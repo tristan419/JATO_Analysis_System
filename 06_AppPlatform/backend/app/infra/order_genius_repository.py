@@ -650,6 +650,7 @@ def sync_missing_template_fobs(
     bom_template: str,
     target_material_codes: list[str] | None = None,
     changed_by: str | None = None,
+    reprice_existing_colour_surcharges: bool = False,
 ) -> dict[str, int | str]:
     """Fill missing concrete SKU FOB rows from sibling rows in one BOM template.
 
@@ -657,8 +658,11 @@ def sync_missing_template_fobs(
     Genius only shows concrete SKUs that have a positive country FOB. When a new
     colour SKU is added under an existing template, create missing country FOBs
     from sibling colours so the order matrix sees the same colour coverage.
-    Existing active rows are never overwritten; an active non-positive row is
-    treated as an explicit clear and left untouched.
+    Existing active rows are not overwritten by default; an active non-positive
+    row is treated as an explicit clear and left untouched. When
+    ``reprice_existing_colour_surcharges`` is enabled, existing dual/special
+    rows are explicitly recalculated from the single-colour template FOB plus
+    the configured brand colour surcharge.
     """
     template = clean_text(bom_template).upper()
     if not template:
@@ -675,9 +679,11 @@ def sync_missing_template_fobs(
         return {
             "bomTemplate": template,
             "created": 0,
+            "repriced": 0,
             "skippedExisting": 0,
             "skippedCleared": 0,
             "skippedNoSource": 0,
+            "unchanged": 0,
         }
 
     target_codes = {
@@ -693,9 +699,11 @@ def sync_missing_template_fobs(
         return {
             "bomTemplate": template,
             "created": 0,
+            "repriced": 0,
             "skippedExisting": 0,
             "skippedCleared": 0,
             "skippedNoSource": 0,
+            "unchanged": 0,
         }
 
     material_codes = [sku.material_code for sku in skus]
@@ -718,9 +726,11 @@ def sync_missing_template_fobs(
         return {
             "bomTemplate": template,
             "created": 0,
+            "repriced": 0,
             "skippedExisting": 0,
             "skippedCleared": 0,
             "skippedNoSource": len(target_skus),
+            "unchanged": 0,
         }
 
     sku_by_code = {sku.material_code: sku for sku in skus}
@@ -729,9 +739,11 @@ def sync_missing_template_fobs(
         for sku in skus
     }
     created = 0
+    repriced = 0
     skipped_existing = 0
     skipped_cleared = 0
     skipped_no_source = 0
+    unchanged = 0
 
     for country_code, country_rows in positive_by_country.items():
         rows_by_tier: dict[str, list[CountrySkuFobResolved]] = {}
@@ -744,17 +756,76 @@ def sync_missing_template_fobs(
         base_value = float(base_row.final_fob_eur)
 
         for sku in target_skus:
+            target_tier = tier_by_code.get(sku.material_code, "single")
             existing = active_by_material_country.get((sku.material_code, country_code))
             if existing:
                 if existing.final_fob_eur is not None and float(existing.final_fob_eur) <= 0:
                     skipped_cleared += 1
+                elif (
+                    reprice_existing_colour_surcharges
+                    and target_tier in {"dual", "special"}
+                ):
+                    surcharge = _template_colour_surcharge(
+                        session,
+                        sku.brand or (sku_by_code.get(base_row.material_code).brand if sku_by_code.get(base_row.material_code) else ""),
+                        target_tier,
+                    )
+                    if surcharge <= 0:
+                        skipped_existing += 1
+                        continue
+                    final_fob = round(base_value + surcharge, 2)
+                    uploaded_fob = _money(base_row.uploaded_fob_eur) or base_value
+                    base_fob = _money(base_row.base_fob_eur) or base_value
+                    changed = (
+                        round(float(existing.final_fob_eur), 2) != final_fob
+                        or _money(existing.uploaded_fob_eur) != uploaded_fob
+                        or _money(existing.base_fob_eur) != base_fob
+                        or _money(existing.colour_surcharge_eur) != surcharge
+                    )
+                    if changed:
+                        session.add(
+                            FobResolvedHistory(
+                                country_sku_fob_id=existing.country_sku_fob_id,
+                                baseline_version_id=base_row.baseline_version_id,
+                                country_code=country_code,
+                                material_code=sku.material_code,
+                                payment_term_code=existing.payment_term_code,
+                                old_uploaded_fob_eur=existing.uploaded_fob_eur,
+                                new_uploaded_fob_eur=uploaded_fob,
+                                old_final_fob_eur=existing.final_fob_eur,
+                                new_final_fob_eur=final_fob,
+                                changed_by=changed_by or "sync_template_colour_surcharge",
+                            )
+                        )
+                        existing.baseline_version_id = base_row.baseline_version_id
+                        existing.base_fob_eur = base_fob
+                        existing.colour_surcharge_eur = surcharge
+                        existing.uploaded_fob_eur = uploaded_fob
+                        existing.final_fob_eur = final_fob
+                        existing.fob_source_country_code = country_code
+                        existing.fob_source_mode = "colour_surcharge_repriced"
+                        existing.updated_at_utc = datetime.now(timezone.utc)
+                        repriced += 1
+                    else:
+                        unchanged += 1
                 else:
                     skipped_existing += 1
                 continue
 
-            target_tier = tier_by_code.get(sku.material_code, "single")
             same_tier_rows = rows_by_tier.get(target_tier) or []
-            if same_tier_rows:
+            surcharge = _template_colour_surcharge(
+                session,
+                sku.brand or (sku_by_code.get(base_row.material_code).brand if sku_by_code.get(base_row.material_code) else ""),
+                target_tier,
+            )
+            if target_tier in {"dual", "special"} and surcharge > 0:
+                source_row = base_row
+                final_fob = round(base_value + surcharge, 2)
+                uploaded_fob = _money(base_row.uploaded_fob_eur) or base_value
+                base_fob = _money(base_row.base_fob_eur) or base_value
+                colour_surcharge = surcharge
+                source_mode = "derived_from_template_colour"
+            elif same_tier_rows:
                 source_row = min(
                     same_tier_rows,
                     key=lambda row: float(row.final_fob_eur),
@@ -766,11 +837,6 @@ def sync_missing_template_fobs(
                 source_mode = "copied_from_template_colour"
             else:
                 source_row = base_row
-                surcharge = _template_colour_surcharge(
-                    session,
-                    sku.brand or (sku_by_code.get(base_row.material_code).brand if sku_by_code.get(base_row.material_code) else ""),
-                    target_tier,
-                )
                 final_fob = round(base_value + surcharge, 2)
                 uploaded_fob = _money(base_row.uploaded_fob_eur) or base_value
                 base_fob = _money(base_row.base_fob_eur) or base_value
@@ -799,9 +865,11 @@ def sync_missing_template_fobs(
     return {
         "bomTemplate": template,
         "created": created,
+        "repriced": repriced,
         "skippedExisting": skipped_existing,
         "skippedCleared": skipped_cleared,
         "skippedNoSource": skipped_no_source,
+        "unchanged": unchanged,
     }
 
 

@@ -1069,6 +1069,7 @@ def sync_bom_template_fobs(
             bom_template=bom_template,
             target_material_codes=material_codes,
             changed_by=user.name,
+            reprice_existing_colour_surcharges=_body_bool(body.get("repriceExistingColourSurcharges")),
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc

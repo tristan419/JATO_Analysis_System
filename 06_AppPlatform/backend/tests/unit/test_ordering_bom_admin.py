@@ -803,3 +803,113 @@ def test_sync_missing_template_fobs_backfills_new_colour_rows_only() -> None:
     assert created_by_code[dual.material_code].fob_source_mode == "derived_from_template_colour"
     assert created_by_code[special.material_code].final_fob_eur == 28300
     assert cleared.material_code not in created_by_code
+
+
+def test_sync_template_fobs_can_reprice_existing_colour_surcharges() -> None:
+    baseline_id = uuid4()
+    template = "T6481QN**LX0004"
+    base = SimpleNamespace(
+        material_code="T6481QNBWLX0004",
+        bom_template=template,
+        brand="JAECOO",
+        exterior_color_name="Khaki white",
+        exterior_color_code="BW",
+        exterior_color_type="single",
+        colour_tier="single",
+        colour_hex=None,
+        edition_tag=None,
+    )
+    dual = SimpleNamespace(
+        material_code="T6481QNZELX0004",
+        bom_template=template,
+        brand="JAECOO",
+        exterior_color_name="Black & White",
+        exterior_color_code="ZE",
+        exterior_color_type="dual",
+        colour_tier="dual",
+        colour_hex="#111111|#FFFFFF",
+        edition_tag=None,
+    )
+    special = SimpleNamespace(
+        material_code="T6481QNUELX0004",
+        bom_template=template,
+        brand="JAECOO",
+        exterior_color_name="Matte gray",
+        exterior_color_code="UE",
+        exterior_color_type="special",
+        colour_tier="special",
+        colour_hex="#777777",
+        edition_tag=None,
+    )
+    base_fob = CountrySkuFobResolved(
+        country_sku_fob_id=uuid4(),
+        baseline_version_id=baseline_id,
+        country_code="AT",
+        material_code=base.material_code,
+        payment_term_code="LC90",
+        final_fob_eur=28650,
+        fob_source_mode="manual_edit",
+        is_active=True,
+    )
+    dual_fob = CountrySkuFobResolved(
+        country_sku_fob_id=uuid4(),
+        baseline_version_id=baseline_id,
+        country_code="AT",
+        material_code=dual.material_code,
+        payment_term_code="LC90",
+        final_fob_eur=28650,
+        fob_source_mode="manual_edit",
+        is_active=True,
+    )
+    special_fob = CountrySkuFobResolved(
+        country_sku_fob_id=uuid4(),
+        baseline_version_id=baseline_id,
+        country_code="AT",
+        material_code=special.material_code,
+        payment_term_code="LC90",
+        final_fob_eur=28650,
+        fob_source_mode="manual_edit",
+        is_active=True,
+    )
+    dual_rule = BrandColourSurchargeRule(
+        colour_surcharge_rule_id=uuid4(),
+        brand="JAECOO",
+        colour_type="dual",
+        surcharge_eur=300,
+        is_active=True,
+    )
+    special_rule = BrandColourSurchargeRule(
+        colour_surcharge_rule_id=uuid4(),
+        brand="JAECOO",
+        colour_type="special",
+        surcharge_eur=300,
+        is_active=True,
+    )
+    fake_session = _QueuedExecuteSession([
+        [base, dual, special],
+        [base_fob, dual_fob, special_fob],
+        [dual_rule],
+        [special_rule],
+    ])
+
+    result = repo.sync_missing_template_fobs(
+        fake_session,
+        bom_template=template,
+        changed_by="admin",
+        reprice_existing_colour_surcharges=True,
+    )
+
+    assert result["created"] == 0
+    assert result["repriced"] == 2
+    assert result["skippedExisting"] == 1
+    assert dual_fob.final_fob_eur == 28950
+    assert dual_fob.base_fob_eur == 28650
+    assert dual_fob.colour_surcharge_eur == 300
+    assert dual_fob.fob_source_mode == "colour_surcharge_repriced"
+    assert special_fob.final_fob_eur == 28950
+    histories = [row for row in fake_session.added if isinstance(row, FobResolvedHistory)]
+    assert len(histories) == 2
+    assert {history.material_code for history in histories} == {
+        dual.material_code,
+        special.material_code,
+    }

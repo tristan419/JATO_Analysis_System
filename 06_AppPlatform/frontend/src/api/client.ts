@@ -4115,8 +4115,8 @@ export const api = {
   createMaterialSku: (body: { materialCode: string; brand?: string; modelName?: string; version?: string; colour?: string; colourCode?: string; colourHex?: string | null; colourType?: string; colourTier?: string; powertrain?: string; bomTemplate?: string; sourceBomTemplate?: string }) =>
     request<any>("/order-genius/material-skus", { method: "POST", body: JSON.stringify(body) }),
 
-  syncBomTemplateFobs: (body: { bomTemplate: string; materialCodes?: string[] }) =>
-    request<{ bomTemplate: string; created: number; skippedExisting: number; skippedCleared: number; skippedNoSource: number }>(
+  syncBomTemplateFobs: (body: { bomTemplate: string; materialCodes?: string[]; repriceExistingColourSurcharges?: boolean }) =>
+    request<{ bomTemplate: string; created: number; repriced: number; skippedExisting: number; skippedCleared: number; skippedNoSource: number; unchanged: number }>(
       "/order-genius/bom-templates/sync-fobs",
       { method: "POST", body: JSON.stringify(body) },
     ),
