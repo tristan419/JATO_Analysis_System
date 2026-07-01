@@ -54,7 +54,7 @@ PRICE_SOURCES = ("msrp", "jato")
 DEFAULT_SEGMENT = "SUV A0"
 DEFAULT_FUEL = "BEV"
 DEFAULT_PRICE_CURRENCY = "EUR"
-_HERO_PRODUCT_DECK_CACHE_SCHEMA_VERSION = 2
+_HERO_PRODUCT_DECK_CACHE_SCHEMA_VERSION = 6
 _HERO_PRODUCT_DECK_CACHE_PREFIX = f"ms:hero-product-deck:v{_HERO_PRODUCT_DECK_CACHE_SCHEMA_VERSION}"
 _HERO_PRODUCT_DECK_CACHE_TTL_SECONDS = 300
 _hero_product_deck_cache: dict[str, tuple[float, str, dict[str, Any]]] = {}
@@ -1131,7 +1131,6 @@ def _aggregate_models(
         row["barPct"] = _safe_share(float(row["sales"]), max_sales)
     return rows
 
-
 def _resolve_requested_models(
     model_rows: list[dict[str, Any]],
     requested: list[str],
@@ -1735,8 +1734,8 @@ def _query_hero_product_deck_impl(
     hero_rows = _resolve_requested_models(
         model_rows,
         hero_models,
-        _default_hero_rows(model_rows, min(6, top_n)),
-        min(10, top_n),
+        _default_hero_rows(model_rows, top_n),
+        top_n,
     )
     benchmark_keys = {_source_pair(row) for row in [*top_rows[:6], *hero_rows]}
     benchmark_rows = [
@@ -1889,7 +1888,7 @@ def _query_hero_product_deck_impl(
                 "distribution": top_distribution,
             },
             "heroTrend": {
-                "title": "Hero 车型销量趋势",
+                "title": "中国车型销量趋势",
                 "models": hero_rows,
                 "series": _build_trend_series(frame, hero_rows, source["trendPeriods"]),
                 "countryRanking": hero_selected_country_ranking,
@@ -1897,7 +1896,7 @@ def _query_hero_product_deck_impl(
                 "priceRows": _build_price_panel_rows(hero_rows[:6]),
             },
             "heroDistribution": {
-                "title": "Hero 车型市场分布",
+                "title": "中国车型市场分布",
                 "models": hero_rows,
                 "distribution": hero_distribution,
             },
