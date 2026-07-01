@@ -1895,11 +1895,11 @@ export function OrderGeniusPage() {
     const freightEur = optionalExportNumber(piExportFreightEur);
     const insuranceEur = optionalExportNumber(piExportInsuranceEur);
     if (piExportFreightEur.trim() && freightEur === undefined) {
-      setError("PI freight must be a non-negative number");
+      setError("PI 单车运费必须是非负数字");
       return;
     }
     if (piExportInsuranceEur.trim() && insuranceEur === undefined) {
-      setError("PI insurance must be a non-negative number");
+      setError("PI 单车保费必须是非负数字");
       return;
     }
     const exportOptions = {
@@ -2256,6 +2256,10 @@ export function OrderGeniusPage() {
       </div>
       {showPiExportOptions ? (
         <div className="og-pi-export-options">
+          <div className="og-pi-export-options-copy">
+            <strong>PI Export Options</strong>
+            <span>单车运费和单车保费选填；留空时导出为空值。</span>
+          </div>
           <label>
             单车运费
             <input
@@ -2268,7 +2272,7 @@ export function OrderGeniusPage() {
             />
           </label>
           <label>
-            单车保险
+            单车保费
             <input
               type="number"
               min="0"

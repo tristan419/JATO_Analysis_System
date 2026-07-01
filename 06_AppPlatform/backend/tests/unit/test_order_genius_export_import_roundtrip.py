@@ -139,6 +139,19 @@ def test_order_genius_pi_export_maps_business_columns() -> None:
                 "powertrain": "HEV",
                 "months": months,
             },
+            {
+                "brand": "OMODA",
+                "modelName": "OMODA9 SHS",
+                "version": "Premium-AWD",
+                "colour": "Matte black",
+                "colourCode": "CP",
+                "colourType": "single",
+                "colourTier": "special",
+                "materialCode": "T7151RYCPMH0003",
+                "fobEur": 22200.0,
+                "powertrain": "PHEV",
+                "months": months,
+            },
         ],
         country_code="SE",
         country_name="Sweden",
@@ -147,6 +160,7 @@ def test_order_genius_pi_export_maps_business_columns() -> None:
         nl_fob_by_material_code={
             "T7151RYKUMH0001": 20200.0,
             "T71604NBWMH0032": 17700.0,
+            "T7151RYCPMH0003": 21200.0,
         },
         freight_eur=610.0,
         insurance_eur=120.0,
@@ -155,28 +169,34 @@ def test_order_genius_pi_export_maps_business_columns() -> None:
     workbook = openpyxl.load_workbook(export_buffer, data_only=True)
     try:
         ws = workbook["PI"]
-        headers = [ws.cell(row=3, column=col).value for col in range(1, ws.max_column + 1)]
+        headers = [ws.cell(row=1, column=col).value for col in range(1, ws.max_column + 1)]
         values = {
-            header: ws.cell(row=4, column=idx + 1).value
+            header: ws.cell(row=2, column=idx + 1).value
             for idx, header in enumerate(headers)
         }
         dual_values = {
-            header: ws.cell(row=5, column=idx + 1).value
+            header: ws.cell(row=3, column=idx + 1).value
+            for idx, header in enumerate(headers)
+        }
+        matte_values = {
+            header: ws.cell(row=4, column=idx + 1).value
             for idx, header in enumerate(headers)
         }
 
+        assert headers[:3] == ["单双色", "质保政策", "产品编号"]
         assert values["单双色"] == "单色"
         assert values["产品编号"] == "T7151RYKUMH0001"
         assert values["数量"] == 3
         assert values["单价"] == 21200
         assert values["单车运费"] == 610
-        assert values["单车保险"] == 120
+        assert values["单车保费"] == 120
         assert values["PIProductcategories"] == "O9 SHS"
         assert values["PIExterior"] == "Silver (KU)"
         assert values["一次内销单价"] == 20200
         assert values["一次内销单车运费"] == 610
-        assert values["一次内销单车保险"] == 120
-        assert dual_values["单双色"] == "拼色"
+        assert values["一次内销单车保费"] == 120
+        assert dual_values["单双色"] == "双色"
         assert dual_values["PIProductcategories"] == "J7 HEV"
+        assert matte_values["单双色"] == "磨砂"
     finally:
         workbook.close()

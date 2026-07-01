@@ -13767,12 +13767,32 @@ table.data-table tr.data-table-group-row.contains-selection td {
 
 .og-pi-export-options {
   display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr)) auto;
+  grid-template-columns: minmax(180px, 1fr) repeat(2, minmax(120px, 160px)) auto;
   gap: 10px;
   align-items: end;
   padding: 10px;
   border: 1px solid #d8dee6;
   background: #f8fafc;
+}
+
+.og-pi-export-options-copy {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+}
+
+.og-pi-export-options-copy strong {
+  color: #111827;
+  font-size: 13px;
+  font-weight: 800;
+  letter-spacing: .08em;
+  text-transform: uppercase;
+}
+
+.og-pi-export-options-copy span {
+  color: #64748b;
+  font-size: 12px;
+  line-height: 1.35;
 }
 
 .og-pi-export-options label {
@@ -14210,7 +14230,8 @@ table.data-table tr.data-table-group-row.contains-selection td {
 
   .order-genius-control-tabs,
   .order-genius-filter-grid,
-  .order-genius-action-grid {
+  .order-genius-action-grid,
+  .og-pi-export-options {
     grid-template-columns: 1fr;
   }
 

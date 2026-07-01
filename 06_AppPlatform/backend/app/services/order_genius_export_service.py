@@ -43,7 +43,7 @@ PI_HEADERS = [
     "数量",
     "单价",
     "单车运费",
-    "单车保险",
+    "单车保费",
     "PIProductcategories",
     "PIPower",
     "PIVersion",
@@ -52,7 +52,7 @@ PI_HEADERS = [
     "单车支持",
     "一次内销单价",
     "一次内销单车运费",
-    "一次内销单车保险",
+    "一次内销单车保费",
 ]
 
 
@@ -239,27 +239,14 @@ def generate_order_genius_pi_excel(
     ws = wb.active
     ws.title = "PI"
 
-    title_month = f"M{quantity_month:02d}" if quantity_month else "TTL"
-    title = f"PI Export — {country_name} ({country_code}) {year} — Quantity: {title_month}"
-    ws.merge_cells(start_row=1, start_column=1, end_row=1, end_column=len(PI_HEADERS))
-    title_cell = ws.cell(row=1, column=1, value=title)
-    title_cell.font = Font(name="Calibri", size=14, bold=True)
-    title_cell.alignment = LEFT_ALIGN
-
-    manual_note = "预留列可手动填写；Excel 中可直接拖动复制。"
-    ws.merge_cells(start_row=2, start_column=1, end_row=2, end_column=len(PI_HEADERS))
-    note_cell = ws.cell(row=2, column=1, value=manual_note)
-    note_cell.font = Font(name="Calibri", size=10, color="64748B")
-    note_cell.alignment = LEFT_ALIGN
-
     for col_idx, header in enumerate(PI_HEADERS, 1):
-        cell = ws.cell(row=3, column=col_idx, value=header)
+        cell = ws.cell(row=1, column=col_idx, value=header)
         _apply_cell_style(cell, font=HEADER_FONT, fill=HEADER_FILL,
                           alignment=CENTER_ALIGN, border=THIN_BORDER)
 
     manual_cols = {2, 6, 7, 9, 10, 11, 13, 15, 16}
     manual_fill = PatternFill(start_color="FFF2CC", end_color="FFF2CC", fill_type="solid")
-    for row_idx, row in enumerate(rows, start=4):
+    for row_idx, row in enumerate(rows, start=2):
         material_code = row.get("materialCode", "")
         values = [
             _pi_colour_kind(row),
@@ -279,7 +266,7 @@ def generate_order_genius_pi_excel(
             freight_eur,
             insurance_eur,
         ]
-        row_fill = STRIPED_FILL if (row_idx - 4) % 2 == 1 else None
+        row_fill = STRIPED_FILL if (row_idx - 2) % 2 == 1 else None
         for col_idx, value in enumerate(values, 1):
             fill = manual_fill if col_idx in manual_cols else row_fill
             alignment = RIGHT_ALIGN if col_idx in {4, 5, 6, 7, 13, 14, 15, 16} else LEFT_ALIGN
@@ -289,8 +276,8 @@ def generate_order_genius_pi_excel(
             if col_idx in {4, 5, 6, 7, 13, 14, 15, 16}:
                 cell.number_format = "#,##0"
 
-    ws.freeze_panes = "A4"
-    ws.auto_filter.ref = f"A3:{get_column_letter(len(PI_HEADERS))}{max(3, len(rows) + 3)}"
+    ws.freeze_panes = "A2"
+    ws.auto_filter.ref = f"A1:{get_column_letter(len(PI_HEADERS))}{max(1, len(rows) + 1)}"
 
     widths = {
         1: 10, 2: 22, 3: 20, 4: 10, 5: 12, 6: 12, 7: 12, 8: 18,
@@ -316,8 +303,23 @@ def _pi_colour_kind(row: dict) -> str:
     colour = row.get("colour", "") or ""
     colour_type = (row.get("colourType") or "").lower()
     colour_tier = (row.get("colourTier") or "").lower()
-    is_dual = colour_type == "dual" or colour_tier == "dual" or bool(re.search(r"[&／]", colour))
-    return "拼色" if is_dual else "单色"
+    colour_hex = (row.get("colourHex") or "").strip()
+    combined = f"{colour} {colour_type} {colour_tier}".lower()
+    is_special = (
+        colour_type in {"special", "matte", "pearl", "metallic"}
+        or colour_tier in {"special", "matte", "pearl", "metallic"}
+        or any(token in combined for token in ("matte", "磨砂", "black edition", "special finish"))
+    )
+    if is_special:
+        return "磨砂"
+    is_dual = (
+        colour_type in {"dual", "two-tone", "dual-tone", "dual tone", "bi-color", "bi-colour"}
+        or colour_tier in {"dual", "two-tone", "dual-tone", "dual tone", "bi-color", "bi-colour"}
+        or ("|" in colour_hex and all(part.strip() for part in colour_hex.split("|", 1)))
+        or bool(re.search(r"[&／/＋+]", colour))
+        or any(token in combined for token in ("双色", "two-tone", "dual tone", "dual-tone", "bi-color", "bi-colour"))
+    )
+    return "双色" if is_dual else "单色"
 
 
 def _pi_powertrain_label(row: dict) -> str:
