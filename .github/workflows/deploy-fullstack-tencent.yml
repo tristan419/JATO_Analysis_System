@@ -148,7 +148,6 @@ jobs:
 
       - name: Upload archive to server
         if: ${{ steps.auth.outputs.mode == 'key' }}
-        continue-on-error: true
         env:
           SSH_HOST: ${{ secrets.SSH_HOST }}
           SSH_USER: ${{ secrets.SSH_USER }}
@@ -182,7 +181,7 @@ jobs:
           REMOTE_ARCHIVE_TMP="${REMOTE_ARCHIVE}.uploading"
           ls -lh "$ARCHIVE_PATH"
 
-          timeout 180s scp -q -P "$SSH_PORT" \
+          timeout 600s scp -q -P "$SSH_PORT" \
             -o BatchMode=yes \
             -o StrictHostKeyChecking=no \
             -o UserKnownHostsFile=/dev/null \
@@ -197,7 +196,7 @@ jobs:
             "$ARCHIVE_PATH" \
             "$SSH_USER@$SSH_CONNECT_HOST:$REMOTE_ARCHIVE_TMP"
 
-          timeout 180s ssh -T -p "$SSH_PORT" \
+          timeout 600s ssh -T -p "$SSH_PORT" \
             -o BatchMode=yes \
             -o StrictHostKeyChecking=no \
             -o UserKnownHostsFile=/dev/null \
@@ -213,7 +212,6 @@ jobs:
 
       - name: Upload archive to server
         if: ${{ steps.auth.outputs.mode == 'password' }}
-        continue-on-error: true
         env:
           SSH_HOST: ${{ secrets.SSH_HOST }}
           SSH_USER: ${{ secrets.SSH_USER }}
@@ -236,7 +234,7 @@ jobs:
           REMOTE_ARCHIVE_TMP="${REMOTE_ARCHIVE}.uploading"
           ls -lh "$ARCHIVE_PATH"
 
-          timeout 180s sshpass -p "$SSH_PASSWORD" \
+          timeout 600s sshpass -p "$SSH_PASSWORD" \
             scp -q -P "$SSH_PORT" \
             -o PreferredAuthentications=password \
             -o PubkeyAuthentication=no \
@@ -251,7 +249,7 @@ jobs:
             "$ARCHIVE_PATH" \
             "$SSH_USER@$SSH_HOST:$REMOTE_ARCHIVE_TMP"
 
-          timeout 180s sshpass -p "$SSH_PASSWORD" \
+          timeout 600s sshpass -p "$SSH_PASSWORD" \
             ssh -T -p "$SSH_PORT" \
             -o PreferredAuthentications=password \
             -o PubkeyAuthentication=no \
