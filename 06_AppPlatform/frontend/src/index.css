@@ -15254,6 +15254,18 @@ table.material-finance-table td:nth-child(n+5) {
   padding: 7px 8px;
 }
 
+.hero-product-distribution-card-head {
+  cursor: zoom-in;
+  user-select: none;
+}
+
+.hero-product-distribution-card-head:hover,
+.hero-product-distribution-card-head:focus-visible {
+  background: rgba(37, 99, 235, 0.08);
+  outline: 1px solid rgba(37, 99, 235, 0.32);
+  outline-offset: -1px;
+}
+
 .hero-product-distribution-card header strong {
   font-size: 14px;
   text-align: center;
@@ -15298,7 +15310,8 @@ table.material-finance-table td:nth-child(n+5) {
 }
 
 .hero-product-distribution-total {
-  display: flex;
+  display: grid;
+  grid-template-columns: auto minmax(44px, max-content);
   align-items: baseline;
   justify-content: flex-end;
   gap: 8px;
@@ -15306,6 +15319,7 @@ table.material-finance-table td:nth-child(n+5) {
   padding: 8px 12px 10px;
   border-top: 1px solid rgba(15, 23, 42, 0.08);
   color: #0f172a;
+  overflow: visible;
 }
 
 .hero-product-distribution-total span {
@@ -15317,6 +15331,11 @@ table.material-finance-table td:nth-child(n+5) {
 .hero-product-distribution-total strong {
   font-size: 18px;
   font-weight: 750;
+  min-width: max-content;
+  overflow: visible;
+  text-align: right;
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
 }
 
 .hero-product-slide-frame {
@@ -15401,6 +15420,13 @@ table.material-finance-table td:nth-child(n+5) {
   flex: 1 1 auto;
 }
 
+.hero-product-trend-chart {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+}
+
 .hero-product-channel-strip {
   grid-template-columns: 82px repeat(5, minmax(0, 1fr));
   min-height: 84px;
@@ -15438,6 +15464,7 @@ table.material-finance-table td:nth-child(n+5) {
   color: #64748b;
 }
 
+.hero-product-trend-chart-head,
 .hero-product-rank-trace-head {
   display: flex;
   align-items: baseline;
@@ -15447,6 +15474,7 @@ table.material-finance-table td:nth-child(n+5) {
   padding: 0 2px 3px;
 }
 
+.hero-product-trend-chart-head span,
 .hero-product-rank-trace-head span,
 .hero-product-rank-trace.is-empty span {
   color: #0f766e;
@@ -15456,6 +15484,7 @@ table.material-finance-table td:nth-child(n+5) {
   text-transform: uppercase;
 }
 
+.hero-product-trend-chart-head strong,
 .hero-product-rank-trace-head strong,
 .hero-product-rank-trace.is-empty strong {
   color: #0f172a;
@@ -15726,9 +15755,14 @@ table.material-finance-table td:nth-child(n+5) {
 }
 
 .hero-product-slide-frame .hero-product-share-ranking-list {
-  flex: 0 0 auto;
+  flex: 1 1 auto;
   gap: 7px;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
   padding: 2px 0 4px;
+  padding-right: 4px;
+  scrollbar-gutter: stable;
 }
 
 .hero-product-slide-frame .hero-product-share-ranking-row {
@@ -16051,6 +16085,11 @@ table.material-finance-table td:nth-child(n+5) {
   min-height: 220px;
 }
 
+.hero-product-slide-frame .hero-product-trend-chart .hero-product-trend-svg {
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
 .hero-product-slide-frame .hero-product-distribution-panel .hero-product-distribution-wrap {
   flex: 1 1 auto;
   width: 100%;
@@ -16064,6 +16103,9 @@ table.material-finance-table td:nth-child(n+5) {
 .hero-product-slide-frame .hero-product-distribution-panel.is-top-30 .hero-product-distribution-wrap {
   overflow-x: auto;
   overflow-y: hidden;
+  padding-right: 18px;
+  padding-bottom: 4px;
+  scrollbar-gutter: stable;
 }
 
 .hero-product-slide-frame .hero-product-distribution-panel .hero-product-distribution-grid {
@@ -16074,14 +16116,22 @@ table.material-finance-table td:nth-child(n+5) {
 }
 
 .hero-product-slide-frame .hero-product-distribution-panel.is-top-20 .hero-product-distribution-grid {
-  grid-template-columns: repeat(var(--hero-product-distribution-cols, 20), minmax(116px, 1fr));
-  min-width: calc(var(--hero-product-distribution-cols, 20) * 116px);
+  grid-template-columns: repeat(var(--hero-product-distribution-cols, 20), minmax(128px, 128px));
+  width: max-content;
+  min-width: 100%;
+  padding-right: 28px;
+  box-sizing: content-box;
+  overflow: visible;
 }
 
 .hero-product-slide-frame .hero-product-distribution-panel.is-top-30 .hero-product-distribution-grid {
-  grid-template-columns: repeat(var(--hero-product-distribution-cols, 30), minmax(96px, 1fr));
+  grid-template-columns: repeat(var(--hero-product-distribution-cols, 30), minmax(108px, 108px));
+  width: max-content;
+  min-width: 100%;
   gap: 5px;
-  min-width: calc(var(--hero-product-distribution-cols, 30) * 96px);
+  padding-right: 28px;
+  box-sizing: content-box;
+  overflow: visible;
 }
 
 .hero-product-slide-frame .hero-product-distribution-panel--top .hero-product-distribution-grid {
@@ -16171,6 +16221,24 @@ table.material-finance-table td:nth-child(n+5) {
 
 .hero-product-slide-frame .hero-product-distribution-panel--top .hero-product-distribution-total strong {
   font-size: 14px;
+}
+
+.hero-product-slide-frame .hero-product-distribution-panel.is-top-20 .hero-product-distribution-total {
+  grid-template-columns: auto minmax(48px, max-content);
+  padding: 5px 8px 7px;
+}
+
+.hero-product-slide-frame .hero-product-distribution-panel.is-top-20 .hero-product-distribution-total strong {
+  font-size: 16px;
+}
+
+.hero-product-slide-frame .hero-product-distribution-panel.is-top-30 .hero-product-distribution-total {
+  grid-template-columns: auto minmax(44px, max-content);
+  padding: 4px 6px 6px;
+}
+
+.hero-product-slide-frame .hero-product-distribution-panel.is-top-30 .hero-product-distribution-total strong {
+  font-size: 13px;
 }
 
 .hero-product-control-hint {
