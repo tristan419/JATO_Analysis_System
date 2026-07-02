@@ -1,0 +1,153 @@
+{
+  "schemaVersion": "msrp_source_reference_evidence_v1",
+  "generatedAt": "2026-06-17T02:16:49Z",
+  "backlogRunId": "msrp-dryrun-20260617-012812",
+  "referenceSource": "EVKX",
+  "referencePolicy": "reference_only_review_required",
+  "officialSourceRequiredForIngest": true,
+  "officialIngestEligible": false,
+  "summary": {
+    "evidenceItemCount": 2,
+    "localReferenceCount": 8,
+    "missingLocalReferenceCount": 0,
+    "officialIngestEligibleCount": 0
+  },
+  "items": [
+    {
+      "countryCode": "fi",
+      "pricingCountry": "Finland",
+      "brand": "TESLA",
+      "modelQuery": "Tesla Model Y",
+      "sourceCodes": [
+        "tesla_model_y_fi_draft_scrapling"
+      ],
+      "failureReason": "forbidden_403",
+      "recommendedStrategy": "manual_review_or_proxy_required",
+      "referenceAssist": {
+        "preferred": "official_proxy_or_configurator_api",
+        "thirdPartyReference": "EVKX",
+        "referencePolicy": "reference_only_review_required",
+        "officialSourceRequiredForIngest": true,
+        "acceptanceRules": [
+          "Do not count EVKX as an official MSRP dryrun pass.",
+          "Only use EVKX records when pricingCountry matches the target country.",
+          "Only use EVKX records when isConverted is false.",
+          "Keep the Tesla official source open until an official page, price list, or configurator API is fetchable."
+        ],
+        "reason": "Tesla official pages are blocked by the direct fetch path; EVKX can supply BEV variant and local-price reference evidence but cannot replace official MSRP evidence."
+      },
+      "referenceSource": "EVKX",
+      "referencePolicy": "reference_only_review_required",
+      "officialIngestEligible": false,
+      "localReferenceCount": 3,
+      "localPriceReferences": [
+        {
+          "evId": "0a5a89bc",
+          "name": "Tesla Model Y Performance",
+          "startPrice": 61990,
+          "currency": "EUR",
+          "pricingCountry": "Finland",
+          "isConverted": false,
+          "infoUrl": "https://evkx.net/models/tesla/model_y/model_y_performance/"
+        },
+        {
+          "evId": "5db7f539",
+          "name": "Tesla Model Y Premium AWD",
+          "startPrice": 52990,
+          "currency": "EUR",
+          "pricingCountry": "Finland",
+          "isConverted": false,
+          "infoUrl": "https://evkx.net/models/tesla/model_y/model_y_premium_awd/"
+        },
+        {
+          "evId": "1e577414",
+          "name": "Tesla Model Y Standard",
+          "startPrice": 39990,
+          "currency": "EUR",
+          "pricingCountry": "Finland",
+          "isConverted": false,
+          "infoUrl": "https://evkx.net/models/tesla/model_y/model_y_standard/"
+        }
+      ],
+      "fetchError": null,
+      "reviewRecommendation": "use_as_review_reference_only"
+    },
+    {
+      "countryCode": "se",
+      "pricingCountry": "Sweden",
+      "brand": "TESLA",
+      "modelQuery": "Tesla Model Y",
+      "sourceCodes": [
+        "tesla_model_y_se_draft_scrapling"
+      ],
+      "failureReason": "forbidden_403",
+      "recommendedStrategy": "manual_review_or_proxy_required",
+      "referenceAssist": {
+        "preferred": "official_proxy_or_configurator_api",
+        "thirdPartyReference": "EVKX",
+        "referencePolicy": "reference_only_review_required",
+        "officialSourceRequiredForIngest": true,
+        "acceptanceRules": [
+          "Do not count EVKX as an official MSRP dryrun pass.",
+          "Only use EVKX records when pricingCountry matches the target country.",
+          "Only use EVKX records when isConverted is false.",
+          "Keep the Tesla official source open until an official page, price list, or configurator API is fetchable."
+        ],
+        "reason": "Tesla official pages are blocked by the direct fetch path; EVKX can supply BEV variant and local-price reference evidence but cannot replace official MSRP evidence."
+      },
+      "referenceSource": "EVKX",
+      "referencePolicy": "reference_only_review_required",
+      "officialIngestEligible": false,
+      "localReferenceCount": 5,
+      "localPriceReferences": [
+        {
+          "evId": "ccb008ac",
+          "name": "Tesla Model Y L",
+          "startPrice": 675900,
+          "currency": "SEK",
+          "pricingCountry": "Sweden",
+          "isConverted": false,
+          "infoUrl": "https://evkx.net/models/tesla/model_y/model_y_l/"
+        },
+        {
+          "evId": "0a5a89bc",
+          "name": "Tesla Model Y Performance",
+          "startPrice": 719990,
+          "currency": "SEK",
+          "pricingCountry": "Sweden",
+          "isConverted": false,
+          "infoUrl": "https://evkx.net/models/tesla/model_y/model_y_performance/"
+        },
+        {
+          "evId": "5db7f539",
+          "name": "Tesla Model Y Premium AWD",
+          "startPrice": 649990,
+          "currency": "SEK",
+          "pricingCountry": "Sweden",
+          "isConverted": false,
+          "infoUrl": "https://evkx.net/models/tesla/model_y/model_y_premium_awd/"
+        },
+        {
+          "evId": "a3904d49",
+          "name": "Tesla Model Y Premium RWD",
+          "startPrice": 612990,
+          "currency": "SEK",
+          "pricingCountry": "Sweden",
+          "isConverted": false,
+          "infoUrl": "https://evkx.net/models/tesla/model_y/model_y_premium_rwd/"
+        },
+        {
+          "evId": "1e577414",
+          "name": "Tesla Model Y Standard",
+          "startPrice": 499990,
+          "currency": "SEK",
+          "pricingCountry": "Sweden",
+          "isConverted": false,
+          "infoUrl": "https://evkx.net/models/tesla/model_y/model_y_standard/"
+        }
+      ],
+      "fetchError": null,
+      "reviewRecommendation": "use_as_review_reference_only"
+    }
+  ]
+}

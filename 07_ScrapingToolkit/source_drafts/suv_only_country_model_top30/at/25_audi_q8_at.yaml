@@ -1,113 +1,54 @@
 source_code: audi_q8_at_draft_scrapling
 country: 奥地利
 brand: AUDI
-source_url: https://www.audi.at/modelle/q8
-source_type: manufacturer_official
+source_url: https://www.audi.at/q8/q8-suv/preisliste
+source_type: official_price_list
 price_semantics: base_msrp
-extractor_type: scrapling
+extractor_type: pdf_text
 profile:
-  url: https://www.audi.at/modelle/q8
-  tier: stealth
-  headless: true
-  network_idle: true
-  impersonate: chrome
+  url: https://gpt-live.porsche.co.at/at/brand/A/pricelist/2145_audi_q8_pa_katalog_inkl__preisliste.pdf
+  timeout_seconds: 30
+  retry_attempts: 1
+  retry_delay_seconds: 1
+  browser_download_fallback: true
   default_currency: EUR
   default_tax_included: true
-  default_price_label: Unverbindliche Preisempfehlung inkl. MwSt
+  default_price_label: Unverbindlicher Richtpreis inkl. NoVA, 20% MwSt. und Frachtkosten
   fixed_model: Q8
   fixed_jato_model: Q8
-  fixed_jato_powertrain: null
-  model_rules: []
-  skip_if_model_unmapped: false
   copy_trim_to_jato_trim: true
-  confidence_rules:
-    base: 0.2
-    fixed_model_bonus: 0.18
-    fixed_jato_model_bonus: 0.12
-    model_rule_bonus: 0.12
-    trim_present_bonus: 0.1
-    copy_trim_to_jato_trim_bonus: 0.09
-    parsed_price_text_bonus: 0.03
-    currency_bonus: 0.01
-    price_label_bonus: 0.02
-    trim_keyword_bonuses: []
-    price_band_bonuses:
-    - key: price_band_entry
-      label: Entry price band matched
-      max: 0
-      delta: 0.0
-    - key: price_band_mid
-      label: Mid price band matched
-      min: 0
-      max: 0
-      delta: 0.01
-    - key: price_band_high
-      label: High price band matched
-      min: 0
-      delta: 0.03
-    powertrain_keyword_bonuses: []
-    powertrain_bonuses:
-    - key: powertrain_phev
-      label: 'Powertrain matched: PHEV'
-      powertrain: PHEV
-      delta: 0.03
-    - key: powertrain_mhev
-      label: 'Powertrain matched: MHEV'
-      powertrain: MHEV
-      delta: 0.03
-    - key: powertrain_ice
-      label: 'Powertrain matched: ICE'
-      powertrain: ICE
-      delta: 0.03
-    clamp_min: 0.0
-    clamp_max: 1.0
-  structured_fields:
-    edition_rules:
-    - key: edition_special
-      label: Special Edition
-      keyword: special edition
-      special: true
-    powertrain_rules:
-    - key: powertrain_phev
-      powertrain: PHEV
-      keywords:
-      - Plug-in-Hybrid
-      - TFSI e
-      - Q8 TFSI e
-    - key: powertrain_mhev
-      powertrain: MHEV
-      keywords:
-      - Mild-Hybrid
-      - 48V
-      - MHEV
-    - key: powertrain_ice
-      powertrain: ICE
-      keywords:
-      - Benzin
-      - Diesel
-      - TFSI
-      - TDI
-  auto_accept_gates:
-    review_threshold: 0.95
-    semi_auto_threshold: 0.98
-    require_powertrain_match: true
-    force_review_if_powertrain_missing: true
-    force_review_if_powertrain_ambiguous: true
-    force_review_for_special_edition: true
-  json_script_selector: script[type='application/ld+json']
-  css:
-    vehicle_container: body
-    model: h2
-    trim: h3
-    price: '[class*="price"]'
+  match_confidence: 0.86
+  match_status: review_required
+  match_reason:
+    kind: official_pdf_price_list
+    source: audi_at_q8_preisliste
+    note: Official Audi Austria Q8 catalogue including price list.
+  entry_patterns:
+  - pattern: 'Q8\s+e-hybrid\s+quattro\s+290\s+kW\s+Tiptronic\s+8\s+Gang.*?(?P<price>94\.564,\s*00)'
+    official_trim: Q8 e-hybrid quattro 290 kW Tiptronic 8 Gang
+    official_powertrain: e-hybrid quattro 290 kW Tiptronic
+    jato_powertrain: PHEV
+  - pattern: 'Q8\s+55\s+TFSI\s+quattro\s+Tiptronic\s+8\s+Gang.*?(?P<price>111\.837,\s*00)'
+    official_trim: Q8 55 TFSI quattro Tiptronic 8 Gang
+    official_powertrain: 55 TFSI quattro Tiptronic
+    jato_powertrain: ICE
+  - pattern: 'Q8\s+50\s+TDI\s+quattro\s+Tiptronic\s+8\s+Gang.*?(?P<price>105\.903,\s*00)'
+    official_trim: Q8 50 TDI quattro Tiptronic 8 Gang
+    official_powertrain: 50 TDI quattro Tiptronic
+    jato_powertrain: ICE
+  - pattern: 'Q8\s+e-hybrid\s+quattro\s+360\s+kW\s+Tiptronic\s+8\s+Gang.*?(?P<price>108\.393,\s*00)'
+    official_trim: Q8 e-hybrid quattro 360 kW Tiptronic 8 Gang
+    official_powertrain: e-hybrid quattro 360 kW Tiptronic
+    jato_powertrain: PHEV
 schedule:
   frequency: manual_only
   run_window_start: 00:00
   run_window_end: 05:00
   preferred_weekday: monday
-notes: Keywords filled from official manufacturer website research (AT market). CSS
-  selectors still require browser-based inspection before promotion. [CSS selectors
-  applied from brand probe]
+notes: Keywords filled from official manufacturer website research (AT market).
+  Replaced stale model landing page with official Audi Austria price-list PDF
+  linked from the Q8 preisliste page. Regexes target Motorenpreisliste rows and
+  use the final Richtpreis column.
 bootstrap_meta:
   country_model_rank: 25
   suggested_scope_kind: single_model

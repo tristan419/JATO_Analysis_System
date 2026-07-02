@@ -6,7 +6,7 @@ requires creating a new YAML file — no Python code changes needed.
 
 Each YAML file describes **one source** and must contain:
     - source_code, country, brand, source_url   (identity)
-    - extractor_type: "http_json" | "scrapling" | "playwright" | "pdf_text"
+    - extractor_type: "http_json" | "http_text" | "scrapling" | "playwright" | "pdf_text"
     - profile: <dict>                            (extractor-specific config)
 
 Optional source fields:
@@ -29,11 +29,19 @@ from jato_scraper.extractors.http_json import (
     HttpJsonExtractor,
     HttpJsonProfile,
     LookupMapping,
+    MinPriceGroup,
+    PricingContextMapping as HttpPricingContextMapping,
+    ValueFilter,
+)
+from jato_scraper.extractors.http_text import (
+    HttpTextEntryPattern,
+    HttpTextExtractor,
+    HttpTextProfile,
 )
 from jato_scraper.extractors.scrapling_web import (
     AttrJsonMapping,
     CssMapping,
-    PricingContextMapping,
+    PricingContextMapping as ScraplingPricingContextMapping,
     ScraplingExtractor,
     ScraplingProfile,
     TextRegexEntryPattern,
@@ -178,6 +186,49 @@ def _build_http_json_profile(profile: dict[str, Any]) -> HttpJsonProfile:
             else None
         ),
     )
+
+    filters_raw = profile.get("filters", [])
+    filters: list[ValueFilter] = []
+    if filters_raw:
+        if not isinstance(filters_raw, list):
+            raise ValueError("http_json filters must be a list")
+        for item in filters_raw:
+            if not isinstance(item, dict):
+                raise ValueError("http_json filter entries must be mappings")
+            path = str(item.get("path", "")).strip()
+            if not path:
+                raise ValueError("http_json filter entries require a path")
+            equals_raw = item.get("equals", item.get("in", []))
+            if isinstance(equals_raw, list):
+                equals = tuple(
+                    str(value).strip()
+                    for value in equals_raw
+                    if str(value).strip()
+                )
+            elif equals_raw is None:
+                equals = ()
+            else:
+                equals = (str(equals_raw).strip(),)
+            filters.append(ValueFilter(path=path, equals=equals))
+
+    min_price_group = None
+    min_price_group_raw = profile.get(
+        "min_price_group",
+        profile.get("group_min_price"),
+    )
+    if min_price_group_raw:
+        if not isinstance(min_price_group_raw, dict):
+            raise ValueError("http_json min_price_group must be a mapping")
+        key_raw = min_price_group_raw.get("key")
+        key = _path_field(key_raw, "", allow_list=True)
+        if not key:
+            raise ValueError("http_json min_price_group requires a key")
+        price = (
+            str(min_price_group_raw.get("price", fm.price)).strip()
+            or fm.price
+        )
+        min_price_group = MinPriceGroup(key=key, price=price)
+
     return HttpJsonProfile(
         url=profile["url"],
         method=profile.get("method", "GET"),
@@ -192,6 +243,55 @@ def _build_http_json_profile(profile: dict[str, Any]) -> HttpJsonProfile:
             "Manufacturer's Recommended Retail Price",
         ),
         fixed_model=profile.get("fixed_model"),
+        fixed_official_powertrain=profile.get("fixed_official_powertrain"),
+        fixed_jato_model=profile.get("fixed_jato_model"),
+        fixed_jato_powertrain=profile.get("fixed_jato_powertrain"),
+        copy_trim_to_jato_trim=bool(profile.get("copy_trim_to_jato_trim", False)),
+        match_confidence=(
+            float(profile["match_confidence"])
+            if profile.get("match_confidence") is not None
+            else None
+        ),
+        match_status=profile.get("match_status", "review_required"),
+        match_reason=profile.get("match_reason"),
+        filters=tuple(filters),
+        min_price_group=min_price_group,
+        pricing_context=_build_pricing_context_mapping(
+            profile,
+            mapping_cls=HttpPricingContextMapping,
+            owner="http_json",
+        ),
+    )
+
+
+def _build_pricing_context_mapping(
+    profile: dict[str, Any],
+    *,
+    mapping_cls: type[HttpPricingContextMapping] | type[ScraplingPricingContextMapping],
+    owner: str,
+) -> HttpPricingContextMapping | ScraplingPricingContextMapping | None:
+    pricing_context_raw = profile.get("pricing_context")
+    if not pricing_context_raw:
+        return None
+    if not isinstance(pricing_context_raw, dict):
+        raise ValueError(f"{owner} pricing_context must be a mapping")
+    fields_raw = pricing_context_raw.get("fields", {})
+    constants_raw = pricing_context_raw.get("constants", {})
+    if not isinstance(fields_raw, dict):
+        raise ValueError(f"{owner} pricing_context fields must be a mapping")
+    if not isinstance(constants_raw, dict):
+        raise ValueError(f"{owner} pricing_context constants must be a mapping")
+    return mapping_cls(
+        fields={
+            str(key).strip(): str(value).strip()
+            for key, value in fields_raw.items()
+            if str(key).strip() and str(value).strip()
+        },
+        constants={
+            str(key).strip(): value
+            for key, value in constants_raw.items()
+            if str(key).strip()
+        },
     )
 
 
@@ -297,39 +397,17 @@ def _build_scrapling_profile(profile: dict[str, Any]) -> ScraplingProfile:
             rule for rule in model_rules_raw if isinstance(rule, dict)
         )
 
-    pricing_context_raw = profile.get("pricing_context")
-    pricing_context = None
-    if pricing_context_raw:
-        if not isinstance(pricing_context_raw, dict):
-            raise ValueError("scrapling pricing_context must be a mapping")
-        fields_raw = pricing_context_raw.get("fields", {})
-        constants_raw = pricing_context_raw.get("constants", {})
-        if not isinstance(fields_raw, dict):
-            raise ValueError("scrapling pricing_context fields must be a mapping")
-        if not isinstance(constants_raw, dict):
-            raise ValueError(
-                "scrapling pricing_context constants must be a mapping"
-            )
-        pricing_context = PricingContextMapping(
-            fields={
-                str(key).strip(): str(value).strip()
-                for key, value in fields_raw.items()
-                if str(key).strip() and str(value).strip()
-            },
-            constants={
-                str(key).strip(): value
-                for key, value in constants_raw.items()
-                if str(key).strip()
-            },
-        )
-
     return ScraplingProfile(
         url=profile["url"],
         tier=profile.get("tier", "http"),
         css=css,
         attr_json=attr_json,
         text_regex=text_regex,
-        pricing_context=pricing_context,
+        pricing_context=_build_pricing_context_mapping(
+            profile,
+            mapping_cls=ScraplingPricingContextMapping,
+            owner="scrapling",
+        ),
         json_script_selector=profile.get("json_script_selector"),
         json_vehicles_path=profile.get("json_vehicles_path"),
         headless=profile.get("headless", True),
@@ -433,6 +511,9 @@ def _build_playwright_profile(
         trim_name_selector=profile.get("trim_name_selector", "h3"),
         trim_model_selector=profile.get("trim_model_selector"),
         trim_card_wait_ms=int(profile.get("trim_card_wait_ms", 1200)),
+        trim_price_ready_timeout_ms=int(
+            profile.get("trim_price_ready_timeout_ms", 10000)
+        ),
         next_step_selector=profile.get("next_step_selector", ""),
         detail_ready_selector=profile.get("detail_ready_selector"),
         detail_card_selector=profile.get("detail_card_selector", ""),
@@ -481,6 +562,12 @@ def _build_pdf_text_profile(profile: dict[str, Any]) -> PdfTextProfile:
         profile.get(
             "browser_download_fallback",
             profile.get("curl_download_fallback", False),
+        )
+    )
+    prefer_curl_download = bool(
+        profile.get(
+            "prefer_curl_download",
+            profile.get("curl_download_first", False),
         )
     )
     entry_patterns = tuple(
@@ -532,7 +619,80 @@ def _build_pdf_text_profile(profile: dict[str, Any]) -> PdfTextProfile:
         timeout_seconds=int(profile.get("timeout_seconds", 60)),
         retry_attempts=int(profile.get("retry_attempts", 0)),
         retry_delay_seconds=float(profile.get("retry_delay_seconds", 0.0) or 0.0),
+        prefer_curl_download=prefer_curl_download,
         browser_download_fallback=browser_download_fallback,
+        default_currency=profile.get("default_currency", "EUR"),
+        default_tax_included=bool(profile.get("default_tax_included", True)),
+        default_price_label=profile.get(
+            "default_price_label",
+            "Manufacturer's Recommended Retail Price",
+        ),
+        fixed_model=profile.get("fixed_model"),
+        fixed_jato_model=profile.get("fixed_jato_model"),
+        fixed_jato_powertrain=profile.get("fixed_jato_powertrain"),
+        copy_trim_to_jato_trim=bool(profile.get("copy_trim_to_jato_trim", False)),
+        match_confidence=(
+            float(profile["match_confidence"])
+            if profile.get("match_confidence") is not None
+            else None
+        ),
+        match_status=profile.get("match_status", "review_required"),
+        match_reason=profile.get("match_reason"),
+    )
+
+
+def _build_http_text_profile(profile: dict[str, Any]) -> HttpTextProfile:
+    patterns_raw = profile.get("entry_patterns", [])
+    if not isinstance(patterns_raw, list):
+        raise ValueError("http_text entry_patterns must be a list")
+    entry_patterns = tuple(
+        HttpTextEntryPattern(
+            pattern=str(item["pattern"]).strip(),
+            official_trim=(
+                str(item["official_trim"]).strip()
+                if item.get("official_trim") is not None
+                else None
+            ),
+            official_powertrain=(
+                str(item["official_powertrain"]).strip()
+                if item.get("official_powertrain") is not None
+                else None
+            ),
+            official_edition=(
+                str(item["official_edition"]).strip()
+                if item.get("official_edition") is not None
+                else None
+            ),
+            availability_text=(
+                str(item["availability_text"]).strip()
+                if item.get("availability_text") is not None
+                else None
+            ),
+            jato_trim=(
+                str(item["jato_trim"]).strip()
+                if item.get("jato_trim") is not None
+                else None
+            ),
+            jato_powertrain=(
+                str(item["jato_powertrain"]).strip()
+                if item.get("jato_powertrain") is not None
+                else None
+            ),
+            price_delta=float(item.get("price_delta", 0.0) or 0.0),
+            price_label=(
+                str(item["price_label"]).strip()
+                if item.get("price_label") is not None
+                else None
+            ),
+        )
+        for item in patterns_raw
+        if isinstance(item, dict) and str(item.get("pattern", "")).strip()
+    )
+    return HttpTextProfile(
+        url=profile["url"],
+        entry_patterns=entry_patterns,
+        timeout_seconds=int(profile.get("timeout_seconds", 30)),
+        headers=profile.get("headers", {}),
         default_currency=profile.get("default_currency", "EUR"),
         default_tax_included=bool(profile.get("default_tax_included", True)),
         default_price_label=profile.get(
@@ -555,7 +715,13 @@ def _build_pdf_text_profile(profile: dict[str, Any]) -> PdfTextProfile:
 
 def _make_extractor_class(
     extractor_type: str,
-    profile: HttpJsonProfile | ScraplingProfile | PlaywrightCardFlowProfile | PdfTextProfile,
+    profile: (
+        HttpJsonProfile
+        | HttpTextProfile
+        | ScraplingProfile
+        | PlaywrightCardFlowProfile
+        | PdfTextProfile
+    ),
 ) -> type:
     """Create an extractor class that binds a fixed profile at init."""
     if extractor_type == "http_json":
@@ -565,6 +731,14 @@ def _make_extractor_class(
             def __init__(self, config: ExtractorConfig) -> None:
                 super().__init__(config, self._profile)
         return _ConfiguredHttpJson
+
+    if extractor_type == "http_text":
+        class _ConfiguredHttpText(HttpTextExtractor):
+            _profile = profile
+
+            def __init__(self, config: ExtractorConfig) -> None:
+                super().__init__(config, self._profile)
+        return _ConfiguredHttpText
 
     if extractor_type == "scrapling":
         class _ConfiguredScrapling(ScraplingExtractor):
@@ -632,6 +806,8 @@ def load_source_file(path: Path) -> str | None:
         profile_raw = _resolve_profile_raw(path, data)
         if ext_type == "http_json":
             profile = _build_http_json_profile(profile_raw)
+        elif ext_type == "http_text":
+            profile = _build_http_text_profile(profile_raw)
         elif ext_type == "scrapling":
             profile = _build_scrapling_profile(profile_raw)
         elif ext_type == "playwright":

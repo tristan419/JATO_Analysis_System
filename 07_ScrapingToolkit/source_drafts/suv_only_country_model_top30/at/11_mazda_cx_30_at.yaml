@@ -7,10 +7,19 @@ price_semantics: base_msrp
 extractor_type: scrapling
 profile:
   url: https://www.mazda.at/modelle/mazda-cx-30/
-  tier: stealth
+  tier: http
   headless: true
-  network_idle: true
+  network_idle: false
+  load_dom: false
+  timeout_ms: 20000
   impersonate: chrome
+  text_regex:
+    source_selector: body
+    include_element_html: true
+    entry_patterns:
+    - pattern: 'Berechnungsbeispiel:\s+Mazda\s+2026\s+CX-30\s+G140\s+6MT\s+2WD\s+(?P<trim>PRIME-LINE),\s+Listenpreis\s+(?:€|&euro;|\\u0026euro;)\s*(?P<price>\d{2}\.\d{3})'
+      official_powertrain: G140 M Hybrid
+      price_label: Listenpreis inkl. MwSt. und NoVA
   default_currency: EUR
   default_tax_included: true
   default_price_label: Unverbindliche Preisempfehlung inkl. MwSt
@@ -75,19 +84,15 @@ profile:
     force_review_if_powertrain_ambiguous: true
     force_review_for_special_edition: true
   json_script_selector: script[type='application/ld+json']
-  css:
-    vehicle_container: body
-    model: h1, h2
-    trim: h3
-    price: '[class*="price"]'
 schedule:
   frequency: manual_only
   run_window_start: 00:00
   run_window_end: 05:00
   preferred_weekday: monday
-notes: Keywords filled from official manufacturer website research (AT market). CSS
-  selectors still require browser-based inspection before promotion. [CSS selectors
-  applied from brand probe]
+notes: Keywords filled from official manufacturer website research (AT market). Replaced
+  broad CSS selectors with text_regex over the official Mazda Listenpreis disclosure
+  to avoid treating monthly finance rates as MSRP. Static HTTP fetch validated against
+  official Listenpreis disclosure; browser rendering is not required.
 bootstrap_meta:
   country_model_rank: 11
   suggested_scope_kind: single_model

@@ -257,7 +257,8 @@ def _title_case_label(value: str) -> str:
 
 
 def parse_price(raw: str) -> float | None:
-    m = _PRICE_RE.search(raw.replace("\xa0", "").replace(" ", ""))
+    normalized_raw = re.sub(r"\s+", "", raw.replace("\xa0", " "))
+    m = _PRICE_RE.search(normalized_raw)
     if not m:
         return None
     s = m.group().replace("'", "").replace("\u2019", "")
@@ -376,6 +377,23 @@ class ScraplingExtractor(BaseExtractor):
             )
         ).lower()
 
+    def _nested_payload_text(
+        self,
+        raw_payload: dict[str, Any],
+        *container_names: str,
+    ) -> str:
+        parts: list[str] = []
+        for container_name in container_names:
+            container = raw_payload.get(container_name)
+            if not isinstance(container, dict):
+                continue
+            parts.extend(
+                str(value)
+                for value in container.values()
+                if value not in (None, "", [], {})
+            )
+        return _normalize_space(" ".join(parts))
+
     def _build_powertrain_search_text(
         self,
         resolved_model: str,
@@ -396,6 +414,7 @@ class ScraplingExtractor(BaseExtractor):
                     str(raw_payload.get("fuel_type", "")),
                     str(raw_payload.get("fuelType", "")),
                     str(raw_payload.get("category", "")),
+                    self._nested_payload_text(raw_payload, "filter", "tracking"),
                 )
                 if part
             )
@@ -422,6 +441,7 @@ class ScraplingExtractor(BaseExtractor):
                     str(raw_payload.get("fuel_type", "")),
                     str(raw_payload.get("fuelType", "")),
                     str(raw_payload.get("category", "")),
+                    self._nested_payload_text(raw_payload, "filter", "tracking"),
                 )
                 if part
             )
@@ -1402,6 +1422,90 @@ class ScraplingExtractor(BaseExtractor):
 
         return metadata
 
+    def _page_text_sample(self, page: Any, *, limit: int = 2_000) -> str:
+        parts: list[str] = []
+        try:
+            parts.extend(
+                self._collect_text_result_values(page.css("body ::text"))
+            )
+        except Exception:
+            pass
+        if not parts:
+            try:
+                elements = page.css("body")
+            except Exception:
+                elements = []
+            for element in elements[:1]:
+                try:
+                    parts.extend(
+                        self._collect_text_result_values(element.css("::text"))
+                    )
+                except Exception:
+                    pass
+                if not parts:
+                    try:
+                        parts.extend(self._string_values(element.get()))
+                    except Exception:
+                        pass
+        if not parts:
+            html_content = getattr(page, "html_content", None)
+            if html_content:
+                parts.append(str(html_content))
+        if not parts:
+            body = getattr(page, "body", None)
+            if isinstance(body, bytes):
+                parts.append(body.decode("utf-8", errors="ignore"))
+            elif body:
+                parts.append(str(body))
+        return _normalize_space(" ".join(parts))[:limit]
+
+    def _page_markup_sample(self, page: Any, *, limit: int = 4_000) -> str:
+        parts: list[str] = []
+        try:
+            elements = page.css("body")
+        except Exception:
+            elements = []
+        for element in elements[:1]:
+            try:
+                parts.extend(self._string_values(element.get()))
+            except Exception:
+                pass
+        if not parts:
+            html_content = getattr(page, "html_content", None)
+            if html_content:
+                parts.append(str(html_content))
+        if not parts:
+            body = getattr(page, "body", None)
+            if isinstance(body, bytes):
+                parts.append(body.decode("utf-8", errors="ignore"))
+            elif body:
+                parts.append(str(body))
+        return _normalize_space(" ".join(parts))[:limit]
+
+    def _access_denied_error(self, page: Any) -> str | None:
+        sample = self._page_text_sample(page)
+        markup_sample = self._page_markup_sample(page)
+        lower = f"{sample} {markup_sample}".lower()
+        if not (sample or markup_sample):
+            return None
+        if (
+            "sec-if-cpt-container" in lower
+            or (
+                "powered and protected by" in lower
+                and "akamai" in lower
+            )
+        ):
+            return f"anti_bot_access_denied: {sample[:240]}"
+        if "access denied" not in lower:
+            return None
+        if (
+            "permission to access" not in lower
+            and "errors.edgesuite.net" not in lower
+            and "akamai" not in lower
+        ):
+            return None
+        return f"anti_bot_access_denied: {(sample or markup_sample)[:240]}"
+
     def extract(self) -> list[RawObservation]:
         page = self._fetch()
         if page is None:
@@ -1420,6 +1524,18 @@ class ScraplingExtractor(BaseExtractor):
         attempted: list[dict[str, Any]] = []
         p = self.profile
         results: list[RawObservation] = []
+        access_error = self._access_denied_error(page)
+        if access_error:
+            self.record_audit_event(
+                url=p.url,
+                attempted_strategies=attempted,
+                winning_strategy=None,
+                observations=[],
+                tier=p.tier or "http",
+                error=access_error,
+                extra=fetch_metadata or None,
+            )
+            return []
 
         # Strategy 1: attribute-embedded JSON (most reliable for React SPAs)
         if p.attr_json:
@@ -1823,14 +1939,44 @@ class ScraplingExtractor(BaseExtractor):
     _VEHICLE_JSON_TYPES = frozenset({
         "Product", "Car", "Vehicle", "Offer", "AggregateOffer",
         "IndividualProduct", "ProductModel",
+        "schema:Product", "schema:Car", "schema:Vehicle",
+        "schema:Offer", "schema:AggregateOffer",
+        "schema:IndividualProduct", "schema:ProductModel",
     })
 
     _JSON_FALLBACK_KEYS = (
         "name",
+        "schema:name",
         "model",
+        "schema:model",
         "description",
+        "schema:description",
         "priceCurrency",
+        "schema:priceCurrency",
     )
+
+    _JSON_OFFER_KEYS = ("offers", "schema:offers")
+    _JSON_PRICE_KEYS = (
+        "price",
+        "lowPrice",
+        "highPrice",
+        "schema:price",
+        "schema:lowPrice",
+        "schema:highPrice",
+    )
+    _JSON_CURRENCY_KEYS = ("priceCurrency", "schema:priceCurrency")
+    _JSON_PRICE_SPEC_KEYS = ("priceSpecification", "schema:priceSpecification")
+
+    def _json_first_non_empty(
+        self,
+        payload: dict[str, Any],
+        keys: tuple[str, ...],
+    ) -> Any | None:
+        for key in keys:
+            value = payload.get(key)
+            if value not in (None, "", [], {}):
+                return value
+        return None
 
     def _resolve_json_path(
         self,
@@ -1899,17 +2045,36 @@ class ScraplingExtractor(BaseExtractor):
         payload: dict[str, Any],
         inherited: dict[str, Any],
     ) -> bool:
-        has_direct_price = any(
-            payload.get(key) not in (None, "", [], {})
-            for key in ("price", "lowPrice", "highPrice")
+        has_direct_price = (
+            self._json_first_non_empty(payload, self._JSON_PRICE_KEYS)
+            is not None
         )
-        has_offer_dict = isinstance(payload.get("offers"), dict)
+        offers = self._json_first_non_empty(payload, self._JSON_OFFER_KEYS)
+        has_offer_price = False
+        if isinstance(offers, dict):
+            price_spec = self._json_first_non_empty(
+                offers,
+                self._JSON_PRICE_SPEC_KEYS,
+            )
+            has_offer_price = (
+                self._json_first_non_empty(offers, self._JSON_PRICE_KEYS)
+                is not None
+                or (
+                    isinstance(price_spec, dict)
+                    and self._json_first_non_empty(
+                        price_spec,
+                        self._JSON_PRICE_KEYS,
+                    )
+                    is not None
+                )
+            )
         has_identity = any(
             payload.get(key) not in (None, "", [], {})
             or inherited.get(key) not in (None, "", [], {})
-            for key in ("name", "model", "description")
+            for key in self._JSON_FALLBACK_KEYS
+            if key not in self._JSON_CURRENCY_KEYS
         )
-        return has_identity and (has_direct_price or has_offer_dict)
+        return has_identity and (has_direct_price or has_offer_price)
 
     def _collect_json_vehicle_candidates(
         self,
@@ -1960,7 +2125,7 @@ class ScraplingExtractor(BaseExtractor):
                 candidate.setdefault(key, value)
             results.append(candidate)
 
-        offers = payload.get("offers")
+        offers = self._json_first_non_empty(payload, self._JSON_OFFER_KEYS)
         if isinstance(offers, list):
             parent_fields = {
                 key: payload.get(key, current_inherited.get(key))
@@ -1978,7 +2143,7 @@ class ScraplingExtractor(BaseExtractor):
                 )
 
         for key, value in payload.items():
-            if key == "offers" and isinstance(value, list):
+            if key in self._JSON_OFFER_KEYS:
                 continue
             if isinstance(value, (dict, list)):
                 results.extend(
@@ -2030,47 +2195,100 @@ class ScraplingExtractor(BaseExtractor):
     def _map_json_vehicle(self, vehicle: dict) -> RawObservation | None:
         p = self.profile
         try:
-            model = str(vehicle.get("name", vehicle.get("model", "")))
-            trim = str(
-                vehicle.get(
-                    "trim",
-                    vehicle.get("description", vehicle.get("model", "")),
+            model = str(
+                self._json_first_non_empty(
+                    vehicle,
+                    ("name", "schema:name", "model", "schema:model"),
                 )
+                or ""
+            )
+            trim = str(
+                self._json_first_non_empty(
+                    vehicle,
+                    (
+                        "trim",
+                        "schema:trim",
+                        "description",
+                        "schema:description",
+                        "model",
+                        "schema:model",
+                    ),
+                )
+                or ""
             )
             # Fallback: use model name as trim when no trim info available
             if not trim.strip():
                 trim = model
-            offers = vehicle.get("offers", {})
+            offers = self._json_first_non_empty(
+                vehicle,
+                self._JSON_OFFER_KEYS,
+            ) or {}
             if isinstance(offers, list):
                 offers = next(
                     (
                         item
                         for item in offers
                         if isinstance(item, dict)
-                        and item.get("price") not in (None, "")
+                        and self._json_first_non_empty(
+                            item,
+                            self._JSON_PRICE_KEYS,
+                        )
+                        not in (None, "")
                     ),
                     {},
                 )
-            price_raw = vehicle.get(
-                "price",
-                offers.get("price", offers.get("lowPrice", 0)),
+            if not isinstance(offers, dict):
+                offers = {}
+            price_spec = self._json_first_non_empty(
+                offers,
+                self._JSON_PRICE_SPEC_KEYS,
             )
-            currency = str(
-                vehicle.get(
-                    "priceCurrency",
-                    offers.get("priceCurrency", p.default_currency),
+            price_raw = self._json_first_non_empty(
+                vehicle,
+                self._JSON_PRICE_KEYS,
+            )
+            if price_raw is None:
+                price_raw = self._json_first_non_empty(
+                    offers,
+                    self._JSON_PRICE_KEYS,
                 )
+            if price_raw is None and isinstance(price_spec, dict):
+                price_raw = self._json_first_non_empty(
+                    price_spec,
+                    self._JSON_PRICE_KEYS,
+                )
+            currency = (
+                self._json_first_non_empty(vehicle, self._JSON_CURRENCY_KEYS)
+                or self._json_first_non_empty(offers, self._JSON_CURRENCY_KEYS)
+            )
+            if currency is None and isinstance(price_spec, dict):
+                currency = self._json_first_non_empty(
+                    price_spec,
+                    self._JSON_CURRENCY_KEYS,
+                )
+            currency = str(currency or p.default_currency)
+            msrp_value = float(price_raw)
+            source_url = str(
+                self._json_first_non_empty(
+                    offers,
+                    ("url", "schema:url"),
+                )
+                or self._json_first_non_empty(
+                    vehicle,
+                    ("url", "schema:url"),
+                )
+                or p.url
             )
             return self._build_observation(
                 official_model=model,
                 official_trim=trim,
-                msrp_value=float(price_raw),
+                msrp_value=msrp_value,
                 currency=currency,
-                source_url=p.url,
+                source_url=source_url,
                 raw_payload={
                     **vehicle,
                     "trimText": trim,
-                    "sourcePriceValue": float(price_raw),
+                    "sourcePriceValue": msrp_value,
                 },
             )
         except (TypeError, ValueError, KeyError) as exc:

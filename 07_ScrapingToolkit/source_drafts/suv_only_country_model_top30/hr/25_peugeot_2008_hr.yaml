@@ -1,111 +1,81 @@
 source_code: peugeot_2008_hr_draft_scrapling
 country: 克罗地亚
 brand: PEUGEOT
-source_url: https://www.peugeot.hr/modeli/novi-2008.html
-source_type: manufacturer_official
+source_url: https://www.peugeot.hr/korisne-informacije/cjenici.html
+source_type: official_price_list
 price_semantics: base_msrp
-extractor_type: scrapling
+extractor_type: pdf_text
 profile:
-  url: https://www.peugeot.hr/modeli/novi-2008.html
-  tier: stealth
-  headless: true
-  network_idle: true
-  impersonate: chrome
+  url: https://www.peugeot.hr/content/dam/peugeot/croatia/cjenici/aktualni-cjenici/2008.pdf
+  timeout_seconds: 30
+  retry_attempts: 1
+  retry_delay_seconds: 1
+  browser_download_fallback: true
   default_currency: EUR
   default_tax_included: true
-  default_price_label: Preporučena maloprodajna cijena s PDV-om
+  default_price_label: Preporučena maloprodajna cijena uključuje PDV i PPMV
   fixed_model: '2008'
   fixed_jato_model: '2008'
-  fixed_jato_powertrain: null
-  model_rules: []
-  skip_if_model_unmapped: false
   copy_trim_to_jato_trim: true
-  confidence_rules:
-    base: 0.2
-    fixed_model_bonus: 0.18
-    fixed_jato_model_bonus: 0.12
-    model_rule_bonus: 0.12
-    trim_present_bonus: 0.1
-    copy_trim_to_jato_trim_bonus: 0.09
-    parsed_price_text_bonus: 0.03
-    currency_bonus: 0.01
-    price_label_bonus: 0.02
-    trim_keyword_bonuses: []
-    price_band_bonuses:
-    - key: price_band_entry
-      label: Entry price band matched
-      max: 0
-      delta: 0.0
-    - key: price_band_mid
-      label: Mid price band matched
-      min: 0
-      max: 0
-      delta: 0.01
-    - key: price_band_high
-      label: High price band matched
-      min: 0
-      delta: 0.03
-    powertrain_keyword_bonuses: []
-    powertrain_bonuses:
-    - key: powertrain_bev
-      label: 'Powertrain matched: BEV'
-      powertrain: BEV
-      delta: 0.03
-    - key: powertrain_mhev
-      label: 'Powertrain matched: MHEV'
-      powertrain: MHEV
-      delta: 0.03
-    - key: powertrain_ice
-      label: 'Powertrain matched: ICE'
-      powertrain: ICE
-      delta: 0.03
-    clamp_min: 0.0
-    clamp_max: 1.0
-  structured_fields:
-    edition_rules:
-    - key: edition_special
-      label: Special Edition
-      keyword: special edition
-      special: true
-    powertrain_rules:
-    - key: powertrain_bev
-      powertrain: BEV
-      keywords:
-      - električni
-      - electric
-      - E-2008
-      - elbil
-    - key: powertrain_mhev
-      powertrain: MHEV
-      keywords:
-      - mild hybrid
-      - 48V
-    - key: powertrain_ice
-      powertrain: ICE
-      keywords:
-      - benzin
-      - PureTech
-  auto_accept_gates:
-    review_threshold: 0.95
-    semi_auto_threshold: 0.98
-    require_powertrain_match: true
-    force_review_if_powertrain_missing: true
-    force_review_if_powertrain_ambiguous: true
-    force_review_for_special_edition: true
-  json_script_selector: script[type='application/ld+json']
-  css:
-    vehicle_container: body
-    model: h2
-    trim: h3
-    price: '[class*="price"]'
+  match_confidence: 0.86
+  match_status: review_required
+  match_reason:
+    kind: official_pdf_price_list
+    source: peugeot_hr_cjenici
+    note: Official Peugeot Croatia 2008 price-list PDF from Cjenici page; final column includes PDV and PPMV.
+  entry_patterns:
+  - pattern: 'Style\s+Turbo\s+100\s+BVM6\s+Benzin\s+\d+\s+\d+\s*\(\d+\)\s+\d{2}\.\d{3}\s+\d{3}\s+(?P<price>\d{2}\.\d{3})'
+    official_trim: Style Turbo 100 BVM6
+    official_powertrain: Turbo 100 BVM6
+    jato_powertrain: ICE
+  - pattern: 'Style\s+Hybrid\s+110\s+e\s*-\s*DCS6\s+Benzin\s+\d+\s+\d+\s*\(\d+\)\s+\d{2}\.\d{3}\s+\d{3}\s+(?P<price>\d{2}\.\d{3})'
+    official_trim: Style Hybrid 110 e-DCS6
+    official_powertrain: Hybrid 110 e-DCS6
+    jato_powertrain: MHEV
+  - pattern: 'Business\s+Turbo\s+100\s+BVM6\s+Benzin\s+\d+\s+\d+\s*\(\d+\)\s+\d{2}\.\d{3}\s+\d{3}\s+(?P<price>\d{2}\.\d{3})'
+    official_trim: Business Turbo 100 BVM6
+    official_powertrain: Turbo 100 BVM6
+    jato_powertrain: ICE
+  - pattern: 'Business\s+Hybrid\s+110\s+e\s*-\s*DCS6\s+Benzin\s+\d+\s+\d+\s*\(\d+\)\s+\d{2}\.\d{3}\s+\d{3}\s+(?P<price>\d{2}\.\d{3})'
+    official_trim: Business Hybrid 110 e-DCS6
+    official_powertrain: Hybrid 110 e-DCS6
+    jato_powertrain: MHEV
+  - pattern: 'Allure\s+Turbo\s+100\s+BVM6\s+Benzin\s+\d+\s+\d+\s*\(\d+\)\s+\d{2}\.\d{3}\s+\d{3}\s+(?P<price>\d{2}\.\d{3})'
+    official_trim: Allure Turbo 100 BVM6
+    official_powertrain: Turbo 100 BVM6
+    jato_powertrain: ICE
+  - pattern: 'Allure\s+Hybrid\s+110\s+e\s*-\s*DCS6\s+Benzin\s+\d+\s+\d+\s*\(\d+\)\s+\d{2}\.\d{3}\s+\d{3}\s+(?P<price>\d{2}\.\d{3})'
+    official_trim: Allure Hybrid 110 e-DCS6
+    official_powertrain: Hybrid 110 e-DCS6
+    jato_powertrain: MHEV
+  - pattern: 'Allure\s+Hybrid\s+145\s+e\s*-\s*DCS6\s+Benzin\s+\d+\s+\d+\s*\(\d+\)\s+\d{2}\.\d{3}\s+\d{3}\s+(?P<price>\d{2}\.\d{3})'
+    official_trim: Allure Hybrid 145 e-DCS6
+    official_powertrain: Hybrid 145 e-DCS6
+    jato_powertrain: MHEV
+  - pattern: 'GT\s+Hybrid\s+145\s+e\s*-\s*DCS6\s+Benzin\s+\d+\s+\d+\s*\(\d+\)\s+\d{2}\.\d{3}\s+\d{3}\s+(?P<price>\d{2}\.\d{3})'
+    official_trim: GT Hybrid 145 e-DCS6
+    official_powertrain: Hybrid 145 e-DCS6
+    jato_powertrain: MHEV
+  - pattern: 'Style\s+Elektri\S+\s+156\s+e\s*-\s*EAT\s+Elektri\S+\s+0\s+\d+\s*\(\d+\)\s+\d{2}\.\d{3}\s+-\s+(?P<price>\d{2}\.\d{3})'
+    official_trim: Style Elektricni 156 e-EAT
+    official_powertrain: Elektricni 156 e-EAT
+    jato_powertrain: BEV
+  - pattern: 'Allure\s+Elektri\S+\s+156\s+e\s*-\s*EAT\s+Elektri\S+\s+0\s+\d+\s*\(\d+\)\s+\d{2}\.\d{3}\s+-\s+(?P<price>\d{2}\.\d{3})'
+    official_trim: Allure Elektricni 156 e-EAT
+    official_powertrain: Elektricni 156 e-EAT
+    jato_powertrain: BEV
+  - pattern: 'GT\s+Elektri\S+\s+156\s+e\s*-\s*EAT\s+Elektri\S+\s+0\s+\d+\s*\(\d+\)\s+\d{2}\.\d{3}\s+-\s+(?P<price>\d{2}\.\d{3})'
+    official_trim: GT Elektricni 156 e-EAT
+    official_powertrain: Elektricni 156 e-EAT
+    jato_powertrain: BEV
 schedule:
   frequency: manual_only
   run_window_start: 00:00
   run_window_end: 05:00
   preferred_weekday: monday
-notes: Keywords filled from official manufacturer website research (HR market). CSS
-  selectors still require browser-based inspection before promotion. [CSS selectors
-  applied from brand probe]
+notes: Keywords filled from official manufacturer website research (HR market).
+  Replaced broad page CSS extraction with official Peugeot Croatia 2008 price-list
+  PDF from Cjenici page to avoid accessory prices and campaign offer copy.
 bootstrap_meta:
   country_model_rank: 25
   suggested_scope_kind: single_model

@@ -59,6 +59,17 @@ def _is_truthy(value: str | None) -> bool:
     return str(value or "").strip().lower() in {"1", "true", "yes", "on"}
 
 
+def _float_env(name: str) -> float | None:
+    raw = os.getenv(name)
+    if raw is None or not raw.strip():
+        return None
+    try:
+        return float(raw)
+    except ValueError:
+        print(f"[WARN] Invalid {name}={raw!r}; ignoring")
+        return None
+
+
 def _auth_headers(
     auth_token: str | None = None,
     user_name: str | None = None,
@@ -234,6 +245,7 @@ def _auto_resolve_reviews(
     *,
     decided_by: str,
     limit: int,
+    min_score: float | None,
     note: str | None,
     auth_token: str | None,
     user_name: str | None,
@@ -241,10 +253,12 @@ def _auto_resolve_reviews(
     totals = {
         "candidateCases": 0,
         "autoApprovedCount": 0,
+        "directAutoReviewApprovedCount": 0,
         "linkAppliedCount": 0,
         "overrideAppliedCount": 0,
         "unresolvedCount": 0,
         "missingObservationCount": 0,
+        "scoreRejectedCount": 0,
     }
     for country in countries:
         payload = {
@@ -253,6 +267,8 @@ def _auto_resolve_reviews(
             "limit": limit,
             "note": note,
         }
+        if min_score is not None:
+            payload["min_score"] = min_score
         result = _post_backend_json(
             "/review/cases/auto-resolve",
             payload,
@@ -263,7 +279,9 @@ def _auto_resolve_reviews(
             "  [auto-review]"
             f" country={country}"
             f" approved={result.get('autoApprovedCount', 0)}"
+            f" direct={result.get('directAutoReviewApprovedCount', 0)}"
             f" unresolved={result.get('unresolvedCount', 0)}"
+            f" score_rejected={result.get('scoreRejectedCount', 0)}"
             f" links={result.get('linkAppliedCount', 0)}"
             f" overrides={result.get('overrideAppliedCount', 0)}"
         )
@@ -315,6 +333,8 @@ def _write_ingest_status(
     empty_count: int,
     fail_count: int,
     total: int = 0,
+    auto_review_totals: dict[str, int] | None = None,
+    materialize_totals: dict[str, int] | None = None,
 ) -> None:
     """Write msrp_ingest status to scheduled_fetch_status.json."""
     import json as _json
@@ -364,6 +384,8 @@ def _write_ingest_status(
             "okPct": ok_pct,
             "requiresReview": True,
             "dryRunBeforeIngest": True,
+            "autoReview": auto_review_totals or {},
+            "materialize": materialize_totals or {},
         },
     )
     print(f"[status] msrp_ingest={status} okPct={ok_pct}% written to {status_path}")
@@ -403,6 +425,11 @@ def main() -> None:
         "--auto-review-limit",
         type=int,
         default=int(os.getenv("JATO_AUTO_REVIEW_LIMIT", "500")),
+    )
+    parser.add_argument(
+        "--auto-review-min-score",
+        type=float,
+        default=_float_env("JATO_MSRP_AUTO_REVIEW_MIN_SCORE"),
     )
     parser.add_argument(
         "--materialize-limit",
@@ -489,25 +516,31 @@ def main() -> None:
         f"{fail_count} failed"
     )
 
+    auto_review_totals: dict[str, int] | None = None
+    materialize_totals: dict[str, int] | None = None
+
     if args.auto_review:
-        totals = _auto_resolve_reviews(
+        auto_review_totals = _auto_resolve_reviews(
             countries,
             decided_by=args.decided_by,
             limit=args.auto_review_limit,
+            min_score=args.auto_review_min_score,
             note=args.note,
             auth_token=args.auth_token,
             user_name=args.user_name,
         )
         print(
             "Auto-review:"
-            f" approved={totals['autoApprovedCount']}"
-            f" unresolved={totals['unresolvedCount']}"
-            f" links={totals['linkAppliedCount']}"
-            f" overrides={totals['overrideAppliedCount']}"
+            f" approved={auto_review_totals['autoApprovedCount']}"
+            f" direct={auto_review_totals['directAutoReviewApprovedCount']}"
+            f" unresolved={auto_review_totals['unresolvedCount']}"
+            f" score_rejected={auto_review_totals['scoreRejectedCount']}"
+            f" links={auto_review_totals['linkAppliedCount']}"
+            f" overrides={auto_review_totals['overrideAppliedCount']}"
         )
 
     if args.materialize:
-        totals = _materialize_current_prices(
+        materialize_totals = _materialize_current_prices(
             countries,
             limit=args.materialize_limit,
             auth_token=args.auth_token,
@@ -515,12 +548,20 @@ def main() -> None:
         )
         print(
             "Materialize:"
-            f" candidates={totals['candidateObservations']}"
-            f" materialized={totals['materializedKeys']}"
+            f" candidates={materialize_totals['candidateObservations']}"
+            f" materialized={materialize_totals['materializedKeys']}"
         )
 
     print(f"{'='*70}")
-    _write_ingest_status(countries, ok_count, empty_count, fail_count, total=total)
+    _write_ingest_status(
+        countries,
+        ok_count,
+        empty_count,
+        fail_count,
+        total=total,
+        auto_review_totals=auto_review_totals,
+        materialize_totals=materialize_totals,
+    )
     if STRICT_EXIT and fail_count > 0:
         raise SystemExit(1)
 

@@ -363,6 +363,10 @@ export interface HermesMsrpCountryProgressCountry {
   topFailureReason?: string;
   failureBreakdown?: Record<string, number>;
   strategyRecommendations?: Record<string, number>;
+  financeObservationCandidates?: number;
+  financeMonthlyPaymentCount?: number;
+  financeSemanticsCounts?: Record<string, number>;
+  financeTypeCounts?: Record<string, number>;
 }
 export interface HermesMsrpSourceRepairBacklogGroup {
   failureReason: string;
@@ -383,11 +387,20 @@ export interface HermesMsrpSourceRepairBacklogGroup {
     neuralNetworkFit?: string;
     reason?: string;
   };
+  referenceAssist?: {
+    preferred?: string;
+    thirdPartyReference?: string;
+    referencePolicy?: string;
+    officialSourceRequiredForIngest?: boolean;
+    acceptanceRules?: string[];
+    reason?: string;
+  };
   recommendedAction?: string;
   recommendedStrategy: string;
   recommendedStrategies?: Record<string, number>;
   affectedCountries: string[];
   affectedCountryCount?: number;
+  affectedBrands?: string[];
   sampleSources?: string[];
   sampleTransientRegressions?: Array<{
     countryCode: string;
@@ -409,6 +422,44 @@ export interface HermesMsrpSourceRepairBacklog {
   sourceRepairIssueCount?: number;
   groups: HermesMsrpSourceRepairBacklogGroup[];
 }
+export interface HermesMsrpSourceReferenceEvidenceItem {
+  countryCode: string;
+  pricingCountry?: string;
+  brand?: string;
+  modelQuery: string;
+  sourceCodes?: string[];
+  referenceSource?: string;
+  referencePolicy?: string;
+  officialIngestEligible: boolean;
+  localReferenceCount: number;
+  localPriceReferences?: Array<{
+    evId?: string;
+    name?: string;
+    startPrice?: number;
+    currency?: string;
+    pricingCountry?: string;
+    isConverted?: boolean;
+    infoUrl?: string;
+  }>;
+  fetchError?: string | null;
+  reviewRecommendation?: string;
+}
+export interface HermesMsrpSourceReferenceEvidence {
+  schemaVersion: string;
+  generatedAt?: string | null;
+  backlogRunId?: string | null;
+  referenceSource?: string;
+  referencePolicy?: string;
+  officialSourceRequiredForIngest?: boolean;
+  officialIngestEligible?: boolean;
+  summary: {
+    evidenceItemCount: number;
+    localReferenceCount: number;
+    missingLocalReferenceCount: number;
+    officialIngestEligibleCount: number;
+  };
+  items: HermesMsrpSourceReferenceEvidenceItem[];
+}
 export interface HermesMsrpStableCoverage {
   gateThreshold?: number;
   countryCount?: number;
@@ -418,6 +469,10 @@ export interface HermesMsrpStableCoverage {
   sourceCount?: number;
   readySourceCount?: number;
   sourcePassRate?: number;
+  financeObservationCandidates?: number;
+  financeMonthlyPaymentCount?: number;
+  financeSemanticsCounts?: Record<string, number>;
+  financeTypeCounts?: Record<string, number>;
   latestRunId?: string;
   activeRunId?: string;
   activeRunRunning?: boolean;
@@ -447,6 +502,10 @@ export interface HermesMsrpCountryProgressResponse {
     observedCountries?: string[];
     missingCountries?: string[];
     duplicateCountries?: string[];
+    financeObservationCandidates?: number;
+    financeMonthlyPaymentCount?: number;
+    financeSemanticsCounts?: Record<string, number>;
+    financeTypeCounts?: Record<string, number>;
   };
   countries: HermesMsrpCountryProgressCountry[];
   allCountriesLatest?: HermesMsrpCountryProgressCountry[];
@@ -454,6 +513,7 @@ export interface HermesMsrpCountryProgressResponse {
   topBlockingCountries?: { countryCode: string; passPct: number; reason: string; recommendedAction: string }[];
   topFailureReasons?: { reason: string; count: number }[];
   sourceRepairBacklog?: HermesMsrpSourceRepairBacklog;
+  sourceReferenceEvidence?: HermesMsrpSourceReferenceEvidence;
   findings?: { type: string; severity: string; message: string }[];
 }
 
@@ -472,6 +532,8 @@ export interface HermesMsrpDryrunHistoryRun {
   empty: number;
   fail: number;
   errors: number;
+  financeObservationCandidates?: number;
+  financeMonthlyPaymentCount?: number;
   expectedCountryCount: number;
   observedCountryCount: number;
   missingCountryCount: number;

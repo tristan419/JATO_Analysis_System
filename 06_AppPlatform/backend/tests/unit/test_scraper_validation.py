@@ -71,6 +71,14 @@ class TestCurrencyMatch:
     def test_correct_currency_sweden(self):
         assert _rule_currency_match(_make_obs(currency="SEK"), "瑞典").ok
 
+    def test_correct_currency_sweden_iso_code(self):
+        assert _rule_currency_match(_make_obs(currency="SEK"), "se").ok
+
+    def test_wrong_currency_sweden_iso_code(self):
+        r = _rule_currency_match(_make_obs(currency="EUR"), "se")
+        assert not r.ok
+        assert "SEK" in r.reason
+
     def test_unknown_country_is_ok(self):
         assert _rule_currency_match(_make_obs(currency="ZZZ"), "未知国家").ok
 
@@ -113,6 +121,17 @@ class TestDeltaCheck:
         r = _rule_delta_check(obs, prev)
         assert not r.ok
         assert "delta" in r.reason.lower()
+
+    def test_monthly_lease_semantics_skip_vehicle_price_delta(self):
+        prev = {("3 Series", "320i Sedan"): 30_000.0}
+        obs = _make_obs(
+            msrp_value=5990.0,
+            currency="SEK",
+            raw_payload={"price_semantics": "lease_monthly"},
+        )
+        r = _rule_delta_check(obs, prev)
+        assert r.ok
+        assert "non-current" in r.reason
 
 
 # ── batch validation tests ───────────────────────────────────────────
@@ -158,3 +177,66 @@ class TestValidateObservations:
         assert len(report.rejected) == 1
         failures = report.rejected[0][1]
         assert any(f.rule == "delta_check" for f in failures)
+
+    def test_monthly_lease_amount_passes_finance_semantics(self):
+        obs_list = [
+            _make_obs(
+                msrp_value=5990.0,
+                currency="SEK",
+                price_label="Private lease",
+                raw_payload={
+                    "price_semantics": "lease_monthly",
+                    "monthly_payment": 5990,
+                    "finance_type": "private_lease",
+                },
+            )
+        ]
+        report = validate_observations(
+            obs_list,
+            country="se",
+            previous_prices={("3 Series", "320i Sedan"): 30_000.0},
+        )
+        assert len(report.valid) == 1
+        assert len(report.rejected) == 0
+
+    def test_monthly_lease_source_semantics_pass_without_raw_payload(self):
+        obs_list = [
+            _make_obs(
+                msrp_value=5990.0,
+                currency="SEK",
+                price_label="Private lease",
+            )
+        ]
+        report = validate_observations(
+            obs_list,
+            country="se",
+            source_price_semantics="lease_monthly",
+        )
+        assert len(report.valid) == 1
+
+    def test_monthly_amount_still_rejected_without_finance_semantics(self):
+        obs_list = [
+            _make_obs(
+                msrp_value=5990.0,
+                currency="SEK",
+                price_label="Private lease",
+            )
+        ]
+        report = validate_observations(obs_list, country="se")
+        assert len(report.rejected) == 1
+        failures = report.rejected[0][1]
+        assert any(f.rule == "price_range" for f in failures)
+
+    def test_monthly_amount_rejects_unreasonable_finance_value(self):
+        obs_list = [
+            _make_obs(
+                msrp_value=999_999.0,
+                currency="SEK",
+                price_label="Private lease",
+                raw_payload={"price_semantics": "lease_monthly"},
+            )
+        ]
+        report = validate_observations(obs_list, country="se")
+        assert len(report.rejected) == 1
+        failures = report.rejected[0][1]
+        assert any(f.rule == "price_range" for f in failures)

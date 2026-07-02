@@ -1,13 +1,18 @@
 source_code: toyota_rav4_hr_draft_scrapling
 country: 克罗地亚
 brand: TOYOTA
-source_url: https://www.toyota.hr/new-cars/coming-soon/rav4
+source_url: https://www.toyota.hr/new-cars/rav4
 source_type: manufacturer_official
 price_semantics: base_msrp
 extractor_type: scrapling
 profile:
-  url: https://www.toyota.hr/new-cars/coming-soon/rav4
+  url: https://www.toyota.hr/new-cars/rav4
   headless: true
+  network_idle: false
+  load_dom: false
+  timeout_ms: 30000
+  wait_ms: 500
+  disable_resources: true
   default_currency: EUR
   default_tax_included: true
   default_price_label: Preporučena maloprodajna cijena s PDV-om
@@ -95,7 +100,6 @@ profile:
     trim: h3
     price: '[class*="price"]'
   tier: stealth
-  network_idle: true
   impersonate: chrome
 schedule:
   frequency: manual_only
@@ -105,7 +109,9 @@ schedule:
 notes: Keywords filled from official manufacturer website research (HR market). CSS
   selectors still require browser-based inspection before promotion. [CSS selectors
   applied from brand probe] [Switched to playwright_card_flow with toyota_trim_overview_playwright.yaml]
-  [Reverted to scrapling — playwright preset needs per-brand tuning]
+  [Reverted to scrapling — playwright preset needs per-brand tuning] Disabled
+  nonessential browser resources and skipped network-idle waits to avoid Toyota
+  HR load event timeouts on Akamai-backed pages.
 bootstrap_meta:
   country_model_rank: 28
   suggested_scope_kind: single_model

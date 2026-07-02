@@ -24,7 +24,7 @@ profile:
     source: audi_no_q4_pricelist
     note: Official Audi Norway Q4 e-tron price-list PDF exposes delivered Oslo NOK prices including VAT and registration fee.
   entry_patterns:
-  - pattern: '(?P<trim>Q4 e-tron quattro(?: Plus| Pro| S line Pro Black edition| Performance(?: Plus| Pro| S line Pro Black edition)?)?)\s+Lithium Ion batteri \(82/77\)\s+\d+\s+[\d,]+\s+\d+\s+\d{2}\.\d{3},-\s+(?P<price>\d{3}\.\d{3}),'
+  - pattern: '(?P<trim>Q4 e-tron quattro(?: Plus| Pro| S line Pro Black edition| Performance(?: Plus| Pro| S line Pro Black edition)?)?)\s+Lithium Ion batteri \(82/77\)\s+\d+\s+[\d,]+\s+\d+\s+\d{2}\.\d{3},[-\u2013]?\s*\d*\s+(?P<price>\d{3}\.\d{3})(?:,[-\u2013]?\s*\d*)?'
     jato_powertrain: BEV
 schedule:
   frequency: manual_only

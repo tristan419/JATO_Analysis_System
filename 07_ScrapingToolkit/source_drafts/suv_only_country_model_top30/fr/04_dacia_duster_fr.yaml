@@ -1,12 +1,12 @@
 source_code: dacia_duster_fr_draft_scrapling
 country: 法国
 brand: DACIA
-source_url: https://www.dacia.fr/modeles/duster.html
+source_url: https://www.dacia.fr/gamme-electrique-et-hybride/duster-suv/prix-versions.html
 source_type: manufacturer_official
 price_semantics: base_msrp
 extractor_type: scrapling
 profile:
-  url: https://www.dacia.fr/modeles/duster.html
+  url: https://www.dacia.fr/gamme-electrique-et-hybride/duster-suv/prix-versions.html
   tier: stealth
   headless: true
   network_idle: true

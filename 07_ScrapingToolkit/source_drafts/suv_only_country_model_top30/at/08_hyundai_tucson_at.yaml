@@ -1,113 +1,93 @@
 source_code: hyundai_tucson_at_draft_scrapling
 country: 奥地利
 brand: HYUNDAI
-source_url: https://www.hyundai.com/at/de/modelle/tucson.html
-source_type: manufacturer_official
+source_url: https://www.hyundai.at/tucson/
+source_type: official_price_list
 price_semantics: base_msrp
-extractor_type: scrapling
+extractor_type: pdf_text
 profile:
-  url: https://www.hyundai.com/at/de/modelle/tucson.html
-  headless: true
+  url: https://hyundai.azureedge.net/media/hzcfbnyd/hyundai-tucson-my27-202605.pdf
+  timeout_seconds: 30
+  retry_attempts: 1
+  retry_delay_seconds: 1
+  browser_download_fallback: true
   default_currency: EUR
   default_tax_included: true
-  default_price_label: Unverbindliche Preisempfehlung inkl. MwSt
+  default_price_label: UVP inkl. NoVA und MwSt.
   fixed_model: TUCSON
   fixed_jato_model: TUCSON
-  fixed_jato_powertrain: null
-  model_rules: []
-  skip_if_model_unmapped: false
   copy_trim_to_jato_trim: true
-  confidence_rules:
-    base: 0.2
-    fixed_model_bonus: 0.18
-    fixed_jato_model_bonus: 0.12
-    model_rule_bonus: 0.12
-    trim_present_bonus: 0.1
-    copy_trim_to_jato_trim_bonus: 0.09
-    parsed_price_text_bonus: 0.03
-    currency_bonus: 0.01
-    price_label_bonus: 0.02
-    trim_keyword_bonuses: []
-    price_band_bonuses:
-    - key: price_band_entry
-      label: Entry price band matched
-      max: 0
-      delta: 0.0
-    - key: price_band_mid
-      label: Mid price band matched
-      min: 0
-      max: 0
-      delta: 0.01
-    - key: price_band_high
-      label: High price band matched
-      min: 0
-      delta: 0.03
-    powertrain_keyword_bonuses: []
-    powertrain_bonuses:
-    - key: powertrain_phev
-      label: 'Powertrain matched: PHEV'
-      powertrain: PHEV
-      delta: 0.03
-    - key: powertrain_hev
-      label: 'Powertrain matched: HEV'
-      powertrain: HEV
-      delta: 0.03
-    - key: powertrain_mhev
-      label: 'Powertrain matched: MHEV'
-      powertrain: MHEV
-      delta: 0.03
-    - key: powertrain_ice
-      label: 'Powertrain matched: ICE'
-      powertrain: ICE
-      delta: 0.03
-    clamp_min: 0.0
-    clamp_max: 1.0
-  structured_fields:
-    edition_rules:
-    - key: edition_special
-      label: Special Edition
-      keyword: special edition
-      special: true
-    powertrain_rules:
-    - key: powertrain_phev
-      powertrain: PHEV
-      keywords:
-      - Plug-in-Hybrid
-      - Plug-in Hybrid
-      - Tucson Plug-in Hybrid
-    - key: powertrain_hev
-      powertrain: HEV
-      keywords:
-      - Hybrid
-      - Tucson Hybrid
-      - Vollhybrid
-    - key: powertrain_mhev
-      powertrain: MHEV
-      keywords:
-      - Mild-Hybrid
-      - 48V
-      - MHEV
-    - key: powertrain_ice
-      powertrain: ICE
-      keywords:
-      - Benzin
-      - Diesel
-  auto_accept_gates:
-    review_threshold: 0.95
-    semi_auto_threshold: 0.98
-    require_powertrain_match: true
-    force_review_if_powertrain_missing: true
-    force_review_if_powertrain_ambiguous: true
-    force_review_for_special_edition: true
-  json_script_selector: script[type='application/ld+json']
-  css:
-    vehicle_container: body
-    model: h2, h3
-    trim: h3
-    price: '[class*="price"]'
-  tier: stealth
-  network_idle: true
-  impersonate: chrome
+  match_confidence: 0.86
+  match_status: review_required
+  match_reason:
+    kind: official_pdf_price_list
+    source: hyundai_at_tucson_preisliste
+    note: Official Hyundai Austria TUCSON MY27 price list PDF, May 2026.
+  entry_patterns:
+  - pattern: '1\.6\s+T-GDI\s+2WD\s+110\s*/\s*150.*?6MT.*?(?P<price>35\.490,\s*-)'
+    official_trim: Smart Line 1.6 T-GDI 2WD 6MT
+    official_powertrain: 1.6 T-GDI 2WD 6MT
+    jato_powertrain: ICE
+  - pattern: '1\.6\s+T-GDI\s+2WD\s+110\s*/\s*150.*?6MT.*?35\.490,\s*-\s+(?P<price>40\.490,\s*-)'
+    official_trim: Comfort Line 1.6 T-GDI 2WD 6MT
+    official_powertrain: 1.6 T-GDI 2WD 6MT
+    jato_powertrain: ICE
+  - pattern: '1\.6\s+T-GDI\s+2WD\s+DCT\s+110\s*/\s*150.*?7DCT.*?(?P<price>37\.490,\s*-)'
+    official_trim: Smart Line 1.6 T-GDI 2WD 7DCT
+    official_powertrain: 1.6 T-GDI 2WD 7DCT
+    jato_powertrain: ICE
+  - pattern: '1\.6\s+T-GDI\s+2WD\s+DCT\s+110\s*/\s*150.*?7DCT.*?37\.490,\s*-\s+(?P<price>42\.490,\s*-)'
+    official_trim: Comfort Line 1.6 T-GDI 2WD 7DCT
+    official_powertrain: 1.6 T-GDI 2WD 7DCT
+    jato_powertrain: ICE
+  - pattern: '1\.6\s+T-GDI\s+4WD\s+DCT\s+132\s*/\s*180.*?7DCT.*?(?P<price>45\.490,\s*-)'
+    official_trim: Comfort Line 1.6 T-GDI 4WD 7DCT
+    official_powertrain: 1.6 T-GDI 4WD 7DCT
+    jato_powertrain: ICE
+  - pattern: '1\.6\s+T-GDI\s+4WD\s+DCT\s+132\s*/\s*180.*?7DCT.*?45\.490,\s*-\s+(?P<price>50\.490,\s*-)'
+    official_trim: N Line 1.6 T-GDI 4WD 7DCT
+    official_powertrain: 1.6 T-GDI 4WD 7DCT
+    jato_powertrain: ICE
+  - pattern: '1\.6\s+T-GDI\s+HEV\s+2WD\s+132\s*/\s*180.*?6AT.*?(?P<price>37\.990,\s*-)'
+    official_trim: Smart Line 1.6 T-GDI HEV 2WD 6AT
+    official_powertrain: 1.6 T-GDI HEV 2WD 6AT
+    jato_powertrain: HEV
+  - pattern: '1\.6\s+T-GDI\s+HEV\s+2WD\s+132\s*/\s*180.*?6AT.*?37\.990,\s*-\s+(?P<price>42\.990,\s*-)'
+    official_trim: Comfort Line 1.6 T-GDI HEV 2WD 6AT
+    official_powertrain: 1.6 T-GDI HEV 2WD 6AT
+    jato_powertrain: HEV
+  - pattern: '1\.6\s+T-GDI\s+HEV\s+4WD\s+132\s*/\s*180.*?6AT.*?(?P<price>39\.990,\s*-)'
+    official_trim: Smart Line 1.6 T-GDI HEV 4WD 6AT
+    official_powertrain: 1.6 T-GDI HEV 4WD 6AT
+    jato_powertrain: HEV
+  - pattern: '1\.6\s+T-GDI\s+HEV\s+4WD\s+132\s*/\s*180.*?6AT.*?39\.990,\s*-\s+(?P<price>44\.990,\s*-)'
+    official_trim: Comfort Line 1.6 T-GDI HEV 4WD 6AT
+    official_powertrain: 1.6 T-GDI HEV 4WD 6AT
+    jato_powertrain: HEV
+  - pattern: '1\.6\s+T-GDI\s+HEV\s+4WD\s+132\s*/\s*180.*?6AT.*?39\.990,\s*-\s+44\.990,\s*-\s+(?P<price>49\.990,\s*-)'
+    official_trim: N Line 1.6 T-GDI HEV 4WD 6AT
+    official_powertrain: 1.6 T-GDI HEV 4WD 6AT
+    jato_powertrain: HEV
+  - pattern: '1\.6\s+T-GDI\s+PHEV\s+2WD\s+132\s*/\s*180.*?6AT.*?(?P<price>38\.990,\s*-)'
+    official_trim: Smart Line 1.6 T-GDI PHEV 2WD 6AT
+    official_powertrain: 1.6 T-GDI PHEV 2WD 6AT
+    jato_powertrain: PHEV
+  - pattern: '1\.6\s+T-GDI\s+PHEV\s+2WD\s+132\s*/\s*180.*?6AT.*?38\.990,\s*-\s+(?P<price>43\.990,\s*-)'
+    official_trim: Comfort Line 1.6 T-GDI PHEV 2WD 6AT
+    official_powertrain: 1.6 T-GDI PHEV 2WD 6AT
+    jato_powertrain: PHEV
+  - pattern: '1\.6\s+T-GDI\s+PHEV\s+4WD\s+132\s*/\s*180.*?6AT.*?(?P<price>40\.990,\s*-)'
+    official_trim: Smart Line 1.6 T-GDI PHEV 4WD 6AT
+    official_powertrain: 1.6 T-GDI PHEV 4WD 6AT
+    jato_powertrain: PHEV
+  - pattern: '1\.6\s+T-GDI\s+PHEV\s+4WD\s+132\s*/\s*180.*?6AT.*?40\.990,\s*-\s+(?P<price>45\.990,\s*-)'
+    official_trim: Comfort Line 1.6 T-GDI PHEV 4WD 6AT
+    official_powertrain: 1.6 T-GDI PHEV 4WD 6AT
+    jato_powertrain: PHEV
+  - pattern: '1\.6\s+T-GDI\s+PHEV\s+4WD\s+132\s*/\s*180.*?6AT.*?40\.990,\s*-\s+45\.990,\s*-\s+(?P<price>50\.990,\s*-)'
+    official_trim: N Line 1.6 T-GDI PHEV 4WD 6AT
+    official_powertrain: 1.6 T-GDI PHEV 4WD 6AT
+    jato_powertrain: PHEV
 schedule:
   frequency: manual_only
   run_window_start: 00:00
@@ -116,7 +96,10 @@ schedule:
 notes: Keywords filled from official manufacturer website research (AT market). CSS
   selectors still require browser-based inspection before promotion. [CSS selectors
   applied from brand probe] [Switched to playwright_card_flow with kia_trim_overview_playwright.yaml]
-  [Reverted to scrapling — playwright preset needs per-brand tuning]
+  [Reverted to scrapling — playwright preset needs per-brand tuning] Replaced stale
+  hyundai.com/at path with official hyundai.at page. Switched to Hyundai Austria
+  MY27 price-list PDF because direct browser navigation to hyundai.at times out
+  in local/Shanghai-like direct network paths while the official CDN PDF is stable.
 bootstrap_meta:
   country_model_rank: 8
   suggested_scope_kind: single_model

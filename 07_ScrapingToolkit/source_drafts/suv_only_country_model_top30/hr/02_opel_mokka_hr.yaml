@@ -13,110 +13,61 @@
 source_code: opel_mokka_hr_draft_scrapling
 country: 克罗地亚
 brand: OPEL
-source_url: https://www.opel.hr/vehicles/mokka-models/mokka/pregled.html
-source_type: manufacturer_official
+source_url: https://www.opel.hr/tools/preuzimanja/cjenici.html
+source_type: official_price_list
 price_semantics: base_msrp
-extractor_type: scrapling
+extractor_type: pdf_text
 profile:
-  url: https://www.opel.hr/vehicles/mokka-models/mokka/pregled.html
-  tier: stealth
-  headless: true
-  network_idle: true
-  impersonate: chrome
+  url: https://www.opel.hr/content/dam/opel/croatia/brochures/Pricelists/2026/05/QO.62.HR-Mokka-ICE-05.2026-maloprodajni-cjenik.pdf
+  timeout_seconds: 30
+  retry_attempts: 1
+  retry_delay_seconds: 1
+  browser_download_fallback: true
   default_currency: EUR
   default_tax_included: true
-  default_price_label: Preporučena maloprodajna cijena s PDV-om
+  default_price_label: Cijena s PDV-om i PPMV-om
   fixed_model: MOKKA
   fixed_jato_model: MOKKA
-  fixed_jato_powertrain: null
-  model_rules: []
-  skip_if_model_unmapped: false
   copy_trim_to_jato_trim: true
-  confidence_rules:
-    base: 0.2
-    fixed_model_bonus: 0.18
-    fixed_jato_model_bonus: 0.12
-    model_rule_bonus: 0.12
-    trim_present_bonus: 0.1
-    copy_trim_to_jato_trim_bonus: 0.09
-    parsed_price_text_bonus: 0.03
-    currency_bonus: 0.01
-    price_label_bonus: 0.02
-    trim_keyword_bonuses: []
-    price_band_bonuses:
-    - key: price_band_entry
-      label: Entry price band matched
-      max: 0
-      delta: 0.0
-    - key: price_band_mid
-      label: Mid price band matched
-      min: 0
-      max: 0
-      delta: 0.01
-    - key: price_band_high
-      label: High price band matched
-      min: 0
-      delta: 0.03
-    powertrain_keyword_bonuses: []
-    powertrain_bonuses:
-    - key: powertrain_bev
-      label: 'Powertrain matched: BEV'
-      powertrain: BEV
-      delta: 0.03
-    - key: powertrain_mhev
-      label: 'Powertrain matched: MHEV'
-      powertrain: MHEV
-      delta: 0.03
-    - key: powertrain_ice
-      label: 'Powertrain matched: ICE'
-      powertrain: ICE
-      delta: 0.03
-    clamp_min: 0.0
-    clamp_max: 1.0
-  structured_fields:
-    edition_rules:
-    - key: edition_special
-      label: Special Edition
-      keyword: special edition
-      special: true
-    powertrain_rules:
-    - key: powertrain_bev
-      powertrain: BEV
-      keywords:
-      - električni
-      - electric
-      - Mokka Electric
-      - Mokka-e
-    - key: powertrain_mhev
-      powertrain: MHEV
-      keywords:
-      - mild hybrid
-      - 48V
-    - key: powertrain_ice
-      powertrain: ICE
-      keywords:
-      - benzin
-      - dizel
-  auto_accept_gates:
-    review_threshold: 0.95
-    semi_auto_threshold: 0.98
-    require_powertrain_match: true
-    force_review_if_powertrain_missing: true
-    force_review_if_powertrain_ambiguous: true
-    force_review_for_special_edition: true
-  json_script_selector: script[type='application/ld+json']
-  css:
-    vehicle_container: '.wl-font-18'
-    model: ''
-    trim: ''
-    price: '.wl-font-36'
+  match_confidence: 0.86
+  match_status: review_required
+  match_reason:
+    kind: official_pdf_price_list
+    source: opel_hr_cjenici
+    note: Official Opel Croatia Mokka ICE price-list PDF from Cjenici page; captured column is MSRP including PDV and PPMV, not akcijska price.
+  entry_patterns:
+  - pattern: '1\.2\s+Turbo\s+100\s+kW\s+\(136\s+KS\)\s+MT6\s+Benzin\s+127\s+1GQOSYKP9KB0A062\s+\d{2}\s+\d{3}\s*€\s+\d{3}\s*€\s+(?P<price>\d{2}\s+\d{3})\s*€'
+    official_trim: Edition 1.2 Turbo 136 MT6
+    official_powertrain: 1.2 Turbo 136 MT6 petrol
+    jato_powertrain: ICE
+  - pattern: '1\.2\s+Turbo\s+Hybrid\s+107\s+kW\s+\(145\s+KS\)\*\s+eDCT\s+Hybrid\s+108\s+1GQOSYKJHWB0A062\s+\d{2}\s+\d{3}\s*€\s+\d{2}\s*€\s+(?P<price>\d{2}\s+\d{3})\s*€'
+    official_trim: Edition 1.2 Turbo Hybrid 145 eDCT
+    official_powertrain: 1.2 Turbo Hybrid 145 eDCT
+    jato_powertrain: MHEV
+  - pattern: '1\.2\s+Turbo\s+100\s+kW\s+\(136\s+KS\)\s+MT6\s+Benzin\s+128\s+1GQOSYHP9KB0A062\s+\d{2}\s+\d{3}\s*€\s+\d{3}\s*€\s+(?P<price>\d{2}\s+\d{3})\s*€'
+    official_trim: GS 1.2 Turbo 136 MT6
+    official_powertrain: 1.2 Turbo 136 MT6 petrol
+    jato_powertrain: ICE
+  - pattern: '1\.2\s+Turbo\s+Hybrid\s+107\s+kW\s+\(145\s+KS\)\*\s+eDCT\s+Hybrid\s+108\s+1GQOSYHJHWB0A062\s+\d{2}\s+\d{3}\s*€\s+\d{2}\s*€\s+(?P<price>\d{2}\s+\d{3})\s*€'
+    official_trim: GS 1.2 Turbo Hybrid 145 eDCT
+    official_powertrain: 1.2 Turbo Hybrid 145 eDCT
+    jato_powertrain: MHEV
+  - pattern: '1\.2\s+Turbo\s+100\s+kW\s+\(136\s+KS\)\s+MT6\s+Benzin\s+128\s+1GQOSYHP9KB04062\s+\d{2}\s+\d{3}\s*€\s+\d{3}\s*€\s+(?P<price>\d{2}\s+\d{3})\s*€'
+    official_trim: Ultimate 1.2 Turbo 136 MT6
+    official_powertrain: 1.2 Turbo 136 MT6 petrol
+    jato_powertrain: ICE
+  - pattern: '1\.2\s+Turbo\s+Hybrid\s+107\s+kW\s+\(145\s+KS\)\*\s+eDCT\s+Hybrid\s+108\s+1GQOSYHJHWB04062\s+\d{2}\s+\d{3}\s*€\s+\d{3}\s*€\s+(?P<price>\d{2}\s+\d{3})\s*€'
+    official_trim: Ultimate 1.2 Turbo Hybrid 145 eDCT
+    official_powertrain: 1.2 Turbo Hybrid 145 eDCT
+    jato_powertrain: MHEV
 schedule:
   frequency: manual_only
   run_window_start: 00:00
   run_window_end: 05:00
   preferred_weekday: monday
-notes: Keywords filled from official manufacturer website research (HR market). CSS selectors still require browser-based
-  inspection before promotion.
+notes: Keywords filled from official manufacturer website research (HR market).
+  Replaced unstable model-page CSS extraction with the official Opel Croatia
+  Mokka ICE price-list PDF from Cjenici page.
 bootstrap_meta:
   country_model_rank: 2
   suggested_scope_kind: single_model

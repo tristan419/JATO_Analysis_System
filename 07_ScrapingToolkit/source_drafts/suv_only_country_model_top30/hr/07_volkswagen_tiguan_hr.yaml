@@ -1,47 +1,44 @@
 source_code: volkswagen_tiguan_hr_draft_scrapling
 country: 克罗地亚
 brand: VOLKSWAGEN
-source_url: https://www.volkswagen.hr/hr/modeli/tiguan.html
-source_type: manufacturer_official
+source_url: https://www.volkswagen.hr/svi-cjenici
+source_type: official_price_list
 price_semantics: base_msrp
-extractor_type: playwright
-profile_preset: ../_shared/presets/volkswagen_configurator_trim_overview_playwright.yaml
+extractor_type: pdf_text
 profile:
-  url: https://www.volkswagen.hr/hr/modeli/tiguan.html
+  url: https://www.volkswagen.hr/dam/files/download/4f6f46bd7009db32805826da233c50f2a42889ec/6f8c529bb95b03658b1a8e7585cd66e0/469d8ed2-216f-47d2-9017-08f43f8341a3/VW-Novi-Tiguan-NF-Cjenik
+  timeout_seconds: 30
+  retry_attempts: 1
+  retry_delay_seconds: 1
+  browser_download_fallback: true
   default_currency: EUR
   default_tax_included: true
-  default_price_label: Preporučena maloprodajna cijena s PDV-om
+  default_price_label: Cijena do registracije u EUR, s uključenim PDV-om i PPMV-om
   fixed_model: TIGUAN
   fixed_jato_model: TIGUAN
-  structured_fields:
-    powertrain_rules:
-    - key: powertrain_phev
-      powertrain: PHEV
-      keywords:
-      - eHybrid
-      - plug-in hibrid
-      - plug-in hybrid
-      - Tiguan eHybrid
-    - key: powertrain_mhev
-      powertrain: MHEV
-      keywords:
-      - mild hybrid
-      - eTSI
-    - key: powertrain_ice
-      powertrain: ICE
-      keywords:
-      - benzin
-      - dizel
-      - TSI
-      - TDI
+  copy_trim_to_jato_trim: true
+  match_confidence: 0.86
+  match_status: review_required
+  match_reason:
+    kind: official_pdf_price_list
+    source: volkswagen_hr_svi_cjenici
+    note: Official Volkswagen Croatia Tiguan price-list PDF from Svi cjenici; Cijena do registracije column.
+  entry_patterns:
+  - pattern: '(?P<trim>TIGUAN\s+NF\s+2\.0\s+TDI\s+DSG(?:\s+4M)?(?:\s+(?:Plus|Life(?:\s+Plus)?|Elegance|R-Line(?:\s+Plus)?))?)\s+4\s+DSG\s+7\s+st\.\s+pr\.\s+\d+\s+\d+\s+(?P<price>\d{2}\.\d{3},\d{2})\s*€'
+    official_powertrain: TDI
+    jato_powertrain: ICE
+  - pattern: '(?P<trim>TIGUAN\s+NF\s+1\.5\s*TSI\s+eHybrid\s+DSG\s+(?:Elegance|R-Line(?:\s+Plus)?))\s+4\s+DSG\s+6\s+st\.\s+pr\.\s+\d+\s+\d+\s+(?P<price>\d{2}\.\d{3},\d{2})\s*€'
+    official_powertrain: TSI eHybrid
+    jato_powertrain: PHEV
 schedule:
   frequency: manual_only
   run_window_start: 00:00
   run_window_end: 05:00
   preferred_weekday: monday
-notes: Keywords filled from official manufacturer website research (HR market). CSS
-  selectors still require browser-based inspection before promotion. [Switched to
-  playwright_card_flow with volkswagen_configurator_trim_overview_playwright.yaml]
+notes: Keywords filled from official manufacturer website research (HR market).
+  Replaced stale Playwright model page with official Volkswagen Croatia Svi cjenici
+  price-list PDF; PDF URL is taken from data-gtm-element-url without the stale
+  /pdf suffix.
 bootstrap_meta:
   country_model_rank: 7
   suggested_scope_kind: single_model

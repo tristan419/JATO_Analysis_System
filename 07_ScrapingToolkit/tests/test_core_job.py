@@ -241,6 +241,33 @@ def test_msrp_pdf_source_maps_to_unified_scrape_job():
     assert job.extractor_config["extractorType"] == "pdf_text"
 
 
+def test_msrp_http_text_source_maps_to_unified_scrape_job():
+    job = msrp_source_to_scrape_job(
+        {
+            "source_code": "mazda_cx_30_hr_draft_scrapling",
+            "country": "克罗地亚",
+            "brand": "MAZDA",
+            "source_url": "https://www.mazda.hr/konfigurirajte/MAZDA%20CX-30/5WGN/",
+            "source_type": "manufacturer_official",
+            "price_semantics": "base_msrp",
+            "extractor_type": "http_text",
+            "profile": {
+                "url": "https://www.mazda.hr/konfigurirajte/MAZDA%20CX-30/5WGN/",
+                "fixed_model": "CX-30",
+            },
+            "schedule": {"frequency": "weekly"},
+        },
+        source_path="source_drafts/hr/20_mazda_cx_30_hr.yaml",
+    )
+
+    assert job.job_id == "msrp:hr:mazda_cx_30_hr_draft_scrapling"
+    assert job.kind == "msrp"
+    assert job.fetcher == "requests"
+    assert job.extractor == "http_text"
+    assert job.allow_domains == ["www.mazda.hr"]
+    assert job.extractor_config["extractorType"] == "http_text"
+
+
 def test_msrp_scrapling_requests_tier_maps_to_requests_fetcher():
     job = msrp_source_to_scrape_job(
         {

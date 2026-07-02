@@ -1,22 +1,30 @@
 source_code: mg_zs_at_draft_scrapling
 country: 奥地利
 brand: MG
-source_url: https://www.mgmotor.at/modelle/mg-zs
+source_url: https://www.mgmotor.eu/de-AT/configurator/zs-plus
 source_type: manufacturer_official
-price_semantics: base_msrp
-extractor_type: scrapling
+price_semantics: campaign_price
+extractor_type: http_text
 profile:
-  url: https://www.mgmotor.at/modelle/mg-zs
-  tier: stealth
-  headless: true
-  network_idle: true
-  impersonate: chrome
+  url: https://www.mgmotor.eu/de-AT/configurator/zs-plus
+  timeout_seconds: 45
+  headers:
+    User-Agent: Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0 Safari/537.36
+  entry_patterns:
+  - pattern: 'field_commerceHandle(?:&quot;|"):(?:&quot;|")select(?:&quot;|").*?field_paymentOption_paymentName(?:&quot;|"):(?:&quot;|")Aktionspreis \(Privatkunde\)(?:&quot;|").*?field_paymentOption_paymentHandle(?:&quot;|"):(?:&quot;|")cash(?:&quot;|").*?field_paymentOption_basePrice(?:&quot;|"):(?:&quot;|")(?P<price>18490\.00)(?:&quot;|")'
+    official_trim: ZS+ Select
+    official_powertrain: Benzin
+    price_label: Aktionspreis Privatkunde inkl. MwSt. und NoVA
+  - pattern: 'field_commerceHandle(?:&quot;|"):(?:&quot;|")comfort(?:&quot;|").*?field_paymentOption_paymentName(?:&quot;|"):(?:&quot;|")Aktionspreis \(Privatkunde\)(?:&quot;|").*?field_paymentOption_paymentHandle(?:&quot;|"):(?:&quot;|")cash(?:&quot;|").*?field_paymentOption_basePrice(?:&quot;|"):(?:&quot;|")(?P<price>21780\.00)(?:&quot;|")'
+    official_trim: ZS+ Comfort
+    official_powertrain: Benzin
+    price_label: Aktionspreis Privatkunde inkl. MwSt. und NoVA
   default_currency: EUR
   default_tax_included: true
-  default_price_label: Unverbindliche Preisempfehlung inkl. MwSt
+  default_price_label: Aktionspreis Privatkunde inkl. MwSt. und NoVA
   fixed_model: ZS
   fixed_jato_model: ZS
-  fixed_jato_powertrain: null
+  fixed_jato_powertrain: ICE
   model_rules: []
   skip_if_model_unmapped: false
   copy_trim_to_jato_trim: true
@@ -91,20 +99,16 @@ profile:
     force_review_if_powertrain_missing: true
     force_review_if_powertrain_ambiguous: true
     force_review_for_special_edition: true
-  json_script_selector: script[type='application/ld+json']
-  css:
-    vehicle_container: body
-    model: h1, h2
-    trim: h3
-    price: '[class*="price"]'
 schedule:
   frequency: manual_only
   run_window_start: 00:00
   run_window_end: 05:00
   preferred_weekday: monday
-notes: Keywords filled from official manufacturer website research (AT market). CSS
-  selectors still require browser-based inspection before promotion. [CSS selectors
-  applied from brand probe]
+notes: Keywords filled from official manufacturer website research (AT market).
+  Replaced unreachable mgmotor.at model page with the current MG Motor Europe Austria
+  ZS+ configurator. The extracted values are official Aktionspreis Privatkunde cash
+  prices, so the source is explicitly marked campaign_price and kept out of base
+  MSRP ingest until a clean Katalogpreis/UVP source is found.
 bootstrap_meta:
   country_model_rank: 7
   suggested_scope_kind: single_model

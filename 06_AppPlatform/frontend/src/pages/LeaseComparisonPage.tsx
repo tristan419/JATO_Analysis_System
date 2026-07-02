@@ -3,14 +3,17 @@ import { api } from "../api/client";
 import { DeckFloatingDrawer } from "../components/deckControls";
 import { useAuth } from "../contexts/AuthContext";
 import { useResolvedCountry } from "../hooks/useResolvedCountry";
-import type { MsrpFinanceObservation } from "../types";
+import type { MsrpFinanceObservation, MsrpFinanceObservationSummary } from "../types";
 import type { LeaseOffer, LeaseCompareSet, SolveResult } from "../types/leaseComparison";
 import {
   formatFinanceCurrency,
+  formatFinanceCurrencyRange,
   formatFinanceDate,
   formatFinanceNumber,
   getFinanceObservationLabel,
   getFinanceObservationModelLabel,
+  getFinanceObservationValidityBadgeClass,
+  getFinanceObservationValidityLabel,
   matchesFinanceObservationFilters,
 } from "../utils/msrpFinance";
 
@@ -59,6 +62,8 @@ export function LeaseComparisonPage() {
   const [financeTypeFilter, setFinanceTypeFilter] = useState("");
   const [filterDeckOpen, setFilterDeckOpen] = useState(true);
   const [financeOffers, setFinanceOffers] = useState<MsrpFinanceObservation[]>([]);
+  const [financeSummary, setFinanceSummary] = useState<MsrpFinanceObservationSummary | null>(null);
+  const [financeTotal, setFinanceTotal] = useState(0);
   const [financeLoading, setFinanceLoading] = useState(false);
   const [financeError, setFinanceError] = useState<string | null>(null);
 
@@ -94,6 +99,8 @@ export function LeaseComparisonPage() {
         has_monthly_payment: true,
         limit: 100,
       });
+      setFinanceSummary(response.summary);
+      setFinanceTotal(response.total);
       setFinanceOffers(
         response.items.filter((item) => matchesFinanceObservationFilters(item, {
           country: countryFilter,
@@ -105,6 +112,8 @@ export function LeaseComparisonPage() {
     } catch (e: unknown) {
       setFinanceError(e instanceof Error ? e.message : "Load finance observations failed");
       setFinanceOffers([]);
+      setFinanceSummary(null);
+      setFinanceTotal(0);
     } finally {
       setFinanceLoading(false);
     }
@@ -184,6 +193,9 @@ export function LeaseComparisonPage() {
       || [offer.modelName, offer.version, offer.powertrain].filter(Boolean).join(" ").toLowerCase().includes(modelNeedle);
     return brandMatches && modelMatches;
   });
+  const primaryFinanceType = financeSummary
+    ? Object.entries(financeSummary.financeTypeCounts).sort((left, right) => right[1] - left[1])[0]?.[0] ?? "-"
+    : "-";
 
   function useFinanceOfferInSolver(item: MsrpFinanceObservation) {
     setSolver((current) => ({
@@ -216,31 +228,31 @@ export function LeaseComparisonPage() {
       >
         <div className="crud-toolbar-grid">
           <div className="filter-group">
-            <label>Country</label>
-            <select value={countryFilter} onChange={(e) => setCountryFilter(e.target.value)}>
+            <label htmlFor="lease-filter-country">Country</label>
+            <select id="lease-filter-country" value={countryFilter} onChange={(e) => setCountryFilter(e.target.value)}>
               <option value="">All Countries</option>
               <option value="SE">Sweden</option><option value="NO">Norway</option><option value="DK">Denmark</option>
               <option value="FI">Finland</option><option value="DE">Germany</option><option value="NL">Netherlands</option>
             </select>
           </div>
           <div className="filter-group">
-            <label>Brand</label>
-            <input value={brandFilter} onChange={(event) => setBrandFilter(event.target.value)} placeholder="e.g. Volvo / BMW" />
+            <label htmlFor="lease-filter-brand">Brand</label>
+            <input id="lease-filter-brand" value={brandFilter} onChange={(event) => setBrandFilter(event.target.value)} placeholder="e.g. Volvo / BMW" />
           </div>
           <div className="filter-group">
-            <label>Model</label>
-            <input value={modelFilter} onChange={(event) => setModelFilter(event.target.value)} placeholder="e.g. XC60 / iX1" />
+            <label htmlFor="lease-filter-model">Model</label>
+            <input id="lease-filter-model" value={modelFilter} onChange={(event) => setModelFilter(event.target.value)} placeholder="e.g. XC60 / iX1" />
           </div>
           <div className="filter-group">
-            <label>Lease type</label>
-            <select value={leaseTypeFilter} onChange={(e) => setLeaseTypeFilter(e.target.value)}>
+            <label htmlFor="lease-filter-lease-type">Lease type</label>
+            <select id="lease-filter-lease-type" value={leaseTypeFilter} onChange={(e) => setLeaseTypeFilter(e.target.value)}>
               <option value="">All Types</option>
               {LEASE_TYPES.map((t) => <option key={t} value={t}>{t}</option>)}
             </select>
           </div>
           <div className="filter-group">
-            <label>Official finance type</label>
-            <input value={financeTypeFilter} onChange={(event) => setFinanceTypeFilter(event.target.value)} placeholder="private_lease / finance" />
+            <label htmlFor="lease-filter-finance-type">Official finance type</label>
+            <input id="lease-filter-finance-type" value={financeTypeFilter} onChange={(event) => setFinanceTypeFilter(event.target.value)} placeholder="private_lease / finance" />
           </div>
         </div>
       </DeckFloatingDrawer>
@@ -330,6 +342,30 @@ export function LeaseComparisonPage() {
             {financeLoading ? "Loading" : "Refresh"}
           </button>
         </div>
+        {financeSummary && (
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(150px, 1fr))", gap: 10, marginBottom: 12 }}>
+            <div style={financeMetricStyle}>
+              <span style={financeMetricLabelStyle}>API total</span>
+              <strong>{financeTotal.toLocaleString()}</strong>
+            </div>
+            <div style={financeMetricStyle}>
+              <span style={financeMetricLabelStyle}>Monthly EUR</span>
+              <strong>{formatFinanceCurrencyRange(financeSummary.monthlyPaymentEurMin, financeSummary.monthlyPaymentEurMax)}</strong>
+            </div>
+            <div style={financeMetricStyle}>
+              <span style={financeMetricLabelStyle}>Net price rows</span>
+              <strong>{financeSummary.netPriceAfterSubsidyCount.toLocaleString()}</strong>
+            </div>
+            <div style={financeMetricStyle}>
+              <span style={financeMetricLabelStyle}>Subsidy rows</span>
+              <strong>{financeSummary.subsidyObservationCount.toLocaleString()}</strong>
+            </div>
+            <div style={financeMetricStyle}>
+              <span style={financeMetricLabelStyle}>Main type</span>
+              <strong>{primaryFinanceType}</strong>
+            </div>
+          </div>
+        )}
         {financeOffers.length > 0 ? (
           <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(280px, 1fr))", gap: 12 }}>
             {financeOffers.map((item) => (
@@ -339,6 +375,9 @@ export function LeaseComparisonPage() {
                     <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginBottom: 6 }}>
                       <span className="badge badge-active">{item.country}</span>
                       <span className="badge badge-warning">{getFinanceObservationLabel(item)}</span>
+                      <span className={`badge ${getFinanceObservationValidityBadgeClass(item)}`}>
+                        {getFinanceObservationValidityLabel(item)}
+                      </span>
                     </div>
                     <strong>{getFinanceObservationModelLabel(item)}</strong>
                     <div style={{ fontSize: 12, color: "#64748b", marginTop: 2 }}>{item.officialModel} {item.officialTrim}</div>
@@ -355,6 +394,7 @@ export function LeaseComparisonPage() {
                   <span>APR {item.apr !== null ? `${formatFinanceNumber(item.apr, 2)}%` : "-"}</span>
                   <span>Net {formatFinanceCurrency(item.netPriceAfterSubsidyEur)}</span>
                   <span>Valid {formatFinanceDate(item.offerValidUntil)}</span>
+                  <span>Observed {formatFinanceDate(item.observedAtUtc)}</span>
                 </div>
                 <div style={{ display: "flex", gap: 8, marginTop: 12, alignItems: "center", justifyContent: "space-between" }}>
                   <button type="button" className="btn btn-xs btn-secondary" onClick={() => useFinanceOfferInSolver(item)}>
@@ -608,4 +648,21 @@ export function LeaseComparisonPage() {
 const inputStyle: React.CSSProperties = {
   display: "block", width: "100%", marginTop: 2, padding: "4px 8px",
   borderRadius: 4, border: "1px solid #d1d5db", fontSize: 12,
+};
+
+const financeMetricStyle: React.CSSProperties = {
+  border: "1px solid #e2e8f0",
+  borderRadius: 6,
+  padding: "8px 10px",
+  minHeight: 58,
+  display: "flex",
+  flexDirection: "column",
+  justifyContent: "center",
+  gap: 3,
+};
+
+const financeMetricLabelStyle: React.CSSProperties = {
+  color: "#64748b",
+  fontSize: 11,
+  textTransform: "uppercase",
 };

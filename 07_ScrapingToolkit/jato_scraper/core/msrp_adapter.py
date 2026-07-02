@@ -18,6 +18,7 @@ from jato_scraper.core.job import (
 
 _EXTRACTOR_KIND_BY_TYPE: dict[str, ExtractorKind] = {
     "http_json": "http_json",
+    "http_text": "http_text",
     "scrapling": "scrapling",
     "playwright": "playwright_card_flow",
     "pdf_text": "pdf_text",
@@ -38,10 +39,12 @@ def _country_code_from_source_code(source_code: str) -> str:
         "_draft_scrapling",
         "_draft_playwright",
         "_draft_http_json",
+        "_draft_http_text",
         "_draft_pdf_text",
         "_scrapling",
         "_playwright",
         "_http_json",
+        "_http_text",
         "_pdf_text",
     ):
         if normalized.endswith(suffix):
@@ -72,6 +75,8 @@ def _allow_domains(*urls: str) -> list[str]:
 
 def _fetcher_for_source(extractor_type: str, profile: Mapping[str, Any]) -> FetcherKind:
     if extractor_type == "http_json":
+        return "requests"
+    if extractor_type == "http_text":
         return "requests"
     if extractor_type == "pdf_text":
         return "requests"

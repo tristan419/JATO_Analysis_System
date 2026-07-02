@@ -1,3 +1,5 @@
+from datetime import date
+
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy.orm import Session
 
@@ -20,6 +22,10 @@ from app.services.msrp_workflow_service import (
     materialize_current_prices,
     queue_reconciliation_conflicts_for_review,
     remap_current_price,
+)
+from app.services.msrp_monitoring_service import (
+    build_msrp_backfill_snapshot_preview,
+    build_msrp_monitoring_events,
 )
 
 router = APIRouter(prefix="/msrp", tags=["msrp"])
@@ -52,6 +58,43 @@ def get_current_prices(
         limit,
         offset,
     )
+
+
+@router.get("/monitoring/events")
+def get_msrp_monitoring_events(
+    country: str | None = Query(default=None),
+    brand: str | None = Query(default=None),
+    jato_model: str | None = Query(default=None),
+    window_days: int = Query(default=30, ge=1, le=365),
+    from_date: date | None = Query(default=None),
+    threshold_pct: float = Query(default=0.0, ge=0.0, le=50.0),
+    direction: str = Query(default="drops", pattern="^(drops|increases|all)$"),
+    limit: int = Query(default=500, ge=1, le=500),
+    mode: str = Query(default="live", pattern="^(live|sweden_demo)$"),
+    session: Session = Depends(get_db_session),
+    _=Depends(require_min_role("viewer")),
+) -> dict[str, object]:
+    return build_msrp_monitoring_events(
+        session,
+        country=country,
+        brand=brand,
+        jato_model=jato_model,
+        window_days=window_days,
+        from_date=from_date,
+        threshold_pct=threshold_pct,
+        direction=direction,
+        limit=limit,
+        mode=mode,
+    )
+
+
+@router.get("/monitoring/backfill-snapshot")
+def get_msrp_backfill_snapshot(
+    path: str = Query(min_length=1),
+    max_chars: int = Query(default=20_000, ge=1_000, le=100_000),
+    _=Depends(require_min_role("viewer")),
+) -> dict[str, object]:
+    return build_msrp_backfill_snapshot_preview(path, max_chars=max_chars)
 
 
 @router.get("/finance-observations")

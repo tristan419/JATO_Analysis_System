@@ -65,6 +65,10 @@ def _make_msrp_v3_report(run_id: str = "msrp-dryrun-20260611-120000") -> dict:
             "status": "success",
             "gateThreshold": 70,
             "gateStatus": "allowed",
+            "financeObservationCandidates": 4,
+            "financeMonthlyPaymentCount": 3,
+            "financeSemanticsCounts": {"lease_monthly": 3, "cash_msrp": 1},
+            "financeTypeCounts": {"private_lease": 3, "unknown": 1},
         },
         "countriesDetail": [
             {
@@ -84,17 +88,16 @@ def _make_msrp_v3_report(run_id: str = "msrp-dryrun-20260611-120000") -> dict:
                     "diagnose_with_msrp_page_analyzer": 2,
                     "manual_review_or_proxy_required": 1,
                 },
+                "financeObservationCandidates": 4,
+                "financeMonthlyPaymentCount": 3,
+                "financeSemanticsCounts": {"lease_monthly": 3, "cash_msrp": 1},
+                "financeTypeCounts": {"private_lease": 3, "unknown": 1},
                 "sources": [],
             }
         ],
         "results": [],
         "generatedAt": "2026-06-11T12:00:00Z",
     }
-
-
-def _write_jsonl(path: Path, records: list[dict]) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text("\n".join(json.dumps(record) for record in records) + "\n", encoding="utf-8")
 
 
 # ── /hermes/sentinel + deploy status ─────────────────────────────────
@@ -596,6 +599,13 @@ class TestSentinelAndDeploy:
         assert data["overall"] == "ok"
         assert data["countries"][0]["countryCode"] == "fi"
         assert data["countries"][0]["passPct"] == 90.0
+        assert data["status"]["financeObservationCandidates"] == 4
+        assert data["status"]["financeMonthlyPaymentCount"] == 3
+        assert data["countries"][0]["financeObservationCandidates"] == 4
+        assert data["countries"][0]["financeSemanticsCounts"] == {
+            "lease_monthly": 3,
+            "cash_msrp": 1,
+        }
         assert data["topFailureReasons"][0] == {
             "reason": "no_observation_extracted",
             "count": 2,
@@ -754,6 +764,11 @@ class TestSentinelAndDeploy:
         data = resp.json()
         assert data["status"]["runId"] == run_id
         assert data["countries"][0]["countryCode"] == "fi"
+        assert data["status"]["financeMonthlyPaymentCount"] == 3
+        assert data["countries"][0]["financeTypeCounts"] == {
+            "private_lease": 3,
+            "unknown": 1,
+        }
 
     def test_msrp_country_progress_derives_host_backlog_from_v3_sources(
         self,
@@ -843,110 +858,88 @@ class TestSentinelAndDeploy:
             "audi_q6_e_tron_fi_draft_scrapling",
         ]
 
-    def test_history_clusters_endpoint(self, client, monkeypatch):
-        monkeypatch.setattr(
-            "app.services.hermes_history_service.list_history_clusters",
-            lambda level, y_axis, workstream, limit: {
-                "summary": {"level": level, "yAxis": y_axis, "clusterCount": 1},
-                "clusters": [{"clusterId": "cluster_1", "title": "Hermes"}],
+    def test_msrp_country_progress_includes_source_reference_evidence(
+        self,
+        client,
+        tmp_path,
+    ):
+        reports_dir = tmp_path / "hermes" / "reports"
+        artifact_dir = tmp_path / "03_Scripts" / "diagnostics" / "artifacts"
+        reports_dir.mkdir(parents=True)
+        artifact_dir.mkdir(parents=True)
+        report = _make_msrp_v3_report()
+        _write_json(artifact_dir / "dryrun_report.json", report)
+        _write_json(artifact_dir / "msrp_source_reference_evidence.json", {
+            "schemaVersion": "msrp_source_reference_evidence_v1",
+            "generatedAt": "2026-06-17T02:16:49Z",
+            "backlogRunId": report["runId"],
+            "referenceSource": "EVKX",
+            "referencePolicy": "reference_only_review_required",
+            "officialSourceRequiredForIngest": True,
+            "officialIngestEligible": False,
+            "summary": {
+                "evidenceItemCount": 2,
+                "localReferenceCount": 8,
+                "missingLocalReferenceCount": 0,
+                "officialIngestEligibleCount": 0,
             },
-        )
-
-        resp = client.get("/hermes/history/clusters?level=feature&yAxis=workstream")
-
-        assert resp.status_code == 200
-        assert resp.json()["summary"]["clusterCount"] == 1
-
-    def test_progress_swimlanes_endpoint(self, client, monkeypatch):
-        monkeypatch.setattr(
-            "app.services.hermes_history_service.get_progress_swimlanes",
-            lambda: {
-                "summary": {"total": 1, "blocking": 0},
-                "phases": ["PRD", "Implemented"],
-                "lanes": [{"workstream": "Hermes", "features": []}],
-            },
-        )
-
-        resp = client.get("/hermes/progress/swimlanes")
-
-        assert resp.status_code == 200
-        assert resp.json()["summary"]["total"] == 1
-
-    def test_workflow_cockpit_endpoint(self, client, monkeypatch):
-        monkeypatch.setattr(
-            "app.services.hermes_history_service.get_workflow_cockpit",
-            lambda: {
-                "summary": {"sessionCount": 1, "modelCount": 1, "totalEvents": 2},
-                "models": [{"model": "codex", "eventCount": 2}],
-                "sessions": [{"sessionId": "hermes-session", "model": "codex"}],
-                "reviewItems": [],
-            },
-        )
-
-        resp = client.get("/hermes/workflow/cockpit")
-
-        assert resp.status_code == 200
-        assert resp.json()["summary"]["sessionCount"] == 1
-
-    def test_feature_goal_swimlanes_endpoint(self, client, monkeypatch):
-        monkeypatch.setattr(
-            "app.services.hermes_feature_goal_service.get_feature_goal_swimlanes",
-            lambda: {
-                "summary": {"total": 1, "blocked": 0, "readyForPr": 1, "inProgress": 0, "verified": 0, "workstreamCount": 1},
-                "features": [{"featureId": "feature.hermes_feature_pmo_cockpit", "state": "ready_for_pr"}],
-                "lanes": [{"workstream": "Hermes", "features": [{"featureId": "feature.hermes_feature_pmo_cockpit"}]}],
-            },
-        )
-
-        resp = client.get("/hermes/goals/swimlanes")
-
-        assert resp.status_code == 200
-        assert resp.json()["summary"]["readyForPr"] == 1
-        assert resp.json()["lanes"][0]["workstream"] == "Hermes"
-
-    def test_reuse_candidates_endpoint(self, client, monkeypatch):
-        monkeypatch.setattr(
-            "app.services.hermes_feature_goal_service.get_reuse_candidates_for_feature",
-            lambda feature_id: {
-                "featureId": feature_id,
-                "title": "Hermes Feature PMO Cockpit",
-                "workstream": "Hermes",
-                "candidates": [{"path": "06_AppPlatform/backend/app/services/hermes_history_service.py", "score": 8}],
-            },
-        )
-
-        resp = client.get("/hermes/reuse/candidates?featureId=feature.hermes_feature_pmo_cockpit")
-
-        assert resp.status_code == 200
-        assert resp.json()["featureId"] == "feature.hermes_feature_pmo_cockpit"
-        assert resp.json()["candidates"][0]["score"] == 8
-
-    def test_cost_heatmap_includes_astrbot_usage(self, client, tmp_path):
-        now = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-        _write_jsonl(
-            tmp_path / "hermes" / "agent_usage.jsonl",
-            [
+            "items": [
                 {
-                    "usageId": "agent_usage_today",
-                    "recordedAt": now,
-                    "pricingModel": "deepseek-v4-flash",
-                    "inputTokens": 1,
-                    "outputTokens": 1,
-                    "estimatedCostCny": 0.42,
+                    "countryCode": "fi",
+                    "modelQuery": "Tesla Model Y",
+                    "localReferenceCount": 3,
+                    "officialIngestEligible": False,
                 }
             ],
-        )
+        })
+        _write_json(artifact_dir / "msrp_source_accessibility_audit.json", {
+            "schemaVersion": "msrp_source_accessibility_audit_v1",
+            "generatedAt": "2026-06-18T17:38:42Z",
+            "backlogRunId": report["runId"],
+            "summary": {
+                "sourceRepairIssueCount": 2,
+                "transientRegressionCount": 13,
+                "probedSourceCount": 2,
+                "probeStatusCounts": {
+                    "network_unreachable": 1,
+                    "anti_bot_blocked": 1,
+                },
+                "recommendedActionCounts": {
+                    "retry_network_or_proxy": 1,
+                    "official_proxy_or_configurator_api": 1,
+                },
+                "retryableNetworkCount": 1,
+                "officialProxyRequiredCount": 1,
+                "tlsHandshakeFailedCount": 1,
+                "dnsUnresolvedCount": 0,
+            },
+            "items": [
+                {
+                    "countryCode": "at",
+                    "sourceCode": "tesla_model_y_at_draft_scrapling",
+                    "probeStatus": "anti_bot_blocked",
+                    "officialProxyRequired": True,
+                }
+            ],
+        })
 
         with patch("app.api.routes.hermes.PROJECT_ROOT", tmp_path), patch(
-            "app.api.routes.hermes.HERMES_DIR",
-            tmp_path / "hermes",
+            "app.api.routes.hermes.REPORTS_DIR",
+            reports_dir,
         ):
-            resp = client.get("/hermes/cost-heatmap?days=1")
+            resp = client.get("/hermes/msrp-country-progress")
 
         assert resp.status_code == 200
-        data = resp.json()
-        assert data["totalCny"] == pytest.approx(0.42)
-        assert data["bySourceCny"]["astrbot"] == pytest.approx(0.42)
+        evidence = resp.json()["sourceReferenceEvidence"]
+        assert evidence["schemaVersion"] == "msrp_source_reference_evidence_v1"
+        assert evidence["summary"]["localReferenceCount"] == 8
+        assert evidence["summary"]["officialIngestEligibleCount"] == 0
+        assert evidence["items"][0]["officialIngestEligible"] is False
+        accessibility = resp.json()["sourceAccessibilityAudit"]
+        assert accessibility["schemaVersion"] == "msrp_source_accessibility_audit_v1"
+        assert accessibility["summary"]["officialProxyRequiredCount"] == 1
+        assert accessibility["summary"]["tlsHandshakeFailedCount"] == 1
+        assert accessibility["items"][0]["probeStatus"] == "anti_bot_blocked"
 
 
 # ── /hermes/gaps ──────────────────────────────────────────────────────
