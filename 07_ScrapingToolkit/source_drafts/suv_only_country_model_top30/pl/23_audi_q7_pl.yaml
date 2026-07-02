@@ -1,12 +1,12 @@
 source_code: audi_q7_pl_draft_scrapling
 country: 波兰
 brand: AUDI
-source_url: https://www.audi.pl/no/web/no/modele/q4-e-tron.html
+source_url: https://www.audi.pl/pl/web/pl/modele/q7/q7.html
 source_type: manufacturer_official
 price_semantics: base_msrp
 extractor_type: scrapling
 profile:
-  url: https://www.audi.pl/no/web/no/modele/q4-e-tron.html
+  url: https://www.audi.pl/pl/web/pl/modele/q7/q7.html
   tier: stealth
   headless: true
   network_idle: true
@@ -113,7 +113,9 @@ schedule:
 notes: Draft scaffold generated from country×model top30 backlog. Replace source_url,
   profile.url, selectors, currency, price label, and the single-model placeholders
   before promoting to 07_ScrapingToolkit/sources. [URL filled from AUDI template]
-  [URL language corrected] [CSS selectors applied from brand probe]
+  [URL language corrected] [CSS selectors applied from brand probe] [Corrected
+  wrong-country Audi URL from NO Q4 e-tron path to Poland Q7 canonical model
+  path]
 bootstrap_meta:
   country_model_rank: 23
   suggested_scope_kind: single_model

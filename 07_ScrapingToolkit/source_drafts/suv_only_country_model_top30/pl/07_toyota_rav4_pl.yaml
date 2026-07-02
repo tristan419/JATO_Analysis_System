@@ -1,113 +1,35 @@
 source_code: toyota_rav4_pl_draft_scrapling
 country: 波兰
 brand: TOYOTA
-source_url: https://www.toyota.pl/samochody/rav4
+source_url: https://www.toyota.pl/nowe-samochody/rav4
 source_type: manufacturer_official
 price_semantics: base_msrp
-extractor_type: scrapling
+extractor_type: http_text
 profile:
-  url: https://www.toyota.pl/samochody/rav4
-  headless: true
+  url: https://www.toyota.pl/nowe-samochody/rav4
+  timeout_seconds: 45
+  headers:
+    User-Agent: Mozilla/5.0
+    Accept-Language: pl-PL,pl;q=0.9,en;q=0.8
+  entry_patterns:
+  - pattern: 'window\.tngaDataLayer\.product\s*=\s*\[\{.*?"productName"\s*:\s*"RAV4\s+(?P<trim>[^"]+)".*?"price"\s*:\s*(?P<price>\d+(?:\.\d+)?)'
+    official_trim: RAV4 starting price
+    official_powertrain: Hybrid
+    jato_powertrain: HEV
+    price_label: Cena katalogowa
   default_currency: PLN
   default_tax_included: true
-  default_price_label: MSRP
+  default_price_label: Cena katalogowa
   fixed_model: RAV4
   fixed_jato_model: RAV4
-  fixed_jato_powertrain: null
-  model_rules: []
-  skip_if_model_unmapped: false
+  fixed_jato_powertrain: HEV
   copy_trim_to_jato_trim: true
-  confidence_rules:
-    base: 0.2
-    fixed_model_bonus: 0.18
-    fixed_jato_model_bonus: 0.12
-    model_rule_bonus: 0.12
-    trim_present_bonus: 0.1
-    copy_trim_to_jato_trim_bonus: 0.09
-    parsed_price_text_bonus: 0.03
-    currency_bonus: 0.01
-    price_label_bonus: 0.02
-    trim_keyword_bonuses: []
-    price_band_bonuses:
-    - key: price_band_entry
-      label: Entry price band matched
-      max: 0
-      delta: 0.0
-    - key: price_band_mid
-      label: Mid price band matched
-      min: 0
-      max: 0
-      delta: 0.01
-    - key: price_band_high
-      label: High price band matched
-      min: 0
-      delta: 0.03
-    powertrain_keyword_bonuses: []
-    powertrain_bonuses:
-    - key: powertrain_phev
-      label: 'Powertrain matched: PHEV'
-      powertrain: PHEV
-      delta: 0.03
-    - key: powertrain_hev
-      label: 'Powertrain matched: HEV'
-      powertrain: HEV
-      delta: 0.03
-    - key: powertrain_ice
-      label: 'Powertrain matched: ICE'
-      powertrain: ICE
-      delta: 0.03
-    clamp_min: 0.0
-    clamp_max: 1.0
-  structured_fields:
-    edition_rules:
-    - key: edition_special
-      label: Special Edition
-      keyword: special edition
-      special: true
-    powertrain_rules:
-    - key: powertrain_phev
-      powertrain: PHEV
-      keywords:
-      - phev
-      - plug-in hybrid
-      - plug in hybrid
-      - plugin hybrid
-      - hybryda plug-in
-    - key: powertrain_hev
-      powertrain: HEV
-      keywords:
-      - hev
-      - full hybrid
-      - self-charging hybrid
-      - self charging hybrid
-      - hybrid
-      - hybryda
-      - pelna hybryda
-    - key: powertrain_ice
-      powertrain: ICE
-      keywords:
-      - ice
-      - petrol
-      - gasoline
-      - diesel
-      - combustion
-      - benzyna
-  auto_accept_gates:
-    review_threshold: 0.95
-    semi_auto_threshold: 0.98
-    require_powertrain_match: true
-    force_review_if_powertrain_missing: true
-    force_review_if_powertrain_ambiguous: true
-    force_review_for_special_edition: true
-  json_script_selector: script[type='application/ld+json']
-  css:
-    vehicle_container: body
-    model: h2, h3
-    trim: h3
-    price: '[class*="price"]'
-  tier: stealth
-  network_idle: true
-  impersonate: chrome
+  match_confidence: 0.82
+  match_status: review_required
+  match_reason:
+    kind: official_model_page_embedded_price
+    source: toyota_pl_tnga_product_datalayer
+    note: Official Toyota Poland RAV4 page embeds the current model starting price in window.tngaDataLayer.product; the old /samochody/rav4 URL now returns 404.
 schedule:
   frequency: manual_only
   run_window_start: 00:00
@@ -118,7 +40,8 @@ notes: Draft scaffold generated from country×model top30 backlog. Replace sourc
   before promoting to 07_ScrapingToolkit/sources. [URL filled from TOYOTA template]
   [URL language corrected] [CSS selectors applied from brand probe] [Switched to playwright_card_flow
   with toyota_trim_overview_playwright.yaml] [Reverted to scrapling — playwright preset
-  needs per-brand tuning]
+  needs per-brand tuning] [Replaced obsolete 404 URL with current Toyota Poland
+  RAV4 page and switched to http_text over embedded tngaDataLayer product price]
 bootstrap_meta:
   country_model_rank: 7
   suggested_scope_kind: single_model
