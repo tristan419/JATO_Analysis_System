@@ -3216,6 +3216,7 @@ export function MarketScanPage({
                   setSelectedPeriod(value?.end ?? null);
                 }}
                 disabled={!deck}
+                commitOnIdle={false}
               />
             </div>
 
@@ -3312,7 +3313,6 @@ export function MarketScanPage({
 
         {deck ? (
           <div className="market-scan-content" aria-busy={loading}>
-            {loading ? <MarketScanDeckSkeleton /> : null}
             <div className="market-scan-slide-shell-actions">
               <div className="market-scan-slide-shell-meta">
                 <span className={`market-scan-toolbar-chip slide-edit-shell-chip${slideEditMode ? " is-active" : ""}`}>

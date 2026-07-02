@@ -8,6 +8,7 @@ interface DeckPeriodTimelineProps {
   onChange: (value: MarketScanPeriodRange | null) => void;
   disabled?: boolean;
   label?: string;
+  commitOnIdle?: boolean;
 }
 
 const AUTO_COMMIT_DELAY_MS = 1000;
@@ -43,6 +44,7 @@ export function DeckPeriodTimeline({
   onChange,
   disabled = false,
   label = "Period",
+  commitOnIdle = true,
 }: DeckPeriodTimelineProps) {
   const [expanded, setExpanded] = useState(false);
   const [activeThumb, setActiveThumb] = useState<"start" | "end">("start");
@@ -80,7 +82,7 @@ export function DeckPeriodTimeline({
   }, [committedRangeState, expanded]);
 
   useEffect(() => {
-    if (!expanded) {
+    if (!expanded || !commitOnIdle) {
       return;
     }
     const latestDraftRange = draftRangeRef.current;
@@ -103,7 +105,7 @@ export function DeckPeriodTimeline({
     return () => {
       window.clearTimeout(timeoutId);
     };
-  }, [committedRangeState, draftRange, expanded]);
+  }, [commitOnIdle, committedRangeState, draftRange, expanded]);
 
   const rangeState = useMemo(() => {
     if (expanded && draftRange) {
@@ -124,7 +126,13 @@ export function DeckPeriodTimeline({
       return;
     }
     if (startOption.value === latestOption.value && endOption.value === latestOption.value) {
+      if (!value) {
+        return;
+      }
       onChange(null);
+      return;
+    }
+    if (value?.start === startOption.value && value.end === endOption.value) {
       return;
     }
     onChange({ start: startOption.value, end: endOption.value });
@@ -216,6 +224,8 @@ export function DeckPeriodTimeline({
                 className={`deck-period-timeline-input deck-period-timeline-input--start${activeThumb === "start" ? " is-active" : ""}${rangeState.startIndex === rangeState.endIndex ? " is-overlap" : ""}`}
                 aria-label="开始月份"
                 onPointerDown={() => setActiveThumb("start")}
+                onPointerUp={commitDraftRange}
+                onPointerCancel={commitDraftRange}
                 onFocus={() => setActiveThumb("start")}
                 onChange={(event) => {
                   updateDraftRange(Number(event.target.value), rangeState.endIndex);
@@ -232,6 +242,8 @@ export function DeckPeriodTimeline({
                 className={`deck-period-timeline-input deck-period-timeline-input--end${activeThumb === "end" ? " is-active" : ""}`}
                 aria-label="结束月份"
                 onPointerDown={() => setActiveThumb("end")}
+                onPointerUp={commitDraftRange}
+                onPointerCancel={commitDraftRange}
                 onFocus={() => setActiveThumb("end")}
                 onChange={(event) => {
                   updateDraftRange(rangeState.startIndex, Number(event.target.value));
