@@ -66,20 +66,22 @@ export const dashboardApi = {
     top_n: number;
     options?: Record<string, unknown>;
     time_range?: { start: string; end: string };
-  }) =>
+  }, init?: RequestInit) =>
     request<AdvancedChartResponse>("/analysis/advanced-chart", {
       method: "POST",
       body: JSON.stringify(payload),
+      ...init,
     }),
   modelVersions: (payload: {
     filters: Record<string, string[]>;
     model_name: string;
     top_n?: number;
     time_range?: { start: string; end: string };
-  }) =>
+  }, init?: RequestInit) =>
     request<ModelVersionsResponse>("/analysis/model-versions", {
       method: "POST",
       body: JSON.stringify(payload),
+      ...init,
     }),
   positioningMap: (payload: {
     filters: Record<string, string[]>;
@@ -90,9 +92,10 @@ export const dashboardApi = {
     top_n: number;
     n_clusters: number;
     time_range?: { start: string; end: string };
-  }) =>
+  }, init?: RequestInit) =>
     request<PositioningMapResponse>("/analysis/positioning-map", {
       method: "POST",
       body: JSON.stringify(payload),
+      ...init,
     }),
 };

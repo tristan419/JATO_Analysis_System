@@ -399,6 +399,17 @@ export function DashboardPage() {
   const [pmExport, setPmExport] = useState<ExportSettings>({ ...DEFAULT_EXPORT });
   const tsChartRef = useRef<HTMLDivElement | null>(null);
   const advChartRef = useRef<HTMLDivElement | null>(null);
+  const advRequestAbortRef = useRef<AbortController | null>(null);
+  const mvRequestAbortRef = useRef<AbortController | null>(null);
+  const pmRequestAbortRef = useRef<AbortController | null>(null);
+  useEffect(() => () => {
+    advRequestAbortRef.current?.abort();
+    advRequestAbortRef.current = null;
+    mvRequestAbortRef.current?.abort();
+    mvRequestAbortRef.current = null;
+    pmRequestAbortRef.current?.abort();
+    pmRequestAbortRef.current = null;
+  }, []);
   // --- interactive "selected" label strategy for Advanced scatter charts ---
   const [selectedAdvKeys, setSelectedAdvKeys] = useState<Map<string, { x: number; y: number; text: string }>>(new Map());
   useEffect(() => {
@@ -579,6 +590,9 @@ export function DashboardPage() {
   /* advanced chart */
   async function loadAdvChart() {
     prevAdvPayloadRef.current = filterTimeScopeKey;
+    advRequestAbortRef.current?.abort();
+    const controller = new AbortController();
+    advRequestAbortRef.current = controller;
     setAdvLoading(true); setError("");
     try {
       const opts: Record<string, unknown> = { band_size: advBandSize };
@@ -616,17 +630,33 @@ export function DashboardPage() {
         top_n: advTopN,
         options: opts,
         time_range: timeRangePayload,
-      });
+      }, { signal: controller.signal });
+      if (advRequestAbortRef.current !== controller || controller.signal.aborted) return;
       setAdvItems(ensureArray(r.items));
       setAdvMeta(r.meta ?? null);
-    } catch (e) { setError((e as Error).message); }
-    finally { setAdvLoading(false); }
+    } catch (e) {
+      if (advRequestAbortRef.current === controller && !isAbortError(e)) {
+        setError((e as Error).message);
+      }
+    }
+    finally {
+      if (advRequestAbortRef.current === controller) {
+        advRequestAbortRef.current = null;
+        setAdvLoading(false);
+      }
+    }
   }
 
   /* model version bubble */
   async function loadModelVersions() {
-    if (!mvModelName.trim()) return;
+    mvRequestAbortRef.current?.abort();
+    if (!mvModelName.trim()) {
+      setMvLoading(false);
+      return;
+    }
     prevMvScopeRef.current = filterTimeScopeKey;
+    const controller = new AbortController();
+    mvRequestAbortRef.current = controller;
     setMvLoading(true); setError("");
     try {
       const r = await dashboardApi.modelVersions({
@@ -634,10 +664,20 @@ export function DashboardPage() {
         model_name: mvModelName.trim(),
         top_n: mvTopN,
         time_range: timeRangePayload,
-      });
+      }, { signal: controller.signal });
+      if (mvRequestAbortRef.current !== controller || controller.signal.aborted) return;
       setMvItems(ensureArray(r.items));
-    } catch (e) { setError((e as Error).message); }
-    finally { setMvLoading(false); }
+    } catch (e) {
+      if (mvRequestAbortRef.current === controller && !isAbortError(e)) {
+        setError((e as Error).message);
+      }
+    }
+    finally {
+      if (mvRequestAbortRef.current === controller) {
+        mvRequestAbortRef.current = null;
+        setMvLoading(false);
+      }
+    }
   }
 
   /* OJ positioning map */
@@ -655,6 +695,9 @@ export function DashboardPage() {
   }
   async function loadPositioningMap() {
     prevPmScopeRef.current = filterTimeScopeKey;
+    pmRequestAbortRef.current?.abort();
+    const controller = new AbortController();
+    pmRequestAbortRef.current = controller;
     setPmLoading(true); setError("");
     try {
       const r = await dashboardApi.positioningMap({
@@ -666,10 +709,20 @@ export function DashboardPage() {
         top_n: pmTopN,
         n_clusters: pmNClusters,
         time_range: timeRangePayload,
-      });
+      }, { signal: controller.signal });
+      if (pmRequestAbortRef.current !== controller || controller.signal.aborted) return;
       setPmItems(ensureArray(r.items)); setPmTarget(r.target ?? null); setPmClusterTop3(ensureArray(r.cluster_top3)); setPmPeerCorridor(r.peerCorridor ?? null);
-    } catch (e) { setError((e as Error).message); }
-    finally { setPmLoading(false); }
+    } catch (e) {
+      if (pmRequestAbortRef.current === controller && !isAbortError(e)) {
+        setError((e as Error).message);
+      }
+    }
+    finally {
+      if (pmRequestAbortRef.current === controller) {
+        pmRequestAbortRef.current = null;
+        setPmLoading(false);
+      }
+    }
   }
 
   /* ── derived chart data ──────────────────────────── */
