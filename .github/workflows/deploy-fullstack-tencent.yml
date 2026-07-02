@@ -181,7 +181,7 @@ jobs:
           REMOTE_ARCHIVE_TMP="${REMOTE_ARCHIVE}.uploading"
           ls -lh "$ARCHIVE_PATH"
 
-          timeout 600s scp -q -P "$SSH_PORT" \
+          if ! timeout 180s scp -q -P "$SSH_PORT" \
             -o BatchMode=yes \
             -o StrictHostKeyChecking=no \
             -o UserKnownHostsFile=/dev/null \
@@ -194,9 +194,12 @@ jobs:
             -o HostKeyAlias="$SSH_HOST" \
             -i ~/.ssh/github_actions_tencent_key \
             "$ARCHIVE_PATH" \
-            "$SSH_USER@$SSH_CONNECT_HOST:$REMOTE_ARCHIVE_TMP"
+            "$SSH_USER@$SSH_CONNECT_HOST:$REMOTE_ARCHIVE_TMP"; then
+            echo "[WARN] Deploy archive upload failed or timed out; SSH deploy will fall back to sparse Git fetch."
+            exit 0
+          fi
 
-          timeout 600s ssh -T -p "$SSH_PORT" \
+          if ! timeout 120s ssh -T -p "$SSH_PORT" \
             -o BatchMode=yes \
             -o StrictHostKeyChecking=no \
             -o UserKnownHostsFile=/dev/null \
@@ -208,7 +211,10 @@ jobs:
             -o HostKeyAlias="$SSH_HOST" \
             -i ~/.ssh/github_actions_tencent_key \
             "$SSH_USER@$SSH_CONNECT_HOST" \
-            "mv '$REMOTE_ARCHIVE_TMP' '$REMOTE_ARCHIVE' && ls -lh '$REMOTE_ARCHIVE'"
+            "mv '$REMOTE_ARCHIVE_TMP' '$REMOTE_ARCHIVE' && ls -lh '$REMOTE_ARCHIVE'"; then
+            echo "[WARN] Remote archive finalization failed; SSH deploy will fall back to sparse Git fetch."
+            exit 0
+          fi
 
       - name: Upload archive to server
         if: ${{ steps.auth.outputs.mode == 'password' }}
@@ -234,7 +240,7 @@ jobs:
           REMOTE_ARCHIVE_TMP="${REMOTE_ARCHIVE}.uploading"
           ls -lh "$ARCHIVE_PATH"
 
-          timeout 600s sshpass -p "$SSH_PASSWORD" \
+          if ! timeout 180s sshpass -p "$SSH_PASSWORD" \
             scp -q -P "$SSH_PORT" \
             -o PreferredAuthentications=password \
             -o PubkeyAuthentication=no \
@@ -247,9 +253,12 @@ jobs:
             -o Compression=yes \
             -o IPQoS=none \
             "$ARCHIVE_PATH" \
-            "$SSH_USER@$SSH_HOST:$REMOTE_ARCHIVE_TMP"
+            "$SSH_USER@$SSH_HOST:$REMOTE_ARCHIVE_TMP"; then
+            echo "[WARN] Deploy archive upload failed or timed out; SSH deploy will fall back to sparse Git fetch."
+            exit 0
+          fi
 
-          timeout 600s sshpass -p "$SSH_PASSWORD" \
+          if ! timeout 120s sshpass -p "$SSH_PASSWORD" \
             ssh -T -p "$SSH_PORT" \
             -o PreferredAuthentications=password \
             -o PubkeyAuthentication=no \
@@ -261,7 +270,10 @@ jobs:
             -o ServerAliveCountMax=2 \
             -o IPQoS=none \
             "$SSH_USER@$SSH_HOST" \
-            "mv '$REMOTE_ARCHIVE_TMP' '$REMOTE_ARCHIVE' && ls -lh '$REMOTE_ARCHIVE'"
+            "mv '$REMOTE_ARCHIVE_TMP' '$REMOTE_ARCHIVE' && ls -lh '$REMOTE_ARCHIVE'"; then
+            echo "[WARN] Remote archive finalization failed; SSH deploy will fall back to sparse Git fetch."
+            exit 0
+          fi
 
       - name: Deploy on server via SSH
         if: ${{ steps.auth.outputs.mode == 'key' }}
