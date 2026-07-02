@@ -1,0 +1,54 @@
+name: intl-edge-prewarm
+
+on:
+  push:
+    branches: ["main"]
+    paths:
+      - "06_AppPlatform/frontend/functions/**"
+      - "06_AppPlatform/frontend/scripts/prewarm_intl_edge_cache.cjs"
+      - "06_AppPlatform/frontend/package.json"
+      - ".github/workflows/intl-edge-prewarm.yml"
+  schedule:
+    - cron: "17 */4 * * *"
+  workflow_dispatch:
+    inputs:
+      origin:
+        description: "Frontend origin to prewarm"
+        required: false
+        default: "https://intl.ojeur.cloud"
+      roles:
+        description: "Comma-separated role scopes to prewarm"
+        required: false
+        default: "order_filler"
+      repetitions:
+        description: "Number of prewarm rounds"
+        required: false
+        default: "2"
+
+concurrency:
+  group: intl-edge-prewarm
+  cancel-in-progress: true
+
+jobs:
+  prewarm:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20.19.0"
+
+      - name: Prewarm intl edge cache
+        working-directory: 06_AppPlatform/frontend
+        env:
+          JATO_PREWARM_ORIGIN: ${{ inputs.origin || 'https://intl.ojeur.cloud' }}
+          JATO_PREWARM_ROLES: ${{ inputs.roles || 'order_filler' }}
+          JATO_PREWARM_REPETITIONS: ${{ inputs.repetitions || '2' }}
+          JATO_PREWARM_TIMEOUT_MS: "30000"
+          JATO_PREWARM_FAIL_ON_ERROR: "1"
+        run: npm run perf:prewarm-edge
