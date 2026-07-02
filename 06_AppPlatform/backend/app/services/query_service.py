@@ -2038,8 +2038,11 @@ def _chart_powertrain_bubble(
         if group_field not in vf.columns:
             warnings.append(f"当前数据不包含{group_dimension_label}字段，已跳过分组 TopN。")
         else:
+            grouped_rank_cols = [group_field, "Model"]
+            if "Brand" in vf.columns:
+                grouped_rank_cols.insert(1, "Brand")
             grouped_rank_df = (
-                vf.groupby([group_field, "Model"], as_index=False)["Sales"]
+                vf.groupby(grouped_rank_cols, as_index=False)["Sales"]
                 .sum()
                 .sort_values("Sales", ascending=False)
             )
@@ -2057,11 +2060,11 @@ def _chart_powertrain_bubble(
                     if group_rank.empty:
                         continue
                     keep_chunks.append(
-                        group_rank.head(group_topn)[[group_field, "Model"]]
+                        group_rank.head(group_topn)[grouped_rank_cols]
                     )
                 if keep_chunks:
                     keep_pairs = pd.concat(keep_chunks, ignore_index=True).drop_duplicates()
-                    vf = vf.merge(keep_pairs, on=[group_field, "Model"], how="inner")
+                    vf = vf.merge(keep_pairs, on=grouped_rank_cols, how="inner")
                     grouped_top_n_applied = True
             else:
                 warnings.append("已启用分组 TopN，但未选中有效分组。")
@@ -2108,6 +2111,8 @@ def _chart_powertrain_bubble(
         agg = agg.merge(variant_counts, on=group_cols, how="left")
 
     agg["BubbleGrain"] = "version" if use_version_grain else "model"
+    if "Brand" in agg.columns:
+        agg["ModelKey"] = agg["Brand"].astype(str).str.strip() + "::" + agg["Model"].astype(str).str.strip()
 
     if "Segment" in vf.columns and "Segment" not in group_cols:
         segment_map = grouped["Segment"].agg(

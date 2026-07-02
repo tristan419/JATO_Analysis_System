@@ -177,27 +177,49 @@ jobs:
           chmod 600 ~/.ssh/github_actions_tencent_key
 
           ARCHIVE_PATH="$RUNNER_TEMP/JATO_deploy.tar.gz"
-          REMOTE_ARCHIVE="/tmp/JATO_deploy.tar.gz"
+          REMOTE_ARCHIVE="JATO_deploy_${GITHUB_SHA}.tar.gz"
           REMOTE_ARCHIVE_TMP="${REMOTE_ARCHIVE}.uploading"
+          echo "DEPLOY_ARCHIVE_PATH=$REMOTE_ARCHIVE" >> "$GITHUB_ENV"
           ls -lh "$ARCHIVE_PATH"
+          ARCHIVE_BYTES="$(wc -c < "$ARCHIVE_PATH" | tr -d '[:space:]')"
+          CHUNK_DIR="$RUNNER_TEMP/deploy_archive_chunks"
+          rm -rf "$CHUNK_DIR"
+          mkdir -p "$CHUNK_DIR"
+          split -b 512k "$ARCHIVE_PATH" "$CHUNK_DIR/chunk_"
 
-          if ! timeout 180s scp -q -P "$SSH_PORT" \
-            -o BatchMode=yes \
-            -o StrictHostKeyChecking=no \
-            -o UserKnownHostsFile=/dev/null \
-            -o ConnectTimeout=20 \
-            -o ConnectionAttempts=2 \
-            -o ServerAliveInterval=10 \
-            -o ServerAliveCountMax=2 \
-            -o Compression=yes \
-            -o IPQoS=none \
-            -o HostKeyAlias="$SSH_HOST" \
-            -i ~/.ssh/github_actions_tencent_key \
-            "$ARCHIVE_PATH" \
-            "$SSH_USER@$SSH_CONNECT_HOST:$REMOTE_ARCHIVE_TMP"; then
-            echo "[WARN] Deploy archive upload failed or timed out; SSH deploy will fall back to sparse Git fetch."
-            exit 0
+          SSH_COMMON_OPTS=(
+            -T
+            -p "$SSH_PORT"
+            -o BatchMode=yes
+            -o StrictHostKeyChecking=no
+            -o UserKnownHostsFile=/dev/null
+            -o ConnectTimeout=20
+            -o ConnectionAttempts=2
+            -o ServerAliveInterval=10
+            -o ServerAliveCountMax=2
+            -o IPQoS=none
+            -o HostKeyAlias="$SSH_HOST"
+            -i ~/.ssh/github_actions_tencent_key
+          )
+
+          if ! timeout 120s ssh "${SSH_COMMON_OPTS[@]}" "$SSH_USER@$SSH_CONNECT_HOST" \
+            "rm -f '$REMOTE_ARCHIVE_TMP' && : > '$REMOTE_ARCHIVE_TMP'"; then
+            echo "::error::Remote archive preparation failed."
+            exit 1
           fi
+
+          chunk_total="$(find "$CHUNK_DIR" -type f | wc -l | tr -d '[:space:]')"
+          chunk_index=0
+          for chunk in "$CHUNK_DIR"/chunk_*; do
+            chunk_index=$((chunk_index + 1))
+            chunk_size="$(wc -c < "$chunk" | tr -d '[:space:]')"
+            echo "[INFO] Uploading deploy archive chunk ${chunk_index}/${chunk_total} (${chunk_size} bytes)"
+            if ! timeout 90s ssh "${SSH_COMMON_OPTS[@]}" "$SSH_USER@$SSH_CONNECT_HOST" \
+              "cat >> '$REMOTE_ARCHIVE_TMP'" < "$chunk"; then
+              echo "::error::Deploy archive chunk upload failed or timed out."
+              exit 1
+            fi
+          done
 
           if ! timeout 120s ssh -T -p "$SSH_PORT" \
             -o BatchMode=yes \
@@ -211,9 +233,9 @@ jobs:
             -o HostKeyAlias="$SSH_HOST" \
             -i ~/.ssh/github_actions_tencent_key \
             "$SSH_USER@$SSH_CONNECT_HOST" \
-            "mv '$REMOTE_ARCHIVE_TMP' '$REMOTE_ARCHIVE' && ls -lh '$REMOTE_ARCHIVE'"; then
-            echo "[WARN] Remote archive finalization failed; SSH deploy will fall back to sparse Git fetch."
-            exit 0
+            "remote_size=\$(wc -c < '$REMOTE_ARCHIVE_TMP' | tr -d '[:space:]'); if [ \"\$remote_size\" != '$ARCHIVE_BYTES' ]; then echo \"remote archive size mismatch: \$remote_size != $ARCHIVE_BYTES\" >&2; exit 1; fi; mv '$REMOTE_ARCHIVE_TMP' '$REMOTE_ARCHIVE' && ls -lh '$REMOTE_ARCHIVE'"; then
+            echo "::error::Remote archive finalization failed."
+            exit 1
           fi
 
       - name: Upload archive to server
@@ -236,27 +258,50 @@ jobs:
           sudo apt-get install -y sshpass
 
           ARCHIVE_PATH="$RUNNER_TEMP/JATO_deploy.tar.gz"
-          REMOTE_ARCHIVE="/tmp/JATO_deploy.tar.gz"
+          REMOTE_ARCHIVE="JATO_deploy_${GITHUB_SHA}.tar.gz"
           REMOTE_ARCHIVE_TMP="${REMOTE_ARCHIVE}.uploading"
+          echo "DEPLOY_ARCHIVE_PATH=$REMOTE_ARCHIVE" >> "$GITHUB_ENV"
           ls -lh "$ARCHIVE_PATH"
+          ARCHIVE_BYTES="$(wc -c < "$ARCHIVE_PATH" | tr -d '[:space:]')"
+          CHUNK_DIR="$RUNNER_TEMP/deploy_archive_chunks"
+          rm -rf "$CHUNK_DIR"
+          mkdir -p "$CHUNK_DIR"
+          split -b 512k "$ARCHIVE_PATH" "$CHUNK_DIR/chunk_"
 
-          if ! timeout 180s sshpass -p "$SSH_PASSWORD" \
-            scp -q -P "$SSH_PORT" \
-            -o PreferredAuthentications=password \
-            -o PubkeyAuthentication=no \
-            -o StrictHostKeyChecking=no \
-            -o UserKnownHostsFile=/dev/null \
-            -o ConnectTimeout=20 \
-            -o ConnectionAttempts=2 \
-            -o ServerAliveInterval=10 \
-            -o ServerAliveCountMax=2 \
-            -o Compression=yes \
-            -o IPQoS=none \
-            "$ARCHIVE_PATH" \
-            "$SSH_USER@$SSH_HOST:$REMOTE_ARCHIVE_TMP"; then
-            echo "[WARN] Deploy archive upload failed or timed out; SSH deploy will fall back to sparse Git fetch."
-            exit 0
+          SSH_COMMON_OPTS=(
+            -T
+            -p "$SSH_PORT"
+            -o PreferredAuthentications=password
+            -o PubkeyAuthentication=no
+            -o StrictHostKeyChecking=no
+            -o UserKnownHostsFile=/dev/null
+            -o ConnectTimeout=20
+            -o ConnectionAttempts=2
+            -o ServerAliveInterval=10
+            -o ServerAliveCountMax=2
+            -o IPQoS=none
+          )
+
+          if ! timeout 120s sshpass -p "$SSH_PASSWORD" \
+            ssh "${SSH_COMMON_OPTS[@]}" "$SSH_USER@$SSH_HOST" \
+            "rm -f '$REMOTE_ARCHIVE_TMP' && : > '$REMOTE_ARCHIVE_TMP'"; then
+            echo "::error::Remote archive preparation failed."
+            exit 1
           fi
+
+          chunk_total="$(find "$CHUNK_DIR" -type f | wc -l | tr -d '[:space:]')"
+          chunk_index=0
+          for chunk in "$CHUNK_DIR"/chunk_*; do
+            chunk_index=$((chunk_index + 1))
+            chunk_size="$(wc -c < "$chunk" | tr -d '[:space:]')"
+            echo "[INFO] Uploading deploy archive chunk ${chunk_index}/${chunk_total} (${chunk_size} bytes)"
+            if ! timeout 90s sshpass -p "$SSH_PASSWORD" \
+              ssh "${SSH_COMMON_OPTS[@]}" "$SSH_USER@$SSH_HOST" \
+              "cat >> '$REMOTE_ARCHIVE_TMP'" < "$chunk"; then
+              echo "::error::Deploy archive chunk upload failed or timed out."
+              exit 1
+            fi
+          done
 
           if ! timeout 120s sshpass -p "$SSH_PASSWORD" \
             ssh -T -p "$SSH_PORT" \
@@ -270,9 +315,9 @@ jobs:
             -o ServerAliveCountMax=2 \
             -o IPQoS=none \
             "$SSH_USER@$SSH_HOST" \
-            "mv '$REMOTE_ARCHIVE_TMP' '$REMOTE_ARCHIVE' && ls -lh '$REMOTE_ARCHIVE'"; then
-            echo "[WARN] Remote archive finalization failed; SSH deploy will fall back to sparse Git fetch."
-            exit 0
+            "remote_size=\$(wc -c < '$REMOTE_ARCHIVE_TMP' | tr -d '[:space:]'); if [ \"\$remote_size\" != '$ARCHIVE_BYTES' ]; then echo \"remote archive size mismatch: \$remote_size != $ARCHIVE_BYTES\" >&2; exit 1; fi; mv '$REMOTE_ARCHIVE_TMP' '$REMOTE_ARCHIVE' && ls -lh '$REMOTE_ARCHIVE'"; then
+            echo "::error::Remote archive finalization failed."
+            exit 1
           fi
 
       - name: Deploy on server via SSH
@@ -311,6 +356,7 @@ jobs:
           REMOTE_EXPORTS+="export DEPLOY_RELEASE_ID=$(printf '%q' "${GITHUB_RUN_ID:-}-${GITHUB_RUN_ATTEMPT:-}"); "
           REMOTE_EXPORTS+="export DEPLOY_RUN_ID=$(printf '%q' "${GITHUB_RUN_ID:-}"); "
           REMOTE_EXPORTS+="export DEPLOY_RUN_ATTEMPT=$(printf '%q' "${GITHUB_RUN_ATTEMPT:-}"); "
+          REMOTE_EXPORTS+="export DEPLOY_ARCHIVE_PATH=$(printf '%q' "${DEPLOY_ARCHIVE_PATH:-}"); "
           REMOTE_EXPORTS+="export DEPLOY_REPOSITORY=$(printf '%q' "${GITHUB_REPOSITORY:-}"); "
           REMOTE_EXPORTS+="export DEPLOY_WORKFLOW=$(printf '%q' "${GITHUB_WORKFLOW:-}"); "
           REMOTE_EXPORTS+="export DEEPSEEK_API_KEY=$(printf '%q' '${{ secrets.DEEPSEEK_API_KEY }}'); "
@@ -347,7 +393,7 @@ jobs:
           fi
 
           RELEASE_WORKTREE="/tmp/JATO_deploy_work_${DEPLOY_COMMIT_SHA}"
-          RELEASE_ARCHIVE="/tmp/JATO_deploy.tar.gz"
+          RELEASE_ARCHIVE="${DEPLOY_ARCHIVE_PATH:-/tmp/JATO_deploy.tar.gz}"
           RELEASE_REMOTE="https://github.com/tristan419/JATO_Analysis_System.git"
           DEPLOY_SOURCE="github_sparse_checkout"
           RUNTIME_PRESERVE_DIR="$(mktemp -d /tmp/JATO_deploy_runtime.XXXXXX)"
@@ -733,6 +779,7 @@ jobs:
           REMOTE_EXPORTS+="export DEPLOY_RELEASE_ID=$(printf '%q' "${GITHUB_RUN_ID:-}-${GITHUB_RUN_ATTEMPT:-}"); "
           REMOTE_EXPORTS+="export DEPLOY_RUN_ID=$(printf '%q' "${GITHUB_RUN_ID:-}"); "
           REMOTE_EXPORTS+="export DEPLOY_RUN_ATTEMPT=$(printf '%q' "${GITHUB_RUN_ATTEMPT:-}"); "
+          REMOTE_EXPORTS+="export DEPLOY_ARCHIVE_PATH=$(printf '%q' "${DEPLOY_ARCHIVE_PATH:-}"); "
           REMOTE_EXPORTS+="export DEPLOY_REPOSITORY=$(printf '%q' "${GITHUB_REPOSITORY:-}"); "
           REMOTE_EXPORTS+="export DEPLOY_WORKFLOW=$(printf '%q' "${GITHUB_WORKFLOW:-}"); "
           REMOTE_EXPORTS+="export DEEPSEEK_API_KEY=$(printf '%q' '${{ secrets.DEEPSEEK_API_KEY }}'); "
@@ -770,7 +817,7 @@ jobs:
           fi
 
           RELEASE_WORKTREE="/tmp/JATO_deploy_work_${DEPLOY_COMMIT_SHA}"
-          RELEASE_ARCHIVE="/tmp/JATO_deploy.tar.gz"
+          RELEASE_ARCHIVE="${DEPLOY_ARCHIVE_PATH:-/tmp/JATO_deploy.tar.gz}"
           RELEASE_REMOTE="https://github.com/tristan419/JATO_Analysis_System.git"
           DEPLOY_SOURCE="github_sparse_checkout"
           RUNTIME_PRESERVE_DIR="$(mktemp -d /tmp/JATO_deploy_runtime.XXXXXX)"

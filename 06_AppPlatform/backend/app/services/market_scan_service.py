@@ -1927,19 +1927,28 @@ def _resolve_version_comparison_segment(
 def _build_all_model_options(
     frame: pd.DataFrame,
     sales_column: str,
-) -> list[dict[str, str]]:
+) -> list[dict[str, Any]]:
     if frame.empty or sales_column not in frame.columns:
         return []
+    group_keys = ["__model_key", "__model", "__brand"] if "__model_key" in frame.columns else ["__model"]
     grouped = (
-        frame.groupby("__model", dropna=False)[sales_column]
+        frame.groupby(group_keys, dropna=False)[sales_column]
         .sum()
         .sort_values(ascending=False)
     )
-    return [
-        {"value": str(model), "label": str(model)}
-        for model in grouped.index
-        if str(model).strip()
-    ]
+    options: list[dict[str, Any]] = []
+    for raw_key, _sales in grouped.items():
+        if isinstance(raw_key, tuple):
+            model_key = str(raw_key[0])
+            model = str(raw_key[1])
+            brand = str(raw_key[2])
+        else:
+            model = str(raw_key)
+            brand = ""
+            model_key = model
+        if model_key.strip() and model.strip():
+            options.append({"value": model_key, "label": model, "brand": brand})
+    return options
 
 
 def _resolve_version_comparison_models(
@@ -1947,30 +1956,27 @@ def _resolve_version_comparison_models(
     requested_models: list[str],
     *,
     sales_column: str,
-) -> tuple[list[str], list[dict[str, str]]]:
+) -> tuple[list[str], list[dict[str, Any]]]:
     if frame.empty or sales_column not in frame.columns:
         return [], []
-    grouped = (
-        frame.groupby("__model", dropna=False)[sales_column]
-        .sum()
-        .sort_values(ascending=False)
-    )
-    options = [
-        {"value": str(model), "label": str(model)}
-        for model in grouped.index
-        if str(model).strip()
-    ]
+    options = _build_all_model_options(frame, sales_column)
     if not options:
         return [], []
     available = {option["value"] for option in options}
+    legacy_lookup: dict[str, str] = {}
+    for option in options:
+        label = str(option.get("label", "")).strip()
+        if label and label not in legacy_lookup:
+            legacy_lookup[label] = str(option["value"])
     selected: list[str] = []
     seen: set[str] = set()
     for model in requested_models:
         normalized = str(model).strip()
-        if not normalized or normalized not in available or normalized in seen:
+        resolved = normalized if normalized in available else legacy_lookup.get(normalized, "")
+        if not resolved or resolved in seen:
             continue
-        selected.append(normalized)
-        seen.add(normalized)
+        selected.append(resolved)
+        seen.add(resolved)
         if len(selected) >= VERSION_COMPARISON_MODEL_LIMIT:
             break
     if selected:
@@ -1988,12 +1994,18 @@ def _build_version_comparison_bubble_items(
     if frame.empty or sales_column not in frame.columns:
         return []
     working = frame.copy()
+    if "__brand" not in working.columns:
+        working["__brand"] = ""
+    if "__model_key" not in working.columns:
+        brand_text = working["__brand"].where(working["__brand"].notna(), "").astype(str).str.strip()
+        model_text = working["__model"].where(working["__model"].notna(), "").astype(str).str.strip()
+        working["__model_key"] = brand_text + "::" + model_text
     working["__sales"] = pd.to_numeric(working[sales_column], errors="coerce").fillna(0.0)
     working = working[working["__sales"] > 0]
     if working.empty:
         return []
     grouped = working.groupby(
-        ["__model", "__version", "__trim", "__powertrain"],
+        ["__model_key", "__brand", "__model", "__version", "__trim", "__powertrain"],
         dropna=False,
     )
     aggregated = grouped.agg(
@@ -2020,6 +2032,8 @@ def _build_version_comparison_bubble_items(
     aggregated = aggregated.sort_values(["Sales", "MSRP"], ascending=[False, True])
     return [
         {
+            "modelKey": str(row["__model_key"]),
+            "brand": str(row["__brand"]),
             "model": str(row["__model"]),
             "version": str(row["__version"]),
             "trim": str(row["__trim"]),
@@ -2069,7 +2083,7 @@ def _build_version_comparison_page_payload(
         msrp_max=range_max,
     )
     total_sales = float(pd.to_numeric(range_frame[sales_column], errors="coerce").fillna(0.0).sum()) if sales_column in range_frame.columns else 0.0
-    model_count = int(range_frame["__model"].nunique()) if "__model" in range_frame.columns else 0
+    model_count = int(range_frame["__model_key"].nunique()) if "__model_key" in range_frame.columns else int(range_frame["__model"].nunique()) if "__model" in range_frame.columns else 0
     version_count = len(bubble_items)
     lead_version = bubble_items[0]["version"] if bubble_items else "-"
     return {
@@ -2184,13 +2198,17 @@ def _build_positioning_bubble_items(
         return []
 
     working = frame.copy()
+    if "__model_key" not in working.columns:
+        brand_text = working["__brand"].where(working["__brand"].notna(), "").astype(str).str.strip()
+        model_text = working["__model"].where(working["__model"].notna(), "").astype(str).str.strip()
+        working["__model_key"] = brand_text + "::" + model_text
     working["__sales"] = pd.to_numeric(working[sales_column], errors="coerce").fillna(0.0)
     working = working[working["__sales"] > 0]
     if working.empty:
         return []
 
     grouped = working.groupby(
-        ["__brand", "__model", "__powertrain", "__segment_raw"],
+        ["__model_key", "__brand", "__model", "__powertrain", "__segment_raw"],
         dropna=False,
     )
     aggregated = grouped.agg(
@@ -2221,6 +2239,7 @@ def _build_positioning_bubble_items(
     aggregated = aggregated.sort_values(["Sales", "MsrpMin"], ascending=[False, True]).head(max(1, int(bubble_limit)))
     return [
         {
+            "modelKey": str(row["__model_key"]),
             "brand": str(row["__brand"]),
             "model": str(row["__model"]),
             "powertrain": str(row["__powertrain"]),
@@ -2282,7 +2301,7 @@ def _build_positioning_page_payload(
         length_max=length_range["max"],
     )
     total_sales = float(pd.to_numeric(range_frame[sales_column], errors="coerce").fillna(0.0).sum()) if sales_column in range_frame.columns else 0.0
-    model_count = int(range_frame["__model"].nunique()) if "__model" in range_frame.columns else 0
+    model_count = int(range_frame["__model_key"].nunique()) if "__model_key" in range_frame.columns else int(range_frame["__model"].nunique()) if "__model" in range_frame.columns else 0
     min_msrp = float(range_frame["__msrp"].min()) if not range_frame.empty else range_min
     max_msrp = float(range_frame["__msrp"].max()) if not range_frame.empty else range_max
     min_length = float(range_frame["__length"].min()) if not range_frame.empty else length_range["min"]
@@ -4304,6 +4323,7 @@ def _query_positioning_pricing_deck_impl(
     frame = _ensure_numeric_columns(frame, [*sales_columns, columns.length, columns.msrp])
     frame["__brand"] = frame[columns.make].astype(str).str.strip()
     frame["__model"] = frame[columns.model].astype(str).str.strip()
+    frame["__model_key"] = frame["__brand"] + "::" + frame["__model"]
     frame["__segment_raw"] = frame[columns.segment].astype(str).str.strip()
     frame["__powertrain"] = frame[columns.powertrain].map(_normalize_powertrain)
     frame["__trim"] = (
@@ -4317,6 +4337,7 @@ def _query_positioning_pricing_deck_impl(
     frame = frame[
         (frame["__brand"] != "")
         & (frame["__model"] != "")
+        & (frame["__model_key"] != "::")
         & (frame["__segment_raw"] != "")
         & (frame["__powertrain"] != "OTHER")
         & (frame["__length"] > 0)
@@ -4581,22 +4602,28 @@ def _query_version_comparison_deck_impl(
     filter_expression = repo._build_filter_expression({columns.country_value: [selected_country["value"]]})
     numeric_columns = [*sales_columns, columns.length, columns.msrp]
 
+    def _dimension_text(series: pd.Series) -> pd.Series:
+        text = series.where(series.notna(), "").astype(str).str.strip()
+        return text.mask(text.str.lower().isin({"<na>", "nan", "none", "nat", "null"}), "")
+
     def _prepare_version_comparison_frame(raw_frame: pd.DataFrame) -> pd.DataFrame:
         prepared = _ensure_numeric_columns(raw_frame, numeric_columns)
-        prepared["__brand"] = prepared[columns.make].astype(str).str.strip()
-        prepared["__model"] = prepared[columns.model].astype(str).str.strip()
-        prepared["__version"] = prepared[columns.version].astype(str).str.strip()
-        prepared["__trim"] = prepared[columns.trim].astype(str).str.strip() if columns.trim and columns.trim in prepared.columns else prepared["__version"]
-        prepared["__segment_raw"] = prepared[columns.segment].astype(str).str.strip()
+        prepared["__brand"] = _dimension_text(prepared[columns.make])
+        prepared["__model"] = _dimension_text(prepared[columns.model])
+        prepared["__model_key"] = prepared["__brand"] + "::" + prepared["__model"]
+        prepared["__version"] = _dimension_text(prepared[columns.version])
+        prepared["__trim"] = _dimension_text(prepared[columns.trim]) if columns.trim and columns.trim in prepared.columns else prepared["__version"]
+        prepared["__segment_raw"] = _dimension_text(prepared[columns.segment])
         prepared["__powertrain"] = prepared[columns.powertrain].map(_normalize_powertrain)
         prepared["__length"] = pd.to_numeric(prepared[columns.length], errors="coerce").fillna(0.0)
         prepared["__msrp"] = pd.to_numeric(prepared[columns.msrp], errors="coerce").fillna(0.0)
-        prepared["__drive_type"] = prepared[columns.drive_type].astype(str).str.strip() if columns.drive_type and columns.drive_type in prepared.columns else ""
-        prepared["__body_type"] = prepared[columns.body_type].astype(str).str.strip() if columns.body_type and columns.body_type in prepared.columns else ""
+        prepared["__drive_type"] = _dimension_text(prepared[columns.drive_type]) if columns.drive_type and columns.drive_type in prepared.columns else ""
+        prepared["__body_type"] = _dimension_text(prepared[columns.body_type]) if columns.body_type and columns.body_type in prepared.columns else ""
         prepared[sales_column] = _series_sum(prepared, sales_columns)
         return prepared[
             (prepared["__brand"] != "")
             & (prepared["__model"] != "")
+            & (prepared["__model_key"] != "::")
             & (prepared["__version"] != "")
             & (prepared["__segment_raw"] != "")
             & (prepared["__powertrain"] != "OTHER")
@@ -4649,7 +4676,7 @@ def _query_version_comparison_deck_impl(
         selected_models, _ = _resolve_version_comparison_models(
             segment_frame, models, sales_column=sales_column,
         )
-        comparison_frame = segment_frame[segment_frame["__model"].isin(selected_models)].copy() if selected_models else segment_frame.iloc[0:0].copy()
+        comparison_frame = segment_frame[segment_frame["__model_key"].isin(selected_models)].copy() if selected_models else segment_frame.iloc[0:0].copy()
         candidate_model_options = _build_all_model_options(segment_frame, sales_column)
         global_candidate_frame = global_fuel_frame[global_fuel_frame["__segment_raw"] == selected_segment].copy() if selected_segment else global_fuel_frame.iloc[0:0].copy()
     else:  # free_comparison
@@ -4658,32 +4685,34 @@ def _query_version_comparison_deck_impl(
         global_candidate_frame = _apply_free_candidate_filters(global_fuel_frame)
         available_segments = _build_model_option_list(fuel_frame, "__segment_raw", sales_column)
         selected_segment = ""
-        # Selected basket: explicit models from full frame, default top 3 from candidate pool
-        if models:
-            selected_models, _ = _resolve_version_comparison_models(fuel_frame, models, sales_column=sales_column)
-        else:
-            selected_models, _ = _resolve_version_comparison_models(candidate_frame, [], sales_column=sales_column)
+        # Selected basket follows the same filtered candidate pool as Add Model.
+        selected_models, _ = _resolve_version_comparison_models(candidate_frame, models, sales_column=sales_column)
         # Candidate pool = models within the filtered candidate frame
         candidate_model_options = _build_all_model_options(candidate_frame, sales_column)
-        comparison_frame = fuel_frame[fuel_frame["__model"].isin(selected_models)].copy() if selected_models else fuel_frame.iloc[0:0].copy()
+        comparison_frame = candidate_frame[candidate_frame["__model_key"].isin(selected_models)].copy() if selected_models else candidate_frame.iloc[0:0].copy()
 
     # Build enhanced model options with metadata
     def _build_enhanced_model_options(model_list: list[str], source_frame: pd.DataFrame) -> list[dict[str, Any]]:
         result: list[dict[str, Any]] = []
         model_agg: dict[str, dict[str, Any]] = {}
-        for model_name in model_list:
-            model_rows = source_frame[source_frame["__model"] == model_name]
+        for model_key in model_list:
+            model_rows = source_frame[source_frame["__model_key"] == model_key]
             if model_rows.empty:
                 continue
+            brands = model_rows["__brand"].dropna().unique()
+            models = model_rows["__model"].dropna().unique()
             segments = model_rows["__segment_raw"].dropna().unique()
             powertrains = model_rows["__powertrain"].dropna().unique()
             body_types = model_rows["__body_type"].dropna().unique() if columns.body_type else []
             drive_types_list = model_rows["__drive_type"].dropna().unique() if columns.drive_type else []
             lengths = model_rows[model_rows["__length"] > 0]["__length"]
             msrps = model_rows[model_rows["__msrp"] > 0]["__msrp"]
-            model_agg[model_name] = {
-                "value": model_name,
-                "label": model_name,
+            label = str(models[0]) if len(models) > 0 else str(model_key)
+            model_agg[model_key] = {
+                "value": model_key,
+                "modelKey": model_key,
+                "label": label,
+                "brand": str(brands[0]) if len(brands) > 0 else "",
                 "segment": str(segments[0]) if len(segments) > 0 else "",
                 "powertrain": " / ".join(sorted(set(str(p) for p in powertrains))) if len(powertrains) > 0 else "",
                 "bodyType": str(body_types[0]) if len(body_types) > 0 else "",
