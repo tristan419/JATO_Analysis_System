@@ -1098,6 +1098,8 @@ def export_pi_matrix(
     material_code_search: str | None = None,
     selected_month: int | None = None,
     hide_empty_rows: bool = False,
+    freight_eur: float | None = None,
+    insurance_eur: float | None = None,
 ) -> io.BytesIO:
     """Generate a PI workbook using the current Order Genius selection."""
     matrix = build_matrix(session, country_code, year,
@@ -1125,6 +1127,8 @@ def export_pi_matrix(
         year=year,
         quantity_month=selected_month,
         nl_fob_by_material_code=nl_fob_by_material_code,
+        freight_eur=freight_eur,
+        insurance_eur=insurance_eur,
     )
 
 

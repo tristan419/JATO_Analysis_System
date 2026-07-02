@@ -47,6 +47,12 @@ import type {
   MsrpFinanceObservation,
   MsrpFinanceObservationSummary,
   MsrpFinanceObservationsResponse,
+  MsrpBackfillSnapshotPreview,
+  MsrpMonitoringResponse,
+  MsrpPriceSalesEffectivenessItem,
+  MsrpPriceSalesEffectivenessResponse,
+  MsrpPriceSalesEffectivenessSummary,
+  MsrpSalesWindowRow,
   MsrpReconciliationItem,
   MsrpReconciliationResponse,
   MsrpReconciliationReviewQueueResponse,
@@ -825,6 +831,67 @@ function mapMsrpReviewQueueSummary(
     reviewCasesQueued: Number(raw?.reviewCasesQueued ?? 0),
     reviewCasesCreated: Number(raw?.reviewCasesCreated ?? 0),
     reviewCasesReused: Number(raw?.reviewCasesReused ?? 0),
+    limit: Number(raw?.limit ?? 0),
+  };
+}
+
+function mapMsrpSalesWindowRow(raw: Record<string, unknown>): MsrpSalesWindowRow {
+  return {
+    period: String(raw.period ?? ""),
+    sales: Number(raw.sales ?? 0),
+  };
+}
+
+function mapMsrpPriceSalesEffectivenessItem(
+  raw: Record<string, unknown>,
+): MsrpPriceSalesEffectivenessItem {
+  return {
+    analysisId: String(raw.analysisId ?? ""),
+    country: String(raw.country ?? ""),
+    brand: String(raw.brand ?? ""),
+    jatoModel: String(raw.jatoModel ?? ""),
+    jatoTrim: nullableString(raw.jatoTrim),
+    priceEventMonth: nullableString(raw.priceEventMonth),
+    priceChangeDirection: String(raw.priceChangeDirection ?? ""),
+    priceChangeValue: nullableNumber(raw.priceChangeValue),
+    priceChangePct: nullableNumber(raw.priceChangePct),
+    baselineWindowMonths: Array.isArray(raw.baselineWindowMonths)
+      ? raw.baselineWindowMonths.map((item) => String(item))
+      : [],
+    postWindowMonths: Array.isArray(raw.postWindowMonths)
+      ? raw.postWindowMonths.map((item) => String(item))
+      : [],
+    baselineSales: Array.isArray(raw.baselineSales)
+      ? raw.baselineSales.map((item) => mapMsrpSalesWindowRow(item as Record<string, unknown>))
+      : [],
+    postSales: Array.isArray(raw.postSales)
+      ? raw.postSales.map((item) => mapMsrpSalesWindowRow(item as Record<string, unknown>))
+      : [],
+    baselineAvgSales: nullableNumber(raw.baselineAvgSales),
+    postAvgSales: nullableNumber(raw.postAvgSales),
+    salesDelta: nullableNumber(raw.salesDelta),
+    salesDeltaPct: nullableNumber(raw.salesDeltaPct),
+    effectivenessLabel: String(raw.effectivenessLabel ?? ""),
+    confidenceNote: String(raw.confidenceNote ?? ""),
+    generatedAtUtc: String(raw.generatedAtUtc ?? ""),
+    sourcePriceAlert: raw.sourcePriceAlert && typeof raw.sourcePriceAlert === "object"
+      ? raw.sourcePriceAlert as Record<string, unknown>
+      : {},
+  };
+}
+
+function mapMsrpPriceSalesEffectivenessSummary(
+  raw: Record<string, unknown> | undefined,
+): MsrpPriceSalesEffectivenessSummary {
+  const labelCounts = (
+    raw?.labelCounts && typeof raw.labelCounts === "object"
+      ? raw.labelCounts
+      : {}
+  ) as Record<string, number>;
+  return {
+    priceEventCount: Number(raw?.priceEventCount ?? 0),
+    analyzedEventCount: Number(raw?.analyzedEventCount ?? 0),
+    labelCounts,
     limit: Number(raw?.limit ?? 0),
   };
 }
@@ -2609,6 +2676,36 @@ export const api = {
     }),
 
   /* ── MSRP Current Prices ───────────────────────── */
+  getMsrpMonitoringEvents: (params?: {
+    country?: string;
+    brand?: string;
+    jato_model?: string;
+    window_days?: number;
+    from_date?: string;
+    threshold_pct?: number;
+    direction?: "drops" | "increases" | "all";
+    limit?: number;
+    mode?: "live" | "sweden_demo";
+  }) => {
+    const sp = new URLSearchParams();
+    if (params?.country) sp.set("country", params.country);
+    if (params?.brand) sp.set("brand", params.brand);
+    if (params?.jato_model) sp.set("jato_model", params.jato_model);
+    if (params?.window_days !== undefined) sp.set("window_days", String(params.window_days));
+    if (params?.from_date) sp.set("from_date", params.from_date);
+    if (params?.threshold_pct !== undefined) sp.set("threshold_pct", String(params.threshold_pct));
+    if (params?.direction) sp.set("direction", params.direction);
+    if (params?.limit) sp.set("limit", String(params.limit));
+    if (params?.mode) sp.set("mode", params.mode);
+    const q = sp.toString();
+    return request<MsrpMonitoringResponse>(`/msrp/monitoring/events${q ? `?${q}` : ""}`);
+  },
+  getMsrpBackfillSnapshot: (path: string, maxChars = 20_000) => {
+    const sp = new URLSearchParams();
+    sp.set("path", path);
+    sp.set("max_chars", String(maxChars));
+    return request<MsrpBackfillSnapshotPreview>(`/msrp/monitoring/backfill-snapshot?${sp.toString()}`);
+  },
   listMsrpSources: (params?: {
     source_code?: string;
     country?: string;
@@ -2824,6 +2921,63 @@ export const api = {
         sampleReviewCases: (item.sampleReviewCases ?? []).map((reviewCase) => (
           mapReviewCase(reviewCase)
         )),
+      };
+    });
+  },
+  listMsrpPriceSalesEffectiveness: (params?: {
+    country?: string;
+    brand?: string;
+    jato_model?: string;
+    threshold_pct?: number;
+    baseline_window_months?: number;
+    post_window_months?: number;
+    post_lag_months?: number;
+    min_months?: number;
+    limit?: number;
+  }) => {
+    const sp = new URLSearchParams();
+    if (params?.country) sp.set("country", params.country);
+    if (params?.brand) sp.set("brand", params.brand);
+    if (params?.jato_model) sp.set("jato_model", params.jato_model);
+    if (params?.threshold_pct !== undefined) sp.set("threshold_pct", String(params.threshold_pct));
+    if (params?.baseline_window_months) sp.set("baseline_window_months", String(params.baseline_window_months));
+    if (params?.post_window_months) sp.set("post_window_months", String(params.post_window_months));
+    if (params?.post_lag_months !== undefined) sp.set("post_lag_months", String(params.post_lag_months));
+    if (params?.min_months) sp.set("min_months", String(params.min_months));
+    if (params?.limit) sp.set("limit", String(params.limit));
+    const q = sp.toString();
+    return request<{
+      schemaVersion?: unknown;
+      generatedAtUtc?: unknown;
+      filters?: Record<string, unknown>;
+      window?: Record<string, unknown>;
+      summary?: Record<string, unknown>;
+      items?: Record<string, unknown>[];
+      warnings?: unknown[];
+    }>(`/msrp/effectiveness${q ? `?${q}` : ""}`).then((res): MsrpPriceSalesEffectivenessResponse => {
+      const filters = res.filters ?? {};
+      const window = res.window ?? {};
+      return {
+        schemaVersion: String(res.schemaVersion ?? ""),
+        generatedAtUtc: String(res.generatedAtUtc ?? ""),
+        filters: {
+          country: mapNullableFilterText(filters, "country"),
+          brand: mapNullableFilterText(filters, "brand"),
+          jatoModel: mapNullableFilterText(filters, "jatoModel"),
+        },
+        window: {
+          baselineWindowMonths: Number(window.baselineWindowMonths ?? 0),
+          postWindowMonths: Number(window.postWindowMonths ?? 0),
+          postLagMonths: Number(window.postLagMonths ?? 0),
+          minMonths: Number(window.minMonths ?? 0),
+        },
+        summary: mapMsrpPriceSalesEffectivenessSummary(res.summary),
+        items: (res.items ?? []).map((item) => (
+          mapMsrpPriceSalesEffectivenessItem(item)
+        )),
+        warnings: Array.isArray(res.warnings)
+          ? res.warnings.map((item) => String(item))
+          : [],
       };
     });
   },
@@ -3887,7 +4041,7 @@ export const api = {
       headers: { "Content-Type": "application/json" },
     }),
 
-  exportOrderGeniusPi: (country: string, year: number, opts?: { brand?: string; model?: string; powertrain?: string; version?: string; colour?: string; materialCodeSearch?: string; selectedMonth?: number; hideEmptyRows?: boolean }) =>
+  exportOrderGeniusPi: (country: string, year: number, opts?: { brand?: string; model?: string; powertrain?: string; version?: string; colour?: string; materialCodeSearch?: string; selectedMonth?: number; hideEmptyRows?: boolean; freightEur?: number; insuranceEur?: number }) =>
     requestBlob("/order-genius/export-pi", {
       method: "POST",
       body: JSON.stringify({ country, year, ...opts }),
@@ -4008,6 +4162,13 @@ export const api = {
     appendSearchParam(qs, "vin", params.vin);
     appendSearchParam(qs, "material_code", params.materialCode);
     appendSearchParam(qs, "bom", params.bom);
+    appendSearchParam(qs, "brand", params.brand);
+    appendSearchParam(qs, "model_name", params.modelName);
+    appendSearchParam(qs, "version", params.version);
+    appendSearchParam(qs, "powertrain", params.powertrain);
+    appendSearchParam(qs, "exterior_color_name", params.exteriorColorName);
+    appendSearchParam(qs, "interior_color_name", params.interiorColorName);
+    appendSearchParam(qs, "order_month", params.orderMonth);
     appendSearchParam(qs, "country", params.country);
     appendSearchParam(qs, "ship_name", params.shipName);
     appendSearchParam(qs, "allocation_status", params.allocationStatus);
@@ -4118,8 +4279,14 @@ export const api = {
   createPaymentTerm: (body: { countryCode: string; countryName: string; paymentTermCode: string; paymentMethod: string; lcDays: number }) =>
     request<any>("/order-genius/payment-terms/countries", { method: "POST", body: JSON.stringify(body) }),
 
-  createMaterialSku: (body: { materialCode: string; brand?: string; modelName?: string; version?: string; colour?: string; colourCode?: string; colourHex?: string | null; colourType?: string; powertrain?: string; bomTemplate?: string; sourceBomTemplate?: string }) =>
+  createMaterialSku: (body: { materialCode: string; brand?: string; modelName?: string; version?: string; colour?: string; colourCode?: string; colourHex?: string | null; colourType?: string; colourTier?: string; powertrain?: string; bomTemplate?: string; sourceBomTemplate?: string }) =>
     request<any>("/order-genius/material-skus", { method: "POST", body: JSON.stringify(body) }),
+
+  syncBomTemplateFobs: (body: { bomTemplate: string; materialCodes?: string[]; repriceExistingColourSurcharges?: boolean }) =>
+    request<{ bomTemplate: string; created: number; repriced: number; skippedExisting: number; skippedCleared: number; skippedNoSource: number; unchanged: number }>(
+      "/order-genius/bom-templates/sync-fobs",
+      { method: "POST", body: JSON.stringify(body) },
+    ),
 
   updateSkuMetadata: (materialCode: string, body: { materialCodes?: string[]; brand?: string; modelName?: string; version?: string; powertrain?: string }) =>
     request<{ materialCodes: string[]; updated: number }>(
@@ -4133,8 +4300,8 @@ export const api = {
   confirmColourCode: (materialCode: string) =>
     request<any>(`/order-genius/material-skus/${encodeURIComponent(materialCode)}/confirm-colour-code`, { method: "PATCH" }),
 
-  updateColourCode: (materialCode: string, colourCode: string) =>
-    request<any>(`/order-genius/material-skus/${encodeURIComponent(materialCode)}/colour-code`, { method: "PATCH", body: JSON.stringify({ colourCode }) }),
+  updateColourCode: (materialCode: string, body: { colourCode: string; colourName?: string; colourHex?: string | null }) =>
+    request<any>(`/order-genius/material-skus/${encodeURIComponent(materialCode)}/colour-code`, { method: "PATCH", body: JSON.stringify(body) }),
 
   updateMaterialCode: (oldCode: string, newCode: string) =>
     request<any>(`/order-genius/material-skus/${encodeURIComponent(oldCode)}/material-code`, { method: "PATCH", body: JSON.stringify({ materialCode: newCode }) }),

@@ -2,8 +2,12 @@ import { describe, expect, it } from "vitest";
 
 import type { CurrentPrice, MsrpFinanceObservation } from "../../types";
 import {
+  formatFinanceCurrencyRange,
   formatFinanceMonthlyPayment,
   getFinanceObservationsForCurrentPrice,
+  getFinanceObservationValidity,
+  getFinanceObservationValidityBadgeClass,
+  getFinanceObservationValidityLabel,
   matchesFinanceObservationFilters,
 } from "../../utils/msrpFinance";
 
@@ -102,5 +106,26 @@ describe("msrp finance helpers", () => {
   it("formats monthly payment in EUR first", () => {
     expect(formatFinanceMonthlyPayment(makeFinanceObservation({ monthlyPaymentEur: 520.87 }))).toBe("521 EUR");
     expect(formatFinanceMonthlyPayment(makeFinanceObservation({ monthlyPaymentEur: null }))).toBe("5,990 SEK");
+  });
+
+  it("formats monthly payment ranges for finance summaries", () => {
+    expect(formatFinanceCurrencyRange(500, 700)).toBe("500 EUR - 700 EUR");
+    expect(formatFinanceCurrencyRange(520, 520)).toBe("520 EUR");
+    expect(formatFinanceCurrencyRange(null, 700)).toBe("-");
+  });
+
+  it("classifies finance observation validity windows", () => {
+    const now = new Date("2026-06-17T00:00:00Z");
+    expect(getFinanceObservationValidity(makeFinanceObservation({ offerValidUntil: "2026-07-15" }), now)).toBe("active");
+    expect(getFinanceObservationValidity(makeFinanceObservation({ offerValidUntil: "2026-06-20" }), now)).toBe("expiresSoon");
+    expect(getFinanceObservationValidity(makeFinanceObservation({ offerValidUntil: "2026-06-01" }), now)).toBe("expired");
+    expect(getFinanceObservationValidity(makeFinanceObservation({ offerValidUntil: null }), now)).toBe("undated");
+  });
+
+  it("maps finance validity to display labels and badge classes", () => {
+    const now = new Date("2026-06-17T00:00:00Z");
+    const expired = makeFinanceObservation({ offerValidUntil: "2026-06-01" });
+    expect(getFinanceObservationValidityLabel(expired, now)).toBe("Expired");
+    expect(getFinanceObservationValidityBadgeClass(expired, now)).toBe("badge-danger");
   });
 });

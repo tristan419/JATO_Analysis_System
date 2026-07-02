@@ -1,18 +1,37 @@
 source_code: volkswagen_t_cross_at_draft_scrapling
 country: 奥地利
 brand: VOLKSWAGEN
-source_url: https://www.volkswagen.at/modelle/t-cross
+source_url: https://www.volkswagen.at/t-cross/t-cross
 source_type: manufacturer_official
 price_semantics: base_msrp
-extractor_type: playwright
-profile_preset: ../_shared/presets/volkswagen_configurator_trim_overview_playwright.yaml
+extractor_type: scrapling
 profile:
-  url: https://www.volkswagen.at/modelle/t-cross
+  url: https://www.volkswagen.at/t-cross/t-cross
+  tier: http
+  headless: true
+  network_idle: false
+  load_dom: false
+  timeout_ms: 20000
+  impersonate: chrome
+  text_regex:
+    source_selector: body
+    entry_patterns:
+    - pattern: 'Preis\s+ab\s*(?:€|EUR)\s*(?P<price>\d{2}\.\d{3},00)\s+inkl\.\s+MwSt\.'
+      official_trim: T-Cross starting price
+      official_powertrain: TSI
+      price_label: Preis ab inkl. MwSt.
   default_currency: EUR
   default_tax_included: true
-  default_price_label: Unverbindliche Preisempfehlung inkl. MwSt
+  default_price_label: Preis ab inkl. MwSt.
   fixed_model: T-CROSS
   fixed_jato_model: T-CROSS
+  copy_trim_to_jato_trim: true
+  match_confidence: 0.82
+  match_status: review_required
+  match_reason:
+    kind: official_model_page_starting_price
+    source: volkswagen_at_model_page
+    note: Official Volkswagen Austria T-Cross model page exposes Preis ab before bonus price.
   structured_fields:
     powertrain_rules:
     - key: powertrain_ice
@@ -25,9 +44,10 @@ schedule:
   run_window_start: 00:00
   run_window_end: 05:00
   preferred_weekday: monday
-notes: Keywords filled from official manufacturer website research (AT market). CSS
-  selectors still require browser-based inspection before promotion. [Switched to
-  playwright_card_flow with volkswagen_configurator_trim_overview_playwright.yaml]
+notes: Keywords filled from official manufacturer website research (AT market).
+  Replaced outdated Playwright trimcard flow with text_regex over the official
+  model-page Preis ab value. [Static Volkswagen AT model-page price validated
+  with HTTP fetch; browser rendering is not required]
 bootstrap_meta:
   country_model_rank: 10
   suggested_scope_kind: single_model

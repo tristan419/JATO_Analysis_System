@@ -1,17 +1,28 @@
 source_code: nissan_qashqai_fr_draft_scrapling
 country: 法国
 brand: NISSAN
-source_url: https://www.nissan.fr/vehicules/qashqai.html
+source_url: https://www.nissan.fr/cf/vehicules/neufs/qashqai
 source_type: manufacturer_official
 price_semantics: base_msrp
 extractor_type: scrapling
 profile:
-  url: https://www.nissan.fr/vehicules/qashqai.html
+  url: https://www.nissan.fr/cf/vehicules/neufs/qashqai
   tier: stealth
   headless: true
-  network_idle: true
+  network_idle: false
+  load_dom: false
+  timeout_ms: 30000
+  wait_ms: 500
+  disable_resources: true
   impersonate: chrome
   json_script_selector: script[type='application/ld+json']
+  text_regex:
+    source_selector: body
+    include_element_html: true
+    entry_patterns:
+    - pattern: '<p>Qashqai\s+(?P<trim>[^<]+)</p>.{0,12000}?Comptant.{0,300}?partir de\s+(?P<price>\d{2}[\s\u00a0\u202f]*\d{3})\s*(?:EUR|€)'
+      official_powertrain: Qashqai grade cash price
+      price_label: Comptant
   css:
     vehicle_container: body
     model: h1, h2
@@ -118,7 +129,9 @@ schedule:
 notes: Draft scaffold generated from country×model top30 backlog. Replace source_url,
   profile.url, selectors, currency, price label, and the single-model placeholders
   before promoting to 07_ScrapingToolkit/sources. [URL filled from NISSAN template]
-  [URL language corrected] [CSS selectors applied from brand probe]
+  [URL language corrected] [CSS selectors applied from brand probe] [Pinned to the
+  current /cf Qashqai page and text_regex cash-price block so LLD monthly prices
+  such as 229 EUR/mois do not satisfy base_msrp extraction.]
 bootstrap_meta:
   country_model_rank: 19
   suggested_scope_kind: single_model

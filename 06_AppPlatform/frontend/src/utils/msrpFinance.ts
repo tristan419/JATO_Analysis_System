@@ -1,5 +1,7 @@
 import type { CurrentPrice, MsrpFinanceObservation } from "../types";
 
+export type FinanceObservationValidity = "active" | "expiresSoon" | "expired" | "undated";
+
 function normalizeText(value: string | null | undefined): string {
   return (value ?? "").trim().toLowerCase();
 }
@@ -48,11 +50,83 @@ export function formatFinanceCurrency(
   return `${formatFinanceNumber(value, maximumFractionDigits)} ${currency}`;
 }
 
+export function formatFinanceCurrencyRange(
+  min: number | null | undefined,
+  max: number | null | undefined,
+  currency = "EUR",
+): string {
+  if (
+    min === null
+    || min === undefined
+    || max === null
+    || max === undefined
+    || !Number.isFinite(min)
+    || !Number.isFinite(max)
+  ) {
+    return "-";
+  }
+  if (Math.abs(min - max) < 0.000001) {
+    return formatFinanceCurrency(min, currency);
+  }
+  return `${formatFinanceCurrency(min, currency)} - ${formatFinanceCurrency(max, currency)}`;
+}
+
 export function formatFinanceDate(value: string | null | undefined): string {
   if (!value) return "-";
   const parsed = new Date(value);
   if (Number.isNaN(parsed.getTime())) return value;
   return parsed.toLocaleDateString();
+}
+
+function parseFinanceDeadline(value: string | null | undefined): Date | null {
+  if (!value) return null;
+  const normalized = value.includes("T") ? value : `${value}T23:59:59Z`;
+  const parsed = new Date(normalized);
+  return Number.isNaN(parsed.getTime()) ? null : parsed;
+}
+
+export function getFinanceObservationValidity(
+  item: MsrpFinanceObservation,
+  now = new Date(),
+): FinanceObservationValidity {
+  const deadline = parseFinanceDeadline(item.offerValidUntil);
+  if (!deadline) return "undated";
+  const remainingMs = deadline.getTime() - now.getTime();
+  if (remainingMs < 0) return "expired";
+  const remainingDays = remainingMs / (24 * 60 * 60 * 1000);
+  return remainingDays <= 14 ? "expiresSoon" : "active";
+}
+
+export function getFinanceObservationValidityLabel(
+  item: MsrpFinanceObservation,
+  now = new Date(),
+): string {
+  switch (getFinanceObservationValidity(item, now)) {
+    case "active":
+      return "Active";
+    case "expiresSoon":
+      return "Expires soon";
+    case "expired":
+      return "Expired";
+    case "undated":
+      return "No validity date";
+  }
+}
+
+export function getFinanceObservationValidityBadgeClass(
+  item: MsrpFinanceObservation,
+  now = new Date(),
+): string {
+  switch (getFinanceObservationValidity(item, now)) {
+    case "active":
+      return "badge-active";
+    case "expiresSoon":
+      return "badge-warning";
+    case "expired":
+      return "badge-danger";
+    case "undated":
+      return "badge-inactive";
+  }
 }
 
 export function getFinanceObservationLabel(item: MsrpFinanceObservation): string {

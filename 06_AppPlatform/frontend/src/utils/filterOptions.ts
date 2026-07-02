@@ -50,6 +50,7 @@ export function cloneFilterSelections(source: FilterSelections): FilterSelection
     body_type: [],
     segment: [],
     powertrain: [],
+    origin: [],
     make: [],
     model: [],
     version: [],

@@ -42,6 +42,7 @@ from app.services.order_genius_service import (
 from app.services.ordering_normalization import (
     clean_text,
     infer_colour_tier,
+    merge_colour_tiers,
     normalize_brand,
     normalize_brand_text,
 )
@@ -81,9 +82,12 @@ def _optional_float_from_body(body: dict, key: str) -> float | None:
     if value in (None, ""):
         return None
     try:
-        return float(value)
+        parsed = float(value)
     except (TypeError, ValueError) as exc:
         raise HTTPException(status_code=400, detail=f"{key} must be numeric") from exc
+    if parsed < 0:
+        raise HTTPException(status_code=400, detail=f"{key} must be non-negative")
+    return parsed
 
 
 def _export_filter_params(body: dict) -> dict:
@@ -574,16 +578,30 @@ def patch_colour_code(
     _=Depends(require_min_role("editor")),
 ) -> dict:
     """Update colour code and regenerate material code."""
-    sku = repo.get_sku_by_material_code(session, material_code)
-    if not sku:
-        raise HTTPException(status_code=404)
-    new_code = body.get("colourCode", "").upper()
-    if new_code and "**" in (sku.material_code or ""):
-        sku.material_code = sku.material_code.replace("**", new_code)
-    sku.exterior_color_code = new_code
-    sku.colour_code_confirmed = True
+    new_code = clean_text(body.get("colourCode")).upper()
+    try:
+        sku, old_material_code = repo.update_sku_colour_code(
+            session,
+            material_code,
+            new_code,
+            new_colour_name=body.get("colourName", body.get("colour_name")),
+            new_colour_hex=body.get("colourHex", body.get("colour_hex")) if ("colourHex" in body or "colour_hex" in body) else None,
+        )
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        detail = str(exc)
+        status_code = 409 if "already exists" in detail.lower() else 400
+        raise HTTPException(status_code=status_code, detail=detail) from exc
     session.commit()
-    return {"materialCode": sku.material_code, "colourCode": new_code}
+    return {
+        "oldMaterialCode": old_material_code,
+        "materialCode": sku.material_code,
+        "colourCode": sku.exterior_color_code,
+        "colour": sku.exterior_color_name,
+        "colourHex": sku.colour_hex,
+        "colourCodeConfirmed": sku.colour_code_confirmed,
+    }
 
 
 @router.patch("/material-skus/{material_code}/material-code")
@@ -1029,6 +1047,36 @@ def patch_sku_fob(
     }
 
 
+@router.post("/bom-templates/sync-fobs")
+def sync_bom_template_fobs(
+    body: dict,
+    session: Session = Depends(get_db_session),
+    user=Depends(require_min_role("editor")),
+) -> dict:
+    """Backfill missing concrete SKU FOB rows from sibling colours in a BOM template."""
+    bom_template = clean_text(body.get("bomTemplate") or body.get("materialCode")).upper()
+    material_codes_raw = body.get("materialCodes")
+    material_codes = (
+        [code for code in (clean_text(item).upper() for item in material_codes_raw) if code]
+        if isinstance(material_codes_raw, list)
+        else None
+    )
+    if not bom_template:
+        raise HTTPException(status_code=400, detail="bomTemplate is required")
+    try:
+        result = repo.sync_missing_template_fobs(
+            session,
+            bom_template=bom_template,
+            target_material_codes=material_codes,
+            changed_by=user.name,
+            reprice_existing_colour_surcharges=_body_bool(body.get("repriceExistingColourSurcharges")),
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    session.commit()
+    return result
+
+
 @router.post("/countries/copy-fobs")
 def copy_country_fobs(
     body: dict,
@@ -1108,9 +1156,10 @@ def create_material_sku(
     brand = normalize_brand(body.get("brand"))
     model_name = normalize_brand_text(body.get("modelName"))
     version = clean_text(body.get("version"))
-    colour = clean_text(body.get("colour"))
     colour_code = clean_text(body.get("colourCode")).upper()
+    colour = clean_text(body.get("colour")) or colour_code
     colour_type = clean_text(body.get("colourType")) or "single"
+    requested_colour_tier = clean_text(body.get("colourTier")).lower()
     powertrain = clean_text(body.get("powertrain")) or "Other"
     bom_template = clean_text(body.get("bomTemplate")).upper() or material_code
     source_bom_template = clean_text(body.get("sourceBomTemplate")).upper()
@@ -1122,7 +1171,6 @@ def create_material_sku(
             ("brand", brand),
             ("modelName", model_name),
             ("version", version),
-            ("colour", colour),
             ("colourCode", colour_code),
         )
         if not value
@@ -1153,9 +1201,9 @@ def create_material_sku(
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     colour_hex = explicit_colour_hex or repo.find_reusable_colour_hex(
         session,
-        brand=str(body["brand"]),
-        colour_code=str(body["colourCode"]),
-        colour_name=str(body["colour"]),
+        brand=brand,
+        colour_code=colour_code,
+        colour_name=colour,
     )
 
     sku = MaterialSkuMaster(
@@ -1170,12 +1218,15 @@ def create_material_sku(
         bom_template=bom_template,
         powertrain=powertrain,
         colour_hex=colour_hex,
-        colour_tier=infer_colour_tier(
-            colour,
-            colour_type,
-            body.get("editionTag", body.get("edition_tag")),
-            colour_code,
-            colour_hex,
+        colour_tier=merge_colour_tiers(
+            requested_colour_tier if requested_colour_tier in {"single", "dual", "special"} else None,
+            infer_colour_tier(
+                colour,
+                colour_type,
+                body.get("editionTag", body.get("edition_tag")),
+                colour_code,
+                colour_hex,
+            ),
         ),
         lifecycle_status="active",
         is_active=True,
@@ -1183,13 +1234,20 @@ def create_material_sku(
         baseline_version_id=baseline.baseline_version_id,
     )
     session.add(sku)
-    copied_finance_rows = repo.copy_country_material_finance_template(
-        session,
-        source_bom_template,
-        bom_template,
-        updated_by=user.name,
-    )
     try:
+        session.flush()
+        copied_finance_rows = repo.copy_country_material_finance_template(
+            session,
+            source_bom_template,
+            bom_template,
+            updated_by=user.name,
+        )
+        copied_fob_rows = repo.sync_missing_template_fobs(
+            session,
+            bom_template=bom_template,
+            target_material_codes=[material_code],
+            changed_by=user.name,
+        )
         session.commit()
     except IntegrityError as exc:
         session.rollback()
@@ -1201,6 +1259,7 @@ def create_material_sku(
         "materialCode": sku.material_code,
         "id": str(sku.material_sku_id),
         "copiedFinanceRows": copied_finance_rows,
+        "copiedFobRows": copied_fob_rows,
     }
 
 
@@ -1574,7 +1633,14 @@ def export_order_genius_pi(
     validate_country_access(session, user.name, user.role, country)
     year = body.get("year", 2026)
     filters = _export_filter_params(body)
-    buf = export_pi_matrix(session, country, year, **filters)
+    buf = export_pi_matrix(
+        session,
+        country,
+        year,
+        **filters,
+        freight_eur=_optional_float_from_body(body, "freightEur"),
+        insurance_eur=_optional_float_from_body(body, "insuranceEur"),
+    )
     from datetime import date as _date
     today = _date.today().strftime("%Y%m%d")
     suffix = _export_filename_suffix(filters)

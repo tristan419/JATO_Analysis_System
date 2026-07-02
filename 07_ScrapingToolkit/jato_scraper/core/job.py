@@ -31,6 +31,7 @@ ExtractorKind = Literal[
     "rss",
     "json_path",
     "http_json",
+    "http_text",
     "pdf_text",
     "scrapling",
     "playwright_card_flow",

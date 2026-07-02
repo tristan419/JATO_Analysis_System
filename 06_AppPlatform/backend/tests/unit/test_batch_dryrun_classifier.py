@@ -60,6 +60,57 @@ def test_valid_success_status_counts_as_passing_result():
     assert summary["passPct"] == 100.0
 
 
+def test_v3_report_payload_preserves_finance_summary_fields():
+    results = [
+        {
+            "country": "se",
+            "code": "skoda_enyaq_se_draft_scrapling",
+            "status": "dry_run",
+            "valid": 1,
+            "extracted": 1,
+            "rejected": 0,
+            "financeObservationCandidates": 1,
+            "financeMonthlyPaymentCount": 1,
+            "financeSemanticsCounts": {"lease_monthly": 1},
+            "financeTypeCounts": {"private_lease": 1},
+            "sampleFinanceContexts": [{"monthlyPayment": 5990}],
+        },
+        {
+            "country": "fi",
+            "code": "tesla_model_y_fi_draft_scrapling",
+            "status": "dry_run",
+            "valid": 1,
+            "extracted": 1,
+            "rejected": 0,
+            "financeObservationCandidates": 1,
+            "financeMonthlyPaymentCount": 0,
+            "financeSemanticsCounts": {"cash_msrp": 1},
+            "financeTypeCounts": {"unknown": 1},
+        },
+    ]
+
+    payload = dryrun_mod._build_dryrun_report_payload(
+        batch="se,fi",
+        countries=["se", "fi"],
+        results=results,
+        run_id="msrp-dryrun-20260617-120000",
+        generated_at="2026-06-17T12:00:00Z",
+    )
+
+    assert payload["summary"]["financeObservationCandidates"] == 2
+    assert payload["summary"]["financeMonthlyPaymentCount"] == 1
+    assert payload["summary"]["financeSemanticsCounts"] == {
+        "lease_monthly": 1,
+        "cash_msrp": 1,
+    }
+    se_country = next(
+        country for country in payload["countriesDetail"]
+        if country["countryCode"] == "se"
+    )
+    assert se_country["financeMonthlyPaymentCount"] == 1
+    assert se_country["sources"][0]["sampleFinanceContexts"] == [{"monthlyPayment": 5990}]
+
+
 def test_classify_valid_soft_404_final_url():
     """Valid observations on a soft-404 final URL are not counted as a pass."""
     src = {
@@ -113,6 +164,24 @@ def test_classify_empty_forbidden_403_from_captured_log():
     }
     result = dryrun_mod._classify_dryrun_failure(src)
     assert result["failureReason"] == "forbidden_403"
+    assert result["recommendedStrategy"] == "manual_review_or_proxy_required"
+
+
+def test_classify_anti_bot_access_denied_body():
+    """Akamai Access Denied bodies can arrive with HTTP 200 and need separate classification."""
+    src = {
+        "status": "empty",
+        "httpStatus": 200,
+        "extractorError": (
+            "anti_bot_access_denied: Access Denied You don't have permission "
+            "to access http://www.tesla.com/de_at/modely on this server. "
+            "https://errors.edgesuite.net/18.example"
+        ),
+    }
+
+    result = dryrun_mod._classify_dryrun_failure(src)
+
+    assert result["failureReason"] == "anti_bot_access_denied"
     assert result["recommendedStrategy"] == "manual_review_or_proxy_required"
 
 

@@ -44,6 +44,29 @@ BUDGET_DAILY_CNY = 20
 BUDGET_MONTHLY_CNY = 500
 ALERT_EMAIL = "tristanlyk@gmail.com"
 SOURCE_URL_PATTERN = re.compile(r"https?://[^\s\"')<>]+")
+MSRP_COUNTRY_LABELS = {
+    "at": "Austria",
+    "be": "Belgium",
+    "ch": "Switzerland",
+    "cz": "Czech Republic",
+    "de": "Germany",
+    "dk": "Denmark",
+    "es": "Spain",
+    "fi": "Finland",
+    "fr": "France",
+    "gr": "Greece",
+    "hr": "Croatia",
+    "hu": "Hungary",
+    "it": "Italy",
+    "nl": "Netherlands",
+    "no": "Norway",
+    "pl": "Poland",
+    "pt": "Portugal",
+    "ro": "Romania",
+    "se": "Sweden",
+    "si": "Slovenia",
+    "sk": "Slovakia",
+}
 
 def _read_json(path: Path) -> dict[str, Any]:
     if not path.is_file():
@@ -58,6 +81,36 @@ def _read_json_if_exists(path: Path) -> dict[str, Any] | None:
         return json.loads(path.read_text())
     except (json.JSONDecodeError, OSError):
         return None
+
+
+def _msrp_country_label(country_code: str) -> str:
+    code = str(country_code or "").strip().lower()
+    return MSRP_COUNTRY_LABELS.get(code, code.upper())
+
+
+def _msrp_run_recency_key(run: dict[str, Any]) -> tuple[str, str]:
+    run_id = str(run.get("runId") or "")
+    timestamp = str(
+        run.get("finishedAt")
+        or run.get("startedAt")
+        or run.get("updatedAt")
+        or ""
+    )
+    return timestamp, run_id
+
+
+def _sort_msrp_runs_index(index_data: dict[str, Any]) -> dict[str, Any]:
+    runs = index_data.get("runs")
+    if not isinstance(runs, list):
+        return index_data
+    return {
+        **index_data,
+        "runs": sorted(
+            [run for run in runs if isinstance(run, dict)],
+            key=_msrp_run_recency_key,
+            reverse=True,
+        ),
+    }
 
 
 def _msrp_artifacts_dir() -> Path:
@@ -77,9 +130,81 @@ def _default_source_repair_backlog() -> dict[str, Any]:
     }
 
 
+def _default_source_reference_evidence() -> dict[str, Any]:
+    return {
+        "schemaVersion": "msrp_source_reference_evidence_v1",
+        "generatedAt": None,
+        "backlogRunId": None,
+        "referenceSource": "EVKX",
+        "referencePolicy": "reference_only_review_required",
+        "officialSourceRequiredForIngest": True,
+        "officialIngestEligible": False,
+        "summary": {
+            "evidenceItemCount": 0,
+            "localReferenceCount": 0,
+            "missingLocalReferenceCount": 0,
+            "officialIngestEligibleCount": 0,
+        },
+        "items": [],
+    }
+
+
+def _default_source_accessibility_audit() -> dict[str, Any]:
+    return {
+        "schemaVersion": "msrp_source_accessibility_audit_v1",
+        "generatedAt": None,
+        "backlogRunId": None,
+        "includeTransient": False,
+        "summary": {
+            "sourceRepairIssueCount": 0,
+            "transientRegressionCount": 0,
+            "probedSourceCount": 0,
+            "probeStatusCounts": {},
+            "recommendedActionCounts": {},
+            "retryableNetworkCount": 0,
+            "officialProxyRequiredCount": 0,
+            "tlsHandshakeFailedCount": 0,
+            "dnsUnresolvedCount": 0,
+        },
+        "items": [],
+    }
+
+
 def _load_msrp_source_repair_backlog() -> dict[str, Any]:
     backlog = _read_json_if_exists(_msrp_artifacts_dir() / "msrp_source_repair_backlog.json")
     return backlog if isinstance(backlog, dict) else _default_source_repair_backlog()
+
+
+def _load_msrp_source_reference_evidence(run_id: str | None = None) -> dict[str, Any]:
+    evidence = _read_json_if_exists(_msrp_artifacts_dir() / "msrp_source_reference_evidence.json")
+    if not isinstance(evidence, dict):
+        return _default_source_reference_evidence()
+    evidence_run_id = str(evidence.get("backlogRunId") or "")
+    target_run_id = str(run_id or "")
+    if target_run_id and evidence_run_id and evidence_run_id != target_run_id:
+        return _default_source_reference_evidence()
+    return evidence
+
+
+def _load_msrp_source_accessibility_audit(run_id: str | None = None) -> dict[str, Any]:
+    audit = _read_json_if_exists(_msrp_artifacts_dir() / "msrp_source_accessibility_audit.json")
+    if not isinstance(audit, dict):
+        return _default_source_accessibility_audit()
+    audit_run_id = str(audit.get("backlogRunId") or "")
+    target_run_id = str(run_id or "")
+    if target_run_id and audit_run_id and audit_run_id != target_run_id:
+        return _default_source_accessibility_audit()
+    return audit
+
+
+def _with_source_reference_evidence(progress: dict[str, Any]) -> dict[str, Any]:
+    enriched = dict(progress)
+    run_id = str((enriched.get("status") or {}).get("runId") or "")
+    if not isinstance(enriched.get("sourceReferenceEvidence"), dict):
+        enriched["sourceReferenceEvidence"] = _load_msrp_source_reference_evidence(run_id)
+    if not isinstance(enriched.get("sourceAccessibilityAudit"), dict):
+        enriched["sourceAccessibilityAudit"] = _load_msrp_source_accessibility_audit(run_id)
+    return enriched
 
 
 def _source_url(source: dict[str, Any]) -> str:
@@ -208,6 +333,23 @@ def _source_is_pass(source: dict[str, Any]) -> bool:
         and (status == "pass" or valid > 0)
         and status not in {"empty", "error", "exception", "fail"}
     )
+
+
+def _int_value(value: Any) -> int:
+    try:
+        return int(value or 0)
+    except (TypeError, ValueError):
+        return 0
+
+
+def _count_map(value: Any) -> dict[str, int]:
+    if not isinstance(value, dict):
+        return {}
+    counts: dict[str, int] = {}
+    for name, count in value.items():
+        label = str(name or "").strip() or "unknown"
+        counts[label] = counts.get(label, 0) + _int_value(count)
+    return counts
 
 
 def _transient_lookup_from_stable_coverage(
@@ -486,7 +628,7 @@ def _msrp_progress_country_entry(country: dict[str, Any]) -> dict[str, Any]:
     )
     entry = {
         "countryCode": code,
-        "countryLabel": country.get("countryLabel"),
+        "countryLabel": country.get("countryLabel") or _msrp_country_label(code),
         "total": int(country.get("total") or 0),
         "pass": int(country.get("pass") or 0),
         "empty": int(country.get("empty") or 0),
@@ -497,6 +639,10 @@ def _msrp_progress_country_entry(country: dict[str, Any]) -> dict[str, Any]:
         "topFailureReason": country.get("topFailureReason"),
         "failureBreakdown": country.get("failureBreakdown") or {},
         "strategyRecommendations": country.get("strategyRecommendations") or {},
+        "financeObservationCandidates": _int_value(country.get("financeObservationCandidates")),
+        "financeMonthlyPaymentCount": _int_value(country.get("financeMonthlyPaymentCount")),
+        "financeSemanticsCounts": _count_map(country.get("financeSemanticsCounts")),
+        "financeTypeCounts": _count_map(country.get("financeTypeCounts")),
     }
     for key in ("runId", "batch", "timestamp", "gateStatus", "runStatus", "isLatestRun", "completed"):
         if key in country:
@@ -651,7 +797,7 @@ def _msrp_progress_from_report(report: dict[str, Any]) -> dict[str, Any]:
         "warning" if findings else "ok"
     )
 
-    return {
+    return _with_source_reference_evidence({
         "probe": "pipeline.msrp_country_progress",
         "overall": overall,
         "generatedAt": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
@@ -665,6 +811,10 @@ def _msrp_progress_from_report(report: dict[str, Any]) -> dict[str, Any]:
             "observedCountries": report.get("observedCountries", []),
             "missingCountries": report.get("missingCountries", []),
             "duplicateCountries": report.get("duplicateCountries", []),
+            "financeObservationCandidates": _int_value(summary.get("financeObservationCandidates")),
+            "financeMonthlyPaymentCount": _int_value(summary.get("financeMonthlyPaymentCount")),
+            "financeSemanticsCounts": _count_map(summary.get("financeSemanticsCounts")),
+            "financeTypeCounts": _count_map(summary.get("financeTypeCounts")),
         },
         "countries": countries,
         "topBlockingCountries": sorted(top_blocking, key=lambda item: item["passPct"]),
@@ -674,11 +824,11 @@ def _msrp_progress_from_report(report: dict[str, Any]) -> dict[str, Any]:
         ],
         "sourceRepairBacklog": _source_repair_backlog_from_report(report),
         "findings": findings,
-    }
+    })
 
 
 def _missing_msrp_progress() -> dict[str, Any]:
-    return {
+    return _with_source_reference_evidence({
         "probe": "pipeline.msrp_country_progress",
         "overall": "critical",
         "generatedAt": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
@@ -692,7 +842,7 @@ def _missing_msrp_progress() -> dict[str, Any]:
             "severity": "critical",
             "message": "No dryrun report found. MSRP dryrun may not have run yet.",
         }],
-    }
+    })
 
 
 def _msrp_progress_from_partial_current(
@@ -770,7 +920,7 @@ def _msrp_progress_from_partial_current(
         None,
     )
 
-    return {
+    return _with_source_reference_evidence({
         "probe": "pipeline.msrp_country_progress",
         "overall": overall,
         "generatedAt": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
@@ -788,6 +938,10 @@ def _msrp_progress_from_partial_current(
             "duplicateCountries": [],
             "stableLatestRunId": stable_latest_run_id,
             "activeRunId": coverage.get("activeRunId") or current.get("runId"),
+            "financeObservationCandidates": _int_value(current.get("financeObservationCandidates")),
+            "financeMonthlyPaymentCount": _int_value(current.get("financeMonthlyPaymentCount")),
+            "financeSemanticsCounts": _count_map(current.get("financeSemanticsCounts")),
+            "financeTypeCounts": _count_map(current.get("financeTypeCounts")),
         },
         "countries": countries,
         "allCountriesLatest": latest_countries or countries,
@@ -802,7 +956,7 @@ def _msrp_progress_from_partial_current(
             stable_coverage=stable_coverage,
         ),
         "findings": findings,
-    }
+    })
 
 
 def _partial_msrp_progress(
@@ -930,7 +1084,7 @@ def hermes_msrp_country_progress(
         report_path = REPORTS_DIR / f"msrp_country_progress_{run_id}.json"
         static_progress = _read_json_if_exists(report_path)
         if static_progress and not _is_empty_msrp_progress(static_progress):
-            return static_progress
+            return _with_source_reference_evidence(static_progress)
         dryrun_report = _load_msrp_dryrun_report(run_id)
         if dryrun_report:
             return _msrp_progress_from_report(dryrun_report)
@@ -959,9 +1113,11 @@ def hermes_msrp_country_progress(
         return _with_msrp_latest_context(
             _msrp_progress_from_report(latest_report),
             dashboard_context,
-        )
+    )
     if static_progress and not _is_empty_msrp_progress(static_progress):
-        return _with_msrp_latest_context(static_progress, dashboard_context)
+        return _with_source_reference_evidence(
+            _with_msrp_latest_context(static_progress, dashboard_context)
+        )
     if latest_report:
         return _with_msrp_latest_context(
             _msrp_progress_from_report(latest_report),
@@ -970,7 +1126,9 @@ def hermes_msrp_country_progress(
     if partial_progress:
         return partial_progress
     if static_progress:
-        return _with_msrp_latest_context(static_progress, dashboard_context)
+        return _with_source_reference_evidence(
+            _with_msrp_latest_context(static_progress, dashboard_context)
+        )
     return _with_msrp_latest_context(_missing_msrp_progress(), dashboard_context)
 
 
@@ -985,7 +1143,7 @@ def hermes_msrp_dryrun_history(_=Depends(require_min_role("viewer"))) -> dict:
             "latestRunId": None,
             "runs": [],
         }
-    return _read_json(path)
+    return _sort_msrp_runs_index(_read_json(path))
 
 
 @router.get("/code-audit")

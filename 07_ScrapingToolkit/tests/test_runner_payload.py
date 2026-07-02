@@ -3,7 +3,7 @@ import requests
 from jato_scraper import runner
 from jato_scraper.base import BaseExtractor, ExtractorConfig, RawObservation
 from jato_scraper.runner import build_batch_payload
-from jato_scraper.validation import BatchValidationReport
+from jato_scraper.validation import BatchValidationReport, ValidationResult
 
 
 class DummyExtractor(BaseExtractor):
@@ -16,9 +16,11 @@ class FakeResponse:
         self,
         payload: dict,
         status_code: int = 200,
+        text: str | None = None,
     ) -> None:
         self.payload = payload
         self.status_code = status_code
+        self.text = text if text is not None else str(payload)
 
     def raise_for_status(self) -> None:
         if self.status_code >= 400:
@@ -200,3 +202,131 @@ def test_build_batch_payload_preserves_explicit_pricing_context() -> None:
         "monthly_payment": 5990,
         "price_semantics": "lease_monthly",
     }
+
+
+def test_finance_summary_counts_valid_finance_contexts() -> None:
+    observations = [
+        RawObservation(
+            official_model="Enyaq",
+            official_trim="85",
+            msrp_value=5990,
+            currency="SEK",
+            tax_included=True,
+            price_label="Private lease",
+            source_url="https://example.test/enyaq",
+            raw_payload={
+                "monthly_payment": 5990,
+                "finance_type": "private_lease",
+                "finance_currency": "SEK",
+                "price_semantics": "lease_monthly",
+            },
+        ),
+        RawObservation(
+            official_model="Model Y",
+            official_trim="Long Range",
+            msrp_value=529900,
+            currency="SEK",
+            tax_included=True,
+            price_label="List price",
+            source_url="https://example.test/model-y",
+            raw_payload={"price_semantics": "cash_msrp"},
+        ),
+        RawObservation(
+            official_model="EX30",
+            official_trim="Core",
+            msrp_value=429000,
+            currency="SEK",
+            tax_included=True,
+            price_label="List price",
+            source_url="https://example.test/ex30",
+            raw_payload={"priceText": "429 000 kr"},
+        ),
+    ]
+
+    summary = runner._finance_summary_from_observations(observations)
+
+    assert summary["financeObservationCandidates"] == 2
+    assert summary["financeMonthlyPaymentCount"] == 1
+    assert summary["financeSemanticsCounts"] == {
+        "lease_monthly": 1,
+        "cash_msrp": 1,
+    }
+    assert summary["financeTypeCounts"] == {
+        "private_lease": 1,
+        "unknown": 1,
+    }
+    assert summary["sampleFinanceContexts"][0]["monthlyPayment"] == 5990
+
+
+def test_rejection_diagnostics_summarize_validation_failures() -> None:
+    observation = RawObservation(
+        official_model="QASHQAI",
+        official_trim="Personnalisation et style",
+        msrp_value=229,
+        currency="EUR",
+        tax_included=True,
+        price_label="MSRP",
+        source_url="https://example.test/qashqai",
+        raw_payload={"priceText": "229 EUR"},
+    )
+    report = BatchValidationReport(
+        valid=[],
+        rejected=[
+            (
+                observation,
+                [
+                    ValidationResult(
+                        ok=False,
+                        rule="price_range",
+                        reason="msrp_value=229.0 < 5000.0 for base_msrp",
+                    ),
+                ],
+            ),
+        ],
+    )
+
+    diagnostics = runner._rejection_diagnostics_from_report(report)
+
+    assert diagnostics["rejectedReasons"] == [
+        "msrp_value=229.0 < 5000.0 for base_msrp",
+    ]
+    assert diagnostics["rejectedRules"] == ["price_range"]
+    assert diagnostics["rejectionRuleCounts"] == {"price_range": 1}
+    assert diagnostics["sampleRejectedObservations"] == [
+        {
+            "officialModel": "QASHQAI",
+            "officialTrim": "Personnalisation et style",
+            "msrpValue": 229,
+            "currency": "EUR",
+            "priceLabel": "MSRP",
+            "reasons": ["msrp_value=229.0 < 5000.0 for base_msrp"],
+            "rules": ["price_range"],
+            "priceText": "229 EUR",
+        },
+    ]
+
+
+def test_submit_batch_includes_backend_response_body_on_http_error(
+    monkeypatch,
+) -> None:
+    def fake_post(*args, **kwargs):
+        return FakeResponse(
+            {"detail": [{"loc": ["body", "observations", 0]}]},
+            status_code=422,
+            text='{"detail":[{"loc":["body","observations",0]}]}',
+        )
+
+    monkeypatch.setattr(runner.requests, "post", fake_post)
+
+    try:
+        runner.submit_batch(
+            {"batch_code": "bad"},
+            "https://example.test/v1",
+        )
+    except requests.HTTPError as exc:
+        message = str(exc)
+    else:
+        raise AssertionError("submit_batch should raise for HTTP errors")
+
+    assert "422 error" in message
+    assert '"observations",0' in message

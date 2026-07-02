@@ -686,6 +686,7 @@ def vehicle_to_dict(
         "interiorColorName": vehicle.interior_color_name,
         "interiorColourCode": vehicle.interior_colour_code,
         "orderDate": _date_str(header.order_date) if header else None,
+        "orderMonth": header.order_month if header else None,
         "productionDate": _date_str(vehicle.production_date),
         "etd": _date_str(vehicle.etd),
         "eta": _date_str(vehicle.eta),

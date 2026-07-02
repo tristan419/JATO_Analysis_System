@@ -175,6 +175,117 @@ def test_read_data_management_overview_without_database(
     assert payload["airflow"]["available"] is False
 
 
+def test_database_payload_tracks_msrp_finance_warehouse(monkeypatch) -> None:
+    class _FakeExecuteResult:
+        def scalar_one(self):
+            return 0
+
+        def scalars(self):
+            return self
+
+        def all(self):
+            return []
+
+    class _FakeSession:
+        def execute(self, _statement):
+            return _FakeExecuteResult()
+
+    class _FakeSessionFactory:
+        def __call__(self):
+            return self
+
+        def __enter__(self):
+            return _FakeSession()
+
+        def __exit__(self, _exc_type, _exc, _tb):
+            return False
+
+    row_counts = {
+        "msrp.sources": 4,
+        "msrp.observations": 12,
+        "msrp.finance_observations": 9,
+        "msrp.current_prices": 5,
+        "msrp.price_history": 7,
+        "review.review_cases": 2,
+        "engineering.config_variants": 3,
+    }
+    last_events = {
+        "msrp.observations": "2026-06-16T10:00:00+00:00",
+        "msrp.finance_observations": "2026-06-17T10:00:00+00:00",
+        "msrp.current_prices": "2026-06-17T09:00:00+00:00",
+        "msrp.price_history": "2026-06-14T10:00:00+00:00",
+    }
+
+    def _fake_table_summary(
+        _session,
+        *,
+        model,
+        schema,
+        label,
+        domain,
+        timestamp_column,
+    ):
+        key = f"{schema}.{model.__tablename__}"
+        return {
+            "key": key,
+            "label": label,
+            "domain": domain,
+            "schema": schema,
+            "table": model.__tablename__,
+            "rowCount": row_counts.get(key, 0),
+            "lastEventAt": last_events.get(key),
+            "status": "ready" if row_counts.get(key, 0) > 0 else "inactive",
+        }
+
+    def _fake_day_counts(_session, *, model, timestamp_column, since_at):
+        if model is data_management_service.FinanceObservation:
+            return [(data_management_service.date(2026, 6, 17), 3)]
+        return []
+
+    monkeypatch.setattr(
+        data_management_service,
+        "get_database_health",
+        lambda: {"enabled": True, "connected": True, "detail": "ok"},
+    )
+    monkeypatch.setattr(
+        data_management_service,
+        "get_session_factory",
+        lambda: _FakeSessionFactory(),
+    )
+    monkeypatch.setattr(
+        data_management_service,
+        "_query_table_summary",
+        _fake_table_summary,
+    )
+    monkeypatch.setattr(
+        data_management_service,
+        "_query_day_counts",
+        _fake_day_counts,
+    )
+    monkeypatch.setattr(
+        data_management_service,
+        "_collect_recent_snapshot_items",
+        lambda _session: [],
+    )
+
+    health, table_items, activity_by_day, activity_by_source, domains = (
+        data_management_service._build_database_payload()
+    )
+
+    msrp_domain = next(item for item in domains if item["key"] == "msrp")
+    msrp_metrics = {item["label"]: item["value"] for item in msrp_domain["metrics"]}
+
+    assert health["connected"] is True
+    assert any(item["key"] == "msrp.finance_observations" for item in table_items)
+    assert msrp_domain["updatedAt"] == "2026-06-17T10:00:00+00:00"
+    assert msrp_metrics["Observations"] == 12
+    assert msrp_metrics["Finance observations"] == 9
+    assert msrp_metrics["Current prices"] == 5
+    assert msrp_metrics["Price history"] == 7
+    assert activity_by_day[data_management_service.date(2026, 6, 17)] == 3
+    assert activity_by_source["msrp"] == 3
+
+
 def test_collect_recent_snapshot_items_deduplicates_latest_path() -> None:
     class _FakeResult:
         def __init__(self, rows):

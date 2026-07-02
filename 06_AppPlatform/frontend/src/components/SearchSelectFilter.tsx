@@ -1,17 +1,24 @@
 import { useState } from "react";
 
+interface SearchSelectShortcut {
+  label: string;
+  values: string[];
+}
+
 export function SearchSelectFilter({
   label,
   options,
   selected,
   onChange,
   showSuvShortcut = false,
+  shortcuts = [],
 }: {
   label: string;
   options: string[];
   selected: string[];
   onChange: (vals: string[]) => void;
   showSuvShortcut?: boolean;
+  shortcuts?: SearchSelectShortcut[];
 }) {
   const [query, setQuery] = useState("");
   const normalizedQuery = query.toLowerCase().trim();
@@ -54,6 +61,20 @@ export function SearchSelectFilter({
             一键筛选 SUV
           </button>
         )}
+        {shortcuts.map((shortcut) => {
+          const validValues = shortcut.values.filter((value) => options.includes(value));
+          if (validValues.length === 0) return null;
+          return (
+            <button
+              key={shortcut.label}
+              type="button"
+              className="filter-action-btn"
+              onClick={() => onChange(validValues)}
+            >
+              {shortcut.label}
+            </button>
+          );
+        })}
         <button type="button" className="filter-action-btn" onClick={() => onChange([])}>
           清空
         </button>

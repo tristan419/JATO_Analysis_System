@@ -893,6 +893,7 @@ export interface VersionComparisonMetadata {
   availableFuelTypes: string[];
   availableSegments: MarketScanCountryOption[];
   availableModels: VersionComparisonModelOption[];
+  globalAvailableModels?: VersionComparisonModelOption[];
   availableBodyTypes: string[];
   availableDriveTypes: string[];
   suggestedLengthMin: number | null;
@@ -1727,6 +1728,315 @@ export interface PriceHistoryEntry {
   createdAtUtc: string;
 }
 
+export interface MsrpMonitoringSource {
+  sourceCode: string | null;
+  sourceType: string | null;
+  extractorName: string | null;
+  extractorVersion: string | null;
+  sourceRegistryUrl: string | null;
+}
+
+export interface MsrpMonitoringRelatedOfficialEvidence {
+  url?: string | null;
+  label?: string | null;
+  snapshotPath?: string | null;
+  payloadHash?: string | null;
+}
+
+export interface MsrpMonitoringEvidence {
+  sourceUrl: string | null;
+  sourceSnapshotPath: string | null;
+  matchConfidence: number | null;
+  matchStatus: string | null;
+  observationSourceUrl: string | null;
+  sourcePayloadHash: string | null;
+  observedAtUtc: string | null;
+  scrapeBatchId?: string | null;
+  scrapeBatchCode?: string | null;
+  dryrunRunId?: string | null;
+  demoBackfilled?: boolean;
+  demoScenario?: string | null;
+  backfilled?: boolean;
+  backfillKind?: string | null;
+  backfillSourceLabel?: string | null;
+  backfillEffectiveDate?: string | null;
+  backfillEvidenceUrl?: string | null;
+  backfillSnapshotPath?: string | null;
+  backfillPayloadHash?: string | null;
+  backfillCapturedAtUtc?: string | null;
+  backfillNotes?: string | null;
+  backfillObservationId?: string | null;
+  backfillEvidenceRole?: string | null;
+  backfillCount?: number | null;
+  relatedOfficialEvidence?: MsrpMonitoringRelatedOfficialEvidence[];
+}
+
+export interface MsrpBackfillSnapshotPreview {
+  exists: boolean;
+  previewable: boolean;
+  status: "ok" | "missing" | "blocked" | "unsupported" | string;
+  path: string;
+  fileName: string;
+  contentType: string | null;
+  sizeBytes: number | null;
+  content: string | null;
+  truncated: boolean;
+  message: string;
+}
+
+export type MsrpAuditPriority = "auto_pass" | "sample" | "priority_audit" | "block";
+
+export interface MsrpMonitoringTimelineEvent {
+  country: string;
+  countryLabel: string;
+  brand: string;
+  jatoModel: string;
+  jatoTrim: string;
+  jatoPowertrain: string;
+  changedAtUtc: string | null;
+  oldMsrpEur: number | null;
+  currentMsrpEur: number | null;
+  changeAmountEur: number | null;
+  changePct: number | null;
+  changePctBasis?: "source_msrp" | "eur_normalized" | string | null;
+  oldSourceMsrp: number | null;
+  currentSourceMsrp: number | null;
+  changeAmountSource: number | null;
+  sourceCurrency: string;
+  previousSourceCurrency: string;
+  sourceCurrencyChanged: boolean;
+  sourceStatus: string;
+  reviewFlag: boolean;
+  riskReasons: string[];
+  auditPriority: MsrpAuditPriority | string;
+  suggestedAction: MsrpAuditPriority | string;
+  auditActionLabel: string;
+  auditReasons: string[];
+  samplingBucket: string;
+  lifecycleStatus?: string | null;
+  currentPriceId: string;
+  priceHistoryId: string;
+  currentObservationId: string;
+  previousObservationId: string;
+  lastConfirmedObservationId: string;
+  effectiveObservationId: string;
+  source: MsrpMonitoringSource;
+  evidence: MsrpMonitoringEvidence;
+  outlier?: boolean;
+  suspectedFalsePositive?: boolean;
+}
+
+export interface MsrpLaunchAlert {
+  alertId: string;
+  country: string;
+  countryLabel: string;
+  brand: string;
+  jatoModel: string;
+  jatoTrim: string;
+  jatoPowertrain: string;
+  eventType: "new_product_launch_price_baseline" | string;
+  launchedAtUtc: string | null;
+  currentMsrpEur: number | null;
+  currentSourceMsrp: number | null;
+  sourceCurrency: string;
+  sourceStatus: string;
+  reviewFlag: boolean;
+  riskReasons: string[];
+  auditPriority: MsrpAuditPriority | string;
+  suggestedAction: string;
+  auditActionLabel: string;
+  auditReasons: string[];
+  samplingBucket: string;
+  currentPriceId: string;
+  priceHistoryId: string;
+  currentObservationId: string;
+  lastConfirmedObservationId: string;
+  effectiveObservationId: string;
+  source: MsrpMonitoringSource;
+  evidence: MsrpMonitoringEvidence;
+}
+
+export interface MsrpOfferSignal {
+  signalId: string;
+  country: string;
+  countryLabel: string;
+  brand: string;
+  jatoModel: string;
+  jatoTrim: string;
+  jatoPowertrain: string;
+  primaryType: "cash_discount" | "finance_offer" | "lease_offer" | "purchase_benefit" | "coverage_gap" | string;
+  offerTypes: string[];
+  headline: string;
+  valueLabel: string;
+  cashDiscountSek: number | null;
+  interestRatePct: number | null;
+  monthlyPaymentSek: number | null;
+  benefitLabels: string[];
+  sourceUrl: string;
+  sourceLabel: string;
+  sourceObservedDate: string;
+  offerValidUntil: string | null;
+  capturedAtUtc: string;
+  notes: string;
+  auditPriority: MsrpAuditPriority | string;
+  samplingBucket: string;
+  matchStatus: "pending_current_price_match" | "source_coverage_gap" | string;
+}
+
+export interface MsrpBatchACountryCoverage {
+  code: string;
+  countryLabel: string;
+  currentRows: number;
+  priceHistoryRows: number;
+  closedPeriodCount: number;
+  backfillPeriodCount: number;
+  launchCandidateCount: number;
+  hasCurrent: boolean;
+  hasHistoricalMonitoring: boolean;
+  hasHistoricalBackfill: boolean;
+  status: "backfilled" | "history_without_backfill" | "current_only" | "not_loaded" | string;
+  firstSeenAtUtc: string | null;
+  latestCurrentStartedAtUtc: string | null;
+}
+
+export interface MsrpBatchACoverage {
+  batchCode: string;
+  countryCount: number;
+  loadedCountryCount: number;
+  historicalMonitoringCountryCount: number;
+  historicalBackfillCountryCount: number;
+  launchCandidateCountryCount: number;
+  currentRows: number;
+  backfillPeriodCount: number;
+  launchCandidateCount: number;
+  countries: MsrpBatchACountryCoverage[];
+}
+
+export interface MsrpMonitoringSalesPoint {
+  period: string;
+  label: string;
+  sales: number;
+}
+
+export interface MsrpMonitoringSalesEffectMarker {
+  period: string;
+  changedAtUtc: string | null;
+  country: string | null;
+  countryLabel: string | null;
+  jatoTrim: string | null;
+  changePct: number | null;
+  changeAmountEur: number | null;
+  eventType: "price_drop" | "price_increase" | "price_flat" | string;
+}
+
+export interface MsrpMonitoringModelSales {
+  source: "market_scan" | string;
+  countryLabels: string[];
+  totalSales: number;
+  currentMonthSales: number;
+  latestSalesPeriod: string | null;
+  latestSalesLabel: string | null;
+  effectCoverageStatus: "covered" | "post_sales_pending" | "no_effect_markers" | "no_sales_match" | string;
+  coveredEffectMarkerCount: number;
+  pendingEffectMarkerCount: number;
+  monthlySeries: MsrpMonitoringSalesPoint[];
+  effectMarkers: MsrpMonitoringSalesEffectMarker[];
+  matchedRowCount: number;
+  matchedCountryCount: number;
+  warnings: string[];
+}
+
+export interface MsrpMonitoringModelEvent {
+  eventId: string;
+  brand: string;
+  jatoModel: string;
+  jatoPowertrain: string;
+  powertrainColor: string;
+  lengthMm: number | null;
+  lengthMissing: boolean;
+  lengthSource: string | null;
+  affectedCountryCount: number;
+  countryChangeCount: number;
+  timelineEventCount: number;
+  trimChangeCount: number;
+  medianChangePct: number | null;
+  minChangePct: number | null;
+  maxChangePct: number | null;
+  changePctBasis?: "source_msrp" | "eur_normalized" | "mixed" | string | null;
+  medianOldMsrpEur: number | null;
+  medianCurrentMsrpEur: number | null;
+  oldMsrpEurRange: { min: number | null; max: number | null };
+  currentMsrpEurRange: { min: number | null; max: number | null };
+  sourceRiskCount: number;
+  reviewRequiredCount: number;
+  outlierCount: number;
+  suspectedFalsePositiveCount: number;
+  multiCountrySync: boolean;
+  lifecycleStatus?: string | null;
+  demo?: boolean;
+  backfilled?: boolean;
+  backfillEventCount?: number;
+  auditPriority: MsrpAuditPriority | string;
+  suggestedAction: MsrpAuditPriority | string;
+  auditActionLabel: string;
+  auditReasons: string[];
+  samplingBucket: string;
+  confidence: "high" | "medium" | "low" | string;
+  riskReasons: Record<string, number>;
+  sales: MsrpMonitoringModelSales | null;
+  countries: MsrpMonitoringTimelineEvent[];
+  timeline: MsrpMonitoringTimelineEvent[];
+}
+
+export interface MsrpMonitoringResponse {
+  schemaVersion: string;
+  mode?: "live" | "sweden_demo" | string;
+  generatedAtUtc: string;
+  filters: {
+    country: string | null;
+    brand: string | null;
+    jatoModel: string | null;
+    windowDays: number;
+    fromDate: string | null;
+    thresholdPct: number;
+    direction: "drops" | "increases" | "all" | string;
+    limit: number;
+  };
+  summary: {
+    eventCount: number;
+    timelineEventCount: number;
+    affectedCountryCount: number;
+    sourceRiskCount: number;
+    reviewRequiredCount: number;
+    outlierCount: number;
+    lengthMissingCount: number;
+    campaignBoundaryCount: number;
+    auditPriorityCounts: Record<MsrpAuditPriority | string, number>;
+    autoPassCount: number;
+    sampleCount: number;
+    priorityAuditCount: number;
+    blockCount: number;
+    launchAlertCount?: number;
+    offerSignalCount?: number;
+    batchALoadedCountryCount?: number;
+    batchAHistoricalBackfillCountryCount?: number;
+  };
+  powertrainColors: Record<string, string>;
+  events: MsrpMonitoringModelEvent[];
+  launchAlerts?: MsrpLaunchAlert[];
+  offerSignals?: MsrpOfferSignal[];
+  coverage?: {
+    batchA: MsrpBatchACoverage | null;
+  };
+  warnings: string[];
+  demo?: {
+    enabled: boolean;
+    country: string;
+    backfilled: boolean;
+    description: string;
+  } | null;
+}
+
 export interface MsrpFinanceObservation {
   financeObservationId: string;
   observationId: string;
@@ -1884,6 +2194,68 @@ export interface MsrpReconciliationReviewQueueResponse {
   summary: MsrpReconciliationReviewQueueSummary;
   sampleConflicts: MsrpReconciliationQueuedConflict[];
   sampleReviewCases: ReviewCase[];
+}
+
+export interface MsrpSalesWindowRow {
+  period: string;
+  sales: number;
+}
+
+export type MsrpPriceSalesEffectivenessLabel =
+  | "positive"
+  | "neutral"
+  | "negative"
+  | "insufficient_data"
+  | string;
+
+export interface MsrpPriceSalesEffectivenessItem {
+  analysisId: string;
+  country: string;
+  brand: string;
+  jatoModel: string;
+  jatoTrim: string | null;
+  priceEventMonth: string | null;
+  priceChangeDirection: string;
+  priceChangeValue: number | null;
+  priceChangePct: number | null;
+  baselineWindowMonths: string[];
+  postWindowMonths: string[];
+  baselineSales: MsrpSalesWindowRow[];
+  postSales: MsrpSalesWindowRow[];
+  baselineAvgSales: number | null;
+  postAvgSales: number | null;
+  salesDelta: number | null;
+  salesDeltaPct: number | null;
+  effectivenessLabel: MsrpPriceSalesEffectivenessLabel;
+  confidenceNote: string;
+  generatedAtUtc: string;
+  sourcePriceAlert: Record<string, unknown>;
+}
+
+export interface MsrpPriceSalesEffectivenessSummary {
+  priceEventCount: number;
+  analyzedEventCount: number;
+  labelCounts: Record<string, number>;
+  limit: number;
+}
+
+export interface MsrpPriceSalesEffectivenessResponse {
+  schemaVersion: string;
+  generatedAtUtc: string;
+  filters: {
+    country: string | null;
+    brand: string | null;
+    jatoModel: string | null;
+  };
+  window: {
+    baselineWindowMonths: number;
+    postWindowMonths: number;
+    postLagMonths: number;
+    minMonths: number;
+  };
+  summary: MsrpPriceSalesEffectivenessSummary;
+  items: MsrpPriceSalesEffectivenessItem[];
+  warnings: string[];
 }
 
 export interface JatoMonthlyUpdateUpload {

@@ -13,7 +13,13 @@ const PERIOD_OPTIONS = [
   { value: "2026-04", label: "26.04" },
 ];
 
-function TestHarness({ initialValue = null }: { initialValue?: MarketScanPeriodRange | null }) {
+function TestHarness({
+  initialValue = null,
+  commitOnIdle = true,
+}: {
+  initialValue?: MarketScanPeriodRange | null;
+  commitOnIdle?: boolean;
+}) {
   const [period, setPeriod] = useState<MarketScanPeriodRange | null>(initialValue);
 
   return (
@@ -22,6 +28,7 @@ function TestHarness({ initialValue = null }: { initialValue?: MarketScanPeriodR
         options={PERIOD_OPTIONS}
         value={period}
         onChange={setPeriod}
+        commitOnIdle={commitOnIdle}
       />
       <div>{`Active period: ${period ? `${period.start}~${period.end}` : "latest"}`}</div>
     </div>
@@ -53,5 +60,17 @@ describe("DeckPeriodTimeline", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "回到默认最新月" }));
     expect(screen.getByText("Active period: latest")).toBeTruthy();
+  });
+
+  it("can defer drag commits until pointer release", () => {
+    render(<TestHarness commitOnIdle={false} />);
+
+    fireEvent.click(screen.getByRole("button", { name: "展开时间轴" }));
+    const startSlider = screen.getByRole("slider", { name: "开始月份" });
+    fireEvent.change(startSlider, { target: { value: "0" } });
+    expect(screen.getByText("Active period: latest")).toBeTruthy();
+
+    fireEvent.pointerUp(startSlider);
+    expect(screen.getByText("Active period: 2026-02~2026-04")).toBeTruthy();
   });
 });

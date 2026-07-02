@@ -1,5 +1,7 @@
-import { useEffect, useMemo, useRef, useState, type ChangeEvent, type FormEvent } from "react";
+import { useEffect, useMemo, useRef, useState, type ChangeEvent, type FormEvent, type ReactElement } from "react";
 import { api } from "../api/client";
+import { DeckFloatingDrawer } from "../components/deckControls";
+import { VehicleAllocationPivotGrid } from "../components/VehicleAllocationPivotGrid";
 import { useAuth } from "../contexts/AuthContext";
 import type {
   AllocationStatus,
@@ -226,6 +228,7 @@ export function OrderGeniusVehicleAllocationPage() {
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [refreshKey, setRefreshKey] = useState(0);
+  const [toolsOpen, setToolsOpen] = useState(true);
   const [piForm, setPiForm] = useState<PiForm>({
     countryCode: defaultCountry,
     orderMonth: "",
@@ -259,6 +262,9 @@ export function OrderGeniusVehicleAllocationPage() {
   const [importPreview, setImportPreview] = useState<VehicleImportPreview | null>(null);
   const [importBusy, setImportBusy] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const initialPiCodeRef = useRef<string | null>(
+    new URLSearchParams(window.location.search).get("pi")?.trim().toUpperCase() || null,
+  );
 
   const page = filters.page ?? 1;
   const pageSize = filters.pageSize ?? 100;
@@ -272,6 +278,13 @@ export function OrderGeniusVehicleAllocationPage() {
     || filters.keyword
     || filters.materialCode
     || filters.bom
+    || filters.brand
+    || filters.modelName
+    || filters.version
+    || filters.powertrain
+    || filters.exteriorColorName
+    || filters.interiorColorName
+    || filters.orderMonth
     || filters.shipName
     || filters.allocationStatus
     || filters.logisticsStatus
@@ -290,6 +303,7 @@ export function OrderGeniusVehicleAllocationPage() {
     const allocated = vehicles.filter((item) => item.allocationStatus === "allocated").length;
     return { vinMissing, ready, allocated };
   }, [vehicles]);
+  const pivotVehicles = vehicles.length > 0 ? vehicles : selectedPi?.vehicles ?? [];
 
   useEffect(() => {
     if (!defaultCountry) {
@@ -368,6 +382,135 @@ export function OrderGeniusVehicleAllocationPage() {
     setFilters((current) => ({ ...current, [key]: value, page: key === "page" ? value as number : 1 }));
   }
 
+  function renderVehicleFilters(): ReactElement {
+    return (
+      <section className="va-filters va-filter-panel">
+        <div className="va-panel-head va-filter-head">
+          <h2>Filters</h2>
+          <span>{total} vehicles</span>
+        </div>
+        <input
+          value={filters.country ?? ""}
+          onChange={(event) => updateFilter("country", event.target.value.toUpperCase())}
+          placeholder="Country"
+          title="Filter by vehicle market country. Combined PIs also appear when this country is in market countries."
+        />
+        <input
+          value={filters.piCode ?? ""}
+          onChange={(event) => updateFilter("piCode", event.target.value.toUpperCase())}
+          placeholder="PI Code"
+          title="Filter vehicles by PI Code"
+        />
+        <input
+          type="month"
+          value={filters.orderMonth ?? ""}
+          onChange={(event) => updateFilter("orderMonth", event.target.value)}
+          title="Filter vehicles by PI order month"
+        />
+        <input
+          value={filters.carCode ?? ""}
+          onChange={(event) => updateFilter("carCode", event.target.value.toUpperCase())}
+          placeholder="Car Code"
+          title="Filter by generated Car Code"
+        />
+        <input
+          value={filters.vin ?? ""}
+          onChange={(event) => updateFilter("vin", event.target.value.toUpperCase())}
+          placeholder="VIN"
+          title="Filter by VIN"
+        />
+        <input
+          value={filters.materialCode ?? ""}
+          onChange={(event) => updateFilter("materialCode", event.target.value.toUpperCase())}
+          placeholder="Material"
+          title="Filter by material code"
+        />
+        <input
+          value={filters.brand ?? ""}
+          onChange={(event) => updateFilter("brand", event.target.value)}
+          placeholder="Brand"
+          title="Filter by brand"
+        />
+        <input
+          value={filters.modelName ?? ""}
+          onChange={(event) => updateFilter("modelName", event.target.value)}
+          placeholder="Model"
+          title="Filter by model name, e.g. O9 or JAECOO7"
+        />
+        <input
+          value={filters.version ?? ""}
+          onChange={(event) => updateFilter("version", event.target.value)}
+          placeholder="Version"
+          title="Filter by trim/version"
+        />
+        <input
+          value={filters.powertrain ?? ""}
+          onChange={(event) => updateFilter("powertrain", event.target.value)}
+          placeholder="Powertrain"
+          title="Filter by ICE / HEV / BEV / PHEV"
+        />
+        <input
+          value={filters.exteriorColorName ?? ""}
+          onChange={(event) => updateFilter("exteriorColorName", event.target.value)}
+          placeholder="Exterior"
+          title="Filter by exterior colour"
+        />
+        <input
+          value={filters.interiorColorName ?? ""}
+          onChange={(event) => updateFilter("interiorColorName", event.target.value)}
+          placeholder="Interior"
+          title="Filter by interior colour"
+        />
+        <select
+          value={filters.allocationStatus ?? ""}
+          onChange={(event) => updateFilter("allocationStatus", event.target.value as AllocationStatus | "")}
+        >
+          <option value="">Allocation</option>
+          {ALLOCATION_STATUSES.map((status) => (
+            <option key={status} value={status}>{statusText(status)}</option>
+          ))}
+        </select>
+        <select
+          value={filters.logisticsStatus ?? ""}
+          onChange={(event) => updateFilter("logisticsStatus", event.target.value as LogisticsStatus | "")}
+        >
+          <option value="">Logistics</option>
+          {LOGISTICS_STATUSES.map((status) => (
+            <option key={status} value={status}>{statusText(status)}</option>
+          ))}
+        </select>
+        <label className="va-check">
+          <input
+            type="checkbox"
+            checked={Boolean(filters.vinMissingOnly)}
+            onChange={(event) => updateFilter("vinMissingOnly", event.target.checked)}
+          />
+          VIN missing
+        </label>
+        <label className="va-check">
+          <input
+            type="checkbox"
+            checked={Boolean(filters.unallocatedOnly)}
+            onChange={(event) => updateFilter("unallocatedOnly", event.target.checked)}
+          />
+          Unallocated
+        </label>
+        <button
+          type="button"
+          onClick={() => {
+            setFilters({ country: defaultCountry, page: 1, pageSize: 100 });
+            setSelectedPi(null);
+            setSelectedLineCode(null);
+            setSelectedVehicle(null);
+            setEditForm(null);
+          }}
+        >
+          Reset
+        </button>
+      </section>
+    );
+  }
+
   function setPiVehicleScope(detail: PiOrderDetail, lineCode: string | null): void {
     setSelectedPi(detail);
     setSelectedLineCode(lineCode);
@@ -395,7 +538,7 @@ export function OrderGeniusVehicleAllocationPage() {
       const result = await api.searchVehicleAllocation(keyword);
       if (result.type === "pi" && isPiDetail(result.item)) {
         const detail = result.item;
-        setPiVehicleScope(detail, detail.lines[0]?.piLineCode ?? null);
+        setPiVehicleScope(detail, null);
         setNotice(`Loaded ${detail.header.piCode}`);
         return;
       }
@@ -405,7 +548,7 @@ export function OrderGeniusVehicleAllocationPage() {
         setPiVehicleScope(detail, vehicle.piLineCode);
         setSelectedVehicle(vehicle);
         setEditForm(toEditForm(vehicle));
-        setNotice(`Loaded ${vehicle.carCode}`);
+        setNotice(`Loaded ${vehicle.carCode} · ${vehicle.piCode} · ${vehicle.piLineCode}`);
         return;
       }
       setNotice("No match");
@@ -419,11 +562,20 @@ export function OrderGeniusVehicleAllocationPage() {
     setNotice(null);
     try {
       const detail = await api.getVehicleAllocationPi(piCode);
-      setPiVehicleScope(detail, detail.lines[0]?.piLineCode ?? null);
+      setPiVehicleScope(detail, null);
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : "加载 PI 失败");
     }
   }
+
+  useEffect(() => {
+    const piCode = initialPiCodeRef.current;
+    if (!piCode) {
+      return;
+    }
+    initialPiCodeRef.current = null;
+    void selectPi(piCode).then(() => setToolsOpen(false));
+  }, []);
 
   function selectLineScope(lineCode: string | null): void {
     if (!selectedPi) {
@@ -441,9 +593,20 @@ export function OrderGeniusVehicleAllocationPage() {
     setEditForm(null);
   }
 
-  function selectVehicle(vehicle: PiVehicleUnit): void {
+  async function selectVehicle(vehicle: PiVehicleUnit): Promise<void> {
     setSelectedVehicle(vehicle);
     setEditForm(toEditForm(vehicle));
+    if (selectedPi?.header.piCode === vehicle.piCode) {
+      setSelectedLineCode(vehicle.piLineCode);
+      return;
+    }
+    try {
+      const detail = await api.getVehicleAllocationPi(vehicle.piCode);
+      setSelectedPi(detail);
+      setSelectedLineCode(vehicle.piLineCode);
+    } catch {
+      // The row itself remains editable even if the surrounding PI context cannot refresh.
+    }
   }
 
   async function saveVehicle(): Promise<void> {
@@ -482,7 +645,7 @@ export function OrderGeniusVehicleAllocationPage() {
         eta: cleanText(piForm.eta),
       });
       const detail = await api.getVehicleAllocationPi(header.piCode);
-      setPiVehicleScope(detail, detail.lines[0]?.piLineCode ?? null);
+      setPiVehicleScope(detail, null);
       setPiForm((current) => ({ ...current, officialPiNo: "", shipName: "", eta: "" }));
       setRefreshKey((key) => key + 1);
       setNotice(`Created ${header.piCode}`);
@@ -514,7 +677,7 @@ export function OrderGeniusVehicleAllocationPage() {
         eta: cleanText(piForm.eta),
       });
       const detail = await api.getVehicleAllocationPi(result.piCode);
-      setPiVehicleScope(detail, detail.lines[0]?.piLineCode ?? null);
+      setPiVehicleScope(detail, null);
       setRefreshKey((key) => key + 1);
       setNotice(`Generated ${result.piCode}: ${result.lineCount} lines / ${result.vehicleCount} cars`);
     } catch (err: unknown) {
@@ -541,7 +704,7 @@ export function OrderGeniusVehicleAllocationPage() {
       setRefreshKey((key) => key + 1);
       if (selectedPi) {
         const detail = await api.getVehicleAllocationPi(selectedPi.header.piCode);
-        setPiVehicleScope(detail, detail.lines[0]?.piLineCode ?? null);
+        setPiVehicleScope(detail, null);
       }
     } catch (e: unknown) { setError(e instanceof Error ? e.message : "Delete line failed"); }
   }
@@ -759,7 +922,21 @@ export function OrderGeniusVehicleAllocationPage() {
       )}
 
       <div className="va-layout">
-        <aside className="va-side">
+        <DeckFloatingDrawer
+          open={toolsOpen}
+          onOpenChange={setToolsOpen}
+          triggerPrimary="筛选 / PI 工具"
+          triggerSecondaryOpen="关闭面板"
+          triggerSecondaryClosed={selectedPi ? selectedPi.header.piCode : `${piHeaders.length} PI · ${total} vehicles`}
+          eyebrow="Order Genius"
+          title="筛选、PI 创建与导入导出"
+          ariaLabel="PI vehicle allocation tools"
+          className="va-tools-drawer"
+          panelClassName="va-tools-panel"
+          bodyClassName="va-tools-body"
+        >
+        <aside className="va-side va-side-drawer">
+          {renderVehicleFilters()}
           <section className="va-panel">
             <div className="va-panel-head">
               <h2>PI</h2>
@@ -888,87 +1065,9 @@ export function OrderGeniusVehicleAllocationPage() {
             )}
           </section>
         </aside>
+        </DeckFloatingDrawer>
 
         <main className="va-main">
-          <section className="va-filters">
-            <input
-              value={filters.country ?? ""}
-              onChange={(event) => updateFilter("country", event.target.value.toUpperCase())}
-              placeholder="Country"
-              title="Filter by vehicle market country. Combined PIs also appear when this country is in market countries."
-            />
-            <input
-              value={filters.piCode ?? ""}
-              onChange={(event) => updateFilter("piCode", event.target.value.toUpperCase())}
-              placeholder="PI Code"
-              title="Filter vehicles by PI Code"
-            />
-            <input
-              value={filters.carCode ?? ""}
-              onChange={(event) => updateFilter("carCode", event.target.value.toUpperCase())}
-              placeholder="Car Code"
-              title="Filter by generated Car Code"
-            />
-            <input
-              value={filters.vin ?? ""}
-              onChange={(event) => updateFilter("vin", event.target.value.toUpperCase())}
-              placeholder="VIN"
-              title="Filter by VIN"
-            />
-            <input
-              value={filters.materialCode ?? ""}
-              onChange={(event) => updateFilter("materialCode", event.target.value.toUpperCase())}
-              placeholder="Material"
-              title="Filter by material code"
-            />
-            <select
-              value={filters.allocationStatus ?? ""}
-              onChange={(event) => updateFilter("allocationStatus", event.target.value as AllocationStatus | "")}
-            >
-              <option value="">Allocation</option>
-              {ALLOCATION_STATUSES.map((status) => (
-                <option key={status} value={status}>{statusText(status)}</option>
-              ))}
-            </select>
-            <select
-              value={filters.logisticsStatus ?? ""}
-              onChange={(event) => updateFilter("logisticsStatus", event.target.value as LogisticsStatus | "")}
-            >
-              <option value="">Logistics</option>
-              {LOGISTICS_STATUSES.map((status) => (
-                <option key={status} value={status}>{statusText(status)}</option>
-              ))}
-            </select>
-            <label className="va-check">
-              <input
-                type="checkbox"
-                checked={Boolean(filters.vinMissingOnly)}
-                onChange={(event) => updateFilter("vinMissingOnly", event.target.checked)}
-              />
-              VIN missing
-            </label>
-            <label className="va-check">
-              <input
-                type="checkbox"
-                checked={Boolean(filters.unallocatedOnly)}
-                onChange={(event) => updateFilter("unallocatedOnly", event.target.checked)}
-              />
-              Unallocated
-            </label>
-            <button
-              type="button"
-              onClick={() => {
-                setFilters({ country: defaultCountry, page: 1, pageSize: 100 });
-                setSelectedPi(null);
-                setSelectedLineCode(null);
-                setSelectedVehicle(null);
-                setEditForm(null);
-              }}
-            >
-              Reset
-            </button>
-          </section>
-
           <section className="va-stats">
             <div><span>Total</span><strong>{total}</strong></div>
             <div><span>Allocated</span><strong>{tableSummary.allocated}</strong></div>
@@ -1132,6 +1231,12 @@ export function OrderGeniusVehicleAllocationPage() {
             </div>
           )}
 
+          <VehicleAllocationPivotGrid
+            vehicles={pivotVehicles}
+            selectedCarCode={selectedVehicle?.carCode ?? null}
+            onSelectVehicle={selectVehicle}
+          />
+
           <section className="va-table-wrap">
             <div className="va-table-head">
               <span>{loading ? "Loading vehicles" : selectedPi ? `${vehicles.length} shown · ${activeScopeLabel}` : "Select a PI"}</span>
@@ -1180,19 +1285,19 @@ export function OrderGeniusVehicleAllocationPage() {
                           onClick={(e) => e.stopPropagation()}
                           style={{ margin: 0 }} />
                       </td>
-                      <td onClick={() => selectVehicle(vehicle)} style={{ cursor: "pointer" }}>{vehicle.carCode}</td>
-                      <td onClick={() => selectVehicle(vehicle)} style={{ cursor: "pointer" }}>{display(vehicle.vin)}</td>
-                      <td onClick={() => selectVehicle(vehicle)} style={{ cursor: "pointer" }}>{vehicle.piCode}</td>
-                      <td onClick={() => selectVehicle(vehicle)} style={{ cursor: "pointer" }}>{vehicle.countryCode}</td>
-                      <td onClick={() => selectVehicle(vehicle)} style={{ cursor: "pointer" }}>{display(vehicle.materialCode)}</td>
-                      <td onClick={() => selectVehicle(vehicle)} style={{ cursor: "pointer" }}>{display(vehicle.modelName)} / {display(vehicle.version)}</td>
-                      <td onClick={() => selectVehicle(vehicle)} style={{ cursor: "pointer" }}>{display(vehicle.exteriorColorName)}</td>
-                      <td onClick={() => selectVehicle(vehicle)} style={{ cursor: "pointer" }}>{display(vehicle.interiorColorName)}</td>
-                      <td onClick={() => selectVehicle(vehicle)} style={{ cursor: "pointer" }}><span className={`va-status va-status-${vehicle.allocationStatus}`}>{statusText(vehicle.allocationStatus)}</span></td>
-                      <td onClick={() => selectVehicle(vehicle)} style={{ cursor: "pointer" }}><span className={`va-status va-status-${vehicle.logisticsStatus}`}>{statusText(vehicle.logisticsStatus)}</span></td>
-                      <td onClick={() => selectVehicle(vehicle)} style={{ cursor: "pointer" }}>{display(vehicle.shipName)}</td>
-                      <td onClick={() => selectVehicle(vehicle)} style={{ cursor: "pointer" }}>{display(vehicle.eta)}</td>
-                      <td onClick={() => selectVehicle(vehicle)} style={{ cursor: "pointer" }}>{display(vehicle.readyForPickupDate)}</td>
+                      <td onClick={() => void selectVehicle(vehicle)} style={{ cursor: "pointer" }}>{vehicle.carCode}</td>
+                      <td onClick={() => void selectVehicle(vehicle)} style={{ cursor: "pointer" }}>{display(vehicle.vin)}</td>
+                      <td onClick={() => void selectVehicle(vehicle)} style={{ cursor: "pointer" }}>{vehicle.piCode}</td>
+                      <td onClick={() => void selectVehicle(vehicle)} style={{ cursor: "pointer" }}>{vehicle.countryCode}</td>
+                      <td onClick={() => void selectVehicle(vehicle)} style={{ cursor: "pointer" }}>{display(vehicle.materialCode)}</td>
+                      <td onClick={() => void selectVehicle(vehicle)} style={{ cursor: "pointer" }}>{display(vehicle.modelName)} / {display(vehicle.version)}</td>
+                      <td onClick={() => void selectVehicle(vehicle)} style={{ cursor: "pointer" }}>{display(vehicle.exteriorColorName)}</td>
+                      <td onClick={() => void selectVehicle(vehicle)} style={{ cursor: "pointer" }}>{display(vehicle.interiorColorName)}</td>
+                      <td onClick={() => void selectVehicle(vehicle)} style={{ cursor: "pointer" }}><span className={`va-status va-status-${vehicle.allocationStatus}`}>{statusText(vehicle.allocationStatus)}</span></td>
+                      <td onClick={() => void selectVehicle(vehicle)} style={{ cursor: "pointer" }}><span className={`va-status va-status-${vehicle.logisticsStatus}`}>{statusText(vehicle.logisticsStatus)}</span></td>
+                      <td onClick={() => void selectVehicle(vehicle)} style={{ cursor: "pointer" }}>{display(vehicle.shipName)}</td>
+                      <td onClick={() => void selectVehicle(vehicle)} style={{ cursor: "pointer" }}>{display(vehicle.eta)}</td>
+                      <td onClick={() => void selectVehicle(vehicle)} style={{ cursor: "pointer" }}>{display(vehicle.readyForPickupDate)}</td>
                     </tr>
                   );})}
                   {!loading && vehicles.length === 0 && (
@@ -1251,8 +1356,12 @@ export function OrderGeniusVehicleAllocationPage() {
         .va-message{padding:10px 12px;border-radius:6px;margin-bottom:14px}
         .va-message.is-error{background:#fff1f0;color:#a8071a;border:1px solid #ffa39e}
         .va-message.is-notice{background:#f0f7ff;color:#174ea6;border:1px solid #b7d6ff}
-        .va-layout{display:grid;grid-template-columns:330px minmax(0,1fr);gap:16px;align-items:start}
+        .va-layout{display:block}
         .va-side,.va-main{display:flex;flex-direction:column;gap:16px}
+        .va-tools-drawer{display:flex;justify-content:flex-end;margin-bottom:16px}
+        .va-tools-panel{width:min(720px,calc(100vw - 32px))}
+        .va-tools-body{display:block}
+        .va-side-drawer{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));align-items:start}
         .va-panel,.va-filters,.va-stats,.va-pi-detail,.va-table-wrap{background:#fff;border:1px solid #d8dee6;border-radius:8px}
         .va-panel{padding:14px}
         .va-panel-head,.va-table-head,.va-pi-title,.va-drawer-head{display:flex;align-items:center;justify-content:space-between;gap:12px}
@@ -1271,6 +1380,8 @@ export function OrderGeniusVehicleAllocationPage() {
         .va-preview-grid span{color:#667085}
         .va-preview-error{font-size:12px;color:#a8071a}
         .va-filters{display:grid;grid-template-columns:repeat(6,minmax(112px,1fr));gap:10px;padding:12px}
+        .va-filter-panel{grid-column:1/-1}
+        .va-filter-head{grid-column:1/-1}
         .va-check{display:flex;align-items:center;gap:6px;min-height:38px;font-size:12px;color:#475467}
         .va-stats{display:grid;grid-template-columns:repeat(4,1fr)}
         .va-stats div{padding:14px 16px;border-right:1px solid #e5eaf0}
@@ -1289,12 +1400,12 @@ export function OrderGeniusVehicleAllocationPage() {
         .va-bulk-fields label{display:grid;gap:5px;font-size:12px;font-weight:700;color:#475467}
         .va-line-form{display:grid;grid-template-columns:repeat(10,minmax(82px,1fr)) auto;gap:8px;margin-top:12px}
         .va-line-list{display:grid;gap:6px;margin-top:12px}
-        .va-line-row{display:flex;align-items:stretch;border:1px solid #e5eaf0;border-radius:6px;background:#fbfcfe;color:#111827;overflow:hidden}
+        .va-line-row{display:flex;align-items:stretch;border:1px solid #d8e0ea;border-radius:6px;background:#fff;color:#111827;overflow:hidden}
         .va-line-row.is-active{border-color:#1c69d4;background:#eef5ff}
         .va-line-all{background:#fff}
         .va-line-body{display:grid;grid-template-columns:170px minmax(0,1fr) minmax(150px,auto);gap:8px;align-items:center;flex:1;padding:8px;border:none;background:none;cursor:pointer;text-align:left;color:inherit;font:inherit}
         .va-line-body strong{font-size:12px}
-        .va-line-body span,.va-line-body small{font-size:12px;color:#667085;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+        .va-line-body span,.va-line-body small{font-size:12px;color:#344054;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
         .va-line-delete{display:flex;align-items:center;justify-content:center;width:32px;flex-shrink:0;border:none;border-left:1px solid #e5eaf0;background:#f9fafb;color:#d1d5db;cursor:pointer;font-size:14px;padding:0}
         .va-line-delete:hover{background:#fef2f2;color:#ef4444;border-left-color:#fecaca}
         .va-table-wrap{overflow:hidden}
@@ -1313,6 +1424,27 @@ export function OrderGeniusVehicleAllocationPage() {
         .va-status-reserved,.va-status-on_vessel,.va-status-in_production{background:#fff7e6;color:#ad6800}
         .va-status-unallocated,.va-status-pending{background:#eef2f6;color:#475467}
         .va-status-cancelled{background:#fff1f0;color:#a8071a}
+        .va-pivot-panel{background:#fff;border:1px solid #d8dee6;border-radius:8px;overflow:hidden}
+        .va-pivot-toolbar{display:flex;align-items:flex-start;justify-content:space-between;gap:16px;padding:12px;border-bottom:1px solid #e5eaf0}
+        .va-pivot-toolbar strong{display:block;font-size:14px}
+        .va-pivot-toolbar span{display:block;color:#667085;font-size:12px;margin-top:2px}
+        .va-column-pills{display:flex;flex-wrap:wrap;gap:6px;justify-content:flex-end;max-width:760px}
+        .vehicle-allocation-page .va-column-pills button{background:#fff;color:#475467;border:1px solid #cfd6df;border-radius:6px;padding:5px 8px;font-size:11px;line-height:1.2}
+        .vehicle-allocation-page .va-column-pills button.is-active{background:#1c69d4;color:#fff;border-color:#1c69d4}
+        .va-pivot-grid{height:420px}
+        .va-pivot-grid .ag-root-wrapper{border:0}
+        .va-pivot-panel.has-rows .ag-overlay-no-rows-wrapper{display:none!important}
+        .va-pivot-grid .ag-header{background:#334155;color:#fff}
+        .va-pivot-grid .ag-header-cell-text{color:#fff;letter-spacing:.12em;text-transform:uppercase;font-size:11px}
+        .va-pivot-grid .ag-row.is-pi-group{background:#f1f5f9;font-weight:700}
+        .va-pivot-grid .ag-row.is-line-group{background:#f8fafc;font-weight:600}
+        .va-pivot-grid .ag-row.is-selected-vehicle{background:#eef5ff}
+        .va-pivot-group-toggle,.va-pivot-vehicle-link{width:100%;display:grid;grid-template-columns:auto minmax(0,1fr);gap:4px 8px;align-items:center;border:0!important;background:transparent!important;color:#111827!important;padding:0!important;text-align:left}
+        .va-pivot-group-toggle small,.va-pivot-vehicle-link small{grid-column:2;color:#667085;font-weight:500;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+        .va-pivot-group-toggle strong,.va-pivot-vehicle-link strong{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+        .va-pivot-group-line{padding-left:18px!important}
+        .va-pivot-status-cell{text-transform:capitalize}
+        .va-pivot-muted-cell{color:#94a3b8}
         .va-drawer{position:fixed;right:0;top:80px;bottom:0;width:min(520px,100vw);background:#fff;border-left:1px solid #cfd6df;box-shadow:-12px 0 28px rgba(16,24,40,.12);z-index:60;padding:18px;overflow:auto}
         .va-drawer-head{border-bottom:1px solid #e5eaf0;padding-bottom:12px;margin-bottom:12px}
         .va-drawer-head button{background:#fff;color:#111827;border-color:#cfd6df}
@@ -1322,13 +1454,15 @@ export function OrderGeniusVehicleAllocationPage() {
         .va-wide{grid-column:1/-1}
         .va-save{width:100%;margin-top:14px}
         @media (max-width:1100px){
-          .va-layout{grid-template-columns:1fr}
           .va-header{align-items:stretch;flex-direction:column}
           .va-search{min-width:0}
           .va-filters{grid-template-columns:repeat(2,minmax(0,1fr))}
           .va-line-form,.va-bulk-fields{grid-template-columns:repeat(2,minmax(0,1fr))}
           .va-line-row{grid-template-columns:1fr}
           .va-stats{grid-template-columns:repeat(2,1fr)}
+          .va-side-drawer{grid-template-columns:1fr}
+          .va-pivot-toolbar{display:grid}
+          .va-column-pills{justify-content:flex-start}
         }
         @media (max-width:640px){
           .vehicle-allocation-page{padding:14px}

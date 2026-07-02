@@ -258,6 +258,32 @@ def fetch_search_catalog(
         page += 1
 
 
+def select_local_pricing_items(
+    items: list[dict[str, Any]],
+    *,
+    pricing_country: str,
+    name_contains: str | None = None,
+) -> list[dict[str, Any]]:
+    """Keep only EVKX records that are local, non-converted price references."""
+    target_country = str(pricing_country or "").strip().lower()
+    target_name = str(name_contains or "").strip().lower()
+    selected: list[dict[str, Any]] = []
+    for item in items:
+        item_country = str(item.get("pricingCountry") or "").strip().lower()
+        item_name = str(item.get("name") or "").strip().lower()
+        converted = item.get("isConverted")
+        if item_country != target_country:
+            continue
+        if converted is not False and str(converted).strip().lower() != "false":
+            continue
+        if item.get("startPrice") is None or not item.get("currency"):
+            continue
+        if target_name and target_name not in item_name:
+            continue
+        selected.append(item)
+    return selected
+
+
 def fetch_vehicle_detail(
     session: requests.Session,
     info_url: str,

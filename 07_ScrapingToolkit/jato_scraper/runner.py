@@ -80,11 +80,16 @@ def _default_source_timeout_seconds() -> int:
 def _source_diagnostics_from_extractor(
     extractor: BaseExtractor,
 ) -> dict[str, Any]:
+    cfg = extractor.config
     diagnostics: dict[str, Any] = {
-        "sourceUrl": extractor.config.source_url,
-        "brand": extractor.config.brand,
-        "extractorName": extractor.extractor_name,
-        "extractorVersion": extractor.extractor_version,
+        "sourceUrl": getattr(cfg, "source_url", None),
+        "brand": getattr(cfg, "brand", None),
+        "extractorName": getattr(
+            extractor,
+            "extractor_name",
+            type(extractor).__name__,
+        ),
+        "extractorVersion": getattr(extractor, "extractor_version", None),
     }
     audit_event = getattr(extractor, "last_audit_event", None)
     if isinstance(audit_event, dict):
@@ -376,6 +381,135 @@ def _source_context_from_raw_payload(
     return source_context
 
 
+def _pricing_context_from_raw_payload(
+    raw_payload: dict[str, Any],
+) -> dict[str, Any]:
+    if not raw_payload:
+        return {}
+    pricing_context = raw_payload.get("pricingContext")
+    if isinstance(pricing_context, dict):
+        return {
+            str(key): value
+            for key, value in pricing_context.items()
+            if value is not None
+        }
+    return {
+        key: raw_payload[key]
+        for key in FINANCE_CONTEXT_FIELDS
+        if raw_payload.get(key) is not None
+    }
+
+
+def _increment_counter(
+    counts: dict[str, int],
+    value: object,
+) -> None:
+    label = str(value or "").strip() or "unknown"
+    counts[label] = counts.get(label, 0) + 1
+
+
+def _finance_summary_from_observations(
+    observations: list[RawObservation],
+) -> dict[str, Any]:
+    candidates = 0
+    monthly_count = 0
+    semantics_counts: dict[str, int] = {}
+    finance_type_counts: dict[str, int] = {}
+    samples: list[dict[str, Any]] = []
+
+    for observation in observations:
+        context = _pricing_context_from_raw_payload(observation.raw_payload)
+        if not context:
+            continue
+        semantics = context.get("price_semantics")
+        has_finance_signal = bool(
+            semantics
+            or context.get("finance_type")
+            or context.get("monthly_payment") is not None
+            or context.get("down_payment") is not None
+            or context.get("subsidy_amount") is not None
+            or context.get("net_price_after_subsidy") is not None
+        )
+        if not has_finance_signal:
+            continue
+        candidates += 1
+        if context.get("monthly_payment") is not None:
+            monthly_count += 1
+        _increment_counter(semantics_counts, semantics)
+        _increment_counter(finance_type_counts, context.get("finance_type"))
+        if len(samples) < 5:
+            samples.append({
+                "officialModel": observation.official_model,
+                "officialTrim": observation.official_trim,
+                "jatoModel": observation.jato_model,
+                "jatoTrim": observation.jato_trim,
+                "priceSemantics": semantics,
+                "financeType": context.get("finance_type"),
+                "monthlyPayment": context.get("monthly_payment"),
+                "financeCurrency": context.get("finance_currency")
+                or observation.currency,
+            })
+
+    return {
+        "financeObservationCandidates": candidates,
+        "financeMonthlyPaymentCount": monthly_count,
+        "financeSemanticsCounts": semantics_counts,
+        "financeTypeCounts": finance_type_counts,
+        "sampleFinanceContexts": samples,
+    }
+
+
+def _rejection_diagnostics_from_report(
+    report: BatchValidationReport,
+    sample_limit: int = 5,
+) -> dict[str, Any]:
+    if not report.rejected:
+        return {}
+
+    reason_counts: dict[str, int] = {}
+    rule_counts: dict[str, int] = {}
+    samples: list[dict[str, Any]] = []
+
+    for observation, failures in report.rejected:
+        reasons = [failure.reason for failure in failures]
+        rules = [failure.rule for failure in failures]
+        for reason in reasons:
+            _increment_counter(reason_counts, reason)
+        for rule in rules:
+            _increment_counter(rule_counts, rule)
+        if len(samples) >= sample_limit:
+            continue
+        raw_payload = (
+            observation.raw_payload
+            if isinstance(observation.raw_payload, dict)
+            else {}
+        )
+        sample: dict[str, Any] = {
+            "officialModel": observation.official_model,
+            "officialTrim": observation.official_trim,
+            "msrpValue": observation.msrp_value,
+            "currency": observation.currency,
+            "priceLabel": observation.price_label,
+            "reasons": reasons,
+            "rules": rules,
+        }
+        price_text = raw_payload.get("priceText")
+        if price_text not in (None, ""):
+            sample["priceText"] = price_text
+        pricing_context = raw_payload.get("pricingContext")
+        if isinstance(pricing_context, dict) and pricing_context:
+            sample["pricingContext"] = pricing_context
+        samples.append(sample)
+
+    return {
+        "rejectedReasons": sorted(reason_counts),
+        "rejectedRules": sorted(rule_counts),
+        "rejectionReasonCounts": dict(sorted(reason_counts.items())),
+        "rejectionRuleCounts": dict(sorted(rule_counts.items())),
+        "sampleRejectedObservations": samples,
+    }
+
+
 def build_batch_payload(
     extractor: BaseExtractor,
     report: BatchValidationReport,
@@ -415,7 +549,18 @@ def submit_batch(
         headers=_auth_headers(auth_token, user_name),
         timeout=60,
     )
-    resp.raise_for_status()
+    try:
+        resp.raise_for_status()
+    except requests.HTTPError as exc:
+        response_body = (getattr(resp, "text", "") or "").strip()
+        if len(response_body) > 4000:
+            response_body = f"{response_body[:4000]}..."
+        if response_body:
+            raise requests.HTTPError(
+                f"{exc}; response_body={response_body}",
+                response=resp,
+            ) from exc
+        raise
     return resp.json()
 
 
@@ -600,6 +745,11 @@ def run_scrape(
         report = validate_observations(
             observations,
             country=extractor.config.country,
+            source_price_semantics=getattr(
+                extractor.config,
+                "price_semantics",
+                "base_msrp",
+            ),
         )
         # --- EUR conversion ---
         enrich_observations_with_eur(report.valid)
@@ -630,6 +780,8 @@ def run_scrape(
             extracted=len(observations),
             valid=len(report.valid),
             rejected=len(report.rejected),
+            **_finance_summary_from_observations(report.valid),
+            **_rejection_diagnostics_from_report(report),
         )
         if dry_run:
             source_result["status"] = "dry_run"

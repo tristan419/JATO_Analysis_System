@@ -1,93 +1,42 @@
 source_code: mazda_cx_30_hr_draft_scrapling
 country: 克罗地亚
 brand: MAZDA
-source_url: https://www.mazda.hr/modeli/mazda-cx-30.html
+source_url: https://www.mazda.hr/konfigurirajte/MAZDA%20CX-30/5WGN/
 source_type: manufacturer_official
 price_semantics: base_msrp
-extractor_type: scrapling
+extractor_type: http_text
 profile:
-  url: https://www.mazda.hr/modeli/mazda-cx-30.html
-  tier: stealth
-  headless: true
-  network_idle: true
-  impersonate: chrome
+  url: https://www.mazda.hr/konfigurirajte/MAZDA%20CX-30/5WGN/
+  timeout_seconds: 45
+  headers:
+    Accept-Language: hr-HR,hr;q=0.9,en;q=0.8
+  entry_patterns:
+  - pattern: '"gradeName":"(?P<trim>Prime-Line)".{0,3000}?"newPrice":\{"priceValue":(?P<price>\d+\.\d+)'
+    official_powertrain: 2.5L e-SKYACTIV G 140 M Hybrid 6MT 2WD
+    price_label: Preporučena cijena s PDV-om i PPMV
   default_currency: EUR
   default_tax_included: true
-  default_price_label: Preporučena maloprodajna cijena s PDV-om
+  default_price_label: Preporučena cijena s PDV-om i PPMV
   fixed_model: CX-30
   fixed_jato_model: CX-30
-  fixed_jato_powertrain: null
-  model_rules: []
-  skip_if_model_unmapped: false
+  fixed_jato_powertrain: MHEV
   copy_trim_to_jato_trim: true
-  confidence_rules:
-    base: 0.2
-    fixed_model_bonus: 0.18
-    fixed_jato_model_bonus: 0.12
-    model_rule_bonus: 0.12
-    trim_present_bonus: 0.1
-    copy_trim_to_jato_trim_bonus: 0.09
-    parsed_price_text_bonus: 0.03
-    currency_bonus: 0.01
-    price_label_bonus: 0.02
-    trim_keyword_bonuses: []
-    price_band_bonuses:
-    - key: price_band_entry
-      label: Entry price band matched
-      max: 0
-      delta: 0.0
-    - key: price_band_mid
-      label: Mid price band matched
-      min: 0
-      max: 0
-      delta: 0.01
-    - key: price_band_high
-      label: High price band matched
-      min: 0
-      delta: 0.03
-    powertrain_keyword_bonuses: []
-    powertrain_bonuses:
-    - key: powertrain_mhev
-      label: 'Powertrain matched: MHEV'
-      powertrain: MHEV
-      delta: 0.03
-    clamp_min: 0.0
-    clamp_max: 1.0
-  structured_fields:
-    edition_rules:
-    - key: edition_special
-      label: Special Edition
-      keyword: special edition
-      special: true
-    powertrain_rules:
-    - key: powertrain_mhev
-      powertrain: MHEV
-      keywords:
-      - mild hybrid
-      - M Hybrid
-      - e-Skyactiv
-      - 24V
-  auto_accept_gates:
-    review_threshold: 0.95
-    semi_auto_threshold: 0.98
-    require_powertrain_match: true
-    force_review_if_powertrain_missing: true
-    force_review_if_powertrain_ambiguous: true
-    force_review_for_special_edition: true
-  json_script_selector: script[type='application/ld+json']
-  css:
-    vehicle_container: body
-    model: h1, h2
-    trim: h3
-    price: '[class*="price"]'
+  match_confidence: 0.82
+  match_status: review_required
+  match_reason:
+    kind: official_configurator_grade_price
+    source: mazda_hr_configurator
+    note: Official Mazda Croatia configurator embeds Prime-Line newPrice.priceValue; legal disclaimer states displayed prices are Mazda Motor Croatia recommended prices including 25% VAT and PPMV.
 schedule:
   frequency: manual_only
   run_window_start: 00:00
   run_window_end: 05:00
   preferred_weekday: monday
-notes: Keywords filled from official manufacturer website research (HR market). CSS
-  selectors still require browser-based inspection before promotion. [CSS selectors
-  applied from brand probe]
+notes: Keywords filled from official manufacturer website research (HR market).
+  Replaced outdated .html model URL with the official Mazda Croatia configurator and
+  http_text regex over the embedded Prime-Line recommended price. Static HTTP fetch
+  avoids Scrapling native crashes on the large configurator HTML and was validated
+  against configurator legal text for VAT and PPMV inclusion.
 bootstrap_meta:
   country_model_rank: 20
   suggested_scope_kind: single_model

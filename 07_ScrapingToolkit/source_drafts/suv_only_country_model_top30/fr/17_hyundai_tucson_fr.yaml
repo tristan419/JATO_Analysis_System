@@ -1,12 +1,12 @@
 source_code: hyundai_tucson_fr_draft_scrapling
 country: 法国
 brand: HYUNDAI
-source_url: https://www.hyundai.fr/modeles/tucson.html
+source_url: https://www.hyundai.com/fr/fr/modeles/tucson-hybrid.html
 source_type: manufacturer_official
 price_semantics: base_msrp
 extractor_type: scrapling
 profile:
-  url: https://www.hyundai.fr/modeles/tucson.html
+  url: https://www.hyundai.com/fr/fr/modeles/tucson-hybrid.html
   headless: true
   default_currency: EUR
   default_tax_included: true

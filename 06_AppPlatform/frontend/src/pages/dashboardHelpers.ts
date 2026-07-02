@@ -33,6 +33,7 @@ export interface DashboardPageCache {
   overview: OverviewResponse | null;
   yearSeries: TimeSeriesPoint[];
   monthSeries: TimeSeriesPoint[];
+  tsExport: ExportSettings;
   activeTab: "year" | "month";
   chartType: "line" | "bar" | "rank";
   rankLimit: number;
@@ -54,6 +55,7 @@ export interface DashboardPageCache {
   advMigrationMode: "area" | "line";
   advBubbleScale: number;
   advBubbleGrain: "model" | "version";
+  advBubbleLabelDimension: "model" | "version";
   advBubbleFacet: boolean;
   advBubbleFacetMax: number;
   advBubbleShowYoy: boolean;
@@ -94,6 +96,9 @@ export interface DashboardPageCache {
   pmPeerCorridor: PositioningPeerCorridor | null;
   timeRange: TimeRange | null;
   monthGrain: "month" | "quarter" | "year";
+  advExport: ExportSettings;
+  mvExport: ExportSettings;
+  pmExport: ExportSettings;
 }
 
 /* ── constants ──────────────────────────────────────── */

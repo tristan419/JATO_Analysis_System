@@ -89,7 +89,6 @@ profile:
     fields:
       monthly_payment: regexGroups.monthly_payment
     constants:
-      price_semantics: lease_monthly
       finance_type: private_lease
       finance_currency: SEK
   tier: stealth

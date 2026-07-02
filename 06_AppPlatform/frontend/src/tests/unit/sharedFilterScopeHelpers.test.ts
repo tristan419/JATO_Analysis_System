@@ -132,6 +132,7 @@ describe("fetchOnDemandCascadedOptions", () => {
     body_type: "Body type",
     segment: "细分市场",
     powertrain: "动总规整",
+    origin: "车系",
     make: "Make",
     model: "Model",
     version: "Version name",
@@ -142,10 +143,11 @@ describe("fetchOnDemandCascadedOptions", () => {
     const fetchOptionsBatch = vi.fn(async (items: FilterOptionsPayload[]) => (
       items.map((item) => (
         item.column === "动总规整" ? ["BEV", "ICE"]
-          : item.column === "Make" ? ["Tesla"]
-            : item.column === "Model" ? ["Model Y"]
-              : item.column === "Version name" ? ["Long Range"]
-                : []
+          : item.column === "车系" ? ["欧洲"]
+            : item.column === "Make" ? ["Tesla"]
+              : item.column === "Model" ? ["Model Y"]
+                : item.column === "Version name" ? ["Long Range"]
+                  : []
       ))
     ));
 
@@ -154,6 +156,7 @@ describe("fetchOnDemandCascadedOptions", () => {
       createSharedSelections({
         country: ["丹麦"],
         powertrain: ["BEV"],
+        origin: ["欧洲"],
         make: ["Tesla"],
         model: ["Model Y"],
       }),
@@ -167,11 +170,13 @@ describe("fetchOnDemandCascadedOptions", () => {
     expect(fetchOptionsBatch).toHaveBeenCalledTimes(1);
     expect(fetchOptionsBatch.mock.calls[0]?.[0]).toEqual([
       { column: "动总规整", filters: { 国家: ["丹麦"] } },
-      { column: "Make", filters: { 国家: ["丹麦"], 动总规整: ["BEV"] } },
-      { column: "Model", filters: { 国家: ["丹麦"], 动总规整: ["BEV"], Make: ["Tesla"] } },
-      { column: "Version name", filters: { 国家: ["丹麦"], 动总规整: ["BEV"], Make: ["Tesla"], Model: ["Model Y"] } },
+      { column: "车系", filters: { 国家: ["丹麦"], 动总规整: ["BEV"] } },
+      { column: "Make", filters: { 国家: ["丹麦"], 动总规整: ["BEV"], 车系: ["欧洲"] } },
+      { column: "Model", filters: { 国家: ["丹麦"], 动总规整: ["BEV"], 车系: ["欧洲"], Make: ["Tesla"] } },
+      { column: "Version name", filters: { 国家: ["丹麦"], 动总规整: ["BEV"], 车系: ["欧洲"], Make: ["Tesla"], Model: ["Model Y"] } },
     ]);
     expect(result.selections.powertrain).toEqual(["BEV"]);
+    expect(result.selections.origin).toEqual(["欧洲"]);
     expect(result.selections.make).toEqual(["Tesla"]);
     expect(result.optionsMap.version).toEqual(["Long Range"]);
   });
@@ -181,8 +186,9 @@ describe("fetchOnDemandCascadedOptions", () => {
     const fetchOptionsBatch = vi.fn(async (items: FilterOptionsPayload[]) => (
       items.map((item) => (
         item.column === "动总规整" ? ["BEV"]
-          : item.column === "Make" ? ["Tesla"]
-            : []
+          : item.column === "车系" ? ["欧洲"]
+            : item.column === "Make" ? ["Tesla"]
+              : []
       ))
     ));
 
@@ -191,6 +197,7 @@ describe("fetchOnDemandCascadedOptions", () => {
       createSharedSelections({
         country: ["丹麦"],
         powertrain: ["MISSING"],
+        origin: ["欧洲"],
         make: ["Tesla"],
       }),
       3,
@@ -202,8 +209,9 @@ describe("fetchOnDemandCascadedOptions", () => {
     expect(fetchOptions).not.toHaveBeenCalled();
     expect(fetchOptionsBatch).toHaveBeenCalledTimes(1);
     expect(result.selections.powertrain).toEqual([]);
+    expect(result.selections.origin).toEqual([]);
     expect(result.selections.make).toEqual([]);
-    expect(result.optionsMap.make).toEqual([]);
+    expect(result.optionsMap.origin).toEqual([]);
   });
 });
 

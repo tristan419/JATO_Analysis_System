@@ -28,6 +28,10 @@ def test_dashboard_reads_v3_report_from_artifacts(tmp_path, monkeypatch):
             "status": "success",
             "gateThreshold": 70,
             "gateStatus": "allowed",
+            "financeObservationCandidates": 1,
+            "financeMonthlyPaymentCount": 1,
+            "financeSemanticsCounts": {"lease_monthly": 1},
+            "financeTypeCounts": {"private_lease": 1},
         },
         "countriesDetail": [
             {
@@ -41,6 +45,10 @@ def test_dashboard_reads_v3_report_from_artifacts(tmp_path, monkeypatch):
                 "status": "success",
                 "failureBreakdown": {},
                 "strategyRecommendations": {},
+                "financeObservationCandidates": 1,
+                "financeMonthlyPaymentCount": 1,
+                "financeSemanticsCounts": {"lease_monthly": 1},
+                "financeTypeCounts": {"private_lease": 1},
                 "sources": [
                     {
                         "country": "se",
@@ -54,6 +62,10 @@ def test_dashboard_reads_v3_report_from_artifacts(tmp_path, monkeypatch):
                         "sourceUrl": "https://www.volvocars.com/se/build/xc60-hybrid/",
                         "finalUrl": "https://www.volvocars.com/se/build/xc60-hybrid/",
                         "httpStatus": 0,
+                        "financeObservationCandidates": 1,
+                        "financeMonthlyPaymentCount": 1,
+                        "financeSemanticsCounts": {"lease_monthly": 1},
+                        "financeTypeCounts": {"private_lease": 1},
                     }
                 ],
             }
@@ -77,6 +89,8 @@ def test_dashboard_reads_v3_report_from_artifacts(tmp_path, monkeypatch):
                 "empty": 0,
                 "fail": 0,
                 "errors": 0,
+                "financeObservationCandidates": 1,
+                "financeMonthlyPaymentCount": 1,
                 "artifactPath": str(artifacts / "dryrun_report_msrp-dryrun-20260611-120000.json"),
             }
         ],
@@ -101,8 +115,15 @@ def test_dashboard_reads_v3_report_from_artifacts(tmp_path, monkeypatch):
     assert dashboard["current"]["countries"][0]["sources"][0]["sourceUrl"] == "https://www.volvocars.com/se/build/xc60-hybrid/"
     assert dashboard["current"]["countries"][0]["sources"][0]["finalUrl"] == "https://www.volvocars.com/se/build/xc60-hybrid/"
     assert dashboard["current"]["countries"][0]["sources"][0]["httpStatus"] == 0
+    assert dashboard["current"]["financeObservationCandidates"] == 1
+    assert dashboard["current"]["financeMonthlyPaymentCount"] == 1
+    assert dashboard["current"]["countries"][0]["financeSemanticsCounts"] == {"lease_monthly": 1}
+    assert dashboard["current"]["countries"][0]["sources"][0]["financeMonthlyPaymentCount"] == 1
     assert dashboard["history"][0]["runId"] == "msrp-dryrun-20260611-120000"
+    assert dashboard["history"][0]["financeObservationCandidates"] == 1
+    assert dashboard["history"][0]["financeMonthlyPaymentCount"] == 1
     assert [country["countryCode"] for country in dashboard["allCountries"]] == ["se"]
+    assert dashboard["allCountries"][0]["financeMonthlyPaymentCount"] == 1
     assert dashboard["stableCoverage"]["countryCount"] == 1
     assert dashboard["stableCoverage"]["readyCountryCount"] == 1
     assert dashboard["stableCoverage"]["latestRunId"] == "msrp-dryrun-20260611-120000"
@@ -110,6 +131,8 @@ def test_dashboard_reads_v3_report_from_artifacts(tmp_path, monkeypatch):
     assert dashboard["stableCoverage"]["sourceCount"] == 1
     assert dashboard["stableCoverage"]["readySourceCount"] == 1
     assert dashboard["stableCoverage"]["sourcePassRate"] == 100.0
+    assert dashboard["stableCoverage"]["financeObservationCandidates"] == 1
+    assert dashboard["stableCoverage"]["financeMonthlyPaymentCount"] == 1
 
 
 def test_dashboard_exposes_latest_progress_for_all_historical_countries(tmp_path, monkeypatch):
@@ -288,6 +311,265 @@ def test_dashboard_exposes_latest_progress_for_all_historical_countries(tmp_path
     assert dashboard["stableCoverage"]["sourceCount"] == 4
     assert dashboard["stableCoverage"]["readySourceCount"] == 3
     assert dashboard["stableCoverage"]["sourcePassRate"] == 75.0
+
+
+def test_dashboard_sorts_unsorted_runs_index_before_selecting_latest_stable_country(
+    tmp_path,
+    monkeypatch,
+):
+    artifacts = tmp_path / "artifacts"
+    logs = tmp_path / "logs"
+    artifacts.mkdir()
+    logs.mkdir()
+
+    older_run_id = "msrp-dryrun-20260616-010000"
+    newer_run_id = "msrp-dryrun-20260618-010000"
+
+    def make_report(run_id: str, valid: int, generated_at: str) -> dict:
+        return {
+            "schemaVersion": "msrp_dryrun_report_v3",
+            "runId": run_id,
+            "batch": "es",
+            "expectedCountries": ["es"],
+            "observedCountries": ["es"],
+            "missingCountries": [],
+            "duplicateCountries": [],
+            "summary": {
+                "total": 1,
+                "pass": 1,
+                "empty": 0,
+                "fail": 0,
+                "errors": 0,
+                "passPct": 100.0,
+                "status": "success",
+                "gateThreshold": 70,
+                "gateStatus": "allowed",
+            },
+            "countriesDetail": [
+                {
+                    "countryCode": "es",
+                    "total": 1,
+                    "pass": 1,
+                    "empty": 0,
+                    "fail": 0,
+                    "errors": 0,
+                    "passPct": 100.0,
+                    "status": "success",
+                    "sources": [
+                        {
+                            "sourceCode": "seat_arona_es_draft_scrapling",
+                            "status": "pass",
+                            "valid": valid,
+                        },
+                    ],
+                },
+            ],
+            "generatedAt": generated_at,
+        }
+
+    older_report = make_report(older_run_id, 1, "2026-06-16T01:00:00Z")
+    newer_report = make_report(newer_run_id, 7, "2026-06-18T01:00:00Z")
+    index = {
+        "schemaVersion": "msrp_dryrun_runs_index_v1",
+        "latestRunId": newer_run_id,
+        "runs": [
+            {
+                "runId": older_run_id,
+                "batch": "es",
+                "finishedAt": "2026-06-16T01:00:00Z",
+                "status": "success",
+                "gateStatus": "allowed",
+                "gateThreshold": 70,
+                "artifactPath": str(artifacts / f"dryrun_report_{older_run_id}.json"),
+            },
+            {
+                "runId": newer_run_id,
+                "batch": "es",
+                "finishedAt": "2026-06-18T01:00:00Z",
+                "status": "success",
+                "gateStatus": "allowed",
+                "gateThreshold": 70,
+                "artifactPath": str(artifacts / f"dryrun_report_{newer_run_id}.json"),
+            },
+        ],
+    }
+    (artifacts / "dryrun_report.json").write_text(json.dumps(newer_report))
+    (artifacts / f"dryrun_report_{older_run_id}.json").write_text(
+        json.dumps(older_report),
+    )
+    (artifacts / f"dryrun_report_{newer_run_id}.json").write_text(
+        json.dumps(newer_report),
+    )
+    (artifacts / "dryrun_runs_index.json").write_text(json.dumps(index))
+
+    monkeypatch.setattr(progress, "ARTIFACT_DIR", artifacts)
+    monkeypatch.setattr(progress, "LATEST_REPORT_PATH", artifacts / "dryrun_report.json")
+    monkeypatch.setattr(progress, "RUNS_INDEX_PATH", artifacts / "dryrun_runs_index.json")
+    monkeypatch.setattr(progress, "LOG_DIR", logs)
+
+    dashboard = progress.get_dryrun_dashboard()
+
+    assert dashboard["allCountries"][0]["countryCode"] == "es"
+    assert dashboard["allCountries"][0]["countryLabel"] == "Spain"
+    assert dashboard["allCountries"][0]["runId"] == newer_run_id
+    assert dashboard["allCountries"][0]["sources"][0]["valid"] == 7
+    assert dashboard["history"][0]["runId"] == newer_run_id
+    assert dashboard["stableCoverage"]["latestRunId"] == newer_run_id
+
+
+def test_dashboard_keeps_latest_stable_country_when_new_probe_regresses(tmp_path, monkeypatch):
+    artifacts = tmp_path / "artifacts"
+    logs = tmp_path / "logs"
+    artifacts.mkdir()
+    logs.mkdir()
+
+    latest_run_id = "msrp-dryrun-20260618-110029"
+    stable_run_id = "msrp-dryrun-20260618-085225"
+    stable_report = {
+        "schemaVersion": "msrp_dryrun_report_v3",
+        "runId": stable_run_id,
+        "batch": "at",
+        "expectedCountries": ["at"],
+        "observedCountries": ["at"],
+        "missingCountries": [],
+        "duplicateCountries": [],
+        "summary": {
+            "total": 2,
+            "pass": 2,
+            "empty": 0,
+            "fail": 0,
+            "errors": 0,
+            "passPct": 100.0,
+            "status": "success",
+            "gateThreshold": 70,
+            "gateStatus": "allowed",
+        },
+        "countriesDetail": [
+            {
+                "countryCode": "at",
+                "total": 2,
+                "pass": 2,
+                "empty": 0,
+                "fail": 0,
+                "errors": 0,
+                "passPct": 100.0,
+                "status": "success",
+                "sources": [
+                    {
+                        "sourceCode": "audi_q8_at_draft_scrapling",
+                        "status": "pass",
+                        "valid": 4,
+                    },
+                    {
+                        "sourceCode": "skoda_karoq_at_draft_scrapling",
+                        "status": "pass",
+                        "valid": 6,
+                    },
+                ],
+            }
+        ],
+    }
+    latest_report = {
+        **stable_report,
+        "runId": latest_run_id,
+        "summary": {
+            **stable_report["summary"],
+            "pass": 1,
+            "empty": 1,
+            "passPct": 50.0,
+            "status": "degraded",
+            "gateStatus": "blocked",
+        },
+        "countriesDetail": [
+            {
+                "countryCode": "at",
+                "total": 2,
+                "pass": 1,
+                "empty": 1,
+                "fail": 0,
+                "errors": 0,
+                "passPct": 50.0,
+                "status": "degraded",
+                "failureBreakdown": {"network_unavailable": 1},
+                "sources": [
+                    {
+                        "sourceCode": "audi_q8_at_draft_scrapling",
+                        "status": "pass",
+                        "valid": 4,
+                    },
+                    {
+                        "sourceCode": "skoda_karoq_at_draft_scrapling",
+                        "status": "empty",
+                        "valid": 0,
+                        "failureReason": "network_unavailable",
+                        "recommendedStrategy": "retry_network_or_proxy",
+                    },
+                ],
+            }
+        ],
+    }
+    index = {
+        "schemaVersion": "msrp_dryrun_runs_index_v1",
+        "latestRunId": latest_run_id,
+        "runs": [
+            {
+                "runId": latest_run_id,
+                "batch": "at",
+                "finishedAt": "2026-06-18T11:00:29Z",
+                "status": "degraded",
+                "gateStatus": "blocked",
+                "gateThreshold": 70,
+                "passPct": 50.0,
+                "total": 2,
+                "pass": 1,
+                "empty": 1,
+                "fail": 0,
+                "errors": 0,
+                "artifactPath": str(artifacts / f"dryrun_report_{latest_run_id}.json"),
+            },
+            {
+                "runId": stable_run_id,
+                "batch": "at",
+                "finishedAt": "2026-06-18T08:52:25Z",
+                "status": "success",
+                "gateStatus": "allowed",
+                "gateThreshold": 70,
+                "passPct": 100.0,
+                "total": 2,
+                "pass": 2,
+                "empty": 0,
+                "fail": 0,
+                "errors": 0,
+                "artifactPath": str(artifacts / f"dryrun_report_{stable_run_id}.json"),
+            },
+        ],
+    }
+
+    (artifacts / "dryrun_report.json").write_text(json.dumps(latest_report))
+    (artifacts / f"dryrun_report_{latest_run_id}.json").write_text(json.dumps(latest_report))
+    (artifacts / f"dryrun_report_{stable_run_id}.json").write_text(json.dumps(stable_report))
+    (artifacts / "dryrun_runs_index.json").write_text(json.dumps(index))
+
+    monkeypatch.setattr(progress, "ARTIFACT_DIR", artifacts)
+    monkeypatch.setattr(progress, "LATEST_REPORT_PATH", artifacts / "dryrun_report.json")
+    monkeypatch.setattr(progress, "RUNS_INDEX_PATH", artifacts / "dryrun_runs_index.json")
+    monkeypatch.setattr(progress, "LOG_DIR", logs)
+
+    dashboard = progress.get_dryrun_dashboard()
+
+    assert dashboard["current"]["runId"] == latest_run_id
+    assert dashboard["current"]["overallPassRate"] == 50.0
+    assert dashboard["allCountries"][0]["countryCode"] == "at"
+    assert dashboard["allCountries"][0]["runId"] == stable_run_id
+    assert dashboard["allCountries"][0]["passRate"] == 100.0
+    assert dashboard["allCountries"][0]["isLatestRun"] is False
+    assert dashboard["stableCoverage"]["latestRunId"] == stable_run_id
+    assert dashboard["stableCoverage"]["activeRunId"] == latest_run_id
+    assert dashboard["stableCoverage"]["probeDiffersFromStableRun"] is True
+    assert dashboard["stableCoverage"]["probeRegressionCount"] == 1
+    assert dashboard["stableCoverage"]["probeRegressionSamples"][0]["sourceCode"] == (
+        "skoda_karoq_at_draft_scrapling"
+    )
 
 
 def test_dashboard_uses_runs_index_when_latest_shortcut_is_stale_partial(tmp_path, monkeypatch):

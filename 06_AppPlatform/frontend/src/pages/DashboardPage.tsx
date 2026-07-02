@@ -21,7 +21,7 @@ import type { FilterKey } from "../dashboardFilters";
 import type { OverviewResponse, TimeSeriesPoint, GroupedTimeSeriesItem, ModelVersionItem, PositioningMapItem, PositioningPeerCorridor, OthersDetailItem, DataFreshnessItem } from "../types";
 import { LazyPlotlyChart as PlotlyChart } from "../components/LazyPlotlyChart";
 import { TimeAxis, type TimeRange } from "../components/TimeAxis";
-import { DEFAULT_EXPORT, applyExportToLayout, getExportPalette, applyDataLabelsToTraces, applySeriesColors, buildExportLabelModeOptions, withExportLabels, type ExportSettings } from "../components/ExportPanelHelpers";
+import { DEFAULT_EXPORT, applyExportToLayout, getExportPalette, applyDataLabelsToTraces, applySeriesColors, buildExportLabelModeOptions, withExportLabels, type ExportLabelOverlapStrategy, type ExportSettings } from "../components/ExportPanelHelpers";
 import { buildBubbleSizing } from "../utils/bubbleSizing";
 import { DEFAULT_POWERTRAINS, fuelFamilyColor, normalizePowertrainName, seriesColor } from "../utils/colors";
 import { getCachedPageValue, setCachedPageValue } from "../utils/pageCache";
@@ -65,6 +65,167 @@ const DashboardExportPanel = lazy(() =>
 );
 
 const DASHBOARD_DEFERRED_FETCH_DELAY_MS = 6_000;
+const DASHBOARD_CHART_RUNTIME_IDLE_TIMEOUT_MS = 4_000;
+const DEFAULT_ADVANCED_EXPORT: ExportSettings = {
+  ...DEFAULT_EXPORT,
+  dataLabelOverlapStrategy: "smart_top",
+};
+const ADVANCED_BUBBLE_LABEL_OPTIONS: Array<{ value: ExportLabelOverlapStrategy; label: string }> = [
+  { value: "smart_top", label: "Smart Top" },
+  { value: "clean", label: "Clean" },
+  { value: "selected", label: "Selected" },
+  { value: "all", label: "All" },
+];
+type DashboardBubbleLabelMode = "all" | "smart_top" | "selected" | "clean";
+
+interface DashboardBubbleLabelInfo {
+  key: string;
+  text: string;
+  x: number;
+  y: number;
+  sales: number;
+  series: string;
+  priority: number;
+  showLabel: boolean;
+  jitterX: number;
+  jitterY: number;
+}
+
+const DASHBOARD_BUBBLE_LABEL_STYLE: Record<number, { sizeOffset: number; color: string }> = {
+  3: { sizeOffset: 0, color: "rgba(15,23,42,0.96)" },
+  2: { sizeOffset: -1, color: "rgba(51,65,85,0.72)" },
+  1: { sizeOffset: -1, color: "rgba(51,65,85,0.38)" },
+  0: { sizeOffset: -2, color: "rgba(51,65,85,0.22)" },
+};
+
+function hashDashboardLabelKey(value: string): number {
+  let hash = 0;
+  for (let index = 0; index < value.length; index += 1) {
+    hash = ((hash << 5) - hash) + value.charCodeAt(index);
+    hash |= 0;
+  }
+  return Math.abs(hash);
+}
+
+function jitterDashboardLabel(key: string, amplitude: number): number {
+  return ((hashDashboardLabelKey(key) % 1000) / 1000) * amplitude * 2 - amplitude;
+}
+
+function normalizeDashboardBubbleLabelMode(strategy: ExportLabelOverlapStrategy): DashboardBubbleLabelMode {
+  if (strategy === "smart" || strategy === "smart_top") return "smart_top";
+  if (strategy === "selected") return "selected";
+  if (strategy === "all") return "all";
+  return "clean";
+}
+
+function salesOpacity(value: number, minSales: number, maxSales: number): number {
+  if (!Number.isFinite(value) || value <= 0) return 0.18;
+  if (maxSales <= minSales) return 0.78;
+  const normalized = Math.max(0, Math.min(1, (value - minSales) / (maxSales - minSales)));
+  return 0.24 + Math.sqrt(normalized) * 0.58;
+}
+
+function buildSalesOpacityValues(values: number[]): number[] {
+  const valid = values.filter((value) => Number.isFinite(value) && value > 0);
+  const minSales = Math.min(...valid);
+  const maxSales = Math.max(...valid);
+  return values.map((value) => salesOpacity(value, minSales, maxSales));
+}
+
+function filterDashboardBubbleLabelOverlap(
+  labels: DashboardBubbleLabelInfo[],
+  xRange: number,
+  yRange: number,
+): Set<string> {
+  const hidden = new Set<string>();
+  if (labels.length <= 1) return hidden;
+  const placed: Array<{ x: number; y: number }> = [];
+  const sorted = [...labels].sort((a, b) => b.priority - a.priority || b.sales - a.sales);
+  const xThreshold = xRange * 0.022;
+  const yThreshold = yRange * 0.028;
+  sorted.forEach((label) => {
+    const x = label.x + label.jitterX;
+    const y = label.y + label.jitterY;
+    const overlaps = placed.some(
+      (point) => Math.abs(point.x - x) < xThreshold && Math.abs(point.y - y) < yThreshold,
+    );
+    if (overlaps) {
+      hidden.add(label.key);
+      return;
+    }
+    placed.push({ x, y });
+  });
+  return hidden;
+}
+
+function buildDashboardBubbleLabelTraces(
+  items: DashboardBubbleLabelInfo[],
+  labelMode: DashboardBubbleLabelMode,
+  fontSize: number,
+): Data[] {
+  if (labelMode === "clean") return [];
+  const visibleCandidates = items.filter((item) => item.showLabel);
+  if (visibleCandidates.length === 0) return [];
+  const xValues = visibleCandidates.map((item) => item.x);
+  const yValues = visibleCandidates.map((item) => item.y);
+  const hidden = filterDashboardBubbleLabelOverlap(
+    visibleCandidates,
+    Math.max(...xValues) - Math.min(...xValues) || 1,
+    Math.max(...yValues) - Math.min(...yValues) || 1,
+  );
+  const visible = visibleCandidates.filter((item) => !hidden.has(item.key));
+  return [3, 2, 1, 0].flatMap((priority) => {
+    const priorityItems = visible.filter((item) => item.priority === priority);
+    if (priorityItems.length === 0) return [];
+    const style = DASHBOARD_BUBBLE_LABEL_STYLE[priority];
+    return [{
+      type: "scatter",
+      mode: "text",
+      name: `label-p${priority}`,
+      showlegend: false,
+      x: priorityItems.map((item) => item.x + item.jitterX),
+      y: priorityItems.map((item) => item.y + item.jitterY),
+      text: priorityItems.map((item) => item.text),
+      textposition: "top center",
+      textfont: {
+        size: Math.max(7, fontSize + style.sizeOffset),
+        color: style.color,
+      },
+      cliponaxis: false,
+      customdata: priorityItems.map((item) => [item.series, item.sales, item.key]),
+      hoverinfo: "skip",
+    } as Data];
+  });
+}
+
+let dashboardAnimationPromise: Promise<typeof import("animejs")> | null = null;
+
+function loadDashboardAnimation() {
+  if (!dashboardAnimationPromise) {
+    dashboardAnimationPromise = import("animejs").catch((error) => {
+      dashboardAnimationPromise = null;
+      throw error;
+    });
+  }
+  return dashboardAnimationPromise;
+}
+
+type DashboardIdleWindow = Window & typeof globalThis & {
+  requestIdleCallback?: (callback: () => void, options?: { timeout?: number }) => number;
+  cancelIdleCallback?: (handle: number) => void;
+};
+
+function scheduleDashboardIdlePreload(callback: () => void): () => void {
+  const idleWindow = window as DashboardIdleWindow;
+  if (typeof idleWindow.requestIdleCallback === "function") {
+    const handle = idleWindow.requestIdleCallback(callback, {
+      timeout: DASHBOARD_CHART_RUNTIME_IDLE_TIMEOUT_MS,
+    });
+    return () => idleWindow.cancelIdleCallback?.(handle);
+  }
+  const handle = window.setTimeout(callback, DASHBOARD_CHART_RUNTIME_IDLE_TIMEOUT_MS);
+  return () => window.clearTimeout(handle);
+}
 
 function resolveTimeSeriesSeriesColor(
   name: string,
@@ -238,7 +399,7 @@ export function DashboardPage() {
   const cachedPageRef = useRef<DashboardPageCache | null>(null);
   if (cachedPageRef.current === null) {
     const cached = getCachedPageValue<DashboardPageCache>(DASHBOARD_CACHE_KEY);
-    cachedPageRef.current = cached && cached.search === currentSearch ? cached : null;
+    cachedPageRef.current = cached && (cached.search === currentSearch || currentSearch === "") ? cached : null;
   }
   const cachedPage = cachedPageRef.current;
   const {
@@ -292,7 +453,7 @@ export function DashboardPage() {
   const [activeTab, setActiveTab] = useState<"year"|"month">(() => cachedPage?.activeTab ?? "month");
   const [chartType, setChartType] = useState<"line"|"bar"|"rank">(() => cachedPage?.chartType ?? "line");
   const [rankLimit, setRankLimit] = useState(() => cachedPage?.rankLimit ?? 20);
-  const [tsMode, setTsMode] = useState<"\u603b\u548c"|"\u5206\u7ec4">("\u603b\u548c");
+  const [tsMode, setTsMode] = useState<"\u603b\u548c"|"\u5206\u7ec4">(() => cachedPage?.tsMode ?? "\u603b\u548c");
   const [tsGroupDim, setTsGroupDim] = useState(() => cachedPage?.tsGroupDim ?? "\u56fd\u5bb6");
   const [tsShareSplit, setTsShareSplit] = useState<TimeSeriesShareSplitDimension>(
     () => cachedPage?.tsShareSplit ?? "total",
@@ -319,6 +480,7 @@ export function DashboardPage() {
   const [advMigrationMode, setAdvMigrationMode] = useState<"area"|"line">(() => cachedPage?.advMigrationMode ?? "area");
   const [advBubbleScale, setAdvBubbleScale] = useState(() => cachedPage?.advBubbleScale ?? 2);
   const [advBubbleGrain, setAdvBubbleGrain] = useState<"model"|"version">(() => cachedPage?.advBubbleGrain ?? "model");
+  const [advBubbleLabelDimension, setAdvBubbleLabelDimension] = useState<"model"|"version">(() => cachedPage?.advBubbleLabelDimension ?? "model");
   /* 7a: brand faceting for powertrain_bubble */
   const [advBubbleFacet, setAdvBubbleFacet] = useState(() => cachedPage?.advBubbleFacet ?? false);
   const [advBubbleFacetMax, setAdvBubbleFacetMax] = useState(() => cachedPage?.advBubbleFacetMax ?? 4);
@@ -377,7 +539,7 @@ export function DashboardPage() {
   );
 
   /* export settings (one per chart section) */
-  const [tsExport, setTsExport] = useState<ExportSettings>({ ...DEFAULT_EXPORT });
+  const [tsExport, setTsExport] = useState<ExportSettings>(() => cachedPage?.tsExport ?? { ...DEFAULT_EXPORT });
   const [deckExportDrawerOpen, setDeckExportDrawerOpen] = useState(false);
   const [deckControlDrawerOpen, setDeckControlDrawerOpen] = useState(false);
   const [deckLayouts, setDeckLayouts] = useState<DashboardDeckLayouts>(
@@ -394,9 +556,9 @@ export function DashboardPage() {
   useEffect(() => {
     try { localStorage.setItem("dashboard-deck-layouts", JSON.stringify(deckLayouts)); } catch {}
   }, [deckLayouts]);
-  const [advExport, setAdvExport] = useState<ExportSettings>({ ...DEFAULT_EXPORT });
-  const [mvExport, setMvExport] = useState<ExportSettings>({ ...DEFAULT_EXPORT });
-  const [pmExport, setPmExport] = useState<ExportSettings>({ ...DEFAULT_EXPORT });
+  const [advExport, setAdvExport] = useState<ExportSettings>(() => cachedPage?.advExport ?? { ...DEFAULT_ADVANCED_EXPORT });
+  const [mvExport, setMvExport] = useState<ExportSettings>(() => cachedPage?.mvExport ?? { ...DEFAULT_EXPORT });
+  const [pmExport, setPmExport] = useState<ExportSettings>(() => cachedPage?.pmExport ?? { ...DEFAULT_EXPORT });
   const tsChartRef = useRef<HTMLDivElement | null>(null);
   const advChartRef = useRef<HTMLDivElement | null>(null);
   const advRequestAbortRef = useRef<AbortController | null>(null);
@@ -411,10 +573,10 @@ export function DashboardPage() {
     pmRequestAbortRef.current = null;
   }, []);
   // --- interactive "selected" label strategy for Advanced scatter charts ---
-  const [selectedAdvKeys, setSelectedAdvKeys] = useState<Map<string, { x: number; y: number; text: string }>>(new Map());
+  const [selectedAdvKeys, setSelectedAdvKeys] = useState<Set<string>>(new Set());
   useEffect(() => {
     if (advExport.dataLabelOverlapStrategy !== "selected") {
-      setSelectedAdvKeys(new Map());
+      setSelectedAdvKeys(new Set());
     }
   }, [advExport.dataLabelOverlapStrategy]);
   const handleAdvClick = useCallback((event: Readonly<PlotMouseEvent>) => {
@@ -425,33 +587,29 @@ export function DashboardPage() {
     const series = typeof point.data?.name === "string" ? point.data.name : "";
     const text = typeof point.text === "string" ? point.text : "";
     if (!series || !text) return;
-    const key = `${series}|${text}`;
     const x = Number(point.x);
     const y = Number(point.y);
     if (!Number.isFinite(x) || !Number.isFinite(y)) return;
     setSelectedAdvKeys((prev) => {
-      const next = new Map(prev);
-      if (next.has(key)) { next.delete(key); } else { next.set(key, { x, y, text }); }
+      const next = new Set(prev);
+      const pointKey = `${series}|${text}|${x}|${y}`;
+      if (next.has(pointKey)) { next.delete(pointKey); } else { next.add(pointKey); }
       return next;
     });
   }, [advExport.dataLabelOverlapStrategy]);
-  const selectedAdvLabelTraces: Data[] = useMemo(() => {
-    if (selectedAdvKeys.size === 0) return [];
-    const entries = [...selectedAdvKeys.values()];
-    return [{
-      type: "scatter",
-      mode: "text",
-      name: "clicked-labels",
-      showlegend: false,
-      x: entries.map((e) => e.x),
-      y: entries.map((e) => e.y),
-      text: entries.map((e) => e.text),
-      textposition: "top center",
-      textfont: { size: 9, color: "#1d4ed8" },
-      cliponaxis: false,
-      hoverinfo: "skip",
-    } as Data];
-  }, [selectedAdvKeys]);
+  const initialAdvBubbleLabelStrategySyncDoneRef = useRef(false);
+  useEffect(() => {
+    if (initialAdvBubbleLabelStrategySyncDoneRef.current) return;
+    if (advChart !== "powertrain_bubble") return;
+    initialAdvBubbleLabelStrategySyncDoneRef.current = true;
+    if (advExport.dataLabelOverlapStrategy === "all") {
+      setAdvExport((previous) => (
+        previous.dataLabelOverlapStrategy === "all"
+          ? { ...previous, dataLabelOverlapStrategy: "smart_top" }
+          : previous
+      ));
+    }
+  }, [advChart, advExport.dataLabelOverlapStrategy]);
   const mvChartRef = useRef<HTMLDivElement | null>(null);
   const pmChartRef = useRef<HTMLDivElement | null>(null);
 
@@ -526,6 +684,16 @@ export function DashboardPage() {
     if (selections.model.length !== 1) return;
     setMvModelName((current) => current || selections.model[0]);
   }, [selections.model]);
+
+  const initialBubbleLabelSyncDoneRef = useRef(false);
+  useEffect(() => {
+    if (initialBubbleLabelSyncDoneRef.current) return;
+    if (advChart !== "powertrain_bubble") return;
+    initialBubbleLabelSyncDoneRef.current = true;
+    if (advBubbleGrain === "version" && advBubbleLabelDimension !== "version") {
+      setAdvBubbleLabelDimension("version");
+    }
+  }, [advBubbleGrain, advBubbleLabelDimension, advChart]);
 
   /* B3: auto-reload advanced chart when filters change */
   const prevAdvPayloadRef = useRef(filterTimeScopeKey);
@@ -948,6 +1116,7 @@ export function DashboardPage() {
     overview,
     yearSeries,
     monthSeries,
+    tsExport,
     activeTab,
     chartType,
     rankLimit,
@@ -969,6 +1138,7 @@ export function DashboardPage() {
     advMigrationMode,
     advBubbleScale,
     advBubbleGrain,
+    advBubbleLabelDimension,
     advBubbleFacet,
     advBubbleFacetMax,
     advBubbleShowYoy,
@@ -1009,6 +1179,9 @@ export function DashboardPage() {
     pmPeerCorridor,
     timeRange,
     monthGrain,
+    advExport,
+    mvExport,
+    pmExport,
   }), [
     activeTab,
     advBandSize,
@@ -1019,10 +1192,12 @@ export function DashboardPage() {
     advBubbleGroupTopNMap,
     advBubbleGroupValues,
     advBubbleGrain,
+    advBubbleLabelDimension,
     advBubbleScale,
     advBubbleShowYoy,
     advBubbleYoyYear,
     advChart,
+    advExport,
     advGroup,
     advHeatmapScale,
     advItems,
@@ -1050,6 +1225,7 @@ export function DashboardPage() {
     monthGrain,
     monthSeries,
     mvColorBy,
+    mvExport,
     mvItems,
     mvModelName,
     mvTopN,
@@ -1057,6 +1233,7 @@ export function DashboardPage() {
     othersDetail,
     overview,
     pmClusterTop3,
+    pmExport,
     pmItems,
     pmLengthRange,
     pmManualCompetitors,
@@ -1074,6 +1251,7 @@ export function DashboardPage() {
     tcoTaxInsurance,
     tcoYears,
     timeRange,
+    tsExport,
     tsGroupDim,
     tsIncludeOthers,
     tsMode,
@@ -1502,6 +1680,7 @@ export function DashboardPage() {
               selected={selections[key]}
               onChange={(values) => void onFilterChange(key, values)}
               showSuvShortcut={key === "segment"}
+              shortcuts={key === "origin" ? [{ label: "中国品牌 / 中系车", values: ["中系", "中系2", "中国", "China", "Chinese", "CN"] }] : []}
             />
           ))}
       </CollapsibleFilterSidebar>
@@ -1987,7 +2166,16 @@ export function DashboardPage() {
               <div className="adv-bubble-deck">
                 <div className="adv-bubble-main">
                   <div className="filter-group adv-control-unit"><label>粒度</label>
-                    <select value={advBubbleGrain} onChange={e=>{setAdvBubbleGrain(e.target.value as "model"|"version"); setAdvItems([]); setAdvMeta(null);}}>
+                    <select
+                      value={advBubbleGrain}
+                      onChange={(e) => {
+                        const nextGrain = e.target.value as "model" | "version";
+                        setAdvBubbleGrain(nextGrain);
+                        setAdvBubbleLabelDimension(nextGrain);
+                        setAdvItems([]);
+                        setAdvMeta(null);
+                      }}
+                    >
                       <option value="model">Model</option>
                       <option value="version">Version</option>
                     </select>
@@ -2236,19 +2424,29 @@ export function DashboardPage() {
               advItems.map(r => Number(r[ax.z] ?? 0)),
               { maxDiameter: 24 * advBubbleScale, minDiameter: 4 },
             );
+            const pointLabelText = (row: Record<string, string | number>): string => {
+              if (advChart !== "powertrain_bubble") {
+                return String(row.DisplayName ?? row.Version ?? row.Model ?? row.Brand ?? "");
+              }
+              if (advBubbleLabelDimension === "version") {
+                return String(row.Version ?? row.DisplayName ?? row.Model ?? row.Brand ?? "");
+              }
+              return String(row.Model ?? row.DisplayName ?? row.Version ?? row.Brand ?? "");
+            };
 
             function buildTraces(items: Record<string, string|number>[]) {
               const localCats = [...new Set(items.map(r=>String(r[ax.color]??"")))];
               return localCats.map((cat, i) => {
                 const subset = items.filter(r=>String(r[ax.color]??"")=== cat);
                 const isBubbleMsrp = advChart === "powertrain_bubble";
+                const salesValues = subset.map(r => Math.max(0, Number(r[ax.z] ?? 0)));
                 const bubbleYoyTemplate = isBubbleMsrp && bubbleYoyEnabled && bubbleYoyCompareYear && bubbleYoyBaseYear
                   ? `<br>${bubbleYoyBaseYear} Sales: %{customdata[4]:,.0f}<br>${bubbleYoyCompareYear} Sales: %{customdata[5]:,.0f}<br>YoY: %{customdata[6]:+.1f}%`
                   : "";
                 return withExportLabels({
                   x: subset.map(r => Number(r[ax.x] ?? 0)),
                   y: subset.map(r => Number(r[ax.y] ?? 0)),
-                  text: subset.map(r => String(r.DisplayName ?? r.Version ?? r.Model ?? r.Brand ?? "")),
+                  text: subset.map(pointLabelText),
                   customdata: subset.map(r => isBubbleMsrp
                     ? [
                         Number(r[ax.z] ?? 0),
@@ -2273,11 +2471,11 @@ export function DashboardPage() {
                       advExport.seriesColors,
                       advancedFocusedPowertrain,
                     ),
-                    size: subset.map(r => Math.max(0, Number(r[ax.z] ?? 0))),
+                    size: salesValues,
                     sizemode: scatterBubbleSizing.sizemode,
                     sizeref: scatterBubbleSizing.sizeref,
                     sizemin: scatterBubbleSizing.sizemin,
-                    opacity: 0.7,
+                    opacity: isBubbleMsrp ? buildSalesOpacityValues(salesValues) : 0.7,
                   },
                   hovertemplate: isBubbleMsrp
                     ? advBubbleGrain === "version"
@@ -2285,12 +2483,99 @@ export function DashboardPage() {
                       : "%{text}<br>" + ax.xLabel + ": %{x:,.0f}<br>MSRP（组内中位数）: %{y:,.0f}<br>MSRP范围: %{customdata[1]:,.0f} - %{customdata[2]:,.0f}<br>聚合版型数: %{customdata[3]:,.0f}<br>Sales: %{customdata[0]:,.0f}" + bubbleYoyTemplate + "<extra>%{fullData.name}</extra>"
                     : "%{text}<br>" + ax.xLabel + ": %{x:,.0f}<br>" + ax.yLabel + ": %{y:,.0f}<br>Sales: %{customdata[0]:,.0f}<extra>%{fullData.name}</extra>",
                 } as Data, {
-                  ...(subset.some(r => String(r.Model ?? "").trim()) ? { model: subset.map(r => String(r.Model ?? "")) } : {}),
+                  ...(subset.some(r => pointLabelText(r).trim()) ? { model: subset.map(pointLabelText) } : {}),
                   ...(subset.some(r => r.Sales !== undefined) ? { sales: subset.map(r => Number(r.Sales ?? 0)) } : {}),
                   value: subset.map(r => Number(r[ax.y] ?? 0)),
                   series: subset.map(() => cat),
                 }) as Data;
               });
+            }
+
+            function buildPowertrainBubbleLabels(items: Record<string, string | number>[]): Data[] {
+              if (advChart !== "powertrain_bubble" || advExport.dataLabelMode === "off") return [];
+              const labelMode = normalizeDashboardBubbleLabelMode(advExport.dataLabelOverlapStrategy);
+              if (labelMode === "clean") return [];
+              const candidates = items.flatMap((row): DashboardBubbleLabelInfo[] => {
+                const text = pointLabelText(row).trim();
+                const x = Number(row[ax.x] ?? 0);
+                const y = Number(row[ax.y] ?? 0);
+                const sales = Math.max(0, Number(row[ax.z] ?? 0));
+                const series = String(row[ax.color] ?? "");
+                if (!text || !series || !Number.isFinite(x) || !Number.isFinite(y)) return [];
+                const key = `${series}|${text}|${x}|${y}`;
+                return [{
+                  key,
+                  text,
+                  x,
+                  y,
+                  sales,
+                  series,
+                  priority: 1,
+                  showLabel: true,
+                  jitterX: 0,
+                  jitterY: 0,
+                }];
+              });
+              if (candidates.length === 0) return [];
+              const xValues = candidates.map((item) => item.x);
+              const yValues = candidates.map((item) => item.y);
+              const xRange = Math.max(...xValues) - Math.min(...xValues) || 1;
+              const yRange = Math.max(...yValues) - Math.min(...yValues) || 1;
+              const rankedKeys = [...candidates]
+                .sort((left, right) => right.sales - left.sales)
+                .map((item) => item.key);
+              const highSalesCutoff = Math.max(1, Math.ceil(candidates.length * 0.08));
+              const midSalesCutoff = Math.max(highSalesCutoff + 1, Math.ceil(candidates.length * 0.24));
+              const longTailCutoff = Math.max(0, Math.floor(candidates.length * 0.2));
+              const highSalesKeys = new Set(rankedKeys.slice(0, highSalesCutoff));
+              const midSalesKeys = new Set(rankedKeys.slice(0, midSalesCutoff));
+              const longTailKeys = new Set(rankedKeys.slice(candidates.length - longTailCutoff));
+              const topBySeries = new Map<string, Set<string>>();
+              Array.from(new Set(candidates.map((item) => item.series))).forEach((series) => {
+                const seriesTop = candidates
+                  .filter((item) => item.series === series)
+                  .sort((left, right) => right.sales - left.sales)
+                  .slice(0, 2)
+                  .map((item) => item.key);
+                topBySeries.set(series, new Set(seriesTop));
+              });
+              const labelInfos = candidates.map((candidate) => {
+                const seriesTop = topBySeries.get(candidate.series);
+                let priority = 1;
+                if (highSalesKeys.has(candidate.key)) {
+                  priority = 3;
+                } else if (midSalesKeys.has(candidate.key) || seriesTop?.has(candidate.key)) {
+                  priority = 2;
+                } else if (longTailKeys.has(candidate.key)) {
+                  priority = 0;
+                }
+                const showLabel =
+                  labelMode === "all" ||
+                  (labelMode === "smart_top" && priority >= 2) ||
+                  (labelMode === "selected" && selectedAdvKeys.has(candidate.key));
+                return {
+                  ...candidate,
+                  priority,
+                  showLabel,
+                  jitterX: jitterDashboardLabel(candidate.key, xRange * 0.008),
+                  jitterY: jitterDashboardLabel(`${candidate.key}_y`, yRange * 0.01),
+                };
+              });
+              return buildDashboardBubbleLabelTraces(
+                labelInfos,
+                labelMode,
+                advExport.labelFontSize ?? advExport.fontSize,
+              );
+            }
+
+            function applyAdvancedScatterData(sourceItems: Record<string, string | number>[], traces: Data[]): Data[] {
+              if (advChart !== "powertrain_bubble") {
+                return applySeriesColors(applyDataLabelsToTraces(traces, advExport), advExport.seriesColors);
+              }
+              return [
+                ...applySeriesColors(traces, advExport.seriesColors),
+                ...buildPowertrainBubbleLabels(sourceItems),
+              ];
             }
 
             /* 7a: brand faceting */
@@ -2314,7 +2599,7 @@ export function DashboardPage() {
                       <div key={brand} className="facet-plot-card">
                         <div className="facet-plot-title">{brand}</div>
                         <PlotlyChart
-                          data={applySeriesColors(applyDataLabelsToTraces(traces, advExport), advExport.seriesColors)}
+                          data={applyAdvancedScatterData(subset, traces)}
                           layout={applyExportToLayout({
                                       xaxis: { title: { text: ax.xLabel } },
                             yaxis: { title: { text: ax.yLabel } },
@@ -2335,7 +2620,7 @@ export function DashboardPage() {
               <div ref={el => { advChartRef.current = el; }}>
                 <PlotlyChart
                   key={`adv-scatter-${selectedAdvKeys.size}`}
-                  data={[...applySeriesColors(applyDataLabelsToTraces(traces, advExport), advExport.seriesColors), ...selectedAdvLabelTraces]}
+                  data={applyAdvancedScatterData(advItems, traces)}
                   layout={applyExportToLayout({
                       xaxis: { title: { text: ax.xLabel } },
                     yaxis: { title: { text: ax.yLabel } },
@@ -3154,18 +3439,6 @@ export function DashboardPage() {
                       <span>Top N</span>
                       <DebouncedNumberInput value={advTopN} onCommit={(v) => v !== null && setAdvTopN(v)} min={5} max={100} delayMs={1200} />
                     </label>
-                    <label className="market-scan-field">
-                      <span>标签策略</span>
-                      <select
-                        value={advExport.dataLabelOverlapStrategy}
-                        onChange={(e) => setAdvExport((prev) => ({ ...prev, dataLabelOverlapStrategy: e.target.value as ExportSettings["dataLabelOverlapStrategy"] }))}
-                      >
-                        <option value="all">All</option>
-                        <option value="smart_top">Smart Top</option>
-                        <option value="selected">Selected</option>
-                        <option value="clean">Clean</option>
-                      </select>
-                    </label>
                   </>
                 )}
                 {activeDeckSection === "modelVersion" && (
@@ -3255,7 +3528,48 @@ export function DashboardPage() {
               <DashboardExportPanel value={tsExport} onChange={setTsExport} graphDiv={tsChartRef.current} seriesNames={timeSeriesExportSeriesNames} labelModeOptions={tsLabelModeOptions} showExportButton={false} showDimensionControls={false} collapsible={false} />
             )}
             {activeDeckSection === "advanced" && (
-              <DashboardExportPanel value={advExport} onChange={setAdvExport} graphDiv={advChartRef.current} seriesNames={advancedExportSeriesNames} labelModeOptions={advLabelModeOptions} showExportButton={false} showDimensionControls={false} collapsible={false} />
+              <>
+                <DashboardExportPanel value={advExport} onChange={setAdvExport} graphDiv={advChartRef.current} seriesNames={advancedExportSeriesNames} labelModeOptions={advLabelModeOptions} showExportButton={false} showDimensionControls={false} showLabelStrategyControl={false} collapsible={false} />
+                <div className="positioning-pricing-control-grid">
+                  <label className="market-scan-field">
+                    <span>标签字段</span>
+                    <select
+                      value={advBubbleLabelDimension}
+                      onChange={(e) => {
+                        const nextLabel = e.target.value as "model" | "version";
+                        setAdvBubbleLabelDimension(nextLabel);
+                        if (nextLabel === "version" && advBubbleGrain !== "version") {
+                          setAdvBubbleGrain("version");
+                          setAdvItems([]);
+                          setAdvMeta(null);
+                        }
+                      }}
+                    >
+                      <option value="model">Model</option>
+                      <option value="version">Version</option>
+                    </select>
+                    {advBubbleLabelDimension === "version" && advBubbleGrain !== "version" && (
+                      <span className="ts-mode-hint">Version 标签会同步切换 04 图粒度并重新加载。</span>
+                    )}
+                  </label>
+                  <label className="market-scan-field">
+                    <span>气泡标签</span>
+                    <select
+                      value={advExport.dataLabelOverlapStrategy}
+                      onChange={(e) => setAdvExport((previous) => ({
+                        ...previous,
+                        dataLabelOverlapStrategy: e.target.value as ExportLabelOverlapStrategy,
+                      }))}
+                    >
+                      {ADVANCED_BUBBLE_LABEL_OPTIONS.map((option) => (
+                        <option key={option.value} value={option.value}>
+                          {option.label}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                </div>
+              </>
             )}
             {activeDeckSection === "modelVersion" && (
               <DashboardExportPanel value={mvExport} onChange={setMvExport} graphDiv={mvChartRef.current} seriesNames={modelVersionExportSeriesNames} labelModeOptions={mvLabelModeOptions} showExportButton={false} showDimensionControls={false} collapsible={false} />

@@ -1,22 +1,31 @@
 source_code: audi_q3_hr_draft_scrapling
 country: 克罗地亚
 brand: AUDI
-source_url: https://www.audi.hr/hr/web/hr/models/q3.html
+source_url: https://www.audi.hr/modeli/svi-modeli
 source_type: manufacturer_official
 price_semantics: base_msrp
 extractor_type: scrapling
 profile:
-  url: https://www.audi.hr/hr/web/hr/models/q3.html
-  tier: stealth
+  url: https://www.audi.hr/modeli/svi-modeli
+  tier: http
   headless: true
-  network_idle: true
+  network_idle: false
+  load_dom: false
+  timeout_ms: 20000
   impersonate: chrome
+  text_regex:
+    source_selector: body
+    include_element_html: true
+    entry_patterns:
+    - pattern: '\\"pageName\\":\\"(?P<trim>Novi Q3 SUV)\\".{0,12000}?\\"grossPriceData\\":(?P<price>\d+\.\d+),\\"currency\\":\\"EUR\\".{0,1000}?\\"status\\":\\"SALE\\"'
+      official_powertrain: Q3 SUV starting price ICE
+      price_label: Preporučena maloprodajna cijena
   default_currency: EUR
   default_tax_included: true
   default_price_label: Preporučena maloprodajna cijena s PDV-om
   fixed_model: Q3
   fixed_jato_model: Q3
-  fixed_jato_powertrain: null
+  fixed_jato_powertrain: ICE
   model_rules: []
   skip_if_model_unmapped: false
   copy_trim_to_jato_trim: true
@@ -94,6 +103,12 @@ profile:
     force_review_if_powertrain_missing: true
     force_review_if_powertrain_ambiguous: true
     force_review_for_special_edition: true
+  match_confidence: 0.82
+  match_status: review_required
+  match_reason:
+    kind: official_model_overview_starting_price
+    source: audi_hr_model_overview
+    note: Official Audi Croatia model overview embeds Novi Q3 SUV grossPriceData in EUR with SALE status.
   json_script_selector: script[type='application/ld+json']
   css:
     vehicle_container: body
@@ -105,9 +120,9 @@ schedule:
   run_window_start: 00:00
   run_window_end: 05:00
   preferred_weekday: monday
-notes: Keywords filled from official manufacturer website research (HR market). CSS
-  selectors still require browser-based inspection before promotion. [CSS selectors
-  applied from brand probe]
+notes: Keywords filled from official manufacturer website research (HR market).
+  Replaced stale Q3 .html URL with Audi Croatia's official model overview and
+  text_regex over embedded Novi Q3 SUV grossPriceData.
 bootstrap_meta:
   country_model_rank: 27
   suggested_scope_kind: single_model

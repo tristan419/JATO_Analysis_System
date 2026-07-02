@@ -1,4 +1,7 @@
 from datetime import date, datetime, timedelta, timezone
+import re
+from typing import Any
+from urllib.parse import urlparse
 from uuid import UUID
 
 from fastapi import HTTPException
@@ -68,6 +71,24 @@ FINANCE_AMOUNT_FIELDS = {
     "subsidy_amount",
     "net_price_after_subsidy",
 }
+AUTO_REVIEW_SCHEMA_VERSION = "msrp_auto_review_score_v1"
+AUTO_REVIEW_DEFAULT_WEIGHTS = {
+    "match_confidence": 0.30,
+    "identity_alignment": 0.22,
+    "price_integrity": 0.18,
+    "source_traceability": 0.14,
+    "semantic_alignment": 0.10,
+    "finance_completeness": 0.06,
+}
+AUTO_REVIEW_FORCE_REVIEW_SCORE = 60.0
+AUTO_REVIEW_OFFICIAL_SOURCE_TYPES = {
+    "official_api",
+    "official_configurator",
+    "official_price_list",
+    "official_price_list_pdf",
+    "official_website",
+    "manufacturer_site",
+}
 
 
 def _utc_now() -> datetime:
@@ -128,6 +149,464 @@ def _json_safe_finance_context(context: dict[str, object]) -> dict[str, object]:
         else:
             normalized[key] = value
     return normalized
+
+
+def _clamp(value: float, minimum: float = 0.0, maximum: float = 1.0) -> float:
+    return max(minimum, min(value, maximum))
+
+
+def _normal_text(value: object | None) -> str:
+    return str(value or "").strip().lower()
+
+
+def _text_tokens(value: object | None) -> set[str]:
+    return {
+        token
+        for token in re.split(r"[^a-z0-9]+", _normal_text(value))
+        if token
+    }
+
+
+def _token_similarity(left: object | None, right: object | None) -> float:
+    left_text = _normal_text(left)
+    right_text = _normal_text(right)
+    if not left_text and not right_text:
+        return 0.5
+    if not left_text or not right_text:
+        return 0.0
+    if left_text == right_text:
+        return 1.0
+    if left_text in right_text or right_text in left_text:
+        return 0.9
+    left_tokens = _text_tokens(left_text)
+    right_tokens = _text_tokens(right_text)
+    if not left_tokens or not right_tokens:
+        return 0.0
+    overlap = len(left_tokens & right_tokens)
+    return overlap / max(len(left_tokens), len(right_tokens))
+
+
+def _valid_http_url(value: object | None) -> bool:
+    parsed = urlparse(str(value or "").strip())
+    return parsed.scheme in {"http", "https"} and bool(parsed.netloc)
+
+
+def _dict_or_empty(value: object | None) -> dict[str, Any]:
+    return value if isinstance(value, dict) else {}
+
+
+def _auto_review_config_from_payload(
+    item: dict[str, object],
+    key: str,
+) -> dict[str, Any]:
+    source_context = _dict_or_empty(item.get("source_context_json"))
+    pricing_context = _dict_or_empty(source_context.get("pricingContext"))
+    for candidate in (
+        item.get(key),
+        item.get(f"{key}_json"),
+        source_context.get(key),
+        pricing_context.get(key),
+    ):
+        if isinstance(candidate, dict):
+            return candidate
+    return {}
+
+
+def _auto_review_weights(item: dict[str, object]) -> dict[str, float]:
+    configured = _auto_review_config_from_payload(
+        item,
+        "autoReviewWeights",
+    ) or _auto_review_config_from_payload(item, "auto_review_weights")
+    raw_weights = dict(AUTO_REVIEW_DEFAULT_WEIGHTS)
+    for key in AUTO_REVIEW_DEFAULT_WEIGHTS:
+        value = configured.get(key)
+        if value is None:
+            continue
+        try:
+            weight = float(value)
+        except (TypeError, ValueError):
+            continue
+        raw_weights[key] = max(0.0, weight)
+
+    total = sum(raw_weights.values())
+    if total <= 0:
+        raw_weights = dict(AUTO_REVIEW_DEFAULT_WEIGHTS)
+        total = sum(raw_weights.values())
+    return {
+        key: round(value / total, 4)
+        for key, value in raw_weights.items()
+    }
+
+
+def _auto_review_gate(item: dict[str, object]) -> dict[str, float]:
+    configured = _auto_review_config_from_payload(
+        item,
+        "autoReviewGate",
+    ) or _auto_review_config_from_payload(item, "auto_review_gate")
+    force_review_score = configured.get("forceReviewBelowScore")
+    min_confidence = configured.get("forceReviewBelowConfidence")
+    try:
+        score_threshold = float(force_review_score)
+    except (TypeError, ValueError):
+        score_threshold = AUTO_REVIEW_FORCE_REVIEW_SCORE
+    try:
+        confidence_threshold = float(min_confidence)
+    except (TypeError, ValueError):
+        confidence_threshold = 0.0
+    return {
+        "forceReviewBelowScore": round(score_threshold, 2),
+        "forceReviewBelowConfidence": round(confidence_threshold, 4),
+    }
+
+
+def _component(
+    key: str,
+    label: str,
+    score: float,
+    weight: float,
+    evidence: dict[str, object],
+) -> dict[str, object]:
+    normalized = round(_clamp(score), 4)
+    weighted = round(normalized * weight * 100, 2)
+    return {
+        "key": key,
+        "label": label,
+        "score": normalized,
+        "weight": weight,
+        "weightedScore": weighted,
+        "evidence": evidence,
+    }
+
+
+def _identity_alignment_score(item: dict[str, object]) -> tuple[float, dict[str, object]]:
+    model_score = _token_similarity(
+        item.get("jato_model"),
+        item.get("official_model"),
+    )
+    trim_score = _token_similarity(
+        item.get("jato_trim"),
+        item.get("official_trim"),
+    )
+    jato_powertrain = _normal_text(item.get("jato_powertrain"))
+    official_powertrain = _normal_text(item.get("official_powertrain"))
+    if not jato_powertrain and not official_powertrain:
+        powertrain_score = 0.75
+    elif jato_powertrain and official_powertrain:
+        powertrain_score = _token_similarity(
+            jato_powertrain,
+            official_powertrain,
+        )
+    else:
+        powertrain_score = 0.45
+    score = (model_score * 0.58) + (trim_score * 0.27) + (powertrain_score * 0.15)
+    return score, {
+        "modelScore": round(model_score, 4),
+        "trimScore": round(trim_score, 4),
+        "powertrainScore": round(powertrain_score, 4),
+        "jatoModel": item.get("jato_model"),
+        "officialModel": item.get("official_model"),
+        "jatoTrim": item.get("jato_trim"),
+        "officialTrim": item.get("official_trim"),
+    }
+
+
+def _price_integrity_score(
+    source_msrp_value: float,
+    source_currency: str,
+) -> tuple[float, dict[str, object], list[str]]:
+    blockers: list[str] = []
+    price_ok = source_msrp_value > 0
+    currency_ok = len(source_currency.strip()) == 3
+    if not price_ok:
+        blockers.append("invalid_price")
+    if not currency_ok:
+        blockers.append("missing_currency")
+    return (
+        (0.72 if price_ok else 0.0) + (0.28 if currency_ok else 0.0),
+        {
+            "sourceMsrpValue": source_msrp_value,
+            "sourceCurrency": source_currency,
+            "pricePositive": price_ok,
+            "currencyPresent": currency_ok,
+        },
+        blockers,
+    )
+
+
+def _source_traceability_score(
+    item: dict[str, object],
+    source: MsrpSource,
+) -> tuple[float, dict[str, object], list[str]]:
+    source_type = str(getattr(source, "source_type", "") or "").strip()
+    source_url = str(item.get("source_url") or "").strip()
+    registry_url = str(getattr(source, "source_url", "") or "").strip()
+    extractor_name = str(getattr(source, "extractor_name", "") or "").strip()
+    extractor_version = str(
+        getattr(source, "extractor_version", "") or ""
+    ).strip()
+    source_url_ok = _valid_http_url(source_url)
+    registry_url_ok = _valid_http_url(registry_url)
+    official_source = source_type in AUTO_REVIEW_OFFICIAL_SOURCE_TYPES
+    extractor_ok = bool(extractor_name and extractor_version)
+    snapshot_ok = bool(str(item.get("source_snapshot_path") or "").strip())
+    score = (
+        (0.30 if source_url_ok else 0.0)
+        + (0.20 if registry_url_ok else 0.0)
+        + (0.25 if official_source else 0.0)
+        + (0.15 if extractor_ok else 0.0)
+        + (0.10 if snapshot_ok else 0.0)
+    )
+    blockers = [] if source_url_ok else ["missing_source_url"]
+    return score, {
+        "sourceUrlPresent": source_url_ok,
+        "registryUrlPresent": registry_url_ok,
+        "sourceType": source_type or None,
+        "officialSourceType": official_source,
+        "extractor": extractor_name or None,
+        "extractorVersion": extractor_version or None,
+        "snapshotPresent": snapshot_ok,
+    }, blockers
+
+
+def _semantic_alignment_score(
+    item: dict[str, object],
+    source_price_semantics: str | None,
+) -> tuple[float, dict[str, object]]:
+    price_semantics = _payload_price_semantics(item, source_price_semantics)
+    label = _normal_text(item.get("price_label"))
+    context = _finance_context_from_payload(item, source_price_semantics)
+    finance_semantics = price_semantics != "base_msrp"
+    finance_signal = any(
+        context.get(key) is not None
+        for key in FINANCE_CONTEXT_FIELDS
+        if key != "price_semantics"
+    )
+    if finance_semantics:
+        score = 0.75 if finance_signal else 0.35
+        if "monthly" in price_semantics or "lease" in price_semantics:
+            score += 0.15
+        if "lease" in label or "monthly" in label or "mån" in label:
+            score += 0.10
+    else:
+        finance_words = ("lease", "monthly", "finance", "subscription", "mån")
+        score = 0.55 if any(word in label for word in finance_words) else 1.0
+    return _clamp(score), {
+        "priceSemantics": price_semantics,
+        "sourcePriceSemantics": source_price_semantics,
+        "hasFinanceSignal": finance_signal,
+        "priceLabel": item.get("price_label"),
+    }
+
+
+def _finance_completeness_score(
+    item: dict[str, object],
+    source_price_semantics: str | None,
+) -> tuple[float, dict[str, object]]:
+    price_semantics = _payload_price_semantics(item, source_price_semantics)
+    if price_semantics == "base_msrp":
+        return 1.0, {"priceSemantics": price_semantics, "notApplicable": True}
+    context = _finance_context_from_payload(item, source_price_semantics)
+    has_monthly = context.get("monthly_payment") is not None
+    has_term = context.get("term_months") is not None
+    has_type = bool(_optional_text(context.get("finance_type")))
+    has_subsidy_or_net = (
+        context.get("subsidy_amount") is not None
+        or context.get("net_price_after_subsidy") is not None
+    )
+    score = (
+        (0.55 if has_monthly else 0.0)
+        + (0.18 if has_term else 0.0)
+        + (0.17 if has_type else 0.0)
+        + (0.10 if has_subsidy_or_net else 0.0)
+    )
+    return score, {
+        "priceSemantics": price_semantics,
+        "hasMonthlyPayment": has_monthly,
+        "hasTermMonths": has_term,
+        "hasFinanceType": has_type,
+        "hasSubsidyOrNetPrice": has_subsidy_or_net,
+    }
+
+
+def _model_assistance_recommendation(
+    score: float,
+    blockers: list[str],
+    components: list[dict[str, object]],
+) -> dict[str, object]:
+    component_scores = {
+        str(item["key"]): float(item["score"])
+        for item in components
+    }
+    semantic_low = component_scores.get("semantic_alignment", 1.0) < 0.7
+    identity_low = component_scores.get("identity_alignment", 1.0) < 0.7
+    traceability_low = component_scores.get("source_traceability", 1.0) < 0.6
+    if blockers:
+        preferred = "rule_based_source_repair"
+        llm_fit = "low"
+        rationale = (
+            "Hard blockers are fetch/source-quality issues, "
+            "not language understanding issues."
+        )
+    elif semantic_low or identity_low:
+        preferred = "rule_based_then_llm"
+        llm_fit = "medium"
+        rationale = (
+            "LLM can help classify page semantics or trim naming after "
+            "deterministic checks flag uncertainty."
+        )
+    elif traceability_low:
+        preferred = "rule_based_source_repair"
+        llm_fit = "low"
+        rationale = "Traceability gaps require source metadata or snapshot repair."
+    elif score < 75:
+        preferred = "rule_based_recheck"
+        llm_fit = "low"
+        rationale = "The low score is better handled by deterministic profile/source fixes first."
+    else:
+        preferred = "deterministic_rules"
+        llm_fit = "low"
+        rationale = "Weighted deterministic checks are sufficient for this observation."
+    return {
+        "preferred": preferred,
+        "llmFit": llm_fit,
+        "neuralNetworkFit": "not_recommended_until_labeled_corpus",
+        "rationale": rationale,
+    }
+
+
+def _build_msrp_auto_review_score(
+    item: dict[str, object],
+    source: MsrpSource,
+    *,
+    source_msrp_value: float,
+    source_currency: str,
+    match_confidence: float,
+) -> dict[str, object]:
+    weights = _auto_review_weights(item)
+    source_price_semantics = getattr(source, "price_semantics", None)
+    identity_score, identity_evidence = _identity_alignment_score(item)
+    price_score, price_evidence, price_blockers = _price_integrity_score(
+        source_msrp_value,
+        source_currency,
+    )
+    trace_score, trace_evidence, trace_blockers = _source_traceability_score(
+        item,
+        source,
+    )
+    semantic_score, semantic_evidence = _semantic_alignment_score(
+        item,
+        source_price_semantics,
+    )
+    finance_score, finance_evidence = _finance_completeness_score(
+        item,
+        source_price_semantics,
+    )
+    components = [
+        _component(
+            "match_confidence",
+            "Extractor match confidence",
+            match_confidence,
+            weights["match_confidence"],
+            {"matchConfidence": round(match_confidence, 4)},
+        ),
+        _component(
+            "identity_alignment",
+            "Official/JATO model, trim and powertrain alignment",
+            identity_score,
+            weights["identity_alignment"],
+            identity_evidence,
+        ),
+        _component(
+            "price_integrity",
+            "Price and currency integrity",
+            price_score,
+            weights["price_integrity"],
+            price_evidence,
+        ),
+        _component(
+            "source_traceability",
+            "Official source and snapshot traceability",
+            trace_score,
+            weights["source_traceability"],
+            trace_evidence,
+        ),
+        _component(
+            "semantic_alignment",
+            "MSRP/finance semantic alignment",
+            semantic_score,
+            weights["semantic_alignment"],
+            semantic_evidence,
+        ),
+        _component(
+            "finance_completeness",
+            "Lease/finance context completeness",
+            finance_score,
+            weights["finance_completeness"],
+            finance_evidence,
+        ),
+    ]
+    score = round(
+        sum(float(component["weightedScore"]) for component in components),
+        2,
+    )
+    hard_blockers = price_blockers + trace_blockers
+    gate = _auto_review_gate(item)
+    model_assistance = _model_assistance_recommendation(
+        score,
+        hard_blockers,
+        components,
+    )
+    return {
+        "schemaVersion": AUTO_REVIEW_SCHEMA_VERSION,
+        "method": "deterministic_weighted_rules",
+        "score": score,
+        "scoreBand": (
+            "high" if score >= 80 else "medium" if score >= 60 else "low"
+        ),
+        "weights": weights,
+        "components": components,
+        "hardBlockers": hard_blockers,
+        "gate": gate,
+        "modelAssistance": model_assistance,
+    }
+
+
+def _auto_review_adjusted_match_status(
+    match_status: str,
+    auto_review: dict[str, object],
+    match_confidence: float,
+) -> str:
+    if match_status in {"human_approved", "override_applied"}:
+        return match_status
+    gate = _dict_or_empty(auto_review.get("gate"))
+    score = float(auto_review.get("score") or 0.0)
+    hard_blockers = auto_review.get("hardBlockers")
+    has_blockers = isinstance(hard_blockers, list) and bool(hard_blockers)
+    force_review_score = float(
+        gate.get("forceReviewBelowScore") or AUTO_REVIEW_FORCE_REVIEW_SCORE
+    )
+    force_review_confidence = float(gate.get("forceReviewBelowConfidence") or 0.0)
+    if has_blockers or score < force_review_score or match_confidence < force_review_confidence:
+        return REVIEW_REQUIRED_STATUS
+    return match_status
+
+
+def _merge_auto_review_match_reason(
+    match_reason: object | None,
+    auto_review: dict[str, object],
+    *,
+    input_match_status: str,
+    final_match_status: str,
+) -> dict[str, object]:
+    reason: dict[str, object] = (
+        dict(match_reason) if isinstance(match_reason, dict) else {}
+    )
+    review_payload = dict(auto_review)
+    review_payload["inputMatchStatus"] = input_match_status
+    review_payload["finalMatchStatus"] = final_match_status
+    review_payload["statusAdjusted"] = input_match_status != final_match_status
+    reason["autoReview"] = review_payload
+    return reason
 
 
 def _finance_context_from_payload(
@@ -619,6 +1098,28 @@ def create_scrape_batch_ingest(
         observed_at_utc = item.get("observed_at_utc") or _utc_now()
         source_msrp_value = float(item["msrp_value"])
         source_currency = str(item.get("currency") or "").strip().upper()
+        match_confidence = float(item.get("match_confidence") or 0.0)
+        input_match_status = str(
+            item.get("match_status") or REVIEW_REQUIRED_STATUS
+        ).strip()
+        auto_review = _build_msrp_auto_review_score(
+            item,
+            source,
+            source_msrp_value=source_msrp_value,
+            source_currency=source_currency,
+            match_confidence=match_confidence,
+        )
+        match_status = _auto_review_adjusted_match_status(
+            input_match_status,
+            auto_review,
+            match_confidence,
+        )
+        match_reason_json = _merge_auto_review_match_reason(
+            item.get("match_reason_json"),
+            auto_review,
+            input_match_status=input_match_status,
+            final_match_status=match_status,
+        )
         msrp_value_eur, fx_quote = convert_amount_to_eur(
             source_msrp_value,
             source_currency,
@@ -677,11 +1178,9 @@ def create_scrape_batch_ingest(
             extraction_version=str(
                 item.get("extraction_version") or ""
             ).strip(),
-            match_confidence=float(item.get("match_confidence") or 0.0),
-            match_status=str(
-                item.get("match_status") or "review_required"
-            ).strip(),
-            match_reason_json=item.get("match_reason_json"),
+            match_confidence=match_confidence,
+            match_status=match_status,
+            match_reason_json=match_reason_json,
             source_context_json=item.get("source_context_json"),
         )
         observations.append(observation)

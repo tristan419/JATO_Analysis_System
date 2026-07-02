@@ -1,111 +1,64 @@
-source_code: suzuki_vitara_hr_draft_scrapling
+source_code: suzuki_vitara_hr_draft_http_json
 country: 克罗地亚
 brand: SUZUKI
 source_url: https://auto.suzuki.hr/cars/vitara-hybrid
 source_type: manufacturer_official
 price_semantics: base_msrp
-extractor_type: scrapling
+extractor_type: http_json
 profile:
-  url: https://auto.suzuki.hr/cars/vitara-hybrid
-  tier: stealth
-  headless: true
-  network_idle: true
-  impersonate: chrome
+  url: https://cm-public.suzukibusinesscloud-croatia.com/sellingPrices
+  method: GET
+  headers:
+    x-api-key: JocnBrI7IE9OCVz8emOpG1x1dtvL77ig8fDSNJoK
+  params:
+    modelCode: V
+    startDate: '{today}'
+    endDate: '{today}'
+    dealerCode: HUA251103
+    lob: '1'
+  field_mapping:
+    vehicles_path: data.0.sellingPriceDetails
+    model: modelCode
+    trim: variantCode
+    price: price2
+    currency: ''
+    tax_included: ''
+    price_label: ''
   default_currency: EUR
   default_tax_included: true
   default_price_label: Preporučena maloprodajna cijena s PDV-om
   fixed_model: VITARA
+  fixed_official_powertrain: MHEV
   fixed_jato_model: VITARA
-  fixed_jato_powertrain: null
-  model_rules: []
-  skip_if_model_unmapped: false
+  fixed_jato_powertrain: MHEV
   copy_trim_to_jato_trim: true
-  confidence_rules:
-    base: 0.2
-    fixed_model_bonus: 0.18
-    fixed_jato_model_bonus: 0.12
-    model_rule_bonus: 0.12
-    trim_present_bonus: 0.1
-    copy_trim_to_jato_trim_bonus: 0.09
-    parsed_price_text_bonus: 0.03
-    currency_bonus: 0.01
-    price_label_bonus: 0.02
-    trim_keyword_bonuses: []
-    price_band_bonuses:
-    - key: price_band_entry
-      label: Entry price band matched
-      max: 0
-      delta: 0.0
-    - key: price_band_mid
-      label: Mid price band matched
-      min: 0
-      max: 0
-      delta: 0.01
-    - key: price_band_high
-      label: High price band matched
-      min: 0
-      delta: 0.03
-    powertrain_keyword_bonuses: []
-    powertrain_bonuses:
-    - key: powertrain_hev
-      label: 'Powertrain matched: HEV'
-      powertrain: HEV
-      delta: 0.03
-    - key: powertrain_mhev
-      label: 'Powertrain matched: MHEV'
-      powertrain: MHEV
-      delta: 0.03
-    - key: powertrain_ice
-      label: 'Powertrain matched: ICE'
-      powertrain: ICE
-      delta: 0.03
-    clamp_min: 0.0
-    clamp_max: 1.0
-  structured_fields:
-    edition_rules:
-    - key: edition_special
-      label: Special Edition
-      keyword: special edition
-      special: true
-    powertrain_rules:
-    - key: powertrain_hev
-      powertrain: HEV
-      keywords:
-      - hibrid
-      - hybrid
-      - Vitara Hybrid
-    - key: powertrain_mhev
-      powertrain: MHEV
-      keywords:
-      - mild hybrid
-      - MILD HYBRID 48V
-      - blagi hibrid
-      - 48V
-    - key: powertrain_ice
-      powertrain: ICE
-      keywords:
-      - benzin
-  auto_accept_gates:
-    review_threshold: 0.95
-    semi_auto_threshold: 0.98
-    require_powertrain_match: true
-    force_review_if_powertrain_missing: true
-    force_review_if_powertrain_ambiguous: true
-    force_review_for_special_edition: true
-  json_script_selector: script[type='application/ld+json']
-  css:
-    vehicle_container: body
-    model: h1, h2
-    trim: h3
-    price: '[class*="price"]'
+  match_confidence: 0.88
+  match_status: review_required
+  match_reason:
+    kind: official_suzuki_selling_price_api
+    model_code: V
+    dealer_code: HUA251103
+    price_field: price2
+    grouping: min_price_by_variant
+  min_price_group:
+    key: variantCode
+    price: price2
+  pricing_context:
+    fields:
+      external_variant_code: variantCode
+      external_color_code: colorCode
+    constants:
+      source_api: suzuki_business_cloud_selling_prices
+      source_market_code: CRA
 schedule:
   frequency: manual_only
   run_window_start: 00:00
   run_window_end: 05:00
   preferred_weekday: monday
-notes: Keywords filled from official manufacturer website research (HR market). CSS
-  selectors still require browser-based inspection before promotion. [CSS selectors
-  applied from brand probe]
+notes: Official Suzuki Croatia Business Cloud sellingPrices API used by the public
+  model page. price2 matches the site's "Preporučena maloprodajna cijena" setting;
+  min-price grouping keeps one base paint observation per variant and avoids color
+  surcharge duplicates while preserving special-edition variants.
 bootstrap_meta:
   country_model_rank: 3
   suggested_scope_kind: single_model

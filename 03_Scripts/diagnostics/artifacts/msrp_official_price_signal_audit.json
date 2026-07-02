@@ -1,0 +1,973 @@
+{
+  "schemaVersion": "msrp_official_price_signal_audit_v1",
+  "generatedAt": "2026-06-22T05:34:05Z",
+  "backlogRunId": "msrp-dryrun-20260618-110029",
+  "includeTransient": true,
+  "officialSourceRequiredForIngest": true,
+  "summary": {
+    "sourceRepairIssueCount": 2,
+    "transientRegressionCount": 13,
+    "inspectedSourceCount": 13,
+    "candidateUrlCount": 14,
+    "fetchStatusCounts": {
+      "tls_handshake_failed": 1,
+      "fetchable": 11,
+      "anti_bot_blocked": 2
+    },
+    "officialPriceSignalCounts": {
+      "tls_handshake_failed": 1,
+      "campaign_or_net_price_signal": 3,
+      "access_blocked": 2,
+      "price_signal_present": 8
+    },
+    "recommendedActionCounts": {
+      "try_official_alternative_url_or_proxy": 1,
+      "route_to_campaign_or_net_price_pipeline_not_base_msrp": 3,
+      "official_proxy_or_configurator_api": 2,
+      "repair_selector_and_run_dryrun": 8
+    },
+    "dryrunCandidateEligibleCount": 8,
+    "officialIngestEligibleCount": 0,
+    "noPriceSignalCount": 0,
+    "accessBlockedCount": 2
+  },
+  "items": [
+    {
+      "countryCode": "at",
+      "sourceCode": "mg_zs_at_draft_scrapling",
+      "brand": "MG",
+      "candidateKind": "registered_source",
+      "candidateUrl": "https://www.mgmotor.at/modelle/mg-zs",
+      "host": "mgmotor.at",
+      "httpStatus": null,
+      "finalUrl": "https://www.mgmotor.at/modelle/mg-zs",
+      "contentType": null,
+      "elapsedMs": 291,
+      "dryrunFailureReason": "network_unavailable",
+      "dryrunRecommendedStrategy": "retry_network_or_proxy",
+      "fetchStatus": "tls_handshake_failed",
+      "officialPriceSignalStatus": "tls_handshake_failed",
+      "recommendedAction": "try_official_alternative_url_or_proxy",
+      "dryrunCandidateEligible": false,
+      "officialIngestEligible": false,
+      "signalSummary": {},
+      "heuristics": {},
+      "error": "HTTPSConnectionPool(host='www.mgmotor.at', port=443): Max retries exceeded with url: /modelle/mg-zs (Caused by SSLError(SSLEOFError(8, '[SSL: UNEXPECTED_EOF_WHILE_READING] EOF occurred in violation of protocol (_ssl.c:1000)')))"
+    },
+    {
+      "countryCode": "at",
+      "sourceCode": "mg_zs_at_draft_scrapling",
+      "brand": "MG",
+      "candidateKind": "candidate_url",
+      "candidateUrl": "https://www.mgmotor.eu/de-AT/configurator/zs-hev",
+      "host": "mgmotor.eu",
+      "httpStatus": 200,
+      "finalUrl": "https://www.mgmotor.eu/de-AT/configurator/zs-hev",
+      "contentType": "text/html; charset=UTF-8",
+      "elapsedMs": 1150,
+      "dryrunFailureReason": "network_unavailable",
+      "dryrunRecommendedStrategy": "retry_network_or_proxy",
+      "fetchStatus": "fetchable",
+      "officialPriceSignalStatus": "campaign_or_net_price_signal",
+      "recommendedAction": "route_to_campaign_or_net_price_pipeline_not_base_msrp",
+      "dryrunCandidateEligible": false,
+      "officialIngestEligible": false,
+      "reason": "Official page includes price-like values, but promotion, bonus, subsidy, cash, or leasing context means it must not be treated as base MSRP.",
+      "nonMsrpSignalType": "campaign_or_net_price",
+      "nonMsrpKeywordHits": [
+        "aktionspreis",
+        "eintauschbonus",
+        "leasingbonus",
+        "versicherungsbonus"
+      ],
+      "signalSummary": {
+        "title": "MG ZS Hybrid+ | MG Motor Austria",
+        "msrpKeywordHits": [
+          "inkl. mwst"
+        ],
+        "financeKeywordHits": [
+          "leasing",
+          "finance",
+          "financing",
+          "monthly",
+          "pro monat",
+          "monatlich",
+          "rate"
+        ],
+        "configuratorKeywordHits": [
+          "configurator",
+          "konfigurator"
+        ],
+        "jsonKeywordHits": [
+          "offers"
+        ],
+        "priceLikeSamples": [
+          "1.000",
+          "2.000",
+          "150.000",
+          "18990.00",
+          "18.990,00",
+          "5.697,00",
+          "10.070,35",
+          "13.293,00",
+          "22.090,13",
+          "18490.00"
+        ],
+        "ldJsonScriptCount": 1,
+        "candidateLinks": [
+          "/apple-touch-icon.png?v=M4Kr3JJ98d",
+          "https://www.mgmotor.eu/de-AT/configurator/zs-hev",
+          "https://www.mgmotor.bg/configurator/zs-hev",
+          "https://www.mgmotor.mk/configurator/zs-hev",
+          "https://www.mgmotor.rs/configurator/zs-hev",
+          "https://www.mgmotor.si/configurator/zs-hev",
+          "https://www.mgmotor.hr/configurator/zs-hev",
+          "https://www.mgmotor.lv/configurator/zs-hev",
+          "https://www.mgmotor.ee/configurator/zs-hev",
+          "https://www.mgmotor.pl/configurator/zs-hev",
+          "https://www.mgmotor.lt/configurator/zs-hev",
+          "https://www.mgmotor.hu/configurator/zs-hev",
+          "https://www.mgmotor.ch/de/configurator/zs-hev",
+          "https://www.mgmotor.ch/fr/configurator/zs-hev",
+          "https://www.mgmotor.ch/it/configurator/zs-hev",
+          "https://www.mgmotor.fi/configurator/zs-hev",
+          "https://www.mgmotor.pt/configurator/zs-hev",
+          "https://www.mgmotor.eu/es-ES/configurator/zs-hev",
+          "https://www.mgmotor.it/configurator/zs-hev",
+          "https://www.mgmotor.is/configurator/zs-hev"
+        ],
+        "headings": [
+          "Elektrisch",
+          "Plug-in-Hybrid",
+          "Hybrid",
+          "Benzin",
+          "To configure a car, please select your country",
+          "To book a test drive, please select your country",
+          "Angebot anfordern",
+          "MG ZS Hybrid+"
+        ]
+      },
+      "heuristics": {
+        "pageSemantics": "mixed",
+        "recommendedExtractor": "playwright",
+        "powertrainGranularity": "engine_level",
+        "confidence": 0.82,
+        "shouldUseLlmInPipeline": true,
+        "selectorHints": {
+          "json_script_selector": "script[type='application/ld+json']"
+        },
+        "risks": [
+          "Finance wording may contaminate MSRP extraction with monthly offers",
+          "Dynamic configurator flows usually need consent handling and waits"
+        ],
+        "recommendation": "Start with Playwright because the page looks like a dynamic configurator rather than a static MSRP listing. The page appears to mix MSRP and finance messaging, so guard against monthly-payment contamination. Add LLM only for semantic disambiguation, selector hints, or failure triage."
+      }
+    },
+    {
+      "countryCode": "at",
+      "sourceCode": "tesla_model_y_at_draft_scrapling",
+      "brand": "TESLA",
+      "candidateKind": "registered_source",
+      "candidateUrl": "https://www.tesla.com/de_at/modely",
+      "host": "tesla.com",
+      "httpStatus": 403,
+      "finalUrl": "https://www.tesla.com/de_at/modely",
+      "contentType": "text/html",
+      "elapsedMs": 305,
+      "dryrunFailureReason": "network_unavailable",
+      "dryrunRecommendedStrategy": "retry_network_or_proxy",
+      "fetchStatus": "anti_bot_blocked",
+      "officialPriceSignalStatus": "access_blocked",
+      "recommendedAction": "official_proxy_or_configurator_api",
+      "dryrunCandidateEligible": false,
+      "officialIngestEligible": false,
+      "signalSummary": {},
+      "heuristics": {}
+    },
+    {
+      "countryCode": "at",
+      "sourceCode": "peugeot_3008_at_draft_scrapling",
+      "brand": "PEUGEOT",
+      "candidateKind": "registered_source",
+      "candidateUrl": "https://www.peugeot.at/unsere-modelle/neuer-3008.html",
+      "host": "peugeot.at",
+      "httpStatus": 403,
+      "finalUrl": "https://www.peugeot.at/unsere-modelle/neuer-3008.html",
+      "contentType": "text/html",
+      "elapsedMs": 661,
+      "dryrunFailureReason": "network_unavailable",
+      "dryrunRecommendedStrategy": "retry_network_or_proxy",
+      "fetchStatus": "anti_bot_blocked",
+      "officialPriceSignalStatus": "access_blocked",
+      "recommendedAction": "official_proxy_or_configurator_api",
+      "dryrunCandidateEligible": false,
+      "officialIngestEligible": false,
+      "signalSummary": {},
+      "heuristics": {}
+    },
+    {
+      "countryCode": "at",
+      "sourceCode": "skoda_elroq_at_draft_scrapling",
+      "brand": "SKODA",
+      "candidateKind": "registered_source",
+      "candidateUrl": "https://www.skoda.at/elroq/elroq/overlay-elroq-preisliste",
+      "host": "skoda.at",
+      "httpStatus": 200,
+      "finalUrl": "https://www.skoda.at/elroq/elroq/overlay-elroq-preisliste",
+      "contentType": "text/html; charset=utf-8",
+      "elapsedMs": 378,
+      "dryrunFailureReason": "network_unavailable",
+      "dryrunRecommendedStrategy": "retry_network_or_proxy",
+      "fetchStatus": "fetchable",
+      "officialPriceSignalStatus": "price_signal_present",
+      "recommendedAction": "repair_selector_and_run_dryrun",
+      "dryrunCandidateEligible": true,
+      "officialIngestEligible": false,
+      "reason": "Official page has price-list cues plus MSRP/VAT semantics; validate selector scope through dryrun before ingest.",
+      "signalSummary": {
+        "title": "Škoda Elroq Preise » aktuelle Preislisten",
+        "msrpKeywordHits": [
+          "inkl. mwst"
+        ],
+        "financeKeywordHits": [
+          "leasing",
+          "pro monat",
+          "monatlich",
+          "rate",
+          "raten"
+        ],
+        "configuratorKeywordHits": [
+          "configurator",
+          "konfigurator"
+        ],
+        "jsonKeywordHits": [],
+        "priceLikeSamples": [
+          "48.740,00",
+          "42.190,00",
+          "46.140,00",
+          "255,255,255",
+          "150.000",
+          "100.000",
+          "0.237"
+        ],
+        "ldJsonScriptCount": 0,
+        "candidateLinks": [
+          "/dam/files/5a3e0b5db36f0fa07261de9d1ec3fd20bd1f4dd6/0bca657b644af6fa92fe8b61d3301dc2/e8314605-d3fe-465a-9845-aa904346c64d/appstorebadge",
+          "https://play.google.com/store/apps/details?id=cz.skodaauto.myskoda&amp;hl=en_US",
+          "https://apps.apple.com/de/app/my%C5%A1koda/id1632202810"
+        ],
+        "headings": [
+          "Preisliste"
+        ]
+      },
+      "heuristics": {
+        "pageSemantics": "mixed",
+        "recommendedExtractor": "playwright",
+        "powertrainGranularity": "trim_level",
+        "confidence": 0.74,
+        "shouldUseLlmInPipeline": true,
+        "selectorHints": {},
+        "risks": [
+          "Finance wording may contaminate MSRP extraction with monthly offers",
+          "Dynamic configurator flows usually need consent handling and waits"
+        ],
+        "recommendation": "Start with Playwright because the page looks like a dynamic configurator rather than a static MSRP listing. The page appears to mix MSRP and finance messaging, so guard against monthly-payment contamination. Add LLM only for semantic disambiguation, selector hints, or failure triage."
+      }
+    },
+    {
+      "countryCode": "at",
+      "sourceCode": "skoda_enyaq_at_draft_scrapling",
+      "brand": "SKODA",
+      "candidateKind": "registered_source",
+      "candidateUrl": "https://www.skoda.at/enyaq/enyaq/overlay-enyaq-preisliste",
+      "host": "skoda.at",
+      "httpStatus": 200,
+      "finalUrl": "https://www.skoda.at/enyaq/enyaq/overlay-enyaq-preisliste",
+      "contentType": "text/html; charset=utf-8",
+      "elapsedMs": 175,
+      "dryrunFailureReason": "network_unavailable",
+      "dryrunRecommendedStrategy": "retry_network_or_proxy",
+      "fetchStatus": "fetchable",
+      "officialPriceSignalStatus": "price_signal_present",
+      "recommendedAction": "repair_selector_and_run_dryrun",
+      "dryrunCandidateEligible": true,
+      "officialIngestEligible": false,
+      "reason": "Official page has price-list cues plus MSRP/VAT semantics; validate selector scope through dryrun before ingest.",
+      "signalSummary": {
+        "title": "Škoda Enyaq Preise » aktuelle Preislisten",
+        "msrpKeywordHits": [
+          "inkl. mwst"
+        ],
+        "financeKeywordHits": [
+          "leasing",
+          "pro monat",
+          "monatlich",
+          "rate",
+          "raten"
+        ],
+        "configuratorKeywordHits": [
+          "configurator",
+          "konfigurator"
+        ],
+        "jsonKeywordHits": [],
+        "priceLikeSamples": [
+          "43.980,00",
+          "255,255,255",
+          "0.237",
+          "150.000",
+          "100.000",
+          "160.000"
+        ],
+        "ldJsonScriptCount": 0,
+        "candidateLinks": [
+          "/dam/files/5a3e0b5db36f0fa07261de9d1ec3fd20bd1f4dd6/0bca657b644af6fa92fe8b61d3301dc2/e8314605-d3fe-465a-9845-aa904346c64d/appstorebadge",
+          "https://play.google.com/store/apps/details?id=cz.skodaauto.myskoda&amp;hl=en_US",
+          "https://apps.apple.com/de/app/my%C5%A1koda/id1632202810"
+        ],
+        "headings": [
+          "Preisliste"
+        ]
+      },
+      "heuristics": {
+        "pageSemantics": "mixed",
+        "recommendedExtractor": "playwright",
+        "powertrainGranularity": "trim_level",
+        "confidence": 0.74,
+        "shouldUseLlmInPipeline": true,
+        "selectorHints": {},
+        "risks": [
+          "Finance wording may contaminate MSRP extraction with monthly offers",
+          "Dynamic configurator flows usually need consent handling and waits"
+        ],
+        "recommendation": "Start with Playwright because the page looks like a dynamic configurator rather than a static MSRP listing. The page appears to mix MSRP and finance messaging, so guard against monthly-payment contamination. Add LLM only for semantic disambiguation, selector hints, or failure triage."
+      }
+    },
+    {
+      "countryCode": "at",
+      "sourceCode": "skoda_kamiq_at_draft_scrapling",
+      "brand": "SKODA",
+      "candidateKind": "registered_source",
+      "candidateUrl": "https://www.skoda.at/kamiq/kamiq/overlay-kamiq-preise-technische-daten",
+      "host": "skoda.at",
+      "httpStatus": 200,
+      "finalUrl": "https://www.skoda.at/kamiq/kamiq/overlay-kamiq-preise-technische-daten",
+      "contentType": "text/html; charset=utf-8",
+      "elapsedMs": 153,
+      "dryrunFailureReason": "network_unavailable",
+      "dryrunRecommendedStrategy": "retry_network_or_proxy",
+      "fetchStatus": "fetchable",
+      "officialPriceSignalStatus": "price_signal_present",
+      "recommendedAction": "repair_selector_and_run_dryrun",
+      "dryrunCandidateEligible": true,
+      "officialIngestEligible": false,
+      "reason": "Official page has price-list cues plus MSRP/VAT semantics; validate selector scope through dryrun before ingest.",
+      "signalSummary": {
+        "title": "Škoda Kamiq Preise & technische Daten » alle Infos | Škoda Österreich",
+        "msrpKeywordHits": [
+          "inkl. mwst"
+        ],
+        "financeKeywordHits": [
+          "leasing",
+          "pro monat",
+          "monatlich",
+          "rate",
+          "raten"
+        ],
+        "configuratorKeywordHits": [
+          "configurator",
+          "konfigurator"
+        ],
+        "jsonKeywordHits": [],
+        "priceLikeSamples": [
+          "30.670,00",
+          "28.570,00",
+          "27.590,00",
+          "255,255,255",
+          "0.237",
+          "150.000",
+          "100.000"
+        ],
+        "ldJsonScriptCount": 0,
+        "candidateLinks": [
+          "/dam/files/5a3e0b5db36f0fa07261de9d1ec3fd20bd1f4dd6/0bca657b644af6fa92fe8b61d3301dc2/e8314605-d3fe-465a-9845-aa904346c64d/appstorebadge",
+          "https://play.google.com/store/apps/details?id=cz.skodaauto.myskoda&amp;hl=en_US",
+          "https://apps.apple.com/de/app/my%C5%A1koda/id1632202810"
+        ],
+        "headings": [
+          "Preisliste"
+        ]
+      },
+      "heuristics": {
+        "pageSemantics": "mixed",
+        "recommendedExtractor": "playwright",
+        "powertrainGranularity": "trim_level",
+        "confidence": 0.74,
+        "shouldUseLlmInPipeline": true,
+        "selectorHints": {},
+        "risks": [
+          "Finance wording may contaminate MSRP extraction with monthly offers",
+          "Dynamic configurator flows usually need consent handling and waits"
+        ],
+        "recommendation": "Start with Playwright because the page looks like a dynamic configurator rather than a static MSRP listing. The page appears to mix MSRP and finance messaging, so guard against monthly-payment contamination. Add LLM only for semantic disambiguation, selector hints, or failure triage."
+      }
+    },
+    {
+      "countryCode": "at",
+      "sourceCode": "skoda_karoq_at_draft_scrapling",
+      "brand": "SKODA",
+      "candidateKind": "registered_source",
+      "candidateUrl": "https://www.skoda.at/karoq/karoq/overlay-karoq-preise-technische-daten",
+      "host": "skoda.at",
+      "httpStatus": 200,
+      "finalUrl": "https://www.skoda.at/karoq/karoq/overlay-karoq-preise-technische-daten",
+      "contentType": "text/html; charset=utf-8",
+      "elapsedMs": 175,
+      "dryrunFailureReason": "network_unavailable",
+      "dryrunRecommendedStrategy": "retry_network_or_proxy",
+      "fetchStatus": "fetchable",
+      "officialPriceSignalStatus": "price_signal_present",
+      "recommendedAction": "repair_selector_and_run_dryrun",
+      "dryrunCandidateEligible": true,
+      "officialIngestEligible": false,
+      "reason": "Official page has price-list cues plus MSRP/VAT semantics; validate selector scope through dryrun before ingest.",
+      "signalSummary": {
+        "title": "Škoda Karoq Preise » technische Daten & Co. | Škoda Österreich",
+        "msrpKeywordHits": [
+          "inkl. mwst"
+        ],
+        "financeKeywordHits": [
+          "leasing",
+          "pro monat",
+          "monatlich",
+          "rate",
+          "raten"
+        ],
+        "configuratorKeywordHits": [
+          "configurator",
+          "konfigurator"
+        ],
+        "jsonKeywordHits": [],
+        "priceLikeSamples": [
+          "46.487,00",
+          "45.206,00",
+          "45.039,00",
+          "55.509,00",
+          "53.340,00",
+          "48.550,00",
+          "255,255,255",
+          "0.237",
+          "150.000",
+          "100.000"
+        ],
+        "ldJsonScriptCount": 0,
+        "candidateLinks": [
+          "/dam/files/5a3e0b5db36f0fa07261de9d1ec3fd20bd1f4dd6/0bca657b644af6fa92fe8b61d3301dc2/e8314605-d3fe-465a-9845-aa904346c64d/appstorebadge",
+          "https://play.google.com/store/apps/details?id=cz.skodaauto.myskoda&amp;hl=en_US",
+          "https://apps.apple.com/de/app/my%C5%A1koda/id1632202810"
+        ],
+        "headings": [
+          "Preisliste"
+        ]
+      },
+      "heuristics": {
+        "pageSemantics": "mixed",
+        "recommendedExtractor": "playwright",
+        "powertrainGranularity": "trim_level",
+        "confidence": 0.74,
+        "shouldUseLlmInPipeline": true,
+        "selectorHints": {},
+        "risks": [
+          "Finance wording may contaminate MSRP extraction with monthly offers",
+          "Dynamic configurator flows usually need consent handling and waits"
+        ],
+        "recommendation": "Start with Playwright because the page looks like a dynamic configurator rather than a static MSRP listing. The page appears to mix MSRP and finance messaging, so guard against monthly-payment contamination. Add LLM only for semantic disambiguation, selector hints, or failure triage."
+      }
+    },
+    {
+      "countryCode": "at",
+      "sourceCode": "skoda_kodiaq_at_draft_scrapling",
+      "brand": "SKODA",
+      "candidateKind": "registered_source",
+      "candidateUrl": "https://www.skoda.at/kodiaq/kodiaq/overlay-kodiaq-preise-technische-daten",
+      "host": "skoda.at",
+      "httpStatus": 200,
+      "finalUrl": "https://www.skoda.at/kodiaq/kodiaq/overlay-kodiaq-preise-technische-daten",
+      "contentType": "text/html; charset=utf-8",
+      "elapsedMs": 169,
+      "dryrunFailureReason": "network_unavailable",
+      "dryrunRecommendedStrategy": "retry_network_or_proxy",
+      "fetchStatus": "fetchable",
+      "officialPriceSignalStatus": "price_signal_present",
+      "recommendedAction": "repair_selector_and_run_dryrun",
+      "dryrunCandidateEligible": true,
+      "officialIngestEligible": false,
+      "reason": "Official page has price-list cues plus MSRP/VAT semantics; validate selector scope through dryrun before ingest.",
+      "signalSummary": {
+        "title": "Škoda Kodiaq Preise » alle Informationen | Škoda Österreich",
+        "msrpKeywordHits": [
+          "inkl. mwst"
+        ],
+        "financeKeywordHits": [
+          "leasing",
+          "pro monat",
+          "monatlich",
+          "rate",
+          "raten"
+        ],
+        "configuratorKeywordHits": [
+          "configurator",
+          "konfigurator"
+        ],
+        "jsonKeywordHits": [],
+        "priceLikeSamples": [
+          "59.290,00",
+          "61.550,00",
+          "56.150,00",
+          "52.890,00",
+          "57.390,00",
+          "255,255,255",
+          "0.237",
+          "150.000",
+          "100.000"
+        ],
+        "ldJsonScriptCount": 0,
+        "candidateLinks": [
+          "/dam/files/5a3e0b5db36f0fa07261de9d1ec3fd20bd1f4dd6/0bca657b644af6fa92fe8b61d3301dc2/e8314605-d3fe-465a-9845-aa904346c64d/appstorebadge",
+          "https://play.google.com/store/apps/details?id=cz.skodaauto.myskoda&amp;hl=en_US",
+          "https://apps.apple.com/de/app/my%C5%A1koda/id1632202810"
+        ],
+        "headings": [
+          "Preisliste"
+        ]
+      },
+      "heuristics": {
+        "pageSemantics": "mixed",
+        "recommendedExtractor": "playwright",
+        "powertrainGranularity": "trim_level",
+        "confidence": 0.74,
+        "shouldUseLlmInPipeline": true,
+        "selectorHints": {},
+        "risks": [
+          "Finance wording may contaminate MSRP extraction with monthly offers",
+          "Dynamic configurator flows usually need consent handling and waits"
+        ],
+        "recommendation": "Start with Playwright because the page looks like a dynamic configurator rather than a static MSRP listing. The page appears to mix MSRP and finance messaging, so guard against monthly-payment contamination. Add LLM only for semantic disambiguation, selector hints, or failure triage."
+      }
+    },
+    {
+      "countryCode": "at",
+      "sourceCode": "volkswagen_id_4_at_draft_scrapling",
+      "brand": "VOLKSWAGEN",
+      "candidateKind": "registered_source",
+      "candidateUrl": "https://www.volkswagen.at/id4/id4",
+      "host": "volkswagen.at",
+      "httpStatus": 200,
+      "finalUrl": "https://www.volkswagen.at/id4/id4",
+      "contentType": "text/html; charset=utf-8",
+      "elapsedMs": 514,
+      "dryrunFailureReason": "network_unavailable",
+      "dryrunRecommendedStrategy": "retry_network_or_proxy",
+      "fetchStatus": "fetchable",
+      "officialPriceSignalStatus": "campaign_or_net_price_signal",
+      "recommendedAction": "route_to_campaign_or_net_price_pipeline_not_base_msrp",
+      "dryrunCandidateEligible": false,
+      "officialIngestEligible": false,
+      "reason": "Official page includes price-like values, but promotion, bonus, subsidy, cash, or leasing context means it must not be treated as base MSRP.",
+      "nonMsrpSignalType": "campaign_or_net_price",
+      "nonMsrpKeywordHits": [
+        "aktionspreis",
+        "eintauschbonus"
+      ],
+      "signalSummary": {
+        "title": "VW ID.4 » Modell entdecken | Volkswagen Österreich",
+        "msrpKeywordHits": [
+          "inkl. mwst"
+        ],
+        "financeKeywordHits": [
+          "rate"
+        ],
+        "configuratorKeywordHits": [
+          "konfigurator"
+        ],
+        "jsonKeywordHits": [
+          "application/ld+json",
+          "offers",
+          "aggregateoffer"
+        ],
+        "priceLikeSamples": [
+          "223,228,232",
+          "255,255,255",
+          "0 100",
+          "4.165",
+          "76,199,244",
+          "42.490,00",
+          "33.290,00",
+          "1.000",
+          "8.200",
+          "1.575"
+        ],
+        "ldJsonScriptCount": 2,
+        "candidateLinks": [
+          "/assets/apple-touch-icon.png",
+          "https://www.volkswagen.de/de/modelle/id4.html",
+          "https://www.volkswagen.ch/de/modelle/id4.html",
+          "/modelle/uebersicht",
+          "/modelle/sondermodelle/business",
+          "/modelle/technologie/assistenzsysteme/parkassistenten/park-assist-plus",
+          "/modelle/technologie/assistenzsysteme/fahrassistent-travel-assist",
+          "/modelle/technologie/assistenzsysteme/emergency-assist",
+          "/id4/id4/wellness-in-car-app",
+          "/modelle/sondermodelle/business#ID.4",
+          "/id4/id4/volkswagen-app",
+          "/id4/id4/android-auto-und-apple-carplay",
+          "https://konfigurator.volkswagen.at/cc-at/de_AT_VW22/V/auv/444?variant=Pure",
+          "https://konfigurator.volkswagen.at/cc-at/de_AT_VW22/V/auv/444?variant=Pro",
+          "https://konfigurator.volkswagen.at/cc-at/de_AT_VW22/V/auv/444?variant=Pure%20Bus.",
+          "https://konfigurator.volkswagen.at/cc-at/de_AT_VW22/V/auv/444?variant=Pro%20Bus.",
+          "https://konfigurator.volkswagen.at/cc-at/de_AT_VW22/V/auv/444?variant=GTX%20Bus.",
+          "https://konfigurator.volkswagen.at/cc-at/de_AT_VW22/V/auv/444?variant=GTX",
+          "/modelle/fahrzeugtypen/elektro-suv",
+          "/modelle/sachbezug-bei-dienstwagen"
+        ],
+        "headings": [
+          "Der ID.4",
+          "Vollelektrisch. Vielseitig. Und sehr viel Platz.",
+          "Kraftvoll wie ein SUV, nachhaltig wie ein ID.",
+          "Entdecke den ID.4",
+          "Details zum Exterieur",
+          "Details zum Design-Paket „Black Style“",
+          "Details zum Interieur",
+          "Details zur Software",
+          "Details zu Laden und Reichweite",
+          "Details zum Infotainment",
+          "Details zu Keyless Access",
+          "Details zum Getriebe"
+        ]
+      },
+      "heuristics": {
+        "pageSemantics": "mixed",
+        "recommendedExtractor": "playwright",
+        "powertrainGranularity": "trim_level",
+        "confidence": 0.82,
+        "shouldUseLlmInPipeline": true,
+        "selectorHints": {
+          "json_script_selector": "script[type='application/ld+json']"
+        },
+        "risks": [
+          "Finance wording may contaminate MSRP extraction with monthly offers",
+          "Dynamic configurator flows usually need consent handling and waits"
+        ],
+        "recommendation": "Start with Playwright because the page looks like a dynamic configurator rather than a static MSRP listing. The page appears to mix MSRP and finance messaging, so guard against monthly-payment contamination. Add LLM only for semantic disambiguation, selector hints, or failure triage."
+      }
+    },
+    {
+      "countryCode": "at",
+      "sourceCode": "volkswagen_t_cross_at_draft_scrapling",
+      "brand": "VOLKSWAGEN",
+      "candidateKind": "registered_source",
+      "candidateUrl": "https://www.volkswagen.at/t-cross/t-cross",
+      "host": "volkswagen.at",
+      "httpStatus": 200,
+      "finalUrl": "https://www.volkswagen.at/t-cross/t-cross",
+      "contentType": "text/html; charset=utf-8",
+      "elapsedMs": 436,
+      "dryrunFailureReason": "network_unavailable",
+      "dryrunRecommendedStrategy": "retry_network_or_proxy",
+      "fetchStatus": "fetchable",
+      "officialPriceSignalStatus": "campaign_or_net_price_signal",
+      "recommendedAction": "route_to_campaign_or_net_price_pipeline_not_base_msrp",
+      "dryrunCandidateEligible": false,
+      "officialIngestEligible": false,
+      "reason": "Official page includes price-like values, but promotion, bonus, subsidy, cash, or leasing context means it must not be treated as base MSRP.",
+      "nonMsrpSignalType": "campaign_or_net_price",
+      "nonMsrpKeywordHits": [
+        "aktionspreis",
+        "eintauschbonus"
+      ],
+      "signalSummary": {
+        "title": "VW T-Cross » Modell entdecken | Preis inkl. Boni ab € 18.190,-",
+        "msrpKeywordHits": [
+          "inkl. mwst"
+        ],
+        "financeKeywordHits": [
+          "rate"
+        ],
+        "configuratorKeywordHits": [
+          "konfigurator"
+        ],
+        "jsonKeywordHits": [
+          "application/ld+json",
+          "offers",
+          "aggregateoffer"
+        ],
+        "priceLikeSamples": [
+          "18.190",
+          "255,255,255",
+          "223,228,232",
+          "0 100",
+          "4.165",
+          "76,199,244",
+          "23.190,00",
+          "18.190,00",
+          "1.200",
+          "1.281"
+        ],
+        "ldJsonScriptCount": 2,
+        "candidateLinks": [
+          "/assets/apple-touch-icon.png",
+          "https://www.volkswagen.de/de/modelle/der-t-cross.html",
+          "/modelle/uebersicht",
+          "/modelle/sondermodelle",
+          "/t-cross/t-cross/volkswagen-app",
+          "/t-cross/t-cross/android-auto-und-apple-carplay",
+          "/modelle/fahrzeugtypen/suv",
+          "/modelle/technologie/antriebsarten/benzinmotor-tsi",
+          "/modelle/technologie/assistenzsysteme",
+          "/modelle/technologie/assistenzsysteme/automatische-distanzregelung-acc",
+          "/modelle/technologie/assistenzsysteme/fahrassistent-travel-assist",
+          "/modelle/technologie/assistenzsysteme/spurhalteassistent-lane-assist",
+          "/modelle/technologie/automatikgetriebe/dsg",
+          "/modelle/technologie/digital-cockpit",
+          "/modelle/technologie/navigationssystem",
+          "/modelle/technologie/assistenzsysteme/muedigkeitserkennung",
+          "/modelle/technologie/assistenzsysteme/proaktiver-insassenschutz",
+          "/modelle/technologie/assistenzsysteme/notbremsassistent-front-assist",
+          "/modelle/sondermodelle/friends",
+          "/modelle/technologie/assistenzsysteme/rueckfahrkamera-rear-view"
+        ],
+        "headings": [
+          "Der T-Cross",
+          "Grenzenlos kompakt. Wendig, flexibel, vielseitig. Entdecke den T‑Cross.",
+          "Details zum Exterieur",
+          "Details zum Interieur",
+          "Details zum Design-Paket \"Style\"",
+          "Details zum Design-Paket \"Black Style\"",
+          "Details zu den Ausstattungslinien",
+          "Details zu den Sitzen",
+          "Details zum Raumkonzept",
+          "Details zu den Einstiegsleisten und Pedalen aus Edelstahl",
+          "Details zur Ambientebeleuchtung",
+          "Details zur Klimaanlage"
+        ]
+      },
+      "heuristics": {
+        "pageSemantics": "mixed",
+        "recommendedExtractor": "playwright",
+        "powertrainGranularity": "trim_level",
+        "confidence": 0.82,
+        "shouldUseLlmInPipeline": true,
+        "selectorHints": {
+          "json_script_selector": "script[type='application/ld+json']"
+        },
+        "risks": [
+          "Finance wording may contaminate MSRP extraction with monthly offers",
+          "Dynamic configurator flows usually need consent handling and waits"
+        ],
+        "recommendation": "Start with Playwright because the page looks like a dynamic configurator rather than a static MSRP listing. The page appears to mix MSRP and finance messaging, so guard against monthly-payment contamination. Add LLM only for semantic disambiguation, selector hints, or failure triage."
+      }
+    },
+    {
+      "countryCode": "at",
+      "sourceCode": "seat_arona_at_draft_scrapling",
+      "brand": "SEAT",
+      "candidateKind": "registered_source",
+      "candidateUrl": "https://www.seat.at/angebote-und-produkte/kataloge-preislisten/arona",
+      "host": "seat.at",
+      "httpStatus": 200,
+      "finalUrl": "https://www.seat.at/angebote-und-produkte/kataloge-preislisten/arona",
+      "contentType": "text/html; charset=utf-8",
+      "elapsedMs": 410,
+      "dryrunFailureReason": "no_observation_extracted",
+      "dryrunRecommendedStrategy": "diagnose_with_msrp_page_analyzer",
+      "fetchStatus": "fetchable",
+      "officialPriceSignalStatus": "price_signal_present",
+      "recommendedAction": "repair_selector_and_run_dryrun",
+      "dryrunCandidateEligible": true,
+      "officialIngestEligible": false,
+      "reason": "Official page has price-list cues plus MSRP/VAT semantics; validate selector scope through dryrun before ingest.",
+      "signalSummary": {
+        "title": "Kataloge und Preislisten für den SEAT Arona",
+        "msrpKeywordHits": [
+          "inkl. mwst"
+        ],
+        "financeKeywordHits": [
+          "leasing",
+          "pro monat"
+        ],
+        "configuratorKeywordHits": [
+          "configurator"
+        ],
+        "jsonKeywordHits": [],
+        "priceLikeSamples": [
+          "0.165",
+          "255 255 255",
+          "1 100",
+          "13.990",
+          "16.990",
+          "19.990",
+          "20.990",
+          "255,255,255",
+          "1.500",
+          "1.000"
+        ],
+        "ldJsonScriptCount": 0,
+        "candidateLinks": [
+          "/suv-modelle/suv-modelle",
+          "/seat-for-business/modelle-bis-126g-co2-km",
+          "/marke-und-erlebnis/vorgaengermodelle/ueberblick"
+        ],
+        "headings": [
+          "Kataloge & Preislisten für den SEAT Arona",
+          "SEAT Arona"
+        ]
+      },
+      "heuristics": {
+        "pageSemantics": "mixed",
+        "recommendedExtractor": "playwright",
+        "powertrainGranularity": "trim_level",
+        "confidence": 0.74,
+        "shouldUseLlmInPipeline": true,
+        "selectorHints": {},
+        "risks": [
+          "Finance wording may contaminate MSRP extraction with monthly offers",
+          "Dynamic configurator flows usually need consent handling and waits"
+        ],
+        "recommendation": "Start with Playwright because the page looks like a dynamic configurator rather than a static MSRP listing. The page appears to mix MSRP and finance messaging, so guard against monthly-payment contamination. Add LLM only for semantic disambiguation, selector hints, or failure triage."
+      }
+    },
+    {
+      "countryCode": "at",
+      "sourceCode": "seat_ateca_at_draft_scrapling",
+      "brand": "SEAT",
+      "candidateKind": "registered_source",
+      "candidateUrl": "https://www.seat.at/angebote-und-produkte/kataloge-preislisten/ateca",
+      "host": "seat.at",
+      "httpStatus": 200,
+      "finalUrl": "https://www.seat.at/angebote-und-produkte/kataloge-preislisten/ateca",
+      "contentType": "text/html; charset=utf-8",
+      "elapsedMs": 183,
+      "dryrunFailureReason": "no_observation_extracted",
+      "dryrunRecommendedStrategy": "diagnose_with_msrp_page_analyzer",
+      "fetchStatus": "fetchable",
+      "officialPriceSignalStatus": "price_signal_present",
+      "recommendedAction": "repair_selector_and_run_dryrun",
+      "dryrunCandidateEligible": true,
+      "officialIngestEligible": false,
+      "reason": "Official page has price-list cues plus MSRP/VAT semantics; validate selector scope through dryrun before ingest.",
+      "signalSummary": {
+        "title": "Kataloge für den SEAT Ateca",
+        "msrpKeywordHits": [
+          "inkl. mwst"
+        ],
+        "financeKeywordHits": [
+          "leasing",
+          "pro monat"
+        ],
+        "configuratorKeywordHits": [
+          "configurator"
+        ],
+        "jsonKeywordHits": [],
+        "priceLikeSamples": [
+          "0.165",
+          "255 255 255",
+          "1 100",
+          "13.990",
+          "16.990",
+          "19.990",
+          "20.990",
+          "255,255,255",
+          "1.500",
+          "1.000"
+        ],
+        "ldJsonScriptCount": 0,
+        "candidateLinks": [
+          "/suv-modelle/suv-modelle",
+          "/seat-for-business/modelle-bis-126g-co2-km",
+          "/marke-und-erlebnis/vorgaengermodelle/ueberblick"
+        ],
+        "headings": [
+          "Katalog für den SEAT Ateca",
+          "SEAT Ateca"
+        ]
+      },
+      "heuristics": {
+        "pageSemantics": "mixed",
+        "recommendedExtractor": "playwright",
+        "powertrainGranularity": "trim_level",
+        "confidence": 0.74,
+        "shouldUseLlmInPipeline": true,
+        "selectorHints": {},
+        "risks": [
+          "Finance wording may contaminate MSRP extraction with monthly offers",
+          "Dynamic configurator flows usually need consent handling and waits"
+        ],
+        "recommendation": "Start with Playwright because the page looks like a dynamic configurator rather than a static MSRP listing. The page appears to mix MSRP and finance messaging, so guard against monthly-payment contamination. Add LLM only for semantic disambiguation, selector hints, or failure triage."
+      }
+    },
+    {
+      "countryCode": "at",
+      "sourceCode": "toyota_yaris_cross_at_draft_scrapling",
+      "brand": "TOYOTA",
+      "candidateKind": "registered_source",
+      "candidateUrl": "https://www.toyota.at/neuwagen/brochures",
+      "host": "toyota.at",
+      "httpStatus": 200,
+      "finalUrl": "https://www.toyota.at/neuwagen/brochures",
+      "contentType": "text/html;charset=utf-8",
+      "elapsedMs": 557,
+      "dryrunFailureReason": "no_observation_extracted",
+      "dryrunRecommendedStrategy": "diagnose_with_msrp_page_analyzer",
+      "fetchStatus": "fetchable",
+      "officialPriceSignalStatus": "price_signal_present",
+      "recommendedAction": "repair_selector_and_run_dryrun",
+      "dryrunCandidateEligible": true,
+      "officialIngestEligible": false,
+      "reason": "Official page has price-list cues plus MSRP/VAT semantics; validate selector scope through dryrun before ingest.",
+      "signalSummary": {
+        "title": "TOYOTA Prospekte und Preislisten - Toyota AT",
+        "msrpKeywordHits": [
+          "unverbindliche preisempfehlung"
+        ],
+        "financeKeywordHits": [
+          "leasing",
+          "finance",
+          "rate"
+        ],
+        "configuratorKeywordHits": [
+          "konfigurator"
+        ],
+        "jsonKeywordHits": [],
+        "priceLikeSamples": [
+          "0.174"
+        ],
+        "ldJsonScriptCount": 3,
+        "candidateLinks": [
+          "https://nl.toyota.be/modellen/brochures",
+          "/etc.clientlibs/dxp-frontend-core/clientlibs/clientlib-toyota/resources/images/favicons/apple-touch-icon.png",
+          "https://www.toyota.at/elektromobilitat/alle-e-modelle",
+          "https://www.sarii-app.toyota/takata-recall-checker.html",
+          "https://www.toyota.at/service/mytoyota/mytoyota-app",
+          "https://www.toyota.at/apps/customerportal"
+        ],
+        "headings": [
+          "TOYOTA DOWNLOADS - PROSPEKTE"
+        ]
+      },
+      "heuristics": {
+        "pageSemantics": "mixed",
+        "recommendedExtractor": "playwright",
+        "powertrainGranularity": "trim_level",
+        "confidence": 0.82,
+        "shouldUseLlmInPipeline": true,
+        "selectorHints": {
+          "json_script_selector": "script[type='application/ld+json']"
+        },
+        "risks": [
+          "Finance wording may contaminate MSRP extraction with monthly offers",
+          "Dynamic configurator flows usually need consent handling and waits"
+        ],
+        "recommendation": "Start with Playwright because the page looks like a dynamic configurator rather than a static MSRP listing. The page appears to mix MSRP and finance messaging, so guard against monthly-payment contamination. Add LLM only for semantic disambiguation, selector hints, or failure triage."
+      }
+    }
+  ]
+}
