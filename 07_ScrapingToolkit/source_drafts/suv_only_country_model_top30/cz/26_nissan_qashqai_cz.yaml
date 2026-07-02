@@ -13,108 +13,43 @@
 source_code: nissan_qashqai_cz_draft_scrapling
 country: 捷克
 brand: NISSAN
-source_url: https://www.nissan.cz/vozidla/nove-vozy/qashqai.html
-source_type: manufacturer_official
+source_url: https://www-europe.nissan-cdn.net/content/dam/Nissan/cz/brochures/Pricelists/Qashqai-Pricelist_CZ_2026.pdf
+source_type: official_price_list
 price_semantics: base_msrp
-extractor_type: scrapling
+extractor_type: pdf_text
 profile:
-  url: https://www.nissan.cz/vozidla/nove-vozy/qashqai.html
-  tier: stealth
-  headless: true
-  network_idle: true
-  impersonate: chrome
-  css:
-    vehicle_container: .title-payment-info-container
-    model: ''
-    trim: ''
-    price: .msrp-price
+  url: https://www-europe.nissan-cdn.net/content/dam/Nissan/cz/brochures/Pricelists/Qashqai-Pricelist_CZ_2026.pdf
+  timeout_seconds: 60
+  retry_attempts: 2
+  retry_delay_seconds: 1.0
+  prefer_curl_download: true
+  entry_patterns:
+  - pattern: '1,3\s+DIG-T\s+mHEV\s+158\s+HP\s+2WD\s+MT\s+Ceníková\s+cena\s+(?P<price>\d{3}\s\d{3})\s+Kč'
+    official_trim: Acenta
+    official_powertrain: 1.3 DIG-T mHEV 158 HP 2WD MT
+    jato_powertrain: MHEV
+    price_label: Ceníková cena vč. DPH
   default_currency: CZK
   default_tax_included: true
-  default_price_label: Doporučená cena včetně DPH
+  default_price_label: Ceníková cena vč. DPH
   fixed_model: QASHQAI
   fixed_jato_model: QASHQAI
-  fixed_jato_powertrain: null
-  model_rules: []
-  skip_if_model_unmapped: false
   copy_trim_to_jato_trim: true
-  confidence_rules:
-    base: 0.2
-    fixed_model_bonus: 0.18
-    fixed_jato_model_bonus: 0.12
-    model_rule_bonus: 0.12
-    trim_present_bonus: 0.1
-    copy_trim_to_jato_trim_bonus: 0.09
-    parsed_price_text_bonus: 0.03
-    currency_bonus: 0.01
-    price_label_bonus: 0.02
-    trim_keyword_bonuses: []
-    price_band_bonuses:
-    - key: price_band_entry
-      label: Entry price band matched
-      max: 0
-      delta: 0.0
-    - key: price_band_mid
-      label: Mid price band matched
-      min: 0
-      max: 0
-      delta: 0.01
-    - key: price_band_high
-      label: High price band matched
-      min: 0
-      delta: 0.03
-    powertrain_keyword_bonuses: []
-    powertrain_bonuses:
-    - key: powertrain_hev
-      label: 'Powertrain matched: HEV'
-      powertrain: HEV
-      delta: 0.03
-    - key: powertrain_mhev
-      label: 'Powertrain matched: MHEV'
-      powertrain: MHEV
-      delta: 0.03
-    - key: powertrain_ice
-      label: 'Powertrain matched: ICE'
-      powertrain: ICE
-      delta: 0.03
-    clamp_min: 0.0
-    clamp_max: 1.0
-  structured_fields:
-    edition_rules:
-    - key: edition_special
-      label: Special Edition
-      keyword: special edition
-      special: true
-    powertrain_rules:
-    - key: powertrain_hev
-      powertrain: HEV
-      keywords:
-      - hybrid
-      - e-POWER
-    - key: powertrain_mhev
-      powertrain: MHEV
-      keywords:
-      - mild hybrid
-      - 48V
-      - MHEV
-    - key: powertrain_ice
-      powertrain: ICE
-      keywords:
-      - benzín
-  auto_accept_gates:
-    review_threshold: 0.95
-    semi_auto_threshold: 0.98
-    require_powertrain_match: true
-    force_review_if_powertrain_missing: true
-    force_review_if_powertrain_ambiguous: true
-    force_review_for_special_edition: true
-  json_script_selector: script[type='application/ld+json']
+  match_confidence: 0.86
+  match_status: review_required
+  match_reason:
+    kind: pdf_price_list
+    source: official_nissan_cz_2026_pricelist
+    note: Official Nissan Czech Qashqai 2026 price-list PDF exposes Ceníková cena list prices separately from Akční cena campaign prices.
 schedule:
   frequency: manual_only
   run_window_start: 00:00
   run_window_end: 05:00
   preferred_weekday: monday
-notes: Keywords filled from official manufacturer website research (CZ market). CSS selectors still require browser-based
-  inspection before promotion.
+notes: Keywords filled from official manufacturer website research (CZ market).
+  Replaced removed /vozidla/nove-vozy/qashqai.html page with Nissan Czech's
+  official Qashqai 2026 price-list PDF. Regex targets the Ceníková cena list
+  price and avoids the Akční cena campaign price shown in the same table.
 bootstrap_meta:
   country_model_rank: 26
   suggested_scope_kind: single_model
