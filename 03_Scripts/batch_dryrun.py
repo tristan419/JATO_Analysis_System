@@ -163,6 +163,18 @@ def _promoted_code_for_draft(code: str) -> str:
     return code.replace("_draft_scrapling", "_scrapling")
 
 
+def _failure_classification(
+    failure_reason: str | None,
+    recommended_strategy: str | None,
+    severity: str,
+) -> dict:
+    return {
+        "failureReason": failure_reason,
+        "recommendedStrategy": recommended_strategy,
+        "severity": severity,
+    }
+
+
 def _classify_dryrun_failure(
     src: dict,
     exception: Exception | None = None,
@@ -192,7 +204,7 @@ def _classify_dryrun_failure(
         http_status = None
 
     if "404-page" in final_url.lower() or "/404" in final_url.lower():
-        return {"failureReason": "source_url_not_found", "recommendedStrategy": "update_source_url", "severity": "error"}
+        return _failure_classification("source_url_not_found", "update_source_url", "error")
     if (
         "anti_bot_access_denied" in error_lower
         or (
@@ -204,15 +216,19 @@ def _classify_dryrun_failure(
             )
         )
     ):
-        return {"failureReason": "anti_bot_access_denied", "recommendedStrategy": "manual_review_or_proxy_required", "severity": "error"}
+        return _failure_classification(
+            "anti_bot_access_denied",
+            "manual_review_or_proxy_required",
+            "error",
+        )
     if http_status == 403:
-        return {"failureReason": "forbidden_403", "recommendedStrategy": "manual_review_or_proxy_required", "severity": "error"}
+        return _failure_classification("forbidden_403", "manual_review_or_proxy_required", "error")
     if http_status == 404:
-        return {"failureReason": "source_url_not_found", "recommendedStrategy": "update_source_url", "severity": "error"}
+        return _failure_classification("source_url_not_found", "update_source_url", "error")
     if http_status and http_status >= 400:
-        return {"failureReason": "http_error", "recommendedStrategy": "check_source_url_or_site_status", "severity": "error"}
+        return _failure_classification("http_error", "check_source_url_or_site_status", "error")
     if valid > 0 and status not in {"empty", "error", "exception"}:
-        return {"failureReason": None, "recommendedStrategy": None, "severity": "info"}
+        return _failure_classification(None, None, "info")
     if _looks_like_discontinued_model_url(final_url):
         return {
             "failureReason": "model_not_currently_available",
@@ -232,7 +248,7 @@ def _classify_dryrun_failure(
         or "nodename nor servname" in error_lower
         or "err_name_not_resolved" in error_lower
     ):
-        return {"failureReason": "dns_resolution_failed", "recommendedStrategy": "retry_or_check_dns", "severity": "warning"}
+        return _failure_classification("dns_resolution_failed", "retry_or_check_dns", "warning")
     if (
         "err_internet_disconnected" in error_lower
         or "internet disconnected" in error_lower
@@ -243,39 +259,67 @@ def _classify_dryrun_failure(
         or "err_connection_closed" in error_lower
         or "failed to load" in error_lower
     ):
-        return {"failureReason": "network_unavailable", "recommendedStrategy": "retry_network_or_proxy", "severity": "warning"}
+        return _failure_classification("network_unavailable", "retry_network_or_proxy", "warning")
     if "403" in error_lower or "forbidden" in error_lower:
-        return {"failureReason": "forbidden_403", "recommendedStrategy": "manual_review_or_proxy_required", "severity": "error"}
+        return _failure_classification("forbidden_403", "manual_review_or_proxy_required", "error")
     if "no plausible trim-overview msrp" in error_lower:
-        return {"failureReason": "dynamic_price_not_ready", "recommendedStrategy": "retry_or_reduce_concurrency", "severity": "warning"}
+        return _failure_classification("dynamic_price_not_ready", "retry_or_reduce_concurrency", "warning")
     if "waiting for" in error_lower or "playwright" in error_lower:
-        return {"failureReason": "js_required_or_selector_timeout", "recommendedStrategy": "try_playwright_card_flow", "severity": "warning"}
+        return _failure_classification(
+            "js_required_or_selector_timeout",
+            "try_playwright_card_flow",
+            "warning",
+        )
     if "fetch_failed" in error_lower:
-        return {"failureReason": "http_error", "recommendedStrategy": "check_source_url_or_site_status", "severity": "error"}
+        return _failure_classification("http_error", "check_source_url_or_site_status", "error")
     if "timeout" in error_lower or "timed out" in error_lower:
-        return {"failureReason": "http_timeout", "recommendedStrategy": "retry_or_reduce_concurrency", "severity": "warning"}
+        return _failure_classification("http_timeout", "retry_or_reduce_concurrency", "warning")
 
     if exception or status in ("exception", "error"):
         if "waiting for" in error_lower or "playwright" in error_lower:
-            return {"failureReason": "js_required_or_selector_timeout", "recommendedStrategy": "try_playwright_card_flow", "severity": "warning"}
+            return _failure_classification(
+                "js_required_or_selector_timeout",
+                "try_playwright_card_flow",
+                "warning",
+            )
         if "timeout" in error_lower:
-            return {"failureReason": "http_timeout", "recommendedStrategy": "retry_or_reduce_concurrency", "severity": "warning"}
+            return _failure_classification("http_timeout", "retry_or_reduce_concurrency", "warning")
         if "403" in error_lower or "forbidden" in error_lower:
-            return {"failureReason": "forbidden_403", "recommendedStrategy": "manual_review_or_proxy_required", "severity": "error"}
+            return _failure_classification("forbidden_403", "manual_review_or_proxy_required", "error")
         if "selector" in error_lower or "no elements" in error_lower or "TODO_SELECTOR" in error:
-            return {"failureReason": "selector_empty", "recommendedStrategy": "try_scrapling_dynamic_or_playwright", "severity": "warning"}
+            return _failure_classification(
+                "selector_empty",
+                "try_scrapling_dynamic_or_playwright",
+                "warning",
+            )
         if "502" in error_lower or "503" in error_lower or "bad gateway" in error_lower:
-            return {"failureReason": "db_or_backend_write_failed", "recommendedStrategy": "pipeline_error_not_source_error", "severity": "error"}
-        return {"failureReason": "unknown", "recommendedStrategy": "diagnose_with_msrp_page_analyzer", "severity": "warning"}
+            return _failure_classification(
+                "db_or_backend_write_failed",
+                "pipeline_error_not_source_error",
+                "error",
+            )
+        return _failure_classification("unknown", "diagnose_with_msrp_page_analyzer", "warning")
 
     if status == "empty":
         if "TODO_SELECTOR" in error:
-            return {"failureReason": "selector_empty", "recommendedStrategy": "try_scrapling_dynamic_or_playwright", "severity": "warning"}
+            return _failure_classification(
+                "selector_empty",
+                "try_scrapling_dynamic_or_playwright",
+                "warning",
+            )
         if "selector" in error_lower or "no elements" in error_lower:
-            return {"failureReason": "selector_empty", "recommendedStrategy": "try_scrapling_dynamic_or_playwright", "severity": "warning"}
+            return _failure_classification(
+                "selector_empty",
+                "try_scrapling_dynamic_or_playwright",
+                "warning",
+            )
         if "json" in error_lower and ("noth" in error_lower or "falling back" in error_lower):
-            return {"failureReason": "json_ld_empty", "recommendedStrategy": "try_css_or_attr_json", "severity": "warning"}
-        return {"failureReason": "no_observation_extracted", "recommendedStrategy": "diagnose_with_msrp_page_analyzer", "severity": "warning"}
+            return _failure_classification("json_ld_empty", "try_css_or_attr_json", "warning")
+        return _failure_classification(
+            "no_observation_extracted",
+            "diagnose_with_msrp_page_analyzer",
+            "warning",
+        )
 
     if extracted > 0 and valid == 0:
         rejected_reasons = [str(r).lower() for r in src.get("rejectedReasons", [])]
@@ -284,7 +328,7 @@ def _classify_dryrun_failure(
         if isinstance(rejection_rule_counts, dict):
             rejected_rules.extend(str(r).lower() for r in rejection_rule_counts)
         if any("currency" in r for r in rejected_reasons):
-            return {"failureReason": "currency_mismatch", "recommendedStrategy": "check_default_currency", "severity": "warning"}
+            return _failure_classification("currency_mismatch", "check_default_currency", "warning")
         if (
             any(r == "price_range" for r in rejected_rules)
             or any(
@@ -293,10 +337,18 @@ def _classify_dryrun_failure(
                 for r in rejected_reasons
             )
         ):
-            return {"failureReason": "price_out_of_range", "recommendedStrategy": "check_currency_and_price_semantics", "severity": "warning"}
-        return {"failureReason": "validation_rejected_all", "recommendedStrategy": "review_validation_rules", "severity": "warning"}
+            return _failure_classification(
+                "price_out_of_range",
+                "check_currency_and_price_semantics",
+                "warning",
+            )
+        return _failure_classification(
+            "validation_rejected_all",
+            "review_validation_rules",
+            "warning",
+        )
 
-    return {"failureReason": "unknown", "recommendedStrategy": "diagnose_with_msrp_page_analyzer", "severity": "info"}
+    return _failure_classification("unknown", "diagnose_with_msrp_page_analyzer", "info")
 
 
 def _looks_like_discontinued_model_url(url: str) -> bool:

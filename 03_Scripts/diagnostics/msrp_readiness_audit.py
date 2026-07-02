@@ -900,7 +900,10 @@ def build_readiness_report(
                 TEST_EVIDENCE["monitoringService"],
                 TEST_EVIDENCE["frontendApi"],
             ],
-            note="Groups price-history changes into country/model monitoring events with source-risk and review evidence.",
+            note=(
+                "Groups price-history changes into country/model monitoring events "
+                "with source-risk and review evidence."
+            ),
         ),
         _requirement(
             key="review_queue",

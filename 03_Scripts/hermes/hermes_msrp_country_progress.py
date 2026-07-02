@@ -26,8 +26,12 @@ STATUS_FILE_PATH = REPO_ROOT / "03_Scripts" / "logs" / "scheduled_fetch_status.j
 FALLBACK_REPORT_PATH = REPO_ROOT / "03_Scripts" / "diagnostics" / "artifacts" / "dryrun_report.json"
 RUNS_INDEX_PATH = REPO_ROOT / "03_Scripts" / "diagnostics" / "artifacts" / "dryrun_runs_index.json"
 SOURCE_REPAIR_BACKLOG_PATH = REPO_ROOT / "03_Scripts" / "diagnostics" / "artifacts" / "msrp_source_repair_backlog.json"
-SOURCE_REFERENCE_EVIDENCE_PATH = REPO_ROOT / "03_Scripts" / "diagnostics" / "artifacts" / "msrp_source_reference_evidence.json"
-SOURCE_ACCESSIBILITY_AUDIT_PATH = REPO_ROOT / "03_Scripts" / "diagnostics" / "artifacts" / "msrp_source_accessibility_audit.json"
+SOURCE_REFERENCE_EVIDENCE_PATH = (
+    REPO_ROOT / "03_Scripts" / "diagnostics" / "artifacts" / "msrp_source_reference_evidence.json"
+)
+SOURCE_ACCESSIBILITY_AUDIT_PATH = (
+    REPO_ROOT / "03_Scripts" / "diagnostics" / "artifacts" / "msrp_source_accessibility_audit.json"
+)
 SOURCE_URL_PATTERN = re.compile(r"https?://[^\s\"')<>]+")
 COUNTRY_LABELS = {
     "at": "Austria",
@@ -306,7 +310,10 @@ def _priority_review_assist(failure_reason: str, source_repair_count: int) -> di
             "preferred": "rule_based_then_llm",
             "llmFit": "medium",
             "neuralNetworkFit": "not_recommended_until_labeled_corpus",
-            "reason": "Rules identify the failure class; an LLM can propose selector or extraction repair from page evidence.",
+            "reason": (
+                "Rules identify the failure class; an LLM can propose selector or "
+                "extraction repair from page evidence."
+            ),
         }
     return {
         "preferred": "rule_based",
@@ -805,7 +812,13 @@ def _historical_good_sources(current_run_id: str | None) -> dict[tuple[str, str]
             continue
         report = _load_v3_report(_artifact_path_from_ref(run.get("artifactPath")))
         if not report:
-            report = _load_v3_report(REPO_ROOT / "03_Scripts" / "diagnostics" / "artifacts" / f"dryrun_report_{run_id}.json")
+            report = _load_v3_report(
+                REPO_ROOT
+                / "03_Scripts"
+                / "diagnostics"
+                / "artifacts"
+                / f"dryrun_report_{run_id}.json"
+            )
         if not report:
             continue
         observed_at = str(run.get("finishedAt") or report.get("generatedAt") or "")
@@ -839,19 +852,22 @@ def _source_repair_backlog_from_report(report: dict[str, Any], now: str) -> dict
             key = _source_key(country_code, source)
             last_good = last_known_good.get(key) if key else None
             is_transient = bool(last_good)
-            group = groups.setdefault(reason, {
-                "failureReason": reason,
-                "count": 0,
-                "transientRegressionCount": 0,
-                "sourceRepairIssueCount": 0,
-                "recommendedStrategies": {},
-                "affectedCountries": set(),
-                "sources": [],
-                "sourceDetails": [],
-                "transientSources": [],
-                "hosts": {},
-                "status": "new",
-            })
+            group = groups.setdefault(
+                reason,
+                {
+                    "failureReason": reason,
+                    "count": 0,
+                    "transientRegressionCount": 0,
+                    "sourceRepairIssueCount": 0,
+                    "recommendedStrategies": {},
+                    "affectedCountries": set(),
+                    "sources": [],
+                    "sourceDetails": [],
+                    "transientSources": [],
+                    "hosts": {},
+                    "status": "new",
+                },
+            )
             group["count"] += 1
             source_detail = _source_issue_detail_from_report_source(
                 source=source,
@@ -876,9 +892,15 @@ def _source_repair_backlog_from_report(report: dict[str, Any], now: str) -> dict
             host = _source_host(source)
             url = _source_url(source)
             if host:
+                empty_host_bucket = {
+                    "count": 0,
+                    "affectedCountries": set(),
+                    "sources": [],
+                    "urls": [],
+                }
                 for host_bucket in (
-                    group["hosts"].setdefault(host, {"count": 0, "affectedCountries": set(), "sources": [], "urls": []}),
-                    top_hosts.setdefault(host, {"count": 0, "affectedCountries": set(), "sources": [], "urls": []}),
+                    group["hosts"].setdefault(host, dict(empty_host_bucket)),
+                    top_hosts.setdefault(host, dict(empty_host_bucket)),
                 ):
                     host_bucket["count"] += 1
                     if country_code:

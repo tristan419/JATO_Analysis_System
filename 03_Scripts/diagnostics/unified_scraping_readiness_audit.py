@@ -253,7 +253,10 @@ def _render_markdown(report: dict[str, Any]) -> str:
                 "",
                 "## AI Intelligence",
                 "",
-                f"- Required countries: {_markdown_cell(', '.join(intelligence_inputs.get('requiredCountries') or []))}",
+                (
+                    "- Required countries: "
+                    f"{_markdown_cell(', '.join(intelligence_inputs.get('requiredCountries') or []))}"
+                ),
                 f"- News countries: {intelligence_summary.get('newsCountryCount', 0)}",
                 f"- VOC countries: {intelligence_summary.get('vocCountryCount', 0)}",
                 f"- Missing news evidence countries: {intelligence_summary.get('newsMissingEvidenceCountryCount', 0)}",

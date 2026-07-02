@@ -108,7 +108,11 @@ def _valid_count(result: dict[str, Any]) -> int:
 
 def _result_is_pass(result: dict[str, Any]) -> bool:
     status = _status_value(result)
-    return _valid_count(result) > 0 and not result.get("failureReason") and status not in {"empty", "error", "exception"}
+    return (
+        _valid_count(result) > 0
+        and not result.get("failureReason")
+        and status not in {"empty", "error", "exception"}
+    )
 
 
 def _result_is_empty(result: dict[str, Any]) -> bool:
@@ -465,7 +469,10 @@ def _priority_review_assist(
             "preferred": "rule_based_then_llm",
             "llmFit": "medium",
             "neuralNetworkFit": "not_recommended_until_labeled_corpus",
-            "reason": "Rules identify the failure class; an LLM can propose selector or extraction repair from page evidence.",
+            "reason": (
+                "Rules identify the failure class; an LLM can propose selector or "
+                "extraction repair from page evidence."
+            ),
         }
     return {
         "preferred": "rule_based",
@@ -491,7 +498,10 @@ def _source_reference_assist(group: dict[str, Any]) -> dict[str, Any] | None:
                 "Do not count EVKX as an official MSRP dryrun pass.",
                 "Only use EVKX records when pricingCountry matches the target country.",
                 "Only use EVKX records when isConverted is false.",
-                "Keep the Tesla official source open until an official page, price list, or configurator API is fetchable.",
+                (
+                    "Keep the Tesla official source open until an official page, "
+                    "price list, or configurator API is fetchable."
+                ),
             ],
             "reason": (
                 "Tesla official pages are blocked by the direct fetch path; "
@@ -864,7 +874,10 @@ def _write_source_repair_backlog(
         f"Business resolutions: {payload['businessResolutionCount']}",
         f"Source repair issues: {payload['sourceRepairIssueCount']}",
         "",
-        "| Failure reason | Priority | Count | Recheck | Business | Source repair | Recommended strategy | Reference assist | Affected countries |",
+        (
+            "| Failure reason | Priority | Count | Recheck | Business | Source repair | "
+            "Recommended strategy | Reference assist | Affected countries |"
+        ),
         "|---|---:|---:|---:|---:|---:|---|---|---|",
     ]
     for item in normalized_groups:
@@ -875,7 +888,10 @@ def _write_source_repair_backlog(
             else "-"
         )
         lines.append(
-            "| {reason} | {priority} | {count} | {transient} | {business} | {source_repair} | {strategy} | {reference} | {countries} |".format(
+            (
+                "| {reason} | {priority} | {count} | {transient} | {business} | "
+                "{source_repair} | {strategy} | {reference} | {countries} |"
+            ).format(
                 reason=item["failureReason"],
                 priority=f"{item['priorityBand']} {item['priorityScore']}",
                 count=item["count"],
@@ -1003,7 +1019,12 @@ def run(
 
         # Update dryrun_runs_index.json
         index_path = out_path.parent / "dryrun_runs_index.json"
-        index_data: dict = {"schemaVersion": "msrp_dryrun_runs_index_v1", "updatedAt": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"), "latestRunId": run_id, "runs": []}
+        index_data: dict = {
+            "schemaVersion": "msrp_dryrun_runs_index_v1",
+            "updatedAt": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+            "latestRunId": run_id,
+            "runs": [],
+        }
         if index_path.is_file():
             try:
                 index_data = json.loads(index_path.read_text())

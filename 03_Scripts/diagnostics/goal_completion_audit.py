@@ -611,7 +611,10 @@ def build_goal_completion_report(
             status="passed" if unified_ready else "missing",
             evidence=[unified_status.get("statusPath", "")],
             runtime=unified_status,
-            note="Covers MSRP/news/VOC/policy/incentive/spec job mapping and fixture Fetcher->Extractor->Normalizer->Sink stages.",
+            note=(
+                "Covers MSRP/news/VOC/policy/incentive/spec job mapping and fixture "
+                "Fetcher->Extractor->Normalizer->Sink stages."
+            ),
         ),
         _requirement(
             key="msrp_21_country_source_draft_coverage",
@@ -619,7 +622,10 @@ def build_goal_completion_report(
             status=source_status,
             evidence=[source_coverage["sourceDraftDir"]],
             runtime=source_coverage,
-            note="Full PRD completion still requires eliminating TODO placeholders and validating real source extraction across all countries.",
+            note=(
+                "Full PRD completion still requires eliminating TODO placeholders and "
+                "validating real source extraction across all countries."
+            ),
         ),
         _requirement(
             key="production_deployment_state",
@@ -627,7 +633,10 @@ def build_goal_completion_report(
             status=str(remote.get("status") or "not_checked"),
             evidence=[remote.get("apiBase", "")] if remote.get("apiBase") else [],
             runtime=remote,
-            note="Production is complete only when deployed API exposes current snapshot, monitoring events, effective dryrun gate, and unified readiness success.",
+            note=(
+                "Production is complete only when deployed API exposes current snapshot, "
+                "monitoring events, effective dryrun gate, and unified readiness success."
+            ),
         ),
     ]
     status_counts = dict(sorted(Counter(item["status"] for item in requirements).items()))
@@ -679,7 +688,10 @@ def _render_markdown(report: dict[str, Any]) -> str:
         f"| Degraded | {(summary.get('statusCounts') or {}).get('degraded', 0)} |",
         f"| Missing | {(summary.get('statusCounts') or {}).get('missing', 0)} |",
         f"| Not checked | {(summary.get('statusCounts') or {}).get('not_checked', 0)} |",
-        f"| MSRP detailed passed | {summary.get('msrpDetailedPassedCount', 0)} / {summary.get('msrpDetailedRequirementCount', 0)} |",
+        (
+            f"| MSRP detailed passed | {summary.get('msrpDetailedPassedCount', 0)} / "
+            f"{summary.get('msrpDetailedRequirementCount', 0)} |"
+        ),
         f"| Source draft countries | {summary.get('sourceDraftCountryCount', 0)} |",
         f"| Source TODO placeholders | {summary.get('sourceDraftTodoPlaceholderCount', 0)} |",
         "",
@@ -735,7 +747,13 @@ def write_status_record(
     if write_pipeline_status is None:
         return None
     status = str(report.get("status") or "in_progress")
-    pipeline_status = "success" if status == "complete" else "degraded" if status == "degraded" else "failed"
+    pipeline_status = (
+        "success"
+        if status == "complete"
+        else "degraded"
+        if status == "degraded"
+        else "failed"
+    )
     summary = report.get("summary") if isinstance(report.get("summary"), dict) else {}
     status_counts = summary.get("statusCounts") if isinstance(summary.get("statusCounts"), dict) else {}
     failed_count = int(status_counts.get("missing") or 0) + int(status_counts.get("not_checked") or 0)
@@ -770,7 +788,10 @@ def write_status_record(
 
 def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Audit full goal completion across MSRP, finance, official config, AI News/VOC, and unified scraping.",
+        description=(
+            "Audit full goal completion across MSRP, finance, official config, "
+            "AI News/VOC, and unified scraping."
+        ),
     )
     parser.add_argument("--repo-root", default=str(REPO_ROOT))
     parser.add_argument("--source-draft-dir", default=DEFAULT_SOURCE_DRAFT_DIR)
