@@ -636,8 +636,13 @@ function versionBubbleLayout(
   };
 }
 
-function searchModelOptions(options: VersionComparisonModelOption[], query: string): VersionComparisonModelOption[] {
+function compactSearchToken(value: string): string {
+  return value.toLowerCase().replace(/[^a-z0-9\u4e00-\u9fff]+/g, "");
+}
+
+function searchModelOptions<T extends VersionComparisonModelOption>(options: T[], query: string): T[] {
   const q = query.trim().toLowerCase();
+  const compactQuery = compactSearchToken(query);
   if (!q) return options;
   return options.filter((m) => {
     const fields = [
@@ -649,7 +654,7 @@ function searchModelOptions(options: VersionComparisonModelOption[], query: stri
       String(m.lengthMm),
       String(m.msrpMedian),
     ].filter(Boolean).join(" ").toLowerCase();
-    return fields.includes(q);
+    return fields.includes(q) || (compactQuery !== "" && compactSearchToken(fields).includes(compactQuery));
   });
 }
 
@@ -664,6 +669,10 @@ function searchCountryOptions(options: { value: string; label: string }[], query
   if (!q) return options;
   return options.filter((c) => c.label.toLowerCase().includes(q) || c.value.toLowerCase().includes(q));
 }
+
+type VersionComparisonPickerOption = VersionComparisonModelOption & {
+  availability: "current" | "global";
+};
 
 export function VersionComparisonPage() {
   const [searchParams, setSearchParams] = useSearchParams();
@@ -971,12 +980,27 @@ export function VersionComparisonPage() {
     exporting: exportingSlide,
   });
 
-  // Candidate pool: filtered model options shown in the picker
+  // Candidate pool: current-country options plus global-discovery options shown in the picker.
   const candidateOptions = deck?.metadata.availableModels ?? [];
+  const globalCandidateOptions = deck?.metadata.globalAvailableModels ?? [];
+  const pickerOptions = useMemo<VersionComparisonPickerOption[]>(() => {
+    const currentValues = new Set(candidateOptions.map((option) => option.value));
+    const currentOptions = candidateOptions.map((option) => ({
+      ...option,
+      availability: "current" as const,
+    }));
+    const globalOnlyOptions = globalCandidateOptions
+      .filter((option) => !currentValues.has(option.value))
+      .map((option) => ({
+        ...option,
+        availability: "global" as const,
+      }));
+    return [...currentOptions, ...globalOnlyOptions];
+  }, [candidateOptions, globalCandidateOptions]);
   // Filtered by search query
   const searchedOptions = useMemo(
-    () => searchModelOptions(candidateOptions, modelSearchQuery),
-    [candidateOptions, modelSearchQuery],
+    () => searchModelOptions(pickerOptions, modelSearchQuery),
+    [modelSearchQuery, pickerOptions],
   );
   const segmentOptions = deck?.metadata.availableSegments ?? [];
   const searchedSegmentOptions = useMemo(
@@ -1009,7 +1033,7 @@ export function VersionComparisonPage() {
   // Auto-select modelToAdd from search results
   useEffect(() => {
     if (searchedOptions.length > 0) {
-      const unselected = searchedOptions.filter((m) => !activeModels.includes(m.value));
+      const unselected = searchedOptions.filter((m) => m.availability === "current" && !activeModels.includes(m.value));
       setModelToAdd(unselected[0]?.value ?? "");
     } else {
       setModelToAdd("");
@@ -1066,11 +1090,10 @@ export function VersionComparisonPage() {
   }
 
   function handleSelectAllVisible() {
-    const visibleValues = new Set(searchedOptions.map((m) => m.value));
     setSelectedModels((current) => {
       const existing = new Set(current);
       const toAdd = searchedOptions
-        .filter((m) => !existing.has(m.value))
+        .filter((m) => m.availability === "current" && !existing.has(m.value))
         .slice(0, MAX_SELECTED_MODELS - current.length)
         .map((m) => m.value);
       return [...current, ...toAdd].slice(0, MAX_SELECTED_MODELS);
@@ -1465,13 +1488,15 @@ export function VersionComparisonPage() {
                       </div>
                       {searchedOptions.slice(0, 50).map((option) => {
                         const isSelected = activeModels.includes(option.value);
+                        const isGlobalOnly = option.availability === "global";
                         return (
                           <button
                             key={option.value}
                             type="button"
-                            className={`version-comparison-model-option${option.value === modelToAdd ? " is-active" : ""}${isSelected ? " is-selected" : ""}`}
+                            className={`version-comparison-model-option${option.value === modelToAdd ? " is-active" : ""}${isSelected ? " is-selected" : ""}${isGlobalOnly ? " is-global-only" : ""}`}
+                            disabled={isGlobalOnly}
                             onClick={() => { handleToggleModel(option.value); setModelToAdd(option.value); }}
-                            onMouseEnter={() => setModelToAdd(option.value)}
+                            onMouseEnter={() => { if (!isGlobalOnly) setModelToAdd(option.value); }}
                           >
                             <span className={`version-comparison-model-checkbox${isSelected ? " is-checked" : ""}`}>
                               {isSelected ? "✓" : ""}
@@ -1480,6 +1505,7 @@ export function VersionComparisonPage() {
                               <div className="version-comparison-model-option-main">
                                 <span className="version-comparison-model-option-name">{option.label}</span>
                                 {isSelected ? <span className="version-comparison-model-option-added">已添加</span> : null}
+                                {isGlobalOnly ? <span className="version-comparison-model-option-added">全局有车 · 当前不可选</span> : null}
                               </div>
                               <div className="version-comparison-model-option-meta">
                                 {option.segment ? <span>{option.segment}</span> : null}

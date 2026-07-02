@@ -899,6 +899,7 @@ interface Props {
   labelModeOptions?: ExportLabelMode[];
   showExportButton?: boolean;
   showDimensionControls?: boolean;
+  showLabelStrategyControl?: boolean;
   collapsible?: boolean;
   defaultOpen?: boolean;
 }
@@ -911,6 +912,7 @@ export function ExportPanel({
   labelModeOptions,
   showExportButton = true,
   showDimensionControls = true,
+  showLabelStrategyControl = true,
   collapsible = true,
   defaultOpen = false,
 }: Props) {
@@ -1060,16 +1062,18 @@ export function ExportPanel({
                 {LABEL_POSITIONS.map(p => <option key={p} value={p}>{p === "auto" ? "自动" : p}</option>)}
               </select>
             </div>
-            <div className="filter-group"><label>标签策略</label>
-              <select
-                value={safeLabelStrategy}
-                onChange={e => set("dataLabelOverlapStrategy", e.target.value as ExportLabelOverlapStrategy)}
-              >
-                {LABEL_OVERLAP_STRATEGIES.map(item => (
-                  <option key={item.value} value={item.value}>{item.label}</option>
-                ))}
-              </select>
-            </div>
+            {showLabelStrategyControl ? (
+              <div className="filter-group"><label>标签策略</label>
+                <select
+                  value={safeLabelStrategy}
+                  onChange={e => set("dataLabelOverlapStrategy", e.target.value as ExportLabelOverlapStrategy)}
+                >
+                  {LABEL_OVERLAP_STRATEGIES.map(item => (
+                    <option key={item.value} value={item.value}>{item.label}</option>
+                  ))}
+                </select>
+              </div>
+            ) : null}
             <div className="filter-group"><label>小数位</label>
               <DebouncedNumberInput
                 value={s.decimalPlaces}

@@ -4579,31 +4579,35 @@ def _query_version_comparison_deck_impl(
 
     dataset = repo._open_dataset()
     filter_expression = repo._build_filter_expression({columns.country_value: [selected_country["value"]]})
-    table = dataset.to_table(columns=selected_columns, filter=filter_expression)
-    frame = table.to_pandas()
     numeric_columns = [*sales_columns, columns.length, columns.msrp]
-    frame = _ensure_numeric_columns(frame, numeric_columns)
-    frame["__brand"] = frame[columns.make].astype(str).str.strip()
-    frame["__model"] = frame[columns.model].astype(str).str.strip()
-    frame["__version"] = frame[columns.version].astype(str).str.strip()
-    frame["__trim"] = frame[columns.trim].astype(str).str.strip() if columns.trim and columns.trim in frame.columns else frame["__version"]
-    frame["__segment_raw"] = frame[columns.segment].astype(str).str.strip()
-    frame["__powertrain"] = frame[columns.powertrain].map(_normalize_powertrain)
-    frame["__length"] = pd.to_numeric(frame[columns.length], errors="coerce").fillna(0.0)
-    frame["__msrp"] = pd.to_numeric(frame[columns.msrp], errors="coerce").fillna(0.0)
-    frame["__drive_type"] = frame[columns.drive_type].astype(str).str.strip() if columns.drive_type and columns.drive_type in frame.columns else ""
-    frame["__body_type"] = frame[columns.body_type].astype(str).str.strip() if columns.body_type and columns.body_type in frame.columns else ""
-    frame[sales_column] = _series_sum(frame, sales_columns)
-    frame = frame[
-        (frame["__brand"] != "")
-        & (frame["__model"] != "")
-        & (frame["__version"] != "")
-        & (frame["__segment_raw"] != "")
-        & (frame["__powertrain"] != "OTHER")
-        & (frame["__length"] > 0)
-        & (frame["__msrp"] > 0)
-        & (frame[sales_column] > 0)
-    ].copy()
+
+    def _prepare_version_comparison_frame(raw_frame: pd.DataFrame) -> pd.DataFrame:
+        prepared = _ensure_numeric_columns(raw_frame, numeric_columns)
+        prepared["__brand"] = prepared[columns.make].astype(str).str.strip()
+        prepared["__model"] = prepared[columns.model].astype(str).str.strip()
+        prepared["__version"] = prepared[columns.version].astype(str).str.strip()
+        prepared["__trim"] = prepared[columns.trim].astype(str).str.strip() if columns.trim and columns.trim in prepared.columns else prepared["__version"]
+        prepared["__segment_raw"] = prepared[columns.segment].astype(str).str.strip()
+        prepared["__powertrain"] = prepared[columns.powertrain].map(_normalize_powertrain)
+        prepared["__length"] = pd.to_numeric(prepared[columns.length], errors="coerce").fillna(0.0)
+        prepared["__msrp"] = pd.to_numeric(prepared[columns.msrp], errors="coerce").fillna(0.0)
+        prepared["__drive_type"] = prepared[columns.drive_type].astype(str).str.strip() if columns.drive_type and columns.drive_type in prepared.columns else ""
+        prepared["__body_type"] = prepared[columns.body_type].astype(str).str.strip() if columns.body_type and columns.body_type in prepared.columns else ""
+        prepared[sales_column] = _series_sum(prepared, sales_columns)
+        return prepared[
+            (prepared["__brand"] != "")
+            & (prepared["__model"] != "")
+            & (prepared["__version"] != "")
+            & (prepared["__segment_raw"] != "")
+            & (prepared["__powertrain"] != "OTHER")
+            & (prepared["__length"] > 0)
+            & (prepared["__msrp"] > 0)
+            & (prepared[sales_column] > 0)
+        ].copy()
+
+    frame = _prepare_version_comparison_frame(
+        dataset.to_table(columns=selected_columns, filter=filter_expression).to_pandas()
+    )
 
     available_fuels = [
         fuel for fuel in POSITIONING_FUEL_ORDER
@@ -4612,6 +4616,28 @@ def _query_version_comparison_deck_impl(
     selected_fuels = _normalize_selected_fuels(fuel_types, available_fuels)
     selected_fuels = [fuel for fuel in POSITIONING_FUEL_ORDER if fuel in selected_fuels]
     fuel_frame = frame[frame["__powertrain"].isin(selected_fuels)].copy()
+    global_frame = _prepare_version_comparison_frame(
+        dataset.to_table(columns=selected_columns).to_pandas()
+    )
+    global_fuel_frame = global_frame[global_frame["__powertrain"].isin(selected_fuels)].copy()
+
+    def _apply_free_candidate_filters(source: pd.DataFrame) -> pd.DataFrame:
+        candidate = source.copy()
+        if body_type and body_type.strip():
+            candidate = candidate[candidate["__body_type"] == body_type.strip()]
+        if length_min is not None:
+            candidate = candidate[candidate["__length"] >= float(length_min)]
+        if length_max is not None:
+            candidate = candidate[candidate["__length"] <= float(length_max)]
+        if msrp_min is not None:
+            candidate = candidate[candidate["__msrp"] >= float(msrp_min)]
+        if msrp_max is not None:
+            candidate = candidate[candidate["__msrp"] <= float(msrp_max)]
+        if drive_types:
+            candidate = candidate[candidate["__drive_type"].isin(drive_types)]
+        if segments:
+            candidate = candidate[candidate["__segment_raw"].isin(segments)]
+        return candidate
 
     # --- Comparison mode logic ---
     if comparison_mode == "same_segment":
@@ -4625,23 +4651,11 @@ def _query_version_comparison_deck_impl(
         )
         comparison_frame = segment_frame[segment_frame["__model"].isin(selected_models)].copy() if selected_models else segment_frame.iloc[0:0].copy()
         candidate_model_options = _build_all_model_options(segment_frame, sales_column)
+        global_candidate_frame = global_fuel_frame[global_fuel_frame["__segment_raw"] == selected_segment].copy() if selected_segment else global_fuel_frame.iloc[0:0].copy()
     else:  # free_comparison
         # Candidate pool: optional filters (body, length, msrp, drive, segments)
-        candidate_frame = fuel_frame.copy()
-        if body_type and body_type.strip():
-            candidate_frame = candidate_frame[candidate_frame["__body_type"] == body_type.strip()]
-        if length_min is not None:
-            candidate_frame = candidate_frame[candidate_frame["__length"] >= float(length_min)]
-        if length_max is not None:
-            candidate_frame = candidate_frame[candidate_frame["__length"] <= float(length_max)]
-        if msrp_min is not None:
-            candidate_frame = candidate_frame[candidate_frame["__msrp"] >= float(msrp_min)]
-        if msrp_max is not None:
-            candidate_frame = candidate_frame[candidate_frame["__msrp"] <= float(msrp_max)]
-        if drive_types:
-            candidate_frame = candidate_frame[candidate_frame["__drive_type"].isin(drive_types)]
-        if segments:
-            candidate_frame = candidate_frame[candidate_frame["__segment_raw"].isin(segments)]
+        candidate_frame = _apply_free_candidate_filters(fuel_frame)
+        global_candidate_frame = _apply_free_candidate_filters(global_fuel_frame)
         available_segments = _build_model_option_list(fuel_frame, "__segment_raw", sales_column)
         selected_segment = ""
         # Selected basket: explicit models from full frame, default top 3 from candidate pool
@@ -4654,11 +4668,11 @@ def _query_version_comparison_deck_impl(
         comparison_frame = fuel_frame[fuel_frame["__model"].isin(selected_models)].copy() if selected_models else fuel_frame.iloc[0:0].copy()
 
     # Build enhanced model options with metadata
-    def _build_enhanced_model_options(model_list: list[str]) -> list[dict[str, Any]]:
+    def _build_enhanced_model_options(model_list: list[str], source_frame: pd.DataFrame) -> list[dict[str, Any]]:
         result: list[dict[str, Any]] = []
         model_agg: dict[str, dict[str, Any]] = {}
         for model_name in model_list:
-            model_rows = fuel_frame[fuel_frame["__model"] == model_name]
+            model_rows = source_frame[source_frame["__model"] == model_name]
             if model_rows.empty:
                 continue
             segments = model_rows["__segment_raw"].dropna().unique()
@@ -4682,10 +4696,15 @@ def _query_version_comparison_deck_impl(
 
     # Enhanced availableModels with metadata
     enhanced_available_models = _build_enhanced_model_options(
-        [opt["value"] for opt in candidate_model_options]
+        [opt["value"] for opt in candidate_model_options],
+        fuel_frame,
+    )
+    global_available_models = _build_enhanced_model_options(
+        [opt["value"] for opt in _build_all_model_options(global_candidate_frame, sales_column)],
+        global_fuel_frame,
     )
     # Detect mixed segment
-    selected_model_details = _build_enhanced_model_options(selected_models)
+    selected_model_details = _build_enhanced_model_options(selected_models, fuel_frame)
     selected_segments_set = {m["segment"] for m in selected_model_details if m["segment"]}
     is_mixed_segment = len(selected_segments_set) > 1
 
@@ -4761,6 +4780,7 @@ def _query_version_comparison_deck_impl(
             "availableFuelTypes": available_fuels,
             "availableSegments": available_segments,
             "availableModels": enhanced_available_models,
+            "globalAvailableModels": global_available_models,
             "availableBodyTypes": _available_body_types(fuel_frame) if columns.body_type else [],
             "availableDriveTypes": _available_drive_types(fuel_frame) if columns.drive_type else [],
             "suggestedLengthMin": suggested_length_min,

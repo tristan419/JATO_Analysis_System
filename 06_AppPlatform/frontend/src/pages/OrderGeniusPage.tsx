@@ -18,6 +18,7 @@ import { useAuth } from "../contexts/AuthContext";
 import { useAccountCountryOptions } from "../hooks/useAccountCountryOptions";
 import { useResolvedCountry } from "../hooks/useResolvedCountry";
 import { formatCountryCodeTooltip } from "../utils/jatoCountries";
+import { getCachedPageValue, setCachedPageValue } from "../utils/pageCache";
 import type { CellValueChangedEvent } from "ag-grid-community";
 import {
   getOrderGeniusRowId,
@@ -2839,6 +2840,40 @@ type BomBulkFobEditor = {
   selectedCountries: string[];
 };
 
+type BomAdminCopyCountryForm = {
+  sourceCountryCode: string;
+  targetCountryCode: string;
+  overwriteExisting: boolean;
+};
+
+type BomAdminAdjustCountryForm = {
+  countryCode: string;
+  deltaEur: string;
+};
+
+type BomAdminPageCache = {
+  searchText: string;
+  toolsFlipped: boolean;
+  showAddMaterial: boolean;
+  expandedGroups: string[];
+  editingBoms: string[];
+  bulkFobEditors: Record<string, BomBulkFobEditor>;
+  copyCountryForm: BomAdminCopyCountryForm;
+  adjustCountryForm: BomAdminAdjustCountryForm;
+};
+
+const BOM_ADMIN_PAGE_CACHE_KEY = "order-genius:bom-admin";
+const BOM_ADMIN_PAGE_CACHE_TTL_MS = 30 * 60 * 1000;
+const EMPTY_BOM_ADMIN_COPY_COUNTRY_FORM: BomAdminCopyCountryForm = {
+  sourceCountryCode: "",
+  targetCountryCode: "",
+  overwriteExisting: false,
+};
+const EMPTY_BOM_ADMIN_ADJUST_COUNTRY_FORM: BomAdminAdjustCountryForm = {
+  countryCode: "",
+  deltaEur: "",
+};
+
 type BomAdminModelGroup = {
   brand: string;
   modelName: string;
@@ -2987,13 +3022,21 @@ function BomAdminPanel({
   onFobCountriesChanged,
   onFobChanged,
 }: BomAdminPanelProps) {
+  const cachedBomAdminRef = useRef<BomAdminPageCache | null | undefined>(undefined);
+  if (cachedBomAdminRef.current === undefined) {
+    cachedBomAdminRef.current = getCachedPageValue<BomAdminPageCache>(BOM_ADMIN_PAGE_CACHE_KEY);
+  }
+  const cachedBomAdmin = cachedBomAdminRef.current;
+  const cachedSearchText = cachedBomAdmin?.searchText ?? "";
+  const initialBomLoadSearchRef = useRef(cachedSearchText.trim());
+  const skipNextDebouncedLoadRef = useRef(true);
   const [skus, setSkus] = useState<any[]>([]);
   const [countries, setCountries] = useState<string[]>([]);
   const [activeFobCountries, setActiveFobCountries] = useState<string[]>([]);
   const { countryOptions: accountCountryOptions } = useAccountCountryOptions();
   const [loading, setLoading] = useState(true);
-  const [searchText, setSearchText] = useState("");
-  const [debouncedSearch, setDebouncedSearch] = useState("");
+  const [searchText, setSearchText] = useState(cachedSearchText);
+  const [debouncedSearch, setDebouncedSearch] = useState(cachedSearchText.trim());
   const [editFob, setEditFob] = useState<{ materialCodes: string[]; countryCode: string; fob: number | null } | null>(null);
   const [financeQuickCard, setFinanceQuickCard] = useState<BomFinanceQuickCard | null>(null);
   const [financeQuickFlipped, setFinanceQuickFlipped] = useState(false);
@@ -3005,9 +3048,9 @@ function BomAdminPanel({
   const [financeDrawerLoading, setFinanceDrawerLoading] = useState(false);
   const [savingFinanceMaterialCode, setSavingFinanceMaterialCode] = useState<string | null>(null);
   const [financeError, setFinanceError] = useState("");
-  const [expandedGroups, setExpandedGroups] = useState<Set<string>>(new Set());
-  const [showAddMaterial, setShowAddMaterial] = useState(false);
-  const [toolsFlipped, setToolsFlipped] = useState(false);
+  const [expandedGroups, setExpandedGroups] = useState<Set<string>>(() => new Set(cachedBomAdmin?.expandedGroups ?? []));
+  const [showAddMaterial, setShowAddMaterial] = useState(cachedBomAdmin?.showAddMaterial ?? false);
+  const [toolsFlipped, setToolsFlipped] = useState(cachedBomAdmin?.toolsFlipped ?? false);
   const [isCompactToolsLayout, setIsCompactToolsLayout] = useState(() =>
     typeof window !== "undefined" && window.innerWidth <= BOM_ADMIN_TOOLS_COMPACT_BREAKPOINT,
   );
@@ -3017,19 +3060,25 @@ function BomAdminPanel({
   const [newMaterial, setNewMaterial] = useState<AddMaterialFormState>(EMPTY_ADD_MATERIAL);
   const [addMaterialError, setAddMaterialError] = useState("");
   const [addMaterialNotice, setAddMaterialNotice] = useState("");
-  const [copyCountryForm, setCopyCountryForm] = useState({ sourceCountryCode: "", targetCountryCode: "", overwriteExisting: false });
+  const [copyCountryForm, setCopyCountryForm] = useState<BomAdminCopyCountryForm>({
+    ...EMPTY_BOM_ADMIN_COPY_COUNTRY_FORM,
+    ...(cachedBomAdmin?.copyCountryForm ?? {}),
+  });
   const [copyCountryMessage, setCopyCountryMessage] = useState("");
   const [bomAdminNotice, setBomAdminNotice] = useState("");
   const [bomAdminError, setBomAdminError] = useState("");
   const [copyingCountry, setCopyingCountry] = useState(false);
-  const [adjustCountryForm, setAdjustCountryForm] = useState({ countryCode: "", deltaEur: "" });
+  const [adjustCountryForm, setAdjustCountryForm] = useState<BomAdminAdjustCountryForm>({
+    ...EMPTY_BOM_ADMIN_ADJUST_COUNTRY_FORM,
+    ...(cachedBomAdmin?.adjustCountryForm ?? {}),
+  });
   const [adjustCountryMessage, setAdjustCountryMessage] = useState("");
   const [adjustingCountry, setAdjustingCountry] = useState(false);
   const [copyDrafts, setCopyDrafts] = useState<Record<string, BomCopyDraft>>({});
   const [copyDraftErrors, setCopyDraftErrors] = useState<Record<string, string>>({});
   const [copyDraftSavingKey, setCopyDraftSavingKey] = useState<string | null>(null);
   const [copyDraftFocusKey, setCopyDraftFocusKey] = useState<string | null>(null);
-  const [bulkFobEditors, setBulkFobEditors] = useState<Record<string, BomBulkFobEditor>>({});
+  const [bulkFobEditors, setBulkFobEditors] = useState<Record<string, BomBulkFobEditor>>(cachedBomAdmin?.bulkFobEditors ?? {});
   const [bulkFobErrors, setBulkFobErrors] = useState<Record<string, string>>({});
   const [bulkFobSavingKey, setBulkFobSavingKey] = useState<string | null>(null);
   const [optimisticColourTiers, setOptimisticColourTiers] = useState<Record<string, BomAdminColourTier>>({});
@@ -3060,7 +3109,7 @@ function BomAdminPanel({
   const [dragOverTier, setDragOverTier] = useState<string | null>(null);
   const dragEnterCount = useRef(0);
   const dragMaterialCode = useRef<string | null>(null); // bypass dataTransfer quirks
-  const [editingBoms, setEditingBoms] = useState<Set<string>>(new Set());
+  const [editingBoms, setEditingBoms] = useState<Set<string>>(() => new Set(cachedBomAdmin?.editingBoms ?? []));
   const toggleEditBom = (key: string) => {
     setEditingBoms(prev => { const n = new Set(prev); n.has(key) ? n.delete(key) : n.add(key); return n; });
   };
@@ -3437,7 +3486,7 @@ function BomAdminPanel({
     }));
   }, [patchBomSkus]);
 
-  useEffect(() => { load(); }, [load]);
+  useEffect(() => { load(initialBomLoadSearchRef.current || undefined); }, [load]);
   useEffect(() => { void loadColourSurcharges(); }, [loadColourSurcharges]);
   useEffect(() => { void loadColourHexRules(); }, [loadColourHexRules]);
 
@@ -3580,8 +3629,38 @@ function BomAdminPanel({
   }, [searchText]);
 
   useEffect(() => {
+    if (skipNextDebouncedLoadRef.current) {
+      skipNextDebouncedLoadRef.current = false;
+      return;
+    }
     load(debouncedSearch || undefined);
-  }, [debouncedSearch]);
+  }, [debouncedSearch, load]);
+
+  useEffect(() => {
+    setCachedPageValue<BomAdminPageCache>(
+      BOM_ADMIN_PAGE_CACHE_KEY,
+      {
+        searchText,
+        toolsFlipped,
+        showAddMaterial,
+        expandedGroups: [...expandedGroups],
+        editingBoms: [...editingBoms],
+        bulkFobEditors,
+        copyCountryForm,
+        adjustCountryForm,
+      },
+      BOM_ADMIN_PAGE_CACHE_TTL_MS,
+    );
+  }, [
+    adjustCountryForm,
+    bulkFobEditors,
+    copyCountryForm,
+    editingBoms,
+    expandedGroups,
+    searchText,
+    showAddMaterial,
+    toolsFlipped,
+  ]);
 
   useEffect(() => {
     if (!copyDraftFocusKey) return;
@@ -6592,132 +6671,158 @@ function BomAdminPanel({
                             ) : null}
                             {editing ? (
                               <tr>
-                                <td colSpan={BOM_ADMIN_FIXED_COLUMN_COUNT + sortedCountries.length} style={{ background: "#f8fafc", borderLeft: "3px solid #2563eb", padding: "6px 8px", position: "relative", zIndex: 2 }}>
-                                  <div style={{ display: "grid", gap: 8 }}>
-                                    <form onSubmit={(event) => handleProductMetadataSave(event, allCodes)}
-                                      style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
-                                      <span style={{ fontSize: 10, color: "#64748b", fontWeight: 700 }}>Product fields</span>
-                                      <input name="brand" type="text" required defaultValue={(ref as any).brand || ""}
-                                        placeholder="Brand" style={{ width: 90, fontSize: 11, textTransform: "uppercase" }} />
-                                      <input name="modelName" type="text" required defaultValue={(ref as any).modelName || ""}
-                                        placeholder="Model" style={{ width: 150, fontSize: 11 }} />
-                                      <input name="version" type="text" required defaultValue={(ref as any).version || ""}
-                                        placeholder="Version" style={{ width: 130, fontSize: 11 }} />
-                                      <select name="powertrain" required defaultValue={(ref as any).powertrain || mg.pt || "ICE"}
-                                        style={{ width: 80, fontSize: 11 }}>
-                                        {['BEV','HEV','PHEV','ICE','MHEV','REEV','Other'].map(p => <option key={p} value={p}>{p}</option>)}
-                                      </select>
-                                      <span style={{ fontFamily: "monospace", fontSize: 10, color: "#94a3b8" }}>
-                                        {allCodes.length} SKUs
-                                      </span>
+                                <td
+                                  colSpan={BOM_ADMIN_FIXED_COLUMN_COUNT + sortedCountries.length}
+                                  className="bom-admin-inline-editor-cell"
+                                >
+                                  <div className="bom-admin-inline-editor">
+                                    <div className="bom-admin-inline-editor-head">
+                                      <div className="bom-admin-inline-editor-title">
+                                        <span>BOM editor</span>
+                                        <strong title={bomTemplate}>{bomTemplate}</strong>
+                                        {sourceLabel ? <em title={sourceLabel}>{sourceLabel}</em> : null}
+                                      </div>
                                       <button
                                         type="button"
-	                                        className="btn btn-sm btn-ghost"
-	                                        style={{ fontSize: 10, padding: "2px 8px", color: "#2563eb", borderColor: "#bfdbfe", background: "#eff6ff" }}
-	                                        onClick={() => handleCopyMaterialFromBom(draftKey, bomTemplate, ref, allSkus, sourceLabel)}
-	                                      >
+                                        className="btn btn-sm btn-ghost bom-admin-editor-copy"
+                                        onClick={() => handleCopyMaterialFromBom(draftKey, bomTemplate, ref, allSkus, sourceLabel)}
+                                      >
                                         Copy Material
                                       </button>
-                                      <button type="submit" className="btn btn-sm btn-primary" style={{ fontSize: 10, padding: "2px 8px" }}>
-                                        Save fields
-                                      </button>
-                                    </form>
-                                    <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
-                                      <span style={{ fontSize: 10, color: "#1d4ed8", fontWeight: 700 }}>FOB tools</span>
-                                      <input
-                                        type="number"
-                                        value={bulkFobEditor.deltaEur}
-                                        placeholder="± EUR"
-                                        onChange={(event) => {
-                                          const value = event.target.value;
-                                          updateBulkFobEditor(bomTemplate, allSkus, (current) => ({
-                                            ...current,
-                                            deltaEur: value,
-                                          }));
-                                        }}
-                                        style={{ width: 90, fontSize: 11 }}
-                                      />
-                                      <button
-                                        type="button"
-                                        className="btn btn-sm btn-primary"
-                                        style={{ fontSize: 10, padding: "2px 8px" }}
-                                        disabled={bulkFobSavingKey === bomTemplate}
-                                        onClick={() => void applyBulkFobDelta(bomTemplate, allSkus)}
+                                    </div>
+                                    <div className="bom-admin-inline-editor-grid">
+                                      <form
+                                        onSubmit={(event) => handleProductMetadataSave(event, allCodes)}
+                                        className="bom-admin-editor-section bom-admin-product-fields"
                                       >
-                                        {bulkFobSavingKey === bomTemplate ? "Saving..." : `Apply to ${bulkFobEditor.selectedCountries.length || 0}`}
-                                      </button>
-                                      <button
-                                        type="button"
-                                        className="btn btn-sm btn-ghost"
-                                        style={{ fontSize: 10, padding: "2px 8px", color: "#2563eb", borderColor: "#bfdbfe", background: "#eff6ff" }}
-                                        disabled={bulkFobSavingKey === bomTemplate}
-                                        onClick={() => void applyBulkFobDelta(bomTemplate, allSkus, 200)}
-                                      >
-                                        +200
-                                      </button>
-                                      <button
-                                        type="button"
-                                        className="btn btn-sm btn-ghost"
-                                        style={{ fontSize: 10, padding: "2px 8px", color: "#b45309", borderColor: "#fed7aa", background: "#fff7ed" }}
-                                        disabled={bulkFobSavingKey === bomTemplate}
-                                        onClick={() => void applyBulkFobDelta(bomTemplate, allSkus, -300)}
-                                      >
-                                        -300
-                                      </button>
-                                      <button
-                                        type="button"
-                                        className="btn btn-sm btn-ghost"
-                                        title="Select countries that already have FOB on this BOM"
-                                        style={{ fontSize: 10, padding: "2px 8px" }}
-                                        onClick={() => setBulkFobCountryScope(bomTemplate, allSkus, "filled")}
-                                      >
-                                        Filled
-                                      </button>
-                                      <button
-                                        type="button"
-                                        className="btn btn-sm btn-ghost"
-                                        title="Select every visible country column"
-                                        style={{ fontSize: 10, padding: "2px 8px" }}
-                                        onClick={() => setBulkFobCountryScope(bomTemplate, allSkus, "all")}
-                                      >
-                                        All
-                                      </button>
-                                      <button
-                                        type="button"
-                                        className="btn btn-sm btn-ghost"
-                                        title="Clear selected countries"
-                                        style={{ fontSize: 10, padding: "2px 8px" }}
-                                        onClick={() => setBulkFobCountryScope(bomTemplate, allSkus, "clear")}
-                                      >
-                                        Clear
-                                      </button>
+                                        <div className="bom-admin-editor-section-head">
+                                          <span>Product fields</span>
+                                          <small>{allCodes.length} SKUs</small>
+                                        </div>
+                                        <div className="bom-admin-editor-fields">
+                                          <input
+                                            name="brand"
+                                            type="text"
+                                            required
+                                            defaultValue={(ref as any).brand || ""}
+                                            placeholder="Brand"
+                                            className="bom-admin-editor-input is-brand"
+                                          />
+                                          <input
+                                            name="modelName"
+                                            type="text"
+                                            required
+                                            defaultValue={(ref as any).modelName || ""}
+                                            placeholder="Model"
+                                            className="bom-admin-editor-input"
+                                          />
+                                          <input
+                                            name="version"
+                                            type="text"
+                                            required
+                                            defaultValue={(ref as any).version || ""}
+                                            placeholder="Version"
+                                            className="bom-admin-editor-input"
+                                          />
+                                          <select
+                                            name="powertrain"
+                                            required
+                                            defaultValue={(ref as any).powertrain || mg.pt || "ICE"}
+                                            className="bom-admin-editor-select"
+                                          >
+                                            {['BEV','HEV','PHEV','ICE','MHEV','REEV','Other'].map(p => <option key={p} value={p}>{p}</option>)}
+                                          </select>
+                                          <button type="submit" className="btn btn-sm btn-primary bom-admin-editor-primary">
+                                            Save Product
+                                          </button>
+                                        </div>
+                                      </form>
+                                      <div className="bom-admin-editor-section bom-admin-fob-tools">
+                                        <div className="bom-admin-editor-section-head">
+                                          <span>FOB adjustment</span>
+                                          <small>{bulkFobEditor.selectedCountries.length || 0} selected</small>
+                                        </div>
+                                        <div className="bom-admin-editor-fields">
+                                          <input
+                                            type="number"
+                                            value={bulkFobEditor.deltaEur}
+                                            placeholder="± EUR"
+                                            onChange={(event) => {
+                                              const value = event.target.value;
+                                              updateBulkFobEditor(bomTemplate, allSkus, (current) => ({
+                                                ...current,
+                                                deltaEur: value,
+                                              }));
+                                            }}
+                                            className="bom-admin-editor-input is-delta"
+                                          />
+                                          <button
+                                            type="button"
+                                            className="btn btn-sm btn-primary bom-admin-editor-primary"
+                                            disabled={bulkFobSavingKey === bomTemplate}
+                                            onClick={() => void applyBulkFobDelta(bomTemplate, allSkus)}
+                                          >
+                                            {bulkFobSavingKey === bomTemplate ? "Saving..." : `Apply to ${bulkFobEditor.selectedCountries.length || 0}`}
+                                          </button>
+                                          <button
+                                            type="button"
+                                            className="btn btn-sm btn-ghost bom-admin-editor-quick is-plus"
+                                            disabled={bulkFobSavingKey === bomTemplate}
+                                            onClick={() => void applyBulkFobDelta(bomTemplate, allSkus, 200)}
+                                          >
+                                            +200
+                                          </button>
+                                          <button
+                                            type="button"
+                                            className="btn btn-sm btn-ghost bom-admin-editor-quick is-minus"
+                                            disabled={bulkFobSavingKey === bomTemplate}
+                                            onClick={() => void applyBulkFobDelta(bomTemplate, allSkus, -300)}
+                                          >
+                                            -300
+                                          </button>
+                                          <button
+                                            type="button"
+                                            className="btn btn-sm btn-ghost bom-admin-editor-scope"
+                                            title="Select countries that already have FOB on this BOM"
+                                            onClick={() => setBulkFobCountryScope(bomTemplate, allSkus, "filled")}
+                                          >
+                                            Filled
+                                          </button>
+                                          <button
+                                            type="button"
+                                            className="btn btn-sm btn-ghost bom-admin-editor-scope"
+                                            title="Select every visible country column"
+                                            onClick={() => setBulkFobCountryScope(bomTemplate, allSkus, "all")}
+                                          >
+                                            All
+                                          </button>
+                                          <button
+                                            type="button"
+                                            className="btn btn-sm btn-ghost bom-admin-editor-scope"
+                                            title="Clear selected countries"
+                                            onClick={() => setBulkFobCountryScope(bomTemplate, allSkus, "clear")}
+                                          >
+                                            Clear
+                                          </button>
+                                        </div>
+                                      </div>
                                     </div>
                                     {bulkFobErrors[bomTemplate] ? (
-                                      <div style={{ fontSize: 10, color: "#dc2626", fontWeight: 600 }}>
+                                      <div className="bom-admin-editor-error">
                                         {bulkFobErrors[bomTemplate]}
                                       </div>
                                     ) : null}
-                                    <details>
-                                      <summary style={{ cursor: "pointer", fontSize: 10, color: "#475569", fontWeight: 600 }}>
+                                    <details className="bom-admin-country-scope">
+                                      <summary>
                                         Selected countries ({bulkFobEditor.selectedCountries.length})
                                       </summary>
-                                      <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginTop: 8 }}>
+                                      <div className="bom-admin-country-scope-list">
                                         {tiers.countryCodes.map((countryCode) => {
                                           const hasFob = tiers.filledCountryCodeSet.has(countryCode);
                                           return (
                                             <label
                                               key={`${bomTemplate}-country-${countryCode}`}
-                                              style={{
-                                                display: "inline-flex",
-                                                alignItems: "center",
-                                                gap: 4,
-                                                padding: "4px 6px",
-                                                borderRadius: 6,
-                                                border: "1px solid #cbd5e1",
-                                                background: hasFob ? "#ffffff" : "#f8fafc",
-                                                fontSize: 10,
-                                                color: hasFob ? "#1e293b" : "#94a3b8",
-                                              }}
+                                              className={`bom-admin-country-chip${hasFob ? " has-fob" : ""}`}
                                               title={`${countryCode}${countryLabels.get(countryCode) ? ` · ${countryLabels.get(countryCode)}` : ""}${hasFob ? "" : " · no FOB on this BOM yet"}`}
                                             >
                                               <input

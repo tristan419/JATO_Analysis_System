@@ -1,4 +1,5 @@
 const CACHE_PREFIX = "jato:page-cache:v2:";
+const MEMORY_CACHE_MAX_ENTRIES = 64;
 
 interface CacheEnvelope<T> {
   savedAt: number;
@@ -7,6 +8,28 @@ interface CacheEnvelope<T> {
 }
 
 const memoryCache = new Map<string, CacheEnvelope<unknown>>();
+
+function trimMemoryCache(): void {
+  while (memoryCache.size > MEMORY_CACHE_MAX_ENTRIES) {
+    const oldest = memoryCache.keys().next();
+    if (oldest.done) return;
+    memoryCache.delete(oldest.value);
+  }
+}
+
+function setMemoryEntry<T>(key: string, entry: CacheEnvelope<T>): void {
+  memoryCache.delete(key);
+  memoryCache.set(key, entry as CacheEnvelope<unknown>);
+  trimMemoryCache();
+}
+
+function getMemoryEntry<T>(key: string): CacheEnvelope<T> | undefined {
+  const entry = memoryCache.get(key) as CacheEnvelope<T> | undefined;
+  if (!entry) return undefined;
+  memoryCache.delete(key);
+  memoryCache.set(key, entry as CacheEnvelope<unknown>);
+  return entry;
+}
 
 function getStorageKey(key: string): string {
   return `${CACHE_PREFIX}${key}`;
@@ -53,7 +76,7 @@ function removeFromSessionStorage(key: string): void {
 }
 
 export function getCachedPageValue<T>(key: string): T | null {
-  const memoryEntry = memoryCache.get(key) as CacheEnvelope<T> | undefined;
+  const memoryEntry = getMemoryEntry<T>(key);
   if (memoryEntry) {
     if (isExpired(memoryEntry)) {
       memoryCache.delete(key);
@@ -70,7 +93,7 @@ export function getCachedPageValue<T>(key: string): T | null {
     return null;
   }
 
-  memoryCache.set(key, sessionEntry as CacheEnvelope<unknown>);
+  setMemoryEntry(key, sessionEntry);
   return sessionEntry.value;
 }
 
@@ -82,7 +105,7 @@ export function setCachedPageValue<T>(key: string, value: T, ttlMs: number): voi
     value,
   };
 
-  memoryCache.set(key, entry as CacheEnvelope<unknown>);
+  setMemoryEntry(key, entry);
   writeToSessionStorage(key, entry);
 }
 

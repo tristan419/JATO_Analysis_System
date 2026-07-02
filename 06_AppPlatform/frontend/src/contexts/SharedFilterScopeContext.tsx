@@ -112,6 +112,7 @@ export function createSharedSelections(
     body_type: [...(source?.body_type ?? base.body_type)],
     segment: [...(source?.segment ?? base.segment)],
     powertrain: [...(source?.powertrain ?? base.powertrain)],
+    origin: [...(source?.origin ?? base.origin)],
     make: [...(source?.make ?? base.make)],
     model: [...(source?.model ?? base.model)],
     version: [...(source?.version ?? base.version)],
@@ -129,6 +130,7 @@ export function resolveFilterColumns(columns: string[]): ResolvedFilterColumns {
       body_type: null,
       segment: null,
       powertrain: null,
+      origin: null,
       make: null,
       model: null,
       version: null,
@@ -197,7 +199,7 @@ export function SharedFilterScopeProvider({ children }: { children: ReactNode })
     const cached = getCachedPageValue<SharedFilterScopeCache>(
       SHARED_FILTER_SCOPE_CACHE_KEY,
     );
-    cachedScopeRef.current = cached && cached.search === currentSearch ? cached : null;
+    cachedScopeRef.current = cached && (cached.search === currentSearch || currentSearch === "") ? cached : null;
   }
 
   const cachedScope = cachedScopeRef.current;

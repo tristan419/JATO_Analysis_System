@@ -893,6 +893,7 @@ export interface VersionComparisonMetadata {
   availableFuelTypes: string[];
   availableSegments: MarketScanCountryOption[];
   availableModels: VersionComparisonModelOption[];
+  globalAvailableModels?: VersionComparisonModelOption[];
   availableBodyTypes: string[];
   availableDriveTypes: string[];
   suggestedLengthMin: number | null;

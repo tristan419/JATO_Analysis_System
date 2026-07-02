@@ -10141,6 +10141,15 @@ table.data-table tr.data-table-group-row.contains-selection td {
   background: rgba(28, 105, 212, 0.04);
 }
 
+.version-comparison-model-option.is-global-only {
+  cursor: default;
+  opacity: 0.68;
+}
+
+.version-comparison-model-option.is-global-only:hover {
+  background: rgba(15, 23, 42, 0.025);
+}
+
 .version-comparison-model-checkbox {
   flex-shrink: 0;
   width: 14px;
@@ -14348,6 +14357,210 @@ table.data-table tr.data-table-group-row.contains-selection td {
   font-variant-numeric: tabular-nums;
 }
 
+.bom-admin-inline-editor-cell {
+  position: relative;
+  z-index: 2;
+  padding: 8px 10px !important;
+  border-left: 3px solid #2563eb;
+  background: #f8fafc;
+  white-space: normal !important;
+  overflow: visible !important;
+  text-overflow: clip !important;
+}
+
+.bom-admin-inline-editor {
+  display: grid;
+  gap: 10px;
+  padding: 10px;
+  border: 1px solid rgba(148, 163, 184, 0.5);
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.96), rgba(241, 245, 249, 0.72));
+}
+
+.bom-admin-inline-editor-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  min-width: 0;
+}
+
+.bom-admin-inline-editor-title {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  min-width: 0;
+}
+
+.bom-admin-inline-editor-title span,
+.bom-admin-editor-section-head span {
+  color: #0f766e;
+  font-size: 10px;
+  font-weight: 900;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+}
+
+.bom-admin-inline-editor-title strong {
+  max-width: 260px;
+  overflow: hidden;
+  color: #111827;
+  font-size: 13px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.bom-admin-inline-editor-title em {
+  max-width: 180px;
+  overflow: hidden;
+  color: #64748b;
+  font-size: 10px;
+  font-style: normal;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.bom-admin-inline-editor-grid {
+  display: grid;
+  grid-template-columns: minmax(420px, 1fr) minmax(360px, 0.9fr);
+  gap: 10px;
+  align-items: stretch;
+}
+
+.bom-admin-editor-section {
+  display: grid;
+  align-content: start;
+  gap: 8px;
+  min-width: 0;
+  padding: 10px;
+  border: 1px solid rgba(203, 213, 225, 0.86);
+  background: rgba(255, 255, 255, 0.88);
+}
+
+.bom-admin-editor-section-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  min-width: 0;
+}
+
+.bom-admin-editor-section-head small {
+  color: #94a3b8;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+  font-size: 10px;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.bom-admin-editor-fields {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.bom-admin-editor-input,
+.bom-admin-editor-select {
+  height: 30px;
+  min-width: 0;
+  border: 1px solid #cbd5e1;
+  background: #fff;
+  color: #111827;
+  font-size: 11px;
+  font-weight: 650;
+}
+
+.bom-admin-editor-input {
+  width: 150px;
+}
+
+.bom-admin-editor-input.is-brand {
+  width: 100px;
+  text-transform: uppercase;
+}
+
+.bom-admin-editor-input.is-delta {
+  width: 92px;
+  font-variant-numeric: tabular-nums;
+}
+
+.bom-admin-editor-select {
+  width: 86px;
+}
+
+.bom-admin-editor-copy,
+.bom-admin-editor-primary,
+.bom-admin-editor-quick,
+.bom-admin-editor-scope {
+  min-height: 30px;
+  padding: 2px 10px;
+  font-size: 10px;
+  white-space: nowrap;
+}
+
+.bom-admin-editor-copy {
+  flex-shrink: 0;
+  border-color: #bfdbfe;
+  background: #eff6ff;
+  color: #2563eb;
+}
+
+.bom-admin-editor-quick.is-plus {
+  border-color: #bfdbfe;
+  background: #eff6ff;
+  color: #2563eb;
+}
+
+.bom-admin-editor-quick.is-minus {
+  border-color: #fed7aa;
+  background: #fff7ed;
+  color: #b45309;
+}
+
+.bom-admin-editor-error {
+  color: #dc2626;
+  font-size: 10px;
+  font-weight: 700;
+}
+
+.bom-admin-country-scope {
+  border-top: 1px solid rgba(203, 213, 225, 0.9);
+  padding-top: 8px;
+}
+
+.bom-admin-country-scope summary {
+  cursor: pointer;
+  color: #475569;
+  font-size: 10px;
+  font-weight: 800;
+}
+
+.bom-admin-country-scope-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+.bom-admin-country-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  min-height: 24px;
+  padding: 4px 7px;
+  border: 1px solid #dbe2ea;
+  background: #f8fafc;
+  color: #94a3b8;
+  font-size: 10px;
+}
+
+.bom-admin-country-chip.has-fob {
+  border-color: #cbd5e1;
+  background: #fff;
+  color: #1e293b;
+}
+
 .bom-finance-source-mark {
   position: absolute;
   top: 4px;
@@ -14538,6 +14751,21 @@ table.data-table tr.data-table-group-row.contains-selection td {
   min-width: 96px;
   height: 34px;
   justify-content: center;
+}
+
+@media (max-width: 980px) {
+  .bom-admin-inline-editor-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .bom-admin-inline-editor-head {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .bom-admin-editor-input {
+    width: 136px;
+  }
 }
 
 .bom-fob-edit-card {
