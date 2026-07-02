@@ -50,6 +50,15 @@ function okProbe(target: "cn" | "intl", ms: number): ProbeResult {
   };
 }
 
+function failedProbe(target: "cn" | "intl", ms: number): ProbeResult {
+  return {
+    ...makeInitialProbe(target),
+    status: "failed",
+    ms,
+    checkedAt: "10:00:00",
+  };
+}
+
 describe("route decision helpers", () => {
   it("keeps the current route when probes are within the redirect margin", () => {
     expect(chooseAutoRoute({
@@ -75,7 +84,7 @@ describe("route decision helpers", () => {
     }, "intl")?.target).toBe("cn");
   });
 
-  it("keeps China-local browsers on www unless intl is much faster", () => {
+  it("keeps China-local browsers on www whenever www is reachable", () => {
     const chinaProfile = createClientRouteProfile({
       timeZone: "Asia/Shanghai",
       languages: ["zh-CN"],
@@ -89,12 +98,17 @@ describe("route decision helpers", () => {
     expect(chooseAutoRoute({
       cn: okProbe("cn", 1_900),
       intl: okProbe("intl", 300),
-    }, "cn", chinaProfile)?.target).toBe("intl");
+    }, "cn", chinaProfile)?.target).toBe("cn");
 
     expect(chooseAutoRoute({
       cn: okProbe("cn", 1_700),
       intl: okProbe("intl", 300),
     }, "intl", chinaProfile)?.target).toBe("cn");
+
+    expect(chooseAutoRoute({
+      cn: failedProbe("cn", 1_800),
+      intl: okProbe("intl", 300),
+    }, "cn", chinaProfile)?.target).toBe("intl");
   });
 
   it("builds cross-origin redirect URLs without dropping existing filters", () => {
