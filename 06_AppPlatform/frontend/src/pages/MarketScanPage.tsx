@@ -46,6 +46,7 @@ import {
   type SlideLayoutSettings,
 } from "../utils/slideLayout";
 import { TRANSPARENT_CHART_LAYOUT as CHART_LAYOUT } from "../utils/plotlyDefaults";
+import { optionMatchesCompactSearch } from "../utils/searchMatching";
 import { useArrowCountryNavigation } from "../utils/useArrowCountryNavigation";
 import { useFixedCanvasPreview } from "../utils/useFixedCanvasPreview";
 import { SlideFitSummary } from "../components/SlideFitSummary";
@@ -2376,7 +2377,7 @@ function DrilldownSection({
 function searchDrilldownOptions(options: { value: string; label: string }[], query: string): { value: string; label: string }[] {
   const q = query.trim().toLowerCase();
   if (!q) return options;
-  return options.filter((s) => s.label.toLowerCase().includes(q) || s.value.toLowerCase().includes(q));
+  return options.filter((s) => optionMatchesCompactSearch(s, query));
 }
 
 export function MarketScanPage({
