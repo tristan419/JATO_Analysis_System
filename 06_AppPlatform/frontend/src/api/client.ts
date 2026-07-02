@@ -300,7 +300,7 @@ function isAbortLikeError(error: unknown): boolean {
 }
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
-  const shouldDedupe = !(init?.body instanceof FormData);
+  const shouldDedupe = !(init?.body instanceof FormData) && !init?.signal;
   const key = shouldDedupe ? dedupeKey(path, init) : null;
   const inflight = key
     ? inflightRequests.get(key) as Promise<T> | undefined
