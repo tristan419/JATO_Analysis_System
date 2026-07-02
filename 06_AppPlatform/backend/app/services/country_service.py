@@ -77,17 +77,22 @@ def country_filter_aliases(query: str) -> set[str]:
         return set()
 
     matched: set[str] = set()
+    exact_only = len(normalized) <= 2
     for canonical, aliases in COUNTRY_ALIAS_GROUPS.items():
         all_names = {
             _normalize(canonical),
             *{_normalize(alias) for alias in aliases},
         }
-        if any(
-            normalized == name
-            or name.startswith(normalized)
-            or normalized in name
-            for name in all_names
-        ):
+        if exact_only:
+            is_match = normalized in all_names
+        else:
+            is_match = any(
+                normalized == name
+                or name.startswith(normalized)
+                or normalized in name
+                for name in all_names
+            )
+        if is_match:
             matched.update(all_names)
 
     if matched:

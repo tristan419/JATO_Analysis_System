@@ -1,125 +1,55 @@
 source_code: peugeot_3008_fr_draft_scrapling
 country: 法国
 brand: PEUGEOT
-source_url: https://www.peugeot.fr/modeles/3008.html
-source_type: manufacturer_official
+source_url: https://www.peugeot.fr/content/dam/peugeot/france/b2c/documentation/catalogues/brochure/ct-3008-applicable-au-04-mai-2026.pdf
+source_type: official_price_list
 price_semantics: base_msrp
-extractor_type: scrapling
+extractor_type: pdf_text
 profile:
-  url: https://www.peugeot.fr/modeles/3008.html
-  tier: stealth
-  headless: true
-  network_idle: true
-  impersonate: chrome
-  json_script_selector: script[type='application/ld+json']
-  css:
-    vehicle_container: body
-    model: h2
-    trim: h3
-    price: '[class*="price"]'
+  url: https://www.peugeot.fr/content/dam/peugeot/france/b2c/documentation/catalogues/brochure/ct-3008-applicable-au-04-mai-2026.pdf
+  timeout_seconds: 60
+  retry_attempts: 1
+  retry_delay_seconds: 1
+  prefer_curl_download: true
+  browser_download_fallback: true
   default_currency: EUR
   default_tax_included: true
-  default_price_label: Prix catalogue
+  default_price_label: Prix conseillés TTC
   fixed_model: '3008'
   fixed_jato_model: '3008'
-  fixed_jato_powertrain: null
-  model_rules: []
-  skip_if_model_unmapped: false
   copy_trim_to_jato_trim: true
-  confidence_rules:
-    base: 0.2
-    fixed_model_bonus: 0.18
-    fixed_jato_model_bonus: 0.12
-    model_rule_bonus: 0.12
-    trim_present_bonus: 0.1
-    copy_trim_to_jato_trim_bonus: 0.09
-    parsed_price_text_bonus: 0.03
-    currency_bonus: 0.01
-    price_label_bonus: 0.02
-    trim_keyword_bonuses: []
-    price_band_bonuses:
-    - key: price_band_entry
-      label: Entry price band matched
-      max: 0
-      delta: 0.0
-    - key: price_band_mid
-      label: Mid price band matched
-      min: 0
-      max: 0
-      delta: 0.01
-    - key: price_band_high
-      label: High price band matched
-      min: 0
-      delta: 0.03
-    powertrain_keyword_bonuses: []
-    powertrain_bonuses:
-    - key: powertrain_bev
-      label: 'Powertrain matched: BEV'
-      powertrain: BEV
-      delta: 0.03
-    - key: powertrain_phev
-      label: 'Powertrain matched: PHEV'
-      powertrain: PHEV
-      delta: 0.03
-    - key: powertrain_mhev
-      label: 'Powertrain matched: MHEV'
-      powertrain: MHEV
-      delta: 0.03
-    - key: powertrain_ice
-      label: 'Powertrain matched: ICE'
-      powertrain: ICE
-      delta: 0.03
-    clamp_min: 0.0
-    clamp_max: 1.0
-  structured_fields:
-    edition_rules:
-    - key: edition_special
-      label: Special Edition
-      keyword: special edition
-      special: true
-    powertrain_rules:
-    - key: powertrain_bev
-      powertrain: BEV
-      keywords:
-      - e-3008
-      - électrique
-      - electrique
-      - electric
-    - key: powertrain_phev
-      powertrain: PHEV
-      keywords:
-      - hybride rechargeable
-      - plug-in-hybrid
-    - key: powertrain_mhev
-      powertrain: MHEV
-      keywords:
-      - hybride
-      - hybrid
-    - key: powertrain_ice
-      powertrain: ICE
-      keywords:
-      - puretech
-      - bluehdi
-      - essence
-      - diesel
-  auto_accept_gates:
-    review_threshold: 0.95
-    semi_auto_threshold: 0.98
-    require_powertrain_match: true
-    force_review_if_powertrain_missing: true
-    force_review_if_powertrain_ambiguous: true
-    force_review_for_special_edition: true
+  match_confidence: 0.9
+  match_status: review_required
+  match_reason:
+    kind: official_pdf_price_list
+    source: peugeot_fr_tarifs_pdf
+    note: Official Peugeot France 3008 tariff PDF exposes Prix conseillés TTC by powertrain and trim; regexes avoid campaign/finance copy on the showroom page.
+  entry_patterns:
+  - pattern: 'Electrique\s+210\s+ch\s+batterie\s+73\s+kWh\s+0-0\s+7\s+-3\s*600\s*€\s+\*\*\*\s+(?P<price>45\s*090\s*€)'
+    official_trim: ALLURE Electrique 210 ch batterie 73 kWh
+    official_powertrain: Electrique 210 ch batterie 73 kWh
+    jato_powertrain: BEV
+  - pattern: 'Electrique\s+230\s+ch\s+batterie\s+97\s+kWh\s+Grande\s+autonomie\s+0-0\s+7\s+-3\s*600\s*€\s+ou\s+-380€\s+\*\*\*\s+(?P<price>46\s*990\s*€)'
+    official_trim: ALLURE Electrique 230 ch batterie 97 kWh Grande autonomie
+    official_powertrain: Electrique 230 ch batterie 97 kWh Grande autonomie
+    jato_powertrain: BEV
+  - pattern: 'Plug-in\s+Hybrid\s+225\s+ch\s+e-DCS7\s+55-58\s+8\s+2\s*810\s*€\s+(?P<price>43\s*490\s*€)'
+    official_trim: ALLURE Plug-in Hybrid 225 ch e-DCS7
+    official_powertrain: Plug-in Hybrid 225 ch e-DCS7
+    jato_powertrain: PHEV
+  - pattern: 'Hybrid\s+145\s+ch\s+e-DCS6\s+120-126\s+7\s+540-880\s*€\s+(?P<price>40\s*500\s*€)'
+    official_trim: ALLURE Hybrid 145 ch e-DCS6
+    official_powertrain: Hybrid 145 ch e-DCS6
+    jato_powertrain: MHEV
 schedule:
   frequency: manual_only
   run_window_start: 00:00
   run_window_end: 05:00
   preferred_weekday: monday
-notes: Research-confirmed Peugeot France model-specific configurator entry. The page
-  exposes q-v3-vehicle-configurator with finition and motorisation steps, but inline
-  vehiclePriceCatalogue and vehiclePriceFinal fields are empty in the raw HTML. Treat
-  this as a valid landing page with a remaining client-side data extraction blocker,
-  not as a finance-only rejection. [URL language corrected] [CSS selectors applied
-  from brand probe]
+notes: Repaired from showroom-page CSS scraping to the official Peugeot France
+  3008 tariff PDF. The showroom page exposes campaign/finance copy and empty
+  client-side price placeholders; the PDF contains stable Prix conseillés TTC
+  rows by powertrain and trim.
 bootstrap_meta:
   country_model_rank: 2
   suggested_scope_kind: single_model

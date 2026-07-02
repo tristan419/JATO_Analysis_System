@@ -1,13 +1,13 @@
+from datetime import datetime
+
 from sqlalchemy import (
     Select,
     and_,
     case,
-    distinct,
     func,
     inspect,
     or_,
     select,
-    tuple_,
 )
 from sqlalchemy.orm import Session
 
@@ -750,34 +750,129 @@ def list_current_prices(
     return session.execute(stmt).scalars().all()
 
 
-def _current_price_alert_keys_subquery():
+def _normalize_price_alert_direction(direction: str | None) -> str:
+    value = str(direction or "all").strip().lower()
+    if value in {"drops", "drop", "decrease", "decreases"}:
+        return "drops"
+    if value in {"increases", "increase"}:
+        return "increases"
+    return "all"
+
+
+def _price_history_event_keys_subquery(
+    direction: str | None = None,
+    changed_since: datetime | None = None,
+    threshold_pct: float | None = None,
+):
+    partition_columns = (
+        PriceHistory.country,
+        PriceHistory.brand,
+        PriceHistory.jato_model,
+        PriceHistory.jato_trim,
+        PriceHistory.jato_powertrain,
+    )
+    previous_source_value = func.lag(PriceHistory.source_msrp_value).over(
+        partition_by=partition_columns,
+        order_by=PriceHistory.valid_from_utc.asc(),
+    )
+    previous_source_currency = func.lag(PriceHistory.source_currency).over(
+        partition_by=partition_columns,
+        order_by=PriceHistory.valid_from_utc.asc(),
+    )
+    previous_msrp_value = func.lag(PriceHistory.msrp_value).over(
+        partition_by=partition_columns,
+        order_by=PriceHistory.valid_from_utc.asc(),
+    )
+    history_events = select(
+        PriceHistory.country.label("country"),
+        PriceHistory.brand.label("brand"),
+        PriceHistory.jato_model.label("jato_model"),
+        PriceHistory.jato_trim.label("jato_trim"),
+        PriceHistory.jato_powertrain.label("jato_powertrain"),
+        PriceHistory.msrp_value.label("msrp_value"),
+        PriceHistory.source_msrp_value.label("source_msrp_value"),
+        PriceHistory.source_currency.label("source_currency"),
+        PriceHistory.valid_from_utc.label("valid_from_utc"),
+        previous_msrp_value.label("previous_msrp_value"),
+        previous_source_value.label("previous_source_msrp_value"),
+        previous_source_currency.label("previous_source_currency"),
+    ).subquery("price_history_events")
+
+    stmt = select(
+        history_events.c.country,
+        history_events.c.brand,
+        history_events.c.jato_model,
+        history_events.c.jato_trim,
+        history_events.c.jato_powertrain,
+    ).where(
+        history_events.c.previous_source_msrp_value.is_not(None),
+        or_(
+            history_events.c.source_msrp_value
+            != history_events.c.previous_source_msrp_value,
+            history_events.c.source_currency
+            != history_events.c.previous_source_currency,
+        ),
+    )
+    if changed_since is not None:
+        stmt = stmt.where(history_events.c.valid_from_utc >= changed_since)
+    source_currency_matches = (
+        history_events.c.source_currency
+        == history_events.c.previous_source_currency
+    )
+    source_change_value = (
+        history_events.c.source_msrp_value
+        - history_events.c.previous_source_msrp_value
+    )
+    eur_change_value = (
+        history_events.c.msrp_value
+        - history_events.c.previous_msrp_value
+    )
+    monitoring_change_value = case(
+        (source_currency_matches, source_change_value),
+        else_=eur_change_value,
+    )
+    monitoring_previous_value = case(
+        (
+            source_currency_matches,
+            history_events.c.previous_source_msrp_value,
+        ),
+        else_=history_events.c.previous_msrp_value,
+    )
+    safe_threshold_pct = max(0.0, float(threshold_pct or 0.0))
+    if safe_threshold_pct > 0:
+        change_pct = func.abs(
+            (monitoring_change_value / monitoring_previous_value) * 100.0
+        )
+        stmt = stmt.where(
+            monitoring_previous_value != 0,
+            change_pct >= safe_threshold_pct,
+        )
+    normalized_direction = _normalize_price_alert_direction(direction)
+    if normalized_direction == "drops":
+        stmt = stmt.where(monitoring_change_value < 0)
+    elif normalized_direction == "increases":
+        stmt = stmt.where(monitoring_change_value > 0)
     return (
-        select(
-            PriceHistory.country.label("country"),
-            PriceHistory.brand.label("brand"),
-            PriceHistory.jato_model.label("jato_model"),
-            PriceHistory.jato_trim.label("jato_trim"),
-            PriceHistory.jato_powertrain.label("jato_powertrain"),
-        )
-        .group_by(
-            PriceHistory.country,
-            PriceHistory.brand,
-            PriceHistory.jato_model,
-            PriceHistory.jato_trim,
-            PriceHistory.jato_powertrain,
-        )
-        .having(
-            func.count(
-                distinct(
-                    tuple_(
-                        PriceHistory.source_msrp_value,
-                        PriceHistory.source_currency,
-                    )
-                )
-            )
-            > 1
+        stmt.group_by(
+            history_events.c.country,
+            history_events.c.brand,
+            history_events.c.jato_model,
+            history_events.c.jato_trim,
+            history_events.c.jato_powertrain,
         )
         .subquery("alert_keys")
+    )
+
+
+def _current_price_alert_keys_subquery(
+    direction: str | None = None,
+    changed_since: datetime | None = None,
+    threshold_pct: float | None = None,
+):
+    return (
+        _price_history_event_keys_subquery(direction, changed_since, threshold_pct)
+        if direction is not None or changed_since is not None or threshold_pct is not None
+        else _price_history_event_keys_subquery()
     )
 
 
@@ -786,6 +881,9 @@ def count_current_price_alerts(
     country: str | None,
     brand: str | None,
     jato_model: str | None,
+    direction: str | None = None,
+    changed_since: datetime | None = None,
+    threshold_pct: float | None = None,
 ) -> int:
     if not has_price_history_table(session):
         return 0
@@ -803,7 +901,7 @@ def count_current_price_alerts(
         jato_model,
     ).subquery("filtered_current_prices")
 
-    alert_keys = _current_price_alert_keys_subquery()
+    alert_keys = _current_price_alert_keys_subquery(direction, changed_since, threshold_pct)
     stmt = select(func.count()).select_from(
         filtered_current_prices.join(
             alert_keys,
@@ -828,11 +926,14 @@ def list_current_price_alerts(
     jato_model: str | None,
     limit: int,
     offset: int,
+    direction: str | None = None,
+    changed_since: datetime | None = None,
+    threshold_pct: float | None = None,
 ) -> list[CurrentPrice]:
     if not has_price_history_table(session):
         return []
 
-    alert_keys = _current_price_alert_keys_subquery()
+    alert_keys = _current_price_alert_keys_subquery(direction, changed_since, threshold_pct)
     stmt: Select[tuple[CurrentPrice]] = select(CurrentPrice).join(
         alert_keys,
         and_(

@@ -1,110 +1,57 @@
 source_code: mg_zs_hr_draft_scrapling
 country: 克罗地亚
 brand: MG
-source_url: https://www.mgmotor.hr/model/mg-zs
+source_url: https://www.mgmotor.hr/configurator/zs
 source_type: manufacturer_official
 price_semantics: base_msrp
 extractor_type: scrapling
 profile:
-  url: https://www.mgmotor.hr/model/mg-zs
-  tier: stealth
+  url: https://www.mgmotor.hr/configurator/zs
+  tier: http
   headless: true
-  network_idle: true
+  network_idle: false
+  load_dom: false
+  timeout_ms: 20000
   impersonate: chrome
+  text_regex:
+    source_selector: body
+    include_element_html: true
+    entry_patterns:
+    - pattern: 'field_commerceHandle(?:&quot;|"):(?:&quot;|")standard(?:&quot;|").*?field_paymentOption_paymentName(?:&quot;|"):(?:&quot;|")Gotovina(?:&quot;|").*?field_paymentOption_basePrice(?:&quot;|"):(?:&quot;|")(?P<price>18990\.00)(?:&quot;|")'
+      official_trim: ZS Standard
+      official_powertrain: Benzin
+      price_label: Gotovina
+    - pattern: 'field_commerceHandle(?:&quot;|"):(?:&quot;|")comfort(?:&quot;|").*?field_paymentOption_paymentName(?:&quot;|"):(?:&quot;|")Gotovina(?:&quot;|").*?field_paymentOption_basePrice(?:&quot;|"):(?:&quot;|")(?P<price>21990\.00)(?:&quot;|")'
+      official_trim: ZS Comfort
+      official_powertrain: Benzin
+      price_label: Gotovina
   default_currency: EUR
   default_tax_included: true
-  default_price_label: Preporučena maloprodajna cijena s PDV-om
+  default_price_label: Gotovina
   fixed_model: ZS
   fixed_jato_model: ZS
-  fixed_jato_powertrain: null
-  model_rules: []
-  skip_if_model_unmapped: false
+  fixed_jato_powertrain: ICE
   copy_trim_to_jato_trim: true
-  confidence_rules:
-    base: 0.2
-    fixed_model_bonus: 0.18
-    fixed_jato_model_bonus: 0.12
-    model_rule_bonus: 0.12
-    trim_present_bonus: 0.1
-    copy_trim_to_jato_trim_bonus: 0.09
-    parsed_price_text_bonus: 0.03
-    currency_bonus: 0.01
-    price_label_bonus: 0.02
-    trim_keyword_bonuses: []
-    price_band_bonuses:
-    - key: price_band_entry
-      label: Entry price band matched
-      max: 0
-      delta: 0.0
-    - key: price_band_mid
-      label: Mid price band matched
-      min: 0
-      max: 0
-      delta: 0.01
-    - key: price_band_high
-      label: High price band matched
-      min: 0
-      delta: 0.03
-    powertrain_keyword_bonuses: []
-    powertrain_bonuses:
-    - key: powertrain_bev
-      label: 'Powertrain matched: BEV'
-      powertrain: BEV
-      delta: 0.03
-    - key: powertrain_hev
-      label: 'Powertrain matched: HEV'
-      powertrain: HEV
-      delta: 0.03
-    - key: powertrain_ice
-      label: 'Powertrain matched: ICE'
-      powertrain: ICE
-      delta: 0.03
-    clamp_min: 0.0
-    clamp_max: 1.0
+  match_confidence: 0.82
+  match_status: review_required
+  match_reason:
+    kind: official_configurator_cash_price
+    source: mg_hr_configurator_zs
+    note: Official MG Croatia ZS configurator embeds Gotovina cash basePrice values with priceVat includingVat; monthly Moove On rental prices and JSON-LD 250 placeholder are excluded.
   structured_fields:
-    edition_rules:
-    - key: edition_special
-      label: Special Edition
-      keyword: special edition
-      special: true
     powertrain_rules:
-    - key: powertrain_bev
-      powertrain: BEV
-      keywords:
-      - električni
-      - electric
-      - MG ZS EV
-      - EV
-    - key: powertrain_hev
-      powertrain: HEV
-      keywords:
-      - hibrid
-      - hybrid
     - key: powertrain_ice
       powertrain: ICE
       keywords:
       - benzin
-  auto_accept_gates:
-    review_threshold: 0.95
-    semi_auto_threshold: 0.98
-    require_powertrain_match: true
-    force_review_if_powertrain_missing: true
-    force_review_if_powertrain_ambiguous: true
-    force_review_for_special_edition: true
-  json_script_selector: script[type='application/ld+json']
-  css:
-    vehicle_container: body
-    model: h1, h2
-    trim: h3
-    price: '[class*="price"]'
 schedule:
   frequency: manual_only
   run_window_start: 00:00
   run_window_end: 05:00
   preferred_weekday: monday
-notes: Keywords filled from official manufacturer website research (HR market). CSS
-  selectors still require browser-based inspection before promotion. [CSS selectors
-  applied from brand probe]
+notes: Keywords filled from official manufacturer website research (HR market).
+  Replaced stale model-page CSS extraction with text_regex over the official MG
+  Croatia ZS configurator's embedded Gotovina cash price payload.
 bootstrap_meta:
   country_model_rank: 22
   suggested_scope_kind: single_model

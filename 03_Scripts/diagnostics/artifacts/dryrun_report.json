@@ -1,12 +1,2364 @@
 {
-  "batch": "--help",
+  "schemaVersion": "msrp_dryrun_report_v3",
+  "runId": "msrp-dryrun-20260624-142640",
+  "batch": "fr",
   "countries": [
-    "--help"
+    "fr"
   ],
-  "total": 0,
-  "pass": 0,
-  "empty": 0,
-  "fail": 0,
+  "expectedCountries": [
+    "fr"
+  ],
+  "observedCountries": [
+    "fr"
+  ],
+  "missingCountries": [],
+  "duplicateCountries": [],
+  "summary": {
+    "total": 27,
+    "pass": 19,
+    "empty": 1,
+    "fail": 7,
+    "errors": 0,
+    "passPct": 70.4,
+    "status": "degraded",
+    "failureBreakdown": {
+      "http_timeout": 7,
+      "anti_bot_access_denied": 1
+    },
+    "strategyRecommendations": {
+      "retry_or_reduce_concurrency": 7,
+      "manual_review_or_proxy_required": 1
+    },
+    "financeObservationCandidates": 0,
+    "financeMonthlyPaymentCount": 0,
+    "financeSemanticsCounts": {},
+    "financeTypeCounts": {},
+    "gateThreshold": 70,
+    "gateStatus": "allowed"
+  },
+  "countriesDetail": [
+    {
+      "countryCode": "fr",
+      "total": 27,
+      "pass": 19,
+      "empty": 1,
+      "fail": 7,
+      "errors": 0,
+      "passPct": 70.4,
+      "status": "degraded",
+      "topFailureReason": "http_timeout",
+      "failureBreakdown": {
+        "http_timeout": 7,
+        "anti_bot_access_denied": 1
+      },
+      "strategyRecommendations": {
+        "retry_or_reduce_concurrency": 7,
+        "manual_review_or_proxy_required": 1
+      },
+      "financeObservationCandidates": 0,
+      "financeMonthlyPaymentCount": 0,
+      "financeSemanticsCounts": {},
+      "financeTypeCounts": {},
+      "sources": [
+        {
+          "country": "fr",
+          "code": "bmw_ix1_fr_draft_scrapling",
+          "status": "pass",
+          "valid": 1,
+          "extracted": 1,
+          "rejected": 0,
+          "elapsed": 2.6,
+          "sourceAttempts": [
+            {
+              "attempt": 1,
+              "status": "dry_run",
+              "valid": 1,
+              "extracted": 1,
+              "failureReason": null,
+              "elapsedSeconds": 2.6
+            }
+          ],
+          "sourceUrl": "https://configure.bmw.fr/fr_FR/configure/U11/11HM",
+          "brand": "BMW",
+          "extractorName": "_ConfiguredHttpJson",
+          "extractorVersion": "0.2.0",
+          "coverageLevel": "L2_ENTRY_OR_RANGE_PRICE",
+          "auditStatus": "success",
+          "attemptedStrategies": [
+            {
+              "strategy": "http_json",
+              "status": "success",
+              "observations_count": 1
+            }
+          ],
+          "winningStrategy": "http_json",
+          "financeObservationCandidates": 0,
+          "financeMonthlyPaymentCount": 0,
+          "financeSemanticsCounts": {},
+          "financeTypeCounts": {},
+          "sampleFinanceContexts": [],
+          "index": 1,
+          "totalInCountry": 27,
+          "sourceCode": "bmw_ix1_fr_draft_scrapling",
+          "rawStatus": "dry_run",
+          "elapsedSeconds": 2.6
+        },
+        {
+          "country": "fr",
+          "code": "bmw_x1_fr_draft_scrapling",
+          "status": "pass",
+          "valid": 1,
+          "extracted": 1,
+          "rejected": 0,
+          "elapsed": 1.2,
+          "sourceAttempts": [
+            {
+              "attempt": 1,
+              "status": "dry_run",
+              "valid": 1,
+              "extracted": 1,
+              "failureReason": null,
+              "elapsedSeconds": 1.2
+            }
+          ],
+          "sourceUrl": "https://configure.bmw.fr/fr_FR/configure/U11/31EE",
+          "brand": "BMW",
+          "extractorName": "_ConfiguredHttpJson",
+          "extractorVersion": "0.2.0",
+          "coverageLevel": "L2_ENTRY_OR_RANGE_PRICE",
+          "auditStatus": "success",
+          "attemptedStrategies": [
+            {
+              "strategy": "http_json",
+              "status": "success",
+              "observations_count": 1
+            }
+          ],
+          "winningStrategy": "http_json",
+          "financeObservationCandidates": 0,
+          "financeMonthlyPaymentCount": 0,
+          "financeSemanticsCounts": {},
+          "financeTypeCounts": {},
+          "sampleFinanceContexts": [],
+          "index": 2,
+          "totalInCountry": 27,
+          "sourceCode": "bmw_x1_fr_draft_scrapling",
+          "rawStatus": "dry_run",
+          "elapsedSeconds": 1.2
+        },
+        {
+          "country": "fr",
+          "code": "citroen_c3_aircross_fr_draft_scrapling",
+          "status": "pass",
+          "valid": 1,
+          "extracted": 1,
+          "rejected": 0,
+          "elapsed": 48.9,
+          "sourceAttempts": [
+            {
+              "attempt": 1,
+              "status": "dry_run",
+              "valid": 1,
+              "extracted": 1,
+              "failureReason": null,
+              "elapsedSeconds": 48.9
+            }
+          ],
+          "sourceUrl": "https://www.citroen.fr/vehicules/c3-aircross.html",
+          "brand": "CITROEN",
+          "extractorName": "_ConfiguredScrapling",
+          "extractorVersion": "0.6.2-scrapling",
+          "coverageLevel": "L2_ENTRY_OR_RANGE_PRICE",
+          "auditStatus": "success",
+          "attemptedStrategies": [
+            {
+              "strategy": "css_selectors",
+              "status": "success",
+              "observations_count": 1
+            }
+          ],
+          "winningStrategy": "css_selectors",
+          "httpStatus": 200,
+          "finalUrl": "https://www.citroen.fr/vehicules/c3-aircross.html",
+          "financeObservationCandidates": 0,
+          "financeMonthlyPaymentCount": 0,
+          "financeSemanticsCounts": {},
+          "financeTypeCounts": {},
+          "sampleFinanceContexts": [],
+          "index": 3,
+          "totalInCountry": 27,
+          "sourceCode": "citroen_c3_aircross_fr_draft_scrapling",
+          "rawStatus": "dry_run",
+          "elapsedSeconds": 48.9
+        },
+        {
+          "country": "fr",
+          "code": "citroen_c5_aircross_fr_draft_scrapling",
+          "status": "pass",
+          "valid": 1,
+          "extracted": 1,
+          "rejected": 0,
+          "elapsed": 19.2,
+          "sourceAttempts": [
+            {
+              "attempt": 1,
+              "status": "dry_run",
+              "valid": 1,
+              "extracted": 1,
+              "failureReason": null,
+              "elapsedSeconds": 19.2
+            }
+          ],
+          "sourceUrl": "https://www.citroen.fr/vehicules/nouveau-c5-aircross.html",
+          "brand": "CITROEN",
+          "extractorName": "_ConfiguredScrapling",
+          "extractorVersion": "0.6.2-scrapling",
+          "coverageLevel": "L2_ENTRY_OR_RANGE_PRICE",
+          "auditStatus": "success",
+          "attemptedStrategies": [
+            {
+              "strategy": "css_selectors",
+              "status": "success",
+              "observations_count": 1
+            }
+          ],
+          "winningStrategy": "css_selectors",
+          "httpStatus": 200,
+          "finalUrl": "https://www.citroen.fr/vehicules/nouveau-c5-aircross.html",
+          "financeObservationCandidates": 0,
+          "financeMonthlyPaymentCount": 0,
+          "financeSemanticsCounts": {},
+          "financeTypeCounts": {},
+          "sampleFinanceContexts": [],
+          "index": 4,
+          "totalInCountry": 27,
+          "sourceCode": "citroen_c5_aircross_fr_draft_scrapling",
+          "rawStatus": "dry_run",
+          "elapsedSeconds": 19.2
+        },
+        {
+          "country": "fr",
+          "code": "dacia_bigster_fr_draft_scrapling",
+          "status": "pass",
+          "valid": 5,
+          "extracted": 5,
+          "rejected": 0,
+          "elapsed": 13.9,
+          "sourceAttempts": [
+            {
+              "attempt": 1,
+              "status": "dry_run",
+              "valid": 5,
+              "extracted": 5,
+              "failureReason": null,
+              "elapsedSeconds": 13.9
+            }
+          ],
+          "sourceUrl": "https://www.dacia.fr/gamme-electrique-et-hybride/bigster-suv/prix-versions.html",
+          "brand": "DACIA",
+          "extractorName": "_ConfiguredScrapling",
+          "extractorVersion": "0.6.2-scrapling",
+          "coverageLevel": "L3_FULL_TRIM_PRICE",
+          "auditStatus": "success",
+          "attemptedStrategies": [
+            {
+              "strategy": "json_script_selector",
+              "status": "success",
+              "observations_count": 5
+            }
+          ],
+          "winningStrategy": "json_script_selector",
+          "httpStatus": 200,
+          "finalUrl": "https://www.dacia.fr/gamme-electrique-et-hybride/bigster-suv/prix-versions.html?gradeCode=ENS_MDL2P1SERIELIM1",
+          "financeObservationCandidates": 0,
+          "financeMonthlyPaymentCount": 0,
+          "financeSemanticsCounts": {},
+          "financeTypeCounts": {},
+          "sampleFinanceContexts": [],
+          "index": 5,
+          "totalInCountry": 27,
+          "sourceCode": "dacia_bigster_fr_draft_scrapling",
+          "rawStatus": "dry_run",
+          "elapsedSeconds": 13.9
+        },
+        {
+          "country": "fr",
+          "code": "dacia_duster_fr_draft_scrapling",
+          "status": "pass",
+          "valid": 5,
+          "extracted": 5,
+          "rejected": 0,
+          "elapsed": 11.6,
+          "sourceAttempts": [
+            {
+              "attempt": 1,
+              "status": "dry_run",
+              "valid": 5,
+              "extracted": 5,
+              "failureReason": null,
+              "elapsedSeconds": 11.6
+            }
+          ],
+          "sourceUrl": "https://www.dacia.fr/gamme-electrique-et-hybride/duster-suv/prix-versions.html",
+          "brand": "DACIA",
+          "extractorName": "_ConfiguredScrapling",
+          "extractorVersion": "0.6.2-scrapling",
+          "coverageLevel": "L3_FULL_TRIM_PRICE",
+          "auditStatus": "success",
+          "attemptedStrategies": [
+            {
+              "strategy": "json_script_selector",
+              "status": "success",
+              "observations_count": 5
+            }
+          ],
+          "winningStrategy": "json_script_selector",
+          "httpStatus": 200,
+          "finalUrl": "https://www.dacia.fr/gamme-electrique-et-hybride/duster-suv/prix-versions.html?gradeCode=ENS_MDL2PSL1SERIESPE2",
+          "financeObservationCandidates": 0,
+          "financeMonthlyPaymentCount": 0,
+          "financeSemanticsCounts": {},
+          "financeTypeCounts": {},
+          "sampleFinanceContexts": [],
+          "index": 6,
+          "totalInCountry": 27,
+          "sourceCode": "dacia_duster_fr_draft_scrapling",
+          "rawStatus": "dry_run",
+          "elapsedSeconds": 11.6
+        },
+        {
+          "country": "fr",
+          "code": "ford_kuga_fr_draft_scrapling",
+          "status": "pass",
+          "valid": 3,
+          "extracted": 3,
+          "rejected": 0,
+          "elapsed": 10.2,
+          "sourceAttempts": [
+            {
+              "attempt": 1,
+              "status": "dry_run",
+              "valid": 3,
+              "extracted": 3,
+              "failureReason": null,
+              "elapsedSeconds": 10.2
+            }
+          ],
+          "sourceUrl": "https://www.ford.fr/content/dam/guxeu/fr/documents/brochures/cars/Kuga/BRO-ford-kuga.pdf",
+          "brand": "FORD",
+          "extractorName": "_ConfiguredPdfText",
+          "extractorVersion": "0.1.0-pdf-text",
+          "coverageLevel": "L3_FULL_TRIM_PRICE",
+          "auditStatus": "success",
+          "attemptedStrategies": [
+            {
+              "strategy": "pdf_text",
+              "status": "success",
+              "observations_count": 3
+            }
+          ],
+          "winningStrategy": "pdf_text",
+          "financeObservationCandidates": 0,
+          "financeMonthlyPaymentCount": 0,
+          "financeSemanticsCounts": {},
+          "financeTypeCounts": {},
+          "sampleFinanceContexts": [],
+          "index": 7,
+          "totalInCountry": 27,
+          "sourceCode": "ford_kuga_fr_draft_scrapling",
+          "rawStatus": "dry_run",
+          "elapsedSeconds": 10.2
+        },
+        {
+          "country": "fr",
+          "code": "ford_puma_fr_draft_scrapling",
+          "status": "pass",
+          "valid": 3,
+          "extracted": 3,
+          "rejected": 0,
+          "elapsed": 18.8,
+          "sourceAttempts": [
+            {
+              "attempt": 1,
+              "status": "dry_run",
+              "valid": 3,
+              "extracted": 3,
+              "failureReason": null,
+              "elapsedSeconds": 18.8
+            }
+          ],
+          "sourceUrl": "https://www.ford.fr/content/dam/guxeu/fr/documents/brochures/cars/new-puma/BRO-nouveau_ford_puma.pdf",
+          "brand": "FORD",
+          "extractorName": "_ConfiguredPdfText",
+          "extractorVersion": "0.1.0-pdf-text",
+          "coverageLevel": "L3_FULL_TRIM_PRICE",
+          "auditStatus": "success",
+          "attemptedStrategies": [
+            {
+              "strategy": "pdf_text",
+              "status": "success",
+              "observations_count": 3
+            }
+          ],
+          "winningStrategy": "pdf_text",
+          "financeObservationCandidates": 0,
+          "financeMonthlyPaymentCount": 0,
+          "financeSemanticsCounts": {},
+          "financeTypeCounts": {},
+          "sampleFinanceContexts": [],
+          "index": 8,
+          "totalInCountry": 27,
+          "sourceCode": "ford_puma_fr_draft_scrapling",
+          "rawStatus": "dry_run",
+          "elapsedSeconds": 18.8
+        },
+        {
+          "country": "fr",
+          "code": "hyundai_kona_fr_draft_scrapling",
+          "status": "pass",
+          "valid": 1,
+          "extracted": 1,
+          "rejected": 0,
+          "elapsed": 22.4,
+          "sourceAttempts": [
+            {
+              "attempt": 1,
+              "status": "dry_run",
+              "valid": 1,
+              "extracted": 1,
+              "failureReason": null,
+              "elapsedSeconds": 22.4
+            }
+          ],
+          "sourceUrl": "https://www.hyundai.com/fr/fr/modeles/kona-hybrid/tarifs.html",
+          "brand": "HYUNDAI",
+          "extractorName": "_ConfiguredScrapling",
+          "extractorVersion": "0.6.2-scrapling",
+          "coverageLevel": "L2_ENTRY_OR_RANGE_PRICE",
+          "auditStatus": "success",
+          "attemptedStrategies": [
+            {
+              "strategy": "json_script_selector",
+              "status": "success",
+              "observations_count": 1
+            }
+          ],
+          "winningStrategy": "json_script_selector",
+          "httpStatus": 200,
+          "finalUrl": "https://www.hyundai.com/fr/fr/modeles/kona-hybrid/tarifs.html",
+          "financeObservationCandidates": 0,
+          "financeMonthlyPaymentCount": 0,
+          "financeSemanticsCounts": {},
+          "financeTypeCounts": {},
+          "sampleFinanceContexts": [],
+          "index": 9,
+          "totalInCountry": 27,
+          "sourceCode": "hyundai_kona_fr_draft_scrapling",
+          "rawStatus": "dry_run",
+          "elapsedSeconds": 22.4
+        },
+        {
+          "country": "fr",
+          "code": "hyundai_tucson_fr_draft_scrapling",
+          "status": "fail",
+          "valid": 0,
+          "extracted": 0,
+          "rejected": 0,
+          "elapsed": 60.0,
+          "sourceAttempts": [
+            {
+              "attempt": 1,
+              "status": "timeout",
+              "valid": 0,
+              "extracted": 0,
+              "failureReason": "http_timeout",
+              "elapsedSeconds": 60.0
+            }
+          ],
+          "sourceUrl": "https://www.hyundai.com/fr/fr/modeles/tucson-hybrid.html",
+          "brand": "HYUNDAI",
+          "error": "source hyundai_tucson_fr_draft_scrapling exceeded 60s extraction timeout",
+          "extractorName": "_ConfiguredScrapling",
+          "extractorVersion": "0.6.2-scrapling",
+          "coverageLevel": "L0_FAILED",
+          "auditStatus": "error",
+          "attemptedStrategies": [
+            {
+              "strategy": "extractor",
+              "status": "error",
+              "observations_count": 0
+            }
+          ],
+          "winningStrategy": null,
+          "extractorError": "source hyundai_tucson_fr_draft_scrapling exceeded 60s extraction timeout",
+          "failureReason": "http_timeout",
+          "recommendedStrategy": "retry_or_reduce_concurrency",
+          "severity": "warning",
+          "index": 10,
+          "totalInCountry": 27,
+          "sourceCode": "hyundai_tucson_fr_draft_scrapling",
+          "rawStatus": "timeout",
+          "elapsedSeconds": 60.0
+        },
+        {
+          "country": "fr",
+          "code": "kia_sportage_fr_draft_scrapling",
+          "status": "fail",
+          "valid": 0,
+          "extracted": 0,
+          "rejected": 0,
+          "elapsed": 60.1,
+          "sourceAttempts": [
+            {
+              "attempt": 1,
+              "status": "timeout",
+              "valid": 0,
+              "extracted": 0,
+              "failureReason": "http_timeout",
+              "elapsedSeconds": 60.1
+            }
+          ],
+          "sourceUrl": "https://www.kia.com/fr/modeles/sportage/",
+          "brand": "KIA",
+          "error": "source kia_sportage_fr_draft_scrapling exceeded 60s extraction timeout",
+          "extractorName": "_ConfiguredScrapling",
+          "extractorVersion": "0.6.2-scrapling",
+          "coverageLevel": "L0_FAILED",
+          "auditStatus": "error",
+          "attemptedStrategies": [
+            {
+              "strategy": "extractor",
+              "status": "error",
+              "observations_count": 0
+            }
+          ],
+          "winningStrategy": null,
+          "extractorError": "source kia_sportage_fr_draft_scrapling exceeded 60s extraction timeout",
+          "failureReason": "http_timeout",
+          "recommendedStrategy": "retry_or_reduce_concurrency",
+          "severity": "warning",
+          "index": 11,
+          "totalInCountry": 27,
+          "sourceCode": "kia_sportage_fr_draft_scrapling",
+          "rawStatus": "timeout",
+          "elapsedSeconds": 60.1
+        },
+        {
+          "country": "fr",
+          "code": "mercedes_gla_fr_draft_scrapling",
+          "status": "pass",
+          "valid": 1,
+          "extracted": 1,
+          "rejected": 0,
+          "elapsed": 13.4,
+          "sourceAttempts": [
+            {
+              "attempt": 1,
+              "status": "dry_run",
+              "valid": 1,
+              "extracted": 1,
+              "failureReason": null,
+              "elapsedSeconds": 13.4
+            }
+          ],
+          "sourceUrl": "https://www.mercedes-benz.fr/passengercars/models/suv/gla/overview.html",
+          "brand": "MERCEDES",
+          "extractorName": "_ConfiguredScrapling",
+          "extractorVersion": "0.6.2-scrapling",
+          "coverageLevel": "L2_ENTRY_OR_RANGE_PRICE",
+          "auditStatus": "success",
+          "attemptedStrategies": [
+            {
+              "strategy": "json_script_selector",
+              "status": "success",
+              "observations_count": 1
+            }
+          ],
+          "winningStrategy": "json_script_selector",
+          "httpStatus": 200,
+          "finalUrl": "https://www.mercedes-benz.fr/passengercars/models/suv/gla/overview.html",
+          "financeObservationCandidates": 0,
+          "financeMonthlyPaymentCount": 0,
+          "financeSemanticsCounts": {},
+          "financeTypeCounts": {},
+          "sampleFinanceContexts": [],
+          "index": 12,
+          "totalInCountry": 27,
+          "sourceCode": "mercedes_gla_fr_draft_scrapling",
+          "rawStatus": "dry_run",
+          "elapsedSeconds": 13.4
+        },
+        {
+          "country": "fr",
+          "code": "mg_zs_fr_draft_scrapling",
+          "status": "pass",
+          "valid": 1,
+          "extracted": 1,
+          "rejected": 0,
+          "elapsed": 50.1,
+          "sourceAttempts": [
+            {
+              "attempt": 1,
+              "status": "dry_run",
+              "valid": 1,
+              "extracted": 1,
+              "failureReason": null,
+              "elapsedSeconds": 50.1
+            }
+          ],
+          "sourceUrl": "https://www.mgmotor.fr/model/zs-hev",
+          "brand": "MG",
+          "extractorName": "_ConfiguredScrapling",
+          "extractorVersion": "0.6.2-scrapling",
+          "coverageLevel": "L2_ENTRY_OR_RANGE_PRICE",
+          "auditStatus": "success",
+          "attemptedStrategies": [
+            {
+              "strategy": "css_selectors",
+              "status": "success",
+              "observations_count": 1
+            }
+          ],
+          "winningStrategy": "css_selectors",
+          "httpStatus": 200,
+          "finalUrl": "https://www.mgmotor.fr/model/zs-hev",
+          "financeObservationCandidates": 0,
+          "financeMonthlyPaymentCount": 0,
+          "financeSemanticsCounts": {},
+          "financeTypeCounts": {},
+          "sampleFinanceContexts": [],
+          "index": 13,
+          "totalInCountry": 27,
+          "sourceCode": "mg_zs_fr_draft_scrapling",
+          "rawStatus": "dry_run",
+          "elapsedSeconds": 50.1
+        },
+        {
+          "country": "fr",
+          "code": "nissan_juke_fr_draft_scrapling",
+          "status": "fail",
+          "valid": 0,
+          "extracted": 0,
+          "rejected": 0,
+          "elapsed": 60.0,
+          "sourceAttempts": [
+            {
+              "attempt": 1,
+              "status": "timeout",
+              "valid": 0,
+              "extracted": 0,
+              "failureReason": "http_timeout",
+              "elapsedSeconds": 60.0
+            }
+          ],
+          "sourceUrl": "https://www.nissan.fr/vehicules/neufs/juke.html",
+          "brand": "NISSAN",
+          "error": "source nissan_juke_fr_draft_scrapling exceeded 60s extraction timeout",
+          "extractorName": "_ConfiguredScrapling",
+          "extractorVersion": "0.6.2-scrapling",
+          "coverageLevel": "L0_FAILED",
+          "auditStatus": "error",
+          "attemptedStrategies": [
+            {
+              "strategy": "extractor",
+              "status": "error",
+              "observations_count": 0
+            }
+          ],
+          "winningStrategy": null,
+          "extractorError": "source nissan_juke_fr_draft_scrapling exceeded 60s extraction timeout",
+          "failureReason": "http_timeout",
+          "recommendedStrategy": "retry_or_reduce_concurrency",
+          "severity": "warning",
+          "index": 14,
+          "totalInCountry": 27,
+          "sourceCode": "nissan_juke_fr_draft_scrapling",
+          "rawStatus": "timeout",
+          "elapsedSeconds": 60.0
+        },
+        {
+          "country": "fr",
+          "code": "nissan_qashqai_fr_draft_scrapling",
+          "status": "pass",
+          "valid": 5,
+          "extracted": 5,
+          "rejected": 0,
+          "elapsed": 9.8,
+          "sourceAttempts": [
+            {
+              "attempt": 1,
+              "status": "dry_run",
+              "valid": 5,
+              "extracted": 5,
+              "failureReason": null,
+              "elapsedSeconds": 9.8
+            }
+          ],
+          "sourceUrl": "https://www.nissan.fr/cf/vehicules/neufs/qashqai",
+          "brand": "NISSAN",
+          "extractorName": "_ConfiguredScrapling",
+          "extractorVersion": "0.6.2-scrapling",
+          "coverageLevel": "L3_FULL_TRIM_PRICE",
+          "auditStatus": "success",
+          "attemptedStrategies": [
+            {
+              "strategy": "json_script_selector",
+              "status": "no_match",
+              "observations_count": 0
+            },
+            {
+              "strategy": "text_regex",
+              "status": "success",
+              "observations_count": 5
+            }
+          ],
+          "winningStrategy": "text_regex",
+          "httpStatus": 200,
+          "finalUrl": "https://www.nissan.fr/cf/vehicules/neufs/qashqai",
+          "financeObservationCandidates": 0,
+          "financeMonthlyPaymentCount": 0,
+          "financeSemanticsCounts": {},
+          "financeTypeCounts": {},
+          "sampleFinanceContexts": [],
+          "index": 15,
+          "totalInCountry": 27,
+          "sourceCode": "nissan_qashqai_fr_draft_scrapling",
+          "rawStatus": "dry_run",
+          "elapsedSeconds": 9.8
+        },
+        {
+          "country": "fr",
+          "code": "peugeot_2008_fr_draft_scrapling",
+          "status": "fail",
+          "valid": 0,
+          "extracted": 0,
+          "rejected": 0,
+          "elapsed": 60.1,
+          "sourceAttempts": [
+            {
+              "attempt": 1,
+              "status": "timeout",
+              "valid": 0,
+              "extracted": 0,
+              "failureReason": "http_timeout",
+              "elapsedSeconds": 60.1
+            }
+          ],
+          "sourceUrl": "https://www.peugeot.fr/nos-vehicules/suv-peugeot-2008/hybride-essence.html",
+          "brand": "PEUGEOT",
+          "error": "source peugeot_2008_fr_draft_scrapling exceeded 60s extraction timeout",
+          "extractorName": "_ConfiguredScrapling",
+          "extractorVersion": "0.6.2-scrapling",
+          "coverageLevel": "L0_FAILED",
+          "auditStatus": "error",
+          "attemptedStrategies": [
+            {
+              "strategy": "extractor",
+              "status": "error",
+              "observations_count": 0
+            }
+          ],
+          "winningStrategy": null,
+          "extractorError": "source peugeot_2008_fr_draft_scrapling exceeded 60s extraction timeout",
+          "failureReason": "http_timeout",
+          "recommendedStrategy": "retry_or_reduce_concurrency",
+          "severity": "warning",
+          "index": 16,
+          "totalInCountry": 27,
+          "sourceCode": "peugeot_2008_fr_draft_scrapling",
+          "rawStatus": "timeout",
+          "elapsedSeconds": 60.1
+        },
+        {
+          "country": "fr",
+          "code": "peugeot_3008_fr_draft_scrapling",
+          "status": "fail",
+          "valid": 0,
+          "extracted": 0,
+          "rejected": 0,
+          "elapsed": 60.1,
+          "sourceAttempts": [
+            {
+              "attempt": 1,
+              "status": "timeout",
+              "valid": 0,
+              "extracted": 0,
+              "failureReason": "http_timeout",
+              "elapsedSeconds": 60.1
+            }
+          ],
+          "sourceUrl": "https://www.peugeot.fr/nos-vehicules/peugeot-3008/hybride.html",
+          "brand": "PEUGEOT",
+          "error": "source peugeot_3008_fr_draft_scrapling exceeded 60s extraction timeout",
+          "extractorName": "_ConfiguredScrapling",
+          "extractorVersion": "0.6.2-scrapling",
+          "coverageLevel": "L0_FAILED",
+          "auditStatus": "error",
+          "attemptedStrategies": [
+            {
+              "strategy": "extractor",
+              "status": "error",
+              "observations_count": 0
+            }
+          ],
+          "winningStrategy": null,
+          "extractorError": "source peugeot_3008_fr_draft_scrapling exceeded 60s extraction timeout",
+          "failureReason": "http_timeout",
+          "recommendedStrategy": "retry_or_reduce_concurrency",
+          "severity": "warning",
+          "index": 17,
+          "totalInCountry": 27,
+          "sourceCode": "peugeot_3008_fr_draft_scrapling",
+          "rawStatus": "timeout",
+          "elapsedSeconds": 60.1
+        },
+        {
+          "country": "fr",
+          "code": "peugeot_5008_fr_draft_scrapling",
+          "status": "fail",
+          "valid": 0,
+          "extracted": 0,
+          "rejected": 0,
+          "elapsed": 60.1,
+          "sourceAttempts": [
+            {
+              "attempt": 1,
+              "status": "timeout",
+              "valid": 0,
+              "extracted": 0,
+              "failureReason": "http_timeout",
+              "elapsedSeconds": 60.1
+            }
+          ],
+          "sourceUrl": "https://www.peugeot.fr/nos-vehicules/peugeot-5008/hybride.html",
+          "brand": "PEUGEOT",
+          "error": "source peugeot_5008_fr_draft_scrapling exceeded 60s extraction timeout",
+          "extractorName": "_ConfiguredScrapling",
+          "extractorVersion": "0.6.2-scrapling",
+          "coverageLevel": "L0_FAILED",
+          "auditStatus": "error",
+          "attemptedStrategies": [
+            {
+              "strategy": "extractor",
+              "status": "error",
+              "observations_count": 0
+            }
+          ],
+          "winningStrategy": null,
+          "extractorError": "source peugeot_5008_fr_draft_scrapling exceeded 60s extraction timeout",
+          "failureReason": "http_timeout",
+          "recommendedStrategy": "retry_or_reduce_concurrency",
+          "severity": "warning",
+          "index": 18,
+          "totalInCountry": 27,
+          "sourceCode": "peugeot_5008_fr_draft_scrapling",
+          "rawStatus": "timeout",
+          "elapsedSeconds": 60.1
+        },
+        {
+          "country": "fr",
+          "code": "renault_austral_fr_draft_scrapling",
+          "status": "pass",
+          "valid": 4,
+          "extracted": 4,
+          "rejected": 0,
+          "elapsed": 14.1,
+          "sourceAttempts": [
+            {
+              "attempt": 1,
+              "status": "dry_run",
+              "valid": 4,
+              "extracted": 4,
+              "failureReason": null,
+              "elapsedSeconds": 14.1
+            }
+          ],
+          "sourceUrl": "https://www.renault.fr/vehicules-hybrides/renault-austral/prix-versions.html",
+          "brand": "RENAULT",
+          "extractorName": "_ConfiguredScrapling",
+          "extractorVersion": "0.6.2-scrapling",
+          "coverageLevel": "L3_FULL_TRIM_PRICE",
+          "auditStatus": "success",
+          "attemptedStrategies": [
+            {
+              "strategy": "json_script_selector",
+              "status": "success",
+              "observations_count": 4
+            }
+          ],
+          "winningStrategy": "json_script_selector",
+          "httpStatus": 200,
+          "finalUrl": "https://www.renault.fr/vehicules-hybrides/renault-austral/prix-versions.html?gradeCode=ENS_MDL2PSL1SERIELIM1",
+          "financeObservationCandidates": 0,
+          "financeMonthlyPaymentCount": 0,
+          "financeSemanticsCounts": {},
+          "financeTypeCounts": {},
+          "sampleFinanceContexts": [],
+          "index": 19,
+          "totalInCountry": 27,
+          "sourceCode": "renault_austral_fr_draft_scrapling",
+          "rawStatus": "dry_run",
+          "elapsedSeconds": 14.1
+        },
+        {
+          "country": "fr",
+          "code": "renault_captur_fr_draft_scrapling",
+          "status": "pass",
+          "valid": 4,
+          "extracted": 4,
+          "rejected": 0,
+          "elapsed": 11.7,
+          "sourceAttempts": [
+            {
+              "attempt": 1,
+              "status": "dry_run",
+              "valid": 4,
+              "extracted": 4,
+              "failureReason": null,
+              "elapsedSeconds": 11.7
+            }
+          ],
+          "sourceUrl": "https://www.renault.fr/vehicules-hybrides/captur/prix-versions.html",
+          "brand": "RENAULT",
+          "extractorName": "_ConfiguredScrapling",
+          "extractorVersion": "0.6.2-scrapling",
+          "coverageLevel": "L3_FULL_TRIM_PRICE",
+          "auditStatus": "success",
+          "attemptedStrategies": [
+            {
+              "strategy": "json_script_selector",
+              "status": "success",
+              "observations_count": 4
+            }
+          ],
+          "winningStrategy": "json_script_selector",
+          "httpStatus": 200,
+          "finalUrl": "https://www.renault.fr/vehicules-hybrides/captur/prix-versions.html?gradeCode=ENS_MDL2PSL1SERIELIM1",
+          "financeObservationCandidates": 0,
+          "financeMonthlyPaymentCount": 0,
+          "financeSemanticsCounts": {},
+          "financeTypeCounts": {},
+          "sampleFinanceContexts": [],
+          "index": 20,
+          "totalInCountry": 27,
+          "sourceCode": "renault_captur_fr_draft_scrapling",
+          "rawStatus": "dry_run",
+          "elapsedSeconds": 11.7
+        },
+        {
+          "country": "fr",
+          "code": "renault_scenic_fr_draft_scrapling",
+          "status": "pass",
+          "valid": 4,
+          "extracted": 4,
+          "rejected": 0,
+          "elapsed": 14.7,
+          "sourceAttempts": [
+            {
+              "attempt": 1,
+              "status": "dry_run",
+              "valid": 4,
+              "extracted": 4,
+              "failureReason": null,
+              "elapsedSeconds": 14.7
+            }
+          ],
+          "sourceUrl": "https://www.renault.fr/vehicules-electriques/scenic-e-tech-electrique/versions-prix.html",
+          "brand": "RENAULT",
+          "extractorName": "_ConfiguredScrapling",
+          "extractorVersion": "0.6.2-scrapling",
+          "coverageLevel": "L3_FULL_TRIM_PRICE",
+          "auditStatus": "success",
+          "attemptedStrategies": [
+            {
+              "strategy": "json_script_selector",
+              "status": "success",
+              "observations_count": 4
+            }
+          ],
+          "winningStrategy": "json_script_selector",
+          "httpStatus": 200,
+          "finalUrl": "https://www.renault.fr/vehicules-electriques/scenic-e-tech-electrique/versions-prix.html?gradeCode=ENS_MDL2PSL1SERIELIM2",
+          "financeObservationCandidates": 0,
+          "financeMonthlyPaymentCount": 0,
+          "financeSemanticsCounts": {},
+          "financeTypeCounts": {},
+          "sampleFinanceContexts": [],
+          "index": 21,
+          "totalInCountry": 27,
+          "sourceCode": "renault_scenic_fr_draft_scrapling",
+          "rawStatus": "dry_run",
+          "elapsedSeconds": 14.7
+        },
+        {
+          "country": "fr",
+          "code": "renault_symbioz_fr_draft_scrapling",
+          "status": "pass",
+          "valid": 5,
+          "extracted": 5,
+          "rejected": 0,
+          "elapsed": 18.7,
+          "sourceAttempts": [
+            {
+              "attempt": 1,
+              "status": "dry_run",
+              "valid": 5,
+              "extracted": 5,
+              "failureReason": null,
+              "elapsedSeconds": 18.7
+            }
+          ],
+          "sourceUrl": "https://www.renault.fr/vehicules-hybrides/symbioz/prix-versions.html",
+          "brand": "RENAULT",
+          "extractorName": "_ConfiguredScrapling",
+          "extractorVersion": "0.6.2-scrapling",
+          "coverageLevel": "L3_FULL_TRIM_PRICE",
+          "auditStatus": "success",
+          "attemptedStrategies": [
+            {
+              "strategy": "json_script_selector",
+              "status": "success",
+              "observations_count": 5
+            }
+          ],
+          "winningStrategy": "json_script_selector",
+          "httpStatus": 200,
+          "finalUrl": "https://www.renault.fr/vehicules-hybrides/symbioz/prix-versions.html?gradeCode=ENS_MDL2PSL1SERIELIM1",
+          "financeObservationCandidates": 0,
+          "financeMonthlyPaymentCount": 0,
+          "financeSemanticsCounts": {},
+          "financeTypeCounts": {},
+          "sampleFinanceContexts": [],
+          "index": 22,
+          "totalInCountry": 27,
+          "sourceCode": "renault_symbioz_fr_draft_scrapling",
+          "rawStatus": "dry_run",
+          "elapsedSeconds": 18.7
+        },
+        {
+          "country": "fr",
+          "code": "skoda_elroq_fr_draft_scrapling",
+          "status": "pass",
+          "valid": 1,
+          "extracted": 1,
+          "rejected": 0,
+          "elapsed": 22.3,
+          "sourceAttempts": [
+            {
+              "attempt": 1,
+              "status": "dry_run",
+              "valid": 1,
+              "extracted": 1,
+              "failureReason": null,
+              "elapsedSeconds": 22.3
+            }
+          ],
+          "sourceUrl": "https://www.skoda.fr/gamme/elroq/elroq/elroq-liste-prix",
+          "brand": "SKODA",
+          "extractorName": "_ConfiguredScrapling",
+          "extractorVersion": "0.6.2-scrapling",
+          "coverageLevel": "L2_ENTRY_OR_RANGE_PRICE",
+          "auditStatus": "success",
+          "attemptedStrategies": [
+            {
+              "strategy": "json_script_selector",
+              "status": "no_match",
+              "observations_count": 0
+            },
+            {
+              "strategy": "text_regex",
+              "status": "success",
+              "observations_count": 1
+            }
+          ],
+          "winningStrategy": "text_regex",
+          "httpStatus": 200,
+          "finalUrl": "https://www.skoda.fr/gamme/elroq/elroq/elroq-liste-prix",
+          "financeObservationCandidates": 0,
+          "financeMonthlyPaymentCount": 0,
+          "financeSemanticsCounts": {},
+          "financeTypeCounts": {},
+          "sampleFinanceContexts": [],
+          "index": 23,
+          "totalInCountry": 27,
+          "sourceCode": "skoda_elroq_fr_draft_scrapling",
+          "rawStatus": "dry_run",
+          "elapsedSeconds": 22.3
+        },
+        {
+          "country": "fr",
+          "code": "tesla_model_y_fr_draft_scrapling",
+          "status": "empty",
+          "valid": 0,
+          "extracted": 0,
+          "rejected": 0,
+          "elapsed": 6.7,
+          "sourceAttempts": [
+            {
+              "attempt": 1,
+              "status": "empty",
+              "valid": 0,
+              "extracted": 0,
+              "failureReason": "anti_bot_access_denied",
+              "elapsedSeconds": 6.7
+            }
+          ],
+          "sourceUrl": "https://www.tesla.com/fr_FR/modely",
+          "brand": "TESLA",
+          "extractorName": "_ConfiguredScrapling",
+          "extractorVersion": "0.6.2-scrapling",
+          "coverageLevel": "L0_FAILED",
+          "auditStatus": "error",
+          "winningStrategy": null,
+          "extractorError": "anti_bot_access_denied: Access Denied You don't have permission to access \"http://www.tesla.com/fr_FR/modely\" on this server. Reference #18.da7cb17.1782311107.4150f274 https://errors.edgesuite.net/18.da7cb17.1782311107.4150f274",
+          "httpStatus": 403,
+          "finalUrl": "https://www.tesla.com/fr_FR/modely",
+          "failureReason": "anti_bot_access_denied",
+          "recommendedStrategy": "manual_review_or_proxy_required",
+          "severity": "error",
+          "index": 24,
+          "totalInCountry": 27,
+          "sourceCode": "tesla_model_y_fr_draft_scrapling",
+          "rawStatus": "empty",
+          "elapsedSeconds": 6.7
+        },
+        {
+          "country": "fr",
+          "code": "toyota_aygo_x_fr_draft_scrapling",
+          "status": "pass",
+          "valid": 1,
+          "extracted": 1,
+          "rejected": 0,
+          "elapsed": 21.3,
+          "sourceAttempts": [
+            {
+              "attempt": 1,
+              "status": "dry_run",
+              "valid": 1,
+              "extracted": 1,
+              "failureReason": null,
+              "elapsedSeconds": 21.3
+            }
+          ],
+          "sourceUrl": "https://www.toyota.fr/vehicules-neufs/aygo-x",
+          "brand": "TOYOTA",
+          "extractorName": "_ConfiguredScrapling",
+          "extractorVersion": "0.6.2-scrapling",
+          "coverageLevel": "L2_ENTRY_OR_RANGE_PRICE",
+          "auditStatus": "success",
+          "attemptedStrategies": [
+            {
+              "strategy": "json_script_selector",
+              "status": "no_match",
+              "observations_count": 0
+            },
+            {
+              "strategy": "css_selectors",
+              "status": "success",
+              "observations_count": 1
+            }
+          ],
+          "winningStrategy": "css_selectors",
+          "httpStatus": 200,
+          "finalUrl": "https://www.toyota.fr/vehicules-neufs/aygo-x",
+          "financeObservationCandidates": 0,
+          "financeMonthlyPaymentCount": 0,
+          "financeSemanticsCounts": {},
+          "financeTypeCounts": {},
+          "sampleFinanceContexts": [],
+          "index": 25,
+          "totalInCountry": 27,
+          "sourceCode": "toyota_aygo_x_fr_draft_scrapling",
+          "rawStatus": "dry_run",
+          "elapsedSeconds": 21.3
+        },
+        {
+          "country": "fr",
+          "code": "toyota_c_hr_fr_draft_scrapling",
+          "status": "pass",
+          "valid": 1,
+          "extracted": 1,
+          "rejected": 0,
+          "elapsed": 11.2,
+          "sourceAttempts": [
+            {
+              "attempt": 1,
+              "status": "dry_run",
+              "valid": 1,
+              "extracted": 1,
+              "failureReason": null,
+              "elapsedSeconds": 11.2
+            }
+          ],
+          "sourceUrl": "https://www.toyota.fr/vehicules-neufs/toyota-c-hr",
+          "brand": "TOYOTA",
+          "extractorName": "_ConfiguredScrapling",
+          "extractorVersion": "0.6.2-scrapling",
+          "coverageLevel": "L2_ENTRY_OR_RANGE_PRICE",
+          "auditStatus": "success",
+          "attemptedStrategies": [
+            {
+              "strategy": "json_script_selector",
+              "status": "no_match",
+              "observations_count": 0
+            },
+            {
+              "strategy": "css_selectors",
+              "status": "success",
+              "observations_count": 1
+            }
+          ],
+          "winningStrategy": "css_selectors",
+          "httpStatus": 200,
+          "finalUrl": "https://www.toyota.fr/vehicules-neufs/toyota-c-hr",
+          "financeObservationCandidates": 0,
+          "financeMonthlyPaymentCount": 0,
+          "financeSemanticsCounts": {},
+          "financeTypeCounts": {},
+          "sampleFinanceContexts": [],
+          "index": 26,
+          "totalInCountry": 27,
+          "sourceCode": "toyota_c_hr_fr_draft_scrapling",
+          "rawStatus": "dry_run",
+          "elapsedSeconds": 11.2
+        },
+        {
+          "country": "fr",
+          "code": "toyota_yaris_cross_fr_draft_scrapling",
+          "status": "fail",
+          "valid": 0,
+          "extracted": 0,
+          "rejected": 0,
+          "elapsed": 60.1,
+          "sourceAttempts": [
+            {
+              "attempt": 1,
+              "status": "timeout",
+              "valid": 0,
+              "extracted": 0,
+              "failureReason": "http_timeout",
+              "elapsedSeconds": 60.1
+            }
+          ],
+          "sourceUrl": "https://www.toyota.fr/vehicules-neufs/yaris-cross",
+          "brand": "TOYOTA",
+          "error": "source toyota_yaris_cross_fr_draft_scrapling exceeded 60s extraction timeout",
+          "extractorName": "_ConfiguredScrapling",
+          "extractorVersion": "0.6.2-scrapling",
+          "coverageLevel": "L0_FAILED",
+          "auditStatus": "error",
+          "attemptedStrategies": [
+            {
+              "strategy": "extractor",
+              "status": "error",
+              "observations_count": 0
+            }
+          ],
+          "winningStrategy": null,
+          "extractorError": "source toyota_yaris_cross_fr_draft_scrapling exceeded 60s extraction timeout",
+          "failureReason": "http_timeout",
+          "recommendedStrategy": "retry_or_reduce_concurrency",
+          "severity": "warning",
+          "index": 27,
+          "totalInCountry": 27,
+          "sourceCode": "toyota_yaris_cross_fr_draft_scrapling",
+          "rawStatus": "timeout",
+          "elapsedSeconds": 60.1
+        }
+      ],
+      "completed": true
+    }
+  ],
+  "results": [
+    {
+      "country": "fr",
+      "code": "bmw_ix1_fr_draft_scrapling",
+      "status": "dry_run",
+      "valid": 1,
+      "extracted": 1,
+      "rejected": 0,
+      "elapsed": 2.6,
+      "sourceAttempts": [
+        {
+          "attempt": 1,
+          "status": "dry_run",
+          "valid": 1,
+          "extracted": 1,
+          "failureReason": null,
+          "elapsedSeconds": 2.6
+        }
+      ],
+      "sourceUrl": "https://configure.bmw.fr/fr_FR/configure/U11/11HM",
+      "brand": "BMW",
+      "extractorName": "_ConfiguredHttpJson",
+      "extractorVersion": "0.2.0",
+      "coverageLevel": "L2_ENTRY_OR_RANGE_PRICE",
+      "auditStatus": "success",
+      "attemptedStrategies": [
+        {
+          "strategy": "http_json",
+          "status": "success",
+          "observations_count": 1
+        }
+      ],
+      "winningStrategy": "http_json",
+      "financeObservationCandidates": 0,
+      "financeMonthlyPaymentCount": 0,
+      "financeSemanticsCounts": {},
+      "financeTypeCounts": {},
+      "sampleFinanceContexts": []
+    },
+    {
+      "country": "fr",
+      "code": "bmw_x1_fr_draft_scrapling",
+      "status": "dry_run",
+      "valid": 1,
+      "extracted": 1,
+      "rejected": 0,
+      "elapsed": 1.2,
+      "sourceAttempts": [
+        {
+          "attempt": 1,
+          "status": "dry_run",
+          "valid": 1,
+          "extracted": 1,
+          "failureReason": null,
+          "elapsedSeconds": 1.2
+        }
+      ],
+      "sourceUrl": "https://configure.bmw.fr/fr_FR/configure/U11/31EE",
+      "brand": "BMW",
+      "extractorName": "_ConfiguredHttpJson",
+      "extractorVersion": "0.2.0",
+      "coverageLevel": "L2_ENTRY_OR_RANGE_PRICE",
+      "auditStatus": "success",
+      "attemptedStrategies": [
+        {
+          "strategy": "http_json",
+          "status": "success",
+          "observations_count": 1
+        }
+      ],
+      "winningStrategy": "http_json",
+      "financeObservationCandidates": 0,
+      "financeMonthlyPaymentCount": 0,
+      "financeSemanticsCounts": {},
+      "financeTypeCounts": {},
+      "sampleFinanceContexts": []
+    },
+    {
+      "country": "fr",
+      "code": "citroen_c3_aircross_fr_draft_scrapling",
+      "status": "dry_run",
+      "valid": 1,
+      "extracted": 1,
+      "rejected": 0,
+      "elapsed": 48.9,
+      "sourceAttempts": [
+        {
+          "attempt": 1,
+          "status": "dry_run",
+          "valid": 1,
+          "extracted": 1,
+          "failureReason": null,
+          "elapsedSeconds": 48.9
+        }
+      ],
+      "sourceUrl": "https://www.citroen.fr/vehicules/c3-aircross.html",
+      "brand": "CITROEN",
+      "extractorName": "_ConfiguredScrapling",
+      "extractorVersion": "0.6.2-scrapling",
+      "coverageLevel": "L2_ENTRY_OR_RANGE_PRICE",
+      "auditStatus": "success",
+      "attemptedStrategies": [
+        {
+          "strategy": "css_selectors",
+          "status": "success",
+          "observations_count": 1
+        }
+      ],
+      "winningStrategy": "css_selectors",
+      "httpStatus": 200,
+      "finalUrl": "https://www.citroen.fr/vehicules/c3-aircross.html",
+      "financeObservationCandidates": 0,
+      "financeMonthlyPaymentCount": 0,
+      "financeSemanticsCounts": {},
+      "financeTypeCounts": {},
+      "sampleFinanceContexts": []
+    },
+    {
+      "country": "fr",
+      "code": "citroen_c5_aircross_fr_draft_scrapling",
+      "status": "dry_run",
+      "valid": 1,
+      "extracted": 1,
+      "rejected": 0,
+      "elapsed": 19.2,
+      "sourceAttempts": [
+        {
+          "attempt": 1,
+          "status": "dry_run",
+          "valid": 1,
+          "extracted": 1,
+          "failureReason": null,
+          "elapsedSeconds": 19.2
+        }
+      ],
+      "sourceUrl": "https://www.citroen.fr/vehicules/nouveau-c5-aircross.html",
+      "brand": "CITROEN",
+      "extractorName": "_ConfiguredScrapling",
+      "extractorVersion": "0.6.2-scrapling",
+      "coverageLevel": "L2_ENTRY_OR_RANGE_PRICE",
+      "auditStatus": "success",
+      "attemptedStrategies": [
+        {
+          "strategy": "css_selectors",
+          "status": "success",
+          "observations_count": 1
+        }
+      ],
+      "winningStrategy": "css_selectors",
+      "httpStatus": 200,
+      "finalUrl": "https://www.citroen.fr/vehicules/nouveau-c5-aircross.html",
+      "financeObservationCandidates": 0,
+      "financeMonthlyPaymentCount": 0,
+      "financeSemanticsCounts": {},
+      "financeTypeCounts": {},
+      "sampleFinanceContexts": []
+    },
+    {
+      "country": "fr",
+      "code": "dacia_bigster_fr_draft_scrapling",
+      "status": "dry_run",
+      "valid": 5,
+      "extracted": 5,
+      "rejected": 0,
+      "elapsed": 13.9,
+      "sourceAttempts": [
+        {
+          "attempt": 1,
+          "status": "dry_run",
+          "valid": 5,
+          "extracted": 5,
+          "failureReason": null,
+          "elapsedSeconds": 13.9
+        }
+      ],
+      "sourceUrl": "https://www.dacia.fr/gamme-electrique-et-hybride/bigster-suv/prix-versions.html",
+      "brand": "DACIA",
+      "extractorName": "_ConfiguredScrapling",
+      "extractorVersion": "0.6.2-scrapling",
+      "coverageLevel": "L3_FULL_TRIM_PRICE",
+      "auditStatus": "success",
+      "attemptedStrategies": [
+        {
+          "strategy": "json_script_selector",
+          "status": "success",
+          "observations_count": 5
+        }
+      ],
+      "winningStrategy": "json_script_selector",
+      "httpStatus": 200,
+      "finalUrl": "https://www.dacia.fr/gamme-electrique-et-hybride/bigster-suv/prix-versions.html?gradeCode=ENS_MDL2P1SERIELIM1",
+      "financeObservationCandidates": 0,
+      "financeMonthlyPaymentCount": 0,
+      "financeSemanticsCounts": {},
+      "financeTypeCounts": {},
+      "sampleFinanceContexts": []
+    },
+    {
+      "country": "fr",
+      "code": "dacia_duster_fr_draft_scrapling",
+      "status": "dry_run",
+      "valid": 5,
+      "extracted": 5,
+      "rejected": 0,
+      "elapsed": 11.6,
+      "sourceAttempts": [
+        {
+          "attempt": 1,
+          "status": "dry_run",
+          "valid": 5,
+          "extracted": 5,
+          "failureReason": null,
+          "elapsedSeconds": 11.6
+        }
+      ],
+      "sourceUrl": "https://www.dacia.fr/gamme-electrique-et-hybride/duster-suv/prix-versions.html",
+      "brand": "DACIA",
+      "extractorName": "_ConfiguredScrapling",
+      "extractorVersion": "0.6.2-scrapling",
+      "coverageLevel": "L3_FULL_TRIM_PRICE",
+      "auditStatus": "success",
+      "attemptedStrategies": [
+        {
+          "strategy": "json_script_selector",
+          "status": "success",
+          "observations_count": 5
+        }
+      ],
+      "winningStrategy": "json_script_selector",
+      "httpStatus": 200,
+      "finalUrl": "https://www.dacia.fr/gamme-electrique-et-hybride/duster-suv/prix-versions.html?gradeCode=ENS_MDL2PSL1SERIESPE2",
+      "financeObservationCandidates": 0,
+      "financeMonthlyPaymentCount": 0,
+      "financeSemanticsCounts": {},
+      "financeTypeCounts": {},
+      "sampleFinanceContexts": []
+    },
+    {
+      "country": "fr",
+      "code": "ford_kuga_fr_draft_scrapling",
+      "status": "dry_run",
+      "valid": 3,
+      "extracted": 3,
+      "rejected": 0,
+      "elapsed": 10.2,
+      "sourceAttempts": [
+        {
+          "attempt": 1,
+          "status": "dry_run",
+          "valid": 3,
+          "extracted": 3,
+          "failureReason": null,
+          "elapsedSeconds": 10.2
+        }
+      ],
+      "sourceUrl": "https://www.ford.fr/content/dam/guxeu/fr/documents/brochures/cars/Kuga/BRO-ford-kuga.pdf",
+      "brand": "FORD",
+      "extractorName": "_ConfiguredPdfText",
+      "extractorVersion": "0.1.0-pdf-text",
+      "coverageLevel": "L3_FULL_TRIM_PRICE",
+      "auditStatus": "success",
+      "attemptedStrategies": [
+        {
+          "strategy": "pdf_text",
+          "status": "success",
+          "observations_count": 3
+        }
+      ],
+      "winningStrategy": "pdf_text",
+      "financeObservationCandidates": 0,
+      "financeMonthlyPaymentCount": 0,
+      "financeSemanticsCounts": {},
+      "financeTypeCounts": {},
+      "sampleFinanceContexts": []
+    },
+    {
+      "country": "fr",
+      "code": "ford_puma_fr_draft_scrapling",
+      "status": "dry_run",
+      "valid": 3,
+      "extracted": 3,
+      "rejected": 0,
+      "elapsed": 18.8,
+      "sourceAttempts": [
+        {
+          "attempt": 1,
+          "status": "dry_run",
+          "valid": 3,
+          "extracted": 3,
+          "failureReason": null,
+          "elapsedSeconds": 18.8
+        }
+      ],
+      "sourceUrl": "https://www.ford.fr/content/dam/guxeu/fr/documents/brochures/cars/new-puma/BRO-nouveau_ford_puma.pdf",
+      "brand": "FORD",
+      "extractorName": "_ConfiguredPdfText",
+      "extractorVersion": "0.1.0-pdf-text",
+      "coverageLevel": "L3_FULL_TRIM_PRICE",
+      "auditStatus": "success",
+      "attemptedStrategies": [
+        {
+          "strategy": "pdf_text",
+          "status": "success",
+          "observations_count": 3
+        }
+      ],
+      "winningStrategy": "pdf_text",
+      "financeObservationCandidates": 0,
+      "financeMonthlyPaymentCount": 0,
+      "financeSemanticsCounts": {},
+      "financeTypeCounts": {},
+      "sampleFinanceContexts": []
+    },
+    {
+      "country": "fr",
+      "code": "hyundai_kona_fr_draft_scrapling",
+      "status": "dry_run",
+      "valid": 1,
+      "extracted": 1,
+      "rejected": 0,
+      "elapsed": 22.4,
+      "sourceAttempts": [
+        {
+          "attempt": 1,
+          "status": "dry_run",
+          "valid": 1,
+          "extracted": 1,
+          "failureReason": null,
+          "elapsedSeconds": 22.4
+        }
+      ],
+      "sourceUrl": "https://www.hyundai.com/fr/fr/modeles/kona-hybrid/tarifs.html",
+      "brand": "HYUNDAI",
+      "extractorName": "_ConfiguredScrapling",
+      "extractorVersion": "0.6.2-scrapling",
+      "coverageLevel": "L2_ENTRY_OR_RANGE_PRICE",
+      "auditStatus": "success",
+      "attemptedStrategies": [
+        {
+          "strategy": "json_script_selector",
+          "status": "success",
+          "observations_count": 1
+        }
+      ],
+      "winningStrategy": "json_script_selector",
+      "httpStatus": 200,
+      "finalUrl": "https://www.hyundai.com/fr/fr/modeles/kona-hybrid/tarifs.html",
+      "financeObservationCandidates": 0,
+      "financeMonthlyPaymentCount": 0,
+      "financeSemanticsCounts": {},
+      "financeTypeCounts": {},
+      "sampleFinanceContexts": []
+    },
+    {
+      "country": "fr",
+      "code": "hyundai_tucson_fr_draft_scrapling",
+      "status": "timeout",
+      "valid": 0,
+      "extracted": 0,
+      "rejected": 0,
+      "elapsed": 60.0,
+      "sourceAttempts": [
+        {
+          "attempt": 1,
+          "status": "timeout",
+          "valid": 0,
+          "extracted": 0,
+          "failureReason": "http_timeout",
+          "elapsedSeconds": 60.0
+        }
+      ],
+      "sourceUrl": "https://www.hyundai.com/fr/fr/modeles/tucson-hybrid.html",
+      "brand": "HYUNDAI",
+      "error": "source hyundai_tucson_fr_draft_scrapling exceeded 60s extraction timeout",
+      "extractorName": "_ConfiguredScrapling",
+      "extractorVersion": "0.6.2-scrapling",
+      "coverageLevel": "L0_FAILED",
+      "auditStatus": "error",
+      "attemptedStrategies": [
+        {
+          "strategy": "extractor",
+          "status": "error",
+          "observations_count": 0
+        }
+      ],
+      "winningStrategy": null,
+      "extractorError": "source hyundai_tucson_fr_draft_scrapling exceeded 60s extraction timeout",
+      "failureReason": "http_timeout",
+      "recommendedStrategy": "retry_or_reduce_concurrency",
+      "severity": "warning"
+    },
+    {
+      "country": "fr",
+      "code": "kia_sportage_fr_draft_scrapling",
+      "status": "timeout",
+      "valid": 0,
+      "extracted": 0,
+      "rejected": 0,
+      "elapsed": 60.1,
+      "sourceAttempts": [
+        {
+          "attempt": 1,
+          "status": "timeout",
+          "valid": 0,
+          "extracted": 0,
+          "failureReason": "http_timeout",
+          "elapsedSeconds": 60.1
+        }
+      ],
+      "sourceUrl": "https://www.kia.com/fr/modeles/sportage/",
+      "brand": "KIA",
+      "error": "source kia_sportage_fr_draft_scrapling exceeded 60s extraction timeout",
+      "extractorName": "_ConfiguredScrapling",
+      "extractorVersion": "0.6.2-scrapling",
+      "coverageLevel": "L0_FAILED",
+      "auditStatus": "error",
+      "attemptedStrategies": [
+        {
+          "strategy": "extractor",
+          "status": "error",
+          "observations_count": 0
+        }
+      ],
+      "winningStrategy": null,
+      "extractorError": "source kia_sportage_fr_draft_scrapling exceeded 60s extraction timeout",
+      "failureReason": "http_timeout",
+      "recommendedStrategy": "retry_or_reduce_concurrency",
+      "severity": "warning"
+    },
+    {
+      "country": "fr",
+      "code": "mercedes_gla_fr_draft_scrapling",
+      "status": "dry_run",
+      "valid": 1,
+      "extracted": 1,
+      "rejected": 0,
+      "elapsed": 13.4,
+      "sourceAttempts": [
+        {
+          "attempt": 1,
+          "status": "dry_run",
+          "valid": 1,
+          "extracted": 1,
+          "failureReason": null,
+          "elapsedSeconds": 13.4
+        }
+      ],
+      "sourceUrl": "https://www.mercedes-benz.fr/passengercars/models/suv/gla/overview.html",
+      "brand": "MERCEDES",
+      "extractorName": "_ConfiguredScrapling",
+      "extractorVersion": "0.6.2-scrapling",
+      "coverageLevel": "L2_ENTRY_OR_RANGE_PRICE",
+      "auditStatus": "success",
+      "attemptedStrategies": [
+        {
+          "strategy": "json_script_selector",
+          "status": "success",
+          "observations_count": 1
+        }
+      ],
+      "winningStrategy": "json_script_selector",
+      "httpStatus": 200,
+      "finalUrl": "https://www.mercedes-benz.fr/passengercars/models/suv/gla/overview.html",
+      "financeObservationCandidates": 0,
+      "financeMonthlyPaymentCount": 0,
+      "financeSemanticsCounts": {},
+      "financeTypeCounts": {},
+      "sampleFinanceContexts": []
+    },
+    {
+      "country": "fr",
+      "code": "mg_zs_fr_draft_scrapling",
+      "status": "dry_run",
+      "valid": 1,
+      "extracted": 1,
+      "rejected": 0,
+      "elapsed": 50.1,
+      "sourceAttempts": [
+        {
+          "attempt": 1,
+          "status": "dry_run",
+          "valid": 1,
+          "extracted": 1,
+          "failureReason": null,
+          "elapsedSeconds": 50.1
+        }
+      ],
+      "sourceUrl": "https://www.mgmotor.fr/model/zs-hev",
+      "brand": "MG",
+      "extractorName": "_ConfiguredScrapling",
+      "extractorVersion": "0.6.2-scrapling",
+      "coverageLevel": "L2_ENTRY_OR_RANGE_PRICE",
+      "auditStatus": "success",
+      "attemptedStrategies": [
+        {
+          "strategy": "css_selectors",
+          "status": "success",
+          "observations_count": 1
+        }
+      ],
+      "winningStrategy": "css_selectors",
+      "httpStatus": 200,
+      "finalUrl": "https://www.mgmotor.fr/model/zs-hev",
+      "financeObservationCandidates": 0,
+      "financeMonthlyPaymentCount": 0,
+      "financeSemanticsCounts": {},
+      "financeTypeCounts": {},
+      "sampleFinanceContexts": []
+    },
+    {
+      "country": "fr",
+      "code": "nissan_juke_fr_draft_scrapling",
+      "status": "timeout",
+      "valid": 0,
+      "extracted": 0,
+      "rejected": 0,
+      "elapsed": 60.0,
+      "sourceAttempts": [
+        {
+          "attempt": 1,
+          "status": "timeout",
+          "valid": 0,
+          "extracted": 0,
+          "failureReason": "http_timeout",
+          "elapsedSeconds": 60.0
+        }
+      ],
+      "sourceUrl": "https://www.nissan.fr/vehicules/neufs/juke.html",
+      "brand": "NISSAN",
+      "error": "source nissan_juke_fr_draft_scrapling exceeded 60s extraction timeout",
+      "extractorName": "_ConfiguredScrapling",
+      "extractorVersion": "0.6.2-scrapling",
+      "coverageLevel": "L0_FAILED",
+      "auditStatus": "error",
+      "attemptedStrategies": [
+        {
+          "strategy": "extractor",
+          "status": "error",
+          "observations_count": 0
+        }
+      ],
+      "winningStrategy": null,
+      "extractorError": "source nissan_juke_fr_draft_scrapling exceeded 60s extraction timeout",
+      "failureReason": "http_timeout",
+      "recommendedStrategy": "retry_or_reduce_concurrency",
+      "severity": "warning"
+    },
+    {
+      "country": "fr",
+      "code": "nissan_qashqai_fr_draft_scrapling",
+      "status": "dry_run",
+      "valid": 5,
+      "extracted": 5,
+      "rejected": 0,
+      "elapsed": 9.8,
+      "sourceAttempts": [
+        {
+          "attempt": 1,
+          "status": "dry_run",
+          "valid": 5,
+          "extracted": 5,
+          "failureReason": null,
+          "elapsedSeconds": 9.8
+        }
+      ],
+      "sourceUrl": "https://www.nissan.fr/cf/vehicules/neufs/qashqai",
+      "brand": "NISSAN",
+      "extractorName": "_ConfiguredScrapling",
+      "extractorVersion": "0.6.2-scrapling",
+      "coverageLevel": "L3_FULL_TRIM_PRICE",
+      "auditStatus": "success",
+      "attemptedStrategies": [
+        {
+          "strategy": "json_script_selector",
+          "status": "no_match",
+          "observations_count": 0
+        },
+        {
+          "strategy": "text_regex",
+          "status": "success",
+          "observations_count": 5
+        }
+      ],
+      "winningStrategy": "text_regex",
+      "httpStatus": 200,
+      "finalUrl": "https://www.nissan.fr/cf/vehicules/neufs/qashqai",
+      "financeObservationCandidates": 0,
+      "financeMonthlyPaymentCount": 0,
+      "financeSemanticsCounts": {},
+      "financeTypeCounts": {},
+      "sampleFinanceContexts": []
+    },
+    {
+      "country": "fr",
+      "code": "peugeot_2008_fr_draft_scrapling",
+      "status": "timeout",
+      "valid": 0,
+      "extracted": 0,
+      "rejected": 0,
+      "elapsed": 60.1,
+      "sourceAttempts": [
+        {
+          "attempt": 1,
+          "status": "timeout",
+          "valid": 0,
+          "extracted": 0,
+          "failureReason": "http_timeout",
+          "elapsedSeconds": 60.1
+        }
+      ],
+      "sourceUrl": "https://www.peugeot.fr/nos-vehicules/suv-peugeot-2008/hybride-essence.html",
+      "brand": "PEUGEOT",
+      "error": "source peugeot_2008_fr_draft_scrapling exceeded 60s extraction timeout",
+      "extractorName": "_ConfiguredScrapling",
+      "extractorVersion": "0.6.2-scrapling",
+      "coverageLevel": "L0_FAILED",
+      "auditStatus": "error",
+      "attemptedStrategies": [
+        {
+          "strategy": "extractor",
+          "status": "error",
+          "observations_count": 0
+        }
+      ],
+      "winningStrategy": null,
+      "extractorError": "source peugeot_2008_fr_draft_scrapling exceeded 60s extraction timeout",
+      "failureReason": "http_timeout",
+      "recommendedStrategy": "retry_or_reduce_concurrency",
+      "severity": "warning"
+    },
+    {
+      "country": "fr",
+      "code": "peugeot_3008_fr_draft_scrapling",
+      "status": "timeout",
+      "valid": 0,
+      "extracted": 0,
+      "rejected": 0,
+      "elapsed": 60.1,
+      "sourceAttempts": [
+        {
+          "attempt": 1,
+          "status": "timeout",
+          "valid": 0,
+          "extracted": 0,
+          "failureReason": "http_timeout",
+          "elapsedSeconds": 60.1
+        }
+      ],
+      "sourceUrl": "https://www.peugeot.fr/nos-vehicules/peugeot-3008/hybride.html",
+      "brand": "PEUGEOT",
+      "error": "source peugeot_3008_fr_draft_scrapling exceeded 60s extraction timeout",
+      "extractorName": "_ConfiguredScrapling",
+      "extractorVersion": "0.6.2-scrapling",
+      "coverageLevel": "L0_FAILED",
+      "auditStatus": "error",
+      "attemptedStrategies": [
+        {
+          "strategy": "extractor",
+          "status": "error",
+          "observations_count": 0
+        }
+      ],
+      "winningStrategy": null,
+      "extractorError": "source peugeot_3008_fr_draft_scrapling exceeded 60s extraction timeout",
+      "failureReason": "http_timeout",
+      "recommendedStrategy": "retry_or_reduce_concurrency",
+      "severity": "warning"
+    },
+    {
+      "country": "fr",
+      "code": "peugeot_5008_fr_draft_scrapling",
+      "status": "timeout",
+      "valid": 0,
+      "extracted": 0,
+      "rejected": 0,
+      "elapsed": 60.1,
+      "sourceAttempts": [
+        {
+          "attempt": 1,
+          "status": "timeout",
+          "valid": 0,
+          "extracted": 0,
+          "failureReason": "http_timeout",
+          "elapsedSeconds": 60.1
+        }
+      ],
+      "sourceUrl": "https://www.peugeot.fr/nos-vehicules/peugeot-5008/hybride.html",
+      "brand": "PEUGEOT",
+      "error": "source peugeot_5008_fr_draft_scrapling exceeded 60s extraction timeout",
+      "extractorName": "_ConfiguredScrapling",
+      "extractorVersion": "0.6.2-scrapling",
+      "coverageLevel": "L0_FAILED",
+      "auditStatus": "error",
+      "attemptedStrategies": [
+        {
+          "strategy": "extractor",
+          "status": "error",
+          "observations_count": 0
+        }
+      ],
+      "winningStrategy": null,
+      "extractorError": "source peugeot_5008_fr_draft_scrapling exceeded 60s extraction timeout",
+      "failureReason": "http_timeout",
+      "recommendedStrategy": "retry_or_reduce_concurrency",
+      "severity": "warning"
+    },
+    {
+      "country": "fr",
+      "code": "renault_austral_fr_draft_scrapling",
+      "status": "dry_run",
+      "valid": 4,
+      "extracted": 4,
+      "rejected": 0,
+      "elapsed": 14.1,
+      "sourceAttempts": [
+        {
+          "attempt": 1,
+          "status": "dry_run",
+          "valid": 4,
+          "extracted": 4,
+          "failureReason": null,
+          "elapsedSeconds": 14.1
+        }
+      ],
+      "sourceUrl": "https://www.renault.fr/vehicules-hybrides/renault-austral/prix-versions.html",
+      "brand": "RENAULT",
+      "extractorName": "_ConfiguredScrapling",
+      "extractorVersion": "0.6.2-scrapling",
+      "coverageLevel": "L3_FULL_TRIM_PRICE",
+      "auditStatus": "success",
+      "attemptedStrategies": [
+        {
+          "strategy": "json_script_selector",
+          "status": "success",
+          "observations_count": 4
+        }
+      ],
+      "winningStrategy": "json_script_selector",
+      "httpStatus": 200,
+      "finalUrl": "https://www.renault.fr/vehicules-hybrides/renault-austral/prix-versions.html?gradeCode=ENS_MDL2PSL1SERIELIM1",
+      "financeObservationCandidates": 0,
+      "financeMonthlyPaymentCount": 0,
+      "financeSemanticsCounts": {},
+      "financeTypeCounts": {},
+      "sampleFinanceContexts": []
+    },
+    {
+      "country": "fr",
+      "code": "renault_captur_fr_draft_scrapling",
+      "status": "dry_run",
+      "valid": 4,
+      "extracted": 4,
+      "rejected": 0,
+      "elapsed": 11.7,
+      "sourceAttempts": [
+        {
+          "attempt": 1,
+          "status": "dry_run",
+          "valid": 4,
+          "extracted": 4,
+          "failureReason": null,
+          "elapsedSeconds": 11.7
+        }
+      ],
+      "sourceUrl": "https://www.renault.fr/vehicules-hybrides/captur/prix-versions.html",
+      "brand": "RENAULT",
+      "extractorName": "_ConfiguredScrapling",
+      "extractorVersion": "0.6.2-scrapling",
+      "coverageLevel": "L3_FULL_TRIM_PRICE",
+      "auditStatus": "success",
+      "attemptedStrategies": [
+        {
+          "strategy": "json_script_selector",
+          "status": "success",
+          "observations_count": 4
+        }
+      ],
+      "winningStrategy": "json_script_selector",
+      "httpStatus": 200,
+      "finalUrl": "https://www.renault.fr/vehicules-hybrides/captur/prix-versions.html?gradeCode=ENS_MDL2PSL1SERIELIM1",
+      "financeObservationCandidates": 0,
+      "financeMonthlyPaymentCount": 0,
+      "financeSemanticsCounts": {},
+      "financeTypeCounts": {},
+      "sampleFinanceContexts": []
+    },
+    {
+      "country": "fr",
+      "code": "renault_scenic_fr_draft_scrapling",
+      "status": "dry_run",
+      "valid": 4,
+      "extracted": 4,
+      "rejected": 0,
+      "elapsed": 14.7,
+      "sourceAttempts": [
+        {
+          "attempt": 1,
+          "status": "dry_run",
+          "valid": 4,
+          "extracted": 4,
+          "failureReason": null,
+          "elapsedSeconds": 14.7
+        }
+      ],
+      "sourceUrl": "https://www.renault.fr/vehicules-electriques/scenic-e-tech-electrique/versions-prix.html",
+      "brand": "RENAULT",
+      "extractorName": "_ConfiguredScrapling",
+      "extractorVersion": "0.6.2-scrapling",
+      "coverageLevel": "L3_FULL_TRIM_PRICE",
+      "auditStatus": "success",
+      "attemptedStrategies": [
+        {
+          "strategy": "json_script_selector",
+          "status": "success",
+          "observations_count": 4
+        }
+      ],
+      "winningStrategy": "json_script_selector",
+      "httpStatus": 200,
+      "finalUrl": "https://www.renault.fr/vehicules-electriques/scenic-e-tech-electrique/versions-prix.html?gradeCode=ENS_MDL2PSL1SERIELIM2",
+      "financeObservationCandidates": 0,
+      "financeMonthlyPaymentCount": 0,
+      "financeSemanticsCounts": {},
+      "financeTypeCounts": {},
+      "sampleFinanceContexts": []
+    },
+    {
+      "country": "fr",
+      "code": "renault_symbioz_fr_draft_scrapling",
+      "status": "dry_run",
+      "valid": 5,
+      "extracted": 5,
+      "rejected": 0,
+      "elapsed": 18.7,
+      "sourceAttempts": [
+        {
+          "attempt": 1,
+          "status": "dry_run",
+          "valid": 5,
+          "extracted": 5,
+          "failureReason": null,
+          "elapsedSeconds": 18.7
+        }
+      ],
+      "sourceUrl": "https://www.renault.fr/vehicules-hybrides/symbioz/prix-versions.html",
+      "brand": "RENAULT",
+      "extractorName": "_ConfiguredScrapling",
+      "extractorVersion": "0.6.2-scrapling",
+      "coverageLevel": "L3_FULL_TRIM_PRICE",
+      "auditStatus": "success",
+      "attemptedStrategies": [
+        {
+          "strategy": "json_script_selector",
+          "status": "success",
+          "observations_count": 5
+        }
+      ],
+      "winningStrategy": "json_script_selector",
+      "httpStatus": 200,
+      "finalUrl": "https://www.renault.fr/vehicules-hybrides/symbioz/prix-versions.html?gradeCode=ENS_MDL2PSL1SERIELIM1",
+      "financeObservationCandidates": 0,
+      "financeMonthlyPaymentCount": 0,
+      "financeSemanticsCounts": {},
+      "financeTypeCounts": {},
+      "sampleFinanceContexts": []
+    },
+    {
+      "country": "fr",
+      "code": "skoda_elroq_fr_draft_scrapling",
+      "status": "dry_run",
+      "valid": 1,
+      "extracted": 1,
+      "rejected": 0,
+      "elapsed": 22.3,
+      "sourceAttempts": [
+        {
+          "attempt": 1,
+          "status": "dry_run",
+          "valid": 1,
+          "extracted": 1,
+          "failureReason": null,
+          "elapsedSeconds": 22.3
+        }
+      ],
+      "sourceUrl": "https://www.skoda.fr/gamme/elroq/elroq/elroq-liste-prix",
+      "brand": "SKODA",
+      "extractorName": "_ConfiguredScrapling",
+      "extractorVersion": "0.6.2-scrapling",
+      "coverageLevel": "L2_ENTRY_OR_RANGE_PRICE",
+      "auditStatus": "success",
+      "attemptedStrategies": [
+        {
+          "strategy": "json_script_selector",
+          "status": "no_match",
+          "observations_count": 0
+        },
+        {
+          "strategy": "text_regex",
+          "status": "success",
+          "observations_count": 1
+        }
+      ],
+      "winningStrategy": "text_regex",
+      "httpStatus": 200,
+      "finalUrl": "https://www.skoda.fr/gamme/elroq/elroq/elroq-liste-prix",
+      "financeObservationCandidates": 0,
+      "financeMonthlyPaymentCount": 0,
+      "financeSemanticsCounts": {},
+      "financeTypeCounts": {},
+      "sampleFinanceContexts": []
+    },
+    {
+      "country": "fr",
+      "code": "tesla_model_y_fr_draft_scrapling",
+      "status": "empty",
+      "valid": 0,
+      "extracted": 0,
+      "rejected": 0,
+      "elapsed": 6.7,
+      "sourceAttempts": [
+        {
+          "attempt": 1,
+          "status": "empty",
+          "valid": 0,
+          "extracted": 0,
+          "failureReason": "anti_bot_access_denied",
+          "elapsedSeconds": 6.7
+        }
+      ],
+      "sourceUrl": "https://www.tesla.com/fr_FR/modely",
+      "brand": "TESLA",
+      "extractorName": "_ConfiguredScrapling",
+      "extractorVersion": "0.6.2-scrapling",
+      "coverageLevel": "L0_FAILED",
+      "auditStatus": "error",
+      "winningStrategy": null,
+      "extractorError": "anti_bot_access_denied: Access Denied You don't have permission to access \"http://www.tesla.com/fr_FR/modely\" on this server. Reference #18.da7cb17.1782311107.4150f274 https://errors.edgesuite.net/18.da7cb17.1782311107.4150f274",
+      "httpStatus": 403,
+      "finalUrl": "https://www.tesla.com/fr_FR/modely",
+      "failureReason": "anti_bot_access_denied",
+      "recommendedStrategy": "manual_review_or_proxy_required",
+      "severity": "error"
+    },
+    {
+      "country": "fr",
+      "code": "toyota_aygo_x_fr_draft_scrapling",
+      "status": "dry_run",
+      "valid": 1,
+      "extracted": 1,
+      "rejected": 0,
+      "elapsed": 21.3,
+      "sourceAttempts": [
+        {
+          "attempt": 1,
+          "status": "dry_run",
+          "valid": 1,
+          "extracted": 1,
+          "failureReason": null,
+          "elapsedSeconds": 21.3
+        }
+      ],
+      "sourceUrl": "https://www.toyota.fr/vehicules-neufs/aygo-x",
+      "brand": "TOYOTA",
+      "extractorName": "_ConfiguredScrapling",
+      "extractorVersion": "0.6.2-scrapling",
+      "coverageLevel": "L2_ENTRY_OR_RANGE_PRICE",
+      "auditStatus": "success",
+      "attemptedStrategies": [
+        {
+          "strategy": "json_script_selector",
+          "status": "no_match",
+          "observations_count": 0
+        },
+        {
+          "strategy": "css_selectors",
+          "status": "success",
+          "observations_count": 1
+        }
+      ],
+      "winningStrategy": "css_selectors",
+      "httpStatus": 200,
+      "finalUrl": "https://www.toyota.fr/vehicules-neufs/aygo-x",
+      "financeObservationCandidates": 0,
+      "financeMonthlyPaymentCount": 0,
+      "financeSemanticsCounts": {},
+      "financeTypeCounts": {},
+      "sampleFinanceContexts": []
+    },
+    {
+      "country": "fr",
+      "code": "toyota_c_hr_fr_draft_scrapling",
+      "status": "dry_run",
+      "valid": 1,
+      "extracted": 1,
+      "rejected": 0,
+      "elapsed": 11.2,
+      "sourceAttempts": [
+        {
+          "attempt": 1,
+          "status": "dry_run",
+          "valid": 1,
+          "extracted": 1,
+          "failureReason": null,
+          "elapsedSeconds": 11.2
+        }
+      ],
+      "sourceUrl": "https://www.toyota.fr/vehicules-neufs/toyota-c-hr",
+      "brand": "TOYOTA",
+      "extractorName": "_ConfiguredScrapling",
+      "extractorVersion": "0.6.2-scrapling",
+      "coverageLevel": "L2_ENTRY_OR_RANGE_PRICE",
+      "auditStatus": "success",
+      "attemptedStrategies": [
+        {
+          "strategy": "json_script_selector",
+          "status": "no_match",
+          "observations_count": 0
+        },
+        {
+          "strategy": "css_selectors",
+          "status": "success",
+          "observations_count": 1
+        }
+      ],
+      "winningStrategy": "css_selectors",
+      "httpStatus": 200,
+      "finalUrl": "https://www.toyota.fr/vehicules-neufs/toyota-c-hr",
+      "financeObservationCandidates": 0,
+      "financeMonthlyPaymentCount": 0,
+      "financeSemanticsCounts": {},
+      "financeTypeCounts": {},
+      "sampleFinanceContexts": []
+    },
+    {
+      "country": "fr",
+      "code": "toyota_yaris_cross_fr_draft_scrapling",
+      "status": "timeout",
+      "valid": 0,
+      "extracted": 0,
+      "rejected": 0,
+      "elapsed": 60.1,
+      "sourceAttempts": [
+        {
+          "attempt": 1,
+          "status": "timeout",
+          "valid": 0,
+          "extracted": 0,
+          "failureReason": "http_timeout",
+          "elapsedSeconds": 60.1
+        }
+      ],
+      "sourceUrl": "https://www.toyota.fr/vehicules-neufs/yaris-cross",
+      "brand": "TOYOTA",
+      "error": "source toyota_yaris_cross_fr_draft_scrapling exceeded 60s extraction timeout",
+      "extractorName": "_ConfiguredScrapling",
+      "extractorVersion": "0.6.2-scrapling",
+      "coverageLevel": "L0_FAILED",
+      "auditStatus": "error",
+      "attemptedStrategies": [
+        {
+          "strategy": "extractor",
+          "status": "error",
+          "observations_count": 0
+        }
+      ],
+      "winningStrategy": null,
+      "extractorError": "source toyota_yaris_cross_fr_draft_scrapling exceeded 60s extraction timeout",
+      "failureReason": "http_timeout",
+      "recommendedStrategy": "retry_or_reduce_concurrency",
+      "severity": "warning"
+    }
+  ],
+  "generatedAt": "2026-06-24T14:26:40Z",
+  "savedAt": "2026-06-24T14:26:40Z",
+  "total": 27,
+  "pass": 19,
+  "empty": 1,
+  "fail": 7,
   "errors": 0,
-  "results": []
+  "passPct": 70.4,
+  "failureBreakdown": {
+    "http_timeout": 7,
+    "anti_bot_access_denied": 1
+  },
+  "strategyRecommendations": {
+    "retry_or_reduce_concurrency": 7,
+    "manual_review_or_proxy_required": 1
+  },
+  "financeObservationCandidates": 0,
+  "financeMonthlyPaymentCount": 0,
+  "financeSemanticsCounts": {},
+  "financeTypeCounts": {}
 }

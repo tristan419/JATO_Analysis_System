@@ -11,6 +11,7 @@ import { HermesWorkflowView } from "../components/HermesWorkflowView";
 import { LoadingSurface } from "../components/LoadingSurface";
 import { MsrpDryrunDashboard } from "../components/MsrpDryrunDashboard";
 import { MsrpFinanceObservationsPanel } from "../components/MsrpFinanceObservationsPanel";
+import { MsrpPriceSalesEffectivenessPanel } from "../components/MsrpPriceSalesEffectivenessPanel";
 import { MsrpReconciliationPanel } from "../components/MsrpReconciliationPanel";
 import type {
   DataManagementAirflowStatus,
@@ -1754,6 +1755,9 @@ export function DataManagementPage() {
                         const issueCount = progress.sourceRepairBacklog?.totalIssueCount ?? 0;
                         const recheckCount = progress.sourceRepairBacklog?.transientRegressionCount ?? 0;
                         const sourceRepairIssueCount = progress.sourceRepairBacklog?.sourceRepairIssueCount ?? issueCount;
+                        const referenceEvidence = progress.sourceReferenceEvidence;
+                        const referenceSummary = referenceEvidence?.summary;
+                        const referenceItems = referenceEvidence?.items ?? [];
                         const gateColor = status?.gateStatus === "blocked" ? "#dc2626" : "#16a34a";
                         return (
                           <div style={{display:"grid",gap:10}}>
@@ -1876,6 +1880,37 @@ export function DataManagementPage() {
                                   <span style={{color:"#64748b",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}} title={group.recommendedStrategy}>{group.recommendedStrategy}</span>
                                 </div>
                               )) : <span style={{fontSize:11,color:"#94a3b8"}}>No source repair backlog</span>}
+                              {referenceSummary && referenceSummary.evidenceItemCount > 0 && (
+                                <div style={{borderTop:"1px solid #e2e8f0",marginTop:8,paddingTop:8}}>
+                                  <div style={{display:"flex",justifyContent:"space-between",gap:10,alignItems:"center",marginBottom:6}}>
+                                    <div style={{fontSize:11,fontWeight:700}}>Reference Evidence</div>
+                                    <div style={{fontSize:10,color:"#64748b",textAlign:"right"}}>{referenceEvidence?.referencePolicy ?? "reference_only"}</div>
+                                  </div>
+                                  <div style={{display:"grid",gridTemplateColumns:"repeat(4,minmax(0,1fr))",gap:6,marginBottom:6}}>
+                                    <div style={{fontSize:10,color:"#64748b"}}>
+                                      Items <strong style={{display:"block",fontSize:12,color:"#0f172a"}}>{formatDataManagementNumber(referenceSummary.evidenceItemCount)}</strong>
+                                    </div>
+                                    <div style={{fontSize:10,color:"#64748b"}}>
+                                      Local refs <strong style={{display:"block",fontSize:12,color:"#0f172a"}}>{formatDataManagementNumber(referenceSummary.localReferenceCount)}</strong>
+                                    </div>
+                                    <div style={{fontSize:10,color:"#64748b"}}>
+                                      Missing <strong style={{display:"block",fontSize:12,color:referenceSummary.missingLocalReferenceCount > 0 ? "#ea580c" : "#16a34a"}}>{formatDataManagementNumber(referenceSummary.missingLocalReferenceCount)}</strong>
+                                    </div>
+                                    <div style={{fontSize:10,color:"#64748b"}}>
+                                      Ingest OK <strong style={{display:"block",fontSize:12,color:referenceSummary.officialIngestEligibleCount > 0 ? "#dc2626" : "#64748b"}}>{formatDataManagementNumber(referenceSummary.officialIngestEligibleCount)}</strong>
+                                    </div>
+                                  </div>
+                                  <div style={{display:"grid",gap:4}}>
+                                    {referenceItems.slice(0,3).map((item) => (
+                                      <div key={`${item.countryCode}-${item.modelQuery}`} style={{display:"grid",gridTemplateColumns:"40px minmax(0,1fr) 54px",gap:8,fontSize:11,alignItems:"center"}}>
+                                        <strong>{item.countryCode.toUpperCase()}</strong>
+                                        <span style={{overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}} title={item.modelQuery}>{item.modelQuery}</span>
+                                        <span style={{textAlign:"right",color:item.officialIngestEligible ? "#dc2626" : "#64748b"}}>{item.localReferenceCount} refs</span>
+                                      </div>
+                                    ))}
+                                  </div>
+                                </div>
+                              )}
                             </div>
 
                             {(hermesMsrpHistory?.runs ?? []).length > 0 && (
@@ -1897,6 +1932,9 @@ export function DataManagementPage() {
                         );
                       })() : <span style={{color:"#94a3b8",fontSize:11}}>Run dryrun to populate</span>}
                     </div>
+                  </div>
+                  <div className="card crud-card" style={{gridColumn:"1 / -1"}}>
+                    <MsrpPriceSalesEffectivenessPanel />
                   </div>
                   <div className="card crud-card" style={{gridColumn:"1 / -1"}}>
                     <MsrpReconciliationPanel />

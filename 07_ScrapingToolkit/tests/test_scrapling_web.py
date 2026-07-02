@@ -1,14 +1,17 @@
+import json
 from unittest.mock import MagicMock, patch
 
 from jato_scraper.base import ExtractorConfig
 from jato_scraper.config_loader import _build_scrapling_profile
 from jato_scraper.extractors.scrapling_web import (
+    AttrJsonMapping,
     CssMapping,
     PricingContextMapping,
     ScraplingExtractor,
     ScraplingProfile,
     TextRegexEntryPattern,
     TextRegexMapping,
+    parse_price,
 )
 
 
@@ -22,6 +25,10 @@ def build_extractor() -> ScraplingExtractor:
         ),
         ScraplingProfile(url="https://example.com"),
     )
+
+
+def test_parse_price_collapses_narrow_no_break_space() -> None:
+    assert parse_price("34\u202f200 €") == 34_200.0
 
 
 def test_fetch_metadata_reads_response_status_url_and_content_type() -> None:
@@ -56,6 +63,107 @@ def test_fetch_failure_records_original_error(monkeypatch, tmp_path) -> None:
         extractor.last_audit_event["error"]
         == "TimeoutError: Page.goto: Timeout 30000ms exceeded"
     )
+
+
+def test_access_denied_body_records_audit_error(monkeypatch, tmp_path) -> None:
+    monkeypatch.setenv("JATO_AUDIT_DIR", str(tmp_path))
+    page = _mock_page_with_descendant_text(
+        "body",
+        "\n".join([
+            "Access Denied",
+            "You don't have permission to access http://www.tesla.com/de_at/modely on this server.",
+            "https://errors.edgesuite.net/18.ab30d417.example",
+        ]),
+    )
+    page.status = 200
+    page.url = "https://www.tesla.com/de_at/modely"
+    page.headers = {"content-type": "text/html"}
+    extractor = build_extractor()
+    extractor.run_id = "run_access_denied"
+    monkeypatch.setattr(extractor, "_fetch", lambda: page)
+
+    assert extractor.extract() == []
+    assert extractor.last_audit_event is not None
+    assert extractor.last_audit_event["error"].startswith("anti_bot_access_denied")
+    assert extractor.last_audit_event["httpStatus"] == 200
+
+
+def test_akamai_behavioral_challenge_records_audit_error(monkeypatch, tmp_path) -> None:
+    monkeypatch.setenv("JATO_AUDIT_DIR", str(tmp_path))
+    page = _mock_page_with_descendant_text(
+        "body",
+        "\n".join([
+            "sec-if-cpt-container",
+            "Powered and protected by Akamai",
+            "Privacy",
+        ]),
+    )
+    page.status = 200
+    page.url = "https://www.tesla.com/fr_FR/modely"
+    page.headers = {"content-type": "text/html"}
+    extractor = build_extractor()
+    extractor.run_id = "run_akamai_challenge"
+    monkeypatch.setattr(extractor, "_fetch", lambda: page)
+
+    assert extractor.extract() == []
+    assert extractor.last_audit_event is not None
+    assert extractor.last_audit_event["error"].startswith("anti_bot_access_denied")
+    assert extractor.last_audit_event["httpStatus"] == 200
+
+
+def test_akamai_behavioral_challenge_uses_html_marker_fallback(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    monkeypatch.setenv("JATO_AUDIT_DIR", str(tmp_path))
+    page = _mock_page_with_descendant_text_and_html(
+        "body",
+        "\n".join([
+            "Powered and protected by",
+            "Privacy",
+        ]),
+        "<body><div id='sec-if-cpt-container'>Powered and protected by</div></body>",
+    )
+    page.status = 200
+    page.url = "https://www.tesla.com/fr_FR/modely"
+    page.headers = {"content-type": "text/html"}
+    extractor = build_extractor()
+    extractor.run_id = "run_akamai_html_marker_fallback"
+    monkeypatch.setattr(extractor, "_fetch", lambda: page)
+
+    assert extractor.extract() == []
+    assert extractor.last_audit_event is not None
+    assert extractor.last_audit_event["error"].startswith("anti_bot_access_denied")
+    assert extractor.last_audit_event["httpStatus"] == 200
+
+
+def test_akamai_behavioral_challenge_reads_html_content_fallback(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    monkeypatch.setenv("JATO_AUDIT_DIR", str(tmp_path))
+
+    class HtmlOnlyPage:
+        status = 200
+        url = "https://www.tesla.com/fr_FR/modely"
+        headers = {"content-type": "text/html"}
+        html_content = (
+            "<div id='sec-if-cpt-container'>"
+            "Powered and protected by Akamai"
+            "</div>"
+        )
+
+        def css(self, _selector):
+            return []
+
+    extractor = build_extractor()
+    extractor.run_id = "run_akamai_html_fallback"
+    monkeypatch.setattr(extractor, "_fetch", lambda: HtmlOnlyPage())
+
+    assert extractor.extract() == []
+    assert extractor.last_audit_event is not None
+    assert extractor.last_audit_event["error"].startswith("anti_bot_access_denied")
+    assert extractor.last_audit_event["httpStatus"] == 200
 
 
 def test_fetch_passes_browser_runtime_options(monkeypatch) -> None:
@@ -247,6 +355,107 @@ def _mock_page_with_descendant_text_and_html(
     return page
 
 
+def _mock_page_with_json_scripts(
+    selector: str,
+    payloads: list[dict],
+) -> MagicMock:
+    page = MagicMock()
+    scripts = []
+    for payload in payloads:
+        script = MagicMock()
+        text_result = MagicMock()
+        text_result.get.return_value = json.dumps(payload)
+        script.css.return_value = text_result
+        scripts.append(script)
+
+    def _css_side_effect(query: str):
+        if query == selector:
+            return scripts
+        return []
+
+    page.css.side_effect = _css_side_effect
+    return page
+
+
+def _mock_attr_json_card(
+    *,
+    filter_payload: dict,
+    tracking_payload: dict,
+    series: str,
+) -> MagicMock:
+    card = MagicMock()
+    card.attrib = {
+        "data-card-filter-info": json.dumps(filter_payload),
+        "data-tracking-attributes": json.dumps(tracking_payload),
+    }
+
+    def _css_side_effect(query: str):
+        result = MagicMock()
+        if query == ".cmp-allmodelscarddetail__series::text":
+            result.get.return_value = series
+        else:
+            result.get.return_value = None
+        return result
+
+    card.css.side_effect = _css_side_effect
+    return card
+
+
+def test_attr_json_model_rules_can_match_nested_tracking_name() -> None:
+    page = MagicMock()
+    page.css.side_effect = lambda query: (
+        [
+            _mock_attr_json_card(
+                filter_payload={"price": "46788.0", "fuelType": "e"},
+                tracking_payload={"name": "BMW iX1 xDrive30", "range": "U11"},
+                series="iX1",
+            ),
+            _mock_attr_json_card(
+                filter_payload={"price": "49027.6", "fuelType": "o"},
+                tracking_payload={"name": "BMW X1 xDrive23i", "range": "U11"},
+                series="X1",
+            ),
+        ]
+        if query == ".cmp-allmodelscard"
+        else []
+    )
+    extractor = ScraplingExtractor(
+        ExtractorConfig(
+            source_code="bmw_x1_at",
+            country="AT",
+            brand="BMW",
+            source_url="https://www.bmw.at/de/konfigurator.html",
+        ),
+        ScraplingProfile(
+            url="https://www.bmw.at/de/konfigurator.html",
+            attr_json=AttrJsonMapping(
+                vehicle_container=".cmp-allmodelscard",
+                filter_attr="data-card-filter-info",
+                tracking_attr="data-tracking-attributes",
+            ),
+            default_currency="EUR",
+            model_rules=(
+                {
+                    "key": "model_x1",
+                    "jato_model": "X1",
+                    "official_model": "X1",
+                    "keywords": ["BMW X1"],
+                },
+            ),
+            skip_if_model_unmapped=True,
+            copy_trim_to_jato_trim=True,
+        ),
+    )
+
+    results = extractor._extract_from_attr_json(page)
+
+    assert len(results) == 1
+    assert results[0].official_model == "X1"
+    assert results[0].official_trim == "xDrive23i"
+    assert results[0].jato_model == "X1"
+    assert results[0].msrp_value == 49_027.6
+
+
 @patch.object(ScraplingExtractor, "_fetch")
 def test_css_extract_honors_include_if_text_contains(mock_fetch) -> None:
     mock_fetch.return_value = _mock_page_with_css(
@@ -283,6 +492,75 @@ def test_css_extract_honors_include_if_text_contains(mock_fetch) -> None:
     assert len(results) == 1
     assert results[0].official_model == "TIGUAN"
     assert results[0].msrp_value == 39_870.0
+
+
+def test_json_extracts_namespaced_schema_product_model_variants() -> None:
+    selector = "script[type='application/ld+json']"
+    page = _mock_page_with_json_scripts(
+        selector,
+        [
+            {
+                "@context": {"schema": "http://schema.org/"},
+                "@type": ["schema:ProductModel", "schema:Car"],
+                "schema:name": "CAPTUR",
+                "@reverse": {
+                    "schema:isVariantOf": [
+                        {
+                            "@type": ["schema:ProductModel", "schema:Car"],
+                            "schema:name": "CAPTUR evolution",
+                            "schema:offers": {
+                                "@type": "schema:Offer",
+                                "schema:priceSpecification": {
+                                    "@type": "schema:UnitPriceSpecification",
+                                    "schema:price": "26800.0",
+                                    "schema:priceCurrency": "EUR",
+                                    "schema:priceType": "SRP",
+                                },
+                                "schema:url": (
+                                    "https://www.renault.fr/vehicules-hybrides/"
+                                    "captur/prix-versions.html"
+                                ),
+                            },
+                        },
+                        {
+                            "@type": ["schema:ProductModel", "schema:Car"],
+                            "schema:name": "CAPTUR techno",
+                            "schema:offers": {
+                                "@type": "schema:Offer",
+                                "schema:price": "29100.0",
+                                "schema:priceCurrency": "EUR",
+                            },
+                        },
+                    ]
+                },
+            }
+        ],
+    )
+    extractor = ScraplingExtractor(
+        ExtractorConfig(
+            source_code="renault_captur_fr",
+            country="FR",
+            brand="RENAULT",
+            source_url="https://example.com",
+        ),
+        ScraplingProfile(
+            url="https://example.com",
+            json_script_selector=selector,
+            default_currency="EUR",
+            fixed_model="CAPTUR",
+            fixed_jato_model="CAPTUR",
+            copy_trim_to_jato_trim=True,
+        ),
+    )
+
+    results = extractor._extract_from_json(page)
+
+    assert [(r.official_trim, r.msrp_value) for r in results] == [
+        ("CAPTUR evolution", 26_800.0),
+        ("CAPTUR techno", 29_100.0),
+    ]
+    assert all(r.official_model == "CAPTUR" for r in results)
+    assert all(r.currency == "EUR" for r in results)
 
 
 @patch.object(ScraplingExtractor, "_fetch")
@@ -863,6 +1141,63 @@ def test_text_regex_can_include_selected_element_html(mock_fetch) -> None:
     assert results[0].official_model == "S5"
     assert results[0].official_trim == "Comfort"
     assert results[0].msrp_value == 294_900.0
+
+
+@patch.object(ScraplingExtractor, "_fetch")
+def test_text_regex_extracts_nissan_grade_cash_price_from_card_html(
+    mock_fetch,
+) -> None:
+    mock_fetch.return_value = _mock_page_with_descendant_text_and_html(
+        "body",
+        "Qashqai N-CONNECTA\nX-Trail N-CONNECTA",
+        (
+            '<div data-testid="product-card"><p>Qashqai N-CONNECTA</p>'
+            '<div class="prices">Comptant '
+            '<span>À partir de 36\u202f200 €</span></div></div>'
+            '<div data-testid="product-card"><p>X-Trail N-CONNECTA</p>'
+            '<div class="prices">Comptant '
+            '<span>À partir de 29\u202f300 €</span></div></div>'
+        ),
+    )
+    extractor = ScraplingExtractor(
+        ExtractorConfig(
+            source_code="nissan_qashqai_fr",
+            country="FR",
+            brand="Nissan",
+            source_url="https://example.com",
+        ),
+        ScraplingProfile(
+            url="https://example.com",
+            text_regex=TextRegexMapping(
+                source_selector="body",
+                include_element_html=True,
+                entry_patterns=(
+                    TextRegexEntryPattern(
+                        pattern=(
+                            r"<p>Qashqai\s+(?P<trim>[^<]+)</p>"
+                            r".{0,12000}?Comptant.{0,300}?partir de\s+"
+                            r"(?P<price>\d{2}[\s\u00a0\u202f]*\d{3})"
+                            r"\s*(?:EUR|€)"
+                        ),
+                        official_powertrain="Qashqai grade cash price",
+                        price_label="Comptant",
+                    ),
+                ),
+            ),
+            default_currency="EUR",
+            fixed_model="QASHQAI",
+            fixed_jato_model="QASHQAI",
+            copy_trim_to_jato_trim=True,
+        ),
+    )
+
+    results = extractor.extract()
+
+    assert len(results) == 1
+    assert results[0].official_model == "QASHQAI"
+    assert results[0].official_trim == "N-CONNECTA"
+    assert results[0].msrp_value == 36_200.0
+    assert results[0].price_label == "Comptant"
 
 
 def test_config_loader_builds_scrapling_text_regex_profile() -> None:

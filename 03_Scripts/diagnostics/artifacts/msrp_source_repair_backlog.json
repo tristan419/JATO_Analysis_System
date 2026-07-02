@@ -1,15 +1,810 @@
 {
   "schemaVersion": "msrp_source_repair_backlog_v1",
-  "generatedAt": "2026-05-20T20:15:44Z",
-  "summary": {
-    "totalSources": 0,
-    "successCount": 0,
-    "failedCount": 0,
-    "passPct": 0.0,
-    "gateThreshold": 70,
-    "gateStatus": "blocked"
-  },
-  "failureBreakdown": {},
-  "strategyRecommendations": {},
-  "backlog": []
+  "runId": "msrp-dryrun-20260624-142640",
+  "generatedAt": "2026-06-24T14:26:40Z",
+  "totalIssueCount": 8,
+  "transientRegressionCount": 7,
+  "sourceRepairIssueCount": 1,
+  "businessResolutionCount": 0,
+  "sourceIssues": [
+    {
+      "countryCode": "fr",
+      "sourceCode": "tesla_model_y_fr_draft_scrapling",
+      "brand": "TESLA",
+      "sourceUrl": "https://www.tesla.com/fr_FR/modely",
+      "host": "tesla.com",
+      "status": "empty",
+      "rawStatus": null,
+      "valid": 0,
+      "extracted": 0,
+      "failureReason": "anti_bot_access_denied",
+      "recommendedStrategy": "manual_review_or_proxy_required",
+      "sourceRepairIssue": true,
+      "transientRegression": false,
+      "businessResolution": false,
+      "recommendedAction": "repair_source_definition",
+      "httpStatus": 403,
+      "finalUrl": "https://www.tesla.com/fr_FR/modely",
+      "extractorName": "_ConfiguredScrapling",
+      "coverageLevel": "L0_FAILED",
+      "errorSnippet": "anti_bot_access_denied: Access Denied You don't have permission to access \"http://www.tesla.com/fr_FR/modely\" on this server. Reference #18.da7cb17.1782311107.4150f274 https://errors.edgesuite.net/18.da7cb17.1782311107.4150f274"
+    }
+  ],
+  "businessResolutionIssues": [],
+  "transientSourceRegressions": [
+    {
+      "countryCode": "fr",
+      "sourceCode": "hyundai_tucson_fr_draft_scrapling",
+      "brand": "HYUNDAI",
+      "sourceUrl": "https://www.hyundai.com/fr/fr/modeles/tucson-hybrid.html",
+      "host": "hyundai.com",
+      "status": "timeout",
+      "rawStatus": null,
+      "valid": 0,
+      "extracted": 0,
+      "failureReason": "http_timeout",
+      "recommendedStrategy": "retry_or_reduce_concurrency",
+      "sourceRepairIssue": false,
+      "transientRegression": true,
+      "businessResolution": false,
+      "recommendedAction": "recheck_before_source_repair",
+      "extractorName": "_ConfiguredScrapling",
+      "coverageLevel": "L0_FAILED",
+      "errorSnippet": "source hyundai_tucson_fr_draft_scrapling exceeded 60s extraction timeout"
+    },
+    {
+      "countryCode": "fr",
+      "sourceCode": "kia_sportage_fr_draft_scrapling",
+      "brand": "KIA",
+      "sourceUrl": "https://www.kia.com/fr/modeles/sportage/",
+      "host": "kia.com",
+      "status": "timeout",
+      "rawStatus": null,
+      "valid": 0,
+      "extracted": 0,
+      "failureReason": "http_timeout",
+      "recommendedStrategy": "retry_or_reduce_concurrency",
+      "sourceRepairIssue": false,
+      "transientRegression": true,
+      "businessResolution": false,
+      "recommendedAction": "recheck_before_source_repair",
+      "extractorName": "_ConfiguredScrapling",
+      "coverageLevel": "L0_FAILED",
+      "errorSnippet": "source kia_sportage_fr_draft_scrapling exceeded 60s extraction timeout",
+      "lastKnownGoodRunId": "msrp-dryrun-20260623-131042",
+      "lastKnownGoodAt": "2026-06-23T13:10:42Z",
+      "lastKnownGoodValid": 1
+    },
+    {
+      "countryCode": "fr",
+      "sourceCode": "nissan_juke_fr_draft_scrapling",
+      "brand": "NISSAN",
+      "sourceUrl": "https://www.nissan.fr/vehicules/neufs/juke.html",
+      "host": "nissan.fr",
+      "status": "timeout",
+      "rawStatus": null,
+      "valid": 0,
+      "extracted": 0,
+      "failureReason": "http_timeout",
+      "recommendedStrategy": "retry_or_reduce_concurrency",
+      "sourceRepairIssue": false,
+      "transientRegression": true,
+      "businessResolution": false,
+      "recommendedAction": "recheck_before_source_repair",
+      "extractorName": "_ConfiguredScrapling",
+      "coverageLevel": "L0_FAILED",
+      "errorSnippet": "source nissan_juke_fr_draft_scrapling exceeded 60s extraction timeout",
+      "lastKnownGoodRunId": "msrp-dryrun-20260623-132635",
+      "lastKnownGoodAt": "2026-06-23T13:26:35Z",
+      "lastKnownGoodValid": 1
+    },
+    {
+      "countryCode": "fr",
+      "sourceCode": "peugeot_2008_fr_draft_scrapling",
+      "brand": "PEUGEOT",
+      "sourceUrl": "https://www.peugeot.fr/nos-vehicules/suv-peugeot-2008/hybride-essence.html",
+      "host": "peugeot.fr",
+      "status": "timeout",
+      "rawStatus": null,
+      "valid": 0,
+      "extracted": 0,
+      "failureReason": "http_timeout",
+      "recommendedStrategy": "retry_or_reduce_concurrency",
+      "sourceRepairIssue": false,
+      "transientRegression": true,
+      "businessResolution": false,
+      "recommendedAction": "recheck_before_source_repair",
+      "extractorName": "_ConfiguredScrapling",
+      "coverageLevel": "L0_FAILED",
+      "errorSnippet": "source peugeot_2008_fr_draft_scrapling exceeded 60s extraction timeout",
+      "lastKnownGoodRunId": "msrp-dryrun-20260623-132635",
+      "lastKnownGoodAt": "2026-06-23T13:26:35Z",
+      "lastKnownGoodValid": 1
+    },
+    {
+      "countryCode": "fr",
+      "sourceCode": "peugeot_3008_fr_draft_scrapling",
+      "brand": "PEUGEOT",
+      "sourceUrl": "https://www.peugeot.fr/nos-vehicules/peugeot-3008/hybride.html",
+      "host": "peugeot.fr",
+      "status": "timeout",
+      "rawStatus": null,
+      "valid": 0,
+      "extracted": 0,
+      "failureReason": "http_timeout",
+      "recommendedStrategy": "retry_or_reduce_concurrency",
+      "sourceRepairIssue": false,
+      "transientRegression": true,
+      "businessResolution": false,
+      "recommendedAction": "recheck_before_source_repair",
+      "extractorName": "_ConfiguredScrapling",
+      "coverageLevel": "L0_FAILED",
+      "errorSnippet": "source peugeot_3008_fr_draft_scrapling exceeded 60s extraction timeout",
+      "lastKnownGoodRunId": "msrp-dryrun-20260623-131042",
+      "lastKnownGoodAt": "2026-06-23T13:10:42Z",
+      "lastKnownGoodValid": 4
+    },
+    {
+      "countryCode": "fr",
+      "sourceCode": "peugeot_5008_fr_draft_scrapling",
+      "brand": "PEUGEOT",
+      "sourceUrl": "https://www.peugeot.fr/nos-vehicules/peugeot-5008/hybride.html",
+      "host": "peugeot.fr",
+      "status": "timeout",
+      "rawStatus": null,
+      "valid": 0,
+      "extracted": 0,
+      "failureReason": "http_timeout",
+      "recommendedStrategy": "retry_or_reduce_concurrency",
+      "sourceRepairIssue": false,
+      "transientRegression": true,
+      "businessResolution": false,
+      "recommendedAction": "recheck_before_source_repair",
+      "extractorName": "_ConfiguredScrapling",
+      "coverageLevel": "L0_FAILED",
+      "errorSnippet": "source peugeot_5008_fr_draft_scrapling exceeded 60s extraction timeout"
+    },
+    {
+      "countryCode": "fr",
+      "sourceCode": "toyota_yaris_cross_fr_draft_scrapling",
+      "brand": "TOYOTA",
+      "sourceUrl": "https://www.toyota.fr/vehicules-neufs/yaris-cross",
+      "host": "toyota.fr",
+      "status": "timeout",
+      "rawStatus": null,
+      "valid": 0,
+      "extracted": 0,
+      "failureReason": "http_timeout",
+      "recommendedStrategy": "retry_or_reduce_concurrency",
+      "sourceRepairIssue": false,
+      "transientRegression": true,
+      "businessResolution": false,
+      "recommendedAction": "recheck_before_source_repair",
+      "extractorName": "_ConfiguredScrapling",
+      "coverageLevel": "L0_FAILED",
+      "errorSnippet": "source toyota_yaris_cross_fr_draft_scrapling exceeded 60s extraction timeout"
+    }
+  ],
+  "topSourceHosts": [
+    {
+      "host": "peugeot.fr",
+      "count": 3,
+      "affectedCountries": [
+        "fr"
+      ],
+      "affectedCountryCount": 1,
+      "sampleSources": [
+        "peugeot_2008_fr_draft_scrapling",
+        "peugeot_3008_fr_draft_scrapling",
+        "peugeot_5008_fr_draft_scrapling"
+      ],
+      "sampleUrls": [
+        "https://www.peugeot.fr/nos-vehicules/suv-peugeot-2008/hybride-essence.html",
+        "https://www.peugeot.fr/nos-vehicules/peugeot-3008/hybride.html",
+        "https://www.peugeot.fr/nos-vehicules/peugeot-5008/hybride.html"
+      ]
+    },
+    {
+      "host": "hyundai.com",
+      "count": 1,
+      "affectedCountries": [
+        "fr"
+      ],
+      "affectedCountryCount": 1,
+      "sampleSources": [
+        "hyundai_tucson_fr_draft_scrapling"
+      ],
+      "sampleUrls": [
+        "https://www.hyundai.com/fr/fr/modeles/tucson-hybrid.html"
+      ]
+    },
+    {
+      "host": "kia.com",
+      "count": 1,
+      "affectedCountries": [
+        "fr"
+      ],
+      "affectedCountryCount": 1,
+      "sampleSources": [
+        "kia_sportage_fr_draft_scrapling"
+      ],
+      "sampleUrls": [
+        "https://www.kia.com/fr/modeles/sportage/"
+      ]
+    },
+    {
+      "host": "nissan.fr",
+      "count": 1,
+      "affectedCountries": [
+        "fr"
+      ],
+      "affectedCountryCount": 1,
+      "sampleSources": [
+        "nissan_juke_fr_draft_scrapling"
+      ],
+      "sampleUrls": [
+        "https://www.nissan.fr/vehicules/neufs/juke.html"
+      ]
+    },
+    {
+      "host": "tesla.com",
+      "count": 1,
+      "affectedCountries": [
+        "fr"
+      ],
+      "affectedCountryCount": 1,
+      "sampleSources": [
+        "tesla_model_y_fr_draft_scrapling"
+      ],
+      "sampleUrls": [
+        "https://www.tesla.com/fr_FR/modely"
+      ]
+    },
+    {
+      "host": "toyota.fr",
+      "count": 1,
+      "affectedCountries": [
+        "fr"
+      ],
+      "affectedCountryCount": 1,
+      "sampleSources": [
+        "toyota_yaris_cross_fr_draft_scrapling"
+      ],
+      "sampleUrls": [
+        "https://www.toyota.fr/vehicules-neufs/yaris-cross"
+      ]
+    }
+  ],
+  "groups": [
+    {
+      "failureReason": "anti_bot_access_denied",
+      "count": 1,
+      "transientRegressionCount": 0,
+      "sourceRepairIssueCount": 1,
+      "businessResolutionCount": 0,
+      "priorityScore": 19.0,
+      "priorityBand": "medium",
+      "priorityWeights": {
+        "sourceRepair": 10.0,
+        "country": 6.0,
+        "hostCluster": 3.0,
+        "transientRecheck": 1.5,
+        "businessResolution": 4.0
+      },
+      "reviewAssist": {
+        "preferred": "rule_based",
+        "llmFit": "low",
+        "neuralNetworkFit": "not_recommended_until_labeled_corpus",
+        "reason": "Use deterministic retry/proxy/source diagnostics before model-assisted repair."
+      },
+      "recommendedAction": "repair_source_definition",
+      "recommendedStrategy": "manual_review_or_proxy_required",
+      "recommendedStrategies": {
+        "manual_review_or_proxy_required": 1
+      },
+      "affectedCountries": [
+        "fr"
+      ],
+      "affectedCountryCount": 1,
+      "affectedBrands": [
+        "TESLA"
+      ],
+      "sampleSources": [
+        "tesla_model_y_fr_draft_scrapling"
+      ],
+      "sourceRepairIssues": [
+        {
+          "countryCode": "fr",
+          "sourceCode": "tesla_model_y_fr_draft_scrapling",
+          "brand": "TESLA",
+          "sourceUrl": "https://www.tesla.com/fr_FR/modely",
+          "host": "tesla.com",
+          "status": "empty",
+          "rawStatus": null,
+          "valid": 0,
+          "extracted": 0,
+          "failureReason": "anti_bot_access_denied",
+          "recommendedStrategy": "manual_review_or_proxy_required",
+          "sourceRepairIssue": true,
+          "transientRegression": false,
+          "businessResolution": false,
+          "recommendedAction": "repair_source_definition",
+          "httpStatus": 403,
+          "finalUrl": "https://www.tesla.com/fr_FR/modely",
+          "extractorName": "_ConfiguredScrapling",
+          "coverageLevel": "L0_FAILED",
+          "errorSnippet": "anti_bot_access_denied: Access Denied You don't have permission to access \"http://www.tesla.com/fr_FR/modely\" on this server. Reference #18.da7cb17.1782311107.4150f274 https://errors.edgesuite.net/18.da7cb17.1782311107.4150f274"
+        }
+      ],
+      "sampleBusinessResolutions": [],
+      "businessResolutionIssues": [],
+      "sampleTransientRegressions": [],
+      "transientRegressions": [],
+      "topSourceHosts": [
+        {
+          "host": "tesla.com",
+          "count": 1,
+          "affectedCountries": [
+            "fr"
+          ],
+          "affectedCountryCount": 1,
+          "sampleSources": [
+            "tesla_model_y_fr_draft_scrapling"
+          ],
+          "sampleUrls": [
+            "https://www.tesla.com/fr_FR/modely"
+          ]
+        }
+      ],
+      "status": "new",
+      "referenceAssist": {
+        "preferred": "official_proxy_or_configurator_api",
+        "thirdPartyReference": "EVKX",
+        "referencePolicy": "reference_only_review_required",
+        "officialSourceRequiredForIngest": true,
+        "acceptanceRules": [
+          "Do not count EVKX as an official MSRP dryrun pass.",
+          "Only use EVKX records when pricingCountry matches the target country.",
+          "Only use EVKX records when isConverted is false.",
+          "Keep the Tesla official source open until an official page, price list, or configurator API is fetchable."
+        ],
+        "reason": "Tesla official pages are blocked by the direct fetch path; EVKX can supply BEV variant and local-price reference evidence but cannot replace official MSRP evidence."
+      }
+    },
+    {
+      "failureReason": "http_timeout",
+      "count": 7,
+      "transientRegressionCount": 7,
+      "sourceRepairIssueCount": 0,
+      "businessResolutionCount": 0,
+      "priorityScore": 25.5,
+      "priorityBand": "recheck",
+      "priorityWeights": {
+        "sourceRepair": 10.0,
+        "country": 6.0,
+        "hostCluster": 3.0,
+        "transientRecheck": 1.5,
+        "businessResolution": 4.0
+      },
+      "reviewAssist": {
+        "preferred": "rule_based_recheck",
+        "llmFit": "low",
+        "neuralNetworkFit": "not_recommended",
+        "reason": "Historical pass exists; rerun or inspect network conditions before source repair."
+      },
+      "recommendedAction": "recheck_before_source_repair",
+      "recommendedStrategy": "retry_or_reduce_concurrency",
+      "recommendedStrategies": {
+        "retry_or_reduce_concurrency": 7
+      },
+      "affectedCountries": [
+        "fr"
+      ],
+      "affectedCountryCount": 1,
+      "affectedBrands": [
+        "HYUNDAI",
+        "KIA",
+        "NISSAN",
+        "PEUGEOT",
+        "TOYOTA"
+      ],
+      "sampleSources": [
+        "hyundai_tucson_fr_draft_scrapling",
+        "kia_sportage_fr_draft_scrapling",
+        "nissan_juke_fr_draft_scrapling",
+        "peugeot_2008_fr_draft_scrapling",
+        "peugeot_3008_fr_draft_scrapling",
+        "peugeot_5008_fr_draft_scrapling",
+        "toyota_yaris_cross_fr_draft_scrapling"
+      ],
+      "sourceRepairIssues": [],
+      "sampleBusinessResolutions": [],
+      "businessResolutionIssues": [],
+      "sampleTransientRegressions": [
+        {
+          "countryCode": "fr",
+          "sourceCode": "hyundai_tucson_fr_draft_scrapling",
+          "brand": "HYUNDAI",
+          "sourceUrl": "https://www.hyundai.com/fr/fr/modeles/tucson-hybrid.html",
+          "host": "hyundai.com",
+          "status": "timeout",
+          "rawStatus": null,
+          "valid": 0,
+          "extracted": 0,
+          "failureReason": "http_timeout",
+          "recommendedStrategy": "retry_or_reduce_concurrency",
+          "sourceRepairIssue": false,
+          "transientRegression": true,
+          "businessResolution": false,
+          "recommendedAction": "recheck_before_source_repair",
+          "extractorName": "_ConfiguredScrapling",
+          "coverageLevel": "L0_FAILED",
+          "errorSnippet": "source hyundai_tucson_fr_draft_scrapling exceeded 60s extraction timeout"
+        },
+        {
+          "countryCode": "fr",
+          "sourceCode": "kia_sportage_fr_draft_scrapling",
+          "brand": "KIA",
+          "sourceUrl": "https://www.kia.com/fr/modeles/sportage/",
+          "host": "kia.com",
+          "status": "timeout",
+          "rawStatus": null,
+          "valid": 0,
+          "extracted": 0,
+          "failureReason": "http_timeout",
+          "recommendedStrategy": "retry_or_reduce_concurrency",
+          "sourceRepairIssue": false,
+          "transientRegression": true,
+          "businessResolution": false,
+          "recommendedAction": "recheck_before_source_repair",
+          "extractorName": "_ConfiguredScrapling",
+          "coverageLevel": "L0_FAILED",
+          "errorSnippet": "source kia_sportage_fr_draft_scrapling exceeded 60s extraction timeout",
+          "lastKnownGoodRunId": "msrp-dryrun-20260623-131042",
+          "lastKnownGoodAt": "2026-06-23T13:10:42Z",
+          "lastKnownGoodValid": 1
+        },
+        {
+          "countryCode": "fr",
+          "sourceCode": "nissan_juke_fr_draft_scrapling",
+          "brand": "NISSAN",
+          "sourceUrl": "https://www.nissan.fr/vehicules/neufs/juke.html",
+          "host": "nissan.fr",
+          "status": "timeout",
+          "rawStatus": null,
+          "valid": 0,
+          "extracted": 0,
+          "failureReason": "http_timeout",
+          "recommendedStrategy": "retry_or_reduce_concurrency",
+          "sourceRepairIssue": false,
+          "transientRegression": true,
+          "businessResolution": false,
+          "recommendedAction": "recheck_before_source_repair",
+          "extractorName": "_ConfiguredScrapling",
+          "coverageLevel": "L0_FAILED",
+          "errorSnippet": "source nissan_juke_fr_draft_scrapling exceeded 60s extraction timeout",
+          "lastKnownGoodRunId": "msrp-dryrun-20260623-132635",
+          "lastKnownGoodAt": "2026-06-23T13:26:35Z",
+          "lastKnownGoodValid": 1
+        },
+        {
+          "countryCode": "fr",
+          "sourceCode": "peugeot_2008_fr_draft_scrapling",
+          "brand": "PEUGEOT",
+          "sourceUrl": "https://www.peugeot.fr/nos-vehicules/suv-peugeot-2008/hybride-essence.html",
+          "host": "peugeot.fr",
+          "status": "timeout",
+          "rawStatus": null,
+          "valid": 0,
+          "extracted": 0,
+          "failureReason": "http_timeout",
+          "recommendedStrategy": "retry_or_reduce_concurrency",
+          "sourceRepairIssue": false,
+          "transientRegression": true,
+          "businessResolution": false,
+          "recommendedAction": "recheck_before_source_repair",
+          "extractorName": "_ConfiguredScrapling",
+          "coverageLevel": "L0_FAILED",
+          "errorSnippet": "source peugeot_2008_fr_draft_scrapling exceeded 60s extraction timeout",
+          "lastKnownGoodRunId": "msrp-dryrun-20260623-132635",
+          "lastKnownGoodAt": "2026-06-23T13:26:35Z",
+          "lastKnownGoodValid": 1
+        },
+        {
+          "countryCode": "fr",
+          "sourceCode": "peugeot_3008_fr_draft_scrapling",
+          "brand": "PEUGEOT",
+          "sourceUrl": "https://www.peugeot.fr/nos-vehicules/peugeot-3008/hybride.html",
+          "host": "peugeot.fr",
+          "status": "timeout",
+          "rawStatus": null,
+          "valid": 0,
+          "extracted": 0,
+          "failureReason": "http_timeout",
+          "recommendedStrategy": "retry_or_reduce_concurrency",
+          "sourceRepairIssue": false,
+          "transientRegression": true,
+          "businessResolution": false,
+          "recommendedAction": "recheck_before_source_repair",
+          "extractorName": "_ConfiguredScrapling",
+          "coverageLevel": "L0_FAILED",
+          "errorSnippet": "source peugeot_3008_fr_draft_scrapling exceeded 60s extraction timeout",
+          "lastKnownGoodRunId": "msrp-dryrun-20260623-131042",
+          "lastKnownGoodAt": "2026-06-23T13:10:42Z",
+          "lastKnownGoodValid": 4
+        },
+        {
+          "countryCode": "fr",
+          "sourceCode": "peugeot_5008_fr_draft_scrapling",
+          "brand": "PEUGEOT",
+          "sourceUrl": "https://www.peugeot.fr/nos-vehicules/peugeot-5008/hybride.html",
+          "host": "peugeot.fr",
+          "status": "timeout",
+          "rawStatus": null,
+          "valid": 0,
+          "extracted": 0,
+          "failureReason": "http_timeout",
+          "recommendedStrategy": "retry_or_reduce_concurrency",
+          "sourceRepairIssue": false,
+          "transientRegression": true,
+          "businessResolution": false,
+          "recommendedAction": "recheck_before_source_repair",
+          "extractorName": "_ConfiguredScrapling",
+          "coverageLevel": "L0_FAILED",
+          "errorSnippet": "source peugeot_5008_fr_draft_scrapling exceeded 60s extraction timeout"
+        },
+        {
+          "countryCode": "fr",
+          "sourceCode": "toyota_yaris_cross_fr_draft_scrapling",
+          "brand": "TOYOTA",
+          "sourceUrl": "https://www.toyota.fr/vehicules-neufs/yaris-cross",
+          "host": "toyota.fr",
+          "status": "timeout",
+          "rawStatus": null,
+          "valid": 0,
+          "extracted": 0,
+          "failureReason": "http_timeout",
+          "recommendedStrategy": "retry_or_reduce_concurrency",
+          "sourceRepairIssue": false,
+          "transientRegression": true,
+          "businessResolution": false,
+          "recommendedAction": "recheck_before_source_repair",
+          "extractorName": "_ConfiguredScrapling",
+          "coverageLevel": "L0_FAILED",
+          "errorSnippet": "source toyota_yaris_cross_fr_draft_scrapling exceeded 60s extraction timeout"
+        }
+      ],
+      "transientRegressions": [
+        {
+          "countryCode": "fr",
+          "sourceCode": "hyundai_tucson_fr_draft_scrapling",
+          "brand": "HYUNDAI",
+          "sourceUrl": "https://www.hyundai.com/fr/fr/modeles/tucson-hybrid.html",
+          "host": "hyundai.com",
+          "status": "timeout",
+          "rawStatus": null,
+          "valid": 0,
+          "extracted": 0,
+          "failureReason": "http_timeout",
+          "recommendedStrategy": "retry_or_reduce_concurrency",
+          "sourceRepairIssue": false,
+          "transientRegression": true,
+          "businessResolution": false,
+          "recommendedAction": "recheck_before_source_repair",
+          "extractorName": "_ConfiguredScrapling",
+          "coverageLevel": "L0_FAILED",
+          "errorSnippet": "source hyundai_tucson_fr_draft_scrapling exceeded 60s extraction timeout"
+        },
+        {
+          "countryCode": "fr",
+          "sourceCode": "kia_sportage_fr_draft_scrapling",
+          "brand": "KIA",
+          "sourceUrl": "https://www.kia.com/fr/modeles/sportage/",
+          "host": "kia.com",
+          "status": "timeout",
+          "rawStatus": null,
+          "valid": 0,
+          "extracted": 0,
+          "failureReason": "http_timeout",
+          "recommendedStrategy": "retry_or_reduce_concurrency",
+          "sourceRepairIssue": false,
+          "transientRegression": true,
+          "businessResolution": false,
+          "recommendedAction": "recheck_before_source_repair",
+          "extractorName": "_ConfiguredScrapling",
+          "coverageLevel": "L0_FAILED",
+          "errorSnippet": "source kia_sportage_fr_draft_scrapling exceeded 60s extraction timeout",
+          "lastKnownGoodRunId": "msrp-dryrun-20260623-131042",
+          "lastKnownGoodAt": "2026-06-23T13:10:42Z",
+          "lastKnownGoodValid": 1
+        },
+        {
+          "countryCode": "fr",
+          "sourceCode": "nissan_juke_fr_draft_scrapling",
+          "brand": "NISSAN",
+          "sourceUrl": "https://www.nissan.fr/vehicules/neufs/juke.html",
+          "host": "nissan.fr",
+          "status": "timeout",
+          "rawStatus": null,
+          "valid": 0,
+          "extracted": 0,
+          "failureReason": "http_timeout",
+          "recommendedStrategy": "retry_or_reduce_concurrency",
+          "sourceRepairIssue": false,
+          "transientRegression": true,
+          "businessResolution": false,
+          "recommendedAction": "recheck_before_source_repair",
+          "extractorName": "_ConfiguredScrapling",
+          "coverageLevel": "L0_FAILED",
+          "errorSnippet": "source nissan_juke_fr_draft_scrapling exceeded 60s extraction timeout",
+          "lastKnownGoodRunId": "msrp-dryrun-20260623-132635",
+          "lastKnownGoodAt": "2026-06-23T13:26:35Z",
+          "lastKnownGoodValid": 1
+        },
+        {
+          "countryCode": "fr",
+          "sourceCode": "peugeot_2008_fr_draft_scrapling",
+          "brand": "PEUGEOT",
+          "sourceUrl": "https://www.peugeot.fr/nos-vehicules/suv-peugeot-2008/hybride-essence.html",
+          "host": "peugeot.fr",
+          "status": "timeout",
+          "rawStatus": null,
+          "valid": 0,
+          "extracted": 0,
+          "failureReason": "http_timeout",
+          "recommendedStrategy": "retry_or_reduce_concurrency",
+          "sourceRepairIssue": false,
+          "transientRegression": true,
+          "businessResolution": false,
+          "recommendedAction": "recheck_before_source_repair",
+          "extractorName": "_ConfiguredScrapling",
+          "coverageLevel": "L0_FAILED",
+          "errorSnippet": "source peugeot_2008_fr_draft_scrapling exceeded 60s extraction timeout",
+          "lastKnownGoodRunId": "msrp-dryrun-20260623-132635",
+          "lastKnownGoodAt": "2026-06-23T13:26:35Z",
+          "lastKnownGoodValid": 1
+        },
+        {
+          "countryCode": "fr",
+          "sourceCode": "peugeot_3008_fr_draft_scrapling",
+          "brand": "PEUGEOT",
+          "sourceUrl": "https://www.peugeot.fr/nos-vehicules/peugeot-3008/hybride.html",
+          "host": "peugeot.fr",
+          "status": "timeout",
+          "rawStatus": null,
+          "valid": 0,
+          "extracted": 0,
+          "failureReason": "http_timeout",
+          "recommendedStrategy": "retry_or_reduce_concurrency",
+          "sourceRepairIssue": false,
+          "transientRegression": true,
+          "businessResolution": false,
+          "recommendedAction": "recheck_before_source_repair",
+          "extractorName": "_ConfiguredScrapling",
+          "coverageLevel": "L0_FAILED",
+          "errorSnippet": "source peugeot_3008_fr_draft_scrapling exceeded 60s extraction timeout",
+          "lastKnownGoodRunId": "msrp-dryrun-20260623-131042",
+          "lastKnownGoodAt": "2026-06-23T13:10:42Z",
+          "lastKnownGoodValid": 4
+        },
+        {
+          "countryCode": "fr",
+          "sourceCode": "peugeot_5008_fr_draft_scrapling",
+          "brand": "PEUGEOT",
+          "sourceUrl": "https://www.peugeot.fr/nos-vehicules/peugeot-5008/hybride.html",
+          "host": "peugeot.fr",
+          "status": "timeout",
+          "rawStatus": null,
+          "valid": 0,
+          "extracted": 0,
+          "failureReason": "http_timeout",
+          "recommendedStrategy": "retry_or_reduce_concurrency",
+          "sourceRepairIssue": false,
+          "transientRegression": true,
+          "businessResolution": false,
+          "recommendedAction": "recheck_before_source_repair",
+          "extractorName": "_ConfiguredScrapling",
+          "coverageLevel": "L0_FAILED",
+          "errorSnippet": "source peugeot_5008_fr_draft_scrapling exceeded 60s extraction timeout"
+        },
+        {
+          "countryCode": "fr",
+          "sourceCode": "toyota_yaris_cross_fr_draft_scrapling",
+          "brand": "TOYOTA",
+          "sourceUrl": "https://www.toyota.fr/vehicules-neufs/yaris-cross",
+          "host": "toyota.fr",
+          "status": "timeout",
+          "rawStatus": null,
+          "valid": 0,
+          "extracted": 0,
+          "failureReason": "http_timeout",
+          "recommendedStrategy": "retry_or_reduce_concurrency",
+          "sourceRepairIssue": false,
+          "transientRegression": true,
+          "businessResolution": false,
+          "recommendedAction": "recheck_before_source_repair",
+          "extractorName": "_ConfiguredScrapling",
+          "coverageLevel": "L0_FAILED",
+          "errorSnippet": "source toyota_yaris_cross_fr_draft_scrapling exceeded 60s extraction timeout"
+        }
+      ],
+      "topSourceHosts": [
+        {
+          "host": "peugeot.fr",
+          "count": 3,
+          "affectedCountries": [
+            "fr"
+          ],
+          "affectedCountryCount": 1,
+          "sampleSources": [
+            "peugeot_2008_fr_draft_scrapling",
+            "peugeot_3008_fr_draft_scrapling",
+            "peugeot_5008_fr_draft_scrapling"
+          ],
+          "sampleUrls": [
+            "https://www.peugeot.fr/nos-vehicules/suv-peugeot-2008/hybride-essence.html",
+            "https://www.peugeot.fr/nos-vehicules/peugeot-3008/hybride.html",
+            "https://www.peugeot.fr/nos-vehicules/peugeot-5008/hybride.html"
+          ]
+        },
+        {
+          "host": "hyundai.com",
+          "count": 1,
+          "affectedCountries": [
+            "fr"
+          ],
+          "affectedCountryCount": 1,
+          "sampleSources": [
+            "hyundai_tucson_fr_draft_scrapling"
+          ],
+          "sampleUrls": [
+            "https://www.hyundai.com/fr/fr/modeles/tucson-hybrid.html"
+          ]
+        },
+        {
+          "host": "kia.com",
+          "count": 1,
+          "affectedCountries": [
+            "fr"
+          ],
+          "affectedCountryCount": 1,
+          "sampleSources": [
+            "kia_sportage_fr_draft_scrapling"
+          ],
+          "sampleUrls": [
+            "https://www.kia.com/fr/modeles/sportage/"
+          ]
+        },
+        {
+          "host": "nissan.fr",
+          "count": 1,
+          "affectedCountries": [
+            "fr"
+          ],
+          "affectedCountryCount": 1,
+          "sampleSources": [
+            "nissan_juke_fr_draft_scrapling"
+          ],
+          "sampleUrls": [
+            "https://www.nissan.fr/vehicules/neufs/juke.html"
+          ]
+        },
+        {
+          "host": "toyota.fr",
+          "count": 1,
+          "affectedCountries": [
+            "fr"
+          ],
+          "affectedCountryCount": 1,
+          "sampleSources": [
+            "toyota_yaris_cross_fr_draft_scrapling"
+          ],
+          "sampleUrls": [
+            "https://www.toyota.fr/vehicules-neufs/yaris-cross"
+          ]
+        }
+      ],
+      "status": "new"
+    }
+  ]
 }

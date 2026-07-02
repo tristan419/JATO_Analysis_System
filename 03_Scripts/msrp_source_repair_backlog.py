@@ -20,7 +20,15 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+SCRIPT_DIR = Path(__file__).resolve().parent
 REPO_ROOT = Path(__file__).resolve().parent.parent
+if str(SCRIPT_DIR) not in sys.path:
+    sys.path.insert(0, str(SCRIPT_DIR))
+
+try:
+    from msrp_dryrun_aggregate import _write_source_repair_backlog as _write_v3_source_repair_backlog
+except ImportError:  # pragma: no cover - keeps old-report fallback usable in stripped script contexts.
+    _write_v3_source_repair_backlog = None  # type: ignore[assignment]
 
 
 def _load_dryrun_report(path: str | None) -> dict:
@@ -50,9 +58,20 @@ def _classify_no_observation(src: dict) -> str:
 def _classify_validation_fix(src: dict) -> tuple[str, str]:
     """Return (likely_cause, recommended_fix) for validation_rejected_all."""
     rejected = [str(r).lower() for r in (src.get("rejectedReasons") or [])]
+    rejected_rules = [str(r).lower() for r in (src.get("rejectedRules") or [])]
+    rejection_rule_counts = src.get("rejectionRuleCounts") or {}
+    if isinstance(rejection_rule_counts, dict):
+        rejected_rules.extend(str(r).lower() for r in rejection_rule_counts)
     if any("currency" in r for r in rejected):
         return "currency issue", "check default_currency in the source YAML"
-    if any("price" in r and ("range" in r or "out" in r) for r in rejected):
+    if (
+        any(r == "price_range" for r in rejected_rules)
+        or any(
+            ("price" in r or "msrp_value" in r)
+            and ("range" in r or "out" in r or "<" in r or ">" in r)
+            for r in rejected
+        )
+    ):
         return "price range issue", "check price parsing and units in extraction config"
     if any("financ" in r or "leas" in r or "monthly" in r for r in rejected):
         return "finance/leasing price issue", "avoid monthly payment / leasing selector"
@@ -191,15 +210,31 @@ def run(dryrun_path: str | None = None, out_dir: str | None = None) -> dict:
         print("[backlog] No dryrun report found.", file=sys.stderr)
         return {}
 
-    backlog = _build_backlog(report)
     out_base = Path(out_dir).resolve() if out_dir else REPO_ROOT / "03_Scripts" / "diagnostics" / "artifacts"
     out_base.mkdir(parents=True, exist_ok=True)
-
     json_path = out_base / "msrp_source_repair_backlog.json"
+    md_path = out_base / "msrp_source_repair_backlog.md"
+
+    if report.get("schemaVersion") == "msrp_dryrun_report_v3" and _write_v3_source_repair_backlog:
+        history_base = Path(dryrun_path).resolve().parent if dryrun_path else out_base
+        _write_v3_source_repair_backlog(report, out_base, history_base)
+        try:
+            backlog = json.loads(json_path.read_text(encoding="utf-8"))
+        except Exception:
+            backlog = {}
+        print(f"[backlog] JSON: {json_path}")
+        print(f"[backlog] Markdown: {md_path}")
+        print(
+            "[backlog] "
+            f"{backlog.get('sourceRepairIssueCount', 0)} source repair issues, "
+            f"{backlog.get('transientRegressionCount', 0)} transient rechecks"
+        )
+        return backlog
+
+    backlog = _build_backlog(report)
     json_path.write_text(json.dumps(backlog, indent=2, ensure_ascii=False) + "\n")
     print(f"[backlog] JSON: {json_path}")
 
-    md_path = out_base / "msrp_source_repair_backlog.md"
     md_path.write_text(_render_markdown(backlog))
     print(f"[backlog] Markdown: {md_path}")
 

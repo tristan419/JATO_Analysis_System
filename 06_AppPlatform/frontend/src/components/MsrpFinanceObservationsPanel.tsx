@@ -5,6 +5,16 @@ import type {
   MsrpFinanceObservation,
   MsrpFinanceObservationsResponse,
 } from "../types";
+import {
+  formatFinanceCurrency,
+  formatFinanceDate,
+  formatFinanceMonthlyPayment,
+  formatFinanceNumber,
+  getFinanceObservationLabel,
+  getFinanceObservationModelLabel,
+  getFinanceObservationValidityBadgeClass,
+  getFinanceObservationValidityLabel,
+} from "../utils/msrpFinance";
 
 interface FinanceFilters {
   country: string;
@@ -36,11 +46,6 @@ function formatNumber(value: number | null, suffix = ""): string {
   return `${value.toLocaleString(undefined, { maximumFractionDigits: 2 })}${suffix}`;
 }
 
-function formatCurrency(value: number | null, currency = "EUR"): string {
-  if (value === null || !Number.isFinite(value)) return "-";
-  return `${value.toLocaleString(undefined, { maximumFractionDigits: 0 })} ${currency}`;
-}
-
 function formatDateTime(value: string): string {
   if (!value) return "-";
   const date = new Date(value);
@@ -57,11 +62,38 @@ function rowFinanceLabel(item: MsrpFinanceObservation): string {
   return item.financeType || item.priceSemantics || "-";
 }
 
+function financeModelLabel(item: MsrpFinanceObservation): string {
+  return getFinanceObservationModelLabel(item) || item.officialModel || item.financeObservationId;
+}
+
+function officialModelLabel(item: MsrpFinanceObservation): string {
+  return [item.officialModel, item.officialTrim].filter(Boolean).join(" ") || "-";
+}
+
+function financeDetailRows(item: MsrpFinanceObservation): Array<{ label: string; value: string }> {
+  return [
+    { label: "Monthly", value: formatFinanceCurrency(item.monthlyPayment, item.currency) },
+    { label: "Monthly EUR", value: formatFinanceCurrency(item.monthlyPaymentEur) },
+    { label: "Down payment", value: formatFinanceCurrency(item.downPayment, item.currency) },
+    { label: "Down EUR", value: formatFinanceCurrency(item.downPaymentEur) },
+    { label: "Term", value: item.termMonths ? `${item.termMonths} mo` : "-" },
+    { label: "Mileage", value: item.annualMileageLimit ? `${formatFinanceNumber(item.annualMileageLimit)} km/y` : "-" },
+    { label: "APR", value: item.apr !== null ? `${formatFinanceNumber(item.apr, 2)}%` : "-" },
+    { label: "Effective APR", value: item.effectiveApr !== null ? `${formatFinanceNumber(item.effectiveApr, 2)}%` : "-" },
+    { label: "Balloon", value: formatFinanceCurrency(item.balloonPayment, item.currency) },
+    { label: "Credit cost EUR", value: formatFinanceCurrency(item.totalCreditCostEur) },
+    { label: "Subsidy EUR", value: formatFinanceCurrency(item.subsidyAmountEur) },
+    { label: "Net after subsidy EUR", value: formatFinanceCurrency(item.netPriceAfterSubsidyEur) },
+  ];
+}
+
 export function MsrpFinanceObservationsPanel() {
   const [filters, setFilters] = useState<FinanceFilters>(defaultFilters);
   const [data, setData] = useState<MsrpFinanceObservationsResponse | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
+  const [selectedFinance, setSelectedFinance] = useState<MsrpFinanceObservation | null>(null);
+  const [detailFlipped, setDetailFlipped] = useState(false);
 
   async function loadFinanceObservations(nextFilters = filters): Promise<void> {
     setLoading(true);
@@ -94,6 +126,17 @@ export function MsrpFinanceObservationsPanel() {
 
   const summary = data?.summary;
   const rows = data?.items ?? [];
+  const cardRows = rows.slice(0, 8);
+
+  function openFinanceDetail(item: MsrpFinanceObservation): void {
+    setSelectedFinance(item);
+    setDetailFlipped(false);
+  }
+
+  function closeFinanceDetail(): void {
+    setSelectedFinance(null);
+    setDetailFlipped(false);
+  }
 
   return (
     <div className="msrp-finance-panel">
@@ -165,14 +208,14 @@ export function MsrpFinanceObservationsPanel() {
           <span>Monthly payments</span>
           <strong>{formatNumber(summary?.monthlyPaymentCount ?? 0)}</strong>
           <small>
-            {formatCurrency(summary?.monthlyPaymentEurMin ?? null)} - {formatCurrency(summary?.monthlyPaymentEurMax ?? null)}
+            {formatFinanceCurrency(summary?.monthlyPaymentEurMin ?? null)} - {formatFinanceCurrency(summary?.monthlyPaymentEurMax ?? null)}
           </small>
         </div>
         <div className="data-management-metric">
           <span>Net price rows</span>
           <strong>{formatNumber(summary?.netPriceAfterSubsidyCount ?? 0)}</strong>
           <small>
-            {formatCurrency(summary?.netPriceAfterSubsidyEurMin ?? null)} - {formatCurrency(summary?.netPriceAfterSubsidyEurMax ?? null)}
+            {formatFinanceCurrency(summary?.netPriceAfterSubsidyEurMin ?? null)} - {formatFinanceCurrency(summary?.netPriceAfterSubsidyEurMax ?? null)}
           </small>
         </div>
         <div className="data-management-metric">
@@ -181,6 +224,36 @@ export function MsrpFinanceObservationsPanel() {
           <small>Subsidy rows {formatNumber(summary?.subsidyObservationCount ?? 0)}</small>
         </div>
       </div>
+
+      {cardRows.length > 0 ? (
+        <div className="msrp-finance-card-grid">
+          {cardRows.map((item) => (
+            <button
+              key={`card-${item.financeObservationId}`}
+              type="button"
+              className="msrp-finance-detail-card"
+              aria-label={`Open finance details for ${financeModelLabel(item)}`}
+              onClick={() => openFinanceDetail(item)}
+            >
+              <div className="msrp-finance-detail-card-head">
+                <div>
+                  <strong>{financeModelLabel(item)}</strong>
+                  <span>{officialModelLabel(item)}</span>
+                </div>
+                <span className={`badge ${getFinanceObservationValidityBadgeClass(item)}`}>
+                  {getFinanceObservationValidityLabel(item)}
+                </span>
+              </div>
+              <div className="msrp-finance-card-monthly">{formatFinanceMonthlyPayment(item)}</div>
+              <div className="msrp-finance-card-meta">
+                <span>{item.country}</span>
+                <span>{getFinanceObservationLabel(item)}</span>
+                <span>{item.termMonths ? `${item.termMonths} mo` : "-"}</span>
+              </div>
+            </button>
+          ))}
+        </div>
+      ) : null}
 
       {rows.length > 0 ? (
         <div className="msrp-finance-table-wrap">
@@ -211,14 +284,14 @@ export function MsrpFinanceObservationsPanel() {
                     <span>{item.priceSemantics}</span>
                   </td>
                   <td>
-                    <strong>{formatCurrency(item.monthlyPayment, item.currency)}</strong>
-                    <span>{formatCurrency(item.monthlyPaymentEur)}</span>
+                    <strong>{formatFinanceCurrency(item.monthlyPayment, item.currency)}</strong>
+                    <span>{formatFinanceCurrency(item.monthlyPaymentEur)}</span>
                   </td>
                   <td>
-                    <strong>{formatCurrency(item.netPriceAfterSubsidy, item.currency)}</strong>
-                    <span>{formatCurrency(item.netPriceAfterSubsidyEur)}</span>
+                    <strong>{formatFinanceCurrency(item.netPriceAfterSubsidy, item.currency)}</strong>
+                    <span>{formatFinanceCurrency(item.netPriceAfterSubsidyEur)}</span>
                   </td>
-                  <td>{formatCurrency(item.subsidyAmountEur)}</td>
+                  <td>{formatFinanceCurrency(item.subsidyAmountEur)}</td>
                   <td>
                     {item.termMonths ? `${item.termMonths} mo` : "-"}
                     {item.annualMileageLimit ? <span>{formatNumber(item.annualMileageLimit)} km/y</span> : null}
@@ -233,6 +306,89 @@ export function MsrpFinanceObservationsPanel() {
           {loading ? "Loading finance observations" : "No finance observations"}
         </div>
       )}
+
+      {selectedFinance ? (
+        <div className="msrp-finance-overlay" role="dialog" aria-modal="true" onClick={closeFinanceDetail}>
+          <div
+            className={`msrp-finance-flip-card${detailFlipped ? " is-flipped" : ""}`}
+            onClick={(event) => event.stopPropagation()}
+          >
+            <div className="msrp-finance-flip-inner">
+              <div className="msrp-finance-flip-face">
+                <div>
+                  <div className="msrp-finance-detail-card-head">
+                    <div>
+                      <strong>{financeModelLabel(selectedFinance)}</strong>
+                      <span>{officialModelLabel(selectedFinance)}</span>
+                    </div>
+                    <span className={`badge ${getFinanceObservationValidityBadgeClass(selectedFinance)}`}>
+                      {getFinanceObservationValidityLabel(selectedFinance)}
+                    </span>
+                  </div>
+                  <div className="msrp-finance-flip-hero-value">
+                    {formatFinanceMonthlyPayment(selectedFinance)}
+                    <span>{getFinanceObservationLabel(selectedFinance)}</span>
+                  </div>
+                </div>
+                <div className="msrp-finance-flip-grid">
+                  {financeDetailRows(selectedFinance).slice(0, 6).map((row) => (
+                    <div key={row.label}>
+                      <span>{row.label}</span>
+                      <strong>{row.value}</strong>
+                    </div>
+                  ))}
+                </div>
+                <div className="msrp-finance-flip-actions">
+                  <button type="button" className="btn btn-sm btn-secondary" onClick={() => setDetailFlipped(true)}>
+                    Details
+                  </button>
+                  <button type="button" className="btn btn-sm btn-ghost" onClick={closeFinanceDetail}>
+                    Close
+                  </button>
+                </div>
+              </div>
+              <div className="msrp-finance-flip-face msrp-finance-flip-back">
+                <div className="msrp-finance-detail-card-head">
+                  <div>
+                    <strong>Finance Context</strong>
+                    <span>{selectedFinance.country} / {selectedFinance.brand}</span>
+                  </div>
+                  <span className="badge badge-inactive">{selectedFinance.priceSemantics}</span>
+                </div>
+                <div className="msrp-finance-flip-grid">
+                  {financeDetailRows(selectedFinance).map((row) => (
+                    <div key={row.label}>
+                      <span>{row.label}</span>
+                      <strong>{row.value}</strong>
+                    </div>
+                  ))}
+                  <div>
+                    <span>Offer valid</span>
+                    <strong>{formatFinanceDate(selectedFinance.offerValidUntil)}</strong>
+                  </div>
+                  <div>
+                    <span>Observed</span>
+                    <strong>{formatDateTime(selectedFinance.observedAtUtc)}</strong>
+                  </div>
+                </div>
+                <div className="msrp-finance-flip-actions">
+                  {selectedFinance.sourceUrl ? (
+                    <a className="btn btn-sm btn-secondary" href={selectedFinance.sourceUrl} target="_blank" rel="noreferrer">
+                      Source
+                    </a>
+                  ) : null}
+                  <button type="button" className="btn btn-sm btn-secondary" onClick={() => setDetailFlipped(false)}>
+                    Summary
+                  </button>
+                  <button type="button" className="btn btn-sm btn-ghost" onClick={closeFinanceDetail}>
+                    Close
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      ) : null}
     </div>
   );
 }

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Completion audit for the MSRP/AI/Unified scraping goal.
+"""Completion audit for the MSRP/finance/config/AI/unified scraping goal.
 
 This report is intentionally stricter than the P0 readiness checks. It keeps
 local feature readiness separate from full PRD completion evidence such as
@@ -21,6 +21,7 @@ from urllib.error import HTTPError, URLError
 from urllib.parse import urlparse
 from urllib.request import Request, urlopen
 
+
 REPO_ROOT = Path(__file__).resolve().parents[2]
 HERMES_SCRIPT_DIR = REPO_ROOT / "03_Scripts" / "hermes"
 if str(HERMES_SCRIPT_DIR) not in sys.path:
@@ -32,7 +33,7 @@ except ImportError:  # pragma: no cover - optional for isolated unit imports.
     write_pipeline_status = None  # type: ignore[assignment]
 
 
-SCHEMA_VERSION = "jato_goal_completion_audit_v1"
+SCHEMA_VERSION = "jato_goal_completion_audit_v2"
 PIPELINE_ID = "goal_completion_audit"
 DEFAULT_SOURCE_DRAFT_DIR = "07_ScrapingToolkit/source_drafts/suv_only_country_model_top30"
 DEFAULT_REQUIRED_SOURCE_COUNTRIES = (
@@ -82,11 +83,15 @@ REQUIRED_MSRP_REQUIREMENT_KEYS = (
     "current_price",
     "price_history",
     "price_alerts",
+    "monitoring_events",
     "review_queue",
+    "auto_review_scoring",
     "sales_effectiveness",
     "finance_monthly_lease_subsidy_net",
+    "official_config_table_pipeline",
     "multi_source_reconciliation",
     "dryrun_governance",
+    "pipeline_orchestration",
     "frontend_management_views",
 )
 
@@ -117,7 +122,12 @@ def _safe_token(value: str | None, fallback: str) -> str:
 
 def _history_suffix(report: dict[str, Any]) -> str:
     generated = str(report.get("generatedAtUtc") or _utc_now_iso())
-    stamp = generated.replace(":", "").replace("-", "").replace("+", "z").replace(".", "-")
+    stamp = (
+        generated.replace(":", "")
+        .replace("-", "")
+        .replace("+", "z")
+        .replace(".", "-")
+    )
     return _safe_token(stamp, "unknown-time")
 
 
@@ -228,7 +238,9 @@ def _msrp_detail_requirements(
                 evidence=evidence,
                 runtime=runtime,
                 note=str(
-                    detail.get("note") if isinstance(detail, dict) else "Detailed MSRP readiness evidence is missing."
+                    detail.get("note")
+                    if isinstance(detail, dict)
+                    else "Detailed MSRP readiness evidence is missing."
                 ),
             )
         )
@@ -337,6 +349,67 @@ def _fetch_json(
         return None, str(exc), None
 
 
+def _safe_float(value: Any, default: float = 0.0) -> float:
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return default
+
+
+def _safe_int(value: Any, default: int = 0) -> int:
+    try:
+        return int(float(value))
+    except (TypeError, ValueError):
+        return default
+
+
+def _effective_progress_gate(progress: dict[str, Any] | None) -> dict[str, Any]:
+    if not isinstance(progress, dict):
+        return {
+            "effectiveGateStatus": "missing",
+            "effectiveGateBasis": "missing",
+            "stableCoverage": {},
+        }
+
+    progress_status = progress.get("status")
+    if not isinstance(progress_status, dict):
+        progress_status = {}
+    stable = progress.get("stableCoverage")
+    if not isinstance(stable, dict):
+        stable = {}
+
+    active_gate = str(progress_status.get("gateStatus") or "").strip().lower()
+    if active_gate == "allowed":
+        return {
+            "effectiveGateStatus": "allowed",
+            "effectiveGateBasis": "active",
+            "stableCoverage": stable,
+        }
+
+    threshold = _safe_float(
+        stable.get("gateThreshold", progress_status.get("gateThreshold")),
+        70.0,
+    )
+    stable_pass_rate = _safe_float(
+        stable.get("sourcePassRate", stable.get("stablePassRate")),
+        0.0,
+    )
+    ready_country_count = _safe_int(stable.get("readyCountryCount"), 0)
+    blocked_country_count = _safe_int(stable.get("blockedCountryCount"), 0)
+    stable_ready = (
+        stable_pass_rate >= threshold
+        and ready_country_count > 0
+        and blocked_country_count == 0
+        and not bool(stable.get("activeRunRunning"))
+        and not bool(stable.get("activeRunPartial"))
+    )
+    return {
+        "effectiveGateStatus": "allowed" if stable_ready else "blocked",
+        "effectiveGateBasis": "stable" if stable_ready else "active",
+        "stableCoverage": stable,
+    }
+
+
 def _remote_checks(
     remote_api_base: str | None,
     timeout_seconds: int,
@@ -364,18 +437,28 @@ def _remote_checks(
         timeout_seconds,
         resolve_ip=resolve_ip,
     )
+    monitoring, monitoring_error, monitoring_code = _fetch_json(
+        f"{base}/msrp/monitoring/events",
+        timeout_seconds,
+        resolve_ip=resolve_ip,
+    )
     progress_status = progress.get("status") if isinstance(progress, dict) else {}
     if not isinstance(progress_status, dict):
         progress_status = {}
+    progress_gate = _effective_progress_gate(progress)
+    stable_coverage = progress_gate["stableCoverage"]
     passed = (
         snapshot_code == 200
         and isinstance(snapshot, dict)
         and snapshot.get("schemaVersion") == "msrp_current_price_snapshot_v1"
         and progress_code == 200
-        and progress_status.get("gateStatus") == "allowed"
+        and progress_gate["effectiveGateStatus"] == "allowed"
         and unified_code == 200
         and isinstance(unified, dict)
         and unified.get("status") == "success"
+        and monitoring_code == 200
+        and isinstance(monitoring, dict)
+        and monitoring.get("schemaVersion") == "msrp_monitoring_events_v1"
     )
     return {
         "status": "passed" if passed else "missing",
@@ -391,7 +474,19 @@ def _remote_checks(
             "httpStatus": progress_code,
             "runId": progress_status.get("runId"),
             "gateStatus": progress_status.get("gateStatus"),
+            "effectiveGateStatus": progress_gate["effectiveGateStatus"],
+            "effectiveGateBasis": progress_gate["effectiveGateBasis"],
             "overallPassPct": progress_status.get("overallPassPct"),
+            "stableCoverage": {
+                "gateThreshold": stable_coverage.get("gateThreshold"),
+                "stablePassRate": stable_coverage.get("stablePassRate"),
+                "sourcePassRate": stable_coverage.get("sourcePassRate"),
+                "readyCountryCount": stable_coverage.get("readyCountryCount"),
+                "blockedCountryCount": stable_coverage.get("blockedCountryCount"),
+                "probeRegressionCount": stable_coverage.get("probeRegressionCount"),
+                "latestRunId": stable_coverage.get("latestRunId"),
+                "activeRunId": stable_coverage.get("activeRunId"),
+            },
             "error": progress_error,
         },
         "unifiedScrapingReadiness": {
@@ -399,6 +494,31 @@ def _remote_checks(
             "status": unified.get("status") if isinstance(unified, dict) else None,
             "readinessStatus": unified.get("readinessStatus") if isinstance(unified, dict) else None,
             "error": unified_error,
+        },
+        "msrpMonitoringEvents": {
+            "httpStatus": monitoring_code,
+            "schemaVersion": monitoring.get("schemaVersion") if isinstance(monitoring, dict) else None,
+            "eventCount": (
+                monitoring.get("summary", {}).get("eventCount")
+                if isinstance(monitoring, dict) and isinstance(monitoring.get("summary"), dict)
+                else None
+            ),
+            "timelineEventCount": (
+                monitoring.get("summary", {}).get("timelineEventCount")
+                if isinstance(monitoring, dict) and isinstance(monitoring.get("summary"), dict)
+                else None
+            ),
+            "sourceRiskCount": (
+                monitoring.get("summary", {}).get("sourceRiskCount")
+                if isinstance(monitoring, dict) and isinstance(monitoring.get("summary"), dict)
+                else None
+            ),
+            "warningCount": (
+                len(monitoring.get("warnings"))
+                if isinstance(monitoring, dict) and isinstance(monitoring.get("warnings"), list)
+                else None
+            ),
+            "error": monitoring_error,
         },
     }
 
@@ -433,7 +553,11 @@ def build_goal_completion_report(
         resolve_ip=remote_resolve_ip,
     )
 
-    msrp_missing_keys = [item["key"] for item in msrp_detail_requirements if item.get("status") != "passed"]
+    msrp_missing_keys = [
+        item["key"]
+        for item in msrp_detail_requirements
+        if item.get("status") != "passed"
+    ]
     msrp_ready = (
         msrp_status.get("status") == "success"
         and msrp_status.get("readinessStatus") == "passed"
@@ -444,9 +568,9 @@ def build_goal_completion_report(
     ai_ready = (
         ai_status.get("status") == "success"
         and ai_status.get("smokeStatus") == "ok"
-        and int(ai_status.get("requiredCountryCount") or 0) >= len(required_ai_countries)
-        and int(ai_news.get("countryCount") or 0) >= len(required_ai_countries)
-        and int(ai_voc.get("countryCount") or 0) >= len(required_ai_countries)
+        and _safe_int(ai_status.get("requiredCountryCount")) >= len(required_ai_countries)
+        and _safe_int(ai_news.get("countryCount")) >= len(required_ai_countries)
+        and _safe_int(ai_voc.get("countryCount")) >= len(required_ai_countries)
     )
     unified_ready = (
         unified_status.get("status") == "success"
@@ -499,8 +623,8 @@ def build_goal_completion_report(
             evidence=[source_coverage["sourceDraftDir"]],
             runtime=source_coverage,
             note=(
-                "Full PRD completion still requires eliminating TODO placeholders and validating "
-                "real source extraction across all countries."
+                "Full PRD completion still requires eliminating TODO placeholders and "
+                "validating real source extraction across all countries."
             ),
         ),
         _requirement(
@@ -511,7 +635,7 @@ def build_goal_completion_report(
             runtime=remote,
             note=(
                 "Production is complete only when deployed API exposes current snapshot, "
-                "allowed dryrun gate, and unified readiness success."
+                "monitoring events, effective dryrun gate, and unified readiness success."
             ),
         ),
     ]
@@ -524,8 +648,14 @@ def build_goal_completion_report(
             "requirementCount": len(requirements),
             "statusCounts": status_counts,
             "localP0Ready": msrp_ready and ai_ready and unified_ready,
+            "msrpReady": msrp_ready,
+            "aiReady": ai_ready,
+            "unifiedReady": unified_ready,
             "msrpDetailedRequirementCount": len(msrp_detail_requirements),
-            "msrpDetailedPassedCount": sum(1 for item in msrp_detail_requirements if item.get("status") == "passed"),
+            "msrpDetailedPassedCount": sum(
+                1 for item in msrp_detail_requirements
+                if item.get("status") == "passed"
+            ),
             "msrpMissingRequirementKeys": msrp_missing_keys,
             "sourceDraftTodoPlaceholderCount": source_coverage["todoPlaceholderCount"],
             "sourceDraftCountryCount": source_coverage["countryCount"],
@@ -543,7 +673,7 @@ def _markdown_cell(value: Any) -> str:
 def _render_markdown(report: dict[str, Any]) -> str:
     summary = report.get("summary") if isinstance(report.get("summary"), dict) else {}
     lines = [
-        "# JATO MSRP / AI / Unified Goal Completion Audit",
+        "# JATO MSRP / Finance / Config / Unified Goal Completion Audit",
         "",
         f"**Generated:** {report.get('generatedAtUtc', '-')}",
         f"**Status:** {report.get('status', '-')}",
@@ -617,7 +747,13 @@ def write_status_record(
     if write_pipeline_status is None:
         return None
     status = str(report.get("status") or "in_progress")
-    pipeline_status = "success" if status == "complete" else "degraded" if status == "degraded" else "failed"
+    pipeline_status = (
+        "success"
+        if status == "complete"
+        else "degraded"
+        if status == "degraded"
+        else "failed"
+    )
     summary = report.get("summary") if isinstance(report.get("summary"), dict) else {}
     status_counts = summary.get("statusCounts") if isinstance(summary.get("statusCounts"), dict) else {}
     failed_count = int(status_counts.get("missing") or 0) + int(status_counts.get("not_checked") or 0)
@@ -652,7 +788,10 @@ def write_status_record(
 
 def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Audit full goal completion across MSRP, AI News/VOC, and Unified Scraping.",
+        description=(
+            "Audit full goal completion across MSRP, finance, official config, "
+            "AI News/VOC, and unified scraping."
+        ),
     )
     parser.add_argument("--repo-root", default=str(REPO_ROOT))
     parser.add_argument("--source-draft-dir", default=DEFAULT_SOURCE_DRAFT_DIR)

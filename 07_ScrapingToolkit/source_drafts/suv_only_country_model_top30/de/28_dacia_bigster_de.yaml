@@ -1,12 +1,12 @@
 source_code: dacia_bigster_de_draft_scrapling
 country: 德国
 brand: DACIA
-source_url: https://www.dacia.de/modelle/bigster.html
+source_url: https://www.dacia.de/hybrid-und-elektromodelle/bigster-suv/preise-versionen.html
 source_type: manufacturer_official
 price_semantics: base_msrp
 extractor_type: scrapling
 profile:
-  url: https://www.dacia.de/modelle/bigster.html
+  url: https://www.dacia.de/hybrid-und-elektromodelle/bigster-suv/preise-versionen.html
   tier: stealth
   headless: true
   network_idle: true

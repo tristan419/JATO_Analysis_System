@@ -13,12 +13,43 @@ from typing import Any, Sequence
 
 SCRIPT_DIR = Path(__file__).resolve().parent
 REPO_ROOT = Path(__file__).resolve().parents[2]
-if str(SCRIPT_DIR) not in sys.path:
-    sys.path.insert(0, str(SCRIPT_DIR))
+SCRIPTS_ROOT = REPO_ROOT / "03_Scripts"
 HERMES_SCRIPT_DIR = REPO_ROOT / "03_Scripts" / "hermes"
-if str(HERMES_SCRIPT_DIR) not in sys.path:
-    sys.path.insert(0, str(HERMES_SCRIPT_DIR))
+DRYRUN_ARTIFACTS_DIR = REPO_ROOT / "03_Scripts" / "diagnostics" / "artifacts"
+DRYRUN_REPORT_PATH = DRYRUN_ARTIFACTS_DIR / "dryrun_report.json"
+DRYRUN_RUNS_INDEX_PATH = DRYRUN_ARTIFACTS_DIR / "dryrun_runs_index.json"
+SOURCE_REPAIR_BACKLOG_PATH = DRYRUN_ARTIFACTS_DIR / "msrp_source_repair_backlog.json"
+MSRP_SOURCE_COUNTRY_CODES = {
+    "at",
+    "be",
+    "ch",
+    "cz",
+    "de",
+    "dk",
+    "es",
+    "fi",
+    "fr",
+    "gr",
+    "hr",
+    "hu",
+    "it",
+    "nl",
+    "no",
+    "pl",
+    "pt",
+    "ro",
+    "se",
+    "si",
+    "sk",
+}
+for path in (SCRIPT_DIR, SCRIPTS_ROOT, HERMES_SCRIPT_DIR):
+    if str(path) not in sys.path:
+        sys.path.insert(0, str(path))
 
+from engineering_config_source_sync import (  # noqa: E402
+    DEFAULT_SPEC_BATCH,
+    build_source_sync_report,
+)
 from msrp_workflow_smoke import ApiClient, DEFAULT_API_BASE, SmokeFailure  # noqa: E402
 
 try:
@@ -40,8 +71,14 @@ MIN_WRITE_ROLE_LEVEL = WRITE_ROLE_LEVELS["editor"]
 TEST_EVIDENCE = {
     "workflowSmoke": "03_Scripts/tests/test_msrp_workflow_smoke.py",
     "workflowService": "06_AppPlatform/backend/tests/unit/test_msrp_workflow_service.py",
+    "monitoringService": "06_AppPlatform/backend/tests/unit/test_msrp_monitoring_service.py",
     "snapshotScript": "03_Scripts/tests/test_hermes_msrp_current_price_snapshot.py",
     "frontendApi": "06_AppPlatform/frontend/src/tests/unit/dataManagementApi.test.ts",
+    "pipelineWrapper": "03_Scripts/tests/test_run_msrp_pipeline.py",
+    "configSourceSync": "03_Scripts/tests/test_engineering_config_source_sync.py",
+    "scraperValidation": "06_AppPlatform/backend/tests/unit/test_scraper_validation.py",
+    "httpJsonExtractor": "07_ScrapingToolkit/tests/test_http_json.py",
+    "scraplingExtractor": "07_ScrapingToolkit/tests/test_scrapling_web.py",
 }
 
 
@@ -128,6 +165,167 @@ def _nested_dict(payload: dict[str, Any], key: str) -> dict[str, Any]:
     return value if isinstance(value, dict) else {}
 
 
+def _read_json_file(path: Path) -> dict[str, Any]:
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return {}
+    return payload if isinstance(payload, dict) else {}
+
+
+def _country_codes_from_run(run: dict[str, Any]) -> list[str]:
+    batch = str(run.get("batch") or "").strip().lower()
+    if not batch:
+        return []
+    tokens = batch.replace("+", ",").replace("/", ",").split(",")
+    return [
+        token.strip()
+        for token in tokens
+        if token.strip() in MSRP_SOURCE_COUNTRY_CODES
+    ]
+
+
+def _dryrun_history_from_artifacts() -> dict[str, Any]:
+    index = _read_json_file(DRYRUN_RUNS_INDEX_PATH)
+    runs = index.get("runs") if isinstance(index.get("runs"), list) else []
+    if not runs:
+        return {}
+    latest_run_id = str(index.get("latestRunId") or runs[0].get("runId") or "")
+    return {
+        "schemaVersion": index.get("schemaVersion"),
+        "latestRunId": latest_run_id,
+        "updatedAt": index.get("updatedAt"),
+        "runs": runs,
+        "source": _display_path(DRYRUN_RUNS_INDEX_PATH),
+    }
+
+
+def _all_country_latest_from_dryrun_runs(
+    runs: Sequence[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    latest_by_country: dict[str, dict[str, Any]] = {}
+    for run in runs:
+        if not isinstance(run, dict):
+            continue
+        for country_code in _country_codes_from_run(run):
+            if country_code in latest_by_country:
+                continue
+            latest_by_country[country_code] = {
+                "countryCode": country_code,
+                "runId": run.get("runId"),
+                "batch": run.get("batch"),
+                "status": run.get("status"),
+                "gateStatus": run.get("gateStatus"),
+                "gateThreshold": run.get("gateThreshold"),
+                "passPct": run.get("passPct"),
+                "total": run.get("total"),
+                "pass": run.get("pass"),
+                "empty": run.get("empty"),
+                "fail": run.get("fail"),
+                "errors": run.get("errors"),
+                "finishedAt": run.get("finishedAt") or run.get("startedAt"),
+                "artifactPath": run.get("artifactPath"),
+            }
+    return [latest_by_country[key] for key in sorted(latest_by_country)]
+
+
+def _stable_coverage_from_artifact_latest(
+    all_countries_latest: Sequence[dict[str, Any]],
+    latest_run_id: str,
+) -> dict[str, Any]:
+    country_count = len(all_countries_latest)
+    source_count = sum(int(item.get("total") or 0) for item in all_countries_latest)
+    ready_source_count = sum(int(item.get("pass") or 0) for item in all_countries_latest)
+    ready_countries = [
+        str(item.get("countryCode"))
+        for item in all_countries_latest
+        if str(item.get("gateStatus") or "").lower() == "allowed"
+    ]
+    blocked_countries = [
+        str(item.get("countryCode"))
+        for item in all_countries_latest
+        if str(item.get("gateStatus") or "").lower() != "allowed"
+    ]
+    source_pass_rate = (
+        round(ready_source_count / source_count * 100, 1)
+        if source_count
+        else 0.0
+    )
+    return {
+        "latestRunId": latest_run_id,
+        "activeRunId": latest_run_id,
+        "countryCount": country_count,
+        "readyCountryCount": len(ready_countries),
+        "blockedCountryCount": len(blocked_countries),
+        "readyCountries": ready_countries,
+        "blockedCountries": blocked_countries,
+        "sourceRowsObserved": 0,
+        "sourceCount": source_count,
+        "readySourceCount": ready_source_count,
+        "sourcePassRate": source_pass_rate,
+        "stablePassRate": source_pass_rate,
+        "probeDiffersFromStableRun": False,
+    }
+
+
+def _dryrun_country_progress_from_artifacts(
+    artifact_history: dict[str, Any],
+) -> dict[str, Any]:
+    runs = artifact_history.get("runs") if isinstance(artifact_history.get("runs"), list) else []
+    if not runs:
+        return {}
+    latest_run = runs[0] if isinstance(runs[0], dict) else {}
+    latest_run_id = str(artifact_history.get("latestRunId") or latest_run.get("runId") or "")
+    report = _read_json_file(DRYRUN_REPORT_PATH)
+    summary = _nested_dict(report, "summary")
+    gate_status = summary.get("gateStatus") or latest_run.get("gateStatus") or "blocked"
+    pass_pct = summary.get("passPct", latest_run.get("passPct"))
+    all_countries_latest = _all_country_latest_from_dryrun_runs(runs)
+    stable_coverage = _stable_coverage_from_artifact_latest(
+        all_countries_latest,
+        latest_run_id,
+    )
+    return {
+        "overall": "ok" if str(gate_status).lower() == "allowed" else "critical",
+        "status": {
+            "runId": report.get("runId") or latest_run_id,
+            "schemaVersion": report.get("schemaVersion"),
+            "overallPassPct": pass_pct,
+            "gateThreshold": summary.get("gateThreshold", latest_run.get("gateThreshold")),
+            "gateStatus": gate_status,
+            "expectedCountries": report.get("expectedCountries", []),
+            "observedCountries": report.get("observedCountries", []),
+            "missingCountries": report.get("missingCountries", []),
+            "duplicateCountries": report.get("duplicateCountries", []),
+            "stableLatestRunId": stable_coverage.get("latestRunId"),
+            "activeRunId": stable_coverage.get("activeRunId"),
+        },
+        "allCountriesLatest": all_countries_latest,
+        "stableCoverage": stable_coverage,
+        "sourceRepairBacklog": _read_json_file(SOURCE_REPAIR_BACKLOG_PATH),
+        "artifactFallback": {
+            "historyPath": _display_path(DRYRUN_RUNS_INDEX_PATH),
+            "reportPath": _display_path(DRYRUN_REPORT_PATH),
+        },
+    }
+
+
+def _should_use_dryrun_artifact_fallback(
+    *,
+    api_history: dict[str, Any],
+    api_progress: dict[str, Any],
+    artifact_history: dict[str, Any],
+) -> bool:
+    artifact_latest = str(artifact_history.get("latestRunId") or "")
+    if not artifact_latest:
+        return False
+    api_latest = str(api_history.get("latestRunId") or "")
+    api_all_countries = api_progress.get("allCountriesLatest")
+    if not api_latest or api_latest != artifact_latest:
+        return True
+    return not isinstance(api_all_countries, list) or not api_all_countries
+
+
 def _safe_get(
     client: ApiClient,
     path: str,
@@ -201,6 +399,7 @@ def _render_markdown(report: dict[str, Any]) -> str:
         f"| Current prices | {runtime_counts.get('currentPriceCount', 0)} |",
         f"| Price history rows | {runtime_counts.get('priceHistoryRows', 0)} |",
         f"| Finance observations | {runtime_counts.get('financeObservationCount', 0)} |",
+        f"| Official config sources | {runtime_counts.get('officialConfigSourceCount', 0)} |",
         f"| Reconciliation conflicts | {runtime_counts.get('reconciliationConflictGroups', 0)} |",
         "",
         "## Requirements",
@@ -323,6 +522,11 @@ def build_readiness_report(
         "/msrp/current-prices/alerts",
         query=snapshot_query,
     )
+    monitoring, monitoring_error = _safe_get(
+        client,
+        "/msrp/monitoring/events",
+        query={**query, "window_days": 365, "threshold_pct": filters.get("threshold_pct", 3.0), "limit": 500},
+    )
     snapshot, snapshot_error = _safe_get(
         client,
         "/msrp/current-prices/snapshot",
@@ -364,12 +568,45 @@ def build_readiness_report(
         client,
         "/hermes/msrp-dryrun-history",
     )
+    artifact_dryrun_history = _dryrun_history_from_artifacts()
+    dryrun_artifact_fallback_used = _should_use_dryrun_artifact_fallback(
+        api_history=dryrun_history,
+        api_progress=country_progress,
+        artifact_history=artifact_dryrun_history,
+    )
+    if dryrun_artifact_fallback_used:
+        artifact_country_progress = _dryrun_country_progress_from_artifacts(
+            artifact_dryrun_history
+        )
+        if artifact_country_progress:
+            country_progress = artifact_country_progress
+            country_progress_error = None
+        if artifact_dryrun_history:
+            dryrun_history = artifact_dryrun_history
+            dryrun_history_error = None
+    try:
+        config_source_sync = build_source_sync_report(
+            repo_root=REPO_ROOT,
+            spec_batch=DEFAULT_SPEC_BATCH,
+            sample_per_country=1,
+            run_stage_smoke=True,
+        )
+        config_source_sync_error = None
+    except Exception as exc:  # noqa: BLE001 - readiness reports local config blockers.
+        config_source_sync = {}
+        config_source_sync_error = str(exc)
 
     source_count = _count_from_payload(sources, "total", "rows")
     observation_count = _count_from_payload(observations, "total", "rows")
     current_price_count = _count_from_payload(current_prices, "total", "rows")
     history_count = _count_from_payload(history, "rows", "total")
     alert_count = _count_from_payload(alerts, "total", "rows")
+    monitoring_summary = _nested_dict(monitoring, "summary")
+    monitoring_event_count = int(monitoring_summary.get("eventCount") or 0)
+    monitoring_timeline_count = int(monitoring_summary.get("timelineEventCount") or 0)
+    monitoring_source_risk_count = int(monitoring_summary.get("sourceRiskCount") or 0)
+    monitoring_review_required_count = int(monitoring_summary.get("reviewRequiredCount") or 0)
+    monitoring_warnings = monitoring.get("warnings") if isinstance(monitoring.get("warnings"), list) else []
     snapshot_current_count = _summary_count(snapshot, "currentPriceCount")
     snapshot_alert_count = _summary_count(snapshot, "priceAlertCount")
     finance_count = _count_from_payload(finance, "total", "rows")
@@ -381,8 +618,32 @@ def build_readiness_report(
     effectiveness_labels = _nested_dict(effectiveness_summary, "labelCounts")
     dryrun_status = _nested_dict(country_progress, "status")
     dryrun_runs = dryrun_history.get("runs") if isinstance(dryrun_history.get("runs"), list) else []
+    all_countries_latest = (
+        country_progress.get("allCountriesLatest")
+        if isinstance(country_progress.get("allCountriesLatest"), list)
+        else []
+    )
+    stable_coverage = _nested_dict(country_progress, "stableCoverage")
+    source_repair_backlog = _nested_dict(country_progress, "sourceRepairBacklog")
+    source_repair_issue_count = int(
+        source_repair_backlog.get("sourceRepairIssueCount")
+        or source_repair_backlog.get("totalIssueCount")
+        or 0
+    )
+    transient_recheck_count = int(
+        source_repair_backlog.get("transientRegressionCount") or 0
+    )
     dryrun_pass_pct = dryrun_status.get("overallPassPct")
     dryrun_gate = dryrun_status.get("gateStatus")
+    config_source_summary = _nested_dict(config_source_sync, "summary")
+    config_source_warehouse = _nested_dict(config_source_sync, "warehouseContract")
+    config_source_landing = _nested_dict(config_source_sync, "warehouseLanding")
+    config_source_status = str(config_source_sync.get("status") or "failed")
+    config_source_count = int(config_source_summary.get("sourceCount") or 0)
+    config_country_count = int(config_source_summary.get("countryCount") or 0)
+    config_missing_countries = config_source_summary.get("missingRequiredCountries")
+    if not isinstance(config_missing_countries, list):
+        config_missing_countries = []
     write_role, write_role_level = _role_level(auth_me)
     write_auth_ok = write_role_level >= MIN_WRITE_ROLE_LEVEL
     write_auth_reason = (
@@ -406,16 +667,74 @@ def build_readiness_report(
         "test_build_multi_source_reconciliation_flags_source_conflict",
         "conflict",
     )
+    service_covers_auto_review_scoring = _test_file_has(
+        "workflowService",
+        "test_msrp_auto_review_score_uses_weighted_rules_and_model_guidance",
+        "msrp_auto_review_score_v1",
+        "not_recommended_until_labeled_corpus",
+    )
+    service_covers_monitoring_events = _test_file_has(
+        "monitoringService",
+        "test_build_msrp_monitoring_events_groups_price_changes_with_evidence",
+        "test_build_msrp_monitoring_events_groups_multi_country_sync_and_outlier",
+        "msrp_monitoring_events_v1",
+    )
+    script_covers_full_pipeline = _test_file_has(
+        "pipelineWrapper",
+        "test_pipeline_fails_before_dryrun_when_config_source_sync_fails",
+        "engineering_config_source_sync",
+        "test_pipeline_runs_ingest_when_dryrun_gate_is_allowed",
+        "test_pipeline_skips_ingest_when_dryrun_gate_blocks",
+        "test_pipeline_fails_when_post_audit_fails",
+        "unified_scraping_readiness",
+        "goal_completion_audit",
+        "msrp_pipeline",
+    )
     snapshot_script_covered = _test_file_has(
         "snapshotScript",
         "msrp_current_price_snapshot_v1",
         "test_run_writes_degraded_status_for_high_priority_alert",
+    )
+    snapshot_archive_covers_full_prd = _test_file_has(
+        "snapshotScript",
+        "priceSalesEffectiveness",
+        "multiSourceReconciliation",
+        "financeObservations",
+        "test_run_degrades_for_reconciliation_conflicts",
     )
     frontend_finance_reconciliation_covered = _test_file_has(
         "frontendApi",
         "listMsrpFinanceObservations",
         "listMsrpReconciliation",
         "queueMsrpReconciliationReviewCases",
+    )
+    finance_validation_covered = _test_file_has(
+        "scraperValidation",
+        "test_monthly_lease_amount_passes_finance_semantics",
+        "test_monthly_amount_still_rejected_without_finance_semantics",
+        "source_price_semantics",
+    )
+    finance_extractor_context_covered = (
+        _test_file_has(
+            "httpJsonExtractor",
+            "test_http_json_adds_pricing_context_from_profile",
+            "test_config_loader_builds_http_json_pricing_context_profile",
+            "lease_monthly",
+        )
+        and _test_file_has(
+            "scraplingExtractor",
+            "test_build_observation_adds_pricing_context_from_profile",
+            "test_config_loader_builds_scrapling_pricing_context_profile",
+            "lease_monthly",
+        )
+    )
+    config_source_sync_covered = _test_file_has(
+        "configSourceSync",
+        "engineering_config_source_sync_v1",
+        "SpecFeatureObservation",
+        "engineering_config.vehicle_trims",
+        "engineering_config.trim_feature_values",
+        "spec_feature_observation_to_engineering_config_landing_v1",
     )
 
     requirements = [
@@ -482,7 +801,9 @@ def build_readiness_report(
             title="Weekly current-price snapshot",
             status=_status(
                 snapshot.get("schemaVersion") == "msrp_current_price_snapshot_v1"
-                and bool(snapshot.get("snapshotWeek")),
+                and bool(snapshot.get("snapshotWeek"))
+                and snapshot_script_covered
+                and snapshot_archive_covers_full_prd,
                 degraded=snapshot_error is None,
                 unavailable=snapshot_error is not None,
             ),
@@ -491,6 +812,10 @@ def build_readiness_report(
                 "snapshotWeek": snapshot.get("snapshotWeek"),
                 "currentPriceCount": snapshot_current_count,
                 "priceAlertCount": snapshot_alert_count,
+                "scriptCovered": snapshot_script_covered,
+                "archiveIncludesEffectivenessReconciliationFinance": (
+                    snapshot_archive_covers_full_prd
+                ),
                 "error": snapshot_error,
             },
             evidence=[
@@ -551,6 +876,36 @@ def build_readiness_report(
             note="Detects price movement and threshold severity.",
         ),
         _requirement(
+            key="monitoring_events",
+            title="MSRP monitoring events",
+            status=_status(
+                monitoring.get("schemaVersion") == "msrp_monitoring_events_v1"
+                and service_covers_monitoring_events
+                and frontend_finance_reconciliation_covered,
+                degraded=monitoring_error is None and service_covers_monitoring_events,
+                unavailable=monitoring_error is not None,
+            ),
+            runtime={
+                "schemaVersion": monitoring.get("schemaVersion"),
+                "eventCount": monitoring_event_count,
+                "timelineEventCount": monitoring_timeline_count,
+                "sourceRiskCount": monitoring_source_risk_count,
+                "reviewRequiredCount": monitoring_review_required_count,
+                "warningCount": len(monitoring_warnings),
+                "warnings": monitoring_warnings[:5],
+                "error": monitoring_error,
+            },
+            evidence=[
+                "GET /msrp/monitoring/events",
+                TEST_EVIDENCE["monitoringService"],
+                TEST_EVIDENCE["frontendApi"],
+            ],
+            note=(
+                "Groups price-history changes into country/model monitoring events "
+                "with source-risk and review evidence."
+            ),
+        ),
+        _requirement(
             key="review_queue",
             title="Review queue for low-confidence/conflict cases",
             status=_status(
@@ -567,6 +922,25 @@ def build_readiness_report(
                 TEST_EVIDENCE["workflowService"],
             ],
             note="Read-only audit does not queue review cases; write smoke covers the queue path.",
+        ),
+        _requirement(
+            key="auto_review_scoring",
+            title="Automatic MSRP observation scoring",
+            status=_status(service_covers_auto_review_scoring),
+            runtime={
+                "schemaVersion": "msrp_auto_review_score_v1",
+                "method": "deterministic_weighted_rules",
+                "modelAssistance": {
+                    "llmFit": "conditional",
+                    "neuralNetworkFit": "not_recommended_until_labeled_corpus",
+                },
+            },
+            evidence=[TEST_EVIDENCE["workflowService"]],
+            note=(
+                "Ingest adds weighted deterministic auto-review evidence to "
+                "match_reason_json and only uses LLM/neural assistance as a "
+                "governed recommendation."
+            ),
         ),
         _requirement(
             key="sales_effectiveness",
@@ -596,21 +970,79 @@ def build_readiness_report(
             key="finance_monthly_lease_subsidy_net",
             title="Finance monthly, lease, subsidy and net price",
             status=_status(
-                bool(finance_count and finance_count > 0),
-                degraded=finance_error is None and smoke_covers_full_contract,
+                bool(finance_count and finance_count > 0)
+                and finance_validation_covered
+                and finance_extractor_context_covered,
+                degraded=(
+                    finance_error is None
+                    and smoke_covers_full_contract
+                    and finance_validation_covered
+                    and finance_extractor_context_covered
+                ),
                 unavailable=finance_error is not None,
             ),
             runtime={
                 "financeObservationCount": finance_count,
                 "summary": finance.get("summary", {}),
+                "semanticValidationCovered": finance_validation_covered,
+                "extractorPricingContextCovered": finance_extractor_context_covered,
                 "error": finance_error,
             },
             evidence=[
                 "GET /msrp/finance-observations",
                 TEST_EVIDENCE["workflowSmoke"],
                 TEST_EVIDENCE["frontendApi"],
+                TEST_EVIDENCE["scraperValidation"],
+                TEST_EVIDENCE["httpJsonExtractor"],
+                TEST_EVIDENCE["scraplingExtractor"],
+                TEST_EVIDENCE["snapshotScript"],
             ],
-            note="Supports monthly payment, lease type, subsidy amount, and net price after subsidy filters.",
+            note=(
+                "Supports monthly payment, lease type, subsidy amount, net "
+                "price after subsidy filters, and weekly Hermes snapshot "
+                "archive summaries."
+            ),
+        ),
+        _requirement(
+            key="official_config_table_pipeline",
+            title="Official configuration/spec table pipeline",
+            status=_status(
+                config_source_status == "passed"
+                and config_source_count > 0
+                and config_source_sync_covered,
+                degraded=(
+                    config_source_status == "degraded"
+                    and config_source_count > 0
+                    and config_source_sync_covered
+                ),
+                unavailable=(
+                    config_source_sync_error is not None
+                    or config_source_status == "failed"
+                ),
+            ),
+            runtime={
+                "sourceSyncStatus": config_source_status,
+                "sourceCount": config_source_count,
+                "countryCount": config_country_count,
+                "countries": config_source_summary.get("countries") or [],
+                "missingRequiredCountries": config_missing_countries,
+                "schemaRefs": config_source_summary.get("schemaRefs") or {},
+                "warehouseTables": config_source_warehouse.get("tables") or [],
+                "landingAdapter": config_source_warehouse.get("landingAdapter"),
+                "landingSummary": config_source_landing.get("summary") or {},
+                "error": config_source_sync_error,
+            },
+            evidence=[
+                DEFAULT_SPEC_BATCH,
+                "03_Scripts/engineering_config_source_sync.py",
+                TEST_EVIDENCE["configSourceSync"],
+                "06_AppPlatform/backend/app/api/routes/engineering_config.py",
+            ],
+            note=(
+                "Maps official spec/configuration sources into the unified "
+                "ScrapeJob contract and declares the Engineering Config "
+                "ImportBatch/VehicleTrim/TrimFeatureValue warehouse landing path."
+            ),
         ),
         _requirement(
             key="multi_source_reconciliation",
@@ -629,20 +1061,40 @@ def build_readiness_report(
                 "GET /msrp/reconciliation",
                 TEST_EVIDENCE["workflowService"],
                 TEST_EVIDENCE["frontendApi"],
+                TEST_EVIDENCE["snapshotScript"],
             ],
-            note="Groups latest observations by vehicle key and flags source spread conflicts.",
+            note=(
+                "Groups latest observations by vehicle key, flags source "
+                "spread conflicts, and feeds the weekly Hermes snapshot."
+            ),
         ),
         _requirement(
             key="dryrun_governance",
             title="Dryrun history and Hermes governance view",
             status=_status(
-                bool(dryrun_history.get("latestRunId")) and country_progress_error is None,
+                bool(dryrun_history.get("latestRunId"))
+                and bool(all_countries_latest)
+                and country_progress_error is None,
                 degraded=country_progress_error is None or dryrun_history_error is None,
                 unavailable=country_progress_error is not None and dryrun_history_error is not None,
             ),
             runtime={
                 "latestRunId": dryrun_history.get("latestRunId"),
+                "activeRunId": (
+                    dryrun_status.get("activeRunId")
+                    or stable_coverage.get("activeRunId")
+                ),
+                "stableLatestRunId": (
+                    dryrun_status.get("stableLatestRunId")
+                    or stable_coverage.get("latestRunId")
+                ),
                 "runCount": len(dryrun_runs),
+                "allCountryLatestCount": len(all_countries_latest),
+                "stableCoverage": stable_coverage,
+                "sourceRepairIssueCount": source_repair_issue_count,
+                "transientRecheckCount": transient_recheck_count,
+                "artifactFallbackUsed": dryrun_artifact_fallback_used,
+                "artifactFallback": country_progress.get("artifactFallback"),
                 "overall": country_progress.get("overall"),
                 "gateStatus": dryrun_gate,
                 "passPct": dryrun_pass_pct,
@@ -652,7 +1104,40 @@ def build_readiness_report(
                 "GET /hermes/msrp-country-progress",
                 "GET /hermes/msrp-dryrun-history",
             ],
-            note="Provides source-repair governance and pass-rate gate evidence.",
+            note=(
+                "Provides source-repair governance, active-vs-stable country "
+                "coverage, transient recheck counts, and pass-rate gate evidence."
+            ),
+        ),
+        _requirement(
+            key="pipeline_orchestration",
+            title="Dryrun-gated ingest pipeline wrapper",
+            status=_status(script_covers_full_pipeline),
+            runtime={
+                "script": "03_Scripts/run_msrp_pipeline.sh",
+                "statusPipelineId": "msrp_pipeline",
+                "phases": [
+                    "official_config_source_sync",
+                    "dryrun",
+                    "gate",
+                    "ingest",
+                    "snapshot",
+                    "readiness",
+                    "unified_readiness",
+                    "goal_completion_audit",
+                ],
+            },
+            evidence=[
+                "03_Scripts/run_msrp_pipeline.sh",
+                TEST_EVIDENCE["pipelineWrapper"],
+            ],
+            note=(
+                "Runs official config source sync first, then dryrun and only "
+                "proceeds to ingest when the v3 dryrun gate allows it; ingest "
+                "reuses auto-review/materialize and snapshot/readiness refresh "
+                "from the low-concurrency runner before full-pipeline unified "
+                "readiness and goal completion audits are refreshed."
+            ),
         ),
         _requirement(
             key="frontend_management_views",
@@ -695,9 +1180,17 @@ def build_readiness_report(
                 "currentPriceCount": current_price_count,
                 "priceHistoryRows": history_count,
                 "priceAlertCount": alert_count,
+                "monitoringEventCount": monitoring_event_count,
+                "monitoringTimelineEventCount": monitoring_timeline_count,
+                "monitoringSourceRiskCount": monitoring_source_risk_count,
                 "financeObservationCount": finance_count,
+                "officialConfigSourceCount": config_source_count,
+                "officialConfigCountryCount": config_country_count,
                 "reconciliationConflictGroups": conflict_count,
                 "dryrunRunCount": len(dryrun_runs),
+                "dryrunAllCountryLatestCount": len(all_countries_latest),
+                "dryrunSourceRepairIssueCount": source_repair_issue_count,
+                "dryrunTransientRecheckCount": transient_recheck_count,
                 "writeAuthRole": write_role,
             },
         },

@@ -1,12 +1,12 @@
 source_code: mercedes_eqa_se_draft_scrapling
 country: 瑞典
 brand: MERCEDES
-source_url: https://www.mercedes-benz.se/passengercars/models/hybrid.html
+source_url: https://www.mercedes-benz.se/passengercars/models/suv/eqa/overview.html
 source_type: manufacturer_official
 price_semantics: base_msrp
 extractor_type: scrapling
 profile:
-  url: https://www.mercedes-benz.se/passengercars/models/hybrid.html
+  url: https://www.mercedes-benz.se/passengercars/models/suv/eqa/overview.html
   tier: stealth
   headless: true
   network_idle: true
@@ -75,13 +75,14 @@ profile:
     force_review_if_powertrain_ambiguous: true
     force_review_for_special_edition: true
   json_script_selector: script[type='application/ld+json']
-  css:
-    vehicle_container: div[class*="_vmos-card__container"]
-    model: '[class*="card-header__model"]'
-    trim: '[class*="card-header__model"]'
-    price: '[class*="card__info-container"]'
-    include_if_text_contains:
-    - EQA
+  text_regex:
+    source_selector: body
+    include_element_html: true
+    entry_patterns:
+    - pattern: '"aria":"EQA".*?"label":"EQA".*?"url":"https://www\.mercedes-benz\.se/passengercars/models/suv/eqa/overview\.html".*?"price":"Från\s+(?P<price>\d{3}[\s\xa0]\d{3})\s*kr"'
+      official_trim: Entry
+      official_powertrain: BEV
+      price_label: Pris inkl. moms
 schedule:
   frequency: manual_only
   run_window_start: 00:00
@@ -91,7 +92,9 @@ notes: Keywords filled from official manufacturer website research (SE market). 
   selectors verified against the Mercedes-Benz SE official model overview after the
   single-model EQA detail page rendered only support content under headless fetch.
   [CSS selectors applied from brand probe] [Switched to Mercedes-Benz SE model
-  overview for static EQA Från price]
+  overview for static EQA Från price] [Switched to official EQA page embedded
+  navigation JSON price because the old hybrid overview CSS no longer rendered
+  cards under headless fetch]
 bootstrap_meta:
   country_model_rank: 28
   suggested_scope_kind: single_model

@@ -10,6 +10,7 @@ class ReviewAutoResolveRequest(BaseModel):
     model: str | None = None
     note: str | None = None
     limit: int = Field(default=500, ge=1, le=1000)
+    min_score: float | None = Field(default=None, ge=0, le=100)
 
 
 class ReviewDecisionCreate(BaseModel):

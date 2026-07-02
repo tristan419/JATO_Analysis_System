@@ -16,6 +16,7 @@ price_semantics: base_msrp         # or "as_configured", "on_the_road"
 
 # ── Extractor type ───────────────────────────────────────────
 # Choose one:  "scrapling" (web page), "http_json" (REST API),
+# "http_text" (static HTML/text regex),
 # "playwright" (dynamic trim -> powertrain card flow),
 # or "pdf_text" (official PDF price lists parsed via regex)
 extractor_type: scrapling
@@ -73,6 +74,12 @@ profile:
   #   price_label: priceLabel
   #   availability: availability
   #   vehicles_path: data.models
+
+  # --- http_text only ---
+  # entry_patterns:
+  #   - pattern: '"gradeName":"(?P<trim>Prime-Line)".*?"priceValue":(?P<price>\d+\.\d+)'
+  #     official_powertrain: MHEV
+  # copy_trim_to_jato_trim: true
 
   # --- pdf_text only ---
   # entry_patterns:

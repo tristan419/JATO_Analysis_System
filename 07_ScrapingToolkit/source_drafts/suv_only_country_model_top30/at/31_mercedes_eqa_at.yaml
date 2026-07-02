@@ -11,9 +11,16 @@ profile:
   headless: true
   network_idle: true
   impersonate: chrome
+  text_regex:
+    source_selector: script
+    entry_patterns:
+    - pattern: '"aria":"EQA".{0,4000}?"price":"ab\s*(?:€|\\u20ac)\s*(?P<price>\d{2}\.\d{3},\d{2})"'
+      official_trim: EQA starting price
+      official_powertrain: BEV electric
+      price_label: Listenpreis inkl. NoVA und 20% MwSt.
   default_currency: EUR
   default_tax_included: true
-  default_price_label: Unverbindliche Preisempfehlung inkl. MwSt
+  default_price_label: Listenpreis inkl. NoVA und 20% MwSt.
   fixed_model: EQA
   fixed_jato_model: EQA
   fixed_jato_powertrain: null
@@ -63,6 +70,7 @@ profile:
     - key: powertrain_bev
       powertrain: BEV
       keywords:
+      - BEV
       - eqa
       - electric
       - elektro
@@ -75,18 +83,13 @@ profile:
     force_review_if_powertrain_ambiguous: true
     force_review_for_special_edition: true
   json_script_selector: script[type='application/ld+json']
-  css:
-    vehicle_container: body
-    model: h1
-    trim: h2, h3
-    price: '[class*="price"]'
 schedule:
   frequency: manual_only
   run_window_start: 00:00
   run_window_end: 05:00
   preferred_weekday: monday
-notes: Manually added – confirmed ld+json Product with price EUR 45,177.50 on AT market
-  (2026-04-12). [CSS selectors applied from brand probe]
+notes: Manually added. Replaced broad CSS fallback with text_regex over the official
+  Mercedes-Benz Austria model-navigation payload for the EQA card starting price.
 bootstrap_meta:
   country_model_rank: 31
   suggested_scope_kind: single_model

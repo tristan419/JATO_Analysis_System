@@ -5,6 +5,7 @@ from jato_scraper.evkx_catalog import (
     fetch_search_catalog,
     parse_pricing_section,
     parse_specifications_page,
+    select_local_pricing_items,
 )
 
 
@@ -120,3 +121,50 @@ def test_fetch_search_catalog_paginates_until_last_page() -> None:
     assert [item["evId"] for item in items] == ["1", "2", "3"]
     assert session.calls[0][1]["page"] == 1
     assert session.calls[1][1]["page"] == 2
+
+
+def test_select_local_pricing_items_filters_converted_cross_market_prices() -> None:
+    items = [
+        {
+            "name": "Tesla Model Y Standard",
+            "startPrice": 499990,
+            "currency": "SEK",
+            "pricingCountry": "Sweden",
+            "isConverted": False,
+        },
+        {
+            "name": "Tesla Model Y Long Range RWD",
+            "startPrice": 502630,
+            "currency": "SEK",
+            "pricingCountry": "Australia",
+            "isConverted": True,
+        },
+        {
+            "name": "Tesla Model Y RWD",
+            "startPrice": 434152,
+            "currency": "SEK",
+            "pricingCountry": "Sweden",
+            "isConverted": True,
+        },
+        {
+            "name": "Volvo EX30",
+            "startPrice": 429000,
+            "currency": "SEK",
+            "pricingCountry": "Sweden",
+            "isConverted": False,
+        },
+        {
+            "name": "Tesla Model Y Missing Price",
+            "currency": "SEK",
+            "pricingCountry": "Sweden",
+            "isConverted": False,
+        },
+    ]
+
+    selected = select_local_pricing_items(
+        items,
+        pricing_country="Sweden",
+        name_contains="Tesla Model Y",
+    )
+
+    assert selected == [items[0]]

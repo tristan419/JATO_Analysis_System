@@ -1,19 +1,19 @@
 source_code: skoda_elroq_fr_draft_scrapling
 country: 法国
 brand: SKODA
-source_url: https://www.skoda.fr/modeles/elroq
+source_url: https://www.skoda.fr/gamme/elroq/elroq/elroq-liste-prix
 source_type: manufacturer_official
 price_semantics: base_msrp
 extractor_type: scrapling
 profile:
-  url: https://www.skoda.fr/modeles/elroq
+  url: https://www.skoda.fr/gamme/elroq/elroq/elroq-liste-prix
   headless: true
   default_currency: EUR
   default_tax_included: true
   default_price_label: MSRP
   fixed_model: ELROQ
   fixed_jato_model: ELROQ
-  fixed_jato_powertrain: null
+  fixed_jato_powertrain: BEV
   model_rules: []
   skip_if_model_unmapped: false
   copy_trim_to_jato_trim: true
@@ -77,6 +77,13 @@ profile:
     force_review_if_powertrain_ambiguous: true
     force_review_for_special_edition: true
   json_script_selector: script[type="application/json"]
+  text_regex:
+    source_selector: div[data-module="table-price-list"]
+    include_element_html: true
+    entry_patterns:
+    - pattern: '(?:&quot;|")equipmentPrices(?:&quot;|")\s*:\s*\{\s*(?:&quot;|")(?P<trim>[^"&]+?)(?:&quot;|")\s*:\s*\{\s*(?:&quot;|")priceFrom(?:&quot;|")\s*:\s*(?:&quot;|")(?P<price>\d[\d\s]*)'
+      official_powertrain: BEV
+      price_label: MSRP
   css:
     vehicle_container: body
     model: h2, h3
@@ -95,7 +102,7 @@ notes: Draft scaffold generated from country×model top30 backlog. Replace sourc
   before promoting to 07_ScrapingToolkit/sources. [URL filled from SKODA template]
   [URL language corrected] [CSS selectors applied from brand probe] [Switched to playwright_card_flow
   with skoda_trim_overview_playwright.yaml] [Reverted to scrapling — playwright preset
-  needs per-brand tuning]
+  needs per-brand tuning] [FR table-price-list data-props parsed via text_regex]
 bootstrap_meta:
   country_model_rank: 30
   suggested_scope_kind: single_model
