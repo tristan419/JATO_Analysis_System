@@ -373,9 +373,13 @@ def test_query_market_scan_deck_clamps_ranking_limit_to_top10(monkeypatch: pytes
         origin_window_months: int,
         body_window_months: int,
         ranking_limit: int,
-        drilldown_segment: str | None,
+        drilldown_segments: list[str],
+        body_types: list[str],
+        view: str | None = None,
     ) -> dict[str, object]:
         observed["ranking_limit"] = ranking_limit
+        observed["drilldown_segments"] = len(drilldown_segments)
+        observed["body_types"] = len(body_types)
         return {"ok": True}
 
     market_scan_service._deck_cache.clear()
@@ -392,11 +396,14 @@ def test_query_market_scan_deck_clamps_ranking_limit_to_top10(monkeypatch: pytes
         origin_window_months=24,
         body_window_months=24,
         ranking_limit=6,
-        drilldown_segment="SUV A0",
+        drilldown_segments=["SUV A0"],
+        body_types=[],
     )
 
     assert result == {"ok": True}
     assert observed["ranking_limit"] == 10
+    assert observed["drilldown_segments"] == 1
+    assert observed["body_types"] == 0
 
 
 def test_clear_market_scan_local_cache_removes_cached_decks() -> None:
@@ -579,6 +586,55 @@ def test_resolve_version_comparison_models_caps_requested_models_at_10() -> None
     assert selected == ["L", "K", "J", "I", "H", "G", "F", "E", "D", "C"]
 
 
+def test_version_comparison_model_options_use_brand_model_stable_key() -> None:
+    frame = pd.DataFrame(
+        {
+            "__brand": ["BRAND A", "BRAND B", "BRAND C"],
+            "__model": ["Twin", "Twin", "Solo"],
+            "__model_key": ["BRAND A::Twin", "BRAND B::Twin", "BRAND C::Solo"],
+            "__comparison_sales": [300.0, 200.0, 100.0],
+        }
+    )
+
+    selected, options = market_scan_service._resolve_version_comparison_models(
+        frame,
+        ["BRAND B::Twin"],
+        sales_column="__comparison_sales",
+    )
+
+    assert selected == ["BRAND B::Twin"]
+    assert [option["value"] for option in options] == ["BRAND A::Twin", "BRAND B::Twin", "BRAND C::Solo"]
+    assert [option["label"] for option in options[:2]] == ["Twin", "Twin"]
+    assert [option["brand"] for option in options[:2]] == ["BRAND A", "BRAND B"]
+
+
+def test_version_comparison_bubbles_keep_same_model_names_separate_by_brand() -> None:
+    frame = pd.DataFrame(
+        {
+            "__brand": ["BRAND A", "BRAND B"],
+            "__model": ["Twin", "Twin"],
+            "__model_key": ["BRAND A::Twin", "BRAND B::Twin"],
+            "__version": ["Base", "Base"],
+            "__trim": ["Base", "Base"],
+            "__powertrain": ["BEV", "BEV"],
+            "__length": [4300.0, 4400.0],
+            "__msrp": [30000.0, 32000.0],
+            "__comparison_sales": [300.0, 200.0],
+        }
+    )
+
+    items = market_scan_service._build_version_comparison_bubble_items(
+        frame[frame["__model_key"] == "BRAND B::Twin"],
+        sales_column="__comparison_sales",
+    )
+
+    assert len(items) == 1
+    assert items[0]["modelKey"] == "BRAND B::Twin"
+    assert items[0]["brand"] == "BRAND B"
+    assert items[0]["model"] == "Twin"
+    assert items[0]["sales"] == pytest.approx(200.0)
+
+
 def test_build_positioning_price_bands_stacks_sales_by_fuel() -> None:
     frame = pd.DataFrame(
         {
@@ -669,6 +725,40 @@ def test_build_positioning_bubble_items_uses_min_msrp_and_sales_sum() -> None:
     assert song["msrpMax"] == pytest.approx(20900.0)
     assert song["sales"] == pytest.approx(200.0)
     assert song["variantCount"] == 2
+
+
+def test_build_positioning_bubble_items_keep_same_model_names_separate_by_brand() -> None:
+    frame = pd.DataFrame(
+        {
+            "__brand": ["BRAND A", "BRAND B"],
+            "__model": ["Twin", "Twin"],
+            "__model_key": ["BRAND A::Twin", "BRAND B::Twin"],
+            "__powertrain": ["BEV", "BEV"],
+            "__segment_raw": ["SUV A", "SUV A"],
+            "__length": [4300.0, 4400.0],
+            "__msrp": [30000.0, 32000.0],
+            "2026 Apr": [300.0, 200.0],
+        }
+    )
+
+    payload = market_scan_service._build_positioning_page_payload(
+        frame,
+        page_key="suvAll",
+        title="全 SUV",
+        subtitle="全 SUV 价格带与动力定位",
+        sales_column="2026 Apr",
+        sales_metric_label="Current Month Sales",
+        sales_metric_detail="当月销量",
+        selected_fuels=["BEV"],
+        top_n=10,
+        msrp_min=None,
+        msrp_max=None,
+        price_band_size=10000,
+    )
+
+    tracked_models = next(metric for metric in payload["metrics"] if metric["label"] == "Tracked Models")
+    assert tracked_models["value"] == 2
+    assert {item["modelKey"] for item in payload["bubbleChart"]["items"]} == {"BRAND A::Twin", "BRAND B::Twin"}
 
 
 def test_build_positioning_bubble_items_respects_range_and_top_n() -> None:

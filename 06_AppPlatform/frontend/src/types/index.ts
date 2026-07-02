@@ -730,6 +730,7 @@ export interface PositioningPricingPriceBandItem {
 }
 
 export interface PositioningPricingBubbleItem {
+  modelKey: string;
   brand: string;
   model: string;
   powertrain: string;
@@ -826,6 +827,8 @@ export type PositioningPricingSalesMode = "month" | "ytd" | "rolling12";
 export type PositioningPricingPageKey = "overview" | "suvAll" | "suvA0" | "suvA" | "suvBPlus";
 
 export interface VersionComparisonBubbleItem {
+  modelKey: string;
+  brand: string;
   model: string;
   version: string;
   trim: string;
@@ -843,7 +846,9 @@ export interface VersionComparisonBubbleItem {
 
 export interface VersionComparisonModelOption {
   value: string;
+  modelKey: string;
   label: string;
+  brand: string;
   segment: string;
   powertrain: string;
   bodyType: string;

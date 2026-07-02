@@ -621,6 +621,48 @@ def test_query_advanced_chart_respects_time_range_window(
     assert result["items"][0]["value"] == 100.0
 
 
+def test_powertrain_bubble_group_top_n_keeps_same_model_names_separate_by_brand(
+    monkeypatch,
+) -> None:
+    frame = pd.DataFrame(
+        {
+            "Make": ["BRAND A", "BRAND B", "BRAND C"],
+            "Model": ["Twin", "Twin", "Solo"],
+            "Version name": ["Base", "Base", "Base"],
+            "细分市场": ["SUV A", "SUV A", "SUV A"],
+            "动总规整": ["BEV", "BEV", "BEV"],
+            "车长(mm)": [4300.0, 4400.0, 4500.0],
+            "MSRP": [30000.0, 31000.0, 32000.0],
+            "2026 Jan": [100.0, 1.0, 90.0],
+        }
+    )
+
+    columns = list(frame.columns)
+    monkeypatch.setattr(query_service.repo, "list_columns", lambda: columns)
+    monkeypatch.setattr(
+        query_service.repo,
+        "load_slice",
+        lambda columns, filters, limit, offset: frame.loc[:, columns].copy(),
+    )
+
+    result = query_service.query_advanced_chart(
+        group="market_structure",
+        chart="powertrain_bubble",
+        filters={},
+        top_n=1,
+        options={
+            "group_top_n": True,
+            "group_dimension": "segment",
+            "group_values": ["SUV A"],
+            "time_range": {"start": "2026 Jan", "end": "2026 Jan"},
+        },
+    )
+
+    assert result["rows"] == 1
+    assert result["items"][0]["ModelKey"] == "BRAND A::Twin"
+    assert result["items"][0]["Sales"] == pytest.approx(100.0)
+
+
 def test_query_model_versions_respects_time_range_window(
     monkeypatch,
 ) -> None:

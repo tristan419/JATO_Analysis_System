@@ -370,10 +370,10 @@ function buildVersionBubbleTraces(items: VersionComparisonBubbleItem[], opts: Bu
   ];
 
   // --- Key helpers ---
-  const itemKey = (item: VersionComparisonBubbleItem) => `${item.model}||${item.version}`;
+  const itemKey = (item: VersionComparisonBubbleItem) => `${item.modelKey || item.model}||${item.version}||${item.trim}`;
   const asCustomdata = (item: VersionComparisonBubbleItem, key: string) => [
     item.model, item.version, item.trim, item.powertrain,
-    item.sales, item.msrpMin, item.msrpMax, item.length, key,
+    item.sales, item.msrpMin, item.msrpMax, item.length, key, item.brand,
   ];
 
   // --- Ranges for jitter & overlap ---
@@ -385,9 +385,10 @@ function buildVersionBubbleTraces(items: VersionComparisonBubbleItem[], opts: Bu
   // --- Model top-3 sales ---
   const modelGroups = new Map<string, VersionComparisonBubbleItem[]>();
   items.forEach((item) => {
-    const arr = modelGroups.get(item.model) || [];
+    const modelKey = item.modelKey || item.model;
+    const arr = modelGroups.get(modelKey) || [];
     arr.push(item);
-    modelGroups.set(item.model, arr);
+    modelGroups.set(modelKey, arr);
   });
   const modelTopKeys = new Map<string, Set<string>>(); // model -> set of top-2/3 keys (excludes top-1)
   const modelTop1Key = new Map<string, string>(); // model -> top-1 key
@@ -425,13 +426,13 @@ function buildVersionBubbleTraces(items: VersionComparisonBubbleItem[], opts: Bu
     const key = itemKey(item);
     let priority = 1;
 
-    const isModelTop1 = modelTop1Key.get(item.model) === key;
+    const isModelTop1 = modelTop1Key.get(item.modelKey || item.model) === key;
 
     if (selectedKeys.has(key)) {
       priority = 3;
     } else if (isModelTop1 || key === maxMsrpKey || key === minMsrpKey) {
       priority = 3;
-    } else if (modelTopKeys.get(item.model)?.has(key)) {
+    } else if (modelTopKeys.get(item.modelKey || item.model)?.has(key)) {
       priority = 2;
     } else if (ptTopKey.get(item.powertrain) === key) {
       priority = 2;
@@ -494,7 +495,7 @@ function buildVersionBubbleTraces(items: VersionComparisonBubbleItem[], opts: Bu
         sizemin: sizing.sizemin,
       },
       hovertemplate:
-        "Model: %{customdata[0]}<br>Version: %{customdata[1]}<br>Trim: %{customdata[2]}<br>动力: %{customdata[3]}"
+        "Brand: %{customdata[9]}<br>Model: %{customdata[0]}<br>Version: %{customdata[1]}<br>Trim: %{customdata[2]}<br>动力: %{customdata[3]}"
         + "<br>Length: %{customdata[7]:,.0f} mm<br>MSRP: %{y:,.0f}<br>MSRP范围: %{customdata[5]:,.0f}-%{customdata[6]:,.0f}"
         + "<br>Sales: %{customdata[4]:,.0f}<extra></extra>",
     } as Data);
@@ -526,19 +527,20 @@ function buildVersionBubbleTraces(items: VersionComparisonBubbleItem[], opts: Bu
 }
 
 function buildModelLengthAnnotations(items: VersionComparisonBubbleItem[]): NonNullable<Partial<PlotlyLayout>["annotations"]> {
-  const modelLengthMap = new Map<string, number>();
+  const modelLengthMap = new Map<string, { label: string; length: number }>();
   items.forEach((item) => {
-    if (!modelLengthMap.has(item.model)) {
-      modelLengthMap.set(item.model, item.length);
+    const key = item.modelKey || item.model;
+    if (!modelLengthMap.has(key)) {
+      modelLengthMap.set(key, { label: item.model, length: item.length });
     }
   });
   const rowOffsets = [-0.14, -0.24];
   const overlapThreshold = 70;
   let previousLength: number | null = null;
   let currentRow = 0;
-  return Array.from(modelLengthMap.entries())
-    .sort((left, right) => left[1] - right[1])
-    .map(([model, length]) => {
+  return Array.from(modelLengthMap.values())
+    .sort((left, right) => left.length - right.length)
+    .map(({ label, length }) => {
       if (previousLength !== null && Math.abs(length - previousLength) <= overlapThreshold) {
         currentRow = (currentRow + 1) % rowOffsets.length;
       } else {
@@ -550,7 +552,7 @@ function buildModelLengthAnnotations(items: VersionComparisonBubbleItem[]): NonN
         y: rowOffsets[currentRow],
         xref: "x",
         yref: "paper",
-        text: model,
+        text: label,
         showarrow: false,
         xanchor: "center",
         yanchor: "top",
@@ -647,6 +649,7 @@ function searchModelOptions<T extends VersionComparisonModelOption>(options: T[]
   return options.filter((m) => {
     const fields = [
       m.label,
+      m.brand,
       m.segment,
       m.powertrain,
       m.bodyType,
@@ -1508,6 +1511,7 @@ export function VersionComparisonPage() {
                                 {isGlobalOnly ? <span className="version-comparison-model-option-added">全局有车 · 当前不可选</span> : null}
                               </div>
                               <div className="version-comparison-model-option-meta">
+                                {option.brand ? <span>{option.brand}</span> : null}
                                 {option.segment ? <span>{option.segment}</span> : null}
                                 {option.powertrain ? <span>{option.powertrain}</span> : null}
                                 {option.lengthMm > 0 ? <span>{option.lengthMm} mm</span> : null}
@@ -1624,7 +1628,7 @@ export function VersionComparisonPage() {
                       <div className="version-comparison-chip-content">
                         <span className="version-comparison-chip-name">{model.label}</span>
                         <span className="version-comparison-chip-meta">
-                          {model.segment}{model.powertrain ? ` · ${model.powertrain}` : ""}{model.lengthMm > 0 ? ` · ${model.lengthMm}mm` : ""}
+                          {[model.brand, model.segment, model.powertrain, model.lengthMm > 0 ? `${model.lengthMm}mm` : ""].filter(Boolean).join(" · ")}
                         </span>
                       </div>
                       <span className="version-comparison-chip-remove" aria-hidden="true">×</span>
