@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useLocation } from "react-router-dom";
 
-import { apiUrl } from "../api/client";
+import { apiUrl } from "../api/core";
 
 const HEARTBEAT_INTERVAL_MS = 30_000;
 const INITIAL_HEARTBEAT_DELAY_MS = 8_000;

@@ -226,6 +226,59 @@ def test_query_grouped_time_series_uses_persistent_cache(
     assert list(tmp_path.glob("*.json"))
 
 
+def test_query_grouped_time_series_cache_is_scoped_by_role(
+    monkeypatch,
+) -> None:
+    frame = pd.DataFrame(
+        {
+            "Brand": ["Alpha", "Beta"],
+            "2024": [10.0, 5.0],
+        }
+    )
+    load_calls = 0
+
+    def load_slice(columns, filters, limit, offset):
+        nonlocal load_calls
+        load_calls += 1
+        return frame.loc[:, columns].copy()
+
+    monkeypatch.setattr(
+        query_service.repo,
+        "current_dataset_token",
+        lambda: "dataset-a",
+    )
+    monkeypatch.setattr(query_service.repo, "list_columns", lambda: ["Brand", "2024"])
+    monkeypatch.setattr(query_service.repo, "load_slice", load_slice)
+
+    first = query_service.query_grouped_time_series(
+        filters={},
+        grain="year",
+        group_by="Brand",
+        top_n=2,
+        include_others=False,
+        cache_scope="viewer",
+    )
+    second = query_service.query_grouped_time_series(
+        filters={},
+        grain="year",
+        group_by="Brand",
+        top_n=2,
+        include_others=False,
+        cache_scope="viewer",
+    )
+    third = query_service.query_grouped_time_series(
+        filters={},
+        grain="year",
+        group_by="Brand",
+        top_n=2,
+        include_others=False,
+        cache_scope="admin",
+    )
+
+    assert load_calls == 2
+    assert first == second == third
+
+
 def test_query_grouped_time_series_coalesces_concurrent_same_key(
     monkeypatch,
 ) -> None:
@@ -295,6 +348,78 @@ def test_query_grouped_time_series_coalesces_concurrent_same_key(
     query_service._clear_grouped_time_series_cache()
 
 
+def test_query_grouped_time_series_inflight_separates_dataset_tokens(
+    monkeypatch,
+) -> None:
+    dataset_token = "dataset-a"
+    calls = 0
+    first_started = threading.Event()
+    second_started = threading.Event()
+    release_compute = threading.Event()
+    results: list[dict] = []
+
+    def current_dataset_token() -> str:
+        return dataset_token
+
+    def query() -> None:
+        results.append(
+            query_service.query_grouped_time_series(
+                filters={"Country": ["HU"]},
+                grain="year",
+                group_by="Brand",
+                top_n=2,
+                include_others=False,
+            )
+        )
+
+    def fake_impl(**_kwargs) -> dict:
+        nonlocal calls
+        calls += 1
+        token = current_dataset_token()
+        if token == "dataset-a":
+            first_started.set()
+        elif token == "dataset-b":
+            second_started.set()
+        assert release_compute.wait(timeout=2)
+        return {
+            "grain": "year",
+            "rows": 1,
+            "items": [{"time": "2024", "value": 10.0, "series": token}],
+        }
+
+    query_service._clear_grouped_time_series_cache()
+    monkeypatch.setattr(
+        query_service.repo,
+        "current_dataset_token",
+        current_dataset_token,
+    )
+    monkeypatch.setattr(
+        query_service,
+        "_query_grouped_time_series_impl",
+        fake_impl,
+    )
+
+    first = threading.Thread(target=query)
+    first.start()
+    assert first_started.wait(timeout=2)
+    dataset_token = "dataset-b"
+    second = threading.Thread(target=query)
+    second.start()
+    assert second_started.wait(timeout=2)
+    release_compute.set()
+    first.join(timeout=2)
+    second.join(timeout=2)
+
+    assert not first.is_alive()
+    assert not second.is_alive()
+    assert calls == 2
+    assert sorted(item["items"][0]["series"] for item in results) == [
+        "dataset-a",
+        "dataset-b",
+    ]
+    query_service._clear_grouped_time_series_cache()
+
+
 def test_warm_grouped_time_series_cache_includes_configured_filter_sets(
     monkeypatch,
 ) -> None:
@@ -355,6 +480,16 @@ def test_warm_grouped_time_series_cache_includes_configured_filter_sets(
             "cache_scope": "viewer",
         },
     ]
+
+
+def test_grouped_time_series_prewarm_defaults_cover_dashboard_scope() -> None:
+    assert query_service.GROUPED_TIME_SERIES_CACHE_TTL_SECONDS >= 1800
+    assert "order_filler" in query_service.GROUPED_TIME_SERIES_PREWARM_SCOPES
+    assert {"month", "year"}.issubset(set(query_service.GROUPED_TIME_SERIES_PREWARM_GRAINS))
+    assert any(
+        filters.get("国家") and filters.get("动总规整")
+        for filters in query_service.GROUPED_TIME_SERIES_PREWARM_FILTERS
+    )
 
 
 def test_query_grouped_time_series_respects_time_range_for_topn(

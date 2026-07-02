@@ -203,6 +203,11 @@ interface FilterOptionsBatchResponse {
   items: FilterOptionsResponse[];
 }
 
+interface FilterMetadataSnapshotResponse {
+  columns: string[];
+  options: Record<string, string[]>;
+}
+
 function getAuthHeaders(): Record<string, string> {
   const token = (
     localStorage.getItem("jato_auth_token")
@@ -214,10 +219,16 @@ function getAuthHeaders(): Record<string, string> {
     || import.meta.env.VITE_USER_NAME
     || "anonymous"
   ).trim();
+  const role = (
+    localStorage.getItem("jato_user_role")
+    || import.meta.env.VITE_USER_ROLE
+    || "viewer"
+  ).trim();
 
   return {
     ...(token ? { "X-Auth-Token": token } : {}),
-    "X-User-Name": user || "anonymous"
+    "X-User-Name": user || "anonymous",
+    "X-User-Role": role || "viewer"
   };
 }
 
@@ -295,7 +306,7 @@ function isAbortLikeError(error: unknown): boolean {
 }
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
-  const shouldDedupe = !(init?.body instanceof FormData);
+  const shouldDedupe = !(init?.body instanceof FormData) && !init?.signal;
   const key = shouldDedupe ? dedupeKey(path, init) : null;
   const inflight = key
     ? inflightRequests.get(key) as Promise<T> | undefined
@@ -1969,7 +1980,9 @@ export const api = {
   delete: <T>(path: string, init?: RequestInit) =>
     request<T>(path, { method: "DELETE", ...init }),
 
-  columns: () => request<{ items: string[] }>("/metadata/columns"),
+  columns: (init?: RequestInit) => request<{ items: string[] }>("/metadata/columns", init),
+  filterMetadataSnapshot: (init?: RequestInit) =>
+    request<FilterMetadataSnapshotResponse>("/metadata/filter-snapshot", init),
   filterOptions: (payload: FilterOptionsPayload, init?: RequestInit) =>
     request<FilterOptionsResponse>(
       "/filters/options",

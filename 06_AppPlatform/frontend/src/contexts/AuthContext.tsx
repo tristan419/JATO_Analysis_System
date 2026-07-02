@@ -8,7 +8,7 @@ import {
   type ReactNode,
 } from "react";
 
-import { apiUrl } from "../api/client";
+import { apiUrl } from "../api/core";
 
 const AUTH_PROFILE_REFRESH_DELAY_MS = 6_000;
 const AUTH_PROFILE_REFRESH_IDLE_TIMEOUT_MS = 4_000;

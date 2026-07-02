@@ -57,11 +57,33 @@ export function cloneFilterSelections(source: FilterSelections): FilterSelection
   });
 }
 
-export async function fetchOnDemandCascadedOptions(
+type FetchFilterOptions = (
+  payload: FilterOptionsPayload,
+  signal?: AbortSignal,
+) => Promise<string[]>;
+
+type FetchFilterOptionsBatch = (
+  payloads: FilterOptionsPayload[],
+  signal?: AbortSignal,
+) => Promise<string[][]>;
+
+function clearCascadedSelectionsAfter(
+  selections: FilterSelections,
+  optionsMap: Partial<Record<FilterKey, string[]>>,
+  index: number,
+): void {
+  for (let remainder = index + 1; remainder < FILTER_ORDER.length; remainder += 1) {
+    const remainderKey = FILTER_ORDER[remainder].key;
+    selections[remainderKey] = [];
+    optionsMap[remainderKey] = [];
+  }
+}
+
+async function fetchSequentialCascadedOptions(
   resolved: Record<FilterKey, string | null>,
   sourceSelections: FilterSelections,
   startIndex: number,
-  fetchOptions: (payload: FilterOptionsPayload, signal?: AbortSignal) => Promise<string[]>,
+  fetchOptions: FetchFilterOptions,
   signal?: AbortSignal,
 ): Promise<{
   optionsMap: Partial<Record<FilterKey, string[]>>;
@@ -69,10 +91,6 @@ export async function fetchOnDemandCascadedOptions(
 }> {
   const selections = cloneFilterSelections(sourceSelections);
   const optionsMap: Partial<Record<FilterKey, string[]>> = {};
-
-  if (startIndex >= FILTER_ORDER.length) {
-    return { optionsMap, selections };
-  }
 
   const prefixFilters: Record<string, string[]> = {};
   for (let index = 0; index < startIndex; index += 1) {
@@ -99,15 +117,106 @@ export async function fetchOnDemandCascadedOptions(
     selections[key] = validSelections;
 
     if (validSelections.length === 0) {
-      for (let remainder = index + 1; remainder < FILTER_ORDER.length; remainder += 1) {
-        const remainderKey = FILTER_ORDER[remainder].key;
-        selections[remainderKey] = [];
-        optionsMap[remainderKey] = [];
-      }
+      clearCascadedSelectionsAfter(selections, optionsMap, index);
       break;
     }
 
     prefixFilters[column] = validSelections;
+  }
+
+  return { optionsMap, selections };
+}
+
+export async function fetchOnDemandCascadedOptions(
+  resolved: Record<FilterKey, string | null>,
+  sourceSelections: FilterSelections,
+  startIndex: number,
+  fetchOptions: FetchFilterOptions,
+  signal?: AbortSignal,
+  fetchOptionsBatch?: FetchFilterOptionsBatch,
+): Promise<{
+  optionsMap: Partial<Record<FilterKey, string[]>>;
+  selections: FilterSelections;
+}> {
+  const selections = cloneFilterSelections(sourceSelections);
+  const optionsMap: Partial<Record<FilterKey, string[]>> = {};
+
+  if (startIndex >= FILTER_ORDER.length) {
+    return { optionsMap, selections };
+  }
+
+  if (!fetchOptionsBatch) {
+    return fetchSequentialCascadedOptions(
+      resolved,
+      sourceSelections,
+      startIndex,
+      fetchOptions,
+      signal,
+    );
+  }
+
+  const prefixFilters: Record<string, string[]> = {};
+  for (let index = 0; index < startIndex; index += 1) {
+    const key = FILTER_ORDER[index].key;
+    const column = resolved[key];
+    if (column && selections[key].length > 0) {
+      prefixFilters[column] = selections[key];
+    }
+  }
+
+  const requests: {
+    column: string;
+    index: number;
+    key: FilterKey;
+    payload: FilterOptionsPayload;
+  }[] = [];
+
+  for (let index = startIndex; index < FILTER_ORDER.length; index += 1) {
+    const key = FILTER_ORDER[index].key;
+    const column = resolved[key];
+    if (!column) {
+      selections[key] = [];
+      optionsMap[key] = [];
+      continue;
+    }
+
+    requests.push({
+      column,
+      index,
+      key,
+      payload: { column, filters: { ...prefixFilters } },
+    });
+
+    if (selections[key].length === 0) {
+      break;
+    }
+
+    prefixFilters[column] = selections[key];
+  }
+
+  if (requests.length === 0) {
+    return { optionsMap, selections };
+  }
+
+  const optionSets = await fetchOptionsBatch(
+    requests.map((request) => request.payload),
+    signal,
+  );
+
+  for (let index = 0; index < requests.length; index += 1) {
+    const request = requests[index];
+    if (!request) continue;
+    const options = optionSets[index] ?? [];
+    const { key } = request;
+    optionsMap[key] = options;
+
+    const validSelections = selections[key].filter((value) => options.includes(value));
+    selections[key] = validSelections;
+
+    if (validSelections.length === 0) {
+      clearCascadedSelectionsAfter(selections, optionsMap, request.index);
+      break;
+    }
   }
 
   return { optionsMap, selections };

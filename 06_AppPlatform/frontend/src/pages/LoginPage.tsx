@@ -1,6 +1,6 @@
 import { useState, type FormEvent } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
-import { apiUrl } from "../api/client";
+import { apiUrl } from "../api/core";
 import { useAuth } from "../contexts/AuthContext";
 
 export function LoginPage() {

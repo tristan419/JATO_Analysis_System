@@ -10,6 +10,7 @@ from fastapi.testclient import TestClient
 from app.api.routes import analysis as analysis_routes
 from app.api.routes import assistant as assistant_routes
 from app.api.routes import market_scan as market_scan_routes
+from app.api.routes import metadata as metadata_routes
 from app.core.config import API_PREFIX
 from app.services.query_service import GroupedTimeSeriesQueryResult
 
@@ -20,6 +21,7 @@ def client() -> TestClient:
     app.include_router(analysis_routes.router, prefix=API_PREFIX)
     app.include_router(assistant_routes.router, prefix=API_PREFIX)
     app.include_router(market_scan_routes.router, prefix=API_PREFIX)
+    app.include_router(metadata_routes.router, prefix=API_PREFIX)
     return TestClient(app)
 
 
@@ -239,6 +241,36 @@ def test_market_scan_deck_rejects_invalid_ranking_limit(client: TestClient) -> N
     response = client.post("/v1/market-scan/deck", json={"ranking_limit": 9})
 
     assert response.status_code == 422
+
+
+def test_filter_metadata_snapshot_contract(
+    client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        metadata_routes,
+        "metadata_filter_snapshot",
+        lambda: {
+            "columns": ["Country", "Powertrain"],
+            "options": {
+                "Country": ["Sweden"],
+                "Powertrain": ["BEV"],
+            },
+        },
+    )
+
+    response = client.get("/v1/metadata/filter-snapshot")
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "columns": ["Country", "Powertrain"],
+        "options": {
+            "Country": ["Sweden"],
+            "Powertrain": ["BEV"],
+        },
+    }
+    assert "stale-while-revalidate" in response.headers["cache-control"]
+    assert response.headers["etag"].startswith('W/"metadata-filter-snapshot-')
 
 
 def test_analysis_query_contract(

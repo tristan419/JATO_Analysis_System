@@ -7,9 +7,13 @@ FastAPI backend remains on Tencent Cloud.
 It only caches explicit read-only endpoints:
 
 - `GET /v1/metadata/columns`
+- `GET /v1/metadata/filter-snapshot`
 - `GET /v1/assistant/country/metadata`
+- `GET /v1/analysis/data-freshness`
 - `POST /v1/filters/options`
 - `POST /v1/filters/options/batch`
+- `POST /v1/analysis/overview`
+- `POST /v1/analysis/time-series`
 - `POST /v1/analysis/time-series-grouped`
 
 Auth, login, write APIs, profile updates, and admin mutation APIs are always
@@ -22,10 +26,11 @@ The Worker builds a synthetic cache key from:
 - HTTP method
 - path and query string
 - request body SHA-256 hash
-- hashed `X-Auth-Token`, `X-User-Name`, and `X-User-Role`
+- hashed `X-User-Role`
 - `X-JATO-Data-Version` request header, or `DATA_VERSION` from Worker env
 
-This keeps cached payloads scoped to the user/auth context and lets a data
+This keeps cached payloads scoped to the permission role, avoids splitting the
+same read-only dashboard payload by refreshed login tokens, and lets a data
 publish invalidate old entries by changing `DATA_VERSION`.
 
 ## Deploy
@@ -41,6 +46,23 @@ After DNS is ready, bind a route such as:
 [[routes]]
 pattern = "api-intl.ojeur.cloud"
 custom_domain = true
+```
+
+The Worker deployment can report the custom domain as attached before public DNS
+is actually ready. Verify DNS before switching the frontend:
+
+```bash
+nslookup api-intl.ojeur.cloud
+curl -i https://api-intl.ojeur.cloud/healthz
+```
+
+If `nslookup` returns `NXDOMAIN`, add a proxied DNS record in Cloudflare DNS:
+
+```text
+Type: CNAME
+Name: api-intl
+Target: jato-readonly-api-cache.tristanlyk.workers.dev
+Proxy status: Proxied
 ```
 
 If `ojeur.cloud` is managed by Cloudflare DNS, point the Cloudflare Pages intl
