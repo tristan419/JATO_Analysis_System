@@ -17,6 +17,7 @@ export interface MonthCell {
 
 export interface MaterialSkuMatrixRow {
   materialCode: string;
+  bomTemplate?: string | null;
   brand: string;
   modelName: string;
   version: string;
@@ -45,6 +46,11 @@ export interface MatrixResponse {
   year: number;
   rows: MaterialSkuMatrixRow[];
   totalRows: number;
+}
+
+export interface MatrixBatchResponse {
+  matrices: Record<string, MatrixResponse>;
+  errors: Record<string, string>;
 }
 
 export interface QuantityCellUpdate {
@@ -111,6 +117,84 @@ export interface ColourHexRule {
   status: "standard" | "conflict" | "missing";
   standardColourHex: string | null;
   hexOptions: ColourHexOption[];
+}
+
+export interface CountryMaterialFinanceRow {
+  financeId: string | null;
+  countryCode: string;
+  materialCode: string;
+  brand: string;
+  modelName: string;
+  version: string;
+  powertrain: string | null;
+  colour: string;
+  colourCode: string;
+  bomTemplate: string | null;
+  bomFobEur: number | null;
+  fobEur: number | null;
+  retailPriceEur: number | null;
+  wholesalePriceEur: number | null;
+  dealerPriceEur: number | null;
+  costEur: number | null;
+  marginEur: number | null;
+  marginRate: number | null;
+  vehicleMarginEur: number | null;
+  vehicleMarginRate: number | null;
+  vehicleProfitEur: number | null;
+  vehicleProfitRate: number | null;
+  fobDeltaEur: number | null;
+  marginDeltaEur: number | null;
+  memo: string | null;
+  sourceMode: string | null;
+  sourcePayload: Record<string, unknown> | null;
+  updatedBy: string | null;
+  updatedAtUtc: string | null;
+}
+
+export interface CountryMaterialFinanceUpdate {
+  countryCode: string;
+  fobEur?: number | null;
+  retailPriceEur?: number | null;
+  wholesalePriceEur?: number | null;
+  dealerPriceEur?: number | null;
+  costEur?: number | null;
+  marginEur?: number | null;
+  marginRate?: number | null;
+  vehicleMarginEur?: number | null;
+  vehicleMarginRate?: number | null;
+  vehicleProfitEur?: number | null;
+  vehicleProfitRate?: number | null;
+  fobDeltaEur?: number | null;
+  marginDeltaEur?: number | null;
+  memo?: string | null;
+  sourceMode?: string;
+  sourcePayload?: Record<string, unknown> | null;
+}
+
+export interface CountryMaterialFinanceImportRow {
+  lineNumber: number;
+  materialCode: string;
+  update: CountryMaterialFinanceUpdate | null;
+  error: string;
+}
+
+export interface CountryMaterialFinanceImportPreview {
+  rows: CountryMaterialFinanceImportRow[];
+  warnings: string[];
+}
+
+export interface CountryMaterialFinanceHistoryItem {
+  historyId: string;
+  financeId: string | null;
+  countryCode: string;
+  materialCode: string;
+  oldValues: Record<string, unknown> | null;
+  newValues: Record<string, unknown>;
+  changedFields: string[];
+  sourceMode: string | null;
+  sourcePayload: Record<string, unknown> | null;
+  changedBy: string | null;
+  changedAtUtc: string | null;
 }
 
 export interface CountryPaymentTerm {

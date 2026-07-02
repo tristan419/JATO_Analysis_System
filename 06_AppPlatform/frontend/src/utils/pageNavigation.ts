@@ -202,6 +202,7 @@ const ROUTE_ROLE_OVERRIDES: Record<string, MenuRole> = {
   "/specification": "viewer",
   "/data-management": "viewer",
   "/data/order-genius": "order_filler",
+  "/product/order-genius/cbu": "editor",
   "/product/order-genius/vehicle-allocation": "order_filler",
   "/engineering": "editor",
   "/review": "editor",
@@ -220,6 +221,19 @@ export function isRouteAllowedForRole(pathname: string, userRole: string): boole
     return level >= ROLE_LEVEL[override[1]];
   }
   return getMenuPathsForRole(userRole).some((path) => matchesNavPath(pathname, path));
+}
+
+export function isKnownAppRoute(pathname: string): boolean {
+  if (pathname === "/" || pathname.startsWith("/login") || pathname === "/account/profile") {
+    return true;
+  }
+  const override = Object.keys(ROUTE_ROLE_OVERRIDES).some((path) => (
+    matchesNavPath(pathname, path)
+  ));
+  if (override) {
+    return true;
+  }
+  return getMenuPathsForRole("admin").some((path) => matchesNavPath(pathname, path));
 }
 
 export const MEGA_MENU_ITEMS: MegaMenuItem[] = [
@@ -250,7 +264,8 @@ export const MEGA_MENU_ITEMS: MegaMenuItem[] = [
         title: "Market Analysis / 市场分析",
         items: [
           { label: "Overview", sublabel: "市场总览", to: "/market/overview", minRole: "viewer" },
-          { label: "Advanced Analysis", sublabel: "高级分析", to: "/market/advanced-analysis", minRole: "viewer" },
+          { label: "Share Transfer", sublabel: "份额转移分析", to: "/market/advanced-analysis", minRole: "viewer" },
+          { label: "Hero Product", sublabel: "BEV 动总分析", to: "/market/advanced-analysis?mode=hero-product", minRole: "viewer" },
         ],
       },
       {
@@ -282,6 +297,7 @@ export const MEGA_MENU_ITEMS: MegaMenuItem[] = [
         title: "Product Toolkit / 产品工具包",
         items: [
           { label: "Order Genius", sublabel: "订单矩阵", to: "/product/order-genius", minRole: "order_filler" },
+          { label: "CBU Finance", sublabel: "CBU 明细", to: "/product/order-genius/cbu", minRole: "editor" },
           { label: "Vehicle Allocation", sublabel: "PI 分车", to: "/product/order-genius/vehicle-allocation", minRole: "order_filler" },
           { label: "COC Match", sublabel: "COC 比对", to: "/product/coc-match", minRole: "editor" },
         ],

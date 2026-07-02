@@ -1,11 +1,11 @@
-import { Suspense, lazy, Component, type ReactNode } from "react";
+import { Suspense, lazy, Component, useEffect, useState, type ReactNode } from "react";
 import { Navigate, createBrowserRouter, RouterProvider, useLocation } from "react-router-dom";
 import { SharedFilterScopeProvider } from "./contexts/SharedFilterScopeContext";
-import { CountryChatProvider } from "./contexts/CountryChatContext";
 import { AuthProvider } from "./contexts/AuthContext";
 import { Layout } from "./components/Layout";
 import { RequireRole } from "./components/RequireRole";
 import { LoadingSurface } from "./components/LoadingSurface";
+import { getOAuthRedirectTarget } from "./utils/oauthRedirect";
 
 /** Consume OAuth token params before any provider mounts, avoiding aborted fetches. */
 function OAuthGate({ children }: { children: ReactNode }) {
@@ -21,7 +21,7 @@ function OAuthGate({ children }: { children: ReactNode }) {
     localStorage.setItem("jato_user_name", urlUser);
     localStorage.setItem("jato_user_role", urlRole);
     localStorage.removeItem("shared-filter-scope");
-    const target = isNewUser ? "/account/profile" : "/dashboard";
+    const target = getOAuthRedirectTarget(window.location, isNewUser);
     // Sync redirect — aborts current render before any child effects run
     window.location.replace(target);
     return null;
@@ -40,7 +40,7 @@ const CocMatchPage = lazy(() => import("./pages/CocMatchPage").then(m => ({ defa
 const PositioningPricingPage = lazy(() => import("./pages/PositioningPricingPage").then(m => ({ default: m.PositioningPricingPage })));
 const VersionComparisonPage = lazy(() => import("./pages/VersionComparisonPage").then(m => ({ default: m.VersionComparisonPage })));
 const CustomerInsightsPage = lazy(() => import("./pages/CustomerInsightsPage").then(m => ({ default: m.CustomerInsightsPage })));
-const CountryChatPage = lazy(() => import("./pages/CountryChatPage").then(m => ({ default: m.CountryChatPage })));
+const CountryChatPageHost = lazy(() => import("./pages/CountryChatPageHost").then(m => ({ default: m.CountryChatPageHost })));
 const NotFoundPage = lazy(() => import("./pages/NotFoundPage").then(m => ({ default: m.NotFoundPage })));
 const SpecificationPage = lazy(() => import("./pages/SpecificationPage").then(m => ({ default: m.SpecificationPage })));
 const EngineeringConfigPage = lazy(() => import("./pages/EngineeringConfigPage").then(m => ({ default: m.EngineeringConfigPage })));
@@ -53,9 +53,11 @@ const MsrpMonitorPage = lazy(() => import("./pages/MsrpMonitorPage").then(m => (
 const AdvancedAnalysisPage = lazy(() => import("./pages/AdvancedAnalysisPage").then(m => ({ default: m.AdvancedAnalysisPage })));
 const LeaseComparisonPage = lazy(() => import("./pages/LeaseComparisonPage").then(m => ({ default: m.LeaseComparisonPage })));
 const OrderGeniusPage = lazy(() => import("./pages/OrderGeniusPage").then(m => ({ default: m.OrderGeniusPage })));
+const OrderGeniusCbuPage = lazy(() => import("./pages/OrderGeniusCbuPage").then(m => ({ default: m.OrderGeniusCbuPage })));
 const OrderGeniusVehicleAllocationPage = lazy(() => import("./pages/OrderGeniusVehicleAllocationPage").then(m => ({ default: m.OrderGeniusVehicleAllocationPage })));
 const AccessControlPage = lazy(() => import("./pages/AccessControlPage").then(m => ({ default: m.AccessControlPage })));
 const ProfilePage = lazy(() => import("./pages/ProfilePage").then(m => ({ default: m.ProfilePage })));
+const RouteDiagnosticsPage = lazy(() => import("./pages/RouteDiagnosticsPage").then(m => ({ default: m.RouteDiagnosticsPage })));
 
 class ChunkErrorBoundary extends Component<{ children: ReactNode }, { hasError: boolean }> {
   state = { hasError: false };
@@ -84,16 +86,126 @@ function withPageLoader(node: ReactNode) {
   );
 }
 
+function withSharedFilterScope(node: ReactNode) {
+  return <SharedFilterScopeProvider>{node}</SharedFilterScopeProvider>;
+}
+
 function RedirectPreserveSearch({ to }: { to: string }) {
   const location = useLocation();
   return <Navigate to={`${to}${location.search}${location.hash}`} replace />;
 }
 
+function getAppEntryScriptFromHtml(html: string): string | null {
+  const match = html.match(/<script[^>]+src="([^"]*\/assets\/index-[^"]+\.js)"/i);
+  return match?.[1] ?? null;
+}
+
+function getCurrentAppEntryScript(): string | null {
+  const script = Array.from(document.scripts).find((item) =>
+    item.src.includes("/assets/index-") && item.src.endsWith(".js"),
+  );
+  if (!script) return null;
+  try {
+    return new URL(script.src).pathname;
+  } catch {
+    return script.getAttribute("src");
+  }
+}
+
+function AppVersionNotice() {
+  const [latestEntryScript, setLatestEntryScript] = useState<string | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    const currentEntryScript = getCurrentAppEntryScript();
+    if (!currentEntryScript) return undefined;
+
+    const checkLatestEntry = async () => {
+      try {
+        const response = await fetch(`/?version-check=${Date.now()}`, {
+          cache: "no-store",
+          headers: { "Cache-Control": "no-cache" },
+        });
+        if (!response.ok) return;
+        const html = await response.text();
+        const nextEntryScript = getAppEntryScriptFromHtml(html);
+        if (!cancelled && nextEntryScript && nextEntryScript !== currentEntryScript) {
+          setLatestEntryScript(nextEntryScript);
+        }
+      } catch {
+        // Version checks should never interrupt the active workspace.
+      }
+    };
+
+    void checkLatestEntry();
+    const interval = window.setInterval(() => {
+      void checkLatestEntry();
+    }, 5 * 60 * 1000);
+    const handleFocus = () => {
+      void checkLatestEntry();
+    };
+    window.addEventListener("focus", handleFocus);
+    document.addEventListener("visibilitychange", handleFocus);
+
+    return () => {
+      cancelled = true;
+      window.clearInterval(interval);
+      window.removeEventListener("focus", handleFocus);
+      document.removeEventListener("visibilitychange", handleFocus);
+    };
+  }, []);
+
+  if (!latestEntryScript) return null;
+
+  return (
+    <div
+      style={{
+        position: "fixed",
+        left: 16,
+        right: 16,
+        bottom: 16,
+        zIndex: 10000,
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "space-between",
+        gap: 12,
+        padding: "12px 14px",
+        border: "1px solid #bfdbfe",
+        background: "rgba(239,246,255,0.98)",
+        boxShadow: "0 18px 45px rgba(15,23,42,0.18)",
+        color: "#1e3a8a",
+        fontSize: 13,
+        fontWeight: 800,
+      }}
+      role="status"
+    >
+      <span>New app version is available. Refresh to avoid stale Chrome assets.</span>
+      <button
+        type="button"
+        onClick={() => window.location.reload()}
+        style={{
+          border: "1px solid #2563eb",
+          background: "#2563eb",
+          color: "#ffffff",
+          padding: "8px 12px",
+          fontSize: 12,
+          fontWeight: 900,
+          letterSpacing: 1,
+          textTransform: "uppercase",
+          cursor: "pointer",
+        }}
+      >
+        Refresh
+      </button>
+    </div>
+  );
+}
+
 const router = createBrowserRouter([
   { path: "/login", element: (<AuthProvider>{withPageLoader(<LoginPage />)}</AuthProvider>) },
-  { path: "/", element: (<AuthProvider><OAuthGate><SharedFilterScopeProvider><CountryChatProvider><RequireRole><Layout /></RequireRole></CountryChatProvider></SharedFilterScopeProvider></OAuthGate></AuthProvider>), children: [
-    { index: true, element: withPageLoader(<DashboardPage />) },
-    { path: "dashboard", element: withPageLoader(<DashboardPage />) },
+  { path: "/", element: (<AuthProvider><OAuthGate><RequireRole><Layout /></RequireRole></OAuthGate></AuthProvider>), children: [
+    { index: true, element: withSharedFilterScope(withPageLoader(<DashboardPage />)) },
+    { path: "dashboard", element: withSharedFilterScope(withPageLoader(<DashboardPage />)) },
     { path: "market/overview", element: withPageLoader(<MarketOverviewPage />) },
     { path: "market/segments", element: withPageLoader(<MarketSegmentsPage />) },
     { path: "market/ranking/brand", element: withPageLoader(<MarketBrandRankingPage />) },
@@ -104,12 +216,13 @@ const router = createBrowserRouter([
     { path: "market/advanced-analysis", element: withPageLoader(<AdvancedAnalysisPage />) },
     { path: "product/current-msrp", element: withPageLoader(<MsrpPage />) },
     { path: "product/order-genius", element: withPageLoader(<OrderGeniusPage />) },
+    { path: "product/order-genius/cbu", element: withPageLoader(<OrderGeniusCbuPage />) },
     { path: "product/order-genius/vehicle-allocation", element: withPageLoader(<OrderGeniusVehicleAllocationPage />) },
     { path: "product/lease-comparison", element: withPageLoader(<LeaseComparisonPage />) },
     { path: "product/pricing", element: withPageLoader(<PositioningPricingPage />) },
     { path: "product/compare", element: withPageLoader(<VersionComparisonPage />) },
     { path: "product/customer-insight", element: withPageLoader(<CustomerInsightsPage />) },
-    { path: "data/spec-detail", element: withPageLoader(<SpecificationPage />) },
+    { path: "data/spec-detail", element: withSharedFilterScope(withPageLoader(<SpecificationPage />)) },
     { path: "data/overview", element: withPageLoader(<DataManagementPage />) },
     { path: "data/config-import", element: withPageLoader(<EngineeringPage />) },
     { path: "data/matching-review", element: withPageLoader(<ReviewCasesPage />) },
@@ -117,8 +230,9 @@ const router = createBrowserRouter([
     { path: "data/order-genius", element: withPageLoader(<OrderGeniusPage />) },
     { path: "admin/access-control", element: withPageLoader(<AccessControlPage />) },
     { path: "account/profile", element: withPageLoader(<ProfilePage />) },
+    { path: "route-diagnostics", element: withPageLoader(<RouteDiagnosticsPage />) },
     { path: "product/coc-match", element: withPageLoader(<CocMatchPage />) },
-    { path: "copilot", element: withPageLoader(<CountryChatPage />) },
+    { path: "copilot", element: withPageLoader(<CountryChatPageHost />) },
     { path: "engineering-config", element: withPageLoader(<EngineeringConfigPage />) },
     { path: "market-scan", element: <RedirectPreserveSearch to="/market/overview" /> },
     { path: "msrp", element: <RedirectPreserveSearch to="/product/current-msrp" /> },
@@ -127,7 +241,7 @@ const router = createBrowserRouter([
     { path: "version-comparison", element: <RedirectPreserveSearch to="/product/compare" /> },
     { path: "customer-insights", element: <RedirectPreserveSearch to="/product/customer-insight" /> },
     { path: "customer-hev", element: <RedirectPreserveSearch to="/product/customer-insight" /> },
-    { path: "specification", element: withPageLoader(<SpecificationPage />) },
+    { path: "specification", element: withSharedFilterScope(withPageLoader(<SpecificationPage />)) },
     { path: "data-management", element: withPageLoader(<DataManagementPage />) },
     { path: "engineering", element: <RedirectPreserveSearch to="/data/config-import" /> },
     { path: "review", element: <RedirectPreserveSearch to="/data/matching-review" /> },
@@ -136,4 +250,11 @@ const router = createBrowserRouter([
   ]},
 ]);
 
-export default function App() { return <RouterProvider router={router} />; }
+export default function App() {
+  return (
+    <>
+      <RouterProvider router={router} />
+      <AppVersionNotice />
+    </>
+  );
+}

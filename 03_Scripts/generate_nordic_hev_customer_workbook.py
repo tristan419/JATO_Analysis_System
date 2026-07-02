@@ -8,7 +8,6 @@ from openpyxl import Workbook
 from openpyxl.styles import Alignment, Font, PatternFill
 from openpyxl.utils import get_column_letter
 
-
 HEADERS = [
     "Name",
     "Contact",
@@ -50,27 +49,132 @@ HEADERS = [
 ]
 
 MALE_NAMES = [
-    "Erik", "Lars", "Johan", "Anders", "Mikael", "Karl", "Peter", "Mattias", "Stefan", "Andreas",
-    "Bjorn", "Henrik", "Niklas", "Marcus", "Daniel", "David", "Magnus", "Robert", "Thomas", "Christian",
-    "Fredrik", "Patrik", "Oskar", "Viktor", "Jonas", "Linus", "Gustav", "Sebastian", "Simon", "Emil",
+    "Erik",
+    "Lars",
+    "Johan",
+    "Anders",
+    "Mikael",
+    "Karl",
+    "Peter",
+    "Mattias",
+    "Stefan",
+    "Andreas",
+    "Bjorn",
+    "Henrik",
+    "Niklas",
+    "Marcus",
+    "Daniel",
+    "David",
+    "Magnus",
+    "Robert",
+    "Thomas",
+    "Christian",
+    "Fredrik",
+    "Patrik",
+    "Oskar",
+    "Viktor",
+    "Jonas",
+    "Linus",
+    "Gustav",
+    "Sebastian",
+    "Simon",
+    "Emil",
 ]
 FEMALE_NAMES = [
-    "Anna", "Maria", "Karin", "Sara", "Emma", "Lena", "Kristina", "Malin", "Sofia", "Eva",
-    "Helena", "Camilla", "Linda", "Therese", "Cecilia", "Sandra", "Ulrika", "Johanna", "Ingrid", "Rebecka",
-    "Elin", "Hanna", "Ida", "Astrid", "Maja", "Frida", "Klara", "Nora", "Elsa", "Vera",
+    "Anna",
+    "Maria",
+    "Karin",
+    "Sara",
+    "Emma",
+    "Lena",
+    "Kristina",
+    "Malin",
+    "Sofia",
+    "Eva",
+    "Helena",
+    "Camilla",
+    "Linda",
+    "Therese",
+    "Cecilia",
+    "Sandra",
+    "Ulrika",
+    "Johanna",
+    "Ingrid",
+    "Rebecka",
+    "Elin",
+    "Hanna",
+    "Ida",
+    "Astrid",
+    "Maja",
+    "Frida",
+    "Klara",
+    "Nora",
+    "Elsa",
+    "Vera",
 ]
 LAST_NAMES = [
-    "Andersson", "Johansson", "Karlsson", "Nilsson", "Eriksson", "Larsson", "Olsson", "Persson",
-    "Svensson", "Gustafsson", "Pettersson", "Jonsson", "Jansson", "Hansson", "Bengtsson", "Lindstrom",
-    "Lindqvist", "Magnusson", "Berg", "Lindberg", "Holm", "Hedlund", "Lund", "Bergstrom", "Sandberg",
+    "Andersson",
+    "Johansson",
+    "Karlsson",
+    "Nilsson",
+    "Eriksson",
+    "Larsson",
+    "Olsson",
+    "Persson",
+    "Svensson",
+    "Gustafsson",
+    "Pettersson",
+    "Jonsson",
+    "Jansson",
+    "Hansson",
+    "Bengtsson",
+    "Lindstrom",
+    "Lindqvist",
+    "Magnusson",
+    "Berg",
+    "Lindberg",
+    "Holm",
+    "Hedlund",
+    "Lund",
+    "Bergstrom",
+    "Sandberg",
 ]
 REGIONS = [
-    "Stockholm", "Goteborg", "Malmo", "Uppsala", "Linkoping", "Vasteras", "Orebro", "Helsingborg",
-    "Norrkoping", "Jonkoping", "Umea", "Lund", "Boras", "Sundsvall", "Gavle", "Eskilstuna", "Sodertalje",
-    "Karlstad", "Taby", "Nacka", "Tampere", "Espoo", "Turku", "Oslo", "Bergen", "Trondheim", "Aarhus",
+    "Stockholm",
+    "Goteborg",
+    "Malmo",
+    "Uppsala",
+    "Linkoping",
+    "Vasteras",
+    "Orebro",
+    "Helsingborg",
+    "Norrkoping",
+    "Jonkoping",
+    "Umea",
+    "Lund",
+    "Boras",
+    "Sundsvall",
+    "Gavle",
+    "Eskilstuna",
+    "Sodertalje",
+    "Karlstad",
+    "Taby",
+    "Nacka",
+    "Tampere",
+    "Espoo",
+    "Turku",
+    "Oslo",
+    "Bergen",
+    "Trondheim",
+    "Aarhus",
 ]
 EDUCATION_LEVELS = [
-    "University", "University", "University", "College", "Vocational", "College",
+    "University",
+    "University",
+    "University",
+    "College",
+    "Vocational",
+    "College",
 ]
 MARITAL_STATUS = ["Married", "Married", "Cohabiting", "Cohabiting", "Single"]
 CHILDREN_LABELS = ["2 children", "1 child", "2 children", "No children", "3 children"]
@@ -91,12 +195,28 @@ OCCUPATIONS = [
     "Public Service / Police",
 ]
 SPORTS = [
-    "Cross-country skiing", "Trail running", "Hiking / fell walking", "Road cycling", "Swimming",
-    "Gardening", "Photography", "Sailing", "Ice hockey", "Snowmobiling",
+    "Cross-country skiing",
+    "Trail running",
+    "Hiking / fell walking",
+    "Road cycling",
+    "Swimming",
+    "Gardening",
+    "Photography",
+    "Sailing",
+    "Ice hockey",
+    "Snowmobiling",
 ]
 LOCATIONS = [
-    "Children's school & activities", "Summer cottage", "Supermarket / ICA / Prisma", "Ski resort / slopes",
-    "Hardware store / Bauhaus", "Forest trails", "City centre", "National park", "Sports hall", "Ferry terminal",
+    "Children's school & activities",
+    "Summer cottage",
+    "Supermarket / ICA / Prisma",
+    "Ski resort / slopes",
+    "Hardware store / Bauhaus",
+    "Forest trails",
+    "City centre",
+    "National park",
+    "Sports hall",
+    "Ferry terminal",
 ]
 SPENDING_PHILOSOPHY = [
     "Family-centred practical buyer",
@@ -234,7 +354,9 @@ def build_customer_requirements(model: str) -> str:
 
 def build_suggestions(model: str) -> str:
     if "Toyota" in model:
-        return "Explain Toyota hybrid system benefits in plain Nordic family use cases and bundle winter package clearly"
+        return (
+            "Explain Toyota hybrid system benefits in plain Nordic family use cases and bundle winter package clearly"
+        )
     return "Show running-cost math against diesel SUVs and explain winter efficiency with simple charts"
 
 
@@ -261,13 +383,15 @@ def build_row(randomizer: random.Random, index: int) -> list[str | int]:
     powertrain_preference = build_powertrain_preference(randomizer)
     purchase_type = randomizer.choice(PURCHASE_TYPES)
     children = randomizer.choice(CHILDREN_LABELS if household_size >= 3 else ["No children", "1 child"])
-    dream_car = randomizer.choice([
-        "Toyota RAV4 Hybrid Lounge",
-        "Toyota Highlander Hybrid",
-        "Toyota Corolla Cross GR Sport Hybrid",
-        "Lexus NX 350h Takumi",
-        "Honda CR-V e:HEV Advance",
-    ])
+    dream_car = randomizer.choice(
+        [
+            "Toyota RAV4 Hybrid Lounge",
+            "Toyota Highlander Hybrid",
+            "Toyota Corolla Cross GR Sport Hybrid",
+            "Lexus NX 350h Takumi",
+            "Honda CR-V e:HEV Advance",
+        ]
+    )
 
     return [
         name,
@@ -291,12 +415,14 @@ def build_row(randomizer: random.Random, index: int) -> list[str | int]:
         randomizer.choice(PERSONALITIES),
         f"Yes – {model}",
         build_why_this_car(model),
-        randomizer.choice([
-            "Cabin can feel tight with winter gear",
-            "Road noise is noticeable on rough asphalt",
-            "Rear-seat space is only just enough with child seats",
-            "Would like clearer digital HVAC shortcuts",
-        ]),
+        randomizer.choice(
+            [
+                "Cabin can feel tight with winter gear",
+                "Road noise is noticeable on rough asphalt",
+                "Rear-seat space is only just enough with child seats",
+                "Would like clearer digital HVAC shortcuts",
+            ]
+        ),
         dream_car,
         purchase_type,
         build_driving_scenarios(randomizer),
@@ -310,12 +436,14 @@ def build_row(randomizer: random.Random, index: int) -> list[str | int]:
         randomizer.choice(INFORMATION_SOURCES),
         build_price_perception(model),
         build_evaluation(model),
-        randomizer.choice([
-            "Reliable and calm",
-            "Hybrid without friction",
-            "Toyota just makes sense for this stage of life",
-            "We want the family car to stay simple",
-        ]),
+        randomizer.choice(
+            [
+                "Reliable and calm",
+                "Hybrid without friction",
+                "Toyota just makes sense for this stage of life",
+                "We want the family car to stay simple",
+            ]
+        ),
         "",
     ]
 

@@ -22,6 +22,10 @@ def presence_heartbeat(
     payload: HeartbeatPayload | None = Body(None),
     user: UserContext = Depends(get_optional_user),
     page: str = Query("unknown", description="Current page (fallback)"),
+    include_users: bool = Query(
+        False,
+        description="Include full online user list in the heartbeat response",
+    ),
 ) -> dict:
     """Register a heartbeat. Call every 30s from the frontend.
 
@@ -44,6 +48,7 @@ def presence_heartbeat(
         user_name=user_name,
         current_page=current_page,
         role=user.role,
+        include_users=include_users,
     )
 
 
@@ -52,6 +57,13 @@ def presence_online(
     page: str | None = Query(
         None, description="Filter same_page count by page"
     ),
+    include_users: bool = Query(
+        True,
+        description="Include full online user list in the response",
+    ),
 ) -> dict:
     """List currently online users, optionally scoped to a page."""
-    return presence_store.get_online(current_page=page)
+    return presence_store.get_online(
+        current_page=page,
+        include_users=include_users,
+    )

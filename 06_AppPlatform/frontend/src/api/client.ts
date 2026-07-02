@@ -1,6 +1,7 @@
 import type {
   AdvancedChartResponse,
   AnalysisQuery,
+  CocFillJob,
   CocMatchJob,
   ConfigImportBatch,
   ConfigVariant,
@@ -14,6 +15,10 @@ import type {
   PriceHistoryEntry,
   DetailResponse,
   GroupedTimeSeriesResponse,
+  HeroProductDeckRequest,
+  HeroProductDeckResponse,
+  HeroProductPriceOverridePayload,
+  HeroProductSpecOverridePayload,
   JatoMonthlyUpdateCleanupResult,
   JatoMonthlyUpdateArtifacts,
   JatoMonthlyUpdateJob,
@@ -96,13 +101,23 @@ import type {
   HermesCostResponse,
   HermesDailySummaryResponse,
   HermesEvidenceLedgerResponse,
+  HermesFeatureGoal,
+  HermesFeatureGoalsResponse,
+  HermesFeatureGoalSwimlanesResponse,
   HermesFeatureKanbanResponse,
   HermesFullDesignDocumentResponse,
   HermesGap,
+  HermesHistoryClustersResponse,
+  HermesHistoryEventsResponse,
+  HermesHistoryLevel,
+  HermesHistoryYAxis,
   HermesMermaidBlock,
   HermesOverviewResponse,
   HermesPipelineHealthResponse,
   HermesPipelineStatusRecord,
+  HermesProgressFeature,
+  HermesProgressSwimlaneResponse,
+  HermesReuseCandidatesResponse,
   HermesDeployStatusResponse,
   HermesSentinelMailboxStatus,
   HermesSentinelNotification,
@@ -111,15 +126,22 @@ import type {
   HermesMsrpDryrunHistoryResponse,
   HermesSourceQualityResponse,
   HermesToolchainResponse,
+  HermesWorkflowCockpitResponse,
 } from "../types/hermes";
 import type {
   BaselineVersion,
   ColourHexRule,
   ColourSurchargeRule,
+  CountryMaterialFinanceHistoryItem,
+  CountryMaterialFinanceImportPreview,
+  CountryMaterialFinanceImportRow,
+  CountryMaterialFinanceRow,
+  CountryMaterialFinanceUpdate,
   CountryPaymentTerm,
   MaterialUploadPreview,
   MaterialUploadPreviewRow,
   MaterialUploadSession,
+  MatrixBatchResponse,
   MatrixResponse,
   OrderGeniusOptions,
   PaymentTermRule,
@@ -170,6 +192,15 @@ export function apiUrl(path: string): string {
   const normalizedBase = API_BASE.endsWith("/") ? API_BASE.slice(0, -1) : API_BASE;
   const normalizedPath = path.startsWith("/") ? path : `/${path}`;
   return `${normalizedBase}${normalizedPath}`;
+}
+
+interface FilterOptionsResponse {
+  column: string;
+  options: string[];
+}
+
+interface FilterOptionsBatchResponse {
+  items: FilterOptionsResponse[];
 }
 
 function getAuthHeaders(): Record<string, string> {
@@ -304,6 +335,19 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
     );
   }
   return promise;
+}
+
+function normalizeQuantityCellResponse(raw: Record<string, unknown>): QuantityCellResponse {
+  return {
+    orderQuantityCellId: String(raw.orderQuantityCellId ?? raw.order_quantity_cell_id ?? ""),
+    countryCode: String(raw.countryCode ?? raw.country_code ?? ""),
+    orderYear: Number(raw.orderYear ?? raw.order_year ?? 0),
+    orderMonth: Number(raw.orderMonth ?? raw.order_month ?? 0),
+    materialCode: String(raw.materialCode ?? raw.material_code ?? ""),
+    quantity: Number(raw.quantity ?? 0),
+    fobEur: Number(raw.fobEur ?? raw.fob_eur ?? 0),
+    rowVersion: Number(raw.rowVersion ?? raw.row_version ?? 0),
+  };
 }
 
 async function requestBlob(path: string, init?: RequestInit): Promise<Blob> {
@@ -1001,6 +1045,127 @@ function mapCocMatchJob(raw: Record<string, unknown>): CocMatchJob {
   };
 }
 
+function mapCocFillRecord(raw: Record<string, unknown>) {
+  return {
+    materialGroup: String(raw.materialGroup ?? raw.material_group ?? ""),
+    wvtaNo: String(raw.wvtaNo ?? raw.wvta_no ?? ""),
+    cocNo: String(raw.cocNo ?? raw.coc_no ?? ""),
+    brand: nullableString(raw.brand),
+    model: nullableString(raw.model),
+    powertrain: nullableString(raw.powertrain),
+    version: nullableString(raw.version),
+    salesName: nullableString(raw.salesName ?? raw.sales_name),
+    validFrom: nullableString(raw.validFrom ?? raw.valid_from),
+    validTo: nullableString(raw.validTo ?? raw.valid_to),
+    comments: nullableString(raw.comments),
+    pageNumber: Number(raw.pageNumber ?? raw.page_number ?? 0),
+    tableRowNumber: Number(raw.tableRowNumber ?? raw.table_row_number ?? 0),
+  };
+}
+
+function mapCocFillDecision(raw: Record<string, unknown>) {
+  const selectedRecordRaw = raw.selectedRecord ?? raw.selected_record;
+  const candidateRecordsRaw = raw.candidateRecords ?? raw.candidate_records;
+  return {
+    materialGroup: String(raw.materialGroup ?? raw.material_group ?? ""),
+    sheetName: String(raw.sheetName ?? raw.sheet_name ?? ""),
+    rowNumber: Number(raw.rowNumber ?? raw.row_number ?? 0),
+    status: String(raw.status ?? ""),
+    candidateCount: Number(raw.candidateCount ?? raw.candidate_count ?? 0),
+    reason: String(raw.reason ?? ""),
+    confidence: Number(raw.confidence ?? 0),
+    selectedRecord: selectedRecordRaw && typeof selectedRecordRaw === "object" && !Array.isArray(selectedRecordRaw)
+      ? mapCocFillRecord(selectedRecordRaw as Record<string, unknown>)
+      : null,
+    candidateRecords: Array.isArray(candidateRecordsRaw)
+      ? candidateRecordsRaw
+        .filter((item): item is Record<string, unknown> => Boolean(item) && typeof item === "object" && !Array.isArray(item))
+        .map(mapCocFillRecord)
+      : [],
+    writtenWvta: nullableString(raw.writtenWvta ?? raw.written_wvta),
+    writtenCoc: nullableString(raw.writtenCoc ?? raw.written_coc),
+  };
+}
+
+function mapCocFillPreviewGroup(raw: Record<string, unknown>) {
+  const statusCountsRaw = raw.statusCounts ?? raw.status_counts;
+  const decisionsRaw = raw.decisions;
+  const statusCounts: Record<string, number> = {};
+  if (statusCountsRaw && typeof statusCountsRaw === "object" && !Array.isArray(statusCountsRaw)) {
+    for (const [key, value] of Object.entries(statusCountsRaw)) {
+      statusCounts[key] = Number(value);
+    }
+  }
+  return {
+    sheetName: String(raw.sheetName ?? raw.sheet_name ?? ""),
+    totalRows: Number(raw.totalRows ?? raw.total_rows ?? 0),
+    filledCount: Number(raw.filledCount ?? raw.filled_count ?? 0),
+    notFoundCount: Number(raw.notFoundCount ?? raw.not_found_count ?? 0),
+    ambiguousCount: Number(raw.ambiguousCount ?? raw.ambiguous_count ?? 0),
+    skippedExistingCount: Number(raw.skippedExistingCount ?? raw.skipped_existing_count ?? 0),
+    invalidSourceCount: Number(raw.invalidSourceCount ?? raw.invalid_source_count ?? 0),
+    statusCounts,
+    decisions: Array.isArray(decisionsRaw)
+      ? decisionsRaw
+        .filter((item): item is Record<string, unknown> => Boolean(item) && typeof item === "object" && !Array.isArray(item))
+        .map(mapCocFillDecision)
+      : [],
+    previewLimit: nullableNumber(raw.previewLimit ?? raw.preview_limit) ?? undefined,
+    truncated: Boolean(raw.truncated),
+  };
+}
+
+function mapCocFillJob(raw: Record<string, unknown>): CocFillJob {
+  const statusCountsRaw = raw.statusCounts ?? raw.status_counts;
+  const decisionsRaw = raw.decisions;
+  const previewGroupsRaw = raw.previewGroups ?? raw.preview_groups;
+  const sheetNamesRaw = raw.sheetNames ?? raw.sheet_names;
+  const statusCounts: Record<string, number> = {};
+  if (statusCountsRaw && typeof statusCountsRaw === "object" && !Array.isArray(statusCountsRaw)) {
+    for (const [key, value] of Object.entries(statusCountsRaw)) {
+      statusCounts[key] = Number(value);
+    }
+  }
+  return {
+    jobId: String(raw.jobId ?? raw.job_id ?? ""),
+    jobType: String(raw.jobType ?? raw.job_type ?? "fill"),
+    status: String(raw.status ?? ""),
+    phase: String(raw.phase ?? ""),
+    excelFilename: String(raw.excelFilename ?? raw.excel_filename ?? ""),
+    pdfFilename: String(raw.pdfFilename ?? raw.pdf_filename ?? ""),
+    overwriteExisting: Boolean(raw.overwriteExisting ?? raw.overwrite_existing),
+    conflictStrategy: String(raw.conflictStrategy ?? raw.conflict_strategy ?? "strict"),
+    includeResultSheet: Boolean(raw.includeResultSheet ?? raw.include_result_sheet),
+    sheetNames: Array.isArray(sheetNamesRaw) ? sheetNamesRaw.map((item) => String(item)).filter(Boolean) : [],
+    totalRows: nullableNumber(raw.totalRows ?? raw.total_rows),
+    uniqueMaterialCount: nullableNumber(raw.uniqueMaterialCount ?? raw.unique_material_count),
+    pdfRecordCount: nullableNumber(raw.pdfRecordCount ?? raw.pdf_record_count),
+    filledCount: nullableNumber(raw.filledCount ?? raw.filled_count),
+    notFoundCount: nullableNumber(raw.notFoundCount ?? raw.not_found_count),
+    ambiguousCount: nullableNumber(raw.ambiguousCount ?? raw.ambiguous_count),
+    skippedExistingCount: nullableNumber(raw.skippedExistingCount ?? raw.skipped_existing_count),
+    invalidSourceCount: nullableNumber(raw.invalidSourceCount ?? raw.invalid_source_count),
+    sheetCount: nullableNumber(raw.sheetCount ?? raw.sheet_count),
+    statusCounts,
+    decisions: Array.isArray(decisionsRaw)
+      ? decisionsRaw
+        .filter((item): item is Record<string, unknown> => Boolean(item) && typeof item === "object" && !Array.isArray(item))
+        .map(mapCocFillDecision)
+      : [],
+    previewGroups: Array.isArray(previewGroupsRaw)
+      ? previewGroupsRaw
+        .filter((item): item is Record<string, unknown> => Boolean(item) && typeof item === "object" && !Array.isArray(item))
+        .map(mapCocFillPreviewGroup)
+      : [],
+    outputFilename: nullableString(raw.outputFilename ?? raw.output_filename),
+    triggeredBy: String(raw.triggeredBy ?? raw.triggered_by ?? ""),
+    error: raw.error === undefined || raw.error === null ? null : String(raw.error),
+    createdAt: String(raw.createdAt ?? raw.created_at ?? ""),
+    startedAt: nullableString(raw.startedAt ?? raw.started_at),
+    finishedAt: nullableString(raw.finishedAt ?? raw.finished_at),
+  };
+}
+
 function mapMaterialUploadSession(raw: Record<string, unknown>): MaterialUploadSession {
   const uploadedRaw = raw.uploadedChunks ?? raw.uploaded_chunks;
   return {
@@ -1061,6 +1226,94 @@ function mapMaterialUploadPreview(raw: Record<string, unknown>): MaterialUploadP
         .map(mapMaterialUploadPreviewRow)
       : [],
     warnings: Array.isArray(warningsRaw) ? warningsRaw.map((item) => String(item)) : [],
+  };
+}
+
+function mapCountryMaterialFinanceRow(raw: Record<string, unknown>): CountryMaterialFinanceRow {
+  const sourcePayloadRaw = raw.sourcePayload ?? raw.source_payload;
+  return {
+    financeId: nullableString(raw.financeId ?? raw.finance_id),
+    countryCode: String(raw.countryCode ?? raw.country_code ?? ""),
+    materialCode: String(raw.materialCode ?? raw.material_code ?? ""),
+    brand: String(raw.brand ?? ""),
+    modelName: String(raw.modelName ?? raw.model_name ?? ""),
+    version: String(raw.version ?? ""),
+    powertrain: nullableString(raw.powertrain),
+    colour: String(raw.colour ?? ""),
+    colourCode: String(raw.colourCode ?? raw.colour_code ?? ""),
+    bomTemplate: nullableString(raw.bomTemplate ?? raw.bom_template),
+    bomFobEur: nullableNumber(raw.bomFobEur ?? raw.bom_fob_eur),
+    fobEur: nullableNumber(raw.fobEur ?? raw.fob_eur),
+    retailPriceEur: nullableNumber(raw.retailPriceEur ?? raw.retail_price_eur),
+    wholesalePriceEur: nullableNumber(raw.wholesalePriceEur ?? raw.wholesale_price_eur),
+    dealerPriceEur: nullableNumber(raw.dealerPriceEur ?? raw.dealer_price_eur),
+    costEur: nullableNumber(raw.costEur ?? raw.cost_eur),
+    marginEur: nullableNumber(raw.marginEur ?? raw.margin_eur),
+    marginRate: nullableNumber(raw.marginRate ?? raw.margin_rate),
+    vehicleMarginEur: nullableNumber(raw.vehicleMarginEur ?? raw.vehicle_margin_eur),
+    vehicleMarginRate: nullableNumber(raw.vehicleMarginRate ?? raw.vehicle_margin_rate),
+    vehicleProfitEur: nullableNumber(raw.vehicleProfitEur ?? raw.vehicle_profit_eur),
+    vehicleProfitRate: nullableNumber(raw.vehicleProfitRate ?? raw.vehicle_profit_rate),
+    fobDeltaEur: nullableNumber(raw.fobDeltaEur ?? raw.fob_delta_eur),
+    marginDeltaEur: nullableNumber(raw.marginDeltaEur ?? raw.margin_delta_eur),
+    memo: nullableString(raw.memo),
+    sourceMode: nullableString(raw.sourceMode ?? raw.source_mode),
+    sourcePayload: sourcePayloadRaw && typeof sourcePayloadRaw === "object" && !Array.isArray(sourcePayloadRaw)
+      ? sourcePayloadRaw as Record<string, unknown>
+      : null,
+    updatedBy: nullableString(raw.updatedBy ?? raw.updated_by),
+    updatedAtUtc: nullableString(raw.updatedAtUtc ?? raw.updated_at_utc),
+  };
+}
+
+function mapCountryMaterialFinanceImportRow(raw: Record<string, unknown>): CountryMaterialFinanceImportRow {
+  const updateRaw = raw.update;
+  return {
+    lineNumber: Number(raw.lineNumber ?? raw.line_number ?? 0),
+    materialCode: String(raw.materialCode ?? raw.material_code ?? ""),
+    update: updateRaw && typeof updateRaw === "object" && !Array.isArray(updateRaw)
+      ? updateRaw as CountryMaterialFinanceUpdate
+      : null,
+    error: String(raw.error ?? ""),
+  };
+}
+
+function mapCountryMaterialFinanceImportPreview(raw: Record<string, unknown>): CountryMaterialFinanceImportPreview {
+  const rowsRaw = raw.rows;
+  const warningsRaw = raw.warnings;
+  return {
+    rows: Array.isArray(rowsRaw)
+      ? rowsRaw
+        .filter((item): item is Record<string, unknown> => Boolean(item) && typeof item === "object")
+        .map(mapCountryMaterialFinanceImportRow)
+      : [],
+    warnings: Array.isArray(warningsRaw) ? warningsRaw.map((item) => String(item)) : [],
+  };
+}
+
+function mapCountryMaterialFinanceHistoryItem(raw: Record<string, unknown>): CountryMaterialFinanceHistoryItem {
+  const oldValuesRaw = raw.oldValues ?? raw.old_values;
+  const newValuesRaw = raw.newValues ?? raw.new_values;
+  const changedFieldsRaw = raw.changedFields ?? raw.changed_fields;
+  const sourcePayloadRaw = raw.sourcePayload ?? raw.source_payload;
+  return {
+    historyId: String(raw.historyId ?? raw.history_id ?? ""),
+    financeId: nullableString(raw.financeId ?? raw.finance_id),
+    countryCode: String(raw.countryCode ?? raw.country_code ?? ""),
+    materialCode: String(raw.materialCode ?? raw.material_code ?? ""),
+    oldValues: oldValuesRaw && typeof oldValuesRaw === "object" && !Array.isArray(oldValuesRaw)
+      ? oldValuesRaw as Record<string, unknown>
+      : null,
+    newValues: newValuesRaw && typeof newValuesRaw === "object" && !Array.isArray(newValuesRaw)
+      ? newValuesRaw as Record<string, unknown>
+      : {},
+    changedFields: Array.isArray(changedFieldsRaw) ? changedFieldsRaw.map((item) => String(item)) : [],
+    sourceMode: nullableString(raw.sourceMode ?? raw.source_mode),
+    sourcePayload: sourcePayloadRaw && typeof sourcePayloadRaw === "object" && !Array.isArray(sourcePayloadRaw)
+      ? sourcePayloadRaw as Record<string, unknown>
+      : null,
+    changedBy: nullableString(raw.changedBy ?? raw.changed_by),
+    changedAtUtc: nullableString(raw.changedAtUtc ?? raw.changed_at_utc),
   };
 }
 
@@ -1718,9 +1971,14 @@ export const api = {
 
   columns: () => request<{ items: string[] }>("/metadata/columns"),
   filterOptions: (payload: FilterOptionsPayload, init?: RequestInit) =>
-    request<{ column: string; options: string[] }>(
+    request<FilterOptionsResponse>(
       "/filters/options",
       { method: "POST", body: JSON.stringify(payload), ...init }
+    ),
+  filterOptionsBatch: (items: FilterOptionsPayload[], init?: RequestInit) =>
+    request<FilterOptionsBatchResponse>(
+      "/filters/options/batch",
+      { method: "POST", body: JSON.stringify({ items }), ...init }
     ),
   analysis: (payload: AnalysisQuery) =>
     request<{ route: string; rows: number; items: Record<string, unknown>[] }>(
@@ -1740,10 +1998,11 @@ export const api = {
     filters: Record<string, string[]>;
     prefer_precomputed: boolean;
     top_n: number;
-  }) =>
+  }, init?: RequestInit) =>
     request<OverviewResponse>("/analysis/overview", {
       method: "POST",
-      body: JSON.stringify(payload)
+      body: JSON.stringify(payload),
+      ...init,
     }),
   dataFreshness: () =>
     request<{ items: DataFreshnessItem[] }>("/analysis/data-freshness"),
@@ -1888,10 +2147,11 @@ export const api = {
     top_n: number;
     include_others: boolean;
     time_range?: { start: string; end: string };
-  }) =>
+  }, init?: RequestInit) =>
     request<GroupedTimeSeriesResponse>("/analysis/time-series-grouped", {
       method: "POST",
-      body: JSON.stringify(payload)
+      body: JSON.stringify(payload),
+      ...init,
     }),
   modelVersions: (payload: {
     filters: Record<string, string[]>;
@@ -1946,6 +2206,22 @@ export const api = {
     request<VersionComparisonDeckResponse>("/market-scan/version-comparison-deck", {
       method: "POST",
       body: JSON.stringify(payload)
+    }),
+  heroProductDeck: (payload: HeroProductDeckRequest = {}, signal?: AbortSignal) =>
+    request<HeroProductDeckResponse>("/market-scan/hero-product-deck", {
+      method: "POST",
+      body: JSON.stringify(payload),
+      signal,
+    }),
+  patchHeroProductPrice: (payload: HeroProductPriceOverridePayload) =>
+    request<{ item: Record<string, unknown> }>("/market-scan/hero-product-price", {
+      method: "PATCH",
+      body: JSON.stringify(payload),
+    }),
+  patchHeroProductSpec: (payload: HeroProductSpecOverridePayload) =>
+    request<{ item: Record<string, unknown> }>("/market-scan/hero-product-spec", {
+      method: "PATCH",
+      body: JSON.stringify(payload),
     }),
   nordicCustomerDeck: (mode: CustomerInsightMode = "benchmark", countries?: string[]) => {
     const search = new URLSearchParams();
@@ -2104,6 +2380,48 @@ export const api = {
     request<HermesDeployStatusResponse>("/hermes/deploy/status"),
   hermesFullDesignDocument: () =>
     request<HermesFullDesignDocumentResponse>("/hermes/reports/full-design-document"),
+  hermesHistoryEvents: (params?: {
+    source?: string;
+    workstream?: string;
+    model?: string;
+    limit?: number;
+  }) => {
+    const search = new URLSearchParams();
+    if (params?.source) search.set("source", params.source);
+    if (params?.workstream) search.set("workstream", params.workstream);
+    if (params?.model) search.set("model", params.model);
+    if (params?.limit) search.set("limit", String(params.limit));
+    const q = search.toString();
+    return request<HermesHistoryEventsResponse>(`/hermes/history/events${q ? `?${q}` : ""}`);
+  },
+  hermesHistoryClusters: (params?: {
+    level?: HermesHistoryLevel;
+    yAxis?: HermesHistoryYAxis;
+    workstream?: string;
+    limit?: number;
+  }) => {
+    const search = new URLSearchParams();
+    if (params?.level) search.set("level", params.level);
+    if (params?.yAxis) search.set("yAxis", params.yAxis);
+    if (params?.workstream) search.set("workstream", params.workstream);
+    if (params?.limit) search.set("limit", String(params.limit));
+    const q = search.toString();
+    return request<HermesHistoryClustersResponse>(`/hermes/history/clusters${q ? `?${q}` : ""}`);
+  },
+  hermesProgressFeatures: () =>
+    request<HermesProgressFeature[]>("/hermes/progress/features"),
+  hermesProgressSwimlanes: () =>
+    request<HermesProgressSwimlaneResponse>("/hermes/progress/swimlanes"),
+  hermesWorkflowCockpit: () =>
+    request<HermesWorkflowCockpitResponse>("/hermes/workflow/cockpit"),
+  hermesGoalFeatures: () =>
+    request<HermesFeatureGoalsResponse>("/hermes/goals/features"),
+  hermesGoalFeature: (featureId: string) =>
+    request<HermesFeatureGoal>(`/hermes/goals/features/${encodeURIComponent(featureId)}`),
+  hermesGoalSwimlanes: () =>
+    request<HermesFeatureGoalSwimlanesResponse>("/hermes/goals/swimlanes"),
+  hermesReuseCandidates: (featureId: string) =>
+    request<HermesReuseCandidatesResponse>(`/hermes/reuse/candidates?featureId=${encodeURIComponent(featureId)}`),
 
   /* ── Hermes Chat ──────────────────────────────── */
   hermesChat: (payload: HermesChatRequest) =>
@@ -3317,6 +3635,177 @@ export const api = {
       { method: "POST" }
     ).then((res) => ({ item: mapCocMatchJob(res.item) })),
 
+  cocFillCreateJob: (
+    excel: File,
+    pdf: File,
+    options?: { overwriteExisting?: boolean; conflictStrategy?: string; includeResultSheet?: boolean; sheetNames?: string[] },
+  ) => {
+    const fd = new FormData();
+    fd.append("excel", excel);
+    fd.append("pdf", pdf);
+    fd.append("overwrite_existing", String(Boolean(options?.overwriteExisting)));
+    fd.append("conflict_strategy", options?.conflictStrategy || "strict");
+    fd.append("include_result_sheet", String(Boolean(options?.includeResultSheet)));
+    if (options?.sheetNames?.length) {
+      fd.append("sheet_names", options.sheetNames.join(","));
+    }
+    return request<{ item: Record<string, unknown> }>("/coc-match/fill/jobs", {
+      method: "POST",
+      body: fd,
+    }).then((res) => ({ item: mapCocFillJob(res.item) }));
+  },
+
+  cocFillInitiateUpload: (
+    filename: string,
+    sizeBytes: number,
+    resumeKey?: string,
+  ) =>
+    request<{ item: Record<string, unknown> }>(
+      "/coc-match/fill/upload-sessions/initiate",
+      {
+        method: "POST",
+        body: JSON.stringify({
+          filename,
+          sizeBytes,
+          resumeKey: resumeKey || undefined,
+        }),
+      }
+    ).then((res) => res.item),
+
+  cocFillUploadChunk: async (
+    uploadId: string,
+    partNumber: number,
+    blob: Blob,
+  ): Promise<Record<string, unknown>> => {
+    const sha256 = await crypto.subtle.digest("SHA-256", await blob.arrayBuffer())
+      .then((buf) => Array.from(new Uint8Array(buf)).map((b) => b.toString(16).padStart(2, "0")).join(""));
+    return request<{ item: Record<string, unknown> }>(
+      `/coc-match/fill/upload-sessions/${uploadId}/parts/${partNumber}`,
+      {
+        method: "PUT",
+        body: blob,
+        headers: { "X-Chunk-SHA256": sha256, "Content-Type": "application/octet-stream" },
+      }
+    ).then((res) => res.item);
+  },
+
+  cocFillCompleteUpload: (uploadId: string) =>
+    request<{ item: Record<string, unknown> }>(
+      `/coc-match/fill/upload-sessions/${uploadId}/complete`,
+      { method: "POST" }
+    ).then((res) => res.item),
+
+  cocFillCreateJobFromUpload: (
+    excelUploadId: string,
+    pdfUploadId: string,
+    excelFilename: string,
+    pdfFilename: string,
+    options?: { overwriteExisting?: boolean; conflictStrategy?: string; includeResultSheet?: boolean; sheetNames?: string[] },
+  ) => request<{ item: Record<string, unknown> }>("/coc-match/fill/jobs/batch", {
+    method: "POST",
+    body: JSON.stringify({
+      excelUploadId,
+      pdfUploadId,
+      excelFilename,
+      pdfFilename,
+      overwriteExisting: Boolean(options?.overwriteExisting),
+      conflictStrategy: options?.conflictStrategy || "strict",
+      includeResultSheet: Boolean(options?.includeResultSheet),
+      sheetNames: options?.sheetNames || [],
+    }),
+  }).then((res) => ({ item: mapCocFillJob(res.item) })),
+
+  cocFillUploadAndCreateJob: async (
+    excel: File,
+    pdf: File,
+    options?: { overwriteExisting?: boolean; conflictStrategy?: string; includeResultSheet?: boolean; sheetNames?: string[] },
+  ): Promise<{ item: CocFillJob }> => {
+    const CHUNK_THRESHOLD = 50 * 1024 * 1024;
+    const CHUNK_SIZE = 8 * 1024 * 1024;
+    if (excel.size < CHUNK_THRESHOLD && pdf.size < CHUNK_THRESHOLD) {
+      return api.cocFillCreateJob(excel, pdf, options);
+    }
+
+    const uploadFile = async (file: File): Promise<string> => {
+      const session = await api.cocFillInitiateUpload(
+        file.name,
+        file.size,
+        `coc-fill-resume-${file.name}-${file.size}`,
+      );
+      const uploadId = String(session.uploadId ?? "");
+      const received: number[] = Array.isArray(session.receivedChunks)
+        ? session.receivedChunks.map((item) => Number(item))
+        : [];
+      const totalChunks = Number(session.totalChunks ?? 1);
+      for (let i = 1; i <= totalChunks; i++) {
+        if (received.includes(i)) continue;
+        const start = (i - 1) * CHUNK_SIZE;
+        const end = Math.min(start + CHUNK_SIZE, file.size);
+        await api.cocFillUploadChunk(uploadId, i, file.slice(start, end));
+      }
+      await api.cocFillCompleteUpload(uploadId);
+      return uploadId;
+    };
+
+    const excelUploadId = await uploadFile(excel);
+    const pdfUploadId = await uploadFile(pdf);
+    return api.cocFillCreateJobFromUpload(
+      excelUploadId,
+      pdfUploadId,
+      excel.name,
+      pdf.name,
+      options,
+    );
+  },
+
+  cocFillListJobs: (limit = 50) =>
+    request<{ items: Record<string, unknown>[] }>(
+      `/coc-match/fill/jobs?limit=${encodeURIComponent(String(limit))}`
+    ).then((res) => ({ items: res.items.map(mapCocFillJob) })),
+
+  cocFillGetJob: (jobId: string) =>
+    request<{ item: Record<string, unknown> }>(`/coc-match/fill/jobs/${jobId}`)
+      .then((res) => ({ item: mapCocFillJob(res.item) })),
+
+  cocFillApplyOverrides: (
+    jobId: string,
+    overrides: Array<{
+      sheetName: string;
+      rowNumber: number;
+      materialGroup: string;
+      wvtaNo: string;
+      cocNo: string;
+      pageNumber?: number;
+      tableRowNumber?: number;
+    }>,
+  ) =>
+    request<{ item: Record<string, unknown> }>(
+      `/coc-match/fill/jobs/${encodeURIComponent(jobId)}/overrides`,
+      {
+        method: "POST",
+        body: JSON.stringify({ overrides }),
+      },
+    ).then((res) => ({ item: mapCocFillJob(res.item) })),
+
+  cocFillRevertOverrides: (
+    jobId: string,
+    overrides: Array<{
+      sheetName: string;
+      rowNumber: number;
+      materialGroup: string;
+    }>,
+  ) =>
+    request<{ item: Record<string, unknown> }>(
+      `/coc-match/fill/jobs/${encodeURIComponent(jobId)}/overrides/revert`,
+      {
+        method: "POST",
+        body: JSON.stringify({ overrides }),
+      },
+    ).then((res) => ({ item: mapCocFillJob(res.item) })),
+
+  cocFillGetWorkbook: (jobId: string) =>
+    requestBlob(`/coc-match/fill/jobs/${encodeURIComponent(jobId)}/workbook`),
+
   // ── Order Genius ────────────────────────────────────────────────
 
   initiateMaterialMasterUpload: (fileName: string, totalSize: number) =>
@@ -3406,11 +3895,35 @@ export const api = {
     );
   },
 
-  updateQuantityCell: (payload: QuantityCellUpdate) =>
-    request<QuantityCellResponse>("/order-genius/quantity-cell", {
+  getOrderGeniusMatrixBatch: (params: {
+    countries: string[];
+    year: number;
+    brand?: string;
+    model?: string;
+    powertrain?: string;
+    version?: string;
+    colour?: string;
+    materialCodeSearch?: string;
+  }) =>
+    request<MatrixBatchResponse>("/order-genius/matrix/batch", {
+      method: "POST",
+      body: JSON.stringify({
+        countries: params.countries,
+        year: params.year,
+        brand: params.brand,
+        model: params.model,
+        powertrain: params.powertrain,
+        version: params.version,
+        colour: params.colour,
+        materialCodeSearch: params.materialCodeSearch,
+      }),
+    }),
+
+  updateQuantityCell: async (payload: QuantityCellUpdate) =>
+    normalizeQuantityCellResponse(await request<Record<string, unknown>>("/order-genius/quantity-cell", {
       method: "PATCH",
       body: JSON.stringify(payload),
-    }),
+    })),
 
   updateSkuRemark: (materialCode: string, payload: RemarkUpdate) =>
     request<RemarkResponse>(
@@ -3423,6 +3936,91 @@ export const api = {
       `/order-genius/material-skus/${encodeURIComponent(materialCode)}/fob?country=${encodeURIComponent(country)}`,
     ),
 
+  listCountryMaterialFinance: (params: {
+    country: string;
+    brand?: string;
+    model?: string;
+    powertrain?: string;
+    version?: string;
+    materialCodes?: string[];
+  }) => {
+    const qs = new URLSearchParams({ country: params.country });
+    if (params.brand) qs.set("brand", params.brand);
+    if (params.model) qs.set("model", params.model);
+    if (params.powertrain) qs.set("powertrain", params.powertrain);
+    if (params.version) qs.set("version", params.version);
+    for (const materialCode of params.materialCodes || []) {
+      qs.append("material_code", materialCode);
+    }
+    return request<{ items: Record<string, unknown>[] }>(
+      `/order-genius/country-material-finance?${qs.toString()}`,
+    ).then((response) => ({
+      items: response.items.map(mapCountryMaterialFinanceRow),
+    }));
+  },
+
+  getCountryMaterialFinanceOptions: (params: {
+    country: string;
+    brand?: string;
+    model?: string;
+    powertrain?: string;
+    version?: string;
+  }) => {
+    const qs = new URLSearchParams({ country: params.country });
+    if (params.brand) qs.set("brand", params.brand);
+    if (params.model) qs.set("model", params.model);
+    if (params.powertrain) qs.set("powertrain", params.powertrain);
+    if (params.version) qs.set("version", params.version);
+    return request<OrderGeniusOptions>(
+      `/order-genius/country-material-finance/options?${qs.toString()}`,
+    );
+  },
+
+  listCountryMaterialFinanceHistory: (params: {
+    country: string;
+    materialCode: string;
+    limit?: number;
+  }) => {
+    const qs = new URLSearchParams({
+      country: params.country,
+      material_code: params.materialCode,
+    });
+    if (params.limit) qs.set("limit", String(params.limit));
+    return request<{ items: Record<string, unknown>[] }>(
+      `/order-genius/country-material-finance/history?${qs.toString()}`,
+    ).then((response) => ({
+      items: response.items.map(mapCountryMaterialFinanceHistoryItem),
+    }));
+  },
+
+  previewCountryMaterialFinanceImport: (country: string, payload: { file?: File; text?: string }) => {
+    const formData = new FormData();
+    formData.set("country", country);
+    if (payload.file) formData.set("file", payload.file);
+    if (payload.text) formData.set("text", payload.text);
+    return request<Record<string, unknown>>(
+      "/order-genius/country-material-finance/import-preview",
+      {
+        method: "POST",
+        body: formData,
+      },
+    ).then(mapCountryMaterialFinanceImportPreview);
+  },
+
+  getMaterialCountryFinance: (materialCode: string, country: string) =>
+    request<Record<string, unknown>>(
+      `/order-genius/material-skus/${encodeURIComponent(materialCode)}/country-finance?country=${encodeURIComponent(country)}`,
+    ).then(mapCountryMaterialFinanceRow),
+
+  updateMaterialCountryFinance: (materialCode: string, payload: CountryMaterialFinanceUpdate) =>
+    request<Record<string, unknown>>(
+      `/order-genius/material-skus/${encodeURIComponent(materialCode)}/country-finance`,
+      {
+        method: "PATCH",
+        body: JSON.stringify(payload),
+      },
+    ).then(mapCountryMaterialFinanceRow),
+
   exportOrderGenius: (country: string, year: number, opts?: { brand?: string; model?: string; powertrain?: string; version?: string; colour?: string; materialCodeSearch?: string; selectedMonth?: number; hideEmptyRows?: boolean; quantitiesOnly?: boolean }) =>
     requestBlob("/order-genius/export", {
       method: "POST",
@@ -3430,7 +4028,7 @@ export const api = {
       headers: { "Content-Type": "application/json" },
     }),
 
-  exportOrderGeniusPi: (country: string, year: number, opts?: { brand?: string; model?: string; powertrain?: string; version?: string; colour?: string; materialCodeSearch?: string; selectedMonth?: number; hideEmptyRows?: boolean }) =>
+  exportOrderGeniusPi: (country: string, year: number, opts?: { brand?: string; model?: string; powertrain?: string; version?: string; colour?: string; materialCodeSearch?: string; selectedMonth?: number; hideEmptyRows?: boolean; freightEur?: number; insuranceEur?: number }) =>
     requestBlob("/order-genius/export-pi", {
       method: "POST",
       body: JSON.stringify({ country, year, ...opts }),
@@ -3465,6 +4063,9 @@ export const api = {
 
   getAccountCountryOptions: () =>
     request<{ items: CountryPaymentTerm[] }>("/order-genius/account-country-options"),
+
+  getOrderGeniusFobCountries: () =>
+    request<{ countries: string[] }>("/order-genius/fob-countries"),
 
   getOrderGeniusBaselines: () =>
     request<{ items: BaselineVersion[] }>("/order-genius/baselines"),
@@ -3548,6 +4149,13 @@ export const api = {
     appendSearchParam(qs, "vin", params.vin);
     appendSearchParam(qs, "material_code", params.materialCode);
     appendSearchParam(qs, "bom", params.bom);
+    appendSearchParam(qs, "brand", params.brand);
+    appendSearchParam(qs, "model_name", params.modelName);
+    appendSearchParam(qs, "version", params.version);
+    appendSearchParam(qs, "powertrain", params.powertrain);
+    appendSearchParam(qs, "exterior_color_name", params.exteriorColorName);
+    appendSearchParam(qs, "interior_color_name", params.interiorColorName);
+    appendSearchParam(qs, "order_month", params.orderMonth);
     appendSearchParam(qs, "country", params.country);
     appendSearchParam(qs, "ship_name", params.shipName);
     appendSearchParam(qs, "allocation_status", params.allocationStatus);
@@ -3631,32 +4239,44 @@ export const api = {
   // BOM Admin
   getBomAdmin: (params?: { brand?: string; search?: string; country?: string }) => {
     const qs = params ? new URLSearchParams(Object.entries(params).filter(([_,v]) => v != null) as any).toString() : "";
-    return request<{ items: any[]; countries: string[] }>("/order-genius/bom-admin" + (qs ? "?" + qs : ""));
+    return request<{ items: any[]; countries: string[]; activeFobCountries?: string[] }>("/order-genius/bom-admin" + (qs ? "?" + qs : ""));
   },
 
   updateSkuLifecycle: (materialCode: string, body: { lifecycleStatus: string; effectiveFrom?: string; effectiveTo?: string; rowVersion: number }) =>
     request<any>(`/order-genius/material-skus/${encodeURIComponent(materialCode)}/lifecycle`, { method: "PATCH", body: JSON.stringify(body) }),
 
-  updateSkuFob: (materialCode: string, body: { countryCode: string; finalFobEur: number; paymentTermCode?: string }) =>
+  updateSkuFob: (materialCode: string, body: { countryCode: string; finalFobEur?: number | null; paymentTermCode?: string }) =>
     request<any>(`/order-genius/material-skus/${encodeURIComponent(materialCode)}/fob`, { method: "PATCH", body: JSON.stringify(body) }),
 
   getSkuFobDetail: (materialCode: string, country: string) =>
     request<any>(`/order-genius/material-skus/${encodeURIComponent(materialCode)}/fob?country=${encodeURIComponent(country)}`),
 
-  copyCountryFobs: (body: { sourceCountryCode: string; targetCountryCode: string; overwrite: boolean }) =>
-    request<{ sourceCountryCode: string; targetCountryCode: string; totalSourceRows: number; copied: number; updated: number; skipped: number; overwrite: boolean }>(
+  copyCountryFobs: (body: { sourceCountryCode: string; targetCountryCode: string; overwriteExisting?: boolean }) =>
+    request<{ sourceCountryCode: string; targetCountryCode: string; sourceRows: number; created: number; updated: number; skipped: number; unchanged: number; targetPaymentTermCode: string | null }>(
       "/order-genius/countries/copy-fobs",
+      { method: "POST", body: JSON.stringify(body) },
+    ),
+
+  adjustCountryFobs: (body: { countryCode: string; deltaEur: number }) =>
+    request<{ countryCode: string; deltaEur: number; rows: number; adjusted: number; skippedNegative: number; unchanged: number }>(
+      "/order-genius/countries/adjust-fobs",
       { method: "POST", body: JSON.stringify(body) },
     ),
 
   createPaymentTerm: (body: { countryCode: string; countryName: string; paymentTermCode: string; paymentMethod: string; lcDays: number }) =>
     request<any>("/order-genius/payment-terms/countries", { method: "POST", body: JSON.stringify(body) }),
 
-  createMaterialSku: (body: { materialCode: string; brand?: string; modelName?: string; version?: string; colour?: string; colourCode?: string; colourHex?: string | null; colourType?: string; powertrain?: string }) =>
+  createMaterialSku: (body: { materialCode: string; brand?: string; modelName?: string; version?: string; colour?: string; colourCode?: string; colourHex?: string | null; colourType?: string; colourTier?: string; powertrain?: string; bomTemplate?: string; sourceBomTemplate?: string }) =>
     request<any>("/order-genius/material-skus", { method: "POST", body: JSON.stringify(body) }),
 
-  updateSkuMetadata: (materialCode: string, body: { brand: string; modelName: string; version: string; powertrain: string; rowVersion: number }) =>
-    request<{ materialCode: string; brand: string; modelName: string; version: string; powertrain: string | null; rowVersion: number }>(
+  syncBomTemplateFobs: (body: { bomTemplate: string; materialCodes?: string[]; repriceExistingColourSurcharges?: boolean }) =>
+    request<{ bomTemplate: string; created: number; repriced: number; skippedExisting: number; skippedCleared: number; skippedNoSource: number; unchanged: number }>(
+      "/order-genius/bom-templates/sync-fobs",
+      { method: "POST", body: JSON.stringify(body) },
+    ),
+
+  updateSkuMetadata: (materialCode: string, body: { materialCodes?: string[]; brand?: string; modelName?: string; version?: string; powertrain?: string }) =>
+    request<{ materialCodes: string[]; updated: number }>(
       `/order-genius/material-skus/${encodeURIComponent(materialCode)}/metadata`,
       { method: "PATCH", body: JSON.stringify(body) },
     ),
@@ -3667,11 +4287,17 @@ export const api = {
   confirmColourCode: (materialCode: string) =>
     request<any>(`/order-genius/material-skus/${encodeURIComponent(materialCode)}/confirm-colour-code`, { method: "PATCH" }),
 
-  updateColourCode: (materialCode: string, colourCode: string) =>
-    request<any>(`/order-genius/material-skus/${encodeURIComponent(materialCode)}/colour-code`, { method: "PATCH", body: JSON.stringify({ colourCode }) }),
+  updateColourCode: (materialCode: string, body: { colourCode: string; colourName?: string; colourHex?: string | null }) =>
+    request<any>(`/order-genius/material-skus/${encodeURIComponent(materialCode)}/colour-code`, { method: "PATCH", body: JSON.stringify(body) }),
 
   updateMaterialCode: (oldCode: string, newCode: string) =>
     request<any>(`/order-genius/material-skus/${encodeURIComponent(oldCode)}/material-code`, { method: "PATCH", body: JSON.stringify({ materialCode: newCode }) }),
+
+  updateBomTemplateMaterialCode: (materialCodes: string[], bomTemplate: string) =>
+    request<{ bomTemplate: string; materialCodes: string[]; updated: number }>(
+      "/order-genius/bom-templates/material-code",
+      { method: "PATCH", body: JSON.stringify({ materialCodes, bomTemplate }) },
+    ),
 
   updateColourTier: (materialCode: string, colourTier: string) =>
     request<any>(`/order-genius/material-skus/${encodeURIComponent(materialCode)}/colour-tier`, { method: "PATCH", body: JSON.stringify({ colourTier }) }),

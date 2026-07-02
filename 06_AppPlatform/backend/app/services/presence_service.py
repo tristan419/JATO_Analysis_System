@@ -30,6 +30,7 @@ class PresenceStore:
         user_name: str,
         current_page: str,
         role: str = "anonymous",
+        include_users: bool = True,
     ) -> dict:
         with self._lock:
             self._cleanup()
@@ -40,12 +41,16 @@ class PresenceStore:
                 role=role,
             )
             self._sessions[session_id] = session
-            return self._snapshot(current_page)
+            return self._snapshot(current_page, include_users=include_users)
 
-    def get_online(self, current_page: str | None = None) -> dict:
+    def get_online(
+        self,
+        current_page: str | None = None,
+        include_users: bool = True,
+    ) -> dict:
         with self._lock:
             self._cleanup()
-            return self._snapshot(current_page)
+            return self._snapshot(current_page, include_users=include_users)
 
     def _cleanup(self) -> None:
         now = time.time()
@@ -57,27 +62,34 @@ class PresenceStore:
         for sid in expired:
             del self._sessions[sid]
 
-    def _snapshot(self, current_page: str | None = None) -> dict:
+    def _snapshot(
+        self,
+        current_page: str | None = None,
+        include_users: bool = True,
+    ) -> dict:
         now = time.time()
-        users = [
-            {
-                "user_name": s.user_name,
-                "role": s.role,
-                "current_page": s.current_page,
-                "last_seen_ago_s": int(now - s.last_seen),
-            }
-            for s in self._sessions.values()
-        ]
+        sessions = list(self._sessions.values())
         same_page = (
-            sum(1 for u in users if u["current_page"] == current_page)
+            sum(1 for session in sessions if session.current_page == current_page)
             if current_page
             else 0
         )
-        return {
-            "online": len(users),
+        snapshot = {
+            "online": len(sessions),
             "same_page": same_page,
-            "users": sorted(users, key=lambda u: u["user_name"]),
         }
+        if include_users:
+            users = [
+                {
+                    "user_name": s.user_name,
+                    "role": s.role,
+                    "current_page": s.current_page,
+                    "last_seen_ago_s": int(now - s.last_seen),
+                }
+                for s in sessions
+            ]
+            snapshot["users"] = sorted(users, key=lambda u: u["user_name"])
+        return snapshot
 
 
 # Module-level singleton — survives between requests, dies on process restart

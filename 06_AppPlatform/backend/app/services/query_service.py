@@ -1,8 +1,13 @@
+from dataclasses import dataclass
 from uuid import uuid4
+import hashlib
 import io
+import json
+import logging
 import re
 import threading
 import time
+from pathlib import Path
 from typing import Literal
 
 import numpy as np
@@ -11,9 +16,24 @@ import pandas as pd
 from app.core.config import (
     DEFAULT_GROUP_BY,
     FILTER_OPTIONS_SNAPSHOT_TTL_SECONDS,
+    GROUPED_TIME_SERIES_CACHE_MAX_ENTRIES,
+    GROUPED_TIME_SERIES_CACHE_TTL_SECONDS,
+    GROUPED_TIME_SERIES_PERSISTENT_CACHE_DIR,
+    GROUPED_TIME_SERIES_PERSISTENT_CACHE_ENABLED,
+    GROUPED_TIME_SERIES_PREWARM_FILTERS,
+    GROUPED_TIME_SERIES_PREWARM_GRAINS,
+    GROUPED_TIME_SERIES_PREWARM_GROUP_BY,
+    GROUPED_TIME_SERIES_PREWARM_SCOPES,
 )
 from app.infra import parquet_repository as repo
 
+LOGGER = logging.getLogger(__name__)
+
+
+@dataclass(frozen=True)
+class GroupedTimeSeriesQueryResult:
+    payload: dict
+    cache_state: Literal["MEMORY", "DISK", "INFLIGHT", "MISS"]
 
 # ── Column name candidates ──────────────────────────────────────
 COUNTRY_CANDIDATES = ["国家", "Country", "country"]
@@ -62,6 +82,7 @@ TOP_LEVEL_FILTER_CANDIDATE_SETS = [
     SEGMENT_CANDIDATES,
     POWERTRAIN_CANDIDATES,
 ]
+_GROUPED_TIME_SERIES_DISK_CACHE_SCHEMA = 1
 
 _top_level_filter_options_cache: (
     tuple[float, str, dict[str, list[str]]] | None
@@ -77,6 +98,205 @@ _overview_cache: dict[
     tuple[float, str, dict],
 ] = {}
 _overview_cache_lock = threading.Lock()
+_GroupedTimeSeriesCacheKey = tuple[
+    str,
+    tuple[tuple[str, tuple[str, ...]], ...],
+    str,
+    str | None,
+    str | None,
+    int,
+    bool,
+    tuple[str, str] | None,
+]
+
+_grouped_time_series_cache: dict[
+    _GroupedTimeSeriesCacheKey,
+    tuple[float, str, dict],
+] = {}
+_grouped_time_series_inflight: dict[
+    _GroupedTimeSeriesCacheKey,
+    threading.Event,
+] = {}
+_grouped_time_series_cache_lock = threading.Lock()
+
+
+def _normalize_cache_scope(cache_scope: str | None) -> str:
+    return str(cache_scope or "viewer").strip().lower() or "viewer"
+
+
+def _grouped_time_series_disk_payload_key(
+    cache_key: _GroupedTimeSeriesCacheKey,
+    dataset_token: str,
+) -> dict[str, object]:
+    return {
+        "schema": _GROUPED_TIME_SERIES_DISK_CACHE_SCHEMA,
+        "dataset": dataset_token,
+        "cacheKey": cache_key,
+    }
+
+
+def _grouped_time_series_disk_cache_path(
+    cache_key: _GroupedTimeSeriesCacheKey,
+    dataset_token: str,
+) -> Path:
+    payload_key = _grouped_time_series_disk_payload_key(cache_key, dataset_token)
+    digest = hashlib.sha256(
+        json.dumps(payload_key, ensure_ascii=False, sort_keys=True).encode("utf-8")
+    ).hexdigest()
+    return GROUPED_TIME_SERIES_PERSISTENT_CACHE_DIR / f"{digest}.json"
+
+
+def _read_grouped_time_series_disk_cache(
+    cache_key: _GroupedTimeSeriesCacheKey,
+    dataset_token: str,
+    now_epoch: float,
+) -> dict | None:
+    if not GROUPED_TIME_SERIES_PERSISTENT_CACHE_ENABLED:
+        return None
+    cache_path = _grouped_time_series_disk_cache_path(cache_key, dataset_token)
+    try:
+        if not cache_path.exists():
+            return None
+        payload = json.loads(cache_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+
+    if payload.get("schema") != _GROUPED_TIME_SERIES_DISK_CACHE_SCHEMA:
+        return None
+    if payload.get("dataset") != dataset_token:
+        return None
+    cached_at = float(payload.get("cachedAt", 0.0) or 0.0)
+    if (now_epoch - cached_at) >= GROUPED_TIME_SERIES_CACHE_TTL_SECONDS:
+        return None
+    result = payload.get("result")
+    return result if isinstance(result, dict) else None
+
+
+def _prune_grouped_time_series_disk_cache() -> None:
+    if not GROUPED_TIME_SERIES_PERSISTENT_CACHE_ENABLED:
+        return
+    try:
+        cache_files = sorted(
+            GROUPED_TIME_SERIES_PERSISTENT_CACHE_DIR.glob("*.json"),
+            key=lambda path: path.stat().st_mtime,
+        )
+    except OSError:
+        return
+    max_entries = max(1, int(GROUPED_TIME_SERIES_CACHE_MAX_ENTRIES))
+    overflow = len(cache_files) - max_entries
+    if overflow <= 0:
+        return
+    for path in cache_files[:overflow]:
+        try:
+            path.unlink()
+        except OSError:
+            continue
+
+
+def _write_grouped_time_series_disk_cache(
+    cache_key: _GroupedTimeSeriesCacheKey,
+    dataset_token: str,
+    result: dict,
+) -> None:
+    if not GROUPED_TIME_SERIES_PERSISTENT_CACHE_ENABLED:
+        return
+    try:
+        GROUPED_TIME_SERIES_PERSISTENT_CACHE_DIR.mkdir(parents=True, exist_ok=True)
+        cache_path = _grouped_time_series_disk_cache_path(cache_key, dataset_token)
+        tmp_path = cache_path.with_suffix(f".{uuid4().hex}.tmp")
+        tmp_path.write_text(
+            json.dumps(
+                {
+                    "schema": _GROUPED_TIME_SERIES_DISK_CACHE_SCHEMA,
+                    "dataset": dataset_token,
+                    "cachedAt": time.time(),
+                    "result": result,
+                },
+                ensure_ascii=False,
+                separators=(",", ":"),
+            ),
+            encoding="utf-8",
+        )
+        tmp_path.replace(cache_path)
+        _prune_grouped_time_series_disk_cache()
+    except OSError as exc:
+        LOGGER.warning("Could not write grouped time-series cache: %s", exc)
+
+
+def _get_grouped_time_series_cache_hit(
+    cache_key: _GroupedTimeSeriesCacheKey,
+    dataset_token: str,
+    now: float,
+) -> dict | None:
+    cached = _grouped_time_series_cache.get(cache_key)
+    if cached is None:
+        return None
+    cached_at, cached_token, cached_result = cached
+    if (
+        cached_token == dataset_token
+        and (now - cached_at) < GROUPED_TIME_SERIES_CACHE_TTL_SECONDS
+    ):
+        return cached_result
+    return None
+
+
+def _store_grouped_time_series_cache(
+    cache_key: _GroupedTimeSeriesCacheKey,
+    result: dict,
+) -> dict:
+    now = time.monotonic()
+    dataset_token = repo.current_dataset_token()
+    cached_result = _get_grouped_time_series_cache_hit(
+        cache_key,
+        dataset_token,
+        now,
+    )
+    if cached_result is not None:
+        return cached_result
+
+    _grouped_time_series_cache[cache_key] = (now, dataset_token, result)
+    max_entries = max(1, int(GROUPED_TIME_SERIES_CACHE_MAX_ENTRIES))
+    while len(_grouped_time_series_cache) > max_entries:
+        oldest_key = min(
+            _grouped_time_series_cache,
+            key=lambda key: _grouped_time_series_cache[key][0],
+        )
+        _grouped_time_series_cache.pop(oldest_key, None)
+    return result
+
+
+def _load_grouped_time_series_persistent_cache(
+    cache_key: _GroupedTimeSeriesCacheKey,
+    dataset_token: str,
+) -> dict | None:
+    cached_result = _read_grouped_time_series_disk_cache(
+        cache_key,
+        dataset_token,
+        time.time(),
+    )
+    if cached_result is None:
+        return None
+    with _grouped_time_series_cache_lock:
+        return _store_grouped_time_series_cache(cache_key, cached_result)
+
+
+def _wait_for_grouped_time_series_cache(
+    cache_key: _GroupedTimeSeriesCacheKey,
+    event: threading.Event,
+) -> dict | None:
+    event.wait()
+    dataset_token = repo.current_dataset_token()
+    return _get_grouped_time_series_cache_hit(
+        cache_key,
+        dataset_token,
+        time.monotonic(),
+    )
+
+
+def _clear_grouped_time_series_cache() -> None:
+    with _grouped_time_series_cache_lock:
+        _grouped_time_series_cache.clear()
+        _grouped_time_series_inflight.clear()
 
 
 # ── Helper: resolve column name ────────────────────────────────
@@ -838,6 +1058,54 @@ def filters_options(column: str, filters: dict[str, list[str]]) -> dict:
     }
 
 
+def filters_options_batch(
+    requests: list[tuple[str, dict[str, list[str]]]],
+) -> list[dict]:
+    results: list[dict] = [
+        {"column": str(column).strip(), "options": []}
+        for column, _ in requests
+    ]
+    grouped_requests: dict[
+        tuple[tuple[str, tuple[str, ...]], ...],
+        tuple[dict[str, list[str]], list[tuple[int, str]]],
+    ] = {}
+    snapshot: dict[str, list[str]] | None = None
+
+    for index, (raw_column, filters) in enumerate(requests):
+        column = str(raw_column).strip()
+        if not column:
+            continue
+        if not _has_active_filters(filters):
+            if snapshot is None:
+                snapshot = _load_top_level_filter_options_snapshot()
+            if column in snapshot:
+                results[index] = {
+                    "column": column,
+                    "options": snapshot[column],
+                }
+                continue
+
+        normalized_filters = _normalize_query_cache_filters(filters)
+        grouped = grouped_requests.get(normalized_filters)
+        if grouped is None:
+            grouped = (filters, [])
+            grouped_requests[normalized_filters] = grouped
+        grouped[1].append((index, column))
+
+    for filters, indexed_columns in grouped_requests.values():
+        option_map = repo.load_distinct_options_batch(
+            [column for _, column in indexed_columns],
+            filters,
+        )
+        for index, column in indexed_columns:
+            results[index] = {
+                "column": column,
+                "options": option_map.get(column, []),
+            }
+
+    return results
+
+
 # ── Analysis query ──────────────────────────────────────────────
 def query_analysis(
     filters: dict[str, list[str]],
@@ -948,6 +1216,185 @@ def query_time_series(
 
 # ── Grouped time series (multi-series with group-by, top-n, "其他") ──
 def query_grouped_time_series(
+    filters: dict[str, list[str]],
+    grain: str,
+    group_by: str | None,
+    top_n: int,
+    include_others: bool,
+    share_split_by: str | None = None,
+    time_range: dict[str, str] | None = None,
+    cache_scope: str | None = None,
+) -> dict:
+    return query_grouped_time_series_with_cache_state(
+        filters=filters,
+        grain=grain,
+        group_by=group_by,
+        top_n=top_n,
+        include_others=include_others,
+        share_split_by=share_split_by,
+        time_range=time_range,
+        cache_scope=cache_scope,
+    ).payload
+
+
+def query_grouped_time_series_with_cache_state(
+    filters: dict[str, list[str]],
+    grain: str,
+    group_by: str | None,
+    top_n: int,
+    include_others: bool,
+    share_split_by: str | None = None,
+    time_range: dict[str, str] | None = None,
+    cache_scope: str | None = None,
+) -> GroupedTimeSeriesQueryResult:
+    normalized_grain = "year" if str(grain).lower() == "year" else "month"
+    cache_key = (
+        _normalize_cache_scope(cache_scope),
+        _normalize_query_cache_filters(filters),
+        normalized_grain,
+        str(group_by).strip() if group_by else None,
+        str(share_split_by).strip() if share_split_by else None,
+        max(1, int(top_n)),
+        bool(include_others),
+        _extract_time_range(time_range),
+    )
+    dataset_token = repo.current_dataset_token()
+    now = time.monotonic()
+    cached_result = _get_grouped_time_series_cache_hit(
+        cache_key,
+        dataset_token,
+        now,
+    )
+    if cached_result is not None:
+        return GroupedTimeSeriesQueryResult(cached_result, "MEMORY")
+    cached_result = _load_grouped_time_series_persistent_cache(
+        cache_key,
+        dataset_token,
+    )
+    if cached_result is not None:
+        return GroupedTimeSeriesQueryResult(cached_result, "DISK")
+
+    owner = False
+    with _grouped_time_series_cache_lock:
+        now = time.monotonic()
+        dataset_token = repo.current_dataset_token()
+        cached_result = _get_grouped_time_series_cache_hit(
+            cache_key,
+            dataset_token,
+            now,
+        )
+        if cached_result is not None:
+            return GroupedTimeSeriesQueryResult(cached_result, "MEMORY")
+
+        event = _grouped_time_series_inflight.get(cache_key)
+        if event is None:
+            event = threading.Event()
+            _grouped_time_series_inflight[cache_key] = event
+            owner = True
+
+    if not owner:
+        cached_result = _wait_for_grouped_time_series_cache(cache_key, event)
+        if cached_result is not None:
+            return GroupedTimeSeriesQueryResult(cached_result, "INFLIGHT")
+
+        with _grouped_time_series_cache_lock:
+            event = _grouped_time_series_inflight.get(cache_key)
+            if event is None:
+                event = threading.Event()
+                _grouped_time_series_inflight[cache_key] = event
+                owner = True
+        if not owner:
+            cached_result = _wait_for_grouped_time_series_cache(
+                cache_key,
+                event,
+            )
+            if cached_result is not None:
+                return GroupedTimeSeriesQueryResult(cached_result, "INFLIGHT")
+
+    try:
+        result = _query_grouped_time_series_impl(
+            filters=filters,
+            grain=normalized_grain,
+            group_by=group_by,
+            top_n=top_n,
+            include_others=include_others,
+            share_split_by=share_split_by,
+            time_range=time_range,
+        )
+
+        dataset_token = repo.current_dataset_token()
+        with _grouped_time_series_cache_lock:
+            cached_result = _store_grouped_time_series_cache(cache_key, result)
+        _write_grouped_time_series_disk_cache(
+            cache_key,
+            dataset_token,
+            cached_result,
+        )
+        return GroupedTimeSeriesQueryResult(cached_result, "MISS")
+    finally:
+        if owner:
+            with _grouped_time_series_cache_lock:
+                event = _grouped_time_series_inflight.pop(cache_key, None)
+                if event is not None:
+                    event.set()
+
+
+def warm_grouped_time_series_cache() -> dict[str, int]:
+    warmed = 0
+    failed = 0
+    group_bys = [item for item in GROUPED_TIME_SERIES_PREWARM_GROUP_BY if item]
+    grains = [
+        "year" if str(item).strip().lower() == "year" else "month"
+        for item in GROUPED_TIME_SERIES_PREWARM_GRAINS
+        if item
+    ] or ["month"]
+    scopes = [
+        _normalize_cache_scope(item)
+        for item in GROUPED_TIME_SERIES_PREWARM_SCOPES
+        if item
+    ] or ["viewer"]
+    filter_sets: list[dict[str, list[str]]] = []
+    seen_filter_keys: set[tuple[tuple[str, tuple[str, ...]], ...]] = set()
+    for filters in [{}, *GROUPED_TIME_SERIES_PREWARM_FILTERS]:
+        normalized_filters = _normalize_query_cache_filters(filters)
+        if normalized_filters in seen_filter_keys:
+            continue
+        seen_filter_keys.add(normalized_filters)
+        filter_sets.append(
+            {
+                column: list(values)
+                for column, values in normalized_filters
+            }
+        )
+
+    for scope in dict.fromkeys(scopes):
+        for grain in dict.fromkeys(grains):
+            for group_by in dict.fromkeys(group_bys):
+                for filters in filter_sets:
+                    try:
+                        query_grouped_time_series(
+                            filters=filters,
+                            grain=grain,
+                            group_by=group_by,
+                            top_n=10,
+                            include_others=False,
+                            cache_scope=scope,
+                        )
+                        warmed += 1
+                    except Exception as exc:  # pragma: no cover - startup warming must not fail the API
+                        failed += 1
+                        LOGGER.warning(
+                            "Grouped time-series prewarm failed for scope=%s grain=%s group_by=%s filters=%s: %s",
+                            scope,
+                            grain,
+                            group_by,
+                            filters,
+                            exc,
+                        )
+    return {"warmed": warmed, "failed": failed}
+
+
+def _query_grouped_time_series_impl(
     filters: dict[str, list[str]],
     grain: str,
     group_by: str | None,

@@ -40,7 +40,7 @@ import {
   resolveChatModelSelection,
   resolveCountrySelection,
 } from "./countryChatHelpers";
-import { useSharedFilterScope } from "./SharedFilterScopeContext";
+import { useSharedFilterScopeOptional } from "./SharedFilterScopeContext";
 
 const CHAT_SESSIONS_CACHE_KEY = "country-chat-sessions-v2";
 const CHAT_UI_CACHE_KEY = "country-chat-ui-v2";
@@ -193,9 +193,9 @@ function mergeNewsPayloadIntoSessions(
 export function CountryChatProvider({ children }: { children: ReactNode }) {
   const location = useLocation();
   const navigate = useNavigate();
-  const { selections } = useSharedFilterScope();
-  const preferredCountry = Array.isArray(selections.country)
-    ? selections.country[0] ?? ""
+  const sharedScope = useSharedFilterScopeOptional();
+  const preferredCountry = Array.isArray(sharedScope?.selections.country)
+    ? sharedScope.selections.country[0] ?? ""
     : "";
   const cachedSessions = useMemo(
     () => getCachedPageValue<CountryChatSessions>(CHAT_SESSIONS_CACHE_KEY) ?? {},
@@ -208,7 +208,7 @@ export function CountryChatProvider({ children }: { children: ReactNode }) {
 
   const [metadata, setMetadata] =
     useState<CountryChatMetadataResponse | null>(null);
-  const [loadingMetadata, setLoadingMetadata] = useState(true);
+  const [loadingMetadata, setLoadingMetadata] = useState(false);
   const [loadingNewsStatus, setLoadingNewsStatus] = useState(false);
   const [refreshingNews, setRefreshingNews] = useState(false);
   const [sending, setSending] = useState(false);
@@ -230,6 +230,12 @@ export function CountryChatProvider({ children }: { children: ReactNode }) {
   const [widgetHeight, setWidgetHeight] = useState(
     () => cachedUi?.widgetHeight ?? 540,
   );
+  const activeHandoffSearch = useMemo(
+    () => getCountryChatHandoffSearch(location.pathname, location.search),
+    [location.pathname, location.search],
+  );
+  const shouldLoadMetadata =
+    widgetExpanded || location.pathname === "/copilot" || Boolean(activeHandoffSearch);
   const setWidgetSize = useCallback((w: number, h: number) => {
     setWidgetWidth(w);
     setWidgetHeight(h);
@@ -243,6 +249,9 @@ export function CountryChatProvider({ children }: { children: ReactNode }) {
   const [sessions, setSessions] = useState<CountryChatSessions>(cachedSessions);
 
   useEffect(() => {
+    if (!shouldLoadMetadata || metadata) {
+      return;
+    }
     let cancelled = false;
     setLoadingMetadata(true);
     api.countryChatMetadata()
@@ -270,7 +279,7 @@ export function CountryChatProvider({ children }: { children: ReactNode }) {
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [metadata, shouldLoadMetadata]);
 
   useEffect(() => {
     if (!metadata) {
@@ -321,10 +330,6 @@ export function CountryChatProvider({ children }: { children: ReactNode }) {
   }, [metadata, preferredCountry, selectedCountry, sending]);
 
   useEffect(() => {
-    const activeHandoffSearch = getCountryChatHandoffSearch(
-      location.pathname,
-      location.search,
-    );
     if (!activeHandoffSearch) {
       consumedHandoffSearchRef.current = "";
       return;
@@ -378,6 +383,7 @@ export function CountryChatProvider({ children }: { children: ReactNode }) {
   }, [
     location.pathname,
     location.search,
+    activeHandoffSearch,
     metadata,
     navigate,
     preferredCountry,

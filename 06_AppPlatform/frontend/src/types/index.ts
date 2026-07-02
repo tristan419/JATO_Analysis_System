@@ -959,6 +959,248 @@ export interface VersionComparisonDeckRequest {
   length_max?: number | null;
 }
 
+export type HeroProductPriceSource = "msrp" | "jato";
+export type HeroProductSalesMode = "month" | "ytd" | "rolling12";
+
+export interface HeroProductPriceSourceValue {
+  source: HeroProductPriceSource;
+  value: number | null;
+  rawValue: number | null;
+  currency: string;
+  status: "available" | "missing" | "manual_override" | string;
+  override?: {
+    overrideId: string;
+    value: number;
+    currency: string;
+    updatedBy: string;
+    updatedAt: string | null;
+    note?: string | null;
+  } | null;
+}
+
+export interface HeroProductPricePayload {
+  selectedSource: HeroProductPriceSource;
+  selected: HeroProductPriceSourceValue;
+  sources: Record<HeroProductPriceSource, HeroProductPriceSourceValue>;
+}
+
+export interface HeroProductModelSpecs {
+  lengthMm: number | null;
+  rangeKm: number[];
+  batteryKwh: number[];
+  consumptionKwh100km: number[];
+  accelerationSec: number[];
+  chargingKw: number[];
+  chargingText: string[];
+  overrides?: Record<string, {
+    overrideId: string;
+    value: string;
+    updatedBy?: string | null;
+    updatedAt?: string | null;
+    note?: string | null;
+  }>;
+}
+
+export interface HeroProductModelRow {
+  rank: number;
+  brand: string;
+  model: string;
+  sourceBrand?: string;
+  sourceModel?: string;
+  label: string;
+  origin: string;
+  sales: number;
+  priorSales: number;
+  yoy: MarketScanDelta;
+  sharePct: number;
+  barPct: number;
+  channelMix: Record<string, number>;
+  channelSharePct: Record<string, number>;
+  driveMix: Record<string, number>;
+  specs: HeroProductModelSpecs;
+  price: HeroProductPricePayload;
+}
+
+export interface HeroProductTrendPoint {
+  period: string;
+  label: string;
+  volume: number;
+}
+
+export interface HeroProductTrendSeries {
+  brand: string;
+  model: string;
+  sourceBrand?: string;
+  sourceModel?: string;
+  label: string;
+  points: HeroProductTrendPoint[];
+}
+
+export interface HeroProductCountryRankPoint {
+  period: string;
+  label: string;
+  rank: number | null;
+  sales: number;
+  sharePct: number;
+  inWindow: boolean;
+}
+
+export interface HeroProductCountryRankSeries {
+  brand: string;
+  model: string;
+  sourceBrand?: string;
+  sourceModel?: string;
+  label: string;
+  points: HeroProductCountryRankPoint[];
+}
+
+export interface HeroProductCountryRanking {
+  country: MarketScanCountryOption;
+  rankWindow: number;
+  periods: Array<{ period: string; label: string }>;
+  series: HeroProductCountryRankSeries[];
+}
+
+export interface HeroProductCountryDistributionItem {
+  country: string;
+  sales: number;
+  driveMix: Record<string, number>;
+}
+
+export interface HeroProductModelDistribution {
+  brand: string;
+  model: string;
+  sourceBrand?: string;
+  sourceModel?: string;
+  totalSales: number;
+  countries: HeroProductCountryDistributionItem[];
+}
+
+export interface HeroProductBenchmarkPage {
+  title: string;
+  ranking: HeroProductModelRow[];
+  productRows: HeroProductModelRow[];
+}
+
+export interface HeroProductTrendPage {
+  title: string;
+  models: HeroProductModelRow[];
+  series: HeroProductTrendSeries[];
+  countryRanking: HeroProductCountryRanking;
+  countryRankings?: Record<string, HeroProductCountryRanking>;
+  priceRows: Array<{
+    brand: string;
+    model: string;
+    sourceBrand?: string;
+    sourceModel?: string;
+    origin: string;
+    price: HeroProductPricePayload;
+  }>;
+}
+
+export interface HeroProductDistributionPage {
+  title: string;
+  models: HeroProductModelRow[];
+  distribution: {
+    countries: string[];
+    items: HeroProductModelDistribution[];
+  };
+}
+
+export interface HeroProductDeckResponse {
+  metadata: {
+    protocolVersion: string;
+    requestedPeriod: string | null;
+    resolvedPeriod: string;
+    latestPeriod: string;
+    selectedCountries: MarketScanCountryOption[];
+    selectedPriceCountry: MarketScanCountryOption;
+    selectedTrackingCountry: MarketScanCountryOption;
+    selectedSegment: string;
+    selectedFuelType: string;
+    selectedFuelTypes: string[];
+    selectedSalesMode: HeroProductSalesMode;
+    selectedPriceSource: HeroProductPriceSource;
+    selectedCountryLimit?: number;
+    selectedTimeRange?: MarketScanPeriodRange | null;
+    customRangeActive?: boolean;
+    availableCountries: MarketScanCountryOption[];
+    availablePeriods: MarketScanCountryOption[];
+    availablePriceSources: MarketScanCountryOption[];
+    availableFuelTypes?: MarketScanCountryOption[];
+    labels: {
+      pageTitle: string;
+      periodLabel: string;
+      currentMonthShort: string;
+      salesModeLabel: string;
+      marketScopeLabel: string;
+    };
+  };
+  summary: {
+    totalSales: number;
+    modelCount: number;
+    topModel: string;
+    heroModelCount: number;
+  };
+  modelOptions: Array<{
+    brand: string;
+    model: string;
+    label: string;
+    sales: number;
+  }>;
+  pages: {
+    benchmark: HeroProductBenchmarkPage;
+    benchmarkWithChannel: HeroProductBenchmarkPage;
+    topTrend: HeroProductTrendPage;
+    topDistribution: HeroProductDistributionPage;
+    heroTrend: HeroProductTrendPage;
+    heroDistribution: HeroProductDistributionPage;
+  };
+}
+
+export interface HeroProductDeckRequest {
+  countries?: string[];
+  price_country?: string | null;
+  tracking_country?: string | null;
+  target_period?: string | null;
+  time_range?: MarketScanPeriodRange | null;
+  sales_mode?: HeroProductSalesMode;
+  segment?: string;
+  fuel_type?: string;
+  fuel_types?: string[];
+  price_source?: HeroProductPriceSource;
+  top_n?: number;
+  ranking_limit?: number;
+  country_limit?: number;
+  trend_window_months?: number;
+  country_rank_scope?: "selected" | "all";
+  top_models?: string[];
+  hero_models?: string[];
+}
+
+export interface HeroProductPriceOverridePayload {
+  country: string;
+  price_period?: string | null;
+  price_source: HeroProductPriceSource;
+  brand: string;
+  model: string;
+  trim?: string | null;
+  powertrain?: string | null;
+  price_value: number | null;
+  currency?: string;
+  note?: string | null;
+}
+
+export interface HeroProductSpecOverridePayload {
+  country: string;
+  price_period?: string | null;
+  brand: string;
+  model: string;
+  field_name: string;
+  field_value?: string | null;
+  note?: string | null;
+}
+
 export interface CustomerInsightShareItem {
   label: string;
   rawLabel: string;
@@ -2558,6 +2800,81 @@ export interface CocMatchJob {
   coverageRate?: number;
   previousRun?: { month: string; matched: number; total: number } | null;
   diffSummary?: { gained: number; lost: number; newEntries: number } | null;
+  triggeredBy: string;
+  error?: string | null;
+  createdAt: string;
+  startedAt?: string | null;
+  finishedAt?: string | null;
+}
+
+export interface CocFillRecord {
+  materialGroup: string;
+  wvtaNo: string;
+  cocNo: string;
+  brand?: string | null;
+  model?: string | null;
+  powertrain?: string | null;
+  version?: string | null;
+  salesName?: string | null;
+  validFrom?: string | null;
+  validTo?: string | null;
+  comments?: string | null;
+  pageNumber: number;
+  tableRowNumber: number;
+}
+
+export interface CocFillDecision {
+  materialGroup: string;
+  sheetName: string;
+  rowNumber: number;
+  status: "filled" | "skipped_existing" | "not_found" | "ambiguous" | "invalid_source" | string;
+  candidateCount: number;
+  reason: string;
+  confidence: number;
+  selectedRecord?: CocFillRecord | null;
+  candidateRecords?: CocFillRecord[];
+  writtenWvta?: string | null;
+  writtenCoc?: string | null;
+}
+
+export interface CocFillPreviewGroup {
+  sheetName: string;
+  totalRows: number;
+  filledCount: number;
+  notFoundCount: number;
+  ambiguousCount: number;
+  skippedExistingCount: number;
+  invalidSourceCount: number;
+  statusCounts?: Record<string, number>;
+  decisions: CocFillDecision[];
+  previewLimit?: number;
+  truncated?: boolean;
+}
+
+export interface CocFillJob {
+  jobId: string;
+  jobType: "fill" | string;
+  status: string;
+  phase: string;
+  excelFilename: string;
+  pdfFilename: string;
+  overwriteExisting: boolean;
+  conflictStrategy: string;
+  includeResultSheet?: boolean;
+  sheetNames?: string[];
+  totalRows?: number | null;
+  uniqueMaterialCount?: number | null;
+  pdfRecordCount?: number | null;
+  filledCount?: number | null;
+  notFoundCount?: number | null;
+  ambiguousCount?: number | null;
+  skippedExistingCount?: number | null;
+  invalidSourceCount?: number | null;
+  sheetCount?: number | null;
+  statusCounts?: Record<string, number>;
+  decisions?: CocFillDecision[];
+  previewGroups?: CocFillPreviewGroup[];
+  outputFilename?: string | null;
   triggeredBy: string;
   error?: string | null;
   createdAt: string;

@@ -37,7 +37,6 @@ const ORDERING_COUNTRY_NAME_OVERRIDES: Record<string, Pick<JatoCountryOption, "c
   GV: { countryName: "Cape Verde", countryNameZh: "佛得角" },
   KX: { countryName: "Kuwait", countryNameZh: "科威特" },
   LV: { countryName: "Latvia", countryNameZh: "拉脱维亚" },
-  PU: { countryName: "Portugal", countryNameZh: "葡萄牙" },
   ZF: { countryName: "South Africa", countryNameZh: "南非" },
   ZU: { countryName: "Zimbabwe", countryNameZh: "津巴布韦" },
 };

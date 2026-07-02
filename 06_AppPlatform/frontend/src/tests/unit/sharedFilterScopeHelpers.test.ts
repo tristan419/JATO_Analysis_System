@@ -5,7 +5,9 @@ import { shouldSyncDashboardSearchToLocation } from "../../contexts/SharedFilter
 describe("shouldSyncDashboardSearchToLocation", () => {
   it("allows URL sync on dashboard routes that share the global filters", () => {
     expect(shouldSyncDashboardSearchToLocation("/")).toBe(true);
+    expect(shouldSyncDashboardSearchToLocation("/dashboard")).toBe(true);
     expect(shouldSyncDashboardSearchToLocation("/specification")).toBe(true);
+    expect(shouldSyncDashboardSearchToLocation("/data/spec-detail")).toBe(true);
   });
 
   it("prevents URL sync on self-managed routes like market scan and country copilot", () => {

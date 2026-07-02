@@ -1035,6 +1035,7 @@ def create_coc_match_job(
     # Initialize job state
     initial_state: dict[str, Any] = {
         "jobId": job_id,
+        "jobType": "match",
         "status": "queued",
         "phase": "pending",
         "country": country,
@@ -1226,6 +1227,7 @@ def create_coc_match_job_from_upload(
     # Initialize job state
     initial_state: dict[str, Any] = {
         "jobId": job_id,
+        "jobType": "match",
         "status": "queued",
         "phase": "pending",
         "country": country,
@@ -1268,7 +1270,11 @@ def create_coc_match_job_from_upload(
 
 
 def list_coc_match_jobs(limit: int = 20, country: str | None = None) -> dict[str, Any]:
-    payloads = list_job_payloads(COC_MATCH_JOB_ROOT)
+    payloads = [
+        payload
+        for payload in list_job_payloads(COC_MATCH_JOB_ROOT)
+        if str(payload.get("jobType", "match")) == "match"
+    ]
     if country:
         country_filter = country.strip().upper()
         payloads = [
@@ -1284,7 +1290,10 @@ def get_coc_match_job(job_id: str) -> dict[str, Any]:
     sp = state_path(COC_MATCH_JOB_ROOT, job_id)
     if not sp.exists():
         raise HTTPException(status_code=404, detail=f"COC 匹配任务不存在: {job_id}")
-    return load_job_state(sp)
+    payload = load_job_state(sp)
+    if str(payload.get("jobType", "match")) != "match":
+        raise HTTPException(status_code=404, detail=f"COC 匹配任务不存在: {job_id}")
+    return payload
 
 
 def get_coc_match_report_path(job_id: str) -> Path:

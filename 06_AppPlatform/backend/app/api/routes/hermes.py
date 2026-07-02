@@ -19,6 +19,10 @@ from fastapi import APIRouter, Body, Depends, Header, HTTPException, Query
 from fastapi.responses import PlainTextResponse
 
 from app.core.security import ROLE_LEVEL, get_current_user, require_min_role
+from app.services.hermes_cost_ledger_service import (
+    build_daily_cost_heatmap,
+    load_cost_records,
+)
 from app.services.hermes_ops_runner_service import (
     HELP_TEXT,
     HERMES_SCRIPTS,
@@ -1306,7 +1310,14 @@ def hermes_architecture(_=Depends(require_min_role("viewer"))) -> dict:
             "icon": "intelligence",
             "phase": "Phase 5-5.5",
             "scripts": ["hermes_source_quality.py", "hermes_evidence_writer.py", "hermes_answer_audit.py", "hermes_cost_report.py"],
-            "inputs": ["hermes/source_registry.yaml", "hermes/answer_audit.jsonl", "hermes/model_pricing.yaml", "VOC/News/MSRP artifacts"],
+            "inputs": [
+                "hermes/source_registry.yaml",
+                "hermes/answer_audit.jsonl",
+                "hermes/agent_usage.jsonl",
+                "hermes/eval/eval_usage.jsonl",
+                "hermes/model_pricing.yaml",
+                "VOC/News/MSRP artifacts",
+            ],
             "outputs": ["source quality report (.json)", "evidence_ledger.jsonl", "answer audit (.jsonl)", "cost report (.json)"],
             "answers": [
                 "VOC/News/MSRP 源质量如何？哪个该降级？",
@@ -1563,63 +1574,21 @@ def hermes_activity_heatmap(days: int = 30, _=Depends(require_min_role("viewer")
 @router.get("/cost-heatmap")
 def hermes_cost_heatmap(days: int = 30, _=Depends(require_min_role("viewer"))) -> dict:
     """Return daily cost data for heatmap visualization."""
-    audit_path = HERMES_DIR / "answer_audit.jsonl"
-    daily_costs: dict[str, float] = {}
-    by_model: dict[str, float] = {}
-    by_source: dict[str, float] = {}
-
-    # DeepSeek pricing (CNY per 1M tokens)
-    FLASH_INPUT_PRICE = 1.0
-    FLASH_OUTPUT_PRICE = 2.0
-    PRO_INPUT_PRICE = 3.0
-    PRO_OUTPUT_PRICE = 6.0
-
-    if audit_path.is_file():
-        for line in audit_path.read_text().strip().split("\n"):
-            if line.strip():
-                try:
-                    rec = json.loads(line)
-                    date = rec.get("createdAt", "")[:10]
-                    model = rec.get("modelUsed", "unknown")
-                    source = rec.get("source", "hermes")
-                    input_t = rec.get("inputTokens", 0) or 0
-                    output_t = rec.get("outputTokens", 0) or 0
-                    # Flash vs Pro pricing
-                    if "pro" in str(model).lower():
-                        cost = (input_t / 1_000_000) * PRO_INPUT_PRICE + (output_t / 1_000_000) * PRO_OUTPUT_PRICE
-                    else:
-                        cost = (input_t / 1_000_000) * FLASH_INPUT_PRICE + (output_t / 1_000_000) * FLASH_OUTPUT_PRICE
-                    daily_costs[date] = daily_costs.get(date, 0) + cost
-                    by_model[str(model)] = by_model.get(str(model), 0) + cost
-                    by_source[str(source)] = by_source.get(str(source), 0) + cost
-                except Exception:
-                    pass
-
-    from datetime import timedelta
-    today = datetime.now(timezone.utc).date()
-    days_list: list[dict] = []
-    total = 0.0
-    for i in range(days):
-        d = today - timedelta(days=days - 1 - i)
-        ds = d.strftime("%Y-%m-%d")
-        cost = round(daily_costs.get(ds, 0), 4)
-        total += cost
-        over_daily = cost > BUDGET_DAILY_CNY
-        days_list.append({"date": ds, "costCny": cost, "overDailyBudget": over_daily})
-
-    over_monthly = total > BUDGET_MONTHLY_CNY
-    monthly_status = "ok"
-    alerts: list[str] = []
-    if over_monthly:
-        monthly_status = "exceeded"
-        alerts.append(f"Monthly cost {total:.2f} CNY exceeds {BUDGET_MONTHLY_CNY} CNY budget")
-    elif total > BUDGET_MONTHLY_CNY * 0.75:
-        monthly_status = "warning"
-        alerts.append(f"Monthly cost {total:.2f} CNY at {total/BUDGET_MONTHLY_CNY*100:.0f}% of {BUDGET_MONTHLY_CNY} CNY budget")
+    heatmap = build_daily_cost_heatmap(
+        PROJECT_ROOT,
+        days=max(1, min(days, 365)),
+        daily_budget_cny=BUDGET_DAILY_CNY,
+        monthly_budget_cny=BUDGET_MONTHLY_CNY,
+    )
+    alerts = heatmap.get("alerts", [])
 
     # Send email alert if budget exceeded
     if alerts:
-        body = f"Hermes Cost Alert\n\nMonthly total: {total:.2f} CNY / {BUDGET_MONTHLY_CNY} CNY\nDaily budget: {BUDGET_DAILY_CNY} CNY\n\nAlerts:\n"
+        body = (
+            "Hermes Cost Alert\n\n"
+            f"Monthly total: {heatmap['totalCny']:.2f} CNY / {BUDGET_MONTHLY_CNY} CNY\n"
+            f"Daily budget: {BUDGET_DAILY_CNY} CNY\n\nAlerts:\n"
+        )
         body += "\n".join(f"- {a}" for a in alerts)
         body += f"\n\nView: https://www.ojeur.cloud/data-management → Hermes Governance"
         email_sent = _send_budget_alert("Budget Alert", body)
@@ -1627,14 +1596,7 @@ def hermes_cost_heatmap(days: int = 30, _=Depends(require_min_role("viewer"))) -
         email_sent = False
 
     return {
-        "days": days_list,
-        "totalCny": round(total, 4),
-        "dailyBudgetCny": BUDGET_DAILY_CNY,
-        "monthlyBudgetCny": BUDGET_MONTHLY_CNY,
-        "monthlyStatus": monthly_status,
-        "byModelCny": {k: round(v, 4) for k, v in sorted(by_model.items(), key=lambda x: -x[1])},
-        "bySourceCny": {k: round(v, 4) for k, v in sorted(by_source.items(), key=lambda x: -x[1])},
-        "alerts": alerts,
+        **heatmap,
         "emailSent": email_sent,
         "alertEmail": ALERT_EMAIL,
     }
@@ -1654,17 +1616,10 @@ def hermes_daily_summary(_=Depends(require_min_role("viewer"))) -> dict:
 
     # Cost today
     cost_cny = 0.0
-    audit_path = HERMES_DIR / "answer_audit.jsonl"
-    if audit_path.is_file():
-        for line in audit_path.read_text().strip().split("\n"):
-            if line.strip() and today in line:
-                try:
-                    rec = json.loads(line)
-                    input_t = rec.get("inputTokens", 0) or 0
-                    output_t = rec.get("outputTokens", 0) or 0
-                    cost_cny += (input_t / 1_000_000) * 1.0 + (output_t / 1_000_000) * 2.0
-                except Exception:
-                    pass
+    for record in load_cost_records(PROJECT_ROOT):
+        created_at = str(record.get("createdAt") or record.get("recordedAt") or "")
+        if created_at.startswith(today):
+            cost_cny += float(record.get("estimatedCostCny") or 0)
 
     return {
         "date": today,
@@ -2310,6 +2265,103 @@ def hermes_deploy_status(_=Depends(require_min_role("viewer"))) -> dict:
     """Return deployed release metadata and expected GitHub commit drift."""
     from app.services.hermes_deploy_status_service import get_deploy_status
     return get_deploy_status()
+
+
+@router.get("/history/events")
+def hermes_history_events(
+    source: str | None = Query(None),
+    workstream: str | None = Query(None),
+    model: str | None = Query(None),
+    limit: int = Query(200, ge=1, le=500),
+    _=Depends(require_min_role("viewer")),
+) -> dict:
+    """Return normalized Hermes history events from git and governance ledgers."""
+    from app.services.hermes_history_service import list_history_events
+
+    return list_history_events(
+        source=source,
+        workstream=workstream,
+        model=model,
+        limit=limit,
+    )
+
+
+@router.get("/history/clusters")
+def hermes_history_clusters(
+    level: str = Query("feature", description="epic, workstream, feature, session, or commit"),
+    y_axis: str = Query("workstream", alias="yAxis", description="workstream, phase, risk, or session"),
+    workstream: str | None = Query(None),
+    limit: int = Query(160, ge=1, le=300),
+    _=Depends(require_min_role("viewer")),
+) -> dict:
+    """Return rule-based history clusters for the Hermes History Map."""
+    from app.services.hermes_history_service import list_history_clusters
+
+    return list_history_clusters(
+        level=level,
+        y_axis=y_axis,
+        workstream=workstream,
+        limit=limit,
+    )
+
+
+@router.get("/progress/features")
+def hermes_progress_features(_=Depends(require_min_role("viewer"))) -> list[dict]:
+    """Return feature progress states for the Hermes cockpit."""
+    from app.services.hermes_history_service import list_progress_features
+
+    return list_progress_features()
+
+
+@router.get("/progress/swimlanes")
+def hermes_progress_swimlanes(_=Depends(require_min_role("viewer"))) -> dict:
+    """Return feature progress grouped by workstream."""
+    from app.services.hermes_history_service import get_progress_swimlanes
+
+    return get_progress_swimlanes()
+
+
+@router.get("/workflow/cockpit")
+def hermes_workflow_cockpit(_=Depends(require_min_role("viewer"))) -> dict:
+    """Return model/session workflow aggregation for the Hermes cockpit."""
+    from app.services.hermes_history_service import get_workflow_cockpit
+
+    return get_workflow_cockpit()
+
+
+@router.get("/goals/features")
+def hermes_goal_features(_=Depends(require_min_role("viewer"))) -> dict:
+    """Return read-only Feature PMO goals from Markdown, registries, and evidence."""
+    from app.services.hermes_feature_goal_service import list_feature_goals
+
+    return list_feature_goals()
+
+
+@router.get("/goals/features/{feature_id}")
+def hermes_goal_feature(feature_id: str, _=Depends(require_min_role("viewer"))) -> dict:
+    """Return one computed Feature PMO goal."""
+    from app.services.hermes_feature_goal_service import get_feature_goal
+
+    return get_feature_goal(feature_id)
+
+
+@router.get("/goals/swimlanes")
+def hermes_goal_swimlanes(_=Depends(require_min_role("viewer"))) -> dict:
+    """Return Feature PMO goals grouped by workstream."""
+    from app.services.hermes_feature_goal_service import get_feature_goal_swimlanes
+
+    return get_feature_goal_swimlanes()
+
+
+@router.get("/reuse/candidates")
+def hermes_reuse_candidates(
+    feature_id: str = Query(..., alias="featureId"),
+    _=Depends(require_min_role("viewer")),
+) -> dict:
+    """Return reuse candidates for a tracked feature."""
+    from app.services.hermes_feature_goal_service import get_reuse_candidates_for_feature
+
+    return get_reuse_candidates_for_feature(feature_id)
 
 
 @router.get("/dev/features")

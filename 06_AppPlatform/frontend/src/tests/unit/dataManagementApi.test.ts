@@ -193,6 +193,38 @@ describe("data management api", () => {
     );
   });
 
+  it("serializes Hermes history and progress cockpit endpoints", async () => {
+    const fetchMock = vi.fn().mockImplementation((url: string) => {
+      const body = String(url).includes("/hermes/history/clusters")
+        ? { summary: { totalEvents: 0, sources: {}, workstreams: {}, risks: {}, models: {}, clusterCount: 0 }, clusters: [] }
+        : String(url).includes("/hermes/progress/swimlanes")
+          ? { summary: { total: 0, blocking: 0, readyForPr: 0, deployed: 0, verified: 0, workstreamCount: 0 }, phases: [], lanes: [] }
+          : { summary: { totalEvents: 0, sources: {}, workstreams: {}, risks: {}, models: {} }, events: [] };
+      return Promise.resolve(new Response(JSON.stringify(body), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      }));
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(api.hermesHistoryClusters({
+      level: "feature",
+      yAxis: "risk",
+      workstream: "Hermes",
+      limit: 80,
+    })).resolves.toMatchObject({ clusters: [] });
+    expect(fetchMock).toHaveBeenLastCalledWith(
+      expect.stringContaining("/hermes/history/clusters?level=feature&yAxis=risk&workstream=Hermes&limit=80"),
+      expect.any(Object),
+    );
+
+    await expect(api.hermesProgressSwimlanes()).resolves.toMatchObject({ lanes: [] });
+    expect(fetchMock).toHaveBeenLastCalledWith(
+      expect.stringContaining("/hermes/progress/swimlanes"),
+      expect.any(Object),
+    );
+  });
+
   it("maps MSRP finance observations and passes filters", async () => {
     const fetchMock = vi.fn().mockResolvedValue(
       new Response(

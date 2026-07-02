@@ -5,12 +5,7 @@ import json
 from pathlib import Path
 import sys
 
-
-SCRIPT_PATH = (
-    Path(__file__).resolve().parents[1]
-    / "diagnostics"
-    / "ai_intelligence_enrichment_smoke.py"
-)
+SCRIPT_PATH = Path(__file__).resolve().parents[1] / "diagnostics" / "ai_intelligence_enrichment_smoke.py"
 
 
 def load_module():
@@ -54,14 +49,8 @@ def test_run_smoke_verifies_15_country_news_and_voc_enrichment(tmp_path: Path) -
     assert Path(report["artifacts"]["newsEnrichment"]).exists()
     assert Path(report["artifacts"]["vocRoot"]).exists()
     assert report["artifacts"]["vocCollectionSummary"]["country_count"] == 15
-    assert all(
-        country["weeklyDigestReady"]
-        for country in report["countries"]["news"]
-    )
-    assert all(
-        int(country["evidenceCardCount"]) > 0
-        for country in report["countries"]["voc"]
-    )
+    assert all(country["weeklyDigestReady"] for country in report["countries"]["news"])
+    assert all(int(country["evidenceCardCount"]) > 0 for country in report["countries"]["voc"])
 
 
 def test_run_smoke_degrades_when_required_country_is_missing(
@@ -135,7 +124,10 @@ def test_write_status_record_maps_smoke_status(monkeypatch, tmp_path: Path) -> N
         artifact_refs=["hermes/reports/ai_intelligence_enrichment_smoke.json"],
     )
 
-    assert status_record["pipeline_id"] == "ai_intelligence_enrichment_smoke" or status_record["pipelineId"] == "ai_intelligence_enrichment_smoke"
+    assert (
+        status_record["pipeline_id"] == "ai_intelligence_enrichment_smoke"
+        or status_record["pipelineId"] == "ai_intelligence_enrichment_smoke"
+    )
     assert calls[0]["status"] == "degraded"
     assert calls[0]["warning_count"] >= 1
     assert calls[0]["artifact_refs"] == ["hermes/reports/ai_intelligence_enrichment_smoke.json"]
@@ -146,7 +138,8 @@ def test_write_domain_status_records_marks_news_and_voc_as_derived(monkeypatch, 
     monkeypatch.setattr(
         smoke_module,
         "write_pipeline_status",
-        lambda **kwargs: calls.append(kwargs) or {
+        lambda **kwargs: calls.append(kwargs)
+        or {
             "pipelineId": kwargs["pipeline_id"],
             "status": kwargs["status"],
             **(kwargs.get("extra") or {}),
@@ -202,7 +195,4 @@ def test_main_can_write_report_and_status(capsys, monkeypatch, tmp_path: Path) -
     assert payload["reportArtifacts"]["latestJson"].endswith("ai_intelligence_enrichment_smoke.json")
     assert payload["pipelineStatus"]["pipelineId"] == "ai_intelligence_enrichment_smoke"
     assert [item["pipelineId"] for item in payload["pipelineStatuses"]] == ["country_news_sync", "voc_forum_sync"]
-    assert all(
-        item["derivedFrom"] == "ai_intelligence_enrichment_smoke"
-        for item in payload["pipelineStatuses"]
-    )
+    assert all(item["derivedFrom"] == "ai_intelligence_enrichment_smoke" for item in payload["pipelineStatuses"])

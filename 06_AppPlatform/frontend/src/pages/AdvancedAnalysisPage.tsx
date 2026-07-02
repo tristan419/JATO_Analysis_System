@@ -12,6 +12,7 @@ import { SERIES_COLORS } from "../utils/colors";
 import { DEFAULT_EXPORT, ExportPanel, downloadPng, type ExportSettings } from "../components/ExportPanel";
 import { DeckExportDrawer, DeckFloatingDrawer } from "../components/deckControls";
 import { JATO_COUNTRIES, formatJatoCountryOption } from "../utils/jatoCountries";
+import { HeroProductAnalysisView } from "./HeroProductAnalysisView";
 import type {
   AdvancedAnalysisCompetitorSetRequest,
   AdvancedAnalysisCountriesResponse,
@@ -208,6 +209,7 @@ function formatProfileSpecValue(field: CompetitorProductSpecKey, value?: number)
 
 export function AdvancedAnalysisPage() {
   const [searchParams, setSearchParams] = useSearchParams();
+  const analysisMode = searchParams.get("mode") === "hero-product" ? "hero-product" : "transfer";
   const [country, setCountry] = useState(() => searchParams.get("country") || (() => { try { return sessionStorage.getItem("aa_country"); } catch { return null; } })() || DEFAULT_COUNTRY);
   const [availableCountries, setAvailableCountries] = useState<string[]>([]);
   const [period, setPeriod] = useState(() => searchParams.get("period") || "");
@@ -271,9 +273,19 @@ export function AdvancedAnalysisPage() {
   }, [targetModelCandidates, targetSearchTrimmed]);
   const suggestedTargetModel = exactTargetModel || targetModelMatches[0] || targetSearchTrimmed;
   const canApplyTargetModel = Boolean(targetSearchTrimmed && suggestedTargetModel !== targetModel);
+  const switchAnalysisMode = useCallback((mode: "transfer" | "hero-product") => {
+    const params = new URLSearchParams(searchParams);
+    if (mode === "hero-product") {
+      params.set("mode", "hero-product");
+    } else {
+      params.delete("mode");
+    }
+    setSearchParams(params, { replace: true });
+  }, [searchParams, setSearchParams]);
 
   // URL sync
   useEffect(() => {
+    if (analysisMode !== "transfer") return;
     const p = new URLSearchParams();
     if (country) p.set("country", country);
     if (period) p.set("period", period);
@@ -287,9 +299,10 @@ export function AdvancedAnalysisPage() {
     if (targetModel) p.set("model", targetModel);
     setSearchParams(p, { replace: true });
     try { sessionStorage.setItem("aa_country", country); } catch { /* ignore */ }
-  }, [country, period, profileSelections, targetModel, setSearchParams]);
+  }, [analysisMode, country, period, profileSelections, targetModel, setSearchParams]);
 
   useEffect(() => {
+    if (analysisMode !== "transfer") return;
     const controller = new AbortController();
     api.get<AdvancedAnalysisCountriesResponse>("/advanced-analysis/countries", { signal: controller.signal })
       .then(response => setAvailableCountries(response.countries || []))
@@ -297,9 +310,9 @@ export function AdvancedAnalysisPage() {
         if (controller.signal.aborted) return;
         if (error instanceof Error && error.name === "AbortError") return;
         setAvailableCountries([]);
-      });
+    });
     return () => controller.abort();
-  }, []);
+  }, [analysisMode]);
 
   useEffect(() => {
     setTargetModelSearch(targetModel);
@@ -307,6 +320,7 @@ export function AdvancedAnalysisPage() {
 
   // Load profile options when country changes
   useEffect(() => {
+    if (analysisMode !== "transfer") return;
     const controller = new AbortController();
     setProfileOptions(EMPTY_PROFILE_OPTIONS);
     const timeoutId = window.setTimeout(() => {
@@ -325,13 +339,14 @@ export function AdvancedAnalysisPage() {
       window.clearTimeout(timeoutId);
       controller.abort();
     };
-  }, [country]);
+  }, [analysisMode, country]);
 
   useEffect(() => {
+    if (analysisMode !== "transfer") return;
     if (!targetModel || profileOptions.model.length === 0) return;
     if (profileOptions.model.includes(targetModel)) return;
     setTargetModel("");
-  }, [profileOptions.model, targetModel]);
+  }, [analysisMode, profileOptions.model, targetModel]);
 
   // Fetch data
   const buildScope = useCallback(() => {
@@ -345,6 +360,7 @@ export function AdvancedAnalysisPage() {
   }, [profileSelections]);
 
   const fetchData = useCallback(async (signal?: AbortSignal) => {
+    if (analysisMode !== "transfer") return;
     setLoading(true); setError(null);
     try {
       const scope = buildScope();
@@ -387,8 +403,9 @@ export function AdvancedAnalysisPage() {
     finally {
       if (!signal?.aborted) setLoading(false);
     }
-  }, [country, period, timeMode, buildScope, compareMode, periodB, targetModel, profileSpecs]);
+  }, [analysisMode, country, period, timeMode, buildScope, compareMode, periodB, targetModel, profileSpecs]);
   useEffect(() => {
+    if (analysisMode !== "transfer") return;
     const controller = new AbortController();
     const timeoutId = window.setTimeout(() => {
       void fetchData(controller.signal);
@@ -397,7 +414,7 @@ export function AdvancedAnalysisPage() {
       window.clearTimeout(timeoutId);
       controller.abort();
     };
-  }, [fetchData]);
+  }, [analysisMode, fetchData]);
 
   // Drawer mutual exclusion
   const hFO = useCallback((o: boolean) => { setFilterOpen(o); if (o) setExportOpen(false); }, []);
@@ -422,6 +439,10 @@ export function AdvancedAnalysisPage() {
     };
   }, [data, s, profileSelections]);
 
+  if (analysisMode === "hero-product") {
+    return <HeroProductAnalysisView onSwitchToTransfer={() => switchAnalysisMode("transfer")} />;
+  }
+
   return (
     <div className="market-scan-page">
       {/* Hero */}
@@ -431,8 +452,15 @@ export function AdvancedAnalysisPage() {
             <span className="page-kicker">Advanced Analysis</span>
             <h1>Profile-Based Competitive Transfer</h1>
             <p>Describe a product profile with reusable filters, then read share transfer, channel quality, and the closest competitive battlefield.</p>
-            {s && (
-              <div className="market-scan-hero-ribbon">
+            <div className="market-scan-hero-ribbon aa-mode-ribbon">
+              <button type="button" className="btn btn-primary btn-sm aa-mode-btn" onClick={() => switchAnalysisMode("transfer")}>
+                Share Transfer
+              </button>
+              <button type="button" className="btn btn-ghost btn-sm aa-mode-btn" onClick={() => switchAnalysisMode("hero-product")}>
+                Hero Product 分析
+              </button>
+              {s ? (
+                <>
                 <span className="market-scan-hero-chip" style={{ color: stateColor(s.market_state), fontWeight: 700 }}>
                   {s.market_state === "growth" ? "Growth" : s.market_state === "decline" ? "Decline" : "Stable"}
                 </span>
@@ -449,8 +477,9 @@ export function AdvancedAnalysisPage() {
                       : `Target: ${targetModel || competitorData?.target_model}`}
                   </span>
                 )}
-              </div>
-            )}
+                </>
+              ) : null}
+            </div>
           </div>
         </div>
       </section>

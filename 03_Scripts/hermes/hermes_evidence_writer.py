@@ -99,27 +99,33 @@ def _try_extract_voc_evidence(artifacts: list[dict]) -> tuple[list[dict], list[d
                             if isinstance(item, dict):
                                 text = item.get("text", item.get("content", item.get("body", "")))
                                 if text and len(str(text)) > 20:
-                                    evidence.append(_make_evidence(
-                                        "voc_quote",
-                                        str(text)[:300],
-                                        f"VOC artifact: {jf.name}",
-                                        _safe(art, "artifactId", "artifact.voc.raw"),
-                                        country=item.get("country", item.get("country_code", "")),
-                                        confidence=0.6,
-                                    ))
+                                    evidence.append(
+                                        _make_evidence(
+                                            "voc_quote",
+                                            str(text)[:300],
+                                            f"VOC artifact: {jf.name}",
+                                            _safe(art, "artifactId", "artifact.voc.raw"),
+                                            country=item.get("country", item.get("country_code", "")),
+                                            confidence=0.6,
+                                        )
+                                    )
                 except Exception:
                     pass
         else:
-            skipped.append({
-                "artifactId": _safe(art, "artifactId", "?"),
-                "path": art_path,
-                "reason": "VOC raw artifact directory not found locally (server-only)",
-            })
+            skipped.append(
+                {
+                    "artifactId": _safe(art, "artifactId", "?"),
+                    "path": art_path,
+                    "reason": "VOC raw artifact directory not found locally (server-only)",
+                }
+            )
     elif voc_enriched:
-        skipped.append({
-            "artifactId": _safe(voc_enriched[0], "artifactId", "?"),
-            "reason": "VOC enriched signals exist but raw text extraction from enriched format needs schema",
-        })
+        skipped.append(
+            {
+                "artifactId": _safe(voc_enriched[0], "artifactId", "?"),
+                "reason": "VOC enriched signals exist but raw text extraction from enriched format needs schema",
+            }
+        )
     else:
         skipped.append({"artifactId": "artifact.voc.*", "reason": "No VOC artifacts found in registry"})
 
@@ -139,23 +145,30 @@ def _try_extract_news_evidence(artifacts: list[dict]) -> tuple[list[dict], list[
             status = json.loads(status_path.read_text())
             voc = status.get("voc", {})
             if voc and voc.get("status") == "success":
-                evidence.append(_make_evidence(
-                    "news_event",
-                    f"News fetch pipeline completed: {voc.get('successCount', 0)} articles, {voc.get('failedCount', 0)} failures",
-                    "scheduled_fetch_status.json",
-                    "artifact.status_json",
-                    confidence=0.9,
-                ))
+                evidence.append(
+                    _make_evidence(
+                        "news_event",
+                        (
+                            f"News fetch pipeline completed: {voc.get('successCount', 0)} articles, "
+                            f"{voc.get('failedCount', 0)} failures"
+                        ),
+                        "scheduled_fetch_status.json",
+                        "artifact.status_json",
+                        confidence=0.9,
+                    )
+                )
         except Exception:
             pass
 
     if news_digest:
         art = news_digest[0]
         if "PostgreSQL" in _safe(art, "path", ""):
-            skipped.append({
-                "artifactId": _safe(art, "artifactId", "?"),
-                "reason": "News digest stored in PostgreSQL — needs DB connection for extraction",
-            })
+            skipped.append(
+                {
+                    "artifactId": _safe(art, "artifactId", "?"),
+                    "reason": "News digest stored in PostgreSQL — needs DB connection for extraction",
+                }
+            )
     else:
         skipped.append({"artifactId": "artifact.news.*", "reason": "No local news artifact path available"})
 
@@ -173,27 +186,33 @@ def _try_extract_msrp_evidence(artifacts: list[dict]) -> tuple[list[dict], list[
     if msrp_obs:
         art = msrp_obs[0]
         if "PostgreSQL" in _safe(art, "path", ""):
-            skipped.append({
-                "artifactId": _safe(art, "artifactId", "?"),
-                "reason": "MSRP observations in PostgreSQL — needs DB connection for extraction",
-            })
+            skipped.append(
+                {
+                    "artifactId": _safe(art, "artifactId", "?"),
+                    "reason": "MSRP observations in PostgreSQL — needs DB connection for extraction",
+                }
+            )
         # Add a fact from registry metadata
         last_obs = _safe(art, "lastObserved", {}) or {}
         note = _safe(art, "notes", "")
         if note:
-            evidence.append(_make_evidence(
-                "msrp_fact",
-                note,
-                "artifact registry metadata",
-                _safe(art, "artifactId", ""),
-                confidence=0.8,
-            ))
+            evidence.append(
+                _make_evidence(
+                    "msrp_fact",
+                    note,
+                    "artifact registry metadata",
+                    _safe(art, "artifactId", ""),
+                    confidence=0.8,
+                )
+            )
 
     if msrp_prices:
-        skipped.append({
-            "artifactId": _safe(msrp_prices[0], "artifactId", "?"),
-            "reason": "Current prices in PostgreSQL — needs DB connection for extraction",
-        })
+        skipped.append(
+            {
+                "artifactId": _safe(msrp_prices[0], "artifactId", "?"),
+                "reason": "Current prices in PostgreSQL — needs DB connection for extraction",
+            }
+        )
 
     return evidence, skipped
 
@@ -209,19 +228,23 @@ def _try_extract_jato_evidence(artifacts: list[dict]) -> tuple[list[dict], list[
         art_path = _safe(art, "path", "")
         local = REPO_ROOT / art_path if art_path else None
         if local and local.is_file():
-            evidence.append(_make_evidence(
-                "jato_fact",
-                f"JATO full archive parquet available at {art_path} ({local.stat().st_size / 1e9:.1f} GB)",
-                art_path,
-                _safe(art, "artifactId", ""),
-                confidence=0.95,
-            ))
+            evidence.append(
+                _make_evidence(
+                    "jato_fact",
+                    f"JATO full archive parquet available at {art_path} ({local.stat().st_size / 1e9:.1f} GB)",
+                    art_path,
+                    _safe(art, "artifactId", ""),
+                    confidence=0.95,
+                )
+            )
         else:
-            skipped.append({
-                "artifactId": _safe(art, "artifactId", "?"),
-                "path": art_path,
-                "reason": "JATO parquet not found locally (large file, server-only)",
-            })
+            skipped.append(
+                {
+                    "artifactId": _safe(art, "artifactId", "?"),
+                    "path": art_path,
+                    "reason": "JATO parquet not found locally (large file, server-only)",
+                }
+            )
 
     return evidence, skipped
 
@@ -332,11 +355,13 @@ def main() -> None:
     # Write report
     report_path = Path(args.report)
     report_path.parent.mkdir(parents=True, exist_ok=True)
-    report_path.write_text(_generate_report(
-        results["evidence"],
-        results["skipped"],
-        results["typeCounts"],
-    ))
+    report_path.write_text(
+        _generate_report(
+            results["evidence"],
+            results["skipped"],
+            results["typeCounts"],
+        )
+    )
     print(f"[Hermes Evidence Writer] Report: {report_path}")
 
 

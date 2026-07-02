@@ -12,6 +12,18 @@ import {
 import { AssistantMark } from "./AssistantMark";
 import { RoleUpgradeModal } from "./RoleUpgradeModal";
 
+function isSubItemActive(to: string, location: { pathname: string; search: string }): boolean {
+  const [targetPath, targetSearch = ""] = to.split("?");
+  if (location.pathname !== targetPath && !location.pathname.startsWith(`${targetPath}/`)) return false;
+  const currentParams = new URLSearchParams(location.search);
+  if (!targetSearch) return currentParams.get("mode") !== "hero-product";
+  const targetParams = new URLSearchParams(targetSearch);
+  for (const [key, value] of targetParams.entries()) {
+    if (currentParams.get(key) !== value) return false;
+  }
+  return true;
+}
+
 function MegaMenuPanel({
   item, open, onClose,
 }: { item: MegaMenuItem & { type: "dropdown" | "mega" }; open: boolean; onClose: () => void }) {
@@ -37,8 +49,7 @@ function MegaMenuPanel({
 
 function MegaMenuPanelLink({ sub, onClick }: { sub: MegaMenuSubItem; onClick: () => void }) {
   const location = useLocation();
-  const targetPath = sub.to.split(/[?#]/, 1)[0];
-  const active = location.pathname === targetPath || location.pathname.startsWith(`${targetPath}/`);
+  const active = isSubItemActive(sub.to, location);
   return (
     <Link to={sub.to} className={`mega-menu-panel-link${active ? " active" : ""}`} role="menuitem" onClick={onClick}>
       <span className="mega-menu-panel-link-label">{sub.label}</span>

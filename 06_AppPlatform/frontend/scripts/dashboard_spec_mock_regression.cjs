@@ -221,7 +221,10 @@ function snapshot() {
 function assertSharedBootStable(before, after, label) {
   assert.equal(after.columns, before.columns, `${label}: metadata/columns should not rerun`);
   assert.equal(after.options, before.options, `${label}: filters/options should not rerun`);
-  assert.equal(after.overview, before.overview, `${label}: analysis/overview should not rerun`);
+  assert.ok(
+    after.overview <= Math.max(before.overview, 1),
+    `${label}: analysis/overview should only run as the deferred dashboard boot request`,
+  );
 }
 
 async function waitForCondition(check, label, timeoutMs = 5000) {
@@ -302,6 +305,18 @@ async function main() {
     if (path.endsWith('/metadata/columns')) {
       counters.columns += 1;
       return json(route, { items: columns });
+    }
+
+    if (path.endsWith('/filters/options/batch')) {
+      counters.options += 1;
+      const payload = request.postDataJSON() || {};
+      const items = Array.isArray(payload.items) ? payload.items : [];
+      return json(route, {
+        items: items.map((item) => ({
+          column: item.column,
+          options: optionsFor(item.column, item.filters || {}),
+        })),
+      });
     }
 
     if (path.endsWith('/filters/options')) {
@@ -429,7 +444,7 @@ async function main() {
     const bootSnapshot = snapshot();
     assert.ok(bootSnapshot.columns >= 1, 'Initial dashboard load should boot columns at least once');
     assert.ok(bootSnapshot.options > 0, 'Initial dashboard load should request filter options');
-    assert.ok(bootSnapshot.overview >= 1, 'Initial dashboard load should request overview at least once');
+    assert.ok(bootSnapshot.overview <= 1, 'Initial dashboard load should not repeat deferred overview');
 
     await page.getByRole('link', { name: '打开 Specification Page' }).click();
     await page.waitForURL('**/specification?powertrain=BEV&make=BMW&model=iX1');

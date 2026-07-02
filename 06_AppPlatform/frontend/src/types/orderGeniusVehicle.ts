@@ -111,6 +111,7 @@ export interface PiVehicleUnit {
   interiorColorName: string | null;
   interiorColourCode: string | null;
   orderDate: string | null;
+  orderMonth: string | null;
   productionDate: string | null;
   etd: string | null;
   eta: string | null;
@@ -163,6 +164,13 @@ export interface VehicleAllocationFilters {
   vin?: string;
   materialCode?: string;
   bom?: string;
+  brand?: string;
+  modelName?: string;
+  version?: string;
+  powertrain?: string;
+  exteriorColorName?: string;
+  interiorColorName?: string;
+  orderMonth?: string;
   country?: string;
   shipName?: string;
   allocationStatus?: AllocationStatus | "";

@@ -1,6 +1,7 @@
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 
+from app.api.cache_headers import response_has_cache_control
 from app.api.routes.assistant import router as assistant_router
 from app.api.routes.auth import router as auth_router
 from app.api.routes.analysis import router as analysis_router
@@ -31,6 +32,17 @@ from app.core.startup_validation import run_startup_validation
 
 run_startup_validation()
 app = FastAPI(title=APP_NAME, version=APP_VERSION)
+
+
+@app.middleware("http")
+async def add_default_api_cache_control(request: Request, call_next):
+    response = await call_next(request)
+    if (
+        request.url.path.startswith(f"{API_PREFIX}/")
+        and not response_has_cache_control(response)
+    ):
+        response.headers["Cache-Control"] = "no-store"
+    return response
 
 app.add_middleware(
     CORSMiddleware,

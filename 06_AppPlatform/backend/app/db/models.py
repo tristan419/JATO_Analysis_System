@@ -1173,6 +1173,84 @@ class CurrentPrice(Base):
     )
 
 
+class HeroProductPriceOverride(TimestampMixin, Base):
+    __tablename__ = "hero_product_price_overrides"
+    __table_args__ = (
+        UniqueConstraint(
+            "country",
+            "price_period",
+            "price_source",
+            "brand",
+            "model",
+            "trim",
+            "powertrain",
+            name="uq_hero_product_price_overrides_key",
+        ),
+        Index(
+            "ix_hero_product_price_overrides_lookup",
+            "country",
+            "price_period",
+            "price_source",
+            "brand",
+            "model",
+        ),
+        {"schema": "msrp"},
+    )
+
+    override_id: Mapped[UUID] = mapped_column(
+        PGUUID(as_uuid=True),
+        primary_key=True,
+        default=uuid4,
+    )
+    country: Mapped[str] = mapped_column(Text, nullable=False)
+    price_period: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    price_source: Mapped[str] = mapped_column(Text, nullable=False)
+    brand: Mapped[str] = mapped_column(Text, nullable=False)
+    model: Mapped[str] = mapped_column(Text, nullable=False)
+    trim: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    powertrain: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    price_value: Mapped[float] = mapped_column(Numeric(14, 2), nullable=False)
+    currency: Mapped[str] = mapped_column(Text, nullable=False, default="EUR")
+    updated_by: Mapped[str] = mapped_column(Text, nullable=False, default="editor")
+    note: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+
+class HeroProductSpecOverride(TimestampMixin, Base):
+    __tablename__ = "hero_product_spec_overrides"
+    __table_args__ = (
+        UniqueConstraint(
+            "country",
+            "price_period",
+            "brand",
+            "model",
+            "field_name",
+            name="uq_hero_product_spec_overrides_key",
+        ),
+        Index(
+            "ix_hero_product_spec_overrides_lookup",
+            "country",
+            "price_period",
+            "brand",
+            "model",
+        ),
+        {"schema": "msrp"},
+    )
+
+    override_id: Mapped[UUID] = mapped_column(
+        PGUUID(as_uuid=True),
+        primary_key=True,
+        default=uuid4,
+    )
+    country: Mapped[str] = mapped_column(Text, nullable=False)
+    price_period: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    brand: Mapped[str] = mapped_column(Text, nullable=False)
+    model: Mapped[str] = mapped_column(Text, nullable=False)
+    field_name: Mapped[str] = mapped_column(Text, nullable=False)
+    field_value: Mapped[str] = mapped_column(Text, nullable=False)
+    updated_by: Mapped[str] = mapped_column(Text, nullable=False, default="editor")
+    note: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+
 class PriceHistory(Base):
     """Compressed price time-series: each row = one price period.
 
@@ -1869,6 +1947,80 @@ class CountrySkuFobResolved(TimestampMixin, Base):
         Text, nullable=False, default="explicit_price_by_payment_term",
     )
     is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+
+
+class CountryMaterialFinance(TimestampMixin, Base):
+    __tablename__ = "country_material_finance"
+    __table_args__ = (
+        Index(
+            "uq_ordering_country_material_finance_active",
+            "country_code", "material_code",
+            unique=True,
+            postgresql_where=text("is_active = true"),
+        ),
+        Index("ix_ordering_country_material_finance_country", "country_code"),
+        Index("ix_ordering_country_material_finance_material", "material_code"),
+        {"schema": "ordering"},
+    )
+
+    country_material_finance_id: Mapped[UUID] = mapped_column(
+        PGUUID(as_uuid=True), primary_key=True, default=uuid4
+    )
+    country_code: Mapped[str] = mapped_column(Text, nullable=False)
+    material_code: Mapped[str] = mapped_column(Text, nullable=False)
+    fob_eur: Mapped[float | None] = mapped_column(Numeric(12, 2), nullable=True)
+    retail_price_eur: Mapped[float | None] = mapped_column(Numeric(12, 2), nullable=True)
+    wholesale_price_eur: Mapped[float | None] = mapped_column(Numeric(12, 2), nullable=True)
+    dealer_price_eur: Mapped[float | None] = mapped_column(Numeric(12, 2), nullable=True)
+    cost_eur: Mapped[float | None] = mapped_column(Numeric(12, 2), nullable=True)
+    margin_eur: Mapped[float | None] = mapped_column(Numeric(12, 2), nullable=True)
+    margin_rate: Mapped[float | None] = mapped_column(Numeric(10, 6), nullable=True)
+    vehicle_margin_eur: Mapped[float | None] = mapped_column(Numeric(12, 2), nullable=True)
+    vehicle_margin_rate: Mapped[float | None] = mapped_column(Numeric(10, 6), nullable=True)
+    vehicle_profit_eur: Mapped[float | None] = mapped_column(Numeric(12, 2), nullable=True)
+    vehicle_profit_rate: Mapped[float | None] = mapped_column(Numeric(10, 6), nullable=True)
+    fob_delta_eur: Mapped[float | None] = mapped_column(Numeric(12, 2), nullable=True)
+    margin_delta_eur: Mapped[float | None] = mapped_column(Numeric(12, 2), nullable=True)
+    memo: Mapped[str | None] = mapped_column(Text, nullable=True)
+    source_mode: Mapped[str] = mapped_column(Text, nullable=False, default="manual")
+    source_payload_json: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
+    updated_by: Mapped[str | None] = mapped_column(Text, nullable=True)
+    is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+
+
+class CountryMaterialFinanceHistory(Base):
+    """Immutable audit trail for country material finance / CBU edits."""
+
+    __tablename__ = "country_material_finance_history"
+    __table_args__ = (
+        Index(
+            "ix_ordering_country_material_finance_history_code",
+            "country_code", "material_code", "changed_at_utc",
+        ),
+        Index(
+            "ix_ordering_country_material_finance_history_finance",
+            "country_material_finance_id",
+        ),
+        {"schema": "ordering"},
+    )
+
+    finance_history_id: Mapped[UUID] = mapped_column(
+        PGUUID(as_uuid=True), primary_key=True, default=uuid4
+    )
+    country_material_finance_id: Mapped[UUID | None] = mapped_column(
+        PGUUID(as_uuid=True), nullable=True
+    )
+    country_code: Mapped[str] = mapped_column(Text, nullable=False)
+    material_code: Mapped[str] = mapped_column(Text, nullable=False)
+    old_values_json: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
+    new_values_json: Mapped[dict] = mapped_column(JSONB, nullable=False)
+    changed_fields_json: Mapped[list[str]] = mapped_column(JSONB, nullable=False)
+    source_mode: Mapped[str | None] = mapped_column(Text, nullable=True)
+    source_payload_json: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
+    changed_by: Mapped[str | None] = mapped_column(Text, nullable=True)
+    changed_at_utc: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
 
 
 class CountryFobSourceMapping(TimestampMixin, Base):

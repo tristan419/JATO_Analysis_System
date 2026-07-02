@@ -100,6 +100,10 @@ else
   exit 1
 fi
 
+echo "[INFO] Re-apply non-overwrite nginx API cache patch after certbot"
+SERVER_NAME="$SERVER_NAME" BACKEND_PORT="$BACKEND_PORT" FRONTEND_ROOT="$FRONTEND_ROOT" \
+  bash "$NGINX_INSTALL_SCRIPT"
+
 echo "[INFO] Validate nginx and local HTTPS"
 nginx -t
 systemctl reload nginx

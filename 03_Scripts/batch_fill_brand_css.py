@@ -102,7 +102,7 @@ def _get_locale_value(mapping: dict, country: str) -> str | list:
 
 def apply_profile(filepath: str, profile: dict, country: str, dry_run: bool = False) -> bool:
     """Apply a brand CSS profile to a draft YAML file.
-    
+
     Returns True if the file was modified.
     """
     with open(filepath) as f:
@@ -153,7 +153,7 @@ def apply_profile(filepath: str, profile: dict, country: str, dry_run: bool = Fa
         # Insert attr_json section before css section
         attr_json_yaml = "  attr_json:\n"
         for key, val in aj.items():
-            attr_json_yaml += f"    {key}: \"{val}\"\n" if isinstance(val, str) else f"    {key}: {val}\n"
+            attr_json_yaml += f'    {key}: "{val}"\n' if isinstance(val, str) else f"    {key}: {val}\n"
         content = content.replace(
             "  css:\n",
             attr_json_yaml + "  css:\n",
@@ -198,6 +198,7 @@ def apply_profile(filepath: str, profile: dict, country: str, dry_run: bool = Fa
 
 def main():
     import argparse
+
     parser = argparse.ArgumentParser()
     parser.add_argument("--dry-run", action="store_true", help="Don't write files")
     parser.add_argument("--brand", default="", help="Only process this brand")

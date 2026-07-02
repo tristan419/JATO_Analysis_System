@@ -1,5 +1,6 @@
-from pathlib import Path
+import json
 import os
+from pathlib import Path
 
 
 def _load_env_file(path: Path) -> None:
@@ -50,6 +51,45 @@ def _parse_float_env(name: str, default: float) -> float:
 def _parse_csv_env(name: str, default: str) -> list[str]:
     raw_value = os.getenv(name, default)
     return [item.strip().rstrip("/") for item in raw_value.split(",") if item.strip()]
+
+
+def _parse_filter_sets_env(name: str, default: str) -> list[dict[str, list[str]]]:
+    raw_value = os.getenv(name, default).strip()
+    if not raw_value:
+        return []
+    try:
+        parsed = json.loads(raw_value)
+    except json.JSONDecodeError:
+        return []
+    if isinstance(parsed, dict):
+        parsed = [parsed]
+    if not isinstance(parsed, list):
+        return []
+
+    filter_sets: list[dict[str, list[str]]] = []
+    for item in parsed:
+        if not isinstance(item, dict):
+            continue
+        filters: dict[str, list[str]] = {}
+        for raw_column, raw_values in item.items():
+            column = str(raw_column).strip()
+            if not column:
+                continue
+            if isinstance(raw_values, str):
+                values = [value.strip() for value in raw_values.split(",")]
+            elif isinstance(raw_values, list):
+                values = [
+                    str(value).strip()
+                    for value in raw_values
+                    if value is not None
+                ]
+            else:
+                continue
+            normalized_values = _dedupe_values([value for value in values if value])
+            if normalized_values:
+                filters[column] = normalized_values
+        filter_sets.append(filters)
+    return filter_sets
 
 
 def _dedupe_values(values: list[str]) -> list[str]:
@@ -142,6 +182,45 @@ FILTER_OPTIONS_CACHE_MAX_ENTRIES = int(
 FILTER_OPTIONS_SNAPSHOT_TTL_SECONDS = int(
     os.getenv("APP_FILTER_OPTIONS_SNAPSHOT_TTL_SECONDS", "300")
 )
+HTTP_STRONG_CACHE_SECONDS = int(
+    os.getenv("APP_HTTP_STRONG_CACHE_SECONDS", "3600")
+)
+GROUPED_TIME_SERIES_CACHE_TTL_SECONDS = int(
+    os.getenv("APP_GROUPED_TIME_SERIES_CACHE_TTL_SECONDS", "300")
+)
+GROUPED_TIME_SERIES_CACHE_MAX_ENTRIES = int(
+    os.getenv("APP_GROUPED_TIME_SERIES_CACHE_MAX_ENTRIES", "64")
+)
+GROUPED_TIME_SERIES_PERSISTENT_CACHE_ENABLED = _parse_bool_env(
+    "APP_GROUPED_TIME_SERIES_PERSISTENT_CACHE_ENABLED",
+    True,
+)
+GROUPED_TIME_SERIES_PERSISTENT_CACHE_DIR = Path(
+    os.getenv(
+        "APP_GROUPED_TIME_SERIES_PERSISTENT_CACHE_DIR",
+        str(PROJECT_ROOT / "04_Processed_data" / "ops" / "grouped_time_series_cache"),
+    )
+).resolve()
+GROUPED_TIME_SERIES_PREWARM_ENABLED = _parse_bool_env(
+    "APP_GROUPED_TIME_SERIES_PREWARM_ENABLED",
+    False,
+)
+GROUPED_TIME_SERIES_PREWARM_GROUP_BY = _parse_csv_env(
+    "APP_GROUPED_TIME_SERIES_PREWARM_GROUP_BY",
+    "动总规整,国家",
+)
+GROUPED_TIME_SERIES_PREWARM_GRAINS = _parse_csv_env(
+    "APP_GROUPED_TIME_SERIES_PREWARM_GRAINS",
+    "month",
+)
+GROUPED_TIME_SERIES_PREWARM_SCOPES = _parse_csv_env(
+    "APP_GROUPED_TIME_SERIES_PREWARM_SCOPES",
+    "viewer,admin",
+)
+GROUPED_TIME_SERIES_PREWARM_FILTERS = _parse_filter_sets_env(
+    "APP_GROUPED_TIME_SERIES_PREWARM_FILTERS_JSON",
+    "[]",
+)
 
 REDIS_URL = os.getenv("APP_REDIS_URL", "redis://localhost:6379/0").strip()
 REDIS_ENABLED = _parse_bool_env("APP_REDIS_ENABLED", True)
@@ -186,6 +265,8 @@ GOOGLE_REDIRECT_URI = os.getenv(
     "http://127.0.0.1:8000/v1/auth/google/callback",
 ).strip()
 GOOGLE_OAUTH_PROXY_URL = os.getenv("APP_GOOGLE_OAUTH_PROXY_URL", "").strip()
+GOOGLE_OAUTH_RELAY_URL = os.getenv("APP_GOOGLE_OAUTH_RELAY_URL", "").strip()
+GOOGLE_OAUTH_RELAY_TOKEN = os.getenv("APP_GOOGLE_OAUTH_RELAY_TOKEN", "").strip()
 GOOGLE_OAUTH_TIMEOUT_SECONDS = _parse_float_env(
     "APP_GOOGLE_OAUTH_TIMEOUT_SECONDS",
     15.0,

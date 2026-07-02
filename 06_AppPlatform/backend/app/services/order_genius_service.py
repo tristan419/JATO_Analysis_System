@@ -28,6 +28,12 @@ from app.services.order_quantity_parser import (
     OrderQuantityImport,
     parse_order_quantity_xlsx,
 )
+from app.services.ordering_normalization import (
+    infer_colour_tier,
+    merge_colour_tiers,
+    normalize_brand,
+    normalize_brand_text,
+)
 from app.services.powertrain_normalizer import normalize_powertrain
 
 
@@ -59,15 +65,41 @@ def _extract_canonical_pt(sku: object) -> str:
 def _derive_colour_tier(exterior_color_type: str) -> str:
     """Auto-classify colour_tier from exterior_color_type.
     single → single, dual → dual, matte/black edition/etc → special"""
-    if not exterior_color_type:
-        return "single"
-    ct = str(exterior_color_type).strip().lower()
-    if ct in ("single", "solid", "mono"):
-        return "single"
-    if ct in ("dual", "two-tone", "dual tone", "bi-color", "bi colour"):
-        return "dual"
-    # matte, black edition, pearl, metallic, special finishes → special
-    return "special"
+    return infer_colour_tier(None, exterior_color_type)
+
+
+def _effective_colour_tier(sku: object) -> str:
+    return merge_colour_tiers(
+        getattr(sku, "colour_tier", None),
+        infer_colour_tier(
+            getattr(sku, "exterior_color_name", None),
+            getattr(sku, "exterior_color_type", None),
+            getattr(sku, "edition_tag", None),
+            getattr(sku, "exterior_color_code", None),
+            getattr(sku, "colour_hex", None),
+        ),
+    )
+
+
+def _interior_by_template(skus: list[MaterialSkuMaster]) -> dict[str, str]:
+    result: dict[str, str] = {}
+    for sku in skus:
+        template = sku.bom_template or ""
+        interior = sku.interior_color_name or ""
+        if template and interior and template not in result:
+            result[template] = interior
+    return result
+
+
+def _effective_interior_name(
+    sku: MaterialSkuMaster,
+    interior_by_bom_template: dict[str, str],
+) -> str | None:
+    return (
+        sku.interior_color_name
+        or interior_by_bom_template.get(sku.bom_template or "")
+        or _infer_interior_from_bom(sku.bom_template)
+    )
 
 
 # ── Upload orchestration ───────────────────────────────────────────────
@@ -99,6 +131,7 @@ def _assign_fob_based_tiers(
     all_fobs = session.query(CountrySkuFobResolved).filter(
         CountrySkuFobResolved.material_code.in_(material_codes),
         CountrySkuFobResolved.is_active == True,
+        CountrySkuFobResolved.final_fob_eur > 0,
     ).all()
 
     # Step 1: For each (bom_template, country), find the base FOB
@@ -106,7 +139,7 @@ def _assign_fob_based_tiers(
     bom_fobs: dict[tuple[str, str], dict[str, float]] = defaultdict(dict)
     for fob in all_fobs:
         sku = code_to_sku.get(fob.material_code)
-        if not sku or fob.final_fob_eur is None:
+        if not sku or fob.final_fob_eur is None or float(fob.final_fob_eur) <= 0:
             continue
         bt = sku.bom_template or sku.material_code
         key = (bt, fob.country_code)
@@ -119,7 +152,7 @@ def _assign_fob_based_tiers(
     mv_fobs: dict[tuple[str, str], list[float]] = defaultdict(list)
     for fob in all_fobs:
         sku = code_to_sku.get(fob.material_code)
-        if not sku or fob.final_fob_eur is None:
+        if not sku or fob.final_fob_eur is None or float(fob.final_fob_eur) <= 0:
             continue
         mv = f"{sku.model_name or ''}|{sku.version or ''}"
         key = (mv, fob.country_code)
@@ -131,7 +164,7 @@ def _assign_fob_based_tiers(
     surcharge_map: dict[tuple[str, str], dict[str, float]] = defaultdict(dict)
     for fob in all_fobs:
         sku = code_to_sku.get(fob.material_code)
-        if not sku or fob.final_fob_eur is None:
+        if not sku or fob.final_fob_eur is None or float(fob.final_fob_eur) <= 0:
             continue
         bt = sku.bom_template or sku.material_code
         mv = f"{sku.model_name or ''}|{sku.version or ''}"
@@ -166,10 +199,21 @@ def _assign_fob_based_tiers(
             sc_to_tier[unique_sc[-1]] = "special"
 
         for mc, sc in mc_surcharges.items():
-            tier = sc_to_tier.get(sc)
-            if tier is None:
+            fob_tier = sc_to_tier.get(sc)
+            if fob_tier is None:
                 continue
             sku = code_to_sku.get(mc)
+            tier = merge_colour_tiers(
+                sku.colour_tier if sku else None,
+                infer_colour_tier(
+                    sku.exterior_color_name if sku else None,
+                    sku.exterior_color_type if sku else None,
+                    sku.edition_tag if sku else None,
+                    sku.exterior_color_code if sku else None,
+                    sku.colour_hex if sku else None,
+                ),
+                fob_tier,
+            )
             if sku and sku.colour_tier != tier:
                 sku.colour_tier = tier
                 updated += 1
@@ -509,10 +553,72 @@ def get_fob_for_sku(
 # ── Matrix Building ───────────────────────────────────────────────────
 
 
-def build_matrix(
+def _list_matrix_candidate_skus(
+    session: Session,
+    brand: str | None = None,
+    model_name: str | None = None,
+    powertrain: str | None = None,
+    version: str | None = None,
+    colour: str | None = None,
+    material_code_search: str | None = None,
+) -> list[MaterialSkuMaster]:
+    normalized_brand = normalize_brand(brand) if brand else None
+    normalized_model = normalize_brand_text(model_name) if model_name else None
+    canonical_pt = normalize_powertrain(powertrain) if powertrain else None
+
+    # Brand/model/powertrain are normalized in Python because legacy BOM rows can
+    # still contain JEACOO and stale powertrain values.
+    active_skus = repo.list_active_skus(
+        session,
+        version=version,
+        exterior_color_code=colour,
+        material_code_search=material_code_search,
+    )
+    if normalized_brand:
+        active_skus = [
+            sku for sku in active_skus
+            if normalize_brand(sku.brand) == normalized_brand
+        ]
+    if normalized_model:
+        active_skus = [
+            sku for sku in active_skus
+            if normalize_brand_text(sku.model_name) == normalized_model
+        ]
+    if canonical_pt:
+        active_skus = [sku for sku in active_skus if _extract_canonical_pt(sku) == canonical_pt]
+    return active_skus
+
+
+def _historical_sku_matches_matrix_filters(
+    sku: MaterialSkuMaster,
+    material_code: str,
+    brand: str | None = None,
+    model_name: str | None = None,
+    powertrain: str | None = None,
+    version: str | None = None,
+    colour: str | None = None,
+    material_code_search: str | None = None,
+) -> bool:
+    if brand and normalize_brand(sku.brand) != normalize_brand(brand):
+        return False
+    if model_name and normalize_brand_text(sku.model_name) != normalize_brand_text(model_name):
+        return False
+    if version and sku.version != version:
+        return False
+    if colour and sku.exterior_color_code != colour:
+        return False
+    if powertrain and _extract_canonical_pt(sku) != normalize_powertrain(powertrain):
+        return False
+    if material_code_search and material_code_search.lower() not in material_code.lower():
+        return False
+    return True
+
+
+def _build_matrix_for_country(
     session: Session,
     country_code: str,
     year: int,
+    active_skus: list[MaterialSkuMaster],
     brand: str | None = None,
     model_name: str | None = None,
     powertrain: str | None = None,
@@ -520,44 +626,25 @@ def build_matrix(
     colour: str | None = None,
     material_code_search: str | None = None,
 ) -> dict:
-    """Build the Order Genius matrix for a country+year.
-
-    Returns rows with Model, Version, Colour, Material Code, FOB, Jan-Dec, TTL.
-    """
     # Get country payment term valid for this order year
     order_month_hint = f"{year}-01"  # use January of the order year
     country_pt = repo.get_country_payment_term(session, country_code, order_month_hint)
     payment_term_code = country_pt.payment_term_code if country_pt else None
     country_name = country_pt.country_name if country_pt else None
 
-    # Get active SKUs matching filters (powertrain filtered in Python for canonical matching)
-    active_skus = repo.list_active_skus(
+    # Get FOB for these SKUs in one round trip. Payment term is metadata-only
+    # in the current repository rule, matching get_fob_for_country_sku.
+    fob_map: dict[str, CountrySkuFobResolved] = repo.list_fobs_for_country_material_codes(
         session,
-        brand=brand,
-        model_name=model_name,
-        version=version,
-        exterior_color_code=colour,
-        material_code_search=material_code_search,
+        country_code,
+        [sku.material_code for sku in active_skus],
+        payment_term_code,
     )
-
-    # Get FOB for these SKUs — filtered by country's default payment term
-    fob_map: dict[str, CountrySkuFobResolved] = {}
-    for sku in active_skus:
-        fob = repo.get_fob_for_country_sku(
-            session, country_code, sku.material_code, payment_term_code,
-        )
-        if fob:
-            fob_map[sku.material_code] = fob
 
     # Only include SKUs that have FOB for this country
     skus_with_fob = [
         s for s in active_skus if s.material_code in fob_map
     ]
-
-    # Filter by canonical powertrain (model-name-aware, not raw DB field)
-    if powertrain:
-        canonical_pt = normalize_powertrain(powertrain)
-        skus_with_fob = [s for s in skus_with_fob if _extract_canonical_pt(s) == canonical_pt]
 
     # Get quantities for this country+year
     all_quantities = repo.list_quantities_for_country_year(
@@ -570,6 +657,19 @@ def build_matrix(
     # Get historical SKUs that have quantity data
     historical_codes = repo.list_historical_skus_with_quantity(
         session, country_code, year
+    )
+    historical_skus = repo.get_skus_by_material_codes_any_status(
+        session,
+        historical_codes,
+    )
+    matrix_interior_by_template = _interior_by_template(
+        active_skus + list(historical_skus.values())
+    )
+    historical_fob_map = repo.list_fobs_for_country_material_codes(
+        session,
+        country_code,
+        historical_codes,
+        payment_term_code,
     )
 
     # Build rows
@@ -590,18 +690,19 @@ def build_matrix(
 
         rows.append({
             "materialCode": sku.material_code,
-            "brand": sku.brand,
-            "modelName": sku.model_name,
+            "bomTemplate": sku.bom_template,
+            "brand": normalize_brand(sku.brand),
+            "modelName": normalize_brand_text(sku.model_name),
             "version": sku.version,
             "colour": sku.exterior_color_name,
             "colourCode": sku.exterior_color_code,
             "colourType": sku.exterior_color_type,
-            "colourTier": sku.colour_tier,
-            "interiorColorName": sku.interior_color_name,
+            "colourTier": _effective_colour_tier(sku),
+            "interiorColorName": _effective_interior_name(sku, matrix_interior_by_template),
             "interiorColourCode": sku.interior_colour_code,
             "interiorPackage": sku.interior_package,
             "editionTag": sku.edition_tag,
-            "powertrain": sku.powertrain,
+            "powertrain": _extract_canonical_pt(sku),
             "fobEur": float(fob.final_fob_eur) if fob else None,
             "lifecycleStatus": "active",
             "editable": True,
@@ -617,23 +718,22 @@ def build_matrix(
     for mc in historical_codes:
         if mc in fob_map:
             continue  # already included as active
-        hist_sku = repo.get_sku_by_material_code_any_status(session, mc)
+        hist_sku = historical_skus.get(mc)
         if not hist_sku:
             continue
         # Apply filters to historical rows too
-        if brand and hist_sku.brand != brand:
+        if not _historical_sku_matches_matrix_filters(
+            hist_sku,
+            mc,
+            brand=brand,
+            model_name=model_name,
+            powertrain=powertrain,
+            version=version,
+            colour=colour,
+            material_code_search=material_code_search,
+        ):
             continue
-        if model_name and hist_sku.model_name != model_name:
-            continue
-        if version and hist_sku.version != version:
-            continue
-        if colour and hist_sku.exterior_color_code != colour:
-            continue
-        if powertrain and _extract_canonical_pt(hist_sku) != normalize_powertrain(powertrain):
-            continue
-        if material_code_search and material_code_search.lower() not in mc.lower():
-            continue
-        fob = repo.get_fob_for_country_sku(session, country_code, mc)
+        fob = historical_fob_map.get(mc)
 
         row_months: dict[str, dict] = {}
         row_ttl = 0
@@ -653,18 +753,19 @@ def build_matrix(
         if has_any or row_ttl > 0:
             rows.append({
                 "materialCode": mc,
-                "brand": hist_sku.brand,
-                "modelName": hist_sku.model_name,
+                "bomTemplate": hist_sku.bom_template,
+                "brand": normalize_brand(hist_sku.brand),
+                "modelName": normalize_brand_text(hist_sku.model_name),
                 "version": hist_sku.version,
                 "colour": hist_sku.exterior_color_name,
                 "colourCode": hist_sku.exterior_color_code,
                 "colourType": hist_sku.exterior_color_type,
-                "colourTier": hist_sku.colour_tier,
-                "interiorColorName": hist_sku.interior_color_name,
+                "colourTier": _effective_colour_tier(hist_sku),
+                "interiorColorName": _effective_interior_name(hist_sku, matrix_interior_by_template),
                 "interiorColourCode": hist_sku.interior_colour_code,
                 "interiorPackage": hist_sku.interior_package,
                 "editionTag": hist_sku.edition_tag,
-                "powertrain": hist_sku.powertrain,
+                "powertrain": _extract_canonical_pt(hist_sku),
                 "fobEur": float(fob.final_fob_eur) if fob else None,
                 "lifecycleStatus": "historical",
                 "editable": False,
@@ -683,6 +784,82 @@ def build_matrix(
         "year": year,
         "rows": rows,
         "totalRows": len(rows),
+    }
+
+
+def build_matrix(
+    session: Session,
+    country_code: str,
+    year: int,
+    brand: str | None = None,
+    model_name: str | None = None,
+    powertrain: str | None = None,
+    version: str | None = None,
+    colour: str | None = None,
+    material_code_search: str | None = None,
+) -> dict:
+    """Build the Order Genius matrix for a country+year.
+
+    Returns rows with Model, Version, Colour, Material Code, FOB, Jan-Dec, TTL.
+    """
+    active_skus = _list_matrix_candidate_skus(
+        session,
+        brand=brand,
+        model_name=model_name,
+        powertrain=powertrain,
+        version=version,
+        colour=colour,
+        material_code_search=material_code_search,
+    )
+    return _build_matrix_for_country(
+        session,
+        country_code=country_code,
+        year=year,
+        active_skus=active_skus,
+        brand=brand,
+        model_name=model_name,
+        powertrain=powertrain,
+        version=version,
+        colour=colour,
+        material_code_search=material_code_search,
+    )
+
+
+def build_matrix_batch(
+    session: Session,
+    country_codes: list[str],
+    year: int,
+    brand: str | None = None,
+    model_name: str | None = None,
+    powertrain: str | None = None,
+    version: str | None = None,
+    colour: str | None = None,
+    material_code_search: str | None = None,
+) -> dict[str, dict]:
+    """Build matrices for many countries while reusing the filtered SKU set."""
+    active_skus = _list_matrix_candidate_skus(
+        session,
+        brand=brand,
+        model_name=model_name,
+        powertrain=powertrain,
+        version=version,
+        colour=colour,
+        material_code_search=material_code_search,
+    )
+    return {
+        country_code: _build_matrix_for_country(
+            session,
+            country_code=country_code,
+            year=year,
+            active_skus=active_skus,
+            brand=brand,
+            model_name=model_name,
+            powertrain=powertrain,
+            version=version,
+            colour=colour,
+            material_code_search=material_code_search,
+        )
+        for country_code in country_codes
     }
 
 
@@ -705,38 +882,50 @@ def build_options(
         session, country_code, pt_code,
     )
 
-    # Get all active SKUs for this country (filtered by FOB availability)
-    # Don't filter powertrain at DB level — DB has raw values, we filter by canonical after
-    all_active = repo.list_active_skus(session, brand=brand, model_name=model_name,
-                                       version=version)
+    normalized_brand = normalize_brand(brand) if brand else None
+    normalized_model = normalize_brand_text(model_name) if model_name else None
+
+    # Get all active SKUs for this country (filtered by FOB availability).
+    # Brand/model/powertrain are filtered after normalization so old JEACOO rows stay visible.
+    all_active = repo.list_active_skus(session, version=version)
     skus = [s for s in all_active if s.material_code in fob_codes]
+    if normalized_brand:
+        skus = [s for s in skus if normalize_brand(s.brand) == normalized_brand]
+    if normalized_model:
+        skus = [s for s in skus if normalize_brand_text(s.model_name) == normalized_model]
 
     # Filter by canonical powertrain (model-name-aware)
     if powertrain:
         skus = [s for s in skus if _extract_canonical_pt(s) == normalize_powertrain(powertrain)]
 
     # Collect distinct values from the filtered skus
-    brands = sorted(set(s.brand for s in skus))
-    if brand:
+    brands = sorted(set(normalize_brand(s.brand) for s in skus if normalize_brand(s.brand)))
+    if normalized_brand:
         models = sorted(set(
-            s.model_name for s in skus if s.brand == brand
+            normalize_brand_text(s.model_name)
+            for s in skus
+            if normalize_brand(s.brand) == normalized_brand and normalize_brand_text(s.model_name)
         ))
     else:
-        models = sorted(set(s.model_name for s in skus))
+        models = sorted(set(
+            normalize_brand_text(s.model_name)
+            for s in skus
+            if normalize_brand_text(s.model_name)
+        ))
 
-    if model_name:
+    if normalized_model:
         pts = sorted(set(
             _extract_canonical_pt(s) for s in skus
-            if s.model_name == model_name and s.powertrain
+            if normalize_brand_text(s.model_name) == normalized_model
         ))
-    elif brand:
+    elif normalized_brand:
         pts = sorted(set(
             _extract_canonical_pt(s) for s in skus
-            if s.brand == brand and s.powertrain
+            if normalize_brand(s.brand) == normalized_brand
         ))
     else:
         pts = sorted(set(
-            _extract_canonical_pt(s) for s in skus if s.powertrain
+            _extract_canonical_pt(s) for s in skus
         ))
 
     if version:
@@ -744,20 +933,20 @@ def build_options(
     elif brand or model_name:
         # Cascade: versions filtered by upstream selections
         filtered = skus
-        if brand:
-            filtered = [s for s in filtered if s.brand == brand]
-        if model_name:
-            filtered = [s for s in filtered if s.model_name == model_name]
+        if normalized_brand:
+            filtered = [s for s in filtered if normalize_brand(s.brand) == normalized_brand]
+        if normalized_model:
+            filtered = [s for s in filtered if normalize_brand_text(s.model_name) == normalized_model]
         vers = sorted(set(s.version for s in filtered))
     else:
         vers = sorted(set(s.version for s in skus))
 
     # Cascade colours: filtered by all upstream selections
     colour_source = skus
-    if brand:
-        colour_source = [s for s in colour_source if s.brand == brand]
-    if model_name:
-        colour_source = [s for s in colour_source if s.model_name == model_name]
+    if normalized_brand:
+        colour_source = [s for s in colour_source if normalize_brand(s.brand) == normalized_brand]
+    if normalized_model:
+        colour_source = [s for s in colour_source if normalize_brand_text(s.model_name) == normalized_model]
     if powertrain:
         canonical_pt = normalize_powertrain(powertrain)
         colour_source = [s for s in colour_source if _extract_canonical_pt(s) == canonical_pt]
@@ -909,6 +1098,8 @@ def export_pi_matrix(
     material_code_search: str | None = None,
     selected_month: int | None = None,
     hide_empty_rows: bool = False,
+    freight_eur: float | None = None,
+    insurance_eur: float | None = None,
 ) -> io.BytesIO:
     """Generate a PI workbook using the current Order Genius selection."""
     matrix = build_matrix(session, country_code, year,
@@ -936,6 +1127,8 @@ def export_pi_matrix(
         year=year,
         quantity_month=selected_month,
         nl_fob_by_material_code=nl_fob_by_material_code,
+        freight_eur=freight_eur,
+        insurance_eur=insurance_eur,
     )
 
 

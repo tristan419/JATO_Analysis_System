@@ -206,7 +206,13 @@ def _generate_report(
     reg_ids: list[str] = []
     for cat in ["features", "pipelines", "prompts", "artifacts"]:
         for m in matched[cat][:3]:
-            eid = m["entry"].get(f"{cat.rstrip('s')}Id", m["entry"].get("featureId", m["entry"].get("pipelineId", m["entry"].get("promptId", m["entry"].get("artifactId", "?")))))
+            eid = m["entry"].get(
+                f"{cat.rstrip('s')}Id",
+                m["entry"].get(
+                    "featureId",
+                    m["entry"].get("pipelineId", m["entry"].get("promptId", m["entry"].get("artifactId", "?"))),
+                ),
+            )
             reg_ids.append(eid)
     if reg_ids:
         lines.append(f"Affected registries: {', '.join(reg_ids[:8])}")
@@ -250,7 +256,10 @@ def _generate_report(
     else:
         lines.append("- No low-confidence matches to verify.")
 
-    lines.append(f"- **Suggested next step:** Review matched registries, confirm scope, then proceed with Claude Code implementation.")
+    lines.append(
+        "- **Suggested next step:** Review matched registries, confirm scope, "
+        "then proceed with Claude Code implementation."
+    )
     lines.append("")
 
     return "\n".join(lines)
@@ -301,16 +310,20 @@ def _generate_json(
             if matched[cat]
         ],
         "requiredTests": [
-            t for t in [
-                "Backend unit tests" if any(
-                    kw in str(prd_info.get("detected_keywords", {}))
-                    for kw in ["backend", "api"]
-                ) else None,
-                "Frontend component tests" if any(
-                    kw in str(prd_info.get("detected_keywords", {}))
-                    for kw in ["frontend", "component"]
-                ) else None,
-            ] if t
+            t
+            for t in [
+                (
+                    "Backend unit tests"
+                    if any(kw in str(prd_info.get("detected_keywords", {})) for kw in ["backend", "api"])
+                    else None
+                ),
+                (
+                    "Frontend component tests"
+                    if any(kw in str(prd_info.get("detected_keywords", {})) for kw in ["frontend", "component"])
+                    else None
+                ),
+            ]
+            if t
         ],
         "claudeCodeTaskBrief": "\n".join(brief_lines),
     }

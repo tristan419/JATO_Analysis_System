@@ -1,0 +1,17 @@
+name = "jato-readonly-api-cache"
+main = "worker.js"
+compatibility_date = "2026-06-23"
+workers_dev = true
+
+[[routes]]
+pattern = "api-intl.ojeur.cloud"
+custom_domain = true
+
+[vars]
+ORIGIN_BASE_URL = "https://www.ojeur.cloud"
+ALLOWED_ORIGINS = "https://intl.ojeur.cloud,https://www.ojeur.cloud"
+DATA_VERSION = "manual-2026-06-23"
+CACHE_FILTER_OPTIONS_TTL_SECONDS = "300"
+CACHE_METADATA_TTL_SECONDS = "3600"
+CACHE_TIME_SERIES_TTL_SECONDS = "300"
+MAX_CACHE_BODY_BYTES = "8388608"

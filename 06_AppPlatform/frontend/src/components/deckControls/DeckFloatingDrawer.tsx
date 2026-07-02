@@ -16,6 +16,7 @@ interface DeckFloatingDrawerProps {
   headerClassName?: string;
   bodyClassName?: string;
   footerClassName?: string;
+  showTrigger?: boolean;
   children: ReactNode;
   footer?: ReactNode;
 }
@@ -36,6 +37,7 @@ export function DeckFloatingDrawer({
   headerClassName,
   bodyClassName,
   footerClassName,
+  showTrigger = true,
   children,
   footer,
 }: DeckFloatingDrawerProps) {
@@ -48,15 +50,17 @@ export function DeckFloatingDrawer({
 
   return (
     <section className={drawerClassName}>
-      <button
-        type="button"
-        className={toggleClassName}
-        onClick={() => onOpenChange(!open)}
-        aria-expanded={open}
-      >
-        <span>{triggerPrimary}</span>
-        <span>{open ? triggerSecondaryOpen : triggerSecondaryClosed}</span>
-      </button>
+      {showTrigger ? (
+        <button
+          type="button"
+          className={toggleClassName}
+          onClick={() => onOpenChange(!open)}
+          aria-expanded={open}
+        >
+          <span>{triggerPrimary}</span>
+          <span>{open ? triggerSecondaryOpen : triggerSecondaryClosed}</span>
+        </button>
+      ) : null}
       {open ? (
         <aside className={asideClassName} aria-label={ariaLabel}>
           <header className={headClassName}>
