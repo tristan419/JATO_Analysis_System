@@ -2,12 +2,11 @@ import { Suspense, lazy, useCallback, useEffect, useMemo, useRef, useState } fro
 import { Link } from "react-router-dom";
 import type { Data, Layout, PlotMouseEvent } from "plotly.js";
 
-import { api } from "../api/client";
+import { dashboardApi } from "../api/dashboard";
 import { CollapsibleDeckHero } from "../components/CollapsibleDeckHero";
 import { CollapsibleFilterSidebar } from "../components/CollapsibleFilterSidebar";
 import { LoadingActionButton } from "../components/LoadingActionButton";
 import { LoadingSurface } from "../components/LoadingSurface";
-import { preloadPlotlyChartRuntime } from "../components/LazyPlotlyChart";
 import { SearchSelectFilter } from "../components/SearchSelectFilter";
 import { DebouncedNumberInput } from "../components/deckControls/DebouncedNumberInput";
 import { DeckControlTabs, type DeckControlTabItem } from "../components/deckControls/DeckControlTabs";
@@ -22,7 +21,7 @@ import type { FilterKey } from "../dashboardFilters";
 import type { OverviewResponse, TimeSeriesPoint, GroupedTimeSeriesItem, ModelVersionItem, PositioningMapItem, PositioningPeerCorridor, OthersDetailItem, DataFreshnessItem } from "../types";
 import { LazyPlotlyChart as PlotlyChart } from "../components/LazyPlotlyChart";
 import { TimeAxis, type TimeRange } from "../components/TimeAxis";
-import { ExportPanel, DEFAULT_EXPORT, applyExportToLayout, getExportPalette, applyDataLabelsToTraces, applySeriesColors, buildExportLabelModeOptions, withExportLabels, type ExportLabelOverlapStrategy, type ExportSettings } from "../components/ExportPanel";
+import { DEFAULT_EXPORT, applyExportToLayout, getExportPalette, applyDataLabelsToTraces, applySeriesColors, buildExportLabelModeOptions, withExportLabels, type ExportLabelOverlapStrategy, type ExportSettings } from "../components/ExportPanelHelpers";
 import { buildBubbleSizing } from "../utils/bubbleSizing";
 import { DEFAULT_POWERTRAINS, fuelFamilyColor, normalizePowertrainName, seriesColor } from "../utils/colors";
 import { getCachedPageValue, setCachedPageValue } from "../utils/pageCache";
@@ -60,6 +59,9 @@ import {
 } from "./dashboardHelpers";
 const RvFinanceDashboard = lazy(() =>
   import("../components/RvFinanceDashboard").then((module) => ({ default: module.RvFinanceDashboard }))
+);
+const DashboardExportPanel = lazy(() =>
+  import("../components/ExportPanel").then((module) => ({ default: module.ExportPanel }))
 );
 
 const DASHBOARD_DEFERRED_FETCH_DELAY_MS = 6_000;
@@ -559,6 +561,17 @@ export function DashboardPage() {
   const [pmExport, setPmExport] = useState<ExportSettings>(() => cachedPage?.pmExport ?? { ...DEFAULT_EXPORT });
   const tsChartRef = useRef<HTMLDivElement | null>(null);
   const advChartRef = useRef<HTMLDivElement | null>(null);
+  const advRequestAbortRef = useRef<AbortController | null>(null);
+  const mvRequestAbortRef = useRef<AbortController | null>(null);
+  const pmRequestAbortRef = useRef<AbortController | null>(null);
+  useEffect(() => () => {
+    advRequestAbortRef.current?.abort();
+    advRequestAbortRef.current = null;
+    mvRequestAbortRef.current?.abort();
+    mvRequestAbortRef.current = null;
+    pmRequestAbortRef.current?.abort();
+    pmRequestAbortRef.current = null;
+  }, []);
   // --- interactive "selected" label strategy for Advanced scatter charts ---
   const [selectedAdvKeys, setSelectedAdvKeys] = useState<Set<string>>(new Set());
   useEffect(() => {
@@ -613,7 +626,7 @@ export function DashboardPage() {
   useEffect(() => {
     let cancelled = false;
     const timer = window.setTimeout(() => {
-      api.dataFreshness().then((res) => {
+      dashboardApi.dataFreshness().then((res) => {
         if (!cancelled) setFreshnessItems(res.items ?? []);
       }).catch(() => {});
     }, DASHBOARD_DEFERRED_FETCH_DELAY_MS);
@@ -717,7 +730,7 @@ export function DashboardPage() {
           const shareSplitBy = tsMode === "\u5206\u7ec4" && isTimeSeriesShareGroupDimension(tsGroupDim) && tsShareSplit !== "total"
             ? tsShareSplit
             : undefined;
-          const r = await api.groupedTimeSeries({
+          const r = await dashboardApi.groupedTimeSeries({
             filters,
             grain: activeTab,
             group_by: tsGroupDim,
@@ -745,6 +758,9 @@ export function DashboardPage() {
   /* advanced chart */
   async function loadAdvChart() {
     prevAdvPayloadRef.current = filterTimeScopeKey;
+    advRequestAbortRef.current?.abort();
+    const controller = new AbortController();
+    advRequestAbortRef.current = controller;
     setAdvLoading(true); setError("");
     try {
       const opts: Record<string, unknown> = { band_size: advBandSize };
@@ -775,35 +791,61 @@ export function DashboardPage() {
         opts.depreciation_rate = tcoDepreciation; opts.maintenance_rate = tcoMaintenance;
         opts.tax_insurance_rate = tcoTaxInsurance; opts.energy_cost_base = tcoEnergyCost;
       }
-      const r = await api.advancedChart({
+      const r = await dashboardApi.advancedChart({
         group: advGroup,
         chart: advChart,
         filters: buildFilterPayload(),
         top_n: advTopN,
         options: opts,
         time_range: timeRangePayload,
-      });
+      }, { signal: controller.signal });
+      if (advRequestAbortRef.current !== controller || controller.signal.aborted) return;
       setAdvItems(ensureArray(r.items));
       setAdvMeta(r.meta ?? null);
-    } catch (e) { setError((e as Error).message); }
-    finally { setAdvLoading(false); }
+    } catch (e) {
+      if (advRequestAbortRef.current === controller && !isAbortError(e)) {
+        setError((e as Error).message);
+      }
+    }
+    finally {
+      if (advRequestAbortRef.current === controller) {
+        advRequestAbortRef.current = null;
+        setAdvLoading(false);
+      }
+    }
   }
 
   /* model version bubble */
   async function loadModelVersions() {
-    if (!mvModelName.trim()) return;
+    mvRequestAbortRef.current?.abort();
+    if (!mvModelName.trim()) {
+      setMvLoading(false);
+      return;
+    }
     prevMvScopeRef.current = filterTimeScopeKey;
+    const controller = new AbortController();
+    mvRequestAbortRef.current = controller;
     setMvLoading(true); setError("");
     try {
-      const r = await api.modelVersions({
+      const r = await dashboardApi.modelVersions({
         filters: buildFilterPayload(),
         model_name: mvModelName.trim(),
         top_n: mvTopN,
         time_range: timeRangePayload,
-      });
+      }, { signal: controller.signal });
+      if (mvRequestAbortRef.current !== controller || controller.signal.aborted) return;
       setMvItems(ensureArray(r.items));
-    } catch (e) { setError((e as Error).message); }
-    finally { setMvLoading(false); }
+    } catch (e) {
+      if (mvRequestAbortRef.current === controller && !isAbortError(e)) {
+        setError((e as Error).message);
+      }
+    }
+    finally {
+      if (mvRequestAbortRef.current === controller) {
+        mvRequestAbortRef.current = null;
+        setMvLoading(false);
+      }
+    }
   }
 
   /* OJ positioning map */
@@ -821,9 +863,12 @@ export function DashboardPage() {
   }
   async function loadPositioningMap() {
     prevPmScopeRef.current = filterTimeScopeKey;
+    pmRequestAbortRef.current?.abort();
+    const controller = new AbortController();
+    pmRequestAbortRef.current = controller;
     setPmLoading(true); setError("");
     try {
-      const r = await api.positioningMap({
+      const r = await dashboardApi.positioningMap({
         filters: buildFilterPayload(),
         target_length: pmTargetLength ? Number(pmTargetLength) : null,
         target_msrp: pmTargetMsrp ? Number(pmTargetMsrp) : null,
@@ -832,10 +877,20 @@ export function DashboardPage() {
         top_n: pmTopN,
         n_clusters: pmNClusters,
         time_range: timeRangePayload,
-      });
+      }, { signal: controller.signal });
+      if (pmRequestAbortRef.current !== controller || controller.signal.aborted) return;
       setPmItems(ensureArray(r.items)); setPmTarget(r.target ?? null); setPmClusterTop3(ensureArray(r.cluster_top3)); setPmPeerCorridor(r.peerCorridor ?? null);
-    } catch (e) { setError((e as Error).message); }
-    finally { setPmLoading(false); }
+    } catch (e) {
+      if (pmRequestAbortRef.current === controller && !isAbortError(e)) {
+        setError((e as Error).message);
+      }
+    }
+    finally {
+      if (pmRequestAbortRef.current === controller) {
+        pmRequestAbortRef.current = null;
+        setPmLoading(false);
+      }
+    }
   }
 
   /* ── derived chart data ──────────────────────────── */
@@ -1022,21 +1077,6 @@ export function DashboardPage() {
     () => rankingData.slice(0, rankLimit),
     [rankingData, rankLimit],
   );
-  const hasDeferredChartData = (
-    aggregatedSingle.length > 0
-    || filteredGrouped.length > 0
-    || advItems.length > 0
-    || mvItems.length > 0
-    || pmItems.length > 0
-  );
-
-  useEffect(() => {
-    if (dashboardBootstrapping || !hasDeferredChartData) return;
-    return scheduleDashboardIdlePreload(() => {
-      void preloadPlotlyChartRuntime();
-    });
-  }, [dashboardBootstrapping, hasDeferredChartData]);
-
   /* B7: time-window KPI — compute sales from filtered time series */
   const timeWindowSales = useMemo(() => {
     if (!timeRange) return kpis?.cumulativeSales;
@@ -1224,29 +1264,6 @@ export function DashboardPage() {
     if (columns.length === 0) return;
     setCachedPageValue(DASHBOARD_CACHE_KEY, dashboardCacheSnapshot, PAGE_CACHE_TTL_MS);
   }, [columns.length, dashboardCacheSnapshot]);
-
-  useEffect(() => {
-    let cancelled = false;
-    const cancelIdle = scheduleDashboardIdlePreload(() => {
-      void loadDashboardAnimation().then(({ animate }) => {
-        if (cancelled) return;
-        try {
-          animate(".dashboard-hero-head", {
-            opacity: [0, 1],
-            translateY: [12, 0],
-            duration: 600,
-            ease: "outExpo",
-          });
-        } catch {
-          /* decorative only */
-        }
-      }).catch(() => undefined);
-    });
-    return () => {
-      cancelled = true;
-      cancelIdle();
-    };
-  }, []);
 
   /* palette helper */
   const tsPalette = useMemo(() => getExportPalette(tsExport.colorScheme), [tsExport.colorScheme]);
@@ -3506,59 +3523,61 @@ export function DashboardPage() {
               </button>
             ))}
           </div>
-          {activeDeckSection === "timeSeries" && (
-            <ExportPanel value={tsExport} onChange={setTsExport} graphDiv={tsChartRef.current} seriesNames={timeSeriesExportSeriesNames} labelModeOptions={tsLabelModeOptions} showExportButton={false} showDimensionControls={false} collapsible={false} />
-          )}
-          {activeDeckSection === "advanced" && (
-            <>
-              <ExportPanel value={advExport} onChange={setAdvExport} graphDiv={advChartRef.current} seriesNames={advancedExportSeriesNames} labelModeOptions={advLabelModeOptions} showExportButton={false} showDimensionControls={false} showLabelStrategyControl={false} collapsible={false} />
-              <div className="positioning-pricing-control-grid">
-                <label className="market-scan-field">
-                  <span>标签字段</span>
-                  <select
-                    value={advBubbleLabelDimension}
-                    onChange={(e) => {
-                      const nextLabel = e.target.value as "model" | "version";
-                      setAdvBubbleLabelDimension(nextLabel);
-                      if (nextLabel === "version" && advBubbleGrain !== "version") {
-                        setAdvBubbleGrain("version");
-                        setAdvItems([]);
-                        setAdvMeta(null);
-                      }
-                    }}
-                  >
-                    <option value="model">Model</option>
-                    <option value="version">Version</option>
-                  </select>
-                  {advBubbleLabelDimension === "version" && advBubbleGrain !== "version" && (
-                    <span className="ts-mode-hint">Version 标签会同步切换 04 图粒度并重新加载。</span>
-                  )}
-                </label>
-                <label className="market-scan-field">
-                  <span>气泡标签</span>
-                  <select
-                    value={advExport.dataLabelOverlapStrategy}
-                    onChange={(e) => setAdvExport((previous) => ({
-                      ...previous,
-                      dataLabelOverlapStrategy: e.target.value as ExportLabelOverlapStrategy,
-                    }))}
-                  >
-                    {ADVANCED_BUBBLE_LABEL_OPTIONS.map((option) => (
-                      <option key={option.value} value={option.value}>
-                        {option.label}
-                      </option>
-                    ))}
-                  </select>
-                </label>
-              </div>
-            </>
-          )}
-          {activeDeckSection === "modelVersion" && (
-            <ExportPanel value={mvExport} onChange={setMvExport} graphDiv={mvChartRef.current} seriesNames={modelVersionExportSeriesNames} labelModeOptions={mvLabelModeOptions} showExportButton={false} showDimensionControls={false} collapsible={false} />
-          )}
-          {activeDeckSection === "positioning" && (
-            <ExportPanel value={pmExport} onChange={setPmExport} graphDiv={pmChartRef.current} seriesNames={positioningExportSeriesNames} labelModeOptions={pmLabelModeOptions} showExportButton={false} showDimensionControls={false} collapsible={false} />
-          )}
+          <Suspense fallback={<LoadingSurface mode="inline" label="正在加载导出设置" detail="Export panel" />}>
+            {activeDeckSection === "timeSeries" && (
+              <DashboardExportPanel value={tsExport} onChange={setTsExport} graphDiv={tsChartRef.current} seriesNames={timeSeriesExportSeriesNames} labelModeOptions={tsLabelModeOptions} showExportButton={false} showDimensionControls={false} collapsible={false} />
+            )}
+            {activeDeckSection === "advanced" && (
+              <>
+                <DashboardExportPanel value={advExport} onChange={setAdvExport} graphDiv={advChartRef.current} seriesNames={advancedExportSeriesNames} labelModeOptions={advLabelModeOptions} showExportButton={false} showDimensionControls={false} showLabelStrategyControl={false} collapsible={false} />
+                <div className="positioning-pricing-control-grid">
+                  <label className="market-scan-field">
+                    <span>标签字段</span>
+                    <select
+                      value={advBubbleLabelDimension}
+                      onChange={(e) => {
+                        const nextLabel = e.target.value as "model" | "version";
+                        setAdvBubbleLabelDimension(nextLabel);
+                        if (nextLabel === "version" && advBubbleGrain !== "version") {
+                          setAdvBubbleGrain("version");
+                          setAdvItems([]);
+                          setAdvMeta(null);
+                        }
+                      }}
+                    >
+                      <option value="model">Model</option>
+                      <option value="version">Version</option>
+                    </select>
+                    {advBubbleLabelDimension === "version" && advBubbleGrain !== "version" && (
+                      <span className="ts-mode-hint">Version 标签会同步切换 04 图粒度并重新加载。</span>
+                    )}
+                  </label>
+                  <label className="market-scan-field">
+                    <span>气泡标签</span>
+                    <select
+                      value={advExport.dataLabelOverlapStrategy}
+                      onChange={(e) => setAdvExport((previous) => ({
+                        ...previous,
+                        dataLabelOverlapStrategy: e.target.value as ExportLabelOverlapStrategy,
+                      }))}
+                    >
+                      {ADVANCED_BUBBLE_LABEL_OPTIONS.map((option) => (
+                        <option key={option.value} value={option.value}>
+                          {option.label}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                </div>
+              </>
+            )}
+            {activeDeckSection === "modelVersion" && (
+              <DashboardExportPanel value={mvExport} onChange={setMvExport} graphDiv={mvChartRef.current} seriesNames={modelVersionExportSeriesNames} labelModeOptions={mvLabelModeOptions} showExportButton={false} showDimensionControls={false} collapsible={false} />
+            )}
+            {activeDeckSection === "positioning" && (
+              <DashboardExportPanel value={pmExport} onChange={setPmExport} graphDiv={pmChartRef.current} seriesNames={positioningExportSeriesNames} labelModeOptions={pmLabelModeOptions} showExportButton={false} showDimensionControls={false} collapsible={false} />
+            )}
+          </Suspense>
         </DeckExportDrawer>
     </div>
   );

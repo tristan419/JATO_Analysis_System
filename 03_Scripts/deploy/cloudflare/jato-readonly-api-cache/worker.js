@@ -3,9 +3,13 @@ const DEFAULT_MAX_CACHE_BODY_BYTES = 8 * 1024 * 1024;
 
 const CACHEABLE_ENDPOINTS = [
   { method: "GET", path: "/v1/metadata/columns", ttlEnv: "CACHE_METADATA_TTL_SECONDS", defaultTtl: 3600 },
+  { method: "GET", path: "/v1/metadata/filter-snapshot", ttlEnv: "CACHE_METADATA_TTL_SECONDS", defaultTtl: 3600 },
   { method: "GET", path: "/v1/assistant/country/metadata", ttlEnv: "CACHE_METADATA_TTL_SECONDS", defaultTtl: 3600 },
+  { method: "GET", path: "/v1/analysis/data-freshness", ttlEnv: "CACHE_METADATA_TTL_SECONDS", defaultTtl: 300 },
   { method: "POST", path: "/v1/filters/options", ttlEnv: "CACHE_FILTER_OPTIONS_TTL_SECONDS", defaultTtl: 300 },
   { method: "POST", path: "/v1/filters/options/batch", ttlEnv: "CACHE_FILTER_OPTIONS_TTL_SECONDS", defaultTtl: 300 },
+  { method: "POST", path: "/v1/analysis/overview", ttlEnv: "CACHE_TIME_SERIES_TTL_SECONDS", defaultTtl: 300 },
+  { method: "POST", path: "/v1/analysis/time-series", ttlEnv: "CACHE_TIME_SERIES_TTL_SECONDS", defaultTtl: 300 },
   { method: "POST", path: "/v1/analysis/time-series-grouped", ttlEnv: "CACHE_TIME_SERIES_TTL_SECONDS", defaultTtl: 300 },
 ];
 
@@ -86,10 +90,8 @@ async function bodyHash(request) {
 }
 
 async function authScopeHash(request) {
-  const token = request.headers.get("x-auth-token") || "";
-  const userName = request.headers.get("x-user-name") || "";
-  const userRole = request.headers.get("x-user-role") || "";
-  return sha256Hex(`${userRole}\n${userName}\n${token}`);
+  const userRole = String(request.headers.get("x-user-role") || "viewer").trim().toLowerCase();
+  return sha256Hex(`role:${userRole || "viewer"}`);
 }
 
 function dataVersion(request, env) {
@@ -111,7 +113,7 @@ async function cacheKeyRequest(request, env) {
     dataVersion: dataVersion(request, env),
   };
   const keyHash = await sha256Hex(JSON.stringify(keyPayload));
-  return new Request(`https://jato-readonly-api-cache.local/${keyHash}`, {
+  return new Request(new URL(`/_jato_readonly_api_cache/${keyHash}`, url.origin).toString(), {
     method: "GET",
   });
 }
@@ -182,9 +184,11 @@ async function cachedReadOnlyResponse(request, env, ctx, endpoint) {
 
   const body = await originResponse.arrayBuffer();
   const ttl = ttlSeconds(env, endpoint);
-  const response = responseWithCacheHeaders(body, originResponse, endpoint, ttl, "MISS");
+  const response = responseWithCacheHeaders(body.slice(0), originResponse, endpoint, ttl, "MISS");
   if (body.byteLength <= maxCacheBodyBytes(env)) {
-    ctx.waitUntil(cache.put(key, response.clone()));
+    const cacheResponse = responseWithCacheHeaders(body.slice(0), originResponse, endpoint, ttl, "HIT");
+    cacheResponse.headers.delete("vary");
+    await cache.put(key, cacheResponse);
   }
   return withCors(response, request, env);
 }

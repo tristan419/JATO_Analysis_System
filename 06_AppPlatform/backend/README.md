@@ -113,13 +113,16 @@ python 03_Scripts/diagnostics/prewarm_grouped_time_series.py \
   --origin http://127.0.0.1:8000 \
   --token "$APP_AUTH_TOKEN" \
   --user-name prewarm \
-  --user-role viewer \
+  --user-role order_filler \
   --require-server-cache \
   --require-repeat-hit
 ```
 
 The script prints one JSON line per request. A healthy repeated run should show
 `serverCache` as `MEMORY`, `DISK`, or `INFLIGHT` rather than `MISS`.
+Default startup prewarm covers month/year grouped Dashboard lenses for
+`viewer`, `order_filler`, `editor`, and `admin`, including the wide country +
+powertrain filter set used by the Intl Dashboard.
 `03_Scripts/ops/deploy_fullstack_server.sh` runs the same prewarm automatically
 after backend health checks when `APP_GROUPED_TIME_SERIES_PREWARM_ENABLED=true`;
 set `RUN_GROUPED_TIME_SERIES_PREWARM=strict` to fail deployment on a cold repeat.

@@ -1,81 +1,24 @@
 import { useEffect, useMemo, useState } from "react";
 
-type RouteTarget = "cn" | "intl";
-type ProbeStatus = "idle" | "running" | "ok" | "failed";
-
-interface RouteDecision {
-  target: RouteTarget;
-  expiresAt: number;
-  createdAt?: number;
-  source?: "manual" | "auto";
-  reason?: string;
-  cnOk?: boolean;
-  intlOk?: boolean;
-  cnMs?: number;
-  intlMs?: number;
-  marginMs?: number;
-}
-
-interface ProbeResult {
-  target: RouteTarget;
-  host: string;
-  status: ProbeStatus;
-  ms: number | null;
-  checkedAt: string;
-}
-
-const ROUTE_HOSTS: Record<RouteTarget, string> = {
-  cn: "www.ojeur.cloud",
-  intl: "intl.ojeur.cloud",
-};
-const DECISION_KEY = "jato_route_decision_v1";
-const MANUAL_KEY = "jato_route_manual_v1";
-const PROBE_TIMEOUT_MS = 1_800;
-const REDIRECT_MARGIN_MS = 450;
-
-function routeLabel(target: RouteTarget): string {
-  return target === "cn" ? "www" : "intl";
-}
-
-function formatTarget(target: RouteTarget | null): string {
-  if (!target) return "-";
-  return ROUTE_HOSTS[target];
-}
-
-function numberOrUndefined(value: unknown): number | undefined {
-  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
-}
-
-function booleanOrUndefined(value: unknown): boolean | undefined {
-  return typeof value === "boolean" ? value : undefined;
-}
-
-function readDecision(key: string): RouteDecision | null {
-  try {
-    const raw = window.localStorage.getItem(key);
-    if (!raw) return null;
-    const parsed = JSON.parse(raw) as Partial<RouteDecision>;
-    if (parsed.target !== "cn" && parsed.target !== "intl") return null;
-    if (typeof parsed.expiresAt !== "number" || parsed.expiresAt < Date.now()) {
-      window.localStorage.removeItem(key);
-      return null;
-    }
-    return {
-      target: parsed.target,
-      expiresAt: parsed.expiresAt,
-      createdAt: numberOrUndefined(parsed.createdAt),
-      source: parsed.source === "manual" || parsed.source === "auto" ? parsed.source : undefined,
-      reason: typeof parsed.reason === "string" ? parsed.reason : undefined,
-      cnOk: booleanOrUndefined(parsed.cnOk),
-      intlOk: booleanOrUndefined(parsed.intlOk),
-      cnMs: numberOrUndefined(parsed.cnMs),
-      intlMs: numberOrUndefined(parsed.intlMs),
-      marginMs: numberOrUndefined(parsed.marginMs),
-    };
-  } catch {
-    return null;
-  }
-}
+import {
+  DECISION_KEY,
+  MANUAL_KEY,
+  buildRouteRedirectUrl,
+  chooseAutoRoute,
+  clearRouteDecisions,
+  createManualRouteDecision,
+  currentRouteTarget,
+  detectClientRouteProfile,
+  formatTarget,
+  makeInitialProbe,
+  probeRoute,
+  readRouteDecision,
+  routeLabel,
+  saveRouteDecision,
+  type ProbeResult,
+  type RouteDecision,
+  type RouteTarget,
+} from "../utils/routeDecision";
 
 function formatDecision(decision: RouteDecision | null): string {
   if (!decision) return "-";
@@ -83,7 +26,7 @@ function formatDecision(decision: RouteDecision | null): string {
 }
 
 function formatDecisionDetail(decision: RouteDecision | null): string {
-  if (!decision) return "No cached decision. The router will probe both hosts and prefer www unless intl is clearly faster.";
+  if (!decision) return "No cached decision. The router will probe both hosts, keep China-local browsers on www unless intl is clearly faster, and otherwise use the faster measured route.";
   const details: string[] = [];
   if (decision.reason) details.push(decision.reason);
   if (decision.createdAt) {
@@ -105,102 +48,16 @@ function formatProbe(result: ProbeResult): string {
   return `${result.ms} ms`;
 }
 
-async function probeRoute(target: RouteTarget): Promise<ProbeResult> {
-  const controller = new AbortController();
-  const startedAt = performance.now();
-  const timeout = window.setTimeout(() => controller.abort(), PROBE_TIMEOUT_MS);
-  const checkedAt = new Date().toLocaleTimeString();
-  try {
-    await fetch(`https://${ROUTE_HOSTS[target]}/route-probe.txt?ts=${Date.now()}`, {
-      cache: "no-store",
-      credentials: "omit",
-      mode: "no-cors",
-      signal: controller.signal,
-    });
-    return {
-      target,
-      host: ROUTE_HOSTS[target],
-      status: "ok",
-      ms: Math.round(performance.now() - startedAt),
-      checkedAt,
-    };
-  } catch {
-    return {
-      target,
-      host: ROUTE_HOSTS[target],
-      status: "failed",
-      ms: Math.round(performance.now() - startedAt),
-      checkedAt,
-    };
-  } finally {
-    window.clearTimeout(timeout);
-  }
-}
-
-function makeInitialProbe(target: RouteTarget): ProbeResult {
-  return {
-    target,
-    host: ROUTE_HOSTS[target],
-    status: "idle",
-    ms: null,
-    checkedAt: "-",
-  };
-}
-
-function currentRouteTarget(host: string): RouteTarget | null {
-  if (host === ROUTE_HOSTS.cn) return "cn";
-  if (host === ROUTE_HOSTS.intl) return "intl";
-  return null;
-}
-
-function chooseAutoRoute(
-  results: Record<RouteTarget, ProbeResult>,
-  currentTarget: RouteTarget | null,
-): { target: RouteTarget; reason: string } | null {
-  const cnOk = results.cn.status === "ok";
-  const intlOk = results.intl.status === "ok";
-  if (!cnOk && !intlOk) {
-    if (results.cn.status === "running" || results.intl.status === "running") return null;
-    return {
-      target: currentTarget ?? "cn",
-      reason: "Both probes failed; stay on the current host.",
-    };
-  }
-  if (cnOk && !intlOk) {
-    return {
-      target: "cn",
-      reason: "intl probe failed and www probe succeeded.",
-    };
-  }
-  if (intlOk && !cnOk) {
-    return {
-      target: "intl",
-      reason: "www probe failed and intl probe succeeded.",
-    };
-  }
-  const cnMs = results.cn.ms ?? PROBE_TIMEOUT_MS;
-  const intlMs = results.intl.ms ?? PROBE_TIMEOUT_MS;
-  if (intlMs + REDIRECT_MARGIN_MS < cnMs) {
-    return {
-      target: "intl",
-      reason: `intl is faster by ${cnMs - intlMs} ms, above the ${REDIRECT_MARGIN_MS} ms redirect margin.`,
-    };
-  }
-  return {
-    target: "cn",
-    reason: `www is preferred because intl is not more than ${REDIRECT_MARGIN_MS} ms faster.`,
-  };
-}
-
 export function RouteDiagnosticsPage() {
   const [results, setResults] = useState<Record<RouteTarget, ProbeResult>>({
     cn: makeInitialProbe("cn"),
     intl: makeInitialProbe("intl"),
   });
-  const [manualDecision, setManualDecision] = useState<RouteDecision | null>(() => readDecision(MANUAL_KEY));
-  const [autoDecision, setAutoDecision] = useState<RouteDecision | null>(() => readDecision(DECISION_KEY));
+  const [manualDecision, setManualDecision] = useState<RouteDecision | null>(() => readRouteDecision(window.localStorage, MANUAL_KEY));
+  const [autoDecision, setAutoDecision] = useState<RouteDecision | null>(() => readRouteDecision(window.localStorage, DECISION_KEY));
   const currentHost = window.location.hostname || "-";
   const currentTarget = currentRouteTarget(currentHost);
+  const clientProfile = useMemo(() => detectClientRouteProfile(), []);
   const activeDecision = manualDecision ?? autoDecision;
   const activeTarget = activeDecision?.target ?? currentTarget;
   const fastestTarget = useMemo<RouteTarget | null>(() => {
@@ -212,8 +69,8 @@ export function RouteDiagnosticsPage() {
     return cn <= intl ? "cn" : "intl";
   }, [results]);
   const autoRecommendation = useMemo(
-    () => chooseAutoRoute(results, currentTarget),
-    [currentTarget, results],
+    () => chooseAutoRoute(results, currentTarget, clientProfile),
+    [clientProfile, currentTarget, results],
   );
 
   async function runProbe() {
@@ -226,27 +83,22 @@ export function RouteDiagnosticsPage() {
       probeRoute("intl"),
     ]);
     setResults({ cn: cnResult, intl: intlResult });
-    setManualDecision(readDecision(MANUAL_KEY));
-    setAutoDecision(readDecision(DECISION_KEY));
+    setManualDecision(readRouteDecision(window.localStorage, MANUAL_KEY));
+    setAutoDecision(readRouteDecision(window.localStorage, DECISION_KEY));
   }
 
   function lockRoute(target: RouteTarget) {
-    window.localStorage.setItem(
-      MANUAL_KEY,
-      JSON.stringify({
-        target,
-        source: "manual",
-        reason: "Manual override from route diagnostics",
-        createdAt: Date.now(),
-        expiresAt: Date.now() + 24 * 60 * 60 * 1000,
-      }),
-    );
-    window.location.href = `https://${ROUTE_HOSTS[target]}/route-diagnostics?routeChecked=1`;
+    const decision = createManualRouteDecision(target);
+    saveRouteDecision(window.localStorage, decision);
+    window.location.href = buildRouteRedirectUrl(decision, {
+      pathname: "/route-diagnostics",
+      search: "",
+      hash: "",
+    });
   }
 
   function resetAuto() {
-    window.localStorage.removeItem(MANUAL_KEY);
-    window.localStorage.removeItem(DECISION_KEY);
+    clearRouteDecisions(window.localStorage);
     setManualDecision(null);
     setAutoDecision(null);
     void runProbe();
@@ -296,6 +148,11 @@ export function RouteDiagnosticsPage() {
           <span className="route-diagnostics-label">Auto decision</span>
           <strong>{formatDecision(autoDecision)}</strong>
           <span className="route-diagnostics-muted">自动分流缓存</span>
+        </article>
+        <article className="route-diagnostics-panel">
+          <span className="route-diagnostics-label">Browser signal</span>
+          <strong>{clientProfile.prefersChinaRoute ? "China-local" : "Neutral"}</strong>
+          <span className="route-diagnostics-muted">{clientProfile.reason}; China-local browsers prefer www unless intl is clearly faster</span>
         </article>
       </section>
 

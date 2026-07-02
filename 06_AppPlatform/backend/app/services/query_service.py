@@ -108,13 +108,14 @@ _GroupedTimeSeriesCacheKey = tuple[
     bool,
     tuple[str, str] | None,
 ]
+_GroupedTimeSeriesInflightKey = tuple[_GroupedTimeSeriesCacheKey, str]
 
 _grouped_time_series_cache: dict[
     _GroupedTimeSeriesCacheKey,
     tuple[float, str, dict],
 ] = {}
 _grouped_time_series_inflight: dict[
-    _GroupedTimeSeriesCacheKey,
+    _GroupedTimeSeriesInflightKey,
     threading.Event,
 ] = {}
 _grouped_time_series_cache_lock = threading.Lock()
@@ -243,9 +244,10 @@ def _get_grouped_time_series_cache_hit(
 def _store_grouped_time_series_cache(
     cache_key: _GroupedTimeSeriesCacheKey,
     result: dict,
+    dataset_token: str | None = None,
 ) -> dict:
     now = time.monotonic()
-    dataset_token = repo.current_dataset_token()
+    dataset_token = dataset_token or repo.current_dataset_token()
     cached_result = _get_grouped_time_series_cache_hit(
         cache_key,
         dataset_token,
@@ -277,15 +279,19 @@ def _load_grouped_time_series_persistent_cache(
     if cached_result is None:
         return None
     with _grouped_time_series_cache_lock:
-        return _store_grouped_time_series_cache(cache_key, cached_result)
+        return _store_grouped_time_series_cache(
+            cache_key,
+            cached_result,
+            dataset_token,
+        )
 
 
 def _wait_for_grouped_time_series_cache(
     cache_key: _GroupedTimeSeriesCacheKey,
     event: threading.Event,
+    dataset_token: str,
 ) -> dict | None:
     event.wait()
-    dataset_token = repo.current_dataset_token()
     return _get_grouped_time_series_cache_hit(
         cache_key,
         dataset_token,
@@ -1044,6 +1050,18 @@ def metadata_columns() -> list[str]:
     return repo.list_columns()
 
 
+def metadata_filter_snapshot() -> dict:
+    columns = metadata_columns()
+    snapshot = _load_top_level_filter_options_snapshot()
+    return {
+        "columns": list(columns),
+        "options": {
+            column: list(options)
+            for column, options in snapshot.items()
+        },
+    }
+
+
 def filters_options(column: str, filters: dict[str, list[str]]) -> dict:
     if not _has_active_filters(filters):
         snapshot = _load_top_level_filter_options_snapshot()
@@ -1275,6 +1293,8 @@ def query_grouped_time_series_with_cache_state(
         return GroupedTimeSeriesQueryResult(cached_result, "DISK")
 
     owner = False
+    owner_inflight_key: _GroupedTimeSeriesInflightKey | None = None
+    owner_dataset_token: str | None = None
     with _grouped_time_series_cache_lock:
         now = time.monotonic()
         dataset_token = repo.current_dataset_token()
@@ -1286,27 +1306,39 @@ def query_grouped_time_series_with_cache_state(
         if cached_result is not None:
             return GroupedTimeSeriesQueryResult(cached_result, "MEMORY")
 
-        event = _grouped_time_series_inflight.get(cache_key)
+        inflight_key = (cache_key, dataset_token)
+        event = _grouped_time_series_inflight.get(inflight_key)
         if event is None:
             event = threading.Event()
-            _grouped_time_series_inflight[cache_key] = event
+            _grouped_time_series_inflight[inflight_key] = event
             owner = True
+            owner_inflight_key = inflight_key
+            owner_dataset_token = dataset_token
 
     if not owner:
-        cached_result = _wait_for_grouped_time_series_cache(cache_key, event)
+        cached_result = _wait_for_grouped_time_series_cache(
+            cache_key,
+            event,
+            dataset_token,
+        )
         if cached_result is not None:
             return GroupedTimeSeriesQueryResult(cached_result, "INFLIGHT")
 
         with _grouped_time_series_cache_lock:
-            event = _grouped_time_series_inflight.get(cache_key)
+            dataset_token = repo.current_dataset_token()
+            inflight_key = (cache_key, dataset_token)
+            event = _grouped_time_series_inflight.get(inflight_key)
             if event is None:
                 event = threading.Event()
-                _grouped_time_series_inflight[cache_key] = event
+                _grouped_time_series_inflight[inflight_key] = event
                 owner = True
+                owner_inflight_key = inflight_key
+                owner_dataset_token = dataset_token
         if not owner:
             cached_result = _wait_for_grouped_time_series_cache(
                 cache_key,
                 event,
+                dataset_token,
             )
             if cached_result is not None:
                 return GroupedTimeSeriesQueryResult(cached_result, "INFLIGHT")
@@ -1322,9 +1354,13 @@ def query_grouped_time_series_with_cache_state(
             time_range=time_range,
         )
 
-        dataset_token = repo.current_dataset_token()
+        dataset_token = owner_dataset_token or repo.current_dataset_token()
         with _grouped_time_series_cache_lock:
-            cached_result = _store_grouped_time_series_cache(cache_key, result)
+            cached_result = _store_grouped_time_series_cache(
+                cache_key,
+                result,
+                dataset_token,
+            )
         _write_grouped_time_series_disk_cache(
             cache_key,
             dataset_token,
@@ -1332,9 +1368,12 @@ def query_grouped_time_series_with_cache_state(
         )
         return GroupedTimeSeriesQueryResult(cached_result, "MISS")
     finally:
-        if owner:
+        if owner and owner_inflight_key is not None:
             with _grouped_time_series_cache_lock:
-                event = _grouped_time_series_inflight.pop(cache_key, None)
+                event = _grouped_time_series_inflight.pop(
+                    owner_inflight_key,
+                    None,
+                )
                 if event is not None:
                     event.set()
 

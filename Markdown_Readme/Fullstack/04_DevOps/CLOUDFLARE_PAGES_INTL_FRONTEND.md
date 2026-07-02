@@ -12,15 +12,28 @@ Create a Pages project from the GitHub repo:
 - Production environment variables:
 
 ```bash
-VITE_API_BASE=https://www.ojeur.cloud/v1
+VITE_API_BASE=/v1
+API_ORIGIN=https://www.ojeur.cloud
 VITE_USER_ROLE=viewer
 VITE_USER_NAME=anonymous
 ```
+
+`VITE_API_BASE=/v1` is required for the intl frontend. It makes browser API
+traffic hit the same-origin Cloudflare Pages Function at `/v1/*`, where
+read-only metadata, filter, overview, and grouped time-series requests can be
+cached near overseas users before the Function falls back to Tencent Cloud.
+
+Do not set the Pages build variable to
+`VITE_API_BASE=https://www.ojeur.cloud/v1`. That hard-codes the Tencent Cloud
+origin into the built JavaScript and bypasses the Pages Function cache. The
+frontend build includes a Cloudflare Pages guard that fails this specific
+misconfiguration.
 
 The repo includes:
 
 - `public/_redirects`: React Router SPA fallback for routes like `/login`.
 - `public/_headers`: long cache for hashed assets and no-cache for build metadata.
+- `functions/v1/[[path]].js`: same-origin read-only API cache facade for intl.
 
 ## Custom Domain
 
@@ -47,10 +60,68 @@ APP_CORS_ORIGINS=https://www.ojeur.cloud,https://intl.ojeur.cloud,http://localho
 APP_GOOGLE_REDIRECT_URI=https://www.ojeur.cloud/v1/auth/google/callback
 ```
 
-## Optional Read-only API Edge Cache
+## Read-only API Edge Cache
 
-If overseas users still spend most time waiting for Tencent Cloud API reads, add
-the optional Worker facade in:
+The Cloudflare Pages deployment should use the same-origin Pages Function API
+cache:
+
+```bash
+VITE_API_BASE=/v1
+API_ORIGIN=https://www.ojeur.cloud
+```
+
+Quick cache check:
+
+```bash
+curl -sS -D - -X POST 'https://intl.ojeur.cloud/v1/analysis/overview' \
+  -H 'content-type: application/json' \
+  -H 'x-user-name: test' \
+  --data '{"filters":{},"prefer_precomputed":true,"top_n":5}' \
+  -o /dev/null | grep -i 'x-jato-edge-cache'
+```
+
+Run the same command twice. The first response should be `MISS`, and the second
+response should be `HIT` when Cloudflare has accepted the cached object.
+The same-origin Function cache key uses method, URL, request body hash,
+`X-User-Name`, `X-User-Role`, and data version. It intentionally does not use
+`X-Auth-Token`, because refreshed login tokens would otherwise split identical
+read-only Dashboard cache entries.
+The same-origin Function currently caches metadata, filter option batches,
+Dashboard overview, time-series reads, grouped time-series reads, and data
+freshness. If Tencent Cloud has not deployed `/v1/metadata/filter-snapshot`
+yet, the Function synthesizes that snapshot from `/v1/metadata/columns` plus
+`/v1/filters/options/batch`, then caches the synthesized response at the edge.
+
+After each Pages deployment, prewarm the edge cache for the common Dashboard
+startup path:
+
+```bash
+cd 06_AppPlatform/frontend
+JATO_PREWARM_ORIGIN=https://intl.ojeur.cloud \
+JATO_PREWARM_USERNAME='<read-only-user>' \
+JATO_PREWARM_PASSWORD='<password>' \
+npm run perf:prewarm-edge
+```
+
+The script logs in only when username/password are provided, then sends the
+same `X-User-Name`, `X-User-Role`, optional `X-Auth-Token`, and optional
+`X-JATO-Data-Version` headers that the Pages Function uses to scope cache
+entries. It does not cache or touch auth/write/admin APIs. By default it runs
+two rounds so the first round can populate Cloudflare cache and the second
+round can confirm `x-jato-edge-cache: HIT` where the same edge node is reused.
+To prewarm a specific dashboard lens, pass comma-separated values:
+
+```bash
+JATO_PREWARM_COUNTRIES='丹麦,克罗地亚,匈牙利,奥地利,希腊,德国,意大利,挪威,捷克,斯洛伐克,斯洛文尼亚,比利时,法国,波兰,瑞典,瑞士,罗马尼亚,芬兰,荷兰,葡萄牙,西班牙' \
+JATO_PREWARM_POWERTRAINS='ICE,HEV,BEV,MHEV,PHEV' \
+npm run perf:prewarm-edge
+```
+
+Use `JATO_PREWARM_DATA_VERSION` when a backend data import creates a new cache
+version, otherwise the Function falls back to its configured data version.
+
+If a separate API domain is required later, the older standalone Worker facade
+is still available in:
 
 ```text
 03_Scripts/deploy/cloudflare/jato-readonly-api-cache
@@ -62,7 +133,7 @@ Recommended route:
 https://api-intl.ojeur.cloud/*
 ```
 
-Then set the Cloudflare Pages intl frontend API base to:
+Then set the Cloudflare Pages intl frontend API base to that Worker domain:
 
 ```bash
 VITE_API_BASE=https://api-intl.ojeur.cloud/v1
