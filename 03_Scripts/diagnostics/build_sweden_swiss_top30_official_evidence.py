@@ -1519,7 +1519,11 @@ OFFICIAL_SOURCES: tuple[OfficialSource, ...] = (
         country_label="Switzerland",
         brand="AUDI",
         model="Q3",
-        source_url="https://emea-dam.audi.com/adobe/assets/urn%3Aaaid%3Aaem%3A973adfb6-d610-470b-a6f5-400363dbe581/original/as/Audi_Q3_Preisliste_FR.pdf",
+        source_url=(
+            "https://emea-dam.audi.com/adobe/assets/"
+            "urn%3Aaaid%3Aaem%3A973adfb6-d610-470b-a6f5-400363dbe581/original/as/"
+            "Audi_Q3_Preisliste_FR.pdf"
+        ),
         source_label="Audi Switzerland Q3 official price list PDF",
         local_path="audi_ch_q3_preisliste_fr_2026.pdf",
         source_type="official_price_list_pdf",
@@ -1546,7 +1550,11 @@ OFFICIAL_SOURCES: tuple[OfficialSource, ...] = (
         country_label="Switzerland",
         brand="AUDI",
         model="Q3 SPORTBACK",
-        source_url="https://emea-dam.audi.com/adobe/assets/urn%3Aaaid%3Aaem%3A973adfb6-d610-470b-a6f5-400363dbe581/original/as/Audi_Q3_Preisliste_FR.pdf",
+        source_url=(
+            "https://emea-dam.audi.com/adobe/assets/"
+            "urn%3Aaaid%3Aaem%3A973adfb6-d610-470b-a6f5-400363dbe581/original/as/"
+            "Audi_Q3_Preisliste_FR.pdf"
+        ),
         source_label="Audi Switzerland Q3 Sportback official price list PDF",
         local_path="audi_ch_q3_preisliste_fr_2026.pdf",
         source_type="official_price_list_pdf",
@@ -1573,7 +1581,11 @@ OFFICIAL_SOURCES: tuple[OfficialSource, ...] = (
         country_label="Switzerland",
         brand="AUDI",
         model="Q5",
-        source_url="https://emea-dam.audi.com/adobe/assets/urn%3Aaaid%3Aaem%3A215d39eb-b541-4734-bdef-5c5e23b1bd11/original/as/Audi_Q5_SQ5_Preisliste_MJ26_ab_01.01.26_DE.pdf",
+        source_url=(
+            "https://emea-dam.audi.com/adobe/assets/"
+            "urn%3Aaaid%3Aaem%3A215d39eb-b541-4734-bdef-5c5e23b1bd11/original/as/"
+            "Audi_Q5_SQ5_Preisliste_MJ26_ab_01.01.26_DE.pdf"
+        ),
         source_label="Audi Switzerland Q5 official price list PDF",
         local_path="audi_ch_q5_sq5_preisliste_mj26_2026-01-01.pdf",
         source_type="official_price_list_pdf",
@@ -1600,7 +1612,10 @@ OFFICIAL_SOURCES: tuple[OfficialSource, ...] = (
         country_label="Switzerland",
         brand="AUDI",
         model="Q4 E-TRON",
-        source_url="https://media.audi.com/is/content/audi/country/ch/assets/preislisten/mj26/Audi_Q4_e-tron_inkl_Sportback_Preisliste_MJ26_12.05.25_DE.pdf",
+        source_url=(
+            "https://media.audi.com/is/content/audi/country/ch/assets/preislisten/mj26/"
+            "Audi_Q4_e-tron_inkl_Sportback_Preisliste_MJ26_12.05.25_DE.pdf"
+        ),
         source_label="Audi Switzerland Q4 e-tron official price list PDF",
         local_path="audi_ch_q4_etron_preisliste_mj26_2025-05-12.pdf",
         source_type="official_price_list_pdf",
@@ -1627,7 +1642,10 @@ OFFICIAL_SOURCES: tuple[OfficialSource, ...] = (
         country_label="Switzerland",
         brand="TOYOTA",
         model="YARIS CROSS",
-        source_url="https://de.toyota.ch/content/dam/toyota/nmsc/switzerland/pdf_preislisten/PL_Yaris_Cross_de_01_01_26.pdf",
+        source_url=(
+            "https://de.toyota.ch/content/dam/toyota/nmsc/switzerland/pdf_preislisten/"
+            "PL_Yaris_Cross_de_01_01_26.pdf"
+        ),
         source_label="Toyota Switzerland Yaris Cross official price list PDF",
         local_path="toyota_ch_yaris_cross_preisliste_2026-01-01.pdf",
         source_type="official_price_list_pdf",
@@ -1798,7 +1816,10 @@ OFFICIAL_SOURCES: tuple[OfficialSource, ...] = (
         country_label="Switzerland",
         brand="TOYOTA",
         model="RAV4",
-        source_url="https://de.toyota.ch/content/dam/toyota/nmsc/switzerland/pdf_preislisten/PL_RAV4_HEV_PHEV_de_03.pdf",
+        source_url=(
+            "https://de.toyota.ch/content/dam/toyota/nmsc/switzerland/pdf_preislisten/"
+            "PL_RAV4_HEV_PHEV_de_03.pdf"
+        ),
         source_label="Toyota Switzerland RAV4 official 2026 price-list transition",
         local_path="toyota_ch_rav4_hev_phev_preisliste_2026-03.pdf",
         source_type="official_price_list_pdf",
@@ -2176,7 +2197,9 @@ def build_payload(args: argparse.Namespace) -> dict[str, Any]:
             "baselineOnlyCount": sum(1 for item in entries if item.get("readiness") == "baseline_only_no_movement"),
             "offerSignalOnlyCount": sum(1 for item in entries if item.get("readiness") == "offer_signal_only"),
             "alreadyBackfilledCount": sum(1 for item in entries if item.get("readiness") == "already_backfilled_live"),
-            "expiredOfferBoundaryCount": sum(1 for item in entries if item.get("readiness") == "expired_demo_offer_boundary"),
+            "expiredOfferBoundaryCount": sum(
+                1 for item in entries if item.get("readiness") == "expired_demo_offer_boundary"
+            ),
             "generationTransitionCount": sum(
                 1 for item in entries if item.get("readiness") == "generation_transition_baseline"
             ),
@@ -2212,11 +2235,18 @@ def render_markdown(payload: dict[str, Any]) -> str:
             f" (latest source month: {ranking_scope.get('sourceLatestMonth') or '-'})."
         ),
         "",
-        "This artifact is review-only. Offer boundaries are monitor/demo candidates; baseline-only price lists are not price drops.",
+        (
+            "This artifact is review-only. Offer boundaries are monitor/demo candidates; "
+            "baseline-only price lists are not price drops."
+        ),
         "",
         "## Summary",
         "",
-        "| Country | Top30 covered | Top30 missing | Sources | Entries | Demo offer boundaries | Offer-only | Baseline-only | Already backfilled | Expired offer boundaries | Generation transitions |",
+        (
+            "| Country | Top30 covered | Top30 missing | Sources | Entries | Demo offer boundaries | "
+            "Offer-only | Baseline-only | Already backfilled | Expired offer boundaries | "
+            "Generation transitions |"
+        ),
         "| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |",
     ]
     for country in payload["countries"]:
@@ -2245,7 +2275,10 @@ def render_markdown(payload: dict[str, Any]) -> str:
             "",
             "## Evidence Queue",
             "",
-            "| Country | Top30 | Brand | Model / trim | Evidence class | Old/list | Current/special | Change | Valid window | Readiness | Source |",
+            (
+                "| Country | Top30 | Brand | Model / trim | Evidence class | Old/list | Current/special | "
+                "Change | Valid window | Readiness | Source |"
+            ),
             "| --- | ---: | --- | --- | --- | ---: | ---: | ---: | --- | --- | --- |",
         ]
     )
@@ -2281,12 +2314,32 @@ def render_markdown(payload: dict[str, Any]) -> str:
             "",
             "## Interpretation",
             "",
-            "- `already_backfilled_live` rows are the existing Sweden official campaign/promotion backfills already visible in live monitoring.",
-            "- `demo_offer_boundary` rows have official regular/list and special/current prices, so they can drive the Sweden + Swiss demo monitor, but they still represent campaign/offer boundaries unless later evidence proves a permanent MSRP cut.",
-            "- `offer_signal_only` rows have official campaign price and validity/savings text but no old MSRP baseline. They should appear in the deck as offer signals, not as MSRP drops.",
-            "- `baseline_only_no_movement` rows are official current price-list baselines. They should create launch/current baselines, not price-drop conclusions.",
-            "- `expired_demo_offer_boundary` rows are still useful as 2026 historical evidence, but the dashboard should show their valid-until date so they are not treated as active offers.",
-            "- `generation_transition_baseline` rows compare two official price lists across a model-year/generation transition. They are useful monitoring evidence, but should not be merged with same-trim offer drops without manual review.",
+            (
+                "- `already_backfilled_live` rows are the existing Sweden official campaign/promotion "
+                "backfills already visible in live monitoring."
+            ),
+            (
+                "- `demo_offer_boundary` rows have official regular/list and special/current prices, so "
+                "they can drive the Sweden + Swiss demo monitor, but they still represent campaign/offer "
+                "boundaries unless later evidence proves a permanent MSRP cut."
+            ),
+            (
+                "- `offer_signal_only` rows have official campaign price and validity/savings text but no "
+                "old MSRP baseline. They should appear in the deck as offer signals, not as MSRP drops."
+            ),
+            (
+                "- `baseline_only_no_movement` rows are official current price-list baselines. They should "
+                "create launch/current baselines, not price-drop conclusions."
+            ),
+            (
+                "- `expired_demo_offer_boundary` rows are still useful as 2026 historical evidence, but the "
+                "dashboard should show their valid-until date so they are not treated as active offers."
+            ),
+            (
+                "- `generation_transition_baseline` rows compare two official price lists across a "
+                "model-year/generation transition. They are useful monitoring evidence, but should not be "
+                "merged with same-trim offer drops without manual review."
+            ),
         ]
     )
     return "\n".join(lines) + "\n"

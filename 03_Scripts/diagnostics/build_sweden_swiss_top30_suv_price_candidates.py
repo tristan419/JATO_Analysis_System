@@ -430,7 +430,13 @@ def current_price_coverage(database_url: str) -> dict[tuple[str, str, str], dict
     for row in rows:
         item = dict(row._mapping)
         country_label = _clean_text(item["country"])
-        code = "se" if country_label.casefold() == "sweden" else "ch" if country_label.casefold() in {"switzerland", "swiss"} else ""
+        normalized_country = country_label.casefold()
+        if normalized_country == "sweden":
+            code = "se"
+        elif normalized_country in {"switzerland", "swiss"}:
+            code = "ch"
+        else:
+            code = ""
         if not code:
             continue
         key = (code, item["brand"], item["jato_model"])
@@ -497,7 +503,10 @@ def build_payload(args: argparse.Namespace) -> dict[str, Any]:
                     "nextAction": (
                         "collect_official_2026_price_list_or_archived_configurator_snapshot"
                         if current["status"] != "missing_current_price"
-                        or (source_draft_payload(args.source_draft_root, top_model).get("status") == "source_draft_found")
+                        or (
+                            source_draft_payload(args.source_draft_root, top_model).get("status")
+                            == "source_draft_found"
+                        )
                         else "promote_current_official_source_before_backfill"
                     ),
                 }
@@ -647,9 +656,15 @@ def render_markdown(payload: dict[str, Any]) -> str:
             "",
             "## Interpretation",
             "",
-            "- `Current MSRP covered` means the local PostgreSQL `msrp.current_prices` table has accepted current rows for that country/model.",
+            (
+                "- `Current MSRP covered` means the local PostgreSQL `msrp.current_prices` table has "
+                "accepted current rows for that country/model."
+            ),
             "- `Source drafts` are scraper source definitions, not successful current MSRP observations.",
-            "- `Snapshot movement leads` compare processed JATO parquet snapshots only. They require official PDF/configurator/cache evidence before backfilled `price_history` writes.",
+            (
+                "- `Snapshot movement leads` compare processed JATO parquet snapshots only. They require "
+                "official PDF/configurator/cache evidence before backfilled `price_history` writes."
+            ),
         ]
     )
     return "\n".join(lines) + "\n"
