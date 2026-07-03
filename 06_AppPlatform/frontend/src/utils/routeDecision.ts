@@ -21,6 +21,8 @@ export interface ProbeResult {
   status: ProbeStatus;
   ms: number | null;
   checkedAt: string;
+  buildCommit?: string;
+  buildCheckedAt?: string;
 }
 
 export interface ClientRouteProfile {
@@ -299,11 +301,33 @@ export function makeInitialProbe(target: RouteTarget): ProbeResult {
   };
 }
 
+async function fetchRouteBuildCommit(target: RouteTarget): Promise<string | undefined> {
+  const controller = new AbortController();
+  const timeout = window.setTimeout(() => controller.abort(), PROBE_TIMEOUT_MS);
+  try {
+    const response = await fetch(`https://${ROUTE_HOSTS[target]}/build-meta.json?ts=${Date.now()}`, {
+      cache: "no-store",
+      credentials: "omit",
+      signal: controller.signal,
+    });
+    if (!response.ok) return undefined;
+    const payload = await response.json() as { commit?: unknown };
+    return typeof payload.commit === "string" && payload.commit.trim()
+      ? payload.commit.trim()
+      : undefined;
+  } catch {
+    return undefined;
+  } finally {
+    window.clearTimeout(timeout);
+  }
+}
+
 export async function probeRoute(target: RouteTarget): Promise<ProbeResult> {
   const controller = new AbortController();
   const startedAt = performance.now();
   const timeout = window.setTimeout(() => controller.abort(), PROBE_TIMEOUT_MS);
   const checkedAt = new Date().toLocaleTimeString();
+  const buildCommitPromise = fetchRouteBuildCommit(target);
   try {
     await fetch(`https://${ROUTE_HOSTS[target]}/route-probe.txt?ts=${Date.now()}`, {
       cache: "no-store",
@@ -311,24 +335,52 @@ export async function probeRoute(target: RouteTarget): Promise<ProbeResult> {
       mode: "no-cors",
       signal: controller.signal,
     });
+    const buildCommit = await buildCommitPromise;
     return {
       target,
       host: ROUTE_HOSTS[target],
       status: "ok",
       ms: Math.round(performance.now() - startedAt),
       checkedAt,
+      buildCommit,
+      buildCheckedAt: buildCommit ? checkedAt : undefined,
     };
   } catch {
+    const buildCommit = await buildCommitPromise;
     return {
       target,
       host: ROUTE_HOSTS[target],
       status: "failed",
       ms: Math.round(performance.now() - startedAt),
       checkedAt,
+      buildCommit,
+      buildCheckedAt: buildCommit ? checkedAt : undefined,
     };
   } finally {
     window.clearTimeout(timeout);
   }
+}
+
+function buildCompatible(
+  results: Record<RouteTarget, ProbeResult>,
+  currentTarget: RouteTarget | null,
+  nextTarget: RouteTarget,
+): boolean {
+  if (!currentTarget || currentTarget === nextTarget) return true;
+  const currentCommit = results[currentTarget].buildCommit;
+  const nextCommit = results[nextTarget].buildCommit;
+  return Boolean(currentCommit && nextCommit && currentCommit === nextCommit);
+}
+
+function buildIncompatibilityReason(
+  results: Record<RouteTarget, ProbeResult>,
+  currentTarget: RouteTarget | null,
+  nextTarget: RouteTarget,
+): string {
+  const safeCurrentTarget = currentTarget ?? "cn";
+  const currentCommit = results[safeCurrentTarget].buildCommit ?? "unknown";
+  const nextCommit = results[nextTarget].buildCommit ?? "unknown";
+  return `${routeLabel(nextTarget)} build ${nextCommit} is not verified against current ${routeLabel(safeCurrentTarget)} build ${currentCommit}; keep ${routeLabel(safeCurrentTarget)} to avoid stale UI.`;
 }
 
 export function chooseAutoRoute(
@@ -339,50 +391,42 @@ export function chooseAutoRoute(
   const cnOk = results.cn.status === "ok";
   const intlOk = results.intl.status === "ok";
   const marginMs = REDIRECT_MARGIN_MS;
+  const currentOrCn = currentTarget ?? "cn";
+  const choose = (target: RouteTarget, reason: string): { target: RouteTarget; reason: string } => {
+    if (!buildCompatible(results, currentTarget, target)) {
+      return {
+        target: currentOrCn,
+        reason: buildIncompatibilityReason(results, currentTarget, target),
+      };
+    }
+    return { target, reason };
+  };
   if (!cnOk && !intlOk) {
     if (results.cn.status === "running" || results.intl.status === "running") return null;
     return {
-      target: currentTarget ?? "cn",
+      target: currentOrCn,
       reason: "Both probes failed; stay on the current host.",
     };
   }
   if (cnOk && !intlOk) {
-    return {
-      target: "cn",
-      reason: "intl probe failed and www probe succeeded.",
-    };
+    return choose("cn", "intl probe failed and www probe succeeded.");
   }
   if (intlOk && !cnOk) {
-    return {
-      target: "intl",
-      reason: "www probe failed and intl probe succeeded.",
-    };
+    return choose("intl", "www probe failed and intl probe succeeded.");
   }
   const cnMs = results.cn.ms ?? PROBE_TIMEOUT_MS;
   const intlMs = results.intl.ms ?? PROBE_TIMEOUT_MS;
   if (profile?.prefersChinaRoute) {
-    return {
-      target: "cn",
-      reason: `www probe succeeded and the browser has China-local signals; keep the domestic route even if intl probes faster (${profile.reason}).`,
-    };
+    return choose("cn", `www probe succeeded and the browser has China-local signals; keep the domestic route even if intl probes faster (${profile.reason}).`);
   }
   const deltaMs = Math.abs(cnMs - intlMs);
   if (deltaMs <= marginMs) {
-    return {
-      target: currentTarget ?? "cn",
-      reason: `Both probes are within ${marginMs} ms; keep ${routeLabel(currentTarget ?? "cn")} to avoid route churn.`,
-    };
+    return choose(currentOrCn, `Both probes are within ${marginMs} ms; keep ${routeLabel(currentOrCn)} to avoid route churn.`);
   }
   if (intlMs < cnMs) {
-    return {
-      target: "intl",
-      reason: `intl is faster by ${cnMs - intlMs} ms, above the ${marginMs} ms measured-route margin.`,
-    };
+    return choose("intl", `intl is faster by ${cnMs - intlMs} ms, above the ${marginMs} ms measured-route margin.`);
   }
-  return {
-    target: "cn",
-    reason: `www is faster by ${intlMs - cnMs} ms, above the ${marginMs} ms measured-route margin.`,
-  };
+  return choose("cn", `www is faster by ${intlMs - cnMs} ms, above the ${marginMs} ms measured-route margin.`);
 }
 
 export function createAutoRouteDecision(

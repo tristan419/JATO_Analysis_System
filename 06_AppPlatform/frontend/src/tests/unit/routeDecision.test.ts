@@ -41,21 +41,23 @@ function createStorage(): Storage {
   };
 }
 
-function okProbe(target: "cn" | "intl", ms: number): ProbeResult {
+function okProbe(target: "cn" | "intl", ms: number, buildCommit = "same-build"): ProbeResult {
   return {
     ...makeInitialProbe(target),
     status: "ok",
     ms,
     checkedAt: "10:00:00",
+    buildCommit,
   };
 }
 
-function failedProbe(target: "cn" | "intl", ms: number): ProbeResult {
+function failedProbe(target: "cn" | "intl", ms: number, buildCommit = "same-build"): ProbeResult {
   return {
     ...makeInitialProbe(target),
     status: "failed",
     ms,
     checkedAt: "10:00:00",
+    buildCommit,
   };
 }
 
@@ -82,6 +84,23 @@ describe("route decision helpers", () => {
       cn: okProbe("cn", 260),
       intl: okProbe("intl", 900),
     }, "intl")?.target).toBe("cn");
+  });
+
+  it("does not auto switch to a route with an unverified build", () => {
+    const staleIntl = chooseAutoRoute({
+      cn: okProbe("cn", 1_200, "new-build"),
+      intl: okProbe("intl", 300, "old-build"),
+    }, "cn");
+
+    expect(staleIntl?.target).toBe("cn");
+    expect(staleIntl?.reason).toContain("not verified");
+
+    const unknownIntl = chooseAutoRoute({
+      cn: okProbe("cn", 1_200, "new-build"),
+      intl: okProbe("intl", 300, ""),
+    }, "cn");
+
+    expect(unknownIntl?.target).toBe("cn");
   });
 
   it("keeps China-local browsers on www whenever www is reachable", () => {

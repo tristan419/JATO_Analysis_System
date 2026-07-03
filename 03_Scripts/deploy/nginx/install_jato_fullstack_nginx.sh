@@ -77,6 +77,78 @@ else:
 PY
 }
 
+patch_static_route_metadata_headers() {
+  local target="$1"
+
+  if [[ ! -f "$target" ]]; then
+    return 0
+  fi
+
+  python3 - "$target" <<'PY'
+import re
+import sys
+from datetime import datetime
+from pathlib import Path
+
+path = Path(sys.argv[1])
+text = path.read_text(encoding="utf-8")
+changed = False
+
+insert_block = r'''
+    location = /build-meta.json {
+        try_files $uri =404;
+        add_header Cache-Control "no-cache, no-store, must-revalidate" always;
+        add_header Pragma "no-cache" always;
+        add_header Expires "0" always;
+        add_header Access-Control-Allow-Origin "*" always;
+        add_header Timing-Allow-Origin "*" always;
+    }
+
+    location = /route-probe.txt {
+        try_files $uri =404;
+        add_header Cache-Control "no-cache, no-store, must-revalidate" always;
+        add_header Pragma "no-cache" always;
+        add_header Expires "0" always;
+        add_header Access-Control-Allow-Origin "*" always;
+        add_header Timing-Allow-Origin "*" always;
+    }
+
+'''
+
+if "location = /build-meta.json" not in text or "location = /route-probe.txt" not in text:
+    marker = re.search(r"\n\s*location\s+\^~\s+/assets/\s*\{", text)
+    if not marker:
+        marker = re.search(r"\n\s*location\s+=\s+/index\.html\s*\{", text)
+    if marker:
+        text = text[:marker.start() + 1] + insert_block + text[marker.start() + 1:]
+        changed = True
+
+def ensure_header(location_pattern: str, header_line: str) -> None:
+    global text, changed
+    pattern = re.compile(rf"({location_pattern}\s*\{{(?:(?!\n\s*location\s).)*?)(\n\s*\}})", re.S)
+    match = pattern.search(text)
+    if not match or header_line in match.group(1):
+        return
+    replacement = match.group(1) + f"\n        {header_line}" + match.group(2)
+    text = text[:match.start()] + replacement + text[match.end():]
+    changed = True
+
+for location_pattern in [r"location\s+=\s+/build-meta\.json", r"location\s+=\s+/route-probe\.txt"]:
+    ensure_header(location_pattern, 'add_header Access-Control-Allow-Origin "*" always;')
+    ensure_header(location_pattern, 'add_header Timing-Allow-Origin "*" always;')
+
+if changed:
+    backup_dir = Path("/etc/nginx/jato-backups")
+    backup_dir.mkdir(parents=True, exist_ok=True)
+    backup = backup_dir / f"{path.name}.pre-route-metadata-{datetime.now():%Y%m%dT%H%M%S}.bak"
+    backup.write_text(path.read_text(encoding="utf-8"), encoding="utf-8")
+    path.write_text(text, encoding="utf-8")
+    print(f"[INFO] Patched route metadata headers in {path}; backup={backup}")
+else:
+    print(f"[INFO] Route metadata headers already present in {path}")
+PY
+}
+
 if [[ ! -f "$NGINX_TEMPLATE" ]]; then
   echo "[ERROR] Nginx template not found: $NGINX_TEMPLATE"
   exit 1
@@ -91,6 +163,8 @@ if [[ -f "$TARGET_CONF" ]] && grep -qi 'managed by Certbot' "$TARGET_CONF" && [[
   echo "[INFO] Applying safe /v1/ Cache-Control patch in the existing config."
   patch_certbot_managed_api_cache_control "$TARGET_CONF"
   patch_certbot_managed_api_cache_control "$ENABLED_CONF"
+  patch_static_route_metadata_headers "$TARGET_CONF"
+  patch_static_route_metadata_headers "$ENABLED_CONF"
   echo "[INFO] Set ALLOW_CERTBOT_OVERWRITE=true only if you intentionally want to replace the cert-managed config."
   nginx -t
   systemctl enable nginx
@@ -111,6 +185,8 @@ rm -f /etc/nginx/sites-enabled/default
 
 patch_certbot_managed_api_cache_control "$TARGET_CONF"
 patch_certbot_managed_api_cache_control "$ENABLED_CONF"
+patch_static_route_metadata_headers "$TARGET_CONF"
+patch_static_route_metadata_headers "$ENABLED_CONF"
 
 echo "[INFO] Validate and restart nginx"
 nginx -t

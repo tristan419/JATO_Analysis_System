@@ -3,9 +3,12 @@
 
 /build-meta.json
   Cache-Control: no-cache, no-store, must-revalidate
+  Access-Control-Allow-Origin: *
+  Timing-Allow-Origin: *
 
 /route-probe.txt
   Cache-Control: no-cache, no-store, must-revalidate
+  Access-Control-Allow-Origin: *
   Timing-Allow-Origin: *
 
 /*

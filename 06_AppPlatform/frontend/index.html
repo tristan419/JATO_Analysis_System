@@ -210,21 +210,58 @@
           return;
         }
         var cachedDecision = readDecision(decisionKey);
-        if (cachedDecision) {
+        if (cachedDecision && targetHost(cachedDecision.target) === host) {
           redirectTo(cachedDecision.target, cachedDecision);
           return;
         }
 
         markProbeInFlight();
+        function buildCommit(target) {
+          var url = "https://" + targetHost(target) + "/build-meta.json?ts=" + Date.now();
+          return new Promise(function (resolve) {
+            var settled = false;
+            var controller = window.AbortController ? new AbortController() : null;
+            var timer = window.setTimeout(function () {
+              if (settled) return;
+              settled = true;
+              if (controller) controller.abort();
+              resolve("");
+            }, timeoutMs);
+            var options = {
+              cache: "no-store",
+              credentials: "omit"
+            };
+            if (controller) options.signal = controller.signal;
+            fetch(url, options).then(function (response) {
+              if (!response.ok) return null;
+              return response.json();
+            }).then(function (payload) {
+              if (settled) return;
+              settled = true;
+              window.clearTimeout(timer);
+              var commit = payload && typeof payload.commit === "string" ? payload.commit.trim() : "";
+              resolve(commit);
+            }).catch(function () {
+              if (settled) return;
+              settled = true;
+              window.clearTimeout(timer);
+              resolve("");
+            });
+          });
+        }
+
         function probe(target) {
           var startedAt = performance.now();
           var url = "https://" + targetHost(target) + "/route-probe.txt?ts=" + Date.now();
+          var buildCommitPromise = buildCommit(target);
           return new Promise(function (resolve) {
             var settled = false;
             var timer = window.setTimeout(function () {
               if (settled) return;
               settled = true;
-              resolve({ target: target, ok: false, ms: timeoutMs });
+              buildCommitPromise.then(function (commit) {
+                resolve({ target: target, ok: false, ms: timeoutMs, buildCommit: commit });
+              });
             }, timeoutMs);
             fetch(url, {
               cache: "no-store",
@@ -234,12 +271,16 @@
               if (settled) return;
               settled = true;
               window.clearTimeout(timer);
-              resolve({ target: target, ok: true, ms: performance.now() - startedAt });
+              buildCommitPromise.then(function (commit) {
+                resolve({ target: target, ok: true, ms: performance.now() - startedAt, buildCommit: commit });
+              });
             }).catch(function () {
               if (settled) return;
               settled = true;
               window.clearTimeout(timer);
-              resolve({ target: target, ok: false, ms: timeoutMs });
+              buildCommitPromise.then(function (commit) {
+                resolve({ target: target, ok: false, ms: timeoutMs, buildCommit: commit });
+              });
             });
           });
         }
@@ -250,8 +291,29 @@
           var profile = clientRouteProfile();
           var marginMs = profile.prefersChinaRoute ? chinaLocalRedirectMarginMs : redirectMarginMs;
           var currentTarget = host === intlHost ? "intl" : "cn";
+          var currentProbe = currentTarget === "intl" ? intl : cn;
           var nextTarget = currentTarget;
           var reason = "Both route probes failed; stay on the current host";
+          function routeLabel(target) {
+            return target === "intl" ? "intl" : "www";
+          }
+          function probeFor(target) {
+            return target === "intl" ? intl : cn;
+          }
+          function buildCompatible(target) {
+            if (target === currentTarget) return true;
+            var targetProbe = probeFor(target);
+            return Boolean(currentProbe.buildCommit && targetProbe.buildCommit && currentProbe.buildCommit === targetProbe.buildCommit);
+          }
+          function applyBuildGuard(target) {
+            if (buildCompatible(target)) return target;
+            var targetProbe = probeFor(target);
+            reason = routeLabel(target) + " build " + (targetProbe.buildCommit || "unknown")
+              + " is not verified against current " + routeLabel(currentTarget)
+              + " build " + (currentProbe.buildCommit || "unknown")
+              + "; stay on " + routeLabel(currentTarget) + " to avoid stale UI";
+            return currentTarget;
+          }
           if (cn.ok && intl.ok) {
             if (profile.prefersChinaRoute) {
               nextTarget = intl.ms + marginMs < cn.ms ? "intl" : "cn";
@@ -277,6 +339,7 @@
             nextTarget = "cn";
             reason = "intl probe failed and www probe succeeded";
           }
+          nextTarget = applyBuildGuard(nextTarget);
           var autoPayload = saveDecision(decisionKey, nextTarget, autoTtlMs, {
             source: "auto",
             reason: reason,
@@ -284,7 +347,9 @@
             intlOk: Boolean(intl.ok),
             cnMs: Math.round(cn.ms),
             intlMs: Math.round(intl.ms),
-            marginMs: marginMs
+            marginMs: marginMs,
+            cnBuildCommit: cn.buildCommit || "",
+            intlBuildCommit: intl.buildCommit || ""
           });
           redirectTo(nextTarget, autoPayload);
           clearProbeInFlight();
