@@ -1049,7 +1049,7 @@ function mapCocMatchJob(raw: Record<string, unknown>): CocMatchJob {
       ? (raw.diffSummary as { gained: number; lost: number; newEntries: number })
       : null,
     triggeredBy: String(raw.triggeredBy ?? ""),
-    error: raw.error === undefined ? null : String(raw.error),
+    error: raw.error === undefined || raw.error === null ? null : String(raw.error),
     createdAt: String(raw.createdAt ?? ""),
     startedAt: raw.startedAt === undefined ? null : String(raw.startedAt),
     finishedAt: raw.finishedAt === undefined ? null : String(raw.finishedAt),

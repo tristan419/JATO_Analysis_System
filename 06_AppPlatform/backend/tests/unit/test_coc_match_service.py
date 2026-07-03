@@ -53,6 +53,26 @@ def test_read_excel_rows_finds_vin_header_in_multi_column_sheet(tmp_path: Path) 
     ]
 
 
+def test_read_excel_rows_infers_headerless_single_vin_column(tmp_path: Path) -> None:
+    from openpyxl import Workbook
+
+    workbook = Workbook()
+    sheet = workbook.active
+    sheet.append([" LVUGTBHD5TC114629 "])
+    sheet.append(["not-a-vin-note"])
+    sheet.append(["LNNBDDEH0TG030197"])
+    sheet.append([None])
+    sheet.append(["LNNBDDEH0TG030457"])
+    path = tmp_path / "headerless-vins.xlsx"
+    workbook.save(path)
+
+    assert read_excel_rows(path) == [
+        {"chassis": "LVUGTBHD5TC114629", "model": "", "country": ""},
+        {"chassis": "LNNBDDEH0TG030197", "model": "", "country": ""},
+        {"chassis": "LNNBDDEH0TG030457", "model": "", "country": ""},
+    ]
+
+
 def test_classify_coc_difference_detects_one_sided_and_bidirectional() -> None:
     assert classify_coc_difference(0, 0) == "matched"
     assert classify_coc_difference(1, 0) == "missing_archive_files"

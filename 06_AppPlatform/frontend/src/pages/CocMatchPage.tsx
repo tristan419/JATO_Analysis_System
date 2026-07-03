@@ -80,6 +80,12 @@ function cocDifferenceLabel(type: string | null | undefined): string {
   return type ? (labels[type] ?? type) : "-";
 }
 
+function compactJobError(error: string | null | undefined): string {
+  const text = String(error ?? "").trim();
+  if (!text) return "-";
+  return text.replace(/^\d{3}:\s*/, "");
+}
+
 function fillStrategyLabel(strategy: string): string {
   if (strategy === "strict") return "严格唯一";
   if (strategy === "date_country") return "日期 / 国家";
@@ -1214,6 +1220,7 @@ export function CocMatchPage() {
                   <th style={thStyle}>匹配</th>
                   <th style={thStyle}>缺失</th>
                   <th style={thStyle}>覆盖率</th>
+                  <th style={thStyle}>错误原因</th>
                   <th style={thStyle}>操作</th>
                 </tr>
               </thead>
@@ -1226,6 +1233,9 @@ export function CocMatchPage() {
                     <td style={tdStyle}>{job.matchedCount ?? "-"}</td>
                     <td style={tdStyle}>{job.missingCount ?? "-"}</td>
                     <td style={tdStyle}>{job.coverageRate != null ? `${job.coverageRate}%` : "-"}</td>
+                    <td style={{ ...tdStyle, whiteSpace: "normal", minWidth: 240 }}>
+                      {job.status === "failed" ? compactJobError(job.error) : "-"}
+                    </td>
                     <td style={tdStyle}>{renderMatchActions(job)}</td>
                   </tr>
                 ))}

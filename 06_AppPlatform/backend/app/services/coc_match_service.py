@@ -49,6 +49,8 @@ _VIN_HEADER_CANDIDATES = {
 _MODEL_HEADER_CANDIDATES = {"model", "车型", "车型名", "modelname", "vehiclemodel"}
 _COUNTRY_HEADER_CANDIDATES = {"country", "国家", "market", "市场"}
 _HEADER_SCAN_ROWS = 20
+_HEADERLESS_VIN_SCAN_ROWS = 200
+_VIN_VALUE_RE = re.compile(r"^[A-HJ-NPR-Z0-9]{17}$", re.IGNORECASE)
 
 
 def _normalize_excel_header(value: object) -> str:
@@ -64,10 +66,57 @@ def _find_header_index(row: tuple[object, ...], candidates: set[str]) -> int | N
         if normalized in candidates:
             return index
         if candidates is _VIN_HEADER_CANDIDATES:
-            text = str(value or "").strip().lower()
-            if re.search(r"\bvin\b", text) or "车架" in normalized or "底盘" in normalized:
+            if normalized.startswith("vin") or normalized.endswith("vin") or "车架" in normalized or "底盘" in normalized:
                 return index
     return None
+
+
+def _normalize_vin_value(value: object) -> str:
+    return re.sub(r"\s+", "", str(value or "").strip()).upper()
+
+
+def _looks_like_vin(value: object) -> bool:
+    return bool(_VIN_VALUE_RE.fullmatch(_normalize_vin_value(value)))
+
+
+def _infer_headerless_vin_column(ws: Any) -> tuple[int, int] | None:
+    """Infer a VIN column from headerless sheets containing raw VIN rows."""
+    stats: dict[int, dict[str, int | None]] = {}
+    for row_number, row in enumerate(
+        ws.iter_rows(min_row=1, max_row=_HEADERLESS_VIN_SCAN_ROWS, values_only=True),
+        start=1,
+    ):
+        for column_index, value in enumerate(row):
+            text = str(value or "").strip()
+            if not text:
+                continue
+            column_stats = stats.setdefault(
+                column_index,
+                {"vin_count": 0, "non_empty_count": 0, "first_vin_row": None},
+            )
+            column_stats["non_empty_count"] = int(column_stats["non_empty_count"] or 0) + 1
+            if _looks_like_vin(value):
+                column_stats["vin_count"] = int(column_stats["vin_count"] or 0) + 1
+                if column_stats["first_vin_row"] is None:
+                    column_stats["first_vin_row"] = row_number
+
+    candidates: list[tuple[int, int, int]] = []
+    for column_index, column_stats in stats.items():
+        vin_count = int(column_stats["vin_count"] or 0)
+        non_empty_count = int(column_stats["non_empty_count"] or 0)
+        first_vin_row = column_stats["first_vin_row"]
+        if not isinstance(first_vin_row, int) or vin_count <= 0:
+            continue
+        if vin_count >= 2 or vin_count == non_empty_count:
+            candidates.append((vin_count, column_index, first_vin_row))
+
+    if not candidates:
+        return None
+    _vin_count, column_index, first_vin_row = max(
+        candidates,
+        key=lambda item: (item[0], -item[1], -item[2]),
+    )
+    return first_vin_row, column_index
 
 
 def read_excel_rows(excel_path: Path) -> list[dict[str, str]]:
@@ -89,17 +138,25 @@ def read_excel_rows(excel_path: Path) -> list[dict[str, str]]:
             country_index = _find_header_index(row, _COUNTRY_HEADER_CANDIDATES)
             break
 
+    inferred_headerless_vin = False
     if header_row_number is None or vin_index is None:
-        raise HTTPException(
-            status_code=400,
-            detail="Excel 未找到 VIN / Chassis / 车架号 表头，请确认表格包含 VIN 列。",
-        )
+        inferred = _infer_headerless_vin_column(ws)
+        if inferred is None:
+            raise HTTPException(
+                status_code=400,
+                detail="Excel 未找到 VIN / Chassis / 车架号 表头，也未识别到无表头 VIN 列。",
+            )
+        header_row_number = inferred[0] - 1
+        vin_index = inferred[1]
+        inferred_headerless_vin = True
 
     rows: list[dict[str, str]] = []
     for row in ws.iter_rows(min_row=header_row_number + 1, values_only=True):
         chassis = row[vin_index] if vin_index < len(row) else None
-        chassis_text = str(chassis or "").strip()
+        chassis_text = _normalize_vin_value(chassis) if inferred_headerless_vin else str(chassis or "").strip()
         if not chassis_text:
+            continue
+        if inferred_headerless_vin and not _looks_like_vin(chassis_text):
             continue
         model = (
             str(row[model_index]).strip()
