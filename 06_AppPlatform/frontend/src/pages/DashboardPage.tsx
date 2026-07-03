@@ -425,6 +425,21 @@ function DeferredDashboardDecksPlaceholder({ onActivate }: { onActivate: () => v
   );
 }
 
+function DeferredDashboardChartPlaceholder({ onActivate }: { onActivate: () => void }) {
+  return (
+    <div className="dashboard-chart-runtime-placeholder">
+      <div>
+        <span className="panel-kicker">Chart Runtime</span>
+        <strong>趋势图正在后台准备</strong>
+        <p>筛选、概览和控制区已可操作，图表运行时会在浏览器空闲后加载。</p>
+      </div>
+      <button type="button" className="btn btn-secondary" onClick={onActivate}>
+        立即加载趋势图
+      </button>
+    </div>
+  );
+}
+
 /* ── filter component ──────────────────────────────── */
 /* ── Main Dashboard ────────────────────────────────── */
 export function DashboardPage() {
@@ -498,23 +513,29 @@ export function DashboardPage() {
     () => ensureArray(cachedPage?.groupedItems),
   );
   const [groupedLoading, setGroupedLoading] = useState(false);
+  const [chartRuntimeReady, setChartRuntimeReady] = useState(false);
   const [heavyQueriesReady, setHeavyQueriesReady] = useState(false);
   const [hiddenSeries, setHiddenSeries] = useState<Set<string>>(() => new Set(cachedPage?.hiddenSeries ?? []));
   const [othersDetail, setOthersDetail] = useState<OthersDetailItem[]>(() => cachedPage?.othersDetail ?? []);
+  const releaseChartRuntime = useCallback(() => {
+    setChartRuntimeReady(true);
+  }, []);
   const releaseHeavyQueries = useCallback(() => {
     setHeavyQueriesReady(true);
   }, []);
   const selectTsMode = useCallback((nextMode: "总和" | "分组") => {
+    releaseChartRuntime();
     releaseHeavyQueries();
     setTsMode(nextMode);
-  }, [releaseHeavyQueries]);
+  }, [releaseChartRuntime, releaseHeavyQueries]);
   const selectChartType = useCallback((nextType: "line" | "bar" | "rank") => {
+    releaseChartRuntime();
     releaseHeavyQueries();
     setChartType(nextType);
     if (nextType === "rank" && tsMode === "总和") {
       setTsMode("分组");
     }
-  }, [releaseHeavyQueries, tsMode]);
+  }, [releaseChartRuntime, releaseHeavyQueries, tsMode]);
 
   /* advanced charts — honor URL params for deep-links from Copilot */
   const urlParams = useMemo(() => new URLSearchParams(currentSearch), [currentSearch]);
@@ -727,6 +748,13 @@ export function DashboardPage() {
     }, 80);
     return () => window.clearInterval(timer);
   }, [loading]);
+
+  useEffect(() => {
+    if (chartRuntimeReady || !filtersReady || loading || columns.length === 0) return;
+    return scheduleDashboardIdlePreload(() => {
+      setChartRuntimeReady(true);
+    });
+  }, [chartRuntimeReady, columns.length, filtersReady, loading]);
 
   useEffect(() => {
     if (heavyQueriesReady || !filtersReady || loading || columns.length === 0) return;
@@ -1898,8 +1926,8 @@ export function DashboardPage() {
           <div className="analysis-chart-block analysis-chart-block--compact dashboard-deck-hero-surface">
           <div className="chart-header">
             <div className="tab-bar">
-              <button className={"tab-btn"+(activeTab==="year"?" active":"")} onClick={()=>setActiveTab("year")}>{"\u5e74\u5ea6\u5bf9\u6bd4"}</button>
-              <button className={"tab-btn"+(activeTab==="month"?" active":"")} onClick={()=>setActiveTab("month")}>{"\u6708\u5ea6\u660e\u7ec6"}</button>
+              <button className={"tab-btn"+(activeTab==="year"?" active":"")} onClick={()=>{releaseChartRuntime(); setActiveTab("year");}}>{"\u5e74\u5ea6\u5bf9\u6bd4"}</button>
+              <button className={"tab-btn"+(activeTab==="month"?" active":"")} onClick={()=>{releaseChartRuntime(); setActiveTab("month");}}>{"\u6708\u5ea6\u660e\u7ec6"}</button>
             </div>
             <div className="chart-controls">
               <div className="tab-bar">
@@ -1944,8 +1972,12 @@ export function DashboardPage() {
             );
           })()}
 
+          {!chartRuntimeReady && (
+            <DeferredDashboardChartPlaceholder onActivate={releaseChartRuntime} />
+          )}
+
           {/* single-series */}
-          {!isGrouped && chartType !== "rank" && aggregatedSingle.length > 0 && (
+          {chartRuntimeReady && !isGrouped && chartType !== "rank" && aggregatedSingle.length > 0 && (
             <div ref={el => { tsChartRef.current = el; }}>
               <PlotlyChart
                 data={(() => {
@@ -1982,7 +2014,7 @@ export function DashboardPage() {
           )}
 
           {/* multi-series grouped */}
-          {isGrouped && chartType !== "rank" && filteredGrouped.length > 0 && (() => {
+          {chartRuntimeReady && isGrouped && chartType !== "rank" && filteredGrouped.length > 0 && (() => {
             const isPt = tsGroupDim === "\u52a8\u603b\u89c4\u6574";
             let traces: Data[] = visibleSeries.map((name) => {
               const seriesData = filteredGrouped.filter(g => g.series === name);
@@ -2024,11 +2056,11 @@ export function DashboardPage() {
             );
           })()}
 
-          {!isGrouped && chartType !== "rank" && aggregatedSingle.length===0 && !loading && <div className="chart-empty">{"\u6682\u65e0\u8d8b\u52bf\u6570\u636e"}</div>}
-          {isGrouped && chartType !== "rank" && filteredGrouped.length===0 && !groupedLoading && <div className="chart-empty">{"\u5207\u6362\u5206\u7ec4\u7ef4\u5ea6\u6216\u8c03\u6574\u7b5b\u9009\u6761\u4ef6"}</div>}
+          {chartRuntimeReady && !isGrouped && chartType !== "rank" && aggregatedSingle.length===0 && !loading && <div className="chart-empty">{"\u6682\u65e0\u8d8b\u52bf\u6570\u636e"}</div>}
+          {chartRuntimeReady && isGrouped && chartType !== "rank" && filteredGrouped.length===0 && !groupedLoading && <div className="chart-empty">{"\u5207\u6362\u5206\u7ec4\u7ef4\u5ea6\u6216\u8c03\u6574\u7b5b\u9009\u6761\u4ef6"}</div>}
 
           {/* ranking horizontal bar chart */}
-          {chartType === "rank" && isGrouped && rankingSliced.length > 0 && (() => {
+          {chartRuntimeReady && chartType === "rank" && isGrouped && rankingSliced.length > 0 && (() => {
             const reversed = [...rankingSliced].reverse();
             const maxVol = rankingSliced[0]?.volume ?? 1;
             const chartHeight = Math.max(timeSeriesDeckLayout.height, Math.min(1200, rankingSliced.length * 26 + 50));
@@ -2093,7 +2125,7 @@ export function DashboardPage() {
             );
           })()}
 
-          {chartType === "rank" && isGrouped && rankingData.length === 0 && !groupedLoading && (
+          {chartRuntimeReady && chartType === "rank" && isGrouped && rankingData.length === 0 && !groupedLoading && (
             <div className="chart-empty">{"\u5207\u6362\u5206\u7ec4\u7ef4\u5ea6\u6216\u8c03\u6574\u7b5b\u9009\u6761\u4ef6"}</div>
           )}
 
