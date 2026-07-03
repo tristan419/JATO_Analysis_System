@@ -4479,6 +4479,8 @@ table.data-table tr.data-table-group-row.contains-selection td {
 }
 .ts-pill:hover {
   background: color-mix(in srgb, var(--pill-color) 22%, transparent);
+}
+
 .btn:disabled { opacity: .5; cursor: not-allowed; }
 .btn:hover:not(:disabled) { transform: translateY(-1px); }
 .btn-primary { background: var(--c-primary); color: #fff; border-color: var(--c-primary); }
@@ -15930,6 +15932,8 @@ table.material-finance-table td:nth-child(n+5) {
 
 .hero-product-price-name small.is-positive {
   color: #16a34a;
+}
+
 .og-remark-note {
   display: inline-block;
   max-width: 100%;
@@ -16032,6 +16036,8 @@ table.material-finance-table td:nth-child(n+5) {
   background: rgba(37, 99, 235, 0.08);
   outline: 1px solid rgba(37, 99, 235, 0.32);
   outline-offset: -1px;
+}
+
 .order-genius-action-grid .btn,
 .og-pi-export-options .btn,
 .og-pi-batch-actions .btn,
@@ -16188,6 +16194,8 @@ table.material-finance-table td:nth-child(n+5) {
 
 .hero-product-benchmark-grid {
   gap: 12px;
+}
+
 .bom-fob-legend-remark-dot {
   display: inline-block;
   width: 6px;
@@ -16689,6 +16697,8 @@ table.material-finance-table td:nth-child(n+5) {
   height: 100%;
   min-height: 0;
   overflow: visible;
+}
+
 .bom-admin-tools-front-actions .btn,
 .bom-admin-tools-back-head .btn,
 .bom-admin-tools-grid .btn,
@@ -16958,6 +16968,8 @@ table.material-finance-table td:nth-child(n+5) {
 .hero-product-benchmark-grid,
 .hero-product-trend-grid {
   height: 100%;
+}
+
 .bom-admin-table td.bom-admin-material-cell,
 .bom-admin-table td.bom-admin-interior-cell,
 .bom-admin-table td.bom-admin-colour-tier-cell,
@@ -17139,6 +17151,8 @@ table.material-finance-table td:nth-child(n+5) {
   color: #64748b;
   font-size: 11px;
   line-height: 1;
+}
+
 .bom-fob-price-value {
   position: relative;
   display: inline-flex;
@@ -17364,6 +17378,8 @@ table.material-finance-table td:nth-child(n+5) {
   min-height: 0;
   border-radius: 999px;
   box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.88), 0 0 0 1px rgba(15, 23, 42, 0.04);
+}
+
 .bom-finance-action-button {
   min-width: 96px;
   height: var(--control-height-sm);
@@ -17425,6 +17441,8 @@ table.material-finance-table td:nth-child(n+5) {
 .hero-product-slide-frame .hero-product-trend-chart .hero-product-trend-svg {
   flex: 1 1 auto;
   min-height: 0;
+}
+
 .bom-fob-edit-source-line {
   display: flex;
   align-items: center;
@@ -17537,6 +17555,8 @@ table.material-finance-table td:nth-child(n+5) {
 
 .hero-product-slide-frame .hero-product-distribution-panel--top.is-top-30 .hero-product-distribution-card header strong {
   font-size: 9px;
+}
+
 .bom-fob-edit-remark-field {
   grid-column: 1 / -1;
 }
@@ -17575,6 +17595,8 @@ table.material-finance-table td:nth-child(n+5) {
 .hero-product-slide-frame .hero-product-distribution-panel--top.is-top-30 .hero-product-country-bar-shell .hero-product-drive-stack {
   inset: 3px auto 3px 0;
   height: 7px;
+}
+
 .bom-fob-edit-grid textarea {
   width: 100%;
   min-width: 0;
