@@ -42,9 +42,10 @@ jobs:
           fi
 
           if [ "${#missing[@]}" -gt 0 ]; then
-            printf '[ERROR] Cloudflare Pages deploy is not configured; missing: %s\n' "${missing[*]}"
+            printf '[WARN] Skipping direct Cloudflare Pages deploy; missing: %s\n' "${missing[*]}"
+            printf '[WARN] Cloudflare GitHub App deployments can still publish the Pages project when configured in Cloudflare.\n'
             echo "configured=false" >> "$GITHUB_OUTPUT"
-            exit 1
+            exit 0
           fi
 
           echo "configured=true" >> "$GITHUB_OUTPUT"
