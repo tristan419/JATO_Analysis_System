@@ -28,6 +28,8 @@ const MONTH_NAMES = [
   "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
 ];
 const MONTH_NUMBERS = MONTH_NAMES.map((_, i) => i + 1);
+const MODEL_COLUMN_MIN_WIDTH = 320;
+const MODEL_COLUMN_CONTENT_PADDING = 88;
 
 export interface OrderGeniusGridRow {
   materialCode: string;
@@ -147,6 +149,7 @@ export function buildOrderGeniusColumnDefs(
   selectedMonth: number | null,
   vis: OrderGeniusGridProps["visibleColumns"],
   canEditQuantities: boolean,
+  modelColumnWidth: number,
   piSelectionSummary?: PiSelectionSummary,
   isPiRowSelected?: (row: OrderGeniusGridRow) => boolean,
   onTogglePiRow?: (row: OrderGeniusGridRow, selected: boolean) => void,
@@ -202,7 +205,8 @@ export function buildOrderGeniusColumnDefs(
       headerName: "Model",
       field: "modelName",
       pinned: "left",
-      width: 220,
+      width: modelColumnWidth,
+      minWidth: MODEL_COLUMN_MIN_WIDTH,
       editable: false,
       cellRendererSelector: (p: any) => {
         if (p.data?.__type === "groupHeader") {
@@ -272,6 +276,23 @@ export function buildOrderGeniusColumnDefs(
       editable: false,
       cellClass: "og-material-cell",
         valueFormatter: (p) => (p.data?.__type === "groupHeader" || p.data?.__type === "summary" ? "" : String(p.value ?? "")),
+    });
+  }
+
+  if (vis.remark) {
+    cols.push({
+      headerName: "Note",
+      field: "remark",
+      pinned: "left",
+      width: 190,
+      editable: false,
+      cellClass: "og-remark-cell",
+      tooltipValueGetter: (p) => (p.value ? String(p.value) : ""),
+      cellRenderer: (params: ICellRendererParams<OrderGeniusGridRow, string>) => {
+        const value = String(params.value ?? "").trim();
+        if (!value) return "";
+        return <span className="og-remark-note">{value}</span>;
+      },
     });
   }
 
@@ -399,17 +420,40 @@ export function buildOrderGeniusColumnDefs(
     });
   }
 
-  if (vis.remark) {
-    cols.push({
-      headerName: "Remark",
-      field: "remark",
-      width: 200,
-      editable: false,
-      cellClass: "og-remark-cell",
-    });
-  }
-
   return cols;
+}
+
+function estimateGridTextWidth(value: string): number {
+  let width = 0;
+  for (const char of value) {
+    if (/[\u4e00-\u9fff]/.test(char)) {
+      width += 14;
+    } else if (/[A-Z0-9]/.test(char)) {
+      width += 8.4;
+    } else if (/[a-z]/.test(char)) {
+      width += 7.2;
+    } else if (char === " ") {
+      width += 4.5;
+    } else {
+      width += 5.8;
+    }
+  }
+  return width;
+}
+
+function getModelColumnDisplayText(row: OrderGeniusGridRow): string {
+  if (row.__type === "groupHeader") {
+    return [row.__groupLabel, row.__groupMeta].filter(Boolean).join(" ");
+  }
+  return row.modelName || "";
+}
+
+function getModelColumnWidth(rows: OrderGeniusGridRow[]): number {
+  const widestText = rows.reduce((width, row) => {
+    const text = getModelColumnDisplayText(row);
+    return Math.max(width, estimateGridTextWidth(text));
+  }, 0);
+  return Math.ceil(Math.max(MODEL_COLUMN_MIN_WIDTH, widestText + MODEL_COLUMN_CONTENT_PADDING));
 }
 
 /** Inline quantity editor — reads DOM value directly to avoid React batching issues. */
@@ -492,17 +536,22 @@ export function OrderGeniusGrid({
     (row: OrderGeniusGridRow): boolean => selectedRowIdsRef.current?.has(getOrderGeniusRowId(row)) ?? false,
     [],
   );
+  const modelColumnWidth = useMemo(
+    () => getModelColumnWidth(rows),
+    [rows],
+  );
   const columnDefs = useMemo(
     () => buildOrderGeniusColumnDefs(
       showCountry,
       selectedMonth,
       visibleColumns,
       canEditQuantities,
+      modelColumnWidth,
       piSelectionSummary,
       isPiRowSelected,
       onTogglePiRow,
     ),
-    [canEditQuantities, showCountry, selectedMonth, visibleColumns, piSelectionSummary, isPiRowSelected, onTogglePiRow],
+    [canEditQuantities, showCountry, selectedMonth, visibleColumns, modelColumnWidth, piSelectionSummary, isPiRowSelected, onTogglePiRow],
   );
 
   const defaultColDef = useMemo<ColDef<OrderGeniusGridRow>>(
@@ -671,7 +720,7 @@ export function OrderGeniusGrid({
             {expanded ? "-" : "+"}
           </button>
           <div style={{ width: isSubgroup ? 3 : 4, height: isSubgroup ? 16 : 20, borderRadius: 2, flexShrink: 0, backgroundColor: color }} />
-          <span style={{ color, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{label}</span>
+          <span title={label} style={{ color, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{label}</span>
           {meta ? <span className="og-group-header-meta">{meta}</span> : null}
         </div>
       );

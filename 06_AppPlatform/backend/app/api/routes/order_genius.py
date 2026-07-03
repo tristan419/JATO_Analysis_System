@@ -978,8 +978,8 @@ def patch_sku_lifecycle(
         "materialCode": result.material_code,
         "lifecycleStatus": result.lifecycle_status,
         "rowVersion": result.row_version,
-        "effectiveFrom": result.effective_from,
-        "effectiveTo": result.effective_to,
+        "effectiveFrom": result.effective_from_month,
+        "effectiveTo": result.effective_to_month,
     }
 
 
@@ -1033,8 +1033,17 @@ def patch_sku_fob(
     if fob_val is not None and fob_val <= 0:
         fob_val = None
     pt_code = body.get("paymentTermCode")
+    has_remark = "remark" in body
+    remark = body.get("remark") if has_remark else None
     result = repo.update_sku_fob_for_country(
-        session, material_code, country, fob_val, pt_code,
+        session,
+        material_code,
+        country,
+        fob_val,
+        pt_code,
+        remark=remark,
+        update_remark=has_remark,
+        changed_by=user.name,
     )
     if not result and fob_val is not None:
         raise HTTPException(status_code=404, detail="Could not update FOB")
@@ -1044,6 +1053,9 @@ def patch_sku_fob(
         "countryCode": result.country_code if result else country,
         "finalFobEur": float(result.final_fob_eur) if result and fob_val is not None else None,
         "paymentTermCode": result.payment_term_code if result else pt_code,
+        "fobSourceMode": result.fob_source_mode if result else None,
+        "fobSourceCountryCode": result.fob_source_country_code if result else None,
+        "remark": result.remark if result else clean_text(remark) if has_remark else None,
     }
 
 
@@ -1163,6 +1175,7 @@ def create_material_sku(
     powertrain = clean_text(body.get("powertrain")) or "Other"
     bom_template = clean_text(body.get("bomTemplate")).upper() or material_code
     source_bom_template = clean_text(body.get("sourceBomTemplate")).upper()
+    remark = clean_text(body.get("remark"))
 
     missing = [
         label
@@ -1229,6 +1242,7 @@ def create_material_sku(
             ),
         ),
         lifecycle_status="active",
+        remark=remark or None,
         is_active=True,
         is_published=False,
         baseline_version_id=baseline.baseline_version_id,
@@ -1640,6 +1654,8 @@ def export_order_genius_pi(
         **filters,
         freight_eur=_optional_float_from_body(body, "freightEur"),
         insurance_eur=_optional_float_from_body(body, "insuranceEur"),
+        domestic_freight_eur=_optional_float_from_body(body, "domesticFreightEur"),
+        domestic_insurance_eur=_optional_float_from_body(body, "domesticInsuranceEur"),
     )
     from datetime import date as _date
     today = _date.today().strftime("%Y%m%d")

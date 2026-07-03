@@ -281,7 +281,7 @@ def list_active_skus(
 ) -> list[MaterialSkuMaster]:
     stmt = select(MaterialSkuMaster).where(
         MaterialSkuMaster.is_active == True,
-        MaterialSkuMaster.lifecycle_status == "active",
+        MaterialSkuMaster.lifecycle_status.in_(["active", "phase_out"]),
     )
     if brand:
         stmt = stmt.where(MaterialSkuMaster.brand == brand)
@@ -336,7 +336,7 @@ def get_active_sku_by_code(
     stmt = select(MaterialSkuMaster).where(
         MaterialSkuMaster.material_code == material_code,
         MaterialSkuMaster.is_active == True,
-        MaterialSkuMaster.lifecycle_status == "active",
+        MaterialSkuMaster.lifecycle_status.in_(["active", "phase_out"]),
     )
     return session.execute(stmt).scalars().first()
 
@@ -379,7 +379,7 @@ def update_sku_lifecycle(
     sku.lifecycle_status = lifecycle_status
     if lifecycle_status == "historical":
         sku.is_active = False
-    elif lifecycle_status == "active":
+    elif lifecycle_status in {"active", "phase_out"}:
         sku.is_active = True
     if effective_from is not None:
         sku.effective_from_month = effective_from
@@ -407,6 +407,9 @@ def update_sku_fob_for_country(
     country_code: str,
     final_fob_eur: float | None,
     payment_term_code: str | None = None,
+    remark: str | None = None,
+    update_remark: bool = False,
+    changed_by: str | None = None,
 ) -> CountrySkuFobResolved | None:
     """Update or create FOB for a specific material + country. Pass None to deactivate."""
     stmt = select(CountrySkuFobResolved).where(
@@ -417,12 +420,46 @@ def update_sku_fob_for_country(
     if payment_term_code:
         stmt = stmt.where(CountrySkuFobResolved.payment_term_code == payment_term_code)
     existing = session.execute(stmt).scalars().first()
+    cleaned_remark = (clean_text(remark) or None) if update_remark else None
 
     if existing:
+        if update_remark:
+            existing.remark = cleaned_remark
         if final_fob_eur is None:
+            session.add(
+                FobResolvedHistory(
+                    country_sku_fob_id=existing.country_sku_fob_id,
+                    baseline_version_id=existing.baseline_version_id,
+                    country_code=existing.country_code,
+                    material_code=existing.material_code,
+                    payment_term_code=existing.payment_term_code,
+                    old_uploaded_fob_eur=existing.uploaded_fob_eur,
+                    new_uploaded_fob_eur=existing.uploaded_fob_eur,
+                    old_final_fob_eur=existing.final_fob_eur,
+                    new_final_fob_eur=None,
+                    changed_by=changed_by or "manual_edit_fob",
+                )
+            )
             existing.is_active = False
             existing.updated_at_utc = datetime.now(timezone.utc)
             return existing
+        if float(existing.final_fob_eur) != float(final_fob_eur):
+            session.add(
+                FobResolvedHistory(
+                    country_sku_fob_id=existing.country_sku_fob_id,
+                    baseline_version_id=existing.baseline_version_id,
+                    country_code=existing.country_code,
+                    material_code=existing.material_code,
+                    payment_term_code=existing.payment_term_code,
+                    old_uploaded_fob_eur=existing.uploaded_fob_eur,
+                    new_uploaded_fob_eur=existing.uploaded_fob_eur,
+                    old_final_fob_eur=existing.final_fob_eur,
+                    new_final_fob_eur=final_fob_eur,
+                    changed_by=changed_by or "manual_edit_fob",
+                )
+            )
+            existing.fob_source_mode = "manual_edit"
+            existing.fob_source_country_code = None
         existing.final_fob_eur = final_fob_eur
         existing.updated_at_utc = datetime.now(timezone.utc)
         return existing
@@ -447,6 +484,7 @@ def update_sku_fob_for_country(
         payment_term_code=payment_term_code or "TT",
         final_fob_eur=final_fob_eur,
         fob_source_mode="manual_edit",
+        remark=cleaned_remark,
         is_active=True,
     )
     session.add(fob)
@@ -672,7 +710,7 @@ def sync_missing_template_fobs(
         select(MaterialSkuMaster).where(
             MaterialSkuMaster.bom_template == template,
             MaterialSkuMaster.is_active == True,
-            MaterialSkuMaster.lifecycle_status == "active",
+            MaterialSkuMaster.lifecycle_status.in_(["active", "phase_out"]),
         )
     ).scalars().all())
     if not skus:
@@ -873,6 +911,36 @@ def sync_missing_template_fobs(
     }
 
 
+def _material_sku_remark_by_code(
+    session: Session,
+    material_codes: list[str],
+) -> dict[str, str]:
+    """Return the newest non-empty SKU remark for each material code."""
+    codes = [code for code in dict.fromkeys(material_codes) if code]
+    if not codes:
+        return {}
+    stmt = (
+        select(MaterialSkuMaster.material_code, MaterialSkuMaster.remark)
+        .where(
+            MaterialSkuMaster.material_code.in_(codes),
+            MaterialSkuMaster.remark.isnot(None),
+            func.length(func.trim(MaterialSkuMaster.remark)) > 0,
+        )
+        .order_by(
+            MaterialSkuMaster.material_code,
+            MaterialSkuMaster.is_active.desc(),
+            MaterialSkuMaster.row_version.desc(),
+            MaterialSkuMaster.updated_at_utc.desc(),
+        )
+    )
+    remarks: dict[str, str] = {}
+    for material_code, remark in session.execute(stmt).all():
+        cleaned = clean_text(remark)
+        if material_code not in remarks and cleaned:
+            remarks[material_code] = cleaned
+    return remarks
+
+
 def list_bom_with_fob(
     session: Session,
     brand: str | None = None,
@@ -907,6 +975,7 @@ def list_bom_with_fob(
             "paymentTermCode": f.payment_term_code,
             "fobSourceCountryCode": f.fob_source_country_code,
             "fobSourceMode": f.fob_source_mode,
+            "remark": f.remark,
         }
 
     material_or_template_codes = {
@@ -961,6 +1030,7 @@ def list_bom_with_fob(
             interior_code_by_template[template] = sku.interior_colour_code
         if sku.interior_package and template not in interior_package_by_template:
             interior_package_by_template[template] = sku.interior_package
+    remark_by_code = _material_sku_remark_by_code(session, material_codes)
 
     return [
         {
@@ -993,6 +1063,7 @@ def list_bom_with_fob(
             "isActive": s.is_active,
             "effectiveFrom": s.effective_from_month,
             "effectiveTo": s.effective_to_month,
+            "remark": clean_text(s.remark) or remark_by_code.get(s.material_code),
             "rowVersion": s.row_version,
             "fobByCountry": fob_map.get(s.material_code, {}),
             "financeCountries": sorted(

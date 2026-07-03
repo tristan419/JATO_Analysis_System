@@ -28,6 +28,7 @@ def test_order_genius_export_can_be_imported_back_with_current_columns(
                 "fobEur": 12345.0,
                 "powertrain": "ICE",
                 "lifecycleStatus": "active",
+                "remark": "New regulation material",
                 "months": months,
                 "ttl": 7,
             }
@@ -53,6 +54,18 @@ def test_order_genius_export_can_be_imported_back_with_current_columns(
     assert row.colour == "White"
     assert [cell.quantity for cell in row.cells[:2]] == [4, 3]
     assert sum(cell.quantity for cell in row.cells) == 7
+
+    workbook = openpyxl.load_workbook(export_buffer, data_only=True)
+    try:
+        headers = [
+            workbook["ICE"].cell(row=2, column=col).value
+            for col in range(1, workbook["ICE"].max_column + 1)
+        ]
+        normalized_headers = {str(header).strip().lower() for header in headers}
+        assert "note" not in normalized_headers
+        assert "remark" not in normalized_headers
+    finally:
+        workbook.close()
 
 
 def test_order_genius_single_month_export_can_be_imported_back(
@@ -164,6 +177,8 @@ def test_order_genius_pi_export_maps_business_columns() -> None:
         },
         freight_eur=610.0,
         insurance_eur=120.0,
+        domestic_freight_eur=710.0,
+        domestic_insurance_eur=130.0,
     )
 
     workbook = openpyxl.load_workbook(export_buffer, data_only=True)
@@ -193,8 +208,10 @@ def test_order_genius_pi_export_maps_business_columns() -> None:
         assert values["PIProductcategories"] == "O9 SHS"
         assert values["PIExterior"] == "Silver (KU)"
         assert values["一次内销单价"] == 20200
-        assert values["一次内销单车运费"] == 610
-        assert values["一次内销单车保费"] == 120
+        assert values["一次内销单车运费"] == 710
+        assert values["一次内销单车保费"] == 130
+        assert "Note" not in headers
+        assert "remark" not in {str(header).lower() for header in headers}
         assert dual_values["单双色"] == "双色"
         assert dual_values["PIProductcategories"] == "J7 HEV"
         assert matte_values["单双色"] == "磨砂"

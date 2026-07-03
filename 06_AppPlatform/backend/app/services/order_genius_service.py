@@ -538,6 +538,7 @@ def _fob_to_dict(fob: CountrySkuFobResolved) -> dict:
         "final_fob_eur": float(fob.final_fob_eur),
         "fob_source_mode": fob.fob_source_mode,
         "fob_source_country_code": fob.fob_source_country_code,
+        "remark": fob.remark,
     }
 
 
@@ -1100,6 +1101,8 @@ def export_pi_matrix(
     hide_empty_rows: bool = False,
     freight_eur: float | None = None,
     insurance_eur: float | None = None,
+    domestic_freight_eur: float | None = None,
+    domestic_insurance_eur: float | None = None,
 ) -> io.BytesIO:
     """Generate a PI workbook using the current Order Genius selection."""
     matrix = build_matrix(session, country_code, year,
@@ -1129,6 +1132,8 @@ def export_pi_matrix(
         nl_fob_by_material_code=nl_fob_by_material_code,
         freight_eur=freight_eur,
         insurance_eur=insurance_eur,
+        domestic_freight_eur=domestic_freight_eur,
+        domestic_insurance_eur=domestic_insurance_eur,
     )
 
 
