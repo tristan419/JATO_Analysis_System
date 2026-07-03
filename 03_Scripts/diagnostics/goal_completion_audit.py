@@ -166,6 +166,91 @@ def _pipeline_status(repo_root: Path, pipeline_id: str) -> dict[str, Any]:
     return payload
 
 
+def _direct_report_path(repo_root: Path, value: str | Path | None) -> Path | None:
+    if value is None:
+        return None
+    text = str(value).strip()
+    if not text:
+        return None
+    return _resolve_path(repo_root, text)
+
+
+def _msrp_status_from_report(
+    repo_root: Path,
+    report_path: str | Path | None,
+) -> tuple[dict[str, Any], dict[str, Any] | None] | None:
+    path = _direct_report_path(repo_root, report_path)
+    if path is None:
+        return None
+    payload = _read_json(path)
+    if payload is None or payload.get("schemaVersion") != "msrp_official_price_readiness_v1":
+        return None
+    readiness_status = str(payload.get("status") or "missing")
+    status_record = {
+        "pipelineId": "msrp_readiness_audit",
+        "status": "success" if readiness_status == "passed" else "degraded",
+        "readinessStatus": readiness_status,
+        "statusPath": _display_path(path),
+        "artifactRefs": [_display_path(path)],
+        "source": "direct_report",
+    }
+    summary = payload.get("summary")
+    if isinstance(summary, dict):
+        status_record["statusCounts"] = summary.get("statusCounts")
+    return status_record, payload
+
+
+def _ai_status_from_report(
+    repo_root: Path,
+    report_path: str | Path | None,
+) -> dict[str, Any] | None:
+    path = _direct_report_path(repo_root, report_path)
+    if path is None:
+        return None
+    payload = _read_json(path)
+    if payload is None or payload.get("schemaVersion") != "ai_intelligence_enrichment_smoke_v1":
+        return None
+    summary = payload.get("summary") if isinstance(payload.get("summary"), dict) else {}
+    smoke_status = str(payload.get("status") or "missing")
+    return {
+        "pipelineId": "ai_intelligence_enrichment_smoke",
+        "status": "success" if smoke_status == "ok" else "failed",
+        "smokeStatus": smoke_status,
+        "requiredCountryCount": summary.get("requiredCountryCount", 0),
+        "news": summary.get("news") if isinstance(summary.get("news"), dict) else {},
+        "voc": summary.get("voc") if isinstance(summary.get("voc"), dict) else {},
+        "statusPath": _display_path(path),
+        "artifactRefs": [_display_path(path)],
+        "source": "direct_report",
+    }
+
+
+def _unified_status_from_report(
+    repo_root: Path,
+    report_path: str | Path | None,
+) -> dict[str, Any] | None:
+    path = _direct_report_path(repo_root, report_path)
+    if path is None:
+        return None
+    payload = _read_json(path)
+    if payload is None or payload.get("schemaVersion") != "unified_scraping_readiness_v1":
+        return None
+    summary = payload.get("summary") if isinstance(payload.get("summary"), dict) else {}
+    readiness_status = str(payload.get("status") or "missing")
+    return {
+        "pipelineId": "unified_scraping_readiness",
+        "status": "success" if readiness_status == "passed" else "failed",
+        "readinessStatus": readiness_status,
+        "contractStatus": summary.get("contractStatus"),
+        "stageStatus": summary.get("stageStatus"),
+        "intelligenceStatus": summary.get("intelligenceStatus"),
+        "jobsByKind": summary.get("jobsByKind") if isinstance(summary.get("jobsByKind"), dict) else {},
+        "statusPath": _display_path(path),
+        "artifactRefs": [_display_path(path)],
+        "source": "direct_report",
+    }
+
+
 def _artifact_path(repo_root: Path, artifact_ref: object) -> Path:
     path = Path(str(artifact_ref or "")).expanduser()
     return path if path.is_absolute() else repo_root / path
@@ -529,20 +614,33 @@ def build_goal_completion_report(
     source_draft_dir: str | Path = DEFAULT_SOURCE_DRAFT_DIR,
     required_source_countries: Sequence[str] = DEFAULT_REQUIRED_SOURCE_COUNTRIES,
     required_ai_countries: Sequence[str] = DEFAULT_REQUIRED_AI_COUNTRIES,
+    msrp_readiness_report: str | Path | None = None,
+    ai_intelligence_report: str | Path | None = None,
+    unified_readiness_report: str | Path | None = None,
     remote_api_base: str | None = None,
     remote_resolve_ip: str | None = None,
     timeout_seconds: int = 15,
 ) -> dict[str, Any]:
     root = Path(repo_root).expanduser().resolve() if repo_root else REPO_ROOT
     resolved_source_dir = _resolve_path(root, source_draft_dir)
-    msrp_status = _pipeline_status(root, "msrp_readiness_audit")
-    msrp_report = _read_msrp_readiness_report(root, msrp_status)
+    direct_msrp = _msrp_status_from_report(root, msrp_readiness_report)
+    if direct_msrp is not None:
+        msrp_status, msrp_report = direct_msrp
+    else:
+        msrp_status = _pipeline_status(root, "msrp_readiness_audit")
+        msrp_report = _read_msrp_readiness_report(root, msrp_status)
     msrp_detail_requirements = _msrp_detail_requirements(
         msrp_report=msrp_report,
         msrp_status=msrp_status,
     )
-    ai_status = _pipeline_status(root, "ai_intelligence_enrichment_smoke")
-    unified_status = _pipeline_status(root, "unified_scraping_readiness")
+    ai_status = (
+        _ai_status_from_report(root, ai_intelligence_report)
+        or _pipeline_status(root, "ai_intelligence_enrichment_smoke")
+    )
+    unified_status = (
+        _unified_status_from_report(root, unified_readiness_report)
+        or _pipeline_status(root, "unified_scraping_readiness")
+    )
     source_coverage = _source_draft_coverage(
         resolved_source_dir,
         required_source_countries,
@@ -797,6 +895,21 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--source-draft-dir", default=DEFAULT_SOURCE_DRAFT_DIR)
     parser.add_argument("--required-source-countries", default=",".join(DEFAULT_REQUIRED_SOURCE_COUNTRIES))
     parser.add_argument("--required-ai-countries", default=",".join(DEFAULT_REQUIRED_AI_COUNTRIES))
+    parser.add_argument(
+        "--msrp-readiness-report",
+        default=None,
+        help="Read a freshly generated msrp_readiness_audit.json instead of pipeline_status.",
+    )
+    parser.add_argument(
+        "--ai-intelligence-report",
+        default=None,
+        help="Read a freshly generated ai_intelligence_enrichment_smoke.json instead of pipeline_status.",
+    )
+    parser.add_argument(
+        "--unified-readiness-report",
+        default=None,
+        help="Read a freshly generated unified_scraping_readiness.json instead of pipeline_status.",
+    )
     parser.add_argument("--remote-api-base", default=None)
     parser.add_argument(
         "--remote-resolve-ip",
@@ -817,6 +930,9 @@ def main(argv: Sequence[str] | None = None) -> int:
         source_draft_dir=args.source_draft_dir,
         required_source_countries=_csv_arg(args.required_source_countries),
         required_ai_countries=_csv_arg(args.required_ai_countries),
+        msrp_readiness_report=args.msrp_readiness_report,
+        ai_intelligence_report=args.ai_intelligence_report,
+        unified_readiness_report=args.unified_readiness_report,
         remote_api_base=args.remote_api_base,
         remote_resolve_ip=args.remote_resolve_ip,
         timeout_seconds=max(1, int(args.timeout_seconds)),

@@ -145,6 +145,83 @@ def test_build_report_separates_local_p0_from_unchecked_production(tmp_path: Pat
     assert report["summary"]["msrpDetailedPassedCount"] == 16
 
 
+def test_build_report_accepts_explicit_audit_artifacts_without_pipeline_status(
+    tmp_path: Path,
+) -> None:
+    artifact_root = tmp_path / "artifacts"
+    msrp_report_path = artifact_root / "msrp_readiness_audit.json"
+    ai_report_path = artifact_root / "ai_intelligence_enrichment_smoke.json"
+    unified_report_path = artifact_root / "unified_scraping_readiness.json"
+    _write_json(
+        msrp_report_path,
+        {
+            "schemaVersion": "msrp_official_price_readiness_v1",
+            "status": "passed",
+            "summary": {
+                "statusCounts": {"passed": len(audit.REQUIRED_MSRP_REQUIREMENT_KEYS)}
+            },
+            "requirements": [
+                {
+                    "key": key,
+                    "title": key.replace("_", " ").title(),
+                    "status": "passed",
+                    "runtime": {"source": "direct-report"},
+                    "evidence": ["direct"],
+                    "note": "direct",
+                }
+                for key in audit.REQUIRED_MSRP_REQUIREMENT_KEYS
+            ],
+        },
+    )
+    _write_json(
+        ai_report_path,
+        {
+            "schemaVersion": "ai_intelligence_enrichment_smoke_v1",
+            "status": "ok",
+            "summary": {
+                "requiredCountryCount": 15,
+                "news": {"countryCount": 15},
+                "voc": {"countryCount": 15},
+            },
+        },
+    )
+    _write_json(
+        unified_report_path,
+        {
+            "schemaVersion": "unified_scraping_readiness_v1",
+            "status": "passed",
+            "summary": {
+                "contractStatus": "ok",
+                "stageStatus": "ok",
+                "intelligenceStatus": "ok",
+                "jobsByKind": {"msrp": 1, "news": 1, "voc": 1},
+            },
+        },
+    )
+    source_root = tmp_path / "source_drafts"
+    _write_source_drafts(source_root, ("se", "fi"))
+
+    report = audit.build_goal_completion_report(
+        repo_root=tmp_path,
+        source_draft_dir=source_root,
+        required_source_countries=("se", "fi"),
+        required_ai_countries=audit.DEFAULT_REQUIRED_AI_COUNTRIES,
+        msrp_readiness_report=msrp_report_path,
+        ai_intelligence_report=ai_report_path,
+        unified_readiness_report=unified_report_path,
+    )
+    by_key = {item["key"]: item for item in report["requirements"]}
+
+    assert report["summary"]["localP0Ready"] is True
+    assert report["summary"]["msrpReady"] is True
+    assert report["summary"]["aiReady"] is True
+    assert report["summary"]["unifiedReady"] is True
+    assert by_key["msrp_official_price_p0"]["status"] == "passed"
+    assert by_key["ai_news_voc_15_country_smoke"]["runtime"]["source"] == "direct_report"
+    assert by_key["unified_scraping_contract_and_stage"]["runtime"]["source"] == "direct_report"
+    assert by_key["production_deployment_state"]["status"] == "not_checked"
+
+
 def test_source_todo_placeholders_degrade_full_goal(tmp_path: Path) -> None:
     _write_statuses(tmp_path)
     source_root = tmp_path / "source_drafts"
