@@ -14,6 +14,12 @@ import numpy as np
 import pandas as pd
 
 from app.core.config import (
+    DASHBOARD_OVERVIEW_CACHE_MAX_ENTRIES,
+    DASHBOARD_OVERVIEW_CACHE_TTL_SECONDS,
+    DASHBOARD_OVERVIEW_PERSISTENT_CACHE_DIR,
+    DASHBOARD_OVERVIEW_PERSISTENT_CACHE_ENABLED,
+    DASHBOARD_OVERVIEW_PREWARM_FILTERS,
+    DASHBOARD_OVERVIEW_PREWARM_SCOPES,
     DEFAULT_GROUP_BY,
     FILTER_OPTIONS_SNAPSHOT_TTL_SECONDS,
     GROUPED_TIME_SERIES_CACHE_MAX_ENTRIES,
@@ -34,6 +40,12 @@ LOGGER = logging.getLogger(__name__)
 class GroupedTimeSeriesQueryResult:
     payload: dict
     cache_state: Literal["MEMORY", "DISK", "INFLIGHT", "MISS"]
+
+
+@dataclass(frozen=True)
+class DashboardOverviewQueryResult:
+    payload: dict
+    cache_state: Literal["MEMORY", "DISK", "MISS"]
 
 # ── Column name candidates ──────────────────────────────────────
 COUNTRY_CANDIDATES = ["国家", "Country", "country"]
@@ -83,18 +95,20 @@ TOP_LEVEL_FILTER_CANDIDATE_SETS = [
     POWERTRAIN_CANDIDATES,
 ]
 _GROUPED_TIME_SERIES_DISK_CACHE_SCHEMA = 1
+_DASHBOARD_OVERVIEW_DISK_CACHE_SCHEMA = 1
 
 _top_level_filter_options_cache: (
     tuple[float, str, dict[str, list[str]]] | None
 ) = None
 _top_level_filter_options_lock = threading.Lock()
-_OVERVIEW_CACHE_TTL_SECONDS = 300
+_OverviewCacheKey = tuple[
+    str,
+    tuple[tuple[str, tuple[str, ...]], ...],
+    bool,
+    int,
+]
 _overview_cache: dict[
-    tuple[
-        tuple[tuple[str, tuple[str, ...]], ...],
-        bool,
-        int,
-    ],
+    _OverviewCacheKey,
     tuple[float, str, dict],
 ] = {}
 _overview_cache_lock = threading.Lock()
@@ -123,6 +137,172 @@ _grouped_time_series_cache_lock = threading.Lock()
 
 def _normalize_cache_scope(cache_scope: str | None) -> str:
     return str(cache_scope or "viewer").strip().lower() or "viewer"
+
+
+def _dashboard_overview_disk_payload_key(
+    cache_key: _OverviewCacheKey,
+    dataset_token: str,
+) -> dict[str, object]:
+    return {
+        "schema": _DASHBOARD_OVERVIEW_DISK_CACHE_SCHEMA,
+        "dataset": dataset_token,
+        "cacheKey": cache_key,
+    }
+
+
+def _dashboard_overview_disk_cache_path(
+    cache_key: _OverviewCacheKey,
+    dataset_token: str,
+) -> Path:
+    payload_key = _dashboard_overview_disk_payload_key(cache_key, dataset_token)
+    digest = hashlib.sha256(
+        json.dumps(payload_key, ensure_ascii=False, sort_keys=True).encode("utf-8")
+    ).hexdigest()
+    return DASHBOARD_OVERVIEW_PERSISTENT_CACHE_DIR / f"{digest}.json"
+
+
+def _read_dashboard_overview_disk_cache(
+    cache_key: _OverviewCacheKey,
+    dataset_token: str,
+    now_epoch: float,
+) -> dict | None:
+    if not DASHBOARD_OVERVIEW_PERSISTENT_CACHE_ENABLED:
+        return None
+    cache_path = _dashboard_overview_disk_cache_path(cache_key, dataset_token)
+    try:
+        if not cache_path.exists():
+            return None
+        payload = json.loads(cache_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+
+    if payload.get("schema") != _DASHBOARD_OVERVIEW_DISK_CACHE_SCHEMA:
+        return None
+    if payload.get("dataset") != dataset_token:
+        return None
+    cached_at = float(payload.get("cachedAt", 0.0) or 0.0)
+    if (now_epoch - cached_at) >= DASHBOARD_OVERVIEW_CACHE_TTL_SECONDS:
+        return None
+    result = payload.get("result")
+    return result if isinstance(result, dict) else None
+
+
+def _prune_dashboard_overview_disk_cache() -> None:
+    if not DASHBOARD_OVERVIEW_PERSISTENT_CACHE_ENABLED:
+        return
+    try:
+        cache_files = sorted(
+            DASHBOARD_OVERVIEW_PERSISTENT_CACHE_DIR.glob("*.json"),
+            key=lambda path: path.stat().st_mtime,
+        )
+    except OSError:
+        return
+    max_entries = max(1, int(DASHBOARD_OVERVIEW_CACHE_MAX_ENTRIES))
+    overflow = len(cache_files) - max_entries
+    if overflow <= 0:
+        return
+    for path in cache_files[:overflow]:
+        try:
+            path.unlink()
+        except OSError:
+            continue
+
+
+def _write_dashboard_overview_disk_cache(
+    cache_key: _OverviewCacheKey,
+    dataset_token: str,
+    result: dict,
+) -> None:
+    if not DASHBOARD_OVERVIEW_PERSISTENT_CACHE_ENABLED:
+        return
+    try:
+        DASHBOARD_OVERVIEW_PERSISTENT_CACHE_DIR.mkdir(parents=True, exist_ok=True)
+        cache_path = _dashboard_overview_disk_cache_path(cache_key, dataset_token)
+        tmp_path = cache_path.with_suffix(f".{uuid4().hex}.tmp")
+        tmp_path.write_text(
+            json.dumps(
+                {
+                    "schema": _DASHBOARD_OVERVIEW_DISK_CACHE_SCHEMA,
+                    "dataset": dataset_token,
+                    "cachedAt": time.time(),
+                    "result": result,
+                },
+                ensure_ascii=False,
+                separators=(",", ":"),
+            ),
+            encoding="utf-8",
+        )
+        tmp_path.replace(cache_path)
+        _prune_dashboard_overview_disk_cache()
+    except OSError as exc:
+        LOGGER.warning("Could not write dashboard overview cache: %s", exc)
+
+
+def _get_dashboard_overview_cache_hit(
+    cache_key: _OverviewCacheKey,
+    dataset_token: str,
+    now: float,
+) -> dict | None:
+    cached = _overview_cache.get(cache_key)
+    if cached is None:
+        return None
+    cached_at, cached_token, cached_result = cached
+    if (
+        cached_token == dataset_token
+        and (now - cached_at) < DASHBOARD_OVERVIEW_CACHE_TTL_SECONDS
+    ):
+        return cached_result
+    return None
+
+
+def _store_dashboard_overview_cache(
+    cache_key: _OverviewCacheKey,
+    result: dict,
+    dataset_token: str | None = None,
+) -> dict:
+    now = time.monotonic()
+    dataset_token = dataset_token or repo.current_dataset_token()
+    cached_result = _get_dashboard_overview_cache_hit(
+        cache_key,
+        dataset_token,
+        now,
+    )
+    if cached_result is not None:
+        return cached_result
+
+    _overview_cache[cache_key] = (now, dataset_token, result)
+    max_entries = max(1, int(DASHBOARD_OVERVIEW_CACHE_MAX_ENTRIES))
+    while len(_overview_cache) > max_entries:
+        oldest_key = min(
+            _overview_cache,
+            key=lambda key: _overview_cache[key][0],
+        )
+        _overview_cache.pop(oldest_key, None)
+    return result
+
+
+def _load_dashboard_overview_persistent_cache(
+    cache_key: _OverviewCacheKey,
+    dataset_token: str,
+) -> dict | None:
+    cached_result = _read_dashboard_overview_disk_cache(
+        cache_key,
+        dataset_token,
+        time.time(),
+    )
+    if cached_result is None:
+        return None
+    with _overview_cache_lock:
+        return _store_dashboard_overview_cache(
+            cache_key,
+            cached_result,
+            dataset_token,
+        )
+
+
+def _clear_dashboard_overview_cache() -> None:
+    with _overview_cache_lock:
+        _overview_cache.clear()
 
 
 def _grouped_time_series_disk_payload_key(
@@ -1433,6 +1613,49 @@ def warm_grouped_time_series_cache() -> dict[str, int]:
     return {"warmed": warmed, "failed": failed}
 
 
+def warm_dashboard_overview_cache() -> dict[str, int]:
+    warmed = 0
+    failed = 0
+    scopes = [
+        _normalize_cache_scope(item)
+        for item in DASHBOARD_OVERVIEW_PREWARM_SCOPES
+        if item
+    ] or ["viewer"]
+    filter_sets: list[dict[str, list[str]]] = []
+    seen_filter_keys: set[tuple[tuple[str, tuple[str, ...]], ...]] = set()
+    for filters in [{}, *DASHBOARD_OVERVIEW_PREWARM_FILTERS]:
+        normalized_filters = _normalize_query_cache_filters(filters)
+        if normalized_filters in seen_filter_keys:
+            continue
+        seen_filter_keys.add(normalized_filters)
+        filter_sets.append(
+            {
+                column: list(values)
+                for column, values in normalized_filters
+            }
+        )
+
+    for scope in dict.fromkeys(scopes):
+        for filters in filter_sets:
+            try:
+                query_overview(
+                    filters=filters,
+                    prefer_precomputed=True,
+                    top_n=10,
+                    cache_scope=scope,
+                )
+                warmed += 1
+            except Exception as exc:  # pragma: no cover - startup warming must not fail the API
+                failed += 1
+                LOGGER.warning(
+                    "Dashboard overview prewarm failed for scope=%s filters=%s: %s",
+                    scope,
+                    filters,
+                    exc,
+                )
+    return {"warmed": warmed, "failed": failed}
+
+
 def _query_grouped_time_series_impl(
     filters: dict[str, list[str]],
     grain: str,
@@ -1589,48 +1812,71 @@ def query_overview(
     filters: dict[str, list[str]],
     prefer_precomputed: bool,
     top_n: int,
+    cache_scope: str | None = None,
 ) -> dict:
+    return query_overview_with_cache_state(
+        filters=filters,
+        prefer_precomputed=prefer_precomputed,
+        top_n=top_n,
+        cache_scope=cache_scope,
+    ).payload
+
+
+def query_overview_with_cache_state(
+    filters: dict[str, list[str]],
+    prefer_precomputed: bool,
+    top_n: int,
+    cache_scope: str | None = None,
+) -> DashboardOverviewQueryResult:
     cache_key = (
+        _normalize_cache_scope(cache_scope),
         _normalize_query_cache_filters(filters),
         bool(prefer_precomputed),
         max(1, int(top_n)),
     )
     dataset_token = repo.current_dataset_token()
     now = time.monotonic()
-    cached = _overview_cache.get(cache_key)
-    if cached is not None:
-        cached_at, cached_token, cached_result = cached
-        if (
-            cached_token == dataset_token
-            and (now - cached_at) < _OVERVIEW_CACHE_TTL_SECONDS
-        ):
-            return cached_result
+    cached_result = _get_dashboard_overview_cache_hit(
+        cache_key,
+        dataset_token,
+        now,
+    )
+    if cached_result is not None:
+        return DashboardOverviewQueryResult(cached_result, "MEMORY")
+    cached_result = _load_dashboard_overview_persistent_cache(
+        cache_key,
+        dataset_token,
+    )
+    if cached_result is not None:
+        return DashboardOverviewQueryResult(cached_result, "DISK")
 
     with _overview_cache_lock:
         now = time.monotonic()
         dataset_token = repo.current_dataset_token()
-        cached = _overview_cache.get(cache_key)
-        if cached is not None:
-            cached_at, cached_token, cached_result = cached
-            if (
-                cached_token == dataset_token
-                and (now - cached_at) < _OVERVIEW_CACHE_TTL_SECONDS
-            ):
-                return cached_result
+        cached_result = _get_dashboard_overview_cache_hit(
+            cache_key,
+            dataset_token,
+            now,
+        )
+        if cached_result is not None:
+            return DashboardOverviewQueryResult(cached_result, "MEMORY")
 
         result = _query_overview_impl(
             filters=filters,
             prefer_precomputed=prefer_precomputed,
             top_n=top_n,
         )
-        _overview_cache[cache_key] = (now, dataset_token, result)
-        if len(_overview_cache) > 32:
-            oldest_key = min(
-                _overview_cache,
-                key=lambda key: _overview_cache[key][0],
-            )
-            _overview_cache.pop(oldest_key, None)
-        return result
+        cached_result = _store_dashboard_overview_cache(
+            cache_key,
+            result,
+            dataset_token,
+        )
+        _write_dashboard_overview_disk_cache(
+            cache_key,
+            dataset_token,
+            cached_result,
+        )
+        return DashboardOverviewQueryResult(cached_result, "MISS")
 
 
 def _query_overview_impl(

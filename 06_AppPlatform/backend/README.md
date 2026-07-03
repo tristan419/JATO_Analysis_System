@@ -123,6 +123,9 @@ The script prints one JSON line per request. A healthy repeated run should show
 Default startup prewarm covers month/year grouped Dashboard lenses for
 `viewer`, `order_filler`, `editor`, and `admin`, including the wide country +
 powertrain filter set used by the Intl Dashboard.
+`POST /v1/analysis/overview` uses the same server-cache pattern and returns
+`X-JATO-Server-Cache: MISS|MEMORY|DISK`; startup prewarm covers the empty
+Dashboard and the same wide country + powertrain filter set for each role.
 `03_Scripts/ops/deploy_fullstack_server.sh` runs the same prewarm automatically
 after backend health checks when `APP_GROUPED_TIME_SERIES_PREWARM_ENABLED=true`;
 set `RUN_GROUPED_TIME_SERIES_PREWARM=strict` to fail deployment on a cold repeat.
