@@ -2354,7 +2354,7 @@ export const api = {
     threshold_pct?: number;
     direction?: "drops" | "increases" | "all";
     limit?: number;
-    mode?: "live" | "sweden_demo";
+    mode?: "live" | "sweden_demo" | "sweden_swiss_demo";
   }) => {
     const sp = new URLSearchParams();
     if (params?.country) sp.set("country", params.country);

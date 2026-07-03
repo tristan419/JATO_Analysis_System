@@ -13914,6 +13914,114 @@ table.data-table tr.data-table-group-row.contains-selection td {
   text-align: right;
 }
 
+.msrp-monitor-sweden-status {
+  display: grid;
+  grid-template-columns: minmax(260px, 0.62fr) minmax(0, 1.38fr);
+  gap: var(--msrp-section-gap);
+  align-items: stretch;
+  border: 1px solid var(--msrp-card-border);
+  border-radius: var(--msrp-panel-radius);
+  background: #fff;
+  box-shadow: var(--msrp-card-shadow);
+  padding: 14px;
+}
+
+.msrp-monitor-sweden-status header {
+  display: grid;
+  align-content: space-between;
+  gap: 8px;
+  min-width: 0;
+}
+
+.msrp-monitor-sweden-status header span,
+.msrp-monitor-sweden-status-grid span,
+.msrp-monitor-sweden-status-grid small {
+  display: block;
+  min-width: 0;
+}
+
+.msrp-monitor-sweden-status header span,
+.msrp-monitor-sweden-status-grid span {
+  color: #667085;
+  font-size: 11px;
+  font-weight: 800;
+  text-transform: uppercase;
+}
+
+.msrp-monitor-sweden-status h2 {
+  margin: 2px 0 0;
+  color: #172033;
+  font-size: 18px;
+  letter-spacing: 0;
+}
+
+.msrp-monitor-sweden-status p {
+  margin: 0;
+  color: #667085;
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.msrp-monitor-sweden-status-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 8px;
+  min-width: 0;
+}
+
+.msrp-monitor-sweden-status-grid div {
+  display: grid;
+  align-content: space-between;
+  gap: 8px;
+  min-height: 92px;
+  border: 1px solid #e2e8f0;
+  border-radius: 8px;
+  background: #fbfcfe;
+  padding: 10px;
+}
+
+.msrp-monitor-sweden-status-grid strong {
+  display: block;
+  color: #172033;
+  font-size: 26px;
+  line-height: 1;
+}
+
+.msrp-monitor-sweden-status-grid small {
+  color: #667085;
+  font-size: 11px;
+  line-height: 1.35;
+}
+
+.msrp-monitor-sweden-status-actions {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  align-content: center;
+  gap: 8px;
+  min-width: 0;
+  margin-top: 2px;
+}
+
+.msrp-monitor-sweden-status-actions button {
+  min-height: 38px;
+  border: 1px solid #cbd5e1;
+  border-radius: 8px;
+  background: #fff;
+  color: #172033;
+  cursor: pointer;
+  padding: 8px 10px;
+  font: inherit;
+  font-size: 12px;
+  font-weight: 850;
+}
+
+.msrp-monitor-sweden-status-actions button:hover,
+.msrp-monitor-sweden-status-actions button:focus-visible {
+  border-color: rgba(37, 99, 235, 0.45);
+  box-shadow: 0 0 0 2px rgba(37, 99, 235, 0.08);
+  outline: none;
+}
+
 .msrp-monitor-summary {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(128px, 1fr));
@@ -17381,6 +17489,13 @@ table.data-table tr.data-table-group-row.contains-selection td {
   .msrp-monitor-visual-grid {
     grid-template-columns: minmax(0, 1fr);
   }
+  .msrp-monitor-sweden-status {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .msrp-monitor-sweden-status-actions {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    min-width: 0;
+  }
   .msrp-monitor-demo-banner {
     grid-template-columns: 1fr;
   }
@@ -17395,6 +17510,10 @@ table.data-table tr.data-table-group-row.contains-selection td {
   }
   .msrp-monitor-summary {
     grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+  .msrp-monitor-sweden-status-grid,
+  .msrp-monitor-sweden-status-actions {
+    grid-template-columns: minmax(0, 1fr);
   }
   .msrp-monitor-window-strip button.is-refresh {
     margin-left: 0;

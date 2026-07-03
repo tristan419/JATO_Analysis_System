@@ -1,0 +1,4121 @@
+{
+  "schemaVersion": "sweden_swiss_top30_official_evidence_v1",
+  "generatedAtUtc": "2026-07-03T01:45:02.826049+00:00",
+  "asOfDate": "2026-07-03",
+  "policy": {
+    "status": "review_only",
+    "productionWriteAllowed": false,
+    "rule": "Only rows with same-trim official evidence and clear regular/current prices can be used as demo offer boundaries. Baseline-only price lists and offer-only rows are not MSRP drops."
+  },
+  "summary": {
+    "sourceCount": 60,
+    "entryCount": 74,
+    "countryCount": 2,
+    "offerBoundaryCount": 13,
+    "baselineOnlyCount": 36,
+    "offerSignalOnlyCount": 14,
+    "alreadyBackfilledCount": 3,
+    "expiredOfferBoundaryCount": 6,
+    "generationTransitionCount": 2,
+    "top30CoveredModelCount": 60,
+    "top30MissingModelCount": 0
+  },
+  "rankingScope": {
+    "topN": 30,
+    "segmentFilter": "SUV",
+    "candidateSource": "04_Processed_data/msrp_candidate_scope/suv_only/candidate_scope_report.json",
+    "rankingMethod": "rolling_12m_sales_rank",
+    "sourceLatestMonth": "2026 Jan",
+    "sourceWindow": "rolling 12m from candidate_scope_report",
+    "countries": [
+      {
+        "countryCode": "se",
+        "countryLabel": "Sweden",
+        "rankingMethod": "rolling_12m_sales_rank",
+        "latestMonth": "2026 Jan",
+        "windowStartMonth": "2025 Feb",
+        "windowEndMonth": "2026 Jan",
+        "monthsInWindow": 12
+      },
+      {
+        "countryCode": "ch",
+        "countryLabel": "Switzerland",
+        "rankingMethod": "rolling_12m_sales_rank",
+        "latestMonth": "2026 Jan",
+        "windowStartMonth": "2025 Feb",
+        "windowEndMonth": "2026 Jan",
+        "monthsInWindow": 12
+      }
+    ]
+  },
+  "top30Coverage": [
+    {
+      "countryCode": "SE",
+      "countryLabel": "Sweden",
+      "top30ModelCount": 30,
+      "coveredModelCount": 30,
+      "missingModelCount": 0,
+      "coveredModels": [
+        {
+          "rank": 1,
+          "brand": "VOLVO",
+          "model": "XC60",
+          "sales12m": 17287.0,
+          "snapshotMovementStatus": "no_jato_snapshot_median_shift",
+          "currentPriceStatus": "current_price_found"
+        },
+        {
+          "rank": 2,
+          "brand": "VOLVO",
+          "model": "EX40",
+          "sales12m": 9271.0,
+          "snapshotMovementStatus": "candidate_from_jato_snapshot_median_shift",
+          "currentPriceStatus": "missing_current_price"
+        },
+        {
+          "rank": 3,
+          "brand": "TESLA",
+          "model": "MODEL Y",
+          "sales12m": 6024.0,
+          "snapshotMovementStatus": "no_jato_snapshot_median_shift",
+          "currentPriceStatus": "current_price_found"
+        },
+        {
+          "rank": 4,
+          "brand": "KIA",
+          "model": "EV3",
+          "sales12m": 5543.0,
+          "snapshotMovementStatus": "no_jato_snapshot_median_shift",
+          "currentPriceStatus": "missing_current_price"
+        },
+        {
+          "rank": 5,
+          "brand": "VOLVO",
+          "model": "EX30",
+          "sales12m": 5231.0,
+          "snapshotMovementStatus": "no_jato_snapshot_median_shift",
+          "currentPriceStatus": "missing_current_price"
+        },
+        {
+          "rank": 6,
+          "brand": "SKODA",
+          "model": "KODIAQ",
+          "sales12m": 5154.0,
+          "snapshotMovementStatus": "no_jato_snapshot_median_shift",
+          "currentPriceStatus": "current_price_found"
+        },
+        {
+          "rank": 7,
+          "brand": "TOYOTA",
+          "model": "RAV4",
+          "sales12m": 4860.0,
+          "snapshotMovementStatus": "no_jato_snapshot_median_shift",
+          "currentPriceStatus": "missing_current_price"
+        },
+        {
+          "rank": 8,
+          "brand": "POLESTAR",
+          "model": "4",
+          "sales12m": 4744.0,
+          "snapshotMovementStatus": "no_jato_snapshot_median_shift",
+          "currentPriceStatus": "missing_current_price"
+        },
+        {
+          "rank": 9,
+          "brand": "VOLKSWAGEN",
+          "model": "TIGUAN",
+          "sales12m": 4603.0,
+          "snapshotMovementStatus": "no_jato_snapshot_median_shift",
+          "currentPriceStatus": "current_price_found"
+        },
+        {
+          "rank": 10,
+          "brand": "VOLKSWAGEN",
+          "model": "ID.4",
+          "sales12m": 4546.0,
+          "snapshotMovementStatus": "no_jato_snapshot_median_shift",
+          "currentPriceStatus": "current_price_found"
+        },
+        {
+          "rank": 11,
+          "brand": "TOYOTA",
+          "model": "YARIS CROSS",
+          "sales12m": 3924.0,
+          "snapshotMovementStatus": "no_jato_snapshot_median_shift",
+          "currentPriceStatus": "missing_current_price"
+        },
+        {
+          "rank": 12,
+          "brand": "VOLKSWAGEN",
+          "model": "T-ROC",
+          "sales12m": 3651.0,
+          "snapshotMovementStatus": "no_jato_snapshot_median_shift",
+          "currentPriceStatus": "current_price_found"
+        },
+        {
+          "rank": 13,
+          "brand": "KIA",
+          "model": "SPORTAGE",
+          "sales12m": 3404.0,
+          "snapshotMovementStatus": "no_jato_snapshot_median_shift",
+          "currentPriceStatus": "missing_current_price"
+        },
+        {
+          "rank": 14,
+          "brand": "SKODA",
+          "model": "ENYAQ",
+          "sales12m": 3365.0,
+          "snapshotMovementStatus": "no_jato_snapshot_median_shift",
+          "currentPriceStatus": "current_price_found"
+        },
+        {
+          "rank": 15,
+          "brand": "PEUGEOT",
+          "model": "3008",
+          "sales12m": 2944.0,
+          "snapshotMovementStatus": "candidate_from_jato_snapshot_median_shift",
+          "currentPriceStatus": "missing_current_price"
+        },
+        {
+          "rank": 16,
+          "brand": "TOYOTA",
+          "model": "COROLLA CROSS",
+          "sales12m": 2779.0,
+          "snapshotMovementStatus": "no_jato_snapshot_median_shift",
+          "currentPriceStatus": "missing_current_price"
+        },
+        {
+          "rank": 17,
+          "brand": "PEUGEOT",
+          "model": "2008",
+          "sales12m": 2611.0,
+          "snapshotMovementStatus": "candidate_from_jato_snapshot_median_shift",
+          "currentPriceStatus": "missing_current_price"
+        },
+        {
+          "rank": 18,
+          "brand": "TOYOTA",
+          "model": "C-HR",
+          "sales12m": 2449.0,
+          "snapshotMovementStatus": "no_jato_snapshot_median_shift",
+          "currentPriceStatus": "missing_current_price"
+        },
+        {
+          "rank": 19,
+          "brand": "VOLVO",
+          "model": "EC40",
+          "sales12m": 2277.0,
+          "snapshotMovementStatus": "candidate_from_jato_snapshot_median_shift",
+          "currentPriceStatus": "missing_current_price"
+        },
+        {
+          "rank": 20,
+          "brand": "CUPRA",
+          "model": "TERRAMAR",
+          "sales12m": 2266.0,
+          "snapshotMovementStatus": "no_jato_snapshot_median_shift",
+          "currentPriceStatus": "missing_current_price"
+        },
+        {
+          "rank": 21,
+          "brand": "KIA",
+          "model": "EV9",
+          "sales12m": 2233.0,
+          "snapshotMovementStatus": "no_jato_snapshot_median_shift",
+          "currentPriceStatus": "missing_current_price"
+        },
+        {
+          "rank": 22,
+          "brand": "PEUGEOT",
+          "model": "5008",
+          "sales12m": 2181.0,
+          "snapshotMovementStatus": "no_jato_snapshot_median_shift",
+          "currentPriceStatus": "missing_current_price"
+        },
+        {
+          "rank": 23,
+          "brand": "VOLKSWAGEN",
+          "model": "TAYRON",
+          "sales12m": 2071.0,
+          "snapshotMovementStatus": "no_jato_snapshot_median_shift",
+          "currentPriceStatus": "current_price_found"
+        },
+        {
+          "rank": 24,
+          "brand": "VOLVO",
+          "model": "XC40",
+          "sales12m": 2069.0,
+          "snapshotMovementStatus": "no_jato_snapshot_median_shift",
+          "currentPriceStatus": "missing_current_price"
+        },
+        {
+          "rank": 25,
+          "brand": "KIA",
+          "model": "EV6",
+          "sales12m": 2063.0,
+          "snapshotMovementStatus": "no_jato_snapshot_median_shift",
+          "currentPriceStatus": "missing_current_price"
+        },
+        {
+          "rank": 26,
+          "brand": "VOLVO",
+          "model": "XC90",
+          "sales12m": 1965.0,
+          "snapshotMovementStatus": "candidate_from_jato_snapshot_median_shift",
+          "currentPriceStatus": "missing_current_price"
+        },
+        {
+          "rank": 27,
+          "brand": "BMW",
+          "model": "IX1",
+          "sales12m": 1949.0,
+          "snapshotMovementStatus": "no_jato_snapshot_median_shift",
+          "currentPriceStatus": "missing_current_price"
+        },
+        {
+          "rank": 28,
+          "brand": "MERCEDES",
+          "model": "EQA",
+          "sales12m": 1740.0,
+          "snapshotMovementStatus": "no_jato_snapshot_median_shift",
+          "currentPriceStatus": "missing_current_price"
+        },
+        {
+          "rank": 29,
+          "brand": "AUDI",
+          "model": "Q4 E-TRON",
+          "sales12m": 1667.0,
+          "snapshotMovementStatus": "no_jato_snapshot_median_shift",
+          "currentPriceStatus": "missing_current_price"
+        },
+        {
+          "rank": 30,
+          "brand": "VOLVO",
+          "model": "EX90",
+          "sales12m": 1649.0,
+          "snapshotMovementStatus": "no_jato_snapshot_median_shift",
+          "currentPriceStatus": "missing_current_price"
+        }
+      ],
+      "missingModels": []
+    },
+    {
+      "countryCode": "CH",
+      "countryLabel": "Switzerland",
+      "top30ModelCount": 30,
+      "coveredModelCount": 30,
+      "missingModelCount": 0,
+      "coveredModels": [
+        {
+          "rank": 1,
+          "brand": "VOLKSWAGEN",
+          "model": "TIGUAN",
+          "sales12m": 5084.0,
+          "snapshotMovementStatus": "no_jato_snapshot_median_shift",
+          "currentPriceStatus": "missing_current_price"
+        },
+        {
+          "rank": 2,
+          "brand": "TESLA",
+          "model": "MODEL Y",
+          "sales12m": 4991.0,
+          "snapshotMovementStatus": "no_jato_snapshot_median_shift",
+          "currentPriceStatus": "missing_current_price"
+        },
+        {
+          "rank": 3,
+          "brand": "SKODA",
+          "model": "KODIAQ",
+          "sales12m": 3857.0,
+          "snapshotMovementStatus": "no_jato_snapshot_median_shift",
+          "currentPriceStatus": "missing_current_price"
+        },
+        {
+          "rank": 4,
+          "brand": "SKODA",
+          "model": "ELROQ",
+          "sales12m": 3646.0,
+          "snapshotMovementStatus": "no_jato_snapshot_median_shift",
+          "currentPriceStatus": "missing_current_price"
+        },
+        {
+          "rank": 5,
+          "brand": "MERCEDES",
+          "model": "GLC",
+          "sales12m": 3533.0,
+          "snapshotMovementStatus": "no_jato_snapshot_median_shift",
+          "currentPriceStatus": "missing_current_price"
+        },
+        {
+          "rank": 6,
+          "brand": "BMW",
+          "model": "X1",
+          "sales12m": 3465.0,
+          "snapshotMovementStatus": "no_jato_snapshot_median_shift",
+          "currentPriceStatus": "missing_current_price"
+        },
+        {
+          "rank": 7,
+          "brand": "SKODA",
+          "model": "KAROQ",
+          "sales12m": 3390.0,
+          "snapshotMovementStatus": "no_jato_snapshot_median_shift",
+          "currentPriceStatus": "missing_current_price"
+        },
+        {
+          "rank": 8,
+          "brand": "BMW",
+          "model": "X3",
+          "sales12m": 2839.0,
+          "snapshotMovementStatus": "no_jato_snapshot_median_shift",
+          "currentPriceStatus": "missing_current_price"
+        },
+        {
+          "rank": 9,
+          "brand": "SKODA",
+          "model": "ENYAQ",
+          "sales12m": 2785.0,
+          "snapshotMovementStatus": "no_jato_snapshot_median_shift",
+          "currentPriceStatus": "missing_current_price"
+        },
+        {
+          "rank": 10,
+          "brand": "VOLVO",
+          "model": "XC60",
+          "sales12m": 2647.0,
+          "snapshotMovementStatus": "candidate_from_jato_snapshot_median_shift",
+          "currentPriceStatus": "missing_current_price"
+        },
+        {
+          "rank": 11,
+          "brand": "DACIA",
+          "model": "DUSTER",
+          "sales12m": 2274.0,
+          "snapshotMovementStatus": "no_jato_snapshot_median_shift",
+          "currentPriceStatus": "missing_current_price"
+        },
+        {
+          "rank": 12,
+          "brand": "VOLVO",
+          "model": "EX30",
+          "sales12m": 2178.0,
+          "snapshotMovementStatus": "candidate_from_jato_snapshot_median_shift",
+          "currentPriceStatus": "missing_current_price"
+        },
+        {
+          "rank": 13,
+          "brand": "KIA",
+          "model": "SPORTAGE",
+          "sales12m": 2104.0,
+          "snapshotMovementStatus": "candidate_from_jato_snapshot_median_shift",
+          "currentPriceStatus": "missing_current_price"
+        },
+        {
+          "rank": 14,
+          "brand": "CUPRA",
+          "model": "TERRAMAR",
+          "sales12m": 2097.0,
+          "snapshotMovementStatus": "no_jato_snapshot_median_shift",
+          "currentPriceStatus": "missing_current_price"
+        },
+        {
+          "rank": 15,
+          "brand": "MERCEDES",
+          "model": "GLA",
+          "sales12m": 2054.0,
+          "snapshotMovementStatus": "no_jato_snapshot_median_shift",
+          "currentPriceStatus": "missing_current_price"
+        },
+        {
+          "rank": 16,
+          "brand": "HYUNDAI",
+          "model": "TUCSON",
+          "sales12m": 2005.0,
+          "snapshotMovementStatus": "no_jato_snapshot_median_shift",
+          "currentPriceStatus": "missing_current_price"
+        },
+        {
+          "rank": 17,
+          "brand": "AUDI",
+          "model": "Q3 SPORTBACK",
+          "sales12m": 1962.0,
+          "snapshotMovementStatus": "no_jato_snapshot_median_shift",
+          "currentPriceStatus": "missing_current_price"
+        },
+        {
+          "rank": 18,
+          "brand": "BMW",
+          "model": "X5",
+          "sales12m": 1962.0,
+          "snapshotMovementStatus": "no_jato_snapshot_median_shift",
+          "currentPriceStatus": "missing_current_price"
+        },
+        {
+          "rank": 19,
+          "brand": "DACIA",
+          "model": "BIGSTER",
+          "sales12m": 1912.0,
+          "snapshotMovementStatus": "no_jato_snapshot_median_shift",
+          "currentPriceStatus": "missing_current_price"
+        },
+        {
+          "rank": 20,
+          "brand": "TOYOTA",
+          "model": "YARIS CROSS",
+          "sales12m": 1911.0,
+          "snapshotMovementStatus": "no_jato_snapshot_median_shift",
+          "currentPriceStatus": "missing_current_price"
+        },
+        {
+          "rank": 21,
+          "brand": "VOLKSWAGEN",
+          "model": "T-ROC",
+          "sales12m": 1771.0,
+          "snapshotMovementStatus": "no_jato_snapshot_median_shift",
+          "currentPriceStatus": "missing_current_price"
+        },
+        {
+          "rank": 22,
+          "brand": "AUDI",
+          "model": "Q5",
+          "sales12m": 1638.0,
+          "snapshotMovementStatus": "no_jato_snapshot_median_shift",
+          "currentPriceStatus": "missing_current_price"
+        },
+        {
+          "rank": 23,
+          "brand": "AUDI",
+          "model": "Q4 E-TRON",
+          "sales12m": 1577.0,
+          "snapshotMovementStatus": "no_jato_snapshot_median_shift",
+          "currentPriceStatus": "missing_current_price"
+        },
+        {
+          "rank": 24,
+          "brand": "BMW",
+          "model": "IX1",
+          "sales12m": 1566.0,
+          "snapshotMovementStatus": "no_jato_snapshot_median_shift",
+          "currentPriceStatus": "missing_current_price"
+        },
+        {
+          "rank": 25,
+          "brand": "AUDI",
+          "model": "Q3",
+          "sales12m": 1513.0,
+          "snapshotMovementStatus": "no_jato_snapshot_median_shift",
+          "currentPriceStatus": "missing_current_price"
+        },
+        {
+          "rank": 26,
+          "brand": "MERCEDES",
+          "model": "GLE",
+          "sales12m": 1482.0,
+          "snapshotMovementStatus": "no_jato_snapshot_median_shift",
+          "currentPriceStatus": "missing_current_price"
+        },
+        {
+          "rank": 27,
+          "brand": "HYUNDAI",
+          "model": "KONA",
+          "sales12m": 1397.0,
+          "snapshotMovementStatus": "no_jato_snapshot_median_shift",
+          "currentPriceStatus": "missing_current_price"
+        },
+        {
+          "rank": 28,
+          "brand": "VOLKSWAGEN",
+          "model": "TAYRON",
+          "sales12m": 1380.0,
+          "snapshotMovementStatus": "no_jato_snapshot_median_shift",
+          "currentPriceStatus": "missing_current_price"
+        },
+        {
+          "rank": 29,
+          "brand": "CUPRA",
+          "model": "FORMENTOR",
+          "sales12m": 1351.0,
+          "snapshotMovementStatus": "no_jato_snapshot_median_shift",
+          "currentPriceStatus": "missing_current_price"
+        },
+        {
+          "rank": 30,
+          "brand": "TOYOTA",
+          "model": "RAV4",
+          "sales12m": 1332.0,
+          "snapshotMovementStatus": "no_jato_snapshot_median_shift",
+          "currentPriceStatus": "missing_current_price"
+        }
+      ],
+      "missingModels": []
+    }
+  ],
+  "countries": [
+    {
+      "countryLabel": "Sweden",
+      "sourceCount": 30,
+      "entryCount": 37,
+      "offerBoundaryCount": 7,
+      "baselineOnlyCount": 17,
+      "offerSignalOnlyCount": 10,
+      "alreadyBackfilledCount": 3,
+      "expiredOfferBoundaryCount": 0,
+      "generationTransitionCount": 0,
+      "top30ModelCount": 30,
+      "coveredModelCount": 30,
+      "missingModelCount": 0
+    },
+    {
+      "countryLabel": "Switzerland",
+      "sourceCount": 30,
+      "entryCount": 37,
+      "offerBoundaryCount": 6,
+      "baselineOnlyCount": 19,
+      "offerSignalOnlyCount": 4,
+      "alreadyBackfilledCount": 0,
+      "expiredOfferBoundaryCount": 6,
+      "generationTransitionCount": 2,
+      "top30ModelCount": 30,
+      "coveredModelCount": 30,
+      "missingModelCount": 0
+    }
+  ],
+  "sources": [
+    {
+      "code": "se_skoda_enyaq_solid_edition",
+      "countryCode": "SE",
+      "countryLabel": "Sweden",
+      "brand": "SKODA",
+      "model": "ENYAQ",
+      "top30": {
+        "rank": 14,
+        "sales12m": 3365.0,
+        "sourceDraftStatus": "source_draft_found",
+        "currentPriceStatus": "current_price_found",
+        "snapshotMovementStatus": "no_jato_snapshot_median_shift"
+      },
+      "sourceUrl": "https://www.skoda.se/erbjudande/kampanj/erbjudande-enyaq",
+      "sourceLabel": "Skoda Sweden official campaign page + PDF",
+      "sourceType": "official_campaign_pdf",
+      "localPath": "03_Scripts/diagnostics/artifacts/msrp_backfill/sweden_2026/skoda_enyaq_solid_edition_prislista_2026-06-17.pdf",
+      "sha256": "c52ac543014eed3f2c235ef870b25279fe073e19e8e154eeef2a9256c2e88dfb",
+      "documentDate": "2026-06-17",
+      "validFrom": "2026-06-17",
+      "validUntil": "2026-09-30",
+      "evidenceClass": "already_backfilled_live",
+      "expectedTermHits": [
+        {
+          "term": "Enyaq",
+          "matched": true
+        },
+        {
+          "term": "Solid Edition",
+          "matched": true
+        },
+        {
+          "term": "599 500",
+          "matched": true
+        },
+        {
+          "term": "Prislista 17 juni",
+          "matched": true
+        }
+      ],
+      "allExpectedTermsMatched": true,
+      "downloadError": null,
+      "extractError": null,
+      "textSample": "Škoda Enyaq Solid Edition Prislista 17 juni, 2026 Räckvidd KM Förbr. blandad CO2-utsläpp Motor Hk (WLTP – estimerad) WLTP l/100 km* WLTP (g/km)* Selection Sportline RS 85 286 572 155 0 599 500 kr – – 85x 299 572 157 0 638 500 kr – – 85x Sportline 299 565 159 0 – 679 900 kr RS 340 558 161 0 – – 689 900 kr *Värde gäller för motor i grundutförande. Paket Plus 85/85x 85x Sportline RS Matrix LED-strålkastare fram variabel ljusfördelning LED-bakljus med animerade blinkers STD STD STD Elektrisk förarstol med minnesfunktion, massage och justerbart svankstöd Sidoairbags bak Advanced (inkl. Plus) 85/85x 85x Sportline RS Head up-display i framrutan Ljuslist på Tech-Deck Face (STD på RS) 23 900 kr STD S",
+      "entries": [
+        {
+          "trim": "Solid Edition",
+          "powertrain": "BEV",
+          "oldSourceMsrp": 619800,
+          "currentSourceMsrp": 599500,
+          "currency": "SEK",
+          "evidenceRole": "campaign_price_vs_regular_price",
+          "readiness": "already_backfilled_live",
+          "changePct": -3.28,
+          "expired": false
+        }
+      ]
+    },
+    {
+      "code": "se_volvo_ex90_ultra_pro",
+      "countryCode": "SE",
+      "countryLabel": "Sweden",
+      "brand": "VOLVO",
+      "model": "EX90",
+      "top30": {
+        "rank": 30,
+        "sales12m": 1649.0,
+        "sourceDraftStatus": "source_draft_found",
+        "currentPriceStatus": "missing_current_price",
+        "snapshotMovementStatus": "no_jato_snapshot_median_shift"
+      },
+      "sourceUrl": "https://www.volvocars.com/se/promotions/",
+      "sourceLabel": "Volvo Sweden official promotions evidence note",
+      "sourceType": "official_promotion_excerpt",
+      "localPath": "03_Scripts/diagnostics/artifacts/msrp_backfill/sweden_2026/volvo_ex90_ultra_pro_edition_offer_2026-06-23.md",
+      "sha256": "bebcf5523ef6cf90387056d164fed9ee46e60559b4414791a3b24a833ac2d4b2",
+      "documentDate": "2026-06-23",
+      "validFrom": "2026-06-23",
+      "validUntil": null,
+      "evidenceClass": "already_backfilled_live",
+      "expectedTermHits": [
+        {
+          "term": "EX90",
+          "matched": true
+        },
+        {
+          "term": "Ultra Pro Edition",
+          "matched": true
+        },
+        {
+          "term": "1,099,900",
+          "matched": true
+        },
+        {
+          "term": "1,148,800",
+          "matched": true
+        }
+      ],
+      "allExpectedTermsMatched": true,
+      "downloadError": null,
+      "extractError": null,
+      "textSample": "# Volvo Sweden EX90 Ultra Pro Edition Offer Evidence Captured: 2026-06-23 Source URL: https://www.volvocars.com/se/promotions/ Capture method: browser search/open text extraction; direct curl and Playwright requests returned Akamai Access Denied from this environment. Extracted official facts: - Vehicle: Volvo EX90 Ultra Pro Edition - Current recommended price: 1,099,900 SEK - Ordinary price: 1,148,800 SEK - Offer footnote: recommended prices; offer applies to model year 2027 Backfill use: - Match to current MSRP row: Sweden / VOLVO / EX90 / Ultra Pro Edition / BEV - Classification: official promotion price versus ordinary recommended price - Caveat: promotion/ordinary-price evidence, not a ",
+      "entries": [
+        {
+          "trim": "Ultra Pro Edition",
+          "powertrain": "BEV",
+          "oldSourceMsrp": 1148800,
+          "currentSourceMsrp": 1099900,
+          "currency": "SEK",
+          "evidenceRole": "promotion_price_vs_ordinary_price",
+          "readiness": "already_backfilled_live",
+          "changePct": -4.26,
+          "expired": false
+        }
+      ]
+    },
+    {
+      "code": "se_vw_tayron_rline_swe",
+      "countryCode": "SE",
+      "countryLabel": "Sweden",
+      "brand": "VOLKSWAGEN",
+      "model": "TAYRON",
+      "top30": {
+        "rank": 23,
+        "sales12m": 2071.0,
+        "sourceDraftStatus": "source_draft_found",
+        "currentPriceStatus": "current_price_found",
+        "snapshotMovementStatus": "no_jato_snapshot_median_shift"
+      },
+      "sourceUrl": "https://www.volkswagen.se/sv/kop-en-vw/erbjudanden.html",
+      "sourceLabel": "Volkswagen Sweden official offers + configurator snapshots",
+      "sourceType": "official_campaign_savings_snapshot",
+      "localPath": "03_Scripts/diagnostics/artifacts/msrp_backfill/sweden_2026/volkswagen_offers_2026-06-24.txt",
+      "sha256": "59aa0481f77054ec5a985e0f40315b627c0680ec26f0db6ff0e22e755489b167",
+      "documentDate": "2026-06-24",
+      "validFrom": "2026-06-24",
+      "validUntil": null,
+      "evidenceClass": "already_backfilled_live",
+      "expectedTermHits": [
+        {
+          "term": "Tayron",
+          "matched": true
+        },
+        {
+          "term": "R-Line SWE Edition",
+          "matched": true
+        },
+        {
+          "term": "100 100",
+          "matched": true
+        }
+      ],
+      "allExpectedTermsMatched": true,
+      "downloadError": null,
+      "extractError": null,
+      "textSample": "Bilkampanjer och Aktuella Erbjudanden | Volkswagen Sverige Gå till huvudinnehåll Gå till sidfot Volkswagen Meny Våra modeller Bygg bil Lagerbilar Våra bilar Bygg din bil Nya bilar i lager Golf Sportscombi Pressen testar Golf Sportscombi Lär dig om våra modellversioner Boka provkörning Äga Service Originalservice Originalservice 4+ Originalservice 8+ Basservice Ekonomiservice Skadereparation ServiceCam Service av elbilar Tillbehör Transport- och bagagelösningar Interiör- och exteriörskydd Underhållning och elektronik Laddbox och laddningskablar Modellspecifika tillbehör Däck och fälg Delar Originaldelar Bytesdelar Ekonomidelar Classic Parts Volkswagenkortet Förmåner och erbjudanden Frågor och",
+      "entries": [
+        {
+          "trim": "R-Line SWE Edition",
+          "powertrain": "UNKNOWN",
+          "oldSourceMsrp": 711500,
+          "currentSourceMsrp": 611400,
+          "currency": "SEK",
+          "evidenceRole": "campaign_savings_vs_current_price",
+          "readiness": "already_backfilled_live",
+          "changePct": -14.07,
+          "expired": false
+        }
+      ]
+    },
+    {
+      "code": "se_kia_ev3_current",
+      "countryCode": "SE",
+      "countryLabel": "Sweden",
+      "brand": "KIA",
+      "model": "EV3",
+      "top30": {
+        "rank": 4,
+        "sales12m": 5543.0,
+        "sourceDraftStatus": "source_draft_found",
+        "currentPriceStatus": "missing_current_price",
+        "snapshotMovementStatus": "no_jato_snapshot_median_shift"
+      },
+      "sourceUrl": "https://www.kia.com/se/nya-bilar/ev3/upptack/",
+      "sourceLabel": "Kia Sweden EV3 official model page",
+      "sourceType": "official_model_page",
+      "localPath": "03_Scripts/diagnostics/artifacts/msrp_backfill/sweden_swiss_top30_suv/evidence/kia_se_ev3_model_page_2026-07-02.html",
+      "sha256": "776711b26069e334ff1add4db8644e19cce84ff3cb393e89d29e1fc78d6b747d",
+      "documentDate": "2026-07-02",
+      "validFrom": "2026-07-02",
+      "validUntil": null,
+      "evidenceClass": "official_current_baseline",
+      "expectedTermHits": [
+        {
+          "term": "Kia EV3",
+          "matched": true
+        },
+        {
+          "term": "Rek ca pris från",
+          "matched": true
+        },
+        {
+          "term": "434 900 kr",
+          "matched": true
+        }
+      ],
+      "allExpectedTermsMatched": true,
+      "downloadError": null,
+      "extractError": null,
+      "textSample": "(function(w,d,s,l,i){ w[l]=w[l]||[];w[l].push({'gtm.start':new Date().getTime(),event:'gtm.js'});var f=d.getElementsByTagName(s)[0], j=d.createElement(s),dl=l!='dataLayer'?'&l='+l:'';j.async=true;j.src='https://www.googletagmanager.com/gtm.js?id='+i+dl;f.parentNode.insertBefore(j,f); })(window,document,'script','dataLayer','GTM-T98NH9XV'); Upptäck Kia EV3 - en kompakt el-SUV | Kia Sverige --> function IEdetection() { var ua = window.navigator.userAgent; var msie = ua.indexOf('MSIE '); if (msie > 0) { // IE 10 or older, return version number return ('IE ' + parseInt(ua.substring( msie + 5, ua.indexOf('.', msie)), 10)); } var trident = ua.indexOf('Trident/'); if (trident > 0) { // IE 11, retur",
+      "entries": [
+        {
+          "trim": "from price",
+          "powertrain": "BEV",
+          "oldSourceMsrp": null,
+          "currentSourceMsrp": 434900,
+          "currency": "SEK",
+          "evidenceRole": "current_model_page_from_price",
+          "readiness": "baseline_only_no_movement",
+          "changePct": null,
+          "expired": false
+        }
+      ]
+    },
+    {
+      "code": "se_kia_sportage_current",
+      "countryCode": "SE",
+      "countryLabel": "Sweden",
+      "brand": "KIA",
+      "model": "SPORTAGE",
+      "top30": {
+        "rank": 13,
+        "sales12m": 3404.0,
+        "sourceDraftStatus": "source_draft_found",
+        "currentPriceStatus": "missing_current_price",
+        "snapshotMovementStatus": "no_jato_snapshot_median_shift"
+      },
+      "sourceUrl": "https://www.kia.com/se/nya-bilar/sportage/upptack/",
+      "sourceLabel": "Kia Sweden Sportage official model page",
+      "sourceType": "official_model_page",
+      "localPath": "03_Scripts/diagnostics/artifacts/msrp_backfill/sweden_swiss_top30_suv/evidence/kia_se_sportage_model_page_2026-07-02.html",
+      "sha256": "d6b357db3c07496239d892cac95c28444a8d1604674dd1af9d59dde9b70c768b",
+      "documentDate": "2026-07-02",
+      "validFrom": "2026-07-02",
+      "validUntil": null,
+      "evidenceClass": "official_current_baseline",
+      "expectedTermHits": [
+        {
+          "term": "Sportage Plug-In Hybrid",
+          "matched": true
+        },
+        {
+          "term": "Rek. ca pris från",
+          "matched": true
+        },
+        {
+          "term": "508 900 kr",
+          "matched": true
+        }
+      ],
+      "allExpectedTermsMatched": true,
+      "downloadError": null,
+      "extractError": null,
+      "textSample": "(function(w,d,s,l,i){ w[l]=w[l]||[];w[l].push({'gtm.start':new Date().getTime(),event:'gtm.js'});var f=d.getElementsByTagName(s)[0], j=d.createElement(s),dl=l!='dataLayer'?'&l='+l:'';j.async=true;j.src='https://www.googletagmanager.com/gtm.js?id='+i+dl;f.parentNode.insertBefore(j,f); })(window,document,'script','dataLayer','GTM-T98NH9XV'); Nya Kia Sportage Plug-In Hybrid | Kia Sverige --> function IEdetection() { var ua = window.navigator.userAgent; var msie = ua.indexOf('MSIE '); if (msie > 0) { // IE 10 or older, return version number return ('IE ' + parseInt(ua.substring( msie + 5, ua.indexOf('.', msie)), 10)); } var trident = ua.indexOf('Trident/'); if (trident > 0) { // IE 11, return ve",
+      "entries": [
+        {
+          "trim": "Plug-In Hybrid from price",
+          "powertrain": "PHEV",
+          "oldSourceMsrp": null,
+          "currentSourceMsrp": 508900,
+          "currency": "SEK",
+          "evidenceRole": "current_model_page_from_price",
+          "readiness": "baseline_only_no_movement",
+          "changePct": null,
+          "expired": false
+        }
+      ]
+    },
+    {
+      "code": "se_kia_ev9_current",
+      "countryCode": "SE",
+      "countryLabel": "Sweden",
+      "brand": "KIA",
+      "model": "EV9",
+      "top30": {
+        "rank": 21,
+        "sales12m": 2233.0,
+        "sourceDraftStatus": "source_draft_found",
+        "currentPriceStatus": "missing_current_price",
+        "snapshotMovementStatus": "no_jato_snapshot_median_shift"
+      },
+      "sourceUrl": "https://www.kia.com/se/nya-bilar/ev9/upptack/",
+      "sourceLabel": "Kia Sweden EV9 official model page",
+      "sourceType": "official_model_page",
+      "localPath": "03_Scripts/diagnostics/artifacts/msrp_backfill/sweden_swiss_top30_suv/evidence/kia_se_ev9_model_page_2026-07-02.html",
+      "sha256": "5b1e2e5551b09b977297941b119bfb0343d835df015bf97255469dc5b523aa80",
+      "documentDate": "2026-07-02",
+      "validFrom": "2026-07-02",
+      "validUntil": null,
+      "evidenceClass": "official_current_baseline",
+      "expectedTermHits": [
+        {
+          "term": "EV9",
+          "matched": true
+        },
+        {
+          "term": "Rek. ca pris från",
+          "matched": true
+        },
+        {
+          "term": "701 900 kr",
+          "matched": true
+        }
+      ],
+      "allExpectedTermsMatched": true,
+      "downloadError": null,
+      "extractError": null,
+      "textSample": "(function(w,d,s,l,i){ w[l]=w[l]||[];w[l].push({'gtm.start':new Date().getTime(),event:'gtm.js'});var f=d.getElementsByTagName(s)[0], j=d.createElement(s),dl=l!='dataLayer'?'&l='+l:'';j.async=true;j.src='https://www.googletagmanager.com/gtm.js?id='+i+dl;f.parentNode.insertBefore(j,f); })(window,document,'script','dataLayer','GTM-T98NH9XV'); Upptäck Kia EV9 | Kia Sverige --> function IEdetection() { var ua = window.navigator.userAgent; var msie = ua.indexOf('MSIE '); if (msie > 0) { // IE 10 or older, return version number return ('IE ' + parseInt(ua.substring( msie + 5, ua.indexOf('.', msie)), 10)); } var trident = ua.indexOf('Trident/'); if (trident > 0) { // IE 11, return version number var",
+      "entries": [
+        {
+          "trim": "from price",
+          "powertrain": "BEV",
+          "oldSourceMsrp": null,
+          "currentSourceMsrp": 701900,
+          "currency": "SEK",
+          "evidenceRole": "current_model_page_from_price",
+          "readiness": "baseline_only_no_movement",
+          "changePct": null,
+          "expired": false
+        }
+      ]
+    },
+    {
+      "code": "se_kia_ev6_current",
+      "countryCode": "SE",
+      "countryLabel": "Sweden",
+      "brand": "KIA",
+      "model": "EV6",
+      "top30": {
+        "rank": 25,
+        "sales12m": 2063.0,
+        "sourceDraftStatus": "source_draft_found",
+        "currentPriceStatus": "missing_current_price",
+        "snapshotMovementStatus": "no_jato_snapshot_median_shift"
+      },
+      "sourceUrl": "https://www.kia.com/se/nya-bilar/ev6/upptack/",
+      "sourceLabel": "Kia Sweden EV6 official model page",
+      "sourceType": "official_model_page",
+      "localPath": "03_Scripts/diagnostics/artifacts/msrp_backfill/sweden_swiss_top30_suv/evidence/kia_se_ev6_model_page_2026-07-02.html",
+      "sha256": "7401b344aed126109051c9f65fdc79dd61f97f76496386b33ddfc52b7d864834",
+      "documentDate": "2026-07-02",
+      "validFrom": "2026-07-02",
+      "validUntil": null,
+      "evidenceClass": "official_current_baseline",
+      "expectedTermHits": [
+        {
+          "term": "EV6",
+          "matched": true
+        },
+        {
+          "term": "Rek. ca pris från",
+          "matched": true
+        },
+        {
+          "term": "596 400 kr",
+          "matched": true
+        }
+      ],
+      "allExpectedTermsMatched": true,
+      "downloadError": null,
+      "extractError": null,
+      "textSample": "(function(w,d,s,l,i){ w[l]=w[l]||[];w[l].push({'gtm.start':new Date().getTime(),event:'gtm.js'});var f=d.getElementsByTagName(s)[0], j=d.createElement(s),dl=l!='dataLayer'?'&l='+l:'';j.async=true;j.src='https://www.googletagmanager.com/gtm.js?id='+i+dl;f.parentNode.insertBefore(j,f); })(window,document,'script','dataLayer','GTM-T98NH9XV'); Upptäck nya Kia EV6 | Kia Sverige --> function IEdetection() { var ua = window.navigator.userAgent; var msie = ua.indexOf('MSIE '); if (msie > 0) { // IE 10 or older, return version number return ('IE ' + parseInt(ua.substring( msie + 5, ua.indexOf('.', msie)), 10)); } var trident = ua.indexOf('Trident/'); if (trident > 0) { // IE 11, return version number",
+      "entries": [
+        {
+          "trim": "from price",
+          "powertrain": "BEV",
+          "oldSourceMsrp": null,
+          "currentSourceMsrp": 596400,
+          "currency": "SEK",
+          "evidenceRole": "current_model_page_from_price",
+          "readiness": "baseline_only_no_movement",
+          "changePct": null,
+          "expired": false
+        }
+      ]
+    },
+    {
+      "code": "se_toyota_rav4_current",
+      "countryCode": "SE",
+      "countryLabel": "Sweden",
+      "brand": "TOYOTA",
+      "model": "RAV4",
+      "top30": {
+        "rank": 7,
+        "sales12m": 4860.0,
+        "sourceDraftStatus": "source_draft_found",
+        "currentPriceStatus": "missing_current_price",
+        "snapshotMovementStatus": "no_jato_snapshot_median_shift"
+      },
+      "sourceUrl": "https://www.toyota.se/bilar/rav4",
+      "sourceLabel": "Toyota Sweden RAV4 official model page",
+      "sourceType": "official_model_page",
+      "localPath": "03_Scripts/diagnostics/artifacts/msrp_backfill/sweden_swiss_top30_suv/evidence/toyota_se_rav4_model_page_2026-07-02.html",
+      "sha256": "d15b2ae8bb4ae0dd00c5390c24fc74f489b5612b99e11af58ab09220035ed635",
+      "documentDate": "2026-07-02",
+      "validFrom": "2026-07-02",
+      "validUntil": null,
+      "evidenceClass": "official_current_baseline",
+      "expectedTermHits": [
+        {
+          "term": "Nya RAV4",
+          "matched": true
+        },
+        {
+          "term": "Från 459 900 kr",
+          "matched": true
+        },
+        {
+          "term": "HYBRID & LADDHYBRID",
+          "matched": true
+        }
+      ],
+      "allExpectedTermsMatched": true,
+      "downloadError": null,
+      "extractError": null,
+      "textSample": "function OptanonWrapper() { } (function(h,o,u,n,d) { h=h[d]=h[d]||{q:[],onReady:function(c){h.q.push(c)}} d=o.createElement(u);d.async=1;d.src=n n=o.getElementsByTagName(u)[0];n.parentNode.insertBefore(d,n) })(window,document,'script','https://www.datadoghq-browser-agent.com/eu1/v5/datadog-rum.js','DD_RUM') window.DD_RUM.onReady(function() { window.DD_RUM.setGlobalContextProperty('templateName','sales-campaign'); window.DD_RUM.setGlobalContextProperty('modelName','RA'); window.DD_RUM.setGlobalContextProperty('sectionlv1','new-cars'); window.DD_RUM.setGlobalContextProperty('category','content'); window.DD_RUM.setGlobalContextProperty('subCategory','model-page-sales'); let botPattern = \"(googl",
+      "entries": [
+        {
+          "trim": "from price",
+          "powertrain": "HEV/PHEV",
+          "oldSourceMsrp": null,
+          "currentSourceMsrp": 459900,
+          "currency": "SEK",
+          "evidenceRole": "current_model_page_from_price",
+          "readiness": "baseline_only_no_movement",
+          "changePct": null,
+          "expired": false
+        }
+      ]
+    },
+    {
+      "code": "se_toyota_yaris_cross_current",
+      "countryCode": "SE",
+      "countryLabel": "Sweden",
+      "brand": "TOYOTA",
+      "model": "YARIS CROSS",
+      "top30": {
+        "rank": 11,
+        "sales12m": 3924.0,
+        "sourceDraftStatus": "source_draft_found",
+        "currentPriceStatus": "missing_current_price",
+        "snapshotMovementStatus": "no_jato_snapshot_median_shift"
+      },
+      "sourceUrl": "https://www.toyota.se/bilar/yaris-cross",
+      "sourceLabel": "Toyota Sweden Yaris Cross official model page",
+      "sourceType": "official_model_page",
+      "localPath": "03_Scripts/diagnostics/artifacts/msrp_backfill/sweden_swiss_top30_suv/evidence/toyota_se_yaris_cross_model_page_2026-07-02.html",
+      "sha256": "6d85b4fcd2c530dcf16289249f165e47b19dd906d14cf904fb1f3dc12c665c51",
+      "documentDate": "2026-07-02",
+      "validFrom": "2026-07-02",
+      "validUntil": null,
+      "evidenceClass": "official_current_baseline",
+      "expectedTermHits": [
+        {
+          "term": "Yaris Cross",
+          "matched": true
+        },
+        {
+          "term": "Hybrid",
+          "matched": true
+        },
+        {
+          "term": "Från 295 900 kr",
+          "matched": true
+        }
+      ],
+      "allExpectedTermsMatched": true,
+      "downloadError": null,
+      "extractError": null,
+      "textSample": "function OptanonWrapper() { } (function(h,o,u,n,d) { h=h[d]=h[d]||{q:[],onReady:function(c){h.q.push(c)}} d=o.createElement(u);d.async=1;d.src=n n=o.getElementsByTagName(u)[0];n.parentNode.insertBefore(d,n) })(window,document,'script','https://www.datadoghq-browser-agent.com/eu1/v5/datadog-rum.js','DD_RUM') window.DD_RUM.onReady(function() { window.DD_RUM.setGlobalContextProperty('templateName','sales-campaign'); window.DD_RUM.setGlobalContextProperty('modelName','YB'); window.DD_RUM.setGlobalContextProperty('sectionlv1','new-cars'); window.DD_RUM.setGlobalContextProperty('category','content'); window.DD_RUM.setGlobalContextProperty('subCategory','model-page-sales'); let botPattern = \"(googl",
+      "entries": [
+        {
+          "trim": "from price",
+          "powertrain": "HEV",
+          "oldSourceMsrp": null,
+          "currentSourceMsrp": 295900,
+          "currency": "SEK",
+          "evidenceRole": "current_model_page_from_price",
+          "readiness": "baseline_only_no_movement",
+          "changePct": null,
+          "expired": false
+        }
+      ]
+    },
+    {
+      "code": "se_toyota_corolla_cross_current",
+      "countryCode": "SE",
+      "countryLabel": "Sweden",
+      "brand": "TOYOTA",
+      "model": "COROLLA CROSS",
+      "top30": {
+        "rank": 16,
+        "sales12m": 2779.0,
+        "sourceDraftStatus": "source_draft_found",
+        "currentPriceStatus": "missing_current_price",
+        "snapshotMovementStatus": "no_jato_snapshot_median_shift"
+      },
+      "sourceUrl": "https://www.toyota.se/bilar/corolla-cross",
+      "sourceLabel": "Toyota Sweden Corolla Cross official model page",
+      "sourceType": "official_model_page",
+      "localPath": "03_Scripts/diagnostics/artifacts/msrp_backfill/sweden_swiss_top30_suv/evidence/toyota_se_corolla_cross_model_page_2026-07-02.html",
+      "sha256": "a590ff4fbc06e93bc4bf7713f63e9b264e2578aa01154b456c5507b7a9aec61a",
+      "documentDate": "2026-07-02",
+      "validFrom": "2026-07-02",
+      "validUntil": null,
+      "evidenceClass": "official_current_baseline",
+      "expectedTermHits": [
+        {
+          "term": "Corolla Cross",
+          "matched": true
+        },
+        {
+          "term": "Hybrid",
+          "matched": true
+        },
+        {
+          "term": "Från 360 900 kr",
+          "matched": true
+        }
+      ],
+      "allExpectedTermsMatched": true,
+      "downloadError": null,
+      "extractError": null,
+      "textSample": "function OptanonWrapper() { } (function(h,o,u,n,d) { h=h[d]=h[d]||{q:[],onReady:function(c){h.q.push(c)}} d=o.createElement(u);d.async=1;d.src=n n=o.getElementsByTagName(u)[0];n.parentNode.insertBefore(d,n) })(window,document,'script','https://www.datadoghq-browser-agent.com/eu1/v5/datadog-rum.js','DD_RUM') window.DD_RUM.onReady(function() { window.DD_RUM.setGlobalContextProperty('templateName','sales-campaign'); window.DD_RUM.setGlobalContextProperty('modelName','CX'); window.DD_RUM.setGlobalContextProperty('sectionlv1','new-cars'); window.DD_RUM.setGlobalContextProperty('category','content'); window.DD_RUM.setGlobalContextProperty('subCategory','model-page-sales'); let botPattern = \"(googl",
+      "entries": [
+        {
+          "trim": "from price",
+          "powertrain": "HEV",
+          "oldSourceMsrp": null,
+          "currentSourceMsrp": 360900,
+          "currency": "SEK",
+          "evidenceRole": "current_model_page_from_price",
+          "readiness": "baseline_only_no_movement",
+          "changePct": null,
+          "expired": false
+        }
+      ]
+    },
+    {
+      "code": "se_toyota_chr_current",
+      "countryCode": "SE",
+      "countryLabel": "Sweden",
+      "brand": "TOYOTA",
+      "model": "C-HR",
+      "top30": {
+        "rank": 18,
+        "sales12m": 2449.0,
+        "sourceDraftStatus": "source_draft_found",
+        "currentPriceStatus": "missing_current_price",
+        "snapshotMovementStatus": "no_jato_snapshot_median_shift"
+      },
+      "sourceUrl": "https://www.toyota.se/bilar/c-hr",
+      "sourceLabel": "Toyota Sweden C-HR official model page",
+      "sourceType": "official_model_page",
+      "localPath": "03_Scripts/diagnostics/artifacts/msrp_backfill/sweden_swiss_top30_suv/evidence/toyota_se_chr_model_page_2026-07-02.html",
+      "sha256": "4afa6ea94f916ed9fb5ca9c932f5286b955f19ff421fdbdb6bb1120b08201585",
+      "documentDate": "2026-07-02",
+      "validFrom": "2026-07-02",
+      "validUntil": null,
+      "evidenceClass": "official_current_baseline",
+      "expectedTermHits": [
+        {
+          "term": "Toyota C-HR",
+          "matched": true
+        },
+        {
+          "term": "Hybrid & Laddhybrid",
+          "matched": true
+        },
+        {
+          "term": "Från 350 900 kr",
+          "matched": true
+        }
+      ],
+      "allExpectedTermsMatched": true,
+      "downloadError": null,
+      "extractError": null,
+      "textSample": "function OptanonWrapper() { } (function(h,o,u,n,d) { h=h[d]=h[d]||{q:[],onReady:function(c){h.q.push(c)}} d=o.createElement(u);d.async=1;d.src=n n=o.getElementsByTagName(u)[0];n.parentNode.insertBefore(d,n) })(window,document,'script','https://www.datadoghq-browser-agent.com/eu1/v5/datadog-rum.js','DD_RUM') window.DD_RUM.onReady(function() { window.DD_RUM.setGlobalContextProperty('templateName','sales-campaign'); window.DD_RUM.setGlobalContextProperty('modelName','C-HR'); window.DD_RUM.setGlobalContextProperty('sectionlv1','new-cars'); window.DD_RUM.setGlobalContextProperty('category','content'); window.DD_RUM.setGlobalContextProperty('subCategory','model-page-sales'); let botPattern = \"(goo",
+      "entries": [
+        {
+          "trim": "from price",
+          "powertrain": "HEV/PHEV",
+          "oldSourceMsrp": null,
+          "currentSourceMsrp": 350900,
+          "currency": "SEK",
+          "evidenceRole": "current_model_page_from_price",
+          "readiness": "baseline_only_no_movement",
+          "changePct": null,
+          "expired": false
+        }
+      ]
+    },
+    {
+      "code": "se_skoda_kodiaq_explore_offer",
+      "countryCode": "SE",
+      "countryLabel": "Sweden",
+      "brand": "SKODA",
+      "model": "KODIAQ",
+      "top30": {
+        "rank": 6,
+        "sales12m": 5154.0,
+        "sourceDraftStatus": "source_draft_found",
+        "currentPriceStatus": "current_price_found",
+        "snapshotMovementStatus": "no_jato_snapshot_median_shift"
+      },
+      "sourceUrl": "https://www.skoda.se/erbjudande/kampanj/erbjudande-kodiaq",
+      "sourceLabel": "Skoda Sweden Kodiaq Explore official campaign page",
+      "sourceType": "official_campaign_page",
+      "localPath": "03_Scripts/diagnostics/artifacts/msrp_backfill/sweden_swiss_top30_suv/evidence/skoda_se_kodiaq_explore_offer_2026-07-02.html",
+      "sha256": "8ec46112f2d28428922c3152e626165d7bd3bffcb19f1605d9c479e20b42268e",
+      "documentDate": "2026-07-02",
+      "validFrom": "2026-07-02",
+      "validUntil": null,
+      "evidenceClass": "official_offer_boundary",
+      "expectedTermHits": [
+        {
+          "term": "Kodiaq Explore",
+          "matched": true
+        },
+        {
+          "term": "399 900",
+          "matched": true
+        },
+        {
+          "term": "447 800",
+          "matched": true
+        },
+        {
+          "term": "Privatleasing från 4 430",
+          "matched": true
+        }
+      ],
+      "allExpectedTermsMatched": true,
+      "downloadError": null,
+      "extractError": null,
+      "textSample": "Erbjudande på Kodiaq Explore var dataLayer = dataLayer || []; (function (w, d, s, l, i) { w[l] = w[l] || []; w[l].push({ 'gtm.start': new Date().getTime(), event: 'gtm.js' }); var f = d.getElementsByTagName(s)[0], j = d.createElement(s), dl = l != 'dataLayer' ? '&l=' + l : ''; j.async = true; j.src = '//www.googletagmanager.com/gtm.js?id=' + i + dl; f.parentNode.insertBefore(j, f); })(window, document, 'script', 'dataLayer', 'GTM-MNWPV4D'); var dataLayer = dataLayer || []; (function (w, d, s, l, i) { w[l] = w[l] || []; w[l].push({ 'gtm.start': new Date().getTime(), event: 'gtm.js' }); var f = d.getElementsByTagName(s)[0], j = d.createElement(s), dl = l != 'dataLayer' ? '&l=' + l : ''; j.asyn",
+      "entries": [
+        {
+          "trim": "Explore from price",
+          "powertrain": "UNKNOWN",
+          "oldSourceMsrp": 447800,
+          "currentSourceMsrp": 399900,
+          "currency": "SEK",
+          "evidenceRole": "campaign_price_vs_ordinary_price",
+          "readiness": "demo_offer_boundary",
+          "changePct": -10.7,
+          "expired": false
+        }
+      ]
+    },
+    {
+      "code": "se_vw_tiguan_rline_offer_signal",
+      "countryCode": "SE",
+      "countryLabel": "Sweden",
+      "brand": "VOLKSWAGEN",
+      "model": "TIGUAN",
+      "top30": {
+        "rank": 9,
+        "sales12m": 4603.0,
+        "sourceDraftStatus": "source_draft_found",
+        "currentPriceStatus": "current_price_found",
+        "snapshotMovementStatus": "no_jato_snapshot_median_shift"
+      },
+      "sourceUrl": "https://www.volkswagen.se/sv/modeller/tiguan.html",
+      "sourceLabel": "Volkswagen Sweden Tiguan official model offer page",
+      "sourceType": "official_offer_page",
+      "localPath": "03_Scripts/diagnostics/artifacts/msrp_backfill/sweden_swiss_top30_suv/evidence/volkswagen_se_tiguan_model_page_2026-07-02.html",
+      "sha256": "5d8767f47a62bb1d6fe2372a30fc9ede752bc3cca0ed9205ed51b4eb8993d196",
+      "documentDate": "2026-07-02",
+      "validFrom": "2026-07-02",
+      "validUntil": "2026-09-30",
+      "evidenceClass": "official_offer_signal",
+      "expectedTermHits": [
+        {
+          "term": "R-Line SWE Edition",
+          "matched": true
+        },
+        {
+          "term": "409 900",
+          "matched": true
+        },
+        {
+          "term": "115 300",
+          "matched": true
+        },
+        {
+          "term": "2026-09-30",
+          "matched": true
+        }
+      ],
+      "allExpectedTermsMatched": true,
+      "downloadError": null,
+      "extractError": null,
+      "textSample": "Volkswagen Tiguan - kraftfull suv med uttrycksfull design | Volkswagen Sverige @font-face { font-family: 'vw-head'; font-weight: 400; font-display: swap; src: url('/etc.clientlibs/clientlibs/vwa-ngw18/ngw18-frontend/apps/resources/statics/fonts/vwhead-regular.woff2') format('woff2'), url('/etc.clientlibs/clientlibs/vwa-ngw18/ngw18-frontend/apps/resources/statics/fonts/vwhead-regular.woff') format('woff'); } @font-face { font-family: 'vw-head'; font-weight: 700; font-display: swap; src: url('/etc.clientlibs/clientlibs/vwa-ngw18/ngw18-frontend/apps/resources/statics/fonts/vwhead-bold.woff2') format('woff2'), url('/etc.clientlibs/clientlibs/vwa-ngw18/ngw18-frontend/apps/resources/statics/fonts/",
+      "entries": [
+        {
+          "trim": "R-Line SWE Edition",
+          "powertrain": "UNKNOWN",
+          "oldSourceMsrp": null,
+          "currentSourceMsrp": 409900,
+          "currency": "SEK",
+          "evidenceRole": "model_offer_price_with_max_savings",
+          "readiness": "offer_signal_only",
+          "maximumSavingsLocal": 115300,
+          "changePct": null,
+          "expired": false
+        }
+      ]
+    },
+    {
+      "code": "se_vw_troc_current",
+      "countryCode": "SE",
+      "countryLabel": "Sweden",
+      "brand": "VOLKSWAGEN",
+      "model": "T-ROC",
+      "top30": {
+        "rank": 12,
+        "sales12m": 3651.0,
+        "sourceDraftStatus": "source_draft_found",
+        "currentPriceStatus": "current_price_found",
+        "snapshotMovementStatus": "no_jato_snapshot_median_shift"
+      },
+      "sourceUrl": "https://www.volkswagen.se/sv/modeller/t-roc.html",
+      "sourceLabel": "Volkswagen Sweden T-Roc official model page",
+      "sourceType": "official_model_page",
+      "localPath": "03_Scripts/diagnostics/artifacts/msrp_backfill/sweden_swiss_top30_suv/evidence/volkswagen_se_troc_model_page_2026-07-02.html",
+      "sha256": "f7694c9a30a6bc7d68bd4d38f31c7066575689f881126fee9f8f272ace24baea",
+      "documentDate": "2026-07-02",
+      "validFrom": "2026-07-02",
+      "validUntil": null,
+      "evidenceClass": "official_current_baseline",
+      "expectedTermHits": [
+        {
+          "term": "T-Roc",
+          "matched": true
+        },
+        {
+          "term": "Pris från",
+          "matched": true
+        },
+        {
+          "term": "389 900",
+          "matched": true
+        }
+      ],
+      "allExpectedTermsMatched": true,
+      "downloadError": null,
+      "extractError": null,
+      "textSample": "Nya T-Roc | Volkswagen Sverige @font-face { font-family: 'vw-head'; font-weight: 400; font-display: swap; src: url('/etc.clientlibs/clientlibs/vwa-ngw18/ngw18-frontend/apps/resources/statics/fonts/vwhead-regular.woff2') format('woff2'), url('/etc.clientlibs/clientlibs/vwa-ngw18/ngw18-frontend/apps/resources/statics/fonts/vwhead-regular.woff') format('woff'); } @font-face { font-family: 'vw-head'; font-weight: 700; font-display: swap; src: url('/etc.clientlibs/clientlibs/vwa-ngw18/ngw18-frontend/apps/resources/statics/fonts/vwhead-bold.woff2') format('woff2'), url('/etc.clientlibs/clientlibs/vwa-ngw18/ngw18-frontend/apps/resources/statics/fonts/vwhead-bold.woff') format('woff'); } @font-face ",
+      "entries": [
+        {
+          "trim": "from price",
+          "powertrain": "UNKNOWN",
+          "oldSourceMsrp": null,
+          "currentSourceMsrp": 389900,
+          "currency": "SEK",
+          "evidenceRole": "current_model_page_from_price",
+          "readiness": "baseline_only_no_movement",
+          "changePct": null,
+          "expired": false
+        }
+      ]
+    },
+    {
+      "code": "se_volvo_ex30_current",
+      "countryCode": "SE",
+      "countryLabel": "Sweden",
+      "brand": "VOLVO",
+      "model": "EX30",
+      "top30": {
+        "rank": 5,
+        "sales12m": 5231.0,
+        "sourceDraftStatus": "source_draft_found",
+        "currentPriceStatus": "missing_current_price",
+        "snapshotMovementStatus": "no_jato_snapshot_median_shift"
+      },
+      "sourceUrl": "https://www.volvocars.com/se/cars/ex30-electric/",
+      "sourceLabel": "Volvo Sweden EX30 official model page extract",
+      "sourceType": "official_model_page_excerpt",
+      "localPath": "03_Scripts/diagnostics/artifacts/msrp_backfill/sweden_swiss_top30_suv/evidence/volvo_se_ex30_model_page_web_extract_2026-07-02.md",
+      "sha256": "7e139e21eb2d57b37f428b956187d6d5642caf533e07b3a6e5dd5d92e50b9369",
+      "documentDate": "2026-07-02",
+      "validFrom": "2026-07-02",
+      "validUntil": null,
+      "evidenceClass": "official_current_baseline",
+      "expectedTermHits": [
+        {
+          "term": "EX30",
+          "matched": true
+        },
+        {
+          "term": "Rek. pris från 429 000 kr",
+          "matched": true
+        },
+        {
+          "term": "Leasing från 3 895 kr/mån",
+          "matched": true
+        }
+      ],
+      "allExpectedTermsMatched": true,
+      "downloadError": null,
+      "extractError": null,
+      "textSample": "# Volvo Sweden EX30 official model page extract - Captured: 2026-07-02 - Source: https://www.volvocars.com/se/cars/ex30-electric/ - Capture note: direct deterministic HTML snapshot returned 403 during the audit, so this file preserves the official page text exposed through the searchable page extract for review-only demo evidence. ## Extracted official terms - EX30 - Rek. pris från 429 000 kr - Leasing från 3 895 kr/mån ## MSRP monitor classification - Country: Sweden - Brand/model: VOLVO EX30 - Evidence lane: official current baseline - Readiness: baseline_only_no_movement - Current source MSRP: 429000 SEK - Rule: current baseline only; not a 2026 price-drop conclusion without a prior offic",
+      "entries": [
+        {
+          "trim": "from price",
+          "powertrain": "BEV",
+          "oldSourceMsrp": null,
+          "currentSourceMsrp": 429000,
+          "currency": "SEK",
+          "evidenceRole": "current_model_page_from_price",
+          "readiness": "baseline_only_no_movement",
+          "changePct": null,
+          "expired": false
+        }
+      ]
+    },
+    {
+      "code": "se_tesla_model_y_current",
+      "countryCode": "SE",
+      "countryLabel": "Sweden",
+      "brand": "TESLA",
+      "model": "MODEL Y",
+      "top30": {
+        "rank": 3,
+        "sales12m": 6024.0,
+        "sourceDraftStatus": "source_draft_found",
+        "currentPriceStatus": "current_price_found",
+        "snapshotMovementStatus": "no_jato_snapshot_median_shift"
+      },
+      "sourceUrl": "https://www.tesla.com/sv_SE/modely/design",
+      "sourceLabel": "Tesla Sweden Model Y official design page extract",
+      "sourceType": "official_configurator_excerpt",
+      "localPath": "03_Scripts/diagnostics/artifacts/msrp_backfill/sweden_swiss_top30_suv/evidence/sweden_missing_top30_official_web_extracts_2026-07-02.md",
+      "sha256": "330ba9c996758b811f757ffaa545a9100e41f0c092f710c8b8dede47bbf8b3a4",
+      "documentDate": "2026-07-02",
+      "validFrom": "2026-07-02",
+      "validUntil": null,
+      "evidenceClass": "official_current_baseline",
+      "expectedTermHits": [
+        {
+          "term": "Model Y Bakhjulsdrift",
+          "matched": true
+        },
+        {
+          "term": "490 810 kr",
+          "matched": true
+        },
+        {
+          "term": "Pearl White",
+          "matched": true
+        }
+      ],
+      "allExpectedTermsMatched": true,
+      "downloadError": null,
+      "extractError": null,
+      "textSample": "# Sweden missing top30 official web extracts - Captured: 2026-07-02 - Capture note: these official pages either returned 403/503 during deterministic local HTML fetch or are rendered dynamically. This file preserves the official page text exposed through searchable official-page extracts for review-only demo evidence. ## Tesla Sweden Model Y - Source: https://www.tesla.com/sv_SE/modely/design - Model Y Bakhjulsdrift 490 810 kr - Pearl White included - Evidence lane: official current baseline ## Audi Sweden Q4 e-tron - Source: https://www.audi.se/sv/models/q4-e-tron/q4-e-tron/ - Q4 e-tron från 570 000 kr inkl. moms - Evidence lane: official current baseline ## Volvo Sweden XC40 - Source: http",
+      "entries": [
+        {
+          "trim": "Bakhjulsdrift",
+          "powertrain": "BEV",
+          "oldSourceMsrp": null,
+          "currentSourceMsrp": 490810,
+          "currency": "SEK",
+          "evidenceRole": "current_configurator_from_price",
+          "readiness": "baseline_only_no_movement",
+          "changePct": null,
+          "expired": false
+        }
+      ]
+    },
+    {
+      "code": "se_polestar_4_current",
+      "countryCode": "SE",
+      "countryLabel": "Sweden",
+      "brand": "POLESTAR",
+      "model": "4",
+      "top30": {
+        "rank": 8,
+        "sales12m": 4744.0,
+        "sourceDraftStatus": "source_draft_found",
+        "currentPriceStatus": "missing_current_price",
+        "snapshotMovementStatus": "no_jato_snapshot_median_shift"
+      },
+      "sourceUrl": "https://www.polestar.com/se/polestar-4-models/polestar-4-coupe/specifications/",
+      "sourceLabel": "Polestar Sweden Polestar 4 official specifications page",
+      "sourceType": "official_model_page",
+      "localPath": "03_Scripts/diagnostics/artifacts/msrp_backfill/sweden_swiss_top30_suv/evidence/polestar_se_4_specifications_2026-07-02.html",
+      "sha256": "a1352f686e4e6ecdd88cfed640f4266865672f3752beb5c6aabbd8ed3fb85dff",
+      "documentDate": "2026-07-02",
+      "validFrom": "2026-07-02",
+      "validUntil": null,
+      "evidenceClass": "official_current_baseline",
+      "expectedTermHits": [
+        {
+          "term": "Polestar 4",
+          "matched": true
+        },
+        {
+          "term": "Pris från",
+          "matched": true
+        },
+        {
+          "term": "619 000 kr",
+          "matched": true
+        }
+      ],
+      "allExpectedTermsMatched": true,
+      "downloadError": null,
+      "extractError": null,
+      "textSample": "const otScript = document.getElementById('one-trust'); if (otScript) { otScript.onerror = () => { console.error('OneTrust script failed'); window.OneTrustFailed = true; }; } function OptanonWrapper() {}; Polestar 4 coupé - Tekniska specifikationer | Polestar Sverige {\"@context\":\"https://schema.org\",\"@type\":\"BreadcrumbList\",\"itemListElement\":[{\"@type\":\"ListItem\",\"position\":1,\"item\":\"https://www.polestar.com/se/polestar-4\"},{\"@type\":\"ListItem\",\"position\":2,\"name\":\"Specifikationer\"}]} (function(w,d,s,l,i){w[l]=w[l]||[];w[l].push({'gtm.start': new Date().getTime(),event:'gtm.js'});var f=d.getElementsByTagName(s)[0], j=d.createElement(s),dl=l!='dataLayer'?'&l='+l:'';j.async=true;j.setAttributeNod",
+      "entries": [
+        {
+          "trim": "Rear motor from price",
+          "powertrain": "BEV",
+          "oldSourceMsrp": null,
+          "currentSourceMsrp": 619000,
+          "currency": "SEK",
+          "evidenceRole": "current_model_page_from_price",
+          "readiness": "baseline_only_no_movement",
+          "changePct": null,
+          "expired": false
+        }
+      ]
+    },
+    {
+      "code": "se_vw_id4_current",
+      "countryCode": "SE",
+      "countryLabel": "Sweden",
+      "brand": "VOLKSWAGEN",
+      "model": "ID.4",
+      "top30": {
+        "rank": 10,
+        "sales12m": 4546.0,
+        "sourceDraftStatus": "source_draft_found",
+        "currentPriceStatus": "current_price_found",
+        "snapshotMovementStatus": "no_jato_snapshot_median_shift"
+      },
+      "sourceUrl": "https://www.volkswagen.se/sv/modeller/id4.html",
+      "sourceLabel": "Volkswagen Sweden ID.4 official model page",
+      "sourceType": "official_model_page",
+      "localPath": "03_Scripts/diagnostics/artifacts/msrp_backfill/sweden_swiss_top30_suv/evidence/volkswagen_se_id4_model_page_2026-07-02.html",
+      "sha256": "9273fb1ec68b7f74ea12f145ba06229a9c7eef689089369fc65f5113dc635211",
+      "documentDate": "2026-07-02",
+      "validFrom": "2026-07-02",
+      "validUntil": null,
+      "evidenceClass": "official_current_baseline",
+      "expectedTermHits": [
+        {
+          "term": "Volkswagen ID.4",
+          "matched": true
+        },
+        {
+          "term": "Pris från",
+          "matched": true
+        },
+        {
+          "term": "538 700 kr",
+          "matched": true
+        }
+      ],
+      "allExpectedTermsMatched": true,
+      "downloadError": null,
+      "extractError": null,
+      "textSample": "ID.4 - Nästa generations eldrivna SUV | Volkswagen Sverige @font-face { font-family: 'vw-head'; font-weight: 400; font-display: swap; src: url('/etc.clientlibs/clientlibs/vwa-ngw18/ngw18-frontend/apps/resources/statics/fonts/vwhead-regular.woff2') format('woff2'), url('/etc.clientlibs/clientlibs/vwa-ngw18/ngw18-frontend/apps/resources/statics/fonts/vwhead-regular.woff') format('woff'); } @font-face { font-family: 'vw-head'; font-weight: 700; font-display: swap; src: url('/etc.clientlibs/clientlibs/vwa-ngw18/ngw18-frontend/apps/resources/statics/fonts/vwhead-bold.woff2') format('woff2'), url('/etc.clientlibs/clientlibs/vwa-ngw18/ngw18-frontend/apps/resources/statics/fonts/vwhead-bold.woff') f",
+      "entries": [
+        {
+          "trim": "from price",
+          "powertrain": "BEV",
+          "oldSourceMsrp": null,
+          "currentSourceMsrp": 538700,
+          "currency": "SEK",
+          "evidenceRole": "current_model_page_from_price",
+          "readiness": "baseline_only_no_movement",
+          "changePct": null,
+          "expired": false
+        }
+      ]
+    },
+    {
+      "code": "se_cupra_terramar_current_offer",
+      "countryCode": "SE",
+      "countryLabel": "Sweden",
+      "brand": "CUPRA",
+      "model": "TERRAMAR",
+      "top30": {
+        "rank": 20,
+        "sales12m": 2266.0,
+        "sourceDraftStatus": "source_draft_found",
+        "currentPriceStatus": "missing_current_price",
+        "snapshotMovementStatus": "no_jato_snapshot_median_shift"
+      },
+      "sourceUrl": "https://www.cupraofficial.se/kopa/erbjudande",
+      "sourceLabel": "Cupra Sweden official offers page",
+      "sourceType": "official_offer_page",
+      "localPath": "03_Scripts/diagnostics/artifacts/msrp_backfill/sweden_swiss_top30_suv/evidence/cupra_se_offers_2026-07-02.html",
+      "sha256": "478883039abbb7d333bad358b69370f19fd51a5080b4e76539b09fc02813a1c8",
+      "documentDate": "2026-07-02",
+      "validFrom": "2026-07-02",
+      "validUntil": null,
+      "evidenceClass": "official_offer_signal",
+      "expectedTermHits": [
+        {
+          "term": "CUPRA Terramar",
+          "matched": true
+        },
+        {
+          "term": "Pris från",
+          "matched": true
+        },
+        {
+          "term": "442.900 kr",
+          "matched": true
+        }
+      ],
+      "allExpectedTermsMatched": true,
+      "downloadError": null,
+      "extractError": null,
+      "textSample": ".loading-show::before { width: 100%; height: 100%; left: 0; top: 0; position: absolute; background-color: #f4f4f3; content: ''; z-index: 5; } .loading-show::after { position: absolute; width: 72px; height: 72px; content: ''; left: 50%; top: 50%; z-index: 5; transform: translate(-50%,-50%); background-image: url('/etc.clientlibs/private-area/cupra/components/page/base/clientlibs/resources/icons/logo-cupra.svg'); background-position: center; background-repeat: no-repeat; display: inline-block; animation: rotateImageLoading 1.5s linear infinite; } @keyframes rotateImageLoading { from { transform: translate(-50%,-50%) rotateY(0deg) scale(1.01); } to { transform: translate(-50%,-50%) rotateY(360d",
+      "entries": [
+        {
+          "trim": "from price",
+          "powertrain": "MHEV/PHEV",
+          "oldSourceMsrp": null,
+          "currentSourceMsrp": 442900,
+          "currency": "SEK",
+          "evidenceRole": "current_offer_page_from_price",
+          "readiness": "offer_signal_only",
+          "changePct": null,
+          "expired": false
+        }
+      ]
+    },
+    {
+      "code": "se_volvo_xc40_current",
+      "countryCode": "SE",
+      "countryLabel": "Sweden",
+      "brand": "VOLVO",
+      "model": "XC40",
+      "top30": {
+        "rank": 24,
+        "sales12m": 2069.0,
+        "sourceDraftStatus": "source_draft_found",
+        "currentPriceStatus": "missing_current_price",
+        "snapshotMovementStatus": "no_jato_snapshot_median_shift"
+      },
+      "sourceUrl": "https://www.volvocars.com/se/cars/xc40/",
+      "sourceLabel": "Volvo Sweden XC40 official model page extract",
+      "sourceType": "official_model_page_excerpt",
+      "localPath": "03_Scripts/diagnostics/artifacts/msrp_backfill/sweden_swiss_top30_suv/evidence/sweden_missing_top30_official_web_extracts_2026-07-02.md",
+      "sha256": "330ba9c996758b811f757ffaa545a9100e41f0c092f710c8b8dede47bbf8b3a4",
+      "documentDate": "2026-07-02",
+      "validFrom": "2026-07-02",
+      "validUntil": null,
+      "evidenceClass": "official_current_baseline",
+      "expectedTermHits": [
+        {
+          "term": "XC40",
+          "matched": true
+        },
+        {
+          "term": "Rek. pris från 430 000 kr",
+          "matched": true
+        },
+        {
+          "term": "Mildhybrid / Motor",
+          "matched": true
+        }
+      ],
+      "allExpectedTermsMatched": true,
+      "downloadError": null,
+      "extractError": null,
+      "textSample": "# Sweden missing top30 official web extracts - Captured: 2026-07-02 - Capture note: these official pages either returned 403/503 during deterministic local HTML fetch or are rendered dynamically. This file preserves the official page text exposed through searchable official-page extracts for review-only demo evidence. ## Tesla Sweden Model Y - Source: https://www.tesla.com/sv_SE/modely/design - Model Y Bakhjulsdrift 490 810 kr - Pearl White included - Evidence lane: official current baseline ## Audi Sweden Q4 e-tron - Source: https://www.audi.se/sv/models/q4-e-tron/q4-e-tron/ - Q4 e-tron från 570 000 kr inkl. moms - Evidence lane: official current baseline ## Volvo Sweden XC40 - Source: http",
+      "entries": [
+        {
+          "trim": "from price",
+          "powertrain": "MHEV",
+          "oldSourceMsrp": null,
+          "currentSourceMsrp": 430000,
+          "currency": "SEK",
+          "evidenceRole": "current_model_page_from_price",
+          "readiness": "baseline_only_no_movement",
+          "changePct": null,
+          "expired": false
+        }
+      ]
+    },
+    {
+      "code": "se_volvo_xc90_current",
+      "countryCode": "SE",
+      "countryLabel": "Sweden",
+      "brand": "VOLVO",
+      "model": "XC90",
+      "top30": {
+        "rank": 26,
+        "sales12m": 1965.0,
+        "sourceDraftStatus": "source_draft_found",
+        "currentPriceStatus": "missing_current_price",
+        "snapshotMovementStatus": "candidate_from_jato_snapshot_median_shift"
+      },
+      "sourceUrl": "https://www.volvocars.com/se/cars/xc90-hybrid/",
+      "sourceLabel": "Volvo Sweden XC90 official model page extract",
+      "sourceType": "official_model_page_excerpt",
+      "localPath": "03_Scripts/diagnostics/artifacts/msrp_backfill/sweden_swiss_top30_suv/evidence/sweden_missing_top30_official_web_extracts_2026-07-02.md",
+      "sha256": "330ba9c996758b811f757ffaa545a9100e41f0c092f710c8b8dede47bbf8b3a4",
+      "documentDate": "2026-07-02",
+      "validFrom": "2026-07-02",
+      "validUntil": null,
+      "evidenceClass": "official_current_baseline",
+      "expectedTermHits": [
+        {
+          "term": "XC90",
+          "matched": true
+        },
+        {
+          "term": "Rek. pris från 994 000 kr",
+          "matched": true
+        },
+        {
+          "term": "Leasing från 12 995 kr/mån",
+          "matched": true
+        }
+      ],
+      "allExpectedTermsMatched": true,
+      "downloadError": null,
+      "extractError": null,
+      "textSample": "# Sweden missing top30 official web extracts - Captured: 2026-07-02 - Capture note: these official pages either returned 403/503 during deterministic local HTML fetch or are rendered dynamically. This file preserves the official page text exposed through searchable official-page extracts for review-only demo evidence. ## Tesla Sweden Model Y - Source: https://www.tesla.com/sv_SE/modely/design - Model Y Bakhjulsdrift 490 810 kr - Pearl White included - Evidence lane: official current baseline ## Audi Sweden Q4 e-tron - Source: https://www.audi.se/sv/models/q4-e-tron/q4-e-tron/ - Q4 e-tron från 570 000 kr inkl. moms - Evidence lane: official current baseline ## Volvo Sweden XC40 - Source: http",
+      "entries": [
+        {
+          "trim": "from price",
+          "powertrain": "PHEV",
+          "oldSourceMsrp": null,
+          "currentSourceMsrp": 994000,
+          "currency": "SEK",
+          "evidenceRole": "current_model_page_from_price",
+          "readiness": "baseline_only_no_movement",
+          "changePct": null,
+          "expired": false
+        }
+      ]
+    },
+    {
+      "code": "se_bmw_ix1_inventory_offer",
+      "countryCode": "SE",
+      "countryLabel": "Sweden",
+      "brand": "BMW",
+      "model": "IX1",
+      "top30": {
+        "rank": 27,
+        "sales12m": 1949.0,
+        "sourceDraftStatus": "source_draft_found",
+        "currentPriceStatus": "missing_current_price",
+        "snapshotMovementStatus": "no_jato_snapshot_median_shift"
+      },
+      "sourceUrl": "https://hitta.bmw.se/r/U11E-iX1",
+      "sourceLabel": "BMW Sweden iX1 official available-cars offer page",
+      "sourceType": "official_inventory_offer_page",
+      "localPath": "03_Scripts/diagnostics/artifacts/msrp_backfill/sweden_swiss_top30_suv/evidence/bmw_se_ix1_inventory_offer_2026-07-02.html",
+      "sha256": "4619b0ff78dab33fbdd9a6e309dd1e39a8dbf922d124cb78fb69c766c98cb027",
+      "documentDate": "2026-07-02",
+      "validFrom": "2026-07-02",
+      "validUntil": null,
+      "evidenceClass": "official_offer_boundary",
+      "expectedTermHits": [
+        {
+          "term": "iX1 eDrive20",
+          "matched": true
+        },
+        {
+          "term": "Rek. ord pris",
+          "matched": true
+        },
+        {
+          "term": "613 700 kr",
+          "matched": true
+        },
+        {
+          "term": "Kontantpris 499 900 kr",
+          "matched": true
+        }
+      ],
+      "allExpectedTermsMatched": true,
+      "downloadError": null,
+      "extractError": null,
+      "textSample": "iX1 - BMW iX1. | BMW Sverige start_vwo_if_consent(); function start_vwo_if_consent(){ console.log('start_vwo_if_consent()'); var consentCookie = getCookie('cc_consentCookie'); if(consentCookie !== null){ if(consentCookie.includes('advertising\"%3A1') || consentCookie.includes('advertising%22%3A1')){ start_vwo(); // 2024-11-21 Remove this to see if we get more vwo data //var cameFromBmwCookie = getCookie('cameFromBmw'); //if(cameFromBmwCookie !== null){ // start_vwo(); // setCookie('cameFromBmw','updated', 30); //}else{ // var referrer = document.referrer; // console.log('referrer:' + referrer); // if(referrer !== undefined && referrer !== '' && (referrer === 'https://www.bmw.se/' || referrer ",
+      "entries": [
+        {
+          "trim": "eDrive20 inventory offer",
+          "powertrain": "BEV",
+          "oldSourceMsrp": 613700,
+          "currentSourceMsrp": 499900,
+          "currency": "SEK",
+          "evidenceRole": "recommended_price_vs_inventory_cash_price",
+          "readiness": "demo_offer_boundary",
+          "changePct": -18.54,
+          "expired": false
+        }
+      ]
+    },
+    {
+      "code": "se_mercedes_eqa_current",
+      "countryCode": "SE",
+      "countryLabel": "Sweden",
+      "brand": "MERCEDES",
+      "model": "EQA",
+      "top30": {
+        "rank": 28,
+        "sales12m": 1740.0,
+        "sourceDraftStatus": "source_draft_found",
+        "currentPriceStatus": "missing_current_price",
+        "snapshotMovementStatus": "no_jato_snapshot_median_shift"
+      },
+      "sourceUrl": "https://www.mercedes-benz.se/passengercars/models/suv/eqa/overview.html",
+      "sourceLabel": "Mercedes-Benz Sweden EQA official model-page navigation extract",
+      "sourceType": "official_model_page_navigation_excerpt",
+      "localPath": "03_Scripts/diagnostics/artifacts/msrp_backfill/sweden_swiss_top30_suv/evidence/sweden_missing_top30_official_web_extracts_2026-07-02.md",
+      "sha256": "330ba9c996758b811f757ffaa545a9100e41f0c092f710c8b8dede47bbf8b3a4",
+      "documentDate": "2026-07-03",
+      "validFrom": "2026-07-03",
+      "validUntil": null,
+      "evidenceClass": "official_current_baseline",
+      "expectedTermHits": [
+        {
+          "term": "EQA",
+          "matched": true
+        },
+        {
+          "term": "Från 529 000 kr",
+          "matched": true
+        },
+        {
+          "term": "Pris inkl. moms",
+          "matched": true
+        }
+      ],
+      "allExpectedTermsMatched": true,
+      "downloadError": null,
+      "extractError": null,
+      "textSample": "# Sweden missing top30 official web extracts - Captured: 2026-07-02 - Capture note: these official pages either returned 403/503 during deterministic local HTML fetch or are rendered dynamically. This file preserves the official page text exposed through searchable official-page extracts for review-only demo evidence. ## Tesla Sweden Model Y - Source: https://www.tesla.com/sv_SE/modely/design - Model Y Bakhjulsdrift 490 810 kr - Pearl White included - Evidence lane: official current baseline ## Audi Sweden Q4 e-tron - Source: https://www.audi.se/sv/models/q4-e-tron/q4-e-tron/ - Q4 e-tron från 570 000 kr inkl. moms - Evidence lane: official current baseline ## Volvo Sweden XC40 - Source: http",
+      "entries": [
+        {
+          "trim": "from price",
+          "powertrain": "BEV",
+          "oldSourceMsrp": null,
+          "currentSourceMsrp": 529000,
+          "currency": "SEK",
+          "evidenceRole": "current_model_page_navigation_from_price",
+          "readiness": "baseline_only_no_movement",
+          "changePct": null,
+          "expired": false
+        }
+      ]
+    },
+    {
+      "code": "se_audi_q4_etron_current",
+      "countryCode": "SE",
+      "countryLabel": "Sweden",
+      "brand": "AUDI",
+      "model": "Q4 E-TRON",
+      "top30": {
+        "rank": 29,
+        "sales12m": 1667.0,
+        "sourceDraftStatus": "source_draft_found",
+        "currentPriceStatus": "missing_current_price",
+        "snapshotMovementStatus": "no_jato_snapshot_median_shift"
+      },
+      "sourceUrl": "https://www.audi.se/sv/models/q4-e-tron/q4-e-tron/",
+      "sourceLabel": "Audi Sweden Q4 e-tron official model page extract",
+      "sourceType": "official_model_page_excerpt",
+      "localPath": "03_Scripts/diagnostics/artifacts/msrp_backfill/sweden_swiss_top30_suv/evidence/sweden_missing_top30_official_web_extracts_2026-07-02.md",
+      "sha256": "330ba9c996758b811f757ffaa545a9100e41f0c092f710c8b8dede47bbf8b3a4",
+      "documentDate": "2026-07-02",
+      "validFrom": "2026-07-02",
+      "validUntil": null,
+      "evidenceClass": "official_current_baseline",
+      "expectedTermHits": [
+        {
+          "term": "Q4 e-tron",
+          "matched": true
+        },
+        {
+          "term": "från 570 000 kr",
+          "matched": true
+        },
+        {
+          "term": "inkl. moms",
+          "matched": true
+        }
+      ],
+      "allExpectedTermsMatched": true,
+      "downloadError": null,
+      "extractError": null,
+      "textSample": "# Sweden missing top30 official web extracts - Captured: 2026-07-02 - Capture note: these official pages either returned 403/503 during deterministic local HTML fetch or are rendered dynamically. This file preserves the official page text exposed through searchable official-page extracts for review-only demo evidence. ## Tesla Sweden Model Y - Source: https://www.tesla.com/sv_SE/modely/design - Model Y Bakhjulsdrift 490 810 kr - Pearl White included - Evidence lane: official current baseline ## Audi Sweden Q4 e-tron - Source: https://www.audi.se/sv/models/q4-e-tron/q4-e-tron/ - Q4 e-tron från 570 000 kr inkl. moms - Evidence lane: official current baseline ## Volvo Sweden XC40 - Source: http",
+      "entries": [
+        {
+          "trim": "from price",
+          "powertrain": "BEV",
+          "oldSourceMsrp": null,
+          "currentSourceMsrp": 570000,
+          "currency": "SEK",
+          "evidenceRole": "current_model_page_from_price",
+          "readiness": "baseline_only_no_movement",
+          "changePct": null,
+          "expired": false
+        }
+      ]
+    },
+    {
+      "code": "se_peugeot_3008_edition_offer",
+      "countryCode": "SE",
+      "countryLabel": "Sweden",
+      "brand": "PEUGEOT",
+      "model": "3008",
+      "top30": {
+        "rank": 15,
+        "sales12m": 2944.0,
+        "sourceDraftStatus": "source_draft_found",
+        "currentPriceStatus": "missing_current_price",
+        "snapshotMovementStatus": "candidate_from_jato_snapshot_median_shift"
+      },
+      "sourceUrl": "https://www.peugeot.se/kop/erbjudanden/edition.html",
+      "sourceLabel": "Peugeot Sweden Edition official offer page",
+      "sourceType": "official_offer_excerpt",
+      "localPath": "03_Scripts/diagnostics/artifacts/msrp_backfill/sweden_swiss_top30_suv/evidence/peugeot_se_edition_offer_web_extract_2026-07-02.md",
+      "sha256": "3f5ca000305ae15addf1c65e74e7b9698f3c088e2d13c110de1d34172dac4902",
+      "documentDate": "2026-07-02",
+      "validFrom": "2026-07-02",
+      "validUntil": "2026-08-31",
+      "evidenceClass": "official_offer_signal",
+      "expectedTermHits": [
+        {
+          "term": "3008 Hybrid Edition",
+          "matched": true
+        },
+        {
+          "term": "Pris: 399 900 kr",
+          "matched": true
+        },
+        {
+          "term": "Spara minst 40 000",
+          "matched": true
+        },
+        {
+          "term": "31/8–2026",
+          "matched": true
+        }
+      ],
+      "allExpectedTermsMatched": true,
+      "downloadError": null,
+      "extractError": null,
+      "textSample": "# Peugeot Sweden Edition Official Offer Extract Source URL: https://www.peugeot.se/kop/erbjudanden/edition.html Captured: 2026-07-02 Source type: official_offer_excerpt Offer text: - Spara minst 40 000 kronor. - Erbjudandet gäller t.o.m. 31/8–2026. SUV Edition prices: - 2008 Edition: Pris: 244.900 kr - E-2008 Edition: Pris: 389 900 kr - 3008 Hybrid Edition: Pris: 399 900 kr - 3008 Plug-In Hybrid Edition: Pris: 479 900 kr - E-3008 Edition: Pris: 499 900 kr - 5008 Hybrid Edition: Pris: 439 900 kr - 5008 Plug-In Hybrid Edition: Pris: 519 900 kr - E-5008 Edition: Pris: 539 900 kr Interpretation: - This is an official offer-only signal with stated minimum savings and a validity date. - It does no",
+      "entries": [
+        {
+          "trim": "Hybrid Edition",
+          "powertrain": "HEV",
+          "oldSourceMsrp": null,
+          "currentSourceMsrp": 399900,
+          "currency": "SEK",
+          "evidenceRole": "edition_offer_price_with_min_savings",
+          "readiness": "offer_signal_only",
+          "minimumSavingsLocal": 40000,
+          "changePct": null,
+          "expired": false
+        },
+        {
+          "trim": "Plug-In Hybrid Edition",
+          "powertrain": "PHEV",
+          "oldSourceMsrp": null,
+          "currentSourceMsrp": 479900,
+          "currency": "SEK",
+          "evidenceRole": "edition_offer_price_with_min_savings",
+          "readiness": "offer_signal_only",
+          "minimumSavingsLocal": 40000,
+          "changePct": null,
+          "expired": false
+        },
+        {
+          "trim": "E-3008 Edition",
+          "powertrain": "BEV",
+          "oldSourceMsrp": null,
+          "currentSourceMsrp": 499900,
+          "currency": "SEK",
+          "evidenceRole": "edition_offer_price_with_min_savings",
+          "readiness": "offer_signal_only",
+          "minimumSavingsLocal": 40000,
+          "changePct": null,
+          "expired": false
+        }
+      ]
+    },
+    {
+      "code": "se_peugeot_2008_edition_offer",
+      "countryCode": "SE",
+      "countryLabel": "Sweden",
+      "brand": "PEUGEOT",
+      "model": "2008",
+      "top30": {
+        "rank": 17,
+        "sales12m": 2611.0,
+        "sourceDraftStatus": "source_draft_found",
+        "currentPriceStatus": "missing_current_price",
+        "snapshotMovementStatus": "candidate_from_jato_snapshot_median_shift"
+      },
+      "sourceUrl": "https://www.peugeot.se/kop/erbjudanden/edition.html",
+      "sourceLabel": "Peugeot Sweden Edition official offer page",
+      "sourceType": "official_offer_excerpt",
+      "localPath": "03_Scripts/diagnostics/artifacts/msrp_backfill/sweden_swiss_top30_suv/evidence/peugeot_se_edition_offer_web_extract_2026-07-02.md",
+      "sha256": "3f5ca000305ae15addf1c65e74e7b9698f3c088e2d13c110de1d34172dac4902",
+      "documentDate": "2026-07-02",
+      "validFrom": "2026-07-02",
+      "validUntil": "2026-08-31",
+      "evidenceClass": "official_offer_signal",
+      "expectedTermHits": [
+        {
+          "term": "2008 Edition",
+          "matched": true
+        },
+        {
+          "term": "Pris: 244.900 kr",
+          "matched": true
+        },
+        {
+          "term": "E-2008 Edition",
+          "matched": true
+        },
+        {
+          "term": "389 900 kr",
+          "matched": true
+        }
+      ],
+      "allExpectedTermsMatched": true,
+      "downloadError": null,
+      "extractError": null,
+      "textSample": "# Peugeot Sweden Edition Official Offer Extract Source URL: https://www.peugeot.se/kop/erbjudanden/edition.html Captured: 2026-07-02 Source type: official_offer_excerpt Offer text: - Spara minst 40 000 kronor. - Erbjudandet gäller t.o.m. 31/8–2026. SUV Edition prices: - 2008 Edition: Pris: 244.900 kr - E-2008 Edition: Pris: 389 900 kr - 3008 Hybrid Edition: Pris: 399 900 kr - 3008 Plug-In Hybrid Edition: Pris: 479 900 kr - E-3008 Edition: Pris: 499 900 kr - 5008 Hybrid Edition: Pris: 439 900 kr - 5008 Plug-In Hybrid Edition: Pris: 519 900 kr - E-5008 Edition: Pris: 539 900 kr Interpretation: - This is an official offer-only signal with stated minimum savings and a validity date. - It does no",
+      "entries": [
+        {
+          "trim": "Edition",
+          "powertrain": "ICE",
+          "oldSourceMsrp": null,
+          "currentSourceMsrp": 244900,
+          "currency": "SEK",
+          "evidenceRole": "edition_offer_price_with_min_savings",
+          "readiness": "offer_signal_only",
+          "minimumSavingsLocal": 40000,
+          "changePct": null,
+          "expired": false
+        },
+        {
+          "trim": "E-2008 Edition",
+          "powertrain": "BEV",
+          "oldSourceMsrp": null,
+          "currentSourceMsrp": 389900,
+          "currency": "SEK",
+          "evidenceRole": "edition_offer_price_with_min_savings",
+          "readiness": "offer_signal_only",
+          "minimumSavingsLocal": 40000,
+          "changePct": null,
+          "expired": false
+        }
+      ]
+    },
+    {
+      "code": "se_peugeot_5008_edition_offer",
+      "countryCode": "SE",
+      "countryLabel": "Sweden",
+      "brand": "PEUGEOT",
+      "model": "5008",
+      "top30": {
+        "rank": 22,
+        "sales12m": 2181.0,
+        "sourceDraftStatus": "source_draft_found",
+        "currentPriceStatus": "missing_current_price",
+        "snapshotMovementStatus": "no_jato_snapshot_median_shift"
+      },
+      "sourceUrl": "https://www.peugeot.se/kop/erbjudanden/edition.html",
+      "sourceLabel": "Peugeot Sweden Edition official offer page",
+      "sourceType": "official_offer_excerpt",
+      "localPath": "03_Scripts/diagnostics/artifacts/msrp_backfill/sweden_swiss_top30_suv/evidence/peugeot_se_edition_offer_web_extract_2026-07-02.md",
+      "sha256": "3f5ca000305ae15addf1c65e74e7b9698f3c088e2d13c110de1d34172dac4902",
+      "documentDate": "2026-07-02",
+      "validFrom": "2026-07-02",
+      "validUntil": "2026-08-31",
+      "evidenceClass": "official_offer_signal",
+      "expectedTermHits": [
+        {
+          "term": "5008 Hybrid Edition",
+          "matched": true
+        },
+        {
+          "term": "Pris: 439 900 kr",
+          "matched": true
+        },
+        {
+          "term": "E-5008 Edition",
+          "matched": true
+        },
+        {
+          "term": "539 900 kr",
+          "matched": true
+        }
+      ],
+      "allExpectedTermsMatched": true,
+      "downloadError": null,
+      "extractError": null,
+      "textSample": "# Peugeot Sweden Edition Official Offer Extract Source URL: https://www.peugeot.se/kop/erbjudanden/edition.html Captured: 2026-07-02 Source type: official_offer_excerpt Offer text: - Spara minst 40 000 kronor. - Erbjudandet gäller t.o.m. 31/8–2026. SUV Edition prices: - 2008 Edition: Pris: 244.900 kr - E-2008 Edition: Pris: 389 900 kr - 3008 Hybrid Edition: Pris: 399 900 kr - 3008 Plug-In Hybrid Edition: Pris: 479 900 kr - E-3008 Edition: Pris: 499 900 kr - 5008 Hybrid Edition: Pris: 439 900 kr - 5008 Plug-In Hybrid Edition: Pris: 519 900 kr - E-5008 Edition: Pris: 539 900 kr Interpretation: - This is an official offer-only signal with stated minimum savings and a validity date. - It does no",
+      "entries": [
+        {
+          "trim": "Hybrid Edition",
+          "powertrain": "HEV",
+          "oldSourceMsrp": null,
+          "currentSourceMsrp": 439900,
+          "currency": "SEK",
+          "evidenceRole": "edition_offer_price_with_min_savings",
+          "readiness": "offer_signal_only",
+          "minimumSavingsLocal": 40000,
+          "changePct": null,
+          "expired": false
+        },
+        {
+          "trim": "Plug-In Hybrid Edition",
+          "powertrain": "PHEV",
+          "oldSourceMsrp": null,
+          "currentSourceMsrp": 519900,
+          "currency": "SEK",
+          "evidenceRole": "edition_offer_price_with_min_savings",
+          "readiness": "offer_signal_only",
+          "minimumSavingsLocal": 40000,
+          "changePct": null,
+          "expired": false
+        },
+        {
+          "trim": "E-5008 Edition",
+          "powertrain": "BEV",
+          "oldSourceMsrp": null,
+          "currentSourceMsrp": 539900,
+          "currency": "SEK",
+          "evidenceRole": "edition_offer_price_with_min_savings",
+          "readiness": "offer_signal_only",
+          "minimumSavingsLocal": 40000,
+          "changePct": null,
+          "expired": false
+        }
+      ]
+    },
+    {
+      "code": "se_volvo_xc60_nordic_edition",
+      "countryCode": "SE",
+      "countryLabel": "Sweden",
+      "brand": "VOLVO",
+      "model": "XC60",
+      "top30": {
+        "rank": 1,
+        "sales12m": 17287.0,
+        "sourceDraftStatus": "missing_source_draft",
+        "currentPriceStatus": "current_price_found",
+        "snapshotMovementStatus": "no_jato_snapshot_median_shift"
+      },
+      "sourceUrl": "https://www.volvocars.com/se/promotions/",
+      "sourceLabel": "Volvo Sweden official promotions top30 extract",
+      "sourceType": "official_promotion_excerpt",
+      "localPath": "03_Scripts/diagnostics/artifacts/msrp_backfill/sweden_swiss_top30_suv/evidence/volvo_se_promotions_top30_web_extract_2026-07-02.md",
+      "sha256": "13b56255aeacbe7390c7c1ca618fce4c104543ecd31251b2917d771c38d6e7ad",
+      "documentDate": "2026-07-02",
+      "validFrom": null,
+      "validUntil": null,
+      "evidenceClass": "official_offer_boundary",
+      "expectedTermHits": [
+        {
+          "term": "XC60 Plus Black Nordic Edition",
+          "matched": true
+        },
+        {
+          "term": "619 900",
+          "matched": true
+        },
+        {
+          "term": "751 900",
+          "matched": true
+        }
+      ],
+      "allExpectedTermsMatched": true,
+      "downloadError": null,
+      "extractError": null,
+      "textSample": "# Volvo Sweden Promotions Top30 SUV Evidence Extract Source URL: https://www.volvocars.com/se/promotions/ Captured for review artifact on 2026-07-02. Direct local curl/Playwright captures can return Akamai Access Denied, so this note records the official page text observed through the web index/open path for MSRP monitoring review. Relevant official evidence snippets: - XC60 Plus Black Nordic Edition: recommended price 619 900 SEK, ordinary price 751 900 SEK. - EX40 Ultra Black Special Edition: recommended price 609 900 SEK, ordinary price 665 900 SEK. - EX40 Plus Black Special Edition: recommended price 589 900 SEK, ordinary price 628 900 SEK. - EX40 Core Special Edition: recommended price ",
+      "entries": [
+        {
+          "trim": "Plus Black Nordic Edition",
+          "powertrain": "MHEV/PHEV",
+          "oldSourceMsrp": 751900,
+          "currentSourceMsrp": 619900,
+          "currency": "SEK",
+          "evidenceRole": "promotion_price_vs_ordinary_price",
+          "readiness": "demo_offer_boundary",
+          "changePct": -17.56,
+          "expired": false
+        }
+      ]
+    },
+    {
+      "code": "se_volvo_ex40_special_editions",
+      "countryCode": "SE",
+      "countryLabel": "Sweden",
+      "brand": "VOLVO",
+      "model": "EX40",
+      "top30": {
+        "rank": 2,
+        "sales12m": 9271.0,
+        "sourceDraftStatus": "source_draft_found",
+        "currentPriceStatus": "missing_current_price",
+        "snapshotMovementStatus": "candidate_from_jato_snapshot_median_shift"
+      },
+      "sourceUrl": "https://www.volvocars.com/se/promotions/",
+      "sourceLabel": "Volvo Sweden official promotions top30 extract",
+      "sourceType": "official_promotion_excerpt",
+      "localPath": "03_Scripts/diagnostics/artifacts/msrp_backfill/sweden_swiss_top30_suv/evidence/volvo_se_promotions_top30_web_extract_2026-07-02.md",
+      "sha256": "13b56255aeacbe7390c7c1ca618fce4c104543ecd31251b2917d771c38d6e7ad",
+      "documentDate": "2026-07-02",
+      "validFrom": null,
+      "validUntil": null,
+      "evidenceClass": "official_offer_boundary",
+      "expectedTermHits": [
+        {
+          "term": "EX40 Ultra Black Special Edition",
+          "matched": true
+        },
+        {
+          "term": "609 900",
+          "matched": true
+        },
+        {
+          "term": "665 900",
+          "matched": true
+        },
+        {
+          "term": "EX40 Plus Black Special Edition",
+          "matched": true
+        },
+        {
+          "term": "589 900",
+          "matched": true
+        },
+        {
+          "term": "628 900",
+          "matched": true
+        }
+      ],
+      "allExpectedTermsMatched": true,
+      "downloadError": null,
+      "extractError": null,
+      "textSample": "# Volvo Sweden Promotions Top30 SUV Evidence Extract Source URL: https://www.volvocars.com/se/promotions/ Captured for review artifact on 2026-07-02. Direct local curl/Playwright captures can return Akamai Access Denied, so this note records the official page text observed through the web index/open path for MSRP monitoring review. Relevant official evidence snippets: - XC60 Plus Black Nordic Edition: recommended price 619 900 SEK, ordinary price 751 900 SEK. - EX40 Ultra Black Special Edition: recommended price 609 900 SEK, ordinary price 665 900 SEK. - EX40 Plus Black Special Edition: recommended price 589 900 SEK, ordinary price 628 900 SEK. - EX40 Core Special Edition: recommended price ",
+      "entries": [
+        {
+          "trim": "Ultra Black Special Edition",
+          "powertrain": "BEV",
+          "oldSourceMsrp": 665900,
+          "currentSourceMsrp": 609900,
+          "currency": "SEK",
+          "evidenceRole": "promotion_price_vs_ordinary_price",
+          "readiness": "demo_offer_boundary",
+          "changePct": -8.41,
+          "expired": false
+        },
+        {
+          "trim": "Plus Black Special Edition",
+          "powertrain": "BEV",
+          "oldSourceMsrp": 628900,
+          "currentSourceMsrp": 589900,
+          "currency": "SEK",
+          "evidenceRole": "promotion_price_vs_ordinary_price",
+          "readiness": "demo_offer_boundary",
+          "changePct": -6.2,
+          "expired": false
+        }
+      ]
+    },
+    {
+      "code": "se_volvo_ec40_special_editions",
+      "countryCode": "SE",
+      "countryLabel": "Sweden",
+      "brand": "VOLVO",
+      "model": "EC40",
+      "top30": {
+        "rank": 19,
+        "sales12m": 2277.0,
+        "sourceDraftStatus": "source_draft_found",
+        "currentPriceStatus": "missing_current_price",
+        "snapshotMovementStatus": "candidate_from_jato_snapshot_median_shift"
+      },
+      "sourceUrl": "https://www.volvocars.com/se/promotions/",
+      "sourceLabel": "Volvo Sweden official promotions top30 extract",
+      "sourceType": "official_promotion_excerpt",
+      "localPath": "03_Scripts/diagnostics/artifacts/msrp_backfill/sweden_swiss_top30_suv/evidence/volvo_se_promotions_top30_web_extract_2026-07-02.md",
+      "sha256": "13b56255aeacbe7390c7c1ca618fce4c104543ecd31251b2917d771c38d6e7ad",
+      "documentDate": "2026-07-02",
+      "validFrom": null,
+      "validUntil": null,
+      "evidenceClass": "official_offer_boundary",
+      "expectedTermHits": [
+        {
+          "term": "EC40 Ultra Black Special Edition",
+          "matched": true
+        },
+        {
+          "term": "677 900",
+          "matched": true
+        },
+        {
+          "term": "609 900",
+          "matched": true
+        },
+        {
+          "term": "EC40 Plus Black Special Edition",
+          "matched": true
+        },
+        {
+          "term": "589 900",
+          "matched": true
+        },
+        {
+          "term": "646 900",
+          "matched": true
+        }
+      ],
+      "allExpectedTermsMatched": true,
+      "downloadError": null,
+      "extractError": null,
+      "textSample": "# Volvo Sweden Promotions Top30 SUV Evidence Extract Source URL: https://www.volvocars.com/se/promotions/ Captured for review artifact on 2026-07-02. Direct local curl/Playwright captures can return Akamai Access Denied, so this note records the official page text observed through the web index/open path for MSRP monitoring review. Relevant official evidence snippets: - XC60 Plus Black Nordic Edition: recommended price 619 900 SEK, ordinary price 751 900 SEK. - EX40 Ultra Black Special Edition: recommended price 609 900 SEK, ordinary price 665 900 SEK. - EX40 Plus Black Special Edition: recommended price 589 900 SEK, ordinary price 628 900 SEK. - EX40 Core Special Edition: recommended price ",
+      "entries": [
+        {
+          "trim": "Ultra Black Special Edition",
+          "powertrain": "BEV",
+          "oldSourceMsrp": 677900,
+          "currentSourceMsrp": 609900,
+          "currency": "SEK",
+          "evidenceRole": "promotion_price_vs_ordinary_price",
+          "readiness": "demo_offer_boundary",
+          "changePct": -10.03,
+          "expired": false
+        },
+        {
+          "trim": "Plus Black Special Edition",
+          "powertrain": "BEV",
+          "oldSourceMsrp": 646900,
+          "currentSourceMsrp": 589900,
+          "currency": "SEK",
+          "evidenceRole": "promotion_price_vs_ordinary_price",
+          "readiness": "demo_offer_boundary",
+          "changePct": -8.81,
+          "expired": false
+        }
+      ]
+    },
+    {
+      "code": "ch_vw_tiguan_united",
+      "countryCode": "CH",
+      "countryLabel": "Switzerland",
+      "brand": "VOLKSWAGEN",
+      "model": "TIGUAN",
+      "top30": {
+        "rank": 1,
+        "sales12m": 5084.0,
+        "sourceDraftStatus": "source_draft_found",
+        "currentPriceStatus": "missing_current_price",
+        "snapshotMovementStatus": "no_jato_snapshot_median_shift"
+      },
+      "sourceUrl": "https://www.volkswagen.ch/de/modelle/die-sondermodelle-united.html",
+      "sourceLabel": "Volkswagen Switzerland UNITED official offer page",
+      "sourceType": "official_offer_page",
+      "localPath": "03_Scripts/diagnostics/artifacts/msrp_backfill/sweden_swiss_top30_suv/evidence/volkswagen_ch_united_offer_2026-07-02.html",
+      "sha256": "96140cdba634497b7d4b88652f8f948d681ed1535c65e009a9f0519d71c30946",
+      "documentDate": "2026-07-02",
+      "validFrom": "2026-07-01",
+      "validUntil": "2026-08-31",
+      "evidenceClass": "official_offer_boundary",
+      "expectedTermHits": [
+        {
+          "term": "Tiguan UNITED Life",
+          "matched": true
+        },
+        {
+          "term": "58’180",
+          "matched": true
+        },
+        {
+          "term": "53’100",
+          "matched": true
+        },
+        {
+          "term": "01.07.2026",
+          "matched": true
+        },
+        {
+          "term": "31.08.2026",
+          "matched": true
+        }
+      ],
+      "allExpectedTermsMatched": true,
+      "downloadError": null,
+      "extractError": null,
+      "textSample": "Sondermodelle UNITED | Volkswagen Schweiz @font-face { font-family: 'vw-head'; font-weight: 400; font-display: swap; src: url('/etc.clientlibs/clientlibs/vwa-ngw18/ngw18-frontend/apps/resources/statics/fonts/vwhead-regular.woff2') format('woff2'), url('/etc.clientlibs/clientlibs/vwa-ngw18/ngw18-frontend/apps/resources/statics/fonts/vwhead-regular.woff') format('woff'); } @font-face { font-family: 'vw-head'; font-weight: 700; font-display: swap; src: url('/etc.clientlibs/clientlibs/vwa-ngw18/ngw18-frontend/apps/resources/statics/fonts/vwhead-bold.woff2') format('woff2'), url('/etc.clientlibs/clientlibs/vwa-ngw18/ngw18-frontend/apps/resources/statics/fonts/vwhead-bold.woff') format('woff'); } ",
+      "entries": [
+        {
+          "trim": "UNITED Life 2.0 TSI",
+          "powertrain": "ICE",
+          "oldSourceMsrp": 58180,
+          "currentSourceMsrp": 53100,
+          "currency": "CHF",
+          "evidenceRole": "regular_price_vs_special_model_price",
+          "readiness": "demo_offer_boundary",
+          "changePct": -8.73,
+          "expired": false
+        }
+      ]
+    },
+    {
+      "code": "ch_volvo_xc60_aurora_bonus",
+      "countryCode": "CH",
+      "countryLabel": "Switzerland",
+      "brand": "VOLVO",
+      "model": "XC60",
+      "top30": {
+        "rank": 10,
+        "sales12m": 2647.0,
+        "sourceDraftStatus": "source_draft_found",
+        "currentPriceStatus": "missing_current_price",
+        "snapshotMovementStatus": "candidate_from_jato_snapshot_median_shift"
+      },
+      "sourceUrl": "https://www.volvocars.com/de-ch/cars/xc60-hybrid/",
+      "sourceLabel": "Volvo Switzerland XC60 official offer extract",
+      "sourceType": "official_offer_excerpt",
+      "localPath": "03_Scripts/diagnostics/artifacts/msrp_backfill/sweden_swiss_top30_suv/evidence/volvo_ch_xc60_web_extract_2026-07-02.md",
+      "sha256": "f7abe5fc853f863dd62aa593779955da98e18ac75981ba238bb8c20b71a74e0a",
+      "documentDate": "2026-07-02",
+      "validFrom": null,
+      "validUntil": "2026-06-30",
+      "evidenceClass": "official_offer_boundary_expired",
+      "expectedTermHits": [
+        {
+          "term": "Aurora Bonus",
+          "matched": true
+        },
+        {
+          "term": "CHF 7'000",
+          "matched": true
+        },
+        {
+          "term": "CHF 59'700",
+          "matched": true
+        },
+        {
+          "term": "CHF 66'700",
+          "matched": true
+        }
+      ],
+      "allExpectedTermsMatched": true,
+      "downloadError": null,
+      "extractError": null,
+      "textSample": "# Volvo Switzerland XC60 Official Offer Evidence Extract Source URL: https://www.volvocars.com/de-ch/cars/xc60-hybrid/ Captured for review artifact on 2026-07-02. Direct local curl/Playwright captures can return Akamai Access Denied, so this note records the official page text observed through the web index/open path for MSRP monitoring review. Relevant official evidence snippets: - XC60 page headline lists Aurora Bonus CHF 7'000 and stock leasing 0.0%. - XC60 Plug-in Hybrid listed from CHF 79'900. - Offer text states plug-in hybrid SUV from CHF 72'900 after bonus, valid until 30 June. - Additional XC60 offer text states CHF 59'700 after CHF 7'000 Aurora Bonus. - Footnote example: XC60 B5 AW",
+      "entries": [
+        {
+          "trim": "B5 AWD Mild Hybrid Essential",
+          "powertrain": "MHEV",
+          "oldSourceMsrp": 66700,
+          "currentSourceMsrp": 59700,
+          "currency": "CHF",
+          "evidenceRole": "catalog_price_vs_aurora_bonus_price",
+          "readiness": "expired_demo_offer_boundary",
+          "changePct": -10.49,
+          "expired": true
+        },
+        {
+          "trim": "Plug-in Hybrid from price",
+          "powertrain": "PHEV",
+          "oldSourceMsrp": 79900,
+          "currentSourceMsrp": 72900,
+          "currency": "CHF",
+          "evidenceRole": "catalog_price_vs_aurora_bonus_price",
+          "readiness": "expired_demo_offer_boundary",
+          "changePct": -8.76,
+          "expired": true
+        }
+      ]
+    },
+    {
+      "code": "ch_kia_sportage_black_edition",
+      "countryCode": "CH",
+      "countryLabel": "Switzerland",
+      "brand": "KIA",
+      "model": "SPORTAGE",
+      "top30": {
+        "rank": 13,
+        "sales12m": 2104.0,
+        "sourceDraftStatus": "source_draft_found",
+        "currentPriceStatus": "missing_current_price",
+        "snapshotMovementStatus": "candidate_from_jato_snapshot_median_shift"
+      },
+      "sourceUrl": "https://www.kia.ch/de/modelle/neuer-sportage",
+      "sourceLabel": "Kia Switzerland Sportage official offer page",
+      "sourceType": "official_offer_page",
+      "localPath": "03_Scripts/diagnostics/artifacts/msrp_backfill/sweden_swiss_top30_suv/evidence/kia_ch_sportage_offer_2026-07-02.html",
+      "sha256": "12ae30de39c418927c027b9d4cfe40f86e130fac90a492432cab0d8c2882e91c",
+      "documentDate": "2026-07-02",
+      "validFrom": null,
+      "validUntil": "2026-06-30",
+      "evidenceClass": "official_offer_boundary_expired",
+      "expectedTermHits": [
+        {
+          "term": "Sportage Black Edition",
+          "matched": true
+        },
+        {
+          "term": "46'950",
+          "matched": true
+        },
+        {
+          "term": "5890",
+          "matched": true
+        },
+        {
+          "term": "30.6.26",
+          "matched": true
+        }
+      ],
+      "allExpectedTermsMatched": true,
+      "downloadError": null,
+      "extractError": null,
+      "textSample": "Der neue Kia Sportage | Kia Schweiz @font-face { font-family: 'Kia-Signature'; src: url('/assets/fonts/kia-signature-web-fix/woff2/KiaSignatureFixLight.woff2') format('woff2'), url('/assets/fonts/kia-signature-web-fix/woff/KiaSignatureFixLight.woff') format('woff'), url('/assets/fonts/kia-signature-web-fix/eot/KiaSignatureFixLight.eot') format('eot'); font-weight: 400; font-style: normal; font-display: swap; } @font-face { font-family: 'Kia-Signature'; src: url('/assets/fonts/kia-signature-web-fix/woff2/KiaSignatureFixBold.woff2') format('woff2'), url('/assets/fonts/kia-signature-web-fix/woff/KiaSignatureFixBold.woff') format('woff'), url('/assets/fonts/kia-signature-web-fix/eot/KiaSignature",
+      "entries": [
+        {
+          "trim": "Black Edition 1.6 T-GDi HEV",
+          "powertrain": "HEV",
+          "oldSourceMsrp": 52840,
+          "currentSourceMsrp": 46950,
+          "currency": "CHF",
+          "evidenceRole": "price_advantage_vs_offer_price",
+          "readiness": "expired_demo_offer_boundary",
+          "changePct": -11.15,
+          "expired": true
+        }
+      ]
+    },
+    {
+      "code": "ch_vw_tayron_united",
+      "countryCode": "CH",
+      "countryLabel": "Switzerland",
+      "brand": "VOLKSWAGEN",
+      "model": "TAYRON",
+      "top30": {
+        "rank": 28,
+        "sales12m": 1380.0,
+        "sourceDraftStatus": "source_draft_found",
+        "currentPriceStatus": "missing_current_price",
+        "snapshotMovementStatus": "no_jato_snapshot_median_shift"
+      },
+      "sourceUrl": "https://www.volkswagen.ch/de/modelle/die-sondermodelle-united.html",
+      "sourceLabel": "Volkswagen Switzerland UNITED official offer page",
+      "sourceType": "official_offer_page",
+      "localPath": "03_Scripts/diagnostics/artifacts/msrp_backfill/sweden_swiss_top30_suv/evidence/volkswagen_ch_united_offer_2026-07-02.html",
+      "sha256": "96140cdba634497b7d4b88652f8f948d681ed1535c65e009a9f0519d71c30946",
+      "documentDate": "2026-07-02",
+      "validFrom": "2026-07-01",
+      "validUntil": "2026-08-31",
+      "evidenceClass": "official_offer_boundary",
+      "expectedTermHits": [
+        {
+          "term": "Tayron UNITED R-Line",
+          "matched": true
+        },
+        {
+          "term": "64’560",
+          "matched": true
+        },
+        {
+          "term": "62’800",
+          "matched": true
+        },
+        {
+          "term": "01.07.2026",
+          "matched": true
+        },
+        {
+          "term": "31.08.2026",
+          "matched": true
+        }
+      ],
+      "allExpectedTermsMatched": true,
+      "downloadError": null,
+      "extractError": null,
+      "textSample": "Sondermodelle UNITED | Volkswagen Schweiz @font-face { font-family: 'vw-head'; font-weight: 400; font-display: swap; src: url('/etc.clientlibs/clientlibs/vwa-ngw18/ngw18-frontend/apps/resources/statics/fonts/vwhead-regular.woff2') format('woff2'), url('/etc.clientlibs/clientlibs/vwa-ngw18/ngw18-frontend/apps/resources/statics/fonts/vwhead-regular.woff') format('woff'); } @font-face { font-family: 'vw-head'; font-weight: 700; font-display: swap; src: url('/etc.clientlibs/clientlibs/vwa-ngw18/ngw18-frontend/apps/resources/statics/fonts/vwhead-bold.woff2') format('woff2'), url('/etc.clientlibs/clientlibs/vwa-ngw18/ngw18-frontend/apps/resources/statics/fonts/vwhead-bold.woff') format('woff'); } ",
+      "entries": [
+        {
+          "trim": "UNITED R-Line 2.0 TSI",
+          "powertrain": "ICE",
+          "oldSourceMsrp": 64560,
+          "currentSourceMsrp": 62800,
+          "currency": "CHF",
+          "evidenceRole": "regular_price_vs_special_model_price",
+          "readiness": "demo_offer_boundary",
+          "changePct": -2.73,
+          "expired": false
+        }
+      ]
+    },
+    {
+      "code": "ch_dacia_duster_current",
+      "countryCode": "CH",
+      "countryLabel": "Switzerland",
+      "brand": "DACIA",
+      "model": "DUSTER",
+      "top30": {
+        "rank": 11,
+        "sales12m": 2274.0,
+        "sourceDraftStatus": "source_draft_found",
+        "currentPriceStatus": "missing_current_price",
+        "snapshotMovementStatus": "no_jato_snapshot_median_shift"
+      },
+      "sourceUrl": "https://de.dacia.ch/hybrid-and-electric-range/duster-suv.html",
+      "sourceLabel": "Dacia Switzerland Duster official model page",
+      "sourceType": "official_model_page",
+      "localPath": "03_Scripts/diagnostics/artifacts/msrp_backfill/sweden_swiss_top30_suv/evidence/dacia_ch_duster_model_page_2026-07-02.html",
+      "sha256": "c83bbd20c91deaa246401ccc4cb72c26c19f3dbd2b7a03a748d2934d17196bc8",
+      "documentDate": "2026-07-02",
+      "validFrom": "2026-07-02",
+      "validUntil": null,
+      "evidenceClass": "official_current_baseline",
+      "expectedTermHits": [
+        {
+          "term": "DUSTER",
+          "matched": true
+        },
+        {
+          "term": "Preis ab CHF",
+          "matched": true
+        },
+        {
+          "term": "24’990",
+          "matched": true
+        },
+        {
+          "term": "DUSTER extreme mild hybrid 140",
+          "matched": true
+        }
+      ],
+      "allExpectedTermsMatched": true,
+      "downloadError": null,
+      "extractError": null,
+      "textSample": "Duster, der beliebte SUV mit Offroad-Fähigkeiten – Dacia {\"@context\":\"http://schema.org\",\"@type\":\"BreadcrumbList\",\"itemListElement\":[{\"@type\":\"ListItem\",\"position\":1,\"item\":{\"@id\":\"https://de.dacia.ch/\",\"name\":\"Dacia Schweiz\"}},{\"@type\":\"ListItem\",\"position\":2,\"item\":{\"@id\":\"https://de.dacia.ch/hybrid-and-electric-range.html\",\"name\":\"Hybrid- und Elektrofahrzeuge\"}},{\"@type\":\"ListItem\",\"position\":3,\"item\":{\"@id\":\"https://de.dacia.ch/hybrid-and-electric-range/duster-suv.html\",\"name\":\"Der SUV Dacia Duster\"}}]} {\"@context\":\"https://schema.org/\",\"@type\":\"Product\",\"name\":\"dacia DUSTER\",\"image\":\"https://cdn.group.renault.com/dac/master/dacia-vn/vehicules/duster-p1310/hero-zone/dacia-duster-p1310-he",
+      "entries": [
+        {
+          "trim": "from price",
+          "powertrain": "MHEV/HEV",
+          "oldSourceMsrp": null,
+          "currentSourceMsrp": 24990,
+          "currency": "CHF",
+          "evidenceRole": "current_model_page_from_price",
+          "readiness": "baseline_only_no_movement",
+          "changePct": null,
+          "expired": false
+        }
+      ]
+    },
+    {
+      "code": "ch_dacia_bigster_current",
+      "countryCode": "CH",
+      "countryLabel": "Switzerland",
+      "brand": "DACIA",
+      "model": "BIGSTER",
+      "top30": {
+        "rank": 19,
+        "sales12m": 1912.0,
+        "sourceDraftStatus": "source_draft_found",
+        "currentPriceStatus": "missing_current_price",
+        "snapshotMovementStatus": "no_jato_snapshot_median_shift"
+      },
+      "sourceUrl": "https://de.dacia.ch/hybrid-and-electric-range/bigster.html",
+      "sourceLabel": "Dacia Switzerland Bigster official model page",
+      "sourceType": "official_model_page",
+      "localPath": "03_Scripts/diagnostics/artifacts/msrp_backfill/sweden_swiss_top30_suv/evidence/dacia_ch_bigster_model_page_2026-07-02.html",
+      "sha256": "2893d6a83e4763445ce795343ab978cea71987bb845b239209f581f66d903d84",
+      "documentDate": "2026-07-02",
+      "validFrom": "2026-07-02",
+      "validUntil": null,
+      "evidenceClass": "official_current_baseline",
+      "expectedTermHits": [
+        {
+          "term": "BIGSTER",
+          "matched": true
+        },
+        {
+          "term": "Preis ab CHF",
+          "matched": true
+        },
+        {
+          "term": "27’990",
+          "matched": true
+        },
+        {
+          "term": "BIGSTER journey mild hybrid 140",
+          "matched": true
+        }
+      ],
+      "allExpectedTermsMatched": true,
+      "downloadError": null,
+      "extractError": null,
+      "textSample": "Bigster, der geräumige und robuste Hybrid SUV – Dacia {\"@context\":\"http://schema.org\",\"@type\":\"BreadcrumbList\",\"itemListElement\":[{\"@type\":\"ListItem\",\"position\":1,\"item\":{\"@id\":\"https://de.dacia.ch/\",\"name\":\"Dacia Schweiz\"}},{\"@type\":\"ListItem\",\"position\":2,\"item\":{\"@id\":\"https://de.dacia.ch/hybrid-and-electric-range.html\",\"name\":\"Hybrid- und Elektrofahrzeuge\"}},{\"@type\":\"ListItem\",\"position\":3,\"item\":{\"@id\":\"https://de.dacia.ch/hybrid-and-electric-range/bigster.html\",\"name\":\"Bigster Hybrid SUV – Dacia\"}}]} {\"@context\":\"https://schema.org/\",\"@type\":\"Product\",\"name\":\"dacia BIGSTER\",\"image\":\"https://cdn.group.renault.com/dac/master/dacia-vn/vehicules/bigster-db3l1-ph1/herozone/dacia-bigster-db",
+      "entries": [
+        {
+          "trim": "from price",
+          "powertrain": "MHEV/HEV",
+          "oldSourceMsrp": null,
+          "currentSourceMsrp": 27990,
+          "currency": "CHF",
+          "evidenceRole": "current_model_page_from_price",
+          "readiness": "baseline_only_no_movement",
+          "changePct": null,
+          "expired": false
+        }
+      ]
+    },
+    {
+      "code": "ch_cupra_terramar_prime_offer",
+      "countryCode": "CH",
+      "countryLabel": "Switzerland",
+      "brand": "CUPRA",
+      "model": "TERRAMAR",
+      "top30": {
+        "rank": 14,
+        "sales12m": 2097.0,
+        "sourceDraftStatus": "source_draft_found",
+        "currentPriceStatus": "missing_current_price",
+        "snapshotMovementStatus": "no_jato_snapshot_median_shift"
+      },
+      "sourceUrl": "https://www.cupraofficial.ch/de/angebote/sonderangebote",
+      "sourceLabel": "Cupra Switzerland special offers official page",
+      "sourceType": "official_offer_page",
+      "localPath": "03_Scripts/diagnostics/artifacts/msrp_backfill/sweden_swiss_top30_suv/evidence/cupra_ch_special_offers_2026-07-02.html",
+      "sha256": "637b2c43f77dcf097ebec5ad44f517cacceda701501ba962f921393a49bcc7ba",
+      "documentDate": "2026-07-02",
+      "validFrom": "2026-07-02",
+      "validUntil": null,
+      "evidenceClass": "official_offer_boundary",
+      "expectedTermHits": [
+        {
+          "term": "CUPRA Terramar VZ PRIME EDITION",
+          "matched": true
+        },
+        {
+          "term": "Regulärer Preis",
+          "matched": true
+        },
+        {
+          "term": "70'150",
+          "matched": true
+        },
+        {
+          "term": "58'850",
+          "matched": true
+        }
+      ],
+      "allExpectedTermsMatched": true,
+      "downloadError": null,
+      "extractError": null,
+      "textSample": "Aktuelle Angbote – Exklusive Deals & Leasingvorteile entdecken | CUPRA const currentWebsite = \"Cupra\"; const isCupra = true; const isSeat = false; const animationAllModalSite = true; const animationTimeAllModalSite = 500; window.lpTag=window.lpTag||{},'undefined'==typeof window.lpTag._tagCount?(window.lpTag={wl:lpTag.wl||null,scp:lpTag.scp||null,site:'25706656'||'',section:lpTag.section||'',tagletSection:lpTag.tagletSection||null,autoStart:lpTag.autoStart!==!1,ovr:lpTag.ovr||{},_v:'1.10.0',_tagCount:1,protocol:'https:',events:{bind:function(t,e,i){lpTag.defer(function(){lpTag.events.bind(t,e,i)},0)},trigger:function(t,e,i){lpTag.defer(function(){lpTag.events.trigger(t,e,i)},1)}},defer:functi",
+      "entries": [
+        {
+          "trim": "VZ PRIME EDITION",
+          "powertrain": "ICE",
+          "oldSourceMsrp": 70150,
+          "currentSourceMsrp": 58850,
+          "currency": "CHF",
+          "evidenceRole": "regular_price_vs_special_offer_price",
+          "readiness": "demo_offer_boundary",
+          "changePct": -16.11,
+          "expired": false
+        }
+      ]
+    },
+    {
+      "code": "ch_cupra_formentor_prime_offer",
+      "countryCode": "CH",
+      "countryLabel": "Switzerland",
+      "brand": "CUPRA",
+      "model": "FORMENTOR",
+      "top30": {
+        "rank": 29,
+        "sales12m": 1351.0,
+        "sourceDraftStatus": "source_draft_found",
+        "currentPriceStatus": "missing_current_price",
+        "snapshotMovementStatus": "no_jato_snapshot_median_shift"
+      },
+      "sourceUrl": "https://www.cupraofficial.ch/de/angebote/sonderangebote",
+      "sourceLabel": "Cupra Switzerland special offers official page",
+      "sourceType": "official_offer_page",
+      "localPath": "03_Scripts/diagnostics/artifacts/msrp_backfill/sweden_swiss_top30_suv/evidence/cupra_ch_special_offers_2026-07-02.html",
+      "sha256": "637b2c43f77dcf097ebec5ad44f517cacceda701501ba962f921393a49bcc7ba",
+      "documentDate": "2026-07-02",
+      "validFrom": "2026-07-02",
+      "validUntil": null,
+      "evidenceClass": "official_offer_boundary",
+      "expectedTermHits": [
+        {
+          "term": "CUPRA Formentor PRIME EDITION",
+          "matched": true
+        },
+        {
+          "term": "Regulärer Preis",
+          "matched": true
+        },
+        {
+          "term": "53'150",
+          "matched": true
+        },
+        {
+          "term": "40'350",
+          "matched": true
+        }
+      ],
+      "allExpectedTermsMatched": true,
+      "downloadError": null,
+      "extractError": null,
+      "textSample": "Aktuelle Angbote – Exklusive Deals & Leasingvorteile entdecken | CUPRA const currentWebsite = \"Cupra\"; const isCupra = true; const isSeat = false; const animationAllModalSite = true; const animationTimeAllModalSite = 500; window.lpTag=window.lpTag||{},'undefined'==typeof window.lpTag._tagCount?(window.lpTag={wl:lpTag.wl||null,scp:lpTag.scp||null,site:'25706656'||'',section:lpTag.section||'',tagletSection:lpTag.tagletSection||null,autoStart:lpTag.autoStart!==!1,ovr:lpTag.ovr||{},_v:'1.10.0',_tagCount:1,protocol:'https:',events:{bind:function(t,e,i){lpTag.defer(function(){lpTag.events.bind(t,e,i)},0)},trigger:function(t,e,i){lpTag.defer(function(){lpTag.events.trigger(t,e,i)},1)}},defer:functi",
+      "entries": [
+        {
+          "trim": "PRIME EDITION",
+          "powertrain": "ICE",
+          "oldSourceMsrp": 53150,
+          "currentSourceMsrp": 40350,
+          "currency": "CHF",
+          "evidenceRole": "regular_price_vs_special_offer_price",
+          "readiness": "demo_offer_boundary",
+          "changePct": -24.08,
+          "expired": false
+        }
+      ]
+    },
+    {
+      "code": "ch_volvo_ex30_fjord_bonus",
+      "countryCode": "CH",
+      "countryLabel": "Switzerland",
+      "brand": "VOLVO",
+      "model": "EX30",
+      "top30": {
+        "rank": 12,
+        "sales12m": 2178.0,
+        "sourceDraftStatus": "source_draft_found",
+        "currentPriceStatus": "missing_current_price",
+        "snapshotMovementStatus": "candidate_from_jato_snapshot_median_shift"
+      },
+      "sourceUrl": "https://www.volvocars.com/de-ch/cars/ex30-electric/",
+      "sourceLabel": "Volvo Switzerland EX30 official offer extract",
+      "sourceType": "official_promotion_excerpt",
+      "localPath": "03_Scripts/diagnostics/artifacts/msrp_backfill/sweden_swiss_top30_suv/evidence/volvo_ch_ex30_fjord_bonus_web_extract_2026-07-02.md",
+      "sha256": "93b5018716f942876403466efa8bf47f3b0b6a9a59138d38ea02f20fd4d8df26",
+      "documentDate": "2026-07-02",
+      "validFrom": null,
+      "validUntil": "2026-06-30",
+      "evidenceClass": "official_offer_boundary_expired",
+      "expectedTermHits": [
+        {
+          "term": "Fjord Bonus CHF 5'000",
+          "matched": true
+        },
+        {
+          "term": "Katalogpreis CHF 38'250",
+          "matched": true
+        },
+        {
+          "term": "CHF 33'250",
+          "matched": true
+        },
+        {
+          "term": "30. Juni",
+          "matched": true
+        }
+      ],
+      "allExpectedTermsMatched": true,
+      "downloadError": null,
+      "extractError": null,
+      "textSample": "# Volvo Switzerland EX30 official offer extract - Captured: 2026-07-02 - Source: https://www.volvocars.com/de-ch/cars/ex30-electric/ - Capture note: direct deterministic HTML snapshot returned 403 during the audit, so this file preserves the official page text exposed through the searchable page extract for review-only demo evidence. ## Extracted official terms - EX30 - Fjord Bonus CHF 5'000 - Katalogpreis CHF 38'250 - CHF 33'250 - Angebot gültig bis 30. Juni ## MSRP monitor classification - Country: Switzerland - Brand/model: VOLVO EX30 - Evidence lane: expired official offer boundary - Readiness: expired_demo_offer_boundary - Previous source MSRP: 38250 CHF - Current offer price: 33250 CHF",
+      "entries": [
+        {
+          "trim": "P5 Core",
+          "powertrain": "BEV",
+          "oldSourceMsrp": 38250,
+          "currentSourceMsrp": 33250,
+          "currency": "CHF",
+          "evidenceRole": "catalog_price_vs_fjord_bonus_price",
+          "readiness": "expired_demo_offer_boundary",
+          "changePct": -13.07,
+          "expired": true
+        }
+      ]
+    },
+    {
+      "code": "ch_vw_troc_offer_signal",
+      "countryCode": "CH",
+      "countryLabel": "Switzerland",
+      "brand": "VOLKSWAGEN",
+      "model": "T-ROC",
+      "top30": {
+        "rank": 21,
+        "sales12m": 1771.0,
+        "sourceDraftStatus": "source_draft_found",
+        "currentPriceStatus": "missing_current_price",
+        "snapshotMovementStatus": "no_jato_snapshot_median_shift"
+      },
+      "sourceUrl": "https://www.volkswagen.ch/de/beratung-und-kauf/praemien.html",
+      "sourceLabel": "Volkswagen Switzerland premiums official page",
+      "sourceType": "official_offer_page",
+      "localPath": "03_Scripts/diagnostics/artifacts/msrp_backfill/sweden_swiss_top30_suv/evidence/volkswagen_ch_premiums_2026-07-02.html",
+      "sha256": "ff333366ade1bea849e00bc59cfed2070edfa5b1f48afcde68f222c65cd133f4",
+      "documentDate": "2026-07-02",
+      "validFrom": "2026-07-01",
+      "validUntil": "2026-08-31",
+      "evidenceClass": "official_offer_signal",
+      "expectedTermHits": [
+        {
+          "term": "New T-Roc",
+          "matched": true
+        },
+        {
+          "term": "Volkswagen Prämie",
+          "matched": true
+        },
+        {
+          "term": "2000.-",
+          "matched": true
+        },
+        {
+          "term": "Advantage-Prämie",
+          "matched": true
+        },
+        {
+          "term": "1500.-",
+          "matched": true
+        }
+      ],
+      "allExpectedTermsMatched": true,
+      "downloadError": null,
+      "extractError": null,
+      "textSample": "Aktuelle Angebote | Volkswagen Schweiz @font-face { font-family: 'vw-head'; font-weight: 400; font-display: swap; src: url('/etc.clientlibs/clientlibs/vwa-ngw18/ngw18-frontend/apps/resources/statics/fonts/vwhead-regular.woff2') format('woff2'), url('/etc.clientlibs/clientlibs/vwa-ngw18/ngw18-frontend/apps/resources/statics/fonts/vwhead-regular.woff') format('woff'); } @font-face { font-family: 'vw-head'; font-weight: 700; font-display: swap; src: url('/etc.clientlibs/clientlibs/vwa-ngw18/ngw18-frontend/apps/resources/statics/fonts/vwhead-bold.woff2') format('woff2'), url('/etc.clientlibs/clientlibs/vwa-ngw18/ngw18-frontend/apps/resources/statics/fonts/vwhead-bold.woff') format('woff'); } @fo",
+      "entries": [
+        {
+          "trim": "New T-Roc premium",
+          "powertrain": "UNKNOWN",
+          "oldSourceMsrp": null,
+          "currentSourceMsrp": null,
+          "currency": "CHF",
+          "evidenceRole": "premium_and_advantage_offer_signal",
+          "readiness": "offer_signal_only",
+          "minimumSavingsLocal": 3500,
+          "changePct": null,
+          "expired": false
+        }
+      ]
+    },
+    {
+      "code": "ch_tesla_model_y_current",
+      "countryCode": "CH",
+      "countryLabel": "Switzerland",
+      "brand": "TESLA",
+      "model": "MODEL Y",
+      "top30": {
+        "rank": 2,
+        "sales12m": 4991.0,
+        "sourceDraftStatus": "source_draft_found",
+        "currentPriceStatus": "missing_current_price",
+        "snapshotMovementStatus": "no_jato_snapshot_median_shift"
+      },
+      "sourceUrl": "https://www.tesla.com/de_CH/modely/design",
+      "sourceLabel": "Tesla Switzerland Model Y official design page extract",
+      "sourceType": "official_configurator_excerpt",
+      "localPath": "03_Scripts/diagnostics/artifacts/msrp_backfill/sweden_swiss_top30_suv/evidence/tesla_ch_model_y_web_extract_2026-07-02.md",
+      "sha256": "9ad26d9e23f8c51adf68030c9a59472824faaf27aa0b885c7865f3878df3a6eb",
+      "documentDate": "2026-07-02",
+      "validFrom": "2026-07-02",
+      "validUntil": null,
+      "evidenceClass": "official_current_baseline",
+      "expectedTermHits": [
+        {
+          "term": "Model Y Hinterradantrieb",
+          "matched": true
+        },
+        {
+          "term": "CHF 40'990",
+          "matched": true
+        },
+        {
+          "term": "Pearl White-Lackierung",
+          "matched": true
+        }
+      ],
+      "allExpectedTermsMatched": true,
+      "downloadError": null,
+      "extractError": null,
+      "textSample": "# Tesla Switzerland Model Y official design page extract - Captured: 2026-07-02 - Source: https://www.tesla.com/de_CH/modely/design - Capture note: deterministic local HTML fetch returned 403 during the audit, so this file preserves the official Tesla design-page text exposed through searchable official-page extracts for review-only baseline evidence. ## Extracted official terms - Model Y Hinterradantrieb CHF 40'990 - Pearl White-Lackierung inklusive - 18-Zoll Aperture-Felgen inklusive ## MSRP monitor classification - Country: Switzerland - Brand/model: TESLA MODEL Y - Evidence lane: official current baseline - Readiness: baseline_only_no_movement - Current source MSRP: 40990 CHF - Rule: cur",
+      "entries": [
+        {
+          "trim": "Hinterradantrieb",
+          "powertrain": "BEV",
+          "oldSourceMsrp": null,
+          "currentSourceMsrp": 40990,
+          "currency": "CHF",
+          "evidenceRole": "current_configurator_from_price",
+          "readiness": "baseline_only_no_movement",
+          "changePct": null,
+          "expired": false
+        }
+      ]
+    },
+    {
+      "code": "ch_bmw_x1_current",
+      "countryCode": "CH",
+      "countryLabel": "Switzerland",
+      "brand": "BMW",
+      "model": "X1",
+      "top30": {
+        "rank": 6,
+        "sales12m": 3465.0,
+        "sourceDraftStatus": "source_draft_found",
+        "currentPriceStatus": "missing_current_price",
+        "snapshotMovementStatus": "no_jato_snapshot_median_shift"
+      },
+      "sourceUrl": "https://www.bmw.ch/de/bmw-neuwagen.html",
+      "sourceLabel": "BMW Switzerland official model overview extract",
+      "sourceType": "official_model_overview_excerpt",
+      "localPath": "03_Scripts/diagnostics/artifacts/msrp_backfill/sweden_swiss_top30_suv/evidence/bmw_ch_models_web_extract_2026-07-02.md",
+      "sha256": "f36fcf9c30157e31d0e7a66b28b1a306707490f1b6f676c9b78a2f0fe32faa8e",
+      "documentDate": "2026-07-02",
+      "validFrom": "2026-07-02",
+      "validUntil": null,
+      "evidenceClass": "official_current_baseline",
+      "expectedTermHits": [
+        {
+          "term": "SUV X1 Modelle Benzin",
+          "matched": true
+        },
+        {
+          "term": "Ab CHF 49'900",
+          "matched": true
+        },
+        {
+          "term": "BMW SWISS BONUS",
+          "matched": true
+        }
+      ],
+      "allExpectedTermsMatched": true,
+      "downloadError": null,
+      "extractError": null,
+      "textSample": "# BMW Switzerland official model overview extracts - Captured: 2026-07-02 - Source: https://www.bmw.ch/de/bmw-neuwagen.html - Capture note: local deterministic HTML fetch timed out during audit, so this file preserves official BMW Switzerland model overview text exposed through searchable official-page extracts for review-only baseline evidence. ## Extracted official terms - BMW iX1 xDrive30. Vollelektrisch. Ab CHF 52'200. - SUV X1 Modelle Benzin. Ab CHF 49'900. - SUV X3 Modelle Benzin. Ab CHF 69'600. - SUV X5 Modelle Diesel. Ab CHF 106'800. - Die angegebenen Preise verstehen sich VOR ABZUG DES BMW SWISS BONUS. - Alle Preise inkl. 8.1% MwSt. ## MSRP monitor classification - BMW X1: official ",
+      "entries": [
+        {
+          "trim": "Benzin from price",
+          "powertrain": "ICE",
+          "oldSourceMsrp": null,
+          "currentSourceMsrp": 49900,
+          "currency": "CHF",
+          "evidenceRole": "current_model_overview_from_price",
+          "readiness": "baseline_only_no_movement",
+          "changePct": null,
+          "expired": false
+        }
+      ]
+    },
+    {
+      "code": "ch_bmw_x3_current",
+      "countryCode": "CH",
+      "countryLabel": "Switzerland",
+      "brand": "BMW",
+      "model": "X3",
+      "top30": {
+        "rank": 8,
+        "sales12m": 2839.0,
+        "sourceDraftStatus": "source_draft_found",
+        "currentPriceStatus": "missing_current_price",
+        "snapshotMovementStatus": "no_jato_snapshot_median_shift"
+      },
+      "sourceUrl": "https://www.bmw.ch/de/bmw-neuwagen.html",
+      "sourceLabel": "BMW Switzerland official model overview extract",
+      "sourceType": "official_model_overview_excerpt",
+      "localPath": "03_Scripts/diagnostics/artifacts/msrp_backfill/sweden_swiss_top30_suv/evidence/bmw_ch_models_web_extract_2026-07-02.md",
+      "sha256": "f36fcf9c30157e31d0e7a66b28b1a306707490f1b6f676c9b78a2f0fe32faa8e",
+      "documentDate": "2026-07-02",
+      "validFrom": "2026-07-02",
+      "validUntil": null,
+      "evidenceClass": "official_current_baseline",
+      "expectedTermHits": [
+        {
+          "term": "SUV X3 Modelle Benzin",
+          "matched": true
+        },
+        {
+          "term": "Ab CHF 69'600",
+          "matched": true
+        },
+        {
+          "term": "BMW SWISS BONUS",
+          "matched": true
+        }
+      ],
+      "allExpectedTermsMatched": true,
+      "downloadError": null,
+      "extractError": null,
+      "textSample": "# BMW Switzerland official model overview extracts - Captured: 2026-07-02 - Source: https://www.bmw.ch/de/bmw-neuwagen.html - Capture note: local deterministic HTML fetch timed out during audit, so this file preserves official BMW Switzerland model overview text exposed through searchable official-page extracts for review-only baseline evidence. ## Extracted official terms - BMW iX1 xDrive30. Vollelektrisch. Ab CHF 52'200. - SUV X1 Modelle Benzin. Ab CHF 49'900. - SUV X3 Modelle Benzin. Ab CHF 69'600. - SUV X5 Modelle Diesel. Ab CHF 106'800. - Die angegebenen Preise verstehen sich VOR ABZUG DES BMW SWISS BONUS. - Alle Preise inkl. 8.1% MwSt. ## MSRP monitor classification - BMW X1: official ",
+      "entries": [
+        {
+          "trim": "Benzin from price",
+          "powertrain": "ICE",
+          "oldSourceMsrp": null,
+          "currentSourceMsrp": 69600,
+          "currency": "CHF",
+          "evidenceRole": "current_model_overview_from_price",
+          "readiness": "baseline_only_no_movement",
+          "changePct": null,
+          "expired": false
+        }
+      ]
+    },
+    {
+      "code": "ch_bmw_x5_current",
+      "countryCode": "CH",
+      "countryLabel": "Switzerland",
+      "brand": "BMW",
+      "model": "X5",
+      "top30": {
+        "rank": 18,
+        "sales12m": 1962.0,
+        "sourceDraftStatus": "source_draft_found",
+        "currentPriceStatus": "missing_current_price",
+        "snapshotMovementStatus": "no_jato_snapshot_median_shift"
+      },
+      "sourceUrl": "https://www.bmw.ch/de/bmw-neuwagen.html",
+      "sourceLabel": "BMW Switzerland official model overview extract",
+      "sourceType": "official_model_overview_excerpt",
+      "localPath": "03_Scripts/diagnostics/artifacts/msrp_backfill/sweden_swiss_top30_suv/evidence/bmw_ch_models_web_extract_2026-07-02.md",
+      "sha256": "f36fcf9c30157e31d0e7a66b28b1a306707490f1b6f676c9b78a2f0fe32faa8e",
+      "documentDate": "2026-07-02",
+      "validFrom": "2026-07-02",
+      "validUntil": null,
+      "evidenceClass": "official_current_baseline",
+      "expectedTermHits": [
+        {
+          "term": "SUV X5 Modelle Diesel",
+          "matched": true
+        },
+        {
+          "term": "Ab CHF 106'800",
+          "matched": true
+        },
+        {
+          "term": "BMW SWISS BONUS",
+          "matched": true
+        }
+      ],
+      "allExpectedTermsMatched": true,
+      "downloadError": null,
+      "extractError": null,
+      "textSample": "# BMW Switzerland official model overview extracts - Captured: 2026-07-02 - Source: https://www.bmw.ch/de/bmw-neuwagen.html - Capture note: local deterministic HTML fetch timed out during audit, so this file preserves official BMW Switzerland model overview text exposed through searchable official-page extracts for review-only baseline evidence. ## Extracted official terms - BMW iX1 xDrive30. Vollelektrisch. Ab CHF 52'200. - SUV X1 Modelle Benzin. Ab CHF 49'900. - SUV X3 Modelle Benzin. Ab CHF 69'600. - SUV X5 Modelle Diesel. Ab CHF 106'800. - Die angegebenen Preise verstehen sich VOR ABZUG DES BMW SWISS BONUS. - Alle Preise inkl. 8.1% MwSt. ## MSRP monitor classification - BMW X1: official ",
+      "entries": [
+        {
+          "trim": "Diesel from price",
+          "powertrain": "ICE",
+          "oldSourceMsrp": null,
+          "currentSourceMsrp": 106800,
+          "currency": "CHF",
+          "evidenceRole": "current_model_overview_from_price",
+          "readiness": "baseline_only_no_movement",
+          "changePct": null,
+          "expired": false
+        }
+      ]
+    },
+    {
+      "code": "ch_bmw_ix1_current",
+      "countryCode": "CH",
+      "countryLabel": "Switzerland",
+      "brand": "BMW",
+      "model": "IX1",
+      "top30": {
+        "rank": 24,
+        "sales12m": 1566.0,
+        "sourceDraftStatus": "source_draft_found",
+        "currentPriceStatus": "missing_current_price",
+        "snapshotMovementStatus": "no_jato_snapshot_median_shift"
+      },
+      "sourceUrl": "https://www.bmw.ch/de/bmw-neuwagen.html",
+      "sourceLabel": "BMW Switzerland official model overview extract",
+      "sourceType": "official_model_overview_excerpt",
+      "localPath": "03_Scripts/diagnostics/artifacts/msrp_backfill/sweden_swiss_top30_suv/evidence/bmw_ch_models_web_extract_2026-07-02.md",
+      "sha256": "f36fcf9c30157e31d0e7a66b28b1a306707490f1b6f676c9b78a2f0fe32faa8e",
+      "documentDate": "2026-07-02",
+      "validFrom": "2026-07-02",
+      "validUntil": null,
+      "evidenceClass": "official_current_baseline",
+      "expectedTermHits": [
+        {
+          "term": "BMW iX1 xDrive30",
+          "matched": true
+        },
+        {
+          "term": "Ab CHF 52'200",
+          "matched": true
+        },
+        {
+          "term": "BMW SWISS BONUS",
+          "matched": true
+        }
+      ],
+      "allExpectedTermsMatched": true,
+      "downloadError": null,
+      "extractError": null,
+      "textSample": "# BMW Switzerland official model overview extracts - Captured: 2026-07-02 - Source: https://www.bmw.ch/de/bmw-neuwagen.html - Capture note: local deterministic HTML fetch timed out during audit, so this file preserves official BMW Switzerland model overview text exposed through searchable official-page extracts for review-only baseline evidence. ## Extracted official terms - BMW iX1 xDrive30. Vollelektrisch. Ab CHF 52'200. - SUV X1 Modelle Benzin. Ab CHF 49'900. - SUV X3 Modelle Benzin. Ab CHF 69'600. - SUV X5 Modelle Diesel. Ab CHF 106'800. - Die angegebenen Preise verstehen sich VOR ABZUG DES BMW SWISS BONUS. - Alle Preise inkl. 8.1% MwSt. ## MSRP monitor classification - BMW X1: official ",
+      "entries": [
+        {
+          "trim": "xDrive30 from price",
+          "powertrain": "BEV",
+          "oldSourceMsrp": null,
+          "currentSourceMsrp": 52200,
+          "currency": "CHF",
+          "evidenceRole": "current_model_overview_from_price",
+          "readiness": "baseline_only_no_movement",
+          "changePct": null,
+          "expired": false
+        }
+      ]
+    },
+    {
+      "code": "ch_mercedes_glc_current",
+      "countryCode": "CH",
+      "countryLabel": "Switzerland",
+      "brand": "MERCEDES",
+      "model": "GLC",
+      "top30": {
+        "rank": 5,
+        "sales12m": 3533.0,
+        "sourceDraftStatus": "source_draft_found",
+        "currentPriceStatus": "missing_current_price",
+        "snapshotMovementStatus": "no_jato_snapshot_median_shift"
+      },
+      "sourceUrl": "https://www.mercedes-benz.ch/de/passengercars/models/suv/glc/overview.html",
+      "sourceLabel": "Mercedes-Benz Switzerland GLC official model page",
+      "sourceType": "official_model_page_excerpt",
+      "localPath": "03_Scripts/diagnostics/artifacts/msrp_backfill/sweden_swiss_top30_suv/evidence/mercedes_ch_suv_official_page_extracts_2026-07-03.md",
+      "sha256": "2779d6397a13024354f062d81c30d7559e7b2ed549128a246a471445e281660e",
+      "documentDate": "2026-07-03",
+      "validFrom": "2026-07-03",
+      "validUntil": null,
+      "evidenceClass": "official_current_baseline",
+      "expectedTermHits": [
+        {
+          "term": "GLC",
+          "matched": true
+        },
+        {
+          "term": "UVP CHF 65'900.-",
+          "matched": true
+        },
+        {
+          "term": "GLC 200 d 4MATIC",
+          "matched": true
+        }
+      ],
+      "allExpectedTermsMatched": true,
+      "downloadError": null,
+      "extractError": null,
+      "textSample": "# Mercedes-Benz Switzerland SUV official page extracts - Captured: 2026-07-03 - Capture method: Playwright browser render of Mercedes-Benz Switzerland official model pages. Direct deterministic curl/urllib fetch timed out or returned protocol errors, but browser-rendered body text exposed the official UVP values. - Evidence lane: official current baseline - Rule: current baselines only; not 2026 price-drop conclusions without prior same-trim official baselines. ## GLC - Source: https://www.mercedes-benz.ch/de/passengercars/models/suv/glc/overview.html - Page title: GLC | Preise & Spezifikationen | Mercedes-Benz - Extracted official terms: - GLC - UVP CHF 65'900.- - GLC 200 d 4MATIC - MSRP mo",
+      "entries": [
+        {
+          "trim": "GLC 200 d 4MATIC from price",
+          "powertrain": "MHEV diesel",
+          "oldSourceMsrp": null,
+          "currentSourceMsrp": 65900,
+          "currency": "CHF",
+          "evidenceRole": "current_model_page_uvp",
+          "readiness": "baseline_only_no_movement",
+          "changePct": null,
+          "expired": false
+        }
+      ]
+    },
+    {
+      "code": "ch_mercedes_gla_current",
+      "countryCode": "CH",
+      "countryLabel": "Switzerland",
+      "brand": "MERCEDES",
+      "model": "GLA",
+      "top30": {
+        "rank": 15,
+        "sales12m": 2054.0,
+        "sourceDraftStatus": "source_draft_found",
+        "currentPriceStatus": "missing_current_price",
+        "snapshotMovementStatus": "no_jato_snapshot_median_shift"
+      },
+      "sourceUrl": "https://www.mercedes-benz.ch/de/passengercars/models/suv/gla/overview.html",
+      "sourceLabel": "Mercedes-Benz Switzerland GLA official model page",
+      "sourceType": "official_model_page_excerpt",
+      "localPath": "03_Scripts/diagnostics/artifacts/msrp_backfill/sweden_swiss_top30_suv/evidence/mercedes_ch_suv_official_page_extracts_2026-07-03.md",
+      "sha256": "2779d6397a13024354f062d81c30d7559e7b2ed549128a246a471445e281660e",
+      "documentDate": "2026-07-03",
+      "validFrom": "2026-07-03",
+      "validUntil": null,
+      "evidenceClass": "official_current_baseline",
+      "expectedTermHits": [
+        {
+          "term": "GLA",
+          "matched": true
+        },
+        {
+          "term": "UVP CHF 50'900.-",
+          "matched": true
+        },
+        {
+          "term": "GLA 250 e with EQ Hybrid Technology",
+          "matched": true
+        }
+      ],
+      "allExpectedTermsMatched": true,
+      "downloadError": null,
+      "extractError": null,
+      "textSample": "# Mercedes-Benz Switzerland SUV official page extracts - Captured: 2026-07-03 - Capture method: Playwright browser render of Mercedes-Benz Switzerland official model pages. Direct deterministic curl/urllib fetch timed out or returned protocol errors, but browser-rendered body text exposed the official UVP values. - Evidence lane: official current baseline - Rule: current baselines only; not 2026 price-drop conclusions without prior same-trim official baselines. ## GLC - Source: https://www.mercedes-benz.ch/de/passengercars/models/suv/glc/overview.html - Page title: GLC | Preise & Spezifikationen | Mercedes-Benz - Extracted official terms: - GLC - UVP CHF 65'900.- - GLC 200 d 4MATIC - MSRP mo",
+      "entries": [
+        {
+          "trim": "GLA 250 e EQ Star from price",
+          "powertrain": "PHEV",
+          "oldSourceMsrp": null,
+          "currentSourceMsrp": 50900,
+          "currency": "CHF",
+          "evidenceRole": "current_model_page_uvp",
+          "readiness": "baseline_only_no_movement",
+          "changePct": null,
+          "expired": false
+        }
+      ]
+    },
+    {
+      "code": "ch_mercedes_gle_current",
+      "countryCode": "CH",
+      "countryLabel": "Switzerland",
+      "brand": "MERCEDES",
+      "model": "GLE",
+      "top30": {
+        "rank": 26,
+        "sales12m": 1482.0,
+        "sourceDraftStatus": "source_draft_found",
+        "currentPriceStatus": "missing_current_price",
+        "snapshotMovementStatus": "no_jato_snapshot_median_shift"
+      },
+      "sourceUrl": "https://www.mercedes-benz.ch/de/passengercars/models/suv/gle/overview.html",
+      "sourceLabel": "Mercedes-Benz Switzerland GLE official model page",
+      "sourceType": "official_model_page_excerpt",
+      "localPath": "03_Scripts/diagnostics/artifacts/msrp_backfill/sweden_swiss_top30_suv/evidence/mercedes_ch_suv_official_page_extracts_2026-07-03.md",
+      "sha256": "2779d6397a13024354f062d81c30d7559e7b2ed549128a246a471445e281660e",
+      "documentDate": "2026-07-03",
+      "validFrom": "2026-07-03",
+      "validUntil": null,
+      "evidenceClass": "official_current_baseline",
+      "expectedTermHits": [
+        {
+          "term": "GLE",
+          "matched": true
+        },
+        {
+          "term": "UVP CHF 108'200.-",
+          "matched": true
+        },
+        {
+          "term": "GLE 350 d 4MATIC",
+          "matched": true
+        }
+      ],
+      "allExpectedTermsMatched": true,
+      "downloadError": null,
+      "extractError": null,
+      "textSample": "# Mercedes-Benz Switzerland SUV official page extracts - Captured: 2026-07-03 - Capture method: Playwright browser render of Mercedes-Benz Switzerland official model pages. Direct deterministic curl/urllib fetch timed out or returned protocol errors, but browser-rendered body text exposed the official UVP values. - Evidence lane: official current baseline - Rule: current baselines only; not 2026 price-drop conclusions without prior same-trim official baselines. ## GLC - Source: https://www.mercedes-benz.ch/de/passengercars/models/suv/glc/overview.html - Page title: GLC | Preise & Spezifikationen | Mercedes-Benz - Extracted official terms: - GLC - UVP CHF 65'900.- - GLC 200 d 4MATIC - MSRP mo",
+      "entries": [
+        {
+          "trim": "GLE 350 d 4MATIC from price",
+          "powertrain": "MHEV diesel",
+          "oldSourceMsrp": null,
+          "currentSourceMsrp": 108200,
+          "currency": "CHF",
+          "evidenceRole": "current_model_page_uvp",
+          "readiness": "baseline_only_no_movement",
+          "changePct": null,
+          "expired": false
+        }
+      ]
+    },
+    {
+      "code": "ch_hyundai_tucson_promotion",
+      "countryCode": "CH",
+      "countryLabel": "Switzerland",
+      "brand": "HYUNDAI",
+      "model": "TUCSON",
+      "top30": {
+        "rank": 16,
+        "sales12m": 2005.0,
+        "sourceDraftStatus": "source_draft_found",
+        "currentPriceStatus": "missing_current_price",
+        "snapshotMovementStatus": "no_jato_snapshot_median_shift"
+      },
+      "sourceUrl": "https://hyundai.ch/de/promotionen/",
+      "sourceLabel": "Hyundai Switzerland official promotions page",
+      "sourceType": "official_offer_page",
+      "localPath": "03_Scripts/diagnostics/artifacts/msrp_backfill/sweden_swiss_top30_suv/evidence/hyundai_ch_promotions_2026-07-02.html",
+      "sha256": "b579e6a769bf3087aea5cb0ed7067b52ad614f7772c7a662ddc3e640b7e812c4",
+      "documentDate": "2026-07-02",
+      "validFrom": "2026-07-02",
+      "validUntil": null,
+      "evidenceClass": "official_offer_signal",
+      "expectedTermHits": [
+        {
+          "term": "TUCSON Black Line",
+          "matched": true
+        },
+        {
+          "term": "CHF 39'750",
+          "matched": true
+        },
+        {
+          "term": "Preislisten",
+          "matched": true
+        }
+      ],
+      "allExpectedTermsMatched": true,
+      "downloadError": null,
+      "extractError": null,
+      "textSample": "Aktuelle Angebote | Hyundai Switzerland window.config = window.config || {}; window.DY = window.DY || {}; window.pageLoadData = window.pageLoadData || {}; function create_UUID() { var dt = new Date().getTime(); var uuid = 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, function (c) { var r = (dt + Math.random() * 16) % 16 | 0; dt = Math.floor(dt / 16); return (c == 'x' ? r : (r & 0x3 | 0x8)).toString(16); }); return uuid; } if (typeof (Storage) !== \"undefined\") { if (!sessionStorage.getItem(\"gtmSession\")) { sessionStorage.setItem(\"gtmSession\", create_UUID()); } window.gtmSession = sessionStorage.getItem(\"gtmSession\"); } else { console.log(\"Browser does not support session storage\"); ",
+      "entries": [
+        {
+          "trim": "Black Line",
+          "powertrain": "UNKNOWN",
+          "oldSourceMsrp": null,
+          "currentSourceMsrp": 39750,
+          "currency": "CHF",
+          "evidenceRole": "current_offer_page_from_price",
+          "readiness": "offer_signal_only",
+          "changePct": null,
+          "expired": false
+        }
+      ]
+    },
+    {
+      "code": "ch_hyundai_kona_promotion",
+      "countryCode": "CH",
+      "countryLabel": "Switzerland",
+      "brand": "HYUNDAI",
+      "model": "KONA",
+      "top30": {
+        "rank": 27,
+        "sales12m": 1397.0,
+        "sourceDraftStatus": "source_draft_found",
+        "currentPriceStatus": "missing_current_price",
+        "snapshotMovementStatus": "no_jato_snapshot_median_shift"
+      },
+      "sourceUrl": "https://hyundai.ch/de/promotionen/",
+      "sourceLabel": "Hyundai Switzerland official promotions page",
+      "sourceType": "official_offer_page",
+      "localPath": "03_Scripts/diagnostics/artifacts/msrp_backfill/sweden_swiss_top30_suv/evidence/hyundai_ch_promotions_2026-07-02.html",
+      "sha256": "b579e6a769bf3087aea5cb0ed7067b52ad614f7772c7a662ddc3e640b7e812c4",
+      "documentDate": "2026-07-02",
+      "validFrom": "2026-07-02",
+      "validUntil": null,
+      "evidenceClass": "official_offer_signal",
+      "expectedTermHits": [
+        {
+          "term": "KONA Ab CHF 42'850",
+          "matched": true
+        },
+        {
+          "term": "Lagerprämie",
+          "matched": true
+        },
+        {
+          "term": "KONA Electric Ab CHF 46'800",
+          "matched": true
+        }
+      ],
+      "allExpectedTermsMatched": true,
+      "downloadError": null,
+      "extractError": null,
+      "textSample": "Aktuelle Angebote | Hyundai Switzerland window.config = window.config || {}; window.DY = window.DY || {}; window.pageLoadData = window.pageLoadData || {}; function create_UUID() { var dt = new Date().getTime(); var uuid = 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, function (c) { var r = (dt + Math.random() * 16) % 16 | 0; dt = Math.floor(dt / 16); return (c == 'x' ? r : (r & 0x3 | 0x8)).toString(16); }); return uuid; } if (typeof (Storage) !== \"undefined\") { if (!sessionStorage.getItem(\"gtmSession\")) { sessionStorage.setItem(\"gtmSession\", create_UUID()); } window.gtmSession = sessionStorage.getItem(\"gtmSession\"); } else { console.log(\"Browser does not support session storage\"); ",
+      "entries": [
+        {
+          "trim": "KONA offer from price",
+          "powertrain": "UNKNOWN",
+          "oldSourceMsrp": null,
+          "currentSourceMsrp": 42850,
+          "currency": "CHF",
+          "evidenceRole": "offer_price_with_inventory_bonus",
+          "readiness": "offer_signal_only",
+          "maximumSavingsLocal": 5500,
+          "changePct": null,
+          "expired": false
+        },
+        {
+          "trim": "KONA Electric offer from price",
+          "powertrain": "BEV",
+          "oldSourceMsrp": null,
+          "currentSourceMsrp": 46800,
+          "currency": "CHF",
+          "evidenceRole": "offer_price_with_inventory_bonus",
+          "readiness": "offer_signal_only",
+          "maximumSavingsLocal": 5000,
+          "changePct": null,
+          "expired": false
+        }
+      ]
+    },
+    {
+      "code": "ch_audi_q3_current",
+      "countryCode": "CH",
+      "countryLabel": "Switzerland",
+      "brand": "AUDI",
+      "model": "Q3",
+      "top30": {
+        "rank": 25,
+        "sales12m": 1513.0,
+        "sourceDraftStatus": "source_draft_found",
+        "currentPriceStatus": "missing_current_price",
+        "snapshotMovementStatus": "no_jato_snapshot_median_shift"
+      },
+      "sourceUrl": "https://emea-dam.audi.com/adobe/assets/urn%3Aaaid%3Aaem%3A973adfb6-d610-470b-a6f5-400363dbe581/original/as/Audi_Q3_Preisliste_FR.pdf",
+      "sourceLabel": "Audi Switzerland Q3 official price list PDF",
+      "sourceType": "official_price_list_pdf",
+      "localPath": "03_Scripts/diagnostics/artifacts/msrp_backfill/sweden_swiss_top30_suv/evidence/audi_ch_q3_preisliste_fr_2026.pdf",
+      "sha256": "5a61487d64113fc40585a815c59245acd32c0aaa3deb568e2f3728c530ef41b1",
+      "documentDate": "2026-03-01",
+      "validFrom": "2026-03-01",
+      "validUntil": null,
+      "evidenceClass": "official_current_baseline",
+      "expectedTermHits": [
+        {
+          "term": "Audi Q3 SUV",
+          "matched": true
+        },
+        {
+          "term": "Gültig ab 01.03.2026",
+          "matched": true
+        },
+        {
+          "term": "49 200",
+          "matched": true
+        }
+      ],
+      "allExpectedTermsMatched": true,
+      "downloadError": null,
+      "extractError": null,
+      "textSample": "Preisliste Gültig ab 01.03.2026 Modelljahr 2026 Q3 Audi Q3 SUV Audi Q3 SUV e-hybrid Audi Q3 Sportback Audi Q3 Sportback e-hybrid 2 Preisliste Q3 Audi Q3 SUV / Q3 SUV e-hybrid Audi Q3 Sportback / Q3 Sportback e-hybrid Preise 4 Ausstattungs- und Designpakete 7 Lackierungen 13 Räder und Reifen 14 Räder Sonstiges 14 Licht 15 Spiegel 16 Dachsysteme/Verglasung 16 Weitere Aussenausstattungen 16 Sitze/Sitzkomfort 16 Dekorelemente 21 Dachhimmel 21 Lenkräder 21 Klimatisierung 22 Komfort und Funktion 22 Weitere Innenausstattungen 23 Navigation, Medien und Soundsysteme 24 Telefon und Kommunikation 24 Assistenzsysteme 24 Fahrwerke/Bremsen 25 Technik/Sicherheit 26 Ladesysteme e-hybrid 26 Audi Anschlussgar",
+      "entries": [
+        {
+          "trim": "TFSI 110 kW",
+          "powertrain": "ICE",
+          "oldSourceMsrp": null,
+          "currentSourceMsrp": 49200,
+          "currency": "CHF",
+          "evidenceRole": "current_price_list_baseline",
+          "readiness": "baseline_only_no_movement",
+          "changePct": null,
+          "expired": false
+        }
+      ]
+    },
+    {
+      "code": "ch_audi_q3_sportback_current",
+      "countryCode": "CH",
+      "countryLabel": "Switzerland",
+      "brand": "AUDI",
+      "model": "Q3 SPORTBACK",
+      "top30": {
+        "rank": 17,
+        "sales12m": 1962.0,
+        "sourceDraftStatus": "source_draft_found",
+        "currentPriceStatus": "missing_current_price",
+        "snapshotMovementStatus": "no_jato_snapshot_median_shift"
+      },
+      "sourceUrl": "https://emea-dam.audi.com/adobe/assets/urn%3Aaaid%3Aaem%3A973adfb6-d610-470b-a6f5-400363dbe581/original/as/Audi_Q3_Preisliste_FR.pdf",
+      "sourceLabel": "Audi Switzerland Q3 Sportback official price list PDF",
+      "sourceType": "official_price_list_pdf",
+      "localPath": "03_Scripts/diagnostics/artifacts/msrp_backfill/sweden_swiss_top30_suv/evidence/audi_ch_q3_preisliste_fr_2026.pdf",
+      "sha256": "5a61487d64113fc40585a815c59245acd32c0aaa3deb568e2f3728c530ef41b1",
+      "documentDate": "2026-03-01",
+      "validFrom": "2026-03-01",
+      "validUntil": null,
+      "evidenceClass": "official_current_baseline",
+      "expectedTermHits": [
+        {
+          "term": "Audi Q3 Sportback",
+          "matched": true
+        },
+        {
+          "term": "Gültig ab 01.03.2026",
+          "matched": true
+        },
+        {
+          "term": "50 650",
+          "matched": false
+        }
+      ],
+      "allExpectedTermsMatched": false,
+      "downloadError": null,
+      "extractError": null,
+      "textSample": "Preisliste Gültig ab 01.03.2026 Modelljahr 2026 Q3 Audi Q3 SUV Audi Q3 SUV e-hybrid Audi Q3 Sportback Audi Q3 Sportback e-hybrid 2 Preisliste Q3 Audi Q3 SUV / Q3 SUV e-hybrid Audi Q3 Sportback / Q3 Sportback e-hybrid Preise 4 Ausstattungs- und Designpakete 7 Lackierungen 13 Räder und Reifen 14 Räder Sonstiges 14 Licht 15 Spiegel 16 Dachsysteme/Verglasung 16 Weitere Aussenausstattungen 16 Sitze/Sitzkomfort 16 Dekorelemente 21 Dachhimmel 21 Lenkräder 21 Klimatisierung 22 Komfort und Funktion 22 Weitere Innenausstattungen 23 Navigation, Medien und Soundsysteme 24 Telefon und Kommunikation 24 Assistenzsysteme 24 Fahrwerke/Bremsen 25 Technik/Sicherheit 26 Ladesysteme e-hybrid 26 Audi Anschlussgar",
+      "entries": [
+        {
+          "trim": "TFSI 110 kW",
+          "powertrain": "ICE",
+          "oldSourceMsrp": null,
+          "currentSourceMsrp": 50650,
+          "currency": "CHF",
+          "evidenceRole": "current_price_list_baseline",
+          "readiness": "baseline_only_no_movement",
+          "changePct": null,
+          "expired": false
+        }
+      ]
+    },
+    {
+      "code": "ch_audi_q5_current",
+      "countryCode": "CH",
+      "countryLabel": "Switzerland",
+      "brand": "AUDI",
+      "model": "Q5",
+      "top30": {
+        "rank": 22,
+        "sales12m": 1638.0,
+        "sourceDraftStatus": "source_draft_found",
+        "currentPriceStatus": "missing_current_price",
+        "snapshotMovementStatus": "no_jato_snapshot_median_shift"
+      },
+      "sourceUrl": "https://emea-dam.audi.com/adobe/assets/urn%3Aaaid%3Aaem%3A215d39eb-b541-4734-bdef-5c5e23b1bd11/original/as/Audi_Q5_SQ5_Preisliste_MJ26_ab_01.01.26_DE.pdf",
+      "sourceLabel": "Audi Switzerland Q5 official price list PDF",
+      "sourceType": "official_price_list_pdf",
+      "localPath": "03_Scripts/diagnostics/artifacts/msrp_backfill/sweden_swiss_top30_suv/evidence/audi_ch_q5_sq5_preisliste_mj26_2026-01-01.pdf",
+      "sha256": "c37bd53a9d11364415644e48ded02580db938f9a6d27f943421c486379c8e1c0",
+      "documentDate": "2026-01-01",
+      "validFrom": "2026-01-01",
+      "validUntil": null,
+      "evidenceClass": "official_current_baseline",
+      "expectedTermHits": [
+        {
+          "term": "Audi Q5 SUV",
+          "matched": true
+        },
+        {
+          "term": "Gültig ab 01.01.2026",
+          "matched": true
+        },
+        {
+          "term": "68 800",
+          "matched": true
+        }
+      ],
+      "allExpectedTermsMatched": true,
+      "downloadError": null,
+      "extractError": null,
+      "textSample": "Preisliste Gültig ab 01.01.2026 Modelljahr 2026 Audi Q5 SUV Audi SQ5 SUV Q 5 Audi Q5 SUV e-hybrid Audi Q5 Sportback Audi SQ5 Sportback Audi Q5 Sportback e-hybrid 2 Preisliste Q5 Audi Q5 SUV/SQ5 SUV/Q5 SUV e-hybrid Audi Q5 Sportback/SQ5 Sportback/Q5 Sportback e-hybrid Preise 4 Ausstattungs- und Designpakete 8 Lackierungen 14 Räder 15 Räder Sonstiges 17 Licht 17 Spiegel 17 Dachsysteme 18 Verglasung 18 Weitere Aussenausstattungen 18 Sitze/Sitzkomfort 19 Weitere Interieurumfänge 24 Lenkräder 25 Dekoreinlagen 25 Dachhimmel 26 Klimatisierung 26 Komfort und Funktion 27 Weitere Innenausstattungen 27 Navigation, Medien und Soundsysteme 28 Telefon und Kommunikation 29 Assistenzsysteme 29 Fahrwerk/Brem",
+      "entries": [
+        {
+          "trim": "TFSI quattro 150 kW",
+          "powertrain": "ICE",
+          "oldSourceMsrp": null,
+          "currentSourceMsrp": 68800,
+          "currency": "CHF",
+          "evidenceRole": "current_price_list_baseline",
+          "readiness": "baseline_only_no_movement",
+          "changePct": null,
+          "expired": false
+        }
+      ]
+    },
+    {
+      "code": "ch_audi_q4_etron_current",
+      "countryCode": "CH",
+      "countryLabel": "Switzerland",
+      "brand": "AUDI",
+      "model": "Q4 E-TRON",
+      "top30": {
+        "rank": 23,
+        "sales12m": 1577.0,
+        "sourceDraftStatus": "source_draft_found",
+        "currentPriceStatus": "missing_current_price",
+        "snapshotMovementStatus": "no_jato_snapshot_median_shift"
+      },
+      "sourceUrl": "https://media.audi.com/is/content/audi/country/ch/assets/preislisten/mj26/Audi_Q4_e-tron_inkl_Sportback_Preisliste_MJ26_12.05.25_DE.pdf",
+      "sourceLabel": "Audi Switzerland Q4 e-tron official price list PDF",
+      "sourceType": "official_price_list_pdf",
+      "localPath": "03_Scripts/diagnostics/artifacts/msrp_backfill/sweden_swiss_top30_suv/evidence/audi_ch_q4_etron_preisliste_mj26_2025-05-12.pdf",
+      "sha256": "bc5e213396a2a372f460c5824aa44feec7d7d9c28336cae84ccd68605eee800f",
+      "documentDate": "2025-05-12",
+      "validFrom": "2025-05-12",
+      "validUntil": null,
+      "evidenceClass": "official_current_baseline",
+      "expectedTermHits": [
+        {
+          "term": "Q4 e-tron",
+          "matched": true
+        },
+        {
+          "term": "Gültig ab 12.05.2025",
+          "matched": true
+        },
+        {
+          "term": "56 900",
+          "matched": true
+        }
+      ],
+      "allExpectedTermsMatched": true,
+      "downloadError": null,
+      "extractError": null,
+      "textSample": "Preisliste Gültig ab 12.05.2025 Modelljahr 2026 Q4 e-tron Q4 e-tron Q4 Sportback e-tron 2 Preisliste Q4 e-tron/Q4 Sportback e-tron Q4 e-tron/Q4 Sportback e-tron Preise Q4 e-tron/Q4 Sportback e-tron 4 Serien- und Sonderausstattungen Lackierungen 6 Ausstattungs- und Designpakete 7 Laden 10 Komfort 11 Infotainment 12 Fahrerassistenz 12 Klimatisierung 13 Fahrwerk 14 Funktion 15 Räder/Reifen 15 Scheinwerfer 17 Exterieur Design 17 Dachsysteme/Verglasung 18 Sitze 19 Lenkräder 24 Interieur Design 24 Licht 25 Audi Anschlussgarantie 25 Effizienzklassen, CO2- und Verbrauchsangaben 26 Garantie- und Serviceleistungen 28 3 Audi Q4 e-tron Modell Batterie Leistung Drehmoment Q4 e-tron in kWh maximal in kW m",
+      "entries": [
+        {
+          "trim": "45 Heck",
+          "powertrain": "BEV",
+          "oldSourceMsrp": null,
+          "currentSourceMsrp": 56900,
+          "currency": "CHF",
+          "evidenceRole": "current_price_list_baseline",
+          "readiness": "baseline_only_no_movement",
+          "changePct": null,
+          "expired": false
+        }
+      ]
+    },
+    {
+      "code": "ch_toyota_yaris_cross_current",
+      "countryCode": "CH",
+      "countryLabel": "Switzerland",
+      "brand": "TOYOTA",
+      "model": "YARIS CROSS",
+      "top30": {
+        "rank": 20,
+        "sales12m": 1911.0,
+        "sourceDraftStatus": "source_draft_found",
+        "currentPriceStatus": "missing_current_price",
+        "snapshotMovementStatus": "no_jato_snapshot_median_shift"
+      },
+      "sourceUrl": "https://de.toyota.ch/content/dam/toyota/nmsc/switzerland/pdf_preislisten/PL_Yaris_Cross_de_01_01_26.pdf",
+      "sourceLabel": "Toyota Switzerland Yaris Cross official price list PDF",
+      "sourceType": "official_price_list_pdf",
+      "localPath": "03_Scripts/diagnostics/artifacts/msrp_backfill/sweden_swiss_top30_suv/evidence/toyota_ch_yaris_cross_preisliste_2026-01-01.pdf",
+      "sha256": "594a19678f705587bfae07d1d1d513e0127e91b8bb9cb3f6eb427c52482e8ec4",
+      "documentDate": "2026-01-01",
+      "validFrom": "2026-01-01",
+      "validUntil": null,
+      "evidenceClass": "official_current_baseline",
+      "expectedTermHits": [
+        {
+          "term": "Yaris Cross",
+          "matched": true
+        },
+        {
+          "term": "Gültig ab 01.01.2026",
+          "matched": true
+        },
+        {
+          "term": "30'900",
+          "matched": true
+        }
+      ],
+      "allExpectedTermsMatched": true,
+      "downloadError": null,
+      "extractError": null,
+      "textSample": "YARIS CROSS PREISLISTE Yaris Cross Preise und Fakten. Gültig ab 01.01.2026 Dreh- Verbrauch Energie- Getriebe Antrieb Motor Hybrid Garantie Leistung moment kombiniert Kategorie CO2* CO2** Preis in CHF kW/PS Nm l/100 km g/km g/km inkl. MwSt. HYBRID 116 PS 1,5l Comfort e-Multidrive Frontantrieb Hybrid ● 85/116 – 4.5 C 102 21 30'900.– 1,5l Trend e-Multidrive Frontantrieb Hybrid ● 85/116 – 4.5 C 103 21 33'500.– HYBRID 130 PS 1,5l Comfort e-Multidrive Allradantrieb Hybrid ● 96/130 4.7 C 107 22 33'700.– 1,5l Trend e-Multidrive Allradantrieb Hybrid ● 96/130 4.7 C 108 22 36'300.– 1,5l GR SPORT e-Multidrive Frontantrieb Hybrid ● 96/130 – 4.8 C 110 22 37'500.– 1,5l Premium e-Multidrive Allradantrieb Hy",
+      "entries": [
+        {
+          "trim": "1.5l Comfort e-Multidrive",
+          "powertrain": "HEV",
+          "oldSourceMsrp": null,
+          "currentSourceMsrp": 30900,
+          "currency": "CHF",
+          "evidenceRole": "current_price_list_baseline",
+          "readiness": "baseline_only_no_movement",
+          "changePct": null,
+          "expired": false
+        }
+      ]
+    },
+    {
+      "code": "ch_skoda_kodiaq_dynamic",
+      "countryCode": "CH",
+      "countryLabel": "Switzerland",
+      "brand": "SKODA",
+      "model": "KODIAQ",
+      "top30": {
+        "rank": 3,
+        "sales12m": 3857.0,
+        "sourceDraftStatus": "source_draft_found",
+        "currentPriceStatus": "missing_current_price",
+        "snapshotMovementStatus": "no_jato_snapshot_median_shift"
+      },
+      "sourceUrl": "https://pageflip.ch/skoda/de/preislisten/d_pl_newkodiaq/d_pl_newkodiaq.pdf",
+      "sourceLabel": "Skoda Switzerland Kodiaq price list PDF",
+      "sourceType": "official_price_list_pdf",
+      "localPath": "03_Scripts/diagnostics/artifacts/msrp_backfill/sweden_swiss_top30_suv/evidence/skoda_ch_kodiaq_preisliste_2026-07.pdf",
+      "sha256": "d56ddc38c9de1c96cd8bcd0f957ececa46ec35cb0105cde2bb0840c42c1001a2",
+      "documentDate": "2026-07-01",
+      "validFrom": "2026-07-01",
+      "validUntil": "2026-09-30",
+      "evidenceClass": "official_offer_boundary",
+      "expectedTermHits": [
+        {
+          "term": "Kodiaq",
+          "matched": true
+        },
+        {
+          "term": "gültig ab 01.07.2026",
+          "matched": true
+        },
+        {
+          "term": "Sparvorteil",
+          "matched": true
+        },
+        {
+          "term": "Endpreis 52’570",
+          "matched": true
+        }
+      ],
+      "allExpectedTermsMatched": true,
+      "downloadError": null,
+      "extractError": null,
+      "textSample": "Kodiaq Preisliste Jetzt konfigurieren gültig ab 01.07.2026 1 Preise Kodiaq Modelljahr 2026 Selection Unverbindliche Modellschlüssel Motor Leistung Getriebe Preisempfehlungen* PS7DDDSE 1.5 TSI mHEV 110 kW / 150 PS 7-Gang DSG (Automatikgetriebe)2) CHF 48’490 PS7DMZSE 2.0 TSI 4x4 150 kW / 204 PS 7-Gang DSG (Automatikgetriebe)2) CHF 54’290 PS7DYCSE 1.5 TSI PHEV3) 150 kW / 204 PS 6-Gang DSG (Automatikgetriebe)2) CHF 55’090 PS7D6ZSE 2.0 TDI SCR1) 4x4 142 kW / 193 PS 7-Gang DSG (Automatikgetriebe)2) CHF 57’740 Sportline Unverbindliche Modellschlüssel Motor Leistung Getriebe Preisempfehlungen* PS7RMZSL 2.0 TSI 4x4 150 kW / 204 PS 7-Gang DSG (Automatikgetriebe)2) CHF 60’790 PS7RYCSL 1.5 TSI PHEV3) 15",
+      "entries": [
+        {
+          "trim": "Dynamic 2.0 TSI 4x4",
+          "powertrain": "ICE",
+          "oldSourceMsrp": 60770,
+          "currentSourceMsrp": 52570,
+          "currency": "CHF",
+          "evidenceRole": "list_price_vs_dynamic_end_price",
+          "readiness": "demo_offer_boundary",
+          "changePct": -13.49,
+          "expired": false
+        },
+        {
+          "trim": "Dynamic 1.5 TSI PHEV",
+          "powertrain": "PHEV",
+          "oldSourceMsrp": 61350,
+          "currentSourceMsrp": 48650,
+          "currency": "CHF",
+          "evidenceRole": "list_price_vs_dynamic_end_price",
+          "readiness": "demo_offer_boundary",
+          "changePct": -20.7,
+          "expired": false
+        }
+      ]
+    },
+    {
+      "code": "ch_skoda_karoq_dynamic",
+      "countryCode": "CH",
+      "countryLabel": "Switzerland",
+      "brand": "SKODA",
+      "model": "KAROQ",
+      "top30": {
+        "rank": 7,
+        "sales12m": 3390.0,
+        "sourceDraftStatus": "source_draft_found",
+        "currentPriceStatus": "missing_current_price",
+        "snapshotMovementStatus": "no_jato_snapshot_median_shift"
+      },
+      "sourceUrl": "https://pageflip.ch/skoda/de/preislisten/d_pl_karoq/d_pl_karoq.pdf",
+      "sourceLabel": "Skoda Switzerland Karoq price list PDF",
+      "sourceType": "official_price_list_pdf",
+      "localPath": "03_Scripts/diagnostics/artifacts/msrp_backfill/sweden_swiss_top30_suv/evidence/skoda_ch_karoq_preisliste_2026-05.pdf",
+      "sha256": "6475d7cb88e524cc4a239178fbf20606b09484034d6402de9b364de2d7bf4295",
+      "documentDate": "2026-05-08",
+      "validFrom": "2026-04-01",
+      "validUntil": "2026-06-30",
+      "evidenceClass": "official_offer_boundary_expired",
+      "expectedTermHits": [
+        {
+          "term": "Karoq",
+          "matched": true
+        },
+        {
+          "term": "gültig ab 01.04.2026",
+          "matched": true
+        },
+        {
+          "term": "Sparvorteil",
+          "matched": true
+        },
+        {
+          "term": "Endpreis 39’380",
+          "matched": true
+        }
+      ],
+      "allExpectedTermsMatched": true,
+      "downloadError": null,
+      "extractError": null,
+      "textSample": "Karoq Preisliste Jetzt konfigurieren gültig ab 01.04.2026 Preise Karoq Modelljahr 2027 Selection Unverbindliche Modellschlüssel Motor Leistung Getriebe Preisempfehlungen* NU7DMDSE 1.5 TSI, Frontantrieb 110 kW / 150 PS 7-Gang DSG CHF 39’730 NU7D7ZSE 2.0 TDI, 4x4 110 kW / 150 PS 7-Gang DSG CHF 45’410 Sportline Unverbindliche Modellschlüssel Motor Leistung Getriebe Preisempfehlungen* NU7RMDSL 1.5 TSI, Frontantrieb 110 kW / 150 PS 7-Gang DSG CHF 45’380 NU7RQZSL 2.0 TSI, 4x4 140 kW / 190 PS 7-Gang DSG CHF 49’930 NU7R7ZSL 2.0 TDI, 4x4 110 kW / 150 PS 7-Gang DSG CHF 51’060 Sondermodell Dynamic Unverbindliche Modellschlüssel Motor Leistung Getriebe Preisempfehlungen* NU7DMDDY 1.5 TSI, Frontantrieb 1",
+      "entries": [
+        {
+          "trim": "Dynamic 1.5 TSI",
+          "powertrain": "ICE",
+          "oldSourceMsrp": 48930,
+          "currentSourceMsrp": 39380,
+          "currency": "CHF",
+          "evidenceRole": "list_price_vs_dynamic_end_price",
+          "readiness": "expired_demo_offer_boundary",
+          "changePct": -19.52,
+          "expired": true
+        },
+        {
+          "trim": "Dynamic 2.0 TDI 4x4",
+          "powertrain": "ICE",
+          "oldSourceMsrp": 54610,
+          "currentSourceMsrp": 45060,
+          "currency": "CHF",
+          "evidenceRole": "list_price_vs_dynamic_end_price",
+          "readiness": "expired_demo_offer_boundary",
+          "changePct": -17.49,
+          "expired": true
+        }
+      ]
+    },
+    {
+      "code": "ch_skoda_elroq_current",
+      "countryCode": "CH",
+      "countryLabel": "Switzerland",
+      "brand": "SKODA",
+      "model": "ELROQ",
+      "top30": {
+        "rank": 4,
+        "sales12m": 3646.0,
+        "sourceDraftStatus": "source_draft_found",
+        "currentPriceStatus": "missing_current_price",
+        "snapshotMovementStatus": "no_jato_snapshot_median_shift"
+      },
+      "sourceUrl": "https://pageflip.ch/skoda/de/preislisten/d_pl_elroq/d_pl_elroq.pdf",
+      "sourceLabel": "Skoda Switzerland Elroq price list PDF",
+      "sourceType": "official_price_list_pdf",
+      "localPath": "03_Scripts/diagnostics/artifacts/msrp_backfill/sweden_swiss_top30_suv/evidence/skoda_ch_elroq_preisliste_2026-05.pdf",
+      "sha256": "ba577dca00ea5a68664c14da23f4924b96db62f8c12b5ce1a5c2205e6cbd950a",
+      "documentDate": "2026-05-04",
+      "validFrom": "2026-05-01",
+      "validUntil": null,
+      "evidenceClass": "official_current_baseline",
+      "expectedTermHits": [
+        {
+          "term": "Elroq",
+          "matched": true
+        },
+        {
+          "term": "gültig ab 01.05.2026",
+          "matched": true
+        },
+        {
+          "term": "CHF 37’300",
+          "matched": true
+        },
+        {
+          "term": "CHF 52’200",
+          "matched": true
+        }
+      ],
+      "allExpectedTermsMatched": true,
+      "downloadError": null,
+      "extractError": null,
+      "textSample": "Elroq Preisliste Jetzt konfigurieren gültig ab 01.05.2026 Preise Elroq Modelljahr 2027 Essence Unverbindliche Modellschlüssel Variante Batterie / Antriebsart Leistung Batteriekapazität, netto (kWh) Preisempfehlungen* PYLBB2ES 60 61 kWh 4x2 140 kW1 ⁾ / 190 PS 58 CHF 37’300 Selection Unverbindliche Modellschlüssel Variante Batterie / Antriebsart Leistung Batteriekapazität, netto (kWh) Preisempfehlungen* PYLDM2SE 85 82 kWh 4x2 210 kW1 ⁾ / 286 PS 77 CHF 43’150 PYLDQ4SE 85x 82 kWh 4x4 220 kW1 ⁾ / 299 PS 77 CHF 45’350 Sportline Unverbindliche Modellschlüssel Variante Batterie / Antriebsart Leistung Batteriekapazität, netto (kWh) Preisempfehlungen* PYLRM2SL 85 82 kWh 4x2 210 kW1 ⁾ / 286 PS 77 CHF 4",
+      "entries": [
+        {
+          "trim": "Essence 60",
+          "powertrain": "BEV",
+          "oldSourceMsrp": null,
+          "currentSourceMsrp": 37300,
+          "currency": "CHF",
+          "evidenceRole": "current_price_list_baseline",
+          "readiness": "baseline_only_no_movement",
+          "changePct": null,
+          "expired": false
+        },
+        {
+          "trim": "RS",
+          "powertrain": "BEV",
+          "oldSourceMsrp": null,
+          "currentSourceMsrp": 52200,
+          "currency": "CHF",
+          "evidenceRole": "current_price_list_baseline",
+          "readiness": "baseline_only_no_movement",
+          "changePct": null,
+          "expired": false
+        }
+      ]
+    },
+    {
+      "code": "ch_skoda_enyaq_current",
+      "countryCode": "CH",
+      "countryLabel": "Switzerland",
+      "brand": "SKODA",
+      "model": "ENYAQ",
+      "top30": {
+        "rank": 9,
+        "sales12m": 2785.0,
+        "sourceDraftStatus": "source_draft_found",
+        "currentPriceStatus": "missing_current_price",
+        "snapshotMovementStatus": "no_jato_snapshot_median_shift"
+      },
+      "sourceUrl": "https://pageflip.ch/skoda/de/preislisten/d_pl_newenyaq_fl/d_pl_newenyaq_fl.pdf",
+      "sourceLabel": "Skoda Switzerland Enyaq price list PDF",
+      "sourceType": "official_price_list_pdf",
+      "localPath": "03_Scripts/diagnostics/artifacts/msrp_backfill/sweden_swiss_top30_suv/evidence/skoda_ch_enyaq_preisliste_2026-05.pdf",
+      "sha256": "9bfd40710adcfdbbfec82bcad6d94390d782c1d1437c88b2b7c2ad11549d7566",
+      "documentDate": "2026-05-04",
+      "validFrom": "2026-05-01",
+      "validUntil": null,
+      "evidenceClass": "official_current_baseline",
+      "expectedTermHits": [
+        {
+          "term": "Enyaq",
+          "matched": true
+        },
+        {
+          "term": "CHF 52’250",
+          "matched": true
+        },
+        {
+          "term": "CHF 61’450",
+          "matched": true
+        },
+        {
+          "term": "WM-Lagerprämie",
+          "matched": true
+        }
+      ],
+      "allExpectedTermsMatched": true,
+      "downloadError": null,
+      "extractError": null,
+      "textSample": "Enyaq PPrreeiisslliissttee Jetzt konfigurieren ggüüllttiigg aabb X01X..0054..22002265 Preise Enyaq Modelljahr 2027 Selection Unverbindliche Modellschlüssel Variante Batterie / Antriebsart Leistung Batteriekapazität, netto (kWh) Preisempfehlungen* 5AZDM2SE 85 82 kWh 4x2 210 kW 1) / 286 PS 77 CHF 52’250 5AZDQ4SE 85x 82 kWh 4x4 220 kW 1) / 299 PS 77 CHF 55’150 Sportline Unverbindliche Modellschlüssel Variante Batterie / Antriebsart Leistung Batteriekapazität, netto (kWh) Preisempfehlungen* 5AZRM2SL 85 82 kWh 4x2 210 kW 1) / 286 PS 77 CHF 57’750 5AZRQ4SL 85x 82 kWh 4x4 220 kW 1) / 299 PS 77 CHF 60’650 RS Unverbindliche Modellschlüssel Variante Batterie / Antriebsart Leistung Batteriekapazität, n",
+      "entries": [
+        {
+          "trim": "85 Selection",
+          "powertrain": "BEV",
+          "oldSourceMsrp": null,
+          "currentSourceMsrp": 52250,
+          "currency": "CHF",
+          "evidenceRole": "current_price_list_baseline",
+          "readiness": "baseline_only_no_movement",
+          "changePct": null,
+          "expired": false
+        },
+        {
+          "trim": "RS",
+          "powertrain": "BEV",
+          "oldSourceMsrp": null,
+          "currentSourceMsrp": 61450,
+          "currency": "CHF",
+          "evidenceRole": "current_price_list_baseline",
+          "readiness": "baseline_only_no_movement",
+          "changePct": null,
+          "expired": false
+        }
+      ]
+    },
+    {
+      "code": "ch_toyota_rav4_price_list_transition",
+      "countryCode": "CH",
+      "countryLabel": "Switzerland",
+      "brand": "TOYOTA",
+      "model": "RAV4",
+      "top30": {
+        "rank": 30,
+        "sales12m": 1332.0,
+        "sourceDraftStatus": "source_draft_found",
+        "currentPriceStatus": "missing_current_price",
+        "snapshotMovementStatus": "no_jato_snapshot_median_shift"
+      },
+      "sourceUrl": "https://de.toyota.ch/content/dam/toyota/nmsc/switzerland/pdf_preislisten/PL_RAV4_HEV_PHEV_de_03.pdf",
+      "sourceLabel": "Toyota Switzerland RAV4 official 2026 price-list transition",
+      "sourceType": "official_price_list_pdf",
+      "localPath": "03_Scripts/diagnostics/artifacts/msrp_backfill/sweden_swiss_top30_suv/evidence/toyota_ch_rav4_hev_phev_preisliste_2026-03.pdf",
+      "sha256": "d6356678068d4508d8d210a49336c53353a046e674b74528611d4fb942524c9c",
+      "documentDate": "2026-03-02",
+      "validFrom": "2026-03-02",
+      "validUntil": null,
+      "evidenceClass": "official_generation_transition_baseline",
+      "expectedTermHits": [
+        {
+          "term": "RAV4",
+          "matched": true
+        },
+        {
+          "term": "Gültig ab 02.03.2026",
+          "matched": true
+        },
+        {
+          "term": "47'900",
+          "matched": true
+        },
+        {
+          "term": "55'600",
+          "matched": true
+        }
+      ],
+      "allExpectedTermsMatched": true,
+      "downloadError": null,
+      "extractError": null,
+      "textSample": "RAV4 PREISLISTE Erhältlich ab Juni 2026 RAV4 Preise und Fakten. Gültig ab 02.03.2026 Elektrische Hybrid Ga- Verbrauch Verbrauch Reichweite Benzin- Energie- Getriebe Antrieb Motor rantie kombiniert kombiniert kombiniert äquivalent Kategorie CO2* CO2** Preis in CHF l/100 km kWh/100 km km l/100 km g/km g/km inkl. MwSt. HYBRID 2,5 l Trend, FWD e-Multidrive Frontantrieb Hybrid ● 4.9 – – – D 112 23 44'900.– 2,5 l Trend, AWD e-Multidrive Allradantrieb Hybrid ● 5.3 – – – D 121 24 47'900.– 2,5 l Style, FWD e-Multidrive Frontantrieb Hybrid ● 5.2 – – – D 117 24 48'600.– 2,5 l Style, AWD e-Multidrive Allradantrieb Hybrid ● 5.6 – – – D 127 26 51'600.– 2,5 l GR SPORT, AWD e-Multidrive Allradantrieb Hybrid",
+      "entries": [
+        {
+          "trim": "Trend AWD Hybrid",
+          "powertrain": "HEV",
+          "oldSourceMsrp": 53500,
+          "currentSourceMsrp": 47900,
+          "currency": "CHF",
+          "evidenceRole": "previous_price_list_vs_new_generation_price_list",
+          "readiness": "generation_transition_baseline",
+          "relatedEvidence": "toyota_ch_rav4_preisliste_2026-01.pdf",
+          "changePct": -10.47,
+          "expired": false
+        },
+        {
+          "trim": "GR SPORT AWD Hybrid",
+          "powertrain": "HEV",
+          "oldSourceMsrp": 59900,
+          "currentSourceMsrp": 55600,
+          "currency": "CHF",
+          "evidenceRole": "previous_price_list_vs_new_generation_price_list",
+          "readiness": "generation_transition_baseline",
+          "relatedEvidence": "toyota_ch_rav4_preisliste_2026-01.pdf",
+          "changePct": -7.18,
+          "expired": false
+        }
+      ]
+    }
+  ]
+}

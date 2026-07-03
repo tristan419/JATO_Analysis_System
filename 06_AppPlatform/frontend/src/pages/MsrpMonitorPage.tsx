@@ -45,6 +45,7 @@ const REFRESH_OPTIONS = [
 const MODE_OPTIONS = [
   { value: "live", label: "Live" },
   { value: "sweden_demo", label: "Sweden demo" },
+  { value: "sweden_swiss_demo", label: "Sweden + Swiss demo" },
 ] as const;
 
 const AUDIT_OPTIONS = [
@@ -92,6 +93,8 @@ type AuditFilter = typeof AUDIT_OPTIONS[number]["value"];
 type DirectionFilter = typeof DIRECTION_OPTIONS[number]["value"];
 type EvidenceFilter = typeof EVIDENCE_OPTIONS[number]["value"];
 type OfferSignalColumnKey = "cash" | "finance" | "lease" | "benefit" | "gap";
+
+const DEFAULT_SWEDEN_SWISS_DEMO_COUNTRY = "CH";
 
 interface TimelineSeries {
   key: string;
@@ -190,7 +193,8 @@ interface PriceImpactModel {
   title: string;
   subtitle: string;
   metricLabel: string;
-  valueKind: "eur" | "sek" | "count";
+  valueKind: "eur" | "local" | "count";
+  valueCurrency?: string;
   effectLabel: string;
   effectPctLabel: string;
   rangeLabel: string;
@@ -518,26 +522,40 @@ function offerSignalMatchesFilters(
 }
 
 function offerSignalMetric(signal: MsrpOfferSignal): string {
-  if (signal.cashDiscountSek !== null) {
-    return formatSek(signal.cashDiscountSek);
+  const cashDiscount = offerSignalCashDiscount(signal);
+  const monthlyPayment = offerSignalMonthlyPayment(signal);
+  if (cashDiscount !== null) {
+    return formatSourcePrice(cashDiscount, offerSignalLocalCurrency(signal));
   }
   if (signal.interestRatePct !== null) {
     return `${formatNumber(signal.interestRatePct, 1)}% interest`;
   }
-  if (signal.monthlyPaymentSek !== null) {
-    return `${formatSek(signal.monthlyPaymentSek)}/mo`;
+  if (monthlyPayment !== null) {
+    return `${formatSourcePrice(monthlyPayment, offerSignalLocalCurrency(signal))}/mo`;
   }
   return offerSignalMatchStatusLabel(signal.matchStatus);
+}
+
+function offerSignalLocalCurrency(signal: MsrpOfferSignal): string {
+  return signal.localCurrency || (signal.country === "CH" ? "CHF" : "SEK");
+}
+
+function offerSignalCashDiscount(signal: MsrpOfferSignal): number | null {
+  return signal.cashDiscountLocal ?? signal.cashDiscountSek;
+}
+
+function offerSignalMonthlyPayment(signal: MsrpOfferSignal): number | null {
+  return signal.monthlyPaymentLocal ?? signal.monthlyPaymentSek;
 }
 
 function offerSignalColumnActive(signal: MsrpOfferSignal, column: OfferSignalColumnKey): boolean {
   switch (column) {
     case "cash":
-      return signal.cashDiscountSek !== null;
+      return offerSignalCashDiscount(signal) !== null;
     case "finance":
       return signal.interestRatePct !== null || signal.offerTypes.includes("finance_offer");
     case "lease":
-      return signal.monthlyPaymentSek !== null || signal.offerTypes.includes("lease_offer");
+      return offerSignalMonthlyPayment(signal) !== null || signal.offerTypes.includes("lease_offer");
     case "benefit":
       return signal.benefitLabels.length > 0 || signal.offerTypes.includes("purchase_benefit");
     case "gap":
@@ -553,11 +571,13 @@ function offerSignalColumnLabel(signal: MsrpOfferSignal, column: OfferSignalColu
   }
   switch (column) {
     case "cash":
-      return formatSek(signal.cashDiscountSek);
+      return formatSourcePrice(offerSignalCashDiscount(signal), offerSignalLocalCurrency(signal));
     case "finance":
       return signal.interestRatePct !== null ? `${formatNumber(signal.interestRatePct, 1)}%` : "Finance";
     case "lease":
-      return signal.monthlyPaymentSek !== null ? `${formatSek(signal.monthlyPaymentSek)}/mo` : "Lease";
+      return offerSignalMonthlyPayment(signal) !== null
+        ? `${formatSourcePrice(offerSignalMonthlyPayment(signal), offerSignalLocalCurrency(signal))}/mo`
+        : "Lease";
     case "benefit":
       return signal.benefitLabels.length ? `${signal.benefitLabels.length} item${signal.benefitLabels.length === 1 ? "" : "s"}` : "Benefit";
     case "gap":
@@ -570,17 +590,17 @@ function offerSignalColumnLabel(signal: MsrpOfferSignal, column: OfferSignalColu
 function offerSignalColumnRatio(
   signal: MsrpOfferSignal,
   column: OfferSignalColumnKey,
-  maxCashDiscountSek: number,
-  maxMonthlyPaymentSek: number,
+  maxCashDiscount: number,
+  maxMonthlyPayment: number,
 ): number {
   if (!offerSignalColumnActive(signal, column)) {
     return 0;
   }
   switch (column) {
     case "cash":
-      return Math.max(0.1, Math.min(1, Number(signal.cashDiscountSek ?? 0) / Math.max(1, maxCashDiscountSek)));
+      return Math.max(0.1, Math.min(1, Number(offerSignalCashDiscount(signal) ?? 0) / Math.max(1, maxCashDiscount)));
     case "lease":
-      return Math.max(0.1, Math.min(1, Number(signal.monthlyPaymentSek ?? 0) / Math.max(1, maxMonthlyPaymentSek)));
+      return Math.max(0.1, Math.min(1, Number(offerSignalMonthlyPayment(signal) ?? 0) / Math.max(1, maxMonthlyPayment)));
     case "benefit":
       return Math.max(0.32, Math.min(1, signal.benefitLabels.length / 3));
     case "finance":
@@ -596,7 +616,7 @@ function offerSignalSortRank(signal: MsrpOfferSignal): number {
 }
 
 function offerSignalSortValue(signal: MsrpOfferSignal): number {
-  return Math.max(Number(signal.cashDiscountSek ?? 0), Number(signal.monthlyPaymentSek ?? 0));
+  return Math.max(Number(offerSignalCashDiscount(signal) ?? 0), Number(offerSignalMonthlyPayment(signal) ?? 0));
 }
 
 function offerSignalValidUntilLabel(signal: MsrpOfferSignal): string {
@@ -609,9 +629,13 @@ function offerSignalEurNormalizedLabel(signal: MsrpOfferSignal): string {
 
 function offerSignalLocalCurrencyLabel(signal: MsrpOfferSignal): string {
   const parts = [
-    signal.cashDiscountSek !== null ? `Cash ${formatSek(signal.cashDiscountSek)}` : null,
+    offerSignalCashDiscount(signal) !== null
+      ? `Cash ${formatSourcePrice(offerSignalCashDiscount(signal), offerSignalLocalCurrency(signal))}`
+      : null,
     signal.interestRatePct !== null ? `Finance ${formatNumber(signal.interestRatePct, 1)}%` : null,
-    signal.monthlyPaymentSek !== null ? `Lease ${formatSek(signal.monthlyPaymentSek)}/mo` : null,
+    offerSignalMonthlyPayment(signal) !== null
+      ? `Lease ${formatSourcePrice(offerSignalMonthlyPayment(signal), offerSignalLocalCurrency(signal))}/mo`
+      : null,
     signal.benefitLabels.length > 0 ? `${signal.benefitLabels.length} benefits` : null,
   ].filter((item): item is string => Boolean(item));
   return parts.length > 0 ? parts.join(" · ") : signal.valueLabel;
@@ -623,8 +647,45 @@ function countryScopeLabel(
   countryOptions: Array<[string, string]>,
 ): string {
   if (mode === "sweden_demo") return "Sweden demo";
+  if (mode === "sweden_swiss_demo" && countryFilter === "all") return "Sweden + Swiss demo";
   if (countryFilter === "all") return "All countries";
   return countryOptions.find(([value]) => value === countryFilter)?.[1] ?? countryFilter;
+}
+
+function monitorModeLabel(mode: MonitorMode): string {
+  return MODE_OPTIONS.find((option) => option.value === mode)?.label ?? "Live";
+}
+
+function demoScopeLabel(data: MsrpMonitoringResponse | null): string | null {
+  const scope = data?.demo?.scope;
+  if (!scope) return null;
+  const topN = scope.topN ? `top${scope.topN}` : "top30";
+  const segment = scope.segmentFilter || "SUV";
+  const latest = scope.sourceLatestMonth ? ` · latest ${scope.sourceLatestMonth}` : "";
+  return `Rolling 12M ${segment} ${topN}${latest}`;
+}
+
+function isSwedenValue(value: string | null | undefined): boolean {
+  const normalized = String(value ?? "").trim().toLowerCase();
+  return normalized === "se" || normalized === "sweden" || normalized === "瑞典";
+}
+
+function isSwedenTimelineItem(item: MsrpMonitoringTimelineEvent): boolean {
+  return isSwedenValue(item.country) || isSwedenValue(item.countryLabel);
+}
+
+function isSwedenLaunchAlert(alert: MsrpLaunchAlert): boolean {
+  return isSwedenValue(alert.country) || isSwedenValue(alert.countryLabel);
+}
+
+function isSwedenOfferSignal(signal: MsrpOfferSignal): boolean {
+  return isSwedenValue(signal.country) || isSwedenValue(signal.countryLabel);
+}
+
+function isOfficialDropSignal(item: MsrpMonitoringTimelineEvent): boolean {
+  return Number(item.changePct ?? 0) < 0
+    && Boolean(item.evidence.backfilled)
+    && String(item.evidence.backfillKind ?? "").startsWith("official_");
 }
 
 function brandScopeLabel(brandFilter: string): string {
@@ -705,6 +766,12 @@ function backfillKindLabel(kind: string | null | undefined): string {
       return "Official promotion vs ordinary price";
     case "official_price_list_pdf":
       return "Official historical price list";
+    case "official_offer_boundary":
+      return "Official offer boundary";
+    case "official_offer_boundary_expired":
+      return "Expired official offer boundary";
+    case "official_generation_transition_baseline":
+      return "Official generation transition";
     default:
       return kind ? kind.replace(/_/g, " ") : "Historical backfill";
   }
@@ -715,6 +782,8 @@ function isCampaignPromotionBackfillKind(kind: string | null | undefined): boole
     kind === "official_campaign_vs_regular_price"
     || kind === "official_campaign_savings_vs_current_price"
     || kind === "official_promotion_vs_ordinary_price"
+    || kind === "official_offer_boundary"
+    || kind === "official_offer_boundary_expired"
   );
 }
 
@@ -747,6 +816,9 @@ function backfillBoundaryLabel(item: MsrpMonitoringTimelineEvent): string {
   }
   if (kind === "official_price_list_pdf") {
     return "Official dated price-list evidence.";
+  }
+  if (kind === "official_generation_transition_baseline") {
+    return "Generation-transition evidence; review before treating it as a same-trim price drop.";
   }
   return "Backfilled evidence; spot-check the source before accepting.";
 }
@@ -969,8 +1041,11 @@ function spotCheckOutcomeLine(
   decision: SpotCheckDecision,
 ): string {
   const kind = item.evidence.backfillKind ?? "";
+  if (item.evidence.demoBackfilled && item.evidence.backfilled && isCampaignPromotionBackfillKind(kind)) {
+    return "Outcome: official evidence boundary in demo mode; keep out of permanent MSRP-cut conclusions until production backfill is accepted.";
+  }
   if (item.evidence.demoBackfilled) {
-    return "Outcome: demo only; do not use as a real market conclusion.";
+    return "Outcome: demo monitor only; do not use as a real market conclusion.";
   }
   if (isCampaignPromotionBackfillKind(kind)) {
     return "Outcome: keep as campaign/promotion boundary; do not accept as permanent MSRP cut without dated official price-list evidence.";
@@ -987,11 +1062,20 @@ function spotCheckOutcomeLine(
 function buildSpotCheckQueueDecision(item: MsrpMonitoringTimelineEvent): SpotCheckDecision {
   const kind = item.evidence.backfillKind ?? "";
 
+  if (item.evidence.demoBackfilled && item.evidence.backfilled && isCampaignPromotionBackfillKind(kind)) {
+    return {
+      label: "Demo boundary",
+      className: "is-warn",
+      detail: "Official evidence-backed demo boundary; source-check before treating it as a permanent MSRP cut.",
+      actions: ["Open Source", "Verify official boundary"],
+    };
+  }
+
   if (item.evidence.demoBackfilled) {
     return {
       label: "Demo only",
       className: "is-warn",
-      detail: "Demo backfill is useful for layout review, not a real market conclusion.",
+      detail: "Demo monitor only; replace with accepted production backfill before market reporting.",
       actions: ["Open Source", "Replace with official evidence"],
     };
   }
@@ -1073,11 +1157,12 @@ function buildSpotCheckBrief(
         ? `${preview.fileName} (${preview.status}${preview.truncated ? ", truncated" : ""})`
         : item.evidence.backfillSnapshotPath
     : "-";
+  const validUntilLine = item.evidence.backfillValidUntil ? ` · Valid until: ${item.evidence.backfillValidUntil}` : "";
   const lines = [
     `Model: ${eventLabel(event)} · ${item.jatoTrim || "trim"} · ${item.countryLabel}`,
     `Change: ${formatNumber(item.oldSourceMsrp)} -> ${formatNumber(item.currentSourceMsrp)} ${item.sourceCurrency} (${formatPct(item.changePct)} · ${changePctBasisLabel(item.changePctBasis)})`,
     `EUR normalized: ${formatCurrency(item.oldMsrpEur)} -> ${formatCurrency(item.currentMsrpEur)}`,
-    `Observed: ${formatDateTime(item.evidence.observedAtUtc)} · Effective: ${item.evidence.backfillEffectiveDate ?? formatTime(item.changedAtUtc)}`,
+    `Observed: ${formatDateTime(item.evidence.observedAtUtc)} · Effective: ${item.evidence.backfillEffectiveDate ?? formatTime(item.changedAtUtc)}${validUntilLine}`,
     `Audit: ${auditLabel(audit?.priority ?? item.auditPriority)} · ${audit?.actionLabel ?? item.auditActionLabel}`,
     `Evidence: ${backfillKindLabel(item.evidence.backfillKind)} · ${sourceUrl}`,
     ...(backfillArtifactSummary ? [`Backfill artifact: ${backfillArtifactSummary}`] : []),
@@ -1376,9 +1461,9 @@ function impactDurationDays(startValue: string | null | undefined): number {
   return Math.max(1, Math.ceil((now.getTime() - start.getTime()) / 86_400_000));
 }
 
-function formatImpactValue(value: number, valueKind: PriceImpactModel["valueKind"]): string {
-  if (valueKind === "sek") {
-    return formatSek(value);
+function formatImpactValue(value: number, valueKind: PriceImpactModel["valueKind"], valueCurrency?: string): string {
+  if (valueKind === "local") {
+    return formatSourcePrice(value, valueCurrency);
   }
   if (valueKind === "eur") {
     return formatCurrency(value);
@@ -1414,7 +1499,8 @@ function buildMoveImpactModel(action: PriceActionMoveItem): PriceImpactModel {
   const item = action.queueItem.item;
   const expected = Number(item.oldSourceMsrp ?? item.oldMsrpEur ?? 0);
   const actual = Number(item.currentSourceMsrp ?? item.currentMsrpEur ?? expected);
-  const valueKind: PriceImpactModel["valueKind"] = item.oldSourceMsrp !== null || item.currentSourceMsrp !== null ? "sek" : "eur";
+  const valueKind: PriceImpactModel["valueKind"] = item.oldSourceMsrp !== null || item.currentSourceMsrp !== null ? "local" : "eur";
+  const valueCurrency = valueKind === "local" ? item.sourceCurrency : undefined;
   const durationDays = impactDurationDays(item.changedAtUtc);
   const effect = expected - actual;
   const avgPerDay = effect;
@@ -1422,12 +1508,13 @@ function buildMoveImpactModel(action: PriceActionMoveItem): PriceImpactModel {
   return {
     title: "Price impact view",
     subtitle: `${action.modelLabel} · ${item.countryLabel} · ${impactDateLabel(item.changedAtUtc)}`,
-    metricLabel: valueKind === "sek" ? `Local MSRP (${item.sourceCurrency})` : "MSRP EUR normalized",
+    metricLabel: valueKind === "local" ? `Local MSRP (${item.sourceCurrency})` : "MSRP EUR normalized",
     valueKind,
-    effectLabel: formatImpactValue(effect, valueKind),
+    valueCurrency,
+    effectLabel: formatImpactValue(effect, valueKind, valueCurrency),
     effectPctLabel: formatPct(item.changePct),
     rangeLabel: impactRangeLabel(effect),
-    avgPerDayLabel: formatImpactValue(avgPerDay, valueKind),
+    avgPerDayLabel: formatImpactValue(avgPerDay, valueKind, valueCurrency),
     durationLabel: `${durationDays} days`,
     verdictLabel: action.queueItem.decision.label,
     baselineLabel: "Expected = previous official price baseline",
@@ -1440,19 +1527,23 @@ function buildMoveImpactModel(action: PriceActionMoveItem): PriceImpactModel {
 
 function buildOfferImpactModel(action: PriceActionOfferItem): PriceImpactModel {
   const signal = action.signal;
-  const effect = Number(signal.cashDiscountSek ?? signal.monthlyPaymentSek ?? signal.benefitLabels.length);
+  const cashDiscount = offerSignalCashDiscount(signal);
+  const monthlyPayment = offerSignalMonthlyPayment(signal);
+  const effect = Number(cashDiscount ?? monthlyPayment ?? signal.benefitLabels.length);
   const durationDays = impactDurationDays(signal.capturedAtUtc || signal.sourceObservedDate);
-  const valueKind: PriceImpactModel["valueKind"] = signal.cashDiscountSek !== null || signal.monthlyPaymentSek !== null ? "sek" : "count";
+  const valueKind: PriceImpactModel["valueKind"] = cashDiscount !== null || monthlyPayment !== null ? "local" : "count";
+  const valueCurrency = valueKind === "local" ? offerSignalLocalCurrency(signal) : undefined;
 
   return {
     title: "Offer impact view",
     subtitle: `${action.modelLabel} · ${signal.countryLabel} · ${signal.sourceObservedDate}`,
-    metricLabel: signal.cashDiscountSek !== null ? "Price gap vs no-offer baseline" : signal.monthlyPaymentSek !== null ? "Monthly offer gap vs baseline" : "Benefit count",
+    metricLabel: cashDiscount !== null ? "Price gap vs no-offer baseline" : monthlyPayment !== null ? "Monthly offer gap vs baseline" : "Benefit count",
     valueKind,
-    effectLabel: formatImpactValue(effect, valueKind),
+    valueCurrency,
+    effectLabel: formatImpactValue(effect, valueKind, valueCurrency),
     effectPctLabel: offerSignalMatchStatusLabel(signal.matchStatus),
     rangeLabel: impactRangeLabel(effect),
-    avgPerDayLabel: formatImpactValue(effect, valueKind),
+    avgPerDayLabel: formatImpactValue(effect, valueKind, valueCurrency),
     durationLabel: `${durationDays} days`,
     verdictLabel: auditLabel(signal.auditPriority),
     baselineLabel: "Expected = no official incentive signal",
@@ -1476,8 +1567,8 @@ function MsrpOfferSignalVisual({ signals, selectedSignalId, onSelect }: MsrpOffe
     || left.brand.localeCompare(right.brand)
     || left.jatoModel.localeCompare(right.jatoModel)
   ));
-  const maxCashDiscountSek = Math.max(0, ...sortedSignals.map((signal) => Number(signal.cashDiscountSek ?? 0)));
-  const maxMonthlyPaymentSek = Math.max(0, ...sortedSignals.map((signal) => Number(signal.monthlyPaymentSek ?? 0)));
+  const maxCashDiscount = Math.max(0, ...sortedSignals.map((signal) => Number(offerSignalCashDiscount(signal) ?? 0)));
+  const maxMonthlyPayment = Math.max(0, ...sortedSignals.map((signal) => Number(offerSignalMonthlyPayment(signal) ?? 0)));
   const cashCount = sortedSignals.filter((signal) => offerSignalColumnActive(signal, "cash")).length;
   const financeCount = sortedSignals.filter((signal) => offerSignalColumnActive(signal, "finance")).length;
   const leaseCount = sortedSignals.filter((signal) => offerSignalColumnActive(signal, "lease")).length;
@@ -1517,7 +1608,7 @@ function MsrpOfferSignalVisual({ signals, selectedSignalId, onSelect }: MsrpOffe
                 </span>
                 {OFFER_SIGNAL_COLUMNS.map((column) => {
                   const active = offerSignalColumnActive(signal, column.key);
-                  const ratio = offerSignalColumnRatio(signal, column.key, maxCashDiscountSek, maxMonthlyPaymentSek);
+                  const ratio = offerSignalColumnRatio(signal, column.key, maxCashDiscount, maxMonthlyPayment);
                   return (
                     <span
                       key={`${signal.signalId}-${column.key}`}
@@ -1587,9 +1678,9 @@ function MsrpOfferSignalSource({ signal }: { signal: MsrpOfferSignal }) {
       </div>
       <dl>
         <dt>Value</dt><dd>{signal.valueLabel}</dd>
-        <dt>Cash discount</dt><dd>{formatSek(signal.cashDiscountSek)}</dd>
+        <dt>Cash discount</dt><dd>{formatSourcePrice(offerSignalCashDiscount(signal), offerSignalLocalCurrency(signal))}</dd>
         <dt>Interest</dt><dd>{signal.interestRatePct !== null ? `${formatNumber(signal.interestRatePct, 1)}%` : "-"}</dd>
-        <dt>Monthly</dt><dd>{signal.monthlyPaymentSek !== null ? `${formatSek(signal.monthlyPaymentSek)}/month` : "-"}</dd>
+        <dt>Monthly</dt><dd>{offerSignalMonthlyPayment(signal) !== null ? `${formatSourcePrice(offerSignalMonthlyPayment(signal), offerSignalLocalCurrency(signal))}/month` : "-"}</dd>
         <dt>Benefits</dt><dd>{signal.benefitLabels.length ? signal.benefitLabels.join(", ") : "-"}</dd>
         <dt>Observed</dt><dd>{signal.sourceObservedDate}</dd>
         <dt>Valid until</dt><dd>{offerSignalValidUntilLabel(signal)}</dd>
@@ -1845,7 +1936,7 @@ function ImpactMiniChart({
           <line x1={IMPACT_CHART_MARGIN.left} x2={IMPACT_CHART_MARGIN.left + innerWidth} y1={scaleY(0)} y2={scaleY(0)} />
           {yTicks.map((tick) => (
             <text key={`impact-yt-${mode}-${tick}`} x={IMPACT_CHART_MARGIN.left - 8} y={scaleY(tick) + 4} textAnchor="end">
-              {formatImpactValue(tick, model.valueKind)}
+              {formatImpactValue(tick, model.valueKind, model.valueCurrency)}
             </text>
           ))}
           {model.points.map((point, index) => (
@@ -2717,15 +2808,15 @@ function MsrpEventChart({
 }
 
 export function MsrpMonitorPage() {
-  const [mode, setMode] = useState<MonitorMode>("live");
-  const [windowOptionId, setWindowOptionId] = useState("30d");
+  const [mode, setMode] = useState<MonitorMode>("sweden_swiss_demo");
+  const [windowOptionId, setWindowOptionId] = useState(() => currentYearWindowOption().id);
   const [thresholdPct, setThresholdPct] = useState(0);
   const [refreshIntervalSeconds, setRefreshIntervalSeconds] = useState(60);
   const [refreshTick, setRefreshTick] = useState(0);
   const [auditFilter, setAuditFilter] = useState<AuditFilter>("all");
-  const [directionFilter, setDirectionFilter] = useState<DirectionFilter>("drops");
+  const [directionFilter, setDirectionFilter] = useState<DirectionFilter>("all");
   const [evidenceFilter, setEvidenceFilter] = useState<EvidenceFilter>("all");
-  const [countryFilter, setCountryFilter] = useState("all");
+  const [countryFilter, setCountryFilter] = useState(DEFAULT_SWEDEN_SWISS_DEMO_COUNTRY);
   const [brandFilter, setBrandFilter] = useState("all");
   const [data, setData] = useState<MsrpMonitoringResponse | null>(null);
   const [loading, setLoading] = useState(false);
@@ -2741,7 +2832,7 @@ export function MsrpMonitorPage() {
   const [snapshotPreviewPathOverride, setSnapshotPreviewPathOverride] = useState<string | null>(null);
   const [spotCheckBriefCopyStatus, setSpotCheckBriefCopyStatus] = useState<CopyStatus>("idle");
   const [pendingCampaignBoundaryFocus, setPendingCampaignBoundaryFocus] = useState(false);
-  const [deckOpen, setDeckOpen] = useState(true);
+  const [deckOpen, setDeckOpen] = useState(false);
   const [deckTab, setDeckTab] = useState<DeckTab>("overview");
   const [timelineIndex, setTimelineIndex] = useState(0);
   const monitoringRequestSequenceRef = useRef(0);
@@ -3078,18 +3169,27 @@ export function MsrpMonitorPage() {
   const activeCountryScopeLabel = countryScopeLabel(mode, countryFilter, countryOptions);
   const activeBrandScopeLabel = brandScopeLabel(brandFilter);
   const activeWindowScopeLabel = windowScopeLabel(selectedWindowOption);
+  const activeDemoScopeLabel = demoScopeLabel(data);
   const missingLengthEvents = events.filter((event) => event.lengthMissing);
-  const swedenLaunchAlerts = launchAlerts.filter((item) => (
-    item.countryLabel === "Sweden"
-    || item.country === "瑞典"
-    || item.country.toLowerCase() === "se"
-  ));
+  const swedenTimelineItems = rawEvents.flatMap((event) => event.timeline.filter(isSwedenTimelineItem));
+  const swedenOfficialDropSignalCount = swedenTimelineItems.filter(isOfficialDropSignal).length;
+  const swedenLaunchAlerts = launchAlerts.filter(isSwedenLaunchAlert);
+  const swedenOfferSignalCount = rawOfferSignals.filter(isSwedenOfferSignal).length;
+  const swedenCoverage = batchACoverage?.countries.find((item) => isSwedenValue(item.code) || isSwedenValue(item.countryLabel)) ?? null;
+  const swedenLaunchBaselineCount = swedenCoverage?.launchCandidateCount ?? swedenLaunchAlerts.length;
+  const swedenBackfillPeriodCount = swedenCoverage?.backfillPeriodCount ?? swedenOfficialDropSignalCount;
+  const swedenCurrentRows = swedenCoverage?.currentRows ?? null;
+  const swedenStatusVisible = Boolean(data)
+    && (mode === "sweden_demo" || isSwedenValue(countryFilter) || isSwedenValue(activeCountryScopeLabel) || isSwedenValue(data?.filters.country));
+  const launchSummaryCount = swedenStatusVisible
+    ? swedenLaunchBaselineCount
+    : data?.summary.launchAlertCount ?? launchAlerts.length;
   const displayedLaunchAlerts = showLaunchAlerts
     ? (
         swedenLaunchAlerts.length > 0
           ? [...swedenLaunchAlerts, ...launchAlerts.filter((item) => !swedenLaunchAlerts.includes(item))]
           : launchAlerts
-      ).slice(0, 12)
+      )
     : [];
 
   function selectEvent(eventId: string): void {
@@ -3184,6 +3284,10 @@ export function MsrpMonitorPage() {
   }
 
   function selectTopCountryScope(value: string): void {
+    if (mode === "sweden_swiss_demo") {
+      setCountryFilter(value);
+      return;
+    }
     setMode("live");
     setCountryFilter(value);
   }
@@ -3208,6 +3312,36 @@ export function MsrpMonitorPage() {
     setBrandFilter("all");
     setThresholdPct(0);
     setDeckTab("source");
+    setDeckOpen(true);
+    setRefreshTick((value) => value + 1);
+  }
+
+  function viewSwedenLaunchBaselines(): void {
+    const ytdOption = currentYearWindowOption();
+    setMode("live");
+    setWindowOptionId(ytdOption.id);
+    setDirectionFilter("all");
+    setEvidenceFilter("all");
+    setAuditFilter("all");
+    setCountryFilter("SE");
+    setBrandFilter("all");
+    setThresholdPct(0);
+    setDeckTab("filters");
+    setDeckOpen(true);
+    setRefreshTick((value) => value + 1);
+  }
+
+  function applySwedenSwissDemoPreset(): void {
+    const ytdOption = currentYearWindowOption();
+    setMode("sweden_swiss_demo");
+    setWindowOptionId(ytdOption.id);
+    setDirectionFilter("all");
+    setEvidenceFilter("all");
+    setAuditFilter("all");
+    setCountryFilter(DEFAULT_SWEDEN_SWISS_DEMO_COUNTRY);
+    setBrandFilter("all");
+    setThresholdPct(0);
+    setDeckTab("overview");
     setDeckOpen(true);
     setRefreshTick((value) => value + 1);
   }
@@ -3263,11 +3397,12 @@ export function MsrpMonitorPage() {
           <p className="msrp-monitor-subtitle">默认聚焦 price drop，跨国家车型调价聚合、国家展开、trim/source evidence 和时间轴追踪。</p>
         </div>
         <div className="msrp-monitor-header-meta">
-          <span>{mode === "sweden_demo" ? "Sweden demo" : "Live"}</span>
+          <span>{monitorModeLabel(mode)}</span>
           <span>{activeCountryScopeLabel}</span>
           <span>{activeBrandScopeLabel}</span>
           <span>{directionFilterLabel(directionFilter)}</span>
           <span>{activeWindowScopeLabel}</span>
+          {activeDemoScopeLabel ? <span>{activeDemoScopeLabel}</span> : null}
           <span>{auditFilterLabel(auditFilter)}</span>
           <span>{evidenceFilterLabel(evidenceFilter)}</span>
           <span>{loading && data ? "Updating..." : `Synced ${formatDateTime(lastUpdatedAt)}`}</span>
@@ -3333,7 +3468,7 @@ export function MsrpMonitorPage() {
         triggerPrimary="MSRP Deck"
         triggerSecondaryOpen="收起"
         triggerSecondaryClosed="打开"
-        eyebrow={mode === "sweden_demo" ? "Sweden demo" : "Live monitor"}
+        eyebrow={mode === "live" ? "Live monitor" : monitorModeLabel(mode)}
         title={selectedEvent ? eventLabel(selectedEvent) : "MSRP controls"}
         ariaLabel="MSRP monitoring floating deck"
         className="msrp-monitor-floating-drawer"
@@ -3472,6 +3607,9 @@ export function MsrpMonitorPage() {
               ) : null}
               {selectedCountryEvent?.evidence.backfilled ? (
                 <span className="is-boundary">{backfillBoundaryLabel(selectedCountryEvent)}</span>
+              ) : null}
+              {selectedCountryEvent?.evidence.backfillValidUntil ? (
+                <span>Valid until: {selectedCountryEvent.evidence.backfillValidUntil}</span>
               ) : null}
               {selectedEvent.auditReasons.slice(0, 4).map((reason) => <span key={reason} title={reason}>{auditReasonLabel(reason)}</span>)}
             </div>
@@ -3661,6 +3799,7 @@ export function MsrpMonitorPage() {
               </dd>
               <dt>Backfill kind</dt><dd>{selectedCountryEvent.evidence.backfilled ? backfillKindLabel(selectedCountryEvent.evidence.backfillKind) : "-"}</dd>
               <dt>Backfill date</dt><dd>{selectedCountryEvent.evidence.backfillEffectiveDate ?? "-"}</dd>
+              <dt>Valid until</dt><dd>{selectedCountryEvent.evidence.backfillValidUntil ?? "-"}</dd>
               <dt>Backfill role</dt><dd>{selectedCountryEvent.evidence.backfillEvidenceRole ?? "-"}</dd>
               <dt>Backfill URL</dt>
               <dd>
@@ -3812,7 +3951,7 @@ export function MsrpMonitorPage() {
       ) : null}
       {data?.demo?.enabled ? (
         <div className="msrp-monitor-demo-banner">
-          <strong>Sweden demo</strong>
+          <strong>{data.demo.country} demo</strong>
           <span>{data.demo.description}</span>
           <small>Backfilled scenario only; no synthetic price history was written to the database.</small>
         </div>
@@ -3820,9 +3959,47 @@ export function MsrpMonitorPage() {
 
       {data ? (
         <>
+          {swedenStatusVisible ? (
+            <section className="msrp-monitor-sweden-status" aria-label="Sweden 2026 MSRP monitor status">
+              <header>
+                <div>
+                  <span>Sweden 2026</span>
+                  <h2>Monitor status</h2>
+                </div>
+                <p>Official campaign/promotion drops are separated from launch baselines; this is monitored evidence, not a full-market absence proof.</p>
+                <div className="msrp-monitor-sweden-status-actions">
+                  <button type="button" onClick={applySwedenYtdBackfillPreset}>Review drop signals</button>
+                  <button type="button" onClick={viewSwedenLaunchBaselines}>View launch baselines</button>
+                </div>
+              </header>
+              <div className="msrp-monitor-sweden-status-grid">
+                <div>
+                  <span>Official drop signals</span>
+                  <strong>{swedenOfficialDropSignalCount}</strong>
+                  <small>{swedenBackfillPeriodCount} backfilled periods · campaign/promotion</small>
+                </div>
+                <div>
+                  <span>Launch baselines</span>
+                  <strong>{swedenLaunchBaselineCount}</strong>
+                  <small>{showLaunchAlerts ? "Listed in All moves" : "Coverage count; switch All moves to list"}</small>
+                </div>
+                <div>
+                  <span>Offer signals</span>
+                  <strong>{swedenOfferSignalCount}</strong>
+                  <small>Cash / finance / lease / benefit</small>
+                </div>
+                <div>
+                  <span>Current rows</span>
+                  <strong>{swedenCurrentRows ?? "-"}</strong>
+                  <small>{swedenCoverage?.status ? coverageStatusLabel(swedenCoverage.status) : "Current official scope"}</small>
+                </div>
+              </div>
+            </section>
+          ) : null}
+
           <div className="msrp-monitor-summary">
-            <div><span>Model events</span><strong>{events.length}/{data.summary.eventCount}</strong></div>
-            <div><span>Timeline moves</span><strong>{filteredTimelineCount}/{data.summary.timelineEventCount}</strong></div>
+            <div><span>Movement signals</span><strong>{events.length}/{data.summary.eventCount}</strong></div>
+            <div><span>Price moves</span><strong>{filteredTimelineCount}/{data.summary.timelineEventCount}</strong></div>
             <div><span>Priority audit</span><strong>{filteredPriorityAuditCount}</strong></div>
             <button
               type="button"
@@ -3832,6 +4009,16 @@ export function MsrpMonitorPage() {
               <span>Sweden 2026</span>
               <strong>YTD</strong>
               <small>Official drops</small>
+            </button>
+            <button
+              type="button"
+              data-testid="msrp-monitor-sweden-swiss-demo-preset"
+              title="Open the Sweden and Swiss demo, defaulting to Switzerland"
+              onClick={applySwedenSwissDemoPreset}
+            >
+              <span>Sweden + Swiss</span>
+              <strong>Demo</strong>
+              <small>Rolling 12M top30</small>
             </button>
             <button
               type="button"
@@ -3848,9 +4035,9 @@ export function MsrpMonitorPage() {
             </button>
             <div><span>Blocks</span><strong>{filteredBlockCount}</strong></div>
             <div><span>Samples</span><strong>{filteredSampleCount}</strong></div>
-            <div><span>Backfill evidence</span><strong>{filteredBackfillCount}</strong></div>
+            <div><span>Backfilled signals</span><strong>{filteredBackfillCount}</strong></div>
             <div><span>Official offers</span><strong>{offerSignals.length}/{data.summary.offerSignalCount ?? rawOfferSignals.length}</strong></div>
-            {showLaunchAlerts ? <div><span>Launch baselines</span><strong>{launchAlerts.length}</strong></div> : null}
+            {showLaunchAlerts || swedenStatusVisible ? <div><span>Launch baselines</span><strong>{launchSummaryCount}</strong></div> : null}
             <div><span>Batch A backfill</span><strong>{batchACoverage ? `${batchACoverage.historicalBackfillCountryCount}/${batchACoverage.countryCount}` : "-"}</strong></div>
           </div>
 
@@ -3918,7 +4105,7 @@ export function MsrpMonitorPage() {
               <header>
                 <div>
                   <h2>New launch price alerts</h2>
-                  <span>{swedenLaunchAlerts.length} Sweden launch baselines in current window · {launchAlerts.length} total</span>
+                  <span>{displayedLaunchAlerts.length} launch baselines in current window · {launchAlerts.length} total</span>
                 </div>
                 <strong>{formatDateTime(data.generatedAtUtc)}</strong>
               </header>
@@ -3985,7 +4172,16 @@ export function MsrpMonitorPage() {
                         <td>{formatCurrency(item.oldMsrpEur)} → {formatCurrency(item.currentMsrpEur)}</td>
                         <td>{formatNumber(item.oldSourceMsrp)} → {formatNumber(item.currentSourceMsrp)} {item.sourceCurrency}</td>
                         <td>{item.sourceStatus}<small>{item.lifecycleStatus ?? item.source.sourceType ?? "-"}</small></td>
-                        <td>{eventEvidenceLabel(item)}<small>{item.evidence.backfilled ? item.evidence.backfillEffectiveDate ?? item.evidence.backfillEvidenceRole ?? "backfilled" : item.evidence.scrapeBatchCode ?? "-"}</small></td>
+                        <td>
+                          {eventEvidenceLabel(item)}
+                          <small>
+                            {item.evidence.backfilled
+                              ? [item.evidence.backfillEffectiveDate, item.evidence.backfillValidUntil ? `until ${item.evidence.backfillValidUntil}` : null]
+                                .filter(Boolean)
+                                .join(" · ") || item.evidence.backfillEvidenceRole || "backfilled"
+                              : item.evidence.scrapeBatchCode ?? "-"}
+                          </small>
+                        </td>
                       </tr>
                     );
                   }) : null}

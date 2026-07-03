@@ -510,6 +510,144 @@ def test_build_msrp_monitoring_events_returns_official_offer_signals_without_his
     assert payload["offerSignals"][0]["capturedAtUtc"] == now.isoformat()
 
 
+def test_build_sweden_swiss_demo_events_returns_demo_only_cross_country_payload(
+    monkeypatch,
+) -> None:
+    now = datetime(2026, 7, 2, 8, 0, tzinfo=timezone.utc)
+    monkeypatch.setattr(msrp_monitoring_service, "_utc_now", lambda: now)
+    monkeypatch.setattr(
+        msrp_monitoring_service,
+        "_build_batch_a_coverage",
+        lambda session: _empty_batch_a_coverage(),
+    )
+
+    payload = msrp_monitoring_service.build_msrp_monitoring_events(
+        "session",
+        window_days=365,
+        threshold_pct=0,
+        direction="all",
+        mode="sweden_swiss_demo",
+    )
+
+    assert payload["mode"] == "sweden_swiss_demo"
+    assert payload["demo"]["enabled"] is True
+    assert payload["demo"]["country"] == "Sweden + Switzerland"
+    assert payload["demo"]["backfilled"] is True
+    assert payload["demo"]["scope"]["rankingMethod"] == "rolling_12m_sales_rank"
+    assert payload["demo"]["scope"]["topN"] == 30
+    assert payload["demo"]["scope"]["segmentFilter"] == "SUV"
+    assert "rolling 12M SUV top30" in payload["demo"]["description"]
+    assert not any("MERCEDES EQA" in warning for warning in payload["warnings"])
+    assert payload["summary"]["eventCount"] == 20
+    assert payload["summary"]["timelineEventCount"] == 24
+    assert payload["summary"]["launchAlertCount"] == 36
+    assert payload["summary"]["offerSignalCount"] == 15
+    peugeot_signal = next(
+        signal
+        for signal in payload["offerSignals"]
+        if signal["signalId"] == "se-2026-peugeot-3008-edition-official-offer"
+    )
+    assert peugeot_signal["offerValidUntil"] == "2026-08-31"
+    assert peugeot_signal["matchStatus"] == "pending_current_price_match"
+    tiguan = next(event for event in payload["events"] if event["eventId"] == "VOLKSWAGEN|TIGUAN|ICE")
+    tiguan_switzerland = tiguan["timeline"][0]
+    assert tiguan_switzerland["countryLabel"] == "Switzerland"
+    assert tiguan_switzerland["evidence"]["demoBackfilled"] is True
+    assert tiguan_switzerland["evidence"]["backfilled"] is True
+    assert tiguan_switzerland["evidence"]["backfillKind"] == "official_offer_boundary"
+    assert tiguan_switzerland["evidence"]["backfillEffectiveDate"] == "2026-07-01"
+    assert (
+        tiguan_switzerland["evidence"]["backfillSnapshotPath"]
+        == "03_Scripts/diagnostics/artifacts/msrp_backfill/sweden_swiss_top30_suv/evidence/volkswagen_ch_united_offer_2026-07-02.html"
+    )
+    assert tiguan_switzerland["evidence"]["backfillValidUntil"] == "2026-08-31"
+    sportage = next(event for event in payload["events"] if event["eventId"] == "KIA|SPORTAGE|HEV")
+    sportage_switzerland = sportage["timeline"][0]
+    assert sportage_switzerland["evidence"]["backfillKind"] == "official_offer_boundary_expired"
+    assert sportage_switzerland["evidence"]["backfillValidUntil"] == "2026-06-30"
+    bmw_ix1 = next(event for event in payload["events"] if event["eventId"] == "BMW|IX1|BEV")
+    assert bmw_ix1["timeline"][0]["evidence"]["backfillKind"] == "official_offer_boundary"
+    rav4 = next(event for event in payload["events"] if event["eventId"] == "TOYOTA|RAV4|HEV")
+    assert len(rav4["timeline"]) == 2
+    assert {item["jatoTrim"] for item in rav4["timeline"]} == {
+        "Trend AWD Hybrid",
+        "GR SPORT AWD Hybrid",
+    }
+    assert {item["evidence"]["backfillKind"] for item in rav4["timeline"]} == {
+        "official_generation_transition_baseline",
+    }
+    for event_id in {
+        "SKODA|KODIAQ|UNKNOWN",
+        "CUPRA|TERRAMAR|ICE",
+        "CUPRA|FORMENTOR|ICE",
+        "VOLVO|EX30|BEV",
+    }:
+        assert any(event["eventId"] == event_id for event in payload["events"])
+    assert any(alert["jatoModel"] == "DUSTER" for alert in payload["launchAlerts"])
+    assert any(alert["jatoModel"] == "EQA" for alert in payload["launchAlerts"])
+    assert any(alert["jatoModel"] == "GLC" for alert in payload["launchAlerts"])
+    assert any(alert["jatoModel"] == "GLA" for alert in payload["launchAlerts"])
+    assert any(alert["jatoModel"] == "GLE" for alert in payload["launchAlerts"])
+    assert any(alert["jatoModel"] == "Q4 E-TRON" for alert in payload["launchAlerts"])
+    swiss_offer = next(
+        signal
+        for signal in payload["offerSignals"]
+        if signal["signalId"] == "ch-2026-vw-troc-premiums-official-offer"
+    )
+    assert swiss_offer["localCurrency"] == "CHF"
+    assert swiss_offer["cashDiscountLocal"] == 3500
+
+
+def test_build_sweden_swiss_demo_events_filters_swiss_alias(
+    monkeypatch,
+) -> None:
+    now = datetime(2026, 7, 2, 8, 0, tzinfo=timezone.utc)
+    monkeypatch.setattr(msrp_monitoring_service, "_utc_now", lambda: now)
+    monkeypatch.setattr(
+        msrp_monitoring_service,
+        "_build_batch_a_coverage",
+        lambda session: _empty_batch_a_coverage(),
+    )
+
+    payload = msrp_monitoring_service.build_msrp_monitoring_events(
+        "session",
+        country="swiss",
+        window_days=365,
+        threshold_pct=0,
+        direction="all",
+        mode="sweden_swiss_demo",
+    )
+
+    assert payload["summary"]["launchAlertCount"] == 19
+    assert payload["summary"]["offerSignalCount"] == 1
+    assert payload["summary"]["eventCount"] == 12
+    assert payload["summary"]["timelineEventCount"] == 14
+    assert [signal["signalId"] for signal in payload["offerSignals"]] == [
+        "ch-2026-vw-troc-premiums-official-offer"
+    ]
+    assert {item["countryLabel"] for event in payload["events"] for item in event["countries"]} == {"Switzerland"}
+    assert {alert["countryLabel"] for alert in payload["launchAlerts"]} == {"Switzerland"}
+    assert {alert["jatoModel"] for alert in payload["launchAlerts"]} == {
+        "BIGSTER",
+        "DUSTER",
+        "ELROQ",
+        "ENYAQ",
+        "GLA",
+        "GLC",
+        "GLE",
+        "IX1",
+        "MODEL Y",
+        "Q3",
+        "Q3 SPORTBACK",
+        "Q4 E-TRON",
+        "Q5",
+        "X1",
+        "X3",
+        "X5",
+        "YARIS CROSS",
+    }
+
+
 def test_build_offer_signals_filters_country_brand_and_model() -> None:
     now = datetime(2026, 6, 24, 8, 0, tzinfo=timezone.utc)
 
@@ -1321,7 +1459,7 @@ def test_build_msrp_monitoring_events_groups_price_changes_with_evidence(
         "priorityAuditCount": 1,
         "blockCount": 0,
         "launchAlertCount": 0,
-        "offerSignalCount": 10,
+        "offerSignalCount": 15,
         "batchALoadedCountryCount": 0,
         "batchAHistoricalBackfillCountryCount": 0,
     }

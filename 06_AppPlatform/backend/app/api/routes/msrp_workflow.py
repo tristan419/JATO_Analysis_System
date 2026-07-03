@@ -70,7 +70,7 @@ def get_msrp_monitoring_events(
     threshold_pct: float = Query(default=0.0, ge=0.0, le=50.0),
     direction: str = Query(default="drops", pattern="^(drops|increases|all)$"),
     limit: int = Query(default=500, ge=1, le=500),
-    mode: str = Query(default="live", pattern="^(live|sweden_demo)$"),
+    mode: str = Query(default="live", pattern="^(live|sweden_demo|sweden_swiss_demo)$"),
     session: Session = Depends(get_db_session),
     _=Depends(require_min_role("viewer")),
 ) -> dict[str, object]:
