@@ -254,6 +254,28 @@ def test_dashboard_overview_prewarm_defaults_cover_dashboard_scope() -> None:
     )
 
 
+def test_warm_dashboard_metadata_cache_reuses_service_loaders(
+    monkeypatch,
+) -> None:
+    calls: list[str] = []
+
+    monkeypatch.setattr(
+        query_service,
+        "metadata_columns",
+        lambda: calls.append("columns") or ["Country"],
+    )
+    monkeypatch.setattr(
+        query_service,
+        "get_data_freshness",
+        lambda: calls.append("freshness") or [],
+    )
+
+    result = query_service.warm_dashboard_metadata_cache()
+
+    assert result == {"warmed": 2, "failed": 0}
+    assert calls == ["columns", "freshness"]
+
+
 def test_query_grouped_time_series_caches_by_params_and_dataset_token(
     monkeypatch,
 ) -> None:
