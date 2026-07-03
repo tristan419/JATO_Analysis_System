@@ -19,7 +19,7 @@ on:
       roles:
         description: "Comma-separated role scopes to prewarm"
         required: false
-        default: "order_filler"
+        default: "viewer,order_filler,editor,admin"
       repetitions:
         description: "Number of prewarm rounds"
         required: false
@@ -32,7 +32,7 @@ concurrency:
 jobs:
   prewarm:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 20
 
     steps:
       - name: Checkout
@@ -47,7 +47,7 @@ jobs:
         working-directory: 06_AppPlatform/frontend
         env:
           JATO_PREWARM_ORIGIN: ${{ inputs.origin || 'https://intl.ojeur.cloud' }}
-          JATO_PREWARM_ROLES: ${{ inputs.roles || 'order_filler' }}
+          JATO_PREWARM_ROLES: ${{ inputs.roles || 'viewer,order_filler,editor,admin' }}
           JATO_PREWARM_REPETITIONS: ${{ inputs.repetitions || '2' }}
           JATO_PREWARM_TIMEOUT_MS: "30000"
           JATO_PREWARM_FAIL_ON_ERROR: "1"
