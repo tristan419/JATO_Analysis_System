@@ -66,6 +66,7 @@ const DashboardExportPanel = lazy(() =>
 
 const DASHBOARD_DEFERRED_FETCH_DELAY_MS = 6_000;
 const DASHBOARD_CHART_RUNTIME_IDLE_TIMEOUT_MS = 4_000;
+const DASHBOARD_CHART_RUNTIME_MIN_DELAY_MS = 3_500;
 const DEFAULT_ADVANCED_EXPORT: ExportSettings = {
   ...DEFAULT_EXPORT,
   dataLabelOverlapStrategy: "smart_top",
@@ -225,6 +226,17 @@ function scheduleDashboardIdlePreload(callback: () => void): () => void {
   }
   const handle = window.setTimeout(callback, DASHBOARD_CHART_RUNTIME_IDLE_TIMEOUT_MS);
   return () => window.clearTimeout(handle);
+}
+
+function scheduleDashboardDelayedIdlePreload(callback: () => void, delayMs: number): () => void {
+  let cancelIdlePreload: (() => void) | null = null;
+  const timer = window.setTimeout(() => {
+    cancelIdlePreload = scheduleDashboardIdlePreload(callback);
+  }, delayMs);
+  return () => {
+    window.clearTimeout(timer);
+    cancelIdlePreload?.();
+  };
 }
 
 function resolveTimeSeriesSeriesColor(
@@ -751,9 +763,12 @@ export function DashboardPage() {
 
   useEffect(() => {
     if (chartRuntimeReady || !filtersReady || loading || columns.length === 0) return;
-    return scheduleDashboardIdlePreload(() => {
-      setChartRuntimeReady(true);
-    });
+    return scheduleDashboardDelayedIdlePreload(
+      () => {
+        setChartRuntimeReady(true);
+      },
+      DASHBOARD_CHART_RUNTIME_MIN_DELAY_MS,
+    );
   }, [chartRuntimeReady, columns.length, filtersReady, loading]);
 
   useEffect(() => {
