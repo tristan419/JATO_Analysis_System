@@ -124,6 +124,30 @@ def test_pdf_text_profile_accepts_preferred_curl_download() -> None:
     assert profile.prefer_curl_download is True
 
 
+def test_pdf_text_profile_can_ignore_environment_proxy() -> None:
+    profile = _build_pdf_text_profile(
+        {
+            "url": "https://example.invalid/cz-price-list.pdf",
+            "ignore_environment_proxy": True,
+            "entry_patterns": [],
+        }
+    )
+
+    assert profile.ignore_environment_proxy is True
+
+
+def test_pdf_text_profile_accepts_direct_download_fallback() -> None:
+    profile = _build_pdf_text_profile(
+        {
+            "url": "https://example.invalid/cz-price-list.pdf",
+            "direct_download_fallback": True,
+            "entry_patterns": [],
+        }
+    )
+
+    assert profile.direct_download_fallback is True
+
+
 def test_pdf_text_uses_curl_fallback_after_requests_timeout(monkeypatch):
     extractor = PdfTextExtractor(
         ExtractorConfig(
@@ -192,6 +216,41 @@ def test_pdf_text_prefers_curl_download_before_requests(monkeypatch):
     assert curl_timeouts == [30]
 
 
+def test_pdf_text_direct_download_fallback_uses_proxy_first_then_direct(monkeypatch):
+    extractor = PdfTextExtractor(
+        ExtractorConfig(
+            source_code="mg_zs_cz_draft_scrapling",
+            country="捷克",
+            brand="MG",
+            source_url="https://www.mgmotor-czech.cz/UserFiles/ceniky/cenik_nove_ZS_CZ.pdf",
+            source_type="official_price_list",
+            price_semantics="base_msrp",
+        ),
+        PdfTextProfile(
+            url="https://example.invalid/zs.pdf",
+            timeout_seconds=2,
+            prefer_curl_download=True,
+            direct_download_fallback=True,
+        ),
+    )
+    curl_modes = []
+
+    def fail_request(*_args, **_kwargs):
+        raise requests.exceptions.ProxyError("proxy refused")
+
+    def fetch_with_curl(timeout, *, ignore_environment_proxy=None):
+        curl_modes.append(ignore_environment_proxy)
+        if ignore_environment_proxy:
+            return b"%PDF-1.7\n"
+        return None
+
+    monkeypatch.setattr(extractor._session, "get", fail_request)
+    monkeypatch.setattr(extractor, "_fetch_pdf_bytes_with_curl", fetch_with_curl)
+
+    assert extractor._fetch_pdf_bytes() == b"%PDF-1.7\n"
+    assert curl_modes == [None, True]
+
+
 def test_pdf_text_curl_fallback_keeps_curl_default_user_agent(monkeypatch):
     extractor = PdfTextExtractor(
         ExtractorConfig(
@@ -217,3 +276,69 @@ def test_pdf_text_curl_fallback_keeps_curl_default_user_agent(monkeypatch):
 
     assert extractor._fetch_pdf_bytes_with_curl(30) == b"%PDF-1.7\n"
     assert "--user-agent" not in commands[0]
+
+
+def test_pdf_text_curl_fallback_can_ignore_environment_proxy(monkeypatch):
+    extractor = PdfTextExtractor(
+        ExtractorConfig(
+            source_code="mg_zs_cz_draft_scrapling",
+            country="捷克",
+            brand="MG",
+            source_url="https://www.mgmotor-czech.cz/UserFiles/ceniky/cenik_nove_ZS_CZ.pdf",
+            source_type="official_price_list",
+            price_semantics="base_msrp",
+        ),
+        PdfTextProfile(
+            url="https://example.invalid/zs.pdf",
+            ignore_environment_proxy=True,
+        ),
+    )
+    captured_env = {}
+
+    monkeypatch.setenv("HTTP_PROXY", "http://127.0.0.1:7897")
+    monkeypatch.setenv("HTTPS_PROXY", "http://127.0.0.1:7897")
+    monkeypatch.setenv("ALL_PROXY", "socks5h://127.0.0.1:7897")
+
+    def fake_run(command, **kwargs):
+        captured_env.update(kwargs.get("env") or {})
+        output_path = command[command.index("-o") + 1]
+        with open(output_path, "wb") as f:
+            f.write(b"%PDF-1.7\n")
+        return subprocess.CompletedProcess(command, 0, b"", b"")
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+
+    assert extractor._fetch_pdf_bytes_with_curl(30) == b"%PDF-1.7\n"
+    assert "HTTP_PROXY" not in captured_env
+    assert "HTTPS_PROXY" not in captured_env
+    assert "ALL_PROXY" not in captured_env
+
+
+def test_pdf_text_records_download_failure_in_strategy_audit(tmp_path, monkeypatch):
+    extractor = PdfTextExtractor(
+        ExtractorConfig(
+            source_code="mg_zs_cz_draft_scrapling",
+            country="捷克",
+            brand="MG",
+            source_url="https://www.mgmotor-czech.cz/UserFiles/ceniky/cenik_nove_ZS_CZ.pdf",
+            source_type="official_price_list",
+            price_semantics="base_msrp",
+        ),
+        PdfTextProfile(url="https://example.invalid/zs.pdf"),
+    )
+    extractor.run_id = "pdf-download-failure-test"
+    monkeypatch.setenv("JATO_AUDIT_DIR", str(tmp_path))
+
+    def fail_fetch():
+        extractor._last_fetch_error = (
+            "pdf_direct_download_failed: Could not resolve host: example.invalid"
+        )
+        return None
+
+    monkeypatch.setattr(extractor, "_fetch_pdf_bytes", fail_fetch)
+
+    assert extractor.extract() == []
+    assert extractor.last_audit_event is not None
+    assert extractor.last_audit_event["error"] == (
+        "pdf_direct_download_failed: Could not resolve host: example.invalid"
+    )

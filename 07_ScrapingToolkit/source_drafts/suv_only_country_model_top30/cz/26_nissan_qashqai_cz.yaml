@@ -23,6 +23,7 @@ profile:
   retry_attempts: 2
   retry_delay_seconds: 1.0
   prefer_curl_download: true
+  direct_download_fallback: true
   entry_patterns:
   - pattern: '1,3\s+DIG-T\s+mHEV\s+158\s+HP\s+2WD\s+MT\s+Ceníková\s+cena\s+(?P<price>\d{3}\s\d{3})\s+Kč'
     official_trim: Acenta

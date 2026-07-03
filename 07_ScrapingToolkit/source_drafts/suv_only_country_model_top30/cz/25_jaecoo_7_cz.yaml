@@ -11,6 +11,7 @@ profile:
   retry_attempts: 1
   retry_delay_seconds: 1.0
   prefer_curl_download: true
+  direct_download_fallback: true
   default_currency: CZK
   default_tax_included: true
   default_price_label: Ceníková cena s DPH

@@ -147,6 +147,26 @@ def test_classify_playwright_failed_load_as_retryable_network_failure() -> None:
     assert classification["severity"] == "warning"
 
 
+def test_classify_pdf_download_name_resolution_as_dns_failure() -> None:
+    classification = batch_dryrun._classify_dryrun_failure(
+        {
+            "status": "empty",
+            "valid": 0,
+            "extracted": 0,
+            "extractorError": (
+                "pdf_direct_download_failed: HTTPSConnectionPool("
+                "host='www.suzuki.cz', port=443): Max retries exceeded "
+                "(Caused by NameResolutionError(\"Failed to resolve "
+                "'www.suzuki.cz'\"))"
+            ),
+        }
+    )
+
+    assert classification["failureReason"] == "dns_resolution_failed"
+    assert classification["recommendedStrategy"] == "retry_or_check_dns"
+    assert classification["severity"] == "warning"
+
+
 def test_classify_missing_dynamic_price_as_retryable() -> None:
     classification = batch_dryrun._classify_dryrun_failure(
         {

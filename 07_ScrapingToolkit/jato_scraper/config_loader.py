@@ -621,6 +621,8 @@ def _build_pdf_text_profile(profile: dict[str, Any]) -> PdfTextProfile:
         retry_delay_seconds=float(profile.get("retry_delay_seconds", 0.0) or 0.0),
         prefer_curl_download=prefer_curl_download,
         browser_download_fallback=browser_download_fallback,
+        ignore_environment_proxy=bool(profile.get("ignore_environment_proxy", False)),
+        direct_download_fallback=bool(profile.get("direct_download_fallback", False)),
         default_currency=profile.get("default_currency", "EUR"),
         default_tax_included=bool(profile.get("default_tax_included", True)),
         default_price_label=profile.get(
