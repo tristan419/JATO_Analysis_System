@@ -465,8 +465,23 @@ export function DashboardPage() {
     () => ensureArray(cachedPage?.groupedItems),
   );
   const [groupedLoading, setGroupedLoading] = useState(false);
+  const [heavyQueriesReady, setHeavyQueriesReady] = useState(false);
   const [hiddenSeries, setHiddenSeries] = useState<Set<string>>(() => new Set(cachedPage?.hiddenSeries ?? []));
   const [othersDetail, setOthersDetail] = useState<OthersDetailItem[]>(() => cachedPage?.othersDetail ?? []);
+  const releaseHeavyQueries = useCallback(() => {
+    setHeavyQueriesReady(true);
+  }, []);
+  const selectTsMode = useCallback((nextMode: "总和" | "分组") => {
+    releaseHeavyQueries();
+    setTsMode(nextMode);
+  }, [releaseHeavyQueries]);
+  const selectChartType = useCallback((nextType: "line" | "bar" | "rank") => {
+    releaseHeavyQueries();
+    setChartType(nextType);
+    if (nextType === "rank" && tsMode === "总和") {
+      setTsMode("分组");
+    }
+  }, [releaseHeavyQueries, tsMode]);
 
   /* advanced charts — honor URL params for deep-links from Copilot */
   const urlParams = useMemo(() => new URLSearchParams(currentSearch), [currentSearch]);
@@ -681,6 +696,13 @@ export function DashboardPage() {
   }, [loading]);
 
   useEffect(() => {
+    if (heavyQueriesReady || !filtersReady || loading || columns.length === 0) return;
+    return scheduleDashboardIdlePreload(() => {
+      setHeavyQueriesReady(true);
+    });
+  }, [columns.length, filtersReady, heavyQueriesReady, loading]);
+
+  useEffect(() => {
     if (selections.model.length !== 1) return;
     setMvModelName((current) => current || selections.model[0]);
   }, [selections.model]);
@@ -700,26 +722,26 @@ export function DashboardPage() {
   const prevMvScopeRef = useRef(filterTimeScopeKey);
   const prevPmScopeRef = useRef(filterTimeScopeKey);
   useEffect(() => {
-    if (optionsSyncPending || prevAdvPayloadRef.current === filterTimeScopeKey || advItems.length === 0 || columns.length === 0) return;
+    if (!heavyQueriesReady || optionsSyncPending || prevAdvPayloadRef.current === filterTimeScopeKey || advItems.length === 0 || columns.length === 0) return;
     prevAdvPayloadRef.current = filterTimeScopeKey;
     loadAdvChart();
-  }, [advItems.length, columns.length, filterTimeScopeKey, loadAdvChart, optionsSyncPending]);
+  }, [advItems.length, columns.length, filterTimeScopeKey, heavyQueriesReady, loadAdvChart, optionsSyncPending]);
 
   useEffect(() => {
-    if (optionsSyncPending || prevMvScopeRef.current === filterTimeScopeKey || mvItems.length === 0 || !mvModelName.trim()) return;
+    if (!heavyQueriesReady || optionsSyncPending || prevMvScopeRef.current === filterTimeScopeKey || mvItems.length === 0 || !mvModelName.trim()) return;
     prevMvScopeRef.current = filterTimeScopeKey;
     loadModelVersions();
-  }, [filterTimeScopeKey, loadModelVersions, mvItems.length, mvModelName, optionsSyncPending]);
+  }, [filterTimeScopeKey, heavyQueriesReady, loadModelVersions, mvItems.length, mvModelName, optionsSyncPending]);
 
   useEffect(() => {
-    if (optionsSyncPending || prevPmScopeRef.current === filterTimeScopeKey || pmItems.length === 0) return;
+    if (!heavyQueriesReady || optionsSyncPending || prevPmScopeRef.current === filterTimeScopeKey || pmItems.length === 0) return;
     prevPmScopeRef.current = filterTimeScopeKey;
     loadPositioningMap();
-  }, [filterTimeScopeKey, loadPositioningMap, optionsSyncPending, pmItems.length]);
+  }, [filterTimeScopeKey, heavyQueriesReady, loadPositioningMap, optionsSyncPending, pmItems.length]);
 
   /* auto-fetch grouped time series */
   useEffect(() => {
-    if (tsMode !== "\u5206\u7ec4" || columns.length === 0) return;
+    if (!heavyQueriesReady || tsMode !== "\u5206\u7ec4" || columns.length === 0) return;
     const filters = JSON.parse(filterPayloadStr) as Record<string, string[]>;
     setGroupedLoading(true);
     let cancelled = false;
@@ -753,7 +775,7 @@ export function DashboardPage() {
         clearTimeout(timer);
         setGroupedLoading(false);
       };
-  }, [tsMode, tsGroupDim, tsShareSplit, activeTab, tsTopN, tsTopNEnabled, tsIncludeOthers, chartType, rankLimit, filterPayloadStr, columns.length, timeRangePayload]);
+  }, [tsMode, tsGroupDim, tsShareSplit, activeTab, tsTopN, tsTopNEnabled, tsIncludeOthers, chartType, rankLimit, filterPayloadStr, columns.length, heavyQueriesReady, timeRangePayload]);
 
   /* advanced chart */
   async function loadAdvChart() {
@@ -1848,13 +1870,13 @@ export function DashboardPage() {
             </div>
             <div className="chart-controls">
               <div className="tab-bar">
-                <button className={"tab-btn"+(tsMode==="\u603b\u548c"?" active":"")} onClick={()=>setTsMode("\u603b\u548c")}>{"\u603b\u548c"}</button>
-                <button className={"tab-btn"+(tsMode==="\u5206\u7ec4"?" active":"")} onClick={()=>setTsMode("\u5206\u7ec4")}>{"\u5206\u7ec4"}</button>
+                <button className={"tab-btn"+(tsMode==="\u603b\u548c"?" active":"")} onClick={()=>selectTsMode("\u603b\u548c")}>{"\u603b\u548c"}</button>
+                <button className={"tab-btn"+(tsMode==="\u5206\u7ec4"?" active":"")} onClick={()=>selectTsMode("\u5206\u7ec4")}>{"\u5206\u7ec4"}</button>
               </div>
               <span className="chart-controls-sep" />
-              <label className="chart-mode-label"><input type="radio" name="chartType" value="line" checked={chartType==="line"} onChange={()=>setChartType("line")} />{" \u6298\u7ebf"}</label>
-              <label className="chart-mode-label"><input type="radio" name="chartType" value="bar" checked={chartType==="bar"} onChange={()=>setChartType("bar")} />{" \u7d2f\u79ef\u67f1\u72b6"}</label>
-              <label className="chart-mode-label"><input type="radio" name="chartType" value="rank" checked={chartType==="rank"} onChange={()=>{setChartType("rank"); if(tsMode==="\u603b\u548c") setTsMode("\u5206\u7ec4");}} />{" \u6392\u540d"}</label>
+              <label className="chart-mode-label"><input type="radio" name="chartType" value="line" checked={chartType==="line"} onChange={()=>selectChartType("line")} />{" \u6298\u7ebf"}</label>
+              <label className="chart-mode-label"><input type="radio" name="chartType" value="bar" checked={chartType==="bar"} onChange={()=>selectChartType("bar")} />{" \u7d2f\u79ef\u67f1\u72b6"}</label>
+              <label className="chart-mode-label"><input type="radio" name="chartType" value="rank" checked={chartType==="rank"} onChange={()=>selectChartType("rank")} />{" \u6392\u540d"}</label>
             </div>
           </div>
 
@@ -2345,7 +2367,7 @@ export function DashboardPage() {
                 </select>
               </div>
             )}
-            <LoadingActionButton loading={advLoading} loadingLabel="加载中…" disabled={!columns.length} onClick={loadAdvChart}>加载图表</LoadingActionButton>
+            <LoadingActionButton loading={advLoading} loadingLabel="加载中…" disabled={!columns.length} onClick={()=>{ releaseHeavyQueries(); void loadAdvChart(); }}>加载图表</LoadingActionButton>
             </>)}
           </div>
 
@@ -3062,7 +3084,7 @@ export function DashboardPage() {
                 <option value="Trim">Trim</option>
               </select>
             </div>
-            <LoadingActionButton loading={mvLoading} loadingLabel="加载中…" disabled={!mvModelName.trim()} onClick={loadModelVersions}>
+            <LoadingActionButton loading={mvLoading} loadingLabel="加载中…" disabled={!mvModelName.trim()} onClick={()=>{ releaseHeavyQueries(); void loadModelVersions(); }}>
               加载版型
             </LoadingActionButton>
           </div>
@@ -3185,7 +3207,7 @@ export function DashboardPage() {
               <input type="number" value={pmTopN} min={10} max={300} style={{width:60}}
                 onChange={e=>setPmTopN(Number(e.target.value)||80)} />
             </div>
-            <LoadingActionButton loading={pmLoading} loadingLabel="加载中…" onClick={loadPositioningMap}>
+            <LoadingActionButton loading={pmLoading} loadingLabel="加载中…" onClick={()=>{ releaseHeavyQueries(); void loadPositioningMap(); }}>
               加载定位图
             </LoadingActionButton>
           </div>
@@ -3389,16 +3411,16 @@ export function DashboardPage() {
                     <label className="market-scan-field">
                       <span>Series</span>
                       <div className="tab-bar">
-                        <button className={`tab-btn${tsMode==="总和"?" active":""}`} onClick={()=>setTsMode("总和")}>总和</button>
-                        <button className={`tab-btn${tsMode==="分组"?" active":""}`} onClick={()=>setTsMode("分组")}>分组</button>
+                        <button className={`tab-btn${tsMode==="总和"?" active":""}`} onClick={()=>selectTsMode("总和")}>总和</button>
+                        <button className={`tab-btn${tsMode==="分组"?" active":""}`} onClick={()=>selectTsMode("分组")}>分组</button>
                       </div>
                     </label>
                     <label className="market-scan-field positioning-pricing-control-field--wide">
                       <span>Chart</span>
                       <div className="tab-bar">
-                        <button className={`tab-btn${chartType==="line"?" active":""}`} onClick={()=>setChartType("line")}>折线</button>
-                        <button className={`tab-btn${chartType==="bar"?" active":""}`} onClick={()=>setChartType("bar")}>柱状</button>
-                        <button className={`tab-btn${chartType==="rank"?" active":""}`} onClick={()=>{setChartType("rank"); if(tsMode==="总和") setTsMode("分组");}}>排名</button>
+                        <button className={`tab-btn${chartType==="line"?" active":""}`} onClick={()=>selectChartType("line")}>折线</button>
+                        <button className={`tab-btn${chartType==="bar"?" active":""}`} onClick={()=>selectChartType("bar")}>柱状</button>
+                        <button className={`tab-btn${chartType==="rank"?" active":""}`} onClick={()=>selectChartType("rank")}>排名</button>
                       </div>
                     </label>
                     {isGrouped && (
