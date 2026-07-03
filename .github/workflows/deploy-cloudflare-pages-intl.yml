@@ -42,9 +42,9 @@ jobs:
           fi
 
           if [ "${#missing[@]}" -gt 0 ]; then
-            printf '[WARN] Skipping Cloudflare Pages deploy; missing: %s\n' "${missing[*]}"
+            printf '[ERROR] Cloudflare Pages deploy is not configured; missing: %s\n' "${missing[*]}"
             echo "configured=false" >> "$GITHUB_OUTPUT"
-            exit 0
+            exit 1
           fi
 
           echo "configured=true" >> "$GITHUB_OUTPUT"
