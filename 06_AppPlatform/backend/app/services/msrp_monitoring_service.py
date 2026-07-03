@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from datetime import date, datetime, timedelta, timezone
 from html.parser import HTMLParser
 from pathlib import Path
@@ -40,6 +41,24 @@ DEFAULT_BACKFILL_SNAPSHOT_PREVIEW_CHARS = 20_000
 MAX_BACKFILL_SNAPSHOT_PREVIEW_CHARS = 100_000
 MONITORING_MODE_LIVE = "live"
 MONITORING_MODE_SWEDEN_DEMO = "sweden_demo"
+MONITORING_MODE_SWEDEN_SWISS_DEMO = "sweden_swiss_demo"
+MONITORING_DEMO_MODES = {
+    MONITORING_MODE_SWEDEN_DEMO,
+    MONITORING_MODE_SWEDEN_SWISS_DEMO,
+}
+SWEDEN_SWISS_TOP30_EVIDENCE_PATH = (
+    PROJECT_ROOT
+    / "03_Scripts"
+    / "diagnostics"
+    / "artifacts"
+    / "msrp_backfill"
+    / "sweden_swiss_top30_suv"
+    / "official_evidence_leads.json"
+)
+MSRP_DEMO_EUR_NORMALIZATION = {
+    "SEK": 1 / 11.5,
+    "CHF": 1.06,
+}
 MONITORING_DIRECTIONS = {"drops", "increases", "all"}
 DEFAULT_MONITORING_DIRECTION = "drops"
 BACKFILL_SNAPSHOT_TEXT_EXTENSIONS = {".html", ".htm", ".md", ".txt", ".json", ".yaml", ".yml"}
@@ -72,6 +91,8 @@ OFFICIAL_PROMOTION_BACKFILL_KINDS = {
     "official_campaign_vs_regular_price",
     "official_campaign_savings_vs_current_price",
     "official_promotion_vs_ordinary_price",
+    "official_offer_boundary",
+    "official_offer_boundary_expired",
 }
 AUDIT_PRIORITY_ORDER = {
     "auto_pass": 0,
@@ -129,7 +150,7 @@ BATCH_A_COUNTRIES: tuple[dict[str, str], ...] = (
     {"code": "IT", "countryLabel": "Italy"},
     {"code": "PL", "countryLabel": "Poland"},
 )
-OFFICIAL_SWEDEN_2026_OFFER_SIGNALS: tuple[dict[str, object], ...] = (
+OFFICIAL_2026_OFFER_SIGNALS: tuple[dict[str, object], ...] = (
     {
         "signalId": "se-2026-toyota-c-hr-plus-official-offer",
         "country": "SE",
@@ -306,6 +327,113 @@ OFFICIAL_SWEDEN_2026_OFFER_SIGNALS: tuple[dict[str, object], ...] = (
         "modelAliases": ["ev4", "kia ev4"],
     },
     {
+        "signalId": "se-2026-peugeot-3008-edition-official-offer",
+        "country": "SE",
+        "countryLabel": "Sweden",
+        "brand": "PEUGEOT",
+        "jatoModel": "3008",
+        "jatoTrim": "Edition official offer",
+        "jatoPowertrain": "HEV/PHEV/BEV",
+        "primaryType": "cash_discount",
+        "offerTypes": ["cash_discount", "purchase_benefit"],
+        "headline": "Peugeot 3008 Edition official offer signal",
+        "valueLabel": "Edition prices from 399,900 SEK; minimum 40,000 SEK saving; valid until 2026-08-31",
+        "cashDiscountSek": 40000,
+        "interestRatePct": None,
+        "monthlyPaymentSek": None,
+        "benefitLabels": ["3-year service agreement"],
+        "sourceUrl": "https://www.peugeot.se/kop/erbjudanden/edition.html",
+        "sourceLabel": "Peugeot Sweden Edition official offer page",
+        "sourceObservedDate": "2026-07-02",
+        "offerValidUntil": "2026-08-31",
+        "notes": "Official offer-only signal: 3008 Hybrid, PHEV and E-3008 Edition prices are listed with minimum savings, but no old MSRP baseline in this extract.",
+        "auditPriority": "priority_audit",
+        "samplingBucket": "official_offer_signal",
+        "matchStatus": "pending_current_price_match",
+        "modelAliases": ["3008", "e-3008", "peugeot 3008"],
+    },
+    {
+        "signalId": "se-2026-peugeot-2008-edition-official-offer",
+        "country": "SE",
+        "countryLabel": "Sweden",
+        "brand": "PEUGEOT",
+        "jatoModel": "2008",
+        "jatoTrim": "Edition official offer",
+        "jatoPowertrain": "ICE/BEV",
+        "primaryType": "cash_discount",
+        "offerTypes": ["cash_discount", "purchase_benefit"],
+        "headline": "Peugeot 2008 Edition official offer signal",
+        "valueLabel": "Edition prices from 244,900 SEK; minimum 40,000 SEK saving; valid until 2026-08-31",
+        "cashDiscountSek": 40000,
+        "interestRatePct": None,
+        "monthlyPaymentSek": None,
+        "benefitLabels": ["3-year service agreement"],
+        "sourceUrl": "https://www.peugeot.se/kop/erbjudanden/edition.html",
+        "sourceLabel": "Peugeot Sweden Edition official offer page",
+        "sourceObservedDate": "2026-07-02",
+        "offerValidUntil": "2026-08-31",
+        "notes": "Official offer-only signal: 2008 Edition and E-2008 Edition prices are listed with minimum savings, but no old MSRP baseline in this extract.",
+        "auditPriority": "priority_audit",
+        "samplingBucket": "official_offer_signal",
+        "matchStatus": "pending_current_price_match",
+        "modelAliases": ["2008", "e-2008", "peugeot 2008"],
+    },
+    {
+        "signalId": "se-2026-peugeot-5008-edition-official-offer",
+        "country": "SE",
+        "countryLabel": "Sweden",
+        "brand": "PEUGEOT",
+        "jatoModel": "5008",
+        "jatoTrim": "Edition official offer",
+        "jatoPowertrain": "HEV/PHEV/BEV",
+        "primaryType": "cash_discount",
+        "offerTypes": ["cash_discount", "purchase_benefit"],
+        "headline": "Peugeot 5008 Edition official offer signal",
+        "valueLabel": "Edition prices from 439,900 SEK; minimum 40,000 SEK saving; valid until 2026-08-31",
+        "cashDiscountSek": 40000,
+        "interestRatePct": None,
+        "monthlyPaymentSek": None,
+        "benefitLabels": ["3-year service agreement"],
+        "sourceUrl": "https://www.peugeot.se/kop/erbjudanden/edition.html",
+        "sourceLabel": "Peugeot Sweden Edition official offer page",
+        "sourceObservedDate": "2026-07-02",
+        "offerValidUntil": "2026-08-31",
+        "notes": "Official offer-only signal: 5008 Hybrid, PHEV and E-5008 Edition prices are listed with minimum savings, but no old MSRP baseline in this extract.",
+        "auditPriority": "priority_audit",
+        "samplingBucket": "official_offer_signal",
+        "matchStatus": "pending_current_price_match",
+        "modelAliases": ["5008", "e-5008", "peugeot 5008"],
+    },
+    {
+        "signalId": "se-2026-vw-tiguan-rline-swe-official-offer",
+        "country": "SE",
+        "countryLabel": "Sweden",
+        "brand": "VOLKSWAGEN",
+        "jatoModel": "TIGUAN",
+        "jatoTrim": "R-Line SWE Edition",
+        "jatoPowertrain": "UNKNOWN",
+        "primaryType": "cash_discount",
+        "offerTypes": ["cash_discount", "purchase_benefit"],
+        "headline": "Volkswagen Tiguan R-Line SWE Edition official offer signal",
+        "valueLabel": "R-Line SWE Edition from 409,900 SEK; advertised saving up to 115,300 SEK; valid until 2026-09-30",
+        "cashDiscountSek": 115300,
+        "cashDiscountLocal": 115300,
+        "localCurrency": "SEK",
+        "interestRatePct": None,
+        "monthlyPaymentSek": None,
+        "monthlyPaymentLocal": None,
+        "benefitLabels": [],
+        "sourceUrl": "https://www.volkswagen.se/sv/modeller/tiguan.html",
+        "sourceLabel": "Volkswagen Sweden Tiguan official model offer page",
+        "sourceObservedDate": "2026-07-02",
+        "offerValidUntil": "2026-09-30",
+        "notes": "Official offer-only signal: current campaign price and maximum saving exist, but same-trim previous MSRP must be matched before accepting a durable price movement.",
+        "auditPriority": "priority_audit",
+        "samplingBucket": "official_offer_signal",
+        "matchStatus": "pending_current_price_match",
+        "modelAliases": ["tiguan", "r-line swe edition", "volkswagen tiguan"],
+    },
+    {
         "signalId": "se-2026-byd-sealion-7-official-finance",
         "country": "SE",
         "countryLabel": "Sweden",
@@ -380,6 +508,35 @@ OFFICIAL_SWEDEN_2026_OFFER_SIGNALS: tuple[dict[str, object], ...] = (
         "matchStatus": "source_coverage_gap",
         "modelAliases": ["geely", "geely auto"],
     },
+    {
+        "signalId": "ch-2026-vw-troc-premiums-official-offer",
+        "country": "CH",
+        "countryLabel": "Switzerland",
+        "brand": "VOLKSWAGEN",
+        "jatoModel": "T-ROC",
+        "jatoTrim": "New T-Roc premium signal",
+        "jatoPowertrain": "UNKNOWN",
+        "primaryType": "cash_discount",
+        "offerTypes": ["cash_discount", "purchase_benefit"],
+        "headline": "Volkswagen Switzerland New T-Roc premium signal",
+        "valueLabel": "Volkswagen Prämie CHF 2,000 plus Advantage-Prämie CHF 1,500; valid 2026-07-01 to 2026-08-31",
+        "cashDiscountSek": None,
+        "cashDiscountLocal": 3500,
+        "localCurrency": "CHF",
+        "interestRatePct": None,
+        "monthlyPaymentSek": None,
+        "monthlyPaymentLocal": None,
+        "benefitLabels": [],
+        "sourceUrl": "https://www.volkswagen.ch/de/beratung-und-kauf/praemien.html",
+        "sourceLabel": "Volkswagen Switzerland premiums official page",
+        "sourceObservedDate": "2026-07-02",
+        "offerValidUntil": "2026-08-31",
+        "notes": "Official offer-only signal: premium values and validity dates are explicit, but no same-trim MSRP boundary is present in this source.",
+        "auditPriority": "sample",
+        "samplingBucket": "official_offer_signal",
+        "matchStatus": "pending_current_price_match",
+        "modelAliases": ["t-roc", "troc", "new t-roc", "volkswagen t-roc"],
+    },
 )
 SWEDEN_DEMO_SCENARIOS: dict[tuple[str, str, str], dict[str, object]] = {
     ("VOLVO", "EX90", "BEV"): {
@@ -410,6 +567,839 @@ SWEDEN_DEMO_SCENARIOS: dict[tuple[str, str, str], dict[str, object]] = {
         "lifecycleStatus": "removed_from_configurator",
     },
 }
+SWEDEN_SWISS_DEMO_ROWS: tuple[dict[str, object], ...] = (
+    {
+        "country": "SE",
+        "countryLabel": "Sweden",
+        "brand": "VOLVO",
+        "jatoModel": "EX90",
+        "jatoTrim": "Ultra Pro Edition",
+        "jatoPowertrain": "BEV",
+        "lengthMm": 5037,
+        "oldMsrpEur": 99895.65,
+        "currentMsrpEur": 95643.48,
+        "oldSourceMsrp": 1148800.0,
+        "currentSourceMsrp": 1099900.0,
+        "sourceCurrency": "SEK",
+        "changePct": -4.26,
+        "daysAgo": 12,
+        "scenario": "Existing Sweden official promotion versus ordinary price",
+        "sourceUrl": "https://www.volvocars.com/se/promotions/",
+        "sourceCode": "demo_volvo_ex90_se",
+        "backfilled": True,
+        "backfillKind": "official_promotion_vs_ordinary_price",
+        "backfillSourceLabel": "Volvo Sweden official promotions evidence note",
+        "backfillEffectiveDate": "2026-06-23",
+        "backfillEvidenceUrl": "https://www.volvocars.com/se/promotions/",
+        "backfillSnapshotPath": "03_Scripts/diagnostics/artifacts/msrp_backfill/sweden_2026/volvo_ex90_ultra_pro_edition_offer_2026-06-23.md",
+        "backfillNotes": "Official promotion price against ordinary recommended price; not a permanent MSRP cut conclusion.",
+        "backfillEvidenceRole": "previous",
+    },
+    {
+        "country": "SE",
+        "countryLabel": "Sweden",
+        "brand": "SKODA",
+        "jatoModel": "ENYAQ",
+        "jatoTrim": "Solid Edition",
+        "jatoPowertrain": "BEV",
+        "lengthMm": 4653,
+        "oldMsrpEur": 53895.65,
+        "currentMsrpEur": 52130.43,
+        "oldSourceMsrp": 619800.0,
+        "currentSourceMsrp": 599500.0,
+        "sourceCurrency": "SEK",
+        "changePct": -3.28,
+        "daysAgo": 18,
+        "scenario": "Existing Sweden campaign price versus ordinary price",
+        "sourceUrl": "https://www.skoda.se/erbjudande/kampanj/erbjudande-enyaq",
+        "sourceCode": "demo_skoda_enyaq_se",
+        "backfilled": True,
+        "backfillKind": "official_campaign_vs_regular_price",
+        "backfillSourceLabel": "Skoda Sweden official campaign page plus PDF",
+        "backfillEffectiveDate": "2026-06-17",
+        "backfillValidUntil": "2026-09-30",
+        "backfillEvidenceUrl": "https://www.skoda.se/erbjudande/kampanj/erbjudande-enyaq",
+        "backfillSnapshotPath": "03_Scripts/diagnostics/artifacts/msrp_backfill/sweden_2026/skoda_enyaq_solid_edition_prislista_2026-06-17.pdf",
+        "backfillNotes": "Official campaign price against ordinary price; keep as campaign/promotion evidence.",
+        "backfillEvidenceRole": "previous",
+    },
+    {
+        "country": "SE",
+        "countryLabel": "Sweden",
+        "brand": "VOLKSWAGEN",
+        "jatoModel": "TAYRON",
+        "jatoTrim": "R-Line SWE Edition",
+        "jatoPowertrain": "UNKNOWN",
+        "lengthMm": 4770,
+        "oldMsrpEur": 61869.56,
+        "currentMsrpEur": 53165.22,
+        "oldSourceMsrp": 711500.0,
+        "currentSourceMsrp": 611400.0,
+        "sourceCurrency": "SEK",
+        "changePct": -14.07,
+        "daysAgo": 24,
+        "scenario": "Demo campaign savings boundary",
+        "sourceUrl": "https://www.volkswagen.se/sv/kop-en-vw/erbjudanden.html",
+        "sourceCode": "demo_volkswagen_tayron_se",
+        "sourceStatus": "review_required",
+        "riskReasons": ["demo_campaign_savings_boundary"],
+        "backfilled": True,
+        "backfillKind": "official_campaign_savings_vs_current_price",
+        "backfillSourceLabel": "Volkswagen Sweden official offers plus configurator snapshots",
+        "backfillEffectiveDate": "2026-06-24",
+        "backfillEvidenceUrl": "https://www.volkswagen.se/sv/kop-en-vw/erbjudanden.html",
+        "backfillSnapshotPath": "03_Scripts/diagnostics/artifacts/msrp_backfill/sweden_2026/volkswagen_offers_2026-06-24.txt",
+        "backfillNotes": "Savings boundary inferred from official savings amount plus current configurator price.",
+        "backfillEvidenceRole": "previous",
+        "relatedOfficialEvidence": [
+            {
+                "label": "Volkswagen Tayron configurator snapshot",
+                "url": "https://www.volkswagen.se/sv/bygg-din-bil.html/__app/31150.app",
+                "snapshotPath": "03_Scripts/diagnostics/artifacts/msrp_backfill/sweden_2026/volkswagen_tayron_configurator_2026-06-24.txt",
+            }
+        ],
+    },
+    {
+        "country": "SE",
+        "countryLabel": "Sweden",
+        "brand": "SKODA",
+        "jatoModel": "KODIAQ",
+        "jatoTrim": "Explore from price",
+        "jatoPowertrain": "UNKNOWN",
+        "lengthMm": 4758,
+        "oldMsrpEur": 38939.13,
+        "currentMsrpEur": 34773.91,
+        "oldSourceMsrp": 447800.0,
+        "currentSourceMsrp": 399900.0,
+        "sourceCurrency": "SEK",
+        "changePct": -10.7,
+        "daysAgo": 1,
+        "scenario": "Sweden Skoda Kodiaq Explore campaign price versus ordinary price",
+        "sourceUrl": "https://www.skoda.se/erbjudande/kampanj/erbjudande-kodiaq",
+        "sourceCode": "demo_skoda_kodiaq_explore_se",
+        "sourceStatus": "review_required",
+        "riskReasons": ["official_offer_boundary", "not_permanent_msrp_cut"],
+        "backfilled": True,
+        "backfillKind": "official_offer_boundary",
+        "backfillSourceLabel": "Skoda Sweden Kodiaq Explore official campaign page",
+        "backfillEffectiveDate": "2026-07-02",
+        "backfillEvidenceUrl": "https://www.skoda.se/erbjudande/kampanj/erbjudande-kodiaq",
+        "backfillSnapshotPath": "03_Scripts/diagnostics/artifacts/msrp_backfill/sweden_swiss_top30_suv/evidence/skoda_se_kodiaq_explore_offer_2026-07-02.html",
+        "backfillNotes": "Official campaign price against ordinary price; do not classify as permanent MSRP cut without current scrape confirmation.",
+        "backfillEvidenceRole": "previous",
+    },
+    {
+        "country": "SE",
+        "countryLabel": "Sweden",
+        "brand": "VOLVO",
+        "jatoModel": "XC60",
+        "jatoTrim": "Plus Black Nordic Edition",
+        "jatoPowertrain": "UNKNOWN",
+        "lengthMm": 4708,
+        "oldMsrpEur": 65382.61,
+        "currentMsrpEur": 53904.35,
+        "oldSourceMsrp": 751900.0,
+        "currentSourceMsrp": 619900.0,
+        "sourceCurrency": "SEK",
+        "changePct": -17.56,
+        "daysAgo": 1,
+        "scenario": "Sweden Volvo official promotion versus ordinary price",
+        "sourceUrl": "https://www.volvocars.com/se/promotions/",
+        "sourceCode": "demo_volvo_xc60_black_nordic_se",
+        "sourceStatus": "review_required",
+        "riskReasons": ["official_offer_boundary", "not_permanent_msrp_cut", "powertrain_match_pending"],
+        "backfilled": True,
+        "backfillKind": "official_offer_boundary",
+        "backfillSourceLabel": "Volvo Sweden official promotions top30 extract",
+        "backfillEffectiveDate": "2026-07-02",
+        "backfillEvidenceUrl": "https://www.volvocars.com/se/promotions/",
+        "backfillSnapshotPath": "03_Scripts/diagnostics/artifacts/msrp_backfill/sweden_swiss_top30_suv/evidence/volvo_se_promotions_top30_web_extract_2026-07-02.md",
+        "backfillNotes": "Official promotion price against ordinary price; powertrain and permanent MSRP semantics require source review.",
+        "backfillEvidenceRole": "previous",
+    },
+    {
+        "country": "SE",
+        "countryLabel": "Sweden",
+        "brand": "VOLVO",
+        "jatoModel": "EX40",
+        "jatoTrim": "Ultra Black Special Edition",
+        "jatoPowertrain": "BEV",
+        "lengthMm": 4440,
+        "oldMsrpEur": 57904.35,
+        "currentMsrpEur": 53034.78,
+        "oldSourceMsrp": 665900.0,
+        "currentSourceMsrp": 609900.0,
+        "sourceCurrency": "SEK",
+        "changePct": -8.41,
+        "daysAgo": 1,
+        "scenario": "Sweden Volvo official EX40 special-edition promotion",
+        "sourceUrl": "https://www.volvocars.com/se/promotions/",
+        "sourceCode": "demo_volvo_ex40_ultra_special_se",
+        "sourceStatus": "review_required",
+        "riskReasons": ["official_offer_boundary", "not_permanent_msrp_cut"],
+        "backfilled": True,
+        "backfillKind": "official_offer_boundary",
+        "backfillSourceLabel": "Volvo Sweden official promotions top30 extract",
+        "backfillEffectiveDate": "2026-07-02",
+        "backfillEvidenceUrl": "https://www.volvocars.com/se/promotions/",
+        "backfillSnapshotPath": "03_Scripts/diagnostics/artifacts/msrp_backfill/sweden_swiss_top30_suv/evidence/volvo_se_promotions_top30_web_extract_2026-07-02.md",
+        "backfillNotes": "Official special-edition recommended price against ordinary price; treat as offer boundary.",
+        "backfillEvidenceRole": "previous",
+    },
+    {
+        "country": "SE",
+        "countryLabel": "Sweden",
+        "brand": "VOLVO",
+        "jatoModel": "EX40",
+        "jatoTrim": "Plus Black Special Edition",
+        "jatoPowertrain": "BEV",
+        "lengthMm": 4440,
+        "oldMsrpEur": 54686.96,
+        "currentMsrpEur": 51295.65,
+        "oldSourceMsrp": 628900.0,
+        "currentSourceMsrp": 589900.0,
+        "sourceCurrency": "SEK",
+        "changePct": -6.2,
+        "daysAgo": 1,
+        "scenario": "Sweden Volvo official EX40 special-edition promotion",
+        "sourceUrl": "https://www.volvocars.com/se/promotions/",
+        "sourceCode": "demo_volvo_ex40_plus_special_se",
+        "sourceStatus": "review_required",
+        "riskReasons": ["official_offer_boundary", "not_permanent_msrp_cut"],
+        "backfilled": True,
+        "backfillKind": "official_offer_boundary",
+        "backfillSourceLabel": "Volvo Sweden official promotions top30 extract",
+        "backfillEffectiveDate": "2026-07-02",
+        "backfillEvidenceUrl": "https://www.volvocars.com/se/promotions/",
+        "backfillSnapshotPath": "03_Scripts/diagnostics/artifacts/msrp_backfill/sweden_swiss_top30_suv/evidence/volvo_se_promotions_top30_web_extract_2026-07-02.md",
+        "backfillNotes": "Official special-edition recommended price against ordinary price; treat as offer boundary.",
+        "backfillEvidenceRole": "previous",
+    },
+    {
+        "country": "SE",
+        "countryLabel": "Sweden",
+        "brand": "VOLVO",
+        "jatoModel": "EC40",
+        "jatoTrim": "Ultra Black Special Edition",
+        "jatoPowertrain": "BEV",
+        "lengthMm": 4440,
+        "oldMsrpEur": 58947.83,
+        "currentMsrpEur": 53034.78,
+        "oldSourceMsrp": 677900.0,
+        "currentSourceMsrp": 609900.0,
+        "sourceCurrency": "SEK",
+        "changePct": -10.03,
+        "daysAgo": 1,
+        "scenario": "Sweden Volvo official EC40 special-edition promotion",
+        "sourceUrl": "https://www.volvocars.com/se/promotions/",
+        "sourceCode": "demo_volvo_ec40_ultra_special_se",
+        "sourceStatus": "review_required",
+        "riskReasons": ["official_offer_boundary", "not_permanent_msrp_cut"],
+        "backfilled": True,
+        "backfillKind": "official_offer_boundary",
+        "backfillSourceLabel": "Volvo Sweden official promotions top30 extract",
+        "backfillEffectiveDate": "2026-07-02",
+        "backfillEvidenceUrl": "https://www.volvocars.com/se/promotions/",
+        "backfillSnapshotPath": "03_Scripts/diagnostics/artifacts/msrp_backfill/sweden_swiss_top30_suv/evidence/volvo_se_promotions_top30_web_extract_2026-07-02.md",
+        "backfillNotes": "Official special-edition recommended price against ordinary price; treat as offer boundary.",
+        "backfillEvidenceRole": "previous",
+    },
+    {
+        "country": "SE",
+        "countryLabel": "Sweden",
+        "brand": "VOLVO",
+        "jatoModel": "EC40",
+        "jatoTrim": "Plus Black Special Edition",
+        "jatoPowertrain": "BEV",
+        "lengthMm": 4440,
+        "oldMsrpEur": 56252.17,
+        "currentMsrpEur": 51295.65,
+        "oldSourceMsrp": 646900.0,
+        "currentSourceMsrp": 589900.0,
+        "sourceCurrency": "SEK",
+        "changePct": -8.81,
+        "daysAgo": 1,
+        "scenario": "Sweden Volvo official EC40 special-edition promotion",
+        "sourceUrl": "https://www.volvocars.com/se/promotions/",
+        "sourceCode": "demo_volvo_ec40_plus_special_se",
+        "sourceStatus": "review_required",
+        "riskReasons": ["official_offer_boundary", "not_permanent_msrp_cut"],
+        "backfilled": True,
+        "backfillKind": "official_offer_boundary",
+        "backfillSourceLabel": "Volvo Sweden official promotions top30 extract",
+        "backfillEffectiveDate": "2026-07-02",
+        "backfillEvidenceUrl": "https://www.volvocars.com/se/promotions/",
+        "backfillSnapshotPath": "03_Scripts/diagnostics/artifacts/msrp_backfill/sweden_swiss_top30_suv/evidence/volvo_se_promotions_top30_web_extract_2026-07-02.md",
+        "backfillNotes": "Official special-edition recommended price against ordinary price; treat as offer boundary.",
+        "backfillEvidenceRole": "previous",
+    },
+    {
+        "country": "CH",
+        "countryLabel": "Switzerland",
+        "brand": "VOLKSWAGEN",
+        "jatoModel": "TIGUAN",
+        "jatoTrim": "UNITED Life 2.0 TSI",
+        "jatoPowertrain": "ICE",
+        "lengthMm": 4539,
+        "oldMsrpEur": 61670.8,
+        "currentMsrpEur": 56286.0,
+        "oldSourceMsrp": 58180.0,
+        "currentSourceMsrp": 53100.0,
+        "sourceCurrency": "CHF",
+        "changePct": -8.73,
+        "daysAgo": 1,
+        "scenario": "Swiss official UNITED regular price versus special model price",
+        "sourceUrl": "https://www.volkswagen.ch/de/modelle/die-sondermodelle-united.html",
+        "sourceCode": "demo_vw_tiguan_united_ch",
+        "sourceStatus": "review_required",
+        "riskReasons": ["official_offer_boundary", "not_permanent_msrp_cut"],
+        "backfilled": True,
+        "backfillKind": "official_offer_boundary",
+        "backfillSourceLabel": "Volkswagen Switzerland UNITED official offer page",
+        "backfillEffectiveDate": "2026-07-01",
+        "backfillValidUntil": "2026-08-31",
+        "backfillEvidenceUrl": "https://www.volkswagen.ch/de/modelle/die-sondermodelle-united.html",
+        "backfillSnapshotPath": "03_Scripts/diagnostics/artifacts/msrp_backfill/sweden_swiss_top30_suv/evidence/volkswagen_ch_united_offer_2026-07-02.html",
+        "backfillNotes": "Official regular price versus special model price; valid for contracts from 2026-07-01 to 2026-08-31.",
+        "backfillEvidenceRole": "previous",
+    },
+    {
+        "country": "CH",
+        "countryLabel": "Switzerland",
+        "brand": "VOLVO",
+        "jatoModel": "XC60",
+        "jatoTrim": "B5 AWD Mild Hybrid Essential",
+        "jatoPowertrain": "MHEV",
+        "lengthMm": 4688,
+        "oldMsrpEur": 70702.0,
+        "currentMsrpEur": 63282.0,
+        "oldSourceMsrp": 66700.0,
+        "currentSourceMsrp": 59700.0,
+        "sourceCurrency": "CHF",
+        "changePct": -10.49,
+        "daysAgo": 2,
+        "scenario": "Swiss Volvo Aurora Bonus expired campaign boundary",
+        "sourceUrl": "https://www.volvocars.com/de-ch/cars/xc60-hybrid/",
+        "sourceCode": "demo_volvo_xc60_b5_aurora_ch",
+        "sourceStatus": "review_required",
+        "riskReasons": ["expired_offer_boundary", "official_offer_boundary", "not_current_offer", "not_permanent_msrp_cut"],
+        "backfilled": True,
+        "backfillKind": "official_offer_boundary_expired",
+        "backfillSourceLabel": "Volvo Switzerland XC60 official offer extract",
+        "backfillEffectiveDate": "2026-06-30",
+        "backfillValidUntil": "2026-06-30",
+        "backfillEvidenceUrl": "https://www.volvocars.com/de-ch/cars/xc60-hybrid/",
+        "backfillSnapshotPath": "03_Scripts/diagnostics/artifacts/msrp_backfill/sweden_swiss_top30_suv/evidence/volvo_ch_xc60_web_extract_2026-07-02.md",
+        "backfillNotes": "Official Aurora Bonus evidence valid until 2026-06-30; display as historical campaign boundary.",
+        "backfillEvidenceRole": "previous",
+    },
+    {
+        "country": "CH",
+        "countryLabel": "Switzerland",
+        "brand": "VOLVO",
+        "jatoModel": "XC60",
+        "jatoTrim": "Plug-in Hybrid from price",
+        "jatoPowertrain": "PHEV",
+        "lengthMm": 4688,
+        "oldMsrpEur": 84694.0,
+        "currentMsrpEur": 77274.0,
+        "oldSourceMsrp": 79900.0,
+        "currentSourceMsrp": 72900.0,
+        "sourceCurrency": "CHF",
+        "changePct": -8.76,
+        "daysAgo": 2,
+        "scenario": "Swiss Volvo Aurora Bonus expired campaign boundary",
+        "sourceUrl": "https://www.volvocars.com/de-ch/cars/xc60-hybrid/",
+        "sourceCode": "demo_volvo_xc60_phev_aurora_ch",
+        "sourceStatus": "review_required",
+        "riskReasons": ["expired_offer_boundary", "official_offer_boundary", "not_current_offer", "not_permanent_msrp_cut"],
+        "backfilled": True,
+        "backfillKind": "official_offer_boundary_expired",
+        "backfillSourceLabel": "Volvo Switzerland XC60 official offer extract",
+        "backfillEffectiveDate": "2026-06-30",
+        "backfillValidUntil": "2026-06-30",
+        "backfillEvidenceUrl": "https://www.volvocars.com/de-ch/cars/xc60-hybrid/",
+        "backfillSnapshotPath": "03_Scripts/diagnostics/artifacts/msrp_backfill/sweden_swiss_top30_suv/evidence/volvo_ch_xc60_web_extract_2026-07-02.md",
+        "backfillNotes": "Official Aurora Bonus evidence valid until 2026-06-30; display as historical campaign boundary.",
+        "backfillEvidenceRole": "previous",
+    },
+    {
+        "country": "CH",
+        "countryLabel": "Switzerland",
+        "brand": "KIA",
+        "jatoModel": "SPORTAGE",
+        "jatoTrim": "Black Edition 1.6 T-GDi HEV",
+        "jatoPowertrain": "HEV",
+        "lengthMm": 4515,
+        "oldMsrpEur": 56010.4,
+        "currentMsrpEur": 49767.0,
+        "oldSourceMsrp": 52840.0,
+        "currentSourceMsrp": 46950.0,
+        "sourceCurrency": "CHF",
+        "changePct": -11.15,
+        "daysAgo": 2,
+        "scenario": "Swiss Kia Sportage official Black Edition offer boundary",
+        "sourceUrl": "https://www.kia.ch/de/modelle/neuer-sportage",
+        "sourceCode": "demo_kia_sportage_black_edition_ch",
+        "sourceStatus": "review_required",
+        "riskReasons": ["expired_offer_boundary", "official_offer_boundary", "not_current_offer", "not_permanent_msrp_cut"],
+        "backfilled": True,
+        "backfillKind": "official_offer_boundary_expired",
+        "backfillSourceLabel": "Kia Switzerland Sportage official offer page",
+        "backfillEffectiveDate": "2026-06-30",
+        "backfillValidUntil": "2026-06-30",
+        "backfillEvidenceUrl": "https://www.kia.ch/de/modelle/neuer-sportage",
+        "backfillSnapshotPath": "03_Scripts/diagnostics/artifacts/msrp_backfill/sweden_swiss_top30_suv/evidence/kia_ch_sportage_offer_2026-07-02.html",
+        "backfillNotes": "Official Black Edition offer price plus stated price advantage; expired as of 2026-07-02.",
+        "backfillEvidenceRole": "previous",
+    },
+    {
+        "country": "CH",
+        "countryLabel": "Switzerland",
+        "brand": "VOLKSWAGEN",
+        "jatoModel": "TAYRON",
+        "jatoTrim": "UNITED R-Line 2.0 TSI",
+        "jatoPowertrain": "ICE",
+        "lengthMm": 4770,
+        "oldMsrpEur": 68433.6,
+        "currentMsrpEur": 66568.0,
+        "oldSourceMsrp": 64560.0,
+        "currentSourceMsrp": 62800.0,
+        "sourceCurrency": "CHF",
+        "changePct": -2.73,
+        "daysAgo": 1,
+        "scenario": "Swiss official UNITED regular price versus special model price",
+        "sourceUrl": "https://www.volkswagen.ch/de/modelle/die-sondermodelle-united.html",
+        "sourceCode": "demo_vw_tayron_united_ch",
+        "sourceStatus": "review_required",
+        "riskReasons": ["official_offer_boundary", "not_permanent_msrp_cut"],
+        "backfilled": True,
+        "backfillKind": "official_offer_boundary",
+        "backfillSourceLabel": "Volkswagen Switzerland UNITED official offer page",
+        "backfillEffectiveDate": "2026-07-01",
+        "backfillValidUntil": "2026-08-31",
+        "backfillEvidenceUrl": "https://www.volkswagen.ch/de/modelle/die-sondermodelle-united.html",
+        "backfillSnapshotPath": "03_Scripts/diagnostics/artifacts/msrp_backfill/sweden_swiss_top30_suv/evidence/volkswagen_ch_united_offer_2026-07-02.html",
+        "backfillNotes": "Official regular price versus special model price; valid for contracts from 2026-07-01 to 2026-08-31.",
+        "backfillEvidenceRole": "previous",
+    },
+    {
+        "country": "CH",
+        "countryLabel": "Switzerland",
+        "brand": "CUPRA",
+        "jatoModel": "TERRAMAR",
+        "jatoTrim": "VZ PRIME EDITION",
+        "jatoPowertrain": "ICE",
+        "lengthMm": 4519,
+        "oldMsrpEur": 74359.0,
+        "currentMsrpEur": 62381.0,
+        "oldSourceMsrp": 70150.0,
+        "currentSourceMsrp": 58850.0,
+        "sourceCurrency": "CHF",
+        "changePct": -16.11,
+        "daysAgo": 1,
+        "scenario": "Swiss Cupra Terramar PRIME regular price versus special offer price",
+        "sourceUrl": "https://www.cupraofficial.ch/de/angebote/sonderangebote",
+        "sourceCode": "demo_cupra_terramar_prime_ch",
+        "sourceStatus": "review_required",
+        "riskReasons": ["official_offer_boundary", "not_permanent_msrp_cut"],
+        "backfilled": True,
+        "backfillKind": "official_offer_boundary",
+        "backfillSourceLabel": "Cupra Switzerland special offers official page",
+        "backfillEffectiveDate": "2026-07-02",
+        "backfillEvidenceUrl": "https://www.cupraofficial.ch/de/angebote/sonderangebote",
+        "backfillSnapshotPath": "03_Scripts/diagnostics/artifacts/msrp_backfill/sweden_swiss_top30_suv/evidence/cupra_ch_special_offers_2026-07-02.html",
+        "backfillNotes": "Official regular price against special offer price; campaign semantics require source review.",
+        "backfillEvidenceRole": "previous",
+    },
+    {
+        "country": "CH",
+        "countryLabel": "Switzerland",
+        "brand": "CUPRA",
+        "jatoModel": "FORMENTOR",
+        "jatoTrim": "PRIME EDITION",
+        "jatoPowertrain": "ICE",
+        "lengthMm": 4451,
+        "oldMsrpEur": 56339.0,
+        "currentMsrpEur": 42771.0,
+        "oldSourceMsrp": 53150.0,
+        "currentSourceMsrp": 40350.0,
+        "sourceCurrency": "CHF",
+        "changePct": -24.08,
+        "daysAgo": 1,
+        "scenario": "Swiss Cupra Formentor PRIME regular price versus special offer price",
+        "sourceUrl": "https://www.cupraofficial.ch/de/angebote/sonderangebote",
+        "sourceCode": "demo_cupra_formentor_prime_ch",
+        "sourceStatus": "review_required",
+        "riskReasons": ["official_offer_boundary", "not_permanent_msrp_cut"],
+        "backfilled": True,
+        "backfillKind": "official_offer_boundary",
+        "backfillSourceLabel": "Cupra Switzerland special offers official page",
+        "backfillEffectiveDate": "2026-07-02",
+        "backfillEvidenceUrl": "https://www.cupraofficial.ch/de/angebote/sonderangebote",
+        "backfillSnapshotPath": "03_Scripts/diagnostics/artifacts/msrp_backfill/sweden_swiss_top30_suv/evidence/cupra_ch_special_offers_2026-07-02.html",
+        "backfillNotes": "Official regular price against special offer price; campaign semantics require source review.",
+        "backfillEvidenceRole": "previous",
+    },
+    {
+        "country": "CH",
+        "countryLabel": "Switzerland",
+        "brand": "VOLVO",
+        "jatoModel": "EX30",
+        "jatoTrim": "P5 Core Fjord Bonus",
+        "jatoPowertrain": "BEV",
+        "lengthMm": 4233,
+        "oldMsrpEur": 40545.0,
+        "currentMsrpEur": 35245.0,
+        "oldSourceMsrp": 38250.0,
+        "currentSourceMsrp": 33250.0,
+        "sourceCurrency": "CHF",
+        "changePct": -13.07,
+        "daysAgo": 2,
+        "scenario": "Swiss Volvo EX30 Fjord Bonus expired campaign boundary",
+        "sourceUrl": "https://www.volvocars.com/de-ch/cars/ex30-electric/",
+        "sourceCode": "demo_volvo_ex30_fjord_bonus_ch",
+        "sourceStatus": "review_required",
+        "riskReasons": ["expired_offer_boundary", "official_offer_boundary", "not_current_offer", "not_permanent_msrp_cut"],
+        "backfilled": True,
+        "backfillKind": "official_offer_boundary_expired",
+        "backfillSourceLabel": "Volvo Switzerland EX30 official offer extract",
+        "backfillEffectiveDate": "2026-06-30",
+        "backfillValidUntil": "2026-06-30",
+        "backfillEvidenceUrl": "https://www.volvocars.com/de-ch/cars/ex30-electric/",
+        "backfillSnapshotPath": "03_Scripts/diagnostics/artifacts/msrp_backfill/sweden_swiss_top30_suv/evidence/volvo_ch_ex30_fjord_bonus_web_extract_2026-07-02.md",
+        "backfillNotes": "Official Fjord Bonus evidence valid until 2026-06-30; display as historical campaign boundary.",
+        "backfillEvidenceRole": "previous",
+    },
+    {
+        "country": "CH",
+        "countryLabel": "Switzerland",
+        "brand": "SKODA",
+        "jatoModel": "KODIAQ",
+        "jatoTrim": "Dynamic 2.0 TSI 4x4",
+        "jatoPowertrain": "ICE",
+        "lengthMm": 4758,
+        "oldMsrpEur": 64416.2,
+        "currentMsrpEur": 55724.2,
+        "oldSourceMsrp": 60770.0,
+        "currentSourceMsrp": 52570.0,
+        "sourceCurrency": "CHF",
+        "changePct": -13.49,
+        "daysAgo": 1,
+        "scenario": "Swiss official Dynamic list price versus end price",
+        "sourceUrl": "https://pageflip.ch/skoda/de/preislisten/d_pl_newkodiaq/d_pl_newkodiaq.pdf",
+        "sourceCode": "demo_skoda_kodiaq_dynamic_ch",
+        "sourceStatus": "review_required",
+        "riskReasons": ["official_offer_boundary", "not_permanent_msrp_cut"],
+        "backfilled": True,
+        "backfillKind": "official_offer_boundary",
+        "backfillSourceLabel": "Skoda Switzerland Kodiaq price list PDF",
+        "backfillEffectiveDate": "2026-07-01",
+        "backfillValidUntil": "2026-09-30",
+        "backfillEvidenceUrl": "https://pageflip.ch/skoda/de/preislisten/d_pl_newkodiaq/d_pl_newkodiaq.pdf",
+        "backfillSnapshotPath": "03_Scripts/diagnostics/artifacts/msrp_backfill/sweden_swiss_top30_suv/evidence/skoda_ch_kodiaq_preisliste_2026-07.pdf",
+        "backfillNotes": "Official Dynamic model list price versus end price; campaign valid to 2026-09-30.",
+        "backfillEvidenceRole": "previous",
+    },
+    {
+        "country": "CH",
+        "countryLabel": "Switzerland",
+        "brand": "SKODA",
+        "jatoModel": "KODIAQ",
+        "jatoTrim": "Dynamic 1.5 TSI PHEV",
+        "jatoPowertrain": "PHEV",
+        "lengthMm": 4758,
+        "oldMsrpEur": 65031.0,
+        "currentMsrpEur": 51569.0,
+        "oldSourceMsrp": 61350.0,
+        "currentSourceMsrp": 48650.0,
+        "sourceCurrency": "CHF",
+        "changePct": -20.7,
+        "daysAgo": 1,
+        "scenario": "Swiss official Dynamic PHEV list price versus end price",
+        "sourceUrl": "https://pageflip.ch/skoda/de/preislisten/d_pl_newkodiaq/d_pl_newkodiaq.pdf",
+        "sourceCode": "demo_skoda_kodiaq_dynamic_phev_ch",
+        "sourceStatus": "review_required",
+        "riskReasons": ["official_offer_boundary", "not_permanent_msrp_cut"],
+        "backfilled": True,
+        "backfillKind": "official_offer_boundary",
+        "backfillSourceLabel": "Skoda Switzerland Kodiaq price list PDF",
+        "backfillEffectiveDate": "2026-07-01",
+        "backfillValidUntil": "2026-09-30",
+        "backfillEvidenceUrl": "https://pageflip.ch/skoda/de/preislisten/d_pl_newkodiaq/d_pl_newkodiaq.pdf",
+        "backfillSnapshotPath": "03_Scripts/diagnostics/artifacts/msrp_backfill/sweden_swiss_top30_suv/evidence/skoda_ch_kodiaq_preisliste_2026-07.pdf",
+        "backfillNotes": "Official Dynamic PHEV list price versus end price; campaign valid to 2026-09-30.",
+        "backfillEvidenceRole": "previous",
+    },
+    {
+        "country": "CH",
+        "countryLabel": "Switzerland",
+        "brand": "SKODA",
+        "jatoModel": "KAROQ",
+        "jatoTrim": "Dynamic 1.5 TSI",
+        "jatoPowertrain": "ICE",
+        "lengthMm": 4390,
+        "oldMsrpEur": 51865.8,
+        "currentMsrpEur": 41742.8,
+        "oldSourceMsrp": 48930.0,
+        "currentSourceMsrp": 39380.0,
+        "sourceCurrency": "CHF",
+        "changePct": -19.52,
+        "daysAgo": 92,
+        "scenario": "Swiss expired Dynamic offer boundary retained for 2026 history demo",
+        "sourceUrl": "https://pageflip.ch/skoda/de/preislisten/d_pl_karoq/d_pl_karoq.pdf",
+        "sourceCode": "demo_skoda_karoq_dynamic_ch",
+        "sourceStatus": "review_required",
+        "riskReasons": ["expired_offer_boundary", "official_offer_boundary", "not_current_offer"],
+        "backfilled": True,
+        "backfillKind": "official_offer_boundary_expired",
+        "backfillSourceLabel": "Skoda Switzerland Karoq price list PDF",
+        "backfillEffectiveDate": "2026-04-01",
+        "backfillValidUntil": "2026-06-30",
+        "backfillEvidenceUrl": "https://pageflip.ch/skoda/de/preislisten/d_pl_karoq/d_pl_karoq.pdf",
+        "backfillSnapshotPath": "03_Scripts/diagnostics/artifacts/msrp_backfill/sweden_swiss_top30_suv/evidence/skoda_ch_karoq_preisliste_2026-05.pdf",
+        "backfillNotes": "Official Dynamic campaign evidence valid until 2026-06-30; display as historical evidence, not an active offer.",
+        "backfillEvidenceRole": "previous",
+    },
+    {
+        "country": "CH",
+        "countryLabel": "Switzerland",
+        "brand": "SKODA",
+        "jatoModel": "KAROQ",
+        "jatoTrim": "Dynamic 2.0 TDI 4x4",
+        "jatoPowertrain": "ICE",
+        "lengthMm": 4390,
+        "oldMsrpEur": 57886.6,
+        "currentMsrpEur": 47763.6,
+        "oldSourceMsrp": 54610.0,
+        "currentSourceMsrp": 45060.0,
+        "sourceCurrency": "CHF",
+        "changePct": -17.49,
+        "daysAgo": 92,
+        "scenario": "Swiss expired Dynamic offer boundary retained for 2026 history demo",
+        "sourceUrl": "https://pageflip.ch/skoda/de/preislisten/d_pl_karoq/d_pl_karoq.pdf",
+        "sourceCode": "demo_skoda_karoq_dynamic_tdi_ch",
+        "sourceStatus": "review_required",
+        "riskReasons": ["expired_offer_boundary", "official_offer_boundary", "not_current_offer"],
+        "backfilled": True,
+        "backfillKind": "official_offer_boundary_expired",
+        "backfillSourceLabel": "Skoda Switzerland Karoq price list PDF",
+        "backfillEffectiveDate": "2026-04-01",
+        "backfillValidUntil": "2026-06-30",
+        "backfillEvidenceUrl": "https://pageflip.ch/skoda/de/preislisten/d_pl_karoq/d_pl_karoq.pdf",
+        "backfillSnapshotPath": "03_Scripts/diagnostics/artifacts/msrp_backfill/sweden_swiss_top30_suv/evidence/skoda_ch_karoq_preisliste_2026-05.pdf",
+        "backfillNotes": "Official Dynamic campaign evidence valid until 2026-06-30; display as historical evidence, not an active offer.",
+        "backfillEvidenceRole": "previous",
+    },
+    {
+        "country": "SE",
+        "countryLabel": "Sweden",
+        "brand": "BMW",
+        "jatoModel": "IX1",
+        "jatoTrim": "eDrive20 inventory offer",
+        "jatoPowertrain": "BEV",
+        "lengthMm": 4500,
+        "oldMsrpEur": 53365.22,
+        "currentMsrpEur": 43469.57,
+        "oldSourceMsrp": 613700.0,
+        "currentSourceMsrp": 499900.0,
+        "sourceCurrency": "SEK",
+        "changePct": -18.54,
+        "daysAgo": 1,
+        "scenario": "Sweden BMW iX1 official inventory cash price versus recommended price",
+        "sourceUrl": "https://hitta.bmw.se/r/U11E-iX1",
+        "sourceCode": "demo_bmw_ix1_inventory_offer_se",
+        "sourceStatus": "review_required",
+        "riskReasons": ["official_offer_boundary", "inventory_offer", "not_permanent_msrp_cut"],
+        "backfilled": True,
+        "backfillKind": "official_offer_boundary",
+        "backfillSourceLabel": "BMW Sweden iX1 official available-cars offer page",
+        "backfillEffectiveDate": "2026-07-02",
+        "backfillEvidenceUrl": "https://hitta.bmw.se/r/U11E-iX1",
+        "backfillSnapshotPath": "03_Scripts/diagnostics/artifacts/msrp_backfill/sweden_swiss_top30_suv/evidence/bmw_se_ix1_inventory_offer_2026-07-02.html",
+        "backfillNotes": "Official BMW available-cars page exposes recommended ordinary price and cash price; treat as inventory offer boundary, not a permanent MSRP cut.",
+        "backfillEvidenceRole": "previous",
+    },
+    {
+        "country": "CH",
+        "countryLabel": "Switzerland",
+        "brand": "TOYOTA",
+        "jatoModel": "RAV4",
+        "jatoTrim": "Trend AWD Hybrid",
+        "jatoPowertrain": "HEV",
+        "lengthMm": 4600,
+        "oldMsrpEur": 56710.0,
+        "currentMsrpEur": 50774.0,
+        "oldSourceMsrp": 53500.0,
+        "currentSourceMsrp": 47900.0,
+        "sourceCurrency": "CHF",
+        "changePct": -10.47,
+        "daysAgo": 122,
+        "scenario": "Swiss Toyota RAV4 official model-year price-list transition",
+        "sourceUrl": "https://de.toyota.ch/content/dam/toyota/nmsc/switzerland/pdf_preislisten/PL_RAV4_HEV_PHEV_de_03.pdf",
+        "sourceCode": "demo_toyota_rav4_trend_generation_ch",
+        "sourceStatus": "review_required",
+        "riskReasons": ["generation_transition_baseline", "trim_generation_match_pending"],
+        "backfilled": True,
+        "backfillKind": "official_generation_transition_baseline",
+        "backfillSourceLabel": "Toyota Switzerland RAV4 official 2026 price-list transition",
+        "backfillEffectiveDate": "2026-03-02",
+        "backfillEvidenceUrl": "https://de.toyota.ch/content/dam/toyota/nmsc/switzerland/pdf_preislisten/PL_RAV4_HEV_PHEV_de_03.pdf",
+        "backfillSnapshotPath": "03_Scripts/diagnostics/artifacts/msrp_backfill/sweden_swiss_top30_suv/evidence/toyota_ch_rav4_hev_phev_preisliste_2026-03.pdf",
+        "backfillNotes": "Two official Toyota Switzerland price lists show a model-year/generation transition; keep separate from same-trim MSRP drop until trim continuity is reviewed.",
+        "backfillEvidenceRole": "previous",
+        "relatedOfficialEvidence": [
+            {
+                "label": "Toyota Switzerland RAV4 previous 2026 price list",
+                "url": "https://de.toyota.ch/content/dam/toyota/nmsc/switzerland/pdf_preislisten/PL_RAV4_PHEV_de_01_01_26.pdf",
+                "snapshotPath": "03_Scripts/diagnostics/artifacts/msrp_backfill/sweden_swiss_top30_suv/evidence/toyota_ch_rav4_preisliste_2026-01.pdf",
+            }
+        ],
+    },
+    {
+        "country": "CH",
+        "countryLabel": "Switzerland",
+        "brand": "TOYOTA",
+        "jatoModel": "RAV4",
+        "jatoTrim": "GR SPORT AWD Hybrid",
+        "jatoPowertrain": "HEV",
+        "lengthMm": 4600,
+        "oldMsrpEur": 63494.0,
+        "currentMsrpEur": 58936.0,
+        "oldSourceMsrp": 59900.0,
+        "currentSourceMsrp": 55600.0,
+        "sourceCurrency": "CHF",
+        "changePct": -7.18,
+        "daysAgo": 122,
+        "scenario": "Swiss Toyota RAV4 official model-year price-list transition",
+        "sourceUrl": "https://de.toyota.ch/content/dam/toyota/nmsc/switzerland/pdf_preislisten/PL_RAV4_HEV_PHEV_de_03.pdf",
+        "sourceCode": "demo_toyota_rav4_grsport_generation_ch",
+        "sourceStatus": "review_required",
+        "riskReasons": ["generation_transition_baseline", "trim_generation_match_pending"],
+        "backfilled": True,
+        "backfillKind": "official_generation_transition_baseline",
+        "backfillSourceLabel": "Toyota Switzerland RAV4 official 2026 price-list transition",
+        "backfillEffectiveDate": "2026-03-02",
+        "backfillEvidenceUrl": "https://de.toyota.ch/content/dam/toyota/nmsc/switzerland/pdf_preislisten/PL_RAV4_HEV_PHEV_de_03.pdf",
+        "backfillSnapshotPath": "03_Scripts/diagnostics/artifacts/msrp_backfill/sweden_swiss_top30_suv/evidence/toyota_ch_rav4_hev_phev_preisliste_2026-03.pdf",
+        "backfillNotes": "Two official Toyota Switzerland price lists show a model-year/generation transition; keep separate from same-trim MSRP drop until trim continuity is reviewed.",
+        "backfillEvidenceRole": "previous",
+        "relatedOfficialEvidence": [
+            {
+                "label": "Toyota Switzerland RAV4 previous 2026 price list",
+                "url": "https://de.toyota.ch/content/dam/toyota/nmsc/switzerland/pdf_preislisten/PL_RAV4_PHEV_de_01_01_26.pdf",
+                "snapshotPath": "03_Scripts/diagnostics/artifacts/msrp_backfill/sweden_swiss_top30_suv/evidence/toyota_ch_rav4_preisliste_2026-01.pdf",
+            }
+        ],
+    },
+)
+SWEDEN_SWISS_DEMO_LAUNCH_ALERTS: tuple[dict[str, object], ...] = (
+    {
+        "country": "SE",
+        "countryLabel": "Sweden",
+        "brand": "VOLVO",
+        "jatoModel": "XC90",
+        "jatoTrim": "Ultra",
+        "jatoPowertrain": "PHEV",
+        "lengthMm": 4953,
+        "currentMsrpEur": 86434.78,
+        "currentSourceMsrp": 994000.0,
+        "sourceCurrency": "SEK",
+        "daysAgo": 15,
+        "sourceUrl": "https://www.volvocars.com/se/build/xc90-hybrid/",
+        "sourceCode": "demo_volvo_xc90_launch_se",
+    },
+    {
+        "country": "SE",
+        "countryLabel": "Sweden",
+        "brand": "VOLKSWAGEN",
+        "jatoModel": "T-ROC",
+        "jatoTrim": "from price",
+        "jatoPowertrain": "UNKNOWN",
+        "lengthMm": 4373,
+        "currentMsrpEur": 33817.39,
+        "currentSourceMsrp": 389900.0,
+        "sourceCurrency": "SEK",
+        "daysAgo": 1,
+        "sourceUrl": "https://www.volkswagen.se/sv/modeller/t-roc.html",
+        "sourceCode": "demo_vw_troc_baseline_se",
+    },
+    {
+        "country": "SE",
+        "countryLabel": "Sweden",
+        "brand": "VOLVO",
+        "jatoModel": "EX30",
+        "jatoTrim": "from price",
+        "jatoPowertrain": "BEV",
+        "lengthMm": 4233,
+        "currentMsrpEur": 37304.35,
+        "currentSourceMsrp": 429000.0,
+        "sourceCurrency": "SEK",
+        "daysAgo": 1,
+        "sourceUrl": "https://www.volvocars.com/se/cars/ex30-electric/",
+        "sourceCode": "demo_volvo_ex30_baseline_se",
+    },
+    {
+        "country": "CH",
+        "countryLabel": "Switzerland",
+        "brand": "SKODA",
+        "jatoModel": "ELROQ",
+        "jatoTrim": "Essence 60",
+        "jatoPowertrain": "BEV",
+        "lengthMm": 4488,
+        "currentMsrpEur": 39538.0,
+        "currentSourceMsrp": 37300.0,
+        "sourceCurrency": "CHF",
+        "daysAgo": 62,
+        "sourceUrl": "https://pageflip.ch/skoda/de/preislisten/d_pl_elroq/d_pl_elroq.pdf",
+        "sourceCode": "demo_skoda_elroq_baseline_ch",
+    },
+    {
+        "country": "CH",
+        "countryLabel": "Switzerland",
+        "brand": "SKODA",
+        "jatoModel": "ENYAQ",
+        "jatoTrim": "85 Selection",
+        "jatoPowertrain": "BEV",
+        "lengthMm": 4658,
+        "currentMsrpEur": 55385.0,
+        "currentSourceMsrp": 52250.0,
+        "sourceCurrency": "CHF",
+        "daysAgo": 62,
+        "sourceUrl": "https://pageflip.ch/skoda/de/preislisten/d_pl_newenyaq_fl/d_pl_newenyaq_fl.pdf",
+        "sourceCode": "demo_skoda_enyaq_baseline_ch",
+    },
+    {
+        "country": "CH",
+        "countryLabel": "Switzerland",
+        "brand": "DACIA",
+        "jatoModel": "DUSTER",
+        "jatoTrim": "from price",
+        "jatoPowertrain": "MHEV/HEV",
+        "lengthMm": 4343,
+        "currentMsrpEur": 26489.4,
+        "currentSourceMsrp": 24990.0,
+        "sourceCurrency": "CHF",
+        "daysAgo": 1,
+        "sourceUrl": "https://de.dacia.ch/hybrid-and-electric-range/duster-suv.html",
+        "sourceCode": "demo_dacia_duster_baseline_ch",
+    },
+    {
+        "country": "CH",
+        "countryLabel": "Switzerland",
+        "brand": "DACIA",
+        "jatoModel": "BIGSTER",
+        "jatoTrim": "from price",
+        "jatoPowertrain": "MHEV/HEV",
+        "lengthMm": 4570,
+        "currentMsrpEur": 29669.4,
+        "currentSourceMsrp": 27990.0,
+        "sourceCurrency": "CHF",
+        "daysAgo": 1,
+        "sourceUrl": "https://de.dacia.ch/hybrid-and-electric-range/bigster.html",
+        "sourceCode": "demo_dacia_bigster_baseline_ch",
+    },
+)
 
 
 def _utc_now() -> datetime:
@@ -459,6 +1449,162 @@ def _text_or_none(value: object | None) -> str | None:
     return text or None
 
 
+def _date_from_text(value: object | None) -> date | None:
+    text = _text_or_none(value)
+    if not text:
+        return None
+    try:
+        return date.fromisoformat(text[:10])
+    except ValueError:
+        return None
+
+
+def _datetime_from_date_text(value: object | None) -> datetime | None:
+    parsed = _date_from_text(value)
+    if parsed is None:
+        return None
+    return datetime(parsed.year, parsed.month, parsed.day, tzinfo=timezone.utc)
+
+
+def _demo_days_ago_from_date(value: object | None, generated_at: datetime) -> int:
+    parsed = _date_from_text(value)
+    if parsed is None:
+        return 1
+    return max(0, (generated_at.date() - parsed).days)
+
+
+def _demo_eur_normalized(local_price: object | None, currency: object | None) -> float | None:
+    price = _float_or_none(local_price)
+    if price is None:
+        return None
+    rate = MSRP_DEMO_EUR_NORMALIZATION.get(str(currency or "").strip().upper())
+    if rate is None:
+        return None
+    return round(price * rate, 2)
+
+
+def _load_sweden_swiss_top30_evidence_pack() -> dict[str, object] | None:
+    if not SWEDEN_SWISS_TOP30_EVIDENCE_PATH.exists():
+        return None
+    try:
+        raw = SWEDEN_SWISS_TOP30_EVIDENCE_PATH.read_text(encoding="utf-8")
+        payload = json.loads(raw)
+    except (OSError, json.JSONDecodeError):
+        return None
+    return payload if isinstance(payload, dict) else None
+
+
+def _sweden_swiss_top30_demo_scope() -> dict[str, object]:
+    evidence_pack = _load_sweden_swiss_top30_evidence_pack()
+    ranking_scope = evidence_pack.get("rankingScope") if isinstance(evidence_pack, dict) else None
+    if not isinstance(ranking_scope, dict):
+        return {
+            "topN": 30,
+            "segmentFilter": "SUV",
+            "rankingMethod": "rolling_12m_sales_rank",
+            "sourceWindow": "rolling 12m",
+            "sourceLatestMonth": None,
+            "countries": [],
+        }
+    return {
+        "topN": ranking_scope.get("topN") or 30,
+        "segmentFilter": ranking_scope.get("segmentFilter") or "SUV",
+        "rankingMethod": ranking_scope.get("rankingMethod") or "rolling_12m_sales_rank",
+        "sourceWindow": ranking_scope.get("sourceWindow") or "rolling 12m",
+        "sourceLatestMonth": ranking_scope.get("sourceLatestMonth"),
+        "candidateSource": ranking_scope.get("candidateSource"),
+        "countries": list(ranking_scope.get("countries") or []),
+    }
+
+
+def _sweden_swiss_top30_gap_warnings() -> list[str]:
+    evidence_pack = _load_sweden_swiss_top30_evidence_pack()
+    if not isinstance(evidence_pack, dict):
+        return []
+    warnings: list[str] = []
+    for coverage in list(evidence_pack.get("top30Coverage") or []):
+        if not isinstance(coverage, dict):
+            continue
+        missing_models = coverage.get("missingModels") or []
+        if not missing_models:
+            continue
+        missing_labels = []
+        for item in missing_models:
+            if not isinstance(item, dict):
+                continue
+            rank = item.get("rank")
+            brand = item.get("brand")
+            model = item.get("model")
+            missing_labels.append(f"#{rank} {brand} {model}")
+        if missing_labels:
+            country_label = coverage.get("countryLabel") or coverage.get("countryCode") or "country"
+            warnings.append(f"rolling_12m_top30_official_price_missing:{country_label}:{', '.join(missing_labels)}")
+    return warnings
+
+
+def _sweden_swiss_top30_baseline_rows(generated_at: datetime) -> list[dict[str, object]]:
+    evidence_pack = _load_sweden_swiss_top30_evidence_pack()
+    if not evidence_pack:
+        return []
+    rows: list[dict[str, object]] = []
+    as_of_date = _text_or_none(evidence_pack.get("asOfDate"))
+    for source in list(evidence_pack.get("sources") or []):
+        if not isinstance(source, dict):
+            continue
+        country = str(source.get("countryCode") or "")
+        country_label = str(source.get("countryLabel") or to_display_country(country))
+        brand = str(source.get("brand") or "")
+        model = str(source.get("model") or "")
+        source_url = str(source.get("sourceUrl") or "")
+        source_code = str(source.get("code") or f"{country}_{brand}_{model}").lower().replace(" ", "_")
+        effective_date = (
+            _text_or_none(source.get("validFrom"))
+            or _text_or_none(source.get("documentDate"))
+            or as_of_date
+        )
+        launch_display_date = as_of_date or effective_date
+        for entry in list(source.get("entries") or []):
+            if not isinstance(entry, dict):
+                continue
+            if entry.get("readiness") != "baseline_only_no_movement":
+                continue
+            current_source_msrp = _float_or_none(entry.get("currentSourceMsrp"))
+            if current_source_msrp is None:
+                continue
+            currency = str(entry.get("currency") or "")
+            trim = str(entry.get("trim") or "from price")
+            row_source_code = f"{source_code}_{trim}".lower().replace(" ", "_").replace("/", "_")
+            rows.append(
+                {
+                    "country": country,
+                    "countryLabel": country_label,
+                    "brand": brand,
+                    "jatoModel": model,
+                    "jatoTrim": trim,
+                    "jatoPowertrain": str(entry.get("powertrain") or "UNKNOWN"),
+                    "currentMsrpEur": _demo_eur_normalized(current_source_msrp, currency),
+                    "currentSourceMsrp": current_source_msrp,
+                    "sourceCurrency": currency,
+                    "daysAgo": _demo_days_ago_from_date(effective_date, generated_at),
+                    "launchedAtDate": launch_display_date,
+                    "sourceUrl": source_url,
+                    "sourceCode": row_source_code,
+                    "sourceType": str(source.get("sourceType") or "official_current_baseline"),
+                    "sourceLabel": str(source.get("sourceLabel") or "Official current baseline"),
+                    "backfilled": True,
+                    "backfillKind": "official_current_baseline",
+                    "backfillSourceLabel": str(source.get("sourceLabel") or "Official current baseline"),
+                    "backfillEffectiveDate": effective_date,
+                    "backfillEvidenceUrl": source_url,
+                    "backfillSnapshotPath": _text_or_none(source.get("localPath")),
+                    "backfillPayloadHash": _text_or_none(source.get("sha256")),
+                    "backfillNotes": "Official current-price baseline from the Sweden/Swiss top30 evidence pack; no previous official baseline, so this is not a price-drop conclusion.",
+                    "backfillEvidenceRole": str(entry.get("evidenceRole") or "current_baseline"),
+                }
+            )
+    return rows
+
+
 def _normalized_filter_text(value: object | None) -> str:
     return str(value or "").strip().casefold()
 
@@ -470,7 +1616,12 @@ def _offer_signal_country_matches(signal: dict[str, object], country: str | None
     query_label = _normalized_filter_text(to_display_country(country))
     signal_country = _normalized_filter_text(signal.get("country"))
     signal_label = _normalized_filter_text(signal.get("countryLabel"))
-    return query in {signal_country, signal_label} or query_label == signal_label
+    if query == "swiss":
+        query_label = "switzerland"
+    signal_aliases = {signal_country, signal_label}
+    if signal_label == "switzerland":
+        signal_aliases.add("swiss")
+    return query in signal_aliases or query_label == signal_label
 
 
 def _offer_signal_brand_matches(signal: dict[str, object], brand: str | None) -> bool:
@@ -502,7 +1653,7 @@ def _build_offer_signals(
     jato_model: str | None,
 ) -> list[dict[str, object]]:
     signals: list[dict[str, object]] = []
-    for signal in OFFICIAL_SWEDEN_2026_OFFER_SIGNALS:
+    for signal in OFFICIAL_2026_OFFER_SIGNALS:
         if not _offer_signal_country_matches(signal, country):
             continue
         if not _offer_signal_brand_matches(signal, brand):
@@ -556,22 +1707,38 @@ def _plain_snapshot_preview(path: Path, raw_text: str) -> str:
 
 
 def _pdf_snapshot_preview(path: Path, max_chars: int) -> tuple[str | None, str | None]:
+    pages: list[str] = []
     try:
-        from pypdf import PdfReader
-    except ImportError:
-        return None, "pypdf is not installed; PDF evidence is stored but cannot be text-previewed."
+        import pdfplumber
 
-    try:
-        reader = PdfReader(str(path))
-        pages: list[str] = []
-        for index, page in enumerate(reader.pages):
-            page_text = str(page.extract_text() or "").strip()
-            if page_text:
-                pages.append(f"--- Page {index + 1} ---\n{page_text}")
-            if sum(len(item) for item in pages) > max_chars:
-                break
-    except Exception as exc:
-        return None, f"PDF text extraction failed: {type(exc).__name__}."
+        with pdfplumber.open(path) as pdf:
+            for index, page in enumerate(pdf.pages):
+                page_text = str(page.extract_text() or "").strip()
+                if page_text:
+                    pages.append(f"--- Page {index + 1} ---\n{page_text}")
+                if sum(len(item) for item in pages) > max_chars:
+                    break
+    except ImportError:
+        pass
+    except Exception:
+        pages = []
+
+    if not pages:
+        try:
+            from pypdf import PdfReader
+        except ImportError:
+            return None, "PDF evidence is stored, but no installed PDF extractor could text-preview it."
+
+        try:
+            reader = PdfReader(str(path))
+            for index, page in enumerate(reader.pages):
+                page_text = str(page.extract_text() or "").strip()
+                if page_text:
+                    pages.append(f"--- Page {index + 1} ---\n{page_text}")
+                if sum(len(item) for item in pages) > max_chars:
+                    break
+        except Exception as exc:
+            return None, f"PDF text extraction failed: {type(exc).__name__}."
 
     content = "\n\n".join(pages).strip()
     if not content:
@@ -892,6 +2059,7 @@ def _extract_backfill_evidence(value: object | None) -> dict[str, object]:
         "backfillKind": _first_text(payload, ("kind", "type", "sourceType", "source_type")) or "historical_price_backfill",
         "backfillSourceLabel": _first_text(payload, ("sourceLabel", "source_label", "label", "title", "source")),
         "backfillEffectiveDate": _first_text(payload, ("effectiveDate", "effective_date", "validFrom", "valid_from", "priceDate", "price_date")),
+        "backfillValidUntil": _first_text(payload, ("validUntil", "valid_until", "expiresAt", "expires_at")),
         "backfillEvidenceUrl": _first_text(payload, ("evidenceUrl", "evidence_url", "sourceUrl", "source_url", "url")),
         "backfillSnapshotPath": _first_text(payload, ("snapshotPath", "snapshot_path", "cachePath", "cache_path")),
         "backfillCapturedAtUtc": _first_text(payload, ("capturedAtUtc", "captured_at_utc", "observedAtUtc", "observed_at_utc")),
@@ -1012,6 +2180,7 @@ def _summary_payload(events: list[dict[str, object]]) -> dict[str, object]:
         for item in country_events
         if item.get("samplingBucket") == "campaign_promotion_boundary"
         or "campaign_promotion_boundary:not_permanent_msrp_cut" in list(item.get("auditReasons") or [])
+        or str(dict(item.get("evidence") or {}).get("backfillKind") or "") in OFFICIAL_PROMOTION_BACKFILL_KINDS
     )
     return {
         "eventCount": len(events),
@@ -2324,6 +3493,214 @@ def _demo_timeline_payload(
     }
 
 
+def _demo_filter_matches(
+    value: object,
+    query: str | None,
+    *,
+    country_label: object | None = None,
+) -> bool:
+    if not query:
+        return True
+    query_text = str(query or "").strip().casefold()
+    query_label = to_display_country(str(query or "")).casefold()
+    candidates = {
+        str(value or "").strip().casefold(),
+        str(country_label or "").strip().casefold(),
+        to_display_country(str(value or "")).casefold(),
+    }
+    if query_text == "swiss":
+        query_label = "switzerland"
+    if "switzerland" in candidates:
+        candidates.add("swiss")
+    return query_text in candidates or query_label in candidates
+
+
+def _demo_row_matches_filters(
+    row: dict[str, object],
+    *,
+    country: str | None,
+    brand: str | None,
+    jato_model: str | None,
+) -> bool:
+    if not _demo_filter_matches(row.get("country"), country, country_label=row.get("countryLabel")):
+        return False
+    if brand and str(brand).strip().casefold() not in str(row.get("brand") or "").casefold():
+        return False
+    if jato_model and str(jato_model).strip().casefold() not in str(row.get("jatoModel") or "").casefold():
+        return False
+    return True
+
+
+def _demo_row_timeline_payload(
+    *,
+    row: dict[str, object],
+    generated_at: datetime,
+    threshold_pct: float,
+    direction: str,
+) -> dict[str, object] | None:
+    change_pct = _float_or_none(row.get("changePct"))
+    if (
+        change_pct is None
+        or abs(change_pct) < threshold_pct
+        or not _change_matches_direction(change_pct, direction)
+    ):
+        return None
+    days_ago = int(_float_or_none(row.get("daysAgo")) or 7)
+    changed_at = generated_at - timedelta(days=max(1, days_ago))
+    country = str(row.get("country") or "")
+    brand = str(row.get("brand") or "")
+    model = str(row.get("jatoModel") or "")
+    trim = str(row.get("jatoTrim") or "")
+    powertrain = _normalize_powertrain(row.get("jatoPowertrain"))
+    source_status = str(row.get("sourceStatus") or "confirmed")
+    risk_reasons = [str(item) for item in list(row.get("riskReasons") or [])]
+    source_code = str(row.get("sourceCode") or f"demo_{brand}_{model}_{country}").lower().replace(" ", "_")
+    source_url = str(row.get("sourceUrl") or "")
+    evidence_id = f"demo:{country}:{brand}:{model}:{trim}:{changed_at.date().isoformat()}".replace(" ", "_")
+    return {
+        "country": country,
+        "countryLabel": str(row.get("countryLabel") or to_display_country(country)),
+        "brand": brand,
+        "jatoModel": model,
+        "jatoTrim": trim,
+        "jatoPowertrain": powertrain,
+        "changedAtUtc": changed_at.isoformat(),
+        "oldMsrpEur": _float_or_none(row.get("oldMsrpEur")),
+        "currentMsrpEur": _float_or_none(row.get("currentMsrpEur")),
+        "changeAmountEur": round(
+            float(row.get("currentMsrpEur") or 0.0) - float(row.get("oldMsrpEur") or 0.0),
+            2,
+        ),
+        "changePct": round(change_pct, 2),
+        "changePctBasis": "source_msrp",
+        "oldSourceMsrp": _float_or_none(row.get("oldSourceMsrp")),
+        "currentSourceMsrp": _float_or_none(row.get("currentSourceMsrp")),
+        "changeAmountSource": round(
+            float(row.get("currentSourceMsrp") or 0.0) - float(row.get("oldSourceMsrp") or 0.0),
+            2,
+        ),
+        "sourceCurrency": str(row.get("sourceCurrency") or ""),
+        "previousSourceCurrency": str(row.get("sourceCurrency") or ""),
+        "sourceCurrencyChanged": False,
+        "sourceStatus": source_status,
+        "reviewFlag": source_status != "confirmed",
+        "riskReasons": risk_reasons,
+        "lifecycleStatus": str(row.get("lifecycleStatus") or "active"),
+        "currentPriceId": f"demo-current:{country}:{brand}:{model}:{trim}",
+        "priceHistoryId": f"demo-history:{country}:{brand}:{model}:{trim}:{changed_at.date().isoformat()}",
+        "currentObservationId": f"demo-current-observation:{country}:{brand}:{model}:{trim}",
+        "previousObservationId": f"demo-backfill-observation:{country}:{brand}:{model}:{trim}",
+        "lastConfirmedObservationId": f"demo-current-observation:{country}:{brand}:{model}:{trim}",
+        "effectiveObservationId": f"demo-current-observation:{country}:{brand}:{model}:{trim}",
+        "source": {
+            "sourceCode": source_code,
+            "sourceType": "demo_official_source",
+            "extractorName": "demo_msrp_monitoring",
+            "extractorVersion": "sweden_swiss_demo_v1",
+            "sourceRegistryUrl": source_url,
+        },
+        "evidence": {
+            "sourceUrl": source_url,
+            "sourceSnapshotPath": None,
+            "matchConfidence": 1.0,
+            "matchStatus": "demo_only",
+            "observationSourceUrl": source_url,
+            "sourcePayloadHash": evidence_id,
+            "observedAtUtc": generated_at.isoformat(),
+            "demoBackfilled": True,
+            "demoScenario": str(row.get("scenario") or "Sweden/Swiss MSRP monitor demo"),
+            "dryrunRunId": "msrp-demo-sweden-swiss-2026",
+            "scrapeBatchCode": "msrp-demo-sweden-swiss",
+            "backfilled": bool(row.get("backfilled")),
+            "backfillKind": _text_or_none(row.get("backfillKind")),
+            "backfillSourceLabel": _text_or_none(row.get("backfillSourceLabel")),
+            "backfillEffectiveDate": _text_or_none(row.get("backfillEffectiveDate")),
+            "backfillValidUntil": _text_or_none(row.get("backfillValidUntil")),
+            "backfillEvidenceUrl": _text_or_none(row.get("backfillEvidenceUrl")),
+            "backfillSnapshotPath": _text_or_none(row.get("backfillSnapshotPath")),
+            "backfillPayloadHash": _text_or_none(row.get("backfillPayloadHash")),
+            "backfillCapturedAtUtc": generated_at.isoformat() if row.get("backfilled") else None,
+            "backfillNotes": _text_or_none(row.get("backfillNotes")),
+            "backfillEvidenceRole": _text_or_none(row.get("backfillEvidenceRole")),
+            "relatedOfficialEvidence": list(row.get("relatedOfficialEvidence") or []),
+        },
+    }
+
+
+def _demo_launch_alert_payload(
+    *,
+    row: dict[str, object],
+    generated_at: datetime,
+) -> dict[str, object]:
+    days_ago = int(_float_or_none(row.get("daysAgo")) or 7)
+    launched_at = _datetime_from_date_text(row.get("launchedAtDate")) or generated_at - timedelta(days=max(0, days_ago))
+    country = str(row.get("country") or "")
+    brand = str(row.get("brand") or "")
+    model = str(row.get("jatoModel") or "")
+    trim = str(row.get("jatoTrim") or "")
+    powertrain = _normalize_powertrain(row.get("jatoPowertrain"))
+    source_url = str(row.get("sourceUrl") or "")
+    source_code = str(row.get("sourceCode") or f"demo_{brand}_{model}_{country}").lower().replace(" ", "_")
+    source_label = _text_or_none(row.get("sourceLabel")) or "Official current baseline"
+    snapshot_path = _text_or_none(row.get("backfillSnapshotPath"))
+    payload_hash = _text_or_none(row.get("backfillPayloadHash")) or f"demo-launch:{country}:{brand}:{model}:{trim}".replace(" ", "_")
+    return {
+        "alertId": f"demo-launch|{country}|{brand}|{model}|{trim}|{powertrain}",
+        "country": country,
+        "countryLabel": str(row.get("countryLabel") or to_display_country(country)),
+        "brand": brand,
+        "jatoModel": model,
+        "jatoTrim": trim,
+        "jatoPowertrain": powertrain,
+        "eventType": "new_product_launch_price_baseline",
+        "launchedAtUtc": launched_at.isoformat(),
+        "currentMsrpEur": _float_or_none(row.get("currentMsrpEur")),
+        "currentSourceMsrp": _float_or_none(row.get("currentSourceMsrp")),
+        "sourceCurrency": str(row.get("sourceCurrency") or ""),
+        "sourceStatus": "confirmed",
+        "reviewFlag": False,
+        "riskReasons": [],
+        "auditPriority": "sample",
+        "suggestedAction": "sample_launch_price_baseline",
+        "auditActionLabel": "Spot-check the launch price baseline, then monitor the next scrape for the first movement.",
+        "auditReasons": ["demo_backfilled_scenario", "new_product_launch_price_baseline", "no_previous_price_period"],
+        "samplingBucket": "new_launch_price_baseline",
+        "currentPriceId": f"demo-launch-current:{country}:{brand}:{model}:{trim}",
+        "priceHistoryId": f"demo-launch-history:{country}:{brand}:{model}:{trim}",
+        "currentObservationId": f"demo-launch-observation:{country}:{brand}:{model}:{trim}",
+        "lastConfirmedObservationId": f"demo-launch-observation:{country}:{brand}:{model}:{trim}",
+        "effectiveObservationId": f"demo-launch-observation:{country}:{brand}:{model}:{trim}",
+        "source": {
+            "sourceCode": source_code,
+            "sourceType": str(row.get("sourceType") or "demo_official_source"),
+            "extractorName": "demo_msrp_monitoring",
+            "extractorVersion": "sweden_swiss_demo_v1",
+            "sourceRegistryUrl": source_url,
+        },
+        "evidence": {
+            "sourceUrl": source_url,
+            "sourceSnapshotPath": snapshot_path,
+            "matchConfidence": 1.0,
+            "matchStatus": "demo_only",
+            "observationSourceUrl": source_url,
+            "sourcePayloadHash": payload_hash,
+            "observedAtUtc": generated_at.isoformat(),
+            "demoBackfilled": True,
+            "demoScenario": "Sweden/Swiss launch baseline demo",
+            "backfilled": bool(row.get("backfilled")),
+            "backfillKind": _text_or_none(row.get("backfillKind")),
+            "backfillSourceLabel": _text_or_none(row.get("backfillSourceLabel")) or source_label,
+            "backfillEffectiveDate": _text_or_none(row.get("backfillEffectiveDate")),
+            "backfillEvidenceUrl": _text_or_none(row.get("backfillEvidenceUrl")) or source_url,
+            "backfillSnapshotPath": snapshot_path,
+            "backfillPayloadHash": payload_hash,
+            "backfillCapturedAtUtc": generated_at.isoformat() if row.get("backfilled") else None,
+            "backfillNotes": _text_or_none(row.get("backfillNotes")),
+            "backfillEvidenceRole": _text_or_none(row.get("backfillEvidenceRole")),
+        },
+    }
+
+
 def _build_sweden_demo_events(
     session: Session,
     *,
@@ -2465,6 +3842,136 @@ def _build_sweden_demo_events(
     }
 
 
+def _build_sweden_swiss_demo_events(
+    session: Session,
+    *,
+    country: str | None,
+    brand: str | None,
+    jato_model: str | None,
+    generated_at: datetime,
+    safe_window_days: int,
+    from_date: date | None,
+    safe_threshold_pct: float,
+    safe_limit: int,
+    direction: str,
+) -> dict[str, object]:
+    since = _monitoring_since(generated_at, safe_window_days, from_date)
+    grouped_timeline: dict[tuple[str, str, str], list[dict[str, object]]] = {}
+    grouped_lengths: dict[tuple[str, str, str], dict[str, tuple[int | None, str | None]]] = {}
+    for row in SWEDEN_SWISS_DEMO_ROWS:
+        if not _demo_row_matches_filters(
+            row,
+            country=country,
+            brand=brand,
+            jato_model=jato_model,
+        ):
+            continue
+        changed_at = generated_at - timedelta(days=int(_float_or_none(row.get("daysAgo")) or 7))
+        if changed_at < since:
+            continue
+        timeline_item = _demo_row_timeline_payload(
+            row=row,
+            generated_at=generated_at,
+            threshold_pct=safe_threshold_pct,
+            direction=direction,
+        )
+        if timeline_item is None:
+            continue
+        key = (
+            str(row.get("brand") or ""),
+            str(row.get("jatoModel") or ""),
+            _normalize_powertrain(row.get("jatoPowertrain")),
+        )
+        grouped_timeline.setdefault(key, []).append(timeline_item)
+        grouped_lengths.setdefault(key, {})[str(row.get("country") or "")] = (
+            int(row.get("lengthMm") or 0) or None,
+            "sweden_swiss_demo",
+        )
+
+    events = [
+        _build_model_event(
+            key,
+            timeline,
+            grouped_lengths.get(key, {}),
+        )
+        for key, timeline in grouped_timeline.items()
+        if timeline
+    ]
+    events.sort(
+        key=lambda item: (
+            -int(item.get("affectedCountryCount") or 0),
+            -abs(float(item.get("medianChangePct") or 0.0)),
+            str(item.get("brand") or ""),
+            str(item.get("jatoModel") or ""),
+        )
+    )
+    launch_source_rows = _sweden_swiss_top30_baseline_rows(generated_at) or list(SWEDEN_SWISS_DEMO_LAUNCH_ALERTS)
+    launch_alerts = (
+        [
+            _demo_launch_alert_payload(row=row, generated_at=generated_at)
+            for row in launch_source_rows
+            if _demo_row_matches_filters(
+                row,
+                country=country,
+                brand=brand,
+                jato_model=jato_model,
+            )
+            and (
+                _datetime_from_date_text(row.get("launchedAtDate"))
+                or generated_at - timedelta(days=int(_float_or_none(row.get("daysAgo")) or 7))
+            ) >= since
+        ][:safe_limit]
+        if direction == "all"
+        else []
+    )
+    summary = _summary_payload(events)
+    summary["launchAlertCount"] = len(launch_alerts)
+    offer_signals = [] if direction == "increases" else _build_offer_signals(
+        generated_at,
+        country=country,
+        brand=brand,
+        jato_model=jato_model,
+    )
+    summary["offerSignalCount"] = len(offer_signals)
+    coverage = {"batchA": _build_batch_a_coverage(session)}
+    batch_a_coverage = coverage["batchA"]
+    if isinstance(batch_a_coverage, dict):
+        summary["batchALoadedCountryCount"] = batch_a_coverage.get("loadedCountryCount", 0)
+        summary["batchAHistoricalBackfillCountryCount"] = batch_a_coverage.get("historicalBackfillCountryCount", 0)
+    return {
+        "schemaVersion": "msrp_monitoring_events_v1",
+        "mode": MONITORING_MODE_SWEDEN_SWISS_DEMO,
+        "generatedAtUtc": generated_at.isoformat(),
+        "filters": _monitoring_filters_payload(
+            country=country,
+            brand=brand,
+            jato_model=jato_model,
+            safe_window_days=safe_window_days,
+            from_date=from_date,
+            safe_threshold_pct=safe_threshold_pct,
+            safe_limit=safe_limit,
+            direction=direction,
+        ),
+        "summary": summary,
+        "powertrainColors": POWERTRAIN_COLORS,
+        "events": events,
+        "launchAlerts": launch_alerts,
+        "offerSignals": offer_signals,
+        "coverage": coverage,
+        "warnings": [
+            "sweden_swiss_demo_not_written_to_price_history",
+            *_sweden_swiss_top30_gap_warnings(),
+        ],
+        "demo": {
+            "enabled": True,
+            "country": "Sweden + Switzerland",
+            "backfilled": True,
+            "scope": _sweden_swiss_top30_demo_scope(),
+            "description": "Demo-only Sweden and Swiss rolling 12M SUV top30 MSRP movements for cross-country monitor review.",
+        },
+    }
+
+
 def build_msrp_monitoring_events(
     session: Session,
     *,
@@ -2485,15 +3992,24 @@ def build_msrp_monitoring_events(
     safe_direction = _normalize_monitoring_direction(direction)
     since = _monitoring_since(generated_at, safe_window_days, from_date)
     price_history_limit = _monitoring_price_history_limit(generated_at, since)
-    safe_mode = (
-        MONITORING_MODE_SWEDEN_DEMO
-        if mode == MONITORING_MODE_SWEDEN_DEMO
-        else MONITORING_MODE_LIVE
-    )
+    safe_mode = mode if mode in MONITORING_DEMO_MODES else MONITORING_MODE_LIVE
 
     if safe_mode == MONITORING_MODE_SWEDEN_DEMO:
         return _build_sweden_demo_events(
             session,
+            brand=brand,
+            jato_model=jato_model,
+            generated_at=generated_at,
+            safe_window_days=safe_window_days,
+            from_date=from_date,
+            safe_threshold_pct=safe_threshold_pct,
+            safe_limit=safe_limit,
+            direction=safe_direction,
+        )
+    if safe_mode == MONITORING_MODE_SWEDEN_SWISS_DEMO:
+        return _build_sweden_swiss_demo_events(
+            session,
+            country=country,
             brand=brand,
             jato_model=jato_model,
             generated_at=generated_at,

@@ -1765,6 +1765,7 @@ export interface MsrpMonitoringEvidence {
   backfillKind?: string | null;
   backfillSourceLabel?: string | null;
   backfillEffectiveDate?: string | null;
+  backfillValidUntil?: string | null;
   backfillEvidenceUrl?: string | null;
   backfillSnapshotPath?: string | null;
   backfillPayloadHash?: string | null;
@@ -1874,8 +1875,11 @@ export interface MsrpOfferSignal {
   headline: string;
   valueLabel: string;
   cashDiscountSek: number | null;
+  cashDiscountLocal?: number | null;
+  localCurrency?: string | null;
   interestRatePct: number | null;
   monthlyPaymentSek: number | null;
+  monthlyPaymentLocal?: number | null;
   benefitLabels: string[];
   sourceUrl: string;
   sourceLabel: string;
@@ -1995,7 +1999,7 @@ export interface MsrpMonitoringModelEvent {
 
 export interface MsrpMonitoringResponse {
   schemaVersion: string;
-  mode?: "live" | "sweden_demo" | string;
+  mode?: "live" | "sweden_demo" | "sweden_swiss_demo" | string;
   generatedAtUtc: string;
   filters: {
     country: string | null;
@@ -2038,6 +2042,23 @@ export interface MsrpMonitoringResponse {
     enabled: boolean;
     country: string;
     backfilled: boolean;
+    scope?: {
+      topN?: number | null;
+      segmentFilter?: string | null;
+      rankingMethod?: string | null;
+      sourceWindow?: string | null;
+      sourceLatestMonth?: string | null;
+      candidateSource?: string | null;
+      countries?: Array<{
+        countryCode?: string | null;
+        countryLabel?: string | null;
+        rankingMethod?: string | null;
+        latestMonth?: string | null;
+        windowStartMonth?: string | null;
+        windowEndMonth?: string | null;
+        monthsInWindow?: number | null;
+      }>;
+    };
     description: string;
   } | null;
 }
