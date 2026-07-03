@@ -55,6 +55,15 @@ SWEDEN_SWISS_TOP30_EVIDENCE_PATH = (
     / "sweden_swiss_top30_suv"
     / "official_evidence_leads.json"
 )
+SWEDEN_SWISS_TOP30_CANDIDATES_PATH = (
+    PROJECT_ROOT
+    / "03_Scripts"
+    / "diagnostics"
+    / "artifacts"
+    / "msrp_backfill"
+    / "sweden_swiss_top30_suv"
+    / "top30_suv_price_movement_candidates.json"
+)
 MSRP_DEMO_EUR_NORMALIZATION = {
     "SEK": 1 / 11.5,
     "CHF": 1.06,
@@ -1494,6 +1503,17 @@ def _load_sweden_swiss_top30_evidence_pack() -> dict[str, object] | None:
     return payload if isinstance(payload, dict) else None
 
 
+def _load_sweden_swiss_top30_candidates_pack() -> dict[str, object] | None:
+    if not SWEDEN_SWISS_TOP30_CANDIDATES_PATH.exists():
+        return None
+    try:
+        raw = SWEDEN_SWISS_TOP30_CANDIDATES_PATH.read_text(encoding="utf-8")
+        payload = json.loads(raw)
+    except (OSError, json.JSONDecodeError):
+        return None
+    return payload if isinstance(payload, dict) else None
+
+
 def _sweden_swiss_top30_demo_scope() -> dict[str, object]:
     evidence_pack = _load_sweden_swiss_top30_evidence_pack()
     ranking_scope = evidence_pack.get("rankingScope") if isinstance(evidence_pack, dict) else None
@@ -1540,6 +1560,166 @@ def _sweden_swiss_top30_gap_warnings() -> list[str]:
             country_label = coverage.get("countryLabel") or coverage.get("countryCode") or "country"
             warnings.append(f"rolling_12m_top30_official_price_missing:{country_label}:{', '.join(missing_labels)}")
     return warnings
+
+
+def _sweden_swiss_top30_sales_month_period(value: object | None) -> str | None:
+    if not value:
+        return None
+    try:
+        return datetime.strptime(str(value), "%Y %b").strftime("%Y-%m")
+    except ValueError:
+        return None
+
+
+def _sweden_swiss_top30_country_tokens(country: object | None, country_label: object | None) -> set[str]:
+    tokens = {
+        str(country or "").strip(),
+        str(country_label or "").strip(),
+        str(to_display_country(country) or "").strip(),
+    }
+    normalized_labels = {token.casefold() for token in tokens if token}
+    if "switzerland" in normalized_labels or "ch" in normalized_labels:
+        tokens.add("swiss")
+    return {token.casefold() for token in tokens if token}
+
+
+def _sweden_swiss_top30_sales_lookup() -> dict[tuple[str, str, str], dict[str, object]]:
+    candidates_pack = _load_sweden_swiss_top30_candidates_pack()
+    if not isinstance(candidates_pack, dict):
+        return {}
+    lookup: dict[tuple[str, str, str], dict[str, object]] = {}
+    for country_payload in list(candidates_pack.get("countries") or []):
+        if not isinstance(country_payload, dict):
+            continue
+        country_code = str(country_payload.get("countryCode") or "").strip()
+        country_label = str(country_payload.get("countryLabel") or to_display_country(country_code)).strip()
+        country_tokens = _sweden_swiss_top30_country_tokens(country_code, country_label)
+        for model_payload in list(country_payload.get("models") or []):
+            if not isinstance(model_payload, dict):
+                continue
+            brand_key = str(model_payload.get("brand") or "").strip().casefold()
+            model_key = str(model_payload.get("model") or "").strip().casefold()
+            sales12m = _float_or_none(model_payload.get("sales12m"))
+            if not brand_key or not model_key or sales12m is None:
+                continue
+            row = {
+                "countryCode": country_code,
+                "countryLabel": country_label,
+                "brand": str(model_payload.get("brand") or "").strip(),
+                "model": str(model_payload.get("model") or "").strip(),
+                "rank": model_payload.get("rank"),
+                "sales12m": sales12m,
+                "salesWindow": model_payload.get("salesWindow") if isinstance(model_payload.get("salesWindow"), dict) else {},
+            }
+            for country_token in country_tokens:
+                lookup[(country_token, brand_key, model_key)] = row
+    return lookup
+
+
+def _top30_sales_rows_for_event(
+    event: dict[str, object],
+    lookup: dict[tuple[str, str, str], dict[str, object]],
+) -> list[dict[str, object]]:
+    brand_key = str(event.get("brand") or "").strip().casefold()
+    model_key = str(event.get("jatoModel") or "").strip().casefold()
+    if not brand_key or not model_key:
+        return []
+    rows_by_country: dict[str, dict[str, object]] = {}
+    for country_event in list(event.get("countries") or []):
+        if not isinstance(country_event, dict):
+            continue
+        country_tokens = _sweden_swiss_top30_country_tokens(
+            country_event.get("country"),
+            country_event.get("countryLabel"),
+        )
+        for country_token in country_tokens:
+            row = lookup.get((country_token, brand_key, model_key))
+            if row is None:
+                continue
+            country_code = str(row.get("countryCode") or country_token)
+            rows_by_country[country_code] = row
+            break
+    return list(rows_by_country.values())
+
+
+def _attach_sweden_swiss_top30_sales(events: list[dict[str, object]]) -> str | None:
+    """Attach demo top30 rolling-12 sales without changing price evidence."""
+    if not events:
+        return None
+    lookup = _sweden_swiss_top30_sales_lookup()
+    if not lookup:
+        return "sweden_swiss_top30_sales_unavailable"
+
+    missing_count = 0
+    for event in events:
+        rows = _top30_sales_rows_for_event(event, lookup)
+        markers = _effect_markers_for_event(event)
+        if not rows:
+            missing_count += 1
+            event["sales"] = {
+                "source": "sweden_swiss_top30_rolling12",
+                "countryLabels": [],
+                "totalSales": 0.0,
+                "currentMonthSales": 0.0,
+                "latestSalesPeriod": None,
+                "latestSalesLabel": None,
+                "effectCoverageStatus": "no_sales_match",
+                "coveredEffectMarkerCount": 0,
+                "pendingEffectMarkerCount": len(markers),
+                "monthlySeries": [],
+                "effectMarkers": markers,
+                "matchedRowCount": 0,
+                "matchedCountryCount": 0,
+                "warnings": ["sweden_swiss_top30_sales_match_missing"],
+            }
+            continue
+
+        total_sales = sum(float(row.get("sales12m") or 0.0) for row in rows)
+        country_labels = sorted({str(row.get("countryLabel") or row.get("countryCode") or "") for row in rows})
+        latest_labels = [
+            str((row.get("salesWindow") or {}).get("latestMonth") or "")
+            for row in rows
+            if isinstance(row.get("salesWindow"), dict)
+        ]
+        latest_sales_label = sorted({label for label in latest_labels if label})[-1] if latest_labels else None
+        latest_sales_period = _sweden_swiss_top30_sales_month_period(latest_sales_label)
+        covered_effect_count = (
+            sum(
+                1
+                for marker in markers
+                if latest_sales_period is not None
+                and str(marker.get("period") or "") <= latest_sales_period
+            )
+            if markers
+            else 0
+        )
+        pending_effect_count = max(0, len(markers) - covered_effect_count)
+        event["sales"] = {
+            "source": "sweden_swiss_top30_rolling12",
+            "countryLabels": country_labels,
+            "totalSales": round(total_sales, 2),
+            "currentMonthSales": 0.0,
+            "latestSalesPeriod": latest_sales_period,
+            "latestSalesLabel": latest_sales_label,
+            "effectCoverageStatus": (
+                "no_effect_markers"
+                if not markers
+                else "post_sales_pending"
+                if pending_effect_count
+                else "covered"
+            ),
+            "coveredEffectMarkerCount": covered_effect_count,
+            "pendingEffectMarkerCount": pending_effect_count,
+            "monthlySeries": [],
+            "effectMarkers": markers,
+            "matchedRowCount": len(rows),
+            "matchedCountryCount": len(country_labels),
+            "warnings": ["sweden_swiss_top30_rolling12_sales_only"],
+        }
+
+    if missing_count:
+        return f"sweden_swiss_top30_sales_missing:{missing_count}"
+    return None
 
 
 def _sweden_swiss_top30_baseline_rows(generated_at: datetime) -> list[dict[str, object]]:
@@ -3897,6 +4077,7 @@ def _build_sweden_swiss_demo_events(
         for key, timeline in grouped_timeline.items()
         if timeline
     ]
+    sales_lookup_warning = _attach_sweden_swiss_top30_sales(events)
     events.sort(
         key=lambda item: (
             -int(item.get("affectedCountryCount") or 0),
@@ -3959,8 +4140,13 @@ def _build_sweden_swiss_demo_events(
         "offerSignals": offer_signals,
         "coverage": coverage,
         "warnings": [
-            "sweden_swiss_demo_not_written_to_price_history",
-            *_sweden_swiss_top30_gap_warnings(),
+            item
+            for item in [
+                "sweden_swiss_demo_not_written_to_price_history",
+                sales_lookup_warning,
+                *_sweden_swiss_top30_gap_warnings(),
+            ]
+            if item
         ],
         "demo": {
             "enabled": True,
