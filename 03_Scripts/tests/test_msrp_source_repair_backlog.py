@@ -261,6 +261,52 @@ def test_v3_report_marks_dynamic_price_not_ready_as_recheck_without_history(
     assert group["sourceRepairIssueCount"] == 0
 
 
+def test_v3_report_splits_runner_browser_failure_from_source_repair(
+    tmp_path: Path,
+) -> None:
+    report = {
+        "schemaVersion": "msrp_dryrun_report_v3",
+        "runId": "msrp-dryrun-20260703-025330",
+        "results": [
+            {
+                "country": "cz",
+                "sourceCode": "ford_kuga_cz_draft_scrapling",
+                "brand": "FORD",
+                "status": "empty",
+                "valid": 0,
+                "failureReason": "runner_browser_launch_failed",
+                "recommendedStrategy": "pipeline_error_not_source_error",
+                "extractorError": "TargetClosedError: BrowserType.launch_persistent_context: kill EPERM",
+                "sourceUrl": "https://www.ford.cz/osobni-vozy/kuga",
+            }
+        ],
+    }
+    report_path = tmp_path / "dryrun_report.json"
+    report_path.write_text(json.dumps(report), encoding="utf-8")
+
+    backlog = backlog_script.run(str(report_path), str(tmp_path))
+
+    assert backlog["totalIssueCount"] == 1
+    assert backlog["sourceRepairIssueCount"] == 0
+    assert backlog["pipelineIssueCount"] == 1
+    assert backlog["sourceIssues"] == []
+    issue = backlog["pipelineIssues"][0]
+    assert issue["sourceCode"] == "ford_kuga_cz_draft_scrapling"
+    assert issue["pipelineIssue"] is True
+    assert issue["sourceRepairIssue"] is False
+    assert issue["recommendedAction"] == "fix_runner_or_pipeline"
+    group = backlog["groups"][0]
+    assert group["priorityBand"] == "pipeline"
+    assert group["recommendedAction"] == "fix_runner_or_pipeline"
+    assert group["reviewAssist"]["preferred"] == "fix_runner_or_pipeline"
+
+    markdown = (tmp_path / "msrp_source_repair_backlog.md").read_text(
+        encoding="utf-8"
+    )
+    assert "Pipeline issues: 1" in markdown
+    assert "## Pipeline Issue Queue" in markdown
+
+
 def test_v3_report_uses_artifact_history_when_output_dir_differs(
     tmp_path: Path,
 ) -> None:

@@ -38,6 +38,10 @@ EXTERNAL_ACCESS_FAILURES = {
     "forbidden_403",
     "anti_bot_access_denied",
 }
+PIPELINE_RUNTIME_FAILURES = {
+    "db_or_backend_write_failed",
+    "runner_browser_launch_failed",
+}
 
 
 def _load_country_artifact(path: Path) -> dict | None:
@@ -432,9 +436,12 @@ def _priority_band(
     transient_count: int,
     business_resolution_count: int = 0,
     external_access_count: int = 0,
+    pipeline_issue_count: int = 0,
 ) -> str:
     if source_repair_count <= 0 and transient_count > 0:
         return "recheck"
+    if source_repair_count <= 0 and pipeline_issue_count > 0:
+        return "pipeline"
     if source_repair_count <= 0 and external_access_count > 0:
         return "external_access"
     if source_repair_count <= 0 and business_resolution_count > 0:
@@ -454,6 +461,7 @@ def _priority_review_assist(
     transient_count: int = 0,
     business_resolution_count: int = 0,
     external_access_count: int = 0,
+    pipeline_issue_count: int = 0,
 ) -> dict[str, str]:
     if source_repair_count <= 0 and transient_count > 0:
         return {
@@ -481,6 +489,16 @@ def _priority_review_assist(
                 "Official source access is blocked by the current fetch path; "
                 "use an official proxy or official configurator API before "
                 "attempting selector repair."
+            ),
+        }
+    if source_repair_count <= 0 and pipeline_issue_count > 0:
+        return {
+            "preferred": "fix_runner_or_pipeline",
+            "llmFit": "low",
+            "neuralNetworkFit": "not_recommended",
+            "reason": (
+                "The dryrun failed in the runner or pipeline environment; fix "
+                "the local/server runtime before repairing source definitions."
             ),
         }
     if failure_reason in {"no_observation_extracted", "validation_rejected_all"}:
@@ -537,6 +555,12 @@ def _is_external_access_issue(result: dict[str, Any], failure_reason: str) -> bo
     return _source_brand(result) == "TESLA" or _source_host(result) == "tesla.com"
 
 
+def _is_pipeline_issue(result: dict[str, Any], failure_reason: str) -> bool:
+    if failure_reason in PIPELINE_RUNTIME_FAILURES:
+        return True
+    return str(result.get("recommendedStrategy") or "") == "pipeline_error_not_source_error"
+
+
 def _source_issue_detail(
     *,
     result: dict[str, Any],
@@ -548,6 +572,7 @@ def _source_issue_detail(
     transient_recheck: bool,
     business_resolution: bool = False,
     external_access: bool = False,
+    pipeline_issue: bool = False,
 ) -> dict[str, Any]:
     source_url = _source_url(result)
     detail: dict[str, Any] = {
@@ -566,10 +591,12 @@ def _source_issue_detail(
             not transient_recheck
             and not business_resolution
             and not external_access
+            and not pipeline_issue
         ),
         "transientRegression": transient_recheck,
         "businessResolution": business_resolution,
         "externalAccessIssue": external_access,
+        "pipelineIssue": pipeline_issue,
         "recommendedAction": "repair_source_definition",
     }
     if transient_recheck:
@@ -578,6 +605,8 @@ def _source_issue_detail(
         detail["recommendedAction"] = "business_resolution_required"
     elif external_access:
         detail["recommendedAction"] = "official_proxy_or_configurator_api"
+    elif pipeline_issue:
+        detail["recommendedAction"] = "fix_runner_or_pipeline"
     for key in (
         "httpStatus",
         "finalUrl",
@@ -613,6 +642,7 @@ def _priority_fields(group: dict[str, Any]) -> dict[str, Any]:
     transient_count = int(group["transientRegressionCount"])
     business_resolution_count = int(group.get("businessResolutionCount") or 0)
     external_access_count = int(group.get("externalAccessIssueCount") or 0)
+    pipeline_issue_count = int(group.get("pipelineIssueCount") or 0)
     affected_country_count = len(group["affectedCountries"])
     host_counts = [int(data.get("count") or 0) for data in group["hosts"].values()]
     top_host_count = max(host_counts or [0])
@@ -623,6 +653,7 @@ def _priority_fields(group: dict[str, Any]) -> dict[str, Any]:
         + transient_count * _priority_weight("TRANSIENT_RECHECK", 1.5)
         + business_resolution_count * _priority_weight("BUSINESS_RESOLUTION", 4.0)
         + external_access_count * _priority_weight("EXTERNAL_ACCESS", 5.0)
+        + pipeline_issue_count * _priority_weight("PIPELINE_ISSUE", 2.0)
     )
     return {
         "priorityScore": round(score, 1),
@@ -632,6 +663,7 @@ def _priority_fields(group: dict[str, Any]) -> dict[str, Any]:
             transient_count,
             business_resolution_count,
             external_access_count,
+            pipeline_issue_count,
         ),
         "priorityWeights": {
             "sourceRepair": _priority_weight("SOURCE_REPAIR", 10.0),
@@ -640,6 +672,7 @@ def _priority_fields(group: dict[str, Any]) -> dict[str, Any]:
             "transientRecheck": _priority_weight("TRANSIENT_RECHECK", 1.5),
             "businessResolution": _priority_weight("BUSINESS_RESOLUTION", 4.0),
             "externalAccess": _priority_weight("EXTERNAL_ACCESS", 5.0),
+            "pipelineIssue": _priority_weight("PIPELINE_ISSUE", 2.0),
         },
         "reviewAssist": _priority_review_assist(
             str(group["failureReason"]),
@@ -647,6 +680,7 @@ def _priority_fields(group: dict[str, Any]) -> dict[str, Any]:
             transient_count,
             business_resolution_count,
             external_access_count,
+            pipeline_issue_count,
         ),
     }
 
@@ -763,6 +797,7 @@ def _write_source_repair_backlog(
             "sourceRepairIssueCount": 0,
             "businessResolutionCount": 0,
             "externalAccessIssueCount": 0,
+            "pipelineIssueCount": 0,
             "recommendedStrategies": {},
             "affectedCountries": set(),
             "brands": set(),
@@ -771,6 +806,7 @@ def _write_source_repair_backlog(
             "transientSources": [],
             "businessSources": [],
             "externalAccessSources": [],
+            "pipelineSources": [],
             "hosts": {},
             "status": "new",
         })
@@ -779,6 +815,12 @@ def _write_source_repair_backlog(
             _is_external_access_issue(result, reason_label)
             and not is_transient
             and not is_business_resolution
+        )
+        is_pipeline_issue = (
+            _is_pipeline_issue(result, reason_label)
+            and not is_transient
+            and not is_business_resolution
+            and not is_external_access
         )
         source_detail = _source_issue_detail(
             result=result,
@@ -790,6 +832,7 @@ def _write_source_repair_backlog(
             transient_recheck=is_transient,
             business_resolution=is_business_resolution,
             external_access=is_external_access,
+            pipeline_issue=is_pipeline_issue,
         )
         if is_transient:
             group["transientRegressionCount"] += 1
@@ -800,6 +843,9 @@ def _write_source_repair_backlog(
         elif is_external_access:
             group["externalAccessIssueCount"] += 1
             group["externalAccessSources"].append(source_detail)
+        elif is_pipeline_issue:
+            group["pipelineIssueCount"] += 1
+            group["pipelineSources"].append(source_detail)
         else:
             group["sourceRepairIssueCount"] += 1
             group["sourceDetails"].append(source_detail)
@@ -834,11 +880,14 @@ def _write_source_repair_backlog(
         source_repair_count = int(group["sourceRepairIssueCount"])
         business_resolution_count = int(group["businessResolutionCount"])
         external_access_count = int(group["externalAccessIssueCount"])
+        pipeline_issue_count = int(group["pipelineIssueCount"])
         recommended_action = "repair_source_definition"
         if transient_count and not source_repair_count and not business_resolution_count:
             recommended_action = "recheck_before_source_repair"
         elif business_resolution_count and not source_repair_count:
             recommended_action = "business_resolution_required"
+        elif pipeline_issue_count and not source_repair_count:
+            recommended_action = "fix_runner_or_pipeline"
         elif external_access_count and not source_repair_count:
             recommended_action = "official_proxy_or_configurator_api"
         normalized_group = {
@@ -848,6 +897,7 @@ def _write_source_repair_backlog(
             "sourceRepairIssueCount": source_repair_count,
             "businessResolutionCount": business_resolution_count,
             "externalAccessIssueCount": external_access_count,
+            "pipelineIssueCount": pipeline_issue_count,
             **_priority_fields(group),
             "recommendedAction": recommended_action,
             "recommendedStrategy": recommended_strategy,
@@ -861,6 +911,8 @@ def _write_source_repair_backlog(
             "businessResolutionIssues": group["businessSources"],
             "sampleExternalAccessIssues": group["externalAccessSources"][:8],
             "externalAccessIssues": group["externalAccessSources"],
+            "samplePipelineIssues": group["pipelineSources"][:8],
+            "pipelineIssues": group["pipelineSources"],
             "sampleTransientRegressions": group["transientSources"][:8],
             "transientRegressions": group["transientSources"],
             "topSourceHosts": _normalize_host_groups(group["hosts"]),
@@ -877,10 +929,12 @@ def _write_source_repair_backlog(
             else 1
             if int(item["businessResolutionCount"]) > 0
             else 2
-            if int(item.get("externalAccessIssueCount") or 0) > 0
+            if int(item.get("pipelineIssueCount") or 0) > 0
             else 3
-            if int(item["transientRegressionCount"]) > 0
+            if int(item.get("externalAccessIssueCount") or 0) > 0
             else 4
+            if int(item["transientRegressionCount"]) > 0
+            else 5
         ),
         -float(item["priorityScore"]),
         -int(item["count"]),
@@ -890,6 +944,7 @@ def _write_source_repair_backlog(
     source_repair_issue_count = sum(int(item["sourceRepairIssueCount"]) for item in normalized_groups)
     business_resolution_count = sum(int(item["businessResolutionCount"]) for item in normalized_groups)
     external_access_issue_count = sum(int(item.get("externalAccessIssueCount") or 0) for item in normalized_groups)
+    pipeline_issue_count = sum(int(item.get("pipelineIssueCount") or 0) for item in normalized_groups)
     source_issues = [
         source
         for item in normalized_groups
@@ -904,6 +959,11 @@ def _write_source_repair_backlog(
         source
         for item in normalized_groups
         for source in item.get("externalAccessIssues") or []
+    ]
+    pipeline_issues = [
+        source
+        for item in normalized_groups
+        for source in item.get("pipelineIssues") or []
     ]
     transient_regressions = [
         source
@@ -920,9 +980,11 @@ def _write_source_repair_backlog(
         "sourceRepairIssueCount": source_repair_issue_count,
         "businessResolutionCount": business_resolution_count,
         "externalAccessIssueCount": external_access_issue_count,
+        "pipelineIssueCount": pipeline_issue_count,
         "sourceIssues": source_issues,
         "businessResolutionIssues": business_resolutions,
         "externalAccessIssues": external_access_issues,
+        "pipelineIssues": pipeline_issues,
         "transientSourceRegressions": transient_regressions,
         "topSourceHosts": _normalize_host_groups(top_hosts),
         "groups": normalized_groups,
@@ -937,14 +999,15 @@ def _write_source_repair_backlog(
         f"Run ID: {payload.get('runId') or '-'}",
         f"Transient regressions: {payload['transientRegressionCount']}",
         f"Business resolutions: {payload['businessResolutionCount']}",
+        f"Pipeline issues: {payload['pipelineIssueCount']}",
         f"External access issues: {payload['externalAccessIssueCount']}",
         f"Source repair issues: {payload['sourceRepairIssueCount']}",
         "",
         (
-            "| Failure reason | Priority | Count | Recheck | Business | External | Source repair | "
+            "| Failure reason | Priority | Count | Recheck | Business | Pipeline | External | Source repair | "
             "Recommended strategy | Reference assist | Affected countries |"
         ),
-        "|---|---:|---:|---:|---:|---:|---:|---|---|---|",
+        "|---|---:|---:|---:|---:|---:|---:|---:|---|---|---|",
     ]
     for item in normalized_groups:
         reference_assist = item.get("referenceAssist") or {}
@@ -955,7 +1018,7 @@ def _write_source_repair_backlog(
         )
         lines.append(
             (
-                "| {reason} | {priority} | {count} | {transient} | {business} | {external} | "
+                "| {reason} | {priority} | {count} | {transient} | {business} | {pipeline} | {external} | "
                 "{source_repair} | {strategy} | {reference} | {countries} |"
             ).format(
                 reason=item["failureReason"],
@@ -963,6 +1026,7 @@ def _write_source_repair_backlog(
                 count=item["count"],
                 transient=item["transientRegressionCount"],
                 business=item["businessResolutionCount"],
+                pipeline=item.get("pipelineIssueCount") or 0,
                 external=item.get("externalAccessIssueCount") or 0,
                 source_repair=item["sourceRepairIssueCount"],
                 strategy=item["recommendedStrategy"],
@@ -970,6 +1034,24 @@ def _write_source_repair_backlog(
                 countries=", ".join(str(c).upper() for c in item["affectedCountries"]) or "-",
             )
         )
+    if pipeline_issues:
+        lines.extend([
+            "",
+            "## Pipeline Issue Queue",
+            "",
+            "| Country | Source | Brand | Failure reason | Action |",
+            "|---|---|---|---|---|",
+        ])
+        for source in pipeline_issues:
+            lines.append(
+                "| {country} | `{source}` | {brand} | {reason} | {action} |".format(
+                    country=str(source.get("countryCode") or "-").upper(),
+                    source=source.get("sourceCode") or "-",
+                    brand=source.get("brand") or "-",
+                    reason=source.get("failureReason") or "-",
+                    action=source.get("recommendedAction") or "-",
+                )
+            )
     if source_issues:
         lines.extend([
             "",

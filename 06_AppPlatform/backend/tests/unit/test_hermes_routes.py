@@ -933,6 +933,81 @@ class TestSentinelAndDeploy:
         )
         assert backlog["groups"][0]["priorityBand"] == "external_access"
 
+    def test_msrp_country_progress_splits_pipeline_runtime_backlog(
+        self,
+        client,
+        tmp_path,
+    ):
+        reports_dir = tmp_path / "hermes" / "reports"
+        artifact_dir = tmp_path / "03_Scripts" / "diagnostics" / "artifacts"
+        report = _make_msrp_v3_report()
+        report["summary"].update({
+            "total": 1,
+            "pass": 0,
+            "empty": 1,
+            "passPct": 0.0,
+            "status": "failure",
+            "gateStatus": "blocked",
+        })
+        report["countriesDetail"][0].update({
+            "countryCode": "cz",
+            "total": 1,
+            "pass": 0,
+            "empty": 1,
+            "passPct": 0.0,
+            "status": "failure",
+            "failureBreakdown": {"runner_browser_launch_failed": 1},
+            "strategyRecommendations": {
+                "pipeline_error_not_source_error": 1,
+            },
+            "sources": [
+                {
+                    "sourceCode": "ford_kuga_cz_draft_scrapling",
+                    "brand": "FORD",
+                    "status": "empty",
+                    "valid": 0,
+                    "failureReason": "runner_browser_launch_failed",
+                    "recommendedStrategy": "pipeline_error_not_source_error",
+                    "sourceUrl": "https://www.ford.cz/osobni-vozy/kuga",
+                },
+            ],
+        })
+        _write_json(artifact_dir / "dryrun_report.json", report)
+        _write_json(reports_dir / "msrp_country_progress.json", {
+            "probe": "pipeline.msrp_country_progress",
+            "overall": "critical",
+            "status": {"runId": report["runId"]},
+            "countries": [],
+            "topBlockingCountries": [],
+            "topFailureReasons": [],
+            "sourceRepairBacklog": {
+                "schemaVersion": "msrp_source_repair_backlog_v1",
+                "runId": report["runId"],
+                "totalIssueCount": 1,
+                "groups": [],
+            },
+            "findings": [],
+        })
+
+        with patch("app.api.routes.hermes.PROJECT_ROOT", tmp_path), patch(
+            "app.api.routes.hermes.REPORTS_DIR",
+            reports_dir,
+        ):
+            resp = client.get("/hermes/msrp-country-progress")
+
+        assert resp.status_code == 200
+        backlog = resp.json()["sourceRepairBacklog"]
+        assert backlog["totalIssueCount"] == 1
+        assert backlog["sourceRepairIssueCount"] == 0
+        assert backlog["pipelineIssueCount"] == 1
+        assert backlog["pipelineIssues"][0]["sourceCode"] == (
+            "ford_kuga_cz_draft_scrapling"
+        )
+        assert backlog["pipelineIssues"][0]["recommendedAction"] == (
+            "fix_runner_or_pipeline"
+        )
+        assert backlog["groups"][0]["priorityBand"] == "pipeline"
+
     def test_msrp_country_progress_includes_source_reference_evidence(
         self,
         client,

@@ -48,6 +48,10 @@ EXTERNAL_ACCESS_FAILURES = {
     "forbidden_403",
     "anti_bot_access_denied",
 }
+PIPELINE_RUNTIME_FAILURES = {
+    "db_or_backend_write_failed",
+    "runner_browser_launch_failed",
+}
 MSRP_COUNTRY_LABELS = {
     "at": "Austria",
     "be": "Belgium",
@@ -131,6 +135,8 @@ def _default_source_repair_backlog() -> dict[str, Any]:
         "sourceRepairIssueCount": 0,
         "externalAccessIssueCount": 0,
         "externalAccessIssues": [],
+        "pipelineIssueCount": 0,
+        "pipelineIssues": [],
         "topSourceHosts": [],
         "groups": [],
     }
@@ -265,9 +271,12 @@ def _priority_band(
     source_repair_count: int,
     transient_count: int,
     external_access_count: int = 0,
+    pipeline_issue_count: int = 0,
 ) -> str:
     if source_repair_count <= 0 and transient_count > 0:
         return "recheck"
+    if source_repair_count <= 0 and pipeline_issue_count > 0:
+        return "pipeline"
     if source_repair_count <= 0 and external_access_count > 0:
         return "external_access"
     if score >= 80 or source_repair_count >= 10:
@@ -283,6 +292,7 @@ def _priority_review_assist(
     failure_reason: str,
     source_repair_count: int,
     external_access_count: int = 0,
+    pipeline_issue_count: int = 0,
 ) -> dict[str, str]:
     if source_repair_count <= 0 and external_access_count > 0:
         return {
@@ -290,6 +300,13 @@ def _priority_review_assist(
             "llmFit": "low",
             "neuralNetworkFit": "not_recommended",
             "reason": "Official source access is blocked by the current fetch path; use an official proxy or configurator API before selector repair.",
+        }
+    if source_repair_count <= 0 and pipeline_issue_count > 0:
+        return {
+            "preferred": "fix_runner_or_pipeline",
+            "llmFit": "low",
+            "neuralNetworkFit": "not_recommended",
+            "reason": "The dryrun failed in the runner or pipeline environment; fix the runtime before repairing source definitions.",
         }
     if source_repair_count <= 0:
         return {
@@ -317,6 +334,7 @@ def _priority_fields(group: dict[str, Any]) -> dict[str, Any]:
     source_repair_count = int(group["sourceRepairIssueCount"])
     transient_count = int(group["transientRegressionCount"])
     external_access_count = int(group.get("externalAccessIssueCount") or 0)
+    pipeline_issue_count = int(group.get("pipelineIssueCount") or 0)
     affected_country_count = len(group["affectedCountries"])
     host_counts = [int(data.get("count") or 0) for data in group["hosts"].values()]
     top_host_count = max(host_counts or [0])
@@ -326,18 +344,31 @@ def _priority_fields(group: dict[str, Any]) -> dict[str, Any]:
         + top_host_count * _priority_weight("HOST_CLUSTER", 3.0)
         + transient_count * _priority_weight("TRANSIENT_RECHECK", 1.5)
         + external_access_count * _priority_weight("EXTERNAL_ACCESS", 5.0)
+        + pipeline_issue_count * _priority_weight("PIPELINE_ISSUE", 2.0)
     )
     return {
         "priorityScore": round(score, 1),
-        "priorityBand": _priority_band(score, source_repair_count, transient_count, external_access_count),
+        "priorityBand": _priority_band(
+            score,
+            source_repair_count,
+            transient_count,
+            external_access_count,
+            pipeline_issue_count,
+        ),
         "priorityWeights": {
             "sourceRepair": _priority_weight("SOURCE_REPAIR", 10.0),
             "country": _priority_weight("COUNTRY", 6.0),
             "hostCluster": _priority_weight("HOST_CLUSTER", 3.0),
             "transientRecheck": _priority_weight("TRANSIENT_RECHECK", 1.5),
             "externalAccess": _priority_weight("EXTERNAL_ACCESS", 5.0),
+            "pipelineIssue": _priority_weight("PIPELINE_ISSUE", 2.0),
         },
-        "reviewAssist": _priority_review_assist(str(group["failureReason"]), source_repair_count, external_access_count),
+        "reviewAssist": _priority_review_assist(
+            str(group["failureReason"]),
+            source_repair_count,
+            external_access_count,
+            pipeline_issue_count,
+        ),
     }
 
 
@@ -346,6 +377,12 @@ def _is_external_access_issue(source: dict[str, Any], failure_reason: str) -> bo
         return False
     brand = str(source.get("brand") or "").strip().upper()
     return brand == "TESLA" or _source_host(source) == "tesla.com"
+
+
+def _is_pipeline_issue(source: dict[str, Any], failure_reason: str) -> bool:
+    if failure_reason in PIPELINE_RUNTIME_FAILURES:
+        return True
+    return str(source.get("recommendedStrategy") or "") == "pipeline_error_not_source_error"
 
 
 def _source_key(country_code: str | None, source: dict[str, Any]) -> tuple[str, str] | None:
@@ -465,16 +502,23 @@ def _source_repair_backlog_from_current(
                 "transientRegressionCount": 0,
                 "sourceRepairIssueCount": 0,
                 "externalAccessIssueCount": 0,
+                "pipelineIssueCount": 0,
                 "recommendedStrategies": {},
                 "affectedCountries": set(),
                 "sources": [],
                 "transientSources": [],
                 "externalAccessSources": [],
+                "pipelineSources": [],
                 "hosts": {},
                 "status": "new",
             })
             group["count"] += 1
             is_external_access = _is_external_access_issue(source, reason) and not is_transient
+            is_pipeline_issue = (
+                _is_pipeline_issue(source, reason)
+                and not is_transient
+                and not is_external_access
+            )
             if is_transient:
                 group["transientRegressionCount"] += 1
                 group["transientSources"].append({
@@ -500,6 +544,18 @@ def _source_repair_backlog_from_current(
                     "failureReason": reason,
                     "recommendedStrategy": recommended,
                     "recommendedAction": "official_proxy_or_configurator_api",
+                })
+            elif is_pipeline_issue:
+                group["pipelineIssueCount"] += 1
+                group["pipelineSources"].append({
+                    "countryCode": country_code,
+                    "sourceCode": source_code,
+                    "brand": str(source.get("brand") or "").strip().upper(),
+                    "sourceUrl": _source_url(source),
+                    "host": _source_host(source),
+                    "failureReason": reason,
+                    "recommendedStrategy": recommended,
+                    "recommendedAction": "fix_runner_or_pipeline",
                 })
             else:
                 group["sourceRepairIssueCount"] += 1
@@ -530,16 +586,20 @@ def _source_repair_backlog_from_current(
         transient_count = int(group["transientRegressionCount"])
         source_repair_count = int(group["sourceRepairIssueCount"])
         external_access_count = int(group["externalAccessIssueCount"])
+        pipeline_issue_count = int(group["pipelineIssueCount"])
         normalized_groups.append({
             "failureReason": group["failureReason"],
             "count": group["count"],
             "transientRegressionCount": transient_count,
             "sourceRepairIssueCount": source_repair_count,
             "externalAccessIssueCount": external_access_count,
+            "pipelineIssueCount": pipeline_issue_count,
             **_priority_fields(group),
             "recommendedAction": (
                 "recheck_before_source_repair"
                 if transient_count and not source_repair_count
+                else "fix_runner_or_pipeline"
+                if pipeline_issue_count and not source_repair_count
                 else "official_proxy_or_configurator_api"
                 if external_access_count and not source_repair_count
                 else "repair_source_definition"
@@ -552,6 +612,8 @@ def _source_repair_backlog_from_current(
             "sampleTransientRegressions": group["transientSources"][:8],
             "sampleExternalAccessIssues": group["externalAccessSources"][:8],
             "externalAccessIssues": group["externalAccessSources"],
+            "samplePipelineIssues": group["pipelineSources"][:8],
+            "pipelineIssues": group["pipelineSources"],
             "topSourceHosts": _normalize_host_groups(group["hosts"]),
             "status": group["status"],
         })
@@ -559,8 +621,10 @@ def _source_repair_backlog_from_current(
         0
         if int(item["sourceRepairIssueCount"]) > 0
         else 1
+        if int(item.get("pipelineIssueCount") or 0) > 0
+        else 2
         if int(item.get("externalAccessIssueCount") or 0) > 0
-        else 2,
+        else 3,
         -float(item["priorityScore"]),
         -int(item["count"]),
         str(item["failureReason"]),
@@ -568,10 +632,16 @@ def _source_repair_backlog_from_current(
     transient_regression_count = sum(int(item["transientRegressionCount"]) for item in normalized_groups)
     source_repair_issue_count = sum(int(item["sourceRepairIssueCount"]) for item in normalized_groups)
     external_access_issue_count = sum(int(item.get("externalAccessIssueCount") or 0) for item in normalized_groups)
+    pipeline_issue_count = sum(int(item.get("pipelineIssueCount") or 0) for item in normalized_groups)
     external_access_issues = [
         source
         for item in normalized_groups
         for source in item.get("externalAccessIssues") or []
+    ]
+    pipeline_issues = [
+        source
+        for item in normalized_groups
+        for source in item.get("pipelineIssues") or []
     ]
     return {
         "schemaVersion": "msrp_source_repair_backlog_v1",
@@ -583,6 +653,8 @@ def _source_repair_backlog_from_current(
         "sourceRepairIssueCount": source_repair_issue_count,
         "externalAccessIssueCount": external_access_issue_count,
         "externalAccessIssues": external_access_issues,
+        "pipelineIssueCount": pipeline_issue_count,
+        "pipelineIssues": pipeline_issues,
         "topSourceHosts": _normalize_host_groups(top_hosts),
         "groups": normalized_groups,
     }

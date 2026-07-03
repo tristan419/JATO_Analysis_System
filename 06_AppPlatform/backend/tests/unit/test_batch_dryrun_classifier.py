@@ -215,6 +215,22 @@ def test_classify_js_required():
     assert result["recommendedStrategy"] == "try_playwright_card_flow"
 
 
+def test_classify_playwright_browser_launch_failure_as_pipeline_issue():
+    """Browser launch/runtime failures are runner issues, not source repairs."""
+    src = {
+        "status": "error",
+        "error": (
+            "TargetClosedError: BrowserType.launch_persistent_context: "
+            "Target page, context or browser has been closed\n"
+            "exception while trying to kill process: Error: kill EPERM\n"
+            "user-data-dir=/tmp/playwright_chromiumdev_profile-test"
+        ),
+    }
+    result = dryrun_mod._classify_dryrun_failure(src)
+    assert result["failureReason"] == "runner_browser_launch_failed"
+    assert result["recommendedStrategy"] == "pipeline_error_not_source_error"
+
+
 def test_classify_empty_selector_message():
     """Empty result with no matching elements is a selector issue."""
     src = {"status": "empty", "extractorError": "No elements found for '.gradewalk-card'"}

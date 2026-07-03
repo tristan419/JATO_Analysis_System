@@ -135,8 +135,9 @@ def test_country_progress_preserves_finance_dryrun_counts(tmp_path, monkeypatch)
     assert "| TLS handshake failed | 1 |" in markdown
 
 
-def test_source_repair_backlog_preserves_rejection_diagnostics():
+def test_source_repair_backlog_preserves_rejection_diagnostics(tmp_path, monkeypatch):
     module = _load_module()
+    monkeypatch.setattr(module, "RUNS_INDEX_PATH", tmp_path / "missing_runs_index.json")
     report = {
         "schemaVersion": "msrp_dryrun_report_v3",
         "runId": "msrp-dryrun-20260624-083348",
@@ -189,8 +190,9 @@ def test_source_repair_backlog_preserves_rejection_diagnostics():
     assert backlog["groups"][0]["sourceRepairIssues"][0] == issue
 
 
-def test_source_repair_backlog_splits_tesla_external_access_issue():
+def test_source_repair_backlog_splits_tesla_external_access_issue(tmp_path, monkeypatch):
     module = _load_module()
+    monkeypatch.setattr(module, "RUNS_INDEX_PATH", tmp_path / "missing_runs_index.json")
     report = {
         "schemaVersion": "msrp_dryrun_report_v3",
         "runId": "msrp-dryrun-20260624-135526",
@@ -227,6 +229,47 @@ def test_source_repair_backlog_splits_tesla_external_access_issue():
     group = backlog["groups"][0]
     assert group["priorityBand"] == "external_access"
     assert group["recommendedAction"] == "official_proxy_or_configurator_api"
+
+
+def test_source_repair_backlog_splits_pipeline_runtime_issue(tmp_path, monkeypatch):
+    module = _load_module()
+    monkeypatch.setattr(module, "RUNS_INDEX_PATH", tmp_path / "missing_runs_index.json")
+    report = {
+        "schemaVersion": "msrp_dryrun_report_v3",
+        "runId": "msrp-dryrun-20260703-025330",
+        "countriesDetail": [
+            {
+                "countryCode": "cz",
+                "sources": [
+                    {
+                        "sourceCode": "ford_kuga_cz_draft_scrapling",
+                        "brand": "FORD",
+                        "sourceUrl": "https://www.ford.cz/osobni-vozy/kuga",
+                        "status": "empty",
+                        "valid": 0,
+                        "failureReason": "runner_browser_launch_failed",
+                        "recommendedStrategy": "pipeline_error_not_source_error",
+                    }
+                ],
+            }
+        ],
+    }
+
+    backlog = module._source_repair_backlog_from_report(
+        report,
+        "2026-07-03T02:53:30Z",
+    )
+
+    assert backlog["sourceRepairIssueCount"] == 0
+    assert backlog["pipelineIssueCount"] == 1
+    assert backlog["sourceIssues"] == []
+    issue = backlog["pipelineIssues"][0]
+    assert issue["sourceCode"] == "ford_kuga_cz_draft_scrapling"
+    assert issue["recommendedAction"] == "fix_runner_or_pipeline"
+    assert issue["pipelineIssue"] is True
+    group = backlog["groups"][0]
+    assert group["priorityBand"] == "pipeline"
+    assert group["recommendedAction"] == "fix_runner_or_pipeline"
 
 
 def test_country_progress_keeps_stable_latest_when_active_run_regresses(tmp_path, monkeypatch):

@@ -175,6 +175,21 @@ def _failure_classification(
     }
 
 
+def _is_runner_browser_launch_failure(error_lower: str) -> bool:
+    return (
+        "browsertype.launch" in error_lower
+        or "launch_persistent_context" in error_lower
+        or (
+            "targetclosederror" in error_lower
+            and "browser has been closed" in error_lower
+        )
+        or (
+            "kill eperm" in error_lower
+            and "playwright_chromiumdev_profile" in error_lower
+        )
+    )
+
+
 def _classify_dryrun_failure(
     src: dict,
     exception: Exception | None = None,
@@ -203,6 +218,12 @@ def _classify_dryrun_failure(
     except (TypeError, ValueError):
         http_status = None
 
+    if _is_runner_browser_launch_failure(error_lower):
+        return _failure_classification(
+            "runner_browser_launch_failed",
+            "pipeline_error_not_source_error",
+            "error",
+        )
     if "404-page" in final_url.lower() or "/404" in final_url.lower():
         return _failure_classification("source_url_not_found", "update_source_url", "error")
     if (
