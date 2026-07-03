@@ -1755,6 +1755,7 @@ export function DataManagementPage() {
                         const issueCount = progress.sourceRepairBacklog?.totalIssueCount ?? 0;
                         const recheckCount = progress.sourceRepairBacklog?.transientRegressionCount ?? 0;
                         const sourceRepairIssueCount = progress.sourceRepairBacklog?.sourceRepairIssueCount ?? issueCount;
+                        const externalAccessIssueCount = progress.sourceRepairBacklog?.externalAccessIssueCount ?? 0;
                         const referenceEvidence = progress.sourceReferenceEvidence;
                         const referenceSummary = referenceEvidence?.summary;
                         const referenceItems = referenceEvidence?.items ?? [];
@@ -1781,7 +1782,7 @@ export function DataManagementPage() {
                               <div style={{padding:"8px 10px",background:"#fff",border:"1px solid #e2e8f0",borderRadius:6}}>
                                 <div style={{fontSize:10,color:"#64748b"}}>Fix Queue</div>
                                 <div style={{fontSize:13,fontWeight:700,color:sourceRepairIssueCount > 0 ? "#ea580c" : "#16a34a"}}>{sourceRepairIssueCount}</div>
-                                <div style={{fontSize:10,color:"#64748b",whiteSpace:"nowrap"}}>{recheckCount} recheck · {issueCount} total</div>
+                                <div style={{fontSize:10,color:"#64748b",whiteSpace:"nowrap"}}>{externalAccessIssueCount} external · {recheckCount} recheck · {issueCount} total</div>
                               </div>
                             </div>
 
@@ -1858,24 +1859,26 @@ export function DataManagementPage() {
                             <div style={{background:"#fff",border:"1px solid #e2e8f0",borderRadius:6,padding:8}}>
                               <div style={{fontSize:11,fontWeight:700,marginBottom:5}}>Source Repair Backlog</div>
                               {backlogGroups.length ? (
-                                <div style={{fontSize:10,color:"#64748b",display:"grid",gridTemplateColumns:"minmax(0,1.1fr) 54px 42px 48px minmax(0,1.1fr)",gap:8,marginBottom:4}}>
+                                <div style={{fontSize:10,color:"#64748b",display:"grid",gridTemplateColumns:"minmax(0,1.1fr) 54px 42px 48px 48px minmax(0,1.1fr)",gap:8,marginBottom:4}}>
                                   <span>Reason</span>
                                   <span style={{textAlign:"right"}}>Priority</span>
                                   <span style={{textAlign:"right"}}>Repair</span>
+                                  <span style={{textAlign:"right"}}>External</span>
                                   <span style={{textAlign:"right"}}>Recheck</span>
                                   <span>Strategy</span>
                                 </div>
                               ) : null}
                               {backlogGroups.length ? backlogGroups.slice(0,5).map((group: HermesMsrpSourceRepairBacklogGroup) => (
-                                <div key={group.failureReason} style={{fontSize:11,display:"grid",gridTemplateColumns:"minmax(0,1.1fr) 54px 42px 48px minmax(0,1.1fr)",gap:8,alignItems:"center",marginBottom:5}}>
+                                <div key={group.failureReason} style={{fontSize:11,display:"grid",gridTemplateColumns:"minmax(0,1.1fr) 54px 42px 48px 48px minmax(0,1.1fr)",gap:8,alignItems:"center",marginBottom:5}}>
                                   <span style={{fontWeight:600,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}} title={group.failureReason}>{group.failureReason}</span>
                                   <strong
-                                    style={{textAlign:"right",color:group.priorityBand === "recheck" ? "#2563eb" : "#475569"}}
+                                    style={{textAlign:"right",color:group.priorityBand === "external_access" ? "#7c3aed" : group.priorityBand === "recheck" ? "#2563eb" : "#475569"}}
                                     title={group.reviewAssist?.reason ?? group.priorityBand}
                                   >
                                     {group.priorityBand ?? "n/a"} {group.priorityScore ?? 0}
                                   </strong>
                                   <strong style={{textAlign:"right",color:(group.sourceRepairIssueCount ?? group.count) > 0 ? "#ea580c" : "#16a34a"}}>{group.sourceRepairIssueCount ?? group.count}</strong>
+                                  <strong style={{textAlign:"right",color:(group.externalAccessIssueCount ?? 0) > 0 ? "#7c3aed" : "#94a3b8"}}>{group.externalAccessIssueCount ?? 0}</strong>
                                   <strong style={{textAlign:"right",color:(group.transientRegressionCount ?? 0) > 0 ? "#2563eb" : "#94a3b8"}}>{group.transientRegressionCount ?? 0}</strong>
                                   <span style={{color:"#64748b",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}} title={group.recommendedStrategy}>{group.recommendedStrategy}</span>
                                 </div>

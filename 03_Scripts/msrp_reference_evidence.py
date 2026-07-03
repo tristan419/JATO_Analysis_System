@@ -156,9 +156,11 @@ def _iter_source_repair_issues(backlog: dict[str, Any]) -> list[dict[str, Any]]:
     items: list[dict[str, Any]] = []
     candidates: list[Any] = []
     candidates.extend(backlog.get("sourceIssues") or [])
+    candidates.extend(backlog.get("externalAccessIssues") or [])
     for group in backlog.get("groups") or []:
         if isinstance(group, dict):
             candidates.extend(group.get("sourceRepairIssues") or [])
+            candidates.extend(group.get("externalAccessIssues") or [])
     for candidate in candidates:
         if not isinstance(candidate, dict):
             continue

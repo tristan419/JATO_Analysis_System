@@ -227,6 +227,7 @@ def run(dryrun_path: str | None = None, out_dir: str | None = None) -> dict:
         print(
             "[backlog] "
             f"{backlog.get('sourceRepairIssueCount', 0)} source repair issues, "
+            f"{backlog.get('externalAccessIssueCount', 0)} external access issues, "
             f"{backlog.get('transientRegressionCount', 0)} transient rechecks"
         )
         return backlog

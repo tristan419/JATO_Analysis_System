@@ -447,9 +447,18 @@ def test_v3_report_marks_tesla_403_with_evkx_reference_policy(tmp_path: Path) ->
     group = backlog["groups"][0]
     assert group["failureReason"] == "forbidden_403"
     assert group["affectedBrands"] == ["TESLA"]
-    assert len(backlog["sourceIssues"]) == 2
-    assert backlog["sourceIssues"][0]["host"] == "tesla.com"
-    assert backlog["sourceIssues"][0]["recommendedAction"] == "repair_source_definition"
+    assert backlog["sourceRepairIssueCount"] == 0
+    assert backlog["externalAccessIssueCount"] == 2
+    assert backlog["sourceIssues"] == []
+    assert len(backlog["externalAccessIssues"]) == 2
+    assert backlog["externalAccessIssues"][0]["host"] == "tesla.com"
+    assert backlog["externalAccessIssues"][0]["recommendedAction"] == "official_proxy_or_configurator_api"
+    assert backlog["externalAccessIssues"][0]["externalAccessIssue"] is True
+    assert backlog["externalAccessIssues"][0]["sourceRepairIssue"] is False
+    assert group["sourceRepairIssueCount"] == 0
+    assert group["externalAccessIssueCount"] == 2
+    assert group["priorityBand"] == "external_access"
+    assert group["recommendedAction"] == "official_proxy_or_configurator_api"
     assert group["referenceAssist"]["preferred"] == "official_proxy_or_configurator_api"
     assert group["referenceAssist"]["thirdPartyReference"] == "EVKX"
     assert group["referenceAssist"]["referencePolicy"] == "reference_only_review_required"
@@ -461,6 +470,8 @@ def test_v3_report_marks_tesla_403_with_evkx_reference_policy(tmp_path: Path) ->
     markdown = (tmp_path / "msrp_source_repair_backlog.md").read_text(
         encoding="utf-8"
     )
+    assert "External access issues: 2" in markdown
+    assert "## External Access Queue" in markdown
     assert "EVKX reference_only_review_required" in markdown
 
 
@@ -498,9 +509,13 @@ def test_v3_report_marks_tesla_anti_bot_with_evkx_reference_policy(
     group = backlog["groups"][0]
     assert group["failureReason"] == "anti_bot_access_denied"
     assert group["affectedBrands"] == ["TESLA"]
-    assert backlog["sourceIssues"][0]["errorSnippet"].startswith(
+    assert backlog["sourceRepairIssueCount"] == 0
+    assert backlog["externalAccessIssueCount"] == 1
+    assert backlog["externalAccessIssues"][0]["errorSnippet"].startswith(
         "anti_bot_access_denied: Access Denied"
     )
+    assert backlog["externalAccessIssues"][0]["recommendedAction"] == "official_proxy_or_configurator_api"
+    assert group["priorityBand"] == "external_access"
     assert group["referenceAssist"]["preferred"] == "official_proxy_or_configurator_api"
     assert group["referenceAssist"]["thirdPartyReference"] == "EVKX"
     assert group["referenceAssist"]["referencePolicy"] == "reference_only_review_required"

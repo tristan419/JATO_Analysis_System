@@ -380,6 +380,7 @@ export interface HermesMsrpSourceRepairBacklogGroup {
     country?: number;
     hostCluster?: number;
     transientRecheck?: number;
+    externalAccess?: number;
   };
   reviewAssist?: {
     preferred?: string;
@@ -411,6 +412,27 @@ export interface HermesMsrpSourceRepairBacklogGroup {
     lastKnownGoodAt?: string;
     recommendedAction?: string;
   }>;
+  externalAccessIssueCount?: number;
+  sampleExternalAccessIssues?: Array<{
+    countryCode: string;
+    sourceCode: string;
+    brand?: string;
+    sourceUrl?: string;
+    host?: string;
+    failureReason?: string;
+    recommendedStrategy?: string;
+    recommendedAction?: string;
+  }>;
+  externalAccessIssues?: Array<{
+    countryCode: string;
+    sourceCode: string;
+    brand?: string;
+    sourceUrl?: string;
+    host?: string;
+    failureReason?: string;
+    recommendedStrategy?: string;
+    recommendedAction?: string;
+  }>;
   status?: string;
 }
 export interface HermesMsrpSourceRepairBacklog {
@@ -420,6 +442,17 @@ export interface HermesMsrpSourceRepairBacklog {
   totalIssueCount: number;
   transientRegressionCount?: number;
   sourceRepairIssueCount?: number;
+  externalAccessIssueCount?: number;
+  externalAccessIssues?: Array<{
+    countryCode: string;
+    sourceCode: string;
+    brand?: string;
+    sourceUrl?: string;
+    host?: string;
+    failureReason?: string;
+    recommendedStrategy?: string;
+    recommendedAction?: string;
+  }>;
   groups: HermesMsrpSourceRepairBacklogGroup[];
 }
 export interface HermesMsrpSourceReferenceEvidenceItem {

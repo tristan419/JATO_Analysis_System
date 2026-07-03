@@ -858,6 +858,81 @@ class TestSentinelAndDeploy:
             "audi_q6_e_tron_fi_draft_scrapling",
         ]
 
+    def test_msrp_country_progress_splits_tesla_external_access_backlog(
+        self,
+        client,
+        tmp_path,
+    ):
+        reports_dir = tmp_path / "hermes" / "reports"
+        artifact_dir = tmp_path / "03_Scripts" / "diagnostics" / "artifacts"
+        report = _make_msrp_v3_report()
+        report["summary"].update({
+            "total": 1,
+            "pass": 0,
+            "empty": 1,
+            "passPct": 0.0,
+            "status": "failure",
+            "gateStatus": "blocked",
+        })
+        report["countriesDetail"][0].update({
+            "countryCode": "cz",
+            "total": 1,
+            "pass": 0,
+            "empty": 1,
+            "passPct": 0.0,
+            "status": "failure",
+            "failureBreakdown": {"anti_bot_access_denied": 1},
+            "strategyRecommendations": {
+                "manual_review_or_proxy_required": 1,
+            },
+            "sources": [
+                {
+                    "sourceCode": "tesla_model_y_cz_draft_scrapling",
+                    "brand": "TESLA",
+                    "status": "empty",
+                    "valid": 0,
+                    "failureReason": "anti_bot_access_denied",
+                    "recommendedStrategy": "manual_review_or_proxy_required",
+                    "sourceUrl": "https://www.tesla.com/cs_cz/modely",
+                },
+            ],
+        })
+        _write_json(artifact_dir / "dryrun_report.json", report)
+        _write_json(reports_dir / "msrp_country_progress.json", {
+            "probe": "pipeline.msrp_country_progress",
+            "overall": "critical",
+            "status": {"runId": report["runId"]},
+            "countries": [],
+            "topBlockingCountries": [],
+            "topFailureReasons": [],
+            "sourceRepairBacklog": {
+                "schemaVersion": "msrp_source_repair_backlog_v1",
+                "runId": report["runId"],
+                "totalIssueCount": 1,
+                "groups": [],
+            },
+            "findings": [],
+        })
+
+        with patch("app.api.routes.hermes.PROJECT_ROOT", tmp_path), patch(
+            "app.api.routes.hermes.REPORTS_DIR",
+            reports_dir,
+        ):
+            resp = client.get("/hermes/msrp-country-progress")
+
+        assert resp.status_code == 200
+        backlog = resp.json()["sourceRepairBacklog"]
+        assert backlog["totalIssueCount"] == 1
+        assert backlog["sourceRepairIssueCount"] == 0
+        assert backlog["externalAccessIssueCount"] == 1
+        assert backlog["externalAccessIssues"][0]["sourceCode"] == (
+            "tesla_model_y_cz_draft_scrapling"
+        )
+        assert backlog["externalAccessIssues"][0]["recommendedAction"] == (
+            "official_proxy_or_configurator_api"
+        )
+        assert backlog["groups"][0]["priorityBand"] == "external_access"
+
     def test_msrp_country_progress_includes_source_reference_evidence(
         self,
         client,

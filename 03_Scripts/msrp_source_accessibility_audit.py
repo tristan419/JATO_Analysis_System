@@ -275,9 +275,11 @@ def source_issues_from_backlog(
     """Extract per-source repair targets from a backlog artifact."""
     candidates: list[Any] = []
     candidates.extend(backlog.get("sourceIssues") or [])
+    candidates.extend(backlog.get("externalAccessIssues") or [])
     for group in backlog.get("groups") or []:
         if isinstance(group, dict):
             candidates.extend(group.get("sourceRepairIssues") or [])
+            candidates.extend(group.get("externalAccessIssues") or [])
     if include_transient:
         candidates.extend(backlog.get("transientSourceRegressions") or [])
         for group in backlog.get("groups") or []:

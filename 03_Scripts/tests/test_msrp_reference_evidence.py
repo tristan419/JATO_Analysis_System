@@ -173,13 +173,16 @@ def test_build_reference_evidence_uses_per_source_tesla_issue_for_austria() -> N
                 "host": "mgmotor.at",
                 "failureReason": "network_unavailable",
             },
+        ],
+        "externalAccessIssues": [
             {
                 "countryCode": "at",
                 "sourceCode": "tesla_model_y_at_draft_scrapling",
                 "brand": "TESLA",
                 "host": "tesla.com",
-                "failureReason": "network_unavailable",
-                "recommendedStrategy": "retry_network_or_proxy",
+                "failureReason": "forbidden_403",
+                "recommendedStrategy": "manual_review_or_proxy_required",
+                "recommendedAction": "official_proxy_or_configurator_api",
             },
         ],
     }

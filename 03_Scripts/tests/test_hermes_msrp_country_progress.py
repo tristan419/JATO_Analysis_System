@@ -189,6 +189,46 @@ def test_source_repair_backlog_preserves_rejection_diagnostics():
     assert backlog["groups"][0]["sourceRepairIssues"][0] == issue
 
 
+def test_source_repair_backlog_splits_tesla_external_access_issue():
+    module = _load_module()
+    report = {
+        "schemaVersion": "msrp_dryrun_report_v3",
+        "runId": "msrp-dryrun-20260624-135526",
+        "countriesDetail": [
+            {
+                "countryCode": "cz",
+                "sources": [
+                    {
+                        "sourceCode": "tesla_model_y_cz_draft_scrapling",
+                        "brand": "TESLA",
+                        "sourceUrl": "https://www.tesla.com/cs_cz/modely",
+                        "status": "empty",
+                        "valid": 0,
+                        "failureReason": "anti_bot_access_denied",
+                        "recommendedStrategy": "manual_review_or_proxy_required",
+                    }
+                ],
+            }
+        ],
+    }
+
+    backlog = module._source_repair_backlog_from_report(
+        report,
+        "2026-06-24T13:55:26Z",
+    )
+
+    assert backlog["sourceRepairIssueCount"] == 0
+    assert backlog["externalAccessIssueCount"] == 1
+    assert backlog["sourceIssues"] == []
+    issue = backlog["externalAccessIssues"][0]
+    assert issue["sourceCode"] == "tesla_model_y_cz_draft_scrapling"
+    assert issue["recommendedAction"] == "official_proxy_or_configurator_api"
+    assert issue["externalAccessIssue"] is True
+    group = backlog["groups"][0]
+    assert group["priorityBand"] == "external_access"
+    assert group["recommendedAction"] == "official_proxy_or_configurator_api"
+
+
 def test_country_progress_keeps_stable_latest_when_active_run_regresses(tmp_path, monkeypatch):
     module = _load_module()
     latest_run_id = "msrp-dryrun-20260618-110029"

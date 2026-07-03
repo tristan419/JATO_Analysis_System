@@ -74,6 +74,13 @@ def test_source_issues_from_backlog_dedupes_group_and_top_level_items() -> None:
                 "sourceUrl": "https://www.mgmotor.at/modelle/mg-zs",
             }
         ],
+        "externalAccessIssues": [
+            {
+                "countryCode": "at",
+                "sourceCode": "tesla_model_y_at_draft_scrapling",
+                "sourceUrl": "https://www.tesla.com/de_at/modely",
+            }
+        ],
         "groups": [
             {
                 "sourceRepairIssues": [
@@ -82,12 +89,14 @@ def test_source_issues_from_backlog_dedupes_group_and_top_level_items() -> None:
                         "sourceCode": "mg_zs_at_draft_scrapling",
                         "sourceUrl": "https://www.mgmotor.at/modelle/mg-zs",
                     },
+                ],
+                "externalAccessIssues": [
                     {
                         "countryCode": "at",
                         "sourceCode": "tesla_model_y_at_draft_scrapling",
                         "sourceUrl": "https://www.tesla.com/de_at/modely",
                     },
-                ]
+                ],
             }
         ],
         "transientSourceRegressions": [

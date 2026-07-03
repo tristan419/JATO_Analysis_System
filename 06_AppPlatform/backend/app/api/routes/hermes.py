@@ -44,6 +44,10 @@ BUDGET_DAILY_CNY = 20
 BUDGET_MONTHLY_CNY = 500
 ALERT_EMAIL = "tristanlyk@gmail.com"
 SOURCE_URL_PATTERN = re.compile(r"https?://[^\s\"')<>]+")
+EXTERNAL_ACCESS_FAILURES = {
+    "forbidden_403",
+    "anti_bot_access_denied",
+}
 MSRP_COUNTRY_LABELS = {
     "at": "Austria",
     "be": "Belgium",
@@ -125,6 +129,8 @@ def _default_source_repair_backlog() -> dict[str, Any]:
         "totalIssueCount": 0,
         "transientRegressionCount": 0,
         "sourceRepairIssueCount": 0,
+        "externalAccessIssueCount": 0,
+        "externalAccessIssues": [],
         "topSourceHosts": [],
         "groups": [],
     }
@@ -254,9 +260,16 @@ def _priority_weight(name: str, default: float) -> float:
         return default
 
 
-def _priority_band(score: float, source_repair_count: int, transient_count: int) -> str:
+def _priority_band(
+    score: float,
+    source_repair_count: int,
+    transient_count: int,
+    external_access_count: int = 0,
+) -> str:
     if source_repair_count <= 0 and transient_count > 0:
         return "recheck"
+    if source_repair_count <= 0 and external_access_count > 0:
+        return "external_access"
     if score >= 80 or source_repair_count >= 10:
         return "critical"
     if score >= 45 or source_repair_count >= 3:
@@ -266,7 +279,18 @@ def _priority_band(score: float, source_repair_count: int, transient_count: int)
     return "low"
 
 
-def _priority_review_assist(failure_reason: str, source_repair_count: int) -> dict[str, str]:
+def _priority_review_assist(
+    failure_reason: str,
+    source_repair_count: int,
+    external_access_count: int = 0,
+) -> dict[str, str]:
+    if source_repair_count <= 0 and external_access_count > 0:
+        return {
+            "preferred": "official_proxy_or_configurator_api",
+            "llmFit": "low",
+            "neuralNetworkFit": "not_recommended",
+            "reason": "Official source access is blocked by the current fetch path; use an official proxy or configurator API before selector repair.",
+        }
     if source_repair_count <= 0:
         return {
             "preferred": "rule_based_recheck",
@@ -292,6 +316,7 @@ def _priority_review_assist(failure_reason: str, source_repair_count: int) -> di
 def _priority_fields(group: dict[str, Any]) -> dict[str, Any]:
     source_repair_count = int(group["sourceRepairIssueCount"])
     transient_count = int(group["transientRegressionCount"])
+    external_access_count = int(group.get("externalAccessIssueCount") or 0)
     affected_country_count = len(group["affectedCountries"])
     host_counts = [int(data.get("count") or 0) for data in group["hosts"].values()]
     top_host_count = max(host_counts or [0])
@@ -300,18 +325,27 @@ def _priority_fields(group: dict[str, Any]) -> dict[str, Any]:
         + affected_country_count * _priority_weight("COUNTRY", 6.0)
         + top_host_count * _priority_weight("HOST_CLUSTER", 3.0)
         + transient_count * _priority_weight("TRANSIENT_RECHECK", 1.5)
+        + external_access_count * _priority_weight("EXTERNAL_ACCESS", 5.0)
     )
     return {
         "priorityScore": round(score, 1),
-        "priorityBand": _priority_band(score, source_repair_count, transient_count),
+        "priorityBand": _priority_band(score, source_repair_count, transient_count, external_access_count),
         "priorityWeights": {
             "sourceRepair": _priority_weight("SOURCE_REPAIR", 10.0),
             "country": _priority_weight("COUNTRY", 6.0),
             "hostCluster": _priority_weight("HOST_CLUSTER", 3.0),
             "transientRecheck": _priority_weight("TRANSIENT_RECHECK", 1.5),
+            "externalAccess": _priority_weight("EXTERNAL_ACCESS", 5.0),
         },
-        "reviewAssist": _priority_review_assist(str(group["failureReason"]), source_repair_count),
+        "reviewAssist": _priority_review_assist(str(group["failureReason"]), source_repair_count, external_access_count),
     }
+
+
+def _is_external_access_issue(source: dict[str, Any], failure_reason: str) -> bool:
+    if failure_reason not in EXTERNAL_ACCESS_FAILURES:
+        return False
+    brand = str(source.get("brand") or "").strip().upper()
+    return brand == "TESLA" or _source_host(source) == "tesla.com"
 
 
 def _source_key(country_code: str | None, source: dict[str, Any]) -> tuple[str, str] | None:
@@ -430,14 +464,17 @@ def _source_repair_backlog_from_current(
                 "count": 0,
                 "transientRegressionCount": 0,
                 "sourceRepairIssueCount": 0,
+                "externalAccessIssueCount": 0,
                 "recommendedStrategies": {},
                 "affectedCountries": set(),
                 "sources": [],
                 "transientSources": [],
+                "externalAccessSources": [],
                 "hosts": {},
                 "status": "new",
             })
             group["count"] += 1
+            is_external_access = _is_external_access_issue(source, reason) and not is_transient
             if is_transient:
                 group["transientRegressionCount"] += 1
                 group["transientSources"].append({
@@ -451,6 +488,18 @@ def _source_repair_backlog_from_current(
                     ),
                     "lastKnownGoodAt": (historical_sample or {}).get("observedAt"),
                     "recommendedAction": "recheck_before_source_repair",
+                })
+            elif is_external_access:
+                group["externalAccessIssueCount"] += 1
+                group["externalAccessSources"].append({
+                    "countryCode": country_code,
+                    "sourceCode": source_code,
+                    "brand": str(source.get("brand") or "").strip().upper(),
+                    "sourceUrl": _source_url(source),
+                    "host": _source_host(source),
+                    "failureReason": reason,
+                    "recommendedStrategy": recommended,
+                    "recommendedAction": "official_proxy_or_configurator_api",
                 })
             else:
                 group["sourceRepairIssueCount"] += 1
@@ -480,15 +529,19 @@ def _source_repair_backlog_from_current(
         recommended_strategy = max(strategies, key=strategies.get) if strategies else "diagnose_with_msrp_page_analyzer"
         transient_count = int(group["transientRegressionCount"])
         source_repair_count = int(group["sourceRepairIssueCount"])
+        external_access_count = int(group["externalAccessIssueCount"])
         normalized_groups.append({
             "failureReason": group["failureReason"],
             "count": group["count"],
             "transientRegressionCount": transient_count,
             "sourceRepairIssueCount": source_repair_count,
+            "externalAccessIssueCount": external_access_count,
             **_priority_fields(group),
             "recommendedAction": (
                 "recheck_before_source_repair"
                 if transient_count and not source_repair_count
+                else "official_proxy_or_configurator_api"
+                if external_access_count and not source_repair_count
                 else "repair_source_definition"
             ),
             "recommendedStrategy": recommended_strategy,
@@ -497,17 +550,29 @@ def _source_repair_backlog_from_current(
             "affectedCountryCount": len(group["affectedCountries"]),
             "sampleSources": group["sources"][:20],
             "sampleTransientRegressions": group["transientSources"][:8],
+            "sampleExternalAccessIssues": group["externalAccessSources"][:8],
+            "externalAccessIssues": group["externalAccessSources"],
             "topSourceHosts": _normalize_host_groups(group["hosts"]),
             "status": group["status"],
         })
     normalized_groups.sort(key=lambda item: (
-        0 if int(item["sourceRepairIssueCount"]) > 0 else 1,
+        0
+        if int(item["sourceRepairIssueCount"]) > 0
+        else 1
+        if int(item.get("externalAccessIssueCount") or 0) > 0
+        else 2,
         -float(item["priorityScore"]),
         -int(item["count"]),
         str(item["failureReason"]),
     ))
     transient_regression_count = sum(int(item["transientRegressionCount"]) for item in normalized_groups)
     source_repair_issue_count = sum(int(item["sourceRepairIssueCount"]) for item in normalized_groups)
+    external_access_issue_count = sum(int(item.get("externalAccessIssueCount") or 0) for item in normalized_groups)
+    external_access_issues = [
+        source
+        for item in normalized_groups
+        for source in item.get("externalAccessIssues") or []
+    ]
     return {
         "schemaVersion": "msrp_source_repair_backlog_v1",
         "runId": current.get("runId"),
@@ -516,6 +581,8 @@ def _source_repair_backlog_from_current(
         "totalIssueCount": sum(int(item["count"]) for item in normalized_groups),
         "transientRegressionCount": transient_regression_count,
         "sourceRepairIssueCount": source_repair_issue_count,
+        "externalAccessIssueCount": external_access_issue_count,
+        "externalAccessIssues": external_access_issues,
         "topSourceHosts": _normalize_host_groups(top_hosts),
         "groups": normalized_groups,
     }
