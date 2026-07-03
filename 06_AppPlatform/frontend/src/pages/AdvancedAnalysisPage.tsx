@@ -9,6 +9,7 @@ import { LoadingSurface } from "../components/LoadingSurface";
 import { SearchSelectFilter } from "../components/SearchSelectFilter";
 import { TRANSPARENT_CHART_LAYOUT as CHART_LAYOUT } from "../utils/plotlyDefaults";
 import { SERIES_COLORS } from "../utils/colors";
+import { compactSearchText } from "../utils/searchMatching";
 import { DEFAULT_EXPORT, ExportPanel, downloadPng, type ExportSettings } from "../components/ExportPanel";
 import { DeckExportDrawer, DeckFloatingDrawer } from "../components/deckControls";
 import { JATO_COUNTRIES, formatJatoCountryOption } from "../utils/jatoCountries";
@@ -90,6 +91,9 @@ function normalizeLookupText(value: string): string {
     .replace(/[^a-z0-9\u4e00-\u9fa5]+/g, " ")
     .trim();
 }
+function compactLookupText(value: string): string {
+  return compactSearchText(normalizeLookupText(value));
+}
 function tokenizeModelQuery(query: string): string[] {
   return normalizeLookupText(query).split(/\s+/).filter(Boolean);
 }
@@ -99,10 +103,14 @@ function scoreModelOption(model: string, query: string): number | null {
   if (!normalizedQuery) return 1;
   const tokens = tokenizeModelQuery(query);
   if (tokens.length === 0) return 1;
-  if (!tokens.every((token) => normalizedModel.includes(token))) return null;
+  const compactModel = compactLookupText(model);
+  const compactQuery = compactLookupText(query);
+  if (!tokens.every((token) => normalizedModel.includes(token)) && !compactModel.includes(compactQuery)) return null;
   let score = 10;
   if (normalizedModel === normalizedQuery) score += 100;
   if (normalizedModel.startsWith(normalizedQuery)) score += 45;
+  if (compactModel === compactQuery) score += 90;
+  if (compactModel.startsWith(compactQuery)) score += 35;
   score += tokens.reduce((sum, token) => {
     if (normalizedModel.startsWith(token)) return sum + 18;
     if (normalizedModel.split(" ").some((word) => word.startsWith(token))) return sum + 12;
@@ -269,7 +277,8 @@ export function AdvancedAnalysisPage() {
   const exactTargetModel = useMemo(() => {
     if (!targetSearchTrimmed) return "";
     const normalizedSearch = normalizeLookupText(targetSearchTrimmed);
-    return targetModelCandidates.find(model => normalizeLookupText(model) === normalizedSearch) || "";
+    const compactSearch = compactLookupText(targetSearchTrimmed);
+    return targetModelCandidates.find(model => normalizeLookupText(model) === normalizedSearch || compactLookupText(model) === compactSearch) || "";
   }, [targetModelCandidates, targetSearchTrimmed]);
   const suggestedTargetModel = exactTargetModel || targetModelMatches[0] || targetSearchTrimmed;
   const canApplyTargetModel = Boolean(targetSearchTrimmed && suggestedTargetModel !== targetModel);

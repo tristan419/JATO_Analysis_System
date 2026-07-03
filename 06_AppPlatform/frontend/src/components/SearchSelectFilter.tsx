@@ -1,5 +1,7 @@
 import { useState } from "react";
 
+import { matchesCompactSearch } from "../utils/searchMatching";
+
 interface SearchSelectShortcut {
   label: string;
   values: string[];
@@ -22,9 +24,8 @@ export function SearchSelectFilter({
 }) {
   const [query, setQuery] = useState("");
   const normalizedQuery = query.toLowerCase().trim();
-  const matched = normalizedQuery
-    ? options.filter((option) => option.toLowerCase().includes(normalizedQuery))
-    : options;
+  const matched = normalizedQuery ? options.filter((option) => matchesCompactSearch(option, query)) : options;
+  const suvOptions = options.filter((option) => matchesCompactSearch(option, "suv"));
   const selectedSet = new Set(selected);
 
   return (
@@ -52,11 +53,11 @@ export function SearchSelectFilter({
         >
           全选搜索结果
         </button>
-        {showSuvShortcut && options.some((option) => option.toLowerCase().includes("suv")) && (
+        {showSuvShortcut && suvOptions.length > 0 && (
           <button
             type="button"
             className="filter-action-btn"
-            onClick={() => onChange(options.filter((option) => option.toLowerCase().includes("suv")))}
+            onClick={() => onChange(suvOptions)}
           >
             一键筛选 SUV
           </button>

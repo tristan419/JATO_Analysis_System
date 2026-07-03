@@ -7698,6 +7698,10 @@ table.data-table tr.data-table-group-row.contains-selection td {
   font-weight: 600;
 }
 
+.version-comparison-model-option-added.is-muted {
+  color: #64748b;
+}
+
 .version-comparison-model-option-meta {
   display: flex;
   flex-wrap: wrap;

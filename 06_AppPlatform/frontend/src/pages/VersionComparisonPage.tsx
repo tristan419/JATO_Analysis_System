@@ -37,6 +37,7 @@ import type {
 import { buildBubbleSizing } from "../utils/bubbleSizing";
 import { fuelColor } from "../utils/colors";
 import { TRANSPARENT_CHART_LAYOUT as CHART_LAYOUT } from "../utils/plotlyDefaults";
+import { compactSearchText, optionMatchesCompactSearch } from "../utils/searchMatching";
 import { useArrowCountryNavigation } from "../utils/useArrowCountryNavigation";
 import { useFixedCanvasPreview } from "../utils/useFixedCanvasPreview";
 import { useDeckLayoutControls, type DeckLayoutDirection } from "../hooks/useDeckLayoutControls";
@@ -526,6 +527,9 @@ function buildVersionBubbleTraces(items: VersionComparisonBubbleItem[], opts: Bu
   return traces;
 }
 
+const MODEL_LENGTH_LABEL_YSHIFTS = [-28, -52] as const;
+const BUBBLE_MODEL_LABEL_BOTTOM_MARGIN = 118;
+
 function buildModelLengthAnnotations(items: VersionComparisonBubbleItem[]): NonNullable<Partial<PlotlyLayout>["annotations"]> {
   const modelLengthMap = new Map<string, { label: string; length: number }>();
   items.forEach((item) => {
@@ -534,7 +538,6 @@ function buildModelLengthAnnotations(items: VersionComparisonBubbleItem[]): NonN
       modelLengthMap.set(key, { label: item.model, length: item.length });
     }
   });
-  const rowOffsets = [-0.14, -0.24];
   const overlapThreshold = 70;
   let previousLength: number | null = null;
   let currentRow = 0;
@@ -542,16 +545,17 @@ function buildModelLengthAnnotations(items: VersionComparisonBubbleItem[]): NonN
     .sort((left, right) => left.length - right.length)
     .map(({ label, length }) => {
       if (previousLength !== null && Math.abs(length - previousLength) <= overlapThreshold) {
-        currentRow = (currentRow + 1) % rowOffsets.length;
+        currentRow = (currentRow + 1) % MODEL_LENGTH_LABEL_YSHIFTS.length;
       } else {
         currentRow = 0;
       }
       previousLength = length;
       return {
         x: length,
-        y: rowOffsets[currentRow],
+        y: 0,
         xref: "x",
         yref: "paper",
+        yshift: MODEL_LENGTH_LABEL_YSHIFTS[currentRow],
         text: label,
         showarrow: false,
         xanchor: "center",
@@ -607,9 +611,10 @@ function versionBubbleLayout(
   step: number,
   annotations: NonNullable<Partial<PlotlyLayout>["annotations"]>,
 ): Partial<PlotlyLayout> {
+  const bottomMargin = annotations.length > 0 ? BUBBLE_MODEL_LABEL_BOTTOM_MARGIN : 62;
   return {
     ...CHART_LAYOUT,
-    margin: { l: 96, r: 80, t: 16, b: 62 },
+    margin: { l: 96, r: 80, t: 16, b: bottomMargin },
     legend: {
       orientation: "v",
       x: 1.02,
@@ -639,7 +644,7 @@ function versionBubbleLayout(
 }
 
 function compactSearchToken(value: string): string {
-  return value.toLowerCase().replace(/[^a-z0-9\u4e00-\u9fff]+/g, "");
+  return compactSearchText(value);
 }
 
 function searchModelOptions<T extends VersionComparisonModelOption>(options: T[], query: string): T[] {
@@ -661,20 +666,27 @@ function searchModelOptions<T extends VersionComparisonModelOption>(options: T[]
   });
 }
 
+function modelOptionIdentity(option: VersionComparisonModelOption): string {
+  const brand = compactSearchToken(option.brand || "");
+  const label = compactSearchToken(option.label || option.value || option.modelKey || "");
+  return `${brand}::${label}`;
+}
+
 function searchSegmentOptions(options: { value: string; label: string }[], query: string): { value: string; label: string }[] {
   const q = query.trim().toLowerCase();
   if (!q) return options;
-  return options.filter((s) => s.label.toLowerCase().includes(q) || s.value.toLowerCase().includes(q));
+  return options.filter((s) => optionMatchesCompactSearch(s, query));
 }
 
 function searchCountryOptions(options: { value: string; label: string }[], query: string): { value: string; label: string }[] {
   const q = query.trim().toLowerCase();
   if (!q) return options;
-  return options.filter((c) => c.label.toLowerCase().includes(q) || c.value.toLowerCase().includes(q));
+  return options.filter((c) => optionMatchesCompactSearch(c, query));
 }
 
 type VersionComparisonPickerOption = VersionComparisonModelOption & {
   availability: "current" | "global";
+  availabilityReason?: string;
 };
 
 export function VersionComparisonPage() {
@@ -799,9 +811,11 @@ export function VersionComparisonPage() {
     const fuels = selectedFuelTypes.slice().sort().join(",");
     const defaultFuels = DEFAULT_FUEL_TYPES.slice().sort().join(",");
     if (fuels && fuels !== defaultFuels) params.set("fuelTypes", selectedFuelTypes.join(","));
-    if (msrpMin !== null) params.set("msrpMin", String(msrpMin));
-    if (msrpMax !== null) params.set("msrpMax", String(msrpMax));
-    if (priceBandSize !== null && priceBandSize !== DEFAULT_PRICE_BAND_SIZE) params.set("priceBandSize", String(priceBandSize));
+    if (priceControlsTouched) {
+      if (msrpMin !== null) params.set("msrpMin", String(msrpMin));
+      if (msrpMax !== null) params.set("msrpMax", String(msrpMax));
+      if (priceBandSize !== null && priceBandSize !== DEFAULT_PRICE_BAND_SIZE) params.set("priceBandSize", String(priceBandSize));
+    }
     if (bodyType && comparisonMode !== "same_segment") params.set("bodyType", bodyType);
     if (driveTypes.length > 0 && comparisonMode !== "same_segment") params.set("driveTypes", driveTypes.join(","));
     if (lengthMin !== null && comparisonMode !== "same_segment") params.set("lengthMin", String(lengthMin));
@@ -809,7 +823,7 @@ export function VersionComparisonPage() {
     if (selectedSegments.length > 0 && comparisonMode !== "same_segment") params.set("segments", selectedSegments.join(","));
     if (labelMode !== "smart_top") params.set("labelMode", labelMode);
     setSearchParams(params, { replace: true });
-  }, [msrpMax, msrpMin, priceBandSize, salesMode, comparisonMode, selectedCountry, selectedFuelTypes, selectedModels, selectedPeriod, selectedSegment, selectedTimeRange, bodyType, driveTypes, lengthMin, lengthMax, selectedSegments, labelMode, setSearchParams]);
+  }, [msrpMax, msrpMin, priceBandSize, priceControlsTouched, salesMode, comparisonMode, selectedCountry, selectedFuelTypes, selectedModels, selectedPeriod, selectedSegment, selectedTimeRange, bodyType, driveTypes, lengthMin, lengthMax, selectedSegments, labelMode, setSearchParams]);
 
   useEffect(() => {
     syncUrlParams();
@@ -838,9 +852,9 @@ export function VersionComparisonPage() {
       comparison_mode: comparisonMode,
       segment: selectedSegment || undefined,
       models: selectedModels,
-      msrp_min: msrpMin,
-      msrp_max: msrpMax,
-      price_band_size: priceBandSize,
+      msrp_min: priceControlsTouched ? (msrpMin ?? undefined) : undefined,
+      msrp_max: priceControlsTouched ? (msrpMax ?? undefined) : undefined,
+      price_band_size: priceControlsTouched ? (priceBandSize ?? undefined) : undefined,
       body_type: bodyType || undefined,
       drive_types: driveTypes.length > 0 ? driveTypes : undefined,
       segments: selectedSegments.length > 0 ? selectedSegments : undefined,
@@ -864,7 +878,7 @@ export function VersionComparisonPage() {
           setLoading(false);
         }
       });
-  }, [msrpMax, msrpMin, priceBandSize, reloadToken, salesMode, comparisonMode, selectedCountry, selectedFuelTypes, selectedModels, selectedPeriod, selectedSegment, selectedTimeRange, bodyType, driveTypes, selectedSegments, lengthMin, lengthMax]);
+  }, [msrpMax, msrpMin, priceBandSize, priceControlsTouched, reloadToken, salesMode, comparisonMode, selectedCountry, selectedFuelTypes, selectedModels, selectedPeriod, selectedSegment, selectedTimeRange, bodyType, driveTypes, selectedSegments, lengthMin, lengthMax]);
 
   useEffect(() => {
     if (!deck) {
@@ -959,6 +973,15 @@ export function VersionComparisonPage() {
   const bodyTypeOptions = deck?.metadata.availableBodyTypes ?? [];
   const driveTypeOptions = deck?.metadata.availableDriveTypes ?? [];
   const activeModeLabel = comparisonMode === "free_comparison" ? "自由对比" : "同级别对比";
+  const activeSegmentLabel = comparisonMode === "free_comparison"
+    ? (selectedSegments.length > 0 ? selectedSegments.join(" + ") : "全部 Segment")
+    : (currentSegment || "当前 Segment");
+  const globalUnavailableContext = [
+    deck?.metadata.selectedCountryLabel ?? currentCountry,
+    deck?.metadata.labels.salesModeLabel,
+    activeFuelTypes.join(" / "),
+    activeSegmentLabel,
+  ].filter(Boolean).join(" · ");
 
   useEffect(() => {
     if (!page || priceControlsTouched) {
@@ -988,15 +1011,17 @@ export function VersionComparisonPage() {
   const globalCandidateOptions = deck?.metadata.globalAvailableModels ?? [];
   const pickerOptions = useMemo<VersionComparisonPickerOption[]>(() => {
     const currentValues = new Set(candidateOptions.map((option) => option.value));
+    const currentIdentities = new Set(candidateOptions.map(modelOptionIdentity));
     const currentOptions = candidateOptions.map((option) => ({
       ...option,
       availability: "current" as const,
     }));
     const globalOnlyOptions = globalCandidateOptions
-      .filter((option) => !currentValues.has(option.value))
+      .filter((option) => !currentValues.has(option.value) && !currentIdentities.has(modelOptionIdentity(option)))
       .map((option) => ({
         ...option,
         availability: "global" as const,
+        availabilityReason: "当前筛选无销量",
       }));
     return [...currentOptions, ...globalOnlyOptions];
   }, [candidateOptions, globalCandidateOptions]);
@@ -1498,6 +1523,7 @@ export function VersionComparisonPage() {
                             type="button"
                             className={`version-comparison-model-option${option.value === modelToAdd ? " is-active" : ""}${isSelected ? " is-selected" : ""}${isGlobalOnly ? " is-global-only" : ""}`}
                             disabled={isGlobalOnly}
+                            title={isGlobalOnly ? `${option.availabilityReason ?? "当前筛选无销量"}：${globalUnavailableContext}` : undefined}
                             onClick={() => { handleToggleModel(option.value); setModelToAdd(option.value); }}
                             onMouseEnter={() => { if (!isGlobalOnly) setModelToAdd(option.value); }}
                           >
@@ -1508,7 +1534,7 @@ export function VersionComparisonPage() {
                               <div className="version-comparison-model-option-main">
                                 <span className="version-comparison-model-option-name">{option.label}</span>
                                 {isSelected ? <span className="version-comparison-model-option-added">已添加</span> : null}
-                                {isGlobalOnly ? <span className="version-comparison-model-option-added">全局有车 · 当前不可选</span> : null}
+                                {isGlobalOnly ? <span className="version-comparison-model-option-added is-muted">{`全局有车 · ${option.availabilityReason ?? "当前筛选无销量"}`}</span> : null}
                               </div>
                               <div className="version-comparison-model-option-meta">
                                 {option.brand ? <span>{option.brand}</span> : null}
