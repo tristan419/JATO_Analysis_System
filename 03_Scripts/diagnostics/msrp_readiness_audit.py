@@ -625,11 +625,10 @@ def build_readiness_report(
     )
     stable_coverage = _nested_dict(country_progress, "stableCoverage")
     source_repair_backlog = _nested_dict(country_progress, "sourceRepairBacklog")
-    source_repair_issue_count = int(
-        source_repair_backlog.get("sourceRepairIssueCount")
-        or source_repair_backlog.get("totalIssueCount")
-        or 0
-    )
+    source_repair_issue_raw = source_repair_backlog.get("sourceRepairIssueCount")
+    if source_repair_issue_raw is None:
+        source_repair_issue_raw = source_repair_backlog.get("totalIssueCount")
+    source_repair_issue_count = int(source_repair_issue_raw or 0)
     transient_recheck_count = int(
         source_repair_backlog.get("transientRegressionCount") or 0
     )

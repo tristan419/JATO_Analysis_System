@@ -48,6 +48,13 @@ EXTERNAL_ACCESS_FAILURES = {
     "forbidden_403",
     "anti_bot_access_denied",
 }
+TRANSIENT_RECHECK_FAILURES = {
+    "http_timeout",
+    "dns_resolution_failed",
+    "network_unavailable",
+    "dynamic_price_not_ready",
+    "js_required_or_selector_timeout",
+}
 PIPELINE_RUNTIME_FAILURES = {
     "db_or_backend_write_failed",
     "runner_browser_launch_failed",
@@ -495,7 +502,10 @@ def _source_repair_backlog_from_current(
             key = _source_key(country_code, source)
             stable_sample = transient_lookup.get(key) if key else None
             historical_sample = historical_good.get(key) if key else None
-            is_transient = bool(stable_sample or historical_sample)
+            is_transient = (
+                bool(stable_sample or historical_sample)
+                or reason in TRANSIENT_RECHECK_FAILURES
+            )
             group = groups.setdefault(reason, {
                 "failureReason": reason,
                 "count": 0,

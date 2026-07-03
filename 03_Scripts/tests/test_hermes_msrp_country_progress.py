@@ -272,6 +272,46 @@ def test_source_repair_backlog_splits_pipeline_runtime_issue(tmp_path, monkeypat
     assert group["recommendedAction"] == "fix_runner_or_pipeline"
 
 
+def test_source_repair_backlog_marks_timeout_as_transient_recheck(tmp_path, monkeypatch):
+    module = _load_module()
+    monkeypatch.setattr(module, "RUNS_INDEX_PATH", tmp_path / "missing_runs_index.json")
+    report = {
+        "schemaVersion": "msrp_dryrun_report_v3",
+        "runId": "msrp-dryrun-20260624-142640",
+        "countriesDetail": [
+            {
+                "countryCode": "fr",
+                "sources": [
+                    {
+                        "sourceCode": "peugeot_3008_fr_draft_scrapling",
+                        "brand": "PEUGEOT",
+                        "sourceUrl": "https://www.peugeot.fr/nos-vehicules/peugeot-3008/hybride.html",
+                        "status": "timeout",
+                        "valid": 0,
+                        "failureReason": "http_timeout",
+                        "recommendedStrategy": "retry_or_reduce_concurrency",
+                    }
+                ],
+            }
+        ],
+    }
+
+    backlog = module._source_repair_backlog_from_report(
+        report,
+        "2026-06-24T14:26:40Z",
+    )
+
+    assert backlog["sourceRepairIssueCount"] == 0
+    assert backlog["transientRegressionCount"] == 1
+    assert backlog["sourceIssues"] == []
+    issue = backlog["transientSourceRegressions"][0]
+    assert issue["sourceCode"] == "peugeot_3008_fr_draft_scrapling"
+    assert issue["recommendedAction"] == "recheck_before_source_repair"
+    group = backlog["groups"][0]
+    assert group["priorityBand"] == "recheck"
+    assert group["reviewAssist"]["preferred"] == "rule_based_recheck"
+
+
 def test_country_progress_keeps_stable_latest_when_active_run_regresses(tmp_path, monkeypatch):
     module = _load_module()
     latest_run_id = "msrp-dryrun-20260618-110029"

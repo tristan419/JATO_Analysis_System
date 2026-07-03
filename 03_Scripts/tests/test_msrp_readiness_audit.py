@@ -192,6 +192,25 @@ class FakeReadinessClient:
         raise AssertionError(f"Unexpected request: {path}")
 
 
+class ZeroSourceRepairReadinessClient(FakeReadinessClient):
+    def request_json(
+        self,
+        method: str,
+        path: str,
+        payload: dict[str, Any] | None = None,
+        query: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        response = super().request_json(method, path, payload, query)
+        if path == "/hermes/msrp-country-progress":
+            response["sourceRepairBacklog"] = {
+                "totalIssueCount": 8,
+                "sourceRepairIssueCount": 0,
+                "transientRegressionCount": 7,
+                "externalAccessIssueCount": 1,
+            }
+        return response
+
+
 def test_build_readiness_report_marks_complete_contract_passed() -> None:
     report = audit_module.build_readiness_report(
         client=FakeReadinessClient(),
@@ -260,6 +279,23 @@ def test_build_readiness_report_marks_complete_contract_passed() -> None:
     assert pipeline_runtime["statusPipelineId"] == "msrp_pipeline"
     assert "unified_readiness" in pipeline_runtime["phases"]
     assert "goal_completion_audit" in pipeline_runtime["phases"]
+
+
+def test_build_readiness_report_preserves_zero_source_repair_count() -> None:
+    report = audit_module.build_readiness_report(
+        client=ZeroSourceRepairReadinessClient(),
+        filters={},
+    )
+
+    requirements = {
+        item["key"]: item
+        for item in report["requirements"]
+    }
+    dryrun_runtime = requirements["dryrun_governance"]["runtime"]
+    assert dryrun_runtime["sourceRepairIssueCount"] == 0
+    assert dryrun_runtime["transientRecheckCount"] == 7
+    assert report["summary"]["runtimeCounts"]["dryrunSourceRepairIssueCount"] == 0
+    assert report["summary"]["runtimeCounts"]["dryrunTransientRecheckCount"] == 7
 
 
 def test_build_readiness_report_marks_missing_when_monitoring_events_are_unavailable() -> None:

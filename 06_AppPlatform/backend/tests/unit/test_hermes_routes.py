@@ -395,12 +395,15 @@ class TestSentinelAndDeploy:
         assert backlog["partial"] is True
         assert backlog["runId"] == "msrp-dryrun-20260612-070207"
         assert backlog["totalIssueCount"] == 2
-        assert backlog["groups"][0]["failureReason"] == "http_timeout"
-        assert backlog["groups"][0]["priorityScore"] > 0
-        assert backlog["groups"][0]["priorityBand"] in {"medium", "high", "critical"}
-        assert backlog["groups"][0]["reviewAssist"]["preferred"] == "rule_based"
-        assert backlog["groups"][0]["sampleSources"] == ["audi_q4_e_tron_se_draft_scrapling"]
-        assert backlog["groups"][0]["topSourceHosts"] == [
+        groups = {group["failureReason"]: group for group in backlog["groups"]}
+        assert groups["json_ld_empty"]["sourceRepairIssueCount"] == 1
+        assert groups["http_timeout"]["sourceRepairIssueCount"] == 0
+        assert groups["http_timeout"]["transientRegressionCount"] == 1
+        assert groups["http_timeout"]["priorityBand"] == "recheck"
+        assert groups["http_timeout"]["reviewAssist"]["preferred"] == "rule_based_recheck"
+        assert groups["http_timeout"]["recommendedAction"] == "recheck_before_source_repair"
+        assert groups["http_timeout"]["sampleSources"] == ["audi_q4_e_tron_se_draft_scrapling"]
+        assert groups["http_timeout"]["topSourceHosts"] == [
             {
                 "host": "audi.se",
                 "count": 1,
@@ -850,10 +853,14 @@ class TestSentinelAndDeploy:
         assert backlog["totalIssueCount"] == 3
         assert backlog["topSourceHosts"][0]["host"] == "audi.fi"
         assert backlog["topSourceHosts"][0]["count"] == 2
-        assert backlog["groups"][0]["failureReason"] == "http_timeout"
-        assert backlog["groups"][0]["priorityScore"] > 0
-        assert backlog["groups"][0]["topSourceHosts"][0]["host"] == "audi.fi"
-        assert backlog["groups"][0]["topSourceHosts"][0]["sampleSources"] == [
+        groups = {group["failureReason"]: group for group in backlog["groups"]}
+        assert groups["forbidden_403"]["sourceRepairIssueCount"] == 1
+        assert groups["http_timeout"]["sourceRepairIssueCount"] == 0
+        assert groups["http_timeout"]["transientRegressionCount"] == 2
+        assert groups["http_timeout"]["priorityBand"] == "recheck"
+        assert groups["http_timeout"]["recommendedAction"] == "recheck_before_source_repair"
+        assert groups["http_timeout"]["topSourceHosts"][0]["host"] == "audi.fi"
+        assert groups["http_timeout"]["topSourceHosts"][0]["sampleSources"] == [
             "audi_q4_e_tron_fi_draft_scrapling",
             "audi_q6_e_tron_fi_draft_scrapling",
         ]

@@ -37,6 +37,13 @@ EXTERNAL_ACCESS_FAILURES = {
     "forbidden_403",
     "anti_bot_access_denied",
 }
+TRANSIENT_RECHECK_FAILURES = {
+    "http_timeout",
+    "dns_resolution_failed",
+    "network_unavailable",
+    "dynamic_price_not_ready",
+    "js_required_or_selector_timeout",
+}
 PIPELINE_RUNTIME_FAILURES = {
     "db_or_backend_write_failed",
     "runner_browser_launch_failed",
@@ -940,7 +947,7 @@ def _source_repair_backlog_from_report(report: dict[str, Any], now: str) -> dict
             recommended = str(source.get("recommendedStrategy") or "diagnose_with_msrp_page_analyzer")
             key = _source_key(country_code, source)
             last_good = last_known_good.get(key) if key else None
-            is_transient = bool(last_good)
+            is_transient = bool(last_good) or reason in TRANSIENT_RECHECK_FAILURES
             group = groups.setdefault(
                 reason,
                 {
