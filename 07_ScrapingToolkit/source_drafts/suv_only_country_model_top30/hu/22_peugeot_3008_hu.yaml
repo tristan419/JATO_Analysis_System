@@ -1,121 +1,84 @@
 source_code: peugeot_3008_hu_draft_scrapling
 country: 匈牙利
 brand: PEUGEOT
-source_url: https://www.peugeot.hu/modelljeink/3008-suv.html
-source_type: manufacturer_official
+source_url: https://www.peugeot.hu/content/dam/peugeot/hungary/Arlista_es_katalogus/Arlista/3008_arlista.pdf
+source_type: official_price_list
 price_semantics: base_msrp
-extractor_type: scrapling
+extractor_type: pdf_text
 profile:
-  url: https://www.peugeot.hu/modelljeink/3008-suv.html
-  tier: stealth
-  headless: true
-  network_idle: true
-  impersonate: chrome
+  url: https://www.peugeot.hu/content/dam/peugeot/hungary/Arlista_es_katalogus/Arlista/3008_arlista.pdf
+  timeout_seconds: 60
+  retry_attempts: 1
+  retry_delay_seconds: 1
+  prefer_curl_download: true
+  browser_download_fallback: true
   default_currency: HUF
   default_tax_included: true
-  default_price_label: Ajánlott fogyasztói ár (ÁFA-val)
+  default_price_label: Listaár
   fixed_model: '3008'
   fixed_jato_model: '3008'
-  fixed_jato_powertrain: null
-  model_rules: []
-  skip_if_model_unmapped: false
   copy_trim_to_jato_trim: true
-  confidence_rules:
-    base: 0.2
-    fixed_model_bonus: 0.18
-    fixed_jato_model_bonus: 0.12
-    model_rule_bonus: 0.12
-    trim_present_bonus: 0.1
-    copy_trim_to_jato_trim_bonus: 0.09
-    parsed_price_text_bonus: 0.03
-    currency_bonus: 0.01
-    price_label_bonus: 0.02
-    trim_keyword_bonuses: []
-    price_band_bonuses:
-    - key: price_band_entry
-      label: Entry price band matched
-      max: 0
-      delta: 0.0
-    - key: price_band_mid
-      label: Mid price band matched
-      min: 0
-      max: 0
-      delta: 0.01
-    - key: price_band_high
-      label: High price band matched
-      min: 0
-      delta: 0.03
-    powertrain_keyword_bonuses: []
-    powertrain_bonuses:
-    - key: powertrain_bev
-      label: 'Powertrain matched: BEV'
-      powertrain: BEV
-      delta: 0.03
-    - key: powertrain_phev
-      label: 'Powertrain matched: PHEV'
-      powertrain: PHEV
-      delta: 0.03
-    - key: powertrain_mhev
-      label: 'Powertrain matched: MHEV'
-      powertrain: MHEV
-      delta: 0.03
-    - key: powertrain_ice
-      label: 'Powertrain matched: ICE'
-      powertrain: ICE
-      delta: 0.03
-    clamp_min: 0.0
-    clamp_max: 1.0
-  structured_fields:
-    edition_rules:
-    - key: edition_special
-      label: Special Edition
-      keyword: special edition
-      special: true
-    powertrain_rules:
-    - key: powertrain_bev
-      powertrain: BEV
-      keywords:
-      - elektromos
-      - electric
-      - E-3008
-      - tisztán elektromos
-    - key: powertrain_phev
-      powertrain: PHEV
-      keywords:
-      - plug-in hibrid
-      - plug-in hybrid
-      - HYBRID
-    - key: powertrain_mhev
-      powertrain: MHEV
-      keywords:
-      - mild hybrid
-      - 48V
-    - key: powertrain_ice
-      powertrain: ICE
-      keywords:
-      - benzin
-      - PureTech
-  auto_accept_gates:
-    review_threshold: 0.95
-    semi_auto_threshold: 0.98
-    require_powertrain_match: true
-    force_review_if_powertrain_missing: true
-    force_review_if_powertrain_ambiguous: true
-    force_review_for_special_edition: true
-  json_script_selector: script[type='application/ld+json']
-  css:
-    vehicle_container: body
-    model: h2
-    trim: h3
-    price: '[class*="price"]'
+  match_confidence: 0.88
+  match_status: review_required
+  match_reason:
+    kind: official_pdf_price_list
+    source: peugeot_hu_arlista_pdf
+    note: Official Peugeot Hungary 3008 price-list PDF exposes Listaár and Kedvezményes ár columns; regexes target the Listaár column and avoid campaign discounted prices.
+  entry_patterns:
+  - pattern: 'Hybrid\s+145\s+LE\s+e-DCT6\s+6\s+seb\.\s+auto\.\s+Benzin\s*/\s*Hybrid\s+(?P<price>13\s*180\s*000)'
+    official_trim: Allure Hybrid 145 LE e-DCT6
+    official_powertrain: Hybrid 145 LE e-DCT6
+    jato_powertrain: MHEV
+    price_label: Listaár
+  - pattern: 'Hybrid\s+145\s+LE\s+e-DCT6\s+6\s+seb\.\s+auto\.\s+Benzin\s*/\s*Hybrid\s+13\s*180\s*000\s+12\s*180\s*000\s+(?P<price>14\s*900\s*000)'
+    official_trim: GT Hybrid 145 LE e-DCT6
+    official_powertrain: Hybrid 145 LE e-DCT6
+    jato_powertrain: MHEV
+    price_label: Listaár
+  - pattern: 'PHEV\s+225\s+LE\s+e-DCT7\s+7\s+seb\.\s+auto\.\s+Plug-in\s+hybrid\s+(?P<price>17\s*930\s*000)'
+    official_trim: Allure PHEV 225 LE e-DCT7
+    official_powertrain: PHEV 225 LE e-DCT7
+    jato_powertrain: PHEV
+    price_label: Listaár
+  - pattern: 'PHEV\s+225\s+LE\s+e-DCT7\s+7\s+seb\.\s+auto\.\s+Plug-in\s+hybrid\s+17\s*930\s*000\s+16\s*930\s*000\s+(?P<price>19\s*780\s*000)'
+    official_trim: GT PHEV 225 LE e-DCT7
+    official_powertrain: PHEV 225 LE e-DCT7
+    jato_powertrain: PHEV
+    price_label: Listaár
+  - pattern: 'Elektromos\s+210\s+LE\s+\(73\s+kWh\)\s+Fix\s+áttétel\s+Elektromos\s+(?P<price>20\s*550\s*000)'
+    official_trim: Allure Elektromos 210 LE 73 kWh
+    official_powertrain: Elektromos 210 LE 73 kWh
+    jato_powertrain: BEV
+    price_label: Listaár
+  - pattern: 'Elektromos\s+210\s+LE\s+\(73\s+kWh\)\s+Fix\s+áttétel\s+Elektromos\s+20\s*550\s*000\s+18\s*550\s*000\s+(?P<price>22\s*400\s*000)'
+    official_trim: GT Elektromos 210 LE 73 kWh
+    official_powertrain: Elektromos 210 LE 73 kWh
+    jato_powertrain: BEV
+    price_label: Listaár
+  - pattern: 'Elektromos\s+230\s+LE\s+\(97\s+kWh\)\s+Fix\s+áttétel\s+Elektromos\s+(?P<price>22\s*460\s*000)'
+    official_trim: Allure Elektromos 230 LE 97 kWh
+    official_powertrain: Elektromos 230 LE 97 kWh
+    jato_powertrain: BEV
+    price_label: Listaár
+  - pattern: 'Elektromos\s+230\s+LE\s+\(97\s+kWh\)\s+Fix\s+áttétel\s+Elektromos\s+22\s*460\s*000\s+20\s*460\s*000\s+(?P<price>24\s*310\s*000)'
+    official_trim: GT Elektromos 230 LE 97 kWh
+    official_powertrain: Elektromos 230 LE 97 kWh
+    jato_powertrain: BEV
+    price_label: Listaár
+  - pattern: 'Elektromos\s+325\s+LE\s+AWD\s+\(73\s+kWh\)\s+Fix\s+áttétel\s+Elektromos\s+-\s+-\s+(?P<price>23\s*400\s*000)'
+    official_trim: GT Elektromos 325 LE AWD 73 kWh
+    official_powertrain: Elektromos 325 LE AWD 73 kWh
+    jato_powertrain: BEV
+    price_label: Listaár
 schedule:
   frequency: manual_only
   run_window_start: 00:00
   run_window_end: 05:00
   preferred_weekday: monday
-notes: Keywords filled from official manufacturer website research (HU market). CSS
-  selectors still require browser-based inspection before promotion. [CSS selectors
-  applied from brand probe]
+notes: Replaced removed /modelljeink/3008-suv.html showroom page with Peugeot
+  Hungary's official 3008 price-list PDF linked from the model page. Regexes
+  target the Listaár list-price column and avoid Kedvezményes ár discounted
+  offer prices.
 bootstrap_meta:
   country_model_rank: 22
   suggested_scope_kind: single_model

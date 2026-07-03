@@ -1,114 +1,94 @@
 source_code: skoda_kodiaq_hu_draft_scrapling
 country: 匈牙利
 brand: SKODA
-source_url: https://www.skoda.hu/modelle/kodiaq
-source_type: manufacturer_official
+source_url: https://gpt-live.porsche.co.at/hu/brand/C/pricelist/956_uj_kodiaq_huf.pdf
+source_type: official_price_list
 price_semantics: base_msrp
-extractor_type: scrapling
+extractor_type: pdf_text
 profile:
-  url: https://www.skoda.hu/modelle/kodiaq
-  headless: true
+  url: https://gpt-live.porsche.co.at/hu/brand/C/pricelist/956_uj_kodiaq_huf.pdf
+  timeout_seconds: 60
+  retry_attempts: 1
+  retry_delay_seconds: 1
+  prefer_curl_download: true
+  browser_download_fallback: true
   default_currency: HUF
   default_tax_included: true
-  default_price_label: Ajánlott fogyasztói ár (ÁFA-val)
+  default_price_label: Ajánlott kiskereskedelmi modell ár (bruttó, regisztrációs adóval)
   fixed_model: KODIAQ
   fixed_jato_model: KODIAQ
-  fixed_jato_powertrain: null
-  model_rules: []
-  skip_if_model_unmapped: false
   copy_trim_to_jato_trim: true
-  confidence_rules:
-    base: 0.2
-    fixed_model_bonus: 0.18
-    fixed_jato_model_bonus: 0.12
-    model_rule_bonus: 0.12
-    trim_present_bonus: 0.1
-    copy_trim_to_jato_trim_bonus: 0.09
-    parsed_price_text_bonus: 0.03
-    currency_bonus: 0.01
-    price_label_bonus: 0.02
-    trim_keyword_bonuses: []
-    price_band_bonuses:
-    - key: price_band_entry
-      label: Entry price band matched
-      max: 0
-      delta: 0.0
-    - key: price_band_mid
-      label: Mid price band matched
-      min: 0
-      max: 0
-      delta: 0.01
-    - key: price_band_high
-      label: High price band matched
-      min: 0
-      delta: 0.03
-    powertrain_keyword_bonuses: []
-    powertrain_bonuses:
-    - key: powertrain_phev
-      label: 'Powertrain matched: PHEV'
-      powertrain: PHEV
-      delta: 0.03
-    - key: powertrain_mhev
-      label: 'Powertrain matched: MHEV'
-      powertrain: MHEV
-      delta: 0.03
-    - key: powertrain_ice
-      label: 'Powertrain matched: ICE'
-      powertrain: ICE
-      delta: 0.03
-    clamp_min: 0.0
-    clamp_max: 1.0
-  structured_fields:
-    edition_rules:
-    - key: edition_special
-      label: Special Edition
-      keyword: special edition
-      special: true
-    powertrain_rules:
-    - key: powertrain_phev
-      powertrain: PHEV
-      keywords:
-      - plug-in hibrid
-      - iV
-      - plug-in hybrid
-      - Kodiaq iV
-    - key: powertrain_mhev
-      powertrain: MHEV
-      keywords:
-      - mild hybrid
-      - eTSI
-    - key: powertrain_ice
-      powertrain: ICE
-      keywords:
-      - benzin
-      - dízel
-      - TSI
-      - TDI
-  auto_accept_gates:
-    review_threshold: 0.95
-    semi_auto_threshold: 0.98
-    require_powertrain_match: true
-    force_review_if_powertrain_missing: true
-    force_review_if_powertrain_ambiguous: true
-    force_review_for_special_edition: true
-  json_script_selector: script[type="application/json"]
-  css:
-    vehicle_container: body
-    model: h2, h3
-    trim: h3
-    price: '[class*="price"]'
-  tier: stealth
-  network_idle: true
-  impersonate: chrome
+  match_confidence: 0.89
+  match_status: review_required
+  match_reason:
+    kind: official_pdf_price_list
+    source: skoda_hu_gpt_price_list_pdf
+    note: Official Skoda Hungary GPT price-list PDF exposes model prices including registration tax; regexes target the KODIAQ model price table.
+  entry_patterns:
+  - pattern: 'Kodiaq\s+Selection\s+2\.0\s+TSI\s+4x4\s+DSG\s+\S+\s+DSG\s+váltó\s+7\s+fokozatú\s+150/204\s+7\.4\s*l/100km\s+168\s*g/km\s+188\s*000\s+(?P<price>17\s*860\s*050)'
+    official_trim: Selection 2.0 TSI 4x4 DSG
+    official_powertrain: 2.0 TSI 4x4 DSG
+    jato_powertrain: ICE
+    price_label: Ajánlott kiskereskedelmi modell ár (bruttó, regisztrációs adóval)
+  - pattern: 'Kodiaq\s+Selection\s+2\.0\s+TDI\s+DSG\s+SCR\s+\S+\s+DSG\s+váltó\s+7\s+fokozatú\s+110/150\s+5\.3\s*l/100km\s+139\s*g/km\s+94\s*000\s+(?P<price>17\s*030\s*720)'
+    official_trim: Selection 2.0 TDI DSG SCR
+    official_powertrain: 2.0 TDI DSG SCR
+    jato_powertrain: ICE
+    price_label: Ajánlott kiskereskedelmi modell ár (bruttó, regisztrációs adóval)
+  - pattern: 'Kodiaq\s+Selection\s+2\.0\s+TDI\s+4x4\s+DSG\s+SCR\s+\S+\s+DSG\s+váltó\s+7\s+fokozatú\s+142/193\s+6\s*l/100km\s+157\s*g/km\s+188\s*000\s+(?P<price>18\s*911\s*610)'
+    official_trim: Selection 2.0 TDI 4x4 DSG SCR
+    official_powertrain: 2.0 TDI 4x4 DSG SCR
+    jato_powertrain: ICE
+    price_label: Ajánlott kiskereskedelmi modell ár (bruttó, regisztrációs adóval)
+  - pattern: 'Kodiaq\s+Selection\s+1\.5\s+TSI\s+DSG\s+mHEV\s+ACT\s+\S+\s+DSG\s+váltó\s+7\s+fokozatú\s+9/11\s+6\s*l/100km\s+137\s*g/km\s+94\s*000\s+(?P<price>15\s*877\s*560)'
+    official_trim: Selection 1.5 TSI DSG mHEV ACT
+    official_powertrain: 1.5 TSI DSG mHEV ACT
+    jato_powertrain: MHEV
+    price_label: Ajánlott kiskereskedelmi modell ár (bruttó, regisztrációs adóval)
+  - pattern: 'Kodiaq\s+Selection\s+1\.5\s+TSI\s+DSG\s+PHEV\s+\S+\s+DSG\s+váltó\s+6\s+fokozatú\s+85/116\s+1\.5\s*l/100km\s+35\s*g/km\s+94\s*000\s+(?P<price>19\s*359\s*900)'
+    official_trim: Selection 1.5 TSI DSG PHEV
+    official_powertrain: 1.5 TSI DSG PHEV
+    jato_powertrain: PHEV
+    price_label: Ajánlott kiskereskedelmi modell ár (bruttó, regisztrációs adóval)
+  - pattern: 'Kodiaq\s+SportLine\s+2\.0\s+TSI\s+4x4\s+DSG\s+\S+\s+DSG\s+váltó\s+7\s+fokozatú\s+150/204\s+7\.5\s*l/100km\s+170\s*g/km\s+188\s*000\s+(?P<price>19\s*326\s*900)'
+    official_trim: SportLine 2.0 TSI 4x4 DSG
+    official_powertrain: 2.0 TSI 4x4 DSG
+    jato_powertrain: ICE
+    price_label: Ajánlott kiskereskedelmi modell ár (bruttó, regisztrációs adóval)
+  - pattern: 'Kodiaq\s+SportLine\s+2\.0\s+TDI\s+DSG\s+SCR\s+\S+\s+DSG\s+váltó\s+7\s+fokozatú\s+110/150\s+5\.4\s*l/100km\s+142\s*g/km\s+94\s*000\s+(?P<price>18\s*497\s*570)'
+    official_trim: SportLine 2.0 TDI DSG SCR
+    official_powertrain: 2.0 TDI DSG SCR
+    jato_powertrain: ICE
+    price_label: Ajánlott kiskereskedelmi modell ár (bruttó, regisztrációs adóval)
+  - pattern: 'Kodiaq\s+SportLine\s+2\.0\s+TDI\s+4x4\s+DSG\s+SCR\s+\S+\s+DSG\s+váltó\s+7\s+fokozatú\s+142/193\s+6\.1\s*l/100km\s+160\s*g/km\s+188\s*000\s+(?P<price>20\s*378\s*460)'
+    official_trim: SportLine 2.0 TDI 4x4 DSG SCR
+    official_powertrain: 2.0 TDI 4x4 DSG SCR
+    jato_powertrain: ICE
+    price_label: Ajánlott kiskereskedelmi modell ár (bruttó, regisztrációs adóval)
+  - pattern: 'Kodiaq\s+SportLine\s+1\.5\s+TSI\s+DSG\s+mHEV\s+ACT\s+\S+\s+DSG\s+váltó\s+7\s+fokozatú\s+9/11\s+6\.1\s*l/100km\s+140\s*g/km\s+94\s*000\s+(?P<price>17\s*344\s*410)'
+    official_trim: SportLine 1.5 TSI DSG mHEV ACT
+    official_powertrain: 1.5 TSI DSG mHEV ACT
+    jato_powertrain: MHEV
+    price_label: Ajánlott kiskereskedelmi modell ár (bruttó, regisztrációs adóval)
+  - pattern: 'Kodiaq\s+SportLine\s+1\.5\s+TSI\s+DSG\s+PHEV\s+\S+\s+DSG\s+váltó\s+6\s+fokozatú\s+85/116\s+1\.7\s*l/100km\s+38\s*g/km\s+94\s*000\s+(?P<price>20\s*835\s*640)'
+    official_trim: SportLine 1.5 TSI DSG PHEV
+    official_powertrain: 1.5 TSI DSG PHEV
+    jato_powertrain: PHEV
+    price_label: Ajánlott kiskereskedelmi modell ár (bruttó, regisztrációs adóval)
+  - pattern: 'Kodiaq\s+RS\s+2\.0\s+TSI\s+4x4\s+DSG\s+\S+\s+DSG\s+váltó\s+7\s+fokozatú\s+195/265\s+8\.2\s*l/100km\s+186\s*g/km\s+282\s*000\s+(?P<price>21\s*628\s*160)'
+    official_trim: RS 2.0 TSI 4x4 DSG
+    official_powertrain: 2.0 TSI 4x4 DSG
+    jato_powertrain: ICE
+    price_label: Ajánlott kiskereskedelmi modell ár (bruttó, regisztrációs adóval)
 schedule:
   frequency: manual_only
   run_window_start: 00:00
   run_window_end: 05:00
   preferred_weekday: monday
-notes: Keywords filled from official manufacturer website research (HU market). CSS
-  selectors still require browser-based inspection before promotion. [CSS selectors
-  applied from brand probe] [Switched to playwright_card_flow with skoda_trim_overview_playwright.yaml]
-  [Reverted to scrapling — playwright preset needs per-brand tuning]
+notes: Replaced removed /modelle/kodiaq page path and broad page/configurator
+  scraping with Skoda Hungary's official GPT Kodiaq PDF price list. Regexes
+  target the KODIAQ model price table and use the bruttó price including
+  registration tax.
 bootstrap_meta:
   country_model_rank: 13
   suggested_scope_kind: single_model

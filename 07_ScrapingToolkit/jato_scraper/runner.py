@@ -16,6 +16,10 @@ from typing import Any
 
 import requests
 
+TOOLKIT_ROOT = Path(__file__).resolve().parents[1]
+if str(TOOLKIT_ROOT) not in sys.path:
+    sys.path.insert(0, str(TOOLKIT_ROOT))
+
 from jato_scraper import registry
 from jato_scraper.base import BaseExtractor, RawObservation
 from jato_scraper.config_loader import load_all_sources, load_source_file

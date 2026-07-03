@@ -1,124 +1,78 @@
 source_code: kia_sportage_hu_draft_scrapling
 country: 匈牙利
 brand: KIA
-source_url: https://www.kia.com/hu/modellek/sportage/
-source_type: manufacturer_official
+source_url: https://www.kia.com/content/dam/kwcms/kme/hu/hu/assets/contents/utility/Brochure/price-list/kia-sportage-arlista.pdf
+source_type: official_price_list
 price_semantics: base_msrp
-extractor_type: scrapling
+extractor_type: pdf_text
 profile:
-  url: https://www.kia.com/hu/modellek/sportage/
-  headless: true
+  url: https://www.kia.com/content/dam/kwcms/kme/hu/hu/assets/contents/utility/Brochure/price-list/kia-sportage-arlista.pdf
+  timeout_seconds: 60
+  retry_attempts: 1
+  retry_delay_seconds: 1
+  prefer_curl_download: true
+  browser_download_fallback: true
   default_currency: HUF
   default_tax_included: true
-  default_price_label: Ajánlott fogyasztói ár (ÁFA-val)
+  default_price_label: Ajánlott bruttó listaár
   fixed_model: SPORTAGE
   fixed_jato_model: SPORTAGE
-  fixed_jato_powertrain: null
-  model_rules: []
-  skip_if_model_unmapped: false
   copy_trim_to_jato_trim: true
-  confidence_rules:
-    base: 0.2
-    fixed_model_bonus: 0.18
-    fixed_jato_model_bonus: 0.12
-    model_rule_bonus: 0.12
-    trim_present_bonus: 0.1
-    copy_trim_to_jato_trim_bonus: 0.09
-    parsed_price_text_bonus: 0.03
-    currency_bonus: 0.01
-    price_label_bonus: 0.02
-    trim_keyword_bonuses: []
-    price_band_bonuses:
-    - key: price_band_entry
-      label: Entry price band matched
-      max: 0
-      delta: 0.0
-    - key: price_band_mid
-      label: Mid price band matched
-      min: 0
-      max: 0
-      delta: 0.01
-    - key: price_band_high
-      label: High price band matched
-      min: 0
-      delta: 0.03
-    powertrain_keyword_bonuses: []
-    powertrain_bonuses:
-    - key: powertrain_phev
-      label: 'Powertrain matched: PHEV'
-      powertrain: PHEV
-      delta: 0.03
-    - key: powertrain_hev
-      label: 'Powertrain matched: HEV'
-      powertrain: HEV
-      delta: 0.03
-    - key: powertrain_mhev
-      label: 'Powertrain matched: MHEV'
-      powertrain: MHEV
-      delta: 0.03
-    - key: powertrain_ice
-      label: 'Powertrain matched: ICE'
-      powertrain: ICE
-      delta: 0.03
-    clamp_min: 0.0
-    clamp_max: 1.0
-  structured_fields:
-    edition_rules:
-    - key: edition_special
-      label: Special Edition
-      keyword: special edition
-      special: true
-    powertrain_rules:
-    - key: powertrain_phev
-      powertrain: PHEV
-      keywords:
-      - plug-in hibrid
-      - plug-in hybrid
-      - Sportage Plug-In Hybrid
-    - key: powertrain_hev
-      powertrain: HEV
-      keywords:
-      - hibrid
-      - hybrid
-      - Sportage Hybrid
-    - key: powertrain_mhev
-      powertrain: MHEV
-      keywords:
-      - mild hybrid
-      - MHEV
-      - 48V
-    - key: powertrain_ice
-      powertrain: ICE
-      keywords:
-      - benzin
-      - dízel
-      - diesel
-      - 1.6 T-GDi
-  auto_accept_gates:
-    review_threshold: 0.95
-    semi_auto_threshold: 0.98
-    require_powertrain_match: true
-    force_review_if_powertrain_missing: true
-    force_review_if_powertrain_ambiguous: true
-    force_review_for_special_edition: true
-  json_script_selector: script[type='application/ld+json']
-  css:
-    vehicle_container: body
-    model: h2, h3
-    trim: h3
-    price: '[class*="price"]'
-  tier: stealth
-  network_idle: true
-  impersonate: chrome
+  match_confidence: 0.87
+  match_status: review_required
+  match_reason:
+    kind: official_pdf_price_list
+    source: kia_hu_sportage_arlista_pdf
+    note: Official Kia Hungary Sportage price-list PDF exposes LISTAÁRAK separately from KEDVEZMÉNYES ÁRAK; regexes target list prices only.
+  entry_patterns:
+  - pattern: 'ESSENCE\s+Limitált\s+széria\s+(?P<price>10\s*799\s*000\s*Ft)'
+    official_trim: Essence Limitált széria 150 T-GDI MT
+    official_powertrain: 150 T-GDI MT Benzin
+    jato_powertrain: ICE
+    price_label: Ajánlott bruttó listaár
+  - pattern: 'ESSENCE\s+Limitált\s+széria\s+10\s*799\s*000\s*Ft\s+(?P<price>11\s*299\s*000\s*Ft)'
+    official_trim: Essence Limitált széria 150 T-GDI DCT
+    official_powertrain: 150 T-GDI DCT Benzin
+    jato_powertrain: ICE
+    price_label: Ajánlott bruttó listaár
+  - pattern: 'SILVER\s+(?P<price>11\s*799\s*000\s*Ft)'
+    official_trim: Silver 150 T-GDI MT
+    official_powertrain: 150 T-GDI MT Benzin
+    jato_powertrain: ICE
+    price_label: Ajánlott bruttó listaár
+  - pattern: 'SILVER\s+11\s*799\s*000\s*Ft\s+(?P<price>12\s*699\s*000\s*Ft)'
+    official_trim: Silver 150 T-GDI DCT
+    official_powertrain: 150 T-GDI DCT Benzin
+    jato_powertrain: ICE
+    price_label: Ajánlott bruttó listaár
+  - pattern: 'SILVER\s+11\s*799\s*000\s*Ft\s+12\s*699\s*000\s*Ft\s+(?P<price>13\s*449\s*000\s*Ft)'
+    official_trim: Silver 136 Hybrid 48V DCT Dízel
+    official_powertrain: 136 Hybrid 48V DCT Dízel
+    jato_powertrain: MHEV
+    price_label: Ajánlott bruttó listaár
+  - pattern: 'SILVER\s+11\s*799\s*000\s*Ft\s+12\s*699\s*000\s*Ft\s+13\s*449\s*000\s*Ft\s+-\s+(?P<price>14\s*499\s*000\s*Ft)'
+    official_trim: Silver 239 Hybrid
+    official_powertrain: 239 Hybrid Benzin
+    jato_powertrain: HEV
+    price_label: Ajánlott bruttó listaár
+  - pattern: 'SILVER\s+11\s*799\s*000\s*Ft\s+12\s*699\s*000\s*Ft\s+13\s*449\s*000\s*Ft\s+-\s+14\s*499\s*000\s*Ft\s+(?P<price>17\s*699\s*000\s*Ft)'
+    official_trim: Silver 288 Plug-in Hybrid
+    official_powertrain: 288 Plug-in Hybrid Benzin
+    jato_powertrain: PHEV
+    price_label: Ajánlott bruttó listaár
+  - pattern: 'GOLD\s+12\s*299\s*000\s*Ft\s+13\s*199\s*000\s*Ft\s+13\s*949\s*000\s*Ft\s+(?P<price>14\s*199\s*000\s*Ft)'
+    official_trim: Gold 180 T-GDI DCT 4WD
+    official_powertrain: 180 T-GDI DCT 4WD Benzin
+    jato_powertrain: ICE
+    price_label: Ajánlott bruttó listaár
 schedule:
   frequency: manual_only
   run_window_start: 00:00
   run_window_end: 05:00
   preferred_weekday: monday
-notes: Keywords filled from official manufacturer website research (HU market). CSS
-  selectors still require browser-based inspection before promotion. [Switched to
-  playwright_card_flow with kia_trim_overview_playwright.yaml] [Reverted to scrapling
-  — playwright preset needs per-brand tuning]
+notes: Replaced removed /sportage/ page path and broad page CSS extraction with
+  Kia Hungary's official Sportage price-list PDF. Regexes target LISTAÁRAK list
+  prices and avoid the later KEDVEZMÉNYES ÁRAK discounted-price table.
 bootstrap_meta:
   country_model_rank: 7
   suggested_scope_kind: single_model
