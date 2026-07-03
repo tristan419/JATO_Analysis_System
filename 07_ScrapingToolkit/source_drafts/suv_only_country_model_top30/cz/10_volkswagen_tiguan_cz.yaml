@@ -1,18 +1,30 @@
 source_code: volkswagen_tiguan_cz_draft_scrapling
 country: 捷克
 brand: VOLKSWAGEN
-source_url: https://www.volkswagen.cz/modely/tiguan
+source_url: https://www.volkswagen.cz/tiguan/tiguan
 source_type: manufacturer_official
 price_semantics: base_msrp
-extractor_type: playwright
-profile_preset: ../_shared/presets/volkswagen_configurator_trim_overview_playwright.yaml
+extractor_type: http_text
 profile:
-  url: https://www.volkswagen.cz/modely/tiguan
+  url: https://www.volkswagen.cz/tiguan/tiguan
+  timeout_seconds: 45
   default_currency: CZK
   default_tax_included: true
-  default_price_label: Doporučená cena včetně DPH
+  default_price_label: Cena od včetně DPH
   fixed_model: TIGUAN
   fixed_jato_model: TIGUAN
+  copy_trim_to_jato_trim: true
+  match_confidence: 0.82
+  match_status: review_required
+  match_reason:
+    kind: official_model_page_entry_price
+    source: volkswagen_cz_tiguan_model_page
+    note: Official Volkswagen Czech Tiguan model page exposes a static hero entry price; source remains review_required because the model page does not expose the exact trim/powertrain beside the price.
+  entry_patterns:
+  - pattern: 'Cena od[\s\S]{0,1200}?<span[^>]*>(?P<price>\d[\d\s]*Kč)</span>\s*vč\. DPH'
+    official_trim: Tiguan starting price
+    official_powertrain: null
+    price_label: Cena od včetně DPH
   structured_fields:
     powertrain_rules:
     - key: powertrain_phev
@@ -40,8 +52,9 @@ schedule:
   run_window_end: 05:00
   preferred_weekday: monday
 notes: Keywords filled from official manufacturer website research (CZ market). CSS
-  selectors still require browser-based inspection before promotion. [Switched to
-  playwright_card_flow with volkswagen_configurator_trim_overview_playwright.yaml]
+  selectors still require browser-based inspection before promotion. Replaced
+  browser card flow with deterministic http_text over the official model-page
+  hero "Cena od" value because the HTML contains the gross CZK entry price.
 bootstrap_meta:
   country_model_rank: 10
   suggested_scope_kind: single_model
