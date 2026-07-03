@@ -12,7 +12,10 @@ from app.api.routes import assistant as assistant_routes
 from app.api.routes import market_scan as market_scan_routes
 from app.api.routes import metadata as metadata_routes
 from app.core.config import API_PREFIX
-from app.services.query_service import GroupedTimeSeriesQueryResult
+from app.services.query_service import (
+    DashboardOverviewQueryResult,
+    GroupedTimeSeriesQueryResult,
+)
 
 
 @pytest.fixture
@@ -369,6 +372,48 @@ def test_grouped_time_series_exposes_server_cache_header(
     assert captured["filters"] == {"Country": ["Sweden"]}
     assert captured["grain"] == "year"
     assert captured["group_by"] == "Brand"
+
+
+def test_overview_exposes_server_cache_header(
+    client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured: dict[str, Any] = {}
+
+    def fake_query_overview_with_cache_state(**kwargs: Any):
+        captured.update(kwargs)
+        return DashboardOverviewQueryResult(
+            payload={
+                "route": "dynamic-aggregate",
+                "kpis": {"totalRows": 10},
+                "monthSeries": [],
+                "yearSeries": [],
+            },
+            cache_state="DISK",
+        )
+
+    monkeypatch.setattr(
+        analysis_routes,
+        "query_overview_with_cache_state",
+        fake_query_overview_with_cache_state,
+    )
+
+    response = client.post(
+        "/v1/analysis/overview",
+        json={
+            "filters": {"Country": ["Sweden"]},
+            "prefer_precomputed": True,
+            "top_n": 10,
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.headers["x-jato-server-cache"] == "DISK"
+    assert response.json()["kpis"]["totalRows"] == 10
+    assert captured["filters"] == {"Country": ["Sweden"]}
+    assert captured["prefer_precomputed"] is True
+    assert captured["top_n"] == 10
+    assert captured["cache_scope"] == "admin"
 
 
 def test_country_chat_contract(

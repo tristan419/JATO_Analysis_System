@@ -1,9 +1,11 @@
+import hashlib
 import json
 import logging
 import threading
 import time
 from collections import OrderedDict
 from pathlib import Path
+from uuid import uuid4
 
 import pandas as pd
 import pyarrow.dataset as ds
@@ -15,6 +17,10 @@ from app.core.config import (
     FILTER_OPTIONS_CACHE_TTL_SECONDS,
     MAX_GROUP_METRICS,
     MAX_RAW_ROWS,
+    METADATA_PERSISTENT_CACHE_DIR,
+    METADATA_PERSISTENT_CACHE_ENABLED,
+    METADATA_PERSISTENT_CACHE_MAX_ENTRIES,
+    METADATA_PERSISTENT_CACHE_TTL_SECONDS,
     PARTITIONED_PATH,
     PARQUET_PATH,
     PRECOMPUTED_DIR,
@@ -162,6 +168,98 @@ _options_cache: OrderedDict[
 ] = OrderedDict()
 _options_cache_lock = threading.Lock()
 _METADATA_CACHE_TTL = 300  # 5 minutes
+_METADATA_DISK_CACHE_SCHEMA = 1
+
+
+def _metadata_disk_cache_path(namespace: str, dataset_token: str) -> Path:
+    payload_key = {
+        "schema": _METADATA_DISK_CACHE_SCHEMA,
+        "namespace": namespace,
+        "dataset": dataset_token,
+    }
+    digest = hashlib.sha256(
+        json.dumps(payload_key, ensure_ascii=False, sort_keys=True).encode("utf-8")
+    ).hexdigest()
+    return METADATA_PERSISTENT_CACHE_DIR / f"{namespace}-{digest}.json"
+
+
+def _read_metadata_disk_cache(
+    namespace: str,
+    dataset_token: str,
+    now_epoch: float,
+) -> object | None:
+    if not METADATA_PERSISTENT_CACHE_ENABLED:
+        return None
+    cache_path = _metadata_disk_cache_path(namespace, dataset_token)
+    try:
+        if not cache_path.exists():
+            return None
+        payload = json.loads(cache_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+
+    if payload.get("schema") != _METADATA_DISK_CACHE_SCHEMA:
+        return None
+    if payload.get("namespace") != namespace:
+        return None
+    if payload.get("dataset") != dataset_token:
+        return None
+    cached_at = float(payload.get("cachedAt", 0.0) or 0.0)
+    if (now_epoch - cached_at) >= METADATA_PERSISTENT_CACHE_TTL_SECONDS:
+        return None
+    return payload.get("result")
+
+
+def _prune_metadata_disk_cache() -> None:
+    if not METADATA_PERSISTENT_CACHE_ENABLED:
+        return
+    try:
+        cache_files = sorted(
+            METADATA_PERSISTENT_CACHE_DIR.glob("*.json"),
+            key=lambda path: path.stat().st_mtime,
+        )
+    except OSError:
+        return
+    max_entries = max(1, int(METADATA_PERSISTENT_CACHE_MAX_ENTRIES))
+    overflow = len(cache_files) - max_entries
+    if overflow <= 0:
+        return
+    for path in cache_files[:overflow]:
+        try:
+            path.unlink()
+        except OSError:
+            continue
+
+
+def _write_metadata_disk_cache(
+    namespace: str,
+    dataset_token: str,
+    result: object,
+) -> None:
+    if not METADATA_PERSISTENT_CACHE_ENABLED:
+        return
+    try:
+        METADATA_PERSISTENT_CACHE_DIR.mkdir(parents=True, exist_ok=True)
+        cache_path = _metadata_disk_cache_path(namespace, dataset_token)
+        tmp_path = cache_path.with_suffix(f".{uuid4().hex}.tmp")
+        tmp_path.write_text(
+            json.dumps(
+                {
+                    "schema": _METADATA_DISK_CACHE_SCHEMA,
+                    "namespace": namespace,
+                    "dataset": dataset_token,
+                    "cachedAt": time.time(),
+                    "result": result,
+                },
+                ensure_ascii=False,
+                separators=(",", ":"),
+            ),
+            encoding="utf-8",
+        )
+        tmp_path.replace(cache_path)
+        _prune_metadata_disk_cache()
+    except OSError as exc:
+        LOGGER.warning("Could not write metadata cache %s: %s", namespace, exc)
 
 
 def _normalize_option_values(values: list[object]) -> list[str]:
@@ -243,9 +341,17 @@ def list_columns() -> list[str]:
         cached_token, cached_at, cached_columns = _columns_cache
         if cached_token == token and (now - cached_at) < _METADATA_CACHE_TTL:
             return cached_columns
+    cached_result = _read_metadata_disk_cache("columns", token, time.time())
+    if isinstance(cached_result, list) and all(
+        isinstance(item, str) for item in cached_result
+    ):
+        cols = [str(item).strip() for item in cached_result if str(item).strip()]
+        _columns_cache = (token, now, cols)
+        return cols
     dataset = _open_dataset()
     cols = [str(name).strip() for name in dataset.schema.names]
     _columns_cache = (token, now, cols)
+    _write_metadata_disk_cache("columns", token, cols)
     return cols
 
 
@@ -482,6 +588,21 @@ _freshness_cache: tuple[str, float, list[dict[str, object]]] | None = None
 _freshness_lock = threading.Lock()
 
 
+def _is_freshness_payload(value: object) -> bool:
+    return isinstance(value, list) and all(isinstance(item, dict) for item in value)
+
+
+def _store_freshness_cache(
+    dataset_token: str,
+    items: list[dict[str, object]],
+) -> list[dict[str, object]]:
+    global _freshness_cache
+    with _freshness_lock:
+        _freshness_cache = (dataset_token, time.monotonic(), items)
+    _write_metadata_disk_cache("country-data-freshness", dataset_token, items)
+    return items
+
+
 def country_data_freshness() -> list[dict[str, object]]:
     global _freshness_cache
     now = time.monotonic()
@@ -491,6 +612,17 @@ def country_data_freshness() -> list[dict[str, object]]:
             cached_token, cached_at, cached_items = _freshness_cache
             if cached_token == token and (now - cached_at) < FILTER_OPTIONS_CACHE_TTL_SECONDS:
                 return cached_items
+
+    cached_result = _read_metadata_disk_cache(
+        "country-data-freshness",
+        token,
+        time.time(),
+    )
+    if _is_freshness_payload(cached_result):
+        items = [dict(item) for item in cached_result]
+        with _freshness_lock:
+            _freshness_cache = (token, now, items)
+        return items
 
     dataset = _open_dataset()
     all_cols = [str(name).strip() for name in dataset.schema.names]
@@ -505,12 +637,12 @@ def country_data_freshness() -> list[dict[str, object]]:
 
     month_cols = _sort_month_columns_chrono(_month_columns(all_cols))
     if not country_col or not month_cols:
-        return []
+        return _store_freshness_cache(token, [])
 
     table = dataset.to_table(columns=[country_col, *month_cols])
     df = table.to_pandas()
     if df.empty:
-        return []
+        return _store_freshness_cache(token, [])
 
     for col in month_cols:
         df[col] = pd.to_numeric(df[col], errors="coerce").fillna(0.0)
@@ -537,10 +669,7 @@ def country_data_freshness() -> list[dict[str, object]]:
 
     items.sort(key=lambda x: str(x.get("country", "")))
 
-    with _freshness_lock:
-        _freshness_cache = (token, time.monotonic(), items)
-
-    return items
+    return _store_freshness_cache(token, items)
 
 
 def _read_crud_items() -> list[dict]:

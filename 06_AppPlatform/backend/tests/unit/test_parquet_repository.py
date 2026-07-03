@@ -1,6 +1,7 @@
 from types import SimpleNamespace
 
 import pandas as pd
+import pytest
 
 from app.infra import parquet_repository
 
@@ -24,6 +25,17 @@ class _FakeDataset:
         filter=None,  # noqa: A002
     ) -> _FakeTable:
         return _FakeTable(self._frame.loc[:, columns])
+
+
+@pytest.fixture(autouse=True)
+def clear_repository_caches(monkeypatch, tmp_path) -> None:
+    monkeypatch.setattr(parquet_repository, "_columns_cache", None)
+    monkeypatch.setattr(parquet_repository, "_freshness_cache", None)
+    monkeypatch.setattr(
+        parquet_repository,
+        "METADATA_PERSISTENT_CACHE_DIR",
+        tmp_path,
+    )
 
 
 def test_time_series_month_returns_latest_rows(monkeypatch) -> None:
@@ -97,3 +109,76 @@ def test_count_rows_falls_back_to_full_parquet_when_partition_files_exceed_manif
 
     assert parquet_repository._resolve_dataset_path() == full_parquet
     assert parquet_repository.count_rows({}) == 1
+
+
+def test_list_columns_uses_persistent_metadata_cache(monkeypatch) -> None:
+    frame = pd.DataFrame({"国家": ["瑞典"], "2026 Jan": [10]})
+    open_calls = 0
+
+    def open_dataset() -> _FakeDataset:
+        nonlocal open_calls
+        open_calls += 1
+        return _FakeDataset(frame)
+
+    monkeypatch.setattr(
+        parquet_repository,
+        "METADATA_PERSISTENT_CACHE_ENABLED",
+        True,
+    )
+    monkeypatch.setattr(
+        parquet_repository,
+        "current_dataset_token",
+        lambda: "dataset-a",
+    )
+    monkeypatch.setattr(parquet_repository, "_open_dataset", open_dataset)
+
+    first = parquet_repository.list_columns()
+    monkeypatch.setattr(parquet_repository, "_columns_cache", None)
+    second = parquet_repository.list_columns()
+
+    assert first == ["国家", "2026 Jan"]
+    assert second == first
+    assert open_calls == 1
+    assert list(parquet_repository.METADATA_PERSISTENT_CACHE_DIR.glob("*.json"))
+
+
+def test_country_data_freshness_uses_persistent_metadata_cache(
+    monkeypatch,
+) -> None:
+    frame = pd.DataFrame(
+        {
+            "国家": ["瑞典", "芬兰"],
+            "2026 Jan": [10, 0],
+            "2026 Feb": [0, 20],
+        }
+    )
+    open_calls = 0
+
+    def open_dataset() -> _FakeDataset:
+        nonlocal open_calls
+        open_calls += 1
+        return _FakeDataset(frame)
+
+    monkeypatch.setattr(
+        parquet_repository,
+        "METADATA_PERSISTENT_CACHE_ENABLED",
+        True,
+    )
+    monkeypatch.setattr(
+        parquet_repository,
+        "current_dataset_token",
+        lambda: "dataset-a",
+    )
+    monkeypatch.setattr(parquet_repository, "_open_dataset", open_dataset)
+
+    first = parquet_repository.country_data_freshness()
+    monkeypatch.setattr(parquet_repository, "_freshness_cache", None)
+    second = parquet_repository.country_data_freshness()
+
+    assert first == [
+        {"country": "瑞典", "latestMonth": "2026 Jan", "monthsInWindow": 1},
+        {"country": "芬兰", "latestMonth": "2026 Feb", "monthsInWindow": 2},
+    ]
+    assert second == first
+    assert open_calls == 1
+    assert list(parquet_repository.METADATA_PERSISTENT_CACHE_DIR.glob("*.json"))

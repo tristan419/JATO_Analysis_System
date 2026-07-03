@@ -18,7 +18,18 @@ def disable_grouped_time_series_disk_cache(monkeypatch, tmp_path) -> None:
         "GROUPED_TIME_SERIES_PERSISTENT_CACHE_DIR",
         tmp_path,
     )
+    monkeypatch.setattr(
+        query_service,
+        "DASHBOARD_OVERVIEW_PERSISTENT_CACHE_ENABLED",
+        False,
+    )
+    monkeypatch.setattr(
+        query_service,
+        "DASHBOARD_OVERVIEW_PERSISTENT_CACHE_DIR",
+        tmp_path,
+    )
     query_service._clear_grouped_time_series_cache()
+    query_service._clear_dashboard_overview_cache()
 
 
 def test_filters_options_batch_merges_requests_with_same_filters(
@@ -70,6 +81,199 @@ def test_filters_options_batch_uses_top_level_snapshot(
     assert result == [
         {"column": "Country", "options": ["HU", "SE"]},
     ]
+
+
+def test_query_overview_reports_cache_state_and_role_scope(
+    monkeypatch,
+) -> None:
+    calls = 0
+
+    monkeypatch.setattr(
+        query_service.repo,
+        "current_dataset_token",
+        lambda: "dataset-a",
+    )
+
+    def fake_query_overview_impl(**kwargs) -> dict:
+        nonlocal calls
+        if kwargs.get("filters") == {"Country": ["HU"]}:
+            calls += 1
+        return {
+            "route": "dynamic-aggregate",
+            "kpis": {"totalRows": 10},
+            "monthSeries": [],
+            "yearSeries": [],
+        }
+
+    monkeypatch.setattr(
+        query_service,
+        "_query_overview_impl",
+        fake_query_overview_impl,
+    )
+
+    first = query_service.query_overview_with_cache_state(
+        filters={"Country": ["HU"]},
+        prefer_precomputed=True,
+        top_n=10,
+        cache_scope="viewer",
+    )
+    second = query_service.query_overview_with_cache_state(
+        filters={"Country": ["HU"]},
+        prefer_precomputed=True,
+        top_n=10,
+        cache_scope="viewer",
+    )
+    third = query_service.query_overview_with_cache_state(
+        filters={"Country": ["HU"]},
+        prefer_precomputed=True,
+        top_n=10,
+        cache_scope="admin",
+    )
+
+    assert first.cache_state == "MISS"
+    assert second.cache_state == "MEMORY"
+    assert third.cache_state == "MISS"
+    assert calls == 2
+    assert first.payload == second.payload == third.payload
+
+
+def test_query_overview_uses_persistent_cache(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    calls = 0
+
+    monkeypatch.setattr(
+        query_service,
+        "DASHBOARD_OVERVIEW_PERSISTENT_CACHE_ENABLED",
+        True,
+    )
+    monkeypatch.setattr(
+        query_service,
+        "DASHBOARD_OVERVIEW_PERSISTENT_CACHE_DIR",
+        tmp_path,
+    )
+    monkeypatch.setattr(
+        query_service.repo,
+        "current_dataset_token",
+        lambda: "dataset-a",
+    )
+
+    def fake_query_overview_impl(**kwargs) -> dict:
+        nonlocal calls
+        if kwargs.get("filters") == {"Country": ["HU"]}:
+            calls += 1
+        return {
+            "route": "dynamic-aggregate",
+            "kpis": {"totalRows": 10},
+            "monthSeries": [],
+            "yearSeries": [],
+        }
+
+    monkeypatch.setattr(
+        query_service,
+        "_query_overview_impl",
+        fake_query_overview_impl,
+    )
+
+    first = query_service.query_overview_with_cache_state(
+        filters={"Country": ["HU"]},
+        prefer_precomputed=True,
+        top_n=10,
+        cache_scope="viewer",
+    )
+    query_service._clear_dashboard_overview_cache()
+    second = query_service.query_overview_with_cache_state(
+        filters={"Country": ["HU"]},
+        prefer_precomputed=True,
+        top_n=10,
+        cache_scope="viewer",
+    )
+
+    assert first.cache_state == "MISS"
+    assert second.cache_state == "DISK"
+    assert calls == 1
+    assert first.payload == second.payload
+    assert list(tmp_path.glob("*.json"))
+
+
+def test_warm_dashboard_overview_cache_includes_configured_filter_sets(
+    monkeypatch,
+) -> None:
+    calls: list[dict[str, object]] = []
+
+    monkeypatch.setattr(
+        query_service,
+        "DASHBOARD_OVERVIEW_PREWARM_SCOPES",
+        ["viewer"],
+    )
+    monkeypatch.setattr(
+        query_service,
+        "DASHBOARD_OVERVIEW_PREWARM_FILTERS",
+        [
+            {"Country": ["DK"], "Powertrain": ["ICE", "BEV"]},
+            {"Powertrain": ["BEV", "ICE"], "Country": ["DK"]},
+        ],
+    )
+
+    def fake_query_overview(**kwargs) -> dict:
+        calls.append(kwargs)
+        return {"items": []}
+
+    monkeypatch.setattr(
+        query_service,
+        "query_overview",
+        fake_query_overview,
+    )
+
+    result = query_service.warm_dashboard_overview_cache()
+
+    assert result == {"warmed": 2, "failed": 0}
+    assert calls == [
+        {
+            "filters": {},
+            "prefer_precomputed": True,
+            "top_n": 10,
+            "cache_scope": "viewer",
+        },
+        {
+            "filters": {"Country": ["DK"], "Powertrain": ["BEV", "ICE"]},
+            "prefer_precomputed": True,
+            "top_n": 10,
+            "cache_scope": "viewer",
+        },
+    ]
+
+
+def test_dashboard_overview_prewarm_defaults_cover_dashboard_scope() -> None:
+    assert query_service.DASHBOARD_OVERVIEW_CACHE_TTL_SECONDS >= 1800
+    assert "order_filler" in query_service.DASHBOARD_OVERVIEW_PREWARM_SCOPES
+    assert any(
+        filters.get("国家") and filters.get("动总规整")
+        for filters in query_service.DASHBOARD_OVERVIEW_PREWARM_FILTERS
+    )
+
+
+def test_warm_dashboard_metadata_cache_reuses_service_loaders(
+    monkeypatch,
+) -> None:
+    calls: list[str] = []
+
+    monkeypatch.setattr(
+        query_service,
+        "metadata_columns",
+        lambda: calls.append("columns") or ["Country"],
+    )
+    monkeypatch.setattr(
+        query_service,
+        "get_data_freshness",
+        lambda: calls.append("freshness") or [],
+    )
+
+    result = query_service.warm_dashboard_metadata_cache()
+
+    assert result == {"warmed": 2, "failed": 0}
+    assert calls == ["columns", "freshness"]
 
 
 def test_query_grouped_time_series_caches_by_params_and_dataset_token(
