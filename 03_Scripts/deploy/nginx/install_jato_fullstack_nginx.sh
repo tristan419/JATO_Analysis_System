@@ -149,6 +149,31 @@ else:
 PY
 }
 
+patch_all_jato_nginx_configs() {
+  local seen=""
+  local target=""
+  local candidates=("$TARGET_CONF" "$ENABLED_CONF")
+
+  while IFS= read -r target; do
+    candidates+=("$target")
+  done < <(
+    grep -rlE 'jato_fullstack_api|JATO_Analysis_System-main/06_AppPlatform/frontend/dist|JATO_Analysis_System/06_AppPlatform/frontend/dist' \
+      /etc/nginx/sites-available /etc/nginx/sites-enabled /etc/nginx/conf.d 2>/dev/null || true
+  )
+
+  for target in "${candidates[@]}"; do
+    if [[ -z "$target" || ! -f "$target" ]]; then
+      continue
+    fi
+    case "|$seen|" in
+      *"|$target|"*) continue ;;
+    esac
+    seen="${seen}|$target"
+    patch_certbot_managed_api_cache_control "$target"
+    patch_static_route_metadata_headers "$target"
+  done
+}
+
 if [[ ! -f "$NGINX_TEMPLATE" ]]; then
   echo "[ERROR] Nginx template not found: $NGINX_TEMPLATE"
   exit 1
@@ -160,11 +185,8 @@ apt-get install -y nginx
 
 if [[ -f "$TARGET_CONF" ]] && grep -qi 'managed by Certbot' "$TARGET_CONF" && [[ "$allow_certbot_overwrite" != "true" ]]; then
   echo "[WARN] Existing nginx config is managed by Certbot; skipping full overwrite to preserve HTTPS."
-  echo "[INFO] Applying safe /v1/ Cache-Control patch in the existing config."
-  patch_certbot_managed_api_cache_control "$TARGET_CONF"
-  patch_certbot_managed_api_cache_control "$ENABLED_CONF"
-  patch_static_route_metadata_headers "$TARGET_CONF"
-  patch_static_route_metadata_headers "$ENABLED_CONF"
+  echo "[INFO] Applying safe nginx patches in existing JATO configs."
+  patch_all_jato_nginx_configs
   echo "[INFO] Set ALLOW_CERTBOT_OVERWRITE=true only if you intentionally want to replace the cert-managed config."
   nginx -t
   systemctl enable nginx
@@ -183,10 +205,7 @@ sed \
 ln -sf "$TARGET_CONF" "$ENABLED_CONF"
 rm -f /etc/nginx/sites-enabled/default
 
-patch_certbot_managed_api_cache_control "$TARGET_CONF"
-patch_certbot_managed_api_cache_control "$ENABLED_CONF"
-patch_static_route_metadata_headers "$TARGET_CONF"
-patch_static_route_metadata_headers "$ENABLED_CONF"
+patch_all_jato_nginx_configs
 
 echo "[INFO] Validate and restart nginx"
 nginx -t
