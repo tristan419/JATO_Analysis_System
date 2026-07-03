@@ -46,7 +46,7 @@ class GroupedTimeSeriesQueryResult:
 @dataclass(frozen=True)
 class DashboardOverviewQueryResult:
     payload: dict
-    cache_state: Literal["MEMORY", "DISK", "MISS"]
+    cache_state: Literal["MEMORY", "REDIS", "DISK", "MISS"]
 
 # ── Column name candidates ──────────────────────────────────────
 COUNTRY_CANDIDATES = ["国家", "Country", "country"]
@@ -98,6 +98,7 @@ TOP_LEVEL_FILTER_CANDIDATE_SETS = [
 _GROUPED_TIME_SERIES_DISK_CACHE_SCHEMA = 1
 _GROUPED_TIME_SERIES_REDIS_CACHE_SCHEMA = 1
 _DASHBOARD_OVERVIEW_DISK_CACHE_SCHEMA = 1
+_DASHBOARD_OVERVIEW_REDIS_CACHE_SCHEMA = 1
 
 _top_level_filter_options_cache: (
     tuple[float, str, dict[str, list[str]]] | None
@@ -163,6 +164,24 @@ def _dashboard_overview_disk_cache_path(
     return DASHBOARD_OVERVIEW_PERSISTENT_CACHE_DIR / f"{digest}.json"
 
 
+def _dashboard_overview_cache_digest(
+    cache_key: _OverviewCacheKey,
+    dataset_token: str,
+) -> str:
+    payload_key = _dashboard_overview_disk_payload_key(cache_key, dataset_token)
+    return hashlib.sha256(
+        json.dumps(payload_key, ensure_ascii=False, sort_keys=True).encode("utf-8")
+    ).hexdigest()
+
+
+def _dashboard_overview_redis_cache_key(
+    cache_key: _OverviewCacheKey,
+    dataset_token: str,
+) -> str:
+    digest = _dashboard_overview_cache_digest(cache_key, dataset_token)
+    return f"dashboard:overview:v{_DASHBOARD_OVERVIEW_REDIS_CACHE_SCHEMA}:{digest}"
+
+
 def _read_dashboard_overview_disk_cache(
     cache_key: _OverviewCacheKey,
     dataset_token: str,
@@ -187,6 +206,60 @@ def _read_dashboard_overview_disk_cache(
         return None
     result = payload.get("result")
     return result if isinstance(result, dict) else None
+
+
+def _read_dashboard_overview_redis_cache(
+    cache_key: _OverviewCacheKey,
+    dataset_token: str,
+) -> dict | None:
+    client = get_redis_client()
+    if client is None:
+        return None
+    redis_key = _dashboard_overview_redis_cache_key(cache_key, dataset_token)
+    try:
+        raw = client.get(redis_key)
+        if raw is None:
+            return None
+        text = raw.decode("utf-8") if isinstance(raw, bytes) else str(raw)
+        payload = json.loads(text)
+    except Exception as exc:  # noqa: BLE001 - Redis must fail open
+        LOGGER.warning("Could not read dashboard overview Redis cache: %s", exc)
+        return None
+
+    if payload.get("schema") != _DASHBOARD_OVERVIEW_REDIS_CACHE_SCHEMA:
+        return None
+    if payload.get("dataset") != dataset_token:
+        return None
+    result = payload.get("result")
+    return result if isinstance(result, dict) else None
+
+
+def _write_dashboard_overview_redis_cache(
+    cache_key: _OverviewCacheKey,
+    dataset_token: str,
+    result: dict,
+) -> None:
+    client = get_redis_client()
+    if client is None:
+        return
+    redis_key = _dashboard_overview_redis_cache_key(cache_key, dataset_token)
+    try:
+        client.setex(
+            redis_key,
+            max(1, int(DASHBOARD_OVERVIEW_CACHE_TTL_SECONDS)),
+            json.dumps(
+                {
+                    "schema": _DASHBOARD_OVERVIEW_REDIS_CACHE_SCHEMA,
+                    "dataset": dataset_token,
+                    "cachedAt": time.time(),
+                    "result": result,
+                },
+                ensure_ascii=False,
+                separators=(",", ":"),
+            ),
+        )
+    except Exception as exc:  # noqa: BLE001 - Redis must fail open
+        LOGGER.warning("Could not write dashboard overview Redis cache: %s", exc)
 
 
 def _prune_dashboard_overview_disk_cache() -> None:
@@ -291,6 +364,24 @@ def _load_dashboard_overview_persistent_cache(
         cache_key,
         dataset_token,
         time.time(),
+    )
+    if cached_result is None:
+        return None
+    with _overview_cache_lock:
+        return _store_dashboard_overview_cache(
+            cache_key,
+            cached_result,
+            dataset_token,
+        )
+
+
+def _load_dashboard_overview_redis_cache(
+    cache_key: _OverviewCacheKey,
+    dataset_token: str,
+) -> dict | None:
+    cached_result = _read_dashboard_overview_redis_cache(
+        cache_key,
+        dataset_token,
     )
     if cached_result is None:
         return None
@@ -1962,6 +2053,12 @@ def query_overview_with_cache_state(
     )
     if cached_result is not None:
         return DashboardOverviewQueryResult(cached_result, "MEMORY")
+    cached_result = _load_dashboard_overview_redis_cache(
+        cache_key,
+        dataset_token,
+    )
+    if cached_result is not None:
+        return DashboardOverviewQueryResult(cached_result, "REDIS")
     cached_result = _load_dashboard_overview_persistent_cache(
         cache_key,
         dataset_token,
@@ -1990,12 +2087,17 @@ def query_overview_with_cache_state(
             result,
             dataset_token,
         )
-        _write_dashboard_overview_disk_cache(
-            cache_key,
-            dataset_token,
-            cached_result,
-        )
-        return DashboardOverviewQueryResult(cached_result, "MISS")
+    _write_dashboard_overview_redis_cache(
+        cache_key,
+        dataset_token,
+        cached_result,
+    )
+    _write_dashboard_overview_disk_cache(
+        cache_key,
+        dataset_token,
+        cached_result,
+    )
+    return DashboardOverviewQueryResult(cached_result, "MISS")
 
 
 def _query_overview_impl(
