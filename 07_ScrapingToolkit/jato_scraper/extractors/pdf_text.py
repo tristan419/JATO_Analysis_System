@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+import html
 from io import BytesIO
 import logging
 import re
@@ -56,7 +57,7 @@ class PdfTextProfile:
 
 
 def parse_price(raw: str) -> float | None:
-    normalized_raw = re.sub(r"\s+", "", raw.replace("\xa0", " "))
+    normalized_raw = re.sub(r"\s+", "", html.unescape(raw).replace("\xa0", " "))
     match = _PRICE_RE.search(normalized_raw)
     if not match:
         return None

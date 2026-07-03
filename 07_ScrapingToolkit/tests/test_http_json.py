@@ -127,6 +127,40 @@ def test_http_json_supports_list_indexes_in_paths():
     assert results[0].official_trim.startswith("R-Line / 2.0 TDI SCR")
 
 
+def test_http_json_decodes_html_entity_thousand_separator(monkeypatch):
+    extractor = HttpJsonExtractor(
+        ExtractorConfig(
+            source_code="kgm_korando_cz_test",
+            country="捷克",
+            brand="KGM",
+            source_url="https://konfigurator.kgmcars.cz/",
+        ),
+        HttpJsonProfile(
+            url="https://example.invalid/korando.json",
+            fixed_model="KORANDO",
+            default_currency="CZK",
+            default_tax_included=True,
+            field_mapping=FieldMapping(
+                model="",
+                trim="trim",
+                price="price",
+                vehicles_path="items",
+            ),
+        ),
+    )
+
+    monkeypatch.setattr(
+        extractor,
+        "_fetch",
+        lambda: {"items": [{"trim": "Style", "price": "549&nbsp;900"}]},
+    )
+
+    results = extractor.extract()
+
+    assert len(results) == 1
+    assert results[0].msrp_value == 549_900.0
+
+
 def test_http_json_joins_lookup_mapped_fields(monkeypatch):
     extractor = HttpJsonExtractor(
         ExtractorConfig(

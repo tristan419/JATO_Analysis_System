@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import html
 import logging
 import re
 from dataclasses import dataclass, field
@@ -422,7 +423,9 @@ class HttpJsonExtractor(BaseExtractor):
         return value
 
     def _parse_amount(self, raw: str) -> float | None:
-        match = _PRICE_RE.search(raw.replace("\xa0", "").replace(" ", ""))
+        match = _PRICE_RE.search(
+            html.unescape(raw).replace("\xa0", "").replace(" ", "")
+        )
         if not match:
             return None
         value = match.group().replace("'", "").replace("\u2019", "")

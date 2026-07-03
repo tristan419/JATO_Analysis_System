@@ -16,6 +16,10 @@ def test_parse_price_collapses_pdf_table_line_breaks():
     assert parse_price("3\n8 .\n1\n90,\n-") == 38_190.0
 
 
+def test_parse_price_decodes_html_entity_thousand_separator():
+    assert parse_price("549&nbsp;900 Kč") == 549_900.0
+
+
 def test_pdf_text_extracts_entries_and_applies_price_delta(monkeypatch):
     extractor = PdfTextExtractor(
         ExtractorConfig(
