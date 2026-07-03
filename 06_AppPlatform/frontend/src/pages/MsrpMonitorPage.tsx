@@ -2177,7 +2177,7 @@ function salesVolume(event: MsrpMonitoringModelEvent): number {
 function salesBubbleRadius(event: MsrpMonitoringModelEvent, maxSales: number): number {
   const sales = salesVolume(event);
   if (sales <= 0 || maxSales <= 0) {
-    return Math.min(12, 6 + Math.sqrt(event.affectedCountryCount) * 1.8);
+    return 0;
   }
   return 7 + Math.sqrt(sales / maxSales) * 22;
 }
@@ -2457,15 +2457,16 @@ function ChartPoint({
   onSelect: () => void;
 }) {
   const [hovered, setHovered] = useState(false);
-  const bubbleRadius = showSalesLayer ? radius : 0;
-  const dotRadius = showSalesLayer ? Math.max(5.5, Math.min(9.5, radius * 0.42)) : 7;
-  const anchorRadius = showSalesLayer ? Math.max(bubbleRadius, dotRadius) : dotRadius;
+  const renderSalesBubble = showSalesLayer && salesVolume(event) > 0;
+  const bubbleRadius = renderSalesBubble ? radius : 0;
+  const dotRadius = renderSalesBubble ? Math.max(5.5, Math.min(9.5, radius * 0.42)) : 7;
+  const anchorRadius = renderSalesBubble ? Math.max(bubbleRadius, dotRadius) : dotRadius;
   const hitTop = Math.min(oldY, currentY) - 22;
   const hitHeight = Math.abs(currentY - oldY) + 44;
   const hitWidth = Math.max(30, anchorRadius * 2 + 20);
   const labelX = labelSide === "left" ? x - anchorRadius - 8 : x + anchorRadius + 8;
   const hoverDetail = chartPointHoverDetail(event);
-  const smartLabelNote = chartSmartLabelNote(event, showSalesLayer);
+  const smartLabelNote = chartSmartLabelNote(event, renderSalesBubble);
   const tooltipWidth = 306;
   const tooltipHeight = 188;
   const tooltipX = labelSide === "left" || x > CHART_WIDTH - tooltipWidth - 24
@@ -2509,7 +2510,7 @@ function ChartPoint({
       </g>
       <line className={`msrp-monitor-drop-line ${movementClass}`} x1={x} x2={x} y1={oldY} y2={currentY} />
       <circle className="msrp-monitor-old-dot" cx={x} cy={oldY} r={Math.max(4, dotRadius * 0.75)} />
-      {showSalesLayer ? (
+      {renderSalesBubble ? (
         <circle
           className="msrp-monitor-sales-bubble"
           cx={x}
