@@ -16,6 +16,7 @@ from app.api.schemas import (
     TimeSeriesRequest,
 )
 from app.core.config import (
+    DASHBOARD_OVERVIEW_PREWARM_ENABLED,
     GROUPED_TIME_SERIES_PREWARM_ENABLED,
     MAX_DETAIL_PAGE_SIZE,
     MAX_EXPORT_ROWS,
@@ -29,10 +30,11 @@ from app.services.query_service import (
     query_detail,
     query_grouped_time_series_with_cache_state,
     query_model_versions,
-    query_overview,
+    query_overview_with_cache_state,
     query_positioning_map,
     query_rv_finance,
     query_time_series,
+    warm_dashboard_overview_cache,
     warm_grouped_time_series_cache,
 )
 
@@ -40,6 +42,8 @@ router = APIRouter(prefix="/analysis", tags=["analysis"])
 
 if GROUPED_TIME_SERIES_PREWARM_ENABLED:
     threading.Thread(target=warm_grouped_time_series_cache, daemon=True).start()
+if DASHBOARD_OVERVIEW_PREWARM_ENABLED:
+    threading.Thread(target=warm_dashboard_overview_cache, daemon=True).start()
 
 
 @router.post("/query")
@@ -71,13 +75,17 @@ def time_series(
 @router.post("/overview")
 def overview(
     payload: OverviewRequest,
-    _=Depends(optional_viewer),
+    response: Response,
+    user=Depends(optional_viewer),
 ) -> dict:
-    return query_overview(
+    result = query_overview_with_cache_state(
         filters=payload.filters,
         prefer_precomputed=payload.prefer_precomputed,
         top_n=payload.top_n,
+        cache_scope=user.role,
     )
+    response.headers["X-JATO-Server-Cache"] = result.cache_state
+    return result.payload
 
 
 @router.get("/data-freshness")
