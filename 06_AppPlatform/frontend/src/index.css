@@ -169,6 +169,23 @@ button, input, select, textarea {
   background: var(--c-surface);
 }
 
+.route-diagnostics-subheader {
+  min-width: 720px;
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 18px;
+  padding: 16px;
+  border-bottom: 1px solid var(--c-border-light);
+  background: var(--c-surface-alt);
+}
+
+.route-diagnostics-subheader p {
+  margin-top: 4px;
+  color: var(--c-text-secondary);
+  font-size: 12px;
+}
+
 .route-diagnostics-table {
   width: 100%;
   border-collapse: collapse;
