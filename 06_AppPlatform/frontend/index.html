@@ -210,7 +210,7 @@
           return;
         }
         var cachedDecision = readDecision(decisionKey);
-        if (cachedDecision && targetHost(cachedDecision.target) === host) {
+        if (cachedDecision) {
           redirectTo(cachedDecision.target, cachedDecision);
           return;
         }
