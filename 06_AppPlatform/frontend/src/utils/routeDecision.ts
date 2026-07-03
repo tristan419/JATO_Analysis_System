@@ -13,6 +13,10 @@ export interface RouteDecision {
   cnMs?: number;
   intlMs?: number;
   marginMs?: number;
+  cnBuildCommit?: string;
+  intlBuildCommit?: string;
+  cnFrontendBuildId?: string;
+  intlFrontendBuildId?: string;
 }
 
 export interface ProbeResult {
@@ -22,7 +26,13 @@ export interface ProbeResult {
   ms: number | null;
   checkedAt: string;
   buildCommit?: string;
+  frontendBuildId?: string;
   buildCheckedAt?: string;
+}
+
+interface RouteBuildInfo {
+  commit?: string;
+  frontendBuildId?: string;
 }
 
 export interface ClientRouteProfile {
@@ -55,6 +65,10 @@ const TRANSFER_INTL_OK_PARAM = "jatoRouteIntlOk";
 const TRANSFER_CN_MS_PARAM = "jatoRouteCnMs";
 const TRANSFER_INTL_MS_PARAM = "jatoRouteIntlMs";
 const TRANSFER_MARGIN_MS_PARAM = "jatoRouteMarginMs";
+const TRANSFER_CN_BUILD_COMMIT_PARAM = "jatoRouteCnBuildCommit";
+const TRANSFER_INTL_BUILD_COMMIT_PARAM = "jatoRouteIntlBuildCommit";
+const TRANSFER_CN_FRONTEND_BUILD_ID_PARAM = "jatoRouteCnFrontendBuildId";
+const TRANSFER_INTL_FRONTEND_BUILD_ID_PARAM = "jatoRouteIntlFrontendBuildId";
 
 const TRANSFER_PARAMS = [
   TRANSFER_TARGET_PARAM,
@@ -67,6 +81,10 @@ const TRANSFER_PARAMS = [
   TRANSFER_CN_MS_PARAM,
   TRANSFER_INTL_MS_PARAM,
   TRANSFER_MARGIN_MS_PARAM,
+  TRANSFER_CN_BUILD_COMMIT_PARAM,
+  TRANSFER_INTL_BUILD_COMMIT_PARAM,
+  TRANSFER_CN_FRONTEND_BUILD_ID_PARAM,
+  TRANSFER_INTL_FRONTEND_BUILD_ID_PARAM,
 ];
 
 export const ROUTE_HOSTS: Record<RouteTarget, string> = {
@@ -157,6 +175,10 @@ export function booleanOrUndefined(value: unknown): boolean | undefined {
   return typeof value === "boolean" ? value : undefined;
 }
 
+function stringOrUndefined(value: unknown): string | undefined {
+  return typeof value === "string" && value.trim() ? value.trim() : undefined;
+}
+
 function parseFiniteNumber(value: string | null): number | undefined {
   if (!value) return undefined;
   const parsed = Number(value);
@@ -218,6 +240,10 @@ export function readRouteDecision(
       cnMs: numberOrUndefined(parsed.cnMs),
       intlMs: numberOrUndefined(parsed.intlMs),
       marginMs: numberOrUndefined(parsed.marginMs),
+      cnBuildCommit: stringOrUndefined(parsed.cnBuildCommit),
+      intlBuildCommit: stringOrUndefined(parsed.intlBuildCommit),
+      cnFrontendBuildId: stringOrUndefined(parsed.cnFrontendBuildId),
+      intlFrontendBuildId: stringOrUndefined(parsed.intlFrontendBuildId),
     };
   } catch {
     return null;
@@ -273,6 +299,10 @@ export function consumeRouteDecisionTransfer(
       cnMs: parseFiniteNumber(params.get(TRANSFER_CN_MS_PARAM)),
       intlMs: parseFiniteNumber(params.get(TRANSFER_INTL_MS_PARAM)),
       marginMs: parseFiniteNumber(params.get(TRANSFER_MARGIN_MS_PARAM)),
+      cnBuildCommit: stringOrUndefined(params.get(TRANSFER_CN_BUILD_COMMIT_PARAM)),
+      intlBuildCommit: stringOrUndefined(params.get(TRANSFER_INTL_BUILD_COMMIT_PARAM)),
+      cnFrontendBuildId: stringOrUndefined(params.get(TRANSFER_CN_FRONTEND_BUILD_ID_PARAM)),
+      intlFrontendBuildId: stringOrUndefined(params.get(TRANSFER_INTL_FRONTEND_BUILD_ID_PARAM)),
     };
     saveRouteDecision(storage, decision);
   }
@@ -301,7 +331,7 @@ export function makeInitialProbe(target: RouteTarget): ProbeResult {
   };
 }
 
-async function fetchRouteBuildCommit(target: RouteTarget): Promise<string | undefined> {
+async function fetchRouteBuildInfo(target: RouteTarget): Promise<RouteBuildInfo> {
   const controller = new AbortController();
   const timeout = window.setTimeout(() => controller.abort(), PROBE_TIMEOUT_MS);
   try {
@@ -310,13 +340,14 @@ async function fetchRouteBuildCommit(target: RouteTarget): Promise<string | unde
       credentials: "omit",
       signal: controller.signal,
     });
-    if (!response.ok) return undefined;
-    const payload = await response.json() as { commit?: unknown };
-    return typeof payload.commit === "string" && payload.commit.trim()
-      ? payload.commit.trim()
-      : undefined;
+    if (!response.ok) return {};
+    const payload = await response.json() as { commit?: unknown; frontendBuildId?: unknown };
+    return {
+      commit: stringOrUndefined(payload.commit),
+      frontendBuildId: stringOrUndefined(payload.frontendBuildId),
+    };
   } catch {
-    return undefined;
+    return {};
   } finally {
     window.clearTimeout(timeout);
   }
@@ -327,7 +358,7 @@ export async function probeRoute(target: RouteTarget): Promise<ProbeResult> {
   const startedAt = performance.now();
   const timeout = window.setTimeout(() => controller.abort(), PROBE_TIMEOUT_MS);
   const checkedAt = new Date().toLocaleTimeString();
-  const buildCommitPromise = fetchRouteBuildCommit(target);
+  const buildInfoPromise = fetchRouteBuildInfo(target);
   try {
     await fetch(`https://${ROUTE_HOSTS[target]}/route-probe.txt?ts=${Date.now()}`, {
       cache: "no-store",
@@ -335,26 +366,28 @@ export async function probeRoute(target: RouteTarget): Promise<ProbeResult> {
       mode: "no-cors",
       signal: controller.signal,
     });
-    const buildCommit = await buildCommitPromise;
+    const buildInfo = await buildInfoPromise;
     return {
       target,
       host: ROUTE_HOSTS[target],
       status: "ok",
       ms: Math.round(performance.now() - startedAt),
       checkedAt,
-      buildCommit,
-      buildCheckedAt: buildCommit ? checkedAt : undefined,
+      buildCommit: buildInfo.commit,
+      frontendBuildId: buildInfo.frontendBuildId,
+      buildCheckedAt: buildInfo.commit || buildInfo.frontendBuildId ? checkedAt : undefined,
     };
   } catch {
-    const buildCommit = await buildCommitPromise;
+    const buildInfo = await buildInfoPromise;
     return {
       target,
       host: ROUTE_HOSTS[target],
       status: "failed",
       ms: Math.round(performance.now() - startedAt),
       checkedAt,
-      buildCommit,
-      buildCheckedAt: buildCommit ? checkedAt : undefined,
+      buildCommit: buildInfo.commit,
+      frontendBuildId: buildInfo.frontendBuildId,
+      buildCheckedAt: buildInfo.commit || buildInfo.frontendBuildId ? checkedAt : undefined,
     };
   } finally {
     window.clearTimeout(timeout);
@@ -367,9 +400,20 @@ function buildCompatible(
   nextTarget: RouteTarget,
 ): boolean {
   if (!currentTarget || currentTarget === nextTarget) return true;
+  const currentBuildId = results[currentTarget].frontendBuildId;
+  const nextBuildId = results[nextTarget].frontendBuildId;
+  if (currentBuildId && nextBuildId) {
+    return currentBuildId === nextBuildId;
+  }
   const currentCommit = results[currentTarget].buildCommit;
   const nextCommit = results[nextTarget].buildCommit;
   return Boolean(currentCommit && nextCommit && currentCommit === nextCommit);
+}
+
+function buildLabel(result: ProbeResult): string {
+  if (result.frontendBuildId) return `frontend ${result.frontendBuildId.slice(0, 12)}`;
+  if (result.buildCommit) return `commit ${result.buildCommit.slice(0, 12)}`;
+  return "unknown";
 }
 
 function buildIncompatibilityReason(
@@ -378,9 +422,7 @@ function buildIncompatibilityReason(
   nextTarget: RouteTarget,
 ): string {
   const safeCurrentTarget = currentTarget ?? "cn";
-  const currentCommit = results[safeCurrentTarget].buildCommit ?? "unknown";
-  const nextCommit = results[nextTarget].buildCommit ?? "unknown";
-  return `${routeLabel(nextTarget)} build ${nextCommit} is not verified against current ${routeLabel(safeCurrentTarget)} build ${currentCommit}; keep ${routeLabel(safeCurrentTarget)} to avoid stale UI.`;
+  return `${routeLabel(nextTarget)} build ${buildLabel(results[nextTarget])} is not verified against current ${routeLabel(safeCurrentTarget)} build ${buildLabel(results[safeCurrentTarget])}; keep ${routeLabel(safeCurrentTarget)} to avoid stale UI.`;
 }
 
 export function chooseAutoRoute(
@@ -448,6 +490,10 @@ export function createAutoRouteDecision(
     cnMs: results.cn.ms ?? undefined,
     intlMs: results.intl.ms ?? undefined,
     marginMs: profile?.prefersChinaRoute ? undefined : REDIRECT_MARGIN_MS,
+    cnBuildCommit: results.cn.buildCommit,
+    intlBuildCommit: results.intl.buildCommit,
+    cnFrontendBuildId: results.cn.frontendBuildId,
+    intlFrontendBuildId: results.intl.frontendBuildId,
   };
 }
 
@@ -497,6 +543,18 @@ export function buildRouteRedirectUrl(
   }
   if (decision.marginMs !== undefined) {
     url.searchParams.set(TRANSFER_MARGIN_MS_PARAM, String(decision.marginMs));
+  }
+  if (decision.cnBuildCommit) {
+    url.searchParams.set(TRANSFER_CN_BUILD_COMMIT_PARAM, decision.cnBuildCommit);
+  }
+  if (decision.intlBuildCommit) {
+    url.searchParams.set(TRANSFER_INTL_BUILD_COMMIT_PARAM, decision.intlBuildCommit);
+  }
+  if (decision.cnFrontendBuildId) {
+    url.searchParams.set(TRANSFER_CN_FRONTEND_BUILD_ID_PARAM, decision.cnFrontendBuildId);
+  }
+  if (decision.intlFrontendBuildId) {
+    url.searchParams.set(TRANSFER_INTL_FRONTEND_BUILD_ID_PARAM, decision.intlFrontendBuildId);
   }
   return url.toString();
 }

@@ -41,23 +41,35 @@ function createStorage(): Storage {
   };
 }
 
-function okProbe(target: "cn" | "intl", ms: number, buildCommit = "same-build"): ProbeResult {
+function okProbe(
+  target: "cn" | "intl",
+  ms: number,
+  buildCommit = "same-build",
+  frontendBuildId?: string,
+): ProbeResult {
   return {
     ...makeInitialProbe(target),
     status: "ok",
     ms,
     checkedAt: "10:00:00",
     buildCommit,
+    frontendBuildId,
   };
 }
 
-function failedProbe(target: "cn" | "intl", ms: number, buildCommit = "same-build"): ProbeResult {
+function failedProbe(
+  target: "cn" | "intl",
+  ms: number,
+  buildCommit = "same-build",
+  frontendBuildId?: string,
+): ProbeResult {
   return {
     ...makeInitialProbe(target),
     status: "failed",
     ms,
     checkedAt: "10:00:00",
     buildCommit,
+    frontendBuildId,
   };
 }
 
@@ -101,6 +113,23 @@ describe("route decision helpers", () => {
     }, "cn");
 
     expect(unknownIntl?.target).toBe("cn");
+  });
+
+  it("uses frontend build fingerprints before commit ids when checking route compatibility", () => {
+    const sameFrontend = chooseAutoRoute({
+      cn: okProbe("cn", 1_200, "www-only-commit", "same-frontend-build"),
+      intl: okProbe("intl", 300, "intl-only-commit", "same-frontend-build"),
+    }, "cn");
+
+    expect(sameFrontend?.target).toBe("intl");
+
+    const staleFrontend = chooseAutoRoute({
+      cn: okProbe("cn", 1_200, "same-commit", "new-frontend-build"),
+      intl: okProbe("intl", 300, "same-commit", "old-frontend-build"),
+    }, "cn");
+
+    expect(staleFrontend?.target).toBe("cn");
+    expect(staleFrontend?.reason).toContain("frontend old-frontend");
   });
 
   it("keeps China-local browsers on www whenever www is reachable", () => {

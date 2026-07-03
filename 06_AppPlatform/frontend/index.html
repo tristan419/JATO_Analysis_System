@@ -141,6 +141,18 @@
           if (decision && typeof decision.marginMs === "number") {
             url.searchParams.set("jatoRouteMarginMs", String(decision.marginMs));
           }
+          if (decision && typeof decision.cnBuildCommit === "string" && decision.cnBuildCommit) {
+            url.searchParams.set("jatoRouteCnBuildCommit", decision.cnBuildCommit);
+          }
+          if (decision && typeof decision.intlBuildCommit === "string" && decision.intlBuildCommit) {
+            url.searchParams.set("jatoRouteIntlBuildCommit", decision.intlBuildCommit);
+          }
+          if (decision && typeof decision.cnFrontendBuildId === "string" && decision.cnFrontendBuildId) {
+            url.searchParams.set("jatoRouteCnFrontendBuildId", decision.cnFrontendBuildId);
+          }
+          if (decision && typeof decision.intlFrontendBuildId === "string" && decision.intlFrontendBuildId) {
+            url.searchParams.set("jatoRouteIntlFrontendBuildId", decision.intlFrontendBuildId);
+          }
         }
 
         function redirectTo(target, decision) {
@@ -216,7 +228,7 @@
         }
 
         markProbeInFlight();
-        function buildCommit(target) {
+        function buildInfo(target) {
           var url = "https://" + targetHost(target) + "/build-meta.json?ts=" + Date.now();
           return new Promise(function (resolve) {
             var settled = false;
@@ -225,7 +237,7 @@
               if (settled) return;
               settled = true;
               if (controller) controller.abort();
-              resolve("");
+              resolve({ commit: "", frontendBuildId: "" });
             }, timeoutMs);
             var options = {
               cache: "no-store",
@@ -240,12 +252,13 @@
               settled = true;
               window.clearTimeout(timer);
               var commit = payload && typeof payload.commit === "string" ? payload.commit.trim() : "";
-              resolve(commit);
+              var frontendBuildId = payload && typeof payload.frontendBuildId === "string" ? payload.frontendBuildId.trim() : "";
+              resolve({ commit: commit, frontendBuildId: frontendBuildId });
             }).catch(function () {
               if (settled) return;
               settled = true;
               window.clearTimeout(timer);
-              resolve("");
+              resolve({ commit: "", frontendBuildId: "" });
             });
           });
         }
@@ -253,14 +266,20 @@
         function probe(target) {
           var startedAt = performance.now();
           var url = "https://" + targetHost(target) + "/route-probe.txt?ts=" + Date.now();
-          var buildCommitPromise = buildCommit(target);
+          var buildInfoPromise = buildInfo(target);
           return new Promise(function (resolve) {
             var settled = false;
             var timer = window.setTimeout(function () {
               if (settled) return;
               settled = true;
-              buildCommitPromise.then(function (commit) {
-                resolve({ target: target, ok: false, ms: timeoutMs, buildCommit: commit });
+              buildInfoPromise.then(function (info) {
+                resolve({
+                  target: target,
+                  ok: false,
+                  ms: timeoutMs,
+                  buildCommit: info.commit,
+                  frontendBuildId: info.frontendBuildId
+                });
               });
             }, timeoutMs);
             fetch(url, {
@@ -271,15 +290,27 @@
               if (settled) return;
               settled = true;
               window.clearTimeout(timer);
-              buildCommitPromise.then(function (commit) {
-                resolve({ target: target, ok: true, ms: performance.now() - startedAt, buildCommit: commit });
+              buildInfoPromise.then(function (info) {
+                resolve({
+                  target: target,
+                  ok: true,
+                  ms: performance.now() - startedAt,
+                  buildCommit: info.commit,
+                  frontendBuildId: info.frontendBuildId
+                });
               });
             }).catch(function () {
               if (settled) return;
               settled = true;
               window.clearTimeout(timer);
-              buildCommitPromise.then(function (commit) {
-                resolve({ target: target, ok: false, ms: timeoutMs, buildCommit: commit });
+              buildInfoPromise.then(function (info) {
+                resolve({
+                  target: target,
+                  ok: false,
+                  ms: timeoutMs,
+                  buildCommit: info.commit,
+                  frontendBuildId: info.frontendBuildId
+                });
               });
             });
           });
@@ -303,14 +334,22 @@
           function buildCompatible(target) {
             if (target === currentTarget) return true;
             var targetProbe = probeFor(target);
+            if (currentProbe.frontendBuildId && targetProbe.frontendBuildId) {
+              return currentProbe.frontendBuildId === targetProbe.frontendBuildId;
+            }
             return Boolean(currentProbe.buildCommit && targetProbe.buildCommit && currentProbe.buildCommit === targetProbe.buildCommit);
+          }
+          function buildLabel(probeResult) {
+            if (probeResult.frontendBuildId) return "frontend " + probeResult.frontendBuildId.slice(0, 12);
+            if (probeResult.buildCommit) return "commit " + probeResult.buildCommit.slice(0, 12);
+            return "unknown";
           }
           function applyBuildGuard(target) {
             if (buildCompatible(target)) return target;
             var targetProbe = probeFor(target);
-            reason = routeLabel(target) + " build " + (targetProbe.buildCommit || "unknown")
+            reason = routeLabel(target) + " build " + buildLabel(targetProbe)
               + " is not verified against current " + routeLabel(currentTarget)
-              + " build " + (currentProbe.buildCommit || "unknown")
+              + " build " + buildLabel(currentProbe)
               + "; stay on " + routeLabel(currentTarget) + " to avoid stale UI";
             return currentTarget;
           }
@@ -349,7 +388,9 @@
             intlMs: Math.round(intl.ms),
             marginMs: marginMs,
             cnBuildCommit: cn.buildCommit || "",
-            intlBuildCommit: intl.buildCommit || ""
+            intlBuildCommit: intl.buildCommit || "",
+            cnFrontendBuildId: cn.frontendBuildId || "",
+            intlFrontendBuildId: intl.frontendBuildId || ""
           });
           redirectTo(nextTarget, autoPayload);
           clearProbeInFlight();
