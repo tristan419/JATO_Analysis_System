@@ -94,7 +94,25 @@ path = Path(sys.argv[1])
 text = path.read_text(encoding="utf-8")
 changed = False
 
-insert_block = r'''
+def find_matching_brace(source: str, open_index: int) -> int:
+    depth = 0
+    for index in range(open_index, len(source)):
+        if source[index] == "{":
+            depth += 1
+        elif source[index] == "}":
+            depth -= 1
+            if depth == 0:
+                return index
+    return -1
+
+def iter_server_spans(source: str):
+    for match in re.finditer(r"\bserver\s*\{", source):
+        open_index = source.find("{", match.start())
+        close_index = find_matching_brace(source, open_index)
+        if close_index != -1:
+            yield match.start(), close_index + 1
+
+build_meta_location = r'''
     location = /build-meta.json {
         try_files $uri =404;
         add_header Cache-Control "no-cache, no-store, must-revalidate" always;
@@ -104,6 +122,9 @@ insert_block = r'''
         add_header Timing-Allow-Origin "*" always;
     }
 
+'''
+
+route_probe_location = r'''
     location = /route-probe.txt {
         try_files $uri =404;
         add_header Cache-Control "no-cache, no-store, must-revalidate" always;
@@ -115,27 +136,77 @@ insert_block = r'''
 
 '''
 
-if "location = /build-meta.json" not in text or "location = /route-probe.txt" not in text:
-    marker = re.search(r"\n\s*location\s+\^~\s+/assets/\s*\{", text)
+metadata_headers = [
+    'add_header Cache-Control "no-cache, no-store, must-revalidate" always;',
+    'add_header Pragma "no-cache" always;',
+    'add_header Expires "0" always;',
+    'add_header Access-Control-Allow-Origin "*" always;',
+    'add_header Timing-Allow-Origin "*" always;',
+]
+
+def serves_frontend(block: str) -> bool:
+    if re.search(r"\n\s*return\s+30[18]\s+", block):
+        return False
+    if not re.search(r"\n\s*root\s+", block):
+        return False
+    return (
+        "jato_fullstack_api" in block
+        or "try_files $uri $uri/ /index.html" in block
+        or re.search(r"\n\s*location\s+\^~\s+/assets/\s*\{", block)
+    )
+
+def insert_missing_locations(block: str) -> str:
+    pieces = []
+    if "location = /build-meta.json" not in block:
+        pieces.append(build_meta_location)
+    if "location = /route-probe.txt" not in block:
+        pieces.append(route_probe_location)
+    if not pieces:
+        return block
+
+    insert_block = "".join(pieces)
+    marker = re.search(r"\n\s*location\s+\^~\s+/assets/\s*\{", block)
     if not marker:
-        marker = re.search(r"\n\s*location\s+=\s+/index\.html\s*\{", text)
+        marker = re.search(r"\n\s*location\s+=\s+/index\.html\s*\{", block)
+    if not marker:
+        marker = re.search(r"\n\s*location\s+/\s*\{", block)
     if marker:
-        text = text[:marker.start() + 1] + insert_block + text[marker.start() + 1:]
+        return block[:marker.start() + 1] + insert_block + block[marker.start() + 1:]
+
+    close_index = block.rfind("}")
+    if close_index == -1:
+        return block
+    return block[:close_index] + insert_block + block[close_index:]
+
+def ensure_location_headers(block: str, location_pattern: str) -> str:
+    pattern = re.compile(rf"({location_pattern}\s*\{{(?:(?!\n\s*location\s).)*?)(\s*\}})", re.S)
+
+    def repl(match: re.Match[str]) -> str:
+        body = match.group(1)
+        for header in metadata_headers:
+            if header not in body:
+                body += f"\n        {header}"
+        return body + match.group(2)
+
+    return pattern.sub(repl, block)
+
+parts = []
+last = 0
+for start, end in iter_server_spans(text):
+    block = text[start:end]
+    next_block = block
+    if serves_frontend(block):
+        next_block = insert_missing_locations(next_block)
+        next_block = ensure_location_headers(next_block, r"location\s+=\s+/build-meta\.json")
+        next_block = ensure_location_headers(next_block, r"location\s+=\s+/route-probe\.txt")
+    if next_block != block:
         changed = True
-
-def ensure_header(location_pattern: str, header_line: str) -> None:
-    global text, changed
-    pattern = re.compile(rf"({location_pattern}\s*\{{(?:(?!\n\s*location\s).)*?)(\n\s*\}})", re.S)
-    match = pattern.search(text)
-    if not match or header_line in match.group(1):
-        return
-    replacement = match.group(1) + f"\n        {header_line}" + match.group(2)
-    text = text[:match.start()] + replacement + text[match.end():]
-    changed = True
-
-for location_pattern in [r"location\s+=\s+/build-meta\.json", r"location\s+=\s+/route-probe\.txt"]:
-    ensure_header(location_pattern, 'add_header Access-Control-Allow-Origin "*" always;')
-    ensure_header(location_pattern, 'add_header Timing-Allow-Origin "*" always;')
+    parts.append(text[last:start])
+    parts.append(next_block)
+    last = end
+parts.append(text[last:])
+if parts:
+    text = "".join(parts)
 
 if changed:
     backup_dir = Path("/etc/nginx/jato-backups")
