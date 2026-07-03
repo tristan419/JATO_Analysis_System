@@ -1656,6 +1656,22 @@ def warm_dashboard_overview_cache() -> dict[str, int]:
     return {"warmed": warmed, "failed": failed}
 
 
+def warm_dashboard_metadata_cache() -> dict[str, int]:
+    warmed = 0
+    failed = 0
+    for label, loader in (
+        ("metadata-columns", metadata_columns),
+        ("data-freshness", get_data_freshness),
+    ):
+        try:
+            loader()
+            warmed += 1
+        except Exception as exc:  # pragma: no cover - startup warming must not fail the API
+            failed += 1
+            LOGGER.warning("Dashboard metadata prewarm failed for %s: %s", label, exc)
+    return {"warmed": warmed, "failed": failed}
+
+
 def _query_grouped_time_series_impl(
     filters: dict[str, list[str]],
     grain: str,

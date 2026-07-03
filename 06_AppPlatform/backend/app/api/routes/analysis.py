@@ -20,6 +20,7 @@ from app.core.config import (
     GROUPED_TIME_SERIES_PREWARM_ENABLED,
     MAX_DETAIL_PAGE_SIZE,
     MAX_EXPORT_ROWS,
+    METADATA_PREWARM_ENABLED,
 )
 from app.core.security import optional_viewer
 from app.services.query_service import (
@@ -35,6 +36,7 @@ from app.services.query_service import (
     query_rv_finance,
     query_time_series,
     warm_dashboard_overview_cache,
+    warm_dashboard_metadata_cache,
     warm_grouped_time_series_cache,
 )
 
@@ -44,6 +46,8 @@ if GROUPED_TIME_SERIES_PREWARM_ENABLED:
     threading.Thread(target=warm_grouped_time_series_cache, daemon=True).start()
 if DASHBOARD_OVERVIEW_PREWARM_ENABLED:
     threading.Thread(target=warm_dashboard_overview_cache, daemon=True).start()
+if METADATA_PREWARM_ENABLED:
+    threading.Thread(target=warm_dashboard_metadata_cache, daemon=True).start()
 
 
 @router.post("/query")

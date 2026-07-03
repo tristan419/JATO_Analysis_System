@@ -53,5 +53,6 @@ hermes/sentinel_notification_state.json
 04_Processed_data/chroma_db/
 04_Processed_data/ops/dashboard_overview_cache/
 04_Processed_data/ops/grouped_time_series_cache/
+04_Processed_data/ops/metadata_cache/
 .gitnexus
 .hermes_server_snapshot/
