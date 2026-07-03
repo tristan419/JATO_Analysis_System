@@ -1,12 +1,12 @@
 source_code: skoda_karoq_pl_draft_scrapling
 country: 波兰
 brand: SKODA
-source_url: https://www.skoda.pl/modele/karoq
+source_url: https://www.skoda.pl/modele/karoq/skoda-karoq
 source_type: manufacturer_official
 price_semantics: base_msrp
 extractor_type: scrapling
 profile:
-  url: https://www.skoda.pl/modele/karoq
+  url: https://www.skoda.pl/modele/karoq/skoda-karoq
   headless: true
   default_currency: PLN
   default_tax_included: true
@@ -73,7 +73,7 @@ profile:
     force_review_if_powertrain_missing: true
     force_review_if_powertrain_ambiguous: true
     force_review_for_special_edition: true
-  json_script_selector: script[type="application/json"]
+  json_script_selector: script[type='application/ld+json']
   css:
     vehicle_container: body
     model: h2, h3
@@ -92,7 +92,9 @@ notes: Draft scaffold generated from country×model top30 backlog. Replace sourc
   before promoting to 07_ScrapingToolkit/sources. [URL filled from SKODA template]
   [URL language corrected] [CSS selectors applied from brand probe] [Switched to playwright_card_flow
   with skoda_trim_overview_playwright.yaml] [Reverted to scrapling — playwright preset
-  needs per-brand tuning]
+  needs per-brand tuning] [Updated to current Skoda Poland canonical model page
+  after /modele/karoq returned 404; page exposes JSON-LD priceCurrency=PLN]
+  [Switched JSON selector to application/ld+json for schema.org Product offer]
 bootstrap_meta:
   country_model_rank: 21
   suggested_scope_kind: single_model
