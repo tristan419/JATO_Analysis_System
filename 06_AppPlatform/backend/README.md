@@ -66,7 +66,7 @@ python -m pytest tests/unit
 - POST /v1/filters/options
 - POST /v1/analysis/query
 - POST /v1/analysis/time-series-grouped
-  - response header `X-JATO-Server-Cache`: `MISS`, `MEMORY`, `DISK`, or `INFLIGHT`
+  - response header `X-JATO-Server-Cache`: `MISS`, `MEMORY`, `REDIS`, `DISK`, or `INFLIGHT`
 - GET /v1/crud/items
 - POST /v1/crud/items
 - PATCH /v1/crud/items/{item_id}
@@ -119,7 +119,7 @@ python 03_Scripts/diagnostics/prewarm_grouped_time_series.py \
 ```
 
 The script prints one JSON line per request. A healthy repeated run should show
-`serverCache` as `MEMORY`, `DISK`, or `INFLIGHT` rather than `MISS`.
+`serverCache` as `MEMORY`, `REDIS`, `DISK`, or `INFLIGHT` rather than `MISS`.
 Default startup prewarm covers month/year grouped Dashboard lenses for
 `viewer`, `order_filler`, `editor`, and `admin`, including the wide country +
 powertrain filter set used by the Intl Dashboard.
