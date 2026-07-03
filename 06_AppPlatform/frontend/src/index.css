@@ -4896,6 +4896,37 @@ table.data-table tr.data-table-group-row.contains-selection td {
   padding-top: 0;
 }
 
+.dashboard-chart-runtime-placeholder {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  min-height: 260px;
+  padding: 24px;
+  border: 1px dashed var(--c-border);
+  background: linear-gradient(180deg, rgba(248, 250, 252, 0.95) 0%, rgba(241, 245, 249, 0.78) 100%);
+}
+
+.dashboard-chart-runtime-placeholder strong {
+  display: block;
+  margin-top: 6px;
+  color: var(--c-text);
+  font-size: 20px;
+  line-height: 1.2;
+}
+
+.dashboard-chart-runtime-placeholder p {
+  max-width: 520px;
+  margin: 8px 0 0;
+  color: var(--c-text-muted);
+  font-size: 13px;
+  line-height: 1.6;
+}
+
+.dashboard-chart-runtime-placeholder .btn {
+  flex: 0 0 auto;
+}
+
 @media (max-width: 1200px) {
   .dashboard-deck-card--compact-hero .dashboard-deck-hero-head {
     grid-template-columns: 1fr;
@@ -4908,6 +4939,12 @@ table.data-table tr.data-table-group-row.contains-selection td {
 
   .dashboard-deck-card--compact-hero .dashboard-deck-hero-actions--quad {
     grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .dashboard-chart-runtime-placeholder {
+    align-items: flex-start;
+    flex-direction: column;
+    min-height: 220px;
   }
 }
 
