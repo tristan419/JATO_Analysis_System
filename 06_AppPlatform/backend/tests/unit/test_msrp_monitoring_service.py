@@ -550,6 +550,11 @@ def test_build_sweden_swiss_demo_events_returns_demo_only_cross_country_payload(
     assert peugeot_signal["offerValidUntil"] == "2026-08-31"
     assert peugeot_signal["matchStatus"] == "pending_current_price_match"
     tiguan = next(event for event in payload["events"] if event["eventId"] == "VOLKSWAGEN|TIGUAN|ICE")
+    assert tiguan["sales"]["source"] == "sweden_swiss_top30_rolling12"
+    assert tiguan["sales"]["totalSales"] == 5084
+    assert tiguan["sales"]["latestSalesLabel"] == "2026 Jan"
+    assert tiguan["sales"]["countryLabels"] == ["Switzerland"]
+    assert tiguan["sales"]["warnings"] == ["sweden_swiss_top30_rolling12_sales_only"]
     tiguan_switzerland = tiguan["timeline"][0]
     assert tiguan_switzerland["countryLabel"] == "Switzerland"
     assert tiguan_switzerland["evidence"]["demoBackfilled"] is True
@@ -622,6 +627,11 @@ def test_build_sweden_swiss_demo_events_filters_swiss_alias(
     assert payload["summary"]["offerSignalCount"] == 1
     assert payload["summary"]["eventCount"] == 12
     assert payload["summary"]["timelineEventCount"] == 14
+    assert {
+        tuple(event["sales"]["countryLabels"])
+        for event in payload["events"]
+        if event.get("sales") and event["sales"].get("totalSales")
+    } == {("Switzerland",)}
     assert [signal["signalId"] for signal in payload["offerSignals"]] == [
         "ch-2026-vw-troc-premiums-official-offer"
     ]
