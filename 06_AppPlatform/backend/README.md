@@ -124,7 +124,7 @@ Default startup prewarm covers month/year grouped Dashboard lenses for
 `viewer`, `order_filler`, `editor`, and `admin`, including the wide country +
 powertrain filter set used by the Intl Dashboard.
 `POST /v1/analysis/overview` uses the same server-cache pattern and returns
-`X-JATO-Server-Cache: MISS|MEMORY|DISK`; startup prewarm covers the empty
+`X-JATO-Server-Cache: MISS|MEMORY|REDIS|DISK`; startup prewarm covers the empty
 Dashboard and the same wide country + powertrain filter set for each role.
 Dashboard metadata endpoints also prewarm and persist `GET /v1/metadata/columns`
 and `GET /v1/analysis/data-freshness` snapshots using the parquet dataset token,

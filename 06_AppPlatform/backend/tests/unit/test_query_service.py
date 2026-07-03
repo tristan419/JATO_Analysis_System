@@ -212,6 +212,69 @@ def test_query_overview_uses_persistent_cache(
     assert list(tmp_path.glob("*.json"))
 
 
+def test_query_overview_uses_redis_cache_by_role_scope(
+    monkeypatch,
+) -> None:
+    calls = 0
+    redis = _FakeRedis()
+
+    monkeypatch.setattr(query_service, "get_redis_client", lambda: redis)
+    monkeypatch.setattr(
+        query_service.repo,
+        "current_dataset_token",
+        lambda: "dataset-a",
+    )
+
+    def fake_query_overview_impl(**kwargs) -> dict:
+        nonlocal calls
+        if kwargs.get("filters") == {"Country": ["HU"]}:
+            calls += 1
+        return {
+            "route": "dynamic-aggregate",
+            "kpis": {"totalRows": 10},
+            "monthSeries": [],
+            "yearSeries": [],
+        }
+
+    monkeypatch.setattr(
+        query_service,
+        "_query_overview_impl",
+        fake_query_overview_impl,
+    )
+
+    first = query_service.query_overview_with_cache_state(
+        filters={"Country": ["HU"]},
+        prefer_precomputed=True,
+        top_n=10,
+        cache_scope="viewer",
+    )
+    query_service._clear_dashboard_overview_cache()
+    second = query_service.query_overview_with_cache_state(
+        filters={"Country": ["HU"]},
+        prefer_precomputed=True,
+        top_n=10,
+        cache_scope="viewer",
+    )
+    query_service._clear_dashboard_overview_cache()
+    third = query_service.query_overview_with_cache_state(
+        filters={"Country": ["HU"]},
+        prefer_precomputed=True,
+        top_n=10,
+        cache_scope="admin",
+    )
+
+    assert first.cache_state == "MISS"
+    assert second.cache_state == "REDIS"
+    assert third.cache_state == "MISS"
+    assert calls == 2
+    assert first.payload == second.payload == third.payload
+    assert redis.ttls
+    assert all(
+        ttl == query_service.DASHBOARD_OVERVIEW_CACHE_TTL_SECONDS
+        for ttl in redis.ttls.values()
+    )
+
+
 def test_warm_dashboard_overview_cache_includes_configured_filter_sets(
     monkeypatch,
 ) -> None:
