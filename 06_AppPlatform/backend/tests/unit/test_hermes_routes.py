@@ -256,6 +256,42 @@ class TestSentinelAndDeploy:
         assert data["status"]["runId"] == "msrp-dryrun-20260612-070207"
         assert data["findings"][0]["type"] == "dryrun_running_without_aggregate"
 
+    def test_msrp_dryrun_history_falls_back_to_latest_report(self, client, tmp_path):
+        artifact_dir = tmp_path / "03_Scripts" / "diagnostics" / "artifacts"
+        artifact_dir.mkdir(parents=True)
+        report = _make_msrp_v3_report("msrp-dryrun-20260624-142640")
+        report["batch"] = "fr"
+        report["generatedAt"] = "2026-06-24T14:26:40Z"
+        report["summary"].update({
+            "total": 27,
+            "pass": 19,
+            "empty": 1,
+            "fail": 7,
+            "errors": 0,
+            "passPct": 70.4,
+            "status": "degraded",
+            "gateStatus": "allowed",
+        })
+        report["expectedCountries"] = ["fr"]
+        report["observedCountries"] = ["fr"]
+        report["missingCountries"] = []
+        _write_json(artifact_dir / "dryrun_report.json", report)
+
+        with patch("app.api.routes.hermes.PROJECT_ROOT", tmp_path):
+            resp = client.get("/hermes/msrp-dryrun-history")
+
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["schemaVersion"] == "msrp_dryrun_runs_index_v1"
+        assert data["latestRunId"] == "msrp-dryrun-20260624-142640"
+        assert len(data["runs"]) == 1
+        run = data["runs"][0]
+        assert run["runId"] == "msrp-dryrun-20260624-142640"
+        assert run["batch"] == "fr"
+        assert run["passPct"] == 70.4
+        assert run["expectedCountryCount"] == 1
+        assert run["artifactPath"] == "03_Scripts/diagnostics/artifacts/dryrun_report.json"
+
     def test_msrp_country_progress_prefers_new_active_partial_over_stale_complete_run(
         self,
         client,

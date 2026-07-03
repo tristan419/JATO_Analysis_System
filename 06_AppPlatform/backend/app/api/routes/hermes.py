@@ -128,6 +128,48 @@ def _sort_msrp_runs_index(index_data: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _msrp_runs_index_from_report(report: dict[str, Any] | None) -> dict[str, Any] | None:
+    if not report or report.get("schemaVersion") != "msrp_dryrun_report_v3":
+        return None
+    run_id = str(report.get("runId") or "").strip()
+    if not run_id:
+        return None
+    summary = report.get("summary") if isinstance(report.get("summary"), dict) else {}
+    generated_at = report.get("generatedAt") or report.get("generatedAtUtc")
+    run_entry = {
+        "runId": run_id,
+        "mode": "dryrun",
+        "batch": report.get("batch", ""),
+        "startedAt": generated_at,
+        "finishedAt": generated_at,
+        "status": summary.get("status", "unknown"),
+        "gateStatus": summary.get("gateStatus"),
+        "gateThreshold": summary.get("gateThreshold"),
+        "passPct": summary.get("passPct", 0.0),
+        "total": summary.get("total", 0),
+        "pass": summary.get("pass", 0),
+        "empty": summary.get("empty", 0),
+        "fail": summary.get("fail", 0),
+        "errors": summary.get("errors", 0),
+        "financeObservationCandidates": summary.get("financeObservationCandidates", 0),
+        "financeMonthlyPaymentCount": summary.get("financeMonthlyPaymentCount", 0),
+        "expectedCountryCount": len(report.get("expectedCountries") or []),
+        "observedCountryCount": len(report.get("observedCountries") or []),
+        "missingCountryCount": len(report.get("missingCountries") or []),
+        "artifactPath": "03_Scripts/diagnostics/artifacts/dryrun_report.json",
+        "latestArtifactPath": "03_Scripts/diagnostics/artifacts/dryrun_report.json",
+        "reportMdPath": f"hermes/reports/msrp_country_progress_{run_id}.md",
+        "runDir": "",
+        "logFile": "",
+    }
+    return {
+        "schemaVersion": "msrp_dryrun_runs_index_v1",
+        "updatedAt": generated_at,
+        "latestRunId": run_id,
+        "runs": [run_entry],
+    }
+
+
 def _msrp_artifacts_dir() -> Path:
     return PROJECT_ROOT / "03_Scripts" / "diagnostics" / "artifacts"
 
@@ -1286,6 +1328,9 @@ def hermes_msrp_dryrun_history(_=Depends(require_min_role("viewer"))) -> dict:
     """Return the MSRP dryrun runs index (history of all runs)."""
     path = PROJECT_ROOT / "03_Scripts" / "diagnostics" / "artifacts" / "dryrun_runs_index.json"
     if not path.is_file():
+        fallback_index = _msrp_runs_index_from_report(_load_msrp_dryrun_report())
+        if fallback_index:
+            return fallback_index
         return {
             "schemaVersion": "msrp_dryrun_runs_index_v1",
             "updatedAt": None,
