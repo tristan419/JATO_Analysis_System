@@ -392,6 +392,39 @@ function getDeckLayoutStyle(
   } as React.CSSProperties;
 }
 
+function DeferredDashboardDecksPlaceholder({ onActivate }: { onActivate: () => void }) {
+  return (
+    <div className="card analysis-deck-card dashboard-deck-card--compact-hero">
+      <div className="dashboard-hero-head dashboard-deck-hero-head">
+        <div className="dashboard-hero-copy dashboard-deck-hero-copy">
+          <span className="panel-kicker">04-06 / Deferred Analysis</span>
+          <h3>Advanced decks preparing</h3>
+          <p>高级分析、单车型版型和竞品定位模块正在准备。</p>
+        </div>
+        <div className="dashboard-hero-actions dashboard-deck-hero-actions dashboard-deck-hero-actions--pair">
+          <div className="hero-meta-block dashboard-deck-hero-stat">
+            <span className="hero-meta-label">Startup</span>
+            <strong className="hero-meta-value">FAST</strong>
+            <span className="hero-meta-subvalue">首屏优先展示筛选和趋势</span>
+          </div>
+          <div className="hero-meta-block dashboard-deck-hero-stat">
+            <span className="hero-meta-label">Heavy decks</span>
+            <strong className="hero-meta-value">DEFERRED</strong>
+            <span className="hero-meta-subvalue">空闲后自动挂载</span>
+          </div>
+        </div>
+      </div>
+      <div className="analysis-chart-block analysis-chart-block--compact dashboard-deck-hero-surface">
+        <div className="dashboard-cta-row">
+          <button type="button" className="btn btn-secondary" onClick={onActivate}>
+            立即加载高级分析模块
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 /* ── filter component ──────────────────────────────── */
 /* ── Main Dashboard ────────────────────────────────── */
 export function DashboardPage() {
@@ -2092,6 +2125,8 @@ export function DashboardPage() {
           </div>
         </div>
 
+        {heavyQueriesReady ? (
+          <>
         {/* ── Advanced analysis ───────────────────────── */}
         <div
           className="card analysis-deck-card dashboard-advanced-card dashboard-deck-card--compact-hero"
@@ -3321,6 +3356,10 @@ export function DashboardPage() {
           {pmItems.length===0 && !pmLoading && <div className="chart-empty">{"\u8f93\u5165\u76ee\u6807\u8f66\u578b\u53c2\u6570\u6216\u76f4\u63a5\u70b9\u51fb\u300c\u52a0\u8f7d\u5b9a\u4f4d\u56fe\u300d\u67e5\u770b\u5f53\u524d\u7b5b\u9009\u8fb9\u754c\u5185\u5b9a\u4ef7"}</div>}
           </div>
         </div>
+          </>
+        ) : (
+          <DeferredDashboardDecksPlaceholder onActivate={releaseHeavyQueries} />
+        )}
 
         <div className="card analysis-deck-card analysis-route-card dashboard-deck-card--compact-hero">
           <div className="dashboard-hero-head dashboard-deck-hero-head">
