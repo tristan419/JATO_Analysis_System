@@ -94,9 +94,10 @@ def test_query_overview_reports_cache_state_and_role_scope(
         lambda: "dataset-a",
     )
 
-    def fake_query_overview_impl(**_kwargs) -> dict:
+    def fake_query_overview_impl(**kwargs) -> dict:
         nonlocal calls
-        calls += 1
+        if kwargs.get("filters") == {"Country": ["HU"]}:
+            calls += 1
         return {
             "route": "dynamic-aggregate",
             "kpis": {"totalRows": 10},
@@ -158,9 +159,10 @@ def test_query_overview_uses_persistent_cache(
         lambda: "dataset-a",
     )
 
-    def fake_query_overview_impl(**_kwargs) -> dict:
+    def fake_query_overview_impl(**kwargs) -> dict:
         nonlocal calls
-        calls += 1
+        if kwargs.get("filters") == {"Country": ["HU"]}:
+            calls += 1
         return {
             "route": "dynamic-aggregate",
             "kpis": {"totalRows": 10},
