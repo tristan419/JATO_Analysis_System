@@ -157,13 +157,14 @@
 
         function redirectTo(target, decision) {
           var nextHost = targetHost(target);
-          if (nextHost === host) return;
+          if (nextHost === host) return false;
           var url = new URL(window.location.href);
           url.protocol = "https:";
           url.hostname = nextHost;
           url.searchParams.set("routeChecked", "1");
           addDecisionTransferParams(url, target, decision);
           window.location.replace(url.toString());
+          return true;
         }
 
         function markProbeInFlight() {
@@ -361,8 +362,10 @@
             cnFrontendBuildId: cn.frontendBuildId || "",
             intlFrontendBuildId: intl.frontendBuildId || ""
           });
-          redirectTo(nextTarget, autoPayload);
-          clearProbeInFlight();
+          var didRedirect = redirectTo(nextTarget, autoPayload);
+          if (!didRedirect) {
+            clearProbeInFlight();
+          }
         }).catch(function () {
           clearProbeInFlight();
         });

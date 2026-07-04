@@ -22,4 +22,12 @@ describe("route bootstrap script", () => {
     expect(indexHtml).toContain("www probe succeeded and the browser has China-local signals; keep the domestic route");
     expect(indexHtml).not.toContain("intl.ms + marginMs < cn.ms");
   });
+
+  it("keeps the app boot blocked while a cross-host redirect is pending", () => {
+    expect(indexHtml).toContain("if (nextHost === host) return false;");
+    expect(indexHtml).toContain("return true;");
+    expect(indexHtml).toContain("var didRedirect = redirectTo(nextTarget, autoPayload);");
+    expect(indexHtml).toContain("if (!didRedirect) {");
+    expect(indexHtml).toContain("clearProbeInFlight();");
+  });
 });

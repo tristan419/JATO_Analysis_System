@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Iterator
 from pathlib import Path
 from typing import Any
 
@@ -19,13 +20,14 @@ from app.services.query_service import (
 
 
 @pytest.fixture
-def client() -> TestClient:
+def client() -> Iterator[TestClient]:
     app = FastAPI()
     app.include_router(analysis_routes.router, prefix=API_PREFIX)
     app.include_router(assistant_routes.router, prefix=API_PREFIX)
     app.include_router(market_scan_routes.router, prefix=API_PREFIX)
     app.include_router(metadata_routes.router, prefix=API_PREFIX)
-    return TestClient(app)
+    with TestClient(app) as test_client:
+        yield test_client
 
 
 def _market_scan_contract_payload() -> dict[str, Any]:

@@ -218,32 +218,18 @@ jobs:
             -o HostKeyAlias="$SSH_HOST"
             -i ~/.ssh/github_actions_tencent_key
           )
-          SCP_COMMON_OPTS=(
-            -P "$SSH_PORT"
-            -o BatchMode=yes
-            -o StrictHostKeyChecking=no
-            -o UserKnownHostsFile=/dev/null
-            -o ConnectTimeout=20
-            -o ConnectionAttempts=2
-            -o ServerAliveInterval=10
-            -o ServerAliveCountMax=2
-            -o IPQoS=none
-            -o HostKeyAlias="$SSH_HOST"
-            -i ~/.ssh/github_actions_tencent_key
-          )
-
           if ! timeout 120s ssh "${SSH_COMMON_OPTS[@]}" "$SSH_USER@$SSH_CONNECT_HOST" \
             "rm -f '$REMOTE_ARCHIVE_TMP' && : > '$REMOTE_ARCHIVE_TMP'"; then
             fallback_to_sparse_deploy "Remote archive preparation failed"
             exit 0
           fi
 
-          echo "[INFO] Uploading deploy archive with scp (${ARCHIVE_BYTES} bytes)"
-          if ! timeout 900s scp "${SCP_COMMON_OPTS[@]}" \
-            "$ARCHIVE_PATH" "$SSH_USER@$SSH_CONNECT_HOST:$REMOTE_ARCHIVE_TMP"; then
+          echo "[INFO] Uploading deploy archive over ssh stream (${ARCHIVE_BYTES} bytes)"
+          if ! timeout 900s ssh "${SSH_COMMON_OPTS[@]}" "$SSH_USER@$SSH_CONNECT_HOST" \
+            "cat > '$REMOTE_ARCHIVE_TMP'" < "$ARCHIVE_PATH"; then
             timeout 120s ssh "${SSH_COMMON_OPTS[@]}" "$SSH_USER@$SSH_CONNECT_HOST" \
               "rm -f '$REMOTE_ARCHIVE_TMP'" || true
-            fallback_to_sparse_deploy "Deploy archive scp upload failed or timed out"
+            fallback_to_sparse_deploy "Deploy archive ssh stream upload failed or timed out"
             exit 0
           fi
 
@@ -311,19 +297,6 @@ jobs:
             -o ServerAliveCountMax=2
             -o IPQoS=none
           )
-          SCP_COMMON_OPTS=(
-            -P "$SSH_PORT"
-            -o PreferredAuthentications=password
-            -o PubkeyAuthentication=no
-            -o StrictHostKeyChecking=no
-            -o UserKnownHostsFile=/dev/null
-            -o ConnectTimeout=20
-            -o ConnectionAttempts=2
-            -o ServerAliveInterval=10
-            -o ServerAliveCountMax=2
-            -o IPQoS=none
-          )
-
           if ! timeout 120s sshpass -p "$SSH_PASSWORD" \
             ssh "${SSH_COMMON_OPTS[@]}" "$SSH_USER@$SSH_HOST" \
             "rm -f '$REMOTE_ARCHIVE_TMP' && : > '$REMOTE_ARCHIVE_TMP'"; then
@@ -331,13 +304,14 @@ jobs:
             exit 0
           fi
 
-          echo "[INFO] Uploading deploy archive with scp (${ARCHIVE_BYTES} bytes)"
+          echo "[INFO] Uploading deploy archive over ssh stream (${ARCHIVE_BYTES} bytes)"
           if ! timeout 900s sshpass -p "$SSH_PASSWORD" \
-            scp "${SCP_COMMON_OPTS[@]}" "$ARCHIVE_PATH" "$SSH_USER@$SSH_HOST:$REMOTE_ARCHIVE_TMP"; then
+            ssh "${SSH_COMMON_OPTS[@]}" "$SSH_USER@$SSH_HOST" \
+            "cat > '$REMOTE_ARCHIVE_TMP'" < "$ARCHIVE_PATH"; then
             timeout 120s sshpass -p "$SSH_PASSWORD" \
               ssh "${SSH_COMMON_OPTS[@]}" "$SSH_USER@$SSH_HOST" \
               "rm -f '$REMOTE_ARCHIVE_TMP'" || true
-            fallback_to_sparse_deploy "Deploy archive scp upload failed or timed out"
+            fallback_to_sparse_deploy "Deploy archive ssh stream upload failed or timed out"
             exit 0
           fi
 
