@@ -322,36 +322,10 @@
           var profile = clientRouteProfile();
           var marginMs = profile.prefersChinaRoute ? chinaLocalRedirectMarginMs : redirectMarginMs;
           var currentTarget = host === intlHost ? "intl" : "cn";
-          var currentProbe = currentTarget === "intl" ? intl : cn;
           var nextTarget = currentTarget;
           var reason = "Both route probes failed; stay on the current host";
           function routeLabel(target) {
             return target === "intl" ? "intl" : "www";
-          }
-          function probeFor(target) {
-            return target === "intl" ? intl : cn;
-          }
-          function buildCompatible(target) {
-            if (target === currentTarget) return true;
-            var targetProbe = probeFor(target);
-            if (currentProbe.frontendBuildId && targetProbe.frontendBuildId) {
-              return currentProbe.frontendBuildId === targetProbe.frontendBuildId;
-            }
-            return Boolean(currentProbe.buildCommit && targetProbe.buildCommit && currentProbe.buildCommit === targetProbe.buildCommit);
-          }
-          function buildLabel(probeResult) {
-            if (probeResult.frontendBuildId) return "frontend " + probeResult.frontendBuildId.slice(0, 12);
-            if (probeResult.buildCommit) return "commit " + probeResult.buildCommit.slice(0, 12);
-            return "unknown";
-          }
-          function applyBuildGuard(target) {
-            if (buildCompatible(target)) return target;
-            var targetProbe = probeFor(target);
-            reason = routeLabel(target) + " build " + buildLabel(targetProbe)
-              + " is not verified against current " + routeLabel(currentTarget)
-              + " build " + buildLabel(currentProbe)
-              + "; stay on " + routeLabel(currentTarget) + " to avoid stale UI";
-            return currentTarget;
           }
           if (cn.ok && intl.ok) {
             if (profile.prefersChinaRoute) {
@@ -378,7 +352,6 @@
             nextTarget = "cn";
             reason = "intl probe failed and www probe succeeded";
           }
-          nextTarget = applyBuildGuard(nextTarget);
           var autoPayload = saveDecision(decisionKey, nextTarget, autoTtlMs, {
             source: "auto",
             reason: reason,

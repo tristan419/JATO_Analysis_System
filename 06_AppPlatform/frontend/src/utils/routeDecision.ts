@@ -394,37 +394,6 @@ export async function probeRoute(target: RouteTarget): Promise<ProbeResult> {
   }
 }
 
-function buildCompatible(
-  results: Record<RouteTarget, ProbeResult>,
-  currentTarget: RouteTarget | null,
-  nextTarget: RouteTarget,
-): boolean {
-  if (!currentTarget || currentTarget === nextTarget) return true;
-  const currentBuildId = results[currentTarget].frontendBuildId;
-  const nextBuildId = results[nextTarget].frontendBuildId;
-  if (currentBuildId && nextBuildId) {
-    return currentBuildId === nextBuildId;
-  }
-  const currentCommit = results[currentTarget].buildCommit;
-  const nextCommit = results[nextTarget].buildCommit;
-  return Boolean(currentCommit && nextCommit && currentCommit === nextCommit);
-}
-
-function buildLabel(result: ProbeResult): string {
-  if (result.frontendBuildId) return `frontend ${result.frontendBuildId.slice(0, 12)}`;
-  if (result.buildCommit) return `commit ${result.buildCommit.slice(0, 12)}`;
-  return "unknown";
-}
-
-function buildIncompatibilityReason(
-  results: Record<RouteTarget, ProbeResult>,
-  currentTarget: RouteTarget | null,
-  nextTarget: RouteTarget,
-): string {
-  const safeCurrentTarget = currentTarget ?? "cn";
-  return `${routeLabel(nextTarget)} build ${buildLabel(results[nextTarget])} is not verified against current ${routeLabel(safeCurrentTarget)} build ${buildLabel(results[safeCurrentTarget])}; keep ${routeLabel(safeCurrentTarget)} to avoid stale UI.`;
-}
-
 export function chooseAutoRoute(
   results: Record<RouteTarget, ProbeResult>,
   currentTarget: RouteTarget | null,
@@ -434,15 +403,6 @@ export function chooseAutoRoute(
   const intlOk = results.intl.status === "ok";
   const marginMs = REDIRECT_MARGIN_MS;
   const currentOrCn = currentTarget ?? "cn";
-  const choose = (target: RouteTarget, reason: string): { target: RouteTarget; reason: string } => {
-    if (!buildCompatible(results, currentTarget, target)) {
-      return {
-        target: currentOrCn,
-        reason: buildIncompatibilityReason(results, currentTarget, target),
-      };
-    }
-    return { target, reason };
-  };
   if (!cnOk && !intlOk) {
     if (results.cn.status === "running" || results.intl.status === "running") return null;
     return {
@@ -451,24 +411,36 @@ export function chooseAutoRoute(
     };
   }
   if (cnOk && !intlOk) {
-    return choose("cn", "intl probe failed and www probe succeeded.");
+    return { target: "cn", reason: "intl probe failed and www probe succeeded." };
   }
   if (intlOk && !cnOk) {
-    return choose("intl", "www probe failed and intl probe succeeded.");
+    return { target: "intl", reason: "www probe failed and intl probe succeeded." };
   }
   const cnMs = results.cn.ms ?? PROBE_TIMEOUT_MS;
   const intlMs = results.intl.ms ?? PROBE_TIMEOUT_MS;
   if (profile?.prefersChinaRoute) {
-    return choose("cn", `www probe succeeded and the browser has China-local signals; keep the domestic route even if intl probes faster (${profile.reason}).`);
+    return {
+      target: "cn",
+      reason: `www probe succeeded and the browser has China-local signals; keep the domestic route even if intl probes faster (${profile.reason}).`,
+    };
   }
   const deltaMs = Math.abs(cnMs - intlMs);
   if (deltaMs <= marginMs) {
-    return choose(currentOrCn, `Both probes are within ${marginMs} ms; keep ${routeLabel(currentOrCn)} to avoid route churn.`);
+    return {
+      target: currentOrCn,
+      reason: `Both probes are within ${marginMs} ms; keep ${routeLabel(currentOrCn)} to avoid route churn.`,
+    };
   }
   if (intlMs < cnMs) {
-    return choose("intl", `intl is faster by ${cnMs - intlMs} ms, above the ${marginMs} ms measured-route margin.`);
+    return {
+      target: "intl",
+      reason: `intl is faster by ${cnMs - intlMs} ms, above the ${marginMs} ms measured-route margin.`,
+    };
   }
-  return choose("cn", `www is faster by ${intlMs - cnMs} ms, above the ${marginMs} ms measured-route margin.`);
+  return {
+    target: "cn",
+    reason: `www is faster by ${intlMs - cnMs} ms, above the ${marginMs} ms measured-route margin.`,
+  };
 }
 
 export function createAutoRouteDecision(
