@@ -1,18 +1,39 @@
 source_code: volkswagen_taigo_pt_draft_scrapling
 country: 葡萄牙
 brand: VOLKSWAGEN
-source_url: https://todo.invalid/pt/volkswagen/taigo
+source_url: https://configurador.volkswagen.pt/cc-pt/pt_PT_VW22/V/models
 source_type: manufacturer_official
 price_semantics: base_msrp
-extractor_type: playwright
-profile_preset: ../_shared/presets/volkswagen_configurator_trim_overview_playwright.yaml
+extractor_type: http_json
 profile:
-  url: https://todo.invalid/pt/volkswagen/taigo
+  url: https://configurador.volkswagen.pt/cc-pt/be/pt_PT_VW22/api/v2/modelgroup?brand=V
+  method: GET
+  headers:
+    Accept-Language: pt-PT,pt;q=0.9,en;q=0.8
   default_currency: EUR
   default_tax_included: true
-  default_price_label: MSRP
+  default_price_label: PVPR incl. IVA
   fixed_model: TAIGO
   fixed_jato_model: TAIGO
+  copy_trim_to_jato_trim: true
+  match_confidence: 0.84
+  match_status: review_required
+  match_reason:
+    kind: official_configurator_modelgroup_api
+    source: volkswagen_pt_configurator_modelgroup_api
+    note: Official Volkswagen Portugal configurator modelgroup API exposes the Taigo gross price; the model page disclaimer defines prices as PVPR for Portugal Continental including taxes. Campaign badge prices are intentionally ignored, and the source remains review_required because the modelgroup price is an entry price without trim-level detail.
+  filters:
+  - path: name
+    equals: TAIGO
+  field_mapping:
+    vehicles_path: modelgroups
+    model: name
+    trim: name
+    price: price.gross
+    currency: ''
+    tax_included: ''
+    price_label: ''
+    availability: additionalText
   structured_fields:
     powertrain_rules:
     - key: powertrain_ice
@@ -32,7 +53,9 @@ schedule:
 notes: Draft scaffold generated from country×model top30 backlog. Replace source_url,
   profile.url, selectors, currency, price label, and the single-model placeholders
   before promoting to 07_ScrapingToolkit/sources. [Switched to playwright_card_flow
-  with volkswagen_configurator_trim_overview_playwright.yaml]
+  with volkswagen_configurator_trim_overview_playwright.yaml] [Replaced todo.invalid
+  with deterministic http_json over Volkswagen Portugal's official configurator
+  modelgroup API, filtering the Taigo gross PVPR and ignoring campaign badges.]
 bootstrap_meta:
   country_model_rank: 26
   suggested_scope_kind: single_model
