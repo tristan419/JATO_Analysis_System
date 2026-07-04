@@ -1245,6 +1245,25 @@ function niceTicks(min: number, max: number, count: number): number[] {
   return ticks;
 }
 
+function spacedTicks(
+  min: number,
+  max: number,
+  count: number,
+  scale: (value: number) => number,
+  minSpacingPx: number,
+): number[] {
+  const selected: Array<{ tick: number; y: number }> = [];
+  [...niceTicks(min, max, count)]
+    .sort((left, right) => scale(left) - scale(right))
+    .forEach((tick) => {
+      const y = scale(tick);
+      if (selected.every((item) => Math.abs(item.y - y) >= minSpacingPx)) {
+        selected.push({ tick, y });
+      }
+    });
+  return selected.map((item) => item.tick).sort((left, right) => left - right);
+}
+
 function timelineItemMatchesDirection(item: MsrpMonitoringTimelineEvent, direction: DirectionFilter): boolean {
   if (direction === "all") {
     return true;
@@ -2472,7 +2491,10 @@ function ChartPoint({
   const tooltipX = labelSide === "left" || x > CHART_WIDTH - tooltipWidth - 24
     ? Math.max(8, x - tooltipWidth - anchorRadius - 16)
     : Math.min(CHART_WIDTH - tooltipWidth - 8, x + anchorRadius + 16);
-  const tooltipY = Math.max(10, Math.min(CHART_HEIGHT - tooltipHeight - 10, Math.min(oldY, currentY) - 22));
+  const tooltipTop = currentY > CHART_HEIGHT * 0.56
+    ? CHART_MARGIN.top + 10
+    : Math.max(CHART_MARGIN.top + 10, currentY + anchorRadius + 18);
+  const tooltipY = Math.max(10, Math.min(CHART_HEIGHT - tooltipHeight - CHART_MARGIN.bottom, tooltipTop));
   return (
     <g
       className={`msrp-monitor-point ${movementClass} ${auditClass(event.auditPriority)}${unanchored ? " is-unanchored" : ""}${hovered ? " is-hovered" : ""}${showLabel || selected ? " is-label-visible" : ""}`}
@@ -2503,9 +2525,7 @@ function ChartPoint({
             y1={segment.oldY}
             y2={segment.currentY}
             opacity={segment.opacity}
-          >
-            <title>{segment.label}</title>
-          </line>
+          />
         ))}
       </g>
       <line className={`msrp-monitor-drop-line ${movementClass}`} x1={x} x2={x} y1={oldY} y2={currentY} />
@@ -2535,7 +2555,6 @@ function ChartPoint({
         r={dotRadius}
         fill={event.powertrainColor}
       />
-      <title>{`${eventLabel(event)} · ${formatCurrency(event.medianOldMsrpEur)} to ${formatCurrency(event.medianCurrentMsrpEur)} · ${chartSalesLabel(event)} · ${event.affectedCountryCount} countries`}</title>
       <g className="msrp-monitor-point-label-group" aria-hidden="true">
         <text className="msrp-monitor-point-label" x={labelX} y={currentY + 2} textAnchor={labelSide === "left" ? "end" : "start"}>
           {eventLabel(event)}
@@ -2909,7 +2928,7 @@ function MsrpEventChart({
   const scaleX = (value: number) => CHART_MARGIN.left + ((value - xMin) / Math.max(1, xMax - xMin)) * anchoredInnerWidth;
   const scaleY = (value: number) => CHART_MARGIN.top + (1 - (value - yMin) / Math.max(1, yMax - yMin)) * innerHeight;
   const xTicks = niceTicks(xMin, xMax, 6);
-  const yTicks = niceTicks(yMin, yMax, 6);
+  const yTicks = spacedTicks(yMin, yMax, 6, scaleY, 42);
   const maxSales = Math.max(0, ...priceChartEvents.map(salesVolume));
   const smartLabelIds = smartChartLabelEventIds(priceChartEvents, maxSales, showSalesLayer);
 
