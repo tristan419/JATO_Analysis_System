@@ -64,9 +64,10 @@ const DashboardExportPanel = lazy(() =>
   import("../components/ExportPanel").then((module) => ({ default: module.ExportPanel }))
 );
 
-const DASHBOARD_DEFERRED_FETCH_DELAY_MS = 6_000;
+const DASHBOARD_DEFERRED_FETCH_DELAY_MS = 10_000;
 const DASHBOARD_CHART_RUNTIME_IDLE_TIMEOUT_MS = 4_000;
-const DASHBOARD_CHART_RUNTIME_MIN_DELAY_MS = 3_500;
+const DASHBOARD_CHART_RUNTIME_MIN_DELAY_MS = 12_000;
+const DASHBOARD_HEAVY_QUERY_MIN_DELAY_MS = 10_000;
 const DEFAULT_ADVANCED_EXPORT: ExportSettings = {
   ...DEFAULT_EXPORT,
   dataLabelOverlapStrategy: "smart_top",
@@ -535,19 +536,21 @@ export function DashboardPage() {
   const releaseHeavyQueries = useCallback(() => {
     setHeavyQueriesReady(true);
   }, []);
-  const selectTsMode = useCallback((nextMode: "总和" | "分组") => {
+  const releaseDashboardChartWork = useCallback(() => {
     releaseChartRuntime();
     releaseHeavyQueries();
-    setTsMode(nextMode);
   }, [releaseChartRuntime, releaseHeavyQueries]);
+  const selectTsMode = useCallback((nextMode: "总和" | "分组") => {
+    releaseDashboardChartWork();
+    setTsMode(nextMode);
+  }, [releaseDashboardChartWork]);
   const selectChartType = useCallback((nextType: "line" | "bar" | "rank") => {
-    releaseChartRuntime();
-    releaseHeavyQueries();
+    releaseDashboardChartWork();
     setChartType(nextType);
     if (nextType === "rank" && tsMode === "总和") {
       setTsMode("分组");
     }
-  }, [releaseChartRuntime, releaseHeavyQueries, tsMode]);
+  }, [releaseDashboardChartWork, tsMode]);
 
   /* advanced charts — honor URL params for deep-links from Copilot */
   const urlParams = useMemo(() => new URLSearchParams(currentSearch), [currentSearch]);
@@ -773,9 +776,12 @@ export function DashboardPage() {
 
   useEffect(() => {
     if (heavyQueriesReady || !filtersReady || loading || columns.length === 0) return;
-    return scheduleDashboardIdlePreload(() => {
-      setHeavyQueriesReady(true);
-    });
+    return scheduleDashboardDelayedIdlePreload(
+      () => {
+        setHeavyQueriesReady(true);
+      },
+      DASHBOARD_HEAVY_QUERY_MIN_DELAY_MS,
+    );
   }, [columns.length, filtersReady, heavyQueriesReady, loading]);
 
   useEffect(() => {
@@ -1988,7 +1994,7 @@ export function DashboardPage() {
           })()}
 
           {!chartRuntimeReady && (
-            <DeferredDashboardChartPlaceholder onActivate={releaseChartRuntime} />
+            <DeferredDashboardChartPlaceholder onActivate={releaseDashboardChartWork} />
           )}
 
           {/* single-series */}
