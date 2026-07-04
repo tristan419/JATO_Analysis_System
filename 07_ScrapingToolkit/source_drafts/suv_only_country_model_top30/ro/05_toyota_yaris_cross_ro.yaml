@@ -1,112 +1,45 @@
 source_code: toyota_yaris_cross_ro_draft_scrapling
 country: 罗马尼亚
 brand: TOYOTA
-source_url: https://todo.invalid/ro/toyota/yaris_cross
-source_type: manufacturer_official
+source_url: https://scene7.toyota.eu/is/content/toyotaeurope/toyota/ro/nmsc/brosuri-liste-pret/liste-de-pret/Preturi_Yaris_Cross_Hybrid.pdf
+source_type: official_price_list
 price_semantics: base_msrp
-extractor_type: scrapling
+extractor_type: pdf_text
 profile:
-  url: https://todo.invalid/ro/toyota/yaris_cross
-  headless: true
-  default_currency: RON
+  url: https://scene7.toyota.eu/is/content/toyotaeurope/toyota/ro/nmsc/brosuri-liste-pret/liste-de-pret/Preturi_Yaris_Cross_Hybrid.pdf
+  timeout_seconds: 60
+  retry_attempts: 1
+  retry_delay_seconds: 1
+  prefer_curl_download: true
+  browser_download_fallback: true
+  default_currency: EUR
   default_tax_included: true
-  default_price_label: MSRP
+  default_price_label: Pret de lista recomandat (cu TVA)
   fixed_model: YARIS CROSS
   fixed_jato_model: YARIS CROSS
-  fixed_jato_powertrain: null
-  model_rules: []
-  skip_if_model_unmapped: false
   copy_trim_to_jato_trim: true
-  confidence_rules:
-    base: 0.2
-    fixed_model_bonus: 0.18
-    fixed_jato_model_bonus: 0.12
-    model_rule_bonus: 0.12
-    trim_present_bonus: 0.1
-    copy_trim_to_jato_trim_bonus: 0.09
-    parsed_price_text_bonus: 0.03
-    currency_bonus: 0.01
-    price_label_bonus: 0.02
-    trim_keyword_bonuses: []
-    price_band_bonuses:
-    - key: price_band_entry
-      label: Entry price band matched
-      max: 0
-      delta: 0.0
-    - key: price_band_mid
-      label: Mid price band matched
-      min: 0
-      max: 0
-      delta: 0.01
-    - key: price_band_high
-      label: High price band matched
-      min: 0
-      delta: 0.03
-    powertrain_keyword_bonuses: []
-    powertrain_bonuses:
-    - key: powertrain_hev
-      label: 'Powertrain matched: HEV'
-      powertrain: HEV
-      delta: 0.03
-    - key: powertrain_ice
-      label: 'Powertrain matched: ICE'
-      powertrain: ICE
-      delta: 0.03
-    clamp_min: 0.0
-    clamp_max: 1.0
-  structured_fields:
-    edition_rules:
-    - key: edition_special
-      label: Special Edition
-      keyword: special edition
-      special: true
-    powertrain_rules:
-    - key: powertrain_hev
-      powertrain: HEV
-      keywords:
-      - hev
-      - full hybrid
-      - self-charging hybrid
-      - self charging hybrid
-      - hybrid
-      - hibrid
-    - key: powertrain_ice
-      powertrain: ICE
-      keywords:
-      - ice
-      - petrol
-      - gasoline
-      - diesel
-      - combustion
-      - benzina
-      - motorina
-  auto_accept_gates:
-    review_threshold: 0.95
-    semi_auto_threshold: 0.98
-    require_powertrain_match: true
-    force_review_if_powertrain_missing: true
-    force_review_if_powertrain_ambiguous: true
-    force_review_for_special_edition: true
-  css:
-    vehicle_container: body
-    model: h2, h3
-    trim: h3
-    price: '[class*="price"]'
-  tier: stealth
-  network_idle: true
-  impersonate: chrome
+  match_confidence: 0.84
+  match_status: review_required
+  match_reason:
+    kind: official_pdf_price_list
+    source: toyota_ro_scene7_price_list
+    note: Official Toyota Romania Yaris Cross Hybrid July 2026 price-list PDF; extractor captures the Pret (cu TVA) column and ignores accessories.
+  entry_patterns:
+  - pattern: '30000025(?:40|51|52|54|56|57|55)\s+(?P<trim>[A-Z ]+HYB\s+4X[24]\s+(?:116|130)\s+CP)\s*\*?\s+(?:[\d,.]+)\s*€\s+(?P<price>[\d,.]+)\s*€'
+    official_powertrain: 1.5 Hybrid list price
+    jato_powertrain: HEV
+    price_label: Pret (cu TVA)
 schedule:
   frequency: manual_only
   run_window_start: 00:00
   run_window_end: 05:00
   preferred_weekday: monday
-notes: Draft scaffold generated from country×model top30 backlog. Replace source_url,
-  profile.url, selectors, currency, price label, and the single-model placeholders
-  before promoting to 07_ScrapingToolkit/sources. [CSS selectors applied from brand
-  probe] [Switched to playwright_card_flow with toyota_trim_overview_playwright.yaml]
-  [Reverted to scrapling — playwright preset needs per-brand tuning]
+notes: Draft scaffold generated from country×model top30 backlog. Replaced todo.invalid
+  placeholder with the official Toyota Romania Yaris Cross Hybrid July 2026 price-list
+  PDF from Toyota Scene7. Regex targets vehicle tariff rows only, using the VAT-included
+  recommended list price column.
 bootstrap_meta:
   country_model_rank: 5
   suggested_scope_kind: single_model
-  sales_12m: 2925.0
+  sales_12m: 2398.0
   model: YARIS CROSS
