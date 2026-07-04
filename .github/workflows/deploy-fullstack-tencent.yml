@@ -323,6 +323,7 @@ jobs:
       - name: Deploy on server via SSH
         if: ${{ steps.auth.outputs.mode == 'key' }}
         env:
+          SSH_HOST: ${{ secrets.SSH_HOST }}
           SSH_USER: ${{ secrets.SSH_USER }}
           SSH_PORT: ${{ secrets.SSH_PORT }}
           SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
