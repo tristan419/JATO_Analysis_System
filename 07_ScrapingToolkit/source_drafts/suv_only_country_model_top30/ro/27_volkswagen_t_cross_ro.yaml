@@ -1,18 +1,39 @@
 source_code: volkswagen_t_cross_ro_draft_scrapling
 country: 罗马尼亚
 brand: VOLKSWAGEN
-source_url: https://todo.invalid/ro/volkswagen/t_cross
+source_url: https://configurator.volkswagen.ro/cc-ro/ro_RO_VW22/V/models
 source_type: manufacturer_official
 price_semantics: base_msrp
-extractor_type: playwright
-profile_preset: ../_shared/presets/volkswagen_configurator_trim_overview_playwright.yaml
+extractor_type: http_json
 profile:
-  url: https://todo.invalid/ro/volkswagen/t_cross
-  default_currency: RON
+  url: https://configurator.volkswagen.ro/cc-ro/be/ro_RO_VW22/api/v2/modelgroup?brand=V
+  method: GET
+  headers:
+    Accept-Language: ro-RO,ro;q=0.9,en;q=0.8
+  default_currency: EUR
   default_tax_included: true
-  default_price_label: MSRP
+  default_price_label: Pret recomandat
   fixed_model: T-CROSS
   fixed_jato_model: T-CROSS
+  copy_trim_to_jato_trim: true
+  match_confidence: 0.84
+  match_status: review_required
+  match_reason:
+    kind: official_configurator_modelgroup_api
+    source: volkswagen_ro_configurator_modelgroup_api
+    note: Official Volkswagen Romania configurator modelgroup API exposes the T-Cross entry gross recommended price. The configurator labels the model-list price as "Pret recomandat" and the site disclaimer states displayed website prices are recommended selling prices; keep review_required because the modelgroup price is an entry price without explicit trim/powertrain detail.
+  filters:
+  - path: name
+    equals: T-Cross
+  field_mapping:
+    vehicles_path: modelgroups
+    model: name
+    trim: name
+    price: price.gross
+    currency: ''
+    tax_included: ''
+    price_label: ''
+    availability: additionalText
   structured_fields:
     powertrain_rules:
     - key: powertrain_ice
@@ -33,7 +54,9 @@ schedule:
 notes: Draft scaffold generated from country×model top30 backlog. Replace source_url,
   profile.url, selectors, currency, price label, and the single-model placeholders
   before promoting to 07_ScrapingToolkit/sources. [Switched to playwright_card_flow
-  with volkswagen_configurator_trim_overview_playwright.yaml]
+  with volkswagen_configurator_trim_overview_playwright.yaml] [Replaced todo.invalid
+  with deterministic http_json over Volkswagen Romania's official configurator
+  modelgroup API, filtering the T-Cross entry price labeled Pret recomandat.]
 bootstrap_meta:
   country_model_rank: 27
   suggested_scope_kind: single_model
