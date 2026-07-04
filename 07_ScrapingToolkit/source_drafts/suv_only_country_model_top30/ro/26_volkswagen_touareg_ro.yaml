@@ -1,18 +1,32 @@
 source_code: volkswagen_touareg_ro_draft_scrapling
 country: 罗马尼亚
 brand: VOLKSWAGEN
-source_url: https://todo.invalid/ro/volkswagen/touareg
+source_url: https://www.volkswagen.ro/modele-si-configurator/toate-modelele
 source_type: manufacturer_official
 price_semantics: base_msrp
-extractor_type: playwright
-profile_preset: ../_shared/presets/volkswagen_configurator_trim_overview_playwright.yaml
+extractor_type: http_text
 profile:
-  url: https://todo.invalid/ro/volkswagen/touareg
-  default_currency: RON
+  url: https://www.volkswagen.ro/modele-si-configurator/toate-modelele
+  timeout_seconds: 45
+  headers:
+    User-Agent: Mozilla/5.0
+    Accept-Language: ro-RO,ro;q=0.9,en;q=0.8
+  entry_patterns:
+  - pattern: '\\n[0-9a-f]+:\{\\"value\\":\d+\}\\n[0-9a-f]+:\{\\"value\\":(?P<price>\d+)\}\\n[0-9a-f]+:\{\\"currency\\":\\"EUR\\",\\"net\\":\\"\$[0-9a-f]+\\",\\"gross\\":\\"\$[0-9a-f]+\\"\}[\s\S]{0,650}?\\"name\\":\\"(?P<trim>Touareg[^\\"]+)\\",\\"prices\\":\\"\$[0-9a-f]+\\"'
+    official_powertrain: null
+    price_label: Preț recomandat incl. TVA
+  default_currency: EUR
   default_tax_included: true
-  default_price_label: MSRP
+  default_price_label: Preț recomandat incl. TVA
   fixed_model: TOUAREG
   fixed_jato_model: TOUAREG
+  copy_trim_to_jato_trim: true
+  match_confidence: 0.82
+  match_status: review_required
+  match_reason:
+    kind: official_model_overview_variant_price
+    source: volkswagen_ro_all_models_next_data
+    note: Official Volkswagen Romania all-models page embeds Touareg variant prices in Next.js page data. The site displays prices as recommended gross prices including TVA; kept review_required because the extractor reads the embedded page data rather than a public trim table.
   structured_fields:
     powertrain_rules:
     - key: powertrain_phev
@@ -41,7 +55,9 @@ schedule:
 notes: Draft scaffold generated from country×model top30 backlog. Replace source_url,
   profile.url, selectors, currency, price label, and the single-model placeholders
   before promoting to 07_ScrapingToolkit/sources. [Switched to playwright_card_flow
-  with volkswagen_configurator_trim_overview_playwright.yaml]
+  with volkswagen_configurator_trim_overview_playwright.yaml] [Replaced todo.invalid
+  with deterministic http_text over Volkswagen Romania's official all-models
+  page embedded Next.js data, capturing Touareg gross EUR prices including TVA.]
 bootstrap_meta:
   country_model_rank: 26
   suggested_scope_kind: single_model
