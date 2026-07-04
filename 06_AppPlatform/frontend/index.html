@@ -329,12 +329,8 @@
           }
           if (cn.ok && intl.ok) {
             if (profile.prefersChinaRoute) {
-              nextTarget = intl.ms + marginMs < cn.ms ? "intl" : "cn";
-              if (nextTarget === "intl") {
-                reason = "intl is faster than www by more than the China-local guard";
-              } else {
-                reason = "www is preferred for China-local browser signals unless intl is clearly faster";
-              }
+              nextTarget = "cn";
+              reason = "www probe succeeded and the browser has China-local signals; keep the domestic route";
             } else if (Math.abs(cn.ms - intl.ms) <= marginMs) {
               nextTarget = currentTarget;
               reason = "Both routes are within the measured-route margin; keep the current host";

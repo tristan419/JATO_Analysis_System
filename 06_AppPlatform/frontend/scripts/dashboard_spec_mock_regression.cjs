@@ -473,9 +473,11 @@ async function main() {
 
     const beforeCrud = snapshot();
     await page.evaluate(() => {
-      window.history.pushState({}, '', '/crud');
-      window.dispatchEvent(new PopStateEvent('popstate'));
+      const target = `/crud${window.location.search}${window.location.hash}`;
+      window.history.pushState(window.history.state, '', target);
+      window.dispatchEvent(new PopStateEvent('popstate', { state: window.history.state }));
     });
+    await page.waitForFunction(() => ['/crud', '/data-management'].includes(window.location.pathname));
     await page.waitForURL((url) => url.pathname === '/data-management');
     await page.getByRole('heading', { name: '数据总览' }).waitFor();
     await page.getByRole('button', { name: 'MSRP Sources' }).waitFor();

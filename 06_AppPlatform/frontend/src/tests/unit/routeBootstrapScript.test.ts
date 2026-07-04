@@ -16,4 +16,10 @@ describe("route bootstrap script", () => {
     expect(indexHtml).not.toContain("applyBuildGuard");
     expect(indexHtml).not.toContain("not verified against current");
   });
+
+  it("keeps China-local browser signals on www whenever the www probe works", () => {
+    expect(indexHtml).toContain("if (profile.prefersChinaRoute) {");
+    expect(indexHtml).toContain("www probe succeeded and the browser has China-local signals; keep the domestic route");
+    expect(indexHtml).not.toContain("intl.ms + marginMs < cn.ms");
+  });
 });
