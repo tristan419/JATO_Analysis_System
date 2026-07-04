@@ -3,7 +3,7 @@ type RouteProbeWindow = Window & typeof globalThis & {
 };
 
 const PROBE_INFLIGHT_KEY = "jato_route_probe_inflight_v1";
-const PROBE_INFLIGHT_TTL_MS = 2_500;
+const PROBE_INFLIGHT_TTL_MS = 4_000;
 const PROBE_CHECK_INTERVAL_MS = 50;
 
 function isInitialRouteProbeInFlight(): boolean {
