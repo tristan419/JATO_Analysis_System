@@ -8,6 +8,7 @@ on:
       - "07_ScrapingToolkit/**"
       - "03_Scripts/**"
       - "hermes/**"
+      - "!hermes/dev_events/**"
       - "01_RAW_DATA/VOC_Nordic_SUV_Users_100.xlsx"
       - ".github/workflows/deploy-fullstack-tencent.yml"
   workflow_dispatch:
