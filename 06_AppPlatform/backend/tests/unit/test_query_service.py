@@ -30,6 +30,21 @@ def disable_grouped_time_series_disk_cache(monkeypatch, tmp_path) -> None:
     )
     query_service._clear_grouped_time_series_cache()
     query_service._clear_dashboard_overview_cache()
+    monkeypatch.setattr(query_service, "get_redis_client", lambda: None)
+
+
+class _FakeRedis:
+    def __init__(self) -> None:
+        self.store: dict[str, str] = {}
+        self.ttls: dict[str, int] = {}
+
+    def get(self, key: str):
+        return self.store.get(key)
+
+    def setex(self, key: str, ttl: int, value: str) -> bool:
+        self.store[key] = value
+        self.ttls[key] = ttl
+        return True
 
 
 def test_filters_options_batch_merges_requests_with_same_filters(
@@ -195,6 +210,69 @@ def test_query_overview_uses_persistent_cache(
     assert calls == 1
     assert first.payload == second.payload
     assert list(tmp_path.glob("*.json"))
+
+
+def test_query_overview_uses_redis_cache_by_role_scope(
+    monkeypatch,
+) -> None:
+    calls = 0
+    redis = _FakeRedis()
+
+    monkeypatch.setattr(query_service, "get_redis_client", lambda: redis)
+    monkeypatch.setattr(
+        query_service.repo,
+        "current_dataset_token",
+        lambda: "dataset-a",
+    )
+
+    def fake_query_overview_impl(**kwargs) -> dict:
+        nonlocal calls
+        if kwargs.get("filters") == {"Country": ["HU"]}:
+            calls += 1
+        return {
+            "route": "dynamic-aggregate",
+            "kpis": {"totalRows": 10},
+            "monthSeries": [],
+            "yearSeries": [],
+        }
+
+    monkeypatch.setattr(
+        query_service,
+        "_query_overview_impl",
+        fake_query_overview_impl,
+    )
+
+    first = query_service.query_overview_with_cache_state(
+        filters={"Country": ["HU"]},
+        prefer_precomputed=True,
+        top_n=10,
+        cache_scope="viewer",
+    )
+    query_service._clear_dashboard_overview_cache()
+    second = query_service.query_overview_with_cache_state(
+        filters={"Country": ["HU"]},
+        prefer_precomputed=True,
+        top_n=10,
+        cache_scope="viewer",
+    )
+    query_service._clear_dashboard_overview_cache()
+    third = query_service.query_overview_with_cache_state(
+        filters={"Country": ["HU"]},
+        prefer_precomputed=True,
+        top_n=10,
+        cache_scope="admin",
+    )
+
+    assert first.cache_state == "MISS"
+    assert second.cache_state == "REDIS"
+    assert third.cache_state == "MISS"
+    assert calls == 2
+    assert first.payload == second.payload == third.payload
+    assert redis.ttls
+    assert all(
+        ttl == query_service.DASHBOARD_OVERVIEW_CACHE_TTL_SECONDS
+        for ttl in redis.ttls.values()
+    )
 
 
 def test_warm_dashboard_overview_cache_includes_configured_filter_sets(
@@ -428,6 +506,71 @@ def test_query_grouped_time_series_uses_persistent_cache(
     assert load_calls == 1
     assert first == second
     assert list(tmp_path.glob("*.json"))
+
+
+def test_query_grouped_time_series_uses_redis_cache_by_role_scope(
+    monkeypatch,
+) -> None:
+    frame = pd.DataFrame(
+        {
+            "Brand": ["Alpha", "Beta"],
+            "2024": [10.0, 5.0],
+        }
+    )
+    load_calls = 0
+    redis = _FakeRedis()
+
+    def load_slice(columns, filters, limit, offset):
+        nonlocal load_calls
+        load_calls += 1
+        return frame.loc[:, columns].copy()
+
+    monkeypatch.setattr(query_service, "get_redis_client", lambda: redis)
+    monkeypatch.setattr(
+        query_service.repo,
+        "current_dataset_token",
+        lambda: "dataset-a",
+    )
+    monkeypatch.setattr(query_service.repo, "list_columns", lambda: ["Brand", "2024"])
+    monkeypatch.setattr(query_service.repo, "load_slice", load_slice)
+
+    first = query_service.query_grouped_time_series_with_cache_state(
+        filters={"Country": ["HU"]},
+        grain="year",
+        group_by="Brand",
+        top_n=2,
+        include_others=False,
+        cache_scope="viewer",
+    )
+    query_service._clear_grouped_time_series_cache()
+    second = query_service.query_grouped_time_series_with_cache_state(
+        filters={"Country": ["HU"]},
+        grain="year",
+        group_by="Brand",
+        top_n=2,
+        include_others=False,
+        cache_scope="viewer",
+    )
+    query_service._clear_grouped_time_series_cache()
+    third = query_service.query_grouped_time_series_with_cache_state(
+        filters={"Country": ["HU"]},
+        grain="year",
+        group_by="Brand",
+        top_n=2,
+        include_others=False,
+        cache_scope="admin",
+    )
+
+    assert first.cache_state == "MISS"
+    assert second.cache_state == "REDIS"
+    assert third.cache_state == "MISS"
+    assert load_calls == 2
+    assert first.payload == second.payload == third.payload
+    assert redis.ttls
+    assert all(
+        ttl == query_service.GROUPED_TIME_SERIES_CACHE_TTL_SECONDS
+        for ttl in redis.ttls.values()
+    )
 
 
 def test_query_grouped_time_series_cache_is_scoped_by_role(

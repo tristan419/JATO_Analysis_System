@@ -113,6 +113,18 @@ interface ChartMovementSegment {
   label: string;
 }
 
+interface ChartPointHoverDetail {
+  scopeLabel: string;
+  trimLabel: string;
+  changeLabel: string;
+  priceLabel: string;
+  salesLabel: string;
+  salesSourceLabel: string;
+  salesUseLabel: string;
+  evidenceLabel: string;
+  sampleLabel: string;
+}
+
 interface SpotCheckQueueItem {
   key: string;
   eventId: string;
@@ -2165,9 +2177,9 @@ function salesVolume(event: MsrpMonitoringModelEvent): number {
 function salesBubbleRadius(event: MsrpMonitoringModelEvent, maxSales: number): number {
   const sales = salesVolume(event);
   if (sales <= 0 || maxSales <= 0) {
-    return Math.min(14, 7 + Math.sqrt(event.affectedCountryCount) * 2.5);
+    return 0;
   }
-  return 8 + Math.sqrt(sales / maxSales) * 18;
+  return 7 + Math.sqrt(sales / maxSales) * 22;
 }
 
 function eventMovementClass(event: MsrpMonitoringModelEvent): string {
@@ -2176,6 +2188,88 @@ function eventMovementClass(event: MsrpMonitoringModelEvent): string {
   if (currentPrice < oldPrice) return "is-drop";
   if (currentPrice > oldPrice) return "is-rise";
   return "is-flat";
+}
+
+function formatCompactNumber(value: number | null | undefined): string {
+  if (value === null || value === undefined || !Number.isFinite(value)) {
+    return "-";
+  }
+  const absolute = Math.abs(value);
+  if (absolute >= 1_000_000) {
+    return `${(value / 1_000_000).toFixed(absolute >= 10_000_000 ? 0 : 1)}m`;
+  }
+  if (absolute >= 1_000) {
+    return `${(value / 1_000).toFixed(absolute >= 10_000 ? 0 : 1)}k`;
+  }
+  return formatNumber(value);
+}
+
+function chartSalesLabel(event: MsrpMonitoringModelEvent): string {
+  const sales = salesVolume(event);
+  if (sales <= 0) {
+    return "JATO rolling 12M not matched";
+  }
+  const coverage = event.sales?.countryLabels.join(", ") || "matched market";
+  return `${formatNumber(sales)} JATO rolling 12M units · ${coverage}`;
+}
+
+function chartSalesSourceLabel(event: MsrpMonitoringModelEvent): string {
+  const sales = event.sales;
+  if (!sales || salesVolume(event) <= 0) {
+    return "No current-country JATO sales match";
+  }
+  if (sales.source === "sweden_swiss_top30_rolling12") {
+    return `JATO top30 snapshot · ${sales.latestSalesLabel ?? "rolling 12M"}`;
+  }
+  if (sales.source === "market_scan") {
+    return `JATO market_scan · ${sales.latestSalesLabel ?? "latest"} rolling window`;
+  }
+  return `${sales.source || "JATO sales"} · ${sales.latestSalesLabel ?? "rolling 12M"}`;
+}
+
+function chartMovementScopeShortLabel(event: MsrpMonitoringModelEvent): string {
+  const trimCount = uniqueChartTrims(event).length;
+  const scope = chartMovementScopeLabel(event, trimCount);
+  if (scope === "Single trim movement") {
+    return "single trim";
+  }
+  if (scope === "Multi-trim movement") {
+    return "multi trim";
+  }
+  return "model-wide";
+}
+
+function chartSmartLabelNote(event: MsrpMonitoringModelEvent, showSalesLayer: boolean): string {
+  if (!showSalesLayer) {
+    return chartMovementScopeShortLabel(event);
+  }
+  const sales = salesVolume(event);
+  const salesLabel = sales > 0 ? `12M ${formatCompactNumber(sales)}` : "12M n/a";
+  return `${salesLabel} · ${chartMovementScopeShortLabel(event)}`;
+}
+
+function chartSmartLabelScore(event: MsrpMonitoringModelEvent, maxSales: number, showSalesLayer: boolean): number {
+  const sales = salesVolume(event);
+  const salesScore = showSalesLayer && maxSales > 0 ? (sales / maxSales) * 56 : 0;
+  const auditScore = Math.max(0, 4 - auditPriorityRank(event.auditPriority)) * 16;
+  const changeScore = Math.min(28, Math.max(Math.abs(event.minChangePct ?? 0), Math.abs(event.maxChangePct ?? 0)) * 1.8);
+  const trimScore = event.trimChangeCount > 1 || event.timelineEventCount > 1 ? 14 : 0;
+  const syncScore = event.multiCountrySync ? 8 : 0;
+  return salesScore + auditScore + changeScore + trimScore + syncScore;
+}
+
+function smartChartLabelEventIds(events: MsrpMonitoringModelEvent[], maxSales: number, showSalesLayer: boolean): Set<string> {
+  const labelBudget = Math.max(4, Math.min(7, Math.ceil(events.length * 0.42)));
+  return new Set(
+    [...events]
+      .sort((left, right) => (
+        chartSmartLabelScore(right, maxSales, showSalesLayer) - chartSmartLabelScore(left, maxSales, showSalesLayer)
+        || (showSalesLayer ? salesVolume(right) - salesVolume(left) : 0)
+        || eventLabel(left).localeCompare(eventLabel(right))
+      ))
+      .slice(0, labelBudget)
+      .map((event) => event.eventId),
+  );
 }
 
 function buildChartMovementSegments(
@@ -2226,12 +2320,78 @@ function buildChartMovementSegments(
         key: `${event.eventId}-${item.priceHistoryId ?? index}`,
         oldY: scaleY(Number(item.oldMsrpEur)),
         currentY: scaleY(Number(item.currentMsrpEur)),
-        xOffset: spreadIndex * 5,
-        opacity: 0.28 + recency * 0.54,
+        xOffset: spreadIndex * 4,
+        opacity: 0.22 + recency * 0.48,
         className: change < 0 ? "is-drop" : change > 0 ? "is-rise" : "is-flat",
         label: `${formatTime(item.changedAtUtc)} · ${formatPct(item.changePct)}${collapsedLabel}`,
       };
     });
+}
+
+function latestTimelineEvent(event: MsrpMonitoringModelEvent): MsrpMonitoringTimelineEvent | null {
+  return event.timeline
+    .map((item) => ({ item, time: timelineTimeMs(item) ?? 0 }))
+    .sort((left, right) => right.time - left.time)[0]?.item ?? event.timeline[0] ?? null;
+}
+
+function uniqueChartTrims(event: MsrpMonitoringModelEvent): string[] {
+  return Array.from(new Set(event.timeline.map((item) => item.jatoTrim.trim()).filter(Boolean)));
+}
+
+function chartMovementScopeLabel(event: MsrpMonitoringModelEvent, trimCount: number): string {
+  const effectiveTrimCount = Math.max(event.trimChangeCount, trimCount);
+  if (effectiveTrimCount <= 1) {
+    return "Single trim movement";
+  }
+  if (effectiveTrimCount >= 3 || event.timelineEventCount >= 3) {
+    return "Model-wide candidate";
+  }
+  return "Multi-trim movement";
+}
+
+function chartTrimLabel(trims: string[]): string {
+  if (trims.length === 0) {
+    return "Trim pending";
+  }
+  const visible = trims.slice(0, 3);
+  return trims.length > visible.length ? `${visible.join(", ")} +${trims.length - visible.length}` : visible.join(", ");
+}
+
+function chartEvidenceLabel(item: MsrpMonitoringTimelineEvent | null): string {
+  if (!item) {
+    return "Evidence pending";
+  }
+  if (item.evidence.backfilled && item.evidence.backfillKind) {
+    return backfillKindLabel(item.evidence.backfillKind);
+  }
+  if (item.evidence.backfillSourceLabel) {
+    return item.evidence.backfillSourceLabel;
+  }
+  return item.evidence.sourceUrl || item.sourceStatus || "Live MSRP source";
+}
+
+function chartPointHoverDetail(event: MsrpMonitoringModelEvent): ChartPointHoverDetail {
+  const trims = uniqueChartTrims(event);
+  const latest = latestTimelineEvent(event);
+  const minChange = formatPct(event.minChangePct);
+  const maxChange = formatPct(event.maxChangePct);
+  const changeLabel = minChange === maxChange ? minChange : `${minChange} to ${maxChange}`;
+  const sampleParts = [
+    latest?.countryLabel,
+    latest?.jatoTrim || trims[0],
+    latest?.changedAtUtc ? formatTime(latest.changedAtUtc) : null,
+  ].filter((item): item is string => Boolean(item));
+  return {
+    scopeLabel: chartMovementScopeLabel(event, trims.length),
+    trimLabel: chartTrimLabel(trims),
+    changeLabel,
+    priceLabel: `${formatCurrency(event.medianOldMsrpEur)} -> ${formatCurrency(event.medianCurrentMsrpEur)}`,
+    salesLabel: chartSalesLabel(event),
+    salesSourceLabel: chartSalesSourceLabel(event),
+    salesUseLabel: "Visual layer only; not price evidence",
+    evidenceLabel: chartEvidenceLabel(latest),
+    sampleLabel: sampleParts.join(" · ") || `${event.affectedCountryCount} market signal`,
+  };
 }
 
 function monthTimeMs(period: string | null | undefined): number | null {
@@ -2278,6 +2438,8 @@ function ChartPoint({
   labelSide = "right",
   unanchored = false,
   selected,
+  showLabel,
+  showSalesLayer,
   onSelect,
 }: {
   event: MsrpMonitoringModelEvent;
@@ -2290,21 +2452,47 @@ function ChartPoint({
   labelSide?: "left" | "right";
   unanchored?: boolean;
   selected: boolean;
+  showLabel: boolean;
+  showSalesLayer: boolean;
   onSelect: () => void;
 }) {
-  const hitTop = Math.min(oldY, currentY) - 34;
-  const hitHeight = Math.abs(currentY - oldY) + 68;
-  const hitWidth = Math.max(188, radius + 178);
-  const labelX = labelSide === "left" ? x - radius - 7 : x + radius + 6;
+  const [hovered, setHovered] = useState(false);
+  const renderSalesBubble = showSalesLayer && salesVolume(event) > 0;
+  const bubbleRadius = renderSalesBubble ? radius : 0;
+  const dotRadius = renderSalesBubble ? Math.max(5.5, Math.min(9.5, radius * 0.42)) : 7;
+  const anchorRadius = renderSalesBubble ? Math.max(bubbleRadius, dotRadius) : dotRadius;
+  const hitTop = Math.min(oldY, currentY) - 22;
+  const hitHeight = Math.abs(currentY - oldY) + 44;
+  const hitWidth = Math.max(30, anchorRadius * 2 + 20);
+  const labelX = labelSide === "left" ? x - anchorRadius - 8 : x + anchorRadius + 8;
+  const hoverDetail = chartPointHoverDetail(event);
+  const smartLabelNote = chartSmartLabelNote(event, renderSalesBubble);
+  const tooltipWidth = 306;
+  const tooltipHeight = 188;
+  const tooltipX = labelSide === "left" || x > CHART_WIDTH - tooltipWidth - 24
+    ? Math.max(8, x - tooltipWidth - anchorRadius - 16)
+    : Math.min(CHART_WIDTH - tooltipWidth - 8, x + anchorRadius + 16);
+  const tooltipY = Math.max(10, Math.min(CHART_HEIGHT - tooltipHeight - 10, Math.min(oldY, currentY) - 22));
   return (
-    <g className={`msrp-monitor-point ${movementClass} ${auditClass(event.auditPriority)}${unanchored ? " is-unanchored" : ""}`} onClick={onSelect} onKeyDown={(e) => {
-      if (e.key === "Enter" || e.key === " ") {
-        e.preventDefault();
-        onSelect();
-      }
-    }} tabIndex={0} role="button" aria-label={eventLabel(event)}>
-      <rect className="msrp-monitor-hit-target" x={x - radius - 18} y={hitTop} width={hitWidth} height={hitHeight} rx={8} />
-      <circle className="msrp-monitor-hit-target" cx={x} cy={currentY} r={Math.max(24, radius + 14)} />
+    <g
+      className={`msrp-monitor-point ${movementClass} ${auditClass(event.auditPriority)}${unanchored ? " is-unanchored" : ""}${hovered ? " is-hovered" : ""}${showLabel || selected ? " is-label-visible" : ""}`}
+      onClick={onSelect}
+      onMouseEnter={() => setHovered(true)}
+      onMouseLeave={() => setHovered(false)}
+      onFocus={() => setHovered(true)}
+      onBlur={() => setHovered(false)}
+      onKeyDown={(e) => {
+        if (e.key === "Enter" || e.key === " ") {
+          e.preventDefault();
+          onSelect();
+        }
+      }}
+      tabIndex={0}
+      role="button"
+      aria-label={`${eventLabel(event)} ${hoverDetail.scopeLabel}`}
+    >
+      <rect className="msrp-monitor-hit-target" x={x - hitWidth / 2} y={hitTop} width={hitWidth} height={hitHeight} rx={8} />
+      <circle className="msrp-monitor-hit-target" cx={x} cy={currentY} r={Math.max(24, anchorRadius + 10)} />
       <g className="msrp-monitor-price-trail">
         {segments.map((segment) => (
           <line
@@ -2321,11 +2509,21 @@ function ChartPoint({
         ))}
       </g>
       <line className={`msrp-monitor-drop-line ${movementClass}`} x1={x} x2={x} y1={oldY} y2={currentY} />
-      <circle className="msrp-monitor-old-dot" cx={x} cy={oldY} r={radius * 0.62} />
+      <circle className="msrp-monitor-old-dot" cx={x} cy={oldY} r={Math.max(4, dotRadius * 0.75)} />
+      {renderSalesBubble ? (
+        <circle
+          className="msrp-monitor-sales-bubble"
+          cx={x}
+          cy={currentY}
+          r={bubbleRadius}
+          fill={event.powertrainColor}
+          stroke={event.powertrainColor}
+        />
+      ) : null}
       <line
         className="msrp-monitor-current-line"
-        x1={x - radius * 1.25}
-        x2={x + radius * 1.25}
+        x1={x - dotRadius * 1.45}
+        x2={x + dotRadius * 1.45}
         y1={currentY}
         y2={currentY}
         stroke={event.powertrainColor}
@@ -2334,13 +2532,44 @@ function ChartPoint({
         className={`msrp-monitor-current-dot${selected ? " is-selected" : ""}`}
         cx={x}
         cy={currentY}
-        r={radius}
+        r={dotRadius}
         fill={event.powertrainColor}
       />
-      <title>{`${eventLabel(event)} · ${formatCurrency(event.medianOldMsrpEur)} to ${formatCurrency(event.medianCurrentMsrpEur)} · sales ${formatNumber(event.sales?.totalSales ?? null)} · ${event.affectedCountryCount} countries`}</title>
-      <text className="msrp-monitor-point-label" x={labelX} y={currentY + 4} textAnchor={labelSide === "left" ? "end" : "start"}>
-        {eventLabel(event)}
-      </text>
+      <title>{`${eventLabel(event)} · ${formatCurrency(event.medianOldMsrpEur)} to ${formatCurrency(event.medianCurrentMsrpEur)} · ${chartSalesLabel(event)} · ${event.affectedCountryCount} countries`}</title>
+      <g className="msrp-monitor-point-label-group" aria-hidden="true">
+        <text className="msrp-monitor-point-label" x={labelX} y={currentY + 2} textAnchor={labelSide === "left" ? "end" : "start"}>
+          {eventLabel(event)}
+        </text>
+        <text className="msrp-monitor-point-label-note" x={labelX} y={currentY + 15} textAnchor={labelSide === "left" ? "end" : "start"}>
+          {smartLabelNote}
+        </text>
+      </g>
+      {hovered ? (
+        <foreignObject
+          className="msrp-monitor-hover-card-wrap"
+          x={tooltipX}
+          y={tooltipY}
+          width={tooltipWidth}
+          height={tooltipHeight}
+        >
+          <div className="msrp-monitor-hover-card">
+            <header>
+              <strong>{eventLabel(event)}</strong>
+              <span>{hoverDetail.scopeLabel}</span>
+            </header>
+            <dl>
+              <div><dt>Trim</dt><dd>{hoverDetail.trimLabel}</dd></div>
+              <div><dt>Change</dt><dd>{hoverDetail.changeLabel} · {changePctBasisShortLabel(event.changePctBasis)}</dd></div>
+              <div><dt>MSRP</dt><dd>{hoverDetail.priceLabel}</dd></div>
+              <div><dt>Sales</dt><dd>{hoverDetail.salesLabel}</dd></div>
+              <div><dt>Source</dt><dd>{hoverDetail.salesSourceLabel}</dd></div>
+              <div><dt>Use</dt><dd>{hoverDetail.salesUseLabel}</dd></div>
+              <div><dt>Evidence</dt><dd>{hoverDetail.evidenceLabel}</dd></div>
+              <div><dt>Sample</dt><dd>{hoverDetail.sampleLabel}</dd></div>
+            </dl>
+          </div>
+        </foreignObject>
+      ) : null}
     </g>
   );
 }
@@ -2407,7 +2636,7 @@ function MsrpSalesEffectChart({ event }: { event: MsrpMonitoringModelEvent | nul
       <div className="msrp-monitor-sales-chart-head">
         <div>
           <strong>JATO sales effect</strong>
-          <span>{sales.countryLabels.join(", ") || "Matched market"} · {formatNumber(sales.totalSales)} units in window</span>
+          <span>{sales.countryLabels.join(", ") || "Matched market"} · {formatNumber(sales.totalSales)} rolling 12M units</span>
           <em className={`msrp-monitor-sales-coverage ${salesEffectCoverageClass(sales.effectCoverageStatus)}`}>
             {salesEffectCoverageLabel(sales.effectCoverageStatus)}
             {sales.pendingEffectMarkerCount > 0 ? ` · ${sales.pendingEffectMarkerCount} pending` : ""}
@@ -2648,6 +2877,7 @@ function MsrpEventChart({
   selectedEventId: string | null;
   onSelect: (eventId: string) => void;
 }) {
+  const [showSalesLayer, setShowSalesLayer] = useState(false);
   const priceChartEvents = events.filter(isPriceChartEvent);
   const drawableEvents = priceChartEvents.filter(isChartDrawableEvent);
   const missingLengthEvents = priceChartEvents.filter((event) => !isChartDrawableEvent(event));
@@ -2681,6 +2911,7 @@ function MsrpEventChart({
   const xTicks = niceTicks(xMin, xMax, 6);
   const yTicks = niceTicks(yMin, yMax, 6);
   const maxSales = Math.max(0, ...priceChartEvents.map(salesVolume));
+  const smartLabelIds = smartChartLabelEventIds(priceChartEvents, maxSales, showSalesLayer);
 
   return (
     <div className="msrp-monitor-chart-shell">
@@ -2693,7 +2924,15 @@ function MsrpEventChart({
           <span><i className="old" /> Old MSRP</span>
           <span><i className="line" /> Movement trail</span>
           <span><i className="current" /> Current MSRP</span>
-          <span><i className="bubble" /> JATO sales</span>
+          <button
+            type="button"
+            className={`msrp-monitor-legend-toggle${showSalesLayer ? " is-active" : ""}`}
+            aria-pressed={showSalesLayer}
+            onClick={() => setShowSalesLayer((current) => !current)}
+          >
+            <i className="bubble" /> JATO rolling 12M sales
+          </button>
+          <span><i className="smart" /> Smart label</span>
         </div>
       </div>
       <svg viewBox={`0 0 ${CHART_WIDTH} ${CHART_HEIGHT}`} className="msrp-monitor-chart" role="img" aria-label="MSRP monitor model event chart">
@@ -2745,6 +2984,8 @@ function MsrpEventChart({
             movementClass={eventMovementClass(event)}
             segments={buildChartMovementSegments(event, scaleY)}
             selected={event.eventId === selectedEventId}
+            showLabel={smartLabelIds.has(event.eventId)}
+            showSalesLayer={showSalesLayer}
             onSelect={() => onSelect(event.eventId)}
           />
         ))}
@@ -2763,6 +3004,8 @@ function MsrpEventChart({
               labelSide="left"
               unanchored
               selected={event.eventId === selectedEventId}
+              showLabel={smartLabelIds.has(event.eventId)}
+              showSalesLayer={showSalesLayer}
               onSelect={() => onSelect(event.eventId)}
             />
           );

@@ -65,8 +65,10 @@ const DashboardExportPanel = lazy(() =>
   import("../components/ExportPanel").then((module) => ({ default: module.ExportPanel }))
 );
 
-const DASHBOARD_DEFERRED_FETCH_DELAY_MS = 6_000;
+const DASHBOARD_DEFERRED_FETCH_DELAY_MS = 10_000;
 const DASHBOARD_CHART_RUNTIME_IDLE_TIMEOUT_MS = 4_000;
+const DASHBOARD_CHART_RUNTIME_MIN_DELAY_MS = 12_000;
+const DASHBOARD_HEAVY_QUERY_MIN_DELAY_MS = 10_000;
 const DEFAULT_ADVANCED_EXPORT: ExportSettings = {
   ...DEFAULT_EXPORT,
   dataLabelOverlapStrategy: "smart_top",
@@ -226,6 +228,17 @@ function scheduleDashboardIdlePreload(callback: () => void): () => void {
   }
   const handle = window.setTimeout(callback, DASHBOARD_CHART_RUNTIME_IDLE_TIMEOUT_MS);
   return () => window.clearTimeout(handle);
+}
+
+function scheduleDashboardDelayedIdlePreload(callback: () => void, delayMs: number): () => void {
+  let cancelIdlePreload: (() => void) | null = null;
+  const timer = window.setTimeout(() => {
+    cancelIdlePreload = scheduleDashboardIdlePreload(callback);
+  }, delayMs);
+  return () => {
+    window.clearTimeout(timer);
+    cancelIdlePreload?.();
+  };
 }
 
 function resolveTimeSeriesSeriesColor(
@@ -393,6 +406,54 @@ function getDeckLayoutStyle(
   } as React.CSSProperties;
 }
 
+function DeferredDashboardDecksPlaceholder({ onActivate }: { onActivate: () => void }) {
+  return (
+    <div className="card analysis-deck-card dashboard-deck-card--compact-hero">
+      <div className="dashboard-hero-head dashboard-deck-hero-head">
+        <div className="dashboard-hero-copy dashboard-deck-hero-copy">
+          <span className="panel-kicker">04-06 / Deferred Analysis</span>
+          <h3>Advanced decks preparing</h3>
+          <p>高级分析、单车型版型和竞品定位模块正在准备。</p>
+        </div>
+        <div className="dashboard-hero-actions dashboard-deck-hero-actions dashboard-deck-hero-actions--pair">
+          <div className="hero-meta-block dashboard-deck-hero-stat">
+            <span className="hero-meta-label">Startup</span>
+            <strong className="hero-meta-value">FAST</strong>
+            <span className="hero-meta-subvalue">首屏优先展示筛选和趋势</span>
+          </div>
+          <div className="hero-meta-block dashboard-deck-hero-stat">
+            <span className="hero-meta-label">Heavy decks</span>
+            <strong className="hero-meta-value">DEFERRED</strong>
+            <span className="hero-meta-subvalue">空闲后自动挂载</span>
+          </div>
+        </div>
+      </div>
+      <div className="analysis-chart-block analysis-chart-block--compact dashboard-deck-hero-surface">
+        <div className="dashboard-cta-row">
+          <button type="button" className="btn btn-secondary" onClick={onActivate}>
+            立即加载高级分析模块
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function DeferredDashboardChartPlaceholder({ onActivate }: { onActivate: () => void }) {
+  return (
+    <div className="dashboard-chart-runtime-placeholder">
+      <div>
+        <span className="panel-kicker">Chart Runtime</span>
+        <strong>趋势图正在后台准备</strong>
+        <p>筛选、概览和控制区已可操作，图表运行时会在浏览器空闲后加载。</p>
+      </div>
+      <button type="button" className="btn btn-secondary" onClick={onActivate}>
+        立即加载趋势图
+      </button>
+    </div>
+  );
+}
+
 /* ── filter component ──────────────────────────────── */
 /* ── Main Dashboard ────────────────────────────────── */
 export function DashboardPage() {
@@ -466,23 +527,31 @@ export function DashboardPage() {
     () => ensureArray(cachedPage?.groupedItems),
   );
   const [groupedLoading, setGroupedLoading] = useState(false);
+  const [chartRuntimeReady, setChartRuntimeReady] = useState(false);
   const [heavyQueriesReady, setHeavyQueriesReady] = useState(false);
   const [hiddenSeries, setHiddenSeries] = useState<Set<string>>(() => new Set(cachedPage?.hiddenSeries ?? []));
   const [othersDetail, setOthersDetail] = useState<OthersDetailItem[]>(() => cachedPage?.othersDetail ?? []);
+  const releaseChartRuntime = useCallback(() => {
+    setChartRuntimeReady(true);
+  }, []);
   const releaseHeavyQueries = useCallback(() => {
     setHeavyQueriesReady(true);
   }, []);
+  const releaseDashboardChartWork = useCallback(() => {
+    releaseChartRuntime();
+    releaseHeavyQueries();
+  }, [releaseChartRuntime, releaseHeavyQueries]);
   const selectTsMode = useCallback((nextMode: "总和" | "分组") => {
-    releaseHeavyQueries();
+    releaseDashboardChartWork();
     setTsMode(nextMode);
-  }, [releaseHeavyQueries]);
+  }, [releaseDashboardChartWork]);
   const selectChartType = useCallback((nextType: "line" | "bar" | "rank") => {
-    releaseHeavyQueries();
+    releaseDashboardChartWork();
     setChartType(nextType);
     if (nextType === "rank" && tsMode === "总和") {
       setTsMode("分组");
     }
-  }, [releaseHeavyQueries, tsMode]);
+  }, [releaseDashboardChartWork, tsMode]);
 
   /* advanced charts — honor URL params for deep-links from Copilot */
   const urlParams = useMemo(() => new URLSearchParams(currentSearch), [currentSearch]);
@@ -697,10 +766,23 @@ export function DashboardPage() {
   }, [loading]);
 
   useEffect(() => {
+    if (chartRuntimeReady || !filtersReady || loading || columns.length === 0) return;
+    return scheduleDashboardDelayedIdlePreload(
+      () => {
+        setChartRuntimeReady(true);
+      },
+      DASHBOARD_CHART_RUNTIME_MIN_DELAY_MS,
+    );
+  }, [chartRuntimeReady, columns.length, filtersReady, loading]);
+
+  useEffect(() => {
     if (heavyQueriesReady || !filtersReady || loading || columns.length === 0) return;
-    return scheduleDashboardIdlePreload(() => {
-      setHeavyQueriesReady(true);
-    });
+    return scheduleDashboardDelayedIdlePreload(
+      () => {
+        setHeavyQueriesReady(true);
+      },
+      DASHBOARD_HEAVY_QUERY_MIN_DELAY_MS,
+    );
   }, [columns.length, filtersReady, heavyQueriesReady, loading]);
 
   useEffect(() => {
@@ -1870,8 +1952,8 @@ export function DashboardPage() {
           <div className="analysis-chart-block analysis-chart-block--compact dashboard-deck-hero-surface">
           <div className="chart-header">
             <div className="tab-bar">
-              <button className={"tab-btn"+(activeTab==="year"?" active":"")} onClick={()=>setActiveTab("year")}>{"\u5e74\u5ea6\u5bf9\u6bd4"}</button>
-              <button className={"tab-btn"+(activeTab==="month"?" active":"")} onClick={()=>setActiveTab("month")}>{"\u6708\u5ea6\u660e\u7ec6"}</button>
+              <button className={"tab-btn"+(activeTab==="year"?" active":"")} onClick={()=>{releaseChartRuntime(); setActiveTab("year");}}>{"\u5e74\u5ea6\u5bf9\u6bd4"}</button>
+              <button className={"tab-btn"+(activeTab==="month"?" active":"")} onClick={()=>{releaseChartRuntime(); setActiveTab("month");}}>{"\u6708\u5ea6\u660e\u7ec6"}</button>
             </div>
             <div className="chart-controls">
               <div className="tab-bar">
@@ -1916,8 +1998,12 @@ export function DashboardPage() {
             );
           })()}
 
+          {!chartRuntimeReady && (
+            <DeferredDashboardChartPlaceholder onActivate={releaseDashboardChartWork} />
+          )}
+
           {/* single-series */}
-          {!isGrouped && chartType !== "rank" && aggregatedSingle.length > 0 && (
+          {chartRuntimeReady && !isGrouped && chartType !== "rank" && aggregatedSingle.length > 0 && (
             <div ref={el => { tsChartRef.current = el; }}>
               <PlotlyChart
                 data={(() => {
@@ -1954,7 +2040,7 @@ export function DashboardPage() {
           )}
 
           {/* multi-series grouped */}
-          {isGrouped && chartType !== "rank" && filteredGrouped.length > 0 && (() => {
+          {chartRuntimeReady && isGrouped && chartType !== "rank" && filteredGrouped.length > 0 && (() => {
             const isPt = tsGroupDim === "\u52a8\u603b\u89c4\u6574";
             let traces: Data[] = visibleSeries.map((name) => {
               const seriesData = filteredGrouped.filter(g => g.series === name);
@@ -1996,11 +2082,11 @@ export function DashboardPage() {
             );
           })()}
 
-          {!isGrouped && chartType !== "rank" && aggregatedSingle.length===0 && !loading && <div className="chart-empty">{"\u6682\u65e0\u8d8b\u52bf\u6570\u636e"}</div>}
-          {isGrouped && chartType !== "rank" && filteredGrouped.length===0 && !groupedLoading && <div className="chart-empty">{"\u5207\u6362\u5206\u7ec4\u7ef4\u5ea6\u6216\u8c03\u6574\u7b5b\u9009\u6761\u4ef6"}</div>}
+          {chartRuntimeReady && !isGrouped && chartType !== "rank" && aggregatedSingle.length===0 && !loading && <div className="chart-empty">{"\u6682\u65e0\u8d8b\u52bf\u6570\u636e"}</div>}
+          {chartRuntimeReady && isGrouped && chartType !== "rank" && filteredGrouped.length===0 && !groupedLoading && <div className="chart-empty">{"\u5207\u6362\u5206\u7ec4\u7ef4\u5ea6\u6216\u8c03\u6574\u7b5b\u9009\u6761\u4ef6"}</div>}
 
           {/* ranking horizontal bar chart */}
-          {chartType === "rank" && isGrouped && rankingSliced.length > 0 && (() => {
+          {chartRuntimeReady && chartType === "rank" && isGrouped && rankingSliced.length > 0 && (() => {
             const reversed = [...rankingSliced].reverse();
             const maxVol = rankingSliced[0]?.volume ?? 1;
             const chartHeight = Math.max(timeSeriesDeckLayout.height, Math.min(1200, rankingSliced.length * 26 + 50));
@@ -2065,7 +2151,7 @@ export function DashboardPage() {
             );
           })()}
 
-          {chartType === "rank" && isGrouped && rankingData.length === 0 && !groupedLoading && (
+          {chartRuntimeReady && chartType === "rank" && isGrouped && rankingData.length === 0 && !groupedLoading && (
             <div className="chart-empty">{"\u5207\u6362\u5206\u7ec4\u7ef4\u5ea6\u6216\u8c03\u6574\u7b5b\u9009\u6761\u4ef6"}</div>
           )}
 
@@ -2097,6 +2183,8 @@ export function DashboardPage() {
           </div>
         </div>
 
+        {heavyQueriesReady ? (
+          <>
         {/* ── Advanced analysis ───────────────────────── */}
         <div
           className="card analysis-deck-card dashboard-advanced-card dashboard-deck-card--compact-hero"
@@ -3340,6 +3428,10 @@ export function DashboardPage() {
           {pmItems.length===0 && !pmLoading && <div className="chart-empty">{"\u8f93\u5165\u76ee\u6807\u8f66\u578b\u53c2\u6570\u6216\u76f4\u63a5\u70b9\u51fb\u300c\u52a0\u8f7d\u5b9a\u4f4d\u56fe\u300d\u67e5\u770b\u5f53\u524d\u7b5b\u9009\u8fb9\u754c\u5185\u5b9a\u4ef7"}</div>}
           </div>
         </div>
+          </>
+        ) : (
+          <DeferredDashboardDecksPlaceholder onActivate={releaseHeavyQueries} />
+        )}
 
         <div className="card analysis-deck-card analysis-route-card dashboard-deck-card--compact-hero">
           <div className="dashboard-hero-head dashboard-deck-hero-head">

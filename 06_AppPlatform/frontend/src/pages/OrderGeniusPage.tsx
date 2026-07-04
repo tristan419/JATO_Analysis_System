@@ -25,9 +25,11 @@ import {
   OrderGeniusGrid,
   type OrderGeniusGridRow,
 } from "../components/OrderGeniusGrid";
+import { CommandSelect } from "../components/CommandSelect";
 import { DeckFloatingDrawer, FlipToolCard } from "../components/deckControls";
 import { MaterialFinanceMatrix, MaterialFinanceWorkbench } from "../components/finance";
 import { PageBannerStack, PageLoadingShell } from "../components/PageFeedback";
+import { BomEditPanel, type BomEditCountryOption } from "../components/orderGenius";
 import type {
   ColourHexRule,
   ColourSurchargeRule,
@@ -55,6 +57,11 @@ const BOM_ADMIN_SURCHARGE_TYPES = [
   { value: "dual", label: "Dual" },
   { value: "special", label: "Special" },
 ] as const;
+const POWERTRAIN_COMMAND_OPTIONS = ["BEV", "HEV", "PHEV", "ICE", "MHEV", "REEV", "Other"].map((value) => ({
+  value,
+  label: value,
+  keywords: [value.toLowerCase()],
+}));
 const BOM_ADMIN_TOOLS_COMPACT_BREAKPOINT = 680;
 const BOM_ADMIN_TOOLS_PHONE_BREAKPOINT = 520;
 const DEFAULT_COLOUR_SURCHARGES: Record<string, number> = {
@@ -102,14 +109,33 @@ const BOM_ADMIN_STICKY_COLUMN_LEFTS = {
     + BOM_ADMIN_STICKY_COLUMN_WIDTHS.dual,
 } as const;
 const BOM_ADMIN_TRAILING_COLUMN_WIDTHS = {
-  lifecycle: 90,
-  actions: 146,
+  lifecycle: 118,
+  actions: 176,
   from: 92,
   to: 92,
 } as const;
 const BOM_ADMIN_FIXED_COLUMN_WIDTH =
   Object.values(BOM_ADMIN_STICKY_COLUMN_WIDTHS).reduce((total, width) => total + width, 0)
   + Object.values(BOM_ADMIN_TRAILING_COLUMN_WIDTHS).reduce((total, width) => total + width, 0);
+
+const BOM_LIFECYCLE_OPTIONS = [
+  {
+    value: "active",
+    label: "Active",
+    description: "Active：正常在选品表出现；有正价 FOB 就可以填数量、导出 PI。",
+  },
+  {
+    value: "phase_out",
+    label: "Phase out",
+    description: "Phase out：退市中，但仍会在选品表出现；有正价 FOB 仍可填数量。From / To 用来标记退市窗口，目前不会自动按日期锁死。",
+  },
+  {
+    value: "historical",
+    label: "History",
+    description: "History：历史物料，不作为新选品出现；主要保留历史记录，避免老订单/老数据丢失。",
+  },
+] as const;
+type BomLifecycleStatus = (typeof BOM_LIFECYCLE_OPTIONS)[number]["value"];
 
 function colourSurchargeKey(brand: string, colourType: string): string {
   return `${brand.trim().toUpperCase()}|${colourType.trim().toLowerCase()}`;
@@ -124,6 +150,23 @@ function normalizeBomAdminColourTier(value: unknown): BomAdminColourTier {
     return "special";
   }
   return "single";
+}
+
+function normalizeBomLifecycleStatus(value: unknown): BomLifecycleStatus {
+  const raw = String(value ?? "").trim().toLowerCase();
+  if (raw === "phase_out" || raw === "phase out" || raw === "phased_out") return "phase_out";
+  if (raw === "historical" || raw === "history") return "historical";
+  return "active";
+}
+
+function formatBomLifecycleLabel(value: unknown): string {
+  const status = normalizeBomLifecycleStatus(value);
+  return BOM_LIFECYCLE_OPTIONS.find((option) => option.value === status)?.label ?? "Active";
+}
+
+function formatBomLifecycleTooltip(value: unknown): string {
+  const status = normalizeBomLifecycleStatus(value);
+  return BOM_LIFECYCLE_OPTIONS.find((option) => option.value === status)?.description ?? "";
 }
 
 function mergeBomAdminColourTier(...tiers: unknown[]): BomAdminColourTier {
@@ -217,6 +260,39 @@ function deriveMaterialTemplate(codes: string[]): string {
     return `${prefix}**${suffix}`;
   }
   return prefix + suffix || cleanCodes[0];
+}
+
+type MaterialTemplateRemarkSource = {
+  materialCode: string;
+  bomTemplate?: string | null;
+  colourCode?: string | null;
+  remark?: string | null;
+};
+
+function materialTemplateForRow(row: MaterialTemplateRemarkSource): string {
+  const stored = row.bomTemplate?.trim().toUpperCase();
+  if (stored) return stored;
+  const materialCode = row.materialCode.trim().toUpperCase();
+  const colourCode = row.colourCode?.trim().toUpperCase();
+  if (materialCode && colourCode) {
+    const colourIndex = materialCode.indexOf(colourCode);
+    if (colourIndex >= 0) {
+      return `${materialCode.slice(0, colourIndex)}**${materialCode.slice(colourIndex + colourCode.length)}`;
+    }
+  }
+  return deriveMaterialTemplate([materialCode]) || materialCode;
+}
+
+function buildMaterialTemplateRemarkMap(rows: MaterialTemplateRemarkSource[]): Map<string, string> {
+  const remarkByTemplate = new Map<string, string>();
+  for (const row of rows) {
+    const template = materialTemplateForRow(row);
+    const remark = String(row.remark || "").trim();
+    if (template && remark && !remarkByTemplate.has(template)) {
+      remarkByTemplate.set(template, remark);
+    }
+  }
+  return remarkByTemplate;
 }
 
 function normalizeAccountCode(value: string): string {
@@ -806,11 +882,13 @@ export function OrderGeniusPage() {
   const materialSuggestions = useMemo(() => {
     const seen = new Set<string>();
     const suggestions: Array<{ materialCode: string; remark: string | null }> = [];
+    const remarkByTemplate = buildMaterialTemplateRemarkMap(combinedMatrix.rows);
     for (const row of combinedMatrix.rows) {
       const materialCode = row.materialCode?.trim();
       if (!materialCode || seen.has(materialCode)) continue;
       seen.add(materialCode);
-      suggestions.push({ materialCode, remark: row.remark ?? null });
+      const templateRemark = remarkByTemplate.get(materialTemplateForRow(row));
+      suggestions.push({ materialCode, remark: templateRemark ?? row.remark ?? null });
       if (suggestions.length >= 300) break;
     }
     return suggestions;
@@ -819,6 +897,25 @@ export function OrderGeniusPage() {
   // ── Grid data + cell editing ──────────────────────────────────────
 
   const flatRows = useMemo<OrderGeniusGridRow[]>(() => {
+    const remarkByTemplate = buildMaterialTemplateRemarkMap(combinedMatrix.rows);
+
+    const bomTemplateForRow = (row: MatrixRowWithCountry): string => materialTemplateForRow(row);
+
+    const parentMaterialRemarkForRow = (row: MatrixRowWithCountry): string | undefined => {
+      const remark = remarkByTemplate.get(bomTemplateForRow(row)) || String(row.remark || "").trim();
+      return remark || undefined;
+    };
+
+    const commonParentMaterialRemark = (rows: MatrixRowWithCountry[]): string | undefined => {
+      const templates = new Set(rows.map(bomTemplateForRow));
+      if (templates.size !== 1) return undefined;
+      for (const row of rows) {
+        const remark = parentMaterialRemarkForRow(row);
+        if (remark) return remark;
+      }
+      return undefined;
+    };
+
     const getEffectiveQuantity = (r: MatrixRowWithCountry, month: number): number => {
       const stateKey = quantityCellKey(r._countryCode, r.materialCode, month);
       if (Object.prototype.hasOwnProperty.call(quantityDrafts, stateKey)) {
@@ -827,7 +924,7 @@ export function OrderGeniusPage() {
       return r.months?.[String(month)]?.quantity ?? 0;
     };
 
-    const makeRow = (r: MatrixRowWithCountry, indent = false): OrderGeniusGridRow => {
+    const makeRow = (r: MatrixRowWithCountry, indent = false, includeParentRemark = true): OrderGeniusGridRow => {
       const row: OrderGeniusGridRow = {
         materialCode: r.materialCode,
         bomTemplate: r.bomTemplate,
@@ -838,7 +935,7 @@ export function OrderGeniusPage() {
         fobEur: r.fobEur ?? null,
         lifecycleStatus: r.lifecycleStatus,
         editable: r.editable,
-        remark: r.remark ?? undefined,
+        remark: includeParentRemark ? parentMaterialRemarkForRow(r) : undefined,
         _countryCode: r._countryCode,
         _indent: indent || undefined,
         _versions: {},
@@ -929,7 +1026,7 @@ export function OrderGeniusPage() {
         fobEur: aggregate.floorFob,
         lifecycleStatus: "active",
         editable: false,
-        remark: "",
+        remark: params.kind === "bom" ? commonParentMaterialRemark(params.rows) : undefined,
         _countryCode: params.countryCode,
         _versions: {},
         _errors: {},
@@ -951,20 +1048,6 @@ export function OrderGeniusPage() {
       return header;
     };
 
-    const bomTemplateForRow = (row: MatrixRowWithCountry): string => {
-      const stored = row.bomTemplate?.trim().toUpperCase();
-      if (stored) return stored;
-      const materialCode = row.materialCode.trim().toUpperCase();
-      const colourCode = row.colourCode?.trim().toUpperCase();
-      if (materialCode && colourCode) {
-        const colourIndex = materialCode.indexOf(colourCode);
-        if (colourIndex >= 0) {
-          return `${materialCode.slice(0, colourIndex)}**${materialCode.slice(colourIndex + colourCode.length)}`;
-        }
-      }
-      return deriveMaterialTemplate([materialCode]) || materialCode;
-    };
-
     const appendBomChildren = (
       target: OrderGeniusGridRow[],
       rows: MatrixRowWithCountry[],
@@ -981,7 +1064,28 @@ export function OrderGeniusPage() {
       }
       const sortedBomGroups = [...bomGroups.entries()].sort(([left], [right]) => left.localeCompare(right));
       if (sortedBomGroups.length <= 1) {
-        for (const row of rows) target.push(makeRow(row, level > 0));
+        const singleBomEntry = sortedBomGroups[0];
+        const singleBomTemplate = singleBomEntry?.[0] ?? "";
+        const singleBomRows = singleBomEntry?.[1] ?? rows;
+        const parentRemark = commonParentMaterialRemark(singleBomRows);
+        if (singleBomTemplate && parentRemark) {
+          const bomKey = `${parentKey}|bom|${singleBomTemplate}`;
+          const aggregate = aggregateRows(singleBomRows);
+          target.push(makeGroupHeader({
+            groupKey: bomKey,
+            label: singleBomTemplate,
+            meta: `${singleBomRows.length} variants · ${aggregate.ttl.toLocaleString()} units`,
+            color,
+            rows: singleBomRows,
+            countryCode: singleBomRows[0]?._countryCode,
+            level,
+            kind: "bom",
+            expanded: true,
+          }));
+          for (const row of singleBomRows) target.push(makeRow(row, true, false));
+        } else {
+          for (const row of rows) target.push(makeRow(row, level > 0, false));
+        }
         return;
       }
       for (const [bomTemplate, bomRows] of sortedBomGroups) {
@@ -1000,7 +1104,7 @@ export function OrderGeniusPage() {
           expanded,
         }));
         if (expanded) {
-          for (const row of bomRows) target.push(makeRow(row, true));
+          for (const row of bomRows) target.push(makeRow(row, true, false));
         }
       }
     };
@@ -1319,6 +1423,7 @@ export function OrderGeniusPage() {
 
   const piCandidateRows = useMemo<OrderGeniusGridRow[]>(() => {
     if (selectedMonth == null) return [];
+    const remarkByTemplate = buildMaterialTemplateRemarkMap(combinedMatrix.rows);
     const seen = new Set<string>();
     const result: OrderGeniusGridRow[] = [];
     for (const row of combinedMatrix.rows) {
@@ -1341,7 +1446,7 @@ export function OrderGeniusPage() {
         fobEur: row.fobEur ?? null,
         lifecycleStatus: row.lifecycleStatus,
         editable: row.editable,
-        remark: row.remark ?? undefined,
+        remark: remarkByTemplate.get(materialTemplateForRow(row)) ?? row.remark ?? undefined,
         _countryCode: row._countryCode,
         _versions: {},
         _errors: {},
@@ -1836,6 +1941,8 @@ export function OrderGeniusPage() {
   const [showPiExportOptions, setShowPiExportOptions] = useState(false);
   const [piExportFreightEur, setPiExportFreightEur] = useState("");
   const [piExportInsuranceEur, setPiExportInsuranceEur] = useState("");
+  const [piExportDomesticFreightEur, setPiExportDomesticFreightEur] = useState("");
+  const [piExportDomesticInsuranceEur, setPiExportDomesticInsuranceEur] = useState("");
 
   const buildExportOptions = () => ({
     brand: brandFilter || undefined,
@@ -1896,6 +2003,8 @@ export function OrderGeniusPage() {
   const handlePiExport = async () => {
     const freightEur = optionalExportNumber(piExportFreightEur);
     const insuranceEur = optionalExportNumber(piExportInsuranceEur);
+    const domesticFreightEur = optionalExportNumber(piExportDomesticFreightEur);
+    const domesticInsuranceEur = optionalExportNumber(piExportDomesticInsuranceEur);
     if (piExportFreightEur.trim() && freightEur === undefined) {
       setError("PI 单车运费必须是非负数字");
       return;
@@ -1904,10 +2013,20 @@ export function OrderGeniusPage() {
       setError("PI 单车保费必须是非负数字");
       return;
     }
+    if (piExportDomesticFreightEur.trim() && domesticFreightEur === undefined) {
+      setError("PI 一次内销单车运费必须是非负数字");
+      return;
+    }
+    if (piExportDomesticInsuranceEur.trim() && domesticInsuranceEur === undefined) {
+      setError("PI 一次内销单车保费必须是非负数字");
+      return;
+    }
     const exportOptions = {
       ...buildExportOptions(),
       freightEur,
       insuranceEur,
+      domesticFreightEur,
+      domesticInsuranceEur,
     };
     const monthSuffix = exportMonthSuffix();
     try {
@@ -2260,7 +2379,7 @@ export function OrderGeniusPage() {
         <div className="og-pi-export-options">
           <div className="og-pi-export-options-copy">
             <strong>PI Export Options</strong>
-            <span>单车运费和单车保费选填；留空时导出为空值。</span>
+            <span>四个费用字段选填；一次内销单价自动使用 NL 价格，没有则为空。</span>
           </div>
           <label>
             单车运费
@@ -2281,6 +2400,28 @@ export function OrderGeniusPage() {
               step="1"
               value={piExportInsuranceEur}
               onChange={(event) => setPiExportInsuranceEur(event.target.value)}
+              placeholder="blank"
+            />
+          </label>
+          <label>
+            一次内销单车运费
+            <input
+              type="number"
+              min="0"
+              step="1"
+              value={piExportDomesticFreightEur}
+              onChange={(event) => setPiExportDomesticFreightEur(event.target.value)}
+              placeholder="blank"
+            />
+          </label>
+          <label>
+            一次内销单车保费
+            <input
+              type="number"
+              min="0"
+              step="1"
+              value={piExportDomesticInsuranceEur}
+              onChange={(event) => setPiExportDomesticInsuranceEur(event.target.value)}
               placeholder="blank"
             />
           </label>
@@ -2679,7 +2820,7 @@ export function OrderGeniusPage() {
               onChange={() => setVisibleColumns((v) => ({ ...v, [col]: !v[col] }))}
               style={{ marginRight: 4 }}
             />
-            {{ months: "Months", amount: "Amount", ttlQty: "TTL Qty", ttlAmount: "TTL Amt", fob: "FOB", materialCode: "Material", remark: "Remark" }[col]}
+            {{ months: "Months", amount: "Amount", ttlQty: "TTL Qty", ttlAmount: "TTL Amt", fob: "FOB", materialCode: "Material", remark: "Note" }[col]}
           </label>
         ))}
       </div>
@@ -2804,6 +2945,7 @@ type BomDraftFobEntry = {
   colourSurchargeEur?: number | null;
   fobSourceCountryCode?: string | null;
   fobSourceMode?: string | null;
+  remark?: string | null;
 };
 
 type BomFobPatch = {
@@ -2812,6 +2954,8 @@ type BomFobPatch = {
   finalFobEur: number | null;
   paymentTermCode?: string | null;
   fobSourceMode?: string | null;
+  fobSourceCountryCode?: string | null;
+  remark?: string | null;
 };
 
 type BomCopyDraft = {
@@ -2828,6 +2972,7 @@ type BomCopyDraft = {
   lifecycleStatus: string;
   effectiveFrom: string | null;
   effectiveTo: string | null;
+  remark: string;
   fobByCountry: Record<string, BomDraftFobEntry>;
   bulkDeltaEur: string;
   bulkSelectedCountries: string[];
@@ -2942,7 +3087,30 @@ interface BomFinanceQuickCard {
   materialCodes: string[];
   title: string;
   fob: number | null;
+  remark: string;
+  fobSourceMode?: string | null;
+  fobSourceCountryCode?: string | null;
 }
+
+type BomFobEditor = {
+  materialCodes: string[];
+  countryCode: string;
+  fob: number | null;
+  originalFob: number | null;
+  remark: string;
+  fobSourceMode?: string | null;
+  fobSourceCountryCode?: string | null;
+};
+
+type BomFobSaveResponse = {
+  materialCode: string;
+  countryCode: string;
+  finalFobEur: number | null;
+  paymentTermCode?: string | null;
+  fobSourceMode?: string | null;
+  fobSourceCountryCode?: string | null;
+  remark?: string | null;
+};
 
 interface BomFinanceDrawerScope {
   countryCode: string;
@@ -3036,7 +3204,7 @@ function BomAdminPanel({
   const [loading, setLoading] = useState(true);
   const [searchText, setSearchText] = useState(cachedSearchText);
   const [debouncedSearch, setDebouncedSearch] = useState(cachedSearchText.trim());
-  const [editFob, setEditFob] = useState<{ materialCodes: string[]; countryCode: string; fob: number | null } | null>(null);
+  const [editFob, setEditFob] = useState<BomFobEditor | null>(null);
   const [financeQuickCard, setFinanceQuickCard] = useState<BomFinanceQuickCard | null>(null);
   const [financeQuickFlipped, setFinanceQuickFlipped] = useState(false);
   const [financeQuickRows, setFinanceQuickRows] = useState<CountryMaterialFinanceRow[]>([]);
@@ -3066,6 +3234,8 @@ function BomAdminPanel({
   const [copyCountryMessage, setCopyCountryMessage] = useState("");
   const [bomAdminNotice, setBomAdminNotice] = useState("");
   const [bomAdminError, setBomAdminError] = useState("");
+  const [savingProductKey, setSavingProductKey] = useState<string | null>(null);
+  const [productSaveMessages, setProductSaveMessages] = useState<Record<string, { kind: "success" | "error"; text: string }>>({});
   const [copyingCountry, setCopyingCountry] = useState(false);
   const [adjustCountryForm, setAdjustCountryForm] = useState<BomAdminAdjustCountryForm>({
     ...EMPTY_BOM_ADMIN_ADJUST_COUNTRY_FORM,
@@ -3243,6 +3413,7 @@ function BomAdminPanel({
     colourSurchargeEur?: number | null,
     fobSourceMode?: string | null,
     fobSourceCountryCode?: string | null,
+    remark?: string | null,
   ): string => {
     const fobLabel = baseFob != null && baseFob > 0
       ? `FOB ${baseFob.toLocaleString()} EUR`
@@ -3251,7 +3422,8 @@ function BomAdminPanel({
       ? ` · surcharge +${colourSurchargeEur.toLocaleString()} EUR`
       : "";
     const sourceLabel = formatBomFobSourceLabel(fobSourceMode, fobSourceCountryCode);
-    return `${countryTooltipByCode.get(countryCode) || formatCountryCodeTooltip(countryCode)} · ${fobLabel}${surchargeLabel}${sourceLabel ? ` · ${sourceLabel}` : ""}`;
+    const remarkLabel = String(remark || "").trim();
+    return `${countryTooltipByCode.get(countryCode) || formatCountryCodeTooltip(countryCode)} · ${fobLabel}${surchargeLabel}${sourceLabel ? ` · ${sourceLabel}` : ""}${remarkLabel ? ` · remark: ${remarkLabel}` : ""}`;
   };
 
   const formatBomFobSourceLabel = (
@@ -3440,12 +3612,15 @@ function BomAdminPanel({
       const fobByCountry: Record<string, BomDraftFobEntry> = { ...(sku.fobByCountry || {}) };
       for (const update of materialUpdates) {
         const existing = fobByCountry[update.countryCode] || {};
+        const hasRemarkUpdate = Object.prototype.hasOwnProperty.call(update, "remark");
         fobByCountry[update.countryCode] = {
           ...existing,
           uploadedFobEur: update.finalFobEur,
           finalFobEur: update.finalFobEur,
           paymentTermCode: update.paymentTermCode ?? existing.paymentTermCode ?? null,
           fobSourceMode: update.fobSourceMode ?? existing.fobSourceMode ?? "manual_edit",
+          fobSourceCountryCode: update.fobSourceCountryCode ?? existing.fobSourceCountryCode ?? null,
+          remark: hasRemarkUpdate ? (update.remark ?? null) : existing.remark ?? null,
         };
       }
       return { ...sku, fobByCountry };
@@ -3482,6 +3657,32 @@ function BomAdminPanel({
       ...sku,
       interiorColorName,
       editionTag,
+    }));
+  }, [patchBomSkus]);
+
+  const getBomTemplateRemark = useCallback((allSkus: any[]): string => {
+    for (const sku of allSkus) {
+      const remark = String(sku?.remark || "").trim();
+      if (remark) return remark;
+    }
+    return "";
+  }, []);
+
+  const getBomCountryFobRemark = useCallback((allSkus: any[], countryCode: string): string => {
+    const normalizedCountry = countryCode.trim().toUpperCase();
+    for (const sku of allSkus) {
+      const fob = sku?.fobByCountry?.[normalizedCountry] as BomDraftFobEntry | undefined;
+      const remark = String(fob?.remark || "").trim();
+      if (remark) return remark;
+    }
+    return "";
+  }, []);
+
+  const patchBomRemark = useCallback((materialCodes: string[], remark: string) => {
+    patchBomSkus(materialCodes, (sku) => ({
+      ...sku,
+      remark,
+      rowVersion: typeof sku.rowVersion === "number" ? sku.rowVersion + 1 : sku.rowVersion,
     }));
   }, [patchBomSkus]);
 
@@ -3690,16 +3891,30 @@ function BomAdminPanel({
 
   const handleFobSave = async () => {
     if (!editFob) return;
+    const remark = editFob.fob != null && editFob.fob > 0 ? editFob.remark.trim() : "";
+    const nextFob = editFob.fob != null && editFob.fob > 0 ? editFob.fob : null;
+    const originalFob = editFob.originalFob != null && editFob.originalFob > 0 ? editFob.originalFob : null;
+    const didChangeFob = nextFob !== originalFob;
     try {
+      const responses: BomFobSaveResponse[] = [];
       for (const mc of editFob.materialCodes) {
-        await api.updateSkuFob(mc, { countryCode: editFob.countryCode, finalFobEur: editFob.fob });
+        responses.push(await api.updateSkuFob(mc, { countryCode: editFob.countryCode, finalFobEur: editFob.fob, remark }) as BomFobSaveResponse);
       }
-      patchBomFobs(editFob.materialCodes.map((materialCode) => ({
-        materialCode,
-        countryCode: editFob.countryCode,
-        finalFobEur: editFob.fob,
-        fobSourceMode: "manual_edit",
-      })));
+      const responseByMaterial = new Map(
+        responses.map((response) => [bomMaterialKey(response.materialCode), response]),
+      );
+      patchBomFobs(editFob.materialCodes.map((materialCode) => {
+        const response = responseByMaterial.get(bomMaterialKey(materialCode));
+        return {
+          materialCode,
+          countryCode: editFob.countryCode,
+          finalFobEur: response?.finalFobEur ?? nextFob,
+          paymentTermCode: response?.paymentTermCode ?? null,
+          fobSourceMode: response?.fobSourceMode ?? (didChangeFob ? "manual_edit" : editFob.fobSourceMode ?? null),
+          fobSourceCountryCode: response?.fobSourceCountryCode ?? (didChangeFob ? null : editFob.fobSourceCountryCode ?? null),
+          remark: response?.remark ?? remark,
+        };
+      }));
       setEditFob(null);
       scheduleLoad(1200);
       onFobChanged?.();
@@ -3950,6 +4165,11 @@ function BomAdminPanel({
       allSkus.some((sku: any) => getDraftBaseFob(sku?.fobByCountry?.[countryCode]) != null),
     );
 
+  const getUnfilledBomCountryCodes = (allSkus: any[]): string[] =>
+    getBomCountryCodes(allSkus).filter((countryCode) =>
+      !allSkus.some((sku: any) => getDraftBaseFob(sku?.fobByCountry?.[countryCode]) != null),
+    );
+
   const getBulkFobEditor = (
     bomKey: string,
     allSkus: any[],
@@ -3979,7 +4199,7 @@ function BomAdminPanel({
   const setBulkFobCountryScope = (
     bomKey: string,
     allSkus: any[],
-    scope: "all" | "filled" | "clear",
+    scope: "all" | "filled" | "unfilled" | "clear",
   ) => {
     updateBulkFobEditor(bomKey, allSkus, (current) => ({
       ...current,
@@ -3988,7 +4208,9 @@ function BomAdminPanel({
           ? getBomCountryCodes(allSkus)
           : scope === "filled"
             ? getFilledBomCountryCodes(allSkus)
-            : [],
+            : scope === "unfilled"
+              ? getUnfilledBomCountryCodes(allSkus)
+              : [],
     }));
     setBulkFobErrors((prev) => {
       if (!prev[bomKey]) return prev;
@@ -4144,6 +4366,7 @@ function BomAdminPanel({
     ref: any,
     allSkus: any[],
     sourceDisplayLabel?: string,
+    selectedCountryCodes?: string[],
   ) => {
     const initialTemplate = String(
       bomTemplate || deriveMaterialTemplate(allSkus.map((sku: any) => String(sku.materialCode || "")).filter(Boolean)) || ref.materialCode || "",
@@ -4168,6 +4391,7 @@ function BomAdminPanel({
       lifecycleStatus: String(ref.lifecycleStatus || "active"),
       effectiveFrom: ref.effectiveFrom ? String(ref.effectiveFrom) : null,
       effectiveTo: ref.effectiveTo ? String(ref.effectiveTo) : null,
+      remark: getBomTemplateRemark(allSkus),
       fobByCountry: Object.fromEntries(
         Object.entries(ref.fobByCountry || {}).map(([countryCode, fob]) => [
           countryCode,
@@ -4194,7 +4418,9 @@ function BomAdminPanel({
     };
     const nextDraft: BomCopyDraft = {
       ...baseDraft,
-      bulkSelectedCountries: getFilledDraftCountryCodes(baseDraft),
+      bulkSelectedCountries: Array.isArray(selectedCountryCodes)
+        ? getDraftCountryCodes(baseDraft).filter((code) => selectedCountryCodes.includes(code))
+        : getFilledDraftCountryCodes(baseDraft),
     };
     setCopyDrafts((prev) => ({ ...prev, [draftKey]: nextDraft }));
     setCopyDraftErrors((prev) => {
@@ -4266,6 +4492,7 @@ function BomAdminPanel({
           colourTier: effectiveColourTier,
           powertrain: draft.powertrain || "ICE",
           sourceBomTemplate: draft.sourceBomTemplate,
+          remark: draft.remark || undefined,
         });
         if (effectiveColourTier !== "single") {
           await api.updateColourTier(materialCode, effectiveColourTier);
@@ -4295,6 +4522,7 @@ function BomAdminPanel({
             countryCode,
             finalFobEur: Number(baseFob),
             paymentTermCode: fob?.paymentTermCode ?? undefined,
+            remark: fob?.remark ?? null,
           });
         }
         createdSkus.push({
@@ -4314,6 +4542,7 @@ function BomAdminPanel({
           lifecycleStatus: draft.lifecycleStatus || "active",
           effectiveFrom: draft.effectiveFrom,
           effectiveTo: draft.effectiveTo,
+          remark: draft.remark,
           rowVersion: 1,
           fobByCountry: Object.fromEntries(
             draft.bulkSelectedCountries.flatMap((countryCode) => {
@@ -4604,6 +4833,7 @@ function BomAdminPanel({
         colourType: addColourEditor.tierName === "single" ? "single" : addColourEditor.tierName,
         colourTier: addColourEditor.tierName,
         powertrain: addColourEditor.powertrain,
+        remark: String(addColourEditor.fobSourceSku?.remark || "").trim() || undefined,
       });
       await api.updateColourTier(materialCode, addColourEditor.tierName);
       if (addColourEditor.interiorColorName) {
@@ -4633,12 +4863,23 @@ function BomAdminPanel({
 
   const handleProductMetadataSave = async (
     event: FormEvent<HTMLFormElement>,
-    materialCodes: string[],
+    allSkus: any[],
+    saveKey: string,
   ) => {
     event.preventDefault();
     const form = new FormData(event.currentTarget);
+    const materialCodes = allSkus
+      .map((sku) => String(sku?.materialCode || "").trim())
+      .filter(Boolean);
     const leadCode = materialCodes[0];
     if (!leadCode) return;
+    const remark = String(form.get("remark") || "").trim();
+    setSavingProductKey(saveKey);
+    setProductSaveMessages((prev) => {
+      const next = { ...prev };
+      delete next[saveKey];
+      return next;
+    });
     try {
       await api.updateSkuMetadata(leadCode, {
         materialCodes,
@@ -4647,9 +4888,33 @@ function BomAdminPanel({
         version: String(form.get("version") || ""),
         powertrain: String(form.get("powertrain") || ""),
       });
+      for (const sku of allSkus) {
+        const materialCode = String(sku?.materialCode || "").trim();
+        if (!materialCode) continue;
+        const currentRemark = String(sku?.remark || "").trim();
+        if (currentRemark === remark) continue;
+        await api.updateSkuRemark(materialCode, {
+          remark,
+          rowVersion: Number(sku?.rowVersion || 1),
+        });
+      }
+      patchBomRemark(materialCodes, remark);
+      setBomAdminError("");
+      setBomAdminNotice("Saved product fields.");
+      setProductSaveMessages((prev) => ({
+        ...prev,
+        [saveKey]: { kind: "success", text: "Saved product fields." },
+      }));
       load();
     } catch (err) {
-      alert(getErrorMessage(err));
+      const message = getErrorMessage(err);
+      setBomAdminError(message);
+      setProductSaveMessages((prev) => ({
+        ...prev,
+        [saveKey]: { kind: "error", text: message },
+      }));
+    } finally {
+      setSavingProductKey((current) => (current === saveKey ? null : current));
     }
   };
 
@@ -5256,6 +5521,7 @@ function BomAdminPanel({
             <span><b>C</b> copied FOB</span>
             <span><b>B</b> country adjustment</span>
             <span><b>M</b> cell edit</span>
+            <span><i className="bom-fob-legend-remark-dot" /> remark</span>
           </div>
           <span style={{ fontSize: 12, color: "#64748b", whiteSpace: "nowrap" }}>{skus.length} SKUs · {modelGroups.size} models · {sortedCountries.length} countries</span>
         </div>
@@ -5987,10 +6253,13 @@ function BomAdminPanel({
 	          <input type="text" placeholder="Code" value={newMaterial.colourCode}
 	            onChange={e => setNewMaterial({...newMaterial, colourCode: e.target.value})}
 	            style={{ width: 60, fontSize: 11 }} />
-	          <select value={newMaterial.powertrain} onChange={e => setNewMaterial({...newMaterial, powertrain: e.target.value})}
-	            style={{ fontSize: 11, width: 70 }}>
-	            {['BEV','HEV','PHEV','ICE','MHEV','REEV'].map(p => <option key={p} value={p}>{p}</option>)}
-	          </select>
+	          <CommandSelect
+	            value={newMaterial.powertrain}
+	            options={POWERTRAIN_COMMAND_OPTIONS}
+	            searchPlaceholder="Search powertrain..."
+	            className="bom-add-powertrain-select"
+	            onValueChange={(powertrain) => setNewMaterial({...newMaterial, powertrain})}
+	          />
           <div style={{ display: "inline-flex", gap: 6, flexShrink: 0 }}>
             <button className="btn btn-sm btn-primary" onClick={async () => {
               await handleCreateMaterial();
@@ -6083,10 +6352,19 @@ function BomAdminPanel({
                           <th title="Single colour tier" style={{ ...bomHeaderBaseStyle, ...getBomStickyCellStyle("single", "#334155", 3) }}>Single</th>
                           <th title="Dual colour tier" style={{ ...bomHeaderBaseStyle, ...getBomStickyCellStyle("dual", "#334155", 3) }}>Dual</th>
                           <th title="Special colour tier" style={{ ...bomHeaderBaseStyle, ...getBomStickyCellStyle("special", "#334155", 3) }}>Spec</th>
-                          <th title="Lifecycle" style={{ ...bomHeaderBaseStyle, width: BOM_ADMIN_TRAILING_COLUMN_WIDTHS.lifecycle, minWidth: BOM_ADMIN_TRAILING_COLUMN_WIDTHS.lifecycle }}>LC</th>
+                          <th title="Lifecycle status and active window" style={{ ...bomHeaderBaseStyle, width: BOM_ADMIN_TRAILING_COLUMN_WIDTHS.lifecycle, minWidth: BOM_ADMIN_TRAILING_COLUMN_WIDTHS.lifecycle }}>LC</th>
                           <th title="Actions" style={{ ...bomHeaderBaseStyle, width: BOM_ADMIN_TRAILING_COLUMN_WIDTHS.actions, minWidth: BOM_ADMIN_TRAILING_COLUMN_WIDTHS.actions }}>Actions</th>
-                          <th title="Effective from" style={{ ...bomHeaderBaseStyle, width: BOM_ADMIN_TRAILING_COLUMN_WIDTHS.from, minWidth: BOM_ADMIN_TRAILING_COLUMN_WIDTHS.from }}>From</th>
-                          <th title="Effective to" style={{ ...bomHeaderBaseStyle, width: BOM_ADMIN_TRAILING_COLUMN_WIDTHS.to, minWidth: BOM_ADMIN_TRAILING_COLUMN_WIDTHS.to }}>To</th>
+                          <th
+                            colSpan={2}
+                            title="Father material note"
+                            style={{
+                              ...bomHeaderBaseStyle,
+                              width: BOM_ADMIN_TRAILING_COLUMN_WIDTHS.from + BOM_ADMIN_TRAILING_COLUMN_WIDTHS.to,
+                              minWidth: BOM_ADMIN_TRAILING_COLUMN_WIDTHS.from + BOM_ADMIN_TRAILING_COLUMN_WIDTHS.to,
+                            }}
+                          >
+                            Note
+                          </th>
                           {sortedCountries.map(c => (
                             <th key={c} title={countryTooltipByCode.get(c) || formatCountryCodeTooltip(c)} style={{ width: BOM_ADMIN_COUNTRY_COLUMN_WIDTH, minWidth: BOM_ADMIN_COUNTRY_COLUMN_WIDTH, textAlign: "center", color: c === 'NL' ? '#d97706' : '#64748b', fontWeight: c === 'NL' ? 700 : 600 }}>
                               <button
@@ -6111,6 +6389,7 @@ function BomAdminPanel({
                           const ref = allSkus[0];
                           const isHist = ref.lifecycleStatus === 'historical';
                           const isPhaseOut = ref.lifecycleStatus === 'phase_out';
+                          const lifecycleStatus = normalizeBomLifecycleStatus(ref.lifecycleStatus);
                           const allCodes = allSkus.map((s: any) => s.materialCode);
                           const intName = (ref as any).interiorColorName || '';
                           const edTag = (ref as any).editionTag || '';
@@ -6124,11 +6403,24 @@ function BomAdminPanel({
                           // Helper: render a tier cell with colour chips and drop zone
                           const editing = editingBoms.has(bomTemplate);
                           const draftKey = `${mk}|${vk}|${bomTemplate}`;
+                          const currentBomTemplateRemark = getBomTemplateRemark(allSkus);
+                          const productSaveMessage = productSaveMessages[draftKey];
+                          const isSavingProduct = savingProductKey === draftKey;
                           const copyDraft = copyDrafts[draftKey];
                           const bulkFobEditor = bulkFobEditors[bomTemplate] || {
                             deltaEur: "",
                             selectedCountries: tiers.filledCountryCodes,
                           };
+                          const editCountryOptions: BomEditCountryOption[] = tiers.countryCodes.map((countryCode) => {
+                            const hasFob = tiers.filledCountryCodeSet.has(countryCode);
+                            return {
+                              code: countryCode,
+                              hasFob,
+                              selected: bulkFobEditor.selectedCountries.includes(countryCode),
+                              title: `${countryCode}${countryLabels.get(countryCode) ? ` · ${countryLabels.get(countryCode)}` : ""}${hasFob ? "" : " · no FOB on this BOM yet"}`,
+                              onToggle: (checked: boolean) => toggleBulkFobCountry(bomTemplate, allSkus, countryCode, checked),
+                            };
+                          });
                           const renderTierCell = (tierName: BomAdminColourTier, tierSkus: any[], borderColor: string, bgColor: string) => {
                             const isOver = editing && dragOverTier === tierName && dragSku && !tierSkus.some((s: any) => s.materialCode === dragSku);
                             const dragProps = editing ? {
@@ -6177,14 +6469,15 @@ function BomAdminPanel({
                             return (
                               <td
                                 {...dragProps}
+                                className="bom-admin-colour-tier-cell"
                                 style={{
                                   padding: '3px 5px',
                                   outline: isOver ? `2px dashed ${borderColor}` : 'none',
                                   outlineOffset: -2,
-                                  verticalAlign: 'top',
+                                  verticalAlign: 'middle',
                                   ...getBomStickyCellStyle(tierName, isOver ? bgColor : "#fff", 1),
                                 }}>
-                                <div style={{ display: "flex", gap: 3, flexWrap: "wrap", alignItems: "center" }}>
+                                <div className={`bom-admin-colour-tier-stack${tierSkus.length > 2 ? " is-multi-row" : ""}`} style={{ display: "flex", gap: 3, flexWrap: "wrap", alignItems: "center" }}>
                                   {tierSkus.length === 0 ? (
                                     <span style={{ fontSize: 9, color: '#cbd5e1' }}>—</span>
                                   ) : (
@@ -6209,90 +6502,87 @@ function BomAdminPanel({
                             <tr
                               style={isHist ? { opacity: 0.55, textDecoration: "line-through" }
                                    : isPhaseOut ? { opacity: 0.75 } : undefined}>
-                              <td style={{
+                              <td className="bom-admin-material-cell" style={{
                                 borderLeft: `3px solid ${isHist ? '#9ca3af' : isPhaseOut ? '#d97706' : '#16a34a'}`,
                                 color: isHist ? '#9ca3af' : '#1e293b',
                                 maxWidth: 160,
                                 overflow: "hidden",
                                 ...getBomStickyCellStyle("bom", "white", 1),
                               }}>
-                                {editingBoms.has(bomTemplate) ? (
-                                  <input type="text" defaultValue={bomTemplate}
-                                    placeholder="BOM / Material Code"
-                                    onBlur={async (e) => {
-                                      const v = e.target.value.trim();
-                                      if (!v || v === bomTemplate) return;
-                                      try {
-                                        await api.updateBomTemplateMaterialCode(allCodes, v.toUpperCase());
-                                        await load();
-                                      } catch (err) {
-                                        alert(getErrorMessage(err));
-                                        e.target.value = bomTemplate;
-                                      }
-                                    }}
-                                    style={{ fontFamily: "monospace", fontSize: 11, width: "100%", minWidth: BOM_ADMIN_STICKY_COLUMN_WIDTHS.bom }} />
-                                ) : (
-                                  <div style={{ fontFamily: "monospace", fontSize: 11, fontWeight: 600, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}
-                                    title={bomTemplate}>{bomTemplate}</div>
-                                )}
-                                <div style={{ fontSize: 8, color: sourceWarnings.length ? '#d97706' : '#94a3b8', marginTop: 1 }}>
+                                <div className="bom-admin-material-main-line">
+                                  {editingBoms.has(bomTemplate) ? (
+                                    <input className="bom-admin-inline-input" type="text" defaultValue={bomTemplate}
+                                      placeholder="BOM / Material Code"
+                                      onBlur={async (e) => {
+                                        const v = e.target.value.trim();
+                                        if (!v || v === bomTemplate) return;
+                                        try {
+                                          await api.updateBomTemplateMaterialCode(allCodes, v.toUpperCase());
+                                          await load();
+                                        } catch (err) {
+                                          alert(getErrorMessage(err));
+                                          e.target.value = bomTemplate;
+                                        }
+                                      }}
+                                      style={{ fontFamily: "monospace", fontSize: 11, width: "100%", minWidth: BOM_ADMIN_STICKY_COLUMN_WIDTHS.bom }} />
+                                  ) : (
+                                    <div style={{ fontFamily: "monospace", fontSize: 11, fontWeight: 600, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}
+                                      title={bomTemplate}>{bomTemplate}</div>
+                                  )}
+                                </div>
+                                <div className="bom-admin-material-subline" style={{ color: sourceWarnings.length ? '#d97706' : '#94a3b8' }}>
                                   {sourceLabel}{sourceWarnings.length > 0 ? ` ⚠${sourceWarnings.length}` : ''}
                                 </div>
                               </td>
-                              <td style={getBomStickyCellStyle("interior", "white", 1)}>
-                                {editingBoms.has(bomTemplate) ? (
-                                  <input type="text" defaultValue={intName + (edTag ? ` · ${edTag}` : '')}
-                                    placeholder="Interior"
-                                    onBlur={async (e) => {
-                                      const v = e.target.value.trim();
-                                      if (!v || v === intName + (edTag ? ` · ${edTag}` : '')) return;
-                                      const edMatch = v.match(/^(.*?)\s*·\s*(.+)$/);
-                                      const newInterior = edMatch ? edMatch[1].trim() : v;
-	                                      const newEdition = edMatch ? edMatch[2].trim() : null;
-	                                      for (const s of allSkus) {
-	                                        try { await api.updateSkuInterior(s.materialCode, { interiorColorName: newInterior || null, editionTag: newEdition }); } catch {}
-	                                      }
-	                                      patchBomInterior(allCodes, newInterior || null, newEdition);
-	                                      scheduleLoad(1200);
-	                                    }}
-	                                    style={{ fontSize: 10, width: '100%', minWidth: 80 }} />
-                                ) : (
-                                  <span style={{ fontSize: 10, color: intName ? '#1e293b' : '#cbd5e1' }}>
-                                    {intName || '—'}{edTag ? <span style={{ color: '#7c3aed' }}> · {edTag}</span> : null}
-                                  </span>
-                                )}
+                              <td className="bom-admin-interior-cell" style={getBomStickyCellStyle("interior", "white", 1)}>
+                                <div className="bom-admin-interior-main-line">
+                                  {editingBoms.has(bomTemplate) ? (
+                                    <input className="bom-admin-inline-input" type="text" defaultValue={intName + (edTag ? ` · ${edTag}` : '')}
+                                      placeholder="Interior"
+                                      onBlur={async (e) => {
+                                        const v = e.target.value.trim();
+                                        if (!v || v === intName + (edTag ? ` · ${edTag}` : '')) return;
+                                        const edMatch = v.match(/^(.*?)\s*·\s*(.+)$/);
+                                        const newInterior = edMatch ? edMatch[1].trim() : v;
+	                                        const newEdition = edMatch ? edMatch[2].trim() : null;
+	                                        for (const s of allSkus) {
+	                                          try { await api.updateSkuInterior(s.materialCode, { interiorColorName: newInterior || null, editionTag: newEdition }); } catch {}
+	                                        }
+	                                        patchBomInterior(allCodes, newInterior || null, newEdition);
+	                                        scheduleLoad(1200);
+	                                      }}
+	                                      style={{ fontSize: 10, width: '100%', minWidth: 80 }} />
+                                  ) : (
+                                    <span style={{ fontSize: 10, color: intName ? '#1e293b' : '#cbd5e1' }}>
+                                      {intName || '—'}{edTag ? <span style={{ color: '#7c3aed' }}> · {edTag}</span> : null}
+                                    </span>
+                                  )}
+                                </div>
                               </td>
                               {renderTierCell('single', tiers.single, '#16a34a', '#f0fdf4')}
                               {renderTierCell('dual', tiers.dual, '#2563eb', '#eff6ff')}
                               {renderTierCell('special', tiers.special, '#d97706', '#fffbeb')}
-                              <td style={{ width: BOM_ADMIN_TRAILING_COLUMN_WIDTHS.lifecycle, minWidth: BOM_ADMIN_TRAILING_COLUMN_WIDTHS.lifecycle }}>
-                                {editingBoms.has(bomTemplate) ? (
-                                  <select value={ref.lifecycleStatus || 'active'}
-                                    onChange={async (e) => {
-	                                      const v = e.target.value;
-	                                      for (const s of allSkus) {
-	                                        try { await api.updateSkuLifecycle(s.materialCode, { lifecycleStatus: v, rowVersion: s.rowVersion }); } catch {}
-	                                      }
-	                                      patchBomLifecycle(allCodes, { lifecycleStatus: v });
-	                                      scheduleLoad(1200);
-	                                    }}
-                                    style={{ fontSize: 10, width: 80 }}>
-                                    <option value="active">Active</option>
-                                    <option value="phase_out">Phase Out</option>
-                                    <option value="historical">Historical</option>
-                                  </select>
-                                ) : (
-                                  <span style={{ fontSize: 10, fontWeight: 600,
-                                    color: isHist ? '#9ca3af' : isPhaseOut ? '#d97706' : '#16a34a' }}>
-                                    {ref.lifecycleStatus || 'active'}
+                              <td
+                                className="bom-lifecycle-cell"
+                                title={formatBomLifecycleTooltip(lifecycleStatus)}
+                                style={{ width: BOM_ADMIN_TRAILING_COLUMN_WIDTHS.lifecycle, minWidth: BOM_ADMIN_TRAILING_COLUMN_WIDTHS.lifecycle }}
+                              >
+                                <div className="bom-lifecycle-readonly">
+                                  <span className={`bom-lifecycle-pill bom-lifecycle-pill-${lifecycleStatus}`}>
+                                    {formatBomLifecycleLabel(lifecycleStatus)}
                                   </span>
-                                )}
+                                  {(ref.effectiveFrom || ref.effectiveTo) ? (
+                                    <span className="bom-lifecycle-range">
+                                      {ref.effectiveFrom || "Any"} → {ref.effectiveTo || "Open"}
+                                    </span>
+                                  ) : null}
+                                </div>
                               </td>
-                              <td style={{ width: BOM_ADMIN_TRAILING_COLUMN_WIDTHS.actions, minWidth: BOM_ADMIN_TRAILING_COLUMN_WIDTHS.actions, textAlign: "center" }}>
-                                <div style={{ display: "inline-flex", gap: 6, alignItems: "center", justifyContent: "center" }}>
+                              <td className="bom-admin-actions-cell" style={{ width: BOM_ADMIN_TRAILING_COLUMN_WIDTHS.actions, minWidth: BOM_ADMIN_TRAILING_COLUMN_WIDTHS.actions, textAlign: "center" }}>
+                                <div className="bom-admin-row-actions" style={{ display: "inline-flex", gap: 6, alignItems: "center", justifyContent: "center" }}>
                                   {pendingDeletes.has(bomTemplate) ? (
-                                    <button className="btn btn-sm" title="Click again to confirm delete"
-                                      style={{ fontSize: 10, padding: "1px 6px", color: '#fff', background: '#dc2626' }}
+                                    <button className="btn btn-sm bom-admin-row-action-button" title="Click again to confirm delete"
+                                      style={{ color: '#fff', background: '#dc2626' }}
                                       onClick={async () => {
                                         for (const s of allSkus) {
                                           try { await api.deleteMaterialSku(s.materialCode); } catch {}
@@ -6301,48 +6591,29 @@ function BomAdminPanel({
                                         scheduleLoad(300);
                                       }}>Confirm?</button>
                                   ) : (
-                                    <button className="btn btn-sm btn-ghost" title="Delete permanently — double-click"
-                                      style={{ fontSize: 10, padding: "1px 6px", color: '#dc2626' }}
+                                    <button className="btn btn-sm btn-ghost bom-admin-row-action-button" title="Delete permanently — double-click"
+                                      style={{ color: '#dc2626' }}
                                       onClick={() => setPendingDeletes(new Set([bomTemplate]))}>Delete</button>
                                   )}
-                                  <button className="btn btn-sm btn-ghost"
-                                    style={{ fontSize: 10, padding: '1px 6px', color: editingBoms.has(bomTemplate) ? '#16a34a' : '#64748b' }}
+                                  <button className="btn btn-sm btn-ghost bom-admin-row-action-button"
+                                    style={{ color: editingBoms.has(bomTemplate) ? '#16a34a' : '#64748b' }}
                                     onClick={() => toggleEditBom(bomTemplate)}>
-                                    {editingBoms.has(bomTemplate) ? 'Save' : 'Edit'}
+                                    {editingBoms.has(bomTemplate) ? 'Done' : 'Edit'}
                                   </button>
                                 </div>
                               </td>
-                              <td style={{ width: BOM_ADMIN_TRAILING_COLUMN_WIDTHS.from, minWidth: BOM_ADMIN_TRAILING_COLUMN_WIDTHS.from }}>
-                                {editingBoms.has(bomTemplate) ? (
-                                  <input type="text" placeholder="YYYY-MM" defaultValue={ref.effectiveFrom || ''}
-                                    onBlur={async (e) => {
-	                                      const v = e.target.value || null;
-	                                      for (const s of allSkus) {
-	                                        try { await api.updateSkuLifecycle(s.materialCode, { lifecycleStatus: s.lifecycleStatus, effectiveFrom: v ?? undefined, rowVersion: s.rowVersion }); } catch {}
-	                                      }
-	                                      patchBomLifecycle(allCodes, { effectiveFrom: v });
-	                                      scheduleLoad(1200);
-	                                    }}
-                                    style={{ width: "100%", fontSize: 10 }} />
-                                ) : (
-                                  <span style={{ fontSize: 10, color: ref.effectiveFrom ? '#1e293b' : '#cbd5e1' }}>{ref.effectiveFrom || '—'}</span>
-                                )}
-                              </td>
-                              <td style={{ width: BOM_ADMIN_TRAILING_COLUMN_WIDTHS.to, minWidth: BOM_ADMIN_TRAILING_COLUMN_WIDTHS.to }}>
-                                {editingBoms.has(bomTemplate) ? (
-                                  <input type="text" placeholder="YYYY-MM" defaultValue={ref.effectiveTo || ''}
-                                    onBlur={async (e) => {
-	                                      const v = e.target.value || null;
-	                                      for (const s of allSkus) {
-	                                        try { await api.updateSkuLifecycle(s.materialCode, { lifecycleStatus: s.lifecycleStatus, effectiveTo: v ?? undefined, rowVersion: s.rowVersion }); } catch {}
-	                                      }
-	                                      patchBomLifecycle(allCodes, { effectiveTo: v });
-	                                      scheduleLoad(1200);
-	                                    }}
-                                    style={{ width: "100%", fontSize: 10 }} />
-                                ) : (
-                                  <span style={{ fontSize: 10, color: ref.effectiveTo ? '#1e293b' : '#cbd5e1' }}>{ref.effectiveTo || '—'}</span>
-                                )}
+                              <td
+                                className="bom-admin-note-cell"
+                                colSpan={2}
+                                title={currentBomTemplateRemark || "No material note"}
+                                style={{
+                                  width: BOM_ADMIN_TRAILING_COLUMN_WIDTHS.from + BOM_ADMIN_TRAILING_COLUMN_WIDTHS.to,
+                                  minWidth: BOM_ADMIN_TRAILING_COLUMN_WIDTHS.from + BOM_ADMIN_TRAILING_COLUMN_WIDTHS.to,
+                                }}
+                              >
+                                <span className={currentBomTemplateRemark ? "bom-material-note-summary" : "bom-material-note-empty"}>
+                                  {currentBomTemplateRemark || "—"}
+                                </span>
                               </td>
                               {sortedCountries.map(c => {
                                 const fob = ref.fobByCountry?.[c];
@@ -6350,12 +6621,14 @@ function BomAdminPanel({
                                 const hasFob = fob != null && baseFob != null && baseFob > 0;
                                 const hasSurcharge = fob?.colourSurchargeEur && fob.colourSurchargeEur > 0;
                                 const sourceMarker = getBomFobSourceMarker(fob?.fobSourceMode);
+                                const countryRemark = getBomCountryFobRemark(allSkus, c);
+                                const hasCountryRemark = hasFob && countryRemark.length > 0;
                                 const financeCountries = Array.isArray((ref as { financeCountries?: unknown }).financeCountries)
                                   ? ((ref as { financeCountries: string[] }).financeCountries)
                                   : [];
                                 const hasFinance = financeCountries.includes(c);
                                 return (
-                                  <td key={c} className="bom-fob-price-cell" title={formatBomFobTooltip(c, baseFob, fob?.colourSurchargeEur, fob?.fobSourceMode, fob?.fobSourceCountryCode)} style={{ width: BOM_ADMIN_COUNTRY_COLUMN_WIDTH, minWidth: BOM_ADMIN_COUNTRY_COLUMN_WIDTH, textAlign: "right", cursor: "pointer", padding: "2px 4px" }}
+                                  <td key={c} className="bom-fob-price-cell" title={formatBomFobTooltip(c, baseFob, fob?.colourSurchargeEur, fob?.fobSourceMode, fob?.fobSourceCountryCode, countryRemark)} style={{ width: BOM_ADMIN_COUNTRY_COLUMN_WIDTH, minWidth: BOM_ADMIN_COUNTRY_COLUMN_WIDTH, textAlign: "right", cursor: "pointer", padding: "2px 4px" }}
                                     onClick={() => {
                                       if (c === "NL") {
                                         void openFinanceQuickCard({
@@ -6364,10 +6637,21 @@ function BomAdminPanel({
                                           materialCodes: allCodes,
                                           title: `${c} finance · ${bomTemplate}`,
                                           fob: baseFob ?? null,
+                                          remark: countryRemark,
+                                          fobSourceMode: fob?.fobSourceMode ?? null,
+                                          fobSourceCountryCode: fob?.fobSourceCountryCode ?? null,
                                         });
                                         return;
                                       }
-                                      setEditFob({ materialCodes: allCodes, countryCode: c, fob: baseFob ?? null });
+                                      setEditFob({
+                                        materialCodes: allCodes,
+                                        countryCode: c,
+                                        fob: baseFob ?? null,
+                                        originalFob: baseFob ?? null,
+                                        remark: countryRemark,
+                                        fobSourceMode: fob?.fobSourceMode ?? null,
+                                        fobSourceCountryCode: fob?.fobSourceCountryCode ?? null,
+                                      });
                                     }}>
                                     <span className="bom-fob-price-value" style={{ color: hasFob ? "#0f766e" : "#cbd5e1", fontWeight: hasFob ? 600 : 400 }}>
                                       {hasFob ? baseFob!.toLocaleString() : "-"}
@@ -6377,9 +6661,18 @@ function BomAdminPanel({
                                           %
                                         </sup>
                                       ) : null}
-                                      {sourceMarker ? (
-                                        <sup className="bom-fob-source-mark" title={formatBomFobSourceLabel(fob?.fobSourceMode, fob?.fobSourceCountryCode)}>
-                                          {sourceMarker}
+                                      {(sourceMarker || hasCountryRemark) ? (
+                                        <sup
+                                          className={`bom-fob-source-mark${hasCountryRemark ? " has-remark" : ""}${sourceMarker ? "" : " is-remark-only"}`}
+                                          title={[
+                                            sourceMarker ? formatBomFobSourceLabel(fob?.fobSourceMode, fob?.fobSourceCountryCode) : "",
+                                            hasCountryRemark ? `Remark: ${countryRemark}` : "",
+                                          ].filter(Boolean).join(" · ")}
+                                        >
+                                          {sourceMarker ? <span className="bom-fob-source-mark-label">{sourceMarker}</span> : null}
+                                          {hasCountryRemark ? (
+                                            <span className="bom-fob-remark-mark" aria-label="Country FOB remark" />
+                                          ) : null}
                                         </sup>
                                       ) : null}
                                     </span>
@@ -6479,29 +6772,69 @@ function BomAdminPanel({
                                     </div>
                                   </td>
                                 ))}
-                                <td style={{ width: BOM_ADMIN_TRAILING_COLUMN_WIDTHS.lifecycle, minWidth: BOM_ADMIN_TRAILING_COLUMN_WIDTHS.lifecycle }}>
-                                  <select
-                                    value={copyDraft.lifecycleStatus || "active"}
-                                    onChange={(event) => {
-                                      const value = event.target.value;
-                                      updateCopyDraft(draftKey, (draft) => ({
-                                        ...draft,
-                                        lifecycleStatus: value,
-                                      }));
-                                    }}
-                                    style={{ fontSize: 10, width: 80 }}
-                                  >
-                                    <option value="active">Active</option>
-                                    <option value="phase_out">Phase Out</option>
-                                    <option value="historical">Historical</option>
-                                  </select>
+                                <td className="bom-lifecycle-cell" style={{ width: BOM_ADMIN_TRAILING_COLUMN_WIDTHS.lifecycle, minWidth: BOM_ADMIN_TRAILING_COLUMN_WIDTHS.lifecycle }}>
+                                  <div className="bom-lifecycle-editor">
+                                    <div className="bom-lifecycle-segment" aria-label="Draft lifecycle status">
+                                      {BOM_LIFECYCLE_OPTIONS.map((option) => {
+                                        const draftLifecycle = normalizeBomLifecycleStatus(copyDraft.lifecycleStatus);
+                                        return (
+                                          <button
+                                            key={`${draftKey}-${option.value}`}
+                                            type="button"
+                                            className={`bom-lifecycle-option bom-lifecycle-option-${option.value}${draftLifecycle === option.value ? " is-active" : ""}`}
+                                            title={option.description}
+                                            onClick={() => {
+                                              updateCopyDraft(draftKey, (draft) => ({
+                                                ...draft,
+                                                lifecycleStatus: option.value,
+                                              }));
+                                            }}
+                                          >
+                                            {option.label}
+                                          </button>
+                                        );
+                                      })}
+                                    </div>
+                                    <div className="bom-lifecycle-window">
+                                      <label>
+                                        <span>From</span>
+                                        <input
+                                          type="text"
+                                          placeholder="YYYY-MM"
+                                          value={copyDraft.effectiveFrom || ""}
+                                          onChange={(event) => {
+                                            const value = event.target.value || null;
+                                            updateCopyDraft(draftKey, (draft) => ({
+                                              ...draft,
+                                              effectiveFrom: value,
+                                            }));
+                                          }}
+                                        />
+                                      </label>
+                                      <label>
+                                        <span>To</span>
+                                        <input
+                                          type="text"
+                                          placeholder="YYYY-MM"
+                                          value={copyDraft.effectiveTo || ""}
+                                          onChange={(event) => {
+                                            const value = event.target.value || null;
+                                            updateCopyDraft(draftKey, (draft) => ({
+                                              ...draft,
+                                              effectiveTo: value,
+                                            }));
+                                          }}
+                                        />
+                                      </label>
+                                    </div>
+                                  </div>
                                 </td>
                                 <td style={{ width: BOM_ADMIN_TRAILING_COLUMN_WIDTHS.actions, minWidth: BOM_ADMIN_TRAILING_COLUMN_WIDTHS.actions, textAlign: "center" }}>
                                   <div style={{ display: "inline-flex", gap: 6, alignItems: "center", justifyContent: "center" }}>
                                     <button
                                       type="button"
                                       className="btn btn-sm btn-ghost"
-                                      style={{ fontSize: 10, padding: "1px 6px", color: "#64748b" }}
+                                      style={{ color: "#64748b" }}
                                       onClick={() => dismissCopyDraft(draftKey)}
                                     >
                                       Cancel
@@ -6509,7 +6842,6 @@ function BomAdminPanel({
                                     <button
                                       type="button"
                                       className="btn btn-sm btn-primary"
-                                      style={{ fontSize: 10, padding: "1px 6px" }}
                                       disabled={copyDraftSavingKey === draftKey}
                                       onClick={() => void handleSaveCopiedBom(draftKey)}
                                     >
@@ -6517,35 +6849,17 @@ function BomAdminPanel({
                                     </button>
                                   </div>
                                 </td>
-                                <td style={{ width: BOM_ADMIN_TRAILING_COLUMN_WIDTHS.from, minWidth: BOM_ADMIN_TRAILING_COLUMN_WIDTHS.from }}>
-                                  <input
-                                    type="text"
-                                    placeholder="YYYY-MM"
-                                    value={copyDraft.effectiveFrom || ""}
-                                    onChange={(event) => {
-                                      const value = event.target.value || null;
-                                      updateCopyDraft(draftKey, (draft) => ({
-                                        ...draft,
-                                        effectiveFrom: value,
-                                      }));
-                                    }}
-                                    style={{ width: "100%", fontSize: 10 }}
-                                  />
-                                </td>
-                                <td style={{ width: BOM_ADMIN_TRAILING_COLUMN_WIDTHS.to, minWidth: BOM_ADMIN_TRAILING_COLUMN_WIDTHS.to }}>
-                                  <input
-                                    type="text"
-                                    placeholder="YYYY-MM"
-                                    value={copyDraft.effectiveTo || ""}
-                                    onChange={(event) => {
-                                      const value = event.target.value || null;
-                                      updateCopyDraft(draftKey, (draft) => ({
-                                        ...draft,
-                                        effectiveTo: value,
-                                      }));
-                                    }}
-                                    style={{ width: "100%", fontSize: 10 }}
-                                  />
+                                <td
+                                  colSpan={2}
+                                  title={copyDraft.remark || "Draft note"}
+                                  style={{
+                                    width: BOM_ADMIN_TRAILING_COLUMN_WIDTHS.from + BOM_ADMIN_TRAILING_COLUMN_WIDTHS.to,
+                                    minWidth: BOM_ADMIN_TRAILING_COLUMN_WIDTHS.from + BOM_ADMIN_TRAILING_COLUMN_WIDTHS.to,
+                                  }}
+                                >
+                                  <span className={copyDraft.remark ? "bom-material-note-summary" : "bom-material-note-empty"}>
+                                    {copyDraft.remark || "Draft note below"}
+                                  </span>
                                 </td>
                                 {sortedCountries.map((c) => {
                                   const fob = copyDraft.fobByCountry?.[c];
@@ -6565,6 +6879,22 @@ function BomAdminPanel({
                                   colSpan={BOM_ADMIN_FIXED_COLUMN_COUNT + sortedCountries.length}
                                   style={{ background: "#eff6ff", borderLeft: "3px solid #2563eb", padding: "6px 8px", position: "relative", zIndex: 2 }}
                                 >
+                                  <div style={{ display: "grid", gridTemplateColumns: "auto minmax(240px, 1fr)", gap: 8, alignItems: "start", marginBottom: 8 }}>
+                                    <span style={{ fontSize: 10, color: "#1d4ed8", fontWeight: 700, paddingTop: 7 }}>Draft note</span>
+                                    <textarea
+                                      value={copyDraft.remark}
+                                      placeholder="What changed on this copied material..."
+                                      rows={2}
+                                      onChange={(event) => {
+                                        const value = event.target.value;
+                                        updateCopyDraft(draftKey, (draft) => ({
+                                          ...draft,
+                                          remark: value,
+                                        }));
+                                      }}
+                                      style={{ minHeight: 42, resize: "vertical", fontSize: 11, lineHeight: 1.35 }}
+                                    />
+                                  </div>
                                   <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
                                     <span style={{ fontSize: 10, color: "#1d4ed8", fontWeight: 700 }}>Draft FOB tools</span>
                                     <input
@@ -6583,7 +6913,6 @@ function BomAdminPanel({
                                     <button
                                       type="button"
                                       className="btn btn-sm btn-primary"
-                                      style={{ fontSize: 10, padding: "2px 8px" }}
                                       onClick={() => applyCopyDraftFobDelta(draftKey)}
                                     >
                                       Apply to {copyDraft.bulkSelectedCountries.length || 0}
@@ -6591,7 +6920,7 @@ function BomAdminPanel({
                                     <button
                                       type="button"
                                       className="btn btn-sm btn-ghost"
-                                      style={{ fontSize: 10, padding: "2px 8px", color: "#2563eb", borderColor: "#bfdbfe", background: "#eff6ff" }}
+                                      style={{ color: "#2563eb", borderColor: "#bfdbfe", background: "#eff6ff" }}
                                       onClick={() => applyCopyDraftFobDelta(draftKey, 200)}
                                     >
                                       +200
@@ -6599,7 +6928,7 @@ function BomAdminPanel({
                                     <button
                                       type="button"
                                       className="btn btn-sm btn-ghost"
-                                      style={{ fontSize: 10, padding: "2px 8px", color: "#b45309", borderColor: "#fed7aa", background: "#fff7ed" }}
+                                      style={{ color: "#b45309", borderColor: "#fed7aa", background: "#fff7ed" }}
                                       onClick={() => applyCopyDraftFobDelta(draftKey, -300)}
                                     >
                                       -300
@@ -6608,7 +6937,6 @@ function BomAdminPanel({
                                       type="button"
                                       className="btn btn-sm btn-ghost"
                                       title="Select countries that already have FOB on this copied row"
-                                      style={{ fontSize: 10, padding: "2px 8px" }}
                                       onClick={() => setCopyDraftCountryScope(draftKey, "filled")}
                                     >
                                       Filled
@@ -6617,7 +6945,6 @@ function BomAdminPanel({
                                       type="button"
                                       className="btn btn-sm btn-ghost"
                                       title="Select every visible country column"
-                                      style={{ fontSize: 10, padding: "2px 8px" }}
                                       onClick={() => setCopyDraftCountryScope(draftKey, "all")}
                                     >
                                       All
@@ -6626,7 +6953,6 @@ function BomAdminPanel({
                                       type="button"
                                       className="btn btn-sm btn-ghost"
                                       title="Clear selected countries"
-                                      style={{ fontSize: 10, padding: "2px 8px" }}
                                       onClick={() => setCopyDraftCountryScope(draftKey, "clear")}
                                     >
                                       Clear
@@ -6673,170 +6999,156 @@ function BomAdminPanel({
                             {editing ? (
                               <tr>
                                 <td
+                                  className="bom-edit-panel-cell"
                                   colSpan={BOM_ADMIN_FIXED_COLUMN_COUNT + sortedCountries.length}
-                                  className="bom-admin-inline-editor-cell"
+                                  style={{ background: "#f8fafc", borderLeft: "3px solid #2563eb", padding: "6px 8px", position: "relative", zIndex: 2 }}
                                 >
-                                  <div className="bom-admin-inline-editor">
-                                    <div className="bom-admin-inline-editor-head">
-                                      <div className="bom-admin-inline-editor-title">
-                                        <span>BOM editor</span>
-                                        <strong title={bomTemplate}>{bomTemplate}</strong>
-                                        {sourceLabel ? <em title={sourceLabel}>{sourceLabel}</em> : null}
-                                      </div>
-                                      <button
-                                        type="button"
-                                        className="btn btn-sm btn-ghost bom-admin-editor-copy"
-                                        onClick={() => handleCopyMaterialFromBom(draftKey, bomTemplate, ref, allSkus, sourceLabel)}
-                                      >
-                                        Copy Material
-                                      </button>
-                                    </div>
-                                    <div className="bom-admin-inline-editor-grid">
-                                      <form
-                                        onSubmit={(event) => handleProductMetadataSave(event, allCodes)}
-                                        className="bom-admin-editor-section bom-admin-product-fields"
-                                      >
-                                        <div className="bom-admin-editor-section-head">
-                                          <span>Product fields</span>
-                                          <small>{allCodes.length} SKUs</small>
-                                        </div>
-                                        <div className="bom-admin-editor-fields">
+                                  <div style={{ display: "grid", gap: 8 }}>
+                                    <BomEditPanel
+                                      onSubmit={(event) => void handleProductMetadataSave(event, allSkus, draftKey)}
+                                      productFields={(
+                                        <>
                                           <input
+                                            className="bom-edit-product-input bom-edit-product-input-brand"
                                             name="brand"
                                             type="text"
                                             required
                                             defaultValue={(ref as any).brand || ""}
                                             placeholder="Brand"
-                                            className="bom-admin-editor-input is-brand"
                                           />
                                           <input
+                                            className="bom-edit-product-input"
                                             name="modelName"
                                             type="text"
                                             required
                                             defaultValue={(ref as any).modelName || ""}
                                             placeholder="Model"
-                                            className="bom-admin-editor-input"
                                           />
                                           <input
+                                            className="bom-edit-product-input"
                                             name="version"
                                             type="text"
                                             required
                                             defaultValue={(ref as any).version || ""}
                                             placeholder="Version"
-                                            className="bom-admin-editor-input"
                                           />
-                                          <select
+                                          <CommandSelect
                                             name="powertrain"
-                                            required
                                             defaultValue={(ref as any).powertrain || mg.pt || "ICE"}
-                                            className="bom-admin-editor-select"
-                                          >
-                                            {['BEV','HEV','PHEV','ICE','MHEV','REEV','Other'].map(p => <option key={p} value={p}>{p}</option>)}
-                                          </select>
-                                          <button type="submit" className="btn btn-sm btn-primary bom-admin-editor-primary">
-                                            Save Product
-                                          </button>
-                                        </div>
-                                      </form>
-                                      <div className="bom-admin-editor-section bom-admin-fob-tools">
-                                        <div className="bom-admin-editor-section-head">
-                                          <span>FOB adjustment</span>
-                                          <small>{bulkFobEditor.selectedCountries.length || 0} selected</small>
-                                        </div>
-                                        <div className="bom-admin-editor-fields">
-                                          <input
-                                            type="number"
-                                            value={bulkFobEditor.deltaEur}
-                                            placeholder="± EUR"
-                                            onChange={(event) => {
-                                              const value = event.target.value;
-                                              updateBulkFobEditor(bomTemplate, allSkus, (current) => ({
-                                                ...current,
-                                                deltaEur: value,
-                                              }));
-                                            }}
-                                            className="bom-admin-editor-input is-delta"
+                                            options={POWERTRAIN_COMMAND_OPTIONS}
+                                            searchPlaceholder="Search powertrain..."
+                                            className="bom-edit-powertrain-select"
                                           />
-                                          <button
-                                            type="button"
-                                            className="btn btn-sm btn-primary bom-admin-editor-primary"
-                                            disabled={bulkFobSavingKey === bomTemplate}
-                                            onClick={() => void applyBulkFobDelta(bomTemplate, allSkus)}
-                                          >
-                                            {bulkFobSavingKey === bomTemplate ? "Saving..." : `Apply to ${bulkFobEditor.selectedCountries.length || 0}`}
-                                          </button>
-                                          <button
-                                            type="button"
-                                            className="btn btn-sm btn-ghost bom-admin-editor-quick is-plus"
-                                            disabled={bulkFobSavingKey === bomTemplate}
-                                            onClick={() => void applyBulkFobDelta(bomTemplate, allSkus, 200)}
-                                          >
-                                            +200
-                                          </button>
-                                          <button
-                                            type="button"
-                                            className="btn btn-sm btn-ghost bom-admin-editor-quick is-minus"
-                                            disabled={bulkFobSavingKey === bomTemplate}
-                                            onClick={() => void applyBulkFobDelta(bomTemplate, allSkus, -300)}
-                                          >
-                                            -300
-                                          </button>
-                                          <button
-                                            type="button"
-                                            className="btn btn-sm btn-ghost bom-admin-editor-scope"
-                                            title="Select countries that already have FOB on this BOM"
-                                            onClick={() => setBulkFobCountryScope(bomTemplate, allSkus, "filled")}
-                                          >
-                                            Filled
-                                          </button>
-                                          <button
-                                            type="button"
-                                            className="btn btn-sm btn-ghost bom-admin-editor-scope"
-                                            title="Select every visible country column"
-                                            onClick={() => setBulkFobCountryScope(bomTemplate, allSkus, "all")}
-                                          >
-                                            All
-                                          </button>
-                                          <button
-                                            type="button"
-                                            className="btn btn-sm btn-ghost bom-admin-editor-scope"
-                                            title="Clear selected countries"
-                                            onClick={() => setBulkFobCountryScope(bomTemplate, allSkus, "clear")}
-                                          >
-                                            Clear
-                                          </button>
-                                        </div>
-                                      </div>
-                                    </div>
-                                    {bulkFobErrors[bomTemplate] ? (
-                                      <div className="bom-admin-editor-error">
-                                        {bulkFobErrors[bomTemplate]}
-                                      </div>
-                                    ) : null}
-                                    <details className="bom-admin-country-scope">
-                                      <summary>
-                                        Selected countries ({bulkFobEditor.selectedCountries.length})
-                                      </summary>
-                                      <div className="bom-admin-country-scope-list">
-                                        {tiers.countryCodes.map((countryCode) => {
-                                          const hasFob = tiers.filledCountryCodeSet.has(countryCode);
-                                          return (
-                                            <label
-                                              key={`${bomTemplate}-country-${countryCode}`}
-                                              className={`bom-admin-country-chip${hasFob ? " has-fob" : ""}`}
-                                              title={`${countryCode}${countryLabels.get(countryCode) ? ` · ${countryLabels.get(countryCode)}` : ""}${hasFob ? "" : " · no FOB on this BOM yet"}`}
-                                            >
+                                          <span className="bom-edit-sku-count">
+                                            {allCodes.length} SKUs
+                                          </span>
+                                        </>
+                                      )}
+                                      lifecycle={(
+                                        <div className="bom-lifecycle-editor">
+                                          <div className="bom-lifecycle-segment" aria-label="Lifecycle status">
+                                            {BOM_LIFECYCLE_OPTIONS.map((option) => (
+                                              <button
+                                                key={`${draftKey}-lifecycle-${option.value}`}
+                                                type="button"
+                                                className={`bom-lifecycle-option bom-lifecycle-option-${option.value}${lifecycleStatus === option.value ? " is-active" : ""}`}
+                                                title={option.description}
+                                                onClick={async () => {
+                                                  const value = option.value;
+                                                  patchBomLifecycle(allCodes, { lifecycleStatus: value });
+                                                  for (const s of allSkus) {
+                                                    try {
+                                                      await api.updateSkuLifecycle(s.materialCode, {
+                                                        lifecycleStatus: value,
+                                                        rowVersion: s.rowVersion,
+                                                      });
+                                                    } catch {}
+                                                  }
+                                                  scheduleLoad(1200);
+                                                }}
+                                              >
+                                                {option.label}
+                                              </button>
+                                            ))}
+                                          </div>
+                                          <div className="bom-lifecycle-window">
+                                            <label>
+                                              <span>From</span>
                                               <input
-                                                type="checkbox"
-                                                checked={bulkFobEditor.selectedCountries.includes(countryCode)}
-                                                onChange={(event) => toggleBulkFobCountry(bomTemplate, allSkus, countryCode, event.target.checked)}
+                                                type="text"
+                                                placeholder="YYYY-MM"
+                                                defaultValue={ref.effectiveFrom || ""}
+                                                onBlur={async (e) => {
+                                                  const value = e.target.value.trim() || null;
+                                                  patchBomLifecycle(allCodes, { effectiveFrom: value });
+                                                  for (const s of allSkus) {
+                                                    try {
+                                                      await api.updateSkuLifecycle(s.materialCode, {
+                                                        lifecycleStatus: s.lifecycleStatus || lifecycleStatus,
+                                                        effectiveFrom: value ?? undefined,
+                                                        rowVersion: s.rowVersion,
+                                                      });
+                                                    } catch {}
+                                                  }
+                                                  scheduleLoad(1200);
+                                                }}
                                               />
-                                              <span style={{ fontWeight: 700 }}>{countryCode}</span>
                                             </label>
-                                          );
-                                        })}
-                                      </div>
-                                    </details>
+                                            <label>
+                                              <span>To</span>
+                                              <input
+                                                type="text"
+                                                placeholder="YYYY-MM"
+                                                defaultValue={ref.effectiveTo || ""}
+                                                onBlur={async (e) => {
+                                                  const value = e.target.value.trim() || null;
+                                                  patchBomLifecycle(allCodes, { effectiveTo: value });
+                                                  for (const s of allSkus) {
+                                                    try {
+                                                      await api.updateSkuLifecycle(s.materialCode, {
+                                                        lifecycleStatus: s.lifecycleStatus || lifecycleStatus,
+                                                        effectiveTo: value ?? undefined,
+                                                        rowVersion: s.rowVersion,
+                                                      });
+                                                    } catch {}
+                                                  }
+                                                  scheduleLoad(1200);
+                                                }}
+                                              />
+                                            </label>
+                                          </div>
+                                        </div>
+                                      )}
+                                      countries={editCountryOptions}
+                                      selectedCountryCount={bulkFobEditor.selectedCountries.length}
+                                      fobDeltaEur={bulkFobEditor.deltaEur}
+                                      fobSaving={bulkFobSavingKey === bomTemplate}
+                                      fobError={bulkFobErrors[bomTemplate] || null}
+                                      onFobDeltaChange={(value) => {
+                                        updateBulkFobEditor(bomTemplate, allSkus, (current) => ({
+                                          ...current,
+                                          deltaEur: value,
+                                        }));
+                                      }}
+                                      onApplyFobDelta={() => void applyBulkFobDelta(bomTemplate, allSkus)}
+                                      onApplyQuickFobDelta={(deltaEur) => void applyBulkFobDelta(bomTemplate, allSkus, deltaEur)}
+                                      onSelectFilledCountries={() => setBulkFobCountryScope(bomTemplate, allSkus, "filled")}
+                                      onSelectUnfilledCountries={() => setBulkFobCountryScope(bomTemplate, allSkus, "unfilled")}
+                                      onSelectAllCountries={() => setBulkFobCountryScope(bomTemplate, allSkus, "all")}
+                                      onClearCountries={() => setBulkFobCountryScope(bomTemplate, allSkus, "clear")}
+                                      noteKey={`${draftKey}|remark|${currentBomTemplateRemark}`}
+                                      noteDefaultValue={currentBomTemplateRemark}
+                                      saveMessage={productSaveMessage}
+                                      onCopyMaterial={() => handleCopyMaterialFromBom(
+                                        draftKey,
+                                        bomTemplate,
+                                        ref,
+                                        allSkus,
+                                        sourceLabel,
+                                        bulkFobEditor.selectedCountries,
+                                      )}
+                                      isSavingProduct={isSavingProduct}
+                                    />
                                   </div>
                                 </td>
                               </tr>
@@ -6882,6 +7194,10 @@ function BomAdminPanel({
                             materialCodes: financeQuickCard.materialCodes,
                             countryCode: financeQuickCard.countryCode,
                             fob: financeQuickCard.fob,
+                            originalFob: financeQuickCard.fob,
+                            remark: financeQuickCard.remark,
+                            fobSourceMode: financeQuickCard.fobSourceMode ?? null,
+                            fobSourceCountryCode: financeQuickCard.fobSourceCountryCode ?? null,
                           });
                           closeFinanceQuickCard();
                         },
@@ -6928,6 +7244,17 @@ function BomAdminPanel({
                 <h4>Edit FOB</h4>
                 <p>{editFob.materialCodes.length} material codes</p>
               </div>
+              <div className="bom-fob-edit-source-line">
+                <span className="bom-fob-edit-source-pill">
+                  {getBomFobSourceMarker(editFob.fobSourceMode) || "BASE"}
+                </span>
+                <span>
+                  {formatBomFobSourceLabel(editFob.fobSourceMode, editFob.fobSourceCountryCode) || "uploaded/resolved FOB"}
+                </span>
+                <span className="bom-fob-edit-source-value">
+                  Current {editFob.originalFob != null ? editFob.originalFob.toLocaleString() : "-"}
+                </span>
+              </div>
               <div className="bom-fob-edit-grid">
                 <label>
                   <span>Country</span>
@@ -6943,6 +7270,15 @@ function BomAdminPanel({
                     type="number"
                     value={editFob.fob ?? ""}
                     onChange={(event) => setEditFob({ ...editFob, fob: event.target.value === "" ? null : Number(event.target.value) })}
+                  />
+                </label>
+                <label className="bom-fob-edit-remark-field">
+                  <span>Remark</span>
+                  <textarea
+                    value={editFob.remark}
+                    placeholder="Country-specific FOB remark for this father material..."
+                    rows={3}
+                    onChange={(event) => setEditFob({ ...editFob, remark: event.target.value })}
                   />
                 </label>
               </div>

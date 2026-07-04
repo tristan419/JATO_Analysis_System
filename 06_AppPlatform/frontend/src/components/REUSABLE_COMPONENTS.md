@@ -103,6 +103,31 @@ Notes:
 - The caller owns accepted extensions, selected file state, upload progress, validation, and submit behavior.
 - Use separate `FileDropzone` state per workflow tab so switching tabs cannot submit the wrong files.
 
+## Order Genius Admin
+
+Location: `src/components/orderGenius`
+
+Import:
+
+```tsx
+import { BomEditPanel, type BomEditCountryOption } from "../components/orderGenius";
+```
+
+### `BomEditPanel`
+
+Use for the expanded BOM Admin editing surface that combines product metadata, lifecycle, country selection, bulk FOB tools, note editing, and final actions.
+
+Good fit:
+
+- BOM Admin father-material edit rows.
+- Future Order Genius inline edit panels that need the same country-chip and FOB-tool layout.
+
+Notes:
+
+- The component owns layout alignment, country chip rendering, FOB tool button sizing, and note/action placement.
+- The caller owns product field inputs, lifecycle controls, API calls, selected-country state, save messages, and copy-material behavior.
+- `Filled` single-click selects countries with positive FOB; double-click selects countries without FOB.
+
 ## Workbench Components
 
 Location: `src/components/workbench`

@@ -1049,7 +1049,7 @@ function mapCocMatchJob(raw: Record<string, unknown>): CocMatchJob {
       ? (raw.diffSummary as { gained: number; lost: number; newEntries: number })
       : null,
     triggeredBy: String(raw.triggeredBy ?? ""),
-    error: raw.error === undefined ? null : String(raw.error),
+    error: raw.error === undefined || raw.error === null ? null : String(raw.error),
     createdAt: String(raw.createdAt ?? ""),
     startedAt: raw.startedAt === undefined ? null : String(raw.startedAt),
     finishedAt: raw.finishedAt === undefined ? null : String(raw.finishedAt),
@@ -4041,7 +4041,7 @@ export const api = {
       headers: { "Content-Type": "application/json" },
     }),
 
-  exportOrderGeniusPi: (country: string, year: number, opts?: { brand?: string; model?: string; powertrain?: string; version?: string; colour?: string; materialCodeSearch?: string; selectedMonth?: number; hideEmptyRows?: boolean; freightEur?: number; insuranceEur?: number }) =>
+  exportOrderGeniusPi: (country: string, year: number, opts?: { brand?: string; model?: string; powertrain?: string; version?: string; colour?: string; materialCodeSearch?: string; selectedMonth?: number; hideEmptyRows?: boolean; freightEur?: number; insuranceEur?: number; domesticFreightEur?: number; domesticInsuranceEur?: number }) =>
     requestBlob("/order-genius/export-pi", {
       method: "POST",
       body: JSON.stringify({ country, year, ...opts }),
@@ -4258,7 +4258,7 @@ export const api = {
   updateSkuLifecycle: (materialCode: string, body: { lifecycleStatus: string; effectiveFrom?: string; effectiveTo?: string; rowVersion: number }) =>
     request<any>(`/order-genius/material-skus/${encodeURIComponent(materialCode)}/lifecycle`, { method: "PATCH", body: JSON.stringify(body) }),
 
-  updateSkuFob: (materialCode: string, body: { countryCode: string; finalFobEur?: number | null; paymentTermCode?: string }) =>
+  updateSkuFob: (materialCode: string, body: { countryCode: string; finalFobEur?: number | null; paymentTermCode?: string; remark?: string | null }) =>
     request<any>(`/order-genius/material-skus/${encodeURIComponent(materialCode)}/fob`, { method: "PATCH", body: JSON.stringify(body) }),
 
   getSkuFobDetail: (materialCode: string, country: string) =>
@@ -4279,7 +4279,7 @@ export const api = {
   createPaymentTerm: (body: { countryCode: string; countryName: string; paymentTermCode: string; paymentMethod: string; lcDays: number }) =>
     request<any>("/order-genius/payment-terms/countries", { method: "POST", body: JSON.stringify(body) }),
 
-  createMaterialSku: (body: { materialCode: string; brand?: string; modelName?: string; version?: string; colour?: string; colourCode?: string; colourHex?: string | null; colourType?: string; colourTier?: string; powertrain?: string; bomTemplate?: string; sourceBomTemplate?: string }) =>
+  createMaterialSku: (body: { materialCode: string; brand?: string; modelName?: string; version?: string; colour?: string; colourCode?: string; colourHex?: string | null; colourType?: string; colourTier?: string; powertrain?: string; bomTemplate?: string; sourceBomTemplate?: string; remark?: string }) =>
     request<any>("/order-genius/material-skus", { method: "POST", body: JSON.stringify(body) }),
 
   syncBomTemplateFobs: (body: { bomTemplate: string; materialCodes?: string[]; repriceExistingColourSurcharges?: boolean }) =>

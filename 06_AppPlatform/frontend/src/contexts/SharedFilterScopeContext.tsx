@@ -38,9 +38,9 @@ import {
 const SHARED_FILTER_SCOPE_CACHE_KEY = "shared-filter-scope";
 const FILTER_SNAPSHOT_UNAVAILABLE_CACHE_KEY = "filter-snapshot-unavailable-until";
 const PAGE_CACHE_TTL_MS = 30 * 60 * 1000;
-export const FILTER_SNAPSHOT_FALLBACK_TIMEOUT_MS = 650;
+export const FILTER_SNAPSHOT_FALLBACK_TIMEOUT_MS = 1_800;
 export const FILTER_SNAPSHOT_INTL_FALLBACK_TIMEOUT_MS = 3_500;
-export const FILTER_SNAPSHOT_UNAVAILABLE_TTL_MS = 10 * 60 * 1000;
+export const FILTER_SNAPSHOT_UNAVAILABLE_TTL_MS = 60 * 1000;
 
 export type ResolvedFilterColumns = Record<FilterKey, string | null>;
 
