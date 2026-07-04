@@ -195,9 +195,14 @@ jobs:
           ARCHIVE_PATH="$RUNNER_TEMP/JATO_deploy.tar.gz"
           REMOTE_ARCHIVE="JATO_deploy_${GITHUB_SHA}.tar.gz"
           REMOTE_ARCHIVE_TMP="${REMOTE_ARCHIVE}.uploading"
-          echo "DEPLOY_ARCHIVE_PATH=$REMOTE_ARCHIVE" >> "$GITHUB_ENV"
           ls -lh "$ARCHIVE_PATH"
           ARCHIVE_BYTES="$(wc -c < "$ARCHIVE_PATH" | tr -d '[:space:]')"
+
+          fallback_to_sparse_deploy() {
+            echo "::warning::$1; continuing without uploaded archive so server deploy can fall back to sparse Git fetch."
+            echo "DEPLOY_ARCHIVE_PATH=" >> "$GITHUB_ENV"
+            return 0
+          }
 
           SSH_COMMON_OPTS=(
             -T
@@ -229,15 +234,17 @@ jobs:
 
           if ! timeout 120s ssh "${SSH_COMMON_OPTS[@]}" "$SSH_USER@$SSH_CONNECT_HOST" \
             "rm -f '$REMOTE_ARCHIVE_TMP' && : > '$REMOTE_ARCHIVE_TMP'"; then
-            echo "::error::Remote archive preparation failed."
-            exit 1
+            fallback_to_sparse_deploy "Remote archive preparation failed"
+            exit 0
           fi
 
           echo "[INFO] Uploading deploy archive with scp (${ARCHIVE_BYTES} bytes)"
           if ! timeout 900s scp "${SCP_COMMON_OPTS[@]}" \
             "$ARCHIVE_PATH" "$SSH_USER@$SSH_CONNECT_HOST:$REMOTE_ARCHIVE_TMP"; then
-            echo "::error::Deploy archive scp upload failed or timed out."
-            exit 1
+            timeout 120s ssh "${SSH_COMMON_OPTS[@]}" "$SSH_USER@$SSH_CONNECT_HOST" \
+              "rm -f '$REMOTE_ARCHIVE_TMP'" || true
+            fallback_to_sparse_deploy "Deploy archive scp upload failed or timed out"
+            exit 0
           fi
 
           if ! timeout 120s ssh -T -p "$SSH_PORT" \
@@ -253,9 +260,12 @@ jobs:
             -i ~/.ssh/github_actions_tencent_key \
             "$SSH_USER@$SSH_CONNECT_HOST" \
             "remote_size=\$(wc -c < '$REMOTE_ARCHIVE_TMP' | tr -d '[:space:]'); if [ \"\$remote_size\" != '$ARCHIVE_BYTES' ]; then echo \"remote archive size mismatch: \$remote_size != $ARCHIVE_BYTES\" >&2; exit 1; fi; mv '$REMOTE_ARCHIVE_TMP' '$REMOTE_ARCHIVE' && ls -lh '$REMOTE_ARCHIVE'"; then
-            echo "::error::Remote archive finalization failed."
-            exit 1
+            timeout 120s ssh "${SSH_COMMON_OPTS[@]}" "$SSH_USER@$SSH_CONNECT_HOST" \
+              "rm -f '$REMOTE_ARCHIVE_TMP' '$REMOTE_ARCHIVE'" || true
+            fallback_to_sparse_deploy "Remote archive finalization failed"
+            exit 0
           fi
+          echo "DEPLOY_ARCHIVE_PATH=$REMOTE_ARCHIVE" >> "$GITHUB_ENV"
 
       - name: Upload archive to server
         if: ${{ steps.auth.outputs.mode == 'password' && vars.DEPLOY_UPLOAD_ARCHIVE != 'false' }}
@@ -279,9 +289,14 @@ jobs:
           ARCHIVE_PATH="$RUNNER_TEMP/JATO_deploy.tar.gz"
           REMOTE_ARCHIVE="JATO_deploy_${GITHUB_SHA}.tar.gz"
           REMOTE_ARCHIVE_TMP="${REMOTE_ARCHIVE}.uploading"
-          echo "DEPLOY_ARCHIVE_PATH=$REMOTE_ARCHIVE" >> "$GITHUB_ENV"
           ls -lh "$ARCHIVE_PATH"
           ARCHIVE_BYTES="$(wc -c < "$ARCHIVE_PATH" | tr -d '[:space:]')"
+
+          fallback_to_sparse_deploy() {
+            echo "::warning::$1; continuing without uploaded archive so server deploy can fall back to sparse Git fetch."
+            echo "DEPLOY_ARCHIVE_PATH=" >> "$GITHUB_ENV"
+            return 0
+          }
 
           SSH_COMMON_OPTS=(
             -T
@@ -312,15 +327,18 @@ jobs:
           if ! timeout 120s sshpass -p "$SSH_PASSWORD" \
             ssh "${SSH_COMMON_OPTS[@]}" "$SSH_USER@$SSH_HOST" \
             "rm -f '$REMOTE_ARCHIVE_TMP' && : > '$REMOTE_ARCHIVE_TMP'"; then
-            echo "::error::Remote archive preparation failed."
-            exit 1
+            fallback_to_sparse_deploy "Remote archive preparation failed"
+            exit 0
           fi
 
           echo "[INFO] Uploading deploy archive with scp (${ARCHIVE_BYTES} bytes)"
           if ! timeout 900s sshpass -p "$SSH_PASSWORD" \
             scp "${SCP_COMMON_OPTS[@]}" "$ARCHIVE_PATH" "$SSH_USER@$SSH_HOST:$REMOTE_ARCHIVE_TMP"; then
-            echo "::error::Deploy archive scp upload failed or timed out."
-            exit 1
+            timeout 120s sshpass -p "$SSH_PASSWORD" \
+              ssh "${SSH_COMMON_OPTS[@]}" "$SSH_USER@$SSH_HOST" \
+              "rm -f '$REMOTE_ARCHIVE_TMP'" || true
+            fallback_to_sparse_deploy "Deploy archive scp upload failed or timed out"
+            exit 0
           fi
 
           if ! timeout 120s sshpass -p "$SSH_PASSWORD" \
@@ -336,9 +354,13 @@ jobs:
             -o IPQoS=none \
             "$SSH_USER@$SSH_HOST" \
             "remote_size=\$(wc -c < '$REMOTE_ARCHIVE_TMP' | tr -d '[:space:]'); if [ \"\$remote_size\" != '$ARCHIVE_BYTES' ]; then echo \"remote archive size mismatch: \$remote_size != $ARCHIVE_BYTES\" >&2; exit 1; fi; mv '$REMOTE_ARCHIVE_TMP' '$REMOTE_ARCHIVE' && ls -lh '$REMOTE_ARCHIVE'"; then
-            echo "::error::Remote archive finalization failed."
-            exit 1
+            timeout 120s sshpass -p "$SSH_PASSWORD" \
+              ssh "${SSH_COMMON_OPTS[@]}" "$SSH_USER@$SSH_HOST" \
+              "rm -f '$REMOTE_ARCHIVE_TMP' '$REMOTE_ARCHIVE'" || true
+            fallback_to_sparse_deploy "Remote archive finalization failed"
+            exit 0
           fi
+          echo "DEPLOY_ARCHIVE_PATH=$REMOTE_ARCHIVE" >> "$GITHUB_ENV"
 
       - name: Deploy on server via SSH
         if: ${{ steps.auth.outputs.mode == 'key' }}
