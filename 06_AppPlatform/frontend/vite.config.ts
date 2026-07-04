@@ -45,6 +45,14 @@ export default defineConfig(({ mode }) => {
     base: assetBaseUrl,
     plugins: [react()],
     build: {
+      modulePreload: {
+        resolveDependencies(_url, deps, context) {
+          if (context.hostType === "html") {
+            return deps.filter((dep) => !dep.includes("react-vendor"));
+          }
+          return deps;
+        },
+      },
       rollupOptions: {
         output: {
           manualChunks(id) {
