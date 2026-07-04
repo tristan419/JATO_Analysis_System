@@ -1,7 +1,13 @@
 import zipfile
 from pathlib import Path
 
+import pytest
+from fastapi import HTTPException
+from upload_toolkit.job_engine import load_job_state, persist_job_state, state_path
+
 from app.services.coc_match_service import (
+    CocMatchJobRunner,
+    _build_coc_match_failure_result,
     classify_coc_difference,
     find_archive_only_files,
     list_archive_files,
@@ -78,6 +84,74 @@ def test_classify_coc_difference_detects_one_sided_and_bidirectional() -> None:
     assert classify_coc_difference(1, 0) == "missing_archive_files"
     assert classify_coc_difference(0, 1) == "archive_only_files"
     assert classify_coc_difference(1, 1) == "bidirectional_mismatch"
+
+
+def test_build_coc_match_failure_result_explains_excel_stage() -> None:
+    state = {
+        "phase": "reading_excel",
+        "excelFilename": "vin.xlsx",
+        "archiveFilename": "coc.rar",
+        "fileExt": ".pdf",
+        "country": "SE",
+        "month": "2026-07",
+    }
+
+    result = _build_coc_match_failure_result(
+        state,
+        HTTPException(status_code=400, detail="Excel 未找到 VIN / Chassis / 车架号 表头。"),
+    )
+
+    assert result["stage"] == "reading_excel"
+    assert result["stageLabel"] == "Excel 读取"
+    assert result["message"] == "Excel 未找到 VIN / Chassis / 车架号 表头。"
+    assert "VIN / Chassis / 车架号" in result["suggestion"]
+    assert result["excelFilename"] == "vin.xlsx"
+    assert result["archiveFilename"] == "coc.rar"
+
+
+def test_coc_match_runner_persists_failure_result_for_excel_error(tmp_path: Path) -> None:
+    job_root = tmp_path / "jobs"
+    job_id = "coc-match-test"
+    job_dir = job_root / job_id
+    job_dir.mkdir(parents=True)
+    excel_path = job_dir / "excel-bad.xlsx"
+    archive_path = job_dir / "archive-coc.zip"
+    excel_path.write_text("not an excel workbook", encoding="utf-8")
+    with zipfile.ZipFile(archive_path, "w") as zf:
+        zf.writestr("A001.pdf", b"pdf")
+    persist_job_state(
+        state_path(job_root, job_id),
+        {
+            "jobId": job_id,
+            "status": "queued",
+            "phase": "pending",
+            "country": "SE",
+            "month": "2026-07",
+            "fileExt": ".pdf",
+            "excelFilename": "bad.xlsx",
+            "archiveFilename": "coc.zip",
+            "failureResult": None,
+        },
+    )
+    runner = CocMatchJobRunner(
+        job_id=job_id,
+        state_dir=job_root,
+        excel_path=excel_path,
+        archive_path=archive_path,
+        country="SE",
+        month="2026-07",
+        file_ext=".pdf",
+        triggered_by="test",
+    )
+
+    with pytest.raises(Exception):
+        runner.run()
+
+    state = load_job_state(state_path(job_root, job_id))
+    assert state["phase"] == "reading_excel"
+    assert state["failureResult"]["stage"] == "reading_excel"
+    assert state["failureResult"]["stageLabel"] == "Excel 读取"
+    assert state["failureResult"]["excelFilename"] == "bad.xlsx"
 
 
 def test_list_archive_files_reads_zip_without_external_unzip(tmp_path: Path) -> None:
