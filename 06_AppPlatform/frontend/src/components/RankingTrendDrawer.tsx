@@ -68,7 +68,7 @@ export function RankingTrendPopover({
   const chartData = trend.length > 0 ? [{
     type: "scatter" as const,
     mode: "lines+markers" as const,
-    x: trend.map((t) => t.month),
+    x: trend.map((t) => `${t.month}-01`),
     y: trend.map((t) => t.sales),
     name: "Sales",
     line: { color: "#1c69d4", width: 2 },
@@ -119,7 +119,7 @@ export function RankingTrendPopover({
                     data={chartData}
                     layout={{
                       margin: { l: 40, r: 8, t: 4, b: 36 },
-                      xaxis: { tickformat: "%y.%m", tickangle: -45, nticks: 8 },
+                      xaxis: { type: "date", tickformat: "%y.%m", tickangle: -45, nticks: 8 },
                       yaxis: { title: { text: "" } },
                       height: 200,
                       paper_bgcolor: "transparent",

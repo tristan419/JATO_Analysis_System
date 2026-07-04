@@ -4034,6 +4034,7 @@ def query_ranking_trend(
         frame = frame[frame["__length"] >= float(length_min)]
     if length_max is not None:
         frame = frame[frame["__length"] <= float(length_max)]
+    market_frame = frame.copy()
 
     # Filter by brand (and optionally model) — case-insensitive
     brand_lower = brand.strip().lower()
@@ -4055,14 +4056,17 @@ def query_ranking_trend(
         }
 
     month_cols = [c for c in columns.month_columns if c in frame.columns]
+    period_to_column = {_month_column_to_period(c): c for c in month_cols}
     month_records = []
     for mc in month_cols:
         col_series = pd.to_numeric(frame[mc], errors="coerce").fillna(0.0)
         total = float(col_series.sum())
         if total <= 0:
             continue
+        period = _month_column_to_period(mc)
         month_records.append({
-            "month": mc,
+            "month": period,
+            "_sourceColumn": mc,
             "sales": total,
             "msrpMin": float(frame["__msrp"].min()) if len(frame) > 0 else 0,
             "msrpMax": float(frame["__msrp"].max()) if len(frame) > 0 else 0,
@@ -4089,7 +4093,8 @@ def query_ranking_trend(
 
     market_month_totals: dict[str, float] = {}
     for mc in month_cols:
-        market_month_totals[mc] = float(pd.to_numeric(frame[mc], errors="coerce").fillna(0.0).sum())
+        period = _month_column_to_period(mc)
+        market_month_totals[period] = float(pd.to_numeric(market_frame[mc], errors="coerce").fillna(0.0).sum())
 
     for rec in month_records:
         total_market = market_month_totals.get(rec["month"], 0)
@@ -4104,10 +4109,10 @@ def query_ranking_trend(
     all_models: list[dict[str, Any]] = []
     if entity_type == "brand":
         # Latest month and same-month-last-year columns for growth calc
-        latest_month_col = month_records[-1]["month"] if month_records else None
-        latest_year = int(latest_month_col[:4]) if latest_month_col else 0
-        prev_year_month = f"{latest_year - 1}{latest_month_col[4:]}" if latest_month_col else None
-        prev_year_col = prev_year_month if prev_year_month in month_cols else None
+        latest_period = month_records[-1]["month"] if month_records else None
+        latest_month_col = period_to_column.get(latest_period) if latest_period else None
+        prev_year_period = _shift_period(latest_period, -12) if latest_period else None
+        prev_year_col = period_to_column.get(prev_year_period) if prev_year_period else None
 
         model_agg = frame.groupby("__model")
         model_sales: list[dict[str, Any]] = []
@@ -4118,7 +4123,7 @@ def query_ranking_trend(
             ))
             if total_sales <= 0:
                 continue
-            latest_sales = float(pd.to_numeric(m_group[latest_month_col], errors="coerce").fillna(0.0).sum()) if latest_month_col else 0.0
+            latest_sales = float(pd.to_numeric(m_group[latest_month_col], errors="coerce").fillna(0.0).sum()) if latest_month_col and latest_month_col in m_group.columns else 0.0
             prev_year_sales = float(pd.to_numeric(m_group[prev_year_col], errors="coerce").fillna(0.0).sum()) if prev_year_col else 0.0
             growth = round((latest_sales / prev_year_sales - 1) * 100, 1) if prev_year_sales > 0 else 0.0
             model_sales.append({
@@ -4148,6 +4153,11 @@ def query_ranking_trend(
             for m in model_sales
         ]
 
+    trend_records = [
+        {key: value for key, value in record.items() if not key.startswith("_")}
+        for record in month_records
+    ]
+
     return {
         "entityType": entity_type,
         "brand": brand,
@@ -4167,7 +4177,7 @@ def query_ranking_trend(
                 if prev and prev.get("sales", 0) > 0 else 0
             ),
         },
-        "trend": month_records,
+        "trend": trend_records,
         "topModels": all_models,
         "models": all_models,
     }
