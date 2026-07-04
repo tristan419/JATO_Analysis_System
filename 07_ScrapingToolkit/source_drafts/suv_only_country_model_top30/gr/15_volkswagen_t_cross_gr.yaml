@@ -1,18 +1,33 @@
 source_code: volkswagen_t_cross_gr_draft_scrapling
 country: 希腊
 brand: VOLKSWAGEN
-source_url: https://todo.invalid/gr/volkswagen/t_cross
+source_url: https://www.volkswagen.gr/el/models/t-cross.html
 source_type: manufacturer_official
 price_semantics: base_msrp
-extractor_type: playwright
-profile_preset: ../_shared/presets/volkswagen_configurator_trim_overview_playwright.yaml
+extractor_type: http_text
 profile:
-  url: https://todo.invalid/gr/volkswagen/t_cross
+  url: https://www.volkswagen.gr/el/models/t-cross.html
+  timeout_seconds: 45
+  headers:
+    User-Agent: Mozilla/5.0
+    Accept-Language: el-GR,el;q=0.9,en;q=0.8
+  entry_patterns:
+  - pattern: '"key":"Τιμή","label":"Τιμή \(με ΦΠΑ\)","value":"Από\s*(?P<price>\d[\d\.]*)","unit":"€"'
+    official_trim: T-Cross starting price
+    official_powertrain: 1.0 TSI
+    price_label: Τιμή με ΦΠΑ
   default_currency: EUR
   default_tax_included: true
-  default_price_label: MSRP
+  default_price_label: Τιμή με ΦΠΑ
   fixed_model: T-CROSS
   fixed_jato_model: T-CROSS
+  copy_trim_to_jato_trim: true
+  match_confidence: 0.82
+  match_status: review_required
+  match_reason:
+    kind: official_model_page_entry_price
+    source: volkswagen_gr_t_cross_model_page
+    note: Official Volkswagen Greece T-Cross model page exposes the highlighted "Τιμή (με ΦΠΑ)" starting price. Keep review_required because the page-level price is an entry price, while the finance disclaimer names the T-Cross 1.0 TSI 95PS Essential variant.
   structured_fields:
     powertrain_rules:
     - key: powertrain_ice
@@ -33,7 +48,9 @@ schedule:
 notes: Draft scaffold generated from country×model top30 backlog. Replace source_url,
   profile.url, selectors, currency, price label, and the single-model placeholders
   before promoting to 07_ScrapingToolkit/sources. [Switched to playwright_card_flow
-  with volkswagen_configurator_trim_overview_playwright.yaml]
+  with volkswagen_configurator_trim_overview_playwright.yaml] [Replaced todo.invalid
+  with deterministic http_text over Volkswagen Greece's official T-Cross model page
+  highlighted VAT-included starting price.]
 bootstrap_meta:
   country_model_rank: 15
   suggested_scope_kind: single_model
