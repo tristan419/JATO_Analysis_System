@@ -401,7 +401,6 @@ jobs:
           RUNTIME_PRESERVE_PATHS="
           03_Scripts/diagnostics/artifacts
           03_Scripts/logs
-          06_AppPlatform/frontend/dist
           hermes/reports
           "
 
@@ -825,7 +824,6 @@ jobs:
           RUNTIME_PRESERVE_PATHS="
           03_Scripts/diagnostics/artifacts
           03_Scripts/logs
-          06_AppPlatform/frontend/dist
           hermes/reports
           "
 
@@ -1167,3 +1165,51 @@ jobs:
           fi
           curl --noproxy '*' -fsS http://127.0.0.1:8000/healthz >/dev/null
           EOF
+
+      - name: Verify public frontend build metadata
+        env:
+          PUBLIC_BUILD_META_URLS: ${{ vars.DEPLOY_PUBLIC_BUILD_META_URLS }}
+        run: |
+          set -euo pipefail
+
+          if [ -z "${PUBLIC_BUILD_META_URLS:-}" ]; then
+            PUBLIC_BUILD_META_URLS="https://www.ojeur.cloud https://ojeur.cloud"
+          fi
+
+          expected="$GITHUB_SHA"
+          failed=0
+
+          for origin in $PUBLIC_BUILD_META_URLS; do
+            origin="${origin%/}"
+            echo "[INFO] Verifying frontend build metadata: $origin"
+            matched=false
+
+            for attempt in $(seq 1 24); do
+              cache_bust="deploy_verify=${GITHUB_RUN_ID:-manual}-${GITHUB_RUN_ATTEMPT:-1}-${attempt}"
+              meta="$(
+                curl -L -fsS --max-time 20 "$origin/build-meta.json?$cache_bust" 2>/dev/null \
+                  || true
+              )"
+              commit="$(
+                printf '%s' "$meta" | python3 -c 'import json, sys; payload = sys.stdin.read(); print((json.loads(payload).get("commit") or "") if payload else "")' 2>/dev/null \
+                  || true
+              )"
+
+              if [ "$commit" = "$expected" ]; then
+                echo "[INFO] $origin is serving $commit"
+                matched=true
+                break
+              fi
+
+              short="${commit:-missing}"
+              echo "[INFO] $origin attempt $attempt/24 served ${short:0:12}; expected ${expected:0:12}"
+              sleep 10
+            done
+
+            if [ "$matched" != "true" ]; then
+              echo "::error::$origin did not serve build-meta commit $expected"
+              failed=1
+            fi
+          done
+
+          exit "$failed"
