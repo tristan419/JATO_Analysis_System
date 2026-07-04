@@ -511,10 +511,15 @@ jobs:
           done
           for runtime_path in $RUNTIME_PRESERVE_PATHS; do
             if [ -e "$RUNTIME_PRESERVE_DIR/$runtime_path" ]; then
-              rm -rf "$REPO_DIR/$runtime_path"
-              mkdir -p "$(dirname "$REPO_DIR/$runtime_path")"
-              cp -a "$RUNTIME_PRESERVE_DIR/$runtime_path" "$REPO_DIR/$runtime_path"
-              echo "[INFO] Restored runtime path: $runtime_path"
+              if [ -d "$RUNTIME_PRESERVE_DIR/$runtime_path" ] && [ -d "$REPO_DIR/$runtime_path" ]; then
+                (cd "$RUNTIME_PRESERVE_DIR" && tar cf - "$runtime_path") | (cd "$REPO_DIR" && tar xf -)
+                echo "[INFO] Merged runtime path: $runtime_path"
+              else
+                rm -rf "$REPO_DIR/$runtime_path"
+                mkdir -p "$(dirname "$REPO_DIR/$runtime_path")"
+                cp -a "$RUNTIME_PRESERVE_DIR/$runtime_path" "$REPO_DIR/$runtime_path"
+                echo "[INFO] Restored runtime path: $runtime_path"
+              fi
             fi
           done
           rm -rf "$RUNTIME_PRESERVE_DIR"
@@ -934,10 +939,15 @@ jobs:
           done
           for runtime_path in $RUNTIME_PRESERVE_PATHS; do
             if [ -e "$RUNTIME_PRESERVE_DIR/$runtime_path" ]; then
-              rm -rf "$REPO_DIR/$runtime_path"
-              mkdir -p "$(dirname "$REPO_DIR/$runtime_path")"
-              cp -a "$RUNTIME_PRESERVE_DIR/$runtime_path" "$REPO_DIR/$runtime_path"
-              echo "[INFO] Restored runtime path: $runtime_path"
+              if [ -d "$RUNTIME_PRESERVE_DIR/$runtime_path" ] && [ -d "$REPO_DIR/$runtime_path" ]; then
+                (cd "$RUNTIME_PRESERVE_DIR" && tar cf - "$runtime_path") | (cd "$REPO_DIR" && tar xf -)
+                echo "[INFO] Merged runtime path: $runtime_path"
+              else
+                rm -rf "$REPO_DIR/$runtime_path"
+                mkdir -p "$(dirname "$REPO_DIR/$runtime_path")"
+                cp -a "$RUNTIME_PRESERVE_DIR/$runtime_path" "$REPO_DIR/$runtime_path"
+                echo "[INFO] Restored runtime path: $runtime_path"
+              fi
             fi
           done
           rm -rf "$RUNTIME_PRESERVE_DIR"
