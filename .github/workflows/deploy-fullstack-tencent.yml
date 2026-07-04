@@ -185,7 +185,7 @@ jobs:
           CHUNK_DIR="$RUNNER_TEMP/deploy_archive_chunks"
           rm -rf "$CHUNK_DIR"
           mkdir -p "$CHUNK_DIR"
-          split -b 512k "$ARCHIVE_PATH" "$CHUNK_DIR/chunk_"
+          split -b 4m "$ARCHIVE_PATH" "$CHUNK_DIR/chunk_"
 
           SSH_COMMON_OPTS=(
             -T
@@ -266,7 +266,7 @@ jobs:
           CHUNK_DIR="$RUNNER_TEMP/deploy_archive_chunks"
           rm -rf "$CHUNK_DIR"
           mkdir -p "$CHUNK_DIR"
-          split -b 512k "$ARCHIVE_PATH" "$CHUNK_DIR/chunk_"
+          split -b 4m "$ARCHIVE_PATH" "$CHUNK_DIR/chunk_"
 
           SSH_COMMON_OPTS=(
             -T
