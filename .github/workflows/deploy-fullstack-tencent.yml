@@ -147,7 +147,7 @@ jobs:
           tar tzf "$RUNNER_TEMP/JATO_deploy.tar.gz" "$REQUIRED_WORKBOOK"
 
       - name: Upload archive to server
-        if: ${{ steps.auth.outputs.mode == 'key' && vars.DEPLOY_UPLOAD_ARCHIVE == 'true' }}
+        if: ${{ steps.auth.outputs.mode == 'key' && vars.DEPLOY_UPLOAD_ARCHIVE != 'false' }}
         env:
           SSH_HOST: ${{ secrets.SSH_HOST }}
           SSH_USER: ${{ secrets.SSH_USER }}
@@ -239,7 +239,7 @@ jobs:
           fi
 
       - name: Upload archive to server
-        if: ${{ steps.auth.outputs.mode == 'password' && vars.DEPLOY_UPLOAD_ARCHIVE == 'true' }}
+        if: ${{ steps.auth.outputs.mode == 'password' && vars.DEPLOY_UPLOAD_ARCHIVE != 'false' }}
         env:
           SSH_HOST: ${{ secrets.SSH_HOST }}
           SSH_USER: ${{ secrets.SSH_USER }}
