@@ -184,14 +184,23 @@ jobs:
           echo "DEPLOY_ARCHIVE_PATH=$REMOTE_ARCHIVE" >> "$GITHUB_ENV"
           ls -lh "$ARCHIVE_PATH"
           ARCHIVE_BYTES="$(wc -c < "$ARCHIVE_PATH" | tr -d '[:space:]')"
-          CHUNK_DIR="$RUNNER_TEMP/deploy_archive_chunks"
-          rm -rf "$CHUNK_DIR"
-          mkdir -p "$CHUNK_DIR"
-          split -b 1m "$ARCHIVE_PATH" "$CHUNK_DIR/chunk_"
 
           SSH_COMMON_OPTS=(
             -T
             -p "$SSH_PORT"
+            -o BatchMode=yes
+            -o StrictHostKeyChecking=no
+            -o UserKnownHostsFile=/dev/null
+            -o ConnectTimeout=20
+            -o ConnectionAttempts=2
+            -o ServerAliveInterval=10
+            -o ServerAliveCountMax=2
+            -o IPQoS=none
+            -o HostKeyAlias="$SSH_HOST"
+            -i ~/.ssh/github_actions_tencent_key
+          )
+          SCP_COMMON_OPTS=(
+            -P "$SSH_PORT"
             -o BatchMode=yes
             -o StrictHostKeyChecking=no
             -o UserKnownHostsFile=/dev/null
@@ -210,18 +219,12 @@ jobs:
             exit 1
           fi
 
-          chunk_total="$(find "$CHUNK_DIR" -type f | wc -l | tr -d '[:space:]')"
-          chunk_index=0
-          for chunk in "$CHUNK_DIR"/chunk_*; do
-            chunk_index=$((chunk_index + 1))
-            chunk_size="$(wc -c < "$chunk" | tr -d '[:space:]')"
-            echo "[INFO] Uploading deploy archive chunk ${chunk_index}/${chunk_total} (${chunk_size} bytes)"
-            if ! timeout 90s ssh "${SSH_COMMON_OPTS[@]}" "$SSH_USER@$SSH_CONNECT_HOST" \
-              "cat >> '$REMOTE_ARCHIVE_TMP'" < "$chunk"; then
-              echo "::error::Deploy archive chunk upload failed or timed out."
-              exit 1
-            fi
-          done
+          echo "[INFO] Uploading deploy archive with scp (${ARCHIVE_BYTES} bytes)"
+          if ! timeout 900s scp "${SCP_COMMON_OPTS[@]}" \
+            "$ARCHIVE_PATH" "$SSH_USER@$SSH_CONNECT_HOST:$REMOTE_ARCHIVE_TMP"; then
+            echo "::error::Deploy archive scp upload failed or timed out."
+            exit 1
+          fi
 
           if ! timeout 120s ssh -T -p "$SSH_PORT" \
             -o BatchMode=yes \
@@ -265,14 +268,22 @@ jobs:
           echo "DEPLOY_ARCHIVE_PATH=$REMOTE_ARCHIVE" >> "$GITHUB_ENV"
           ls -lh "$ARCHIVE_PATH"
           ARCHIVE_BYTES="$(wc -c < "$ARCHIVE_PATH" | tr -d '[:space:]')"
-          CHUNK_DIR="$RUNNER_TEMP/deploy_archive_chunks"
-          rm -rf "$CHUNK_DIR"
-          mkdir -p "$CHUNK_DIR"
-          split -b 1m "$ARCHIVE_PATH" "$CHUNK_DIR/chunk_"
 
           SSH_COMMON_OPTS=(
             -T
             -p "$SSH_PORT"
+            -o PreferredAuthentications=password
+            -o PubkeyAuthentication=no
+            -o StrictHostKeyChecking=no
+            -o UserKnownHostsFile=/dev/null
+            -o ConnectTimeout=20
+            -o ConnectionAttempts=2
+            -o ServerAliveInterval=10
+            -o ServerAliveCountMax=2
+            -o IPQoS=none
+          )
+          SCP_COMMON_OPTS=(
+            -P "$SSH_PORT"
             -o PreferredAuthentications=password
             -o PubkeyAuthentication=no
             -o StrictHostKeyChecking=no
@@ -291,19 +302,12 @@ jobs:
             exit 1
           fi
 
-          chunk_total="$(find "$CHUNK_DIR" -type f | wc -l | tr -d '[:space:]')"
-          chunk_index=0
-          for chunk in "$CHUNK_DIR"/chunk_*; do
-            chunk_index=$((chunk_index + 1))
-            chunk_size="$(wc -c < "$chunk" | tr -d '[:space:]')"
-            echo "[INFO] Uploading deploy archive chunk ${chunk_index}/${chunk_total} (${chunk_size} bytes)"
-            if ! timeout 90s sshpass -p "$SSH_PASSWORD" \
-              ssh "${SSH_COMMON_OPTS[@]}" "$SSH_USER@$SSH_HOST" \
-              "cat >> '$REMOTE_ARCHIVE_TMP'" < "$chunk"; then
-              echo "::error::Deploy archive chunk upload failed or timed out."
-              exit 1
-            fi
-          done
+          echo "[INFO] Uploading deploy archive with scp (${ARCHIVE_BYTES} bytes)"
+          if ! timeout 900s sshpass -p "$SSH_PASSWORD" \
+            scp "${SCP_COMMON_OPTS[@]}" "$ARCHIVE_PATH" "$SSH_USER@$SSH_HOST:$REMOTE_ARCHIVE_TMP"; then
+            echo "::error::Deploy archive scp upload failed or timed out."
+            exit 1
+          fi
 
           if ! timeout 120s sshpass -p "$SSH_PASSWORD" \
             ssh -T -p "$SSH_PORT" \
