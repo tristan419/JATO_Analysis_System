@@ -2815,6 +2815,8 @@ export interface CocMatchFailureResult {
   stageLabel: string;
   message: string;
   suggestion: string;
+  retryable?: boolean;
+  actionLabel?: string;
   excelFilename: string;
   archiveFilename: string;
   fileExt: string;
@@ -2841,6 +2843,7 @@ export interface CocMatchJob {
   coverageRate?: number;
   previousRun?: { month: string; matched: number; total: number } | null;
   diffSummary?: { gained: number; lost: number; newEntries: number } | null;
+  inputWarning?: string | null;
   triggeredBy: string;
   error?: string | null;
   failureResult?: CocMatchFailureResult | null;

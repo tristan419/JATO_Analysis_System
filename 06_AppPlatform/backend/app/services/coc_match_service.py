@@ -30,6 +30,7 @@ ALLOWED_ARCHIVE_EXTENSIONS = {".zip", ".rar"}
 _RUNNING_THREADS: dict[str, "CocMatchJobRunner"] = {}
 _COC_UPLOAD_CHUNK_SIZE = 8 * 1024 * 1024  # 8 MB
 _COC_UPLOAD_THRESHOLD_BYTES = 50 * 1024 * 1024  # 50 MB
+_COC_MATCH_STALE_AFTER_SECONDS = 60 * 60
 
 # ── Excel → rows ───────────────────────────────────────────────────
 
@@ -88,7 +89,19 @@ def _exception_user_message(exc: Exception) -> str:
     return str(exc)
 
 
+def _coc_match_failure_retryable(phase: str, message: str) -> bool:
+    if phase in {"saving_history", "building_report"}:
+        return True
+    if "超时" in message or "未更新" in message or "中断" in message:
+        return True
+    if phase in {"reading_excel", "listing_archive", "matching"}:
+        return False
+    return True
+
+
 def _coc_match_failure_suggestion(phase: str, message: str) -> str:
+    if "超时" in message or "未更新" in message or "中断" in message:
+        return "任务可能被服务重启或后台进程中断，请直接重试；如再次卡住，请联系管理员查看任务日志。"
     if phase == "reading_excel":
         if "VIN" in message or "Chassis" in message or "车架" in message:
             return "请确认 Excel 包含 VIN / Chassis / 车架号表头，或使用单列 17 位 VIN 清单。"
@@ -109,11 +122,14 @@ def _coc_match_failure_suggestion(phase: str, message: str) -> str:
 def _build_coc_match_failure_result(state: dict[str, Any], exc: Exception) -> dict[str, Any]:
     phase = str(state.get("phase") or "failed")
     message = _exception_user_message(exc)
+    retryable = _coc_match_failure_retryable(phase, message)
     return {
         "stage": phase,
         "stageLabel": _COC_MATCH_PHASE_LABELS.get(phase, phase),
         "message": message,
         "suggestion": _coc_match_failure_suggestion(phase, message),
+        "retryable": retryable,
+        "actionLabel": "重试" if retryable else "重新上传",
         "excelFilename": str(state.get("excelFilename") or ""),
         "archiveFilename": str(state.get("archiveFilename") or ""),
         "fileExt": str(state.get("fileExt") or ""),
@@ -121,6 +137,63 @@ def _build_coc_match_failure_result(state: dict[str, Any], exc: Exception) -> di
         "month": str(state.get("month") or ""),
         "failedAt": datetime.now().isoformat(),
     }
+
+
+def _parse_state_datetime(value: object) -> datetime | None:
+    if not value:
+        return None
+    text = str(value).strip()
+    if not text:
+        return None
+    try:
+        return datetime.fromisoformat(text.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+
+
+def _state_age_seconds(payload: dict[str, Any]) -> float | None:
+    timestamp = (
+        _parse_state_datetime(payload.get("updatedAt"))
+        or _parse_state_datetime(payload.get("startedAt"))
+        or _parse_state_datetime(payload.get("createdAt"))
+    )
+    if timestamp is None:
+        return None
+    now = datetime.now(timestamp.tzinfo) if timestamp.tzinfo else datetime.now()
+    return (now - timestamp).total_seconds()
+
+
+def _is_coc_match_runner_alive(job_id: str) -> bool:
+    runner = _RUNNING_THREADS.get(job_id)
+    worker = getattr(runner, "_thread", None)
+    return bool(worker and worker.is_alive())
+
+
+def _finalize_stale_coc_match_payload(payload: dict[str, Any]) -> dict[str, Any]:
+    status = str(payload.get("status") or "")
+    if status not in {"queued", "running"}:
+        return payload
+    job_id = str(payload.get("jobId") or "")
+    if job_id and _is_coc_match_runner_alive(job_id):
+        return payload
+    age_seconds = _state_age_seconds(payload)
+    if age_seconds is None or age_seconds < _COC_MATCH_STALE_AFTER_SECONDS:
+        return payload
+
+    stale_payload = dict(payload)
+    stale_phase = str(stale_payload.get("phase") or status or "running")
+    stale_payload["phase"] = stale_phase
+    stale_payload["failureResult"] = _build_coc_match_failure_result(
+        stale_payload,
+        TimeoutError("任务超过 60 分钟未更新，可能是服务重启或后台进程中断。"),
+    )
+    stale_payload["status"] = "failed"
+    stale_payload["phase"] = "failed"
+    stale_payload["error"] = stale_payload["failureResult"]["message"]
+    stale_payload["finishedAt"] = datetime.now().isoformat()
+    if job_id:
+        persist_job_state(state_path(COC_MATCH_JOB_ROOT, job_id), stale_payload)
+    return stale_payload
 
 
 def _normalize_vin_value(value: object) -> str:
@@ -225,6 +298,11 @@ def read_excel_rows(excel_path: Path) -> list[dict[str, str]]:
             "model": model,
             "country": country,
         })
+    if not rows:
+        raise HTTPException(
+            status_code=400,
+            detail="Excel 已识别 VIN / Chassis / 车架号列，但没有有效 VIN 数据。",
+        )
     return rows
 
 
@@ -259,7 +337,7 @@ def _list_rar_files(rar_path: Path, extensions: list[str]) -> set[str]:
         ["7zz", "l", "-ba", str(rar_path)],
     ):
         listed = _list_archive_files_with_command(command, extensions)
-        if listed:
+        if listed is not None:
             return listed
 
     listed = _list_rar_files_python(rar_path, extensions)
@@ -274,9 +352,9 @@ def _list_rar_files(rar_path: Path, extensions: list[str]) -> set[str]:
 def _list_archive_files_with_command(
     command: list[str],
     extensions: list[str],
-) -> set[str]:
+) -> set[str] | None:
     if shutil.which(command[0]) is None:
-        return set()
+        return None
 
     try:
         result = subprocess.run(
@@ -286,9 +364,9 @@ def _list_archive_files_with_command(
             check=False,
         )
     except OSError:
-        return set()
+        return None
     if result.returncode != 0:
-        return set()
+        return None
 
     names: set[str] = set()
     for line in result.stdout.splitlines():
@@ -1027,6 +1105,13 @@ class CocMatchJobRunner(BaseJobRunner):
             self.log(f"Listing archive (ext={self.file_ext})...")
             file_set = list_archive_files(self.archive_path, extensions)
             self.log(f"  {len(file_set)} unique filenames")
+            input_warning = None
+            if not file_set:
+                input_warning = (
+                    f"压缩包内没有找到 {self.file_ext.upper()} COC 文件；"
+                    "本次会生成全部缺失的业务差异报告，请确认文件类型选择是否正确。"
+                )
+                self.log(f"  Warning: {input_warning}")
 
             # Step 3: Match
             self._set_phase("matching")
@@ -1084,6 +1169,7 @@ class CocMatchJobRunner(BaseJobRunner):
             state["differenceType"] = difference_type
             state["hasBidirectionalMismatch"] = difference_type == "bidirectional_mismatch"
             state["coverageRate"] = round(len(matched) / len(rows) * 100, 1) if rows else 0
+            state["inputWarning"] = input_warning
             if prev:
                 state["previousRun"] = {"month": prev[1], "matched": prev[3], "total": prev[2]}
                 state["diffSummary"] = {
@@ -1179,6 +1265,7 @@ def create_coc_match_job(
         "coverageRate": None,
         "previousRun": None,
         "diffSummary": None,
+        "inputWarning": None,
         "error": None,
         "failureResult": None,
         "createdAt": datetime.now().isoformat(),
@@ -1372,6 +1459,7 @@ def create_coc_match_job_from_upload(
         "coverageRate": None,
         "previousRun": None,
         "diffSummary": None,
+        "inputWarning": None,
         "error": None,
         "failureResult": None,
         "createdAt": datetime.now().isoformat(),
@@ -1399,7 +1487,7 @@ def create_coc_match_job_from_upload(
 
 def list_coc_match_jobs(limit: int = 20, country: str | None = None) -> dict[str, Any]:
     payloads = [
-        payload
+        _finalize_stale_coc_match_payload(payload)
         for payload in list_job_payloads(COC_MATCH_JOB_ROOT)
         if str(payload.get("jobType", "match")) == "match"
     ]
@@ -1421,7 +1509,7 @@ def get_coc_match_job(job_id: str) -> dict[str, Any]:
     payload = load_job_state(sp)
     if str(payload.get("jobType", "match")) != "match":
         raise HTTPException(status_code=404, detail=f"COC 匹配任务不存在: {job_id}")
-    return payload
+    return _finalize_stale_coc_match_payload(payload)
 
 
 def get_coc_match_report_path(job_id: str) -> Path:
