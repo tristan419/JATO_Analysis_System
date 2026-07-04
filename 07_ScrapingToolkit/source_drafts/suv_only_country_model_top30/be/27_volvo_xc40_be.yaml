@@ -1,24 +1,27 @@
 source_code: volvo_xc40_be_draft_scrapling
 country: 比利时
 brand: VOLVO
-source_url: https://todo.invalid/be/volvo/xc40
+source_url: https://www.volvocars.com/nl-be/build/xc40/
 source_type: manufacturer_official
 price_semantics: base_msrp
 extractor_type: scrapling
 profile:
-  url: https://todo.invalid/be/volvo/xc40
+  url: https://www.volvocars.com/nl-be/build/xc40/
   tier: stealth
   headless: true
-  network_idle: true
+  network_idle: false
+  timeout_ms: 75000
+  retries: 2
   impersonate: chrome
   css:
-    vehicle_container: body
-    model: h1
-    trim: '[class*="variant"], [class*="trim"], h2'
-    price: '[class*="price"], [data-automation*="price"]'
+    vehicle_container: '[data-testid="stage-level:container"] [data-testid="selection-card"]'
+    model: ''
+    trim: '[data-testid="title"]'
+    price: '[data-testid="price"]'
+    exclude_if_selector: '[data-testid="selection-card-unavailable"], [data-testid="price"][data-sources*="priceBreakdown.standard"], [data-testid="price"][data-sources*="relative"]'
   default_currency: EUR
   default_tax_included: true
-  default_price_label: MSRP
+  default_price_label: Catalogusprijs incl. btw
   fixed_model: XC40
   fixed_jato_model: XC40
   fixed_jato_powertrain: null
@@ -126,6 +129,11 @@ profile:
     force_review_if_powertrain_missing: true
     force_review_if_powertrain_ambiguous: true
     force_review_for_special_edition: true
+  json_script_selector: script[type='application/ld+json']
+  exclude_price_prefixes:
+  - 'Vanaf '
+  - 'A partir de '
+  - Leasing
 schedule:
   frequency: manual_only
   run_window_start: 00:00
@@ -134,7 +142,8 @@ schedule:
 notes: Draft scaffold generated from country×model top30 backlog. Replace source_url,
   profile.url, selectors, currency, price label, and the single-model placeholders
   before promoting to 07_ScrapingToolkit/sources. [CSS selectors applied from brand
-  probe]
+  probe] [Replaced todo.invalid with official Volvo Belgium XC40 build page using
+  the existing Volvo build-card selector pattern.]
 bootstrap_meta:
   country_model_rank: 27
   suggested_scope_kind: single_model
