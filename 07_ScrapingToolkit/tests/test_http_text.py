@@ -61,6 +61,49 @@ def test_http_text_extracts_embedded_configurator_price(monkeypatch):
     assert results[0].match_confidence == 0.82
 
 
+def test_http_text_cleans_html_entities_from_match_fields(monkeypatch):
+    extractor = HttpTextExtractor(
+        ExtractorConfig(
+            source_code="dacia_duster_ro_draft_scrapling",
+            country="罗马尼亚",
+            brand="DACIA",
+            source_url="https://www.dacia.ro/preturi-de-lista.html",
+            source_type="official_price_list",
+            price_semantics="base_msrp",
+        ),
+        HttpTextProfile(
+            url="https://www.dacia.ro/preturi-de-lista.html",
+            fixed_model="DUSTER",
+            fixed_jato_model="DUSTER",
+            copy_trim_to_jato_trim=True,
+            default_currency="EUR",
+            default_tax_included=True,
+            default_price_label="Preț de listă (TVA inclus)",
+            match_confidence=0.86,
+            match_status="review_required",
+            entry_patterns=(
+                HttpTextEntryPattern(
+                    pattern=(
+                        r"<td><p>(?P<trim>journey&nbsp;hybrid-G 150 4X4)</p>"
+                        r"</td><td><p>(?P<price>29,100)&nbsp;EUR"
+                    ),
+                    official_powertrain="hybrid-G list price",
+                    jato_powertrain="LPG",
+                ),
+            ),
+        ),
+    )
+    html = "<td><p>journey&nbsp;hybrid-G 150 4X4</p></td><td><p>29,100&nbsp;EUR"
+    monkeypatch.setattr(extractor, "_fetch_text", lambda: html)
+
+    results = extractor.extract()
+
+    assert len(results) == 1
+    assert results[0].official_trim == "journey hybrid-G 150 4X4"
+    assert results[0].jato_trim == "journey hybrid-G 150 4X4"
+    assert results[0].raw_payload["match_groups"]["trim"] == "journey hybrid-G 150 4X4"
+
+
 def test_http_text_profile_builds_entry_patterns() -> None:
     profile = _build_http_text_profile(
         {

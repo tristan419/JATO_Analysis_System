@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+import html
 import logging
 import re
 
@@ -13,6 +14,11 @@ from jato_scraper.extractors.pdf_text import parse_price
 
 log = logging.getLogger(__name__)
 DEFAULT_TIMEOUT = 30
+
+
+def _clean_text(value: object) -> str:
+    text = html.unescape(str(value or "")).replace("\xa0", " ")
+    return re.sub(r"\s+", " ", text).strip()
 
 
 @dataclass(frozen=True)
@@ -120,7 +126,7 @@ class HttpTextExtractor(BaseExtractor):
         match: re.Match[str],
     ) -> RawObservation | None:
         groups = {
-            key: value
+            key: _clean_text(value)
             for key, value in match.groupdict().items()
             if value is not None
         }
@@ -140,28 +146,28 @@ class HttpTextExtractor(BaseExtractor):
             )
             return None
 
-        official_model = str(self.profile.fixed_model or groups.get("model") or "").strip()
-        official_trim = str(entry.official_trim or groups.get("trim") or "").strip()
-        official_powertrain = str(
+        official_model = _clean_text(self.profile.fixed_model or groups.get("model") or "")
+        official_trim = _clean_text(entry.official_trim or groups.get("trim") or "")
+        official_powertrain = _clean_text(
             entry.official_powertrain or groups.get("powertrain") or ""
-        ).strip() or None
-        official_edition = str(
+        ) or None
+        official_edition = _clean_text(
             entry.official_edition or groups.get("edition") or ""
-        ).strip() or None
-        availability_text = str(
+        ) or None
+        availability_text = _clean_text(
             entry.availability_text or groups.get("availability") or ""
-        ).strip() or None
+        ) or None
 
-        jato_trim = str(entry.jato_trim or groups.get("jato_trim") or "").strip()
+        jato_trim = _clean_text(entry.jato_trim or groups.get("jato_trim") or "")
         if not jato_trim and self.profile.copy_trim_to_jato_trim:
             jato_trim = official_trim
 
-        jato_powertrain = str(
+        jato_powertrain = _clean_text(
             entry.jato_powertrain
             or self.profile.fixed_jato_powertrain
             or groups.get("jato_powertrain")
             or ""
-        ).strip() or None
+        ) or None
 
         return RawObservation(
             official_model=official_model,
@@ -180,7 +186,9 @@ class HttpTextExtractor(BaseExtractor):
                 "match_groups": groups,
                 "price_delta": entry.price_delta,
             },
-            jato_model=str(self.profile.fixed_jato_model or groups.get("jato_model") or ""),
+            jato_model=_clean_text(
+                self.profile.fixed_jato_model or groups.get("jato_model") or ""
+            ),
             jato_trim=jato_trim,
             jato_powertrain=jato_powertrain,
             match_confidence=self.profile.match_confidence or 0.0,
