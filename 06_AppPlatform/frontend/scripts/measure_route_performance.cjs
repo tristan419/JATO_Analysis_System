@@ -15,6 +15,7 @@ const DEFAULT_ROUTES = [
   { label: "dashboard", path: "/dashboard", selector: ".dashboard-layout", waitForOverview: false },
   { label: "dashboard-wide", path: WIDE_DASHBOARD_PATH, selector: ".dashboard-layout" },
 ];
+const DEFAULT_INITIAL_WINDOW_MS = 8_000;
 
 function getArg(name) {
   const prefix = `--${name}=`;
@@ -29,6 +30,11 @@ function normalizeOrigin(value) {
 
 function normalizeRouteTarget(value) {
   return value === "intl" ? "intl" : "cn";
+}
+
+function parsePositiveInteger(value, fallback) {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) && parsed > 0 ? Math.floor(parsed) : fallback;
 }
 
 function parseCustomHosts() {
@@ -171,7 +177,59 @@ async function collectBrowserMetrics(page) {
   }));
 }
 
-async function measureRoute(browser, host, route, credentials, timeoutMs) {
+function classifyResource(name) {
+  if (name.includes("plotly-vendor")) return "plotly";
+  if (name.includes("DashboardPage")) return "dashboard";
+  if (name.includes("/assets/index-") && name.endsWith(".css")) return "css";
+  if (name.includes("/assets/index-") && name.endsWith(".js")) return "app shell";
+  if (name.includes("-vendor")) return "vendor";
+  if (name.endsWith(".woff2") || name.endsWith(".woff")) return "font";
+  if (name.endsWith(".css")) return "css";
+  if (name.endsWith(".js")) return "js";
+  return "resource";
+}
+
+function formatResourceLabel(name) {
+  try {
+    const url = new URL(name);
+    const leaf = url.pathname.split("/").filter(Boolean).pop();
+    return leaf || url.hostname;
+  } catch {
+    return name;
+  }
+}
+
+async function collectRouteResources(page) {
+  return page.evaluate(() => {
+    const entries = performance.getEntriesByType("resource");
+    return entries
+      .filter((entry) => (
+        entry.name.includes("/assets/")
+        || entry.name.includes("/build-meta.json")
+        || entry.name.includes("/route-probe.txt")
+      ))
+      .map((entry) => {
+        const timing = entry;
+        return {
+          durationMs: timing.duration,
+          encodedBodySize: Number.isFinite(timing.encodedBodySize) ? timing.encodedBodySize : null,
+          name: timing.name,
+          startTimeMs: timing.startTime,
+          transferSize: Number.isFinite(timing.transferSize) ? timing.transferSize : null,
+        };
+      });
+  }).then((entries) => entries
+    .map((entry) => ({
+      ...entry,
+      kind: classifyResource(entry.name),
+      label: formatResourceLabel(entry.name),
+    }))
+    .sort((a, b) => b.durationMs - a.durationMs)
+    .slice(0, 8),
+  ).catch(() => []);
+}
+
+async function measureRoute(browser, host, route, credentials, timeoutMs, initialWindowMs) {
   const context = await createAuthenticatedContext(
     browser,
     host,
@@ -192,22 +250,28 @@ async function measureRoute(browser, host, route, credentials, timeoutMs) {
     try {
       const url = new URL(request.url());
       if (url.pathname.startsWith("/v1/")) {
-        apiStarts.set(request, performance.now());
+        const requestStartedAt = performance.now();
+        apiStarts.set(request, {
+          startedAt: requestStartedAt,
+          startMs: Math.max(0, requestStartedAt - navigationStartedAt),
+        });
       }
     } catch {}
   });
   page.on("response", (response) => {
     const request = response.request();
-    const startedAt = apiStarts.get(request);
-    if (startedAt === undefined) return;
+    const timing = apiStarts.get(request);
+    if (timing === undefined) return;
     apiStarts.delete(request);
     const url = new URL(request.url());
     const headers = response.headers();
     apiCalls.push({
       cache: headers["x-jato-edge-cache"] || "",
+      endMs: performance.now() - navigationStartedAt,
       method: request.method(),
-      ms: performance.now() - startedAt,
+      ms: performance.now() - timing.startedAt,
       path: url.pathname,
+      startMs: timing.startMs,
       status: response.status(),
     });
     if (url.pathname === "/v1/analysis/overview" && overviewReadyMs === null) {
@@ -243,8 +307,15 @@ async function measureRoute(browser, host, route, credentials, timeoutMs) {
   }
 
   const browserMetrics = await collectBrowserMetrics(page);
+  const resources = await collectRouteResources(page);
   await context.close();
   const slowApis = [...apiCalls].sort((a, b) => b.ms - a.ms).slice(0, 5);
+  const initialWindowApis = apiCalls
+    .filter((api) => api.startMs <= initialWindowMs)
+    .sort((a, b) => a.startMs - b.startMs || b.ms - a.ms);
+  const initialWindowSlowApis = [...initialWindowApis]
+    .sort((a, b) => b.ms - a.ms)
+    .slice(0, 5);
   return {
     apiCalls,
     appReadyMs,
@@ -252,8 +323,12 @@ async function measureRoute(browser, host, route, credentials, timeoutMs) {
     domContentLoadedMs,
     error,
     host: host.label,
+    initialWindowApis,
+    initialWindowMs,
+    initialWindowSlowApis,
     networkIdleMs,
     overviewReadyMs,
+    resources,
     route: route.label,
     slowApis,
   };
@@ -267,6 +342,13 @@ function countCacheState(apiCalls, state) {
   return apiCalls.filter((api) => api.cache.toUpperCase() === state).length;
 }
 
+function bytes(value) {
+  if (typeof value !== "number" || !Number.isFinite(value)) return "-";
+  if (value >= 1024 * 1024) return `${(value / 1024 / 1024).toFixed(2)}MB`;
+  if (value >= 1024) return `${(value / 1024).toFixed(1)}KB`;
+  return `${value}B`;
+}
+
 async function main() {
   const username = process.env.JATO_PERF_USERNAME || "";
   const password = process.env.JATO_PERF_PASSWORD || "";
@@ -274,6 +356,10 @@ async function main() {
     throw new Error("Set JATO_PERF_USERNAME and JATO_PERF_PASSWORD before running this script.");
   }
   const timeoutMs = Number(getArg("timeout") || process.env.JATO_PERF_TIMEOUT_MS || 30_000);
+  const initialWindowMs = parsePositiveInteger(
+    getArg("initial-window-ms") || process.env.JATO_PERF_INITIAL_WINDOW_MS,
+    DEFAULT_INITIAL_WINDOW_MS,
+  );
   const hosts = parseHosts();
   const routes = parseRoutes();
   const browser = await chromium.launch({ headless: true });
@@ -287,6 +373,7 @@ async function main() {
           route,
           { username, password },
           timeoutMs,
+          initialWindowMs,
         ));
       }
     }
@@ -306,6 +393,11 @@ async function main() {
     edge_hit: countCacheState(result.apiCalls, "HIT"),
     edge_miss: countCacheState(result.apiCalls, "MISS"),
     edge_bypass: countCacheState(result.apiCalls, "BYPASS"),
+    initial_window_s: seconds(result.initialWindowMs),
+    initial_api_count: result.initialWindowApis.length,
+    initial_slowest_api_s: seconds(result.initialWindowSlowApis[0]?.ms),
+    slowest_resource_s: seconds(result.resources[0]?.durationMs),
+    slowest_resource: result.resources[0]?.label ?? "",
     slowest_api_s: seconds(result.slowApis[0]?.ms),
     error: result.error ? result.error.slice(0, 96) : "",
   })));
@@ -315,6 +407,14 @@ async function main() {
       .map((api) => `${api.method} ${api.path} ${api.status} ${seconds(api.ms)}s ${api.cache || "-"}`)
       .join("; ");
     console.log(`${result.host}/${result.route} slow APIs: ${slow || "-"}`);
+    const initialApis = result.initialWindowApis
+      .map((api) => `${seconds(api.startMs)}s ${api.method} ${api.path} ${api.status} ${seconds(api.ms)}s ${api.cache || "-"}`)
+      .join("; ");
+    console.log(`${result.host}/${result.route} first ${seconds(result.initialWindowMs)}s APIs: ${initialApis || "-"}`);
+    const resources = result.resources
+      .map((resource) => `${seconds(resource.startTimeMs)}s ${resource.kind} ${resource.label} ${seconds(resource.durationMs)}s transfer=${bytes(resource.transferSize)} encoded=${bytes(resource.encodedBodySize)}`)
+      .join("; ");
+    console.log(`${result.host}/${result.route} slow resources: ${resources || "-"}`);
   }
 
   if (results.some((result) => result.error)) {

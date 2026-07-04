@@ -1,6 +1,35 @@
 import { defineConfig, loadEnv } from "vite";
 import react from "@vitejs/plugin-react";
 
+const DASHBOARD_CORE_MODULES = [
+  "/src/components/CollapsibleDeckHero.tsx",
+  "/src/components/CollapsibleFilterSidebar.tsx",
+  "/src/components/LazyPlotlyChart.tsx",
+  "/src/components/LoadingActionButton.tsx",
+  "/src/components/PageFeedback.tsx",
+  "/src/components/SearchSelectFilter.tsx",
+  "/src/components/TimeAxis.tsx",
+  "/src/components/deckControls/DebouncedNumberInput.tsx",
+  "/src/components/deckControls/DeckExportDrawer.tsx",
+  "/src/components/deckControls/DeckFloatingDrawer.tsx",
+  "/src/components/deckControls/DeckControlTabs.tsx",
+  "/src/components/ExportPanelHelpers.ts",
+  "/src/hooks/useResolvedCountry.ts",
+  "/src/pages/dashboardHelpers.ts",
+  "/src/utils/bubbleSizing.ts",
+  "/src/utils/colors.ts",
+  "/src/utils/filterOptions.ts",
+  "/src/utils/jatoCountries.ts",
+  "/src/utils/pageCache.ts",
+  "/src/utils/plotlyDefaults.ts",
+  "/src/utils/timeFormatting.ts",
+];
+
+function isDashboardCoreModule(id: string): boolean {
+  const normalizedId = id.replace(/\\/g, "/");
+  return DASHBOARD_CORE_MODULES.some((modulePath) => normalizedId.endsWith(modulePath));
+}
+
 export default defineConfig(({ mode }) => {
   const env = loadEnv(mode, process.cwd(), "");
   const devProxyTarget =
@@ -21,6 +50,9 @@ export default defineConfig(({ mode }) => {
           manualChunks(id) {
             if (id.includes("vite/preload-helper")) {
               return "vite-runtime";
+            }
+            if (isDashboardCoreModule(id)) {
+              return "dashboard-core";
             }
             if (!id.includes("node_modules")) {
               return undefined;
