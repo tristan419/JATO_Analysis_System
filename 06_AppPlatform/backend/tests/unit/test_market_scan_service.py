@@ -406,6 +406,91 @@ def test_query_market_scan_deck_clamps_ranking_limit_to_top10(monkeypatch: pytes
     assert observed["body_types"] == 0
 
 
+def test_query_ranking_trend_returns_iso_months_and_market_share_denominator(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class FakeTable:
+        def __init__(self, frame: pd.DataFrame) -> None:
+            self._frame = frame
+
+        def to_pandas(self) -> pd.DataFrame:
+            return self._frame.copy()
+
+    class FakeDataset:
+        def __init__(self, frame: pd.DataFrame) -> None:
+            self._frame = frame
+
+        def to_table(self, columns: list[str], filter: object | None = None) -> FakeTable:
+            return FakeTable(self._frame[columns])
+
+    columns = market_scan_service.ColumnMap(
+        country_value="Country",
+        country_label=None,
+        make="Make",
+        model="Model",
+        version=None,
+        trim=None,
+        length="Length",
+        msrp="MSRP",
+        origin=None,
+        segment="Segment",
+        powertrain="Powertrain",
+        body_type=None,
+        drive_type=None,
+        registration_type=None,
+        month_columns=("2025 Apr", "2025 Feb", "2025 Jan", "2025 Dec"),
+    )
+    frame = pd.DataFrame(
+        [
+            {
+                "Country": "Spain",
+                "Make": "KIA",
+                "Model": "KIA EV3",
+                "Segment": "SUV A0",
+                "Powertrain": "BEV",
+                "Length": 4300,
+                "MSRP": 40000,
+                "2025 Apr": 30,
+                "2025 Feb": 20,
+                "2025 Jan": 10,
+                "2025 Dec": 40,
+            },
+            {
+                "Country": "Spain",
+                "Make": "VOLVO",
+                "Model": "Volvo EX30",
+                "Segment": "SUV A0",
+                "Powertrain": "BEV",
+                "Length": 4233,
+                "MSRP": 41000,
+                "2025 Apr": 70,
+                "2025 Feb": 80,
+                "2025 Jan": 90,
+                "2025 Dec": 60,
+            },
+        ],
+    )
+
+    monkeypatch.setattr(market_scan_service, "_get_columns", lambda: columns)
+    monkeypatch.setattr(market_scan_service, "_country_options", lambda dataset_token: [{"value": "Spain", "label": "Spain"}])
+    monkeypatch.setattr(market_scan_service.repo, "current_dataset_token", lambda: "test-token")
+    monkeypatch.setattr(market_scan_service.repo, "_open_dataset", lambda: FakeDataset(frame))
+    monkeypatch.setattr(market_scan_service.repo, "_build_filter_expression", lambda filters: None)
+
+    result = market_scan_service.query_ranking_trend(
+        country="Spain",
+        brand="KIA",
+        model="KIA EV3",
+        segment="SUV A0",
+        fuel_types=["BEV"],
+    )
+
+    assert [item["month"] for item in result["trend"]] == ["2025-01", "2025-02", "2025-04", "2025-12"]
+    assert [item["sales"] for item in result["trend"]] == [10, 20, 30, 40]
+    assert [item["marketShare"] for item in result["trend"]] == pytest.approx([0.1, 0.2, 0.3, 0.4])
+    assert result["summary"]["marketShare"] == pytest.approx(0.4)
+
+
 def test_clear_market_scan_local_cache_removes_cached_decks() -> None:
     market_scan_service._deck_cache.clear()
     market_scan_service._deck_cache["Sweden|2026-03"] = (1.0, "token", {"ok": True})

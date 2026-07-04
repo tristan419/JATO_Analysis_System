@@ -939,12 +939,11 @@ export function CocMatchPage() {
               </>
             ) : null}
             {job.status === "failed" ? (
-              <button className="btn btn-sm btn-danger" type="button" onClick={() => void handleRetryMatch(job.jobId)}>
-                重试
-              </button>
+              renderMatchRetryControl(job, "btn btn-sm btn-danger")
             ) : null}
             <span style={hintStyle}>创建时间 {formatDateTime(job.createdAt)}</span>
           </div>
+          {job.inputWarning ? <div style={matchWarningPanelStyle}>输入提醒：{job.inputWarning}</div> : null}
           {failureResult ? renderMatchFailurePanel(failureResult) : null}
         </div>
       </div>
@@ -1360,9 +1359,27 @@ export function CocMatchPage() {
       );
     }
     if (job.status === "failed") {
-      return <button className="btn btn-sm btn-secondary" type="button" onClick={() => void handleRetryMatch(job.jobId)}>重试</button>;
+      return renderMatchRetryControl(job, "btn btn-sm btn-secondary");
     }
     return "-";
+  }
+
+  function renderMatchRetryControl(job: CocMatchJob, className: string) {
+    const failure = fallbackFailureResult(job);
+    const retryable = failure?.retryable !== false;
+    const label = failure?.actionLabel || (retryable ? "重试" : "重新上传");
+    if (!retryable) {
+      return (
+        <button className="btn btn-sm btn-secondary" type="button" disabled title="请调整源文件后重新上传。">
+          {label}
+        </button>
+      );
+    }
+    return (
+      <button className={className} type="button" onClick={() => void handleRetryMatch(job.jobId)}>
+        {label}
+      </button>
+    );
   }
 
   function renderFillActions(job: CocFillJob) {
@@ -1508,6 +1525,17 @@ const matchFailurePanelStyle: CSSProperties = {
   border: "1px solid rgba(220, 38, 38, 0.22)",
   borderRadius: 6,
   background: "rgba(254, 242, 242, 0.86)",
+};
+
+const matchWarningPanelStyle: CSSProperties = {
+  padding: 10,
+  border: "1px solid rgba(217, 119, 6, 0.24)",
+  borderRadius: 6,
+  background: "rgba(255, 251, 235, 0.9)",
+  color: "#92400e",
+  fontSize: 12,
+  lineHeight: 1.45,
+  overflowWrap: "anywhere",
 };
 
 const matchFailureHeaderStyle: CSSProperties = {

@@ -1050,6 +1050,7 @@ function mapCocMatchJob(raw: Record<string, unknown>): CocMatchJob {
     diffSummary: raw.diffSummary && typeof raw.diffSummary === "object"
       ? (raw.diffSummary as { gained: number; lost: number; newEntries: number })
       : null,
+    inputWarning: raw.inputWarning === undefined || raw.inputWarning === null ? null : String(raw.inputWarning),
     triggeredBy: String(raw.triggeredBy ?? ""),
     error: raw.error === undefined || raw.error === null ? null : String(raw.error),
     failureResult: mapCocMatchFailureResult(raw.failureResult),
@@ -1067,6 +1068,8 @@ function mapCocMatchFailureResult(raw: unknown): CocMatchFailureResult | null {
     stageLabel: String(item.stageLabel ?? item.stage ?? ""),
     message: String(item.message ?? ""),
     suggestion: String(item.suggestion ?? ""),
+    retryable: item.retryable === undefined ? undefined : Boolean(item.retryable),
+    actionLabel: item.actionLabel === undefined || item.actionLabel === null ? undefined : String(item.actionLabel),
     excelFilename: String(item.excelFilename ?? ""),
     archiveFilename: String(item.archiveFilename ?? ""),
     fileExt: String(item.fileExt ?? ""),

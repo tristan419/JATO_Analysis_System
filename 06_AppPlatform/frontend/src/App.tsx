@@ -315,11 +315,16 @@ const router = createBrowserRouter([
   ]},
 ]);
 
+const ROUTER_TRANSITION_PROPS = {
+  // Commit route changes immediately so a lazy target cannot leave the old page visible.
+  unstable_useTransitions: false,
+} satisfies Record<string, boolean>;
+
 export default function App() {
   return (
     <>
       <SmartRouteGate />
-      <RouterProvider router={router} />
+      <RouterProvider router={router} {...ROUTER_TRANSITION_PROPS} />
       <AppVersionNotice />
     </>
   );
