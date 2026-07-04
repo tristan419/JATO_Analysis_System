@@ -195,8 +195,12 @@ jobs:
           ARCHIVE_PATH="$RUNNER_TEMP/JATO_deploy.tar.gz"
           REMOTE_ARCHIVE="JATO_deploy_${GITHUB_SHA}.tar.gz"
           REMOTE_ARCHIVE_TMP="${REMOTE_ARCHIVE}.uploading"
+          CHUNK_DIR="$RUNNER_TEMP/JATO_deploy_chunks"
           ls -lh "$ARCHIVE_PATH"
           ARCHIVE_BYTES="$(wc -c < "$ARCHIVE_PATH" | tr -d '[:space:]')"
+          rm -rf "$CHUNK_DIR"
+          mkdir -p "$CHUNK_DIR"
+          split -b 512k "$ARCHIVE_PATH" "$CHUNK_DIR/chunk_"
 
           fallback_to_sparse_deploy() {
             echo "::warning::$1; continuing without uploaded archive so server deploy can fall back to sparse Git fetch."
@@ -224,14 +228,20 @@ jobs:
             exit 0
           fi
 
-          echo "[INFO] Uploading deploy archive over ssh stream (${ARCHIVE_BYTES} bytes)"
-          if ! timeout 900s ssh "${SSH_COMMON_OPTS[@]}" "$SSH_USER@$SSH_CONNECT_HOST" \
-            "cat > '$REMOTE_ARCHIVE_TMP'" < "$ARCHIVE_PATH"; then
-            timeout 120s ssh "${SSH_COMMON_OPTS[@]}" "$SSH_USER@$SSH_CONNECT_HOST" \
-              "rm -f '$REMOTE_ARCHIVE_TMP'" || true
-            fallback_to_sparse_deploy "Deploy archive ssh stream upload failed or timed out"
-            exit 0
-          fi
+          echo "[INFO] Uploading deploy archive in 512KiB ssh chunks (${ARCHIVE_BYTES} bytes)"
+          chunk_index=0
+          for chunk_path in "$CHUNK_DIR"/chunk_*; do
+            chunk_index=$((chunk_index + 1))
+            chunk_bytes="$(wc -c < "$chunk_path" | tr -d '[:space:]')"
+            echo "[INFO] Upload chunk ${chunk_index}: ${chunk_bytes} bytes"
+            if ! timeout 120s ssh "${SSH_COMMON_OPTS[@]}" "$SSH_USER@$SSH_CONNECT_HOST" \
+              "cat >> '$REMOTE_ARCHIVE_TMP'" < "$chunk_path"; then
+              timeout 120s ssh "${SSH_COMMON_OPTS[@]}" "$SSH_USER@$SSH_CONNECT_HOST" \
+                "rm -f '$REMOTE_ARCHIVE_TMP'" || true
+              fallback_to_sparse_deploy "Deploy archive ssh chunk upload failed or timed out at chunk ${chunk_index}"
+              exit 0
+            fi
+          done
 
           if ! timeout 120s ssh -T -p "$SSH_PORT" \
             -o BatchMode=yes \
@@ -275,8 +285,12 @@ jobs:
           ARCHIVE_PATH="$RUNNER_TEMP/JATO_deploy.tar.gz"
           REMOTE_ARCHIVE="JATO_deploy_${GITHUB_SHA}.tar.gz"
           REMOTE_ARCHIVE_TMP="${REMOTE_ARCHIVE}.uploading"
+          CHUNK_DIR="$RUNNER_TEMP/JATO_deploy_chunks"
           ls -lh "$ARCHIVE_PATH"
           ARCHIVE_BYTES="$(wc -c < "$ARCHIVE_PATH" | tr -d '[:space:]')"
+          rm -rf "$CHUNK_DIR"
+          mkdir -p "$CHUNK_DIR"
+          split -b 512k "$ARCHIVE_PATH" "$CHUNK_DIR/chunk_"
 
           fallback_to_sparse_deploy() {
             echo "::warning::$1; continuing without uploaded archive so server deploy can fall back to sparse Git fetch."
@@ -304,16 +318,22 @@ jobs:
             exit 0
           fi
 
-          echo "[INFO] Uploading deploy archive over ssh stream (${ARCHIVE_BYTES} bytes)"
-          if ! timeout 900s sshpass -p "$SSH_PASSWORD" \
-            ssh "${SSH_COMMON_OPTS[@]}" "$SSH_USER@$SSH_HOST" \
-            "cat > '$REMOTE_ARCHIVE_TMP'" < "$ARCHIVE_PATH"; then
-            timeout 120s sshpass -p "$SSH_PASSWORD" \
+          echo "[INFO] Uploading deploy archive in 512KiB ssh chunks (${ARCHIVE_BYTES} bytes)"
+          chunk_index=0
+          for chunk_path in "$CHUNK_DIR"/chunk_*; do
+            chunk_index=$((chunk_index + 1))
+            chunk_bytes="$(wc -c < "$chunk_path" | tr -d '[:space:]')"
+            echo "[INFO] Upload chunk ${chunk_index}: ${chunk_bytes} bytes"
+            if ! timeout 120s sshpass -p "$SSH_PASSWORD" \
               ssh "${SSH_COMMON_OPTS[@]}" "$SSH_USER@$SSH_HOST" \
-              "rm -f '$REMOTE_ARCHIVE_TMP'" || true
-            fallback_to_sparse_deploy "Deploy archive ssh stream upload failed or timed out"
-            exit 0
-          fi
+              "cat >> '$REMOTE_ARCHIVE_TMP'" < "$chunk_path"; then
+              timeout 120s sshpass -p "$SSH_PASSWORD" \
+                ssh "${SSH_COMMON_OPTS[@]}" "$SSH_USER@$SSH_HOST" \
+                "rm -f '$REMOTE_ARCHIVE_TMP'" || true
+              fallback_to_sparse_deploy "Deploy archive ssh chunk upload failed or timed out at chunk ${chunk_index}"
+              exit 0
+            fi
+          done
 
           if ! timeout 120s sshpass -p "$SSH_PASSWORD" \
             ssh -T -p "$SSH_PORT" \
