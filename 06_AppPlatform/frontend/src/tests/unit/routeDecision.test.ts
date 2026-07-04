@@ -98,24 +98,24 @@ describe("route decision helpers", () => {
     }, "intl")?.target).toBe("cn");
   });
 
-  it("does not auto switch to a route with an unverified build", () => {
+  it("allows cross-host auto routing when build fingerprints differ", () => {
     const staleIntl = chooseAutoRoute({
       cn: okProbe("cn", 1_200, "new-build"),
       intl: okProbe("intl", 300, "old-build"),
     }, "cn");
 
-    expect(staleIntl?.target).toBe("cn");
-    expect(staleIntl?.reason).toContain("not verified");
+    expect(staleIntl?.target).toBe("intl");
+    expect(staleIntl?.reason).toContain("intl is faster");
 
     const unknownIntl = chooseAutoRoute({
       cn: okProbe("cn", 1_200, "new-build"),
       intl: okProbe("intl", 300, ""),
     }, "cn");
 
-    expect(unknownIntl?.target).toBe("cn");
+    expect(unknownIntl?.target).toBe("intl");
   });
 
-  it("uses frontend build fingerprints before commit ids when checking route compatibility", () => {
+  it("records frontend build fingerprints without blocking full-page redirects", () => {
     const sameFrontend = chooseAutoRoute({
       cn: okProbe("cn", 1_200, "www-only-commit", "same-frontend-build"),
       intl: okProbe("intl", 300, "intl-only-commit", "same-frontend-build"),
@@ -128,8 +128,16 @@ describe("route decision helpers", () => {
       intl: okProbe("intl", 300, "same-commit", "old-frontend-build"),
     }, "cn");
 
-    expect(staleFrontend?.target).toBe("cn");
-    expect(staleFrontend?.reason).toContain("frontend old-frontend");
+    expect(staleFrontend?.target).toBe("intl");
+
+    const decision = createAutoRouteDecision({
+      cn: okProbe("cn", 1_200, "same-commit", "new-frontend-build"),
+      intl: okProbe("intl", 300, "same-commit", "old-frontend-build"),
+    }, "cn", null, 1_000);
+
+    expect(decision?.target).toBe("intl");
+    expect(decision?.cnFrontendBuildId).toBe("new-frontend-build");
+    expect(decision?.intlFrontendBuildId).toBe("old-frontend-build");
   });
 
   it("keeps China-local browsers on www whenever www is reachable", () => {

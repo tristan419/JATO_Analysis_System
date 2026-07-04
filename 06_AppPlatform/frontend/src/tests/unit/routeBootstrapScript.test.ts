@@ -11,4 +11,9 @@ describe("route bootstrap script", () => {
     expect(cachedDecisionBranch?.[0]).toBeTruthy();
     expect(cachedDecisionBranch?.[0]).not.toContain("targetHost(cachedDecision.target) === host");
   });
+
+  it("does not block cross-host early redirects on build fingerprint mismatch", () => {
+    expect(indexHtml).not.toContain("applyBuildGuard");
+    expect(indexHtml).not.toContain("not verified against current");
+  });
 });
