@@ -7,6 +7,7 @@ import { CollapsibleDeckHero } from "../components/CollapsibleDeckHero";
 import { CollapsibleFilterSidebar } from "../components/CollapsibleFilterSidebar";
 import { LoadingActionButton } from "../components/LoadingActionButton";
 import { LoadingSurface } from "../components/LoadingSurface";
+import { PageBannerStack } from "../components/PageFeedback";
 import { SearchSelectFilter } from "../components/SearchSelectFilter";
 import { DebouncedNumberInput } from "../components/deckControls/DebouncedNumberInput";
 import { DeckControlTabs, type DeckControlTabItem } from "../components/deckControls/DeckControlTabs";
@@ -1708,7 +1709,11 @@ export function DashboardPage() {
       </CollapsibleFilterSidebar>
 
       <section className="dashboard-main">
-        {combinedError && <div className="alert alert-error">{combinedError}</div>}
+        <PageBannerStack
+          items={[
+            ...(combinedError ? [{ id: "dashboard-error", tone: "error" as const, title: "Dashboard 加载失败", message: combinedError }] : []),
+          ]}
+        />
 
         <CollapsibleDeckHero
           collapsed={heroCollapsed}
@@ -2696,9 +2701,13 @@ export function DashboardPage() {
             const offsetRatio = asMetaNumber(nevKpis?.offsetRatio) ?? 0;
             return (
               <>
-                {nevWarnings.map((warning, idx) => (
-                  <div key={warning+idx} className="alert alert-info">{warning}</div>
-                ))}
+                <PageBannerStack
+                  items={nevWarnings.map((warning, idx) => ({
+                    id: `dashboard-nev-warning-${idx}`,
+                    tone: "info" as const,
+                    message: warning,
+                  }))}
+                />
 
                 {nevFacetPlot.traces.length > 0 && (
                   <div ref={el => { advChartRef.current = el; }} style={{marginBottom:12}}>
@@ -2770,13 +2779,23 @@ export function DashboardPage() {
                 )}
 
                 {nevMetricMode === "net_change" && nevTopModelAbsShare !== null && nevTopModelLimit !== null && nevTopModelLimit > 0 && nevTopModelAbsShare >= 0.7 && (
-                  <div className="alert alert-warning">
-                    {`Top${nevTopModelLimit} |净变化|集中度 ${(nevTopModelAbsShare * 100).toFixed(1)}% >= 70%，结构风险较高，建议关注头部车型波动。`}
-                  </div>
+                  <PageBannerStack
+                    items={[{
+                      id: "dashboard-nev-concentration-warning",
+                      tone: "warning" as const,
+                      message: `Top${nevTopModelLimit} |净变化|集中度 ${(nevTopModelAbsShare * 100).toFixed(1)}% >= 70%，结构风险较高，建议关注头部车型波动。`,
+                    }]}
+                  />
                 )}
 
                 {nevMetricMode === "net_change" && offsetRatio >= 0.85 && (
-                  <div className="alert alert-info">{"对冲率较高：净增背后存在较强的车型结构迁移，建议结合分桶与 Top 车型明细一起看。"}</div>
+                  <PageBannerStack
+                    items={[{
+                      id: "dashboard-nev-offset-info",
+                      tone: "info" as const,
+                      message: "对冲率较高：净增背后存在较强的车型结构迁移，建议结合分桶与 Top 车型明细一起看。",
+                    }]}
+                  />
                 )}
 
                 {nevMetricMode === "net_change" && (nevBucketSummary.length > 0 || nevModelMovers.length > 0) && (

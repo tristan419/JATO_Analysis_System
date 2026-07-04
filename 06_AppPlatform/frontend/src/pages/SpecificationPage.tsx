@@ -5,6 +5,7 @@ import { api } from "../api/client";
 import { CollapsibleDeckHero } from "../components/CollapsibleDeckHero";
 import { CollapsibleFilterSidebar } from "../components/CollapsibleFilterSidebar";
 import { LoadingSurface } from "../components/LoadingSurface";
+import { PageBannerStack, PageLoadingShell } from "../components/PageFeedback";
 import { SearchSelectFilter } from "../components/SearchSelectFilter";
 import { useSharedFilterScope } from "../contexts/SharedFilterScopeContext";
 import { FILTER_ORDER } from "../dashboardFilters";
@@ -285,7 +286,11 @@ export function SpecificationPage() {
       </CollapsibleFilterSidebar>
 
       <section className="content specification-content">
-        {combinedError && <div className="alert alert-error">{combinedError}</div>}
+        <PageBannerStack
+          items={[
+            ...(combinedError ? [{ id: "specification-error", tone: "error" as const, title: "Specification 加载失败", message: combinedError }] : []),
+          ]}
+        />
 
         <CollapsibleDeckHero
           collapsed={heroCollapsed}
@@ -377,8 +382,7 @@ export function SpecificationPage() {
         </div>
 
         {sharedLoading && !overview && (
-          <LoadingSurface
-            mode="overlay"
+          <PageLoadingShell
             label="正在初始化规格页"
             detail="复用共享筛选作用域，并同步概览指标与首屏字段配置"
             kicker="Spec"

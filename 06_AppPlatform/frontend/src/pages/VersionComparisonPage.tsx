@@ -24,6 +24,7 @@ import {
 import { DeckPeriodTimeline } from "../components/DeckPeriodTimeline";
 import { LazyPlotlyChart as PlotlyChart, preloadPlotlyChartRuntime } from "../components/LazyPlotlyChart";
 import { LoadingSurface } from "../components/LoadingSurface";
+import { PageBannerStack, PageLoadingShell } from "../components/PageFeedback";
 import type {
   MarketScanPeriodRange,
   PositioningPricingMetric,
@@ -716,6 +717,7 @@ export function VersionComparisonPage() {
   const modelPickerRef = useRef<HTMLDivElement | null>(null);
   const segmentPickerRef = useRef<HTMLDivElement | null>(null);
   const countryPickerRef = useRef<HTMLDivElement | null>(null);
+  const skipResolvedModelFetchRef = useRef<string | null>(null);
 
   const [selectedCountry, setSelectedCountry] = useState<string | null>(() => searchParams.get("country") || defaultCountry);
   const [selectedPeriod, setSelectedPeriod] = useState<string | null>(() => searchParams.get("period"));
@@ -840,6 +842,11 @@ export function VersionComparisonPage() {
   });
 
   useEffect(() => {
+    const selectedModelKey = selectedModels.join("||");
+    if (skipResolvedModelFetchRef.current === selectedModelKey) {
+      skipResolvedModelFetchRef.current = null;
+      return;
+    }
     const requestId = ++requestRef.current;
     setLoading(true);
     setError("");
@@ -915,6 +922,7 @@ export function VersionComparisonPage() {
       selectedModels.length !== deck.metadata.selectedModels.length
       || selectedModels.some((model, index) => model !== deck.metadata.selectedModels[index])
     ) {
+      skipResolvedModelFetchRef.current = deck.metadata.selectedModels.join("||");
       setSelectedModels(deck.metadata.selectedModels);
     }
   }, [deck, selectedTimeRange]);
@@ -1711,29 +1719,19 @@ export function VersionComparisonPage() {
           ) : null}
         </DeckFloatingDrawer>
 
-        {error ? (
-          <section className="market-scan-state-card market-scan-state-card--error">
-            <strong>版型对比加载失败</strong>
-            <p>{error}</p>
-          </section>
-        ) : null}
+        <PageBannerStack
+          items={[
+            ...(error ? [{ id: "version-comparison-error", tone: "error" as const, title: "版型对比加载失败", message: error }] : []),
+            ...(exportError ? [{ id: "version-comparison-export-error", tone: "error" as const, title: "PNG 导出失败", message: exportError }] : []),
+          ]}
+        />
 
         {loading && !deck ? (
-          <section className="market-scan-state-card">
-            <LoadingSurface
-              mode="inline"
-              kicker="Deck"
-              label="正在生成版型对比页面"
-              detail="按 segment / model / 时间口径实时聚合版型明细。"
-            />
-          </section>
-        ) : null}
-
-        {exportError ? (
-          <section className="market-scan-state-card market-scan-state-card--error">
-            <strong>PNG 导出失败</strong>
-            <p>{exportError}</p>
-          </section>
+          <PageLoadingShell
+            kicker="Deck"
+            label="正在生成版型对比页面"
+            detail="按 segment / model / 时间口径实时聚合版型明细。"
+          />
         ) : null}
 
         {deck && page ? (

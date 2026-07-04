@@ -27,6 +27,7 @@ import {
 } from "../components/OrderGeniusGrid";
 import { DeckFloatingDrawer, FlipToolCard } from "../components/deckControls";
 import { MaterialFinanceMatrix, MaterialFinanceWorkbench } from "../components/finance";
+import { PageBannerStack, PageLoadingShell } from "../components/PageFeedback";
 import type {
   ColourHexRule,
   ColourSurchargeRule,
@@ -2025,11 +2026,11 @@ export function OrderGeniusPage() {
         panelClassName="order-genius-control-panel"
         bodyClassName="order-genius-control-panel-body"
       >
-      {error ? (
-        <div className="alert alert-error" style={{ marginBottom: 16 }}>
-          {error}
-        </div>
-      ) : null}
+      <PageBannerStack
+        items={[
+          ...(error ? [{ id: "order-genius-error", tone: "error" as const, message: error }] : []),
+        ]}
+      />
 
       <div className="deck-control-tabs order-genius-control-tabs" role="tablist" aria-label="Order Genius control sections">
         {orderGeniusControlTabs.map((tab) => (
@@ -2706,9 +2707,7 @@ export function OrderGeniusPage() {
 
       {/* ── Matrix grid (AG Grid) ─────────────────────────────────── */}
       {loading ? (
-        <div style={{ padding: 32, textAlign: "center", color: "#64748b" }}>
-          Loading...
-        </div>
+        <PageLoadingShell label="Loading..." kicker="Order Genius" />
       ) : combinedMatrix.totalRows > 0 ? (
         <OrderGeniusGrid
           rows={displayRows}
@@ -5187,7 +5186,9 @@ function BomAdminPanel({
     );
   }
 
-  if (loading && skus.length === 0 && countries.length === 0) return <div style={{ padding: 16, color: "#64748b" }}>Loading BOM data...</div>;
+  if (loading && skus.length === 0 && countries.length === 0) {
+    return <PageLoadingShell label="Loading BOM data..." kicker="BOM" />;
+  }
 
   if (!loading && skus.length === 0 && countries.length === 0) {
     return renderBomAdminRecoveryPanel(

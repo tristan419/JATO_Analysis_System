@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 
 import { api } from "../api/client";
 import { DeckControlTabs, DeckFloatingDrawer, type DeckControlTabItem } from "../components/deckControls";
-import { LoadingSurface } from "../components/LoadingSurface";
+import { PageBannerStack, PageLoadingShell } from "../components/PageFeedback";
 import type {
   MsrpAuditPriority,
   MsrpBackfillSnapshotPreview,
@@ -3942,12 +3942,23 @@ export function MsrpMonitorPage() {
         ) : null}
       </DeckFloatingDrawer>
 
-      {loading && !data ? <LoadingSurface mode="inline" label="加载 MSRP 监控" detail="读取 price history、source evidence 与调价事件" kicker="MSRP" /> : null}
-      {error ? <div className="market-scan-state-card market-scan-state-card--error"><strong>Error</strong><p>{error}</p></div> : null}
-      {data?.warnings.length ? (
-        <div className="msrp-monitor-warning-list">
-          {data.warnings.map((warning) => <span key={warning}>{warning}</span>)}
-        </div>
+      <PageBannerStack
+        items={[
+          ...(error ? [{ id: "msrp-monitor-error", tone: "error" as const, title: "MSRP Monitor 加载失败", message: error }] : []),
+          ...(data?.warnings ?? []).map((warning) => ({
+            id: `msrp-monitor-warning-${warning}`,
+            tone: "warning" as const,
+            title: "MSRP Warning",
+            message: warning,
+          })),
+        ]}
+      />
+      {loading && !data ? (
+        <PageLoadingShell
+          label="加载 MSRP 监控"
+          detail="读取 price history、source evidence 与调价事件"
+          kicker="MSRP"
+        />
       ) : null}
       {data?.demo?.enabled ? (
         <div className="msrp-monitor-demo-banner">

@@ -551,6 +551,52 @@ def test_version_comparison_deck_request_accepts_ytd_sales_mode() -> None:
     assert payload.sales_mode == "ytd"
 
 
+def test_query_version_comparison_deck_uses_local_cache(monkeypatch: pytest.MonkeyPatch) -> None:
+    calls: list[dict[str, object]] = []
+
+    def fake_impl(**kwargs: object) -> dict[str, object]:
+        calls.append(kwargs)
+        return {
+            "metadata": {"selectedModels": kwargs.get("models", [])},
+            "page": {"bubbleChart": {"items": []}},
+        }
+
+    monkeypatch.setattr(market_scan_service.repo, "current_dataset_token", lambda: "dataset-token")
+    monkeypatch.setattr(market_scan_service, "get_redis_client", lambda: None)
+    monkeypatch.setattr(market_scan_service, "_query_version_comparison_deck_impl", fake_impl)
+    market_scan_service._deck_cache.clear()
+
+    kwargs = {
+        "country": "Denmark",
+        "target_period": "2026-05",
+        "time_range": None,
+        "fuel_types": ["BEV"],
+        "sales_mode": "rolling12",
+        "comparison_mode": "same_segment",
+        "segment": "SUV A0",
+        "models": ["BYD::ATTO 2"],
+        "msrp_min": None,
+        "msrp_max": None,
+        "price_band_size": None,
+        "body_type": None,
+        "drive_types": [],
+        "segments": [],
+        "length_min": None,
+        "length_max": None,
+    }
+
+    try:
+        first = market_scan_service.query_version_comparison_deck(**kwargs)
+        second = market_scan_service.query_version_comparison_deck(**kwargs)
+        assert first is second
+        assert len(calls) == 1
+
+        market_scan_service.query_version_comparison_deck(**{**kwargs, "models": ["MG::MG ZS"]})
+        assert len(calls) == 2
+    finally:
+        market_scan_service._deck_cache.clear()
+
+
 def test_resolve_version_comparison_models_defaults_to_top3() -> None:
     frame = pd.DataFrame(
         {

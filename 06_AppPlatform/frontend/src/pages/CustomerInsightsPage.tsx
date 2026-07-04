@@ -3,7 +3,7 @@ import type { Data, Layout as PlotlyLayout } from "plotly.js";
 
 import { api } from "../api/client";
 import { LazyPlotlyChart as PlotlyChart, preloadPlotlyChartRuntime } from "../components/LazyPlotlyChart";
-import { LoadingSurface } from "../components/LoadingSurface";
+import { PageBannerStack, PageLoadingShell } from "../components/PageFeedback";
 import type {
   CustomerInsightDeckResponse,
   CustomerInsightEvidenceCard,
@@ -565,33 +565,23 @@ export function CustomerInsightsPage({
           </div>
         </section>
 
-        {error ? (
-          <section className="market-scan-state-card market-scan-state-card--error">
-            <strong>{errorTitle}</strong>
-            <p>{error}</p>
-          </section>
-        ) : null}
+        <PageBannerStack
+          items={[
+            ...(error ? [{ id: "customer-insights-error", tone: "error" as const, title: errorTitle, message: error }] : []),
+            ...(exportError ? [{ id: "customer-insights-export-error", tone: "error" as const, title: "PNG 导出失败", message: exportError }] : []),
+          ]}
+        />
 
         {loading && !deck ? (
-          <section className="market-scan-state-card">
-            <LoadingSurface
-              mode="inline"
-              kicker="VOC"
-              label={mode === "benchmark" ? benchmarkCopy.loadingLabel : "正在整理 live forum VOC"}
-              detail={
-                mode === "benchmark"
-                  ? benchmarkCopy.loadingDetail
-                  : "从已生成的公开论坛 / 评论页 deck 中聚合 observed evidence、痛点与决策因素。"
-              }
-            />
-          </section>
-        ) : null}
-
-        {exportError ? (
-          <section className="market-scan-state-card market-scan-state-card--error">
-            <strong>PNG 导出失败</strong>
-            <p>{exportError}</p>
-          </section>
+          <PageLoadingShell
+            kicker="VOC"
+            label={mode === "benchmark" ? benchmarkCopy.loadingLabel : "正在整理 live forum VOC"}
+            detail={
+              mode === "benchmark"
+                ? benchmarkCopy.loadingDetail
+                : "从已生成的公开论坛 / 评论页 deck 中聚合 observed evidence、痛点与决策因素。"
+            }
+          />
         ) : null}
 
         {deck && page ? (

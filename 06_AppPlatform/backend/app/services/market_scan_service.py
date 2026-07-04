@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import hashlib
+import json
 import logging
 import re
 import threading
@@ -32,6 +34,55 @@ logger = logging.getLogger(__name__)
 _DECK_CACHE_TTL_SECONDS = 300
 _deck_cache: dict[str, tuple[float, str, dict[str, Any]]] = {}
 _deck_cache_lock = threading.Lock()
+
+
+def _version_comparison_cache_key(
+    *,
+    country: str | None,
+    target_period: str | None,
+    time_range: dict[str, str] | None,
+    fuel_types: list[str],
+    sales_mode: str,
+    comparison_mode: str,
+    segment: str | None,
+    models: list[str],
+    msrp_min: float | None,
+    msrp_max: float | None,
+    price_band_size: int | None,
+    body_type: str | None,
+    drive_types: list[str] | None,
+    segments: list[str] | None,
+    length_min: float | None,
+    length_max: float | None,
+) -> str:
+    payload = {
+        "kind": "version-comparison/v2",
+        "country": str(country or "").strip(),
+        "targetPeriod": str(target_period or "").strip(),
+        "timeRange": {
+            "start": str(time_range.get("start", "")).strip(),
+            "end": str(time_range.get("end", "")).strip(),
+        } if time_range else None,
+        "fuelTypes": sorted({str(value).strip().upper() for value in fuel_types if str(value).strip()}),
+        "salesMode": sales_mode,
+        "comparisonMode": comparison_mode,
+        "segment": str(segment or "").strip(),
+        "models": [str(value).strip() for value in models if str(value).strip()],
+        "msrpMin": msrp_min,
+        "msrpMax": msrp_max,
+        "priceBandSize": price_band_size,
+        "bodyType": str(body_type or "").strip(),
+        "driveTypes": sorted({str(value).strip() for value in (drive_types or []) if str(value).strip()}),
+        "segments": sorted({str(value).strip() for value in (segments or []) if str(value).strip()}),
+        "lengthMin": length_min,
+        "lengthMax": length_max,
+    }
+    return json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+
+
+def _version_comparison_redis_key(request_key: str, dataset_token: str) -> str:
+    digest = hashlib.sha256(f"{request_key}|{dataset_token}".encode("utf-8")).hexdigest()
+    return f"ms:version-comparison:v2:{digest}"
 
 def clear_market_scan_local_cache() -> dict[str, Any]:
     with _deck_cache_lock:
@@ -4518,7 +4569,8 @@ def query_version_comparison_deck(
     length_min: float | None = None,
     length_max: float | None = None,
 ) -> dict[str, Any]:
-    return _query_version_comparison_deck_impl(
+    dataset_token = repo.current_dataset_token()
+    request_key = _version_comparison_cache_key(
         country=country,
         target_period=target_period,
         time_range=time_range,
@@ -4536,6 +4588,80 @@ def query_version_comparison_deck(
         length_min=length_min,
         length_max=length_max,
     )
+    local_key = f"vc|{request_key}"
+    now = time.monotonic()
+    local_cached = _deck_cache.get(local_key)
+    if local_cached is not None:
+        cached_at, cached_token, cached_payload = local_cached
+        if cached_token == dataset_token and (now - cached_at) < _DECK_CACHE_TTL_SECONDS:
+            logger.info("VersionComparison local-cache HIT")
+            return cached_payload
+
+    redis_client = get_redis_client()
+    redis_cache_key = _version_comparison_redis_key(request_key, dataset_token)
+    acquired_cache_lock_key: str | None = None
+    if redis_client is not None:
+        try:
+            cached = get_cached_deck(redis_client, redis_cache_key)
+            if cached is not None:
+                logger.info("VersionComparison redis HIT")
+                with _deck_cache_lock:
+                    _deck_cache[local_key] = (now, dataset_token, cached)
+                return cached
+            if acquire_compute_lock(redis_client, redis_cache_key):
+                acquired_cache_lock_key = redis_cache_key
+            else:
+                waited = wait_for_cache(redis_client, redis_cache_key)
+                if waited is not None:
+                    logger.info("VersionComparison redis waiter GOT cache from peer")
+                    with _deck_cache_lock:
+                        _deck_cache[local_key] = (now, dataset_token, waited)
+                    return waited
+        except Exception:
+            acquired_cache_lock_key = None
+
+    try:
+        t_compute_start = time.monotonic()
+        result = _query_version_comparison_deck_impl(
+            country=country,
+            target_period=target_period,
+            time_range=time_range,
+            fuel_types=fuel_types,
+            sales_mode=sales_mode,
+            comparison_mode=comparison_mode,
+            segment=segment,
+            models=models,
+            msrp_min=msrp_min,
+            msrp_max=msrp_max,
+            price_band_size=price_band_size,
+            body_type=body_type,
+            drive_types=drive_types,
+            segments=segments,
+            length_min=length_min,
+            length_max=length_max,
+        )
+        logger.info("VersionComparison compute: %.3fs", time.monotonic() - t_compute_start)
+    except Exception:
+        if redis_client is not None and acquired_cache_lock_key is not None:
+            release_compute_lock(redis_client, acquired_cache_lock_key)
+        raise
+
+    with _deck_cache_lock:
+        _deck_cache[local_key] = (now, dataset_token, result)
+        if len(_deck_cache) > 32:
+            oldest_key = min(_deck_cache, key=lambda key: _deck_cache[key][0])
+            _deck_cache.pop(oldest_key, None)
+
+    if redis_client is not None:
+        try:
+            set_cached_deck(redis_client, redis_cache_key, result)
+        except Exception:
+            pass
+        finally:
+            if acquired_cache_lock_key is not None:
+                release_compute_lock(redis_client, acquired_cache_lock_key)
+
+    return result
 
 
 def _query_version_comparison_deck_impl(
@@ -4643,10 +4769,14 @@ def _query_version_comparison_deck_impl(
     selected_fuels = _normalize_selected_fuels(fuel_types, available_fuels)
     selected_fuels = [fuel for fuel in POSITIONING_FUEL_ORDER if fuel in selected_fuels]
     fuel_frame = frame[frame["__powertrain"].isin(selected_fuels)].copy()
-    global_frame = _prepare_version_comparison_frame(
-        dataset.to_table(columns=selected_columns).to_pandas()
-    )
-    global_fuel_frame = global_frame[global_frame["__powertrain"].isin(selected_fuels)].copy()
+
+    def _read_global_version_frame(filters: dict[str, list[str]]) -> pd.DataFrame:
+        return _prepare_version_comparison_frame(
+            dataset.to_table(
+                columns=selected_columns,
+                filter=repo._build_filter_expression(filters),
+            ).to_pandas()
+        )
 
     def _apply_free_candidate_filters(source: pd.DataFrame) -> pd.DataFrame:
         candidate = source.copy()
@@ -4678,10 +4808,26 @@ def _query_version_comparison_deck_impl(
         )
         comparison_frame = segment_frame[segment_frame["__model_key"].isin(selected_models)].copy() if selected_models else segment_frame.iloc[0:0].copy()
         candidate_model_options = _build_all_model_options(segment_frame, sales_column)
-        global_candidate_frame = global_fuel_frame[global_fuel_frame["__segment_raw"] == selected_segment].copy() if selected_segment else global_fuel_frame.iloc[0:0].copy()
+        if selected_segment:
+            global_frame = _read_global_version_frame({columns.segment: [selected_segment]})
+            global_fuel_frame = global_frame[global_frame["__powertrain"].isin(selected_fuels)].copy()
+            global_candidate_frame = global_fuel_frame[global_fuel_frame["__segment_raw"] == selected_segment].copy()
+        else:
+            global_fuel_frame = fuel_frame.iloc[0:0].copy()
+            global_candidate_frame = global_fuel_frame
+        candidate_source_frame = segment_frame
     else:  # free_comparison
         # Candidate pool: optional filters (body, length, msrp, drive, segments)
         candidate_frame = _apply_free_candidate_filters(fuel_frame)
+        global_filters: dict[str, list[str]] = {}
+        if columns.body_type and body_type and body_type.strip():
+            global_filters[columns.body_type] = [body_type.strip()]
+        if columns.drive_type and drive_types:
+            global_filters[columns.drive_type] = drive_types
+        if segments:
+            global_filters[columns.segment] = segments
+        global_frame = _read_global_version_frame(global_filters)
+        global_fuel_frame = global_frame[global_frame["__powertrain"].isin(selected_fuels)].copy()
         global_candidate_frame = _apply_free_candidate_filters(global_fuel_frame)
         available_segments = _build_model_option_list(fuel_frame, "__segment_raw", sales_column)
         selected_segment = ""
@@ -4690,6 +4836,7 @@ def _query_version_comparison_deck_impl(
         # Candidate pool = models within the filtered candidate frame
         candidate_model_options = _build_all_model_options(candidate_frame, sales_column)
         comparison_frame = candidate_frame[candidate_frame["__model_key"].isin(selected_models)].copy() if selected_models else candidate_frame.iloc[0:0].copy()
+        candidate_source_frame = candidate_frame
 
     # Build enhanced model options with metadata
     def _build_enhanced_model_options(model_list: list[str], source_frame: pd.DataFrame) -> list[dict[str, Any]]:
@@ -4726,14 +4873,14 @@ def _query_version_comparison_deck_impl(
     # Enhanced availableModels with metadata
     enhanced_available_models = _build_enhanced_model_options(
         [opt["value"] for opt in candidate_model_options],
-        fuel_frame,
+        candidate_source_frame,
     )
     global_available_models = _build_enhanced_model_options(
         [opt["value"] for opt in _build_all_model_options(global_candidate_frame, sales_column)],
-        global_fuel_frame,
+        global_candidate_frame,
     )
     # Detect mixed segment
-    selected_model_details = _build_enhanced_model_options(selected_models, fuel_frame)
+    selected_model_details = _build_enhanced_model_options(selected_models, comparison_frame)
     selected_segments_set = {m["segment"] for m in selected_model_details if m["segment"]}
     is_mixed_segment = len(selected_segments_set) > 1
 

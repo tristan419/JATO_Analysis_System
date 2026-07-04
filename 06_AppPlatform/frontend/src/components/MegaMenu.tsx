@@ -15,6 +15,10 @@ const RoleUpgradeModal = lazy(() =>
   import("./RoleUpgradeModal").then((module) => ({ default: module.RoleUpgradeModal }))
 );
 
+const MEGA_MENU_PANEL_WIDTH = 520;
+const MEGA_MENU_DROPDOWN_WIDTH = 240;
+const MEGA_MENU_VIEWPORT_MARGIN = 16;
+
 function isSubItemActive(to: string, location: { pathname: string; search: string }): boolean {
   const [targetPath, targetSearch = ""] = to.split("?");
   if (location.pathname !== targetPath && !location.pathname.startsWith(`${targetPath}/`)) return false;
@@ -71,6 +75,16 @@ function MegaMenuDropdown({
   const hoverSupported = useRef(window.matchMedia("(hover: hover)").matches);
   const [flipLeft, setFlipLeft] = useState(false);
 
+  const preparePanelPlacement = useCallback(() => {
+    const triggerRect = ref.current?.getBoundingClientRect();
+    if (!triggerRect) {
+      setFlipLeft(false);
+      return;
+    }
+    const panelWidth = item.type === "mega" ? MEGA_MENU_PANEL_WIDTH : MEGA_MENU_DROPDOWN_WIDTH;
+    setFlipLeft(triggerRect.left + panelWidth + MEGA_MENU_VIEWPORT_MARGIN > window.innerWidth);
+  }, [item.type]);
+
   useEffect(() => {
     function handleClick(e: MouseEvent) { if (ref.current && !ref.current.contains(e.target as Node)) onClose(); }
     if (open) { document.addEventListener("mousedown", handleClick); return () => document.removeEventListener("mousedown", handleClick); }
@@ -83,17 +97,14 @@ function MegaMenuDropdown({
     return () => document.removeEventListener("keydown", handleKey);
   }, [open, onClose]);
 
-  // Flip panel leftwards when it overflows the right edge of the viewport
   useEffect(() => {
-    if (!open) { setFlipLeft(false); return; }
-    const timer = requestAnimationFrame(() => {
-      const panel = ref.current?.querySelector(".mega-menu-panel--lg, .mega-menu-panel") as HTMLElement | null;
-      if (!panel) return;
-      const rect = panel.getBoundingClientRect();
-      setFlipLeft(rect.right > window.innerWidth);
-    });
-    return () => cancelAnimationFrame(timer);
+    if (!open) setFlipLeft(false);
   }, [open]);
+
+  const handleTriggerClick = () => {
+    if (!open) preparePanelPlacement();
+    onToggle();
+  };
 
   const dropdownClass = [
     "mega-menu-dropdown",
@@ -103,9 +114,9 @@ function MegaMenuDropdown({
 
   return (
     <div className={dropdownClass} ref={ref}
-      onMouseEnter={() => { if (hoverSupported.current && !open) onToggle(); }}
+      onMouseEnter={() => { if (hoverSupported.current && !open) { preparePanelPlacement(); onToggle(); } }}
       onMouseLeave={() => { if (hoverSupported.current && open) onClose(); }}>
-      <button type="button" className={`mega-menu-trigger${isActive ? " active" : ""}`} aria-haspopup="true" aria-expanded={open} onClick={onToggle}>
+      <button type="button" className={`mega-menu-trigger${isActive ? " active" : ""}`} aria-haspopup="true" aria-expanded={open} onClick={handleTriggerClick}>
         <span className="mega-menu-trigger-label">{item.label}</span>
         <span className="mega-menu-trigger-sublabel">{item.sublabel}</span>
         <span className="mega-menu-chevron" aria-hidden="true" />

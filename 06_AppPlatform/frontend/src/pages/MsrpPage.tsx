@@ -4,6 +4,7 @@ import { animate } from "animejs";
 import { api } from "../api/client";
 import { CollapsibleDeckHero } from "../components/CollapsibleDeckHero";
 import { LoadingSurface } from "../components/LoadingSurface";
+import { PageBannerStack } from "../components/PageFeedback";
 import { PriceHistoryTimeline } from "../components/PriceHistoryTimeline";
 import { useStaggerEntrance } from "../hooks/useStaggerEntrance";
 import {
@@ -620,11 +621,13 @@ export function MsrpPage() {
         )}
       />
 
-      {error && <div className="alert alert-error">{error}</div>}
-
-      {financeError && <div className="alert alert-error">{financeError}</div>}
-
-      {notice && <div className="alert alert-info">{notice}</div>}
+      <PageBannerStack
+        items={[
+          ...(error ? [{ id: "msrp-error", tone: "error" as const, title: "MSRP 加载失败", message: error }] : []),
+          ...(financeError ? [{ id: "msrp-finance-error", tone: "error" as const, title: "Finance 加载失败", message: financeError }] : []),
+          ...(notice ? [{ id: "msrp-notice", tone: "info" as const, message: notice }] : []),
+        ]}
+      />
 
       {materializeResult && (
         <div className="card crud-card admin-materialize-result">

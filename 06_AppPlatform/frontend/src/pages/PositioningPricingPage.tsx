@@ -25,6 +25,7 @@ import {
 } from "../components/ExportPanel";
 import { LazyPlotlyChart as PlotlyChart, preloadPlotlyChartRuntime } from "../components/LazyPlotlyChart";
 import { LoadingSurface } from "../components/LoadingSurface";
+import { PageBannerStack, PageLoadingShell } from "../components/PageFeedback";
 import type {
   MarketScanPeriodRange,
   PositioningPricingBubbleItem,
@@ -1218,29 +1219,19 @@ export function PositioningPricingPage() {
           tabsClassName="positioning-pricing-tab-strip"
         />
 
-        {error ? (
-          <section className="market-scan-state-card market-scan-state-card--error">
-            <strong>定位定价加载失败</strong>
-            <p>{error}</p>
-          </section>
-        ) : null}
+        <PageBannerStack
+          items={[
+            ...(error ? [{ id: "positioning-pricing-error", tone: "error" as const, title: "定位定价加载失败", message: error }] : []),
+            ...(exportError ? [{ id: "positioning-pricing-export-error", tone: "error" as const, title: "PNG 导出失败", message: exportError }] : []),
+          ]}
+        />
 
         {loading && !deck ? (
-          <section className="market-scan-state-card">
-            <LoadingSurface
-              mode="inline"
-              kicker="Deck"
-              label="正在生成定位定价页面"
-              detail="按国家、月份与动力实时聚合价格带与气泡定位数据。"
-            />
-          </section>
-        ) : null}
-
-        {exportError ? (
-          <section className="market-scan-state-card market-scan-state-card--error">
-            <strong>PNG 导出失败</strong>
-            <p>{exportError}</p>
-          </section>
+          <PageLoadingShell
+            kicker="Deck"
+            label="正在生成定位定价页面"
+            detail="按国家、月份与动力实时聚合价格带与气泡定位数据。"
+          />
         ) : null}
 
         {deck && page ? (

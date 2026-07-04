@@ -1,8 +1,8 @@
 import { useState, useCallback, useEffect, type DragEvent, type ChangeEvent } from "react";
-import { LoadingSurface } from "../components/LoadingSurface";
 import { ConfigComparisonTable } from "../components/ConfigComparisonTable";
 import { ConfigMatrixEditor } from "../components/ConfigMatrixEditor";
 import { ConfigDiffPanel } from "../components/ConfigDiffPanel";
+import { PageBannerStack, PageLoadingShell } from "../components/PageFeedback";
 import { api } from "../api/client";
 import type { VehicleTrimItem, TrimDetail, CompareResponse, ParsePreview, AvailabilityState } from "../types/engineeringConfig";
 
@@ -87,8 +87,18 @@ export function EngineeringConfigPage() {
   return (
     <section className="crud-shell">
       <div className="admin-tabs">{tabs.map((t) => <button key={t} className={`admin-tab ${tab === t ? "admin-tab-active" : ""}`} onClick={() => setTab(t)}>{TAB_LABELS[t]}</button>)}</div>
-      {error && <div className="alert alert-error" style={{ margin: "12px 0" }}>{error}<button className="btn btn-sm" onClick={() => setError(null)} style={{ marginLeft: 8 }}>×</button></div>}
-      {loading && <LoadingSurface mode="inline" label="加载中" />}
+      <PageBannerStack
+        items={[
+          ...(error ? [{
+            id: "engineering-config-error",
+            tone: "error" as const,
+            title: "工程配置加载失败",
+            message: error,
+            action: <button className="btn btn-sm" onClick={() => setError(null)}>×</button>,
+          }] : []),
+        ]}
+      />
+      {loading && <PageLoadingShell label="加载中" kicker="Engineering" />}
 
       {!loading && tab === "trims" && <div className="card"><div className="card-header">车型列表</div><div className="card-body">
         <div className="filter-bar"><input className="input" placeholder="品牌" value={trimFilter.brand} onChange={(e) => setTrimFilter((f) => ({ ...f, brand: e.target.value }))} /><button className="btn btn-secondary" onClick={loadTrims}>刷新</button></div>

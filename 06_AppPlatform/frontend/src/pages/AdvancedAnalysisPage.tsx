@@ -5,7 +5,7 @@ import type { Data, Layout as PlotlyLayout } from "plotly.js";
 
 import { api } from "../api/client";
 import { LazyPlotlyChart as PlotlyChart } from "../components/LazyPlotlyChart";
-import { LoadingSurface } from "../components/LoadingSurface";
+import { PageBannerStack, PageLoadingShell } from "../components/PageFeedback";
 import { SearchSelectFilter } from "../components/SearchSelectFilter";
 import { TRANSPARENT_CHART_LAYOUT as CHART_LAYOUT } from "../utils/plotlyDefaults";
 import { SERIES_COLORS } from "../utils/colors";
@@ -637,9 +637,13 @@ export function AdvancedAnalysisPage() {
         <ExportPanel value={exportSettings} onChange={setExportSettings} showExportButton={false} collapsible={false} />
       </DeckExportDrawer>
 
-      {error && <div style={{ padding: 16, color: "#b91c1c", background: "#fef2f2", borderRadius: 8, margin: "0 16px" }}>{error}</div>}
-      {loading && !data && <LoadingSurface mode="overlay" label="Analyzing..." />}
-      {loading && data && <div style={{ position:"fixed",top:12,right:24,zIndex:100,padding:"4px 12px",borderRadius:6,background:"rgba(59,130,246,0.9)",color:"#fff",fontSize:11,fontWeight:600 }}>Refreshing…</div>}
+      <PageBannerStack
+        items={[
+          ...(error ? [{ id: "advanced-analysis-error", tone: "error" as const, title: "Advanced Analysis 加载失败", message: error }] : []),
+          ...(loading && data ? [{ id: "advanced-analysis-refreshing", tone: "info" as const, title: "Refreshing", message: "正在刷新分析结果" }] : []),
+        ]}
+      />
+      {loading && !data && <PageLoadingShell kicker="Advanced" label="Analyzing..." />}
 
       {data && !data.error && (
         <div style={{ padding: "12px 16px 24px" }}>

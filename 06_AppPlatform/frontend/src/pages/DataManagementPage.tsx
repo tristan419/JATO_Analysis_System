@@ -9,6 +9,7 @@ import { HermesMermaidBlock } from "../components/HermesMermaidBlock";
 import { HermesProgressSwimlane } from "../components/HermesProgressSwimlane";
 import { HermesWorkflowView } from "../components/HermesWorkflowView";
 import { LoadingSurface } from "../components/LoadingSurface";
+import { PageBannerStack, PageLoadingShell } from "../components/PageFeedback";
 import { MsrpDryrunDashboard } from "../components/MsrpDryrunDashboard";
 import { MsrpFinanceObservationsPanel } from "../components/MsrpFinanceObservationsPanel";
 import { MsrpPriceSalesEffectivenessPanel } from "../components/MsrpPriceSalesEffectivenessPanel";
@@ -1119,7 +1120,11 @@ export function DataManagementPage() {
         </div>
       </header>
 
-      {error ? <div className="error-banner">{error}</div> : null}
+      <PageBannerStack
+        items={[
+          ...(error ? [{ id: "data-management-error", tone: "error" as const, title: "Data Ops 加载失败", message: error }] : []),
+        ]}
+      />
 
       <div className="admin-tabs" style={{ marginBottom: 16 }}>
         <button type="button" className={`admin-tab${subpage === "overview" ? " is-active" : ""}`} onClick={() => setSubpage("overview")}>Overview</button>
@@ -1155,8 +1160,12 @@ export function DataManagementPage() {
                 VOC timer: daily 01:45 UTC. Last run: check journalctl on server.
               </span>
             </div>
-            {vocSyncError ? <div className="alert alert-error" style={{marginTop:8}}>{vocSyncError}</div> : null}
-            {vocSyncNotice ? <div className="alert alert-success" style={{marginTop:8}}>{vocSyncNotice}</div> : null}
+            <PageBannerStack
+              items={[
+                ...(vocSyncError ? [{ id: "data-management-voc-sync-error", tone: "error" as const, message: vocSyncError }] : []),
+                ...(vocSyncNotice ? [{ id: "data-management-voc-sync-notice", tone: "success" as const, message: vocSyncNotice }] : []),
+              ]}
+            />
           </div>
         </div>
       ) : null}
@@ -2236,8 +2245,7 @@ export function DataManagementPage() {
       ) : null}
 
       {subpage !== "hermes" && loading && !overview ? (
-        <LoadingSurface
-          mode="overlay"
+        <PageLoadingShell
           label="正在读取数据总览"
           detail="拉取文件清单、数据库表摘要与活跃度数据"
           kicker="Data Ops"
@@ -2345,8 +2353,12 @@ export function DataManagementPage() {
                         Web UI: {airflowStatus.actions.canOpenUi ? airflowStatus.uiUrl : "未运行"}
                       </span>
                     </div>
-                    {airflowError ? <div className="alert alert-error">{airflowError}</div> : null}
-                    {airflowNotice ? <div className="alert alert-success">{airflowNotice}</div> : null}
+                    <PageBannerStack
+                      items={[
+                        ...(airflowError ? [{ id: "data-management-airflow-error", tone: "error" as const, message: airflowError }] : []),
+                        ...(airflowNotice ? [{ id: "data-management-airflow-notice", tone: "success" as const, message: airflowNotice }] : []),
+                      ]}
+                    />
                     <div className="data-management-inline-actions">
                       <button
                         type="button"
@@ -2381,8 +2393,12 @@ export function DataManagementPage() {
                       将 `04_Processed_data/voc/**/raw/*.json` 同步到 PostgreSQL staging，
                       供后续统计、过滤与 Assistant 消费。
                     </p>
-                    {vocSyncError ? <div className="alert alert-error">{vocSyncError}</div> : null}
-                    {vocSyncNotice ? <div className="alert alert-success">{vocSyncNotice}</div> : null}
+                    <PageBannerStack
+                      items={[
+                        ...(vocSyncError ? [{ id: "data-management-domain-voc-error", tone: "error" as const, message: vocSyncError }] : []),
+                        ...(vocSyncNotice ? [{ id: "data-management-domain-voc-notice", tone: "success" as const, message: vocSyncNotice }] : []),
+                      ]}
+                    />
                     <div className="data-management-inline-actions">
                       <button
                         type="button"
@@ -2468,9 +2484,13 @@ export function DataManagementPage() {
               </span>
             </div>
 
-            {vocOverviewError ? <div className="alert alert-error">{vocOverviewError}</div> : null}
-            {vocSyncError ? <div className="alert alert-error">{vocSyncError}</div> : null}
-            {vocSyncNotice ? <div className="alert alert-success">{vocSyncNotice}</div> : null}
+            <PageBannerStack
+              items={[
+                ...(vocOverviewError ? [{ id: "data-management-voc-overview-error", tone: "error" as const, message: vocOverviewError }] : []),
+                ...(vocSyncError ? [{ id: "data-management-voc-page-sync-error", tone: "error" as const, message: vocSyncError }] : []),
+                ...(vocSyncNotice ? [{ id: "data-management-voc-page-sync-notice", tone: "success" as const, message: vocSyncNotice }] : []),
+              ]}
+            />
 
             <div className="crud-toolbar-grid">
               <div className="filter-group">
@@ -2777,8 +2797,12 @@ export function DataManagementPage() {
                 </button>
               </div>
 
-              {crudError ? <div className="alert alert-error">{crudError}</div> : null}
-              {crudNotice ? <div className="alert alert-success">{crudNotice}</div> : null}
+              <PageBannerStack
+                items={[
+                  ...(crudError ? [{ id: "data-management-crud-error", tone: "error" as const, message: crudError }] : []),
+                  ...(crudNotice ? [{ id: "data-management-crud-notice", tone: "success" as const, message: crudNotice }] : []),
+                ]}
+              />
 
               <div className="admin-tabs">
                 <button

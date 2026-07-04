@@ -30,6 +30,7 @@ import { DeckSubpageNav } from "../components/DeckSubpageNav";
 import { DebouncedNumberInput, DeckExportDrawer, DeckFloatingDrawer } from "../components/deckControls";
 import { LazyPlotlyChart as PlotlyChart, preloadPlotlyChartRuntime } from "../components/LazyPlotlyChart";
 import { LoadingSurface } from "../components/LoadingSurface";
+import { PageBannerStack, PageLoadingShell } from "../components/PageFeedback";
 import { SlideLayoutEditor } from "../components/SlideLayoutEditor";
 import {
   buildDrilldownInsight,
@@ -351,59 +352,11 @@ interface PanelProps {
 
 function MarketScanDeckSkeleton() {
   return (
-    <section className="market-scan-state-card market-scan-state-card--skeleton" aria-hidden="true">
-      <LoadingSurface
-        mode="inline"
-        kicker="Deck"
-        label="正在生成市场扫描页面"
-        detail="后端会按国家、月份和燃料组合动态聚合 Parquet 数据。"
-      />
-      <div className="market-scan-skeleton-hero">
-        <div className="market-scan-skeleton-copy">
-          <span className="market-scan-skeleton-block market-scan-skeleton-block--eyebrow" />
-          <span className="market-scan-skeleton-block market-scan-skeleton-block--title" />
-          <span className="market-scan-skeleton-block market-scan-skeleton-block--body" />
-        </div>
-        <div className="market-scan-skeleton-chip-row">
-          {Array.from({ length: 4 }, (_, index) => (
-            <span
-              key={`skeleton-chip-${index}`}
-              className="market-scan-skeleton-block market-scan-skeleton-block--chip"
-            />
-          ))}
-        </div>
-      </div>
-      <div className="market-scan-skeleton-tabs">
-        {Array.from({ length: 6 }, (_, index) => (
-          <span
-            key={`skeleton-tab-${index}`}
-            className="market-scan-skeleton-block market-scan-skeleton-block--tab"
-          />
-        ))}
-      </div>
-      <div className="market-scan-skeleton-grid market-scan-skeleton-grid--metrics">
-        {Array.from({ length: 4 }, (_, index) => (
-          <div key={`skeleton-metric-${index}`} className="market-scan-skeleton-panel">
-            <span className="market-scan-skeleton-block market-scan-skeleton-block--metric-label" />
-            <span className="market-scan-skeleton-block market-scan-skeleton-block--metric-value" />
-            <span className="market-scan-skeleton-block market-scan-skeleton-block--metric-detail" />
-          </div>
-        ))}
-      </div>
-      <div className="market-scan-skeleton-grid market-scan-skeleton-grid--content">
-        <div className="market-scan-skeleton-panel market-scan-skeleton-panel--wide">
-          <span className="market-scan-skeleton-block market-scan-skeleton-block--panel-title" />
-          <span className="market-scan-skeleton-block market-scan-skeleton-block--chart" />
-        </div>
-        <div className="market-scan-skeleton-panel market-scan-skeleton-panel--stack">
-          <span className="market-scan-skeleton-block market-scan-skeleton-block--panel-title" />
-          <span className="market-scan-skeleton-block market-scan-skeleton-block--list-row" />
-          <span className="market-scan-skeleton-block market-scan-skeleton-block--list-row" />
-          <span className="market-scan-skeleton-block market-scan-skeleton-block--list-row" />
-          <span className="market-scan-skeleton-block market-scan-skeleton-block--list-row" />
-        </div>
-      </div>
-    </section>
+    <PageLoadingShell
+      kicker="Deck"
+      label="正在生成市场扫描页面"
+      detail="后端会按国家、月份和燃料组合动态聚合 Parquet 数据。"
+    />
   );
 }
 
@@ -3289,28 +3242,28 @@ export function MarketScanPage({
           tabsClassName="market-scan-tab-strip"
         />
 
-        {error ? (
-          <section className="market-scan-state-card market-scan-state-card--error">
-            <strong>Market Scan 加载失败</strong>
-            <p>{error}</p>
-            <button
-              type="button"
-              className="btn btn-secondary btn-sm"
-              onClick={() => setReloadToken((value) => value + 1)}
-            >
-              重试
-            </button>
-          </section>
-        ) : null}
+        <PageBannerStack
+          items={[
+            ...(error ? [{
+              id: "market-scan-error",
+              tone: "error" as const,
+              title: "Market Scan 加载失败",
+              message: error,
+              action: (
+                <button
+                  type="button"
+                  className="btn btn-secondary btn-sm"
+                  onClick={() => setReloadToken((value) => value + 1)}
+                >
+                  重试
+                </button>
+              ),
+            }] : []),
+            ...(exportError ? [{ id: "market-scan-export-error", tone: "error" as const, title: "PNG 导出失败", message: exportError }] : []),
+          ]}
+        />
 
         {loading && !deck ? <MarketScanDeckSkeleton /> : null}
-
-        {exportError ? (
-          <section className="market-scan-state-card market-scan-state-card--error">
-            <strong>PNG 导出失败</strong>
-            <p>{exportError}</p>
-          </section>
-        ) : null}
 
         {deck ? (
           <div className="market-scan-content" aria-busy={loading}>
