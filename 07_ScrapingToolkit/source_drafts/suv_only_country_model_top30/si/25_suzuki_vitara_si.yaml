@@ -1,27 +1,31 @@
 source_code: suzuki_vitara_si_draft_scrapling
 country: 斯洛文尼亚
 brand: SUZUKI
-source_url: https://todo.invalid/si/suzuki/vitara
+source_url: https://auto.suzuki.si/pages/katalogi-in-ceniki
 source_type: manufacturer_official
 price_semantics: base_msrp
 extractor_type: scrapling
 profile:
-  url: https://todo.invalid/si/suzuki/vitara
-  tier: stealth
+  url: https://auto.suzuki.si/pages/katalogi-in-ceniki
+  tier: http
   headless: true
-  network_idle: true
+  network_idle: false
+  load_dom: false
+  timeout_ms: 30000
   impersonate: chrome
-  css:
-    vehicle_container: body
-    model: h1, h2
-    trim: h3
-    price: '[class*="price"]'
+  text_regex:
+    source_selector: body
+    include_element_html: true
+    entry_patterns:
+    - pattern: 'VITARA\s+1\.4\s+(?:BOOSTERJET\s+)?(?:ALLGRIP\s+)?HIBRID(?:\s+AT)?\s+(?P<trim>(?:COMFORT|PREMIUM|ELEGANCE TOP|ELEGANCE|SPECIAL EDITION)\s+V6[A-Z0-9]+)\s+M(?:HEV|EHV)\s+81\s+1373\s+[0-9,.-]+\s+[0-9,-]+\s+6-st\.\s+(?:ročni|avt\.)\s+5\s+(?P<price>[0-9.]+,[0-9]{2})'
+      official_powertrain: MHEV
+      price_label: PRIPOROČENA MALOPRODAJNA CENA
   default_currency: EUR
   default_tax_included: true
-  default_price_label: MSRP
+  default_price_label: PRIPOROČENA MALOPRODAJNA CENA
   fixed_model: VITARA
   fixed_jato_model: VITARA
-  fixed_jato_powertrain: null
+  fixed_jato_powertrain: MHEV
   model_rules: []
   skip_if_model_unmapped: false
   copy_trim_to_jato_trim: true
@@ -69,6 +73,17 @@ profile:
       keyword: special edition
       special: true
     powertrain_rules:
+    - key: powertrain_mhev
+      powertrain: MHEV
+      keywords:
+      - mhev
+      - mehv
+      - hibrid
+      - hibridni
+      - mild hybrid
+      - mild-hybrid
+      - 48V
+      - blagi hibrid
     - key: powertrain_hev
       powertrain: HEV
       keywords:
@@ -77,16 +92,6 @@ profile:
       - self-charging hybrid
       - self charging hybrid
       - hybrid
-      - hibrid
-      - hibridni
-    - key: powertrain_mhev
-      powertrain: MHEV
-      keywords:
-      - mhev
-      - mild hybrid
-      - mild-hybrid
-      - 48V
-      - blagi hibrid
   auto_accept_gates:
     review_threshold: 0.95
     semi_auto_threshold: 0.98
@@ -102,7 +107,10 @@ schedule:
 notes: Draft scaffold generated from country×model top30 backlog. Replace source_url,
   profile.url, selectors, currency, price label, and the single-model placeholders
   before promoting to 07_ScrapingToolkit/sources. [CSS selectors applied from brand
-  probe]
+  probe] [Replaced todo.invalid with Suzuki Slovenia's official katalogi-in-ceniki
+  price page. text_regex targets the NOVA VITARA table's PRIPOROČENA MALOPRODAJNA
+  CENA column and intentionally ignores POPUST / AKCIJSKA MALOPRODAJNA CENA
+  campaign columns.]
 bootstrap_meta:
   country_model_rank: 25
   suggested_scope_kind: single_model
