@@ -79,6 +79,17 @@ class TestCurrencyMatch:
         assert not r.ok
         assert "SEK" in r.reason
 
+    def test_romania_accepts_official_ron_and_eur(self):
+        assert _rule_currency_match(_make_obs(currency="RON"), "罗马尼亚").ok
+        assert _rule_currency_match(_make_obs(currency="EUR"), "罗马尼亚").ok
+        assert _rule_currency_match(_make_obs(currency="EUR"), "ro").ok
+
+    def test_wrong_currency_romania_lists_allowed_currencies(self):
+        r = _rule_currency_match(_make_obs(currency="USD"), "ro")
+        assert not r.ok
+        assert "RON" in r.reason
+        assert "EUR" in r.reason
+
     def test_unknown_country_is_ok(self):
         assert _rule_currency_match(_make_obs(currency="ZZZ"), "未知国家").ok
 
@@ -164,6 +175,12 @@ class TestValidateObservations:
         assert len(report.rejected) == 1
         failures = report.rejected[0][1]
         assert any(f.rule == "currency_match" for f in failures)
+
+    def test_romania_official_eur_price_uses_eur_bounds(self):
+        obs_list = [_make_obs(msrp_value=15_000.0, currency="EUR")]
+        report = validate_observations(obs_list, country="ro")
+        assert len(report.valid) == 1
+        assert len(report.rejected) == 0
 
     def test_empty_model_rejected(self):
         obs_list = [_make_obs(official_model="")]

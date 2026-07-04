@@ -50,6 +50,11 @@ COUNTRY_CURRENCY: dict[str, str] = {
     "波兰": "PLN",
     "罗马尼亚": "RON",
 }
+COUNTRY_ALLOWED_CURRENCIES: dict[str, tuple[str, ...]] = {
+    # Romanian official OEM sites can publish list prices in either RON or EUR.
+    "ro": ("RON", "EUR"),
+    "罗马尼亚": ("RON", "EUR"),
+}
 MIN_PRICE = 5_000.0
 MAX_PRICE = 500_000.0
 DELTA_THRESHOLD = 0.30
@@ -116,8 +121,23 @@ def _expected_currency(country: str) -> str | None:
     )
 
 
-def _price_bounds(country: str) -> tuple[float, float]:
-    cur = _expected_currency(country)
+def _allowed_currencies(country: str) -> tuple[str, ...]:
+    normalized = str(country or "").strip()
+    configured = (
+        COUNTRY_ALLOWED_CURRENCIES.get(normalized.lower())
+        or COUNTRY_ALLOWED_CURRENCIES.get(normalized)
+    )
+    if configured:
+        return configured
+    expected = _expected_currency(country)
+    return (expected,) if expected else ()
+
+
+def _price_bounds(
+    country: str,
+    currency: str | None = None,
+) -> tuple[float, float]:
+    cur = str(currency or "").strip().upper() or _expected_currency(country)
     if cur and cur in _HIGH_DENOMINATION:
         return _HIGH_DENOMINATION[cur]
     return (MIN_PRICE, MAX_PRICE)
@@ -127,8 +147,9 @@ def _amount_bounds(
     country: str,
     *,
     semantics: str,
+    currency: str | None = None,
 ) -> tuple[float, float]:
-    cur = _expected_currency(country)
+    cur = str(currency or "").strip().upper() or _expected_currency(country)
     if semantics in MONTHLY_PRICE_SEMANTICS:
         if cur and cur in _HIGH_DENOMINATION_MONTHLY:
             return _HIGH_DENOMINATION_MONTHLY[cur]
@@ -137,7 +158,7 @@ def _amount_bounds(
         if cur and cur in _HIGH_DENOMINATION_ALLOWANCE:
             return _HIGH_DENOMINATION_ALLOWANCE[cur]
         return (ALLOWANCE_MIN_AMOUNT, ALLOWANCE_MAX_AMOUNT)
-    return _price_bounds(country)
+    return _price_bounds(country, currency=cur)
 
 
 def _price_semantics(
@@ -191,7 +212,7 @@ def _rule_price_range(
     source_price_semantics: str | None = None,
 ) -> ValidationResult:
     semantics = _price_semantics(obs, source_price_semantics)
-    lo, hi = _amount_bounds(country, semantics=semantics)
+    lo, hi = _amount_bounds(country, semantics=semantics, currency=obs.currency)
     if obs.msrp_value < lo:
         return ValidationResult(
             False,
@@ -211,8 +232,13 @@ def _rule_currency_match(
     obs: RawObservation,
     country: str,
 ) -> ValidationResult:
-    expected = _expected_currency(country)
-    if expected and obs.currency != expected:
+    allowed = _allowed_currencies(country)
+    if allowed and obs.currency not in allowed:
+        expected = (
+            allowed[0]
+            if len(allowed) == 1
+            else f"one of {', '.join(allowed)}"
+        )
         return ValidationResult(
             False,
             "currency_match",
