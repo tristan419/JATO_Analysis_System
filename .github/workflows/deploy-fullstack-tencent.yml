@@ -68,6 +68,15 @@ jobs:
             echo "::error::Missing required workbook: $REQUIRED_WORKBOOK"
             exit 1
           fi
+          MSRP_TOP30_PACK="03_Scripts/diagnostics/artifacts/msrp_backfill/sweden_swiss_top30_suv"
+          MSRP_TOP30_CANDIDATES="$MSRP_TOP30_PACK/top30_suv_price_movement_candidates.json"
+          MSRP_TOP30_EVIDENCE="$MSRP_TOP30_PACK/official_evidence_leads.json"
+          for required_msrp_pack_file in "$MSRP_TOP30_CANDIDATES" "$MSRP_TOP30_EVIDENCE"; do
+            if [ ! -f "$GITHUB_WORKSPACE/$required_msrp_pack_file" ]; then
+              echo "::error::Missing required MSRP monitor pack file: $required_msrp_pack_file"
+              exit 1
+            fi
+          done
 
           python3 - <<'PY'
           import datetime as _dt
@@ -140,6 +149,9 @@ jobs:
           tar rf "$RUNNER_TEMP/JATO_deploy.tar" \
             -C "$GITHUB_WORKSPACE" \
             "$REQUIRED_WORKBOOK"
+          tar rf "$RUNNER_TEMP/JATO_deploy.tar" \
+            -C "$GITHUB_WORKSPACE" \
+            "$MSRP_TOP30_PACK"
           if [ -f "$MIHOMO_PACKAGED_CONFIG" ]; then
             tar rf "$RUNNER_TEMP/JATO_deploy.tar" \
               -C "$MIHOMO_PAYLOAD_ROOT" \
@@ -148,6 +160,7 @@ jobs:
           gzip -f "$RUNNER_TEMP/JATO_deploy.tar"
           ls -lh "$RUNNER_TEMP/JATO_deploy.tar.gz"
           tar tzf "$RUNNER_TEMP/JATO_deploy.tar.gz" "$REQUIRED_WORKBOOK"
+          tar tzf "$RUNNER_TEMP/JATO_deploy.tar.gz" "$MSRP_TOP30_CANDIDATES" "$MSRP_TOP30_EVIDENCE"
 
       - name: Upload archive to server
         if: ${{ steps.auth.outputs.mode == 'key' && vars.DEPLOY_UPLOAD_ARCHIVE != 'false' }}
