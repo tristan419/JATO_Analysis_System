@@ -2810,9 +2810,23 @@ export interface RvFinanceResponse {
 
 /* ---- COC Match ---- */
 
+export interface CocMatchFailureResult {
+  stage: string;
+  stageLabel: string;
+  message: string;
+  suggestion: string;
+  excelFilename: string;
+  archiveFilename: string;
+  fileExt: string;
+  country: string;
+  month: string;
+  failedAt: string;
+}
+
 export interface CocMatchJob {
   jobId: string;
   status: string;
+  phase?: string | null;
   country: string;
   month: string;
   fileExt: string;
@@ -2829,6 +2843,7 @@ export interface CocMatchJob {
   diffSummary?: { gained: number; lost: number; newEntries: number } | null;
   triggeredBy: string;
   error?: string | null;
+  failureResult?: CocMatchFailureResult | null;
   createdAt: string;
   startedAt?: string | null;
   finishedAt?: string | null;

@@ -2,6 +2,7 @@ import type {
   AdvancedChartResponse,
   AnalysisQuery,
   CocFillJob,
+  CocMatchFailureResult,
   CocMatchJob,
   ConfigImportBatch,
   ConfigVariant,
@@ -1030,6 +1031,7 @@ function mapCocMatchJob(raw: Record<string, unknown>): CocMatchJob {
   return {
     jobId: String(raw.jobId ?? ""),
     status: String(raw.status ?? ""),
+    phase: raw.phase === undefined || raw.phase === null ? null : String(raw.phase),
     country: String(raw.country ?? ""),
     month: String(raw.month ?? ""),
     fileExt: String(raw.fileExt ?? ""),
@@ -1050,9 +1052,27 @@ function mapCocMatchJob(raw: Record<string, unknown>): CocMatchJob {
       : null,
     triggeredBy: String(raw.triggeredBy ?? ""),
     error: raw.error === undefined || raw.error === null ? null : String(raw.error),
+    failureResult: mapCocMatchFailureResult(raw.failureResult),
     createdAt: String(raw.createdAt ?? ""),
-    startedAt: raw.startedAt === undefined ? null : String(raw.startedAt),
-    finishedAt: raw.finishedAt === undefined ? null : String(raw.finishedAt),
+    startedAt: raw.startedAt === undefined || raw.startedAt === null ? null : String(raw.startedAt),
+    finishedAt: raw.finishedAt === undefined || raw.finishedAt === null ? null : String(raw.finishedAt),
+  };
+}
+
+function mapCocMatchFailureResult(raw: unknown): CocMatchFailureResult | null {
+  if (!raw || typeof raw !== "object") return null;
+  const item = raw as Record<string, unknown>;
+  return {
+    stage: String(item.stage ?? ""),
+    stageLabel: String(item.stageLabel ?? item.stage ?? ""),
+    message: String(item.message ?? ""),
+    suggestion: String(item.suggestion ?? ""),
+    excelFilename: String(item.excelFilename ?? ""),
+    archiveFilename: String(item.archiveFilename ?? ""),
+    fileExt: String(item.fileExt ?? ""),
+    country: String(item.country ?? ""),
+    month: String(item.month ?? ""),
+    failedAt: String(item.failedAt ?? ""),
   };
 }
 

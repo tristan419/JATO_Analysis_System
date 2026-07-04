@@ -51,6 +51,17 @@ _COUNTRY_HEADER_CANDIDATES = {"country", "国家", "market", "市场"}
 _HEADER_SCAN_ROWS = 20
 _HEADERLESS_VIN_SCAN_ROWS = 200
 _VIN_VALUE_RE = re.compile(r"^[A-HJ-NPR-Z0-9]{17}$", re.IGNORECASE)
+_COC_MATCH_PHASE_LABELS = {
+    "pending": "等待处理",
+    "initializing": "任务初始化",
+    "reading_excel": "Excel 读取",
+    "listing_archive": "压缩包读取",
+    "matching": "VIN 文件名比对",
+    "saving_history": "历史记录保存",
+    "building_report": "报告生成",
+    "completed": "任务完成",
+    "failed": "任务失败",
+}
 
 
 def _normalize_excel_header(value: object) -> str:
@@ -69,6 +80,47 @@ def _find_header_index(row: tuple[object, ...], candidates: set[str]) -> int | N
             if normalized.startswith("vin") or normalized.endswith("vin") or "车架" in normalized or "底盘" in normalized:
                 return index
     return None
+
+
+def _exception_user_message(exc: Exception) -> str:
+    if isinstance(exc, HTTPException):
+        return str(exc.detail or exc)
+    return str(exc)
+
+
+def _coc_match_failure_suggestion(phase: str, message: str) -> str:
+    if phase == "reading_excel":
+        if "VIN" in message or "Chassis" in message or "车架" in message:
+            return "请确认 Excel 包含 VIN / Chassis / 车架号表头，或使用单列 17 位 VIN 清单。"
+        return "请确认 Excel 文件未损坏，且工作簿中存在可读取的 VIN 数据。"
+    if phase == "listing_archive":
+        if "RAR" in message or "rar" in message:
+            return "请确认 RAR 未损坏或加密；如仍失败，可改用 ZIP 后重新上传。"
+        return "请确认压缩包格式正确，并且包内存在所选后缀的 COC 文件。"
+    if phase == "matching":
+        return "请检查 Excel VIN 与 COC 文件名是否使用同一套 VIN/Chassis 编码。"
+    if phase == "saving_history":
+        return "比对已完成但历史保存失败，请稍后重试或联系管理员检查任务存储。"
+    if phase == "building_report":
+        return "比对已完成但报告生成失败，请稍后重试或联系管理员检查报告输出目录。"
+    return "请根据失败原因调整文件后重试；若多次失败，请联系管理员查看任务日志。"
+
+
+def _build_coc_match_failure_result(state: dict[str, Any], exc: Exception) -> dict[str, Any]:
+    phase = str(state.get("phase") or "failed")
+    message = _exception_user_message(exc)
+    return {
+        "stage": phase,
+        "stageLabel": _COC_MATCH_PHASE_LABELS.get(phase, phase),
+        "message": message,
+        "suggestion": _coc_match_failure_suggestion(phase, message),
+        "excelFilename": str(state.get("excelFilename") or ""),
+        "archiveFilename": str(state.get("archiveFilename") or ""),
+        "fileExt": str(state.get("fileExt") or ""),
+        "country": str(state.get("country") or ""),
+        "month": str(state.get("month") or ""),
+        "failedAt": datetime.now().isoformat(),
+    }
 
 
 def _normalize_vin_value(value: object) -> str:
@@ -946,89 +998,106 @@ class CocMatchJobRunner(BaseJobRunner):
         self.file_ext = file_ext
         self.triggered_by = triggered_by
 
+    def _set_phase(self, phase: str) -> None:
+        state = self.load_state()
+        state["phase"] = phase
+        self.persist_state(state)
+
     def run(self) -> None:
         state = self.load_state()
         state["status"] = "running"
+        state["phase"] = "initializing"
         state["startedAt"] = datetime.now().isoformat()
         self.persist_state(state)
 
-        self.log(f"Country: {self.country}, Month: {self.month}, Ext: {self.file_ext}")
-        self.log(f"Excel: {self.excel_path}")
-        self.log(f"Archive: {self.archive_path}")
+        try:
+            self.log(f"Country: {self.country}, Month: {self.month}, Ext: {self.file_ext}")
+            self.log(f"Excel: {self.excel_path}")
+            self.log(f"Archive: {self.archive_path}")
 
-        # Step 1: Read Excel
-        self.log("Reading Excel...")
-        extensions = [self.file_ext]
-        rows = read_excel_rows(self.excel_path)
-        self.log(f"  {len(rows)} rows loaded")
+            # Step 1: Read Excel
+            self._set_phase("reading_excel")
+            self.log("Reading Excel...")
+            extensions = [self.file_ext]
+            rows = read_excel_rows(self.excel_path)
+            self.log(f"  {len(rows)} rows loaded")
 
-        # Step 2: List archive
-        self.log(f"Listing archive (ext={self.file_ext})...")
-        file_set = list_archive_files(self.archive_path, extensions)
-        self.log(f"  {len(file_set)} unique filenames")
+            # Step 2: List archive
+            self._set_phase("listing_archive")
+            self.log(f"Listing archive (ext={self.file_ext})...")
+            file_set = list_archive_files(self.archive_path, extensions)
+            self.log(f"  {len(file_set)} unique filenames")
 
-        # Step 3: Match
-        matched, missing = match_cocs(rows, file_set)
-        archive_only_files = find_archive_only_files(rows, file_set)
-        difference_type = classify_coc_difference(len(missing), len(archive_only_files))
-        self.log(
-            f"  Matched: {len(matched)}, Missing: {len(missing)}, "
-            f"Archive-only: {len(archive_only_files)}, Difference: {difference_type}"
-        )
+            # Step 3: Match
+            self._set_phase("matching")
+            matched, missing = match_cocs(rows, file_set)
+            archive_only_files = find_archive_only_files(rows, file_set)
+            difference_type = classify_coc_difference(len(missing), len(archive_only_files))
+            self.log(
+                f"  Matched: {len(matched)}, Missing: {len(missing)}, "
+                f"Archive-only: {len(archive_only_files)}, Difference: {difference_type}"
+            )
 
-        # Step 4/5: Save run history and compare with previous month.
-        # SQLite has a single writer; serialize in-process writes and let
-        # busy_timeout handle another backend process holding the file lock.
-        with _COC_DB_LOCK:
-            conn = _init_coc_db()
-            try:
-                run_id = _save_run(conn, self.country, self.month, rows)
-                prev = _get_previous_run(conn, self.country, self.month)
-                diff = _get_diff(conn, prev[0] if prev else None, rows) if prev else {}
-            finally:
-                conn.close()
-        if prev:
-            gained = sum(1 for v in diff.values() if v == "gained_pdf")
-            g_lost = sum(1 for v in diff.values() if v == "lost_pdf")
-            self.log(f"  vs {prev[1]}: +{gained} gained, -{g_lost} lost")
+            # Step 4/5: Save run history and compare with previous month.
+            # SQLite has a single writer; serialize in-process writes and let
+            # busy_timeout handle another backend process holding the file lock.
+            self._set_phase("saving_history")
+            with _COC_DB_LOCK:
+                conn = _init_coc_db()
+                try:
+                    run_id = _save_run(conn, self.country, self.month, rows)
+                    prev = _get_previous_run(conn, self.country, self.month)
+                    diff = _get_diff(conn, prev[0] if prev else None, rows) if prev else {}
+                finally:
+                    conn.close()
+            if prev:
+                gained = sum(1 for v in diff.values() if v == "gained_pdf")
+                g_lost = sum(1 for v in diff.values() if v == "lost_pdf")
+                self.log(f"  vs {prev[1]}: +{gained} gained, -{g_lost} lost")
 
-        # Step 6: Build HTML report
-        html = build_html_report(
-            rows,
-            matched,
-            missing,
-            archive_only_files,
-            self.country,
-            self.month,
-            prev,
-            diff,
-        )
-        report_path = self.state_dir / self.job_id / "report.html"
-        report_path.parent.mkdir(parents=True, exist_ok=True)
-        report_path.write_text(html, encoding="utf-8")
-        self.log(f"Report: {report_path}")
+            # Step 6: Build HTML report
+            self._set_phase("building_report")
+            html = build_html_report(
+                rows,
+                matched,
+                missing,
+                archive_only_files,
+                self.country,
+                self.month,
+                prev,
+                diff,
+            )
+            report_path = self.state_dir / self.job_id / "report.html"
+            report_path.parent.mkdir(parents=True, exist_ok=True)
+            report_path.write_text(html, encoding="utf-8")
+            self.log(f"Report: {report_path}")
 
-        # Step 7: Update state with results
-        state = self.load_state()
-        state["status"] = "success"
-        state["phase"] = "completed"
-        state["finishedAt"] = datetime.now().isoformat()
-        state["totalRows"] = len(rows)
-        state["matchedCount"] = len(matched)
-        state["missingCount"] = len(missing)
-        state["extraFileCount"] = len(archive_only_files)
-        state["differenceType"] = difference_type
-        state["hasBidirectionalMismatch"] = difference_type == "bidirectional_mismatch"
-        state["coverageRate"] = round(len(matched) / len(rows) * 100, 1) if rows else 0
-        if prev:
-            state["previousRun"] = {"month": prev[1], "matched": prev[3], "total": prev[2]}
-            state["diffSummary"] = {
-                "gained": sum(1 for v in diff.values() if v == "gained_pdf"),
-                "lost": sum(1 for v in diff.values() if v == "lost_pdf"),
-                "newEntries": sum(1 for v in diff.values() if v == "new_entry"),
-            }
-        self.persist_state(state)
-        self.log("Done!")
+            # Step 7: Update state with results
+            state = self.load_state()
+            state["status"] = "success"
+            state["phase"] = "completed"
+            state["finishedAt"] = datetime.now().isoformat()
+            state["totalRows"] = len(rows)
+            state["matchedCount"] = len(matched)
+            state["missingCount"] = len(missing)
+            state["extraFileCount"] = len(archive_only_files)
+            state["differenceType"] = difference_type
+            state["hasBidirectionalMismatch"] = difference_type == "bidirectional_mismatch"
+            state["coverageRate"] = round(len(matched) / len(rows) * 100, 1) if rows else 0
+            if prev:
+                state["previousRun"] = {"month": prev[1], "matched": prev[3], "total": prev[2]}
+                state["diffSummary"] = {
+                    "gained": sum(1 for v in diff.values() if v == "gained_pdf"),
+                    "lost": sum(1 for v in diff.values() if v == "lost_pdf"),
+                    "newEntries": sum(1 for v in diff.values() if v == "new_entry"),
+                }
+            self.persist_state(state)
+            self.log("Done!")
+        except Exception as exc:
+            state = self.load_state()
+            state["failureResult"] = _build_coc_match_failure_result(state, exc)
+            self.persist_state(state)
+            raise
 
 
 # ── API-facing Functions ───────────────────────────────────────────
@@ -1111,6 +1180,7 @@ def create_coc_match_job(
         "previousRun": None,
         "diffSummary": None,
         "error": None,
+        "failureResult": None,
         "createdAt": datetime.now().isoformat(),
         "startedAt": None,
         "finishedAt": None,
@@ -1303,6 +1373,7 @@ def create_coc_match_job_from_upload(
         "previousRun": None,
         "diffSummary": None,
         "error": None,
+        "failureResult": None,
         "createdAt": datetime.now().isoformat(),
         "startedAt": None,
         "finishedAt": None,

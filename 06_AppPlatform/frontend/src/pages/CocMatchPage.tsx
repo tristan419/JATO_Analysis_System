@@ -19,7 +19,14 @@ import {
   DeckFloatingDrawer,
   type DeckControlTabItem,
 } from "../components/deckControls";
-import type { CocFillDecision, CocFillJob, CocFillPreviewGroup, CocFillRecord, CocMatchJob } from "../types";
+import type {
+  CocFillDecision,
+  CocFillJob,
+  CocFillPreviewGroup,
+  CocFillRecord,
+  CocMatchFailureResult,
+  CocMatchJob,
+} from "../types";
 import { downloadBlob } from "../utils/download";
 import { formatDateTime } from "../utils/timeFormatting";
 
@@ -84,6 +91,25 @@ function compactJobError(error: string | null | undefined): string {
   const text = String(error ?? "").trim();
   if (!text) return "-";
   return text.replace(/^\d{3}:\s*/, "");
+}
+
+function fallbackFailureResult(job: CocMatchJob): CocMatchFailureResult | null {
+  if (job.status !== "failed") return null;
+  if (job.failureResult) return job.failureResult;
+  const message = compactJobError(job.error);
+  if (message === "-") return null;
+  return {
+    stage: job.phase || "failed",
+    stageLabel: "任务失败",
+    message,
+    suggestion: "请根据失败原因调整文件后重试；若多次失败，请联系管理员查看任务日志。",
+    excelFilename: job.excelFilename,
+    archiveFilename: job.archiveFilename,
+    fileExt: job.fileExt,
+    country: job.country,
+    month: job.month,
+    failedAt: job.finishedAt || "",
+  };
 }
 
 function fillStrategyLabel(strategy: string): string {
@@ -879,6 +905,7 @@ export function CocMatchPage() {
 
   function renderMatchSummary(job: CocMatchJob) {
     const running = job.status !== "success" && job.status !== "failed";
+    const failureResult = fallbackFailureResult(job);
     return (
       <div style={matchSummaryBodyStyle}>
         <div style={matchMetricsGridStyle}>
@@ -918,6 +945,26 @@ export function CocMatchPage() {
             ) : null}
             <span style={hintStyle}>创建时间 {formatDateTime(job.createdAt)}</span>
           </div>
+          {failureResult ? renderMatchFailurePanel(failureResult) : null}
+        </div>
+      </div>
+    );
+  }
+
+  function renderMatchFailurePanel(failure: CocMatchFailureResult) {
+    return (
+      <div style={matchFailurePanelStyle}>
+        <div style={matchFailureHeaderStyle}>
+          <strong>失败结果</strong>
+          <span>{failure.stageLabel || failure.stage || "任务失败"}</span>
+        </div>
+        <div style={matchFailureMessageStyle}>{failure.message || "任务执行失败。"}</div>
+        <div style={matchFailureSuggestionStyle}>建议处理：{failure.suggestion || "请调整文件后重试。"}</div>
+        <div style={matchMetaGridStyle}>
+          <MatchMetaItem label="Excel" value={failure.excelFilename || "-"} />
+          <MatchMetaItem label="文件包" value={failure.archiveFilename || "-"} />
+          <MatchMetaItem label="国家 / 月份" value={`${failure.country || "-"} / ${failure.month || "-"}`} />
+          <MatchMetaItem label="失败时间" value={failure.failedAt ? formatDateTime(failure.failedAt) : "-"} />
         </div>
       </div>
     );
@@ -1220,7 +1267,7 @@ export function CocMatchPage() {
                   <th style={thStyle}>匹配</th>
                   <th style={thStyle}>缺失</th>
                   <th style={thStyle}>覆盖率</th>
-                  <th style={thStyle}>错误原因</th>
+                  <th style={thStyle}>失败结果</th>
                   <th style={thStyle}>操作</th>
                 </tr>
               </thead>
@@ -1233,8 +1280,8 @@ export function CocMatchPage() {
                     <td style={tdStyle}>{job.matchedCount ?? "-"}</td>
                     <td style={tdStyle}>{job.missingCount ?? "-"}</td>
                     <td style={tdStyle}>{job.coverageRate != null ? `${job.coverageRate}%` : "-"}</td>
-                    <td style={{ ...tdStyle, whiteSpace: "normal", minWidth: 240 }}>
-                      {job.status === "failed" ? compactJobError(job.error) : "-"}
+                    <td style={{ ...tdStyle, whiteSpace: "normal", minWidth: 260 }}>
+                      {renderMatchFailureCell(job)}
                     </td>
                     <td style={tdStyle}>{renderMatchActions(job)}</td>
                   </tr>
@@ -1244,6 +1291,19 @@ export function CocMatchPage() {
           </div>
         )}
       </div>
+    );
+  }
+
+  function renderMatchFailureCell(job: CocMatchJob) {
+    const failure = fallbackFailureResult(job);
+    if (!failure) return "-";
+    return (
+      <span style={{ display: "grid", gap: 2 }}>
+        <strong style={{ color: "#991b1b", fontSize: 12 }}>{failure.stageLabel || failure.stage || "任务失败"}</strong>
+        <span style={{ color: "#b91c1c", fontSize: 12, lineHeight: 1.35 }}>
+          {failure.message || compactJobError(job.error)}
+        </span>
+      </span>
     );
   }
 
@@ -1439,6 +1499,39 @@ const matchActionRowStyle: CSSProperties = {
   gap: 8,
   flexWrap: "wrap",
   paddingTop: 2,
+};
+
+const matchFailurePanelStyle: CSSProperties = {
+  display: "grid",
+  gap: 8,
+  padding: 10,
+  border: "1px solid rgba(220, 38, 38, 0.22)",
+  borderRadius: 6,
+  background: "rgba(254, 242, 242, 0.86)",
+};
+
+const matchFailureHeaderStyle: CSSProperties = {
+  display: "flex",
+  alignItems: "center",
+  justifyContent: "space-between",
+  gap: 8,
+  color: "#991b1b",
+  fontSize: 12,
+  fontWeight: 800,
+};
+
+const matchFailureMessageStyle: CSSProperties = {
+  color: "#b91c1c",
+  fontSize: 12,
+  lineHeight: 1.45,
+  overflowWrap: "anywhere",
+};
+
+const matchFailureSuggestionStyle: CSSProperties = {
+  color: "#7f1d1d",
+  fontSize: 12,
+  lineHeight: 1.45,
+  overflowWrap: "anywhere",
 };
 
 const previewFilterButtonStyle: CSSProperties = {
