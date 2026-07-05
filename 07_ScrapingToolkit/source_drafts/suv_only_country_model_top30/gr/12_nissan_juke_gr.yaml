@@ -1,109 +1,62 @@
 source_code: nissan_juke_gr_draft_scrapling
 country: 希腊
 brand: NISSAN
-source_url: https://todo.invalid/gr/nissan/juke
+source_url: https://www.nissan.gr/vehicles/new-vehicles/juke-2024.html
 source_type: manufacturer_official
 price_semantics: base_msrp
-extractor_type: scrapling
+extractor_type: http_text
 profile:
-  url: https://todo.invalid/gr/nissan/juke
-  tier: stealth
-  headless: true
-  network_idle: true
-  impersonate: chrome
-  css:
-    vehicle_container: body
-    model: h1, h2
-    trim: h3
-    price: '[class*="price"]'
+  url: https://www.nissan.gr/vehicles/new-vehicles/juke-2024.html
+  timeout_seconds: 30
+  headers:
+    Accept-Language: el-GR,el;q=0.9,en;q=0.8
   default_currency: EUR
   default_tax_included: true
-  default_price_label: MSRP
+  default_price_label: financialOfferPrice
   fixed_model: JUKE
   fixed_jato_model: JUKE
-  fixed_jato_powertrain: null
-  model_rules: []
-  skip_if_model_unmapped: false
   copy_trim_to_jato_trim: true
-  confidence_rules:
-    base: 0.2
-    fixed_model_bonus: 0.18
-    fixed_jato_model_bonus: 0.12
-    model_rule_bonus: 0.12
-    trim_present_bonus: 0.1
-    copy_trim_to_jato_trim_bonus: 0.09
-    parsed_price_text_bonus: 0.03
-    currency_bonus: 0.01
-    price_label_bonus: 0.02
-    trim_keyword_bonuses: []
-    price_band_bonuses:
-    - key: price_band_entry
-      label: Entry price band matched
-      max: 0
-      delta: 0.0
-    - key: price_band_mid
-      label: Mid price band matched
-      min: 0
-      max: 0
-      delta: 0.01
-    - key: price_band_high
-      label: High price band matched
-      min: 0
-      delta: 0.03
-    powertrain_keyword_bonuses: []
-    powertrain_bonuses:
-    - key: powertrain_hev
-      label: 'Powertrain matched: HEV'
-      powertrain: HEV
-      delta: 0.03
-    - key: powertrain_ice
-      label: 'Powertrain matched: ICE'
-      powertrain: ICE
-      delta: 0.03
-    clamp_min: 0.0
-    clamp_max: 1.0
-  structured_fields:
-    edition_rules:
-    - key: edition_special
-      label: Special Edition
-      keyword: special edition
-      special: true
-    powertrain_rules:
-    - key: powertrain_hev
-      powertrain: HEV
-      keywords:
-      - hev
-      - full hybrid
-      - self-charging hybrid
-      - self charging hybrid
-      - hybrid
-      - yvridiko
-    - key: powertrain_ice
-      powertrain: ICE
-      keywords:
-      - ice
-      - petrol
-      - gasoline
-      - diesel
-      - combustion
-      - venzini
-      - petreleo
-  auto_accept_gates:
-    review_threshold: 0.95
-    semi_auto_threshold: 0.98
-    require_powertrain_match: true
-    force_review_if_powertrain_missing: true
-    force_review_if_powertrain_ambiguous: true
-    force_review_for_special_edition: true
+  match_confidence: 0.84
+  match_status: review_required
+  match_reason:
+    kind: official_model_page_structured_offer
+    source: nissan_gr_juke_version_grid
+    note: Official Nissan Greece Juke page embeds version-grid financialOfferVersionName and financialOfferPrice fields. Patterns capture 1.0P version prices only and exclude headline now-from copy, configurator CTA text, menus, formatting config, and disclaimer amounts.
+  entry_patterns:
+  - pattern: '&#34;financialOfferVersionName&#34;\s*:\s*&#34;1\.0P Acenta Business&#34;(?:(?!&#34;financialOfferVersionName&#34;\s*:).)*?&#34;financialOfferPrice&#34;\s*:\s*&#34;(?P<price>\d+(?:\.\d+)?)&#34;'
+    official_trim: Acenta Business
+    official_powertrain: 1.0P
+    jato_powertrain: ICE
+    price_label: financialOfferPrice
+  - pattern: '&#34;financialOfferVersionName&#34;\s*:\s*&#34;1\.0P Acenta&#34;(?:(?!&#34;financialOfferVersionName&#34;\s*:).)*?&#34;financialOfferPrice&#34;\s*:\s*&#34;(?P<price>\d+(?:\.\d+)?)&#34;'
+    official_trim: Acenta
+    official_powertrain: 1.0P
+    jato_powertrain: ICE
+    price_label: financialOfferPrice
+  - pattern: '&#34;financialOfferVersionName&#34;\s*:\s*&#34;1\.0P N-Connecta&#34;(?:(?!&#34;financialOfferVersionName&#34;\s*:).)*?&#34;financialOfferPrice&#34;\s*:\s*&#34;(?P<price>\d+(?:\.\d+)?)&#34;'
+    official_trim: N-Connecta
+    official_powertrain: 1.0P
+    jato_powertrain: ICE
+    price_label: financialOfferPrice
+  - pattern: '&#34;financialOfferVersionName&#34;\s*:\s*&#34;1\.0P N-Design&#34;(?:(?!&#34;financialOfferVersionName&#34;\s*:).)*?&#34;financialOfferPrice&#34;\s*:\s*&#34;(?P<price>\d+(?:\.\d+)?)&#34;'
+    official_trim: N-Design
+    official_powertrain: 1.0P
+    jato_powertrain: ICE
+    price_label: financialOfferPrice
+  - pattern: '&#34;financialOfferVersionName&#34;\s*:\s*&#34;1\.0P N-Sport&#34;(?:(?!&#34;financialOfferVersionName&#34;\s*:).)*?&#34;financialOfferPrice&#34;\s*:\s*&#34;(?P<price>\d+(?:\.\d+)?)&#34;'
+    official_trim: N-Sport
+    official_powertrain: 1.0P
+    jato_powertrain: ICE
+    price_label: financialOfferPrice
 schedule:
   frequency: manual_only
   run_window_start: 00:00
   run_window_end: 05:00
   preferred_weekday: monday
-notes: Draft scaffold generated from country×model top30 backlog. Replace source_url,
-  profile.url, selectors, currency, price label, and the single-model placeholders
-  before promoting to 07_ScrapingToolkit/sources. [CSS selectors applied from brand
-  probe]
+notes: Replaced todo.invalid with Nissan Greece's official Juke model page. The
+  HTTP text patterns target embedded version-grid financialOfferPrice values and
+  exclude headline now-from copy, configurator CTA text, menus, formatting config,
+  and disclaimer amounts.
 bootstrap_meta:
   country_model_rank: 12
   suggested_scope_kind: single_model
