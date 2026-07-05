@@ -4918,35 +4918,56 @@ def _query_version_comparison_deck_impl(
 
     # Build enhanced model options with metadata
     def _build_enhanced_model_options(model_list: list[str], source_frame: pd.DataFrame) -> list[dict[str, Any]]:
-        result: list[dict[str, Any]] = []
-        model_agg: dict[str, dict[str, Any]] = {}
-        for model_key in model_list:
-            model_rows = source_frame[source_frame["__model_key"] == model_key]
-            if model_rows.empty:
-                continue
-            brands = model_rows["__brand"].dropna().unique()
-            models = model_rows["__model"].dropna().unique()
-            segments = model_rows["__segment_raw"].dropna().unique()
-            powertrains = model_rows["__powertrain"].dropna().unique()
-            body_types = model_rows["__body_type"].dropna().unique() if columns.body_type else []
-            drive_types_list = model_rows["__drive_type"].dropna().unique() if columns.drive_type else []
-            lengths = model_rows[model_rows["__length"] > 0]["__length"]
-            msrps = model_rows[model_rows["__msrp"] > 0]["__msrp"]
-            label = str(models[0]) if len(models) > 0 else str(model_key)
-            model_agg[model_key] = {
-                "value": model_key,
-                "modelKey": model_key,
-                "label": label,
-                "brand": str(brands[0]) if len(brands) > 0 else "",
-                "segment": str(segments[0]) if len(segments) > 0 else "",
-                "powertrain": " / ".join(sorted(set(str(p) for p in powertrains))) if len(powertrains) > 0 else "",
-                "bodyType": str(body_types[0]) if len(body_types) > 0 else "",
-                "driveType": " / ".join(sorted(set(str(d) for d in drive_types_list))) if len(drive_types_list) > 0 else "",
-                "lengthMm": float(lengths.median()) if len(lengths) > 0 else 0,
-                "msrpMedian": float(msrps.median()) if len(msrps) > 0 else 0,
+        if not model_list or source_frame.empty or "__model_key" not in source_frame.columns:
+            return []
+
+        requested = {str(model_key) for model_key in model_list}
+        model_rows = source_frame[source_frame["__model_key"].isin(requested)].copy()
+        if model_rows.empty:
+            return []
+
+        def _first_text(values: pd.Series) -> str:
+            for value in values:
+                text = str(value).strip()
+                if text:
+                    return text
+            return ""
+
+        def _join_text(values: pd.Series) -> str:
+            normalized = sorted({str(value).strip() for value in values if str(value).strip()})
+            return " / ".join(normalized)
+
+        def _positive_median(values: pd.Series) -> float:
+            numeric = pd.to_numeric(values, errors="coerce")
+            numeric = numeric[numeric > 0]
+            return float(numeric.median()) if len(numeric) > 0 else 0.0
+
+        grouped = model_rows.groupby("__model_key", sort=False).agg(
+            brand=("__brand", _first_text),
+            label=("__model", _first_text),
+            segment=("__segment_raw", _first_text),
+            powertrain=("__powertrain", _join_text),
+            bodyType=("__body_type", _first_text),
+            driveType=("__drive_type", _join_text),
+            lengthMm=("__length", _positive_median),
+            msrpMedian=("__msrp", _positive_median),
+        )
+        model_agg = {
+            str(model_key): {
+                "value": str(model_key),
+                "modelKey": str(model_key),
+                "label": str(row["label"] or model_key),
+                "brand": str(row["brand"]),
+                "segment": str(row["segment"]),
+                "powertrain": str(row["powertrain"]),
+                "bodyType": str(row["bodyType"]),
+                "driveType": str(row["driveType"]),
+                "lengthMm": float(row["lengthMm"]),
+                "msrpMedian": float(row["msrpMedian"]),
             }
-        result = [model_agg[m] for m in model_list if m in model_agg]
-        return result
+            for model_key, row in grouped.iterrows()
+        }
+        return [model_agg[model_key] for model_key in model_list if model_key in model_agg]
 
     # Enhanced availableModels with metadata
     enhanced_available_models = _build_enhanced_model_options(
