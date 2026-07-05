@@ -24,6 +24,10 @@ on:
         description: "Number of prewarm rounds"
         required: false
         default: "2"
+      dashboard_url:
+        description: "Optional Dashboard URL whose filter params should be prewarmed exactly"
+        required: false
+        default: ""
 
 concurrency:
   group: intl-edge-prewarm
@@ -49,6 +53,7 @@ jobs:
           JATO_PREWARM_ORIGIN: ${{ inputs.origin || 'https://intl.ojeur.cloud' }}
           JATO_PREWARM_ROLES: ${{ inputs.roles || 'viewer,order_filler,editor,admin' }}
           JATO_PREWARM_REPETITIONS: ${{ inputs.repetitions || '2' }}
+          JATO_PREWARM_DASHBOARD_URL: ${{ inputs.dashboard_url || '' }}
           JATO_PREWARM_TIMEOUT_MS: "30000"
           JATO_PREWARM_FAIL_ON_ERROR: "1"
         run: npm run perf:prewarm-edge
