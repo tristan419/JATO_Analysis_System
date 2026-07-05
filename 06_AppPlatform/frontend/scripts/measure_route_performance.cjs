@@ -391,6 +391,7 @@ async function main() {
     network_idle_s: seconds(result.networkIdleMs),
     api_count: result.apiCalls.length,
     edge_hit: countCacheState(result.apiCalls, "HIT"),
+    edge_stale: countCacheState(result.apiCalls, "STALE"),
     edge_miss: countCacheState(result.apiCalls, "MISS"),
     edge_bypass: countCacheState(result.apiCalls, "BYPASS"),
     initial_window_s: seconds(result.initialWindowMs),

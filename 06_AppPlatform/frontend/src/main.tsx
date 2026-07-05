@@ -47,9 +47,11 @@ async function bootApp(): Promise<void> {
   const root = document.getElementById("root");
   if (!root) return;
   ReactDOM.createRoot(root).render(
-    <React.StrictMode>
-      <App />
-    </React.StrictMode>,
+    React.createElement(
+      React.StrictMode,
+      null,
+      React.createElement(App),
+    ),
   );
 }
 
