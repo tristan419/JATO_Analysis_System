@@ -317,22 +317,23 @@
           });
         }
 
-        Promise.all([probe("cn"), probe("intl")]).then(function (results) {
-          var cn = results[0];
-          var intl = results[1];
-          var profile = clientRouteProfile();
-          var marginMs = profile.prefersChinaRoute ? chinaLocalRedirectMarginMs : redirectMarginMs;
-          var currentTarget = host === intlHost ? "intl" : "cn";
+        var profile = clientRouteProfile();
+        var marginMs = profile.prefersChinaRoute ? chinaLocalRedirectMarginMs : redirectMarginMs;
+        var currentTarget = host === intlHost ? "intl" : "cn";
+        var decisionSettled = false;
+        var cnProbePromise = probe("cn");
+        var intlProbePromise = probe("intl");
+
+        function completeDecision(cn, intl) {
+          if (decisionSettled) return;
+          decisionSettled = true;
           var nextTarget = currentTarget;
           var reason = "Both route probes failed; stay on the current host";
-          function routeLabel(target) {
-            return target === "intl" ? "intl" : "www";
-          }
-          if (cn.ok && intl.ok) {
-            if (profile.prefersChinaRoute) {
-              nextTarget = "cn";
-              reason = "www probe succeeded and the browser has China-local signals; keep the domestic route";
-            } else if (Math.abs(cn.ms - intl.ms) <= marginMs) {
+          if (cn.ok && profile.prefersChinaRoute) {
+            nextTarget = "cn";
+            reason = "www probe succeeded and the browser has China-local signals; keep the domestic route";
+          } else if (cn.ok && intl && intl.ok) {
+            if (Math.abs(cn.ms - intl.ms) <= marginMs) {
               nextTarget = currentTarget;
               reason = "Both routes are within the measured-route margin; keep the current host";
             } else if (intl.ms < cn.ms) {
@@ -342,10 +343,10 @@
               nextTarget = "cn";
               reason = "www is faster than intl by more than the redirect margin";
             }
-          } else if (intl.ok && !cn.ok) {
+          } else if (intl && intl.ok && !cn.ok) {
             nextTarget = "intl";
             reason = "www probe failed and intl probe succeeded";
-          } else if (cn.ok && !intl.ok) {
+          } else if (cn.ok && intl && !intl.ok) {
             nextTarget = "cn";
             reason = "intl probe failed and www probe succeeded";
           }
@@ -353,19 +354,28 @@
             source: "auto",
             reason: reason,
             cnOk: Boolean(cn.ok),
-            intlOk: Boolean(intl.ok),
+            intlOk: intl ? Boolean(intl.ok) : undefined,
             cnMs: Math.round(cn.ms),
-            intlMs: Math.round(intl.ms),
+            intlMs: intl ? Math.round(intl.ms) : undefined,
             marginMs: marginMs,
             cnBuildCommit: cn.buildCommit || "",
-            intlBuildCommit: intl.buildCommit || "",
+            intlBuildCommit: intl ? intl.buildCommit || "" : "",
             cnFrontendBuildId: cn.frontendBuildId || "",
-            intlFrontendBuildId: intl.frontendBuildId || ""
+            intlFrontendBuildId: intl ? intl.frontendBuildId || "" : ""
           });
           var didRedirect = redirectTo(nextTarget, autoPayload);
           if (!didRedirect) {
             clearProbeInFlight();
           }
+        }
+
+        cnProbePromise.then(function (cn) {
+          if (profile.prefersChinaRoute && cn.ok) {
+            completeDecision(cn, null);
+          }
+        });
+        Promise.all([cnProbePromise, intlProbePromise]).then(function (results) {
+          completeDecision(results[0], results[1]);
         }).catch(function () {
           clearProbeInFlight();
         });

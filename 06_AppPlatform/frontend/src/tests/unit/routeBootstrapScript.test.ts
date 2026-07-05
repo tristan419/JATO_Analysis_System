@@ -19,9 +19,19 @@ describe("route bootstrap script", () => {
   });
 
   it("keeps China-local browser signals on www whenever the www probe works", () => {
-    expect(indexHtml).toContain("if (profile.prefersChinaRoute) {");
+    expect(indexHtml).toContain("if (cn.ok && profile.prefersChinaRoute) {");
     expect(indexHtml).toContain("www probe succeeded and the browser has China-local signals; keep the domestic route");
     expect(indexHtml).not.toContain("intl.ms + marginMs < cn.ms");
+  });
+
+  it("does not wait for the intl probe before booting China-local www traffic", () => {
+    expect(indexHtml).toContain('var cnProbePromise = probe("cn");');
+    expect(indexHtml).toContain('var intlProbePromise = probe("intl");');
+    expect(indexHtml).toContain("if (decisionSettled) return;");
+    expect(indexHtml).toContain("cnProbePromise.then(function (cn) {");
+    expect(indexHtml).toContain("if (profile.prefersChinaRoute && cn.ok) {");
+    expect(indexHtml).toContain("completeDecision(cn, null);");
+    expect(indexHtml).toContain("Promise.all([cnProbePromise, intlProbePromise]).then(function (results) {");
   });
 
   it("keeps the app boot blocked while a cross-host redirect is pending", () => {
