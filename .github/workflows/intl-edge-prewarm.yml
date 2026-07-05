@@ -10,6 +10,9 @@ on:
       - ".github/workflows/intl-edge-prewarm.yml"
   schedule:
     - cron: "17 */4 * * *"
+  workflow_run:
+    workflows: ["deploy-cloudflare-pages-intl"]
+    types: [completed]
   workflow_dispatch:
     inputs:
       origin:
@@ -35,6 +38,7 @@ concurrency:
 
 jobs:
   prewarm:
+    if: ${{ github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success' }}
     runs-on: ubuntu-latest
     timeout-minutes: 20
 
