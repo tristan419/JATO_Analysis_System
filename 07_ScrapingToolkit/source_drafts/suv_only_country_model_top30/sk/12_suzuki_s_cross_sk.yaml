@@ -1,106 +1,102 @@
 source_code: suzuki_s_cross_sk_draft_scrapling
 country: 斯洛伐克
 brand: SUZUKI
-source_url: https://todo.invalid/sk/suzuki/s_cross
-source_type: manufacturer_official
+source_url: https://www.suzuki.sk/automobily/cennik
+source_type: official_price_list
 price_semantics: base_msrp
-extractor_type: scrapling
+extractor_type: pdf_text
 profile:
-  url: https://todo.invalid/sk/suzuki/s_cross
-  tier: stealth
-  headless: true
-  network_idle: true
-  impersonate: chrome
-  css:
-    vehicle_container: body
-    model: h1, h2
-    trim: h3
-    price: '[class*="price"]'
+  url: https://www.suzuki.sk/automobily/sites/default/files/2026-07/Cennikk.pdf
+  timeout_seconds: 30
+  retry_attempts: 0
+  retry_delay_seconds: 0
   default_currency: EUR
   default_tax_included: true
-  default_price_label: MSRP
+  default_price_label: Cena s DPH
   fixed_model: S-CROSS
   fixed_jato_model: S-CROSS
-  fixed_jato_powertrain: null
-  model_rules: []
-  skip_if_model_unmapped: false
   copy_trim_to_jato_trim: true
-  confidence_rules:
-    base: 0.2
-    fixed_model_bonus: 0.18
-    fixed_jato_model_bonus: 0.12
-    model_rule_bonus: 0.12
-    trim_present_bonus: 0.1
-    copy_trim_to_jato_trim_bonus: 0.09
-    parsed_price_text_bonus: 0.03
-    currency_bonus: 0.01
-    price_label_bonus: 0.02
-    trim_keyword_bonuses: []
-    price_band_bonuses:
-    - key: price_band_entry
-      label: Entry price band matched
-      max: 0
-      delta: 0.0
-    - key: price_band_mid
-      label: Mid price band matched
-      min: 0
-      max: 0
-      delta: 0.01
-    - key: price_band_high
-      label: High price band matched
-      min: 0
-      delta: 0.03
-    powertrain_keyword_bonuses: []
-    powertrain_bonuses:
-    - key: powertrain_hev
-      label: 'Powertrain matched: HEV'
-      powertrain: HEV
-      delta: 0.03
-    - key: powertrain_mhev
-      label: 'Powertrain matched: MHEV'
-      powertrain: MHEV
-      delta: 0.03
-    clamp_min: 0.0
-    clamp_max: 1.0
-  structured_fields:
-    edition_rules:
-    - key: edition_special
-      label: Special Edition
-      keyword: special edition
-      special: true
-    powertrain_rules:
-    - key: powertrain_hev
-      powertrain: HEV
-      keywords:
-      - hev
-      - full hybrid
-      - self-charging hybrid
-      - self charging hybrid
-      - hybrid
-      - hybridny
-    - key: powertrain_mhev
-      powertrain: MHEV
-      keywords:
-      - mhev
-      - mild hybrid
-      - mild-hybrid
-      - 48V
-  auto_accept_gates:
-    review_threshold: 0.95
-    semi_auto_threshold: 0.98
-    require_powertrain_match: true
-    force_review_if_powertrain_missing: true
-    force_review_if_powertrain_ambiguous: true
-    force_review_for_special_edition: true
+  match_confidence: 0.84
+  match_status: review_required
+  match_reason:
+    kind: official_pdf_price_list
+    source: suzuki_sk_all_models_cennik
+    valid_from: '2026-07-01'
+    note: Official Suzuki Slovakia all-model price-list PDF from the Suzuki Slovakia cennik page. Patterns are anchored to the Novy S-Cross section and capture only the Cena s DPH column, excluding AKCIOVA CENA campaign prices and accessories.
+  entry_patterns:
+  - pattern: 'GLX\s+61\s+kWh\s+4WD\s+AT\s+AKCIA\s+\d{2}\s*\d{3}\s*€\s+\d{2}\s*\d{3}\s*€(?:(?!2,5\s+L\s+PLUG-IN).)*?1,4\s+l\s+BOOSTERJET\s+MILD\s+HYBRID\s+COMFORT\s+2WD\s+AKCIA\s+(?P<price>\d{2}\s*\d{3})\s*€'
+    official_trim: Comfort
+    official_powertrain: 1.4 Boosterjet MHEV 2WD
+    jato_powertrain: MHEV
+    price_label: Cena s DPH
+  - pattern: 'GLX\s+61\s+kWh\s+4WD\s+AT\s+AKCIA\s+\d{2}\s*\d{3}\s*€\s+\d{2}\s*\d{3}\s*€(?:(?!2,5\s+L\s+PLUG-IN).)*?1,4\s+l\s+BOOSTERJET\s+MILD\s+HYBRID\s+PREMIUM\s+2WD\s+AKCIA\s+(?P<price>\d{2}\s*\d{3})\s*€'
+    official_trim: Premium
+    official_powertrain: 1.4 Boosterjet MHEV 2WD
+    jato_powertrain: MHEV
+    price_label: Cena s DPH
+  - pattern: 'GLX\s+61\s+kWh\s+4WD\s+AT\s+AKCIA\s+\d{2}\s*\d{3}\s*€\s+\d{2}\s*\d{3}\s*€(?:(?!2,5\s+L\s+PLUG-IN).)*?1,4\s+l\s+BOOSTERJET\s+MILD\s+HYBRID\s+ELEGANCE\s+2WD\s+AKCIA\s+(?P<price>\d{2}\s*\d{3})\s*€'
+    official_trim: Elegance
+    official_powertrain: 1.4 Boosterjet MHEV 2WD
+    jato_powertrain: MHEV
+    price_label: Cena s DPH
+  - pattern: 'GLX\s+61\s+kWh\s+4WD\s+AT\s+AKCIA\s+\d{2}\s*\d{3}\s*€\s+\d{2}\s*\d{3}\s*€(?:(?!2,5\s+L\s+PLUG-IN).)*?1,4\s+l\s+BOOSTERJET\s+MILD\s+HYBRID\s+ELEGANCE\+\s+2WD\s+AKCIA\s+(?P<price>\d{2}\s*\d{3})\s*€'
+    official_trim: Elegance+
+    official_powertrain: 1.4 Boosterjet MHEV 2WD
+    jato_powertrain: MHEV
+    price_label: Cena s DPH
+  - pattern: 'GLX\s+61\s+kWh\s+4WD\s+AT\s+AKCIA\s+\d{2}\s*\d{3}\s*€\s+\d{2}\s*\d{3}\s*€(?:(?!2,5\s+L\s+PLUG-IN).)*?1,4\s+l\s+BOOSTERJET\s+MILD\s+HYBRID\s+PREMIUM\s+4WD\s+AKCIA\s+(?P<price>\d{2}\s*\d{3})\s*€'
+    official_trim: Premium
+    official_powertrain: 1.4 Boosterjet MHEV 4WD
+    jato_powertrain: MHEV
+    price_label: Cena s DPH
+  - pattern: 'GLX\s+61\s+kWh\s+4WD\s+AT\s+AKCIA\s+\d{2}\s*\d{3}\s*€\s+\d{2}\s*\d{3}\s*€(?:(?!2,5\s+L\s+PLUG-IN).)*?1,4\s+l\s+BOOSTERJET\s+MILD\s+HYBRID\s+ELEGANCE\s+4WD\s+AKCIA\s+(?P<price>\d{2}\s*\d{3})\s*€'
+    official_trim: Elegance
+    official_powertrain: 1.4 Boosterjet MHEV 4WD
+    jato_powertrain: MHEV
+    price_label: Cena s DPH
+  - pattern: 'GLX\s+61\s+kWh\s+4WD\s+AT\s+AKCIA\s+\d{2}\s*\d{3}\s*€\s+\d{2}\s*\d{3}\s*€(?:(?!2,5\s+L\s+PLUG-IN).)*?1,4\s+l\s+BOOSTERJET\s+MILD\s+HYBRID\s+ELEGANCE\+\s+4WD\s+AKCIA\s+(?P<price>\d{2}\s*\d{3})\s*€'
+    official_trim: Elegance+
+    official_powertrain: 1.4 Boosterjet MHEV 4WD
+    jato_powertrain: MHEV
+    price_label: Cena s DPH
+  - pattern: 'GLX\s+61\s+kWh\s+4WD\s+AT\s+AKCIA\s+\d{2}\s*\d{3}\s*€\s+\d{2}\s*\d{3}\s*€(?:(?!2,5\s+L\s+PLUG-IN).)*?1,4\s+l\s+BOOSTERJET\s+MILD\s+HYBRID\s+PREMIUM\s+2WD\s+AT\s+AKCIA\s+(?P<price>\d{2}\s*\d{3})\s*€'
+    official_trim: Premium
+    official_powertrain: 1.4 Boosterjet MHEV 2WD AT
+    jato_powertrain: MHEV
+    price_label: Cena s DPH
+  - pattern: 'GLX\s+61\s+kWh\s+4WD\s+AT\s+AKCIA\s+\d{2}\s*\d{3}\s*€\s+\d{2}\s*\d{3}\s*€(?:(?!2,5\s+L\s+PLUG-IN).)*?1,4\s+l\s+BOOSTERJET\s+MILD\s+HYBRID\s+ELEGANCE\s+2WD\s+AT\s+AKCIA\s+(?P<price>\d{2}\s*\d{3})\s*€'
+    official_trim: Elegance
+    official_powertrain: 1.4 Boosterjet MHEV 2WD AT
+    jato_powertrain: MHEV
+    price_label: Cena s DPH
+  - pattern: 'GLX\s+61\s+kWh\s+4WD\s+AT\s+AKCIA\s+\d{2}\s*\d{3}\s*€\s+\d{2}\s*\d{3}\s*€(?:(?!2,5\s+L\s+PLUG-IN).)*?1,4\s+l\s+BOOSTERJET\s+MILD\s+HYBRID\s+ELEGANCE\+\s+2WD\s+AT\s+AKCIA\s+(?P<price>\d{2}\s*\d{3})\s*€'
+    official_trim: Elegance+
+    official_powertrain: 1.4 Boosterjet MHEV 2WD AT
+    jato_powertrain: MHEV
+    price_label: Cena s DPH
+  - pattern: 'GLX\s+61\s+kWh\s+4WD\s+AT\s+AKCIA\s+\d{2}\s*\d{3}\s*€\s+\d{2}\s*\d{3}\s*€(?:(?!2,5\s+L\s+PLUG-IN).)*?1,4\s+l\s+BOOSTERJET\s+MILD\s+HYBRID\s+PREMIUM\s+4WD\s+AT\s+AKCIA\s+(?P<price>\d{2}\s*\d{3})\s*€'
+    official_trim: Premium
+    official_powertrain: 1.4 Boosterjet MHEV 4WD AT
+    jato_powertrain: MHEV
+    price_label: Cena s DPH
+  - pattern: 'GLX\s+61\s+kWh\s+4WD\s+AT\s+AKCIA\s+\d{2}\s*\d{3}\s*€\s+\d{2}\s*\d{3}\s*€(?:(?!2,5\s+L\s+PLUG-IN).)*?1,4\s+l\s+BOOSTERJET\s+MILD\s+HYBRID\s+ELEGANCE\s+4WD\s+AT\s+AKCIA\s+(?P<price>\d{2}\s*\d{3})\s*€'
+    official_trim: Elegance
+    official_powertrain: 1.4 Boosterjet MHEV 4WD AT
+    jato_powertrain: MHEV
+    price_label: Cena s DPH
+  - pattern: 'GLX\s+61\s+kWh\s+4WD\s+AT\s+AKCIA\s+\d{2}\s*\d{3}\s*€\s+\d{2}\s*\d{3}\s*€(?:(?!2,5\s+L\s+PLUG-IN).)*?1,4\s+l\s+BOOSTERJET\s+MILD\s+HYBRID\s+ELEGANCE\+\s+4WD\s+AT\s+AKCIA\s+(?P<price>\d{2}\s*\d{3})\s*€'
+    official_trim: Elegance+
+    official_powertrain: 1.4 Boosterjet MHEV 4WD AT
+    jato_powertrain: MHEV
+    price_label: Cena s DPH
 schedule:
   frequency: manual_only
   run_window_start: 00:00
   run_window_end: 05:00
   preferred_weekday: monday
-notes: Draft scaffold generated from country×model top30 backlog. Replace source_url,
-  profile.url, selectors, currency, price label, and the single-model placeholders
-  before promoting to 07_ScrapingToolkit/sources. [CSS selectors applied from brand
-  probe]
+notes: Replaced todo.invalid with Suzuki Slovakia's official all-model price-list
+  PDF. Regexes are anchored to the Novy S-Cross section and target the Cena s
+  DPH column only, excluding AKCIOVA CENA campaign values and accessory prices.
 bootstrap_meta:
   country_model_rank: 12
   suggested_scope_kind: single_model
