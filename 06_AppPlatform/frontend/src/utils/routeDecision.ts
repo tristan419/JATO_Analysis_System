@@ -469,6 +469,23 @@ export function createAutoRouteDecision(
   };
 }
 
+export function createCurrentChinaRouteDecision(
+  currentTarget: RouteTarget | null,
+  profile?: ClientRouteProfile | null,
+  now = Date.now(),
+): RouteDecision | null {
+  if (currentTarget !== "cn" || !profile?.prefersChinaRoute) return null;
+  return {
+    target: "cn",
+    source: "auto",
+    reason: `Current www route already loaded with China-local signals; skip runtime intl probe (${profile.reason}).`,
+    createdAt: now,
+    expiresAt: now + AUTO_DECISION_TTL_MS,
+    cnOk: true,
+    intlOk: undefined,
+  };
+}
+
 export function createManualRouteDecision(
   target: RouteTarget,
   now = Date.now(),

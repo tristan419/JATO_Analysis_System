@@ -7,6 +7,7 @@ import {
   clearRouteDecisions,
   consumeRouteDecisionTransfer,
   createAutoRouteDecision,
+  createCurrentChinaRouteDecision,
   currentRouteTarget,
   detectClientRouteProfile,
   isRouteProbeInFlight,
@@ -57,6 +58,13 @@ export function SmartRouteGate() {
       return undefined;
     }
 
+    const clientProfile = detectClientRouteProfile();
+    const currentChinaDecision = createCurrentChinaRouteDecision(currentTarget, clientProfile);
+    if (currentChinaDecision) {
+      saveRouteDecision(window.localStorage, currentChinaDecision);
+      return undefined;
+    }
+
     let cancelled = false;
     void (async () => {
       const [cnResult, intlResult] = await Promise.all([
@@ -64,7 +72,6 @@ export function SmartRouteGate() {
         probeRoute("intl"),
       ]);
       if (cancelled) return;
-      const clientProfile = detectClientRouteProfile();
       const decision = createAutoRouteDecision({
         cn: cnResult,
         intl: intlResult,
