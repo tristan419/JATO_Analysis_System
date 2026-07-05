@@ -414,7 +414,6 @@ jobs:
           DEPLOY_ENABLE_HTTPS: ${{ vars.DEPLOY_ENABLE_HTTPS }}
           DEPLOY_CERTBOT_EMAIL: ${{ secrets.DEPLOY_CERTBOT_EMAIL }}
           VITE_ASSET_BASE_URL: ${{ vars.VITE_ASSET_BASE_URL }}
-          DEPLOY_GIT_PROXY_URL: ${{ vars.DEPLOY_GIT_PROXY_URL }}
         run: |
           set -euo pipefail
           if [ -z "${SSH_PORT:-}" ]; then
@@ -442,7 +441,6 @@ jobs:
           REMOTE_EXPORTS+="export DEPLOY_RUN_ID=$(printf '%q' "${GITHUB_RUN_ID:-}"); "
           REMOTE_EXPORTS+="export DEPLOY_RUN_ATTEMPT=$(printf '%q' "${GITHUB_RUN_ATTEMPT:-}"); "
           REMOTE_EXPORTS+="export DEPLOY_ARCHIVE_PATH=$(printf '%q' "${DEPLOY_ARCHIVE_PATH:-}"); "
-          REMOTE_EXPORTS+="export DEPLOY_GIT_PROXY_URL=$(printf '%q' "${DEPLOY_GIT_PROXY_URL:-}"); "
           REMOTE_EXPORTS+="export DEPLOY_REPOSITORY=$(printf '%q' "${GITHUB_REPOSITORY:-}"); "
           REMOTE_EXPORTS+="export DEPLOY_WORKFLOW=$(printf '%q' "${GITHUB_WORKFLOW:-}"); "
           REMOTE_EXPORTS+="export DEEPSEEK_API_KEY=$(printf '%q' '${{ secrets.DEEPSEEK_API_KEY }}'); "
@@ -528,20 +526,6 @@ jobs:
             git -C "$RELEASE_WORKTREE" config http.version HTTP/1.1
             git -C "$RELEASE_WORKTREE" config http.lowSpeedLimit 1
             git -C "$RELEASE_WORKTREE" config http.lowSpeedTime 600
-            configure_sparse_fetch_proxy() {
-              local proxy_url="${DEPLOY_GIT_PROXY_URL:-http://127.0.0.1:7897}"
-              if [ -z "$proxy_url" ]; then
-                return 0
-              fi
-              if curl -fsS -I --max-time 10 --proxy "$proxy_url" https://github.com >/dev/null 2>&1; then
-                git -C "$RELEASE_WORKTREE" config http.proxy "$proxy_url"
-                git -C "$RELEASE_WORKTREE" config https.proxy "$proxy_url"
-                echo "[INFO] Sparse Git fetch will use proxy: $proxy_url"
-              else
-                echo "[WARN] Sparse Git fetch proxy unavailable: $proxy_url"
-              fi
-            }
-            configure_sparse_fetch_proxy
             mkdir -p "$RELEASE_WORKTREE/.git/info"
             cat > "$RELEASE_WORKTREE/.git/info/sparse-checkout" <<'SPARSE'
           /03_Scripts/
@@ -860,7 +844,6 @@ jobs:
           DEPLOY_ENABLE_HTTPS: ${{ vars.DEPLOY_ENABLE_HTTPS }}
           DEPLOY_CERTBOT_EMAIL: ${{ secrets.DEPLOY_CERTBOT_EMAIL }}
           VITE_ASSET_BASE_URL: ${{ vars.VITE_ASSET_BASE_URL }}
-          DEPLOY_GIT_PROXY_URL: ${{ vars.DEPLOY_GIT_PROXY_URL }}
         run: |
           set -euo pipefail
           if [ -z "${SSH_PORT:-}" ]; then
@@ -887,7 +870,6 @@ jobs:
           REMOTE_EXPORTS+="export DEPLOY_RUN_ID=$(printf '%q' "${GITHUB_RUN_ID:-}"); "
           REMOTE_EXPORTS+="export DEPLOY_RUN_ATTEMPT=$(printf '%q' "${GITHUB_RUN_ATTEMPT:-}"); "
           REMOTE_EXPORTS+="export DEPLOY_ARCHIVE_PATH=$(printf '%q' "${DEPLOY_ARCHIVE_PATH:-}"); "
-          REMOTE_EXPORTS+="export DEPLOY_GIT_PROXY_URL=$(printf '%q' "${DEPLOY_GIT_PROXY_URL:-}"); "
           REMOTE_EXPORTS+="export DEPLOY_REPOSITORY=$(printf '%q' "${GITHUB_REPOSITORY:-}"); "
           REMOTE_EXPORTS+="export DEPLOY_WORKFLOW=$(printf '%q' "${GITHUB_WORKFLOW:-}"); "
           REMOTE_EXPORTS+="export DEEPSEEK_API_KEY=$(printf '%q' '${{ secrets.DEEPSEEK_API_KEY }}'); "
@@ -974,20 +956,6 @@ jobs:
             git -C "$RELEASE_WORKTREE" config http.version HTTP/1.1
             git -C "$RELEASE_WORKTREE" config http.lowSpeedLimit 1
             git -C "$RELEASE_WORKTREE" config http.lowSpeedTime 600
-            configure_sparse_fetch_proxy() {
-              local proxy_url="${DEPLOY_GIT_PROXY_URL:-http://127.0.0.1:7897}"
-              if [ -z "$proxy_url" ]; then
-                return 0
-              fi
-              if curl -fsS -I --max-time 10 --proxy "$proxy_url" https://github.com >/dev/null 2>&1; then
-                git -C "$RELEASE_WORKTREE" config http.proxy "$proxy_url"
-                git -C "$RELEASE_WORKTREE" config https.proxy "$proxy_url"
-                echo "[INFO] Sparse Git fetch will use proxy: $proxy_url"
-              else
-                echo "[WARN] Sparse Git fetch proxy unavailable: $proxy_url"
-              fi
-            }
-            configure_sparse_fetch_proxy
             mkdir -p "$RELEASE_WORKTREE/.git/info"
             cat > "$RELEASE_WORKTREE/.git/info/sparse-checkout" <<'SPARSE'
           /03_Scripts/
