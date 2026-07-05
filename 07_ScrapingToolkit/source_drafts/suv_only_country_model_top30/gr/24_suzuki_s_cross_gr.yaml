@@ -1,106 +1,69 @@
 source_code: suzuki_s_cross_gr_draft_scrapling
 country: 希腊
 brand: SUZUKI
-source_url: https://todo.invalid/gr/suzuki/s_cross
-source_type: manufacturer_official
+source_url: https://auto.suzuki.gr/photo/master/202603/csiicd1772697541510.pdf
+source_type: official_price_list
 price_semantics: base_msrp
-extractor_type: scrapling
+extractor_type: pdf_text
 profile:
-  url: https://todo.invalid/gr/suzuki/s_cross
-  tier: stealth
-  headless: true
-  network_idle: true
-  impersonate: chrome
-  css:
-    vehicle_container: body
-    model: h1, h2
-    trim: h3
-    price: '[class*="price"]'
+  url: https://auto.suzuki.gr/photo/master/202603/csiicd1772697541510.pdf
+  timeout_seconds: 90
+  retry_attempts: 1
+  retry_delay_seconds: 1
+  prefer_curl_download: true
+  direct_download_fallback: true
+  headers:
+    User-Agent: Mozilla/5.0
+    Accept: application/pdf,application/octet-stream;q=0.9,*/*;q=0.8
+    Accept-Language: el-GR,el;q=0.9,en;q=0.8
   default_currency: EUR
   default_tax_included: true
-  default_price_label: MSRP
+  default_price_label: Ανώτατη Τιμή Λιανικής
   fixed_model: S-CROSS
   fixed_jato_model: S-CROSS
-  fixed_jato_powertrain: null
-  model_rules: []
-  skip_if_model_unmapped: false
   copy_trim_to_jato_trim: true
-  confidence_rules:
-    base: 0.2
-    fixed_model_bonus: 0.18
-    fixed_jato_model_bonus: 0.12
-    model_rule_bonus: 0.12
-    trim_present_bonus: 0.1
-    copy_trim_to_jato_trim_bonus: 0.09
-    parsed_price_text_bonus: 0.03
-    currency_bonus: 0.01
-    price_label_bonus: 0.02
-    trim_keyword_bonuses: []
-    price_band_bonuses:
-    - key: price_band_entry
-      label: Entry price band matched
-      max: 0
-      delta: 0.0
-    - key: price_band_mid
-      label: Mid price band matched
-      min: 0
-      max: 0
-      delta: 0.01
-    - key: price_band_high
-      label: High price band matched
-      min: 0
-      delta: 0.03
-    powertrain_keyword_bonuses: []
-    powertrain_bonuses:
-    - key: powertrain_hev
-      label: 'Powertrain matched: HEV'
-      powertrain: HEV
-      delta: 0.03
-    - key: powertrain_mhev
-      label: 'Powertrain matched: MHEV'
-      powertrain: MHEV
-      delta: 0.03
-    clamp_min: 0.0
-    clamp_max: 1.0
-  structured_fields:
-    edition_rules:
-    - key: edition_special
-      label: Special Edition
-      keyword: special edition
-      special: true
-    powertrain_rules:
-    - key: powertrain_hev
-      powertrain: HEV
-      keywords:
-      - hev
-      - full hybrid
-      - self-charging hybrid
-      - self charging hybrid
-      - hybrid
-      - yvridiko
-    - key: powertrain_mhev
-      powertrain: MHEV
-      keywords:
-      - mhev
-      - mild hybrid
-      - mild-hybrid
-      - 48V
-  auto_accept_gates:
-    review_threshold: 0.95
-    semi_auto_threshold: 0.98
-    require_powertrain_match: true
-    force_review_if_powertrain_missing: true
-    force_review_if_powertrain_ambiguous: true
-    force_review_for_special_edition: true
+  match_confidence: 0.88
+  match_status: review_required
+  match_reason:
+    kind: official_pdf_price_list
+    source: suzuki_gr_price_list
+    document_date: '2026-03-05'
+    note: Official Suzuki Greece price-list PDF. Patterns capture the Ανώτατη Τιμή Λιανικής column and exclude pre-tax, special-edition, color-charge, and leather-option rows.
+  entry_patterns:
+  - pattern: '1\.4\s+GL\s+HYBRID\s+1\.373\s+110\s+121\s+17\.397,58\s*€\s+(?P<price>21\.990\s*€)'
+    official_trim: GL 2WD
+    official_powertrain: 1.4 HYBRID
+    jato_powertrain: MHEV
+    price_label: Ανώτατη Τιμή Λιανικής
+  - pattern: '1\.4\s+GL\+\s+HYBRID\s+1\.373\s+110\s+121\s+19\.000,00\s*€\s+(?P<price>24\.380\s*€)'
+    official_trim: GL+ 2WD
+    official_powertrain: 1.4 HYBRID
+    jato_powertrain: MHEV
+    price_label: Ανώτατη Τιμή Λιανικής
+  - pattern: '1\.4\s+GLX\s+HYBRID\s+1\.373\s+110\s+121\s+20\.331,45\s*€\s+(?P<price>26\.380\s*€)'
+    official_trim: GLX 2WD
+    official_powertrain: 1.4 HYBRID
+    jato_powertrain: MHEV
+    price_label: Ανώτατη Τιμή Λιανικής
+  - pattern: '1\.4\s+GL\+\s+HYBRID\s+1\.373\s+110\s+131\s+21\.119,35\s*€\s+(?P<price>27\.680\s*€)'
+    official_trim: GL+ 4WD
+    official_powertrain: 1.4 HYBRID
+    jato_powertrain: MHEV
+    price_label: Ανώτατη Τιμή Λιανικής
+  - pattern: '1\.4\s+GLX\s+HYBRID\s+6AT\s+1\.373\s+110\s+141\s+23\.700,00\s*€\s+(?P<price>31\.680\s*€)'
+    official_trim: GLX 4WD 6AT
+    official_powertrain: 1.4 HYBRID 6AT
+    jato_powertrain: MHEV
+    price_label: Ανώτατη Τιμή Λιανικής
 schedule:
   frequency: manual_only
   run_window_start: 00:00
   run_window_end: 05:00
   preferred_weekday: monday
-notes: Draft scaffold generated from country×model top30 backlog. Replace source_url,
-  profile.url, selectors, currency, price label, and the single-model placeholders
-  before promoting to 07_ScrapingToolkit/sources. [CSS selectors applied from brand
-  probe]
+notes: Replaced todo.invalid with Suzuki Greece's official March 2026 price-list
+  PDF. Regexes target S-CROSS rows and the Ανώτατη Τιμή Λιανικής column only,
+  excluding Λιανική Τιμή προ Φόρων, S-CROSS special-edition rows, color charges,
+  leather options, and other Suzuki models in the same PDF.
 bootstrap_meta:
   country_model_rank: 24
   suggested_scope_kind: single_model
