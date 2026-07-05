@@ -163,7 +163,7 @@ jobs:
           tar tzf "$RUNNER_TEMP/JATO_deploy.tar.gz" "$MSRP_TOP30_CANDIDATES" "$MSRP_TOP30_EVIDENCE"
 
       - name: Upload archive to server
-        if: ${{ steps.auth.outputs.mode == 'key' && vars.DEPLOY_UPLOAD_ARCHIVE != 'false' }}
+        if: ${{ steps.auth.outputs.mode == 'key' && vars.DEPLOY_UPLOAD_ARCHIVE == 'true' }}
         env:
           SSH_HOST: ${{ secrets.SSH_HOST }}
           SSH_USER: ${{ secrets.SSH_USER }}
@@ -286,7 +286,7 @@ jobs:
           echo "DEPLOY_ARCHIVE_PATH=$REMOTE_ARCHIVE" >> "$GITHUB_ENV"
 
       - name: Upload archive to server
-        if: ${{ steps.auth.outputs.mode == 'password' && vars.DEPLOY_UPLOAD_ARCHIVE != 'false' }}
+        if: ${{ steps.auth.outputs.mode == 'password' && vars.DEPLOY_UPLOAD_ARCHIVE == 'true' }}
         env:
           SSH_HOST: ${{ secrets.SSH_HOST }}
           SSH_USER: ${{ secrets.SSH_USER }}
@@ -529,6 +529,8 @@ jobs:
             mkdir -p "$RELEASE_WORKTREE/.git/info"
             cat > "$RELEASE_WORKTREE/.git/info/sparse-checkout" <<'SPARSE'
           /03_Scripts/
+          !/03_Scripts/diagnostics/artifacts/**
+          /03_Scripts/diagnostics/artifacts/msrp_backfill/sweden_swiss_top30_suv/**
           /06_AppPlatform/
           /07_ScrapingToolkit/
           /hermes/
@@ -957,6 +959,8 @@ jobs:
             mkdir -p "$RELEASE_WORKTREE/.git/info"
             cat > "$RELEASE_WORKTREE/.git/info/sparse-checkout" <<'SPARSE'
           /03_Scripts/
+          !/03_Scripts/diagnostics/artifacts/**
+          /03_Scripts/diagnostics/artifacts/msrp_backfill/sweden_swiss_top30_suv/**
           /06_AppPlatform/
           /07_ScrapingToolkit/
           /hermes/
