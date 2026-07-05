@@ -1,125 +1,153 @@
 source_code: hyundai_tucson_si_draft_scrapling
 country: 斯洛文尼亚
 brand: HYUNDAI
-source_url: https://todo.invalid/si/hyundai/tucson
-source_type: manufacturer_official
+source_url: https://www.hyundai.si/hyundai-tucson
+source_type: official_price_list
 price_semantics: base_msrp
-extractor_type: scrapling
+extractor_type: pdf_text
 profile:
-  url: https://todo.invalid/si/hyundai/tucson
-  headless: true
+  url: https://hyundai3.b-cdn.net/media/Ceniki/TUCSON/cenik-tucson-2026-02-18-my26.pdf
+  urls:
+  - https://hyundai3.b-cdn.net/media/Ceniki/TUCSON/cenik-tucson-2026-02-18-my26.pdf
+  - https://hyundai3.b-cdn.net/media/Ceniki/TUCSON%20HEV_PHEV/cenik-tucson-hev-phev-2026-02-18-my26.pdf
+  timeout_seconds: 10
+  retry_attempts: 0
+  retry_delay_seconds: 0
+  browser_download_fallback: true
   default_currency: EUR
   default_tax_included: true
-  default_price_label: MSRP
+  default_price_label: Cena v EUR
   fixed_model: TUCSON
   fixed_jato_model: TUCSON
-  fixed_jato_powertrain: null
-  model_rules: []
-  skip_if_model_unmapped: false
   copy_trim_to_jato_trim: true
-  confidence_rules:
-    base: 0.2
-    fixed_model_bonus: 0.18
-    fixed_jato_model_bonus: 0.12
-    model_rule_bonus: 0.12
-    trim_present_bonus: 0.1
-    copy_trim_to_jato_trim_bonus: 0.09
-    parsed_price_text_bonus: 0.03
-    currency_bonus: 0.01
-    price_label_bonus: 0.02
-    trim_keyword_bonuses: []
-    price_band_bonuses:
-    - key: price_band_entry
-      label: Entry price band matched
-      max: 0
-      delta: 0.0
-    - key: price_band_mid
-      label: Mid price band matched
-      min: 0
-      max: 0
-      delta: 0.01
-    - key: price_band_high
-      label: High price band matched
-      min: 0
-      delta: 0.03
-    powertrain_keyword_bonuses: []
-    powertrain_bonuses:
-    - key: powertrain_phev
-      label: 'Powertrain matched: PHEV'
-      powertrain: PHEV
-      delta: 0.03
-    - key: powertrain_hev
-      label: 'Powertrain matched: HEV'
-      powertrain: HEV
-      delta: 0.03
-    - key: powertrain_mhev
-      label: 'Powertrain matched: MHEV'
-      powertrain: MHEV
-      delta: 0.03
-    - key: powertrain_ice
-      label: 'Powertrain matched: ICE'
-      powertrain: ICE
-      delta: 0.03
-    clamp_min: 0.0
-    clamp_max: 1.0
-  structured_fields:
-    edition_rules:
-    - key: edition_special
-      label: Special Edition
-      keyword: special edition
-      special: true
-    powertrain_rules:
-    - key: powertrain_phev
-      powertrain: PHEV
-      keywords:
-      - phev
-      - plug-in hybrid
-      - plug in hybrid
-      - plugin hybrid
-      - prikljucni hibrid
-    - key: powertrain_hev
-      powertrain: HEV
-      keywords:
-      - hev
-      - full hybrid
-      - self-charging hybrid
-      - self charging hybrid
-      - hybrid
-      - hibrid
-      - hibridni
-    - key: powertrain_mhev
-      powertrain: MHEV
-      keywords:
-      - mhev
-      - mild hybrid
-      - mild-hybrid
-      - 48V
-      - blagi hibrid
-    - key: powertrain_ice
-      powertrain: ICE
-      keywords:
-      - ice
-      - petrol
-      - gasoline
-      - diesel
-      - combustion
-      - bencin
-      - dizel
-  auto_accept_gates:
-    review_threshold: 0.95
-    semi_auto_threshold: 0.98
-    require_powertrain_match: true
-    force_review_if_powertrain_missing: true
-    force_review_if_powertrain_ambiguous: true
-    force_review_for_special_edition: true
-  css:
-    vehicle_container: body
-    model: h2, h3
-    trim: h3
-    price: '[class*="price"]'
-  tier: stealth
-  network_idle: true
-  impersonate: chrome
+  match_confidence: 0.86
+  match_status: review_required
+  match_reason:
+    kind: official_pdf_price_list
+    source: hyundai_si_tucson_cenik
+    document_date: '2026-02-18'
+    note: Official Hyundai Slovenia Tucson ICE and HEV/PHEV price-list PDFs; values are vehicle prices labeled Cena v EUR.
+  entry_patterns:
+  - pattern: '1\.6\s+T-GDI\s+[–-]\s+150\s+TREND\s+6-stopenjski\s+ročni(?:(?!TREND\s+7-stopenjski\s+DCT).)*?(?P<price>\d{2}\.\d{3})\b'
+    official_trim: TREND
+    official_powertrain: ICE 1.6 T-GDI 150 6MT 2WD
+    jato_powertrain: ICE
+    price_label: Cena v EUR
+  - pattern: '1\.6\s+T-GDI\s+[–-]\s+150\s+TREND\s+6-stopenjski\s+ročni(?:(?!TREND\s+7-stopenjski\s+DCT).)*?\bSTYLE\s+(?P<price>\d{2}\.\d{3})\b'
+    official_trim: STYLE
+    official_powertrain: ICE 1.6 T-GDI 150 6MT 2WD
+    jato_powertrain: ICE
+    price_label: Cena v EUR
+  - pattern: '1\.6\s+T-GDI\s+[–-]\s+150\s+TREND\s+6-stopenjski\s+ročni(?:(?!TREND\s+7-stopenjski\s+DCT).)*?\bPREMIUM\s+(?P<price>\d{2}\.\d{3})\b'
+    official_trim: PREMIUM
+    official_powertrain: ICE 1.6 T-GDI 150 6MT 2WD
+    jato_powertrain: ICE
+    price_label: Cena v EUR
+  - pattern: '1\.6\s+T-GDI\s+[–-]\s+150\s+TREND\s+6-stopenjski\s+ročni(?:(?!TREND\s+7-stopenjski\s+DCT).)*?\bIMPRESSION\s+(?P<price>\d{2}\.\d{3})\b'
+    official_trim: IMPRESSION
+    official_powertrain: ICE 1.6 T-GDI 150 6MT 2WD
+    jato_powertrain: ICE
+    price_label: Cena v EUR
+  - pattern: '1\.6\s+T-GDI\s+[–-]\s+150.*?TREND\s+7-stopenjski\s+DCT(?:(?!4-kolesni\s+pogon).)*?(?P<price>\d{2}\.\d{3})\b'
+    official_trim: TREND
+    official_powertrain: ICE 1.6 T-GDI 150 7DCT 2WD
+    jato_powertrain: ICE
+    price_label: Cena v EUR
+  - pattern: '1\.6\s+T-GDI\s+[–-]\s+150.*?TREND\s+7-stopenjski\s+DCT(?:(?!4-kolesni\s+pogon).)*?\bSTYLE\s+(?P<price>\d{2}\.\d{3})\b'
+    official_trim: STYLE
+    official_powertrain: ICE 1.6 T-GDI 150 7DCT 2WD
+    jato_powertrain: ICE
+    price_label: Cena v EUR
+  - pattern: '1\.6\s+T-GDI\s+[–-]\s+150.*?TREND\s+7-stopenjski\s+DCT(?:(?!4-kolesni\s+pogon).)*?\bPREMIUM\s+(?P<price>\d{2}\.\d{3})\b'
+    official_trim: PREMIUM
+    official_powertrain: ICE 1.6 T-GDI 150 7DCT 2WD
+    jato_powertrain: ICE
+    price_label: Cena v EUR
+  - pattern: '1\.6\s+T-GDI\s+[–-]\s+150.*?TREND\s+7-stopenjski\s+DCT(?:(?!4-kolesni\s+pogon).)*?\bIMPRESSION\s+(?P<price>\d{2}\.\d{3})\b'
+    official_trim: IMPRESSION
+    official_powertrain: ICE 1.6 T-GDI 150 7DCT 2WD
+    jato_powertrain: ICE
+    price_label: Cena v EUR
+  - pattern: '4-kolesni\s+pogon\s+1\.6\s+T-GDI\s+-\s+180\s+TREND\s+7-stopenjski\s+DCT(?:(?!Poraba\s+goriva).)*?(?P<price>\d{2}\.\d{3})\b'
+    official_trim: TREND
+    official_powertrain: ICE 1.6 T-GDI 180 7DCT AWD
+    jato_powertrain: ICE
+    price_label: Cena v EUR
+  - pattern: '4-kolesni\s+pogon\s+1\.6\s+T-GDI\s+-\s+180\s+TREND\s+7-stopenjski\s+DCT(?:(?!Poraba\s+goriva).)*?\bSTYLE\s+(?P<price>\d{2}\.\d{3})\b'
+    official_trim: STYLE
+    official_powertrain: ICE 1.6 T-GDI 180 7DCT AWD
+    jato_powertrain: ICE
+    price_label: Cena v EUR
+  - pattern: '4-kolesni\s+pogon\s+1\.6\s+T-GDI\s+-\s+180\s+TREND\s+7-stopenjski\s+DCT(?:(?!Poraba\s+goriva).)*?\bPREMIUM\s+(?P<price>\d{2}\.\d{3})\b'
+    official_trim: PREMIUM
+    official_powertrain: ICE 1.6 T-GDI 180 7DCT AWD
+    jato_powertrain: ICE
+    price_label: Cena v EUR
+  - pattern: '4-kolesni\s+pogon\s+1\.6\s+T-GDI\s+-\s+180\s+TREND\s+7-stopenjski\s+DCT(?:(?!Poraba\s+goriva).)*?\bIMPRESSION\s+(?P<price>\d{2}\.\d{3})\b'
+    official_trim: IMPRESSION
+    official_powertrain: ICE 1.6 T-GDI 180 7DCT AWD
+    jato_powertrain: ICE
+    price_label: Cena v EUR
+  - pattern: 'TUCSON\s+Hybrid\s+2-kolesni\s+pogon.*?1\.6\s+T-GDI\s+STYLE\s+6-stopenjski\s+samodejni(?:(?!4-kolesni\s+pogon).)*?(?P<price>\d{2}\.\d{3})\b'
+    official_trim: STYLE
+    official_powertrain: HEV 1.6 T-GDI 239 6AT 2WD
+    jato_powertrain: HEV
+    price_label: Cena v EUR
+  - pattern: 'TUCSON\s+Hybrid\s+2-kolesni\s+pogon.*?1\.6\s+T-GDI\s+STYLE\s+6-stopenjski\s+samodejni(?:(?!4-kolesni\s+pogon).)*?\bPREMIUM\s+(?P<price>\d{2}\.\d{3})\b'
+    official_trim: PREMIUM
+    official_powertrain: HEV 1.6 T-GDI 239 6AT 2WD
+    jato_powertrain: HEV
+    price_label: Cena v EUR
+  - pattern: 'TUCSON\s+Hybrid\s+2-kolesni\s+pogon.*?1\.6\s+T-GDI\s+STYLE\s+6-stopenjski\s+samodejni(?:(?!4-kolesni\s+pogon).)*?\bIMPRESSION\s+(?P<price>\d{2}\.\d{3})\b'
+    official_trim: IMPRESSION
+    official_powertrain: HEV 1.6 T-GDI 239 6AT 2WD
+    jato_powertrain: HEV
+    price_label: Cena v EUR
+  - pattern: 'TUCSON\s+Hybrid.*?4-kolesni\s+pogon\s+1\.6\s+T-GDI\s+STYLE\s+6-stopenjski\s+samodejni(?:(?!TUCSON\s+Plug-in\s+Hybrid).)*?(?P<price>\d{2}\.\d{3})\b'
+    official_trim: STYLE
+    official_powertrain: HEV 1.6 T-GDI 239 6AT AWD
+    jato_powertrain: HEV
+    price_label: Cena v EUR
+  - pattern: 'TUCSON\s+Hybrid.*?4-kolesni\s+pogon\s+1\.6\s+T-GDI\s+STYLE\s+6-stopenjski\s+samodejni(?:(?!TUCSON\s+Plug-in\s+Hybrid).)*?\bPREMIUM\s+(?P<price>\d{2}\.\d{3})\b'
+    official_trim: PREMIUM
+    official_powertrain: HEV 1.6 T-GDI 239 6AT AWD
+    jato_powertrain: HEV
+    price_label: Cena v EUR
+  - pattern: 'TUCSON\s+Hybrid.*?4-kolesni\s+pogon\s+1\.6\s+T-GDI\s+STYLE\s+6-stopenjski\s+samodejni(?:(?!TUCSON\s+Plug-in\s+Hybrid).)*?\bIMPRESSION\s+(?P<price>\d{2}\.\d{3})\b'
+    official_trim: IMPRESSION
+    official_powertrain: HEV 1.6 T-GDI 239 6AT AWD
+    jato_powertrain: HEV
+    price_label: Cena v EUR
+  - pattern: 'TUCSON\s+Plug-in\s+Hybrid\s+2-kolesni\s+pogon.*?1\.6\s+T-GDI\s+STYLE\s+6-stopenjski\s+samodejni(?:(?!4-kolesni\s+pogon).)*?(?P<price>\d{2}\.\d{3})\b'
+    official_trim: STYLE
+    official_powertrain: PHEV 1.6 T-GDI 288 6AT 2WD
+    jato_powertrain: PHEV
+    price_label: Cena v EUR
+  - pattern: 'TUCSON\s+Plug-in\s+Hybrid\s+2-kolesni\s+pogon.*?1\.6\s+T-GDI\s+STYLE\s+6-stopenjski\s+samodejni(?:(?!4-kolesni\s+pogon).)*?\bPREMIUM\s+(?P<price>\d{2}\.\d{3})\b'
+    official_trim: PREMIUM
+    official_powertrain: PHEV 1.6 T-GDI 288 6AT 2WD
+    jato_powertrain: PHEV
+    price_label: Cena v EUR
+  - pattern: 'TUCSON\s+Plug-in\s+Hybrid\s+2-kolesni\s+pogon.*?1\.6\s+T-GDI\s+STYLE\s+6-stopenjski\s+samodejni(?:(?!4-kolesni\s+pogon).)*?\bIMPRESSION\s+(?P<price>\d{2}\.\d{3})\b'
+    official_trim: IMPRESSION
+    official_powertrain: PHEV 1.6 T-GDI 288 6AT 2WD
+    jato_powertrain: PHEV
+    price_label: Cena v EUR
+  - pattern: 'TUCSON\s+Plug-in\s+Hybrid.*?4-kolesni\s+pogon\s+1\.6\s+T-GDI\s+STYLE\s+6-stopenjski\s+samodejni(?:(?!Poraba\s+goriva).)*?(?P<price>\d{2}\.\d{3})\b'
+    official_trim: STYLE
+    official_powertrain: PHEV 1.6 T-GDI 288 6AT AWD
+    jato_powertrain: PHEV
+    price_label: Cena v EUR
+  - pattern: 'TUCSON\s+Plug-in\s+Hybrid.*?4-kolesni\s+pogon\s+1\.6\s+T-GDI\s+STYLE\s+6-stopenjski\s+samodejni(?:(?!Poraba\s+goriva).)*?\bPREMIUM\s+(?P<price>\d{2}\.\d{3})\b'
+    official_trim: PREMIUM
+    official_powertrain: PHEV 1.6 T-GDI 288 6AT AWD
+    jato_powertrain: PHEV
+    price_label: Cena v EUR
+  - pattern: 'TUCSON\s+Plug-in\s+Hybrid.*?4-kolesni\s+pogon\s+1\.6\s+T-GDI\s+STYLE\s+6-stopenjski\s+samodejni(?:(?!Poraba\s+goriva).)*?\bIMPRESSION\s+(?P<price>\d{2}\.\d{3})\b'
+    official_trim: IMPRESSION
+    official_powertrain: PHEV 1.6 T-GDI 288 6AT AWD
+    jato_powertrain: PHEV
+    price_label: Cena v EUR
 schedule:
   frequency: manual_only
   run_window_start: 00:00
@@ -129,7 +157,10 @@ notes: Draft scaffold generated from country×model top30 backlog. Replace sourc
   profile.url, selectors, currency, price label, and the single-model placeholders
   before promoting to 07_ScrapingToolkit/sources. [CSS selectors applied from brand
   probe] [Switched to playwright_card_flow with kia_trim_overview_playwright.yaml]
-  [Reverted to scrapling — playwright preset needs per-brand tuning]
+  [Reverted to scrapling — playwright preset needs per-brand tuning] [Replaced
+  todo.invalid with Hyundai Slovenia's official Tucson and Tucson HEV/PHEV
+  price-list PDFs. The PDFs are labeled Cena v EUR; patterns target vehicle
+  price rows only.]
 bootstrap_meta:
   country_model_rank: 6
   suggested_scope_kind: single_model

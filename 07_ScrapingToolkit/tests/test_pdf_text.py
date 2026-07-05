@@ -148,6 +148,24 @@ def test_pdf_text_profile_accepts_direct_download_fallback() -> None:
     assert profile.direct_download_fallback is True
 
 
+def test_pdf_text_profile_accepts_multiple_urls() -> None:
+    profile = _build_pdf_text_profile(
+        {
+            "urls": [
+                "https://example.invalid/tucson-ice.pdf",
+                "https://example.invalid/tucson-hybrid.pdf",
+            ],
+            "entry_patterns": [],
+        }
+    )
+
+    assert profile.url == "https://example.invalid/tucson-ice.pdf"
+    assert profile.urls == (
+        "https://example.invalid/tucson-ice.pdf",
+        "https://example.invalid/tucson-hybrid.pdf",
+    )
+
+
 def test_pdf_text_uses_curl_fallback_after_requests_timeout(monkeypatch):
     extractor = PdfTextExtractor(
         ExtractorConfig(
@@ -173,11 +191,11 @@ def test_pdf_text_uses_curl_fallback_after_requests_timeout(monkeypatch):
     monkeypatch.setattr(extractor._session, "get", fail_request)
     fallback_timeouts = []
 
-    def fail_browser(timeout):
+    def fail_browser(timeout, **_kwargs):
         fallback_timeouts.append(("browser", timeout))
         return None
 
-    def fetch_with_curl(timeout):
+    def fetch_with_curl(timeout, **_kwargs):
         fallback_timeouts.append(("curl", timeout))
         return b"%PDF-1.7\n"
 
@@ -213,7 +231,7 @@ def test_pdf_text_uses_browser_fallback_after_requests_failure(monkeypatch):
 
     browser_timeouts = []
 
-    def fetch_with_browser(timeout):
+    def fetch_with_browser(timeout, **_kwargs):
         browser_timeouts.append(timeout)
         return b"%PDF-1.7\n"
 
@@ -251,7 +269,7 @@ def test_pdf_text_prefers_curl_download_before_requests(monkeypatch):
     monkeypatch.setattr(extractor._session, "get", fail_request)
     curl_timeouts = []
 
-    def fetch_with_curl(timeout):
+    def fetch_with_curl(timeout, **_kwargs):
         curl_timeouts.append(timeout)
         return b"%PDF-1.7\n"
 
@@ -283,7 +301,7 @@ def test_pdf_text_direct_download_fallback_uses_proxy_first_then_direct(monkeypa
     def fail_request(*_args, **_kwargs):
         raise requests.exceptions.ProxyError("proxy refused")
 
-    def fetch_with_curl(timeout, *, ignore_environment_proxy=None):
+    def fetch_with_curl(timeout, *, url=None, ignore_environment_proxy=None):
         curl_modes.append(ignore_environment_proxy)
         if ignore_environment_proxy:
             return b"%PDF-1.7\n"
@@ -374,7 +392,7 @@ def test_pdf_text_records_download_failure_in_strategy_audit(tmp_path, monkeypat
     extractor.run_id = "pdf-download-failure-test"
     monkeypatch.setenv("JATO_AUDIT_DIR", str(tmp_path))
 
-    def fail_fetch():
+    def fail_fetch(*_args, **_kwargs):
         extractor._last_fetch_error = (
             "pdf_direct_download_failed: Could not resolve host: example.invalid"
         )

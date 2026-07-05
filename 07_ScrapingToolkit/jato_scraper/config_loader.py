@@ -558,6 +558,17 @@ def _build_pdf_text_profile(profile: dict[str, Any]) -> PdfTextProfile:
     patterns_raw = profile.get("entry_patterns", [])
     if not isinstance(patterns_raw, list):
         raise ValueError("pdf_text entry_patterns must be a list")
+    urls_raw = profile.get("urls", [])
+    if urls_raw and not isinstance(urls_raw, list):
+        raise ValueError("pdf_text urls must be a list")
+    urls = tuple(
+        str(item).strip()
+        for item in urls_raw
+        if str(item or "").strip()
+    )
+    primary_url = str(profile.get("url") or (urls[0] if urls else "")).strip()
+    if not primary_url:
+        raise ValueError("pdf_text profile requires url or urls")
     browser_download_fallback = bool(
         profile.get(
             "browser_download_fallback",
@@ -614,7 +625,8 @@ def _build_pdf_text_profile(profile: dict[str, Any]) -> PdfTextProfile:
         if isinstance(item, dict) and str(item.get("pattern", "")).strip()
     )
     return PdfTextProfile(
-        url=profile["url"],
+        url=primary_url,
+        urls=urls or (primary_url,),
         entry_patterns=entry_patterns,
         timeout_seconds=int(profile.get("timeout_seconds", 60)),
         retry_attempts=int(profile.get("retry_attempts", 0)),
