@@ -718,6 +718,7 @@ export function VersionComparisonPage() {
   const segmentPickerRef = useRef<HTMLDivElement | null>(null);
   const countryPickerRef = useRef<HTMLDivElement | null>(null);
   const skipResolvedModelFetchRef = useRef<string | null>(null);
+  const modelScopeKeyRef = useRef<string | null>(null);
 
   const [selectedCountry, setSelectedCountry] = useState<string | null>(() => searchParams.get("country") || defaultCountry);
   const [selectedPeriod, setSelectedPeriod] = useState<string | null>(() => searchParams.get("period"));
@@ -797,6 +798,39 @@ export function VersionComparisonPage() {
   });
 
   const countryOptions = deck?.metadata.availableCountries ?? [];
+  const modelScopeKey = useMemo(() => JSON.stringify({
+    bodyType: comparisonMode === "free_comparison" ? (bodyType ?? "") : "",
+    comparisonMode,
+    country: selectedCountry || "",
+    driveTypes: comparisonMode === "free_comparison" ? driveTypes.slice().sort() : [],
+    fuelTypes: selectedFuelTypes.slice().sort(),
+    lengthMax: comparisonMode === "free_comparison" ? lengthMax : null,
+    lengthMin: comparisonMode === "free_comparison" ? lengthMin : null,
+    msrpMax: priceControlsTouched ? msrpMax : null,
+    msrpMin: priceControlsTouched ? msrpMin : null,
+    period: selectedPeriod || "",
+    salesMode,
+    segment: comparisonMode === "same_segment" ? (selectedSegment || "") : "",
+    segments: comparisonMode === "free_comparison" ? selectedSegments.slice().sort() : [],
+    timeEnd: selectedTimeRange?.end ?? "",
+    timeStart: selectedTimeRange?.start ?? "",
+  }), [
+    bodyType,
+    comparisonMode,
+    driveTypes,
+    lengthMax,
+    lengthMin,
+    msrpMax,
+    msrpMin,
+    priceControlsTouched,
+    salesMode,
+    selectedCountry,
+    selectedFuelTypes,
+    selectedPeriod,
+    selectedSegment,
+    selectedSegments,
+    selectedTimeRange,
+  ]);
 
   const syncUrlParams = useCallback(() => {
     const params = new URLSearchParams();
@@ -843,9 +877,24 @@ export function VersionComparisonPage() {
 
   useEffect(() => {
     const selectedModelKey = selectedModels.join("||");
-    if (skipResolvedModelFetchRef.current === selectedModelKey) {
+    const previousModelScopeKey = modelScopeKeyRef.current;
+    const modelScopeChanged = previousModelScopeKey !== null && previousModelScopeKey !== modelScopeKey;
+    modelScopeKeyRef.current = modelScopeKey;
+    if (!modelScopeChanged && skipResolvedModelFetchRef.current === selectedModelKey) {
       skipResolvedModelFetchRef.current = null;
       return;
+    }
+    if (modelScopeChanged) {
+      skipResolvedModelFetchRef.current = null;
+    }
+    const requestModels = modelScopeChanged ? [] : selectedModels;
+    if (modelScopeChanged && selectedModels.length > 0) {
+      skipResolvedModelFetchRef.current = "";
+      setSelectedModels([]);
+      setModelSearchQuery("");
+      setModelPickerOpen(false);
+      setModelToAdd("");
+      setSelectedBubbles(new Set());
     }
     const requestId = ++requestRef.current;
     setLoading(true);
@@ -858,7 +907,7 @@ export function VersionComparisonPage() {
       sales_mode: salesMode,
       comparison_mode: comparisonMode,
       segment: selectedSegment || undefined,
-      models: selectedModels,
+      models: requestModels,
       msrp_min: priceControlsTouched ? (msrpMin ?? undefined) : undefined,
       msrp_max: priceControlsTouched ? (msrpMax ?? undefined) : undefined,
       price_band_size: priceControlsTouched ? (priceBandSize ?? undefined) : undefined,
@@ -885,7 +934,7 @@ export function VersionComparisonPage() {
           setLoading(false);
         }
       });
-  }, [msrpMax, msrpMin, priceBandSize, priceControlsTouched, reloadToken, salesMode, comparisonMode, selectedCountry, selectedFuelTypes, selectedModels, selectedPeriod, selectedSegment, selectedTimeRange, bodyType, driveTypes, selectedSegments, lengthMin, lengthMax]);
+  }, [msrpMax, msrpMin, modelScopeKey, priceBandSize, priceControlsTouched, reloadToken, salesMode, comparisonMode, selectedCountry, selectedFuelTypes, selectedModels, selectedPeriod, selectedSegment, selectedTimeRange, bodyType, driveTypes, selectedSegments, lengthMin, lengthMax]);
 
   useEffect(() => {
     if (!deck) {
@@ -926,13 +975,6 @@ export function VersionComparisonPage() {
       setSelectedModels(deck.metadata.selectedModels);
     }
   }, [deck, selectedTimeRange]);
-
-  // In free_comparison, clear selected models when segments change so backend
-  // re-resolves the top 3 from the new segment selection
-  useEffect(() => {
-    if (comparisonMode !== "free_comparison") return;
-    setSelectedModels([]);
-  }, [selectedSegments, comparisonMode]);
 
   // Auto-detect free_comparison mode when models span multiple segments
   useEffect(() => {
