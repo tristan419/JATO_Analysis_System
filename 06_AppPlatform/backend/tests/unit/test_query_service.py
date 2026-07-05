@@ -795,6 +795,16 @@ def test_warm_grouped_time_series_cache_includes_configured_filter_sets(
             {"Powertrain": ["BEV", "ICE"], "Country": ["DK"]},
         ],
     )
+    monkeypatch.setattr(
+        query_service,
+        "GROUPED_TIME_SERIES_PREWARM_TOP_N",
+        12,
+    )
+    monkeypatch.setattr(
+        query_service,
+        "GROUPED_TIME_SERIES_PREWARM_INCLUDE_OTHERS",
+        True,
+    )
 
     def fake_query_grouped_time_series(**kwargs) -> dict:
         calls.append(kwargs)
@@ -814,16 +824,16 @@ def test_warm_grouped_time_series_cache_includes_configured_filter_sets(
             "filters": {},
             "grain": "month",
             "group_by": "Brand",
-            "top_n": 10,
-            "include_others": False,
+            "top_n": 12,
+            "include_others": True,
             "cache_scope": "viewer",
         },
         {
             "filters": {"Country": ["DK"], "Powertrain": ["BEV", "ICE"]},
             "grain": "month",
             "group_by": "Brand",
-            "top_n": 10,
-            "include_others": False,
+            "top_n": 12,
+            "include_others": True,
             "cache_scope": "viewer",
         },
     ]
@@ -831,6 +841,8 @@ def test_warm_grouped_time_series_cache_includes_configured_filter_sets(
 
 def test_grouped_time_series_prewarm_defaults_cover_dashboard_scope() -> None:
     assert query_service.GROUPED_TIME_SERIES_CACHE_TTL_SECONDS >= 1800
+    assert query_service.GROUPED_TIME_SERIES_PREWARM_TOP_N >= 10
+    assert query_service.GROUPED_TIME_SERIES_PREWARM_INCLUDE_OTHERS is False
     assert "order_filler" in query_service.GROUPED_TIME_SERIES_PREWARM_SCOPES
     assert {"month", "year"}.issubset(set(query_service.GROUPED_TIME_SERIES_PREWARM_GRAINS))
     assert any(
