@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import indexHtml from "../../../index.html?raw";
+import mainEntry from "../../main.tsx?raw";
 
 describe("route bootstrap script", () => {
   it("applies cached route decisions before React loads", () => {
@@ -29,5 +30,15 @@ describe("route bootstrap script", () => {
     expect(indexHtml).toContain("var didRedirect = redirectTo(nextTarget, autoPayload);");
     expect(indexHtml).toContain("if (!didRedirect) {");
     expect(indexHtml).toContain("clearProbeInFlight();");
+  });
+
+  it("keeps React out of the static entry imports until route selection settles", () => {
+    expect(mainEntry).toContain("await waitForInitialRouteProbe();");
+    expect(mainEntry).toContain('import("react")');
+    expect(mainEntry).toContain('import("react-dom/client")');
+    expect(mainEntry).toContain("React.createElement(");
+    expect(mainEntry).not.toMatch(/import\s+[^;]+from\s+["']react["']/);
+    expect(mainEntry).not.toContain("<React.StrictMode>");
+    expect(mainEntry).not.toContain("<App />");
   });
 });
