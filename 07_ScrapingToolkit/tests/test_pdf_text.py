@@ -1,4 +1,6 @@
 import subprocess
+import sys
+import types
 
 import requests
 
@@ -136,6 +138,56 @@ def test_pdf_text_profile_can_ignore_environment_proxy() -> None:
     assert profile.ignore_environment_proxy is True
 
 
+def test_pdf_text_profile_accepts_headers() -> None:
+    profile = _build_pdf_text_profile(
+        {
+            "url": "https://example.invalid/jeep-avenger.pdf",
+            "headers": {
+                "User-Agent": "Mozilla/5.0",
+                "Accept-Language": "sl-SI,sl;q=0.9,en;q=0.8",
+            },
+            "entry_patterns": [],
+        }
+    )
+
+    assert profile.headers == {
+        "User-Agent": "Mozilla/5.0",
+        "Accept-Language": "sl-SI,sl;q=0.9,en;q=0.8",
+    }
+
+
+def test_pdf_text_applies_profile_headers_to_requests_and_curl() -> None:
+    extractor = PdfTextExtractor(
+        ExtractorConfig(
+            source_code="jeep_avenger_si_draft_scrapling",
+            country="斯洛文尼亚",
+            brand="JEEP",
+            source_url="https://example.invalid/jeep-avenger.pdf",
+            source_type="official_price_list",
+            price_semantics="base_msrp",
+        ),
+        PdfTextProfile(
+            url="https://example.invalid/jeep-avenger.pdf",
+            headers={
+                "User-Agent": "Mozilla/5.0",
+                "Accept-Language": "sl-SI,sl;q=0.9,en;q=0.8",
+            },
+        ),
+    )
+
+    assert extractor._session.headers["User-Agent"] == "Mozilla/5.0"
+    assert (
+        extractor._session.headers["Accept-Language"]
+        == "sl-SI,sl;q=0.9,en;q=0.8"
+    )
+    assert extractor._curl_header_args() == [
+        "-H",
+        "User-Agent: Mozilla/5.0",
+        "-H",
+        "Accept-Language: sl-SI,sl;q=0.9,en;q=0.8",
+    ]
+
+
 def test_pdf_text_profile_accepts_direct_download_fallback() -> None:
     profile = _build_pdf_text_profile(
         {
@@ -244,6 +296,91 @@ def test_pdf_text_uses_browser_fallback_after_requests_failure(monkeypatch):
 
     assert extractor._fetch_pdf_bytes() == b"%PDF-1.7\n"
     assert browser_timeouts == [3]
+
+
+def test_pdf_text_browser_fallback_reads_inline_pdf_response(monkeypatch):
+    class FakePlaywrightTimeoutError(Exception):
+        pass
+
+    class FakeDownloadContext:
+        value = None
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, _exc_type, _exc, _tb):
+            raise FakePlaywrightTimeoutError("download did not start")
+
+    class FakeResponse:
+        headers = {"content-type": "application/pdf"}
+
+        def body(self):
+            return b"%PDF-1.7\ninline"
+
+    class FakePage:
+        goto_calls = 0
+
+        def expect_download(self, *, timeout):
+            assert timeout == 5_000
+            return FakeDownloadContext()
+
+        def goto(self, url, *, wait_until, timeout):
+            self.goto_calls += 1
+            assert url == "https://example.invalid/inline.pdf"
+            assert wait_until == "commit"
+            assert timeout == 5_000
+            if self.goto_calls == 1:
+                return None
+            return FakeResponse()
+
+    class FakeContext:
+        def new_page(self):
+            return FakePage()
+
+    class FakeBrowser:
+        def new_context(self, **kwargs):
+            assert kwargs["accept_downloads"] is True
+            return FakeContext()
+
+        def close(self):
+            pass
+
+    class FakeChromium:
+        def launch(self, *, headless):
+            assert headless is True
+            return FakeBrowser()
+
+    class FakePlaywright:
+        chromium = FakeChromium()
+
+    class FakeSyncPlaywright:
+        def __enter__(self):
+            return FakePlaywright()
+
+        def __exit__(self, _exc_type, _exc, _tb):
+            pass
+
+    playwright_package = types.ModuleType("playwright")
+    playwright_sync_api = types.ModuleType("playwright.sync_api")
+    playwright_sync_api.Error = Exception
+    playwright_sync_api.TimeoutError = FakePlaywrightTimeoutError
+    playwright_sync_api.sync_playwright = lambda: FakeSyncPlaywright()
+    monkeypatch.setitem(sys.modules, "playwright", playwright_package)
+    monkeypatch.setitem(sys.modules, "playwright.sync_api", playwright_sync_api)
+
+    extractor = PdfTextExtractor(
+        ExtractorConfig(
+            source_code="jeep_avenger_si_draft_scrapling",
+            country="斯洛文尼亚",
+            brand="JEEP",
+            source_url="https://example.invalid/inline.pdf",
+            source_type="official_price_list",
+            price_semantics="base_msrp",
+        ),
+        PdfTextProfile(url="https://example.invalid/inline.pdf", timeout_seconds=5),
+    )
+
+    assert extractor._fetch_pdf_bytes_with_browser(5) == b"%PDF-1.7\ninline"
 
 
 def test_pdf_text_prefers_curl_download_before_requests(monkeypatch):

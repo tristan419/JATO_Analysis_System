@@ -629,6 +629,7 @@ def _build_pdf_text_profile(profile: dict[str, Any]) -> PdfTextProfile:
         urls=urls or (primary_url,),
         entry_patterns=entry_patterns,
         timeout_seconds=int(profile.get("timeout_seconds", 60)),
+        headers=profile.get("headers", {}),
         retry_attempts=int(profile.get("retry_attempts", 0)),
         retry_delay_seconds=float(profile.get("retry_delay_seconds", 0.0) or 0.0),
         prefer_curl_download=prefer_curl_download,

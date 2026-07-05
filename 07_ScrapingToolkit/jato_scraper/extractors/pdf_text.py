@@ -42,6 +42,7 @@ class PdfTextProfile:
     urls: tuple[str, ...] = ()
     entry_patterns: tuple[PdfTextEntryPattern, ...] = field(default_factory=tuple)
     timeout_seconds: int = DEFAULT_TIMEOUT
+    headers: dict[str, str] = field(default_factory=dict)
     retry_attempts: int = 0
     retry_delay_seconds: float = 0.0
     prefer_curl_download: bool = False
@@ -96,6 +97,7 @@ class PdfTextExtractor(BaseExtractor):
             {
                 "User-Agent": "JATO-MSRP-Scraper/0.1",
                 "Accept": "application/pdf,application/octet-stream;q=0.9,*/*;q=0.8",
+                **profile.headers,
             }
         )
 
@@ -250,18 +252,43 @@ class PdfTextExtractor(BaseExtractor):
                             ),
                         )
                         page = context.new_page()
-                        with page.expect_download(timeout=timeout_ms) as download_info:
-                            try:
-                                page.goto(
-                                    source_url,
-                                    wait_until="commit",
-                                    timeout=timeout_ms,
-                                )
-                            except PlaywrightError as exc:
-                                if "Download is starting" not in str(exc):
-                                    raise
-                        download = download_info.value
-                        download.save_as(tmp.name)
+                        response = None
+                        try:
+                            with page.expect_download(timeout=timeout_ms) as download_info:
+                                try:
+                                    response = page.goto(
+                                        source_url,
+                                        wait_until="commit",
+                                        timeout=timeout_ms,
+                                    )
+                                except PlaywrightError as exc:
+                                    if "Download is starting" not in str(exc):
+                                        raise
+                            download = download_info.value
+                            download.save_as(tmp.name)
+                        except PlaywrightTimeoutError as exc:
+                            if response is None:
+                                try:
+                                    response = page.goto(
+                                        source_url,
+                                        wait_until="commit",
+                                        timeout=timeout_ms,
+                                    )
+                                except PlaywrightError:
+                                    raise exc
+                            headers = {
+                                str(key).lower(): str(value)
+                                for key, value in response.headers.items()
+                            }
+                            content_type = headers.get("content-type", "").lower()
+                            body = response.body()
+                            if (
+                                not body.startswith(b"%PDF")
+                                and "application/pdf" not in content_type
+                            ):
+                                raise
+                            tmp.write(body)
+                            tmp.flush()
                     finally:
                         browser.close()
                 tmp.seek(0)
@@ -338,6 +365,7 @@ class PdfTextExtractor(BaseExtractor):
                         str(timeout),
                         "-o",
                         tmp.name,
+                        *self._curl_header_args(),
                         source_url,
                     ],
                     check=False,
@@ -371,6 +399,16 @@ class PdfTextExtractor(BaseExtractor):
             )
             return None
         return blob
+
+    def _curl_header_args(self) -> list[str]:
+        args: list[str] = []
+        for key, value in self.profile.headers.items():
+            header_name = str(key).strip()
+            header_value = str(value).strip()
+            if not header_name or not header_value:
+                continue
+            args.extend(["-H", f"{header_name}: {header_value}"])
+        return args
 
     def _remember_fetch_error(self, error: str) -> None:
         self._last_fetch_error = error[:1000]

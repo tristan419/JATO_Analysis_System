@@ -1,124 +1,100 @@
 source_code: jeep_avenger_si_draft_scrapling
 country: 斯洛文尼亚
 brand: JEEP
-source_url: https://todo.invalid/si/jeep/avenger
-source_type: manufacturer_official
+source_url: https://www.jeep.com/content/dam/cross-regional/stellantis/jeep/emea/slovenia/sl_si/fad/ceniki/noviCeniki/Jeep%20Avenger%20MY25%20-%20cenik%20%28februar%202025%29.pdf
+source_type: official_price_list
 price_semantics: base_msrp
-extractor_type: scrapling
+extractor_type: pdf_text
 profile:
-  url: https://todo.invalid/si/jeep/avenger
-  tier: stealth
-  headless: true
-  network_idle: true
-  impersonate: chrome
-  css:
-    vehicle_container: body
-    model: h1, h2
-    trim: h3
-    price: '[class*="price"]'
+  url: https://www.jeep.com/content/dam/cross-regional/stellantis/jeep/emea/slovenia/sl_si/fad/ceniki/noviCeniki/Jeep%20Avenger%20MY25%20-%20cenik%20%28februar%202025%29.pdf
+  timeout_seconds: 20
+  headers:
+    User-Agent: Mozilla/5.0
+    Accept-Language: sl-SI,sl;q=0.9,en;q=0.8
+  retry_attempts: 0
+  retry_delay_seconds: 0
+  browser_download_fallback: true
   default_currency: EUR
   default_tax_included: true
-  default_price_label: MSRP
+  default_price_label: MPC z DDV
   fixed_model: AVENGER
   fixed_jato_model: AVENGER
-  fixed_jato_powertrain: null
-  model_rules: []
-  skip_if_model_unmapped: false
   copy_trim_to_jato_trim: true
-  confidence_rules:
-    base: 0.2
-    fixed_model_bonus: 0.18
-    fixed_jato_model_bonus: 0.12
-    model_rule_bonus: 0.12
-    trim_present_bonus: 0.1
-    copy_trim_to_jato_trim_bonus: 0.09
-    parsed_price_text_bonus: 0.03
-    currency_bonus: 0.01
-    price_label_bonus: 0.02
-    trim_keyword_bonuses: []
-    price_band_bonuses:
-    - key: price_band_entry
-      label: Entry price band matched
-      max: 0
-      delta: 0.0
-    - key: price_band_mid
-      label: Mid price band matched
-      min: 0
-      max: 0
-      delta: 0.01
-    - key: price_band_high
-      label: High price band matched
-      min: 0
-      delta: 0.03
-    powertrain_keyword_bonuses: []
-    powertrain_bonuses:
-    - key: powertrain_bev
-      label: 'Powertrain matched: BEV'
-      powertrain: BEV
-      delta: 0.03
-    - key: powertrain_mhev
-      label: 'Powertrain matched: MHEV'
-      powertrain: MHEV
-      delta: 0.03
-    - key: powertrain_ice
-      label: 'Powertrain matched: ICE'
-      powertrain: ICE
-      delta: 0.03
-    clamp_min: 0.0
-    clamp_max: 1.0
-  structured_fields:
-    edition_rules:
-    - key: edition_special
-      label: Special Edition
-      keyword: special edition
-      special: true
-    powertrain_rules:
-    - key: powertrain_bev
-      powertrain: BEV
-      keywords:
-      - bev
-      - ev
-      - electric
-      - battery electric
-      - fully electric
-      - electric vehicle
-      - elektricni
-      - elektricno
-      - elektricno vozilo
-    - key: powertrain_mhev
-      powertrain: MHEV
-      keywords:
-      - mhev
-      - mild hybrid
-      - mild-hybrid
-      - 48V
-      - blagi hibrid
-    - key: powertrain_ice
-      powertrain: ICE
-      keywords:
-      - ice
-      - petrol
-      - gasoline
-      - diesel
-      - combustion
-      - bencin
-      - dizel
-  auto_accept_gates:
-    review_threshold: 0.95
-    semi_auto_threshold: 0.98
-    require_powertrain_match: true
-    force_review_if_powertrain_missing: true
-    force_review_if_powertrain_ambiguous: true
-    force_review_for_special_edition: true
+  match_confidence: 0.84
+  match_status: review_required
+  match_reason:
+    kind: official_pdf_price_list
+    source: jeep_si_avenger_my25_cenik
+    document_date: '2025-02-26'
+    note: Official Jeep Slovenia Avenger MY25 price-list PDF; patterns capture the CENA z DDV/MPC column and exclude discounts, financing discounts, and Borzen EV subsidies.
+  entry_patterns:
+  - pattern: 'LONGITUDE619\.M25\.21\.2\s+GSE\s+10073,5\s+\(100\)(?:\d{2}\.\d{3})(?P<price>\d{2}\.\d{3})'
+    official_trim: LONGITUDE
+    official_powertrain: ICE 1.2 GSE 100 6MT FWD
+    jato_powertrain: ICE
+    price_label: MPC z DDV
+  - pattern: 'ALTITUDE619\.P25\.21\.2\s+GSE\s+10073,5\s+\(100\)(?:\d{2}\.\d{3})(?P<price>\d{2}\.\d{3})'
+    official_trim: ALTITUDE
+    official_powertrain: ICE 1.2 GSE 100 6MT FWD
+    jato_powertrain: ICE
+    price_label: MPC z DDV
+  - pattern: 'SUMMIT\s+619\.P25\.21\.2\s+GSE\s+10073,5\s+\(100\)(?:\d{2}\.\d{3})(?P<price>\d{2}\.\d{3})'
+    official_trim: SUMMIT
+    official_powertrain: ICE 1.2 GSE 100 6MT FWD
+    jato_powertrain: ICE
+    price_label: MPC z DDV
+  - pattern: 'LONGITUDE619\.M2K\.21\.2\s+E-DCT6\s+MHEV\s+10073,5\s+\(100\)(?:\d{2}\.\d{3})(?P<price>\d{2}\.\d{3})'
+    official_trim: LONGITUDE
+    official_powertrain: MHEV 1.2 E-DCT6 100 FWD
+    jato_powertrain: MHEV
+    price_label: MPC z DDV
+  - pattern: 'ALTITUDE619\.P2K\.21\.2\s+E-DCT6\s+MHEV\s+10073,5\s+\(100\)(?:\d{2}\.\d{3})(?P<price>\d{2}\.\d{3})'
+    official_trim: ALTITUDE
+    official_powertrain: MHEV 1.2 E-DCT6 100 FWD
+    jato_powertrain: MHEV
+    price_label: MPC z DDV
+  - pattern: 'SUMMIT\s+619\.P2K\.21\.2\s+E-DCT6\s+MHEV\s+10073,5\s+\(100\)(?:\d{2}\.\d{3})(?P<price>\d{2}\.\d{3})'
+    official_trim: SUMMIT
+    official_powertrain: MHEV 1.2 E-DCT6 100 FWD
+    jato_powertrain: MHEV
+    price_label: MPC z DDV
+  - pattern: 'UPLAND619\.S4L\.21\.2\s+E-DCT6\s+MHEV\s+136100\s+\(136\)(?:\d{2}\.\d{3})(?P<price>\d{2}\.\d{3})'
+    official_trim: UPLAND
+    official_powertrain: MHEV 1.2 E-DCT6 136 AWD
+    official_edition: UPLAND
+    jato_powertrain: MHEV
+    price_label: MPC z DDV
+  - pattern: 'THE\s+NORTH\s+FACE619\.U4L\.21\.2\s+E-DCT6\s+MHEV\s+136100\s+\(136\)(?:\d{2}\.\d{3})(?P<price>\d{2}\.\d{3})'
+    official_trim: THE NORTH FACE
+    official_powertrain: MHEV 1.2 E-DCT6 136 AWD
+    official_edition: THE NORTH FACE
+    jato_powertrain: MHEV
+    price_label: MPC z DDV
+  - pattern: 'LONGITUDE420\.M2E\.2samodejnielektro\s+motor\s+\(54\s+kWh\)115\s+\(156\)(?:\d{2}\.\d{3})(?P<price>\d{2}\.\d{3})'
+    official_trim: LONGITUDE
+    official_powertrain: BEV 54 kWh 115 kW FWD
+    jato_powertrain: BEV
+    price_label: MPC z DDV
+  - pattern: 'ALTITUDE420\.P2E\.2samodejnielektro\s+motor\s+\(54\s+kWh\)115\s+\(156\)(?:\d{2}\.\d{3})(?P<price>\d{2}\.\d{3})'
+    official_trim: ALTITUDE
+    official_powertrain: BEV 54 kWh 115 kW FWD
+    jato_powertrain: BEV
+    price_label: MPC z DDV
+  - pattern: 'SUMMIT\s+420\.P2E\.2samodejnielektro\s+motor\s+\(54\s+kWh\)115\s+\(156\)(?:\d{2}\.\d{3})(?P<price>\d{2}\.\d{3})'
+    official_trim: SUMMIT
+    official_powertrain: BEV 54 kWh 115 kW FWD
+    jato_powertrain: BEV
+    price_label: MPC z DDV
 schedule:
   frequency: manual_only
   run_window_start: 00:00
   run_window_end: 05:00
   preferred_weekday: monday
-notes: Draft scaffold generated from country×model top30 backlog. Replace source_url,
-  profile.url, selectors, currency, price label, and the single-model placeholders
-  before promoting to 07_ScrapingToolkit/sources. [CSS selectors applied from brand
-  probe]
+notes: Official Jeep Slovenia Avenger MY25 price-list PDF. Replaced
+  todo.invalid with the Jeep official PDF and enabled browser_download_fallback
+  because the default scraper user agent receives 403 while browser-like fetches
+  succeed. Patterns capture the CENA z DDV/MPC column only; discounts, financing
+  discounts, and Borzen EV subsidies are excluded from base MSRP.
 bootstrap_meta:
   country_model_rank: 22
   suggested_scope_kind: single_model
