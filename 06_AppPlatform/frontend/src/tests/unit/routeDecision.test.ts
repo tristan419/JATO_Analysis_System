@@ -9,6 +9,7 @@ import {
   consumeRouteDecisionTransfer,
   createAutoRouteDecision,
   createClientRouteProfile,
+  createCurrentChinaRouteDecision,
   createManualRouteDecision,
   isRouteProbeInFlight,
   makeInitialProbe,
@@ -165,6 +166,26 @@ describe("route decision helpers", () => {
       cn: failedProbe("cn", 1_800),
       intl: okProbe("intl", 300),
     }, "cn", chinaProfile)?.target).toBe("intl");
+  });
+
+  it("creates a local www decision before runtime probes for China-local browsers", () => {
+    const chinaProfile = createClientRouteProfile({
+      timeZone: "Asia/Shanghai",
+      languages: ["zh-CN"],
+    });
+    const overseasProfile = createClientRouteProfile({
+      timeZone: "Europe/Amsterdam",
+      languages: ["en-US"],
+    });
+
+    const decision = createCurrentChinaRouteDecision("cn", chinaProfile, 1_000);
+
+    expect(decision?.target).toBe("cn");
+    expect(decision?.cnOk).toBe(true);
+    expect(decision?.intlOk).toBeUndefined();
+    expect(decision?.reason).toContain("skip runtime intl probe");
+    expect(createCurrentChinaRouteDecision("intl", chinaProfile, 1_000)).toBeNull();
+    expect(createCurrentChinaRouteDecision("cn", overseasProfile, 1_000)).toBeNull();
   });
 
   it("builds cross-origin redirect URLs without dropping existing filters", () => {

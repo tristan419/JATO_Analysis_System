@@ -29,7 +29,9 @@ from app.core.config import (
     GROUPED_TIME_SERIES_PREWARM_FILTERS,
     GROUPED_TIME_SERIES_PREWARM_GRAINS,
     GROUPED_TIME_SERIES_PREWARM_GROUP_BY,
+    GROUPED_TIME_SERIES_PREWARM_INCLUDE_OTHERS,
     GROUPED_TIME_SERIES_PREWARM_SCOPES,
+    GROUPED_TIME_SERIES_PREWARM_TOP_N,
 )
 from app.infra import parquet_repository as repo
 from app.infra.redis_client import get_redis_client
@@ -1789,8 +1791,8 @@ def warm_grouped_time_series_cache() -> dict[str, int]:
                             filters=filters,
                             grain=grain,
                             group_by=group_by,
-                            top_n=10,
-                            include_others=False,
+                            top_n=GROUPED_TIME_SERIES_PREWARM_TOP_N,
+                            include_others=GROUPED_TIME_SERIES_PREWARM_INCLUDE_OTHERS,
                             cache_scope=scope,
                         )
                         warmed += 1

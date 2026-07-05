@@ -9,7 +9,8 @@ const CountryChatWidgetHost = lazy(() =>
   import("./CountryChatWidgetHost").then((module) => ({ default: module.CountryChatWidgetHost }))
 );
 
-const AUXILIARY_WIDGET_DELAY_MS = 10_000;
+export const AUXILIARY_WIDGET_DELAY_MS = 30_000;
+export const AUXILIARY_WIDGET_IDLE_TIMEOUT_MS = 8_000;
 
 type IdleWindow = Window & typeof globalThis & {
   requestIdleCallback?: (callback: () => void, options?: { timeout?: number }) => number;
@@ -21,7 +22,9 @@ function scheduleAuxiliaryWidgets(callback: () => void): () => void {
   let idleHandle: number | null = null;
   const timeoutHandle = window.setTimeout(() => {
     if (typeof idleWindow.requestIdleCallback === "function") {
-      idleHandle = idleWindow.requestIdleCallback(callback, { timeout: 2_000 });
+      idleHandle = idleWindow.requestIdleCallback(callback, {
+        timeout: AUXILIARY_WIDGET_IDLE_TIMEOUT_MS,
+      });
       return;
     }
     callback();
