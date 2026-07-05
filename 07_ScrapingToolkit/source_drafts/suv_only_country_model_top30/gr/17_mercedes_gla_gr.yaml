@@ -1,119 +1,92 @@
 source_code: mercedes_gla_gr_draft_scrapling
 country: 希腊
 brand: MERCEDES
-source_url: https://todo.invalid/gr/mercedes/gla
-source_type: manufacturer_official
+source_url: https://www.mercedes-benz.gr/our-brands/pricelist/
+source_type: official_price_list
 price_semantics: base_msrp
-extractor_type: scrapling
+extractor_type: pdf_text
 profile:
-  url: https://todo.invalid/gr/mercedes/gla
-  tier: stealth
-  headless: true
-  network_idle: true
-  impersonate: chrome
-  css:
-    vehicle_container: body
-    model: h1
-    trim: h2, h3
-    price: '[class*="price"]'
+  url: https://nd-mediagallery2-public-production.s3.amazonaws.com/a16219cfa8ad2e7beff6ac15800ce208/mbc_15_04_2026_pricelist_mb.pdf
+  timeout_seconds: 60
+  retry_attempts: 1
+  retry_delay_seconds: 1
+  headers:
+    User-Agent: Mozilla/5.0
+    Accept: application/pdf,application/octet-stream;q=0.9,*/*;q=0.8
+    Accept-Language: el-GR,el;q=0.9,en;q=0.8
   default_currency: EUR
   default_tax_included: true
-  default_price_label: MSRP
+  default_price_label: Ανώτατη Προτεινόμενη Λιανική Τιμή (ΑΠΛΤ)
   fixed_model: GLA
   fixed_jato_model: GLA
-  fixed_jato_powertrain: null
-  model_rules: []
-  skip_if_model_unmapped: false
   copy_trim_to_jato_trim: true
-  confidence_rules:
-    base: 0.2
-    fixed_model_bonus: 0.18
-    fixed_jato_model_bonus: 0.12
-    model_rule_bonus: 0.12
-    trim_present_bonus: 0.1
-    copy_trim_to_jato_trim_bonus: 0.09
-    parsed_price_text_bonus: 0.03
-    currency_bonus: 0.01
-    price_label_bonus: 0.02
-    trim_keyword_bonuses: []
-    price_band_bonuses:
-    - key: price_band_entry
-      label: Entry price band matched
-      max: 0
-      delta: 0.0
-    - key: price_band_mid
-      label: Mid price band matched
-      min: 0
-      max: 0
-      delta: 0.01
-    - key: price_band_high
-      label: High price band matched
-      min: 0
-      delta: 0.03
-    powertrain_keyword_bonuses: []
-    powertrain_bonuses:
-    - key: powertrain_phev
-      label: 'Powertrain matched: PHEV'
-      powertrain: PHEV
-      delta: 0.03
-    - key: powertrain_mhev
-      label: 'Powertrain matched: MHEV'
-      powertrain: MHEV
-      delta: 0.03
-    - key: powertrain_ice
-      label: 'Powertrain matched: ICE'
-      powertrain: ICE
-      delta: 0.03
-    clamp_min: 0.0
-    clamp_max: 1.0
-  structured_fields:
-    edition_rules:
-    - key: edition_special
-      label: Special Edition
-      keyword: special edition
-      special: true
-    powertrain_rules:
-    - key: powertrain_phev
-      powertrain: PHEV
-      keywords:
-      - phev
-      - plug-in hybrid
-      - plug in hybrid
-      - plugin hybrid
-      - epanafortizomeno yvridiko
-    - key: powertrain_mhev
-      powertrain: MHEV
-      keywords:
-      - mhev
-      - mild hybrid
-      - mild-hybrid
-      - 48V
-    - key: powertrain_ice
-      powertrain: ICE
-      keywords:
-      - ice
-      - petrol
-      - gasoline
-      - diesel
-      - combustion
-      - venzini
-      - petreleo
-  auto_accept_gates:
-    review_threshold: 0.95
-    semi_auto_threshold: 0.98
-    require_powertrain_match: true
-    force_review_if_powertrain_missing: true
-    force_review_if_powertrain_ambiguous: true
-    force_review_for_special_edition: true
+  match_confidence: 0.88
+  match_status: review_required
+  match_reason:
+    kind: official_pdf_price_list
+    source: mercedes_benz_gr_passenger_car_pricelist
+    document_date: '2026-04-15'
+    note: Official Mercedes-Benz Greece pricelist page links the Star Automotive Hellas passenger-car MSRP PDF. Patterns target the GLA Facelift H247 section and the final tax-included APLT column, excluding leasing and campaign pages.
+  entry_patterns:
+  - pattern: 'GLA\s+180\s+Style\s+136\s+\+\s+14\s+100\s+\+\s+10\s+1\.332\s+151\s+247\.784\s+32\.489\s+7\.797\s+5\.163\s+(?P<price>45\.450)'
+    official_trim: GLA 180 Style
+    official_powertrain: 136 + 14 hp mild hybrid petrol
+    jato_powertrain: MHEV
+    price_label: Ανώτατη Προτεινόμενη Λιανική Τιμή (ΑΠΛΤ)
+  - pattern: 'GLA\s+200\s+163\s+\+\s+14\s+120\s+\+\s+10\s+1\.332\s+152\s+247\.787\s+34\.683\s+8\.324\s+5\.493\s+(?P<price>48\.500)'
+    official_trim: GLA 200
+    official_powertrain: 163 + 14 hp mild hybrid petrol
+    jato_powertrain: MHEV
+    price_label: Ανώτατη Προτεινόμενη Λιανική Τιμή (ΑΠΛΤ)
+  - pattern: 'GLA\s+220\s+4MATIC\s+190\s+\+\s+14\s+140\s+\+\s+10\s+1\.991\s+168\s+247\.745\s+38\.777\s+9\.306\s+6\.717\s+(?P<price>54\.800)'
+    official_trim: GLA 220 4MATIC
+    official_powertrain: 190 + 14 hp mild hybrid petrol
+    jato_powertrain: MHEV
+    price_label: Ανώτατη Προτεινόμενη Λιανική Τιμή (ΑΠΛΤ)
+  - pattern: 'GLA\s+250\s+4MATIC\s+224\s+\+\s+14\s+165\s+\+\s+10\s+1\.991\s+169\s+247\.747\s+41\.196\s+9\.887\s+7\.116\s+(?P<price>58\.200)'
+    official_trim: GLA 250 4MATIC
+    official_powertrain: 224 + 14 hp mild hybrid petrol
+    jato_powertrain: MHEV
+    price_label: Ανώτατη Προτεινόμενη Λιανική Τιμή (ΑΠΛΤ)
+  - pattern: 'GLA\s+250\s+e\s+with\s+EQ\s+hybrid\s+technology\s+163\s+\+\s+109\s+120\s+\+\s+80\s+1\.332\s+66\s+247\.785\s+39\.971\s+9\.593\s+5\.971\s+(?P<price>55\.536)'
+    official_trim: GLA 250 e
+    official_powertrain: EQ hybrid technology
+    jato_powertrain: PHEV
+    price_label: Ανώτατη Προτεινόμενη Λιανική Τιμή (ΑΠΛΤ)
+  - pattern: 'GLA\s+200\s+d\s+149\s+110\s+1\.950\s+142\s+247\.712\s+38\.325\s+9\.198\s+12\.077\s+(?P<price>59\.600)'
+    official_trim: GLA 200 d
+    official_powertrain: diesel
+    jato_powertrain: ICE
+    price_label: Ανώτατη Προτεινόμενη Λιανική Τιμή (ΑΠΛΤ)
+  - pattern: 'GLA\s+200\s+d\s+4MATIC\s+149\s+110\s+1\.950\s+148\s+247\.713\s+39\.851\s+9\.564\s+12\.535\s+(?P<price>61\.950)'
+    official_trim: GLA 200 d 4MATIC
+    official_powertrain: diesel 4MATIC
+    jato_powertrain: ICE
+    price_label: Ανώτατη Προτεινόμενη Λιανική Τιμή (ΑΠΛΤ)
+  - pattern: 'GLA\s+220\s+d\s+4MATIC\s+190\s+140\s+1\.950\s+149\s+247\.715\s+42\.156\s+10\.117\s+13\.227\s+(?P<price>65\.500)'
+    official_trim: GLA 220 d 4MATIC
+    official_powertrain: diesel 4MATIC
+    jato_powertrain: ICE
+    price_label: Ανώτατη Προτεινόμενη Λιανική Τιμή (ΑΠΛΤ)
+  - pattern: 'Mercedes-AMG\s+GLA\s+35\s+4MATIC\s+306\s+\+\s+14\s+225\s+\+\s+10\s+1\.991\s+200\s+247\.751\s+49\.896\s+11\.975\s+9\.329\s+(?P<price>71\.200)'
+    official_trim: Mercedes-AMG GLA 35 4MATIC
+    official_powertrain: 306 + 14 hp mild hybrid petrol
+    jato_powertrain: MHEV
+    price_label: Ανώτατη Προτεινόμενη Λιανική Τιμή (ΑΠΛΤ)
+  - pattern: 'Mercedes-AMG\s+GLA\s+45\s+S\s+4MATIC\+\s+421\s+310\s+1\.991\s+215\s+247\.754\s+59\.292\s+14\.230\s+23\.878\s+(?P<price>97\.400)'
+    official_trim: Mercedes-AMG GLA 45 S 4MATIC+
+    official_powertrain: petrol AMG
+    jato_powertrain: ICE
+    price_label: Ανώτατη Προτεινόμενη Λιανική Τιμή (ΑΠΛΤ)
 schedule:
   frequency: manual_only
   run_window_start: 00:00
   run_window_end: 05:00
   preferred_weekday: monday
-notes: Draft scaffold generated from country×model top30 backlog. Replace source_url,
-  profile.url, selectors, currency, price label, and the single-model placeholders
-  before promoting to 07_ScrapingToolkit/sources. [CSS selectors applied from brand
-  probe]
+notes: Replaced todo.invalid with Mercedes-Benz Greece's official pricelist page
+  and current Star Automotive Hellas passenger-car MSRP PDF. Regexes target only
+  the GLA Facelift H247 rows and the final tax-included APLT column, excluding
+  leasing, campaign, pre-tax, VAT, and registration-tax values.
 bootstrap_meta:
   country_model_rank: 17
   suggested_scope_kind: single_model
