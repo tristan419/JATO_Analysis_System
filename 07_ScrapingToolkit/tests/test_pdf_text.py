@@ -173,14 +173,59 @@ def test_pdf_text_uses_curl_fallback_after_requests_timeout(monkeypatch):
     monkeypatch.setattr(extractor._session, "get", fail_request)
     fallback_timeouts = []
 
+    def fail_browser(timeout):
+        fallback_timeouts.append(("browser", timeout))
+        return None
+
     def fetch_with_curl(timeout):
-        fallback_timeouts.append(timeout)
+        fallback_timeouts.append(("curl", timeout))
         return b"%PDF-1.7\n"
 
+    monkeypatch.setattr(extractor, "_fetch_pdf_bytes_with_browser", fail_browser)
     monkeypatch.setattr(extractor, "_fetch_pdf_bytes_with_curl", fetch_with_curl)
 
     assert extractor._fetch_pdf_bytes() == b"%PDF-1.7\n"
-    assert fallback_timeouts == [30]
+    assert fallback_timeouts == [("browser", 2), ("curl", 30)]
+
+
+def test_pdf_text_uses_browser_fallback_after_requests_failure(monkeypatch):
+    extractor = PdfTextExtractor(
+        ExtractorConfig(
+            source_code="peugeot_2008_si_draft_scrapling",
+            country="斯洛文尼亚",
+            brand="PEUGEOT",
+            source_url="https://www.peugeot.si/novi-2008",
+            source_type="official_price_list",
+            price_semantics="base_msrp",
+        ),
+        PdfTextProfile(
+            url=(
+                "https://www.peugeot.si/content/dam/peugeot/slovenia/"
+                "katalogi-in-ceniki/Cenik_in_cenik_opcij_2008.pdf"
+            ),
+            timeout_seconds=3,
+            browser_download_fallback=True,
+        ),
+    )
+
+    def fail_request(*_args, **_kwargs):
+        raise requests.HTTPError("403 Client Error")
+
+    browser_timeouts = []
+
+    def fetch_with_browser(timeout):
+        browser_timeouts.append(timeout)
+        return b"%PDF-1.7\n"
+
+    def fail_curl(*_args, **_kwargs):
+        raise AssertionError("curl should not run when browser download succeeds")
+
+    monkeypatch.setattr(extractor._session, "get", fail_request)
+    monkeypatch.setattr(extractor, "_fetch_pdf_bytes_with_browser", fetch_with_browser)
+    monkeypatch.setattr(extractor, "_fetch_pdf_bytes_with_curl", fail_curl)
+
+    assert extractor._fetch_pdf_bytes() == b"%PDF-1.7\n"
+    assert browser_timeouts == [3]
 
 
 def test_pdf_text_prefers_curl_download_before_requests(monkeypatch):
