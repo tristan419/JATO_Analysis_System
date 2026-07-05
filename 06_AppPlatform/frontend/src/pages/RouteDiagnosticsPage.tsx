@@ -20,7 +20,7 @@ import {
   type RouteTarget,
 } from "../utils/routeDecision";
 
-interface RouteResourceTiming {
+export interface RouteResourceTiming {
   label: string;
   kind: string;
   durationMs: number;
@@ -29,6 +29,26 @@ interface RouteResourceTiming {
   encodedBodySize: number | null;
   cached: boolean;
 }
+
+export interface RouteResourceSummary {
+  totalTransferBytes: number;
+  initialTransferBytes: number;
+  initialJsTransferBytes: number;
+  initialCssTransferBytes: number;
+  initialVendorCount: number;
+  resourceCount: number;
+}
+
+export const INITIAL_RESOURCE_WINDOW_MS = 8_000;
+const RESOURCE_TABLE_LIMIT = 10;
+const VENDOR_RESOURCE_KINDS = new Set([
+  "plotly",
+  "recharts",
+  "grid",
+  "diagram",
+  "vendor",
+  "export",
+]);
 
 function formatDecision(decision: RouteDecision | null): string {
   if (!decision) return "-";
@@ -86,6 +106,10 @@ function formatBuildParity(results: Record<RouteTarget, ProbeResult>): string {
 
 function classifyResource(name: string): string {
   if (name.includes("plotly-vendor")) return "plotly";
+  if (name.includes("recharts-vendor")) return "recharts";
+  if (name.includes("grid-vendor")) return "grid";
+  if (name.includes("diagram-vendor")) return "diagram";
+  if (name.includes("export-vendor")) return "export";
   if (name.includes("DashboardPage")) return "dashboard";
   if (name.includes("/assets/index-") && name.endsWith(".css")) return "css";
   if (name.includes("/assets/index-") && name.endsWith(".js")) return "app shell";
@@ -106,7 +130,38 @@ function formatResourceLabel(name: string): string {
   }
 }
 
-function collectRouteResourceTimings(): RouteResourceTiming[] {
+function resourceTransferBytes(resource: RouteResourceTiming): number {
+  const value = resource.transferSize ?? 0;
+  return value > 0 ? value : 0;
+}
+
+export function summarizeRouteResources(
+  resources: RouteResourceTiming[],
+  initialWindowMs = INITIAL_RESOURCE_WINDOW_MS,
+): RouteResourceSummary {
+  const initialResources = resources.filter((resource) => resource.startTimeMs <= initialWindowMs);
+  return {
+    totalTransferBytes: resources.reduce((sum, resource) => sum + resourceTransferBytes(resource), 0),
+    initialTransferBytes: initialResources.reduce((sum, resource) => sum + resourceTransferBytes(resource), 0),
+    initialJsTransferBytes: initialResources
+      .filter((resource) => (
+        resource.kind === "js"
+        || resource.kind === "app shell"
+        || resource.kind === "dashboard"
+        || VENDOR_RESOURCE_KINDS.has(resource.kind)
+      ))
+      .reduce((sum, resource) => sum + resourceTransferBytes(resource), 0),
+    initialCssTransferBytes: initialResources
+      .filter((resource) => resource.kind === "css")
+      .reduce((sum, resource) => sum + resourceTransferBytes(resource), 0),
+    initialVendorCount: initialResources
+      .filter((resource) => VENDOR_RESOURCE_KINDS.has(resource.kind))
+      .length,
+    resourceCount: resources.length,
+  };
+}
+
+export function collectRouteResourceTimings(): RouteResourceTiming[] {
   const entries = performance.getEntriesByType("resource") as PerformanceResourceTiming[];
   return entries
     .filter((entry) => (
@@ -126,8 +181,7 @@ function collectRouteResourceTimings(): RouteResourceTiming[] {
     .sort((a, b) => (
       (b.transferSize ?? b.encodedBodySize ?? 0) - (a.transferSize ?? a.encodedBodySize ?? 0)
       || b.durationMs - a.durationMs
-    ))
-    .slice(0, 10);
+    ));
 }
 
 export function RouteDiagnosticsPage() {
@@ -157,6 +211,14 @@ export function RouteDiagnosticsPage() {
   );
   const buildParity = useMemo(() => formatBuildParity(results), [results]);
   const largestResource = resourceTimings[0] ?? null;
+  const resourceSummary = useMemo(
+    () => summarizeRouteResources(resourceTimings),
+    [resourceTimings],
+  );
+  const visibleResourceTimings = useMemo(
+    () => resourceTimings.slice(0, RESOURCE_TABLE_LIMIT),
+    [resourceTimings],
+  );
 
   function refreshResources() {
     setResourceTimings(collectRouteResourceTimings());
@@ -311,9 +373,36 @@ export function RouteDiagnosticsPage() {
         <div className="route-diagnostics-subheader">
           <div>
             <span className="route-diagnostics-label">Current page resources</span>
-            <p>按传输体积排序，用来确认首屏是否提前加载大 JS/CSS/字体资源。</p>
+            <p>首屏窗口按 {INITIAL_RESOURCE_WINDOW_MS / 1000} 秒计算，用来确认是否提前加载 Plotly、Grid、Mermaid 等大资源。</p>
           </div>
           <button className="btn btn-sm btn-secondary" type="button" onClick={refreshResources}>刷新资源</button>
+        </div>
+        <div className="route-diagnostics-grid route-diagnostics-grid--compact">
+          <article className="route-diagnostics-panel">
+            <span className="route-diagnostics-label">Initial transfer</span>
+            <strong>{formatBytes(resourceSummary.initialTransferBytes)}</strong>
+            <span className="route-diagnostics-muted">前 {INITIAL_RESOURCE_WINDOW_MS / 1000} 秒资源传输</span>
+          </article>
+          <article className="route-diagnostics-panel">
+            <span className="route-diagnostics-label">Initial JS</span>
+            <strong>{formatBytes(resourceSummary.initialJsTransferBytes)}</strong>
+            <span className="route-diagnostics-muted">JS、页面 chunk 与 vendor</span>
+          </article>
+          <article className="route-diagnostics-panel">
+            <span className="route-diagnostics-label">Initial CSS</span>
+            <strong>{formatBytes(resourceSummary.initialCssTransferBytes)}</strong>
+            <span className="route-diagnostics-muted">首屏样式传输</span>
+          </article>
+          <article className="route-diagnostics-panel">
+            <span className="route-diagnostics-label">Vendor chunks</span>
+            <strong>{resourceSummary.initialVendorCount}</strong>
+            <span className="route-diagnostics-muted">首屏实际请求的 vendor 数</span>
+          </article>
+          <article className="route-diagnostics-panel">
+            <span className="route-diagnostics-label">Total transfer</span>
+            <strong>{formatBytes(resourceSummary.totalTransferBytes)}</strong>
+            <span className="route-diagnostics-muted">{resourceSummary.resourceCount} sampled resources</span>
+          </article>
         </div>
         <table className="route-diagnostics-table">
           <thead>
@@ -328,7 +417,7 @@ export function RouteDiagnosticsPage() {
             </tr>
           </thead>
           <tbody>
-            {resourceTimings.length > 0 ? resourceTimings.map((resource) => (
+            {visibleResourceTimings.length > 0 ? visibleResourceTimings.map((resource) => (
               <tr key={`${resource.label}-${resource.startTimeMs}`}>
                 <td>{resource.label}</td>
                 <td>{resource.kind}</td>

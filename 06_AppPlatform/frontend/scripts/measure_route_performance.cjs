@@ -179,6 +179,10 @@ async function collectBrowserMetrics(page) {
 
 function classifyResource(name) {
   if (name.includes("plotly-vendor")) return "plotly";
+  if (name.includes("recharts-vendor")) return "recharts";
+  if (name.includes("grid-vendor")) return "grid";
+  if (name.includes("diagram-vendor")) return "diagram";
+  if (name.includes("export-vendor")) return "export";
   if (name.includes("DashboardPage")) return "dashboard";
   if (name.includes("/assets/index-") && name.endsWith(".css")) return "css";
   if (name.includes("/assets/index-") && name.endsWith(".js")) return "app shell";
@@ -197,6 +201,45 @@ function formatResourceLabel(name) {
   } catch {
     return name;
   }
+}
+
+const VENDOR_RESOURCE_KINDS = new Set([
+  "plotly",
+  "recharts",
+  "grid",
+  "diagram",
+  "vendor",
+  "export",
+]);
+
+function resourceTransferBytes(resource) {
+  const value = resource.transferSize ?? 0;
+  return value > 0 ? value : 0;
+}
+
+function summarizeRouteResources(resources, initialWindowMs) {
+  const initialResources = resources.filter((resource) => resource.startTimeMs <= initialWindowMs);
+  return {
+    initialCssTransferBytes: initialResources
+      .filter((resource) => resource.kind === "css")
+      .reduce((sum, resource) => sum + resourceTransferBytes(resource), 0),
+    initialJsTransferBytes: initialResources
+      .filter((resource) => (
+        resource.kind === "js"
+        || resource.kind === "app shell"
+        || resource.kind === "dashboard"
+        || VENDOR_RESOURCE_KINDS.has(resource.kind)
+      ))
+      .reduce((sum, resource) => sum + resourceTransferBytes(resource), 0),
+    initialTransferBytes: initialResources
+      .reduce((sum, resource) => sum + resourceTransferBytes(resource), 0),
+    initialVendorCount: initialResources
+      .filter((resource) => VENDOR_RESOURCE_KINDS.has(resource.kind))
+      .length,
+    resourceCount: resources.length,
+    totalTransferBytes: resources
+      .reduce((sum, resource) => sum + resourceTransferBytes(resource), 0),
+  };
 }
 
 async function collectRouteResources(page) {
@@ -224,8 +267,10 @@ async function collectRouteResources(page) {
       kind: classifyResource(entry.name),
       label: formatResourceLabel(entry.name),
     }))
-    .sort((a, b) => b.durationMs - a.durationMs)
-    .slice(0, 8),
+    .sort((a, b) => (
+      (b.transferSize ?? b.encodedBodySize ?? 0) - (a.transferSize ?? a.encodedBodySize ?? 0)
+      || b.durationMs - a.durationMs
+    )),
   ).catch(() => []);
 }
 
@@ -308,6 +353,7 @@ async function measureRoute(browser, host, route, credentials, timeoutMs, initia
 
   const browserMetrics = await collectBrowserMetrics(page);
   const resources = await collectRouteResources(page);
+  const resourceSummary = summarizeRouteResources(resources, initialWindowMs);
   await context.close();
   const slowApis = [...apiCalls].sort((a, b) => b.ms - a.ms).slice(0, 5);
   const initialWindowApis = apiCalls
@@ -328,6 +374,7 @@ async function measureRoute(browser, host, route, credentials, timeoutMs, initia
     initialWindowSlowApis,
     networkIdleMs,
     overviewReadyMs,
+    resourceSummary,
     resources,
     route: route.label,
     slowApis,
@@ -397,6 +444,10 @@ async function main() {
     initial_window_s: seconds(result.initialWindowMs),
     initial_api_count: result.initialWindowApis.length,
     initial_slowest_api_s: seconds(result.initialWindowSlowApis[0]?.ms),
+    initial_transfer: bytes(result.resourceSummary.initialTransferBytes),
+    initial_js: bytes(result.resourceSummary.initialJsTransferBytes),
+    initial_css: bytes(result.resourceSummary.initialCssTransferBytes),
+    initial_vendor_count: result.resourceSummary.initialVendorCount,
     slowest_resource_s: seconds(result.resources[0]?.durationMs),
     slowest_resource: result.resources[0]?.label ?? "",
     slowest_api_s: seconds(result.slowApis[0]?.ms),
@@ -413,9 +464,18 @@ async function main() {
       .join("; ");
     console.log(`${result.host}/${result.route} first ${seconds(result.initialWindowMs)}s APIs: ${initialApis || "-"}`);
     const resources = result.resources
+      .slice(0, 8)
       .map((resource) => `${seconds(resource.startTimeMs)}s ${resource.kind} ${resource.label} ${seconds(resource.durationMs)}s transfer=${bytes(resource.transferSize)} encoded=${bytes(resource.encodedBodySize)}`)
       .join("; ");
     console.log(`${result.host}/${result.route} slow resources: ${resources || "-"}`);
+    console.log(
+      `${result.host}/${result.route} resource budget: initial_transfer=${bytes(result.resourceSummary.initialTransferBytes)}`
+      + ` initial_js=${bytes(result.resourceSummary.initialJsTransferBytes)}`
+      + ` initial_css=${bytes(result.resourceSummary.initialCssTransferBytes)}`
+      + ` initial_vendor_count=${result.resourceSummary.initialVendorCount}`
+      + ` total_transfer=${bytes(result.resourceSummary.totalTransferBytes)}`
+      + ` resources=${result.resourceSummary.resourceCount}`,
+    );
   }
 
   if (results.some((result) => result.error)) {
