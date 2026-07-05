@@ -1,126 +1,137 @@
 source_code: hyundai_kona_sk_draft_scrapling
 country: 斯洛伐克
 brand: HYUNDAI
-source_url: https://todo.invalid/sk/hyundai/kona
-source_type: manufacturer_official
+source_url: https://www.hyundai.com/sk/sk/modely/kona/dokumenty.html
+source_type: official_price_list
 price_semantics: base_msrp
-extractor_type: scrapling
+extractor_type: pdf_text
 profile:
-  url: https://todo.invalid/sk/hyundai/kona
-  headless: true
+  url: https://dmassets.hyundai.com/is/content/hyundaiautoever/cennik_technicke-udaje-Hyundai-KONA-MY27-2026-06pdf
+  urls:
+  - https://dmassets.hyundai.com/is/content/hyundaiautoever/cennik_technicke-udaje-Hyundai-KONA-MY27-2026-06pdf
+  - https://dmassets.hyundai.com/is/content/hyundaiautoever/cennik_technicke-udaje-Hyundai-KONA-HEV-MY27-2026-06pdf
+  - https://dmassets.hyundai.com/is/content/hyundaiautoever/cennik_technicke-udaje-Hyundai-KONA-EV-MY26-2026-04pdf
+  timeout_seconds: 30
+  retry_attempts: 0
+  retry_delay_seconds: 0
   default_currency: EUR
   default_tax_included: true
-  default_price_label: MSRP
+  default_price_label: Cennikova cena s DPH
   fixed_model: KONA
   fixed_jato_model: KONA
-  fixed_jato_powertrain: null
-  model_rules: []
-  skip_if_model_unmapped: false
   copy_trim_to_jato_trim: true
-  confidence_rules:
-    base: 0.2
-    fixed_model_bonus: 0.18
-    fixed_jato_model_bonus: 0.12
-    model_rule_bonus: 0.12
-    trim_present_bonus: 0.1
-    copy_trim_to_jato_trim_bonus: 0.09
-    parsed_price_text_bonus: 0.03
-    currency_bonus: 0.01
-    price_label_bonus: 0.02
-    trim_keyword_bonuses: []
-    price_band_bonuses:
-    - key: price_band_entry
-      label: Entry price band matched
-      max: 0
-      delta: 0.0
-    - key: price_band_mid
-      label: Mid price band matched
-      min: 0
-      max: 0
-      delta: 0.01
-    - key: price_band_high
-      label: High price band matched
-      min: 0
-      delta: 0.03
-    powertrain_keyword_bonuses: []
-    powertrain_bonuses:
-    - key: powertrain_bev
-      label: 'Powertrain matched: BEV'
-      powertrain: BEV
-      delta: 0.03
-    - key: powertrain_hev
-      label: 'Powertrain matched: HEV'
-      powertrain: HEV
-      delta: 0.03
-    - key: powertrain_ice
-      label: 'Powertrain matched: ICE'
-      powertrain: ICE
-      delta: 0.03
-    clamp_min: 0.0
-    clamp_max: 1.0
-  structured_fields:
-    edition_rules:
-    - key: edition_special
-      label: Special Edition
-      keyword: special edition
-      special: true
-    powertrain_rules:
-    - key: powertrain_bev
-      powertrain: BEV
-      keywords:
-      - bev
-      - ev
-      - electric
-      - battery electric
-      - fully electric
-      - electric vehicle
-      - elektricky
-      - elektromobil
-      - plne elektricky
-    - key: powertrain_hev
-      powertrain: HEV
-      keywords:
-      - hev
-      - full hybrid
-      - self-charging hybrid
-      - self charging hybrid
-      - hybrid
-      - hybridny
-    - key: powertrain_ice
-      powertrain: ICE
-      keywords:
-      - ice
-      - petrol
-      - gasoline
-      - diesel
-      - combustion
-      - benzin
-      - nafta
-  auto_accept_gates:
-    review_threshold: 0.95
-    semi_auto_threshold: 0.98
-    require_powertrain_match: true
-    force_review_if_powertrain_missing: true
-    force_review_if_powertrain_ambiguous: true
-    force_review_for_special_edition: true
-  css:
-    vehicle_container: body
-    model: h2, h3
-    trim: h3
-    price: '[class*="price"]'
-  tier: stealth
-  network_idle: true
-  impersonate: chrome
+  match_confidence: 0.84
+  match_status: review_required
+  match_reason:
+    kind: official_pdf_price_list
+    source: hyundai_sk_kona_cennik
+    document_date: '2026-06-05'
+    note: Official Hyundai Slovakia KONA ICE MY27, HEV MY27, and EV MY26 price-list PDFs from the KONA documents pages; patterns capture only Cennikova cena and exclude bonus, akciova cena, monthly financing, accessories, and lowest-30-day prices.
+  entry_patterns:
+  - pattern: 'COMFORT\s+1\.0\s+T-GDi\s+6\s+M\s+85/115\s+4\s+x\s+2\s+(?P<price>\d{2}\s\d{3})\s*€'
+    official_trim: COMFORT
+    official_powertrain: ICE 1.0 T-GDi 6M 85 kW 4x2
+    jato_powertrain: ICE
+    price_label: Cennikova cena s DPH
+  - pattern: 'COMFORT(?:(?!FAMILY).)*?1\.6\s+T-GDi\s+6\s+M\s+110/150\s+4\s+x\s+2\s+(?P<price>\d{2}\s\d{3})\s*€'
+    official_trim: COMFORT
+    official_powertrain: ICE 1.6 T-GDi 6M 110 kW 4x2
+    jato_powertrain: ICE
+    price_label: Cennikova cena s DPH
+  - pattern: 'COMFORT(?:(?!FAMILY).)*?1\.6\s+T-GDi\s+7\s+DCT\s+110/150\s+4\s+x\s+2\s+(?P<price>\d{2}\s\d{3})\s*€'
+    official_trim: COMFORT
+    official_powertrain: ICE 1.6 T-GDi 7DCT 110 kW 4x2
+    jato_powertrain: ICE
+    price_label: Cennikova cena s DPH
+  - pattern: 'FAMILY(?:(?!STYLE).)*?1\.0\s+T-GDi\s+6\s+M\s+85/115\s+4\s+x\s+2\s+(?P<price>\d{2}\s\d{3})\s*€'
+    official_trim: FAMILY
+    official_powertrain: ICE 1.0 T-GDi 6M 85 kW 4x2
+    jato_powertrain: ICE
+    price_label: Cennikova cena s DPH
+  - pattern: 'FAMILY(?:(?!STYLE).)*?1\.6\s+T-GDi\s+6\s+M\s+110/150\s+4\s+x\s+2\s+(?P<price>\d{2}\s\d{3})\s*€'
+    official_trim: FAMILY
+    official_powertrain: ICE 1.6 T-GDi 6M 110 kW 4x2
+    jato_powertrain: ICE
+    price_label: Cennikova cena s DPH
+  - pattern: 'FAMILY(?:(?!STYLE).)*?1\.6\s+T-GDi\s+7\s+DCT\s+110/150\s+4\s+x\s+2\s+(?P<price>\d{2}\s\d{3})\s*€'
+    official_trim: FAMILY
+    official_powertrain: ICE 1.6 T-GDi 7DCT 110 kW 4x2
+    jato_powertrain: ICE
+    price_label: Cennikova cena s DPH
+  - pattern: 'FAMILY(?:(?!STYLE).)*?1\.6\s+T-GDi\s+7\s+DCT\s+132/180\s+4\s+x\s+4\s+(?P<price>\d{2}\s\d{3})\s*€'
+    official_trim: FAMILY
+    official_powertrain: ICE 1.6 T-GDi 7DCT 132 kW 4x4
+    jato_powertrain: ICE
+    price_label: Cennikova cena s DPH
+  - pattern: 'STYLE(?:(?!N\s+LINE\+).)*?1\.6\s+T-GDi\s+7\s+DCT\s+132/180\s+4\s+x\s+2\s+(?P<price>\d{2}\s\d{3})\s*€'
+    official_trim: STYLE
+    official_powertrain: ICE 1.6 T-GDi 7DCT 132 kW 4x2
+    jato_powertrain: ICE
+    price_label: Cennikova cena s DPH
+  - pattern: 'STYLE(?:(?!N\s+LINE\+).)*?1\.6\s+T-GDi\s+7\s+DCT\s+132/180\s+4\s+x\s+4\s+(?P<price>\d{2}\s\d{3})\s*€'
+    official_trim: STYLE
+    official_powertrain: ICE 1.6 T-GDi 7DCT 132 kW 4x4
+    jato_powertrain: ICE
+    price_label: Cennikova cena s DPH
+  - pattern: 'N\s+LINE\+(?:(?!\*\s+Plat).)*?1\.6\s+T-GDi\s+7\s+DCT\s+132/180\s+4\s+x\s+2\s+(?P<price>\d{2}\s\d{3})\s*€'
+    official_trim: N LINE+
+    official_powertrain: ICE 1.6 T-GDi 7DCT 132 kW 4x2
+    jato_powertrain: ICE
+    price_label: Cennikova cena s DPH
+  - pattern: 'N\s+LINE\+(?:(?!\*\s+Plat).)*?1\.6\s+T-GDi\s+7\s+DCT\s+132/180\s+4\s+x\s+4\s+(?P<price>\d{2}\s\d{3})\s*€'
+    official_trim: N LINE+
+    official_powertrain: ICE 1.6 T-GDi 7DCT 132 kW 4x4
+    jato_powertrain: ICE
+    price_label: Cennikova cena s DPH
+  - pattern: 'FAMILY\s+1\.6\s+GDi\s+HEV\s+6\s+DCT\s+102/138\s+4\s+x\s+2\s+(?P<price>\d{2}\s\d{3})\s*€'
+    official_trim: FAMILY
+    official_powertrain: HEV 1.6 GDi 6DCT 102 kW 4x2
+    jato_powertrain: HEV
+    price_label: Cennikova cena s DPH
+  - pattern: 'STYLE\s+1\.6\s+GDi\s+HEV\s+6\s+DCT\s+102/138\s+4\s+x\s+2\s+(?P<price>\d{2}\s\d{3})\s*€'
+    official_trim: STYLE
+    official_powertrain: HEV 1.6 GDi 6DCT 102 kW 4x2
+    jato_powertrain: HEV
+    price_label: Cennikova cena s DPH
+  - pattern: 'N\s+LINE\+\s+1\.6\s+GDi\s+HEV\s+6\s+DCT\s+102/138\s+4\s+x\s+2\s+(?P<price>\d{2}\s\d{3})\s*€'
+    official_trim: N LINE+
+    official_powertrain: HEV 1.6 GDi 6DCT 102 kW 4x2
+    jato_powertrain: HEV
+    price_label: Cennikova cena s DPH
+  - pattern: 'COMFORT\s+48,6\s+kWh\s+99/135\s+4\s+x\s+2\s+(?P<price>\d{2}\s\d{3})\s*€'
+    official_trim: COMFORT
+    official_powertrain: BEV 48.6 kWh 99 kW 4x2
+    jato_powertrain: BEV
+    price_label: Cennikova cena s DPH
+  - pattern: 'FAMILY(?:(?!STYLE).)*?48,6\s+kWh\s+99/135\s+4\s+x\s+2\s+(?P<price>\d{2}\s\d{3})\s*€'
+    official_trim: FAMILY
+    official_powertrain: BEV 48.6 kWh 99 kW 4x2
+    jato_powertrain: BEV
+    price_label: Cennikova cena s DPH
+  - pattern: 'FAMILY(?:(?!STYLE).)*?64,8\s+kWh\s+150/204\s+4\s+x\s+2\s+(?P<price>\d{2}\s\d{3})\s*€'
+    official_trim: FAMILY
+    official_powertrain: BEV 64.8 kWh 150 kW 4x2
+    jato_powertrain: BEV
+    price_label: Cennikova cena s DPH
+  - pattern: 'STYLE\s+64,8\s+kWh\s+150/204\s+4\s+x\s+2\s+(?P<price>\d{2}\s\d{3})\s*€'
+    official_trim: STYLE
+    official_powertrain: BEV 64.8 kWh 150 kW 4x2
+    jato_powertrain: BEV
+    price_label: Cennikova cena s DPH
+  - pattern: 'N\s+LINE\+\s+64,8\s+kWh\s+150/204\s+4\s+x\s+2\s+(?P<price>\d{2}\s\d{3})\s*€'
+    official_trim: N LINE+
+    official_powertrain: BEV 64.8 kWh 150 kW 4x2
+    jato_powertrain: BEV
+    price_label: Cennikova cena s DPH
 schedule:
   frequency: manual_only
   run_window_start: 00:00
   run_window_end: 05:00
   preferred_weekday: monday
-notes: Draft scaffold generated from country×model top30 backlog. Replace source_url,
-  profile.url, selectors, currency, price label, and the single-model placeholders
-  before promoting to 07_ScrapingToolkit/sources. [CSS selectors applied from brand
-  probe] [Switched to playwright_card_flow with kia_trim_overview_playwright.yaml]
-  [Reverted to scrapling — playwright preset needs per-brand tuning]
+notes: Replaced todo.invalid with Hyundai Slovakia's official KONA documents page
+  and KONA ICE MY27, KONA HEV MY27, and KONA EV MY26 price-list PDFs. Regexes
+  target the Cennikova cena column only and exclude bonus, akciova cena, monthly
+  financing, accessories, and lowest-30-day prices.
 bootstrap_meta:
   country_model_rank: 28
   suggested_scope_kind: single_model
