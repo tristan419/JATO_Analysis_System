@@ -16,6 +16,7 @@ const DEFAULT_ROUTES = [
   { label: "dashboard-wide", path: WIDE_DASHBOARD_PATH, selector: ".dashboard-layout" },
 ];
 const DEFAULT_INITIAL_WINDOW_MS = 8_000;
+const BUILD_META_TIMEOUT_MS = 8_000;
 
 function getArg(name) {
   const prefix = `--${name}=`;
@@ -119,6 +120,84 @@ function buildUrl(origin, path) {
   const url = new URL(path, origin);
   url.searchParams.set("route", "stay");
   return url.toString();
+}
+
+function formatShortHash(value) {
+  return typeof value === "string" && value ? value.slice(0, 12) : "-";
+}
+
+function buildFingerprint(buildMeta) {
+  return buildMeta.frontendBuildId || buildMeta.commit || "";
+}
+
+async function fetchBuildMeta(host) {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), BUILD_META_TIMEOUT_MS);
+  try {
+    const response = await fetch(`${host.origin}/build-meta.json?ts=${Date.now()}`, {
+      cache: "no-store",
+      signal: controller.signal,
+    });
+    if (!response.ok) {
+      return {
+        host: host.label,
+        origin: host.origin,
+        commit: "",
+        frontendBuildId: "",
+        builtAt: "",
+        nodeVersion: "",
+        error: `${response.status} ${response.statusText}`,
+      };
+    }
+    const payload = await response.json();
+    return {
+      host: host.label,
+      origin: host.origin,
+      commit: typeof payload.commit === "string" ? payload.commit : "",
+      frontendBuildId: typeof payload.frontendBuildId === "string" ? payload.frontendBuildId : "",
+      builtAt: typeof payload.builtAt === "string" ? payload.builtAt : "",
+      nodeVersion: typeof payload.nodeVersion === "string" ? payload.nodeVersion : "",
+      error: "",
+    };
+  } catch (error) {
+    return {
+      host: host.label,
+      origin: host.origin,
+      commit: "",
+      frontendBuildId: "",
+      builtAt: "",
+      nodeVersion: "",
+      error: error instanceof Error ? error.message : String(error),
+    };
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+function summarizeBuildParity(buildMetas) {
+  const fingerprints = buildMetas
+    .map(buildFingerprint)
+    .filter(Boolean);
+  const uniqueFingerprints = new Set(fingerprints);
+  if (fingerprints.length !== buildMetas.length) {
+    return {
+      ok: false,
+      state: "unknown",
+      message: "One or more hosts did not expose build metadata.",
+    };
+  }
+  if (uniqueFingerprints.size <= 1) {
+    return {
+      ok: true,
+      state: "same",
+      message: "All measured hosts expose the same frontend build fingerprint.",
+    };
+  }
+  return {
+    ok: false,
+    state: "different",
+    message: "Measured hosts are on different frontend builds; compare timings as directional only.",
+  };
 }
 
 async function createAuthenticatedContext(browser, host, username, password, timeoutMs) {
@@ -409,6 +488,8 @@ async function main() {
   );
   const hosts = parseHosts();
   const routes = parseRoutes();
+  const buildMetas = await Promise.all(hosts.map(fetchBuildMeta));
+  const buildParity = summarizeBuildParity(buildMetas);
   const browser = await chromium.launch({ headless: true });
   const results = [];
   try {
@@ -427,6 +508,17 @@ async function main() {
   } finally {
     await browser.close();
   }
+
+  console.table(buildMetas.map((buildMeta) => ({
+    host: buildMeta.host,
+    origin: buildMeta.origin,
+    commit: formatShortHash(buildMeta.commit),
+    frontend_build: formatShortHash(buildMeta.frontendBuildId),
+    built_at: buildMeta.builtAt || "-",
+    node: buildMeta.nodeVersion || "-",
+    error: buildMeta.error,
+  })));
+  console.log(`build parity: ${buildParity.state} - ${buildParity.message}`);
 
   console.table(results.map((result) => ({
     host: result.host,
@@ -479,6 +571,9 @@ async function main() {
   }
 
   if (results.some((result) => result.error)) {
+    process.exitCode = 1;
+  }
+  if (!buildParity.ok && process.env.JATO_PERF_REQUIRE_BUILD_PARITY === "1") {
     process.exitCode = 1;
   }
 }
