@@ -127,6 +127,57 @@ def test_http_json_supports_list_indexes_in_paths():
     assert results[0].official_trim.startswith("R-Line / 2.0 TDI SCR")
 
 
+def test_http_json_supports_root_list_vehicles_path(monkeypatch):
+    extractor = HttpJsonExtractor(
+        ExtractorConfig(
+            source_code="byd_seal_u_es_test",
+            country="西班牙",
+            brand="BYD",
+            source_url="https://www.byd.com/es-es/configurador/seal-u",
+        ),
+        HttpJsonProfile(
+            url="https://cms-api.byd.com/car/byd/es/CX007009.json",
+            fixed_model="SEAL U",
+            fixed_jato_model="SEAL U",
+            fixed_jato_powertrain="BEV",
+            default_currency="EUR",
+            default_tax_included=True,
+            default_price_label="productPrice MSRP",
+            copy_trim_to_jato_trim=True,
+            field_mapping=FieldMapping(
+                trim="productNameAlias.val",
+                price="productPrice",
+                currency="currency",
+                vehicles_path=".",
+                availability=None,
+            ),
+        ),
+    )
+    sample = [
+        {
+            "productNameAlias": {"val": "Comfort"},
+            "productPrice": "43790",
+            "currency": "EUR",
+        },
+        {
+            "productNameAlias": {"val": "Design"},
+            "productPrice": "47290",
+            "currency": "EUR",
+        },
+    ]
+
+    monkeypatch.setattr(extractor, "_fetch", lambda: sample)
+    results = extractor.extract()
+
+    assert len(results) == 2
+    assert results[0].official_model == "SEAL U"
+    assert results[0].official_trim == "Comfort"
+    assert results[0].msrp_value == 43790
+    assert results[0].jato_model == "SEAL U"
+    assert results[0].jato_trim == "Comfort"
+    assert results[0].jato_powertrain == "BEV"
+
+
 def test_http_json_decodes_html_entity_thousand_separator(monkeypatch):
     extractor = HttpJsonExtractor(
         ExtractorConfig(

@@ -240,7 +240,11 @@ class HttpJsonExtractor(BaseExtractor):
 
     def _navigate(self, data: Any) -> list[dict] | None:
         path = self.profile.field_mapping.vehicles_path
-        node = self._resolve_path(data, path, log_errors=True)
+        node = (
+            data
+            if path in ("", ".", "$")
+            else self._resolve_path(data, path, log_errors=True)
+        )
         if node is None:
             return None
         if not isinstance(node, list):
