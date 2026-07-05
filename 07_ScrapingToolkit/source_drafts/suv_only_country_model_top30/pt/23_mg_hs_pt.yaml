@@ -1,107 +1,43 @@
 source_code: mg_hs_pt_draft_scrapling
 country: 葡萄牙
 brand: MG
-source_url: https://todo.invalid/pt/mg/hs
+source_url: https://www.mgmotor.pt/model/hs-phev
 source_type: manufacturer_official
 price_semantics: base_msrp
-extractor_type: scrapling
+extractor_type: http_text
 profile:
-  url: https://todo.invalid/pt/mg/hs
-  tier: stealth
-  headless: true
-  network_idle: true
-  impersonate: chrome
-  css:
-    vehicle_container: body
-    model: h1, h2
-    trim: h3
-    price: '[class*="price"]'
+  url: https://www.mgmotor.pt/model/hs-phev
+  timeout_seconds: 30
+  headers:
+    Accept-Language: pt-PT,pt;q=0.9,en;q=0.8
   default_currency: EUR
   default_tax_included: true
-  default_price_label: MSRP
+  default_price_label: Desde
   fixed_model: HS
   fixed_jato_model: HS
-  fixed_jato_powertrain: null
-  model_rules: []
-  skip_if_model_unmapped: false
   copy_trim_to_jato_trim: true
-  confidence_rules:
-    base: 0.2
-    fixed_model_bonus: 0.18
-    fixed_jato_model_bonus: 0.12
-    model_rule_bonus: 0.12
-    trim_present_bonus: 0.1
-    copy_trim_to_jato_trim_bonus: 0.09
-    parsed_price_text_bonus: 0.03
-    currency_bonus: 0.01
-    price_label_bonus: 0.02
-    trim_keyword_bonuses: []
-    price_band_bonuses:
-    - key: price_band_entry
-      label: Entry price band matched
-      max: 0
-      delta: 0.0
-    - key: price_band_mid
-      label: Mid price band matched
-      min: 0
-      max: 0
-      delta: 0.01
-    - key: price_band_high
-      label: High price band matched
-      min: 0
-      delta: 0.03
-    powertrain_keyword_bonuses: []
-    powertrain_bonuses:
-    - key: powertrain_phev
-      label: 'Powertrain matched: PHEV'
-      powertrain: PHEV
-      delta: 0.03
-    - key: powertrain_ice
-      label: 'Powertrain matched: ICE'
-      powertrain: ICE
-      delta: 0.03
-    clamp_min: 0.0
-    clamp_max: 1.0
-  structured_fields:
-    edition_rules:
-    - key: edition_special
-      label: Special Edition
-      keyword: special edition
-      special: true
-    powertrain_rules:
-    - key: powertrain_phev
-      powertrain: PHEV
-      keywords:
-      - phev
-      - plug-in hybrid
-      - plug in hybrid
-      - plugin hybrid
-      - hibrido plug-in
-    - key: powertrain_ice
-      powertrain: ICE
-      keywords:
-      - ice
-      - petrol
-      - gasoline
-      - diesel
-      - combustion
-      - gasolina
-  auto_accept_gates:
-    review_threshold: 0.95
-    semi_auto_threshold: 0.98
-    require_powertrain_match: true
-    force_review_if_powertrain_missing: true
-    force_review_if_powertrain_ambiguous: true
-    force_review_for_special_edition: true
+  match_confidence: 0.8
+  match_status: review_required
+  match_reason:
+    kind: official_model_page_start_price
+    source: mgmotor_pt_hs_phev
+    note: Official MG Motor Portugal HS PHEV model page embeds the headline start price in headerSubtitle. Pattern captures only the Desde price and excludes renting, configurator CTA URLs, marketing feature values, autonomy, finance text, and unrelated menu labels. Keep review_required because this is a model-level start price rather than a trim grid.
+  entry_patterns:
+  - pattern: 'headerSubtitle(?:(?!headerSubtitle).){0,500}?Desde (?P<price>\d{2}\.\d{3})\\u20ac\*'
+    official_trim: HS PHEV
+    official_powertrain: PHEV
+    jato_powertrain: PHEV
+    price_label: Desde
 schedule:
   frequency: manual_only
   run_window_start: 00:00
   run_window_end: 05:00
   preferred_weekday: monday
-notes: Draft scaffold generated from country×model top30 backlog. Replace source_url,
-  profile.url, selectors, currency, price label, and the single-model placeholders
-  before promoting to 07_ScrapingToolkit/sources. [CSS selectors applied from brand
-  probe]
+notes: Replaced todo.invalid with MG Motor Portugal's official HS PHEV model page.
+  The HTTP text pattern targets the embedded headerSubtitle start price only and
+  excludes renting, CTAs, marketing feature values, autonomy, and unrelated menu
+  text. Marked review_required because the page exposes a model-level start price,
+  not a full trim grid.
 bootstrap_meta:
   country_model_rank: 23
   suggested_scope_kind: single_model
