@@ -1,122 +1,128 @@
 source_code: ford_kuga_si_draft_scrapling
 country: 斯洛文尼亚
 brand: FORD
-source_url: https://todo.invalid/si/ford/kuga
-source_type: manufacturer_official
+source_url: https://ford.si/brochures_and_pricelists/46
+source_type: official_price_list
 price_semantics: base_msrp
-extractor_type: scrapling
+extractor_type: pdf_text
 profile:
-  url: https://todo.invalid/si/ford/kuga
-  tier: stealth
-  headless: true
-  network_idle: true
-  impersonate: chrome
-  css:
-    vehicle_container: body
-    model: h1, h2
-    trim: h3
-    price: '[class*="price"]'
+  url: https://ford.si/brochures_and_pricelists/1982/download?name=Cenik+Kuga+MY+2026-3.0++2026
+  timeout_seconds: 15
+  retry_attempts: 0
+  retry_delay_seconds: 0
   default_currency: EUR
   default_tax_included: true
-  default_price_label: MSRP
+  default_price_label: Maloprodajna cena
   fixed_model: KUGA
   fixed_jato_model: KUGA
-  fixed_jato_powertrain: null
-  model_rules: []
-  skip_if_model_unmapped: false
   copy_trim_to_jato_trim: true
-  confidence_rules:
-    base: 0.2
-    fixed_model_bonus: 0.18
-    fixed_jato_model_bonus: 0.12
-    model_rule_bonus: 0.12
-    trim_present_bonus: 0.1
-    copy_trim_to_jato_trim_bonus: 0.09
-    parsed_price_text_bonus: 0.03
-    currency_bonus: 0.01
-    price_label_bonus: 0.02
-    trim_keyword_bonuses: []
-    price_band_bonuses:
-    - key: price_band_entry
-      label: Entry price band matched
-      max: 0
-      delta: 0.0
-    - key: price_band_mid
-      label: Mid price band matched
-      min: 0
-      max: 0
-      delta: 0.01
-    - key: price_band_high
-      label: High price band matched
-      min: 0
-      delta: 0.03
-    powertrain_keyword_bonuses: []
-    powertrain_bonuses:
-    - key: powertrain_phev
-      label: 'Powertrain matched: PHEV'
-      powertrain: PHEV
-      delta: 0.03
-    - key: powertrain_hev
-      label: 'Powertrain matched: HEV'
-      powertrain: HEV
-      delta: 0.03
-    - key: powertrain_ice
-      label: 'Powertrain matched: ICE'
-      powertrain: ICE
-      delta: 0.03
-    clamp_min: 0.0
-    clamp_max: 1.0
-  structured_fields:
-    edition_rules:
-    - key: edition_special
-      label: Special Edition
-      keyword: special edition
-      special: true
-    powertrain_rules:
-    - key: powertrain_phev
-      powertrain: PHEV
-      keywords:
-      - phev
-      - plug-in hybrid
-      - plug in hybrid
-      - plugin hybrid
-      - prikljucni hibrid
-    - key: powertrain_hev
-      powertrain: HEV
-      keywords:
-      - hev
-      - full hybrid
-      - self-charging hybrid
-      - self charging hybrid
-      - hybrid
-      - hibrid
-      - hibridni
-    - key: powertrain_ice
-      powertrain: ICE
-      keywords:
-      - ice
-      - petrol
-      - gasoline
-      - diesel
-      - combustion
-      - bencin
-      - dizel
-  auto_accept_gates:
-    review_threshold: 0.95
-    semi_auto_threshold: 0.98
-    require_powertrain_match: true
-    force_review_if_powertrain_missing: true
-    force_review_if_powertrain_ambiguous: true
-    force_review_for_special_edition: true
+  match_confidence: 0.86
+  match_status: review_required
+  match_reason:
+    kind: official_pdf_price_list
+    source: ford_si_kuga_cenik_my2026_3_0
+    document_date: '2026-03-25'
+    note: Official Ford Slovenia Kuga MY2026-3.0 retail price list; patterns capture the first Maloprodajna cena column and exclude financing, campaign discount, Ford Bon, and transport/preparation costs.
+  entry_patterns:
+  - pattern: 'TITANIUM\s+bencin\s+1\.5\s+EcoBoost\s+110\s+kW\s+\(150\s+KM\),\s+6-stopenjski\s+ročni\s+menjalnik,\s+Start/Stop\s+sistem\s+FWD\s+(?P<price>\d{2}\.\d{3})\b'
+    official_trim: TITANIUM
+    official_powertrain: ICE 1.5 EcoBoost 150 6MT FWD
+    jato_powertrain: ICE
+    price_label: Maloprodajna cena
+  - pattern: 'TITANIUM\s+bencin\s+1\.5\s+EcoBoost\s+110.*?1\.5\s+EcoBoost\s+137\s+kW\s+\(186\s+KM\),\s+8-stopenjski\s+samodejni\s+menjalnik,\s+Start/Stop\s+sistem\s+FWD\s+(?P<price>\d{2}\.\d{3})\b'
+    official_trim: TITANIUM
+    official_powertrain: ICE 1.5 EcoBoost 186 8AT FWD
+    jato_powertrain: ICE
+    price_label: Maloprodajna cena
+  - pattern: 'TITANIUM\s+bencin.*?hibrid\s+\(FHEV\)\s+-\s+bencin\s+2\.5\s+Duratec\s+Hybrid\s+132\s+kW\s+\(180\s+KM\),\s+FHEV,\s+brezstopenjski\s+samodejni\s+menjalnik\s+FWD\s+(?P<price>\d{2}\.\d{3})\b'
+    official_trim: TITANIUM
+    official_powertrain: FHEV 2.5 Duratec Hybrid 180 CVT FWD
+    jato_powertrain: FHEV
+    price_label: Maloprodajna cena
+  - pattern: 'TITANIUM\s+bencin.*?hibrid\s+\(FHEV\)\s+-\s+bencin.*?2\.5\s+Duratec\s+Hybrid\s+134\s+kW\s+\(183\s+KM\),\s+FHEV,\s+brezstopenjski\s+samodejni\s+menjalnik\s+AWD\s+(?P<price>\d{2}\.\d{3})\b'
+    official_trim: TITANIUM
+    official_powertrain: FHEV 2.5 Duratec Hybrid 183 CVT AWD
+    jato_powertrain: FHEV
+    price_label: Maloprodajna cena
+  - pattern: 'TITANIUM\s+bencin.*?priključni\s+hibrid\s+\(PHEV\)\s+-\s+bencin\s+2\.5\s+Duratec\s+Hybrid\s+178\s+kW\s+\(243\s+KM\),\s+PHEV,\s+brezstopenjski\s+samodejni\s+menjalnik\s+FWD\s+(?P<price>\d{2}\.\d{3})\b'
+    official_trim: TITANIUM
+    official_powertrain: PHEV 2.5 Duratec Hybrid 243 CVT FWD
+    jato_powertrain: PHEV
+    price_label: Maloprodajna cena
+  - pattern: 'ST-LINE\s+bencin\s+1\.5\s+EcoBoost\s+110\s+kW\s+\(150\s+KM\),\s+6-stopenjski\s+ročni\s+menjalnik,\s+Start/Stop\s+sistem\s+FWD\s+(?P<price>\d{2}\.\d{3})\b'
+    official_trim: ST-LINE
+    official_powertrain: ICE 1.5 EcoBoost 150 6MT FWD
+    jato_powertrain: ICE
+    price_label: Maloprodajna cena
+  - pattern: 'ST-LINE\s+bencin\s+1\.5\s+EcoBoost\s+110.*?1\.5\s+EcoBoost\s+137\s+kW\s+\(186\s+KM\),\s+8-stopenjski\s+samodejni\s+menjalnik,\s+Start/Stop\s+sistem\s+FWD\s+(?P<price>\d{2}\.\d{3})\b'
+    official_trim: ST-LINE
+    official_powertrain: ICE 1.5 EcoBoost 186 8AT FWD
+    jato_powertrain: ICE
+    price_label: Maloprodajna cena
+  - pattern: 'ST-LINE\s+bencin.*?priključni\s+hibrid\s+\(PHEV\)\s+-\s+bencin\s+2\.5\s+Duratec\s+Hybrid\s+178\s+kW\s+\(243\s+KM\),\s+PHEV,\s+brezstopenjski\s+samodejni\s+menjalnik\s+FWD\s+(?P<price>\d{2}\.\d{3})\b'
+    official_trim: ST-LINE
+    official_powertrain: PHEV 2.5 Duratec Hybrid 243 CVT FWD
+    jato_powertrain: PHEV
+    price_label: Maloprodajna cena
+  - pattern: 'ST-LINE\s+hibrid\s+\(FHEV\)\s+-\s+bencin\s+2\.5\s+Duratec\s+Hybrid\s+132\s+kW\s+\(180\s+KM\),\s+FHEV,\s+brezstopenjski\s+samodejni\s+menjalnik\s+FWD\s+(?P<price>\d{2}\.\d{3})\b'
+    official_trim: ST-LINE
+    official_powertrain: FHEV 2.5 Duratec Hybrid 180 CVT FWD
+    jato_powertrain: FHEV
+    price_label: Maloprodajna cena
+  - pattern: 'ST-LINE\s+hibrid\s+\(FHEV\)\s+-\s+bencin.*?2\.5\s+Duratec\s+Hybrid\s+134\s+kW\s+\(183\s+KM\),\s+FHEV,\s+brezstopenjski\s+samodejni\s+menjalnik\s+AWD\s+(?P<price>\d{2}\.\d{3})\b'
+    official_trim: ST-LINE
+    official_powertrain: FHEV 2.5 Duratec Hybrid 183 CVT AWD
+    jato_powertrain: FHEV
+    price_label: Maloprodajna cena
+  - pattern: 'ST-LINE\s+X\s+bencin\s+1\.5\s+EcoBoost\s+137\s+kW\s+\(186\s+KM\),\s+8-stopenjski\s+samodejni\s+menjalnik,\s+Start/Stop\s+sistem\s+FWD\s+(?P<price>\d{2}\.\d{3})\b'
+    official_trim: ST-LINE X
+    official_powertrain: ICE 1.5 EcoBoost 186 8AT FWD
+    jato_powertrain: ICE
+    price_label: Maloprodajna cena
+  - pattern: 'ST-LINE\s+X\s+bencin.*?priključni\s+hibrid\s+\(PHEV\)\s+-\s+bencin\s+2\.5\s+Duratec\s+Hybrid\s+178\s+kW\s+\(243\s+KM\),\s+PHEV,\s+brezstopenjski\s+samodejni\s+menjalnik\s+FWD\s+(?P<price>\d{2}\.\d{3})\b'
+    official_trim: ST-LINE X
+    official_powertrain: PHEV 2.5 Duratec Hybrid 243 CVT FWD
+    jato_powertrain: PHEV
+    price_label: Maloprodajna cena
+  - pattern: 'ST-LINE\s+X\s+hibrid\s+\(FHEV\)\s+-\s+bencin\s+2\.5\s+Duratec\s+Hybrid\s+132\s+kW\s+\(180\s+KM\),\s+FHEV,\s+brezstopenjski\s+samodejni\s+menjalnik\s+FWD\s+(?P<price>\d{2}\.\d{3})\b'
+    official_trim: ST-LINE X
+    official_powertrain: FHEV 2.5 Duratec Hybrid 180 CVT FWD
+    jato_powertrain: FHEV
+    price_label: Maloprodajna cena
+  - pattern: 'ST-LINE\s+X\s+hibrid\s+\(FHEV\)\s+-\s+bencin.*?2\.5\s+Duratec\s+Hybrid\s+134\s+kW\s+\(183\s+KM\),\s+FHEV,\s+brezstopenjski\s+samodejni\s+menjalnik\s+AWD\s+(?P<price>\d{2}\.\d{3})\b'
+    official_trim: ST-LINE X
+    official_powertrain: FHEV 2.5 Duratec Hybrid 183 CVT AWD
+    jato_powertrain: FHEV
+    price_label: Maloprodajna cena
+  - pattern: 'ACTIVE\s+X\s+bencin\s+1\.5\s+EcoBoost\s+137\s+kW\s+\(186\s+KM\),\s+8-stopenjski\s+samodejni\s+menjalnik,\s+Start/Stop\s+sistem\s+FWD\s+(?P<price>\d{2}\.\d{3})\b'
+    official_trim: ACTIVE X
+    official_powertrain: ICE 1.5 EcoBoost 186 8AT FWD
+    jato_powertrain: ICE
+    price_label: Maloprodajna cena
+  - pattern: 'ACTIVE\s+X\s+bencin.*?priključni\s+hibrid\s+\(PHEV\)\s+-\s+bencin\s+2\.5\s+Duratec\s+Hybrid\s+178\s+kW\s+\(243\s+KM\),\s+PHEV,\s+brezstopenjski\s+samodejni\s+menjalnik\s+FWD\s+(?P<price>\d{2}\.\d{3})\b'
+    official_trim: ACTIVE X
+    official_powertrain: PHEV 2.5 Duratec Hybrid 243 CVT FWD
+    jato_powertrain: PHEV
+    price_label: Maloprodajna cena
+  - pattern: 'ACTIVE\s+X\s+hibrid\s+\(FHEV\)\s+-\s+bencin\s+2\.5\s+Duratec\s+Hybrid\s+132\s+kW\s+\(180\s+KM\),\s+FHEV,\s+brezstopenjski\s+samodejni\s+menjalnik\s+FWD\s+(?P<price>\d{2}\.\d{3})\b'
+    official_trim: ACTIVE X
+    official_powertrain: FHEV 2.5 Duratec Hybrid 180 CVT FWD
+    jato_powertrain: FHEV
+    price_label: Maloprodajna cena
+  - pattern: 'ACTIVE\s+X\s+hibrid\s+\(FHEV\)\s+-\s+bencin.*?2\.5\s+Duratec\s+Hybrid\s+134\s+kW\s+\(183\s+KM\),\s+FHEV,\s+brezstopenjski\s+samodejni\s+menjalnik\s+AWD\s+(?P<price>\d{2}\.\d{3})\b'
+    official_trim: ACTIVE X
+    official_powertrain: FHEV 2.5 Duratec Hybrid 183 CVT AWD
+    jato_powertrain: FHEV
+    price_label: Maloprodajna cena
 schedule:
   frequency: manual_only
   run_window_start: 00:00
   run_window_end: 05:00
   preferred_weekday: monday
-notes: Draft scaffold generated from country×model top30 backlog. Replace source_url,
-  profile.url, selectors, currency, price label, and the single-model placeholders
-  before promoting to 07_ScrapingToolkit/sources. [CSS selectors applied from brand
-  probe]
+notes: Official Ford Slovenia Kuga MY2026-3.0 retail price-list PDF. Replaced
+  todo.invalid with the Ford download center source and captured the Maloprodajna
+  cena column only; financing discounts, campaign discounts, Ford Bon, and
+  transport/preparation costs are excluded.
 bootstrap_meta:
   country_model_rank: 16
   suggested_scope_kind: single_model
