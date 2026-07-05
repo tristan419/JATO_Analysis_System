@@ -1,124 +1,75 @@
 source_code: opel_mokka_si_draft_scrapling
 country: 斯洛文尼亚
 brand: OPEL
-source_url: https://todo.invalid/si/opel/mokka
-source_type: manufacturer_official
+source_url: https://www.opel.si/content/dam/opel/slovenia/tools/brochures/pricelists/SI_MokkaMCM.pdf
+source_type: official_price_list
 price_semantics: base_msrp
-extractor_type: scrapling
+extractor_type: pdf_text
 profile:
-  url: https://todo.invalid/si/opel/mokka
-  tier: stealth
-  headless: true
-  network_idle: true
-  impersonate: chrome
-  css:
-    vehicle_container: body
-    model: h2
-    trim: h3
-    price: '[class*="price"]'
+  url: https://www.opel.si/content/dam/opel/slovenia/tools/brochures/pricelists/SI_MokkaMCM.pdf
+  timeout_seconds: 20
+  retry_attempts: 0
+  retry_delay_seconds: 0
+  browser_download_fallback: true
   default_currency: EUR
   default_tax_included: true
-  default_price_label: MSRP
+  default_price_label: Cena z DDV
   fixed_model: MOKKA
   fixed_jato_model: MOKKA
-  fixed_jato_powertrain: null
-  model_rules: []
-  skip_if_model_unmapped: false
   copy_trim_to_jato_trim: true
-  confidence_rules:
-    base: 0.2
-    fixed_model_bonus: 0.18
-    fixed_jato_model_bonus: 0.12
-    model_rule_bonus: 0.12
-    trim_present_bonus: 0.1
-    copy_trim_to_jato_trim_bonus: 0.09
-    parsed_price_text_bonus: 0.03
-    currency_bonus: 0.01
-    price_label_bonus: 0.02
-    trim_keyword_bonuses: []
-    price_band_bonuses:
-    - key: price_band_entry
-      label: Entry price band matched
-      max: 0
-      delta: 0.0
-    - key: price_band_mid
-      label: Mid price band matched
-      min: 0
-      max: 0
-      delta: 0.01
-    - key: price_band_high
-      label: High price band matched
-      min: 0
-      delta: 0.03
-    powertrain_keyword_bonuses: []
-    powertrain_bonuses:
-    - key: powertrain_bev
-      label: 'Powertrain matched: BEV'
-      powertrain: BEV
-      delta: 0.03
-    - key: powertrain_mhev
-      label: 'Powertrain matched: MHEV'
-      powertrain: MHEV
-      delta: 0.03
-    - key: powertrain_ice
-      label: 'Powertrain matched: ICE'
-      powertrain: ICE
-      delta: 0.03
-    clamp_min: 0.0
-    clamp_max: 1.0
-  structured_fields:
-    edition_rules:
-    - key: edition_special
-      label: Special Edition
-      keyword: special edition
-      special: true
-    powertrain_rules:
-    - key: powertrain_bev
-      powertrain: BEV
-      keywords:
-      - bev
-      - ev
-      - electric
-      - battery electric
-      - fully electric
-      - electric vehicle
-      - elektricni
-      - elektricno
-      - elektricno vozilo
-    - key: powertrain_mhev
-      powertrain: MHEV
-      keywords:
-      - mhev
-      - mild hybrid
-      - mild-hybrid
-      - 48V
-      - blagi hibrid
-    - key: powertrain_ice
-      powertrain: ICE
-      keywords:
-      - ice
-      - petrol
-      - gasoline
-      - diesel
-      - combustion
-      - bencin
-      - dizel
-  auto_accept_gates:
-    review_threshold: 0.95
-    semi_auto_threshold: 0.98
-    require_powertrain_match: true
-    force_review_if_powertrain_missing: true
-    force_review_if_powertrain_ambiguous: true
-    force_review_for_special_edition: true
+  match_confidence: 0.86
+  match_status: review_required
+  match_reason:
+    kind: official_pdf_price_list
+    source: opel_si_mokka_cenik
+    document_date: '2026-02-09'
+    note: Official Opel Slovenia Mokka price-list PDF; patterns capture the Cena z DDV column and exclude Opel financing discounts, extra campaign savings, and Borzen EV subsidies.
+  entry_patterns:
+  - pattern: 'Edition\s+1\.2\s+Turbo\s+Start/Stop\s+6-st\.\s+ročni\s+Bencin\s+100\s+kW\s+/\s+136\s+KM\s+\S+\s+(?P<price>\d{2}\s\d{3},00)\b'
+    official_trim: Edition
+    official_powertrain: ICE 1.2 Turbo 136 6MT
+    jato_powertrain: ICE
+    price_label: Cena z DDV
+  - pattern: 'GS\s+1\.2\s+Turbo\s+Start/Stop\s+6-st\.\s+ročni\s+Bencin\s+100\s+kW\s+/\s+136\s+KM\s+\S+\s+(?P<price>\d{2}\s\d{3},00)\b'
+    official_trim: GS
+    official_powertrain: ICE 1.2 Turbo 136 6MT
+    jato_powertrain: ICE
+    price_label: Cena z DDV
+  - pattern: 'Edition\s+1\.2\s+Turbo\s+Hibrid\s+48V\s+6-st\.\s+avtomatski\s+eDCT\s+Blagi\s+hibrid\s+107\s+kW\s+/\s+145\s+KM\s+\S+\s+(?P<price>\d{2}\s\d{3},00)\b'
+    official_trim: Edition
+    official_powertrain: MHEV 1.2 Turbo Hybrid 48V 145 eDCT
+    jato_powertrain: MHEV
+    price_label: Cena z DDV
+  - pattern: 'GS\s+1\.2\s+Turbo\s+Hibrid\s+48V\s+6-st\.\s+avtomatski\s+eDCT\s+Blagi\s+hibrid\s+107\s+kW\s+/\s+145\s+KM\s+\S+\s+(?P<price>\d{2}\s\d{3},00)\b'
+    official_trim: GS
+    official_powertrain: MHEV 1.2 Turbo Hybrid 48V 145 eDCT
+    jato_powertrain: MHEV
+    price_label: Cena z DDV
+  - pattern: 'Edition\s+Elektri\s+čni\s+motor\s+avtomatski\s+Elektri\s+čni\s+115\s+kW\s+/\s+156\s+KM\s+\S+\s+(?P<price>\d{2}\s\d{3},00)\b'
+    official_trim: Edition
+    official_powertrain: BEV 115 kW 156 automatic
+    jato_powertrain: BEV
+    price_label: Cena z DDV
+  - pattern: 'GS\s+Elektri\s+čni\s+motor\s+avtomatski\s+Elektri\s+čni\s+115\s+kW\s+/\s+156\s+KM\s+\S+\s+(?P<price>\d{2}\s\d{3},00)\b'
+    official_trim: GS
+    official_powertrain: BEV 115 kW 156 automatic
+    jato_powertrain: BEV
+    price_label: Cena z DDV
+  - pattern: 'GSE\s+Elektri\s+čni\s+motor\s+avtomatski\s+Elektri\s+čni\s+207\s+kW\s+/\s+281\s+KM\s+\S+\s+(?P<price>\d{2}\s\d{3},00)\b'
+    official_trim: GSE
+    official_powertrain: BEV 207 kW 281 automatic
+    jato_powertrain: BEV
+    price_label: Cena z DDV
 schedule:
   frequency: manual_only
   run_window_start: 00:00
   run_window_end: 05:00
   preferred_weekday: monday
-notes: Draft scaffold generated from country×model top30 backlog. Replace source_url,
-  profile.url, selectors, currency, price label, and the single-model placeholders
-  before promoting to 07_ScrapingToolkit/sources. [CSS selectors applied from brand
-  probe]
+notes: Official Opel Slovenia Mokka price-list PDF. Replaced todo.invalid with
+  the PDF evidence source and enabled browser_download_fallback because direct
+  requests return 403 while browser download succeeds. Patterns capture Cena z
+  DDV only; Opel financing discounts, campaign savings, and EV subsidies are
+  excluded from base MSRP.
 bootstrap_meta:
   country_model_rank: 18
   suggested_scope_kind: single_model
