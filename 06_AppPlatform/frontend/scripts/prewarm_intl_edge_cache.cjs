@@ -36,6 +36,7 @@ const FILTER_COLUMN_ALIASES = {
   country: ["国家", "Country", "country"],
   make: ["Make", "品牌", "make"],
   model: ["Model", "model"],
+  origin: ["车系", "Origin", "Series", "origin"],
   powertrain: ["动总规整", "powertrain", "Powertrain"],
   segment: ["细分市场（按车长）", "细分市场", "segment"],
   version: ["Version name", "version name", "Version Name"],
@@ -45,6 +46,7 @@ const FILTER_ORDER_KEYS = [
   "body_type",
   "segment",
   "powertrain",
+  "origin",
   "make",
   "model",
   "version",
@@ -68,6 +70,32 @@ function parseList(raw, fallback) {
 
 function uniqueList(values) {
   return [...new Set(values.map((item) => String(item || "").trim()).filter(Boolean))];
+}
+
+function parseDashboardFilterParams(rawUrl) {
+  const value = String(rawUrl || "").trim();
+  if (!value) return {};
+  let url;
+  try {
+    url = new URL(value, DEFAULT_ORIGIN);
+  } catch {
+    return {};
+  }
+  const selections = {};
+  for (const key of FILTER_ORDER_KEYS) {
+    const values = uniqueList(
+      url.searchParams.getAll(key).flatMap((item) => parseList(item, [])),
+    );
+    if (values.length > 0) selections[key] = values;
+  }
+  return selections;
+}
+
+function mergeConfiguredSelections(configuredCountries, configuredPowertrains, dashboardUrl) {
+  const selections = parseDashboardFilterParams(dashboardUrl);
+  if (configuredCountries.length > 0) selections.country = configuredCountries;
+  if (configuredPowertrains.length > 0) selections.powertrain = configuredPowertrains;
+  return selections;
 }
 
 function resolveWarmupRoles({ configuredRoles, explicitRole, loginRole, token }) {
@@ -120,6 +148,7 @@ function resolveColumns(snapshot) {
     country: resolveColumn(columns, FILTER_COLUMN_ALIASES.country),
     make: resolveColumn(columns, FILTER_COLUMN_ALIASES.make),
     model: resolveColumn(columns, FILTER_COLUMN_ALIASES.model),
+    origin: resolveColumn(columns, FILTER_COLUMN_ALIASES.origin),
     powertrain: resolveColumn(columns, FILTER_COLUMN_ALIASES.powertrain),
     segment: resolveColumn(columns, FILTER_COLUMN_ALIASES.segment),
     version: resolveColumn(columns, FILTER_COLUMN_ALIASES.version),
@@ -134,37 +163,61 @@ function valuesFromSnapshot(snapshot, column, fallback) {
   return Array.isArray(options) && options.length > 0 ? options : fallback;
 }
 
-function buildDefaultFilterPayload(snapshot, configuredCountries, configuredPowertrains) {
+function buildDefaultFilterPayload(
+  snapshot,
+  configuredCountries,
+  configuredPowertrains,
+  configuredSelections = {},
+) {
   const columns = resolveColumns(snapshot);
   const countries = configuredCountries.length > 0
     ? configuredCountries
+    : configuredSelections.country?.length > 0
+    ? configuredSelections.country
     : valuesFromSnapshot(snapshot, columns.country, FALLBACK_COUNTRIES);
   const powertrains = configuredPowertrains.length > 0
     ? configuredPowertrains
+    : configuredSelections.powertrain?.length > 0
+    ? configuredSelections.powertrain
     : valuesFromSnapshot(snapshot, columns.powertrain, DEFAULT_POWERTRAINS)
       .filter((item) => DEFAULT_POWERTRAINS.includes(String(item).toUpperCase()));
+  const selections = {
+    ...configuredSelections,
+    country: countries,
+    powertrain: powertrains,
+  };
   const filters = {};
-  if (columns.country && countries.length > 0) filters[columns.country] = countries;
-  if (columns.powertrain && powertrains.length > 0) filters[columns.powertrain] = powertrains;
+  for (const key of FILTER_ORDER_KEYS) {
+    const column = columns[key];
+    const values = selections[key] ?? [];
+    if (column && values.length > 0) filters[column] = values;
+  }
   return { columns, filters };
 }
 
-function buildDefaultSelections(snapshot, configuredCountries, configuredPowertrains) {
+function buildDefaultSelections(
+  snapshot,
+  configuredCountries,
+  configuredPowertrains,
+  configuredSelections = {},
+) {
   const { columns, filters } = buildDefaultFilterPayload(
     snapshot,
     configuredCountries,
     configuredPowertrains,
+    configuredSelections,
   );
   return {
     columns,
     selections: {
-      body_type: [],
+      body_type: filters[columns.body_type] ?? [],
       country: filters[columns.country] ?? [],
-      make: [],
-      model: [],
+      make: filters[columns.make] ?? [],
+      model: filters[columns.model] ?? [],
+      origin: filters[columns.origin] ?? [],
       powertrain: filters[columns.powertrain] ?? [],
-      segment: [],
-      version: [],
+      segment: filters[columns.segment] ?? [],
+      version: filters[columns.version] ?? [],
     },
     topLevelOptions: {
       body_type: valuesFromSnapshot(snapshot, columns.body_type, []),
@@ -194,11 +247,17 @@ function initialCascadeStartIndex(selections, topLevelOptions) {
   return powertrainIndex + 1;
 }
 
-function buildDefaultCascadePayloads(snapshot, configuredCountries, configuredPowertrains) {
+function buildDefaultCascadePayloads(
+  snapshot,
+  configuredCountries,
+  configuredPowertrains,
+  configuredSelections = {},
+) {
   const { columns, selections, topLevelOptions } = buildDefaultSelections(
     snapshot,
     configuredCountries,
     configuredPowertrains,
+    configuredSelections,
   );
   const startIndex = initialCascadeStartIndex(selections, topLevelOptions);
   const prefixFilters = {};
@@ -300,11 +359,17 @@ async function callPrewarm(origin, requestDef, auth, timeoutMs) {
   };
 }
 
-function buildWarmupRequests(snapshot, configuredCountries, configuredPowertrains) {
+function buildWarmupRequests(
+  snapshot,
+  configuredCountries,
+  configuredPowertrains,
+  configuredSelections = {},
+) {
   const { columns, filters } = buildDefaultFilterPayload(
     snapshot,
     configuredCountries,
     configuredPowertrains,
+    configuredSelections,
   );
   const topLevelColumns = [
     columns.country,
@@ -316,6 +381,7 @@ function buildWarmupRequests(snapshot, configuredCountries, configuredPowertrain
     snapshot,
     configuredCountries,
     configuredPowertrains,
+    configuredSelections,
   );
   const groupBy = columns.country || "国家";
   return [
@@ -414,6 +480,11 @@ async function main() {
     getArg("powertrains") || process.env.JATO_PREWARM_POWERTRAINS,
     [],
   );
+  const configuredSelections = mergeConfiguredSelections(
+    configuredCountries,
+    configuredPowertrains,
+    getArg("dashboard-url") || process.env.JATO_PREWARM_DASHBOARD_URL,
+  );
   const username = getArg("username") || process.env.JATO_PREWARM_USERNAME || "";
   const password = getArg("password") || process.env.JATO_PREWARM_PASSWORD || "";
   const loginAuth = await login(origin, username, password, timeoutMs);
@@ -482,6 +553,7 @@ async function main() {
         snapshot,
         configuredCountries,
         configuredPowertrains,
+        configuredSelections,
       );
       for (const requestDef of dependentRequests) {
         try {
@@ -520,6 +592,8 @@ module.exports = {
   buildDefaultFilterPayload,
   buildWarmupRequests,
   initialCascadeStartIndex,
+  mergeConfiguredSelections,
+  parseDashboardFilterParams,
   resolveWarmupRoles,
   resolveColumns,
 };
