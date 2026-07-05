@@ -1,6 +1,6 @@
 from typing import Literal
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, Query, Response
 
 from app.api.schemas import (
     HeroProductDeckRequest,
@@ -75,9 +75,10 @@ def positioning_pricing_deck(
 @router.post("/version-comparison-deck")
 def version_comparison_deck(
     payload: VersionComparisonDeckRequest,
+    response: Response,
     _=Depends(optional_viewer),
 ) -> dict:
-    return query_version_comparison_deck(
+    result = query_version_comparison_deck(
         country=payload.country,
         target_period=payload.target_period,
         time_range=payload.time_range,
@@ -96,6 +97,10 @@ def version_comparison_deck(
         length_min=payload.length_min,
         length_max=payload.length_max,
     )
+    cache_state = (result.get("metadata") or {}).get("serverCache")
+    if cache_state:
+        response.headers["X-JATO-Server-Cache"] = str(cache_state)
+    return result
 
 
 @router.post("/hero-product-deck")

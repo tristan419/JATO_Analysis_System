@@ -9,7 +9,9 @@ import threading
 import time
 from dataclasses import dataclass
 from functools import lru_cache
+from pathlib import Path
 from typing import Any
+from uuid import uuid4
 
 import pandas as pd
 
@@ -18,6 +20,12 @@ try:
 except ImportError:  # pragma: no cover - optional runtime dependency
     duckdb = None
 
+from app.core.config import (
+    VERSION_COMPARISON_PERSISTENT_CACHE_DIR,
+    VERSION_COMPARISON_PERSISTENT_CACHE_ENABLED,
+    VERSION_COMPARISON_PERSISTENT_CACHE_MAX_ENTRIES,
+    VERSION_COMPARISON_PERSISTENT_CACHE_TTL_SECONDS,
+)
 from app.db.session import get_engine
 from app.infra import parquet_repository as repo
 from app.infra.redis_client import get_redis_client
@@ -35,6 +43,7 @@ logger = logging.getLogger(__name__)
 _DECK_CACHE_TTL_SECONDS = 300
 _deck_cache: dict[str, tuple[float, str, dict[str, Any]]] = {}
 _deck_cache_lock = threading.Lock()
+_VERSION_COMPARISON_DISK_CACHE_SCHEMA = 1
 
 
 def _version_comparison_cache_key(
@@ -86,6 +95,144 @@ def _version_comparison_cache_key(
 def _version_comparison_redis_key(request_key: str, dataset_token: str) -> str:
     digest = hashlib.sha256(f"{request_key}|{dataset_token}".encode("utf-8")).hexdigest()
     return f"ms:version-comparison:v2:{digest}"
+
+
+def _version_comparison_disk_payload_key(
+    request_key: str,
+    dataset_token: str,
+) -> dict[str, Any]:
+    return {
+        "schema": _VERSION_COMPARISON_DISK_CACHE_SCHEMA,
+        "dataset": dataset_token,
+        "cacheKey": request_key,
+    }
+
+
+def _version_comparison_disk_cache_path(
+    request_key: str,
+    dataset_token: str,
+) -> Path:
+    payload_key = _version_comparison_disk_payload_key(request_key, dataset_token)
+    digest = hashlib.sha256(
+        json.dumps(payload_key, ensure_ascii=False, sort_keys=True).encode("utf-8")
+    ).hexdigest()
+    return VERSION_COMPARISON_PERSISTENT_CACHE_DIR / f"{digest}.json"
+
+
+def _without_version_comparison_cache_state(payload: dict[str, Any]) -> dict[str, Any]:
+    result = dict(payload)
+    metadata = result.get("metadata")
+    if isinstance(metadata, dict):
+        clean_metadata = dict(metadata)
+        clean_metadata.pop("serverCache", None)
+        result["metadata"] = clean_metadata
+    return result
+
+
+def _with_version_comparison_cache_state(
+    payload: dict[str, Any],
+    cache_state: str,
+) -> dict[str, Any]:
+    result = dict(payload)
+    metadata = dict(result.get("metadata") or {})
+    metadata["serverCache"] = cache_state
+    result["metadata"] = metadata
+    return result
+
+
+def _read_version_comparison_persistent_cache(
+    request_key: str,
+    dataset_token: str,
+) -> dict[str, Any] | None:
+    if not VERSION_COMPARISON_PERSISTENT_CACHE_ENABLED:
+        return None
+    cache_path = _version_comparison_disk_cache_path(request_key, dataset_token)
+    try:
+        if not cache_path.exists():
+            return None
+        payload = json.loads(cache_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+
+    if payload.get("schema") != _VERSION_COMPARISON_DISK_CACHE_SCHEMA:
+        return None
+    if payload.get("dataset") != dataset_token:
+        return None
+    cached_at = float(payload.get("cachedAt", 0.0) or 0.0)
+    if (time.time() - cached_at) >= VERSION_COMPARISON_PERSISTENT_CACHE_TTL_SECONDS:
+        return None
+    result = payload.get("result")
+    return result if isinstance(result, dict) else None
+
+
+def _prune_version_comparison_persistent_cache() -> None:
+    if not VERSION_COMPARISON_PERSISTENT_CACHE_ENABLED:
+        return
+    try:
+        cache_files = sorted(
+            VERSION_COMPARISON_PERSISTENT_CACHE_DIR.glob("*.json"),
+            key=lambda path: path.stat().st_mtime,
+        )
+    except OSError:
+        return
+
+    max_entries = max(1, int(VERSION_COMPARISON_PERSISTENT_CACHE_MAX_ENTRIES))
+    overflow = len(cache_files) - max_entries
+    if overflow <= 0:
+        return
+    for path in cache_files[:overflow]:
+        try:
+            path.unlink()
+        except OSError:
+            continue
+
+
+def _write_version_comparison_persistent_cache(
+    request_key: str,
+    dataset_token: str,
+    result: dict[str, Any],
+) -> None:
+    if not VERSION_COMPARISON_PERSISTENT_CACHE_ENABLED:
+        return
+    try:
+        VERSION_COMPARISON_PERSISTENT_CACHE_DIR.mkdir(parents=True, exist_ok=True)
+        cache_path = _version_comparison_disk_cache_path(request_key, dataset_token)
+        tmp_path = cache_path.with_suffix(f".{uuid4().hex}.tmp")
+        tmp_path.write_text(
+            json.dumps(
+                {
+                    "schema": _VERSION_COMPARISON_DISK_CACHE_SCHEMA,
+                    "dataset": dataset_token,
+                    "cachedAt": time.time(),
+                    "result": _without_version_comparison_cache_state(result),
+                },
+                ensure_ascii=False,
+                separators=(",", ":"),
+            ),
+            encoding="utf-8",
+        )
+        tmp_path.replace(cache_path)
+        _prune_version_comparison_persistent_cache()
+    except OSError as exc:
+        logger.warning("Could not write version-comparison persistent cache: %s", exc)
+
+
+def _store_version_comparison_local_cache(
+    local_key: str,
+    dataset_token: str,
+    result: dict[str, Any],
+    cached_at: float | None = None,
+) -> None:
+    with _deck_cache_lock:
+        _deck_cache[local_key] = (
+            cached_at if cached_at is not None else time.monotonic(),
+            dataset_token,
+            _without_version_comparison_cache_state(result),
+        )
+        if len(_deck_cache) > 32:
+            oldest_key = min(_deck_cache, key=lambda key: _deck_cache[key][0])
+            _deck_cache.pop(oldest_key, None)
+
 
 def clear_market_scan_local_cache() -> dict[str, Any]:
     with _deck_cache_lock:
@@ -4666,7 +4813,7 @@ def query_version_comparison_deck(
         cached_at, cached_token, cached_payload = local_cached
         if cached_token == dataset_token and (now - cached_at) < _DECK_CACHE_TTL_SECONDS:
             logger.info("VersionComparison local-cache HIT")
-            return cached_payload
+            return _with_version_comparison_cache_state(cached_payload, "MEMORY")
 
     redis_client = get_redis_client()
     redis_cache_key = _version_comparison_redis_key(request_key, dataset_token)
@@ -4676,18 +4823,27 @@ def query_version_comparison_deck(
             cached = get_cached_deck(redis_client, redis_cache_key)
             if cached is not None:
                 logger.info("VersionComparison redis HIT")
-                with _deck_cache_lock:
-                    _deck_cache[local_key] = (now, dataset_token, cached)
-                return cached
+                _store_version_comparison_local_cache(local_key, dataset_token, cached, now)
+                return _with_version_comparison_cache_state(cached, "REDIS")
+        except Exception:
+            pass
+
+    disk_cached = _read_version_comparison_persistent_cache(request_key, dataset_token)
+    if disk_cached is not None:
+        logger.info("VersionComparison persistent-cache HIT")
+        _store_version_comparison_local_cache(local_key, dataset_token, disk_cached, now)
+        return _with_version_comparison_cache_state(disk_cached, "DISK")
+
+    if redis_client is not None:
+        try:
             if acquire_compute_lock(redis_client, redis_cache_key):
                 acquired_cache_lock_key = redis_cache_key
             else:
                 waited = wait_for_cache(redis_client, redis_cache_key)
                 if waited is not None:
                     logger.info("VersionComparison redis waiter GOT cache from peer")
-                    with _deck_cache_lock:
-                        _deck_cache[local_key] = (now, dataset_token, waited)
-                    return waited
+                    _store_version_comparison_local_cache(local_key, dataset_token, waited, now)
+                    return _with_version_comparison_cache_state(waited, "REDIS")
         except Exception:
             acquired_cache_lock_key = None
 
@@ -4718,22 +4874,23 @@ def query_version_comparison_deck(
             release_compute_lock(redis_client, acquired_cache_lock_key)
         raise
 
-    with _deck_cache_lock:
-        _deck_cache[local_key] = (now, dataset_token, result)
-        if len(_deck_cache) > 32:
-            oldest_key = min(_deck_cache, key=lambda key: _deck_cache[key][0])
-            _deck_cache.pop(oldest_key, None)
+    _store_version_comparison_local_cache(local_key, dataset_token, result, now)
+    _write_version_comparison_persistent_cache(request_key, dataset_token, result)
 
     if redis_client is not None:
         try:
-            set_cached_deck(redis_client, redis_cache_key, result)
+            set_cached_deck(
+                redis_client,
+                redis_cache_key,
+                _without_version_comparison_cache_state(result),
+            )
         except Exception:
             pass
         finally:
             if acquired_cache_lock_key is not None:
                 release_compute_lock(redis_client, acquired_cache_lock_key)
 
-    return result
+    return _with_version_comparison_cache_state(result, "MISS")
 
 
 def _query_version_comparison_deck_impl(

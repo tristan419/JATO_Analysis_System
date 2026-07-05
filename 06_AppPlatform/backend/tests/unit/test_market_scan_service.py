@@ -650,6 +650,7 @@ def test_query_version_comparison_deck_uses_local_cache(monkeypatch: pytest.Monk
     monkeypatch.setattr(market_scan_service.repo, "current_dataset_token", lambda: "dataset-token")
     monkeypatch.setattr(market_scan_service, "get_redis_client", lambda: None)
     monkeypatch.setattr(market_scan_service, "_query_version_comparison_deck_impl", fake_impl)
+    monkeypatch.setattr(market_scan_service, "VERSION_COMPARISON_PERSISTENT_CACHE_ENABLED", False)
     market_scan_service._deck_cache.clear()
 
     kwargs = {
@@ -675,7 +676,8 @@ def test_query_version_comparison_deck_uses_local_cache(monkeypatch: pytest.Monk
     try:
         first = market_scan_service.query_version_comparison_deck(**kwargs)
         second = market_scan_service.query_version_comparison_deck(**kwargs)
-        assert first is second
+        assert first["metadata"]["serverCache"] == "MISS"
+        assert second["metadata"]["serverCache"] == "MEMORY"
         assert len(calls) == 1
 
         market_scan_service.query_version_comparison_deck(**{**kwargs, "models": ["MG::MG ZS"]})
@@ -683,6 +685,61 @@ def test_query_version_comparison_deck_uses_local_cache(monkeypatch: pytest.Monk
 
         market_scan_service.query_version_comparison_deck(**{**kwargs, "refill_models": True})
         assert len(calls) == 3
+    finally:
+        market_scan_service._deck_cache.clear()
+
+
+def test_query_version_comparison_deck_uses_persistent_cache(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path,
+) -> None:
+    calls: list[dict[str, object]] = []
+
+    def fake_impl(**kwargs: object) -> dict[str, object]:
+        calls.append(kwargs)
+        return {
+            "metadata": {"selectedModels": kwargs.get("models", [])},
+            "page": {"bubbleChart": {"items": []}},
+        }
+
+    monkeypatch.setattr(market_scan_service.repo, "current_dataset_token", lambda: "dataset-token")
+    monkeypatch.setattr(market_scan_service, "get_redis_client", lambda: None)
+    monkeypatch.setattr(market_scan_service, "_query_version_comparison_deck_impl", fake_impl)
+    monkeypatch.setattr(market_scan_service, "VERSION_COMPARISON_PERSISTENT_CACHE_ENABLED", True)
+    monkeypatch.setattr(market_scan_service, "VERSION_COMPARISON_PERSISTENT_CACHE_DIR", tmp_path)
+    monkeypatch.setattr(market_scan_service, "VERSION_COMPARISON_PERSISTENT_CACHE_TTL_SECONDS", 300)
+    market_scan_service._deck_cache.clear()
+
+    kwargs = {
+        "country": "Denmark",
+        "target_period": "2026-05",
+        "time_range": None,
+        "fuel_types": ["BEV"],
+        "sales_mode": "rolling12",
+        "comparison_mode": "same_segment",
+        "segment": "SUV A0",
+        "models": ["BYD::ATTO 2"],
+        "refill_models": False,
+        "msrp_min": None,
+        "msrp_max": None,
+        "price_band_size": None,
+        "body_type": None,
+        "drive_types": [],
+        "segments": [],
+        "length_min": None,
+        "length_max": None,
+    }
+
+    try:
+        first = market_scan_service.query_version_comparison_deck(**kwargs)
+        assert first["metadata"]["serverCache"] == "MISS"
+        assert len(calls) == 1
+
+        market_scan_service._deck_cache.clear()
+        second = market_scan_service.query_version_comparison_deck(**kwargs)
+        assert second["metadata"]["serverCache"] == "DISK"
+        assert second["metadata"]["selectedModels"] == ["BYD::ATTO 2"]
+        assert len(calls) == 1
     finally:
         market_scan_service._deck_cache.clear()
 
