@@ -5,12 +5,26 @@ interface PrewarmModule {
     snapshot: unknown,
     configuredCountries: string[],
     configuredPowertrains: string[],
+    configuredSelections?: Record<string, string[]>,
   ) => { column: string; filters: Record<string, string[]> }[];
+  buildDefaultFilterPayload: (
+    snapshot: unknown,
+    configuredCountries: string[],
+    configuredPowertrains: string[],
+    configuredSelections?: Record<string, string[]>,
+  ) => { columns: Record<string, string>; filters: Record<string, string[]> };
   buildWarmupRequests: (
     snapshot: unknown,
     configuredCountries: string[],
     configuredPowertrains: string[],
+    configuredSelections?: Record<string, string[]>,
   ) => { body?: unknown; label: string; method: string; path: string }[];
+  mergeConfiguredSelections: (
+    configuredCountries: string[],
+    configuredPowertrains: string[],
+    dashboardUrl: string,
+  ) => Record<string, string[]>;
+  parseDashboardFilterParams: (dashboardUrl: string) => Record<string, string[]>;
   resolveWarmupRoles: (options: {
     configuredRoles?: string[];
     explicitRole?: string;
@@ -93,6 +107,60 @@ describe("prewarm intl edge cache", () => {
       },
       method: "POST",
       path: "/filters/options/batch",
+    });
+  });
+
+  it("uses dashboard URL query params for exact edge prewarm payloads", () => {
+    const dashboardUrl = "/dashboard?country=%E4%B8%B9%E9%BA%A6%2C%E5%BE%B7%E5%9B%BD&powertrain=BEV%2CPHEV&make=BYD&model=SEAL";
+    const configuredSelections = prewarm.mergeConfiguredSelections([], [], dashboardUrl);
+
+    expect(configuredSelections).toEqual({
+      country: ["丹麦", "德国"],
+      make: ["BYD"],
+      model: ["SEAL"],
+      powertrain: ["BEV", "PHEV"],
+    });
+    expect(prewarm.buildDefaultFilterPayload(snapshot, [], [], configuredSelections).filters).toEqual({
+      "国家": ["丹麦", "德国"],
+      "动总规整": ["BEV", "PHEV"],
+      Make: ["BYD"],
+      Model: ["SEAL"],
+    });
+    expect(prewarm.buildDefaultCascadePayloads(snapshot, [], [], configuredSelections)).toEqual([
+      {
+        column: "Make",
+        filters: {
+          "国家": ["丹麦", "德国"],
+          "动总规整": ["BEV", "PHEV"],
+        },
+      },
+      {
+        column: "Model",
+        filters: {
+          "国家": ["丹麦", "德国"],
+          "动总规整": ["BEV", "PHEV"],
+          Make: ["BYD"],
+        },
+      },
+      {
+        column: "Version name",
+        filters: {
+          "国家": ["丹麦", "德国"],
+          "动总规整": ["BEV", "PHEV"],
+          Make: ["BYD"],
+          Model: ["SEAL"],
+        },
+      },
+    ]);
+  });
+
+  it("lets explicit countries and powertrains override dashboard URL params", () => {
+    const dashboardUrl = "/dashboard?country=%E4%B8%B9%E9%BA%A6&powertrain=BEV&make=BYD";
+
+    expect(prewarm.mergeConfiguredSelections(["西班牙"], ["ICE"], dashboardUrl)).toEqual({
+      country: ["西班牙"],
+      make: ["BYD"],
+      powertrain: ["ICE"],
     });
   });
 

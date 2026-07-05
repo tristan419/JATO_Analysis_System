@@ -10,8 +10,8 @@ import {
 
 import { apiUrl } from "../api/core";
 
-const AUTH_PROFILE_REFRESH_DELAY_MS = 6_000;
-const AUTH_PROFILE_REFRESH_IDLE_TIMEOUT_MS = 4_000;
+const AUTH_PROFILE_REFRESH_DELAY_MS = 30_000;
+const AUTH_PROFILE_REFRESH_IDLE_TIMEOUT_MS = 8_000;
 
 type AuthIdleWindow = Window & typeof globalThis & {
   requestIdleCallback?: (callback: () => void, options?: { timeout?: number }) => number;

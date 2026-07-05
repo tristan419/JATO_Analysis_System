@@ -96,11 +96,26 @@ button, input, select, textarea {
   gap: 8px;
 }
 
+.route-diagnostics-actions .btn-ghost {
+  color: var(--c-shell-text);
+  border-color: rgba(226, 232, 240, 0.65);
+}
+
+.route-diagnostics-actions .btn-ghost:hover {
+  background: rgba(226, 232, 240, 0.08);
+}
+
 .route-diagnostics-grid {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
   border: 1px solid var(--c-border-soft);
   background: var(--c-surface);
+}
+
+.route-diagnostics-grid--compact {
+  min-width: 720px;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  border-width: 0 0 1px;
 }
 
 .route-diagnostics-panel {
@@ -116,6 +131,14 @@ button, input, select, textarea {
 }
 
 .route-diagnostics-panel:nth-child(3n) {
+  border-right: 0;
+}
+
+.route-diagnostics-grid--compact .route-diagnostics-panel:nth-child(3n) {
+  border-right: 1px solid var(--c-border-light);
+}
+
+.route-diagnostics-grid--compact .route-diagnostics-panel:nth-child(5n) {
   border-right: 0;
 }
 
@@ -239,11 +262,24 @@ button, input, select, textarea {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
+  .route-diagnostics-grid--compact {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
   .route-diagnostics-panel:nth-child(3n) {
     border-right: 1px solid var(--c-border-light);
   }
 
+  .route-diagnostics-grid--compact .route-diagnostics-panel:nth-child(3n),
+  .route-diagnostics-grid--compact .route-diagnostics-panel:nth-child(5n) {
+    border-right: 1px solid var(--c-border-light);
+  }
+
   .route-diagnostics-panel:nth-child(2n) {
+    border-right: 0;
+  }
+
+  .route-diagnostics-grid--compact .route-diagnostics-panel:nth-child(2n) {
     border-right: 0;
   }
 
@@ -262,12 +298,20 @@ button, input, select, textarea {
     grid-template-columns: 1fr;
   }
 
+  .route-diagnostics-grid--compact {
+    grid-template-columns: 1fr;
+  }
+
   .route-diagnostics-panel {
     border-right: 0;
     border-bottom: 1px solid var(--c-border-light);
   }
 
   .route-diagnostics-panel:nth-child(3n) {
+    border-right: 0;
+  }
+
+  .route-diagnostics-grid--compact .route-diagnostics-panel:nth-child(5n) {
     border-right: 0;
   }
 
