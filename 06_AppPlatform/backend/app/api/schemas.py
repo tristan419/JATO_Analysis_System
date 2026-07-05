@@ -149,6 +149,7 @@ class VersionComparisonDeckRequest(BaseModel):
     comparison_mode: Literal["same_segment", "free_comparison"] = "same_segment"
     segment: str | None = None
     models: list[str] = Field(default_factory=list)
+    refill_models: bool = False
     msrp_min: float | None = Field(default=None, ge=0)
     msrp_max: float | None = Field(default=None, ge=0)
     price_band_size: int | None = Field(default=None, ge=500, le=200000)

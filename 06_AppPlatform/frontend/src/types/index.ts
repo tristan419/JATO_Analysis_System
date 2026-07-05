@@ -855,6 +855,7 @@ export interface VersionComparisonModelOption {
   driveType: string;
   lengthMm: number;
   msrpMedian: number;
+  availabilityReason?: string;
 }
 
 export type VersionComparisonMode = "same_segment" | "free_comparison";
@@ -955,6 +956,7 @@ export interface VersionComparisonDeckRequest {
   comparison_mode?: VersionComparisonMode;
   segment?: string | null;
   models?: string[];
+  refill_models?: boolean;
   msrp_min?: number | null;
   msrp_max?: number | null;
   price_band_size?: number | null;

@@ -46,6 +46,7 @@ def _version_comparison_cache_key(
     comparison_mode: str,
     segment: str | None,
     models: list[str],
+    refill_models: bool,
     msrp_min: float | None,
     msrp_max: float | None,
     price_band_size: int | None,
@@ -68,6 +69,7 @@ def _version_comparison_cache_key(
         "comparisonMode": comparison_mode,
         "segment": str(segment or "").strip(),
         "models": [str(value).strip() for value in models if str(value).strip()],
+        "refillModels": bool(refill_models),
         "msrpMin": msrp_min,
         "msrpMax": msrp_max,
         "priceBandSize": price_band_size,
@@ -2007,6 +2009,7 @@ def _resolve_version_comparison_models(
     requested_models: list[str],
     *,
     sales_column: str,
+    refill_models: bool = False,
 ) -> tuple[list[str], list[dict[str, Any]]]:
     if frame.empty or sales_column not in frame.columns:
         return [], []
@@ -2031,6 +2034,15 @@ def _resolve_version_comparison_models(
         if len(selected) >= VERSION_COMPARISON_MODEL_LIMIT:
             break
     if selected:
+        if refill_models and len(selected) < 3:
+            for option in options:
+                value = str(option["value"])
+                if value in seen:
+                    continue
+                selected.append(value)
+                seen.add(value)
+                if len(selected) >= 3 or len(selected) >= VERSION_COMPARISON_MODEL_LIMIT:
+                    break
         return selected, options
     return [option["value"] for option in options[:3]], options
 
@@ -4570,6 +4582,7 @@ def query_version_comparison_deck(
     comparison_mode: str = "same_segment",
     segment: str | None,
     models: list[str],
+    refill_models: bool = False,
     msrp_min: float | None,
     msrp_max: float | None,
     price_band_size: int | None,
@@ -4589,6 +4602,7 @@ def query_version_comparison_deck(
         comparison_mode=comparison_mode,
         segment=segment,
         models=models,
+        refill_models=refill_models,
         msrp_min=msrp_min,
         msrp_max=msrp_max,
         price_band_size=price_band_size,
@@ -4641,6 +4655,7 @@ def query_version_comparison_deck(
             comparison_mode=comparison_mode,
             segment=segment,
             models=models,
+            refill_models=refill_models,
             msrp_min=msrp_min,
             msrp_max=msrp_max,
             price_band_size=price_band_size,
@@ -4684,6 +4699,7 @@ def _query_version_comparison_deck_impl(
     comparison_mode: str = "same_segment",
     segment: str | None,
     models: list[str],
+    refill_models: bool = False,
     msrp_min: float | None,
     msrp_max: float | None,
     price_band_size: int | None,
@@ -4814,7 +4830,7 @@ def _query_version_comparison_deck_impl(
         )
         segment_frame = fuel_frame[fuel_frame["__segment_raw"] == selected_segment].copy() if selected_segment else fuel_frame.iloc[0:0].copy()
         selected_models, _ = _resolve_version_comparison_models(
-            segment_frame, models, sales_column=sales_column,
+            segment_frame, models, sales_column=sales_column, refill_models=refill_models,
         )
         comparison_frame = segment_frame[segment_frame["__model_key"].isin(selected_models)].copy() if selected_models else segment_frame.iloc[0:0].copy()
         candidate_model_options = _build_all_model_options(segment_frame, sales_column)
@@ -4842,7 +4858,12 @@ def _query_version_comparison_deck_impl(
         available_segments = _build_model_option_list(fuel_frame, "__segment_raw", sales_column)
         selected_segment = ""
         # Selected basket follows the same filtered candidate pool as Add Model.
-        selected_models, _ = _resolve_version_comparison_models(candidate_frame, models, sales_column=sales_column)
+        selected_models, _ = _resolve_version_comparison_models(
+            candidate_frame,
+            models,
+            sales_column=sales_column,
+            refill_models=refill_models,
+        )
         # Candidate pool = models within the filtered candidate frame
         candidate_model_options = _build_all_model_options(candidate_frame, sales_column)
         comparison_frame = candidate_frame[candidate_frame["__model_key"].isin(selected_models)].copy() if selected_models else candidate_frame.iloc[0:0].copy()
@@ -4885,9 +4906,13 @@ def _query_version_comparison_deck_impl(
         [opt["value"] for opt in candidate_model_options],
         candidate_source_frame,
     )
+    global_discovery_frame = pd.concat(
+        [frame, global_candidate_frame],
+        ignore_index=True,
+    ).drop_duplicates()
     global_available_models = _build_enhanced_model_options(
-        [opt["value"] for opt in _build_all_model_options(global_candidate_frame, sales_column)],
-        global_candidate_frame,
+        [opt["value"] for opt in _build_all_model_options(global_discovery_frame, sales_column)],
+        global_discovery_frame,
     )
     # Detect mixed segment
     selected_model_details = _build_enhanced_model_options(selected_models, comparison_frame)

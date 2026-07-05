@@ -632,8 +632,9 @@ def test_positioning_pricing_deck_request_accepts_ytd_sales_mode() -> None:
 
 
 def test_version_comparison_deck_request_accepts_ytd_sales_mode() -> None:
-    payload = VersionComparisonDeckRequest(sales_mode="ytd")
+    payload = VersionComparisonDeckRequest(sales_mode="ytd", refill_models=True)
     assert payload.sales_mode == "ytd"
+    assert payload.refill_models is True
 
 
 def test_query_version_comparison_deck_uses_local_cache(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -660,6 +661,7 @@ def test_query_version_comparison_deck_uses_local_cache(monkeypatch: pytest.Monk
         "comparison_mode": "same_segment",
         "segment": "SUV A0",
         "models": ["BYD::ATTO 2"],
+        "refill_models": False,
         "msrp_min": None,
         "msrp_max": None,
         "price_band_size": None,
@@ -678,6 +680,9 @@ def test_query_version_comparison_deck_uses_local_cache(monkeypatch: pytest.Monk
 
         market_scan_service.query_version_comparison_deck(**{**kwargs, "models": ["MG::MG ZS"]})
         assert len(calls) == 2
+
+        market_scan_service.query_version_comparison_deck(**{**kwargs, "refill_models": True})
+        assert len(calls) == 3
     finally:
         market_scan_service._deck_cache.clear()
 
@@ -715,6 +720,24 @@ def test_resolve_version_comparison_models_caps_requested_models_at_10() -> None
     )
 
     assert selected == ["L", "K", "J", "I", "H", "G", "F", "E", "D", "C"]
+
+
+def test_resolve_version_comparison_models_refills_valid_requested_models() -> None:
+    frame = pd.DataFrame(
+        {
+            "__model": ["A", "B", "C", "D"],
+            "__comparison_sales": [400.0, 300.0, 200.0, 100.0],
+        }
+    )
+
+    selected, _ = market_scan_service._resolve_version_comparison_models(
+        frame,
+        ["D", "Missing"],
+        sales_column="__comparison_sales",
+        refill_models=True,
+    )
+
+    assert selected == ["D", "A", "B"]
 
 
 def test_version_comparison_model_options_use_brand_model_stable_key() -> None:

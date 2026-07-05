@@ -7903,6 +7903,15 @@ table.data-table tr.data-table-group-row.contains-selection td {
   cursor: pointer;
 }
 
+.version-comparison-chip--detailed.is-unavailable {
+  border-color: rgba(100, 116, 139, 0.24);
+  background: rgba(148, 163, 184, 0.12);
+}
+
+.version-comparison-chip--detailed.is-unavailable .version-comparison-chip-name {
+  color: #64748b;
+}
+
 .version-comparison-chip-content {
   display: flex;
   flex-direction: column;
@@ -7919,6 +7928,11 @@ table.data-table tr.data-table-group-row.contains-selection td {
   font-size: 10px;
   color: #64748b;
   font-weight: 400;
+}
+
+.version-comparison-chip-meta--warn {
+  color: #b45309;
+  font-weight: 700;
 }
 
 .version-comparison-chip-remove {

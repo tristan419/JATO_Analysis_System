@@ -62,6 +62,11 @@ const COMPARISON_MODE_OPTIONS: Array<{ value: VersionComparisonMode; label: stri
   { value: "same_segment", label: "同级别对比" },
   { value: "free_comparison", label: "自由对比" },
 ];
+type ModelSelectionMode = "auto" | "locked";
+const MODEL_SELECTION_MODE_OPTIONS: Array<{ value: ModelSelectionMode; label: string; hint: string }> = [
+  { value: "auto", label: "自动跟随", hint: "筛选变化时保留有效车型并补当前Top" },
+  { value: "locked", label: "锁定当前", hint: "筛选变化时灰显不可选车型" },
+];
 
 type LabelMode = "clean" | "smart_top" | "selected" | "all";
 const LABEL_MODE_OPTIONS: Array<{ value: LabelMode; label: string; hint: string }> = [
@@ -210,6 +215,10 @@ function isSalesMode(value: string | null): value is PositioningPricingSalesMode
 
 function isComparisonMode(value: string | null): value is VersionComparisonMode {
   return COMPARISON_MODE_OPTIONS.some((item) => item.value === value);
+}
+
+function isModelSelectionMode(value: string | null): value is ModelSelectionMode {
+  return MODEL_SELECTION_MODE_OPTIONS.some((item) => item.value === value);
 }
 
 function formatMetricValue(value: number | string): string {
@@ -690,6 +699,11 @@ type VersionComparisonPickerOption = VersionComparisonModelOption & {
   availabilityReason?: string;
 };
 
+type VersionComparisonSelectedModelDetail = VersionComparisonModelOption & {
+  availability: "current" | "global" | "missing";
+  availabilityReason?: string;
+};
+
 export function VersionComparisonPage() {
   const [searchParams, setSearchParams] = useSearchParams();
   const { country: defaultCountry } = useResolvedCountry("zh");
@@ -719,6 +733,7 @@ export function VersionComparisonPage() {
   const countryPickerRef = useRef<HTMLDivElement | null>(null);
   const skipResolvedModelFetchRef = useRef<string | null>(null);
   const modelScopeKeyRef = useRef<string | null>(null);
+  const modelSelectionModeRef = useRef<ModelSelectionMode | null>(null);
 
   const [selectedCountry, setSelectedCountry] = useState<string | null>(() => searchParams.get("country") || defaultCountry);
   const [selectedPeriod, setSelectedPeriod] = useState<string | null>(() => searchParams.get("period"));
@@ -732,6 +747,10 @@ export function VersionComparisonPage() {
   const [comparisonMode, setComparisonMode] = useState<VersionComparisonMode>(() => {
     const requested = searchParams.get("comparisonMode");
     return isComparisonMode(requested) ? requested : "same_segment";
+  });
+  const [modelSelectionMode, setModelSelectionMode] = useState<ModelSelectionMode>(() => {
+    const requested = searchParams.get("modelMode");
+    return isModelSelectionMode(requested) ? requested : "auto";
   });
   const [selectedSegment, setSelectedSegment] = useState<string | null>(() => searchParams.get("segment"));
   const [selectedModels, setSelectedModels] = useState<string[]>(() => {
@@ -842,6 +861,7 @@ export function VersionComparisonPage() {
     }
     if (salesMode !== DEFAULT_SALES_MODE) params.set("salesMode", salesMode);
     if (comparisonMode !== "same_segment") params.set("comparisonMode", comparisonMode);
+    if (modelSelectionMode !== "auto") params.set("modelMode", modelSelectionMode);
     if (selectedSegment && comparisonMode === "same_segment") params.set("segment", selectedSegment);
     if (selectedModels.length > 0) params.set("models", selectedModels.join("||"));
     const fuels = selectedFuelTypes.slice().sort().join(",");
@@ -859,7 +879,7 @@ export function VersionComparisonPage() {
     if (selectedSegments.length > 0 && comparisonMode !== "same_segment") params.set("segments", selectedSegments.join(","));
     if (labelMode !== "smart_top") params.set("labelMode", labelMode);
     setSearchParams(params, { replace: true });
-  }, [msrpMax, msrpMin, priceBandSize, priceControlsTouched, salesMode, comparisonMode, selectedCountry, selectedFuelTypes, selectedModels, selectedPeriod, selectedSegment, selectedTimeRange, bodyType, driveTypes, lengthMin, lengthMax, selectedSegments, labelMode, setSearchParams]);
+  }, [msrpMax, msrpMin, modelSelectionMode, priceBandSize, priceControlsTouched, salesMode, comparisonMode, selectedCountry, selectedFuelTypes, selectedModels, selectedPeriod, selectedSegment, selectedTimeRange, bodyType, driveTypes, lengthMin, lengthMax, selectedSegments, labelMode, setSearchParams]);
 
   useEffect(() => {
     syncUrlParams();
@@ -878,19 +898,25 @@ export function VersionComparisonPage() {
   useEffect(() => {
     const selectedModelKey = selectedModels.join("||");
     const previousModelScopeKey = modelScopeKeyRef.current;
+    const previousModelSelectionMode = modelSelectionModeRef.current;
     const modelScopeChanged = previousModelScopeKey !== null && previousModelScopeKey !== modelScopeKey;
+    const modelSelectionChangedToAuto = (
+      previousModelSelectionMode !== null
+      && previousModelSelectionMode !== modelSelectionMode
+      && modelSelectionMode === "auto"
+    );
     modelScopeKeyRef.current = modelScopeKey;
-    if (!modelScopeChanged && skipResolvedModelFetchRef.current === selectedModelKey) {
+    modelSelectionModeRef.current = modelSelectionMode;
+    if (!modelScopeChanged && !modelSelectionChangedToAuto && skipResolvedModelFetchRef.current === selectedModelKey) {
       skipResolvedModelFetchRef.current = null;
       return;
     }
     if (modelScopeChanged) {
       skipResolvedModelFetchRef.current = null;
     }
-    const requestModels = modelScopeChanged ? [] : selectedModels;
+    const requestModels = selectedModels;
+    const refillModels = modelSelectionMode === "auto" && (modelScopeChanged || modelSelectionChangedToAuto);
     if (modelScopeChanged && selectedModels.length > 0) {
-      skipResolvedModelFetchRef.current = "";
-      setSelectedModels([]);
       setModelSearchQuery("");
       setModelPickerOpen(false);
       setModelToAdd("");
@@ -908,6 +934,7 @@ export function VersionComparisonPage() {
       comparison_mode: comparisonMode,
       segment: selectedSegment || undefined,
       models: requestModels,
+      refill_models: refillModels,
       msrp_min: priceControlsTouched ? (msrpMin ?? undefined) : undefined,
       msrp_max: priceControlsTouched ? (msrpMax ?? undefined) : undefined,
       price_band_size: priceControlsTouched ? (priceBandSize ?? undefined) : undefined,
@@ -934,7 +961,7 @@ export function VersionComparisonPage() {
           setLoading(false);
         }
       });
-  }, [msrpMax, msrpMin, modelScopeKey, priceBandSize, priceControlsTouched, reloadToken, salesMode, comparisonMode, selectedCountry, selectedFuelTypes, selectedModels, selectedPeriod, selectedSegment, selectedTimeRange, bodyType, driveTypes, selectedSegments, lengthMin, lengthMax]);
+  }, [msrpMax, msrpMin, modelScopeKey, modelSelectionMode, priceBandSize, priceControlsTouched, reloadToken, salesMode, comparisonMode, selectedCountry, selectedFuelTypes, selectedModels, selectedPeriod, selectedSegment, selectedTimeRange, bodyType, driveTypes, selectedSegments, lengthMin, lengthMax]);
 
   useEffect(() => {
     if (!deck) {
@@ -967,14 +994,26 @@ export function VersionComparisonPage() {
     if (normalizedFuelTypes.length !== selectedFuelTypes.length) {
       setSelectedFuelTypes(deck.metadata.selectedFuelTypes);
     }
-    if (
-      selectedModels.length !== deck.metadata.selectedModels.length
-      || selectedModels.some((model, index) => model !== deck.metadata.selectedModels[index])
-    ) {
+    const deckModelSet = new Set(deck.metadata.selectedModels);
+    const selectedModelSet = new Set(selectedModels);
+    const selectedModelsMatchDeck = (
+      selectedModels.length === deck.metadata.selectedModels.length
+      && selectedModels.every((model, index) => model === deck.metadata.selectedModels[index])
+    );
+    const lockedModelsAllUnavailable = (
+      modelSelectionMode === "locked"
+      && selectedModels.length > 0
+      && !selectedModels.some((model) => deckModelSet.has(model))
+    );
+    const lockedModeNeedsInitialModels = modelSelectionMode === "locked" && selectedModels.length === 0;
+    const autoModeNeedsDeckModels = modelSelectionMode === "auto" && !selectedModelsMatchDeck;
+    if (autoModeNeedsDeckModels || lockedModeNeedsInitialModels || lockedModelsAllUnavailable) {
       skipResolvedModelFetchRef.current = deck.metadata.selectedModels.join("||");
       setSelectedModels(deck.metadata.selectedModels);
+    } else if (modelSelectionMode === "locked" && selectedModels.some((model) => deckModelSet.has(model)) && deck.metadata.selectedModels.some((model) => !selectedModelSet.has(model))) {
+      skipResolvedModelFetchRef.current = selectedModels.join("||");
     }
-  }, [deck, selectedTimeRange]);
+  }, [deck, modelSelectionMode, selectedModels, selectedTimeRange]);
 
   // Auto-detect free_comparison mode when models span multiple segments
   useEffect(() => {
@@ -1059,6 +1098,40 @@ export function VersionComparisonPage() {
   // Candidate pool: current-country options plus global-discovery options shown in the picker.
   const candidateOptions = deck?.metadata.availableModels ?? [];
   const globalCandidateOptions = deck?.metadata.globalAvailableModels ?? [];
+  function modelUnavailableReason(option: VersionComparisonModelOption): string {
+    const optionFuels = option.powertrain.split("/").map((fuel) => fuel.trim()).filter(Boolean);
+    if (optionFuels.length > 0 && !optionFuels.some((fuel) => activeFuelTypes.includes(fuel))) {
+      return "不在当前动总";
+    }
+    if (comparisonMode === "same_segment" && currentSegment && option.segment && option.segment !== currentSegment) {
+      return "不在当前 Segment";
+    }
+    if (comparisonMode === "free_comparison" && selectedSegments.length > 0 && option.segment && !selectedSegments.includes(option.segment)) {
+      return "不在当前 Segment";
+    }
+    if (bodyType && option.bodyType && option.bodyType !== bodyType) {
+      return "不在当前车身形式";
+    }
+    if (driveTypes.length > 0 && option.driveType) {
+      const optionDriveTypes = option.driveType.split("/").map((drive) => drive.trim()).filter(Boolean);
+      if (!optionDriveTypes.some((drive) => driveTypes.includes(drive))) {
+        return "不在当前驱动";
+      }
+    }
+    if (lengthMin !== null && option.lengthMm > 0 && option.lengthMm < lengthMin) {
+      return "不在当前车长范围";
+    }
+    if (lengthMax !== null && option.lengthMm > 0 && option.lengthMm > lengthMax) {
+      return "不在当前车长范围";
+    }
+    if (priceControlsTouched && msrpMin !== null && option.msrpMedian > 0 && option.msrpMedian < msrpMin) {
+      return "不在当前 MSRP 范围";
+    }
+    if (priceControlsTouched && msrpMax !== null && option.msrpMedian > 0 && option.msrpMedian > msrpMax) {
+      return "不在当前 MSRP 范围";
+    }
+    return "当前国家无销量";
+  }
   const pickerOptions = useMemo<VersionComparisonPickerOption[]>(() => {
     const currentValues = new Set(candidateOptions.map((option) => option.value));
     const currentIdentities = new Set(candidateOptions.map(modelOptionIdentity));
@@ -1071,10 +1144,10 @@ export function VersionComparisonPage() {
       .map((option) => ({
         ...option,
         availability: "global" as const,
-        availabilityReason: "当前筛选无销量",
+        availabilityReason: option.availabilityReason ?? modelUnavailableReason(option),
       }));
     return [...currentOptions, ...globalOnlyOptions];
-  }, [candidateOptions, globalCandidateOptions]);
+  }, [activeFuelTypes, bodyType, candidateOptions, comparisonMode, currentSegment, driveTypes, globalCandidateOptions, lengthMax, lengthMin, msrpMax, msrpMin, priceControlsTouched, selectedSegments]);
   // Filtered by search query
   const searchedOptions = useMemo(
     () => searchModelOptions(pickerOptions, modelSearchQuery),
@@ -1090,10 +1163,39 @@ export function VersionComparisonPage() {
     [countryOptions, countrySearchQuery],
   );
   // Models the user has selected, with full metadata
-  const selectedModelDetails = useMemo(() => {
-    const detailMap = new Map(candidateOptions.map((m) => [m.value, m]));
-    return activeModels.map((modelName) => detailMap.get(modelName)).filter(Boolean) as VersionComparisonModelOption[];
-  }, [activeModels, candidateOptions]);
+  const selectedModelDetails = useMemo<VersionComparisonSelectedModelDetail[]>(() => {
+    const currentMap = new Map(candidateOptions.map((m) => [m.value, m]));
+    const pickerMap = new Map(pickerOptions.map((m) => [m.value, m]));
+    return activeModels.map((modelValue) => {
+      const currentOption = currentMap.get(modelValue);
+      if (currentOption) {
+        return { ...currentOption, availability: "current" };
+      }
+      const pickerOption = pickerMap.get(modelValue);
+      if (pickerOption) {
+        return {
+          ...pickerOption,
+          availability: "global",
+          availabilityReason: pickerOption.availabilityReason ?? modelUnavailableReason(pickerOption),
+        };
+      }
+      const [brand = "", label = modelValue] = modelValue.split("::");
+      return {
+        value: modelValue,
+        modelKey: modelValue,
+        label,
+        brand,
+        segment: "",
+        powertrain: "",
+        bodyType: "",
+        driveType: "",
+        lengthMm: 0,
+        msrpMedian: 0,
+        availability: "missing",
+        availabilityReason: "当前筛选不可选",
+      };
+    });
+  }, [activeModels, candidateOptions, pickerOptions]);
 
   // Backward compat: unselected model options for the old plain select (unused but kept for data)
   const unselectedModelOptions = candidateOptions.filter((item) => !activeModels.includes(item.value));
@@ -1307,6 +1409,7 @@ export function VersionComparisonPage() {
                     onClick={() => {
                       setSelectedCountry(defaultCountry); setSelectedPeriod(null);
                       setSalesMode(DEFAULT_SALES_MODE); setComparisonMode("same_segment");
+                      setModelSelectionMode("auto");
                       setSelectedSegment(null); setSelectedModels([]);
                       setSelectedFuelTypes(DEFAULT_FUEL_TYPES); setPriceControlsTouched(false);
                       setMsrpMin(null); setMsrpMax(null); setPriceBandSize(DEFAULT_PRICE_BAND_SIZE);
@@ -1370,6 +1473,31 @@ export function VersionComparisonPage() {
                     </button>
                   ))}
                 </div>
+              </div>
+
+              <div className="market-scan-field deck-panel-grid__wide">
+                <span>车型策略</span>
+                <div className="btn-group">
+                  {MODEL_SELECTION_MODE_OPTIONS.map((option) => (
+                    <button
+                      key={option.value}
+                      type="button"
+                      className={`btn btn-sm ${modelSelectionMode === option.value ? "btn-primary" : "btn-ghost"}`}
+                      title={option.hint}
+                      onClick={() => {
+                        setModelSelectionMode(option.value);
+                        if (option.value === "locked" && selectedModels.length === 0 && activeModels.length > 0) {
+                          setSelectedModels(activeModels);
+                        }
+                      }}
+                    >
+                      {option.label}
+                    </button>
+                  ))}
+                </div>
+                <small className="market-scan-field-hint">
+                  自动跟随会保留有效车型并补当前Top；锁定当前会灰显不可选车型。
+                </small>
               </div>
 
               <div className="market-scan-field version-comparison-model-picker-field" ref={countryPickerRef}>
@@ -1471,7 +1599,6 @@ export function VersionComparisonPage() {
                             onClick={() => {
                               if (comparisonMode === "same_segment") {
                                 setSelectedSegment(seg.value);
-                                setSelectedModels([]);
                                 setSegmentSearchQuery("");
                                 setSegmentPickerOpen(false);
                               } else {
@@ -1694,22 +1821,31 @@ export function VersionComparisonPage() {
                   ) : null}
                 </div>
                 <div className="version-comparison-chip-row">
-                  {selectedModelDetails.length > 0 ? selectedModelDetails.map((model) => (
+                  {selectedModelDetails.length > 0 ? selectedModelDetails.map((model) => {
+                    const unavailable = model.availability !== "current";
+                    return (
                     <button
                       key={model.value}
                       type="button"
-                      className="version-comparison-chip version-comparison-chip--detailed"
+                      className={`version-comparison-chip version-comparison-chip--detailed${unavailable ? " is-unavailable" : ""}`}
                       onClick={() => handleRemoveModel(model.value)}
+                      title={unavailable ? model.availabilityReason : undefined}
                     >
                       <div className="version-comparison-chip-content">
                         <span className="version-comparison-chip-name">{model.label}</span>
                         <span className="version-comparison-chip-meta">
                           {[model.brand, model.segment, model.powertrain, model.lengthMm > 0 ? `${model.lengthMm}mm` : ""].filter(Boolean).join(" · ")}
                         </span>
+                        {unavailable ? (
+                          <span className="version-comparison-chip-meta version-comparison-chip-meta--warn">
+                            全局有车 · {model.availabilityReason ?? "当前不可选"}
+                          </span>
+                        ) : null}
                       </div>
                       <span className="version-comparison-chip-remove" aria-hidden="true">×</span>
                     </button>
-                  )) : (
+                    );
+                  }) : (
                     <span className="version-comparison-empty">
                       {comparisonMode === "free_comparison" ? "搜索车型开始对比" : "暂无可对比 Model"}
                     </span>

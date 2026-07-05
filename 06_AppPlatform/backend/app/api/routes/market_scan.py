@@ -86,6 +86,7 @@ def version_comparison_deck(
         comparison_mode=payload.comparison_mode,
         segment=payload.segment,
         models=payload.models,
+        refill_models=payload.refill_models,
         msrp_min=payload.msrp_min,
         msrp_max=payload.msrp_max,
         price_band_size=payload.price_band_size,
