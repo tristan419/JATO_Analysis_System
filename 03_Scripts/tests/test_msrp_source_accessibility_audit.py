@@ -277,6 +277,38 @@ def test_probe_source_classifies_akamai_403_as_official_proxy_required() -> None
     assert item["officialProxyRequired"] is True
 
 
+def test_probe_source_respects_pdf_browser_download_fallback() -> None:
+    session = _FakeSession([
+        _FakeResponse(
+            403,
+            url="https://www.opel.gr/tools/timokatalogoi.html",
+            headers={"server": "AkamaiGHost"},
+            text="Access Denied. You don't have permission to access this server.",
+        ),
+        _FakeResponse(
+            403,
+            url="https://www.opel.gr/tools/timokatalogoi.html",
+            headers={"server": "AkamaiGHost"},
+            text="Access Denied. You don't have permission to access this server.",
+        ),
+    ])
+
+    item = audit.probe_source(
+        {
+            "countryCode": "gr",
+            "sourceCode": "opel_frontera_gr_draft_scrapling",
+            "sourceUrl": "https://www.opel.gr/tools/timokatalogoi.html",
+            "extractorType": "pdf_text",
+            "browserDownloadFallback": True,
+        },
+        session=session,
+    )
+
+    assert item["probeStatus"] == "browser_fallback_required"
+    assert item["recommendedAction"] == "run_pdf_text_browser_fallback"
+    assert item["officialProxyRequired"] is False
+
+
 def test_probe_source_falls_back_to_get_when_head_not_allowed() -> None:
     session = _FakeSession([
         _FakeResponse(405),

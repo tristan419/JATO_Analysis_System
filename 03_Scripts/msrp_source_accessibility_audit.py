@@ -152,7 +152,7 @@ def source_issues_from_source_drafts(
         if code_filter and source_code not in code_filter:
             continue
         source_url = str(data.get("source_url") or profile.get("url") or "").strip()
-        sources.append({
+        source_item = {
             "countryCode": country_code,
             "sourceCode": source_code,
             "sourceUrl": source_url,
@@ -161,7 +161,12 @@ def source_issues_from_source_drafts(
             "recommendedStrategy": "probe_current_source_url",
             "recommendedAction": "verify_current_source_draft_url",
             "sourceDraftPath": _display_path(path),
-        })
+        }
+        if str(data.get("extractor_type") or "").strip() == "pdf_text":
+            source_item["extractorType"] = "pdf_text"
+        if bool(profile.get("browser_download_fallback")):
+            source_item["browserDownloadFallback"] = True
+        sources.append(source_item)
         if limit and len(sources) >= limit:
             break
     return sources
@@ -511,6 +516,18 @@ def probe_source(
         error=error,
         error_type=error_type,
     )
+    if (
+        source.get("extractorType") == "pdf_text"
+        and source.get("browserDownloadFallback")
+        and classification.get("officialProxyRequired")
+    ):
+        classification = {
+            **classification,
+            "probeStatus": "browser_fallback_required",
+            "recommendedAction": "run_pdf_text_browser_fallback",
+            "retryable": False,
+            "officialProxyRequired": False,
+        }
     return {
         "countryCode": str(source.get("countryCode") or source.get("country") or "").lower(),
         "sourceCode": source.get("sourceCode") or source.get("code"),
