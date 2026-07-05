@@ -32,6 +32,7 @@ import type {
   PositioningPricingSalesMode,
   VersionComparisonBubbleItem,
   VersionComparisonDeckResponse,
+  VersionComparisonFocusRange,
   VersionComparisonMode,
   VersionComparisonModelOption,
 } from "../types";
@@ -64,7 +65,7 @@ const COMPARISON_MODE_OPTIONS: Array<{ value: VersionComparisonMode; label: stri
 ];
 type ModelSelectionMode = "auto" | "locked";
 const MODEL_SELECTION_MODE_OPTIONS: Array<{ value: ModelSelectionMode; label: string; hint: string }> = [
-  { value: "auto", label: "自动跟随", hint: "筛选变化时保留有效车型并补当前Top" },
+  { value: "auto", label: "自动跟随", hint: "筛选变化时使用当前筛选销量Top3" },
   { value: "locked", label: "锁定当前", hint: "筛选变化时灰显不可选车型" },
 ];
 
@@ -620,8 +621,15 @@ function versionBubbleLayout(
   rangeMax: number,
   step: number,
   annotations: NonNullable<Partial<PlotlyLayout>["annotations"]>,
+  focusRange?: VersionComparisonFocusRange | null,
 ): Partial<PlotlyLayout> {
   const bottomMargin = annotations.length > 0 ? BUBBLE_MODEL_LABEL_BOTTOM_MARGIN : 62;
+  const xRange = focusRange && focusRange.lengthMax > focusRange.lengthMin
+    ? [focusRange.lengthMin, focusRange.lengthMax] as [number, number]
+    : undefined;
+  const yRange = focusRange && focusRange.msrpMax > focusRange.msrpMin
+    ? [focusRange.msrpMin, focusRange.msrpMax] as [number, number]
+    : [rangeMin, rangeMax] as [number, number];
   return {
     ...CHART_LAYOUT,
     margin: { l: 96, r: 80, t: 16, b: bottomMargin },
@@ -634,6 +642,7 @@ function versionBubbleLayout(
       font: { size: 9 },
     },
     xaxis: {
+      ...(xRange ? { range: xRange } : {}),
       tickformat: ",d",
       automargin: true,
       showgrid: false,
@@ -641,8 +650,8 @@ function versionBubbleLayout(
     },
     yaxis: {
       title: { text: "Version MSRP" },
-      range: [rangeMin, rangeMax],
-      tick0: rangeMin,
+      range: yRange,
+      tick0: yRange[0],
       dtick: step,
       tickformat: ",d",
       automargin: true,
@@ -2003,6 +2012,7 @@ export function VersionComparisonPage() {
                                   page.priceBands.range.max,
                                   page.priceBands.bandSize,
                                   bubbleAnnotations,
+                                  page.focusRange,
                                 ), bubbleExport)}
                                 height={chartHeight}
                                 onHover={handleBubbleHover}

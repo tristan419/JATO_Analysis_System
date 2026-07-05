@@ -722,7 +722,7 @@ def test_resolve_version_comparison_models_caps_requested_models_at_10() -> None
     assert selected == ["L", "K", "J", "I", "H", "G", "F", "E", "D", "C"]
 
 
-def test_resolve_version_comparison_models_refills_valid_requested_models() -> None:
+def test_resolve_version_comparison_models_refill_uses_filtered_top3() -> None:
     frame = pd.DataFrame(
         {
             "__model": ["A", "B", "C", "D"],
@@ -737,7 +737,7 @@ def test_resolve_version_comparison_models_refills_valid_requested_models() -> N
         refill_models=True,
     )
 
-    assert selected == ["D", "A", "B"]
+    assert selected == ["A", "B", "C"]
 
 
 def test_version_comparison_model_options_use_brand_model_stable_key() -> None:
@@ -787,6 +787,42 @@ def test_version_comparison_bubbles_keep_same_model_names_separate_by_brand() ->
     assert items[0]["brand"] == "BRAND B"
     assert items[0]["model"] == "Twin"
     assert items[0]["sales"] == pytest.approx(200.0)
+
+
+def test_build_version_comparison_page_payload_focuses_axis_range_to_visible_models() -> None:
+    frame = pd.DataFrame(
+        {
+            "__brand": ["A", "B"],
+            "__model": ["One", "Two"],
+            "__model_key": ["A::One", "B::Two"],
+            "__version": ["Base", "Base"],
+            "__trim": ["Base", "Base"],
+            "__powertrain": ["BEV", "BEV"],
+            "__length": [4300.0, 4500.0],
+            "__msrp": [30000.0, 40000.0],
+            "__comparison_sales": [300.0, 200.0],
+        }
+    )
+
+    payload = market_scan_service._build_version_comparison_page_payload(
+        frame,
+        title="版型对比",
+        subtitle="Top3 聚焦",
+        sales_column="__comparison_sales",
+        sales_metric_label="Sales",
+        sales_metric_detail="销量",
+        selected_fuels=["BEV"],
+        msrp_min=None,
+        msrp_max=None,
+        price_band_size=1000,
+    )
+
+    assert payload["focusRange"] == {
+        "lengthMin": 4200.0,
+        "lengthMax": 4600.0,
+        "msrpMin": 29000.0,
+        "msrpMax": 41000.0,
+    }
 
 
 def test_build_positioning_price_bands_stacks_sales_by_fuel() -> None:

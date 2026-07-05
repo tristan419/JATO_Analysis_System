@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import math
 import re
 import threading
 import time
@@ -2016,6 +2017,8 @@ def _resolve_version_comparison_models(
     options = _build_all_model_options(frame, sales_column)
     if not options:
         return [], []
+    if refill_models:
+        return [option["value"] for option in options[:3]], options
     available = {option["value"] for option in options}
     legacy_lookup: dict[str, str] = {}
     for option in options:
@@ -2034,17 +2037,54 @@ def _resolve_version_comparison_models(
         if len(selected) >= VERSION_COMPARISON_MODEL_LIMIT:
             break
     if selected:
-        if refill_models and len(selected) < 3:
-            for option in options:
-                value = str(option["value"])
-                if value in seen:
-                    continue
-                selected.append(value)
-                seen.add(value)
-                if len(selected) >= 3 or len(selected) >= VERSION_COMPARISON_MODEL_LIMIT:
-                    break
         return selected, options
     return [option["value"] for option in options[:3]], options
+
+
+def _build_version_comparison_focus_range(
+    bubble_items: list[dict[str, Any]],
+    *,
+    fallback_msrp_min: float,
+    fallback_msrp_max: float,
+    price_step: int,
+) -> dict[str, float] | None:
+    if not bubble_items:
+        return None
+
+    lengths = [float(item["length"]) for item in bubble_items if float(item.get("length") or 0) > 0]
+    msrps = [float(item["msrp"]) for item in bubble_items if float(item.get("msrp") or 0) > 0]
+    if not lengths or not msrps:
+        return None
+
+    length_min_raw = min(lengths)
+    length_max_raw = max(lengths)
+    length_span = length_max_raw - length_min_raw
+    length_padding = max(length_span * 0.08, 80.0)
+    length_min = max(0.0, float(math.floor((length_min_raw - length_padding) / 50.0) * 50.0))
+    length_max = float(math.ceil((length_max_raw + length_padding) / 50.0) * 50.0)
+    if length_max <= length_min:
+        length_max = length_min + 100.0
+
+    msrp_min_raw = min(msrps)
+    msrp_max_raw = max(msrps)
+    msrp_span = msrp_max_raw - msrp_min_raw
+    resolved_price_step = max(float(price_step or 1000), 1.0)
+    msrp_padding = max(msrp_span * 0.1, resolved_price_step)
+    msrp_min = max(0.0, float(math.floor((msrp_min_raw - msrp_padding) / resolved_price_step) * resolved_price_step))
+    msrp_max = float(math.ceil((msrp_max_raw + msrp_padding) / resolved_price_step) * resolved_price_step)
+    if msrp_max <= msrp_min:
+        msrp_max = msrp_min + resolved_price_step
+
+    if fallback_msrp_max > fallback_msrp_min:
+        msrp_min = max(0.0, msrp_min)
+        msrp_max = max(msrp_max, msrp_min + resolved_price_step)
+
+    return {
+        "lengthMin": length_min,
+        "lengthMax": length_max,
+        "msrpMin": msrp_min,
+        "msrpMax": msrp_max,
+    }
 
 
 def _build_version_comparison_bubble_items(
@@ -2145,6 +2185,12 @@ def _build_version_comparison_page_payload(
         msrp_min=range_min,
         msrp_max=range_max,
     )
+    focus_range = _build_version_comparison_focus_range(
+        bubble_items,
+        fallback_msrp_min=range_min,
+        fallback_msrp_max=range_max,
+        price_step=price_bands["bandSize"],
+    )
     total_sales = float(pd.to_numeric(range_frame[sales_column], errors="coerce").fillna(0.0).sum()) if sales_column in range_frame.columns else 0.0
     model_count = int(range_frame["__model_key"].nunique()) if "__model_key" in range_frame.columns else int(range_frame["__model"].nunique()) if "__model" in range_frame.columns else 0
     version_count = len(bubble_items)
@@ -2165,6 +2211,7 @@ def _build_version_comparison_page_payload(
         "bubbleChart": {
             "items": bubble_items,
         },
+        "focusRange": focus_range,
     }
 
 

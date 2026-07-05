@@ -860,6 +860,13 @@ export interface VersionComparisonModelOption {
 
 export type VersionComparisonMode = "same_segment" | "free_comparison";
 
+export interface VersionComparisonFocusRange {
+  lengthMin: number;
+  lengthMax: number;
+  msrpMin: number;
+  msrpMax: number;
+}
+
 export interface VersionComparisonPage {
   title: string;
   subtitle: string;
@@ -876,6 +883,7 @@ export interface VersionComparisonPage {
   bubbleChart: {
     items: VersionComparisonBubbleItem[];
   };
+  focusRange?: VersionComparisonFocusRange | null;
 }
 
 export interface VersionComparisonMetadata {
