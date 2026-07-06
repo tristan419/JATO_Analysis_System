@@ -6,6 +6,7 @@ from dataclasses import dataclass, field
 import html
 import logging
 import re
+import subprocess
 
 import requests
 
@@ -40,6 +41,8 @@ class HttpTextProfile:
     entry_patterns: tuple[HttpTextEntryPattern, ...] = field(default_factory=tuple)
     timeout_seconds: int = DEFAULT_TIMEOUT
     headers: dict[str, str] = field(default_factory=dict)
+    prefer_curl_fetch: bool = False
+    curl_fallback: bool = False
     default_currency: str = "EUR"
     default_tax_included: bool = True
     default_price_label: str = "Manufacturer's Recommended Retail Price"
@@ -108,17 +111,70 @@ class HttpTextExtractor(BaseExtractor):
 
     def _fetch_text(self) -> str:
         timeout = max(1, int(self.profile.timeout_seconds or DEFAULT_TIMEOUT))
+        if self.profile.prefer_curl_fetch:
+            text = self._fetch_text_with_curl(timeout)
+            if text:
+                return text
+            log.warning(
+                "Preferred HTTP text curl fetch failed for %s; falling back to requests",
+                self.config.source_code,
+            )
         try:
             response = self._session.get(self.profile.url, timeout=timeout)
             response.raise_for_status()
+            return response.text
         except requests.RequestException as exc:
             log.error(
                 "HTTP text request failed for %s: %s",
                 self.config.source_code,
                 exc,
             )
+            if self.profile.curl_fallback:
+                return self._fetch_text_with_curl(timeout)
             return ""
-        return response.text
+
+    def _fetch_text_with_curl(self, timeout: int) -> str:
+        cmd = [
+            "curl",
+            "--location",
+            "--http1.1",
+            "--compressed",
+            "--silent",
+            "--show-error",
+            "--fail",
+            "--max-time",
+            str(max(1, int(timeout))),
+        ]
+        for key, value in self._session.headers.items():
+            if value is None:
+                continue
+            cmd.extend(["-H", f"{key}: {value}"])
+        cmd.append(self.profile.url)
+        try:
+            result = subprocess.run(
+                cmd,
+                capture_output=True,
+                check=False,
+                text=True,
+                timeout=max(2, int(timeout) + 5),
+            )
+        except (OSError, subprocess.SubprocessError) as exc:
+            log.error(
+                "HTTP text curl fetch unavailable for %s: %s",
+                self.config.source_code,
+                exc,
+            )
+            return ""
+        if result.returncode != 0:
+            error = (result.stderr or "").strip()
+            log.warning(
+                "HTTP text curl fetch failed for %s with exit %s%s",
+                self.config.source_code,
+                result.returncode,
+                f": {error}" if error else "",
+            )
+            return ""
+        return result.stdout or ""
 
     def _build_observation(
         self,

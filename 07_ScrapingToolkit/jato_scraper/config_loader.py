@@ -708,6 +708,8 @@ def _build_http_text_profile(profile: dict[str, Any]) -> HttpTextProfile:
         entry_patterns=entry_patterns,
         timeout_seconds=int(profile.get("timeout_seconds", 30)),
         headers=profile.get("headers", {}),
+        prefer_curl_fetch=bool(profile.get("prefer_curl_fetch", False)),
+        curl_fallback=bool(profile.get("curl_fallback", False)),
         default_currency=profile.get("default_currency", "EUR"),
         default_tax_included=bool(profile.get("default_tax_included", True)),
         default_price_label=profile.get(

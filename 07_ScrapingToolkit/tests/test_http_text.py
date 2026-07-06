@@ -1,3 +1,7 @@
+import subprocess
+
+import requests
+
 from jato_scraper.base import ExtractorConfig
 from jato_scraper.config_loader import _build_http_text_profile
 from jato_scraper.extractors.http_text import (
@@ -110,6 +114,8 @@ def test_http_text_profile_builds_entry_patterns() -> None:
             "url": "https://example.invalid/model",
             "timeout_seconds": 45,
             "headers": {"Accept-Language": "hr-HR"},
+            "prefer_curl_fetch": True,
+            "curl_fallback": True,
             "entry_patterns": [
                 {
                     "pattern": r'"priceValue":(?P<price>\d+\.\d+)',
@@ -122,5 +128,69 @@ def test_http_text_profile_builds_entry_patterns() -> None:
 
     assert profile.timeout_seconds == 45
     assert profile.headers == {"Accept-Language": "hr-HR"}
+    assert profile.prefer_curl_fetch is True
+    assert profile.curl_fallback is True
     assert profile.entry_patterns[0].official_trim == "Prime-Line"
     assert profile.entry_patterns[0].jato_powertrain == "MHEV"
+
+
+def test_http_text_uses_curl_fallback_after_requests_failure(monkeypatch):
+    extractor = HttpTextExtractor(
+        ExtractorConfig(
+            source_code="mg_zs_es_draft_scrapling",
+            country="西班牙",
+            brand="MG",
+            source_url="https://www.mgmotor.eu/es-ES/configurator/zs",
+            source_type="manufacturer_official",
+            price_semantics="base_msrp",
+        ),
+        HttpTextProfile(
+            url="https://www.mgmotor.eu/es-ES/configurator/zs",
+            fixed_model="ZS",
+            fixed_jato_model="ZS",
+            copy_trim_to_jato_trim=True,
+            default_currency="EUR",
+            default_tax_included=True,
+            default_price_label="Precio de catálogo incl. IVA",
+            match_confidence=0.84,
+            match_status="review_required",
+            curl_fallback=True,
+            entry_patterns=(
+                HttpTextEntryPattern(
+                    pattern=(
+                        r"field_version_versionTitle.*?>"
+                        r"(?P<trim>Standard)</span>.*?"
+                        r"paymentOptionBasePrice.*?"
+                        r"(?P<price>20\.840)"
+                    ),
+                    official_powertrain="1.5L gasoline",
+                    jato_powertrain="ICE",
+                ),
+            ),
+        ),
+    )
+
+    def raise_ssl_error(*_args, **_kwargs):
+        raise requests.exceptions.SSLError("tls eof")
+
+    def fake_run(cmd, **_kwargs):
+        assert cmd[0] == "curl"
+        return subprocess.CompletedProcess(
+            cmd,
+            0,
+            stdout=(
+                "field_version_versionTitle\"><span>Standard</span>"
+                "paymentOptionBasePrice\">20.840</div>"
+            ),
+            stderr="",
+        )
+
+    monkeypatch.setattr(extractor._session, "get", raise_ssl_error)
+    monkeypatch.setattr(subprocess, "run", fake_run)
+
+    results = extractor.extract()
+
+    assert len(results) == 1
+    assert results[0].official_trim == "Standard"
+    assert results[0].msrp_value == 20840
+    assert results[0].jato_powertrain == "ICE"
