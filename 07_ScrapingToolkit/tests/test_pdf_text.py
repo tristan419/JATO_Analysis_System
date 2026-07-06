@@ -200,6 +200,20 @@ def test_pdf_text_profile_accepts_direct_download_fallback() -> None:
     assert profile.direct_download_fallback is True
 
 
+def test_pdf_text_profile_accepts_curl_transport_options() -> None:
+    profile = _build_pdf_text_profile(
+        {
+            "url": "https://example.invalid/ford-price-list.pdf",
+            "curl_compressed": True,
+            "curl_http1_1": False,
+            "entry_patterns": [],
+        }
+    )
+
+    assert profile.curl_compressed is True
+    assert profile.curl_http1_1 is False
+
+
 def test_pdf_text_profile_accepts_multiple_urls() -> None:
     profile = _build_pdf_text_profile(
         {
@@ -476,6 +490,38 @@ def test_pdf_text_curl_fallback_keeps_curl_default_user_agent(monkeypatch):
 
     assert extractor._fetch_pdf_bytes_with_curl(30) == b"%PDF-1.7\n"
     assert "--user-agent" not in commands[0]
+
+
+def test_pdf_text_curl_fallback_can_use_compressed_without_forced_http1(monkeypatch):
+    extractor = PdfTextExtractor(
+        ExtractorConfig(
+            source_code="ford_kuga_nl_draft_scrapling",
+            country="荷兰",
+            brand="FORD",
+            source_url="https://www.ford.nl/content/dam/guxeu/nl/documents/pricelists/cars/PL-ford_new_kuga_phev.pdf",
+            source_type="official_price_list",
+            price_semantics="base_msrp",
+        ),
+        PdfTextProfile(
+            url="https://example.invalid/kuga.pdf",
+            curl_compressed=True,
+            curl_http1_1=False,
+        ),
+    )
+    commands = []
+
+    def fake_run(command, **_kwargs):
+        commands.append(command)
+        output_path = command[command.index("-o") + 1]
+        with open(output_path, "wb") as f:
+            f.write(b"%PDF-1.7\n")
+        return subprocess.CompletedProcess(command, 0, b"", b"")
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+
+    assert extractor._fetch_pdf_bytes_with_curl(30) == b"%PDF-1.7\n"
+    assert "--compressed" in commands[0]
+    assert "--http1.1" not in commands[0]
 
 
 def test_pdf_text_curl_fallback_can_ignore_environment_proxy(monkeypatch):

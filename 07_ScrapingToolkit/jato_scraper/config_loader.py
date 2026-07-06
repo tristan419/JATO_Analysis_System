@@ -636,6 +636,8 @@ def _build_pdf_text_profile(profile: dict[str, Any]) -> PdfTextProfile:
         browser_download_fallback=browser_download_fallback,
         ignore_environment_proxy=bool(profile.get("ignore_environment_proxy", False)),
         direct_download_fallback=bool(profile.get("direct_download_fallback", False)),
+        curl_compressed=bool(profile.get("curl_compressed", False)),
+        curl_http1_1=bool(profile.get("curl_http1_1", True)),
         default_currency=profile.get("default_currency", "EUR"),
         default_tax_included=bool(profile.get("default_tax_included", True)),
         default_price_label=profile.get(

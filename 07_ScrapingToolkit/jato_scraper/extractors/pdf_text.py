@@ -49,6 +49,8 @@ class PdfTextProfile:
     browser_download_fallback: bool = False
     ignore_environment_proxy: bool = False
     direct_download_fallback: bool = False
+    curl_compressed: bool = False
+    curl_http1_1: bool = True
     default_currency: str = "EUR"
     default_tax_included: bool = True
     default_price_label: str = "Manufacturer's Recommended Retail Price"
@@ -355,11 +357,13 @@ class PdfTextExtractor(BaseExtractor):
                 prefix="jato_pdf_",
                 suffix=".pdf",
             ) as tmp:
-                result = subprocess.run(
+                command = ["curl", "-L"]
+                if self.profile.curl_http1_1:
+                    command.append("--http1.1")
+                if self.profile.curl_compressed:
+                    command.append("--compressed")
+                command.extend(
                     [
-                        "curl",
-                        "-L",
-                        "--http1.1",
                         "-sS",
                         "--max-time",
                         str(timeout),
@@ -367,7 +371,10 @@ class PdfTextExtractor(BaseExtractor):
                         tmp.name,
                         *self._curl_header_args(),
                         source_url,
-                    ],
+                    ]
+                )
+                result = subprocess.run(
+                    command,
                     check=False,
                     stdout=subprocess.PIPE,
                     stderr=subprocess.PIPE,
