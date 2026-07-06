@@ -277,6 +277,74 @@ def test_probe_source_classifies_akamai_403_as_official_proxy_required() -> None
     assert item["officialProxyRequired"] is True
 
 
+def test_probe_source_classifies_cloudflare_challenge_as_official_proxy_required() -> None:
+    session = _FakeSession([
+        _FakeResponse(
+            503,
+            url="https://www.kia.si/modeli/sportage/",
+            headers={"server": "cloudflare"},
+        ),
+        _FakeResponse(
+            200,
+            url="https://www.kia.si/modeli/sportage/",
+            headers={"server": "cloudflare"},
+            text=(
+                "<title>Just a moment...</title>"
+                "Enable JavaScript and cookies to continue "
+                "/cdn-cgi/challenge-platform/h/b/orchestrate/chl_page/v1"
+            ),
+        ),
+    ])
+
+    item = audit.probe_source(
+        {
+            "countryCode": "si",
+            "sourceCode": "kia_sportage_si_draft_scrapling",
+            "sourceUrl": "https://www.kia.si/modeli/sportage/",
+        },
+        session=session,
+    )
+
+    assert session.calls == [
+        ("HEAD", "https://www.kia.si/modeli/sportage/"),
+        ("GET", "https://www.kia.si/modeli/sportage/"),
+    ]
+    assert item["probeStatus"] == "anti_bot_blocked"
+    assert item["recommendedAction"] == "official_proxy_or_configurator_api"
+    assert item["officialProxyRequired"] is True
+
+
+def test_probe_source_classifies_request_denied_body_as_official_proxy_required() -> None:
+    session = _FakeSession([
+        _FakeResponse(
+            403,
+            url="https://www.seat.es/coches/arona/overview.html",
+        ),
+        _FakeResponse(
+            200,
+            url="https://www.seat.es/coches/arona/overview.html",
+            text=(
+                "<TITLE>Request Denied</TITLE>"
+                "The access to the requested URL has been denied. "
+                "Event ID : 0.28ef2117.1783301438.1fd0d138"
+            ),
+        ),
+    ])
+
+    item = audit.probe_source(
+        {
+            "countryCode": "es",
+            "sourceCode": "seat_arona_es_draft_scrapling",
+            "sourceUrl": "https://www.seat.es/coches/arona/overview.html",
+        },
+        session=session,
+    )
+
+    assert item["probeStatus"] == "anti_bot_blocked"
+    assert item["recommendedAction"] == "official_proxy_or_configurator_api"
+    assert item["officialProxyRequired"] is True
+
+
 def test_probe_source_respects_pdf_browser_download_fallback() -> None:
     session = _FakeSession([
         _FakeResponse(

@@ -323,14 +323,27 @@ def _is_anti_bot_response(
         str(value) for value in headers.values() if value is not None
     ).lower()
     body = text_sample.lower()
+    anti_bot_body = (
+        "access denied" in body
+        or "permission to access" in body
+        or "errors.edgesuite.net" in body
+        or ("request denied" in body and "event id" in body)
+        or ("just a moment" in body and "challenge-platform" in body)
+        or "enable javascript and cookies to continue" in body
+        or "__cf_chl" in body
+        or "cf_chl" in body
+    )
     return bool(
-        status_code == 403
-        and (
-            "akamai" in header_text
-            or "access denied" in body
-            or "permission to access" in body
-            or "errors.edgesuite.net" in body
-            or host == "tesla.com"
+        (
+            anti_bot_body
+            and (status_code in {200, 403, 406, 429, 503} or status_code is None)
+        )
+        or (
+            status_code == 403
+            and (
+                "akamai" in header_text
+                or host == "tesla.com"
+            )
         )
     )
 
@@ -466,7 +479,7 @@ def _request_source(
 ) -> tuple[str, Any]:
     response = session.head(url, allow_redirects=True, timeout=timeout_seconds)
     status_code = int(getattr(response, "status_code", 0) or 0)
-    if status_code in {400, 403, 405, 406, 501}:
+    if status_code in {400, 403, 405, 406, 501, 503}:
         response = session.get(url, allow_redirects=True, timeout=timeout_seconds)
         return "GET", response
     return "HEAD", response
