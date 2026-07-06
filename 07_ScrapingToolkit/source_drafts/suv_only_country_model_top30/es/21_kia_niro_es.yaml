@@ -1,124 +1,56 @@
 source_code: kia_niro_es_draft_scrapling
 country: 西班牙
 brand: KIA
-source_url: https://todo.invalid/es/kia/niro
+source_url: https://www.kia.com/es/modelos/niro/especificaciones/
 source_type: manufacturer_official
 price_semantics: base_msrp
-extractor_type: scrapling
+extractor_type: http_text
 profile:
-  url: https://todo.invalid/es/kia/niro
-  headless: true
+  url: https://www.kia.com/es/modelos/niro/especificaciones/
+  timeout_seconds: 45
+  curl_fallback: true
+  headers:
+    User-Agent: Mozilla/5.0
+    Accept-Language: es-ES,es;q=0.9,en;q=0.8
+    Accept: text/html,application/xhtml+xml,*/*;q=0.8
+  entry_patterns:
+  - pattern: '"id":"0TW5K9A1TEV1-LX1","name":"1\.6 GDi HEV 101,5 kW \(138 cv\) \(Gasolina , DCT\);","price":"(?P<price>\d+)"'
+    official_trim: Concept
+    official_powertrain: 1.6 GDi HEV 101,5 kW 138 cv Gasolina DCT
+    jato_powertrain: HEV
+    price_label: Acabados y precios
+  - pattern: '"id":"0TW5K9A1TEV1-TX1","name":"1\.6 GDi HEV 101,5 kW \(138 cv\) \(Gasolina , DCT\);","price":"(?P<price>\d+)"'
+    official_trim: Drive
+    official_powertrain: 1.6 GDi HEV 101,5 kW 138 cv Gasolina DCT
+    jato_powertrain: HEV
+    price_label: Acabados y precios
+  - pattern: '"id":"0TW5K9A1TEV1-SX1","name":"1\.6 GDi HEV 101,5 kW \(138 cv\) \(Gasolina , DCT\);","price":"(?P<price>\d+)"'
+    official_trim: Emotion
+    official_powertrain: 1.6 GDi HEV 101,5 kW 138 cv Gasolina DCT
+    jato_powertrain: HEV
+    price_label: Acabados y precios
   default_currency: EUR
   default_tax_included: true
-  default_price_label: MSRP
+  default_price_label: Acabados y precios
   fixed_model: NIRO
   fixed_jato_model: NIRO
-  fixed_jato_powertrain: null
-  model_rules: []
-  skip_if_model_unmapped: false
   copy_trim_to_jato_trim: true
-  confidence_rules:
-    base: 0.2
-    fixed_model_bonus: 0.18
-    fixed_jato_model_bonus: 0.12
-    model_rule_bonus: 0.12
-    trim_present_bonus: 0.1
-    copy_trim_to_jato_trim_bonus: 0.09
-    parsed_price_text_bonus: 0.03
-    currency_bonus: 0.01
-    price_label_bonus: 0.02
-    trim_keyword_bonuses: []
-    price_band_bonuses:
-    - key: price_band_entry
-      label: Entry price band matched
-      max: 0
-      delta: 0.0
-    - key: price_band_mid
-      label: Mid price band matched
-      min: 0
-      max: 0
-      delta: 0.01
-    - key: price_band_high
-      label: High price band matched
-      min: 0
-      delta: 0.03
-    powertrain_keyword_bonuses: []
-    powertrain_bonuses:
-    - key: powertrain_bev
-      label: 'Powertrain matched: BEV'
-      powertrain: BEV
-      delta: 0.03
-    - key: powertrain_phev
-      label: 'Powertrain matched: PHEV'
-      powertrain: PHEV
-      delta: 0.03
-    - key: powertrain_hev
-      label: 'Powertrain matched: HEV'
-      powertrain: HEV
-      delta: 0.03
-    clamp_min: 0.0
-    clamp_max: 1.0
-  structured_fields:
-    edition_rules:
-    - key: edition_special
-      label: Special Edition
-      keyword: special edition
-      special: true
-    powertrain_rules:
-    - key: powertrain_bev
-      powertrain: BEV
-      keywords:
-      - bev
-      - ev
-      - electric
-      - battery electric
-      - fully electric
-      - electric vehicle
-      - electrico
-      - 100% electrico
-      - vehiculo electrico
-    - key: powertrain_phev
-      powertrain: PHEV
-      keywords:
-      - phev
-      - plug-in hybrid
-      - plug in hybrid
-      - plugin hybrid
-      - hibrido enchufable
-    - key: powertrain_hev
-      powertrain: HEV
-      keywords:
-      - hev
-      - full hybrid
-      - self-charging hybrid
-      - self charging hybrid
-      - hybrid
-      - hibrido
-  auto_accept_gates:
-    review_threshold: 0.95
-    semi_auto_threshold: 0.98
-    require_powertrain_match: true
-    force_review_if_powertrain_missing: true
-    force_review_if_powertrain_ambiguous: true
-    force_review_for_special_edition: true
-  css:
-    vehicle_container: body
-    model: h2, h3
-    trim: h3
-    price: '[class*="price"]'
-  tier: stealth
-  network_idle: true
-  impersonate: chrome
+  match_confidence: 0.86
+  match_status: review_required
+  match_reason:
+    kind: official_trim_price_table
+    source: kia_es_niro_specifications_trims_prices
+    note: Official Kia Spain specifications page embeds the Acabados y precios table in eut.tableDatas with named Niro Hibrido trims, engine ids, and integer EUR prices. Regexes target those HEV engine rows directly; the current page exposes PHEV navigation but no matching PHEV price table rows.
 schedule:
   frequency: manual_only
   run_window_start: 00:00
   run_window_end: 05:00
   preferred_weekday: monday
-notes: Draft scaffold generated from country×model top30 backlog. Replace source_url,
-  profile.url, selectors, currency, price label, and the single-model placeholders
-  before promoting to 07_ScrapingToolkit/sources. [CSS selectors applied from brand
-  probe] [Switched to playwright_card_flow with kia_trim_overview_playwright.yaml]
-  [Reverted to scrapling — playwright preset needs per-brand tuning]
+notes: Replaced todo.invalid with Kia Spain's official Niro specifications page.
+  The source uses deterministic http_text over the embedded eut.tableDatas
+  Acabados y precios payload, extracting three Niro Hibrido HEV trim price rows.
+  Kept review_required because the same page currently has PHEV navigation but
+  does not expose a comparable PHEV price table payload.
 bootstrap_meta:
   country_model_rank: 21
   suggested_scope_kind: single_model
