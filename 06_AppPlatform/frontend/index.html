@@ -5,6 +5,75 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
     <title>JATO App Platform</title>
+    <style>
+      html,
+      body,
+      #root {
+        min-height: 100%;
+        margin: 0;
+        background: #0b1119;
+      }
+
+      .bootstrap-loading {
+        min-height: 100vh;
+        display: grid;
+        place-items: center;
+        color: #e5edf7;
+        font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      }
+
+      .bootstrap-loading__panel {
+        width: min(360px, calc(100vw - 48px));
+        border: 1px solid rgba(148, 163, 184, 0.28);
+        background: #101722;
+        padding: 24px;
+      }
+
+      .bootstrap-loading__kicker {
+        margin: 0 0 12px;
+        color: #60a5fa;
+        font-size: 12px;
+        font-weight: 800;
+        letter-spacing: 0.12em;
+      }
+
+      .bootstrap-loading__title {
+        margin: 0;
+        font-size: 24px;
+        font-weight: 700;
+        letter-spacing: 0;
+      }
+
+      .bootstrap-loading__detail {
+        margin: 8px 0 18px;
+        color: #94a3b8;
+        font-size: 14px;
+      }
+
+      .bootstrap-loading__bar {
+        height: 3px;
+        overflow: hidden;
+        background: #1e293b;
+      }
+
+      .bootstrap-loading__bar::before {
+        content: "";
+        display: block;
+        width: 42%;
+        height: 100%;
+        background: #2563eb;
+        animation: bootstrap-loading-bar 1.2s ease-in-out infinite;
+      }
+
+      @keyframes bootstrap-loading-bar {
+        0% {
+          transform: translateX(-110%);
+        }
+        100% {
+          transform: translateX(260%);
+        }
+      }
+    </style>
     <script>
       (function () {
         var cnHost = "www.ojeur.cloud";
@@ -383,7 +452,16 @@
     </script>
   </head>
   <body>
-    <div id="root"></div>
+    <div id="root">
+      <div class="bootstrap-loading" role="status" aria-live="polite">
+        <div class="bootstrap-loading__panel">
+          <p class="bootstrap-loading__kicker">JATO ANALYSIS SYSTEM</p>
+          <p class="bootstrap-loading__title">Loading workspace</p>
+          <p class="bootstrap-loading__detail">Preparing the nearest access route.</p>
+          <div class="bootstrap-loading__bar"></div>
+        </div>
+      </div>
+    </div>
     <script type="module" src="/src/main.tsx"></script>
   </body>
 </html>
