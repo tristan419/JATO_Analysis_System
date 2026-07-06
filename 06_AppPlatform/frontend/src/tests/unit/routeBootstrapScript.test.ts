@@ -53,6 +53,13 @@ describe("route bootstrap script", () => {
     expect(mainEntry).not.toContain("<App />");
   });
 
+  it("starts CSS and React route resources in parallel after route selection", () => {
+    expect(mainEntry).toContain('const cssPromise = import("./index.css");');
+    expect(mainEntry).toContain("const appModulesPromise = Promise.all([");
+    expect(mainEntry).toContain("cssPromise,");
+    expect(mainEntry).toContain("appModulesPromise,");
+  });
+
   it("renders a static bootstrap placeholder before React starts", () => {
     expect(indexHtml).toContain('<div id="root">');
     expect(indexHtml).toContain('class="bootstrap-loading"');

@@ -38,11 +38,15 @@ async function waitForInitialRouteProbe(): Promise<void> {
 
 async function bootApp(): Promise<void> {
   await waitForInitialRouteProbe();
-  await import("./index.css");
-  const [{ default: React }, ReactDOM, { default: App }] = await Promise.all([
+  const cssPromise = import("./index.css");
+  const appModulesPromise = Promise.all([
     import("react"),
     import("react-dom/client"),
     import("./App"),
+  ]);
+  const [, [{ default: React }, ReactDOM, { default: App }]] = await Promise.all([
+    cssPromise,
+    appModulesPromise,
   ]);
   const root = document.getElementById("root");
   if (!root) return;
