@@ -44,11 +44,26 @@ describe("route bootstrap script", () => {
 
   it("keeps React out of the static entry imports until route selection settles", () => {
     expect(mainEntry).toContain("await waitForInitialRouteProbe();");
+    expect(mainEntry).toContain("const PROBE_INFLIGHT_TTL_MS = 2_200;");
     expect(mainEntry).toContain('import("react")');
     expect(mainEntry).toContain('import("react-dom/client")');
     expect(mainEntry).toContain("React.createElement(");
     expect(mainEntry).not.toMatch(/import\s+[^;]+from\s+["']react["']/);
     expect(mainEntry).not.toContain("<React.StrictMode>");
     expect(mainEntry).not.toContain("<App />");
+  });
+
+  it("starts CSS and React route resources in parallel after route selection", () => {
+    expect(mainEntry).toContain('const cssPromise = import("./index.css");');
+    expect(mainEntry).toContain("const appModulesPromise = Promise.all([");
+    expect(mainEntry).toContain("cssPromise,");
+    expect(mainEntry).toContain("appModulesPromise,");
+  });
+
+  it("renders a static bootstrap placeholder before React starts", () => {
+    expect(indexHtml).toContain('<div id="root">');
+    expect(indexHtml).toContain('class="bootstrap-loading"');
+    expect(indexHtml).toContain("Loading workspace");
+    expect(indexHtml).toContain("@keyframes bootstrap-loading-bar");
   });
 });

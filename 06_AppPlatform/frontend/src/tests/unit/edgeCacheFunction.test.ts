@@ -359,6 +359,54 @@ describe("Cloudflare edge cache function", () => {
     expect(runtime.cache.put).toHaveBeenCalledTimes(2);
   });
 
+  it("caches stable metadata helpers named by the intl prewarm job", async () => {
+    const runtime = createRuntime();
+
+    const firstColumns = await callEdgeFunction(runtime, "metadata/columns", {
+      headers: {
+        "x-user-name": "dashboard-user",
+        "x-user-role": "viewer",
+      },
+      method: "GET",
+    });
+    expect(firstColumns.headers.get("x-jato-edge-cache")).toBe("MISS");
+    expect(firstColumns.headers.get("x-jato-edge-cache-endpoint")).toBe("/v1/metadata/columns");
+    await flushWaitUntil(runtime);
+
+    const secondColumns = await callEdgeFunction(runtime, "metadata/columns", {
+      headers: {
+        "x-user-name": "dashboard-user",
+        "x-user-role": "viewer",
+      },
+      method: "GET",
+    });
+    expect(secondColumns.headers.get("x-jato-edge-cache")).toBe("HIT");
+    expect(await secondColumns.json()).toMatchObject({ sequence: 1 });
+
+    const firstAssistantMetadata = await callEdgeFunction(runtime, "assistant/country/metadata", {
+      headers: {
+        "x-user-name": "dashboard-user",
+        "x-user-role": "viewer",
+      },
+      method: "GET",
+    });
+    expect(firstAssistantMetadata.headers.get("x-jato-edge-cache")).toBe("MISS");
+    expect(firstAssistantMetadata.headers.get("x-jato-edge-cache-endpoint")).toBe("/v1/assistant/country/metadata");
+    await flushWaitUntil(runtime);
+
+    const secondAssistantMetadata = await callEdgeFunction(runtime, "assistant/country/metadata", {
+      headers: {
+        "x-user-name": "dashboard-user",
+        "x-user-role": "viewer",
+      },
+      method: "GET",
+    });
+    expect(secondAssistantMetadata.headers.get("x-jato-edge-cache")).toBe("HIT");
+    expect(await secondAssistantMetadata.json()).toMatchObject({ sequence: 2 });
+    expect(runtime.fetch).toHaveBeenCalledTimes(2);
+    expect(runtime.cache.put).toHaveBeenCalledTimes(4);
+  });
+
   it("bypasses auth and other non-cacheable endpoints", async () => {
     const runtime = createRuntime();
     const response = await callEdgeFunction(runtime, "auth/login", {
@@ -374,6 +422,45 @@ describe("Cloudflare edge cache function", () => {
     expect(runtime.cache.match).not.toHaveBeenCalled();
     expect(runtime.cache.put).not.toHaveBeenCalled();
     expect(runtime.originCalls[0]?.url).toBe("https://origin.example/v1/auth/login");
+  });
+
+  it("bypasses auth profile, permission management, and write methods", async () => {
+    const runtime = createRuntime();
+
+    const authProfile = await callEdgeFunction(runtime, "auth/me", {
+      headers: { "x-auth-token": "token-a" },
+      method: "GET",
+    });
+    expect(authProfile.headers.get("x-jato-edge-cache")).toBe("BYPASS");
+
+    const permissionWrite = await callEdgeFunction(runtime, "auth/users/alice/profile", {
+      body: JSON.stringify({ role: "admin" }),
+      headers: {
+        "content-type": "application/json",
+        "x-auth-token": "token-a",
+        "x-user-role": "admin",
+      },
+      method: "PATCH",
+    });
+    expect(permissionWrite.headers.get("x-jato-edge-cache")).toBe("BYPASS");
+
+    const dashboardWrite = await callEdgeFunction(runtime, "filters/options/batch", {
+      body: JSON.stringify({ items: [] }),
+      headers: {
+        "content-type": "application/json",
+        "x-auth-token": "token-a",
+      },
+      method: "PUT",
+    });
+    expect(dashboardWrite.headers.get("x-jato-edge-cache")).toBe("BYPASS");
+    expect(runtime.fetch).toHaveBeenCalledTimes(3);
+    expect(runtime.cache.match).not.toHaveBeenCalled();
+    expect(runtime.cache.put).not.toHaveBeenCalled();
+    expect(runtime.originCalls.map((call) => call.url)).toEqual([
+      "https://origin.example/v1/auth/me",
+      "https://origin.example/v1/auth/users/alice/profile",
+      "https://origin.example/v1/filters/options/batch",
+    ]);
   });
 
   it("does not cache failed origin responses", async () => {

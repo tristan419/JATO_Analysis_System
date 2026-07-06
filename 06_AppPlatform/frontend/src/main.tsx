@@ -3,7 +3,7 @@ type RouteProbeWindow = Window & typeof globalThis & {
 };
 
 const PROBE_INFLIGHT_KEY = "jato_route_probe_inflight_v1";
-const PROBE_INFLIGHT_TTL_MS = 4_000;
+const PROBE_INFLIGHT_TTL_MS = 2_200;
 const PROBE_CHECK_INTERVAL_MS = 50;
 
 function isInitialRouteProbeInFlight(): boolean {
@@ -38,11 +38,15 @@ async function waitForInitialRouteProbe(): Promise<void> {
 
 async function bootApp(): Promise<void> {
   await waitForInitialRouteProbe();
-  await import("./index.css");
-  const [{ default: React }, ReactDOM, { default: App }] = await Promise.all([
+  const cssPromise = import("./index.css");
+  const appModulesPromise = Promise.all([
     import("react"),
     import("react-dom/client"),
     import("./App"),
+  ]);
+  const [, [{ default: React }, ReactDOM, { default: App }]] = await Promise.all([
+    cssPromise,
+    appModulesPromise,
   ]);
   const root = document.getElementById("root");
   if (!root) return;
