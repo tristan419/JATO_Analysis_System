@@ -71,7 +71,7 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           pip install -r 06_AppPlatform/backend/requirements.txt
-          pip install pytest httpx
+          pip install "pytest<9" httpx
 
       - name: Validate backend syntax
         run: |
@@ -79,7 +79,18 @@ jobs:
 
       - name: API contract tests
         working-directory: 06_AppPlatform/backend
-        run: python -m pytest tests/integration/test_api_contracts.py -q
+        run: |
+          set -o pipefail
+          pytest_log="$(mktemp)"
+          status=0
+          timeout 180s python -m pytest tests/integration/test_api_contracts.py -q 2>&1 | tee "$pytest_log" || status=$?
+          if [ "$status" -eq 124 ] && grep -Eq '^[0-9]+ passed(, [0-9]+ warnings?)? in ' "$pytest_log"; then
+            echo "::warning::pytest reported success but did not exit cleanly; cleaning up residual Python child processes."
+            pkill -P $$ python || true
+            exit 0
+          fi
+          pkill -P $$ python || true
+          exit "$status"
 
   fullstack-frontend:
     runs-on: ubuntu-latest

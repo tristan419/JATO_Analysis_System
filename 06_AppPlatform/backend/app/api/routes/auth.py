@@ -753,14 +753,16 @@ import json as _json
 def google_auth_url(
     request: Request,
     redirect: str = Query("/", description="Frontend page to return to"),
+    frontend_origin: str | None = None,
 ) -> dict:
     """Return the Google OAuth authorization URL."""
     if not GOOGLE_ENABLED:
         raise HTTPException(status_code=503, detail="Google login not configured")
+    return_origin = _allowed_frontend_origin(frontend_origin) or _frontend_origin_for_request(request)
     # Encode redirect destination into the state param (Google passes it back)
     state = _json.dumps({
         "redirect": _safe_frontend_redirect(redirect),
-        "frontend_origin": _frontend_origin_for_request(request),
+        "frontend_origin": return_origin,
         "nonce": secrets.token_urlsafe(8),
     })
     from app.services.google_service import build_auth_url
