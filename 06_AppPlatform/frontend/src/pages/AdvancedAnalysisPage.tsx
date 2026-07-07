@@ -4,7 +4,7 @@ import { useSearchParams } from "react-router-dom";
 import type { Data, Layout as PlotlyLayout } from "plotly.js";
 
 import { api } from "../api/client";
-import { LazyPlotlyChart as PlotlyChart } from "../components/LazyPlotlyChart";
+import { LazyPlotlyChart, type PlotlyChartProps } from "../components/LazyPlotlyChart";
 import { PageBannerStack, PageLoadingShell } from "../components/PageFeedback";
 import { SearchSelectFilter } from "../components/SearchSelectFilter";
 import { TRANSPARENT_CHART_LAYOUT as CHART_LAYOUT } from "../utils/plotlyDefaults";
@@ -38,6 +38,7 @@ const STATIC_COUNTRY_OPTIONS = JATO_COUNTRIES.map((country) => ({
 }));
 const CHART_MARGIN = { l: 52, r: 24, t: 20, b: 48 } as const;
 const DEFAULT_AA_EXPORT: ExportSettings = { ...DEFAULT_EXPORT, exportWidth: 1920, exportHeight: 1080, dataLabelMode: "value", fontSize: 11 };
+const ADVANCED_ANALYSIS_PLOTLY_DEFER_MS = 6_000;
 const COLORS = { growth: "#10b981", decline: "#ef4444", stable: "#94a3b8", market: "#3b82f6", share: "#10b981", mix: "#f59e0b", interaction: "#8b5cf6", winner: "#10b981", loser: "#ef4444" };
 const RESPONSIVE_TWO_COL: CSSProperties = { display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(360px, 1fr))", gap: 16, marginBottom: 16 };
 const PROFILE_DIMENSIONS: Array<{ key: AdvancedAnalysisProfileDimension; label: string; showSuvShortcut?: boolean }> = [
@@ -81,6 +82,9 @@ type RankedModelOption = { model: string; score: number; index: number };
 /* ── Helpers ── */
 
 function pt(text: string): Partial<PlotlyLayout>["title"] { return { text }; }
+function PlotlyChart(props: PlotlyChartProps) {
+  return <LazyPlotlyChart {...props} deferMs={ADVANCED_ANALYSIS_PLOTLY_DEFER_MS} />;
+}
 function stateColor(s: string): string { return s === "growth" ? COLORS.growth : s === "decline" ? COLORS.decline : COLORS.stable; }
 function getGraphDiv(): HTMLElement | null { return document.querySelector(".chart-card .js-plotly-plot") as HTMLElement | null; }
 function fmtNum(n: number): string { return n.toLocaleString(undefined, { maximumFractionDigits: 0 }); }

@@ -39,6 +39,15 @@ type VisibilityWindow = Window & typeof globalThis & {
   IntersectionObserver?: typeof IntersectionObserver;
 };
 
+export interface LazyPlotlyChartProps extends PlotlyChartProps {
+  deferMs?: number;
+}
+
+function normalizeDeferMs(value: number | undefined): number {
+  if (typeof value !== "number" || !Number.isFinite(value) || value <= 0) return 0;
+  return Math.floor(value);
+}
+
 function ChartFallback({ height }: { height: number }) {
   return (
     <div style={{ ...FALLBACK_SHELL_STYLE, minHeight: Math.max(height, 220) }}>
@@ -59,23 +68,25 @@ function resolvePlaceholderHeight(props: PlotlyChartProps): number {
   return 450;
 }
 
-export function LazyPlotlyChart(props: PlotlyChartProps) {
+export function LazyPlotlyChart({ deferMs, ...props }: LazyPlotlyChartProps) {
+  const normalizedDeferMs = normalizeDeferMs(deferMs);
+  const [isEligibleToLoad, setIsEligibleToLoad] = useState(false);
   const [shouldLoad, setShouldLoad] = useState(false);
   const placeholderRef = useRef<HTMLDivElement | null>(null);
   const height = resolvePlaceholderHeight(props);
 
   useEffect(() => {
-    if (shouldLoad) return undefined;
+    if (shouldLoad || isEligibleToLoad) return undefined;
     const element = placeholderRef.current;
     if (!element) return undefined;
     const visibilityWindow = window as VisibilityWindow;
     if (typeof visibilityWindow.IntersectionObserver !== "function") {
-      const handle = window.setTimeout(() => setShouldLoad(true), CHART_VISIBILITY_FALLBACK_DELAY_MS);
+      const handle = window.setTimeout(() => setIsEligibleToLoad(true), CHART_VISIBILITY_FALLBACK_DELAY_MS);
       return () => window.clearTimeout(handle);
     }
     const observer = new visibilityWindow.IntersectionObserver((entries) => {
       if (entries.some((entry) => entry.isIntersecting)) {
-        setShouldLoad(true);
+        setIsEligibleToLoad(true);
         observer.disconnect();
       }
     }, {
@@ -83,7 +94,17 @@ export function LazyPlotlyChart(props: PlotlyChartProps) {
     });
     observer.observe(element);
     return () => observer.disconnect();
-  }, [shouldLoad]);
+  }, [isEligibleToLoad, shouldLoad]);
+
+  useEffect(() => {
+    if (!isEligibleToLoad || shouldLoad) return undefined;
+    if (normalizedDeferMs === 0) {
+      setShouldLoad(true);
+      return undefined;
+    }
+    const handle = window.setTimeout(() => setShouldLoad(true), normalizedDeferMs);
+    return () => window.clearTimeout(handle);
+  }, [isEligibleToLoad, normalizedDeferMs, shouldLoad]);
 
   if (!shouldLoad) {
     return (

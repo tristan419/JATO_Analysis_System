@@ -20,4 +20,9 @@ describe("Advanced Analysis startup", () => {
     expect(advancedAnalysisSource).toContain("<Suspense fallback={<PageLoadingShell");
     expect(advancedAnalysisSource).not.toContain('import { HeroProductAnalysisView } from "./HeroProductAnalysisView";');
   });
+
+  it("defers Plotly runtime so the transfer result shell paints before heavy chart code", () => {
+    expect(advancedAnalysisSource).toContain("const ADVANCED_ANALYSIS_PLOTLY_DEFER_MS = 6_000;");
+    expect(advancedAnalysisSource).toContain("return <LazyPlotlyChart {...props} deferMs={ADVANCED_ANALYSIS_PLOTLY_DEFER_MS} />;");
+  });
 });
