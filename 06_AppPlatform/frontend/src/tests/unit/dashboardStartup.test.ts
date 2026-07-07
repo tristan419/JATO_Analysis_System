@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 
+import appSource from "../../App.tsx?raw";
 import dashboardApiSource from "../../api/dashboard.ts?raw";
 import dashboardSource from "../../pages/DashboardPage.tsx?raw";
 
@@ -11,5 +12,12 @@ describe("Dashboard startup path", () => {
     expect(dashboardSource).toContain("controller.abort();");
     expect(dashboardApiSource).toContain("dataFreshness: (init?: RequestInit) =>");
     expect(dashboardApiSource).toContain('request<{ items: DataFreshnessItem[] }>("/analysis/data-freshness", init)');
+  });
+
+  it("keeps shared filter scope out of the App startup chunk so the dashboard skeleton can paint first", () => {
+    expect(appSource).toContain("const SharedFilterScopeProvider = lazy(() =>");
+    expect(appSource).toContain('import("./contexts/SharedFilterScopeContext")');
+    expect(appSource).not.toContain('import { SharedFilterScopeProvider } from "./contexts/SharedFilterScopeContext";');
+    expect(appSource).toContain("fallback ?? <DashboardRouteSkeleton />");
   });
 });

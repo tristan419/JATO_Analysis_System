@@ -17,4 +17,11 @@ describe("route performance script", () => {
     expect(routePerfScript).toContain("edge=");
     expect(routePerfScript).toContain("server=");
   });
+
+  it("can force Playwright to bypass local system proxy rules for direct route timing", () => {
+    expect(routePerfScript).toContain("JATO_PERF_DIRECT");
+    expect(routePerfScript).toContain('getArg("direct")');
+    expect(routePerfScript).toContain('"--proxy-server=direct://"');
+    expect(routePerfScript).toContain('"--proxy-bypass-list=*"');
+  });
 });
