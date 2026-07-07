@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import appSource from "../../App.tsx?raw";
 import dashboardApiSource from "../../api/dashboard.ts?raw";
 import dashboardSource from "../../pages/DashboardPage.tsx?raw";
+import viteConfigSource from "../../../vite.config.ts?raw";
 
 describe("Dashboard startup path", () => {
   it("keeps data freshness outside the immediate first paint request path", () => {
@@ -19,5 +20,14 @@ describe("Dashboard startup path", () => {
     expect(appSource).toContain('import("./contexts/SharedFilterScopeContext")');
     expect(appSource).not.toContain('import { SharedFilterScopeProvider } from "./contexts/SharedFilterScopeContext";');
     expect(appSource).toContain("fallback ?? <DashboardRouteSkeleton />");
+  });
+
+  it("keeps the small loading fallback out of the dashboard-core chunk", () => {
+    expect(viteConfigSource).toContain("function isLoadingSurfaceModule");
+    expect(viteConfigSource).toContain('return "loading-surface";');
+    expect(viteConfigSource.indexOf("isLoadingSurfaceModule(id)")).toBeLessThan(
+      viteConfigSource.indexOf("isDashboardCoreModule(id)"),
+    );
+    expect(viteConfigSource).not.toContain('"/src/hooks/useResolvedCountry.ts"');
   });
 });

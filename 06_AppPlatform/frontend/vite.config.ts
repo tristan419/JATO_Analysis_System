@@ -14,7 +14,6 @@ const DASHBOARD_CORE_MODULES = [
   "/src/components/deckControls/DeckFloatingDrawer.tsx",
   "/src/components/deckControls/DeckControlTabs.tsx",
   "/src/components/ExportPanelHelpers.ts",
-  "/src/hooks/useResolvedCountry.ts",
   "/src/pages/dashboardHelpers.ts",
   "/src/utils/bubbleSizing.ts",
   "/src/utils/colors.ts",
@@ -28,6 +27,10 @@ const DASHBOARD_CORE_MODULES = [
 function isDashboardCoreModule(id: string): boolean {
   const normalizedId = id.replace(/\\/g, "/");
   return DASHBOARD_CORE_MODULES.some((modulePath) => normalizedId.endsWith(modulePath));
+}
+
+function isLoadingSurfaceModule(id: string): boolean {
+  return id.replace(/\\/g, "/").endsWith("/src/components/LoadingSurface.tsx");
 }
 
 export default defineConfig(({ mode }) => {
@@ -58,6 +61,9 @@ export default defineConfig(({ mode }) => {
           manualChunks(id) {
             if (id.includes("vite/preload-helper")) {
               return "vite-runtime";
+            }
+            if (isLoadingSurfaceModule(id)) {
+              return "loading-surface";
             }
             if (isDashboardCoreModule(id)) {
               return "dashboard-core";
