@@ -402,6 +402,7 @@ async function measureRoute(browser, host, route, credentials, timeoutMs, initia
       method: request.method(),
       ms: performance.now() - timing.startedAt,
       path: url.pathname,
+      serverCache: headers["x-jato-server-cache"] || "",
       startMs: timing.startMs,
       status: response.status(),
     });
@@ -475,6 +476,10 @@ function countCacheState(apiCalls, state) {
   return apiCalls.filter((api) => api.cache.toUpperCase() === state).length;
 }
 
+function countServerCacheState(apiCalls, state) {
+  return apiCalls.filter((api) => api.serverCache.toUpperCase() === state).length;
+}
+
 function bytes(value) {
   if (typeof value !== "number" || !Number.isFinite(value)) return "-";
   if (value >= 1024 * 1024) return `${(value / 1024 / 1024).toFixed(2)}MB`;
@@ -540,6 +545,11 @@ async function main() {
     edge_stale: countCacheState(result.apiCalls, "STALE"),
     edge_miss: countCacheState(result.apiCalls, "MISS"),
     edge_bypass: countCacheState(result.apiCalls, "BYPASS"),
+    server_memory: countServerCacheState(result.apiCalls, "MEMORY"),
+    server_redis: countServerCacheState(result.apiCalls, "REDIS"),
+    server_disk: countServerCacheState(result.apiCalls, "DISK"),
+    server_inflight: countServerCacheState(result.apiCalls, "INFLIGHT"),
+    server_miss: countServerCacheState(result.apiCalls, "MISS"),
     initial_window_s: seconds(result.initialWindowMs),
     initial_api_count: result.initialWindowApis.length,
     initial_slowest_api_s: seconds(result.initialWindowSlowApis[0]?.ms),
@@ -555,11 +565,11 @@ async function main() {
 
   for (const result of results) {
     const slow = result.slowApis
-      .map((api) => `${api.method} ${api.path} ${api.status} ${seconds(api.ms)}s ${api.cache || "-"}`)
+      .map((api) => `${api.method} ${api.path} ${api.status} ${seconds(api.ms)}s edge=${api.cache || "-"} server=${api.serverCache || "-"}`)
       .join("; ");
     console.log(`${result.host}/${result.route} slow APIs: ${slow || "-"}`);
     const initialApis = result.initialWindowApis
-      .map((api) => `${seconds(api.startMs)}s ${api.method} ${api.path} ${api.status} ${seconds(api.ms)}s ${api.cache || "-"}`)
+      .map((api) => `${seconds(api.startMs)}s ${api.method} ${api.path} ${api.status} ${seconds(api.ms)}s edge=${api.cache || "-"} server=${api.serverCache || "-"}`)
       .join("; ");
     console.log(`${result.host}/${result.route} first ${seconds(result.initialWindowMs)}s APIs: ${initialApis || "-"}`);
     const resources = result.resources
