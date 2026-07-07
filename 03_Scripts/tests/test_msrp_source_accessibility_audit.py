@@ -636,4 +636,21 @@ def test_run_can_probe_only_placeholder_source_drafts(tmp_path: Path) -> None:
     assert report["summary"]["probeStatusCounts"] == {
         "placeholder_source_url": 1,
     }
+    assert report["summary"]["countryProbeStatusCounts"] == {
+        "es": {"placeholder_source_url": 1},
+    }
+    assert report["summary"]["brandProbeStatusCounts"] == {
+        "SEAT": {"placeholder_source_url": 1},
+    }
+    assert report["summary"]["placeholderCountries"] == [
+        {"countryCode": "es", "count": 1},
+    ]
+    assert report["summary"]["placeholderBrands"] == [
+        {"brand": "SEAT", "count": 1},
+    ]
     assert report["items"][0]["sourceCode"] == "seat_arona_es_draft_scrapling"
+    markdown = (tmp_path / "out" / "msrp_source_accessibility_audit.md").read_text(
+        encoding="utf-8",
+    )
+    assert "| ES | 1 |" in markdown
+    assert "| SEAT | 1 |" in markdown

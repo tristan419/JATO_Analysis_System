@@ -579,9 +579,35 @@ def _increment(target: dict[str, int], value: Any) -> None:
     target[key] = target.get(key, 0) + 1
 
 
+def _increment_nested(target: dict[str, dict[str, int]], outer: Any, inner: Any) -> None:
+    outer_key = str(outer or "unknown").strip() or "unknown"
+    inner_key = str(inner or "unknown").strip() or "unknown"
+    bucket = target.setdefault(outer_key, {})
+    bucket[inner_key] = bucket.get(inner_key, 0) + 1
+
+
+def _top_count_items(
+    counts: dict[str, int],
+    *,
+    key_name: str,
+    limit: int = 10,
+) -> list[dict[str, Any]]:
+    return [
+        {key_name: key, "count": count}
+        for key, count in sorted(
+            counts.items(),
+            key=lambda item: (-item[1], item[0]),
+        )[:limit]
+    ]
+
+
 def summarize_items(items: list[dict[str, Any]]) -> dict[str, Any]:
     status_counts: dict[str, int] = {}
     action_counts: dict[str, int] = {}
+    country_status_counts: dict[str, dict[str, int]] = {}
+    brand_status_counts: dict[str, dict[str, int]] = {}
+    placeholder_country_counts: dict[str, int] = {}
+    placeholder_brand_counts: dict[str, int] = {}
     retryable_count = 0
     proxy_required_count = 0
     tls_failed_count = 0
@@ -589,8 +615,12 @@ def summarize_items(items: list[dict[str, Any]]) -> dict[str, Any]:
     placeholder_count = 0
     for item in items:
         probe_status = item.get("probeStatus")
+        country_code = str(item.get("countryCode") or "").lower() or "unknown"
+        brand = str(item.get("brand") or _brand_from_source_code(str(item.get("sourceCode") or "")) or "").upper() or "unknown"
         _increment(status_counts, probe_status)
         _increment(action_counts, item.get("recommendedAction"))
+        _increment_nested(country_status_counts, country_code, probe_status)
+        _increment_nested(brand_status_counts, brand, probe_status)
         if item.get("retryable"):
             retryable_count += 1
         if item.get("officialProxyRequired"):
@@ -601,15 +631,27 @@ def summarize_items(items: list[dict[str, Any]]) -> dict[str, Any]:
             dns_unresolved_count += 1
         if probe_status == "placeholder_source_url":
             placeholder_count += 1
+            _increment(placeholder_country_counts, country_code)
+            _increment(placeholder_brand_counts, brand)
     return {
         "probedSourceCount": len(items),
         "probeStatusCounts": status_counts,
         "recommendedActionCounts": action_counts,
+        "countryProbeStatusCounts": dict(sorted(country_status_counts.items())),
+        "brandProbeStatusCounts": dict(sorted(brand_status_counts.items())),
         "retryableNetworkCount": retryable_count,
         "officialProxyRequiredCount": proxy_required_count,
         "tlsHandshakeFailedCount": tls_failed_count,
         "dnsUnresolvedCount": dns_unresolved_count,
         "placeholderSourceCount": placeholder_count,
+        "placeholderCountries": _top_count_items(
+            placeholder_country_counts,
+            key_name="countryCode",
+        ),
+        "placeholderBrands": _top_count_items(
+            placeholder_brand_counts,
+            key_name="brand",
+        ),
     }
 
 
@@ -727,9 +769,33 @@ def _write_markdown(report: dict[str, Any], path: Path) -> None:
         f"| DNS unresolved | {summary.get('dnsUnresolvedCount', 0)} |",
         f"| Placeholder source URLs | {summary.get('placeholderSourceCount', 0)} |",
         "",
+        "| Placeholder country | Count |",
+        "|---|---:|",
+    ]
+    placeholder_countries = summary.get("placeholderCountries") or []
+    if placeholder_countries:
+        for item in placeholder_countries:
+            lines.append(
+                f"| {str(item.get('countryCode') or '').upper()} | {item.get('count', 0)} |"
+            )
+    else:
+        lines.append("| - | 0 |")
+    lines.extend([
+        "",
+        "| Placeholder brand | Count |",
+        "|---|---:|",
+    ])
+    placeholder_brands = summary.get("placeholderBrands") or []
+    if placeholder_brands:
+        for item in placeholder_brands:
+            lines.append(f"| {item.get('brand') or '-'} | {item.get('count', 0)} |")
+    else:
+        lines.append("| - | 0 |")
+    lines.extend([
+        "",
         "| Country | Source | HTTP | Probe status | Recommended action | URL |",
         "|---|---|---:|---|---|---|",
-    ]
+    ])
     for item in report.get("items") or []:
         lines.append(
             "| {country} | `{source}` | {status} | {probe} | {action} | {url} |".format(
