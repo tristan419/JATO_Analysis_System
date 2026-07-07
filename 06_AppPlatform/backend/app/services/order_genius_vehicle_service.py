@@ -14,6 +14,7 @@ from app.db.models import PiOrderHeader, PiOrderLine, PiOrderLineAllocation, PiV
 from app.infra import order_genius_repository as og_repo
 from app.infra import order_genius_vehicle_repository as repo
 from app.services.order_genius_vehicle_exporter import generate_vehicle_allocation_excel
+from app.services.vehicle_status_flow_config import get_vehicle_status_flow_config
 
 
 PI_STATUSES = {
@@ -26,6 +27,7 @@ LOGISTICS_STATUSES = {
     "arrived_at_port", "in_warehouse", "ready_for_pickup", "delivered",
 }
 PI_SCOPE_CODE_RE = r"[A-Z0-9]{2,12}"
+VIN_CODE_RE = re.compile(r"^[A-HJ-NPR-Z0-9]{17}$")
 
 
 def build_pi_code(scope_code: str, year: int, month: int, sequence: int) -> str:
@@ -1147,6 +1149,11 @@ def _validate_import_row(row: dict[str, Any]) -> tuple[list[str], list[str]]:
         errors.append("PI Code format is invalid")
     if car_code and not parse_car_code(car_code.upper()):
         errors.append("Car Code format is invalid")
+    if vin:
+        normalized_vin = vin.upper()
+        row["vin"] = normalized_vin
+        if not VIN_CODE_RE.fullmatch(normalized_vin):
+            errors.append("VIN format is invalid")
     if not country and pi_code:
         parsed = parse_pi_code(pi_code.upper())
         if parsed and len(str(parsed["countryCode"])) == 2:

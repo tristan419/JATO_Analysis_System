@@ -12,6 +12,7 @@ import { MaterialFinanceMatrix } from "./MaterialFinanceMatrix";
 interface MaterialFinanceWorkbenchProps {
   countryCode: string;
   countryCodes: string[];
+  scopeLabel?: string;
   rows: CountryMaterialFinanceRow[];
   loading: boolean;
   error?: string;

@@ -1,3 +1,4 @@
+import json
 from pathlib import Path
 from types import SimpleNamespace
 from uuid import uuid4
@@ -6,11 +7,16 @@ import openpyxl
 import pytest
 from fastapi import HTTPException
 
+from app.api.routes import order_genius_vehicle_allocation as vehicle_route
+from app.api.routes.order_genius_vehicle_allocation import _normalise_import_rows_payload
 from app.infra import order_genius_repository as order_repo
 from app.infra import order_genius_vehicle_repository as vehicle_repo
 from app.services import order_genius_vehicle_service as vehicle_service
 from app.services.order_genius_vehicle_exporter import generate_vehicle_allocation_excel
-from app.services.order_genius_vehicle_import_parser import parse_vehicle_allocation_xlsx
+from app.services.order_genius_vehicle_import_parser import (
+    parse_vehicle_allocation_xlsx,
+    parse_vehicle_vin_list_xlsx,
+)
 from app.services.order_genius_vehicle_service import (
     _ensure_vehicle_units_for_line_allocations,
     _line_items_from_order_quantities,
@@ -25,6 +31,7 @@ from app.services.order_genius_vehicle_service import (
     parse_car_code,
     parse_pi_code,
 )
+from app.services.vehicle_status_flow_config import get_vehicle_status_flow_config
 
 
 def test_vehicle_allocation_code_generation_rules() -> None:
@@ -59,6 +66,82 @@ def test_vehicle_allocation_code_generation_rules() -> None:
         "lineSequence": 2,
         "unitSequence": 12,
     }
+
+
+def test_vehicle_status_flow_config_exposes_default_contract() -> None:
+    config = get_vehicle_status_flow_config("se", None)
+
+    assert config["countryCode"] == "SE"
+    assert config["orderingAccountCode"] is None
+    assert config["source"] == "default"
+    assert [item["key"] for item in config["logistics"]][:2] == ["pending", "in_production"]
+    assert config["logistics"][-1]["terminal"] is True
+    assert config["allocation"][0]["allowedTransitions"] == ["reserved", "allocated", "cancelled"]
+
+
+def test_vehicle_status_flow_config_prefers_ordering_account_override() -> None:
+    config = get_vehicle_status_flow_config("dk", "ncg")
+
+    assert config["countryCode"] == "DK"
+    assert config["orderingAccountCode"] == "NCG"
+    assert config["source"] == "ordering_account"
+    labels_by_key = {item["key"]: item["labelZh"] for item in config["logistics"]}
+    assert labels_by_key["pending"] == "已下单"
+    assert labels_by_key["on_vessel"] == "海运途中"
+    assert labels_by_key["in_warehouse"] == "总代库存"
+    assert labels_by_key["ready_for_pickup"] == "经销商库存"
+    assert labels_by_key["delivered"] == "已交付并注册"
+    assert config["allocation"][0]["allowedTransitions"] == ["reserved", "allocated", "cancelled"]
+
+
+def test_vehicle_status_flow_config_returns_independent_steps() -> None:
+    first = get_vehicle_status_flow_config("se", None)
+    first["logistics"][0]["allowedTransitions"].append("mutated")
+
+    second = get_vehicle_status_flow_config("se", None)
+
+    assert "mutated" not in second["logistics"][0]["allowedTransitions"]
+
+
+def test_vehicle_status_flow_route_validates_country_access(monkeypatch) -> None:
+    calls: list[tuple[str, str, str]] = []
+
+    def fake_validate_country_access(session, username, role, country):
+        calls.append((username, role, country))
+
+    monkeypatch.setattr(vehicle_route, "validate_country_access", fake_validate_country_access)
+
+    config = vehicle_route.get_status_flow_config(
+        country="dk",
+        ordering_account="ncg",
+        session=object(),
+        user=SimpleNamespace(name="tester", role="viewer"),
+    )
+
+    assert calls == [("tester", "viewer", "DK")]
+    assert config["countryCode"] == "DK"
+    assert config["orderingAccountCode"] == "NCG"
+    assert config["source"] == "ordering_account"
+
+
+def test_vehicle_status_flow_route_allows_default_viewer_without_country(monkeypatch) -> None:
+    calls: list[tuple[str, str, str]] = []
+
+    def fake_validate_country_access(session, username, role, country):
+        calls.append((username, role, country))
+
+    monkeypatch.setattr(vehicle_route, "validate_country_access", fake_validate_country_access)
+
+    config = vehicle_route.get_status_flow_config(
+        country=None,
+        ordering_account=None,
+        session=object(),
+        user=SimpleNamespace(name="tester", role="viewer"),
+    )
+
+    assert calls == []
+    assert config["countryCode"] is None
+    assert config["source"] == "default"
 
 
 def test_vehicle_allocation_export_has_eta_column_after_etd() -> None:
@@ -115,6 +198,114 @@ def test_vehicle_allocation_import_parser_maps_eta(tmp_path: Path) -> None:
             "country_code": "RO",
         }
     ]
+
+
+def test_vehicle_allocation_vin_list_parser_reads_single_column_without_header(tmp_path: Path) -> None:
+    workbook = openpyxl.Workbook()
+    ws = workbook.active
+    ws.append(["LVUGTBHD5TC114629"])
+    ws.append(["LNNBDDEH0TG030197"])
+    path = tmp_path / "vin-only.xlsx"
+    workbook.save(path)
+    workbook.close()
+
+    rows = parse_vehicle_vin_list_xlsx(path)
+
+    assert rows == [
+        "LVUGTBHD5TC114629",
+        "LNNBDDEH0TG030197",
+    ]
+
+
+def test_vehicle_allocation_vin_list_parser_prefers_vin_header_column(tmp_path: Path) -> None:
+    workbook = openpyxl.Workbook()
+    ws = workbook.active
+    ws.append(["Material", "VIN", "Remark"])
+    ws.append(["T7000", "LVUGTBHD5TC114629", "ready"])
+    ws.append(["T7001", "LNNBDDEH0TG030197", ""])
+    path = tmp_path / "vin-column.xlsx"
+    workbook.save(path)
+    workbook.close()
+
+    rows = parse_vehicle_vin_list_xlsx(path)
+
+    assert rows == [
+        "LVUGTBHD5TC114629",
+        "LNNBDDEH0TG030197",
+    ]
+
+
+def test_vehicle_allocation_import_preview_rejects_invalid_vin(monkeypatch) -> None:
+    monkeypatch.setattr(vehicle_repo, "get_vehicle_by_vin", lambda session, vin: None)
+
+    preview = vehicle_service.preview_vehicle_import(
+        object(),
+        [{"sourceRow": 2, "vin": "SHORTVIN"}],
+    )
+
+    assert preview["status"] == "error"
+    assert preview["errors"] == ["Row 2: VIN format is invalid"]
+    assert preview["previewRows"][0]["vin"] == "SHORTVIN"
+
+
+def test_vehicle_allocation_import_rows_payload_adds_source_rows() -> None:
+    rows = _normalise_import_rows_payload({
+        "rows": [
+            {"pi_code": "PI-SE-202607-001", "vin": "LVTDB21B9RD123456"},
+            {"sourceRow": 9, "pi_code": "PI-SE-202607-001", "vin": "LVTDB21B9RD123457"},
+        ],
+    })
+
+    assert rows == [
+        {"sourceRow": 1, "pi_code": "PI-SE-202607-001", "vin": "LVTDB21B9RD123456"},
+        {"sourceRow": 9, "pi_code": "PI-SE-202607-001", "vin": "LVTDB21B9RD123457"},
+    ]
+
+
+def test_vehicle_allocation_import_rows_payload_rejects_non_objects() -> None:
+    with pytest.raises(HTTPException) as exc:
+        _normalise_import_rows_payload({"rows": ["bad-row"]})
+
+    assert exc.value.status_code == 400
+    assert "rows[0] must be an object" in exc.value.detail
+
+
+def test_vehicle_allocation_import_rows_preview_creates_apply_session(tmp_path: Path, monkeypatch) -> None:
+    preview_rows: list[dict] = []
+
+    def fake_preview(session, rows):
+        preview_rows.extend(rows)
+        return {
+            "totalRows": len(rows),
+            "newHeaders": 0,
+            "newLines": 0,
+            "newUnits": 0,
+            "updatedUnits": len(rows),
+            "warnings": [],
+            "errors": [],
+            "previewRows": [],
+            "status": "ok",
+        }
+
+    monkeypatch.setattr(vehicle_route, "IMPORT_SESSION_DIR", tmp_path)
+    monkeypatch.setattr(vehicle_route, "uuid4", lambda: "parsed-rows-session")
+    monkeypatch.setattr(vehicle_route, "_validate_import_access", lambda session, user, rows: None)
+    monkeypatch.setattr(vehicle_route, "preview_vehicle_import", fake_preview)
+
+    result = vehicle_route.preview_import_rows(
+        {"rows": [{"pi_code": "PI-SE-202607-001", "vin": "LVTDB21B9RD123456"}]},
+        session=object(),
+        user=SimpleNamespace(name="tester", role="admin"),
+    )
+
+    session_path = tmp_path / "parsed-rows-session.json"
+
+    assert result["importId"] == "parsed-rows-session"
+    assert preview_rows == [{"sourceRow": 1, "pi_code": "PI-SE-202607-001", "vin": "LVTDB21B9RD123456"}]
+    assert json.loads(session_path.read_text()) == {
+        "rows": [{"sourceRow": 1, "pi_code": "PI-SE-202607-001", "vin": "LVTDB21B9RD123456"}],
+        "source": "parsed_rows",
+    }
 
 
 def test_line_payload_uses_bom_admin_and_country_fob(monkeypatch) -> None:
@@ -427,6 +618,88 @@ def test_combined_pi_vehicle_units_keep_market_country_per_allocation(monkeypatc
         "CAR-SE-2607-001-L01-0002",
         "CAR-FI-2607-001-L01-0003",
     ]
+
+
+def test_combined_pi_vehicle_generation_does_not_duplicate_existing_units(monkeypatch) -> None:
+    added = []
+    header = SimpleNamespace(
+        pi_id=uuid4(),
+        pi_code="PI-NORDIC-202607-001",
+        country_code="SE",
+        order_month="2026-07",
+        pi_sequence_no=1,
+        etd=None,
+        eta=None,
+        ready_for_pickup_date=None,
+        ship_name=None,
+    )
+    line = SimpleNamespace(
+        pi_line_id=uuid4(),
+        pi_line_code="PI-NORDIC-202607-001-L01",
+        line_sequence_no=1,
+        material_code="A",
+        bom="BOM-A",
+        brand="OMODA",
+        model_name="OMODA9",
+        version="Exclusive",
+        powertrain="PHEV",
+        exterior_color_name="Black",
+        exterior_color_code="CL",
+        interior_color_name="Black",
+        interior_colour_code="BK",
+        quantity=3,
+    )
+
+    monkeypatch.setattr(vehicle_repo, "count_vehicles_for_line", lambda session, pi_line_code: 3)
+    monkeypatch.setattr(vehicle_repo, "add_vehicle", lambda session, vehicle: added.append(vehicle) or vehicle)
+
+    _ensure_vehicle_units_for_line_allocations(
+        object(),
+        header,
+        line,
+        [
+            {"countryCode": "SE", "quantity": 2},
+            {"countryCode": "FI", "quantity": 1},
+        ],
+        "tester",
+    )
+
+    assert added == []
+
+
+def test_combined_pi_vehicle_generation_rejects_quantity_below_existing_units(monkeypatch) -> None:
+    header = SimpleNamespace(
+        pi_id=uuid4(),
+        pi_code="PI-NORDIC-202607-001",
+        country_code="SE",
+        order_month="2026-07",
+        pi_sequence_no=1,
+        etd=None,
+        eta=None,
+        ready_for_pickup_date=None,
+        ship_name=None,
+    )
+    line = SimpleNamespace(
+        pi_line_id=uuid4(),
+        pi_line_code="PI-NORDIC-202607-001-L01",
+        line_sequence_no=1,
+        material_code="A",
+        quantity=2,
+    )
+
+    monkeypatch.setattr(vehicle_repo, "count_vehicles_for_line", lambda session, pi_line_code: 3)
+
+    with pytest.raises(HTTPException) as exc:
+        _ensure_vehicle_units_for_line_allocations(
+            object(),
+            header,
+            line,
+            [{"countryCode": "SE", "quantity": 2}],
+            "tester",
+        )
+
+    assert exc.value.status_code == 409
+    assert "quantity cannot be lower" in str(exc.value.detail)
 
 
 def test_bulk_vehicle_update_assigns_vins_to_empty_units_in_car_code_order(monkeypatch) -> None:

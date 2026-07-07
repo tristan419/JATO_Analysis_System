@@ -102,6 +102,16 @@ export interface ColourSurchargeRule {
   isActive: boolean;
 }
 
+export interface SpecialColourSurchargeRule {
+  specialColourSurchargeRuleId: string;
+  brand: string;
+  modelName: string | null;
+  colourCode: string;
+  colourName: string | null;
+  surchargeEur: number;
+  isActive: boolean;
+}
+
 export interface ColourHexOption {
   colourHex: string;
   skuCount: number;

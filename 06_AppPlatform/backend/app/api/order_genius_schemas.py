@@ -93,6 +93,14 @@ class ColourSurchargeUpdate(BaseModel):
     surchargeEur: float = Field(ge=0)
 
 
+class SpecialColourSurchargeUpdate(BaseModel):
+    brand: str = Field(min_length=1)
+    modelName: str | None = None
+    colourCode: str = Field(min_length=1)
+    colourName: str | None = None
+    surchargeEur: float = Field(ge=0)
+
+
 # ── Order Genius Matrix ──────────────────────────────────────────────
 
 

@@ -1,0 +1,189 @@
+.command-select {
+  position: relative;
+  min-width: 0;
+}
+
+.command-select .command-select-trigger {
+  width: 100%;
+  min-height: 38px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  border: 1px solid #cfd6df;
+  border-radius: 6px;
+  background: #fff;
+  color: #111827;
+  padding: 8px 10px;
+  font: inherit;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.command-select .command-select-trigger:disabled {
+  background: #f3f6f9;
+  color: #98a2b3;
+  cursor: not-allowed;
+}
+
+.command-select-trigger-label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  text-align: left;
+}
+
+.command-select-trigger-placeholder {
+  color: #98a2b3;
+}
+
+.command-select-trigger-caret {
+  color: #667085;
+  font-size: 10px;
+  line-height: 1;
+}
+
+.command-select-popover {
+  position: absolute;
+  z-index: 80;
+  top: calc(100% + 6px);
+  left: 0;
+  width: min(360px, max(100%, 260px));
+  border: 1px solid #b8c4d4;
+  border-radius: 6px;
+  background: #fff;
+  box-shadow: 0 14px 30px rgba(16, 24, 40, 0.16);
+  overflow: hidden;
+}
+
+.command-select-search {
+  width: 100%;
+  border: 0;
+  border-bottom: 1px solid #e4e9f0;
+  border-radius: 0;
+  background: #fff;
+  color: #111827;
+  padding: 12px 14px;
+  outline: none;
+  font: inherit;
+}
+
+.command-select-meta {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 8px 12px;
+  border-bottom: 1px solid #eef2f6;
+  color: #667085;
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.command-select-meta-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.command-select .command-select-action {
+  border: 1px solid #cfd6df;
+  border-radius: 4px;
+  background: #fff;
+  color: #344054;
+  padding: 4px 8px;
+  font-size: 11px;
+  font-weight: 800;
+  cursor: pointer;
+}
+
+.command-select-list {
+  max-height: 260px;
+  overflow: auto;
+  padding: 4px;
+}
+
+.command-select .command-select-option {
+  width: 100%;
+  min-height: 34px;
+  display: grid;
+  grid-template-columns: 18px minmax(0, 1fr);
+  gap: 8px;
+  align-items: center;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: #111827;
+  padding: 7px 8px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.command-select .command-select-option:hover,
+.command-select .command-select-option.is-active {
+  background: #edf4ff;
+}
+
+.command-select .command-select-option.is-selected {
+  color: #1c69d4;
+  font-weight: 800;
+}
+
+.command-select .command-select-option:disabled {
+  color: #98a2b3;
+  cursor: not-allowed;
+}
+
+.command-select-option-check {
+  width: 16px;
+  height: 16px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid #cfd6df;
+  border-radius: 3px;
+  color: #1c69d4;
+  font-size: 12px;
+  font-weight: 900;
+}
+
+.command-select-option-text {
+  min-width: 0;
+  display: grid;
+  gap: 2px;
+}
+
+.command-select-option-label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.command-select-option-caption {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: #667085;
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.command-select-empty {
+  padding: 18px 12px;
+  color: #667085;
+  text-align: center;
+  font-size: 12px;
+}
+
+.command-select.is-compact .command-select-trigger {
+  min-height: 30px;
+  padding: 4px 8px;
+  font-size: 12px;
+}
+
+.command-select.is-compact .command-select-popover {
+  width: min(320px, max(100%, 230px));
+}

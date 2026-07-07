@@ -25,6 +25,25 @@ export type LogisticsStatus =
   | "ready_for_pickup"
   | "delivered";
 
+export interface VehicleStatusFlowStep {
+  key: AllocationStatus | LogisticsStatus | string;
+  labelEn: string;
+  labelZh: string;
+  order: number;
+  color: string;
+  icon: string;
+  terminal: boolean;
+  allowedTransitions: string[];
+}
+
+export interface VehicleStatusFlowConfig {
+  countryCode: string | null;
+  orderingAccountCode: string | null;
+  source: "default" | "country" | "ordering_account" | string;
+  logistics: VehicleStatusFlowStep[];
+  allocation: VehicleStatusFlowStep[];
+}
+
 export interface PiOrderHeader {
   piId: string;
   piCode: string;
@@ -286,10 +305,24 @@ export interface VehicleImportPreview {
   status: "ok" | "error";
 }
 
+export type VehicleImportParsedRow = Record<string, unknown>;
+
+export interface VehicleImportParsedRowsPayload {
+  rows: VehicleImportParsedRow[];
+  source?: string | null;
+}
+
 export interface VehicleImportResult {
   createdUnits: number;
   updatedUnits: number;
   warnings: string[];
+}
+
+export interface VehicleVinListExtract {
+  fileName: string | null;
+  totalRows: number;
+  vins: string[];
+  uploadedBy: string;
 }
 
 export interface UpdateVehiclePayload {

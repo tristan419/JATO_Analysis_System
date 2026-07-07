@@ -12,13 +12,12 @@ from copy import deepcopy
 from datetime import datetime, timezone
 from uuid import UUID, uuid4
 
-from sqlalchemy import and_, func, inspect, select, update
+from sqlalchemy import and_, delete, func, inspect, select, update
 from sqlalchemy.orm import Session
 
 from app.db.models import (
     BrandColourSurchargeRule,
     CountryMaterialFinance,
-    CountryMaterialFinanceHistory,
     CountryPaymentTermMaster,
     CountrySkuFobResolved,
     FobResolvedHistory,
@@ -32,14 +31,9 @@ from app.db.models import (
     PiOrderLineAllocation,
     PiVehicleUnit,
     QuantityCellHistory,
+    SpecialColourSurchargeRule,
 )
-from app.services.ordering_normalization import (
-    clean_text,
-    infer_colour_tier,
-    merge_colour_tiers,
-    normalize_brand,
-    normalize_brand_text,
-)
+from app.services.ordering_normalization import clean_text, normalize_brand, normalize_brand_text
 from app.services.powertrain_normalizer import normalize_powertrain
 
 
@@ -70,6 +64,9 @@ COUNTRY_NAMES_BY_CODE: dict[str, str] = {
 }
 
 SUPPORTED_ORDERING_COUNTRY_CODES = frozenset(COUNTRY_NAMES_BY_CODE)
+COLOUR_SURCHARGE_MANUAL_SOURCE_MODES = frozenset(
+    {"manual_edit", "manual_country_adjust"}
+)
 COUNTRY_MATERIAL_FINANCE_VALUE_FIELDS = (
     "fob_eur",
     "retail_price_eur",
@@ -85,25 +82,6 @@ COUNTRY_MATERIAL_FINANCE_VALUE_FIELDS = (
     "fob_delta_eur",
     "margin_delta_eur",
     "memo",
-)
-
-COUNTRY_MATERIAL_FINANCE_AUDIT_FIELDS = (
-    "fob_eur",
-    "retail_price_eur",
-    "wholesale_price_eur",
-    "dealer_price_eur",
-    "cost_eur",
-    "margin_eur",
-    "margin_rate",
-    "vehicle_margin_eur",
-    "vehicle_margin_rate",
-    "vehicle_profit_eur",
-    "vehicle_profit_rate",
-    "fob_delta_eur",
-    "margin_delta_eur",
-    "memo",
-    "source_mode",
-    "source_payload_json",
 )
 
 
@@ -241,34 +219,6 @@ def get_sku_by_material_code_any_status(
     return session.execute(stmt).scalars().first()
 
 
-def get_skus_by_material_codes_any_status(
-    session: Session,
-    material_codes: list[str],
-) -> dict[str, MaterialSkuMaster]:
-    """Return the preferred SKU row per material code.
-
-    Preference matches get_sku_by_material_code_any_status: active first, then
-    highest row_version. This avoids one query per historical matrix row.
-    """
-    codes = [code for code in dict.fromkeys(material_codes) if code]
-    if not codes:
-        return {}
-    stmt = (
-        select(MaterialSkuMaster)
-        .where(MaterialSkuMaster.material_code.in_(codes))
-        .order_by(
-            MaterialSkuMaster.material_code,
-            MaterialSkuMaster.is_active.desc(),
-            MaterialSkuMaster.row_version.desc(),
-        )
-    )
-    result: dict[str, MaterialSkuMaster] = {}
-    for row in session.execute(stmt).scalars().all():
-        if row.material_code not in result:
-            result[row.material_code] = row
-    return result
-
-
 def list_active_skus(
     session: Session,
     brand: str | None = None,
@@ -281,7 +231,7 @@ def list_active_skus(
 ) -> list[MaterialSkuMaster]:
     stmt = select(MaterialSkuMaster).where(
         MaterialSkuMaster.is_active == True,
-        MaterialSkuMaster.lifecycle_status.in_(["active", "phase_out"]),
+        MaterialSkuMaster.lifecycle_status == "active",
     )
     if brand:
         stmt = stmt.where(MaterialSkuMaster.brand == brand)
@@ -336,7 +286,7 @@ def get_active_sku_by_code(
     stmt = select(MaterialSkuMaster).where(
         MaterialSkuMaster.material_code == material_code,
         MaterialSkuMaster.is_active == True,
-        MaterialSkuMaster.lifecycle_status.in_(["active", "phase_out"]),
+        MaterialSkuMaster.lifecycle_status == "active",
     )
     return session.execute(stmt).scalars().first()
 
@@ -379,7 +329,7 @@ def update_sku_lifecycle(
     sku.lifecycle_status = lifecycle_status
     if lifecycle_status == "historical":
         sku.is_active = False
-    elif lifecycle_status in {"active", "phase_out"}:
+    elif lifecycle_status == "active":
         sku.is_active = True
     if effective_from is not None:
         sku.effective_from_month = effective_from
@@ -407,9 +357,6 @@ def update_sku_fob_for_country(
     country_code: str,
     final_fob_eur: float | None,
     payment_term_code: str | None = None,
-    remark: str | None = None,
-    update_remark: bool = False,
-    changed_by: str | None = None,
 ) -> CountrySkuFobResolved | None:
     """Update or create FOB for a specific material + country. Pass None to deactivate."""
     stmt = select(CountrySkuFobResolved).where(
@@ -420,30 +367,15 @@ def update_sku_fob_for_country(
     if payment_term_code:
         stmt = stmt.where(CountrySkuFobResolved.payment_term_code == payment_term_code)
     existing = session.execute(stmt).scalars().first()
-    cleaned_remark = (clean_text(remark) or None) if update_remark else None
 
     if existing:
-        if update_remark:
-            existing.remark = cleaned_remark
         if final_fob_eur is None:
-            session.add(
-                FobResolvedHistory(
-                    country_sku_fob_id=existing.country_sku_fob_id,
-                    baseline_version_id=existing.baseline_version_id,
-                    country_code=existing.country_code,
-                    material_code=existing.material_code,
-                    payment_term_code=existing.payment_term_code,
-                    old_uploaded_fob_eur=existing.uploaded_fob_eur,
-                    new_uploaded_fob_eur=existing.uploaded_fob_eur,
-                    old_final_fob_eur=existing.final_fob_eur,
-                    new_final_fob_eur=None,
-                    changed_by=changed_by or "manual_edit_fob",
-                )
-            )
             existing.is_active = False
             existing.updated_at_utc = datetime.now(timezone.utc)
             return existing
-        if float(existing.final_fob_eur) != float(final_fob_eur):
+        old_final = float(existing.final_fob_eur)
+        new_final = round(float(final_fob_eur), 2)
+        if round(old_final, 2) != new_final:
             session.add(
                 FobResolvedHistory(
                     country_sku_fob_id=existing.country_sku_fob_id,
@@ -454,13 +386,13 @@ def update_sku_fob_for_country(
                     old_uploaded_fob_eur=existing.uploaded_fob_eur,
                     new_uploaded_fob_eur=existing.uploaded_fob_eur,
                     old_final_fob_eur=existing.final_fob_eur,
-                    new_final_fob_eur=final_fob_eur,
-                    changed_by=changed_by or "manual_edit_fob",
+                    new_final_fob_eur=new_final,
+                    changed_by="manual_edit",
                 )
             )
-            existing.fob_source_mode = "manual_edit"
-            existing.fob_source_country_code = None
         existing.final_fob_eur = final_fob_eur
+        existing.fob_source_country_code = None
+        existing.fob_source_mode = "manual_edit"
         existing.updated_at_utc = datetime.now(timezone.utc)
         return existing
     if final_fob_eur is None:
@@ -484,11 +416,128 @@ def update_sku_fob_for_country(
         payment_term_code=payment_term_code or "TT",
         final_fob_eur=final_fob_eur,
         fob_source_mode="manual_edit",
-        remark=cleaned_remark,
         is_active=True,
     )
     session.add(fob)
     return fob
+
+
+def clear_country_fobs(session: Session, country_code: str) -> int:
+    """Deactivate all active BOM FOB rows for one country column."""
+    result = session.execute(
+        update(CountrySkuFobResolved)
+        .where(
+            CountrySkuFobResolved.country_code == country_code,
+            CountrySkuFobResolved.is_active == True,
+        )
+        .values(
+            is_active=False,
+            fob_source_mode="country_column_trash",
+            updated_at_utc=datetime.now(timezone.utc),
+        )
+    )
+    return int(result.rowcount or 0)
+
+
+def list_country_fob_trash(session: Session) -> list[dict[str, object]]:
+    """List country columns currently parked in BOM FOB trash."""
+    active_countries = {
+        str(code or "").strip().upper()
+        for code in session.execute(
+            select(CountrySkuFobResolved.country_code)
+            .where(CountrySkuFobResolved.is_active == True)
+            .distinct()
+        ).scalars().all()
+        if len(str(code or "").strip()) == 2
+    }
+    rows = session.execute(
+        select(
+            CountrySkuFobResolved.country_code,
+            CountrySkuFobResolved.fob_source_mode,
+            CountrySkuFobResolved.updated_at_utc,
+        )
+        .where(
+            CountrySkuFobResolved.is_active == False,
+        )
+    ).all()
+    by_country: dict[str, dict[str, object]] = {}
+    for country_code, source_mode, deleted_at in rows:
+        country = str(country_code or "").strip().upper()
+        if len(country) != 2:
+            continue
+        if source_mode != "country_column_trash" and country in active_countries:
+            continue
+        item = by_country.setdefault(country, {"countryCode": country, "rows": 0, "deletedAtUtc": None})
+        item["rows"] = int(item["rows"]) + 1
+        current_deleted_at = item["deletedAtUtc"]
+        if current_deleted_at is None or (deleted_at is not None and deleted_at > current_deleted_at):
+            item["deletedAtUtc"] = deleted_at
+    return [by_country[country] for country in sorted(by_country)]
+
+
+def _select_country_trash_rows(session: Session, country: str) -> list[CountrySkuFobResolved]:
+    active_country_exists = session.execute(
+        select(CountrySkuFobResolved.country_sku_fob_id)
+        .where(
+            CountrySkuFobResolved.country_code == country,
+            CountrySkuFobResolved.is_active == True,
+        )
+        .limit(1)
+    ).first()
+    stmt = select(CountrySkuFobResolved).where(
+        CountrySkuFobResolved.country_code == country,
+        CountrySkuFobResolved.is_active == False,
+    )
+    if active_country_exists:
+        stmt = stmt.where(CountrySkuFobResolved.fob_source_mode == "country_column_trash")
+    return list(session.execute(stmt).scalars().all())
+
+
+def restore_country_fobs_from_trash(session: Session, country_code: str) -> dict[str, int | str]:
+    """Restore a trashed country column, skipping rows that now have active replacements."""
+    country = str(country_code or "").strip().upper()
+    trashed_rows = _select_country_trash_rows(session, country)
+    restored = 0
+    skipped_active_conflict = 0
+    now = datetime.now(timezone.utc)
+    for row in trashed_rows:
+        active_exists = session.execute(
+            select(CountrySkuFobResolved.country_sku_fob_id)
+            .where(
+                CountrySkuFobResolved.country_code == row.country_code,
+                CountrySkuFobResolved.material_code == row.material_code,
+                CountrySkuFobResolved.payment_term_code == row.payment_term_code,
+                CountrySkuFobResolved.is_active == True,
+            )
+            .limit(1)
+        ).first()
+        if active_exists:
+            skipped_active_conflict += 1
+            continue
+        row.is_active = True
+        row.fob_source_mode = "country_column_restore"
+        row.updated_at_utc = now
+        restored += 1
+    return {
+        "countryCode": country,
+        "rows": len(trashed_rows),
+        "restored": restored,
+        "skippedActiveConflict": skipped_active_conflict,
+    }
+
+
+def purge_country_fob_trash(session: Session, country_code: str) -> int:
+    """Permanently delete inactive trash rows for one country."""
+    country = str(country_code or "").strip().upper()
+    trashed_ids = [row.country_sku_fob_id for row in _select_country_trash_rows(session, country)]
+    if not trashed_ids:
+        return 0
+    result = session.execute(
+        delete(CountrySkuFobResolved).where(
+            CountrySkuFobResolved.country_sku_fob_id.in_(trashed_ids),
+        )
+    )
+    return int(result.rowcount or 0)
 
 
 def copy_country_fobs(
@@ -513,16 +562,11 @@ def copy_country_fobs(
     skipped = 0
     unchanged = 0
     for source_row in source_rows:
-        existing = _get_fob_for_country_sku_row(
+        existing = get_fob_for_country_sku(
             session,
             target,
             source_row.material_code,
-            positive_only=False,
         )
-        if existing and existing.final_fob_eur is not None and existing.final_fob_eur <= 0:
-            existing.is_active = False
-            existing.updated_at_utc = datetime.now(timezone.utc)
-            existing = None
         if existing:
             if not overwrite_existing:
                 skipped += 1
@@ -637,8 +681,6 @@ def adjust_country_fobs(
         )
         row.final_fob_eur = new_value
         row.fob_source_mode = "manual_country_adjust"
-        if new_value == 0:
-            row.is_active = False
         row.updated_at_utc = datetime.now(timezone.utc)
         adjusted += 1
 
@@ -652,295 +694,6 @@ def adjust_country_fobs(
     }
 
 
-def _effective_sku_colour_tier(sku: MaterialSkuMaster) -> str:
-    return merge_colour_tiers(
-        sku.colour_tier,
-        infer_colour_tier(
-            sku.exterior_color_name,
-            sku.exterior_color_type,
-            sku.edition_tag,
-            sku.exterior_color_code,
-            sku.colour_hex,
-        ),
-    )
-
-
-def _money(value: object) -> float | None:
-    if value is None:
-        return None
-    return round(float(value), 2)
-
-
-def _template_colour_surcharge(
-    session: Session,
-    brand: str,
-    colour_tier: str,
-) -> float:
-    if colour_tier not in {"dual", "special"}:
-        return 0.0
-    rule = get_brand_colour_surcharge(session, brand, colour_tier)
-    return round(float(rule.surcharge_eur), 2) if rule else 0.0
-
-
-def sync_missing_template_fobs(
-    session: Session,
-    *,
-    bom_template: str,
-    target_material_codes: list[str] | None = None,
-    changed_by: str | None = None,
-    reprice_existing_colour_surcharges: bool = False,
-) -> dict[str, int | str]:
-    """Fill missing concrete SKU FOB rows from sibling rows in one BOM template.
-
-    BOM Admin edits colour membership at the ``**`` template level, while Order
-    Genius only shows concrete SKUs that have a positive country FOB. When a new
-    colour SKU is added under an existing template, create missing country FOBs
-    from sibling colours so the order matrix sees the same colour coverage.
-    Existing active rows are not overwritten by default; an active non-positive
-    row is treated as an explicit clear and left untouched. When
-    ``reprice_existing_colour_surcharges`` is enabled, existing dual/special
-    rows are explicitly recalculated from the single-colour template FOB plus
-    the configured brand colour surcharge.
-    """
-    template = clean_text(bom_template).upper()
-    if not template:
-        raise ValueError("bomTemplate is required")
-
-    skus = list(session.execute(
-        select(MaterialSkuMaster).where(
-            MaterialSkuMaster.bom_template == template,
-            MaterialSkuMaster.is_active == True,
-            MaterialSkuMaster.lifecycle_status.in_(["active", "phase_out"]),
-        )
-    ).scalars().all())
-    if not skus:
-        return {
-            "bomTemplate": template,
-            "created": 0,
-            "repriced": 0,
-            "skippedExisting": 0,
-            "skippedCleared": 0,
-            "skippedNoSource": 0,
-            "unchanged": 0,
-        }
-
-    target_codes = {
-        clean_text(code).upper()
-        for code in (target_material_codes or [])
-        if clean_text(code)
-    }
-    target_skus = [
-        sku for sku in skus
-        if not target_codes or sku.material_code in target_codes
-    ]
-    if not target_skus:
-        return {
-            "bomTemplate": template,
-            "created": 0,
-            "repriced": 0,
-            "skippedExisting": 0,
-            "skippedCleared": 0,
-            "skippedNoSource": 0,
-            "unchanged": 0,
-        }
-
-    material_codes = [sku.material_code for sku in skus]
-    fob_rows = list(session.execute(
-        select(CountrySkuFobResolved).where(
-            CountrySkuFobResolved.material_code.in_(material_codes),
-            CountrySkuFobResolved.is_active == True,
-        )
-    ).scalars().all())
-    active_by_material_country = {
-        (row.material_code, row.country_code): row
-        for row in fob_rows
-    }
-    positive_by_country: dict[str, list[CountrySkuFobResolved]] = {}
-    for row in fob_rows:
-        if row.final_fob_eur is None or float(row.final_fob_eur) <= 0:
-            continue
-        positive_by_country.setdefault(row.country_code, []).append(row)
-    if not positive_by_country:
-        return {
-            "bomTemplate": template,
-            "created": 0,
-            "repriced": 0,
-            "skippedExisting": 0,
-            "skippedCleared": 0,
-            "skippedNoSource": len(target_skus),
-            "unchanged": 0,
-        }
-
-    sku_by_code = {sku.material_code: sku for sku in skus}
-    tier_by_code = {
-        sku.material_code: _effective_sku_colour_tier(sku)
-        for sku in skus
-    }
-    created = 0
-    repriced = 0
-    skipped_existing = 0
-    skipped_cleared = 0
-    skipped_no_source = 0
-    unchanged = 0
-
-    for country_code, country_rows in positive_by_country.items():
-        rows_by_tier: dict[str, list[CountrySkuFobResolved]] = {}
-        for row in country_rows:
-            tier = tier_by_code.get(row.material_code, "single")
-            rows_by_tier.setdefault(tier, []).append(row)
-
-        base_candidates = rows_by_tier.get("single") or country_rows
-        base_row = min(base_candidates, key=lambda row: float(row.final_fob_eur))
-        base_value = float(base_row.final_fob_eur)
-
-        for sku in target_skus:
-            target_tier = tier_by_code.get(sku.material_code, "single")
-            existing = active_by_material_country.get((sku.material_code, country_code))
-            if existing:
-                if existing.final_fob_eur is not None and float(existing.final_fob_eur) <= 0:
-                    skipped_cleared += 1
-                elif (
-                    reprice_existing_colour_surcharges
-                    and target_tier in {"dual", "special"}
-                ):
-                    surcharge = _template_colour_surcharge(
-                        session,
-                        sku.brand or (sku_by_code.get(base_row.material_code).brand if sku_by_code.get(base_row.material_code) else ""),
-                        target_tier,
-                    )
-                    if surcharge <= 0:
-                        skipped_existing += 1
-                        continue
-                    final_fob = round(base_value + surcharge, 2)
-                    uploaded_fob = _money(base_row.uploaded_fob_eur) or base_value
-                    base_fob = _money(base_row.base_fob_eur) or base_value
-                    changed = (
-                        round(float(existing.final_fob_eur), 2) != final_fob
-                        or _money(existing.uploaded_fob_eur) != uploaded_fob
-                        or _money(existing.base_fob_eur) != base_fob
-                        or _money(existing.colour_surcharge_eur) != surcharge
-                    )
-                    if changed:
-                        session.add(
-                            FobResolvedHistory(
-                                country_sku_fob_id=existing.country_sku_fob_id,
-                                baseline_version_id=base_row.baseline_version_id,
-                                country_code=country_code,
-                                material_code=sku.material_code,
-                                payment_term_code=existing.payment_term_code,
-                                old_uploaded_fob_eur=existing.uploaded_fob_eur,
-                                new_uploaded_fob_eur=uploaded_fob,
-                                old_final_fob_eur=existing.final_fob_eur,
-                                new_final_fob_eur=final_fob,
-                                changed_by=changed_by or "sync_template_colour_surcharge",
-                            )
-                        )
-                        existing.baseline_version_id = base_row.baseline_version_id
-                        existing.base_fob_eur = base_fob
-                        existing.colour_surcharge_eur = surcharge
-                        existing.uploaded_fob_eur = uploaded_fob
-                        existing.final_fob_eur = final_fob
-                        existing.fob_source_country_code = country_code
-                        existing.fob_source_mode = "colour_surcharge_repriced"
-                        existing.updated_at_utc = datetime.now(timezone.utc)
-                        repriced += 1
-                    else:
-                        unchanged += 1
-                else:
-                    skipped_existing += 1
-                continue
-
-            same_tier_rows = rows_by_tier.get(target_tier) or []
-            surcharge = _template_colour_surcharge(
-                session,
-                sku.brand or (sku_by_code.get(base_row.material_code).brand if sku_by_code.get(base_row.material_code) else ""),
-                target_tier,
-            )
-            if target_tier in {"dual", "special"} and surcharge > 0:
-                source_row = base_row
-                final_fob = round(base_value + surcharge, 2)
-                uploaded_fob = _money(base_row.uploaded_fob_eur) or base_value
-                base_fob = _money(base_row.base_fob_eur) or base_value
-                colour_surcharge = surcharge
-                source_mode = "derived_from_template_colour"
-            elif same_tier_rows:
-                source_row = min(
-                    same_tier_rows,
-                    key=lambda row: float(row.final_fob_eur),
-                )
-                final_fob = round(float(source_row.final_fob_eur), 2)
-                uploaded_fob = _money(source_row.uploaded_fob_eur)
-                base_fob = _money(source_row.base_fob_eur)
-                colour_surcharge = _money(source_row.colour_surcharge_eur)
-                source_mode = "copied_from_template_colour"
-            else:
-                source_row = base_row
-                final_fob = round(base_value + surcharge, 2)
-                uploaded_fob = _money(base_row.uploaded_fob_eur) or base_value
-                base_fob = _money(base_row.base_fob_eur) or base_value
-                colour_surcharge = surcharge if surcharge > 0 else None
-                source_mode = "derived_from_template_colour"
-
-            session.add(
-                CountrySkuFobResolved(
-                    country_sku_fob_id=uuid4(),
-                    baseline_version_id=source_row.baseline_version_id,
-                    country_code=country_code,
-                    material_code=sku.material_code,
-                    payment_term_code=source_row.payment_term_code,
-                    base_fob_eur=base_fob,
-                    payment_term_adjustment_eur=source_row.payment_term_adjustment_eur,
-                    colour_surcharge_eur=colour_surcharge,
-                    uploaded_fob_eur=uploaded_fob,
-                    final_fob_eur=final_fob,
-                    fob_source_country_code=country_code,
-                    fob_source_mode=source_mode,
-                    is_active=True,
-                )
-            )
-            created += 1
-
-    return {
-        "bomTemplate": template,
-        "created": created,
-        "repriced": repriced,
-        "skippedExisting": skipped_existing,
-        "skippedCleared": skipped_cleared,
-        "skippedNoSource": skipped_no_source,
-        "unchanged": unchanged,
-    }
-
-
-def _material_sku_remark_by_code(
-    session: Session,
-    material_codes: list[str],
-) -> dict[str, str]:
-    """Return the newest non-empty SKU remark for each material code."""
-    codes = [code for code in dict.fromkeys(material_codes) if code]
-    if not codes:
-        return {}
-    stmt = (
-        select(MaterialSkuMaster.material_code, MaterialSkuMaster.remark)
-        .where(
-            MaterialSkuMaster.material_code.in_(codes),
-            MaterialSkuMaster.remark.isnot(None),
-            func.length(func.trim(MaterialSkuMaster.remark)) > 0,
-        )
-        .order_by(
-            MaterialSkuMaster.material_code,
-            MaterialSkuMaster.is_active.desc(),
-            MaterialSkuMaster.row_version.desc(),
-            MaterialSkuMaster.updated_at_utc.desc(),
-        )
-    )
-    remarks: dict[str, str] = {}
-    for material_code, remark in session.execute(stmt).all():
-        cleaned = clean_text(remark)
-        if material_code not in remarks and cleaned:
-            remarks[material_code] = cleaned
-    return remarks
-
-
 def list_bom_with_fob(
     session: Session,
     brand: str | None = None,
@@ -949,7 +702,7 @@ def list_bom_with_fob(
     limit: int = 1000,
 ) -> tuple[list[dict], list[str]]:
     """Return SKUs with their FOB per country, grouped for BOM admin display."""
-    all_countries = list_bom_admin_country_columns(session)
+    all_countries = list_active_fob_country_codes(session)
     skus = list_all_material_skus_for_admin(session, brand=brand, search=search, country_code=country_code, limit=limit)
     if not skus:
         return [], all_countries
@@ -959,7 +712,6 @@ def list_bom_with_fob(
         select(CountrySkuFobResolved).where(
             CountrySkuFobResolved.material_code.in_(material_codes),
             CountrySkuFobResolved.is_active == True,
-            CountrySkuFobResolved.final_fob_eur > 0,
         )
     ).scalars().all()
 
@@ -968,15 +720,18 @@ def list_bom_with_fob(
     for f in fobs:
         if f.material_code not in fob_map:
             fob_map[f.material_code] = {}
-        fob_map[f.material_code][f.country_code] = {
+        fob_entry = {
             "finalFobEur": float(f.final_fob_eur),
-            "uploadedFobEur": float(f.uploaded_fob_eur) if f.uploaded_fob_eur else None,
-            "colourSurchargeEur": float(f.colour_surcharge_eur) if f.colour_surcharge_eur else None,
             "paymentTermCode": f.payment_term_code,
-            "fobSourceCountryCode": f.fob_source_country_code,
             "fobSourceMode": f.fob_source_mode,
-            "remark": f.remark,
         }
+        if f.uploaded_fob_eur:
+            fob_entry["uploadedFobEur"] = float(f.uploaded_fob_eur)
+        if f.colour_surcharge_eur:
+            fob_entry["colourSurchargeEur"] = float(f.colour_surcharge_eur)
+        if f.fob_source_country_code:
+            fob_entry["fobSourceCountryCode"] = f.fob_source_country_code
+        fob_map[f.material_code][f.country_code] = fob_entry
 
     material_or_template_codes = {
         s.material_code
@@ -1008,29 +763,15 @@ def list_bom_with_fob(
         ).scalars().all()
         baseline_names = {b.baseline_version_id: b.source_file_name for b in baselines}
 
-    def compact_source_payload(raw_payload: object) -> dict:
-        if not isinstance(raw_payload, dict):
+    def slim_source_payload(payload: object) -> dict:
+        if not isinstance(payload, dict):
             return {}
-        return {
-            "sheet_name": raw_payload.get("sheet_name"),
-            "row_index": raw_payload.get("row_index"),
-            "warnings": raw_payload.get("warnings") or [],
-        }
-
-    interior_by_template: dict[str, str] = {}
-    interior_code_by_template: dict[str, str] = {}
-    interior_package_by_template: dict[str, str] = {}
-    for sku in skus:
-        template = sku.bom_template or ""
-        if not template:
-            continue
-        if sku.interior_color_name and template not in interior_by_template:
-            interior_by_template[template] = sku.interior_color_name
-        if sku.interior_colour_code and template not in interior_code_by_template:
-            interior_code_by_template[template] = sku.interior_colour_code
-        if sku.interior_package and template not in interior_package_by_template:
-            interior_package_by_template[template] = sku.interior_package
-    remark_by_code = _material_sku_remark_by_code(session, material_codes)
+        slim: dict[str, object] = {}
+        for key in ("sheet_name", "row_index", "warnings"):
+            value = payload.get(key)
+            if value not in (None, "", []):
+                slim[key] = value
+        return slim
 
     return [
         {
@@ -1038,32 +779,22 @@ def list_bom_with_fob(
             "brand": normalize_brand(s.brand),
             "modelName": normalize_brand_text(s.model_name),
             "version": s.version,
-            "powertrain": _extract_canonical_powertrain(s),
             "colour": s.exterior_color_name or "",
             "colourCode": s.exterior_color_code or "",
             "colourType": s.exterior_color_type or "single",
             "colourHex": s.colour_hex,
             "colourCodeConfirmed": s.colour_code_confirmed,
-            "colourTier": merge_colour_tiers(
-                s.colour_tier,
-                infer_colour_tier(
-                    s.exterior_color_name,
-                    s.exterior_color_type,
-                    s.edition_tag,
-                    s.exterior_color_code,
-                    s.colour_hex,
-                ),
-            ),
+            "colourTier": s.colour_tier or "single",
             "bomTemplate": s.bom_template,
-            "interiorColorName": s.interior_color_name or interior_by_template.get(s.bom_template or ""),
-            "interiorColourCode": s.interior_colour_code or interior_code_by_template.get(s.bom_template or ""),
-            "interiorPackage": s.interior_package or interior_package_by_template.get(s.bom_template or ""),
+            "interiorColorName": s.interior_color_name,
+            "interiorColourCode": s.interior_colour_code,
+            "interiorPackage": s.interior_package,
             "editionTag": s.edition_tag,
+            "remark": s.remark,
             "lifecycleStatus": s.lifecycle_status,
             "isActive": s.is_active,
             "effectiveFrom": s.effective_from_month,
             "effectiveTo": s.effective_to_month,
-            "remark": clean_text(s.remark) or remark_by_code.get(s.material_code),
             "rowVersion": s.row_version,
             "fobByCountry": fob_map.get(s.material_code, {}),
             "financeCountries": sorted(
@@ -1073,7 +804,7 @@ def list_bom_with_fob(
             "sourceSheetName": s.source_sheet_name,
             "sourceRowNumber": s.source_row_number,
             "sourceFileName": baseline_names.get(s.baseline_version_id) if s.baseline_version_id else None,
-            "sourcePayload": compact_source_payload(s.raw_payload_json),
+            "sourcePayload": slim_source_payload(s.raw_payload_json),
         }
         for s in skus
     ], all_countries
@@ -1085,83 +816,13 @@ def _optional_float(value: object) -> float | None:
     return float(value)
 
 
-def _finance_audit_scalar(value: object) -> object:
-    if value is None or isinstance(value, (str, bool, int, float, list, dict)):
-        return deepcopy(value)
-    try:
-        return float(value)
-    except (TypeError, ValueError):
-        return str(value)
-
-
-def _country_material_finance_audit_values(
-    finance: CountryMaterialFinance | None,
-) -> dict[str, object] | None:
-    if finance is None:
-        return None
-    return {
-        field_name: _finance_audit_scalar(getattr(finance, field_name))
-        for field_name in COUNTRY_MATERIAL_FINANCE_AUDIT_FIELDS
-    }
-
-
-def _changed_finance_fields(
-    old_values: dict[str, object] | None,
-    new_values: dict[str, object],
-) -> list[str]:
-    if old_values is None:
-        return [
-            field_name
-            for field_name, value in new_values.items()
-            if value not in (None, "", {}, [])
-        ]
-    return [
-        field_name
-        for field_name, value in new_values.items()
-        if old_values.get(field_name) != value
-    ]
-
-
-def _add_country_material_finance_history(
-    session: Session,
-    finance: CountryMaterialFinance,
-    old_values: dict[str, object] | None,
-    *,
-    changed_by: str | None,
-) -> None:
-    new_values = _country_material_finance_audit_values(finance) or {}
-    changed_fields = _changed_finance_fields(old_values, new_values)
-    if not changed_fields:
-        return
-    session.add(
-        CountryMaterialFinanceHistory(
-            country_material_finance_id=finance.country_material_finance_id,
-            country_code=finance.country_code,
-            material_code=finance.material_code,
-            old_values_json=old_values,
-            new_values_json=new_values,
-            changed_fields_json=changed_fields,
-            source_mode=finance.source_mode,
-            source_payload_json=deepcopy(finance.source_payload_json)
-            if isinstance(finance.source_payload_json, dict)
-            else None,
-            changed_by=changed_by,
-            changed_at_utc=datetime.now(timezone.utc),
-        )
-    )
-
-
 def _country_material_finance_payload(
     sku: MaterialSkuMaster,
     country_code: str,
     fob: CountrySkuFobResolved | None,
     finance: CountryMaterialFinance | None,
 ) -> dict:
-    bom_fob_eur = (
-        float(fob.final_fob_eur)
-        if fob and fob.final_fob_eur is not None and fob.final_fob_eur > 0
-        else None
-    )
+    bom_fob_eur = float(fob.final_fob_eur) if fob and fob.final_fob_eur is not None else None
     finance_fob_eur = (
         float(finance.fob_eur)
         if finance and finance.fob_eur is not None
@@ -1287,7 +948,6 @@ def list_country_material_finance(
             CountrySkuFobResolved.country_code == country,
             CountrySkuFobResolved.material_code.in_(codes),
             CountrySkuFobResolved.is_active == True,
-            CountrySkuFobResolved.final_fob_eur > 0,
         )
     ).scalars().all()
     fob_by_code = {row.material_code: row for row in fobs}
@@ -1344,83 +1004,6 @@ def list_country_material_finance(
     ]
 
 
-def list_country_material_finance_options(
-    session: Session,
-    country_code: str,
-    *,
-    brand: str | None = None,
-    model_name: str | None = None,
-    powertrain: str | None = None,
-    version: str | None = None,
-    limit: int = 5000,
-) -> dict:
-    """Return CBU filter options from the BOM SKU universe, not country FOB coverage."""
-    country = clean_text(country_code).upper()
-    country_pt = get_country_payment_term(session, country)
-    normalized_brand = normalize_brand(brand) if brand else None
-    normalized_model = normalize_brand_text(model_name) if model_name else None
-    normalized_powertrain = normalize_powertrain(powertrain) if powertrain else None
-    normalized_version = clean_text(version) if version else None
-
-    skus = list_all_material_skus_for_admin(session, limit=limit)
-    filtered = skus
-    if normalized_brand:
-        filtered = [sku for sku in filtered if normalize_brand(sku.brand) == normalized_brand]
-    if normalized_model:
-        filtered = [sku for sku in filtered if normalize_brand_text(sku.model_name) == normalized_model]
-    if normalized_powertrain:
-        filtered = [sku for sku in filtered if _extract_canonical_powertrain(sku) == normalized_powertrain]
-    if normalized_version:
-        filtered = [sku for sku in filtered if clean_text(sku.version) == normalized_version]
-
-    return {
-        "countryCode": country,
-        "paymentTermCode": country_pt.payment_term_code if country_pt else None,
-        "brands": sorted(
-            {
-                normalize_brand(sku.brand)
-                for sku in filtered
-                if normalize_brand(sku.brand)
-            }
-        ),
-        "models": sorted(
-            {
-                normalize_brand_text(sku.model_name)
-                for sku in filtered
-                if normalize_brand_text(sku.model_name)
-            }
-        ),
-        "powertrains": sorted(
-            {
-                _extract_canonical_powertrain(sku)
-                for sku in filtered
-                if _extract_canonical_powertrain(sku)
-            }
-        ),
-        "versions": sorted(
-            {
-                clean_text(sku.version)
-                for sku in filtered
-                if clean_text(sku.version)
-            }
-        ),
-        "colours": sorted(
-            {
-                clean_text(sku.exterior_color_name)
-                for sku in filtered
-                if clean_text(sku.exterior_color_name)
-            }
-        ),
-        "materialCodes": sorted(
-            {
-                clean_text(sku.bom_template or sku.material_code).upper()
-                for sku in filtered
-                if clean_text(sku.bom_template or sku.material_code)
-            }
-        ),
-    }
-
-
 def upsert_country_material_finance(
     session: Session,
     country_code: str,
@@ -1454,7 +1037,6 @@ def upsert_country_material_finance(
             CountryMaterialFinance.is_active == True,
         )
     ).scalar_one_or_none()
-    old_values = _country_material_finance_audit_values(finance)
     if finance is None:
         finance = CountryMaterialFinance(
             country_code=country,
@@ -1491,21 +1073,22 @@ def upsert_country_material_finance(
     finance.updated_by = updated_by
     finance.updated_at_utc = datetime.now(timezone.utc)
     session.flush()
-    _add_country_material_finance_history(
-        session,
-        finance,
-        old_values,
-        changed_by=updated_by,
-    )
 
     if "**" in material:
         concrete_codes = [item.material_code for item in template_skus if item.material_code]
+        if "fob_eur" in values:
+            for concrete_code in concrete_codes:
+                update_sku_fob_for_country(
+                    session,
+                    concrete_code,
+                    country,
+                    values["fob_eur"],
+                )
         fobs = session.execute(
             select(CountrySkuFobResolved).where(
                 CountrySkuFobResolved.country_code == country,
                 CountrySkuFobResolved.material_code.in_(concrete_codes),
                 CountrySkuFobResolved.is_active == True,
-                CountrySkuFobResolved.final_fob_eur > 0,
             )
         ).scalars().all()
         return _country_template_finance_payload(
@@ -1514,49 +1097,10 @@ def upsert_country_material_finance(
             {row.material_code: row for row in fobs},
             finance,
         )
+    if "fob_eur" in values:
+        update_sku_fob_for_country(session, material, country, values["fob_eur"])
     fob = get_fob_for_country_sku(session, country, material)
     return _country_material_finance_payload(sku, country, fob, finance)
-
-
-def list_country_material_finance_history(
-    session: Session,
-    country_code: str,
-    material_code: str,
-    *,
-    limit: int = 50,
-) -> list[dict]:
-    """Return immutable audit events for one country material finance row."""
-    country = clean_text(country_code).upper()
-    material = clean_text(material_code).upper()
-    if not country or not material:
-        return []
-    capped_limit = max(1, min(int(limit or 50), 200))
-    rows = session.execute(
-        select(CountryMaterialFinanceHistory)
-        .where(
-            CountryMaterialFinanceHistory.country_code == country,
-            CountryMaterialFinanceHistory.material_code == material,
-        )
-        .order_by(CountryMaterialFinanceHistory.changed_at_utc.desc())
-        .limit(capped_limit)
-    ).scalars().all()
-    return [
-        {
-            "historyId": str(row.finance_history_id),
-            "financeId": str(row.country_material_finance_id)
-            if row.country_material_finance_id else None,
-            "countryCode": row.country_code,
-            "materialCode": row.material_code,
-            "oldValues": row.old_values_json,
-            "newValues": row.new_values_json,
-            "changedFields": row.changed_fields_json or [],
-            "sourceMode": row.source_mode,
-            "sourcePayload": row.source_payload_json,
-            "changedBy": row.changed_by,
-            "changedAtUtc": row.changed_at_utc.isoformat() if row.changed_at_utc else None,
-        }
-        for row in rows
-    ]
 
 
 def delete_orphan_template_finance(
@@ -1634,13 +1178,6 @@ def copy_country_material_finance_template(
         for field_name in COUNTRY_MATERIAL_FINANCE_VALUE_FIELDS:
             setattr(target_row, field_name, getattr(source_row, field_name))
         session.add(target_row)
-        session.flush()
-        _add_country_material_finance_history(
-            session,
-            target_row,
-            None,
-            changed_by=updated_by,
-        )
         copied += 1
     if copied:
         session.flush()
@@ -1663,7 +1200,6 @@ def list_all_material_skus_for_admin(
         subq = select(CountrySkuFobResolved.material_code).where(
             CountrySkuFobResolved.country_code == country_code,
             CountrySkuFobResolved.is_active == True,
-            CountrySkuFobResolved.final_fob_eur > 0,
         ).distinct()
         stmt = stmt.where(MaterialSkuMaster.material_code.in_(subq))
     if brand:
@@ -1902,61 +1438,77 @@ def update_sku_remark(
     return result.rowcount > 0
 
 
-def _rekey_material_code_references(
+def update_sku_material_code(
     session: Session,
     old_material_code: str,
     new_material_code: str,
-    *,
-    bom_template: str | None = None,
-    exterior_color_code: str | None = None,
-) -> None:
-    """Move dependent ordering records when a material code is corrected."""
+) -> bool:
+    """Update a SKU's material code and all Order Genius references."""
     old_code = clean_text(old_material_code).upper()
     new_code = clean_text(new_material_code).upper()
-    if not old_code or not new_code or old_code == new_code:
-        return
+    if not old_code or not new_code:
+        raise ValueError("material code is required")
+    if old_code == new_code:
+        return get_sku_by_material_code_any_status(session, old_code) is not None
 
-    line_values: dict[str, str | None] = {"material_code": new_code}
-    vehicle_values: dict[str, str | None] = {"material_code": new_code}
-    template = clean_text(bom_template).upper()
-    if template:
-        line_values["bom"] = template
-        vehicle_values["bom"] = template
-    colour_code = clean_text(exterior_color_code).upper()
-    if colour_code:
-        line_values["exterior_color_code"] = colour_code
-        vehicle_values["exterior_color_code"] = colour_code
-
-    for model in (
-        CountrySkuFobResolved,
-        CountryMaterialFinance,
-        CountryMaterialFinanceHistory,
-        OrderQuantityCell,
-        FobResolvedHistory,
-        QuantityCellHistory,
-        PiOrderLineAllocation,
-        MaterialSkuRemarkHistory,
-    ):
-        session.execute(
-            update(model)
-            .where(model.material_code == old_code)
-            .values(material_code=new_code)
+    conflict = session.execute(
+        select(MaterialSkuMaster.material_code).where(
+            MaterialSkuMaster.material_code == new_code,
         )
+    ).scalar_one_or_none()
+    if conflict:
+        raise ValueError(f"Material code already exists: {new_code}")
 
+    bind = session.get_bind()
+    inspector = inspect(bind)
+    has_material_lifecycle = inspector.has_table("material_lifecycle", schema="ordering")
+
+    stmt = (
+        update(MaterialSkuMaster)
+        .where(MaterialSkuMaster.material_code == old_code)
+        .values(material_code=new_code)
+        .execution_options(synchronize_session="fetch")
+    )
+    result = session.execute(stmt)
+    if not result.rowcount:
+        return False
+
+    session.execute(
+        update(CountrySkuFobResolved)
+        .where(CountrySkuFobResolved.material_code == old_code)
+        .values(material_code=new_code)
+    )
+    session.execute(
+        update(CountryMaterialFinance)
+        .where(CountryMaterialFinance.material_code == old_code)
+        .values(material_code=new_code)
+    )
+    session.execute(
+        update(OrderQuantityCell)
+        .where(OrderQuantityCell.material_code == old_code)
+        .values(material_code=new_code)
+    )
     session.execute(
         update(PiOrderLine)
         .where(PiOrderLine.material_code == old_code)
-        .values(**line_values)
+        .values(material_code=new_code)
+    )
+    session.execute(
+        update(PiOrderLineAllocation)
+        .where(PiOrderLineAllocation.material_code == old_code)
+        .values(material_code=new_code)
     )
     session.execute(
         update(PiVehicleUnit)
         .where(PiVehicleUnit.material_code == old_code)
-        .values(**vehicle_values)
+        .values(material_code=new_code)
     )
-
-    bind = session.get_bind()
-    inspector = inspect(bind)
-    if inspector.has_table("material_lifecycle", schema="ordering"):
+    session.execute(
+        update(MaterialSkuRemarkHistory)
+        .where(MaterialSkuRemarkHistory.material_code == old_code)
+        .values(material_code=new_code)
+    )
+    if has_material_lifecycle:
         session.execute(
             update(MaterialLifecycle)
             .where(MaterialLifecycle.material_code == old_code)
@@ -1967,89 +1519,7 @@ def _rekey_material_code_references(
             .where(MaterialLifecycle.replaced_by_code == old_code)
             .values(replaced_by_code=new_code)
         )
-
-
-def update_sku_material_code(
-    session: Session,
-    old_material_code: str,
-    new_material_code: str,
-) -> bool:
-    """Update a SKU's material code and all dependent ordering references."""
-    old_code = clean_text(old_material_code).upper()
-    new_code = clean_text(new_material_code).upper()
-    stmt = (
-        update(MaterialSkuMaster)
-        .where(MaterialSkuMaster.material_code == old_code)
-        .values(material_code=new_code)
-    )
-    result = session.execute(stmt)
-    _rekey_material_code_references(session, old_code, new_code)
-    return result.rowcount > 0
-
-
-def _target_material_code_for_colour_code(
-    sku: MaterialSkuMaster,
-    new_colour_code: str,
-) -> str:
-    template = clean_text(sku.bom_template).upper()
-    if template and "**" in template:
-        return template.replace("**", new_colour_code)
-    material_code = clean_text(sku.material_code).upper()
-    old_colour_code = clean_text(sku.exterior_color_code).upper()
-    if old_colour_code and old_colour_code in material_code:
-        return material_code.replace(old_colour_code, new_colour_code, 1)
-    return material_code
-
-
-def update_sku_colour_code(
-    session: Session,
-    material_code: str,
-    new_colour_code: str,
-    new_colour_name: str | None = None,
-    new_colour_hex: str | None = None,
-) -> tuple[MaterialSkuMaster, str]:
-    """Correct a SKU colour code and regenerate its material code when possible."""
-    sku = get_sku_by_material_code_any_status(session, material_code)
-    if not sku:
-        raise LookupError(f"Material code not found: {material_code}")
-
-    old_material_code = clean_text(sku.material_code).upper()
-    colour_code = clean_text(new_colour_code).upper()
-    if not colour_code:
-        sku.exterior_color_code = ""
-        sku.colour_code_confirmed = False
-        sku.updated_at_utc = datetime.now(timezone.utc)
-        return sku, old_material_code
-    if not re.fullmatch(r"[A-Z0-9]{1,4}", colour_code):
-        raise ValueError("colourCode must use 1-4 letters or digits")
-
-    colour_name = clean_text(new_colour_name)
-    colour_hex = normalize_colour_hex_value(new_colour_hex) if new_colour_hex is not None else None
-    target_material_code = _target_material_code_for_colour_code(sku, colour_code)
-    if target_material_code != old_material_code:
-        conflict = get_sku_by_material_code_any_status(session, target_material_code)
-        if conflict is not None:
-            raise ValueError(f"Material code already exists: {target_material_code}")
-
-    sku.exterior_color_code = colour_code
-    if colour_name:
-        sku.exterior_color_name = colour_name
-    if new_colour_hex is not None:
-        sku.colour_hex = colour_hex
-    sku.colour_code_confirmed = True
-    sku.updated_at_utc = datetime.now(timezone.utc)
-    if target_material_code != old_material_code:
-        sku.material_code = target_material_code
-        if sku.bom_template and "**" not in sku.bom_template and sku.bom_template == old_material_code:
-            sku.bom_template = target_material_code
-        _rekey_material_code_references(
-            session,
-            old_material_code,
-            target_material_code,
-            bom_template=sku.bom_template,
-            exterior_color_code=colour_code,
-        )
-    return sku, old_material_code
+    return True
 
 
 def _resolve_material_code_from_bom_template(
@@ -2162,9 +1632,12 @@ def update_bom_template_material_codes(
         if clean_text(sku.bom_template)
     }
     for old_code, new_code in mapping.items():
-        sku = sku_by_code[old_code]
-        sku.material_code = new_code
-        sku.bom_template = normalized_template
+        session.execute(
+            update(MaterialSkuMaster)
+            .where(MaterialSkuMaster.material_code == old_code)
+            .values(material_code=new_code, bom_template=normalized_template)
+            .execution_options(synchronize_session="fetch")
+        )
 
         session.execute(
             update(CountrySkuFobResolved)
@@ -2473,22 +1946,9 @@ def list_active_fob_country_codes(session: Session) -> list[str]:
     country_codes = session.execute(
         select(CountrySkuFobResolved.country_code)
         .where(CountrySkuFobResolved.is_active == True)
-        .where(CountrySkuFobResolved.final_fob_eur > 0)
         .distinct()
     ).scalars().all()
     return sorted({str(code or "").upper() for code in country_codes if str(code or "").strip()})
-
-
-def list_bom_admin_country_columns(session: Session) -> list[str]:
-    """Return BOM Admin country columns.
-
-    NL is a mandatory logistics hub column even before NL FOB rows exist.
-    `/fob-countries` still uses list_active_fob_country_codes so no-FOB alerts
-    keep their original meaning.
-    """
-    countries = set(list_active_fob_country_codes(session))
-    countries.add("NL")
-    return ["NL", *sorted(country for country in countries if country != "NL")]
 
 
 def list_all_payment_terms(
@@ -2617,6 +2077,360 @@ def upsert_colour_surcharge(
     return rule
 
 
+def _normalize_special_colour_code(colour_code: str | None) -> str:
+    return clean_text(colour_code).upper()
+
+
+def list_special_colour_surcharges(
+    session: Session,
+) -> list[SpecialColourSurchargeRule]:
+    stmt = (
+        select(SpecialColourSurchargeRule)
+        .where(SpecialColourSurchargeRule.is_active == True)
+        .order_by(
+            SpecialColourSurchargeRule.brand,
+            SpecialColourSurchargeRule.model_name,
+            SpecialColourSurchargeRule.colour_code,
+        )
+    )
+    return list(session.execute(stmt).scalars().all())
+
+
+def get_special_colour_surcharge_for_sku(
+    session: Session,
+    sku: MaterialSkuMaster,
+) -> SpecialColourSurchargeRule | None:
+    """Return the most specific special-colour override for one SKU."""
+    normalized_brand = normalize_brand(sku.brand)
+    normalized_model = normalize_brand_text(sku.model_name)
+    normalized_code = _normalize_special_colour_code(sku.exterior_color_code)
+    if not normalized_brand or not normalized_code:
+        return None
+
+    exact = session.execute(
+        select(SpecialColourSurchargeRule).where(
+            SpecialColourSurchargeRule.brand == normalized_brand,
+            SpecialColourSurchargeRule.model_name == normalized_model,
+            SpecialColourSurchargeRule.colour_code == normalized_code,
+            SpecialColourSurchargeRule.is_active == True,
+        )
+    ).scalars().first()
+    if exact is not None:
+        return exact
+
+    return session.execute(
+        select(SpecialColourSurchargeRule).where(
+            SpecialColourSurchargeRule.brand == normalized_brand,
+            SpecialColourSurchargeRule.model_name.is_(None),
+            SpecialColourSurchargeRule.colour_code == normalized_code,
+            SpecialColourSurchargeRule.is_active == True,
+        )
+    ).scalars().first()
+
+
+def upsert_special_colour_surcharge(
+    session: Session,
+    brand: str,
+    colour_code: str,
+    surcharge_eur: float,
+    *,
+    model_name: str | None = None,
+    colour_name: str | None = None,
+) -> SpecialColourSurchargeRule:
+    normalized_brand = normalize_brand(brand)
+    normalized_model = normalize_brand_text(model_name) if model_name else None
+    normalized_code = _normalize_special_colour_code(colour_code)
+    normalized_name = clean_text(colour_name) or None
+    if not normalized_brand:
+        raise ValueError("brand is required")
+    if not normalized_code:
+        raise ValueError("colourCode is required")
+    if surcharge_eur < 0:
+        raise ValueError("surchargeEur must be greater than or equal to 0")
+
+    existing = session.execute(
+        select(SpecialColourSurchargeRule).where(
+            SpecialColourSurchargeRule.brand == normalized_brand,
+            SpecialColourSurchargeRule.model_name == normalized_model,
+            SpecialColourSurchargeRule.colour_code == normalized_code,
+            SpecialColourSurchargeRule.is_active == True,
+        )
+    ).scalars().first()
+    if existing:
+        existing.colour_name = normalized_name or existing.colour_name
+        existing.surcharge_eur = surcharge_eur
+        existing.updated_at_utc = datetime.now(timezone.utc)
+        return existing
+
+    rule = SpecialColourSurchargeRule(
+        special_colour_surcharge_rule_id=uuid4(),
+        brand=normalized_brand,
+        model_name=normalized_model,
+        colour_code=normalized_code,
+        colour_name=normalized_name,
+        surcharge_eur=surcharge_eur,
+        is_active=True,
+    )
+    session.add(rule)
+    return rule
+
+
+def get_colour_surcharge_amount_for_sku(
+    session: Session,
+    sku: MaterialSkuMaster,
+    colour_tier: str,
+) -> float:
+    """Resolve tier surcharge: special colour override wins over brand default."""
+    if colour_tier == "special":
+        special_rule = get_special_colour_surcharge_for_sku(session, sku)
+        if special_rule is not None:
+            return float(special_rule.surcharge_eur)
+    rule = get_brand_colour_surcharge(session, sku.brand, colour_tier)
+    return float(rule.surcharge_eur) if rule else 0.0
+
+
+def _positive_float(value: object) -> float | None:
+    if value is None:
+        return None
+    parsed = float(value)
+    return parsed if parsed > 0 else None
+
+
+def _find_colour_surcharge_base_fob(
+    session: Session,
+    sku: MaterialSkuMaster,
+    country_code: str,
+) -> float | None:
+    """Find the base single-colour FOB for this SKU's BOM template and country."""
+    template = clean_text(sku.bom_template).upper()
+    stmt = (
+        select(func.min(CountrySkuFobResolved.final_fob_eur))
+        .select_from(CountrySkuFobResolved)
+        .join(
+            MaterialSkuMaster,
+            MaterialSkuMaster.material_code == CountrySkuFobResolved.material_code,
+        )
+        .where(
+            CountrySkuFobResolved.country_code == country_code,
+            CountrySkuFobResolved.is_active == True,
+            CountrySkuFobResolved.final_fob_eur > 0,
+            MaterialSkuMaster.is_active == True,
+            MaterialSkuMaster.material_code != sku.material_code,
+            MaterialSkuMaster.colour_tier == "single",
+        )
+    )
+    if template:
+        stmt = stmt.where(MaterialSkuMaster.bom_template == template)
+    else:
+        stmt = stmt.where(
+            MaterialSkuMaster.brand == sku.brand,
+            MaterialSkuMaster.model_name == sku.model_name,
+            MaterialSkuMaster.version == sku.version,
+            MaterialSkuMaster.powertrain == sku.powertrain,
+        )
+    return _positive_float(session.execute(stmt).scalar_one_or_none())
+
+
+def _infer_existing_colour_surcharge_base_fob(
+    fob: CountrySkuFobResolved,
+) -> float | None:
+    base = _positive_float(fob.base_fob_eur)
+    if base is not None:
+        return base
+    surcharge = _positive_float(fob.colour_surcharge_eur) or 0.0
+    if surcharge > 0:
+        inferred = round(float(fob.final_fob_eur) - surcharge, 2)
+        return inferred if inferred > 0 else None
+    return None
+
+
+def reprice_sku_colour_surcharge_fobs(
+    session: Session,
+    material_code: str,
+    *,
+    changed_by: str | None = None,
+) -> dict[str, int | str]:
+    """Recalculate non-manual FOB rows after a SKU colour tier changes."""
+    sku = get_sku_by_material_code(session, material_code)
+    if sku is None:
+        return {
+            "materialCode": material_code,
+            "rows": 0,
+            "updated": 0,
+            "unchanged": 0,
+            "skippedManual": 0,
+            "skippedNoBase": 0,
+        }
+
+    colour_tier = clean_text(sku.colour_tier or "single").lower()
+    if colour_tier not in {"single", "dual", "special"}:
+        colour_tier = "single"
+    surcharge = 0.0
+    if colour_tier in {"dual", "special"}:
+        surcharge = get_colour_surcharge_amount_for_sku(session, sku, colour_tier)
+
+    rows = list(
+        session.execute(
+            select(CountrySkuFobResolved).where(
+                CountrySkuFobResolved.material_code == sku.material_code,
+                CountrySkuFobResolved.is_active == True,
+                CountrySkuFobResolved.final_fob_eur > 0,
+            )
+        ).scalars().all()
+    )
+    updated = 0
+    unchanged = 0
+    skipped_manual = 0
+    skipped_no_base = 0
+    now = datetime.now(timezone.utc)
+
+    for row in rows:
+        if row.fob_source_mode in COLOUR_SURCHARGE_MANUAL_SOURCE_MODES:
+            skipped_manual += 1
+            continue
+
+        if colour_tier == "single":
+            base_fob = _infer_existing_colour_surcharge_base_fob(row) or float(row.final_fob_eur)
+            new_surcharge = None
+        else:
+            base_fob = (
+                _find_colour_surcharge_base_fob(session, sku, row.country_code)
+                or _infer_existing_colour_surcharge_base_fob(row)
+            )
+            if base_fob is None:
+                skipped_no_base += 1
+                continue
+            new_surcharge = surcharge if surcharge > 0 else None
+
+        new_final = round(base_fob + (new_surcharge or 0.0), 2)
+        old_final = float(row.final_fob_eur)
+        final_changed = round(old_final, 2) != new_final
+        meta_changed = (
+            row.base_fob_eur != base_fob
+            or row.colour_surcharge_eur != new_surcharge
+        )
+        if not final_changed and not meta_changed:
+            unchanged += 1
+            continue
+
+        if final_changed:
+            session.add(
+                FobResolvedHistory(
+                    country_sku_fob_id=row.country_sku_fob_id,
+                    baseline_version_id=row.baseline_version_id,
+                    country_code=row.country_code,
+                    material_code=row.material_code,
+                    payment_term_code=row.payment_term_code,
+                    old_uploaded_fob_eur=row.uploaded_fob_eur,
+                    new_uploaded_fob_eur=row.uploaded_fob_eur,
+                    old_final_fob_eur=row.final_fob_eur,
+                    new_final_fob_eur=new_final,
+                    changed_by=changed_by or "colour_surcharge_reprice",
+                )
+            )
+        row.base_fob_eur = base_fob
+        row.colour_surcharge_eur = new_surcharge
+        row.final_fob_eur = new_final
+        row.updated_at_utc = now
+        updated += 1
+
+    return {
+        "materialCode": sku.material_code,
+        "rows": len(rows),
+        "updated": updated,
+        "unchanged": unchanged,
+        "skippedManual": skipped_manual,
+        "skippedNoBase": skipped_no_base,
+    }
+
+
+def reprice_brand_colour_surcharge_fobs(
+    session: Session,
+    brand: str,
+    colour_tier: str,
+    *,
+    changed_by: str | None = None,
+) -> dict[str, int | str]:
+    """Recalculate all active SKUs affected by one brand/tier surcharge rule."""
+    normalized_brand = normalize_brand(brand)
+    normalized_tier = clean_text(colour_tier).lower()
+    material_codes = list(
+        session.execute(
+            select(MaterialSkuMaster.material_code)
+            .where(
+                MaterialSkuMaster.is_active == True,
+                MaterialSkuMaster.brand == normalized_brand,
+                MaterialSkuMaster.colour_tier == normalized_tier,
+            )
+            .order_by(MaterialSkuMaster.material_code)
+        ).scalars().all()
+    )
+    totals = {
+        "brand": normalized_brand,
+        "colourTier": normalized_tier,
+        "skus": len(material_codes),
+        "rows": 0,
+        "updated": 0,
+        "unchanged": 0,
+        "skippedManual": 0,
+        "skippedNoBase": 0,
+    }
+    for code in material_codes:
+        result = reprice_sku_colour_surcharge_fobs(
+            session,
+            code,
+            changed_by=changed_by or "colour_surcharge_rule_update",
+        )
+        for key in ("rows", "updated", "unchanged", "skippedManual", "skippedNoBase"):
+            totals[key] = int(totals[key]) + int(result[key])
+    return totals
+
+
+def reprice_special_colour_surcharge_fobs(
+    session: Session,
+    brand: str,
+    colour_code: str,
+    *,
+    model_name: str | None = None,
+    changed_by: str | None = None,
+) -> dict[str, int | str]:
+    """Recalculate active special-colour SKUs affected by one override rule."""
+    normalized_brand = normalize_brand(brand)
+    normalized_model = normalize_brand_text(model_name) if model_name else None
+    normalized_code = _normalize_special_colour_code(colour_code)
+    stmt = select(MaterialSkuMaster.material_code).where(
+        MaterialSkuMaster.is_active == True,
+        MaterialSkuMaster.brand == normalized_brand,
+        MaterialSkuMaster.colour_tier == "special",
+        func.upper(MaterialSkuMaster.exterior_color_code) == normalized_code,
+    )
+    if normalized_model:
+        stmt = stmt.where(MaterialSkuMaster.model_name == normalized_model)
+    material_codes = list(
+        session.execute(stmt.order_by(MaterialSkuMaster.material_code)).scalars().all()
+    )
+    totals = {
+        "brand": normalized_brand,
+        "modelName": normalized_model or "",
+        "colourCode": normalized_code,
+        "skus": len(material_codes),
+        "rows": 0,
+        "updated": 0,
+        "unchanged": 0,
+        "skippedManual": 0,
+        "skippedNoBase": 0,
+    }
+    for code in material_codes:
+        result = reprice_sku_colour_surcharge_fobs(
+            session,
+            code,
+            changed_by=changed_by or "special_colour_surcharge_update",
+        )
+        for key in ("rows", "updated", "unchanged", "skippedManual", "skippedNoBase"):
+            totals[key] = int(totals[key]) + int(result[key])
+    return totals
+
+
 # ── CountrySkuFobResolved ──────────────────────────────────────────────
 
 
@@ -2624,9 +2438,8 @@ def upsert_fob_resolved(
     session: Session,
     fob: CountrySkuFobResolved,
 ) -> CountrySkuFobResolved:
-    existing = _get_fob_for_country_sku_row(
-        session, fob.country_code, fob.material_code,
-        positive_only=False,
+    existing = get_fob_for_country_sku(
+        session, fob.country_code, fob.material_code, fob.payment_term_code,
     )
     if existing:
         # Write history record before overwriting values
@@ -2667,67 +2480,13 @@ def get_fob_for_country_sku(
     material_code: str,
     payment_term_code: str | None = None,  # kept for API compat, no longer filters
 ) -> CountrySkuFobResolved | None:
-    """Get a business-visible FOB for a country+material.
-
-    A non-positive FOB means the market does not currently have an orderable
-    FOB for the SKU. Keep that rule here so Order Genius, exports, and vehicle
-    allocation do not treat cleared FOB rows as available.
-    """
-    return _get_fob_for_country_sku_row(
-        session,
-        country_code,
-        material_code,
-        positive_only=True,
-    )
-
-
-def _get_fob_for_country_sku_row(
-    session: Session,
-    country_code: str,
-    material_code: str,
-    *,
-    positive_only: bool,
-) -> CountrySkuFobResolved | None:
-    """Get an active FOB row; internal writers can include cleared rows."""
+    """Get FOB for a country+material. PT is metadata only — not a filter."""
     stmt = select(CountrySkuFobResolved).where(
         CountrySkuFobResolved.country_code == country_code,
         CountrySkuFobResolved.material_code == material_code,
         CountrySkuFobResolved.is_active == True,
     )
-    if positive_only:
-        stmt = stmt.where(CountrySkuFobResolved.final_fob_eur > 0)
     return session.execute(stmt).scalars().first()
-
-
-def list_fobs_for_country_material_codes(
-    session: Session,
-    country_code: str,
-    material_codes: list[str],
-    payment_term_code: str | None = None,  # kept for call-site clarity, not a filter
-) -> dict[str, CountrySkuFobResolved]:
-    """Return active FOB rows for many material codes in one query.
-
-    Payment term is metadata-only in current pricing rules, matching
-    get_fob_for_country_sku behavior.
-    """
-    codes = [code for code in dict.fromkeys(material_codes) if code]
-    if not codes:
-        return {}
-    stmt = (
-        select(CountrySkuFobResolved)
-        .where(
-            CountrySkuFobResolved.country_code == country_code,
-            CountrySkuFobResolved.material_code.in_(codes),
-            CountrySkuFobResolved.is_active == True,
-            CountrySkuFobResolved.final_fob_eur > 0,
-        )
-        .order_by(CountrySkuFobResolved.material_code)
-    )
-    result: dict[str, CountrySkuFobResolved] = {}
-    for row in session.execute(stmt).scalars().all():
-        if row.material_code not in result:
-            result[row.material_code] = row
-    return result
 
 
 def list_fob_by_country(
@@ -2738,7 +2497,6 @@ def list_fob_by_country(
     stmt = select(CountrySkuFobResolved).where(
         CountrySkuFobResolved.country_code == country_code,
         CountrySkuFobResolved.is_active == True,
-        CountrySkuFobResolved.final_fob_eur > 0,
     )
     if payment_term_code:
         stmt = stmt.where(
@@ -2756,7 +2514,6 @@ def list_active_fob_material_codes(
         select(CountrySkuFobResolved.material_code).where(
             CountrySkuFobResolved.country_code == country_code,
             CountrySkuFobResolved.is_active == True,
-            CountrySkuFobResolved.final_fob_eur > 0,
         )
     ).all()}
 
