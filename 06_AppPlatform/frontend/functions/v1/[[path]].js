@@ -3,6 +3,8 @@ const CACHEABLE_ENDPOINTS = new Map([
   ["GET metadata/columns", 3600],
   ["GET metadata/filter-snapshot", 3600],
   ["GET assistant/country/metadata", 3600],
+  ["GET advanced-analysis/countries", 3600],
+  ["GET advanced-analysis/profile-options", 3600],
   ["GET analysis/data-freshness", 300],
   ["POST filters/options", 300],
   ["POST filters/options/batch", 300],

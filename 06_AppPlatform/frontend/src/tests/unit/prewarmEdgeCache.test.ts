@@ -1,6 +1,9 @@
 import { beforeAll, describe, expect, it } from "vitest";
 
 interface PrewarmModule {
+  buildAdvancedAnalysisWarmupRequests: (
+    configuredCountries?: string[],
+  ) => { body?: unknown; label: string; method: string; path: string }[];
   buildDefaultCascadePayloads: (
     snapshot: unknown,
     configuredCountries: string[],
@@ -108,6 +111,39 @@ describe("prewarm intl edge cache", () => {
       method: "POST",
       path: "/filters/options/batch",
     });
+  });
+
+  it("builds bounded Advanced Analysis metadata warmups", () => {
+    expect(prewarm.buildAdvancedAnalysisWarmupRequests()).toEqual([
+      {
+        label: "advanced-analysis-countries",
+        method: "GET",
+        path: "/advanced-analysis/countries",
+      },
+      {
+        label: "advanced-analysis-profile-options-瑞典",
+        method: "GET",
+        path: "/advanced-analysis/profile-options?country=%E7%91%9E%E5%85%B8",
+      },
+    ]);
+
+    expect(prewarm.buildAdvancedAnalysisWarmupRequests(["德国", "瑞典"])).toEqual([
+      {
+        label: "advanced-analysis-countries",
+        method: "GET",
+        path: "/advanced-analysis/countries",
+      },
+      {
+        label: "advanced-analysis-profile-options-德国",
+        method: "GET",
+        path: "/advanced-analysis/profile-options?country=%E5%BE%B7%E5%9B%BD",
+      },
+      {
+        label: "advanced-analysis-profile-options-瑞典",
+        method: "GET",
+        path: "/advanced-analysis/profile-options?country=%E7%91%9E%E5%85%B8",
+      },
+    ]);
   });
 
   it("uses dashboard URL query params for exact edge prewarm payloads", () => {

@@ -403,8 +403,51 @@ describe("Cloudflare edge cache function", () => {
     });
     expect(secondAssistantMetadata.headers.get("x-jato-edge-cache")).toBe("HIT");
     expect(await secondAssistantMetadata.json()).toMatchObject({ sequence: 2 });
-    expect(runtime.fetch).toHaveBeenCalledTimes(2);
-    expect(runtime.cache.put).toHaveBeenCalledTimes(4);
+
+    const firstAdvancedCountries = await callEdgeFunction(runtime, "advanced-analysis/countries", {
+      headers: {
+        "x-user-name": "dashboard-user",
+        "x-user-role": "viewer",
+      },
+      method: "GET",
+    });
+    expect(firstAdvancedCountries.headers.get("x-jato-edge-cache")).toBe("MISS");
+    expect(firstAdvancedCountries.headers.get("x-jato-edge-cache-endpoint")).toBe("/v1/advanced-analysis/countries");
+    await flushWaitUntil(runtime);
+
+    const secondAdvancedCountries = await callEdgeFunction(runtime, "advanced-analysis/countries", {
+      headers: {
+        "x-user-name": "dashboard-user",
+        "x-user-role": "viewer",
+      },
+      method: "GET",
+    });
+    expect(secondAdvancedCountries.headers.get("x-jato-edge-cache")).toBe("HIT");
+    expect(await secondAdvancedCountries.json()).toMatchObject({ sequence: 3 });
+
+    const firstAdvancedProfile = await callEdgeFunction(runtime, "advanced-analysis/profile-options?country=%E7%91%9E%E5%85%B8", {
+      headers: {
+        "x-user-name": "dashboard-user",
+        "x-user-role": "viewer",
+      },
+      method: "GET",
+    });
+    expect(firstAdvancedProfile.headers.get("x-jato-edge-cache")).toBe("MISS");
+    expect(firstAdvancedProfile.headers.get("x-jato-edge-cache-endpoint")).toBe("/v1/advanced-analysis/profile-options");
+    await flushWaitUntil(runtime);
+
+    const secondAdvancedProfile = await callEdgeFunction(runtime, "advanced-analysis/profile-options?country=%E7%91%9E%E5%85%B8", {
+      headers: {
+        "x-user-name": "dashboard-user",
+        "x-user-role": "viewer",
+      },
+      method: "GET",
+    });
+    expect(secondAdvancedProfile.headers.get("x-jato-edge-cache")).toBe("HIT");
+    expect(await secondAdvancedProfile.json()).toMatchObject({ sequence: 4 });
+    expect(runtime.fetch).toHaveBeenCalledTimes(4);
+    expect(runtime.cache.put).toHaveBeenCalledTimes(8);
+    expect(runtime.originCalls[3]?.url).toBe("https://origin.example/v1/advanced-analysis/profile-options?country=%E7%91%9E%E5%85%B8");
   });
 
   it("bypasses auth and other non-cacheable endpoints", async () => {
