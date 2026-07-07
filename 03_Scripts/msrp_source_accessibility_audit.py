@@ -42,6 +42,7 @@ DEFAULT_HEADERS = {
     "Accept-Language": "en-US,en;q=0.9,de;q=0.8",
 }
 CurlProbe = Callable[[str, float], dict[str, Any] | None]
+CURL_RETRY_HTTP_STATUSES = {400, 403, 405, 406, 501}
 
 
 def _utc_now_iso() -> str:
@@ -307,33 +308,43 @@ def _response_text_sample(response: Any, limit: int = 500) -> str:
     return " ".join(text.split())[:limit]
 
 
-def _probe_with_curl(url: str, timeout_seconds: float) -> dict[str, Any] | None:
-    """Use curl as a second opinion when requests fails before HTTP.
-
-    Some manufacturer sites reject Python/OpenSSL TLS fingerprints while the
-    system curl path succeeds. The audit should not turn those into source
-    repair issues when the URL itself is reachable.
-    """
-    if not url:
-        return None
+def _run_curl_probe(
+    url: str,
+    timeout_seconds: float,
+    *,
+    probe_method: str,
+    browser_user_agent: bool,
+) -> dict[str, Any]:
+    command = [
+        "curl",
+        "--location",
+        "--http1.1",
+    ]
+    if probe_method == "HEAD":
+        command.append("--head")
+    else:
+        command.extend(["--range", "0-4095"])
+    command.extend([
+        "--silent",
+        "--show-error",
+        "--max-time",
+        str(max(1, int(timeout_seconds))),
+    ])
+    if browser_user_agent:
+        command.extend(["--user-agent", DEFAULT_HEADERS["User-Agent"]])
+    command.extend([
+        "--output",
+        "/dev/null",
+        "--write-out",
+        "\n%{http_code}\n%{url_effective}",
+        url,
+    ])
+    method_label = f"CURL_{probe_method}"
+    if browser_user_agent:
+        method_label = f"{method_label}_BROWSER_UA"
     try:
         completed = subprocess.run(
-            [
-                "curl",
-                "--location",
-                "--head",
-                "--silent",
-                "--show-error",
-                "--max-time",
-                str(max(1, int(timeout_seconds))),
-                "--user-agent",
-                DEFAULT_HEADERS["User-Agent"],
-                "--output",
-                "/dev/null",
-                "--write-out",
-                "\n%{http_code}\n%{url_effective}",
-                url,
-            ],
+            command,
             capture_output=True,
             check=False,
             text=True,
@@ -341,7 +352,7 @@ def _probe_with_curl(url: str, timeout_seconds: float) -> dict[str, Any] | None:
         )
     except (OSError, subprocess.TimeoutExpired) as exc:
         return {
-            "method": "CURL_HEAD",
+            "method": method_label,
             "error": str(exc),
             "errorType": type(exc).__name__,
         }
@@ -355,7 +366,7 @@ def _probe_with_curl(url: str, timeout_seconds: float) -> dict[str, Any] | None:
     elif lines and lines[-1].isdigit():
         status_code = int(lines[-1])
     result: dict[str, Any] = {
-        "method": "CURL_HEAD",
+        "method": method_label,
         "statusCode": status_code,
         "finalUrl": final_url,
         "returnCode": completed.returncode,
@@ -364,6 +375,42 @@ def _probe_with_curl(url: str, timeout_seconds: float) -> dict[str, Any] | None:
         result["error"] = " ".join(completed.stderr.split())
         result["errorType"] = "CurlError"
     return result
+
+
+def _curl_probe_needs_fallback(result: dict[str, Any]) -> bool:
+    status_code = result.get("statusCode")
+    if not isinstance(status_code, int) or status_code <= 0:
+        return True
+    return status_code in CURL_RETRY_HTTP_STATUSES
+
+
+def _probe_with_curl(url: str, timeout_seconds: float) -> dict[str, Any] | None:
+    """Use curl as a second opinion when requests fails before HTTP.
+
+    Some manufacturer sites reject Python/OpenSSL TLS fingerprints while the
+    system curl path succeeds. The audit should not turn those into source
+    repair issues when the URL itself is reachable. Try the same default curl
+    identity used by the PDF extractor before falling back to a browser UA.
+    """
+    if not url:
+        return None
+    attempts = [
+        ("HEAD", False),
+        ("GET_RANGE", False),
+        ("HEAD", True),
+        ("GET_RANGE", True),
+    ]
+    last_result: dict[str, Any] | None = None
+    for probe_method, browser_user_agent in attempts:
+        last_result = _run_curl_probe(
+            url,
+            timeout_seconds,
+            probe_method=probe_method,
+            browser_user_agent=browser_user_agent,
+        )
+        if not _curl_probe_needs_fallback(last_result):
+            return last_result
+    return last_result
 
 
 def _is_anti_bot_response(

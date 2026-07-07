@@ -3,6 +3,7 @@ from __future__ import annotations
 import importlib.util
 import json
 from pathlib import Path
+import subprocess
 import sys
 
 
@@ -365,6 +366,67 @@ def test_probe_source_uses_curl_fallback_when_requests_tls_fails() -> None:
     assert item["retryable"] is False
     assert item["fallbackProbe"] == "curl"
     assert item["requestsError"]
+
+
+def test_curl_probe_uses_default_curl_identity_first(monkeypatch) -> None:
+    commands: list[list[str]] = []
+
+    def fake_run(command, **_kwargs):
+        commands.append(command)
+        return subprocess.CompletedProcess(
+            command,
+            0,
+            "\n200\nhttps://www.peugeot.be/tarif.pdf",
+            "",
+        )
+
+    monkeypatch.setattr(audit.subprocess, "run", fake_run)
+
+    result = audit._probe_with_curl("https://www.peugeot.be/tarif.pdf", 9.0)
+
+    assert result is not None
+    assert result["method"] == "CURL_HEAD"
+    assert result["statusCode"] == 200
+    assert len(commands) == 1
+    assert "--user-agent" not in commands[0]
+    assert "--http1.1" in commands[0]
+
+
+def test_curl_probe_falls_back_to_default_range_get_after_head_403(monkeypatch) -> None:
+    commands: list[list[str]] = []
+    responses = [
+        subprocess.CompletedProcess(
+            [],
+            0,
+            "\n403\nhttps://www.peugeot.be/tarif.pdf",
+            "",
+        ),
+        subprocess.CompletedProcess(
+            [],
+            0,
+            "\n206\nhttps://www.peugeot.be/tarif.pdf",
+            "",
+        ),
+    ]
+
+    def fake_run(command, **_kwargs):
+        commands.append(command)
+        response = responses.pop(0)
+        response.args = command
+        return response
+
+    monkeypatch.setattr(audit.subprocess, "run", fake_run)
+
+    result = audit._probe_with_curl("https://www.peugeot.be/tarif.pdf", 9.0)
+
+    assert result is not None
+    assert result["method"] == "CURL_GET_RANGE"
+    assert result["statusCode"] == 206
+    assert len(commands) == 2
+    assert "--head" in commands[0]
+    assert "--range" in commands[1]
+    assert "--user-agent" not in commands[0]
+    assert "--user-agent" not in commands[1]
 
 
 def test_probe_source_classifies_dns_resolution_failures() -> None:
