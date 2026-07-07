@@ -60,4 +60,37 @@ describe("LazyPlotlyChart", () => {
 
     expect(await screen.findByTestId("plotly-chart")).toBeTruthy();
   });
+
+  it("can defer Plotly loading after the chart reaches the viewport", async () => {
+    vi.useFakeTimers();
+    try {
+      render(<LazyPlotlyChart data={[]} height={320} deferMs={3500} />);
+
+      const target = document.querySelector("[style]") as Element;
+      await act(async () => {
+        observerCallback?.([
+          {
+            isIntersecting: true,
+            target,
+          } as IntersectionObserverEntry,
+        ], new MockIntersectionObserver(() => undefined));
+      });
+
+      expect(screen.queryByTestId("plotly-chart")).toBeNull();
+
+      await act(async () => {
+        vi.advanceTimersByTime(3499);
+      });
+      expect(screen.queryByTestId("plotly-chart")).toBeNull();
+
+      await act(async () => {
+        vi.advanceTimersByTime(1);
+        await Promise.resolve();
+      });
+
+      expect(screen.getByTestId("plotly-chart")).toBeTruthy();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });

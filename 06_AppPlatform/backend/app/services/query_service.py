@@ -30,6 +30,7 @@ from app.core.config import (
     GROUPED_TIME_SERIES_PREWARM_GRAINS,
     GROUPED_TIME_SERIES_PREWARM_GROUP_BY,
     GROUPED_TIME_SERIES_PREWARM_INCLUDE_OTHERS,
+    GROUPED_TIME_SERIES_PREWARM_SHARE_SPLIT_BY,
     GROUPED_TIME_SERIES_PREWARM_SCOPES,
     GROUPED_TIME_SERIES_PREWARM_TOP_N,
 )
@@ -1194,6 +1195,17 @@ def _query_grouped_share_time_series(
     return {"grain": normalized_grain, "rows": len(items), "items": items}
 
 
+def _prewarm_share_split_values(group_by: str) -> list[str | None]:
+    if group_by not in _GROUPED_SHARE_MODE_SPECS:
+        return [None]
+    values: list[str | None] = [None]
+    for raw_value in GROUPED_TIME_SERIES_PREWARM_SHARE_SPLIT_BY:
+        value = str(raw_value).strip().lower()
+        if value and value in _GROUPED_SHARE_SPLIT_SPECS and value not in values:
+            values.append(value)
+    return values
+
+
 def _resolve_sales_columns_from_options(
     columns: list[str],
     opts: dict | None,
@@ -1785,27 +1797,32 @@ def warm_grouped_time_series_cache() -> dict[str, int]:
     for scope in dict.fromkeys(scopes):
         for grain in dict.fromkeys(grains):
             for group_by in dict.fromkeys(group_bys):
-                for filters in filter_sets:
-                    try:
-                        query_grouped_time_series(
-                            filters=filters,
-                            grain=grain,
-                            group_by=group_by,
-                            top_n=GROUPED_TIME_SERIES_PREWARM_TOP_N,
-                            include_others=GROUPED_TIME_SERIES_PREWARM_INCLUDE_OTHERS,
-                            cache_scope=scope,
-                        )
-                        warmed += 1
-                    except Exception as exc:  # pragma: no cover - startup warming must not fail the API
-                        failed += 1
-                        LOGGER.warning(
-                            "Grouped time-series prewarm failed for scope=%s grain=%s group_by=%s filters=%s: %s",
-                            scope,
-                            grain,
-                            group_by,
-                            filters,
-                            exc,
-                        )
+                for share_split_by in _prewarm_share_split_values(group_by):
+                    for filters in filter_sets:
+                        kwargs = {
+                            "filters": filters,
+                            "grain": grain,
+                            "group_by": group_by,
+                            "top_n": GROUPED_TIME_SERIES_PREWARM_TOP_N,
+                            "include_others": GROUPED_TIME_SERIES_PREWARM_INCLUDE_OTHERS,
+                            "cache_scope": scope,
+                        }
+                        if share_split_by is not None:
+                            kwargs["share_split_by"] = share_split_by
+                        try:
+                            query_grouped_time_series(**kwargs)
+                            warmed += 1
+                        except Exception as exc:  # pragma: no cover - startup warming must not fail the API
+                            failed += 1
+                            LOGGER.warning(
+                                "Grouped time-series prewarm failed for scope=%s grain=%s group_by=%s share_split_by=%s filters=%s: %s",
+                                scope,
+                                grain,
+                                group_by,
+                                share_split_by or "-",
+                                filters,
+                                exc,
+                            )
     return {"warmed": warmed, "failed": failed}
 
 

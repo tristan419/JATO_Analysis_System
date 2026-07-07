@@ -122,7 +122,10 @@ The script prints one JSON line per request. A healthy repeated run should show
 `serverCache` as `MEMORY`, `REDIS`, `DISK`, or `INFLIGHT` rather than `MISS`.
 Default startup prewarm covers month/year grouped Dashboard lenses for
 `viewer`, `order_filler`, `editor`, and `admin`, including the wide country +
-powertrain filter set used by the Intl Dashboard.
+powertrain filter set used by the Intl Dashboard. The grouped warmup also covers
+the share-only lenses (`四驱占比`, `Business/Private 占比`) with the default
+`segment` and `powertrain` split keys, so cached users who reopen those Dashboard
+views do not fall back to a cold `time-series-grouped` query.
 `POST /v1/analysis/overview` uses the same server-cache pattern and returns
 `X-JATO-Server-Cache: MISS|MEMORY|REDIS|DISK`; startup prewarm covers the empty
 Dashboard and the same wide country + powertrain filter set for each role.

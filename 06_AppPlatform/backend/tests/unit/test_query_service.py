@@ -805,6 +805,11 @@ def test_warm_grouped_time_series_cache_includes_configured_filter_sets(
         "GROUPED_TIME_SERIES_PREWARM_INCLUDE_OTHERS",
         True,
     )
+    monkeypatch.setattr(
+        query_service,
+        "GROUPED_TIME_SERIES_PREWARM_SHARE_SPLIT_BY",
+        ["segment"],
+    )
 
     def fake_query_grouped_time_series(**kwargs) -> dict:
         calls.append(kwargs)
@@ -839,12 +844,102 @@ def test_warm_grouped_time_series_cache_includes_configured_filter_sets(
     ]
 
 
+def test_warm_grouped_time_series_cache_includes_share_split_lenses(
+    monkeypatch,
+) -> None:
+    calls: list[dict[str, object]] = []
+
+    monkeypatch.setattr(
+        query_service,
+        "GROUPED_TIME_SERIES_PREWARM_GROUP_BY",
+        ["四驱占比"],
+    )
+    monkeypatch.setattr(
+        query_service,
+        "GROUPED_TIME_SERIES_PREWARM_GRAINS",
+        ["month"],
+    )
+    monkeypatch.setattr(
+        query_service,
+        "GROUPED_TIME_SERIES_PREWARM_SCOPES",
+        ["order_filler"],
+    )
+    monkeypatch.setattr(
+        query_service,
+        "GROUPED_TIME_SERIES_PREWARM_FILTERS",
+        [],
+    )
+    monkeypatch.setattr(
+        query_service,
+        "GROUPED_TIME_SERIES_PREWARM_TOP_N",
+        10,
+    )
+    monkeypatch.setattr(
+        query_service,
+        "GROUPED_TIME_SERIES_PREWARM_INCLUDE_OTHERS",
+        False,
+    )
+    monkeypatch.setattr(
+        query_service,
+        "GROUPED_TIME_SERIES_PREWARM_SHARE_SPLIT_BY",
+        ["segment", "powertrain", "invalid"],
+    )
+
+    def fake_query_grouped_time_series(**kwargs) -> dict:
+        calls.append(kwargs)
+        return {"items": []}
+
+    monkeypatch.setattr(
+        query_service,
+        "query_grouped_time_series",
+        fake_query_grouped_time_series,
+    )
+
+    result = query_service.warm_grouped_time_series_cache()
+
+    assert result == {"warmed": 3, "failed": 0}
+    assert calls == [
+        {
+            "filters": {},
+            "grain": "month",
+            "group_by": "四驱占比",
+            "top_n": 10,
+            "include_others": False,
+            "cache_scope": "order_filler",
+        },
+        {
+            "filters": {},
+            "grain": "month",
+            "group_by": "四驱占比",
+            "top_n": 10,
+            "include_others": False,
+            "cache_scope": "order_filler",
+            "share_split_by": "segment",
+        },
+        {
+            "filters": {},
+            "grain": "month",
+            "group_by": "四驱占比",
+            "top_n": 10,
+            "include_others": False,
+            "cache_scope": "order_filler",
+            "share_split_by": "powertrain",
+        },
+    ]
+
+
 def test_grouped_time_series_prewarm_defaults_cover_dashboard_scope() -> None:
     assert query_service.GROUPED_TIME_SERIES_CACHE_TTL_SECONDS >= 1800
     assert query_service.GROUPED_TIME_SERIES_PREWARM_TOP_N >= 10
     assert query_service.GROUPED_TIME_SERIES_PREWARM_INCLUDE_OTHERS is False
     assert "order_filler" in query_service.GROUPED_TIME_SERIES_PREWARM_SCOPES
     assert {"month", "year"}.issubset(set(query_service.GROUPED_TIME_SERIES_PREWARM_GRAINS))
+    assert {"四驱占比", "Business/Private 占比"}.issubset(
+        set(query_service.GROUPED_TIME_SERIES_PREWARM_GROUP_BY)
+    )
+    assert {"segment", "powertrain"}.issubset(
+        set(query_service.GROUPED_TIME_SERIES_PREWARM_SHARE_SPLIT_BY)
+    )
     assert any(
         filters.get("国家") and filters.get("动总规整")
         for filters in query_service.GROUPED_TIME_SERIES_PREWARM_FILTERS

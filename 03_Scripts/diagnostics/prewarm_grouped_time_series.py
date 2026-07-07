@@ -36,9 +36,11 @@ DEFAULT_COUNTRIES = [
     "西班牙",
 ]
 DEFAULT_POWERTRAINS = ["ICE", "HEV", "BEV", "MHEV", "PHEV"]
-DEFAULT_GROUP_BYS = ["动总规整", "国家"]
+DEFAULT_GROUP_BYS = ["动总规整", "国家", "四驱占比", "Business/Private 占比"]
 DEFAULT_GRAINS = ["month", "year"]
 DEFAULT_USER_ROLES = ["viewer", "order_filler", "editor", "admin"]
+DEFAULT_SHARE_SPLIT_BY = ["segment", "powertrain"]
+SHARE_GROUP_BYS = {"四驱占比", "Business/Private 占比"}
 SERVER_CACHE_HEADER = "x-jato-server-cache"
 EDGE_CACHE_HEADER = "x-jato-edge-cache"
 
@@ -84,27 +86,37 @@ def build_prewarm_requests(
     grains: list[str],
     top_n: int,
     include_others: bool,
+    share_split_by: list[str] | None = None,
 ) -> list[PrewarmRequest]:
     filters = {
         "国家": countries,
         "动总规整": powertrains,
     }
     requests: list[PrewarmRequest] = []
+    split_values = [
+        value.strip().lower()
+        for value in (share_split_by or [])
+        if value.strip().lower() in {"segment", "powertrain"}
+    ]
     for grain in dict.fromkeys(grains):
         normalized_grain = "year" if grain.strip().lower() == "year" else "month"
         for group_by in dict.fromkeys(group_bys):
-            requests.append(
-                PrewarmRequest(
-                    label=f"{normalized_grain}:{group_by}",
-                    payload={
-                        "filters": filters,
-                        "grain": normalized_grain,
-                        "group_by": group_by,
-                        "top_n": max(1, int(top_n)),
-                        "include_others": bool(include_others),
-                    },
-                )
-            )
+            group_split_values: list[str | None] = [None]
+            if group_by in SHARE_GROUP_BYS:
+                group_split_values.extend(dict.fromkeys(split_values))
+            for split_value in group_split_values:
+                payload = {
+                    "filters": filters,
+                    "grain": normalized_grain,
+                    "group_by": group_by,
+                    "top_n": max(1, int(top_n)),
+                    "include_others": bool(include_others),
+                }
+                label = f"{normalized_grain}:{group_by}"
+                if split_value is not None:
+                    payload["share_split_by"] = split_value
+                    label = f"{label}:{split_value}"
+                requests.append(PrewarmRequest(label=label, payload=payload))
     return requests
 
 
@@ -262,6 +274,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--powertrains", default=os.getenv("JATO_PREWARM_POWERTRAINS", ""))
     parser.add_argument("--group-by", default=os.getenv("JATO_PREWARM_GROUP_BY", ""))
     parser.add_argument("--grains", default=os.getenv("JATO_PREWARM_GRAINS", ""))
+    parser.add_argument("--share-split-by", default=os.getenv("JATO_PREWARM_SHARE_SPLIT_BY", ""))
     parser.add_argument("--top-n", type=int, default=int(os.getenv("JATO_PREWARM_TOP_N", "10")))
     parser.add_argument("--include-others", action="store_true")
     parser.add_argument("--repeat", type=int, default=int(os.getenv("JATO_PREWARM_REPEAT", "2")))
@@ -281,6 +294,7 @@ def main() -> None:
         grains=split_csv(args.grains, DEFAULT_GRAINS),
         top_n=args.top_n,
         include_others=args.include_others,
+        share_split_by=split_csv(args.share_split_by, DEFAULT_SHARE_SPLIT_BY),
     )
     attempts = run_prewarm(
         url=url,
