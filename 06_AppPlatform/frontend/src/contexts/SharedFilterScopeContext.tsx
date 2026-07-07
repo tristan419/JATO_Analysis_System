@@ -491,7 +491,7 @@ export function SharedFilterScopeProvider({ children }: { children: ReactNode })
       setYearSeries(overviewResponse.yearSeries ?? []);
       setMonthSeries(overviewResponse.monthSeries ?? []);
       setFilteredRowCount(overviewResponse.kpis.totalRows);
-    } catch (err) { console.log("[SFS] boot ERROR:", err);
+    } catch (err) {
       if (!isAbortError(err)) setError((err as Error).message);
     } finally {
       if (!signal?.aborted) setLoading(false);
@@ -598,7 +598,7 @@ export function SharedFilterScopeProvider({ children }: { children: ReactNode })
         setFiltersReady(true);
         bootCompleted.current = true;
         setLoading(false);
-      } catch (err) { console.log("[SFS] boot ERROR:", err);
+      } catch (err) {
         if (!cancelled && !isAbortError(err)) setError((err as Error).message);
       } finally {
         if (!cancelled) setLoading(false);
@@ -688,6 +688,8 @@ export function SharedFilterScopeProvider({ children }: { children: ReactNode })
       if (index === -1) return;
 
       const cascadeStartIndex = index < 3 ? 3 : index;
+      overviewAbortRef.current?.abort();
+      overviewAbortRef.current = null;
       deferredOptionsAbortRef.current?.abort();
       deferredOptionsAbortRef.current = null;
       syncOptionsAbortRef.current?.abort();
@@ -714,7 +716,7 @@ export function SharedFilterScopeProvider({ children }: { children: ReactNode })
         setSelections(syncedSelections);
         setOptionsMap((previous) => ({ ...previous, ...cascadedOptions }));
         setFiltersReady(true);
-      } catch (err) { console.log("[SFS] boot ERROR:", err);
+      } catch (err) {
         if (!isAbortError(err)) setError((err as Error).message);
       } finally {
         if (syncOptionsAbortRef.current === controller) {

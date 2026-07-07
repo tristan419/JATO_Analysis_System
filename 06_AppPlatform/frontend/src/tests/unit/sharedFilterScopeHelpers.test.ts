@@ -1,12 +1,13 @@
 // @vitest-environment jsdom
 
-import { act, cleanup, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { createElement } from "react";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { MemoryRouter, Route, Routes, useLocation } from "react-router-dom";
 
 import type * as SharedFilterScopeContextModule from "../../contexts/SharedFilterScopeContext";
 import { fetchOnDemandCascadedOptions, type FilterOptionsPayload } from "../../utils/filterOptions";
+import { clearCachedPageValue } from "../../utils/pageCache";
 
 const apiMock = vi.hoisted(() => ({
   columns: vi.fn(),
@@ -60,6 +61,16 @@ function SharedScopeProbe() {
     null,
     createElement("span", { "data-testid": "search" }, location.search),
     createElement("span", { "data-testid": "ready" }, String(scope.filtersReady)),
+    createElement(
+      "button",
+      {
+        onClick: () => {
+          void scope.onFilterChange("country", ["德国"]);
+        },
+        type: "button",
+      },
+      "Germany",
+    ),
   );
 }
 
@@ -227,6 +238,7 @@ describe("SharedFilterScopeProvider boot", () => {
   beforeEach(() => {
     localStorage.clear();
     sessionStorage.clear();
+    clearCachedPageValue("shared-filter-scope");
     apiMock.filterMetadataSnapshot.mockResolvedValue({
       columns: ["国家", "Body type", "细分市场", "动总规整", "Make", "Model", "Version name"],
       options: {
@@ -306,6 +318,59 @@ describe("SharedFilterScopeProvider boot", () => {
       prefer_precomputed: true,
       top_n: 120,
     }, expect.objectContaining({ signal: expect.any(AbortSignal) }));
+  });
+
+  it("aborts the in-flight overview request before syncing a new filter selection", async () => {
+    apiMock.filterMetadataSnapshot.mockResolvedValue({
+      columns: ["国家", "Body type", "细分市场", "动总规整", "Make", "Model", "Version name"],
+      options: {
+        国家: ["丹麦", "德国"],
+        "Body type": ["SUV"],
+        细分市场: ["C"],
+        动总规整: ["ICE", "BEV"],
+      },
+    });
+    apiMock.filterOptionsBatch.mockResolvedValue({
+      items: [{ column: "Make", options: [] }],
+    });
+    const overviewSignals: AbortSignal[] = [];
+    apiMock.overview.mockImplementation((_payload: unknown, init?: RequestInit) => {
+      if (init?.signal) overviewSignals.push(init.signal);
+      return new Promise((_resolve, reject) => {
+        init?.signal?.addEventListener("abort", () => {
+          reject(new DOMException("Aborted", "AbortError"));
+        }, { once: true });
+      });
+    });
+
+    render(
+      createElement(
+        MemoryRouter,
+        { initialEntries: ["/dashboard"] },
+        createElement(
+          Routes,
+          null,
+          createElement(Route, {
+            path: "/dashboard",
+            element: createElement(
+              SharedFilterScopeProvider,
+              null,
+              createElement(SharedScopeProbe),
+            ),
+          }),
+        ),
+      ),
+    );
+
+    await waitFor(() => expect(apiMock.overview).toHaveBeenCalledTimes(1));
+    expect(overviewSignals[0]?.aborted).toBe(false);
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Germany" }));
+      await Promise.resolve();
+    });
+
+    expect(overviewSignals[0]?.aborted).toBe(true);
   });
 
   it("falls back to columns when the filter snapshot is too slow", async () => {
