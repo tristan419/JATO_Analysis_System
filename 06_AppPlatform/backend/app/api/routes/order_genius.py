@@ -19,6 +19,7 @@ from app.api.order_genius_schemas import (
     PublishBaselineRequest,
     QuantityCellUpdate,
     RemarkUpdate,
+    SpecialColourSurchargeUpdate,
 )
 from app.core.config import PROJECT_ROOT
 from app.core.security import require_min_role, require_roles, validate_country_access
@@ -73,6 +74,15 @@ def _optional_float_from_body(body: dict, key: str) -> float | None:
         return float(value)
     except (TypeError, ValueError) as exc:
         raise HTTPException(status_code=400, detail=f"{key} must be numeric") from exc
+
+
+def _parse_fob_value(raw_value: object) -> float | None:
+    if raw_value in (None, "", 0, "0"):
+        return None
+    try:
+        return float(raw_value)
+    except (TypeError, ValueError) as exc:
+        raise HTTPException(status_code=400, detail="finalFobEur must be numeric") from exc
 
 
 def _export_filter_params(body: dict) -> dict:
@@ -269,7 +279,7 @@ def list_colour_surcharges(
 def update_colour_surcharge(
     body: ColourSurchargeUpdate,
     session: Session = Depends(get_db_session),
-    _=Depends(require_min_role("editor")),
+    user=Depends(require_min_role("editor")),
 ) -> dict:
     try:
         rule = repo.upsert_colour_surcharge(
@@ -277,6 +287,12 @@ def update_colour_surcharge(
             body.brand,
             body.colourType,
             body.surchargeEur,
+        )
+        reprice = repo.reprice_brand_colour_surcharge_fobs(
+            session,
+            body.brand,
+            body.colourType,
+            changed_by=user.name,
         )
         session.commit()
         session.refresh(rule)
@@ -295,6 +311,75 @@ def update_colour_surcharge(
         "colourType": rule.colour_type,
         "surchargeEur": float(rule.surcharge_eur),
         "isActive": rule.is_active,
+        "reprice": reprice,
+    }
+
+
+@router.get("/special-colour-surcharges")
+def list_special_colour_surcharges(
+    session: Session = Depends(get_db_session),
+    _=Depends(require_min_role("viewer")),
+) -> dict:
+    rules = repo.list_special_colour_surcharges(session)
+    return {
+        "items": [
+            {
+                "specialColourSurchargeRuleId": str(r.special_colour_surcharge_rule_id),
+                "brand": r.brand,
+                "modelName": r.model_name,
+                "colourCode": r.colour_code,
+                "colourName": r.colour_name,
+                "surchargeEur": float(r.surcharge_eur),
+                "isActive": r.is_active,
+            }
+            for r in rules
+        ],
+    }
+
+
+@router.patch("/special-colour-surcharges")
+def update_special_colour_surcharge(
+    body: SpecialColourSurchargeUpdate,
+    session: Session = Depends(get_db_session),
+    user=Depends(require_min_role("editor")),
+) -> dict:
+    try:
+        rule = repo.upsert_special_colour_surcharge(
+            session,
+            body.brand,
+            body.colourCode,
+            body.surchargeEur,
+            model_name=body.modelName,
+            colour_name=body.colourName,
+        )
+        session.flush()
+        reprice = repo.reprice_special_colour_surcharge_fobs(
+            session,
+            rule.brand,
+            rule.colour_code,
+            model_name=rule.model_name,
+            changed_by=user.name,
+        )
+        session.commit()
+        session.refresh(rule)
+    except ValueError as exc:
+        session.rollback()
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except IntegrityError as exc:
+        session.rollback()
+        raise HTTPException(
+            status_code=409,
+            detail="Special colour surcharge rule already exists",
+        ) from exc
+    return {
+        "specialColourSurchargeRuleId": str(rule.special_colour_surcharge_rule_id),
+        "brand": rule.brand,
+        "modelName": rule.model_name,
+        "colourCode": rule.colour_code,
+        "colourName": rule.colour_name,
+        "surchargeEur": float(rule.surcharge_eur),
+        "isActive": rule.is_active,
+        "reprice": reprice,
     }
 
 
@@ -508,13 +593,46 @@ def patch_colour_code(
     sku = repo.get_sku_by_material_code(session, material_code)
     if not sku:
         raise HTTPException(status_code=404)
-    new_code = body.get("colourCode", "").upper()
-    if new_code and "**" in (sku.material_code or ""):
-        sku.material_code = sku.material_code.replace("**", new_code)
+    old_material_code = sku.material_code
+    old_colour_code = clean_text(sku.exterior_color_code).upper()
+    new_code = clean_text(body.get("colourCode")).upper()
+    if not new_code:
+        sku.exterior_color_code = ""
+        sku.colour_code_confirmed = False
+        session.commit()
+        return {
+            "materialCode": sku.material_code,
+            "colourCode": "",
+            "colourCodeConfirmed": False,
+        }
+
     sku.exterior_color_code = new_code
     sku.colour_code_confirmed = True
+    target_material_code = old_material_code
+    try:
+        bom_template = clean_text(sku.bom_template).upper()
+        if bom_template and "**" in bom_template:
+            mapping = repo.update_bom_template_material_codes(
+                session,
+                [old_material_code],
+                bom_template,
+            )
+            target_material_code = mapping.get(old_material_code, old_material_code)
+        elif old_colour_code and old_colour_code in old_material_code:
+            target_material_code = old_material_code.replace(old_colour_code, new_code, 1)
+            repo.update_sku_material_code(session, old_material_code, target_material_code)
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        detail = str(exc)
+        status_code = 409 if "already exists" in detail.lower() else 400
+        raise HTTPException(status_code=status_code, detail=detail) from exc
     session.commit()
-    return {"materialCode": sku.material_code, "colourCode": new_code}
+    return {
+        "materialCode": target_material_code,
+        "colourCode": new_code,
+        "colourCodeConfirmed": True,
+    }
 
 
 @router.patch("/material-skus/{material_code}/material-code")
@@ -598,8 +716,13 @@ def patch_sku_colour_tier(
     ok = repo.update_sku_colour_tier(session, material_code, colour_tier)
     if not ok:
         raise HTTPException(status_code=404, detail="SKU not found")
+    reprice = repo.reprice_sku_colour_surcharge_fobs(
+        session,
+        material_code,
+        changed_by=user.name,
+    )
     session.commit()
-    return {"materialCode": material_code, "colourTier": colour_tier}
+    return {"materialCode": material_code, "colourTier": colour_tier, "reprice": reprice}
 
 
 @router.patch("/material-skus/{material_code}/interior")
@@ -811,6 +934,12 @@ def delete_material_sku(
     user=Depends(require_min_role("admin")),
 ) -> dict:
     """Hard-delete a material SKU and its FOB records (admin only)."""
+    result = _delete_material_sku_records(session, material_code)
+    session.commit()
+    return result
+
+
+def _delete_material_sku_records(session: Session, material_code: str) -> dict:
     existing_sku = repo.get_sku_by_material_code_any_status(session, material_code)
     bom_template = existing_sku.bom_template if existing_sku else None
     deleted = repo.delete_sku(session, material_code)
@@ -830,12 +959,34 @@ def delete_material_sku(
         )
     )
     deleted_template_finance = repo.delete_orphan_template_finance(session, bom_template)
-    session.commit()
     return {
         "materialCode": material_code,
         "deleted": True,
         "deletedTemplateFinance": deleted_template_finance,
     }
+
+
+@router.delete("/material-skus")
+def delete_material_skus_bulk(
+    body: dict,
+    session: Session = Depends(get_db_session),
+    user=Depends(require_min_role("admin")),
+) -> dict:
+    """Hard-delete many material SKUs and their FOB records in one transaction."""
+    material_codes = body.get("materialCodes") or body.get("material_codes")
+    if not isinstance(material_codes, list) or not material_codes:
+        raise HTTPException(status_code=400, detail="materialCodes must be a non-empty list")
+    if len(material_codes) > 200:
+        raise HTTPException(status_code=400, detail="materialCodes is limited to 200 rows")
+    normalized_codes = []
+    for index, code in enumerate(material_codes):
+        material_code = clean_text(code).upper()
+        if not material_code:
+            raise HTTPException(status_code=400, detail=f"materialCodes[{index}] is required")
+        normalized_codes.append(material_code)
+    results = [_delete_material_sku_records(session, material_code) for material_code in normalized_codes]
+    session.commit()
+    return {"deleted": len(results), "items": results}
 
 
 @router.patch("/material-skus/{material_code}/fob")
@@ -845,17 +996,31 @@ def patch_sku_fob(
     session: Session = Depends(get_db_session),
     user=Depends(require_min_role("editor")),
 ) -> dict:
-    """Update or create FOB for a material code in a specific country. Send 0 or null to clear."""
-    country = body.get("countryCode", "")
-    fob_raw = body.get("finalFobEur")
+    """Update or create FOB for a material code in a specific country. Send null or blank to clear."""
+    country = clean_text(body.get("countryCode") or body.get("country_code")).upper()
     if not country:
         raise HTTPException(status_code=400, detail="countryCode is required")
-    fob_val = fob_raw if fob_raw is None else float(fob_raw)
+    if "finalFobEur" not in body and "baseFobEur" not in body:
+        raise HTTPException(status_code=400, detail="finalFobEur is required")
+    if not repo.get_sku_by_material_code_any_status(session, material_code):
+        raise HTTPException(status_code=404, detail="Material code not found")
+
+    fob_raw = body.get("finalFobEur") if "finalFobEur" in body else body.get("baseFobEur")
+    fob_val = _parse_fob_value(fob_raw)
     pt_code = body.get("paymentTermCode")
     result = repo.update_sku_fob_for_country(
         session, material_code, country, fob_val, pt_code,
     )
-    if not result:
+    if fob_val is None:
+        session.commit()
+        return {
+            "materialCode": material_code,
+            "countryCode": country,
+            "finalFobEur": None,
+            "paymentTermCode": pt_code,
+            "cleared": True,
+        }
+    if result is None:
         raise HTTPException(status_code=404, detail="Could not update FOB")
     session.commit()
     return {
@@ -864,6 +1029,135 @@ def patch_sku_fob(
         "finalFobEur": float(result.final_fob_eur) if result.final_fob_eur is not None else None,
         "paymentTermCode": result.payment_term_code,
     }
+
+
+@router.post("/material-skus/fobs/bulk")
+def patch_sku_fobs_bulk(
+    body: dict,
+    session: Session = Depends(get_db_session),
+    user=Depends(require_min_role("editor")),
+) -> dict:
+    """Update or clear many material-country FOB cells in one transaction."""
+    updates = body.get("updates")
+    if not isinstance(updates, list) or not updates:
+        raise HTTPException(status_code=400, detail="updates must be a non-empty list")
+    if len(updates) > 500:
+        raise HTTPException(status_code=400, detail="updates is limited to 500 rows")
+
+    normalized_updates: list[dict] = []
+    missing_materials: list[str] = []
+    for index, update_body in enumerate(updates):
+        if not isinstance(update_body, dict):
+            raise HTTPException(status_code=400, detail=f"updates[{index}] must be an object")
+        material_code = clean_text(update_body.get("materialCode") or update_body.get("material_code")).upper()
+        country = clean_text(update_body.get("countryCode") or update_body.get("country_code")).upper()
+        if not material_code or not country:
+            raise HTTPException(status_code=400, detail=f"updates[{index}] materialCode and countryCode are required")
+        if len(country) != 2:
+            raise HTTPException(status_code=400, detail=f"updates[{index}] countryCode must be 2 letters")
+        if "finalFobEur" not in update_body and "baseFobEur" not in update_body:
+            raise HTTPException(status_code=400, detail=f"updates[{index}] finalFobEur is required")
+        if not repo.get_sku_by_material_code_any_status(session, material_code):
+            missing_materials.append(material_code)
+            continue
+        fob_raw = update_body.get("finalFobEur") if "finalFobEur" in update_body else update_body.get("baseFobEur")
+        normalized_updates.append({
+            "materialCode": material_code,
+            "countryCode": country,
+            "finalFobEur": _parse_fob_value(fob_raw),
+            "paymentTermCode": update_body.get("paymentTermCode"),
+        })
+
+    if missing_materials:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Material code not found: {', '.join(sorted(set(missing_materials))[:5])}",
+        )
+
+    updated = 0
+    cleared = 0
+    unchanged = 0
+    for update_body in normalized_updates:
+        result = repo.update_sku_fob_for_country(
+            session,
+            update_body["materialCode"],
+            update_body["countryCode"],
+            update_body["finalFobEur"],
+            update_body["paymentTermCode"],
+        )
+        if result is None:
+            unchanged += 1
+        elif update_body["finalFobEur"] is None:
+            cleared += 1
+        else:
+            updated += 1
+    session.commit()
+    return {
+        "updated": updated,
+        "cleared": cleared,
+        "unchanged": unchanged,
+        "total": len(normalized_updates),
+    }
+
+
+@router.delete("/countries/{country}/fobs")
+def delete_country_fobs(
+    country: str,
+    session: Session = Depends(get_db_session),
+    _=Depends(require_min_role("editor")),
+) -> dict:
+    """Clear one BOM Admin country column by deactivating all active FOB rows."""
+    country_code = clean_text(country).upper()
+    if not country_code:
+        raise HTTPException(status_code=400, detail="country is required")
+    if len(country_code) != 2:
+        raise HTTPException(status_code=400, detail="Country code must be 2 letters")
+    cleared = repo.clear_country_fobs(session, country_code)
+    session.commit()
+    return {"countryCode": country_code, "cleared": cleared}
+
+
+@router.get("/countries/fob-trash")
+def list_country_fob_trash(
+    session: Session = Depends(get_db_session),
+    _=Depends(require_min_role("editor")),
+) -> dict:
+    """List soft-deleted BOM FOB country columns available for restore or purge."""
+    return {"items": repo.list_country_fob_trash(session)}
+
+
+@router.post("/countries/{country}/fobs/restore")
+def restore_country_fobs(
+    country: str,
+    session: Session = Depends(get_db_session),
+    _=Depends(require_min_role("editor")),
+) -> dict:
+    """Restore one soft-deleted BOM FOB country column from trash."""
+    country_code = clean_text(country).upper()
+    if not country_code:
+        raise HTTPException(status_code=400, detail="country is required")
+    if len(country_code) != 2:
+        raise HTTPException(status_code=400, detail="Country code must be 2 letters")
+    result = repo.restore_country_fobs_from_trash(session, country_code)
+    session.commit()
+    return result
+
+
+@router.delete("/countries/{country}/fobs/trash")
+def purge_country_fob_trash(
+    country: str,
+    session: Session = Depends(get_db_session),
+    _=Depends(require_min_role("editor")),
+) -> dict:
+    """Permanently delete trashed BOM FOB rows for one country."""
+    country_code = clean_text(country).upper()
+    if not country_code:
+        raise HTTPException(status_code=400, detail="country is required")
+    if len(country_code) != 2:
+        raise HTTPException(status_code=400, detail="Country code must be 2 letters")
+    purged = repo.purge_country_fob_trash(session, country_code)
+    session.commit()
+    return {"countryCode": country_code, "purged": purged}
 
 
 @router.post("/countries/copy-fobs")
@@ -951,6 +1245,17 @@ def create_material_sku(
     powertrain = clean_text(body.get("powertrain")) or "Other"
     bom_template = clean_text(body.get("bomTemplate")).upper() or material_code
     source_bom_template = clean_text(body.get("sourceBomTemplate")).upper()
+    colour_tier = clean_text(body.get("colourTier") or "single").lower()
+    if colour_tier not in {"single", "dual", "special"}:
+        raise HTTPException(status_code=400, detail="colourTier must be single, dual, or special")
+    lifecycle_status = clean_text(body.get("lifecycleStatus") or "active") or "active"
+    effective_from = clean_text(body.get("effectiveFrom")) or None
+    effective_to = clean_text(body.get("effectiveTo")) or None
+    interior_color_name = clean_text(body.get("interiorColorName")) or None
+    edition_tag = clean_text(body.get("editionTag")) or None
+    fob_updates = body.get("fobs") or []
+    if not isinstance(fob_updates, list):
+        raise HTTPException(status_code=400, detail="fobs must be a list")
 
     missing = [
         label
@@ -1007,7 +1312,12 @@ def create_material_sku(
         bom_template=bom_template,
         powertrain=powertrain,
         colour_hex=colour_hex,
-        lifecycle_status="active",
+        colour_tier=colour_tier,
+        interior_color_name=interior_color_name,
+        edition_tag=edition_tag,
+        lifecycle_status=lifecycle_status,
+        effective_from_month=effective_from,
+        effective_to_month=effective_to,
         is_active=True,
         is_published=False,
         baseline_version_id=baseline.baseline_version_id,
@@ -1019,6 +1329,29 @@ def create_material_sku(
         bom_template,
         updated_by=user.name,
     )
+    fobs_created = 0
+    for index, fob_body in enumerate(fob_updates):
+        if not isinstance(fob_body, dict):
+            raise HTTPException(status_code=400, detail=f"fobs[{index}] must be an object")
+        country = clean_text(fob_body.get("countryCode") or fob_body.get("country_code")).upper()
+        if not country:
+            raise HTTPException(status_code=400, detail=f"fobs[{index}] countryCode is required")
+        if len(country) != 2:
+            raise HTTPException(status_code=400, detail=f"fobs[{index}] countryCode must be 2 letters")
+        if "finalFobEur" not in fob_body and "baseFobEur" not in fob_body:
+            raise HTTPException(status_code=400, detail=f"fobs[{index}] finalFobEur is required")
+        fob_raw = fob_body.get("finalFobEur") if "finalFobEur" in fob_body else fob_body.get("baseFobEur")
+        fob_value = _parse_fob_value(fob_raw)
+        if fob_value is None:
+            continue
+        repo.update_sku_fob_for_country(
+            session,
+            material_code,
+            country,
+            fob_value,
+            fob_body.get("paymentTermCode"),
+        )
+        fobs_created += 1
     try:
         session.commit()
     except IntegrityError as exc:
@@ -1031,6 +1364,7 @@ def create_material_sku(
         "materialCode": sku.material_code,
         "id": str(sku.material_sku_id),
         "copiedFinanceRows": copied_finance_rows,
+        "fobsCreated": fobs_created,
     }
 
 

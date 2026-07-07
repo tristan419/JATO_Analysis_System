@@ -111,6 +111,7 @@ import type {
   BaselineVersion,
   ColourHexRule,
   ColourSurchargeRule,
+  SpecialColourSurchargeRule,
   CountryMaterialFinanceRow,
   CountryMaterialFinanceUpdate,
   CountryPaymentTerm,
@@ -141,8 +142,11 @@ import type {
   VehicleAllocationListResponse,
   VehicleAllocationPlan,
   VehicleAllocationSearchResult,
+  VehicleStatusFlowConfig,
+  VehicleImportParsedRowsPayload,
   VehicleImportPreview,
   VehicleImportResult,
+  VehicleVinListExtract,
 } from "../types/orderGeniusVehicle";
 import type {
   CountryChatDeckResponse,
@@ -3666,6 +3670,17 @@ export const api = {
       body: JSON.stringify(body),
     }),
 
+  getOrderGeniusSpecialColourSurcharges: () =>
+    request<{ items: SpecialColourSurchargeRule[] }>(
+      "/order-genius/special-colour-surcharges",
+    ),
+
+  updateOrderGeniusSpecialColourSurcharge: (body: { brand: string; modelName?: string | null; colourCode: string; colourName?: string | null; surchargeEur: number }) =>
+    request<SpecialColourSurchargeRule & { reprice?: Record<string, number | string> }>(
+      "/order-genius/special-colour-surcharges",
+      { method: "PATCH", body: JSON.stringify(body) },
+    ),
+
   getOrderGeniusColourHexRules: () =>
     request<{ items: ColourHexRule[] }>("/order-genius/colour-hex-rules"),
 
@@ -3801,6 +3816,16 @@ export const api = {
       { method: "POST", body: JSON.stringify(body) },
     ),
 
+  getVehicleAllocationStatusFlow: (params: { country?: string; orderingAccountCode?: string } = {}) => {
+    const qs = new URLSearchParams();
+    appendSearchParam(qs, "country", params.country);
+    appendSearchParam(qs, "ordering_account", params.orderingAccountCode);
+    const suffix = qs.toString();
+    return request<VehicleStatusFlowConfig>(
+      `/order-genius/vehicle-allocation/status-flow${suffix ? `?${suffix}` : ""}`,
+    );
+  },
+
   searchVehicleAllocation: (keyword: string) => {
     const qs = new URLSearchParams({ keyword });
     return request<VehicleAllocationSearchResult>(
@@ -3833,6 +3858,21 @@ export const api = {
     );
   },
 
+  extractVehicleAllocationVinList: (file: File) => {
+    const form = new FormData();
+    form.append("file", file);
+    return request<VehicleVinListExtract>(
+      "/order-genius/vehicle-allocation/import/vin-list",
+      { method: "POST", body: form },
+    );
+  },
+
+  previewVehicleAllocationParsedRows: (payload: VehicleImportParsedRowsPayload) =>
+    request<VehicleImportPreview>(
+      "/order-genius/vehicle-allocation/import/preview-rows",
+      { method: "POST", body: JSON.stringify(payload) },
+    ),
+
   applyVehicleAllocationImport: (importId: string) =>
     request<VehicleImportResult>(
       `/order-genius/vehicle-allocation/import/${encodeURIComponent(importId)}/apply`,
@@ -3855,11 +3895,40 @@ export const api = {
   updateSkuLifecycle: (materialCode: string, body: { lifecycleStatus: string; effectiveFrom?: string; effectiveTo?: string; rowVersion: number }) =>
     request<any>(`/order-genius/material-skus/${encodeURIComponent(materialCode)}/lifecycle`, { method: "PATCH", body: JSON.stringify(body) }),
 
-  updateSkuFob: (materialCode: string, body: { countryCode: string; finalFobEur: number; paymentTermCode?: string }) =>
+  updateSkuFob: (materialCode: string, body: { countryCode: string; finalFobEur: number | null; paymentTermCode?: string | null }) =>
     request<any>(`/order-genius/material-skus/${encodeURIComponent(materialCode)}/fob`, { method: "PATCH", body: JSON.stringify(body) }),
+
+  updateSkuFobsBulk: (body: { updates: { materialCode: string; countryCode: string; finalFobEur: number | null; paymentTermCode?: string | null }[] }) =>
+    request<{ updated: number; cleared: number; unchanged: number; total: number }>(
+      "/order-genius/material-skus/fobs/bulk",
+      { method: "POST", body: JSON.stringify(body) },
+    ),
 
   getSkuFobDetail: (materialCode: string, country: string) =>
     request<any>(`/order-genius/material-skus/${encodeURIComponent(materialCode)}/fob?country=${encodeURIComponent(country)}`),
+
+  deleteCountryFobs: (country: string) =>
+    request<{ countryCode: string; cleared: number }>(
+      `/order-genius/countries/${encodeURIComponent(country)}/fobs`,
+      { method: "DELETE" },
+    ),
+
+  getCountryFobTrash: () =>
+    request<{ items: { countryCode: string; rows: number; deletedAtUtc?: string | null }[] }>(
+      "/order-genius/countries/fob-trash",
+    ),
+
+  restoreCountryFobs: (country: string) =>
+    request<{ countryCode: string; rows: number; restored: number; skippedActiveConflict: number }>(
+      `/order-genius/countries/${encodeURIComponent(country)}/fobs/restore`,
+      { method: "POST" },
+    ),
+
+  purgeCountryFobTrash: (country: string) =>
+    request<{ countryCode: string; purged: number }>(
+      `/order-genius/countries/${encodeURIComponent(country)}/fobs/trash`,
+      { method: "DELETE" },
+    ),
 
   copyCountryFobs: (body: { sourceCountryCode: string; targetCountryCode: string; overwriteExisting?: boolean }) =>
     request<{ sourceCountryCode: string; targetCountryCode: string; sourceRows: number; created: number; updated: number; skipped: number; unchanged: number; targetPaymentTermCode: string | null }>(
@@ -3876,7 +3945,7 @@ export const api = {
   createPaymentTerm: (body: { countryCode: string; countryName: string; paymentTermCode: string; paymentMethod: string; lcDays: number }) =>
     request<any>("/order-genius/payment-terms/countries", { method: "POST", body: JSON.stringify(body) }),
 
-  createMaterialSku: (body: { materialCode: string; brand?: string; modelName?: string; version?: string; colour?: string; colourCode?: string; colourHex?: string | null; colourType?: string; powertrain?: string; bomTemplate?: string; sourceBomTemplate?: string }) =>
+  createMaterialSku: (body: { materialCode: string; brand?: string; modelName?: string; version?: string; colour?: string; colourCode?: string; colourHex?: string | null; colourType?: string; colourTier?: string; powertrain?: string; bomTemplate?: string; sourceBomTemplate?: string; interiorColorName?: string | null; editionTag?: string | null; lifecycleStatus?: string; effectiveFrom?: string | null; effectiveTo?: string | null; fobs?: { countryCode: string; finalFobEur: number; paymentTermCode?: string | null }[] }) =>
     request<any>("/order-genius/material-skus", { method: "POST", body: JSON.stringify(body) }),
 
   updateSkuMetadata: (materialCode: string, body: { materialCodes?: string[]; brand?: string; modelName?: string; version?: string; powertrain?: string }) =>
@@ -3908,6 +3977,12 @@ export const api = {
 
   deleteMaterialSku: (materialCode: string) =>
     request<any>(`/order-genius/material-skus/${encodeURIComponent(materialCode)}`, { method: "DELETE" }),
+
+  deleteMaterialSkusBulk: (materialCodes: string[]) =>
+    request<{ deleted: number; items: any[] }>("/order-genius/material-skus", {
+      method: "DELETE",
+      body: JSON.stringify({ materialCodes }),
+    }),
 
   updateSkuInterior: (materialCode: string, body: { interiorColorName?: string | null; editionTag?: string | null; interiorColourCode?: string | null }) =>
     request<any>(`/order-genius/material-skus/${encodeURIComponent(materialCode)}/interior`, { method: "PATCH", body: JSON.stringify(body) }),

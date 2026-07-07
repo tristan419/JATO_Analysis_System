@@ -7,7 +7,9 @@ import shutil
 from datetime import date
 from uuid import uuid4
 
-from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile
+from typing import Any
+
+from fastapi import APIRouter, Body, Depends, File, HTTPException, Query, UploadFile
 from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
 
@@ -15,7 +17,10 @@ from app.core.config import PROJECT_ROOT
 from app.core.security import UserContext, require_min_role, require_roles, validate_country_access
 from app.db.session import get_db_session
 from app.infra import order_genius_vehicle_repository as vehicle_repo
-from app.services.order_genius_vehicle_import_parser import parse_vehicle_allocation_xlsx
+from app.services.order_genius_vehicle_import_parser import (
+    parse_vehicle_allocation_xlsx,
+    parse_vehicle_vin_list_xlsx,
+)
 from app.services.order_genius_vehicle_service import (
     apply_vehicle_import,
     bulk_update_vehicle_units,
@@ -38,6 +43,7 @@ from app.services.order_genius_vehicle_service import (
     update_pi_line,
     update_vehicle_unit,
 )
+from app.services.vehicle_status_flow_config import get_vehicle_status_flow_config
 
 router = APIRouter(
     prefix="/order-genius/vehicle-allocation",
@@ -76,6 +82,21 @@ def _validate_country(session: Session, user: UserContext, country: str | None) 
 def _validate_optional_country(session: Session, user: UserContext, country: str | None) -> None:
     if country or user.role == "order_filler":
         _validate_country(session, user, country)
+
+
+def _normalise_import_rows_payload(payload: object) -> list[dict[str, Any]]:
+    raw_rows = payload.get("rows") if isinstance(payload, dict) else payload
+    if not isinstance(raw_rows, list):
+        raise HTTPException(status_code=400, detail="rows must be a list")
+
+    rows: list[dict[str, Any]] = []
+    for index, raw_row in enumerate(raw_rows, start=1):
+        if not isinstance(raw_row, dict):
+            raise HTTPException(status_code=400, detail=f"rows[{index - 1}] must be an object")
+        row = dict(raw_row)
+        row.setdefault("sourceRow", index)
+        rows.append(row)
+    return rows
 
 
 def _validate_pi_detail_access(session: Session, user: UserContext, detail: dict) -> None:
@@ -397,6 +418,18 @@ def bulk_update_vehicles(
     return result
 
 
+@router.get("/status-flow")
+def get_status_flow_config(
+    country: str | None = Query(default=None),
+    ordering_account: str | None = Query(default=None),
+    session: Session = Depends(get_db_session),
+    user: UserContext = Depends(require_min_role("viewer")),
+) -> dict:
+    selected_country = _country(country)
+    _validate_optional_country(session, user, selected_country)
+    return get_vehicle_status_flow_config(selected_country, _clean(ordering_account))
+
+
 @router.get("/search")
 def search_allocation(
     keyword: str = Query(min_length=1),
@@ -478,6 +511,52 @@ def preview_import(
     json_path = IMPORT_SESSION_DIR / f"{import_id}.json"
     with json_path.open("w") as handle:
         json.dump({"rows": rows}, handle)
+    preview["importId"] = import_id
+    return preview
+
+
+@router.post("/import/vin-list")
+def extract_vin_list_import(
+    file: UploadFile = File(...),
+    user: UserContext = Depends(require_roles("order_filler", "editor", "admin")),
+) -> dict:
+    IMPORT_SESSION_DIR.mkdir(parents=True, exist_ok=True)
+    tmp_path = IMPORT_SESSION_DIR / f"{uuid4()}-vin-list.xlsx"
+    try:
+        with tmp_path.open("wb") as handle:
+            shutil.copyfileobj(file.file, handle)
+    finally:
+        file.file.close()
+
+    try:
+        vins = parse_vehicle_vin_list_xlsx(tmp_path)
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=f"Failed to parse VIN file: {exc}") from exc
+    finally:
+        tmp_path.unlink(missing_ok=True)
+
+    return {
+        "fileName": file.filename,
+        "totalRows": len(vins),
+        "vins": vins,
+        "uploadedBy": user.name,
+    }
+
+
+@router.post("/import/preview-rows")
+def preview_import_rows(
+    body: object = Body(...),
+    session: Session = Depends(get_db_session),
+    user: UserContext = Depends(require_roles("order_filler", "editor", "admin")),
+) -> dict:
+    rows = _normalise_import_rows_payload(body)
+    _validate_import_access(session, user, rows)
+    preview = preview_vehicle_import(session, rows)
+    import_id = str(uuid4())
+    IMPORT_SESSION_DIR.mkdir(parents=True, exist_ok=True)
+    json_path = IMPORT_SESSION_DIR / f"{import_id}.json"
+    with json_path.open("w") as handle:
+        json.dump({"rows": rows, "source": "parsed_rows"}, handle)
     preview["importId"] = import_id
     return preview
 

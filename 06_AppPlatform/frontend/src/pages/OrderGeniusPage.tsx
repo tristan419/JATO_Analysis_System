@@ -39,6 +39,7 @@ import type {
   QuantityCellUpdate,
   QuantityImportPreview,
   QuantityImportResult,
+  SpecialColourSurchargeRule,
 } from "../types/orderGenius";
 
 const CHUNK_SIZE = 5 * 1024 * 1024; // 5 MB
@@ -59,8 +60,12 @@ const DEFAULT_COLOUR_SURCHARGES: Record<string, number> = {
   "JAECOO|dual": 300,
   "JAECOO|special": 300,
 };
-const BOM_ADMIN_FIXED_COLUMN_COUNT = 9;
+const BOM_ADMIN_FIXED_COLUMN_COUNT = 10;
 const BOM_ADMIN_COUNTRY_COLUMN_WIDTH = 75;
+const BOM_ADMIN_NOTE_COLUMN_WIDTHS = {
+  collapsed: 44,
+  expanded: 180,
+} as const;
 type BomAdminColourTier = "single" | "dual" | "special";
 const BOM_ADMIN_STICKY_COLUMN_WIDTHS = {
   bom: 150,
@@ -86,6 +91,7 @@ const BOM_ADMIN_STICKY_COLUMN_LEFTS = {
 } as const;
 const BOM_ADMIN_TRAILING_COLUMN_WIDTHS = {
   lifecycle: 90,
+  note: BOM_ADMIN_NOTE_COLUMN_WIDTHS.collapsed,
   actions: 146,
   from: 92,
   to: 92,
@@ -2199,8 +2205,11 @@ type BomBulkFobEditor = {
 type BomColourSwatchEditor = {
   materialCode: string;
   brand: string;
+  modelName: string;
   colourCode: string;
   colourName: string;
+  colourTier: BomAdminColourTier;
+  surchargeDraft: string;
   isDual: boolean;
   hex1: string;
   hex2: string;
@@ -2225,6 +2234,12 @@ interface BomFinanceDrawerScope {
   title: string;
   scopeLabel: string;
 }
+
+type BomCountryFobTrashItem = {
+  countryCode: string;
+  rows: number;
+  deletedAtUtc?: string | null;
+};
 
 interface BomAdminPanelProps {
   initialCopyTargetCountry?: string | null;
@@ -2321,6 +2336,11 @@ function BomAdminPanel({
   const [copyCountryForm, setCopyCountryForm] = useState({ sourceCountryCode: "", targetCountryCode: "", overwriteExisting: false });
   const [copyCountryMessage, setCopyCountryMessage] = useState("");
   const [copyingCountry, setCopyingCountry] = useState(false);
+  const [deletingCountryFobKey, setDeletingCountryFobKey] = useState<string | null>(null);
+  const [countryFobTrash, setCountryFobTrash] = useState<BomCountryFobTrashItem[]>([]);
+  const [countryFobTrashLoading, setCountryFobTrashLoading] = useState(false);
+  const [countryFobTrashActionKey, setCountryFobTrashActionKey] = useState<string | null>(null);
+  const [countryFobTrashMessage, setCountryFobTrashMessage] = useState("");
   const [adjustCountryForm, setAdjustCountryForm] = useState({ countryCode: "", deltaEur: "" });
   const [adjustCountryMessage, setAdjustCountryMessage] = useState("");
   const [adjustingCountry, setAdjustingCountry] = useState(false);
@@ -2331,10 +2351,12 @@ function BomAdminPanel({
   const [bulkFobEditors, setBulkFobEditors] = useState<Record<string, BomBulkFobEditor>>({});
   const [bulkFobErrors, setBulkFobErrors] = useState<Record<string, string>>({});
   const [bulkFobSavingKey, setBulkFobSavingKey] = useState<string | null>(null);
+  const [showBomNoteColumn, setShowBomNoteColumn] = useState(false);
   const [colourSurchargeRules, setColourSurchargeRules] = useState<ColourSurchargeRule[]>([]);
   const [colourSurchargeDrafts, setColourSurchargeDrafts] = useState<Record<string, string>>({});
   const [colourSurchargeStatus, setColourSurchargeStatus] = useState("");
   const [savingColourSurcharges, setSavingColourSurcharges] = useState(false);
+  const [specialColourSurchargeRules, setSpecialColourSurchargeRules] = useState<SpecialColourSurchargeRule[]>([]);
   const [colourHexRules, setColourHexRules] = useState<ColourHexRule[]>([]);
   const [colourHexRuleStatus, setColourHexRuleStatus] = useState("");
   const [savingColourHexRuleKey, setSavingColourHexRuleKey] = useState<string | null>(null);
@@ -2357,7 +2379,9 @@ function BomAdminPanel({
 
   // Double-confirm delete state + performance refs
   const [pendingDeletes, setPendingDeletes] = useState<Set<string>>(new Set());
+  const [pendingCountryDeletes, setPendingCountryDeletes] = useState<Set<string>>(new Set());
   const pendingDeleteTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const pendingCountryDeleteTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const loadRef = useRef(false);  // prevent concurrent loads
   const currentLoadKeyRef = useRef<string | null>(null);
   const pendingLoadKeyRef = useRef<string | null>(null);
@@ -2424,7 +2448,14 @@ function BomAdminPanel({
     }
     return map;
   }, [accountCountryOptions]);
-  const bomAdminTableMinWidth = BOM_ADMIN_FIXED_COLUMN_WIDTH + sortedCountries.length * BOM_ADMIN_COUNTRY_COLUMN_WIDTH;
+  const bomNoteColumnWidth = showBomNoteColumn
+    ? BOM_ADMIN_NOTE_COLUMN_WIDTHS.expanded
+    : BOM_ADMIN_NOTE_COLUMN_WIDTHS.collapsed;
+  const bomAdminTableMinWidth =
+    BOM_ADMIN_FIXED_COLUMN_WIDTH
+    - BOM_ADMIN_TRAILING_COLUMN_WIDTHS.note
+    + bomNoteColumnWidth
+    + sortedCountries.length * BOM_ADMIN_COUNTRY_COLUMN_WIDTH;
   const renderBomAdminColumnGroup = () => (
     <colgroup>
       <col style={{ width: BOM_ADMIN_STICKY_COLUMN_WIDTHS.bom }} />
@@ -2433,6 +2464,7 @@ function BomAdminPanel({
       <col style={{ width: BOM_ADMIN_STICKY_COLUMN_WIDTHS.dual }} />
       <col style={{ width: BOM_ADMIN_STICKY_COLUMN_WIDTHS.special }} />
       <col style={{ width: BOM_ADMIN_TRAILING_COLUMN_WIDTHS.lifecycle }} />
+      <col style={{ width: bomNoteColumnWidth }} />
       <col style={{ width: BOM_ADMIN_TRAILING_COLUMN_WIDTHS.actions }} />
       <col style={{ width: BOM_ADMIN_TRAILING_COLUMN_WIDTHS.from }} />
       <col style={{ width: BOM_ADMIN_TRAILING_COLUMN_WIDTHS.to }} />
@@ -2464,6 +2496,31 @@ function BomAdminPanel({
       (item) => colourSurchargeKey(item.brand, item.colourType) === key,
     );
     return rule ? Number(rule.surchargeEur) : DEFAULT_COLOUR_SURCHARGES[key] ?? 0;
+  };
+
+  const getSpecialColourSurchargeAmount = (
+    brand: string,
+    modelName: string,
+    colourCode: string,
+  ): number => {
+    const normalizedBrand = brand.trim().toUpperCase();
+    const normalizedModel = modelName.trim().toUpperCase();
+    const normalizedCode = colourCode.trim().toUpperCase();
+    const exact = specialColourSurchargeRules.find(
+      (item) =>
+        item.brand.trim().toUpperCase() === normalizedBrand
+        && (item.modelName || "").trim().toUpperCase() === normalizedModel
+        && item.colourCode.trim().toUpperCase() === normalizedCode,
+    );
+    if (exact) return Number(exact.surchargeEur);
+    const fallback = specialColourSurchargeRules.find(
+      (item) =>
+        item.brand.trim().toUpperCase() === normalizedBrand
+        && !item.modelName
+        && item.colourCode.trim().toUpperCase() === normalizedCode,
+    );
+    if (fallback) return Number(fallback.surchargeEur);
+    return getColourSurchargeAmount(brand, "special");
   };
 
   const formatBomFobTooltip = (
@@ -2533,6 +2590,15 @@ function BomAdminPanel({
     }
   }, []);
 
+  const loadSpecialColourSurcharges = useCallback(async () => {
+    try {
+      const res = await api.getOrderGeniusSpecialColourSurcharges();
+      setSpecialColourSurchargeRules(res.items || []);
+    } catch (e) {
+      setColourSurchargeStatus(getErrorMessage(e));
+    }
+  }, []);
+
   const loadColourHexRules = useCallback(async () => {
     try {
       const res = await api.getOrderGeniusColourHexRules();
@@ -2543,7 +2609,7 @@ function BomAdminPanel({
     }
   }, []);
 
-  const load = useCallback(async (s?: string) => {
+  const load = useCallback(async (s?: string, options?: { background?: boolean }) => {
     const loadKey = s ?? "";
     if (loadRef.current) {
       if (currentLoadKeyRef.current !== loadKey) {
@@ -2553,7 +2619,7 @@ function BomAdminPanel({
     }
     loadRef.current = true;
     currentLoadKeyRef.current = loadKey;
-    setLoading(true);
+    if (!options?.background) setLoading(true);
     try {
       const isCountry = s && /^[A-Z]{2}$/.test(s);
       const params: any = {};
@@ -2568,24 +2634,147 @@ function BomAdminPanel({
     finally {
       loadRef.current = false;
       currentLoadKeyRef.current = null;
-      setLoading(false);
+      if (!options?.background) setLoading(false);
       const pendingLoadKey = pendingLoadKeyRef.current;
       pendingLoadKeyRef.current = null;
       if (pendingLoadKey !== null) {
         window.setTimeout(() => {
-          void load(pendingLoadKey || undefined);
+          void load(pendingLoadKey || undefined, options);
         }, 0);
       }
     }
   }, []);
 
+  const loadCountryFobTrash = useCallback(async () => {
+    setCountryFobTrashLoading(true);
+    try {
+      const res = await api.getCountryFobTrash();
+      setCountryFobTrash(res.items || []);
+    } catch (err) {
+      setCountryFobTrashMessage(`Error: ${getErrorMessage(err)}`);
+    } finally {
+      setCountryFobTrashLoading(false);
+    }
+  }, []);
+
   const scheduleLoad = useCallback((delay = 0) => {
     if (loadTimerRef.current) clearTimeout(loadTimerRef.current);
-    loadTimerRef.current = setTimeout(() => load(), delay);
+    loadTimerRef.current = setTimeout(() => load(undefined, { background: true }), delay);
   }, [load]);
 
+  const normalizeBomCode = (value: unknown): string =>
+    String(value || "").trim().toUpperCase();
+
+  const applyLocalFobUpdate = (
+    materialCodes: string[],
+    countryCode: string,
+    fobValue: number | null,
+    paymentTermCode?: string | null,
+  ) => {
+    const country = normalizeBomCode(countryCode);
+    const codeSet = new Set(materialCodes.map(normalizeBomCode).filter(Boolean));
+    if (!country || codeSet.size === 0) return;
+    const linkedCodeSet = new Set(codeSet);
+    for (const sku of skus) {
+      const materialCode = normalizeBomCode(sku.materialCode);
+      const bomTemplate = normalizeBomCode(sku.bomTemplate);
+      if (bomTemplate && (codeSet.has(materialCode) || codeSet.has(bomTemplate))) {
+        linkedCodeSet.add(bomTemplate);
+      }
+    }
+
+    setSkus((current) =>
+      current.map((sku) => {
+        const materialCode = normalizeBomCode(sku.materialCode);
+        const bomTemplate = normalizeBomCode(sku.bomTemplate);
+        if (!linkedCodeSet.has(materialCode) && !linkedCodeSet.has(bomTemplate)) return sku;
+        const currentFobs = (sku.fobByCountry || {}) as Record<string, BomDraftFobEntry>;
+        const nextFobs: Record<string, BomDraftFobEntry> = { ...currentFobs };
+        if (fobValue == null) {
+          if (!(country in nextFobs)) return sku;
+          delete nextFobs[country];
+        } else {
+          nextFobs[country] = {
+            ...currentFobs[country],
+            uploadedFobEur: fobValue,
+            finalFobEur: fobValue,
+            paymentTermCode: paymentTermCode ?? currentFobs[country]?.paymentTermCode ?? null,
+            fobSourceMode: "manual_edit",
+          };
+        }
+        return { ...sku, fobByCountry: nextFobs };
+      }),
+    );
+
+    if (fobValue != null) {
+      setCountries((current) => current.includes(country) ? current : [...current, country]);
+    }
+
+    const updateFinanceRows = (rows: CountryMaterialFinanceRow[]) =>
+      rows.map((row) => {
+        if (normalizeBomCode(row.countryCode) !== country) return row;
+        const rowMaterialCode = normalizeBomCode(row.materialCode);
+        const rowBomTemplate = normalizeBomCode(row.bomTemplate);
+        if (!linkedCodeSet.has(rowMaterialCode) && !linkedCodeSet.has(rowBomTemplate)) return row;
+        return { ...row, bomFobEur: fobValue, fobEur: fobValue };
+      });
+    setFinanceQuickRows(updateFinanceRows);
+    setFinanceDrawerRows(updateFinanceRows);
+    setFinanceQuickCard((current) => {
+      if (!current) return current;
+      if (normalizeBomCode(current.countryCode) !== country) return current;
+      const currentCode = normalizeBomCode(current.materialCode);
+      const currentMaterialCodes = current.materialCodes.map(normalizeBomCode);
+      if (!linkedCodeSet.has(currentCode) && !currentMaterialCodes.some((code) => linkedCodeSet.has(code))) return current;
+      return { ...current, fob: fobValue };
+    });
+  };
+
+  const applyLocalRemarkUpdate = (materialCodes: string[], remark: string) => {
+    const codeSet = new Set(materialCodes.map(normalizeBomCode).filter(Boolean));
+    if (codeSet.size === 0) return;
+    setSkus((current) =>
+      current.map((sku) => {
+        const materialCode = normalizeBomCode(sku.materialCode);
+        if (!codeSet.has(materialCode)) return sku;
+        return {
+          ...sku,
+          remark,
+          rowVersion: Number(sku.rowVersion || 1) + 1,
+        };
+      }),
+    );
+  };
+
+  const getBomNoteText = (rows: any[]): string => {
+    const notes = rows
+      .map((row) => String(row?.remark || "").trim())
+      .filter(Boolean);
+    return Array.from(new Set(notes)).join(" / ");
+  };
+
+  const handleBomRemarkSave = async (rows: any[], remark: string) => {
+    const nextRemark = remark.trim();
+    const materialRows = rows.filter((row) =>
+      normalizeBomCode(row?.materialCode) && row?.isActive !== false,
+    );
+    for (const row of materialRows) {
+      await api.updateSkuRemark(normalizeBomCode(row.materialCode), {
+        remark: nextRemark,
+        rowVersion: Number(row.rowVersion || 1),
+      });
+    }
+    applyLocalRemarkUpdate(
+      materialRows.map((row) => normalizeBomCode(row.materialCode)),
+      nextRemark,
+    );
+    scheduleLoad(200);
+  };
+
   useEffect(() => { load(); }, [load]);
+  useEffect(() => { void loadCountryFobTrash(); }, [loadCountryFobTrash]);
   useEffect(() => { void loadColourSurcharges(); }, [loadColourSurcharges]);
+  useEffect(() => { void loadSpecialColourSurcharges(); }, [loadSpecialColourSurcharges]);
   useEffect(() => { void loadColourHexRules(); }, [loadColourHexRules]);
 
   const replaceFinanceRow = (
@@ -2710,6 +2899,13 @@ function BomAdminPanel({
       const saved = await api.updateMaterialCountryFinance(row.materialCode, update);
       setFinanceQuickRows((current) => replaceFinanceRow(current, saved));
       setFinanceDrawerRows((current) => replaceFinanceRow(current, saved));
+      if (Object.prototype.hasOwnProperty.call(update, "fobEur")) {
+        applyLocalFobUpdate(
+          [saved.materialCode, saved.bomTemplate || ""],
+          saved.countryCode,
+          saved.fobEur,
+        );
+      }
       scheduleLoad(200);
     } catch (err) {
       setFinanceError(getErrorMessage(err));
@@ -2725,6 +2921,15 @@ function BomAdminPanel({
     pendingDeleteTimer.current = setTimeout(() => setPendingDeletes(new Set()), 3000);
     return () => { if (pendingDeleteTimer.current) clearTimeout(pendingDeleteTimer.current); };
   }, [pendingDeletes]);
+
+  useEffect(() => {
+    if (pendingCountryDeletes.size === 0) return;
+    if (pendingCountryDeleteTimer.current) clearTimeout(pendingCountryDeleteTimer.current);
+    pendingCountryDeleteTimer.current = setTimeout(() => setPendingCountryDeletes(new Set()), 3000);
+    return () => {
+      if (pendingCountryDeleteTimer.current) clearTimeout(pendingCountryDeleteTimer.current);
+    };
+  }, [pendingCountryDeletes]);
 
   // Debounced search — auto-triggers 1.2s after user stops typing
   useEffect(() => {
@@ -2765,11 +2970,28 @@ function BomAdminPanel({
 
   const handleFobSave = async () => {
     if (!editFob) return;
+    const countryCode = normalizeBomCode(editFob.countryCode);
+    if (!countryCode) {
+      alert("Country is required.");
+      return;
+    }
+    const nextFob = editFob.fob == null ? null : Number(editFob.fob);
+    if (nextFob != null && !Number.isFinite(nextFob)) {
+      alert("FOB must be numeric.");
+      return;
+    }
     try {
-      for (const mc of editFob.materialCodes) {
-        await api.updateSkuFob(mc, { countryCode: editFob.countryCode, finalFobEur: editFob.fob ?? undefined } as any);
-      }
-      setEditFob(null); scheduleLoad(200);
+      await api.updateSkuFobsBulk({
+        updates: editFob.materialCodes.map((materialCode) => ({
+          materialCode,
+          countryCode,
+          finalFobEur: nextFob,
+        })),
+      });
+      applyLocalFobUpdate(editFob.materialCodes, countryCode, nextFob);
+      setEditFob(null);
+      scheduleLoad(200);
+      onFobCountriesChanged?.();
     } catch (e) { alert(getErrorMessage(e)); }
   };
 
@@ -3132,12 +3354,21 @@ function BomAdminPanel({
 
     setBulkFobSavingKey(bomKey);
     try {
-      for (const update of updates) {
-        await api.updateSkuFob(update.materialCode, {
+      await api.updateSkuFobsBulk({
+        updates: updates.map((update) => ({
+          materialCode: update.materialCode,
           countryCode: update.countryCode,
           finalFobEur: update.finalFobEur,
-          paymentTermCode: update.paymentTermCode ?? undefined,
-        });
+          paymentTermCode: update.paymentTermCode ?? null,
+        })),
+      });
+      for (const update of updates) {
+        applyLocalFobUpdate(
+          [update.materialCode],
+          update.countryCode,
+          update.finalFobEur,
+          update.paymentTermCode,
+        );
       }
       if (quickDelta != null) {
         updateBulkFobEditor(bomKey, allSkus, (current) => ({
@@ -3151,7 +3382,8 @@ function BomAdminPanel({
         delete next[bomKey];
         return next;
       });
-      await load();
+      scheduleLoad(200);
+      onFobCountriesChanged?.();
     } catch (err) {
       setBulkFobErrors((prev) => ({
         ...prev,
@@ -3255,6 +3487,7 @@ function BomAdminPanel({
       setCopyDraftErrors((prev) => ({ ...prev, [draftKey]: `Material code already exists: ${existingTargetCode}` }));
       return;
     }
+    const selectedCountryCodes = collectCountryCodes(draft.bulkSelectedCountries);
 
     setCopyDraftSavingKey(draftKey);
     setCopyDraftErrors((prev) => {
@@ -3269,6 +3502,16 @@ function BomAdminPanel({
           sku.colourCode,
           sku.sourceMaterialCode,
         );
+        const fobs = selectedCountryCodes.flatMap((countryCode) => {
+          const fob = draft.fobByCountry?.[countryCode];
+          const baseFob = getDraftBaseFob(fob);
+          if (baseFob == null) return [];
+          return [{
+            countryCode,
+            finalFobEur: Number(baseFob),
+            paymentTermCode: fob?.paymentTermCode ?? null,
+          }];
+        });
         await api.createMaterialSku({
           materialCode,
           bomTemplate: normalizedTemplate,
@@ -3278,41 +3521,21 @@ function BomAdminPanel({
           colour: sku.colour,
           colourCode: sku.colourCode,
           colourType: sku.colourType || "single",
+          colourTier: sku.colourTier || "single",
+          colourHex: sku.colourHex || null,
           powertrain: draft.powertrain || "ICE",
           sourceBomTemplate: draft.sourceBomTemplate,
+          interiorColorName: draft.interiorColorName || null,
+          editionTag: draft.editionTag || null,
+          lifecycleStatus: draft.lifecycleStatus || "active",
+          effectiveFrom: draft.effectiveFrom || null,
+          effectiveTo: draft.effectiveTo || null,
+          fobs,
         });
-        if ((sku.colourTier || "single") !== "single") {
-          await api.updateColourTier(materialCode, sku.colourTier || "single");
-        }
-        if (sku.colourHex) {
-          await api.updateColourHex(materialCode, sku.colourHex);
-        }
-        if (draft.interiorColorName || draft.editionTag) {
-          await api.updateSkuInterior(materialCode, {
-            interiorColorName: draft.interiorColorName || null,
-            editionTag: draft.editionTag || null,
-          });
-        }
-        if (draft.lifecycleStatus !== "active" || draft.effectiveFrom || draft.effectiveTo) {
-          await api.updateSkuLifecycle(materialCode, {
-            lifecycleStatus: draft.lifecycleStatus || "active",
-            effectiveFrom: draft.effectiveFrom || undefined,
-            effectiveTo: draft.effectiveTo || undefined,
-            rowVersion: 1,
-          });
-        }
-        for (const [countryCode, fob] of Object.entries(draft.fobByCountry || {})) {
-          const baseFob = getDraftBaseFob(fob);
-          if (baseFob == null) continue;
-          await api.updateSkuFob(materialCode, {
-            countryCode,
-            finalFobEur: Number(baseFob),
-            paymentTermCode: fob?.paymentTermCode ?? undefined,
-          });
-        }
       }
       dismissCopyDraft(draftKey);
-      await load();
+      scheduleLoad(0);
+      onFobCountriesChanged?.();
     } catch (err) {
       setCopyDraftErrors((prev) => ({ ...prev, [draftKey]: getErrorMessage(err) }));
     } finally {
@@ -3342,6 +3565,7 @@ function BomAdminPanel({
         await api.updateOrderGeniusColourSurcharge(update);
       }
       await loadColourSurcharges();
+      await loadSpecialColourSurcharges();
       setColourSurchargeStatus("Saved colour surcharge rules.");
     } catch (e) {
       setColourSurchargeStatus(getErrorMessage(e));
@@ -3392,10 +3616,27 @@ function BomAdminPanel({
         colourName: colourSwatchEditor.colourName,
         colourHex,
       });
+      let repriceMessage = "";
+      if (colourSwatchEditor.colourTier === "special") {
+        const surchargeEur = Number(colourSwatchEditor.surchargeDraft);
+        if (!Number.isFinite(surchargeEur) || surchargeEur < 0) {
+          throw new Error("Special surcharge needs a non-negative number.");
+        }
+        const surchargeResult = await api.updateOrderGeniusSpecialColourSurcharge({
+          brand: colourSwatchEditor.brand,
+          modelName: colourSwatchEditor.modelName,
+          colourCode: colourSwatchEditor.colourCode,
+          colourName: colourSwatchEditor.colourName,
+          surchargeEur,
+        });
+        const reprice = surchargeResult.reprice;
+        repriceMessage = reprice ? ` · repriced ${reprice.updated ?? 0} FOB rows` : "";
+      }
       setColourSwatchEditor(null);
       await loadColourHexRules();
+      await loadSpecialColourSurcharges();
       await load();
-      setColourHexRuleStatus(`Set ${result.colourCode} ${result.colourName} to ${result.colourHex}; updated ${result.updated} SKUs.`);
+      setColourHexRuleStatus(`Set ${result.colourCode} ${result.colourName} to ${result.colourHex}; updated ${result.updated} SKUs${repriceMessage}.`);
     } catch (e) {
       setColourHexRuleStatus(getErrorMessage(e));
     } finally {
@@ -3497,6 +3738,81 @@ function BomAdminPanel({
     }
   };
 
+  const handleDeleteCountryColumn = async (countryCode: string) => {
+    const country = normalizeBomCode(countryCode);
+    if (!country) return;
+    if (!pendingCountryDeletes.has(country)) {
+      setPendingCountryDeletes(new Set([country]));
+      return;
+    }
+    setDeletingCountryFobKey(country);
+    try {
+      const res = await api.deleteCountryFobs(country);
+      setSkus((current) =>
+        current.map((sku) => {
+          const currentFobs = (sku.fobByCountry || {}) as Record<string, BomDraftFobEntry>;
+          if (!(country in currentFobs)) return sku;
+          const nextFobs = { ...currentFobs };
+          delete nextFobs[country];
+          return { ...sku, fobByCountry: nextFobs };
+        }),
+      );
+      setCountries((current) => current.filter((code) => normalizeBomCode(code) !== country));
+      setCountryFobTrashMessage(`${res.countryCode} country column moved to Trash · ${res.cleared} stored FOB records.`);
+      setPendingCountryDeletes((current) => {
+        const next = new Set(current);
+        next.delete(country);
+        return next;
+      });
+      await loadCountryFobTrash();
+      scheduleLoad(200);
+      onFobCountriesChanged?.();
+    } catch (err) {
+      alert(getErrorMessage(err));
+    } finally {
+      setDeletingCountryFobKey((current) => (current === country ? null : current));
+    }
+  };
+
+  const handleRestoreCountryColumn = async (countryCode: string) => {
+    const country = normalizeBomCode(countryCode);
+    if (!country) return;
+    setCountryFobTrashActionKey(`restore:${country}`);
+    setCountryFobTrashMessage("");
+    try {
+      const res = await api.restoreCountryFobs(country);
+      setCountryFobTrashMessage(
+        `${res.countryCode} country column restored · ${res.restored}/${res.rows} stored FOB records${res.skippedActiveConflict ? ` · ${res.skippedActiveConflict} skipped` : ""}.`,
+      );
+      await Promise.all([
+        load(debouncedSearch || undefined),
+        loadCountryFobTrash(),
+      ]);
+      onFobCountriesChanged?.();
+    } catch (err) {
+      setCountryFobTrashMessage(`Error: ${getErrorMessage(err)}`);
+    } finally {
+      setCountryFobTrashActionKey((current) => (current === `restore:${country}` ? null : current));
+    }
+  };
+
+  const handlePurgeCountryColumn = async (countryCode: string) => {
+    const country = normalizeBomCode(countryCode);
+    if (!country) return;
+    if (!window.confirm(`Permanently clear ${country} from Trash? This cannot be restored.`)) return;
+    setCountryFobTrashActionKey(`purge:${country}`);
+    setCountryFobTrashMessage("");
+    try {
+      const res = await api.purgeCountryFobTrash(country);
+      setCountryFobTrashMessage(`${res.countryCode} country column permanently cleared · ${res.purged} stored FOB records.`);
+      await loadCountryFobTrash();
+    } catch (err) {
+      setCountryFobTrashMessage(`Error: ${getErrorMessage(err)}`);
+    } finally {
+      setCountryFobTrashActionKey((current) => (current === `purge:${country}` ? null : current));
+    }
+  };
+
   const handleAdjustCountryFobs = async () => {
     const countryCode = adjustCountryForm.countryCode.trim().toUpperCase();
     const deltaEur = Number(adjustCountryForm.deltaEur);
@@ -3585,15 +3901,22 @@ function BomAdminPanel({
             }
             const rect = event.currentTarget.getBoundingClientRect();
             const editorWidth = 238;
-            const editorHeight = isDual ? 142 : 104;
+            const editorHeight = isDual ? 174 : 136;
             const viewportWidth = typeof window === "undefined" ? editorWidth : window.innerWidth;
             const viewportHeight = typeof window === "undefined" ? editorHeight : window.innerHeight;
             setColourHexRuleStatus("");
             setColourSwatchEditor({
               materialCode: s.materialCode,
               brand,
+              modelName: String(s.modelName || ""),
               colourCode,
               colourName,
+              colourTier: (s.colourTier || "single") as BomAdminColourTier,
+              surchargeDraft: formatSurchargeDraft(
+                (s.colourTier || "single") === "special"
+                  ? getSpecialColourSurchargeAmount(brand, String(s.modelName || ""), colourCode)
+                  : 0,
+              ),
               isDual,
               hex1: normalizeColourPickerValue(hex1),
               hex2: normalizeColourPickerValue(hex2 || hex1, normalizeColourPickerValue(hex1)),
@@ -3765,6 +4088,50 @@ function BomAdminPanel({
     return result;
   };
 
+  const getSkuFloorTrimFob = (sku: any): number | null => {
+    const entries = Object.values(
+      (sku?.fobByCountry as Record<string, BomDraftFobEntry>) || {},
+    );
+    let floor: number | null = null;
+    for (const entry of entries) {
+      const value = getDraftBaseFob(entry);
+      if (value == null || value <= 0) continue;
+      if (floor == null || value < floor) floor = value;
+    }
+    return floor;
+  };
+
+  const getRowsFloorTrimFob = (rows: any[]): number | null => {
+    let floor: number | null = null;
+    for (const row of rows) {
+      const value = getSkuFloorTrimFob(row);
+      if (value == null) continue;
+      if (floor == null || value < floor) floor = value;
+    }
+    return floor;
+  };
+
+  const getTemplateSkus = (tiers: { single: any[]; dual: any[]; special: any[] }): any[] => [
+    ...tiers.single,
+    ...tiers.dual,
+    ...tiers.special,
+  ];
+
+  const compareByFloorTrimFob = (
+    aRows: any[],
+    bRows: any[],
+    aLabel: string,
+    bLabel: string,
+  ): number => {
+    const aFloor = getRowsFloorTrimFob(aRows);
+    const bFloor = getRowsFloorTrimFob(bRows);
+    const aMissing = aFloor == null;
+    const bMissing = bFloor == null;
+    if (aMissing !== bMissing) return aMissing ? -1 : 1;
+    if (aFloor != null && bFloor != null && aFloor !== bFloor) return aFloor - bFloor;
+    return aLabel.localeCompare(bLabel);
+  };
+
   if (loading && skus.length === 0 && countries.length === 0) return <div style={{ padding: 16, color: "#64748b" }}>Loading BOM data...</div>;
 
   const bomHeaderBaseStyle = {
@@ -3875,7 +4242,7 @@ function BomAdminPanel({
                 <div className="bom-admin-tools-front-copy">
                   <span style={{ fontSize: 12, color: "#334155", fontWeight: 800, letterSpacing: "0.06em" }}>BOM ADMIN TOOLS</span>
                   <h2 style={{ margin: "3px 0 2px", fontSize: 17, lineHeight: 1.2 }}>Material and country helpers</h2>
-                  <p style={{ margin: 0, fontSize: 12, color: "#64748b" }}>Copy FOB · Colour surcharge · Swatch rules.</p>
+                  <p style={{ margin: 0, fontSize: 12, color: "#64748b" }}>Copy FOB · Colour surcharge · Swatch rules · Trash.</p>
                 </div>
                 <div className="bom-admin-tools-front-actions">
                   <button type="button" className="btn btn-sm btn-secondary" onClick={() => toggleToolsCard(true)}>Edit tools</button>
@@ -3891,7 +4258,7 @@ function BomAdminPanel({
                 <div>
                   <span style={{ fontSize: 12, color: "#334155", fontWeight: 800, letterSpacing: "0.06em" }}>BOM ADMIN TOOLS</span>
                   <h2 style={{ margin: "3px 0 2px", fontSize: 17, lineHeight: 1.2 }}>Copy FOB & colour tools</h2>
-                  <p style={{ margin: 0, fontSize: 12, color: "#64748b" }}>Country copy · country adjust · surcharges · swatches.</p>
+                  <p style={{ margin: 0, fontSize: 12, color: "#64748b" }}>Country copy · country adjust · surcharges · swatches · trash.</p>
                 </div>
                 <button type="button" className="btn btn-sm btn-ghost" onClick={() => toggleToolsCard(false)}>Back</button>
               </header>
@@ -4108,9 +4475,61 @@ function BomAdminPanel({
                     <div style={{ marginTop: 7, fontSize: 11, color: colourHexRuleStatus.startsWith("Set") ? "#0f766e" : "#b45309" }}>
                       {colourHexRuleStatus}
                     </div>
-	                  ) : null}
-	                </div>
-	              </div>
+                  ) : null}
+                </div>
+                <div className="bom-admin-tool-tile" style={{ minHeight: 124 }}>
+                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 7 }}>
+                    <span style={{ fontSize: 11, fontWeight: 800, color: "#334155" }}>Country FOB Trash</span>
+                    <button className="btn btn-sm btn-ghost" type="button" onClick={() => void loadCountryFobTrash()} disabled={countryFobTrashLoading}>
+                      {countryFobTrashLoading ? "Loading..." : "Refresh"}
+                    </button>
+                  </div>
+                  <div style={{ display: "grid", gap: 6, maxHeight: 118, overflowY: "auto", paddingRight: 2 }}>
+                    {countryFobTrash.length === 0 ? (
+                      <div style={{ fontSize: 11, color: "#64748b", padding: "8px 0" }}>Trash is empty.</div>
+                    ) : (
+                      countryFobTrash.map((item) => {
+                        const country = normalizeBomCode(item.countryCode);
+                        const restoring = countryFobTrashActionKey === `restore:${country}`;
+                        const purging = countryFobTrashActionKey === `purge:${country}`;
+                        return (
+                          <div key={country} className="bom-country-trash-row">
+                            <div style={{ minWidth: 0 }}>
+                              <div style={{ fontSize: 12, fontWeight: 900, color: "#334155" }}>{country} country column</div>
+                              <div style={{ fontSize: 10, color: "#64748b" }}>
+                                {item.rows} stored FOB records{item.deletedAtUtc ? ` · ${new Date(item.deletedAtUtc).toLocaleString()}` : ""}
+                              </div>
+                            </div>
+                            <div style={{ display: "inline-flex", gap: 5, alignItems: "center", flexShrink: 0 }}>
+                              <button
+                                type="button"
+                                className="btn btn-sm btn-primary"
+                                disabled={restoring || purging}
+                                onClick={() => void handleRestoreCountryColumn(country)}
+                              >
+                                {restoring ? "Restoring..." : "Restore"}
+                              </button>
+                              <button
+                                type="button"
+                                className="btn btn-sm btn-ghost"
+                                disabled={restoring || purging}
+                                onClick={() => void handlePurgeCountryColumn(country)}
+                              >
+                                {purging ? "Purging..." : "Purge"}
+                              </button>
+                            </div>
+                          </div>
+                        );
+                      })
+                    )}
+                  </div>
+                  {countryFobTrashMessage ? (
+                    <div style={{ marginTop: 7, fontSize: 11, color: countryFobTrashMessage.startsWith("Error:") ? "#dc2626" : "#0f766e", fontWeight: 600 }}>
+                      {countryFobTrashMessage}
+                    </div>
+                  ) : null}
+                </div>
+              </div>
               {copyCountryMessage ? (
                 <div style={{ fontSize: 11, color: copyCountryMessage.includes("created") ? "#0f766e" : "#dc2626", fontWeight: 600 }}>
                   {copyCountryMessage}
@@ -4237,6 +4656,20 @@ function BomAdminPanel({
                 />
               </Fragment>
             ) : null}
+            {colourSwatchEditor.colourTier === "special" ? (
+              <Fragment>
+                <span style={{ fontSize: 10, color: "#64748b" }}>Surcharge</span>
+                <span style={{ fontSize: 10, fontWeight: 800, color: "#d97706", textAlign: "center" }}>EUR</span>
+                <input
+                  type="number"
+                  min={0}
+                  step={1}
+                  value={colourSwatchEditor.surchargeDraft}
+                  onChange={(event) => setColourSwatchEditor(prev => prev ? { ...prev, surchargeDraft: event.target.value } : prev)}
+                  style={{ fontSize: 11, minWidth: 0 }}
+                />
+              </Fragment>
+            ) : null}
           </div>
           <div style={{ display: "flex", justifyContent: "flex-end", gap: 6 }}>
             <button
@@ -4255,6 +4688,10 @@ function BomAdminPanel({
                 savingColourSwatchEditor
                 || !isColourPickerValue(colourSwatchEditor.hex1)
                 || (colourSwatchEditor.isDual && !isColourPickerValue(colourSwatchEditor.hex2))
+                || (
+                  colourSwatchEditor.colourTier === "special"
+                  && (!Number.isFinite(Number(colourSwatchEditor.surchargeDraft)) || Number(colourSwatchEditor.surchargeDraft) < 0)
+                )
               }
             >
               {savingColourSwatchEditor ? "Saving..." : "Save"}
@@ -4375,9 +4812,14 @@ function BomAdminPanel({
                 </span>
                 <span style={{ fontWeight: 400, color: "#64748b", fontSize: 11, flexShrink: 0 }}>· {mg.pt} · {mg.versions.size} versions</span>
               </div>
-              {expanded && [...mg.versions.entries()].sort(([a],[b]) => a.localeCompare(b)).map(([vk, vSkus]) => {
+              {expanded && [...mg.versions.entries()]
+                .sort(([a, aSkus], [b, bSkus]) => compareByFloorTrimFob(aSkus, bSkus, a, b))
+                .map(([vk, vSkus]) => {
                 const templates = groupByTemplate(vSkus);
-                const sortedTemplates = [...templates.entries()].sort(([a], [b]) => a.localeCompare(b));
+                const sortedTemplates = [...templates.entries()].sort(([a, aTiers], [b, bTiers]) =>
+                  compareByFloorTrimFob(getTemplateSkus(aTiers), getTemplateSkus(bTiers), a, b),
+                );
+                const canDeleteCountryColumns = sortedTemplates.some(([bomTemplate]) => editingBoms.has(bomTemplate));
                 return (
                   <div key={mk + '|' + vk} style={{ marginLeft: 20, marginBottom: 8 }}>
                     <div style={{ fontSize: 12, fontWeight: 600, color: '#334155', padding: '4px 0', marginBottom: 2 }}>
@@ -4394,25 +4836,55 @@ function BomAdminPanel({
                           <th title="Dual colour tier" style={{ ...bomHeaderBaseStyle, ...getBomStickyCellStyle("dual", "#334155", 3) }}>Dual</th>
                           <th title="Special colour tier" style={{ ...bomHeaderBaseStyle, ...getBomStickyCellStyle("special", "#334155", 3) }}>Spec</th>
                           <th title="Lifecycle" style={{ ...bomHeaderBaseStyle, width: BOM_ADMIN_TRAILING_COLUMN_WIDTHS.lifecycle, minWidth: BOM_ADMIN_TRAILING_COLUMN_WIDTHS.lifecycle }}>LC</th>
+                          <th title="Note" style={{ ...bomHeaderBaseStyle, width: bomNoteColumnWidth, minWidth: bomNoteColumnWidth, textAlign: "center" }}>
+                            <button
+                              type="button"
+                              className={`bom-note-column-toggle${showBomNoteColumn ? " is-open" : ""}`}
+                              title={showBomNoteColumn ? "Collapse Note column" : "Expand Note column"}
+                              onClick={() => setShowBomNoteColumn((current) => !current)}
+                            >
+                              {showBomNoteColumn ? "Note" : "N"}
+                            </button>
+                          </th>
                           <th title="Actions" style={{ ...bomHeaderBaseStyle, width: BOM_ADMIN_TRAILING_COLUMN_WIDTHS.actions, minWidth: BOM_ADMIN_TRAILING_COLUMN_WIDTHS.actions }}>Actions</th>
                           <th title="Effective from" style={{ ...bomHeaderBaseStyle, width: BOM_ADMIN_TRAILING_COLUMN_WIDTHS.from, minWidth: BOM_ADMIN_TRAILING_COLUMN_WIDTHS.from }}>From</th>
                           <th title="Effective to" style={{ ...bomHeaderBaseStyle, width: BOM_ADMIN_TRAILING_COLUMN_WIDTHS.to, minWidth: BOM_ADMIN_TRAILING_COLUMN_WIDTHS.to }}>To</th>
-                          {sortedCountries.map(c => (
-                            <th key={c} title={formatCountryCodeTooltip(c)} style={{ width: BOM_ADMIN_COUNTRY_COLUMN_WIDTH, minWidth: BOM_ADMIN_COUNTRY_COLUMN_WIDTH, textAlign: "right", color: c === 'NL' ? '#d97706' : '#64748b', fontWeight: c === 'NL' ? 700 : 600 }}>
-                              <button
-                                type="button"
-                                className={`bom-country-cbu-trigger${c === "NL" ? " is-nl" : ""}`}
-                                title={`${formatCountryCodeTooltip(c)} · CBU detail`}
-                                onClick={(event) => {
-                                  event.stopPropagation();
-                                  void openFinanceDrawer(buildFinanceDrawerScope(c, mg.brand, mg.modelName, mg.pt));
-                                }}
-                              >
-                                <span className="bom-country-cbu-code">{c}</span>
-                                <span className="bom-country-cbu-caret" aria-hidden="true" />
-                              </button>
-                            </th>
-                          ))}
+                          {sortedCountries.map(c => {
+                            const isDeletePending = pendingCountryDeletes.has(c);
+                            const isDeleting = deletingCountryFobKey === c;
+                            return (
+                              <th key={c} title={formatCountryCodeTooltip(c)} style={{ width: BOM_ADMIN_COUNTRY_COLUMN_WIDTH, minWidth: BOM_ADMIN_COUNTRY_COLUMN_WIDTH, textAlign: "right", color: c === 'NL' ? '#d97706' : '#64748b', fontWeight: c === 'NL' ? 700 : 600 }}>
+                                <div className="bom-country-header-control">
+                                  <button
+                                    type="button"
+                                    className={`bom-country-cbu-trigger${c === "NL" ? " is-nl" : ""}`}
+                                    title={`${formatCountryCodeTooltip(c)} · CBU detail`}
+                                    onClick={(event) => {
+                                      event.stopPropagation();
+                                      void openFinanceDrawer(buildFinanceDrawerScope(c, mg.brand, mg.modelName, mg.pt));
+                                    }}
+                                  >
+                                    <span className="bom-country-cbu-code">{c}</span>
+                                    <span className="bom-country-cbu-caret" aria-hidden="true" />
+                                  </button>
+                                  {canDeleteCountryColumns ? (
+                                    <button
+                                      type="button"
+                                      className={`bom-country-column-delete${isDeletePending ? " is-confirming" : ""}`}
+                                      title={isDeletePending ? `Confirm moving all ${c} BOM FOBs to Trash` : `Move all ${c} BOM FOBs to Trash`}
+                                      disabled={isDeleting}
+                                      onClick={(event) => {
+                                        event.stopPropagation();
+                                        void handleDeleteCountryColumn(c);
+                                      }}
+                                    >
+                                      {isDeleting ? "..." : isDeletePending ? "!" : "x"}
+                                    </button>
+                                  ) : null}
+                                </div>
+                              </th>
+                            );
+                          })}
                         </tr>
                       </thead>
                       <tbody>
@@ -4431,6 +4903,7 @@ function BomAdminPanel({
                             (ref as any).sourceRowNumber ?? sourceInfo.row_index,
                           );
                           const sourceWarnings = sourceInfo.warnings || [];
+                          const noteText = getBomNoteText(allSkus);
                           // Helper: render a tier cell with colour chips and drop zone
                           const editing = editingBoms.has(bomTemplate);
                           const draftKey = `${mk}|${vk}|${bomTemplate}`;
@@ -4438,6 +4911,42 @@ function BomAdminPanel({
                           const bulkFobEditor = getBulkFobEditor(bomTemplate, allSkus);
                           const renderTierCell = (tierName: BomAdminColourTier, tierSkus: any[], borderColor: string, bgColor: string) => {
                             const isOver = editing && dragOverTier === tierName && dragSku && !tierSkus.some((s: any) => s.materialCode === dragSku);
+                            const handleInlineAddColour = async () => {
+                              const code = addColourCodeRef.current?.value?.trim().toUpperCase() || '';
+                              const name = addColourNameRef.current?.value?.trim() || code;
+                              if (!code) {
+                                setColourHexRuleStatus("Colour code is required.");
+                                return;
+                              }
+                              const newMat = (bomTemplate || '').includes('**')
+                                ? bomTemplate.replace('**', code)
+                                : (ref as any).materialCode?.replace(/[A-Z]{2}/, code) || '';
+                              if (!newMat) {
+                                setColourHexRuleStatus("Cannot infer material code for the new colour.");
+                                return;
+                              }
+                              try {
+                                await api.createMaterialSku({
+                                  materialCode: newMat,
+                                  bomTemplate: bomTemplate,
+                                  brand: (ref as any).brand || '',
+                                  modelName: (ref as any).modelName || '',
+                                  version: (ref as any).version || '',
+                                  colour: name,
+                                  colourCode: code,
+                                  colourType: 'single',
+                                  powertrain: (ref as any).powertrain || 'ICE',
+                                });
+                                await api.updateColourTier(newMat, tierName);
+                                const intN = (ref as any).interiorColorName;
+                                if (intN) await api.updateSkuInterior(newMat, { interiorColorName: intN, editionTag: (ref as any).editionTag || null });
+                                setColourHexRuleStatus(`Added ${code} to ${tierName}.`);
+                                setAddColourKey(null);
+                                load();
+                              } catch (err) {
+                                setColourHexRuleStatus(getErrorMessage(err));
+                              }
+                            };
                             const dragProps = editing ? {
                               onDragOver: (e: any) => {
                                 e.preventDefault();
@@ -4509,56 +5018,10 @@ function BomAdminPanel({
                                       onKeyDown={async (e2) => {
                                         if (e2.key === 'Escape') setAddColourKey(null);
                                         if (e2.key !== 'Enter') return;
-                                        const code = addColourCodeRef.current?.value?.trim().toUpperCase() || '';
-                                        const name = addColourNameRef.current?.value?.trim() || '';
-                                        if (!code || !name) return;
-                                        const newMat = (bomTemplate || '').includes('**')
-                                          ? bomTemplate.replace('**', code)
-                                          : (ref as any).materialCode?.replace(/[A-Z]{2}/, code) || '';
-                                        if (!newMat) return;
-                                        try {
-                                          await api.createMaterialSku({
-                                            materialCode: newMat,
-                                            bomTemplate: bomTemplate,
-                                            brand: (ref as any).brand || '',
-                                            modelName: (ref as any).modelName || '',
-                                            version: (ref as any).version || '',
-                                            colour: name, colourCode: code, colourType: 'single',
-                                            powertrain: (ref as any).powertrain || 'ICE',
-                                          });
-                                          await api.updateColourTier(newMat, tierName);
-                                          const intN = (ref as any).interiorColorName;
-                                          if (intN) await api.updateSkuInterior(newMat, { interiorColorName: intN, editionTag: (ref as any).editionTag || null });
-                                          setAddColourKey(null);
-                                          load();
-                                        } catch (err) { /* */ }
+                                        await handleInlineAddColour();
                                       }} />
                                     <span style={{ cursor: 'pointer', fontSize: 10, color: '#16a34a' }}
-                                      onClick={async () => {
-                                        const code = addColourCodeRef.current?.value?.trim().toUpperCase() || '';
-                                        const name = addColourNameRef.current?.value?.trim() || '';
-                                        if (!code || !name) return;
-                                        const newMat = (bomTemplate || '').includes('**')
-                                          ? bomTemplate.replace('**', code)
-                                          : (ref as any).materialCode?.replace(/[A-Z]{2}/, code) || '';
-                                        if (!newMat) return;
-                                        try {
-                                          await api.createMaterialSku({
-                                            materialCode: newMat,
-                                            bomTemplate: bomTemplate,
-                                            brand: (ref as any).brand || '',
-                                            modelName: (ref as any).modelName || '',
-                                            version: (ref as any).version || '',
-                                            colour: name, colourCode: code, colourType: 'single',
-                                            powertrain: (ref as any).powertrain || 'ICE',
-                                          });
-                                          await api.updateColourTier(newMat, tierName);
-                                          const intN = (ref as any).interiorColorName;
-                                          if (intN) await api.updateSkuInterior(newMat, { interiorColorName: intN, editionTag: (ref as any).editionTag || null });
-                                          setAddColourKey(null);
-                                          load();
-                                        } catch (err) { /* */ }
-                                      }}>✓</span>
+                                      onClick={() => void handleInlineAddColour()}>✓</span>
                                     <span style={{ cursor: 'pointer', fontSize: 10, color: '#94a3b8' }}
                                       onClick={() => setAddColourKey(null)}>✕</span>
                                   </div>
@@ -4651,15 +5114,39 @@ function BomAdminPanel({
                                   </span>
                                 )}
                               </td>
+                              <td
+                                className={`bom-note-cell${showBomNoteColumn ? " is-open" : " is-collapsed"}`}
+                                title={noteText || "No note"}
+                                style={{ width: bomNoteColumnWidth, minWidth: bomNoteColumnWidth }}
+                              >
+                                {showBomNoteColumn ? (
+                                  editingBoms.has(bomTemplate) ? (
+                                    <textarea
+                                      defaultValue={noteText}
+                                      rows={2}
+                                      onBlur={(event) => {
+                                        const nextValue = event.target.value.trim();
+                                        if (nextValue === noteText) return;
+                                        void handleBomRemarkSave(allSkus, nextValue).catch((err) => {
+                                          alert(getErrorMessage(err));
+                                          event.target.value = noteText;
+                                        });
+                                      }}
+                                    />
+                                  ) : (
+                                    <span>{noteText || "-"}</span>
+                                  )
+                                ) : (
+                                  <span className={noteText ? "bom-note-dot is-filled" : "bom-note-dot"} />
+                                )}
+                              </td>
                               <td style={{ width: BOM_ADMIN_TRAILING_COLUMN_WIDTHS.actions, minWidth: BOM_ADMIN_TRAILING_COLUMN_WIDTHS.actions, textAlign: "center" }}>
                                 <div style={{ display: "inline-flex", gap: 6, alignItems: "center", justifyContent: "center" }}>
                                   {pendingDeletes.has(bomTemplate) ? (
                                     <button className="btn btn-sm" title="Click again to confirm delete"
                                       style={{ fontSize: 10, padding: "1px 6px", color: '#fff', background: '#dc2626' }}
                                       onClick={async () => {
-                                        for (const s of allSkus) {
-                                          try { await api.deleteMaterialSku(s.materialCode); } catch {}
-                                        }
+                                        try { await api.deleteMaterialSkusBulk(allSkus.map((s: any) => s.materialCode)); } catch {}
                                         setPendingDeletes(prev => { const n = new Set(prev); n.delete(bomTemplate); return n; });
                                         scheduleLoad(300);
                                       }}>Confirm?</button>
@@ -4855,6 +5342,13 @@ function BomAdminPanel({
                                     <option value="historical">Historical</option>
                                   </select>
                                 </td>
+                                <td
+                                  className={`bom-note-cell${showBomNoteColumn ? " is-open" : " is-collapsed"}`}
+                                  title="No note on copied draft"
+                                  style={{ width: bomNoteColumnWidth, minWidth: bomNoteColumnWidth }}
+                                >
+                                  {showBomNoteColumn ? <span>-</span> : <span className="bom-note-dot" />}
+                                </td>
                                 <td style={{ width: BOM_ADMIN_TRAILING_COLUMN_WIDTHS.actions, minWidth: BOM_ADMIN_TRAILING_COLUMN_WIDTHS.actions, textAlign: "center" }}>
                                   <div style={{ display: "inline-flex", gap: 6, alignItems: "center", justifyContent: "center" }}>
                                     <button
@@ -4907,11 +5401,16 @@ function BomAdminPanel({
                                   />
                                 </td>
                                 {sortedCountries.map((c) => {
+                                  const isSelectedForCopy = copyDraft.bulkSelectedCountries.includes(c);
                                   const fob = copyDraft.fobByCountry?.[c];
-                                  const baseFob = getDraftBaseFob(fob);
+                                  const baseFob = isSelectedForCopy ? getDraftBaseFob(fob) : null;
                                   const hasFob = fob != null && baseFob != null && baseFob > 0;
                                   return (
-                                    <td key={`${draftKey}-${c}`} title={formatBomFobTooltip(c, baseFob)} style={{ width: BOM_ADMIN_COUNTRY_COLUMN_WIDTH, minWidth: BOM_ADMIN_COUNTRY_COLUMN_WIDTH, textAlign: "right", padding: "2px 4px" }}>
+                                    <td
+                                      key={`${draftKey}-${c}`}
+                                      title={isSelectedForCopy ? formatBomFobTooltip(c, baseFob) : `${c} will be cleared on copied material`}
+                                      style={{ width: BOM_ADMIN_COUNTRY_COLUMN_WIDTH, minWidth: BOM_ADMIN_COUNTRY_COLUMN_WIDTH, textAlign: "right", padding: "2px 4px" }}
+                                    >
                                       <span style={{ color: hasFob ? "#0f766e" : "#cbd5e1", fontWeight: hasFob ? 600 : 400 }}>
                                         {hasFob ? Number(baseFob).toLocaleString() : "-"}
                                       </span>

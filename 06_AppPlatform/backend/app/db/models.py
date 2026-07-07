@@ -1828,6 +1828,38 @@ class BrandColourSurchargeRule(TimestampMixin, Base):
     is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
 
 
+class SpecialColourSurchargeRule(TimestampMixin, Base):
+    __tablename__ = "special_colour_surcharge_rule"
+    __table_args__ = (
+        Index(
+            "uq_ordering_special_colour_surcharge_active",
+            "brand", "model_name", "colour_code",
+            unique=True,
+            postgresql_where=text("is_active = true AND model_name IS NOT NULL"),
+        ),
+        Index(
+            "uq_ordering_special_colour_surcharge_global_active",
+            "brand", "colour_code",
+            unique=True,
+            postgresql_where=text("is_active = true AND model_name IS NULL"),
+        ),
+        Index("ix_ordering_special_colour_surcharge_lookup", "brand", "colour_code"),
+        {"schema": "ordering"},
+    )
+
+    special_colour_surcharge_rule_id: Mapped[UUID] = mapped_column(
+        PGUUID(as_uuid=True), primary_key=True, default=uuid4
+    )
+    brand: Mapped[str] = mapped_column(Text, nullable=False)
+    model_name: Mapped[str | None] = mapped_column(Text, nullable=True)
+    colour_code: Mapped[str] = mapped_column(Text, nullable=False)
+    colour_name: Mapped[str | None] = mapped_column(Text, nullable=True)
+    surcharge_eur: Mapped[float] = mapped_column(
+        Numeric(12, 2), nullable=False, default=0
+    )
+    is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+
+
 class CountrySkuFobResolved(TimestampMixin, Base):
     __tablename__ = "country_sku_fob_resolved"
     __table_args__ = (

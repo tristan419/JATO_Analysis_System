@@ -151,3 +151,61 @@ Good fit:
 - Material Master upload preview.
 - Quantity import preview.
 - Future CBU Excel paste/upload digest before applying finance rows.
+
+## Vehicle Allocation
+
+Location: `src/components/vehicleAllocation`
+
+Import:
+
+```tsx
+import {
+  VehicleImportDigestPanel,
+  VehicleStatusBoard,
+  VinPasteDigestPanel,
+} from "../components/vehicleAllocation";
+```
+
+### `VehicleStatusBoard`
+
+Use for PI vehicle status summaries that consume a backend status-flow config.
+
+Good fit:
+
+- PI allocation tool drawers.
+- Country/account-specific vehicle status boards where the step order, labels, colours, icons, terminal state, and allowed transitions come from configuration.
+
+Notes:
+
+- Do not hardcode country status flows in page JSX.
+- Pass `VehicleStatusFlowConfig` from `/order-genius/vehicle-allocation/status-flow`.
+- Empty configured statuses still render so each country/account flow is visible even when count is zero.
+
+### `VinPasteDigestPanel`
+
+Use for month/material/PI-scope VIN paste workflows.
+
+Good fit:
+
+- Assigning pasted VINs to empty vehicle slots in PI line and car-code order.
+- Previewing pasted / matched / ready / duplicate / invalid / overflow counts before apply.
+
+Notes:
+
+- The panel reuses `UploadDigestPanel` and `LoadingActionButton`.
+- It does not parse Excel/image files directly; it consumes text pasted by the user.
+
+### `VehicleImportDigestPanel`
+
+Use for vehicle allocation import preview/apply workflows.
+
+Good fit:
+
+- Excel workbook import preview.
+- Parsed image/OCR result import where the image parser already produced structured JSON rows.
+
+Notes:
+
+- Excel files use `/order-genius/vehicle-allocation/import/preview`.
+- Parsed image rows use `/order-genius/vehicle-allocation/import/preview-rows` with `{ rows: [...] }`.
+- Raw image files are not parsed by this component; convert the image to rows first, then use the same digest/apply flow.
