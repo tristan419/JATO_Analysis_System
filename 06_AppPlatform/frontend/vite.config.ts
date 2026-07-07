@@ -4,23 +4,10 @@ import react from "@vitejs/plugin-react";
 const DASHBOARD_CORE_MODULES = [
   "/src/components/CollapsibleDeckHero.tsx",
   "/src/components/CollapsibleFilterSidebar.tsx",
-  "/src/components/LazyPlotlyChart.tsx",
-  "/src/components/LoadingActionButton.tsx",
-  "/src/components/PageFeedback.tsx",
-  "/src/components/SearchSelectFilter.tsx",
   "/src/components/TimeAxis.tsx",
-  "/src/components/deckControls/DebouncedNumberInput.tsx",
-  "/src/components/deckControls/DeckExportDrawer.tsx",
-  "/src/components/deckControls/DeckFloatingDrawer.tsx",
-  "/src/components/deckControls/DeckControlTabs.tsx",
-  "/src/components/ExportPanelHelpers.ts",
   "/src/pages/dashboardHelpers.ts",
-  "/src/utils/bubbleSizing.ts",
-  "/src/utils/colors.ts",
   "/src/utils/filterOptions.ts",
-  "/src/utils/jatoCountries.ts",
   "/src/utils/pageCache.ts",
-  "/src/utils/plotlyDefaults.ts",
   "/src/utils/timeFormatting.ts",
 ];
 

@@ -30,4 +30,15 @@ describe("Dashboard startup path", () => {
     );
     expect(viteConfigSource).not.toContain('"/src/hooks/useResolvedCountry.ts"');
   });
+
+  it("keeps shared chart and export helpers out of the dashboard-core chunk", () => {
+    expect(viteConfigSource).not.toContain('"/src/components/LazyPlotlyChart.tsx"');
+    expect(viteConfigSource).not.toContain('"/src/components/PageFeedback.tsx"');
+    expect(viteConfigSource).not.toContain('"/src/components/SearchSelectFilter.tsx"');
+    expect(viteConfigSource).not.toContain('"/src/components/ExportPanelHelpers.ts"');
+    expect(viteConfigSource).not.toContain('"/src/components/deckControls/DeckFloatingDrawer.tsx"');
+    expect(viteConfigSource).not.toContain('"/src/utils/colors.ts"');
+    expect(viteConfigSource).not.toContain('"/src/utils/jatoCountries.ts"');
+    expect(viteConfigSource).not.toContain('"/src/utils/plotlyDefaults.ts"');
+  });
 });
