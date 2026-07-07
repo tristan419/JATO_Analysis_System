@@ -4,6 +4,7 @@ import hashlib
 import io
 import json
 import logging
+import math
 import re
 import threading
 import time
@@ -20,6 +21,8 @@ from app.core.config import (
     DASHBOARD_OVERVIEW_PERSISTENT_CACHE_ENABLED,
     DASHBOARD_OVERVIEW_PREWARM_FILTERS,
     DASHBOARD_OVERVIEW_PREWARM_SCOPES,
+    DASHBOARD_OVERVIEW_REDIS_WAIT_SECONDS,
+    DASHBOARD_REDIS_WAIT_INTERVAL_SECONDS,
     DEFAULT_GROUP_BY,
     FILTER_OPTIONS_SNAPSHOT_TTL_SECONDS,
     GROUPED_TIME_SERIES_CACHE_MAX_ENTRIES,
@@ -33,6 +36,7 @@ from app.core.config import (
     GROUPED_TIME_SERIES_PREWARM_SHARE_SPLIT_BY,
     GROUPED_TIME_SERIES_PREWARM_SCOPES,
     GROUPED_TIME_SERIES_PREWARM_TOP_N,
+    GROUPED_TIME_SERIES_REDIS_WAIT_SECONDS,
 )
 from app.infra import parquet_repository as repo
 from app.infra.redis_client import get_redis_client
@@ -148,6 +152,12 @@ _grouped_time_series_cache_lock = threading.Lock()
 
 def _normalize_cache_scope(cache_scope: str | None) -> str:
     return str(cache_scope or "viewer").strip().lower() or "viewer"
+
+
+def _redis_wait_args(total_seconds: float) -> tuple[int, float]:
+    delay = max(0.05, float(DASHBOARD_REDIS_WAIT_INTERVAL_SECONDS or 0.25))
+    seconds = max(0.0, float(total_seconds or 0.0))
+    return max(0, math.ceil(seconds / delay)), delay
 
 
 def _dashboard_overview_disk_payload_key(
@@ -410,7 +420,8 @@ def _wait_for_dashboard_overview_redis_cache(
         return None
     redis_key = _dashboard_overview_redis_cache_key(cache_key, dataset_token)
     try:
-        payload = wait_for_cache(client, redis_key)
+        retries, delay = _redis_wait_args(DASHBOARD_OVERVIEW_REDIS_WAIT_SECONDS)
+        payload = wait_for_cache(client, redis_key, retries=retries, delay=delay)
     except Exception as exc:  # noqa: BLE001 - Redis must fail open
         LOGGER.warning("Could not wait for dashboard overview Redis cache: %s", exc)
         return None
@@ -697,7 +708,8 @@ def _wait_for_grouped_time_series_redis_cache(
         return None
     redis_key = _grouped_time_series_redis_cache_key(cache_key, dataset_token)
     try:
-        payload = wait_for_cache(client, redis_key)
+        retries, delay = _redis_wait_args(GROUPED_TIME_SERIES_REDIS_WAIT_SECONDS)
+        payload = wait_for_cache(client, redis_key, retries=retries, delay=delay)
     except Exception as exc:  # noqa: BLE001 - Redis must fail open
         LOGGER.warning("Could not wait for grouped time-series Redis cache: %s", exc)
         return None

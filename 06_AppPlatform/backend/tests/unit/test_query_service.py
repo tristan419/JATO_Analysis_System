@@ -301,6 +301,7 @@ def test_query_overview_waits_for_peer_redis_compute(
 ) -> None:
     redis = _FakeRedis()
     waited_keys: list[str] = []
+    waited_args: list[tuple[int, float]] = []
     payload = {
         "route": "dynamic-aggregate",
         "kpis": {"totalRows": 10},
@@ -319,8 +320,9 @@ def test_query_overview_waits_for_peer_redis_compute(
     )
     redis.store[f"{redis_key}:lock"] = "1"
 
-    def wait_for_peer_cache(client, key):
+    def wait_for_peer_cache(client, key, retries=0, delay=0.0):
         waited_keys.append(key)
+        waited_args.append((retries, delay))
         assert client is redis
         return {
             "schema": query_service._DASHBOARD_OVERVIEW_REDIS_CACHE_SCHEMA,
@@ -354,6 +356,7 @@ def test_query_overview_waits_for_peer_redis_compute(
     assert result.cache_state == "REDIS_WAIT"
     assert result.payload == payload
     assert waited_keys == [redis_key]
+    assert waited_args == [(16, 0.25)]
 
 
 def test_warm_dashboard_overview_cache_includes_configured_filter_sets(
@@ -406,6 +409,7 @@ def test_warm_dashboard_overview_cache_includes_configured_filter_sets(
 
 def test_dashboard_overview_prewarm_defaults_cover_dashboard_scope() -> None:
     assert query_service.DASHBOARD_OVERVIEW_CACHE_TTL_SECONDS >= 1800
+    assert query_service.DASHBOARD_OVERVIEW_REDIS_WAIT_SECONDS >= 4
     assert "order_filler" in query_service.DASHBOARD_OVERVIEW_PREWARM_SCOPES
     assert any(
         filters.get("国家") and filters.get("动总规整")
@@ -660,6 +664,7 @@ def test_query_grouped_time_series_waits_for_peer_redis_compute(
 ) -> None:
     redis = _FakeRedis()
     waited_keys: list[str] = []
+    waited_args: list[tuple[int, float]] = []
     payload = {
         "series": [{"group": "Alpha", "values": [{"period": "2024", "value": 10.0}]}],
         "meta": {"grain": "year"},
@@ -680,8 +685,9 @@ def test_query_grouped_time_series_waits_for_peer_redis_compute(
     )
     redis.store[f"{redis_key}:lock"] = "1"
 
-    def wait_for_peer_cache(client, key):
+    def wait_for_peer_cache(client, key, retries=0, delay=0.0):
         waited_keys.append(key)
+        waited_args.append((retries, delay))
         assert client is redis
         return {
             "schema": query_service._GROUPED_TIME_SERIES_REDIS_CACHE_SCHEMA,
@@ -718,6 +724,7 @@ def test_query_grouped_time_series_waits_for_peer_redis_compute(
     assert result.cache_state == "REDIS_WAIT"
     assert result.payload == payload
     assert waited_keys == [redis_key]
+    assert waited_args == [(32, 0.25)]
 
 
 def test_query_grouped_time_series_cache_is_scoped_by_role(
@@ -1077,6 +1084,7 @@ def test_warm_grouped_time_series_cache_includes_share_split_lenses(
 
 def test_grouped_time_series_prewarm_defaults_cover_dashboard_scope() -> None:
     assert query_service.GROUPED_TIME_SERIES_CACHE_TTL_SECONDS >= 1800
+    assert query_service.GROUPED_TIME_SERIES_REDIS_WAIT_SECONDS >= 8
     assert query_service.GROUPED_TIME_SERIES_PREWARM_TOP_N >= 10
     assert query_service.GROUPED_TIME_SERIES_PREWARM_INCLUDE_OTHERS is False
     assert "order_filler" in query_service.GROUPED_TIME_SERIES_PREWARM_SCOPES
