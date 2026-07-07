@@ -5,6 +5,8 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 import logging
 import re
+import subprocess
+import tempfile
 
 import requests
 
@@ -13,6 +15,7 @@ from jato_scraper.extractors.pdf_text import parse_price
 
 log = logging.getLogger(__name__)
 DEFAULT_TIMEOUT = 30
+DEFAULT_CURL_FALLBACK_TIMEOUT = 30
 
 
 @dataclass(frozen=True)
@@ -105,14 +108,64 @@ class HttpTextExtractor(BaseExtractor):
         try:
             response = self._session.get(self.profile.url, timeout=timeout)
             response.raise_for_status()
+            return response.text
         except requests.RequestException as exc:
-            log.error(
+            log.warning(
                 "HTTP text request failed for %s: %s",
                 self.config.source_code,
                 exc,
             )
+            text = self._fetch_text_with_curl(
+                max(timeout, DEFAULT_CURL_FALLBACK_TIMEOUT),
+            )
+            if text:
+                return text
+            log.error(
+                "HTTP text request and curl fallback failed for %s",
+                self.config.source_code,
+            )
             return ""
-        return response.text
+
+    def _fetch_text_with_curl(self, timeout: int) -> str:
+        try:
+            with tempfile.NamedTemporaryFile(
+                prefix="jato_http_text_",
+                suffix=".html",
+            ) as tmp:
+                result = subprocess.run(
+                    [
+                        "curl",
+                        "-L",
+                        "--http1.1",
+                        "-sS",
+                        "--max-time",
+                        str(timeout),
+                        "-o",
+                        tmp.name,
+                        self.profile.url,
+                    ],
+                    check=False,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    timeout=timeout + 5,
+                )
+                if result.returncode != 0:
+                    log.error(
+                        "HTTP text curl fallback failed for %s: %s",
+                        self.config.source_code,
+                        result.stderr.decode(errors="replace")[:300],
+                    )
+                    return ""
+                tmp.seek(0)
+                blob = tmp.read()
+        except (OSError, subprocess.SubprocessError) as exc:
+            log.error(
+                "HTTP text curl fallback failed for %s: %s",
+                self.config.source_code,
+                exc,
+            )
+            return ""
+        return blob.decode("utf-8", errors="replace").strip()
 
     def _build_observation(
         self,
