@@ -1,126 +1,103 @@
-source_code: ford_puma_be_draft_scrapling
+source_code: ford_puma_be_official_pdf
 country: 比利时
 brand: FORD
-source_url: https://todo.invalid/be/ford/puma
-source_type: manufacturer_official
+source_url: https://www.nl.ford.be/content/dam/guxeu/be/nl_be/documents/pricelist/cars/new-puma/PL-Puma_MCA.pdf
+source_type: official_price_list
 price_semantics: base_msrp
-extractor_type: scrapling
+extractor_type: pdf_text
 profile:
-  url: https://todo.invalid/be/ford/puma
-  tier: stealth
-  headless: true
-  network_idle: true
-  impersonate: chrome
-  css:
-    vehicle_container: body
-    model: h1, h2
-    trim: h3
-    price: '[class*="price"]'
+  url: https://www.nl.ford.be/content/dam/guxeu/be/nl_be/documents/pricelist/cars/new-puma/PL-Puma_MCA.pdf
+  timeout_seconds: 90
+  retry_attempts: 1
+  retry_delay_seconds: 1
+  prefer_curl_download: true
+  direct_download_fallback: true
+  curl_compressed: true
+  curl_http1_1: false
   default_currency: EUR
   default_tax_included: true
-  default_price_label: MSRP
+  default_price_label: Prijs in EUR incl. btw
   fixed_model: PUMA
   fixed_jato_model: PUMA
-  fixed_jato_powertrain: null
-  model_rules: []
-  skip_if_model_unmapped: false
+  fixed_jato_powertrain: MHEV
   copy_trim_to_jato_trim: true
-  confidence_rules:
-    base: 0.2
-    fixed_model_bonus: 0.18
-    fixed_jato_model_bonus: 0.12
-    model_rule_bonus: 0.12
-    trim_present_bonus: 0.1
-    copy_trim_to_jato_trim_bonus: 0.09
-    parsed_price_text_bonus: 0.03
-    currency_bonus: 0.01
-    price_label_bonus: 0.02
-    trim_keyword_bonuses: []
-    price_band_bonuses:
-    - key: price_band_entry
-      label: Entry price band matched
-      max: 0
-      delta: 0.0
-    - key: price_band_mid
-      label: Mid price band matched
-      min: 0
-      max: 0
-      delta: 0.01
-    - key: price_band_high
-      label: High price band matched
-      min: 0
-      delta: 0.03
-    powertrain_keyword_bonuses: []
-    powertrain_bonuses:
-    - key: powertrain_bev
-      label: 'Powertrain matched: BEV'
-      powertrain: BEV
-      delta: 0.03
-    - key: powertrain_mhev
-      label: 'Powertrain matched: MHEV'
-      powertrain: MHEV
-      delta: 0.03
-    - key: powertrain_ice
-      label: 'Powertrain matched: ICE'
-      powertrain: ICE
-      delta: 0.03
-    clamp_min: 0.0
-    clamp_max: 1.0
-  structured_fields:
-    edition_rules:
-    - key: edition_special
-      label: Special Edition
-      keyword: special edition
-      special: true
-    powertrain_rules:
-    - key: powertrain_bev
-      powertrain: BEV
-      keywords:
-      - bev
-      - ev
-      - electric
-      - battery electric
-      - fully electric
-      - electric vehicle
-      - elektrisch
-      - volledig elektrisch
-      - electrique
-      - 100% electrique
-    - key: powertrain_mhev
-      powertrain: MHEV
-      keywords:
-      - mhev
-      - mild hybrid
-      - mild-hybrid
-      - 48V
-      - hybride leger
-    - key: powertrain_ice
-      powertrain: ICE
-      keywords:
-      - ice
-      - petrol
-      - gasoline
-      - diesel
-      - combustion
-      - benzine
-      - essence
-      - thermique
-  auto_accept_gates:
-    review_threshold: 0.95
-    semi_auto_threshold: 0.98
-    require_powertrain_match: true
-    force_review_if_powertrain_missing: true
-    force_review_if_powertrain_ambiguous: true
-    force_review_for_special_edition: true
+  match_confidence: 0.9
+  match_status: review_required
+  match_reason:
+    kind: official_pdf_price_list
+    source: ford_be_puma_prijslijst_pdf
+    note: Official Ford Belgium Puma MCA price-list PDF. The rendered price page headed PUMA MCA exposes vehicle rows with separate prices excluding and including 21% VAT; patterns capture only the Prijs in EUR incl. btw vehicle rows.
+  entry_patterns:
+  - pattern: '1\.0i\s+EcoBoost\s+mHEV\s+-\s+92\s+kW\s+/\s+125\s+Pk\s+M6\s+FWD\s+Euro\s+6e\s+bis\s+BABD\s+24\s+371,90\s+(?P<price>29\s+490,00)'
+    official_trim: Titanium M6
+    official_powertrain: 1.0i EcoBoost mHEV 92 kW / 125 Pk M6 FWD
+    jato_powertrain: MHEV
+    price_label: Prijs in EUR incl. btw
+  - pattern: '1\.0i\s+EcoBoost\s+mHEV\s+-\s+92\s+kW\s+/\s+125\s+Pk\s+A7\s+FWD\s+Euro\s+6e\s+bis\s+BABE\s+25\s+859,50\s+(?P<price>31\s+290,00)'
+    official_trim: Titanium A7
+    official_powertrain: 1.0i EcoBoost mHEV 92 kW / 125 Pk A7 FWD
+    jato_powertrain: MHEV
+    price_label: Prijs in EUR incl. btw
+  - pattern: '1\.0i\s+EcoBoost\s+mHEV\s+-\s+114\s+kW\s+/\s+155\s+Pk\s+A7\s+FWD\s+Euro\s+6e\s+bis\s+BABF\s+26\s+851,24\s+(?P<price>32\s+490,00)'
+    official_trim: Titanium A7 155 Pk
+    official_powertrain: 1.0i EcoBoost mHEV 114 kW / 155 Pk A7 FWD
+    jato_powertrain: MHEV
+    price_label: Prijs in EUR incl. btw
+  - pattern: '1\.0i\s+EcoBoost\s+mHEV\s+-\s+92\s+kW\s+/\s+125\s+Pk\s+M6\s+FWD\s+Euro\s+6e\s+bis\s+BABG\s+25\s+611,57\s+(?P<price>30\s+990,00)'
+    official_trim: ST-Line M6
+    official_powertrain: 1.0i EcoBoost mHEV 92 kW / 125 Pk M6 FWD
+    jato_powertrain: MHEV
+    price_label: Prijs in EUR incl. btw
+  - pattern: '1\.0i\s+EcoBoost\s+mHEV\s+-\s+92\s+kW\s+/\s+125\s+Pk\s+A7\s+FWD\s+Euro\s+6e\s+bis\s+BABH\s+27\s+099,17\s+(?P<price>32\s+790,00)'
+    official_trim: ST-Line A7
+    official_powertrain: 1.0i EcoBoost mHEV 92 kW / 125 Pk A7 FWD
+    jato_powertrain: MHEV
+    price_label: Prijs in EUR incl. btw
+  - pattern: '1\.0i\s+EcoBoost\s+mHEV\s+-\s+114\s+kW\s+/\s+155\s+Pk\s+A7\s+FWD\s+Euro\s+6e\s+bis\s+BABI\s+28\s+090,91\s+(?P<price>33\s+990,00)'
+    official_trim: ST-Line A7 155 Pk
+    official_powertrain: 1.0i EcoBoost mHEV 114 kW / 155 Pk A7 FWD
+    jato_powertrain: MHEV
+    price_label: Prijs in EUR incl. btw
+  - pattern: '1\.0i\s+EcoBoost\s+mHEV\s+-\s+92\s+kW\s+/\s+125\s+Pk\s+M6\s+FWD\s+Euro\s+6e\s+bis\s+BABJ\s+28\s+090,91\s+(?P<price>33\s+990,00)'
+    official_trim: ST-Line X M6
+    official_powertrain: 1.0i EcoBoost mHEV 92 kW / 125 Pk M6 FWD
+    jato_powertrain: MHEV
+    price_label: Prijs in EUR incl. btw
+  - pattern: '1\.0i\s+EcoBoost\s+mHEV\s+-\s+92\s+kW\s+/\s+125\s+Pk\s+A7\s+FWD\s+Euro\s+6e\s+bis\s+BABK\s+29\s+578,51\s+(?P<price>35\s+790,00)'
+    official_trim: ST-Line X A7
+    official_powertrain: 1.0i EcoBoost mHEV 92 kW / 125 Pk A7 FWD
+    jato_powertrain: MHEV
+    price_label: Prijs in EUR incl. btw
+  - pattern: '1\.0i\s+EcoBoost\s+mHEV\s+-\s+114\s+kW\s+/\s+155\s+Pk\s+A7\s+FWD\s+Euro\s+6e\s+bis\s+BABL\s+30\s+570,25\s+(?P<price>36\s+990,00)'
+    official_trim: ST-Line X A7 155 Pk
+    official_powertrain: 1.0i EcoBoost mHEV 114 kW / 155 Pk A7 FWD
+    jato_powertrain: MHEV
+    price_label: Prijs in EUR incl. btw
+  - pattern: '1\.0i\s+EcoBoost\s+mHEV\s+-\s+92\s+kW\s+/\s+125\s+Pk\s+A7\s+FWD\s+Euro\s+6e\s+bis\s+BABM\s+32\s+057,85\s+(?P<price>38\s+790,00)'
+    official_trim: BlueCruise Edition A7
+    official_powertrain: 1.0i EcoBoost mHEV 92 kW / 125 Pk A7 FWD
+    jato_powertrain: MHEV
+    price_label: Prijs in EUR incl. btw
+  - pattern: '1\.0i\s+EcoBoost\s+mHEV\s+-\s+114\s+kW\s+/\s+155\s+Pk\s+A7\s+FWD\s+Euro\s+6e\s+bis\s+BABN\s+33\s+049,59\s+(?P<price>39\s+990,00)'
+    official_trim: BlueCruise Edition A7 155 Pk
+    official_powertrain: 1.0i EcoBoost mHEV 114 kW / 155 Pk A7 FWD
+    jato_powertrain: MHEV
+    price_label: Prijs in EUR incl. btw
+  - pattern: '1\.0i\s+EcoBoost\s+mHEV\s+-\s+119\s+kW\s+/\s+160\s+Pk\s+A7\s+FWD\s+Euro\s+6e\s+bis\s+BABO\s+33\s+793,39\s+(?P<price>40\s+890,00)'
+    official_trim: ST A7 160 Pk
+    official_powertrain: 1.0i EcoBoost mHEV 119 kW / 160 Pk A7 FWD
+    jato_powertrain: MHEV
+    price_label: Prijs in EUR incl. btw
 schedule:
   frequency: manual_only
   run_window_start: 00:00
   run_window_end: 05:00
   preferred_weekday: monday
-notes: Draft scaffold generated from country×model top30 backlog. Replace source_url,
-  profile.url, selectors, currency, price label, and the single-model placeholders
-  before promoting to 07_ScrapingToolkit/sources. [CSS selectors applied from brand
-  probe]
+notes: Replaced a todo.invalid Scrapling scaffold with Ford Belgium's official
+  Puma MCA prijslijst PDF linked from the public Ford Belgium Puma price-list
+  page. The rendered price page was visually checked; regexes capture only the
+  vehicle Prijs in EUR incl. btw rows, not option packs, accessories, finance,
+  lease, CO2, WLTP, or dealer/configured prices.
 bootstrap_meta:
   country_model_rank: 21
   suggested_scope_kind: single_model
