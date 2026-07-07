@@ -13,6 +13,7 @@ import { compactSearchText } from "../utils/searchMatching";
 import { DEFAULT_EXPORT, ExportPanel, downloadPng, type ExportSettings } from "../components/ExportPanel";
 import { DeckExportDrawer, DeckFloatingDrawer } from "../components/deckControls";
 import { JATO_COUNTRIES, formatJatoCountryOption } from "../utils/jatoCountries";
+import "./AdvancedAnalysisPage.css";
 import type {
   AdvancedAnalysisCompetitorSetRequest,
   AdvancedAnalysisCountriesResponse,
