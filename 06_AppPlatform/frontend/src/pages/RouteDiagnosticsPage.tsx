@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 
+import "./RouteDiagnosticsPage.css";
 import {
   DECISION_KEY,
   MANUAL_KEY,
