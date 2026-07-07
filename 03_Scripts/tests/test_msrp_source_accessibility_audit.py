@@ -329,6 +329,44 @@ def test_probe_source_classifies_tls_eof_as_tls_handshake_failed() -> None:
     assert item["retryable"] is True
 
 
+def test_probe_source_uses_curl_fallback_when_requests_tls_fails() -> None:
+    session = _FakeSession(
+        exc=audit.requests.exceptions.SSLError(
+            "[SSL: UNEXPECTED_EOF_WHILE_READING] EOF occurred in violation of protocol",
+        ),
+    )
+    calls: list[tuple[str, float]] = []
+
+    def fake_curl_probe(url: str, timeout_seconds: float):
+        calls.append((url, timeout_seconds))
+        return {
+            "method": "CURL_HEAD",
+            "statusCode": 200,
+            "finalUrl": "https://www.dacia.pt/gama-hibrida-eletrica/duster-suv.html",
+        }
+
+    item = audit.probe_source(
+        {
+            "countryCode": "pt",
+            "sourceCode": "dacia_duster_pt_draft_scrapling",
+            "sourceUrl": "https://www.dacia.pt/gama-hibrida-eletrica/duster-suv.html",
+        },
+        session=session,
+        timeout_seconds=7.0,
+        curl_probe=fake_curl_probe,
+    )
+
+    assert calls == [
+        ("https://www.dacia.pt/gama-hibrida-eletrica/duster-suv.html", 7.0)
+    ]
+    assert item["method"] == "CURL_HEAD"
+    assert item["probeStatus"] == "fetchable"
+    assert item["recommendedAction"] == "run_page_analyzer_or_selector_repair"
+    assert item["retryable"] is False
+    assert item["fallbackProbe"] == "curl"
+    assert item["requestsError"]
+
+
 def test_probe_source_classifies_dns_resolution_failures() -> None:
     session = _FakeSession(
         exc=audit.requests.ConnectionError(
@@ -383,6 +421,7 @@ def test_run_writes_accessibility_report(tmp_path: Path) -> None:
     assert report["summary"]["probeStatusCounts"] == {
         "source_url_not_found": 1,
     }
+    assert report["summary"]["curlFallbackFetchableCount"] == 0
     assert report["summary"]["tlsHandshakeFailedCount"] == 0
     assert report["summary"]["dnsUnresolvedCount"] == 0
     assert (tmp_path / "out" / "msrp_source_accessibility_audit.json").exists()
@@ -419,5 +458,50 @@ def test_run_can_probe_current_source_drafts(tmp_path: Path) -> None:
     assert report["sourceMode"] == "source_drafts"
     assert report["summary"]["sourceDraftSourceCount"] == 1
     assert report["summary"]["probeStatusCounts"] == {"fetchable": 1}
+    assert report["summary"]["curlFallbackFetchableCount"] == 0
     assert report["items"][0]["sourceDraftPath"] == str(target)
     assert (tmp_path / "out" / "msrp_source_accessibility_audit.json").exists()
+
+
+def test_run_counts_curl_fallback_fetchable_source_drafts(tmp_path: Path) -> None:
+    source_root = tmp_path / "source_drafts"
+    target = source_root / "pt" / "04_dacia_duster_pt.yaml"
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text(
+        "\n".join([
+            "source_code: dacia_duster_pt_draft_scrapling",
+            "country: Portugal",
+            "brand: DACIA",
+            "source_url: https://www.dacia.pt/gama-hibrida-eletrica/duster-suv.html",
+            "profile:",
+            "  url: https://www.dacia.pt/gama-hibrida-eletrica/duster-suv.html",
+        ]),
+        encoding="utf-8",
+    )
+    session = _FakeSession(
+        exc=audit.requests.exceptions.SSLError(
+            "[SSL: UNEXPECTED_EOF_WHILE_READING] EOF occurred in violation of protocol",
+        ),
+    )
+
+    def fake_curl_probe(url: str, timeout_seconds: float):
+        return {
+            "method": "CURL_HEAD",
+            "statusCode": 200,
+            "finalUrl": url,
+        }
+
+    report = audit.run(
+        out_dir=str(tmp_path / "out"),
+        source_draft_root=str(source_root),
+        countries="pt",
+        brands="dacia",
+        session=session,
+        curl_probe=fake_curl_probe,
+    )
+
+    assert report["summary"]["probeStatusCounts"] == {"fetchable": 1}
+    assert report["summary"]["retryableNetworkCount"] == 0
+    assert report["summary"]["tlsHandshakeFailedCount"] == 0
+    assert report["summary"]["curlFallbackFetchableCount"] == 1
+    assert report["items"][0]["fallbackProbe"] == "curl"

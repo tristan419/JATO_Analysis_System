@@ -7,9 +7,10 @@ import argparse
 from datetime import datetime, timezone
 import json
 from pathlib import Path
+import subprocess
 import sys
 import time
-from typing import Any
+from typing import Any, Callable
 from urllib.parse import urlparse
 
 import requests
@@ -40,6 +41,7 @@ DEFAULT_HEADERS = {
     "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
     "Accept-Language": "en-US,en;q=0.9,de;q=0.8",
 }
+CurlProbe = Callable[[str, float], dict[str, Any] | None]
 
 
 def _utc_now_iso() -> str:
@@ -305,6 +307,65 @@ def _response_text_sample(response: Any, limit: int = 500) -> str:
     return " ".join(text.split())[:limit]
 
 
+def _probe_with_curl(url: str, timeout_seconds: float) -> dict[str, Any] | None:
+    """Use curl as a second opinion when requests fails before HTTP.
+
+    Some manufacturer sites reject Python/OpenSSL TLS fingerprints while the
+    system curl path succeeds. The audit should not turn those into source
+    repair issues when the URL itself is reachable.
+    """
+    if not url:
+        return None
+    try:
+        completed = subprocess.run(
+            [
+                "curl",
+                "--location",
+                "--head",
+                "--silent",
+                "--show-error",
+                "--max-time",
+                str(max(1, int(timeout_seconds))),
+                "--user-agent",
+                DEFAULT_HEADERS["User-Agent"],
+                "--output",
+                "/dev/null",
+                "--write-out",
+                "\n%{http_code}\n%{url_effective}",
+                url,
+            ],
+            capture_output=True,
+            check=False,
+            text=True,
+            timeout=max(2.0, timeout_seconds + 2.0),
+        )
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        return {
+            "method": "CURL_HEAD",
+            "error": str(exc),
+            "errorType": type(exc).__name__,
+        }
+
+    lines = [line.strip() for line in completed.stdout.splitlines() if line.strip()]
+    status_code = None
+    final_url = url
+    if len(lines) >= 2 and lines[-2].isdigit():
+        status_code = int(lines[-2])
+        final_url = lines[-1] or url
+    elif lines and lines[-1].isdigit():
+        status_code = int(lines[-1])
+    result: dict[str, Any] = {
+        "method": "CURL_HEAD",
+        "statusCode": status_code,
+        "finalUrl": final_url,
+        "returnCode": completed.returncode,
+    }
+    if completed.stderr.strip():
+        result["error"] = " ".join(completed.stderr.split())
+        result["errorType"] = "CurlError"
+    return result
+
+
 def _is_anti_bot_response(
     *,
     status_code: int | None,
@@ -470,6 +531,7 @@ def probe_source(
     *,
     session: requests.Session,
     timeout_seconds: float = 12.0,
+    curl_probe: CurlProbe | None = None,
 ) -> dict[str, Any]:
     source_url = str(source.get("sourceUrl") or source.get("finalUrl") or "").strip()
     started = time.perf_counter()
@@ -477,6 +539,10 @@ def probe_source(
     response = None
     error = None
     error_type = None
+    fallback_probe = None
+    fallback_error = None
+    fallback_status_code = None
+    fallback_final_url = None
     if source_url:
         try:
             method, response = _request_source(
@@ -493,23 +559,53 @@ def probe_source(
         except requests.RequestException as exc:
             error = str(exc)
             error_type = type(exc).__name__
+        if error and curl_probe:
+            curl_result = curl_probe(source_url, timeout_seconds) or {}
+            fallback_error = curl_result.get("error")
+            curl_status = curl_result.get("statusCode") or curl_result.get("httpStatus")
+            if curl_status:
+                fallback_probe = "curl"
+                fallback_status_code = int(curl_status)
+                fallback_final_url = str(curl_result.get("finalUrl") or source_url)
+                method = str(curl_result.get("method") or "CURL_HEAD")
     elapsed_ms = round((time.perf_counter() - started) * 1000)
 
     has_response = response is not None
-    status_code = int(getattr(response, "status_code", 0) or 0) if has_response else None
-    final_url = str(getattr(response, "url", "") or source_url) if has_response else source_url
-    headers = dict(getattr(response, "headers", {}) or {}) if has_response else {}
-    text_sample = _response_text_sample(response) if has_response else ""
+    if fallback_status_code is not None:
+        status_code = fallback_status_code
+    elif has_response:
+        status_code = int(getattr(response, "status_code", 0) or 0)
+    else:
+        status_code = None
+
+    if fallback_final_url is not None:
+        final_url = fallback_final_url
+    elif has_response:
+        final_url = str(getattr(response, "url", "") or source_url)
+    else:
+        final_url = source_url
+
+    if fallback_probe:
+        headers = {}
+        text_sample = ""
+    elif has_response:
+        headers = dict(getattr(response, "headers", {}) or {})
+        text_sample = _response_text_sample(response)
+    else:
+        headers = {}
+        text_sample = ""
+    classification_error = None if fallback_probe else error
+    classification_error_type = None if fallback_probe else error_type
     classification = classify_probe_result(
         url=source_url,
         status_code=status_code,
         final_url=final_url,
         headers=headers,
         text_sample=text_sample,
-        error=error,
-        error_type=error_type,
+        error=classification_error,
+        error_type=classification_error_type,
     )
-    return {
+    result = {
         "countryCode": str(source.get("countryCode") or source.get("country") or "").lower(),
         "sourceCode": source.get("sourceCode") or source.get("code"),
         "brand": source.get("brand"),
@@ -526,6 +622,14 @@ def probe_source(
         "textSample": text_sample if classification["probeStatus"] != "fetchable" else "",
         **classification,
     }
+    if fallback_probe:
+        result["fallbackProbe"] = fallback_probe
+        result["requestsError"] = error
+        result["requestsErrorType"] = error_type
+    elif fallback_error:
+        result["fallbackProbe"] = "curl_failed"
+        result["curlError"] = fallback_error
+    return result
 
 
 def _increment(target: dict[str, int], value: Any) -> None:
@@ -540,6 +644,7 @@ def summarize_items(items: list[dict[str, Any]]) -> dict[str, Any]:
     proxy_required_count = 0
     tls_failed_count = 0
     dns_unresolved_count = 0
+    curl_fallback_fetchable_count = 0
     for item in items:
         probe_status = item.get("probeStatus")
         _increment(status_counts, probe_status)
@@ -552,6 +657,8 @@ def summarize_items(items: list[dict[str, Any]]) -> dict[str, Any]:
             tls_failed_count += 1
         if probe_status == "dns_unresolved":
             dns_unresolved_count += 1
+        if item.get("fallbackProbe") == "curl" and probe_status == "fetchable":
+            curl_fallback_fetchable_count += 1
     return {
         "probedSourceCount": len(items),
         "probeStatusCounts": status_counts,
@@ -560,6 +667,7 @@ def summarize_items(items: list[dict[str, Any]]) -> dict[str, Any]:
         "officialProxyRequiredCount": proxy_required_count,
         "tlsHandshakeFailedCount": tls_failed_count,
         "dnsUnresolvedCount": dns_unresolved_count,
+        "curlFallbackFetchableCount": curl_fallback_fetchable_count,
     }
 
 
@@ -568,6 +676,7 @@ def _build_accessibility_report_from_sources(
     *,
     session: requests.Session,
     timeout_seconds: float = 12.0,
+    curl_probe: CurlProbe | None = None,
     source_mode: str,
     backlog: dict[str, Any] | None = None,
     include_transient: bool = False,
@@ -578,6 +687,7 @@ def _build_accessibility_report_from_sources(
             source,
             session=session,
             timeout_seconds=timeout_seconds,
+            curl_probe=curl_probe,
         )
         for source in sources
     ]
@@ -604,6 +714,7 @@ def build_accessibility_report(
     session: requests.Session,
     timeout_seconds: float = 12.0,
     include_transient: bool = False,
+    curl_probe: CurlProbe | None = None,
 ) -> dict[str, Any]:
     sources = source_issues_from_backlog(
         backlog,
@@ -613,6 +724,7 @@ def build_accessibility_report(
         sources,
         session=session,
         timeout_seconds=timeout_seconds,
+        curl_probe=curl_probe,
         source_mode="backlog",
         backlog=backlog,
         include_transient=include_transient,
@@ -628,6 +740,7 @@ def build_source_draft_accessibility_report(
     limit: int | None,
     session: requests.Session,
     timeout_seconds: float = 12.0,
+    curl_probe: CurlProbe | None = None,
 ) -> dict[str, Any]:
     sources = source_issues_from_source_drafts(
         source_draft_root,
@@ -640,6 +753,7 @@ def build_source_draft_accessibility_report(
         sources,
         session=session,
         timeout_seconds=timeout_seconds,
+        curl_probe=curl_probe,
         source_mode="source_drafts",
         source_context={
             "sourceDraftRoot": _display_path(source_draft_root),
@@ -672,6 +786,7 @@ def _write_markdown(report: dict[str, Any], path: Path) -> None:
         f"| Official proxy required | {summary.get('officialProxyRequiredCount', 0)} |",
         f"| TLS handshake failed | {summary.get('tlsHandshakeFailedCount', 0)} |",
         f"| DNS unresolved | {summary.get('dnsUnresolvedCount', 0)} |",
+        f"| Curl fallback fetchable | {summary.get('curlFallbackFetchableCount', 0)} |",
         "",
         "| Country | Source | HTTP | Probe status | Recommended action | URL |",
         "|---|---|---:|---|---|---|",
@@ -702,12 +817,20 @@ def run(
     source_codes: list[str] | None = None,
     limit: int | None = None,
     session: requests.Session | None = None,
+    use_curl_fallback: bool = True,
+    curl_probe: CurlProbe | None = None,
 ) -> dict[str, Any]:
     output_dir = Path(out_dir).resolve() if out_dir else DEFAULT_OUT_DIR
     output_dir.mkdir(parents=True, exist_ok=True)
     owns_session = session is None
     current_session = session or requests.Session()
     current_session.headers.update(DEFAULT_HEADERS)
+    if curl_probe is not None:
+        active_curl_probe = curl_probe
+    elif use_curl_fallback:
+        active_curl_probe = _probe_with_curl
+    else:
+        active_curl_probe = None
     try:
         if source_draft_root:
             code_filter = {
@@ -723,6 +846,7 @@ def run(
                 limit=limit,
                 session=current_session,
                 timeout_seconds=timeout_seconds,
+                curl_probe=active_curl_probe,
             )
         else:
             backlog = _load_json(Path(backlog_path or DEFAULT_BACKLOG_PATH))
@@ -731,6 +855,7 @@ def run(
                 session=current_session,
                 timeout_seconds=timeout_seconds,
                 include_transient=include_transient,
+                curl_probe=active_curl_probe,
             )
     finally:
         if owns_session:
@@ -790,6 +915,11 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         action="store_true",
         help="Also probe transient regressions with last-known-good evidence.",
     )
+    parser.add_argument(
+        "--no-curl-fallback",
+        action="store_true",
+        help="Disable curl fallback when Python requests fails before HTTP.",
+    )
     return parser.parse_args(argv)
 
 
@@ -805,6 +935,7 @@ def main(argv: list[str] | None = None) -> int:
         brands=args.brands,
         source_codes=args.source_code,
         limit=args.limit,
+        use_curl_fallback=not args.no_curl_fallback,
     )
     return 0
 
