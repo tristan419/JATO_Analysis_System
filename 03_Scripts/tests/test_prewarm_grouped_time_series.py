@@ -38,18 +38,33 @@ def test_build_prewarm_requests_covers_default_dashboard_combinations() -> None:
         grains=prewarm.DEFAULT_GRAINS,
         top_n=10,
         include_others=False,
+        share_split_by=prewarm.DEFAULT_SHARE_SPLIT_BY,
     )
 
     assert [item.label for item in requests] == [
         "month:动总规整",
         "month:国家",
+        "month:四驱占比",
+        "month:四驱占比:segment",
+        "month:四驱占比:powertrain",
+        "month:Business/Private 占比",
+        "month:Business/Private 占比:segment",
+        "month:Business/Private 占比:powertrain",
         "year:动总规整",
         "year:国家",
+        "year:四驱占比",
+        "year:四驱占比:segment",
+        "year:四驱占比:powertrain",
+        "year:Business/Private 占比",
+        "year:Business/Private 占比:segment",
+        "year:Business/Private 占比:powertrain",
     ]
     assert requests[0].payload["filters"]["国家"] == prewarm.DEFAULT_COUNTRIES
     assert requests[0].payload["filters"]["动总规整"] == ["ICE", "HEV", "BEV", "MHEV", "PHEV"]
     assert requests[0].payload["top_n"] == 10
     assert requests[0].payload["include_others"] is False
+    assert requests[3].payload["share_split_by"] == "segment"
+    assert requests[4].payload["share_split_by"] == "powertrain"
 
 
 def test_validate_attempts_can_require_repeat_cache_hit() -> None:

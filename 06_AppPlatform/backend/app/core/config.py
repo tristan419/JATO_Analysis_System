@@ -258,7 +258,11 @@ GROUPED_TIME_SERIES_PREWARM_ENABLED = _parse_bool_env(
 )
 GROUPED_TIME_SERIES_PREWARM_GROUP_BY = _parse_csv_env(
     "APP_GROUPED_TIME_SERIES_PREWARM_GROUP_BY",
-    "动总规整,国家",
+    "动总规整,国家,四驱占比,Business/Private 占比",
+)
+GROUPED_TIME_SERIES_PREWARM_SHARE_SPLIT_BY = _parse_csv_env(
+    "APP_GROUPED_TIME_SERIES_PREWARM_SHARE_SPLIT_BY",
+    "segment,powertrain",
 )
 GROUPED_TIME_SERIES_PREWARM_GRAINS = _parse_csv_env(
     "APP_GROUPED_TIME_SERIES_PREWARM_GRAINS",
