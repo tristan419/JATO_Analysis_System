@@ -35,6 +35,7 @@ import {
   type SlideLayoutSettings,
 } from "../utils/slideLayout";
 import { fuelColor } from "../utils/colors";
+import "./HeroProductAnalysisView.css";
 
 ModuleRegistry.registerModules([AllCommunityModule]);
 
