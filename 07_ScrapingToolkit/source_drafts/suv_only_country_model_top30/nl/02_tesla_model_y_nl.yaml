@@ -1,12 +1,12 @@
 source_code: tesla_model_y_nl_draft_scrapling
 country: 荷兰
 brand: TESLA
-source_url: https://todo.invalid/nl/tesla/model_y
+source_url: https://www.tesla.com/nl_nl/modely
 source_type: manufacturer_official
 price_semantics: base_msrp
 extractor_type: scrapling
 profile:
-  url: https://todo.invalid/nl/tesla/model_y
+  url: https://www.tesla.com/nl_nl/modely
   tier: stealth
   headless: true
   network_idle: true
@@ -90,8 +90,8 @@ schedule:
   preferred_weekday: monday
 notes: Draft scaffold generated from country×model top30 backlog. Replace source_url,
   profile.url, selectors, currency, price label, and the single-model placeholders
-  before promoting to 07_ScrapingToolkit/sources. [CSS selectors applied from brand
-  probe]
+  before promoting to 07_ScrapingToolkit/sources. [URL filled from TESLA template]
+  [CSS selectors applied from brand probe]
 bootstrap_meta:
   country_model_rank: 2
   suggested_scope_kind: single_model
