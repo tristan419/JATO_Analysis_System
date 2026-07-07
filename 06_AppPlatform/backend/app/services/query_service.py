@@ -54,7 +54,7 @@ class GroupedTimeSeriesQueryResult:
 @dataclass(frozen=True)
 class DashboardOverviewQueryResult:
     payload: dict
-    cache_state: Literal["MEMORY", "REDIS", "DISK", "MISS"]
+    cache_state: Literal["MEMORY", "REDIS", "DISK", "REDIS_WAIT", "MISS"]
 
 # ── Column name candidates ──────────────────────────────────────
 COUNTRY_CANDIDATES = ["国家", "Country", "country"]
@@ -397,6 +397,37 @@ def _load_dashboard_overview_redis_cache(
         return _store_dashboard_overview_cache(
             cache_key,
             cached_result,
+            dataset_token,
+        )
+
+
+def _wait_for_dashboard_overview_redis_cache(
+    cache_key: _OverviewCacheKey,
+    dataset_token: str,
+) -> dict | None:
+    client = get_redis_client()
+    if client is None:
+        return None
+    redis_key = _dashboard_overview_redis_cache_key(cache_key, dataset_token)
+    try:
+        payload = wait_for_cache(client, redis_key)
+    except Exception as exc:  # noqa: BLE001 - Redis must fail open
+        LOGGER.warning("Could not wait for dashboard overview Redis cache: %s", exc)
+        return None
+
+    if not isinstance(payload, dict):
+        return None
+    if payload.get("schema") != _DASHBOARD_OVERVIEW_REDIS_CACHE_SCHEMA:
+        return None
+    if payload.get("dataset") != dataset_token:
+        return None
+    result = payload.get("result")
+    if not isinstance(result, dict):
+        return None
+    with _overview_cache_lock:
+        return _store_dashboard_overview_cache(
+            cache_key,
+            result,
             dataset_token,
         )
 
@@ -2152,38 +2183,64 @@ def query_overview_with_cache_state(
     if cached_result is not None:
         return DashboardOverviewQueryResult(cached_result, "DISK")
 
-    with _overview_cache_lock:
-        now = time.monotonic()
+    redis_lock_client = None
+    redis_lock_key: str | None = None
+    redis_lock_acquired = False
+    try:
         dataset_token = repo.current_dataset_token()
-        cached_result = _get_dashboard_overview_cache_hit(
-            cache_key,
-            dataset_token,
-            now,
-        )
-        if cached_result is not None:
-            return DashboardOverviewQueryResult(cached_result, "MEMORY")
+        redis_lock_client = get_redis_client()
+        if redis_lock_client is not None:
+            redis_lock_key = _dashboard_overview_redis_cache_key(
+                cache_key,
+                dataset_token,
+            )
+            redis_lock_acquired = acquire_compute_lock(
+                redis_lock_client,
+                redis_lock_key,
+            )
+            if not redis_lock_acquired:
+                cached_result = _wait_for_dashboard_overview_redis_cache(
+                    cache_key,
+                    dataset_token,
+                )
+                if cached_result is not None:
+                    return DashboardOverviewQueryResult(cached_result, "REDIS_WAIT")
 
-        result = _query_overview_impl(
-            filters=filters,
-            prefer_precomputed=prefer_precomputed,
-            top_n=top_n,
-        )
-        cached_result = _store_dashboard_overview_cache(
+        with _overview_cache_lock:
+            now = time.monotonic()
+            dataset_token = repo.current_dataset_token()
+            cached_result = _get_dashboard_overview_cache_hit(
+                cache_key,
+                dataset_token,
+                now,
+            )
+            if cached_result is not None:
+                return DashboardOverviewQueryResult(cached_result, "MEMORY")
+
+            result = _query_overview_impl(
+                filters=filters,
+                prefer_precomputed=prefer_precomputed,
+                top_n=top_n,
+            )
+            cached_result = _store_dashboard_overview_cache(
+                cache_key,
+                result,
+                dataset_token,
+            )
+        _write_dashboard_overview_redis_cache(
             cache_key,
-            result,
             dataset_token,
+            cached_result,
         )
-    _write_dashboard_overview_redis_cache(
-        cache_key,
-        dataset_token,
-        cached_result,
-    )
-    _write_dashboard_overview_disk_cache(
-        cache_key,
-        dataset_token,
-        cached_result,
-    )
-    return DashboardOverviewQueryResult(cached_result, "MISS")
+        _write_dashboard_overview_disk_cache(
+            cache_key,
+            dataset_token,
+            cached_result,
+        )
+        return DashboardOverviewQueryResult(cached_result, "MISS")
+    finally:
+        if redis_lock_acquired and redis_lock_client is not None and redis_lock_key:
+            release_compute_lock(redis_lock_client, redis_lock_key)
 
 
 def _query_overview_impl(

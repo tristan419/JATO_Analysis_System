@@ -296,6 +296,66 @@ def test_query_overview_uses_redis_cache_by_role_scope(
     )
 
 
+def test_query_overview_waits_for_peer_redis_compute(
+    monkeypatch,
+) -> None:
+    redis = _FakeRedis()
+    waited_keys: list[str] = []
+    payload = {
+        "route": "dynamic-aggregate",
+        "kpis": {"totalRows": 10},
+        "monthSeries": [],
+        "yearSeries": [],
+    }
+    cache_key = (
+        query_service._normalize_cache_scope("viewer"),
+        query_service._normalize_query_cache_filters({"Country": ["HU"]}),
+        True,
+        10,
+    )
+    redis_key = query_service._dashboard_overview_redis_cache_key(
+        cache_key,
+        "dataset-a",
+    )
+    redis.store[f"{redis_key}:lock"] = "1"
+
+    def wait_for_peer_cache(client, key):
+        waited_keys.append(key)
+        assert client is redis
+        return {
+            "schema": query_service._DASHBOARD_OVERVIEW_REDIS_CACHE_SCHEMA,
+            "dataset": "dataset-a",
+            "cachedAt": 1,
+            "result": payload,
+        }
+
+    monkeypatch.setattr(query_service, "get_redis_client", lambda: redis)
+    monkeypatch.setattr(query_service, "wait_for_cache", wait_for_peer_cache)
+    monkeypatch.setattr(
+        query_service.repo,
+        "current_dataset_token",
+        lambda: "dataset-a",
+    )
+    monkeypatch.setattr(
+        query_service,
+        "_query_overview_impl",
+        lambda **_kwargs: (_ for _ in ()).throw(
+            AssertionError("peer cache wait should avoid overview compute")
+        ),
+    )
+
+    result = query_service.query_overview_with_cache_state(
+        filters={"Country": ["HU"]},
+        prefer_precomputed=True,
+        top_n=10,
+        cache_scope="viewer",
+    )
+
+    assert result.cache_state == "REDIS_WAIT"
+    assert result.payload == payload
+    assert waited_keys == [redis_key]
+
+
 def test_warm_dashboard_overview_cache_includes_configured_filter_sets(
     monkeypatch,
 ) -> None:
