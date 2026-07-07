@@ -119,3 +119,21 @@ jobs:
             await sleep(15000);
           }
           NODE
+
+      - name: Prewarm intl edge cache
+        if: steps.cloudflare_config.outputs.configured == 'true'
+        continue-on-error: true
+        timeout-minutes: 8
+        working-directory: 06_AppPlatform/frontend
+        env:
+          JATO_PREWARM_ORIGIN: ${{ vars.JATO_INTL_ORIGIN || 'https://intl.ojeur.cloud' }}
+          JATO_PREWARM_USERNAME: ${{ secrets.JATO_PREWARM_USERNAME }}
+          JATO_PREWARM_PASSWORD: ${{ secrets.JATO_PREWARM_PASSWORD }}
+          JATO_PREWARM_ROLES: ${{ vars.JATO_PREWARM_ROLES || 'viewer,order_filler' }}
+          JATO_PREWARM_REPETITIONS: "2"
+          JATO_PREWARM_TIMEOUT_MS: "20000"
+          JATO_PREWARM_FAIL_ON_ERROR: "0"
+          JATO_PREWARM_COUNTRIES: ${{ vars.JATO_PREWARM_COUNTRIES || '丹麦,克罗地亚,匈牙利,奥地利,希腊,德国,意大利,挪威,捷克,斯洛伐克,斯洛文尼亚,比利时,法国,波兰,瑞典,瑞士,罗马尼亚,芬兰,荷兰,葡萄牙,西班牙' }}
+          JATO_PREWARM_POWERTRAINS: ${{ vars.JATO_PREWARM_POWERTRAINS || 'ICE,HEV,BEV,MHEV,PHEV' }}
+          JATO_PREWARM_GROUP_BY: ${{ vars.JATO_PREWARM_GROUP_BY || '动总规整,国家,四驱占比,Business/Private 占比' }}
+        run: npm run perf:prewarm-edge

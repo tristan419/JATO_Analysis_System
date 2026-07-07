@@ -103,6 +103,21 @@ JATO_PREWARM_PASSWORD='<password>' \
 npm run perf:prewarm-edge
 ```
 
+The GitHub Actions workflow `deploy-cloudflare-pages-intl` runs this prewarm
+step automatically after `build-meta.json` confirms that `intl.ojeur.cloud` is
+serving the new commit. The workflow treats prewarm failures as non-blocking so
+a transient backend timeout does not fail an otherwise successful static
+deployment. Configure these optional variables/secrets to scope the automatic
+warmup:
+
+```text
+JATO_PREWARM_USERNAME / JATO_PREWARM_PASSWORD secrets
+JATO_PREWARM_ROLES variable, default viewer,order_filler
+JATO_PREWARM_COUNTRIES variable
+JATO_PREWARM_POWERTRAINS variable
+JATO_PREWARM_GROUP_BY variable
+```
+
 The script logs in only when username/password are provided, then sends the
 same `X-User-Name`, `X-User-Role`, optional `X-Auth-Token`, and optional
 `X-JATO-Data-Version` headers that the Pages Function uses to scope cache

@@ -27,6 +27,26 @@ def test_tencent_deploy_workflow_preserves_runtime_artifacts() -> None:
     assert "Restored runtime path" in workflow
 
 
+def test_cloudflare_pages_deploy_prewarms_intl_edge_cache_after_build_verification() -> None:
+    workflow = (REPO_ROOT / ".github/workflows/deploy-cloudflare-pages-intl.yml").read_text(
+        encoding="utf-8",
+    )
+
+    assert "Verify intl build metadata" in workflow
+    assert "Prewarm intl edge cache" in workflow
+    assert workflow.index("Verify intl build metadata") < workflow.index(
+        "Prewarm intl edge cache",
+    )
+    assert "continue-on-error: true" in workflow
+    assert "npm run perf:prewarm-edge" in workflow
+    assert "JATO_PREWARM_ROLES" in workflow
+    assert "viewer,order_filler" in workflow
+    assert "JATO_PREWARM_COUNTRIES" in workflow
+    assert "JATO_PREWARM_POWERTRAINS" in workflow
+    assert "JATO_PREWARM_GROUP_BY" in workflow
+    assert "JATO_PREWARM_FAIL_ON_ERROR" in workflow
+
+
 def test_tencent_deploy_upload_timeout_allows_slow_tencent_scp() -> None:
     workflow = (REPO_ROOT / ".github/workflows/deploy-fullstack-tencent.yml").read_text(
         encoding="utf-8",
