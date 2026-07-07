@@ -1,12 +1,12 @@
 source_code: skoda_karoq_pt_draft_scrapling
 country: 葡萄牙
 brand: SKODA
-source_url: https://todo.invalid/pt/skoda/karoq
+source_url: https://www.skoda.pt/skoda-karoq/karoq
 source_type: manufacturer_official
 price_semantics: base_msrp
 extractor_type: scrapling
 profile:
-  url: https://todo.invalid/pt/skoda/karoq
+  url: https://www.skoda.pt/skoda-karoq/karoq
   headless: true
   default_currency: EUR
   default_tax_included: true
@@ -87,11 +87,11 @@ schedule:
   run_window_start: 00:00
   run_window_end: 05:00
   preferred_weekday: monday
-notes: Draft scaffold generated from country×model top30 backlog. Replace source_url,
-  profile.url, selectors, currency, price label, and the single-model placeholders
-  before promoting to 07_ScrapingToolkit/sources. [CSS selectors applied from brand
-  probe] [Switched to playwright_card_flow with skoda_trim_overview_playwright.yaml]
-  [Reverted to scrapling — playwright preset needs per-brand tuning]
+notes: Official Skoda Portugal Karoq model page filled from manufacturer site research.
+  Selectors remain draft-level scrapling defaults until extraction is tuned. [CSS
+  selectors applied from brand probe] [Switched to playwright_card_flow with skoda_trim_overview_playwright.yaml]
+  [Reverted to scrapling — playwright preset needs per-brand tuning] [URL filled
+  from SKODA official site research]
 bootstrap_meta:
   country_model_rank: 24
   suggested_scope_kind: single_model
