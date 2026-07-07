@@ -1,121 +1,90 @@
 source_code: jeep_avenger_gr_draft_scrapling
 country: 希腊
 brand: JEEP
-source_url: https://todo.invalid/gr/jeep/avenger
-source_type: manufacturer_official
+source_url: https://www.jeep.gr/content/dam/jeep/gr/pricelist/2026/Jeep_gamma_Pricelist_MAY_2026_Short.pdf
+source_type: official_price_list
 price_semantics: base_msrp
-extractor_type: scrapling
+extractor_type: pdf_text
 profile:
-  url: https://todo.invalid/gr/jeep/avenger
-  tier: stealth
-  headless: true
-  network_idle: true
-  impersonate: chrome
-  css:
-    vehicle_container: body
-    model: h1, h2
-    trim: h3
-    price: '[class*="price"]'
+  url: https://www.jeep.gr/content/dam/jeep/gr/pricelist/2026/Jeep_gamma_Pricelist_MAY_2026_Short.pdf
+  timeout_seconds: 45
+  retry_attempts: 1
+  retry_delay_seconds: 1
+  prefer_curl_download: true
   default_currency: EUR
   default_tax_included: true
-  default_price_label: MSRP
+  default_price_label: Τιμή τιμοκαταλόγου χωρίς PDI
   fixed_model: AVENGER
   fixed_jato_model: AVENGER
-  fixed_jato_powertrain: null
-  model_rules: []
-  skip_if_model_unmapped: false
   copy_trim_to_jato_trim: true
-  confidence_rules:
-    base: 0.2
-    fixed_model_bonus: 0.18
-    fixed_jato_model_bonus: 0.12
-    model_rule_bonus: 0.12
-    trim_present_bonus: 0.1
-    copy_trim_to_jato_trim_bonus: 0.09
-    parsed_price_text_bonus: 0.03
-    currency_bonus: 0.01
-    price_label_bonus: 0.02
-    trim_keyword_bonuses: []
-    price_band_bonuses:
-    - key: price_band_entry
-      label: Entry price band matched
-      max: 0
-      delta: 0.0
-    - key: price_band_mid
-      label: Mid price band matched
-      min: 0
-      max: 0
-      delta: 0.01
-    - key: price_band_high
-      label: High price band matched
-      min: 0
-      delta: 0.03
-    powertrain_keyword_bonuses: []
-    powertrain_bonuses:
-    - key: powertrain_bev
-      label: 'Powertrain matched: BEV'
-      powertrain: BEV
-      delta: 0.03
-    - key: powertrain_mhev
-      label: 'Powertrain matched: MHEV'
-      powertrain: MHEV
-      delta: 0.03
-    - key: powertrain_ice
-      label: 'Powertrain matched: ICE'
-      powertrain: ICE
-      delta: 0.03
-    clamp_min: 0.0
-    clamp_max: 1.0
-  structured_fields:
-    edition_rules:
-    - key: edition_special
-      label: Special Edition
-      keyword: special edition
-      special: true
-    powertrain_rules:
-    - key: powertrain_bev
-      powertrain: BEV
-      keywords:
-      - bev
-      - ev
-      - electric
-      - battery electric
-      - fully electric
-      - electric vehicle
-      - ilektriko
-    - key: powertrain_mhev
-      powertrain: MHEV
-      keywords:
-      - mhev
-      - mild hybrid
-      - mild-hybrid
-      - 48V
-    - key: powertrain_ice
-      powertrain: ICE
-      keywords:
-      - ice
-      - petrol
-      - gasoline
-      - diesel
-      - combustion
-      - venzini
-      - petreleo
-  auto_accept_gates:
-    review_threshold: 0.95
-    semi_auto_threshold: 0.98
-    require_powertrain_match: true
-    force_review_if_powertrain_missing: true
-    force_review_if_powertrain_ambiguous: true
-    force_review_for_special_edition: true
+  match_confidence: 0.86
+  match_status: review_required
+  match_reason:
+    kind: official_pdf_price_list
+    source: jeep_gr_gamma_pricelist_may_2026_short
+    document_month: 2026-05
+    note: Official Jeep Greece short price-list PDF linked from the Jeep Greece footer. Patterns capture the Τιμή τιμοκαταλόγου (χωρίς PDI) column for Avenger rows only and deliberately exclude PDI, retail promotion, state BEV subsidy, promotion-after-subsidy price, Renegade rows, and Compass rows.
+  entry_patterns:
+  - pattern: 'LONGITUDE\s+420\.M2E\.2\s+28\.379,0\s*€\s+161,3\s*€\s+28\.540,3\s*€\s+6\.811,0\s*€\s+0,0\s*€\s+(?P<price>35\.190)\s*€'
+    official_trim: LONGITUDE
+    official_powertrain: 100% Electric 156hp
+    jato_powertrain: BEV
+    price_label: Τιμή τιμοκαταλόγου χωρίς PDI
+  - pattern: 'ALTITUDE\s+420\.P2E\.2\s+30\.153,2\s*€\s+161,3\s*€\s+30\.314,5\s*€\s+7\.236,8\s*€\s+0,0\s*€\s+(?P<price>37\.390)\s*€'
+    official_trim: ALTITUDE
+    official_powertrain: 100% Electric 156hp
+    jato_powertrain: BEV
+    price_label: Τιμή τιμοκαταλόγου χωρίς PDI
+  - pattern: 'SUMMIT\s+420\.P2E\.2\.SUM\s+32\.008,1\s*€\s+161,3\s*€\s+32\.169,4\s*€\s+7\.681,9\s*€\s+0,0\s*€\s+(?P<price>39\.690)\s*€'
+    official_trim: SUMMIT
+    official_powertrain: 100% Electric 156hp
+    jato_powertrain: BEV
+    price_label: Τιμή τιμοκαταλόγου χωρίς PDI
+  - pattern: 'LONGITUDE\s+619\.M2K\.2\s+20\.293,7\s*€\s+161,3\s*€\s+20\.455,0\s*€\s+4\.870,5\s*€\s+1\.525,8\s*€\s+(?P<price>26\.690)\s*€'
+    official_trim: LONGITUDE
+    official_powertrain: 1.2L 110hp e-Hybrid DCT-6
+    jato_powertrain: MHEV
+    price_label: Τιμή τιμοκαταλόγου χωρίς PDI
+  - pattern: 'LONGITUDE\s+BUSINESS\s+619\.M2K\.2\.BUS\s+19\.167,2\s*€\s+161,3\s*€\s+19\.328,5\s*€\s+4\.600,1\s*€\s+1\.222,7\s*€\s+(?P<price>24\.990)\s*€'
+    official_trim: LONGITUDE BUSINESS
+    official_powertrain: 1.2L 110hp e-Hybrid DCT-6
+    jato_powertrain: MHEV
+    price_label: Τιμή τιμοκαταλόγου χωρίς PDI
+  - pattern: 'ALTITUDE\s+619\.P2K\.2\s+22\.053,3\s*€\s+161,3\s*€\s+22\.214,6\s*€\s+5\.292,8\s*€\s+2\.043,9\s*€\s+(?P<price>29\.390)\s*€'
+    official_trim: ALTITUDE
+    official_powertrain: 1.2L 110hp e-Hybrid DCT-6
+    jato_powertrain: MHEV
+    price_label: Τιμή τιμοκαταλόγου χωρίς PDI
+  - pattern: 'SUMMIT\s+619\.P2K\.2\.SUM\s+23\.878,0\s*€\s+161,3\s*€\s+24\.039,3\s*€\s+5\.730,7\s*€\s+2\.581,3\s*€\s+(?P<price>32\.190)\s*€'
+    official_trim: SUMMIT
+    official_powertrain: 1.2L 110hp e-Hybrid DCT-6
+    jato_powertrain: MHEV
+    price_label: Τιμή τιμοκαταλόγου χωρίς PDI
+  - pattern: 'UPLAND\s+619\.S4L\.2\s+23\.030,8\s*€\s+161,3\s*€\s+23\.192,1\s*€\s+5\.527,4\s*€\s+2\.331,8\s*€\s+(?P<price>30\.890)\s*€'
+    official_trim: UPLAND
+    official_powertrain: 1.2L 145hp DCT-6 4x4
+    jato_powertrain: MHEV
+    price_label: Τιμή τιμοκαταλόγου χωρίς PDI
+  - pattern: 'OVERLAND\s+619\.S4L\.2\.OVL\s+24\.790,3\s*€\s+161,3\s*€\s+24\.951,6\s*€\s+5\.949,7\s*€\s+2\.850,0\s*€\s+(?P<price>33\.590)\s*€'
+    official_trim: OVERLAND
+    official_powertrain: 1.2L 145hp DCT-6 4x4
+    jato_powertrain: MHEV
+    price_label: Τιμή τιμοκαταλόγου χωρίς PDI
+  - pattern: 'THE\s+NORTH\s+FACE\s+619\.U4L\.2\s+28\.151,9\s*€\s+161,3\s*€\s+28\.313,2\s*€\s+6\.756,5\s*€\s+3\.981,6\s*€\s+(?P<price>38\.890)\s*€'
+    official_trim: THE NORTH FACE
+    official_powertrain: 1.2L 145hp DCT-6 4x4
+    official_edition: THE NORTH FACE
+    jato_powertrain: MHEV
+    price_label: Τιμή τιμοκαταλόγου χωρίς PDI
 schedule:
   frequency: manual_only
   run_window_start: 00:00
   run_window_end: 05:00
   preferred_weekday: monday
-notes: Draft scaffold generated from country×model top30 backlog. Replace source_url,
-  profile.url, selectors, currency, price label, and the single-model placeholders
-  before promoting to 07_ScrapingToolkit/sources. [CSS selectors applied from brand
-  probe]
+notes: Replaced todo.invalid with Jeep Greece's official May 2026 short price-list
+  PDF. Regexes target Avenger rows only and capture the Τιμή τιμοκαταλόγου
+  (χωρίς PDI) column; PDI, retail promotions, state EV subsidies, net promoted
+  prices, Renegade rows, and Compass rows are excluded from base MSRP.
 bootstrap_meta:
   country_model_rank: 16
   suggested_scope_kind: single_model
