@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import hashlib
+import json
 import logging
 import os
 import re
@@ -27,25 +29,112 @@ logger = logging.getLogger(__name__)
 
 _CACHE_TTL_SECONDS = 1800
 _CACHE_MAX_ENTRIES = max(1, int(os.getenv("APP_ADVANCED_ANALYSIS_CACHE_MAX_ENTRIES", "48")))
+_CACHE_SCHEMA = 2
 _cache: dict[str, tuple[float, dict[str, Any]]] = {}
 _cache_lock = threading.Lock()
 _WARMUP_RUN = False
+_DEFAULT_WARMUP_COUNTRIES = ["瑞典", "德国", "挪威", "丹麦", "芬兰", "英国"]
+
+
+def _parse_csv_env(name: str, default: list[str]) -> list[str]:
+    raw = os.getenv(name)
+    if raw is None:
+        return list(default)
+    return [item.strip() for item in raw.split(",") if item.strip()]
+
+
+def _bool_env(name: str, default: bool = False) -> bool:
+    raw = os.getenv(name)
+    if raw is None:
+        return default
+    return raw.strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _int_env(name: str, default: int, minimum: int = 1) -> int:
+    try:
+        return max(minimum, int(os.getenv(name, str(default))))
+    except ValueError:
+        return default
 
 
 def warmup_cache() -> dict[str, Any]:
-    """Pre-compute transfer-mart for common countries (runs once on first import)."""
+    """Pre-compute common Advanced Analysis read models (runs once per process)."""
     global _WARMUP_RUN
     if _WARMUP_RUN:
-        return {"warmed": 0}
+        return {"warmed": 0, "failed": 0}
     _WARMUP_RUN = True
     warmed = 0
-    for country in ["瑞典", "德国", "挪威", "丹麦", "芬兰", "英国"]:
-        try:
-            compute_transfer_mart(country=country, top_n=15)
-            warmed += 1
-        except Exception:
-            pass
-    return {"warmed": warmed}
+    failed = 0
+    countries = _parse_csv_env("APP_ADVANCED_ANALYSIS_WARMUP_COUNTRIES", _DEFAULT_WARMUP_COUNTRIES)
+    cache_scopes = [
+        _normalize_cache_scope(item)
+        for item in _parse_csv_env("APP_ADVANCED_ANALYSIS_WARMUP_SCOPES", ["viewer"])
+    ]
+    sales_modes = [
+        item if item in {"month", "ytd", "rolling12"} else "month"
+        for item in _parse_csv_env("APP_ADVANCED_ANALYSIS_WARMUP_SALES_MODES", ["month"])
+    ]
+    top_n = _int_env("APP_ADVANCED_ANALYSIS_WARMUP_TOP_N", 15)
+    warm_profile_options = _bool_env("APP_ADVANCED_ANALYSIS_WARMUP_PROFILE_OPTIONS", True)
+    warm_competitor_set = _bool_env("APP_ADVANCED_ANALYSIS_WARMUP_COMPETITOR_SET", False)
+
+    for cache_scope in dict.fromkeys(cache_scopes):
+        for country in dict.fromkeys(countries):
+            if warm_profile_options:
+                try:
+                    list_profile_filter_options(country=country, cache_scope=cache_scope)
+                    warmed += 1
+                except Exception as exc:  # pragma: no cover - startup warming must fail open
+                    failed += 1
+                    logger.warning(
+                        "Advanced Analysis profile-options warmup failed for scope=%s country=%s: %s",
+                        cache_scope,
+                        country,
+                        exc,
+                    )
+            for sales_mode in dict.fromkeys(sales_modes):
+                try:
+                    compute_transfer_mart(
+                        country=country,
+                        sales_mode=sales_mode,
+                        top_n=top_n,
+                        cache_scope=cache_scope,
+                    )
+                    warmed += 1
+                except Exception as exc:  # pragma: no cover - startup warming must fail open
+                    failed += 1
+                    logger.warning(
+                        "Advanced Analysis transfer-mart warmup failed for scope=%s country=%s mode=%s: %s",
+                        cache_scope,
+                        country,
+                        sales_mode,
+                        exc,
+                    )
+                if warm_competitor_set:
+                    try:
+                        compute_competitor_set(
+                            country=country,
+                            sales_mode=sales_mode,
+                            top_n=min(top_n, 12),
+                            cache_scope=cache_scope,
+                        )
+                        warmed += 1
+                    except Exception as exc:  # pragma: no cover - startup warming must fail open
+                        failed += 1
+                        logger.warning(
+                            "Advanced Analysis competitor-set warmup failed for scope=%s country=%s mode=%s: %s",
+                            cache_scope,
+                            country,
+                            sales_mode,
+                            exc,
+                        )
+    return {
+        "warmed": warmed,
+        "failed": failed,
+        "countries": len(dict.fromkeys(countries)),
+        "scopes": len(dict.fromkeys(cache_scopes)),
+        "salesModes": len(dict.fromkeys(sales_modes)),
+    }
 
 DRIVE_NORMALIZE_RULES: dict[str, list[str]] = {
     "4WD": ["awd", "4wd", "4x4", "all wheel", "quattro", "xdrive"],
@@ -66,9 +155,71 @@ def _build_normalize_map(rules: dict[str, list[str]]) -> dict[str, str]:
     return out
 
 
+def _normalize_cache_scope(cache_scope: str | None) -> str:
+    return str(cache_scope or "viewer").strip().lower() or "viewer"
+
+
+def _stable_cache_value(value: Any) -> Any:
+    if value is None:
+        return None
+    if isinstance(value, dict):
+        return {
+            str(key): _stable_cache_value(item)
+            for key, item in sorted(value.items(), key=lambda entry: str(entry[0]))
+            if item is not None
+        }
+    if isinstance(value, (list, tuple)):
+        return [_stable_cache_value(item) for item in value]
+    if isinstance(value, set):
+        return sorted(_stable_cache_value(item) for item in value)
+    if isinstance(value, (str, int, float, bool)):
+        return value
+    return str(value)
+
+
+def _selection_cache_value(values: list[str] | None) -> list[str]:
+    return sorted({str(value).strip() for value in values or [] if str(value).strip()})
+
+
+def _time_range_cache_value(time_range: dict[str, str] | None) -> dict[str, str] | None:
+    if not time_range:
+        return None
+    return {
+        key: str(time_range[key]).strip()
+        for key in ("start", "end")
+        if time_range.get(key)
+    } or None
+
+
+def _scope_filters_cache_value(scope_filters: list[dict[str, str]] | None) -> list[dict[str, str]]:
+    entries: list[dict[str, str]] = []
+    seen: set[tuple[str, str]] = set()
+    for scope_filter in scope_filters or []:
+        dim = str(scope_filter.get("dim") or "").strip()
+        value = str(scope_filter.get("value") or "").strip()
+        if dim and value and (dim, value) not in seen:
+            seen.add((dim, value))
+            entries.append({"dim": dim, "value": value})
+    return sorted(entries, key=lambda item: (item["dim"], item["value"]))
+
+
 def _cache_key(prefix: str, **kwargs) -> str:
-    raw = f"{prefix}:" + ",".join(f"{k}={v}" for k, v in sorted(kwargs.items()) if v is not None)
-    return raw
+    cache_scope = _normalize_cache_scope(kwargs.pop("cache_scope", None))
+    params = {
+        str(key): _stable_cache_value(value)
+        for key, value in kwargs.items()
+        if value is not None
+    }
+    payload = {
+        "schema": _CACHE_SCHEMA,
+        "dataset": repo.current_dataset_token(),
+        "scope": cache_scope,
+        "params": params,
+    }
+    digest = hashlib.sha256(
+        json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    ).hexdigest()
+    return f"{prefix}:v{_CACHE_SCHEMA}:{digest}"
 
 
 # Precomputed disk cache — survives server restarts.
@@ -300,9 +451,12 @@ def _format_spec_value(field: str, value: float) -> str:
     return f"{value:.1f}"
 
 
-def list_profile_filter_options(country: str | None = None) -> dict[str, Any]:
+def list_profile_filter_options(
+    country: str | None = None,
+    cache_scope: str | None = None,
+) -> dict[str, Any]:
     """Return normalized profile dimensions used by Advanced Analysis filters."""
-    key = _cache_key("profile_options", country=country)
+    key = _cache_key("profile_options", country=country, cache_scope=cache_scope)
 
     def _compute():
         fact = build_fact_sales_monthly(country=country)
@@ -1303,6 +1457,7 @@ def compute_transfer_mart(
     base_period: str | None = None,
     sales_mode: str = "month",
     top_n: int = 25,
+    cache_scope: str | None = None,
 ) -> dict[str, Any]:
     """
     One-stop transfer mart: pre-aggregated table with all decomposition components
@@ -1321,11 +1476,15 @@ def compute_transfer_mart(
     if sales_mode not in {"month", "ytd", "rolling12"}:
         sales_mode = "month"
 
-    sf_key = "|".join(f"{f['dim']}={f['value']}" for f in scope_filters) if scope_filters else "_root"
     cache_kwargs = dict(country=country, target_period=target_period,
-                        fuel_types=",".join(fuel_types or []),
-                        segments=",".join(segments or []),
-                        scope=sf_key, base=base_period, sales_mode=sales_mode, top_n=top_n)
+                        time_range=_time_range_cache_value(time_range),
+                        fuel_types=_selection_cache_value(fuel_types),
+                        segments=_selection_cache_value(segments),
+                        scope=_scope_filters_cache_value(scope_filters),
+                        base=base_period,
+                        sales_mode=sales_mode,
+                        top_n=top_n,
+                        cache_scope=cache_scope)
     key = _cache_key("transfer_mart", **cache_kwargs)
 
     def _compute():
@@ -1823,6 +1982,7 @@ def compute_competitor_set(
     target_model: str | None = None,
     profile_specs: dict[str, Any] | None = None,
     top_n: int = 12,
+    cache_scope: str | None = None,
 ) -> dict[str, Any]:
     """Build a product-centric competitive set using model profile similarity."""
     if scope_filters is None:
@@ -1830,21 +1990,21 @@ def compute_competitor_set(
     if sales_mode not in {"month", "ytd", "rolling12"}:
         sales_mode = "month"
 
-    sf_key = "|".join(f"{f['dim']}={f['value']}" for f in scope_filters) if scope_filters else "_root"
     normalized_specs = _normalize_profile_specs(profile_specs)
     spec_key = "|".join(f"{field}={normalized_specs[field]:.4g}" for field in sorted(normalized_specs))
     cache_kwargs = dict(
         country=country,
         target_period=target_period,
-        fuel_types=",".join(fuel_types or []),
-        segments=",".join(segments or []),
-        scope=sf_key,
+        fuel_types=_selection_cache_value(fuel_types),
+        segments=_selection_cache_value(segments),
+        scope=_scope_filters_cache_value(scope_filters),
         base=base_period,
         sales_mode=sales_mode,
         target_model=target_model,
         profile_specs=spec_key,
         top_n=top_n,
-        time_range=f"{time_range['start']}_{time_range['end']}" if time_range else "",
+        time_range=_time_range_cache_value(time_range),
+        cache_scope=cache_scope,
     )
     key = _cache_key("competitor_set", **cache_kwargs)
 

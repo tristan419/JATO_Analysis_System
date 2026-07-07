@@ -7,6 +7,7 @@ const DEFAULT_REPETITIONS = 2;
 const DEFAULT_ROLE = "viewer";
 const DEFAULT_ROLES = ["viewer", "order_filler", "editor", "admin"];
 const DEFAULT_USER = "edge-prewarm";
+const DEFAULT_ADVANCED_ANALYSIS_COUNTRIES = ["瑞典"];
 const DEFAULT_POWERTRAINS = ["ICE", "HEV", "BEV", "MHEV", "PHEV"];
 const FALLBACK_COUNTRIES = [
   "丹麦",
@@ -446,6 +447,24 @@ function buildWarmupRequests(
   ];
 }
 
+function buildAdvancedAnalysisWarmupRequests(configuredCountries = []) {
+  const countries = uniqueList(
+    configuredCountries.length > 0 ? configuredCountries : DEFAULT_ADVANCED_ANALYSIS_COUNTRIES,
+  );
+  return [
+    {
+      label: "advanced-analysis-countries",
+      method: "GET",
+      path: "/advanced-analysis/countries",
+    },
+    ...countries.map((country) => ({
+      label: `advanced-analysis-profile-options-${country}`,
+      method: "GET",
+      path: `/advanced-analysis/profile-options?country=${encodeURIComponent(country)}`,
+    })),
+  ];
+}
+
 function formatResult(result, round) {
   const cache = result.cache || "-";
   const endpoint = result.endpoint || "-";
@@ -484,6 +503,10 @@ async function main() {
     configuredCountries,
     configuredPowertrains,
     getArg("dashboard-url") || process.env.JATO_PREWARM_DASHBOARD_URL,
+  );
+  const advancedAnalysisCountries = parseList(
+    getArg("advanced-analysis-countries") || process.env.JATO_PREWARM_ADVANCED_ANALYSIS_COUNTRIES,
+    DEFAULT_ADVANCED_ANALYSIS_COUNTRIES,
   );
   const username = getArg("username") || process.env.JATO_PREWARM_USERNAME || "";
   const password = getArg("password") || process.env.JATO_PREWARM_PASSWORD || "";
@@ -549,6 +572,19 @@ async function main() {
         }
       }
 
+      for (const requestDef of buildAdvancedAnalysisWarmupRequests(advancedAnalysisCountries)) {
+        try {
+          const result = await callPrewarm(origin, requestDef, scopedAuth, timeoutMs);
+          const scopedResult = { ...result, role: scopedAuth.role, round };
+          results.push(scopedResult);
+          console.log(formatResult(scopedResult, round));
+        } catch (error) {
+          const message = error instanceof Error ? error.message : String(error);
+          console.warn(`round=${round} role=${scopedAuth.role} label=${requestDef.label} error=${message}`);
+          if (failOnError) throw error;
+        }
+      }
+
       const dependentRequests = buildWarmupRequests(
         snapshot,
         configuredCountries,
@@ -588,6 +624,7 @@ if (require.main === module) {
 }
 
 module.exports = {
+  buildAdvancedAnalysisWarmupRequests,
   buildDefaultCascadePayloads,
   buildDefaultFilterPayload,
   buildWarmupRequests,

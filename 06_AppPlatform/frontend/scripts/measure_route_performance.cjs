@@ -12,8 +12,9 @@ const HOSTS = {
 const WIDE_DASHBOARD_PATH = "/dashboard?country=%E4%B8%B9%E9%BA%A6%2C%E5%85%8B%E7%BD%97%E5%9C%B0%E4%BA%9A%2C%E5%8C%88%E7%89%99%E5%88%A9%2C%E5%A5%A5%E5%9C%B0%E5%88%A9%2C%E5%B8%8C%E8%85%8A%2C%E5%BE%B7%E5%9B%BD%2C%E6%84%8F%E5%A4%A7%E5%88%A9%2C%E6%8C%AA%E5%A8%81%2C%E6%8D%B7%E5%85%8B%2C%E6%96%AF%E6%B4%9B%E4%BC%90%E5%85%8B%2C%E6%96%AF%E6%B4%9B%E6%96%87%E5%B0%BC%E4%BA%9A%2C%E6%AF%94%E5%88%A9%E6%97%B6%2C%E6%B3%95%E5%9B%BD%2C%E6%B3%A2%E5%85%B0%2C%E7%91%9E%E5%85%B8%2C%E7%91%9E%E5%A3%AB%2C%E7%BD%97%E9%A9%AC%E5%B0%BC%E4%BA%9A%2C%E8%8A%AC%E5%85%B0%2C%E8%8D%B7%E5%85%B0%2C%E8%91%A1%E8%90%84%E7%89%99%2C%E8%A5%BF%E7%8F%AD%E7%89%99&powertrain=ICE%2CHEV%2CBEV%2CMHEV%2CPHEV";
 
 const DEFAULT_ROUTES = [
-  { label: "dashboard", path: "/dashboard", selector: ".dashboard-layout", waitForOverview: false },
-  { label: "dashboard-wide", path: WIDE_DASHBOARD_PATH, selector: ".dashboard-layout" },
+  { label: "dashboard", path: "/dashboard", selector: ".dashboard-layout", dataPath: "", waitForData: false },
+  { label: "dashboard-wide", path: WIDE_DASHBOARD_PATH, selector: ".dashboard-layout", dataPath: "/v1/analysis/overview" },
+  { label: "advanced-analysis", path: "/market/advanced-analysis", selector: ".market-scan-page", dataPath: "/v1/advanced-analysis/transfer-mart" },
 ];
 const DEFAULT_INITIAL_WINDOW_MS = 8_000;
 const BUILD_META_TIMEOUT_MS = 8_000;
@@ -108,11 +109,16 @@ function parseRoutes() {
     const label = String(item.label || `route-${index}`);
     const path = String(item.path || "");
     const selector = String(item.selector || ".dashboard-layout");
-    const waitForOverview = item.waitForOverview !== false;
+    const waitForData = item.waitForData !== false && item.waitForOverview !== false;
+    const dataPath = typeof item.dataPath === "string"
+      ? item.dataPath
+      : waitForData
+        ? "/v1/analysis/overview"
+        : "";
     if (!path.startsWith("/")) {
       throw new Error(`Route ${label} path must start with "/".`);
     }
-    return { label, path, selector, waitForOverview };
+    return { label, path, selector, waitForData, dataPath };
   });
 }
 
@@ -263,6 +269,7 @@ function classifyResource(name) {
   if (name.includes("diagram-vendor")) return "diagram";
   if (name.includes("export-vendor")) return "export";
   if (name.includes("DashboardPage")) return "dashboard";
+  if (name.includes("AdvancedAnalysisPage")) return "advanced-analysis";
   if (name.includes("/assets/index-") && name.endsWith(".css")) return "css";
   if (name.includes("/assets/index-") && name.endsWith(".js")) return "app shell";
   if (name.includes("-vendor")) return "vendor";
@@ -365,10 +372,10 @@ async function measureRoute(browser, host, route, credentials, timeoutMs, initia
   const apiStarts = new Map();
   const apiCalls = [];
   let navigationStartedAt = 0;
-  let overviewReadyMs = null;
-  let resolveOverview = null;
-  const overviewResponsePromise = new Promise((resolve) => {
-    resolveOverview = resolve;
+  let dataReadyMs = null;
+  let resolveData = null;
+  const dataResponsePromise = new Promise((resolve) => {
+    resolveData = resolve;
   });
   page.on("request", (request) => {
     try {
@@ -398,9 +405,9 @@ async function measureRoute(browser, host, route, credentials, timeoutMs, initia
       startMs: timing.startMs,
       status: response.status(),
     });
-    if (url.pathname === "/v1/analysis/overview" && overviewReadyMs === null) {
-      overviewReadyMs = performance.now() - navigationStartedAt;
-      resolveOverview?.();
+    if (route.dataPath && url.pathname === route.dataPath && dataReadyMs === null) {
+      dataReadyMs = performance.now() - navigationStartedAt;
+      resolveData?.();
     }
   });
 
@@ -416,9 +423,9 @@ async function measureRoute(browser, host, route, credentials, timeoutMs, initia
     domContentLoadedMs = performance.now() - startedAt;
     await page.waitForSelector(route.selector, { timeout: timeoutMs });
     appReadyMs = performance.now() - startedAt;
-    if (route.waitForOverview !== false) {
+    if (route.waitForData !== false && route.dataPath) {
       await Promise.race([
-        overviewResponsePromise,
+        dataResponsePromise,
         new Promise((resolve) => setTimeout(resolve, Math.min(timeoutMs, 12_000))),
       ]);
     }
@@ -452,7 +459,7 @@ async function measureRoute(browser, host, route, credentials, timeoutMs, initia
     initialWindowMs,
     initialWindowSlowApis,
     networkIdleMs,
-    overviewReadyMs,
+    dataReadyMs,
     resourceSummary,
     resources,
     route: route.label,
@@ -525,7 +532,7 @@ async function main() {
     route: result.route,
     dom_s: seconds(result.domContentLoadedMs),
     app_ready_s: seconds(result.appReadyMs),
-    data_ready_s: seconds(result.overviewReadyMs),
+    data_ready_s: seconds(result.dataReadyMs),
     fcp_s: seconds(result.browserMetrics.firstContentfulPaintMs),
     network_idle_s: seconds(result.networkIdleMs),
     api_count: result.apiCalls.length,

@@ -133,6 +133,13 @@ aggregation.
 `03_Scripts/ops/deploy_fullstack_server.sh` runs the same prewarm automatically
 after backend health checks when `APP_GROUPED_TIME_SERIES_PREWARM_ENABLED=true`;
 set `RUN_GROUPED_TIME_SERIES_PREWARM=strict` to fail deployment on a cold repeat.
+Advanced Analysis has a lighter startup warmup controlled by
+`APP_ADVANCED_ANALYSIS_WARMUP_ENABLED`; Tencent deploy enables the default
+Sweden/month transfer-mart + profile-options combination for each role scope,
+while `APP_ADVANCED_ANALYSIS_WARMUP_COUNTRIES`,
+`APP_ADVANCED_ANALYSIS_WARMUP_SALES_MODES`, and
+`APP_ADVANCED_ANALYSIS_WARMUP_COMPETITOR_SET` can expand that workload when the
+server has enough headroom.
 
 MSRP mapping lifecycle:
 - `JatoMsrpLink` = stable active mapping from JATO key to official key

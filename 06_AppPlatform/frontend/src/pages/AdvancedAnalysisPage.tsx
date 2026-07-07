@@ -83,6 +83,9 @@ function getGraphDiv(): HTMLElement | null { return document.querySelector(".cha
 function fmtNum(n: number): string { return n.toLocaleString(undefined, { maximumFractionDigits: 0 }); }
 function fmtPct(n: number): string { return `${(n * 100).toFixed(1)}%`; }
 function fmtBp(n: number): string { return `${(n * 10000).toFixed(0)} bp`; }
+function isAbortError(error: unknown): boolean {
+  return error instanceof Error && error.name === "AbortError";
+}
 function normalizeLookupText(value: string): string {
   return value
     .normalize("NFKD")
@@ -245,6 +248,8 @@ export function AdvancedAnalysisPage() {
   const [error, setError] = useState<string | null>(null);
   const [data, setData] = useState<TransferMartResponse | null>(null);
   const [competitorData, setCompetitorData] = useState<CompetitorSetResponse | null>(null);
+  const [competitorLoading, setCompetitorLoading] = useState(false);
+  const [competitorError, setCompetitorError] = useState<string | null>(null);
   const [targetModel, setTargetModel] = useState(() => searchParams.get("model") || "");
   const [targetModelSearch, setTargetModelSearch] = useState(() => searchParams.get("model") || "");
   const [filterOpen, setFilterOpen] = useState(false);
@@ -317,7 +322,7 @@ export function AdvancedAnalysisPage() {
       .then(response => setAvailableCountries(response.countries || []))
       .catch((error: unknown) => {
         if (controller.signal.aborted) return;
-        if (error instanceof Error && error.name === "AbortError") return;
+        if (isAbortError(error)) return;
         setAvailableCountries([]);
     });
     return () => controller.abort();
@@ -340,7 +345,7 @@ export function AdvancedAnalysisPage() {
       .then(r => setProfileOptions({ ...EMPTY_PROFILE_OPTIONS, ...(r.options || {}) }))
       .catch((error: unknown) => {
         if (controller.signal.aborted) return;
-        if (error instanceof Error && error.name === "AbortError") return;
+        if (isAbortError(error)) return;
         setProfileOptions(EMPTY_PROFILE_OPTIONS);
       });
     }, 250);
@@ -371,6 +376,9 @@ export function AdvancedAnalysisPage() {
   const fetchData = useCallback(async (signal?: AbortSignal) => {
     if (analysisMode !== "transfer") return;
     setLoading(true); setError(null);
+    setCompetitorLoading(false);
+    setCompetitorError(null);
+    setCompetitorData(null);
     try {
       const scope = buildScope();
       const targetPeriod = compareMode && periodB ? periodB : period;
@@ -396,21 +404,33 @@ export function AdvancedAnalysisPage() {
         { signal },
       );
       if (signal?.aborted) return;
-      const competitorResult = await api.post<CompetitorSetResponse>(
-        "/advanced-analysis/competitor-set",
-        competitorPayload,
-        { signal },
-      );
-      if (signal?.aborted) return;
       setData(martResult);
-      setCompetitorData(competitorResult);
+      setLoading(false);
+      setCompetitorLoading(true);
+      try {
+        const competitorResult = await api.post<CompetitorSetResponse>(
+          "/advanced-analysis/competitor-set",
+          competitorPayload,
+          { signal },
+        );
+        if (signal?.aborted) return;
+        setCompetitorData(competitorResult);
+      } catch (competitorFetchError: unknown) {
+        if (signal?.aborted || isAbortError(competitorFetchError)) return;
+        setCompetitorError(competitorFetchError instanceof Error ? competitorFetchError.message : "Competitor set failed");
+      } finally {
+        if (!signal?.aborted) setCompetitorLoading(false);
+      }
     } catch (e: unknown) {
       if (signal?.aborted) return;
-      if (e instanceof Error && e.name === "AbortError") return;
+      if (isAbortError(e)) return;
       setError(e instanceof Error ? e.message : "Failed");
     }
     finally {
-      if (!signal?.aborted) setLoading(false);
+      if (!signal?.aborted) {
+        setLoading(false);
+        setCompetitorLoading(false);
+      }
     }
   }, [analysisMode, country, period, timeMode, buildScope, compareMode, periodB, targetModel, profileSpecs]);
   useEffect(() => {
@@ -641,6 +661,8 @@ export function AdvancedAnalysisPage() {
         items={[
           ...(error ? [{ id: "advanced-analysis-error", tone: "error" as const, title: "Advanced Analysis 加载失败", message: error }] : []),
           ...(loading && data ? [{ id: "advanced-analysis-refreshing", tone: "info" as const, title: "Refreshing", message: "正在刷新分析结果" }] : []),
+          ...(competitorLoading && data ? [{ id: "advanced-analysis-competitor-loading", tone: "info" as const, title: "Competitor analysis", message: "主分析已可用，竞品战场正在后台补齐。" }] : []),
+          ...(competitorError ? [{ id: "advanced-analysis-competitor-error", tone: "warning" as const, title: "竞品分析加载失败", message: competitorError }] : []),
         ]}
       />
       {loading && !data && <PageLoadingShell kicker="Advanced" label="Analyzing..." />}
