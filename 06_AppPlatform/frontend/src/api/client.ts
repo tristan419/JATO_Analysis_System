@@ -2375,6 +2375,43 @@ export const api = {
     sp.set("max_chars", String(maxChars));
     return request<MsrpBackfillSnapshotPreview>(`/msrp/monitoring/backfill-snapshot?${sp.toString()}`);
   },
+  queueMsrpMonitorSourceIssue: (payload: {
+    target_type: "movement" | "offer_signal";
+    target_id: string;
+    country: string;
+    country_label: string;
+    brand: string;
+    jato_model: string;
+    jato_trim?: string | null;
+    jato_powertrain?: string | null;
+    price_semantics: string;
+    issue_type?: string;
+    source_url?: string | null;
+    source_label?: string | null;
+    evidence_label?: string | null;
+    source_payload_hash?: string | null;
+    observed_at_utc?: string | null;
+    valid_until?: string | null;
+    note?: string | null;
+  }) =>
+    request<{
+      item: {
+        issueId?: unknown;
+        status?: unknown;
+        queuedAtUtc?: unknown;
+        reused?: unknown;
+        backlogPath?: unknown;
+      };
+    }>("/msrp/monitoring/source-issues", {
+      method: "POST",
+      body: JSON.stringify(payload),
+    }).then((res) => ({
+      issueId: String(res.item.issueId ?? ""),
+      status: String(res.item.status ?? ""),
+      queuedAtUtc: String(res.item.queuedAtUtc ?? ""),
+      reused: Boolean(res.item.reused),
+      backlogPath: String(res.item.backlogPath ?? ""),
+    })),
   listMsrpSources: (params?: {
     source_code?: string;
     country?: string;

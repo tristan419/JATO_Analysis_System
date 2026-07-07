@@ -1,13 +1,15 @@
 from datetime import date, datetime, timedelta, timezone
+import json
 import re
 from typing import Any
 from urllib.parse import urlparse
-from uuid import UUID
+from uuid import UUID, uuid4
 
 from fastapi import HTTPException
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
+from app.core.config import PROJECT_ROOT
 from app.db.models import (
     CurrentPrice,
     FinanceObservation,
@@ -89,10 +91,22 @@ AUTO_REVIEW_OFFICIAL_SOURCE_TYPES = {
     "official_website",
     "manufacturer_site",
 }
+MSRP_MONITOR_SOURCE_ISSUE_SCHEMA_VERSION = "msrp_monitor_source_issue_backlog_v1"
+MSRP_MONITOR_SOURCE_ISSUE_BACKLOG_PATH = (
+    PROJECT_ROOT
+    / "03_Scripts"
+    / "diagnostics"
+    / "artifacts"
+    / "msrp_monitor_source_issue_backlog.json"
+)
 
 
 def _utc_now() -> datetime:
     return datetime.now(timezone.utc)
+
+
+def _iso_utc_now() -> str:
+    return _utc_now().replace(microsecond=0).isoformat().replace("+00:00", "Z")
 
 
 def _business_powertrain(value: str | None) -> str:
@@ -189,6 +203,124 @@ def _token_similarity(left: object | None, right: object | None) -> float:
 def _valid_http_url(value: object | None) -> bool:
     parsed = urlparse(str(value or "").strip())
     return parsed.scheme in {"http", "https"} and bool(parsed.netloc)
+
+
+def _source_issue_backlog_default() -> dict[str, Any]:
+    now = _iso_utc_now()
+    return {
+        "schemaVersion": MSRP_MONITOR_SOURCE_ISSUE_SCHEMA_VERSION,
+        "generatedAtUtc": now,
+        "updatedAtUtc": now,
+        "openIssueCount": 0,
+        "totalIssueCount": 0,
+        "items": [],
+    }
+
+
+def _load_source_issue_backlog() -> dict[str, Any]:
+    if not MSRP_MONITOR_SOURCE_ISSUE_BACKLOG_PATH.exists():
+        return _source_issue_backlog_default()
+    try:
+        raw = json.loads(MSRP_MONITOR_SOURCE_ISSUE_BACKLOG_PATH.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return _source_issue_backlog_default()
+    return raw if isinstance(raw, dict) else _source_issue_backlog_default()
+
+
+def _source_issue_key(item: dict[str, object]) -> str:
+    return "|".join(
+        str(item.get(key) or "").strip().lower()
+        for key in (
+            "targetType",
+            "targetId",
+            "country",
+            "priceSemantics",
+            "issueType",
+            "sourceUrl",
+        )
+    )
+
+
+def _write_source_issue_backlog(backlog: dict[str, Any]) -> None:
+    MSRP_MONITOR_SOURCE_ISSUE_BACKLOG_PATH.parent.mkdir(parents=True, exist_ok=True)
+    MSRP_MONITOR_SOURCE_ISSUE_BACKLOG_PATH.write_text(
+        json.dumps(backlog, ensure_ascii=False, indent=2) + "\n",
+        encoding="utf-8",
+    )
+
+
+def queue_msrp_monitor_source_issue(payload: dict[str, object]) -> dict[str, object]:
+    now = _iso_utc_now()
+    target_type = str(payload.get("target_type") or "").strip()
+    target_id = str(payload.get("target_id") or "").strip()
+    country = str(payload.get("country") or "").strip().upper()
+    brand = str(payload.get("brand") or "").strip().upper()
+    jato_model = str(payload.get("jato_model") or "").strip()
+    price_semantics = str(payload.get("price_semantics") or "").strip()
+    if not target_type or not target_id or not country or not brand or not jato_model or not price_semantics:
+        raise HTTPException(status_code=400, detail="Missing required source issue target fields")
+    source_url = _optional_text(payload.get("source_url"))
+    if source_url and not _valid_http_url(source_url):
+        raise HTTPException(status_code=400, detail="Invalid source issue source_url")
+
+    candidate: dict[str, object] = {
+        "issueId": f"msrp-src-{uuid4().hex[:12]}",
+        "targetType": target_type,
+        "targetId": target_id,
+        "country": country,
+        "countryLabel": _optional_text(payload.get("country_label")) or country,
+        "brand": brand,
+        "jatoModel": jato_model,
+        "jatoTrim": _optional_text(payload.get("jato_trim")),
+        "jatoPowertrain": _optional_text(payload.get("jato_powertrain")),
+        "priceSemantics": price_semantics,
+        "issueType": _optional_text(payload.get("issue_type")) or "source_issue",
+        "sourceUrl": source_url,
+        "sourceLabel": _optional_text(payload.get("source_label")),
+        "evidenceLabel": _optional_text(payload.get("evidence_label")),
+        "sourcePayloadHash": _optional_text(payload.get("source_payload_hash")),
+        "observedAtUtc": _optional_text(payload.get("observed_at_utc")),
+        "validUntil": _optional_text(payload.get("valid_until")),
+        "note": _optional_text(payload.get("note")),
+        "status": "open",
+        "createdAtUtc": now,
+        "lastFlaggedAtUtc": now,
+        "flaggedCount": 1,
+        "source": "msrp_monitor_catalog_panel",
+    }
+    key = _source_issue_key(candidate)
+    backlog = _load_source_issue_backlog()
+    items = [item for item in backlog.get("items", []) if isinstance(item, dict)]
+    reused = False
+    for item in items:
+        if _source_issue_key(item) != key:
+            continue
+        item["lastFlaggedAtUtc"] = now
+        item["flaggedCount"] = int(item.get("flaggedCount") or 1) + 1
+        item["note"] = candidate["note"] or item.get("note")
+        candidate = item
+        reused = True
+        break
+    if not reused:
+        items.insert(0, candidate)
+
+    open_count = sum(1 for item in items if str(item.get("status") or "open") == "open")
+    backlog = {
+        "schemaVersion": MSRP_MONITOR_SOURCE_ISSUE_SCHEMA_VERSION,
+        "generatedAtUtc": str(backlog.get("generatedAtUtc") or now),
+        "updatedAtUtc": now,
+        "openIssueCount": open_count,
+        "totalIssueCount": len(items),
+        "items": items,
+    }
+    _write_source_issue_backlog(backlog)
+    return {
+        "issueId": candidate["issueId"],
+        "status": candidate["status"],
+        "queuedAtUtc": now,
+        "reused": reused,
+        "backlogPath": str(MSRP_MONITOR_SOURCE_ISSUE_BACKLOG_PATH.relative_to(PROJECT_ROOT)),
+    }
 
 
 def _dict_or_empty(value: object | None) -> dict[str, Any]:

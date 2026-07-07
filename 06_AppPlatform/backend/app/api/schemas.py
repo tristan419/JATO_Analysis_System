@@ -155,6 +155,26 @@ class VersionComparisonDeckRequest(BaseModel):
     length_max: float | None = Field(default=None, ge=0)
 
 
+class MsrpMonitorSourceIssueRequest(BaseModel):
+    target_type: Literal["movement", "offer_signal"]
+    target_id: str
+    country: str
+    country_label: str
+    brand: str
+    jato_model: str
+    jato_trim: str | None = None
+    jato_powertrain: str | None = None
+    price_semantics: str
+    issue_type: str = "source_issue"
+    source_url: str | None = None
+    source_label: str | None = None
+    evidence_label: str | None = None
+    source_payload_hash: str | None = None
+    observed_at_utc: str | None = None
+    valid_until: str | None = None
+    note: str | None = None
+
+
 class CountryChatTurn(BaseModel):
     role: Literal["user", "assistant"]
     content: str

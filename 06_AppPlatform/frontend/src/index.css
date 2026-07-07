@@ -13855,7 +13855,34 @@ table.data-table tr.data-table-group-row.contains-selection td {
   width: min(480px, calc(100vw - 32px));
 }
 
+.msrp-monitor-floating-drawer:not(.is-open) {
+  top: auto;
+  right: 16px;
+  bottom: 16px;
+  width: auto;
+}
+
+.msrp-monitor-floating-drawer:not(.is-open) .deck-floating-toggle {
+  width: auto;
+  min-height: 34px;
+  gap: 8px;
+  padding: 7px 10px;
+  border-color: rgba(203, 213, 225, 0.9);
+  background: rgba(255, 255, 255, 0.86);
+  box-shadow: 0 10px 24px rgba(15, 23, 42, 0.14);
+}
+
+.msrp-monitor-floating-drawer:not(.is-open) .deck-floating-toggle span {
+  font-size: 11px;
+  line-height: 1;
+}
+
+.msrp-monitor-floating-drawer.is-open > .deck-floating-toggle {
+  display: none;
+}
+
 .msrp-monitor-floating-panel {
+  top: 0;
   width: min(640px, calc(100vw - 32px));
   height: min(72vh, 720px);
 }
@@ -14022,56 +14049,90 @@ table.data-table tr.data-table-group-row.contains-selection td {
   outline: none;
 }
 
-.msrp-monitor-summary {
+.msrp-monitor-summary-strip {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(128px, 1fr));
-  gap: var(--msrp-section-gap);
+  gap: 8px;
 }
 
-.msrp-monitor-summary div,
-.msrp-monitor-summary button {
+.msrp-monitor-summary-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+}
+
+.msrp-monitor-summary-actions button {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  min-height: 30px;
+  border: 1px solid #d8e0ea;
+  border-radius: 999px;
+  background: #fff;
+  color: #253044;
+  cursor: pointer;
+  padding: 5px 9px;
+  font: inherit;
+  line-height: 1;
+}
+
+.msrp-monitor-summary-actions button:hover,
+.msrp-monitor-summary-actions button:focus-visible {
+  border-color: rgba(37, 99, 235, 0.42);
+  box-shadow: 0 0 0 2px rgba(37, 99, 235, 0.08);
+  outline: none;
+}
+
+.msrp-monitor-summary-actions button.is-pending {
+  border-color: rgba(37, 99, 235, 0.52);
+  background: rgba(37, 99, 235, 0.05);
+}
+
+.msrp-monitor-summary-actions span {
+  color: #667085;
+  font-size: 10px;
+  font-weight: 850;
+  text-transform: uppercase;
+}
+
+.msrp-monitor-summary-actions strong {
+  color: #172033;
+  font-size: 11px;
+  font-weight: 900;
+}
+
+.msrp-monitor-summary {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(118px, 1fr));
+  gap: 8px;
+}
+
+.msrp-monitor-summary div {
   display: grid;
   align-content: space-between;
-  min-height: 78px;
+  min-height: 58px;
   border: 1px solid #e2e8f0;
   border-radius: var(--msrp-panel-radius);
   background: #fff;
-  padding: 11px 12px;
+  padding: 9px 10px;
   text-align: left;
 }
 
-.msrp-monitor-summary button {
-  cursor: pointer;
-  font: inherit;
-  color: inherit;
-}
-
-.msrp-monitor-summary button:hover:not(:disabled),
-.msrp-monitor-summary button:focus-visible {
-  border-color: rgba(37, 99, 235, 0.42);
-  box-shadow: 0 0 0 2px rgba(37, 99, 235, 0.08);
-}
-
-.msrp-monitor-summary button.is-pending {
-  border-color: rgba(37, 99, 235, 0.52);
-  background: rgba(37, 99, 235, 0.04);
-}
-
-.msrp-monitor-summary button:disabled {
-  cursor: default;
-  opacity: 0.62;
+.msrp-monitor-summary div.is-warning {
+  border-color: rgba(180, 35, 24, 0.28);
+  background: rgba(180, 35, 24, 0.045);
 }
 
 .msrp-monitor-summary span {
   display: block;
   color: #667085;
   font-size: 11px;
-  margin-bottom: 8px;
+  margin-bottom: 6px;
 }
 
 .msrp-monitor-summary strong {
   display: block;
-  font-size: 24px;
+  font-size: 20px;
   line-height: 1;
 }
 
@@ -14081,6 +14142,353 @@ table.data-table tr.data-table-group-row.contains-selection td {
   color: #2563eb;
   font-size: 11px;
   font-weight: 700;
+}
+
+.msrp-monitor-catalog-panel {
+  display: grid;
+  grid-template-columns: minmax(300px, 0.78fr) minmax(0, 1.22fr);
+  grid-template-rows: auto minmax(0, 1fr);
+  gap: 0;
+  height: clamp(380px, 46vh, 500px);
+  border: 1px solid var(--msrp-card-border);
+  border-radius: var(--msrp-panel-radius);
+  background: #fff;
+  box-shadow: var(--msrp-card-shadow);
+  overflow: hidden;
+}
+
+.msrp-monitor-catalog-panel > header {
+  grid-column: 1 / -1;
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  align-items: flex-start;
+  min-height: 64px;
+  padding: 12px 14px 10px;
+  border-bottom: 1px solid #edf1f5;
+}
+
+.msrp-monitor-catalog-panel > header span {
+  display: block;
+  margin-bottom: 4px;
+  color: #667085;
+  font-size: 10px;
+  font-weight: 900;
+  text-transform: uppercase;
+}
+
+.msrp-monitor-catalog-panel > header h2 {
+  margin: 0;
+  color: #172033;
+  font-size: 16px;
+  letter-spacing: 0;
+}
+
+.msrp-monitor-catalog-panel > header p {
+  margin: 4px 0 0;
+  color: #667085;
+  font-size: 12px;
+  line-height: 1.32;
+}
+
+.msrp-monitor-catalog-panel > header strong {
+  flex: 0 0 auto;
+  color: #172033;
+  font-size: 18px;
+  line-height: 1.1;
+  text-align: right;
+}
+
+.msrp-monitor-catalog-feature {
+  display: grid;
+  align-content: start;
+  gap: 10px;
+  min-width: 0;
+  border-right: 1px solid #edf1f5;
+  background: linear-gradient(180deg, #fbfcfe 0%, #fff 100%);
+  padding: 14px;
+}
+
+.msrp-monitor-catalog-feature-title h3 {
+  margin: 0;
+  color: #172033;
+  font-size: 18px;
+  line-height: 1.1;
+  letter-spacing: 0;
+}
+
+.msrp-monitor-catalog-feature-title p {
+  margin: 6px 0 0;
+  color: #667085;
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.msrp-monitor-catalog-feature-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.msrp-monitor-catalog-feature-grid div {
+  min-width: 0;
+  border: 1px solid #e2e8f0;
+  border-radius: 8px;
+  background: #fff;
+  padding: 8px 9px;
+}
+
+.msrp-monitor-catalog-feature-grid span,
+.msrp-monitor-catalog-row small {
+  display: block;
+  overflow: hidden;
+  color: #667085;
+  font-size: 10px;
+  line-height: 1.35;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.msrp-monitor-catalog-feature-grid span {
+  margin-bottom: 5px;
+  font-weight: 900;
+  text-transform: uppercase;
+}
+
+.msrp-monitor-catalog-feature-grid strong,
+.msrp-monitor-catalog-row strong {
+  display: block;
+  overflow: hidden;
+  color: #172033;
+  font-size: 12px;
+  line-height: 1.25;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.msrp-monitor-catalog-semantics {
+  display: inline-flex;
+  width: fit-content;
+  max-width: 100%;
+  align-items: center;
+  border: 1px solid #d8e0ea;
+  border-radius: 999px;
+  background: #f8fafc;
+  color: #475467;
+  padding: 4px 8px;
+  font-size: 10px;
+  font-weight: 900;
+  line-height: 1.1;
+  text-transform: uppercase;
+}
+
+.msrp-monitor-catalog-semantics.is-base-msrp {
+  border-color: rgba(22, 163, 74, 0.28);
+  background: rgba(22, 163, 74, 0.08);
+  color: #166534;
+}
+
+.msrp-monitor-catalog-semantics.is-starting-price {
+  border-color: rgba(37, 99, 235, 0.26);
+  background: rgba(37, 99, 235, 0.07);
+  color: #1d4ed8;
+}
+
+.msrp-monitor-catalog-semantics.is-official-offer {
+  border-color: rgba(217, 74, 58, 0.28);
+  background: rgba(217, 74, 58, 0.08);
+  color: #b42318;
+}
+
+.msrp-monitor-catalog-semantics.is-inventory-offer {
+  border-color: rgba(180, 83, 9, 0.3);
+  background: rgba(245, 158, 11, 0.1);
+  color: #92400e;
+}
+
+.msrp-monitor-catalog-semantics.is-cash-finance-benefit {
+  border-color: rgba(8, 145, 178, 0.28);
+  background: rgba(8, 145, 178, 0.08);
+  color: #0e7490;
+}
+
+.msrp-monitor-catalog-semantics-note {
+  margin: 0;
+  color: #475467;
+  font-size: 12px;
+  line-height: 1.35;
+}
+
+.msrp-monitor-catalog-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+}
+
+.msrp-monitor-catalog-actions a,
+.msrp-monitor-catalog-actions button {
+  min-height: 30px;
+  border: 1px solid #d8e0ea;
+  border-radius: 999px;
+  background: #fff;
+  color: #253044;
+  cursor: pointer;
+  padding: 7px 10px;
+  font: inherit;
+  font-size: 11px;
+  font-weight: 850;
+  line-height: 1;
+  text-decoration: none;
+}
+
+.msrp-monitor-catalog-actions a:hover,
+.msrp-monitor-catalog-actions a:focus-visible,
+.msrp-monitor-catalog-actions button:hover,
+.msrp-monitor-catalog-actions button:focus-visible {
+  border-color: rgba(37, 99, 235, 0.42);
+  box-shadow: 0 0 0 2px rgba(37, 99, 235, 0.08);
+  outline: none;
+}
+
+.msrp-monitor-catalog-actions button:disabled {
+  cursor: wait;
+  opacity: 0.62;
+}
+
+.msrp-monitor-catalog-issue-status {
+  display: grid;
+  gap: 3px;
+  border: 1px solid #d8e0ea;
+  border-radius: 8px;
+  background: #f8fafc;
+  padding: 8px 10px;
+}
+
+.msrp-monitor-catalog-issue-status strong {
+  color: #172033;
+  font-size: 11px;
+  line-height: 1.2;
+}
+
+.msrp-monitor-catalog-issue-status span {
+  overflow: hidden;
+  color: #667085;
+  font-size: 11px;
+  line-height: 1.35;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.msrp-monitor-catalog-issue-status.is-queued {
+  border-color: rgba(22, 163, 74, 0.28);
+  background: rgba(22, 163, 74, 0.07);
+}
+
+.msrp-monitor-catalog-issue-status.is-failed {
+  border-color: rgba(180, 35, 24, 0.26);
+  background: rgba(180, 35, 24, 0.055);
+}
+
+.msrp-monitor-catalog-table {
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr) auto;
+  min-width: 0;
+  min-height: 0;
+  overflow-x: auto;
+  padding: 0 8px 8px;
+}
+
+.msrp-monitor-catalog-table-head,
+.msrp-monitor-catalog-row {
+  display: grid;
+  grid-template-columns: minmax(128px, 0.78fr) minmax(188px, 1.16fr) minmax(140px, 0.82fr) minmax(188px, 1.18fr);
+  gap: 8px;
+  min-width: 660px;
+}
+
+.msrp-monitor-catalog-table-head {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  padding: 8px 8px 5px;
+  background: #fff;
+  color: #667085;
+  font-size: 10px;
+  font-weight: 900;
+  text-transform: uppercase;
+}
+
+.msrp-monitor-catalog-list {
+  display: grid;
+  gap: 5px;
+  min-height: 0;
+  overflow: auto;
+  padding-right: 2px;
+}
+
+.msrp-monitor-catalog-row {
+  align-items: center;
+  border: 1px solid #e2e8f0;
+  border-radius: 8px;
+  background: #fbfcfe;
+  color: #172033;
+  cursor: pointer;
+  padding: 7px;
+  text-align: left;
+  font: inherit;
+}
+
+.msrp-monitor-catalog-row:hover,
+.msrp-monitor-catalog-row:focus-visible {
+  border-color: rgba(37, 99, 235, 0.42);
+  box-shadow: 0 0 0 2px rgba(37, 99, 235, 0.08);
+  outline: none;
+}
+
+.msrp-monitor-catalog-row.is-selected {
+  border-color: rgba(37, 99, 235, 0.62);
+  box-shadow: 0 0 0 2px rgba(37, 99, 235, 0.14);
+}
+
+.msrp-monitor-catalog-row.is-block {
+  border-color: rgba(180, 35, 24, 0.3);
+  background: rgba(180, 35, 24, 0.045);
+}
+
+.msrp-monitor-catalog-row.is-priority-audit {
+  border-color: rgba(217, 74, 58, 0.28);
+  background: rgba(217, 74, 58, 0.045);
+}
+
+.msrp-monitor-catalog-row.is-priority-audit:not(.is-selected) {
+  border-color: #e2e8f0;
+  background: #fff;
+}
+
+.msrp-monitor-catalog-row .msrp-monitor-catalog-semantics.is-official-offer {
+  border-color: rgba(245, 158, 11, 0.28);
+  background: rgba(245, 158, 11, 0.09);
+  color: #92400e;
+}
+
+.msrp-monitor-catalog-row.is-offer-signal {
+  border-left: 4px solid #0891b2;
+}
+
+.msrp-monitor-catalog-row.is-movement {
+  border-left: 4px solid #d8e0ea;
+}
+
+.msrp-monitor-catalog-row b {
+  margin-bottom: 4px;
+}
+
+.msrp-monitor-catalog-overflow {
+  padding: 8px 8px 0;
+  color: #667085;
+  font-size: 11px;
+  font-weight: 760;
 }
 
 .msrp-monitor-action-layout {
@@ -15284,7 +15692,7 @@ table.data-table tr.data-table-group-row.contains-selection td {
   display: grid;
   grid-template-columns: var(--msrp-two-column-grid);
   gap: var(--msrp-section-gap);
-  align-items: stretch;
+  align-items: start;
 }
 
 .msrp-monitor-main {
@@ -15296,7 +15704,7 @@ table.data-table tr.data-table-group-row.contains-selection td {
 .msrp-monitor-chart-shell {
   position: relative;
   display: grid;
-  grid-template-rows: auto minmax(0, 1fr) auto minmax(124px, 190px);
+  grid-template-rows: auto minmax(0, 1fr) minmax(92px, 138px);
   min-height: var(--msrp-visual-panel-height);
   max-height: var(--msrp-visual-panel-height);
   border: 1px solid var(--msrp-card-border);
@@ -15309,9 +15717,10 @@ table.data-table tr.data-table-group-row.contains-selection td {
 .msrp-monitor-chart-head {
   display: flex;
   justify-content: space-between;
+  align-items: flex-start;
   gap: 12px;
-  min-height: 74px;
-  padding: 14px 16px 12px;
+  min-height: 62px;
+  padding: 12px 14px 10px;
   border-bottom: 1px solid #edf1f5;
 }
 
@@ -15326,9 +15735,15 @@ table.data-table tr.data-table-group-row.contains-selection td {
   font-size: 12px;
 }
 
+.msrp-monitor-chart-head-tools {
+  display: grid;
+  gap: 6px;
+  justify-items: end;
+}
+
 .msrp-monitor-legend {
   display: flex;
-  gap: 10px;
+  gap: 8px;
   flex-wrap: wrap;
   justify-content: flex-end;
   color: #667085;
@@ -15423,7 +15838,8 @@ table.data-table tr.data-table-group-row.contains-selection td {
   display: flex;
   flex-wrap: wrap;
   gap: 6px;
-  padding: 0 14px 10px;
+  justify-content: flex-end;
+  padding: 0;
 }
 
 .msrp-monitor-chart-coverage span {
@@ -15445,12 +15861,12 @@ table.data-table tr.data-table-group-row.contains-selection td {
 
 .msrp-monitor-chart-model-rail {
   display: grid;
-  gap: 8px;
-  margin: 0 14px 14px;
+  gap: 6px;
+  margin: 0 12px 12px;
   border: 1px solid #e2e8f0;
   border-radius: 8px;
   background: #fbfcfe;
-  padding: 10px;
+  padding: 8px;
 }
 
 .msrp-monitor-chart-model-rail header {
@@ -15479,24 +15895,25 @@ table.data-table tr.data-table-group-row.contains-selection td {
 
 .msrp-monitor-chart-model-rail > div {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
-  gap: 6px;
+  grid-template-columns: repeat(auto-fit, minmax(206px, 1fr));
+  gap: 5px;
   min-height: 0;
-  max-height: 136px;
-  overflow: auto;
+  max-height: 92px;
+  overflow-x: hidden;
+  overflow-y: auto;
 }
 
 .msrp-monitor-chart-model-rail button {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
   gap: 4px 8px;
-  min-height: 58px;
+  min-height: 46px;
   border: 1px solid #e2e8f0;
   border-radius: 8px;
   background: #fff;
   color: #172033;
   cursor: pointer;
-  padding: 8px;
+  padding: 7px;
   text-align: left;
   font: inherit;
 }
@@ -15566,6 +15983,12 @@ table.data-table tr.data-table-group-row.contains-selection td {
   overflow: hidden;
 }
 
+.msrp-monitor-offer-visual.is-compact {
+  min-height: 0;
+  max-height: none;
+  align-self: start;
+}
+
 .msrp-monitor-offer-visual header {
   display: flex;
   justify-content: space-between;
@@ -15573,6 +15996,11 @@ table.data-table tr.data-table-group-row.contains-selection td {
   min-height: 74px;
   padding: 14px 16px 12px;
   border-bottom: 1px solid #edf1f5;
+}
+
+.msrp-monitor-offer-visual.is-compact header {
+  min-height: 58px;
+  padding: 12px 14px 10px;
 }
 
 .msrp-monitor-offer-visual h2 {
@@ -15617,6 +16045,11 @@ table.data-table tr.data-table-group-row.contains-selection td {
   min-height: 0;
   overflow: auto;
   padding: 0 12px 12px;
+}
+
+.msrp-monitor-offer-visual.is-compact .msrp-monitor-offer-heatmap {
+  max-height: 220px;
+  padding-bottom: 10px;
 }
 
 .msrp-monitor-offer-heatmap-head,
@@ -15987,10 +16420,10 @@ table.data-table tr.data-table-group-row.contains-selection td {
   border: 1px solid rgba(37, 48, 68, 0.16);
   border-radius: 8px;
   background: rgba(255, 255, 255, 0.96);
-  box-shadow: 0 16px 34px rgba(15, 23, 42, 0.18);
+  box-shadow: 0 12px 26px rgba(15, 23, 42, 0.16);
   color: #1d2939;
-  padding: 9px 11px;
-  font-size: 9.8px;
+  padding: 8px 9px;
+  font-size: 9.5px;
   line-height: 1.22;
 }
 
@@ -15998,8 +16431,8 @@ table.data-table tr.data-table-group-row.contains-selection td {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 10px;
-  margin-bottom: 6px;
+  gap: 8px;
+  margin-bottom: 5px;
 }
 
 .msrp-monitor-hover-card header strong {
@@ -16021,14 +16454,14 @@ table.data-table tr.data-table-group-row.contains-selection td {
 
 .msrp-monitor-hover-card dl {
   display: grid;
-  gap: 3px;
+  gap: 2px;
   margin: 0;
 }
 
 .msrp-monitor-hover-card dl div {
   display: grid;
-  grid-template-columns: 58px minmax(0, 1fr);
-  gap: 7px;
+  grid-template-columns: 48px minmax(0, 1fr);
+  gap: 6px;
 }
 
 .msrp-monitor-hover-card dt,
@@ -16048,7 +16481,7 @@ table.data-table tr.data-table-group-row.contains-selection td {
   color: #253044;
   font-weight: 650;
   -webkit-box-orient: vertical;
-  -webkit-line-clamp: 2;
+  -webkit-line-clamp: 1;
   text-overflow: ellipsis;
   white-space: normal;
 }
@@ -17662,6 +18095,17 @@ table.data-table tr.data-table-group-row.contains-selection td {
   .msrp-monitor-action-layout {
     grid-template-columns: minmax(0, 1fr);
   }
+  .msrp-monitor-catalog-panel {
+    grid-template-columns: minmax(0, 1fr);
+    height: auto;
+  }
+  .msrp-monitor-catalog-feature {
+    border-right: 0;
+    border-bottom: 1px solid #edf1f5;
+  }
+  .msrp-monitor-catalog-list {
+    max-height: 420px;
+  }
   .msrp-monitor-visual-grid {
     grid-template-columns: minmax(0, 1fr);
   }
@@ -17686,6 +18130,15 @@ table.data-table tr.data-table-group-row.contains-selection td {
   }
   .msrp-monitor-summary {
     grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+  .msrp-monitor-catalog-panel > header {
+    flex-direction: column;
+  }
+  .msrp-monitor-catalog-feature-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .msrp-monitor-catalog-table {
+    overflow-x: auto;
   }
   .msrp-monitor-sweden-status-grid,
   .msrp-monitor-sweden-status-actions {

@@ -86,6 +86,7 @@ const TIMELINE_SERIES_COLORS = ["#2563eb", "#16a34a", "#f97316", "#7c3aed", "#08
 const SPOT_CHECK_QUEUE_LIMIT = 8;
 const PRICE_ACTION_BOARD_LIMIT = 12;
 const MAX_CHART_MOVEMENT_SEGMENTS = 4;
+const CATALOG_FACT_LIMIT = 12;
 
 type DeckTab = "filters" | "overview" | "countries" | "timeline" | "offers" | "source";
 type MonitorMode = typeof MODE_OPTIONS[number]["value"];
@@ -168,6 +169,50 @@ interface PriceActionOfferItem extends PriceActionBase {
 }
 
 type PriceActionItem = PriceActionMoveItem | PriceActionOfferItem;
+
+type CatalogPriceSemanticsKey =
+  | "base_msrp"
+  | "starting_price"
+  | "official_offer"
+  | "inventory_offer"
+  | "cash_finance_benefit";
+type CatalogFactKind = "movement" | "offer_signal";
+type CatalogIssueStatus = "idle" | "queueing" | "queued" | "failed";
+
+interface CatalogPriceSemantics {
+  key: CatalogPriceSemanticsKey;
+  label: string;
+  className: string;
+  detail: string;
+}
+
+interface MsrpCatalogFact {
+  key: string;
+  factKind: CatalogFactKind;
+  targetId: string;
+  eventId: string | null;
+  signalId: string | null;
+  countryKey: string;
+  country: string;
+  brand: string;
+  jatoModel: string;
+  modelLabel: string;
+  countryLabel: string;
+  trimLabel: string;
+  powertrainLabel: string;
+  availabilityLabel: string;
+  semantics: CatalogPriceSemantics;
+  localPriceLabel: string;
+  eurPriceLabel: string;
+  sourceLabel: string;
+  sourceUrl: string | null;
+  evidenceLabel: string;
+  updatedLabel: string;
+  observedAtUtc: string | null;
+  validUntilLabel: string | null;
+  sourcePayloadHash: string | null;
+  auditPriority: MsrpAuditPriority | string;
+}
 
 interface SpotCheckDecisionSummary {
   key: string;
@@ -372,14 +417,24 @@ function countryKey(item: MsrpMonitoringTimelineEvent): string {
   return `${item.country}|${item.jatoTrim}|${item.changedAtUtc ?? ""}`;
 }
 
-function riskLabel(event: MsrpMonitoringModelEvent): string {
-  if (event.suspectedFalsePositiveCount > 0) {
-    return `${event.suspectedFalsePositiveCount} risk`;
+function reviewSignalSummary(event: MsrpMonitoringModelEvent): string | null {
+  const parts = [
+    event.reviewRequiredCount > 0 ? `${event.reviewRequiredCount} flag${event.reviewRequiredCount === 1 ? "" : "s"}` : null,
+    event.suspectedFalsePositiveCount > 0
+      ? `${event.suspectedFalsePositiveCount} false positive${event.suspectedFalsePositiveCount === 1 ? "" : "s"}`
+      : null,
+    event.sourceRiskCount > 0 ? `${event.sourceRiskCount} source risk${event.sourceRiskCount === 1 ? "" : "s"}` : null,
+  ].filter((item): item is string => Boolean(item));
+  return parts.length > 0 ? `Review: ${parts.join(" · ")}` : null;
+}
+
+function auditReasonSummary(reasons: string[]): string | null {
+  if (reasons.length === 0) {
+    return null;
   }
-  if (event.sourceRiskCount > 0) {
-    return `${event.sourceRiskCount} source`;
-  }
-  return "clean";
+  const visibleReasons = reasons.slice(0, 2).map(auditReasonLabel);
+  const moreCount = reasons.length - visibleReasons.length;
+  return moreCount > 0 ? `${visibleReasons.join(" · ")} · +${moreCount} reasons` : visibleReasons.join(" · ");
 }
 
 function auditLabel(priority: MsrpAuditPriority | string | null | undefined): string {
@@ -1264,6 +1319,37 @@ function spacedTicks(
   return selected.map((item) => item.tick).sort((left, right) => left - right);
 }
 
+function uniqueFormattedTicks(ticks: number[], formatter: (value: number) => string): number[] {
+  const seenLabels = new Set<string>();
+  return ticks.filter((tick) => {
+    const label = formatter(tick);
+    if (seenLabels.has(label)) {
+      return false;
+    }
+    seenLabels.add(label);
+    return true;
+  });
+}
+
+function boundedTicks(ticks: number[], min: number, max: number): number[] {
+  return ticks.filter((tick) => tick >= min && tick <= max);
+}
+
+function chartPriceDomain(values: number[], fallback: [number, number]): [number, number] {
+  const finiteValues = values.filter((value) => Number.isFinite(value));
+  if (finiteValues.length === 0) {
+    return fallback;
+  }
+  const min = Math.min(...finiteValues);
+  const max = Math.max(...finiteValues);
+  const span = Math.max(5000, max - min);
+  const lowerStep = 2500;
+  const upperStep = 5000;
+  const lower = Math.max(0, Math.floor((min - span * 0.08) / lowerStep) * lowerStep);
+  const upper = Math.ceil((max + span * 0.10) / upperStep) * upperStep;
+  return upper <= lower ? [Math.max(0, lower - lowerStep), lower + upperStep] : [lower, upper];
+}
+
 function timelineItemMatchesDirection(item: MsrpMonitoringTimelineEvent, direction: DirectionFilter): boolean {
   if (direction === "all") {
     return true;
@@ -1429,6 +1515,267 @@ function sourcePriceTransitionLabel(item: MsrpMonitoringTimelineEvent): string {
     return `${formatSourcePrice(item.oldSourceMsrp, item.previousSourceCurrency || item.sourceCurrency)} -> ${formatSourcePrice(item.currentSourceMsrp, item.sourceCurrency)}`;
   }
   return `${formatCurrency(item.oldMsrpEur)} -> ${formatCurrency(item.currentMsrpEur)}`;
+}
+
+function catalogPriceSemantics(item: MsrpMonitoringTimelineEvent): CatalogPriceSemantics {
+  const kind = item.evidence.backfillKind ?? "";
+  const riskReasons = new Set(item.riskReasons);
+  const sourceText = [
+    item.jatoTrim,
+    item.samplingBucket,
+    item.source.sourceType,
+    item.evidence.demoScenario,
+    item.evidence.backfillNotes,
+    item.evidence.backfillSourceLabel,
+  ].join(" ").toLowerCase();
+
+  if (riskReasons.has("inventory_offer") || sourceText.includes("inventory") || sourceText.includes("available-cars")) {
+    return {
+      key: "inventory_offer",
+      label: "Inventory offer",
+      className: "is-inventory-offer",
+      detail: "Current source price is an inventory or stock offer, not base MSRP evidence.",
+    };
+  }
+
+  if (sourceText.includes("finance") || sourceText.includes("lease") || sourceText.includes("benefit")) {
+    return {
+      key: "cash_finance_benefit",
+      label: "Finance / benefit",
+      className: "is-cash-finance-benefit",
+      detail: "Current source price is tied to a finance, lease, cash or benefit signal.",
+    };
+  }
+
+  if (
+    isCampaignPromotionBackfillKind(kind)
+    || riskReasons.has("official_offer_boundary")
+    || riskReasons.has("not_permanent_msrp_cut")
+    || sourceText.includes("special offer")
+    || sourceText.includes("campaign")
+    || sourceText.includes("promotion")
+  ) {
+    return {
+      key: "official_offer",
+      label: "Official offer",
+      className: "is-official-offer",
+      detail: "Official source boundary; keep separate from permanent MSRP movement until price-list evidence exists.",
+    };
+  }
+
+  if (kind === "official_price_list_pdf") {
+    return {
+      key: "base_msrp",
+      label: "Base MSRP",
+      className: "is-base-msrp",
+      detail: "Dated official price-list evidence supports the price boundary.",
+    };
+  }
+
+  return {
+    key: "starting_price",
+    label: "Starting price",
+    className: "is-starting-price",
+    detail: "Current observed source price; monitor movement separately before treating it as a permanent cut.",
+  };
+}
+
+function catalogOfferSignalSemantics(signal: MsrpOfferSignal): CatalogPriceSemantics {
+  if (signal.primaryType === "coverage_gap" || signal.offerTypes.includes("coverage_gap")) {
+    return {
+      key: "official_offer",
+      label: "Offer gap",
+      className: "is-official-offer",
+      detail: "Official offer signal is pending MSRP match; treat it as source coverage work, not price movement.",
+    };
+  }
+  return {
+    key: "cash_finance_benefit",
+    label: "Finance / benefit",
+    className: "is-cash-finance-benefit",
+    detail: "Official incentive signal; visualized as current catalog context only, not price-drop evidence.",
+  };
+}
+
+function catalogSemanticsRank(semantics: CatalogPriceSemantics): number {
+  switch (semantics.key) {
+    case "cash_finance_benefit":
+      return 0;
+    case "inventory_offer":
+      return 1;
+    case "official_offer":
+      return 2;
+    case "base_msrp":
+      return 3;
+    case "starting_price":
+      return 4;
+    default:
+      return 5;
+  }
+}
+
+function catalogAvailabilityLabel(item: MsrpMonitoringTimelineEvent): string {
+  const status = item.lifecycleStatus ?? "active";
+  switch (status) {
+    case "active":
+      return "Available";
+    case "inactive":
+      return "Inactive";
+    case "discontinued":
+      return "No longer sold";
+    default:
+      return status.replace(/_/g, " ");
+  }
+}
+
+function catalogSourceUrl(item: MsrpMonitoringTimelineEvent): string | null {
+  return item.evidence.backfillEvidenceUrl
+    ?? item.evidence.observationSourceUrl
+    ?? item.evidence.sourceUrl
+    ?? item.source.sourceRegistryUrl
+    ?? null;
+}
+
+function catalogSourceLabel(item: MsrpMonitoringTimelineEvent): string {
+  return item.evidence.backfillSourceLabel
+    ?? item.source.sourceType
+    ?? item.source.sourceCode
+    ?? "Official source";
+}
+
+function catalogUpdatedLabel(item: MsrpMonitoringTimelineEvent): string {
+  return formatDateTime(item.evidence.observedAtUtc ?? item.changedAtUtc ?? item.evidence.backfillCapturedAtUtc);
+}
+
+function catalogOfferUpdatedLabel(signal: MsrpOfferSignal): string {
+  return formatDateTime(signal.capturedAtUtc || signal.sourceObservedDate);
+}
+
+function catalogEvidenceSummary(fact: MsrpCatalogFact): string {
+  const evidence = fact.evidenceLabel.trim();
+  const source = fact.sourceLabel.trim();
+  const parts: string[] = [];
+  if (evidence && evidence.toLowerCase() !== source.toLowerCase()) {
+    parts.push(evidence);
+  }
+  parts.push(fact.updatedLabel);
+  if (fact.validUntilLabel) {
+    parts.push(`valid until ${fact.validUntilLabel}`);
+  }
+  return parts.join(" · ");
+}
+
+function buildCatalogFact(event: MsrpMonitoringModelEvent, item: MsrpMonitoringTimelineEvent): MsrpCatalogFact {
+  const semantics = catalogPriceSemantics(item);
+  const effectiveAudit = higherAuditPriority(event, item);
+  const observedAtUtc = item.evidence.observedAtUtc ?? item.changedAtUtc ?? item.evidence.backfillCapturedAtUtc ?? null;
+  return {
+    key: `${event.eventId}|${countryKey(item)}`,
+    factKind: "movement",
+    targetId: `${event.eventId}|${countryKey(item)}`,
+    eventId: event.eventId,
+    signalId: null,
+    countryKey: countryKey(item),
+    country: item.country,
+    brand: item.brand,
+    jatoModel: item.jatoModel,
+    modelLabel: eventLabel(event),
+    countryLabel: item.countryLabel,
+    trimLabel: item.jatoTrim || "trim",
+    powertrainLabel: item.jatoPowertrain || event.jatoPowertrain || "-",
+    availabilityLabel: catalogAvailabilityLabel(item),
+    semantics,
+    localPriceLabel: formatSourcePrice(item.currentSourceMsrp, item.sourceCurrency),
+    eurPriceLabel: formatCurrency(item.currentMsrpEur),
+    sourceLabel: catalogSourceLabel(item),
+    sourceUrl: catalogSourceUrl(item),
+    evidenceLabel: eventEvidenceLabel(item),
+    updatedLabel: catalogUpdatedLabel(item),
+    observedAtUtc,
+    validUntilLabel: item.evidence.backfillValidUntil ?? null,
+    sourcePayloadHash: item.evidence.backfillPayloadHash ?? item.evidence.sourcePayloadHash ?? null,
+    auditPriority: effectiveAudit.priority,
+  };
+}
+
+function buildOfferCatalogFact(signal: MsrpOfferSignal): MsrpCatalogFact {
+  const semantics = catalogOfferSignalSemantics(signal);
+  return {
+    key: `offer:${signal.signalId}`,
+    factKind: "offer_signal",
+    targetId: signal.signalId,
+    eventId: null,
+    signalId: signal.signalId,
+    countryKey: signal.country,
+    country: signal.country,
+    brand: signal.brand,
+    jatoModel: signal.jatoModel,
+    modelLabel: `${signal.brand} ${signal.jatoModel}`,
+    countryLabel: signal.countryLabel,
+    trimLabel: signal.jatoTrim || "trim",
+    powertrainLabel: signal.jatoPowertrain || "-",
+    availabilityLabel: "Offer lead",
+    semantics,
+    localPriceLabel: offerSignalLocalCurrencyLabel(signal),
+    eurPriceLabel: offerSignalEurNormalizedLabel(signal),
+    sourceLabel: signal.sourceLabel,
+    sourceUrl: signal.sourceUrl,
+    evidenceLabel: offerSignalMatchStatusLabel(signal.matchStatus),
+    updatedLabel: catalogOfferUpdatedLabel(signal),
+    observedAtUtc: signal.capturedAtUtc || signal.sourceObservedDate || null,
+    validUntilLabel: signal.offerValidUntil,
+    sourcePayloadHash: null,
+    auditPriority: signal.auditPriority,
+  };
+}
+
+function buildCatalogFacts(
+  events: MsrpMonitoringModelEvent[],
+  offerSignals: MsrpOfferSignal[],
+  direction: DirectionFilter,
+  evidence: EvidenceFilter,
+  audit: AuditFilter,
+): MsrpCatalogFact[] {
+  const movementFacts = events
+    .flatMap((event) => event.timeline
+      .filter((item) => timelineItemMatchesFilters(event, item, direction, evidence, audit))
+      .map((item) => buildCatalogFact(event, item)));
+  const offerFacts = offerSignals
+    .filter((signal) => offerSignalMatchesFilters(signal, direction, evidence, audit))
+    .map(buildOfferCatalogFact);
+  return [...movementFacts, ...offerFacts].sort((left, right) => (
+      catalogSemanticsRank(left.semantics) - catalogSemanticsRank(right.semantics)
+      || left.countryLabel.localeCompare(right.countryLabel)
+      || left.modelLabel.localeCompare(right.modelLabel)
+      || left.trimLabel.localeCompare(right.trimLabel)
+    ));
+}
+
+function buildCatalogSourceIssuePayload(fact: MsrpCatalogFact): Parameters<typeof api.queueMsrpMonitorSourceIssue>[0] {
+  return {
+    target_type: fact.factKind,
+    target_id: fact.targetId,
+    country: fact.country,
+    country_label: fact.countryLabel,
+    brand: fact.brand,
+    jato_model: fact.jatoModel,
+    jato_trim: fact.trimLabel,
+    jato_powertrain: fact.powertrainLabel,
+    price_semantics: fact.semantics.key,
+    issue_type: "source_issue",
+    source_url: fact.sourceUrl,
+    source_label: fact.sourceLabel,
+    evidence_label: fact.evidenceLabel,
+    source_payload_hash: fact.sourcePayloadHash,
+    observed_at_utc: fact.observedAtUtc,
+    valid_until: fact.validUntilLabel,
+    note: `${fact.semantics.label}: ${fact.semantics.detail}`,
+  };
+}
+
+function catalogIssuePacketLabel(fact: MsrpCatalogFact): string {
+  const validity = fact.validUntilLabel ? ` · valid until ${fact.validUntilLabel}` : "";
+  return `${fact.countryLabel} · ${fact.modelLabel} · ${fact.trimLabel} · ${fact.semantics.label}${validity}`;
 }
 
 function launchAlertLabel(alert: MsrpLaunchAlert): string {
@@ -1604,13 +1951,14 @@ function MsrpOfferSignalVisual({ signals, selectedSignalId, onSelect }: MsrpOffe
   const financeCount = sortedSignals.filter((signal) => offerSignalColumnActive(signal, "finance")).length;
   const leaseCount = sortedSignals.filter((signal) => offerSignalColumnActive(signal, "lease")).length;
   const gapCount = sortedSignals.filter((signal) => offerSignalColumnActive(signal, "gap")).length;
+  const compact = sortedSignals.length > 0 && sortedSignals.length < 3;
 
   return (
-    <section className="msrp-monitor-offer-visual" aria-label="Official offer signal visualization">
+    <section className={`msrp-monitor-offer-visual${compact ? " is-compact" : ""}`} aria-label="Official offer signal visualization">
       <header>
         <div>
-          <h2>Offer signal map</h2>
-          <p>Official incentives are leads pending MSRP match; they are not counted as spot-check price movements.</p>
+          <h2>{compact ? "Offer signals" : "Offer signal map"}</h2>
+          <p>Official incentives are leads pending MSRP match, not price movement evidence.</p>
         </div>
         <div className="msrp-monitor-offer-visual-kpis">
           <span><strong>{cashCount}</strong> cash</span>
@@ -1891,6 +2239,119 @@ function PriceActionBoard({ items, totalCount, selectedKey, onSelect }: PriceAct
       ) : (
         <div className="msrp-monitor-empty-block">No MSRP movement actions match the current filters.</div>
       )}
+    </section>
+  );
+}
+
+interface MsrpCatalogTruthPanelProps {
+  facts: MsrpCatalogFact[];
+  totalCount: number;
+  selectedKey: string | null;
+  issueStatus: CatalogIssueStatus;
+  issueMessage: string;
+  onSelect: (fact: MsrpCatalogFact) => void;
+  onFlagSource: (fact: MsrpCatalogFact) => void;
+}
+
+function MsrpCatalogTruthPanel({
+  facts,
+  totalCount,
+  selectedKey,
+  issueStatus,
+  issueMessage,
+  onSelect,
+  onFlagSource,
+}: MsrpCatalogTruthPanelProps) {
+  const selectedFact = facts.find((fact) => fact.key === selectedKey) ?? facts[0] ?? null;
+  const hiddenCount = Math.max(0, totalCount - facts.length);
+
+  return (
+    <section className="msrp-monitor-catalog-panel" aria-label="Current price catalog truth">
+      <header>
+        <div>
+          <span>Catalog truth</span>
+          <h2>Current price facts</h2>
+        </div>
+        <strong>{facts.length}/{totalCount}</strong>
+      </header>
+      {selectedFact ? (
+        <div className="msrp-monitor-catalog-feature">
+          <span className={`msrp-monitor-catalog-semantics ${selectedFact.semantics.className}`}>
+            {selectedFact.semantics.label}
+          </span>
+          <div className="msrp-monitor-catalog-feature-title">
+            <h3>{selectedFact.modelLabel}</h3>
+            <p>{selectedFact.countryLabel} · {selectedFact.trimLabel} · {selectedFact.powertrainLabel} · {selectedFact.availabilityLabel}</p>
+          </div>
+          <div className="msrp-monitor-catalog-feature-grid">
+            <div><span>Local currency</span><strong>{selectedFact.localPriceLabel}</strong></div>
+            <div><span>EUR normalized</span><strong>{selectedFact.eurPriceLabel}</strong></div>
+            <div><span>Source</span><strong>{selectedFact.sourceLabel}</strong></div>
+            <div><span>Evidence</span><strong>{catalogEvidenceSummary(selectedFact)}</strong></div>
+          </div>
+          <p className="msrp-monitor-catalog-semantics-note">{selectedFact.semantics.detail}</p>
+          <div className="msrp-monitor-catalog-actions">
+            {selectedFact.sourceUrl ? <a href={selectedFact.sourceUrl} target="_blank" rel="noreferrer">Open source</a> : null}
+            <button type="button" onClick={() => onSelect(selectedFact)}>
+              {selectedFact.factKind === "offer_signal" ? "Inspect offer" : "Inspect movement"}
+            </button>
+            <button type="button" disabled={issueStatus === "queueing"} onClick={() => onFlagSource(selectedFact)}>
+              {issueStatus === "queueing" ? "Queueing" : "Flag issue"}
+            </button>
+          </div>
+          {issueMessage ? (
+            <div className={`msrp-monitor-catalog-issue-status is-${issueStatus}`}>
+              <strong>{issueStatus === "queued" ? "Audit backlog" : issueStatus === "failed" ? "Source issue failed" : "Source issue"}</strong>
+              <span>{issueMessage}</span>
+            </div>
+          ) : null}
+        </div>
+      ) : (
+        <div className="msrp-monitor-empty-block">No current price facts match the current filters.</div>
+      )}
+
+      {facts.length > 0 ? (
+        <div className="msrp-monitor-catalog-table">
+          <div className="msrp-monitor-catalog-table-head" aria-hidden="true">
+            <span>Semantics</span>
+            <span>Model / trim</span>
+            <span>Current price</span>
+            <span>Source / evidence</span>
+          </div>
+          <div className="msrp-monitor-catalog-list">
+            {facts.map((fact) => (
+              <button
+                key={fact.key}
+                type="button"
+                className={`msrp-monitor-catalog-row ${auditClass(fact.auditPriority)} is-${fact.factKind.replace(/_/g, "-")}${fact.key === selectedKey ? " is-selected" : ""}`}
+                onClick={() => onSelect(fact)}
+              >
+                <span>
+                  <b className={`msrp-monitor-catalog-semantics ${fact.semantics.className}`}>{fact.semantics.label}</b>
+                  <small>{fact.availabilityLabel}</small>
+                </span>
+                <span>
+                  <strong>{fact.modelLabel}</strong>
+                  <small>{fact.countryLabel} · {fact.trimLabel}</small>
+                </span>
+                <span>
+                  <strong>{fact.localPriceLabel}</strong>
+                  <small>{fact.eurPriceLabel}</small>
+                </span>
+                <span>
+                  <strong>{fact.sourceLabel}</strong>
+                  <small>{catalogEvidenceSummary(fact)}</small>
+                </span>
+              </button>
+            ))}
+          </div>
+          {hiddenCount > 0 ? (
+            <div className="msrp-monitor-catalog-overflow">
+              {hiddenCount} more current fact{hiddenCount === 1 ? "" : "s"} match the filters.
+            </div>
+          ) : null}
+        </div>
+      ) : null}
     </section>
   );
 }
@@ -2279,16 +2740,32 @@ function chartSmartLabelScore(event: MsrpMonitoringModelEvent, maxSales: number,
 
 function smartChartLabelEventIds(events: MsrpMonitoringModelEvent[], maxSales: number, showSalesLayer: boolean): Set<string> {
   const labelBudget = Math.max(4, Math.min(7, Math.ceil(events.length * 0.42)));
-  return new Set(
-    [...events]
-      .sort((left, right) => (
-        chartSmartLabelScore(right, maxSales, showSalesLayer) - chartSmartLabelScore(left, maxSales, showSalesLayer)
-        || (showSalesLayer ? salesVolume(right) - salesVolume(left) : 0)
-        || eventLabel(left).localeCompare(eventLabel(right))
-      ))
-      .slice(0, labelBudget)
-      .map((event) => event.eventId),
-  );
+  const selectedIds = new Set<string>();
+  const selectedLabels = new Set<string>();
+  const rankedEvents = [...events].sort((left, right) => (
+    chartSmartLabelScore(right, maxSales, showSalesLayer) - chartSmartLabelScore(left, maxSales, showSalesLayer)
+    || (showSalesLayer ? salesVolume(right) - salesVolume(left) : 0)
+    || eventLabel(left).localeCompare(eventLabel(right))
+  ));
+  rankedEvents.forEach((event) => {
+    if (selectedIds.size >= labelBudget) {
+      return;
+    }
+    const label = eventLabel(event).toLowerCase();
+    if (selectedLabels.has(label)) {
+      return;
+    }
+    selectedLabels.add(label);
+    selectedIds.add(event.eventId);
+  });
+  if (selectedIds.size < Math.min(3, labelBudget)) {
+    rankedEvents.forEach((event) => {
+      if (selectedIds.size < Math.min(3, labelBudget)) {
+        selectedIds.add(event.eventId);
+      }
+    });
+  }
+  return selectedIds;
 }
 
 function buildChartMovementSegments(
@@ -2339,7 +2816,7 @@ function buildChartMovementSegments(
         key: `${event.eventId}-${item.priceHistoryId ?? index}`,
         oldY: scaleY(Number(item.oldMsrpEur)),
         currentY: scaleY(Number(item.currentMsrpEur)),
-        xOffset: spreadIndex * 4,
+        xOffset: spreadIndex * 7,
         opacity: 0.22 + recency * 0.48,
         className: change < 0 ? "is-drop" : change > 0 ? "is-rise" : "is-flat",
         label: `${formatTime(item.changedAtUtc)} · ${formatPct(item.changePct)}${collapsedLabel}`,
@@ -2486,8 +2963,8 @@ function ChartPoint({
   const labelX = labelSide === "left" ? x - anchorRadius - 8 : x + anchorRadius + 8;
   const hoverDetail = chartPointHoverDetail(event);
   const smartLabelNote = chartSmartLabelNote(event, renderSalesBubble);
-  const tooltipWidth = 306;
-  const tooltipHeight = 188;
+  const tooltipWidth = 252;
+  const tooltipHeight = renderSalesBubble ? 132 : 116;
   const tooltipX = labelSide === "left" || x > CHART_WIDTH - tooltipWidth - 24
     ? Math.max(8, x - tooltipWidth - anchorRadius - 16)
     : Math.min(CHART_WIDTH - tooltipWidth - 8, x + anchorRadius + 16);
@@ -2577,14 +3054,11 @@ function ChartPoint({
               <span>{hoverDetail.scopeLabel}</span>
             </header>
             <dl>
-              <div><dt>Trim</dt><dd>{hoverDetail.trimLabel}</dd></div>
+              <div><dt>Scope</dt><dd>{hoverDetail.scopeLabel} · {hoverDetail.trimLabel}</dd></div>
               <div><dt>Change</dt><dd>{hoverDetail.changeLabel} · {changePctBasisShortLabel(event.changePctBasis)}</dd></div>
               <div><dt>MSRP</dt><dd>{hoverDetail.priceLabel}</dd></div>
-              <div><dt>Sales</dt><dd>{hoverDetail.salesLabel}</dd></div>
-              <div><dt>Source</dt><dd>{hoverDetail.salesSourceLabel}</dd></div>
-              <div><dt>Use</dt><dd>{hoverDetail.salesUseLabel}</dd></div>
               <div><dt>Evidence</dt><dd>{hoverDetail.evidenceLabel}</dd></div>
-              <div><dt>Sample</dt><dd>{hoverDetail.sampleLabel}</dd></div>
+              {renderSalesBubble ? <div><dt>Sales</dt><dd>{hoverDetail.salesLabel}</dd></div> : null}
             </dl>
           </div>
         </foreignObject>
@@ -2917,7 +3391,7 @@ function MsrpEventChart({
     Number(event.medianCurrentMsrpEur),
   ]);
   const [xMin, xMax] = domain(xValues, [4000, 5000]);
-  const [yMin, yMax] = domain(priceYValues.length > 0 ? priceYValues : yValues, [20000, 80000], 0.12);
+  const [yMin, yMax] = chartPriceDomain(priceYValues.length > 0 ? priceYValues : yValues, [20000, 80000]);
   const innerWidth = CHART_WIDTH - CHART_MARGIN.left - CHART_MARGIN.right;
   const innerHeight = CHART_HEIGHT - CHART_MARGIN.top - CHART_MARGIN.bottom;
   const hasPendingLengthLane = missingLengthEvents.length > 0;
@@ -2927,31 +3401,39 @@ function MsrpEventChart({
   const pendingLaneX = pendingLaneStart + pendingLaneWidth * 0.52;
   const scaleX = (value: number) => CHART_MARGIN.left + ((value - xMin) / Math.max(1, xMax - xMin)) * anchoredInnerWidth;
   const scaleY = (value: number) => CHART_MARGIN.top + (1 - (value - yMin) / Math.max(1, yMax - yMin)) * innerHeight;
-  const xTicks = niceTicks(xMin, xMax, 6);
-  const yTicks = spacedTicks(yMin, yMax, 6, scaleY, 42);
+  const xTicks = uniqueFormattedTicks(boundedTicks(niceTicks(xMin, xMax, 5), xMin, xMax), (tick) => `${formatNumber(tick)} mm`);
+  const yTicks = uniqueFormattedTicks(boundedTicks(spacedTicks(yMin, yMax, 5, scaleY, 54), yMin, yMax), formatCurrency);
   const maxSales = Math.max(0, ...priceChartEvents.map(salesVolume));
   const smartLabelIds = smartChartLabelEventIds(priceChartEvents, maxSales, showSalesLayer);
+  const moveSegmentCount = priceChartEvents.reduce((total, event) => total + Math.max(1, event.timelineEventCount), 0);
 
   return (
     <div className="msrp-monitor-chart-shell">
       <div className="msrp-monitor-chart-head">
         <div>
           <h2>Length x MSRP movement map</h2>
-          <p>Vehicle length anchors each model; vertical trails encode old price, current price and every observed move.</p>
+          <p>Length anchors each model; dashed trails connect old price to the current point.</p>
         </div>
-        <div className="msrp-monitor-legend">
-          <span><i className="old" /> Old MSRP</span>
-          <span><i className="line" /> Movement trail</span>
-          <span><i className="current" /> Current MSRP</span>
-          <button
-            type="button"
-            className={`msrp-monitor-legend-toggle${showSalesLayer ? " is-active" : ""}`}
-            aria-pressed={showSalesLayer}
-            onClick={() => setShowSalesLayer((current) => !current)}
-          >
-            <i className="bubble" /> JATO rolling 12M sales
-          </button>
-          <span><i className="smart" /> Smart label</span>
+        <div className="msrp-monitor-chart-head-tools">
+          <div className="msrp-monitor-legend">
+            <span><i className="old" /> Old</span>
+            <span><i className="line" /> Trail</span>
+            <span><i className="current" /> Current</span>
+            <button
+              type="button"
+              className={`msrp-monitor-legend-toggle${showSalesLayer ? " is-active" : ""}`}
+              aria-pressed={showSalesLayer}
+              onClick={() => setShowSalesLayer((current) => !current)}
+            >
+              <i className="bubble" /> 12M sales
+            </button>
+            <span><i className="smart" /> Label</span>
+          </div>
+          <div className="msrp-monitor-chart-coverage" aria-label="Length MSRP movement map coverage">
+            <span><strong>{priceChartEvents.length}</strong> plotted</span>
+            {hiddenLengthCount > 0 ? <span><strong>{hiddenLengthCount}</strong> length pending</span> : null}
+            <span><strong>{moveSegmentCount}</strong> move segments</span>
+          </div>
         </div>
       </div>
       <svg viewBox={`0 0 ${CHART_WIDTH} ${CHART_HEIGHT}`} className="msrp-monitor-chart" role="img" aria-label="MSRP monitor model event chart">
@@ -3033,18 +3515,11 @@ function MsrpEventChart({
       {priceChartEvents.length === 0 ? (
         <div className="msrp-monitor-empty">No priced model events are available in this time window.</div>
       ) : null}
-      <div className="msrp-monitor-chart-coverage" aria-label="Length MSRP movement map coverage">
-        <span><strong>{priceChartEvents.length}</strong> plotted</span>
-        <span><strong>{drawableEvents.length}</strong> length anchored</span>
-        <span><strong>{hiddenLengthCount}</strong> length pending</span>
-        <span><strong>{events.length}</strong> filtered models</span>
-        <span><strong>{priceChartEvents.reduce((total, event) => total + Math.max(1, event.timelineEventCount), 0)}</strong> move segments</span>
-      </div>
       {sortedRailEvents.length > 0 ? (
         <div className="msrp-monitor-chart-model-rail">
           <header>
-            <strong>All filtered models</strong>
-            <span>{hiddenLengthCount > 0 ? `${hiddenLengthCount} kept outside the scatter because length is missing` : "Every model is plotted"}</span>
+            <strong>Filtered models</strong>
+            <span>{events.length} models{hiddenLengthCount > 0 ? ` · ${hiddenLengthCount} missing length` : ""}</span>
           </header>
           <div>
             {sortedRailEvents.map((event) => (
@@ -3093,6 +3568,8 @@ export function MsrpMonitorPage() {
   const [backfillSnapshotErrorByPath, setBackfillSnapshotErrorByPath] = useState<Record<string, string>>({});
   const [snapshotPreviewPathOverride, setSnapshotPreviewPathOverride] = useState<string | null>(null);
   const [spotCheckBriefCopyStatus, setSpotCheckBriefCopyStatus] = useState<CopyStatus>("idle");
+  const [catalogIssueStatus, setCatalogIssueStatus] = useState<CatalogIssueStatus>("idle");
+  const [catalogIssueMessage, setCatalogIssueMessage] = useState("");
   const [pendingCampaignBoundaryFocus, setPendingCampaignBoundaryFocus] = useState(false);
   const [deckOpen, setDeckOpen] = useState(false);
   const [deckTab, setDeckTab] = useState<DeckTab>("overview");
@@ -3343,10 +3820,20 @@ export function MsrpMonitorPage() {
     [spotCheckQueueCandidates],
   );
   const visiblePriceActionItems = priceActionItems.slice(0, PRICE_ACTION_BOARD_LIMIT);
+  const catalogFacts = useMemo(
+    () => buildCatalogFacts(events, offerSignals, directionFilter, evidenceFilter, auditFilter),
+    [auditFilter, directionFilter, evidenceFilter, events, offerSignals],
+  );
+  const visibleCatalogFacts = catalogFacts.slice(0, CATALOG_FACT_LIMIT);
   const selectedPriceActionItem = priceActionItems.find((item) => item.key === selectedActionKey)
     ?? visiblePriceActionItems[0]
     ?? null;
   const resolvedSelectedActionKey = selectedPriceActionItem?.key ?? null;
+  const selectedCatalogFactKey = selectedActionKey?.startsWith("offer:") && selectedOfferSignalId
+    ? `offer:${selectedOfferSignalId}`
+    : selectedEvent && selectedCountryEvent
+      ? `${selectedEvent.eventId}|${countryKey(selectedCountryEvent)}`
+      : null;
   const selectedActionIsOffer = selectedActionKey?.startsWith("offer:") ?? false;
   const spotCheckQueueLimitLabel = Math.min(SPOT_CHECK_QUEUE_LIMIT, spotCheckQueueCandidates.length);
   const spotCheckQueueOverflowCount = Math.max(0, spotCheckQueueCandidates.length - spotCheckQueue.length);
@@ -3432,6 +3919,15 @@ export function MsrpMonitorPage() {
   const activeBrandScopeLabel = brandScopeLabel(brandFilter);
   const activeWindowScopeLabel = windowScopeLabel(selectedWindowOption);
   const activeDemoScopeLabel = demoScopeLabel(data);
+  const deckFooterChips = [
+    countryFilter !== "all" && !(mode === "sweden_swiss_demo" && countryFilter === DEFAULT_SWEDEN_SWISS_DEMO_COUNTRY) && mode !== "sweden_demo"
+      ? activeCountryScopeLabel
+      : null,
+    brandFilter !== "all" ? activeBrandScopeLabel : null,
+    directionFilter !== "all" ? directionFilterLabel(directionFilter) : null,
+    auditFilter !== "all" ? auditFilterLabel(auditFilter) : null,
+    evidenceFilter !== "all" ? evidenceFilterLabel(evidenceFilter) : null,
+  ].filter((chip): chip is string => Boolean(chip));
   const missingLengthEvents = events.filter((event) => event.lengthMissing);
   const swedenTimelineItems = rawEvents.flatMap((event) => event.timeline.filter(isSwedenTimelineItem));
   const swedenOfficialDropSignalCount = swedenTimelineItems.filter(isOfficialDropSignal).length;
@@ -3561,6 +4057,46 @@ export function MsrpMonitorPage() {
       return;
     }
     selectOfferSignal(item.signal);
+  }
+
+  function selectCatalogFact(fact: MsrpCatalogFact): void {
+    if (fact.factKind === "offer_signal" && fact.signalId) {
+      setSelectedActionKey(`offer:${fact.signalId}`);
+      setSelectedOfferSignalId(fact.signalId);
+      setDeckTab("offers");
+      setDeckOpen(true);
+      return;
+    }
+    if (!fact.eventId) {
+      return;
+    }
+    setSelectedActionKey(`move:${fact.eventId}|${fact.countryKey}`);
+    setSelectedItem({ eventId: fact.eventId, countryKey: fact.countryKey });
+    setDeckTab("overview");
+    setDeckOpen(true);
+  }
+
+  async function flagCatalogSourceIssue(fact: MsrpCatalogFact): Promise<void> {
+    setCatalogIssueStatus("queueing");
+    setCatalogIssueMessage(`Queueing source issue: ${catalogIssuePacketLabel(fact)}`);
+    if (fact.factKind === "offer_signal" && fact.signalId) {
+      setSelectedActionKey(`offer:${fact.signalId}`);
+      setSelectedOfferSignalId(fact.signalId);
+      setDeckTab("offers");
+    } else if (fact.eventId) {
+      setSelectedActionKey(`move:${fact.eventId}|${fact.countryKey}`);
+      setSelectedItem({ eventId: fact.eventId, countryKey: fact.countryKey });
+      setDeckTab("source");
+    }
+    setDeckOpen(true);
+    try {
+      const queued = await api.queueMsrpMonitorSourceIssue(buildCatalogSourceIssuePayload(fact));
+      setCatalogIssueStatus("queued");
+      setCatalogIssueMessage(`${queued.reused ? "Updated" : "Queued"} ${queued.issueId} · ${queued.backlogPath}`);
+    } catch (err: unknown) {
+      setCatalogIssueStatus("failed");
+      setCatalogIssueMessage(err instanceof Error ? err.message : String(err));
+    }
   }
 
   function applySwedenYtdBackfillPreset(): void {
@@ -3727,24 +4263,19 @@ export function MsrpMonitorPage() {
       <DeckFloatingDrawer
         open={deckOpen}
         onOpenChange={setDeckOpen}
-        triggerPrimary="MSRP Deck"
-        triggerSecondaryOpen="收起"
-        triggerSecondaryClosed="打开"
+        triggerPrimary="Deck"
+        triggerSecondaryOpen="Close"
+        triggerSecondaryClosed="Open"
         eyebrow={mode === "live" ? "Live monitor" : monitorModeLabel(mode)}
         title={selectedEvent ? eventLabel(selectedEvent) : "MSRP controls"}
         ariaLabel="MSRP monitoring floating deck"
         className="msrp-monitor-floating-drawer"
         panelClassName="msrp-monitor-floating-panel"
-        footer={(
+        footer={deckFooterChips.length > 0 ? (
           <div className="msrp-monitor-floating-footer">
-            <span className="market-scan-toolbar-chip">{events.length}/{data?.summary.eventCount ?? 0} events</span>
-            <span className="market-scan-toolbar-chip">{activeCountryScopeLabel}</span>
-            <span className="market-scan-toolbar-chip">{directionFilterLabel(directionFilter)}</span>
-            <span className="market-scan-toolbar-chip">{auditFilterLabel(auditFilter)}</span>
-            <span className="market-scan-toolbar-chip">{evidenceFilterLabel(evidenceFilter)}</span>
-            <span className="market-scan-toolbar-chip">{formatDateTime(lastUpdatedAt)}</span>
+            {deckFooterChips.map((chip) => <span key={chip} className="market-scan-toolbar-chip">{chip}</span>)}
           </div>
-        )}
+        ) : undefined}
       >
         <DeckControlTabs
           tabs={DECK_TABS}
@@ -3858,22 +4389,20 @@ export function MsrpMonitorPage() {
             </div>
             <div className="msrp-monitor-signal-list">
               <span className={`msrp-monitor-audit-pill ${auditClass(selectedEvent.auditPriority)}`}>{selectedEvent.auditActionLabel}</span>
-              <span className={selectedEvent.multiCountrySync ? "is-good" : ""}>Multi-country sync: {selectedEvent.multiCountrySync ? "yes" : "no"}</span>
-              <span>Review flags: {selectedEvent.reviewRequiredCount}</span>
-              <span>Potential false positives: {selectedEvent.suspectedFalsePositiveCount}</span>
-              <span>Risk: {riskLabel(selectedEvent)}</span>
-              <span>Lifecycle: {selectedEvent.lifecycleStatus ?? "active"}</span>
+              {selectedEvent.multiCountrySync ? <span className="is-good">Multi-country sync</span> : null}
+              {reviewSignalSummary(selectedEvent) ? <span>{reviewSignalSummary(selectedEvent)}</span> : null}
+              {selectedEvent.lifecycleStatus && selectedEvent.lifecycleStatus !== "active" ? <span>Lifecycle: {selectedEvent.lifecycleStatus}</span> : null}
               {selectedEvent.backfilled ? <span>Historical backfill: {selectedEvent.backfillEventCount ?? 0}</span> : null}
               {selectedCountryEvent?.evidence.backfilled ? (
-                <span className="is-backfill-signal">Evidence: {backfillKindLabel(selectedCountryEvent.evidence.backfillKind)}</span>
+                <span className="is-backfill-signal">
+                  Evidence: {backfillKindLabel(selectedCountryEvent.evidence.backfillKind)}
+                  {selectedCountryEvent.evidence.backfillValidUntil ? ` · valid until ${selectedCountryEvent.evidence.backfillValidUntil}` : ""}
+                </span>
               ) : null}
               {selectedCountryEvent?.evidence.backfilled ? (
                 <span className="is-boundary">{backfillBoundaryLabel(selectedCountryEvent)}</span>
               ) : null}
-              {selectedCountryEvent?.evidence.backfillValidUntil ? (
-                <span>Valid until: {selectedCountryEvent.evidence.backfillValidUntil}</span>
-              ) : null}
-              {selectedEvent.auditReasons.slice(0, 4).map((reason) => <span key={reason} title={reason}>{auditReasonLabel(reason)}</span>)}
+              {auditReasonSummary(selectedEvent.auditReasons) ? <span>{auditReasonSummary(selectedEvent.auditReasons)}</span> : null}
             </div>
             <MsrpSalesEffectChart event={selectedEvent} />
             {missingLengthEvents.length > 0 ? (
@@ -4259,49 +4788,57 @@ export function MsrpMonitorPage() {
             </section>
           ) : null}
 
-          <div className="msrp-monitor-summary">
-            <div><span>Movement signals</span><strong>{events.length}/{data.summary.eventCount}</strong></div>
-            <div><span>Price moves</span><strong>{filteredTimelineCount}/{data.summary.timelineEventCount}</strong></div>
-            <div><span>Priority audit</span><strong>{filteredPriorityAuditCount}</strong></div>
-            <button
-              type="button"
-              title="Use Sweden, current-year YTD, price drops and campaign/promotion evidence for official backfill spot-checking"
-              onClick={applySwedenYtdBackfillPreset}
-            >
-              <span>Sweden 2026</span>
-              <strong>YTD</strong>
-              <small>Official drops</small>
-            </button>
-            <button
-              type="button"
-              data-testid="msrp-monitor-sweden-swiss-demo-preset"
-              title="Open the Sweden and Swiss demo, defaulting to Switzerland"
-              onClick={applySwedenSwissDemoPreset}
-            >
-              <span>Sweden + Swiss</span>
-              <strong>Demo</strong>
-              <small>Rolling 12M top30</small>
-            </button>
-            <button
-              type="button"
-              className={pendingCampaignBoundaryFocus ? "is-pending" : ""}
-              title="Use current-year YTD, clear country and brand filters, then focus campaign/promotion boundary spot-checks"
-              onClick={focusCampaignBoundarySpotChecks}
-            >
-              <span>Campaign boundary</span><strong>{filteredCampaignBoundaryCount}/{data.summary.campaignBoundaryCount}</strong>
-              {pendingCampaignBoundaryFocus ? (
-                <small>Opening source...</small>
-              ) : data.summary.campaignBoundaryCount > SPOT_CHECK_QUEUE_LIMIT ? (
-                <small>Showing top {SPOT_CHECK_QUEUE_LIMIT}</small>
-              ) : null}
-            </button>
-            <div><span>Blocks</span><strong>{filteredBlockCount}</strong></div>
-            <div><span>Samples</span><strong>{filteredSampleCount}</strong></div>
-            <div><span>Backfilled signals</span><strong>{filteredBackfillCount}</strong></div>
-            <div><span>Official offers</span><strong>{offerSignals.length}/{data.summary.offerSignalCount ?? rawOfferSignals.length}</strong></div>
-            {showLaunchAlerts || swedenStatusVisible ? <div><span>Launch baselines</span><strong>{launchSummaryCount}</strong></div> : null}
-            <div><span>Batch A backfill</span><strong>{batchACoverage ? `${batchACoverage.historicalBackfillCountryCount}/${batchACoverage.countryCount}` : "-"}</strong></div>
+          <div className="msrp-monitor-summary-strip">
+            <div className="msrp-monitor-summary-actions" aria-label="MSRP monitor quick views">
+              <button
+                type="button"
+                title="Use Sweden, current-year YTD, price drops and campaign/promotion evidence for official backfill spot-checking"
+                onClick={applySwedenYtdBackfillPreset}
+              >
+                <span>Sweden 2026</span>
+                <strong>YTD drops</strong>
+              </button>
+              <button
+                type="button"
+                data-testid="msrp-monitor-sweden-swiss-demo-preset"
+                title="Open the Sweden and Swiss demo, defaulting to Switzerland"
+                onClick={applySwedenSwissDemoPreset}
+              >
+                <span>Sweden + Swiss</span>
+                <strong>Demo</strong>
+              </button>
+              <button
+                type="button"
+                className={pendingCampaignBoundaryFocus ? "is-pending" : ""}
+                title="Use current-year YTD, clear country and brand filters, then focus campaign/promotion boundary spot-checks"
+                onClick={focusCampaignBoundarySpotChecks}
+              >
+                <span>Campaign boundary</span>
+                <strong>{filteredCampaignBoundaryCount}/{data.summary.campaignBoundaryCount}</strong>
+              </button>
+            </div>
+            <div className="msrp-monitor-summary">
+              <div><span>Movement signals</span><strong>{events.length}/{data.summary.eventCount}</strong></div>
+              <div><span>Price moves</span><strong>{filteredTimelineCount}/{data.summary.timelineEventCount}</strong></div>
+              <div><span>Priority audit</span><strong>{filteredPriorityAuditCount}</strong></div>
+              {filteredBlockCount > 0 ? <div className="is-warning"><span>Blocks</span><strong>{filteredBlockCount}</strong></div> : null}
+              {filteredSampleCount > 0 ? <div><span>Samples</span><strong>{filteredSampleCount}</strong></div> : null}
+              <div><span>Backfilled signals</span><strong>{filteredBackfillCount}</strong></div>
+              <div><span>Official offers</span><strong>{offerSignals.length}/{data.summary.offerSignalCount ?? rawOfferSignals.length}</strong></div>
+              {showLaunchAlerts || swedenStatusVisible ? <div><span>Launch baselines</span><strong>{launchSummaryCount}</strong></div> : null}
+              <div><span>Batch A backfill</span><strong>{batchACoverage ? `${batchACoverage.historicalBackfillCountryCount}/${batchACoverage.countryCount}` : "-"}</strong></div>
+            </div>
           </div>
+
+          <MsrpCatalogTruthPanel
+            facts={visibleCatalogFacts}
+            totalCount={catalogFacts.length}
+            selectedKey={selectedCatalogFactKey}
+            issueStatus={catalogIssueStatus}
+            issueMessage={catalogIssueMessage}
+            onSelect={selectCatalogFact}
+            onFlagSource={flagCatalogSourceIssue}
+          />
 
           <div className="msrp-monitor-visual-grid">
             <MsrpEventChart events={events} selectedEventId={selectedEvent?.eventId ?? null} onSelect={selectEvent} />

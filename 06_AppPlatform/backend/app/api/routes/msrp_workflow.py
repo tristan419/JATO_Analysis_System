@@ -6,6 +6,7 @@ from sqlalchemy.orm import Session
 from app.api.schemas import (
     CurrentPriceRemapRequest,
     CurrentPriceMaterializeRequest,
+    MsrpMonitorSourceIssueRequest,
     ScrapeBatchIngestRequest,
 )
 from app.core.security import require_min_role
@@ -20,6 +21,7 @@ from app.services.msrp_workflow_service import (
     list_finance_observations,
     list_price_history,
     materialize_current_prices,
+    queue_msrp_monitor_source_issue,
     queue_reconciliation_conflicts_for_review,
     remap_current_price,
 )
@@ -95,6 +97,14 @@ def get_msrp_backfill_snapshot(
     _=Depends(require_min_role("viewer")),
 ) -> dict[str, object]:
     return build_msrp_backfill_snapshot_preview(path, max_chars=max_chars)
+
+
+@router.post("/monitoring/source-issues")
+def post_msrp_monitor_source_issue(
+    payload: MsrpMonitorSourceIssueRequest,
+    _=Depends(require_min_role("viewer")),
+) -> dict[str, object]:
+    return {"item": queue_msrp_monitor_source_issue(payload.model_dump())}
 
 
 @router.get("/finance-observations")
