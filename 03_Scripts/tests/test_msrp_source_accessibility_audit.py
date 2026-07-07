@@ -243,6 +243,46 @@ def test_source_issues_from_source_drafts_reads_current_yaml_urls(tmp_path: Path
     ]
 
 
+def test_source_issues_from_source_drafts_can_filter_placeholders(tmp_path: Path) -> None:
+    source_root = tmp_path / "source_drafts"
+    placeholder = source_root / "es" / "02_seat_arona_es.yaml"
+    placeholder.parent.mkdir(parents=True, exist_ok=True)
+    placeholder.write_text(
+        "\n".join([
+            "source_code: seat_arona_es_draft_scrapling",
+            "country: Spain",
+            "brand: SEAT",
+            "source_url: https://todo.invalid/es/seat/arona",
+            "profile:",
+            "  url: https://todo.invalid/es/seat/arona",
+        ]),
+        encoding="utf-8",
+    )
+    repaired = source_root / "es" / "01_mg_zs_es.yaml"
+    repaired.write_text(
+        "\n".join([
+            "source_code: mg_zs_es_draft_scrapling",
+            "country: Spain",
+            "brand: MG",
+            "source_url: https://www.mgmotor.eu/es-ES/configurator/zs",
+            "profile:",
+            "  url: https://www.mgmotor.eu/es-ES/configurator/zs",
+        ]),
+        encoding="utf-8",
+    )
+
+    sources = audit.source_issues_from_source_drafts(
+        source_root,
+        countries={"es"},
+        placeholder_only=True,
+    )
+
+    assert [item["sourceCode"] for item in sources] == [
+        "seat_arona_es_draft_scrapling",
+    ]
+    assert sources[0]["sourceUrl"] == "https://todo.invalid/es/seat/arona"
+
+
 def test_probe_source_classifies_akamai_403_as_official_proxy_required() -> None:
     session = _FakeSession([
         _FakeResponse(
@@ -459,6 +499,25 @@ def test_probe_source_classifies_dns_resolution_failures() -> None:
     assert item["retryable"] is True
 
 
+def test_probe_source_classifies_placeholder_without_network_probe() -> None:
+    session = _FakeSession()
+
+    item = audit.probe_source(
+        {
+            "countryCode": "es",
+            "sourceCode": "seat_arona_es_draft_scrapling",
+            "sourceUrl": "https://todo.invalid/es/seat/arona",
+        },
+        session=session,
+    )
+
+    assert session.calls == []
+    assert item["probeStatus"] == "placeholder_source_url"
+    assert item["recommendedAction"] == "replace_placeholder_with_official_source"
+    assert item["retryable"] is False
+    assert item["officialProxyRequired"] is False
+
+
 def test_run_writes_accessibility_report(tmp_path: Path) -> None:
     backlog_path = tmp_path / "backlog.json"
     backlog_path.write_text(
@@ -530,3 +589,51 @@ def test_run_can_probe_current_source_drafts(tmp_path: Path) -> None:
     assert report["summary"]["probeStatusCounts"] == {"fetchable": 1}
     assert report["items"][0]["sourceDraftPath"] == str(target)
     assert (tmp_path / "out" / "msrp_source_accessibility_audit.json").exists()
+
+
+def test_run_can_probe_only_placeholder_source_drafts(tmp_path: Path) -> None:
+    source_root = tmp_path / "source_drafts"
+    placeholder = source_root / "es" / "02_seat_arona_es.yaml"
+    placeholder.parent.mkdir(parents=True, exist_ok=True)
+    placeholder.write_text(
+        "\n".join([
+            "source_code: seat_arona_es_draft_scrapling",
+            "country: Spain",
+            "brand: SEAT",
+            "source_url: https://todo.invalid/es/seat/arona",
+            "profile:",
+            "  url: https://todo.invalid/es/seat/arona",
+        ]),
+        encoding="utf-8",
+    )
+    repaired = source_root / "es" / "01_mg_zs_es.yaml"
+    repaired.write_text(
+        "\n".join([
+            "source_code: mg_zs_es_draft_scrapling",
+            "country: Spain",
+            "brand: MG",
+            "source_url: https://www.mgmotor.eu/es-ES/configurator/zs",
+            "profile:",
+            "  url: https://www.mgmotor.eu/es-ES/configurator/zs",
+        ]),
+        encoding="utf-8",
+    )
+    session = _FakeSession()
+
+    report = audit.run(
+        out_dir=str(tmp_path / "out"),
+        source_draft_root=str(source_root),
+        countries="es",
+        placeholder_only=True,
+        session=session,
+    )
+
+    assert session.calls == []
+    assert report["sourceMode"] == "source_drafts"
+    assert report["sourceContext"]["placeholderOnly"] is True
+    assert report["summary"]["sourceDraftSourceCount"] == 1
+    assert report["summary"]["placeholderSourceCount"] == 1
+    assert report["summary"]["probeStatusCounts"] == {
+        "placeholder_source_url": 1,
+    }
+    assert report["items"][0]["sourceCode"] == "seat_arona_es_draft_scrapling"

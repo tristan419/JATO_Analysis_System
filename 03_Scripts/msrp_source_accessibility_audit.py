@@ -71,6 +71,10 @@ def _host_from_url(url: str) -> str:
     return host[4:] if host.startswith("www.") else host
 
 
+def _is_placeholder_source_url(url: str) -> bool:
+    return _host_from_url(url) == "todo.invalid"
+
+
 def _dedupe_sources(items: list[Any]) -> list[dict[str, Any]]:
     seen: set[tuple[str, str, str]] = set()
     sources: list[dict[str, Any]] = []
@@ -129,6 +133,7 @@ def source_issues_from_source_drafts(
     countries: set[str] | None = None,
     brands: set[str] | None = None,
     source_codes: set[str] | None = None,
+    placeholder_only: bool = False,
     limit: int | None = None,
 ) -> list[dict[str, Any]]:
     """Load current source draft URLs as accessibility probe targets."""
@@ -152,6 +157,8 @@ def source_issues_from_source_drafts(
         if code_filter and source_code not in code_filter:
             continue
         source_url = str(data.get("source_url") or profile.get("url") or "").strip()
+        if placeholder_only and not _is_placeholder_source_url(source_url):
+            continue
         source_item = {
             "countryCode": country_code,
             "sourceCode": source_code,
@@ -368,6 +375,13 @@ def classify_probe_result(
             "retryable": False,
             "officialProxyRequired": False,
         }
+    if _is_placeholder_source_url(url):
+        return {
+            "probeStatus": "placeholder_source_url",
+            "recommendedAction": "replace_placeholder_with_official_source",
+            "retryable": False,
+            "officialProxyRequired": False,
+        }
     if error:
         lowered = error.lower()
         if error_type == "Timeout" or "timed out" in lowered or "timeout" in lowered:
@@ -497,7 +511,7 @@ def probe_source(
     response = None
     error = None
     error_type = None
-    if source_url:
+    if source_url and not _is_placeholder_source_url(source_url):
         try:
             method, response = _request_source(
                 session,
@@ -572,6 +586,7 @@ def summarize_items(items: list[dict[str, Any]]) -> dict[str, Any]:
     proxy_required_count = 0
     tls_failed_count = 0
     dns_unresolved_count = 0
+    placeholder_count = 0
     for item in items:
         probe_status = item.get("probeStatus")
         _increment(status_counts, probe_status)
@@ -584,6 +599,8 @@ def summarize_items(items: list[dict[str, Any]]) -> dict[str, Any]:
             tls_failed_count += 1
         if probe_status == "dns_unresolved":
             dns_unresolved_count += 1
+        if probe_status == "placeholder_source_url":
+            placeholder_count += 1
     return {
         "probedSourceCount": len(items),
         "probeStatusCounts": status_counts,
@@ -592,6 +609,7 @@ def summarize_items(items: list[dict[str, Any]]) -> dict[str, Any]:
         "officialProxyRequiredCount": proxy_required_count,
         "tlsHandshakeFailedCount": tls_failed_count,
         "dnsUnresolvedCount": dns_unresolved_count,
+        "placeholderSourceCount": placeholder_count,
     }
 
 
@@ -657,6 +675,7 @@ def build_source_draft_accessibility_report(
     countries: set[str] | None,
     brands: set[str] | None,
     source_codes: set[str] | None,
+    placeholder_only: bool = False,
     limit: int | None,
     session: requests.Session,
     timeout_seconds: float = 12.0,
@@ -666,6 +685,7 @@ def build_source_draft_accessibility_report(
         countries=countries,
         brands=brands,
         source_codes=source_codes,
+        placeholder_only=placeholder_only,
         limit=limit,
     )
     return _build_accessibility_report_from_sources(
@@ -678,6 +698,7 @@ def build_source_draft_accessibility_report(
             "countries": sorted(countries or []),
             "brands": sorted(brands or []),
             "sourceCodes": sorted(source_codes or []),
+            "placeholderOnly": placeholder_only,
             "limit": limit,
         },
     )
@@ -704,6 +725,7 @@ def _write_markdown(report: dict[str, Any], path: Path) -> None:
         f"| Official proxy required | {summary.get('officialProxyRequiredCount', 0)} |",
         f"| TLS handshake failed | {summary.get('tlsHandshakeFailedCount', 0)} |",
         f"| DNS unresolved | {summary.get('dnsUnresolvedCount', 0)} |",
+        f"| Placeholder source URLs | {summary.get('placeholderSourceCount', 0)} |",
         "",
         "| Country | Source | HTTP | Probe status | Recommended action | URL |",
         "|---|---|---:|---|---|---|",
@@ -732,6 +754,7 @@ def run(
     countries: str | None = None,
     brands: str | None = None,
     source_codes: list[str] | None = None,
+    placeholder_only: bool = False,
     limit: int | None = None,
     session: requests.Session | None = None,
 ) -> dict[str, Any]:
@@ -752,6 +775,7 @@ def run(
                 countries=_csv_filter(countries),
                 brands=_csv_filter(brands),
                 source_codes=code_filter,
+                placeholder_only=placeholder_only,
                 limit=limit,
                 session=current_session,
                 timeout_seconds=timeout_seconds,
@@ -816,6 +840,11 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         default=[],
         help="Specific source_code to probe from source drafts; repeatable.",
     )
+    parser.add_argument(
+        "--placeholder-only",
+        action="store_true",
+        help="When probing source drafts, include only unresolved todo.invalid placeholders.",
+    )
     parser.add_argument("--limit", type=int, default=None)
     parser.add_argument(
         "--include-transient",
@@ -836,6 +865,7 @@ def main(argv: list[str] | None = None) -> int:
         countries=args.countries,
         brands=args.brands,
         source_codes=args.source_code,
+        placeholder_only=args.placeholder_only,
         limit=args.limit,
     )
     return 0
