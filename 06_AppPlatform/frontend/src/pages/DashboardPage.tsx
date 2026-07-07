@@ -65,7 +65,7 @@ const DashboardExportPanel = lazy(() =>
   import("../components/ExportPanel").then((module) => ({ default: module.ExportPanel }))
 );
 
-const DASHBOARD_DEFERRED_FETCH_DELAY_MS = 10_000;
+const DASHBOARD_DATA_FRESHNESS_DELAY_MS = 10_000;
 const DASHBOARD_CHART_RUNTIME_IDLE_TIMEOUT_MS = 4_000;
 const DASHBOARD_CHART_RUNTIME_MIN_DELAY_MS = 12_000;
 const DASHBOARD_HEAVY_QUERY_MIN_DELAY_MS = 10_000;
@@ -710,14 +710,16 @@ export function DashboardPage() {
   const [freshnessItems, setFreshnessItems] = useState<DataFreshnessItem[]>([]);
   useEffect(() => {
     let cancelled = false;
-    const timer = window.setTimeout(() => {
-      dashboardApi.dataFreshness().then((res) => {
+    const controller = new AbortController();
+    const cancelPreload = scheduleDashboardDelayedIdlePreload(() => {
+      dashboardApi.dataFreshness({ signal: controller.signal }).then((res) => {
         if (!cancelled) setFreshnessItems(res.items ?? []);
       }).catch(() => {});
-    }, DASHBOARD_DEFERRED_FETCH_DELAY_MS);
+    }, DASHBOARD_DATA_FRESHNESS_DELAY_MS);
     return () => {
       cancelled = true;
-      window.clearTimeout(timer);
+      controller.abort();
+      cancelPreload();
     };
   }, []);
 

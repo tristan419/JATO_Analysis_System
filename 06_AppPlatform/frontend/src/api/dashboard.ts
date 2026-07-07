@@ -43,8 +43,8 @@ export const dashboardApi = {
       body: JSON.stringify(payload),
       ...init,
     }),
-  dataFreshness: () =>
-    request<{ items: DataFreshnessItem[] }>("/analysis/data-freshness"),
+  dataFreshness: (init?: RequestInit) =>
+    request<{ items: DataFreshnessItem[] }>("/analysis/data-freshness", init),
   groupedTimeSeries: (payload: {
     filters: Record<string, string[]>;
     grain: "year" | "month";
