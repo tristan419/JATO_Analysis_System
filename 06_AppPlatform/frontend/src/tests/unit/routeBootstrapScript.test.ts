@@ -24,6 +24,11 @@ describe("route bootstrap script", () => {
     expect(indexHtml).not.toContain("intl.ms + marginMs < cn.ms");
   });
 
+  it("keeps current www users on the domestic entry after a single www probe failure", () => {
+    expect(indexHtml).toContain('if (currentTarget === "cn") {');
+    expect(indexHtml).toContain("www is the current entry; keep the domestic route when only the www probe failed once");
+  });
+
   it("does not wait for the intl probe before booting China-local www traffic", () => {
     expect(indexHtml).toContain('var cnProbePromise = probe("cn");');
     expect(indexHtml).toContain('var intlProbePromise = probe("intl");');

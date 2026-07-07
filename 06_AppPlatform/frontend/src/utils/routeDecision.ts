@@ -414,6 +414,12 @@ export function chooseAutoRoute(
     return { target: "cn", reason: "intl probe failed and www probe succeeded." };
   }
   if (intlOk && !cnOk) {
+    if (currentOrCn === "cn") {
+      return {
+        target: "cn",
+        reason: "www is the current entry; keep the domestic route when only the www probe failed once.",
+      };
+    }
     return { target: "intl", reason: "www probe failed and intl probe succeeded." };
   }
   const cnMs = results.cn.ms ?? PROBE_TIMEOUT_MS;
