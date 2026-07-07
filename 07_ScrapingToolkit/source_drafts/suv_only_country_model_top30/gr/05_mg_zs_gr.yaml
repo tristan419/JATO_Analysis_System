@@ -1,12 +1,12 @@
 source_code: mg_zs_gr_draft_scrapling
 country: 希腊
 brand: MG
-source_url: https://todo.invalid/gr/mg/zs
+source_url: https://mgmotor.gr/model-mg-zs-max/
 source_type: manufacturer_official
 price_semantics: base_msrp
 extractor_type: scrapling
 profile:
-  url: https://todo.invalid/gr/mg/zs
+  url: https://mgmotor.gr/model-mg-zs-max/
   tier: stealth
   headless: true
   network_idle: true
@@ -114,10 +114,9 @@ schedule:
   run_window_start: 00:00
   run_window_end: 05:00
   preferred_weekday: monday
-notes: Draft scaffold generated from country×model top30 backlog. Replace source_url,
-  profile.url, selectors, currency, price label, and the single-model placeholders
-  before promoting to 07_ScrapingToolkit/sources. [CSS selectors applied from brand
-  probe]
+notes: Official MG Greece ZS MAX model page filled from manufacturer site research.
+  Selectors remain draft-level scrapling defaults until extraction is tuned. [CSS
+  selectors applied from brand probe] [URL filled from MG official site research]
 bootstrap_meta:
   country_model_rank: 5
   suggested_scope_kind: single_model
