@@ -71,3 +71,24 @@ def test_google_auth_url_preserves_intl_frontend_origin(monkeypatch) -> None:
     ]
     assert state["redirect"] == "/product/order-genius"
     assert state["frontend_origin"] == "https://intl.ojeur.cloud"
+
+
+def test_google_auth_url_prefers_explicit_frontend_origin(monkeypatch) -> None:
+    _configure_origins(monkeypatch)
+    monkeypatch.setattr(auth, "GOOGLE_ENABLED", True)
+    monkeypatch.setattr(
+        auth,
+        "GOOGLE_REDIRECT_URI",
+        "https://www.ojeur.cloud/v1/auth/google/callback",
+    )
+    request = SimpleNamespace(headers={})
+
+    payload = auth.google_auth_url(
+        request,
+        redirect="/product/order-genius",
+        frontend_origin="https://intl.ojeur.cloud",
+    )
+    query = parse_qs(urlparse(payload["url"]).query)
+    state = json.loads(query["state"][0])
+
+    assert state["frontend_origin"] == "https://intl.ojeur.cloud"

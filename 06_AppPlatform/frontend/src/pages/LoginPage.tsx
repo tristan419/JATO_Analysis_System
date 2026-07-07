@@ -31,8 +31,12 @@ export function LoginPage() {
 
   async function handleOAuth(provider: "google") {
     try {
+      const params = new URLSearchParams({
+        redirect,
+        frontend_origin: window.location.origin,
+      });
       const res = await fetch(
-        apiUrl(`/auth/${provider}/auth-url?redirect=${encodeURIComponent(redirect)}`),
+        apiUrl(`/auth/${provider}/auth-url?${params.toString()}`),
       );
       if (!res.ok) {
         const detail = await res.json().catch(() => null) as { detail?: string } | null;
