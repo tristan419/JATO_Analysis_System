@@ -1,123 +1,48 @@
 source_code: peugeot_2008_es_draft_scrapling
 country: 西班牙
 brand: PEUGEOT
-source_url: https://todo.invalid/es/peugeot/2008
-source_type: manufacturer_official
-price_semantics: base_msrp
-extractor_type: scrapling
+source_url: https://store.peugeot.es/trim/configurable/2008-suv
+source_type: official_configurator
+price_semantics: as_configured
+extractor_type: http_text
 profile:
-  url: https://todo.invalid/es/peugeot/2008
-  tier: stealth
-  headless: true
-  network_idle: true
-  impersonate: chrome
-  css:
-    vehicle_container: body
-    model: h2
-    trim: h3
-    price: '[class*="price"]'
+  url: https://store.peugeot.es/trim/configurable/2008-suv
+  timeout_seconds: 90
   default_currency: EUR
   default_tax_included: true
-  default_price_label: MSRP
+  default_price_label: Precio al contado
   fixed_model: '2008'
   fixed_jato_model: '2008'
-  fixed_jato_powertrain: null
-  model_rules: []
-  skip_if_model_unmapped: false
   copy_trim_to_jato_trim: true
-  confidence_rules:
-    base: 0.2
-    fixed_model_bonus: 0.18
-    fixed_jato_model_bonus: 0.12
-    model_rule_bonus: 0.12
-    trim_present_bonus: 0.1
-    copy_trim_to_jato_trim_bonus: 0.09
-    parsed_price_text_bonus: 0.03
-    currency_bonus: 0.01
-    price_label_bonus: 0.02
-    trim_keyword_bonuses: []
-    price_band_bonuses:
-    - key: price_band_entry
-      label: Entry price band matched
-      max: 0
-      delta: 0.0
-    - key: price_band_mid
-      label: Mid price band matched
-      min: 0
-      max: 0
-      delta: 0.01
-    - key: price_band_high
-      label: High price band matched
-      min: 0
-      delta: 0.03
-    powertrain_keyword_bonuses: []
-    powertrain_bonuses:
-    - key: powertrain_bev
-      label: 'Powertrain matched: BEV'
-      powertrain: BEV
-      delta: 0.03
-    - key: powertrain_mhev
-      label: 'Powertrain matched: MHEV'
-      powertrain: MHEV
-      delta: 0.03
-    - key: powertrain_ice
-      label: 'Powertrain matched: ICE'
-      powertrain: ICE
-      delta: 0.03
-    clamp_min: 0.0
-    clamp_max: 1.0
-  structured_fields:
-    edition_rules:
-    - key: edition_special
-      label: Special Edition
-      keyword: special edition
-      special: true
-    powertrain_rules:
-    - key: powertrain_bev
-      powertrain: BEV
-      keywords:
-      - bev
-      - ev
-      - electric
-      - battery electric
-      - fully electric
-      - electric vehicle
-      - electrico
-      - 100% electrico
-      - vehiculo electrico
-    - key: powertrain_mhev
-      powertrain: MHEV
-      keywords:
-      - mhev
-      - mild hybrid
-      - mild-hybrid
-      - 48V
-      - microhibrido
-    - key: powertrain_ice
-      powertrain: ICE
-      keywords:
-      - ice
-      - petrol
-      - gasoline
-      - diesel
-      - combustion
-      - gasolina
-  auto_accept_gates:
-    review_threshold: 0.95
-    semi_auto_threshold: 0.98
-    require_powertrain_match: true
-    force_review_if_powertrain_missing: true
-    force_review_if_powertrain_ambiguous: true
-    force_review_for_special_edition: true
+  match_confidence: 0.78
+  match_status: review_required
+  match_reason:
+    kind: official_configurator_cash_price
+    source: peugeot_es_store_2008_configurator
+    note: Official Peugeot Spain store configurator exposes engine-card cash prices as Precio al contado. This source is marked as_configured rather than base_msrp because no stable official Spain MSRP price-list PDF was found.
+  entry_patterns:
+  - pattern: 'Turbo\s+100\s+Manual.{0,500}?<span>(?P<price>21\.629,99[\s\u00a0]*€)</span>.{0,120}?al\s+contado'
+    official_trim: Style
+    official_powertrain: Turbo 100 Manual
+    jato_powertrain: ICE
+  - pattern: 'Hybrid\s+110\s+Automático.{0,500}?<span>(?P<price>23\.200,00[\s\u00a0]*€)</span>.{0,120}?al\s+contado'
+    official_trim: Style
+    official_powertrain: Hybrid 110 Automático
+    jato_powertrain: MHEV
+  - pattern: 'Eléctrico\s+115\s+Kw.{0,500}?<span>(?P<price>33\.545,00[\s\u00a0]*€)</span>.{0,120}?al\s+contado'
+    official_trim: Style
+    official_powertrain: Eléctrico 115 Kw
+    jato_powertrain: BEV
 schedule:
   frequency: manual_only
   run_window_start: 00:00
   run_window_end: 05:00
   preferred_weekday: monday
-notes: Draft scaffold generated from country×model top30 backlog. Replace source_url,
-  profile.url, selectors, currency, price label, and the single-model placeholders
-  before promoting to 07_ScrapingToolkit/sources. [CSS selectors applied from brand
-  probe]
+notes: Switched from placeholder URL to the official Peugeot Spain store
+  configurator. The page exposes engine-card cash prices and finance monthly
+  payments; regexes target only the Precio al contado cash amount. This is
+  intentionally as_configured, not base_msrp, until a Spain MSRP/PVP PDF or
+  official list-price API is found.
 bootstrap_meta:
   country_model_rank: 3
   suggested_scope_kind: single_model
