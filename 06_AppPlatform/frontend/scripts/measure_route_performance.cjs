@@ -489,6 +489,57 @@ function seconds(value) {
   return typeof value === "number" ? (value / 1000).toFixed(2) : "-";
 }
 
+function deltaSeconds(value, baseline) {
+  if (typeof value !== "number" || typeof baseline !== "number") return "-";
+  const delta = (value - baseline) / 1000;
+  return `${delta >= 0 ? "+" : ""}${delta.toFixed(2)}`;
+}
+
+function fasterHostForMetric(wwwResult, intlResult, metric) {
+  const wwwValue = wwwResult?.[metric];
+  const intlValue = intlResult?.[metric];
+  if (typeof wwwValue !== "number" || typeof intlValue !== "number") return "-";
+  if (wwwValue === intlValue) return "tie";
+  return wwwValue < intlValue ? "www" : "intl";
+}
+
+function buildRouteComparisonRows(results) {
+  const byRoute = new Map();
+  for (const result of results) {
+    const routeResults = byRoute.get(result.route) || new Map();
+    routeResults.set(result.host, result);
+    byRoute.set(result.route, routeResults);
+  }
+  const rows = [];
+  for (const [route, routeResults] of byRoute.entries()) {
+    const wwwResult = routeResults.get("www");
+    const intlResult = routeResults.get("intl");
+    if (!wwwResult || !intlResult) continue;
+    rows.push({
+      route,
+      www_app_s: seconds(wwwResult.appReadyMs),
+      intl_app_s: seconds(intlResult.appReadyMs),
+      intl_minus_www_app_s: deltaSeconds(intlResult.appReadyMs, wwwResult.appReadyMs),
+      app_winner: fasterHostForMetric(wwwResult, intlResult, "appReadyMs"),
+      www_data_s: seconds(wwwResult.dataReadyMs),
+      intl_data_s: seconds(intlResult.dataReadyMs),
+      intl_minus_www_data_s: deltaSeconds(intlResult.dataReadyMs, wwwResult.dataReadyMs),
+      data_winner: fasterHostForMetric(wwwResult, intlResult, "dataReadyMs"),
+      www_network_idle_s: seconds(wwwResult.networkIdleMs),
+      intl_network_idle_s: seconds(intlResult.networkIdleMs),
+      intl_minus_www_network_idle_s: deltaSeconds(intlResult.networkIdleMs, wwwResult.networkIdleMs),
+      network_idle_winner: fasterHostForMetric(wwwResult, intlResult, "networkIdleMs"),
+      www_initial_js: bytes(wwwResult.resourceSummary.initialJsTransferBytes),
+      intl_initial_js: bytes(intlResult.resourceSummary.initialJsTransferBytes),
+      www_initial_api_count: wwwResult.initialWindowApis.length,
+      intl_initial_api_count: intlResult.initialWindowApis.length,
+      www_error: wwwResult.error ? wwwResult.error.slice(0, 64) : "",
+      intl_error: intlResult.error ? intlResult.error.slice(0, 64) : "",
+    });
+  }
+  return rows;
+}
+
 function countCacheState(apiCalls, state) {
   return apiCalls.filter((api) => api.cache.toUpperCase() === state).length;
 }
@@ -579,6 +630,12 @@ async function main() {
     slowest_api_s: seconds(result.slowApis[0]?.ms),
     error: result.error ? result.error.slice(0, 96) : "",
   })));
+
+  const comparisonRows = buildRouteComparisonRows(results);
+  if (comparisonRows.length > 0) {
+    console.log("www vs intl route comparison: intl_minus_www_* is positive when intl is slower.");
+    console.table(comparisonRows);
+  }
 
   for (const result of results) {
     const slow = result.slowApis

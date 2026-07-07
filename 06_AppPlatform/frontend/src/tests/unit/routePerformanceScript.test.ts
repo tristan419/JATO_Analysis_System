@@ -24,4 +24,12 @@ describe("route performance script", () => {
     expect(routePerfScript).toContain('"--proxy-server=direct://"');
     expect(routePerfScript).toContain('"--proxy-bypass-list=*"');
   });
+
+  it("prints a direct www vs intl timing comparison table", () => {
+    expect(routePerfScript).toContain("buildRouteComparisonRows");
+    expect(routePerfScript).toContain("intl_minus_www_app_s");
+    expect(routePerfScript).toContain("intl_minus_www_data_s");
+    expect(routePerfScript).toContain("www vs intl route comparison");
+    expect(routePerfScript).toContain("positive when intl is slower");
+  });
 });
