@@ -9,6 +9,14 @@ const DEFAULT_ROLES = ["viewer", "order_filler", "editor", "admin"];
 const DEFAULT_USER = "edge-prewarm";
 const DEFAULT_ADVANCED_ANALYSIS_COUNTRIES = ["瑞典"];
 const DEFAULT_POWERTRAINS = ["ICE", "HEV", "BEV", "MHEV", "PHEV"];
+const DEFAULT_GROUPED_TIME_SERIES_GROUP_BYS = [
+  "动总规整",
+  "国家",
+  "四驱占比",
+  "Business/Private 占比",
+];
+const DEFAULT_GROUPED_TIME_SERIES_SHARE_SPLIT_BY = ["segment", "powertrain"];
+const SHARE_GROUP_BYS = new Set(["四驱占比", "Business/Private 占比"]);
 const FALLBACK_COUNTRIES = [
   "丹麦",
   "克罗地亚",
@@ -286,6 +294,51 @@ function buildDefaultCascadePayloads(
   return payloads;
 }
 
+function normalizeGroupedTimeSeriesGroupBys(values) {
+  const normalized = uniqueList(Array.isArray(values) ? values : []);
+  return normalized.length > 0
+    ? normalized
+    : DEFAULT_GROUPED_TIME_SERIES_GROUP_BYS;
+}
+
+function normalizeShareSplitBy(values) {
+  return uniqueList(Array.isArray(values) ? values : [])
+    .map((value) => value.toLowerCase())
+    .filter((value) => value === "segment" || value === "powertrain");
+}
+
+function buildGroupedTimeSeriesWarmups(filters, groupBys, shareSplitBy) {
+  const warmups = [];
+  for (const grain of ["month", "year"]) {
+    for (const groupBy of normalizeGroupedTimeSeriesGroupBys(groupBys)) {
+      const splitValues = SHARE_GROUP_BYS.has(groupBy)
+        ? [null, ...normalizeShareSplitBy(shareSplitBy)]
+        : [null];
+      for (const splitValue of splitValues) {
+        warmups.push({
+          body: {
+            filters,
+            grain,
+            group_by: groupBy,
+            ...(splitValue ? { share_split_by: splitValue } : {}),
+            include_others: false,
+            top_n: 10,
+          },
+          label: [
+            "time-series-grouped",
+            grain,
+            groupBy,
+            splitValue,
+          ].filter(Boolean).join("-"),
+          method: "POST",
+          path: "/analysis/time-series-grouped",
+        });
+      }
+    }
+  }
+  return warmups;
+}
+
 function commonHeaders({ dataVersion, role, token, user }) {
   const headers = {
     accept: "application/json",
@@ -365,6 +418,7 @@ function buildWarmupRequests(
   configuredCountries,
   configuredPowertrains,
   configuredSelections = {},
+  options = {},
 ) {
   const { columns, filters } = buildDefaultFilterPayload(
     snapshot,
@@ -384,7 +438,6 @@ function buildWarmupRequests(
     configuredPowertrains,
     configuredSelections,
   );
-  const groupBy = columns.country || "国家";
   return [
     ...(columns.segment ? [{
       body: {
@@ -420,30 +473,11 @@ function buildWarmupRequests(
       method: "POST",
       path: "/analysis/overview",
     },
-    {
-      body: {
-        filters,
-        grain: "month",
-        group_by: groupBy,
-        include_others: false,
-        top_n: 10,
-      },
-      label: "time-series-grouped-month-country",
-      method: "POST",
-      path: "/analysis/time-series-grouped",
-    },
-    {
-      body: {
-        filters,
-        grain: "year",
-        group_by: groupBy,
-        include_others: false,
-        top_n: 10,
-      },
-      label: "time-series-grouped-year-country",
-      method: "POST",
-      path: "/analysis/time-series-grouped",
-    },
+    ...buildGroupedTimeSeriesWarmups(
+      filters,
+      options.groupBys,
+      options.shareSplitBy ?? DEFAULT_GROUPED_TIME_SERIES_SHARE_SPLIT_BY,
+    ),
   ];
 }
 
@@ -510,6 +544,14 @@ async function main() {
   const configuredPowertrains = parseList(
     getArg("powertrains") || process.env.JATO_PREWARM_POWERTRAINS,
     [],
+  );
+  const groupedTimeSeriesGroupBys = parseList(
+    getArg("group-by") || process.env.JATO_PREWARM_GROUP_BY,
+    DEFAULT_GROUPED_TIME_SERIES_GROUP_BYS,
+  );
+  const groupedTimeSeriesShareSplitBy = parseList(
+    getArg("share-split-by") || process.env.JATO_PREWARM_SHARE_SPLIT_BY,
+    DEFAULT_GROUPED_TIME_SERIES_SHARE_SPLIT_BY,
   );
   const configuredSelections = mergeConfiguredSelections(
     configuredCountries,
@@ -602,6 +644,10 @@ async function main() {
         configuredCountries,
         configuredPowertrains,
         configuredSelections,
+        {
+          groupBys: groupedTimeSeriesGroupBys,
+          shareSplitBy: groupedTimeSeriesShareSplitBy,
+        },
       );
       for (const requestDef of dependentRequests) {
         try {
@@ -639,6 +685,7 @@ module.exports = {
   buildAdvancedAnalysisWarmupRequests,
   buildDefaultCascadePayloads,
   buildDefaultFilterPayload,
+  buildGroupedTimeSeriesWarmups,
   buildWarmupRequests,
   initialCascadeStartIndex,
   mergeConfiguredSelections,

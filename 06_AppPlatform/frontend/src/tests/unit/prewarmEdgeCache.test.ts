@@ -16,11 +16,17 @@ interface PrewarmModule {
     configuredPowertrains: string[],
     configuredSelections?: Record<string, string[]>,
   ) => { columns: Record<string, string>; filters: Record<string, string[]> };
+  buildGroupedTimeSeriesWarmups: (
+    filters: Record<string, string[]>,
+    groupBys?: string[],
+    shareSplitBy?: string[],
+  ) => { body?: unknown; label: string; method: string; path: string }[];
   buildWarmupRequests: (
     snapshot: unknown,
     configuredCountries: string[],
     configuredPowertrains: string[],
     configuredSelections?: Record<string, string[]>,
+    options?: { groupBys?: string[]; shareSplitBy?: string[] },
   ) => { body?: unknown; label: string; method: string; path: string }[];
   mergeConfiguredSelections: (
     configuredCountries: string[],
@@ -81,8 +87,22 @@ describe("prewarm intl edge cache", () => {
       "filters-options-batch",
       "filters-options-default-cascade",
       "analysis-overview-default",
-      "time-series-grouped-month-country",
-      "time-series-grouped-year-country",
+      "time-series-grouped-month-动总规整",
+      "time-series-grouped-month-国家",
+      "time-series-grouped-month-四驱占比",
+      "time-series-grouped-month-四驱占比-segment",
+      "time-series-grouped-month-四驱占比-powertrain",
+      "time-series-grouped-month-Business/Private 占比",
+      "time-series-grouped-month-Business/Private 占比-segment",
+      "time-series-grouped-month-Business/Private 占比-powertrain",
+      "time-series-grouped-year-动总规整",
+      "time-series-grouped-year-国家",
+      "time-series-grouped-year-四驱占比",
+      "time-series-grouped-year-四驱占比-segment",
+      "time-series-grouped-year-四驱占比-powertrain",
+      "time-series-grouped-year-Business/Private 占比",
+      "time-series-grouped-year-Business/Private 占比-segment",
+      "time-series-grouped-year-Business/Private 占比-powertrain",
     ]);
     expect(warmups[0]).toMatchObject({
       body: {
@@ -111,6 +131,145 @@ describe("prewarm intl edge cache", () => {
       method: "POST",
       path: "/filters/options/batch",
     });
+    expect(warmups[7]).toMatchObject({
+      body: {
+        filters: {
+          "国家": ["丹麦", "德国"],
+          "动总规整": ["ICE", "HEV", "BEV", "MHEV", "PHEV"],
+        },
+        grain: "month",
+        group_by: "四驱占比",
+        share_split_by: "segment",
+        include_others: false,
+        top_n: 10,
+      },
+      method: "POST",
+      path: "/analysis/time-series-grouped",
+    });
+    expect(warmups[19]).toMatchObject({
+      body: {
+        filters: {
+          "国家": ["丹麦", "德国"],
+          "动总规整": ["ICE", "HEV", "BEV", "MHEV", "PHEV"],
+        },
+        grain: "year",
+        group_by: "Business/Private 占比",
+        share_split_by: "powertrain",
+        include_others: false,
+        top_n: 10,
+      },
+      method: "POST",
+      path: "/analysis/time-series-grouped",
+    });
+  });
+
+  it("lets grouped time-series prewarm scope be narrowed for targeted warmups", () => {
+    expect(prewarm.buildGroupedTimeSeriesWarmups(
+      { "国家": ["瑞典"], "动总规整": ["BEV"] },
+      ["国家", "四驱占比"],
+      ["segment", "bad", "powertrain"],
+    )).toEqual([
+      {
+        body: {
+          filters: { "国家": ["瑞典"], "动总规整": ["BEV"] },
+          grain: "month",
+          group_by: "国家",
+          include_others: false,
+          top_n: 10,
+        },
+        label: "time-series-grouped-month-国家",
+        method: "POST",
+        path: "/analysis/time-series-grouped",
+      },
+      {
+        body: {
+          filters: { "国家": ["瑞典"], "动总规整": ["BEV"] },
+          grain: "month",
+          group_by: "四驱占比",
+          include_others: false,
+          top_n: 10,
+        },
+        label: "time-series-grouped-month-四驱占比",
+        method: "POST",
+        path: "/analysis/time-series-grouped",
+      },
+      {
+        body: {
+          filters: { "国家": ["瑞典"], "动总规整": ["BEV"] },
+          grain: "month",
+          group_by: "四驱占比",
+          share_split_by: "segment",
+          include_others: false,
+          top_n: 10,
+        },
+        label: "time-series-grouped-month-四驱占比-segment",
+        method: "POST",
+        path: "/analysis/time-series-grouped",
+      },
+      {
+        body: {
+          filters: { "国家": ["瑞典"], "动总规整": ["BEV"] },
+          grain: "month",
+          group_by: "四驱占比",
+          share_split_by: "powertrain",
+          include_others: false,
+          top_n: 10,
+        },
+        label: "time-series-grouped-month-四驱占比-powertrain",
+        method: "POST",
+        path: "/analysis/time-series-grouped",
+      },
+      {
+        body: {
+          filters: { "国家": ["瑞典"], "动总规整": ["BEV"] },
+          grain: "year",
+          group_by: "国家",
+          include_others: false,
+          top_n: 10,
+        },
+        label: "time-series-grouped-year-国家",
+        method: "POST",
+        path: "/analysis/time-series-grouped",
+      },
+      {
+        body: {
+          filters: { "国家": ["瑞典"], "动总规整": ["BEV"] },
+          grain: "year",
+          group_by: "四驱占比",
+          include_others: false,
+          top_n: 10,
+        },
+        label: "time-series-grouped-year-四驱占比",
+        method: "POST",
+        path: "/analysis/time-series-grouped",
+      },
+      {
+        body: {
+          filters: { "国家": ["瑞典"], "动总规整": ["BEV"] },
+          grain: "year",
+          group_by: "四驱占比",
+          share_split_by: "segment",
+          include_others: false,
+          top_n: 10,
+        },
+        label: "time-series-grouped-year-四驱占比-segment",
+        method: "POST",
+        path: "/analysis/time-series-grouped",
+      },
+      {
+        body: {
+          filters: { "国家": ["瑞典"], "动总规整": ["BEV"] },
+          grain: "year",
+          group_by: "四驱占比",
+          share_split_by: "powertrain",
+          include_others: false,
+          top_n: 10,
+        },
+        label: "time-series-grouped-year-四驱占比-powertrain",
+        method: "POST",
+        path: "/analysis/time-series-grouped",
+      },
+    ]);
   });
 
   it("builds bounded Advanced Analysis warmups", () => {
