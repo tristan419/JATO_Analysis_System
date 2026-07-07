@@ -1,99 +1,47 @@
 source_code: mercedes_eqb_be_draft_scrapling
 country: 比利时
 brand: MERCEDES
-source_url: https://todo.invalid/be/mercedes/eqb
-source_type: manufacturer_official
+source_url: https://www.mercedes-benz.be/nl_BE/passengercars/buy/pricelist.html
+source_type: official_price_list
 price_semantics: base_msrp
-extractor_type: scrapling
+extractor_type: pdf_text
 profile:
-  url: https://todo.invalid/be/mercedes/eqb
-  tier: stealth
-  headless: true
-  network_idle: true
-  impersonate: chrome
-  css:
-    vehicle_container: body
-    model: h1
-    trim: h2, h3
-    price: '[class*="price"]'
+  url: https://www.mercedes-benz.be/content/dam/belgium/passengercars/pricelist/2025/july/Prijslijst_EQB.pdf
+  timeout_seconds: 60
+  retry_attempts: 1
+  retry_delay_seconds: 1.0
+  prefer_curl_download: true
+  browser_download_fallback: true
+  direct_download_fallback: true
   default_currency: EUR
   default_tax_included: true
-  default_price_label: MSRP
+  default_price_label: Aanbevolen catalogusprijs incl. BTW
   fixed_model: EQB
   fixed_jato_model: EQB
-  fixed_jato_powertrain: null
-  model_rules: []
-  skip_if_model_unmapped: false
+  fixed_jato_powertrain: BEV
   copy_trim_to_jato_trim: true
-  confidence_rules:
-    base: 0.2
-    fixed_model_bonus: 0.18
-    fixed_jato_model_bonus: 0.12
-    model_rule_bonus: 0.12
-    trim_present_bonus: 0.1
-    copy_trim_to_jato_trim_bonus: 0.09
-    parsed_price_text_bonus: 0.03
-    currency_bonus: 0.01
-    price_label_bonus: 0.02
-    trim_keyword_bonuses: []
-    price_band_bonuses:
-    - key: price_band_entry
-      label: Entry price band matched
-      max: 0
-      delta: 0.0
-    - key: price_band_mid
-      label: Mid price band matched
-      min: 0
-      max: 0
-      delta: 0.01
-    - key: price_band_high
-      label: High price band matched
-      min: 0
-      delta: 0.03
-    powertrain_keyword_bonuses: []
-    powertrain_bonuses:
-    - key: powertrain_bev
-      label: 'Powertrain matched: BEV'
-      powertrain: BEV
-      delta: 0.03
-    clamp_min: 0.0
-    clamp_max: 1.0
-  structured_fields:
-    edition_rules:
-    - key: edition_special
-      label: Special Edition
-      keyword: special edition
-      special: true
-    powertrain_rules:
-    - key: powertrain_bev
-      powertrain: BEV
-      keywords:
-      - bev
-      - ev
-      - electric
-      - battery electric
-      - fully electric
-      - electric vehicle
-      - elektrisch
-      - volledig elektrisch
-      - electrique
-      - 100% electrique
-  auto_accept_gates:
-    review_threshold: 0.95
-    semi_auto_threshold: 0.98
-    require_powertrain_match: true
-    force_review_if_powertrain_missing: true
-    force_review_if_powertrain_ambiguous: true
-    force_review_for_special_edition: true
+  match_confidence: 0.88
+  match_status: review_required
+  match_reason:
+    kind: official_pdf_price_list
+    source: mercedes_benz_be_eqb_prijslijst_2025_07
+    document_date: '2025-07-01'
+    note: Official Mercedes-Benz Belgium EQB price-list PDF is valid from 2025-07-01 and exposes recommended catalog prices in excl. BTW and incl. BTW columns. The pattern captures the incl. BTW price column only.
+  entry_patterns:
+  - pattern: 'EQB\s+250\+\s+Business\s+Star\s+Edition\s+140\s+kW\s+190\s+pk\s+522\s+km\s+15,6\s+kWh/100km\s+48\.500,00\s+EUR\s+(?P<price>\d{2}\.\d{3},00)\s+EUR'
+    official_trim: 250+ Business Star Edition
+    official_powertrain: BEV 250+
+    jato_powertrain: BEV
+    price_label: Aanbevolen catalogusprijs incl. BTW
 schedule:
   frequency: manual_only
   run_window_start: 00:00
   run_window_end: 05:00
   preferred_weekday: monday
-notes: Draft scaffold generated from country×model top30 backlog. Replace source_url,
-  profile.url, selectors, currency, price label, and the single-model placeholders
-  before promoting to 07_ScrapingToolkit/sources. [CSS selectors applied from brand
-  probe]
+notes: Replaced todo.invalid scaffold with Mercedes-Benz Belgium's official EQB
+  price-list PDF linked from the Belgian brochures/pricelists page. Regex targets
+  the EQB Star Edition price table and captures the recommended catalog price
+  including VAT, excluding the separate excl. BTW column and option/equipment rows.
 bootstrap_meta:
   country_model_rank: 8
   suggested_scope_kind: single_model
