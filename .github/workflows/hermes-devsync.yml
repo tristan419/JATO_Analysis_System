@@ -120,6 +120,6 @@ jobs:
           JATO_PREWARM_ORIGIN: ${{ vars.JATO_INTL_ORIGIN || 'https://intl.ojeur.cloud' }}
           JATO_PREWARM_ROLES: "viewer,order_filler,editor,admin"
           JATO_PREWARM_REPETITIONS: "2"
-          JATO_PREWARM_TIMEOUT_MS: "30000"
+          JATO_PREWARM_TIMEOUT_MS: "120000"
           JATO_PREWARM_FAIL_ON_ERROR: "1"
         run: npm run perf:prewarm-edge
