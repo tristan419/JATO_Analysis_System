@@ -5,7 +5,13 @@ from app.services import advanced_analysis_service
 
 
 @pytest.fixture(autouse=True)
-def clear_advanced_analysis_cache() -> None:
+def clear_advanced_analysis_cache(monkeypatch: pytest.MonkeyPatch):
+    advanced_analysis_service._WARMUP_RUN = False
+    advanced_analysis_service.clear_advanced_analysis_cache()
+    monkeypatch.setattr(advanced_analysis_service, "_load_precomputed", lambda *_, **__: None)
+    monkeypatch.setattr(advanced_analysis_service, "_save_precomputed", lambda *_, **__: None)
+    yield
+    advanced_analysis_service._WARMUP_RUN = False
     advanced_analysis_service.clear_advanced_analysis_cache()
 
 
@@ -198,6 +204,69 @@ def test_transfer_mart_cache_key_uses_stable_params_dataset_and_scope(
     assert new_dataset["cache_key"] != first["cache_key"]
     assert new_scope["cache_key"] != new_dataset["cache_key"]
     assert len(keys) == 4
+
+
+def test_warmup_cache_uses_env_configured_workload(monkeypatch: pytest.MonkeyPatch) -> None:
+    profile_calls: list[dict[str, str | None]] = []
+    transfer_calls: list[dict[str, str | int | None]] = []
+    competitor_calls: list[dict[str, str | int | None]] = []
+
+    def profile_options(country: str | None = None, cache_scope: str | None = None):
+        profile_calls.append({"country": country, "cache_scope": cache_scope})
+        return {"options": {}}
+
+    def transfer_mart(
+        country: str | None = None,
+        sales_mode: str = "month",
+        top_n: int = 25,
+        cache_scope: str | None = None,
+        **_: object,
+    ):
+        transfer_calls.append({
+            "country": country,
+            "sales_mode": sales_mode,
+            "top_n": top_n,
+            "cache_scope": cache_scope,
+        })
+        return {"models": []}
+
+    def competitor_set(
+        country: str | None = None,
+        sales_mode: str = "month",
+        top_n: int = 12,
+        cache_scope: str | None = None,
+        **_: object,
+    ):
+        competitor_calls.append({
+            "country": country,
+            "sales_mode": sales_mode,
+            "top_n": top_n,
+            "cache_scope": cache_scope,
+        })
+        return {"competitors": []}
+
+    monkeypatch.setattr(advanced_analysis_service, "list_profile_filter_options", profile_options)
+    monkeypatch.setattr(advanced_analysis_service, "compute_transfer_mart", transfer_mart)
+    monkeypatch.setattr(advanced_analysis_service, "compute_competitor_set", competitor_set)
+    monkeypatch.setenv("APP_ADVANCED_ANALYSIS_WARMUP_COUNTRIES", "瑞典,德国,瑞典")
+    monkeypatch.setenv("APP_ADVANCED_ANALYSIS_WARMUP_SCOPES", "viewer,admin,viewer")
+    monkeypatch.setenv("APP_ADVANCED_ANALYSIS_WARMUP_SALES_MODES", "month,ytd,bad")
+    monkeypatch.setenv("APP_ADVANCED_ANALYSIS_WARMUP_TOP_N", "7")
+    monkeypatch.setenv("APP_ADVANCED_ANALYSIS_WARMUP_PROFILE_OPTIONS", "true")
+    monkeypatch.setenv("APP_ADVANCED_ANALYSIS_WARMUP_COMPETITOR_SET", "true")
+    monkeypatch.setattr(advanced_analysis_service, "_WARMUP_RUN", False)
+
+    result = advanced_analysis_service.warmup_cache()
+
+    assert result == {"warmed": 20, "failed": 0, "countries": 2, "scopes": 2, "salesModes": 2}
+    assert len(profile_calls) == 4
+    assert len(transfer_calls) == 8
+    assert len(competitor_calls) == 8
+    assert {call["cache_scope"] for call in transfer_calls} == {"viewer", "admin"}
+    assert {call["sales_mode"] for call in transfer_calls} == {"month", "ytd"}
+    assert all(call["top_n"] == 7 for call in transfer_calls)
+    assert all(call["top_n"] == 7 for call in competitor_calls)
+    assert advanced_analysis_service.warmup_cache() == {"warmed": 0, "failed": 0}
 
 
 def test_competitor_set_returns_product_battlefield_and_channel_series(monkeypatch: pytest.MonkeyPatch) -> None:
