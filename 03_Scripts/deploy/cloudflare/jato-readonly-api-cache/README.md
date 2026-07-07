@@ -33,6 +33,27 @@ This keeps cached payloads scoped to the permission role, avoids splitting the
 same read-only dashboard payload by refreshed login tokens, and lets a data
 publish invalidate old entries by changing `DATA_VERSION`.
 
+## Prewarm Coverage
+
+`06_AppPlatform/frontend/scripts/prewarm_intl_edge_cache.cjs` seeds the same
+read-only cache used by `intl.ojeur.cloud/v1/*`. The default Dashboard warmup
+covers the top-level filter snapshot/batch requests, `POST /v1/analysis/overview`,
+and grouped time-series combinations for:
+
+- `动总规整`
+- `国家`
+- `四驱占比`
+- `Business/Private 占比`
+
+The share-only grouped lenses also prewarm the `segment` and `powertrain`
+`share_split_by` variants. Override these for a targeted warmup with:
+
+```bash
+JATO_PREWARM_GROUP_BY=国家,四驱占比 \
+JATO_PREWARM_SHARE_SPLIT_BY=segment \
+npm run perf:prewarm-edge
+```
+
 ## Deploy
 
 ```bash

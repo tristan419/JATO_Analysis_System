@@ -26,6 +26,14 @@ on:
         description: "Optional Dashboard URL whose filter params should be prewarmed exactly"
         required: false
         default: ""
+      group_by:
+        description: "Comma-separated grouped time-series lenses"
+        required: false
+        default: "动总规整,国家,四驱占比,Business/Private 占比"
+      share_split_by:
+        description: "Comma-separated split keys for share-only grouped time-series lenses"
+        required: false
+        default: "segment,powertrain"
 
 concurrency:
   group: intl-edge-prewarm
@@ -85,6 +93,8 @@ jobs:
           JATO_PREWARM_ROLES: ${{ inputs.roles || 'viewer,order_filler,editor,admin' }}
           JATO_PREWARM_REPETITIONS: ${{ inputs.repetitions || '2' }}
           JATO_PREWARM_DASHBOARD_URL: ${{ inputs.dashboard_url || '' }}
+          JATO_PREWARM_GROUP_BY: ${{ inputs.group_by || '动总规整,国家,四驱占比,Business/Private 占比' }}
+          JATO_PREWARM_SHARE_SPLIT_BY: ${{ inputs.share_split_by || 'segment,powertrain' }}
           JATO_PREWARM_TIMEOUT_MS: "120000"
           JATO_PREWARM_FAIL_ON_ERROR: "1"
         run: npm run perf:prewarm-edge
