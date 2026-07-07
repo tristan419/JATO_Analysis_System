@@ -1,6 +1,5 @@
 import { Suspense, lazy, Component, useEffect, useState, type ReactNode } from "react";
 import { Navigate, createBrowserRouter, RouterProvider, useLocation } from "react-router-dom";
-import { SharedFilterScopeProvider } from "./contexts/SharedFilterScopeContext";
 import { AuthProvider } from "./contexts/AuthContext";
 import { Layout } from "./components/Layout";
 import { RequireRole } from "./components/RequireRole";
@@ -60,6 +59,9 @@ const OrderGeniusVehicleAllocationPage = lazy(() => import("./pages/OrderGeniusV
 const AccessControlPage = lazy(() => import("./pages/AccessControlPage").then(m => ({ default: m.AccessControlPage })));
 const ProfilePage = lazy(() => import("./pages/ProfilePage").then(m => ({ default: m.ProfilePage })));
 const RouteDiagnosticsPage = lazy(() => import("./pages/RouteDiagnosticsPage").then(m => ({ default: m.RouteDiagnosticsPage })));
+const SharedFilterScopeProvider = lazy(() =>
+  import("./contexts/SharedFilterScopeContext").then(m => ({ default: m.SharedFilterScopeProvider })),
+);
 
 class ChunkErrorBoundary extends Component<{ children: ReactNode }, { hasError: boolean }> {
   state = { hasError: false };
@@ -96,8 +98,8 @@ function withDashboardLoader(node: ReactNode, fallback?: ReactNode) {
   return withRouteLoader(node, fallback ?? <DashboardRouteSkeleton />);
 }
 
-function withSharedFilterScope(node: ReactNode) {
-  return <SharedFilterScopeProvider>{node}</SharedFilterScopeProvider>;
+function withSharedFilterScope(node: ReactNode, fallback?: ReactNode) {
+  return withRouteLoader(<SharedFilterScopeProvider>{node}</SharedFilterScopeProvider>, fallback ?? <DashboardRouteSkeleton />);
 }
 
 function RedirectPreserveSearch({ to }: { to: string }) {
@@ -279,7 +281,12 @@ const router = createBrowserRouter([
         heroKicker="01 / Specification Scope"
         title="Specification Page"
       />,
-    )) },
+    ), <DashboardRouteSkeleton
+      chartKicker="03 / Specification Grid"
+      chartTitle="Specification detail loading"
+      heroKicker="01 / Specification Scope"
+      title="Specification Page"
+    />) },
     { path: "data/overview", element: withPageLoader(<DataManagementPage />) },
     { path: "data/config-import", element: withPageLoader(<EngineeringPage />) },
     { path: "data/matching-review", element: withPageLoader(<ReviewCasesPage />) },
@@ -306,7 +313,12 @@ const router = createBrowserRouter([
         heroKicker="01 / Specification Scope"
         title="Specification Page"
       />,
-    )) },
+    ), <DashboardRouteSkeleton
+      chartKicker="03 / Specification Grid"
+      chartTitle="Specification detail loading"
+      heroKicker="01 / Specification Scope"
+      title="Specification Page"
+    />) },
     { path: "data-management", element: withPageLoader(<DataManagementPage />) },
     { path: "engineering", element: <RedirectPreserveSearch to="/data/config-import" /> },
     { path: "review", element: <RedirectPreserveSearch to="/data/matching-review" /> },

@@ -39,6 +39,23 @@ function parsePositiveInteger(value, fallback) {
   return Number.isFinite(parsed) && parsed > 0 ? Math.floor(parsed) : fallback;
 }
 
+function parseBoolean(value) {
+  return /^(1|true|yes|on)$/i.test(String(value || "").trim());
+}
+
+function buildChromiumLaunchOptions() {
+  const args = [];
+  if (parseBoolean(getArg("direct") || process.env.JATO_PERF_DIRECT)) {
+    args.push("--proxy-server=direct://", "--proxy-bypass-list=*");
+  }
+  const channel = String(getArg("browser-channel") || process.env.JATO_PERF_BROWSER_CHANNEL || "").trim();
+  return {
+    ...(channel ? { channel } : {}),
+    headless: true,
+    ...(args.length ? { args } : {}),
+  };
+}
+
 function parseCustomHosts() {
   const raw = process.env.JATO_PERF_ORIGINS_JSON;
   if (!raw) return {};
@@ -502,7 +519,7 @@ async function main() {
   const routes = parseRoutes();
   const buildMetas = await Promise.all(hosts.map(fetchBuildMeta));
   const buildParity = summarizeBuildParity(buildMetas);
-  const browser = await chromium.launch({ headless: true });
+  const browser = await chromium.launch(buildChromiumLaunchOptions());
   const results = [];
   try {
     for (const host of hosts) {
