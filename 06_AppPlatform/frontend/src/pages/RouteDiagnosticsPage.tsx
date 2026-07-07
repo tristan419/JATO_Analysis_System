@@ -19,6 +19,7 @@ import {
   type RouteDecision,
   type RouteTarget,
 } from "../utils/routeDecision";
+import { apiUrl } from "../api/core";
 
 export interface RouteResourceTiming {
   label: string;
@@ -39,8 +40,59 @@ export interface RouteResourceSummary {
   resourceCount: number;
 }
 
+type ApiProbeStatus = "idle" | "running" | "ok" | "failed";
+
+export interface RouteApiProbeSpec {
+  key: string;
+  label: string;
+  method: "GET" | "POST";
+  path: string;
+  body?: Record<string, unknown>;
+}
+
+export interface RouteApiProbeResult {
+  key: string;
+  label: string;
+  method: string;
+  path: string;
+  status: ApiProbeStatus;
+  statusCode: number | null;
+  durationMs: number | null;
+  serverCache: string | null;
+  edgeCache: string | null;
+  error: string | null;
+  checkedAt: string;
+}
+
 export const INITIAL_RESOURCE_WINDOW_MS = 8_000;
 const RESOURCE_TABLE_LIMIT = 10;
+const API_PROBE_SPECS: RouteApiProbeSpec[] = [
+  {
+    key: "metadata-snapshot",
+    label: "Filter metadata snapshot",
+    method: "GET",
+    path: "/metadata/filter-snapshot",
+  },
+  {
+    key: "auth-profile",
+    label: "Auth profile",
+    method: "GET",
+    path: "/auth/me",
+  },
+  {
+    key: "grouped-time-series",
+    label: "Grouped time-series default",
+    method: "POST",
+    path: "/analysis/time-series-grouped",
+    body: {
+      filters: {},
+      grain: "month",
+      group_by: "动总规整",
+      top_n: 8,
+      include_others: true,
+    },
+  },
+];
 const VENDOR_RESOURCE_KINDS = new Set([
   "plotly",
   "recharts",
@@ -91,6 +143,14 @@ function formatBytes(value: number | null): string {
 
 function formatMilliseconds(value: number): string {
   return `${Math.round(value)} ms`;
+}
+
+function formatNullableMilliseconds(value: number | null): string {
+  return value === null ? "-" : formatMilliseconds(value);
+}
+
+function formatCacheState(value: string | null): string {
+  return value && value.trim() ? value : "-";
 }
 
 function buildFingerprint(result: ProbeResult): string {
@@ -184,12 +244,90 @@ export function collectRouteResourceTimings(): RouteResourceTiming[] {
     ));
 }
 
+function createIdleApiProbeResult(spec: RouteApiProbeSpec): RouteApiProbeResult {
+  return {
+    key: spec.key,
+    label: spec.label,
+    method: spec.method,
+    path: spec.path,
+    status: "idle",
+    statusCode: null,
+    durationMs: null,
+    serverCache: null,
+    edgeCache: null,
+    error: null,
+    checkedAt: "-",
+  };
+}
+
+function diagnosticAuthHeaders(): Headers {
+  const headers = new Headers();
+  const token = (
+    localStorage.getItem("jato_auth_token")
+    || import.meta.env.VITE_AUTH_TOKEN
+    || ""
+  ).trim();
+  const user = (
+    localStorage.getItem("jato_user_name")
+    || import.meta.env.VITE_USER_NAME
+    || "anonymous"
+  ).trim();
+  const role = (
+    localStorage.getItem("jato_user_role")
+    || import.meta.env.VITE_USER_ROLE
+    || "viewer"
+  ).trim();
+  if (token) headers.set("X-Auth-Token", token);
+  headers.set("X-User-Name", user || "anonymous");
+  headers.set("X-User-Role", role || "viewer");
+  return headers;
+}
+
+export async function probeCurrentApiPath(spec: RouteApiProbeSpec): Promise<RouteApiProbeResult> {
+  const startedAt = performance.now();
+  const headers = diagnosticAuthHeaders();
+  let response: Response;
+  try {
+    if (spec.method === "POST") {
+      headers.set("Content-Type", "application/json");
+    }
+    response = await fetch(apiUrl(spec.path), {
+      method: spec.method,
+      headers,
+      body: spec.method === "POST" ? JSON.stringify(spec.body ?? {}) : undefined,
+      cache: "no-store",
+    });
+  } catch (error) {
+    return {
+      ...createIdleApiProbeResult(spec),
+      status: "failed",
+      durationMs: performance.now() - startedAt,
+      error: error instanceof Error ? error.message : String(error),
+      checkedAt: new Date().toLocaleString(),
+    };
+  }
+
+  return {
+    ...createIdleApiProbeResult(spec),
+    status: response.ok ? "ok" : "failed",
+    statusCode: response.status,
+    durationMs: performance.now() - startedAt,
+    serverCache: response.headers.get("X-JATO-Server-Cache"),
+    edgeCache: response.headers.get("X-JATO-Edge-Cache"),
+    error: response.ok ? null : response.statusText || "Request failed",
+    checkedAt: new Date().toLocaleString(),
+  };
+}
+
 export function RouteDiagnosticsPage() {
   const [results, setResults] = useState<Record<RouteTarget, ProbeResult>>({
     cn: makeInitialProbe("cn"),
     intl: makeInitialProbe("intl"),
   });
   const [resourceTimings, setResourceTimings] = useState<RouteResourceTiming[]>([]);
+  const [apiProbeResults, setApiProbeResults] = useState<RouteApiProbeResult[]>(
+    () => API_PROBE_SPECS.map(createIdleApiProbeResult),
+  );
   const [manualDecision, setManualDecision] = useState<RouteDecision | null>(() => readRouteDecision(window.localStorage, MANUAL_KEY));
   const [autoDecision, setAutoDecision] = useState<RouteDecision | null>(() => readRouteDecision(window.localStorage, DECISION_KEY));
   const currentHost = window.location.hostname || "-";
@@ -224,6 +362,16 @@ export function RouteDiagnosticsPage() {
     setResourceTimings(collectRouteResourceTimings());
   }
 
+  async function runApiProbes() {
+    setApiProbeResults(API_PROBE_SPECS.map((spec) => ({
+      ...createIdleApiProbeResult(spec),
+      status: "running",
+      checkedAt: "testing",
+    })));
+    const nextResults = await Promise.all(API_PROBE_SPECS.map(probeCurrentApiPath));
+    setApiProbeResults(nextResults);
+  }
+
   async function runProbe() {
     setResults({
       cn: { ...makeInitialProbe("cn"), status: "running" },
@@ -236,6 +384,7 @@ export function RouteDiagnosticsPage() {
     setResults({ cn: cnResult, intl: intlResult });
     setManualDecision(readRouteDecision(window.localStorage, MANUAL_KEY));
     setAutoDecision(readRouteDecision(window.localStorage, DECISION_KEY));
+    void runApiProbes();
   }
 
   function lockRoute(target: RouteTarget) {
@@ -365,6 +514,48 @@ export function RouteDiagnosticsPage() {
                 </tr>
               );
             })}
+          </tbody>
+        </table>
+      </section>
+
+      <section className="route-diagnostics-table-wrap">
+        <div className="route-diagnostics-subheader">
+          <div>
+            <span className="route-diagnostics-label">API path probes</span>
+            <p>当前入口的关键 API 链路耗时，用来区分路由慢、鉴权慢、还是大查询缓存未命中。</p>
+          </div>
+          <button className="btn btn-sm btn-secondary" type="button" onClick={runApiProbes}>刷新 API</button>
+        </div>
+        <table className="route-diagnostics-table">
+          <thead>
+            <tr>
+              <th>接口</th>
+              <th>方法</th>
+              <th>状态</th>
+              <th>HTTP</th>
+              <th>耗时</th>
+              <th>Server cache</th>
+              <th>Edge cache</th>
+              <th>测试时间</th>
+            </tr>
+          </thead>
+          <tbody>
+            {apiProbeResults.map((probe) => (
+              <tr key={probe.key}>
+                <td>
+                  <strong>{probe.label}</strong>
+                  <br />
+                  <span className="route-diagnostics-muted">{probe.path}</span>
+                </td>
+                <td>{probe.method}</td>
+                <td>{probe.status}</td>
+                <td>{probe.statusCode ?? "-"}</td>
+                <td>{formatNullableMilliseconds(probe.durationMs)}</td>
+                <td>{formatCacheState(probe.serverCache)}</td>
+                <td>{formatCacheState(probe.edgeCache)}</td>
+                <td>{probe.error ? probe.error : probe.checkedAt}</td>
+              </tr>
+            ))}
           </tbody>
         </table>
       </section>
