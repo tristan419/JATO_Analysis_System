@@ -3,11 +3,6 @@ name: intl-edge-prewarm
 on:
   push:
     branches: ["main"]
-    paths:
-      - "06_AppPlatform/frontend/functions/**"
-      - "06_AppPlatform/frontend/scripts/prewarm_intl_edge_cache.cjs"
-      - "06_AppPlatform/frontend/package.json"
-      - ".github/workflows/intl-edge-prewarm.yml"
   schedule:
     - cron: "17 */4 * * *"
   workflow_run:
