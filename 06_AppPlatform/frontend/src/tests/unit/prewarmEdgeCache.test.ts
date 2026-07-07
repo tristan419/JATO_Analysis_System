@@ -113,7 +113,7 @@ describe("prewarm intl edge cache", () => {
     });
   });
 
-  it("builds bounded Advanced Analysis metadata warmups", () => {
+  it("builds bounded Advanced Analysis warmups", () => {
     expect(prewarm.buildAdvancedAnalysisWarmupRequests()).toEqual([
       {
         label: "advanced-analysis-countries",
@@ -124,6 +124,18 @@ describe("prewarm intl edge cache", () => {
         label: "advanced-analysis-profile-options-瑞典",
         method: "GET",
         path: "/advanced-analysis/profile-options?country=%E7%91%9E%E5%85%B8",
+      },
+      {
+        body: {
+          country: "瑞典",
+          fuel_types: [],
+          sales_mode: "month",
+          scope_filters: [],
+          top_n: 25,
+        },
+        label: "advanced-analysis-transfer-mart-瑞典",
+        method: "POST",
+        path: "/advanced-analysis/transfer-mart",
       },
     ]);
 
@@ -142,6 +154,30 @@ describe("prewarm intl edge cache", () => {
         label: "advanced-analysis-profile-options-瑞典",
         method: "GET",
         path: "/advanced-analysis/profile-options?country=%E7%91%9E%E5%85%B8",
+      },
+      {
+        body: {
+          country: "德国",
+          fuel_types: [],
+          sales_mode: "month",
+          scope_filters: [],
+          top_n: 25,
+        },
+        label: "advanced-analysis-transfer-mart-德国",
+        method: "POST",
+        path: "/advanced-analysis/transfer-mart",
+      },
+      {
+        body: {
+          country: "瑞典",
+          fuel_types: [],
+          sales_mode: "month",
+          scope_filters: [],
+          top_n: 25,
+        },
+        label: "advanced-analysis-transfer-mart-瑞典",
+        method: "POST",
+        path: "/advanced-analysis/transfer-mart",
       },
     ]);
   });
