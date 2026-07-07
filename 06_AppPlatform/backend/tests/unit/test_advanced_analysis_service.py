@@ -123,6 +123,83 @@ def test_list_available_countries_uses_active_dataset_options(monkeypatch: pytes
     assert result == {"countries": ["奥地利", "瑞典"]}
 
 
+def test_transfer_mart_cache_key_uses_stable_params_dataset_and_scope(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    keys: list[str] = []
+    dataset_token = "dataset-a"
+
+    def current_dataset_token() -> str:
+        return dataset_token
+
+    def cached_or_compute(key, compute_fn, ttl=advanced_analysis_service._CACHE_TTL_SECONDS):
+        keys.append(key)
+        return {"cache_key": key}
+
+    monkeypatch.setattr(advanced_analysis_service.repo, "current_dataset_token", current_dataset_token)
+    monkeypatch.setattr(advanced_analysis_service, "_cached_or_compute", cached_or_compute)
+
+    first = advanced_analysis_service.compute_transfer_mart(
+        country="瑞典",
+        target_period="2026-01",
+        time_range={"start": "2025-01", "end": "2026-01"},
+        fuel_types=["ICE", "BEV"],
+        segments=["SUV-B", "SUV-A"],
+        scope_filters=[
+            {"dim": "powertrain", "value": "ICE"},
+            {"dim": "segment", "value": "SUV-B"},
+            {"dim": "powertrain", "value": "BEV"},
+            {"dim": "powertrain", "value": "BEV"},
+        ],
+        cache_scope="viewer",
+    )
+    reordered = advanced_analysis_service.compute_transfer_mart(
+        country="瑞典",
+        target_period="2026-01",
+        time_range={"end": "2026-01", "start": "2025-01"},
+        fuel_types=["BEV", "ICE"],
+        segments=["SUV-A", "SUV-B"],
+        scope_filters=[
+            {"dim": "segment", "value": "SUV-B"},
+            {"dim": "powertrain", "value": "BEV"},
+            {"dim": "powertrain", "value": "ICE"},
+        ],
+        cache_scope="viewer",
+    )
+    dataset_token = "dataset-b"
+    new_dataset = advanced_analysis_service.compute_transfer_mart(
+        country="瑞典",
+        target_period="2026-01",
+        time_range={"start": "2025-01", "end": "2026-01"},
+        fuel_types=["BEV", "ICE"],
+        segments=["SUV-A", "SUV-B"],
+        scope_filters=[
+            {"dim": "segment", "value": "SUV-B"},
+            {"dim": "powertrain", "value": "BEV"},
+            {"dim": "powertrain", "value": "ICE"},
+        ],
+        cache_scope="viewer",
+    )
+    new_scope = advanced_analysis_service.compute_transfer_mart(
+        country="瑞典",
+        target_period="2026-01",
+        time_range={"start": "2025-01", "end": "2026-01"},
+        fuel_types=["BEV", "ICE"],
+        segments=["SUV-A", "SUV-B"],
+        scope_filters=[
+            {"dim": "segment", "value": "SUV-B"},
+            {"dim": "powertrain", "value": "BEV"},
+            {"dim": "powertrain", "value": "ICE"},
+        ],
+        cache_scope="admin",
+    )
+
+    assert first["cache_key"] == reordered["cache_key"]
+    assert new_dataset["cache_key"] != first["cache_key"]
+    assert new_scope["cache_key"] != new_dataset["cache_key"]
+    assert len(keys) == 4
+
+
 def test_competitor_set_returns_product_battlefield_and_channel_series(monkeypatch: pytest.MonkeyPatch) -> None:
     fact = pd.DataFrame(
         [
