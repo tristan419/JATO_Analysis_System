@@ -200,7 +200,7 @@ jobs:
           ARCHIVE_BYTES="$(wc -c < "$ARCHIVE_PATH" | tr -d '[:space:]')"
           rm -rf "$CHUNK_DIR"
           mkdir -p "$CHUNK_DIR"
-          split -b 512k "$ARCHIVE_PATH" "$CHUNK_DIR/chunk_"
+          split -b 8M "$ARCHIVE_PATH" "$CHUNK_DIR/chunk_"
 
           fallback_to_sparse_deploy() {
             echo "::warning::$1; continuing without uploaded archive so server deploy can fall back to sparse Git fetch."
@@ -242,7 +242,7 @@ jobs:
             echo "DEPLOY_ARCHIVE_PATH=$REMOTE_ARCHIVE" >> "$GITHUB_ENV"
             exit 0
           fi
-          echo "[WARN] Single-stream archive upload failed; falling back to 512KiB ssh chunks"
+          echo "[WARN] Single-stream archive upload failed; falling back to 8MiB ssh chunks"
 
           if ! timeout 120s ssh "${SSH_COMMON_OPTS[@]}" "$SSH_USER@$SSH_CONNECT_HOST" \
             "rm -f '$REMOTE_ARCHIVE_TMP' && : > '$REMOTE_ARCHIVE_TMP'"; then
@@ -250,7 +250,7 @@ jobs:
             exit 0
           fi
 
-          echo "[INFO] Uploading deploy archive in 512KiB ssh chunks (${ARCHIVE_BYTES} bytes)"
+          echo "[INFO] Uploading deploy archive in 8MiB ssh chunks (${ARCHIVE_BYTES} bytes)"
           chunk_index=0
           for chunk_path in "$CHUNK_DIR"/chunk_*; do
             chunk_index=$((chunk_index + 1))
@@ -312,7 +312,7 @@ jobs:
           ARCHIVE_BYTES="$(wc -c < "$ARCHIVE_PATH" | tr -d '[:space:]')"
           rm -rf "$CHUNK_DIR"
           mkdir -p "$CHUNK_DIR"
-          split -b 512k "$ARCHIVE_PATH" "$CHUNK_DIR/chunk_"
+          split -b 8M "$ARCHIVE_PATH" "$CHUNK_DIR/chunk_"
 
           fallback_to_sparse_deploy() {
             echo "::warning::$1; continuing without uploaded archive so server deploy can fall back to sparse Git fetch."
@@ -356,7 +356,7 @@ jobs:
             echo "DEPLOY_ARCHIVE_PATH=$REMOTE_ARCHIVE" >> "$GITHUB_ENV"
             exit 0
           fi
-          echo "[WARN] Single-stream archive upload failed; falling back to 512KiB ssh chunks"
+          echo "[WARN] Single-stream archive upload failed; falling back to 8MiB ssh chunks"
 
           if ! timeout 120s sshpass -p "$SSH_PASSWORD" \
             ssh "${SSH_COMMON_OPTS[@]}" "$SSH_USER@$SSH_HOST" \
@@ -365,7 +365,7 @@ jobs:
             exit 0
           fi
 
-          echo "[INFO] Uploading deploy archive in 512KiB ssh chunks (${ARCHIVE_BYTES} bytes)"
+          echo "[INFO] Uploading deploy archive in 8MiB ssh chunks (${ARCHIVE_BYTES} bytes)"
           chunk_index=0
           for chunk_path in "$CHUNK_DIR"/chunk_*; do
             chunk_index=$((chunk_index + 1))
