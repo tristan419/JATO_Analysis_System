@@ -116,6 +116,8 @@ def test_http_text_profile_builds_entry_patterns() -> None:
             "headers": {"Accept-Language": "hr-HR"},
             "prefer_curl_fetch": True,
             "curl_fallback": True,
+            "curl_http1_1": False,
+            "curl_send_headers": False,
             "entry_patterns": [
                 {
                     "pattern": r'"priceValue":(?P<price>\d+\.\d+)',
@@ -130,6 +132,8 @@ def test_http_text_profile_builds_entry_patterns() -> None:
     assert profile.headers == {"Accept-Language": "hr-HR"}
     assert profile.prefer_curl_fetch is True
     assert profile.curl_fallback is True
+    assert profile.curl_http1_1 is False
+    assert profile.curl_send_headers is False
     assert profile.entry_patterns[0].official_trim == "Prime-Line"
     assert profile.entry_patterns[0].jato_powertrain == "MHEV"
 
@@ -194,3 +198,31 @@ def test_http_text_uses_curl_fallback_after_requests_failure(monkeypatch):
     assert results[0].official_trim == "Standard"
     assert results[0].msrp_value == 20840
     assert results[0].jato_powertrain == "ICE"
+
+
+def test_http_text_curl_can_skip_http1_and_headers(monkeypatch):
+    extractor = HttpTextExtractor(
+        ExtractorConfig(
+            source_code="peugeot_3008_be_draft_scrapling",
+            country="比利时",
+            brand="PEUGEOT",
+            source_url="https://www.peugeot.be/fr/gamme/nouveau-peugeot-3008/3008-hybride.html",
+            source_type="manufacturer_official",
+            price_semantics="base_msrp",
+        ),
+        HttpTextProfile(
+            url="https://www.peugeot.be/fr/gamme/nouveau-peugeot-3008/3008-hybride.html",
+            prefer_curl_fetch=True,
+            curl_http1_1=False,
+            curl_send_headers=False,
+        ),
+    )
+
+    def fake_run(cmd, **_kwargs):
+        assert "--http1.1" not in cmd
+        assert "-H" not in cmd
+        return subprocess.CompletedProcess(cmd, 0, stdout="<html></html>", stderr="")
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+
+    assert extractor._fetch_text_with_curl(30) == "<html></html>"

@@ -51,6 +51,7 @@ class PdfTextProfile:
     direct_download_fallback: bool = False
     curl_compressed: bool = False
     curl_http1_1: bool = True
+    curl_send_headers: bool = True
     default_currency: str = "EUR"
     default_tax_included: bool = True
     default_price_label: str = "Manufacturer's Recommended Retail Price"
@@ -408,6 +409,8 @@ class PdfTextExtractor(BaseExtractor):
         return blob
 
     def _curl_header_args(self) -> list[str]:
+        if not self.profile.curl_send_headers:
+            return []
         args: list[str] = []
         for key, value in self.profile.headers.items():
             header_name = str(key).strip()

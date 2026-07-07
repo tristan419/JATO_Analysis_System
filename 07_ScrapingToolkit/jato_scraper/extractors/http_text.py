@@ -43,6 +43,8 @@ class HttpTextProfile:
     headers: dict[str, str] = field(default_factory=dict)
     prefer_curl_fetch: bool = False
     curl_fallback: bool = False
+    curl_http1_1: bool = True
+    curl_send_headers: bool = True
     default_currency: str = "EUR"
     default_tax_included: bool = True
     default_price_label: str = "Manufacturer's Recommended Retail Price"
@@ -137,7 +139,6 @@ class HttpTextExtractor(BaseExtractor):
         cmd = [
             "curl",
             "--location",
-            "--http1.1",
             "--compressed",
             "--silent",
             "--show-error",
@@ -145,10 +146,13 @@ class HttpTextExtractor(BaseExtractor):
             "--max-time",
             str(max(1, int(timeout))),
         ]
-        for key, value in self._session.headers.items():
-            if value is None:
-                continue
-            cmd.extend(["-H", f"{key}: {value}"])
+        if self.profile.curl_http1_1:
+            cmd.insert(2, "--http1.1")
+        if self.profile.curl_send_headers:
+            for key, value in self._session.headers.items():
+                if value is None:
+                    continue
+                cmd.extend(["-H", f"{key}: {value}"])
         cmd.append(self.profile.url)
         try:
             result = subprocess.run(

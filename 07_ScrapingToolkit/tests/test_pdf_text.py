@@ -206,12 +206,14 @@ def test_pdf_text_profile_accepts_curl_transport_options() -> None:
             "url": "https://example.invalid/ford-price-list.pdf",
             "curl_compressed": True,
             "curl_http1_1": False,
+            "curl_send_headers": False,
             "entry_patterns": [],
         }
     )
 
     assert profile.curl_compressed is True
     assert profile.curl_http1_1 is False
+    assert profile.curl_send_headers is False
 
 
 def test_pdf_text_profile_accepts_multiple_urls() -> None:

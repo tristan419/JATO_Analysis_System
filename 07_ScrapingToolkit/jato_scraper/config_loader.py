@@ -638,6 +638,7 @@ def _build_pdf_text_profile(profile: dict[str, Any]) -> PdfTextProfile:
         direct_download_fallback=bool(profile.get("direct_download_fallback", False)),
         curl_compressed=bool(profile.get("curl_compressed", False)),
         curl_http1_1=bool(profile.get("curl_http1_1", True)),
+        curl_send_headers=bool(profile.get("curl_send_headers", True)),
         default_currency=profile.get("default_currency", "EUR"),
         default_tax_included=bool(profile.get("default_tax_included", True)),
         default_price_label=profile.get(
@@ -712,6 +713,8 @@ def _build_http_text_profile(profile: dict[str, Any]) -> HttpTextProfile:
         headers=profile.get("headers", {}),
         prefer_curl_fetch=bool(profile.get("prefer_curl_fetch", False)),
         curl_fallback=bool(profile.get("curl_fallback", False)),
+        curl_http1_1=bool(profile.get("curl_http1_1", True)),
+        curl_send_headers=bool(profile.get("curl_send_headers", True)),
         default_currency=profile.get("default_currency", "EUR"),
         default_tax_included=bool(profile.get("default_tax_included", True)),
         default_price_label=profile.get(
