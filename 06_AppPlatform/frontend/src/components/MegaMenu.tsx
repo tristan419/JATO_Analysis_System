@@ -215,6 +215,7 @@ export function MegaMenu() {
                   </div>
                   <div className="mega-menu-profile-popover-actions">
                     <Link to="/account/profile" className="mega-menu-profile-popover-action" onClick={() => setProfileOpen(false)}>Edit Profile</Link>
+                    <Link to="/route-diagnostics" className="mega-menu-profile-popover-action" onClick={() => setProfileOpen(false)}>Route Diagnostics</Link>
                     {user.role === "viewer" && (
                       <button type="button" className="mega-menu-profile-popover-action" onClick={() => { setProfileOpen(false); setShowUpgrade(true); }}>Request Upgrade</button>
                     )}
@@ -249,6 +250,7 @@ export function MegaMenu() {
                 <span className="mega-menu-role">{user.role}</span>
                 {user.email ? <span style={{ fontSize: 11, color: "#94a3b8" }}>{user.email}</span> : null}
                 <Link to="/account/profile" className="mega-menu-signin" onClick={() => setNavOpen(false)}>国家偏好</Link>
+                <Link to="/route-diagnostics" className="mega-menu-signin" onClick={() => setNavOpen(false)}>路由诊断</Link>
                 <button type="button" className="mega-menu-signout" onClick={() => { logout(); setNavOpen(false); }}>Sign out</button>
               </div>
             ) : (
