@@ -10,7 +10,7 @@ permissions:
 jobs:
   devsync:
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    timeout-minutes: 15
 
     steps:
       - name: Checkout with full history
@@ -41,6 +41,7 @@ jobs:
             git commit -m "hermes: auto dev event from push $SHA_SHORT"
             git pull --rebase origin main
             git push origin main
+            echo "dev_event_sha=$(git rev-parse HEAD)" >> $GITHUB_OUTPUT
             echo "skipped=false" >> $GITHUB_OUTPUT
           fi
 
@@ -73,3 +74,52 @@ jobs:
             echo "DevSync returned HTTP $HTTP_CODE (non-blocking warning)"
             cat /tmp/sync_resp.json 2>/dev/null || true
           fi
+
+      - name: Setup Node for intl prewarm
+        if: steps.commit_dev_event.outputs.skipped == 'false'
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20.19.0"
+
+      - name: Wait for intl Pages Hermes commit
+        if: steps.commit_dev_event.outputs.skipped == 'false'
+        working-directory: 06_AppPlatform/frontend
+        env:
+          EXPECTED_COMMIT: ${{ steps.commit_dev_event.outputs.dev_event_sha }}
+          JATO_PREWARM_ORIGIN: ${{ vars.JATO_INTL_ORIGIN || 'https://intl.ojeur.cloud' }}
+        run: |
+          node - <<'NODE'
+          const expected = process.env.EXPECTED_COMMIT;
+          const origin = String(process.env.JATO_PREWARM_ORIGIN || "https://intl.ojeur.cloud").replace(/\/+$/, "");
+          const deadline = Date.now() + 5 * 60 * 1000;
+          const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+          async function fetchCommit() {
+            const response = await fetch(`${origin}/build-meta.json?ts=${Date.now()}`, { cache: "no-store" });
+            if (!response.ok) return "";
+            const payload = await response.json();
+            return typeof payload.commit === "string" ? payload.commit.trim() : "";
+          }
+
+          for (;;) {
+            const commit = await fetchCommit().catch(() => "");
+            console.log(`intl build commit: ${commit || "<unavailable>"}`);
+            if (commit === expected) process.exit(0);
+            if (Date.now() > deadline) {
+              console.error(`intl build metadata did not reach ${expected} within the propagation window`);
+              process.exit(1);
+            }
+            await sleep(15000);
+          }
+          NODE
+
+      - name: Prewarm intl edge after Hermes commit
+        if: steps.commit_dev_event.outputs.skipped == 'false'
+        working-directory: 06_AppPlatform/frontend
+        env:
+          JATO_PREWARM_ORIGIN: ${{ vars.JATO_INTL_ORIGIN || 'https://intl.ojeur.cloud' }}
+          JATO_PREWARM_ROLES: "viewer,order_filler,editor,admin"
+          JATO_PREWARM_REPETITIONS: "2"
+          JATO_PREWARM_TIMEOUT_MS: "30000"
+          JATO_PREWARM_FAIL_ON_ERROR: "1"
+        run: npm run perf:prewarm-edge
