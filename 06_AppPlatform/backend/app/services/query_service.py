@@ -36,6 +36,11 @@ from app.core.config import (
 )
 from app.infra import parquet_repository as repo
 from app.infra.redis_client import get_redis_client
+from app.services.market_scan_cache import (
+    acquire_compute_lock,
+    release_compute_lock,
+    wait_for_cache,
+)
 
 LOGGER = logging.getLogger(__name__)
 
@@ -43,7 +48,7 @@ LOGGER = logging.getLogger(__name__)
 @dataclass(frozen=True)
 class GroupedTimeSeriesQueryResult:
     payload: dict
-    cache_state: Literal["MEMORY", "REDIS", "DISK", "INFLIGHT", "MISS"]
+    cache_state: Literal["MEMORY", "REDIS", "DISK", "REDIS_WAIT", "INFLIGHT", "MISS"]
 
 
 @dataclass(frozen=True)
@@ -648,6 +653,37 @@ def _load_grouped_time_series_redis_cache(
         return _store_grouped_time_series_cache(
             cache_key,
             cached_result,
+            dataset_token,
+        )
+
+
+def _wait_for_grouped_time_series_redis_cache(
+    cache_key: _GroupedTimeSeriesCacheKey,
+    dataset_token: str,
+) -> dict | None:
+    client = get_redis_client()
+    if client is None:
+        return None
+    redis_key = _grouped_time_series_redis_cache_key(cache_key, dataset_token)
+    try:
+        payload = wait_for_cache(client, redis_key)
+    except Exception as exc:  # noqa: BLE001 - Redis must fail open
+        LOGGER.warning("Could not wait for grouped time-series Redis cache: %s", exc)
+        return None
+
+    if not isinstance(payload, dict):
+        return None
+    if payload.get("schema") != _GROUPED_TIME_SERIES_REDIS_CACHE_SCHEMA:
+        return None
+    if payload.get("dataset") != dataset_token:
+        return None
+    result = payload.get("result")
+    if not isinstance(result, dict):
+        return None
+    with _grouped_time_series_cache_lock:
+        return _store_grouped_time_series_cache(
+            cache_key,
+            result,
             dataset_token,
         )
 
@@ -1726,7 +1762,36 @@ def query_grouped_time_series_with_cache_state(
             if cached_result is not None:
                 return GroupedTimeSeriesQueryResult(cached_result, "INFLIGHT")
 
+    redis_lock_client = None
+    redis_lock_key: str | None = None
+    redis_lock_acquired = False
     try:
+        dataset_token = owner_dataset_token or repo.current_dataset_token()
+        cached_result = _load_grouped_time_series_redis_cache(
+            cache_key,
+            dataset_token,
+        )
+        if cached_result is not None:
+            return GroupedTimeSeriesQueryResult(cached_result, "REDIS")
+
+        redis_lock_client = get_redis_client()
+        if redis_lock_client is not None:
+            redis_lock_key = _grouped_time_series_redis_cache_key(
+                cache_key,
+                dataset_token,
+            )
+            redis_lock_acquired = acquire_compute_lock(
+                redis_lock_client,
+                redis_lock_key,
+            )
+            if not redis_lock_acquired:
+                cached_result = _wait_for_grouped_time_series_redis_cache(
+                    cache_key,
+                    dataset_token,
+                )
+                if cached_result is not None:
+                    return GroupedTimeSeriesQueryResult(cached_result, "REDIS_WAIT")
+
         result = _query_grouped_time_series_impl(
             filters=filters,
             grain=normalized_grain,
@@ -1756,6 +1821,8 @@ def query_grouped_time_series_with_cache_state(
         )
         return GroupedTimeSeriesQueryResult(cached_result, "MISS")
     finally:
+        if redis_lock_acquired and redis_lock_client is not None and redis_lock_key:
+            release_compute_lock(redis_lock_client, redis_lock_key)
         if owner and owner_inflight_key is not None:
             with _grouped_time_series_cache_lock:
                 event = _grouped_time_series_inflight.pop(

@@ -46,6 +46,27 @@ class _FakeRedis:
         self.ttls[key] = ttl
         return True
 
+    def setnx(self, key: str, value: str) -> bool:
+        if key in self.store:
+            return False
+        self.store[key] = value
+        return True
+
+    def expire(self, key: str, ttl: int) -> bool:
+        if key not in self.store:
+            return False
+        self.ttls[key] = ttl
+        return True
+
+    def delete(self, *keys: str) -> int:
+        deleted = 0
+        for key in keys:
+            if key in self.store:
+                deleted += 1
+                self.store.pop(key, None)
+            self.ttls.pop(key, None)
+        return deleted
+
 
 def test_filters_options_batch_merges_requests_with_same_filters(
     monkeypatch,
@@ -571,6 +592,72 @@ def test_query_grouped_time_series_uses_redis_cache_by_role_scope(
         ttl == query_service.GROUPED_TIME_SERIES_CACHE_TTL_SECONDS
         for ttl in redis.ttls.values()
     )
+    assert all(not key.endswith(":lock") for key in redis.store)
+
+
+def test_query_grouped_time_series_waits_for_peer_redis_compute(
+    monkeypatch,
+) -> None:
+    redis = _FakeRedis()
+    waited_keys: list[str] = []
+    payload = {
+        "series": [{"group": "Alpha", "values": [{"period": "2024", "value": 10.0}]}],
+        "meta": {"grain": "year"},
+    }
+    cache_key = (
+        query_service._normalize_cache_scope("viewer"),
+        query_service._normalize_query_cache_filters({"Country": ["HU"]}),
+        "year",
+        "Brand",
+        None,
+        2,
+        False,
+        None,
+    )
+    redis_key = query_service._grouped_time_series_redis_cache_key(
+        cache_key,
+        "dataset-a",
+    )
+    redis.store[f"{redis_key}:lock"] = "1"
+
+    def wait_for_peer_cache(client, key):
+        waited_keys.append(key)
+        assert client is redis
+        return {
+            "schema": query_service._GROUPED_TIME_SERIES_REDIS_CACHE_SCHEMA,
+            "dataset": "dataset-a",
+            "cachedAt": 1,
+            "result": payload,
+        }
+
+    monkeypatch.setattr(query_service, "get_redis_client", lambda: redis)
+    monkeypatch.setattr(query_service, "wait_for_cache", wait_for_peer_cache)
+    monkeypatch.setattr(
+        query_service.repo,
+        "current_dataset_token",
+        lambda: "dataset-a",
+    )
+    monkeypatch.setattr(query_service.repo, "list_columns", lambda: ["Brand", "2024"])
+    monkeypatch.setattr(
+        query_service.repo,
+        "load_slice",
+        lambda columns, filters, limit, offset: (_ for _ in ()).throw(
+            AssertionError("peer cache wait should avoid parquet compute")
+        ),
+    )
+
+    result = query_service.query_grouped_time_series_with_cache_state(
+        filters={"Country": ["HU"]},
+        grain="year",
+        group_by="Brand",
+        top_n=2,
+        include_others=False,
+        cache_scope="viewer",
+    )
+
+    assert result.cache_state == "REDIS_WAIT"
+    assert result.payload == payload
+    assert waited_keys == [redis_key]
 
 
 def test_query_grouped_time_series_cache_is_scoped_by_role(
