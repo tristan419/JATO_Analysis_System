@@ -225,7 +225,7 @@ jobs:
 
           upload_archive_stream() {
             echo "[INFO] Uploading deploy archive via single ssh stream (${ARCHIVE_BYTES} bytes)"
-            if timeout 600s ssh "${SSH_COMMON_OPTS[@]}" "$SSH_USER@$SSH_CONNECT_HOST" \
+            if timeout 180s ssh "${SSH_COMMON_OPTS[@]}" "$SSH_USER@$SSH_CONNECT_HOST" \
               "rm -f '$REMOTE_ARCHIVE_TMP' '$REMOTE_ARCHIVE' && cat > '$REMOTE_ARCHIVE_TMP'" < "$ARCHIVE_PATH"; then
               if timeout 120s ssh "${SSH_COMMON_OPTS[@]}" "$SSH_USER@$SSH_CONNECT_HOST" \
                 "remote_size=\$(wc -c < '$REMOTE_ARCHIVE_TMP' | tr -d '[:space:]'); if [ \"\$remote_size\" != '$ARCHIVE_BYTES' ]; then echo \"remote archive size mismatch: \$remote_size != $ARCHIVE_BYTES\" >&2; exit 1; fi; mv '$REMOTE_ARCHIVE_TMP' '$REMOTE_ARCHIVE' && ls -lh '$REMOTE_ARCHIVE'"; then
@@ -336,7 +336,7 @@ jobs:
 
           upload_archive_stream() {
             echo "[INFO] Uploading deploy archive via single ssh stream (${ARCHIVE_BYTES} bytes)"
-            if timeout 600s sshpass -p "$SSH_PASSWORD" \
+            if timeout 180s sshpass -p "$SSH_PASSWORD" \
               ssh "${SSH_COMMON_OPTS[@]}" "$SSH_USER@$SSH_HOST" \
               "rm -f '$REMOTE_ARCHIVE_TMP' '$REMOTE_ARCHIVE' && cat > '$REMOTE_ARCHIVE_TMP'" < "$ARCHIVE_PATH"; then
               if timeout 120s sshpass -p "$SSH_PASSWORD" \
