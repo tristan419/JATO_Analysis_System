@@ -413,8 +413,13 @@
               reason = "www is faster than intl by more than the redirect margin";
             }
           } else if (intl && intl.ok && !cn.ok) {
-            nextTarget = "intl";
-            reason = "www probe failed and intl probe succeeded";
+            if (currentTarget === "cn") {
+              nextTarget = "cn";
+              reason = "www is the current entry; keep the domestic route when only the www probe failed once";
+            } else {
+              nextTarget = "intl";
+              reason = "www probe failed and intl probe succeeded";
+            }
           } else if (cn.ok && intl && !intl.ok) {
             nextTarget = "cn";
             reason = "intl probe failed and www probe succeeded";

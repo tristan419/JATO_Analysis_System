@@ -99,6 +99,23 @@ describe("route decision helpers", () => {
     }, "intl")?.target).toBe("cn");
   });
 
+  it("does not move current www users to intl after a single www probe failure", () => {
+    const decision = chooseAutoRoute({
+      cn: failedProbe("cn", 1_800),
+      intl: okProbe("intl", 300),
+    }, "cn");
+
+    expect(decision?.target).toBe("cn");
+    expect(decision?.reason).toContain("current entry");
+  });
+
+  it("keeps current intl users on intl when only the www probe fails", () => {
+    expect(chooseAutoRoute({
+      cn: failedProbe("cn", 1_800),
+      intl: okProbe("intl", 300),
+    }, "intl")?.target).toBe("intl");
+  });
+
   it("allows cross-host auto routing when build fingerprints differ", () => {
     const staleIntl = chooseAutoRoute({
       cn: okProbe("cn", 1_200, "new-build"),
@@ -165,7 +182,7 @@ describe("route decision helpers", () => {
     expect(chooseAutoRoute({
       cn: failedProbe("cn", 1_800),
       intl: okProbe("intl", 300),
-    }, "cn", chinaProfile)?.target).toBe("intl");
+    }, "cn", chinaProfile)?.target).toBe("cn");
   });
 
   it("creates a local www decision before runtime probes for China-local browsers", () => {
