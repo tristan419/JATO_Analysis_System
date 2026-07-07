@@ -54,6 +54,7 @@ from jato_scraper.extractors.playwright_card_flow import (
 from jato_scraper.extractors.pdf_text import (
     PdfTextEntryPattern,
     PdfTextExtractor,
+    PdfTextLiteralEntry,
     PdfTextProfile,
 )
 
@@ -558,6 +559,12 @@ def _build_pdf_text_profile(profile: dict[str, Any]) -> PdfTextProfile:
     patterns_raw = profile.get("entry_patterns", [])
     if not isinstance(patterns_raw, list):
         raise ValueError("pdf_text entry_patterns must be a list")
+    literal_entries_raw = profile.get("literal_entries", [])
+    if not isinstance(literal_entries_raw, list):
+        raise ValueError("pdf_text literal_entries must be a list")
+    text_presence_raw = profile.get("text_presence_patterns", [])
+    if text_presence_raw and not isinstance(text_presence_raw, list):
+        raise ValueError("pdf_text text_presence_patterns must be a list")
     urls_raw = profile.get("urls", [])
     if urls_raw and not isinstance(urls_raw, list):
         raise ValueError("pdf_text urls must be a list")
@@ -624,10 +631,62 @@ def _build_pdf_text_profile(profile: dict[str, Any]) -> PdfTextProfile:
         for item in patterns_raw
         if isinstance(item, dict) and str(item.get("pattern", "")).strip()
     )
+    literal_entries = tuple(
+        PdfTextLiteralEntry(
+            price=str(item["price"]).strip(),
+            official_trim=str(item["official_trim"]).strip(),
+            official_powertrain=(
+                str(item["official_powertrain"]).strip()
+                if item.get("official_powertrain") is not None
+                else None
+            ),
+            official_edition=(
+                str(item["official_edition"]).strip()
+                if item.get("official_edition") is not None
+                else None
+            ),
+            availability_text=(
+                str(item["availability_text"]).strip()
+                if item.get("availability_text") is not None
+                else None
+            ),
+            jato_trim=(
+                str(item["jato_trim"]).strip()
+                if item.get("jato_trim") is not None
+                else None
+            ),
+            jato_powertrain=(
+                str(item["jato_powertrain"]).strip()
+                if item.get("jato_powertrain") is not None
+                else None
+            ),
+            price_delta=float(item.get("price_delta", 0.0) or 0.0),
+            price_label=(
+                str(item["price_label"]).strip()
+                if item.get("price_label") is not None
+                else None
+            ),
+        )
+        for item in literal_entries_raw
+        if (
+            isinstance(item, dict)
+            and str(item.get("price", "")).strip()
+            and str(item.get("official_trim", "")).strip()
+        )
+    )
+    document_sha256 = str(profile.get("document_sha256") or "").strip().lower() or None
+    text_presence_patterns = tuple(
+        str(item).strip()
+        for item in text_presence_raw
+        if str(item or "").strip()
+    )
     return PdfTextProfile(
         url=primary_url,
         urls=urls or (primary_url,),
         entry_patterns=entry_patterns,
+        literal_entries=literal_entries,
+        document_sha256=document_sha256,
+        text_presence_patterns=text_presence_patterns,
         timeout_seconds=int(profile.get("timeout_seconds", 60)),
         headers=profile.get("headers", {}),
         retry_attempts=int(profile.get("retry_attempts", 0)),

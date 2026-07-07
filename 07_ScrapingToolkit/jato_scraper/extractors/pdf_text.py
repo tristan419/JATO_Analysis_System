@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+import hashlib
 import html
 from io import BytesIO
 import logging
@@ -37,10 +38,26 @@ class PdfTextEntryPattern:
 
 
 @dataclass(frozen=True)
+class PdfTextLiteralEntry:
+    price: str
+    official_trim: str
+    official_powertrain: str | None = None
+    official_edition: str | None = None
+    availability_text: str | None = None
+    jato_trim: str | None = None
+    jato_powertrain: str | None = None
+    price_delta: float = 0.0
+    price_label: str | None = None
+
+
+@dataclass(frozen=True)
 class PdfTextProfile:
     url: str
     urls: tuple[str, ...] = ()
     entry_patterns: tuple[PdfTextEntryPattern, ...] = field(default_factory=tuple)
+    literal_entries: tuple[PdfTextLiteralEntry, ...] = field(default_factory=tuple)
+    document_sha256: str | None = None
+    text_presence_patterns: tuple[str, ...] = ()
     timeout_seconds: int = DEFAULT_TIMEOUT
     headers: dict[str, str] = field(default_factory=dict)
     retry_attempts: int = 0
@@ -94,6 +111,7 @@ class PdfTextExtractor(BaseExtractor):
         self.profile = profile
         self._session = requests.Session()
         self._last_fetch_error: str | None = None
+        self._last_pdf_hashes: list[str] = []
         if self.profile.ignore_environment_proxy:
             self._session.trust_env = False
         self._session.headers.update(
@@ -125,6 +143,20 @@ class PdfTextExtractor(BaseExtractor):
         for entry in self.profile.entry_patterns:
             for match in re.finditer(entry.pattern, text, re.IGNORECASE | re.DOTALL):
                 observation = self._build_observation(entry, match)
+                if observation is None:
+                    continue
+                dedupe_key = (
+                    observation.official_trim,
+                    observation.official_powertrain or "",
+                    observation.msrp_value,
+                )
+                if dedupe_key in seen:
+                    continue
+                seen.add(dedupe_key)
+                results.append(observation)
+        if self.profile.literal_entries and self._literal_entries_allowed(text):
+            for entry in self.profile.literal_entries:
+                observation = self._build_literal_observation(entry)
                 if observation is None:
                     continue
                 dedupe_key = (
@@ -448,10 +480,12 @@ class PdfTextExtractor(BaseExtractor):
 
     def _extract_text(self) -> str:
         chunks: list[str] = []
+        self._last_pdf_hashes = []
         for url in self._profile_urls():
             blob = self._fetch_pdf_bytes(url)
             if blob is None:
                 continue
+            self._last_pdf_hashes.append(hashlib.sha256(blob).hexdigest())
             reader = PdfReader(BytesIO(blob))
             pages = [
                 (page.extract_text() or "").replace("\xa0", " ")
@@ -459,6 +493,32 @@ class PdfTextExtractor(BaseExtractor):
             ]
             chunks.append(f"\n\n=== PDF SOURCE: {url} ===\n\n" + "\n".join(pages))
         return "\n".join(chunks)
+
+    def _literal_entries_allowed(self, text: str) -> bool:
+        expected_hash = str(self.profile.document_sha256 or "").strip().lower()
+        if expected_hash and expected_hash not in self._last_pdf_hashes:
+            self._remember_fetch_error("pdf_literal_entries_blocked: sha256_mismatch")
+            log.warning(
+                "Skipping PDF literal entries for %s because downloaded sha256 %s "
+                "did not match expected %s",
+                self.config.source_code,
+                self._last_pdf_hashes,
+                expected_hash,
+            )
+            return False
+        for pattern in self.profile.text_presence_patterns:
+            if not re.search(pattern, text, re.IGNORECASE | re.DOTALL):
+                self._remember_fetch_error(
+                    f"pdf_literal_entries_blocked: missing text pattern {pattern[:80]}"
+                )
+                log.warning(
+                    "Skipping PDF literal entries for %s because text pattern %r "
+                    "was not present",
+                    self.config.source_code,
+                    pattern,
+                )
+                return False
+        return True
 
     def _build_observation(
         self,
@@ -524,6 +584,60 @@ class PdfTextExtractor(BaseExtractor):
                 "price_delta": entry.price_delta,
             },
             jato_model=str(self.profile.fixed_jato_model or groups.get("jato_model") or ""),
+            jato_trim=jato_trim,
+            jato_powertrain=jato_powertrain,
+            match_confidence=self.profile.match_confidence or 0.0,
+            match_status=self.profile.match_status,
+            match_reason=self.profile.match_reason,
+        )
+
+    def _build_literal_observation(
+        self,
+        entry: PdfTextLiteralEntry,
+    ) -> RawObservation | None:
+        parsed_price = parse_price(entry.price)
+        if parsed_price is None:
+            log.warning(
+                "Skipping PDF literal entry with unparseable price %r for %s",
+                entry.price,
+                self.config.source_code,
+            )
+            return None
+
+        official_model = str(self.profile.fixed_model or "").strip()
+        official_trim = str(entry.official_trim or "").strip()
+        official_powertrain = str(entry.official_powertrain or "").strip() or None
+        official_edition = str(entry.official_edition or "").strip() or None
+        availability_text = str(entry.availability_text or "").strip() or None
+
+        jato_trim = str(entry.jato_trim or "").strip()
+        if not jato_trim and self.profile.copy_trim_to_jato_trim:
+            jato_trim = official_trim
+
+        jato_powertrain = str(
+            entry.jato_powertrain or self.profile.fixed_jato_powertrain or ""
+        ).strip() or None
+
+        return RawObservation(
+            official_model=official_model,
+            official_trim=official_trim,
+            official_powertrain=official_powertrain,
+            official_edition=official_edition,
+            msrp_value=parsed_price + float(entry.price_delta),
+            currency=self.profile.default_currency,
+            tax_included=self.profile.default_tax_included,
+            price_label=str(entry.price_label or self.profile.default_price_label),
+            source_url=self.config.source_url,
+            availability_text=availability_text,
+            raw_payload={
+                "pdf_url": self.profile.url,
+                "pdf_urls": list(self._profile_urls()),
+                "literal_entry": True,
+                "document_sha256": self.profile.document_sha256,
+                "downloaded_sha256": list(self._last_pdf_hashes),
+                "price_delta": entry.price_delta,
+            },
+            jato_model=str(self.profile.fixed_jato_model or ""),
             jato_trim=jato_trim,
             jato_powertrain=jato_powertrain,
             match_confidence=self.profile.match_confidence or 0.0,

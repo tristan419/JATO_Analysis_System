@@ -9,6 +9,7 @@ from jato_scraper.config_loader import _build_pdf_text_profile
 from jato_scraper.extractors.pdf_text import (
     PdfTextEntryPattern,
     PdfTextExtractor,
+    PdfTextLiteralEntry,
     PdfTextProfile,
     parse_price,
 )
@@ -100,6 +101,92 @@ def test_pdf_text_extracts_entries_and_applies_price_delta(monkeypatch):
     assert results[0].match_confidence == 0.84
     assert results[1].msrp_value == 87_590.0
     assert results[1].jato_powertrain == "PHEV"
+
+
+def test_pdf_text_extracts_hash_gated_literal_entries(monkeypatch):
+    extractor = PdfTextExtractor(
+        ExtractorConfig(
+            source_code="jeep_renegade_pt_draft_scrapling",
+            country="葡萄牙",
+            brand="JEEP",
+            source_url="https://www.jeep.pt/content/dam/jeep/pt/brochure/2025/Informativa-Renegade-e-Hybrid.pdf",
+            source_type="official_price_list",
+            price_semantics="base_msrp",
+        ),
+        PdfTextProfile(
+            url="https://example.invalid/renegade.pdf",
+            fixed_model="RENEGADE",
+            fixed_jato_model="RENEGADE",
+            fixed_jato_powertrain="MHEV",
+            copy_trim_to_jato_trim=True,
+            default_currency="EUR",
+            default_tax_included=True,
+            default_price_label="PVP",
+            match_confidence=0.74,
+            match_status="review_required",
+            document_sha256="abc123",
+            text_presence_patterns=(r"JEEP®\s+RENEGADE\s+E-HYBRID",),
+            literal_entries=(
+                PdfTextLiteralEntry(
+                    price="35,150 €",
+                    official_trim="ALTITUDE",
+                    official_powertrain="1.5 TG e-Hybrid 48V 130cv 4X2 DCT",
+                    jato_powertrain="MHEV",
+                ),
+            ),
+        ),
+    )
+
+    def fake_extract_text():
+        extractor._last_pdf_hashes = ["abc123"]
+        return "JEEP® RENEGADE E-HYBRID\nPREÇOS"
+
+    monkeypatch.setattr(extractor, "_extract_text", fake_extract_text)
+
+    results = extractor.extract()
+
+    assert len(results) == 1
+    assert results[0].official_model == "RENEGADE"
+    assert results[0].official_trim == "ALTITUDE"
+    assert results[0].msrp_value == 35_150.0
+    assert results[0].jato_model == "RENEGADE"
+    assert results[0].jato_trim == "ALTITUDE"
+    assert results[0].jato_powertrain == "MHEV"
+    assert results[0].raw_payload["literal_entry"] is True
+    assert results[0].raw_payload["document_sha256"] == "abc123"
+
+
+def test_pdf_text_blocks_literal_entries_on_hash_mismatch(monkeypatch):
+    extractor = PdfTextExtractor(
+        ExtractorConfig(
+            source_code="jeep_renegade_pt_draft_scrapling",
+            country="葡萄牙",
+            brand="JEEP",
+            source_url="https://example.invalid/renegade.pdf",
+            source_type="official_price_list",
+            price_semantics="base_msrp",
+        ),
+        PdfTextProfile(
+            url="https://example.invalid/renegade.pdf",
+            fixed_model="RENEGADE",
+            fixed_jato_model="RENEGADE",
+            document_sha256="expected",
+            literal_entries=(
+                PdfTextLiteralEntry(
+                    price="35,150 €",
+                    official_trim="ALTITUDE",
+                ),
+            ),
+        ),
+    )
+
+    def fake_extract_text():
+        extractor._last_pdf_hashes = ["actual"]
+        return "JEEP® RENEGADE E-HYBRID"
+
+    monkeypatch.setattr(extractor, "_extract_text", fake_extract_text)
+
+    assert extractor.extract() == []
 
 
 def test_pdf_text_profile_accepts_legacy_curl_download_fallback() -> None:
@@ -232,6 +319,30 @@ def test_pdf_text_profile_accepts_multiple_urls() -> None:
         "https://example.invalid/tucson-ice.pdf",
         "https://example.invalid/tucson-hybrid.pdf",
     )
+
+
+def test_pdf_text_profile_accepts_hash_gated_literal_entries() -> None:
+    profile = _build_pdf_text_profile(
+        {
+            "url": "https://example.invalid/renegade.pdf",
+            "document_sha256": "ABC123",
+            "text_presence_patterns": ["RENEGADE", "E-HYBRID"],
+            "literal_entries": [
+                {
+                    "price": "35,150 €",
+                    "official_trim": "ALTITUDE",
+                    "official_powertrain": "1.5 TG e-Hybrid 48V 130cv 4X2 DCT",
+                    "jato_powertrain": "MHEV",
+                }
+            ],
+        }
+    )
+
+    assert profile.document_sha256 == "abc123"
+    assert profile.text_presence_patterns == ("RENEGADE", "E-HYBRID")
+    assert len(profile.literal_entries) == 1
+    assert profile.literal_entries[0].official_trim == "ALTITUDE"
+    assert profile.literal_entries[0].price == "35,150 €"
 
 
 def test_pdf_text_uses_curl_fallback_after_requests_timeout(monkeypatch):
