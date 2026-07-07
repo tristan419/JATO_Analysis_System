@@ -107,6 +107,7 @@ def _resolve_profile_raw(
 
 
 def _build_extractor_config(data: dict[str, Any]) -> ExtractorConfig:
+    profile = data.get("profile") if isinstance(data.get("profile"), dict) else {}
     return ExtractorConfig(
         source_code=data["source_code"],
         country=data["country"],
@@ -114,6 +115,7 @@ def _build_extractor_config(data: dict[str, Any]) -> ExtractorConfig:
         source_url=data["source_url"],
         source_type=data.get("source_type", "manufacturer_official"),
         price_semantics=data.get("price_semantics", "base_msrp"),
+        expected_currency=profile.get("default_currency"),
         requires_location=data.get("requires_location", False),
     )
 

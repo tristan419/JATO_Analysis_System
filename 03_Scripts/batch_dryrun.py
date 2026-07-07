@@ -955,6 +955,68 @@ def _write_dryrun_status_best_effort(
         )
 
 
+def _parse_dryrun_args(argv: list[str]) -> tuple[str, list[str]]:
+    """Parse the intentionally small dryrun CLI without changing legacy usage."""
+    batch = "all"
+    source_codes: list[str] = []
+    index = 0
+    if argv and not argv[0].startswith("-"):
+        batch = argv[0]
+        index = 1
+    while index < len(argv):
+        arg = argv[index]
+        if arg == "--source-code":
+            index += 1
+            if index >= len(argv):
+                raise SystemExit("--source-code requires a source_code value")
+            source_codes.append(argv[index])
+        elif arg.startswith("--source-code="):
+            value = arg.split("=", 1)[1].strip()
+            if not value:
+                raise SystemExit("--source-code requires a source_code value")
+            source_codes.append(value)
+        else:
+            raise SystemExit(f"Unknown argument: {arg}")
+        index += 1
+    return batch, source_codes
+
+
+def _country_code_from_draft_source_code(code: str) -> str | None:
+    parts = code.replace("_draft_scrapling", "").rsplit("_", 1)
+    if len(parts) < 2:
+        return None
+    return parts[-1]
+
+
+def _select_target_codes(
+    *,
+    draft_codes: list[str],
+    promoted_codes: set[str],
+    countries: list[str],
+    requested_source_codes: list[str] | None = None,
+) -> tuple[list[tuple[str, str]], list[tuple[str, str]], list[str]]:
+    requested = set(requested_source_codes or [])
+    country_set = set(countries)
+    target_codes: list[tuple[str, str]] = []
+    skipped_promoted: list[tuple[str, str]] = []
+    seen_requested: set[str] = set()
+    for code in draft_codes:
+        if requested and code not in requested:
+            continue
+        seen_requested.add(code)
+        promoted_code = _promoted_code_for_draft(code)
+        if promoted_code in promoted_codes:
+            skipped_promoted.append((code, promoted_code))
+            continue
+        cc = _country_code_from_draft_source_code(code)
+        if cc and (requested or cc in country_set):
+            target_codes.append((cc, code))
+
+    target_codes.sort()
+    missing_requested = sorted(requested - seen_requested)
+    return target_codes, skipped_promoted, missing_requested
+
+
 def main():
     logging.basicConfig(
         level=logging.WARNING,
@@ -965,14 +1027,15 @@ def main():
     if hasattr(sys.stderr, "reconfigure"):
         sys.stderr.reconfigure(line_buffering=True)
     if len(sys.argv) > 1 and sys.argv[1] in {"-h", "--help"}:
-        print("Usage: batch_dryrun.py [all|1|2|country[,country...]]")
+        print("Usage: batch_dryrun.py [all|1|2|country[,country...]] [--source-code CODE ...]")
         print("")
         print("Examples:")
         print("  batch_dryrun.py no")
         print("  batch_dryrun.py se,fi,dk")
+        print("  batch_dryrun.py all --source-code renault_austral_es_draft_scrapling")
         print("  batch_dryrun.py all")
         return
-    batch = sys.argv[1] if len(sys.argv) > 1 else "all"
+    batch, requested_source_codes = _parse_dryrun_args(sys.argv[1:])
     countries = BATCH_COUNTRIES.get(batch, batch.split(","))
     load_all_sources, run_scrape = _resolve_scraper_functions()
 
@@ -980,23 +1043,25 @@ def main():
     promoted_codes = set(load_all_sources())
     draft_codes = load_all_sources(sources_dir=_DRAFTS_DIR)
     draft_codes = [c for c in draft_codes if c.endswith("_draft_scrapling")]
-    target_codes = []
-    skipped_promoted = []
-    for code in draft_codes:
-        promoted_code = _promoted_code_for_draft(code)
-        if promoted_code in promoted_codes:
-            skipped_promoted.append((code, promoted_code))
-            continue
-        # source code format: brand_model_COUNTRY_draft_scrapling
-        # Extract country suffix: last segment before "_draft_scrapling"
-        parts = code.replace("_draft_scrapling", "").rsplit("_", 1)
-        if len(parts) >= 2:
-            cc = parts[-1]
-            if cc in countries:
-                target_codes.append((cc, code))
-
-    target_codes.sort()
-    print(f"Batch {batch}: {len(target_codes)} sources across {countries}")
+    target_codes, skipped_promoted, missing_requested = _select_target_codes(
+        draft_codes=draft_codes,
+        promoted_codes=promoted_codes,
+        countries=countries,
+        requested_source_codes=requested_source_codes,
+    )
+    effective_countries = (
+        sorted({cc for cc, _ in target_codes})
+        if requested_source_codes
+        else countries
+    )
+    print(f"Batch {batch}: {len(target_codes)} sources across {effective_countries}")
+    if requested_source_codes:
+        print(f"Source filter: {len(requested_source_codes)} requested")
+    if missing_requested:
+        print(
+            "Missing requested draft source(s): "
+            f"{', '.join(missing_requested)}"
+        )
     if skipped_promoted:
         print(
             "Skipped "
@@ -1193,7 +1258,7 @@ def main():
             strategy_recs[strat] = strategy_recs.get(strat, 0) + 1
 
     _write_dryrun_status_best_effort(
-        countries,
+        effective_countries,
         pass_count,
         empty_count,
         fail_count,
@@ -1216,7 +1281,7 @@ def main():
 
     report_payload = _build_dryrun_report_payload(
         batch=batch,
-        countries=countries,
+        countries=effective_countries,
         results=results,
         run_id=run_id,
         generated_at=generated_at,

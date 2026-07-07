@@ -26,6 +26,7 @@ class ExtractorConfig:
     source_url: str
     source_type: str = "manufacturer_official"
     price_semantics: str = "base_msrp"
+    expected_currency: str | None = None
     requires_location: bool = False
 
 

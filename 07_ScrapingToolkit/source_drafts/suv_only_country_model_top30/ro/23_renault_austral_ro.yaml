@@ -1,22 +1,23 @@
 source_code: renault_austral_ro_draft_scrapling
 country: 罗马尼亚
 brand: RENAULT
-source_url: https://todo.invalid/ro/renault/austral
+source_url: https://www.renault.ro/vehicule-hibride/renault-austral-2025.html
 source_type: manufacturer_official
 price_semantics: base_msrp
 extractor_type: scrapling
 profile:
-  url: https://todo.invalid/ro/renault/austral
+  url: https://www.renault.ro/vehicule-hibride/renault-austral-2025.html
   tier: stealth
   headless: true
   network_idle: true
   impersonate: chrome
+  json_script_selector: script[type='application/ld+json']
   css:
     vehicle_container: body
     model: h2
     trim: h3
     price: '[class*="price"]'
-  default_currency: RON
+  default_currency: EUR
   default_tax_included: true
   default_price_label: MSRP
   fixed_model: AUSTRAL

@@ -271,6 +271,71 @@ def test_copy_source_result_diagnostics_preserves_rejection_details() -> None:
     assert "unrelatedRuntimeKey" not in result_entry
 
 
+def test_parse_dryrun_args_supports_repeated_source_code_filter() -> None:
+    batch, source_codes = batch_dryrun._parse_dryrun_args([
+        "all",
+        "--source-code",
+        "renault_austral_es_draft_scrapling",
+        "--source-code=renault_symbioz_nl_draft_scrapling",
+    ])
+
+    assert batch == "all"
+    assert source_codes == [
+        "renault_austral_es_draft_scrapling",
+        "renault_symbioz_nl_draft_scrapling",
+    ]
+
+
+def test_parse_dryrun_args_defaults_batch_to_all_for_source_filter() -> None:
+    batch, source_codes = batch_dryrun._parse_dryrun_args([
+        "--source-code",
+        "renault_austral_es_draft_scrapling",
+    ])
+
+    assert batch == "all"
+    assert source_codes == ["renault_austral_es_draft_scrapling"]
+
+
+def test_select_target_codes_filters_requested_drafts_and_promoted_sources() -> None:
+    target_codes, skipped_promoted, missing_requested = (
+        batch_dryrun._select_target_codes(
+            draft_codes=[
+                "renault_austral_es_draft_scrapling",
+                "renault_symbioz_nl_draft_scrapling",
+                "skoda_kamiq_cz_draft_scrapling",
+            ],
+            promoted_codes={"renault_symbioz_nl_scrapling"},
+            countries=["es", "nl", "cz"],
+            requested_source_codes=[
+                "renault_austral_es_draft_scrapling",
+                "renault_symbioz_nl_draft_scrapling",
+                "missing_draft_scrapling",
+            ],
+        )
+    )
+
+    assert target_codes == [("es", "renault_austral_es_draft_scrapling")]
+    assert skipped_promoted == [
+        ("renault_symbioz_nl_draft_scrapling", "renault_symbioz_nl_scrapling")
+    ]
+    assert missing_requested == ["missing_draft_scrapling"]
+
+
+def test_select_target_codes_source_filter_bypasses_batch_country_filter() -> None:
+    target_codes, skipped_promoted, missing_requested = (
+        batch_dryrun._select_target_codes(
+            draft_codes=["renault_austral_es_draft_scrapling"],
+            promoted_codes=set(),
+            countries=["se", "no"],
+            requested_source_codes=["renault_austral_es_draft_scrapling"],
+        )
+    )
+
+    assert target_codes == [("es", "renault_austral_es_draft_scrapling")]
+    assert skipped_promoted == []
+    assert missing_requested == []
+
+
 def test_source_attempt_limit_env(monkeypatch) -> None:
     monkeypatch.setenv("JATO_MSRP_DRYRUN_SOURCE_ATTEMPTS", "3")
     assert batch_dryrun._source_attempt_limit() == 3

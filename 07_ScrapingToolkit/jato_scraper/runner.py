@@ -745,6 +745,11 @@ def run_scrape(
         report = validate_observations(
             observations,
             country=extractor.config.country,
+            expected_currency=getattr(
+                extractor.config,
+                "expected_currency",
+                None,
+            ),
             source_price_semantics=getattr(
                 extractor.config,
                 "price_semantics",

@@ -1,16 +1,17 @@
 source_code: renault_symbioz_nl_draft_scrapling
 country: 荷兰
 brand: RENAULT
-source_url: https://todo.invalid/nl/renault/symbioz
+source_url: https://www.renault.nl/hybride-modellen/symbioz/versies-en-prijzen.html
 source_type: manufacturer_official
 price_semantics: base_msrp
 extractor_type: scrapling
 profile:
-  url: https://todo.invalid/nl/renault/symbioz
+  url: https://www.renault.nl/hybride-modellen/symbioz/versies-en-prijzen.html
   tier: stealth
   headless: true
   network_idle: true
   impersonate: chrome
+  json_script_selector: script[type='application/ld+json']
   css:
     vehicle_container: body
     model: h2
