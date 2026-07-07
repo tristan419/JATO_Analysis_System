@@ -1,4 +1,4 @@
-import { Fragment, useCallback, useEffect, useMemo, useState } from "react";
+import { Fragment, Suspense, lazy, useCallback, useEffect, useMemo, useState } from "react";
 import type { CSSProperties, ReactNode } from "react";
 import { useSearchParams } from "react-router-dom";
 import type { Data, Layout as PlotlyLayout } from "plotly.js";
@@ -13,7 +13,6 @@ import { compactSearchText } from "../utils/searchMatching";
 import { DEFAULT_EXPORT, ExportPanel, downloadPng, type ExportSettings } from "../components/ExportPanel";
 import { DeckExportDrawer, DeckFloatingDrawer } from "../components/deckControls";
 import { JATO_COUNTRIES, formatJatoCountryOption } from "../utils/jatoCountries";
-import { HeroProductAnalysisView } from "./HeroProductAnalysisView";
 import type {
   AdvancedAnalysisCompetitorSetRequest,
   AdvancedAnalysisCountriesResponse,
@@ -68,6 +67,10 @@ const EMPTY_PROFILE_OPTIONS: AdvancedAnalysisProfileOptions = {
   make: [],
   model: [],
 };
+
+const HeroProductAnalysisView = lazy(() =>
+  import("./HeroProductAnalysisView").then((module) => ({ default: module.HeroProductAnalysisView })),
+);
 
 type DecompositionKey = "market_carryover" | "channel_mix" | "drive_mix" | "powertrain_mix" | "pure_share_shift" | "interaction";
 type SortKey = "model" | "dV" | "pure_share_shift" | DecompositionKey;
@@ -469,7 +472,11 @@ export function AdvancedAnalysisPage() {
   }, [data, s, profileSelections]);
 
   if (analysisMode === "hero-product") {
-    return <HeroProductAnalysisView onSwitchToTransfer={() => switchAnalysisMode("transfer")} />;
+    return (
+      <Suspense fallback={<PageLoadingShell kicker="Advanced" label="Loading Hero Product analysis..." />}>
+        <HeroProductAnalysisView onSwitchToTransfer={() => switchAnalysisMode("transfer")} />
+      </Suspense>
+    );
   }
 
   return (

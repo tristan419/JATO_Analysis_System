@@ -14,4 +14,10 @@ describe("Advanced Analysis startup", () => {
     expect(advancedAnalysisSource).toContain("setCompetitorData(null);");
     expect(advancedAnalysisSource).toContain("advanced-analysis-competitor-loading");
   });
+
+  it("keeps the Hero Product grid runtime out of the transfer startup path", () => {
+    expect(advancedAnalysisSource).toContain("const HeroProductAnalysisView = lazy(() =>");
+    expect(advancedAnalysisSource).toContain("<Suspense fallback={<PageLoadingShell");
+    expect(advancedAnalysisSource).not.toContain('import { HeroProductAnalysisView } from "./HeroProductAnalysisView";');
+  });
 });
