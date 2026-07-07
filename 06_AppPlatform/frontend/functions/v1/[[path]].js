@@ -5,6 +5,8 @@ const CACHEABLE_ENDPOINTS = new Map([
   ["GET assistant/country/metadata", 3600],
   ["GET advanced-analysis/countries", 3600],
   ["GET advanced-analysis/profile-options", 3600],
+  ["POST advanced-analysis/transfer-mart", 300],
+  ["POST advanced-analysis/competitor-set", 300],
   ["GET analysis/data-freshness", 300],
   ["POST filters/options", 300],
   ["POST filters/options/batch", 300],

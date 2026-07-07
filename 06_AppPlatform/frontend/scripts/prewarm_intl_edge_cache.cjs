@@ -462,6 +462,18 @@ function buildAdvancedAnalysisWarmupRequests(configuredCountries = []) {
       method: "GET",
       path: `/advanced-analysis/profile-options?country=${encodeURIComponent(country)}`,
     })),
+    ...countries.map((country) => ({
+      body: {
+        country,
+        fuel_types: [],
+        sales_mode: "month",
+        scope_filters: [],
+        top_n: 25,
+      },
+      label: `advanced-analysis-transfer-mart-${country}`,
+      method: "POST",
+      path: "/advanced-analysis/transfer-mart",
+    })),
   ];
 }
 

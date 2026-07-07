@@ -359,6 +359,84 @@ describe("Cloudflare edge cache function", () => {
     expect(runtime.cache.put).toHaveBeenCalledTimes(2);
   });
 
+  it("caches readonly Advanced Analysis POST endpoints by role scope and request body", async () => {
+    const runtime = createRuntime();
+    const transferBody = JSON.stringify({
+      country: "瑞典",
+      fuel_types: [],
+      sales_mode: "month",
+      scope_filters: [],
+      top_n: 25,
+    });
+    const requestInit: RequestInit = {
+      body: transferBody,
+      headers: {
+        "content-type": "application/json",
+        "x-auth-token": "token-a",
+        "x-jato-data-version": "dataset-a",
+        "x-user-name": "alice",
+        "x-user-role": "order_filler",
+      },
+      method: "POST",
+    };
+
+    const firstTransfer = await callEdgeFunction(runtime, "advanced-analysis/transfer-mart", requestInit);
+    expect(firstTransfer.headers.get("x-jato-edge-cache")).toBe("MISS");
+    expect(firstTransfer.headers.get("x-jato-edge-cache-endpoint")).toBe("/v1/advanced-analysis/transfer-mart");
+    expect(firstTransfer.headers.get("set-cookie")).toBeNull();
+    expect(await firstTransfer.json()).toMatchObject({ sequence: 1 });
+    await flushWaitUntil(runtime);
+
+    const secondTransfer = await callEdgeFunction(runtime, "advanced-analysis/transfer-mart", requestInit);
+    expect(secondTransfer.headers.get("x-jato-edge-cache")).toBe("HIT");
+    expect(await secondTransfer.json()).toMatchObject({ sequence: 1 });
+
+    const adminTransfer = await callEdgeFunction(runtime, "advanced-analysis/transfer-mart", {
+      body: transferBody,
+      headers: {
+        "content-type": "application/json",
+        "x-auth-token": "token-a",
+        "x-jato-data-version": "dataset-a",
+        "x-user-name": "alice",
+        "x-user-role": "admin",
+      },
+      method: "POST",
+    });
+    expect(adminTransfer.headers.get("x-jato-edge-cache")).toBe("MISS");
+    await flushWaitUntil(runtime);
+
+    const competitor = await callEdgeFunction(runtime, "advanced-analysis/competitor-set", {
+      ...requestInit,
+      body: JSON.stringify({
+        country: "瑞典",
+        fuel_types: [],
+        profile_specs: {},
+        sales_mode: "month",
+        scope_filters: [],
+        top_n: 12,
+      }),
+    });
+    expect(competitor.headers.get("x-jato-edge-cache")).toBe("MISS");
+    expect(competitor.headers.get("x-jato-edge-cache-endpoint")).toBe("/v1/advanced-analysis/competitor-set");
+    await flushWaitUntil(runtime);
+
+    const competitorHit = await callEdgeFunction(runtime, "advanced-analysis/competitor-set", {
+      ...requestInit,
+      body: JSON.stringify({
+        country: "瑞典",
+        fuel_types: [],
+        profile_specs: {},
+        sales_mode: "month",
+        scope_filters: [],
+        top_n: 12,
+      }),
+    });
+    expect(competitorHit.headers.get("x-jato-edge-cache")).toBe("HIT");
+    expect(await competitorHit.json()).toMatchObject({ sequence: 3 });
+    expect(runtime.fetch).toHaveBeenCalledTimes(3);
+    expect(runtime.cache.put).toHaveBeenCalledTimes(6);
+  });
+
   it("caches stable metadata helpers named by the intl prewarm job", async () => {
     const runtime = createRuntime();
 
