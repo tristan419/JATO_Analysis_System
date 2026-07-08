@@ -71,6 +71,34 @@ def _country_code_list(values: Any) -> list[str]:
     return codes
 
 
+def _string_list(values: Any) -> list[str]:
+    if not isinstance(values, list):
+        return []
+    items: list[str] = []
+    seen: set[str] = set()
+    for value in values:
+        item = str(value or "").strip()
+        if not item or item in seen:
+            continue
+        items.append(item)
+        seen.add(item)
+    return items
+
+
+def _is_source_filtered_run(run: dict[str, Any]) -> bool:
+    return bool(run.get("isSourceFiltered") or _string_list(run.get("sourceFilter")))
+
+
+def _updates_latest_artifact(run: dict[str, Any]) -> bool:
+    if run.get("updatesLatestArtifact") is False:
+        return False
+    return not _is_source_filtered_run(run)
+
+
+def _is_diagnostic_run(run: dict[str, Any]) -> bool:
+    return not _updates_latest_artifact(run)
+
+
 def _status_for_pass_rate(pass_rate: float) -> str:
     if pass_rate >= 90:
         return "success"
@@ -159,14 +187,27 @@ def _load_latest_indexed_v3_report(index_data: dict[str, Any] | None) -> dict[st
     if not latest_run_id:
         return None
 
+    runs = [
+        run for run in sorted(
+            (index_data or {}).get("runs") or [],
+            key=_run_recency_key,
+            reverse=True,
+        )
+        if isinstance(run, dict)
+    ]
+    run_meta = next((run for run in runs if run.get("runId") == latest_run_id), None)
+    if run_meta and _is_diagnostic_run(run_meta):
+        run_meta = None
+    if not run_meta:
+        run_meta = next((run for run in runs if not _is_diagnostic_run(run)), None)
+    if run_meta:
+        latest_run_id = str(run_meta.get("runId") or "")
+
     fallback_paths: list[Path] = [ARTIFACT_DIR / f"dryrun_report_{latest_run_id}.json"]
-    for run in (index_data or {}).get("runs") or []:
-        if run.get("runId") != latest_run_id:
-            continue
-        artifact_path = _artifact_path_from_ref(run.get("artifactPath"))
+    if run_meta:
+        artifact_path = _artifact_path_from_ref(run_meta.get("artifactPath"))
         if artifact_path:
             fallback_paths.insert(0, artifact_path)
-        break
 
     seen: set[Path] = set()
     for path in fallback_paths:
@@ -415,6 +456,9 @@ def _normalize_country_from_v3(
             "gateStatus": run_meta.get("gateStatus"),
             "runStatus": run_meta.get("status"),
             "isLatestRun": run_id == latest_run_id,
+            "updatesLatestArtifact": _updates_latest_artifact(run_meta),
+            "isSourceFiltered": _is_source_filtered_run(run_meta),
+            "sourceFilter": _string_list(run_meta.get("sourceFilter")),
         })
     return payload
 
@@ -458,6 +502,8 @@ def _all_country_latest_from_runs_index(index_data: dict[str, Any] | None) -> li
         key=_run_recency_key,
         reverse=True,
     ):
+        if _is_diagnostic_run(run):
+            continue
         run_id = str(run.get("runId") or "")
         artifact_path = _artifact_path_from_ref(run.get("artifactPath"))
         report = _load_json(artifact_path) if artifact_path else None
@@ -606,6 +652,7 @@ def _current_from_v3_report(report: dict[str, Any], index_data: dict[str, Any] |
         if run.get("runId") == run_id:
             run_meta = run
             break
+    run_descriptor = run_meta or report
 
     countries: list[dict[str, Any]] = []
     for country in report.get("countriesDetail") or []:
@@ -644,6 +691,9 @@ def _current_from_v3_report(report: dict[str, Any], index_data: dict[str, Any] |
         "observedCountries": _country_code_list(report.get("observedCountries")),
         "missingCountries": _country_code_list(report.get("missingCountries")),
         "duplicateCountries": _country_code_list(report.get("duplicateCountries")),
+        "updatesLatestArtifact": _updates_latest_artifact(run_descriptor),
+        "isSourceFiltered": _is_source_filtered_run(run_descriptor),
+        "sourceFilter": _string_list(run_descriptor.get("sourceFilter")),
         "totalSources": total_sources,
         "totalPass": total_pass,
         "totalEmpty": total_empty,
@@ -669,6 +719,9 @@ def _history_from_runs_index() -> list[dict[str, Any]]:
         key=_run_recency_key,
         reverse=True,
     ):
+        source_filter = _string_list(run.get("sourceFilter"))
+        is_source_filtered = _is_source_filtered_run(run)
+        updates_latest_artifact = _updates_latest_artifact(run)
         report = None
         artifact_path = _artifact_path_from_ref(run.get("artifactPath"))
         if artifact_path:
@@ -713,6 +766,10 @@ def _history_from_runs_index() -> list[dict[str, Any]]:
             "file": Path(str(run.get("artifactPath") or "")).name or f"dryrun_report_{run.get('runId')}.json",
             "gateStatus": run.get("gateStatus"),
             "status": run.get("status"),
+            "updatesLatestArtifact": updates_latest_artifact,
+            "isSourceFiltered": is_source_filtered,
+            "sourceFilter": source_filter,
+            "runScope": "source_probe" if is_source_filtered else ("diagnostic" if not updates_latest_artifact else "full"),
             "countriesDetail": countries_detail,
         })
     return history[:100]

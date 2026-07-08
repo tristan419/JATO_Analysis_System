@@ -9453,6 +9453,10 @@ table.data-table tr.data-table-group-row.contains-selection td {
 .dryrun-history-table .is-fail { color: #dc2626; }
 .dryrun-history-row:hover { background: rgba(28,105,212,0.04); }
 .dryrun-history-row.is-expanded { background: rgba(28,105,212,0.06); }
+.dryrun-history-row.is-diagnostic { background: rgba(100,116,139,0.035); }
+.dryrun-history-scope { display: inline-flex; align-items: center; max-width: 160px; padding: 1px 6px; border-radius: 6px; font-size: 10px; font-weight: 700; line-height: 1.4; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.dryrun-history-scope.is-full { color: #166534; background: rgba(22,101,52,0.08); }
+.dryrun-history-scope.is-diagnostic { color: #475569; background: rgba(100,116,139,0.12); }
 .dryrun-history-detail-row td { padding: 8px 12px !important; background: rgba(248,250,252,0.8); }
 .dryrun-history-detail-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(160px, 1fr)); gap: 6px; }
 .dryrun-history-country-chip { display: flex; flex-direction: column; gap: 2px; padding: 4px 8px; border: 1px solid rgba(15,23,42,0.06); border-radius: 6px; background: #fff; }

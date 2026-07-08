@@ -47,6 +47,9 @@ interface DryrunCountry {
   gateStatus?: string;
   runStatus?: string;
   isLatestRun?: boolean;
+  updatesLatestArtifact?: boolean;
+  isSourceFiltered?: boolean;
+  sourceFilter?: string[];
   sources: DryrunSource[];
 }
 
@@ -65,6 +68,9 @@ interface DryrunCurrent {
   observedCountries?: string[];
   missingCountries?: string[];
   duplicateCountries?: string[];
+  updatesLatestArtifact?: boolean;
+  isSourceFiltered?: boolean;
+  sourceFilter?: string[];
   countries: DryrunCountry[];
   totalSources: number;
   totalPass: number;
@@ -109,6 +115,10 @@ interface DryrunHistoryRun {
   file: string;
   gateStatus?: string;
   status?: string;
+  updatesLatestArtifact?: boolean;
+  isSourceFiltered?: boolean;
+  sourceFilter?: string[];
+  runScope?: "full" | "source_probe" | "diagnostic";
   countriesDetail?: DryrunHistoryCountry[];
 }
 
@@ -205,6 +215,35 @@ function sourceFailureTitle(source: DryrunSource): string | undefined {
     source.finalUrl || source.sourceUrl,
   ].filter(Boolean);
   return parts.length ? parts.join("\n\n") : undefined;
+}
+
+function sourceFilterTitle(sourceFilter?: string[]): string | undefined {
+  return sourceFilter && sourceFilter.length > 0 ? sourceFilter.join("\n") : undefined;
+}
+
+function sourceFilterCountLabel(sourceFilter?: string[]): string {
+  const count = sourceFilter?.length ?? 0;
+  return count > 0 ? `${count} source${count === 1 ? "" : "s"}` : "";
+}
+
+function isDiagnosticHistoryRun(run: DryrunHistoryRun): boolean {
+  return Boolean(
+    run.isSourceFiltered
+      || run.updatesLatestArtifact === false
+      || run.runScope === "source_probe"
+      || run.runScope === "diagnostic"
+  );
+}
+
+function historyRunScopeLabel(run: DryrunHistoryRun): string {
+  if (run.isSourceFiltered || run.runScope === "source_probe") {
+    const count = sourceFilterCountLabel(run.sourceFilter);
+    return count ? `Source probe · ${count}` : "Source probe";
+  }
+  if (run.updatesLatestArtifact === false || run.runScope === "diagnostic") {
+    return "Diagnostic";
+  }
+  return "Full run";
 }
 
 function dedupeByCountryCode(countries: DryrunCountry[]): DryrunCountry[] {
@@ -430,6 +469,12 @@ export function MsrpDryrunDashboard() {
             {current.gateStatus && <span>Gate: {current.gateStatus}</span>}
             {current.startedAt && <span>Started: {formatTime(current.startedAt)}</span>}
             {current.logFile && <span>Log: {current.logFile}</span>}
+            {current.isSourceFiltered && (
+              <span title={sourceFilterTitle(current.sourceFilter)}>
+                Scope: Source probe{sourceFilterCountLabel(current.sourceFilter) ? ` · ${sourceFilterCountLabel(current.sourceFilter)}` : ""}
+              </span>
+            )}
+            {current.updatesLatestArtifact === false && <span>Latest artifact: preserved</span>}
           </div>
           {stableCoverage && stableCoverage.countryCount > 0 && (
             <div className="dryrun-stable-coverage">
@@ -515,6 +560,7 @@ export function MsrpDryrunDashboard() {
                 <tr>
                   <th>Time</th>
                   <th>Batch</th>
+                  <th>Scope</th>
                   <th>Sources</th>
                   <th>Pass</th>
                   <th>Empty</th>
@@ -524,54 +570,65 @@ export function MsrpDryrunDashboard() {
                 </tr>
               </thead>
               <tbody>
-                {history.map((r) => (
-                  <Fragment key={r.runId || r.file}>
-                    <tr
-                      className={`dryrun-history-row${expandedHistory === r.file ? ' is-expanded' : ''}`}
-                      onClick={() => {
-                        const nextExpanded = expandedHistory === r.file ? null : r.file;
-                        setExpandedHistory(nextExpanded);
-                        setSelectedRunId(r.runId || null);
-                        setExpandedCountry(null);
-                        setExpandedAllCountry(null);
-                      }}
-                      style={{ cursor: 'pointer' }}
-                    >
-                      <td>{formatTime(r.timestamp)}</td>
-                      <td>{r.batch}{r.gateStatus ? ` · ${r.gateStatus}` : ""}</td>
-                      <td>{r.total}</td>
-                      <td className="is-pass">{r.pass}</td>
-                      <td className="is-empty">{r.empty}</td>
-                      <td className="is-fail">{r.fail}</td>
-                      <td>{r.financeMonthlyPaymentCount ?? 0}</td>
-                      <td><strong>{r.passRate}%</strong></td>
-                    </tr>
-                    {expandedHistory === r.file && r.countriesDetail && r.countriesDetail.length > 0 && (
-                      <tr key={`${r.file}-detail`} className="dryrun-history-detail-row">
-                        <td colSpan={8}>
-                          <div className="dryrun-history-detail-grid">
-                            {r.countriesDetail.map((c) => (
-                              <div key={c.countryCode} className="dryrun-history-country-chip">
-                                <span className="dryrun-history-country-name">
-                                  {c.countryCode.toUpperCase()} {c.countryLabel}
-                                </span>
-                                <ProgressBar pct={c.passRate} tone={c.passRate >= 50 ? 'green' : c.passRate >= 20 ? 'amber' : 'red'} />
-                                <span className="dryrun-history-country-nums">
-                                  {c.pass}/{c.total} pass · {c.empty} empty · {c.fail} fail
-                                </span>
-                                {hasFinanceCoverage(c) && (
-                                  <span className="dryrun-history-country-nums">
-                                    {financeCoverageLabel(c)}
-                                  </span>
-                                )}
-                              </div>
-                            ))}
-                          </div>
+                {history.map((r) => {
+                  const isDiagnostic = isDiagnosticHistoryRun(r);
+                  return (
+                    <Fragment key={r.runId || r.file}>
+                      <tr
+                        className={`dryrun-history-row${expandedHistory === r.file ? ' is-expanded' : ''}${isDiagnostic ? ' is-diagnostic' : ''}`}
+                        onClick={() => {
+                          const nextExpanded = expandedHistory === r.file ? null : r.file;
+                          setExpandedHistory(nextExpanded);
+                          setSelectedRunId(r.runId || null);
+                          setExpandedCountry(null);
+                          setExpandedAllCountry(null);
+                        }}
+                        style={{ cursor: 'pointer' }}
+                      >
+                        <td>{formatTime(r.timestamp)}</td>
+                        <td>{r.batch}{r.gateStatus ? ` · ${r.gateStatus}` : ""}</td>
+                        <td>
+                          <span
+                            className={`dryrun-history-scope${isDiagnostic ? " is-diagnostic" : " is-full"}`}
+                            title={sourceFilterTitle(r.sourceFilter)}
+                          >
+                            {historyRunScopeLabel(r)}
+                          </span>
                         </td>
+                        <td>{r.total}</td>
+                        <td className="is-pass">{r.pass}</td>
+                        <td className="is-empty">{r.empty}</td>
+                        <td className="is-fail">{r.fail}</td>
+                        <td>{r.financeMonthlyPaymentCount ?? 0}</td>
+                        <td><strong>{r.passRate}%</strong></td>
                       </tr>
-                    )}
-                  </Fragment>
-                ))}
+                      {expandedHistory === r.file && r.countriesDetail && r.countriesDetail.length > 0 && (
+                        <tr key={`${r.file}-detail`} className="dryrun-history-detail-row">
+                          <td colSpan={9}>
+                            <div className="dryrun-history-detail-grid">
+                              {r.countriesDetail.map((c) => (
+                                <div key={c.countryCode} className="dryrun-history-country-chip">
+                                  <span className="dryrun-history-country-name">
+                                    {c.countryCode.toUpperCase()} {c.countryLabel}
+                                  </span>
+                                  <ProgressBar pct={c.passRate} tone={c.passRate >= 50 ? 'green' : c.passRate >= 20 ? 'amber' : 'red'} />
+                                  <span className="dryrun-history-country-nums">
+                                    {c.pass}/{c.total} pass · {c.empty} empty · {c.fail} fail
+                                  </span>
+                                  {hasFinanceCoverage(c) && (
+                                    <span className="dryrun-history-country-nums">
+                                      {financeCoverageLabel(c)}
+                                    </span>
+                                  )}
+                                </div>
+                              ))}
+                            </div>
+                          </td>
+                        </tr>
+                      )}
+                    </Fragment>
+                  );
+                })}
               </tbody>
             </table>
           </div>

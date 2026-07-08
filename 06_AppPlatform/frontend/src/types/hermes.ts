@@ -542,6 +542,10 @@ export interface HermesMsrpDryrunHistoryRun {
   reportMdPath?: string;
   runDir?: string;
   logFile?: string;
+  updatesLatestArtifact?: boolean;
+  isSourceFiltered?: boolean;
+  sourceFilter?: string[];
+  runScope?: "full" | "source_probe" | "diagnostic";
 }
 export interface HermesMsrpDryrunHistoryResponse {
   schemaVersion: string;
