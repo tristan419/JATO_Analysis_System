@@ -1,99 +1,55 @@
 source_code: jaecoo_7_cz_draft_scrapling
 country: 捷克
 brand: JAECOO
-source_url: https://www.jaecoo.cz/j7
+source_url: https://omoda-jaecoo.cz/jaecoo/jaecoo-j7
 source_type: manufacturer_official
 price_semantics: base_msrp
-extractor_type: scrapling
+extractor_type: http_text
 profile:
-  url: https://www.jaecoo.cz/j7
-  tier: stealth
-  headless: true
-  network_idle: true
-  impersonate: chrome
+  url: https://omoda-jaecoo.cz/jaecoo/jaecoo-j7
+  urls:
+  - https://omoda-jaecoo.cz/jaecoo/jaecoo-7-hev
+  - https://omoda-jaecoo.cz/jaecoo/jaecoo-j7-phev
+  timeout_seconds: 45
+  headers:
+    Accept-Language: cs-CZ,cs;q=0.9,en;q=0.8
   default_currency: CZK
   default_tax_included: true
-  default_price_label: Doporučená cena včetně DPH
+  default_price_label: Již za Kč s DPH
   fixed_model: '7'
   fixed_jato_model: '7'
-  fixed_jato_powertrain: null
-  model_rules: []
-  skip_if_model_unmapped: false
   copy_trim_to_jato_trim: true
-  confidence_rules:
-    base: 0.2
-    fixed_model_bonus: 0.18
-    fixed_jato_model_bonus: 0.12
-    model_rule_bonus: 0.12
-    trim_present_bonus: 0.1
-    copy_trim_to_jato_trim_bonus: 0.09
-    parsed_price_text_bonus: 0.03
-    currency_bonus: 0.01
-    price_label_bonus: 0.02
-    trim_keyword_bonuses: []
-    price_band_bonuses:
-    - key: price_band_entry
-      label: Entry price band matched
-      max: 0
-      delta: 0.0
-    - key: price_band_mid
-      label: Mid price band matched
-      min: 0
-      max: 0
-      delta: 0.01
-    - key: price_band_high
-      label: High price band matched
-      min: 0
-      delta: 0.03
-    powertrain_keyword_bonuses: []
-    powertrain_bonuses:
-    - key: powertrain_phev
-      label: 'Powertrain matched: PHEV'
-      powertrain: PHEV
-      delta: 0.03
-    - key: powertrain_ice
-      label: 'Powertrain matched: ICE'
-      powertrain: ICE
-      delta: 0.03
-    clamp_min: 0.0
-    clamp_max: 1.0
-  structured_fields:
-    edition_rules:
-    - key: edition_special
-      label: Special Edition
-      keyword: special edition
-      special: true
-    powertrain_rules:
-    - key: powertrain_phev
-      powertrain: PHEV
-      keywords:
-      - plug-in hybrid
-      - PHEV
-    - key: powertrain_ice
-      powertrain: ICE
-      keywords:
-      - benzín
-  auto_accept_gates:
-    review_threshold: 0.95
-    semi_auto_threshold: 0.98
-    require_powertrain_match: true
-    force_review_if_powertrain_missing: true
-    force_review_if_powertrain_ambiguous: true
-    force_review_for_special_edition: true
-  json_script_selector: script[type='application/ld+json']
-  css:
-    vehicle_container: body
-    model: h1
-    trim: h2
-    price: '[class*="price"]'
+  match_confidence: 0.84
+  match_status: review_required
+  match_reason:
+    kind: official_web_configurator_price
+    source: official_omoda_jaecoo_cz
+    note: Official Czech OMODA JAECOO model pages; extracts configurator equipment base prices and excludes stock-car discount prices.
+  entry_patterns:
+  - pattern: 'JATO_HTTP_TEXT_URL:\s+https://omoda-jaecoo\.cz/jaecoo/jaecoo-j7[\s\S]*?data-configurator-key="equip"[\s\S]*?data-configurator-price="(?P<price>729000)"\s+data-configurator-title="JAECOO7\s+Exclusive"'
+    official_trim: JAECOO7 Exclusive
+    official_powertrain: 1.6 TGDI AWD
+    jato_powertrain: ICE
+  - pattern: 'JATO_HTTP_TEXT_URL:\s+https://omoda-jaecoo\.cz/jaecoo/jaecoo-7-hev[\s\S]*?data-configurator-key="equip"[\s\S]*?data-configurator-price="(?P<price>709000)"\s+data-configurator-title="JAECOO7\s+SHS-H\s+Select"'
+    official_trim: JAECOO7 SHS-H Select
+    official_powertrain: SHS-H hybrid 224 hp
+    jato_powertrain: HEV
+  - pattern: 'JATO_HTTP_TEXT_URL:\s+https://omoda-jaecoo\.cz/jaecoo/jaecoo-7-hev[\s\S]*?data-configurator-key="equip"[\s\S]*?data-configurator-price="(?P<price>779000)"\s+data-configurator-title="JAECOO7\s+SHS-H\s+Exclusive"'
+    official_trim: JAECOO7 SHS-H Exclusive
+    official_powertrain: SHS-H hybrid 224 hp
+    jato_powertrain: HEV
+  - pattern: 'JATO_HTTP_TEXT_URL:\s+https://omoda-jaecoo\.cz/jaecoo/jaecoo-j7-phev[\s\S]*?data-configurator-key="equip"[\s\S]*?data-configurator-price="(?P<price>889000)"\s+data-configurator-title="JAECOO7\s+SHS-P\s+Exclusive"'
+    official_trim: JAECOO7 SHS-P Exclusive
+    official_powertrain: SHS-P plug-in hybrid
+    jato_powertrain: PHEV
 schedule:
   frequency: manual_only
   run_window_start: 00:00
   run_window_end: 05:00
   preferred_weekday: monday
-notes: Keywords filled from official manufacturer website research (CZ market). CSS
-  selectors still require browser-based inspection before promotion. [CSS selectors
-  applied from brand probe]
+notes: Repaired from retired jaecoo.cz URL to official omoda-jaecoo.cz model pages.
+  Uses configurator equipment base prices only and intentionally avoids stock-car
+  discount sections.
 bootstrap_meta:
   country_model_rank: 25
   suggested_scope_kind: single_model
