@@ -41,6 +41,7 @@ import type {
   HermesMsrpCountryProgressResponse,
   HermesMsrpDryrunHistoryResponse,
   HermesMsrpDryrunHistoryRun,
+  HermesMsrpPriceAlertReviewQueueItem,
   HermesMsrpSourceRepairBacklogGroup,
   HermesSourceQualityResponse,
   HermesToolchainResponse,
@@ -1620,6 +1621,13 @@ export function DataManagementPage() {
                         const referenceEvidence = progress.sourceReferenceEvidence;
                         const referenceSummary = referenceEvidence?.summary;
                         const referenceItems = referenceEvidence?.items ?? [];
+                        const priceAlertReviewQueue = progress.priceAlertReviewQueue;
+                        const priceAlertReviewSummary = priceAlertReviewQueue?.summary;
+                        const priceAlertReviewItems = priceAlertReviewQueue?.items ?? [];
+                        const priceAlertReviewCases = priceAlertReviewSummary?.totalCases ?? status?.priceAlertReviewCases ?? 0;
+                        const priceAlertHighPriority = priceAlertReviewSummary?.highPriorityAlertCount ?? status?.priceAlertReviewHighPriority ?? 0;
+                        const priceAlertMissingEvidence = priceAlertReviewSummary?.missingEvidenceCount ?? status?.priceAlertReviewMissingEvidence ?? 0;
+                        const priceAlertEffectivenessFollowUp = priceAlertReviewSummary?.effectivenessFollowUpCount ?? status?.priceAlertReviewEffectivenessFollowUp ?? 0;
                         const gateColor = status?.gateStatus === "blocked" ? "#dc2626" : "#16a34a";
                         return (
                           <div style={{display:"grid",gap:10}}>
@@ -1774,6 +1782,48 @@ export function DataManagementPage() {
                                 </div>
                               )}
                             </div>
+
+                            {priceAlertReviewCases > 0 && (
+                              <div style={{background:"#fff",border:"1px solid #e2e8f0",borderRadius:6,padding:8}}>
+                                <div style={{display:"flex",justifyContent:"space-between",gap:10,alignItems:"center",marginBottom:6}}>
+                                  <div style={{fontSize:11,fontWeight:700}}>Price Alert Review Queue</div>
+                                  <div style={{fontSize:10,color:"#64748b",textAlign:"right"}}>{priceAlertReviewQueue?.snapshotWeek ?? "weekly snapshot"}</div>
+                                </div>
+                                <div style={{display:"grid",gridTemplateColumns:"repeat(4,minmax(0,1fr))",gap:6,marginBottom:8}}>
+                                  <div style={{fontSize:10,color:"#64748b"}}>
+                                    Cases <strong style={{display:"block",fontSize:12,color:priceAlertReviewCases > 0 ? "#ea580c" : "#16a34a"}}>{formatDataManagementNumber(priceAlertReviewCases)}</strong>
+                                  </div>
+                                  <div style={{fontSize:10,color:"#64748b"}}>
+                                    High priority <strong style={{display:"block",fontSize:12,color:priceAlertHighPriority > 0 ? "#dc2626" : "#16a34a"}}>{formatDataManagementNumber(priceAlertHighPriority)}</strong>
+                                  </div>
+                                  <div style={{fontSize:10,color:"#64748b"}}>
+                                    Missing evidence <strong style={{display:"block",fontSize:12,color:priceAlertMissingEvidence > 0 ? "#ea580c" : "#16a34a"}}>{formatDataManagementNumber(priceAlertMissingEvidence)}</strong>
+                                  </div>
+                                  <div style={{fontSize:10,color:"#64748b"}}>
+                                    Sales follow-up <strong style={{display:"block",fontSize:12,color:priceAlertEffectivenessFollowUp > 0 ? "#2563eb" : "#64748b"}}>{formatDataManagementNumber(priceAlertEffectivenessFollowUp)}</strong>
+                                  </div>
+                                </div>
+                                <div style={{display:"grid",gap:5}}>
+                                  {priceAlertReviewItems.slice(0,4).map((item: HermesMsrpPriceAlertReviewQueueItem) => {
+                                    const evidenceComplete = item.officialEvidenceComplete === true;
+                                    const priorityColor = item.reviewPriority === "critical"
+                                      ? "#dc2626"
+                                      : item.reviewPriority === "high"
+                                        ? "#ea580c"
+                                        : "#64748b";
+                                    return (
+                                      <div key={item.caseId} style={{display:"grid",gridTemplateColumns:"44px minmax(0,1.2fr) 62px 74px minmax(0,1fr)",gap:8,fontSize:11,alignItems:"center"}}>
+                                        <strong>{String(item.country ?? "-").toUpperCase()}</strong>
+                                        <span style={{overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}} title={`${item.brand ?? "-"} ${item.jatoModel ?? ""}`}>{item.brand ?? "-"} · {item.jatoModel ?? "-"}</span>
+                                        <span style={{fontWeight:700,color:priorityColor,textAlign:"right"}}>{item.reviewPriority ?? "review"}</span>
+                                        <span style={{color:evidenceComplete ? "#16a34a" : "#ea580c",textAlign:"right"}}>{item.evidenceStatus ?? (evidenceComplete ? "complete" : "missing")}</span>
+                                        <span style={{color:"#64748b",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}} title={item.recommendedAction}>{item.recommendedAction ?? item.direction ?? "-"}</span>
+                                      </div>
+                                    );
+                                  })}
+                                </div>
+                              </div>
+                            )}
 
                             {(hermesMsrpHistory?.runs ?? []).length > 0 && (
                               <div style={{display:"flex",gap:6,overflowX:"auto",paddingBottom:2}}>

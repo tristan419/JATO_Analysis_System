@@ -460,6 +460,78 @@ export interface HermesMsrpSourceReferenceEvidence {
   };
   items: HermesMsrpSourceReferenceEvidenceItem[];
 }
+export interface HermesMsrpPriceAlertReviewQueueItem {
+  caseId: string;
+  queueType?: string;
+  reviewStatus?: string;
+  reviewPriority?: string;
+  reviewReasons?: string[];
+  alertId?: string;
+  priceEventId?: string;
+  country?: string;
+  brand?: string;
+  jatoModel?: string;
+  jatoTrim?: string;
+  jatoPowertrain?: string;
+  officialModel?: string | null;
+  officialTrim?: string | null;
+  officialPowertrain?: string | null;
+  eventType?: string;
+  direction?: string;
+  severity?: string;
+  changedAtUtc?: string | null;
+  recommendedAction?: string;
+  isThresholdAlert?: boolean;
+  isHighPriority?: boolean;
+  requiresHumanReview?: boolean;
+  requiresOfficialEvidence?: boolean;
+  requiresSalesEffectivenessFollowUp?: boolean;
+  officialEvidenceComplete?: boolean;
+  currentObservationId?: string | null;
+  previousObservationId?: string | null;
+  currentEvidenceId?: string | null;
+  previousEvidenceId?: string | null;
+  evidenceStatus?: string;
+  sourceType?: string;
+  sourceName?: string;
+  sourceUrl?: string | null;
+  sourceSnapshotPath?: string | null;
+  currentSourceMsrpValue?: number | null;
+  previousSourceMsrpValue?: number | null;
+  currentSourceCurrency?: string | null;
+  previousSourceCurrency?: string | null;
+  sourceCurrencyChanged?: boolean;
+  deltaSourceMsrpValue?: number | null;
+  deltaMsrpValue?: number | null;
+  deltaPct?: number | null;
+  evidence?: Record<string, unknown>;
+}
+export interface HermesMsrpPriceAlertReviewQueue {
+  schemaVersion: string;
+  generatedAt?: string | null;
+  sourceSnapshotSchemaVersion?: string | null;
+  snapshotWeek?: string | null;
+  snapshotGeneratedAtUtc?: string | null;
+  officialSourceRequiredForResolution?: boolean;
+  warnings?: string[];
+  summary: {
+    totalCases: number;
+    sourceAlertCount: number;
+    skippedAlertCount: number;
+    thresholdAlertCount: number;
+    highPriorityAlertCount: number;
+    missingEvidenceCount: number;
+    sourceCurrencyReviewCount: number;
+    effectivenessFollowUpCount: number;
+    priceDropCount: number;
+    priceIncreaseCount: number;
+    priorityCounts?: Record<string, number>;
+    severityCounts?: Record<string, number>;
+    countryCount: number;
+    countries: string[];
+  };
+  items: HermesMsrpPriceAlertReviewQueueItem[];
+}
 export interface HermesMsrpStableCoverage {
   gateThreshold?: number;
   countryCount?: number;
@@ -506,6 +578,10 @@ export interface HermesMsrpCountryProgressResponse {
     financeMonthlyPaymentCount?: number;
     financeSemanticsCounts?: Record<string, number>;
     financeTypeCounts?: Record<string, number>;
+    priceAlertReviewCases?: number;
+    priceAlertReviewHighPriority?: number;
+    priceAlertReviewMissingEvidence?: number;
+    priceAlertReviewEffectivenessFollowUp?: number;
   };
   countries: HermesMsrpCountryProgressCountry[];
   allCountriesLatest?: HermesMsrpCountryProgressCountry[];
@@ -514,6 +590,7 @@ export interface HermesMsrpCountryProgressResponse {
   topFailureReasons?: { reason: string; count: number }[];
   sourceRepairBacklog?: HermesMsrpSourceRepairBacklog;
   sourceReferenceEvidence?: HermesMsrpSourceReferenceEvidence;
+  priceAlertReviewQueue?: HermesMsrpPriceAlertReviewQueue;
   findings?: { type: string; severity: string; message: string }[];
 }
 
