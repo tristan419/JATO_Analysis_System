@@ -92,6 +92,8 @@ artifact_refs = [
     "03_Scripts/diagnostics/artifacts/msrp_source_reference_evidence.md",
     "03_Scripts/diagnostics/artifacts/msrp_source_review_queue.json",
     "03_Scripts/diagnostics/artifacts/msrp_source_review_queue.md",
+    "03_Scripts/diagnostics/artifacts/msrp_price_alert_review_queue.json",
+    "03_Scripts/diagnostics/artifacts/msrp_price_alert_review_queue.md",
     "03_Scripts/logs/scheduled_fetch_status.json",
     "hermes/reports/msrp_country_progress.json",
     "hermes/reports/msrp_country_progress.md",

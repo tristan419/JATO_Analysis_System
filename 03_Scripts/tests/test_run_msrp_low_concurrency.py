@@ -61,3 +61,18 @@ def test_dryrun_refreshes_source_governance_before_hermes_progress():
     hermes_pos = script.index("Hermes MSRP country progress refreshed")
 
     assert source_repair_pos < reference_pos < review_queue_pos < hermes_pos
+
+
+def test_current_snapshot_refreshes_price_alert_review_queue():
+    script = SCRIPT_PATH.read_text(encoding="utf-8")
+
+    assert "JATO_MSRP_REFRESH_PRICE_ALERT_REVIEW_QUEUE" in script
+    assert "msrp_price_alert_review_queue.py" in script
+    assert "msrp_current_price_snapshot.json" in script
+    assert "msrp_price_alert_review_queue.json" in script
+
+    snapshot_pos = script.index("Hermes MSRP current price snapshot refreshed")
+    queue_pos = script.index("MSRP price alert review queue refreshed")
+    readiness_pos = script.index("MSRP readiness audit refreshed")
+
+    assert snapshot_pos < queue_pos < readiness_pos

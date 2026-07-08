@@ -353,6 +353,10 @@ def test_pipeline_runs_ingest_when_dryrun_gate_is_allowed(tmp_path: Path) -> Non
         "03_Scripts/diagnostics/artifacts/msrp_source_review_queue.json"
         in status["artifactRefs"]
     )
+    assert (
+        "03_Scripts/diagnostics/artifacts/msrp_price_alert_review_queue.json"
+        in status["artifactRefs"]
+    )
     scheduled = json.loads(
         (
             tmp_path

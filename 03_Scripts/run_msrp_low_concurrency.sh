@@ -88,6 +88,7 @@ REFRESH_CURRENT_SNAPSHOT="${JATO_MSRP_REFRESH_CURRENT_SNAPSHOT:-true}"
 CURRENT_SNAPSHOT_LIMIT="${JATO_MSRP_CURRENT_SNAPSHOT_LIMIT:-500}"
 CURRENT_SNAPSHOT_THRESHOLD_PCT="${JATO_MSRP_PRICE_ALERT_THRESHOLD_PCT:-3}"
 CURRENT_SNAPSHOT_TIMEOUT_SECONDS="${JATO_MSRP_CURRENT_SNAPSHOT_TIMEOUT_SECONDS:-30}"
+REFRESH_PRICE_ALERT_REVIEW_QUEUE="${JATO_MSRP_REFRESH_PRICE_ALERT_REVIEW_QUEUE:-true}"
 REFRESH_READINESS_AUDIT="${JATO_MSRP_REFRESH_READINESS_AUDIT:-true}"
 READINESS_AUDIT_TIMEOUT_SECONDS="${JATO_MSRP_READINESS_AUDIT_TIMEOUT_SECONDS:-30}"
 COUNTRY_TIMEOUT_SECONDS="${JATO_MSRP_COUNTRY_TIMEOUT_SECONDS:-3600}"
@@ -518,6 +519,8 @@ status_record = {
         '03_Scripts/diagnostics/artifacts/msrp_source_reference_evidence.md',
         '03_Scripts/diagnostics/artifacts/msrp_source_review_queue.json',
         '03_Scripts/diagnostics/artifacts/msrp_source_review_queue.md',
+        '03_Scripts/diagnostics/artifacts/msrp_price_alert_review_queue.json',
+        '03_Scripts/diagnostics/artifacts/msrp_price_alert_review_queue.md',
         'hermes/reports/msrp_country_progress.json',
         'hermes/reports/msrp_country_progress.md',
     ],
@@ -548,6 +551,23 @@ if is_truthy "$REFRESH_CURRENT_SNAPSHOT" && [[ -f "$CURRENT_SNAPSHOT_SCRIPT" ]];
     echo "[INFO] Hermes MSRP current price snapshot refreshed"
   else
     echo "[WARN] Hermes MSRP current price snapshot refresh failed (non-fatal)"
+  fi
+fi
+
+PRICE_ALERT_REVIEW_QUEUE_SCRIPT="$SCRIPT_DIR/msrp_price_alert_review_queue.py"
+CURRENT_SNAPSHOT_ARTIFACT="$REPO_DIR/hermes/reports/msrp_current_price_snapshot.json"
+if is_truthy "$REFRESH_PRICE_ALERT_REVIEW_QUEUE" && [[ -f "$PRICE_ALERT_REVIEW_QUEUE_SCRIPT" ]]; then
+  if [[ -f "$CURRENT_SNAPSHOT_ARTIFACT" ]]; then
+    echo "[INFO] Refreshing MSRP price alert review queue..."
+    if "$PYTHON_BIN" "$PRICE_ALERT_REVIEW_QUEUE_SCRIPT" \
+      --snapshot "$CURRENT_SNAPSHOT_ARTIFACT" \
+      --out-dir "$MSRP_ARTIFACT_DIR" 2>&1; then
+      echo "[INFO] MSRP price alert review queue refreshed"
+    else
+      echo "[WARN] MSRP price alert review queue refresh failed (non-fatal)"
+    fi
+  else
+    echo "[WARN] MSRP price alert review queue skipped; current snapshot artifact missing"
   fi
 fi
 
