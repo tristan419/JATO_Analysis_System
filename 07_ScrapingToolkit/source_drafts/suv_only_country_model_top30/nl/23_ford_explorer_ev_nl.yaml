@@ -1,97 +1,72 @@
 source_code: ford_explorer_ev_nl_draft_scrapling
 country: 荷兰
 brand: FORD
-source_url: https://todo.invalid/nl/ford/explorer_ev
-source_type: manufacturer_official
+source_url: https://www.ford.nl/content/dam/guxeu/nl/documents/pricelists/cars/PL-electric-ford-explorer.pdf
+source_type: official_price_list
 price_semantics: base_msrp
-extractor_type: scrapling
+extractor_type: pdf_text
 profile:
-  url: https://todo.invalid/nl/ford/explorer_ev
-  tier: stealth
-  headless: true
-  network_idle: true
-  impersonate: chrome
-  css:
-    vehicle_container: body
-    model: h1, h2
-    trim: h3
-    price: '[class*="price"]'
+  url: https://www.ford.nl/content/dam/guxeu/nl/documents/pricelists/cars/PL-electric-ford-explorer.pdf
+  timeout_seconds: 90
+  retry_attempts: 1
+  retry_delay_seconds: 1
+  prefer_curl_download: true
+  browser_download_fallback: true
   default_currency: EUR
   default_tax_included: true
-  default_price_label: MSRP
+  default_price_label: Consumentenprijs incl. kosten rijklaar, BTW en BPM
   fixed_model: EXPLORER EV
   fixed_jato_model: EXPLORER EV
-  fixed_jato_powertrain: null
-  model_rules: []
-  skip_if_model_unmapped: false
+  fixed_jato_powertrain: BEV
   copy_trim_to_jato_trim: true
-  confidence_rules:
-    base: 0.2
-    fixed_model_bonus: 0.18
-    fixed_jato_model_bonus: 0.12
-    model_rule_bonus: 0.12
-    trim_present_bonus: 0.1
-    copy_trim_to_jato_trim_bonus: 0.09
-    parsed_price_text_bonus: 0.03
-    currency_bonus: 0.01
-    price_label_bonus: 0.02
-    trim_keyword_bonuses: []
-    price_band_bonuses:
-    - key: price_band_entry
-      label: Entry price band matched
-      max: 0
-      delta: 0.0
-    - key: price_band_mid
-      label: Mid price band matched
-      min: 0
-      max: 0
-      delta: 0.01
-    - key: price_band_high
-      label: High price band matched
-      min: 0
-      delta: 0.03
-    powertrain_keyword_bonuses: []
-    powertrain_bonuses:
-    - key: powertrain_bev
-      label: 'Powertrain matched: BEV'
-      powertrain: BEV
-      delta: 0.03
-    clamp_min: 0.0
-    clamp_max: 1.0
-  structured_fields:
-    edition_rules:
-    - key: edition_special
-      label: Special Edition
-      keyword: special edition
-      special: true
-    powertrain_rules:
-    - key: powertrain_bev
-      powertrain: BEV
-      keywords:
-      - bev
-      - ev
-      - electric
-      - battery electric
-      - fully electric
-      - electric vehicle
-      - elektrisch
-      - volledig elektrisch
-  auto_accept_gates:
-    review_threshold: 0.95
-    semi_auto_threshold: 0.98
-    require_powertrain_match: true
-    force_review_if_powertrain_missing: true
-    force_review_if_powertrain_ambiguous: true
-    force_review_for_special_edition: true
+  match_confidence: 0.9
+  match_status: review_required
+  match_reason:
+    kind: official_pdf_price_list
+    source: ford_nl_explorer_ev_prijslijst
+    note: Official Ford Netherlands electric Explorer price-list PDF, MY2027.25. Regex captures the Prijzen vehicle Consumentenprijs column on page 10, not fiscal value, net catalog price, options, service plan, finance, private lease, or promotion prices.
+  entry_patterns:
+  - pattern: 'Style\s+Standard\s+Range\s+RWD\s+58\s+kWh\s+444\s+km\s+140\s*\(190\)\s+A\s+€\s*(?P<price>\d{2}\.\d{3})'
+    official_trim: Style
+    official_powertrain: Standard Range RWD 58 kWh 140 kW / 190 pk
+    jato_powertrain: BEV
+  - pattern: 'Select\s+Extended\s+Range\s+RWD\s+79\s+kWh\s+602\s+km\s+210\s*\(286\)\s+A\s+€\s*(?P<price>\d{2}\.\d{3})'
+    official_trim: Select
+    official_powertrain: Extended Range RWD 79 kWh 210 kW / 286 pk
+    jato_powertrain: BEV
+  - pattern: 'Select\s+Extended\s+Range\s+RWD\s+79\s+kWh\s+602\s+km\s+210\s*\(286\)\s+A\s+€\s*\d{2}\.\d{3}.*?Extended\s+Range\s+AWD\s+77\s+kWh\s+553\s+km\s+250\s*\(340\)\s+A\s+€\s*(?P<price>\d{2}\.\d{3})'
+    official_trim: Select
+    official_powertrain: Extended Range AWD 77 kWh 250 kW / 340 pk
+    jato_powertrain: BEV
+  - pattern: 'Premium\s+Standard\s+Range\s+RWD\s+58\s+kWh\s+417\s+km\s+140\s*\(190\)\s+A\s+€\s*(?P<price>\d{2}\.\d{3})'
+    official_trim: Premium
+    official_powertrain: Standard Range RWD 58 kWh 140 kW / 190 pk
+    jato_powertrain: BEV
+  - pattern: 'Premium\s+Standard\s+Range\s+RWD\s+58\s+kWh\s+417\s+km\s+140\s*\(190\)\s+A\s+€\s*\d{2}\.\d{3}.*?Extended\s+Range\s+RWD\s+79\s+kWh\s+572\s+km\s+210\s*\(286\)\s+A\s+€\s*(?P<price>\d{2}\.\d{3})'
+    official_trim: Premium
+    official_powertrain: Extended Range RWD 79 kWh 210 kW / 286 pk
+    jato_powertrain: BEV
+  - pattern: 'Premium\s+Standard\s+Range\s+RWD\s+58\s+kWh\s+417\s+km\s+140\s*\(190\)\s+A\s+€\s*\d{2}\.\d{3}.*?Extended\s+Range\s+RWD\s+79\s+kWh\s+572\s+km\s+210\s*\(286\)\s+A\s+€\s*\d{2}\.\d{3}.*?Extended\s+Range\s+AWD\s+77\s+kWh\s+519\s+km\s+250\s*\(340\)\s+A\s+€\s*(?P<price>\d{2}\.\d{3})'
+    official_trim: Premium
+    official_powertrain: Extended Range AWD 77 kWh 250 kW / 340 pk
+    jato_powertrain: BEV
+  - pattern: 'Collection\s+Extended\s+Range\s+RWD\s+79\s+kWh\s+579\s+km\s+210\s*\(286\)\s+A\s+€\s*(?P<price>\d{2}\.\d{3})'
+    official_trim: Collection
+    official_powertrain: Extended Range RWD 79 kWh 210 kW / 286 pk
+    jato_powertrain: BEV
+  - pattern: 'Collection\s+Extended\s+Range\s+RWD\s+79\s+kWh\s+579\s+km\s+210\s*\(286\)\s+A\s+€\s*\d{2}\.\d{3}.*?Extended\s+Range\s+AWD\s+77\s+kWh\s+526\s+km\s+250\s*\(340\)\s+A\s+€\s*(?P<price>\d{2}\.\d{3})'
+    official_trim: Collection
+    official_powertrain: Extended Range AWD 77 kWh 250 kW / 340 pk
+    jato_powertrain: BEV
 schedule:
   frequency: manual_only
   run_window_start: 00:00
   run_window_end: 05:00
   preferred_weekday: monday
-notes: Draft scaffold generated from country×model top30 backlog. Replace source_url,
-  profile.url, selectors, currency, price label, and the single-model placeholders
-  before promoting to 07_ScrapingToolkit/sources. [CSS selectors applied from brand
-  probe]
+notes: Replaced todo placeholder with Ford Netherlands' official electric
+  Explorer MY2027.25 price-list PDF linked from the Ford Explorer pricelist
+  page. The PDF metadata is 2026-07-02 and page 10 is titled Prijzen. Patterns
+  target only the vehicle Consumentenprijs column.
 bootstrap_meta:
   country_model_rank: 23
   suggested_scope_kind: single_model
