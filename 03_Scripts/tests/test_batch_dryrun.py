@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import importlib.util
+import json
 import logging
 from pathlib import Path
 import sys
@@ -445,6 +446,123 @@ def test_write_source_repair_backlog_artifact_reuses_aggregate_writer(
 
     assert calls == [(report, tmp_path)]
     assert (tmp_path / "msrp_source_repair_backlog.json").is_file()
+
+
+def test_write_dryrun_report_artifacts_preserves_latest_for_source_filter(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    calls = []
+
+    def fake_writer(report: dict, report_dir: Path) -> None:
+        calls.append((report, report_dir))
+
+    monkeypatch.setattr(batch_dryrun, "_write_v3_source_repair_backlog", fake_writer)
+    latest_report = {
+        "schemaVersion": "msrp_dryrun_report_v3",
+        "runId": "msrp-dryrun-stable",
+        "summary": {"passPct": 96.8},
+    }
+    (tmp_path / "dryrun_report.json").write_text(
+        json.dumps(latest_report),
+        encoding="utf-8",
+    )
+    (tmp_path / "dryrun_runs_index.json").write_text(
+        json.dumps({
+            "schemaVersion": "msrp_dryrun_runs_index_v1",
+            "latestRunId": "msrp-dryrun-stable",
+            "runs": [{
+                "runId": "msrp-dryrun-stable",
+                "artifactPath": "03_Scripts/diagnostics/artifacts/dryrun_report_msrp-dryrun-stable.json",
+            }],
+        }),
+        encoding="utf-8",
+    )
+    diagnostic_report = {
+        "schemaVersion": "msrp_dryrun_report_v3",
+        "runId": "msrp-dryrun-source-diagnostic",
+        "batch": "at",
+        "isSourceFiltered": True,
+        "sourceFilter": ["mazda_cx_30_at_draft_scrapling"],
+        "expectedCountries": ["at"],
+        "observedCountries": ["at"],
+        "missingCountries": [],
+        "summary": {
+            "status": "success",
+            "gateStatus": "allowed",
+            "gateThreshold": 70,
+            "passPct": 100.0,
+            "total": 1,
+            "pass": 1,
+            "empty": 0,
+            "fail": 0,
+            "errors": 0,
+        },
+    }
+
+    latest_path, history_path = batch_dryrun._write_dryrun_report_artifacts(
+        diagnostic_report,
+        tmp_path,
+        update_latest=False,
+    )
+
+    assert latest_path == tmp_path / "dryrun_report.json"
+    assert history_path.is_file()
+    assert json.loads(latest_path.read_text()) == latest_report
+    index = json.loads((tmp_path / "dryrun_runs_index.json").read_text())
+    assert index["latestRunId"] == "msrp-dryrun-stable"
+    assert index["runs"][0]["runId"] == "msrp-dryrun-source-diagnostic"
+    assert index["runs"][0]["updatesLatestArtifact"] is False
+    assert index["runs"][0]["isSourceFiltered"] is True
+    assert index["runs"][0]["sourceFilter"] == ["mazda_cx_30_at_draft_scrapling"]
+    assert calls == []
+
+
+def test_write_dryrun_report_artifacts_updates_latest_for_full_run(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    calls = []
+
+    def fake_writer(report: dict, report_dir: Path) -> None:
+        calls.append((report, report_dir))
+
+    monkeypatch.setattr(batch_dryrun, "_write_v3_source_repair_backlog", fake_writer)
+    report = {
+        "schemaVersion": "msrp_dryrun_report_v3",
+        "runId": "msrp-dryrun-full",
+        "batch": "at",
+        "isSourceFiltered": False,
+        "sourceFilter": [],
+        "expectedCountries": ["at"],
+        "observedCountries": ["at"],
+        "missingCountries": [],
+        "summary": {
+            "status": "success",
+            "gateStatus": "allowed",
+            "gateThreshold": 70,
+            "passPct": 96.8,
+            "total": 31,
+            "pass": 30,
+            "empty": 1,
+            "fail": 0,
+            "errors": 0,
+        },
+    }
+
+    latest_path, history_path = batch_dryrun._write_dryrun_report_artifacts(
+        report,
+        tmp_path,
+        update_latest=True,
+    )
+
+    assert json.loads(latest_path.read_text())["runId"] == "msrp-dryrun-full"
+    assert json.loads(history_path.read_text())["runId"] == "msrp-dryrun-full"
+    index = json.loads((tmp_path / "dryrun_runs_index.json").read_text())
+    assert index["latestRunId"] == "msrp-dryrun-full"
+    assert index["runs"][0]["updatesLatestArtifact"] is True
+    assert index["runs"][0]["isSourceFiltered"] is False
+    assert calls == [(report, tmp_path)]
 
 
 def test_write_dryrun_status_best_effort_does_not_block_report_generation(

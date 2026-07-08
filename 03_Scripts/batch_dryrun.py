@@ -659,6 +659,7 @@ def _build_dryrun_report_payload(
     results: list[dict],
     run_id: str,
     generated_at: str,
+    source_filter: list[str] | None = None,
 ) -> dict:
     normalized_countries = [
         country.strip().lower()
@@ -716,10 +717,18 @@ def _build_dryrun_report_payload(
             continue
         countries_detail.append(_country_detail_from_results(country, country_results))
 
+    filtered_sources = [
+        str(code).strip()
+        for code in (source_filter or [])
+        if str(code).strip()
+    ]
+
     return {
         "schemaVersion": "msrp_dryrun_report_v3",
         "runId": run_id,
         "batch": batch,
+        "isSourceFiltered": bool(filtered_sources),
+        "sourceFilter": filtered_sources,
         "countries": expected_countries,
         "expectedCountries": expected_countries,
         "observedCountries": observed_countries,
@@ -754,13 +763,19 @@ def _relative_to_repo(path: Path) -> str:
         return str(path)
 
 
-def _write_dryrun_runs_index(report: dict, latest_path: Path, history_path: Path) -> None:
+def _write_dryrun_runs_index(
+    report: dict,
+    latest_path: Path,
+    history_path: Path,
+    *,
+    update_latest: bool = True,
+) -> None:
     index_path = latest_path.parent / "dryrun_runs_index.json"
     now = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
     index_data: dict = {
         "schemaVersion": "msrp_dryrun_runs_index_v1",
         "updatedAt": now,
-        "latestRunId": report.get("runId"),
+        "latestRunId": None,
         "runs": [],
     }
     if index_path.is_file():
@@ -778,6 +793,9 @@ def _write_dryrun_runs_index(report: dict, latest_path: Path, history_path: Path
         "startedAt": report.get("generatedAt"),
         "finishedAt": now,
         "status": summary.get("status", "unknown"),
+        "updatesLatestArtifact": bool(update_latest),
+        "isSourceFiltered": bool(report.get("isSourceFiltered")),
+        "sourceFilter": report.get("sourceFilter") or [],
         "gateStatus": summary.get("gateStatus"),
         "gateThreshold": summary.get("gateThreshold"),
         "passPct": summary.get("passPct", 0.0),
@@ -807,10 +825,44 @@ def _write_dryrun_runs_index(report: dict, latest_path: Path, history_path: Path
     index_data.update({
         "schemaVersion": "msrp_dryrun_runs_index_v1",
         "updatedAt": now,
-        "latestRunId": run_id,
+        "latestRunId": run_id if update_latest else index_data.get("latestRunId"),
         "runs": existing_runs[:100],
     })
     index_path.write_text(json.dumps(index_data, indent=2, ensure_ascii=False) + "\n")
+
+
+def _write_dryrun_report_artifacts(
+    report: dict,
+    report_dir: Path,
+    *,
+    update_latest: bool = True,
+) -> tuple[Path, Path]:
+    report_dir.mkdir(parents=True, exist_ok=True)
+    run_id = report.get("runId")
+    history_path = report_dir / f"dryrun_report_{run_id}.json"
+    latest_path = report_dir / "dryrun_report.json"
+
+    history_path.write_text(
+        json.dumps(report, indent=2, ensure_ascii=False),
+        encoding="utf-8",
+    )
+
+    if update_latest:
+        latest_path.write_text(
+            json.dumps(report, indent=2, ensure_ascii=False),
+            encoding="utf-8",
+        )
+
+    _write_dryrun_runs_index(
+        report,
+        latest_path,
+        history_path,
+        update_latest=update_latest,
+    )
+    if update_latest:
+        _write_source_repair_backlog_artifact(report, report_dir)
+
+    return latest_path, history_path
 
 
 def _write_source_repair_backlog_artifact(report: dict, report_dir: Path) -> None:
@@ -1285,22 +1337,22 @@ def main():
         results=results,
         run_id=run_id,
         generated_at=generated_at,
+        source_filter=requested_source_codes,
+    )
+    update_latest = not bool(requested_source_codes)
+    latest_path, history_path = _write_dryrun_report_artifacts(
+        report_payload,
+        report_dir,
+        update_latest=update_latest,
     )
 
-    # Timestamped copy for history
-    history_path = report_dir / f"dryrun_report_{run_id}.json"
-    with open(history_path, "w") as f:
-        json.dump(report_payload, f, indent=2, ensure_ascii=False)
-
-    # Also overwrite latest for backward compat
-    latest_path = report_dir / "dryrun_report.json"
-    with open(latest_path, "w") as f:
-        json.dump(report_payload, f, indent=2, ensure_ascii=False)
-
-    _write_dryrun_runs_index(report_payload, latest_path, history_path)
-    _write_source_repair_backlog_artifact(report_payload, report_dir)
-
-    print(f"\nReport saved to {latest_path} (history: {history_path.name})")
+    if update_latest:
+        print(f"\nReport saved to {latest_path} (history: {history_path.name})")
+    else:
+        print(
+            f"\nDiagnostic report saved to {history_path} "
+            f"(latest preserved: {latest_path})"
+        )
 
     if STRICT_EXIT and (fail_count > 0 or error_count > 0):
         raise SystemExit(1)
