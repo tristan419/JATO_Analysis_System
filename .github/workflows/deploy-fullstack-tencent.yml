@@ -414,6 +414,15 @@ jobs:
           DEPLOY_ENABLE_HTTPS: ${{ vars.DEPLOY_ENABLE_HTTPS }}
           DEPLOY_CERTBOT_EMAIL: ${{ secrets.DEPLOY_CERTBOT_EMAIL }}
           VITE_ASSET_BASE_URL: ${{ vars.VITE_ASSET_BASE_URL }}
+          DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
+          HERMES_SYNC_TOKEN: ${{ secrets.HERMES_SYNC_TOKEN }}
+          GOOGLE_CLIENT_ID: ${{ secrets.GOOGLE_CLIENT_ID }}
+          GOOGLE_CLIENT_SECRET: ${{ secrets.GOOGLE_CLIENT_SECRET }}
+          GOOGLE_OAUTH_PROXY_URL: ${{ secrets.GOOGLE_OAUTH_PROXY_URL }}
+          GOOGLE_OAUTH_RELAY_URL: ${{ secrets.GOOGLE_OAUTH_RELAY_URL }}
+          GOOGLE_OAUTH_RELAY_TOKEN: ${{ secrets.GOOGLE_OAUTH_RELAY_TOKEN }}
+          MIHOMO_SUB_URL: ${{ secrets.MIHOMO_SUB_URL }}
+          MIHOMO_DB_PATH: ${{ vars.MIHOMO_DB_PATH }}
         run: |
           set -euo pipefail
           if [ -z "${SSH_PORT:-}" ]; then
@@ -443,15 +452,15 @@ jobs:
           REMOTE_EXPORTS+="export DEPLOY_ARCHIVE_PATH=$(printf '%q' "${DEPLOY_ARCHIVE_PATH:-}"); "
           REMOTE_EXPORTS+="export DEPLOY_REPOSITORY=$(printf '%q' "${GITHUB_REPOSITORY:-}"); "
           REMOTE_EXPORTS+="export DEPLOY_WORKFLOW=$(printf '%q' "${GITHUB_WORKFLOW:-}"); "
-          REMOTE_EXPORTS+="export DEEPSEEK_API_KEY=$(printf '%q' '${{ secrets.DEEPSEEK_API_KEY }}'); "
-          REMOTE_EXPORTS+="export HERMES_SYNC_TOKEN=$(printf '%q' '${{ secrets.HERMES_SYNC_TOKEN }}'); "
-          REMOTE_EXPORTS+="export GOOGLE_CLIENT_ID=$(printf '%q' '${{ secrets.GOOGLE_CLIENT_ID }}'); "
-          REMOTE_EXPORTS+="export GOOGLE_CLIENT_SECRET=$(printf '%q' '${{ secrets.GOOGLE_CLIENT_SECRET }}'); "
-          REMOTE_EXPORTS+="export GOOGLE_OAUTH_PROXY_URL=$(printf '%q' '${{ secrets.GOOGLE_OAUTH_PROXY_URL }}'); "
-          REMOTE_EXPORTS+="export GOOGLE_OAUTH_RELAY_URL=$(printf '%q' '${{ secrets.GOOGLE_OAUTH_RELAY_URL }}'); "
-          REMOTE_EXPORTS+="export GOOGLE_OAUTH_RELAY_TOKEN=$(printf '%q' '${{ secrets.GOOGLE_OAUTH_RELAY_TOKEN }}'); "
-          REMOTE_EXPORTS+="export MIHOMO_SUB_URL=$(printf '%q' '${{ secrets.MIHOMO_SUB_URL }}'); "
-          REMOTE_EXPORTS+="export MIHOMO_DB_PATH=$(printf '%q' '${{ vars.MIHOMO_DB_PATH }}'); "
+          REMOTE_EXPORTS+="export DEEPSEEK_API_KEY=$(printf '%q' "${DEEPSEEK_API_KEY:-}"); "
+          REMOTE_EXPORTS+="export HERMES_SYNC_TOKEN=$(printf '%q' "${HERMES_SYNC_TOKEN:-}"); "
+          REMOTE_EXPORTS+="export GOOGLE_CLIENT_ID=$(printf '%q' "${GOOGLE_CLIENT_ID:-}"); "
+          REMOTE_EXPORTS+="export GOOGLE_CLIENT_SECRET=$(printf '%q' "${GOOGLE_CLIENT_SECRET:-}"); "
+          REMOTE_EXPORTS+="export GOOGLE_OAUTH_PROXY_URL=$(printf '%q' "${GOOGLE_OAUTH_PROXY_URL:-}"); "
+          REMOTE_EXPORTS+="export GOOGLE_OAUTH_RELAY_URL=$(printf '%q' "${GOOGLE_OAUTH_RELAY_URL:-}"); "
+          REMOTE_EXPORTS+="export GOOGLE_OAUTH_RELAY_TOKEN=$(printf '%q' "${GOOGLE_OAUTH_RELAY_TOKEN:-}"); "
+          REMOTE_EXPORTS+="export MIHOMO_SUB_URL=$(printf '%q' "${MIHOMO_SUB_URL:-}"); "
+          REMOTE_EXPORTS+="export MIHOMO_DB_PATH=$(printf '%q' "${MIHOMO_DB_PATH:-}"); "
 
           timeout 1800s ssh -v -p "$SSH_PORT" \
             -o BatchMode=yes \
@@ -475,6 +484,15 @@ jobs:
           DEPLOY_ENABLE_HTTPS: ${{ vars.DEPLOY_ENABLE_HTTPS }}
           DEPLOY_CERTBOT_EMAIL: ${{ secrets.DEPLOY_CERTBOT_EMAIL }}
           VITE_ASSET_BASE_URL: ${{ vars.VITE_ASSET_BASE_URL }}
+          DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
+          HERMES_SYNC_TOKEN: ${{ secrets.HERMES_SYNC_TOKEN }}
+          GOOGLE_CLIENT_ID: ${{ secrets.GOOGLE_CLIENT_ID }}
+          GOOGLE_CLIENT_SECRET: ${{ secrets.GOOGLE_CLIENT_SECRET }}
+          GOOGLE_OAUTH_PROXY_URL: ${{ secrets.GOOGLE_OAUTH_PROXY_URL }}
+          GOOGLE_OAUTH_RELAY_URL: ${{ secrets.GOOGLE_OAUTH_RELAY_URL }}
+          GOOGLE_OAUTH_RELAY_TOKEN: ${{ secrets.GOOGLE_OAUTH_RELAY_TOKEN }}
+          MIHOMO_SUB_URL: ${{ secrets.MIHOMO_SUB_URL }}
+          MIHOMO_DB_PATH: ${{ vars.MIHOMO_DB_PATH }}
         run: |
           set -euo pipefail
           if [ -z "${SSH_PORT:-}" ]; then
@@ -503,15 +521,15 @@ jobs:
           REMOTE_EXPORTS+="export DEPLOY_ARCHIVE_PATH=$(printf '%q' "${DEPLOY_ARCHIVE_PATH:-}"); "
           REMOTE_EXPORTS+="export DEPLOY_REPOSITORY=$(printf '%q' "${GITHUB_REPOSITORY:-}"); "
           REMOTE_EXPORTS+="export DEPLOY_WORKFLOW=$(printf '%q' "${GITHUB_WORKFLOW:-}"); "
-          REMOTE_EXPORTS+="export DEEPSEEK_API_KEY=$(printf '%q' '${{ secrets.DEEPSEEK_API_KEY }}'); "
-          REMOTE_EXPORTS+="export HERMES_SYNC_TOKEN=$(printf '%q' '${{ secrets.HERMES_SYNC_TOKEN }}'); "
-          REMOTE_EXPORTS+="export GOOGLE_CLIENT_ID=$(printf '%q' '${{ secrets.GOOGLE_CLIENT_ID }}'); "
-          REMOTE_EXPORTS+="export GOOGLE_CLIENT_SECRET=$(printf '%q' '${{ secrets.GOOGLE_CLIENT_SECRET }}'); "
-          REMOTE_EXPORTS+="export GOOGLE_OAUTH_PROXY_URL=$(printf '%q' '${{ secrets.GOOGLE_OAUTH_PROXY_URL }}'); "
-          REMOTE_EXPORTS+="export GOOGLE_OAUTH_RELAY_URL=$(printf '%q' '${{ secrets.GOOGLE_OAUTH_RELAY_URL }}'); "
-          REMOTE_EXPORTS+="export GOOGLE_OAUTH_RELAY_TOKEN=$(printf '%q' '${{ secrets.GOOGLE_OAUTH_RELAY_TOKEN }}'); "
-          REMOTE_EXPORTS+="export MIHOMO_SUB_URL=$(printf '%q' '${{ secrets.MIHOMO_SUB_URL }}'); "
-          REMOTE_EXPORTS+="export MIHOMO_DB_PATH=$(printf '%q' '${{ vars.MIHOMO_DB_PATH }}'); "
+          REMOTE_EXPORTS+="export DEEPSEEK_API_KEY=$(printf '%q' "${DEEPSEEK_API_KEY:-}"); "
+          REMOTE_EXPORTS+="export HERMES_SYNC_TOKEN=$(printf '%q' "${HERMES_SYNC_TOKEN:-}"); "
+          REMOTE_EXPORTS+="export GOOGLE_CLIENT_ID=$(printf '%q' "${GOOGLE_CLIENT_ID:-}"); "
+          REMOTE_EXPORTS+="export GOOGLE_CLIENT_SECRET=$(printf '%q' "${GOOGLE_CLIENT_SECRET:-}"); "
+          REMOTE_EXPORTS+="export GOOGLE_OAUTH_PROXY_URL=$(printf '%q' "${GOOGLE_OAUTH_PROXY_URL:-}"); "
+          REMOTE_EXPORTS+="export GOOGLE_OAUTH_RELAY_URL=$(printf '%q' "${GOOGLE_OAUTH_RELAY_URL:-}"); "
+          REMOTE_EXPORTS+="export GOOGLE_OAUTH_RELAY_TOKEN=$(printf '%q' "${GOOGLE_OAUTH_RELAY_TOKEN:-}"); "
+          REMOTE_EXPORTS+="export MIHOMO_SUB_URL=$(printf '%q' "${MIHOMO_SUB_URL:-}"); "
+          REMOTE_EXPORTS+="export MIHOMO_DB_PATH=$(printf '%q' "${MIHOMO_DB_PATH:-}"); "
 
           sshpass -p "$SSH_PASSWORD" \
             timeout 1800s ssh -v -p "$SSH_PORT" \
