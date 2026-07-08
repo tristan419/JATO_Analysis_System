@@ -1,93 +1,42 @@
 source_code: audi_q4_e_tron_ch_draft_scrapling
 country: 瑞士
 brand: AUDI
-source_url: https://www.audi.ch/de/modelle/q4-e-tron.html
-source_type: manufacturer_official
+source_url: https://media.audi.com/is/content/audi/country/ch/assets/preislisten/mj26/Audi_Q4_e-tron_inkl_Sportback_Preisliste_MJ26_12.05.25_DE.pdf
+source_type: official_price_list
 price_semantics: base_msrp
-extractor_type: scrapling
+extractor_type: pdf_text
 profile:
-  url: https://www.audi.ch/de/modelle/q4-e-tron.html
-  tier: stealth
-  headless: true
-  network_idle: true
-  impersonate: chrome
+  url: https://media.audi.com/is/content/audi/country/ch/assets/preislisten/mj26/Audi_Q4_e-tron_inkl_Sportback_Preisliste_MJ26_12.05.25_DE.pdf
+  timeout_seconds: 60
+  retry_attempts: 1
+  retry_delay_seconds: 1
+  prefer_curl_download: true
+  browser_download_fallback: true
   default_currency: CHF
   default_tax_included: true
-  default_price_label: Unverbindliche Preisempfehlung inkl. MwSt
+  default_price_label: Unverbindliche Preisempfehlung inkl. 8.1% MwSt.
   fixed_model: Q4 E-TRON
   fixed_jato_model: Q4 E-TRON
-  fixed_jato_powertrain: null
-  model_rules: []
-  skip_if_model_unmapped: false
   copy_trim_to_jato_trim: true
-  confidence_rules:
-    base: 0.2
-    fixed_model_bonus: 0.18
-    fixed_jato_model_bonus: 0.12
-    model_rule_bonus: 0.12
-    trim_present_bonus: 0.1
-    copy_trim_to_jato_trim_bonus: 0.09
-    parsed_price_text_bonus: 0.03
-    currency_bonus: 0.01
-    price_label_bonus: 0.02
-    trim_keyword_bonuses: []
-    price_band_bonuses:
-    - key: price_band_entry
-      label: Entry price band matched
-      max: 0
-      delta: 0.0
-    - key: price_band_mid
-      label: Mid price band matched
-      min: 0
-      max: 0
-      delta: 0.01
-    - key: price_band_high
-      label: High price band matched
-      min: 0
-      delta: 0.03
-    powertrain_keyword_bonuses: []
-    powertrain_bonuses:
-    - key: powertrain_bev
-      label: 'Powertrain matched: BEV'
-      powertrain: BEV
-      delta: 0.03
-    clamp_min: 0.0
-    clamp_max: 1.0
-  structured_fields:
-    edition_rules:
-    - key: edition_special
-      label: Special Edition
-      keyword: special edition
-      special: true
-    powertrain_rules:
-    - key: powertrain_bev
-      powertrain: BEV
-      keywords:
-      - Elektro
-      - vollelektrisch
-      - e-tron
-      - elektrisch
-  auto_accept_gates:
-    review_threshold: 0.95
-    semi_auto_threshold: 0.98
-    require_powertrain_match: true
-    force_review_if_powertrain_missing: true
-    force_review_if_powertrain_ambiguous: true
-    force_review_for_special_edition: true
-  json_script_selector: script[type='application/ld+json']
-  css:
-    vehicle_container: body
-    model: h2
-    trim: h3
-    price: '[class*="price"]'
+  match_confidence: 0.9
+  match_status: review_required
+  match_reason:
+    kind: official_pdf_price_list
+    source: audi_ch_q4_etron_preisliste
+    note: Official Audi Switzerland Q4 e-tron price-list PDF, valid from 2025-05-12.
+  entry_patterns:
+  - pattern: 'Audi Q4 e-tron\s+Modell\s+Batterie.*?45\s+Heck\s+Lithium-Ionen-Batterie\s+82.*?210\s+545\s+(?P<price>56\s*900)\s+F4BA53'
+    official_trim: 45 Heck
+    official_powertrain: 45 Heck Lithium-Ionen-Batterie 82 kWh
+    jato_powertrain: BEV
 schedule:
   frequency: manual_only
   run_window_start: 00:00
   run_window_end: 05:00
   preferred_weekday: monday
-notes: Keywords filled from official manufacturer website research (CH market). CSS
-  selectors still require browser-based inspection before promotion. [CSS selectors
-  applied from brand probe]
+notes: Replaced the locally blocked Audi model page with the official Audi
+  Switzerland Q4 e-tron price-list PDF. The regex targets the entry Q4 e-tron
+  45 Heck row in the official CHF list.
 bootstrap_meta:
   country_model_rank: 23
   suggested_scope_kind: single_model
