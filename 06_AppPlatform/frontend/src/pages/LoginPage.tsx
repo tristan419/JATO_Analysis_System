@@ -1,7 +1,7 @@
 import { useState, type FormEvent } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
-import { apiUrl } from "../api/core";
 import { useAuth } from "../contexts/AuthContext";
+import { fetchAuthEndpoint } from "../utils/authFallback";
 
 export function LoginPage() {
   const { login } = useAuth();
@@ -35,9 +35,7 @@ export function LoginPage() {
         redirect,
         frontend_origin: window.location.origin,
       });
-      const res = await fetch(
-        apiUrl(`/auth/${provider}/auth-url?${params.toString()}`),
-      );
+      const res = await fetchAuthEndpoint(`/auth/${provider}/auth-url?${params.toString()}`);
       if (!res.ok) {
         const detail = await res.json().catch(() => null) as { detail?: string } | null;
         throw new Error(detail?.detail || "Not available");

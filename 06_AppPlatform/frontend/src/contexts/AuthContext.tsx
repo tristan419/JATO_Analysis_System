@@ -9,6 +9,7 @@ import {
 } from "react";
 
 import { apiUrl } from "../api/core";
+import { fetchAuthEndpoint } from "../utils/authFallback";
 
 const AUTH_PROFILE_REFRESH_DELAY_MS = 30_000;
 const AUTH_PROFILE_REFRESH_IDLE_TIMEOUT_MS = 8_000;
@@ -181,7 +182,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       setProfileLoaded(true);
       return;
     }
-    const res = await fetch(apiUrl("/auth/me"), {
+    const res = await fetchAuthEndpoint("/auth/me", {
       headers: {
         "X-Auth-Token": currentToken,
         "X-User-Name": localStorage.getItem(STORAGE_USER) || import.meta.env.VITE_USER_NAME || "anonymous",
@@ -244,7 +245,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, [refreshUser, token]);
 
   const login = useCallback(async (username: string, password: string) => {
-    const res = await fetch(apiUrl("/auth/login"), {
+    const res = await fetchAuthEndpoint("/auth/login", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ username, password }),
