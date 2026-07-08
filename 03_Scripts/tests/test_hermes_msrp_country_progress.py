@@ -124,6 +124,50 @@ def test_country_progress_preserves_finance_dryrun_counts(tmp_path, monkeypatch)
         encoding="utf-8",
     )
     monkeypatch.setattr(module, "SOURCE_REVIEW_QUEUE_PATH", review_queue_path)
+    price_alert_review_queue_path = tmp_path / "msrp_price_alert_review_queue.json"
+    price_alert_review_queue_path.write_text(
+        json.dumps({
+            "schemaVersion": "msrp_price_alert_review_queue_v1",
+            "generatedAt": "2026-06-17T02:30:00Z",
+            "sourceSnapshotSchemaVersion": "msrp_current_price_snapshot_v1",
+            "snapshotWeek": "2026-W25",
+            "snapshotGeneratedAtUtc": "2026-06-17T02:29:00Z",
+            "officialSourceRequiredForResolution": True,
+            "summary": {
+                "totalCases": 2,
+                "sourceAlertCount": 3,
+                "skippedAlertCount": 1,
+                "thresholdAlertCount": 2,
+                "highPriorityAlertCount": 1,
+                "missingEvidenceCount": 1,
+                "sourceCurrencyReviewCount": 0,
+                "effectivenessFollowUpCount": 1,
+                "priceDropCount": 1,
+                "priceIncreaseCount": 1,
+                "priorityCounts": {"critical": 1, "high": 1},
+                "severityCounts": {"critical": 1, "warning": 1},
+                "countryCount": 1,
+                "countries": ["SE"],
+            },
+            "items": [
+                {
+                    "caseId": "msrp_price_alert_review:msrp-alert:ph-1",
+                    "reviewPriority": "critical",
+                    "alertId": "msrp-alert:ph-1",
+                    "country": "SE",
+                    "brand": "Volvo",
+                    "jatoModel": "XC60",
+                    "officialEvidenceComplete": True,
+                }
+            ],
+        }),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(
+        module,
+        "PRICE_ALERT_REVIEW_QUEUE_PATH",
+        price_alert_review_queue_path,
+    )
     accessibility_path = tmp_path / "msrp_source_accessibility_audit.json"
     accessibility_path.write_text(
         json.dumps({
@@ -168,6 +212,21 @@ def test_country_progress_preserves_finance_dryrun_counts(tmp_path, monkeypatch)
     assert result["sourceReviewQueue"]["summary"]["totalCases"] == 1
     assert result["sourceReviewQueue"]["summary"]["referenceOnlyCount"] == 1
     assert result["sourceReviewQueue"]["officialIngestEligible"] is False
+    assert result["priceAlertReviewQueue"]["schemaVersion"] == (
+        "msrp_price_alert_review_queue_v1"
+    )
+    assert result["status"]["priceAlertReviewCases"] == 2
+    assert result["status"]["priceAlertReviewHighPriority"] == 1
+    assert result["status"]["priceAlertReviewMissingEvidence"] == 1
+    assert result["status"]["priceAlertReviewEffectivenessFollowUp"] == 1
+    assert result["overall"] == "warning"
+    assert {
+        item["type"]
+        for item in result["findings"]
+    } >= {
+        "price_alert_high_priority_review",
+        "price_alert_missing_evidence_review",
+    }
     assert result["sourceAccessibilityAudit"]["summary"]["officialProxyRequiredCount"] == 1
     assert result["sourceAccessibilityAudit"]["summary"]["tlsHandshakeFailedCount"] == 1
     assert "| Local references | 5 |" in markdown
@@ -175,6 +234,10 @@ def test_country_progress_preserves_finance_dryrun_counts(tmp_path, monkeypatch)
     assert "| Total cases | 1 |" in markdown
     assert "| Reference-only cases | 1 |" in markdown
     assert "| Official ingest eligible | 0 |" in markdown
+    assert "## Price Alert Review Queue" in markdown
+    assert "| High-priority alerts | 1 |" in markdown
+    assert "| Missing evidence | 1 |" in markdown
+    assert "| Sales effectiveness follow-up | 1 |" in markdown
     assert "| Official proxy required | 1 |" in markdown
     assert "| TLS handshake failed | 1 |" in markdown
 

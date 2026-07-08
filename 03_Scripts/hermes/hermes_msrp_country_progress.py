@@ -28,6 +28,7 @@ RUNS_INDEX_PATH = REPO_ROOT / "03_Scripts" / "diagnostics" / "artifacts" / "dryr
 SOURCE_REPAIR_BACKLOG_PATH = REPO_ROOT / "03_Scripts" / "diagnostics" / "artifacts" / "msrp_source_repair_backlog.json"
 SOURCE_REFERENCE_EVIDENCE_PATH = REPO_ROOT / "03_Scripts" / "diagnostics" / "artifacts" / "msrp_source_reference_evidence.json"
 SOURCE_REVIEW_QUEUE_PATH = REPO_ROOT / "03_Scripts" / "diagnostics" / "artifacts" / "msrp_source_review_queue.json"
+PRICE_ALERT_REVIEW_QUEUE_PATH = REPO_ROOT / "03_Scripts" / "diagnostics" / "artifacts" / "msrp_price_alert_review_queue.json"
 SOURCE_ACCESSIBILITY_AUDIT_PATH = REPO_ROOT / "03_Scripts" / "diagnostics" / "artifacts" / "msrp_source_accessibility_audit.json"
 SOURCE_URL_PATTERN = re.compile(r"https?://[^\s\"')<>]+")
 COUNTRY_LABELS = {
@@ -177,6 +178,46 @@ def _load_source_review_queue(run_id: str | None = None) -> dict:
         except Exception:
             pass
     return _default_source_review_queue()
+
+
+def _default_price_alert_review_queue() -> dict:
+    return {
+        "schemaVersion": "msrp_price_alert_review_queue_v1",
+        "generatedAt": None,
+        "sourceSnapshotSchemaVersion": None,
+        "snapshotWeek": None,
+        "snapshotGeneratedAtUtc": None,
+        "officialSourceRequiredForResolution": True,
+        "warnings": [],
+        "summary": {
+            "totalCases": 0,
+            "sourceAlertCount": 0,
+            "skippedAlertCount": 0,
+            "thresholdAlertCount": 0,
+            "highPriorityAlertCount": 0,
+            "missingEvidenceCount": 0,
+            "sourceCurrencyReviewCount": 0,
+            "effectivenessFollowUpCount": 0,
+            "priceDropCount": 0,
+            "priceIncreaseCount": 0,
+            "priorityCounts": {},
+            "severityCounts": {},
+            "countryCount": 0,
+            "countries": [],
+        },
+        "items": [],
+    }
+
+
+def _load_price_alert_review_queue() -> dict:
+    if PRICE_ALERT_REVIEW_QUEUE_PATH.is_file():
+        try:
+            data = json.loads(PRICE_ALERT_REVIEW_QUEUE_PATH.read_text())
+            if isinstance(data, dict):
+                return data
+        except Exception:
+            pass
+    return _default_price_alert_review_queue()
 
 
 def _default_source_accessibility_audit() -> dict:
@@ -1001,6 +1042,45 @@ def _severity(pass_pct: float, gate_threshold: int, is_missing: bool) -> str:
     return "ok"
 
 
+def _add_price_alert_review_findings(
+    findings: list[dict],
+    review_queue: dict[str, Any],
+) -> None:
+    summary = review_queue.get("summary") or {}
+    high_priority = _int_value(summary.get("highPriorityAlertCount"))
+    missing_evidence = _int_value(summary.get("missingEvidenceCount"))
+    currency_reviews = _int_value(summary.get("sourceCurrencyReviewCount"))
+    if high_priority:
+        findings.append({
+            "type": "price_alert_high_priority_review",
+            "severity": "warning",
+            "message": (
+                f"{high_priority} MSRP price alert review case(s) are high priority."
+            ),
+            "count": high_priority,
+        })
+    if missing_evidence:
+        findings.append({
+            "type": "price_alert_missing_evidence_review",
+            "severity": "warning",
+            "message": (
+                f"{missing_evidence} MSRP price alert review case(s) are missing "
+                "complete official evidence."
+            ),
+            "count": missing_evidence,
+        })
+    if currency_reviews:
+        findings.append({
+            "type": "price_alert_currency_or_semantics_review",
+            "severity": "warning",
+            "message": (
+                f"{currency_reviews} MSRP price alert review case(s) require "
+                "currency or source semantics review."
+            ),
+            "count": currency_reviews,
+        })
+
+
 def run(out_dir: str | None = None) -> dict:
     report = _load_dryrun_report()
     now = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
@@ -1017,6 +1097,7 @@ def run(out_dir: str | None = None) -> dict:
             "sourceRepairBacklog": _load_source_repair_backlog(),
             "sourceReferenceEvidence": _load_source_reference_evidence(),
             "sourceReviewQueue": _load_source_review_queue(),
+            "priceAlertReviewQueue": _load_price_alert_review_queue(),
             "sourceAccessibilityAudit": _load_source_accessibility_audit(),
             "findings": [{
                 "type": "no_dryrun_report",
@@ -1126,6 +1207,10 @@ def run(out_dir: str | None = None) -> dict:
             "gateThreshold": gate_threshold,
         })
 
+    price_alert_review_queue = _load_price_alert_review_queue()
+    price_alert_review_summary = price_alert_review_queue.get("summary") or {}
+    _add_price_alert_review_findings(findings, price_alert_review_queue)
+
     overall = "critical" if any(f["severity"] == "critical" for f in findings) else \
               "warning" if findings else "ok"
 
@@ -1176,6 +1261,18 @@ def run(out_dir: str | None = None) -> dict:
             "financeTypeCounts": _count_map(summary.get("financeTypeCounts")),
             "stableLatestRunId": stable_coverage.get("latestRunId"),
             "activeRunId": stable_coverage.get("activeRunId"),
+            "priceAlertReviewCases": _int_value(
+                price_alert_review_summary.get("totalCases")
+            ),
+            "priceAlertReviewHighPriority": _int_value(
+                price_alert_review_summary.get("highPriorityAlertCount")
+            ),
+            "priceAlertReviewMissingEvidence": _int_value(
+                price_alert_review_summary.get("missingEvidenceCount")
+            ),
+            "priceAlertReviewEffectivenessFollowUp": _int_value(
+                price_alert_review_summary.get("effectivenessFollowUpCount")
+            ),
         },
         "countries": country_entries,
         "topBlockingCountries": sorted(top_blocking, key=lambda x: x["passPct"]),
@@ -1183,6 +1280,7 @@ def run(out_dir: str | None = None) -> dict:
         "sourceRepairBacklog": source_repair_backlog,
         "sourceReferenceEvidence": _load_source_reference_evidence(str(report.get("runId") or "")),
         "sourceReviewQueue": _load_source_review_queue(str(report.get("runId") or "")),
+        "priceAlertReviewQueue": price_alert_review_queue,
         "sourceAccessibilityAudit": _load_source_accessibility_audit(str(report.get("runId") or "")),
         "allCountriesLatest": [_strip_sources(country) for country in all_countries_full],
         "stableCoverage": stable_coverage,
@@ -1325,6 +1423,20 @@ def _render_markdown(result: dict) -> str:
         lines.append(f"| Reference-only cases | {review_summary.get('referenceOnlyCount', 0)} |")
         lines.append(f"| Local references | {review_summary.get('localReferenceCount', 0)} |")
         lines.append(f"| Official ingest eligible | {review_summary.get('officialIngestEligibleCount', 0)} |")
+        lines.append("")
+
+    price_alert_review_queue = result.get("priceAlertReviewQueue") or {}
+    price_alert_review_summary = price_alert_review_queue.get("summary") or {}
+    if price_alert_review_summary.get("totalCases"):
+        lines.append("## Price Alert Review Queue\n")
+        lines.append("| Metric | Value |")
+        lines.append("|---|---:|")
+        lines.append(f"| Total cases | {price_alert_review_summary.get('totalCases', 0)} |")
+        lines.append(f"| Source alerts | {price_alert_review_summary.get('sourceAlertCount', 0)} |")
+        lines.append(f"| High-priority alerts | {price_alert_review_summary.get('highPriorityAlertCount', 0)} |")
+        lines.append(f"| Missing evidence | {price_alert_review_summary.get('missingEvidenceCount', 0)} |")
+        lines.append(f"| Currency reviews | {price_alert_review_summary.get('sourceCurrencyReviewCount', 0)} |")
+        lines.append(f"| Sales effectiveness follow-up | {price_alert_review_summary.get('effectivenessFollowUpCount', 0)} |")
         lines.append("")
 
     accessibility_audit = result.get("sourceAccessibilityAudit") or {}
