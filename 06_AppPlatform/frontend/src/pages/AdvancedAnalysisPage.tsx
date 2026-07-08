@@ -3,7 +3,6 @@ import type { CSSProperties, ReactNode } from "react";
 import { useSearchParams } from "react-router-dom";
 import type { Data, Layout as PlotlyLayout } from "plotly.js";
 
-import { api } from "../api/client";
 import { LazyPlotlyChart, type PlotlyChartProps } from "../components/LazyPlotlyChart";
 import { PageBannerStack, PageLoadingShell } from "../components/PageFeedback";
 import { SearchSelectFilter } from "../components/SearchSelectFilter";
@@ -107,6 +106,14 @@ type SortKey = "model" | "dV" | "pure_share_shift" | DecompositionKey;
 type RoleColorKey = "likely_source" | "likely_recipient" | "co_winner" | "co_loser" | "adjacent" | "target";
 type CountryOption = { value: string; label: string };
 type RankedModelOption = { model: string; score: number; index: number };
+type AdvancedAnalysisApiClient = typeof import("../api/client").api;
+
+let advancedAnalysisApiPromise: Promise<AdvancedAnalysisApiClient> | null = null;
+
+function loadAdvancedAnalysisApi(): Promise<AdvancedAnalysisApiClient> {
+  advancedAnalysisApiPromise ??= import("../api/client").then((module) => module.api);
+  return advancedAnalysisApiPromise;
+}
 
 /* ── Helpers ── */
 
@@ -354,13 +361,21 @@ export function AdvancedAnalysisPage() {
   useEffect(() => {
     if (analysisMode !== "transfer") return;
     const controller = new AbortController();
-    api.get<AdvancedAnalysisCountriesResponse>("/advanced-analysis/countries", { signal: controller.signal })
-      .then(response => setAvailableCountries(response.countries || []))
-      .catch((error: unknown) => {
+    void (async () => {
+      try {
+        const apiClient = await loadAdvancedAnalysisApi();
+        const response = await apiClient.get<AdvancedAnalysisCountriesResponse>(
+          "/advanced-analysis/countries",
+          { signal: controller.signal },
+        );
+        if (controller.signal.aborted) return;
+        setAvailableCountries(response.countries || []);
+      } catch (error: unknown) {
         if (controller.signal.aborted) return;
         if (isAbortError(error)) return;
         setAvailableCountries([]);
-    });
+      }
+    })();
     return () => controller.abort();
   }, [analysisMode]);
 
@@ -374,16 +389,21 @@ export function AdvancedAnalysisPage() {
     const controller = new AbortController();
     setProfileOptions(EMPTY_PROFILE_OPTIONS);
     const timeoutId = window.setTimeout(() => {
-      api.get<AdvancedAnalysisProfileOptionsResponse>(
-        `/advanced-analysis/profile-options?country=${encodeURIComponent(country)}`,
-        { signal: controller.signal },
-      )
-      .then(r => setProfileOptions({ ...EMPTY_PROFILE_OPTIONS, ...(r.options || {}) }))
-      .catch((error: unknown) => {
-        if (controller.signal.aborted) return;
-        if (isAbortError(error)) return;
-        setProfileOptions(EMPTY_PROFILE_OPTIONS);
-      });
+      void (async () => {
+        try {
+          const apiClient = await loadAdvancedAnalysisApi();
+          const response = await apiClient.get<AdvancedAnalysisProfileOptionsResponse>(
+            `/advanced-analysis/profile-options?country=${encodeURIComponent(country)}`,
+            { signal: controller.signal },
+          );
+          if (controller.signal.aborted) return;
+          setProfileOptions({ ...EMPTY_PROFILE_OPTIONS, ...(response.options || {}) });
+        } catch (error: unknown) {
+          if (controller.signal.aborted) return;
+          if (isAbortError(error)) return;
+          setProfileOptions(EMPTY_PROFILE_OPTIONS);
+        }
+      })();
     }, 250);
     return () => {
       window.clearTimeout(timeoutId);
@@ -434,7 +454,8 @@ export function AdvancedAnalysisPage() {
         profile_specs: buildProfileSpecs(profileSpecs),
         top_n: 12,
       };
-      const martResult = await api.post<TransferMartResponse>(
+      const apiClient = await loadAdvancedAnalysisApi();
+      const martResult = await apiClient.post<TransferMartResponse>(
         "/advanced-analysis/transfer-mart",
         payload,
         { signal },
@@ -444,7 +465,7 @@ export function AdvancedAnalysisPage() {
       setLoading(false);
       setCompetitorLoading(true);
       try {
-        const competitorResult = await api.post<CompetitorSetResponse>(
+        const competitorResult = await apiClient.post<CompetitorSetResponse>(
           "/advanced-analysis/competitor-set",
           competitorPayload,
           { signal },

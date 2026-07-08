@@ -6,13 +6,19 @@ describe("Advanced Analysis startup", () => {
   it("renders transfer results before the competitor analysis finishes", () => {
     const transferCommitIndex = advancedAnalysisSource.indexOf("setData(martResult);");
     const competitorLoadingIndex = advancedAnalysisSource.indexOf("setCompetitorLoading(true);");
-    const competitorRequestIndex = advancedAnalysisSource.indexOf("api.post<CompetitorSetResponse>");
+    const competitorRequestIndex = advancedAnalysisSource.indexOf("apiClient.post<CompetitorSetResponse>");
 
     expect(transferCommitIndex).toBeGreaterThan(-1);
     expect(competitorLoadingIndex).toBeGreaterThan(transferCommitIndex);
     expect(competitorRequestIndex).toBeGreaterThan(transferCommitIndex);
     expect(advancedAnalysisSource).toContain("setCompetitorData(null);");
     expect(advancedAnalysisSource).toContain("advanced-analysis-competitor-loading");
+  });
+
+  it("keeps the full API client out of the route module until data requests start", () => {
+    expect(advancedAnalysisSource).not.toContain('import { api } from "../api/client";');
+    expect(advancedAnalysisSource).toContain('advancedAnalysisApiPromise ??= import("../api/client")');
+    expect(advancedAnalysisSource).toContain("const apiClient = await loadAdvancedAnalysisApi();");
   });
 
   it("keeps the Hero Product grid runtime out of the transfer startup path", () => {
