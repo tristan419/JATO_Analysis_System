@@ -1,129 +1,88 @@
 source_code: opel_grandland_de_draft_scrapling
 country: 德国
 brand: OPEL
-source_url: https://www.opel.de/modelle/grandland.html
-source_type: manufacturer_official
+source_url: https://www.opel.de/content/dam/opel/germany/tools/preislisten/grandland-preisliste.pdf
+source_type: official_price_list
 price_semantics: base_msrp
-extractor_type: scrapling
+extractor_type: pdf_text
 profile:
-  url: https://www.opel.de/modelle/grandland.html
-  tier: stealth
-  headless: true
-  network_idle: true
-  impersonate: chrome
-  json_script_selector: script[type='application/ld+json']
-  css:
-    vehicle_container: body
-    model: h2
-    trim: h3
-    price: '[class*="price"]'
+  url: https://www.opel.de/content/dam/opel/germany/tools/preislisten/grandland-preisliste.pdf
+  prefer_curl_download: true
+  timeout_seconds: 60
   default_currency: EUR
   default_tax_included: true
-  default_price_label: Preis
+  default_price_label: Unverbindliche Preisempfehlung ab Werk inkl. 19 % MwSt.
   fixed_model: GRANDLAND
   fixed_jato_model: GRANDLAND
-  fixed_jato_powertrain: null
-  model_rules: []
-  skip_if_model_unmapped: false
   copy_trim_to_jato_trim: true
-  confidence_rules:
-    base: 0.2
-    fixed_model_bonus: 0.18
-    fixed_jato_model_bonus: 0.12
-    model_rule_bonus: 0.12
-    trim_present_bonus: 0.1
-    copy_trim_to_jato_trim_bonus: 0.09
-    parsed_price_text_bonus: 0.03
-    currency_bonus: 0.01
-    price_label_bonus: 0.02
-    trim_keyword_bonuses: []
-    price_band_bonuses:
-    - key: price_band_entry
-      label: Entry price band matched
-      max: 0
-      delta: 0.0
-    - key: price_band_mid
-      label: Mid price band matched
-      min: 0
-      max: 0
-      delta: 0.01
-    - key: price_band_high
-      label: High price band matched
-      min: 0
-      delta: 0.03
-    powertrain_keyword_bonuses: []
-    powertrain_bonuses:
-    - key: powertrain_bev
-      label: 'Powertrain matched: BEV'
-      powertrain: BEV
-      delta: 0.03
-    - key: powertrain_phev
-      label: 'Powertrain matched: PHEV'
-      powertrain: PHEV
-      delta: 0.03
-    - key: powertrain_mhev
-      label: 'Powertrain matched: MHEV'
-      powertrain: MHEV
-      delta: 0.03
-    - key: powertrain_ice
-      label: 'Powertrain matched: ICE'
-      powertrain: ICE
-      delta: 0.03
-    clamp_min: 0.0
-    clamp_max: 1.0
-  structured_fields:
-    edition_rules:
-    - key: edition_special
-      label: Special Edition
-      keyword: special edition
-      special: true
-    powertrain_rules:
-    - key: powertrain_bev
-      powertrain: BEV
-      keywords:
-      - bev
-      - ev
-      - electric
-      - battery electric
-      - fully electric
-      - electric vehicle
-      - Elektro
-      - elektrisch
-      - vollelektrisch
-      - Elektroauto
-    - key: powertrain_phev
-      powertrain: PHEV
-      keywords:
-      - phev
-      - plug-in hybrid
-      - plug in hybrid
-      - plugin hybrid
-      - Plug-in-Hybrid
-      - eHybrid
-    - key: powertrain_mhev
-      powertrain: MHEV
-      keywords:
-      - mhev
-      - mild hybrid
-      - mild-hybrid
-      - 48V
-    - key: powertrain_ice
-      powertrain: ICE
-      keywords:
-      - ice
-      - petrol
-      - gasoline
-      - diesel
-      - combustion
-      - Benzin
-      - Verbrenner
-  auto_accept_gates:
-    review_threshold: 0.95
-    semi_auto_threshold: 0.98
-    require_powertrain_match: true
-    force_review_if_powertrain_missing: true
-    force_review_if_powertrain_ambiguous: true
-    force_review_for_special_edition: true
+  match_confidence: 0.86
+  match_status: review_required
+  match_reason:
+    kind: pdf_price_list
+    source: official_opel_de_preisliste
+    document_valid_from: '2026-07-01'
+    note: Official Opel Germany Grandland price-list PDF; extracts manufacturer recommended prices ex works including 19% VAT.
+  entry_patterns:
+  - pattern: 'Hybrid\s+Getriebe[\s\S]*?(?P<price>38\.390)\s+EUR\s+42\.590\s+EUR\s+45\.790\s+EUR[\s\S]*?DHybrid\s+\n?107\s+kW\s+\(145\s+PS\)'
+    official_trim: Edition Hybrid
+    official_powertrain: Hybrid 107 kW (145 PS) eDCT
+    jato_powertrain: MHEV
+  - pattern: 'Hybrid\s+Getriebe[\s\S]*?38\.390\s+EUR\s+(?P<price>42\.590)\s+EUR\s+45\.790\s+EUR[\s\S]*?DHybrid\s+\n?107\s+kW\s+\(145\s+PS\)'
+    official_trim: GS Hybrid
+    official_powertrain: Hybrid 107 kW (145 PS) eDCT
+    jato_powertrain: MHEV
+  - pattern: 'Hybrid\s+Getriebe[\s\S]*?38\.390\s+EUR\s+42\.590\s+EUR\s+(?P<price>45\.790)\s+EUR[\s\S]*?DHybrid\s+\n?107\s+kW\s+\(145\s+PS\)'
+    official_trim: Ultimate Hybrid
+    official_powertrain: Hybrid 107 kW (145 PS) eDCT
+    jato_powertrain: MHEV
+  - pattern: 'Plug-in-Hybrid[\s\S]*?(?P<price>43\.950)\s+EUR\s+48\.150\s+EUR\s+51\.350\s+EUR[\s\S]*?Plug-in-Hybrid\s+\n?165\s+kW\s+\(225\s+PS\)'
+    official_trim: Edition Plug-in-Hybrid
+    official_powertrain: Plug-in-Hybrid 165 kW (225 PS) eDCT
+    jato_powertrain: PHEV
+  - pattern: 'Plug-in-Hybrid[\s\S]*?43\.950\s+EUR\s+(?P<price>48\.150)\s+EUR\s+51\.350\s+EUR[\s\S]*?Plug-in-Hybrid\s+\n?165\s+kW\s+\(225\s+PS\)'
+    official_trim: GS Plug-in-Hybrid
+    official_powertrain: Plug-in-Hybrid 165 kW (225 PS) eDCT
+    jato_powertrain: PHEV
+  - pattern: 'Plug-in-Hybrid[\s\S]*?43\.950\s+EUR\s+48\.150\s+EUR\s+(?P<price>51\.350)\s+EUR[\s\S]*?Plug-in-Hybrid\s+\n?165\s+kW\s+\(225\s+PS\)'
+    official_trim: Ultimate Plug-in-Hybrid
+    official_powertrain: Plug-in-Hybrid 165 kW (225 PS) eDCT
+    jato_powertrain: PHEV
+  - pattern: 'Electric[\s\S]*?(?P<price>47\.350)\s+EUR\s+51\.550\s+EUR\s+54\.750\s+EUR[\s\S]*?73-kWh-Batterie\s*\n?157\s+kW\s+\(213\s+PS\)'
+    official_trim: Edition Electric 73 kWh
+    official_powertrain: 73-kWh-Batterie 157 kW (213 PS)
+    jato_powertrain: BEV
+  - pattern: 'Electric[\s\S]*?47\.350\s+EUR\s+(?P<price>51\.550)\s+EUR\s+54\.750\s+EUR[\s\S]*?73-kWh-Batterie\s*\n?157\s+kW\s+\(213\s+PS\)'
+    official_trim: GS Electric 73 kWh
+    official_powertrain: 73-kWh-Batterie 157 kW (213 PS)
+    jato_powertrain: BEV
+  - pattern: 'Electric[\s\S]*?47\.350\s+EUR\s+51\.550\s+EUR\s+(?P<price>54\.750)\s+EUR[\s\S]*?73-kWh-Batterie\s*\n?157\s+kW\s+\(213\s+PS\)'
+    official_trim: Ultimate Electric 73 kWh
+    official_powertrain: 73-kWh-Batterie 157 kW (213 PS)
+    jato_powertrain: BEV
+  - pattern: 'Electric[\s\S]*?47\.350\s+EUR\s+51\.550\s+EUR\s+54\.750\s+EUR[\s\S]*?(?P<price>52\.150)\s+EUR\s+56\.350\s+EUR\s+60\.390\s+EUR[\s\S]*?AWD\s+73-kWh-\s*\n?Batterie\s*\n?239\s+kW\s+\(325\s+PS\)'
+    official_trim: Edition Electric AWD 73 kWh
+    official_powertrain: AWD 73-kWh-Batterie 239 kW (325 PS)
+    jato_powertrain: BEV
+  - pattern: 'Electric[\s\S]*?47\.350\s+EUR\s+51\.550\s+EUR\s+54\.750\s+EUR[\s\S]*?52\.150\s+EUR\s+(?P<price>56\.350)\s+EUR\s+60\.390\s+EUR[\s\S]*?AWD\s+73-kWh-\s*\n?Batterie\s*\n?239\s+kW\s+\(325\s+PS\)'
+    official_trim: GS Electric AWD 73 kWh
+    official_powertrain: AWD 73-kWh-Batterie 239 kW (325 PS)
+    jato_powertrain: BEV
+  - pattern: 'Electric[\s\S]*?47\.350\s+EUR\s+51\.550\s+EUR\s+54\.750\s+EUR[\s\S]*?52\.150\s+EUR\s+56\.350\s+EUR\s+(?P<price>60\.390)\s+EUR[\s\S]*?AWD\s+73-kWh-\s*\n?Batterie\s*\n?239\s+kW\s+\(325\s+PS\)'
+    official_trim: Ultimate AWD Electric 73 kWh
+    official_powertrain: AWD 73-kWh-Batterie 239 kW (325 PS)
+    jato_powertrain: BEV
+  - pattern: 'Electric[\s\S]*?52\.150\s+EUR\s+56\.350\s+EUR\s+60\.390\s+EUR[\s\S]*?(?P<price>52\.150)\s+EUR\s+56\.350\s+EUR\s+59\.550\s+EUR[\s\S]*?LONG RANGE\s+97-\s*\n?kWh-Batterie\s*\n?170\s+kW\s+\(231\s+PS\)'
+    official_trim: Edition Electric Long Range 97 kWh
+    official_powertrain: LONG RANGE 97-kWh-Batterie 170 kW (231 PS)
+    jato_powertrain: BEV
+  - pattern: 'Electric[\s\S]*?52\.150\s+EUR\s+56\.350\s+EUR\s+60\.390\s+EUR[\s\S]*?52\.150\s+EUR\s+(?P<price>56\.350)\s+EUR\s+59\.550\s+EUR[\s\S]*?LONG RANGE\s+97-\s*\n?kWh-Batterie\s*\n?170\s+kW\s+\(231\s+PS\)'
+    official_trim: GS Electric Long Range 97 kWh
+    official_powertrain: LONG RANGE 97-kWh-Batterie 170 kW (231 PS)
+    jato_powertrain: BEV
+  - pattern: 'Electric[\s\S]*?52\.150\s+EUR\s+56\.350\s+EUR\s+60\.390\s+EUR[\s\S]*?52\.150\s+EUR\s+56\.350\s+EUR\s+(?P<price>59\.550)\s+EUR[\s\S]*?LONG RANGE\s+97-\s*\n?kWh-Batterie\s*\n?170\s+kW\s+\(231\s+PS\)'
+    official_trim: Ultimate Electric Long Range 97 kWh
+    official_powertrain: LONG RANGE 97-kWh-Batterie 170 kW (231 PS)
+    jato_powertrain: BEV
 schedule:
   frequency: manual_only
   run_window_start: 00:00
