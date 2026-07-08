@@ -1,18 +1,36 @@
 source_code: volkswagen_tiguan_ch_draft_scrapling
 country: 瑞士
 brand: VOLKSWAGEN
-source_url: https://www.volkswagen.ch/de/modelle/tiguan.html
+source_url: https://www.volkswagen.ch/de/konfigurator.html
 source_type: manufacturer_official
 price_semantics: base_msrp
-extractor_type: playwright
-profile_preset: ../_shared/presets/volkswagen_configurator_trim_overview_playwright.yaml
+extractor_type: scrapling
 profile:
-  url: https://www.volkswagen.ch/de/modelle/tiguan.html
+  url: https://www.volkswagen.ch/de/konfigurator.html
+  tier: http
+  headless: true
+  network_idle: false
+  load_dom: false
+  timeout_ms: 25000
+  impersonate: chrome
+  text_regex:
+    source_selector: body
+    entry_patterns:
+    - pattern: 'Der\s+Tiguan\s+Ab\s+CHF\s*(?P<price>\d{2}''\d{3}\.00)'
+      official_trim: Tiguan starting price
+      price_label: Ab Preis inkl. MwSt.
   default_currency: CHF
   default_tax_included: true
-  default_price_label: Unverbindliche Preisempfehlung inkl. MwSt
+  default_price_label: Ab Preis inkl. MwSt.
   fixed_model: TIGUAN
   fixed_jato_model: TIGUAN
+  copy_trim_to_jato_trim: true
+  match_confidence: 0.82
+  match_status: review_required
+  match_reason:
+    kind: official_model_overview_starting_price
+    source: volkswagen_ch_configurator_overview
+    note: Official Volkswagen Switzerland configurator overview exposes the Tiguan Ab CHF starting price.
   structured_fields:
     powertrain_rules:
     - key: powertrain_phev
@@ -40,8 +58,9 @@ schedule:
   run_window_end: 05:00
   preferred_weekday: monday
 notes: Keywords filled from official manufacturer website research (CH market). CSS
-  selectors still require browser-based inspection before promotion. [Switched to
-  playwright_card_flow with volkswagen_configurator_trim_overview_playwright.yaml]
+  selectors still require browser-based inspection before promotion. Replaced
+  the stale Playwright trimcard flow with a deterministic text_regex over the
+  official Volkswagen Switzerland configurator overview Ab CHF value.
 bootstrap_meta:
   country_model_rank: 1
   suggested_scope_kind: single_model
