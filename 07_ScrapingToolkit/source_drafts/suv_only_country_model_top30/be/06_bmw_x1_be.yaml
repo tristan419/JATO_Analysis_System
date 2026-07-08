@@ -1,123 +1,81 @@
 source_code: bmw_x1_be_draft_scrapling
 country: 比利时
 brand: BMW
-source_url: https://todo.invalid/be/bmw/x1
-source_type: manufacturer_official
+source_url: https://www.bmw.be/content/dam/bmw/marketBE/bmw_be/BE_nl/brochures/prices/BMW_X1_Prijs_BENL.pdf
+source_type: official_price_list
 price_semantics: base_msrp
-extractor_type: scrapling
+extractor_type: pdf_text
 profile:
-  url: https://todo.invalid/be/bmw/x1
-  tier: stealth
-  headless: true
-  network_idle: true
-  impersonate: chrome
-  css:
-    vehicle_container: body
-    model: h1
-    trim: h2, h3
-    price: '[class*="price"]'
+  url: https://www.bmw.be/content/dam/bmw/marketBE/bmw_be/BE_nl/brochures/prices/BMW_X1_Prijs_BENL.pdf
+  timeout_seconds: 60
+  retry_attempts: 1
+  retry_delay_seconds: 1
+  prefer_curl_download: true
+  browser_download_fallback: true
   default_currency: EUR
   default_tax_included: true
-  default_price_label: MSRP
+  default_price_label: Aanbevolen prijs incl. BTW (21%)
   fixed_model: X1
   fixed_jato_model: X1
   fixed_jato_powertrain: null
-  model_rules: []
-  skip_if_model_unmapped: false
   copy_trim_to_jato_trim: true
-  confidence_rules:
-    base: 0.2
-    fixed_model_bonus: 0.18
-    fixed_jato_model_bonus: 0.12
-    model_rule_bonus: 0.12
-    trim_present_bonus: 0.1
-    copy_trim_to_jato_trim_bonus: 0.09
-    parsed_price_text_bonus: 0.03
-    currency_bonus: 0.01
-    price_label_bonus: 0.02
-    trim_keyword_bonuses: []
-    price_band_bonuses:
-    - key: price_band_entry
-      label: Entry price band matched
-      max: 0
-      delta: 0.0
-    - key: price_band_mid
-      label: Mid price band matched
-      min: 0
-      max: 0
-      delta: 0.01
-    - key: price_band_high
-      label: High price band matched
-      min: 0
-      delta: 0.03
-    powertrain_keyword_bonuses: []
-    powertrain_bonuses:
-    - key: powertrain_phev
-      label: 'Powertrain matched: PHEV'
-      powertrain: PHEV
-      delta: 0.03
-    - key: powertrain_mhev
-      label: 'Powertrain matched: MHEV'
-      powertrain: MHEV
-      delta: 0.03
-    - key: powertrain_ice
-      label: 'Powertrain matched: ICE'
-      powertrain: ICE
-      delta: 0.03
-    clamp_min: 0.0
-    clamp_max: 1.0
-  structured_fields:
-    edition_rules:
-    - key: edition_special
-      label: Special Edition
-      keyword: special edition
-      special: true
-    powertrain_rules:
-    - key: powertrain_phev
-      powertrain: PHEV
-      keywords:
-      - phev
-      - plug-in hybrid
-      - plug in hybrid
-      - plugin hybrid
-      - plug-in hybride
-      - stekkerhybride
-      - hybride rechargeable
-    - key: powertrain_mhev
-      powertrain: MHEV
-      keywords:
-      - mhev
-      - mild hybrid
-      - mild-hybrid
-      - 48V
-      - hybride leger
-    - key: powertrain_ice
-      powertrain: ICE
-      keywords:
-      - ice
-      - petrol
-      - gasoline
-      - diesel
-      - combustion
-      - benzine
-      - essence
-      - thermique
-  auto_accept_gates:
-    review_threshold: 0.95
-    semi_auto_threshold: 0.98
-    require_powertrain_match: true
-    force_review_if_powertrain_missing: true
-    force_review_if_powertrain_ambiguous: true
-    force_review_for_special_edition: true
+  match_confidence: 0.9
+  match_status: review_required
+  match_reason:
+    kind: official_pdf_price_list
+    source: bmw_be_x1_ix1_prijslijst
+    note: Official BMW Belgium X1/iX1 BENL price-list PDF. The document cover states Prijslijst 07 - 2025 and page 3 contains Aanbevolen prijzen for Belgium with the final Prijs incl. BTW (21%) column.
+  entry_patterns:
+  - pattern: 'X1\s+sDrive18i\s+3L\s+1499\s+100/136\s+8\s+-\s+\[146-161\]\s+EU6e-bis-FCM\s+33\.305,79\s+(?P<price>40\.300,-)'
+    official_trim: sDrive18i
+    official_powertrain: 1.5 petrol
+    jato_powertrain: ICE
+  - pattern: 'X1\s+sDrive20i\s+3L\s+1499\s+115/156\s+8\s+-\s+\[130-144\]\s+EU6e-bis-FCM\s+34\.917,36\s+(?P<price>42\.250,-)'
+    official_trim: sDrive20i
+    official_powertrain: 1.5 petrol
+    jato_powertrain: MHEV
+  - pattern: 'X1\s+xDrive23i\s+4L\s+1998\s+150/204\s+11\s+-\s+\[144-159\]\s+EU6e-bis-FCM\s+41\.900,83\s+(?P<price>50\.700,-)'
+    official_trim: xDrive23i
+    official_powertrain: 2.0 petrol AWD
+    jato_powertrain: MHEV
+  - pattern: 'X1\s+M35i\s+xDrive\s+4L\s+1998\s+221/300\s+11\s+-\s+\[174-186\]\s+EU6e-bis-FCM\s+51\.528,93\s+(?P<price>62\.350,-)'
+    official_trim: M35i xDrive
+    official_powertrain: 2.0 petrol AWD
+    jato_powertrain: ICE
+  - pattern: 'X1\s+xDrive25e\s+3L\s+1499\s+180/245\S*\s+\(80/109\s+\+\s+100/136\)\s+8\s+-\s+\[18-25\]\s+EU6e\s+44\.008,26\s+(?P<price>53\.250,-)'
+    official_trim: xDrive25e
+    official_powertrain: plug-in hybrid petrol
+    jato_powertrain: PHEV
+  - pattern: 'X1\s+xDrive30e\s+3L\s+1499\s+240/326\S*\s+\(130/177\s+\+\s+110/150\)\s+8\s+-\s+\[18-25\]\s+EU6e\s+46\.115,70\s+(?P<price>55\.800,-)'
+    official_trim: xDrive30e
+    official_powertrain: plug-in hybrid petrol
+    jato_powertrain: PHEV
+  - pattern: 'X1\s+sDrive18d\s+4L\s+1995\s+110/150\s+11\s+-\s+\[133-147\]\s+EU6e-bis-FCM\s+35\.578,51\s+(?P<price>43\.050,-)'
+    official_trim: sDrive18d
+    official_powertrain: 2.0 diesel
+    jato_powertrain: ICE
+  - pattern: 'X1\s+sDrive20d\s+4L\s+1995\s+110/150\s+11\s+-\s+\[119-134\]\s+EU6e-bis-FCM\s+36\.404,96\s+(?P<price>44\.050,-)'
+    official_trim: sDrive20d
+    official_powertrain: 2.0 diesel
+    jato_powertrain: MHEV
+  - pattern: 'X1\s+xDrive20d\s+4L\s+1995\s+110/150\s+11\s+-\s+\[127-140\]\s+EU6e-bis-FCM\s+39\.338,84\s+(?P<price>47\.600,-)'
+    official_trim: xDrive20d
+    official_powertrain: 2.0 diesel AWD
+    jato_powertrain: MHEV
+  - pattern: 'X1\s+xDrive23d\s+4L\s+1995\s+145/197\s+11\s+-\s+\[126-140\]\s+EU6e-bis-FCM\s+44\.173,55\s+(?P<price>53\.450,-)'
+    official_trim: xDrive23d
+    official_powertrain: 2.0 diesel AWD
+    jato_powertrain: MHEV
 schedule:
   frequency: manual_only
   run_window_start: 00:00
   run_window_end: 05:00
   preferred_weekday: monday
-notes: Draft scaffold generated from country×model top30 backlog. Replace source_url,
-  profile.url, selectors, currency, price label, and the single-model placeholders
-  before promoting to 07_ScrapingToolkit/sources. [CSS selectors applied from brand
-  probe]
+notes: Replaced todo placeholder with BMW Belgium's official X1/iX1 BENL price-list
+  PDF. The PDF metadata CreationDate is 2025-06-03 and the visually rendered
+  page 3 table was checked. Patterns target X1 petrol, plug-in hybrid, and diesel
+  model rows and capture Prijs incl. BTW (21%) values, excluding iX1 BEV rows and
+  option-pack prices.
 bootstrap_meta:
   country_model_rank: 6
   suggested_scope_kind: single_model

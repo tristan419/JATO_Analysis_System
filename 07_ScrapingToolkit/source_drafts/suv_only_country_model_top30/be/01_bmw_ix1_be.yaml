@@ -1,99 +1,56 @@
 source_code: bmw_ix1_be_draft_scrapling
 country: 比利时
 brand: BMW
-source_url: https://todo.invalid/be/bmw/ix1
-source_type: manufacturer_official
+source_url: https://www.bmw.be/content/dam/bmw/marketBE/bmw_be/BE_nl/brochures/prices/BMW_X1_Prijs_BENL.pdf
+source_type: official_price_list
 price_semantics: base_msrp
-extractor_type: scrapling
+extractor_type: pdf_text
 profile:
-  url: https://todo.invalid/be/bmw/ix1
-  tier: stealth
-  headless: true
-  network_idle: true
-  impersonate: chrome
-  css:
-    vehicle_container: body
-    model: h1
-    trim: h2, h3
-    price: '[class*="price"]'
+  url: https://www.bmw.be/content/dam/bmw/marketBE/bmw_be/BE_nl/brochures/prices/BMW_X1_Prijs_BENL.pdf
+  timeout_seconds: 60
+  retry_attempts: 1
+  retry_delay_seconds: 1
+  prefer_curl_download: true
+  browser_download_fallback: true
   default_currency: EUR
   default_tax_included: true
-  default_price_label: MSRP
+  default_price_label: Aanbevolen prijs incl. BTW (21%)
   fixed_model: IX1
   fixed_jato_model: IX1
-  fixed_jato_powertrain: null
-  model_rules: []
-  skip_if_model_unmapped: false
+  fixed_jato_powertrain: BEV
   copy_trim_to_jato_trim: true
-  confidence_rules:
-    base: 0.2
-    fixed_model_bonus: 0.18
-    fixed_jato_model_bonus: 0.12
-    model_rule_bonus: 0.12
-    trim_present_bonus: 0.1
-    copy_trim_to_jato_trim_bonus: 0.09
-    parsed_price_text_bonus: 0.03
-    currency_bonus: 0.01
-    price_label_bonus: 0.02
-    trim_keyword_bonuses: []
-    price_band_bonuses:
-    - key: price_band_entry
-      label: Entry price band matched
-      max: 0
-      delta: 0.0
-    - key: price_band_mid
-      label: Mid price band matched
-      min: 0
-      max: 0
-      delta: 0.01
-    - key: price_band_high
-      label: High price band matched
-      min: 0
-      delta: 0.03
-    powertrain_keyword_bonuses: []
-    powertrain_bonuses:
-    - key: powertrain_bev
-      label: 'Powertrain matched: BEV'
-      powertrain: BEV
-      delta: 0.03
-    clamp_min: 0.0
-    clamp_max: 1.0
-  structured_fields:
-    edition_rules:
-    - key: edition_special
-      label: Special Edition
-      keyword: special edition
-      special: true
-    powertrain_rules:
-    - key: powertrain_bev
-      powertrain: BEV
-      keywords:
-      - bev
-      - ev
-      - electric
-      - battery electric
-      - fully electric
-      - electric vehicle
-      - elektrisch
-      - volledig elektrisch
-      - electrique
-      - 100% electrique
-  auto_accept_gates:
-    review_threshold: 0.95
-    semi_auto_threshold: 0.98
-    require_powertrain_match: true
-    force_review_if_powertrain_missing: true
-    force_review_if_powertrain_ambiguous: true
-    force_review_for_special_edition: true
+  match_confidence: 0.9
+  match_status: review_required
+  match_reason:
+    kind: official_pdf_price_list
+    source: bmw_be_x1_ix1_prijslijst
+    note: Official BMW Belgium X1/iX1 BENL price-list PDF. The document cover states Prijslijst 07 - 2025 and page 3 contains Aanbevolen prijzen for Belgium with the final Prijs incl. BTW (21%) column.
+  entry_patterns:
+  - pattern: 'iX1\s+eDrive20\s+-\s+-\s+150/204\s+0\s+-\s+\[0\]\s+-\s+42\.066,12\s+(?P<price>50\.900,-)'
+    official_trim: eDrive20
+    official_powertrain: eDrive20 BEV
+    jato_powertrain: BEV
+  - pattern: 'iX1\s+eDrive20\s+M\s+Edition\s+-\s+-\s+150/204\s+0\s+-\s+\[0\]\s+-\s+42\.066,12\s+(?P<price>50\.900,-)'
+    official_trim: eDrive20 M Edition
+    official_powertrain: eDrive20 BEV
+    jato_powertrain: BEV
+  - pattern: 'iX1\s+xDrive30\s+-\s+-\s+230/313\s+\(225/306\s+\+\s+5/7\s+Boost\)\s+0\s+-\s+\[0\]\s+-\s+48\.677,69\s+(?P<price>58\.900,-)'
+    official_trim: xDrive30
+    official_powertrain: xDrive30 BEV
+    jato_powertrain: BEV
+  - pattern: 'iX1\s+xDrive30\s+M\s+Edition\s+-\s+-\s+230/313\s+\(225/306\s+\+\s+5/7\s+Boost\)\s+0\s+-\s+\[0\]\s+-\s+48\.677,69\s+(?P<price>58\.900,-)'
+    official_trim: xDrive30 M Edition
+    official_powertrain: xDrive30 BEV
+    jato_powertrain: BEV
 schedule:
   frequency: manual_only
   run_window_start: 00:00
   run_window_end: 05:00
   preferred_weekday: monday
-notes: Draft scaffold generated from country×model top30 backlog. Replace source_url,
-  profile.url, selectors, currency, price label, and the single-model placeholders
-  before promoting to 07_ScrapingToolkit/sources. [CSS selectors applied from brand
-  probe]
+notes: Replaced todo placeholder with BMW Belgium's official X1/iX1 BENL price-list
+  PDF. The PDF metadata CreationDate is 2025-06-03 and the visually rendered
+  page 3 table was checked. Patterns target only iX1 electric rows and capture
+  the final Prijs incl. BTW (21%) values, not ex-VAT prices or option-pack rows.
 bootstrap_meta:
   country_model_rank: 1
   suggested_scope_kind: single_model
