@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from html import unescape
 import json
 import re
+import subprocess
 from io import StringIO
 from pathlib import Path
 from typing import Any
@@ -210,21 +211,66 @@ def fetch_search_page(
     page: int,
     page_size: int,
 ) -> dict[str, Any]:
-    response = session.post(
-        EVKX_SEARCH_API_URL,
-        json={
-            "page": page,
-            "pageSize": page_size,
-            "sortOrder": "Name",
-            "availabilityFilter": availability_filter,
-            "pricingCountry": pricing_country,
-        },
-        timeout=60,
-    )
-    response.raise_for_status()
-    payload = response.json()
+    request_payload = {
+        "page": page,
+        "pageSize": page_size,
+        "sortOrder": "Name",
+        "availabilityFilter": availability_filter,
+        "pricingCountry": pricing_country,
+    }
+    try:
+        response = session.post(
+            EVKX_SEARCH_API_URL,
+            json=request_payload,
+            timeout=60,
+        )
+        response.raise_for_status()
+        payload = response.json()
+    except requests.RequestException:
+        payload = _fetch_search_page_with_curl(request_payload)
     if not isinstance(payload, dict):
         raise ValueError("Unexpected EVKX search payload type")
+    return payload
+
+
+def _fetch_search_page_with_curl(request_payload: dict[str, Any]) -> dict[str, Any]:
+    body = json.dumps(request_payload, separators=(",", ":")).encode("utf-8")
+    result = subprocess.run(
+        [
+            "curl",
+            "-L",
+            "--http1.1",
+            "-sS",
+            "--max-time",
+            "60",
+            "-H",
+            f"User-Agent: {DEFAULT_HEADERS['User-Agent']}",
+            "-H",
+            "Accept: application/json",
+            "-H",
+            "Content-Type: application/json",
+            "-X",
+            "POST",
+            "--data-binary",
+            "@-",
+            EVKX_SEARCH_API_URL,
+        ],
+        input=body,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        check=False,
+        timeout=65,
+    )
+    if result.returncode != 0:
+        detail = result.stderr.decode(errors="replace")[:300]
+        raise RuntimeError(f"EVKX curl fallback failed: {detail}")
+    try:
+        payload = json.loads(result.stdout.decode("utf-8"))
+    except json.JSONDecodeError as exc:
+        preview = result.stdout.decode(errors="replace")[:300]
+        raise ValueError(f"EVKX curl fallback returned invalid JSON: {preview}") from exc
+    if not isinstance(payload, dict):
+        raise ValueError("EVKX curl fallback returned non-object JSON")
     return payload
 
 

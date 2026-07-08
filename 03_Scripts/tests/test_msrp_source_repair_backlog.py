@@ -513,6 +513,54 @@ def test_v3_report_marks_tesla_anti_bot_with_evkx_reference_policy(
     assert "EVKX reference_only_review_required" in markdown
 
 
+def test_v3_report_marks_tesla_network_unavailable_with_evkx_reference_policy(
+    tmp_path: Path,
+) -> None:
+    report = {
+        "schemaVersion": "msrp_dryrun_report_v3",
+        "runId": "msrp-dryrun-20260708-043215",
+        "results": [
+            {
+                "country": "nl",
+                "code": "tesla_model_y_nl_draft_scrapling",
+                "brand": "TESLA",
+                "status": "empty",
+                "valid": 0,
+                "extracted": 0,
+                "failureReason": "network_unavailable",
+                "recommendedStrategy": "retry_network_or_proxy",
+                "sourceUrl": "https://www.tesla.com/nl_nl/modely",
+                "extractorError": (
+                    "Error: Page.goto: net::ERR_CONNECTION_CLOSED at "
+                    "https://www.tesla.com/nl_nl/modely"
+                ),
+            },
+        ],
+    }
+    report_path = tmp_path / "dryrun_report.json"
+    report_path.write_text(json.dumps(report), encoding="utf-8")
+
+    backlog = backlog_script.run(str(report_path), str(tmp_path))
+
+    group = backlog["groups"][0]
+    assert group["failureReason"] == "network_unavailable"
+    assert group["affectedBrands"] == ["TESLA"]
+    assert group["sourceRepairIssueCount"] == 0
+    assert group["transientRegressionCount"] == 1
+    assert group["recommendedAction"] == "recheck_before_source_repair"
+    assert backlog["transientSourceRegressions"][0]["host"] == "tesla.com"
+    assert group["referenceAssist"]["preferred"] == "official_proxy_or_configurator_api"
+    assert group["referenceAssist"]["thirdPartyReference"] == "EVKX"
+    assert group["referenceAssist"]["referencePolicy"] == "reference_only_review_required"
+    assert group["referenceAssist"]["officialSourceRequiredForIngest"] is True
+
+    markdown = (tmp_path / "msrp_source_repair_backlog.md").read_text(
+        encoding="utf-8"
+    )
+    assert "network_unavailable" in markdown
+    assert "EVKX reference_only_review_required" in markdown
+
+
 def test_legacy_report_keeps_summary_backlog_format(tmp_path: Path) -> None:
     report = {
         "total": 1,

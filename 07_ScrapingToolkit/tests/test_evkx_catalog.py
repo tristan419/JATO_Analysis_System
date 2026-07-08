@@ -1,5 +1,10 @@
 from __future__ import annotations
 
+import json
+import subprocess
+
+import requests
+
 from jato_scraper.evkx_catalog import (
     EvkxFetchOptions,
     fetch_search_catalog,
@@ -66,6 +71,11 @@ class _FakeSession:
         return _FakeResponse(self._responses.pop(0))
 
 
+class _FailingSession:
+    def post(self, url, json, timeout):
+        raise requests.exceptions.SSLError("[SSL: UNEXPECTED_EOF_WHILE_READING]")
+
+
 def test_parse_pricing_section_extracts_amounts_and_markets() -> None:
     pricing = parse_pricing_section(_DETAIL_HTML)
 
@@ -121,6 +131,36 @@ def test_fetch_search_catalog_paginates_until_last_page() -> None:
     assert [item["evId"] for item in items] == ["1", "2", "3"]
     assert session.calls[0][1]["page"] == 1
     assert session.calls[1][1]["page"] == 2
+
+
+def test_fetch_search_catalog_uses_curl_fallback_after_requests_ssl_error(
+    monkeypatch,
+) -> None:
+    calls = []
+
+    def fake_run(args, input, stdout, stderr, check, timeout):
+        calls.append((args, json.loads(input.decode("utf-8"))))
+        payload = {
+            "evs": [{"evId": "tesla-y", "name": "Tesla Model Y"}],
+            "hasNextPage": False,
+        }
+        return subprocess.CompletedProcess(args, 0, stdout=json.dumps(payload).encode())
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+
+    items = fetch_search_catalog(
+        _FailingSession(),
+        EvkxFetchOptions(
+            pricing_country="Netherlands",
+            availability_filter="current",
+            page_size=1000,
+            include_details=False,
+        ),
+    )
+
+    assert items == [{"evId": "tesla-y", "name": "Tesla Model Y"}]
+    assert calls[0][1]["pricingCountry"] == "Netherlands"
+    assert "--http1.1" in calls[0][0]
 
 
 def test_select_local_pricing_items_filters_converted_cross_market_prices() -> None:

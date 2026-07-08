@@ -34,6 +34,13 @@ TRANSIENT_RECHECK_FAILURES = {
 BUSINESS_RESOLUTION_FAILURES = {
     "model_not_currently_available",
 }
+TESLA_REFERENCE_ASSIST_FAILURES = {
+    "anti_bot_access_denied",
+    "forbidden_403",
+    "http_timeout",
+    "network_unavailable",
+    "tls_handshake_failed",
+}
 
 
 def _load_country_artifact(path: Path) -> dict | None:
@@ -479,7 +486,7 @@ def _source_reference_assist(group: dict[str, Any]) -> dict[str, Any] | None:
     brands = {str(brand).upper() for brand in group.get("brands", set())}
     hosts = {str(host).lower() for host in group.get("hosts", {})}
     failure_reason = str(group.get("failureReason") or "")
-    if failure_reason in {"forbidden_403", "anti_bot_access_denied"} and (
+    if failure_reason in TESLA_REFERENCE_ASSIST_FAILURES and (
         "TESLA" in brands or "tesla.com" in hosts
     ):
         return {
@@ -494,7 +501,7 @@ def _source_reference_assist(group: dict[str, Any]) -> dict[str, Any] | None:
                 "Keep the Tesla official source open until an official page, price list, or configurator API is fetchable.",
             ],
             "reason": (
-                "Tesla official pages are blocked by the direct fetch path; "
+                "Tesla official pages are blocked or unstable on the direct fetch path; "
                 "EVKX can supply BEV variant and local-price reference evidence "
                 "but cannot replace official MSRP evidence."
             ),
