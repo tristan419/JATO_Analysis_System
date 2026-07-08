@@ -3,6 +3,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   INITIAL_RESOURCE_WINDOW_MS,
   probeCurrentApiPath,
+  resolveRouteDiagnosticConclusion,
   summarizeRouteResources,
   type RouteApiProbeSpec,
   type RouteResourceTiming,
@@ -132,5 +133,70 @@ describe("route diagnostics resource summary", () => {
     expect(result.statusCode).toBe(504);
     expect(result.edgeCache).toBe("BYPASS_TIMEOUT");
     expect(result.error).toBe("origin_timeout: Origin request timed out after 12000ms.");
+  });
+
+  it("summarizes the effective route from manual, auto, and live decisions", () => {
+    const manual = resolveRouteDiagnosticConclusion({
+      manualDecision: {
+        target: "intl",
+        source: "manual",
+        reason: "Manual override from route diagnostics",
+        expiresAt: Date.now() + 60_000,
+      },
+      autoDecision: {
+        target: "cn",
+        source: "auto",
+        reason: "www probe succeeded and China-local signals were found.",
+        expiresAt: Date.now() + 60_000,
+      },
+      currentTarget: "cn",
+      recommendation: {
+        target: "cn",
+        reason: "www is faster.",
+      },
+    });
+    expect(manual).toMatchObject({
+      target: "intl",
+      label: "intl locked",
+      source: "manual",
+    });
+    expect(manual.detail).toContain("Manual override");
+
+    const auto = resolveRouteDiagnosticConclusion({
+      manualDecision: null,
+      autoDecision: {
+        target: "cn",
+        source: "auto",
+        reason: "www probe succeeded and China-local signals were found.",
+        expiresAt: Date.now() + 60_000,
+      },
+      currentTarget: "intl",
+      recommendation: {
+        target: "intl",
+        reason: "intl is faster.",
+      },
+    });
+    expect(auto).toMatchObject({
+      target: "cn",
+      label: "www cached",
+      source: "auto",
+    });
+    expect(auto.detail).toContain("China-local signals");
+
+    const live = resolveRouteDiagnosticConclusion({
+      manualDecision: null,
+      autoDecision: null,
+      currentTarget: "intl",
+      recommendation: {
+        target: "cn",
+        reason: "www is faster by 900 ms.",
+      },
+    });
+    expect(live).toEqual({
+      target: "cn",
+      label: "www recommended",
+      detail: "www is faster by 900 ms.",
+      source: "recommendation",
+    });
   });
 });
