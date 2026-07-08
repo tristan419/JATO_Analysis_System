@@ -1,19 +1,26 @@
 source_code: bmw_ix1_ch_draft_scrapling
 country: 瑞士
 brand: BMW
-source_url: https://www.bmw.ch/de/modelle/x-modelle/ix1.html
+source_url: https://www.bmw.ch/de/bmw-neuwagen.html?series=x
 source_type: manufacturer_official
 price_semantics: base_msrp
 extractor_type: scrapling
 profile:
-  url: https://www.bmw.ch/de/modelle/x-modelle/ix1.html
-  tier: stealth
+  url: https://www.bmw.ch/de/bmw-neuwagen.html?series=x
+  tier: http
   headless: true
   network_idle: true
   impersonate: chrome
   default_currency: CHF
   default_tax_included: true
-  default_price_label: Unverbindliche Preisempfehlung inkl. MwSt
+  default_price_label: BMW Switzerland Ab Preis inkl. MwSt
+  text_regex:
+    source_selector: body
+    entry_patterns:
+    - pattern: 'SUV\s+iX1\s+Modelle\s+Vollelektrisch\s+Ab\s+CHF\s*(?P<price>\d{1,3}(?:[’''\s]\d{3})*)'
+      official_trim: iX1 Modelle Vollelektrisch
+      official_powertrain: BEV
+      price_label: BMW Switzerland Ab Preis inkl. MwSt
   fixed_model: IX1
   fixed_jato_model: IX1
   fixed_jato_powertrain: null
@@ -74,20 +81,15 @@ profile:
     force_review_if_powertrain_missing: true
     force_review_if_powertrain_ambiguous: true
     force_review_for_special_edition: true
-  json_script_selector: script[type='application/ld+json']
-  css:
-    vehicle_container: body
-    model: h1
-    trim: h2, h3
-    price: '[class*="price"]'
 schedule:
   frequency: manual_only
   run_window_start: 00:00
   run_window_end: 05:00
   preferred_weekday: monday
-notes: Keywords filled from official manufacturer website research (CH market). CSS
-  selectors still require browser-based inspection before promotion. [CSS selectors
-  applied from brand probe]
+notes: Keywords filled from official manufacturer website research (CH market).
+  Updated from retired /modelle/x-modelle URL to BMW Switzerland's current
+  official new-car overview and narrowed extraction to the visible iX1
+  Vollelektrisch "Ab CHF" MSRP text.
 bootstrap_meta:
   country_model_rank: 24
   suggested_scope_kind: single_model
