@@ -284,6 +284,25 @@ function diagnosticAuthHeaders(): Headers {
   return headers;
 }
 
+async function readApiProbeError(response: Response): Promise<string | null> {
+  if (response.ok) return null;
+  try {
+    const payload = await response.clone().json() as { detail?: unknown; error?: unknown; message?: unknown };
+    const parts = [payload.error, payload.detail, payload.message]
+      .filter((value): value is string => typeof value === "string" && value.trim().length > 0);
+    if (parts.length > 0) return parts.join(": ");
+  } catch {
+    // Fall through to text/status below.
+  }
+  try {
+    const text = (await response.clone().text()).trim();
+    if (text) return text.slice(0, 180);
+  } catch {
+    // Status text is the final fallback.
+  }
+  return response.statusText || "Request failed";
+}
+
 export async function probeCurrentApiPath(spec: RouteApiProbeSpec): Promise<RouteApiProbeResult> {
   const startedAt = performance.now();
   const headers = diagnosticAuthHeaders();
@@ -308,6 +327,7 @@ export async function probeCurrentApiPath(spec: RouteApiProbeSpec): Promise<Rout
     };
   }
 
+  const error = await readApiProbeError(response);
   return {
     ...createIdleApiProbeResult(spec),
     status: response.ok ? "ok" : "failed",
@@ -315,7 +335,7 @@ export async function probeCurrentApiPath(spec: RouteApiProbeSpec): Promise<Rout
     durationMs: performance.now() - startedAt,
     serverCache: response.headers.get("X-JATO-Server-Cache"),
     edgeCache: response.headers.get("X-JATO-Edge-Cache"),
-    error: response.ok ? null : response.statusText || "Request failed",
+    error,
     checkedAt: new Date().toLocaleString(),
   };
 }
