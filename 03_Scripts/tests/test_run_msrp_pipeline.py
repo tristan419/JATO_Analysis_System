@@ -349,6 +349,10 @@ def test_pipeline_runs_ingest_when_dryrun_gate_is_allowed(tmp_path: Path) -> Non
     assert "hermes/reports/engineering_config_source_sync.json" in status["artifactRefs"]
     assert "hermes/reports/unified_scraping_readiness.json" in status["artifactRefs"]
     assert "hermes/reports/goal_completion_audit.json" in status["artifactRefs"]
+    assert (
+        "03_Scripts/diagnostics/artifacts/msrp_source_review_queue.json"
+        in status["artifactRefs"]
+    )
     scheduled = json.loads(
         (
             tmp_path

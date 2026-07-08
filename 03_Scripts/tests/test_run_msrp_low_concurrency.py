@@ -44,3 +44,20 @@ def test_remove_country_pid_at_handles_last_pid_with_nounset():
     )
 
     assert result.returncode == 0, result.stderr
+
+
+def test_dryrun_refreshes_source_governance_before_hermes_progress():
+    script = SCRIPT_PATH.read_text(encoding="utf-8")
+
+    assert "JATO_MSRP_REFRESH_SOURCE_GOVERNANCE" in script
+    assert "msrp_source_repair_backlog.py" in script
+    assert "msrp_reference_evidence.py" in script
+    assert "msrp_source_review_queue.py" in script
+    assert "hermes_msrp_country_progress.py" in script
+
+    source_repair_pos = script.index("MSRP source repair backlog refreshed")
+    reference_pos = script.index("MSRP source reference evidence refreshed")
+    review_queue_pos = script.index("MSRP source review queue refreshed")
+    hermes_pos = script.index("Hermes MSRP country progress refreshed")
+
+    assert source_repair_pos < reference_pos < review_queue_pos < hermes_pos

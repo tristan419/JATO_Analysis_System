@@ -79,6 +79,17 @@ def _reference_items_by_source(
     return items_by_source
 
 
+def _reference_matches_backlog(
+    backlog: dict[str, Any],
+    reference_evidence: dict[str, Any] | None,
+) -> bool:
+    if not reference_evidence:
+        return True
+    backlog_run_id = str(backlog.get("runId") or "").strip()
+    reference_run_id = str(reference_evidence.get("backlogRunId") or "").strip()
+    return not backlog_run_id or not reference_run_id or backlog_run_id == reference_run_id
+
+
 def _safe_float(value: object) -> float:
     try:
         return float(value or 0)
@@ -190,6 +201,10 @@ def build_source_review_queue(
     backlog: dict[str, Any],
     reference_evidence: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
+    warnings: list[str] = []
+    if not _reference_matches_backlog(backlog, reference_evidence):
+        warnings.append("reference_evidence_run_mismatch")
+        reference_evidence = None
     reference_by_source = _reference_items_by_source(reference_evidence)
     backlog_run_id = str(backlog.get("runId") or "") or None
     reference_generated_at = (
@@ -265,6 +280,7 @@ def build_source_review_queue(
         "referenceEvidenceGeneratedAt": (reference_evidence or {}).get("generatedAt"),
         "officialSourceRequiredForIngest": True,
         "officialIngestEligible": False,
+        "warnings": warnings,
         "summary": summary,
         "items": items,
     }

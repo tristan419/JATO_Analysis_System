@@ -86,6 +86,12 @@ dryrun_gate_basis = os.environ.get("MSRP_PIPELINE_DRYRUN_GATE_BASIS") or None
 artifact_refs = [
     "03_Scripts/diagnostics/artifacts/dryrun_report.json",
     "03_Scripts/diagnostics/artifacts/dryrun_runs_index.json",
+    "03_Scripts/diagnostics/artifacts/msrp_source_repair_backlog.json",
+    "03_Scripts/diagnostics/artifacts/msrp_source_repair_backlog.md",
+    "03_Scripts/diagnostics/artifacts/msrp_source_reference_evidence.json",
+    "03_Scripts/diagnostics/artifacts/msrp_source_reference_evidence.md",
+    "03_Scripts/diagnostics/artifacts/msrp_source_review_queue.json",
+    "03_Scripts/diagnostics/artifacts/msrp_source_review_queue.md",
     "03_Scripts/logs/scheduled_fetch_status.json",
     "hermes/reports/msrp_country_progress.json",
     "hermes/reports/msrp_country_progress.md",

@@ -96,6 +96,7 @@ def sample_reference_evidence() -> dict:
     return {
         "schemaVersion": "msrp_source_reference_evidence_v1",
         "generatedAt": "2026-07-08T04:40:00Z",
+        "backlogRunId": "msrp-dryrun-20260708-043215",
         "referencePolicy": "reference_only_review_required",
         "officialIngestEligible": False,
         "items": [
@@ -175,6 +176,28 @@ def test_build_source_review_queue_merges_backlog_and_reference_evidence() -> No
     assert tesla["localReferenceCount"] == 2
     assert tesla["reviewRecommendation"] == "use_as_review_reference_only"
     assert tesla["evidence"]["backlogRunId"] == "msrp-dryrun-20260708-043215"
+
+
+def test_build_source_review_queue_ignores_stale_reference_evidence() -> None:
+    stale_reference = {
+        **sample_reference_evidence(),
+        "backlogRunId": "msrp-dryrun-older",
+    }
+
+    payload = queue_script.build_source_review_queue(
+        sample_backlog(),
+        stale_reference,
+    )
+
+    assert payload["warnings"] == ["reference_evidence_run_mismatch"]
+    assert payload["summary"]["referenceOnlyCount"] == 1
+    assert payload["summary"]["localReferenceCount"] == 0
+    tesla = payload["items"][1]
+    assert tesla["sourceCode"] == "tesla_model_y_nl_draft_scrapling"
+    assert tesla["referenceSource"] == "EVKX"
+    assert tesla["referencePolicy"] == "reference_only_review_required"
+    assert tesla["localReferenceCount"] == 0
+    assert tesla["reviewRecommendation"] == "repair_official_source"
 
 
 def test_run_writes_json_and_markdown(tmp_path: Path) -> None:

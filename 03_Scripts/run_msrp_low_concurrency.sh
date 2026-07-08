@@ -104,7 +104,17 @@ fi
 
 # ── Dryrun-to-ingest gate ──────────────────────────────────────────
 MIN_DRYRUN_PASS_PCT="${JATO_MSRP_MIN_DRYRUN_PASS_PCT:-70}"
-DRYRUN_REPORT="$REPO_DIR/03_Scripts/diagnostics/artifacts/dryrun_report.json"
+MSRP_ARTIFACT_DIR="$REPO_DIR/03_Scripts/diagnostics/artifacts"
+DRYRUN_REPORT="$MSRP_ARTIFACT_DIR/dryrun_report.json"
+SOURCE_REPAIR_BACKLOG_ARTIFACT="$MSRP_ARTIFACT_DIR/msrp_source_repair_backlog.json"
+SOURCE_REFERENCE_EVIDENCE_ARTIFACT="$MSRP_ARTIFACT_DIR/msrp_source_reference_evidence.json"
+SOURCE_REPAIR_BACKLOG_SCRIPT="$SCRIPT_DIR/msrp_source_repair_backlog.py"
+SOURCE_REFERENCE_EVIDENCE_SCRIPT="$SCRIPT_DIR/msrp_reference_evidence.py"
+SOURCE_REVIEW_QUEUE_SCRIPT="$SCRIPT_DIR/msrp_source_review_queue.py"
+REFRESH_SOURCE_GOVERNANCE="${JATO_MSRP_REFRESH_SOURCE_GOVERNANCE:-true}"
+REFRESH_SOURCE_REFERENCE_EVIDENCE="${JATO_MSRP_REFRESH_SOURCE_REFERENCE_EVIDENCE:-true}"
+SOURCE_REFERENCE_PAGE_SIZE="${JATO_MSRP_SOURCE_REFERENCE_PAGE_SIZE:-1000}"
+SOURCE_REFERENCE_MAX_PAGES="${JATO_MSRP_SOURCE_REFERENCE_MAX_PAGES:-2}"
 
 if [[ "$MODE" == "ingest" ]]; then
   GATE_SKIP=false
@@ -216,6 +226,8 @@ echo "[INFO] Log file: $LOG_FILE"
 echo "[INFO] Auto review: $AUTO_REVIEW"
 echo "[INFO] Auto materialize: $AUTO_MATERIALIZE"
 echo "[INFO] Auto review min score: $AUTO_REVIEW_MIN_SCORE"
+echo "[INFO] Refresh source governance artifacts: $REFRESH_SOURCE_GOVERNANCE"
+echo "[INFO] Refresh source reference evidence: $REFRESH_SOURCE_REFERENCE_EVIDENCE"
 echo "[INFO] Refresh current price snapshot: $REFRESH_CURRENT_SNAPSHOT"
 echo "[INFO] Refresh MSRP readiness audit: $REFRESH_READINESS_AUDIT"
 echo "[INFO] Country timeout seconds: $COUNTRY_TIMEOUT_SECONDS"
@@ -400,6 +412,53 @@ if [[ -f "$AGGR_SCRIPT" ]] && [[ "$MODE" == "dryrun" ]]; then
     --expected-countries "${COUNTRIES[*]}" \
     --out-latest "$REPO_DIR/03_Scripts/diagnostics/artifacts/dryrun_report.json" 2>&1; then
     echo "[INFO] Aggregation complete"
+    if is_truthy "$REFRESH_SOURCE_GOVERNANCE"; then
+      echo "[INFO] Refreshing MSRP source governance artifacts..."
+      if [[ -f "$SOURCE_REPAIR_BACKLOG_SCRIPT" ]]; then
+        if "$PYTHON_BIN" "$SOURCE_REPAIR_BACKLOG_SCRIPT" \
+          --dryrun-artifact "$DRYRUN_REPORT" \
+          --out-dir "$MSRP_ARTIFACT_DIR" 2>&1; then
+          echo "[INFO] MSRP source repair backlog refreshed"
+        else
+          echo "[WARN] MSRP source repair backlog refresh failed (non-fatal)"
+        fi
+      else
+        echo "[WARN] MSRP source repair backlog script not found: $SOURCE_REPAIR_BACKLOG_SCRIPT"
+      fi
+
+      if is_truthy "$REFRESH_SOURCE_REFERENCE_EVIDENCE"; then
+        if [[ -f "$SOURCE_REFERENCE_EVIDENCE_SCRIPT" && -f "$SOURCE_REPAIR_BACKLOG_ARTIFACT" ]]; then
+          if "$PYTHON_BIN" "$SOURCE_REFERENCE_EVIDENCE_SCRIPT" \
+            --backlog "$SOURCE_REPAIR_BACKLOG_ARTIFACT" \
+            --out-dir "$MSRP_ARTIFACT_DIR" \
+            --page-size "$SOURCE_REFERENCE_PAGE_SIZE" \
+            --max-pages "$SOURCE_REFERENCE_MAX_PAGES" 2>&1; then
+            echo "[INFO] MSRP source reference evidence refreshed"
+          else
+            echo "[WARN] MSRP source reference evidence refresh failed (non-fatal)"
+          fi
+        else
+          echo "[WARN] MSRP source reference evidence prerequisites missing"
+        fi
+      else
+        echo "[INFO] MSRP source reference evidence skipped"
+      fi
+
+      if [[ -f "$SOURCE_REVIEW_QUEUE_SCRIPT" && -f "$SOURCE_REPAIR_BACKLOG_ARTIFACT" ]]; then
+        if "$PYTHON_BIN" "$SOURCE_REVIEW_QUEUE_SCRIPT" \
+          --backlog "$SOURCE_REPAIR_BACKLOG_ARTIFACT" \
+          --reference "$SOURCE_REFERENCE_EVIDENCE_ARTIFACT" \
+          --out-dir "$MSRP_ARTIFACT_DIR" 2>&1; then
+          echo "[INFO] MSRP source review queue refreshed"
+        else
+          echo "[WARN] MSRP source review queue refresh failed (non-fatal)"
+        fi
+      else
+        echo "[WARN] MSRP source review queue prerequisites missing"
+      fi
+    else
+      echo "[INFO] MSRP source governance artifacts skipped"
+    fi
     HERMES_MSRP_SCRIPT="$SCRIPT_DIR/hermes/hermes_msrp_country_progress.py"
     if [[ -f "$HERMES_MSRP_SCRIPT" ]]; then
       if "$PYTHON_BIN" "$HERMES_MSRP_SCRIPT" --out-dir "$REPO_DIR/hermes/reports" 2>&1; then
@@ -450,7 +509,18 @@ status_record = {
     'recordsProcessed': s.get('total', 0),
     'failedCount': (s.get('total', 0) or 0) - (s.get('pass', 0) or 0),
     'warningCount': len(r.get('missingCountries', [])),
-    'artifactRefs': ['03_Scripts/diagnostics/artifacts/dryrun_report.json'],
+    'artifactRefs': [
+        '03_Scripts/diagnostics/artifacts/dryrun_report.json',
+        '03_Scripts/diagnostics/artifacts/dryrun_runs_index.json',
+        '03_Scripts/diagnostics/artifacts/msrp_source_repair_backlog.json',
+        '03_Scripts/diagnostics/artifacts/msrp_source_repair_backlog.md',
+        '03_Scripts/diagnostics/artifacts/msrp_source_reference_evidence.json',
+        '03_Scripts/diagnostics/artifacts/msrp_source_reference_evidence.md',
+        '03_Scripts/diagnostics/artifacts/msrp_source_review_queue.json',
+        '03_Scripts/diagnostics/artifacts/msrp_source_review_queue.md',
+        'hermes/reports/msrp_country_progress.json',
+        'hermes/reports/msrp_country_progress.md',
+    ],
     'source': '03_Scripts/run_msrp_low_concurrency.sh',
     'message': 'aggregated dryrun report',
     'metadata': runtime_metadata,
