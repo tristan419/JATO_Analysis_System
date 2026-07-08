@@ -1,98 +1,35 @@
 source_code: suzuki_s_cross_ro_draft_scrapling
 country: 罗马尼亚
 brand: SUZUKI
-source_url: https://todo.invalid/ro/suzuki/s_cross
-source_type: manufacturer_official
+source_url: https://d2m726zkydqemy.cloudfront.net//Lista%20preturi_01.04.2026.pdf
+source_type: official_price_list
 price_semantics: base_msrp
-extractor_type: scrapling
+extractor_type: pdf_text
 profile:
-  url: https://todo.invalid/ro/suzuki/s_cross
-  tier: stealth
-  headless: true
-  network_idle: true
-  impersonate: chrome
-  css:
-    vehicle_container: body
-    model: h1, h2
-    trim: h3
-    price: '[class*="price"]'
-  default_currency: RON
+  url: https://d2m726zkydqemy.cloudfront.net//Lista%20preturi_01.04.2026.pdf
+  prefer_curl_download: true
+  timeout_seconds: 60
+  retry_attempts: 1
+  retry_delay_seconds: 1
+  default_currency: EUR
   default_tax_included: true
-  default_price_label: MSRP
+  default_price_label: Pret de lista recomandat de vanzare cu TVA
   fixed_model: S-CROSS
   fixed_jato_model: S-CROSS
-  fixed_jato_powertrain: null
-  model_rules: []
-  skip_if_model_unmapped: false
+  fixed_jato_powertrain: MHEV
   copy_trim_to_jato_trim: true
-  confidence_rules:
-    base: 0.2
-    fixed_model_bonus: 0.18
-    fixed_jato_model_bonus: 0.12
-    model_rule_bonus: 0.12
-    trim_present_bonus: 0.1
-    copy_trim_to_jato_trim_bonus: 0.09
-    parsed_price_text_bonus: 0.03
-    currency_bonus: 0.01
-    price_label_bonus: 0.02
-    trim_keyword_bonuses: []
-    price_band_bonuses:
-    - key: price_band_entry
-      label: Entry price band matched
-      max: 0
-      delta: 0.0
-    - key: price_band_mid
-      label: Mid price band matched
-      min: 0
-      max: 0
-      delta: 0.01
-    - key: price_band_high
-      label: High price band matched
-      min: 0
-      delta: 0.03
-    powertrain_keyword_bonuses: []
-    powertrain_bonuses:
-    - key: powertrain_hev
-      label: 'Powertrain matched: HEV'
-      powertrain: HEV
-      delta: 0.03
-    - key: powertrain_mhev
-      label: 'Powertrain matched: MHEV'
-      powertrain: MHEV
-      delta: 0.03
-    clamp_min: 0.0
-    clamp_max: 1.0
-  structured_fields:
-    edition_rules:
-    - key: edition_special
-      label: Special Edition
-      keyword: special edition
-      special: true
-    powertrain_rules:
-    - key: powertrain_hev
-      powertrain: HEV
-      keywords:
-      - hev
-      - full hybrid
-      - self-charging hybrid
-      - self charging hybrid
-      - hybrid
-      - hibrid
-    - key: powertrain_mhev
-      powertrain: MHEV
-      keywords:
-      - mhev
-      - mild hybrid
-      - mild-hybrid
-      - 48V
-      - hibrid usor
-  auto_accept_gates:
-    review_threshold: 0.95
-    semi_auto_threshold: 0.98
-    require_powertrain_match: true
-    force_review_if_powertrain_missing: true
-    force_review_if_powertrain_ambiguous: true
-    force_review_for_special_edition: true
+  match_confidence: 0.84
+  match_status: review_required
+  match_reason:
+    kind: pdf_price_list
+    source: official_suzuki_romania_price_list
+    note: Official 2026-04-01 price list exposes recommended list price with VAT and promotional price; regex targets the list-price column and anchors the same-row promotional price to avoid column drift.
+  entry_patterns:
+  - pattern: 'MILD HYBRID 48V\s+R573\s+COOL\s+1\.4\s+BENZIN.\s+MT\s+2WD\s+80,9/110\s+-\s+12,22/16\.6\s+5\.4\s+121\s+(?P<price>23\.600)\s+€\s+21\.090\s+€'
+    official_trim: R573 COOL
+    official_powertrain: MILD HYBRID 48V 1.4 BENZINA MT 2WD
+    jato_powertrain: MHEV
+    price_label: Pret de lista recomandat de vanzare cu TVA
 schedule:
   frequency: manual_only
   run_window_start: 00:00
@@ -101,7 +38,9 @@ schedule:
 notes: Draft scaffold generated from country×model top30 backlog. Replace source_url,
   profile.url, selectors, currency, price label, and the single-model placeholders
   before promoting to 07_ScrapingToolkit/sources. [CSS selectors applied from brand
-  probe]
+  probe] [Filled official Suzuki Romania 2026-04-01 price-list PDF; pdf_text anchors
+  the S-Cross R573 COOL row and captures the recommended list price, not the
+  promotional price]
 bootstrap_meta:
   country_model_rank: 13
   suggested_scope_kind: single_model
