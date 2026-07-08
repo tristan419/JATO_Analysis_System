@@ -1,97 +1,104 @@
 source_code: volvo_ex30_nl_draft_scrapling
 country: 荷兰
 brand: VOLVO
-source_url: https://todo.invalid/nl/volvo/ex30
-source_type: manufacturer_official
+source_url: https://volvocarstools.nl/volvo-prijslijsten/ex30.pdf
+source_type: official_price_list
 price_semantics: base_msrp
-extractor_type: scrapling
+extractor_type: pdf_text
 profile:
-  url: https://todo.invalid/nl/volvo/ex30
-  tier: stealth
-  headless: true
-  network_idle: true
-  impersonate: chrome
-  css:
-    vehicle_container: body
-    model: h1
-    trim: '[class*="variant"], [class*="trim"], h2'
-    price: '[class*="price"], [data-automation*="price"]'
+  url: https://volvocarstools.nl/volvo-prijslijsten/ex30.pdf
+  timeout_seconds: 60
+  retry_attempts: 1
+  retry_delay_seconds: 1
+  prefer_curl_download: true
+  browser_download_fallback: true
   default_currency: EUR
   default_tax_included: true
-  default_price_label: MSRP
+  default_price_label: Consumentenadviesprijs incl. bpm, 21% btw, kosten rijklaar maken, kentekenkosten en recyclingbijdrage
   fixed_model: EX30
   fixed_jato_model: EX30
-  fixed_jato_powertrain: null
-  model_rules: []
-  skip_if_model_unmapped: false
+  fixed_jato_powertrain: BEV
   copy_trim_to_jato_trim: true
-  confidence_rules:
-    base: 0.2
-    fixed_model_bonus: 0.18
-    fixed_jato_model_bonus: 0.12
-    model_rule_bonus: 0.12
-    trim_present_bonus: 0.1
-    copy_trim_to_jato_trim_bonus: 0.09
-    parsed_price_text_bonus: 0.03
-    currency_bonus: 0.01
-    price_label_bonus: 0.02
-    trim_keyword_bonuses: []
-    price_band_bonuses:
-    - key: price_band_entry
-      label: Entry price band matched
-      max: 0
-      delta: 0.0
-    - key: price_band_mid
-      label: Mid price band matched
-      min: 0
-      max: 0
-      delta: 0.01
-    - key: price_band_high
-      label: High price band matched
-      min: 0
-      delta: 0.03
-    powertrain_keyword_bonuses: []
-    powertrain_bonuses:
-    - key: powertrain_bev
-      label: 'Powertrain matched: BEV'
-      powertrain: BEV
-      delta: 0.03
-    clamp_min: 0.0
-    clamp_max: 1.0
-  structured_fields:
-    edition_rules:
-    - key: edition_special
-      label: Special Edition
-      keyword: special edition
-      special: true
-    powertrain_rules:
-    - key: powertrain_bev
-      powertrain: BEV
-      keywords:
-      - bev
-      - ev
-      - electric
-      - battery electric
-      - fully electric
-      - electric vehicle
-      - elektrisch
-      - volledig elektrisch
-  auto_accept_gates:
-    review_threshold: 0.95
-    semi_auto_threshold: 0.98
-    require_powertrain_match: true
-    force_review_if_powertrain_missing: true
-    force_review_if_powertrain_ambiguous: true
-    force_review_for_special_edition: true
+  match_confidence: 0.9
+  match_status: review_required
+  match_reason:
+    kind: official_pdf_price_list
+    source: volvo_nl_ex30_prijslijst
+    note: Official Volvo Netherlands EX30 price-list PDF linked from the Volvo prijslijsten page. Patterns target page 7 model-program matrix after visual verification and avoid accessories, option packs, insurance, warranty, charging, and service prices.
+  entry_patterns:
+  - pattern: '€\s*25\.791,74\s+€\s*687\s*,00\s+€\s*31\.895,00\s+€\s*1\.100\s+€\s*(?P<price>32\.995),00'
+    official_trim: Essential P3
+    official_powertrain: BEV P3
+    jato_powertrain: BEV
+  - pattern: '€\s*27\s*\.279,34\s+€\s*687\s*,00\s+€\s*33\.695,00\s+€\s*1\.100\s+€\s*(?P<price>34\.795),00'
+    official_trim: Core P3
+    official_powertrain: BEV P3
+    jato_powertrain: BEV
+  - pattern: '€\s*28\.932,23\s+€\s*687\s*,00\s+€\s*35\.695,00\s+€\s*1\.100\s+€\s*(?P<price>36\.795),00'
+    official_trim: Core P5
+    official_powertrain: BEV P5
+    jato_powertrain: BEV
+  - pattern: '€\s*29\.923,97\s+€\s*687\s*,00\s+€\s*36\.895,00\s+€\s*1\.100\s+€\s*(?P<price>37\s*\.995),00'
+    official_trim: Core P3 Long Range
+    official_powertrain: BEV P3 Long Range
+    jato_powertrain: BEV
+  - pattern: '€\s*31\.576,86\s+€\s*687\s*,00\s+€\s*38\.895,00\s+€\s*1\.100\s+€\s*(?P<price>39\.995),00'
+    official_trim: Core P5 Long Range
+    official_powertrain: BEV P5 Long Range
+    jato_powertrain: BEV
+  - pattern: '€\s*29\.097\s*,52\s+€\s*687\s*,00\s+€\s*35\.895,00\s+€\s*1\.100\s+€\s*(?P<price>36\.995),00'
+    official_trim: Plus P3
+    official_powertrain: BEV P3
+    jato_powertrain: BEV
+  - pattern: '€\s*30\.750,41\s+€\s*687\s*,00\s+€\s*37\s*\.895,00\s+€\s*1\.100\s+€\s*(?P<price>38\.995),00'
+    official_trim: Plus P5
+    official_powertrain: BEV P5
+    jato_powertrain: BEV
+  - pattern: '€\s*31\.742,15\s+€\s*687\s*,00\s+€\s*39\.095,00\s+€\s*1\.100\s+€\s*(?P<price>40\.195),00'
+    official_trim: Plus P3 Long Range
+    official_powertrain: BEV P3 Long Range
+    jato_powertrain: BEV
+  - pattern: '€\s*33\.962,81\s+€\s*687\s*,00\s+€\s*41\.095,00\s+€\s*1\.100\s+€\s*(?P<price>42\.195),00'
+    official_trim: Plus P5 Long Range
+    official_powertrain: BEV P5 Long Range
+    jato_powertrain: BEV
+  - pattern: '€\s*38\.023,14\s+€\s*687\s*,00\s+€\s*46\.695,00\s+€\s*1\.100\s+€\s*(?P<price>47\s*\.795),00'
+    official_trim: Plus P8 AWD
+    official_powertrain: BEV P8 AWD
+    jato_powertrain: BEV
+  - pattern: '€\s*35\.047\s*,93\s+€\s*687\s*,00\s+€\s*43\.095,00\s+€\s*1\.100\s+€\s*(?P<price>44\.195),00'
+    official_trim: Plus Cross Country P5 Long Range
+    official_powertrain: BEV P5 Long Range Cross Country
+    jato_powertrain: BEV
+  - pattern: '€\s*39\.676,03\s+€\s*687\s*,00\s+€\s*48\.695,00\s+€\s*1\.100\s+€\s*(?P<price>49\.795),00'
+    official_trim: Plus Cross Country P8 AWD
+    official_powertrain: BEV P8 AWD Cross Country
+    jato_powertrain: BEV
+  - pattern: '€\s*36\.535,54\s+€\s*687\s*,00\s+€\s*44\.895,00\s+€\s*1\.100\s+€\s*(?P<price>45\.995),00'
+    official_trim: Ultra P5 Long Range
+    official_powertrain: BEV P5 Long Range
+    jato_powertrain: BEV
+  - pattern: '€\s*40\.667\s*,77\s+€\s*687\s*,00\s+€\s*49\.895,00\s+€\s*1\.100\s+€\s*(?P<price>50\.995),00'
+    official_trim: Ultra P8 AWD
+    official_powertrain: BEV P8 AWD
+    jato_powertrain: BEV
+  - pattern: '€\s*38\.188,43\s+€\s*687\s*,00\s+€\s*46\.895,00\s+€\s*1\.100\s+€\s*(?P<price>47\s*\.995),00'
+    official_trim: Ultra Cross Country P5 Long Range
+    official_powertrain: BEV P5 Long Range Cross Country
+    jato_powertrain: BEV
+  - pattern: '€\s*42\.320,66\s+€\s*687\s*,00\s+€\s*51\.895,00\s+€\s*1\.100\s+€\s*(?P<price>52\.995),00'
+    official_trim: Ultra Cross Country P8 AWD
+    official_powertrain: BEV P8 AWD Cross Country
+    jato_powertrain: BEV
 schedule:
   frequency: manual_only
   run_window_start: 00:00
   run_window_end: 05:00
   preferred_weekday: monday
-notes: Draft scaffold generated from country×model top30 backlog. Replace source_url,
-  profile.url, selectors, currency, price label, and the single-model placeholders
-  before promoting to 07_ScrapingToolkit/sources. [CSS selectors applied from brand
-  probe]
+notes: Replaced todo placeholder with Volvo Netherlands' official EX30
+  price-list PDF. PDF metadata CreationDate is 2026-05-13 and the model-program
+  price matrix was visually verified on rendered page 7. Patterns target only
+  vehicle consumentenadviesprijs cells and avoid accessory/service prices.
 bootstrap_meta:
   country_model_rank: 11
   suggested_scope_kind: single_model

@@ -1,97 +1,112 @@
 source_code: volvo_ex40_nl_draft_scrapling
 country: 荷兰
 brand: VOLVO
-source_url: https://todo.invalid/nl/volvo/ex40
-source_type: manufacturer_official
+source_url: https://volvocarstools.nl/volvo-prijslijsten/ex40.pdf
+source_type: official_price_list
 price_semantics: base_msrp
-extractor_type: scrapling
+extractor_type: pdf_text
 profile:
-  url: https://todo.invalid/nl/volvo/ex40
-  tier: stealth
-  headless: true
-  network_idle: true
-  impersonate: chrome
-  css:
-    vehicle_container: body
-    model: h1
-    trim: '[class*="variant"], [class*="trim"], h2'
-    price: '[class*="price"], [data-automation*="price"]'
+  url: https://volvocarstools.nl/volvo-prijslijsten/ex40.pdf
+  timeout_seconds: 75
+  retry_attempts: 1
+  retry_delay_seconds: 1
+  prefer_curl_download: true
+  browser_download_fallback: true
   default_currency: EUR
   default_tax_included: true
-  default_price_label: MSRP
+  default_price_label: Consumentenadviesprijs incl. bpm, 21% btw, kosten rijklaar maken, kentekenkosten en recyclingbijdrage
   fixed_model: EX40
   fixed_jato_model: EX40
-  fixed_jato_powertrain: null
-  model_rules: []
-  skip_if_model_unmapped: false
+  fixed_jato_powertrain: BEV
   copy_trim_to_jato_trim: true
-  confidence_rules:
-    base: 0.2
-    fixed_model_bonus: 0.18
-    fixed_jato_model_bonus: 0.12
-    model_rule_bonus: 0.12
-    trim_present_bonus: 0.1
-    copy_trim_to_jato_trim_bonus: 0.09
-    parsed_price_text_bonus: 0.03
-    currency_bonus: 0.01
-    price_label_bonus: 0.02
-    trim_keyword_bonuses: []
-    price_band_bonuses:
-    - key: price_band_entry
-      label: Entry price band matched
-      max: 0
-      delta: 0.0
-    - key: price_band_mid
-      label: Mid price band matched
-      min: 0
-      max: 0
-      delta: 0.01
-    - key: price_band_high
-      label: High price band matched
-      min: 0
-      delta: 0.03
-    powertrain_keyword_bonuses: []
-    powertrain_bonuses:
-    - key: powertrain_bev
-      label: 'Powertrain matched: BEV'
-      powertrain: BEV
-      delta: 0.03
-    clamp_min: 0.0
-    clamp_max: 1.0
-  structured_fields:
-    edition_rules:
-    - key: edition_special
-      label: Special Edition
-      keyword: special edition
-      special: true
-    powertrain_rules:
-    - key: powertrain_bev
-      powertrain: BEV
-      keywords:
-      - bev
-      - ev
-      - electric
-      - battery electric
-      - fully electric
-      - electric vehicle
-      - elektrisch
-      - volledig elektrisch
-  auto_accept_gates:
-    review_threshold: 0.95
-    semi_auto_threshold: 0.98
-    require_powertrain_match: true
-    force_review_if_powertrain_missing: true
-    force_review_if_powertrain_ambiguous: true
-    force_review_for_special_edition: true
+  match_confidence: 0.9
+  match_status: review_required
+  match_reason:
+    kind: official_pdf_price_list
+    source: volvo_nl_ex40_prijslijst
+    note: Official Volvo Netherlands EX40 price-list PDF linked from the Volvo prijslijsten page. Patterns target pages 7-9 model-program matrix after visual verification and avoid accessories, option packs, insurance, warranty, charging, and service prices.
+  entry_patterns:
+  - pattern: 'Essential\s+Netto\s+catalogusprijs\s+€\s*33\.998,35\s+BPM\s+€\s*687\s+Fiscale\s+waarde1\s+€\s*41\.825\s+Kosten\s+rijklaar2\s+€\s*1\.170\s+Consumentenadviesprijs3\s+€\s*(?P<price>42\.995)'
+    official_trim: Essential Single Motor
+    official_powertrain: BEV Single Motor
+    jato_powertrain: BEV
+  - pattern: 'Core\s+Netto\s+catalogusprijs\s+€\s*36\.477,69\s+BPM\s+€\s*687\s+Fiscale\s+waarde1\s+€\s*44\.825\s+Kosten\s+rijklaar2\s+€\s*1\.170\s+Consumentenadviesprijs3\s+€\s*(?P<price>45\.995)'
+    official_trim: Core Single Motor
+    official_powertrain: BEV Single Motor
+    jato_powertrain: BEV
+  - pattern: 'Netto\s+catalogusprijs\s+€\s*38\.957,02\s+BPM\s+€\s*687\s+Fiscale\s+waarde1\s+€\s*47\.825\s+Kosten\s+rijklaar2\s+€\s*1\.170\s+Consumentenadviesprijs3\s+€\s*(?P<price>48\.995)'
+    official_trim: Core Single Motor Extended Range
+    official_powertrain: BEV Single Motor Extended Range
+    jato_powertrain: BEV
+  - pattern: 'Netto\s+catalogusprijs\s+€\s*40\.609,92\s+BPM\s+€\s*687\s+Fiscale\s+waarde1\s+€\s*49\.825\s+Kosten\s+rijklaar2\s+€\s*1\.170\s+Consumentenadviesprijs3\s+€\s*(?P<price>50\.995)'
+    official_trim: Core Twin Motor
+    official_powertrain: BEV Twin Motor
+    jato_powertrain: BEV
+  - pattern: 'Plus\s+Netto\s+catalogusprijs\s+€\s*39\.370,25\s+BPM\s+€\s*687\s+Fiscale\s+waarde1\s+€\s*48\.325\s+Kosten\s+rijklaar2\s+€\s*1\.170\s+Consumentenadviesprijs3\s+€\s*(?P<price>49\.495)'
+    official_trim: Plus Single Motor
+    official_powertrain: BEV Single Motor
+    jato_powertrain: BEV
+  - pattern: 'Netto\s+catalogusprijs\s+€\s*41\.849,59\s+BPM\s+€\s*687\s+Fiscale\s+waarde1\s+€\s*51\.325\s+Kosten\s+rijklaar2\s+€\s*1\.170\s+Consumentenadviesprijs3\s+€\s*(?P<price>52\.495)'
+    official_trim: Plus Single Motor Extended Range
+    official_powertrain: BEV Single Motor Extended Range
+    jato_powertrain: BEV
+  - pattern: 'Netto\s+catalogusprijs\s+€\s*43\.502,48\s+BPM\s+€\s*687\s+Fiscale\s+waarde1\s+€\s*53\.325\s+Kosten\s+rijklaar2\s+€\s*1\.170\s+Consumentenadviesprijs3\s+€\s*(?P<price>54\.495)'
+    official_trim: Plus Twin Motor
+    official_powertrain: BEV Twin Motor
+    jato_powertrain: BEV
+  - pattern: 'Plus\s+-\s+Black\s+Edition\s+Netto\s+catalogusprijs\s+€\s*40\.609,92\s+BPM\s+€\s*687\s+Fiscale\s+waarde1\s+€\s*49\.825\s+Kosten\s+rijklaar2\s+€\s*1\.170\s+Consumentenadviesprijs3\s+€\s*(?P<price>50\.995)'
+    official_trim: Plus Black Edition Single Motor
+    official_powertrain: BEV Single Motor
+    jato_powertrain: BEV
+  - pattern: 'Netto\s+catalogusprijs\s+€\s*43\.089,26\s+BPM\s+€\s*687\s+Fiscale\s+waarde1\s+€\s*52\.825\s+Kosten\s+rijklaar2\s+€\s*1\.170\s+Consumentenadviesprijs3\s+€\s*(?P<price>53\.995)'
+    official_trim: Plus Black Edition Single Motor Extended Range
+    official_powertrain: BEV Single Motor Extended Range
+    jato_powertrain: BEV
+  - pattern: 'Netto\s+catalogusprijs\s+€\s*44\.742,15\s+BPM\s+€\s*687\s+Fiscale\s+waarde1\s+€\s*54\.825\s+Kosten\s+rijklaar2\s+€\s*1\.170\s+Consumentenadviesprijs3\s+€\s*(?P<price>55\.995)'
+    official_trim: Plus Black Edition Twin Motor
+    official_powertrain: BEV Twin Motor
+    jato_powertrain: BEV
+  - pattern: 'Ultra\s+Netto\s+catalogusprijs\s+€\s*44\.742,15\s+BPM\s+€\s*687\s+Fiscale\s+waarde1\s+€\s*54\.825\s+Kosten\s+rijklaar2\s+€\s*1\.170\s+Consumentenadviesprijs3\s+€\s*(?P<price>55\.995)'
+    official_trim: Ultra Single Motor Extended Range
+    official_powertrain: BEV Single Motor Extended Range
+    jato_powertrain: BEV
+  - pattern: 'Netto\s+catalogusprijs\s+€\s*46\.395,04\s+BPM\s+€\s*687\s+Fiscale\s+waarde1\s+€\s*56\.825\s+Kosten\s+rijklaar2\s+€\s*1\.170\s+Consumentenadviesprijs3\s+€\s*(?P<price>57\.995)'
+    official_trim: Ultra Twin Motor
+    official_powertrain: BEV Twin Motor
+    jato_powertrain: BEV
+  - pattern: 'Ultra\s+-\s+Black\s+Edition\s+Netto\s+catalogusprijs\s+€\s*45\.981,82\s+BPM\s+€\s*687\s+Fiscale\s+waarde1\s+€\s*56\.325\s+Kosten\s+rijklaar2\s+€\s*1\.170\s+Consumentenadviesprijs3\s+€\s*(?P<price>57\.495)'
+    official_trim: Ultra Black Edition Single Motor Extended Range
+    official_powertrain: BEV Single Motor Extended Range
+    jato_powertrain: BEV
+  - pattern: 'Netto\s+catalogusprijs\s+€\s*47\.634,71\s+BPM\s+€\s*687\s+Fiscale\s+waarde1\s+€\s*58\.325\s+Kosten\s+rijklaar2\s+€\s*1\.170\s+Consumentenadviesprijs3\s+€\s*(?P<price>59\.495)'
+    official_trim: Ultra Black Edition Twin Motor
+    official_powertrain: BEV Twin Motor
+    jato_powertrain: BEV
+  - pattern: 'TWIN\s+MOTOR\s+PERFORMANCE\s+Plus\s+Netto\s+catalogusprijs\s+€\s*45\.155,37\s+BPM\s+€\s*687\s+Fiscale\s+waarde1\s+€\s*55\.325\s+Kosten\s+rijklaar2\s+€\s*1\.170\s+Consumentenadviesprijs3\s+€\s*(?P<price>56\.495)'
+    official_trim: Plus Twin Motor Performance
+    official_powertrain: BEV Twin Motor Performance
+    jato_powertrain: BEV
+  - pattern: 'Plus\s+-\s+Black\s+Edition\s+Netto\s+catalogusprijs\s+€\s*46\.395,04\s+BPM\s+€\s*687\s+Fiscale\s+waarde1\s+€\s*56\.825\s+Kosten\s+rijklaar2\s+€\s*1\.170\s+Consumentenadviesprijs3\s+€\s*(?P<price>57\.995)'
+    official_trim: Plus Black Edition Twin Motor Performance
+    official_powertrain: BEV Twin Motor Performance
+    jato_powertrain: BEV
+  - pattern: 'Ultra\s+Netto\s+catalogusprijs\s+€\s*48\.047,93\s+BPM\s+€\s*687\s+Fiscale\s+waarde1\s+€\s*58\.825\s+Kosten\s+rijklaar2\s+€\s*1\.170\s+Consumentenadviesprijs3\s+€\s*(?P<price>59\.995)'
+    official_trim: Ultra Twin Motor Performance
+    official_powertrain: BEV Twin Motor Performance
+    jato_powertrain: BEV
+  - pattern: 'Ultra\s+-\s+Black\s+Edition\s+Netto\s+catalogusprijs\s+€\s*49\.287,60\s+BPM\s+€\s*687\s+Fiscale\s+waarde1\s+€\s*60\.325\s+Kosten\s+rijklaar2\s+€\s*1\.170\s+Consumentenadviesprijs3\s+€\s*(?P<price>61\.495)'
+    official_trim: Ultra Black Edition Twin Motor Performance
+    official_powertrain: BEV Twin Motor Performance
+    jato_powertrain: BEV
 schedule:
   frequency: manual_only
   run_window_start: 00:00
   run_window_end: 05:00
   preferred_weekday: monday
-notes: Draft scaffold generated from country×model top30 backlog. Replace source_url,
-  profile.url, selectors, currency, price label, and the single-model placeholders
-  before promoting to 07_ScrapingToolkit/sources. [CSS selectors applied from brand
-  probe]
+notes: Replaced todo placeholder with Volvo Netherlands' official EX40
+  price-list PDF. PDF metadata CreationDate is 2026-03-12 and the model-program
+  price matrix was visually verified on rendered pages 7-9. Patterns target only
+  vehicle consumentenadviesprijs cells and avoid accessory/service prices.
 bootstrap_meta:
   country_model_rank: 13
   suggested_scope_kind: single_model
