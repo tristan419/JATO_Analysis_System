@@ -1,47 +1,144 @@
 source_code: volkswagen_tiguan_cz_draft_scrapling
 country: 捷克
 brand: VOLKSWAGEN
-source_url: https://www.volkswagen.cz/modely/tiguan
-source_type: manufacturer_official
+source_url: https://www.volkswagen.cz/dam/files/download/32bfc9b39dd35ea324ac276d8c1a487bdca47fdf/2085e1a7f231e9282047f91b509a9bde/ae37c3bc-3fd1-4d27-b0f6-6177717dccbc/Tiguan_cenik_2025_06
+source_type: official_price_list
 price_semantics: base_msrp
-extractor_type: playwright
-profile_preset: ../_shared/presets/volkswagen_configurator_trim_overview_playwright.yaml
+extractor_type: pdf_text
 profile:
-  url: https://www.volkswagen.cz/modely/tiguan
+  url: https://www.volkswagen.cz/dam/files/download/32bfc9b39dd35ea324ac276d8c1a487bdca47fdf/2085e1a7f231e9282047f91b509a9bde/ae37c3bc-3fd1-4d27-b0f6-6177717dccbc/Tiguan_cenik_2025_06
+  timeout_seconds: 45
+  retry_attempts: 1
+  retry_delay_seconds: 1
+  browser_download_fallback: true
   default_currency: CZK
   default_tax_included: true
-  default_price_label: Doporučená cena včetně DPH
+  default_price_label: Cena s DPH
   fixed_model: TIGUAN
   fixed_jato_model: TIGUAN
-  structured_fields:
-    powertrain_rules:
-    - key: powertrain_phev
-      powertrain: PHEV
-      keywords:
-      - plug-in hybrid
-      - eHybrid
-      - Tiguan eHybrid
-    - key: powertrain_mhev
-      powertrain: MHEV
-      keywords:
-      - mild hybrid
-      - eTSI
-      - 48V
-    - key: powertrain_ice
-      powertrain: ICE
-      keywords:
-      - benzín
-      - nafta
-      - TSI
-      - TDI
+  copy_trim_to_jato_trim: true
+  match_confidence: 0.86
+  match_status: review_required
+  match_reason:
+    kind: official_pdf_price_list
+    source: volkswagen_cz_tiguan_cenik
+    document_valid_from: '2025-05-28'
+    model_year: '2026'
+    note: Official Volkswagen Czech Tiguan price-list PDF; extracts Cena s DPH, which the document states includes 21% DPH.
+  entry_patterns:
+  - pattern: 'CT12AML2\s+Aut\.\s+DSG7\s+96/130\s+(?P<price>\d{1,3}(?:\s*\d{3})+)'
+    official_trim: Limited 1.5 eTSI 96 kW
+    official_powertrain: Benzin Mild hybrid / 1.5 l / 96 kW
+    jato_powertrain: MHEV
+  - pattern: 'CT12AM03\s+Aut\.\s+DSG7\s+96/130\s+(?P<price>\d{1,3}(?:\s*\d{3})+)'
+    official_trim: Tiguan 1.5 eTSI 96 kW
+    official_powertrain: Benzin Mild hybrid / 1.5 l / 96 kW
+    jato_powertrain: MHEV
+  - pattern: 'CT134Z03\s+Aut\.\s+DSG7\s+110/150\s+(?P<price>\d{1,3}(?:\s*\d{3})+)'
+    official_trim: Life 2.0 TDI 110 kW
+    official_powertrain: Diesel / 2.0 l / 110 kW
+    jato_powertrain: ICE
+  - pattern: 'CT13AM03\s+Aut\.\s+DSG7\s+96/130\s+(?P<price>\d{1,3}(?:\s*\d{3})+)'
+    official_trim: Life 1.5 eTSI 96 kW
+    official_powertrain: Benzin Mild hybrid / 1.5 l / 96 kW
+    jato_powertrain: MHEV
+  - pattern: 'CT13BM03\s+Aut\.\s+DSG7\s+110/150\s+(?P<price>\d{1,3}(?:\s*\d{3})+)'
+    official_trim: Life 1.5 eTSI 110 kW
+    official_powertrain: Benzin Mild hybrid / 1.5 l / 110 kW
+    jato_powertrain: MHEV
+  - pattern: 'CT13ZY03\s+Aut\.\s+DSG6\s+110/150\s+(?P<price>\d{1,3}(?:\s*\d{3})+)'
+    official_trim: Life 1.5 eHybrid 110 kW
+    official_powertrain: Plug-in hybrid benzin / 1.5 l / 110 kW
+    jato_powertrain: PHEV
+  - pattern: 'CT134ZP3\s+Aut\.\s+DSG7\s+110/150\s+(?P<price>\d{1,3}(?:\s*\d{3})+)'
+    official_trim: People 2.0 TDI 110 kW
+    official_powertrain: Diesel / 2.0 l / 110 kW
+    jato_powertrain: ICE
+  - pattern: 'CT13AMP3\s+Aut\.\s+DSG7\s+96/130\s+(?P<price>\d{1,3}(?:\s*\d{3})+)'
+    official_trim: People 1.5 eTSI 96 kW
+    official_powertrain: Benzin Mild hybrid / 1.5 l / 96 kW
+    jato_powertrain: MHEV
+  - pattern: 'CT13BMP3\s+Aut\.\s+DSG7\s+110/150\s+(?P<price>\d{1,3}(?:\s*\d{3})+)'
+    official_trim: People 1.5 eTSI 110 kW
+    official_powertrain: Benzin Mild hybrid / 1.5 l / 110 kW
+    jato_powertrain: MHEV
+  - pattern: 'CT13ZYP3\s+Aut\.\s+DSG6\s+110/150\s+(?P<price>\d{1,3}(?:\s*\d{3})+)'
+    official_trim: People 1.5 eHybrid 110 kW
+    official_powertrain: Plug-in hybrid benzin / 1.5 l / 110 kW
+    jato_powertrain: PHEV
+  - pattern: 'CT144Z04\s+Aut\.\s+DSG7\s+110/150\s+(?P<price>\d{1,3}(?:\s*\d{3})+)'
+    official_trim: Elegance 2.0 TDI 110 kW
+    official_powertrain: Diesel / 2.0 l / 110 kW
+    jato_powertrain: ICE
+  - pattern: 'CT147T04\s+Aut\.\s+DSG7\s+142/193\s+(?P<price>\d{1,3}(?:\s*\d{3})+)'
+    official_trim: Elegance 2.0 TDI 142 kW
+    official_powertrain: Diesel / 2.0 l / 142 kW
+    jato_powertrain: ICE
+  - pattern: 'CT14BM04\s+Aut\.\s+DSG7\s+110/150\s+(?P<price>\d{1,3}(?:\s*\d{3})+)'
+    official_trim: Elegance 1.5 eTSI 110 kW
+    official_powertrain: Benzin Mild hybrid / 1.5 l / 110 kW
+    jato_powertrain: MHEV
+  - pattern: 'CT14ZY04\s+Aut\.\s+DSG6\s+110/150\s+(?P<price>\d{1,3}(?:\s*\d{3})+)'
+    official_trim: Elegance 1.5 eHybrid 110 kW
+    official_powertrain: Plug-in hybrid benzin / 1.5 l / 110 kW
+    jato_powertrain: PHEV
+  - pattern: 'CT15PT04\s+Aut\.\s+DSG7\s+150/204\s+(?P<price>\d{1,3}(?:\s*\d{3})+)'
+    official_trim: R-Line 2.0 TSI 150 kW
+    official_powertrain: Benzin 95 / 2.0 l / 150 kW
+    jato_powertrain: ICE
+  - pattern: 'CT15ST04\s+Aut\.\s+DSG7\s+195/265\s+(?P<price>\d{1,3}(?:\s*\d{3})+)'
+    official_trim: R-Line 2.0 TSI 195 kW
+    official_powertrain: Benzin 95 / 2.0 l / 195 kW
+    jato_powertrain: ICE
+  - pattern: 'CT157T04\s+Aut\.\s+DSG7\s+142/193\s+(?P<price>\d{1,3}(?:\s*\d{3})+)'
+    official_trim: R-Line 2.0 TDI 142 kW
+    official_powertrain: Diesel / 2.0 l / 142 kW
+    jato_powertrain: ICE
+  - pattern: 'CT15BM04\s+Aut\.\s+DSG7\s+110/150\s+(?P<price>\d{1,3}(?:\s*\d{3})+)'
+    official_trim: R-Line 1.5 eTSI 110 kW
+    official_powertrain: Benzin Mild hybrid / 1.5 l / 110 kW
+    jato_powertrain: MHEV
+  - pattern: 'CT15ZY04\s+Aut\.\s+DSG6\s+110/150\s+(?P<price>\d{1,3}(?:\s*\d{3})+)'
+    official_trim: R-Line 1.5 eHybrid 110 kW
+    official_powertrain: Plug-in hybrid benzin / 1.5 l / 110 kW
+    jato_powertrain: PHEV
+  - pattern: 'CT15YY04\s+Aut\.\s+DSG6\s+130/177\s+(?P<price>\d{1,3}(?:\s*\d{3})+)'
+    official_trim: R-Line 1.5 eHybrid 130 kW
+    official_powertrain: Plug-in hybrid benzin / 1.5 l / 130 kW
+    jato_powertrain: PHEV
+  - pattern: 'CT15PTR3\s+Aut\.\s+DSG7\s+150/204\s+(?P<price>\d{1,3}(?:\s*\d{3})+)'
+    official_trim: R-Line People 2.0 TSI 150 kW
+    official_powertrain: Benzin 95 / 2.0 l / 150 kW
+    jato_powertrain: ICE
+  - pattern: 'CT15STR3\s+Aut\.\s+DSG7\s+195/265\s+(?P<price>\d{1,3}(?:\s*\d{3})+)'
+    official_trim: R-Line People 2.0 TSI 195 kW
+    official_powertrain: Benzin 95 / 2.0 l / 195 kW
+    jato_powertrain: ICE
+  - pattern: 'CT157TR3\s+Aut\.\s+DSG7\s+142/193\s+(?P<price>\d{1,3}(?:\s*\d{3})+)'
+    official_trim: R-Line People 2.0 TDI 142 kW
+    official_powertrain: Diesel / 2.0 l / 142 kW
+    jato_powertrain: ICE
+  - pattern: 'CT15BMR3\s+Aut\.\s+DSG7\s+110/150\s+(?P<price>\d{1,3}(?:\s*\d{3})+)'
+    official_trim: R-Line People 1.5 eTSI 110 kW
+    official_powertrain: Benzin Mild hybrid / 1.5 l / 110 kW
+    jato_powertrain: MHEV
+  - pattern: 'CT15ZYR3\s+Aut\.\s+DSG6\s+110/150\s+(?P<price>\d{1,3}(?:\s*\d{3})+)'
+    official_trim: R-Line People 1.5 eHybrid 110 kW
+    official_powertrain: Plug-in hybrid benzin / 1.5 l / 110 kW
+    jato_powertrain: PHEV
+  - pattern: 'CT15YYR3\s+Aut\.\s+DSG6\s+130/177\s+(?P<price>\d{1,3}(?:\s*\d{3})+)'
+    official_trim: R-Line People 1.5 eHybrid 130 kW
+    official_powertrain: Plug-in hybrid benzin / 1.5 l / 130 kW
+    jato_powertrain: PHEV
 schedule:
   frequency: manual_only
   run_window_start: 00:00
   run_window_end: 05:00
   preferred_weekday: monday
-notes: Keywords filled from official manufacturer website research (CZ market). CSS
-  selectors still require browser-based inspection before promotion. [Switched to
-  playwright_card_flow with volkswagen_configurator_trim_overview_playwright.yaml]
+notes: Repaired from dynamic Volkswagen CZ model page, which failed with
+  Playwright connection resets locally, to the official Volkswagen CZ Tiguan
+  price-list PDF. Page 1 states model year 2026 and validity from 2025-05-28;
+  page 2 states all model prices are in CZK including 21% DPH.
 bootstrap_meta:
   country_model_rank: 10
   suggested_scope_kind: single_model
