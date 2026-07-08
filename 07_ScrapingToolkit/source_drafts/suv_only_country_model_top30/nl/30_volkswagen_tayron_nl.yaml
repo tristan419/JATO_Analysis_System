@@ -1,46 +1,81 @@
 source_code: volkswagen_tayron_nl_draft_scrapling
 country: 荷兰
 brand: VOLKSWAGEN
-source_url: https://www.volkswagen.nl/nl/configurator.html/__app/tayron.app
-source_type: manufacturer_official
+source_url: https://www.volkswagen.nl/idhub/content/dam/onehub_pkw/importers/nl/prijslijsten/Tayron_prijslijst.pdf
+source_type: official_price_list
 price_semantics: base_msrp
-extractor_type: playwright
-profile_preset: ../_shared/presets/volkswagen_configurator_trim_overview_playwright.yaml
+extractor_type: pdf_text
 profile:
-  url: https://www.volkswagen.nl/nl/configurator.html/__app/tayron.app
-  cookie_reject_selector: null
-  cookie_reject_text: Weigeren
+  url: https://www.volkswagen.nl/idhub/content/dam/onehub_pkw/importers/nl/prijslijsten/Tayron_prijslijst.pdf
+  timeout_seconds: 45
+  retry_attempts: 1
+  retry_delay_seconds: 1
+  prefer_curl_download: true
+  browser_download_fallback: true
   default_currency: EUR
   default_tax_included: true
-  default_price_label: Consumentenadviesprijs incl. btw en bpm
+  default_price_label: Consumentenadviesprijs incl. BTW, BPM, rijklaarmaakkosten, recyclingbijdrage, beheerbijdrage en leges
   fixed_model: TAYRON
   fixed_jato_model: TAYRON
-  structured_fields:
-    powertrain_rules:
-    - key: powertrain_phev
-      powertrain: PHEV
-      keywords:
-      - ehybrid
-    - key: powertrain_mhev
-      powertrain: MHEV
-      keywords:
-      - etsi
-    - key: powertrain_ice
-      powertrain: ICE
-      keywords:
-      - tsi
-      - tdi
-      - benzine
+  copy_trim_to_jato_trim: true
+  match_confidence: 0.9
+  match_status: review_required
+  match_reason:
+    kind: official_pdf_price_list
+    source: volkswagen_nl_tayron_prijslijst
+    note: Official Volkswagen Netherlands Tayron price-list PDF. Patterns target the Consumentenadviesprijs incl. BTW incl. BPM vehicle table and avoid options, service, charging, finance, lease, campaign, and "Vanaf" summary prices.
+  entry_patterns:
+  - pattern: '1\.5\s+eHybrid\s+123\s+km\s+150\s+kW\s*/\s*204\s+pk\s+DSG-6\s+automaat\s+Life\s+€\s*41\.717\s+€\s*753\s+€\s*42\.470\s+€\s*51\.230\s+€\s*1\.260\s+€\s*(?P<price>\d{2}\.\d{3})'
+    official_trim: Life
+    official_powertrain: 1.5 eHybrid 150 kW / 204 pk
+    jato_powertrain: PHEV
+  - pattern: '123\s+km\s+Life\s+Edition\s+€\s*43\.783\s+€\s*753\s+€\s*44\.536\s+€\s*53\.730\s+€\s*1\.260\s+€\s*(?P<price>\d{2}\.\d{3})'
+    official_trim: Life Edition
+    official_powertrain: 1.5 eHybrid 150 kW / 204 pk
+    jato_powertrain: PHEV
+  - pattern: '123\s+km\s+R-line\s+€\s*45\.842\s+€\s*761\s+€\s*46\.603\s+€\s*56\.230\s+€\s*1\.260\s+€\s*(?P<price>\d{2}\.\d{3})'
+    official_trim: R-Line
+    official_powertrain: 1.5 eHybrid 150 kW / 204 pk
+    jato_powertrain: PHEV
+  - pattern: '116\s+km\s+R-Line\s+Edition\s+€\s*47\.907\s+€\s*763\s+€\s*48\.670\s+€\s*58\.730\s+€\s*1\.260\s+€\s*(?P<price>\d{2}\.\d{3})'
+    official_trim: R-Line Edition
+    official_powertrain: 1.5 eHybrid 150 kW / 204 pk
+    jato_powertrain: PHEV
+  - pattern: '123\s+km\s+200\s+kW\s*/\s*272\s+pk\s+R-line\s+€\s*47\.493\s+€\s*763\s+€\s*48\.256\s+€\s*58\.230\s+€\s*1\.260\s+€\s*(?P<price>\d{2}\.\d{3})'
+    official_trim: R-Line 272 pk
+    official_powertrain: 1.5 eHybrid 200 kW / 272 pk
+    jato_powertrain: PHEV
+  - pattern: '116\s+km\s+R-Line\s+Edition\s+€\s*49\.560\s+€\s*763\s+€\s*50\.323\s+€\s*60\.730\s+€\s*1\.260\s+€\s*(?P<price>\d{2}\.\d{3})'
+    official_trim: R-Line Edition 272 pk
+    official_powertrain: 1.5 eHybrid 200 kW / 272 pk
+    jato_powertrain: PHEV
+  - pattern: '1\.5\s+eTSI\s+110\s+kW\s*/\s*150\s+pk\s+DSG-7\s+automaat\s+Life\s+€\s*38\.829\s+€\s*9\.786\s+€\s*48\.615\s+€\s*56\.770\s+€\s*1\.220\s+€\s*(?P<price>\d{2}\.\d{3})'
+    official_trim: Life
+    official_powertrain: 1.5 eTSI 110 kW / 150 pk
+    jato_powertrain: MHEV
+  - pattern: 'Life\s+Edition\s+€\s*40\.896\s+€\s*9\.786\s+€\s*50\.682\s+€\s*59\.270\s+€\s*1\.220\s+€\s*(?P<price>\d{2}\.\d{3})\s+139\s+R41CBM/26/LED'
+    official_trim: Life Edition
+    official_powertrain: 1.5 eTSI 110 kW / 150 pk
+    jato_powertrain: MHEV
+  - pattern: 'R-line\s+€\s*41\.980\s+€\s*10\.974\s+€\s*52\.954\s+€\s*61\.770\s+€\s*1\.220\s+€\s*(?P<price>\d{2}\.\d{3})\s+143\s+R41EBM/26/RLN'
+    official_trim: R-Line
+    official_powertrain: 1.5 eTSI 110 kW / 150 pk
+    jato_powertrain: MHEV
+  - pattern: 'R-Line\s+Edition\s+€\s*43\.801\s+€\s*11\.271\s+€\s*55\.072\s+€\s*64\.270\s+€\s*1\.220\s+€\s*(?P<price>\d{2}\.\d{3})\s+141\s+R41EBM/26/RED'
+    official_trim: R-Line Edition
+    official_powertrain: 1.5 eTSI 110 kW / 150 pk
+    jato_powertrain: MHEV
 schedule:
   frequency: manual_only
   run_window_start: 00:00
   run_window_end: 05:00
   preferred_weekday: monday
-notes: Browser probing on 2026-04-13 confirmed the Dutch configurator entry at tayron.app
-  and a stable trim -> Motoren flow with engine-card pricing labeled "Consumentenadviesprijs
-  incl. btw en bpm". The shared Playwright preset now dismisses the Volkswagen overlay
-  stack up front, so this draft no longer depends on showroom CSS selectors. [Switched
-  to playwright_card_flow with volkswagen_configurator_trim_overview_playwright.yaml]
+notes: Replaced the dynamic Volkswagen configurator flow with the official
+  Volkswagen Netherlands Tayron price-list PDF. PDF metadata CreationDate is
+  2026-03-19 and page 4 states prices per 12 March 2026, model year 2026.
+  Patterns target the final consumer advisory price column and intentionally
+  ignore "Vanaf" summary prices, options, services, charging, finance, lease,
+  and campaign text.
 bootstrap_meta:
   country_model_rank: 30
   suggested_scope_kind: single_model

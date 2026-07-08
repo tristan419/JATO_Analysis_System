@@ -1,46 +1,69 @@
 source_code: volkswagen_tiguan_nl_draft_scrapling
 country: 荷兰
 brand: VOLKSWAGEN
-source_url: https://www.volkswagen.nl/nl/configurator.html/__app/tiguan.app
-source_type: manufacturer_official
+source_url: https://www.volkswagen.nl/idhub/content/dam/onehub_pkw/importers/nl/prijslijsten/Tiguan_prijslijst.pdf
+source_type: official_price_list
 price_semantics: base_msrp
-extractor_type: playwright
-profile_preset: ../_shared/presets/volkswagen_configurator_trim_overview_playwright.yaml
+extractor_type: pdf_text
 profile:
-  url: https://www.volkswagen.nl/nl/configurator.html/__app/tiguan.app
-  cookie_reject_selector: null
-  cookie_reject_text: Weigeren
+  url: https://www.volkswagen.nl/idhub/content/dam/onehub_pkw/importers/nl/prijslijsten/Tiguan_prijslijst.pdf
+  timeout_seconds: 45
+  retry_attempts: 1
+  retry_delay_seconds: 1
+  prefer_curl_download: true
+  browser_download_fallback: true
   default_currency: EUR
   default_tax_included: true
-  default_price_label: Consumentenadviesprijs incl. btw en bpm
+  default_price_label: Consumentenadviesprijs incl. BTW, BPM, rijklaarmaakkosten, recyclingbijdrage, beheerbijdrage en leges
   fixed_model: TIGUAN
   fixed_jato_model: TIGUAN
-  structured_fields:
-    powertrain_rules:
-    - key: powertrain_phev
-      powertrain: PHEV
-      keywords:
-      - ehybrid
-    - key: powertrain_mhev
-      powertrain: MHEV
-      keywords:
-      - etsi
-    - key: powertrain_ice
-      powertrain: ICE
-      keywords:
-      - tsi
-      - tdi
-      - benzine
+  copy_trim_to_jato_trim: true
+  match_confidence: 0.9
+  match_status: review_required
+  match_reason:
+    kind: official_pdf_price_list
+    source: volkswagen_nl_tiguan_prijslijst
+    note: Official Volkswagen Netherlands Tiguan price-list PDF. Patterns target the Consumentenadviesprijs incl. BTW incl. BPM vehicle table and avoid options, service, charging, finance, lease, campaign, and "Vanaf" summary prices.
+  entry_patterns:
+  - pattern: '1\.5\s+eTSI\s+96\s+kW\s*/\s*131\s+pk\s+DSG-7\s+automaat\s+Trend\s+€\s*31\.541\s+€\s*8\.700\s+€\s*40\.241\s+€\s*46\.865\s+€\s*1\.125\s+€\s*(?P<price>\d{2}\.\d{3})'
+    official_trim: Trend
+    official_powertrain: 1.5 eTSI 96 kW / 131 pk
+    jato_powertrain: MHEV
+  - pattern: '1\.5\s+eHybrid\s+126\s+km\s+150\s+kW\s*/\s*204\s+pk\s+DSG-6\s+automaat\s+Life\s+€\s*39\.731\s+€\s*751\s+€\s*40\.482\s+€\s*48\.825\s+€\s*1\.165\s+€\s*(?P<price>\d{2}\.\d{3})'
+    official_trim: Life
+    official_powertrain: 1.5 eHybrid 150 kW / 204 pk
+    jato_powertrain: PHEV
+  - pattern: '125\s+km\s+Life\s+Edition\s+€\s*41\.797\s+€\s*751\s+€\s*42\.548\s+€\s*51\.325\s+€\s*1\.165\s+€\s*(?P<price>\d{2}\.\d{3})'
+    official_trim: Life Edition
+    official_powertrain: 1.5 eHybrid 150 kW / 204 pk
+    jato_powertrain: PHEV
+  - pattern: '118\s+km\s+R-Line\s+€\s*43\.856\s+€\s*759\s+€\s*44\.615\s+€\s*53\.825\s+€\s*1\.165\s+€\s*(?P<price>\d{2}\.\d{3})'
+    official_trim: R-Line
+    official_powertrain: 1.5 eHybrid 150 kW / 204 pk
+    jato_powertrain: PHEV
+  - pattern: '118\s+km\s+R-Line\s+Edition\s+€\s*45\.922\s+€\s*759\s+€\s*46\.681\s+€\s*56\.325\s+€\s*1\.165\s+€\s*(?P<price>\d{2}\.\d{3})'
+    official_trim: R-Line Edition
+    official_powertrain: 1.5 eHybrid 150 kW / 204 pk
+    jato_powertrain: PHEV
+  - pattern: '119\s+km\s+200\s+kW\s*/\s*272\s+pk\s+R-Line\s+€\s*45\.509\s+€\s*759\s+€\s*46\.268\s+€\s*55\.825\s+€\s*1\.165\s+€\s*(?P<price>\d{2}\.\d{3})'
+    official_trim: R-Line 272 pk
+    official_powertrain: 1.5 eHybrid 200 kW / 272 pk
+    jato_powertrain: PHEV
+  - pattern: '119\s+km\s+R-Line\s+Edition\s+€\s*47\.575\s+€\s*759\s+€\s*48\.334\s+€\s*58\.325\s+€\s*1\.165\s+€\s*(?P<price>\d{2}\.\d{3})'
+    official_trim: R-Line Edition 272 pk
+    official_powertrain: 1.5 eHybrid 200 kW / 272 pk
+    jato_powertrain: PHEV
 schedule:
   frequency: manual_only
   run_window_start: 00:00
   run_window_end: 05:00
   preferred_weekday: monday
-notes: Browser probing on 2026-04-13 confirmed the Dutch configurator entry at tiguan.app
-  and a stable trim -> Motoren flow with engine-card pricing labeled "Consumentenadviesprijs
-  incl. btw en bpm". The shared Playwright preset now dismisses the Volkswagen overlay
-  stack up front, so this draft no longer depends on showroom CSS selectors. [Switched
-  to playwright_card_flow with volkswagen_configurator_trim_overview_playwright.yaml]
+notes: Replaced the dynamic Volkswagen configurator flow with the official
+  Volkswagen Netherlands Tiguan price-list PDF. PDF metadata CreationDate is
+  2026-03-19 and page 4 states prices per 12 March 2026, model year 2026.
+  Patterns target the final consumer advisory price column and intentionally
+  ignore "Vanaf" summary prices, options, services, charging, finance, lease,
+  and campaign text.
 bootstrap_meta:
   country_model_rank: 7
   suggested_scope_kind: single_model
