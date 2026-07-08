@@ -166,6 +166,38 @@ def _default_source_accessibility_audit() -> dict[str, Any]:
     }
 
 
+def _default_price_alert_review_queue() -> dict[str, Any]:
+    return {
+        "schemaVersion": "msrp_price_alert_review_queue_v1",
+        "generatedAt": None,
+        "sourceSnapshotSchemaVersion": None,
+        "snapshotWeek": None,
+        "snapshotGeneratedAtUtc": None,
+        "officialSourceRequiredForResolution": True,
+        "warnings": [],
+        "summary": {
+            "totalCases": 0,
+            "sourceAlertCount": 0,
+            "skippedAlertCount": 0,
+            "thresholdAlertCount": 0,
+            "highPriorityAlertCount": 0,
+            "missingEvidenceCount": 0,
+            "sourceCurrencyReviewCount": 0,
+            "effectivenessFollowUpCount": 0,
+            "effectivenessLinkedCount": 0,
+            "effectivenessMissingCount": 0,
+            "effectivenessLabelCounts": {},
+            "priceDropCount": 0,
+            "priceIncreaseCount": 0,
+            "priorityCounts": {},
+            "severityCounts": {},
+            "countryCount": 0,
+            "countries": [],
+        },
+        "items": [],
+    }
+
+
 def _load_msrp_source_repair_backlog() -> dict[str, Any]:
     backlog = _read_json_if_exists(_msrp_artifacts_dir() / "msrp_source_repair_backlog.json")
     return backlog if isinstance(backlog, dict) else _default_source_repair_backlog()
@@ -193,6 +225,23 @@ def _load_msrp_source_accessibility_audit(run_id: str | None = None) -> dict[str
     return audit
 
 
+def _load_msrp_price_alert_review_queue() -> dict[str, Any]:
+    queue = _read_json_if_exists(_msrp_artifacts_dir() / "msrp_price_alert_review_queue.json")
+    return queue if isinstance(queue, dict) else _default_price_alert_review_queue()
+
+
+def _price_alert_review_status_fields(queue: dict[str, Any]) -> dict[str, int]:
+    summary = queue.get("summary") if isinstance(queue.get("summary"), dict) else {}
+    return {
+        "priceAlertReviewCases": _int_value(summary.get("totalCases")),
+        "priceAlertReviewHighPriority": _int_value(summary.get("highPriorityAlertCount")),
+        "priceAlertReviewMissingEvidence": _int_value(summary.get("missingEvidenceCount")),
+        "priceAlertReviewEffectivenessFollowUp": _int_value(summary.get("effectivenessFollowUpCount")),
+        "priceAlertReviewEffectivenessLinked": _int_value(summary.get("effectivenessLinkedCount")),
+        "priceAlertReviewEffectivenessMissing": _int_value(summary.get("effectivenessMissingCount")),
+    }
+
+
 def _with_source_reference_evidence(progress: dict[str, Any]) -> dict[str, Any]:
     enriched = dict(progress)
     run_id = str((enriched.get("status") or {}).get("runId") or "")
@@ -200,6 +249,12 @@ def _with_source_reference_evidence(progress: dict[str, Any]) -> dict[str, Any]:
         enriched["sourceReferenceEvidence"] = _load_msrp_source_reference_evidence(run_id)
     if not isinstance(enriched.get("sourceAccessibilityAudit"), dict):
         enriched["sourceAccessibilityAudit"] = _load_msrp_source_accessibility_audit(run_id)
+    if not isinstance(enriched.get("priceAlertReviewQueue"), dict):
+        enriched["priceAlertReviewQueue"] = _load_msrp_price_alert_review_queue()
+    status = dict(enriched.get("status") or {})
+    for key, value in _price_alert_review_status_fields(enriched["priceAlertReviewQueue"]).items():
+        status.setdefault(key, value)
+    enriched["status"] = status
     return enriched
 
 

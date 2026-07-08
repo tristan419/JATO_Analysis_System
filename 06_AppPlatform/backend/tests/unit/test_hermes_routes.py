@@ -612,6 +612,48 @@ class TestSentinelAndDeploy:
         }
         assert data["sourceRepairBacklog"]["totalIssueCount"] == 3
 
+    def test_msrp_country_progress_dynamic_report_includes_price_alert_review_queue(
+        self,
+        client,
+        tmp_path,
+    ):
+        reports_dir = tmp_path / "hermes" / "reports"
+        artifact_dir = tmp_path / "03_Scripts" / "diagnostics" / "artifacts"
+        _write_json(artifact_dir / "dryrun_report.json", _make_msrp_v3_report())
+        _write_json(artifact_dir / "msrp_price_alert_review_queue.json", {
+            "schemaVersion": "msrp_price_alert_review_queue_v1",
+            "snapshotWeek": "2026-W28",
+            "summary": {
+                "totalCases": 2,
+                "highPriorityAlertCount": 1,
+                "missingEvidenceCount": 0,
+                "effectivenessFollowUpCount": 1,
+                "effectivenessLinkedCount": 1,
+                "effectivenessMissingCount": 0,
+            },
+            "items": [],
+        })
+
+        with (
+            patch("app.api.routes.hermes.PROJECT_ROOT", tmp_path),
+            patch("app.api.routes.hermes.REPORTS_DIR", reports_dir),
+            patch("app.api.routes.hermes._partial_msrp_progress", return_value=None),
+        ):
+            resp = client.get("/hermes/msrp-country-progress")
+
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["priceAlertReviewQueue"]["schemaVersion"] == (
+            "msrp_price_alert_review_queue_v1"
+        )
+        assert data["priceAlertReviewQueue"]["snapshotWeek"] == "2026-W28"
+        assert data["status"]["priceAlertReviewCases"] == 2
+        assert data["status"]["priceAlertReviewHighPriority"] == 1
+        assert data["status"]["priceAlertReviewMissingEvidence"] == 0
+        assert data["status"]["priceAlertReviewEffectivenessFollowUp"] == 1
+        assert data["status"]["priceAlertReviewEffectivenessLinked"] == 1
+        assert data["status"]["priceAlertReviewEffectivenessMissing"] == 0
+
     def test_msrp_country_progress_enriches_latest_report_with_all_country_latest(
         self,
         client,

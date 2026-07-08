@@ -141,6 +141,23 @@ def _remote_price_alert_review_queue_payload(
     }
 
 
+def _write_price_alert_review_queue_artifact(
+    repo_root: Path,
+    *,
+    follow_up_count: int = 1,
+    linked_count: int = 1,
+    missing_count: int = 0,
+) -> None:
+    _write_json(
+        repo_root / audit.PRICE_ALERT_REVIEW_QUEUE_RELATIVE_PATH,
+        _remote_price_alert_review_queue_payload(
+            follow_up_count=follow_up_count,
+            linked_count=linked_count,
+            missing_count=missing_count,
+        ),
+    )
+
+
 def test_build_report_separates_local_p0_from_unchecked_production(tmp_path: Path) -> None:
     _write_statuses(tmp_path)
     source_root = tmp_path / "source_drafts"
@@ -171,6 +188,38 @@ def test_build_report_separates_local_p0_from_unchecked_production(tmp_path: Pat
     assert report["summary"]["priceAlertReviewCaseCount"] == 2
     assert report["summary"]["priceAlertReviewEffectivenessLinkedCount"] == 1
     assert report["summary"]["priceAlertReviewEffectivenessMissingCount"] == 0
+
+
+def test_price_alert_review_closure_can_use_queue_artifact_when_readiness_is_stale(
+    tmp_path: Path,
+) -> None:
+    _write_statuses(tmp_path)
+    report_path = tmp_path / "hermes" / "reports" / "msrp_readiness_audit.json"
+    report_payload = json.loads(report_path.read_text(encoding="utf-8"))
+    for item in report_payload["requirements"]:
+        if item["key"] == "review_queue":
+            item["runtime"] = {}
+    _write_json(report_path, report_payload)
+    _write_price_alert_review_queue_artifact(tmp_path)
+    source_root = tmp_path / "source_drafts"
+    _write_source_drafts(source_root, ("se", "fi"))
+
+    report = audit.build_goal_completion_report(
+        repo_root=tmp_path,
+        source_draft_dir=source_root,
+        required_source_countries=("se", "fi"),
+    )
+    closure = {
+        item["key"]: item for item in report["requirements"]
+    }["msrp_price_alert_review_effectiveness_closure"]
+
+    assert closure["status"] == "passed"
+    assert closure["runtime"]["priceAlertReviewQueueSchemaVersion"] == (
+        audit.PRICE_ALERT_REVIEW_QUEUE_SCHEMA_VERSION
+    )
+    assert closure["runtime"]["priceAlertReviewCaseCount"] == 2
+    assert closure["runtime"]["priceAlertReviewEffectivenessLinkedCount"] == 1
+    assert report["summary"]["msrpReady"] is True
 
 
 def test_source_todo_placeholders_degrade_full_goal(tmp_path: Path) -> None:

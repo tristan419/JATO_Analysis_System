@@ -36,6 +36,9 @@ except ImportError:  # pragma: no cover - optional for isolated unit imports.
 SCHEMA_VERSION = "jato_goal_completion_audit_v2"
 PIPELINE_ID = "goal_completion_audit"
 PRICE_ALERT_REVIEW_QUEUE_SCHEMA_VERSION = "msrp_price_alert_review_queue_v1"
+PRICE_ALERT_REVIEW_QUEUE_RELATIVE_PATH = (
+    "03_Scripts/diagnostics/artifacts/msrp_price_alert_review_queue.json"
+)
 DEFAULT_SOURCE_DRAFT_DIR = "07_ScrapingToolkit/source_drafts/suv_only_country_model_top30"
 DEFAULT_REQUIRED_SOURCE_COUNTRIES = (
     "at",
@@ -198,6 +201,16 @@ def _requirement_by_key(report: dict[str, Any] | None) -> dict[str, dict[str, An
     return keyed
 
 
+def _load_price_alert_review_queue_artifact(
+    repo_root: Path,
+) -> tuple[dict[str, Any] | None, str]:
+    path = repo_root / PRICE_ALERT_REVIEW_QUEUE_RELATIVE_PATH
+    payload = _read_json(path)
+    if not isinstance(payload, dict):
+        return None, _display_path(path)
+    return payload, _display_path(path)
+
+
 def _msrp_detail_requirements(
     *,
     msrp_report: dict[str, Any] | None,
@@ -255,6 +268,9 @@ def _requirements_by_report_key(
 
 def _price_alert_review_closure_requirement(
     msrp_detail_requirements: Sequence[dict[str, Any]],
+    *,
+    price_alert_review_queue: dict[str, Any] | None = None,
+    price_alert_review_queue_path: str | None = None,
 ) -> dict[str, Any]:
     by_key = _requirements_by_report_key(msrp_detail_requirements)
     review = by_key.get("msrp_review_queue", {})
@@ -265,23 +281,51 @@ def _price_alert_review_closure_requirement(
         if isinstance(review.get("runtime"), dict)
         else {}
     )
+    artifact_summary = (
+        price_alert_review_queue.get("summary")
+        if isinstance(price_alert_review_queue, dict)
+        and isinstance(price_alert_review_queue.get("summary"), dict)
+        else {}
+    )
+
+    def runtime_or_artifact(runtime_key: str, artifact_key: str) -> Any:
+        if runtime_key in review_runtime:
+            return review_runtime.get(runtime_key)
+        return artifact_summary.get(artifact_key)
 
     schema_version = review_runtime.get("priceAlertReviewQueueSchemaVersion")
-    case_count = _safe_int(review_runtime.get("priceAlertReviewCaseCount"), 0)
+    if not schema_version and isinstance(price_alert_review_queue, dict):
+        schema_version = price_alert_review_queue.get("schemaVersion")
+    case_count = _safe_int(
+        runtime_or_artifact("priceAlertReviewCaseCount", "totalCases"),
+        0,
+    )
     follow_up_count = _safe_int(
-        review_runtime.get("priceAlertReviewEffectivenessFollowUpCount"),
+        runtime_or_artifact(
+            "priceAlertReviewEffectivenessFollowUpCount",
+            "effectivenessFollowUpCount",
+        ),
         0,
     )
     linked_count = _safe_int(
-        review_runtime.get("priceAlertReviewEffectivenessLinkedCount"),
+        runtime_or_artifact(
+            "priceAlertReviewEffectivenessLinkedCount",
+            "effectivenessLinkedCount",
+        ),
         0,
     )
     missing_count = _safe_int(
-        review_runtime.get("priceAlertReviewEffectivenessMissingCount"),
+        runtime_or_artifact(
+            "priceAlertReviewEffectivenessMissingCount",
+            "effectivenessMissingCount",
+        ),
         0,
     )
-    queue_covered = bool(review_runtime.get("priceAlertReviewQueueCovered"))
     queue_schema_ok = schema_version == PRICE_ALERT_REVIEW_QUEUE_SCHEMA_VERSION
+    queue_covered = bool(
+        review_runtime.get("priceAlertReviewQueueCovered")
+        or queue_schema_ok
+    )
     effectiveness_linkage_ok = (
         follow_up_count == 0
         or (linked_count >= follow_up_count and missing_count == 0)
@@ -305,6 +349,7 @@ def _price_alert_review_closure_requirement(
         *(sales.get("evidence") or []),
         *(alerts.get("evidence") or []),
         review_runtime.get("priceAlertReviewQueuePath"),
+        price_alert_review_queue_path if isinstance(price_alert_review_queue, dict) else None,
     ])
 
     return _requirement(
@@ -664,12 +709,17 @@ def build_goal_completion_report(
     resolved_source_dir = _resolve_path(root, source_draft_dir)
     msrp_status = _pipeline_status(root, "msrp_readiness_audit")
     msrp_report = _read_msrp_readiness_report(root, msrp_status)
+    price_alert_review_queue, price_alert_review_queue_path = (
+        _load_price_alert_review_queue_artifact(root)
+    )
     msrp_detail_requirements = _msrp_detail_requirements(
         msrp_report=msrp_report,
         msrp_status=msrp_status,
     )
     msrp_review_closure_requirement = _price_alert_review_closure_requirement(
-        msrp_detail_requirements
+        msrp_detail_requirements,
+        price_alert_review_queue=price_alert_review_queue,
+        price_alert_review_queue_path=price_alert_review_queue_path,
     )
     msrp_completion_requirements = [
         *msrp_detail_requirements,
