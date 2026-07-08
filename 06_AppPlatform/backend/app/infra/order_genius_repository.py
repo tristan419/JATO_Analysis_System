@@ -219,6 +219,28 @@ def get_sku_by_material_code_any_status(
     return session.execute(stmt).scalars().first()
 
 
+def get_skus_by_material_codes_any_status(
+    session: Session, material_codes: list[str],
+) -> dict[str, MaterialSkuMaster]:
+    """Return the best SKU row for each material code, including historical rows."""
+    codes = sorted({str(code or "").strip() for code in material_codes if str(code or "").strip()})
+    if not codes:
+        return {}
+    stmt = (
+        select(MaterialSkuMaster)
+        .where(MaterialSkuMaster.material_code.in_(codes))
+        .order_by(
+            MaterialSkuMaster.material_code,
+            MaterialSkuMaster.is_active.desc(),
+            MaterialSkuMaster.row_version.desc(),
+        )
+    )
+    result: dict[str, MaterialSkuMaster] = {}
+    for sku in session.execute(stmt).scalars().all():
+        result.setdefault(sku.material_code, sku)
+    return result
+
+
 def list_active_skus(
     session: Session,
     brand: str | None = None,
@@ -2487,6 +2509,32 @@ def get_fob_for_country_sku(
         CountrySkuFobResolved.is_active == True,
     )
     return session.execute(stmt).scalars().first()
+
+
+def list_fobs_for_country_material_codes(
+    session: Session,
+    country_code: str,
+    material_codes: list[str],
+    payment_term_code: str | None = None,  # kept for API compat, no longer filters
+) -> dict[str, CountrySkuFobResolved]:
+    """Return active FOB rows keyed by material code for one country."""
+    codes = sorted({str(code or "").strip() for code in material_codes if str(code or "").strip()})
+    if not codes:
+        return {}
+    stmt = (
+        select(CountrySkuFobResolved)
+        .where(
+            CountrySkuFobResolved.country_code == country_code,
+            CountrySkuFobResolved.material_code.in_(codes),
+            CountrySkuFobResolved.is_active == True,
+            CountrySkuFobResolved.final_fob_eur > 0,
+        )
+        .order_by(CountrySkuFobResolved.material_code)
+    )
+    result: dict[str, CountrySkuFobResolved] = {}
+    for row in session.execute(stmt).scalars().all():
+        result.setdefault(row.material_code, row)
+    return result
 
 
 def list_fob_by_country(
