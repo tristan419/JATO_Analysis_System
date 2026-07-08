@@ -297,6 +297,24 @@ def test_parse_dryrun_args_defaults_batch_to_all_for_source_filter() -> None:
     assert source_codes == ["renault_austral_es_draft_scrapling"]
 
 
+def test_countries_for_all_batch_discovers_all_draft_country_dirs(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    drafts = tmp_path / "drafts"
+    for name in ["se", "cz", "it", "_shared", "readme", "nordic"]:
+        (drafts / name).mkdir(parents=True)
+    monkeypatch.setattr(batch_dryrun, "_DRAFTS_DIR", drafts)
+
+    assert batch_dryrun._countries_for_batch("all") == ["cz", "it", "se"]
+
+
+def test_countries_for_named_batches_and_explicit_list() -> None:
+    assert batch_dryrun._countries_for_batch("1") == ["se", "hr"]
+    assert batch_dryrun._countries_for_batch("2") == ["hu", "no", "at", "cz", "ch"]
+    assert batch_dryrun._countries_for_batch("se,fi,dk") == ["se", "fi", "dk"]
+
+
 def test_select_target_codes_filters_requested_drafts_and_promoted_sources() -> None:
     target_codes, skipped_promoted, missing_requested = (
         batch_dryrun._select_target_codes(

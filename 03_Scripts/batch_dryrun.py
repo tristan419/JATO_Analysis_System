@@ -82,10 +82,28 @@ STRICT_EXIT = os.getenv("JATO_STRICT_EXIT", "").strip().lower() in {
 BATCH_COUNTRIES = {
     "1": ["se", "hr"],
     "2": ["hu", "no", "at", "cz", "ch"],
-    "all": ["se", "hr", "hu", "no", "at", "cz", "ch"],
 }
 
 log = logging.getLogger(__name__)
+
+
+def _discover_draft_countries(drafts_dir: Path | None = None) -> list[str]:
+    """Discover all two-letter country draft directories."""
+    drafts_dir = drafts_dir or _DRAFTS_DIR
+    if not drafts_dir.is_dir():
+        return []
+    return sorted(
+        path.name
+        for path in drafts_dir.iterdir()
+        if path.is_dir() and len(path.name) == 2 and path.name.isalpha()
+    )
+
+
+def _countries_for_batch(batch: str) -> list[str]:
+    """Resolve CLI batch name to country codes."""
+    if batch == "all":
+        return _discover_draft_countries()
+    return BATCH_COUNTRIES.get(batch, batch.split(","))
 
 
 class SourceAttemptTimeoutError(TimeoutError):
@@ -1088,7 +1106,7 @@ def main():
         print("  batch_dryrun.py all")
         return
     batch, requested_source_codes = _parse_dryrun_args(sys.argv[1:])
-    countries = BATCH_COUNTRIES.get(batch, batch.split(","))
+    countries = _countries_for_batch(batch)
     load_all_sources, run_scrape = _resolve_scraper_functions()
 
     # Load both promoted sources and draft sources
