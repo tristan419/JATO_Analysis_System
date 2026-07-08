@@ -614,6 +614,42 @@ def test_v3_report_marks_tesla_network_unavailable_with_evkx_reference_policy(
     assert "EVKX reference_only_review_required" in markdown
 
 
+def test_v3_report_promotes_placeholder_urls_to_source_repair(
+    tmp_path: Path,
+) -> None:
+    report = {
+        "schemaVersion": "msrp_dryrun_report_v3",
+        "runId": "msrp-dryrun-20260709-010203",
+        "results": [
+            {
+                "country": "be",
+                "code": "bmw_x1_be_draft_scrapling",
+                "brand": "BMW",
+                "status": "empty",
+                "valid": 0,
+                "extracted": 0,
+                "failureReason": "network_unavailable",
+                "recommendedStrategy": "retry_network_or_proxy",
+                "sourceUrl": "https://todo.invalid/be/bmw/x1",
+                "extractorError": "DNSError: Could not resolve host: todo.invalid",
+            },
+        ],
+    }
+    report_path = tmp_path / "dryrun_report.json"
+    report_path.write_text(json.dumps(report), encoding="utf-8")
+
+    backlog = backlog_script.run(str(report_path), str(tmp_path))
+
+    assert backlog["sourceRepairIssueCount"] == 1
+    assert backlog["transientRegressionCount"] == 0
+    group = backlog["groups"][0]
+    assert group["failureReason"] == "placeholder_source_url"
+    assert group["recommendedStrategy"] == "replace_placeholder_with_official_source"
+    assert group["recommendedAction"] == "repair_source_definition"
+    assert group["reviewAssist"]["preferred"] == "official_source_discovery"
+    assert group["sourceRepairIssues"][0]["host"] == "todo.invalid"
+
+
 def test_legacy_report_keeps_summary_backlog_format(tmp_path: Path) -> None:
     report = {
         "total": 1,

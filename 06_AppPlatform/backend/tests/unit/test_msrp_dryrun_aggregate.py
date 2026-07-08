@@ -216,6 +216,72 @@ def test_source_repair_backlog_marks_historical_pass_as_transient(tmp_path):
     assert group["sampleTransientRegressions"][0]["lastKnownGoodRunId"] == previous_run_id
 
 
+def test_source_repair_backlog_keeps_placeholder_urls_as_repairs_even_with_history(tmp_path):
+    """Placeholder URLs are source-definition debt, not transient network regressions."""
+    previous_run_id = "msrp-dryrun-20260521-020000"
+    current_run_dir = tmp_path / "msrp-dryrun-20260521-033000"
+    countries_dir = current_run_dir / "countries"
+    countries_dir.mkdir(parents=True)
+    source_code = "bmw_x1_be_draft_scrapling"
+    out_dir = tmp_path / "artifacts"
+    out_dir.mkdir()
+
+    previous_report = {
+        "schemaVersion": "msrp_dryrun_report_v3",
+        "runId": previous_run_id,
+        "countriesDetail": [
+            {
+                "countryCode": "be",
+                "sources": [
+                    {
+                        "sourceCode": source_code,
+                        "status": "pass",
+                        "valid": 1,
+                        "failureReason": None,
+                    }
+                ],
+            }
+        ],
+        "generatedAt": "2026-05-21T02:00:00Z",
+    }
+    previous_path = out_dir / f"dryrun_report_{previous_run_id}.json"
+    previous_path.write_text(json.dumps(previous_report))
+    (out_dir / "dryrun_runs_index.json").write_text(json.dumps({
+        "schemaVersion": "msrp_dryrun_runs_index_v1",
+        "latestRunId": previous_run_id,
+        "runs": [
+            {
+                "runId": previous_run_id,
+                "finishedAt": "2026-05-21T02:05:00Z",
+                "artifactPath": str(previous_path),
+            }
+        ],
+    }))
+
+    artifact = _make_country_artifact("be", 0, 1)
+    artifact["results"][0].update({
+        "code": source_code,
+        "brand": "BMW",
+        "failureReason": "network_unavailable",
+        "recommendedStrategy": "retry_network_or_proxy",
+        "sourceUrl": "https://todo.invalid/be/bmw/x1",
+        "extractorError": "DNSError: Could not resolve host: todo.invalid",
+    })
+    (countries_dir / "be.json").write_text(json.dumps(artifact))
+
+    agg_mod.run(str(current_run_dir), ["be"], out_latest=str(out_dir / "dryrun_report.json"))
+
+    backlog = json.loads((out_dir / "msrp_source_repair_backlog.json").read_text())
+    assert backlog["totalIssueCount"] == 1
+    assert backlog["sourceRepairIssueCount"] == 1
+    assert backlog["transientRegressionCount"] == 0
+    group = backlog["groups"][0]
+    assert group["failureReason"] == "placeholder_source_url"
+    assert group["recommendedAction"] == "repair_source_definition"
+    assert group["reviewAssist"]["preferred"] == "official_source_discovery"
+    assert group["sourceRepairIssues"][0]["sourceCode"] == source_code
+
+
 def test_aggregate_preserves_source_diagnostics(tmp_path):
     """Country source rows preserve diagnostics used by dashboards."""
     run_dir = tmp_path / "msrp-dryrun-20260521-040000"

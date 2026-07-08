@@ -64,6 +64,20 @@ SOURCE_RESULT_DIAGNOSTIC_KEYS = (
     "sampleRejectedObservations",
 )
 
+PLACEHOLDER_SOURCE_FAILURE = {
+    "failureReason": "placeholder_source_url",
+    "recommendedStrategy": "replace_placeholder_with_official_source",
+    "severity": "error",
+}
+
+
+def _is_placeholder_source_url(url: str) -> bool:
+    if not url:
+        return False
+    parsed = urlparse(url if "://" in url else f"https://{url}")
+    host = (parsed.hostname or "").lower().strip(".")
+    return host == "todo.invalid" or host.endswith(".todo.invalid")
+
 
 def _copy_source_result_diagnostics(src: dict, result_entry: dict) -> None:
     for key in SOURCE_RESULT_DIAGNOSTIC_KEYS:
@@ -209,6 +223,12 @@ def _classify_dryrun_failure(
     except (TypeError, ValueError):
         http_status = None
 
+    if (
+        _is_placeholder_source_url(source_url)
+        or _is_placeholder_source_url(final_url)
+        or "todo.invalid" in error_lower
+    ):
+        return dict(PLACEHOLDER_SOURCE_FAILURE)
     if "404-page" in final_url.lower() or "/404" in final_url.lower():
         return {"failureReason": "source_url_not_found", "recommendedStrategy": "update_source_url", "severity": "error"}
     if (

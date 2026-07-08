@@ -148,6 +148,28 @@ def test_classify_playwright_failed_load_as_retryable_network_failure() -> None:
     assert classification["severity"] == "warning"
 
 
+def test_classify_placeholder_source_url_as_source_repair() -> None:
+    classification = batch_dryrun._classify_dryrun_failure(
+        {
+            "status": "empty",
+            "valid": 0,
+            "extracted": 0,
+            "sourceUrl": "https://todo.invalid/be/bmw/x1",
+            "extractorError": "DNSError: Could not resolve host: todo.invalid",
+        }
+    )
+
+    assert classification == {
+        "failureReason": "placeholder_source_url",
+        "recommendedStrategy": "replace_placeholder_with_official_source",
+        "severity": "error",
+    }
+    assert not batch_dryrun._source_result_is_retryable(
+        {"status": "empty", "valid": 0, **classification},
+        classification,
+    )
+
+
 def test_classify_missing_dynamic_price_as_retryable() -> None:
     classification = batch_dryrun._classify_dryrun_failure(
         {

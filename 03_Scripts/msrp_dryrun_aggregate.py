@@ -32,6 +32,10 @@ TRANSIENT_RECHECK_FAILURES = {
     "http_timeout",
     "network_unavailable",
 }
+SOURCE_REPAIR_ONLY_FAILURES = {
+    "placeholder_source_url",
+}
+PLACEHOLDER_SOURCE_RECOMMENDATION = "replace_placeholder_with_official_source"
 BUSINESS_RESOLUTION_FAILURES = {
     "model_not_currently_available",
 }
@@ -397,6 +401,28 @@ def _source_host(source: dict[str, Any]) -> str:
     return host[4:] if host.startswith("www.") else host
 
 
+def _is_placeholder_source(source: dict[str, Any]) -> bool:
+    host = _source_host(source)
+    if host == "todo.invalid" or host.endswith(".todo.invalid"):
+        return True
+    for key in ("sourceUrl", "finalUrl", "extractorError", "error"):
+        if "todo.invalid" in str(source.get(key) or "").lower():
+            return True
+    return False
+
+
+def _effective_failure_reason(source: dict[str, Any]) -> str:
+    if _is_placeholder_source(source):
+        return "placeholder_source_url"
+    return str(source.get("failureReason") or "")
+
+
+def _effective_recommended_strategy(source: dict[str, Any], failure_reason: str) -> str:
+    if failure_reason == "placeholder_source_url":
+        return PLACEHOLDER_SOURCE_RECOMMENDATION
+    return str(source.get("recommendedStrategy") or "diagnose_with_msrp_page_analyzer")
+
+
 def _source_brand(source: dict[str, Any]) -> str:
     return str(source.get("brand") or "").strip().upper()
 
@@ -467,6 +493,13 @@ def _priority_review_assist(
                 "Official source indicates the model may be discontinued or unavailable; "
                 "confirm catalog coverage or replace the tracked model instead of repairing selectors."
             ),
+        }
+    if failure_reason == "placeholder_source_url":
+        return {
+            "preferred": "official_source_discovery",
+            "llmFit": "low",
+            "neuralNetworkFit": "not_recommended",
+            "reason": "The source URL is a known placeholder; replace it with an official page, price list, or configurator endpoint.",
         }
     if failure_reason in {"no_observation_extracted", "validation_rejected_all"}:
         return {
@@ -703,19 +736,19 @@ def _write_source_repair_backlog(
         str(report.get("runId") or ""),
     )
     for result in _iter_report_results(report):
-        reason = result.get("failureReason")
+        reason = _effective_failure_reason(result)
         if not reason:
             continue
-        reason_label = str(reason)
+        reason_label = reason
         country = str(result.get("country") or "").lower()
         source_code = result.get("sourceCode") or result.get("code") or ""
-        recommended = result.get("recommendedStrategy") or "diagnose_with_msrp_page_analyzer"
+        recommended = _effective_recommended_strategy(result, reason_label)
         key = _source_key(country, result)
         last_good = last_known_good.get(key) if key else None
         is_business_resolution = reason_label in BUSINESS_RESOLUTION_FAILURES
         is_transient = (
             bool(last_good) or reason_label in TRANSIENT_RECHECK_FAILURES
-        ) and not is_business_resolution
+        ) and not is_business_resolution and reason_label not in SOURCE_REPAIR_ONLY_FAILURES
         group = groups.setdefault(reason_label, {
             "failureReason": reason_label,
             "count": 0,
