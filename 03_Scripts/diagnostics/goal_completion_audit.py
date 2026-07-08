@@ -35,6 +35,7 @@ except ImportError:  # pragma: no cover - optional for isolated unit imports.
 
 SCHEMA_VERSION = "jato_goal_completion_audit_v2"
 PIPELINE_ID = "goal_completion_audit"
+PRICE_ALERT_REVIEW_QUEUE_SCHEMA_VERSION = "msrp_price_alert_review_queue_v1"
 DEFAULT_SOURCE_DRAFT_DIR = "07_ScrapingToolkit/source_drafts/suv_only_country_model_top30"
 DEFAULT_REQUIRED_SOURCE_COUNTRIES = (
     "at",
@@ -230,6 +231,112 @@ def _msrp_detail_requirements(
     return requirements
 
 
+def _dedupe_evidence(values: Iterable[Any]) -> list[str]:
+    seen: set[str] = set()
+    evidence: list[str] = []
+    for value in values:
+        text = str(value or "").strip()
+        if not text or text in seen:
+            continue
+        seen.add(text)
+        evidence.append(text)
+    return evidence
+
+
+def _requirements_by_report_key(
+    requirements: Sequence[dict[str, Any]],
+) -> dict[str, dict[str, Any]]:
+    return {
+        str(item.get("key") or ""): item
+        for item in requirements
+        if isinstance(item, dict) and item.get("key")
+    }
+
+
+def _price_alert_review_closure_requirement(
+    msrp_detail_requirements: Sequence[dict[str, Any]],
+) -> dict[str, Any]:
+    by_key = _requirements_by_report_key(msrp_detail_requirements)
+    review = by_key.get("msrp_review_queue", {})
+    sales = by_key.get("msrp_sales_effectiveness", {})
+    alerts = by_key.get("msrp_price_alerts", {})
+    review_runtime = (
+        review.get("runtime")
+        if isinstance(review.get("runtime"), dict)
+        else {}
+    )
+
+    schema_version = review_runtime.get("priceAlertReviewQueueSchemaVersion")
+    case_count = _safe_int(review_runtime.get("priceAlertReviewCaseCount"), 0)
+    follow_up_count = _safe_int(
+        review_runtime.get("priceAlertReviewEffectivenessFollowUpCount"),
+        0,
+    )
+    linked_count = _safe_int(
+        review_runtime.get("priceAlertReviewEffectivenessLinkedCount"),
+        0,
+    )
+    missing_count = _safe_int(
+        review_runtime.get("priceAlertReviewEffectivenessMissingCount"),
+        0,
+    )
+    queue_covered = bool(review_runtime.get("priceAlertReviewQueueCovered"))
+    queue_schema_ok = schema_version == PRICE_ALERT_REVIEW_QUEUE_SCHEMA_VERSION
+    effectiveness_linkage_ok = (
+        follow_up_count == 0
+        or (linked_count >= follow_up_count and missing_count == 0)
+    )
+    base_paths_pass = (
+        review.get("status") == "passed"
+        and sales.get("status") == "passed"
+        and alerts.get("status") == "passed"
+        and queue_schema_ok
+        and queue_covered
+    )
+    passed = base_paths_pass and effectiveness_linkage_ok
+    degraded = (
+        review.get("status") == "passed"
+        and queue_schema_ok
+        and queue_covered
+        and not effectiveness_linkage_ok
+    )
+    evidence = _dedupe_evidence([
+        *(review.get("evidence") or []),
+        *(sales.get("evidence") or []),
+        *(alerts.get("evidence") or []),
+        review_runtime.get("priceAlertReviewQueuePath"),
+    ])
+
+    return _requirement(
+        key="msrp_price_alert_review_effectiveness_closure",
+        title="Price alert review queue and sales-effectiveness closure",
+        status="passed" if passed else "degraded" if degraded else "missing",
+        evidence=evidence,
+        runtime={
+            "priceAlertReviewQueueSchemaVersion": schema_version,
+            "priceAlertReviewCaseCount": case_count,
+            "priceAlertReviewEffectivenessFollowUpCount": follow_up_count,
+            "priceAlertReviewEffectivenessLinkedCount": linked_count,
+            "priceAlertReviewEffectivenessMissingCount": missing_count,
+            "priceAlertReviewQueueCovered": queue_covered,
+            "effectivenessLinkageStatus": (
+                "ok" if effectiveness_linkage_ok else "missing_linkage"
+            ),
+            "requiredSchemas": [PRICE_ALERT_REVIEW_QUEUE_SCHEMA_VERSION],
+            "dependentRequirements": {
+                "reviewQueue": review.get("status"),
+                "salesEffectiveness": sales.get("status"),
+                "priceAlerts": alerts.get("status"),
+            },
+        },
+        note=(
+            "Full goal completion requires the weekly price-alert review queue "
+            "to expose the v1 schema and link every sales-effectiveness "
+            "follow-up back to an analyzed price event."
+        ),
+    )
+
+
 def _requirement(
     *,
     key: str,
@@ -393,6 +500,37 @@ def _effective_progress_gate(progress: dict[str, Any] | None) -> dict[str, Any]:
     }
 
 
+def _remote_price_alert_review_queue(progress: dict[str, Any] | None) -> dict[str, Any]:
+    queue = progress.get("priceAlertReviewQueue") if isinstance(progress, dict) else {}
+    if not isinstance(queue, dict):
+        queue = {}
+    summary = queue.get("summary")
+    if not isinstance(summary, dict):
+        summary = {}
+    follow_up_count = _safe_int(summary.get("effectivenessFollowUpCount"), 0)
+    linked_count = _safe_int(summary.get("effectivenessLinkedCount"), 0)
+    missing_count = _safe_int(summary.get("effectivenessMissingCount"), 0)
+    linkage_ok = (
+        follow_up_count == 0
+        or (linked_count >= follow_up_count and missing_count == 0)
+    )
+    schema_version = queue.get("schemaVersion")
+    schema_ok = schema_version == PRICE_ALERT_REVIEW_QUEUE_SCHEMA_VERSION
+    return {
+        "schemaVersion": schema_version,
+        "schemaOk": schema_ok,
+        "snapshotWeek": queue.get("snapshotWeek"),
+        "totalCases": _safe_int(summary.get("totalCases"), 0),
+        "highPriorityAlertCount": _safe_int(summary.get("highPriorityAlertCount"), 0),
+        "missingEvidenceCount": _safe_int(summary.get("missingEvidenceCount"), 0),
+        "effectivenessFollowUpCount": follow_up_count,
+        "effectivenessLinkedCount": linked_count,
+        "effectivenessMissingCount": missing_count,
+        "effectivenessLinkageStatus": "ok" if linkage_ok else "missing_linkage",
+        "passed": schema_ok and linkage_ok,
+    }
+
+
 def _remote_checks(
     remote_api_base: str | None,
     timeout_seconds: int,
@@ -430,6 +568,7 @@ def _remote_checks(
         progress_status = {}
     progress_gate = _effective_progress_gate(progress)
     stable_coverage = progress_gate["stableCoverage"]
+    price_alert_review_queue = _remote_price_alert_review_queue(progress)
     passed = (
         snapshot_code == 200
         and isinstance(snapshot, dict)
@@ -442,6 +581,7 @@ def _remote_checks(
         and monitoring_code == 200
         and isinstance(monitoring, dict)
         and monitoring.get("schemaVersion") == "msrp_monitoring_events_v1"
+        and price_alert_review_queue["passed"]
     )
     return {
         "status": "passed" if passed else "missing",
@@ -503,6 +643,11 @@ def _remote_checks(
             ),
             "error": monitoring_error,
         },
+        "priceAlertReviewQueue": {
+            key: value
+            for key, value in price_alert_review_queue.items()
+            if key != "passed"
+        },
     }
 
 
@@ -523,6 +668,13 @@ def build_goal_completion_report(
         msrp_report=msrp_report,
         msrp_status=msrp_status,
     )
+    msrp_review_closure_requirement = _price_alert_review_closure_requirement(
+        msrp_detail_requirements
+    )
+    msrp_completion_requirements = [
+        *msrp_detail_requirements,
+        msrp_review_closure_requirement,
+    ]
     unified_status = _pipeline_status(root, "unified_scraping_readiness")
     source_coverage = _source_draft_coverage(
         resolved_source_dir,
@@ -536,7 +688,7 @@ def build_goal_completion_report(
 
     msrp_missing_keys = [
         item["key"]
-        for item in msrp_detail_requirements
+        for item in msrp_completion_requirements
         if item.get("status") != "passed"
     ]
     msrp_ready = (
@@ -563,9 +715,14 @@ def build_goal_completion_report(
             status="passed" if msrp_ready else "missing",
             evidence=[msrp_status.get("statusPath", "")],
             runtime=msrp_status,
-            note="Aggregate gate: every detailed MSRP readiness requirement below must be passed.",
+            note=(
+                "Aggregate gate: every detailed MSRP readiness requirement "
+                "and the review-queue sales-effectiveness closure below must "
+                "be passed."
+            ),
         ),
         *msrp_detail_requirements,
+        msrp_review_closure_requirement,
         _requirement(
             key="unified_scraping_contract_and_stage",
             title="Unified ScrapeJob contract and stage smoke",
@@ -607,7 +764,27 @@ def build_goal_completion_report(
                 1 for item in msrp_detail_requirements
                 if item.get("status") == "passed"
             ),
+            "msrpCompletionRequirementCount": len(msrp_completion_requirements),
+            "msrpCompletionPassedCount": sum(
+                1 for item in msrp_completion_requirements
+                if item.get("status") == "passed"
+            ),
             "msrpMissingRequirementKeys": msrp_missing_keys,
+            "priceAlertReviewCaseCount": (
+                msrp_review_closure_requirement["runtime"].get(
+                    "priceAlertReviewCaseCount"
+                )
+            ),
+            "priceAlertReviewEffectivenessLinkedCount": (
+                msrp_review_closure_requirement["runtime"].get(
+                    "priceAlertReviewEffectivenessLinkedCount"
+                )
+            ),
+            "priceAlertReviewEffectivenessMissingCount": (
+                msrp_review_closure_requirement["runtime"].get(
+                    "priceAlertReviewEffectivenessMissingCount"
+                )
+            ),
             "sourceDraftTodoPlaceholderCount": source_coverage["todoPlaceholderCount"],
             "sourceDraftCountryCount": source_coverage["countryCount"],
             "productionStatus": remote.get("status"),
@@ -640,6 +817,10 @@ def _render_markdown(report: dict[str, Any]) -> str:
         f"| Missing | {(summary.get('statusCounts') or {}).get('missing', 0)} |",
         f"| Not checked | {(summary.get('statusCounts') or {}).get('not_checked', 0)} |",
         f"| MSRP detailed passed | {summary.get('msrpDetailedPassedCount', 0)} / {summary.get('msrpDetailedRequirementCount', 0)} |",
+        f"| MSRP completion passed | {summary.get('msrpCompletionPassedCount', 0)} / {summary.get('msrpCompletionRequirementCount', 0)} |",
+        f"| Price-alert review cases | {summary.get('priceAlertReviewCaseCount', 0)} |",
+        f"| Price-alert linked effectiveness | {summary.get('priceAlertReviewEffectivenessLinkedCount', 0)} |",
+        f"| Price-alert missing effectiveness | {summary.get('priceAlertReviewEffectivenessMissingCount', 0)} |",
         f"| Source draft countries | {summary.get('sourceDraftCountryCount', 0)} |",
         f"| Source TODO placeholders | {summary.get('sourceDraftTodoPlaceholderCount', 0)} |",
         "",
@@ -721,6 +902,15 @@ def write_status_record(
             "localP0Ready": summary.get("localP0Ready", False),
             "statusCounts": status_counts,
             "msrpMissingRequirementKeys": summary.get("msrpMissingRequirementKeys", []),
+            "priceAlertReviewCaseCount": summary.get("priceAlertReviewCaseCount", 0),
+            "priceAlertReviewEffectivenessLinkedCount": summary.get(
+                "priceAlertReviewEffectivenessLinkedCount",
+                0,
+            ),
+            "priceAlertReviewEffectivenessMissingCount": summary.get(
+                "priceAlertReviewEffectivenessMissingCount",
+                0,
+            ),
             "sourceDraftTodoPlaceholderCount": summary.get("sourceDraftTodoPlaceholderCount", 0),
             "productionStatus": summary.get("productionStatus"),
         },

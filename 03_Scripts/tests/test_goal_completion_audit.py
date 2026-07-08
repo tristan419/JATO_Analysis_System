@@ -39,22 +39,37 @@ def _write_json(path: Path, payload: dict) -> None:
 def _write_statuses(repo_root: Path) -> None:
     status_dir = repo_root / "hermes" / "reports" / "pipeline_status"
     msrp_report_path = repo_root / "hermes" / "reports" / "msrp_readiness_audit.json"
+    requirements = []
+    for key in audit.REQUIRED_MSRP_REQUIREMENT_KEYS:
+        runtime = {}
+        if key == "review_queue":
+            runtime = {
+                "priceAlertReviewQueueSchemaVersion": (
+                    audit.PRICE_ALERT_REVIEW_QUEUE_SCHEMA_VERSION
+                ),
+                "priceAlertReviewQueuePath": (
+                    "03_Scripts/diagnostics/artifacts/msrp_price_alert_review_queue.json"
+                ),
+                "priceAlertReviewCaseCount": 2,
+                "priceAlertReviewEffectivenessFollowUpCount": 1,
+                "priceAlertReviewEffectivenessLinkedCount": 1,
+                "priceAlertReviewEffectivenessMissingCount": 0,
+                "priceAlertReviewQueueCovered": True,
+            }
+        requirements.append({
+            "key": key,
+            "title": key.replace("_", " ").title(),
+            "status": "passed",
+            "runtime": runtime,
+            "evidence": ["unit"],
+            "note": "unit",
+        })
     _write_json(
         msrp_report_path,
         {
             "schemaVersion": "msrp_official_price_readiness_v1",
             "status": "passed",
-            "requirements": [
-                {
-                    "key": key,
-                    "title": key.replace("_", " ").title(),
-                    "status": "passed",
-                    "runtime": {},
-                    "evidence": ["unit"],
-                    "note": "unit",
-                }
-                for key in audit.REQUIRED_MSRP_REQUIREMENT_KEYS
-            ],
+            "requirements": requirements,
         },
     )
     _write_json(
@@ -105,6 +120,27 @@ def _write_source_drafts(
         )
 
 
+def _remote_price_alert_review_queue_payload(
+    *,
+    follow_up_count: int = 1,
+    linked_count: int = 1,
+    missing_count: int = 0,
+) -> dict:
+    return {
+        "schemaVersion": audit.PRICE_ALERT_REVIEW_QUEUE_SCHEMA_VERSION,
+        "snapshotWeek": "2026-W24",
+        "summary": {
+            "totalCases": 2,
+            "highPriorityAlertCount": 1,
+            "missingEvidenceCount": 0,
+            "effectivenessFollowUpCount": follow_up_count,
+            "effectivenessLinkedCount": linked_count,
+            "effectivenessMissingCount": missing_count,
+        },
+        "items": [],
+    }
+
+
 def test_build_report_separates_local_p0_from_unchecked_production(tmp_path: Path) -> None:
     _write_statuses(tmp_path)
     source_root = tmp_path / "source_drafts"
@@ -127,9 +163,14 @@ def test_build_report_separates_local_p0_from_unchecked_production(tmp_path: Pat
     assert by_key["msrp_auto_review_scoring"]["status"] == "passed"
     assert by_key["msrp_monitoring_events"]["status"] == "passed"
     assert by_key["msrp_pipeline_orchestration"]["status"] == "passed"
+    assert by_key["msrp_price_alert_review_effectiveness_closure"]["status"] == "passed"
     assert "ai_news_voc_15_country_smoke" not in by_key
     assert by_key["production_deployment_state"]["status"] == "not_checked"
     assert report["summary"]["msrpDetailedPassedCount"] == 16
+    assert report["summary"]["msrpCompletionPassedCount"] == 17
+    assert report["summary"]["priceAlertReviewCaseCount"] == 2
+    assert report["summary"]["priceAlertReviewEffectivenessLinkedCount"] == 1
+    assert report["summary"]["priceAlertReviewEffectivenessMissingCount"] == 0
 
 
 def test_source_todo_placeholders_degrade_full_goal(tmp_path: Path) -> None:
@@ -171,7 +212,8 @@ def test_remote_checks_can_mark_production_passed(monkeypatch, tmp_path: Path) -
                     "runId": "msrp-dryrun-20260612-013223",
                     "gateStatus": "allowed",
                     "overallPassPct": 96.4,
-                }
+                },
+                "priceAlertReviewQueue": _remote_price_alert_review_queue_payload(),
             }, None, 200
         if url.endswith("/hermes/pipeline/status/unified_scraping_readiness"):
             return {
@@ -198,7 +240,72 @@ def test_remote_checks_can_mark_production_passed(monkeypatch, tmp_path: Path) -
     by_key = {item["key"]: item for item in report["requirements"]}
 
     assert by_key["production_deployment_state"]["status"] == "passed"
+    assert by_key["production_deployment_state"]["runtime"]["priceAlertReviewQueue"] == {
+        "schemaVersion": audit.PRICE_ALERT_REVIEW_QUEUE_SCHEMA_VERSION,
+        "schemaOk": True,
+        "snapshotWeek": "2026-W24",
+        "totalCases": 2,
+        "highPriorityAlertCount": 1,
+        "missingEvidenceCount": 0,
+        "effectivenessFollowUpCount": 1,
+        "effectivenessLinkedCount": 1,
+        "effectivenessMissingCount": 0,
+        "effectivenessLinkageStatus": "ok",
+    }
     assert report["status"] == "complete"
+
+
+def test_remote_checks_rejects_missing_price_alert_review_effectiveness_linkage(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    _write_statuses(tmp_path)
+    source_root = tmp_path / "source_drafts"
+    _write_source_drafts(source_root, ("se", "fi"))
+
+    def fake_fetch_json(
+        url: str,
+        timeout_seconds: int,
+        *,
+        resolve_ip: str | None = None,
+    ):
+        if url.endswith("/msrp/current-prices/snapshot"):
+            return {"schemaVersion": "msrp_current_price_snapshot_v1"}, None, 200
+        if url.endswith("/hermes/msrp-country-progress"):
+            return {
+                "status": {"gateStatus": "allowed", "overallPassPct": 96.4},
+                "priceAlertReviewQueue": _remote_price_alert_review_queue_payload(
+                    follow_up_count=1,
+                    linked_count=0,
+                    missing_count=1,
+                ),
+            }, None, 200
+        if url.endswith("/hermes/pipeline/status/unified_scraping_readiness"):
+            return {"status": "success", "readinessStatus": "passed"}, None, 200
+        if url.endswith("/msrp/monitoring/events"):
+            return {"schemaVersion": "msrp_monitoring_events_v1", "summary": {}}, None, 200
+        raise AssertionError(url)
+
+    monkeypatch.setattr(audit, "_fetch_json", fake_fetch_json)
+
+    report = audit.build_goal_completion_report(
+        repo_root=tmp_path,
+        source_draft_dir=source_root,
+        required_source_countries=("se", "fi"),
+        remote_api_base="https://example.test/v1",
+    )
+    production = {
+        item["key"]: item for item in report["requirements"]
+    }["production_deployment_state"]
+
+    assert production["status"] == "missing"
+    assert report["status"] == "in_progress"
+    assert (
+        production["runtime"]["priceAlertReviewQueue"][
+            "effectivenessLinkageStatus"
+        ]
+        == "missing_linkage"
+    )
 
 
 def test_remote_checks_can_use_stable_progress_when_active_probe_regresses(
@@ -241,6 +348,7 @@ def test_remote_checks_can_use_stable_progress_when_active_probe_regresses(
                     "activeRunRunning": False,
                     "activeRunPartial": False,
                 },
+                "priceAlertReviewQueue": _remote_price_alert_review_queue_payload(),
             }, None, 200
         if url.endswith("/hermes/pipeline/status/unified_scraping_readiness"):
             return {
@@ -307,6 +415,7 @@ def test_remote_checks_rejects_stable_progress_with_blocked_country(
                     "activeRunRunning": False,
                     "activeRunPartial": False,
                 },
+                "priceAlertReviewQueue": _remote_price_alert_review_queue_payload(),
             }, None, 200
         if url.endswith("/hermes/pipeline/status/unified_scraping_readiness"):
             return {"status": "success", "readinessStatus": "passed"}, None, 200
@@ -349,7 +458,10 @@ def test_remote_checks_passes_resolve_ip_to_fetcher(monkeypatch, tmp_path: Path)
         if url.endswith("/msrp/current-prices/snapshot"):
             return {"schemaVersion": "msrp_current_price_snapshot_v1"}, None, 200
         if url.endswith("/hermes/msrp-country-progress"):
-            return {"status": {"gateStatus": "allowed", "overallPassPct": 96.4}}, None, 200
+            return {
+                "status": {"gateStatus": "allowed", "overallPassPct": 96.4},
+                "priceAlertReviewQueue": _remote_price_alert_review_queue_payload(),
+            }, None, 200
         if url.endswith("/hermes/pipeline/status/unified_scraping_readiness"):
             return {"status": "success", "readinessStatus": "passed"}, None, 200
         if url.endswith("/msrp/monitoring/events"):
@@ -403,6 +515,38 @@ def test_missing_msrp_detail_blocks_local_p0(tmp_path: Path) -> None:
     ]
 
 
+def test_missing_price_alert_review_effectiveness_link_blocks_local_p0(tmp_path: Path) -> None:
+    _write_statuses(tmp_path)
+    report_path = tmp_path / "hermes" / "reports" / "msrp_readiness_audit.json"
+    report_payload = json.loads(report_path.read_text(encoding="utf-8"))
+    for item in report_payload["requirements"]:
+        if item["key"] != "review_queue":
+            continue
+        item["runtime"]["priceAlertReviewEffectivenessFollowUpCount"] = 1
+        item["runtime"]["priceAlertReviewEffectivenessLinkedCount"] = 0
+        item["runtime"]["priceAlertReviewEffectivenessMissingCount"] = 1
+    _write_json(report_path, report_payload)
+    source_root = tmp_path / "source_drafts"
+    _write_source_drafts(source_root, ("se", "fi"))
+
+    report = audit.build_goal_completion_report(
+        repo_root=tmp_path,
+        source_draft_dir=source_root,
+        required_source_countries=("se", "fi"),
+    )
+    by_key = {item["key"]: item for item in report["requirements"]}
+
+    assert report["summary"]["localP0Ready"] is False
+    assert by_key["msrp_official_price_p0"]["status"] == "missing"
+    closure = by_key["msrp_price_alert_review_effectiveness_closure"]
+    assert closure["status"] == "degraded"
+    assert closure["runtime"]["effectivenessLinkageStatus"] == "missing_linkage"
+    assert (
+        "msrp_price_alert_review_effectiveness_closure"
+        in report["summary"]["msrpMissingRequirementKeys"]
+    )
+
+
 def test_write_outputs_and_status_record(monkeypatch, tmp_path: Path) -> None:
     _write_statuses(tmp_path)
     source_root = tmp_path / "source_drafts"
@@ -428,5 +572,8 @@ def test_write_outputs_and_status_record(monkeypatch, tmp_path: Path) -> None:
     assert Path(artifacts["latestJson"]).exists()
     assert Path(artifacts["latestMarkdown"]).exists()
     assert status_record == {"pipelineId": audit.PIPELINE_ID, "status": "failed"}
-    assert captured["records_processed"] == 20
+    assert captured["records_processed"] == 21
     assert captured["failed_count"] == 1
+    assert captured["extra"]["priceAlertReviewCaseCount"] == 2
+    assert captured["extra"]["priceAlertReviewEffectivenessLinkedCount"] == 1
+    assert captured["extra"]["priceAlertReviewEffectivenessMissingCount"] == 0
