@@ -1,27 +1,31 @@
 source_code: suzuki_s_cross_sk_draft_scrapling
 country: 斯洛伐克
 brand: SUZUKI
-source_url: https://todo.invalid/sk/suzuki/s_cross
+source_url: https://www.suzuki.sk/automobily/cennik
 source_type: manufacturer_official
 price_semantics: base_msrp
 extractor_type: scrapling
 profile:
-  url: https://todo.invalid/sk/suzuki/s_cross
-  tier: stealth
+  url: https://www.suzuki.sk/automobily/cennik
+  tier: http
   headless: true
-  network_idle: true
+  network_idle: false
+  load_dom: false
+  timeout_ms: 20000
   impersonate: chrome
-  css:
-    vehicle_container: body
-    model: h1, h2
-    trim: h3
-    price: '[class*="price"]'
+  text_regex:
+    source_selector: body
+    include_element_html: true
+    entry_patterns:
+    - pattern: '<a href="/automobily/modely/novy-s-cross#na-stiahnutie">[\s\S]*?<span>\s*(?P<trim>1,4 l BOOSTERJET MILD HYBRID COMFORT 2WD)\s*</span>[\s\S]*?<div class="e-model-price__discount">\s*AKCIA\s*19\s*990\s*€\s*</div>[\s\S]*?<div class="e-model-price__price">\s*(?P<price>25\s*560)\s*€\s*</div>'
+      official_powertrain: 1.4 BOOSTERJET MILD HYBRID
+      price_label: List price before Suzuki AKCIA discount
   default_currency: EUR
   default_tax_included: true
   default_price_label: MSRP
   fixed_model: S-CROSS
   fixed_jato_model: S-CROSS
-  fixed_jato_powertrain: null
+  fixed_jato_powertrain: MHEV
   model_rules: []
   skip_if_model_unmapped: false
   copy_trim_to_jato_trim: true
@@ -69,6 +73,14 @@ profile:
       keyword: special edition
       special: true
     powertrain_rules:
+    - key: powertrain_mhev
+      powertrain: MHEV
+      keywords:
+      - mhev
+      - mild hybrid
+      - mild-hybrid
+      - boosterjet mild hybrid
+      - 48V
     - key: powertrain_hev
       powertrain: HEV
       keywords:
@@ -78,13 +90,6 @@ profile:
       - self charging hybrid
       - hybrid
       - hybridny
-    - key: powertrain_mhev
-      powertrain: MHEV
-      keywords:
-      - mhev
-      - mild hybrid
-      - mild-hybrid
-      - 48V
   auto_accept_gates:
     review_threshold: 0.95
     semi_auto_threshold: 0.98
@@ -100,7 +105,8 @@ schedule:
 notes: Draft scaffold generated from country×model top30 backlog. Replace source_url,
   profile.url, selectors, currency, price label, and the single-model placeholders
   before promoting to 07_ScrapingToolkit/sources. [CSS selectors applied from brand
-  probe]
+  probe] [Filled official Suzuki Slovakia price-list page; text_regex anchors the
+  S-Cross entry trim and captures the non-AKCIA list price]
 bootstrap_meta:
   country_model_rank: 12
   suggested_scope_kind: single_model
