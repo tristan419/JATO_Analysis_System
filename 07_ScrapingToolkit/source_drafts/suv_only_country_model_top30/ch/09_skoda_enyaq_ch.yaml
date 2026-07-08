@@ -71,13 +71,13 @@ profile:
     force_review_if_powertrain_missing: true
     force_review_if_powertrain_ambiguous: true
     force_review_for_special_edition: true
-  json_script_selector: script[type="application/json"]
+  json_script_selector: script[type='application/ld+json']
   css:
     vehicle_container: body
     model: h2, h3
     trim: h3
     price: '[class*="price"]'
-  tier: stealth
+  tier: http
   network_idle: true
   impersonate: chrome
 schedule:
@@ -88,7 +88,8 @@ schedule:
 notes: Keywords filled from official manufacturer website research (CH market). CSS
   selectors still require browser-based inspection before promotion. [CSS selectors
   applied from brand probe] [Switched to playwright_card_flow with skoda_trim_overview_playwright.yaml]
-  [Reverted to scrapling — playwright preset needs per-brand tuning]
+  [Reverted to scrapling — playwright preset needs per-brand tuning] [Switched
+  to static ld+json Product/Offer extraction from the official Skoda CH model page]
 bootstrap_meta:
   country_model_rank: 9
   suggested_scope_kind: single_model
