@@ -27,6 +27,7 @@ FALLBACK_REPORT_PATH = REPO_ROOT / "03_Scripts" / "diagnostics" / "artifacts" / 
 RUNS_INDEX_PATH = REPO_ROOT / "03_Scripts" / "diagnostics" / "artifacts" / "dryrun_runs_index.json"
 SOURCE_REPAIR_BACKLOG_PATH = REPO_ROOT / "03_Scripts" / "diagnostics" / "artifacts" / "msrp_source_repair_backlog.json"
 SOURCE_REFERENCE_EVIDENCE_PATH = REPO_ROOT / "03_Scripts" / "diagnostics" / "artifacts" / "msrp_source_reference_evidence.json"
+SOURCE_REVIEW_QUEUE_PATH = REPO_ROOT / "03_Scripts" / "diagnostics" / "artifacts" / "msrp_source_review_queue.json"
 SOURCE_ACCESSIBILITY_AUDIT_PATH = REPO_ROOT / "03_Scripts" / "diagnostics" / "artifacts" / "msrp_source_accessibility_audit.json"
 SOURCE_URL_PATTERN = re.compile(r"https?://[^\s\"')<>]+")
 COUNTRY_LABELS = {
@@ -136,6 +137,46 @@ def _load_source_reference_evidence(run_id: str | None = None) -> dict:
         except Exception:
             pass
     return _default_source_reference_evidence()
+
+
+def _default_source_review_queue() -> dict:
+    return {
+        "schemaVersion": "msrp_source_review_queue_v1",
+        "generatedAt": None,
+        "backlogRunId": None,
+        "referenceEvidenceGeneratedAt": None,
+        "officialSourceRequiredForIngest": True,
+        "officialIngestEligible": False,
+        "summary": {
+            "totalCases": 0,
+            "sourceRepairCount": 0,
+            "businessResolutionCount": 0,
+            "transientRecheckCount": 0,
+            "referenceOnlyCount": 0,
+            "officialSourceRequiredCount": 0,
+            "officialIngestEligibleCount": 0,
+            "localReferenceCount": 0,
+            "countryCount": 0,
+            "countries": [],
+        },
+        "items": [],
+    }
+
+
+def _load_source_review_queue(run_id: str | None = None) -> dict:
+    if SOURCE_REVIEW_QUEUE_PATH.is_file():
+        try:
+            data = json.loads(SOURCE_REVIEW_QUEUE_PATH.read_text())
+            if not isinstance(data, dict):
+                return _default_source_review_queue()
+            queue_run_id = str(data.get("backlogRunId") or "")
+            target_run_id = str(run_id or "")
+            if target_run_id and queue_run_id and queue_run_id != target_run_id:
+                return _default_source_review_queue()
+            return data
+        except Exception:
+            pass
+    return _default_source_review_queue()
 
 
 def _default_source_accessibility_audit() -> dict:
@@ -975,6 +1016,7 @@ def run(out_dir: str | None = None) -> dict:
             "topFailureReasons": [],
             "sourceRepairBacklog": _load_source_repair_backlog(),
             "sourceReferenceEvidence": _load_source_reference_evidence(),
+            "sourceReviewQueue": _load_source_review_queue(),
             "sourceAccessibilityAudit": _load_source_accessibility_audit(),
             "findings": [{
                 "type": "no_dryrun_report",
@@ -1140,6 +1182,7 @@ def run(out_dir: str | None = None) -> dict:
         "topFailureReasons": [{"reason": r, "count": c} for r, c in top_reasons[:5]],
         "sourceRepairBacklog": source_repair_backlog,
         "sourceReferenceEvidence": _load_source_reference_evidence(str(report.get("runId") or "")),
+        "sourceReviewQueue": _load_source_review_queue(str(report.get("runId") or "")),
         "sourceAccessibilityAudit": _load_source_accessibility_audit(str(report.get("runId") or "")),
         "allCountriesLatest": [_strip_sources(country) for country in all_countries_full],
         "stableCoverage": stable_coverage,
@@ -1267,6 +1310,21 @@ def _render_markdown(result: dict) -> str:
         lines.append(f"| Local references | {reference_summary.get('localReferenceCount', 0)} |")
         lines.append(f"| Missing local references | {reference_summary.get('missingLocalReferenceCount', 0)} |")
         lines.append(f"| Official ingest eligible | {reference_summary.get('officialIngestEligibleCount', 0)} |")
+        lines.append("")
+
+    review_queue = result.get("sourceReviewQueue") or {}
+    review_summary = review_queue.get("summary") or {}
+    if review_summary.get("totalCases"):
+        lines.append("## Source Review Queue\n")
+        lines.append("| Metric | Value |")
+        lines.append("|---|---:|")
+        lines.append(f"| Total cases | {review_summary.get('totalCases', 0)} |")
+        lines.append(f"| Source repair | {review_summary.get('sourceRepairCount', 0)} |")
+        lines.append(f"| Business resolution | {review_summary.get('businessResolutionCount', 0)} |")
+        lines.append(f"| Transient recheck | {review_summary.get('transientRecheckCount', 0)} |")
+        lines.append(f"| Reference-only cases | {review_summary.get('referenceOnlyCount', 0)} |")
+        lines.append(f"| Local references | {review_summary.get('localReferenceCount', 0)} |")
+        lines.append(f"| Official ingest eligible | {review_summary.get('officialIngestEligibleCount', 0)} |")
         lines.append("")
 
     accessibility_audit = result.get("sourceAccessibilityAudit") or {}

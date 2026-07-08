@@ -88,6 +88,42 @@ def test_country_progress_preserves_finance_dryrun_counts(tmp_path, monkeypatch)
         encoding="utf-8",
     )
     monkeypatch.setattr(module, "SOURCE_REFERENCE_EVIDENCE_PATH", reference_path)
+    review_queue_path = tmp_path / "msrp_source_review_queue.json"
+    review_queue_path.write_text(
+        json.dumps({
+            "schemaVersion": "msrp_source_review_queue_v1",
+            "generatedAt": "2026-06-17T02:20:00Z",
+            "backlogRunId": "msrp-dryrun-20260617-012812",
+            "referenceEvidenceGeneratedAt": "2026-06-17T02:16:49Z",
+            "officialSourceRequiredForIngest": True,
+            "officialIngestEligible": False,
+            "summary": {
+                "totalCases": 1,
+                "sourceRepairCount": 0,
+                "businessResolutionCount": 0,
+                "transientRecheckCount": 1,
+                "referenceOnlyCount": 1,
+                "officialSourceRequiredCount": 1,
+                "officialIngestEligibleCount": 0,
+                "localReferenceCount": 5,
+                "countryCount": 1,
+                "countries": ["SE"],
+            },
+            "items": [
+                {
+                    "caseId": "msrp_source_review:se:tesla_model_y_se_draft_scrapling:network_unavailable",
+                    "queueType": "transient_recheck",
+                    "countryCode": "se",
+                    "sourceCode": "tesla_model_y_se_draft_scrapling",
+                    "referencePolicy": "reference_only_review_required",
+                    "officialIngestEligible": False,
+                    "localReferenceCount": 5,
+                }
+            ],
+        }),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(module, "SOURCE_REVIEW_QUEUE_PATH", review_queue_path)
     accessibility_path = tmp_path / "msrp_source_accessibility_audit.json"
     accessibility_path.write_text(
         json.dumps({
@@ -128,15 +164,24 @@ def test_country_progress_preserves_finance_dryrun_counts(tmp_path, monkeypatch)
     assert "| Monthly offers | 1 |" in markdown
     assert "| se | success | 96.6% | 28 | 1 | 0 | 1 | 1 |" in markdown
     assert result["sourceReferenceEvidence"]["summary"]["localReferenceCount"] == 5
+    assert result["sourceReviewQueue"]["schemaVersion"] == "msrp_source_review_queue_v1"
+    assert result["sourceReviewQueue"]["summary"]["totalCases"] == 1
+    assert result["sourceReviewQueue"]["summary"]["referenceOnlyCount"] == 1
+    assert result["sourceReviewQueue"]["officialIngestEligible"] is False
     assert result["sourceAccessibilityAudit"]["summary"]["officialProxyRequiredCount"] == 1
     assert result["sourceAccessibilityAudit"]["summary"]["tlsHandshakeFailedCount"] == 1
     assert "| Local references | 5 |" in markdown
+    assert "## Source Review Queue" in markdown
+    assert "| Total cases | 1 |" in markdown
+    assert "| Reference-only cases | 1 |" in markdown
+    assert "| Official ingest eligible | 0 |" in markdown
     assert "| Official proxy required | 1 |" in markdown
     assert "| TLS handshake failed | 1 |" in markdown
 
 
-def test_source_repair_backlog_preserves_rejection_diagnostics():
+def test_source_repair_backlog_preserves_rejection_diagnostics(tmp_path, monkeypatch):
     module = _load_module()
+    monkeypatch.setattr(module, "RUNS_INDEX_PATH", tmp_path / "missing_index.json")
     report = {
         "schemaVersion": "msrp_dryrun_report_v3",
         "runId": "msrp-dryrun-20260624-083348",
