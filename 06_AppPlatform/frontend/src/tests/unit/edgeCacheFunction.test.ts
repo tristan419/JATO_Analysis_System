@@ -545,6 +545,33 @@ describe("Cloudflare edge cache function", () => {
     expect(runtime.originCalls[0]?.url).toBe("https://origin.example/v1/auth/login");
   });
 
+  it("returns an explicit timeout for hanging non-cacheable origin calls", async () => {
+    const timeoutError = Object.assign(new Error("origin timed out"), { name: "AbortError" });
+    const runtime = createRuntime(() => {
+      throw timeoutError;
+    });
+
+    const response = await callEdgeFunction(runtime, "auth/me", {
+      headers: { "x-auth-token": "token-a" },
+      method: "GET",
+    }, {
+      API_BYPASS_TIMEOUT_MS: "5",
+    });
+
+    expect(response.status).toBe(504);
+    expect(response.headers.get("cache-control")).toBe("no-store");
+    expect(response.headers.get("x-jato-edge-cache")).toBe("BYPASS_TIMEOUT");
+    expect(response.headers.get("x-jato-edge-cache-endpoint")).toBe("/v1/auth/me");
+    expect(await response.json()).toMatchObject({
+      detail: "Origin request timed out after 5ms.",
+      error: "origin_timeout",
+      path: "/v1/auth/me",
+    });
+    expect(runtime.fetch).toHaveBeenCalledTimes(1);
+    expect(runtime.cache.match).not.toHaveBeenCalled();
+    expect(runtime.cache.put).not.toHaveBeenCalled();
+  });
+
   it("bypasses auth profile, permission management, and write methods", async () => {
     const runtime = createRuntime();
 

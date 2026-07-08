@@ -1,4 +1,5 @@
 const DEFAULT_ORIGIN = "https://www.ojeur.cloud";
+const DEFAULT_BYPASS_TIMEOUT_MS = 12_000;
 const CACHEABLE_ENDPOINTS = new Map([
   ["GET metadata/columns", 3600],
   ["GET metadata/filter-snapshot", 3600],
@@ -38,6 +39,32 @@ function cacheTtlSeconds(method, path) {
 function staleTtlSeconds(env) {
   const parsed = Number(env.CACHE_STALE_TTL_SECONDS || env.STALE_CACHE_TTL_SECONDS || "");
   return Number.isFinite(parsed) && parsed > 0 ? Math.floor(parsed) : DEFAULT_STALE_TTL_SECONDS;
+}
+
+function bypassTimeoutMs(env) {
+  const parsed = Number(env.API_BYPASS_TIMEOUT_MS || env.API_ORIGIN_TIMEOUT_MS || "");
+  return Number.isFinite(parsed) && parsed > 0 ? Math.floor(parsed) : DEFAULT_BYPASS_TIMEOUT_MS;
+}
+
+async function withTimeout(timeoutMs, fn) {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    return await fn(controller.signal);
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+function isAbortError(error) {
+  return Boolean(
+    error
+      && typeof error === "object"
+      && (
+        error.name === "AbortError"
+        || error.name === "TimeoutError"
+      ),
+  );
 }
 
 async function sha256Hex(value) {
@@ -119,6 +146,7 @@ async function originFetchPath(request, origin, path, init = {}) {
     method,
     headers,
     body: method === "GET" || method === "HEAD" ? undefined : init.body,
+    signal: init.signal,
   });
 }
 
@@ -129,6 +157,35 @@ async function originFetch(request, origin, path, body) {
     method: request.method,
     search: sourceUrl.search,
   });
+}
+
+function originFailureResponse(path, timeoutMs, error) {
+  const timedOut = isAbortError(error);
+  const headers = new Headers({
+    "cache-control": "no-store",
+    "content-type": "application/json; charset=utf-8",
+    "x-jato-edge-cache": timedOut ? "BYPASS_TIMEOUT" : "BYPASS_ERROR",
+    "x-jato-edge-cache-endpoint": `/v1/${path}`,
+  });
+  return new Response(JSON.stringify({
+    detail: timedOut
+      ? `Origin request timed out after ${timeoutMs}ms.`
+      : "Origin request failed before returning a response.",
+    error: timedOut ? "origin_timeout" : "origin_fetch_failed",
+    path: `/v1/${path}`,
+  }), {
+    status: timedOut ? 504 : 502,
+    headers,
+  });
+}
+
+async function bypassOriginFetch(request, origin, path, body, timeoutMs) {
+  return withTimeout(timeoutMs, (signal) => originFetchPath(request, origin, path, {
+    body,
+    method: request.method,
+    search: new URL(request.url).search,
+    signal,
+  }));
 }
 
 function resolveFilterSnapshotColumns(columns) {
@@ -267,7 +324,12 @@ export async function onRequest(context) {
 
   if (!ttlSeconds) {
     const body = method === "GET" || method === "HEAD" ? undefined : request.body;
-    return bypassResponse(await originFetch(request, origin, path, body));
+    const timeoutMs = bypassTimeoutMs(env);
+    try {
+      return bypassResponse(await bypassOriginFetch(request, origin, path, body, timeoutMs));
+    } catch (error) {
+      return originFailureResponse(path, timeoutMs, error);
+    }
   }
 
   const bodyText = method === "GET" || method === "HEAD" ? "" : await request.text();
