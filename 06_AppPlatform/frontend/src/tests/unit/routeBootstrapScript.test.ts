@@ -39,6 +39,18 @@ describe("route bootstrap script", () => {
     expect(indexHtml).toContain("Promise.all([cnProbePromise, intlProbePromise]).then(function (results) {");
   });
 
+  it("lets non-China intl browsers boot React without waiting for route probes", () => {
+    const directIntlBranch = indexHtml.match(
+      /if \(currentTarget === "intl" && !profile\.prefersChinaRoute\) \{[\s\S]*?start the Cloudflare route immediately\.[\s\S]*?return;[\s\S]*?\}/,
+    );
+    const branchIndex = indexHtml.indexOf('if (currentTarget === "intl" && !profile.prefersChinaRoute) {');
+    const probeMarkIndex = indexHtml.indexOf("markProbeInFlight();");
+
+    expect(directIntlBranch?.[0]).toBeTruthy();
+    expect(branchIndex).toBeGreaterThan(-1);
+    expect(probeMarkIndex).toBeGreaterThan(branchIndex);
+  });
+
   it("keeps the app boot blocked while a cross-host redirect is pending", () => {
     expect(indexHtml).toContain("if (nextHost === host) return false;");
     expect(indexHtml).toContain("return true;");
