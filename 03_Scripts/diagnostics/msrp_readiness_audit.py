@@ -20,6 +20,7 @@ DRYRUN_ARTIFACTS_DIR = REPO_ROOT / "03_Scripts" / "diagnostics" / "artifacts"
 DRYRUN_REPORT_PATH = DRYRUN_ARTIFACTS_DIR / "dryrun_report.json"
 DRYRUN_RUNS_INDEX_PATH = DRYRUN_ARTIFACTS_DIR / "dryrun_runs_index.json"
 SOURCE_REPAIR_BACKLOG_PATH = DRYRUN_ARTIFACTS_DIR / "msrp_source_repair_backlog.json"
+PRICE_ALERT_REVIEW_QUEUE_PATH = DRYRUN_ARTIFACTS_DIR / "msrp_price_alert_review_queue.json"
 MSRP_SOURCE_COUNTRY_CODES = {
     "at",
     "be",
@@ -74,6 +75,7 @@ TEST_EVIDENCE = {
     "workflowService": "06_AppPlatform/backend/tests/unit/test_msrp_workflow_service.py",
     "monitoringService": "06_AppPlatform/backend/tests/unit/test_msrp_monitoring_service.py",
     "snapshotScript": "03_Scripts/tests/test_hermes_msrp_current_price_snapshot.py",
+    "priceAlertReviewQueue": "03_Scripts/tests/test_msrp_price_alert_review_queue.py",
     "frontendApi": "06_AppPlatform/frontend/src/tests/unit/dataManagementApi.test.ts",
     "pipelineWrapper": "03_Scripts/tests/test_run_msrp_pipeline.py",
     "configSourceSync": "03_Scripts/tests/test_engineering_config_source_sync.py",
@@ -589,6 +591,7 @@ def build_readiness_report(
             "min_months": 1,
         },
     )
+    price_alert_review_queue = _read_json_file(PRICE_ALERT_REVIEW_QUEUE_PATH)
     country_progress, country_progress_error = _safe_get(
         client,
         "/hermes/msrp-country-progress",
@@ -645,6 +648,23 @@ def build_readiness_report(
     single_source_count = int(reconciliation_status_counts.get("single_source") or 0)
     effectiveness_summary = _nested_dict(effectiveness, "summary")
     effectiveness_labels = _nested_dict(effectiveness_summary, "labelCounts")
+    price_alert_review_summary = _nested_dict(price_alert_review_queue, "summary")
+    price_alert_review_schema_ok = (
+        price_alert_review_queue.get("schemaVersion")
+        == "msrp_price_alert_review_queue_v1"
+    )
+    price_alert_review_case_count = int(
+        price_alert_review_summary.get("totalCases") or 0
+    )
+    price_alert_review_follow_up_count = int(
+        price_alert_review_summary.get("effectivenessFollowUpCount") or 0
+    )
+    price_alert_review_linked_count = int(
+        price_alert_review_summary.get("effectivenessLinkedCount") or 0
+    )
+    price_alert_review_missing_count = int(
+        price_alert_review_summary.get("effectivenessMissingCount") or 0
+    )
     dryrun_status = _nested_dict(country_progress, "status")
     dryrun_runs = dryrun_history.get("runs") if isinstance(dryrun_history.get("runs"), list) else []
     all_countries_latest = (
@@ -734,6 +754,12 @@ def build_readiness_report(
         "multiSourceReconciliation",
         "financeObservations",
         "test_run_degrades_for_reconciliation_conflicts",
+    )
+    price_alert_review_queue_covered = _test_file_has(
+        "priceAlertReviewQueue",
+        "msrp_price_alert_review_queue_v1",
+        "salesEffectivenessAvailable",
+        "effectivenessLinkedCount",
     )
     frontend_finance_reconciliation_covered = _test_file_has(
         "frontendApi",
@@ -932,21 +958,52 @@ def build_readiness_report(
         ),
         _requirement(
             key="review_queue",
-            title="Review queue for low-confidence/conflict cases",
+            title="Review queue for price alerts and conflicts",
             status=_status(
-                smoke_covers_full_contract and service_covers_reconciliation,
-                degraded=conflict_count > 0,
+                smoke_covers_full_contract
+                and service_covers_reconciliation
+                and price_alert_review_queue_covered
+                and price_alert_review_schema_ok,
+                degraded=(
+                    (conflict_count > 0)
+                    or price_alert_review_queue_covered
+                    or price_alert_review_schema_ok
+                ),
             ),
             runtime={
                 "reconciliationConflictGroups": conflict_count,
                 "reconciliationSingleSourceGroups": single_source_count,
+                "priceAlertReviewQueueSchemaVersion": (
+                    price_alert_review_queue.get("schemaVersion")
+                ),
+                "priceAlertReviewQueuePath": _display_path(
+                    PRICE_ALERT_REVIEW_QUEUE_PATH
+                ),
+                "priceAlertReviewCaseCount": price_alert_review_case_count,
+                "priceAlertReviewEffectivenessFollowUpCount": (
+                    price_alert_review_follow_up_count
+                ),
+                "priceAlertReviewEffectivenessLinkedCount": (
+                    price_alert_review_linked_count
+                ),
+                "priceAlertReviewEffectivenessMissingCount": (
+                    price_alert_review_missing_count
+                ),
+                "priceAlertReviewQueueCovered": price_alert_review_queue_covered,
             },
             evidence=[
                 "POST /msrp/reconciliation/review-cases",
+                _display_path(PRICE_ALERT_REVIEW_QUEUE_PATH),
                 TEST_EVIDENCE["workflowSmoke"],
                 TEST_EVIDENCE["workflowService"],
+                TEST_EVIDENCE["priceAlertReviewQueue"],
             ],
-            note="Read-only audit does not queue review cases; write smoke covers the queue path.",
+            note=(
+                "Read-only audit does not queue DB review cases; write smoke "
+                "covers reconciliation cases and the local price-alert queue "
+                "artifact carries weekly official-evidence and sales-effect "
+                "follow-up state."
+            ),
         ),
         _requirement(
             key="auto_review_scoring",
@@ -1202,6 +1259,10 @@ def build_readiness_report(
                 "currentPriceCount": current_price_count,
                 "priceHistoryRows": history_count,
                 "priceAlertCount": alert_count,
+                "priceAlertReviewCaseCount": price_alert_review_case_count,
+                "priceAlertReviewEffectivenessLinkedCount": (
+                    price_alert_review_linked_count
+                ),
                 "monitoringEventCount": monitoring_event_count,
                 "monitoringTimelineEventCount": monitoring_timeline_count,
                 "monitoringSourceRiskCount": monitoring_source_risk_count,

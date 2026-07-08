@@ -51,6 +51,35 @@ def isolate_dryrun_artifacts(tmp_path: Path, monkeypatch) -> None:
         "SOURCE_REPAIR_BACKLOG_PATH",
         tmp_path / "missing_msrp_source_repair_backlog.json",
     )
+    monkeypatch.setattr(
+        audit_module,
+        "PRICE_ALERT_REVIEW_QUEUE_PATH",
+        tmp_path / "missing_msrp_price_alert_review_queue.json",
+    )
+
+
+def write_price_alert_review_queue(path: Path) -> None:
+    path.write_text(
+        json.dumps({
+            "schemaVersion": "msrp_price_alert_review_queue_v1",
+            "snapshotWeek": "2026-W24",
+            "summary": {
+                "totalCases": 2,
+                "effectivenessFollowUpCount": 1,
+                "effectivenessLinkedCount": 1,
+                "effectivenessMissingCount": 0,
+                "effectivenessLabelCounts": {"positive": 1},
+            },
+            "items": [
+                {
+                    "caseId": "msrp_price_alert_review:msrp-alert:critical",
+                    "salesEffectivenessAvailable": True,
+                    "salesEffectivenessLabel": "positive",
+                }
+            ],
+        }),
+        encoding="utf-8",
+    )
 
 
 class FakeReadinessClient:
@@ -193,6 +222,8 @@ class FakeReadinessClient:
 
 
 def test_build_readiness_report_marks_complete_contract_passed() -> None:
+    write_price_alert_review_queue(audit_module.PRICE_ALERT_REVIEW_QUEUE_PATH)
+
     report = audit_module.build_readiness_report(
         client=FakeReadinessClient(),
         filters={"country": "dk", "brand": "CODEX", "jato_model": "SMOKE"},
@@ -251,10 +282,28 @@ def test_build_readiness_report_marks_complete_contract_passed() -> None:
     assert report["summary"]["runtimeCounts"]["dryrunAllCountryLatestCount"] == 2
     assert report["summary"]["runtimeCounts"]["dryrunSourceRepairIssueCount"] == 2
     assert report["summary"]["runtimeCounts"]["dryrunTransientRecheckCount"] == 1
+    assert report["summary"]["runtimeCounts"]["priceAlertReviewCaseCount"] == 2
+    assert (
+        report["summary"]["runtimeCounts"][
+            "priceAlertReviewEffectivenessLinkedCount"
+        ]
+        == 1
+    )
     assert requirements["multi_source_reconciliation"]["runtime"]["statusCounts"]["conflict"] == 1
     assert (
         audit_module.TEST_EVIDENCE["snapshotScript"]
         in requirements["multi_source_reconciliation"]["evidence"]
+    )
+    review_runtime = requirements["review_queue"]["runtime"]
+    assert review_runtime["priceAlertReviewQueueSchemaVersion"] == (
+        "msrp_price_alert_review_queue_v1"
+    )
+    assert review_runtime["priceAlertReviewCaseCount"] == 2
+    assert review_runtime["priceAlertReviewEffectivenessLinkedCount"] == 1
+    assert review_runtime["priceAlertReviewEffectivenessMissingCount"] == 0
+    assert (
+        audit_module.TEST_EVIDENCE["priceAlertReviewQueue"]
+        in requirements["review_queue"]["evidence"]
     )
     pipeline_runtime = requirements["pipeline_orchestration"]["runtime"]
     assert pipeline_runtime["statusPipelineId"] == "msrp_pipeline"
@@ -435,6 +484,8 @@ def test_build_readiness_report_uses_latest_dryrun_artifact_fallback(
 
 
 def test_main_prints_json_report(capsys, monkeypatch) -> None:
+    write_price_alert_review_queue(audit_module.PRICE_ALERT_REVIEW_QUEUE_PATH)
+
     monkeypatch.setattr(
         audit_module,
         "ApiClient",
