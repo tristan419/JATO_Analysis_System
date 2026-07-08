@@ -4,6 +4,7 @@ import requests
 
 from jato_scraper.base import ExtractorConfig
 from jato_scraper.config_loader import _build_pdf_text_profile
+from jato_scraper.extractors import pdf_text as pdf_text_module
 from jato_scraper.extractors.pdf_text import (
     PdfTextEntryPattern,
     PdfTextExtractor,
@@ -112,12 +113,60 @@ def test_pdf_text_profile_accepts_preferred_curl_download() -> None:
     profile = _build_pdf_text_profile(
         {
             "url": "https://example.invalid/sealion.pdf",
+            "urls": ["https://example.invalid/sealion-extra.pdf"],
             "prefer_curl_download": True,
             "entry_patterns": [],
         }
     )
 
     assert profile.prefer_curl_download is True
+    assert profile.urls == ("https://example.invalid/sealion-extra.pdf",)
+
+
+def test_pdf_text_extracts_text_from_primary_and_additional_urls(monkeypatch):
+    extractor = PdfTextExtractor(
+        ExtractorConfig(
+            source_code="hyundai_kona_nl_draft_scrapling",
+            country="荷兰",
+            brand="HYUNDAI",
+            source_url="https://www.hyundai.com/nl/nl/kona-family.html",
+            source_type="official_price_list",
+            price_semantics="base_msrp",
+        ),
+        PdfTextProfile(
+            url="https://example.invalid/kona-hybrid.pdf",
+            urls=("https://example.invalid/kona-electric.pdf",),
+        ),
+    )
+    fetched_urls = []
+
+    def fake_fetch(url):
+        fetched_urls.append(url)
+        return b"%PDF-1.7\n"
+
+    class FakePage:
+        def __init__(self, text: str) -> None:
+            self._text = text
+
+        def extract_text(self) -> str:
+            return self._text
+
+    class FakeReader:
+        def __init__(self, _blob) -> None:
+            url = fetched_urls[-1]
+            self.pages = [FakePage(f"text for {url}")]
+
+    monkeypatch.setattr(extractor, "_fetch_pdf_bytes_url", fake_fetch)
+    monkeypatch.setattr(pdf_text_module, "PdfReader", FakeReader)
+
+    text = extractor._extract_text()
+
+    assert fetched_urls == [
+        "https://example.invalid/kona-hybrid.pdf",
+        "https://example.invalid/kona-electric.pdf",
+    ]
+    assert "text for https://example.invalid/kona-hybrid.pdf" in text
+    assert "text for https://example.invalid/kona-electric.pdf" in text
 
 
 def test_pdf_text_uses_curl_fallback_after_requests_timeout(monkeypatch):
@@ -145,14 +194,14 @@ def test_pdf_text_uses_curl_fallback_after_requests_timeout(monkeypatch):
     monkeypatch.setattr(extractor._session, "get", fail_request)
     fallback_timeouts = []
 
-    def fetch_with_curl(timeout):
-        fallback_timeouts.append(timeout)
+    def fetch_with_curl(timeout, url=None):
+        fallback_timeouts.append((timeout, url))
         return b"%PDF-1.7\n"
 
     monkeypatch.setattr(extractor, "_fetch_pdf_bytes_with_curl", fetch_with_curl)
 
     assert extractor._fetch_pdf_bytes() == b"%PDF-1.7\n"
-    assert fallback_timeouts == [30]
+    assert fallback_timeouts == [(30, "https://example.invalid/x1.pdf")]
 
 
 def test_pdf_text_prefers_curl_download_before_requests(monkeypatch):
@@ -178,14 +227,14 @@ def test_pdf_text_prefers_curl_download_before_requests(monkeypatch):
     monkeypatch.setattr(extractor._session, "get", fail_request)
     curl_timeouts = []
 
-    def fetch_with_curl(timeout):
-        curl_timeouts.append(timeout)
+    def fetch_with_curl(timeout, url=None):
+        curl_timeouts.append((timeout, url))
         return b"%PDF-1.7\n"
 
     monkeypatch.setattr(extractor, "_fetch_pdf_bytes_with_curl", fetch_with_curl)
 
     assert extractor._fetch_pdf_bytes() == b"%PDF-1.7\n"
-    assert curl_timeouts == [30]
+    assert curl_timeouts == [(30, "https://example.invalid/sealion.pdf")]
 
 
 def test_pdf_text_curl_fallback_keeps_curl_default_user_agent(monkeypatch):

@@ -37,6 +37,7 @@ class PdfTextEntryPattern:
 @dataclass(frozen=True)
 class PdfTextProfile:
     url: str
+    urls: tuple[str, ...] = field(default_factory=tuple)
     entry_patterns: tuple[PdfTextEntryPattern, ...] = field(default_factory=tuple)
     timeout_seconds: int = DEFAULT_TIMEOUT
     retry_attempts: int = 0
@@ -130,33 +131,47 @@ class PdfTextExtractor(BaseExtractor):
         )
         return results
 
+    def _profile_urls(self) -> tuple[str, ...]:
+        urls: list[str] = []
+        for url in (self.profile.url, *self.profile.urls):
+            clean_url = str(url or "").strip()
+            if clean_url and clean_url not in urls:
+                urls.append(clean_url)
+        return tuple(urls)
+
     def _fetch_pdf_bytes(self) -> bytes | None:
+        return self._fetch_pdf_bytes_url(self.profile.url)
+
+    def _fetch_pdf_bytes_url(self, url: str) -> bytes | None:
         last_error: Exception | None = None
         attempts = max(1, int(self.profile.retry_attempts or 0) + 1)
         timeout = max(1, int(self.profile.timeout_seconds or DEFAULT_TIMEOUT))
         if self.profile.prefer_curl_download:
             blob = self._fetch_pdf_bytes_with_curl(
                 max(timeout, DEFAULT_CURL_FALLBACK_TIMEOUT),
+                url,
             )
             if blob:
                 return blob
             log.warning(
-                "Preferred PDF curl download failed for %s; falling back to requests",
+                "Preferred PDF curl download failed for %s at %s; falling back to requests",
                 self.config.source_code,
+                url,
             )
 
         for attempt in range(1, attempts + 1):
             try:
-                response = self._session.get(self.profile.url, timeout=timeout)
+                response = self._session.get(url, timeout=timeout)
                 response.raise_for_status()
                 return response.content
             except requests.RequestException as exc:
                 last_error = exc
                 log.warning(
-                    "PDF request attempt %s/%s failed for %s: %s",
+                    "PDF request attempt %s/%s failed for %s at %s: %s",
                     attempt,
                     attempts,
                     self.config.source_code,
+                    url,
                     exc,
                 )
                 if attempt < attempts and self.profile.retry_delay_seconds > 0:
@@ -165,15 +180,26 @@ class PdfTextExtractor(BaseExtractor):
         if self.profile.browser_download_fallback:
             blob = self._fetch_pdf_bytes_with_curl(
                 max(timeout, DEFAULT_CURL_FALLBACK_TIMEOUT),
+                url,
             )
             if blob:
                 return blob
 
         if last_error:
-            log.error("PDF request failed for %s: %s", self.config.source_code, last_error)
+            log.error(
+                "PDF request failed for %s at %s: %s",
+                self.config.source_code,
+                url,
+                last_error,
+            )
         return None
 
-    def _fetch_pdf_bytes_with_curl(self, timeout: int) -> bytes | None:
+    def _fetch_pdf_bytes_with_curl(
+        self,
+        timeout: int,
+        url: str | None = None,
+    ) -> bytes | None:
+        fetch_url = str(url or self.profile.url)
         try:
             with tempfile.NamedTemporaryFile(
                 prefix="jato_pdf_",
@@ -189,7 +215,7 @@ class PdfTextExtractor(BaseExtractor):
                         str(timeout),
                         "-o",
                         tmp.name,
-                        self.profile.url,
+                        fetch_url,
                     ],
                     check=False,
                     stdout=subprocess.PIPE,
@@ -217,15 +243,18 @@ class PdfTextExtractor(BaseExtractor):
         return blob
 
     def _extract_text(self) -> str:
-        blob = self._fetch_pdf_bytes()
-        if blob is None:
-            return ""
-        reader = PdfReader(BytesIO(blob))
-        pages = [
-            (page.extract_text() or "").replace("\xa0", " ")
-            for page in reader.pages
-        ]
-        return "\n".join(pages)
+        chunks: list[str] = []
+        for url in self._profile_urls():
+            blob = self._fetch_pdf_bytes_url(url)
+            if blob is None:
+                continue
+            reader = PdfReader(BytesIO(blob))
+            pages = [
+                (page.extract_text() or "").replace("\xa0", " ")
+                for page in reader.pages
+            ]
+            chunks.append(f"\n\n--- JATO_PDF_TEXT_URL: {url} ---\n" + "\n".join(pages))
+        return "\n".join(chunks).strip()
 
     def _build_observation(
         self,
@@ -285,6 +314,7 @@ class PdfTextExtractor(BaseExtractor):
             availability_text=availability_text,
             raw_payload={
                 "pdf_url": self.profile.url,
+                "pdf_urls": list(self._profile_urls()),
                 "pattern": entry.pattern,
                 "match_groups": groups,
                 "price_delta": entry.price_delta,
