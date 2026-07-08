@@ -22,41 +22,41 @@ profile:
   match_reason:
     kind: pdf_price_list
     source: official_kia_dk_prisliste
-    note: Official Kia Denmark EV6 price-list PDF exposes campaign prices and normal prices; this source captures the normal/base MSRP line.
+    note: Official Kia Denmark EV6 price-list PDF exposes the current Pris column by trim.
   entry_patterns:
-  - pattern: 'Modelprogram(?:(?!Priser og specifikationer).)*?Access\s+Standard Range \(RWD\).*?460 kr\.\s+\d{3}\.\d{3} kr\.\s+(?P<price>\d{3}\.\d{3}) kr\.'
+  - pattern: 'Modelprogram(?:(?!Priser og specifikationer).)*?Access\s+Standard Range \(RWD\).*?460 kr\.\s+(?P<price>\d{3}\.\d{3}) kr\.'
     official_trim: Access Standard Range
     official_powertrain: BEV
     jato_powertrain: BEV
-  - pattern: 'Modelprogram(?:(?!Priser og specifikationer).)*?Access\s+Standard Range \(RWD\).*?Long Range \(RWD\).*?460 kr\.\s+\d{3}\.\d{3} kr\.\s+(?P<price>\d{3}\.\d{3}) kr\.'
+  - pattern: 'Modelprogram(?:(?!Priser og specifikationer).)*?Access\s+Standard Range \(RWD\).*?Long Range \(RWD\).*?460 kr\.\s+(?P<price>\d{3}\.\d{3}) kr\.'
     official_trim: Access Long Range
     official_powertrain: BEV
     jato_powertrain: BEV
-  - pattern: 'Modelprogram(?:(?!Priser og specifikationer).)*?Prestige\s+Standard Range \(RWD\).*?460 kr\.\s+\d{3}\.\d{3} kr\.\s+(?P<price>\d{3}\.\d{3}) kr\.'
+  - pattern: 'Modelprogram(?:(?!Priser og specifikationer).)*?Prestige\s+Standard Range \(RWD\).*?460 kr\.\s+(?P<price>\d{3}\.\d{3}) kr\.'
     official_trim: Prestige Standard Range
     official_powertrain: BEV
     jato_powertrain: BEV
-  - pattern: 'Modelprogram(?:(?!Priser og specifikationer).)*?Prestige\s+Standard Range \(RWD\).*?Long Range \(RWD\).*?460 kr\.\s+\d{3}\.\d{3} kr\.\s+(?P<price>\d{3}\.\d{3}) kr\.'
+  - pattern: 'Modelprogram(?:(?!Priser og specifikationer).)*?Prestige\s+Standard Range \(RWD\).*?Long Range \(RWD\).*?460 kr\.\s+(?P<price>\d{3}\.\d{3}) kr\.'
     official_trim: Prestige Long Range
     official_powertrain: BEV
     jato_powertrain: BEV
-  - pattern: 'Modelprogram(?:(?!Priser og specifikationer).)*?Upgrade\s+Long Range \(RWD\).*?460 kr\.\s+\d{3}\.\d{3} kr\.\s+(?P<price>\d{3}\.\d{3}) kr\.'
+  - pattern: 'Modelprogram(?:(?!Priser og specifikationer).)*?Upgrade\s+Long Range \(RWD\).*?460 kr\.\s+(?P<price>\d{3}\.\d{3}) kr\.'
     official_trim: Upgrade Long Range
     official_powertrain: BEV
     jato_powertrain: BEV
-  - pattern: 'Modelprogram(?:(?!Priser og specifikationer).)*?Upgrade\s+Long Range \(RWD\).*?Long Range Performance \(AWD\).*?460 kr\.\s+\d{3}\.\d{3} kr\.\s+(?P<price>\d{3}\.\d{3}) kr\.'
+  - pattern: 'Modelprogram(?:(?!Priser og specifikationer).)*?Upgrade\s+Long Range \(RWD\).*?Long Range Performance \(AWD\).*?460 kr\.\s+(?P<price>\d{3}\.\d{3}) kr\.'
     official_trim: Upgrade Long Range Performance
     official_powertrain: BEV
     jato_powertrain: BEV
-  - pattern: 'Modelprogram(?:(?!Priser og specifikationer).)*?GT-Line\s+Long Range \(RWD\).*?460 kr\.\s+\d{3}\.\d{3} kr\.\s+(?P<price>\d{3}\.\d{3}) kr\.'
+  - pattern: 'Modelprogram(?:(?!Priser og specifikationer).)*?GT-Line\s+Long Range \(RWD\).*?460 kr\.\s+(?P<price>\d{3}\.\d{3}) kr\.'
     official_trim: GT-Line Long Range
     official_powertrain: BEV
     jato_powertrain: BEV
-  - pattern: 'Modelprogram(?:(?!Priser og specifikationer).)*?GT-Line\s+Long Range \(RWD\).*?Long Range Performance \(AWD\).*?460 kr\.\s+\d{3}\.\d{3} kr\.\s+(?P<price>\d{3}\.\d{3}) kr\.'
+  - pattern: 'Modelprogram(?:(?!Priser og specifikationer).)*?GT-Line\s+Long Range \(RWD\).*?Long Range Performance \(AWD\).*?460 kr\.\s+(?P<price>\d{3}\.\d{3}) kr\.'
     official_trim: GT-Line Long Range Performance
     official_powertrain: BEV
     jato_powertrain: BEV
-  - pattern: 'Modelprogram(?:(?!Priser og specifikationer).)*?GT\s+Long Range Performance \(AWD\).*?460 kr\.\s+\d{3}\.\d{3} kr\.\s+(?P<price>\d{3}\.\d{3}) kr\.'
+  - pattern: 'Modelprogram(?:(?!Priser og specifikationer).)*?GT\s+Long Range Performance \(AWD\).*?460 kr\.\s+(?P<price>\d{3}\.\d{3}) kr\.'
     official_trim: GT Long Range Performance
     official_powertrain: BEV
     jato_powertrain: BEV
@@ -66,8 +66,8 @@ schedule:
   run_window_end: 05:00
   preferred_weekday: monday
 notes: Draft source repaired to use Kia Denmark's official EV6 prisliste PDF.
-  The PDF contains active campaign prices plus normal prices; regexes capture the
-  normal/base MSRP value after the campaign price and are anchored to Modelprogram.
+  The current PDF exposes one Pris column; regexes capture that official vehicle
+  price and are anchored to Modelprogram.
 bootstrap_meta:
   country_model_rank: 26
   suggested_scope_kind: single_model

@@ -72,17 +72,18 @@ profile:
     force_review_for_special_edition: true
   text_regex:
     source_selector: script
+    include_element_html: true
     entry_patterns:
-    - pattern: 'Vejl\. udsalgspris inkl\. lev\.omk\.¹\s+Active\s+(?P<price>\d{3}\.\d{3})'
+    - pattern: 'Active\s+Style\s+Vejl\.\s+udsalgspris\s+inkl\.\s+lev\.omk\.\s+(?P<price>\d{3}\.\d{3})\s+\d{3}\.\d{3}'
       official_trim: Active
       official_powertrain: HEV
-    - pattern: 'Active\s+\d{3}\.\d{3}\s+Style\s+(?P<price>\d{3}\.\d{3})'
+    - pattern: 'Active\s+Style\s+Vejl\.\s+udsalgspris\s+inkl\.\s+lev\.omk\.\s+\d{3}\.\d{3}\s+(?P<price>\d{3}\.\d{3})'
       official_trim: Style
       official_powertrain: HEV
-    - pattern: 'Style\s+\d{3}\.\d{3}\s+Executive\s+(?P<price>\d{3}\.\d{3})'
+    - pattern: 'Energi-\s*mærke\s+Executive\s+(?P<price>\d{3}\.\d{3})'
       official_trim: Executive
       official_powertrain: HEV
-    - pattern: 'Executive\s+\d{3}\.\d{3}\s+GR Sport\s+(?P<price>\d{3}\.\d{3})'
+    - pattern: 'Executive\s+\d{3}\.\d{3}.*?GR Sport\s+(?P<price>\d{3}\.\d{3})\s+Priserne'
       official_trim: GR Sport
       official_powertrain: HEV
   tier: http
