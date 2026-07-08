@@ -1,19 +1,19 @@
 source_code: kia_ev3_be_draft_scrapling
 country: 比利时
 brand: KIA
-source_url: https://todo.invalid/be/kia/ev3
+source_url: https://www.kia.com/be/nl/modellen/ev3/ontdekken/
 source_type: manufacturer_official
 price_semantics: base_msrp
 extractor_type: scrapling
 profile:
-  url: https://todo.invalid/be/kia/ev3
+  url: https://www.kia.com/be/nl/modellen/ev3/ontdekken/
   headless: true
   default_currency: EUR
   default_tax_included: true
-  default_price_label: MSRP
+  default_price_label: Vanafprijs incl. BTW
   fixed_model: EV3
   fixed_jato_model: EV3
-  fixed_jato_powertrain: null
+  fixed_jato_powertrain: BEV
   model_rules: []
   skip_if_model_unmapped: false
   copy_trim_to_jato_trim: true
@@ -60,16 +60,10 @@ profile:
     - key: powertrain_bev
       powertrain: BEV
       keywords:
-      - bev
-      - ev
-      - electric
-      - battery electric
-      - fully electric
-      - electric vehicle
       - elektrisch
       - volledig elektrisch
-      - electrique
-      - 100% electrique
+      - electric
+      - EV3
   auto_accept_gates:
     review_threshold: 0.95
     semi_auto_threshold: 0.98
@@ -77,13 +71,18 @@ profile:
     force_review_if_powertrain_missing: true
     force_review_if_powertrain_ambiguous: true
     force_review_for_special_edition: true
-  css:
-    vehicle_container: body
-    model: h2, h3
-    trim: h3
-    price: '[class*="price"]'
-  tier: stealth
-  network_idle: true
+  text_regex:
+    source_selector: body
+    include_element_html: true
+    entry_patterns:
+    - pattern: 'aria-label="EV3"[\s\S]*?<strong[^>]*>\s*EV3\s*</strong>[\s\S]*?<span class="price">\s*Vanaf\s*(?P<price>[0-9][0-9.\s]*\s*EUR)\s*incl BTW'
+      official_trim: EV3 entry price
+      official_powertrain: 100% Elektrisch
+      price_label: Vanafprijs incl. BTW
+  tier: http
+  network_idle: false
+  load_dom: false
+  timeout_ms: 20000
   impersonate: chrome
 schedule:
   frequency: manual_only
@@ -94,7 +93,9 @@ notes: Draft scaffold generated from country×model top30 backlog. Replace sourc
   profile.url, selectors, currency, price label, and the single-model placeholders
   before promoting to 07_ScrapingToolkit/sources. [CSS selectors applied from brand
   probe] [Switched to playwright_card_flow with kia_trim_overview_playwright.yaml]
-  [Reverted to scrapling — playwright preset needs per-brand tuning]
+  [Reverted to scrapling — playwright preset needs per-brand tuning] [Filled official
+  Kia Belgium EV3 page; text_regex anchors the model navigation list price and
+  avoids the campaign hero price]
 bootstrap_meta:
   country_model_rank: 14
   suggested_scope_kind: single_model
