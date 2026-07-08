@@ -74,387 +74,6 @@
         }
       }
     </style>
-    <script>
-      (function () {
-        var cnHost = "www.ojeur.cloud";
-        var intlHost = "intl.ojeur.cloud";
-        var host = window.location.hostname;
-        if (host !== cnHost && host !== intlHost) return;
-
-        var params = new URLSearchParams(window.location.search);
-        var route = params.get("route");
-        var routeChecked = params.get("routeChecked") === "1";
-        var hasAuthParams = params.has("token") || params.has("oauthError") || params.has("code") || params.has("state");
-        var decisionKey = "jato_route_decision_v2";
-        var legacyDecisionKeys = ["jato_route_decision_v1"];
-        var manualKey = "jato_route_manual_v1";
-        var inFlightKey = "jato_route_probe_inflight_v1";
-        var autoTtlMs = 2 * 60 * 60 * 1000;
-        var manualTtlMs = 24 * 60 * 60 * 1000;
-        var timeoutMs = 1800;
-        var redirectMarginMs = 450;
-        var chinaLocalRedirectMarginMs = 1500;
-        var chinaLocalTimeZones = {
-          "Asia/Shanghai": true,
-          "Asia/Chongqing": true,
-          "Asia/Harbin": true,
-          "Asia/Urumqi": true
-        };
-
-        function isMainlandChineseLanguage(language) {
-          var normalized = String(language || "").toLowerCase();
-          return normalized === "zh-cn" || normalized.indexOf("zh-cn-") === 0
-            || normalized === "zh-hans" || normalized.indexOf("zh-hans-") === 0;
-        }
-
-        function clientRouteProfile() {
-          var timeZone = "";
-          try {
-            timeZone = Intl.DateTimeFormat().resolvedOptions().timeZone || "";
-          } catch (err) {}
-          var languages = [];
-          try {
-            languages = Array.isArray(navigator.languages) && navigator.languages.length
-              ? navigator.languages
-              : [navigator.language || ""];
-          } catch (err) {}
-          var chinaTimeZone = Boolean(chinaLocalTimeZones[timeZone]);
-          var mainlandChineseLanguage = languages.some(isMainlandChineseLanguage);
-          return {
-            prefersChinaRoute: chinaTimeZone || mainlandChineseLanguage,
-            reason: chinaTimeZone
-              ? "China-local browser time zone"
-              : mainlandChineseLanguage
-                ? "China-local browser language"
-                : "No China-local browser signal"
-          };
-        }
-
-        function cleanParam(name) {
-          if (!params.has(name)) return;
-          params.delete(name);
-          var next = window.location.pathname;
-          var query = params.toString();
-          if (query) next += "?" + query;
-          next += window.location.hash;
-          window.history.replaceState({}, "", next);
-        }
-
-        function saveDecision(key, target, ttlMs, details) {
-          try {
-            var payload = {
-              target: target,
-              createdAt: Date.now(),
-              expiresAt: Date.now() + ttlMs
-            };
-            if (details && typeof details === "object") {
-              Object.keys(details).forEach(function (name) {
-                payload[name] = details[name];
-              });
-            }
-            window.localStorage.setItem(key, JSON.stringify(payload));
-            return payload;
-          } catch (err) {}
-          return {
-            target: target,
-            createdAt: Date.now(),
-            expiresAt: Date.now() + ttlMs
-          };
-        }
-
-        function readDecision(key) {
-          try {
-            var raw = window.localStorage.getItem(key);
-            if (!raw) return null;
-            var parsed = JSON.parse(raw);
-            if (!parsed || parsed.expiresAt < Date.now()) {
-              window.localStorage.removeItem(key);
-              return null;
-            }
-            return parsed.target === "intl" || parsed.target === "cn" ? parsed : null;
-          } catch (err) {
-            return null;
-          }
-        }
-
-        function targetHost(target) {
-          return target === "intl" ? intlHost : cnHost;
-        }
-
-        function addDecisionTransferParams(url, target, decision) {
-          url.searchParams.set("jatoRouteTarget", target);
-          if (decision && typeof decision.expiresAt === "number") {
-            url.searchParams.set("jatoRouteExpires", String(decision.expiresAt));
-          }
-          if (decision && typeof decision.createdAt === "number") {
-            url.searchParams.set("jatoRouteCreated", String(decision.createdAt));
-          }
-          if (decision && typeof decision.source === "string") {
-            url.searchParams.set("jatoRouteSource", decision.source);
-          }
-          if (decision && typeof decision.reason === "string") {
-            url.searchParams.set("jatoRouteReason", decision.reason);
-          }
-          if (decision && typeof decision.cnOk === "boolean") {
-            url.searchParams.set("jatoRouteCnOk", String(decision.cnOk));
-          }
-          if (decision && typeof decision.intlOk === "boolean") {
-            url.searchParams.set("jatoRouteIntlOk", String(decision.intlOk));
-          }
-          if (decision && typeof decision.cnMs === "number") {
-            url.searchParams.set("jatoRouteCnMs", String(decision.cnMs));
-          }
-          if (decision && typeof decision.intlMs === "number") {
-            url.searchParams.set("jatoRouteIntlMs", String(decision.intlMs));
-          }
-          if (decision && typeof decision.marginMs === "number") {
-            url.searchParams.set("jatoRouteMarginMs", String(decision.marginMs));
-          }
-          if (decision && typeof decision.cnBuildCommit === "string" && decision.cnBuildCommit) {
-            url.searchParams.set("jatoRouteCnBuildCommit", decision.cnBuildCommit);
-          }
-          if (decision && typeof decision.intlBuildCommit === "string" && decision.intlBuildCommit) {
-            url.searchParams.set("jatoRouteIntlBuildCommit", decision.intlBuildCommit);
-          }
-          if (decision && typeof decision.cnFrontendBuildId === "string" && decision.cnFrontendBuildId) {
-            url.searchParams.set("jatoRouteCnFrontendBuildId", decision.cnFrontendBuildId);
-          }
-          if (decision && typeof decision.intlFrontendBuildId === "string" && decision.intlFrontendBuildId) {
-            url.searchParams.set("jatoRouteIntlFrontendBuildId", decision.intlFrontendBuildId);
-          }
-        }
-
-        function redirectTo(target, decision) {
-          var nextHost = targetHost(target);
-          if (nextHost === host) return false;
-          var url = new URL(window.location.href);
-          url.protocol = "https:";
-          url.hostname = nextHost;
-          url.searchParams.set("routeChecked", "1");
-          addDecisionTransferParams(url, target, decision);
-          window.location.replace(url.toString());
-          return true;
-        }
-
-        function markProbeInFlight() {
-          window.__JATO_ROUTE_PROBE_IN_FLIGHT__ = true;
-          try {
-            window.sessionStorage.setItem(inFlightKey, String(Date.now()));
-          } catch (err) {}
-        }
-
-        function clearProbeInFlight() {
-          window.__JATO_ROUTE_PROBE_IN_FLIGHT__ = false;
-          try {
-            window.sessionStorage.removeItem(inFlightKey);
-          } catch (err) {}
-        }
-
-        function clearAutoDecisions() {
-          try {
-            window.localStorage.removeItem(decisionKey);
-            legacyDecisionKeys.forEach(function (key) {
-              window.localStorage.removeItem(key);
-            });
-          } catch (err) {}
-        }
-
-        if (window.location.pathname === "/route-diagnostics") return;
-        if (route === "stay") {
-          cleanParam("route");
-          return;
-        }
-        if (route === "cn" || route === "intl") {
-          var manualPayload = saveDecision(manualKey, route, manualTtlMs, {
-            source: "manual",
-            reason: "Manual override from route parameter"
-          });
-          cleanParam("route");
-          redirectTo(route, manualPayload);
-          return;
-        }
-        if (route === "auto") {
-          try {
-            window.localStorage.removeItem(manualKey);
-          } catch (err) {}
-          clearAutoDecisions();
-          cleanParam("route");
-        }
-        if (routeChecked) {
-          cleanParam("routeChecked");
-          return;
-        }
-        if (hasAuthParams) return;
-
-        var manualDecision = readDecision(manualKey);
-        if (manualDecision) {
-          redirectTo(manualDecision.target, manualDecision);
-          return;
-        }
-        var cachedDecision = readDecision(decisionKey);
-        if (cachedDecision) {
-          redirectTo(cachedDecision.target, cachedDecision);
-          return;
-        }
-
-        markProbeInFlight();
-        function buildInfo(target) {
-          var url = "https://" + targetHost(target) + "/build-meta.json?ts=" + Date.now();
-          return new Promise(function (resolve) {
-            var settled = false;
-            var controller = window.AbortController ? new AbortController() : null;
-            var timer = window.setTimeout(function () {
-              if (settled) return;
-              settled = true;
-              if (controller) controller.abort();
-              resolve({ commit: "", frontendBuildId: "" });
-            }, timeoutMs);
-            var options = {
-              cache: "no-store",
-              credentials: "omit"
-            };
-            if (controller) options.signal = controller.signal;
-            fetch(url, options).then(function (response) {
-              if (!response.ok) return null;
-              return response.json();
-            }).then(function (payload) {
-              if (settled) return;
-              settled = true;
-              window.clearTimeout(timer);
-              var commit = payload && typeof payload.commit === "string" ? payload.commit.trim() : "";
-              var frontendBuildId = payload && typeof payload.frontendBuildId === "string" ? payload.frontendBuildId.trim() : "";
-              resolve({ commit: commit, frontendBuildId: frontendBuildId });
-            }).catch(function () {
-              if (settled) return;
-              settled = true;
-              window.clearTimeout(timer);
-              resolve({ commit: "", frontendBuildId: "" });
-            });
-          });
-        }
-
-        function probe(target) {
-          var startedAt = performance.now();
-          var url = "https://" + targetHost(target) + "/route-probe.txt?ts=" + Date.now();
-          var buildInfoPromise = buildInfo(target);
-          return new Promise(function (resolve) {
-            var settled = false;
-            var timer = window.setTimeout(function () {
-              if (settled) return;
-              settled = true;
-              buildInfoPromise.then(function (info) {
-                resolve({
-                  target: target,
-                  ok: false,
-                  ms: timeoutMs,
-                  buildCommit: info.commit,
-                  frontendBuildId: info.frontendBuildId
-                });
-              });
-            }, timeoutMs);
-            fetch(url, {
-              cache: "no-store",
-              credentials: "omit",
-              mode: "no-cors"
-            }).then(function () {
-              if (settled) return;
-              settled = true;
-              window.clearTimeout(timer);
-              buildInfoPromise.then(function (info) {
-                resolve({
-                  target: target,
-                  ok: true,
-                  ms: performance.now() - startedAt,
-                  buildCommit: info.commit,
-                  frontendBuildId: info.frontendBuildId
-                });
-              });
-            }).catch(function () {
-              if (settled) return;
-              settled = true;
-              window.clearTimeout(timer);
-              buildInfoPromise.then(function (info) {
-                resolve({
-                  target: target,
-                  ok: false,
-                  ms: timeoutMs,
-                  buildCommit: info.commit,
-                  frontendBuildId: info.frontendBuildId
-                });
-              });
-            });
-          });
-        }
-
-        var profile = clientRouteProfile();
-        var marginMs = profile.prefersChinaRoute ? chinaLocalRedirectMarginMs : redirectMarginMs;
-        var currentTarget = host === intlHost ? "intl" : "cn";
-        var decisionSettled = false;
-        var cnProbePromise = probe("cn");
-        var intlProbePromise = probe("intl");
-
-        function completeDecision(cn, intl) {
-          if (decisionSettled) return;
-          decisionSettled = true;
-          var nextTarget = currentTarget;
-          var reason = "Both route probes failed; stay on the current host";
-          if (cn.ok && profile.prefersChinaRoute) {
-            nextTarget = "cn";
-            reason = "www probe succeeded and the browser has China-local signals; keep the domestic route";
-          } else if (cn.ok && intl && intl.ok) {
-            if (Math.abs(cn.ms - intl.ms) <= marginMs) {
-              nextTarget = currentTarget;
-              reason = "Both routes are within the measured-route margin; keep the current host";
-            } else if (intl.ms < cn.ms) {
-              nextTarget = "intl";
-              reason = "intl is faster than www by more than the redirect margin";
-            } else {
-              nextTarget = "cn";
-              reason = "www is faster than intl by more than the redirect margin";
-            }
-          } else if (intl && intl.ok && !cn.ok) {
-            if (currentTarget === "cn") {
-              nextTarget = "cn";
-              reason = "www is the current entry; keep the domestic route when only the www probe failed once";
-            } else {
-              nextTarget = "intl";
-              reason = "www probe failed and intl probe succeeded";
-            }
-          } else if (cn.ok && intl && !intl.ok) {
-            nextTarget = "cn";
-            reason = "intl probe failed and www probe succeeded";
-          }
-          var autoPayload = saveDecision(decisionKey, nextTarget, autoTtlMs, {
-            source: "auto",
-            reason: reason,
-            cnOk: Boolean(cn.ok),
-            intlOk: intl ? Boolean(intl.ok) : undefined,
-            cnMs: Math.round(cn.ms),
-            intlMs: intl ? Math.round(intl.ms) : undefined,
-            marginMs: marginMs,
-            cnBuildCommit: cn.buildCommit || "",
-            intlBuildCommit: intl ? intl.buildCommit || "" : "",
-            cnFrontendBuildId: cn.frontendBuildId || "",
-            intlFrontendBuildId: intl ? intl.frontendBuildId || "" : ""
-          });
-          var didRedirect = redirectTo(nextTarget, autoPayload);
-          if (!didRedirect) {
-            clearProbeInFlight();
-          }
-        }
-
-        cnProbePromise.then(function (cn) {
-          if (profile.prefersChinaRoute && cn.ok) {
-            completeDecision(cn, null);
-          }
-        });
-        Promise.all([cnProbePromise, intlProbePromise]).then(function (results) {
-          completeDecision(results[0], results[1]);
-        }).catch(function () {
-          clearProbeInFlight();
-        });
-      })();
-    </script>
   </head>
   <body>
     <div id="root">
@@ -467,6 +86,271 @@
         </div>
       </div>
     </div>
+    <script>
+      (function () {
+        var routeHosts = { cn: "www.ojeur.cloud", intl: "intl.ojeur.cloud" };
+        var decisionKey = "jato_route_decision_v2";
+        var manualKey = "jato_route_manual_v1";
+        var probeInFlightKey = "jato_route_probe_inflight_v1";
+        var probeTimeoutMs = 1800;
+        var redirectMarginMs = 450;
+        var autoDecisionTtlMs = 2 * 60 * 60 * 1000;
+        var host = window.location.hostname;
+        var currentTarget = targetForHost(host);
+        var searchParams = new URLSearchParams(window.location.search);
+
+        function targetForHost(value) {
+          if (value === routeHosts.cn || value === "ojeur.cloud") return "cn";
+          if (value === routeHosts.intl) return "intl";
+          return null;
+        }
+
+        function targetHost(target) {
+          return routeHosts[target] || "";
+        }
+
+        function readDecision(key) {
+          try {
+            var raw = window.localStorage.getItem(key);
+            if (!raw) return null;
+            var parsed = JSON.parse(raw);
+            if ((parsed.target !== "cn" && parsed.target !== "intl") || parsed.expiresAt < Date.now()) {
+              window.localStorage.removeItem(key);
+              return null;
+            }
+            return parsed;
+          } catch (_error) {
+            return null;
+          }
+        }
+
+        function saveDecision(payload) {
+          window.localStorage.setItem(payload.source === "manual" ? manualKey : decisionKey, JSON.stringify(payload));
+        }
+
+        function setTransferParams(url, payload) {
+          url.searchParams.set("jatoRouteTarget", payload.target);
+          url.searchParams.set("jatoRouteExpires", String(payload.expiresAt));
+          url.searchParams.set("jatoRouteCreated", String(payload.createdAt || Date.now()));
+          url.searchParams.set("jatoRouteSource", payload.source || "auto");
+          if (payload.reason) url.searchParams.set("jatoRouteReason", payload.reason);
+          if (payload.cnOk !== undefined) url.searchParams.set("jatoRouteCnOk", String(payload.cnOk));
+          if (payload.intlOk !== undefined) url.searchParams.set("jatoRouteIntlOk", String(payload.intlOk));
+          if (payload.cnMs !== undefined) url.searchParams.set("jatoRouteCnMs", String(payload.cnMs));
+          if (payload.intlMs !== undefined) url.searchParams.set("jatoRouteIntlMs", String(payload.intlMs));
+          if (payload.marginMs !== undefined) url.searchParams.set("jatoRouteMarginMs", String(payload.marginMs));
+          if (payload.cnBuildCommit) url.searchParams.set("jatoRouteCnBuildCommit", payload.cnBuildCommit);
+          if (payload.intlBuildCommit) url.searchParams.set("jatoRouteIntlBuildCommit", payload.intlBuildCommit);
+          if (payload.cnFrontendBuildId) url.searchParams.set("jatoRouteCnFrontendBuildId", payload.cnFrontendBuildId);
+          if (payload.intlFrontendBuildId) url.searchParams.set("jatoRouteIntlFrontendBuildId", payload.intlFrontendBuildId);
+        }
+
+        function redirectTo(nextTarget, payload) {
+          var nextHost = targetHost(nextTarget);
+          if (nextHost === host) return false;
+          if (!nextHost) return false;
+          var url = new URL(window.location.href);
+          url.hostname = nextHost;
+          setTransferParams(url, payload);
+          window.location.replace(url.toString());
+          return true;
+        }
+
+        function markProbeInFlight() {
+          window.__JATO_ROUTE_PROBE_IN_FLIGHT__ = true;
+          try {
+            window.sessionStorage.setItem(probeInFlightKey, String(Date.now()));
+          } catch (_error) {
+            // The app can still boot if storage is unavailable.
+          }
+        }
+
+        function clearProbeInFlight() {
+          window.__JATO_ROUTE_PROBE_IN_FLIGHT__ = false;
+          try {
+            window.sessionStorage.removeItem(probeInFlightKey);
+          } catch (_error) {
+            // The app can still boot if storage is unavailable.
+          }
+        }
+
+        function detectProfile() {
+          var timeZone = "";
+          try {
+            timeZone = Intl.DateTimeFormat().resolvedOptions().timeZone || "";
+          } catch (_error) {
+            timeZone = "";
+          }
+          var languages = [];
+          if (navigator.languages && navigator.languages.length) {
+            languages = Array.prototype.slice.call(navigator.languages);
+          } else if (navigator.language) {
+            languages = [navigator.language];
+          }
+          var chinaTimeZone = /^(Asia\/Shanghai|Asia\/Chongqing|Asia\/Harbin|Asia\/Urumqi)$/.test(timeZone);
+          var mainlandChineseLanguage = languages.some(function (language) {
+            var normalized = String(language || "").toLowerCase();
+            return normalized === "zh-cn" || normalized.indexOf("zh-cn-") === 0 || normalized === "zh-hans" || normalized.indexOf("zh-hans-") === 0;
+          });
+          return {
+            prefersChinaRoute: chinaTimeZone || mainlandChineseLanguage,
+            reason: chinaTimeZone ? "China-local browser signal: time zone " + timeZone : mainlandChineseLanguage ? "China-local browser signal: language " + languages.join(", ") : "No China-local browser signal"
+          };
+        }
+
+        function probe(target) {
+          var startedAt = performance.now();
+          var controller = new AbortController();
+          var timeout = window.setTimeout(function () { controller.abort(); }, probeTimeoutMs);
+          var checkedAt = new Date().toLocaleTimeString();
+          var buildInfoPromise = fetch("https://" + targetHost(target) + "/build-meta.json?ts=" + Date.now(), {
+            cache: "no-store",
+            credentials: "omit",
+            signal: controller.signal
+          }).then(function (response) {
+            if (!response.ok) return {};
+            return response.json();
+          }).catch(function () {
+            return {};
+          });
+          return fetch("https://" + targetHost(target) + "/route-probe.txt?ts=" + Date.now(), {
+            cache: "no-store",
+            credentials: "omit",
+            mode: "no-cors",
+            signal: controller.signal
+          }).then(function () {
+            return buildInfoPromise.then(function (buildInfo) {
+              window.clearTimeout(timeout);
+              return {
+                target: target,
+                ok: true,
+                ms: Math.round(performance.now() - startedAt),
+                checkedAt: checkedAt,
+                buildCommit: typeof buildInfo.commit === "string" ? buildInfo.commit : undefined,
+                frontendBuildId: typeof buildInfo.frontendBuildId === "string" ? buildInfo.frontendBuildId : undefined
+              };
+            });
+          }).catch(function () {
+            return buildInfoPromise.then(function (buildInfo) {
+              window.clearTimeout(timeout);
+              return {
+                target: target,
+                ok: false,
+                ms: Math.round(performance.now() - startedAt),
+                checkedAt: checkedAt,
+                buildCommit: typeof buildInfo.commit === "string" ? buildInfo.commit : undefined,
+                frontendBuildId: typeof buildInfo.frontendBuildId === "string" ? buildInfo.frontendBuildId : undefined
+              };
+            });
+          });
+        }
+
+        function chooseAutoPayload(cn, intl, profile) {
+          var now = Date.now();
+          var currentOrCn = currentTarget || "cn";
+          var cnMs = cn && cn.ms !== undefined ? cn.ms : probeTimeoutMs;
+          var intlMs = intl && intl.ms !== undefined ? intl.ms : probeTimeoutMs;
+          var target = currentOrCn;
+          var reason = "Both probes failed; stay on the current host.";
+          var marginMs = redirectMarginMs;
+          if (cn.ok && profile.prefersChinaRoute) {
+            target = "cn";
+            marginMs = undefined;
+            reason = "www probe succeeded and the browser has China-local signals; keep the domestic route (" + profile.reason + ").";
+          } else if (cn && cn.ok && !(intl && intl.ok)) {
+            target = "cn";
+            reason = "intl probe failed and www probe succeeded.";
+          } else if (intl && intl.ok && !(cn && cn.ok)) {
+            if (currentTarget === "cn") {
+              target = "cn";
+              reason = "www is the current entry; keep the domestic route when only the www probe failed once.";
+            } else {
+              target = "intl";
+              reason = "www probe failed and intl probe succeeded.";
+            }
+          } else if (cn && cn.ok && intl && intl.ok) {
+            var deltaMs = Math.abs(cnMs - intlMs);
+            if (deltaMs <= redirectMarginMs) {
+              target = currentOrCn;
+              reason = "Both probes are within " + redirectMarginMs + " ms; keep the current route to avoid route churn.";
+            } else if (intlMs < cnMs) {
+              target = "intl";
+              reason = "intl is faster by " + (cnMs - intlMs) + " ms, above the measured-route margin.";
+            } else {
+              target = "cn";
+              reason = "www is faster by " + (intlMs - cnMs) + " ms, above the measured-route margin.";
+            }
+          }
+          return {
+            target: target,
+            source: "auto",
+            reason: reason,
+            createdAt: now,
+            expiresAt: now + autoDecisionTtlMs,
+            cnOk: cn ? cn.ok : undefined,
+            intlOk: intl ? intl.ok : undefined,
+            cnMs: cn ? cn.ms : undefined,
+            intlMs: intl ? intl.ms : undefined,
+            marginMs: marginMs,
+            cnBuildCommit: cn ? cn.buildCommit : undefined,
+            intlBuildCommit: intl ? intl.buildCommit : undefined,
+            cnFrontendBuildId: cn ? cn.frontendBuildId : undefined,
+            intlFrontendBuildId: intl ? intl.frontendBuildId : undefined
+          };
+        }
+
+        if (!currentTarget || window.location.pathname === "/route-diagnostics" || searchParams.has("token") || searchParams.has("code") || searchParams.has("state") || searchParams.get("route") === "stay") {
+          return;
+        }
+
+        var manualDecision = readDecision(manualKey);
+        if (manualDecision) {
+          redirectTo(manualDecision.target, manualDecision);
+          return;
+        }
+
+        var cachedDecision = readDecision(decisionKey);
+        if (cachedDecision) {
+          redirectTo(cachedDecision.target, cachedDecision);
+          return;
+        }
+
+        var profile = detectProfile();
+        var decisionSettled = false;
+        markProbeInFlight();
+
+        function completeDecision(cn, intl) {
+          if (decisionSettled) return;
+          decisionSettled = true;
+          var autoPayload = chooseAutoPayload(cn, intl, profile);
+          saveDecision(autoPayload);
+          var nextTarget = autoPayload.target;
+          var didRedirect = redirectTo(nextTarget, autoPayload);
+          if (!didRedirect) {
+            clearProbeInFlight();
+          }
+        }
+
+        var cnProbePromise = probe("cn");
+        var intlProbePromise = probe("intl");
+
+        cnProbePromise.then(function (cn) {
+          if (decisionSettled) return;
+          if (profile.prefersChinaRoute && cn.ok) {
+            completeDecision(cn, null);
+          }
+        }).catch(function () {
+          clearProbeInFlight();
+        });
+
+        Promise.all([cnProbePromise, intlProbePromise]).then(function (results) {
+          if (decisionSettled) return;
+          completeDecision(results[0], results[1]);
+        }).catch(function () {
+          clearProbeInFlight();
+        });
+      })();
+    </script>
     <script type="module" src="/src/main.tsx"></script>
   </body>
 </html>
