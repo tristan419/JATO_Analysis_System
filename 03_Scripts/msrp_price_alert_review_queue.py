@@ -133,11 +133,68 @@ def _count_by(items: list[dict[str, Any]], key: str) -> dict[str, int]:
     return dict(sorted(counts.items()))
 
 
+def _count_present_by(items: list[dict[str, Any]], key: str) -> dict[str, int]:
+    counts: dict[str, int] = {}
+    for item in items:
+        value = _text(item.get(key))
+        if value:
+            counts[value] = counts.get(value, 0) + 1
+    return dict(sorted(counts.items()))
+
+
+def _effectiveness_items(snapshot: dict[str, Any]) -> list[dict[str, Any]]:
+    effectiveness = snapshot.get("priceSalesEffectiveness")
+    if not isinstance(effectiveness, dict):
+        return []
+    return [
+        item
+        for item in list(effectiveness.get("items") or [])
+        if isinstance(item, dict)
+    ]
+
+
+def _effectiveness_key(item: dict[str, Any]) -> str:
+    key = _text(item.get("priceEventId")) or _text(item.get("alertId"))
+    source_alert = item.get("sourcePriceAlert")
+    if not key and isinstance(source_alert, dict):
+        key = _text(source_alert.get("alertId"))
+    return key
+
+
+def _effectiveness_by_price_event(
+    snapshot: dict[str, Any],
+) -> dict[str, dict[str, Any]]:
+    indexed: dict[str, dict[str, Any]] = {}
+    for item in _effectiveness_items(snapshot):
+        key = _effectiveness_key(item)
+        if key:
+            indexed.setdefault(key, item)
+    return indexed
+
+
+def _sales_effectiveness_summary(item: dict[str, Any] | None) -> dict[str, Any] | None:
+    if not isinstance(item, dict):
+        return None
+    return {
+        "analysisId": item.get("analysisId"),
+        "priceEventId": item.get("priceEventId"),
+        "priceEventMonth": item.get("priceEventMonth"),
+        "priceChangeDirection": item.get("priceChangeDirection"),
+        "baselineAvgSales": item.get("baselineAvgSales"),
+        "postAvgSales": item.get("postAvgSales"),
+        "salesDelta": item.get("salesDelta"),
+        "salesDeltaPct": item.get("salesDeltaPct"),
+        "effectivenessLabel": item.get("effectivenessLabel"),
+        "confidenceNote": item.get("confidenceNote"),
+    }
+
+
 def _build_queue_item(
     alert: dict[str, Any],
     *,
     snapshot_week: str | None,
     snapshot_generated_at: str | None,
+    sales_effectiveness: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     reasons = _review_reasons(alert)
     priority = _review_priority(alert, reasons)
@@ -146,6 +203,7 @@ def _build_queue_item(
         if isinstance(alert.get("currentPrice"), dict)
         else {}
     )
+    sales_effectiveness_summary = _sales_effectiveness_summary(sales_effectiveness)
     return {
         "caseId": _case_id(alert),
         "queueType": "price_alert_review",
@@ -192,6 +250,13 @@ def _build_queue_item(
         "deltaSourceMsrpValue": alert.get("deltaSourceMsrpValue"),
         "deltaMsrpValue": alert.get("deltaMsrpValue"),
         "deltaPct": alert.get("deltaPct"),
+        "salesEffectivenessAvailable": sales_effectiveness_summary is not None,
+        "salesEffectivenessLabel": (
+            sales_effectiveness_summary.get("effectivenessLabel")
+            if sales_effectiveness_summary
+            else None
+        ),
+        "salesEffectiveness": sales_effectiveness_summary,
         "evidence": {
             "snapshotWeek": snapshot_week,
             "snapshotGeneratedAtUtc": snapshot_generated_at,
@@ -218,6 +283,12 @@ def _summary(items: list[dict[str, Any]], alert_count: int) -> dict[str, Any]:
         for item in items
         if _text(item.get("country"))
     })
+    effectiveness_linked_count = sum(
+        1 for item in items if item.get("salesEffectivenessAvailable")
+    )
+    effectiveness_follow_up_count = sum(
+        1 for item in items if item.get("requiresSalesEffectivenessFollowUp")
+    )
     return {
         "totalCases": len(items),
         "sourceAlertCount": alert_count,
@@ -230,8 +301,15 @@ def _summary(items: list[dict[str, Any]], alert_count: int) -> dict[str, Any]:
         "sourceCurrencyReviewCount": sum(
             1 for item in items if item.get("sourceCurrencyChanged")
         ),
-        "effectivenessFollowUpCount": sum(
-            1 for item in items if item.get("requiresSalesEffectivenessFollowUp")
+        "effectivenessFollowUpCount": effectiveness_follow_up_count,
+        "effectivenessLinkedCount": effectiveness_linked_count,
+        "effectivenessMissingCount": max(
+            effectiveness_follow_up_count - effectiveness_linked_count,
+            0,
+        ),
+        "effectivenessLabelCounts": _count_present_by(
+            items,
+            "salesEffectivenessLabel",
         ),
         "priceDropCount": sum(1 for item in items if item.get("direction") == "decrease"),
         "priceIncreaseCount": sum(
@@ -255,11 +333,15 @@ def build_price_alert_review_queue(snapshot: dict[str, Any]) -> dict[str, Any]:
         for item in list(snapshot.get("priceAlerts") or [])
         if isinstance(item, dict)
     ]
+    effectiveness_by_event = _effectiveness_by_price_event(snapshot)
     items = [
         _build_queue_item(
             alert,
             snapshot_week=snapshot_week,
             snapshot_generated_at=snapshot_generated_at,
+            sales_effectiveness=effectiveness_by_event.get(
+                _text(alert.get("alertId"))
+            ),
         )
         for alert in alerts
         if _should_queue(alert, _review_reasons(alert))
@@ -313,6 +395,8 @@ def _render_markdown(payload: dict[str, Any]) -> str:
         f"| Missing evidence | {summary.get('missingEvidenceCount', 0)} |",
         f"| Currency reviews | {summary.get('sourceCurrencyReviewCount', 0)} |",
         f"| Sales effectiveness follow-up | {summary.get('effectivenessFollowUpCount', 0)} |",
+        f"| Sales effectiveness linked | {summary.get('effectivenessLinkedCount', 0)} |",
+        f"| Sales effectiveness missing | {summary.get('effectivenessMissingCount', 0)} |",
         "",
         "## Cases",
         "",
@@ -322,8 +406,8 @@ def _render_markdown(payload: dict[str, Any]) -> str:
         lines.append("No price alert review cases.")
         return "\n".join(lines) + "\n"
     lines.extend([
-        "| Priority | Country | Brand | Model | Trim | Direction | Severity | Delta % | Evidence | Action |",
-        "|---|---|---|---|---|---|---|---:|---|---|",
+        "| Priority | Country | Brand | Model | Trim | Direction | Severity | Delta % | Evidence | Effectiveness | Action |",
+        "|---|---|---|---|---|---|---|---:|---|---|---|",
     ])
     for item in items:
         lines.append(
@@ -338,6 +422,7 @@ def _render_markdown(payload: dict[str, Any]) -> str:
                 _markdown_cell(item.get("severity")),
                 _markdown_cell(item.get("deltaPct")),
                 _markdown_cell(item.get("evidenceStatus")),
+                _markdown_cell(item.get("salesEffectivenessLabel")),
                 _markdown_cell(item.get("recommendedAction")),
             ])
             + " |"

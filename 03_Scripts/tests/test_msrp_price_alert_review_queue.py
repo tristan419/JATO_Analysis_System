@@ -131,6 +131,29 @@ def sample_snapshot() -> dict[str, object]:
             missing_evidence,
             skipped_info,
         ],
+        "priceSalesEffectiveness": {
+            "schemaVersion": "msrp_price_sales_effectiveness_v1",
+            "summary": {
+                "priceEventCount": 1,
+                "analyzedEventCount": 1,
+                "labelCounts": {"positive": 1},
+                "limit": 10,
+            },
+            "items": [
+                {
+                    "analysisId": "msrp-effectiveness:se:volvo:xc60:2026-06",
+                    "priceEventId": "msrp-alert:critical",
+                    "priceEventMonth": "2026-06",
+                    "priceChangeDirection": "down",
+                    "baselineAvgSales": 100.0,
+                    "postAvgSales": 128.0,
+                    "salesDelta": 28.0,
+                    "salesDeltaPct": 28.0,
+                    "effectivenessLabel": "positive",
+                    "confidenceNote": "unit-test",
+                }
+            ],
+        },
     }
 
 
@@ -148,6 +171,9 @@ def test_build_price_alert_review_queue_filters_and_summarizes() -> None:
         "missingEvidenceCount": 1,
         "sourceCurrencyReviewCount": 0,
         "effectivenessFollowUpCount": 1,
+        "effectivenessLinkedCount": 1,
+        "effectivenessMissingCount": 0,
+        "effectivenessLabelCounts": {"positive": 1},
         "priceDropCount": 1,
         "priceIncreaseCount": 1,
         "priorityCounts": {"critical": 1, "high": 1},
@@ -161,6 +187,9 @@ def test_build_price_alert_review_queue_filters_and_summarizes() -> None:
     assert critical["reviewPriority"] == "critical"
     assert critical["requiresSalesEffectivenessFollowUp"] is True
     assert critical["officialEvidenceComplete"] is True
+    assert critical["salesEffectivenessAvailable"] is True
+    assert critical["salesEffectivenessLabel"] == "positive"
+    assert critical["salesEffectiveness"]["salesDeltaPct"] == 28.0
     assert critical["evidence"]["latestPriceHistoryId"] == "ph-current"
     assert critical["evidence"]["matchStatus"] == "auto_accepted"
 
@@ -214,5 +243,6 @@ def test_run_writes_json_and_markdown(tmp_path: Path) -> None:
     ] == 2
     markdown = md_path.read_text(encoding="utf-8")
     assert "Policy: price changes require official source evidence" in markdown
-    assert "| critical | SE | Volvo | XC60 | Plus Dark | decrease | critical | -7.5 | complete | review_price_drop_and_queue_sales_effectiveness |" in markdown
+    assert "| Sales effectiveness linked | 1 |" in markdown
+    assert "| critical | SE | Volvo | XC60 | Plus Dark | decrease | critical | -7.5 | complete | positive | review_price_drop_and_queue_sales_effectiveness |" in markdown
     assert payload["summary"]["skippedAlertCount"] == 1
