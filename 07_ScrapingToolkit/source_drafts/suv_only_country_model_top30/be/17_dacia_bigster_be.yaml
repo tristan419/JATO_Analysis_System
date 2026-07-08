@@ -1,27 +1,31 @@
 source_code: dacia_bigster_be_draft_scrapling
 country: 比利时
 brand: DACIA
-source_url: https://todo.invalid/be/dacia/bigster
+source_url: https://nl.dacia.be/hybride-en-elektrische-gamma/bigster.html
 source_type: manufacturer_official
 price_semantics: base_msrp
 extractor_type: scrapling
 profile:
-  url: https://todo.invalid/be/dacia/bigster
-  tier: stealth
+  url: https://nl.dacia.be/hybride-en-elektrische-gamma/bigster.html
+  tier: http
   headless: true
-  network_idle: true
+  network_idle: false
+  load_dom: false
+  timeout_ms: 20000
   impersonate: chrome
-  css:
-    vehicle_container: body
-    model: h2
-    trim: h3
-    price: '[class*="price"]'
+  text_regex:
+    source_selector: body
+    include_element_html: true
+    entry_patterns:
+    - pattern: '<span class="ModelPickerCard__title">BIGSTER</span>[\s\S]*?<span class="NormalizedPrice is-small">\s*Prijs vanaf\s*(?:<!-- -->)?€\s*(?P<price>[0-9][0-9.\s]*)[\s\S]*?<p class="ModelVersionEngine[^"]*">(?P<trim>BIGSTER\s+ESSENTIAL\s+mild\s+hybrid\s+140)</p>[\s\S]*?aanbevolen catalogusprijs BTWi'
+      official_powertrain: mild hybrid 140
+      price_label: aanbevolen catalogusprijs BTWi
   default_currency: EUR
   default_tax_included: true
-  default_price_label: MSRP
+  default_price_label: aanbevolen catalogusprijs BTWi
   fixed_model: BIGSTER
   fixed_jato_model: BIGSTER
-  fixed_jato_powertrain: null
+  fixed_jato_powertrain: MHEV
   model_rules: []
   skip_if_model_unmapped: false
   copy_trim_to_jato_trim: true
@@ -69,6 +73,15 @@ profile:
       keyword: special edition
       special: true
     powertrain_rules:
+    - key: powertrain_mhev
+      powertrain: MHEV
+      keywords:
+      - mhev
+      - mild hybrid
+      - mild-hybrid
+      - 48V
+      - hybride leger
+      - mild hybrid 140
     - key: powertrain_hev
       powertrain: HEV
       keywords:
@@ -79,14 +92,6 @@ profile:
       - hybrid
       - hybride
       - hybride non rechargeable
-    - key: powertrain_mhev
-      powertrain: MHEV
-      keywords:
-      - mhev
-      - mild hybrid
-      - mild-hybrid
-      - 48V
-      - hybride leger
   auto_accept_gates:
     review_threshold: 0.95
     semi_auto_threshold: 0.98
@@ -102,7 +107,8 @@ schedule:
 notes: Draft scaffold generated from country×model top30 backlog. Replace source_url,
   profile.url, selectors, currency, price label, and the single-model placeholders
   before promoting to 07_ScrapingToolkit/sources. [CSS selectors applied from brand
-  probe]
+  probe] [Filled official Dacia Belgium Bigster page; text_regex anchors the model
+  picker MSRP entry price labelled aanbevolen catalogusprijs BTWi]
 bootstrap_meta:
   country_model_rank: 17
   suggested_scope_kind: single_model
