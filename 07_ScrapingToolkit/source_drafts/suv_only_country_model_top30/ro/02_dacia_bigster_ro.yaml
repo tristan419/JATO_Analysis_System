@@ -1,27 +1,31 @@
 source_code: dacia_bigster_ro_draft_scrapling
 country: 罗马尼亚
 brand: DACIA
-source_url: https://todo.invalid/ro/dacia/bigster
+source_url: https://www.dacia.ro/gama-de-modele-hibride-si-electrice/bigster-suv.html
 source_type: manufacturer_official
 price_semantics: base_msrp
 extractor_type: scrapling
 profile:
-  url: https://todo.invalid/ro/dacia/bigster
-  tier: stealth
+  url: https://www.dacia.ro/gama-de-modele-hibride-si-electrice/bigster-suv.html
+  tier: http
   headless: true
-  network_idle: true
+  network_idle: false
+  load_dom: false
+  timeout_ms: 20000
   impersonate: chrome
-  css:
-    vehicle_container: body
-    model: h2
-    trim: h3
-    price: '[class*="price"]'
-  default_currency: RON
+  text_regex:
+    source_selector: html
+    include_element_html: true
+    entry_patterns:
+    - pattern: '"schema:name":"(?P<trim>BIGSTER essential)"[\s\S]*?"schema:price":"(?P<price>[0-9]+)(?:\.0)?"[\s\S]*?"schema:priceCurrency":"EUR"[\s\S]*?"schema:priceType":"SRP"'
+      official_powertrain: mild hybrid 140
+      price_label: SRP
+  default_currency: EUR
   default_tax_included: true
   default_price_label: MSRP
   fixed_model: BIGSTER
   fixed_jato_model: BIGSTER
-  fixed_jato_powertrain: null
+  fixed_jato_powertrain: MHEV
   model_rules: []
   skip_if_model_unmapped: false
   copy_trim_to_jato_trim: true
@@ -52,13 +56,13 @@ profile:
       delta: 0.03
     powertrain_keyword_bonuses: []
     powertrain_bonuses:
-    - key: powertrain_hev
-      label: 'Powertrain matched: HEV'
-      powertrain: HEV
-      delta: 0.03
     - key: powertrain_mhev
       label: 'Powertrain matched: MHEV'
       powertrain: MHEV
+      delta: 0.03
+    - key: powertrain_hev
+      label: 'Powertrain matched: HEV'
+      powertrain: HEV
       delta: 0.03
     - key: powertrain_ice
       label: 'Powertrain matched: ICE'
@@ -73,6 +77,16 @@ profile:
       keyword: special edition
       special: true
     powertrain_rules:
+    - key: powertrain_mhev
+      powertrain: MHEV
+      keywords:
+      - mhev
+      - mild hybrid
+      - mild-hybrid
+      - mild hybrid 140
+      - 48V
+      - hibrid usor
+      - hibrid ușor
     - key: powertrain_hev
       powertrain: HEV
       keywords:
@@ -82,14 +96,6 @@ profile:
       - self charging hybrid
       - hybrid
       - hibrid
-    - key: powertrain_mhev
-      powertrain: MHEV
-      keywords:
-      - mhev
-      - mild hybrid
-      - mild-hybrid
-      - 48V
-      - hibrid usor
     - key: powertrain_ice
       powertrain: ICE
       keywords:
@@ -115,7 +121,8 @@ schedule:
 notes: Draft scaffold generated from country×model top30 backlog. Replace source_url,
   profile.url, selectors, currency, price label, and the single-model placeholders
   before promoting to 07_ScrapingToolkit/sources. [CSS selectors applied from brand
-  probe]
+  probe] [Filled official Dacia Romania Bigster page; text_regex anchors JSON-LD
+  SRP and avoids the visible Rabla/commercial discount price]
 bootstrap_meta:
   country_model_rank: 2
   suggested_scope_kind: single_model
