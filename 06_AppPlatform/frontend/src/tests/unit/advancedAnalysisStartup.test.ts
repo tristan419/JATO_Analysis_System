@@ -25,4 +25,13 @@ describe("Advanced Analysis startup", () => {
     expect(advancedAnalysisSource).toContain("const ADVANCED_ANALYSIS_PLOTLY_DEFER_MS = 6_000;");
     expect(advancedAnalysisSource).toContain("return <LazyPlotlyChart {...props} deferMs={ADVANCED_ANALYSIS_PLOTLY_DEFER_MS} />;");
   });
+
+  it("loads export settings only when the export drawer is opened", () => {
+    expect(advancedAnalysisSource).toContain("const AdvancedAnalysisExportPanel = lazy(() =>");
+    expect(advancedAnalysisSource).toContain('import("../components/ExportPanel")');
+    expect(advancedAnalysisSource).toContain('import("../components/ExportPanelHelpers").then((module) =>');
+    expect(advancedAnalysisSource).toContain("<AdvancedAnalysisExportPanel value={exportSettings}");
+    expect(advancedAnalysisSource).not.toContain("import { DEFAULT_EXPORT, ExportPanel, downloadPng");
+    expect(advancedAnalysisSource).not.toContain('from "../components/ExportPanel";');
+  });
 });

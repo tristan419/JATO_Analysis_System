@@ -10,7 +10,7 @@ import { SearchSelectFilter } from "../components/SearchSelectFilter";
 import { TRANSPARENT_CHART_LAYOUT as CHART_LAYOUT } from "../utils/plotlyDefaults";
 import { SERIES_COLORS } from "../utils/colors";
 import { compactSearchText } from "../utils/searchMatching";
-import { DEFAULT_EXPORT, ExportPanel, downloadPng, type ExportSettings } from "../components/ExportPanel";
+import type { ExportSettings } from "../components/ExportPanelHelpers";
 import { DeckExportDrawer, DeckFloatingDrawer } from "../components/deckControls";
 import { JATO_COUNTRIES, formatJatoCountryOption } from "../utils/jatoCountries";
 import "./AdvancedAnalysisPage.css";
@@ -38,7 +38,32 @@ const STATIC_COUNTRY_OPTIONS = JATO_COUNTRIES.map((country) => ({
   label: formatJatoCountryOption(country),
 }));
 const CHART_MARGIN = { l: 52, r: 24, t: 20, b: 48 } as const;
-const DEFAULT_AA_EXPORT: ExportSettings = { ...DEFAULT_EXPORT, exportWidth: 1920, exportHeight: 1080, dataLabelMode: "value", fontSize: 11 };
+const DEFAULT_AA_EXPORT: ExportSettings = {
+  showXGrid: false,
+  showYGrid: false,
+  showAxisLine: true,
+  showLegend: true,
+  legendPosition: "right",
+  colorScheme: "default",
+  fontSize: 11,
+  labelFontSize: 12,
+  gridColor: "#E5E7EB",
+  axisColor: "#6B7280",
+  xTickFormat: "",
+  yTickFormat: "",
+  paperBg: "#FFFFFF",
+  plotBg: "#FFFFFF",
+  chartTitle: "",
+  xTitle: "",
+  yTitle: "",
+  exportWidth: 1920,
+  exportHeight: 1080,
+  dataLabelMode: "value",
+  dataLabelPosition: "auto",
+  dataLabelOverlapStrategy: "all",
+  decimalPlaces: 0,
+  seriesColors: {},
+};
 const ADVANCED_ANALYSIS_PLOTLY_DEFER_MS = 6_000;
 const COLORS = { growth: "#10b981", decline: "#ef4444", stable: "#94a3b8", market: "#3b82f6", share: "#10b981", mix: "#f59e0b", interaction: "#8b5cf6", winner: "#10b981", loser: "#ef4444" };
 const RESPONSIVE_TWO_COL: CSSProperties = { display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(360px, 1fr))", gap: 16, marginBottom: 16 };
@@ -72,6 +97,9 @@ const EMPTY_PROFILE_OPTIONS: AdvancedAnalysisProfileOptions = {
 
 const HeroProductAnalysisView = lazy(() =>
   import("./HeroProductAnalysisView").then((module) => ({ default: module.HeroProductAnalysisView })),
+);
+const AdvancedAnalysisExportPanel = lazy(() =>
+  import("../components/ExportPanel").then((module) => ({ default: module.ExportPanel })),
 );
 
 type DecompositionKey = "market_carryover" | "channel_mix" | "drive_mix" | "powertrain_mix" | "pure_share_shift" | "interaction";
@@ -456,7 +484,13 @@ export function AdvancedAnalysisPage() {
   // Drawer mutual exclusion
   const hFO = useCallback((o: boolean) => { setFilterOpen(o); if (o) setExportOpen(false); }, []);
   const hEO = useCallback((o: boolean) => { setExportOpen(o); if (o) setFilterOpen(false); }, []);
-  const handleExportPng = useCallback(() => { const d = getGraphDiv(); if (d) downloadPng(d, exportSettings); }, [exportSettings]);
+  const handleExportPng = useCallback(() => {
+    const graphDiv = getGraphDiv();
+    if (!graphDiv) return;
+    void import("../components/ExportPanelHelpers").then((module) => {
+      void module.downloadPng(graphDiv, exportSettings);
+    });
+  }, [exportSettings]);
 
   // ── Synthesized conclusion narrative ──
   const s = data?.scope_summary;
@@ -666,7 +700,9 @@ export function AdvancedAnalysisPage() {
         footer={<div className="market-scan-toolbar-meta"><span className="market-scan-toolbar-chip">{exportSettings.exportWidth}×{exportSettings.exportHeight}</span></div>}
       >
         <button type="button" className="btn btn-primary btn-sm" onClick={handleExportPng} style={{ marginBottom: 12, width: "100%" }}>Export Current Chart PNG</button>
-        <ExportPanel value={exportSettings} onChange={setExportSettings} showExportButton={false} collapsible={false} />
+        <Suspense fallback={<div className="market-scan-toolbar-meta">Loading export settings...</div>}>
+          <AdvancedAnalysisExportPanel value={exportSettings} onChange={setExportSettings} showExportButton={false} collapsible={false} />
+        </Suspense>
       </DeckExportDrawer>
 
       <PageBannerStack
