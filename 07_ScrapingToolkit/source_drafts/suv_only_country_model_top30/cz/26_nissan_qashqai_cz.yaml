@@ -6,115 +6,95 @@
 # Suggested scope kind: single_model
 # Sales 12M: 1,288
 # Draft path: cz/26_nissan_qashqai_cz.yaml
-# TODO: Replace source_url/profile.url with the official single-model MSRP or configurator page.
-# TODO: Keep fixed_model/fixed_jato_model aligned with the exact JATO model and only set fixed_jato_powertrain when the page is powertrain-specific; otherwise rely on structured_fields.powertrain_rules.
-# TODO: Promote only if the page exposes true MSRP semantics, not leasing or finance monthly payments.
-# TODO: Replace price_band_bonuses min/max placeholders with local pricing bands.
 source_code: nissan_qashqai_cz_draft_scrapling
 country: 捷克
 brand: NISSAN
-source_url: https://www.nissan.cz/vozidla/nove-vozy/qashqai.html
-source_type: manufacturer_official
+source_url: https://www-europe.nissan-cdn.net/content/dam/Nissan/cz/brochures/Pricelists/Qashqai-Pricelist_CZ_2024.pdf
+source_type: official_price_list
 price_semantics: base_msrp
-extractor_type: scrapling
+extractor_type: pdf_text
 profile:
-  url: https://www.nissan.cz/vozidla/nove-vozy/qashqai.html
-  tier: stealth
-  headless: true
-  network_idle: true
-  impersonate: chrome
-  css:
-    vehicle_container: .title-payment-info-container
-    model: ''
-    trim: ''
-    price: .msrp-price
+  url: https://www-europe.nissan-cdn.net/content/dam/Nissan/cz/brochures/Pricelists/Qashqai-Pricelist_CZ_2024.pdf
+  prefer_curl_download: true
+  timeout_seconds: 60
   default_currency: CZK
   default_tax_included: true
-  default_price_label: Doporučená cena včetně DPH
+  default_price_label: Ceníková cena Kč vč. DPH
   fixed_model: QASHQAI
   fixed_jato_model: QASHQAI
-  fixed_jato_powertrain: null
-  model_rules: []
-  skip_if_model_unmapped: false
   copy_trim_to_jato_trim: true
-  confidence_rules:
-    base: 0.2
-    fixed_model_bonus: 0.18
-    fixed_jato_model_bonus: 0.12
-    model_rule_bonus: 0.12
-    trim_present_bonus: 0.1
-    copy_trim_to_jato_trim_bonus: 0.09
-    parsed_price_text_bonus: 0.03
-    currency_bonus: 0.01
-    price_label_bonus: 0.02
-    trim_keyword_bonuses: []
-    price_band_bonuses:
-    - key: price_band_entry
-      label: Entry price band matched
-      max: 0
-      delta: 0.0
-    - key: price_band_mid
-      label: Mid price band matched
-      min: 0
-      max: 0
-      delta: 0.01
-    - key: price_band_high
-      label: High price band matched
-      min: 0
-      delta: 0.03
-    powertrain_keyword_bonuses: []
-    powertrain_bonuses:
-    - key: powertrain_hev
-      label: 'Powertrain matched: HEV'
-      powertrain: HEV
-      delta: 0.03
-    - key: powertrain_mhev
-      label: 'Powertrain matched: MHEV'
-      powertrain: MHEV
-      delta: 0.03
-    - key: powertrain_ice
-      label: 'Powertrain matched: ICE'
-      powertrain: ICE
-      delta: 0.03
-    clamp_min: 0.0
-    clamp_max: 1.0
-  structured_fields:
-    edition_rules:
-    - key: edition_special
-      label: Special Edition
-      keyword: special edition
-      special: true
-    powertrain_rules:
-    - key: powertrain_hev
-      powertrain: HEV
-      keywords:
-      - hybrid
-      - e-POWER
-    - key: powertrain_mhev
-      powertrain: MHEV
-      keywords:
-      - mild hybrid
-      - 48V
-      - MHEV
-    - key: powertrain_ice
-      powertrain: ICE
-      keywords:
-      - benzín
-  auto_accept_gates:
-    review_threshold: 0.95
-    semi_auto_threshold: 0.98
-    require_powertrain_match: true
-    force_review_if_powertrain_missing: true
-    force_review_if_powertrain_ambiguous: true
-    force_review_for_special_edition: true
-  json_script_selector: script[type='application/ld+json']
+  match_confidence: 0.86
+  match_status: review_required
+  match_reason:
+    kind: pdf_price_list
+    source: official_nissan_cz_pricelist
+    document_valid_from: '2025-01-07'
+    note: Official Nissan Czech Republic Qashqai price-list PDF; extracts the list price column, not discount or campaign prices.
+  entry_patterns:
+  - pattern: 'ACENTA\s+\n?1\.3\s+DIG-T\s+mHEV\s+2WD,\s+6MT\s+\n?140\s+HP\s+\(103\s+kW\)\s+(?P<price>759\s*990)\s+150\s+000'
+    official_trim: ACENTA 1.3 DIG-T mHEV 2WD 6MT 140 HP
+    official_powertrain: 1.3 DIG-T mHEV 2WD 6MT 140 HP (103 kW)
+    jato_powertrain: MHEV
+  - pattern: 'ACENTA[\s\S]*?140\s+HP\s+\(103\s+kW\)\s+759\s*990\s+150\s+000\s+609\s*990\s+Kč\s*\n158\s+HP\s+\(116\s+kW\)\s+(?P<price>779\s*990)\s+150\s+000'
+    official_trim: ACENTA 1.3 DIG-T mHEV 2WD 6MT 158 HP
+    official_powertrain: 1.3 DIG-T mHEV 2WD 6MT 158 HP (116 kW)
+    jato_powertrain: MHEV
+  - pattern: '1\.3\s+DIG-T\s+mHEV\s+2WD,\s+AT\s+158\s+HP\s+\(116\s+kW\)\s+(?P<price>819\s*990)\s+150\s+000'
+    official_trim: ACENTA 1.3 DIG-T mHEV 2WD AT 158 HP
+    official_powertrain: 1.3 DIG-T mHEV 2WD AT 158 HP (116 kW)
+    jato_powertrain: MHEV
+  - pattern: 'e-POWER,\s+2WD\s+190\s+HP\s+\(140\s+kW\)\s+(?P<price>929\s*990)\s+150\s+000\s+779\s*990\s+Kč'
+    official_trim: ACENTA e-POWER 2WD 190 HP
+    official_powertrain: e-POWER 2WD 190 HP (140 kW)
+    jato_powertrain: HEV
+  - pattern: 'N-CONNECTA\s+\n?1\.3\s+DIG-T\s+mHEV\s+2WD,\s+6MT\s+140\s+HP\s+\(103\s+kW\)\s+(?P<price>829\s*990)\s+170\s+000'
+    official_trim: N-CONNECTA 1.3 DIG-T mHEV 2WD 6MT 140 HP
+    official_powertrain: 1.3 DIG-T mHEV 2WD 6MT 140 HP (103 kW)
+    jato_powertrain: MHEV
+  - pattern: '1\.3\s+DIG-T\s+mHEV\s+4WD,\s+AT\s+158\s+HP\s+\(116\s+kW\)\s+(?P<price>929\s*990)\s+170\s+000'
+    official_trim: N-CONNECTA 1.3 DIG-T mHEV 4WD AT 158 HP
+    official_powertrain: 1.3 DIG-T mHEV 4WD AT 158 HP (116 kW)
+    jato_powertrain: MHEV
+  - pattern: 'N-CONNECTA[\s\S]*?e-POWER,\s+2WD\s+190\s+HP\s+\(140\s+kW\)\s+(?P<price>999\s*990)\s+170\s+000'
+    official_trim: N-CONNECTA e-POWER 2WD 190 HP
+    official_powertrain: e-POWER 2WD 190 HP (140 kW)
+    jato_powertrain: HEV
+  - pattern: 'TEKNA\s+\n?1\.3\s+DIG-T\s+mHEV\s+2WD,\s+AT\s+158\s+HP\s+\(116\s+kW\)\s+(?P<price>949\s*990)\s+170\s+000'
+    official_trim: TEKNA 1.3 DIG-T mHEV 2WD AT 158 HP
+    official_powertrain: 1.3 DIG-T mHEV 2WD AT 158 HP (116 kW)
+    jato_powertrain: MHEV
+  - pattern: 'TEKNA[\s\S]*?1\.3\s+DIG-T\s+mHEV\s+4WD,\s+AT\s+158\s+HP\s+\(116\s+kW\)\s+(?P<price>989\s*990)\s+170\s+000'
+    official_trim: TEKNA 1.3 DIG-T mHEV 4WD AT 158 HP
+    official_powertrain: 1.3 DIG-T mHEV 4WD AT 158 HP (116 kW)
+    jato_powertrain: MHEV
+  - pattern: 'TEKNA[\s\S]*?e-POWER,\s+2WD\s+190\s+HP\s+\(140\s+kW\)\s+(?P<price>1\s*059\s*990)\s+170\s+000'
+    official_trim: TEKNA e-POWER 2WD 190 HP
+    official_powertrain: e-POWER 2WD 190 HP (140 kW)
+    jato_powertrain: HEV
+  - pattern: 'N-DESIGN\s+\n?1\.3\s+DIG-T\s+mHEV\s+2WD,\s+AT\s+158\s+HP\s+\(116\s+kW\)\s+(?P<price>979\s*890)\s+170\s+000'
+    official_trim: N-DESIGN 1.3 DIG-T mHEV 2WD AT 158 HP
+    official_powertrain: 1.3 DIG-T mHEV 2WD AT 158 HP (116 kW)
+    jato_powertrain: MHEV
+  - pattern: 'N-DESIGN[\s\S]*?1\.3\s+DIG-T\s+mHEV\s+4WD,\s+AT\s+158\s+HP\s+\(116\s+kW\)\s+(?P<price>1\s*019\s*890)\s+170\s+000'
+    official_trim: N-DESIGN 1.3 DIG-T mHEV 4WD AT 158 HP
+    official_powertrain: 1.3 DIG-T mHEV 4WD AT 158 HP (116 kW)
+    jato_powertrain: MHEV
+  - pattern: 'N-DESIGN[\s\S]*?e-POWER,\s+2WD\s+190\s+HP\s+\(140\s+kW\)\s+(?P<price>1\s*089\s*890)\s+170\s+000'
+    official_trim: N-DESIGN e-POWER 2WD 190 HP
+    official_powertrain: e-POWER 2WD 190 HP (140 kW)
+    jato_powertrain: HEV
+  - pattern: 'TEKNA\s+PLUS\s+1\.3\s+DIG-T\s+mHEV\s+4WD,\s+AT\s+158\s+HP\s+\(116\s+kW\)\s+(?P<price>1\s*034\s*990)\s+170\s+000'
+    official_trim: TEKNA PLUS 1.3 DIG-T mHEV 4WD AT 158 HP
+    official_powertrain: 1.3 DIG-T mHEV 4WD AT 158 HP (116 kW)
+    jato_powertrain: MHEV
 schedule:
   frequency: manual_only
   run_window_start: 00:00
   run_window_end: 05:00
   preferred_weekday: monday
-notes: Keywords filled from official manufacturer website research (CZ market). CSS selectors still require browser-based
-  inspection before promotion.
+notes: Repaired to official Nissan CZ price-list PDF. Extracts Ceníková cena Kč vč.
+  DPH only; SMART EDITION campaign/finance row is intentionally excluded because it
+  does not expose a clear list-price column.
 bootstrap_meta:
   country_model_rank: 26
   suggested_scope_kind: single_model
