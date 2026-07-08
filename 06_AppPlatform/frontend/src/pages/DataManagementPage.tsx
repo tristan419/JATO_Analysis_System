@@ -1789,7 +1789,7 @@ export function DataManagementPage() {
                                   <div style={{fontSize:11,fontWeight:700}}>Price Alert Review Queue</div>
                                   <div style={{fontSize:10,color:"#64748b",textAlign:"right"}}>{priceAlertReviewQueue?.snapshotWeek ?? "weekly snapshot"}</div>
                                 </div>
-                                <div style={{display:"grid",gridTemplateColumns:"repeat(4,minmax(0,1fr))",gap:6,marginBottom:8}}>
+                                <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(92px,1fr))",gap:6,marginBottom:8}}>
                                   <div style={{fontSize:10,color:"#64748b"}}>
                                     Cases <strong style={{display:"block",fontSize:12,color:priceAlertReviewCases > 0 ? "#ea580c" : "#16a34a"}}>{formatDataManagementNumber(priceAlertReviewCases)}</strong>
                                   </div>
@@ -1812,12 +1812,18 @@ export function DataManagementPage() {
                                         ? "#ea580c"
                                         : "#64748b";
                                     return (
-                                      <div key={item.caseId} style={{display:"grid",gridTemplateColumns:"44px minmax(0,1.2fr) 62px 74px minmax(0,1fr)",gap:8,fontSize:11,alignItems:"center"}}>
+                                      <div key={item.caseId} style={{display:"grid",gridTemplateColumns:"36px minmax(0,1fr)",gap:8,fontSize:11,alignItems:"start"}}>
                                         <strong>{String(item.country ?? "-").toUpperCase()}</strong>
-                                        <span style={{overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}} title={`${item.brand ?? "-"} ${item.jatoModel ?? ""}`}>{item.brand ?? "-"} · {item.jatoModel ?? "-"}</span>
-                                        <span style={{fontWeight:700,color:priorityColor,textAlign:"right"}}>{item.reviewPriority ?? "review"}</span>
-                                        <span style={{color:evidenceComplete ? "#16a34a" : "#ea580c",textAlign:"right"}}>{item.evidenceStatus ?? (evidenceComplete ? "complete" : "missing")}</span>
-                                        <span style={{color:"#64748b",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}} title={item.recommendedAction}>{item.recommendedAction ?? item.direction ?? "-"}</span>
+                                        <div style={{display:"grid",gap:2,minWidth:0}}>
+                                          <div style={{display:"flex",justifyContent:"space-between",gap:8,minWidth:0}}>
+                                            <span style={{overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}} title={`${item.brand ?? "-"} ${item.jatoModel ?? ""}`}>{item.brand ?? "-"} · {item.jatoModel ?? "-"}</span>
+                                            <span style={{fontWeight:700,color:priorityColor,whiteSpace:"nowrap"}}>{item.reviewPriority ?? "review"}</span>
+                                          </div>
+                                          <div style={{display:"flex",gap:8,flexWrap:"wrap",color:"#64748b",minWidth:0}}>
+                                            <span style={{color:evidenceComplete ? "#16a34a" : "#ea580c",whiteSpace:"nowrap"}}>{item.evidenceStatus ?? (evidenceComplete ? "complete" : "missing")}</span>
+                                            <span style={{overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap",minWidth:0,flex:"1 1 120px"}} title={item.recommendedAction}>{item.recommendedAction ?? item.direction ?? "-"}</span>
+                                          </div>
+                                        </div>
                                       </div>
                                     );
                                   })}
