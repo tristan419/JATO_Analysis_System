@@ -33,6 +33,113 @@ def _utc_now() -> str:
     return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
+def _snapshot_week(timestamp: str | None = None) -> str:
+    try:
+        raw = str(timestamp or _utc_now()).replace("Z", "+00:00")
+        current = datetime.fromisoformat(raw)
+    except ValueError:
+        current = datetime.now(timezone.utc)
+    year, week, _ = current.isocalendar()
+    return f"{year}-W{week:02d}"
+
+
+def _failure_snapshot(
+    error: Exception,
+    *,
+    started_at: str,
+    country: str | None,
+    brand: str | None,
+    jato_model: str | None,
+    limit: int,
+    threshold_pct: float,
+) -> dict[str, Any]:
+    warning = f"snapshot_fetch_failed:{type(error).__name__}"
+    return {
+        "schemaVersion": "msrp_current_price_snapshot_v1",
+        "generatedAtUtc": _utc_now(),
+        "snapshotWeek": _snapshot_week(started_at),
+        "filters": {
+            "country": country,
+            "brand": brand,
+            "jatoModel": jato_model,
+        },
+        "summary": {
+            "currentPriceCount": 0,
+            "returnedCurrentPriceCount": 0,
+            "priceAlertCount": 0,
+            "returnedPriceAlertCount": 0,
+            "priceAlertThresholdPct": threshold_pct,
+            "priceAlertSummary": {
+                "priceChangeEventCount": 0,
+                "thresholdAlertCount": 0,
+                "highPriorityAlertCount": 0,
+                "directionCounts": {},
+                "severityCounts": {},
+            },
+            "effectivenessSummary": {
+                "priceEventCount": 0,
+                "analyzedEventCount": 0,
+                "labelCounts": {},
+                "limit": limit,
+            },
+            "reconciliationSummary": {
+                "observationRows": 0,
+                "reconciliationGroupCount": 0,
+                "statusCounts": {},
+                "limit": limit,
+            },
+            "financeSummary": {
+                "monthlyPaymentCount": 0,
+                "netPriceAfterSubsidyCount": 0,
+                "subsidyObservationCount": 0,
+            },
+            "limit": limit,
+        },
+        "currentPrices": [],
+        "priceAlerts": [],
+        "priceSalesEffectiveness": {
+            "schemaVersion": "msrp_price_sales_effectiveness_v1",
+            "summary": {
+                "priceEventCount": 0,
+                "analyzedEventCount": 0,
+                "labelCounts": {},
+                "limit": limit,
+            },
+            "items": [],
+            "warnings": [warning],
+        },
+        "multiSourceReconciliation": {
+            "schemaVersion": "msrp_multi_source_reconciliation_v1",
+            "summary": {
+                "observationRows": 0,
+                "reconciliationGroupCount": 0,
+                "statusCounts": {},
+                "limit": limit,
+            },
+            "items": [],
+            "warnings": [warning],
+        },
+        "financeObservations": {
+            "rows": 0,
+            "total": 0,
+            "limit": limit,
+            "offset": 0,
+            "summary": {
+                "monthlyPaymentCount": 0,
+                "netPriceAfterSubsidyCount": 0,
+                "subsidyObservationCount": 0,
+            },
+            "items": [],
+            "warnings": [warning],
+        },
+        "warnings": [warning],
+        "error": {
+            "type": type(error).__name__,
+            "message": str(error)[:500],
+        },
+    }
+
+
 def _fetch_snapshot(
     *,
     api_base: str,
@@ -443,7 +550,14 @@ def _render_markdown(snapshot: dict[str, Any]) -> str:
     return "\n".join(lines) + "\n"
 
 
-def _write_failure_status(error: Exception, started_at: str) -> None:
+def _write_failure_status(
+    error: Exception,
+    started_at: str,
+    artifact_refs: dict[str, str] | None = None,
+) -> None:
+    extra: dict[str, Any] = {"errorType": type(error).__name__}
+    if artifact_refs:
+        extra["artifactRefsByName"] = artifact_refs
     write_pipeline_status(
         pipeline_id="msrp_current_price_snapshot",
         status="failed",
@@ -451,9 +565,10 @@ def _write_failure_status(error: Exception, started_at: str) -> None:
         finished_at=_utc_now(),
         exit_code=1,
         failed_count=1,
+        artifact_refs=list((artifact_refs or {}).values()),
         source="hermes_msrp_current_price_snapshot",
         message=str(error)[:500],
-        extra={"errorType": type(error).__name__},
+        extra=extra,
         repo_root=REPO_ROOT,
     )
 
@@ -732,7 +847,24 @@ def main(argv: list[str] | None = None) -> int:
             ),
         )
     except Exception as exc:
-        _write_failure_status(exc, started_at)
+        artifact_refs: dict[str, str] = {}
+        try:
+            failure_snapshot = _failure_snapshot(
+                exc,
+                started_at=started_at,
+                country=args.country,
+                brand=args.brand,
+                jato_model=args.jato_model,
+                limit=max(1, min(args.limit, 500)),
+                threshold_pct=max(0.0, args.threshold_pct),
+            )
+            artifact_refs = _write_outputs(
+                failure_snapshot,
+                Path(args.out_dir).expanduser().resolve(),
+            )
+        except Exception:
+            artifact_refs = {}
+        _write_failure_status(exc, started_at, artifact_refs)
         print(f"[msrp-current-snapshot] failed: {exc}", file=sys.stderr)
         return 1
     print(json.dumps(result["artifacts"], ensure_ascii=False, indent=2))

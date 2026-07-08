@@ -519,4 +519,23 @@ def test_main_writes_failed_status_when_snapshot_fetch_fails(
     assert exit_code == 1
     assert status_calls[0]["status"] == "failed"
     assert status_calls[0]["exit_code"] == 1
-    assert status_calls[0]["extra"] == {"errorType": "RuntimeError"}
+    assert status_calls[0]["extra"]["errorType"] == "RuntimeError"
+    assert set(status_calls[0]["extra"]["artifactRefsByName"]) == {
+        "latestJson",
+        "latestMarkdown",
+        "historicalJson",
+        "historicalMarkdown",
+    }
+    assert len(status_calls[0]["artifact_refs"]) == 4
+    snapshot = snapshot_module.json.loads(
+        (tmp_path / "msrp_current_price_snapshot.json").read_text(
+            encoding="utf-8",
+        )
+    )
+    assert snapshot["summary"]["currentPriceCount"] == 0
+    assert snapshot["warnings"] == ["snapshot_fetch_failed:RuntimeError"]
+    markdown = (tmp_path / "msrp_current_price_snapshot.md").read_text(
+        encoding="utf-8",
+    )
+    assert "## Warnings" in markdown
+    assert "- snapshot_fetch_failed:RuntimeError" in markdown
