@@ -1,37 +1,62 @@
 source_code: volkswagen_id_4_nl_draft_scrapling
 country: 荷兰
 brand: VOLKSWAGEN
-source_url: https://www.volkswagen.nl/nl/configurator.html/__app/id4.app
-source_type: manufacturer_official
+source_url: https://www.volkswagen.nl/idhub/content/dam/onehub_pkw/importers/nl/prijslijsten/ID4_prijslijst.pdf
+source_type: official_price_list
 price_semantics: base_msrp
-extractor_type: playwright
-profile_preset: ../_shared/presets/volkswagen_configurator_trim_overview_playwright.yaml
+extractor_type: pdf_text
 profile:
-  url: https://www.volkswagen.nl/nl/configurator.html/__app/id4.app
-  cookie_reject_selector: null
-  cookie_reject_text: Weigeren
+  url: https://www.volkswagen.nl/idhub/content/dam/onehub_pkw/importers/nl/prijslijsten/ID4_prijslijst.pdf
+  timeout_seconds: 45
+  retry_attempts: 1
+  retry_delay_seconds: 1
+  prefer_curl_download: true
+  browser_download_fallback: true
   default_currency: EUR
   default_tax_included: true
-  default_price_label: Consumentenadviesprijs incl. btw en bpm
+  default_price_label: Consumentenadviesprijs incl. BTW, BPM, rijklaarmaakkosten, recyclingbijdrage, beheerbijdrage en leges
   fixed_model: ID.4
   fixed_jato_model: ID.4
-  structured_fields:
-    powertrain_rules:
-    - key: powertrain_bev
-      powertrain: BEV
-      keywords:
-      - elektrisch
-      - elektromotor
+  fixed_jato_powertrain: BEV
+  copy_trim_to_jato_trim: true
+  match_confidence: 0.9
+  match_status: review_required
+  match_reason:
+    kind: official_pdf_price_list
+    source: volkswagen_nl_id4_prijslijst
+    note: Official Volkswagen Netherlands ID.4 Limited Edition price-list PDF. Patterns target the Consumentenadviesprijs incl. BTW incl. BPM vehicle table and avoid options, service, charging, finance, lease, campaign, and "Vanaf" summary prices.
+  entry_patterns:
+  - pattern: '58\s+kWh\s+426\s+km\s+140\s+kW\s*/\s*190\s+pk\s+1-versnelling\s+Limited\s+Edition\s+€\s*31\.358\s+€\s*687\s+€\s*34\.558\s+€\s*38\.630\s+€\s*1\.360\s+€\s*(?P<price>\d{2}\.\d{3})'
+    official_trim: Limited Edition
+    official_powertrain: BEV 58 kWh 140 kW / 190 pk
+    jato_powertrain: BEV
+  - pattern: '79\s+kWh\s+561\s+km\s+210\s+kW\s*/\s*286\s+pk\s+Pro\s+Limited\s+Edition\s+€\s*35\.490\s+€\s*687\s+€\s*36\.177\s+€\s*43\.630\s+€\s*1\.360\s+€\s*(?P<price>\d{2}\.\d{3})'
+    official_trim: Pro Limited Edition
+    official_powertrain: BEV 79 kWh 210 kW / 286 pk
+    jato_powertrain: BEV
+  - pattern: '552\s+km\s+Pro\s+Limited\s+Edition\s+Plus\s+€\s*37\.969\s+€\s*687\s+€\s*38\.656\s+€\s*46\.630\s+€\s*1\.360\s+€\s*(?P<price>\d{2}\.\d{3})'
+    official_trim: Pro Limited Edition Plus
+    official_powertrain: BEV 79 kWh 210 kW / 286 pk
+    jato_powertrain: BEV
+  - pattern: '77\s+kWh\s+542\s+km\s+220\s+kW\s*/\s*299\s+pk\s+4MOTION\s+€\s*39\.622\s+€\s*687\s+€\s*40\.309\s+€\s*48\.630\s+€\s*1\.360\s+€\s*(?P<price>\d{2}\.\d{3})'
+    official_trim: Pro Limited Edition Plus 4MOTION
+    official_powertrain: BEV 77 kWh 220 kW / 299 pk 4MOTION
+    jato_powertrain: BEV
+  - pattern: '524\s+km\s+250\s+kW\s*/\s*340\s+pk\s+4MOTION\*{4}\s+GTX\s+Limited\s+Edition\s+€\s*43\.755\s+€\s*687\s+€\s*44\.442\s+€\s*53\.630\s+€\s*1\.360\s+€\s*(?P<price>\d{2}\.\d{3})'
+    official_trim: GTX Limited Edition
+    official_powertrain: BEV 77 kWh 250 kW / 340 pk 4MOTION
+    jato_powertrain: BEV
 schedule:
   frequency: manual_only
   run_window_start: 00:00
   run_window_end: 05:00
   preferred_weekday: monday
-notes: Browser probing on 2026-04-13 confirmed the Dutch configurator entry at id4.app
-  and a stable trim -> Motoren flow with engine-card pricing labeled "Consumentenadviesprijs
-  incl. btw en bpm". The shared Playwright preset now dismisses the Volkswagen overlay
-  stack up front, so this draft no longer depends on showroom CSS selectors. [Switched
-  to playwright_card_flow with volkswagen_configurator_trim_overview_playwright.yaml]
+notes: Replaced the dynamic Volkswagen configurator flow with the official
+  Volkswagen Netherlands ID.4 Limited Edition price-list PDF. PDF metadata
+  CreationDate is 2026-03-30 and page 4 contains the vehicle
+  Consumentenadviesprijzen table. Patterns target the final consumer advisory
+  price column and intentionally ignore "Vanaf" summary prices, options,
+  services, charging, finance, lease, and campaign text.
 bootstrap_meta:
   country_model_rank: 15
   suggested_scope_kind: single_model
