@@ -1,19 +1,19 @@
 source_code: skoda_enyaq_be_draft_scrapling
 country: 比利时
 brand: SKODA
-source_url: https://todo.invalid/be/skoda/enyaq
+source_url: https://nl.skoda.be/models/enyaq/enyaq
 source_type: manufacturer_official
 price_semantics: base_msrp
 extractor_type: scrapling
 profile:
-  url: https://todo.invalid/be/skoda/enyaq
+  url: https://nl.skoda.be/models/enyaq/enyaq
   headless: true
   default_currency: EUR
   default_tax_included: true
-  default_price_label: MSRP
+  default_price_label: Vanafprijs incl. btw
   fixed_model: ENYAQ
   fixed_jato_model: ENYAQ
-  fixed_jato_powertrain: null
+  fixed_jato_powertrain: BEV
   model_rules: []
   skip_if_model_unmapped: false
   copy_trim_to_jato_trim: true
@@ -60,16 +60,10 @@ profile:
     - key: powertrain_bev
       powertrain: BEV
       keywords:
-      - bev
-      - ev
-      - electric
-      - battery electric
-      - fully electric
-      - electric vehicle
       - elektrisch
       - volledig elektrisch
-      - electrique
-      - 100% electrique
+      - electric
+      - enyaq
   auto_accept_gates:
     review_threshold: 0.95
     semi_auto_threshold: 0.98
@@ -77,14 +71,11 @@ profile:
     force_review_if_powertrain_missing: true
     force_review_if_powertrain_ambiguous: true
     force_review_for_special_edition: true
-  json_script_selector: script[type="application/json"]
-  css:
-    vehicle_container: body
-    model: h2, h3
-    trim: h3
-    price: '[class*="price"]'
-  tier: stealth
-  network_idle: true
+  json_script_selector: script[type='application/ld+json']
+  tier: http
+  network_idle: false
+  load_dom: false
+  timeout_ms: 20000
   impersonate: chrome
 schedule:
   frequency: manual_only
@@ -95,7 +86,8 @@ notes: Draft scaffold generated from country×model top30 backlog. Replace sourc
   profile.url, selectors, currency, price label, and the single-model placeholders
   before promoting to 07_ScrapingToolkit/sources. [CSS selectors applied from brand
   probe] [Switched to playwright_card_flow with skoda_trim_overview_playwright.yaml]
-  [Reverted to scrapling — playwright preset needs per-brand tuning]
+  [Reverted to scrapling — playwright preset needs per-brand tuning] [Filled official
+  Skoda Belgium model page and static ld+json Vehicle offers.price source]
 bootstrap_meta:
   country_model_rank: 15
   suggested_scope_kind: single_model
