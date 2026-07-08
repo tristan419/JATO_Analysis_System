@@ -1,100 +1,43 @@
 source_code: kia_ev3_no_draft_scrapling
 country: 挪威
 brand: KIA
-source_url: https://www.kia.com/no/kjop/sammenlign-modeller/
-source_type: manufacturer_official
+source_url: https://media.crystallize.com/bos-ecom-prod/26/5/30/021bd6c4/2027-kia-norge-ev3_kundeprisliste-juni-30-06-2026.pdf
+source_type: official_price_list
 price_semantics: base_msrp
-extractor_type: scrapling
+extractor_type: pdf_text
 profile:
-  url: https://www.kia.com/no/kjop/sammenlign-modeller/
-  headless: true
+  url: https://media.crystallize.com/bos-ecom-prod/26/5/30/021bd6c4/2027-kia-norge-ev3_kundeprisliste-juni-30-06-2026.pdf
+  timeout_seconds: 90
+  retry_attempts: 1
+  retry_delay_seconds: 1.0
+  prefer_curl_download: true
+  browser_download_fallback: true
   default_currency: NOK
   default_tax_included: true
-  default_price_label: Pris fra inkl. mva
+  default_price_label: Pris inkl. frakt og leveringsomkostninger sor for Nordland
   fixed_model: EV3
   fixed_jato_model: EV3
   fixed_jato_powertrain: BEV
-  model_rules: []
-  skip_if_model_unmapped: false
   copy_trim_to_jato_trim: true
-  confidence_rules:
-    base: 0.2
-    fixed_model_bonus: 0.18
-    fixed_jato_model_bonus: 0.12
-    model_rule_bonus: 0.12
-    trim_present_bonus: 0.1
-    copy_trim_to_jato_trim_bonus: 0.09
-    parsed_price_text_bonus: 0.03
-    currency_bonus: 0.01
-    price_label_bonus: 0.02
-    trim_keyword_bonuses: []
-    price_band_bonuses:
-    - key: price_band_entry
-      label: Entry price band matched
-      max: 0
-      delta: 0.0
-    - key: price_band_mid
-      label: Mid price band matched
-      min: 0
-      max: 0
-      delta: 0.01
-    - key: price_band_high
-      label: High price band matched
-      min: 0
-      delta: 0.03
-    powertrain_keyword_bonuses: []
-    powertrain_bonuses:
-    - key: powertrain_bev
-      label: 'Powertrain matched: BEV'
-      powertrain: BEV
-      delta: 0.03
-    clamp_min: 0.0
-    clamp_max: 1.0
-  structured_fields:
-    edition_rules:
-    - key: edition_special
-      label: Special Edition
-      keyword: special edition
-      special: true
-    powertrain_rules:
-    - key: powertrain_bev
-      powertrain: BEV
-      keywords:
-      - elbil
-      - electric
-      - EV3
-      - helelektrisk
-  auto_accept_gates:
-    review_threshold: 0.95
-    semi_auto_threshold: 0.98
-    require_powertrain_match: true
-    force_review_if_powertrain_missing: true
-    force_review_if_powertrain_ambiguous: true
-    force_review_for_special_edition: true
-  json_script_selector: script[type='application/ld+json']
-  text_regex:
-    source_selector: body
-    entry_patterns:
-    - pattern: 'Våre biler\s+EV3\s+Pris fra \(inkl\. mva\)\.?\s*(?P<price>\d{3}\s+\d{3})\s*kr'
-      official_trim: Base from price
-      official_powertrain: BEV
-  css:
-    vehicle_container: body
-    model: h2, h3
-    trim: h3
-    price: '[class*="price"]'
-  tier: stealth
-  network_idle: true
-  impersonate: chrome
+  match_confidence: 0.86
+  match_status: review_required
+  match_reason:
+    kind: official_pdf_price_list
+    source: kia_no_ev3_kundeprisliste
+    note: Official Kia Norway EV3 customer price-list PDF dated 2026-06-30; entry row Air exposes NOK price including VAT and delivery costs south of Nordland.
+  entry_patterns:
+  - pattern: '(?:^|\n)Air\s+Forhjulstrekk\s+Automat\s+204\s+436\*?\s+14,9\*?\s+0\s+A\s+0\s+A\s+17\s+970\s+(?P<price>\d{3}\s\d{3})'
+    official_trim: Air
+    official_powertrain: BEV
+    jato_powertrain: BEV
 schedule:
   frequency: manual_only
   run_window_start: 00:00
   run_window_end: 05:00
   preferred_weekday: monday
-notes: Keywords filled from official manufacturer website research (NO market). CSS
-  selectors still require browser-based inspection before promotion. [Switched to
-  playwright_card_flow with kia_trim_overview_playwright.yaml] [Reverted to scrapling
-  — playwright preset needs per-brand tuning]
+notes: Keywords filled from official manufacturer website research (NO market). Switched
+  from the Kia compare page, which redirects to a locally unstable nettbutikk endpoint,
+  to the official Kia Norway EV3 customer price-list PDF dated 2026-06-30.
 bootstrap_meta:
   country_model_rank: 15
   suggested_scope_kind: single_model
