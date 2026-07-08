@@ -1981,6 +1981,22 @@ def list_current_price_alerts(
     }
 
 
+def _snapshot_section_warning(section: str, exc: Exception) -> str:
+    return f"{section}_unavailable:{type(exc).__name__}"
+
+
+def _collect_snapshot_warnings(*payloads: dict[str, object]) -> list[str]:
+    warnings: list[str] = []
+    for payload in payloads:
+        warning = payload.get("warning")
+        if warning:
+            warnings.append(str(warning))
+        for item in list(payload.get("warnings") or []):
+            if item:
+                warnings.append(str(item))
+    return list(dict.fromkeys(warnings))
+
+
 def build_current_price_snapshot(
     session: Session,
     country: str | None,
@@ -2008,6 +2024,90 @@ def build_current_price_snapshot(
         0,
         threshold_pct,
     )
+    try:
+        price_sales_effectiveness = build_price_sales_effectiveness(
+            session,
+            country,
+            brand,
+            jato_model,
+            limit,
+            threshold_pct=threshold_pct,
+        )
+    except Exception as exc:
+        warning = _snapshot_section_warning("effectiveness", exc)
+        price_sales_effectiveness = {
+            "schemaVersion": "msrp_price_sales_effectiveness_v1",
+            "generatedAtUtc": generated_at.isoformat(),
+            "filters": {
+                "country": country,
+                "brand": brand,
+                "jatoModel": jato_model,
+            },
+            "summary": {
+                "priceEventCount": price_alerts.get("total", 0),
+                "analyzedEventCount": 0,
+                "labelCounts": {},
+                "limit": limit,
+            },
+            "items": [],
+            "warnings": [warning],
+            "error": {"type": type(exc).__name__, "message": str(exc)[:500]},
+        }
+    try:
+        multi_source_reconciliation = build_multi_source_reconciliation(
+            session,
+            country,
+            brand,
+            jato_model,
+            limit,
+        )
+    except Exception as exc:
+        warning = _snapshot_section_warning("reconciliation", exc)
+        multi_source_reconciliation = {
+            "schemaVersion": "msrp_multi_source_reconciliation_v1",
+            "generatedAtUtc": generated_at.isoformat(),
+            "filters": {
+                "country": country,
+                "brand": brand,
+                "jatoModel": jato_model,
+            },
+            "thresholdPct": 1.0,
+            "summary": {
+                "observationRows": 0,
+                "reconciliationGroupCount": 0,
+                "statusCounts": {},
+                "limit": limit,
+            },
+            "items": [],
+            "warnings": [warning],
+            "error": {"type": type(exc).__name__, "message": str(exc)[:500]},
+        }
+    try:
+        finance_observations = list_finance_observations(
+            session,
+            country,
+            brand,
+            jato_model,
+            None,
+            None,
+            None,
+            None,
+            None,
+            limit,
+            0,
+        )
+    except Exception as exc:
+        warning = _snapshot_section_warning("finance", exc)
+        finance_observations = {
+            "rows": 0,
+            "total": 0,
+            "limit": limit,
+            "offset": 0,
+            "summary": _empty_finance_observation_summary(),
+            "items": [],
+            "warnings": [warning],
+            "error": {"type": type(exc).__name__, "message": str(exc)[:500]},
+        }
 
     return {
         "schemaVersion": "msrp_current_price_snapshot_v1",
@@ -2036,18 +2136,29 @@ def build_current_price_snapshot(
                     ]
                 ),
             ),
+            "effectivenessSummary": price_sales_effectiveness.get(
+                "summary",
+                {},
+            ),
+            "reconciliationSummary": multi_source_reconciliation.get(
+                "summary",
+                {},
+            ),
+            "financeSummary": finance_observations.get("summary", {}),
             "limit": limit,
         },
         "currentPrices": current_prices.get("items", []),
         "priceAlerts": price_alerts.get("items", []),
-        "warnings": [
-            item
-            for item in [
-                current_prices.get("warning"),
-                price_alerts.get("warning"),
-            ]
-            if item
-        ],
+        "priceSalesEffectiveness": price_sales_effectiveness,
+        "multiSourceReconciliation": multi_source_reconciliation,
+        "financeObservations": finance_observations,
+        "warnings": _collect_snapshot_warnings(
+            current_prices,
+            price_alerts,
+            price_sales_effectiveness,
+            multi_source_reconciliation,
+            finance_observations,
+        ),
     }
 
 

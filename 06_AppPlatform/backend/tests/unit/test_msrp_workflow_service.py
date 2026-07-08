@@ -1047,6 +1047,52 @@ def test_build_current_price_snapshot_reuses_current_prices_and_alerts(
             "warning": "price_history_unavailable",
         }
 
+    def fake_build_price_sales_effectiveness(*args, **kwargs):
+        calls.append(("effectiveness", args + (kwargs,)))
+        return {
+            "schemaVersion": "msrp_price_sales_effectiveness_v1",
+            "summary": {
+                "priceEventCount": 2,
+                "analyzedEventCount": 1,
+                "labelCounts": {"positive": 1},
+                "limit": 500,
+            },
+            "items": [{"analysisId": "effect-1"}],
+            "warnings": ["sales_fact_unavailable:fixture"],
+        }
+
+    def fake_build_multi_source_reconciliation(*args):
+        calls.append(("reconciliation", args))
+        return {
+            "schemaVersion": "msrp_multi_source_reconciliation_v1",
+            "summary": {
+                "observationRows": 5,
+                "reconciliationGroupCount": 2,
+                "statusCounts": {"conflict": 1, "aligned": 1},
+                "limit": 500,
+            },
+            "items": [{"status": "conflict"}],
+        }
+
+    def fake_list_finance_observations(*args):
+        calls.append(("finance", args))
+        return {
+            "rows": 1,
+            "total": 3,
+            "summary": {
+                "priceSemanticsCounts": {"lease_monthly": 1},
+                "financeTypeCounts": {"private_lease": 1},
+                "monthlyPaymentCount": 1,
+                "monthlyPaymentEurMin": 520.87,
+                "monthlyPaymentEurMax": 520.87,
+                "netPriceAfterSubsidyCount": 0,
+                "netPriceAfterSubsidyEurMin": None,
+                "netPriceAfterSubsidyEurMax": None,
+                "subsidyObservationCount": 0,
+            },
+            "items": [{"financeObservationId": "fin-1"}],
+        }
+
     monkeypatch.setattr(msrp_workflow_service, "_utc_now", lambda: now)
     monkeypatch.setattr(
         msrp_workflow_service,
@@ -1057,6 +1103,21 @@ def test_build_current_price_snapshot_reuses_current_prices_and_alerts(
         msrp_workflow_service,
         "list_current_price_alerts",
         fake_list_current_price_alerts,
+    )
+    monkeypatch.setattr(
+        msrp_workflow_service,
+        "build_price_sales_effectiveness",
+        fake_build_price_sales_effectiveness,
+    )
+    monkeypatch.setattr(
+        msrp_workflow_service,
+        "build_multi_source_reconciliation",
+        fake_build_multi_source_reconciliation,
+    )
+    monkeypatch.setattr(
+        msrp_workflow_service,
+        "list_finance_observations",
+        fake_list_finance_observations,
     )
 
     payload = msrp_workflow_service.build_current_price_snapshot(
@@ -1070,7 +1131,61 @@ def test_build_current_price_snapshot_reuses_current_prices_and_alerts(
     assert calls == [
         ("current", ("session", "Sweden", "Volvo", "XC60", 500, 0)),
         ("alerts", ("session", "Sweden", "Volvo", "XC60", 500, 0, 3.0)),
+        (
+            "effectiveness",
+            (
+                "session",
+                "Sweden",
+                "Volvo",
+                "XC60",
+                500,
+                {"threshold_pct": 3.0},
+            ),
+        ),
+        (
+            "reconciliation",
+            ("session", "Sweden", "Volvo", "XC60", 500),
+        ),
+        (
+            "finance",
+            (
+                "session",
+                "Sweden",
+                "Volvo",
+                "XC60",
+                None,
+                None,
+                None,
+                None,
+                None,
+                500,
+                0,
+            ),
+        ),
     ]
+    effectiveness_summary = {
+        "priceEventCount": 2,
+        "analyzedEventCount": 1,
+        "labelCounts": {"positive": 1},
+        "limit": 500,
+    }
+    reconciliation_summary = {
+        "observationRows": 5,
+        "reconciliationGroupCount": 2,
+        "statusCounts": {"conflict": 1, "aligned": 1},
+        "limit": 500,
+    }
+    finance_summary = {
+        "priceSemanticsCounts": {"lease_monthly": 1},
+        "financeTypeCounts": {"private_lease": 1},
+        "monthlyPaymentCount": 1,
+        "monthlyPaymentEurMin": 520.87,
+        "monthlyPaymentEurMax": 520.87,
+        "netPriceAfterSubsidyCount": 0,
+        "netPriceAfterSubsidyEurMin": None,
+        "netPriceAfterSubsidyEurMax": None,
+        "subsidyObservationCount": 0,
+    }
     assert payload == {
         "schemaVersion": "msrp_current_price_snapshot_v1",
         "generatedAtUtc": now.isoformat(),
@@ -1093,11 +1208,34 @@ def test_build_current_price_snapshot_reuses_current_prices_and_alerts(
                 "directionCounts": {"decrease": 1},
                 "severityCounts": {"info": 1},
             },
+            "effectivenessSummary": effectiveness_summary,
+            "reconciliationSummary": reconciliation_summary,
+            "financeSummary": finance_summary,
             "limit": 500,
         },
         "currentPrices": [{"currentPriceId": "cp-1"}],
         "priceAlerts": [{"direction": "decrease"}],
-        "warnings": ["price_history_unavailable"],
+        "priceSalesEffectiveness": {
+            "schemaVersion": "msrp_price_sales_effectiveness_v1",
+            "summary": effectiveness_summary,
+            "items": [{"analysisId": "effect-1"}],
+            "warnings": ["sales_fact_unavailable:fixture"],
+        },
+        "multiSourceReconciliation": {
+            "schemaVersion": "msrp_multi_source_reconciliation_v1",
+            "summary": reconciliation_summary,
+            "items": [{"status": "conflict"}],
+        },
+        "financeObservations": {
+            "rows": 1,
+            "total": 3,
+            "summary": finance_summary,
+            "items": [{"financeObservationId": "fin-1"}],
+        },
+        "warnings": [
+            "price_history_unavailable",
+            "sales_fact_unavailable:fixture",
+        ],
     }
 
 
