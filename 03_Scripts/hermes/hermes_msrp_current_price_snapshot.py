@@ -397,6 +397,41 @@ def _summarize_alert_evidence(alerts: list[Any]) -> dict[str, Any]:
     }
 
 
+def _snapshot_section(snapshot: dict[str, Any], key: str) -> dict[str, Any] | None:
+    section = snapshot.get(key)
+    return section if isinstance(section, dict) else None
+
+
+def _section_summary(section: dict[str, Any] | None) -> dict[str, Any]:
+    if not isinstance(section, dict):
+        return {}
+    summary = section.get("summary")
+    return summary if isinstance(summary, dict) else {}
+
+
+def _merge_snapshot_section(
+    snapshot: dict[str, Any],
+    *,
+    section_key: str,
+    summary_key: str,
+    section: dict[str, Any],
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    raw_summary = snapshot.get("summary")
+    summary = raw_summary if isinstance(raw_summary, dict) else {}
+    section_summary = _section_summary(section)
+    return (
+        {
+            **snapshot,
+            "summary": {
+                **summary,
+                summary_key: section_summary,
+            },
+            section_key: section,
+        },
+        section_summary,
+    )
+
+
 def _render_markdown(snapshot: dict[str, Any]) -> str:
     summary = snapshot.get("summary") or {}
     alert_summary = summary.get("priceAlertSummary") or {}
@@ -724,105 +759,100 @@ def run(
     reconciliation_warning_count = 0
     finance_warning_count = 0
     if include_effectiveness:
-        try:
-            effectiveness = _fetch_effectiveness(
-                api_base=api_base,
-                country=country,
-                brand=brand,
-                jato_model=jato_model,
-                limit=limit,
-                threshold_pct=threshold_pct,
-                baseline_window_months=baseline_window_months,
-                post_window_months=post_window_months,
-                post_lag_months=post_lag_months,
-                min_months=min_months,
-                timeout_seconds=timeout_seconds,
-            )
-            effectiveness_summary = (
-                effectiveness.get("summary")
-                if isinstance(effectiveness.get("summary"), dict)
-                else {}
-            )
-            snapshot = {
-                **snapshot,
-                "summary": {
-                    **summary,
-                    "effectivenessSummary": effectiveness_summary,
-                },
-                "priceSalesEffectiveness": effectiveness,
-            }
-        except Exception as exc:  # pragma: no cover - covered by script run paths.
-            effectiveness_warning_count = 1
-            warnings.append(
-                f"effectiveness_unavailable:{type(exc).__name__}"
+        effectiveness = _snapshot_section(snapshot, "priceSalesEffectiveness")
+        if effectiveness is None:
+            try:
+                effectiveness = _fetch_effectiveness(
+                    api_base=api_base,
+                    country=country,
+                    brand=brand,
+                    jato_model=jato_model,
+                    limit=limit,
+                    threshold_pct=threshold_pct,
+                    baseline_window_months=baseline_window_months,
+                    post_window_months=post_window_months,
+                    post_lag_months=post_lag_months,
+                    min_months=min_months,
+                    timeout_seconds=timeout_seconds,
+                )
+            except Exception as exc:  # pragma: no cover - covered by script run paths.
+                effectiveness_warning_count = 1
+                warnings.append(
+                    f"effectiveness_unavailable:{type(exc).__name__}"
+                )
+                effectiveness = None
+        if effectiveness is not None:
+            snapshot, effectiveness_summary = _merge_snapshot_section(
+                snapshot,
+                section_key="priceSalesEffectiveness",
+                summary_key="effectivenessSummary",
+                section=effectiveness,
             )
     summary = snapshot.get("summary") or {}
     if include_reconciliation:
-        try:
-            reconciliation = _fetch_reconciliation(
-                api_base=api_base,
-                country=country,
-                brand=brand,
-                jato_model=jato_model,
-                limit=limit,
-                threshold_pct=reconciliation_threshold_pct,
-                timeout_seconds=timeout_seconds,
+        reconciliation = _snapshot_section(snapshot, "multiSourceReconciliation")
+        reconciliation_embedded = reconciliation is not None
+        if reconciliation is None:
+            try:
+                reconciliation = _fetch_reconciliation(
+                    api_base=api_base,
+                    country=country,
+                    brand=brand,
+                    jato_model=jato_model,
+                    limit=limit,
+                    threshold_pct=reconciliation_threshold_pct,
+                    timeout_seconds=timeout_seconds,
+                )
+            except Exception as exc:  # pragma: no cover - covered by script run paths.
+                reconciliation_warning_count = 1
+                warnings.append(
+                    f"reconciliation_unavailable:{type(exc).__name__}"
+                )
+                reconciliation = None
+        if reconciliation is not None:
+            snapshot, reconciliation_summary = _merge_snapshot_section(
+                snapshot,
+                section_key="multiSourceReconciliation",
+                summary_key="reconciliationSummary",
+                section=reconciliation,
             )
-            reconciliation_summary = (
-                reconciliation.get("summary")
-                if isinstance(reconciliation.get("summary"), dict)
-                else {}
-            )
-            snapshot = {
-                **snapshot,
-                "summary": {
-                    **summary,
-                    "reconciliationSummary": reconciliation_summary,
-                },
-                "multiSourceReconciliation": reconciliation,
-            }
-            for warning in reconciliation.get("warnings") or []:
-                if str(warning).strip():
-                    warnings.append(f"reconciliation:{warning}")
-        except Exception as exc:  # pragma: no cover - covered by script run paths.
-            reconciliation_warning_count = 1
-            warnings.append(
-                f"reconciliation_unavailable:{type(exc).__name__}"
-            )
+            if not reconciliation_embedded:
+                for warning in reconciliation.get("warnings") or []:
+                    if str(warning).strip():
+                        warnings.append(f"reconciliation:{warning}")
     summary = snapshot.get("summary") or {}
     if include_finance:
-        try:
-            finance = _fetch_finance_observations(
-                api_base=api_base,
-                country=country,
-                brand=brand,
-                jato_model=jato_model,
-                limit=limit,
-                timeout_seconds=timeout_seconds,
+        finance = _snapshot_section(snapshot, "financeObservations")
+        finance_embedded = finance is not None
+        if finance is None:
+            try:
+                finance = _fetch_finance_observations(
+                    api_base=api_base,
+                    country=country,
+                    brand=brand,
+                    jato_model=jato_model,
+                    limit=limit,
+                    timeout_seconds=timeout_seconds,
+                )
+            except Exception as exc:  # pragma: no cover - covered by script run paths.
+                finance_warning_count = 1
+                warnings.append(
+                    f"finance_unavailable:{type(exc).__name__}"
+                )
+                finance = None
+        if finance is not None:
+            snapshot, finance_summary = _merge_snapshot_section(
+                snapshot,
+                section_key="financeObservations",
+                summary_key="financeSummary",
+                section=finance,
             )
-            finance_summary = (
-                finance.get("summary")
-                if isinstance(finance.get("summary"), dict)
-                else {}
-            )
-            snapshot = {
-                **snapshot,
-                "summary": {
-                    **summary,
-                    "financeSummary": finance_summary,
-                },
-                "financeObservations": finance,
-            }
-            for warning in finance.get("warnings") or []:
-                if str(warning).strip():
-                    warnings.append(f"finance:{warning}")
-            if finance.get("warning"):
-                warnings.append(f"finance:{finance['warning']}")
-        except Exception as exc:  # pragma: no cover - covered by script run paths.
-            finance_warning_count = 1
-            warnings.append(
-                f"finance_unavailable:{type(exc).__name__}"
-            )
+            if not finance_embedded:
+                for warning in finance.get("warnings") or []:
+                    if str(warning).strip():
+                        warnings.append(f"finance:{warning}")
+                if finance.get("warning"):
+                    warnings.append(f"finance:{finance['warning']}")
     summary = snapshot.get("summary") or {}
     alert_summary = summary.get("priceAlertSummary") or {}
     alert_evidence_summary = _summarize_alert_evidence(

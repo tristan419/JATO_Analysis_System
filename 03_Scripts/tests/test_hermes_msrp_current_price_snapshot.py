@@ -175,6 +175,22 @@ def sample_finance() -> dict[str, object]:
     }
 
 
+def enriched_snapshot() -> dict[str, object]:
+    snapshot = sample_snapshot()
+    return {
+        **snapshot,
+        "summary": {
+            **snapshot["summary"],
+            "effectivenessSummary": sample_effectiveness()["summary"],
+            "reconciliationSummary": sample_reconciliation()["summary"],
+            "financeSummary": sample_finance()["summary"],
+        },
+        "priceSalesEffectiveness": sample_effectiveness(),
+        "multiSourceReconciliation": sample_reconciliation(),
+        "financeObservations": sample_finance(),
+    }
+
+
 def empty_snapshot() -> dict[str, object]:
     return {
         **sample_snapshot(),
@@ -322,6 +338,57 @@ def test_run_writes_degraded_status_for_high_priority_alert(
         "msrp_multi_source_reconciliation_v1"
     )
     assert result["snapshot"]["financeObservations"]["total"] == 1
+
+
+def test_run_reuses_backend_enriched_snapshot_without_refetching_sections(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    status_calls: list[dict[str, object]] = []
+
+    def unexpected_fetch(**_: object) -> dict[str, object]:
+        raise AssertionError("section should come from enriched snapshot")
+
+    monkeypatch.setattr(
+        snapshot_module,
+        "_fetch_snapshot",
+        lambda **_: enriched_snapshot(),
+    )
+    monkeypatch.setattr(snapshot_module, "_fetch_effectiveness", unexpected_fetch)
+    monkeypatch.setattr(snapshot_module, "_fetch_reconciliation", unexpected_fetch)
+    monkeypatch.setattr(
+        snapshot_module,
+        "_fetch_finance_observations",
+        unexpected_fetch,
+    )
+    monkeypatch.setattr(
+        snapshot_module,
+        "write_pipeline_status",
+        lambda **kwargs: status_calls.append(kwargs) or kwargs,
+    )
+
+    result = snapshot_module.run(
+        api_base="http://127.0.0.1:8000/v1",
+        out_dir=tmp_path,
+        country="SE",
+        brand="Volvo",
+        jato_model="XC60",
+        limit=5,
+        threshold_pct=3.0,
+        timeout_seconds=1,
+    )
+
+    assert result["snapshot"]["priceSalesEffectiveness"] == sample_effectiveness()
+    assert result["snapshot"]["multiSourceReconciliation"] == sample_reconciliation()
+    assert result["snapshot"]["financeObservations"] == sample_finance()
+    assert status_calls[0]["extra"]["effectivenessSummary"] == (
+        sample_effectiveness()["summary"]
+    )
+    assert status_calls[0]["extra"]["reconciliationSummary"] == (
+        sample_reconciliation()["summary"]
+    )
+    assert status_calls[0]["extra"]["financeSummary"] == sample_finance()["summary"]
+    assert status_calls[0]["warning_count"] == 2
 
 
 def test_run_degrades_for_missing_alert_evidence(
