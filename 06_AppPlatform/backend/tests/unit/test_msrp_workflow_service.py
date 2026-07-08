@@ -953,6 +953,7 @@ def test_list_current_price_alerts_returns_delta_detail(
     assert item["country"] == "Sweden"
     assert item["brand"] == "Volvo"
     assert item["jatoModel"] == "XC60"
+    assert item["alertId"] == f"msrp-alert:{latest_period.price_history_id}"
     assert item["direction"] == "increase"
     assert item["eventType"] == "price_change"
     assert item["severity"] == "warning"
@@ -960,6 +961,14 @@ def test_list_current_price_alerts_returns_delta_detail(
     assert item["isThresholdAlert"] is True
     assert item["isHighPriority"] is False
     assert item["recommendedAction"] == "review_price_increase_and_notify_market_team"
+    assert item["currentObservationId"] == str(latest_period.started_by_observation_id)
+    assert item["previousObservationId"] == str(previous_period.last_confirmed_by_observation_id)
+    assert item["currentEvidenceId"] == str(latest_period.started_by_observation_id)
+    assert item["previousEvidenceId"] == str(previous_period.last_confirmed_by_observation_id)
+    assert item["sourceType"] == "official_site"
+    assert item["sourceName"] == "volvo_se_official"
+    assert item["sourceUrl"] == observation.source_url
+    assert item["evidenceStatus"] == "complete"
     assert item["currentSourceMsrpValue"] == 773000.0
     assert item["previousSourceMsrpValue"] == 733000.0
     assert item["deltaSourceMsrpValue"] == 40000.0
@@ -1484,6 +1493,9 @@ def test_build_price_sales_effectiveness_compares_sales_windows(
                     "jatoModel": "XC60",
                     "jatoTrim": "Ultra",
                     "direction": "decrease",
+                    "alertId": "msrp-alert:price-history-1",
+                    "currentObservationId": "obs-current",
+                    "previousObservationId": "obs-previous",
                     "changedAtUtc": "2026-03-11T08:00:00+00:00",
                     "deltaMsrpValue": -3000.0,
                     "deltaPct": -5.0,
@@ -1527,6 +1539,9 @@ def test_build_price_sales_effectiveness_compares_sales_windows(
     assert item["analysisId"] == "msrp-effectiveness:sweden:volvo:xc60:2026-03"
     assert item["priceEventMonth"] == "2026-03"
     assert item["priceChangeDirection"] == "down"
+    assert item["priceEventId"] == "msrp-alert:price-history-1"
+    assert item["currentObservationId"] == "obs-current"
+    assert item["previousObservationId"] == "obs-previous"
     assert item["baselineWindowMonths"] == ["2025-12", "2026-01", "2026-02"]
     assert item["postWindowMonths"] == ["2026-04", "2026-05", "2026-06"]
     assert item["baselineAvgSales"] == 100.0

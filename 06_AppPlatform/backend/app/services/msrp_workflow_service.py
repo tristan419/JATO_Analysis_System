@@ -1711,6 +1711,22 @@ def _price_alert_recommended_action(
     return "keep_monitoring"
 
 
+def _price_alert_id(
+    current_price: CurrentPrice,
+    latest_period: PriceHistory | None,
+    changed_at: datetime | None,
+) -> str:
+    if latest_period is not None:
+        return f"msrp-alert:{latest_period.price_history_id}"
+    changed_key = changed_at.isoformat() if changed_at else "unknown-change"
+    safe_changed_key = re.sub(r"[^0-9A-Za-z_.:-]+", "_", changed_key)
+    return f"msrp-alert:{current_price.current_price_id}:{safe_changed_key}"
+
+
+def _observation_id_str(value: object | None) -> str | None:
+    return str(value) if value is not None else None
+
+
 def _summarize_price_alert_events(
     items: list[dict[str, object]],
 ) -> dict[str, object]:
@@ -1823,8 +1839,20 @@ def _price_alert_payload(
         if latest_period is not None
         else current_price.last_price_change_at_utc
     )
+    current_observation_id = (
+        latest_period.started_by_observation_id
+        if latest_period is not None
+        else current_price.effective_observation_id
+    )
+    previous_observation_id = (
+        previous_period.last_confirmed_by_observation_id
+        if previous_period is not None
+        else None
+    )
+    current_price_item = current_price_payload(current_price, source)
     return {
-        "country": current_price_payload(current_price)["country"],
+        "alertId": _price_alert_id(current_price, latest_period, changed_at),
+        "country": current_price_item["country"],
         "brand": current_price.brand,
         "jatoModel": current_price.jato_model,
         "jatoTrim": current_price.jato_trim,
@@ -1843,6 +1871,19 @@ def _price_alert_payload(
             source_currency_changed,
         ),
         "changedAtUtc": changed_at.isoformat() if changed_at else None,
+        "currentObservationId": _observation_id_str(current_observation_id),
+        "previousObservationId": _observation_id_str(previous_observation_id),
+        "currentEvidenceId": _observation_id_str(current_observation_id),
+        "previousEvidenceId": _observation_id_str(previous_observation_id),
+        "sourceType": current_price_item.get("sourceType"),
+        "sourceName": current_price_item.get("sourceCode") or current_price.brand,
+        "sourceUrl": current_price.source_url,
+        "sourceSnapshotPath": current_price.source_snapshot_path,
+        "evidenceStatus": (
+            "complete"
+            if current_price.source_url and current_observation_id
+            else "missing_evidence"
+        ),
         "currentSourceMsrpValue": current_source_value,
         "previousSourceMsrpValue": previous_source_value,
         "currentSourceCurrency": current_source_currency,
@@ -1851,7 +1892,7 @@ def _price_alert_payload(
         "deltaSourceMsrpValue": delta_source_value,
         "deltaMsrpValue": delta_eur_value,
         "deltaPct": delta_pct,
-        "currentPrice": current_price_payload(current_price, source),
+        "currentPrice": current_price_item,
         "latestPrice": (
             price_history_payload(latest_period)
             if latest_period is not None
@@ -2636,6 +2677,9 @@ def _build_effectiveness_item(
         "jatoTrim": trim or None,
         "priceEventMonth": event_month,
         "priceChangeDirection": price_direction,
+        "priceEventId": alert.get("alertId"),
+        "currentObservationId": alert.get("currentObservationId"),
+        "previousObservationId": alert.get("previousObservationId"),
         "priceChangeValue": alert.get("deltaMsrpValue"),
         "priceChangePct": alert.get("deltaPct"),
         "baselineWindowMonths": baseline_months,
