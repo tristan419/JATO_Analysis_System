@@ -76,6 +76,15 @@ def _failure_snapshot(
                 "directionCounts": {},
                 "severityCounts": {},
             },
+            "alertEvidenceSummary": {
+                "alertCount": 0,
+                "completeEvidenceCount": 0,
+                "missingEvidenceCount": 0,
+                "evidenceStatusCounts": {},
+                "sourceTypeCounts": {},
+                "sourceNameCounts": {},
+                "missingAlertIds": [],
+            },
             "effectivenessSummary": {
                 "priceEventCount": 0,
                 "analyzedEventCount": 0,
@@ -332,9 +341,73 @@ def _markdown_cell(value: Any) -> str:
     return text.replace("|", "\\|")
 
 
+def _text_value(value: Any) -> str:
+    return str(value if value is not None else "").strip()
+
+
+def _count_by(items: list[dict[str, Any]], key: str) -> dict[str, int]:
+    counts: dict[str, int] = {}
+    for item in items:
+        value = _text_value(item.get(key)) or "unknown"
+        counts[value] = counts.get(value, 0) + 1
+    return dict(sorted(counts.items()))
+
+
+def _alert_has_complete_evidence(item: dict[str, Any]) -> bool:
+    status = _text_value(item.get("evidenceStatus")).lower()
+    has_evidence_id = any(
+        _text_value(item.get(key))
+        for key in ("currentEvidenceId", "previousEvidenceId", "evidenceId")
+    )
+    has_source_ref = any(
+        _text_value(item.get(key))
+        for key in (
+            "sourceUrl",
+            "sourceSnapshotPath",
+            "sourceDocumentPath",
+            "sourceName",
+        )
+    )
+    return status == "complete" and has_evidence_id and has_source_ref
+
+
+def _summarize_alert_evidence(alerts: list[Any]) -> dict[str, Any]:
+    rows = [item for item in alerts if isinstance(item, dict)]
+    complete_count = 0
+    missing_ids: list[str] = []
+    for item in rows:
+        if _alert_has_complete_evidence(item):
+            complete_count += 1
+            continue
+        alert_id = _text_value(
+            item.get("alertId")
+            or item.get("priceEventId")
+            or item.get("priceHistoryId")
+        )
+        if alert_id:
+            missing_ids.append(alert_id)
+    return {
+        "alertCount": len(rows),
+        "completeEvidenceCount": complete_count,
+        "missingEvidenceCount": len(rows) - complete_count,
+        "evidenceStatusCounts": _count_by(rows, "evidenceStatus"),
+        "sourceTypeCounts": _count_by(rows, "sourceType"),
+        "sourceNameCounts": _count_by(rows, "sourceName"),
+        "missingAlertIds": missing_ids[:25],
+    }
+
+
 def _render_markdown(snapshot: dict[str, Any]) -> str:
     summary = snapshot.get("summary") or {}
     alert_summary = summary.get("priceAlertSummary") or {}
+    alerts = [
+        item
+        for item in list(snapshot.get("priceAlerts") or [])
+        if isinstance(item, dict)
+    ]
+    alert_evidence_summary = summary.get("alertEvidenceSummary")
+    if not isinstance(alert_evidence_summary, dict):
+        alert_evidence_summary = _summarize_alert_evidence(alerts)
     effectiveness = snapshot.get("priceSalesEffectiveness") or {}
     reconciliation = snapshot.get("multiSourceReconciliation") or {}
     finance = snapshot.get("financeObservations") or {}
@@ -372,6 +445,8 @@ def _render_markdown(snapshot: dict[str, Any]) -> str:
         f"| Price change events | {_number(alert_summary.get('priceChangeEventCount'))} |",
         f"| Threshold alerts | {_number(alert_summary.get('thresholdAlertCount'))} |",
         f"| High-priority alerts | {_number(alert_summary.get('highPriorityAlertCount'))} |",
+        f"| Alert evidence complete | {_number(alert_evidence_summary.get('completeEvidenceCount'))} |",
+        f"| Alert evidence missing | {_number(alert_evidence_summary.get('missingEvidenceCount'))} |",
         f"| Alert threshold pct | {_number(summary.get('priceAlertThresholdPct'))} |",
         f"| Effectiveness events | {_number(effectiveness_summary.get('priceEventCount'))} |",
         f"| Effectiveness analyzed | {_number(effectiveness_summary.get('analyzedEventCount'))} |",
@@ -388,11 +463,36 @@ def _render_markdown(snapshot: dict[str, Any]) -> str:
             *[f"- {_markdown_cell(item)}" for item in warnings],
             "",
         ])
+    evidence_status_counts = (
+        alert_evidence_summary.get("evidenceStatusCounts")
+        if isinstance(alert_evidence_summary.get("evidenceStatusCounts"), dict)
+        else {}
+    )
+    source_type_counts = (
+        alert_evidence_summary.get("sourceTypeCounts")
+        if isinstance(alert_evidence_summary.get("sourceTypeCounts"), dict)
+        else {}
+    )
+    if evidence_status_counts or source_type_counts:
+        lines.extend([
+            "## Alert Evidence",
+            "",
+            "| Field | Value | Count |",
+            "|---|---|---:|",
+        ])
+        for status, count in sorted(evidence_status_counts.items()):
+            lines.append(
+                f"| Evidence status | {_markdown_cell(status)} | {_number(count)} |"
+            )
+        for source_type, count in sorted(source_type_counts.items()):
+            lines.append(
+                f"| Source type | {_markdown_cell(source_type)} | {_number(count)} |"
+            )
+        lines.append("")
     lines.extend([
         "## Price Alerts",
         "",
     ])
-    alerts = list(snapshot.get("priceAlerts") or [])
     if not alerts:
         lines.append("No price alerts in this snapshot.")
     else:
@@ -725,9 +825,23 @@ def run(
             )
     summary = snapshot.get("summary") or {}
     alert_summary = summary.get("priceAlertSummary") or {}
+    alert_evidence_summary = _summarize_alert_evidence(
+        list(snapshot.get("priceAlerts") or [])
+    )
+    summary = {
+        **summary,
+        "alertEvidenceSummary": alert_evidence_summary,
+    }
+    snapshot = {
+        **snapshot,
+        "summary": summary,
+    }
     current_count = int(summary.get("currentPriceCount") or 0)
     high_priority = int(alert_summary.get("highPriorityAlertCount") or 0)
     threshold_alerts = int(alert_summary.get("thresholdAlertCount") or 0)
+    missing_alert_evidence = int(
+        alert_evidence_summary.get("missingEvidenceCount") or 0
+    )
     status_counts = reconciliation_summary.get("statusCounts")
     conflict_count = (
         int(status_counts.get("conflict") or 0)
@@ -744,6 +858,8 @@ def run(
     artifact_refs = _write_outputs(snapshot, out_dir)
     finished_at = _utc_now()
     status = "degraded" if current_count == 0 or high_priority > 0 else "success"
+    if missing_alert_evidence > 0:
+        status = "degraded"
     if conflict_count > 0:
         status = "degraded"
     if (
@@ -759,6 +875,7 @@ def run(
         + reconciliation_warning_count
         + finance_warning_count
         + conflict_count
+        + missing_alert_evidence
     )
 
     write_pipeline_status(
@@ -775,6 +892,7 @@ def run(
             f"Current prices={current_count}, "
             f"thresholdAlerts={threshold_alerts}, "
             f"highPriority={high_priority}, "
+            f"missingAlertEvidence={missing_alert_evidence}, "
             f"effectivenessAnalyzed="
             f"{effectiveness_summary.get('analyzedEventCount', 0)}, "
             f"reconciliationConflicts={conflict_count}, "
@@ -783,6 +901,7 @@ def run(
         extra={
             "snapshotWeek": snapshot.get("snapshotWeek"),
             "priceAlertSummary": alert_summary,
+            "alertEvidenceSummary": alert_evidence_summary,
             "effectivenessSummary": effectiveness_summary,
             "reconciliationSummary": reconciliation_summary,
             "financeSummary": finance_summary,

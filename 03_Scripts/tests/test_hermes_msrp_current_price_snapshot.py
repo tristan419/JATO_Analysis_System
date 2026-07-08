@@ -49,6 +49,15 @@ def sample_snapshot() -> dict[str, object]:
                 "directionCounts": {"decrease": 1},
                 "severityCounts": {"critical": 1},
             },
+            "alertEvidenceSummary": {
+                "alertCount": 1,
+                "completeEvidenceCount": 1,
+                "missingEvidenceCount": 0,
+                "evidenceStatusCounts": {"complete": 1},
+                "sourceTypeCounts": {"official_page": 1},
+                "sourceNameCounts": {"volvo_se_official": 1},
+                "missingAlertIds": [],
+            },
             "limit": 5,
         },
         "currentPrices": [{"currentPriceId": "cp-1"}],
@@ -63,7 +72,11 @@ def sample_snapshot() -> dict[str, object]:
                 "severity": "critical",
                 "deltaPct": -6.0,
                 "evidenceStatus": "complete",
+                "currentEvidenceId": "msrp-evidence:current-1",
+                "previousEvidenceId": "msrp-evidence:previous-1",
+                "sourceType": "official_page",
                 "sourceName": "volvo_se_official",
+                "sourceUrl": "https://www.volvocars.com/se/",
                 "recommendedAction": "review_price_drop",
             }
         ],
@@ -201,6 +214,11 @@ def test_render_markdown_escapes_table_cells() -> None:
     })
 
     assert "| Current prices | 1 |" in markdown
+    assert "| Alert evidence complete | 1 |" in markdown
+    assert "| Alert evidence missing | 0 |" in markdown
+    assert "## Alert Evidence" in markdown
+    assert "| Evidence status | complete | 1 |" in markdown
+    assert "| Source type | official_page | 1 |" in markdown
     assert "Volvo\\|Polestar" in markdown
     assert "Plus Dark" in markdown
     assert "| msrp-alert:ph-1 | SE | Volvo\\|Polestar | XC60 | Plus Dark | decrease | critical | -6 | complete | volvo_se_official | review_price_drop |" in markdown
@@ -275,6 +293,15 @@ def test_run_writes_degraded_status_for_high_priority_alert(
     assert status_calls[0]["status"] == "degraded"
     assert status_calls[0]["records_processed"] == 1
     assert status_calls[0]["warning_count"] == 1
+    assert status_calls[0]["extra"]["alertEvidenceSummary"] == {
+        "alertCount": 1,
+        "completeEvidenceCount": 1,
+        "missingEvidenceCount": 0,
+        "evidenceStatusCounts": {"complete": 1},
+        "sourceTypeCounts": {"official_page": 1},
+        "sourceNameCounts": {"volvo_se_official": 1},
+        "missingAlertIds": [],
+    }
     assert status_calls[0]["extra"]["effectivenessSummary"] == {
         "priceEventCount": 1,
         "analyzedEventCount": 1,
@@ -295,6 +322,97 @@ def test_run_writes_degraded_status_for_high_priority_alert(
         "msrp_multi_source_reconciliation_v1"
     )
     assert result["snapshot"]["financeObservations"]["total"] == 1
+
+
+def test_run_degrades_for_missing_alert_evidence(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    status_calls: list[dict[str, object]] = []
+    base = sample_snapshot()
+    alert = dict(base["priceAlerts"][0])
+    alert.update({
+        "severity": "info",
+        "evidenceStatus": "missing_evidence",
+        "currentEvidenceId": "",
+        "previousEvidenceId": "",
+        "sourceType": "",
+        "sourceName": "",
+        "sourceUrl": "",
+    })
+    snapshot = {
+        **base,
+        "summary": {
+            **base["summary"],
+            "priceAlertSummary": {
+                "priceChangeEventCount": 1,
+                "thresholdAlertCount": 0,
+                "highPriorityAlertCount": 0,
+                "directionCounts": {"decrease": 1},
+                "severityCounts": {"info": 1},
+            },
+        },
+        "priceAlerts": [alert],
+    }
+
+    monkeypatch.setattr(snapshot_module, "_fetch_snapshot", lambda **_: snapshot)
+    monkeypatch.setattr(
+        snapshot_module,
+        "_fetch_effectiveness",
+        lambda **_: sample_effectiveness(),
+    )
+    monkeypatch.setattr(
+        snapshot_module,
+        "_fetch_reconciliation",
+        lambda **_: {
+            **sample_reconciliation(),
+            "summary": {
+                **sample_reconciliation()["summary"],
+                "statusCounts": {"aligned": 1},
+            },
+        },
+    )
+    monkeypatch.setattr(
+        snapshot_module,
+        "_fetch_finance_observations",
+        lambda **_: sample_finance(),
+    )
+    monkeypatch.setattr(
+        snapshot_module,
+        "write_pipeline_status",
+        lambda **kwargs: status_calls.append(kwargs) or kwargs,
+    )
+
+    result = snapshot_module.run(
+        api_base="http://127.0.0.1:8000/v1",
+        out_dir=tmp_path,
+        country=None,
+        brand=None,
+        jato_model=None,
+        limit=5,
+        threshold_pct=3.0,
+        timeout_seconds=1,
+    )
+
+    assert result["pipelineStatus"] == "degraded"
+    assert result["snapshot"]["summary"]["alertEvidenceSummary"] == {
+        "alertCount": 1,
+        "completeEvidenceCount": 0,
+        "missingEvidenceCount": 1,
+        "evidenceStatusCounts": {"missing_evidence": 1},
+        "sourceTypeCounts": {"unknown": 1},
+        "sourceNameCounts": {"unknown": 1},
+        "missingAlertIds": ["msrp-alert:ph-1"],
+    }
+    assert status_calls[0]["status"] == "degraded"
+    assert status_calls[0]["warning_count"] == 1
+    assert "missingAlertEvidence=1" in status_calls[0]["message"]
+    assert status_calls[0]["extra"]["alertEvidenceSummary"][
+        "missingEvidenceCount"
+    ] == 1
+    markdown = (tmp_path / "msrp_current_price_snapshot.md").read_text()
+    assert "| Alert evidence complete | 0 |" in markdown
+    assert "| Alert evidence missing | 1 |" in markdown
 
 
 def test_run_degrades_for_reconciliation_conflicts(
