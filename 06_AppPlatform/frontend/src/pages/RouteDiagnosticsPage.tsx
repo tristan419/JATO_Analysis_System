@@ -43,6 +43,8 @@ export interface RouteResourceSummary {
 
 type ApiProbeStatus = "idle" | "running" | "ok" | "failed";
 
+type RouteRecommendation = { target: RouteTarget; reason: string } | null;
+
 export interface RouteApiProbeSpec {
   key: string;
   label: string;
@@ -63,6 +65,13 @@ export interface RouteApiProbeResult {
   edgeCache: string | null;
   error: string | null;
   checkedAt: string;
+}
+
+export interface RouteDiagnosticConclusion {
+  target: RouteTarget | null;
+  label: string;
+  detail: string;
+  source: "manual" | "auto" | "recommendation" | "current" | "unknown";
 }
 
 export const INITIAL_RESOURCE_WINDOW_MS = 8_000;
@@ -122,6 +131,53 @@ function formatDecisionDetail(decision: RouteDecision | null): string {
     details.push(`margin ${decision.marginMs} ms`);
   }
   return details.join(" · ") || "Cached route decision is active.";
+}
+
+export function resolveRouteDiagnosticConclusion(params: {
+  manualDecision: RouteDecision | null;
+  autoDecision: RouteDecision | null;
+  currentTarget: RouteTarget | null;
+  recommendation: RouteRecommendation;
+}): RouteDiagnosticConclusion {
+  const { manualDecision, autoDecision, currentTarget, recommendation } = params;
+  if (manualDecision) {
+    return {
+      target: manualDecision.target,
+      label: `${routeLabel(manualDecision.target)} locked`,
+      detail: formatDecisionDetail(manualDecision),
+      source: "manual",
+    };
+  }
+  if (autoDecision) {
+    return {
+      target: autoDecision.target,
+      label: `${routeLabel(autoDecision.target)} cached`,
+      detail: formatDecisionDetail(autoDecision),
+      source: "auto",
+    };
+  }
+  if (recommendation) {
+    return {
+      target: recommendation.target,
+      label: `${routeLabel(recommendation.target)} recommended`,
+      detail: recommendation.reason,
+      source: "recommendation",
+    };
+  }
+  if (currentTarget) {
+    return {
+      target: currentTarget,
+      label: `${routeLabel(currentTarget)} current`,
+      detail: "No stored route decision yet; staying on the current entry until both probes finish.",
+      source: "current",
+    };
+  }
+  return {
+    target: null,
+    label: "Unknown host",
+    detail: "This browser is not on www.ojeur.cloud or intl.ojeur.cloud, so smart route selection is not active.",
+    source: "unknown",
+  };
 }
 
 function formatProbe(result: ProbeResult): string {
@@ -368,6 +424,15 @@ export function RouteDiagnosticsPage() {
     () => chooseAutoRoute(results, currentTarget, clientProfile),
     [clientProfile, currentTarget, results],
   );
+  const routeConclusion = useMemo(
+    () => resolveRouteDiagnosticConclusion({
+      manualDecision,
+      autoDecision,
+      currentTarget,
+      recommendation: autoRecommendation,
+    }),
+    [autoDecision, autoRecommendation, currentTarget, manualDecision],
+  );
   const buildParity = useMemo(() => formatBuildParity(results), [results]);
   const largestResource = resourceTimings[0] ?? null;
   const resourceSummary = useMemo(
@@ -457,8 +522,13 @@ export function RouteDiagnosticsPage() {
         </article>
         <article className="route-diagnostics-panel">
           <span className="route-diagnostics-label">Final route</span>
-          <strong>{formatTarget(activeTarget)}</strong>
+          <strong>{formatTarget(routeConclusion.target ?? activeTarget)}</strong>
           <span className="route-diagnostics-muted">{activeDecision ? `${activeDecision.source ?? "cached"} decision` : "当前入口"}</span>
+        </article>
+        <article className="route-diagnostics-panel">
+          <span className="route-diagnostics-label">Effective route</span>
+          <strong>{routeConclusion.label}</strong>
+          <span className="route-diagnostics-muted">{routeConclusion.source} · {routeConclusion.detail}</span>
         </article>
         <article className="route-diagnostics-panel">
           <span className="route-diagnostics-label">Fastest path</span>
@@ -495,7 +565,7 @@ export function RouteDiagnosticsPage() {
       <section className="route-diagnostics-decision">
         <div>
           <span className="route-diagnostics-label">Selection reason</span>
-          <p>{formatDecisionDetail(activeDecision)}</p>
+          <p>{routeConclusion.detail}</p>
         </div>
         <div>
           <span className="route-diagnostics-label">Live recommendation</span>
