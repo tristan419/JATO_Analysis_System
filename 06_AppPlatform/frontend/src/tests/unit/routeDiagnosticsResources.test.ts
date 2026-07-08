@@ -103,4 +103,34 @@ describe("route diagnostics resource summary", () => {
     expect(result.serverCache).toBe("MEMORY");
     expect(result.edgeCache).toBe("HIT");
   });
+
+  it("surfaces edge origin timeout details from failed API probes", async () => {
+    stubLocalStorage();
+    const spec: RouteApiProbeSpec = {
+      key: "auth-profile",
+      label: "Auth profile",
+      method: "GET",
+      path: "/auth/me",
+    };
+    const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify({
+      detail: "Origin request timed out after 12000ms.",
+      error: "origin_timeout",
+      path: "/v1/auth/me",
+    }), {
+      status: 504,
+      statusText: "Gateway Timeout",
+      headers: {
+        "Content-Type": "application/json",
+        "X-JATO-Edge-Cache": "BYPASS_TIMEOUT",
+      },
+    }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const result = await probeCurrentApiPath(spec);
+
+    expect(result.status).toBe("failed");
+    expect(result.statusCode).toBe(504);
+    expect(result.edgeCache).toBe("BYPASS_TIMEOUT");
+    expect(result.error).toBe("origin_timeout: Origin request timed out after 12000ms.");
+  });
 });
