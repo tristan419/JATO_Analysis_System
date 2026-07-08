@@ -1,98 +1,72 @@
 source_code: hyundai_inster_nl_draft_scrapling
 country: 荷兰
 brand: HYUNDAI
-source_url: https://todo.invalid/nl/hyundai/inster
-source_type: manufacturer_official
+source_url: https://dmassets.hyundai.com/is/content/hyundaiautoever/Prijslijst-Hyundai-INSTERpdf
+source_type: official_price_list
 price_semantics: base_msrp
-extractor_type: scrapling
+extractor_type: pdf_text
 profile:
-  url: https://todo.invalid/nl/hyundai/inster
-  headless: true
+  url: https://dmassets.hyundai.com/is/content/hyundaiautoever/Prijslijst-Hyundai-INSTERpdf
+  timeout_seconds: 45
+  retry_attempts: 1
+  retry_delay_seconds: 1
+  prefer_curl_download: true
+  browser_download_fallback: true
   default_currency: EUR
   default_tax_included: true
-  default_price_label: MSRP
+  default_price_label: Consumentenprijs incl. BTW, BPM, leges, logistieke kosten en kosten rijklaar maken
   fixed_model: INSTER
   fixed_jato_model: INSTER
-  fixed_jato_powertrain: null
-  model_rules: []
-  skip_if_model_unmapped: false
+  fixed_jato_powertrain: BEV
   copy_trim_to_jato_trim: true
-  confidence_rules:
-    base: 0.2
-    fixed_model_bonus: 0.18
-    fixed_jato_model_bonus: 0.12
-    model_rule_bonus: 0.12
-    trim_present_bonus: 0.1
-    copy_trim_to_jato_trim_bonus: 0.09
-    parsed_price_text_bonus: 0.03
-    currency_bonus: 0.01
-    price_label_bonus: 0.02
-    trim_keyword_bonuses: []
-    price_band_bonuses:
-    - key: price_band_entry
-      label: Entry price band matched
-      max: 0
-      delta: 0.0
-    - key: price_band_mid
-      label: Mid price band matched
-      min: 0
-      max: 0
-      delta: 0.01
-    - key: price_band_high
-      label: High price band matched
-      min: 0
-      delta: 0.03
-    powertrain_keyword_bonuses: []
-    powertrain_bonuses:
-    - key: powertrain_bev
-      label: 'Powertrain matched: BEV'
-      powertrain: BEV
-      delta: 0.03
-    clamp_min: 0.0
-    clamp_max: 1.0
-  structured_fields:
-    edition_rules:
-    - key: edition_special
-      label: Special Edition
-      keyword: special edition
-      special: true
-    powertrain_rules:
-    - key: powertrain_bev
-      powertrain: BEV
-      keywords:
-      - bev
-      - ev
-      - electric
-      - battery electric
-      - fully electric
-      - electric vehicle
-      - elektrisch
-      - volledig elektrisch
-  auto_accept_gates:
-    review_threshold: 0.95
-    semi_auto_threshold: 0.98
-    require_powertrain_match: true
-    force_review_if_powertrain_missing: true
-    force_review_if_powertrain_ambiguous: true
-    force_review_for_special_edition: true
-  css:
-    vehicle_container: body
-    model: h2, h3
-    trim: h3
-    price: '[class*="price"]'
-  tier: stealth
-  network_idle: true
-  impersonate: chrome
+  match_confidence: 0.9
+  match_status: review_required
+  match_reason:
+    kind: official_pdf_price_list
+    source: hyundai_nl_inster_prijslijst
+    note: Official Hyundai Netherlands INSTER price-list PDF, prijslijst per 1 mei 2026; regex captures the vehicle Consumentenprijs column on page 10, not options, delivery packages, finance, private lease, or campaign price blocks.
+  entry_patterns:
+  - pattern: '42\s*kWh\s+E-Motion\s+71,1\s*\(97\)\s+327\s*km\s+Traploos\s+Voorwielen\s+A\s+0\s+€\s*18\.957\s+€\s*3\.981\s+€\s*687\s+€\s*23\.625\s+€\s*870\s+€\s*(?P<price>\d{2}\.\d{3})'
+    official_trim: Standard Range 4-zits E-Motion
+    official_powertrain: BEV 42 kWh 71.1 kW / 97 pk
+    jato_powertrain: BEV
+  - pattern: '42\s*kWh\s+Pulse\s+Advanced\s+71,1\s*\(97\)\s+303\s*km\s+Traploos\s+Voorwielen\s+A\s+0\s+€\s*21\.023\s+€\s*4\.415\s+€\s*687\s+€\s*26\.125\s+€\s*870\s+€\s*(?P<price>\d{2}\.\d{3})'
+    official_trim: Standard Range 4-zits Pulse Advanced
+    official_powertrain: BEV 42 kWh 71.1 kW / 97 pk
+    jato_powertrain: BEV
+  - pattern: '42\s*kWh\s+E-Motion\s+71,1\s*\(97\)\s+323\s*km\s+Traploos\s+Voorwielen\s+A\s+0\s+€\s*19\.370\s+€\s*4\.068\s+€\s*687\s+€\s*24\.125\s+€\s*870\s+€\s*(?P<price>\d{2}\.\d{3})'
+    official_trim: Standard Range 5-zits E-Motion
+    official_powertrain: BEV 42 kWh 71.1 kW / 97 pk
+    jato_powertrain: BEV
+  - pattern: '49\s*kWh\s+E-Motion\s+84,5\s*\(115\)\s+370\s*km\s+Traploos\s+Voorwielen\s+A\s+0\s+€\s*20\.362\s+€\s*4\.276\s+€\s*687\s+€\s*25\.325\s+€\s*870\s+€\s*(?P<price>\d{2}\.\d{3})'
+    official_trim: Long Range 4-zits E-Motion
+    official_powertrain: BEV 49 kWh 84.5 kW / 115 pk
+    jato_powertrain: BEV
+  - pattern: '49\s*kWh\s+Pulse\s+84,5\s*\(115\)\s+370\s*km\s+Traploos\s+Voorwielen\s+A\s+0\s+€\s*21\.436\s+€\s*4\.502\s+€\s*687\s+€\s*26\.625\s+€\s*870\s+€\s*(?P<price>\d{2}\.\d{3})'
+    official_trim: Long Range 4-zits Pulse
+    official_powertrain: BEV 49 kWh 84.5 kW / 115 pk
+    jato_powertrain: BEV
+  - pattern: '49\s*kWh\s+Evolve\s+84,5\s*\(115\)\s+360\s*km\s+Traploos\s+Voorwielen\s+A\s+0\s+€\s*22\.676\s+€\s*4\.762\s+€\s*687\s+€\s*28\.125\s+€\s*870\s+€\s*(?P<price>\d{2}\.\d{3})'
+    official_trim: Long Range 4-zits Evolve
+    official_powertrain: BEV 49 kWh 84.5 kW / 115 pk
+    jato_powertrain: BEV
+  - pattern: '49\s*kWh\s+Evolve\s+Sky\s+84,5\s*\(115\)\s+360\s*km\s+Traploos\s+Voorwielen\s+A\s+0\s+€\s*23\.337\s+€\s*4\.901\s+€\s*687\s+€\s*28\.925\s+€\s*870\s+€\s*(?P<price>\d{2}\.\d{3})'
+    official_trim: Long Range 4-zits Evolve Sky
+    official_powertrain: BEV 49 kWh 84.5 kW / 115 pk
+    jato_powertrain: BEV
+  - pattern: '49\s*kWh\s+Cross\s+Sky\s+Plus\s+84,5\s*\(115\)\s+360\s*km\s+Traploos\s+Voorwielen\s+A\s+0\s+€\s*26\.056\s+€\s*5\.472\s+€\s*687\s+€\s*32\.215\s+€\s*870\s+€\s*(?P<price>\d{2}\.\d{3})'
+    official_trim: Long Range 4-zits Cross Sky Plus
+    official_powertrain: BEV 49 kWh 84.5 kW / 115 pk
+    jato_powertrain: BEV
 schedule:
   frequency: manual_only
   run_window_start: 00:00
   run_window_end: 05:00
   preferred_weekday: monday
-notes: Draft scaffold generated from country×model top30 backlog. Replace source_url,
-  profile.url, selectors, currency, price label, and the single-model placeholders
-  before promoting to 07_ScrapingToolkit/sources. [CSS selectors applied from brand
-  probe] [Switched to playwright_card_flow with kia_trim_overview_playwright.yaml]
-  [Reverted to scrapling — playwright preset needs per-brand tuning]
+notes: Replaced todo placeholder with the official Hyundai Netherlands INSTER
+  brochure-prijslijst PDF linked from the model page. The PDF metadata is
+  2026-04-22/2026-04-30 and page 10 states Hyundai INSTER - Prijslijst per
+  1 mei 2026. Patterns target only the vehicle Consumentenprijs column.
 bootstrap_meta:
   country_model_rank: 16
   suggested_scope_kind: single_model
