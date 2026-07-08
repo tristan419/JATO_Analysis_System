@@ -315,6 +315,15 @@ export function buildOrderGeniusColumnDefs(
     (m) => selectedMonth == null || m === selectedMonth,
   );
 
+  const visibleAmountTotal = (row: OrderGeniusGridRow): number =>
+    activeMonths.reduce((sum, month) => {
+      const monthField = `month_${month}` as `month_${number}`;
+      const amountField = `_amount_${month}` as `_amount_${number}`;
+      const precomputed = row[amountField];
+      if (precomputed != null) return sum + precomputed;
+      return sum + (row[monthField] || 0) * (row.fobEur || 0);
+    }, 0);
+
   for (const m of activeMonths) {
     const field = `month_${m}` as const;
     const amountField = `_amount_${m}` as `_amount_${number}`;
@@ -407,13 +416,7 @@ export function buildOrderGeniusColumnDefs(
       valueGetter: (p: ValueGetterParams<OrderGeniusGridRow>) => {
         const row = p.data;
         if (!row) return 0;
-        if (row.__type === "groupHeader" || row.__type === "consolidated_parent" || row.__type === "summary") {
-          return row._ttlAmount ?? 0;
-        }
-        let t = 0;
-        const fob = row.fobEur ?? 0;
-        for (const m of activeMonths) t += ((row as any)[`month_${m}`] ?? 0) * fob;
-        return t;
+        return visibleAmountTotal(row);
       },
       valueFormatter: (p) => (p.value != null ? (p.value as number).toLocaleString() : "0"),
       cellClass: "og-ttl-amount-cell",

@@ -700,18 +700,20 @@ export function OrderGeniusPage() {
           || (a.interiorColorName || "").localeCompare(b.interiorColorName || "")
           || a.materialCode.localeCompare(b.materialCode);
       });
-      // Sum TTL, monthly totals, and floor FOB for the group
+      // Sum TTL, monthly totals, real monthly amounts, and floor FOB for the group.
       let groupTtl = 0;
       let floorFob: number | null = null;
       const monthlySums: number[] = new Array(13).fill(0); // index 1-12
+      const monthlyAmounts: number[] = new Array(13).fill(0);
       for (const r of groupRows) {
         const months = r.months || {};
+        const fob = r.fobEur ?? 0;
         for (let m = 1; m <= 12; m++) {
           const q = months[String(m)]?.quantity ?? 0;
           monthlySums[m] += q;
+          monthlyAmounts[m] += q * fob;
           groupTtl += q;
         }
-        const fob = r.fobEur ?? 0;
         if (fob > 0 && (floorFob === null || fob < floorFob)) {
           floorFob = fob;
         }
@@ -739,8 +741,12 @@ export function OrderGeniusPage() {
         __groupColor: color,
         __groupKey: groupKey,
         __expanded: expanded,
+        _ttlAmount: monthlyAmounts.reduce((sum, amount) => sum + amount, 0),
       };
-      for (let m = 1; m <= 12; m++) header[`month_${m}`] = monthlySums[m];
+      for (let m = 1; m <= 12; m++) {
+        header[`month_${m}`] = monthlySums[m];
+        header[`_amount_${m}`] = monthlyAmounts[m];
+      }
       result.push(header);
       // Child rows
       if (expanded || (consolidatedView && selectedCountries.length > 1)) {
@@ -859,25 +865,30 @@ export function OrderGeniusPage() {
       if (row.__type === "groupHeader") continue;
       const key = `${row.modelName}|${row.version}|${row.materialCode}`;
       if (!groups.has(key)) {
-        groups.set(key, {
-          parent: {
-            ...row,
-            materialCode: row.materialCode,
-            modelName: row.modelName,
-            version: row.version,
-            _countryCode: "",
-            _saving: new Set(),
-            _errors: {},
-            __type: "consolidated_parent",
-          },
-          children: [],
-        });
+        const parent: OrderGeniusGridRow = {
+          ...row,
+          materialCode: row.materialCode,
+          modelName: row.modelName,
+          version: row.version,
+          _countryCode: "",
+          _saving: new Set(),
+          _errors: {},
+          __type: "consolidated_parent",
+        };
+        for (let m = 1; m <= 12; m++) {
+          parent[`month_${m}`] = 0;
+          parent[`_amount_${m}`] = 0;
+        }
+        groups.set(key, { parent, children: [] });
       }
       const g = groups.get(key)!;
       g.children.push(row);
-      // Sum month quantities
       for (let m = 1; m <= 12; m++) {
-        g.parent[`month_${m}`] = (g.parent[`month_${m}`] || 0) + (row[`month_${m}`] || 0);
+        const monthField = `month_${m}` as `month_${number}`;
+        const amountField = `_amount_${m}` as `_amount_${number}`;
+        const quantity = row[monthField] || 0;
+        g.parent[monthField] = (g.parent[monthField] || 0) + quantity;
+        g.parent[amountField] = (g.parent[amountField] || 0) + (row[amountField] ?? quantity * (row.fobEur || 0));
       }
     }
 
@@ -885,6 +896,8 @@ export function OrderGeniusPage() {
     for (const [, g] of groups) {
       const ttl = Array.from({ length: 12 }, (_, idx) => g.parent[`month_${idx + 1}`] || 0)
         .reduce((sum, quantity) => sum + quantity, 0);
+      g.parent._ttlAmount = Array.from({ length: 12 }, (_, idx) => g.parent[`_amount_${idx + 1}`] || 0)
+        .reduce((sum, amount) => sum + amount, 0);
       g.parent.__groupLabel = `${g.parent.modelName} · ${g.parent.version} · ${g.children.length} countries · TTL ${ttl}`;
       result.push(g.parent);
       if (g.children.length > 1) {
