@@ -261,6 +261,55 @@ def test_v3_report_marks_dynamic_price_not_ready_as_recheck_without_history(
     assert group["sourceRepairIssueCount"] == 0
 
 
+def test_v3_report_marks_anti_bot_as_proxy_recheck_without_history(
+    tmp_path: Path,
+) -> None:
+    report = {
+        "schemaVersion": "msrp_dryrun_report_v3",
+        "runId": "msrp-dryrun-20260708-050729",
+        "results": [
+            {
+                "country": "nl",
+                "sourceCode": "tesla_model_y_nl_draft_scrapling",
+                "brand": "TESLA",
+                "status": "empty",
+                "valid": 0,
+                "failureReason": "anti_bot_access_denied",
+                "recommendedStrategy": "manual_review_or_proxy_required",
+                "sourceUrl": "https://www.tesla.com/nl_nl/modely",
+                "extractorError": (
+                    "anti_bot_access_denied: Access Denied You don't have "
+                    "permission to access this server."
+                ),
+            }
+        ],
+    }
+    report_path = tmp_path / "dryrun_report.json"
+    report_path.write_text(json.dumps(report), encoding="utf-8")
+
+    backlog = backlog_script.run(str(report_path), str(tmp_path))
+
+    assert backlog["sourceRepairIssueCount"] == 0
+    assert backlog["transientRegressionCount"] == 1
+    assert backlog["sourceIssues"] == []
+    transient = backlog["transientSourceRegressions"][0]
+    assert transient["sourceCode"] == "tesla_model_y_nl_draft_scrapling"
+    assert transient["failureReason"] == "anti_bot_access_denied"
+    assert transient["recommendedAction"] == "recheck_before_source_repair"
+    assert transient["recommendedStrategy"] == "manual_review_or_proxy_required"
+
+    group = backlog["groups"][0]
+    assert group["recommendedAction"] == "recheck_before_source_repair"
+    assert group["priorityBand"] == "recheck"
+    assert group["sourceRepairIssueCount"] == 0
+    assert group["transientRegressionCount"] == 1
+    assert group["referenceAssist"]["preferred"] == "official_proxy_or_configurator_api"
+    assert group["referenceAssist"]["referencePolicy"] == (
+        "reference_only_review_required"
+    )
+    assert group["referenceAssist"]["officialSourceRequiredForIngest"] is True
+
+
 def test_v3_report_uses_artifact_history_when_output_dir_differs(
     tmp_path: Path,
 ) -> None:
@@ -498,9 +547,13 @@ def test_v3_report_marks_tesla_anti_bot_with_evkx_reference_policy(
     group = backlog["groups"][0]
     assert group["failureReason"] == "anti_bot_access_denied"
     assert group["affectedBrands"] == ["TESLA"]
-    assert backlog["sourceIssues"][0]["errorSnippet"].startswith(
+    assert backlog["sourceRepairIssueCount"] == 0
+    assert backlog["transientRegressionCount"] == 1
+    assert backlog["transientSourceRegressions"][0]["errorSnippet"].startswith(
         "anti_bot_access_denied: Access Denied"
     )
+    assert group["recommendedAction"] == "recheck_before_source_repair"
+    assert group["priorityBand"] == "recheck"
     assert group["referenceAssist"]["preferred"] == "official_proxy_or_configurator_api"
     assert group["referenceAssist"]["thirdPartyReference"] == "EVKX"
     assert group["referenceAssist"]["referencePolicy"] == "reference_only_review_required"
