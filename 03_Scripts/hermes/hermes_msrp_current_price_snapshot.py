@@ -397,13 +397,14 @@ def _render_markdown(snapshot: dict[str, Any]) -> str:
         lines.append("No price alerts in this snapshot.")
     else:
         lines.extend([
-            "| Country | Brand | Model | Trim | Direction | Severity | Delta % | Action |",
-            "|---|---|---|---|---|---|---:|---|",
+            "| Event ID | Country | Brand | Model | Trim | Direction | Severity | Delta % | Evidence | Source | Action |",
+            "|---|---|---|---|---|---|---|---:|---|---|---|",
         ])
         for item in alerts[:50]:
             lines.append(
                 "| "
                 + " | ".join([
+                    _markdown_cell(item.get("alertId")),
                     _markdown_cell(item.get("country")),
                     _markdown_cell(item.get("brand")),
                     _markdown_cell(item.get("jatoModel")),
@@ -411,6 +412,12 @@ def _render_markdown(snapshot: dict[str, Any]) -> str:
                     _markdown_cell(item.get("direction")),
                     _markdown_cell(item.get("severity")),
                     _number(item.get("deltaPct")),
+                    _markdown_cell(item.get("evidenceStatus")),
+                    _markdown_cell(
+                        item.get("sourceName")
+                        or item.get("sourceType")
+                        or item.get("sourceUrl")
+                    ),
                     _markdown_cell(item.get("recommendedAction")),
                 ])
                 + " |"
@@ -442,13 +449,14 @@ def _render_markdown(snapshot: dict[str, Any]) -> str:
         lines.append("No price sales effectiveness rows in this snapshot.")
     else:
         lines.extend([
-            "| Country | Brand | Model | Event month | Price direction | Sales delta % | Label |",
-            "|---|---|---|---|---|---:|---|",
+            "| Price event | Country | Brand | Model | Event month | Price direction | Sales delta % | Label |",
+            "|---|---|---|---|---|---|---:|---|",
         ])
         for item in effectiveness_items[:50]:
             lines.append(
                 "| "
                 + " | ".join([
+                    _markdown_cell(item.get("priceEventId")),
                     _markdown_cell(item.get("country")),
                     _markdown_cell(item.get("brand")),
                     _markdown_cell(item.get("jatoModel")),

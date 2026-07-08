@@ -54,6 +54,7 @@ def sample_snapshot() -> dict[str, object]:
         "currentPrices": [{"currentPriceId": "cp-1"}],
         "priceAlerts": [
             {
+                "alertId": "msrp-alert:ph-1",
                 "country": "SE",
                 "brand": "Volvo|Polestar",
                 "jatoModel": "XC60",
@@ -61,6 +62,8 @@ def sample_snapshot() -> dict[str, object]:
                 "direction": "decrease",
                 "severity": "critical",
                 "deltaPct": -6.0,
+                "evidenceStatus": "complete",
+                "sourceName": "volvo_se_official",
                 "recommendedAction": "review_price_drop",
             }
         ],
@@ -90,6 +93,7 @@ def sample_effectiveness() -> dict[str, object]:
                 "country": "SE",
                 "brand": "Volvo",
                 "jatoModel": "XC60",
+                "priceEventId": "msrp-alert:ph-1",
                 "priceEventMonth": "2026-03",
                 "priceChangeDirection": "down",
                 "salesDeltaPct": 18.5,
@@ -199,9 +203,10 @@ def test_render_markdown_escapes_table_cells() -> None:
     assert "| Current prices | 1 |" in markdown
     assert "Volvo\\|Polestar" in markdown
     assert "Plus Dark" in markdown
+    assert "| msrp-alert:ph-1 | SE | Volvo\\|Polestar | XC60 | Plus Dark | decrease | critical | -6 | complete | volvo_se_official | review_price_drop |" in markdown
     assert "## Sales Effectiveness" in markdown
     assert "| positive | 1 |" in markdown
-    assert "| SE | Volvo | XC60 | 2026-03 | down | 18.5 | positive |" in markdown
+    assert "| msrp-alert:ph-1 | SE | Volvo | XC60 | 2026-03 | down | 18.5 | positive |" in markdown
     assert "## Multi-source Reconciliation" in markdown
     assert "| conflict | 1 |" in markdown
     assert "| SE | Volvo | XC60 | Ultra | conflict | 2 | 4.2 | review_conflicting_sources |" in markdown
