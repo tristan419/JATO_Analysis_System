@@ -69,6 +69,7 @@ def test_http_text_profile_builds_entry_patterns() -> None:
     profile = _build_http_text_profile(
         {
             "url": "https://example.invalid/model",
+            "urls": ["https://example.invalid/model-extra"],
             "timeout_seconds": 45,
             "headers": {"Accept-Language": "hr-HR"},
             "entry_patterns": [
@@ -82,9 +83,81 @@ def test_http_text_profile_builds_entry_patterns() -> None:
     )
 
     assert profile.timeout_seconds == 45
+    assert profile.urls == ("https://example.invalid/model-extra",)
     assert profile.headers == {"Accept-Language": "hr-HR"}
     assert profile.entry_patterns[0].official_trim == "Prime-Line"
     assert profile.entry_patterns[0].jato_powertrain == "MHEV"
+
+
+def test_http_text_fetches_primary_and_additional_urls(monkeypatch) -> None:
+    extractor = HttpTextExtractor(
+        ExtractorConfig(
+            source_code="byd_seal_u_nl_draft_scrapling",
+            country="荷兰",
+            brand="BYD",
+            source_url="https://www.bydauto.nl/elektrische-autos/seal-u/",
+            source_type="manufacturer_official",
+            price_semantics="base_msrp",
+        ),
+        HttpTextProfile(
+            url="https://www.bydauto.nl/elektrische-autos/seal-u/",
+            urls=("https://www.bydauto.nl/plug-in-hybride/seal-u-dmi/",),
+            fixed_model="SEAL U",
+            fixed_jato_model="SEAL U",
+            copy_trim_to_jato_trim=True,
+            default_currency="EUR",
+            default_tax_included=True,
+            default_price_label="Koopprijs inc. BTW",
+            match_confidence=0.86,
+            entry_patterns=(
+                HttpTextEntryPattern(
+                    pattern=r"Business.{0,80}?Koopprijs\s+€\s*(?P<price>\d{2}\.\d{3}),-",
+                    official_trim="Business",
+                    official_powertrain="BEV",
+                    jato_powertrain="BEV",
+                ),
+                HttpTextEntryPattern(
+                    pattern=r"Boost-FWD.{0,80}?Koopprijs\s+€\s*(?P<price>\d{2}\.\d{3}),-",
+                    official_trim="DM-i Boost-FWD",
+                    official_powertrain="Plug-in Hybrid DM-i FWD",
+                    jato_powertrain="PHEV",
+                ),
+            ),
+        ),
+    )
+
+    class FakeResponse:
+        def __init__(self, text: str) -> None:
+            self.text = text
+
+        def raise_for_status(self) -> None:
+            return None
+
+    seen_urls = []
+    pages = {
+        "https://www.bydauto.nl/elektrische-autos/seal-u/": (
+            "Business</span><span>Koopprijs € 45.690,- inc. BTW"
+        ),
+        "https://www.bydauto.nl/plug-in-hybride/seal-u-dmi/": (
+            "Boost-FWD</span><span>Koopprijs € 39.620,- inc. BTW"
+        ),
+    }
+
+    def fake_get(url, **_kwargs):
+        seen_urls.append(url)
+        return FakeResponse(pages[url])
+
+    monkeypatch.setattr(extractor._session, "get", fake_get)
+
+    results = extractor.extract()
+
+    assert seen_urls == list(pages)
+    assert [result.official_trim for result in results] == [
+        "Business",
+        "DM-i Boost-FWD",
+    ]
+    assert [result.msrp_value for result in results] == [45690.0, 39620.0]
+    assert results[0].raw_payload["text_urls"] == list(pages)
 
 
 def test_http_text_uses_default_curl_fallback_after_requests_tls_error(monkeypatch) -> None:

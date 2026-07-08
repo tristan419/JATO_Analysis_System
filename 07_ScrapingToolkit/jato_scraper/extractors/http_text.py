@@ -34,6 +34,7 @@ class HttpTextEntryPattern:
 @dataclass(frozen=True)
 class HttpTextProfile:
     url: str
+    urls: tuple[str, ...] = field(default_factory=tuple)
     entry_patterns: tuple[HttpTextEntryPattern, ...] = field(default_factory=tuple)
     timeout_seconds: int = DEFAULT_TIMEOUT
     headers: dict[str, str] = field(default_factory=dict)
@@ -103,30 +104,49 @@ class HttpTextExtractor(BaseExtractor):
         )
         return results
 
+    def _profile_urls(self) -> tuple[str, ...]:
+        urls: list[str] = []
+        for url in (self.profile.url, *self.profile.urls):
+            clean_url = str(url or "").strip()
+            if clean_url and clean_url not in urls:
+                urls.append(clean_url)
+        return tuple(urls)
+
     def _fetch_text(self) -> str:
         timeout = max(1, int(self.profile.timeout_seconds or DEFAULT_TIMEOUT))
+        chunks: list[str] = []
+        for url in self._profile_urls():
+            text = self._fetch_text_url(url, timeout)
+            if text:
+                chunks.append(f"\n\n<!-- JATO_HTTP_TEXT_URL: {url} -->\n{text}")
+        return "\n".join(chunks).strip()
+
+    def _fetch_text_url(self, url: str, timeout: int) -> str:
         try:
-            response = self._session.get(self.profile.url, timeout=timeout)
+            response = self._session.get(url, timeout=timeout)
             response.raise_for_status()
             return response.text
         except requests.RequestException as exc:
             log.warning(
-                "HTTP text request failed for %s: %s",
+                "HTTP text request failed for %s at %s: %s",
                 self.config.source_code,
+                url,
                 exc,
             )
             text = self._fetch_text_with_curl(
+                url,
                 max(timeout, DEFAULT_CURL_FALLBACK_TIMEOUT),
             )
             if text:
                 return text
             log.error(
-                "HTTP text request and curl fallback failed for %s",
+                "HTTP text request and curl fallback failed for %s at %s",
                 self.config.source_code,
+                url,
             )
             return ""
 
-    def _fetch_text_with_curl(self, timeout: int) -> str:
+    def _fetch_text_with_curl(self, url: str, timeout: int) -> str:
         try:
             with tempfile.NamedTemporaryFile(
                 prefix="jato_http_text_",
@@ -142,7 +162,7 @@ class HttpTextExtractor(BaseExtractor):
                         str(timeout),
                         "-o",
                         tmp.name,
-                        self.profile.url,
+                        url,
                     ],
                     check=False,
                     stdout=subprocess.PIPE,
@@ -229,6 +249,7 @@ class HttpTextExtractor(BaseExtractor):
             availability_text=availability_text,
             raw_payload={
                 "text_url": self.profile.url,
+                "text_urls": list(self._profile_urls()),
                 "pattern": entry.pattern,
                 "match_groups": groups,
                 "price_delta": entry.price_delta,

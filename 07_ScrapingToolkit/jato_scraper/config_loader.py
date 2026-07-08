@@ -692,6 +692,11 @@ def _build_http_text_profile(profile: dict[str, Any]) -> HttpTextProfile:
     )
     return HttpTextProfile(
         url=profile["url"],
+        urls=tuple(
+            str(url).strip()
+            for url in profile.get("urls", [])
+            if str(url or "").strip()
+        ),
         entry_patterns=entry_patterns,
         timeout_seconds=int(profile.get("timeout_seconds", 30)),
         headers=profile.get("headers", {}),
