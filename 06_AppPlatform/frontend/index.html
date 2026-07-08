@@ -316,6 +316,18 @@
         }
 
         var profile = detectProfile();
+        if (currentTarget === "intl" && !profile.prefersChinaRoute) {
+          saveDecision({
+            target: "intl",
+            source: "auto",
+            reason: "Current intl route loaded without China-local browser signals; start the Cloudflare route immediately.",
+            createdAt: Date.now(),
+            expiresAt: Date.now() + autoDecisionTtlMs,
+            intlOk: true
+          });
+          return;
+        }
+
         var decisionSettled = false;
         markProbeInFlight();
 
