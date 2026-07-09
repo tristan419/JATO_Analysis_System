@@ -1,98 +1,79 @@
 source_code: porsche_cayenne_coupe_pl_draft_scrapling
 country: 波兰
 brand: PORSCHE
-source_url: https://www.porsche.com/norway/models/macan/
-source_type: manufacturer_official
+source_url: https://www.porsche.com/poland/cennik/
+source_type: official_price_list
 price_semantics: base_msrp
-extractor_type: scrapling
+extractor_type: http_text
 profile:
-  url: https://www.porsche.com/norway/models/macan/
-  tier: stealth
-  headless: true
-  network_idle: true
-  impersonate: chrome
-  css:
-    vehicle_container: body
-    model: h1
-    trim: h2, h3
-    price: '[class*="price"]'
+  url: https://www.porsche.com/poland/cennik/
+  timeout_seconds: 45
   default_currency: PLN
   default_tax_included: true
-  default_price_label: MSRP
+  default_price_label: Cena katalogowa brutto (23% VAT)
   fixed_model: CAYENNE COUPE
   fixed_jato_model: CAYENNE COUPE
-  fixed_jato_powertrain: null
-  model_rules: []
-  skip_if_model_unmapped: false
   copy_trim_to_jato_trim: true
-  confidence_rules:
-    base: 0.2
-    fixed_model_bonus: 0.18
-    fixed_jato_model_bonus: 0.12
-    model_rule_bonus: 0.12
-    trim_present_bonus: 0.1
-    copy_trim_to_jato_trim_bonus: 0.09
-    parsed_price_text_bonus: 0.03
-    currency_bonus: 0.01
-    price_label_bonus: 0.02
-    trim_keyword_bonuses: []
-    price_band_bonuses:
-    - key: price_band_entry
-      label: Entry price band matched
-      max: 0
-      delta: 0.0
-    - key: price_band_mid
-      label: Mid price band matched
-      min: 0
-      max: 0
-      delta: 0.01
-    - key: price_band_high
-      label: High price band matched
-      min: 0
-      delta: 0.03
-    powertrain_keyword_bonuses: []
-    powertrain_bonuses:
-    - key: powertrain_phev
-      label: 'Powertrain matched: PHEV'
-      powertrain: PHEV
-      delta: 0.03
-    - key: powertrain_ice
-      label: 'Powertrain matched: ICE'
-      powertrain: ICE
-      delta: 0.03
-    clamp_min: 0.0
-    clamp_max: 1.0
-  structured_fields:
-    edition_rules:
-    - key: edition_special
-      label: Special Edition
-      keyword: special edition
-      special: true
-    powertrain_rules:
-    - key: powertrain_phev
-      powertrain: PHEV
-      keywords:
-      - phev
-      - plug-in hybrid
-      - plug in hybrid
-      - plugin hybrid
-      - hybryda plug-in
-    - key: powertrain_ice
-      powertrain: ICE
-      keywords:
-      - ice
-      - petrol
-      - gasoline
-      - diesel
-      - combustion
-      - benzyna
-  auto_accept_gates:
-    review_threshold: 0.95
-    semi_auto_threshold: 0.98
-    require_powertrain_match: true
-    force_review_if_powertrain_missing: true
-    force_review_if_powertrain_ambiguous: true
-    force_review_for_special_edition: true
+  match_confidence: 0.86
+  match_status: review_required
+  match_reason:
+    kind: official_price_list_html
+    source: official_porsche_pl_cennik
+    document_checked_at: '2026-07-09'
+    note: Official Porsche Poland cennik table exposes gross PLN list prices, including 23% VAT.
+  entry_patterns:
+  - pattern: '9YBAI1[\s\S]*?Cayenne\s+Coup\S*[\s\S]*?2026\s+\(T\)[\s\S]*?(?P<price>497\s*000,00)'
+    official_trim: Cayenne Coupe
+    official_powertrain: Cayenne Coupe
+    jato_powertrain: ICE
+  - pattern: '9YBDI1[\s\S]*?Cayenne\s+Coup\S*\s+Black\s+Edition[\s\S]*?2026\s+\(T\)[\s\S]*?(?P<price>557\s*000,00)'
+    official_trim: Cayenne Coupe Black Edition
+    official_powertrain: Cayenne Coupe Black Edition
+    jato_powertrain: ICE
+  - pattern: '9YBAV1[\s\S]*?Cayenne\s+E-Hybrid\s+Coup\S*[\s\S]*?2026\s+\(T\)[\s\S]*?(?P<price>522\s*000,00)'
+    official_trim: Cayenne E-Hybrid Coupe
+    official_powertrain: Cayenne E-Hybrid Coupe
+    jato_powertrain: PHEV
+  - pattern: '9YBDV1[\s\S]*?Cayenne\s+E-Hybrid\s+Coup\S*\s+Black\s+Edition[\s\S]*?2026\s+\(T\)[\s\S]*?(?P<price>578\s*000,00)'
+    official_trim: Cayenne E-Hybrid Coupe Black Edition
+    official_powertrain: Cayenne E-Hybrid Coupe Black Edition
+    jato_powertrain: PHEV
+  - pattern: '9YBBJ1[\s\S]*?Cayenne\s+S\s+Coup\S*[\s\S]*?2026\s+\(T\)[\s\S]*?(?P<price>614\s*000,00)'
+    official_trim: Cayenne S Coupe
+    official_powertrain: Cayenne S Coupe
+    jato_powertrain: ICE
+  - pattern: '9YBBN1[\s\S]*?Cayenne\s+S\s+E-Hybrid\s+Coup\S*[\s\S]*?2026\s+\(T\)[\s\S]*?(?P<price>605\s*000,00)'
+    official_trim: Cayenne S E-Hybrid Coupe
+    official_powertrain: Cayenne S E-Hybrid Coupe
+    jato_powertrain: PHEV
+  - pattern: '9YBEN1[\s\S]*?Cayenne\s+S\s+E-Hybrid\s+Coup\S*\s+Black\s+Edition[\s\S]*?2026\s+\(T\)[\s\S]*?(?P<price>659\s*000,00)'
+    official_trim: Cayenne S E-Hybrid Coupe Black Edition
+    official_powertrain: Cayenne S E-Hybrid Coupe Black Edition
+    jato_powertrain: PHEV
+  - pattern: '9YBBS1[\s\S]*?Cayenne\s+GTS\s+Coup\S*[\s\S]*?2026\s+\(T\)[\s\S]*?(?P<price>713\s*000,00)'
+    official_trim: Cayenne GTS Coupe
+    official_powertrain: Cayenne GTS Coupe
+    jato_powertrain: ICE
+  - pattern: '9YBCT1[\s\S]*?Cayenne\s+Turbo\s+E-Hybrid\s+Coup\S*[\s\S]*?2026\s+\(T\)[\s\S]*?(?P<price>932\s*000,00)'
+    official_trim: Cayenne Turbo E-Hybrid Coupe
+    official_powertrain: Cayenne Turbo E-Hybrid Coupe
+    jato_powertrain: PHEV
+  - pattern: '9YBCZ1[\s\S]*?Cayenne\s+Turbo\s+E-Hybrid\s+Coup\S*\s+z\s+pakietem\s+GT[\s\S]*?2026\s+\(T\)[\s\S]*?(?P<price>1\s*060\s*000,00)'
+    official_trim: Cayenne Turbo E-Hybrid Coupe z pakietem GT
+    official_powertrain: Cayenne Turbo E-Hybrid Coupe z pakietem GT
+    jato_powertrain: PHEV
+  - pattern: 'X1BAA1[\s\S]*?Cayenne\s+Coup\S*\s+Electric[\s\S]*?2026\s+\(T\)[\s\S]*?(?P<price>463\s*000,00)'
+    official_trim: Cayenne Coupe Electric
+    official_powertrain: Cayenne Coupe Electric
+    jato_powertrain: BEV
+  - pattern: 'X1BBB1[\s\S]*?Cayenne\s+S\s+Coup\S*\s+Electric[\s\S]*?2026\s+\(T\)[\s\S]*?(?P<price>570\s*000,00)'
+    official_trim: Cayenne S Coupe Electric
+    official_powertrain: Cayenne S Coupe Electric
+    jato_powertrain: BEV
+  - pattern: 'X1BCD1[\s\S]*?Cayenne\s+Turbo\s+Coup\S*\s+Electric[\s\S]*?2026\s+\(T\)[\s\S]*?(?P<price>740\s*000,00)'
+    official_trim: Cayenne Turbo Coupe Electric
+    official_powertrain: Cayenne Turbo Coupe Electric
+    jato_powertrain: BEV
 schedule:
   frequency: manual_only
   run_window_start: 00:00
@@ -101,7 +82,9 @@ schedule:
 notes: Draft scaffold generated from country×model top30 backlog. Replace source_url,
   profile.url, selectors, currency, price label, and the single-model placeholders
   before promoting to 07_ScrapingToolkit/sources. [URL filled from PORSCHE template]
-  [CSS selectors applied from brand probe]
+  [CSS selectors applied from brand probe] [Repaired to Porsche Poland official
+  cennik page and deterministic HTTP text extraction from the Cena katalogowa
+  PLN table]
 bootstrap_meta:
   country_model_rank: 28
   suggested_scope_kind: single_model
