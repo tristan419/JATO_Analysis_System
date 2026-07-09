@@ -1,16 +1,24 @@
 source_code: mg_zs_it_draft_scrapling
 country: 意大利
 brand: MG
-source_url: https://www.mgmotor.it/modelli/zs
+source_url: https://www.mgmotor.it/campaign/nuova-mg-zs-benzina-standard
 source_type: manufacturer_official
 price_semantics: base_msrp
 extractor_type: scrapling
 profile:
-  url: https://www.mgmotor.it/modelli/zs
+  url: https://www.mgmotor.it/campaign/nuova-mg-zs-benzina-standard
   tier: stealth
   headless: true
   network_idle: true
   impersonate: chrome
+  text_regex:
+    source_selector: body
+    include_element_html: true
+    entry_patterns:
+    - pattern: 'NUOVA\s+MG\s+ZS\s+Benzina\s+Standard.*?Prezzo\s+di\s+listino:\s*€\s*(?P<price>\d{1,3}\.\d{3})'
+      official_trim: Benzina Standard
+      official_powertrain: 1.5 benzina
+      price_label: Prezzo di listino
   css:
     vehicle_container: body
     model: h1, h2
@@ -118,7 +126,9 @@ schedule:
 notes: Draft scaffold generated from country×model top30 backlog. Replace source_url,
   profile.url, selectors, currency, price label, and the single-model placeholders
   before promoting to 07_ScrapingToolkit/sources. [URL filled from MG template] [URL
-  language corrected] [CSS selectors applied from brand probe]
+  language corrected] [CSS selectors applied from brand probe] [Updated to official
+  MG Italy ZS Benzina Standard campaign page; extracts Prezzo di listino and avoids
+  monthly payment/promo price fields]
 bootstrap_meta:
   country_model_rank: 4
   suggested_scope_kind: single_model
