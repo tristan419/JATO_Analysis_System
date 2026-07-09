@@ -1,135 +1,54 @@
 source_code: hyundai_kona_gr_draft_scrapling
 country: 希腊
 brand: HYUNDAI
-source_url: https://www.hyundai.gr/neo-hyundai-kona/
-source_type: manufacturer_official
+source_url: https://www.hyundai.gr/wp-content/uploads/2026/06/timokatalogos-lianikis-hyundai-23.06.2026.-pdf.pdf
+source_type: official_price_list
 price_semantics: base_msrp
-extractor_type: scrapling
+extractor_type: pdf_text
 profile:
-  url: https://www.hyundai.gr/neo-hyundai-kona/
-  headless: true
+  url: https://www.hyundai.gr/wp-content/uploads/2026/06/timokatalogos-lianikis-hyundai-23.06.2026.-pdf.pdf
+  prefer_curl_download: true
+  browser_download_fallback: true
+  timeout_seconds: 60
+  retry_attempts: 1
+  retry_delay_seconds: 1
   default_currency: EUR
   default_tax_included: true
-  default_price_label: MSRP
+  default_price_label: Προτεινόμενη τιμή πώλησης με ΤΤ και ΦΠΑ
   fixed_model: KONA
   fixed_jato_model: KONA
-  fixed_jato_powertrain: null
-  model_rules: []
-  skip_if_model_unmapped: false
   copy_trim_to_jato_trim: true
-  confidence_rules:
-    base: 0.2
-    fixed_model_bonus: 0.18
-    fixed_jato_model_bonus: 0.12
-    model_rule_bonus: 0.12
-    trim_present_bonus: 0.1
-    copy_trim_to_jato_trim_bonus: 0.09
-    parsed_price_text_bonus: 0.03
-    currency_bonus: 0.01
-    price_label_bonus: 0.02
-    trim_keyword_bonuses: []
-    price_band_bonuses:
-    - key: price_band_entry
-      label: Entry price band matched
-      max: 0
-      delta: 0.0
-    - key: price_band_mid
-      label: Mid price band matched
-      min: 0
-      max: 0
-      delta: 0.01
-    - key: price_band_high
-      label: High price band matched
-      min: 0
-      delta: 0.03
-    powertrain_keyword_bonuses: []
-    powertrain_bonuses:
-    - key: powertrain_bev
-      label: 'Powertrain matched: BEV'
-      powertrain: BEV
-      delta: 0.03
-    - key: powertrain_hev
-      label: 'Powertrain matched: HEV'
-      powertrain: HEV
-      delta: 0.03
-    - key: powertrain_mhev
-      label: 'Powertrain matched: MHEV'
-      powertrain: MHEV
-      delta: 0.03
-    - key: powertrain_ice
-      label: 'Powertrain matched: ICE'
-      powertrain: ICE
-      delta: 0.03
-    clamp_min: 0.0
-    clamp_max: 1.0
-  structured_fields:
-    edition_rules:
-    - key: edition_special
-      label: Special Edition
-      keyword: special edition
-      special: true
-    powertrain_rules:
-    - key: powertrain_bev
-      powertrain: BEV
-      keywords:
-      - bev
-      - ev
-      - electric
-      - battery electric
-      - fully electric
-      - electric vehicle
-      - ilektriko
-    - key: powertrain_hev
-      powertrain: HEV
-      keywords:
-      - hev
-      - full hybrid
-      - self-charging hybrid
-      - self charging hybrid
-      - hybrid
-      - yvridiko
-    - key: powertrain_mhev
-      powertrain: MHEV
-      keywords:
-      - mhev
-      - mild hybrid
-      - mild-hybrid
-      - 48V
-    - key: powertrain_ice
-      powertrain: ICE
-      keywords:
-      - ice
-      - petrol
-      - gasoline
-      - diesel
-      - combustion
-      - venzini
-      - petreleo
-  auto_accept_gates:
-    review_threshold: 0.95
-    semi_auto_threshold: 0.98
-    require_powertrain_match: true
-    force_review_if_powertrain_missing: true
-    force_review_if_powertrain_ambiguous: true
-    force_review_for_special_edition: true
-  css:
-    vehicle_container: body
-    model: h2, h3
-    trim: h3
-    price: '[class*="price"]'
-  tier: stealth
-  network_idle: true
-  impersonate: chrome
+  match_confidence: 0.9
+  match_status: review_required
+  match_reason:
+    kind: official_pdf_price_list
+    source: hyundai_gr_retail_price_list_pdf
+    note: Official Hyundai Greece retail price-list PDF valid from 2026-06-23
+      and linked from the official site navigation as Τιμοκατάλογος Hyundai.
+      The table exposes recommended retail price with TT and VAT, retail
+      discount, discounted retail price, and color charges; regex captures only
+      the first recommended retail price column for KONA MY26 rows and excludes
+      MY25 and MY27 blocks.
+  entry_patterns:
+  - pattern: 'H522(?:30|32|34|36|38|40|42)\s+KONA\s+MY26\s+(?P<powertrain>1\.[06]T\s+\d+ps(?:\s+7DCT)?(?:\s+4X4)?)\s+(?P<trim>PREMIUM|DISTINCTIVE|N\s+Line)\s+(?P<price>\d{2}\.\d{3})\s*€\s+0\s*€'
+    jato_powertrain: ICE
+    price_label: Προτεινόμενη τιμή πώλησης με ΤΤ και ΦΠΑ
+  - pattern: 'H530(?:70|75|80)\s+KONA\s+Hybrid\s+MY26\s+(?P<powertrain>1\.6\s+138ps\s+6-DCT)\s+(?P<trim>PREMIUM|DISTINCTIVE|N\s+Line)\s+(?P<price>\d{2}\.\d{3})\s*€\s+0\s*€'
+    jato_powertrain: HEV
+    price_label: Προτεινόμενη τιμή πώλησης με ΤΤ και ΦΠΑ
+  - pattern: 'H514(?:52|54|58)\s+KONA\s+Electric\s+MY26\s+(?P<powertrain>(?:48\.6|64\.8)\s+kWh\s+\d+ps)\s+(?P<trim>DISTINCTIVE|N\s+LINE)\s+(?P<price>\d{2}\.\d{3})\s*€\s+0\s*€'
+    jato_powertrain: BEV
+    price_label: Προτεινόμενη τιμή πώλησης με ΤΤ και ΦΠΑ
 schedule:
   frequency: manual_only
   run_window_start: 00:00
   run_window_end: 05:00
   preferred_weekday: monday
-notes: Official Hyundai Greece Kona model page filled from manufacturer site research.
-  Selectors remain draft-level scrapling defaults until extraction is tuned. [CSS
-  selectors applied from brand probe] [Switched to playwright_card_flow with kia_trim_overview_playwright.yaml]
-  [Reverted to scrapling — playwright preset needs per-brand tuning] [URL filled
-  from HYUNDAI official site research]
+notes: Official Hyundai Greece retail price-list PDF. Page 2/3 was visually
+  checked after rendering; the extractor captures the recommended retail price
+  with TT and VAT for KONA MY26 ICE, Hybrid, and Electric rows, not discount,
+  discounted retail, special color, metallic color, matte color, or separate
+  PDI/transport charges.
 bootstrap_meta:
   country_model_rank: 14
   suggested_scope_kind: single_model
