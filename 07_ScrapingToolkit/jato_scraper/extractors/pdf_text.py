@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from io import BytesIO
 import logging
+from pathlib import Path
 import re
 import subprocess
 import tempfile
@@ -15,9 +16,23 @@ from pypdf import PdfReader
 
 from jato_scraper.base import BaseExtractor, ExtractorConfig, RawObservation
 
+try:
+    from playwright.sync_api import Error as PlaywrightError
+    from playwright.sync_api import TimeoutError as PlaywrightTimeoutError
+    from playwright.sync_api import sync_playwright
+except ImportError:  # pragma: no cover - exercised only when dependency missing
+    PlaywrightError = Exception
+    PlaywrightTimeoutError = TimeoutError
+    sync_playwright = None
+
 log = logging.getLogger(__name__)
 DEFAULT_TIMEOUT = 60
 DEFAULT_CURL_FALLBACK_TIMEOUT = 30
+DEFAULT_BROWSER_USER_AGENT = (
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+    "AppleWebKit/537.36 (KHTML, like Gecko) "
+    "Chrome/126.0.0.0 Safari/537.36"
+)
 _PRICE_RE = re.compile(r"\d[\d\s.,'\u2019]*\d|\d")
 
 
@@ -44,6 +59,7 @@ class PdfTextProfile:
     retry_attempts: int = 0
     retry_delay_seconds: float = 0.0
     prefer_curl_download: bool = False
+    curl_download_fallback: bool = False
     browser_download_fallback: bool = False
     default_currency: str = "EUR"
     default_tax_included: bool = True
@@ -180,6 +196,14 @@ class PdfTextExtractor(BaseExtractor):
                     time.sleep(float(self.profile.retry_delay_seconds))
 
         if self.profile.browser_download_fallback:
+            blob = self._fetch_pdf_bytes_with_browser(
+                max(timeout, DEFAULT_CURL_FALLBACK_TIMEOUT),
+                url,
+            )
+            if blob:
+                return blob
+
+        if self.profile.curl_download_fallback or self.profile.browser_download_fallback:
             blob = self._fetch_pdf_bytes_with_curl(
                 max(timeout, DEFAULT_CURL_FALLBACK_TIMEOUT),
                 url,
@@ -246,6 +270,82 @@ class PdfTextExtractor(BaseExtractor):
         if not blob.startswith(b"%PDF"):
             log.error(
                 "PDF curl fallback returned non-PDF content for %s",
+                self.config.source_code,
+            )
+            return None
+        return blob
+
+    def _browser_user_agent(self) -> str:
+        for key, value in self.profile.headers.items():
+            if str(key).strip().lower() == "user-agent" and str(value).strip():
+                return str(value).strip()
+        return DEFAULT_BROWSER_USER_AGENT
+
+    def _browser_extra_headers(self) -> dict[str, str]:
+        return {
+            str(key).strip(): str(value)
+            for key, value in self.profile.headers.items()
+            if str(key).strip() and str(key).strip().lower() != "user-agent"
+        }
+
+    def _fetch_pdf_bytes_with_browser(
+        self,
+        timeout: int,
+        url: str | None = None,
+    ) -> bytes | None:
+        if sync_playwright is None:
+            log.error(
+                "PDF browser fallback unavailable for %s: playwright is not installed",
+                self.config.source_code,
+            )
+            return None
+
+        fetch_url = str(url or self.profile.url)
+        timeout_ms = max(1, int(timeout)) * 1000
+        browser = None
+        try:
+            with sync_playwright() as playwright:
+                browser = playwright.chromium.launch(headless=True)
+                context = browser.new_context(
+                    accept_downloads=True,
+                    user_agent=self._browser_user_agent(),
+                    extra_http_headers=self._browser_extra_headers(),
+                )
+                page = context.new_page()
+                page.set_default_timeout(timeout_ms)
+                try:
+                    with page.expect_download(timeout=timeout_ms) as download_info:
+                        try:
+                            page.goto(
+                                fetch_url,
+                                wait_until="commit",
+                                timeout=timeout_ms,
+                            )
+                        except PlaywrightError as exc:
+                            if "Download is starting" not in str(exc):
+                                raise
+                    download = download_info.value
+                    path = download.path()
+                    blob = Path(path).read_bytes()
+                finally:
+                    context.close()
+                browser.close()
+                browser = None
+        except (OSError, PlaywrightError, PlaywrightTimeoutError) as exc:
+            log.error(
+                "PDF browser fallback failed for %s at %s: %s",
+                self.config.source_code,
+                fetch_url,
+                exc,
+            )
+            return None
+        finally:
+            if browser is not None:
+                browser.close()
+
+        if not blob.startswith(b"%PDF"):
+            log.error(
+                "PDF browser fallback returned non-PDF content for %s",
                 self.config.source_code,
             )
             return None

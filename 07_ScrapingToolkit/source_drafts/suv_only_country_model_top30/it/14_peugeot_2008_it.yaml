@@ -8,6 +8,7 @@ extractor_type: pdf_text
 profile:
   url: https://www.peugeot.it/content/dam/peugeot/italy/b2c/our-range/info-and-price-pdf/2008.pdf
   prefer_curl_download: true
+  browser_download_fallback: true
   timeout_seconds: 60
   default_currency: EUR
   default_tax_included: true
