@@ -1,136 +1,92 @@
 source_code: peugeot_3008_pl_draft_scrapling
 country: 波兰
 brand: PEUGEOT
-source_url: https://www.peugeot.pl/modele/3008.html
-source_type: manufacturer_official
+source_url: https://www.peugeot.pl/content/dam/peugeot/poland/cenniki/7-26/Cennik_Klienta_Peugeot_3008_D22026-07-01.pdf
+source_type: official_price_list
 price_semantics: base_msrp
-extractor_type: scrapling
+extractor_type: pdf_text
 profile:
-  url: https://www.peugeot.pl/modele/3008.html
-  tier: stealth
-  headless: true
-  network_idle: true
-  impersonate: chrome
-  json_script_selector: script[type='application/ld+json']
-  css:
-    vehicle_container: body
-    model: h2
-    trim: h3
-    price: '[class*="price"]'
+  url: https://www.peugeot.pl/content/dam/peugeot/poland/cenniki/7-26/Cennik_Klienta_Peugeot_3008_D22026-07-01.pdf
+  prefer_curl_download: true
+  browser_download_fallback: true
+  timeout_seconds: 90
+  retry_attempts: 1
+  retry_delay_seconds: 1
   default_currency: PLN
   default_tax_included: true
-  default_price_label: MSRP
+  default_price_label: Rekomendowane ceny detaliczne brutto
   fixed_model: '3008'
   fixed_jato_model: '3008'
-  fixed_jato_powertrain: null
-  model_rules: []
-  skip_if_model_unmapped: false
   copy_trim_to_jato_trim: true
-  confidence_rules:
-    base: 0.2
-    fixed_model_bonus: 0.18
-    fixed_jato_model_bonus: 0.12
-    model_rule_bonus: 0.12
-    trim_present_bonus: 0.1
-    copy_trim_to_jato_trim_bonus: 0.09
-    parsed_price_text_bonus: 0.03
-    currency_bonus: 0.01
-    price_label_bonus: 0.02
-    trim_keyword_bonuses: []
-    price_band_bonuses:
-    - key: price_band_entry
-      label: Entry price band matched
-      max: 0
-      delta: 0.0
-    - key: price_band_mid
-      label: Mid price band matched
-      min: 0
-      max: 0
-      delta: 0.01
-    - key: price_band_high
-      label: High price band matched
-      min: 0
-      delta: 0.03
-    powertrain_keyword_bonuses: []
-    powertrain_bonuses:
-    - key: powertrain_bev
-      label: 'Powertrain matched: BEV'
-      powertrain: BEV
-      delta: 0.03
-    - key: powertrain_phev
-      label: 'Powertrain matched: PHEV'
-      powertrain: PHEV
-      delta: 0.03
-    - key: powertrain_mhev
-      label: 'Powertrain matched: MHEV'
-      powertrain: MHEV
-      delta: 0.03
-    - key: powertrain_ice
-      label: 'Powertrain matched: ICE'
-      powertrain: ICE
-      delta: 0.03
-    clamp_min: 0.0
-    clamp_max: 1.0
-  structured_fields:
-    edition_rules:
-    - key: edition_special
-      label: Special Edition
-      keyword: special edition
-      special: true
-    powertrain_rules:
-    - key: powertrain_bev
-      powertrain: BEV
-      keywords:
-      - bev
-      - ev
-      - electric
-      - battery electric
-      - fully electric
-      - electric vehicle
-      - elektryczny
-      - w pelni elektryczny
-      - samochod elektryczny
-    - key: powertrain_phev
-      powertrain: PHEV
-      keywords:
-      - phev
-      - plug-in hybrid
-      - plug in hybrid
-      - plugin hybrid
-      - hybryda plug-in
-    - key: powertrain_mhev
-      powertrain: MHEV
-      keywords:
-      - mhev
-      - mild hybrid
-      - mild-hybrid
-      - 48V
-      - miekka hybryda
-    - key: powertrain_ice
-      powertrain: ICE
-      keywords:
-      - ice
-      - petrol
-      - gasoline
-      - diesel
-      - combustion
-      - benzyna
-  auto_accept_gates:
-    review_threshold: 0.95
-    semi_auto_threshold: 0.98
-    require_powertrain_match: true
-    force_review_if_powertrain_missing: true
-    force_review_if_powertrain_ambiguous: true
-    force_review_for_special_edition: true
+  match_confidence: 0.86
+  match_status: review_required
+  match_reason:
+    kind: official_pdf_price_list
+    source: peugeot_pl_july_2026_3008_pricelist_pdf
+    document_checked_at: '2026-07-09'
+    document_valid_from: '2026-07-01'
+    note: Official Peugeot Poland 3008 customer price-list PDF; extracts recommended gross retail prices from the CENY page.
+  entry_patterns:
+  - pattern: 'HYBRID\s+\(g/km\)\(1\)\s+(?P<price>156\s*450\s*zł)'
+    official_trim: Allure Hybrid 145 e-DCS6
+    official_powertrain: Hybrid 145 e-DCS6
+    jato_powertrain: MHEV
+  - pattern: 'HYBRID\s+\(g/km\)\(1\)\s+156\s*450\s*zł\s+(?P<price>165\s*450\s*zł)'
+    official_trim: Business Hybrid 145 e-DCS6
+    official_powertrain: Hybrid 145 e-DCS6
+    jato_powertrain: MHEV
+  - pattern: 'HYBRID\s+\(g/km\)\(1\)\s+156\s*450\s*zł\s+165\s*450\s*zł\s+(?P<price>170\s*800\s*zł)'
+    official_trim: GT Hybrid 145 e-DCS6
+    official_powertrain: Hybrid 145 e-DCS6
+    jato_powertrain: MHEV
+  - pattern: 'HYBRID\s+\(g/km\)\(1\)\s+156\s*450\s*zł\s+165\s*450\s*zł\s+170\s*800\s*zł\s+(?P<price>184\s*750\s*zł)'
+    official_trim: GT Exclusive Hybrid 145 e-DCS6
+    official_powertrain: Hybrid 145 e-DCS6
+    jato_powertrain: MHEV
+  - pattern: 'PLUG-IN\s+HYBRID\s+(?P<price>191\s*100\s*zł)'
+    official_trim: Allure Plug-in Hybrid 225 e-DCS7
+    official_powertrain: Plug-in Hybrid 225 e-DCS7
+    jato_powertrain: PHEV
+  - pattern: 'PLUG-IN\s+HYBRID\s+191\s*100\s*zł\s+(?P<price>200\s*100\s*zł)'
+    official_trim: Business Plug-in Hybrid 225 e-DCS7
+    official_powertrain: Plug-in Hybrid 225 e-DCS7
+    jato_powertrain: PHEV
+  - pattern: 'PLUG-IN\s+HYBRID\s+191\s*100\s*zł\s+200\s*100\s*zł\s+(?P<price>205\s*700\s*zł)'
+    official_trim: GT Plug-in Hybrid 225 e-DCS7
+    official_powertrain: Plug-in Hybrid 225 e-DCS7
+    jato_powertrain: PHEV
+  - pattern: 'PLUG-IN\s+HYBRID\s+191\s*100\s*zł\s+200\s*100\s*zł\s+205\s*700\s*zł\s+(?P<price>221\s*650\s*zł)'
+    official_trim: GT Exclusive Plug-in Hybrid 225 e-DCS7
+    official_powertrain: Plug-in Hybrid 225 e-DCS7
+    jato_powertrain: PHEV
+  - pattern: 'Silnik\s+elektryczny\s+210\s+Akumulator\s+73\s+kWh\s+(?P<price>203\s*500\s*zł)'
+    official_trim: Allure Electric 210 73 kWh Standard Range
+    official_powertrain: Electric 210 Akumulator 73 kWh Standard Range
+    jato_powertrain: BEV
+  - pattern: 'Silnik\s+elektryczny\s+210\s+Akumulator\s+73\s+kWh\s+203\s*500\s*zł\s+(?P<price>212\s*500\s*zł)'
+    official_trim: Business Electric 210 73 kWh Standard Range
+    official_powertrain: Electric 210 Akumulator 73 kWh Standard Range
+    jato_powertrain: BEV
+  - pattern: 'Silnik\s+elektryczny\s+210\s+Akumulator\s+73\s+kWh\s+203\s*500\s*zł\s+212\s*500\s*zł\s+(?P<price>218\s*100\s*zł)'
+    official_trim: GT Electric 210 73 kWh Standard Range
+    official_powertrain: Electric 210 Akumulator 73 kWh Standard Range
+    jato_powertrain: BEV
+  - pattern: 'Silnik\s+elektryczny\s+210\s+Akumulator\s+73\s+kWh\s+203\s*500\s*zł\s+212\s*500\s*zł\s+218\s*100\s*zł\s+(?P<price>232\s*950\s*zł)'
+    official_trim: GT Exclusive Electric 210 73 kWh Standard Range
+    official_powertrain: Electric 210 Akumulator 73 kWh Standard Range
+    jato_powertrain: BEV
+  - pattern: 'Silnik\s+elektryczny\s+325\s+Akumulator\s+73\s+kWh\s+(?P<price>243\s*950\s*zł)'
+    official_trim: GT Exclusive Electric 325 73 kWh Dual Motor
+    official_powertrain: Electric 325 Akumulator 73 kWh Dual Motor
+    jato_powertrain: BEV
 schedule:
   frequency: manual_only
   run_window_start: 00:00
   run_window_end: 05:00
   preferred_weekday: monday
-notes: Draft scaffold generated from country×model top30 backlog. Replace source_url,
-  profile.url, selectors, currency, price label, and the single-model placeholders
-  before promoting to 07_ScrapingToolkit/sources. [URL filled from PEUGEOT template]
-  [URL language corrected] [CSS selectors applied from brand probe]
+notes: Switched from the Peugeot Poland showroom page to the official July 2026
+  3008 customer price-list PDF. The PDF CENY page exposes recommended gross
+  retail prices by trim and powertrain, avoiding dynamic showroom placeholders.
 bootstrap_meta:
   country_model_rank: 6
   suggested_scope_kind: single_model
