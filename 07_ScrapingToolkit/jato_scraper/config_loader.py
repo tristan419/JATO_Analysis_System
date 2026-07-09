@@ -558,12 +558,8 @@ def _build_pdf_text_profile(profile: dict[str, Any]) -> PdfTextProfile:
     patterns_raw = profile.get("entry_patterns", [])
     if not isinstance(patterns_raw, list):
         raise ValueError("pdf_text entry_patterns must be a list")
-    browser_download_fallback = bool(
-        profile.get(
-            "browser_download_fallback",
-            profile.get("curl_download_fallback", False),
-        )
-    )
+    browser_download_fallback = bool(profile.get("browser_download_fallback", False))
+    curl_download_fallback = bool(profile.get("curl_download_fallback", False))
     prefer_curl_download = bool(
         profile.get(
             "prefer_curl_download",
@@ -620,6 +616,7 @@ def _build_pdf_text_profile(profile: dict[str, Any]) -> PdfTextProfile:
         retry_attempts=int(profile.get("retry_attempts", 0)),
         retry_delay_seconds=float(profile.get("retry_delay_seconds", 0.0) or 0.0),
         prefer_curl_download=prefer_curl_download,
+        curl_download_fallback=curl_download_fallback,
         browser_download_fallback=browser_download_fallback,
         default_currency=profile.get("default_currency", "EUR"),
         default_tax_included=bool(profile.get("default_tax_included", True)),
