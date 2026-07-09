@@ -7,21 +7,25 @@ price_semantics: base_msrp
 extractor_type: scrapling
 profile:
   url: https://www.suzuki.sk/automobily/cennik
-  tier: stealth
+  tier: http
   headless: true
-  network_idle: true
+  network_idle: false
+  load_dom: false
+  timeout_ms: 20000
   impersonate: chrome
-  css:
-    vehicle_container: body
-    model: h1, h2
-    trim: h3
-    price: '[class*="price"]'
+  text_regex:
+    source_selector: body
+    include_element_html: true
+    entry_patterns:
+    - pattern: '<a href="/automobily/modely/nova-vitara-hybrid#na-stiahnutie">[\s\S]*?<span>\s*(?P<trim>1,4 l BOOSTERJET MILD HYBRID COMFORT 2WD)\s*</span>[\s\S]*?<div class="e-model-price__discount">\s*AKCIA\s*18\s*990\s*€\s*</div>[\s\S]*?<div class="e-model-price__price">\s*(?P<price>24\s*540)\s*€\s*</div>'
+      official_powertrain: 1.4 BOOSTERJET MILD HYBRID
+      price_label: List price before Suzuki AKCIA discount
   default_currency: EUR
   default_tax_included: true
   default_price_label: MSRP
   fixed_model: VITARA
   fixed_jato_model: VITARA
-  fixed_jato_powertrain: null
+  fixed_jato_powertrain: MHEV
   model_rules: []
   skip_if_model_unmapped: false
   copy_trim_to_jato_trim: true
@@ -73,6 +77,14 @@ profile:
       keyword: special edition
       special: true
     powertrain_rules:
+    - key: powertrain_mhev
+      powertrain: MHEV
+      keywords:
+      - mhev
+      - mild hybrid
+      - mild-hybrid
+      - boosterjet mild hybrid
+      - 48V
     - key: powertrain_hev
       powertrain: HEV
       keywords:
@@ -82,13 +94,6 @@ profile:
       - self charging hybrid
       - hybrid
       - hybridny
-    - key: powertrain_mhev
-      powertrain: MHEV
-      keywords:
-      - mhev
-      - mild hybrid
-      - mild-hybrid
-      - 48V
     - key: powertrain_ice
       powertrain: ICE
       keywords:
@@ -114,7 +119,8 @@ schedule:
 notes: Official Suzuki Slovakia automobile price-list page filled from manufacturer
   site research. Selectors remain draft-level scrapling defaults until extraction
   is tuned. [CSS selectors applied from brand probe] [URL filled from SUZUKI official
-  site research]
+  site research] [Switched to static official cennik text_regex; anchors the
+  Vitara entry trim and captures the non-AKCIA list price]
 bootstrap_meta:
   country_model_rank: 15
   suggested_scope_kind: single_model
