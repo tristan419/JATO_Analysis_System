@@ -1,76 +1,43 @@
 source_code: volvo_xc40_pl_draft_scrapling
 country: 波兰
 brand: VOLVO
-source_url: https://www.volvocars.com/pl/samochody/xc40
+source_url: https://www.volvocars.com/pl/cars/xc40/specifications/
 source_type: manufacturer_official
 price_semantics: base_msrp
 extractor_type: scrapling
 profile:
-  url: https://www.volvocars.com/pl/samochody/xc40
+  url: https://www.volvocars.com/pl/cars/xc40/specifications/
   tier: stealth
   headless: true
-  network_idle: true
+  network_idle: false
+  load_dom: false
+  timeout_ms: 45000
+  wait_ms: 1000
+  retries: 1
+  retry_delay_seconds: 1
   impersonate: chrome
-  json_script_selector: script[type='application/ld+json']
-  css:
-    vehicle_container: body
-    model: h1
-    trim: '[class*="variant"], [class*="trim"], h2'
-    price: '[class*="price"], [data-automation*="price"]'
+  text_regex:
+    source_selector: body
+    include_element_html: true
+    entry_patterns:
+    - pattern: '<h3[^>]*>(?P<trim>[^<]+Mild-Hybrid)</h3>[\s\S]{0,220}?<p[^>]*>od\s*(?P<price>[0-9\s]+)\s*zł</p>'
+      price_label: Cena od
   default_currency: PLN
   default_tax_included: true
-  default_price_label: MSRP
+  default_price_label: Cena od
   fixed_model: XC40
   fixed_jato_model: XC40
   fixed_jato_powertrain: null
   model_rules: []
   skip_if_model_unmapped: false
   copy_trim_to_jato_trim: true
-  confidence_rules:
-    base: 0.2
-    fixed_model_bonus: 0.18
-    fixed_jato_model_bonus: 0.12
-    model_rule_bonus: 0.12
-    trim_present_bonus: 0.1
-    copy_trim_to_jato_trim_bonus: 0.09
-    parsed_price_text_bonus: 0.03
-    currency_bonus: 0.01
-    price_label_bonus: 0.02
-    trim_keyword_bonuses: []
-    price_band_bonuses:
-    - key: price_band_entry
-      label: Entry price band matched
-      max: 0
-      delta: 0.0
-    - key: price_band_mid
-      label: Mid price band matched
-      min: 0
-      max: 0
-      delta: 0.01
-    - key: price_band_high
-      label: High price band matched
-      min: 0
-      delta: 0.03
-    powertrain_keyword_bonuses: []
-    powertrain_bonuses:
-    - key: powertrain_bev
-      label: 'Powertrain matched: BEV'
-      powertrain: BEV
-      delta: 0.03
-    - key: powertrain_phev
-      label: 'Powertrain matched: PHEV'
-      powertrain: PHEV
-      delta: 0.03
-    - key: powertrain_mhev
-      label: 'Powertrain matched: MHEV'
-      powertrain: MHEV
-      delta: 0.03
-    - key: powertrain_ice
-      label: 'Powertrain matched: ICE'
-      powertrain: ICE
-      delta: 0.03
-    clamp_min: 0.0
-    clamp_max: 1.0
+  match_confidence: 0.86
+  match_status: review_required
+  match_reason:
+    kind: official_html_specs_powertrain_price
+    source: volvo_pl_xc40_specifications_page
+    document_checked_at: '2026-07-10'
+    note: Official Volvo Poland specifications page exposes B3/B4 Mild-Hybrid powertrain columns with Cena od values. Regex targets those columns and avoids lease/monthly offerSelector values.
   structured_fields:
     edition_rules:
     - key: edition_special
@@ -130,7 +97,9 @@ schedule:
 notes: Draft scaffold generated from country×model top30 backlog. Replace source_url,
   profile.url, selectors, currency, price label, and the single-model placeholders
   before promoting to 07_ScrapingToolkit/sources. [URL filled from VOLVO template]
-  [URL language corrected] [CSS selectors applied from brand probe]
+  [URL language corrected] [CSS selectors applied from brand probe] [Switched to
+  official specifications page text_regex; the previous model URL was blocked or
+  unavailable locally and did not expose stable price observations.]
 bootstrap_meta:
   country_model_rank: 22
   suggested_scope_kind: single_model

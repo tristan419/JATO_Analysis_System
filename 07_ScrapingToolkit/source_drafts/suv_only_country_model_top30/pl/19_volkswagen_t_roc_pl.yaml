@@ -3,15 +3,39 @@ country: 波兰
 brand: VOLKSWAGEN
 source_url: https://www.volkswagen.pl/pl/modele/t-roc.html
 source_type: manufacturer_official
-price_semantics: base_msrp
-extractor_type: playwright
-profile_preset: ../_shared/presets/volkswagen_configurator_trim_overview_playwright.yaml
+price_semantics: as_configured
+extractor_type: scrapling
 profile:
   url: https://www.volkswagen.pl/pl/modele/t-roc.html
+  tier: http
+  headless: true
+  network_idle: false
+  load_dom: false
+  timeout_ms: 45000
+  wait_ms: 1000
+  retries: 1
+  retry_delay_seconds: 1
+  impersonate: chrome
+  text_regex:
+    source_selector: body
+    include_element_html: true
+    entry_patterns:
+    - pattern: 'data-testid="car-technical-data-section-v2"[\s\S]{0,1200}?Cena specjalna[\s\S]{0,260}?od\s*(?P<price>\d{2,3}\s*\d{3})\s*zł'
+      official_trim: Model-level entry special
+      official_powertrain: MIXED
+      price_label: Cena specjalna
   default_currency: PLN
   default_tax_included: true
   fixed_model: T-ROC
   fixed_jato_model: T-ROC
+  copy_trim_to_jato_trim: true
+  match_confidence: 0.82
+  match_status: review_required
+  match_reason:
+    kind: official_html_model_entry_price
+    source: volkswagen_pl_t_roc_model_page
+    document_checked_at: '2026-07-10'
+    note: Official Volkswagen Poland model page exposes a model-level Cena specjalna from-price in the car-technical-data-section-v2 HTML block. This is marked as_configured/review_required because the label is promotional rather than a clean catalog MSRP.
   structured_fields:
     powertrain_rules:
     - key: powertrain_mhev
@@ -42,7 +66,9 @@ notes: The raw HTML exposes a stable `car-technical-data-section-v2` block where
   technical-data list. This draft intentionally extracts the total campaign price
   and excludes monthly-payment copy, but still needs a semantic review before promotion
   because the page label is promotional rather than explicit catalog MSRP. [Switched
-  to playwright_card_flow with volkswagen_configurator_trim_overview_playwright.yaml]
+  from Playwright trim-card flow to Scrapling text_regex over the official HTML block
+  because the static page exposes the needed model-level price and Playwright was
+  timing out waiting for configurator trim cards.]
 bootstrap_meta:
   country_model_rank: 19
   suggested_scope_kind: single_model
