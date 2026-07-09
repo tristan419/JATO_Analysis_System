@@ -1,17 +1,38 @@
 source_code: nissan_juke_it_draft_scrapling
 country: 意大利
 brand: NISSAN
-source_url: https://www.nissan.it/veicoli/juke.html
+source_url: https://www.nissan.it/veicoli/veicoli-nuovi/juke.html
 source_type: manufacturer_official
 price_semantics: base_msrp
 extractor_type: scrapling
 profile:
-  url: https://www.nissan.it/veicoli/juke.html
+  url: https://www.nissan.it/veicoli/veicoli-nuovi/juke.html
   tier: stealth
   headless: true
-  network_idle: true
+  network_idle: false
+  timeout_ms: 45000
+  wait_ms: 7000
   impersonate: chrome
-  json_script_selector: script[type='application/ld+json']
+  text_regex:
+    source_selector: body
+    include_element_html: true
+    entry_patterns:
+    - pattern: 'Pulse\s+Prezzo\s+promo\s+in\s+caso\s+di\s+permuta\s+o\s+rottamazione\s+€\s*\d{1,3}\.\d{3}\*?\s+Listino\s+a\s+partire\s+da:\s*(?P<price>\d{1,3}\.\d{3})\s*€'
+      official_trim: Pulse
+      official_powertrain: Hybrid/Benzina
+      price_label: Listino a partire da
+    - pattern: 'N-Design\s+Prezzo\s+promo\s+in\s+caso\s+di\s+permuta\s+o\s+rottamazione\s+€\s*\d{1,3}\.\d{3}\*?\s+Listino\s+a\s+partire\s+da:\s*(?P<price>\d{1,3}\.\d{3})\s*€'
+      official_trim: N-Design
+      official_powertrain: Hybrid/Benzina
+      price_label: Listino a partire da
+    - pattern: 'N-Connecta\s+Prezzo\s+promo\s+in\s+caso\s+di\s+permuta\s+o\s+rottamazione\s+€\s*\d{1,3}\.\d{3}\*?\s+Listino\s+a\s+partire\s+da:\s*(?P<price>\d{1,3}\.\d{3})\s*€'
+      official_trim: N-Connecta
+      official_powertrain: Hybrid/Benzina
+      price_label: Listino a partire da
+    - pattern: 'Acenta\s+Prezzo\s+promo\s+in\s+caso\s+di\s+permuta\s+o\s+rottamazione\s+€\s*\d{1,3}\.\d{3}\*?\s+Listino\s+a\s+partire\s+da:\s*(?P<price>\d{1,3}\.\d{3})\s*€'
+      official_trim: Acenta
+      official_powertrain: Hybrid/Benzina
+      price_label: Listino a partire da
   css:
     vehicle_container: body
     model: h1, h2
@@ -114,7 +135,9 @@ schedule:
 notes: Draft scaffold generated from country×model top30 backlog. Replace source_url,
   profile.url, selectors, currency, price label, and the single-model placeholders
   before promoting to 07_ScrapingToolkit/sources. [URL filled from NISSAN template]
-  [URL language corrected] [CSS selectors applied from brand probe]
+  [URL language corrected] [CSS selectors applied from brand probe] [Updated to
+  current Nissan Italy Juke official page and text_regex extraction of "Listino
+  a partire da"; promo prices are intentionally excluded]
 bootstrap_meta:
   country_model_rank: 24
   suggested_scope_kind: single_model
