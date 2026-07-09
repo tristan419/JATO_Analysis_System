@@ -828,6 +828,8 @@ def build_readiness_report(
     )
     stable_coverage = _nested_dict(country_progress, "stableCoverage")
     source_repair_backlog = _nested_dict(country_progress, "sourceRepairBacklog")
+    source_review_queue = _nested_dict(country_progress, "sourceReviewQueue")
+    source_review_summary = _nested_dict(source_review_queue, "summary")
     source_repair_issue_count = int(
         source_repair_backlog.get("sourceRepairIssueCount")
         or source_repair_backlog.get("totalIssueCount")
@@ -835,6 +837,28 @@ def build_readiness_report(
     )
     transient_recheck_count = int(
         source_repair_backlog.get("transientRegressionCount") or 0
+    )
+    business_resolution_count = int(
+        source_repair_backlog.get("businessResolutionCount") or 0
+    )
+    source_review_queue_schema_ok = (
+        source_review_queue.get("schemaVersion")
+        == "msrp_source_review_queue_v1"
+    )
+    source_review_queue_case_count = int(
+        source_review_summary.get("totalCases") or 0
+    )
+    source_review_queue_expected_count = (
+        source_repair_issue_count
+        + transient_recheck_count
+        + business_resolution_count
+    )
+    source_review_queue_complete = bool(
+        source_review_queue_schema_ok
+        and (
+            source_review_queue_expected_count <= 0
+            or source_review_queue_case_count >= source_review_queue_expected_count
+        )
     )
     dryrun_pass_pct = dryrun_status.get("overallPassPct")
     dryrun_gate = dryrun_status.get("gateStatus")
@@ -1307,6 +1331,7 @@ def build_readiness_report(
             status=_status(
                 bool(dryrun_history.get("latestRunId"))
                 and bool(all_countries_latest)
+                and source_review_queue_complete
                 and country_progress_error is None,
                 degraded=country_progress_error is None or dryrun_history_error is None,
                 unavailable=country_progress_error is not None and dryrun_history_error is not None,
@@ -1326,6 +1351,12 @@ def build_readiness_report(
                 "stableCoverage": stable_coverage,
                 "sourceRepairIssueCount": source_repair_issue_count,
                 "transientRecheckCount": transient_recheck_count,
+                "businessResolutionCount": business_resolution_count,
+                "sourceReviewQueueSchemaVersion": source_review_queue.get("schemaVersion"),
+                "sourceReviewQueueCaseCount": source_review_queue_case_count,
+                "sourceReviewQueueExpectedCaseCount": source_review_queue_expected_count,
+                "sourceReviewQueueComplete": source_review_queue_complete,
+                "sourceReviewQueueSummary": source_review_summary,
                 "artifactFallbackUsed": dryrun_artifact_fallback_used,
                 "artifactFallback": country_progress.get("artifactFallback"),
                 "overall": country_progress.get("overall"),
@@ -1428,6 +1459,8 @@ def build_readiness_report(
                 "dryrunAllCountryLatestCount": len(all_countries_latest),
                 "dryrunSourceRepairIssueCount": source_repair_issue_count,
                 "dryrunTransientRecheckCount": transient_recheck_count,
+                "dryrunBusinessResolutionCount": business_resolution_count,
+                "dryrunSourceReviewQueueCaseCount": source_review_queue_case_count,
                 "writeAuthRole": write_role,
             },
         },

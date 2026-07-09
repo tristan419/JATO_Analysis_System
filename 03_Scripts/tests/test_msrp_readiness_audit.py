@@ -92,11 +92,13 @@ class FakeReadinessClient:
         auth_role: str = "editor",
         missing_all_country_latest: bool = False,
         missing_monitoring: bool = False,
+        incomplete_source_review_queue: bool = False,
     ) -> None:
         self.missing_snapshot = missing_snapshot
         self.auth_role = auth_role
         self.missing_all_country_latest = missing_all_country_latest
         self.missing_monitoring = missing_monitoring
+        self.incomplete_source_review_queue = incomplete_source_review_queue
 
     def request_json(
         self,
@@ -197,6 +199,18 @@ class FakeReadinessClient:
                 "sourceRepairBacklog": {
                     "sourceRepairIssueCount": 2,
                     "transientRegressionCount": 1,
+                    "businessResolutionCount": 0,
+                },
+                "sourceReviewQueue": {
+                    "schemaVersion": "msrp_source_review_queue_v1",
+                    "summary": {
+                        "totalCases": (
+                            1 if self.incomplete_source_review_queue else 3
+                        ),
+                        "sourceRepairCount": 2,
+                        "businessResolutionCount": 0,
+                        "transientRecheckCount": 1,
+                    },
                 },
             }
             if not self.missing_all_country_latest:
@@ -279,9 +293,13 @@ def test_build_readiness_report_marks_complete_contract_passed() -> None:
     assert dryrun_runtime["stableCoverage"]["probeRegressionCount"] == 1
     assert dryrun_runtime["sourceRepairIssueCount"] == 2
     assert dryrun_runtime["transientRecheckCount"] == 1
+    assert dryrun_runtime["sourceReviewQueueCaseCount"] == 3
+    assert dryrun_runtime["sourceReviewQueueExpectedCaseCount"] == 3
+    assert dryrun_runtime["sourceReviewQueueComplete"] is True
     assert report["summary"]["runtimeCounts"]["dryrunAllCountryLatestCount"] == 2
     assert report["summary"]["runtimeCounts"]["dryrunSourceRepairIssueCount"] == 2
     assert report["summary"]["runtimeCounts"]["dryrunTransientRecheckCount"] == 1
+    assert report["summary"]["runtimeCounts"]["dryrunSourceReviewQueueCaseCount"] == 3
     assert report["summary"]["runtimeCounts"]["priceAlertReviewCaseCount"] == 2
     assert (
         report["summary"]["runtimeCounts"][
@@ -374,6 +392,25 @@ def test_build_readiness_report_degrades_without_all_country_latest_progress() -
     assert dryrun_requirement["status"] == "degraded"
     assert dryrun_requirement["runtime"]["allCountryLatestCount"] == 0
     assert dryrun_requirement["runtime"]["stableLatestRunId"] == "msrp-dryrun-stable"
+
+
+def test_build_readiness_report_degrades_when_source_review_queue_is_incomplete() -> None:
+    report = audit_module.build_readiness_report(
+        client=FakeReadinessClient(incomplete_source_review_queue=True),
+        filters={},
+    )
+
+    requirements = {
+        item["key"]: item
+        for item in report["requirements"]
+    }
+    dryrun_runtime = requirements["dryrun_governance"]["runtime"]
+
+    assert report["status"] == "degraded"
+    assert requirements["dryrun_governance"]["status"] == "degraded"
+    assert dryrun_runtime["sourceReviewQueueCaseCount"] == 1
+    assert dryrun_runtime["sourceReviewQueueExpectedCaseCount"] == 3
+    assert dryrun_runtime["sourceReviewQueueComplete"] is False
 
 
 def test_build_readiness_report_uses_latest_dryrun_artifact_fallback(
