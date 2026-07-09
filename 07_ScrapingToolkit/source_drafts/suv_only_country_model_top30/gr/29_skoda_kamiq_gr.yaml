@@ -1,98 +1,47 @@
 source_code: skoda_kamiq_gr_draft_scrapling
 country: 希腊
 brand: SKODA
-source_url: https://www.skoda.gr/models/kamiq/kamiq
-source_type: manufacturer_official
+source_url: https://www.skoda.gr/_doc/2f6b0a49-4298-4a9e-8784-786a594e2f27
+source_type: official_price_list
 price_semantics: base_msrp
-extractor_type: scrapling
+extractor_type: pdf_text
 profile:
-  url: https://www.skoda.gr/models/kamiq/kamiq
-  headless: true
+  url: https://www.skoda.gr/_doc/2f6b0a49-4298-4a9e-8784-786a594e2f27
+  prefer_curl_download: true
+  browser_download_fallback: true
+  timeout_seconds: 60
+  retry_attempts: 1
+  retry_delay_seconds: 1
   default_currency: EUR
   default_tax_included: true
-  default_price_label: MSRP
+  default_price_label: Λιανική τιμή με ΦΠΑ & τέλος ταξινόμησης
   fixed_model: KAMIQ
   fixed_jato_model: KAMIQ
-  fixed_jato_powertrain: null
-  model_rules: []
-  skip_if_model_unmapped: false
   copy_trim_to_jato_trim: true
-  confidence_rules:
-    base: 0.2
-    fixed_model_bonus: 0.18
-    fixed_jato_model_bonus: 0.12
-    model_rule_bonus: 0.12
-    trim_present_bonus: 0.1
-    copy_trim_to_jato_trim_bonus: 0.09
-    parsed_price_text_bonus: 0.03
-    currency_bonus: 0.01
-    price_label_bonus: 0.02
-    trim_keyword_bonuses: []
-    price_band_bonuses:
-    - key: price_band_entry
-      label: Entry price band matched
-      max: 0
-      delta: 0.0
-    - key: price_band_mid
-      label: Mid price band matched
-      min: 0
-      max: 0
-      delta: 0.01
-    - key: price_band_high
-      label: High price band matched
-      min: 0
-      delta: 0.03
-    powertrain_keyword_bonuses: []
-    powertrain_bonuses:
-    - key: powertrain_ice
-      label: 'Powertrain matched: ICE'
-      powertrain: ICE
-      delta: 0.03
-    clamp_min: 0.0
-    clamp_max: 1.0
-  structured_fields:
-    edition_rules:
-    - key: edition_special
-      label: Special Edition
-      keyword: special edition
-      special: true
-    powertrain_rules:
-    - key: powertrain_ice
-      powertrain: ICE
-      keywords:
-      - ice
-      - petrol
-      - gasoline
-      - diesel
-      - combustion
-      - venzini
-      - petreleo
-  auto_accept_gates:
-    review_threshold: 0.95
-    semi_auto_threshold: 0.98
-    require_powertrain_match: true
-    force_review_if_powertrain_missing: true
-    force_review_if_powertrain_ambiguous: true
-    force_review_for_special_edition: true
-  json_script_selector: script[type="application/json"]
-  css:
-    vehicle_container: body
-    model: h2, h3
-    trim: h3
-    price: '[class*="price"]'
-  tier: stealth
-  network_idle: true
-  impersonate: chrome
+  match_confidence: 0.9
+  match_status: review_required
+  match_reason:
+    kind: official_pdf_price_list
+    source: skoda_gr_my27_retail_price_list_pdf
+    note: Official Skoda Greece MY2027 retail price-list PDF linked from the
+      official Τιμοκατάλογος page. The table exposes maximum recommended
+      vehicle prices and the retail price with VAT and registration tax; regex
+      captures only the ΛΙΑΝΙΚΗ ΤΙΜΗ ΜΕ ΦΠΑ & ΤΕΛΟΣ ΤΑΞ/ΣΗΣ column for ΝΕΟ
+      KAMIQ rows and avoids WLTP, CO2, and annual circulation-fee columns.
+  entry_patterns:
+  - pattern: 'Kamiq\s+(?P<trim>Selection(?:\s+Plus)?|Monte\s+Carlo)\s+(?P<powertrain>1\.[05]\s+TSI\s+(?:116|150)\s+PS(?:\s+DSG7)?)\s+\d+\s+\d+\s+\d+\s+€\s+(?P<price>\d{2}\.\d{3})\s+[\d,]+\s+\d+\s+€'
+    jato_powertrain: ICE
+    price_label: Λιανική τιμή με ΦΠΑ & τέλος ταξινόμησης
 schedule:
   frequency: manual_only
   run_window_start: 00:00
   run_window_end: 05:00
   preferred_weekday: monday
-notes: Official Skoda Greece Kamiq model page filled from manufacturer site research.
-  Selectors remain draft-level scrapling defaults until extraction is tuned. [CSS
-  selectors applied from brand probe] [Switched to playwright_card_flow with skoda_trim_overview_playwright.yaml]
-  [Reverted to scrapling — playwright preset needs per-brand tuning] [URL filled
-  from SKODA official site research]
+notes: Official Skoda Greece MY2027 retail price-list PDF linked from
+  https://www.skoda.gr/other/prices. Page 1 was visually checked after rendering;
+  the extractor captures ΝΕΟ KAMIQ rows from the retail price with VAT and
+  registration tax column, not WLTP consumption, CO2, or annual circulation
+  fees.
 bootstrap_meta:
   country_model_rank: 29
   suggested_scope_kind: single_model
