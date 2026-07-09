@@ -98,6 +98,9 @@ jobs:
             const response = await fetch(`${origin}/build-meta.json?ts=${Date.now()}`, { cache: "no-store" });
             if (!response.ok) return "";
             const payload = await response.json();
+            if (typeof payload.deployCommit === "string" && payload.deployCommit.trim()) {
+              return payload.deployCommit.trim();
+            }
             return typeof payload.commit === "string" ? payload.commit.trim() : "";
           }
 
