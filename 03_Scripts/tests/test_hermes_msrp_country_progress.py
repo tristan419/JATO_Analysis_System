@@ -242,6 +242,217 @@ def test_country_progress_preserves_finance_dryrun_counts(tmp_path, monkeypatch)
     assert "| TLS handshake failed | 1 |" in markdown
 
 
+def test_country_progress_builds_source_review_queue_when_artifact_missing(
+    tmp_path,
+    monkeypatch,
+):
+    module = _load_module()
+    report_path = tmp_path / "dryrun_report.json"
+    sources = [
+        {
+            "country": "pt",
+            "sourceCode": f"volvo_xc40_pt_{index:02d}_draft_scrapling",
+            "brand": "VOLVO",
+            "sourceUrl": f"https://www.volvocars.com/pt/cars/xc40/?src={index}",
+            "status": "empty",
+            "valid": 0,
+            "extracted": 0,
+            "failureReason": "no_observation_extracted",
+            "recommendedStrategy": "try_scrapling_dynamic",
+        }
+        for index in range(25)
+    ]
+    report = {
+        "schemaVersion": "msrp_dryrun_report_v3",
+        "runId": "msrp-dryrun-20260709-081500",
+        "expectedCountries": ["pt"],
+        "observedCountries": ["pt"],
+        "missingCountries": [],
+        "duplicateCountries": [],
+        "summary": {
+            "passPct": 0.0,
+            "gateThreshold": 70,
+            "gateStatus": "blocked",
+        },
+        "countriesDetail": [
+            {
+                "countryCode": "pt",
+                "total": 25,
+                "pass": 0,
+                "empty": 25,
+                "fail": 0,
+                "errors": 0,
+                "passPct": 0.0,
+                "status": "failure",
+                "failureBreakdown": {"no_observation_extracted": 25},
+                "strategyRecommendations": {
+                    "try_scrapling_dynamic": 25,
+                },
+                "sources": sources,
+            },
+        ],
+    }
+    report_path.write_text(json.dumps(report), encoding="utf-8")
+
+    monkeypatch.setattr(module, "STATUS_FILE_PATH", tmp_path / "missing_status.json")
+    monkeypatch.setattr(module, "FALLBACK_REPORT_PATH", report_path)
+    monkeypatch.setattr(module, "RUNS_INDEX_PATH", tmp_path / "missing_index.json")
+    monkeypatch.setattr(module, "SOURCE_REPAIR_BACKLOG_PATH", tmp_path / "missing_backlog.json")
+    monkeypatch.setattr(
+        module,
+        "SOURCE_REFERENCE_EVIDENCE_PATH",
+        tmp_path / "missing_reference.json",
+    )
+    monkeypatch.setattr(module, "SOURCE_REVIEW_QUEUE_PATH", tmp_path / "missing_review_queue.json")
+    monkeypatch.setattr(
+        module,
+        "PRICE_ALERT_REVIEW_QUEUE_PATH",
+        tmp_path / "missing_price_queue.json",
+    )
+    monkeypatch.setattr(
+        module,
+        "SOURCE_ACCESSIBILITY_AUDIT_PATH",
+        tmp_path / "missing_accessibility.json",
+    )
+
+    result = module.run(str(tmp_path / "reports"))
+
+    queue = result["sourceReviewQueue"]
+    assert queue["schemaVersion"] == "msrp_source_review_queue_v1"
+    assert queue["backlogRunId"] == "msrp-dryrun-20260709-081500"
+    assert queue["summary"]["totalCases"] == 25
+    assert queue["summary"]["sourceRepairCount"] == 25
+    assert queue["items"][0]["queueType"] == "source_repair"
+    assert queue["items"][0]["sourceCode"] == "volvo_xc40_pt_00_draft_scrapling"
+    assert result["sourceRepairBacklog"]["sourceRepairIssueCount"] == 25
+    assert len(result["sourceRepairBacklog"]["sourceIssues"]) == 25
+    assert len(result["sourceRepairBacklog"]["groups"][0]["sourceRepairIssues"]) == 25
+
+
+def test_country_progress_prefers_matching_source_repair_backlog_artifact(
+    tmp_path,
+    monkeypatch,
+):
+    module = _load_module()
+    run_id = "msrp-dryrun-20260709-101500"
+    report_path = tmp_path / "dryrun_report.json"
+    report_path.write_text(
+        json.dumps({
+            "schemaVersion": "msrp_dryrun_report_v3",
+            "runId": run_id,
+            "expectedCountries": ["pt"],
+            "observedCountries": ["pt"],
+            "missingCountries": [],
+            "duplicateCountries": [],
+            "summary": {
+                "passPct": 0.0,
+                "gateThreshold": 70,
+                "gateStatus": "blocked",
+            },
+            "countriesDetail": [
+                {
+                    "countryCode": "pt",
+                    "total": 1,
+                    "pass": 0,
+                    "empty": 1,
+                    "fail": 0,
+                    "errors": 0,
+                    "passPct": 0.0,
+                    "status": "failure",
+                    "failureBreakdown": {"no_observation_extracted": 1},
+                    "strategyRecommendations": {},
+                    "sources": [
+                        {
+                            "country": "pt",
+                            "sourceCode": "fallback_only_pt_draft_scrapling",
+                            "failureReason": "no_observation_extracted",
+                        }
+                    ],
+                },
+            ],
+        }),
+        encoding="utf-8",
+    )
+    backlog_path = tmp_path / "msrp_source_repair_backlog.json"
+    backlog_path.write_text(
+        json.dumps({
+            "schemaVersion": "msrp_source_repair_backlog_v1",
+            "runId": run_id,
+            "sourceRepairIssueCount": 2,
+            "transientRegressionCount": 0,
+            "sourceIssues": [
+                {
+                    "countryCode": "pt",
+                    "sourceCode": "artifact_one_pt_draft_scrapling",
+                    "failureReason": "no_observation_extracted",
+                },
+                {
+                    "countryCode": "pt",
+                    "sourceCode": "artifact_two_pt_draft_scrapling",
+                    "failureReason": "no_observation_extracted",
+                },
+            ],
+            "groups": [
+                {
+                    "failureReason": "no_observation_extracted",
+                    "priorityBand": "high",
+                    "priorityScore": 45.0,
+                    "recommendedAction": "repair_source_definition",
+                    "recommendedStrategy": "try_scrapling_dynamic",
+                    "sourceRepairIssueCount": 2,
+                    "transientRegressionCount": 0,
+                    "sourceRepairIssues": [
+                        {
+                            "countryCode": "pt",
+                            "sourceCode": "artifact_one_pt_draft_scrapling",
+                            "failureReason": "no_observation_extracted",
+                        },
+                        {
+                            "countryCode": "pt",
+                            "sourceCode": "artifact_two_pt_draft_scrapling",
+                            "failureReason": "no_observation_extracted",
+                        },
+                    ],
+                }
+            ],
+        }),
+        encoding="utf-8",
+    )
+
+    monkeypatch.setattr(module, "STATUS_FILE_PATH", tmp_path / "missing_status.json")
+    monkeypatch.setattr(module, "FALLBACK_REPORT_PATH", report_path)
+    monkeypatch.setattr(module, "RUNS_INDEX_PATH", tmp_path / "missing_index.json")
+    monkeypatch.setattr(module, "SOURCE_REPAIR_BACKLOG_PATH", backlog_path)
+    monkeypatch.setattr(
+        module,
+        "SOURCE_REFERENCE_EVIDENCE_PATH",
+        tmp_path / "missing_reference.json",
+    )
+    monkeypatch.setattr(module, "SOURCE_REVIEW_QUEUE_PATH", tmp_path / "missing_review_queue.json")
+    monkeypatch.setattr(
+        module,
+        "PRICE_ALERT_REVIEW_QUEUE_PATH",
+        tmp_path / "missing_price_queue.json",
+    )
+    monkeypatch.setattr(
+        module,
+        "SOURCE_ACCESSIBILITY_AUDIT_PATH",
+        tmp_path / "missing_accessibility.json",
+    )
+
+    result = module.run(str(tmp_path / "reports"))
+
+    assert result["sourceRepairBacklog"]["sourceRepairIssueCount"] == 2
+    assert result["sourceReviewQueue"]["summary"]["sourceRepairCount"] == 2
+    assert {
+        item["sourceCode"]
+        for item in result["sourceReviewQueue"]["items"]
+    } == {
+        "artifact_one_pt_draft_scrapling",
+        "artifact_two_pt_draft_scrapling",
+    }
+
+
 def test_source_repair_backlog_preserves_rejection_diagnostics(tmp_path, monkeypatch):
     module = _load_module()
     monkeypatch.setattr(module, "RUNS_INDEX_PATH", tmp_path / "missing_index.json")

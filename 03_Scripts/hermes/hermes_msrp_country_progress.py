@@ -22,6 +22,15 @@ from typing import Any
 from urllib.parse import urlparse
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
+SCRIPTS_DIR = REPO_ROOT / "03_Scripts"
+if str(SCRIPTS_DIR) not in sys.path:
+    sys.path.insert(0, str(SCRIPTS_DIR))
+
+try:
+    from msrp_source_review_queue import build_source_review_queue
+except ImportError:  # pragma: no cover - keeps Hermes usable in stripped contexts.
+    build_source_review_queue = None  # type: ignore[assignment]
+
 STATUS_FILE_PATH = REPO_ROOT / "03_Scripts" / "logs" / "scheduled_fetch_status.json"
 FALLBACK_REPORT_PATH = REPO_ROOT / "03_Scripts" / "diagnostics" / "artifacts" / "dryrun_report.json"
 RUNS_INDEX_PATH = REPO_ROOT / "03_Scripts" / "diagnostics" / "artifacts" / "dryrun_runs_index.json"
@@ -77,12 +86,7 @@ def _load_dryrun_report() -> dict | None:
     return None
 
 
-def _load_source_repair_backlog() -> dict:
-    if SOURCE_REPAIR_BACKLOG_PATH.is_file():
-        try:
-            return json.loads(SOURCE_REPAIR_BACKLOG_PATH.read_text())
-        except Exception:
-            pass
+def _default_source_repair_backlog() -> dict:
     return {
         "schemaVersion": "msrp_source_repair_backlog_v1",
         "runId": None,
@@ -93,6 +97,22 @@ def _load_source_repair_backlog() -> dict:
         "topSourceHosts": [],
         "groups": [],
     }
+
+
+def _load_source_repair_backlog(run_id: str | None = None) -> dict:
+    if SOURCE_REPAIR_BACKLOG_PATH.is_file():
+        try:
+            data = json.loads(SOURCE_REPAIR_BACKLOG_PATH.read_text())
+            if not isinstance(data, dict):
+                return _default_source_repair_backlog()
+            backlog_run_id = str(data.get("runId") or "")
+            target_run_id = str(run_id or "")
+            if target_run_id and backlog_run_id and backlog_run_id != target_run_id:
+                return _default_source_repair_backlog()
+            return data
+        except Exception:
+            pass
+    return _default_source_repair_backlog()
 
 
 def _load_runs_index() -> dict[str, Any] | None:
@@ -164,7 +184,12 @@ def _default_source_review_queue() -> dict:
     }
 
 
-def _load_source_review_queue(run_id: str | None = None) -> dict:
+def _load_source_review_queue(
+    run_id: str | None = None,
+    *,
+    source_repair_backlog: dict[str, Any] | None = None,
+    reference_evidence: dict[str, Any] | None = None,
+) -> dict:
     if SOURCE_REVIEW_QUEUE_PATH.is_file():
         try:
             data = json.loads(SOURCE_REVIEW_QUEUE_PATH.read_text())
@@ -173,8 +198,21 @@ def _load_source_review_queue(run_id: str | None = None) -> dict:
             queue_run_id = str(data.get("backlogRunId") or "")
             target_run_id = str(run_id or "")
             if target_run_id and queue_run_id and queue_run_id != target_run_id:
+                data = None
+            else:
+                return data
+        except Exception:
+            pass
+    if build_source_review_queue and source_repair_backlog:
+        try:
+            backlog_run_id = str(source_repair_backlog.get("runId") or "")
+            target_run_id = str(run_id or "")
+            if target_run_id and backlog_run_id and backlog_run_id != target_run_id:
                 return _default_source_review_queue()
-            return data
+            return build_source_review_queue(
+                source_repair_backlog,
+                reference_evidence,
+            )
         except Exception:
             pass
     return _default_source_review_queue()
@@ -992,8 +1030,9 @@ def _source_repair_backlog_from_report(report: dict[str, Any], now: str) -> dict
             "affectedCountries": sorted(group["affectedCountries"]),
             "affectedCountryCount": len(group["affectedCountries"]),
             "sampleSources": group["sources"][:20],
-            "sourceRepairIssues": group["sourceDetails"][:20],
+            "sourceRepairIssues": group["sourceDetails"],
             "sampleTransientRegressions": group["transientSources"][:8],
+            "transientRegressions": group["transientSources"],
             "topSourceHosts": _normalize_host_groups(group["hosts"]),
             "status": group["status"],
         })
@@ -1013,7 +1052,7 @@ def _source_repair_backlog_from_report(report: dict[str, Any], now: str) -> dict
     transient_regressions = [
         source
         for item in normalized_groups
-        for source in item.get("sampleTransientRegressions") or []
+        for source in item.get("transientRegressions") or []
     ]
     return {
         "schemaVersion": "msrp_source_repair_backlog_v1",
@@ -1086,6 +1125,8 @@ def run(out_dir: str | None = None) -> dict:
     now = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
     if not report:
+        source_repair_backlog = _load_source_repair_backlog()
+        source_reference_evidence = _load_source_reference_evidence()
         result = {
             "probe": "pipeline.msrp_country_progress",
             "overall": "critical",
@@ -1094,9 +1135,12 @@ def run(out_dir: str | None = None) -> dict:
             "countries": [],
             "topBlockingCountries": [],
             "topFailureReasons": [],
-            "sourceRepairBacklog": _load_source_repair_backlog(),
-            "sourceReferenceEvidence": _load_source_reference_evidence(),
-            "sourceReviewQueue": _load_source_review_queue(),
+            "sourceRepairBacklog": source_repair_backlog,
+            "sourceReferenceEvidence": source_reference_evidence,
+            "sourceReviewQueue": _load_source_review_queue(
+                source_repair_backlog=source_repair_backlog,
+                reference_evidence=source_reference_evidence,
+            ),
             "priceAlertReviewQueue": _load_price_alert_review_queue(),
             "sourceAccessibilityAudit": _load_source_accessibility_audit(),
             "findings": [{
@@ -1214,9 +1258,18 @@ def run(out_dir: str | None = None) -> dict:
     overall = "critical" if any(f["severity"] == "critical" for f in findings) else \
               "warning" if findings else "ok"
 
-    source_repair_backlog = _source_repair_backlog_from_report(report, now)
+    run_id = str(report.get("runId") or "")
+    source_repair_backlog = _load_source_repair_backlog(run_id)
     if not source_repair_backlog.get("groups"):
-        source_repair_backlog = _load_source_repair_backlog()
+        source_repair_backlog = _source_repair_backlog_from_report(report, now)
+    source_reference_evidence = _load_source_reference_evidence(
+        run_id,
+    )
+    source_review_queue = _load_source_review_queue(
+        run_id,
+        source_repair_backlog=source_repair_backlog,
+        reference_evidence=source_reference_evidence,
+    )
 
     all_countries_full = _all_country_latest_from_runs_index()
     if not all_countries_full:
@@ -1278,8 +1331,8 @@ def run(out_dir: str | None = None) -> dict:
         "topBlockingCountries": sorted(top_blocking, key=lambda x: x["passPct"]),
         "topFailureReasons": [{"reason": r, "count": c} for r, c in top_reasons[:5]],
         "sourceRepairBacklog": source_repair_backlog,
-        "sourceReferenceEvidence": _load_source_reference_evidence(str(report.get("runId") or "")),
-        "sourceReviewQueue": _load_source_review_queue(str(report.get("runId") or "")),
+        "sourceReferenceEvidence": source_reference_evidence,
+        "sourceReviewQueue": source_review_queue,
         "priceAlertReviewQueue": price_alert_review_queue,
         "sourceAccessibilityAudit": _load_source_accessibility_audit(str(report.get("runId") or "")),
         "allCountriesLatest": [_strip_sources(country) for country in all_countries_full],
