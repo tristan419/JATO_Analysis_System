@@ -31,6 +31,7 @@ from app.services.backup_utils import backup_ordering_schema
 from app.services.order_genius_service import (
     apply_order_quantity_import,
     build_matrix,
+    build_matrix_batch,
     build_options,
     export_matrix,
     export_pi_matrix,
@@ -514,6 +515,64 @@ def get_order_genius_matrix(
         colour=colour,
         material_code_search=material_code_search,
     )
+
+
+@router.post("/matrix/batch")
+def get_order_genius_matrix_batch(
+    body: dict,
+    session: Session = Depends(get_db_session),
+    user=Depends(require_min_role("viewer")),
+) -> dict:
+    countries_raw = body.get("countries")
+    if not isinstance(countries_raw, list):
+        raise HTTPException(status_code=400, detail="countries must be a list")
+
+    countries: list[str] = []
+    seen: set[str] = set()
+    for value in countries_raw:
+        country = str(value or "").strip().upper()
+        if country and country not in seen:
+            countries.append(country)
+            seen.add(country)
+    if not countries:
+        raise HTTPException(status_code=400, detail="countries is required")
+    if len(countries) > 80:
+        raise HTTPException(status_code=400, detail="too many countries")
+
+    try:
+        year = int(body.get("year"))
+    except (TypeError, ValueError) as exc:
+        raise HTTPException(status_code=400, detail="year is required") from exc
+
+    filters = {
+        "brand": body.get("brand") or None,
+        "model_name": body.get("model") or body.get("modelName") or None,
+        "powertrain": body.get("powertrain") or None,
+        "version": body.get("version") or None,
+        "colour": body.get("colour") or None,
+        "material_code_search": (
+            body.get("materialCodeSearch")
+            or body.get("material_code_search")
+            or None
+        ),
+    }
+
+    errors: dict[str, str] = {}
+    valid_countries: list[str] = []
+    for country in countries:
+        try:
+            validate_country_access(session, user.name, user.role, country)
+            valid_countries.append(country)
+        except HTTPException as exc:
+            errors[country] = str(exc.detail)
+
+    matrices = build_matrix_batch(
+        session,
+        country_codes=valid_countries,
+        year=year,
+        **filters,
+    )
+    return {"matrices": matrices, "errors": errors}
 
 
 @router.patch("/quantity-cell")
@@ -1008,8 +1067,16 @@ def patch_sku_fob(
     fob_raw = body.get("finalFobEur") if "finalFobEur" in body else body.get("baseFobEur")
     fob_val = _parse_fob_value(fob_raw)
     pt_code = body.get("paymentTermCode")
+    remark_provided = "remark" in body
+    remark = clean_text(body.get("remark")) if remark_provided else None
     result = repo.update_sku_fob_for_country(
-        session, material_code, country, fob_val, pt_code,
+        session,
+        material_code,
+        country,
+        fob_val,
+        pt_code,
+        remark=remark,
+        update_remark=remark_provided,
     )
     if fob_val is None:
         session.commit()
@@ -1018,6 +1085,7 @@ def patch_sku_fob(
             "countryCode": country,
             "finalFobEur": None,
             "paymentTermCode": pt_code,
+            "remark": None if remark_provided else remark,
             "cleared": True,
         }
     if result is None:
@@ -1028,6 +1096,9 @@ def patch_sku_fob(
         "countryCode": result.country_code,
         "finalFobEur": float(result.final_fob_eur) if result.final_fob_eur is not None else None,
         "paymentTermCode": result.payment_term_code,
+        "fobSourceMode": result.fob_source_mode,
+        "fobSourceCountryCode": result.fob_source_country_code,
+        "remark": result.remark,
     }
 
 
@@ -1350,6 +1421,8 @@ def create_material_sku(
             country,
             fob_value,
             fob_body.get("paymentTermCode"),
+            remark=clean_text(fob_body.get("remark")) if "remark" in fob_body else None,
+            update_remark="remark" in fob_body,
         )
         fobs_created += 1
     try:

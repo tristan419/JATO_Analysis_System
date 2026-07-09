@@ -494,6 +494,7 @@ def _fob_to_dict(fob: CountrySkuFobResolved) -> dict:
         "final_fob_eur": float(fob.final_fob_eur),
         "fob_source_mode": fob.fob_source_mode,
         "fob_source_country_code": fob.fob_source_country_code,
+        "remark": fob.remark,
     }
 
 
@@ -683,6 +684,34 @@ def build_matrix(
         "year": year,
         "rows": rows,
         "totalRows": len(rows),
+    }
+
+
+def build_matrix_batch(
+    session: Session,
+    country_codes: list[str],
+    year: int,
+    brand: str | None = None,
+    model_name: str | None = None,
+    powertrain: str | None = None,
+    version: str | None = None,
+    colour: str | None = None,
+    material_code_search: str | None = None,
+) -> dict[str, dict]:
+    """Build matrices for many countries through the existing matrix builder."""
+    return {
+        country_code: build_matrix(
+            session,
+            country_code=country_code,
+            year=year,
+            brand=brand,
+            model_name=model_name,
+            powertrain=powertrain,
+            version=version,
+            colour=colour,
+            material_code_search=material_code_search,
+        )
+        for country_code in country_codes
     }
 
 

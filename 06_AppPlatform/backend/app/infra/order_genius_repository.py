@@ -357,6 +357,8 @@ def update_sku_fob_for_country(
     country_code: str,
     final_fob_eur: float | None,
     payment_term_code: str | None = None,
+    remark: str | None = None,
+    update_remark: bool = False,
 ) -> CountrySkuFobResolved | None:
     """Update or create FOB for a specific material + country. Pass None to deactivate."""
     stmt = select(CountrySkuFobResolved).where(
@@ -393,6 +395,8 @@ def update_sku_fob_for_country(
         existing.final_fob_eur = final_fob_eur
         existing.fob_source_country_code = None
         existing.fob_source_mode = "manual_edit"
+        if update_remark:
+            existing.remark = remark or None
         existing.updated_at_utc = datetime.now(timezone.utc)
         return existing
     if final_fob_eur is None:
@@ -416,6 +420,7 @@ def update_sku_fob_for_country(
         payment_term_code=payment_term_code or "TT",
         final_fob_eur=final_fob_eur,
         fob_source_mode="manual_edit",
+        remark=(remark or None) if update_remark else None,
         is_active=True,
     )
     session.add(fob)
@@ -577,6 +582,7 @@ def copy_country_fobs(
                 or existing.base_fob_eur != source_row.base_fob_eur
                 or existing.payment_term_adjustment_eur != source_row.payment_term_adjustment_eur
                 or existing.colour_surcharge_eur != source_row.colour_surcharge_eur
+                or (existing.remark or "") != (source_row.remark or "")
             )
             if changed:
                 session.add(
@@ -604,6 +610,7 @@ def copy_country_fobs(
             existing.final_fob_eur = source_row.final_fob_eur
             existing.fob_source_country_code = source
             existing.fob_source_mode = "copied_from_country"
+            existing.remark = source_row.remark
             existing.is_active = True
             existing.updated_at_utc = datetime.now(timezone.utc)
             continue
@@ -622,6 +629,7 @@ def copy_country_fobs(
                 final_fob_eur=source_row.final_fob_eur,
                 fob_source_country_code=source,
                 fob_source_mode="copied_from_country",
+                remark=source_row.remark,
                 is_active=True,
             )
         )
@@ -731,6 +739,8 @@ def list_bom_with_fob(
             fob_entry["colourSurchargeEur"] = float(f.colour_surcharge_eur)
         if f.fob_source_country_code:
             fob_entry["fobSourceCountryCode"] = f.fob_source_country_code
+        if f.remark:
+            fob_entry["remark"] = f.remark
         fob_map[f.material_code][f.country_code] = fob_entry
 
     material_or_template_codes = {

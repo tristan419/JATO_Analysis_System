@@ -1900,6 +1900,7 @@ class CountrySkuFobResolved(TimestampMixin, Base):
     fob_source_mode: Mapped[str] = mapped_column(
         Text, nullable=False, default="explicit_price_by_payment_term",
     )
+    remark: Mapped[str | None] = mapped_column(Text, nullable=True)
     is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
 
 

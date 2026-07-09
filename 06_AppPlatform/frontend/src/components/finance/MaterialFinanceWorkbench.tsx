@@ -9,7 +9,7 @@ import { MaterialFinanceMatrix } from "./MaterialFinanceMatrix";
 interface MaterialFinanceWorkbenchProps {
   countryCode: string;
   countryCodes: string[];
-  scopeLabel: string;
+  scopeLabel?: string;
   rows: CountryMaterialFinanceRow[];
   loading: boolean;
   error?: string;
@@ -21,7 +21,7 @@ interface MaterialFinanceWorkbenchProps {
 export function MaterialFinanceWorkbench({
   countryCode,
   countryCodes,
-  scopeLabel,
+  scopeLabel = "Finance rows",
   rows,
   loading,
   error = "",

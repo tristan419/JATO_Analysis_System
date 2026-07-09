@@ -17,6 +17,7 @@ export interface MonthCell {
 
 export interface MaterialSkuMatrixRow {
   materialCode: string;
+  bomTemplate?: string | null;
   brand: string;
   modelName: string;
   version: string;
@@ -45,6 +46,11 @@ export interface MatrixResponse {
   year: number;
   rows: MaterialSkuMatrixRow[];
   totalRows: number;
+}
+
+export interface MatrixBatchResponse {
+  matrices: Record<string, MatrixResponse>;
+  errors: Record<string, string>;
 }
 
 export interface QuantityCellUpdate {

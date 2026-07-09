@@ -1,0 +1,402 @@
+.bom-edit-panel-cell {
+  overflow: visible !important;
+  white-space: normal !important;
+}
+
+.bom-edit-product-form {
+  position: sticky;
+  left: 0;
+  display: grid;
+  gap: 0;
+  width: min(100%, 1560px, calc(100vw - 86px));
+  border: 1px solid rgba(203, 213, 225, 0.82);
+  border-radius: 4px;
+  background: #f8fafc;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.72);
+}
+
+.bom-edit-main-row {
+  display: grid;
+  grid-template-columns: minmax(610px, 1fr) minmax(520px, 0.86fr);
+  gap: 16px;
+  align-items: stretch;
+  padding: 12px 14px;
+}
+
+.bom-edit-product-card,
+.bom-edit-lifecycle-card,
+.bom-edit-note-row {
+  min-width: 0;
+}
+
+.bom-edit-product-card,
+.bom-edit-lifecycle-card {
+  display: grid;
+  grid-template-rows: 14px 36px;
+  gap: 7px;
+  align-content: start;
+}
+
+.bom-edit-product-controls {
+  display: grid;
+  grid-template-columns: 108px minmax(150px, 1fr) minmax(130px, 0.86fr) 104px auto;
+  gap: 8px;
+  align-items: center;
+}
+
+.bom-edit-product-input {
+  width: 100%;
+  height: 36px;
+  border-radius: 3px;
+  font-size: 11px;
+}
+
+.bom-admin-table td .bom-edit-product-input {
+  height: 36px;
+  min-height: 36px;
+}
+
+.bom-edit-product-input-brand {
+  text-transform: uppercase;
+}
+
+.bom-edit-product-controls .command-select {
+  width: 104px;
+}
+
+.bom-edit-product-controls .command-select-trigger {
+  height: 36px;
+  min-height: 36px;
+}
+
+.bom-edit-sku-count {
+  color: #94a3b8;
+  font-family: monospace;
+  font-size: 10px;
+  font-weight: 800;
+  white-space: nowrap;
+}
+
+.bom-edit-card-title {
+  color: #64748b;
+  font-size: 10px;
+  font-weight: 800;
+  line-height: 1.2;
+}
+
+.bom-edit-field-label {
+  padding-top: 7px;
+  color: #64748b;
+  font-size: 10px;
+  font-weight: 800;
+  line-height: 1.2;
+}
+
+.bom-edit-lifecycle-card .bom-lifecycle-segment {
+  grid-template-columns: repeat(3, minmax(82px, 1fr));
+}
+
+.bom-edit-lifecycle-card .bom-lifecycle-editor {
+  display: grid;
+  grid-template-columns: minmax(244px, 1fr) minmax(128px, 148px) minmax(128px, 148px);
+  align-items: center;
+  gap: 8px;
+}
+
+.bom-edit-lifecycle-card .bom-lifecycle-option {
+  min-height: 30px;
+  font-size: 10px;
+}
+
+.bom-edit-lifecycle-card .bom-lifecycle-window {
+  display: contents;
+}
+
+.bom-edit-lifecycle-card .bom-lifecycle-window label {
+  position: relative;
+  display: block;
+  min-width: 0;
+  height: 36px;
+}
+
+.bom-edit-lifecycle-card .bom-lifecycle-window label span {
+  position: absolute;
+  top: -14px;
+  left: 0;
+  color: #94a3b8;
+  font-size: 8px;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  line-height: 1;
+  text-transform: uppercase;
+}
+
+.bom-edit-lifecycle-card .bom-lifecycle-window input {
+  height: 36px;
+  min-height: 36px;
+  padding: 0 9px;
+}
+
+.bom-admin-table td .bom-edit-lifecycle-card .bom-lifecycle-window input {
+  height: 36px;
+  min-height: 36px;
+}
+
+.bom-edit-ops-panel {
+  display: grid;
+  grid-template-columns: 150px minmax(0, 1fr);
+  grid-template-areas:
+    "countries-label countries-control"
+    "fob-label fob-control"
+    "error error";
+  gap: 10px 12px;
+  align-items: center;
+  padding: 12px 14px 13px;
+  border-top: 1px solid rgba(203, 213, 225, 0.72);
+  background: rgba(241, 245, 249, 0.74);
+}
+
+.bom-edit-country-details {
+  display: contents;
+}
+
+.bom-edit-country-summary {
+  grid-area: countries-label;
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  width: 100%;
+  min-height: var(--control-height-sm);
+  cursor: pointer;
+  color: #475569;
+  font-size: 10px;
+  font-weight: 800;
+  line-height: 1;
+  white-space: nowrap;
+}
+
+.bom-edit-country-summary::-webkit-details-marker {
+  display: none;
+}
+
+.bom-edit-country-summary::marker {
+  content: "";
+}
+
+.bom-edit-country-caret {
+  width: 0;
+  height: 0;
+  border-top: 5px solid transparent;
+  border-bottom: 5px solid transparent;
+  border-left: 7px solid #2563eb;
+  transform: rotate(90deg);
+  transition: transform 140ms ease;
+}
+
+.bom-edit-country-details:not([open]) .bom-edit-country-caret {
+  transform: rotate(0deg);
+}
+
+.bom-edit-country-summary strong {
+  margin-left: auto;
+  min-width: 20px;
+  padding: 1px 7px;
+  border-radius: 999px;
+  background: #eaf2ff;
+  color: #1d4ed8;
+  text-align: center;
+  font-size: 10px;
+  line-height: 1.5;
+}
+
+.bom-edit-country-chips {
+  grid-area: countries-control;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+  min-width: 0;
+  min-height: var(--control-height-sm);
+  padding: 0;
+}
+
+.bom-edit-country-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  min-height: var(--control-height-sm);
+  padding: 0 8px;
+  border: 1px solid #cbd5e1;
+  border-radius: 6px;
+  background: #fff;
+  color: #1e293b;
+  font-size: 10px;
+  font-weight: 800;
+}
+
+.bom-edit-country-chip.is-empty {
+  background: #f8fafc;
+  color: #94a3b8;
+}
+
+.bom-edit-country-chip input {
+  width: 14px;
+  height: 14px;
+  min-height: 14px;
+  margin: 0;
+}
+
+.bom-edit-fob-tools {
+  display: contents;
+}
+
+.bom-edit-ops-title {
+  grid-area: fob-label;
+  align-self: center;
+  color: #1d4ed8;
+  line-height: 1;
+}
+
+.bom-edit-fob-controls {
+  grid-area: fob-control;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.bom-edit-fob-controls .btn {
+  height: var(--control-height-sm);
+  min-height: var(--control-height-sm);
+  min-width: 78px;
+  padding: 0 var(--button-padding-x-sm);
+  font-size: 11px;
+}
+
+.bom-edit-fob-controls .btn-primary {
+  min-width: 116px;
+}
+
+.bom-edit-fob-controls .bom-edit-fob-quick-button {
+  min-width: 66px;
+}
+
+.bom-edit-fob-delta-input {
+  width: 104px;
+  height: var(--control-height-sm);
+  min-height: var(--control-height-sm);
+  min-width: 0;
+  padding: 0 9px;
+  border: 1px solid #cbd5e1;
+  border-radius: var(--control-radius-sm);
+  background: #fff;
+  color: #0f172a;
+  font-size: 11px;
+}
+
+.bom-edit-fob-quick-button.is-positive {
+  border-color: #bfdbfe;
+  background: #eff6ff;
+  color: #2563eb;
+}
+
+.bom-edit-fob-quick-button.is-negative {
+  border-color: #fed7aa;
+  background: #fff7ed;
+  color: #b45309;
+}
+
+.bom-edit-error-message {
+  grid-area: error;
+  color: #dc2626;
+  font-size: 10px;
+  font-weight: 700;
+}
+
+.bom-admin-table td .bom-edit-fob-controls .btn.btn-sm {
+  min-width: 78px;
+}
+
+.bom-admin-table td .bom-edit-fob-controls .btn-primary.btn-sm {
+  min-width: 116px;
+}
+
+.bom-admin-table td .bom-edit-fob-controls .bom-edit-fob-quick-button.btn-sm {
+  min-width: 66px;
+}
+
+.bom-admin-table td .bom-edit-fob-delta-input {
+  height: var(--control-height-sm);
+  min-height: var(--control-height-sm);
+}
+
+.bom-edit-note-row {
+  display: grid;
+  grid-template-columns: 58px minmax(360px, 1fr) 304px;
+  gap: 10px;
+  align-items: stretch;
+  padding: 9px 14px 10px;
+  border-top: 1px solid rgba(203, 213, 225, 0.72);
+  background: #fff;
+}
+
+.bom-edit-note-row .bom-edit-card-title {
+  padding-top: 8px;
+}
+
+.bom-edit-note-input {
+  min-height: 50px;
+  width: 100%;
+  resize: vertical;
+  border: 1px solid #cbd5e1;
+  border-radius: 4px;
+  background: #fff;
+  color: #1e293b;
+  font-size: 11px;
+  line-height: 1.35;
+}
+
+.bom-edit-action-row {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  width: auto;
+  max-width: none;
+  min-width: 0;
+  box-sizing: border-box;
+  min-height: var(--control-height-sm);
+  padding: 0;
+  border-top: 0;
+  background: transparent;
+}
+
+.bom-edit-action-row .btn {
+  height: var(--control-height-sm);
+  min-height: var(--control-height-sm);
+  min-width: 148px;
+  flex: 0 0 148px;
+  padding: 0 var(--button-padding-x-sm);
+  font-size: 11px;
+}
+
+.bom-edit-action-row .btn-ghost {
+  border-color: #bfdbfe;
+  background: #eff6ff;
+  color: #2563eb;
+}
+
+.bom-edit-save-message {
+  margin-right: auto;
+  font-size: 10px;
+  font-weight: 800;
+}
+
+.bom-edit-save-message.is-success {
+  color: #047857;
+}
+
+.bom-edit-save-message.is-error {
+  color: #dc2626;
+}
