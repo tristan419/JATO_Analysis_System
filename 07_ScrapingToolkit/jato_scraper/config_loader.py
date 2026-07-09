@@ -623,6 +623,11 @@ def _build_pdf_text_profile(profile: dict[str, Any]) -> PdfTextProfile:
             if str(url or "").strip()
         ),
         entry_patterns=entry_patterns,
+        headers={
+            str(key).strip(): str(value)
+            for key, value in profile.get("headers", {}).items()
+            if str(key).strip()
+        },
         timeout_seconds=int(profile.get("timeout_seconds", 60)),
         retry_attempts=int(profile.get("retry_attempts", 0)),
         retry_delay_seconds=float(profile.get("retry_delay_seconds", 0.0) or 0.0),

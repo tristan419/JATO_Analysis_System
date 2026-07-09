@@ -123,6 +123,24 @@ def test_pdf_text_profile_accepts_preferred_curl_download() -> None:
     assert profile.urls == ("https://example.invalid/sealion-extra.pdf",)
 
 
+def test_pdf_text_profile_accepts_custom_headers() -> None:
+    profile = _build_pdf_text_profile(
+        {
+            "url": "https://example.invalid/avenger.pdf",
+            "headers": {
+                "User-Agent": "Mozilla/5.0",
+                "Accept-Language": "sl-SI,sl;q=0.9",
+            },
+            "entry_patterns": [],
+        }
+    )
+
+    assert profile.headers == {
+        "User-Agent": "Mozilla/5.0",
+        "Accept-Language": "sl-SI,sl;q=0.9",
+    }
+
+
 def test_pdf_text_extracts_text_from_primary_and_additional_urls(monkeypatch):
     extractor = PdfTextExtractor(
         ExtractorConfig(
@@ -262,3 +280,34 @@ def test_pdf_text_curl_fallback_keeps_curl_default_user_agent(monkeypatch):
 
     assert extractor._fetch_pdf_bytes_with_curl(30) == b"%PDF-1.7\n"
     assert "--user-agent" not in commands[0]
+
+
+def test_pdf_text_curl_fallback_forwards_custom_headers(monkeypatch):
+    extractor = PdfTextExtractor(
+        ExtractorConfig(
+            source_code="jeep_avenger_si_draft_scrapling",
+            country="斯洛文尼亚",
+            brand="JEEP",
+            source_url="https://www.jeep.com/si/cenik-in-tehnicne-informacije.html",
+            source_type="official_price_list",
+            price_semantics="base_msrp",
+        ),
+        PdfTextProfile(
+            url="https://example.invalid/avenger.pdf",
+            headers={"User-Agent": "Mozilla/5.0"},
+        ),
+    )
+    commands = []
+
+    def fake_run(command, **_kwargs):
+        commands.append(command)
+        output_path = command[command.index("-o") + 1]
+        with open(output_path, "wb") as f:
+            f.write(b"%PDF-1.7\n")
+        return subprocess.CompletedProcess(command, 0, b"", b"")
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+
+    assert extractor._fetch_pdf_bytes_with_curl(30) == b"%PDF-1.7\n"
+    assert "-H" in commands[0]
+    assert "User-Agent: Mozilla/5.0" in commands[0]

@@ -39,6 +39,7 @@ class PdfTextProfile:
     url: str
     urls: tuple[str, ...] = field(default_factory=tuple)
     entry_patterns: tuple[PdfTextEntryPattern, ...] = field(default_factory=tuple)
+    headers: dict[str, str] = field(default_factory=dict)
     timeout_seconds: int = DEFAULT_TIMEOUT
     retry_attempts: int = 0
     retry_delay_seconds: float = 0.0
@@ -89,6 +90,7 @@ class PdfTextExtractor(BaseExtractor):
             {
                 "User-Agent": "JATO-MSRP-Scraper/0.1",
                 "Accept": "application/pdf,application/octet-stream;q=0.9,*/*;q=0.8",
+                **profile.headers,
             }
         )
 
@@ -200,6 +202,12 @@ class PdfTextExtractor(BaseExtractor):
         url: str | None = None,
     ) -> bytes | None:
         fetch_url = str(url or self.profile.url)
+        header_args = [
+            arg
+            for key, value in self.profile.headers.items()
+            if str(key).strip()
+            for arg in ("-H", f"{str(key).strip()}: {str(value)}")
+        ]
         try:
             with tempfile.NamedTemporaryFile(
                 prefix="jato_pdf_",
@@ -215,6 +223,7 @@ class PdfTextExtractor(BaseExtractor):
                         str(timeout),
                         "-o",
                         tmp.name,
+                        *header_args,
                         fetch_url,
                     ],
                     check=False,
