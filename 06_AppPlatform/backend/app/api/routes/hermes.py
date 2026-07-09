@@ -145,6 +145,32 @@ def _default_source_reference_evidence() -> dict[str, Any]:
     }
 
 
+def _default_source_review_queue() -> dict[str, Any]:
+    return {
+        "schemaVersion": "msrp_source_review_queue_v1",
+        "generatedAt": None,
+        "backlogRunId": None,
+        "referenceEvidenceGeneratedAt": None,
+        "officialSourceRequiredForIngest": True,
+        "officialIngestEligible": False,
+        "warnings": [],
+        "summary": {
+            "totalCases": 0,
+            "sourceRepairCount": 0,
+            "businessResolutionCount": 0,
+            "transientRecheckCount": 0,
+            "referenceOnlyCount": 0,
+            "officialSourceRequiredCount": 0,
+            "officialIngestEligibleCount": 0,
+            "localReferenceCount": 0,
+            "countryCount": 0,
+            "countries": [],
+            "sampleOnly": False,
+        },
+        "items": [],
+    }
+
+
 def _default_source_accessibility_audit() -> dict[str, Any]:
     return {
         "schemaVersion": "msrp_source_accessibility_audit_v1",
@@ -214,6 +240,187 @@ def _load_msrp_source_reference_evidence(run_id: str | None = None) -> dict[str,
     return evidence
 
 
+def _source_review_case_id(
+    country_code: str,
+    source_code: str,
+    failure_reason: str,
+) -> str:
+    raw = f"{country_code}:{source_code}:{failure_reason}".lower()
+    return "msrp_source_review:" + re.sub(r"[^a-z0-9_.:-]+", "_", raw)
+
+
+def _source_review_item_from_source(
+    source: dict[str, Any] | str,
+    group: dict[str, Any],
+    queue_type: str,
+) -> dict[str, Any] | None:
+    if isinstance(source, dict):
+        country_code = str(
+            source.get("countryCode") or source.get("country") or ""
+        ).strip().lower()
+        source_code = str(source.get("sourceCode") or source.get("code") or "").strip()
+        host = str(source.get("host") or _source_host(source) or "").strip()
+        source_url = _source_url(source)
+        status = source.get("status")
+        raw_status = source.get("rawStatus")
+        brand = source.get("brand")
+        last_known_good_run_id = source.get("lastKnownGoodRunId")
+        last_known_good_at = source.get("lastKnownGoodAt")
+    else:
+        affected = group.get("affectedCountries") if isinstance(group.get("affectedCountries"), list) else []
+        country_code = str(affected[0] if len(affected) == 1 else "").strip().lower()
+        source_code = str(source or "").strip()
+        host = ""
+        source_url = ""
+        status = None
+        raw_status = None
+        brand = None
+        last_known_good_run_id = None
+        last_known_good_at = None
+
+    if not source_code:
+        return None
+
+    failure_reason = str(group.get("failureReason") or "").strip()
+    return {
+        "caseId": _source_review_case_id(country_code, source_code, failure_reason),
+        "queueType": queue_type,
+        "countryCode": country_code,
+        "sourceCode": source_code,
+        "brand": brand,
+        "host": host,
+        "sourceUrl": source_url,
+        "status": status,
+        "rawStatus": raw_status,
+        "failureReason": failure_reason,
+        "recommendedAction": (
+            "recheck_before_source_repair"
+            if queue_type == "transient_recheck"
+            else group.get("recommendedAction") or "repair_source_definition"
+        ),
+        "recommendedStrategy": group.get("recommendedStrategy"),
+        "priorityBand": group.get("priorityBand") or "low",
+        "priorityScore": float(group.get("priorityScore") or 0),
+        "officialSourceRequiredForIngest": True,
+        "officialIngestEligible": False,
+        "reviewRecommendation": (
+            "recheck_before_source_repair"
+            if queue_type == "transient_recheck"
+            else "repair_official_source"
+        ),
+        "evidence": {
+            "backlogRunId": group.get("runId"),
+            "valid": _int_value(source.get("valid")) if isinstance(source, dict) else 0,
+            "extracted": _int_value(source.get("extracted")) if isinstance(source, dict) else 0,
+            "lastKnownGoodRunId": last_known_good_run_id,
+            "lastKnownGoodAt": last_known_good_at,
+        },
+    }
+
+
+def _source_review_queue_from_backlog(backlog: dict[str, Any]) -> dict[str, Any]:
+    groups = [group for group in backlog.get("groups") or [] if isinstance(group, dict)]
+    items: list[dict[str, Any]] = []
+    seen_case_ids: set[str] = set()
+
+    def append_item(source: dict[str, Any] | str, group: dict[str, Any], queue_type: str) -> None:
+        item = _source_review_item_from_source(source, group, queue_type)
+        if not item:
+            return
+        item["evidence"]["backlogRunId"] = backlog.get("runId")
+        case_id = str(item.get("caseId") or "")
+        if not case_id or case_id in seen_case_ids:
+            return
+        seen_case_ids.add(case_id)
+        items.append(item)
+
+    for group in groups:
+        for source in group.get("sourceRepairIssues") or []:
+            if isinstance(source, dict):
+                append_item(source, group, "source_repair")
+        for source in group.get("businessResolutionIssues") or group.get("sampleBusinessResolutions") or []:
+            if isinstance(source, dict):
+                append_item(source, group, "business_resolution")
+        for source in group.get("transientRegressions") or group.get("sampleTransientRegressions") or []:
+            if isinstance(source, dict):
+                append_item(source, group, "transient_recheck")
+        if not any(group.get(field) for field in (
+            "sourceRepairIssues",
+            "businessResolutionIssues",
+            "sampleBusinessResolutions",
+            "transientRegressions",
+            "sampleTransientRegressions",
+        )):
+            source_repair_count = _int_value(group.get("sourceRepairIssueCount"))
+            transient_count = _int_value(group.get("transientRegressionCount"))
+            for source_code in (group.get("sampleSources") or [])[:source_repair_count]:
+                append_item(str(source_code), group, "source_repair")
+            for source in (group.get("sampleTransientRegressions") or [])[:transient_count]:
+                append_item(source, group, "transient_recheck")
+
+    source_repair_count = _int_value(backlog.get("sourceRepairIssueCount"))
+    if not source_repair_count:
+        source_repair_count = sum(_int_value(group.get("sourceRepairIssueCount")) for group in groups)
+    business_resolution_count = _int_value(backlog.get("businessResolutionCount"))
+    if not business_resolution_count:
+        business_resolution_count = sum(_int_value(group.get("businessResolutionCount")) for group in groups)
+    transient_recheck_count = _int_value(backlog.get("transientRegressionCount"))
+    if not transient_recheck_count:
+        transient_recheck_count = sum(_int_value(group.get("transientRegressionCount")) for group in groups)
+    total_cases = source_repair_count + business_resolution_count + transient_recheck_count
+    if total_cases <= 0:
+        total_cases = _int_value(backlog.get("totalIssueCount"))
+
+    countries = sorted({
+        str(item.get("countryCode") or "").upper()
+        for item in items
+        if str(item.get("countryCode") or "").strip()
+    })
+    return {
+        "schemaVersion": "msrp_source_review_queue_v1",
+        "generatedAt": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "backlogRunId": backlog.get("runId"),
+        "referenceEvidenceGeneratedAt": None,
+        "officialSourceRequiredForIngest": True,
+        "officialIngestEligible": False,
+        "warnings": ["source_review_queue_items_sampled"] if len(items) < total_cases else [],
+        "summary": {
+            "totalCases": total_cases,
+            "sourceRepairCount": source_repair_count,
+            "businessResolutionCount": business_resolution_count,
+            "transientRecheckCount": transient_recheck_count,
+            "referenceOnlyCount": 0,
+            "officialSourceRequiredCount": total_cases,
+            "officialIngestEligibleCount": 0,
+            "localReferenceCount": 0,
+            "countryCount": len(countries),
+            "countries": countries,
+            "sampleOnly": len(items) < total_cases,
+        },
+        "items": items,
+    }
+
+
+def _load_msrp_source_review_queue(
+    run_id: str | None = None,
+    *,
+    source_repair_backlog: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    queue = _read_json_if_exists(_msrp_artifacts_dir() / "msrp_source_review_queue.json")
+    queue_run_id = str((queue or {}).get("backlogRunId") or "") if isinstance(queue, dict) else ""
+    backlog_run_id = str((source_repair_backlog or {}).get("runId") or "")
+    target_run_id = str(run_id or backlog_run_id or "")
+    if isinstance(queue, dict) and (
+        not target_run_id
+        or not queue_run_id
+        or queue_run_id == target_run_id
+    ):
+        return queue
+    if isinstance(source_repair_backlog, dict):
+        return _source_review_queue_from_backlog(source_repair_backlog)
+    return _default_source_review_queue()
+
+
 def _load_msrp_source_accessibility_audit(run_id: str | None = None) -> dict[str, Any]:
     audit = _read_json_if_exists(_msrp_artifacts_dir() / "msrp_source_accessibility_audit.json")
     if not isinstance(audit, dict):
@@ -242,6 +449,16 @@ def _price_alert_review_status_fields(queue: dict[str, Any]) -> dict[str, int]:
     }
 
 
+def _source_review_status_fields(queue: dict[str, Any]) -> dict[str, int]:
+    summary = queue.get("summary") if isinstance(queue.get("summary"), dict) else {}
+    return {
+        "sourceReviewQueueCases": _int_value(summary.get("totalCases")),
+        "sourceReviewQueueSourceRepair": _int_value(summary.get("sourceRepairCount")),
+        "sourceReviewQueueBusinessResolution": _int_value(summary.get("businessResolutionCount")),
+        "sourceReviewQueueTransientRecheck": _int_value(summary.get("transientRecheckCount")),
+    }
+
+
 def _with_source_reference_evidence(progress: dict[str, Any]) -> dict[str, Any]:
     enriched = dict(progress)
     run_id = str((enriched.get("status") or {}).get("runId") or "")
@@ -251,8 +468,20 @@ def _with_source_reference_evidence(progress: dict[str, Any]) -> dict[str, Any]:
         enriched["sourceAccessibilityAudit"] = _load_msrp_source_accessibility_audit(run_id)
     if not isinstance(enriched.get("priceAlertReviewQueue"), dict):
         enriched["priceAlertReviewQueue"] = _load_msrp_price_alert_review_queue()
+    if not isinstance(enriched.get("sourceReviewQueue"), dict):
+        source_repair_backlog = (
+            enriched.get("sourceRepairBacklog")
+            if isinstance(enriched.get("sourceRepairBacklog"), dict)
+            else None
+        )
+        enriched["sourceReviewQueue"] = _load_msrp_source_review_queue(
+            run_id,
+            source_repair_backlog=source_repair_backlog,
+        )
     status = dict(enriched.get("status") or {})
     for key, value in _price_alert_review_status_fields(enriched["priceAlertReviewQueue"]).items():
+        status.setdefault(key, value)
+    for key, value in _source_review_status_fields(enriched["sourceReviewQueue"]).items():
         status.setdefault(key, value)
     enriched["status"] = status
     return enriched

@@ -411,6 +411,14 @@ class TestSentinelAndDeploy:
             }
         ]
         assert backlog["topSourceHosts"][0]["host"] == "audi.se"
+        review_queue = data["sourceReviewQueue"]
+        assert review_queue["schemaVersion"] == "msrp_source_review_queue_v1"
+        assert review_queue["backlogRunId"] == "msrp-dryrun-20260612-070207"
+        assert review_queue["summary"]["totalCases"] == 2
+        assert review_queue["summary"]["sourceRepairCount"] == 2
+        assert review_queue["summary"]["transientRecheckCount"] == 0
+        assert data["status"]["sourceReviewQueueCases"] == 2
+        assert data["status"]["sourceReviewQueueSourceRepair"] == 2
 
     def test_partial_msrp_progress_marks_probe_regressions_for_recheck(self):
         current = {
@@ -502,6 +510,12 @@ class TestSentinelAndDeploy:
         assert backlog["groups"][0]["sampleTransientRegressions"][0]["lastKnownGoodRunId"] == (
             "msrp-dryrun-20260612-070207"
         )
+        review_queue = data["sourceReviewQueue"]
+        assert review_queue["schemaVersion"] == "msrp_source_review_queue_v1"
+        assert review_queue["summary"]["totalCases"] == 1
+        assert review_queue["summary"]["sourceRepairCount"] == 0
+        assert review_queue["summary"]["transientRecheckCount"] == 1
+        assert data["status"]["sourceReviewQueueTransientRecheck"] == 1
 
     def test_partial_msrp_progress_marks_stopped_partial_without_aggregate(self):
         current = {
@@ -653,6 +667,57 @@ class TestSentinelAndDeploy:
         assert data["status"]["priceAlertReviewEffectivenessFollowUp"] == 1
         assert data["status"]["priceAlertReviewEffectivenessLinked"] == 1
         assert data["status"]["priceAlertReviewEffectivenessMissing"] == 0
+
+    def test_msrp_country_progress_dynamic_report_includes_source_review_queue(
+        self,
+        client,
+        tmp_path,
+    ):
+        reports_dir = tmp_path / "hermes" / "reports"
+        artifact_dir = tmp_path / "03_Scripts" / "diagnostics" / "artifacts"
+        report = _make_msrp_v3_report()
+        report["countriesDetail"][0]["sources"] = [
+            {
+                "countryCode": "fi",
+                "sourceCode": "audi_q4_e_tron_fi_draft_scrapling",
+                "status": "empty",
+                "failureReason": "no_observation_extracted",
+                "recommendedStrategy": "diagnose_with_msrp_page_analyzer",
+                "sourceUrl": "https://www.audi.fi/fi/web/fi/models/q4-e-tron.html",
+                "valid": 0,
+                "extracted": 0,
+            },
+            {
+                "countryCode": "fi",
+                "sourceCode": "tesla_model_y_fi_draft_scrapling",
+                "status": "empty",
+                "failureReason": "anti_bot_access_denied",
+                "recommendedStrategy": "manual_review_or_proxy_required",
+                "sourceUrl": "https://www.tesla.com/fi_fi/modely",
+                "valid": 0,
+                "extracted": 0,
+            },
+        ]
+        _write_json(artifact_dir / "dryrun_report.json", report)
+
+        with (
+            patch("app.api.routes.hermes.PROJECT_ROOT", tmp_path),
+            patch("app.api.routes.hermes.REPORTS_DIR", reports_dir),
+            patch("app.api.routes.hermes._partial_msrp_progress", return_value=None),
+        ):
+            resp = client.get("/hermes/msrp-country-progress")
+
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["sourceReviewQueue"]["schemaVersion"] == (
+            "msrp_source_review_queue_v1"
+        )
+        assert data["sourceReviewQueue"]["backlogRunId"] == report["runId"]
+        assert data["sourceReviewQueue"]["summary"]["totalCases"] == 2
+        assert data["sourceReviewQueue"]["summary"]["sourceRepairCount"] == 2
+        assert data["sourceReviewQueue"]["summary"]["transientRecheckCount"] == 0
+        assert data["status"]["sourceReviewQueueCases"] == 2
+        assert data["status"]["sourceReviewQueueSourceRepair"] == 2
 
     def test_msrp_country_progress_enriches_latest_report_with_all_country_latest(
         self,
