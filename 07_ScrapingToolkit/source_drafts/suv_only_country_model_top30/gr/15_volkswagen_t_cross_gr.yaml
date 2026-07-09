@@ -1,39 +1,47 @@
 source_code: volkswagen_t_cross_gr_draft_scrapling
 country: 希腊
 brand: VOLKSWAGEN
-source_url: https://todo.invalid/gr/volkswagen/t_cross
-source_type: manufacturer_official
+source_url: https://www.volkswagen.gr/idhub/content/dam/onehub_pkw/importers/gr/pricelists/2026/Pricelist_VW_PC_MY27-2026_06_10.pdf
+source_type: official_price_list
 price_semantics: base_msrp
-extractor_type: playwright
-profile_preset: ../_shared/presets/volkswagen_configurator_trim_overview_playwright.yaml
+extractor_type: pdf_text
 profile:
-  url: https://todo.invalid/gr/volkswagen/t_cross
+  url: https://www.volkswagen.gr/idhub/content/dam/onehub_pkw/importers/gr/pricelists/2026/Pricelist_VW_PC_MY27-2026_06_10.pdf
+  prefer_curl_download: true
+  browser_download_fallback: true
+  timeout_seconds: 60
+  retry_attempts: 1
+  retry_delay_seconds: 1
   default_currency: EUR
-  default_tax_included: true
-  default_price_label: MSRP
+  default_tax_included: false
+  default_price_label: Ανώτατη Προτεινόμενη Λιανική Τιμή προ Φόρων
   fixed_model: T-CROSS
   fixed_jato_model: T-CROSS
-  structured_fields:
-    powertrain_rules:
-    - key: powertrain_ice
-      powertrain: ICE
-      keywords:
-      - ice
-      - petrol
-      - gasoline
-      - diesel
-      - combustion
-      - venzini
-      - petreleo
+  copy_trim_to_jato_trim: true
+  match_confidence: 0.85
+  match_status: review_required
+  match_reason:
+    kind: official_pdf_price_list
+    source: volkswagen_gr_my27_pre_tax_price_list_pdf
+    note: Official Volkswagen Greece MY2027 price-list PDF linked from the
+      official Τιμοκατάλογοι Volkswagen page. The table exposes maximum
+      recommended retail price before taxes; regex captures only the T-Cross
+      rows from that pre-tax price column and marks tax_included false.
+  entry_patterns:
+  - pattern: 'VOLKSWAGEN\s+T-CROSS\s+D3\s+\w+\s+2027\s+T-Cross\s+(?P<powertrain>1\.0\s+TSI\s+(?:95|116)PS(?:\s+DSG)?)\s+(?P<trim>Essential|Life|More|R-Line\s+More)\s+G\d+\s+999\s+/\s+\d+\s+/\s+\d+\s+€\s+(?P<price>\d{2}\.\d{3})'
+    jato_powertrain: ICE
+    price_label: Ανώτατη Προτεινόμενη Λιανική Τιμή προ Φόρων
 schedule:
   frequency: manual_only
   run_window_start: 00:00
   run_window_end: 05:00
   preferred_weekday: monday
-notes: Draft scaffold generated from country×model top30 backlog. Replace source_url,
-  profile.url, selectors, currency, price label, and the single-model placeholders
-  before promoting to 07_ScrapingToolkit/sources. [Switched to playwright_card_flow
-  with volkswagen_configurator_trim_overview_playwright.yaml]
+notes: Official Volkswagen Greece MY2027 PDF linked from
+  https://www.volkswagen.gr/el/Pricelists_Volkswagen.html. Page 1 was visually
+  checked after rendering; the extractor captures T-Cross rows from the
+  maximum recommended retail price before taxes column, so tax_included is
+  explicitly false to avoid mixing these values with tax-included Greece MSRP
+  sources.
 bootstrap_meta:
   country_model_rank: 15
   suggested_scope_kind: single_model
