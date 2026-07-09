@@ -135,6 +135,95 @@ def test_dashboard_reads_v3_report_from_artifacts(tmp_path, monkeypatch):
     assert dashboard["stableCoverage"]["financeMonthlyPaymentCount"] == 1
 
 
+def test_dashboard_loads_indexed_report_without_artifact_path(tmp_path, monkeypatch):
+    artifacts = tmp_path / "artifacts"
+    logs = tmp_path / "logs"
+    artifacts.mkdir()
+    logs.mkdir()
+
+    run_id = "msrp-dryrun-20260612-081500"
+    report = {
+        "schemaVersion": "msrp_dryrun_report_v3",
+        "runId": run_id,
+        "batch": "pt",
+        "expectedCountries": ["pt"],
+        "observedCountries": ["pt"],
+        "missingCountries": [],
+        "duplicateCountries": [],
+        "summary": {
+            "total": 1,
+            "pass": 1,
+            "empty": 0,
+            "fail": 0,
+            "errors": 0,
+            "passPct": 100.0,
+            "status": "success",
+            "gateThreshold": 70,
+            "gateStatus": "allowed",
+        },
+        "countriesDetail": [
+            {
+                "countryCode": "pt",
+                "total": 1,
+                "pass": 1,
+                "empty": 0,
+                "fail": 0,
+                "errors": 0,
+                "passPct": 100.0,
+                "status": "success",
+                "sources": [
+                    {
+                        "sourceCode": "volvo_xc40_pt_draft_scrapling",
+                        "status": "pass",
+                        "valid": 1,
+                    },
+                ],
+            },
+        ],
+        "generatedAt": "2026-06-12T08:15:00Z",
+    }
+    index = {
+        "schemaVersion": "msrp_dryrun_runs_index_v1",
+        "latestRunId": run_id,
+        "runs": [
+            {
+                "runId": run_id,
+                "batch": "pt",
+                "finishedAt": "2026-06-12T08:15:00Z",
+                "status": "success",
+                "gateStatus": "allowed",
+                "gateThreshold": 70,
+                "passPct": 100.0,
+                "total": 1,
+                "pass": 1,
+                "empty": 0,
+                "fail": 0,
+                "errors": 0,
+            },
+        ],
+    }
+
+    (artifacts / f"dryrun_report_{run_id}.json").write_text(json.dumps(report))
+    (artifacts / "dryrun_runs_index.json").write_text(json.dumps(index))
+
+    monkeypatch.setattr(progress, "ARTIFACT_DIR", artifacts)
+    monkeypatch.setattr(progress, "LATEST_REPORT_PATH", artifacts / "dryrun_report.json")
+    monkeypatch.setattr(progress, "RUNS_INDEX_PATH", artifacts / "dryrun_runs_index.json")
+    monkeypatch.setattr(progress, "LOG_DIR", logs)
+    monkeypatch.setattr(progress, "LOCK_FILE", tmp_path / "missing.lock")
+
+    dashboard = progress.get_dryrun_dashboard()
+
+    assert dashboard["current"]["runId"] == run_id
+    assert dashboard["current"]["countries"][0]["countryCode"] == "pt"
+    assert dashboard["allCountries"][0]["countryCode"] == "pt"
+    assert dashboard["allCountries"][0]["runId"] == run_id
+    assert dashboard["stableCoverage"]["latestRunId"] == run_id
+    assert dashboard["stableCoverage"]["sourcePassRate"] == 100.0
+    assert dashboard["history"][0]["file"] == f"dryrun_report_{run_id}.json"
+    assert dashboard["history"][0]["countriesDetail"][0]["countryCode"] == "pt"
+
+
 def test_dashboard_exposes_latest_progress_for_all_historical_countries(tmp_path, monkeypatch):
     artifacts = tmp_path / "artifacts"
     logs = tmp_path / "logs"

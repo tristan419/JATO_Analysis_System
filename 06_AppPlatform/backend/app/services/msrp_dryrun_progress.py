@@ -182,6 +182,29 @@ def _load_v3_report(run_id: str | None = None) -> dict[str, Any] | None:
     return None
 
 
+def _load_indexed_run_v3_report(run_meta: dict[str, Any] | None) -> dict[str, Any] | None:
+    if not run_meta:
+        return None
+
+    run_id = str(run_meta.get("runId") or "")
+    fallback_paths: list[Path] = []
+    artifact_path = _artifact_path_from_ref(run_meta.get("artifactPath"))
+    if artifact_path:
+        fallback_paths.append(artifact_path)
+    if run_id:
+        fallback_paths.append(ARTIFACT_DIR / f"dryrun_report_{run_id}.json")
+
+    seen: set[Path] = set()
+    for path in fallback_paths:
+        if path in seen:
+            continue
+        seen.add(path)
+        data = _load_json(path)
+        if data and data.get("schemaVersion") == "msrp_dryrun_report_v3":
+            return data
+    return None
+
+
 def _load_latest_indexed_v3_report(index_data: dict[str, Any] | None) -> dict[str, Any] | None:
     latest_run_id = str((index_data or {}).get("latestRunId") or "")
     if not latest_run_id:
@@ -203,21 +226,9 @@ def _load_latest_indexed_v3_report(index_data: dict[str, Any] | None) -> dict[st
     if run_meta:
         latest_run_id = str(run_meta.get("runId") or "")
 
-    fallback_paths: list[Path] = [ARTIFACT_DIR / f"dryrun_report_{latest_run_id}.json"]
-    if run_meta:
-        artifact_path = _artifact_path_from_ref(run_meta.get("artifactPath"))
-        if artifact_path:
-            fallback_paths.insert(0, artifact_path)
-
-    seen: set[Path] = set()
-    for path in fallback_paths:
-        if path in seen:
-            continue
-        seen.add(path)
-        data = _load_json(path)
-        if data and data.get("schemaVersion") == "msrp_dryrun_report_v3":
-            return data
-    return None
+    return _load_indexed_run_v3_report(
+        run_meta or {"runId": latest_run_id},
+    )
 
 
 def _run_recency_key(run: dict[str, Any]) -> tuple[str, str]:
@@ -504,10 +515,8 @@ def _all_country_latest_from_runs_index(index_data: dict[str, Any] | None) -> li
     ):
         if _is_diagnostic_run(run):
             continue
-        run_id = str(run.get("runId") or "")
-        artifact_path = _artifact_path_from_ref(run.get("artifactPath"))
-        report = _load_json(artifact_path) if artifact_path else None
-        if not report or report.get("schemaVersion") != "msrp_dryrun_report_v3":
+        report = _load_indexed_run_v3_report(run)
+        if not report:
             continue
         for country in report.get("countriesDetail") or []:
             normalized = _normalize_country_from_v3(
@@ -722,12 +731,9 @@ def _history_from_runs_index() -> list[dict[str, Any]]:
         source_filter = _string_list(run.get("sourceFilter"))
         is_source_filtered = _is_source_filtered_run(run)
         updates_latest_artifact = _updates_latest_artifact(run)
-        report = None
-        artifact_path = _artifact_path_from_ref(run.get("artifactPath"))
-        if artifact_path:
-            report = _load_json(artifact_path)
+        report = _load_indexed_run_v3_report(run)
         countries_detail: list[dict[str, Any]] = []
-        if report and report.get("schemaVersion") == "msrp_dryrun_report_v3":
+        if report:
             for country in report.get("countriesDetail") or []:
                 code = str(country.get("countryCode") or "").lower()
                 countries_detail.append({
