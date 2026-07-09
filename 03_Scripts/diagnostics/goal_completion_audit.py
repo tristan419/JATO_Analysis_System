@@ -23,7 +23,10 @@ from urllib.request import Request, urlopen
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
+SCRIPT_DIR = REPO_ROOT / "03_Scripts"
 HERMES_SCRIPT_DIR = REPO_ROOT / "03_Scripts" / "hermes"
+if str(SCRIPT_DIR) not in sys.path:
+    sys.path.insert(0, str(SCRIPT_DIR))
 if str(HERMES_SCRIPT_DIR) not in sys.path:
     sys.path.insert(0, str(HERMES_SCRIPT_DIR))
 
@@ -31,6 +34,11 @@ try:
     from pipeline_status_writer import write_pipeline_status
 except ImportError:  # pragma: no cover - optional for isolated unit imports.
     write_pipeline_status = None  # type: ignore[assignment]
+
+try:
+    from msrp_source_review_queue import build_source_review_queue
+except ImportError:  # pragma: no cover - optional for isolated unit imports.
+    build_source_review_queue = None  # type: ignore[assignment]
 
 
 SCHEMA_VERSION = "jato_goal_completion_audit_v2"
@@ -40,6 +48,15 @@ PRICE_ALERT_REVIEW_QUEUE_RELATIVE_PATH = (
     "03_Scripts/diagnostics/artifacts/msrp_price_alert_review_queue.json"
 )
 SOURCE_REVIEW_QUEUE_SCHEMA_VERSION = "msrp_source_review_queue_v1"
+SOURCE_REVIEW_QUEUE_RELATIVE_PATH = (
+    "03_Scripts/diagnostics/artifacts/msrp_source_review_queue.json"
+)
+SOURCE_REPAIR_BACKLOG_RELATIVE_PATH = (
+    "03_Scripts/diagnostics/artifacts/msrp_source_repair_backlog.json"
+)
+SOURCE_REFERENCE_EVIDENCE_RELATIVE_PATH = (
+    "03_Scripts/diagnostics/artifacts/msrp_source_reference_evidence.json"
+)
 DEFAULT_SOURCE_DRAFT_DIR = "07_ScrapingToolkit/source_drafts/suv_only_country_model_top30"
 DEFAULT_REQUIRED_SOURCE_COUNTRIES = (
     "at",
@@ -210,6 +227,66 @@ def _load_price_alert_review_queue_artifact(
     if not isinstance(payload, dict):
         return None, _display_path(path)
     return payload, _display_path(path)
+
+
+def _load_source_review_queue_artifact(
+    repo_root: Path,
+) -> tuple[dict[str, Any] | None, str, dict[str, Any]]:
+    queue_path = repo_root / SOURCE_REVIEW_QUEUE_RELATIVE_PATH
+    backlog_path = repo_root / SOURCE_REPAIR_BACKLOG_RELATIVE_PATH
+    reference_path = repo_root / SOURCE_REFERENCE_EVIDENCE_RELATIVE_PATH
+    queue = _read_json(queue_path)
+    backlog = _read_json(backlog_path)
+    reference_evidence = _read_json(reference_path)
+    backlog_run_id = (
+        str(backlog.get("runId") or "").strip()
+        if isinstance(backlog, dict)
+        else ""
+    )
+    queue_run_id = (
+        str(queue.get("backlogRunId") or "").strip()
+        if isinstance(queue, dict)
+        else ""
+    )
+    queue_matches_backlog = bool(
+        isinstance(queue, dict)
+        and (not backlog_run_id or not queue_run_id or queue_run_id == backlog_run_id)
+    )
+    meta: dict[str, Any] = {
+        "sourceReviewQueuePath": _display_path(queue_path),
+        "sourceRepairBacklogPath": _display_path(backlog_path),
+        "sourceReferenceEvidencePath": _display_path(reference_path),
+        "sourceRepairBacklogRunId": backlog_run_id or None,
+        "sourceReviewQueueBacklogRunId": queue_run_id or None,
+        "sourceReviewQueueBacklogRunMatches": queue_matches_backlog,
+        "sourceReviewQueueSource": "missing",
+    }
+    if isinstance(queue, dict) and queue_matches_backlog:
+        meta["sourceReviewQueueSource"] = "artifact"
+        return queue, _display_path(queue_path), meta
+
+    if isinstance(backlog, dict) and build_source_review_queue is not None:
+        try:
+            payload = build_source_review_queue(
+                backlog,
+                reference_evidence if isinstance(reference_evidence, dict) else None,
+            )
+            if isinstance(payload, dict):
+                meta["sourceReviewQueueSource"] = "dynamic_backlog"
+                meta["staleSourceReviewQueuePath"] = (
+                    _display_path(queue_path) if isinstance(queue, dict) else None
+                )
+                meta["staleSourceReviewQueueBacklogRunId"] = queue_run_id or None
+                meta["sourceReviewQueueBacklogRunId"] = payload.get("backlogRunId")
+                meta["sourceReviewQueueBacklogRunMatches"] = True
+                return payload, f"{_display_path(backlog_path)} (dynamic)", meta
+        except Exception as exc:  # noqa: BLE001 - audit should report stale/missing queue.
+            meta["sourceReviewQueueBuildError"] = str(exc)
+
+    if isinstance(queue, dict):
+        meta["sourceReviewQueueSource"] = "stale_artifact"
+        return queue, _display_path(queue_path), meta
+    return None, _display_path(queue_path), meta
 
 
 def _msrp_detail_requirements(
@@ -385,6 +462,10 @@ def _price_alert_review_closure_requirement(
 
 def _source_review_queue_coverage_requirement(
     msrp_detail_requirements: Sequence[dict[str, Any]],
+    *,
+    source_review_queue: dict[str, Any] | None = None,
+    source_review_queue_path: str | None = None,
+    source_review_queue_meta: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     by_key = _requirements_by_report_key(msrp_detail_requirements)
     dryrun = by_key.get("msrp_dryrun_governance", {})
@@ -393,36 +474,68 @@ def _source_review_queue_coverage_requirement(
         if isinstance(dryrun.get("runtime"), dict)
         else {}
     )
+    artifact_summary = (
+        source_review_queue.get("summary")
+        if isinstance(source_review_queue, dict)
+        and isinstance(source_review_queue.get("summary"), dict)
+        else {}
+    )
+
+    def runtime_or_artifact(runtime_key: str, artifact_key: str) -> Any:
+        if artifact_key in artifact_summary:
+            return artifact_summary.get(artifact_key)
+        return dryrun_runtime.get(runtime_key)
+
     schema_version = dryrun_runtime.get("sourceReviewQueueSchemaVersion")
-    case_count = _safe_int(dryrun_runtime.get("sourceReviewQueueCaseCount"), 0)
-    expected_count = _safe_int(
-        dryrun_runtime.get("sourceReviewQueueExpectedCaseCount"),
+    if not schema_version and isinstance(source_review_queue, dict):
+        schema_version = source_review_queue.get("schemaVersion")
+    case_count = _safe_int(
+        runtime_or_artifact("sourceReviewQueueCaseCount", "totalCases"),
         0,
     )
     source_repair_count = _safe_int(
-        dryrun_runtime.get("sourceRepairIssueCount"),
+        runtime_or_artifact("sourceRepairIssueCount", "sourceRepairCount"),
         0,
     )
     transient_recheck_count = _safe_int(
-        dryrun_runtime.get("transientRecheckCount"),
+        runtime_or_artifact("transientRecheckCount", "transientRecheckCount"),
         0,
     )
     business_resolution_count = _safe_int(
-        dryrun_runtime.get("businessResolutionCount"),
+        runtime_or_artifact("businessResolutionCount", "businessResolutionCount"),
         0,
     )
-    if expected_count <= 0:
+    expected_count = 0
+    if not artifact_summary:
+        expected_count = _safe_int(
+            dryrun_runtime.get("sourceReviewQueueExpectedCaseCount"),
+            0,
+        )
+    if artifact_summary or expected_count <= 0:
         expected_count = (
             source_repair_count
             + transient_recheck_count
             + business_resolution_count
         )
     schema_ok = schema_version == SOURCE_REVIEW_QUEUE_SCHEMA_VERSION
-    queue_complete = bool(
-        dryrun_runtime.get("sourceReviewQueueComplete")
-        and schema_ok
-        and (expected_count <= 0 or case_count >= expected_count)
+    queue_matches_backlog = bool(
+        (source_review_queue_meta or {}).get(
+            "sourceReviewQueueBacklogRunMatches",
+            True,
+        )
     )
+    if isinstance(source_review_queue, dict):
+        queue_complete = bool(
+            schema_ok
+            and queue_matches_backlog
+            and (expected_count <= 0 or case_count >= expected_count)
+        )
+    else:
+        queue_complete = bool(
+            dryrun_runtime.get("sourceReviewQueueComplete")
+            and schema_ok
+            and (expected_count <= 0 or case_count >= expected_count)
+        )
     passed = dryrun.get("status") == "passed" and queue_complete
     degraded = (
         dryrun.get("status") in {"passed", "degraded"}
@@ -433,6 +546,7 @@ def _source_review_queue_coverage_requirement(
     evidence = _dedupe_evidence([
         *(dryrun.get("evidence") or []),
         "GET /hermes/msrp-country-progress",
+        source_review_queue_path if isinstance(source_review_queue, dict) else None,
     ])
 
     return _requirement(
@@ -446,6 +560,25 @@ def _source_review_queue_coverage_requirement(
             "sourceReviewQueueCaseCount": case_count,
             "sourceReviewQueueExpectedCaseCount": expected_count,
             "sourceReviewQueueComplete": queue_complete,
+            "sourceReviewQueuePath": source_review_queue_path,
+            "sourceReviewQueueBacklogRunId": (
+                source_review_queue.get("backlogRunId")
+                if isinstance(source_review_queue, dict)
+                else None
+            ),
+            "sourceReviewQueueBacklogRunMatches": queue_matches_backlog,
+            "sourceReviewQueueSource": (source_review_queue_meta or {}).get(
+                "sourceReviewQueueSource",
+            ),
+            "sourceRepairBacklogPath": (source_review_queue_meta or {}).get(
+                "sourceRepairBacklogPath",
+            ),
+            "sourceRepairBacklogRunId": (source_review_queue_meta or {}).get(
+                "sourceRepairBacklogRunId",
+            ),
+            "sourceReviewQueueBuildError": (source_review_queue_meta or {}).get(
+                "sourceReviewQueueBuildError",
+            ),
             "sourceRepairIssueCount": source_repair_count,
             "transientRecheckCount": transient_recheck_count,
             "businessResolutionCount": business_resolution_count,
@@ -846,6 +979,11 @@ def build_goal_completion_report(
     price_alert_review_queue, price_alert_review_queue_path = (
         _load_price_alert_review_queue_artifact(root)
     )
+    (
+        source_review_queue,
+        source_review_queue_path,
+        source_review_queue_meta,
+    ) = _load_source_review_queue_artifact(root)
     msrp_detail_requirements = _msrp_detail_requirements(
         msrp_report=msrp_report,
         msrp_status=msrp_status,
@@ -857,6 +995,9 @@ def build_goal_completion_report(
     )
     msrp_source_review_queue_requirement = _source_review_queue_coverage_requirement(
         msrp_detail_requirements,
+        source_review_queue=source_review_queue,
+        source_review_queue_path=source_review_queue_path,
+        source_review_queue_meta=source_review_queue_meta,
     )
     msrp_completion_requirements = [
         *msrp_detail_requirements,

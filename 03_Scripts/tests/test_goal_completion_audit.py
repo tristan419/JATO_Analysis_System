@@ -195,6 +195,65 @@ def _write_price_alert_review_queue_artifact(
     )
 
 
+def _source_review_issue(
+    source_code: str,
+    *,
+    country_code: str = "se",
+    failure_reason: str = "no_observation_extracted",
+) -> dict:
+    return {
+        "countryCode": country_code,
+        "sourceCode": source_code,
+        "brand": "Test",
+        "host": "example.test",
+        "sourceUrl": "https://example.test/model",
+        "status": "empty",
+        "failureReason": failure_reason,
+        "valid": 0,
+        "extracted": 0,
+    }
+
+
+def _write_source_repair_backlog_artifact(
+    repo_root: Path,
+    *,
+    run_id: str = "msrp-dryrun-unit",
+) -> None:
+    _write_json(
+        repo_root / audit.SOURCE_REPAIR_BACKLOG_RELATIVE_PATH,
+        {
+            "schemaVersion": "msrp_source_repair_backlog_v1",
+            "runId": run_id,
+            "generatedAt": "2026-07-09T00:00:00Z",
+            "sourceRepairIssueCount": 1,
+            "transientRegressionCount": 1,
+            "businessResolutionCount": 0,
+            "groups": [
+                {
+                    "failureReason": "no_observation_extracted",
+                    "recommendedAction": "repair_source_definition",
+                    "recommendedStrategy": "diagnose_with_msrp_page_analyzer",
+                    "priorityBand": "high",
+                    "priorityScore": 80,
+                    "sourceRepairIssues": [
+                        _source_review_issue("source_repair_unit")
+                    ],
+                    "businessResolutionIssues": [],
+                    "transientRegressions": [
+                        _source_review_issue(
+                            "transient_recheck_unit",
+                            failure_reason="no_observation_extracted",
+                        )
+                    ],
+                }
+            ],
+            "sourceIssues": [],
+            "businessResolutionIssues": [],
+            "transientSourceRegressions": [],
+        },
+    )
+
+
 def test_build_report_separates_local_p0_from_unchecked_production(tmp_path: Path) -> None:
     _write_statuses(tmp_path)
     source_root = tmp_path / "source_drafts"
@@ -260,6 +319,48 @@ def test_price_alert_review_closure_can_use_queue_artifact_when_readiness_is_sta
     )
     assert closure["runtime"]["priceAlertReviewCaseCount"] == 2
     assert closure["runtime"]["priceAlertReviewEffectivenessLinkedCount"] == 1
+    assert report["summary"]["msrpReady"] is True
+
+
+def test_source_review_queue_can_build_from_backlog_when_readiness_is_stale(
+    tmp_path: Path,
+) -> None:
+    _write_statuses(tmp_path)
+    report_path = tmp_path / "hermes" / "reports" / "msrp_readiness_audit.json"
+    report_payload = json.loads(report_path.read_text(encoding="utf-8"))
+    for item in report_payload["requirements"]:
+        if item["key"] == "dryrun_governance":
+            item["runtime"] = {
+                "sourceRepairIssueCount": 1,
+                "sourceReviewQueueExpectedCaseCount": 1,
+            }
+    _write_json(report_path, report_payload)
+    _write_json(
+        tmp_path / audit.SOURCE_REVIEW_QUEUE_RELATIVE_PATH,
+        {
+            **_remote_source_review_queue_payload(total_cases=1),
+            "backlogRunId": "stale-run",
+        },
+    )
+    _write_source_repair_backlog_artifact(tmp_path, run_id="fresh-run")
+    source_root = tmp_path / "source_drafts"
+    _write_source_drafts(source_root, ("se", "fi"))
+
+    report = audit.build_goal_completion_report(
+        repo_root=tmp_path,
+        source_draft_dir=source_root,
+        required_source_countries=("se", "fi"),
+    )
+    coverage = {
+        item["key"]: item for item in report["requirements"]
+    }["msrp_source_review_queue_coverage"]
+
+    assert coverage["status"] == "passed"
+    assert coverage["runtime"]["sourceReviewQueueSource"] == "dynamic_backlog"
+    assert coverage["runtime"]["sourceReviewQueueBacklogRunId"] == "fresh-run"
+    assert coverage["runtime"]["sourceReviewQueueCaseCount"] == 2
+    assert coverage["runtime"]["sourceReviewQueueExpectedCaseCount"] == 2
+    assert coverage["runtime"]["sourceReviewQueueComplete"] is True
     assert report["summary"]["msrpReady"] is True
 
 
