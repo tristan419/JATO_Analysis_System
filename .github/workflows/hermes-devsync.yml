@@ -37,8 +37,7 @@ jobs:
             git config user.name "hermes-bot"
             git config user.email "hermes-bot@jato-analysis.local"
             git add hermes/dev_events/dev_events.jsonl
-            SHA_SHORT=$(echo "$GITHUB_SHA" | cut -c1-8)
-            git commit -m "hermes: auto dev event from push $SHA_SHORT"
+            git commit -m "hermes: auto dev event from push $GITHUB_SHA"
             git pull --rebase origin main
             git push origin main
             echo "dev_event_sha=$(git rev-parse HEAD)" >> $GITHUB_OUTPUT

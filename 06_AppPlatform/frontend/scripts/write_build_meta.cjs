@@ -56,6 +56,14 @@ function changedFilesForCommit(commit) {
   }
 }
 
+function subjectForCommit(commit) {
+  try {
+    return git(["log", "-1", "--format=%s", commit]);
+  } catch {
+    return "";
+  }
+}
+
 function parentCommit(commit) {
   try {
     return git(["rev-parse", `${commit}^`]);
@@ -68,9 +76,30 @@ function isHermesDevEventOnly(files) {
   return files.length > 0 && files.every((file) => file === "hermes/dev_events/dev_events.jsonl" || file.startsWith("hermes/dev_events/"));
 }
 
+function applicationCommitFromHermesSubject(commit) {
+  const subject = subjectForCommit(commit);
+  const match = subject.match(/^hermes: auto dev event from push ([0-9a-f]{7,40})$/i);
+  if (!match) {
+    return "";
+  }
+  const candidate = match[1];
+  if (candidate.length >= 40) {
+    return candidate;
+  }
+  try {
+    return git(["rev-parse", candidate]);
+  } catch {
+    return "";
+  }
+}
+
 function resolveApplicationCommit(commit) {
   let cursor = commit;
   for (let i = 0; i < 20 && cursor; i += 1) {
+    const subjectApplicationCommit = applicationCommitFromHermesSubject(cursor);
+    if (subjectApplicationCommit) {
+      return subjectApplicationCommit;
+    }
     const files = changedFilesForCommit(cursor);
     if (!isHermesDevEventOnly(files)) {
       return cursor;
