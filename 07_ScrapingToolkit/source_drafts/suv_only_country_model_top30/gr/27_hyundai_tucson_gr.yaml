@@ -1,133 +1,57 @@
 source_code: hyundai_tucson_gr_draft_scrapling
 country: 希腊
 brand: HYUNDAI
-source_url: https://www.hyundai.gr/models/hyundai-tucson-facelift/
-source_type: manufacturer_official
+source_url: https://www.hyundai.gr/wp-content/uploads/2026/06/timokatalogos-lianikis-hyundai-23.06.2026.-pdf.pdf
+source_type: official_price_list
 price_semantics: base_msrp
-extractor_type: scrapling
+extractor_type: pdf_text
 profile:
-  url: https://www.hyundai.gr/models/hyundai-tucson-facelift/
-  headless: true
+  url: https://www.hyundai.gr/wp-content/uploads/2026/06/timokatalogos-lianikis-hyundai-23.06.2026.-pdf.pdf
+  prefer_curl_download: true
+  browser_download_fallback: true
+  timeout_seconds: 60
+  retry_attempts: 1
+  retry_delay_seconds: 1
   default_currency: EUR
   default_tax_included: true
-  default_price_label: MSRP
+  default_price_label: Προτεινόμενη τιμή πώλησης με ΤΤ και ΦΠΑ
   fixed_model: TUCSON
   fixed_jato_model: TUCSON
-  fixed_jato_powertrain: null
-  model_rules: []
-  skip_if_model_unmapped: false
   copy_trim_to_jato_trim: true
-  confidence_rules:
-    base: 0.2
-    fixed_model_bonus: 0.18
-    fixed_jato_model_bonus: 0.12
-    model_rule_bonus: 0.12
-    trim_present_bonus: 0.1
-    copy_trim_to_jato_trim_bonus: 0.09
-    parsed_price_text_bonus: 0.03
-    currency_bonus: 0.01
-    price_label_bonus: 0.02
-    trim_keyword_bonuses: []
-    price_band_bonuses:
-    - key: price_band_entry
-      label: Entry price band matched
-      max: 0
-      delta: 0.0
-    - key: price_band_mid
-      label: Mid price band matched
-      min: 0
-      max: 0
-      delta: 0.01
-    - key: price_band_high
-      label: High price band matched
-      min: 0
-      delta: 0.03
-    powertrain_keyword_bonuses: []
-    powertrain_bonuses:
-    - key: powertrain_phev
-      label: 'Powertrain matched: PHEV'
-      powertrain: PHEV
-      delta: 0.03
-    - key: powertrain_hev
-      label: 'Powertrain matched: HEV'
-      powertrain: HEV
-      delta: 0.03
-    - key: powertrain_mhev
-      label: 'Powertrain matched: MHEV'
-      powertrain: MHEV
-      delta: 0.03
-    - key: powertrain_ice
-      label: 'Powertrain matched: ICE'
-      powertrain: ICE
-      delta: 0.03
-    clamp_min: 0.0
-    clamp_max: 1.0
-  structured_fields:
-    edition_rules:
-    - key: edition_special
-      label: Special Edition
-      keyword: special edition
-      special: true
-    powertrain_rules:
-    - key: powertrain_phev
-      powertrain: PHEV
-      keywords:
-      - phev
-      - plug-in hybrid
-      - plug in hybrid
-      - plugin hybrid
-      - epanafortizomeno yvridiko
-    - key: powertrain_hev
-      powertrain: HEV
-      keywords:
-      - hev
-      - full hybrid
-      - self-charging hybrid
-      - self charging hybrid
-      - hybrid
-      - yvridiko
-    - key: powertrain_mhev
-      powertrain: MHEV
-      keywords:
-      - mhev
-      - mild hybrid
-      - mild-hybrid
-      - 48V
-    - key: powertrain_ice
-      powertrain: ICE
-      keywords:
-      - ice
-      - petrol
-      - gasoline
-      - diesel
-      - combustion
-      - venzini
-      - petreleo
-  auto_accept_gates:
-    review_threshold: 0.95
-    semi_auto_threshold: 0.98
-    require_powertrain_match: true
-    force_review_if_powertrain_missing: true
-    force_review_if_powertrain_ambiguous: true
-    force_review_for_special_edition: true
-  css:
-    vehicle_container: body
-    model: h2, h3
-    trim: h3
-    price: '[class*="price"]'
-  tier: stealth
-  network_idle: true
-  impersonate: chrome
+  match_confidence: 0.9
+  match_status: review_required
+  match_reason:
+    kind: official_pdf_price_list
+    source: hyundai_gr_retail_price_list_pdf
+    note: Official Hyundai Greece retail price-list PDF valid from 2026-06-23
+      and linked from the official site navigation as Τιμοκατάλογος Hyundai.
+      The table exposes recommended retail price with TT and VAT, retail
+      discount, discounted retail price, and color charges; regex captures only
+      the first recommended retail price column for TUCSON F/L MY26 rows and
+      excludes MY25 rows.
+  entry_patterns:
+  - pattern: 'H611(?:50|52|54|56|58)\s+TUCSON\s+F/L\s+MY26\s+(?P<powertrain>1\.6T\s+150ps\s+(?:6MT|7DCT)\s+2WD)\s+(?P<trim>PREMIUM|DISTINCTIVE|LIMITED|N\s+Line)\s+(?P<price>\d{2}\.\d{3})\s*€\s+0\s*€'
+    jato_powertrain: ICE
+    price_label: Προτεινόμενη τιμή πώλησης με ΤΤ και ΦΠΑ
+  - pattern: 'H611(?:72|74|76|78|80|82|84|86|88|90|92)\s+TUCSON\s+F/L\s+MY26\s+(?P<powertrain>1\.6D\s+48V\s+136ps\s+(?:6MT|7DCT)\s+(?:2WD|4WD))\s+(?P<trim>PREMIUM|DISTINCTIVE|LIMITED|N\s+Line)\s+(?P<price>\d{2}\.\d{3})\s*€\s+0\s*€'
+    jato_powertrain: MHEV
+    price_label: Προτεινόμενη τιμή πώλησης με ΤΤ και ΦΠΑ
+  - pattern: 'H612(?:20|24|26|28|30|32|34)\s+TUCSON\s+F/L\s+MY26\s+Full\s+Hybrid\s+(?P<powertrain>1\.6T\s+239ps\s+6AT\s+(?:2WD|4WD))\s+(?P<trim>PREMIUM|DISTINCTIVE|LIMITED|N\s+Line)\s+(?P<price>\d{2}\.\d{3})\s*€\s+0\s*€'
+    jato_powertrain: HEV
+    price_label: Προτεινόμενη τιμή πώλησης με ΤΤ και ΦΠΑ
+  - pattern: 'H620(?:40|42|44|46|48|50)\s+TUCSON\s+F/L\s+MY26\s+Plug-in\s+(?P<powertrain>1\.6T\s+288ps\s+6AT\s+(?:2WD|4WD))\s+(?P<trim>DISTINCTIVE|LIMITED|N\s+Line)\s+(?P<price>\d{2}\.\d{3})\s*€\s+0\s*€'
+    jato_powertrain: PHEV
+    price_label: Προτεινόμενη τιμή πώλησης με ΤΤ και ΦΠΑ
 schedule:
   frequency: manual_only
   run_window_start: 00:00
   run_window_end: 05:00
   preferred_weekday: monday
-notes: Official Hyundai Greece Tucson model page filled from manufacturer site research.
-  Selectors remain draft-level scrapling defaults until extraction is tuned. [CSS
-  selectors applied from brand probe] [Switched to playwright_card_flow with kia_trim_overview_playwright.yaml]
-  [Reverted to scrapling — playwright preset needs per-brand tuning] [URL filled
-  from HYUNDAI official site research]
+notes: Official Hyundai Greece retail price-list PDF. Pages 2/3 were visually
+  checked after rendering; the extractor captures the recommended retail price
+  with TT and VAT for TUCSON F/L MY26 petrol, diesel 48V, full-hybrid, and
+  plug-in-hybrid rows, not discount, discounted retail, special color, metallic
+  color, matte color, or separate PDI/transport charges.
 bootstrap_meta:
   country_model_rank: 27
   suggested_scope_kind: single_model
