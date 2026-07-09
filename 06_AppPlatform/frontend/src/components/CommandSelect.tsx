@@ -14,14 +14,18 @@ export interface CommandSelectOption<Value extends string = string> {
   value: Value;
   label: string;
   caption?: string;
+  keywords?: string[];
   disabled?: boolean;
 }
 
 interface CommandSelectProps<Value extends string = string> {
   label?: string;
-  value: Value | "";
+  name?: string;
+  value?: Value | "";
+  defaultValue?: Value | "";
   options: Array<CommandSelectOption<Value>>;
-  onChange: (value: Value | "") => void;
+  onChange?: (value: Value | "") => void;
+  onValueChange?: (value: Value | "") => void;
   placeholder?: string;
   searchPlaceholder?: string;
   emptyLabel?: string;
@@ -50,7 +54,9 @@ function optionMatches(option: CommandSelectOption, query: string): boolean {
   if (!normalized) {
     return true;
   }
-  return `${option.label} ${option.caption ?? ""} ${option.value}`.toLowerCase().includes(normalized);
+  return `${option.label} ${option.caption ?? ""} ${option.value} ${(option.keywords ?? []).join(" ")}`
+    .toLowerCase()
+    .includes(normalized);
 }
 
 function useOutsideClose(open: boolean, onClose: () => void) {
@@ -120,8 +126,11 @@ function PopoverShell({
 export function CommandSelect<Value extends string = string>({
   label,
   value,
+  defaultValue = "",
+  name,
   options,
   onChange,
+  onValueChange,
   placeholder = "Select...",
   searchPlaceholder = "Search...",
   emptyLabel = "No options",
@@ -132,20 +141,26 @@ export function CommandSelect<Value extends string = string>({
 }: CommandSelectProps<Value>) {
   const [open, setOpen] = useState(false);
   const [activeIndex, setActiveIndex] = useState(0);
+  const [internalValue, setInternalValue] = useState<Value | "">(defaultValue);
   const rootRef = useOutsideClose(open, () => setOpen(false));
   const { query, setQuery, searchRef } = useCommandQuery(open);
+  const selectedValue = value ?? internalValue;
   const matched = useMemo(
     () => options.filter((option) => optionMatches(option, query)),
     [options, query],
   );
-  const selectedOption = options.find((option) => option.value === value);
+  const selectedOption = options.find((option) => option.value === selectedValue);
 
   useEffect(() => {
     setActiveIndex(0);
   }, [query, open]);
 
   function choose(nextValue: Value | ""): void {
-    onChange(nextValue);
+    if (value === undefined) {
+      setInternalValue(nextValue);
+    }
+    onChange?.(nextValue);
+    onValueChange?.(nextValue);
     setOpen(false);
   }
 
@@ -188,6 +203,7 @@ export function CommandSelect<Value extends string = string>({
       className={`command-select${compact ? " is-compact" : ""}${className ? ` ${className}` : ""}`}
       onKeyDown={handleKeyDown}
     >
+      {name ? <input type="hidden" name={name} value={selectedValue} /> : null}
       <button
         type="button"
         className="command-select-trigger"
@@ -229,16 +245,16 @@ export function CommandSelect<Value extends string = string>({
               type="button"
               className={[
                 "command-select-option",
-                option.value === value ? "is-selected" : "",
+                option.value === selectedValue ? "is-selected" : "",
                 index === activeIndex ? "is-active" : "",
               ].filter(Boolean).join(" ")}
               disabled={option.disabled}
               role="option"
-              aria-selected={option.value === value}
+              aria-selected={option.value === selectedValue}
               onMouseEnter={() => setActiveIndex(index)}
               onClick={() => choose(option.value)}
             >
-              <span className="command-select-option-check">{option.value === value ? "✓" : ""}</span>
+              <span className="command-select-option-check">{option.value === selectedValue ? "✓" : ""}</span>
               <span className="command-select-option-text">
                 <span className="command-select-option-label">{option.label}</span>
                 {option.caption ? (

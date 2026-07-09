@@ -41,6 +41,7 @@ function hasFinanceValue(row: CountryMaterialFinanceRow): boolean {
 export function MaterialFinanceWorkbench({
   countryCode,
   countryCodes,
+  scopeLabel = "Finance rows",
   rows,
   loading,
   error = "",
