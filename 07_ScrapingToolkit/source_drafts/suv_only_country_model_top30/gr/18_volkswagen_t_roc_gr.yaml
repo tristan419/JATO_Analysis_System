@@ -1,39 +1,48 @@
 source_code: volkswagen_t_roc_gr_draft_scrapling
 country: 希腊
 brand: VOLKSWAGEN
-source_url: https://todo.invalid/gr/volkswagen/t_roc
-source_type: manufacturer_official
+source_url: https://www.volkswagen.gr/idhub/content/dam/onehub_pkw/importers/gr/pricelists/2026/Pricelist_VW_PC_MY26-2026_06_10.pdf
+source_type: official_price_list
 price_semantics: base_msrp
-extractor_type: playwright
-profile_preset: ../_shared/presets/volkswagen_configurator_trim_overview_playwright.yaml
+extractor_type: pdf_text
 profile:
-  url: https://todo.invalid/gr/volkswagen/t_roc
+  url: https://www.volkswagen.gr/idhub/content/dam/onehub_pkw/importers/gr/pricelists/2026/Pricelist_VW_PC_MY26-2026_06_10.pdf
+  prefer_curl_download: true
+  browser_download_fallback: true
+  timeout_seconds: 60
+  retry_attempts: 1
+  retry_delay_seconds: 1
   default_currency: EUR
-  default_tax_included: true
-  default_price_label: MSRP
+  default_tax_included: false
+  default_price_label: Ανώτατη Προτεινόμενη Λιανική Τιμή προ Φόρων
   fixed_model: T-ROC
   fixed_jato_model: T-ROC
-  structured_fields:
-    powertrain_rules:
-    - key: powertrain_ice
-      powertrain: ICE
-      keywords:
-      - ice
-      - petrol
-      - gasoline
-      - diesel
-      - combustion
-      - venzini
-      - petreleo
+  copy_trim_to_jato_trim: true
+  match_confidence: 0.85
+  match_status: review_required
+  match_reason:
+    kind: official_pdf_price_list
+    source: volkswagen_gr_my26_pre_tax_price_list_pdf
+    note: Official Volkswagen Greece MY2026 price-list PDF linked from the
+      official Τιμοκατάλογοι Volkswagen page. The table exposes maximum
+      recommended retail price before taxes; regex captures only the T-Roc
+      hatchback rows from that pre-tax price column and marks tax_included
+      false.
+  entry_patterns:
+  - pattern: 'VOLKSWAGEN\s+T-ROC\s+D4\s+\w+\s+2026\s+T-Roc\s+(?P<powertrain>1\.5\s+eTSI\s+(?:116|150)PS\s+DSG)\s+(?P<trim>Business|Trend|Life|Style|R-Line)\s+H\d+\s+1\.498\s+/\s+\d+\s+/\s+\d+\s+€\s+(?P<price>\d{2}\.\d{3})'
+    jato_powertrain: MHEV
+    price_label: Ανώτατη Προτεινόμενη Λιανική Τιμή προ Φόρων
 schedule:
   frequency: manual_only
   run_window_start: 00:00
   run_window_end: 05:00
   preferred_weekday: monday
-notes: Draft scaffold generated from country×model top30 backlog. Replace source_url,
-  profile.url, selectors, currency, price label, and the single-model placeholders
-  before promoting to 07_ScrapingToolkit/sources. [Switched to playwright_card_flow
-  with volkswagen_configurator_trim_overview_playwright.yaml]
+notes: Official Volkswagen Greece MY2026 PDF linked from
+  https://www.volkswagen.gr/el/Pricelists_Volkswagen.html. Page 1 was visually
+  checked after rendering; the extractor captures T-Roc hatchback rows from the
+  maximum recommended retail price before taxes column and excludes the T-Roc
+  Cabriolet row. tax_included is explicitly false to avoid mixing these values
+  with tax-included Greece MSRP sources.
 bootstrap_meta:
   country_model_rank: 18
   suggested_scope_kind: single_model
