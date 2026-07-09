@@ -1,101 +1,68 @@
 source_code: kia_ev6_pl_draft_scrapling
 country: 波兰
 brand: KIA
-source_url: https://www.kia.com/pl/nowe-modele/ev6/odkryj/
-source_type: manufacturer_official
+source_url: https://www.kia.com/content/dam/kwcms/kme/pl/pl/assets/contents/utility/Price_list/ev6/Cennik_EV6_MY27_RP26_2026-06-18.pdf
+source_type: official_price_list
 price_semantics: base_msrp
-extractor_type: scrapling
+extractor_type: pdf_text
 profile:
-  url: https://www.kia.com/pl/nowe-modele/ev6/odkryj/
-  headless: true
+  url: https://www.kia.com/content/dam/kwcms/kme/pl/pl/assets/contents/utility/Price_list/ev6/Cennik_EV6_MY27_RP26_2026-06-18.pdf
+  prefer_curl_download: true
+  browser_download_fallback: true
+  timeout_seconds: 90
+  retry_attempts: 1
+  retry_delay_seconds: 1
   default_currency: PLN
   default_tax_included: true
-  default_price_label: MSRP
+  default_price_label: Cennik w PLN
   fixed_model: EV6
   fixed_jato_model: EV6
-  fixed_jato_powertrain: null
-  model_rules: []
-  skip_if_model_unmapped: false
   copy_trim_to_jato_trim: true
-  confidence_rules:
-    base: 0.2
-    fixed_model_bonus: 0.18
-    fixed_jato_model_bonus: 0.12
-    model_rule_bonus: 0.12
-    trim_present_bonus: 0.1
-    copy_trim_to_jato_trim_bonus: 0.09
-    parsed_price_text_bonus: 0.03
-    currency_bonus: 0.01
-    price_label_bonus: 0.02
-    trim_keyword_bonuses: []
-    price_band_bonuses:
-    - key: price_band_entry
-      label: Entry price band matched
-      max: 0
-      delta: 0.0
-    - key: price_band_mid
-      label: Mid price band matched
-      min: 0
-      max: 0
-      delta: 0.01
-    - key: price_band_high
-      label: High price band matched
-      min: 0
-      delta: 0.03
-    powertrain_keyword_bonuses: []
-    powertrain_bonuses:
-    - key: powertrain_bev
-      label: 'Powertrain matched: BEV'
-      powertrain: BEV
-      delta: 0.03
-    clamp_min: 0.0
-    clamp_max: 1.0
-  structured_fields:
-    edition_rules:
-    - key: edition_special
-      label: Special Edition
-      keyword: special edition
-      special: true
-    powertrain_rules:
-    - key: powertrain_bev
-      powertrain: BEV
-      keywords:
-      - bev
-      - ev
-      - electric
-      - battery electric
-      - fully electric
-      - electric vehicle
-      - elektryczny
-      - w pelni elektryczny
-      - samochod elektryczny
-  auto_accept_gates:
-    review_threshold: 0.95
-    semi_auto_threshold: 0.98
-    require_powertrain_match: true
-    force_review_if_powertrain_missing: true
-    force_review_if_powertrain_ambiguous: true
-    force_review_for_special_edition: true
-  json_script_selector: script[type='application/ld+json']
-  css:
-    vehicle_container: body
-    model: h2, h3
-    trim: h3
-    price: '[class*="price"]'
-  tier: stealth
-  network_idle: true
-  impersonate: chrome
+  match_confidence: 0.86
+  match_status: review_required
+  match_reason:
+    kind: official_pdf_price_list
+    source: kia_pl_june_2026_ev6_pricelist_pdf
+    document_checked_at: '2026-07-09'
+    document_valid_from: '2026-06-18'
+    note: Official Kia Poland EV6 MY27/RP26 price-list PDF; regexes target the main Cennik w PLN table.
+  entry_patterns:
+  - pattern: '63\s+kWh\s+170\s+KM\s+RWD\s+644\s+428\s+(?P<price>212\s*900)'
+    official_trim: Air 63 kWh 170 KM RWD
+    official_powertrain: 63 kWh 170 KM RWD
+    jato_powertrain: BEV
+  - pattern: '63\s+kWh\s+170\s+KM\s+RWD\s+644\s+428\s+212\s*900\s+(?P<price>227\s*900)'
+    official_trim: Earth 63 kWh 170 KM RWD
+    official_powertrain: 63 kWh 170 KM RWD
+    jato_powertrain: BEV
+  - pattern: '84\s+kWh\s+229\s+KM\s+RWD\s+766\s+-\s+751\s+582\s+-\s+560\s+(?P<price>230\s*900)'
+    official_trim: Air 84 kWh 229 KM RWD
+    official_powertrain: 84 kWh 229 KM RWD
+    jato_powertrain: BEV
+  - pattern: '84\s+kWh\s+229\s+KM\s+RWD\s+766\s+-\s+751\s+582\s+-\s+560\s+230\s*900\s+(?P<price>247\s*900)'
+    official_trim: Earth 84 kWh 229 KM RWD
+    official_powertrain: 84 kWh 229 KM RWD
+    jato_powertrain: BEV
+  - pattern: '84\s+kWh\s+229\s+KM\s+RWD\s+766\s+-\s+751\s+582\s+-\s+560\s+230\s*900\s+247\s*900\s+(?P<price>266\s*900)'
+    official_trim: GT-Line 84 kWh 229 KM RWD
+    official_powertrain: 84 kWh 229 KM RWD
+    jato_powertrain: BEV
+  - pattern: '84\s+kWh\s+325\s+KM\s+AWD\s+669\s+522\s+-\s+(?P<price>270\s*900)'
+    official_trim: Earth 84 kWh 325 KM AWD
+    official_powertrain: 84 kWh 325 KM AWD
+    jato_powertrain: BEV
+  - pattern: '84\s+kWh\s+325\s+KM\s+AWD\s+669\s+522\s+-\s+270\s*900\s+(?P<price>289\s*900)'
+    official_trim: GT-Line 84 kWh 325 KM AWD
+    official_powertrain: 84 kWh 325 KM AWD
+    jato_powertrain: BEV
 schedule:
   frequency: manual_only
   run_window_start: 00:00
   run_window_end: 05:00
   preferred_weekday: monday
-notes: Draft scaffold generated from country×model top30 backlog. Replace source_url,
-  profile.url, selectors, currency, price label, and the single-model placeholders
-  before promoting to 07_ScrapingToolkit/sources. [URL filled from KIA template] [URL
-  language corrected] [CSS selectors applied from brand probe] [Switched to playwright_card_flow
-  with kia_trim_overview_playwright.yaml] [Reverted to scrapling — playwright preset
-  needs per-brand tuning]
+notes: Switched from the Kia Poland model page to the official EV6 MY27/RP26
+  June 2026 price-list PDF. Regexes extract the main price table and skip
+  charging/equipment text.
 bootstrap_meta:
   country_model_rank: 29
   suggested_scope_kind: single_model
