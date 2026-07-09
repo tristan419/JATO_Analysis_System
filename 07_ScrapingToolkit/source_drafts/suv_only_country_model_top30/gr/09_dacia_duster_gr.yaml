@@ -1,128 +1,62 @@
 source_code: dacia_duster_gr_draft_scrapling
 country: 希腊
 brand: DACIA
-source_url: https://www.dacia.gr/cars/all-new-duster/overview.html
-source_type: manufacturer_official
+source_url: https://www.dacia.gr/CountriesData/Greece/images/pricelists/Duster_times_exoplismoi.pdf
+source_type: official_price_list
 price_semantics: base_msrp
-extractor_type: scrapling
+extractor_type: pdf_text
 profile:
-  url: https://www.dacia.gr/cars/all-new-duster/overview.html
-  tier: stealth
-  headless: true
-  network_idle: true
-  impersonate: chrome
-  css:
-    vehicle_container: body
-    model: h2
-    trim: h3
-    price: '[class*="price"]'
+  url: https://www.dacia.gr/CountriesData/Greece/images/pricelists/Duster_times_exoplismoi.pdf
+  prefer_curl_download: true
+  browser_download_fallback: true
+  timeout_seconds: 60
+  retry_attempts: 1
+  retry_delay_seconds: 1
   default_currency: EUR
   default_tax_included: true
-  default_price_label: MSRP
+  default_price_label: ΑΠΛΤ Ανώτατη Προτεινόμενη Λιανική Τιμή
   fixed_model: DUSTER
   fixed_jato_model: DUSTER
-  fixed_jato_powertrain: null
-  model_rules: []
-  skip_if_model_unmapped: false
   copy_trim_to_jato_trim: true
-  confidence_rules:
-    base: 0.2
-    fixed_model_bonus: 0.18
-    fixed_jato_model_bonus: 0.12
-    model_rule_bonus: 0.12
-    trim_present_bonus: 0.1
-    copy_trim_to_jato_trim_bonus: 0.09
-    parsed_price_text_bonus: 0.03
-    currency_bonus: 0.01
-    price_label_bonus: 0.02
-    trim_keyword_bonuses: []
-    price_band_bonuses:
-    - key: price_band_entry
-      label: Entry price band matched
-      max: 0
-      delta: 0.0
-    - key: price_band_mid
-      label: Mid price band matched
-      min: 0
-      max: 0
-      delta: 0.01
-    - key: price_band_high
-      label: High price band matched
-      min: 0
-      delta: 0.03
-    powertrain_keyword_bonuses: []
-    powertrain_bonuses:
-    - key: powertrain_hev
-      label: 'Powertrain matched: HEV'
-      powertrain: HEV
-      delta: 0.03
-    - key: powertrain_mhev
-      label: 'Powertrain matched: MHEV'
-      powertrain: MHEV
-      delta: 0.03
-    - key: powertrain_ice
-      label: 'Powertrain matched: ICE'
-      powertrain: ICE
-      delta: 0.03
-    - key: powertrain_lpg
-      label: 'Powertrain matched: LPG'
-      powertrain: LPG
-      delta: 0.03
-    clamp_min: 0.0
-    clamp_max: 1.0
-  structured_fields:
-    edition_rules:
-    - key: edition_special
-      label: Special Edition
-      keyword: special edition
-      special: true
-    powertrain_rules:
-    - key: powertrain_hev
-      powertrain: HEV
-      keywords:
-      - hev
-      - full hybrid
-      - self-charging hybrid
-      - self charging hybrid
-      - hybrid
-      - yvridiko
-    - key: powertrain_mhev
-      powertrain: MHEV
-      keywords:
-      - mhev
-      - mild hybrid
-      - mild-hybrid
-      - 48V
-    - key: powertrain_ice
-      powertrain: ICE
-      keywords:
-      - ice
-      - petrol
-      - gasoline
-      - diesel
-      - combustion
-      - venzini
-      - petreleo
-    - key: powertrain_lpg
-      powertrain: LPG
-      keywords:
-      - lpg
-      - autogas
-  auto_accept_gates:
-    review_threshold: 0.95
-    semi_auto_threshold: 0.98
-    require_powertrain_match: true
-    force_review_if_powertrain_missing: true
-    force_review_if_powertrain_ambiguous: true
-    force_review_for_special_edition: true
+  match_confidence: 0.9
+  match_status: review_required
+  match_reason:
+    kind: official_pdf_price_list
+    source: dacia_gr_duster_price_equipment_pdf
+    note: Official Dacia Greece Duster price/equipment PDF, price list dated
+      2026-02-06. The table defines AΠΛΤΠΦ as pre-tax recommended retail price
+      and AΠΛΤ as recommended retail price; regex captures the AΠΛΤ column.
+  entry_patterns:
+  - pattern: 'P[12D]\s+2\s+NCG\s+6XS\s+(?P<trim>essential|expression|extreme)\s+(?P<powertrain>Eco-G\s+120)\s+120\s+bi-Fuel\s+\d{2}\.\d{3},\d{2}\s*€\s+(?P<price>\d{2}\.\d{3})\s*€\s+122'
+    jato_powertrain: LPG
+    price_label: ΑΠΛΤ Ανώτατη Προτεινόμενη Λιανική Τιμή
+  - pattern: 'P[23D]\s+2\s+NCA\s+6XS\s+(?P<trim>expression|journey|extreme)\s+(?P<powertrain>Eco-G\s+120\s+EDC)\s+120\s+bi-Fuel\s+\d{2}\.\d{3},\d{2}\s*€\s+(?P<price>\d{2}\.\d{3})\s*€\s+126'
+    jato_powertrain: LPG
+    price_label: ΑΠΛΤ Ανώτατη Προτεινόμενη Λιανική Τιμή
+  - pattern: 'P[23D]\s+2\s+MHM\s+6XB\s+(?P<trim>expression|journey|extreme)\s+(?P<powertrain>mild\s+hybrid\s+140\S*)\s+140\s+HYBRID\s+\d{2}\.\d{3},\d{2}\s*€\s+(?P<price>\d{2}\.\d{3})\s*€\s+126'
+    jato_powertrain: MHEV
+    price_label: ΑΠΛΤ Ανώτατη Προτεινόμενη Λιανική Τιμή
+  - pattern: 'P[23D]\s+4\s+N6G\s+6XB\s+(?P<trim>expression|journey|extreme)\s+(?P<powertrain>hybrid-G\s+150\s+4x4\S*\s+auto)\s+150\s+HYBRID\s+bi-Fuel\s+\d{2}\.\d{3},\d{2}\s*€\s+(?P<price>\d{2}\.\d{3})\s*€\s+120'
+    jato_powertrain: LPG
+    price_label: ΑΠΛΤ Ανώτατη Προτεινόμενη Λιανική Τιμή
+  - pattern: 'P[23D]\s+2\s+N7H\s+6XY\s+(?P<trim>expression|journey|extreme)\s+(?P<powertrain>hybrid\s+155)\s+155\s+HYBRID\s+\d{2}\.\d{3},\d{2}\s*€\s+(?P<price>\d{2}\.\d{3})\s*€\s+109'
+    jato_powertrain: HEV
+    price_label: ΑΠΛΤ Ανώτατη Προτεινόμενη Λιανική Τιμή
+  - pattern: 'P[2D]\s+2\s+MTG\s+6WS\s+(?P<trim>expression|extreme)\s+(?P<powertrain>Eco-G\s+100)\s+100\s+bi-Fuel\s+\d{2}\.\d{3},\d{2}\s*€\s+(?P<price>\d{2}\.\d{3})\s*€\s+12[67]'
+    jato_powertrain: LPG
+    price_label: ΑΠΛΤ Ανώτατη Προτεινόμενη Λιανική Τιμή
+  - pattern: 'P[23]\s+2\s+N4H\s+6WY\s+(?P<trim>expression|journey)\s+(?P<powertrain>hybrid\s+140)\s+140\s+HYBRID\s+\d{2}\.\d{3},\d{2}\s*€\s+(?P<price>\d{2}\.\d{3})\s*€\s+11[34]'
+    jato_powertrain: HEV
+    price_label: ΑΠΛΤ Ανώτατη Προτεινόμενη Λιανική Τιμή
 schedule:
   frequency: manual_only
   run_window_start: 00:00
   run_window_end: 05:00
   preferred_weekday: monday
-notes: Official Dacia Greece Duster market page filled from manufacturer site
-  research. CSS selectors still require browser-based dryrun confirmation before
-  promotion to 07_ScrapingToolkit/sources. [URL filled from DACIA template]
+notes: Official Dacia Greece Duster price/equipment PDF linked from the model
+  page via the ΤΙΜΕΣ & ΕΞΟΠΛΙΣΜΟΙ CTA. The extractor captures the AΠΛΤ
+  recommended retail price column and avoids the model-page marketing card that
+  polluted trim text with the cookie banner.
 bootstrap_meta:
   country_model_rank: 9
   suggested_scope_kind: single_model
