@@ -1,122 +1,51 @@
 source_code: mg_zs_gr_draft_scrapling
 country: 希腊
 brand: MG
-source_url: https://mgmotor.gr/model-mg-zs-max/
-source_type: manufacturer_official
+source_url: https://mgmotor.gr/wp-content/uploads/2025/12/%CE%A3%CE%A5%CE%9D%CE%9F%CE%A0%CE%A4%CE%99%CE%9A%CE%9F%CE%A3-%CE%A4%CE%99%CE%9C%CE%9F%CE%9A%CE%91%CE%A4%CE%91%CE%9B%CE%9F%CE%93%CE%9F%CE%A3-MG_17.12.2025-1.pdf
+source_type: official_price_list
 price_semantics: base_msrp
-extractor_type: scrapling
+extractor_type: pdf_text
 profile:
-  url: https://mgmotor.gr/model-mg-zs-max/
-  tier: stealth
-  headless: true
-  network_idle: true
-  impersonate: chrome
-  css:
-    vehicle_container: body
-    model: h1, h2
-    trim: h3
-    price: '[class*="price"]'
+  url: https://mgmotor.gr/wp-content/uploads/2025/12/%CE%A3%CE%A5%CE%9D%CE%9F%CE%A0%CE%A4%CE%99%CE%9A%CE%9F%CE%A3-%CE%A4%CE%99%CE%9C%CE%9F%CE%9A%CE%91%CE%A4%CE%91%CE%9B%CE%9F%CE%93%CE%9F%CE%A3-MG_17.12.2025-1.pdf
+  prefer_curl_download: true
+  browser_download_fallback: true
+  timeout_seconds: 60
+  retry_attempts: 1
+  retry_delay_seconds: 1
   default_currency: EUR
   default_tax_included: true
-  default_price_label: MSRP
+  default_price_label: Λιανική Τιμή
   fixed_model: ZS
   fixed_jato_model: ZS
-  fixed_jato_powertrain: null
-  model_rules: []
-  skip_if_model_unmapped: false
   copy_trim_to_jato_trim: true
-  confidence_rules:
-    base: 0.2
-    fixed_model_bonus: 0.18
-    fixed_jato_model_bonus: 0.12
-    model_rule_bonus: 0.12
-    trim_present_bonus: 0.1
-    copy_trim_to_jato_trim_bonus: 0.09
-    parsed_price_text_bonus: 0.03
-    currency_bonus: 0.01
-    price_label_bonus: 0.02
-    trim_keyword_bonuses: []
-    price_band_bonuses:
-    - key: price_band_entry
-      label: Entry price band matched
-      max: 0
-      delta: 0.0
-    - key: price_band_mid
-      label: Mid price band matched
-      min: 0
-      max: 0
-      delta: 0.01
-    - key: price_band_high
-      label: High price band matched
-      min: 0
-      delta: 0.03
-    powertrain_keyword_bonuses: []
-    powertrain_bonuses:
-    - key: powertrain_bev
-      label: 'Powertrain matched: BEV'
-      powertrain: BEV
-      delta: 0.03
-    - key: powertrain_hev
-      label: 'Powertrain matched: HEV'
-      powertrain: HEV
-      delta: 0.03
-    - key: powertrain_ice
-      label: 'Powertrain matched: ICE'
-      powertrain: ICE
-      delta: 0.03
-    clamp_min: 0.0
-    clamp_max: 1.0
-  structured_fields:
-    edition_rules:
-    - key: edition_special
-      label: Special Edition
-      keyword: special edition
-      special: true
-    powertrain_rules:
-    - key: powertrain_bev
-      powertrain: BEV
-      keywords:
-      - bev
-      - ev
-      - electric
-      - battery electric
-      - fully electric
-      - electric vehicle
-      - ilektriko
-    - key: powertrain_hev
-      powertrain: HEV
-      keywords:
-      - hev
-      - full hybrid
-      - self-charging hybrid
-      - self charging hybrid
-      - hybrid
-      - yvridiko
-    - key: powertrain_ice
-      powertrain: ICE
-      keywords:
-      - ice
-      - petrol
-      - gasoline
-      - diesel
-      - combustion
-      - venzini
-      - petreleo
-  auto_accept_gates:
-    review_threshold: 0.95
-    semi_auto_threshold: 0.98
-    require_powertrain_match: true
-    force_review_if_powertrain_missing: true
-    force_review_if_powertrain_ambiguous: true
-    force_review_for_special_edition: true
+  match_confidence: 0.9
+  match_status: review_required
+  match_reason:
+    kind: official_pdf_price_list
+    source: mg_gr_summary_price_list_pdf
+    note: Official MG Greece summary price-list PDF valid from 2025-12-17 and
+      linked from the official footer. The table exposes base price, VAT,
+      registration tax, retail price, discounted price, and paint-option price
+      columns; regex captures the first Λιανική Τιμή column for ZS Max and ZS
+      Max Hybrid+ rows.
+  entry_patterns:
+  - pattern: 'MG\s+ZS\s+Max\s+(?P<trim>EXCITE|EXCLUSIVE)\s+2WD\s+MDRX\S+\s+\d{2}\.\d{3}\s*€\s+\d\.\d{3}\s*€\s+\d\.\d{3}\s*€\s+(?P<price>\d{2}\.\d{3})\s*€'
+    official_powertrain: 1.5L Petrol
+    jato_powertrain: ICE
+    price_label: Λιανική Τιμή
+  - pattern: 'MG\s+ZS\s+Max\s+Hybrid\+\s+(?P<trim>EXCITE|EXCLUSIVE|LUXURY)\s+2WD\s+MDRW\S+\s+\d{2}\.\d{3}\s*€\s+\d\.\d{3}\s*€\s+\d\.\d{3}\s*€\s+(?P<price>\d{2}\.\d{3})\s*€'
+    official_powertrain: Hybrid+
+    jato_powertrain: HEV
+    price_label: Λιανική Τιμή
 schedule:
   frequency: manual_only
   run_window_start: 00:00
   run_window_end: 05:00
   preferred_weekday: monday
-notes: Official MG Greece ZS MAX model page filled from manufacturer site research.
-  Selectors remain draft-level scrapling defaults until extraction is tuned. [CSS
-  selectors applied from brand probe] [URL filled from MG official site research]
+notes: Official MG Greece summary price-list PDF linked from the site footer.
+  The extractor captures base retail MSRP for ZS Max petrol and ZS Max Hybrid+
+  current rows, while ignoring discounted retail, metallic-paint, two-tone
+  interior, and duplicated MY25 rows.
 bootstrap_meta:
   country_model_rank: 5
   suggested_scope_kind: single_model
