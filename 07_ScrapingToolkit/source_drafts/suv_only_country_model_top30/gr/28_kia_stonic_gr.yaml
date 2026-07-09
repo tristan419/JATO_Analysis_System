@@ -4,105 +4,118 @@ brand: KIA
 source_url: https://www.kia.com/gr/nea-modela/ybcuv-stonic/times-ekdoseis/
 source_type: manufacturer_official
 price_semantics: base_msrp
-extractor_type: scrapling
+extractor_type: http_text
 profile:
   url: https://www.kia.com/gr/nea-modela/ybcuv-stonic/times-ekdoseis/
-  headless: true
+  timeout_seconds: 45
+  headers:
+    User-Agent: Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0 Safari/537.36
+    Accept-Language: el-GR,el;q=0.9,en;q=0.8
   default_currency: EUR
   default_tax_included: true
-  default_price_label: MSRP
+  default_price_label: Προτεινόμενη Λιανική Τιμή
   fixed_model: STONIC
   fixed_jato_model: STONIC
-  fixed_jato_powertrain: null
-  model_rules: []
-  skip_if_model_unmapped: false
   copy_trim_to_jato_trim: true
-  confidence_rules:
-    base: 0.2
-    fixed_model_bonus: 0.18
-    fixed_jato_model_bonus: 0.12
-    model_rule_bonus: 0.12
-    trim_present_bonus: 0.1
-    copy_trim_to_jato_trim_bonus: 0.09
-    parsed_price_text_bonus: 0.03
-    currency_bonus: 0.01
-    price_label_bonus: 0.02
-    trim_keyword_bonuses: []
-    price_band_bonuses:
-    - key: price_band_entry
-      label: Entry price band matched
-      max: 0
-      delta: 0.0
-    - key: price_band_mid
-      label: Mid price band matched
-      min: 0
-      max: 0
-      delta: 0.01
-    - key: price_band_high
-      label: High price band matched
-      min: 0
-      delta: 0.03
-    powertrain_keyword_bonuses: []
-    powertrain_bonuses:
-    - key: powertrain_mhev
-      label: 'Powertrain matched: MHEV'
-      powertrain: MHEV
-      delta: 0.03
-    - key: powertrain_ice
-      label: 'Powertrain matched: ICE'
-      powertrain: ICE
-      delta: 0.03
-    clamp_min: 0.0
-    clamp_max: 1.0
-  structured_fields:
-    edition_rules:
-    - key: edition_special
-      label: Special Edition
-      keyword: special edition
-      special: true
-    powertrain_rules:
-    - key: powertrain_mhev
-      powertrain: MHEV
-      keywords:
-      - mhev
-      - mild hybrid
-      - mild-hybrid
-      - 48V
-    - key: powertrain_ice
-      powertrain: ICE
-      keywords:
-      - ice
-      - petrol
-      - gasoline
-      - diesel
-      - combustion
-      - venzini
-      - petreleo
-  auto_accept_gates:
-    review_threshold: 0.95
-    semi_auto_threshold: 0.98
-    require_powertrain_match: true
-    force_review_if_powertrain_missing: true
-    force_review_if_powertrain_ambiguous: true
-    force_review_for_special_edition: true
-  css:
-    vehicle_container: body
-    model: h2, h3
-    trim: h3
-    price: '[class*="price"]'
-  tier: stealth
-  network_idle: true
-  impersonate: chrome
+  match_confidence: 0.9
+  match_status: review_required
+  match_reason:
+    kind: official_html_price_table
+    source: kia_gr_stonic_prices_versions_page
+    note: Official Kia Greece Stonic prices/versions page. The page exposes
+      recommended retail price, retail discount, and discounted recommended
+      retail price; regex captures only the recommended retail price column from
+      the first Model Year 2026 table marked with In Cabin Camera.
+  entry_patterns:
+  - pattern: 'Stonic Model Year 2026 \(με In Cabin Camera\)(?:(?!Stonic Model Year 2026 - Παρέχεται).)*?Stonic\s+1\.0T\s+100ps\s+6MT\s+GL\s+Inmotion</td>.*?option2">\s*(?P<price>[\d.]+)\s*€'
+    official_trim: GL Inmotion
+    official_powertrain: 1.0T 100ps 6MT
+    jato_powertrain: ICE
+    price_label: Προτεινόμενη Λιανική Τιμή
+  - pattern: 'Stonic Model Year 2026 \(με In Cabin Camera\)(?:(?!Stonic Model Year 2026 - Παρέχεται).)*?Stonic\s+1\.0T\s+100ps\s+6MT\s+GL\s+Optimum</td>.*?option2">\s*(?P<price>[\d.]+)\s*€'
+    official_trim: GL Optimum
+    official_powertrain: 1.0T 100ps 6MT
+    jato_powertrain: ICE
+    price_label: Προτεινόμενη Λιανική Τιμή
+  - pattern: 'Stonic Model Year 2026 \(με In Cabin Camera\)(?:(?!Stonic Model Year 2026 - Παρέχεται).)*?Stonic\s+1\.0T\s+100ps\s+6MT\s+GLS\s+Platinum</td>.*?option2">\s*(?P<price>[\d.]+)\s*€'
+    official_trim: GLS Platinum
+    official_powertrain: 1.0T 100ps 6MT
+    jato_powertrain: ICE
+    price_label: Προτεινόμενη Λιανική Τιμή
+  - pattern: 'Stonic Model Year 2026 \(με In Cabin Camera\)(?:(?!Stonic Model Year 2026 - Παρέχεται).)*?Stonic\s+1\.0T\s+100ps\s+6MT\s+GT-Line</td>.*?option2">\s*(?P<price>[\d.]+)\s*€'
+    official_trim: GT-Line
+    official_powertrain: 1.0T 100ps 6MT
+    jato_powertrain: ICE
+    price_label: Προτεινόμενη Λιανική Τιμή
+  - pattern: 'Stonic Model Year 2026 \(με In Cabin Camera\)(?:(?!Stonic Model Year 2026 - Παρέχεται).)*?Stonic\s+1\.0T\s+100ps\s+7DCT\s+GL\s+Inmotion</td>.*?option2">\s*(?P<price>[\d.]+)\s*€'
+    official_trim: GL Inmotion
+    official_powertrain: 1.0T 100ps 7DCT
+    jato_powertrain: ICE
+    price_label: Προτεινόμενη Λιανική Τιμή
+  - pattern: 'Stonic Model Year 2026 \(με In Cabin Camera\)(?:(?!Stonic Model Year 2026 - Παρέχεται).)*?Stonic\s+1\.0T\s+100ps\s+7DCT\s+GL\s+Optimum</td>.*?option2">\s*(?P<price>[\d.]+)\s*€'
+    official_trim: GL Optimum
+    official_powertrain: 1.0T 100ps 7DCT
+    jato_powertrain: ICE
+    price_label: Προτεινόμενη Λιανική Τιμή
+  - pattern: 'Stonic Model Year 2026 \(με In Cabin Camera\)(?:(?!Stonic Model Year 2026 - Παρέχεται).)*?Stonic\s+1\.0T\s+100ps\s+7DCT\s+GLS\s+Platinum</td>.*?option2">\s*(?P<price>[\d.]+)\s*€'
+    official_trim: GLS Platinum
+    official_powertrain: 1.0T 100ps 7DCT
+    jato_powertrain: ICE
+    price_label: Προτεινόμενη Λιανική Τιμή
+  - pattern: 'Stonic Model Year 2026 \(με In Cabin Camera\)(?:(?!Stonic Model Year 2026 - Παρέχεται).)*?Stonic\s+1\.0T\s+100ps\s+7DCT\s+GT-Line</td>.*?option2">\s*(?P<price>[\d.]+)\s*€'
+    official_trim: GT-Line
+    official_powertrain: 1.0T 100ps 7DCT
+    jato_powertrain: ICE
+    price_label: Προτεινόμενη Λιανική Τιμή
+  - pattern: 'Stonic Model Year 2026 \(με In Cabin Camera\)(?:(?!Stonic Model Year 2026 - Παρέχεται).)*?Stonic\s+1\.0T\s+115ps\s+6MT\s+GL\s+Inmotion\s+Hybrid</td>.*?option2">\s*(?P<price>[\d.]+)\s*€'
+    official_trim: GL Inmotion
+    official_powertrain: 1.0T 115ps 6MT Hybrid
+    jato_powertrain: MHEV
+    price_label: Προτεινόμενη Λιανική Τιμή
+  - pattern: 'Stonic Model Year 2026 \(με In Cabin Camera\)(?:(?!Stonic Model Year 2026 - Παρέχεται).)*?Stonic\s+1\.0T\s+115ps\s+6MT\s+GL\s+Optimum\s+Hybrid</td>.*?option2">\s*(?P<price>[\d.]+)\s*€'
+    official_trim: GL Optimum
+    official_powertrain: 1.0T 115ps 6MT Hybrid
+    jato_powertrain: MHEV
+    price_label: Προτεινόμενη Λιανική Τιμή
+  - pattern: 'Stonic Model Year 2026 \(με In Cabin Camera\)(?:(?!Stonic Model Year 2026 - Παρέχεται).)*?Stonic\s+1\.0T\s+115ps\s+6MT\s+GLS\s+Platinum\s+Hybrid</td>.*?option2">\s*(?P<price>[\d.]+)\s*€'
+    official_trim: GLS Platinum
+    official_powertrain: 1.0T 115ps 6MT Hybrid
+    jato_powertrain: MHEV
+    price_label: Προτεινόμενη Λιανική Τιμή
+  - pattern: 'Stonic Model Year 2026 \(με In Cabin Camera\)(?:(?!Stonic Model Year 2026 - Παρέχεται).)*?Stonic\s+1\.0T\s+115ps\s+6MT\s+GT-Line\s+Hybrid</td>.*?option2">\s*(?P<price>[\d.]+)\s*€'
+    official_trim: GT-Line
+    official_powertrain: 1.0T 115ps 6MT Hybrid
+    jato_powertrain: MHEV
+    price_label: Προτεινόμενη Λιανική Τιμή
+  - pattern: 'Stonic Model Year 2026 \(με In Cabin Camera\)(?:(?!Stonic Model Year 2026 - Παρέχεται).)*?Stonic\s+1\.0T\s+115ps\s+7DCT\s+GL\s+Inmotion\s+Hybrid</td>.*?option2">\s*(?P<price>[\d.]+)\s*€'
+    official_trim: GL Inmotion
+    official_powertrain: 1.0T 115ps 7DCT Hybrid
+    jato_powertrain: MHEV
+    price_label: Προτεινόμενη Λιανική Τιμή
+  - pattern: 'Stonic Model Year 2026 \(με In Cabin Camera\)(?:(?!Stonic Model Year 2026 - Παρέχεται).)*?Stonic\s+1\.0T\s+115ps\s+7DCT\s+GL\s+Optimum\s+Hybrid</td>.*?option2">\s*(?P<price>[\d.]+)\s*€'
+    official_trim: GL Optimum
+    official_powertrain: 1.0T 115ps 7DCT Hybrid
+    jato_powertrain: MHEV
+    price_label: Προτεινόμενη Λιανική Τιμή
+  - pattern: 'Stonic Model Year 2026 \(με In Cabin Camera\)(?:(?!Stonic Model Year 2026 - Παρέχεται).)*?Stonic\s+1\.0T\s+115ps\s+7DCT\s+GLS\s+Platinum\s+Hybrid</td>.*?option2">\s*(?P<price>[\d.]+)\s*€'
+    official_trim: GLS Platinum
+    official_powertrain: 1.0T 115ps 7DCT Hybrid
+    jato_powertrain: MHEV
+    price_label: Προτεινόμενη Λιανική Τιμή
+  - pattern: 'Stonic Model Year 2026 \(με In Cabin Camera\)(?:(?!Stonic Model Year 2026 - Παρέχεται).)*?Stonic\s+1\.0T\s+115ps\s+7DCT\s+GT-line\s+Hybrid</td>.*?option2">\s*(?P<price>[\d.]+)\s*€'
+    official_trim: GT-Line
+    official_powertrain: 1.0T 115ps 7DCT Hybrid
+    jato_powertrain: MHEV
+    price_label: Προτεινόμενη Λιανική Τιμή
 schedule:
   frequency: manual_only
   run_window_start: 00:00
   run_window_end: 05:00
   preferred_weekday: monday
-notes: Official Kia Greece Stonic prices and versions page filled from manufacturer
-  site research. Selectors remain draft-level scrapling defaults until extraction
-  is tuned. [CSS selectors applied from brand probe] [Switched to playwright_card_flow
-  with kia_trim_overview_playwright.yaml] [Reverted to scrapling — playwright preset
-  needs per-brand tuning] [URL filled from KIA official site research]
+notes: Official Kia Greece Stonic prices/versions page. The extractor captures
+  recommended retail prices from the current Model Year 2026 table with In
+  Cabin Camera and intentionally ignores the retail discount and discounted
+  price columns.
 bootstrap_meta:
   country_model_rank: 28
   suggested_scope_kind: single_model
