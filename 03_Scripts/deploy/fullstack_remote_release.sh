@@ -319,7 +319,7 @@ if [ "$DEPLOY_RC" -eq 0 ] && [ -n "$DEPLOY_SERVER_NAME" ] && [ "$DEPLOY_SERVER_N
     sudo SERVER_NAME="$DEPLOY_SERVER_NAME" BACKEND_PORT=8000 FRONTEND_ROOT="$FRONTEND_ROOT" \
       bash 03_Scripts/deploy/nginx/install_jato_fullstack_nginx.sh
   fi
-  NGINX_CONF=$(sudo -n nginx -T 2>/dev/null | grep -l 'proxy_pass http://jato_fullstack_api' /etc/nginx/sites-enabled/* /etc/nginx/conf.d/* 2>/dev/null | head -1 || echo "")
+  NGINX_CONF=$(sudo -n grep -l 'proxy_pass http://jato_fullstack_api' /etc/nginx/sites-enabled/* /etc/nginx/conf.d/* 2>/dev/null | sed -n '1p' || echo "")
   if [ -n "$NGINX_CONF" ] && sudo -n test -f "$NGINX_CONF"; then
     sudo -n sed -i 's/proxy_buffering on;/proxy_buffering off;/g' "$NGINX_CONF" 2>/dev/null || true
     sudo -n nginx -t 2>/dev/null && sudo -n systemctl reload nginx 2>/dev/null || true
@@ -352,7 +352,7 @@ mkdir -p "$DIST"
   echo "---deploy failure context---"
   cat "$REPO_DIR/hermes/deploy_failure_context.txt" 2>&1 || echo "DEPLOY_FAILURE_CONTEXT_MISSING"
   echo "---nginx---"
-  sudo -n systemctl status nginx --no-pager 2>&1 | head -5 || true
+  sudo -n systemctl status nginx --no-pager 2>&1 | sed -n '1,5p' || true
   echo "---msrp scheduler---"
   sudo -n systemctl status jato-msrp-dryrun.timer --no-pager 2>&1 || true
   sudo -n systemctl status jato-msrp-sync@dryrun.service --no-pager 2>&1 || true

@@ -432,7 +432,7 @@ restart_timer_unit() {
 
   sudo -n systemctl enable "$timer_name"
   sudo -n systemctl restart "$timer_name"
-  sudo -n systemctl --no-pager status "$timer_name" 2>&1 | head -n 12 || true
+  sudo -n systemctl --no-pager status "$timer_name" 2>&1 | sed -n '1,12p' || true
 }
 
 _write_msrp_status() {
@@ -666,7 +666,7 @@ if [[ "$SKIP_GIT_SYNC" != "true" && -d "$REPO_DIR/.git" ]]; then
     if git -C "$REPO_DIR" remote get-url origin >/dev/null 2>&1; then
       REMOTE_NAME="origin"
     else
-      REMOTE_NAME="$(git -C "$REPO_DIR" remote | head -n 1)"
+      REMOTE_NAME="$(git -C "$REPO_DIR" remote | sed -n '1p')"
     fi
   fi
 
@@ -842,7 +842,7 @@ if ! sudo -n systemctl cat "$BACKEND_SERVICE_NAME" >/dev/null 2>&1; then
 fi
 sudo -n systemctl restart "$BACKEND_SERVICE_NAME"
 sleep 2
-sudo -n systemctl --no-pager status "$BACKEND_SERVICE_NAME" 2>&1 | head -n 30 || true
+sudo -n systemctl --no-pager status "$BACKEND_SERVICE_NAME" 2>&1 | sed -n '1,30p' || true
 
 if systemctl is-active --quiet nginx; then
   echo "[INFO] Reload nginx"
