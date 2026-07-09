@@ -18,7 +18,14 @@ DEFAULT_REFERENCE_PATH = DEFAULT_ARTIFACT_DIR / "msrp_source_reference_evidence.
 QUEUE_TYPE_BY_FIELD = (
     ("sourceRepairIssues", "source_repair"),
     ("businessResolutionIssues", "business_resolution"),
+    ("sampleBusinessResolutions", "business_resolution"),
     ("transientRegressions", "transient_recheck"),
+    ("sampleTransientRegressions", "transient_recheck"),
+)
+TOP_LEVEL_QUEUE_TYPE_BY_FIELD = (
+    ("sourceIssues", "source_repair"),
+    ("businessResolutionIssues", "business_resolution"),
+    ("transientSourceRegressions", "transient_recheck"),
 )
 QUEUE_TYPE_SUMMARY_KEY = {
     "source_repair": "sourceRepairCount",
@@ -197,6 +204,51 @@ def _build_queue_item(
     }
 
 
+def _fallback_group_for_source(
+    source: dict[str, Any],
+    groups_by_reason: dict[str, dict[str, Any]],
+) -> dict[str, Any]:
+    failure_reason = str(source.get("failureReason") or "").strip()
+    if failure_reason and failure_reason in groups_by_reason:
+        return groups_by_reason[failure_reason]
+    return {
+        "failureReason": failure_reason,
+        "recommendedAction": source.get("recommendedAction"),
+        "recommendedStrategy": source.get("recommendedStrategy"),
+        "priorityBand": source.get("priorityBand") or "low",
+        "priorityScore": source.get("priorityScore") or 0,
+    }
+
+
+def _append_queue_item(
+    *,
+    items: list[dict[str, Any]],
+    seen_case_ids: set[str],
+    source: dict[str, Any],
+    group: dict[str, Any],
+    queue_type: str,
+    reference_by_source: dict[tuple[str, str], dict[str, Any]],
+    backlog_run_id: str | None,
+    reference_generated_at: str | None,
+) -> None:
+    key = _source_key(source.get("countryCode"), source.get("sourceCode"))
+    if not key[0] or not key[1]:
+        return
+    item = _build_queue_item(
+        source=source,
+        group=group,
+        queue_type=queue_type,
+        reference_item=reference_by_source.get(key),
+        backlog_run_id=backlog_run_id,
+        reference_generated_at=reference_generated_at,
+    )
+    case_id = str(item.get("caseId") or "")
+    if not case_id or case_id in seen_case_ids:
+        return
+    seen_case_ids.add(case_id)
+    items.append(item)
+
+
 def build_source_review_queue(
     backlog: dict[str, Any],
     reference_evidence: dict[str, Any] | None = None,
@@ -211,26 +263,42 @@ def build_source_review_queue(
         str((reference_evidence or {}).get("generatedAt") or "") or None
     )
     items: list[dict[str, Any]] = []
-    for group in backlog.get("groups") or []:
-        if not isinstance(group, dict):
-            continue
+    seen_case_ids: set[str] = set()
+    groups = [group for group in backlog.get("groups") or [] if isinstance(group, dict)]
+    groups_by_reason = {
+        str(group.get("failureReason") or "").strip(): group
+        for group in groups
+        if str(group.get("failureReason") or "").strip()
+    }
+    for group in groups:
         for field, queue_type in QUEUE_TYPE_BY_FIELD:
             for source in group.get(field) or []:
                 if not isinstance(source, dict):
                     continue
-                key = _source_key(source.get("countryCode"), source.get("sourceCode"))
-                if not key[0] or not key[1]:
-                    continue
-                items.append(
-                    _build_queue_item(
-                        source=source,
-                        group=group,
-                        queue_type=queue_type,
-                        reference_item=reference_by_source.get(key),
-                        backlog_run_id=backlog_run_id,
-                        reference_generated_at=reference_generated_at,
-                    )
+                _append_queue_item(
+                    items=items,
+                    seen_case_ids=seen_case_ids,
+                    source=source,
+                    group=group,
+                    queue_type=queue_type,
+                    reference_by_source=reference_by_source,
+                    backlog_run_id=backlog_run_id,
+                    reference_generated_at=reference_generated_at,
                 )
+    for field, queue_type in TOP_LEVEL_QUEUE_TYPE_BY_FIELD:
+        for source in backlog.get(field) or []:
+            if not isinstance(source, dict):
+                continue
+            _append_queue_item(
+                items=items,
+                seen_case_ids=seen_case_ids,
+                source=source,
+                group=_fallback_group_for_source(source, groups_by_reason),
+                queue_type=queue_type,
+                reference_by_source=reference_by_source,
+                backlog_run_id=backlog_run_id,
+                reference_generated_at=reference_generated_at,
+            )
 
     items.sort(
         key=lambda item: (

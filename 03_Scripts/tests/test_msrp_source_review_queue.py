@@ -200,6 +200,82 @@ def test_build_source_review_queue_ignores_stale_reference_evidence() -> None:
     assert tesla["reviewRecommendation"] == "repair_official_source"
 
 
+def test_build_source_review_queue_reads_sample_and_top_level_backlog_items() -> None:
+    backlog = {
+        "schemaVersion": "msrp_source_repair_backlog_v1",
+        "runId": "msrp-dryrun-20260709-081500",
+        "sourceIssues": [
+            {
+                "countryCode": "pt",
+                "sourceCode": "volvo_xc40_pt_draft_scrapling",
+                "brand": "VOLVO",
+                "failureReason": "no_observation_extracted",
+                "recommendedAction": "repair_source_definition",
+            }
+        ],
+        "businessResolutionIssues": [
+            {
+                "countryCode": "es",
+                "sourceCode": "mg_hs_es_draft_scrapling",
+                "brand": "MG",
+                "failureReason": "offer_price_only",
+                "recommendedAction": "business_resolution_required",
+            }
+        ],
+        "transientSourceRegressions": [
+            {
+                "countryCode": "nl",
+                "sourceCode": "tesla_model_y_nl_draft_scrapling",
+                "brand": "TESLA",
+                "failureReason": "network_unavailable",
+                "recommendedAction": "recheck_before_source_repair",
+            },
+            {
+                "countryCode": "se",
+                "sourceCode": "volvo_xc60_se_draft_scrapling",
+                "brand": "VOLVO",
+                "failureReason": "network_unavailable",
+                "recommendedAction": "recheck_before_source_repair",
+            },
+        ],
+        "groups": [
+            {
+                "failureReason": "network_unavailable",
+                "priorityBand": "recheck",
+                "priorityScore": 11.0,
+                "recommendedAction": "recheck_before_source_repair",
+                "recommendedStrategy": "retry_network_or_proxy",
+                "sourceRepairIssues": [],
+                "businessResolutionIssues": [],
+                "sampleTransientRegressions": [
+                    {
+                        "countryCode": "nl",
+                        "sourceCode": "tesla_model_y_nl_draft_scrapling",
+                        "brand": "TESLA",
+                        "failureReason": "network_unavailable",
+                        "recommendedAction": "recheck_before_source_repair",
+                    }
+                ],
+            }
+        ],
+    }
+
+    payload = queue_script.build_source_review_queue(backlog)
+
+    assert payload["summary"]["sourceRepairCount"] == 1
+    assert payload["summary"]["businessResolutionCount"] == 1
+    assert payload["summary"]["transientRecheckCount"] == 2
+    assert payload["summary"]["totalCases"] == 4
+    by_source = {
+        item["sourceCode"]: item
+        for item in payload["items"]
+    }
+    assert by_source["volvo_xc40_pt_draft_scrapling"]["queueType"] == "source_repair"
+    assert by_source["mg_hs_es_draft_scrapling"]["queueType"] == "business_resolution"
+    assert by_source["tesla_model_y_nl_draft_scrapling"]["queueType"] == "transient_recheck"
+    assert by_source["volvo_xc60_se_draft_scrapling"]["queueType"] == "transient_recheck"
+
+
 def test_run_writes_json_and_markdown(tmp_path: Path) -> None:
     backlog_path = tmp_path / "backlog.json"
     reference_path = tmp_path / "reference.json"
