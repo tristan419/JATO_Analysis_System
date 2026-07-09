@@ -1,112 +1,76 @@
 source_code: nissan_qashqai_de_draft_scrapling
 country: 德国
 brand: NISSAN
-source_url: https://www.nissan.de/fahrzeuge/qashqai.html
-source_type: manufacturer_official
+source_url: https://www-europe.nissan-cdn.net/content/dam/Nissan/de/Pricelists_and_Brochures/Qashqai/qashqai-preisliste.pdf
+source_type: official_price_list
 price_semantics: base_msrp
-extractor_type: scrapling
+extractor_type: pdf_text
 profile:
-  url: https://www.nissan.de/fahrzeuge/qashqai.html
-  tier: stealth
-  headless: true
-  network_idle: true
-  impersonate: chrome
-  json_script_selector: script[type='application/ld+json']
-  css:
-    vehicle_container: body
-    model: h1, h2
-    trim: h3
-    price: '[class*="price"]'
+  url: https://www-europe.nissan-cdn.net/content/dam/Nissan/de/Pricelists_and_Brochures/Qashqai/qashqai-preisliste.pdf
+  prefer_curl_download: true
+  timeout_seconds: 60
   default_currency: EUR
   default_tax_included: true
-  default_price_label: Preis
+  default_price_label: Unverbindliche Preisempfehlung ab Auslieferungslager inkl. 19% MwSt.
   fixed_model: QASHQAI
   fixed_jato_model: QASHQAI
-  fixed_jato_powertrain: null
-  model_rules: []
-  skip_if_model_unmapped: false
   copy_trim_to_jato_trim: true
-  confidence_rules:
-    base: 0.2
-    fixed_model_bonus: 0.18
-    fixed_jato_model_bonus: 0.12
-    model_rule_bonus: 0.12
-    trim_present_bonus: 0.1
-    copy_trim_to_jato_trim_bonus: 0.09
-    parsed_price_text_bonus: 0.03
-    currency_bonus: 0.01
-    price_label_bonus: 0.02
-    trim_keyword_bonuses: []
-    price_band_bonuses:
-    - key: price_band_entry
-      label: Entry price band matched
-      max: 0
-      delta: 0.0
-    - key: price_band_mid
-      label: Mid price band matched
-      min: 0
-      max: 0
-      delta: 0.01
-    - key: price_band_high
-      label: High price band matched
-      min: 0
-      delta: 0.03
-    powertrain_keyword_bonuses: []
-    powertrain_bonuses:
-    - key: powertrain_hev
-      label: 'Powertrain matched: HEV'
-      powertrain: HEV
-      delta: 0.03
-    - key: powertrain_mhev
-      label: 'Powertrain matched: MHEV'
-      powertrain: MHEV
-      delta: 0.03
-    - key: powertrain_ice
-      label: 'Powertrain matched: ICE'
-      powertrain: ICE
-      delta: 0.03
-    clamp_min: 0.0
-    clamp_max: 1.0
-  structured_fields:
-    edition_rules:
-    - key: edition_special
-      label: Special Edition
-      keyword: special edition
-      special: true
-    powertrain_rules:
-    - key: powertrain_hev
-      powertrain: HEV
-      keywords:
-      - hev
-      - full hybrid
-      - self-charging hybrid
-      - self charging hybrid
-      - hybrid
-      - Vollhybrid
-    - key: powertrain_mhev
-      powertrain: MHEV
-      keywords:
-      - mhev
-      - mild hybrid
-      - mild-hybrid
-      - 48V
-    - key: powertrain_ice
-      powertrain: ICE
-      keywords:
-      - ice
-      - petrol
-      - gasoline
-      - diesel
-      - combustion
-      - Benzin
-      - Verbrenner
-  auto_accept_gates:
-    review_threshold: 0.95
-    semi_auto_threshold: 0.98
-    require_powertrain_match: true
-    force_review_if_powertrain_missing: true
-    force_review_if_powertrain_ambiguous: true
-    force_review_for_special_edition: true
+  match_confidence: 0.86
+  match_status: review_required
+  match_reason:
+    kind: pdf_price_list
+    source: official_nissan_de_preisliste
+    document_checked_at: '2026-07-09'
+    note: Official Nissan Germany Qashqai price-list PDF; extracts manufacturer recommended prices including 19% VAT, excluding delivery and registration.
+  entry_patterns:
+  - pattern: '1\.3\s+DIG-T\s+Mild-Hybrid\s+6MT\s+Vorderradantrieb\s+116\s+\(158\)\s+(?P<price>34\.540),\D+\s+37\.020,\D+'
+    official_trim: ACENTA 6MT FWD
+    official_powertrain: 1.3 DIG-T Mild-Hybrid 6MT Vorderradantrieb 116 kW (158 PS)
+    jato_powertrain: MHEV
+  - pattern: '1\.3\s+DIG-T\s+Mild-Hybrid\s+6MT\s+Vorderradantrieb\s+116\s+\(158\)\s+34\.540,\D+\s+(?P<price>37\.020),\D+'
+    official_trim: N-CONNECTA 6MT FWD
+    official_powertrain: 1.3 DIG-T Mild-Hybrid 6MT Vorderradantrieb 116 kW (158 PS)
+    jato_powertrain: MHEV
+  - pattern: 'Xtronic\s+Vorderradantrieb\s+116\s+\(158\)\s+(?P<price>37\.680),\D+\s+40\.550,\D+\s+39\.450,\D+\s+43\.820,\D+\s+43\.820,\D+'
+    official_trim: ACENTA Xtronic FWD
+    official_powertrain: 1.3 DIG-T Mild-Hybrid Xtronic Vorderradantrieb 116 kW (158 PS)
+    jato_powertrain: MHEV
+  - pattern: 'Xtronic\s+Vorderradantrieb\s+116\s+\(158\)\s+37\.680,\D+\s+(?P<price>40\.550),\D+\s+39\.450,\D+\s+43\.820,\D+\s+43\.820,\D+'
+    official_trim: N-CONNECTA Xtronic FWD
+    official_powertrain: 1.3 DIG-T Mild-Hybrid Xtronic Vorderradantrieb 116 kW (158 PS)
+    jato_powertrain: MHEV
+  - pattern: 'Xtronic\s+Vorderradantrieb\s+116\s+\(158\)\s+37\.680,\D+\s+40\.550,\D+\s+(?P<price>39\.450),\D+\s+43\.820,\D+\s+43\.820,\D+'
+    official_trim: N-TEC Xtronic FWD
+    official_powertrain: 1.3 DIG-T Mild-Hybrid Xtronic Vorderradantrieb 116 kW (158 PS)
+    jato_powertrain: MHEV
+  - pattern: 'Xtronic\s+Vorderradantrieb\s+116\s+\(158\)\s+37\.680,\D+\s+40\.550,\D+\s+39\.450,\D+\s+(?P<price>43\.820),\D+\s+43\.820,\D+'
+    official_trim: N-DESIGN Xtronic FWD
+    official_powertrain: 1.3 DIG-T Mild-Hybrid Xtronic Vorderradantrieb 116 kW (158 PS)
+    jato_powertrain: MHEV
+  - pattern: 'Xtronic\s+Vorderradantrieb\s+116\s+\(158\)\s+37\.680,\D+\s+40\.550,\D+\s+39\.450,\D+\s+43\.820,\D+\s+(?P<price>43\.820),\D+'
+    official_trim: TEKNA Xtronic FWD
+    official_powertrain: 1.3 DIG-T Mild-Hybrid Xtronic Vorderradantrieb 116 kW (158 PS)
+    jato_powertrain: MHEV
+  - pattern: '1\.5\s+e-POWER\s+Vorderradantrieb\s+151\s+\(205\)\s+(?P<price>40\.180),\D+\s+43\.250,\D+\s+42\.150,\D+\s+46\.520,\D+\s+46\.520,\D+'
+    official_trim: ACENTA e-POWER FWD
+    official_powertrain: 1.5 e-POWER Vorderradantrieb 151 kW (205 PS)
+    jato_powertrain: HEV
+  - pattern: '1\.5\s+e-POWER\s+Vorderradantrieb\s+151\s+\(205\)\s+40\.180,\D+\s+(?P<price>43\.250),\D+\s+42\.150,\D+\s+46\.520,\D+\s+46\.520,\D+'
+    official_trim: N-CONNECTA e-POWER FWD
+    official_powertrain: 1.5 e-POWER Vorderradantrieb 151 kW (205 PS)
+    jato_powertrain: HEV
+  - pattern: '1\.5\s+e-POWER\s+Vorderradantrieb\s+151\s+\(205\)\s+40\.180,\D+\s+43\.250,\D+\s+(?P<price>42\.150),\D+\s+46\.520,\D+\s+46\.520,\D+'
+    official_trim: N-TEC e-POWER FWD
+    official_powertrain: 1.5 e-POWER Vorderradantrieb 151 kW (205 PS)
+    jato_powertrain: HEV
+  - pattern: '1\.5\s+e-POWER\s+Vorderradantrieb\s+151\s+\(205\)\s+40\.180,\D+\s+43\.250,\D+\s+42\.150,\D+\s+(?P<price>46\.520),\D+\s+46\.520,\D+'
+    official_trim: N-DESIGN e-POWER FWD
+    official_powertrain: 1.5 e-POWER Vorderradantrieb 151 kW (205 PS)
+    jato_powertrain: HEV
+  - pattern: '1\.5\s+e-POWER\s+Vorderradantrieb\s+151\s+\(205\)\s+40\.180,\D+\s+43\.250,\D+\s+42\.150,\D+\s+46\.520,\D+\s+(?P<price>46\.520),\D+'
+    official_trim: TEKNA e-POWER FWD
+    official_powertrain: 1.5 e-POWER Vorderradantrieb 151 kW (205 PS)
+    jato_powertrain: HEV
 schedule:
   frequency: manual_only
   run_window_start: 00:00
@@ -115,7 +79,10 @@ schedule:
 notes: Draft scaffold generated from country×model top30 backlog. Replace source_url,
   profile.url, selectors, currency, price label, and the single-model placeholders
   before promoting to 07_ScrapingToolkit/sources. [URL filled from NISSAN template]
-  [URL language corrected] [CSS selectors applied from brand probe]
+  [URL language corrected] [CSS selectors applied from brand probe] [Repaired to
+  Nissan Germany official Qashqai price-list PDF and regex extraction of the
+  Motorisierung & Preise table; delivery and registration are intentionally
+  excluded]
 bootstrap_meta:
   country_model_rank: 27
   suggested_scope_kind: single_model
