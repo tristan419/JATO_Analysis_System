@@ -1,0 +1,2 @@
+align-www-intl=2026-07-09T07:24:00Z
+reason=force both www fullstack and intl cloudflare pages to rebuild from the same main commit
