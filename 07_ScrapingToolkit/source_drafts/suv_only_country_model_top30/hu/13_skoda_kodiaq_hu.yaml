@@ -1,12 +1,12 @@
 source_code: skoda_kodiaq_hu_draft_scrapling
 country: 匈牙利
 brand: SKODA
-source_url: https://www.skoda.hu/modelle/kodiaq
+source_url: https://www.skoda.hu/kodiaq/kodiaq
 source_type: manufacturer_official
 price_semantics: base_msrp
 extractor_type: scrapling
 profile:
-  url: https://www.skoda.hu/modelle/kodiaq
+  url: https://www.skoda.hu/kodiaq/kodiaq
   headless: true
   default_currency: HUF
   default_tax_included: true
@@ -14,6 +14,13 @@ profile:
   fixed_model: KODIAQ
   fixed_jato_model: KODIAQ
   fixed_jato_powertrain: null
+  text_regex:
+    source_selector: body
+    include_element_html: true
+    entry_patterns:
+    - pattern: '\\"name\\":\\"(?P<trim>Selection|SportLine|RS)\\"(?:(?!\\"name\\":).){0,5000}?\\"prices\\":\{\\"gross\\":\{\\"value\\":(?P<price>\d+)\}\}'
+      official_powertrain: Variant gross base price
+      price_label: Ár ennyitől
   model_rules: []
   skip_if_model_unmapped: false
   copy_trim_to_jato_trim: true
