@@ -525,6 +525,24 @@ def _source_attempt_timeout_seconds(source_timeout_seconds: int) -> int:
     return source_timeout_seconds + 60
 
 
+def _configured_source_timeout_seconds(
+    code: str,
+    default_timeout_seconds: int,
+) -> int:
+    if default_timeout_seconds <= 0:
+        return default_timeout_seconds
+    try:
+        from jato_scraper import registry
+
+        profile = getattr(registry.get(code), "profile", None)
+        profile_timeout = int(getattr(profile, "timeout_seconds", 0) or 0)
+    except Exception:
+        return default_timeout_seconds
+    if profile_timeout <= 0:
+        return default_timeout_seconds
+    return max(default_timeout_seconds, profile_timeout + 30)
+
+
 def _run_scrape_once(
     run_scrape: Callable,
     code: str,
@@ -1169,7 +1187,6 @@ def main():
     source_attempt_limit = _source_attempt_limit()
     source_retry_delay = _source_retry_delay_seconds()
     source_timeout_seconds = _source_timeout_seconds()
-    attempt_timeout_seconds = _source_attempt_timeout_seconds(source_timeout_seconds)
 
     for i, (cc, code) in enumerate(target_codes, 1):
         t0 = time.time()
@@ -1181,11 +1198,18 @@ def main():
             for attempt in range(1, source_attempt_limit + 1):
                 attempt_t0 = time.time()
                 attempt_exception: Exception | None = None
+                effective_source_timeout_seconds = _configured_source_timeout_seconds(
+                    code,
+                    source_timeout_seconds,
+                )
+                attempt_timeout_seconds = _source_attempt_timeout_seconds(
+                    effective_source_timeout_seconds,
+                )
                 try:
                     summary, captured_log_text = _run_scrape_attempt(
                         run_scrape,
                         code,
-                        source_timeout_seconds=source_timeout_seconds,
+                        source_timeout_seconds=effective_source_timeout_seconds,
                         attempt_timeout_seconds=attempt_timeout_seconds,
                     )
                     src = summary["sources"].get(code, {})

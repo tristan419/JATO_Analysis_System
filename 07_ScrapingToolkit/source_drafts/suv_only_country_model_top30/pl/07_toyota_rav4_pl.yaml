@@ -1,124 +1,83 @@
 source_code: toyota_rav4_pl_draft_scrapling
 country: 波兰
 brand: TOYOTA
-source_url: https://www.toyota.pl/samochody/rav4
-source_type: manufacturer_official
+source_url: https://pdf.sites.toyota.pl/spec_rav4_py26.pdf
+source_type: official_price_list
 price_semantics: base_msrp
-extractor_type: scrapling
+extractor_type: pdf_text
 profile:
-  url: https://www.toyota.pl/samochody/rav4
-  headless: true
+  url: https://pdf.sites.toyota.pl/spec_rav4_py26.pdf
+  prefer_curl_download: true
+  timeout_seconds: 300
+  retry_attempts: 1
+  retry_delay_seconds: 2
   default_currency: PLN
   default_tax_included: true
-  default_price_label: MSRP
+  default_price_label: cena katalogowa
   fixed_model: RAV4
   fixed_jato_model: RAV4
-  fixed_jato_powertrain: null
-  model_rules: []
-  skip_if_model_unmapped: false
   copy_trim_to_jato_trim: true
-  confidence_rules:
-    base: 0.2
-    fixed_model_bonus: 0.18
-    fixed_jato_model_bonus: 0.12
-    model_rule_bonus: 0.12
-    trim_present_bonus: 0.1
-    copy_trim_to_jato_trim_bonus: 0.09
-    parsed_price_text_bonus: 0.03
-    currency_bonus: 0.01
-    price_label_bonus: 0.02
-    trim_keyword_bonuses: []
-    price_band_bonuses:
-    - key: price_band_entry
-      label: Entry price band matched
-      max: 0
-      delta: 0.0
-    - key: price_band_mid
-      label: Mid price band matched
-      min: 0
-      max: 0
-      delta: 0.01
-    - key: price_band_high
-      label: High price band matched
-      min: 0
-      delta: 0.03
-    powertrain_keyword_bonuses: []
-    powertrain_bonuses:
-    - key: powertrain_phev
-      label: 'Powertrain matched: PHEV'
-      powertrain: PHEV
-      delta: 0.03
-    - key: powertrain_hev
-      label: 'Powertrain matched: HEV'
-      powertrain: HEV
-      delta: 0.03
-    - key: powertrain_ice
-      label: 'Powertrain matched: ICE'
-      powertrain: ICE
-      delta: 0.03
-    clamp_min: 0.0
-    clamp_max: 1.0
-  structured_fields:
-    edition_rules:
-    - key: edition_special
-      label: Special Edition
-      keyword: special edition
-      special: true
-    powertrain_rules:
-    - key: powertrain_phev
-      powertrain: PHEV
-      keywords:
-      - phev
-      - plug-in hybrid
-      - plug in hybrid
-      - plugin hybrid
-      - hybryda plug-in
-    - key: powertrain_hev
-      powertrain: HEV
-      keywords:
-      - hev
-      - full hybrid
-      - self-charging hybrid
-      - self charging hybrid
-      - hybrid
-      - hybryda
-      - pelna hybryda
-    - key: powertrain_ice
-      powertrain: ICE
-      keywords:
-      - ice
-      - petrol
-      - gasoline
-      - diesel
-      - combustion
-      - benzyna
-  auto_accept_gates:
-    review_threshold: 0.95
-    semi_auto_threshold: 0.98
-    require_powertrain_match: true
-    force_review_if_powertrain_missing: true
-    force_review_if_powertrain_ambiguous: true
-    force_review_for_special_edition: true
-  json_script_selector: script[type='application/ld+json']
-  css:
-    vehicle_container: body
-    model: h2, h3
-    trim: h3
-    price: '[class*="price"]'
-  tier: stealth
-  network_idle: true
-  impersonate: chrome
+  match_confidence: 0.86
+  match_status: review_required
+  match_reason:
+    kind: pdf_price_list
+    source: official_toyota_pl_cennik
+    document_checked_at: '2026-07-09'
+    document_valid_from: '2026-03-02'
+    note: Official Toyota Poland RAV4 2026 price-list PDF; extracts cena katalogowa, not cena specjalna or lowest-30-day price.
+  entry_patterns:
+  - pattern: 'SUV\s+z\s+napędem\s+4×2[\s\S]*?185\s+KM\s+FWD\s+e\s*-\s*CVT\s+cena\s+katalogowa\s+(?P<price>195\s*900)\s+214\s*900\s+–\s+232\s*900'
+    official_trim: Comfort Hybrid FWD
+    official_powertrain: 2.5 Hybrid Dynamic Force 185 KM FWD e-CVT
+    jato_powertrain: HEV
+  - pattern: 'SUV\s+z\s+napędem\s+4×2[\s\S]*?185\s+KM\s+FWD\s+e\s*-\s*CVT\s+cena\s+katalogowa\s+195\s*900\s+(?P<price>214\s*900)\s+–\s+232\s*900'
+    official_trim: Style Hybrid FWD
+    official_powertrain: 2.5 Hybrid Dynamic Force 185 KM FWD e-CVT
+    jato_powertrain: HEV
+  - pattern: 'SUV\s+z\s+napędem\s+4×2[\s\S]*?185\s+KM\s+FWD\s+e\s*-\s*CVT\s+cena\s+katalogowa\s+195\s*900\s+214\s*900\s+–\s+(?P<price>232\s*900)'
+    official_trim: Executive Hybrid FWD
+    official_powertrain: 2.5 Hybrid Dynamic Force 185 KM FWD e-CVT
+    jato_powertrain: HEV
+  - pattern: 'SUV\s+z\s+napędem\s+4×4[\s\S]*?194\s+KM\s+AWD-i\s+e\s*-\s*CVT\s+cena\s+katalogowa\s+(?P<price>205\s*900)\s+224\s*900\s+242\s*900\s+242\s*900'
+    official_trim: Comfort Hybrid AWD-i
+    official_powertrain: 2.5 Hybrid Dynamic Force 194 KM AWD-i e-CVT
+    jato_powertrain: HEV
+  - pattern: 'SUV\s+z\s+napędem\s+4×4[\s\S]*?194\s+KM\s+AWD-i\s+e\s*-\s*CVT\s+cena\s+katalogowa\s+205\s*900\s+(?P<price>224\s*900)\s+242\s*900\s+242\s*900'
+    official_trim: Style Hybrid AWD-i
+    official_powertrain: 2.5 Hybrid Dynamic Force 194 KM AWD-i e-CVT
+    jato_powertrain: HEV
+  - pattern: 'SUV\s+z\s+napędem\s+4×4[\s\S]*?194\s+KM\s+AWD-i\s+e\s*-\s*CVT\s+cena\s+katalogowa\s+205\s*900\s+224\s*900\s+(?P<price>242\s*900)\s+242\s*900'
+    official_trim: GR SPORT Hybrid AWD-i
+    official_powertrain: 2.5 Hybrid Dynamic Force 194 KM AWD-i e-CVT
+    jato_powertrain: HEV
+  - pattern: 'SUV\s+z\s+napędem\s+4×4[\s\S]*?194\s+KM\s+AWD-i\s+e\s*-\s*CVT\s+cena\s+katalogowa\s+205\s*900\s+224\s*900\s+242\s*900\s+(?P<price>242\s*900)'
+    official_trim: Executive Hybrid AWD-i
+    official_powertrain: 2.5 Hybrid Dynamic Force 194 KM AWD-i e-CVT
+    jato_powertrain: HEV
+  - pattern: '2\.5\s+Plug-in\s+Hybrid\s+309\s+KM\s+AWD-i\s+e\s*-\s*CVT\s+cena\s+katalogowa\s+(?P<price>232\s*900)\s+251\s*900\s+269\s*900\s+269\s*900'
+    official_trim: Comfort Plug-in Hybrid AWD-i
+    official_powertrain: 2.5 Plug-in Hybrid 309 KM AWD-i e-CVT
+    jato_powertrain: PHEV
+  - pattern: '2\.5\s+Plug-in\s+Hybrid\s+309\s+KM\s+AWD-i\s+e\s*-\s*CVT\s+cena\s+katalogowa\s+232\s*900\s+(?P<price>251\s*900)\s+269\s*900\s+269\s*900'
+    official_trim: Style Plug-in Hybrid AWD-i
+    official_powertrain: 2.5 Plug-in Hybrid 309 KM AWD-i e-CVT
+    jato_powertrain: PHEV
+  - pattern: '2\.5\s+Plug-in\s+Hybrid\s+309\s+KM\s+AWD-i\s+e\s*-\s*CVT\s+cena\s+katalogowa\s+232\s*900\s+251\s*900\s+(?P<price>269\s*900)\s+269\s*900'
+    official_trim: GR SPORT Plug-in Hybrid AWD-i
+    official_powertrain: 2.5 Plug-in Hybrid 309 KM AWD-i e-CVT
+    jato_powertrain: PHEV
+  - pattern: '2\.5\s+Plug-in\s+Hybrid\s+309\s+KM\s+AWD-i\s+e\s*-\s*CVT\s+cena\s+katalogowa\s+232\s*900\s+251\s*900\s+269\s*900\s+(?P<price>269\s*900)'
+    official_trim: Executive Plug-in Hybrid AWD-i
+    official_powertrain: 2.5 Plug-in Hybrid 309 KM AWD-i e-CVT
+    jato_powertrain: PHEV
 schedule:
   frequency: manual_only
   run_window_start: 00:00
   run_window_end: 05:00
   preferred_weekday: monday
-notes: Draft scaffold generated from country×model top30 backlog. Replace source_url,
-  profile.url, selectors, currency, price label, and the single-model placeholders
-  before promoting to 07_ScrapingToolkit/sources. [URL filled from TOYOTA template]
-  [URL language corrected] [CSS selectors applied from brand probe] [Switched to playwright_card_flow
-  with toyota_trim_overview_playwright.yaml] [Reverted to scrapling — playwright preset
-  needs per-brand tuning]
+notes: Switched from stale Toyota Poland model page to the official Toyota Poland
+  RAV4 2026 price-list PDF. Extracts cena katalogowa only; special price and
+  lowest-30-day rows are intentionally excluded.
 bootstrap_meta:
   country_model_rank: 7
   suggested_scope_kind: single_model

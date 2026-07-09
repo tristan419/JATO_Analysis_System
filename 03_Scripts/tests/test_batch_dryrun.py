@@ -6,6 +6,7 @@ import logging
 from pathlib import Path
 import sys
 import time
+from types import SimpleNamespace
 
 import pytest
 
@@ -399,6 +400,22 @@ def test_source_attempt_timeout_defaults_to_source_timeout_plus_buffer(
 
     assert batch_dryrun._source_attempt_timeout_seconds(10) == 70
     assert batch_dryrun._source_attempt_timeout_seconds(0) == 0
+
+
+def test_configured_source_timeout_uses_profile_timeout(monkeypatch) -> None:
+    class FakeRegistry:
+        @staticmethod
+        def get(code: str):
+            assert code == "demo_source"
+            return SimpleNamespace(profile=SimpleNamespace(timeout_seconds=300))
+
+    monkeypatch.setitem(
+        sys.modules,
+        "jato_scraper",
+        SimpleNamespace(registry=FakeRegistry),
+    )
+
+    assert batch_dryrun._configured_source_timeout_seconds("demo_source", 180) == 330
 
 
 def test_classify_hard_attempt_timeout() -> None:
