@@ -1,12 +1,12 @@
 source_code: polestar_3_no_draft_scrapling
 country: 挪威
 brand: POLESTAR
-source_url: https://www.polestar.com/no/polestar-3/
+source_url: https://www.polestar.com/no/polestar-3/specifications/
 source_type: manufacturer_official
 price_semantics: base_msrp
 extractor_type: scrapling
 profile:
-  url: https://www.polestar.com/no/polestar-3/
+  url: https://www.polestar.com/no/polestar-3/specifications/
   tier: stealth
   headless: true
   network_idle: true
@@ -14,12 +14,18 @@ profile:
   text_regex:
     source_selector: body
     entry_patterns:
-    - pattern: 'Pris fra.{0,1200}(?P<price>kr\s*\d{3}\s+\d{3})'
-      official_trim: Base from price
+    - pattern: 'Rear motor\s+Dual motor\s+Performance(?:(?!Motor).)*?Pris\s+(?P<price>kr\s*\d{3}\s+\d{3})'
+      official_trim: Rear motor
+      official_powertrain: BEV Rear motor
+    - pattern: 'Rear motor\s+Dual motor\s+Performance(?:(?!Motor).)*?Pris\s+kr\s*\d{3}\s+\d{3}\s+Pris\s+(?P<price>kr\s*\d{3}\s+\d{3})'
+      official_trim: Dual motor
+      official_powertrain: BEV Dual motor
+    - pattern: 'Rear motor\s+Dual motor\s+Performance(?:(?!Motor).)*?Pris\s+kr\s*\d{3}\s+\d{3}\s+Pris\s+kr\s*\d{3}\s+\d{3}\s+Pris\s+(?P<price>kr\s*\d\s+\d{3}\s+\d{3})'
+      official_trim: Performance
       official_powertrain: BEV
   default_currency: NOK
   default_tax_included: true
-  default_price_label: Official from price
+  default_price_label: Official specifications price
   fixed_model: '3'
   fixed_jato_model: '3'
   fixed_jato_powertrain: BEV
@@ -93,7 +99,8 @@ schedule:
   preferred_weekday: monday
 notes: Keywords filled from official manufacturer website research (NO market). CSS
   selectors still require browser-based inspection before promotion. [CSS selectors
-  applied from brand probe] [Updated to Polestar official NO from-price text_regex]
+  applied from brand probe] [Updated to Polestar official NO specifications price
+  table text_regex]
 bootstrap_meta:
   country_model_rank: 30
   suggested_scope_kind: single_model
