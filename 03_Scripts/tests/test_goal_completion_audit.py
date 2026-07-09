@@ -56,6 +56,24 @@ def _write_statuses(repo_root: Path) -> None:
                 "priceAlertReviewEffectivenessMissingCount": 0,
                 "priceAlertReviewQueueCovered": True,
             }
+        elif key == "dryrun_governance":
+            runtime = {
+                "sourceRepairIssueCount": 2,
+                "transientRecheckCount": 1,
+                "businessResolutionCount": 0,
+                "sourceReviewQueueSchemaVersion": (
+                    audit.SOURCE_REVIEW_QUEUE_SCHEMA_VERSION
+                ),
+                "sourceReviewQueueCaseCount": 3,
+                "sourceReviewQueueExpectedCaseCount": 3,
+                "sourceReviewQueueComplete": True,
+                "sourceReviewQueueSummary": {
+                    "totalCases": 3,
+                    "sourceRepairCount": 2,
+                    "businessResolutionCount": 0,
+                    "transientRecheckCount": 1,
+                },
+            }
         requirements.append({
             "key": key,
             "title": key.replace("_", " ").title(),
@@ -141,6 +159,25 @@ def _remote_price_alert_review_queue_payload(
     }
 
 
+def _remote_source_review_queue_payload(
+    *,
+    total_cases: int = 3,
+    source_repair_count: int = 2,
+    business_resolution_count: int = 0,
+    transient_recheck_count: int = 1,
+) -> dict:
+    return {
+        "schemaVersion": audit.SOURCE_REVIEW_QUEUE_SCHEMA_VERSION,
+        "summary": {
+            "totalCases": total_cases,
+            "sourceRepairCount": source_repair_count,
+            "businessResolutionCount": business_resolution_count,
+            "transientRecheckCount": transient_recheck_count,
+        },
+        "items": [],
+    }
+
+
 def _write_price_alert_review_queue_artifact(
     repo_root: Path,
     *,
@@ -181,13 +218,17 @@ def test_build_report_separates_local_p0_from_unchecked_production(tmp_path: Pat
     assert by_key["msrp_monitoring_events"]["status"] == "passed"
     assert by_key["msrp_pipeline_orchestration"]["status"] == "passed"
     assert by_key["msrp_price_alert_review_effectiveness_closure"]["status"] == "passed"
+    assert by_key["msrp_source_review_queue_coverage"]["status"] == "passed"
     assert "ai_news_voc_15_country_smoke" not in by_key
     assert by_key["production_deployment_state"]["status"] == "not_checked"
     assert report["summary"]["msrpDetailedPassedCount"] == 16
-    assert report["summary"]["msrpCompletionPassedCount"] == 17
+    assert report["summary"]["msrpCompletionPassedCount"] == 18
     assert report["summary"]["priceAlertReviewCaseCount"] == 2
     assert report["summary"]["priceAlertReviewEffectivenessLinkedCount"] == 1
     assert report["summary"]["priceAlertReviewEffectivenessMissingCount"] == 0
+    assert report["summary"]["sourceReviewQueueCaseCount"] == 3
+    assert report["summary"]["sourceReviewQueueExpectedCaseCount"] == 3
+    assert report["summary"]["sourceReviewQueueComplete"] is True
 
 
 def test_price_alert_review_closure_can_use_queue_artifact_when_readiness_is_stale(
@@ -263,6 +304,7 @@ def test_remote_checks_can_mark_production_passed(monkeypatch, tmp_path: Path) -
                     "overallPassPct": 96.4,
                 },
                 "priceAlertReviewQueue": _remote_price_alert_review_queue_payload(),
+                "sourceReviewQueue": _remote_source_review_queue_payload(),
             }, None, 200
         if url.endswith("/hermes/pipeline/status/unified_scraping_readiness"):
             return {
@@ -301,6 +343,16 @@ def test_remote_checks_can_mark_production_passed(monkeypatch, tmp_path: Path) -
         "effectivenessMissingCount": 0,
         "effectivenessLinkageStatus": "ok",
     }
+    assert by_key["production_deployment_state"]["runtime"]["sourceReviewQueue"] == {
+        "schemaVersion": audit.SOURCE_REVIEW_QUEUE_SCHEMA_VERSION,
+        "schemaOk": True,
+        "totalCases": 3,
+        "expectedCases": 3,
+        "sourceRepairCount": 2,
+        "businessResolutionCount": 0,
+        "transientRecheckCount": 1,
+        "queueCoverageStatus": "complete",
+    }
     assert report["status"] == "complete"
 
 
@@ -328,6 +380,7 @@ def test_remote_checks_rejects_missing_price_alert_review_effectiveness_linkage(
                     linked_count=0,
                     missing_count=1,
                 ),
+                "sourceReviewQueue": _remote_source_review_queue_payload(),
             }, None, 200
         if url.endswith("/hermes/pipeline/status/unified_scraping_readiness"):
             return {"status": "success", "readinessStatus": "passed"}, None, 200
@@ -354,6 +407,58 @@ def test_remote_checks_rejects_missing_price_alert_review_effectiveness_linkage(
             "effectivenessLinkageStatus"
         ]
         == "missing_linkage"
+    )
+
+
+def test_remote_checks_rejects_incomplete_source_review_queue(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    _write_statuses(tmp_path)
+    source_root = tmp_path / "source_drafts"
+    _write_source_drafts(source_root, ("se", "fi"))
+
+    def fake_fetch_json(
+        url: str,
+        timeout_seconds: int,
+        *,
+        resolve_ip: str | None = None,
+    ):
+        if url.endswith("/msrp/current-prices/snapshot"):
+            return {"schemaVersion": "msrp_current_price_snapshot_v1"}, None, 200
+        if url.endswith("/hermes/msrp-country-progress"):
+            return {
+                "status": {"gateStatus": "allowed", "overallPassPct": 96.4},
+                "priceAlertReviewQueue": _remote_price_alert_review_queue_payload(),
+                "sourceReviewQueue": _remote_source_review_queue_payload(
+                    total_cases=1,
+                    source_repair_count=2,
+                    transient_recheck_count=1,
+                ),
+            }, None, 200
+        if url.endswith("/hermes/pipeline/status/unified_scraping_readiness"):
+            return {"status": "success", "readinessStatus": "passed"}, None, 200
+        if url.endswith("/msrp/monitoring/events"):
+            return {"schemaVersion": "msrp_monitoring_events_v1", "summary": {}}, None, 200
+        raise AssertionError(url)
+
+    monkeypatch.setattr(audit, "_fetch_json", fake_fetch_json)
+
+    report = audit.build_goal_completion_report(
+        repo_root=tmp_path,
+        source_draft_dir=source_root,
+        required_source_countries=("se", "fi"),
+        remote_api_base="https://example.test/v1",
+    )
+    production = {
+        item["key"]: item for item in report["requirements"]
+    }["production_deployment_state"]
+
+    assert production["status"] == "missing"
+    assert report["status"] == "in_progress"
+    assert (
+        production["runtime"]["sourceReviewQueue"]["queueCoverageStatus"]
+        == "incomplete"
     )
 
 
@@ -398,6 +503,7 @@ def test_remote_checks_can_use_stable_progress_when_active_probe_regresses(
                     "activeRunPartial": False,
                 },
                 "priceAlertReviewQueue": _remote_price_alert_review_queue_payload(),
+                "sourceReviewQueue": _remote_source_review_queue_payload(),
             }, None, 200
         if url.endswith("/hermes/pipeline/status/unified_scraping_readiness"):
             return {
@@ -465,6 +571,7 @@ def test_remote_checks_rejects_stable_progress_with_blocked_country(
                     "activeRunPartial": False,
                 },
                 "priceAlertReviewQueue": _remote_price_alert_review_queue_payload(),
+                "sourceReviewQueue": _remote_source_review_queue_payload(),
             }, None, 200
         if url.endswith("/hermes/pipeline/status/unified_scraping_readiness"):
             return {"status": "success", "readinessStatus": "passed"}, None, 200
@@ -510,6 +617,7 @@ def test_remote_checks_passes_resolve_ip_to_fetcher(monkeypatch, tmp_path: Path)
             return {
                 "status": {"gateStatus": "allowed", "overallPassPct": 96.4},
                 "priceAlertReviewQueue": _remote_price_alert_review_queue_payload(),
+                "sourceReviewQueue": _remote_source_review_queue_payload(),
             }, None, 200
         if url.endswith("/hermes/pipeline/status/unified_scraping_readiness"):
             return {"status": "success", "readinessStatus": "passed"}, None, 200
@@ -596,6 +704,39 @@ def test_missing_price_alert_review_effectiveness_link_blocks_local_p0(tmp_path:
     )
 
 
+def test_incomplete_source_review_queue_blocks_local_p0(tmp_path: Path) -> None:
+    _write_statuses(tmp_path)
+    report_path = tmp_path / "hermes" / "reports" / "msrp_readiness_audit.json"
+    report_payload = json.loads(report_path.read_text(encoding="utf-8"))
+    for item in report_payload["requirements"]:
+        if item["key"] != "dryrun_governance":
+            continue
+        item["runtime"]["sourceReviewQueueCaseCount"] = 1
+        item["runtime"]["sourceReviewQueueComplete"] = False
+    _write_json(report_path, report_payload)
+    source_root = tmp_path / "source_drafts"
+    _write_source_drafts(source_root, ("se", "fi"))
+
+    report = audit.build_goal_completion_report(
+        repo_root=tmp_path,
+        source_draft_dir=source_root,
+        required_source_countries=("se", "fi"),
+    )
+    by_key = {item["key"]: item for item in report["requirements"]}
+
+    assert report["summary"]["localP0Ready"] is False
+    assert report["summary"]["msrpReady"] is False
+    assert by_key["msrp_official_price_p0"]["status"] == "missing"
+    coverage = by_key["msrp_source_review_queue_coverage"]
+    assert coverage["status"] == "degraded"
+    assert coverage["runtime"]["sourceReviewQueueCaseCount"] == 1
+    assert coverage["runtime"]["sourceReviewQueueExpectedCaseCount"] == 3
+    assert (
+        "msrp_source_review_queue_coverage"
+        in report["summary"]["msrpMissingRequirementKeys"]
+    )
+
+
 def test_write_outputs_and_status_record(monkeypatch, tmp_path: Path) -> None:
     _write_statuses(tmp_path)
     source_root = tmp_path / "source_drafts"
@@ -621,8 +762,11 @@ def test_write_outputs_and_status_record(monkeypatch, tmp_path: Path) -> None:
     assert Path(artifacts["latestJson"]).exists()
     assert Path(artifacts["latestMarkdown"]).exists()
     assert status_record == {"pipelineId": audit.PIPELINE_ID, "status": "failed"}
-    assert captured["records_processed"] == 21
+    assert captured["records_processed"] == 22
     assert captured["failed_count"] == 1
     assert captured["extra"]["priceAlertReviewCaseCount"] == 2
     assert captured["extra"]["priceAlertReviewEffectivenessLinkedCount"] == 1
     assert captured["extra"]["priceAlertReviewEffectivenessMissingCount"] == 0
+    assert captured["extra"]["sourceReviewQueueCaseCount"] == 3
+    assert captured["extra"]["sourceReviewQueueExpectedCaseCount"] == 3
+    assert captured["extra"]["sourceReviewQueueComplete"] is True

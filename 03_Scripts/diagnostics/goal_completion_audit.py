@@ -39,6 +39,7 @@ PRICE_ALERT_REVIEW_QUEUE_SCHEMA_VERSION = "msrp_price_alert_review_queue_v1"
 PRICE_ALERT_REVIEW_QUEUE_RELATIVE_PATH = (
     "03_Scripts/diagnostics/artifacts/msrp_price_alert_review_queue.json"
 )
+SOURCE_REVIEW_QUEUE_SCHEMA_VERSION = "msrp_source_review_queue_v1"
 DEFAULT_SOURCE_DRAFT_DIR = "07_ScrapingToolkit/source_drafts/suv_only_country_model_top30"
 DEFAULT_REQUIRED_SOURCE_COUNTRIES = (
     "at",
@@ -382,6 +383,85 @@ def _price_alert_review_closure_requirement(
     )
 
 
+def _source_review_queue_coverage_requirement(
+    msrp_detail_requirements: Sequence[dict[str, Any]],
+) -> dict[str, Any]:
+    by_key = _requirements_by_report_key(msrp_detail_requirements)
+    dryrun = by_key.get("msrp_dryrun_governance", {})
+    dryrun_runtime = (
+        dryrun.get("runtime")
+        if isinstance(dryrun.get("runtime"), dict)
+        else {}
+    )
+    schema_version = dryrun_runtime.get("sourceReviewQueueSchemaVersion")
+    case_count = _safe_int(dryrun_runtime.get("sourceReviewQueueCaseCount"), 0)
+    expected_count = _safe_int(
+        dryrun_runtime.get("sourceReviewQueueExpectedCaseCount"),
+        0,
+    )
+    source_repair_count = _safe_int(
+        dryrun_runtime.get("sourceRepairIssueCount"),
+        0,
+    )
+    transient_recheck_count = _safe_int(
+        dryrun_runtime.get("transientRecheckCount"),
+        0,
+    )
+    business_resolution_count = _safe_int(
+        dryrun_runtime.get("businessResolutionCount"),
+        0,
+    )
+    if expected_count <= 0:
+        expected_count = (
+            source_repair_count
+            + transient_recheck_count
+            + business_resolution_count
+        )
+    schema_ok = schema_version == SOURCE_REVIEW_QUEUE_SCHEMA_VERSION
+    queue_complete = bool(
+        dryrun_runtime.get("sourceReviewQueueComplete")
+        and schema_ok
+        and (expected_count <= 0 or case_count >= expected_count)
+    )
+    passed = dryrun.get("status") == "passed" and queue_complete
+    degraded = (
+        dryrun.get("status") in {"passed", "degraded"}
+        and schema_ok
+        and case_count > 0
+        and not queue_complete
+    )
+    evidence = _dedupe_evidence([
+        *(dryrun.get("evidence") or []),
+        "GET /hermes/msrp-country-progress",
+    ])
+
+    return _requirement(
+        key="msrp_source_review_queue_coverage",
+        title="MSRP source repair and transient recheck queue coverage",
+        status="passed" if passed else "degraded" if degraded else "missing",
+        evidence=evidence,
+        runtime={
+            "sourceReviewQueueSchemaVersion": schema_version,
+            "sourceReviewQueueSchemaOk": schema_ok,
+            "sourceReviewQueueCaseCount": case_count,
+            "sourceReviewQueueExpectedCaseCount": expected_count,
+            "sourceReviewQueueComplete": queue_complete,
+            "sourceRepairIssueCount": source_repair_count,
+            "transientRecheckCount": transient_recheck_count,
+            "businessResolutionCount": business_resolution_count,
+            "dependentRequirements": {
+                "dryrunGovernance": dryrun.get("status"),
+            },
+            "requiredSchemas": [SOURCE_REVIEW_QUEUE_SCHEMA_VERSION],
+        },
+        note=(
+            "Full MSRP completion requires Hermes dryrun governance to expose "
+            "a complete source-review queue covering every source repair, "
+            "business-resolution, and transient recheck case."
+        ),
+    )
+
+
 def _requirement(
     *,
     key: str,
@@ -576,6 +656,53 @@ def _remote_price_alert_review_queue(progress: dict[str, Any] | None) -> dict[st
     }
 
 
+def _remote_source_review_queue(progress: dict[str, Any] | None) -> dict[str, Any]:
+    queue = progress.get("sourceReviewQueue") if isinstance(progress, dict) else {}
+    if not isinstance(queue, dict):
+        queue = {}
+    summary = queue.get("summary")
+    if not isinstance(summary, dict):
+        summary = {}
+    backlog = progress.get("sourceRepairBacklog") if isinstance(progress, dict) else {}
+    if not isinstance(backlog, dict):
+        backlog = {}
+
+    source_repair_count = _safe_int(summary.get("sourceRepairCount"), 0)
+    business_resolution_count = _safe_int(summary.get("businessResolutionCount"), 0)
+    transient_recheck_count = _safe_int(summary.get("transientRecheckCount"), 0)
+    expected_count = (
+        source_repair_count
+        + business_resolution_count
+        + transient_recheck_count
+    )
+    backlog_expected_count = (
+        _safe_int(
+            backlog.get("sourceRepairIssueCount", backlog.get("totalIssueCount")),
+            0,
+        )
+        + _safe_int(backlog.get("businessResolutionCount"), 0)
+        + _safe_int(backlog.get("transientRegressionCount"), 0)
+    )
+    if backlog_expected_count > 0:
+        expected_count = backlog_expected_count
+
+    schema_version = queue.get("schemaVersion")
+    schema_ok = schema_version == SOURCE_REVIEW_QUEUE_SCHEMA_VERSION
+    case_count = _safe_int(summary.get("totalCases"), 0)
+    complete = schema_ok and (expected_count <= 0 or case_count >= expected_count)
+    return {
+        "schemaVersion": schema_version,
+        "schemaOk": schema_ok,
+        "totalCases": case_count,
+        "expectedCases": expected_count,
+        "sourceRepairCount": source_repair_count,
+        "businessResolutionCount": business_resolution_count,
+        "transientRecheckCount": transient_recheck_count,
+        "queueCoverageStatus": "complete" if complete else "incomplete",
+        "passed": complete,
+    }
+
+
 def _remote_checks(
     remote_api_base: str | None,
     timeout_seconds: int,
@@ -614,6 +741,7 @@ def _remote_checks(
     progress_gate = _effective_progress_gate(progress)
     stable_coverage = progress_gate["stableCoverage"]
     price_alert_review_queue = _remote_price_alert_review_queue(progress)
+    source_review_queue = _remote_source_review_queue(progress)
     passed = (
         snapshot_code == 200
         and isinstance(snapshot, dict)
@@ -627,6 +755,7 @@ def _remote_checks(
         and isinstance(monitoring, dict)
         and monitoring.get("schemaVersion") == "msrp_monitoring_events_v1"
         and price_alert_review_queue["passed"]
+        and source_review_queue["passed"]
     )
     return {
         "status": "passed" if passed else "missing",
@@ -693,6 +822,11 @@ def _remote_checks(
             for key, value in price_alert_review_queue.items()
             if key != "passed"
         },
+        "sourceReviewQueue": {
+            key: value
+            for key, value in source_review_queue.items()
+            if key != "passed"
+        },
     }
 
 
@@ -721,9 +855,13 @@ def build_goal_completion_report(
         price_alert_review_queue=price_alert_review_queue,
         price_alert_review_queue_path=price_alert_review_queue_path,
     )
+    msrp_source_review_queue_requirement = _source_review_queue_coverage_requirement(
+        msrp_detail_requirements,
+    )
     msrp_completion_requirements = [
         *msrp_detail_requirements,
         msrp_review_closure_requirement,
+        msrp_source_review_queue_requirement,
     ]
     unified_status = _pipeline_status(root, "unified_scraping_readiness")
     source_coverage = _source_draft_coverage(
@@ -773,6 +911,7 @@ def build_goal_completion_report(
         ),
         *msrp_detail_requirements,
         msrp_review_closure_requirement,
+        msrp_source_review_queue_requirement,
         _requirement(
             key="unified_scraping_contract_and_stage",
             title="Unified ScrapeJob contract and stage smoke",
@@ -835,6 +974,21 @@ def build_goal_completion_report(
                     "priceAlertReviewEffectivenessMissingCount"
                 )
             ),
+            "sourceReviewQueueCaseCount": (
+                msrp_source_review_queue_requirement["runtime"].get(
+                    "sourceReviewQueueCaseCount"
+                )
+            ),
+            "sourceReviewQueueExpectedCaseCount": (
+                msrp_source_review_queue_requirement["runtime"].get(
+                    "sourceReviewQueueExpectedCaseCount"
+                )
+            ),
+            "sourceReviewQueueComplete": (
+                msrp_source_review_queue_requirement["runtime"].get(
+                    "sourceReviewQueueComplete"
+                )
+            ),
             "sourceDraftTodoPlaceholderCount": source_coverage["todoPlaceholderCount"],
             "sourceDraftCountryCount": source_coverage["countryCount"],
             "productionStatus": remote.get("status"),
@@ -871,6 +1025,9 @@ def _render_markdown(report: dict[str, Any]) -> str:
         f"| Price-alert review cases | {summary.get('priceAlertReviewCaseCount', 0)} |",
         f"| Price-alert linked effectiveness | {summary.get('priceAlertReviewEffectivenessLinkedCount', 0)} |",
         f"| Price-alert missing effectiveness | {summary.get('priceAlertReviewEffectivenessMissingCount', 0)} |",
+        f"| Source-review queue cases | {summary.get('sourceReviewQueueCaseCount', 0)} |",
+        f"| Source-review queue expected | {summary.get('sourceReviewQueueExpectedCaseCount', 0)} |",
+        f"| Source-review queue complete | {summary.get('sourceReviewQueueComplete', False)} |",
         f"| Source draft countries | {summary.get('sourceDraftCountryCount', 0)} |",
         f"| Source TODO placeholders | {summary.get('sourceDraftTodoPlaceholderCount', 0)} |",
         "",
@@ -961,6 +1118,12 @@ def write_status_record(
                 "priceAlertReviewEffectivenessMissingCount",
                 0,
             ),
+            "sourceReviewQueueCaseCount": summary.get("sourceReviewQueueCaseCount", 0),
+            "sourceReviewQueueExpectedCaseCount": summary.get(
+                "sourceReviewQueueExpectedCaseCount",
+                0,
+            ),
+            "sourceReviewQueueComplete": summary.get("sourceReviewQueueComplete", False),
             "sourceDraftTodoPlaceholderCount": summary.get("sourceDraftTodoPlaceholderCount", 0),
             "productionStatus": summary.get("productionStatus"),
         },
