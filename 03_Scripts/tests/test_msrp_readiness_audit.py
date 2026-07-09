@@ -483,6 +483,66 @@ def test_build_readiness_report_uses_latest_dryrun_artifact_fallback(
     assert report["summary"]["runtimeCounts"]["dryrunAllCountryLatestCount"] == 2
 
 
+def test_artifact_dryrun_fallback_reads_v3_report_by_run_id(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    artifacts = tmp_path / "artifacts"
+    artifacts.mkdir()
+    run_id = "msrp-dryrun-20260709-081500"
+    (artifacts / f"dryrun_report_{run_id}.json").write_text(
+        json.dumps({
+            "schemaVersion": "msrp_dryrun_report_v3",
+            "runId": run_id,
+            "batch": "pt",
+            "summary": {
+                "passPct": 100.0,
+                "gateStatus": "allowed",
+                "gateThreshold": 70,
+            },
+            "countriesDetail": [
+                {
+                    "countryCode": "pt",
+                    "total": 2,
+                    "pass": 2,
+                    "empty": 0,
+                    "fail": 0,
+                    "errors": 0,
+                    "passPct": 100.0,
+                    "status": "success",
+                },
+            ],
+        }),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(audit_module, "DRYRUN_ARTIFACTS_DIR", artifacts)
+
+    progress = audit_module._dryrun_country_progress_from_artifacts({
+        "latestRunId": run_id,
+        "runs": [
+            {
+                "runId": run_id,
+                "batch": "batch_a",
+                "status": "success",
+                "gateStatus": "allowed",
+                "gateThreshold": 70,
+                "passPct": 100.0,
+                "total": 2,
+                "pass": 2,
+                "empty": 0,
+                "fail": 0,
+                "errors": 0,
+                "finishedAt": "2026-07-09T08:15:00Z",
+            },
+        ],
+    })
+
+    assert progress["allCountriesLatest"][0]["countryCode"] == "pt"
+    assert progress["allCountriesLatest"][0]["runId"] == run_id
+    assert progress["stableCoverage"]["readyCountries"] == ["pt"]
+    assert progress["stableCoverage"]["sourcePassRate"] == 100.0
+
+
 def test_main_prints_json_report(capsys, monkeypatch) -> None:
     write_price_alert_review_queue(audit_module.PRICE_ALERT_REVIEW_QUEUE_PATH)
 

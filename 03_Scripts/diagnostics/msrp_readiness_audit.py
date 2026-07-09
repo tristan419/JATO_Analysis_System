@@ -181,6 +181,35 @@ def _read_json_file(path: Path) -> dict[str, Any]:
     return payload if isinstance(payload, dict) else {}
 
 
+def _artifact_path_from_ref(path_ref: Any) -> Path | None:
+    if not path_ref:
+        return None
+    path = Path(str(path_ref))
+    if not path.is_absolute():
+        path = REPO_ROOT / path
+    return path
+
+
+def _load_indexed_dryrun_report(run: dict[str, Any]) -> dict[str, Any]:
+    run_id = str(run.get("runId") or "")
+    candidate_paths: list[Path] = []
+    artifact_path = _artifact_path_from_ref(run.get("artifactPath"))
+    if artifact_path:
+        candidate_paths.append(artifact_path)
+    if run_id:
+        candidate_paths.append(DRYRUN_ARTIFACTS_DIR / f"dryrun_report_{run_id}.json")
+
+    seen: set[Path] = set()
+    for path in candidate_paths:
+        if path in seen:
+            continue
+        seen.add(path)
+        report = _read_json_file(path)
+        if report.get("schemaVersion") == "msrp_dryrun_report_v3":
+            return report
+    return {}
+
+
 def _country_codes_from_run(run: dict[str, Any]) -> list[str]:
     batch = str(run.get("batch") or "").strip().lower()
     if not batch:
@@ -208,33 +237,158 @@ def _dryrun_history_from_artifacts() -> dict[str, Any]:
     }
 
 
+def _run_recency_key(run: dict[str, Any]) -> tuple[str, str]:
+    return (
+        str(run.get("finishedAt") or run.get("startedAt") or ""),
+        str(run.get("runId") or ""),
+    )
+
+
+def _is_source_filtered_run(run: dict[str, Any]) -> bool:
+    source_filter = run.get("sourceFilter")
+    return bool(
+        run.get("isSourceFiltered")
+        or (isinstance(source_filter, list) and source_filter)
+    )
+
+
+def _updates_latest_artifact(run: dict[str, Any]) -> bool:
+    if run.get("updatesLatestArtifact") is False:
+        return False
+    return not _is_source_filtered_run(run)
+
+
+def _is_diagnostic_dryrun_run(run: dict[str, Any]) -> bool:
+    return not _updates_latest_artifact(run)
+
+
+def _float_value(value: Any, fallback: float = 0.0) -> float:
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return fallback
+
+
+def _int_value(value: Any) -> int:
+    try:
+        return int(value or 0)
+    except (TypeError, ValueError):
+        return 0
+
+
+def _country_latest_row_from_v3(
+    *,
+    run: dict[str, Any],
+    report: dict[str, Any],
+    country: dict[str, Any],
+) -> dict[str, Any] | None:
+    country_code = str(country.get("countryCode") or "").strip().lower()
+    if country_code not in MSRP_SOURCE_COUNTRY_CODES:
+        return None
+    summary = report.get("summary") if isinstance(report.get("summary"), dict) else {}
+    gate_threshold = _float_value(
+        run.get("gateThreshold", summary.get("gateThreshold")),
+        70.0,
+    )
+    pass_pct = _float_value(country.get("passPct"), 0.0)
+    return {
+        "countryCode": country_code,
+        "runId": report.get("runId") or run.get("runId"),
+        "batch": report.get("batch") or run.get("batch"),
+        "status": country.get("status") or run.get("status"),
+        "gateStatus": "allowed" if pass_pct >= gate_threshold else "blocked",
+        "gateThreshold": gate_threshold,
+        "passPct": pass_pct,
+        "total": _int_value(country.get("total")),
+        "pass": _int_value(country.get("pass")),
+        "empty": _int_value(country.get("empty")),
+        "fail": _int_value(country.get("fail")) + _int_value(country.get("errors")),
+        "errors": _int_value(country.get("errors")),
+        "finishedAt": (
+            run.get("finishedAt")
+            or report.get("generatedAt")
+            or run.get("startedAt")
+        ),
+        "artifactPath": run.get("artifactPath"),
+    }
+
+
+def _country_latest_rows_from_v3_report(
+    run: dict[str, Any],
+    report: dict[str, Any],
+) -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+    for country in report.get("countriesDetail") or []:
+        if not isinstance(country, dict):
+            continue
+        row = _country_latest_row_from_v3(
+            run=run,
+            report=report,
+            country=country,
+        )
+        if row:
+            rows.append(row)
+    return rows
+
+
+def _country_latest_rows_from_run_summary(run: dict[str, Any]) -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+    for country_code in _country_codes_from_run(run):
+        rows.append({
+            "countryCode": country_code,
+            "runId": run.get("runId"),
+            "batch": run.get("batch"),
+            "status": run.get("status"),
+            "gateStatus": run.get("gateStatus"),
+            "gateThreshold": run.get("gateThreshold"),
+            "passPct": run.get("passPct"),
+            "total": run.get("total"),
+            "pass": run.get("pass"),
+            "empty": run.get("empty"),
+            "fail": run.get("fail"),
+            "errors": run.get("errors"),
+            "finishedAt": run.get("finishedAt") or run.get("startedAt"),
+            "artifactPath": run.get("artifactPath"),
+        })
+    return rows
+
+
+def _is_stable_country_latest(row: dict[str, Any]) -> bool:
+    return _float_value(row.get("passPct"), 0.0) >= _float_value(
+        row.get("gateThreshold"),
+        70.0,
+    )
+
+
 def _all_country_latest_from_dryrun_runs(
     runs: Sequence[dict[str, Any]],
 ) -> list[dict[str, Any]]:
-    latest_by_country: dict[str, dict[str, Any]] = {}
-    for run in runs:
+    stable_by_country: dict[str, dict[str, Any]] = {}
+    fallback_by_country: dict[str, dict[str, Any]] = {}
+    for run in sorted(runs, key=_run_recency_key, reverse=True):
         if not isinstance(run, dict):
             continue
-        for country_code in _country_codes_from_run(run):
-            if country_code in latest_by_country:
+        if _is_diagnostic_dryrun_run(run):
+            continue
+        report = _load_indexed_dryrun_report(run)
+        country_rows = (
+            _country_latest_rows_from_v3_report(run, report)
+            if report
+            else _country_latest_rows_from_run_summary(run)
+        )
+        for row in country_rows:
+            country_code = str(row.get("countryCode") or "")
+            if not country_code:
                 continue
-            latest_by_country[country_code] = {
-                "countryCode": country_code,
-                "runId": run.get("runId"),
-                "batch": run.get("batch"),
-                "status": run.get("status"),
-                "gateStatus": run.get("gateStatus"),
-                "gateThreshold": run.get("gateThreshold"),
-                "passPct": run.get("passPct"),
-                "total": run.get("total"),
-                "pass": run.get("pass"),
-                "empty": run.get("empty"),
-                "fail": run.get("fail"),
-                "errors": run.get("errors"),
-                "finishedAt": run.get("finishedAt") or run.get("startedAt"),
-                "artifactPath": run.get("artifactPath"),
-            }
-    return [latest_by_country[key] for key in sorted(latest_by_country)]
+            fallback_by_country.setdefault(country_code, row)
+            if country_code not in stable_by_country and _is_stable_country_latest(row):
+                stable_by_country[country_code] = row
+
+    countries_by_code = {
+        country_code: stable_by_country.get(country_code, fallback)
+        for country_code, fallback in fallback_by_country.items()
+    }
+    return [countries_by_code[key] for key in sorted(countries_by_code)]
 
 
 def _stable_coverage_from_artifact_latest(
