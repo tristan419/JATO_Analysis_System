@@ -1,124 +1,86 @@
 source_code: hyundai_santa_fe_pl_draft_scrapling
 country: 波兰
 brand: HYUNDAI
-source_url: https://www.hyundai.pl/modele/santa-fe.html
-source_type: manufacturer_official
+source_url: https://dmassets.hyundai.com/is/content/hyundaiautoever/Cennik-SANTA-FE-Hybrid-PY2026-MY2026pdf
+source_type: official_price_list
 price_semantics: base_msrp
-extractor_type: scrapling
+extractor_type: pdf_text
 profile:
-  url: https://www.hyundai.pl/modele/santa-fe.html
-  headless: true
+  url: https://dmassets.hyundai.com/is/content/hyundaiautoever/Cennik-SANTA-FE-Hybrid-PY2026-MY2026pdf
+  urls:
+  - https://dmassets.hyundai.com/is/content/hyundaiautoever/Cennik-SANTA-FE-Plug-in-PY2026-MY2027pdf
+  prefer_curl_download: true
+  timeout_seconds: 60
   default_currency: PLN
   default_tax_included: true
-  default_price_label: MSRP
+  default_price_label: Cena podstawowa
   fixed_model: SANTA FE
   fixed_jato_model: SANTA FE
-  fixed_jato_powertrain: null
-  model_rules: []
-  skip_if_model_unmapped: false
   copy_trim_to_jato_trim: true
-  confidence_rules:
-    base: 0.2
-    fixed_model_bonus: 0.18
-    fixed_jato_model_bonus: 0.12
-    model_rule_bonus: 0.12
-    trim_present_bonus: 0.1
-    copy_trim_to_jato_trim_bonus: 0.09
-    parsed_price_text_bonus: 0.03
-    currency_bonus: 0.01
-    price_label_bonus: 0.02
-    trim_keyword_bonuses: []
-    price_band_bonuses:
-    - key: price_band_entry
-      label: Entry price band matched
-      max: 0
-      delta: 0.0
-    - key: price_band_mid
-      label: Mid price band matched
-      min: 0
-      max: 0
-      delta: 0.01
-    - key: price_band_high
-      label: High price band matched
-      min: 0
-      delta: 0.03
-    powertrain_keyword_bonuses: []
-    powertrain_bonuses:
-    - key: powertrain_phev
-      label: 'Powertrain matched: PHEV'
-      powertrain: PHEV
-      delta: 0.03
-    - key: powertrain_hev
-      label: 'Powertrain matched: HEV'
-      powertrain: HEV
-      delta: 0.03
-    - key: powertrain_ice
-      label: 'Powertrain matched: ICE'
-      powertrain: ICE
-      delta: 0.03
-    clamp_min: 0.0
-    clamp_max: 1.0
-  structured_fields:
-    edition_rules:
-    - key: edition_special
-      label: Special Edition
-      keyword: special edition
-      special: true
-    powertrain_rules:
-    - key: powertrain_phev
-      powertrain: PHEV
-      keywords:
-      - phev
-      - plug-in hybrid
-      - plug in hybrid
-      - plugin hybrid
-      - hybryda plug-in
-    - key: powertrain_hev
-      powertrain: HEV
-      keywords:
-      - hev
-      - full hybrid
-      - self-charging hybrid
-      - self charging hybrid
-      - hybrid
-      - hybryda
-      - pelna hybryda
-    - key: powertrain_ice
-      powertrain: ICE
-      keywords:
-      - ice
-      - petrol
-      - gasoline
-      - diesel
-      - combustion
-      - benzyna
-  auto_accept_gates:
-    review_threshold: 0.95
-    semi_auto_threshold: 0.98
-    require_powertrain_match: true
-    force_review_if_powertrain_missing: true
-    force_review_if_powertrain_ambiguous: true
-    force_review_for_special_edition: true
-  json_script_selector: script[type='application/ld+json']
-  css:
-    vehicle_container: body
-    model: h2, h3
-    trim: h3
-    price: '[class*="price"]'
-  tier: stealth
-  network_idle: true
-  impersonate: chrome
+  match_confidence: 0.86
+  match_status: review_required
+  match_reason:
+    kind: pdf_price_list
+    source: official_hyundai_pl_cennik
+    document_checked_at: '2026-07-09'
+    note: Official Hyundai Poland SANTA FE Hybrid and Plug-in Hybrid price-list PDFs; extracts Cena podstawowa, not campaign price or lowest 30-day price.
+  entry_patterns:
+  - pattern: 'SMART\s+1\.6\s+T-GDI\s+HEV\s+6AT\s+2WD\s+\(239KM\)\s+5\s+(?P<price>209\s*900)\s+zł'
+    official_trim: SMART Hybrid 5-seat 2WD
+    official_powertrain: 1.6 T-GDI HEV 6AT 2WD (239 KM)
+    jato_powertrain: HEV
+  - pattern: '1\.6\s+T-GDI\s+HEV\s+6AT\s+2WD\s+\(239KM\)\s+5\s+(?P<price>246\s*900)\s+zł'
+    official_trim: EXECUTIVE Hybrid 5-seat 2WD
+    official_powertrain: 1.6 T-GDI HEV 6AT 2WD (239 KM)
+    jato_powertrain: HEV
+  - pattern: '1\.6\s+T-GDI\s+HEV\s+6AT\s+4WD\s+\(239KM\)\s+5\s+(?P<price>256\s*900)\s+zł'
+    official_trim: EXECUTIVE Hybrid 5-seat 4WD
+    official_powertrain: 1.6 T-GDI HEV 6AT 4WD (239 KM)
+    jato_powertrain: HEV
+  - pattern: '1\.6\s+T-GDI\s+HEV\s+6AT\s+4WD\s+\(239KM\)\s+5\s+(?P<price>272\s*900)\s+zł'
+    official_trim: PLATINUM Hybrid 5-seat 4WD
+    official_powertrain: 1.6 T-GDI HEV 6AT 4WD (239 KM)
+    jato_powertrain: HEV
+  - pattern: '1\.6\s+T-GDI\s+HEV\s+6AT\s+4WD\s+\(239KM\)\s+7\s+(?P<price>277\s*900)\s+zł'
+    official_trim: PLATINUM Hybrid 7-seat 4WD
+    official_powertrain: 1.6 T-GDI HEV 6AT 4WD (239 KM)
+    jato_powertrain: HEV
+  - pattern: '1\.6\s+T-GDI\s+HEV\s+6AT\s+4WD\s+\(239KM\)\s+6\s+(?P<price>292\s*900)\s+zł'
+    official_trim: CALLIGRAPHY Hybrid 6-seat 4WD
+    official_powertrain: 1.6 T-GDI HEV 6AT 4WD (239 KM)
+    jato_powertrain: HEV
+  - pattern: '1\.6\s+T-GDI\s+HEV\s+6AT\s+4WD\s+\(239KM\)\s+7\s+(?P<price>292\s*900)\s+zł'
+    official_trim: CALLIGRAPHY Hybrid 7-seat 4WD
+    official_powertrain: 1.6 T-GDI HEV 6AT 4WD (239 KM)
+    jato_powertrain: HEV
+  - pattern: 'SMART\s+1\.6\s+T-GDI\s+PHEV\s+6AT\s+4WD\s+\(288KM\)\s+5\s+(?P<price>237\s*900)\s+zł'
+    official_trim: SMART Plug-In Hybrid 5-seat 4WD
+    official_powertrain: 1.6 T-GDI PHEV 6AT 4WD (288 KM)
+    jato_powertrain: PHEV
+  - pattern: '1\.6\s+T-GDI\s+PHEV\s+6AT\s+4WD\s+\(288KM\)\s+5\s+(?P<price>282\s*900)\s+zł'
+    official_trim: PLATINUM Plug-In Hybrid 5-seat 4WD
+    official_powertrain: 1.6 T-GDI PHEV 6AT 4WD (288 KM)
+    jato_powertrain: PHEV
+  - pattern: '1\.6\s+T-GDI\s+PHEV\s+6AT\s+4WD\s+\(288KM\)\s+7\s+(?P<price>287\s*900)\s+zł'
+    official_trim: PLATINUM Plug-In Hybrid 7-seat 4WD
+    official_powertrain: 1.6 T-GDI PHEV 6AT 4WD (288 KM)
+    jato_powertrain: PHEV
+  - pattern: '1\.6\s+T-GDI\s+PHEV\s+6AT\s+4WD\s+\(288KM\)\s+6\s+(?P<price>299\s*900)\s+zł'
+    official_trim: CALLIGRAPHY Plug-In Hybrid 6-seat 4WD
+    official_powertrain: 1.6 T-GDI PHEV 6AT 4WD (288 KM)
+    jato_powertrain: PHEV
+  - pattern: '1\.6\s+T-GDI\s+PHEV\s+6AT\s+4WD\s+\(288KM\)\s+7\s+(?P<price>299\s*900)\s+zł'
+    official_trim: CALLIGRAPHY Plug-In Hybrid 7-seat 4WD
+    official_powertrain: 1.6 T-GDI PHEV 6AT 4WD (288 KM)
+    jato_powertrain: PHEV
 schedule:
   frequency: manual_only
   run_window_start: 00:00
   run_window_end: 05:00
   preferred_weekday: monday
-notes: Draft scaffold generated from country×model top30 backlog. Replace source_url,
-  profile.url, selectors, currency, price label, and the single-model placeholders
-  before promoting to 07_ScrapingToolkit/sources. [URL filled from HYUNDAI template]
-  [URL language corrected] [CSS selectors applied from brand probe] [Switched to playwright_card_flow
-  with kia_trim_overview_playwright.yaml] [Reverted to scrapling — playwright preset
-  needs per-brand tuning]
+notes: Switched from stale Hyundai Poland model page to official Hyundai Poland
+  SANTA FE Hybrid and Plug-in Hybrid price-list PDFs. Extracts Cena podstawowa
+  only; campaign prices and lowest-30-day values are excluded.
 bootstrap_meta:
   country_model_rank: 26
   suggested_scope_kind: single_model
