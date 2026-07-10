@@ -15,7 +15,9 @@ from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Callable, Iterator
+from urllib.error import HTTPError, URLError
 from urllib.parse import urlparse
+from urllib.request import Request, urlopen
 
 # Ensure jato_scraper is importable
 _script_dir = str(Path(__file__).resolve().parent)
@@ -69,6 +71,50 @@ PLACEHOLDER_SOURCE_FAILURE = {
     "recommendedStrategy": "replace_placeholder_with_official_source",
     "severity": "error",
 }
+
+
+def _timeout_failure_preflight_seconds() -> int:
+    """Return the short direct HTTP check budget used after a browser timeout."""
+    raw = os.getenv("JATO_MSRP_DRYRUN_PREFLIGHT_TIMEOUT_SECONDS", "8")
+    try:
+        return max(1, min(int(raw), 30))
+    except ValueError:
+        return 8
+
+
+def _preflight_timed_out_source(source_url: str) -> dict:
+    """Capture a direct HTTP status without replacing the configured scraper.
+
+    Dynamic sources occasionally exceed their browser budget because the
+    origin rejects the current egress.  A tiny range request distinguishes
+    that deterministic 403/404 condition from an ordinary transient timeout.
+    """
+    if not source_url:
+        return {}
+    parsed = urlparse(source_url)
+    if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+        return {}
+
+    request = Request(
+        source_url,
+        headers={
+            "User-Agent": "Mozilla/5.0 (compatible; JATO-MSRP-Dryrun/1.0)",
+            "Range": "bytes=0-1024",
+        },
+    )
+    try:
+        with urlopen(request, timeout=_timeout_failure_preflight_seconds()) as response:
+            return {
+                "httpStatus": int(response.getcode() or 0),
+                "finalUrl": response.geturl(),
+            }
+    except HTTPError as exc:
+        return {
+            "httpStatus": int(exc.code),
+            "finalUrl": exc.geturl() or source_url,
+        }
+    except (URLError, OSError, ValueError):
+        return {}
 
 
 def _is_placeholder_source_url(url: str) -> bool:
@@ -1335,6 +1381,16 @@ def main():
                     classification_src,
                     exception=attempt_exception,
                 )
+                if classification.get("failureReason") == "http_timeout":
+                    preflight = _preflight_timed_out_source(
+                        str(src.get("sourceUrl") or src.get("source_url") or "")
+                    )
+                    if preflight:
+                        src = {**src, **preflight}
+                        classification = _classify_dryrun_failure(
+                            src,
+                            exception=attempt_exception,
+                        )
 
                 status = src.get("status", "error")
                 valid = src.get("valid", 0)

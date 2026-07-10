@@ -7,6 +7,7 @@ from pathlib import Path
 import sys
 import time
 from types import SimpleNamespace
+from urllib.error import HTTPError
 
 import pytest
 
@@ -93,6 +94,29 @@ def test_classify_http_status_403_without_log_text() -> None:
     assert classification["failureReason"] == "forbidden_403"
     assert classification["recommendedStrategy"] == "manual_review_or_proxy_required"
     assert classification["severity"] == "error"
+
+
+def test_preflight_timed_out_source_records_direct_403(monkeypatch) -> None:
+    source_url = "https://www.nissan.it/cf/veicoli/veicoli-nuovi/qashqai"
+
+    def fake_urlopen(request, timeout):
+        assert request.full_url == source_url
+        assert timeout == 8
+        raise HTTPError(source_url, 403, "Forbidden", {}, None)
+
+    monkeypatch.setattr(batch_dryrun, "urlopen", fake_urlopen)
+
+    preflight = batch_dryrun._preflight_timed_out_source(source_url)
+
+    assert preflight == {"httpStatus": 403, "finalUrl": source_url}
+    classification = batch_dryrun._classify_dryrun_failure(
+        {"status": "timeout", "valid": 0, **preflight}
+    )
+    assert classification["failureReason"] == "forbidden_403"
+    assert not batch_dryrun._source_result_is_retryable(
+        {"status": "timeout", "valid": 0, **classification},
+        classification,
+    )
 
 
 def test_classify_anti_bot_challenge_from_extractor_error() -> None:

@@ -9,7 +9,12 @@ profile:
   url: https://www.nissan.it/cf/veicoli/veicoli-nuovi/qashqai
   tier: stealth
   headless: true
-  network_idle: true
+  # Nissan's Content Factory page keeps analytics connections open, so waiting
+  # for network idle exhausts the source timeout before the price cards parse.
+  network_idle: false
+  load_dom: false
+  timeout_ms: 45000
+  wait_ms: 7000
   impersonate: chrome
   json_script_selector: script[type='application/ld+json']
   text_regex:
