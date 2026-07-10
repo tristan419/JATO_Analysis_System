@@ -79,18 +79,9 @@ profile:
   text_regex:
     source_selector: body
     entry_patterns:
-    - pattern: 'Enyaq\s+Solid Edition.*?Bygg din Enyaq.*?Från\s+1\s+(?P<price>\d{3}[\s\xa0]\d{3})\s*kr\s+Prislista.*?Privatleasing\s+från\s+(?P<monthly_payment>\d{1,2}[\s\xa0]\d{3})\s*kr/mån'
-      official_trim: Solid Edition
-      official_powertrain: BEV
     - pattern: 'Enyaq\s+Solid Edition.*?Bygg din Enyaq.*?Från\s+1\s+(?P<price>\d{3}[\s\xa0]\d{3})\s*kr\s+Prislista'
       official_trim: Solid Edition
       official_powertrain: BEV
-  pricing_context:
-    fields:
-      monthly_payment: regexGroups.monthly_payment
-    constants:
-      finance_type: private_lease
-      finance_currency: SEK
   tier: stealth
   network_idle: true
   impersonate: chrome
@@ -104,7 +95,8 @@ notes: Keywords filled from official manufacturer website research (SE market). 
   applied from brand probe] [Switched to playwright_card_flow with skoda_trim_overview_playwright.yaml]
   [Reverted to scrapling — playwright preset needs per-brand tuning] [Tightened
   to hero text_regex after broad CSS treated Skoda footnote marker 1 as part
-  of the MSRP]
+  of the MSRP. The list-price match deliberately excludes the adjacent private
+  lease/monthly-payment context from base MSRP observations.]
 bootstrap_meta:
   country_model_rank: 14
   suggested_scope_kind: single_model

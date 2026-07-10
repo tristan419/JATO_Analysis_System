@@ -237,3 +237,22 @@ def test_italy_skoda_kamiq_profile_uses_the_official_price_list_pdf() -> None:
     assert profile.entry_patterns[0].price_label == (
         "Prezzo chiavi in mano, IVA 22% e messa su strada incluse; IPT esclusa"
     )
+
+
+def test_sweden_skoda_enyaq_profile_excludes_private_lease_context() -> None:
+    source_path = (
+        Path(__file__).resolve().parents[1]
+        / "source_drafts"
+        / "suv_only_country_model_top30"
+        / "se"
+        / "14_skoda_enyaq_se.yaml"
+    )
+    source = _load_yaml_mapping(source_path)
+    profile = _build_scrapling_profile(source["profile"])
+
+    assert source["price_semantics"] == "base_msrp"
+    assert profile.text_regex is not None
+    assert len(profile.text_regex.entry_patterns) == 1
+    assert "Privatleasing" not in profile.text_regex.entry_patterns[0].pattern
+    assert "monthly_payment" not in profile.text_regex.entry_patterns[0].pattern
+    assert profile.pricing_context is None
