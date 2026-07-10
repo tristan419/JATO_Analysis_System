@@ -178,3 +178,38 @@ def test_italy_ford_profiles_use_current_official_price_list_pdfs() -> None:
         assert profile.entry_patterns[0].price_label == (
             "Prezzo chiavi in mano IVA inclusa, IPT e PFU esclusi"
         )
+
+
+def test_italy_jeep_and_mercedes_profiles_use_model_specific_list_prices() -> None:
+    source_root = (
+        Path(__file__).resolve().parents[1]
+        / "source_drafts"
+        / "suv_only_country_model_top30"
+        / "it"
+    )
+    expected = {
+        "01_jeep_avenger_it.yaml": (
+            "https://www.jeep-official.it/nuova-jeep-avenger/elettrica",
+            "official_model_page_list_price",
+            "BEV",
+        ),
+        "23_mercedes_gla_it.yaml": (
+            "https://www.mercedes-benz.it/passengercars/models/suv/gla/overview.html",
+            "official_model_page_json_ld_offer",
+            None,
+        ),
+    }
+
+    for filename, (url, reason_kind, powertrain) in expected.items():
+        source = _load_yaml_mapping(source_root / filename)
+        profile = _build_http_text_profile(source["profile"])
+
+        assert source["extractor_type"] == "http_text"
+        assert source["source_url"] == url
+        assert profile.url == url
+        assert profile.default_tax_included is True
+        assert profile.match_status == "review_required"
+        assert profile.match_reason["kind"] == reason_kind
+        assert profile.fixed_jato_powertrain == powertrain
+        assert profile.entry_patterns
+        assert re.compile(profile.entry_patterns[0].pattern)
