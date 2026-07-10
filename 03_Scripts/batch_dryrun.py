@@ -229,6 +229,12 @@ def _classify_dryrun_failure(
         or "todo.invalid" in error_lower
     ):
         return dict(PLACEHOLDER_SOURCE_FAILURE)
+    if _is_cross_market_redirect(source_url, final_url):
+        return {
+            "failureReason": "geo_market_redirect",
+            "recommendedStrategy": "run_with_target_market_egress_or_official_snapshot",
+            "severity": "warning",
+        }
     if "404-page" in final_url.lower() or "/404" in final_url.lower():
         return {"failureReason": "source_url_not_found", "recommendedStrategy": "update_source_url", "severity": "error"}
     if (
@@ -261,6 +267,19 @@ def _classify_dryrun_failure(
         return {
             "failureReason": "source_url_redirected_to_homepage",
             "recommendedStrategy": "update_source_url_or_confirm_model_availability",
+            "severity": "warning",
+        }
+    if (
+        "targetclosederror" in error_lower
+        or (
+            "browsertype.launch" in error_lower
+            and "browser has been closed" in error_lower
+        )
+        or ("browser has been closed" in error_lower and "sigabrt" in error_lower)
+    ):
+        return {
+            "failureReason": "browser_runtime_unavailable",
+            "recommendedStrategy": "restart_playwright_runtime_and_recheck",
             "severity": "warning",
         }
     if (
@@ -372,6 +391,39 @@ def _redirected_to_brand_homepage(source_url: str, final_url: str) -> bool:
     return source_path != "/" and final_path == "/"
 
 
+def _is_cross_market_redirect(source_url: str, final_url: str) -> bool:
+    """Detect a global official URL sent to a different market's host."""
+    if not source_url or not final_url:
+        return False
+    source = urlparse(source_url)
+    final = urlparse(final_url)
+    source_host = (source.hostname or "").lower()
+    final_host = (final.hostname or "").lower()
+    if not source_host or not final_host or source_host == final_host:
+        return False
+
+    source_parts = [part.lower() for part in source.path.split("/") if part]
+    final_parts = [part.lower() for part in final.path.split("/") if part]
+    if not source_parts or not final_parts:
+        return False
+    requested_market = source_parts[0]
+    if (
+        len(requested_market) != 2
+        or not requested_market.isalpha()
+        or final_parts[0] != requested_market
+    ):
+        return False
+
+    source_tld = source_host.rsplit(".", 1)[-1]
+    final_tld = final_host.rsplit(".", 1)[-1]
+    return (
+        source_tld in {"com", "net", "org"}
+        and len(final_tld) == 2
+        and final_tld.isalpha()
+        and final_tld != requested_market
+    )
+
+
 def _is_passing_result(result: dict) -> bool:
     """Return True only when a dryrun has valid data and no classified failure."""
     status = str(result.get("rawStatus") or result.get("status") or "").lower()
@@ -462,6 +514,7 @@ def _result_is_fail(result: dict) -> bool:
 
 
 _RETRYABLE_SOURCE_FAILURES = {
+    "browser_runtime_unavailable",
     "dns_resolution_failed",
     "http_timeout",
     "js_required_or_selector_timeout",

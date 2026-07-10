@@ -231,6 +231,51 @@ def test_classify_model_page_redirected_to_homepage() -> None:
     }
 
 
+def test_classify_cross_market_redirect_as_environment_recheck() -> None:
+    classification = batch_dryrun._classify_dryrun_failure(
+        {
+            "status": "empty",
+            "valid": 0,
+            "extracted": 0,
+            "sourceUrl": "https://www.polestar.com/no/polestar-3/specifications/",
+            "finalUrl": "https://www.polestar.cn/no/polestar-3/specifications/",
+            "httpStatus": 404,
+        }
+    )
+
+    assert classification == {
+        "failureReason": "geo_market_redirect",
+        "recommendedStrategy": "run_with_target_market_egress_or_official_snapshot",
+        "severity": "warning",
+    }
+    assert not batch_dryrun._source_result_is_retryable(
+        {"status": "empty", "valid": 0, **classification}, classification
+    )
+
+
+def test_classify_browser_runtime_failure_as_retryable() -> None:
+    classification = batch_dryrun._classify_dryrun_failure(
+        {
+            "status": "empty",
+            "valid": 0,
+            "extracted": 0,
+            "extractorError": (
+                "TargetClosedError: BrowserType.launch_persistent_context: "
+                "Target page, context or browser has been closed; signal=SIGABRT"
+            ),
+        }
+    )
+
+    assert classification == {
+        "failureReason": "browser_runtime_unavailable",
+        "recommendedStrategy": "restart_playwright_runtime_and_recheck",
+        "severity": "warning",
+    }
+    assert batch_dryrun._source_result_is_retryable(
+        {"status": "empty", "valid": 0, **classification}, classification
+    )
+
+
 def test_source_result_retryable_for_timeout_only() -> None:
     assert batch_dryrun._source_result_is_retryable(
         {"status": "empty", "valid": 0, "failureReason": "http_timeout"},

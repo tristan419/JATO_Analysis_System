@@ -261,6 +261,54 @@ def test_v3_report_marks_dynamic_price_not_ready_as_recheck_without_history(
     assert group["sourceRepairIssueCount"] == 0
 
 
+def test_v3_report_marks_browser_and_market_failures_as_rechecks(
+    tmp_path: Path,
+) -> None:
+    report = {
+        "schemaVersion": "msrp_dryrun_report_v3",
+        "runId": "msrp-dryrun-20260710-101010",
+        "results": [
+            {
+                "country": "no",
+                "sourceCode": "polestar_3_no_draft_scrapling",
+                "brand": "POLESTAR",
+                "status": "empty",
+                "valid": 0,
+                "failureReason": "browser_runtime_unavailable",
+                "recommendedStrategy": "restart_playwright_runtime_and_recheck",
+                "sourceUrl": "https://www.polestar.com/no/polestar-3/specifications/",
+            },
+            {
+                "country": "no",
+                "sourceCode": "polestar_4_no_draft_scrapling",
+                "brand": "POLESTAR",
+                "status": "empty",
+                "valid": 0,
+                "failureReason": "geo_market_redirect",
+                "recommendedStrategy": "run_with_target_market_egress_or_official_snapshot",
+                "sourceUrl": "https://www.polestar.com/no/polestar-4-models/polestar-4-coupe/specifications",
+                "finalUrl": "https://www.polestar.cn/no/polestar-4-models/polestar-4-coupe/specifications",
+            },
+        ],
+    }
+    report_path = tmp_path / "dryrun_report.json"
+    report_path.write_text(json.dumps(report), encoding="utf-8")
+
+    backlog = backlog_script.run(str(report_path), str(tmp_path))
+
+    assert backlog["sourceRepairIssueCount"] == 0
+    assert backlog["businessResolutionCount"] == 0
+    assert backlog["transientRegressionCount"] == 2
+    assert backlog["sourceIssues"] == []
+    groups = {group["failureReason"]: group for group in backlog["groups"]}
+    assert groups["browser_runtime_unavailable"]["priorityBand"] == "recheck"
+    assert groups["browser_runtime_unavailable"]["recommendedAction"] == "recheck_before_source_repair"
+    assert groups["geo_market_redirect"]["priorityBand"] == "recheck"
+    assert groups["geo_market_redirect"]["recommendedStrategy"] == (
+        "run_with_target_market_egress_or_official_snapshot"
+    )
+
+
 def test_v3_report_marks_anti_bot_as_proxy_recheck_without_history(
     tmp_path: Path,
 ) -> None:

@@ -27,8 +27,10 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 SOURCE_URL_PATTERN = re.compile(r"https?://[^\s\"')<>]+")
 TRANSIENT_RECHECK_FAILURES = {
     "anti_bot_access_denied",
+    "browser_runtime_unavailable",
     "dns_resolution_failed",
     "dynamic_price_not_ready",
+    "geo_market_redirect",
     "http_timeout",
     "network_unavailable",
 }
