@@ -1,19 +1,37 @@
 source_code: volkswagen_tiguan_de_draft_scrapling
 country: 德国
 brand: VOLKSWAGEN
-source_url: https://www.volkswagen.de/de/konfigurator.html/__app/tiguan-2025/energy-sondermodelle/energy.app
+source_url: https://www.volkswagen.de/de/modelle/tiguan.html
 source_type: manufacturer_official
 price_semantics: base_msrp
-extractor_type: playwright
-profile_preset: ../_shared/presets/volkswagen_configurator_trim_overview_playwright.yaml
+extractor_type: scrapling
 profile:
-  url: https://www.volkswagen.de/de/konfigurator.html/__app/tiguan-2025/energy-sondermodelle/energy.app
-  fixed_trim: ENERGY
+  url: https://www.volkswagen.de/de/modelle/tiguan.html
+  tier: http
+  headless: true
+  network_idle: false
+  load_dom: false
+  timeout_ms: 20000
+  impersonate: chrome
+  text_regex:
+    source_selector: body
+    include_element_html: true
+    entry_patterns:
+    - pattern: '"key":"PriceVatIncluded","label":"Preis ab","value":"(?P<price>\d{2,3}\.\d{3})".{0,300}?"unit":"€ inkl\. MwSt\.?"'
+      official_trim: Tiguan starting price
+      price_label: Preis ab inkl. MwSt.
   default_currency: EUR
   default_tax_included: true
-  default_price_label: Preis inkl. MwSt.
+  default_price_label: Preis ab inkl. MwSt.
   fixed_model: TIGUAN
   fixed_jato_model: TIGUAN
+  copy_trim_to_jato_trim: true
+  match_confidence: 0.82
+  match_status: review_required
+  match_reason:
+    kind: official_model_page_starting_price
+    source: volkswagen_de_model_page
+    note: Official Volkswagen Germany Tiguan model page exposes a tax-included MSRP starting price.
   structured_fields:
     powertrain_rules:
     - key: powertrain_phev
@@ -39,11 +57,10 @@ schedule:
   run_window_start: 00:00
   run_window_end: 05:00
   preferred_weekday: monday
-notes: Browser-probed Volkswagen Germany configurator page renders engine-card entries
-  directly at load under the ENERGY special-edition path. Shared selector set [data-testid="engine-card"]
-  and [data-testid="price-container"] was verified on 2026-04-13, with local price
-  wording "Preis inkl. MwSt." visible on the live page. [Switched to playwright_card_flow
-  with volkswagen_configurator_trim_overview_playwright.yaml]
+notes: Replaced the obsolete configurator ENERGY trim-card flow with the official
+  Volkswagen Germany model-page MSRP starting price. The page exposes "Preis ab"
+  including VAT; this is model-level evidence and remains review-required until
+  a current trim-level configurator/API source is available.
 bootstrap_meta:
   country_model_rank: 2
   suggested_scope_kind: single_model

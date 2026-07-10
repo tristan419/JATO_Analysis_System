@@ -684,6 +684,55 @@ def _increment(target: dict[str, int], value: Any) -> None:
     target[key] = target.get(key, 0) + 1
 
 
+def _environment_assessment(items: list[dict[str, Any]]) -> dict[str, Any]:
+    """Flag a multi-host egress failure without treating it as source repair work."""
+    network_statuses = {
+        "network_timeout",
+        "network_unreachable",
+        "tls_handshake_failed",
+        "dns_unresolved",
+    }
+    attempted = [item for item in items if item.get("sourceUrl")]
+    hosts = {
+        str(item.get("host") or "").lower()
+        for item in attempted
+        if item.get("host")
+    }
+    probe_statuses = {
+        str(item.get("probeStatus") or "")
+        for item in attempted
+    }
+    all_failed_before_http = bool(attempted) and all(
+        not item.get("httpStatus")
+        and bool(item.get("retryable"))
+        and str(item.get("probeStatus") or "") in network_statuses
+        for item in attempted
+    )
+    inconclusive = (
+        len(attempted) >= 3
+        and len(hosts) >= 2
+        and all_failed_before_http
+    )
+    return {
+        "status": "inconclusive_egress" if inconclusive else "not_detected",
+        "sourceRepairEligible": not inconclusive,
+        "probedSourceCount": len(attempted),
+        "distinctHostCount": len(hosts),
+        "probeStatuses": sorted(status for status in probe_statuses if status),
+        "recommendedAction": (
+            "rerun_from_production_egress_or_known_good_network"
+            if inconclusive
+            else "continue_source_level_triage"
+        ),
+        "reason": (
+            "All probes failed before HTTP across multiple official hosts; "
+            "this run cannot prove individual source URLs are broken."
+            if inconclusive
+            else "No systemic local egress failure detected."
+        ),
+    }
+
+
 def summarize_items(items: list[dict[str, Any]]) -> dict[str, Any]:
     status_counts: dict[str, int] = {}
     action_counts: dict[str, int] = {}
@@ -715,6 +764,7 @@ def summarize_items(items: list[dict[str, Any]]) -> dict[str, Any]:
         "tlsHandshakeFailedCount": tls_failed_count,
         "dnsUnresolvedCount": dns_unresolved_count,
         "curlFallbackFetchableCount": curl_fallback_fetchable_count,
+        "environmentAssessment": _environment_assessment(items),
     }
 
 
@@ -815,6 +865,7 @@ def build_source_draft_accessibility_report(
 def _write_markdown(report: dict[str, Any], path: Path) -> None:
     summary = report.get("summary") or {}
     context = report.get("sourceContext") if isinstance(report.get("sourceContext"), dict) else {}
+    environment = summary.get("environmentAssessment") or {}
     lines = [
         "# MSRP Source Accessibility Audit",
         "",
@@ -834,10 +885,22 @@ def _write_markdown(report: dict[str, Any], path: Path) -> None:
         f"| TLS handshake failed | {summary.get('tlsHandshakeFailedCount', 0)} |",
         f"| DNS unresolved | {summary.get('dnsUnresolvedCount', 0)} |",
         f"| Curl fallback fetchable | {summary.get('curlFallbackFetchableCount', 0)} |",
+        f"| Environment assessment | {environment.get('status', 'not_detected')} |",
         "",
+    ]
+    if environment.get("status") == "inconclusive_egress":
+        lines.extend([
+            "## Environment Conclusion",
+            "",
+            environment.get("reason") or "-",
+            "",
+            f"Recommended action: `{environment.get('recommendedAction') or '-'}`",
+            "",
+        ])
+    lines.extend([
         "| Country | Source | HTTP | Probe status | Recommended action | URL |",
         "|---|---|---:|---|---|---|",
-    ]
+    ])
     for item in report.get("items") or []:
         lines.append(
             "| {country} | `{source}` | {status} | {probe} | {action} | {url} |".format(

@@ -217,6 +217,32 @@ def test_classify_missing_dynamic_price_as_retryable() -> None:
     )
 
 
+def test_classify_playwright_locator_timeout_as_stale_selector() -> None:
+    classification = batch_dryrun._classify_dryrun_failure(
+        {
+            "status": "empty",
+            "valid": 0,
+            "extracted": 0,
+            "extractorName": "_ConfiguredPlaywright",
+            "extractorError": (
+                "TimeoutError: Locator.wait_for: Timeout 60000ms exceeded. "
+                'waiting for locator("[data-testid=\\\"trimcard\\\"]").first '
+                "to be visible"
+            ),
+        }
+    )
+
+    assert classification == {
+        "failureReason": "selector_stale",
+        "recommendedStrategy": "update_playwright_selector_or_official_configurator_api",
+        "severity": "warning",
+    }
+    assert not batch_dryrun._source_result_is_retryable(
+        {"status": "empty", "valid": 0, **classification},
+        classification,
+    )
+
+
 def test_classify_discontinued_model_url_as_business_resolution() -> None:
     classification = batch_dryrun._classify_dryrun_failure(
         {
@@ -485,6 +511,34 @@ def test_configured_source_timeout_uses_profile_timeout(monkeypatch) -> None:
     )
 
     assert batch_dryrun._configured_source_timeout_seconds("demo_source", 180) == 330
+
+
+def test_configured_source_timeout_respects_playwright_profile_budget(
+    monkeypatch,
+) -> None:
+    class FakeRegistry:
+        @staticmethod
+        def get(code: str):
+            assert code == "volkswagen_tiguan_de_draft_scrapling"
+            return SimpleNamespace(profile=SimpleNamespace(
+                page_timeout_ms=75_000,
+                initial_ready_timeout_ms=60_000,
+                trim_price_ready_timeout_ms=10_000,
+            ))
+
+    monkeypatch.setitem(
+        sys.modules,
+        "jato_scraper",
+        SimpleNamespace(registry=FakeRegistry),
+    )
+
+    assert (
+        batch_dryrun._configured_source_timeout_seconds(
+            "volkswagen_tiguan_de_draft_scrapling",
+            60,
+        )
+        == 105
+    )
 
 
 def test_classify_hard_attempt_timeout() -> None:

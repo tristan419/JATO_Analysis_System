@@ -351,6 +351,12 @@ def _classify_dryrun_failure(
         return {"failureReason": "forbidden_403", "recommendedStrategy": "manual_review_or_proxy_required", "severity": "error"}
     if "no plausible trim-overview msrp" in error_lower:
         return {"failureReason": "dynamic_price_not_ready", "recommendedStrategy": "retry_or_reduce_concurrency", "severity": "warning"}
+    if "locator.wait_for" in error_lower or "waiting for locator" in error_lower:
+        return {
+            "failureReason": "selector_stale",
+            "recommendedStrategy": "update_playwright_selector_or_official_configurator_api",
+            "severity": "warning",
+        }
     if "waiting for" in error_lower or "playwright" in error_lower:
         return {"failureReason": "js_required_or_selector_timeout", "recommendedStrategy": "try_playwright_card_flow", "severity": "warning"}
     if "fetch_failed" in error_lower:
@@ -635,6 +641,16 @@ def _configured_source_timeout_seconds(
 
         profile = getattr(registry.get(code), "profile", None)
         profile_timeout = int(getattr(profile, "timeout_seconds", 0) or 0)
+        for attr in (
+            "page_timeout_ms",
+            "initial_ready_timeout_ms",
+            "trim_price_ready_timeout_ms",
+        ):
+            timeout_ms = int(getattr(profile, attr, 0) or 0)
+            profile_timeout = max(
+                profile_timeout,
+                (timeout_ms + 999) // 1000,
+            )
     except Exception:
         return default_timeout_seconds
     if profile_timeout <= 0:

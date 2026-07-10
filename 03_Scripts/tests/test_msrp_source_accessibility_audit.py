@@ -309,6 +309,74 @@ def test_probe_source_classifies_timeout_as_retryable_network() -> None:
     assert item["retryable"] is True
 
 
+def test_summarize_items_marks_multi_host_network_outage_as_inconclusive() -> None:
+    summary = audit.summarize_items([
+        {
+            "sourceUrl": "https://www.volkswagen.de/model",
+            "host": "volkswagen.de",
+            "probeStatus": "network_timeout",
+            "retryable": True,
+            "httpStatus": None,
+        },
+        {
+            "sourceUrl": "https://www.skoda.de/model",
+            "host": "skoda.de",
+            "probeStatus": "network_timeout",
+            "retryable": True,
+            "httpStatus": None,
+        },
+        {
+            "sourceUrl": "https://www.opel.de/model",
+            "host": "opel.de",
+            "probeStatus": "network_timeout",
+            "retryable": True,
+            "httpStatus": None,
+        },
+    ])
+
+    assert summary["environmentAssessment"] == {
+        "status": "inconclusive_egress",
+        "sourceRepairEligible": False,
+        "probedSourceCount": 3,
+        "distinctHostCount": 3,
+        "probeStatuses": ["network_timeout"],
+        "recommendedAction": "rerun_from_production_egress_or_known_good_network",
+        "reason": (
+            "All probes failed before HTTP across multiple official hosts; "
+            "this run cannot prove individual source URLs are broken."
+        ),
+    }
+
+
+def test_summarize_items_keeps_mixed_source_evidence_eligible_for_triage() -> None:
+    summary = audit.summarize_items([
+        {
+            "sourceUrl": "https://www.volkswagen.de/model",
+            "host": "volkswagen.de",
+            "probeStatus": "network_timeout",
+            "retryable": True,
+            "httpStatus": None,
+        },
+        {
+            "sourceUrl": "https://www.skoda.de/model",
+            "host": "skoda.de",
+            "probeStatus": "fetchable",
+            "retryable": False,
+            "httpStatus": 200,
+        },
+        {
+            "sourceUrl": "https://www.opel.de/model",
+            "host": "opel.de",
+            "probeStatus": "source_url_not_found",
+            "retryable": False,
+            "httpStatus": 404,
+        },
+    ])
+
+    assert summary["environmentAssessment"]["status"] == "not_detected"
+    assert summary["environmentAssessment"]["sourceRepairEligible"] is True
+
+
 def test_probe_source_classifies_tls_eof_as_tls_handshake_failed() -> None:
     session = _FakeSession(
         exc=audit.requests.exceptions.SSLError(
