@@ -256,3 +256,50 @@ def test_sweden_skoda_enyaq_profile_excludes_private_lease_context() -> None:
     assert "Privatleasing" not in profile.text_regex.entry_patterns[0].pattern
     assert "monthly_payment" not in profile.text_regex.entry_patterns[0].pattern
     assert profile.pricing_context is None
+
+
+def test_hungary_mercedes_eqa_profile_uses_current_official_list_price_pdf() -> None:
+    source_path = (
+        Path(__file__).resolve().parents[1]
+        / "source_drafts"
+        / "suv_only_country_model_top30"
+        / "hu"
+        / "31_mercedes_eqa_hu.yaml"
+    )
+    source = _load_yaml_mapping(source_path)
+    profile = _build_pdf_text_profile(source["profile"])
+
+    assert source["extractor_type"] == "pdf_text"
+    assert source["source_type"] == "official_price_list"
+    assert source["source_url"] == (
+        "https://www.mercedes-benz.hu/passengercars/finance/arlista.html"
+    )
+    assert profile.url.endswith("Mercedes-Benz_elektromos_modellek_alaparlista_2026.06.09.pdf")
+    assert profile.prefer_curl_download is True
+    assert profile.default_price_label == "Listaár HUF (Ajánlott fogyasztói ár)"
+    assert profile.fixed_jato_powertrain == "BEV"
+    assert profile.match_reason["document_valid_from"] == "2026-06-09"
+    assert "Havi fizetendő" not in profile.entry_patterns[0].pattern
+    assert re.compile(profile.entry_patterns[0].pattern)
+
+
+def test_hungary_bmw_x5_profile_uses_current_official_compare_price() -> None:
+    source_path = (
+        Path(__file__).resolve().parents[1]
+        / "source_drafts"
+        / "suv_only_country_model_top30"
+        / "hu"
+        / "24_bmw_x5_hu.yaml"
+    )
+    source = _load_yaml_mapping(source_path)
+    profile = _build_http_text_profile(source["profile"])
+
+    assert source["extractor_type"] == "http_text"
+    assert source["source_url"].endswith("/X/G65/61JF/S02TE/content.q")
+    assert profile.timeout_seconds == 8
+    assert profile.default_currency == "HUF"
+    assert profile.default_tax_included is True
+    assert profile.match_status == "review_required"
+    assert profile.match_reason["kind"] == "official_compare_page_starting_price"
+    assert profile.entry_patterns[0].official_trim == "X5 40 xDrive starting price"
+    assert re.compile(profile.entry_patterns[0].pattern)
