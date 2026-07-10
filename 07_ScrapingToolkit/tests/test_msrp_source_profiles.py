@@ -3,6 +3,7 @@ import re
 
 from jato_scraper.config_loader import (
     _build_http_text_profile,
+    _build_pdf_text_profile,
     _build_scrapling_profile,
     _load_yaml_mapping,
 )
@@ -123,3 +124,31 @@ def test_italy_renault_and_toyota_profiles_do_not_extract_discounted_prices() ->
         pattern = source["profile"]["entry_patterns"][0]["pattern"]
         assert "listWithDiscount" not in pattern
         assert "price&#34;:\\{&#34;list" in pattern
+
+
+def test_italy_price_semantic_repairs_do_not_select_monthly_payments() -> None:
+    source_root = (
+        Path(__file__).resolve().parents[1]
+        / "source_drafts"
+        / "suv_only_country_model_top30"
+        / "it"
+    )
+    junior = _load_yaml_mapping(source_root / "21_alfa_romeo_junior_it.yaml")
+    tucson = _load_yaml_mapping(source_root / "22_hyundai_tucson_it.yaml")
+
+    junior_profile = _build_scrapling_profile(junior["profile"])
+    tucson_profile = _build_pdf_text_profile(tucson["profile"])
+
+    assert junior["extractor_type"] == "scrapling"
+    assert junior_profile.text_regex is not None
+    junior_pattern = junior_profile.text_regex.entry_patterns[0].pattern
+    assert "Prezzo di listino" in junior_pattern
+    assert "mese" not in junior_pattern
+    assert "5\\.000" in junior_pattern
+
+    assert tucson["extractor_type"] == "pdf_text"
+    assert tucson_profile.prefer_curl_download is True
+    assert tucson_profile.entry_patterns[0].price_label == (
+        "Prezzo di listino IVA inclusa, IPT e PFU esclusi"
+    )
+    assert "chiavi" not in tucson_profile.entry_patterns[0].pattern
