@@ -213,3 +213,27 @@ def test_italy_jeep_and_mercedes_profiles_use_model_specific_list_prices() -> No
         assert profile.fixed_jato_powertrain == powertrain
         assert profile.entry_patterns
         assert re.compile(profile.entry_patterns[0].pattern)
+
+
+def test_italy_skoda_kamiq_profile_uses_the_official_price_list_pdf() -> None:
+    source_path = (
+        Path(__file__).resolve().parents[1]
+        / "source_drafts"
+        / "suv_only_country_model_top30"
+        / "it"
+        / "25_skoda_kamiq_it.yaml"
+    )
+    source = _load_yaml_mapping(source_path)
+    profile = _build_pdf_text_profile(source["profile"])
+
+    assert source["extractor_type"] == "pdf_text"
+    assert source["source_url"] == (
+        "https://www.skoda-auto.it/_doc/e5e8f12e-7439-4cc7-ae31-c9415350f09d"
+    )
+    assert profile.prefer_curl_download is True
+    assert profile.default_tax_included is True
+    assert profile.fixed_jato_powertrain == "ICE"
+    assert profile.match_reason["document_valid_from"] == "2026-03-03"
+    assert profile.entry_patterns[0].price_label == (
+        "Prezzo chiavi in mano, IVA 22% e messa su strada incluse; IPT esclusa"
+    )
