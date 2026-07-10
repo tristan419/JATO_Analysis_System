@@ -152,3 +152,29 @@ def test_italy_price_semantic_repairs_do_not_select_monthly_payments() -> None:
         "Prezzo di listino IVA inclusa, IPT e PFU esclusi"
     )
     assert "chiavi" not in tucson_profile.entry_patterns[0].pattern
+
+
+def test_italy_ford_profiles_use_current_official_price_list_pdfs() -> None:
+    source_root = (
+        Path(__file__).resolve().parents[1]
+        / "source_drafts"
+        / "suv_only_country_model_top30"
+        / "it"
+    )
+    expected = {
+        "28_ford_kuga_it.yaml": "https://www.ford.it/content/dam/guxeu/it/documents/pricelists/cars/PL-Kuga_CX482_Pricelist_MY27_2C-2026.pdf",
+        "06_ford_puma_it.yaml": "https://www.ford.it/content/dam/guxeu/it/documents/pricelists/cars/PL-ford_NewPuma.pdf",
+    }
+
+    for filename, url in expected.items():
+        source = _load_yaml_mapping(source_root / filename)
+        profile = _build_pdf_text_profile(source["profile"])
+
+        assert source["extractor_type"] == "pdf_text"
+        assert source["source_url"] == url
+        assert profile.url == url
+        assert profile.prefer_curl_download is True
+        assert profile.default_tax_included is True
+        assert profile.entry_patterns[0].price_label == (
+            "Prezzo chiavi in mano IVA inclusa, IPT e PFU esclusi"
+        )
