@@ -1761,10 +1761,36 @@ export interface JatoMonthlyUpdateCancellation {
   termination?: Record<string, unknown>;
 }
 
+export interface JatoMonthlyUpdateReviewApproval {
+  decision: "approved" | "rejected";
+  reviewedAt: string;
+  reviewedBy: string;
+  candidateFingerprint: string;
+  note?: string | null;
+}
+
+export interface JatoMonthlyUpdateWorkerStatus {
+  state: string;
+  jobId?: string | null;
+  detail?: string | null;
+  updatedAt?: string | null;
+  pid?: number | null;
+  ageSeconds?: number | null;
+  healthy: boolean;
+  queuedJobCount: number;
+  queuedJobIds: string[];
+}
+
 export interface JatoMonthlyUpdateJob {
   jobId: string;
-  month: string;
+  month: string | null;
+  requestedMonth?: string | null;
   batchId?: string | null;
+  jobType?: string | null;
+  country?: string | null;
+  countryScope?: string[];
+  ingestionKey?: string | null;
+  duplicateOfJobId?: string | null;
   status: string;
   phase: string;
   triggeredBy: string;
@@ -1781,6 +1807,7 @@ export interface JatoMonthlyUpdateJob {
   currentProcess?: JatoMonthlyUpdateCurrentProcess | null;
   runtimeCheck?: JatoMonthlyUpdateRuntimeCheck | null;
   cancellation?: JatoMonthlyUpdateCancellation | null;
+  reviewApproval?: JatoMonthlyUpdateReviewApproval | null;
   logPath?: string | null;
   logTail?: string | null;
 }
@@ -1868,6 +1895,8 @@ export interface JatoMonthlyUpdateReviewBundle {
   timeAxisCheck: Record<string, unknown>;
   countryScopeSummary: Record<string, unknown>;
   refreshSummary?: JatoMonthlyUpdateRefreshSummary | null;
+  candidateFingerprint?: string | null;
+  approval?: JatoMonthlyUpdateReviewApproval | null;
 }
 
 export interface JatoMonthlyUpdateCleanupResult {

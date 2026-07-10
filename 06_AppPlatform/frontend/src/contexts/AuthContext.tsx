@@ -79,6 +79,24 @@ function normalizeUserPayload(data: Record<string, unknown>): User {
   };
 }
 
+async function readAuthFailure(response: Response): Promise<string> {
+  const raw = (await response.text()).trim();
+  if (!raw) {
+    return `${response.status} ${response.statusText || "Login failed"}`;
+  }
+  try {
+    const payload = JSON.parse(raw) as Record<string, unknown>;
+    const detail = typeof payload.detail === "string"
+      ? payload.detail
+      : typeof payload.message === "string"
+        ? payload.message
+        : raw;
+    return `${response.status} ${detail}`;
+  } catch {
+    return `${response.status} ${raw}`;
+  }
+}
+
 function storeUser(user: User): void {
   localStorage.setItem(STORAGE_USER, user.username);
   localStorage.setItem(STORAGE_ROLE, user.role);
@@ -207,8 +225,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       body: JSON.stringify({ username, password }),
     });
     if (!res.ok) {
-      const msg = await res.text();
-      throw new Error(msg || "Login failed");
+      throw new Error(await readAuthFailure(res));
     }
     const data = await res.json();
     const nextUser = normalizeUserPayload(data as Record<string, unknown>);

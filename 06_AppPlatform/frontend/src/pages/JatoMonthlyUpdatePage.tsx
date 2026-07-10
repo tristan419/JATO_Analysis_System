@@ -12,6 +12,7 @@ import type {
   JatoMonthlyUpdateReviewBundle,
   JatoMonthlyUpdateStorageMetric,
   JatoMonthlyUpdateUploadProgress,
+  JatoMonthlyUpdateWorkerStatus,
   PublishBlocker,
 } from "../types";
 import {
@@ -140,6 +141,7 @@ export function JatoMonthlyUpdatePage() {
   const [rollingBackJobId, setRollingBackJobId] = useState<string | null>(null);
   const [promotingBaseline, setPromotingBaseline] = useState(false);
   const [reviewLoadingJobId, setReviewLoadingJobId] = useState<string | null>(null);
+  const [approvingReviewJobId, setApprovingReviewJobId] = useState<string | null>(null);
   const [reviewBundle, setReviewBundle] = useState<JatoMonthlyUpdateReviewBundle | null>(null);
   const [selectedReviewCountry, setSelectedReviewCountry] = useState<string | null>(null);
   const [dragActive, setDragActive] = useState(false);
@@ -164,6 +166,7 @@ export function JatoMonthlyUpdatePage() {
   const [heroCollapsed, setHeroCollapsed] = useState(false);
   const [publishBlocker, setPublishBlocker] = useState<PublishBlocker | null>(null);
   const [smartMergingJobId, setSmartMergingJobId] = useState<string | null>(null);
+  const [workerStatus, setWorkerStatus] = useState<JatoMonthlyUpdateWorkerStatus | null>(null);
   const [infoCollapsed, setInfoCollapsed] = useState(true);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
 
@@ -227,6 +230,17 @@ export function JatoMonthlyUpdatePage() {
     }
   }, []);
 
+  const refreshWorkerStatus = useCallback(async (silent = false) => {
+    try {
+      const response = await api.getJatoMonthlyUpdateWorkerStatus();
+      setWorkerStatus(response.item);
+    } catch (err) {
+      if (!silent) {
+        setError((err as Error).message);
+      }
+    }
+  }, []);
+
   useEffect(() => {
     void refreshJobs();
   }, [refreshJobs]);
@@ -234,6 +248,10 @@ export function JatoMonthlyUpdatePage() {
   useEffect(() => {
     void refreshMaintenanceStatus();
   }, [refreshMaintenanceStatus]);
+
+  useEffect(() => {
+    void refreshWorkerStatus();
+  }, [refreshWorkerStatus]);
 
   useEffect(() => {
     if (!selectedJobId) {
@@ -258,12 +276,13 @@ export function JatoMonthlyUpdatePage() {
     }
     const timer = window.setInterval(() => {
       void refreshJobs(selectedJobId ?? undefined, true);
+      void refreshWorkerStatus(true);
       if (selectedJobId) {
         void loadJobDetail(selectedJobId, true);
       }
     }, 5000);
     return () => window.clearInterval(timer);
-  }, [hasActiveJob, loadJobDetail, refreshJobs, selectedJobId]);
+  }, [hasActiveJob, loadJobDetail, refreshJobs, refreshWorkerStatus, selectedJobId]);
 
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -278,7 +297,7 @@ export function JatoMonthlyUpdatePage() {
     try {
       const response = await api.createJatoMonthlyUpdateJob(uploadFile, setUploadProgress, uploadMonth ?? undefined);
       setNotice(
-        `已创建任务 ${response.item.jobId}，自动识别最新数据月 ${response.item.month || "-"}，批次 ${response.item.batchId || "-"}，后台开始串行执行 prepare / compare / refresh。`
+        `已创建任务 ${response.item.jobId}。上传已安全落盘，独立 worker 会先识别国家和月份；单国任务会跳过全量 Raw Compare。`
       );
       setSelectedJob(response.item);
       setSelectedJobId(response.item.jobId);
@@ -290,6 +309,7 @@ export function JatoMonthlyUpdatePage() {
       }
       await refreshJobs(response.item.jobId, true);
       await refreshMaintenanceStatus(true);
+      await refreshWorkerStatus(true);
     } catch (err) {
       setError((err as Error).message);
     } finally {
@@ -526,6 +546,36 @@ export function JatoMonthlyUpdatePage() {
     }
   }
 
+  async function handleApproveReview(job: JatoMonthlyUpdateJob) {
+    if (!reviewBundle || reviewBundle.jobId !== job.jobId) {
+      setError("请先打开并核对 Review Candidate，再执行批准。");
+      return;
+    }
+    const confirmed = window.confirm(
+      "确认批准当前 candidate 的 Review？批准记录会绑定当前 candidate 指纹；任何重建或 Smart Merge 后都必须重新 Review。"
+    );
+    if (!confirmed) {
+      return;
+    }
+    setApprovingReviewJobId(job.jobId);
+    setError("");
+    setNotice("");
+    try {
+      const response = await api.approveJatoMonthlyUpdateReview(job.jobId);
+      setSelectedJob(response.item);
+      setReviewBundle((current) => current?.jobId === job.jobId
+        ? { ...current, approval: response.item.reviewApproval ?? null }
+        : current);
+      setNotice(`Review 已批准：${job.jobId}。Publish 将只接受这个 candidate 指纹。`);
+      await refreshJobs(job.jobId, true);
+      await loadJobDetail(job.jobId, true);
+    } catch (err) {
+      setError((err as Error).message);
+    } finally {
+      setApprovingReviewJobId(null);
+    }
+  }
+
   function parsePublishBlocker(error: unknown): PublishBlocker | null {
     const msg = error instanceof Error ? error.message : String(error);
     const spaceIndex = msg.indexOf(" ");
@@ -643,7 +693,10 @@ export function JatoMonthlyUpdatePage() {
 
   const rawCompare = selectedJob?.summaries?.rawCompare;
   const refresh = selectedJob?.summaries?.refresh;
-  const canReviewSelectedJob = Boolean(selectedJob?.artifacts?.rawCompareReportPath);
+  const canReviewSelectedJob = Boolean(
+    selectedJob?.artifacts?.rawCompareReportPath
+    || (selectedJob?.jobType === "single_country" && selectedJob.status === "success")
+  );
   const canPublishSelectedJob = Boolean(
     selectedJob
     && selectedJob.status === "success"
@@ -668,6 +721,11 @@ export function JatoMonthlyUpdatePage() {
     selectedJob?.publication?.publishedAt && !selectedJob?.publication?.rolledBackAt
   );
   const hasReviewedSelectedJob = reviewBundle?.jobId === selectedJob?.jobId;
+  const hasApprovedSelectedJob = Boolean(
+    selectedJob?.reviewApproval?.decision === "approved"
+    && reviewBundle?.candidateFingerprint
+    && selectedJob.reviewApproval.candidateFingerprint === reviewBundle.candidateFingerprint
+  );
   const availableReviewCountries = reviewBundle
     ? Array.from(
       new Set(
@@ -729,8 +787,7 @@ export function JatoMonthlyUpdatePage() {
               <span className="page-kicker">06 / MSRP Admin</span>
               <h1>JATO Monthly Update</h1>
               <p>
-                隐藏在 MSRP 管理工具里的管理员入口。上传每月 JATO patch xlsx 后，后端会自动串行复用现有
-                prepare、raw compare 和 candidate refresh 脚本。
+                上传每月 JATO patch xlsx 后，网页只负责续传与入队；独立 worker 串行执行分类、review 与 candidate refresh。
               </p>
               <div className="dashboard-hero-inline-summary">
                 <span className="selection-ribbon-label">Publish</span>
@@ -804,6 +861,28 @@ export function JatoMonthlyUpdatePage() {
 
       {error && <div className="alert alert-error">{error}</div>}
       {notice && <div className="alert">{notice}</div>}
+
+      <div className={`card crud-card ${workerStatus?.healthy ? "" : "alert alert-warning"}`}>
+        <div className="detail-section-head">
+          <div>
+            <div className="card-title">Worker / Upload Recovery</div>
+            <p className="section-note">
+              浏览器登出、刷新或网络失败不会中断已完成的分片；任务是否执行由独立 worker 状态决定。
+            </p>
+          </div>
+          <button type="button" className="btn btn-sm btn-secondary" onClick={() => void refreshWorkerStatus()}>
+            刷新 Worker
+          </button>
+        </div>
+        <div className="monthly-update-cleanup-summary">
+          <span>worker: {workerStatus?.state ?? "unknown"}</span>
+          <span>healthy: {workerStatus ? (workerStatus.healthy ? "yes" : "no / stale") : "checking"}</span>
+          <span>queued: {formatMonthlyUpdateNumber(workerStatus?.queuedJobCount ?? 0)}</span>
+          <span>active job: {workerStatus?.jobId ?? "-"}</span>
+          <span>heartbeat: {formatMonthlyUpdateTimestamp(workerStatus?.updatedAt)}</span>
+        </div>
+        {workerStatus?.detail && <p className="section-note" style={{ marginTop: 10 }}>{workerStatus.detail}</p>}
+      </div>
 
       <div className="card crud-card">
         <div className="detail-section-head">
@@ -1198,7 +1277,7 @@ Smart Merge:  [SE:keep active 2026-03] [DE:patch 2026-03] [NL:patch 2026-02] [FR
                         </span>
                       </td>
                       <td>
-                        <strong>{job.month}</strong>
+                        <strong>{job.month ?? job.requestedMonth ?? "待 worker 识别"}</strong>
                         {job.batchId && (
                           <div className="section-note">{job.batchId}</div>
                         )}
@@ -1275,6 +1354,24 @@ Smart Merge:  [SE:keep active 2026-03] [DE:patch 2026-03] [NL:patch 2026-02] [FR
                           : "Review Candidate"}
                     </button>
                   )}
+                  {canPublishSelectedJob && hasReviewedSelectedJob && (
+                    <button
+                      type="button"
+                      className="btn btn-secondary"
+                      onClick={() => void handleApproveReview(selectedJob)}
+                      disabled={
+                        hasApprovedSelectedJob
+                        || approvingReviewJobId === selectedJob.jobId
+                        || Boolean(reviewBundle?.reviewFindings.some((finding) => finding.severity === "blocker"))
+                      }
+                    >
+                      {hasApprovedSelectedJob
+                        ? "Review Approved"
+                        : approvingReviewJobId === selectedJob.jobId
+                          ? "批准中..."
+                          : "Approve Review"}
+                    </button>
+                  )}
                   {canPublishSelectedJob && (
                     <button
                       type="button"
@@ -1282,15 +1379,15 @@ Smart Merge:  [SE:keep active 2026-03] [DE:patch 2026-03] [NL:patch 2026-02] [FR
                       onClick={() => void handlePublishJob(selectedJob)}
                       disabled={
                         isSelectedJobPublished
-                        || !hasReviewedSelectedJob
+                        || !hasApprovedSelectedJob
                         || publishingJobId === selectedJob.jobId
                         || hasActiveJob
                       }
                     >
                       {isSelectedJobPublished
                         ? "Published"
-                        : !hasReviewedSelectedJob
-                          ? "先 Review 再 Publish"
+                        : !hasApprovedSelectedJob
+                          ? "先批准 Review 再 Publish"
                           : publishingJobId === selectedJob.jobId
                             ? "Publishing..."
                             : "Publish Candidate"}
@@ -1349,7 +1446,11 @@ Smart Merge:  [SE:keep active 2026-03] [DE:patch 2026-03] [NL:patch 2026-02] [FR
                 </div>
                 <div className="admin-detail-item">
                   <span>Detected latest month</span>
-                  <strong>{selectedJob.month}</strong>
+                  <strong>{selectedJob.month ?? selectedJob.requestedMonth ?? "待 worker 识别"}</strong>
+                </div>
+                <div className="admin-detail-item">
+                  <span>Scope</span>
+                  <strong>{selectedJob.country ?? selectedJob.countryScope?.join(", ") ?? "待 worker 识别"}</strong>
                 </div>
                 <div className="admin-detail-item">
                   <span>Batch</span>
@@ -1524,13 +1625,18 @@ Smart Merge:  [SE:keep active 2026-03] [DE:patch 2026-03] [NL:patch 2026-02] [FR
                     <div>
                       <div className="card-title">Review Candidate</div>
                       <p className="section-note">
-                        这里集中展示 raw compare checklist 与人工 review 要点；确认后可直接点击 Publish Candidate。
+                        这里集中展示 raw compare 或单国专项检查。没有 blocker 时，必须先 Approve Review，才能 Publish Candidate。
                       </p>
                     </div>
                     <div className="table-status-chip">
                       <span>Decision</span>
                       <strong>{reviewBundle.decisionSuggestion || "-"}</strong>
                     </div>
+                  </div>
+                  <div className={reviewBundle.approval?.decision === "approved" ? "alert alert-success" : "alert alert-info"}>
+                    {reviewBundle.approval?.decision === "approved"
+                      ? `Review 已由 ${reviewBundle.approval.reviewedBy || "-"} 批准（${formatMonthlyUpdateTimestamp(reviewBundle.approval.reviewedAt)}）。`
+                      : "Review 尚未批准；查看所有 findings 后再执行 Approve Review。"}
                   </div>
                   <div className="monthly-update-summary-grid">
                     <article className="monthly-update-summary-card">

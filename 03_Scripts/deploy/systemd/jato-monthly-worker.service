@@ -1,0 +1,28 @@
+[Unit]
+Description=JATO monthly update isolated worker
+After=network.target
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/JATO_Analysis_System-main
+EnvironmentFile=-/etc/jato-fullstack/backend.env
+EnvironmentFile=-/etc/jato-fullstack/monthly-worker.env
+Environment=PYTHONUNBUFFERED=1
+Environment=APP_PROJECT_ROOT=/opt/JATO_Analysis_System-main
+Environment=PYTHONPATH=/opt/JATO_Analysis_System-main/06_AppPlatform/backend
+
+# Protect the interactive site first. Memory thresholds are intentionally set
+# in a reviewed production drop-in after running jato_monthly_worker_capacity.py.
+CPUWeight=20
+IOWeight=20
+Nice=10
+OOMScoreAdjust=500
+TasksMax=64
+TimeoutStopSec=30
+
+ExecStart=/opt/JATO_Analysis_System-main/.venv/bin/python 03_Scripts/jato_monthly_worker.py --poll-seconds 3
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

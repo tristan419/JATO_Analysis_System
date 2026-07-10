@@ -1,0 +1,8 @@
+# Install as /etc/systemd/system/jato-monthly-worker.service.d/resources.conf
+# after reviewing 03_Scripts/ops/jato_monthly_worker_capacity.py output.
+[Service]
+# MemoryHigh=...
+# MemoryMax=...
+CPUWeight=20
+IOWeight=20
+Nice=10

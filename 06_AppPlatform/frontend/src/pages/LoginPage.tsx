@@ -3,6 +3,23 @@ import { useNavigate, useSearchParams } from "react-router-dom";
 import { apiUrl } from "../api/client";
 import { useAuth } from "../contexts/AuthContext";
 
+function formatLoginError(error: unknown): string {
+  const message = error instanceof Error ? error.message : String(error || "Login failed");
+  if (/^401\b|unauthori[sz]ed/i.test(message)) {
+    return "登录信息无效或会话已过期，请重新输入账号和密码。";
+  }
+  if (/^403\b|forbidden/i.test(message)) {
+    return "当前账号没有访问 OJEUR 的权限，请联系管理员。";
+  }
+  if (/^5\d\d\b|resource[_ -]?killed|sigkill/i.test(message)) {
+    return "服务端暂时不可用。请稍后重试；已完成上传的月更分片会保留，不需要重新上传。";
+  }
+  if (/failed to fetch|network|网络|load failed/i.test(message)) {
+    return "无法连接 OJEUR 服务。请检查网络后重试；已完成上传的月更分片会保留。";
+  }
+  return message || "Login failed";
+}
+
 export function LoginPage() {
   const { login } = useAuth();
   const navigate = useNavigate();
@@ -23,7 +40,7 @@ export function LoginPage() {
       await login(username.trim(), password);
       navigate(redirect, { replace: true });
     } catch (err) {
-      setError((err as Error).message || "Login failed");
+      setError(formatLoginError(err));
     } finally {
       setSubmitting(false);
     }

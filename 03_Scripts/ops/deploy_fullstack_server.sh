@@ -65,6 +65,8 @@ SYSTEMD_SOURCE_DIR="$REPO_DIR/03_Scripts/deploy/systemd"
 SYSTEMD_TARGET_DIR="/etc/systemd/system"
 JATO_ETC_DIR="/etc/jato-fullstack"
 ENABLE_SCRAPER_SCHEDULERS="${ENABLE_SCRAPER_SCHEDULERS:-true}"
+ENABLE_JATO_MONTHLY_WORKER="${ENABLE_JATO_MONTHLY_WORKER:-false}"
+JATO_MONTHLY_WORKER_SERVICE="jato-monthly-worker.service"
 
 log_section() {
   printf '\n[STEP] %s\n' "$1"
@@ -378,6 +380,9 @@ reconcile_scraper_schedulers() {
   install_env_file_if_missing \
     "$SYSTEMD_SOURCE_DIR/jato-voc.env.example" \
     "$JATO_ETC_DIR/voc.env"
+  install_env_file_if_missing \
+    "$SYSTEMD_SOURCE_DIR/jato-monthly-worker.env.example" \
+    "$JATO_ETC_DIR/monthly-worker.env"
 
   install_systemd_file "$SYSTEMD_SOURCE_DIR/jato-country-news-sync.service"
   install_systemd_file "$SYSTEMD_SOURCE_DIR/jato-country-news-sync.timer"
@@ -390,8 +395,18 @@ reconcile_scraper_schedulers() {
   install_systemd_file "$SYSTEMD_SOURCE_DIR/jato-voc-forum-sync.timer"
   install_systemd_file "$SYSTEMD_SOURCE_DIR/hermes-source-quality.service"
   install_systemd_file "$SYSTEMD_SOURCE_DIR/hermes-source-quality.timer"
+  install_systemd_file "$SYSTEMD_SOURCE_DIR/jato-monthly-worker.service"
 
   sudo -n systemctl daemon-reload
+
+  echo "[INFO] JATO monthly worker capacity (review before setting MemoryHigh/MemoryMax):"
+  "$VENV_DIR/bin/python" "$REPO_DIR/03_Scripts/ops/jato_monthly_worker_capacity.py"
+  if is_truthy "$ENABLE_JATO_MONTHLY_WORKER"; then
+    sudo -n systemctl enable --now "$JATO_MONTHLY_WORKER_SERVICE"
+    sudo -n systemctl --no-pager status "$JATO_MONTHLY_WORKER_SERVICE" 2>&1 | head -n 20 || true
+  else
+    echo "[INFO] JATO monthly worker installed but left disabled; set ENABLE_JATO_MONTHLY_WORKER=true only after capacity review."
+  fi
 
   restart_timer_unit jato-country-news-sync.timer
   restart_timer_unit jato-country-news-sync-b.timer

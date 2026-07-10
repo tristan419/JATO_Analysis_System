@@ -1,6 +1,7 @@
 import hashlib
 import json
 from pathlib import Path
+from urllib.parse import quote
 
 import pandas as pd
 import pytest
@@ -258,6 +259,18 @@ def _write_plan(project_root: Path, month: str, compare_id: str) -> None:
 def _write_dataset_parquet(path: Path, rows: list[dict[str, object]]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     pd.DataFrame(rows).to_parquet(path, index=False)
+
+
+def _approve_current_candidate(state: dict[str, object]) -> None:
+    artifacts = state["artifacts"]
+    assert isinstance(artifacts, dict)
+    state["reviewApproval"] = {
+        "decision": "approved",
+        "reviewedAt": "2026-04-20T00:00:00+00:00",
+        "reviewedBy": "reviewer",
+        "candidateFingerprint": jato_monthly_update_service._candidate_fingerprint_id(artifacts),
+        "note": None,
+    }
 
 
 def test_run_job_marks_success_and_collects_summaries(
@@ -978,8 +991,9 @@ def test_chunked_upload_session_can_be_completed_and_queued(
     )
 
     assert job["status"] == "queued"
-    assert job["month"] == "2026-03"  # parsed from filename "JATO-2026.03-patch.xlsx"
-    assert job["batchId"] == "2026-03-r1"  # from _allocate_batch_id mock
+    assert job["month"] is None  # worker owns workbook classification
+    assert job["requestedMonth"] == "2026-03"
+    assert job["batchId"] is None
     assert job["phase"] == "queued"
     assert job["upload"]["sizeBytes"] == 10
     assert job["upload"]["sha256"] == hashlib.sha256(b"abcdefghij").hexdigest()
@@ -1039,8 +1053,9 @@ def test_retry_failed_job_reuses_stored_upload_copy(
 
     assert retried["jobId"] != "jato-update-failed"
     assert retried["status"] == "queued"
-    assert retried["month"] == "2026-03"  # from source job state
-    assert retried["batchId"] == "2026-03-r2"  # from _allocate_batch_id mock
+    assert retried["month"] is None
+    assert retried["requestedMonth"] == "2026-03"
+    assert retried["batchId"] is None
     assert retried["phase"] == "queued"
     assert retried["triggeredBy"] == "retry-user"
     assert retried["upload"]["originalFilename"] == "patch.xlsx"
@@ -1500,6 +1515,7 @@ def test_publish_monthly_update_job_promotes_staging_outputs(
         "refreshReportPath": "04_Processed_data/staging/2026-03-mixed/refresh_job_report.json",
     }
     state["summaries"] = {"refresh": {"jobStatus": "success"}}
+    _approve_current_candidate(state)
     jato_monthly_update_service._persist_job_state(state)
     evidence_calls = []
     cache_invalidation = {
@@ -1628,6 +1644,7 @@ def test_publish_monthly_update_job_blocks_country_regression(
         "refreshReportPath": "04_Processed_data/staging/2026-03-mixed/refresh_job_report.json",
     }
     state["summaries"] = {"refresh": {"jobStatus": "success"}}
+    _approve_current_candidate(state)
     jato_monthly_update_service._persist_job_state(state)
 
     with pytest.raises(HTTPException) as exc_info:
@@ -1710,6 +1727,7 @@ def test_publish_monthly_update_job_blocks_likely_doubled_sales(
         "refreshReportPath": "04_Processed_data/staging/2026-03-mixed/refresh_job_report.json",
     }
     state["summaries"] = {"refresh": {"jobStatus": "success"}}
+    _approve_current_candidate(state)
     jato_monthly_update_service._persist_job_state(state)
 
     with pytest.raises(HTTPException) as exc_info:
@@ -1851,6 +1869,7 @@ def test_publish_monthly_update_job_allows_republish_after_rollback(
         "refreshReportPath": "04_Processed_data/staging/2026-03-mixed/refresh_job_report.json",
     }
     state["summaries"] = {"refresh": {"jobStatus": "success"}}
+    _approve_current_candidate(state)
     state["publication"] = {
         "publishedAt": "2026-04-20T12:02:33+00:00",
         "publishedBy": "tester",
@@ -1871,3 +1890,238 @@ def test_publish_monthly_update_job_allows_republish_after_rollback(
         "04_Processed_data/.refresh_backups/manual-promote-"
     )
     assert "rolledBackAt" not in published["publication"]
+
+
+def test_worker_classifies_single_country_without_running_raw_compare(
+    tmp_path: Path, monkeypatch
+) -> None:
+    project_root = tmp_path / "project"
+    job_root = project_root / "04_Processed_data" / "ops" / "jato_monthly_update_jobs"
+    monkeypatch.setattr(jato_monthly_update_service, "PROJECT_ROOT", project_root)
+    monkeypatch.setattr(jato_monthly_update_service, "MONTHLY_UPDATE_JOB_ROOT", job_root)
+    job_id = "jato-update-single-hu"
+    upload_path = job_root / job_id / "uploads" / "Hungary-2026-05.xlsx"
+    upload_path.parent.mkdir(parents=True, exist_ok=True)
+    upload_path.write_bytes(b"hungary-may")
+    jato_monthly_update_service._queue_monthly_update_job_from_stored_upload(
+        job_id=job_id,
+        triggered_by="tester",
+        upload_filename=upload_path.name,
+        stored_upload_path=upload_path,
+        requested_month="2026-05",
+        file_sha256=hashlib.sha256(b"hungary-may").hexdigest(),
+    )
+    monkeypatch.setattr(
+        jato_monthly_update_service,
+        "_inspect_uploaded_excel",
+        lambda _path: (["匈牙利"], "2026-05"),
+    )
+    ran_single: list[str] = []
+
+    def fake_single_country_runner(next_job_id: str) -> None:
+        ran_single.append(next_job_id)
+        state = jato_monthly_update_service._load_job_state(next_job_id)
+        state["status"] = "success"
+        state["phase"] = "completed"
+        jato_monthly_update_service._persist_job_state(state)
+
+    monkeypatch.setattr(jato_monthly_update_service, "_run_single_country_job", fake_single_country_runner)
+    monkeypatch.setattr(
+        jato_monthly_update_service,
+        "_run_job",
+        lambda _job_id: pytest.fail("single-country input must not run full Raw Compare pipeline"),
+    )
+
+    result = jato_monthly_update_service.run_jato_monthly_update_worker_once()
+    state = jato_monthly_update_service._load_job_state(job_id)
+
+    assert result["processedJobId"] == job_id
+    assert ran_single == [job_id]
+    assert state["jobType"] == "single_country"
+    assert state["country"] == "匈牙利"
+    assert state["countryScope"] == ["匈牙利"]
+    assert state["month"] == "2026-05"
+    assert state["ingestionKey"].endswith(hashlib.sha256(b"hungary-may").hexdigest())
+
+
+def test_worker_marks_same_country_month_sha_as_duplicate(
+    tmp_path: Path, monkeypatch
+) -> None:
+    project_root = tmp_path / "project"
+    job_root = project_root / "04_Processed_data" / "ops" / "jato_monthly_update_jobs"
+    monkeypatch.setattr(jato_monthly_update_service, "PROJECT_ROOT", project_root)
+    monkeypatch.setattr(jato_monthly_update_service, "MONTHLY_UPDATE_JOB_ROOT", job_root)
+    sha = hashlib.sha256(b"same-hungary-upload").hexdigest()
+    first_job_id = "jato-update-existing-hu"
+    first_upload = job_root / first_job_id / "uploads" / "Hungary-2026-05.xlsx"
+    first_upload.parent.mkdir(parents=True, exist_ok=True)
+    first_upload.write_bytes(b"same-hungary-upload")
+    existing = jato_monthly_update_service._queue_monthly_update_job_from_stored_upload(
+        job_id=first_job_id,
+        triggered_by="tester",
+        upload_filename=first_upload.name,
+        stored_upload_path=first_upload,
+        requested_month="2026-05",
+        file_sha256=sha,
+    )
+    existing_state = jato_monthly_update_service._load_job_state(existing["jobId"])
+    existing_state.update({
+        "status": "success",
+        "phase": "completed",
+        "month": "2026-05",
+        "countryScope": ["匈牙利"],
+        "country": "匈牙利",
+        "ingestionKey": jato_monthly_update_service._build_ingestion_key(
+            countries=["匈牙利"], month="2026-05", file_sha256=sha
+        ),
+    })
+    jato_monthly_update_service._persist_job_state(existing_state)
+    duplicate_job_id = "jato-update-duplicate-hu"
+    duplicate_upload = job_root / duplicate_job_id / "uploads" / "Hungary-2026-05.xlsx"
+    duplicate_upload.parent.mkdir(parents=True, exist_ok=True)
+    duplicate_upload.write_bytes(b"same-hungary-upload")
+    jato_monthly_update_service._queue_monthly_update_job_from_stored_upload(
+        job_id=duplicate_job_id,
+        triggered_by="tester",
+        upload_filename=duplicate_upload.name,
+        stored_upload_path=duplicate_upload,
+        requested_month="2026-05",
+        file_sha256=sha,
+    )
+    monkeypatch.setattr(
+        jato_monthly_update_service,
+        "_inspect_uploaded_excel",
+        lambda _path: (["匈牙利"], "2026-05"),
+    )
+
+    jato_monthly_update_service.run_jato_monthly_update_worker_once()
+    duplicate = jato_monthly_update_service._load_job_state(duplicate_job_id)
+
+    assert duplicate["status"] == "duplicate"
+    assert duplicate["duplicateOfJobId"] == first_job_id
+
+
+def test_publish_requires_approved_current_candidate_fingerprint(
+    tmp_path: Path, monkeypatch
+) -> None:
+    project_root = tmp_path / "project"
+    processed_root = project_root / "04_Processed_data"
+    job_root = processed_root / "ops" / "jato_monthly_update_jobs"
+    monkeypatch.setattr(jato_monthly_update_service, "PROJECT_ROOT", project_root)
+    monkeypatch.setattr(jato_monthly_update_service, "MONTHLY_UPDATE_JOB_ROOT", job_root)
+    staging_root = processed_root / "staging" / "candidate"
+    _write_dataset_parquet(
+        staging_root / "jato_full_archive.parquet",
+        [{"国家": "匈牙利", "Model": "iX1", "2026 May": 10}],
+    )
+    (staging_root / "manifest.json").write_text("{}", encoding="utf-8")
+    (staging_root / "partitioned_dataset_v1").mkdir(parents=True, exist_ok=True)
+    (staging_root / "dataset_fingerprint.json").write_text("{}", encoding="utf-8")
+    (staging_root / "refresh_job_report.json").write_text('{"jobStatus":"success"}', encoding="utf-8")
+    job_id = "jato-update-approval-gate"
+    upload_path = job_root / job_id / "uploads" / "Hungary-2026-05.xlsx"
+    upload_path.parent.mkdir(parents=True, exist_ok=True)
+    upload_path.write_bytes(b"candidate")
+    state = jato_monthly_update_service._prepare_initial_job_state(
+        job_id=job_id,
+        month="2026-05",
+        triggered_by="tester",
+        upload_filename=upload_path.name,
+        stored_upload_path=upload_path,
+    )
+    state.update({
+        "status": "success",
+        "phase": "completed",
+        "summaries": {"refresh": {"jobStatus": "success"}},
+        "artifacts": {
+            "stagingOutputPath": "04_Processed_data/staging/candidate/jato_full_archive.parquet",
+            "manifestPath": "04_Processed_data/staging/candidate/manifest.json",
+            "partitionOutputPath": "04_Processed_data/staging/candidate/partitioned_dataset_v1",
+            "fingerprintPath": "04_Processed_data/staging/candidate/dataset_fingerprint.json",
+            "refreshReportPath": "04_Processed_data/staging/candidate/refresh_job_report.json",
+        },
+    })
+    jato_monthly_update_service._persist_job_state(state)
+
+    with pytest.raises(HTTPException, match="批准当前 candidate"):
+        jato_monthly_update_service.publish_jato_monthly_update_job(job_id=job_id, triggered_by="publisher")
+
+    state["reviewApproval"] = {
+        "decision": "approved",
+        "candidateFingerprint": "stale-fingerprint",
+    }
+    jato_monthly_update_service._persist_job_state(state)
+    with pytest.raises(HTTPException, match="重新 Review"):
+        jato_monthly_update_service.publish_jato_monthly_update_job(job_id=job_id, triggered_by="publisher")
+
+
+def test_single_country_review_checks_target_and_untouched_partitions(
+    tmp_path: Path, monkeypatch
+) -> None:
+    project_root = tmp_path / "project"
+    processed_root = project_root / "04_Processed_data"
+    job_root = processed_root / "ops" / "jato_monthly_update_jobs"
+    monkeypatch.setattr(jato_monthly_update_service, "PROJECT_ROOT", project_root)
+    monkeypatch.setattr(jato_monthly_update_service, "MONTHLY_UPDATE_JOB_ROOT", job_root)
+    active_rows = [
+        {"国家": "匈牙利", "Model": "iX1", "2026 Apr": 10},
+        {"国家": "德国", "Model": "i4", "2026 Apr": 20},
+    ]
+    candidate_rows = [
+        {"国家": "匈牙利", "Model": "iX1", "2026 Apr": 10, "2026 May": 12},
+        {"国家": "德国", "Model": "i4", "2026 Apr": 20, "2026 May": None},
+    ]
+    _write_dataset_parquet(processed_root / "jato_full_archive.parquet", active_rows)
+    staging_root = processed_root / "staging" / "hungary-may"
+    _write_dataset_parquet(staging_root / "jato_full_archive.parquet", candidate_rows)
+    encoded_hu = quote("匈牙利", safe="")
+    encoded_de = quote("德国", safe="")
+    partition_manifest = {
+        "partitionColumns": ["国家"],
+        "partitionStats": {f"国家={encoded_hu}": {"rows": 1}, f"国家={encoded_de}": {"rows": 1}},
+    }
+    active_partition = processed_root / "partitioned_dataset_v1"
+    candidate_partition = staging_root / "partitioned_dataset_v1"
+    active_partition.mkdir(parents=True, exist_ok=True)
+    candidate_partition.mkdir(parents=True, exist_ok=True)
+    (active_partition / "manifest.json").write_text(json.dumps(partition_manifest), encoding="utf-8")
+    (candidate_partition / "manifest.json").write_text(json.dumps(partition_manifest), encoding="utf-8")
+    (staging_root / "manifest.json").write_text("{}", encoding="utf-8")
+    (staging_root / "refresh_job_report.json").write_text('{"jobStatus":"success"}', encoding="utf-8")
+    job_id = "jato-update-hu-review"
+    upload_path = job_root / job_id / "uploads" / "Hungary-2026-05.xlsx"
+    upload_path.parent.mkdir(parents=True, exist_ok=True)
+    upload_path.write_bytes(b"hungary")
+    state = jato_monthly_update_service._prepare_initial_job_state(
+        job_id=job_id,
+        month="2026-05",
+        triggered_by="tester",
+        upload_filename=upload_path.name,
+        stored_upload_path=upload_path,
+    )
+    state.update({
+        "status": "success",
+        "phase": "completed",
+        "jobType": "single_country",
+        "country": "匈牙利",
+        "countryScope": ["匈牙利"],
+        "artifacts": {
+            "stagingOutputPath": "04_Processed_data/staging/hungary-may/jato_full_archive.parquet",
+            "manifestPath": "04_Processed_data/staging/hungary-may/manifest.json",
+            "partitionOutputPath": "04_Processed_data/staging/hungary-may/partitioned_dataset_v1",
+            "refreshReportPath": "04_Processed_data/staging/hungary-may/refresh_job_report.json",
+        },
+    })
+    jato_monthly_update_service._persist_job_state(state)
+
+    review = jato_monthly_update_service.get_jato_monthly_update_review(job_id)
+    approved = jato_monthly_update_service.approve_jato_monthly_update_review(
+        job_id=job_id,
+        triggered_by="reviewer",
+        decision="approve",
+    )
+
+    assert review["countryFreshnessSummary"][0]["freshnessStatus"] == "advanced"
+    assert review["countryScopeSummary"]["untouchedPartitionCheck"]["status"] == "pass"
+    assert not any(item["severity"] == "blocker" for item in review["reviewFindings"])
+    assert approved["reviewApproval"]["decision"] == "approved"

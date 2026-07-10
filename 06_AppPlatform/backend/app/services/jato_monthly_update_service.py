@@ -12,9 +12,11 @@ import sys
 import threading
 import time
 import traceback
+from contextlib import contextmanager
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
+from urllib.parse import quote
 from uuid import uuid4
 
 import pandas as pd
@@ -68,10 +70,21 @@ _RUNNING_THREADS: dict[str, threading.Thread] = {}
 RUNNING_JOB_STATUSES = {"queued", "running"}
 PROCESS_TERMINATE_GRACE_SECONDS = 8
 RUNNING_LOG_STALE_SECONDS = 15 * 60
+WORKER_STATUS_FILENAME = "worker_status.json"
+WORKER_LOCK_FILENAME = "worker.lock"
+WORKER_HEARTBEAT_STALE_SECONDS = 90
 
 
 class _JobCancelled(RuntimeError):
     pass
+
+
+class _JobResourceKilled(RuntimeError):
+    """Raised when a child process is forcibly killed by the host or cgroup."""
+
+    def __init__(self, label: str, return_code: int) -> None:
+        super().__init__(f"{label} 被系统强制终止，退出码 {return_code}")
+        self.return_code = return_code
 
 
 def _utc_now() -> datetime:
@@ -104,6 +117,10 @@ def _job_state_path(job_id: str) -> Path:
 
 def _job_log_path(job_id: str) -> Path:
     return _job_dir(job_id) / LOG_FILENAME
+
+
+def _worker_status_path() -> Path:
+    return MONTHLY_UPDATE_JOB_ROOT / WORKER_STATUS_FILENAME
 
 
 def _processed_data_root() -> Path:
@@ -609,6 +626,71 @@ def _write_json(path: Path, payload: dict[str, Any]) -> None:
         encoding="utf-8",
     )
     temp_path.replace(path)
+
+
+def _write_worker_status(*, state: str, job_id: str | None = None, detail: str | None = None) -> None:
+    _write_json(
+        _worker_status_path(),
+        {
+            "state": state,
+            "jobId": job_id,
+            "detail": detail,
+            "updatedAt": _utc_now().isoformat(),
+            "pid": os.getpid(),
+        },
+    )
+
+
+def _worker_lock_path() -> Path:
+    return MONTHLY_UPDATE_JOB_ROOT / WORKER_LOCK_FILENAME
+
+
+@contextmanager
+def _exclusive_worker_cycle() -> Any:
+    """Prevent manual or duplicated worker services from consuming the same job."""
+    try:
+        import fcntl
+    except ImportError:  # pragma: no cover - the production worker is Linux/POSIX
+        yield True
+        return
+    lock_path = _worker_lock_path()
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+    with lock_path.open("a+", encoding="utf-8") as handle:
+        try:
+            fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            yield False
+            return
+        try:
+            yield True
+        finally:
+            fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+
+
+def get_jato_monthly_update_worker_status() -> dict[str, Any]:
+    payload = _read_json_if_exists(_relative_to_project(_worker_status_path())) or {}
+    updated_at = _parse_status_dt(payload.get("updatedAt"))
+    age_seconds = (
+        max(0, int((_utc_now() - updated_at).total_seconds()))
+        if updated_at is not None
+        else None
+    )
+    queued_jobs = [
+        str(item.get("jobId", ""))
+        for item in _list_job_state_payloads()
+        if str(item.get("status", "")) == "queued"
+    ]
+    return {
+        "state": str(payload.get("state") or "unknown"),
+        "jobId": payload.get("jobId"),
+        "detail": payload.get("detail"),
+        "updatedAt": payload.get("updatedAt"),
+        "pid": payload.get("pid"),
+        "ageSeconds": age_seconds,
+        "healthy": bool(age_seconds is not None and age_seconds <= WORKER_HEARTBEAT_STALE_SECONDS),
+        "queuedJobCount": len(queued_jobs),
+        "queuedJobIds": queued_jobs[:10],
+    }
 
 
 def _read_json(path: Path) -> dict[str, Any]:
@@ -1651,6 +1733,11 @@ def _serialize_job_state(
             if payload.get("month") in {None, ""}
             else str(payload.get("month"))
         ),
+        "requestedMonth": (
+            None
+            if payload.get("requestedMonth") in {None, ""}
+            else str(payload.get("requestedMonth"))
+        ),
         "batchId": (
             None
             if payload.get("batchId") in {None, ""}
@@ -1658,6 +1745,15 @@ def _serialize_job_state(
         ),
         "status": str(payload.get("status", "")),
         "phase": str(payload.get("phase", "")),
+        "jobType": payload.get("jobType") or payload.get("requestedJobType"),
+        "country": payload.get("country"),
+        "countryScope": (
+            [str(country) for country in payload.get("countryScope", [])]
+            if isinstance(payload.get("countryScope"), list)
+            else []
+        ),
+        "ingestionKey": payload.get("ingestionKey"),
+        "duplicateOfJobId": payload.get("duplicateOfJobId"),
         "triggeredBy": str(payload.get("triggeredBy", "")),
         "createdAt": str(payload.get("createdAt", "")),
         "updatedAt": str(payload.get("updatedAt", "")),
@@ -1695,6 +1791,11 @@ def _serialize_job_state(
         "cancellation": (
             payload.get("cancellation")
             if isinstance(payload.get("cancellation"), dict)
+            else None
+        ),
+        "reviewApproval": (
+            payload.get("reviewApproval")
+            if isinstance(payload.get("reviewApproval"), dict)
             else None
         ),
     }
@@ -1851,6 +1952,237 @@ def _require_no_running_monthly_update_jobs(*, excluding_job_id: str | None = No
         )
 
 
+def _candidate_fingerprint_id(artifacts: dict[str, Any]) -> str:
+    candidate_path = _project_path(str(artifacts.get("stagingOutputPath") or "").strip())
+    if candidate_path is None or not candidate_path.exists():
+        raise HTTPException(status_code=409, detail="缺少 candidate parquet，不能确认 Review。")
+    manifest_value = str(artifacts.get("manifestPath") or "").strip()
+    manifest_path = _project_path(manifest_value) if manifest_value else None
+    hasher = hashlib.sha256()
+    hasher.update(_sha256_hex_for_path(candidate_path).encode("ascii"))
+    if manifest_path is not None and manifest_path.exists():
+        hasher.update(_sha256_hex_for_path(manifest_path).encode("ascii"))
+    return hasher.hexdigest()
+
+
+def _load_parquet_country_subset(path: Path, country: str, *, path_label: str) -> pd.DataFrame:
+    try:
+        import pyarrow.parquet as pq
+
+        schema = pq.read_schema(path)
+        country_column = _find_country_column([str(column) for column in schema.names])
+        if country_column is None:
+            raise HTTPException(status_code=409, detail=f"{path_label} 缺少国家列。")
+        frame = pd.read_parquet(path, filters=[(country_column, "==", country)])
+        frame.columns = [str(column).strip() for column in frame.columns]
+        return frame
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(
+            status_code=409,
+            detail=f"读取 {path_label} 的 {country} 分区失败。",
+        ) from exc
+
+
+def _latest_month_from_frame(frame: pd.DataFrame) -> str | None:
+    month_columns = _detect_month_columns(list(frame.columns))
+    for column in reversed(month_columns):
+        if column in frame.columns and _series_has_data(frame[column]):
+            return column
+    return None
+
+
+def _partition_stability_check(
+    *,
+    active_partition_path: Path,
+    candidate_partition_path: Path,
+    country: str,
+) -> dict[str, Any]:
+    active_manifest = _read_json_if_exists(
+        _relative_to_project(active_partition_path / "manifest.json")
+    ) or {}
+    candidate_manifest = _read_json_if_exists(
+        _relative_to_project(candidate_partition_path / "manifest.json")
+    ) or {}
+    active_stats = active_manifest.get("partitionStats")
+    candidate_stats = candidate_manifest.get("partitionStats")
+    if not isinstance(active_stats, dict) or not isinstance(candidate_stats, dict):
+        return {"status": "unavailable", "changedPartitions": []}
+    partition_columns = candidate_manifest.get("partitionColumns")
+    first_partition_column = (
+        str(partition_columns[0])
+        if isinstance(partition_columns, list) and partition_columns
+        else "国家"
+    )
+    target_prefix = f"{first_partition_column}={quote(country, safe='')}"
+    changed = [
+        key
+        for key in sorted(set(active_stats) | set(candidate_stats))
+        if not str(key).startswith(target_prefix)
+        and active_stats.get(key) != candidate_stats.get(key)
+    ]
+    return {
+        "status": "pass" if not changed else "fail",
+        "changedPartitions": changed[:20],
+        "changedPartitionCount": len(changed),
+    }
+
+
+def _build_single_country_review(payload: dict[str, Any]) -> dict[str, Any]:
+    country = str(payload.get("country") or "").strip()
+    artifacts = payload.get("artifacts")
+    if not country or not isinstance(artifacts, dict):
+        raise HTTPException(status_code=409, detail="单国任务缺少 Review 所需信息。")
+    candidate_path = _project_path(str(artifacts.get("stagingOutputPath") or "").strip())
+    active_paths = _active_data_paths()
+    if candidate_path is None or not candidate_path.exists() or not active_paths["parquet"].exists():
+        raise HTTPException(status_code=409, detail="单国任务尚未生成可 Review 的 candidate。")
+    candidate_frame = _load_parquet_country_subset(candidate_path, country, path_label="candidate")
+    active_frame = _load_parquet_country_subset(active_paths["parquet"], country, path_label="active")
+    month_columns = _detect_month_columns(list(candidate_frame.columns))
+    active_month_columns = _detect_month_columns(list(active_frame.columns))
+    candidate_non_month_columns = set(candidate_frame.columns) - set(month_columns)
+    active_non_month_columns = set(active_frame.columns) - set(active_month_columns)
+    missing_candidate_schema_columns = sorted(active_non_month_columns - candidate_non_month_columns)
+    extra_candidate_schema_columns = sorted(candidate_non_month_columns - active_non_month_columns)
+    key_columns = [
+        column
+        for column in ("国家", "country", "品牌", "make", "Model", "model", "Version name", "versionname")
+        if column in candidate_frame.columns
+    ]
+    duplicate_count = (
+        int(candidate_frame.duplicated(subset=key_columns, keep=False).sum())
+        if key_columns
+        else 0
+    )
+    negative_sales_count = int(
+        sum(
+            pd.to_numeric(candidate_frame[column], errors="coerce").lt(0).sum()
+            for column in month_columns
+        )
+    )
+    active_latest = _latest_month_from_frame(active_frame)
+    candidate_latest = _latest_month_from_frame(candidate_frame)
+    candidate_sales = _collect_country_monthly_sales(
+        candidate_frame, countries=[country], path_label="candidate"
+    ).get(country, {})
+    active_sales = _collect_country_monthly_sales(
+        active_frame, countries=[country], path_label="active"
+    ).get(country, {})
+    common_months = sorted(set(active_sales) & set(candidate_sales), key=_time_sort_key)
+    doubled_months = [
+        month
+        for month in common_months
+        if _is_near_sales_doubling(
+            reference_sales=active_sales.get(month),
+            candidate_sales=candidate_sales.get(month),
+        )[0]
+    ]
+    partition_path = _project_path(str(artifacts.get("partitionOutputPath") or "").strip())
+    partition_check = (
+        _partition_stability_check(
+            active_partition_path=active_paths["partition"],
+            candidate_partition_path=partition_path,
+            country=country,
+        )
+        if partition_path is not None and partition_path.exists() and active_paths["partition"].exists()
+        else {"status": "unavailable", "changedPartitions": []}
+    )
+    findings: list[dict[str, Any]] = []
+    def add_finding(severity: str, rule_id: str, message: str, metrics: dict[str, Any]) -> None:
+        findings.append({
+            "severity": severity,
+            "scope": "country",
+            "target": country,
+            "ruleId": rule_id,
+            "message": message,
+            "metrics": metrics,
+            "suggestedAction": "reject_input_batch" if severity == "blocker" else "manual_review_required",
+        })
+    if not month_columns:
+        add_finding("blocker", "SC001", "candidate 缺少月份列。", {})
+    if missing_candidate_schema_columns:
+        add_finding(
+            "blocker",
+            "SC009",
+            "单国 candidate 缺少 active 业务列。",
+            {"missingColumns": missing_candidate_schema_columns},
+        )
+    if extra_candidate_schema_columns:
+        add_finding(
+            "review",
+            "SC010",
+            "单国 candidate 包含 active 中没有的新业务列。",
+            {"extraColumns": extra_candidate_schema_columns},
+        )
+    if candidate_latest is None:
+        add_finding("blocker", "SC002", "candidate 没有有效销量月份。", {})
+    if active_latest and candidate_latest and _time_sort_key(candidate_latest) < _time_sort_key(active_latest):
+        add_finding("blocker", "SC003", "单国最新月份发生回退。", {"active": active_latest, "candidate": candidate_latest})
+    if duplicate_count:
+        add_finding("blocker", "SC004", "单国 candidate 存在重复业务键。", {"duplicateRows": duplicate_count})
+    if negative_sales_count:
+        add_finding("blocker", "SC005", "单国 candidate 存在负销量。", {"negativeSalesCells": negative_sales_count})
+    if len(doubled_months) >= SALES_DOUBLING_MIN_MONTH_COUNT:
+        add_finding("blocker", "SC006", "单国 candidate 疑似销量翻倍。", {"months": doubled_months})
+    if partition_check.get("status") == "fail":
+        add_finding("blocker", "SC007", "未上传国家的分区签名发生变化。", partition_check)
+    if partition_check.get("status") == "unavailable":
+        add_finding("review", "SC008", "无法验证未上传国家分区稳定性。", partition_check)
+    findings.append({
+        "severity": "info",
+        "scope": "country",
+        "target": country,
+        "ruleId": "SC201",
+        "message": "单国 candidate 已使用 active 数据补充未上传国家。",
+        "metrics": {"rowCount": int(len(candidate_frame)), "latestMonth": candidate_latest},
+        "suggestedAction": "manual_review_required",
+    })
+    decision = "reject_input_batch" if any(item["severity"] == "blocker" for item in findings) else "manual_review_required"
+    rows = [
+        {
+            "month": month,
+            "referenceSales": active_sales.get(month),
+            "candidateSales": candidate_sales.get(month),
+            "deltaSales": _serialize_numeric_value((candidate_sales.get(month) or 0) - (active_sales.get(month) or 0)) if month in active_sales and month in candidate_sales else None,
+            "changeStatus": "unchanged" if active_sales.get(month) == candidate_sales.get(month) else "changed",
+        }
+        for month in sorted(set(active_sales) | set(candidate_sales), key=_time_sort_key)
+    ]
+    return {
+        "jobId": str(payload.get("jobId") or ""),
+        "reviewDir": None,
+        "compareId": f"{payload.get('jobId')}-single-country",
+        "decisionSuggestion": decision,
+        "compareKeyColumns": key_columns,
+        "checklistMarkdown": "\n".join([f"- {item['severity']}: {item['message']}" for item in findings]),
+        "reviewFindings": findings,
+        "sampledCountries": [country],
+        "conflictSampleCount": 0,
+        "conflictSamples": [],
+        "overlapChangeSummary": [],
+        "countryFreshnessSummary": [{"country": country, "oldLatestMonth": active_latest, "newLatestMonth": candidate_latest, "freshnessStatus": "advanced" if active_latest and candidate_latest and _time_sort_key(candidate_latest) > _time_sort_key(active_latest) else "unchanged_latest", "rowDelta": int(len(candidate_frame) - len(active_frame))}],
+        "countryCoverageSummary": [{"country": country, "oldMonths": _detect_month_columns(list(active_frame.columns)), "newMonths": month_columns, "addedMonths": sorted(set(month_columns) - set(_detect_month_columns(list(active_frame.columns))), key=_time_sort_key), "removedMonths": sorted(set(_detect_month_columns(list(active_frame.columns))) - set(month_columns), key=_time_sort_key), "overlappingMonths": common_months, "coverageStatus": "single_country"}],
+        "countrySalesReferenceLabel": "网站当前 active",
+        "countryMonthlySalesSummary": [{"country": country, "rows": rows}],
+        "countryMonthlySalesError": None,
+        "timeAxisCheck": {
+            "targetCountry": country,
+            "activeLatestMonth": active_latest,
+            "candidateLatestMonth": candidate_latest,
+            "schema": {
+                "missingCandidateColumns": missing_candidate_schema_columns,
+                "extraCandidateColumns": extra_candidate_schema_columns,
+            },
+        },
+        "countryScopeSummary": {"targetCountry": country, "untouchedPartitionCheck": partition_check},
+        "refreshSummary": _summarize_refresh_report(_read_json_if_exists(str(artifacts.get("refreshReportPath") or "")) or {}),
+        "candidateFingerprint": _candidate_fingerprint_id(artifacts),
+        "approval": payload.get("reviewApproval"),
+    }
+
+
 def get_jato_monthly_update_review(job_id: str) -> dict[str, Any]:
     payload = _load_job_state(job_id)
     artifacts = payload.get("artifacts")
@@ -1861,6 +2193,8 @@ def get_jato_monthly_update_review(job_id: str) -> dict[str, Any]:
     review_dir = str(artifacts.get("reviewDir") or "").strip()
     raw_compare_report = _read_json_if_exists(raw_compare_report_path)
     if raw_compare_report is None:
+        if str(payload.get("jobType") or "") == "single_country":
+            return _build_single_country_review(payload)
         raise HTTPException(status_code=409, detail="当前任务暂无可 review 的 compare 报告。")
 
     checklist_markdown = _read_text_if_exists(
@@ -1987,7 +2321,47 @@ def get_jato_monthly_update_review(job_id: str) -> dict[str, Any]:
             if isinstance(refresh_report, dict)
             else None
         ),
+        "candidateFingerprint": _candidate_fingerprint_id(artifacts),
+        "approval": payload.get("reviewApproval"),
     }
+
+
+def approve_jato_monthly_update_review(
+    *,
+    job_id: str,
+    triggered_by: str,
+    decision: str,
+    note: str | None = None,
+) -> dict[str, Any]:
+    normalized_decision = decision.strip().lower()
+    if normalized_decision not in {"approve", "reject"}:
+        raise HTTPException(status_code=400, detail="review decision 只支持 approve 或 reject。")
+    payload = _load_job_state(job_id)
+    artifacts = payload.get("artifacts")
+    if not isinstance(artifacts, dict):
+        raise HTTPException(status_code=409, detail="当前任务缺少 candidate，不能确认 Review。")
+    review = get_jato_monthly_update_review(job_id)
+    findings = review.get("reviewFindings")
+    has_blocker = bool(
+        isinstance(findings, list)
+        and any(isinstance(item, dict) and item.get("severity") == "blocker" for item in findings)
+    )
+    if normalized_decision == "approve" and has_blocker:
+        raise HTTPException(status_code=409, detail="Review 存在 blocker，不能批准 Publish。")
+    fingerprint = _candidate_fingerprint_id(artifacts)
+    payload["reviewApproval"] = {
+        "decision": "approved" if normalized_decision == "approve" else "rejected",
+        "reviewedAt": _utc_now().isoformat(),
+        "reviewedBy": triggered_by.strip() or "anonymous",
+        "candidateFingerprint": fingerprint,
+        "note": str(note or "").strip() or None,
+    }
+    _persist_job_state(payload)
+    _append_log(
+        _job_log_path(job_id),
+        f"[{_utc_now().isoformat()}] Review {normalized_decision} by {triggered_by.strip() or 'anonymous'}.",
+    )
+    return _serialize_job_state(payload, include_log_tail=True)
 
 
 def publish_jato_monthly_update_job(
@@ -2019,6 +2393,11 @@ def publish_jato_monthly_update_job(
     artifacts = payload.get("artifacts")
     if not isinstance(artifacts, dict):
         raise HTTPException(status_code=409, detail="当前任务缺少 staging 产物信息，不能 publish。")
+    approval = payload.get("reviewApproval")
+    if not isinstance(approval, dict) or approval.get("decision") != "approved":
+        raise HTTPException(status_code=409, detail="必须先完成并批准当前 candidate 的 Review，才能 publish。")
+    if str(approval.get("candidateFingerprint") or "") != _candidate_fingerprint_id(artifacts):
+        raise HTTPException(status_code=409, detail="candidate 在 Review 后已变化，请重新 Review 并批准。")
 
     source_paths = {
         "parquet": _project_path(str(artifacts.get("stagingOutputPath") or "").strip()),
@@ -2287,6 +2666,8 @@ def _run_logged_command(
     if return_code != 0:
         if tracking_job_id:
             _ensure_job_not_cancelled(tracking_job_id)
+        if return_code < 0:
+            raise _JobResourceKilled(label, return_code)
         raise RuntimeError(f"{label} 失败，退出码 {return_code}")
     if tracking_job_id:
         _ensure_job_not_cancelled(tracking_job_id)
@@ -2529,26 +2910,63 @@ def _parse_month_from_filename(filename: str) -> str | None:
     return None
 
 
+def _job_upload_sha256(payload: dict[str, Any]) -> str | None:
+    upload = payload.get("upload")
+    if not isinstance(upload, dict):
+        return None
+    value = str(upload.get("sha256") or "").strip().lower()
+    return value if re.fullmatch(r"[0-9a-f]{64}", value) else None
+
+
+def _find_existing_job_for_upload_sha256(
+    *,
+    file_sha256: str,
+    exclude_job_id: str | None = None,
+) -> dict[str, Any] | None:
+    for payload in sorted(
+        _list_job_state_payloads(),
+        key=lambda item: str(item.get("createdAt") or ""),
+        reverse=True,
+    ):
+        if str(payload.get("jobId") or "") == str(exclude_job_id or ""):
+            continue
+        if _job_upload_sha256(payload) != file_sha256:
+            continue
+        if str(payload.get("status") or "") in {"queued", "running", "success"}:
+            return payload
+    return None
+
+
+def _build_ingestion_key(*, countries: list[str], month: str, file_sha256: str) -> str:
+    normalized_countries = ",".join(sorted(_ordered_distinct_strings(countries)))
+    return f"{normalized_countries}|{_normalize_month(month)}|{file_sha256}"
+
+
 def _queue_monthly_update_job_from_stored_upload(
     *,
     job_id: str,
     triggered_by: str,
     upload_filename: str,
     stored_upload_path: Path,
-    month: str,
+    requested_month: str | None,
     file_sha256: str | None = None,
+    retry_of_job_id: str | None = None,
 ) -> dict[str, Any]:
     if stored_upload_path.stat().st_size <= 0:
         raise HTTPException(status_code=400, detail="上传文件为空，无法启动月更任务。")
 
-    normalized_month = _normalize_month(month)
-    batch_id = _allocate_batch_id(normalized_month)
+    normalized_requested_month = (
+        _normalize_month(requested_month)
+        if requested_month
+        else None
+    )
 
     now = _utc_now().isoformat()
     state: dict[str, Any] = {
         "jobId": job_id,
-        "month": normalized_month,
-        "batchId": batch_id,
+        "month": None,
+        "requestedMonth": normalized_requested_month,
+        "batchId": None,
         "status": "queued",
         "phase": "queued",
         "triggeredBy": triggered_by.strip() or "anonymous",
@@ -2571,12 +2989,16 @@ def _queue_monthly_update_job_from_stored_upload(
         "summaries": {},
         "logPath": _relative_to_project(_job_log_path(job_id)),
     }
+    if retry_of_job_id:
+        state["retryOfJobId"] = retry_of_job_id
     _persist_job_state(state)
     _append_log(
         _job_log_path(job_id),
-        f"[{now}] queued monthly update batch {batch_id} for month {normalized_month}",
+        (
+            f"[{now}] queued monthly update for independent worker"
+            f" (requestedMonth={normalized_requested_month or '-'})"
+        ),
     )
-    _launch_job_thread(job_id)
     return _serialize_job_state(state, include_log_tail=False)
 
 # Large file guard for direct multipart upload (not chunked)
@@ -2737,6 +3159,16 @@ def _run_job(job_id: str) -> None:
         state["finishedAt"] = _utc_now().isoformat()
         _persist_job_state(state)
         _write_jato_etl_pipeline_status(state)
+    except _JobResourceKilled as exc:
+        state = _load_job_state(job_id)
+        state["status"] = "failed"
+        state["phase"] = "resource_killed"
+        state["finishedAt"] = _utc_now().isoformat()
+        state["error"] = str(exc)
+        state["currentProcess"] = None
+        _persist_job_state(state)
+        _write_jato_etl_pipeline_status(state)
+        _append_log(log_path, f"[{_utc_now().isoformat()}] Resource killed: {exc}")
     except _JobCancelled as exc:
         state = _load_job_state(job_id)
         state["status"] = "cancelled"
@@ -2761,118 +3193,198 @@ def _run_job(job_id: str) -> None:
         _RUNNING_THREADS.pop(job_id, None)
 
 
-def _launch_job_thread(job_id: str) -> None:
-    worker = threading.Thread(
-        target=_run_job,
-        args=(job_id,),
-        name=f"jato-monthly-update-{job_id}",
-        daemon=True,
+def _inspect_uploaded_excel(path: Path) -> tuple[list[str], str]:
+    """Read only the country and monthly columns needed to classify an upload."""
+    header = _read_excel_with_fallback(
+        path,
+        sheet_name=DEFAULT_UPLOAD_SHEET_NAME,
+        nrows=0,
     )
-    _RUNNING_THREADS[job_id] = worker
-    worker.start()
+    header.columns = [str(column).strip() for column in header.columns]
+    country_column = _find_country_column(list(header.columns))
+    if country_column is None:
+        raise HTTPException(status_code=400, detail="上传文件必须包含国家列。")
+    month_columns = _detect_month_columns(list(header.columns))
+    if not month_columns:
+        raise HTTPException(status_code=400, detail="上传文件未识别到月份列。")
+    selected_columns = [country_column, *month_columns]
+    frame = _read_excel_with_fallback(
+        path,
+        sheet_name=DEFAULT_UPLOAD_SHEET_NAME,
+        usecols=selected_columns,
+    )
+    frame.columns = [str(column).strip() for column in frame.columns]
+    resolved_country_column = _find_country_column(list(frame.columns))
+    if resolved_country_column is None:
+        raise HTTPException(status_code=400, detail="上传文件国家列读取失败。")
+    countries = _ordered_distinct_strings(
+        frame[resolved_country_column].astype("string").fillna("").tolist()
+    )
+    if not countries:
+        raise HTTPException(status_code=400, detail="上传文件不包含有效国家数据。")
+    detected_month = _detect_latest_month_from_dataset_frame(
+        frame,
+        path_label="上传文件",
+    )
+    return countries, detected_month
 
 
-def _detect_single_country_upload(path: Path) -> tuple[str, str] | None:
-    """Read uploaded xlsx and return (country, month) if single-country, else None."""
-    try:
-        frame = _read_excel_with_fallback(path, sheet_name=0)
-        frame.columns = [str(c).strip() for c in frame.columns]
-        country_col = _find_country_column(list(frame.columns))
-        if country_col is None:
-            return None
-        frame[country_col] = frame[country_col].astype("string").fillna("").str.strip()
-        countries = _ordered_distinct_strings(frame[country_col].tolist())
-        if len(countries) != 1:
-            return None
-        month = _detect_latest_month_from_dataset_frame(frame, path_label="upload")
-        return countries[0], month
-    except Exception:
-        return None
+def _launch_job_thread(_job_id: str) -> None:
+    """Compatibility no-op: the isolated systemd worker owns execution."""
+    return
 
 
-def _queue_single_country_job(
-    *,
-    job_id: str,
-    country: str,
-    month: str,
-    triggered_by: str,
-    upload_filename: str,
-    stored_upload_path: Path,
-) -> dict[str, Any]:
-    """Create job state and launch single-country background runner."""
-    normalized_month = _normalize_month(month)
-    normalized_country = country.strip()
+def _reconcile_stale_monthly_update_jobs() -> list[str]:
+    resolved: list[str] = []
+    for payload in _list_job_state_payloads():
+        if str(payload.get("status") or "") != "running":
+            continue
+        pid = _current_process_pid(payload)
+        if pid is not None and _process_exists(pid):
+            continue
+        job_id = str(payload.get("jobId") or "")
+        if not job_id:
+            continue
+        now = _utc_now().isoformat()
+        payload["status"] = "failed"
+        payload["phase"] = "stale_failed"
+        payload["finishedAt"] = now
+        payload["currentProcess"] = None
+        payload["error"] = (
+            "Worker restarted or was terminated while this job was running; "
+            "the upload and log were preserved for a controlled retry."
+        )
+        _persist_job_state(payload)
+        _write_jato_etl_pipeline_status(payload)
+        _append_log(_job_log_path(job_id), f"[{now}] Worker reconciliation marked stale_failed.")
+        resolved.append(job_id)
+    return resolved
 
-    active_paths = _active_data_paths()
-    if active_paths["parquet"].exists():
-        try:
-            latest_months = _collect_dataset_country_latest_months(active_paths["parquet"])
-            active_latest = latest_months.get(normalized_country)
-            if active_latest and normalized_month <= active_latest:
-                raise HTTPException(
-                    status_code=409,
-                    detail=(
-                        f"国家「{normalized_country}」在 active 数据集中已有 {active_latest} 月的数据，"
-                        f"上传月份 {normalized_month} 不更新。请提供晚于 {active_latest} 的月份。"
-                    ),
-                )
-        except HTTPException:
-            raise
-        except Exception:
-            pass
 
-    job_dir = _job_dir(job_id)
-    now = _utc_now().isoformat()
-    batch_id = f"{normalized_month}-{normalized_country}-single"
-    state: dict[str, Any] = {
-        "jobId": job_id,
-        "month": normalized_month,
-        "batchId": batch_id,
-        "status": "queued",
-        "phase": "queued",
-        "triggeredBy": triggered_by.strip() or "anonymous",
-        "country": normalized_country,
-        "createdAt": now,
-        "updatedAt": now,
-        "startedAt": None,
-        "finishedAt": None,
-        "error": None,
-        "upload": {
-            "originalFilename": upload_filename,
-            "storedPath": _relative_to_project(stored_upload_path),
-            "sizeBytes": stored_upload_path.stat().st_size,
-            "sha256": _sha256_hex_for_path(stored_upload_path),
-        },
-        "plan": None,
-        "artifacts": {
-            "jobDir": _relative_to_project(job_dir),
-            "logPath": _relative_to_project(_job_log_path(job_id)),
-        },
-        "summaries": {},
-        "logPath": _relative_to_project(_job_log_path(job_id)),
-    }
+def _run_queued_monthly_update_job(job_id: str) -> None:
+    state = _load_job_state(job_id)
+    if str(state.get("status") or "") != "queued":
+        return
+    log_path = _job_log_path(job_id)
+    state["status"] = "running"
+    state["phase"] = "inspecting_upload"
+    state["startedAt"] = state.get("startedAt") or _utc_now().isoformat()
+    _persist_job_state(state)
+
+    upload = state.get("upload")
+    if not isinstance(upload, dict):
+        raise RuntimeError("任务缺少 upload 信息。")
+    stored_upload_path = _project_path(str(upload.get("storedPath") or ""))
+    if stored_upload_path is None or not stored_upload_path.exists():
+        raise RuntimeError("上传副本不存在，无法由 worker 执行任务。")
+
+    countries, detected_month = _inspect_uploaded_excel(stored_upload_path)
+    requested_month = state.get("requestedMonth")
+    if requested_month and _normalize_month(str(requested_month)) != detected_month:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                f"上传文件实际月份为 {detected_month}，与请求月份 {requested_month} 不一致。"
+            ),
+        )
+    expected_country = str(state.get("expectedCountry") or "").strip()
+    if expected_country and countries != [expected_country]:
+        raise HTTPException(
+            status_code=409,
+            detail=f"显式单国任务要求 {expected_country}，文件实际国家为 {', '.join(countries)}。",
+        )
+
+    file_sha256 = _job_upload_sha256(state) or _sha256_hex_for_path(stored_upload_path)
+    ingestion_key = _build_ingestion_key(
+        countries=countries,
+        month=detected_month,
+        file_sha256=file_sha256,
+    )
+    retry_of_job_id = str(state.get("retryOfJobId") or "").strip()
+    if not retry_of_job_id:
+        for existing in _list_job_state_payloads():
+            if str(existing.get("jobId") or "") == job_id:
+                continue
+            if str(existing.get("ingestionKey") or "") != ingestion_key:
+                continue
+            if str(existing.get("status") or "") not in {"queued", "running", "success"}:
+                continue
+            state["status"] = "duplicate"
+            state["phase"] = "duplicate"
+            state["duplicateOfJobId"] = str(existing.get("jobId") or "")
+            state["ingestionKey"] = ingestion_key
+            state["finishedAt"] = _utc_now().isoformat()
+            _persist_job_state(state)
+            _append_log(log_path, f"[{_utc_now().isoformat()}] Duplicate of {state['duplicateOfJobId']}.")
+            return
+
+    state["countryScope"] = countries
+    state["month"] = detected_month
+    state["ingestionKey"] = ingestion_key
+    state["jobType"] = "single_country" if len(countries) == 1 else "batch"
+    if len(countries) == 1:
+        state["country"] = countries[0]
+        state["batchId"] = f"{detected_month}-{countries[0]}-single"
+    else:
+        state["batchId"] = _allocate_batch_id(detected_month)
+    state["status"] = "queued"
+    state["phase"] = "queued"
     _persist_job_state(state)
     _append_log(
-        _job_log_path(job_id),
-        f"[{now}] 已入队单国家任务：{normalized_country} {normalized_month}",
+        log_path,
+        f"[{_utc_now().isoformat()}] Worker classified job type={state['jobType']} countries={','.join(countries)} month={detected_month}.",
     )
 
-    worker = threading.Thread(
-        target=_run_single_country_job,
-        args=(job_id,),
-        name=f"jato-sc-{job_id}",
-        daemon=True,
-    )
-    _RUNNING_THREADS[job_id] = worker
-    worker.start()
+    if state["jobType"] == "single_country":
+        _run_single_country_job(job_id)
+    else:
+        _run_job(job_id)
 
-    return _serialize_job_state(state, include_log_tail=False)
+
+def run_jato_monthly_update_worker_once() -> dict[str, Any]:
+    """Run at most one queued job. Called only by the isolated worker process."""
+    with _exclusive_worker_cycle() as acquired:
+        if not acquired:
+            return {"processedJobId": None, "reconciledJobIds": [], "skipped": "worker_lock_held"}
+        reconciled = _reconcile_stale_monthly_update_jobs()
+        queued = sorted(
+            (
+                payload
+                for payload in _list_job_state_payloads()
+                if str(payload.get("status") or "") == "queued"
+            ),
+            key=lambda item: str(item.get("createdAt") or ""),
+        )
+        if not queued:
+            _write_worker_status(state="idle", detail="No queued monthly update jobs.")
+            return {"processedJobId": None, "reconciledJobIds": reconciled}
+        job_id = str(queued[0].get("jobId") or "")
+        _write_worker_status(state="running", job_id=job_id, detail="Processing queued monthly update.")
+        try:
+            if str(queued[0].get("operation") or "") == "smart_merge":
+                _run_smart_merge(job_id)
+            else:
+                _run_queued_monthly_update_job(job_id)
+        except Exception as exc:
+            state = _load_job_state(job_id)
+            state["status"] = "failed"
+            state["phase"] = "failed"
+            state["finishedAt"] = _utc_now().isoformat()
+            state["error"] = str(exc)
+            state["currentProcess"] = None
+            _persist_job_state(state)
+            _write_jato_etl_pipeline_status(state)
+            _append_log(_job_log_path(job_id), f"[{_utc_now().isoformat()}] Worker failed: {exc}")
+        finally:
+            _write_worker_status(state="idle", job_id=job_id, detail="Finished worker cycle.")
+        return {"processedJobId": job_id, "reconciledJobIds": reconciled}
 
 
 def create_jato_monthly_update_job(
     *,
     file: UploadFile,
     triggered_by: str,
+    month: str | None = None,
 ) -> dict[str, Any]:
     filename = _validate_upload(file)
 
@@ -2894,16 +3406,13 @@ def create_jato_monthly_update_job(
     with stored_upload_path.open("wb") as handle:
         shutil.copyfileobj(file.file, handle)
 
-    month = (
-        _parse_month_from_filename(filename)
-        or datetime.now().strftime("%Y-%m")
-    )
     return _queue_monthly_update_job_from_stored_upload(
         job_id=job_id,
         triggered_by=triggered_by,
         upload_filename=filename,
         stored_upload_path=stored_upload_path,
-        month=month,
+        requested_month=month or _parse_month_from_filename(filename),
+        file_sha256=_sha256_hex_for_path(stored_upload_path),
     )
 
 
@@ -2926,15 +3435,13 @@ def create_jato_monthly_update_job_from_upload(
         detail="上传文件指纹缺失，请重新完成组装。",
     )
 
-    resolved_month = (
-        month
-        or _parse_month_from_filename(filename)
-    )
-    if not resolved_month:
-        raise HTTPException(
-            status_code=400,
-            detail="无法从文件名解析月份，请在上传时明确指定 month 参数。",
-        )
+    requested_month = month or _parse_month_from_filename(filename)
+    existing_job = _find_existing_job_for_upload_sha256(file_sha256=file_sha256)
+    if existing_job is not None:
+        state["status"] = "deduplicated"
+        state["duplicateOfJobId"] = str(existing_job.get("jobId") or "")
+        _persist_upload_session(state)
+        return _serialize_job_state(existing_job, include_log_tail=False)
 
     job_id = f"jato-update-{uuid4().hex[:8]}"
     uploads_dir = _job_dir(job_id) / "uploads"
@@ -2947,7 +3454,7 @@ def create_jato_monthly_update_job_from_upload(
             triggered_by=triggered_by,
             upload_filename=filename,
             stored_upload_path=stored_upload_path,
-            month=resolved_month,
+            requested_month=requested_month,
             file_sha256=file_sha256,
         )
     except Exception:
@@ -3000,23 +3507,20 @@ def retry_failed_jato_monthly_update_job(
     stored_upload_path = uploads_dir / filename
     shutil.copy2(source_upload_path, stored_upload_path)
     source_month = str(source_state.get("month") or "").strip()
-    retry_month = (
-        source_month
-        or _parse_month_from_filename(filename)
-        or datetime.now().strftime("%Y-%m")
-    )
+    retry_month = source_month or _parse_month_from_filename(filename)
     try:
         result = _queue_monthly_update_job_from_stored_upload(
             job_id=job_id,
             triggered_by=triggered_by,
             upload_filename=filename,
             stored_upload_path=stored_upload_path,
-            month=retry_month,
+            requested_month=retry_month,
             file_sha256=(
                 str(source_upload.get("sha256"))
                 if source_upload.get("sha256") is not None
                 else None
             ),
+            retry_of_job_id=source_job_id,
         )
     except Exception:
         shutil.rmtree(_job_dir(job_id), ignore_errors=True)
@@ -3179,6 +3683,16 @@ def _run_single_country_job(job_id: str) -> None:
             f"[{_utc_now().isoformat()}] 单国家任务完成：{country} {month}。可前往 Publish。",
         )
 
+    except _JobResourceKilled as exc:
+        state = _load_job_state(job_id)
+        state["status"] = "failed"
+        state["phase"] = "resource_killed"
+        state["finishedAt"] = _utc_now().isoformat()
+        state["error"] = str(exc)
+        state["currentProcess"] = None
+        _persist_job_state(state)
+        _write_jato_etl_pipeline_status(state)
+        _append_log(log_path, f"[{_utc_now().isoformat()}] Resource killed: {exc}")
     except _JobCancelled as exc:
         state = _load_job_state(job_id)
         state["status"] = "cancelled"
@@ -3227,14 +3741,19 @@ def create_single_country_job(
     with stored_upload_path.open("wb") as handle:
         shutil.copyfileobj(file.file, handle)
 
-    return _queue_single_country_job(
+    queued = _queue_monthly_update_job_from_stored_upload(
         job_id=job_id,
-        country=normalized_country,
-        month=normalized_month,
         triggered_by=triggered_by,
         upload_filename=filename,
         stored_upload_path=stored_upload_path,
+        requested_month=normalized_month,
+        file_sha256=_sha256_hex_for_path(stored_upload_path),
     )
+    payload = _load_job_state(job_id)
+    payload["expectedCountry"] = normalized_country
+    payload["requestedJobType"] = "single_country"
+    _persist_job_state(payload)
+    return _serialize_job_state(payload, include_log_tail=False)
 
 
 # ── Smart Merge ──────────────────────────────────────────────────────────────
@@ -3399,6 +3918,16 @@ def _run_smart_merge(job_id: str) -> None:
             f"[{_utc_now().isoformat()}] Smart Merge: 全部完成。请进入 Review → Publish。",
         )
 
+    except _JobResourceKilled as exc:
+        state = _load_job_state(job_id)
+        state["status"] = "failed"
+        state["phase"] = "resource_killed"
+        state["finishedAt"] = _utc_now().isoformat()
+        state["error"] = str(exc)
+        state["currentProcess"] = None
+        _persist_job_state(state)
+        _write_jato_etl_pipeline_status(state)
+        _append_log(log_path, f"[{_utc_now().isoformat()}] Resource killed: {exc}")
     except _JobCancelled as exc:
         state = _load_job_state(job_id)
         state["status"] = "cancelled"
@@ -3420,17 +3949,6 @@ def _run_smart_merge(job_id: str) -> None:
         _append_log(log_path, traceback.format_exc())
     finally:
         _RUNNING_THREADS.pop(job_id, None)
-
-
-def _launch_smart_merge_thread(job_id: str) -> None:
-    worker = threading.Thread(
-        target=_run_smart_merge,
-        args=(job_id,),
-        name=f"jato-smart-merge-{job_id}",
-        daemon=True,
-    )
-    _RUNNING_THREADS[job_id] = worker
-    worker.start()
 
 
 def create_smart_merge_candidate(
@@ -3471,9 +3989,11 @@ def create_smart_merge_candidate(
         raise HTTPException(status_code=409, detail="找不到 active 数据集，不能执行 Smart Merge。")
 
     payload["triggeredBy"] = triggered_by.strip() or "anonymous"
+    payload["status"] = "queued"
+    payload["phase"] = "queued_smart_merge"
+    payload["operation"] = "smart_merge"
+    payload.pop("reviewApproval", None)
     _persist_job_state(payload)
-
-    _launch_smart_merge_thread(job_id)
     return _serialize_job_state(payload, include_log_tail=False)
 
 

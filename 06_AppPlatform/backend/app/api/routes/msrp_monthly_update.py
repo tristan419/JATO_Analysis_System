@@ -2,6 +2,7 @@ from fastapi import APIRouter, Depends, File, Form, Query, Request, UploadFile
 
 from app.core.security import UserContext, require_min_role
 from app.services.jato_monthly_update_service import (
+    approve_jato_monthly_update_review,
     cancel_jato_monthly_update_job,
     complete_jato_monthly_update_upload,
     create_jato_monthly_update_job,
@@ -12,6 +13,7 @@ from app.services.jato_monthly_update_service import (
     get_jato_monthly_update_job,
     get_jato_monthly_update_maintenance_status,
     get_jato_monthly_update_review,
+    get_jato_monthly_update_worker_status as get_jato_monthly_update_worker_status_service,
     initiate_jato_monthly_update_upload,
     list_jato_monthly_update_jobs,
     promote_current_active_to_baseline,
@@ -32,11 +34,11 @@ def post_monthly_update_job(
     file: UploadFile = File(...),
     user: UserContext = Depends(require_min_role("editor")),
 ) -> dict[str, object]:
-    _ = month
     return {
         "item": create_jato_monthly_update_job(
             file=file,
             triggered_by=user.name,
+            month=month,
         )
     }
 
@@ -134,6 +136,22 @@ def get_monthly_update_review(
     _user: UserContext = Depends(require_min_role("editor")),
 ) -> dict[str, object]:
     return {"item": get_jato_monthly_update_review(job_id)}
+
+
+@router.post("/monthly-update-jobs/{job_id}/review-approval")
+def post_monthly_update_review_approval(
+    job_id: str,
+    payload: dict[str, object],
+    user: UserContext = Depends(require_min_role("editor")),
+) -> dict[str, object]:
+    return {
+        "item": approve_jato_monthly_update_review(
+            job_id=job_id,
+            triggered_by=user.name,
+            decision=str(payload.get("decision", "")),
+            note=str(payload.get("note", "")) if payload.get("note") is not None else None,
+        )
+    }
 
 
 @router.post("/monthly-update-jobs/{job_id}/publish")
@@ -245,6 +263,13 @@ def get_monthly_update_maintenance_status(
     _user: UserContext = Depends(require_min_role("editor")),
 ) -> dict[str, object]:
     return {"item": get_jato_monthly_update_maintenance_status()}
+
+
+@router.get("/monthly-update-worker/status")
+def get_monthly_update_worker_status(
+    _user: UserContext = Depends(require_min_role("editor")),
+) -> dict[str, object]:
+    return {"item": get_jato_monthly_update_worker_status_service()}
 
 
 @router.post("/monthly-update-maintenance/promote-baseline")

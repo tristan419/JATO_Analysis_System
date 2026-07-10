@@ -40,7 +40,8 @@ def _configure_baseline_dirs(
 
 def _headers() -> dict[str, str]:
     return {
-        "X-Auth-Token": "change-me",
+        # Unknown dev token resolves to the permissive local admin context.
+        "X-Auth-Token": "monthly-update-route-test-admin",
         "X-User-Name": "tester",
     }
 
@@ -86,8 +87,8 @@ def test_create_monthly_update_job_route_persists_job(
 
     assert response.status_code == 200
     payload = response.json()["item"]
-    assert payload["month"] is not None  # from filename parse or mock
-    assert payload["batchId"] is not None
+    assert payload["month"] is None
+    assert payload["batchId"] is None
     assert payload["status"] == "queued"
     assert payload["phase"] == "queued"
     assert payload["triggeredBy"] == "tester"
@@ -372,7 +373,9 @@ def test_chunked_monthly_update_upload_routes_create_job(
     assert create_response.status_code == 200
     payload = create_response.json()["item"]
     assert payload["status"] == "queued"
-    assert payload["batchId"] is not None  # from filename parse "JATO-2026.03-patch"
+    assert payload["month"] is None
+    assert payload["requestedMonth"] == "2026-03"
+    assert payload["batchId"] is None
     assert payload["phase"] == "queued"
     assert payload["upload"]["sizeBytes"] == 10
     assert payload["upload"]["sha256"] == hashlib.sha256(b"abcdefghij").hexdigest()
@@ -431,7 +434,9 @@ def test_retry_failed_monthly_update_job_route_requeues_existing_upload(
     payload = response.json()["item"]
     assert payload["jobId"] != source_job_id
     assert payload["status"] == "queued"
-    assert payload["batchId"] is not None  # from source job state month
+    assert payload["month"] is None
+    assert payload["requestedMonth"] == "2026-03"
+    assert payload["batchId"] is None
     assert payload["phase"] == "queued"
     assert payload["triggeredBy"] == "tester"
     assert payload["upload"]["sha256"] == hashlib.sha256(b"retry-me").hexdigest()
@@ -625,3 +630,50 @@ def test_rollback_monthly_update_job_route_returns_rolled_back_job(monkeypatch) 
     payload = response.json()["item"]
     assert payload["jobId"] == "jato-update-1234abcd"
     assert payload["publication"]["rolledBackBy"] == "tester"
+
+
+def test_review_approval_and_worker_status_routes_use_service_guards(monkeypatch) -> None:
+    observed: dict[str, object] = {}
+    monkeypatch.setattr(
+        msrp_monthly_update,
+        "approve_jato_monthly_update_review",
+        lambda *, job_id, triggered_by, decision, note: observed.update({
+            "jobId": job_id,
+            "triggeredBy": triggered_by,
+            "decision": decision,
+            "note": note,
+        }) or {
+            "jobId": job_id,
+            "status": "success",
+            "phase": "completed",
+            "reviewApproval": {"decision": "approved", "reviewedBy": triggered_by},
+        },
+    )
+    monkeypatch.setattr(
+        msrp_monthly_update,
+        "get_jato_monthly_update_worker_status_service",
+        lambda: {
+            "state": "idle",
+            "healthy": True,
+            "queuedJobCount": 0,
+            "queuedJobIds": [],
+        },
+    )
+
+    client = TestClient(app)
+    approval_response = client.post(
+        "/v1/msrp/monthly-update-jobs/jato-update-1234abcd/review-approval",
+        headers=_headers(),
+        json={"decision": "approve", "note": "checked HU May"},
+    )
+    worker_response = client.get("/v1/msrp/monthly-update-worker/status", headers=_headers())
+
+    assert approval_response.status_code == 200
+    assert observed == {
+        "jobId": "jato-update-1234abcd",
+        "triggeredBy": "tester",
+        "decision": "approve",
+        "note": "checked HU May",
+    }
+    assert worker_response.status_code == 200
+    assert worker_response.json()["item"]["healthy"] is True
