@@ -893,16 +893,82 @@ def _write_dryrun_runs_index(
         except (json.JSONDecodeError, OSError):
             pass
 
+    # A source probe must not replace the stable all-country baseline. If an
+    # older index lost that baseline, rebuild it from the canonical latest report.
+    if not update_latest and not index_data.get("latestRunId"):
+        stable_report = _load_v3_report_from_path(latest_path)
+        stable_run_id = str((stable_report or {}).get("runId") or "")
+        if stable_report and stable_run_id and not stable_report.get("isSourceFiltered"):
+            stable_history_path = latest_path.parent / f"dryrun_report_{stable_run_id}.json"
+            stable_artifact_path = (
+                stable_history_path if stable_history_path.is_file() else latest_path
+            )
+            stable_entry = _dryrun_run_index_entry(
+                stable_report,
+                artifact_path=stable_artifact_path,
+                latest_path=latest_path,
+                finished_at=str(stable_report.get("generatedAt") or now),
+                updates_latest=True,
+            )
+            existing_stable_ids = {
+                str(run.get("runId") or "")
+                for run in index_data.get("runs", [])
+                if isinstance(run, dict)
+            }
+            if stable_run_id not in existing_stable_ids:
+                index_data["runs"] = [stable_entry, *(index_data.get("runs") or [])]
+            index_data["latestRunId"] = stable_run_id
+
+    run_id = str(report.get("runId") or "")
+    run_entry = _dryrun_run_index_entry(
+        report,
+        artifact_path=history_path,
+        latest_path=latest_path,
+        finished_at=now,
+        updates_latest=update_latest,
+    )
+
+    existing_runs = [
+        run
+        for run in index_data.get("runs", [])
+        if run.get("runId") != run_id
+    ]
+    existing_runs.insert(0, run_entry)
+    index_data.update({
+        "schemaVersion": "msrp_dryrun_runs_index_v1",
+        "updatedAt": now,
+        "latestRunId": run_id if update_latest else index_data.get("latestRunId"),
+        "runs": existing_runs[:100],
+    })
+    index_path.write_text(json.dumps(index_data, indent=2, ensure_ascii=False) + "\n")
+
+
+def _load_v3_report_from_path(path: Path) -> dict | None:
+    try:
+        report = json.loads(path.read_text())
+    except (json.JSONDecodeError, OSError):
+        return None
+    return report if report.get("schemaVersion") == "msrp_dryrun_report_v3" else None
+
+
+def _dryrun_run_index_entry(
+    report: dict,
+    *,
+    artifact_path: Path,
+    latest_path: Path,
+    finished_at: str,
+    updates_latest: bool,
+) -> dict:
     summary = report.get("summary") or {}
-    run_id = report.get("runId")
-    run_entry = {
+    run_id = str(report.get("runId") or "")
+    return {
         "runId": run_id,
         "mode": "dryrun",
         "batch": report.get("batch", ""),
         "startedAt": report.get("generatedAt"),
-        "finishedAt": now,
+        "finishedAt": finished_at,
         "status": summary.get("status", "unknown"),
-        "updatesLatestArtifact": bool(update_latest),
+        "updatesLatestArtifact": bool(updates_latest),
         "isSourceFiltered": bool(report.get("isSourceFiltered")),
         "sourceFilter": report.get("sourceFilter") or [],
         "gateStatus": summary.get("gateStatus"),
@@ -918,26 +984,12 @@ def _write_dryrun_runs_index(
         "expectedCountryCount": len(report.get("expectedCountries") or []),
         "observedCountryCount": len(report.get("observedCountries") or []),
         "missingCountryCount": len(report.get("missingCountries") or []),
-        "artifactPath": _relative_to_repo(history_path),
+        "artifactPath": _relative_to_repo(artifact_path),
         "latestArtifactPath": _relative_to_repo(latest_path),
         "reportMdPath": f"hermes/reports/msrp_country_progress_{run_id}.md",
         "runDir": "",
         "logFile": "",
     }
-
-    existing_runs = [
-        run
-        for run in index_data.get("runs", [])
-        if run.get("runId") != run_id
-    ]
-    existing_runs.insert(0, run_entry)
-    index_data.update({
-        "schemaVersion": "msrp_dryrun_runs_index_v1",
-        "updatedAt": now,
-        "latestRunId": run_id if update_latest else index_data.get("latestRunId"),
-        "runs": existing_runs[:100],
-    })
-    index_path.write_text(json.dumps(index_data, indent=2, ensure_ascii=False) + "\n")
 
 
 def _write_dryrun_report_artifacts(

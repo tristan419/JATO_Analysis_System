@@ -661,11 +661,26 @@ def _current_from_v3_report(report: dict[str, Any], index_data: dict[str, Any] |
         if run.get("runId") == run_id:
             run_meta = run
             break
-    run_descriptor = run_meta or report
+    run_descriptor = run_meta or {
+        "runId": run_id,
+        "batch": report.get("batch") or "",
+        "startedAt": report.get("generatedAt"),
+        "finishedAt": report.get("generatedAt"),
+        "status": summary.get("status"),
+        "gateStatus": summary.get("gateStatus"),
+        "gateThreshold": summary.get("gateThreshold"),
+        "updatesLatestArtifact": not _is_source_filtered_run(report),
+        "isSourceFiltered": _is_source_filtered_run(report),
+        "sourceFilter": _string_list(report.get("sourceFilter")),
+    }
 
     countries: list[dict[str, Any]] = []
     for country in report.get("countriesDetail") or []:
-        normalized = _normalize_country_from_v3(country)
+        normalized = _normalize_country_from_v3(
+            country,
+            run_meta=run_descriptor,
+            latest_run_id=run_id if _updates_latest_artifact(run_descriptor) else "",
+        )
         if normalized:
             countries.append(normalized)
     finance = _finance_summary_from_countries(countries, summary)
@@ -1367,15 +1382,23 @@ def get_dryrun_dashboard(run_id: str | None = None) -> dict[str, Any]:
             "timestamp": ts.isoformat() if ts else None,
         })
 
-    all_countries = _all_country_latest_from_runs_index(index_data) or current.get("countries", [])
+    all_countries = _all_country_latest_from_runs_index(index_data)
+    if not all_countries and current.get("updatesLatestArtifact"):
+        all_countries = current.get("countries", [])
+    stable_coverage = _stable_coverage_summary(all_countries, current)
+    latest_run_id = (
+        (index_data or {}).get("latestRunId")
+        or stable_coverage.get("latestRunId")
+        or (current.get("runId") if current.get("updatesLatestArtifact") else None)
+    )
     return {
         "current": current,
         "allCountries": all_countries,
-        "stableCoverage": _stable_coverage_summary(all_countries, current),
+        "stableCoverage": stable_coverage,
         "history": history,
         "logFiles": log_files,
         "selectedRunId": run_id,
-        "latestRunId": (index_data or {}).get("latestRunId"),
+        "latestRunId": latest_run_id,
         "serverTime": datetime.now(timezone.utc).isoformat(),
     }
 

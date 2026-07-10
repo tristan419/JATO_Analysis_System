@@ -620,6 +620,63 @@ def test_write_dryrun_report_artifacts_preserves_latest_for_source_filter(
     assert calls == []
 
 
+def test_source_probe_rebuilds_missing_stable_index_from_latest_artifact(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr(batch_dryrun, "_write_v3_source_repair_backlog", lambda *_: None)
+    stable_report = {
+        "schemaVersion": "msrp_dryrun_report_v3",
+        "runId": "msrp-dryrun-stable",
+        "batch": "se,fi",
+        "isSourceFiltered": False,
+        "sourceFilter": [],
+        "expectedCountries": ["se", "fi"],
+        "observedCountries": ["se", "fi"],
+        "missingCountries": [],
+        "summary": {
+            "status": "success",
+            "gateStatus": "allowed",
+            "gateThreshold": 70,
+            "passPct": 96.8,
+            "total": 31,
+            "pass": 30,
+            "empty": 1,
+            "fail": 0,
+            "errors": 0,
+        },
+    }
+    diagnostic_report = {
+        **stable_report,
+        "runId": "msrp-dryrun-source-diagnostic",
+        "isSourceFiltered": True,
+        "sourceFilter": ["polestar_4_no_draft_scrapling"],
+        "expectedCountries": ["no"],
+        "observedCountries": ["no"],
+        "summary": {**stable_report["summary"], "total": 1, "pass": 1, "passPct": 100.0},
+    }
+    (tmp_path / "dryrun_report.json").write_text(json.dumps(stable_report), encoding="utf-8")
+    (tmp_path / "dryrun_runs_index.json").write_text(
+        json.dumps({"schemaVersion": "msrp_dryrun_runs_index_v1", "latestRunId": None, "runs": []}),
+        encoding="utf-8",
+    )
+
+    batch_dryrun._write_dryrun_report_artifacts(
+        diagnostic_report,
+        tmp_path,
+        update_latest=False,
+    )
+
+    index = json.loads((tmp_path / "dryrun_runs_index.json").read_text())
+    assert index["latestRunId"] == "msrp-dryrun-stable"
+    assert [run["runId"] for run in index["runs"]] == [
+        "msrp-dryrun-source-diagnostic",
+        "msrp-dryrun-stable",
+    ]
+    assert index["runs"][1]["updatesLatestArtifact"] is True
+    assert index["runs"][1]["isSourceFiltered"] is False
+
+
 def test_write_dryrun_report_artifacts_updates_latest_for_full_run(
     tmp_path: Path,
     monkeypatch,

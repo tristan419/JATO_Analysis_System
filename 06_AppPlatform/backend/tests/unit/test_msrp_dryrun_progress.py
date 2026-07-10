@@ -1411,3 +1411,81 @@ def test_partial_dashboard_aggregates_expected_countries_and_failures(tmp_path, 
     assert current["missingCountries"] == []
     assert current["failureBreakdown"] == {"http_timeout": 2}
     assert current["strategyRecommendations"] == {"retry_or_reduce_concurrency": 2}
+
+
+def test_dashboard_uses_full_latest_artifact_when_index_has_only_source_probes(
+    tmp_path,
+    monkeypatch,
+):
+    artifacts = tmp_path / "artifacts"
+    logs = tmp_path / "logs"
+    artifacts.mkdir()
+    logs.mkdir()
+    stable_run_id = "msrp-dryrun-20260709-193101"
+    probe_run_id = "msrp-dryrun-20260710-011611"
+    stable_report = {
+        "schemaVersion": "msrp_dryrun_report_v3",
+        "runId": stable_run_id,
+        "batch": "batch_a",
+        "expectedCountries": ["se", "fi"],
+        "observedCountries": ["se", "fi"],
+        "missingCountries": [],
+        "duplicateCountries": [],
+        "summary": {
+            "total": 2,
+            "pass": 2,
+            "empty": 0,
+            "fail": 0,
+            "errors": 0,
+            "passPct": 100.0,
+            "status": "success",
+            "gateThreshold": 70,
+            "gateStatus": "allowed",
+        },
+        "countriesDetail": [
+            {"countryCode": "se", "total": 1, "pass": 1, "empty": 0, "fail": 0, "errors": 0, "passPct": 100.0, "status": "success", "sources": []},
+            {"countryCode": "fi", "total": 1, "pass": 1, "empty": 0, "fail": 0, "errors": 0, "passPct": 100.0, "status": "success", "sources": []},
+        ],
+    }
+    probe_report = {
+        **stable_report,
+        "runId": probe_run_id,
+        "isSourceFiltered": True,
+        "sourceFilter": ["polestar_4_no_draft_scrapling"],
+        "expectedCountries": ["no"],
+        "observedCountries": ["no"],
+        "countriesDetail": [
+            {"countryCode": "no", "total": 1, "pass": 0, "empty": 1, "fail": 0, "errors": 0, "passPct": 0.0, "status": "failure", "sources": []},
+        ],
+    }
+    index = {
+        "schemaVersion": "msrp_dryrun_runs_index_v1",
+        "latestRunId": None,
+        "runs": [
+            {
+                "runId": probe_run_id,
+                "updatesLatestArtifact": False,
+                "isSourceFiltered": True,
+                "sourceFilter": ["polestar_4_no_draft_scrapling"],
+                "artifactPath": str(artifacts / f"dryrun_report_{probe_run_id}.json"),
+            }
+        ],
+    }
+    (artifacts / "dryrun_report.json").write_text(json.dumps(stable_report), encoding="utf-8")
+    (artifacts / f"dryrun_report_{probe_run_id}.json").write_text(json.dumps(probe_report), encoding="utf-8")
+    (artifacts / "dryrun_runs_index.json").write_text(json.dumps(index), encoding="utf-8")
+
+    monkeypatch.setattr(progress, "ARTIFACT_DIR", artifacts)
+    monkeypatch.setattr(progress, "LATEST_REPORT_PATH", artifacts / "dryrun_report.json")
+    monkeypatch.setattr(progress, "RUNS_INDEX_PATH", artifacts / "dryrun_runs_index.json")
+    monkeypatch.setattr(progress, "LOG_DIR", logs)
+    monkeypatch.setattr(progress, "LOCK_FILE", tmp_path / "missing.lock")
+
+    dashboard = progress.get_dryrun_dashboard()
+
+    assert dashboard["current"]["runId"] == stable_run_id
+    assert dashboard["current"]["updatesLatestArtifact"] is True
+    assert [country["countryCode"] for country in dashboard["allCountries"]] == ["se", "fi"]
+    assert {country["runId"] for country in dashboard["allCountries"]} == {stable_run_id}
+    assert dashboard["stableCoverage"]["latestRunId"] == stable_run_id
+    assert dashboard["latestRunId"] == stable_run_id
