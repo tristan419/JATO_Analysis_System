@@ -11,6 +11,12 @@ on:
       - "01_RAW_DATA/VOC_Nordic_SUV_Users_100.xlsx"
       - ".github/workflows/deploy-fullstack-tencent.yml"
   workflow_dispatch:
+    inputs:
+      enable_monthly_worker:
+        description: Enable the isolated JATO monthly-update worker after deployment
+        required: false
+        default: false
+        type: boolean
 
 concurrency:
   group: deploy-fullstack-main
@@ -203,6 +209,7 @@ jobs:
           DEPLOY_ENABLE_HTTPS: ${{ vars.DEPLOY_ENABLE_HTTPS }}
           DEPLOY_CERTBOT_EMAIL: ${{ secrets.DEPLOY_CERTBOT_EMAIL }}
           VITE_ASSET_BASE_URL: ${{ vars.VITE_ASSET_BASE_URL }}
+          ENABLE_JATO_MONTHLY_WORKER: ${{ github.event_name == 'workflow_dispatch' && inputs.enable_monthly_worker || 'false' }}
         run: |
           set -euo pipefail
           if [ -z "${SSH_PORT:-}" ]; then
@@ -231,6 +238,7 @@ jobs:
           REMOTE_EXPORTS+="export DEPLOY_RUN_ATTEMPT=$(printf '%q' "${GITHUB_RUN_ATTEMPT:-}"); "
           REMOTE_EXPORTS+="export DEPLOY_REPOSITORY=$(printf '%q' "${GITHUB_REPOSITORY:-}"); "
           REMOTE_EXPORTS+="export DEPLOY_WORKFLOW=$(printf '%q' "${GITHUB_WORKFLOW:-}"); "
+          REMOTE_EXPORTS+="export ENABLE_JATO_MONTHLY_WORKER=$(printf '%q' "${ENABLE_JATO_MONTHLY_WORKER:-false}"); "
           REMOTE_EXPORTS+="export DEEPSEEK_API_KEY=$(printf '%q' '${{ secrets.DEEPSEEK_API_KEY }}'); "
           REMOTE_EXPORTS+="export HERMES_SYNC_TOKEN=$(printf '%q' '${{ secrets.HERMES_SYNC_TOKEN }}'); "
           REMOTE_EXPORTS+="export GOOGLE_CLIENT_ID=$(printf '%q' '${{ secrets.GOOGLE_CLIENT_ID }}'); "
@@ -468,6 +476,7 @@ jobs:
           DEPLOY_ENABLE_HTTPS: ${{ vars.DEPLOY_ENABLE_HTTPS }}
           DEPLOY_CERTBOT_EMAIL: ${{ secrets.DEPLOY_CERTBOT_EMAIL }}
           VITE_ASSET_BASE_URL: ${{ vars.VITE_ASSET_BASE_URL }}
+          ENABLE_JATO_MONTHLY_WORKER: ${{ github.event_name == 'workflow_dispatch' && inputs.enable_monthly_worker || 'false' }}
         run: |
           set -euo pipefail
           if [ -z "${SSH_PORT:-}" ]; then
@@ -495,6 +504,7 @@ jobs:
           REMOTE_EXPORTS+="export DEPLOY_RUN_ATTEMPT=$(printf '%q' "${GITHUB_RUN_ATTEMPT:-}"); "
           REMOTE_EXPORTS+="export DEPLOY_REPOSITORY=$(printf '%q' "${GITHUB_REPOSITORY:-}"); "
           REMOTE_EXPORTS+="export DEPLOY_WORKFLOW=$(printf '%q' "${GITHUB_WORKFLOW:-}"); "
+          REMOTE_EXPORTS+="export ENABLE_JATO_MONTHLY_WORKER=$(printf '%q' "${ENABLE_JATO_MONTHLY_WORKER:-false}"); "
           REMOTE_EXPORTS+="export DEEPSEEK_API_KEY=$(printf '%q' '${{ secrets.DEEPSEEK_API_KEY }}'); "
           REMOTE_EXPORTS+="export HERMES_SYNC_TOKEN=$(printf '%q' '${{ secrets.HERMES_SYNC_TOKEN }}'); "
           REMOTE_EXPORTS+="export GOOGLE_CLIENT_ID=$(printf '%q' '${{ secrets.GOOGLE_CLIENT_ID }}'); "
