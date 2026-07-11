@@ -2,7 +2,9 @@ name: deploy-fullstack-tencent  # auto-deploy DeepSeek + Governed Copilot v2
 
 on:
   push:
-    branches: ["main"]
+    # Temporary recovery trigger for the isolated Hungary monthly-update rollout.
+    # Remove after the controlled deployment completes.
+    branches: ["main", "codex/jato-monthly-resource-isolation"]
     paths:
       - "06_AppPlatform/**"
       - "07_ScrapingToolkit/**"
