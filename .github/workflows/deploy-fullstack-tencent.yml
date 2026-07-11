@@ -135,7 +135,7 @@ jobs:
           tar tzf "$RUNNER_TEMP/JATO_deploy.tar.gz" "$REQUIRED_WORKBOOK"
 
       - name: Upload archive to server
-        if: ${{ false }}
+        if: ${{ steps.auth.outputs.mode == 'key' }}
         env:
           SSH_HOST: ${{ secrets.SSH_HOST }}
           SSH_USER: ${{ secrets.SSH_USER }}
@@ -168,7 +168,7 @@ jobs:
             < "$RUNNER_TEMP/JATO_deploy.tar.gz"
 
       - name: Upload archive to server
-        if: ${{ false }}
+        if: ${{ steps.auth.outputs.mode == 'password' }}
         env:
           SSH_HOST: ${{ secrets.SSH_HOST }}
           SSH_USER: ${{ secrets.SSH_USER }}
@@ -267,55 +267,22 @@ jobs:
           export NO_PROXY="${NO_PROXY:+$NO_PROXY,}$LOCAL_NO_PROXY_HOSTS"
 
           if [ -z "${DEPLOY_COMMIT_SHA:-}" ]; then
-            echo "[ERROR] DEPLOY_COMMIT_SHA is required for sparse deployment"
+            echo "[ERROR] DEPLOY_COMMIT_SHA is required for archive deployment"
             exit 1
           fi
 
           RELEASE_WORKTREE="/tmp/JATO_deploy_work_${DEPLOY_COMMIT_SHA}"
-          RELEASE_REMOTE="https://github.com/tristan419/JATO_Analysis_System.git"
-
+          RELEASE_ARCHIVE="/tmp/JATO_deploy.tar.gz"
+          if [ ! -s "$RELEASE_ARCHIVE" ]; then
+            echo "[ERROR] Missing deployment archive: $RELEASE_ARCHIVE"
+            exit 1
+          fi
           rm -rf "$RELEASE_WORKTREE"
           mkdir -p "$RELEASE_WORKTREE"
-          git -C "$RELEASE_WORKTREE" init
-          git -C "$RELEASE_WORKTREE" remote add origin "$RELEASE_REMOTE"
-          git -C "$RELEASE_WORKTREE" config advice.detachedHead false
-          git -C "$RELEASE_WORKTREE" config core.sparseCheckout true
-          git -C "$RELEASE_WORKTREE" config core.sparseCheckoutCone false
-          git -C "$RELEASE_WORKTREE" config http.version HTTP/1.1
-          git -C "$RELEASE_WORKTREE" config http.lowSpeedLimit 1
-          git -C "$RELEASE_WORKTREE" config http.lowSpeedTime 600
-          mkdir -p "$RELEASE_WORKTREE/.git/info"
-          cat > "$RELEASE_WORKTREE/.git/info/sparse-checkout" <<'SPARSE'
-          /03_Scripts/
-          /06_AppPlatform/
-          /07_ScrapingToolkit/
-          /hermes/
-          /01_RAW_DATA/VOC_Nordic_SUV_Users_100.xlsx
-          /.nvmrc
-          /requirements.txt
-          /CODEX.md
-          SPARSE
-          FETCH_RC=1
-          for fetch_attempt in 1 2 3 4 5; do
-            echo "[INFO] Sparse fetch attempt ${fetch_attempt}/5 for ${DEPLOY_SHORT_SHA:-$DEPLOY_COMMIT_SHA}"
-            if git -C "$RELEASE_WORKTREE" fetch --depth=1 --filter=blob:none origin "$DEPLOY_BRANCH"; then
-              FETCH_RC=0
-              break
-            fi
-            FETCH_RC=$?
-            rm -f "$RELEASE_WORKTREE/.git/FETCH_HEAD.lock" \
-              "$RELEASE_WORKTREE/.git/index.lock" \
-              "$RELEASE_WORKTREE/.git/shallow.lock"
-            sleep $((fetch_attempt * 10))
-          done
-          if [ "$FETCH_RC" -ne 0 ]; then
-            echo "[ERROR] Sparse fetch failed after retries"
-            exit "$FETCH_RC"
-          fi
-          git -C "$RELEASE_WORKTREE" checkout --force FETCH_HEAD
-          CHECKED_OUT_SHA="$(git -C "$RELEASE_WORKTREE" rev-parse HEAD)"
-          if [ "$CHECKED_OUT_SHA" != "$DEPLOY_COMMIT_SHA" ]; then
-            echo "[ERROR] Sparse fetch resolved $CHECKED_OUT_SHA, expected $DEPLOY_COMMIT_SHA"
+          tar xzf "$RELEASE_ARCHIVE" -C "$RELEASE_WORKTREE"
+          ARCHIVE_COMMIT_SHA="$(cd "$RELEASE_WORKTREE" && python3 -c 'import json; print(json.load(open("hermes/deploy_release.json", encoding="utf-8"))["commitSha"])')"
+          if [ "$ARCHIVE_COMMIT_SHA" != "$DEPLOY_COMMIT_SHA" ]; then
+            echo "[ERROR] Archive commit $ARCHIVE_COMMIT_SHA does not match expected $DEPLOY_COMMIT_SHA"
             exit 1
           fi
 
@@ -328,7 +295,7 @@ jobs:
             fi
           done
           if [ ! -f "$RELEASE_WORKTREE/01_RAW_DATA/VOC_Nordic_SUV_Users_100.xlsx" ]; then
-            echo "[ERROR] Sparse deploy missing required workbook"
+            echo "[ERROR] Archive deploy missing required workbook"
             exit 1
           fi
           mkdir -p "$REPO_DIR/01_RAW_DATA"
@@ -540,55 +507,22 @@ jobs:
           export NO_PROXY="${NO_PROXY:+$NO_PROXY,}$LOCAL_NO_PROXY_HOSTS"
 
           if [ -z "${DEPLOY_COMMIT_SHA:-}" ]; then
-            echo "[ERROR] DEPLOY_COMMIT_SHA is required for sparse deployment"
+            echo "[ERROR] DEPLOY_COMMIT_SHA is required for archive deployment"
             exit 1
           fi
 
           RELEASE_WORKTREE="/tmp/JATO_deploy_work_${DEPLOY_COMMIT_SHA}"
-          RELEASE_REMOTE="https://github.com/tristan419/JATO_Analysis_System.git"
-
+          RELEASE_ARCHIVE="/tmp/JATO_deploy.tar.gz"
+          if [ ! -s "$RELEASE_ARCHIVE" ]; then
+            echo "[ERROR] Missing deployment archive: $RELEASE_ARCHIVE"
+            exit 1
+          fi
           rm -rf "$RELEASE_WORKTREE"
           mkdir -p "$RELEASE_WORKTREE"
-          git -C "$RELEASE_WORKTREE" init
-          git -C "$RELEASE_WORKTREE" remote add origin "$RELEASE_REMOTE"
-          git -C "$RELEASE_WORKTREE" config advice.detachedHead false
-          git -C "$RELEASE_WORKTREE" config core.sparseCheckout true
-          git -C "$RELEASE_WORKTREE" config core.sparseCheckoutCone false
-          git -C "$RELEASE_WORKTREE" config http.version HTTP/1.1
-          git -C "$RELEASE_WORKTREE" config http.lowSpeedLimit 1
-          git -C "$RELEASE_WORKTREE" config http.lowSpeedTime 600
-          mkdir -p "$RELEASE_WORKTREE/.git/info"
-          cat > "$RELEASE_WORKTREE/.git/info/sparse-checkout" <<'SPARSE'
-          /03_Scripts/
-          /06_AppPlatform/
-          /07_ScrapingToolkit/
-          /hermes/
-          /01_RAW_DATA/VOC_Nordic_SUV_Users_100.xlsx
-          /.nvmrc
-          /requirements.txt
-          /CODEX.md
-          SPARSE
-          FETCH_RC=1
-          for fetch_attempt in 1 2 3 4 5; do
-            echo "[INFO] Sparse fetch attempt ${fetch_attempt}/5 for ${DEPLOY_SHORT_SHA:-$DEPLOY_COMMIT_SHA}"
-            if git -C "$RELEASE_WORKTREE" fetch --depth=1 --filter=blob:none origin "$DEPLOY_BRANCH"; then
-              FETCH_RC=0
-              break
-            fi
-            FETCH_RC=$?
-            rm -f "$RELEASE_WORKTREE/.git/FETCH_HEAD.lock" \
-              "$RELEASE_WORKTREE/.git/index.lock" \
-              "$RELEASE_WORKTREE/.git/shallow.lock"
-            sleep $((fetch_attempt * 10))
-          done
-          if [ "$FETCH_RC" -ne 0 ]; then
-            echo "[ERROR] Sparse fetch failed after retries"
-            exit "$FETCH_RC"
-          fi
-          git -C "$RELEASE_WORKTREE" checkout --force FETCH_HEAD
-          CHECKED_OUT_SHA="$(git -C "$RELEASE_WORKTREE" rev-parse HEAD)"
-          if [ "$CHECKED_OUT_SHA" != "$DEPLOY_COMMIT_SHA" ]; then
-            echo "[ERROR] Sparse fetch resolved $CHECKED_OUT_SHA, expected $DEPLOY_COMMIT_SHA"
+          tar xzf "$RELEASE_ARCHIVE" -C "$RELEASE_WORKTREE"
+          ARCHIVE_COMMIT_SHA="$(cd "$RELEASE_WORKTREE" && python3 -c 'import json; print(json.load(open("hermes/deploy_release.json", encoding="utf-8"))["commitSha"])')"
+          if [ "$ARCHIVE_COMMIT_SHA" != "$DEPLOY_COMMIT_SHA" ]; then
+            echo "[ERROR] Archive commit $ARCHIVE_COMMIT_SHA does not match expected $DEPLOY_COMMIT_SHA"
             exit 1
           fi
 
@@ -601,7 +535,7 @@ jobs:
             fi
           done
           if [ ! -f "$RELEASE_WORKTREE/01_RAW_DATA/VOC_Nordic_SUV_Users_100.xlsx" ]; then
-            echo "[ERROR] Sparse deploy missing required workbook"
+            echo "[ERROR] Archive deploy missing required workbook"
             exit 1
           fi
           mkdir -p "$REPO_DIR/01_RAW_DATA"
