@@ -234,6 +234,7 @@ jobs:
           REMOTE_EXPORTS+="export DEPLOY_CERTBOT_EMAIL=$(printf '%q' "${DEPLOY_CERTBOT_EMAIL:-}"); "
           REMOTE_EXPORTS+="export VITE_ASSET_BASE_URL=$(printf '%q' "${VITE_ASSET_BASE_URL:-}"); "
           REMOTE_EXPORTS+="export DEPLOY_COMMIT_SHA=$(printf '%q' "${GITHUB_SHA:-}"); "
+          REMOTE_EXPORTS+="export DEPLOY_BRANCH=$(printf '%q' "${GITHUB_REF_NAME:-main}"); "
           REMOTE_EXPORTS+="export DEPLOY_SHORT_SHA=$(printf '%q' "$DEPLOY_SHORT_SHA"); "
           REMOTE_EXPORTS+="export DEPLOY_RELEASE_ID=$(printf '%q' "${GITHUB_RUN_ID:-}-${GITHUB_RUN_ATTEMPT:-}"); "
           REMOTE_EXPORTS+="export DEPLOY_RUN_ID=$(printf '%q' "${GITHUB_RUN_ID:-}"); "
@@ -297,7 +298,7 @@ jobs:
           FETCH_RC=1
           for fetch_attempt in 1 2 3 4 5; do
             echo "[INFO] Sparse fetch attempt ${fetch_attempt}/5 for ${DEPLOY_SHORT_SHA:-$DEPLOY_COMMIT_SHA}"
-            if git -C "$RELEASE_WORKTREE" fetch --depth=1 --filter=blob:none origin "$DEPLOY_COMMIT_SHA"; then
+            if git -C "$RELEASE_WORKTREE" fetch --depth=1 --filter=blob:none origin "$DEPLOY_BRANCH"; then
               FETCH_RC=0
               break
             fi
@@ -312,6 +313,11 @@ jobs:
             exit "$FETCH_RC"
           fi
           git -C "$RELEASE_WORKTREE" checkout --force FETCH_HEAD
+          CHECKED_OUT_SHA="$(git -C "$RELEASE_WORKTREE" rev-parse HEAD)"
+          if [ "$CHECKED_OUT_SHA" != "$DEPLOY_COMMIT_SHA" ]; then
+            echo "[ERROR] Sparse fetch resolved $CHECKED_OUT_SHA, expected $DEPLOY_COMMIT_SHA"
+            exit 1
+          fi
 
           sudo mkdir -p "$REPO_DIR"
           sudo chown -R "$USER":"$USER" "$REPO_DIR"
@@ -500,6 +506,7 @@ jobs:
           REMOTE_EXPORTS+="export DEPLOY_CERTBOT_EMAIL=$(printf '%q' "${DEPLOY_CERTBOT_EMAIL:-}"); "
           REMOTE_EXPORTS+="export VITE_ASSET_BASE_URL=$(printf '%q' "${VITE_ASSET_BASE_URL:-}"); "
           REMOTE_EXPORTS+="export DEPLOY_COMMIT_SHA=$(printf '%q' "${GITHUB_SHA:-}"); "
+          REMOTE_EXPORTS+="export DEPLOY_BRANCH=$(printf '%q' "${GITHUB_REF_NAME:-main}"); "
           REMOTE_EXPORTS+="export DEPLOY_SHORT_SHA=$(printf '%q' "$DEPLOY_SHORT_SHA"); "
           REMOTE_EXPORTS+="export DEPLOY_RELEASE_ID=$(printf '%q' "${GITHUB_RUN_ID:-}-${GITHUB_RUN_ATTEMPT:-}"); "
           REMOTE_EXPORTS+="export DEPLOY_RUN_ID=$(printf '%q' "${GITHUB_RUN_ID:-}"); "
@@ -564,7 +571,7 @@ jobs:
           FETCH_RC=1
           for fetch_attempt in 1 2 3 4 5; do
             echo "[INFO] Sparse fetch attempt ${fetch_attempt}/5 for ${DEPLOY_SHORT_SHA:-$DEPLOY_COMMIT_SHA}"
-            if git -C "$RELEASE_WORKTREE" fetch --depth=1 --filter=blob:none origin "$DEPLOY_COMMIT_SHA"; then
+            if git -C "$RELEASE_WORKTREE" fetch --depth=1 --filter=blob:none origin "$DEPLOY_BRANCH"; then
               FETCH_RC=0
               break
             fi
@@ -579,6 +586,11 @@ jobs:
             exit "$FETCH_RC"
           fi
           git -C "$RELEASE_WORKTREE" checkout --force FETCH_HEAD
+          CHECKED_OUT_SHA="$(git -C "$RELEASE_WORKTREE" rev-parse HEAD)"
+          if [ "$CHECKED_OUT_SHA" != "$DEPLOY_COMMIT_SHA" ]; then
+            echo "[ERROR] Sparse fetch resolved $CHECKED_OUT_SHA, expected $DEPLOY_COMMIT_SHA"
+            exit 1
+          fi
 
           sudo mkdir -p "$REPO_DIR"
           sudo chown -R "$USER":"$USER" "$REPO_DIR"
