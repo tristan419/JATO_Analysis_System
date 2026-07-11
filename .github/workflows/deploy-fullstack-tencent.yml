@@ -116,7 +116,11 @@ jobs:
           tar cf "$RUNNER_TEMP/JATO_deploy.tar" \
             --exclude='.git' \
             --exclude='node_modules' \
+            --exclude='*/node_modules' \
             --exclude='.venv' \
+            --exclude='*/.venv' \
+            --exclude='dist' \
+            --exclude='*/dist' \
             --exclude='.claude' \
             --exclude='tmp' \
             --exclude='__pycache__' \
