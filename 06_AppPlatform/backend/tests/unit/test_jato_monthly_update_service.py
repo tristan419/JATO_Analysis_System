@@ -2221,3 +2221,85 @@ def test_target_only_single_country_candidate_cannot_publish(
             job_id=job_id,
             triggered_by="publisher",
         )
+
+
+def test_single_country_schema_contract_separates_material_and_derived_drift() -> None:
+    active = pd.DataFrame(
+        {
+            "国家": ["匈牙利"],
+            "Make": ["NISSAN"],
+            "MSRP including delivery charge": [10_500],
+            "YTD 2026 (Apr)": [120],
+            "legacy blank column": [None],
+            "2026 Apr": [10],
+        }
+    )
+    candidate = pd.DataFrame(
+        {
+            "国家": ["匈牙利"],
+            "Make": ["NISSAN"],
+            "YTD 2026 (May)": [132],
+            "2026 Apr": [10],
+            "2026 May": [22],
+        }
+    )
+
+    contract = jato_monthly_update_service._single_country_schema_contract(
+        active_frame=active,
+        candidate_frame=candidate,
+    )
+
+    assert contract["missingMaterial"] == ["MSRP including delivery charge"]
+    assert contract["missingDerivedYtd"] == ["YTD 2026 (Apr)"]
+    assert contract["missingNullOnly"] == ["legacy blank column"]
+
+
+def test_single_country_configuration_fingerprint_keeps_price_variants_distinct() -> None:
+    candidate = pd.DataFrame(
+        {
+            "国家": ["匈牙利", "匈牙利"],
+            "Make": ["NISSAN", "NISSAN"],
+            "Model": ["X-TRAIL", "X-TRAIL"],
+            "Version name": ["1.5 HEV", "1.5 HEV"],
+            "Registration type": ["Business", "Private"],
+            "Retail price": [16_000_000, 16_120_000],
+            "2026 Apr": [5, 6],
+            "2026 May": [7, 8],
+        }
+    )
+    keys = jato_monthly_update_service._single_country_configuration_key_columns(
+        candidate
+    )
+
+    assert int(candidate.duplicated(subset=keys, keep=False).sum()) == 0
+    assert "Retail price" in keys
+    assert "2026 Apr" not in keys
+
+
+def test_single_country_historical_sales_stability_checks_each_make() -> None:
+    active = pd.DataFrame(
+        {
+            "国家": ["匈牙利", "匈牙利"],
+            "Make": ["BMW", "NISSAN"],
+            "2026 Mar": [10, 20],
+            "2026 Apr": [11, 21],
+        }
+    )
+    candidate = pd.DataFrame(
+        {
+            "国家": ["匈牙利", "匈牙利"],
+            "Make": ["BMW", "NISSAN"],
+            "2026 Mar": [10, 20],
+            "2026 Apr": [11, 21],
+            "2026 May": [12, 22],
+        }
+    )
+
+    check = jato_monthly_update_service._single_country_historical_sales_stability(
+        active_frame=active,
+        candidate_frame=candidate,
+        active_latest_month="2026 Apr",
+    )
+
+    assert check["status"] == "pass"
+    assert check["comparedMakeCount"] == 2

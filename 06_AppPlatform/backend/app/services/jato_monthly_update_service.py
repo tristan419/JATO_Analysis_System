@@ -54,6 +54,7 @@ MONTH_COLUMN_PATTERN = re.compile(
     re.IGNORECASE,
 )
 YEAR_COLUMN_PATTERN = re.compile(r"^\d{4}$")
+YTD_COLUMN_PATTERN = re.compile(r"^YTD\s+\d{4}\s+\([A-Za-z]{3}\)$", re.IGNORECASE)
 BATCH_ID_PATTERN = re.compile(r"^(20\d{2}-\d{2})-r(\d+)$")
 COUNTRY_COLUMN_CANDIDATES = ("国家", "country")
 SAFE_CLEANUP_TIER = "safe"
@@ -2104,6 +2105,128 @@ def _partition_stability_check(
     }
 
 
+def _is_derived_ytd_column(column: str) -> bool:
+    return bool(YTD_COLUMN_PATTERN.fullmatch(str(column).strip()))
+
+
+def _single_country_schema_contract(
+    *,
+    active_frame: pd.DataFrame,
+    candidate_frame: pd.DataFrame,
+) -> dict[str, list[str]]:
+    active_months = set(_detect_month_columns(list(active_frame.columns)))
+    candidate_months = set(_detect_month_columns(list(candidate_frame.columns)))
+    active_static = set(active_frame.columns) - active_months
+    candidate_static = set(candidate_frame.columns) - candidate_months
+    missing = sorted(active_static - candidate_static)
+    null_only: list[str] = []
+    derived_ytd: list[str] = []
+    material: list[str] = []
+    for column in missing:
+        if not _series_has_data(active_frame[column]):
+            null_only.append(column)
+        elif _is_derived_ytd_column(column):
+            derived_ytd.append(column)
+        else:
+            material.append(column)
+    return {
+        "missing": missing,
+        "missingNullOnly": null_only,
+        "missingDerivedYtd": derived_ytd,
+        "missingMaterial": material,
+        "extra": sorted(candidate_static - active_static),
+    }
+
+
+def _single_country_configuration_key_columns(frame: pd.DataFrame) -> list[str]:
+    month_columns = set(_detect_month_columns(list(frame.columns)))
+    return [
+        str(column)
+        for column in frame.columns
+        if str(column) not in month_columns
+        and not YEAR_COLUMN_PATTERN.fullmatch(str(column).strip())
+        and not _is_derived_ytd_column(str(column))
+    ]
+
+
+def _single_country_historical_sales_stability(
+    *,
+    active_frame: pd.DataFrame,
+    candidate_frame: pd.DataFrame,
+    active_latest_month: str | None,
+) -> dict[str, Any]:
+    if active_latest_month is None:
+        return {"status": "unavailable", "reason": "active_latest_month_missing"}
+    active_months = set(_detect_month_columns(list(active_frame.columns)))
+    candidate_months = set(_detect_month_columns(list(candidate_frame.columns)))
+    historical_months = sorted(
+        [
+            month
+            for month in active_months
+            if _time_sort_key(month) <= _time_sort_key(active_latest_month)
+        ],
+        key=_time_sort_key,
+    )
+    missing = [month for month in historical_months if month not in candidate_months]
+    if missing:
+        return {
+            "status": "fail",
+            "reason": "candidate_missing_historical_months",
+            "missingMonths": missing,
+        }
+
+    dimension = "Make" if "Make" in active_frame.columns and "Make" in candidate_frame.columns else None
+    active_sales = active_frame[historical_months].apply(pd.to_numeric, errors="coerce").fillna(0)
+    candidate_sales = candidate_frame[historical_months].apply(pd.to_numeric, errors="coerce").fillna(0)
+    samples: list[dict[str, Any]] = []
+
+    def compare(left: pd.Series, right: pd.Series, *, scope: str) -> None:
+        for month in historical_months:
+            left_value = float(left.get(month, 0) or 0)
+            right_value = float(right.get(month, 0) or 0)
+            if left_value != right_value:
+                samples.append(
+                    {
+                        "scope": scope,
+                        "month": month,
+                        "activeSales": _serialize_numeric_value(left_value),
+                        "candidateSales": _serialize_numeric_value(right_value),
+                        "deltaSales": _serialize_numeric_value(right_value - left_value),
+                    }
+                )
+
+    compare(active_sales.sum(), candidate_sales.sum(), scope="country")
+    compared_make_count = 0
+    if dimension is not None:
+        active_grouped = active_sales.groupby(
+            active_frame[dimension].astype("string").fillna("").str.strip(), dropna=False
+        ).sum()
+        candidate_grouped = candidate_sales.groupby(
+            candidate_frame[dimension].astype("string").fillna("").str.strip(), dropna=False
+        ).sum()
+        for make in sorted(set(active_grouped.index) | set(candidate_grouped.index)):
+            compared_make_count += 1
+            active_row = (
+                active_grouped.loc[make]
+                if make in active_grouped.index
+                else pd.Series(0, index=historical_months)
+            )
+            candidate_row = (
+                candidate_grouped.loc[make]
+                if make in candidate_grouped.index
+                else pd.Series(0, index=historical_months)
+            )
+            compare(active_row, candidate_row, scope=f"make:{make}")
+    return {
+        "status": "pass" if not samples else "fail",
+        "comparedThrough": active_latest_month,
+        "comparedMonthCount": len(historical_months),
+        "comparedMakeCount": compared_make_count,
+        "mismatchCount": len(samples),
+        "mismatchSamples": samples[:20],
+    }
+
+
 def _build_single_country_review(payload: dict[str, Any]) -> dict[str, Any]:
     country = str(payload.get("country") or "").strip()
     artifacts = payload.get("artifacts")
@@ -2122,16 +2245,11 @@ def _build_single_country_review(payload: dict[str, Any]) -> dict[str, Any]:
     else:
         raise HTTPException(status_code=409, detail="缺少 active 数据，不能生成单国 Review。")
     month_columns = _detect_month_columns(list(candidate_frame.columns))
-    active_month_columns = _detect_month_columns(list(active_frame.columns))
-    candidate_non_month_columns = set(candidate_frame.columns) - set(month_columns)
-    active_non_month_columns = set(active_frame.columns) - set(active_month_columns)
-    missing_candidate_schema_columns = sorted(active_non_month_columns - candidate_non_month_columns)
-    extra_candidate_schema_columns = sorted(candidate_non_month_columns - active_non_month_columns)
-    key_columns = [
-        column
-        for column in ("国家", "country", "品牌", "make", "Model", "model", "Version name", "versionname")
-        if column in candidate_frame.columns
-    ]
+    schema_contract = _single_country_schema_contract(
+        active_frame=active_frame,
+        candidate_frame=candidate_frame,
+    )
+    key_columns = _single_country_configuration_key_columns(candidate_frame)
     duplicate_count = (
         int(candidate_frame.duplicated(subset=key_columns, keep=False).sum())
         if key_columns
@@ -2145,6 +2263,11 @@ def _build_single_country_review(payload: dict[str, Any]) -> dict[str, Any]:
     )
     active_latest = _latest_month_from_frame(active_frame)
     candidate_latest = _latest_month_from_frame(candidate_frame)
+    historical_sales_stability = _single_country_historical_sales_stability(
+        active_frame=active_frame,
+        candidate_frame=candidate_frame,
+        active_latest_month=active_latest,
+    )
     candidate_sales = _collect_country_monthly_sales(
         candidate_frame, countries=[country], path_label="candidate"
     ).get(country, {})
@@ -2179,30 +2302,65 @@ def _build_single_country_review(payload: dict[str, Any]) -> dict[str, Any]:
         })
     if not month_columns:
         add_finding("blocker", "SC001", "candidate 缺少月份列。", {})
-    if missing_candidate_schema_columns:
+    if schema_contract["missingMaterial"]:
         add_finding(
             "blocker",
             "SC009",
             "单国 candidate 缺少 active 业务列。",
-            {"missingColumns": missing_candidate_schema_columns},
+            {
+                "missingMaterialColumns": schema_contract["missingMaterial"],
+                "missingDerivedYtdColumns": schema_contract["missingDerivedYtd"],
+                "missingNullOnlyColumns": schema_contract["missingNullOnly"],
+            },
         )
-    if extra_candidate_schema_columns:
+    if schema_contract["missingDerivedYtd"]:
+        add_finding(
+            "review",
+            "SC013",
+            "单国 candidate 缺少旧月份 YTD 派生列。",
+            {"missingDerivedYtdColumns": schema_contract["missingDerivedYtd"]},
+        )
+    if schema_contract["extra"]:
         add_finding(
             "review",
             "SC010",
             "单国 candidate 包含 active 中没有的新业务列。",
-            {"extraColumns": extra_candidate_schema_columns},
+            {"extraColumns": schema_contract["extra"]},
         )
     if candidate_latest is None:
         add_finding("blocker", "SC002", "candidate 没有有效销量月份。", {})
     if active_latest and candidate_latest and _time_sort_key(candidate_latest) < _time_sort_key(active_latest):
         add_finding("blocker", "SC003", "单国最新月份发生回退。", {"active": active_latest, "candidate": candidate_latest})
     if duplicate_count:
-        add_finding("blocker", "SC004", "单国 candidate 存在重复业务键。", {"duplicateRows": duplicate_count})
+        add_finding(
+            "blocker",
+            "SC004",
+            "单国 candidate 存在完全相同的配置指纹。",
+            {"duplicateRows": duplicate_count, "keyColumnCount": len(key_columns)},
+        )
     if negative_sales_count:
         add_finding("blocker", "SC005", "单国 candidate 存在负销量。", {"negativeSalesCells": negative_sales_count})
     if len(doubled_months) >= SALES_DOUBLING_MIN_MONTH_COUNT:
         add_finding("blocker", "SC006", "单国 candidate 疑似销量翻倍。", {"months": doubled_months})
+    if historical_sales_stability.get("status") == "fail":
+        add_finding(
+            "blocker",
+            "SC011",
+            "单国 candidate 改写了 active 已有历史销量。",
+            historical_sales_stability,
+        )
+    if int(len(candidate_frame) - len(active_frame)) != 0:
+        add_finding(
+            "review",
+            "SC012",
+            "单国 candidate 的配置行数与 active 不同。",
+            {
+                "activeRows": int(len(active_frame)),
+                "candidateRows": int(len(candidate_frame)),
+                "rowDelta": int(len(candidate_frame) - len(active_frame)),
+                "historicalSalesStability": historical_sales_stability,
+            },
+        )
     if partition_check.get("status") == "fail":
         add_finding("blocker", "SC007", "未上传国家的分区签名发生变化。", partition_check)
     if partition_check.get("status") == "unavailable":
@@ -2249,8 +2407,11 @@ def _build_single_country_review(payload: dict[str, Any]) -> dict[str, Any]:
             "activeLatestMonth": active_latest,
             "candidateLatestMonth": candidate_latest,
             "schema": {
-                "missingCandidateColumns": missing_candidate_schema_columns,
-                "extraCandidateColumns": extra_candidate_schema_columns,
+                "missingCandidateColumns": schema_contract["missing"],
+                "missingMaterialColumns": schema_contract["missingMaterial"],
+                "missingDerivedYtdColumns": schema_contract["missingDerivedYtd"],
+                "missingNullOnlyColumns": schema_contract["missingNullOnly"],
+                "extraCandidateColumns": schema_contract["extra"],
             },
         },
         "countryScopeSummary": {"targetCountry": country, "untouchedPartitionCheck": partition_check},
