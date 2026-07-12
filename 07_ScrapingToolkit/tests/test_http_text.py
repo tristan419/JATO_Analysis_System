@@ -160,6 +160,58 @@ def test_http_text_fetches_primary_and_additional_urls(monkeypatch) -> None:
     assert results[0].raw_payload["text_urls"] == list(pages)
 
 
+def test_http_text_can_prefer_curl_for_official_configurator_responses(
+    monkeypatch,
+) -> None:
+    extractor = HttpTextExtractor(
+        ExtractorConfig(
+            source_code="suzuki_s_cross_hu_draft_scrapling",
+            country="匈牙利",
+            brand="SUZUKI",
+            source_url="https://konfigurator.suzuki.hu/",
+            source_type="manufacturer_official",
+            price_semantics="base_msrp",
+        ),
+        HttpTextProfile(
+            url="https://konfigurator.suzuki.hu/",
+            prefer_curl_fetch=True,
+            fixed_model="S-CROSS",
+            fixed_jato_model="S-CROSS",
+            fixed_jato_powertrain="MHEV",
+            default_currency="HUF",
+            entry_patterns=(
+                HttpTextEntryPattern(
+                    pattern=(
+                        r'&quot;basic&quot;:&quot;(?P<trim>R56W)&quot;'
+                        r'.{0,160}?&quot;list&quot;:(?P<price>9922500)'
+                    ),
+                    official_powertrain="1.4L Boosterjet lágy hibrid",
+                ),
+            ),
+        ),
+    )
+
+    def should_not_use_requests(*_args, **_kwargs):
+        raise AssertionError("prefer_curl_fetch must run before requests")
+
+    monkeypatch.setattr(extractor._session, "get", should_not_use_requests)
+    monkeypatch.setattr(
+        extractor,
+        "_fetch_text_with_curl",
+        lambda *_args, **_kwargs: (
+            '&quot;basic&quot;:&quot;R56W&quot;,&quot;prices&quot;:'
+            '{&quot;list&quot;:9922500,&quot;discount&quot;:7972500}'
+        ),
+    )
+
+    results = extractor.extract()
+
+    assert len(results) == 1
+    assert results[0].official_trim == "R56W"
+    assert results[0].msrp_value == 9_922_500
+    assert results[0].jato_powertrain == "MHEV"
+
+
 def test_http_text_uses_default_curl_fallback_after_requests_tls_error(monkeypatch) -> None:
     extractor = HttpTextExtractor(
         ExtractorConfig(

@@ -38,6 +38,7 @@ class HttpTextProfile:
     entry_patterns: tuple[HttpTextEntryPattern, ...] = field(default_factory=tuple)
     timeout_seconds: int = DEFAULT_TIMEOUT
     headers: dict[str, str] = field(default_factory=dict)
+    prefer_curl_fetch: bool = False
     default_currency: str = "EUR"
     default_tax_included: bool = True
     default_price_label: str = "Manufacturer's Recommended Retail Price"
@@ -122,6 +123,13 @@ class HttpTextExtractor(BaseExtractor):
         return "\n".join(chunks).strip()
 
     def _fetch_text_url(self, url: str, timeout: int) -> str:
+        if self.profile.prefer_curl_fetch:
+            text = self._fetch_text_with_curl(
+                url,
+                max(timeout, DEFAULT_CURL_FALLBACK_TIMEOUT),
+            )
+            if text:
+                return text
         try:
             response = self._session.get(url, timeout=timeout)
             response.raise_for_status()

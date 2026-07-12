@@ -326,3 +326,39 @@ def test_hungary_hyundai_tucson_profile_uses_current_official_list_price_pdf() -
     assert len(profile.entry_patterns) == 4
     for entry in profile.entry_patterns:
         assert re.compile(entry.pattern)
+
+
+def test_hungary_suzuki_profiles_use_official_configurator_list_prices_only() -> None:
+    source_root = (
+        Path(__file__).resolve().parents[1]
+        / "source_drafts"
+        / "suv_only_country_model_top30"
+        / "hu"
+    )
+    expected = {
+        "01_suzuki_s_cross_hu.yaml": ("S-CROSS", "R5[67][0-9A-Z]"),
+        "02_suzuki_vitara_hu.yaml": ("VITARA", "V6G[0-9A-Z]"),
+    }
+
+    for filename, (model, trim_pattern) in expected.items():
+        source = _load_yaml_mapping(source_root / filename)
+        profile = _build_http_text_profile(source["profile"])
+        entry = profile.entry_patterns[0]
+
+        assert source["source_code"].endswith("_draft_scrapling")
+        assert source["extractor_type"] == "http_text"
+        assert source["source_url"] == "https://konfigurator.suzuki.hu/"
+        assert profile.url == source["source_url"]
+        assert profile.default_currency == "HUF"
+        assert profile.default_tax_included is True
+        assert profile.prefer_curl_fetch is True
+        assert profile.fixed_model == model
+        assert profile.fixed_jato_powertrain == "MHEV"
+        assert profile.match_reason["kind"] == "official_configurator_embedded_list_price"
+        assert profile.match_reason["price_field"] == "prices.list"
+        assert profile.match_reason["excluded_field"] == "prices.discount"
+        assert entry.price_label == "Listaár (ÁFA-val)"
+        assert trim_pattern in entry.pattern
+        assert "&quot;prices&quot;:\\{&quot;list&quot;" in entry.pattern
+        assert "discount" not in entry.pattern
+        assert re.compile(entry.pattern)
