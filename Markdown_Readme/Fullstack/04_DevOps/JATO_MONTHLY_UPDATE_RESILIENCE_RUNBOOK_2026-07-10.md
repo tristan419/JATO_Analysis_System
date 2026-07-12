@@ -31,7 +31,7 @@ flowchart LR
 
 ## 部署 worker（变更窗口内）
 
-先在生产主机测量，不要直接套用固定 MemoryMax：
+先在生产主机测量。对于已测得的 15 GiB 生产主机，默认配置会将 Web API 固定为 2 个 worker / `MemoryHigh=6G` / `MemoryMax=8G`，并为单国月更 worker 设置 `MemoryHigh=3G` / `MemoryMax=4G`。这是隔离上限，不是将整机容量分配给月更任务。
 
 ```bash
 cd /opt/JATO_Analysis_System-main
@@ -39,14 +39,13 @@ cd /opt/JATO_Analysis_System-main
 sudo install -m 0644 03_Scripts/deploy/systemd/jato-monthly-worker.service /etc/systemd/system/
 sudo install -m 0644 03_Scripts/deploy/systemd/jato-monthly-worker.env.example /etc/jato-fullstack/monthly-worker.env
 sudo mkdir -p /etc/systemd/system/jato-monthly-worker.service.d
-sudo cp 03_Scripts/deploy/systemd/jato-monthly-worker.resource.conf.example /etc/systemd/system/jato-monthly-worker.service.d/resources.conf
-# 根据 capacity 报告填写经审核的 MemoryHigh / MemoryMax；不要猜测数值。
+sudo cp 03_Scripts/deploy/systemd/jato-monthly-worker.resources.conf /etc/systemd/system/jato-monthly-worker.service.d/20-resources.conf
 sudo systemctl daemon-reload
 sudo systemctl enable --now jato-monthly-worker.service
 sudo systemctl status jato-monthly-worker.service --no-pager
 ```
 
-建议保留：`CPUWeight=20`、`IOWeight=20`、`Nice=10`、`OOMScoreAdjust=500`、`TasksMax=64`。这样内核必须回收资源时，会优先牺牲 worker，不会优先牺牲 nginx/FastAPI。进程级 RLIMIT 默认不设；若启用，写入 `monthly-worker.env` 并与 systemd cgroup 上限保持一致。
+建议保留：`CPUWeight=20`、`IOWeight=20`、`Nice=10`、`OOMScoreAdjust=900`、`TasksMax=64`。这样内核必须回收资源时，会优先牺牲 worker，不会优先牺牲 nginx/FastAPI。进程级 RLIMIT 默认不设；若启用，写入 `monthly-worker.env` 并与 systemd cgroup 上限保持一致。
 
 ## 服务器本机运维 CLI
 

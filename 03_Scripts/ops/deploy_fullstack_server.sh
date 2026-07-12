@@ -395,7 +395,14 @@ reconcile_scraper_schedulers() {
   install_systemd_file "$SYSTEMD_SOURCE_DIR/jato-voc-forum-sync.timer"
   install_systemd_file "$SYSTEMD_SOURCE_DIR/hermes-source-quality.service"
   install_systemd_file "$SYSTEMD_SOURCE_DIR/hermes-source-quality.timer"
+  install_systemd_file "$SYSTEMD_SOURCE_DIR/jato-fullstack-backend@.service"
+  install_systemd_file \
+    "$SYSTEMD_SOURCE_DIR/jato-fullstack-backend@.memory-guard.conf" \
+    "jato-fullstack-backend@8000.service.d/20-memory-guard.conf"
   install_systemd_file "$SYSTEMD_SOURCE_DIR/jato-monthly-worker.service"
+  install_systemd_file \
+    "$SYSTEMD_SOURCE_DIR/jato-monthly-worker.resources.conf" \
+    "jato-monthly-worker.service.d/20-resources.conf"
 
   sudo -n systemctl daemon-reload
 
