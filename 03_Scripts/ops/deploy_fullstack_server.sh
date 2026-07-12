@@ -296,6 +296,12 @@ install_env_file_if_missing() {
   echo "[INFO] Installed default env file: $target_path"
 }
 
+enforce_backend_worker_budget() {
+  run_privileged_bash 'set -Eeuo pipefail; env_file="$1"; mkdir -p "$(dirname "$env_file")"; touch "$env_file"; sed -i "/^APP_BACKEND_WORKERS=/d" "$env_file"; echo "APP_BACKEND_WORKERS=2" >> "$env_file"; chmod 600 "$env_file"' \
+    "$BACKEND_ENV_FILE"
+  echo "[INFO] Enforced APP_BACKEND_WORKERS=2 for the production memory budget"
+}
+
 run_pre_deploy_backup() {
   if [[ "$RUN_PRE_DEPLOY_BACKUP" == "false" || "$RUN_PRE_DEPLOY_BACKUP" == "0" ]]; then
     echo "[INFO] Skipping pre-deploy backup because RUN_PRE_DEPLOY_BACKUP=$RUN_PRE_DEPLOY_BACKUP"
@@ -404,6 +410,7 @@ reconcile_scraper_schedulers() {
     "$SYSTEMD_SOURCE_DIR/jato-monthly-worker.resources.conf" \
     "jato-monthly-worker.service.d/20-resources.conf"
 
+  enforce_backend_worker_budget
   sudo -n systemctl daemon-reload
 
   echo "[INFO] JATO monthly worker capacity (review before setting MemoryHigh/MemoryMax):"
