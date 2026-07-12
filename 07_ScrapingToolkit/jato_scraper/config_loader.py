@@ -161,6 +161,18 @@ def _build_http_json_profile(profile: dict[str, Any]) -> HttpJsonProfile:
         text = str(raw).strip()
         return text or default
 
+    items_paths_raw = fm_raw.get("items_paths", [])
+    if items_paths_raw is None:
+        items_paths = ()
+    elif isinstance(items_paths_raw, list):
+        items_paths = tuple(
+            str(path).strip()
+            for path in items_paths_raw
+            if str(path).strip()
+        )
+    else:
+        raise ValueError("http_json items_paths must be a list")
+
     fm = FieldMapping(
         model=_path_field(fm_raw.get("model"), "model", allow_list=True),
         trim=_path_field(fm_raw.get("trim"), "trim", allow_list=True),
@@ -185,6 +197,7 @@ def _build_http_json_profile(profile: dict[str, Any]) -> HttpJsonProfile:
             if fm_raw.get("items_path") is not None
             else None
         ),
+        items_paths=items_paths,
     )
 
     filters_raw = profile.get("filters", [])

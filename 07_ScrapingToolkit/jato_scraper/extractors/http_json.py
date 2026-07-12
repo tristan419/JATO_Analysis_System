@@ -55,6 +55,7 @@ class FieldMapping:
     availability: str | None = "availability"
     vehicles_path: str = "models"
     items_path: str | None = None
+    items_paths: tuple[str, ...] = field(default_factory=tuple)
 
 
 @dataclass(frozen=True)
@@ -248,29 +249,41 @@ class HttpJsonExtractor(BaseExtractor):
         return node
 
     def _expand_items(self, vehicles: list[dict]) -> list[dict]:
-        items_path = self.profile.field_mapping.items_path
-        if not items_path:
+        mapping = self.profile.field_mapping
+        items_paths = mapping.items_paths or (
+            (mapping.items_path,) if mapping.items_path else ()
+        )
+        if not items_paths:
             return vehicles
-        flattened: list[dict] = []
-        for vehicle in vehicles:
-            if not isinstance(vehicle, dict):
-                log.warning("Skipping non-dict vehicle container: %s", type(vehicle).__name__)
-                continue
-            items = self._resolve_path(vehicle, items_path, log_errors=False)
-            if items is None:
-                continue
-            if not isinstance(items, list):
-                log.warning(
-                    "Expected list at nested items path '%s', got %s",
-                    items_path,
-                    type(items).__name__,
-                )
-                continue
-            for item in items:
-                if not isinstance(item, dict):
-                    log.warning("Skipping non-dict nested item: %s", type(item).__name__)
+        flattened = vehicles
+        for items_path in items_paths:
+            next_level: list[dict] = []
+            for vehicle in flattened:
+                if not isinstance(vehicle, dict):
+                    log.warning(
+                        "Skipping non-dict vehicle container: %s",
+                        type(vehicle).__name__,
+                    )
                     continue
-                flattened.append({**vehicle, **item})
+                items = self._resolve_path(vehicle, items_path, log_errors=False)
+                if items is None:
+                    continue
+                if not isinstance(items, list):
+                    log.warning(
+                        "Expected list at nested items path '%s', got %s",
+                        items_path,
+                        type(items).__name__,
+                    )
+                    continue
+                for item in items:
+                    if not isinstance(item, dict):
+                        log.warning(
+                            "Skipping non-dict nested item: %s",
+                            type(item).__name__,
+                        )
+                        continue
+                    next_level.append({**vehicle, **item})
+            flattened = next_level
         return flattened
 
     def _resolve_field_value(

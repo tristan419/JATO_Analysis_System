@@ -1,39 +1,67 @@
 source_code: volkswagen_t_roc_hu_draft_scrapling
 country: 匈牙利
 brand: VOLKSWAGEN
-source_url: https://www.volkswagen.hu/hu/modellek/t-roc.html
+source_url: https://cc.porscheinformatik.com/cc-hu/be/hu_HU_VW22/api/v2/modelgroup?brand=V
 source_type: manufacturer_official
 price_semantics: base_msrp
-extractor_type: playwright
-profile_preset: ../_shared/presets/volkswagen_configurator_trim_overview_playwright.yaml
+extractor_type: http_json
 profile:
-  url: https://www.volkswagen.hu/hu/modellek/t-roc.html
+  url: https://cc.porscheinformatik.com/cc-hu/be/hu_HU_VW22/api/v2/modelgroup
+  method: GET
+  params:
+    brand: V
+  headers:
+    Accept: application/json
+  field_mapping:
+    vehicles_path: modelgroups
+    items_paths:
+    - variants
+    - models
+    model: ''
+    trim:
+    - modelVariantNumber
+    - designation
+    price: listPrice.gross
+    currency: ''
+    tax_included: ''
+    price_label: ''
+    availability: modelOrderable
+  filters:
+  - path: modelGroupNumber
+    equals:
+    - '042'
   default_currency: HUF
   default_tax_included: true
-  default_price_label: Ajánlott fogyasztói ár (ÁFA-val)
+  default_price_label: Listaár bruttó HUF
   fixed_model: T-ROC
   fixed_jato_model: T-ROC
-  structured_fields:
-    powertrain_rules:
-    - key: powertrain_mhev
-      powertrain: MHEV
-      keywords:
-      - mild hybrid
-      - eTSI
-      - hybrid
-    - key: powertrain_ice
-      powertrain: ICE
-      keywords:
-      - benzin
-      - TSI
+  copy_trim_to_jato_trim: true
+  match_confidence: 0.86
+  match_status: review_required
+  match_reason:
+    kind: official_configurator_modelgroup_list_price
+    source: volkswagen_hu_modelgroup_api
+    price_field: listPrice.gross
+    note: Volkswagen Hungary's public configurator modelgroup API provides the
+      orderable T-Roc model records and their gross listPrice values. The profile
+      excludes the separate T-Roc Cabriolet group and does not use finance fields.
+  pricing_context:
+    fields:
+      external_model_code: number
+      official_model_group_code: modelGroupNumber
+      official_fuel_group: emission.fuelGroup
+      official_wltp_engine: emission.fuelType.wltpEngine
+    constants:
+      source_api: volkswagen_hu_modelgroup
 schedule:
   frequency: manual_only
   run_window_start: 00:00
   run_window_end: 05:00
   preferred_weekday: monday
-notes: Keywords filled from official manufacturer website research (HU market). CSS
-  selectors still require browser-based inspection before promotion. [Switched to
-  playwright_card_flow with volkswagen_configurator_trim_overview_playwright.yaml]
+notes: Replaced the retired model page and stale Playwright trimcard selector with
+  Volkswagen Hungary's public configurator modelgroup API. It flattens the official
+  T-Roc group 042 variants/models tree and extracts listPrice.gross only; no monthly payment,
+  bonus, rebate, or finance price field is selected.
 bootstrap_meta:
   country_model_rank: 12
   suggested_scope_kind: single_model

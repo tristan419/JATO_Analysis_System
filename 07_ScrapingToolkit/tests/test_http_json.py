@@ -333,6 +333,83 @@ def test_http_json_groups_entries_by_min_price_before_mapping(monkeypatch):
     assert results[1].msrp_value == 27146.83
 
 
+def test_http_json_expands_multiple_nested_item_paths(monkeypatch):
+    extractor = HttpJsonExtractor(
+        ExtractorConfig(
+            source_code="volkswagen_t_roc_hu_draft_scrapling",
+            country="匈牙利",
+            brand="VOLKSWAGEN",
+            source_url="https://cc.porscheinformatik.com/cc-hu/be/hu_HU_VW22/api/v2/modelgroup?brand=V",
+            source_type="manufacturer_official",
+            price_semantics="base_msrp",
+        ),
+        HttpJsonProfile(
+            url="https://example.invalid/api/v2/modelgroup",
+            fixed_model="T-ROC",
+            fixed_jato_model="T-ROC",
+            copy_trim_to_jato_trim=True,
+            default_currency="HUF",
+            field_mapping=FieldMapping(
+                vehicles_path="modelgroups",
+                items_paths=("variants", "models"),
+                trim=("modelVariantNumber", "designation"),
+                price="listPrice.gross",
+                availability="modelOrderable",
+            ),
+            filters=(ValueFilter(path="modelGroupNumber", equals=("042",)),),
+        ),
+    )
+    monkeypatch.setattr(
+        extractor,
+        "_fetch",
+        lambda: {
+            "modelgroups": [
+                {
+                    "name": "T-Roc",
+                    "variants": [
+                        {
+                            "code": "Perfect",
+                            "models": [
+                                {
+                                    "number": "D413MEFH",
+                                    "modelGroupNumber": "042",
+                                    "modelVariantNumber": "Perfect",
+                                    "designation": "T-Roc Perfect 1.5 eTSI DSG",
+                                    "modelOrderable": True,
+                                    "listPrice": {"gross": 9490000},
+                                }
+                            ],
+                        }
+                    ],
+                },
+                {
+                    "name": "T-Roc Cabriolet",
+                    "variants": [
+                        {
+                            "models": [
+                                {
+                                    "modelVariantNumber": "Style",
+                                    "modelGroupNumber": "044",
+                                    "designation": "T-Roc Cabrio Style",
+                                    "listPrice": {"gross": 13326130},
+                                }
+                            ],
+                        }
+                    ],
+                },
+            ]
+        },
+    )
+
+    results = extractor.extract()
+
+    assert len(results) == 1
+    assert results[0].official_trim == "Perfect / T-Roc Perfect 1.5 eTSI DSG"
+    assert results[0].msrp_value == 9490000
+    assert results[0].availability_text == "True"
+    assert results[0].jato_trim == "Perfect / T-Roc Perfect 1.5 eTSI DSG"
+
+
 def test_http_json_renders_today_template_in_request_values():
     class DummyResponse:
         def raise_for_status(self):
@@ -481,6 +558,35 @@ def test_config_loader_builds_http_json_lookup_mapping():
     assert isinstance(trim_mapping[0], LookupMapping)
     assert trim_mapping[0].source_path == "trimId"
     assert trim_mapping[0].collection_path == "trims"
+
+
+def test_config_loader_builds_http_json_nested_item_paths():
+    profile = _build_http_json_profile(
+        {
+            "url": "https://example.invalid/modelgroup",
+            "field_mapping": {
+                "vehicles_path": "modelgroups",
+                "items_paths": ["variants", "models"],
+                "price": "listPrice.gross",
+            },
+        }
+    )
+
+    assert profile.field_mapping.items_paths == ("variants", "models")
+
+
+def test_config_loader_rejects_non_list_http_json_nested_item_paths():
+    try:
+        _build_http_json_profile(
+            {
+                "url": "https://example.invalid/modelgroup",
+                "field_mapping": {"items_paths": "variants.models"},
+            }
+        )
+    except ValueError as exc:
+        assert str(exc) == "http_json items_paths must be a list"
+    else:
+        raise AssertionError("Expected non-list items_paths to be rejected")
 
 
 def test_config_loader_builds_http_json_pricing_context_profile():
