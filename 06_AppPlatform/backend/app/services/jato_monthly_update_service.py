@@ -40,6 +40,7 @@ PREPARE_SCRIPT_PATH = (
 REBUILD_SCRIPT_PATH = (
     PROJECT_ROOT / "03_Scripts" / "data_pipeline" / "rebuild_from_parquet.py"
 )
+SINGLE_COUNTRY_ETL_SCRIPT_PATH = PROJECT_ROOT / "03_Scripts" / "elt_worker.py"
 STATE_FILENAME = "job_state.json"
 LOG_FILENAME = "job.log"
 UPLOAD_STATE_FILENAME = "upload_state.json"
@@ -1985,6 +1986,80 @@ def _load_parquet_country_subset(path: Path, country: str, *, path_label: str) -
         ) from exc
 
 
+def _load_active_country_partition_subset(
+    partition_root: Path,
+    country: str,
+) -> pd.DataFrame:
+    country_dir = partition_root / f"国家={quote(country, safe='')}"
+    if not country_dir.exists():
+        raise HTTPException(
+            status_code=409,
+            detail=f"找不到 active 的 {country} 国家分区。",
+        )
+    try:
+        frame = pd.read_parquet(country_dir)
+        frame.columns = [str(column).strip() for column in frame.columns]
+        country_column = _find_country_column(list(frame.columns))
+        if country_column is None:
+            frame["国家"] = country
+        return frame
+    except Exception as exc:
+        raise HTTPException(
+            status_code=409,
+            detail=f"读取 active 的 {country} 国家分区失败。",
+        ) from exc
+
+
+def _untouched_partition_snapshot(
+    *,
+    partition_root: Path,
+    country: str,
+) -> dict[str, Any]:
+    manifest_path = partition_root / "manifest.json"
+    manifest = _read_json_if_exists(_relative_to_project(manifest_path)) or {}
+    partition_stats = manifest.get("partitionStats")
+    partition_columns = manifest.get("partitionColumns")
+    if not isinstance(partition_stats, dict):
+        return {"status": "unavailable", "reason": "missing_partition_stats"}
+    first_partition_column = (
+        str(partition_columns[0])
+        if isinstance(partition_columns, list) and partition_columns
+        else "国家"
+    )
+    target_prefix = f"{first_partition_column}={quote(country, safe='')}"
+    untouched_stats = {
+        str(key): value
+        for key, value in partition_stats.items()
+        if not str(key).startswith(target_prefix)
+    }
+    encoded = json.dumps(untouched_stats, ensure_ascii=False, sort_keys=True).encode("utf-8")
+    return {
+        "status": "pass",
+        "partitionManifestPath": _relative_to_project(manifest_path),
+        "targetPartitionPrefix": target_prefix,
+        "untouchedPartitionCount": len(untouched_stats),
+        "untouchedPartitionFingerprint": hashlib.sha256(encoded).hexdigest(),
+    }
+
+
+def _verify_untouched_partition_stability(
+    *,
+    before: dict[str, Any],
+    after: dict[str, Any],
+) -> dict[str, Any]:
+    if before.get("status") != "pass" or after.get("status") != "pass":
+        return {"status": "unavailable", "before": before, "after": after}
+    changed = before.get("untouchedPartitionFingerprint") != after.get(
+        "untouchedPartitionFingerprint"
+    )
+    return {
+        "status": "fail" if changed else "pass",
+        "untouchedPartitionCount": int(before.get("untouchedPartitionCount", 0) or 0),
+        "beforeFingerprint": before.get("untouchedPartitionFingerprint"),
+        "afterFingerprint": after.get("untouchedPartitionFingerprint"),
+    }
+
+
 def _latest_month_from_frame(frame: pd.DataFrame) -> str | None:
     month_columns = _detect_month_columns(list(frame.columns))
     for column in reversed(month_columns):
@@ -2036,10 +2111,16 @@ def _build_single_country_review(payload: dict[str, Any]) -> dict[str, Any]:
         raise HTTPException(status_code=409, detail="单国任务缺少 Review 所需信息。")
     candidate_path = _project_path(str(artifacts.get("stagingOutputPath") or "").strip())
     active_paths = _active_data_paths()
-    if candidate_path is None or not candidate_path.exists() or not active_paths["parquet"].exists():
+    if candidate_path is None or not candidate_path.exists():
         raise HTTPException(status_code=409, detail="单国任务尚未生成可 Review 的 candidate。")
     candidate_frame = _load_parquet_country_subset(candidate_path, country, path_label="candidate")
-    active_frame = _load_parquet_country_subset(active_paths["parquet"], country, path_label="active")
+    target_active_partition = active_paths["partition"] / f"国家={quote(country, safe='')}"
+    if target_active_partition.exists():
+        active_frame = _load_active_country_partition_subset(active_paths["partition"], country)
+    elif active_paths["parquet"].exists():
+        active_frame = _load_parquet_country_subset(active_paths["parquet"], country, path_label="active")
+    else:
+        raise HTTPException(status_code=409, detail="缺少 active 数据，不能生成单国 Review。")
     month_columns = _detect_month_columns(list(candidate_frame.columns))
     active_month_columns = _detect_month_columns(list(active_frame.columns))
     candidate_non_month_columns = set(candidate_frame.columns) - set(month_columns)
@@ -2079,14 +2160,10 @@ def _build_single_country_review(payload: dict[str, Any]) -> dict[str, Any]:
             candidate_sales=candidate_sales.get(month),
         )[0]
     ]
-    partition_path = _project_path(str(artifacts.get("partitionOutputPath") or "").strip())
+    untouched_partition_check = artifacts.get("untouchedPartitionCheck")
     partition_check = (
-        _partition_stability_check(
-            active_partition_path=active_paths["partition"],
-            candidate_partition_path=partition_path,
-            country=country,
-        )
-        if partition_path is not None and partition_path.exists() and active_paths["partition"].exists()
+        untouched_partition_check
+        if isinstance(untouched_partition_check, dict)
         else {"status": "unavailable", "changedPartitions": []}
     )
     findings: list[dict[str, Any]] = []
@@ -2135,7 +2212,7 @@ def _build_single_country_review(payload: dict[str, Any]) -> dict[str, Any]:
         "scope": "country",
         "target": country,
         "ruleId": "SC201",
-        "message": "单国 candidate 已使用 active 数据补充未上传国家。",
+        "message": "单国 candidate 仅读取目标国家分区；未上传国家 active 分区保持只读。",
         "metrics": {"rowCount": int(len(candidate_frame)), "latestMonth": candidate_latest},
         "suggestedAction": "manual_review_required",
     })
@@ -2393,6 +2470,14 @@ def publish_jato_monthly_update_job(
     artifacts = payload.get("artifacts")
     if not isinstance(artifacts, dict):
         raise HTTPException(status_code=409, detail="当前任务缺少 staging 产物信息，不能 publish。")
+    if artifacts.get("candidateScope") == "target_country_partition_only":
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "单国 candidate 仅用于 Review，不能直接 Publish。"
+                "需要通过完整的、已批准的分区 promotion 流程生成 active 产物。"
+            ),
+        )
     approval = payload.get("reviewApproval")
     if not isinstance(approval, dict) or approval.get("decision") != "approved":
         raise HTTPException(status_code=409, detail="必须先完成并批准当前 candidate 的 Review，才能 publish。")
@@ -3573,9 +3658,10 @@ def _run_single_country_job(job_id: str) -> None:
             raise RuntimeError("上传文件必须包含国家列。")
         frame[country_col] = frame[country_col].astype("string").fillna("").str.strip()
         uploaded_countries = _ordered_distinct_strings(frame[country_col].tolist())
-        if country not in uploaded_countries:
+        if uploaded_countries != [country]:
             raise RuntimeError(
-                f"上传文件中未找到国家「{country}」。可用国家：{', '.join(uploaded_countries)}"
+                "单国上传必须且只能包含目标国家「"
+                f"{country}」。检测到：{', '.join(uploaded_countries) or '-'}"
             )
 
         _append_log(
@@ -3587,17 +3673,15 @@ def _run_single_country_job(job_id: str) -> None:
         job_dir = _job_dir(job_id)
         staging_dir = job_dir / "staging"
         staging_dir.mkdir(parents=True, exist_ok=True)
-        staging_output = staging_dir / "jato_full_archive.parquet"
+        staging_output = staging_dir / "single_country_candidate.parquet"
         manifest_path = staging_dir / "manifest.json"
-        partition_output = staging_dir / "partitioned_dataset_v1"
-        fingerprint_path = staging_dir / "dataset_fingerprint.json"
         report_path = staging_dir / "refresh_job_report.json"
-
-        baseline_path, baseline_source = _require_latest_baseline()
-
-        _append_log(
-            log_path,
-            f"[{_utc_now().isoformat()}] baseline: {_relative_to_project(baseline_path) or baseline_path}",
+        active_paths = _active_data_paths()
+        if not active_paths["partition"].exists():
+            raise RuntimeError("单国刷新需要 active partitioned dataset，当前分区目录不存在。")
+        untouched_before = _untouched_partition_snapshot(
+            partition_root=active_paths["partition"],
+            country=country,
         )
 
         state["phase"] = "refreshing"
@@ -3606,63 +3690,76 @@ def _run_single_country_job(job_id: str) -> None:
 
         refresh_args = [
             sys.executable,
-            str(PROJECT_ROOT / "03_Scripts" / "data_pipeline" / "run_data_refresh_job.py"),
-            "--baseline-input",
-            str(baseline_path.resolve()),
-            "--patch-input-files",
+            str(SINGLE_COUNTRY_ETL_SCRIPT_PATH),
+            "--input",
             str(stored_upload_path.resolve()),
             "--output",
             str(staging_output.resolve()),
             "--manifest",
             str(manifest_path.resolve()),
-            "--partition-output",
-            str(partition_output.resolve()),
-            "--report",
-            str(report_path.resolve()),
-            "--fingerprint",
-            str(fingerprint_path.resolve()),
-            "--incremental",
-            "--skip-benchmark",
+            "--job-id",
+            job_id,
         ]
-
-        active_paths = _active_data_paths()
-        if active_paths["parquet"].exists():
-            refresh_args.extend(
-                [
-                    "--supplement-missing-countries-from-parquet",
-                    str(active_paths["parquet"].resolve()),
-                ]
-            )
-
+        refresh_started_at = time.monotonic()
         _run_logged_command(
-            label="单国家刷新",
+            label="单国家目标分区转换",
             args=refresh_args,
             log_path=log_path,
         )
-
-        refresh_report = _read_json_if_exists(str(report_path.resolve()))
-        if refresh_report is None:
-            raise RuntimeError("Refresh 完成后未找到 refresh_job_report.json。")
+        candidate_frame = _load_parquet_country_subset(
+            staging_output,
+            country,
+            path_label="single-country candidate",
+        )
+        candidate_latest = _latest_month_from_frame(candidate_frame)
+        expected_month_label = datetime.strptime(month, "%Y-%m").strftime("%Y %b")
+        if candidate_latest != expected_month_label:
+            raise RuntimeError(
+                "单国 candidate 的最新月份与上传请求不一致："
+                f"expected={expected_month_label}, actual={candidate_latest or '-'}"
+            )
+        untouched_after = _untouched_partition_snapshot(
+            partition_root=active_paths["partition"],
+            country=country,
+        )
+        untouched_partition_check = _verify_untouched_partition_stability(
+            before=untouched_before,
+            after=untouched_after,
+        )
+        refresh_report = {
+            "jobStatus": "success",
+            "jobElapsedSeconds": round(time.monotonic() - refresh_started_at, 3),
+            "fullManifest": {
+                "rows": int(len(candidate_frame)),
+                "columns": int(len(candidate_frame.columns)),
+            },
+            "partitionManifest": {"parquetFileCount": 1},
+            "incremental": {
+                "enabled": True,
+                "scope": "target_country_partition_only",
+                "targetCountry": country,
+                "untouchedPartitionCheck": untouched_partition_check,
+            },
+        }
+        _write_json(report_path, refresh_report)
 
         state["artifacts"] = {
             "jobDir": _relative_to_project(job_dir),
             "logPath": _relative_to_project(log_path),
-            "baselinePath": _relative_to_project(baseline_path),
-            "baselineSource": baseline_source,
+            "baselinePath": None,
+            "baselineSource": "active_country_partition",
             "stagedPatchPath": _relative_to_project(stored_upload_path),
-            "supplementParquetPath": (
-                _relative_to_project(active_paths["parquet"])
-                if active_paths["parquet"].exists()
-                else None
-            ),
+            "supplementParquetPath": None,
             "stagingOutputPath": _relative_to_project(staging_output),
             "manifestPath": _relative_to_project(manifest_path),
-            "partitionOutputPath": _relative_to_project(partition_output),
+            "partitionOutputPath": None,
             "refreshReportPath": _relative_to_project(report_path),
-            "fingerprintPath": _relative_to_project(fingerprint_path),
+            "fingerprintPath": None,
             "reviewDir": None,
             "rawCompareReportPath": None,
             "planPath": None,
+            "candidateScope": "target_country_partition_only",
+            "untouchedPartitionCheck": untouched_partition_check,
         }
         state["summaries"] = {
             "refresh": _summarize_refresh_report(refresh_report),
@@ -3680,7 +3777,7 @@ def _run_single_country_job(job_id: str) -> None:
         _write_jato_etl_pipeline_status(state)
         _append_log(
             log_path,
-            f"[{_utc_now().isoformat()}] 单国家任务完成：{country} {month}。可前往 Publish。",
+            f"[{_utc_now().isoformat()}] 单国家任务完成：{country} {month}。可前往 Review。",
         )
 
     except _JobResourceKilled as exc:

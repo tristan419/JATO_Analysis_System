@@ -2110,6 +2110,7 @@ def test_single_country_review_checks_target_and_untouched_partitions(
             "manifestPath": "04_Processed_data/staging/hungary-may/manifest.json",
             "partitionOutputPath": "04_Processed_data/staging/hungary-may/partitioned_dataset_v1",
             "refreshReportPath": "04_Processed_data/staging/hungary-may/refresh_job_report.json",
+            "untouchedPartitionCheck": {"status": "pass", "untouchedPartitionCount": 1},
         },
     })
     jato_monthly_update_service._persist_job_state(state)
@@ -2125,3 +2126,98 @@ def test_single_country_review_checks_target_and_untouched_partitions(
     assert review["countryScopeSummary"]["untouchedPartitionCheck"]["status"] == "pass"
     assert not any(item["severity"] == "blocker" for item in review["reviewFindings"])
     assert approved["reviewApproval"]["decision"] == "approved"
+
+
+def test_single_country_partition_snapshot_detects_untouched_changes(
+    tmp_path: Path, monkeypatch
+) -> None:
+    project_root = tmp_path / "project"
+    monkeypatch.setattr(jato_monthly_update_service, "PROJECT_ROOT", project_root)
+    partition_root = project_root / "04_Processed_data" / "partitioned_dataset_v1"
+    partition_root.mkdir(parents=True, exist_ok=True)
+    hungary = quote("匈牙利", safe="")
+    germany = quote("德国", safe="")
+    manifest_path = partition_root / "manifest.json"
+    manifest_path.write_text(
+        json.dumps(
+            {
+                "partitionColumns": ["国家"],
+                "partitionStats": {
+                    f"国家={hungary}": {"rows": 10},
+                    f"国家={germany}": {"rows": 20},
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    before = jato_monthly_update_service._untouched_partition_snapshot(
+        partition_root=partition_root,
+        country="匈牙利",
+    )
+    unchanged = jato_monthly_update_service._untouched_partition_snapshot(
+        partition_root=partition_root,
+        country="匈牙利",
+    )
+
+    assert jato_monthly_update_service._verify_untouched_partition_stability(
+        before=before,
+        after=unchanged,
+    )["status"] == "pass"
+
+    manifest_path.write_text(
+        json.dumps(
+            {
+                "partitionColumns": ["国家"],
+                "partitionStats": {
+                    f"国家={hungary}": {"rows": 10},
+                    f"国家={germany}": {"rows": 21},
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    changed = jato_monthly_update_service._untouched_partition_snapshot(
+        partition_root=partition_root,
+        country="匈牙利",
+    )
+
+    assert jato_monthly_update_service._verify_untouched_partition_stability(
+        before=before,
+        after=changed,
+    )["status"] == "fail"
+
+
+def test_target_only_single_country_candidate_cannot_publish(
+    tmp_path: Path, monkeypatch
+) -> None:
+    project_root = tmp_path / "project"
+    job_root = project_root / "04_Processed_data" / "ops" / "jato_monthly_update_jobs"
+    monkeypatch.setattr(jato_monthly_update_service, "PROJECT_ROOT", project_root)
+    monkeypatch.setattr(jato_monthly_update_service, "MONTHLY_UPDATE_JOB_ROOT", job_root)
+    job_id = "jato-sc-review-only"
+    upload_path = job_root / job_id / "uploads" / "Hungary-2026-05.xlsx"
+    upload_path.parent.mkdir(parents=True, exist_ok=True)
+    upload_path.write_bytes(b"candidate")
+    state = jato_monthly_update_service._prepare_initial_job_state(
+        job_id=job_id,
+        month="2026-05",
+        triggered_by="tester",
+        upload_filename=upload_path.name,
+        stored_upload_path=upload_path,
+    )
+    state.update(
+        {
+            "status": "success",
+            "phase": "completed",
+            "summaries": {"refresh": {"jobStatus": "success"}},
+            "artifacts": {"candidateScope": "target_country_partition_only"},
+        }
+    )
+    jato_monthly_update_service._persist_job_state(state)
+
+    with pytest.raises(HTTPException, match="仅用于 Review"):
+        jato_monthly_update_service.publish_jato_monthly_update_job(
+            job_id=job_id,
+            triggered_by="publisher",
+        )
