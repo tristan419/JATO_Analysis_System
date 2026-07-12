@@ -2,6 +2,7 @@ from pathlib import Path
 import re
 
 from jato_scraper.config_loader import (
+    _build_http_json_profile,
     _build_http_text_profile,
     _build_pdf_text_profile,
     _build_scrapling_profile,
@@ -362,3 +363,44 @@ def test_hungary_suzuki_profiles_use_official_configurator_list_prices_only() ->
         assert "&quot;prices&quot;:\\{&quot;list&quot;" in entry.pattern
         assert "discount" not in entry.pattern
         assert re.compile(entry.pattern)
+
+
+def test_hungary_volkswagen_profiles_use_official_configurator_list_price_api() -> None:
+    source_root = (
+        Path(__file__).resolve().parents[1]
+        / "source_drafts"
+        / "suv_only_country_model_top30"
+        / "hu"
+    )
+    expected = {
+        "12_volkswagen_t_roc_hu.yaml": ("T-ROC", "042"),
+        "16_volkswagen_tiguan_hu.yaml": ("TIGUAN", "192"),
+    }
+    api_url = (
+        "https://cc.porscheinformatik.com/cc-hu/be/hu_HU_VW22/"
+        "api/v2/modelgroup?brand=V"
+    )
+
+    for filename, (model, group_code) in expected.items():
+        source = _load_yaml_mapping(source_root / filename)
+        profile = _build_http_json_profile(source["profile"])
+
+        assert source["extractor_type"] == "http_json"
+        assert source["source_url"] == api_url
+        assert profile.url == api_url.removesuffix("?brand=V")
+        assert profile.params == {"brand": "V"}
+        assert profile.default_currency == "HUF"
+        assert profile.default_tax_included is True
+        assert profile.fixed_model == model
+        assert profile.field_mapping.vehicles_path == "modelgroups"
+        assert profile.field_mapping.items_paths == ("variants", "models")
+        assert profile.field_mapping.price == "listPrice.gross"
+        assert profile.filters[0].path == "modelGroupNumber"
+        assert profile.filters[0].equals == (group_code,)
+        assert profile.match_reason["kind"] == "official_configurator_modelgroup_list_price"
+        if model == "TIGUAN":
+            assert profile.min_price_group is not None
+            assert profile.min_price_group.key == "modelGroupNumber"
+            assert profile.min_price_group.price == "listPrice.gross"
+        else:
+            assert profile.min_price_group is None
