@@ -59,6 +59,8 @@ pip install -e .
 playwright install chromium
 ```
 
+`pdf_text` source 遇到字体编码导致 `pypdf` 无法取字的官方价目 PDF 时，会回退到 Poppler 的 `pdftotext`。生产环境需安装 Poppler 并确保 `pdftotext` 在 `PATH`；若二进制位于非标准位置，设置 `JATO_PDFTOTEXT_BIN=/absolute/path/to/pdftotext`。该回退只负责文本解码，价格仍必须由 source profile 明确匹配官方 `Listaár` / list-price 字段。
+
 如果后续需要用 NVIDIA NIM 做页面分析或 source 辅助判定，先在仓库根目录执行：
 
 ```bash
