@@ -376,6 +376,29 @@ def test_czech_volkswagen_tayron_profile_uses_current_official_list_price_pdf() 
         assert re.compile(entry.pattern)
 
 
+def test_czech_mg_zs_profile_uses_current_official_list_price_pdf() -> None:
+    source_path = (
+        Path(__file__).resolve().parents[1]
+        / "source_drafts"
+        / "suv_only_country_model_top30"
+        / "cz"
+        / "06_mg_zs_cz.yaml"
+    )
+    source = _load_yaml_mapping(source_path)
+    profile = _build_pdf_text_profile(source["profile"])
+
+    assert source["extractor_type"] == "pdf_text"
+    assert source["source_type"] == "official_price_list"
+    assert source["source_url"] == profile.url
+    assert profile.prefer_curl_download is True
+    assert profile.default_price_label == "Cena (doporučená cena včetně DPH)"
+    assert profile.match_reason["document_valid_from"] == "2026-07-01"
+    assert len(profile.entry_patterns) == 5
+    for entry in profile.entry_patterns:
+        assert "AKČNÍ CENA" not in entry.pattern
+        assert re.compile(entry.pattern)
+
+
 def test_hungary_suzuki_profiles_use_official_configurator_list_prices_only() -> None:
     source_root = (
         Path(__file__).resolve().parents[1]
