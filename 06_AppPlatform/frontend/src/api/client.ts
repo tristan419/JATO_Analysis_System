@@ -1211,7 +1211,10 @@ function mapJatoMonthlyUpdateReviewFinding(
     metrics: raw.metrics && typeof raw.metrics === "object"
       ? raw.metrics as Record<string, unknown>
       : {},
-    suggestedAction: String(raw.suggestedAction ?? "")
+    suggestedAction: String(raw.suggestedAction ?? ""),
+    sourceFeedback: raw.sourceFeedback === undefined || raw.sourceFeedback === null
+      ? null
+      : String(raw.sourceFeedback)
   };
 }
 

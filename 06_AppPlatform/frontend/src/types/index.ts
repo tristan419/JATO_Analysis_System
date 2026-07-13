@@ -1820,6 +1820,7 @@ export interface JatoMonthlyUpdateReviewFinding {
   message: string;
   metrics: Record<string, unknown>;
   suggestedAction: string;
+  sourceFeedback?: string | null;
 }
 
 export interface JatoMonthlyUpdateConflictSample {

@@ -2254,6 +2254,29 @@ def test_single_country_schema_contract_separates_material_and_derived_drift() -
     assert contract["missingNullOnly"] == ["legacy blank column"]
 
 
+def test_single_country_source_feedback_distinguishes_schema_and_row_delta() -> None:
+    schema_feedback = jato_monthly_update_service._single_country_source_feedback(
+        rule_id="SC009",
+        country="匈牙利",
+        metrics={"missingMaterialColumns": ["MSRP including delivery charge"]},
+    )
+    row_delta_feedback = jato_monthly_update_service._single_country_source_feedback(
+        rule_id="SC012",
+        country="匈牙利",
+        metrics={
+            "rowDelta": -358,
+            "historicalSalesStability": {"status": "pass"},
+        },
+    )
+
+    assert schema_feedback is not None
+    assert "MSRP including delivery charge" in schema_feedback
+    assert "不能用 Retail price" in schema_feedback
+    assert row_delta_feedback is not None
+    assert "减少 358 行" in row_delta_feedback
+    assert "历史销量已通过核对" in row_delta_feedback
+
+
 def test_single_country_configuration_fingerprint_keeps_price_variants_distinct() -> None:
     candidate = pd.DataFrame(
         {

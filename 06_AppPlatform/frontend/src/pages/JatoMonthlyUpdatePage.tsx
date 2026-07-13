@@ -53,6 +53,18 @@ function formatReviewMetrics(metrics: Record<string, unknown>): string {
     .join(" · ");
 }
 
+async function copySourceFeedback(value: string): Promise<boolean> {
+  if (!navigator.clipboard?.writeText) {
+    return false;
+  }
+  try {
+    await navigator.clipboard.writeText(value);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 function formatConflictSampleBusinessKey(
   businessKey: JatoMonthlyUpdateConflictSample["businessKey"]
 ): string {
@@ -139,6 +151,7 @@ export function JatoMonthlyUpdatePage() {
   const [cancellingJobId, setCancellingJobId] = useState<string | null>(null);
   const [publishingJobId, setPublishingJobId] = useState<string | null>(null);
   const [rollingBackJobId, setRollingBackJobId] = useState<string | null>(null);
+  const [copiedSourceFeedbackKey, setCopiedSourceFeedbackKey] = useState<string | null>(null);
   const [promotingBaseline, setPromotingBaseline] = useState(false);
   const [reviewLoadingJobId, setReviewLoadingJobId] = useState<string | null>(null);
   const [approvingReviewJobId, setApprovingReviewJobId] = useState<string | null>(null);
@@ -1784,18 +1797,42 @@ Smart Merge:  [SE:keep active 2026-03] [DE:patch 2026-03] [NL:patch 2026-02] [FR
                               <th>Rule</th>
                               <th>Message</th>
                               <th>Details</th>
+                              <th>给洗数方反馈</th>
                             </tr>
                           </thead>
                           <tbody>
-                            {reviewBundle.reviewFindings.map((finding, index) => (
-                              <tr key={`${finding.ruleId}-${finding.target}-${index}`}>
-                                <td>{finding.severity}</td>
-                                <td>{finding.target || "-"}</td>
-                                <td>{finding.ruleId || "-"}</td>
-                                <td>{finding.message || "-"}</td>
-                                <td>{formatReviewMetrics(finding.metrics)}</td>
-                              </tr>
-                            ))}
+                            {reviewBundle.reviewFindings.map((finding, index) => {
+                              const findingKey = `${finding.ruleId}-${finding.target}-${index}`;
+                              return (
+                                <tr key={findingKey}>
+                                  <td>{finding.severity}</td>
+                                  <td>{finding.target || "-"}</td>
+                                  <td>{finding.ruleId || "-"}</td>
+                                  <td>{finding.message || "-"}</td>
+                                  <td>{formatReviewMetrics(finding.metrics)}</td>
+                                  <td>
+                                    {finding.sourceFeedback ? (
+                                      <div className="monthly-update-feedback-cell">
+                                        <span>{finding.sourceFeedback}</span>
+                                        <button
+                                          type="button"
+                                          className="btn btn-secondary"
+                                          onClick={() => {
+                                            void copySourceFeedback(finding.sourceFeedback!).then((copied) => {
+                                              if (copied) {
+                                                setCopiedSourceFeedbackKey(findingKey);
+                                              }
+                                            });
+                                          }}
+                                        >
+                                          {copiedSourceFeedbackKey === findingKey ? "已复制" : "复制反馈"}
+                                        </button>
+                                      </div>
+                                    ) : "-"}
+                                  </td>
+                                </tr>
+                              );
+                            })}
                           </tbody>
                         </table>
                       </div>

@@ -1819,6 +1819,11 @@ def _sanitize_review_finding(item: Any) -> dict[str, Any] | None:
         "message": str(item.get("message", "")),
         "metrics": metrics if isinstance(metrics, dict) else {},
         "suggestedAction": str(item.get("suggestedAction", "")),
+        "sourceFeedback": (
+            None
+            if item.get("sourceFeedback") in {None, ""}
+            else str(item.get("sourceFeedback"))
+        ),
     }
 
 
@@ -2227,6 +2232,105 @@ def _single_country_historical_sales_stability(
     }
 
 
+def _single_country_source_feedback(
+    *,
+    rule_id: str,
+    country: str,
+    metrics: dict[str, Any],
+) -> str | None:
+    """Return the copy-ready request that should go back to the data washer.
+
+    Review findings remain the source of truth for the publish decision.  This
+    text only translates their measured result into an actionable request, so
+    analysts do not have to infer an upstream data request from internal QA
+    terminology or metrics.
+    """
+
+    def columns(name: str) -> str:
+        values = metrics.get(name)
+        return "、".join(str(value) for value in values) if isinstance(values, list) else ""
+
+    if rule_id == "SC001":
+        return (
+            f"请重新导出 {country} 的完整月份列。当前文件未识别到任何有效月份列；"
+            "请保留历史月份和本次最新月份，并确保销量字段为可解析数字。"
+        )
+    if rule_id == "SC002":
+        return (
+            f"请检查 {country} 的月份销量值。文件包含月份标题但没有可用数值；"
+            "请不要把销量列清空、转成文本或用格式符号替代数值。"
+        )
+    if rule_id == "SC003":
+        return (
+            f"请提供不早于当前 active {metrics.get('active') or '月份'} 的 {country} 数据。"
+            f"本次最新月份为 {metrics.get('candidate') or '未知'}，发生回退；"
+            "请确认导出筛选条件包含本次要推进的最新月份。"
+        )
+    if rule_id == "SC004":
+        return (
+            f"请去除 {country} 文件中的完全相同配置行（检测到 {metrics.get('duplicateRows', 0)} 行）。"
+            "只删除所有配置字段均相同的重复记录；价格、Registration type、动力或车身不同的版本不能合并。"
+        )
+    if rule_id == "SC005":
+        return (
+            f"请修正 {country} 文件中的负销量（检测到 {metrics.get('negativeSalesCells', 0)} 个单元格）。"
+            "请按原始 JATO 导出确认更正、冲销或缺失值的处理方式，不能直接把负数绝对值化。"
+        )
+    if rule_id == "SC006":
+        months = columns("months")
+        return (
+            f"请检查 {country} 的历史月份是否被重复拼接或重复累计{f'：{months}' if months else ''}。"
+            "候选销量接近 active 的两倍；请从原始导出重新生成，不要把历史全量文件再追加到已有历史上。"
+        )
+    if rule_id == "SC007":
+        return (
+            f"请仅提供 {country} 的单国数据。系统发现未上传国家的分区也发生变化；"
+            "请检查洗数流程是否混入其他国家或复写了共享数据。"
+        )
+    if rule_id == "SC008":
+        return (
+            "本次无法证明未上传国家未被影响。请保留单国文件的国家范围、源文件哈希和分区清单，"
+            "以便重新提交时完成隔离校验。"
+        )
+    if rule_id == "SC009":
+        missing = columns("missingMaterialColumns")
+        return (
+            f"请在 {country} 的洗数后 Data Export 中保留业务字段：{missing or '见 Review 明细'}。"
+            "这些列在当前 active 数据中有实际值，不能用 Retail price 或其他相近字段自动替代；"
+            "请从原始 JATO 导出补齐后重新输出同一月份文件。"
+        )
+    if rule_id == "SC010":
+        extra = columns("extraColumns")
+        return (
+            f"{country} 文件新增字段：{extra or '见 Review 明细'}。"
+            "请提供字段定义、单位和是否应保留的确认；新增列不应覆盖或改名现有业务列。"
+        )
+    if rule_id == "SC011":
+        return (
+            f"请恢复 {country} 在 {metrics.get('comparedThrough') or '已有'} 之前的历史销量。"
+            f"系统发现 {metrics.get('mismatchCount', 0)} 处历史销量差异；"
+            "本次更新只能新增或修正经确认的最新月份，不能重写已发布历史月份。"
+        )
+    if rule_id == "SC012":
+        row_delta = int(metrics.get("rowDelta", 0) or 0)
+        stability = metrics.get("historicalSalesStability")
+        status = stability.get("status") if isinstance(stability, dict) else "unavailable"
+        history_note = "历史销量已通过核对" if status == "pass" else "历史销量需要一并复核"
+        return (
+            f"{country} 本次配置行较 active {'减少' if row_delta < 0 else '增加'} {abs(row_delta)} 行，{history_note}。"
+            "请说明洗数时的去重、零销量配置过滤和车型下架规则，并提供清洗前后配置行数；"
+            "不要仅为凑行数复制或补造车型。"
+        )
+    if rule_id == "SC013":
+        missing = columns("missingDerivedYtdColumns")
+        return (
+            f"{country} 缺少旧月份 YTD 派生列：{missing or '见 Review 明细'}。"
+            "这不是发布 blocker；请确认最新月份的 YTD 字段仍由 Jan 至当月销量计算，"
+            "并在后续导出中保持 YTD 列命名和口径一致。"
+        )
+    return None
+
+
 def _build_single_country_review(payload: dict[str, Any]) -> dict[str, Any]:
     country = str(payload.get("country") or "").strip()
     artifacts = payload.get("artifacts")
@@ -2291,7 +2395,7 @@ def _build_single_country_review(payload: dict[str, Any]) -> dict[str, Any]:
     )
     findings: list[dict[str, Any]] = []
     def add_finding(severity: str, rule_id: str, message: str, metrics: dict[str, Any]) -> None:
-        findings.append({
+        finding = {
             "severity": severity,
             "scope": "country",
             "target": country,
@@ -2299,14 +2403,24 @@ def _build_single_country_review(payload: dict[str, Any]) -> dict[str, Any]:
             "message": message,
             "metrics": metrics,
             "suggestedAction": "reject_input_batch" if severity == "blocker" else "manual_review_required",
-        })
+        }
+        source_feedback = _single_country_source_feedback(
+            rule_id=rule_id,
+            country=country,
+            metrics=metrics,
+        )
+        if source_feedback:
+            finding["sourceFeedback"] = source_feedback
+        findings.append(finding)
     if not month_columns:
         add_finding("blocker", "SC001", "candidate 缺少月份列。", {})
     if schema_contract["missingMaterial"]:
         add_finding(
             "blocker",
             "SC009",
-            "单国 candidate 缺少 active 业务列。",
+            "单国 candidate 缺少 active 业务列："
+            + "、".join(schema_contract["missingMaterial"])
+            + "。",
             {
                 "missingMaterialColumns": schema_contract["missingMaterial"],
                 "missingDerivedYtdColumns": schema_contract["missingDerivedYtd"],
@@ -2317,14 +2431,18 @@ def _build_single_country_review(payload: dict[str, Any]) -> dict[str, Any]:
         add_finding(
             "review",
             "SC013",
-            "单国 candidate 缺少旧月份 YTD 派生列。",
+            "单国 candidate 缺少旧月份 YTD 派生列："
+            + "、".join(schema_contract["missingDerivedYtd"])
+            + "。",
             {"missingDerivedYtdColumns": schema_contract["missingDerivedYtd"]},
         )
     if schema_contract["extra"]:
         add_finding(
             "review",
             "SC010",
-            "单国 candidate 包含 active 中没有的新业务列。",
+            "单国 candidate 包含 active 中没有的新业务列："
+            + "、".join(schema_contract["extra"])
+            + "。",
             {"extraColumns": schema_contract["extra"]},
         )
     if candidate_latest is None:
