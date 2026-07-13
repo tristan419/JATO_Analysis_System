@@ -1,46 +1,95 @@
 source_code: volkswagen_tayron_cz_draft_scrapling
 country: 捷克
 brand: VOLKSWAGEN
-source_url: https://www.volkswagen.cz/modely/tayron
-source_type: manufacturer_official
+source_url: https://www.volkswagen.cz/dam/files/download/9134bf9d4caf7a31052f3dca210127483dc9b029/1ca990887bd829e969401bae9461c964/a5e29298-029d-432b-b4da-47f286205e2b/Cenik_Tayron_2026_04
+source_type: official_price_list
 price_semantics: base_msrp
-extractor_type: playwright
-profile_preset: ../_shared/presets/volkswagen_configurator_trim_overview_playwright.yaml
+extractor_type: pdf_text
 profile:
-  url: https://www.volkswagen.cz/modely/tayron
+  url: https://www.volkswagen.cz/dam/files/download/9134bf9d4caf7a31052f3dca210127483dc9b029/1ca990887bd829e969401bae9461c964/a5e29298-029d-432b-b4da-47f286205e2b/Cenik_Tayron_2026_04
+  prefer_curl_download: true
+  timeout_seconds: 60
   default_currency: CZK
   default_tax_included: true
-  default_price_label: Doporučená cena včetně DPH
+  default_price_label: Cena s DPH
   fixed_model: TAYRON
   fixed_jato_model: TAYRON
-  structured_fields:
-    powertrain_rules:
-    - key: powertrain_phev
-      powertrain: PHEV
-      keywords:
-      - plug-in hybrid
-      - eHybrid
-      - Tayron eHybrid
-    - key: powertrain_mhev
-      powertrain: MHEV
-      keywords:
-      - mild hybrid
-      - eTSI
-    - key: powertrain_ice
-      powertrain: ICE
-      keywords:
-      - benzín
-      - nafta
-      - TSI
-      - TDI
+  copy_trim_to_jato_trim: true
+  match_confidence: 0.88
+  match_status: review_required
+  match_reason:
+    kind: official_pdf_price_list
+    source: volkswagen_cz_tayron_cenik
+    document_valid_from: '2026-04-01'
+    model_year: '2026'
+    note: Official Volkswagen Czech Tayron price-list PDF. Entries explicitly select Cena s DPH and exclude the adjacent Cena bez DPH and finance offers.
+  entry_patterns:
+  - pattern: 'R41C4Z02[\s\S]{0,160}?\d{1,3},\d{3},\d{3}\s+Kč\s+(?P<price>\d{1,3},\d{3},\d{3})\s+Kč'
+    official_trim: Life 2.0 TDI 110 kW
+    official_powertrain: Diesel / 2.0 l / 110 kW
+    jato_powertrain: ICE
+  - pattern: 'R41CBM02[\s\S]{0,160}?\d{1,3},\d{3},\d{3}\s+Kč\s+(?P<price>\d{1,3},\d{3},\d{3})\s+Kč'
+    official_trim: Life 1.5 eTSI mHEV 110 kW
+    official_powertrain: Benzin Mild hybrid / 1.5 l / 110 kW
+    jato_powertrain: MHEV
+  - pattern: 'R41CZY02[\s\S]{0,160}?\d{1,3},\d{3},\d{3}\s+Kč\s+(?P<price>\d{1,3},\d{3},\d{3})\s+Kč'
+    official_trim: Life 1.5 TSI PHEV 110 kW
+    official_powertrain: Plug-in hybrid / 1.5 l / 110 kW
+    jato_powertrain: PHEV
+  - pattern: 'R41D4Z02[\s\S]{0,160}?\d{1,3},\d{3},\d{3}\s+Kč\s+(?P<price>\d{1,3},\d{3},\d{3})\s+Kč'
+    official_trim: Elegance 2.0 TDI 110 kW
+    official_powertrain: Diesel / 2.0 l / 110 kW
+    jato_powertrain: ICE
+  - pattern: 'R41D7T02[\s\S]{0,160}?\d{1,3},\d{3},\d{3}\s+Kč\s+(?P<price>\d{1,3},\d{3},\d{3})\s+Kč'
+    official_trim: Elegance 2.0 TDI 4MOTION 142 kW
+    official_powertrain: Diesel / 2.0 l / 142 kW
+    jato_powertrain: ICE
+  - pattern: 'R41DBM02[\s\S]{0,160}?\d{1,3},\d{3},\d{3}\s+Kč\s+(?P<price>\d{1,3},\d{3},\d{3})\s+Kč'
+    official_trim: Elegance 1.5 eTSI mHEV 110 kW
+    official_powertrain: Benzin Mild hybrid / 1.5 l / 110 kW
+    jato_powertrain: MHEV
+  - pattern: 'R41DPT02[\s\S]{0,160}?\d{1,3},\d{3},\d{3}\s+Kč\s+(?P<price>\d{1,3},\d{3},\d{3})\s+Kč'
+    official_trim: Elegance 2.0 TSI 4MOTION 150 kW
+    official_powertrain: Benzin / 2.0 l / 150 kW
+    jato_powertrain: ICE
+  - pattern: 'R41DZY02[\s\S]{0,160}?\d{1,3},\d{3},\d{3}\s+Kč\s+(?P<price>\d{1,3},\d{3},\d{3})\s+Kč'
+    official_trim: Elegance 1.5 TSI PHEV 110 kW
+    official_powertrain: Plug-in hybrid / 1.5 l / 110 kW
+    jato_powertrain: PHEV
+  - pattern: 'R41E4Z02[\s\S]{0,160}?\d{1,3},\d{3},\d{3}\s+Kč\s+(?P<price>\d{1,3},\d{3},\d{3})\s+Kč'
+    official_trim: R-Line 2.0 TDI 110 kW
+    official_powertrain: Diesel / 2.0 l / 110 kW
+    jato_powertrain: ICE
+  - pattern: 'R41E7T02[\s\S]{0,160}?\d{1,3},\d{3},\d{3}\s+Kč\s+(?P<price>\d{1,3},\d{3},\d{3})\s+Kč'
+    official_trim: R-Line 2.0 TDI 4MOTION 142 kW
+    official_powertrain: Diesel / 2.0 l / 142 kW
+    jato_powertrain: ICE
+  - pattern: 'R41EBM02[\s\S]{0,160}?\d{1,3},\d{3},\d{3}\s+Kč\s+(?P<price>\d{1,3},\d{3},\d{3})\s+Kč'
+    official_trim: R-Line 1.5 eTSI mHEV 110 kW
+    official_powertrain: Benzin Mild hybrid / 1.5 l / 110 kW
+    jato_powertrain: MHEV
+  - pattern: 'R41EPT02[\s\S]{0,160}?\d{1,3},\d{3},\d{3}\s+Kč\s+(?P<price>\d{1,3},\d{3},\d{3})\s+Kč'
+    official_trim: R-Line 2.0 TSI 4MOTION 150 kW
+    official_powertrain: Benzin / 2.0 l / 150 kW
+    jato_powertrain: ICE
+  - pattern: 'R41EST02[\s\S]{0,160}?\d{1,3},\d{3},\d{3}\s+Kč\s+(?P<price>\d{1,3},\d{3},\d{3})\s+Kč'
+    official_trim: R-Line 2.0 TSI 4MOTION 195 kW
+    official_powertrain: Benzin / 2.0 l / 195 kW
+    jato_powertrain: ICE
+  - pattern: 'R41EYY02[\s\S]{0,160}?\d{1,3},\d{3},\d{3}\s+Kč\s+(?P<price>\d{1,3},\d{3},\d{3})\s+Kč'
+    official_trim: R-Line 1.5 TSI PHEV 130 kW
+    official_powertrain: Plug-in hybrid / 1.5 l / 130 kW
+    jato_powertrain: PHEV
+  - pattern: 'R41EZY02[\s\S]{0,160}?\d{1,3},\d{3},\d{3}\s+Kč\s+(?P<price>\d{1,3},\d{3},\d{3})\s+Kč'
+    official_trim: R-Line 1.5 TSI PHEV 110 kW
+    official_powertrain: Plug-in hybrid / 1.5 l / 110 kW
+    jato_powertrain: PHEV
 schedule:
   frequency: manual_only
   run_window_start: 00:00
   run_window_end: 05:00
   preferred_weekday: monday
-notes: Keywords filled from official manufacturer website research (CZ market). CSS
-  selectors still require browser-based inspection before promotion. [Switched to
-  playwright_card_flow with volkswagen_configurator_trim_overview_playwright.yaml]
+notes: Replaced the stale Volkswagen CZ Playwright trim selector with Volkswagen Czech Republic's current official Tayron price-list PDF. Extraction selects Cena s DPH only and excludes Cena bez DPH, campaign prices, and monthly finance payments.
 bootstrap_meta:
   country_model_rank: 24
   suggested_scope_kind: single_model
