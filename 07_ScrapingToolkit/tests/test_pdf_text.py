@@ -1,4 +1,5 @@
 import subprocess
+from types import SimpleNamespace
 
 import requests
 
@@ -306,6 +307,41 @@ def test_pdf_text_prefers_curl_download_before_requests(monkeypatch):
 
     assert extractor._fetch_pdf_bytes() == b"%PDF-1.7\n"
     assert curl_timeouts == [(30, "https://example.invalid/sealion.pdf")]
+
+
+def test_pdf_text_uses_poppler_when_pypdf_returns_blank_text(monkeypatch):
+    extractor = PdfTextExtractor(
+        ExtractorConfig(
+            source_code="kgm_korando_hu_draft_scrapling",
+            country="匈牙利",
+            brand="KGM",
+            source_url="https://example.invalid/korando.pdf",
+            source_type="official_price_list",
+            price_semantics="base_msrp",
+        ),
+        PdfTextProfile(url="https://example.invalid/korando.pdf"),
+    )
+
+    class FakePage:
+        def extract_text(self):
+            return ""
+
+    class FakeReader:
+        def __init__(self, _stream):
+            self.pages = [FakePage()]
+
+    commands = []
+
+    def fake_run(command, **kwargs):
+        commands.append((command, kwargs))
+        return SimpleNamespace(returncode=0, stdout=b"Lista\xc3\xa1r 9 299 000 Ft", stderr=b"")
+
+    monkeypatch.setattr(pdf_text_module, "PdfReader", FakeReader)
+    monkeypatch.setattr(pdf_text_module.shutil, "which", lambda name: "/usr/bin/pdftotext")
+    monkeypatch.setattr(pdf_text_module.subprocess, "run", fake_run)
+
+    assert extractor._extract_text_from_pdf_bytes(b"%PDF-1.7\n") == "Listaár 9 299 000 Ft"
+    assert commands[0][0][:4] == ["/usr/bin/pdftotext", "-layout", "-enc", "UTF-8"]
 
 
 def test_pdf_text_curl_fallback_keeps_curl_default_user_agent(monkeypatch):

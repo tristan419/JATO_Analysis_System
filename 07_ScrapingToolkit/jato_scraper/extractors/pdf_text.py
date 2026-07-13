@@ -5,8 +5,10 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from io import BytesIO
 import logging
+import os
 from pathlib import Path
 import re
+import shutil
 import subprocess
 import tempfile
 import time
@@ -33,6 +35,7 @@ DEFAULT_BROWSER_USER_AGENT = (
     "AppleWebKit/537.36 (KHTML, like Gecko) "
     "Chrome/126.0.0.0 Safari/537.36"
 )
+PDFTOTEXT_BINARY_ENV = "JATO_PDFTOTEXT_BIN"
 _PRICE_RE = re.compile(r"\d[\d\s.,'\u2019]*\d|\d")
 
 
@@ -357,13 +360,58 @@ class PdfTextExtractor(BaseExtractor):
             blob = self._fetch_pdf_bytes_url(url)
             if blob is None:
                 continue
+            text = self._extract_text_from_pdf_bytes(blob)
+            if text:
+                chunks.append(f"\n\n--- JATO_PDF_TEXT_URL: {url} ---\n" + text)
+        return "\n".join(chunks).strip()
+
+    def _extract_text_from_pdf_bytes(self, blob: bytes) -> str:
+        """Extract text with pypdf first, then Poppler for glyph-only PDFs."""
+        try:
             reader = PdfReader(BytesIO(blob))
-            pages = [
+            text = "\n".join(
                 (page.extract_text() or "").replace("\xa0", " ")
                 for page in reader.pages
-            ]
-            chunks.append(f"\n\n--- JATO_PDF_TEXT_URL: {url} ---\n" + "\n".join(pages))
-        return "\n".join(chunks).strip()
+            ).strip()
+        except Exception as exc:  # Third-party parser failures must not kill a source run.
+            log.warning("pypdf extraction failed for %s: %s", self.config.source_code, exc)
+            text = ""
+        if text:
+            return text
+        return self._extract_text_with_pdftotext(blob)
+
+    def _extract_text_with_pdftotext(self, blob: bytes) -> str:
+        binary = os.getenv(PDFTOTEXT_BINARY_ENV) or shutil.which("pdftotext")
+        if not binary:
+            log.warning(
+                "PDF text is empty for %s and Poppler pdftotext is unavailable; "
+                "install Poppler or set %s",
+                self.config.source_code,
+                PDFTOTEXT_BINARY_ENV,
+            )
+            return ""
+        try:
+            with tempfile.NamedTemporaryFile(prefix="jato_pdf_", suffix=".pdf") as tmp:
+                tmp.write(blob)
+                tmp.flush()
+                result = subprocess.run(
+                    [binary, "-layout", "-enc", "UTF-8", tmp.name, "-"],
+                    check=False,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    timeout=max(1, int(self.profile.timeout_seconds or DEFAULT_TIMEOUT)),
+                )
+        except (OSError, subprocess.SubprocessError) as exc:
+            log.warning("Poppler extraction failed for %s: %s", self.config.source_code, exc)
+            return ""
+        if result.returncode != 0:
+            log.warning(
+                "Poppler extraction failed for %s: %s",
+                self.config.source_code,
+                result.stderr.decode(errors="replace")[:300],
+            )
+            return ""
+        return result.stdout.decode("utf-8", errors="replace").replace("\xa0", " ").strip()
 
     def _build_observation(
         self,

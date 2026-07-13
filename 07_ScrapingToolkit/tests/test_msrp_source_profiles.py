@@ -329,6 +329,30 @@ def test_hungary_hyundai_tucson_profile_uses_current_official_list_price_pdf() -
         assert re.compile(entry.pattern)
 
 
+def test_hungary_kgm_korando_profile_uses_current_official_list_price_pdf() -> None:
+    source_path = (
+        Path(__file__).resolve().parents[1]
+        / "source_drafts"
+        / "suv_only_country_model_top30"
+        / "hu"
+        / "20_kgm_korando_hu.yaml"
+    )
+    source = _load_yaml_mapping(source_path)
+    profile = _build_pdf_text_profile(source["profile"])
+
+    assert source["extractor_type"] == "pdf_text"
+    assert source["source_type"] == "official_price_list"
+    assert source["source_url"] == profile.url
+    assert profile.prefer_curl_download is True
+    assert profile.default_price_label == "Listaár (ÁFA és regisztrációs adóval)"
+    assert profile.fixed_jato_powertrain == "ICE"
+    assert profile.match_reason["document_valid_from"] == "2026-02-12"
+    assert len(profile.entry_patterns) == 4
+    for entry in profile.entry_patterns:
+        assert "Promóciós ár" not in entry.pattern
+        assert re.compile(entry.pattern)
+
+
 def test_hungary_suzuki_profiles_use_official_configurator_list_prices_only() -> None:
     source_root = (
         Path(__file__).resolve().parents[1]
