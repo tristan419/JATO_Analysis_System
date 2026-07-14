@@ -35,9 +35,15 @@ router = APIRouter(prefix="/msrp", tags=["msrp"])
 def post_scrape_batch(
     payload: ScrapeBatchIngestRequest,
     session: Session = Depends(get_db_session),
-    _=Depends(require_min_role("editor")),
+    user=Depends(require_min_role("editor")),
 ) -> dict[str, object]:
-    return {"item": create_scrape_batch_ingest(session, payload.model_dump())}
+    return {
+        "item": create_scrape_batch_ingest(
+            session,
+            payload.model_dump(),
+            actor=user.name,
+        )
+    }
 
 
 @router.get("/current-prices")

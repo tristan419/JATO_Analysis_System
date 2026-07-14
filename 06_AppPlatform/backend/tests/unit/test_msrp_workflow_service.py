@@ -4,11 +4,15 @@ from types import SimpleNamespace
 from uuid import uuid4
 
 import pandas as pd
+import pytest
 from fastapi import HTTPException
+from pydantic import ValidationError
 from sqlalchemy.exc import IntegrityError
 
+from app.api.schemas import MsrpObservationEvidenceRef, MsrpObservationIngest
 from app.db.models import CurrentPrice, FinanceObservation, MsrpObservation
 from app.services import advanced_analysis_service, msrp_workflow_service
+from app.services.msrp_evidence_verifier import EvidenceVerificationResult
 
 
 def _make_observation() -> MsrpObservation:
@@ -76,6 +80,74 @@ def _make_current_price(observation: MsrpObservation) -> CurrentPrice:
         source_snapshot_path=None,
         last_price_change_at_utc=observation.observed_at_utc,
         updated_at_utc=observation.updated_at_utc,
+    )
+
+
+def _patch_verified_evidence(monkeypatch, observation: MsrpObservation):
+    source_version_id = uuid4()
+    observation.source_version_id = source_version_id
+    evidence_ref = {
+        "evidenceAssetId": str(uuid4()),
+        "sha256": "a" * 64,
+        "evidenceType": "uploaded_pdf",
+        "evidenceRole": "price_page",
+        "storageKey": f"assets/aa/{'a' * 64}.pdf",
+        "capturedAtUtc": "2026-04-11T09:10:00+00:00",
+    }
+    result = EvidenceVerificationResult(
+        source_version_id=source_version_id,
+        evidence_refs=(evidence_ref,),
+        reasons=(),
+        source_gate=SimpleNamespace(),
+    )
+    monkeypatch.setattr(
+        msrp_workflow_service,
+        "verify_observation_evidence",
+        lambda *_args, **_kwargs: result,
+    )
+    return source_version_id, evidence_ref
+
+
+def test_observation_evidence_contract_rejects_malformed_uuids() -> None:
+    with pytest.raises(ValidationError) as evidence_error:
+        MsrpObservationEvidenceRef.model_validate(
+            {
+                "evidenceAssetId": "not-a-uuid",
+                "evidenceRole": "price_page",
+                "sha256": "a" * 64,
+            }
+        )
+    assert any(
+        error["loc"] == ("evidenceAssetId",)
+        and error["type"] == "uuid_parsing"
+        for error in evidence_error.value.errors()
+    )
+
+    with pytest.raises(ValidationError) as version_error:
+        MsrpObservationIngest.model_validate(
+            {
+                "source_id": str(uuid4()),
+                "sourceVersionId": "not-a-uuid",
+                "country": "SE",
+                "brand": "Volvo",
+                "jato_model": "XC60",
+                "jato_trim": "Ultra",
+                "official_model": "XC60",
+                "official_trim": "Ultra",
+                "msrp_value": 773000,
+                "currency": "SEK",
+                "tax_included": True,
+                "price_label": "List price",
+                "source_url": "https://example.test/xc60",
+                "extraction_version": "v1",
+                "match_confidence": 0.99,
+                "match_status": "auto_accepted",
+            }
+        )
+    assert any(
+        error["loc"] == ("sourceVersionId",)
+        and error["type"] == "uuid_parsing"
+        for error in version_error.value.errors()
     )
 
 
@@ -183,6 +255,7 @@ def test_msrp_auto_review_score_uses_weighted_rules_and_model_guidance() -> None
         extractor_name="scrapling_web",
         extractor_version="v2",
         price_semantics="base_msrp",
+        enabled=True,
     )
     payload = {
         "country": "瑞典",
@@ -548,6 +621,11 @@ def test_create_scrape_batch_ingest_persists_finance_observations(
         lambda session, item_id: SimpleNamespace(
             source_id=item_id,
             price_semantics="base_msrp",
+            source_type="manufacturer_official",
+            source_url="https://example.test/registry/xc60",
+            extractor_name="test",
+            extractor_version="test",
+            enabled=True,
         ),
     )
     monkeypatch.setattr(
@@ -631,6 +709,228 @@ def test_create_scrape_batch_ingest_persists_finance_observations(
     assert auto_review["modelAssistance"]["neuralNetworkFit"] == (
         "not_recommended_until_labeled_corpus"
     )
+
+
+def test_ingest_flushes_evidence_links_before_fact_write_reverification(
+    monkeypatch,
+) -> None:
+    events: list[str] = []
+    state = {"links_added": False, "links_flushed": False}
+
+    class FakeSession:
+        def flush(self) -> None:
+            if state["links_added"] and not state["links_flushed"]:
+                state["links_flushed"] = True
+                events.append("flush_links")
+            else:
+                events.append("flush")
+
+        def commit(self) -> None:
+            events.append("commit")
+
+        def rollback(self) -> None:
+            events.append("rollback")
+
+        def refresh(self, _item) -> None:
+            pass
+
+    source_id = uuid4()
+    source_version_id = uuid4()
+    evidence_asset_id = uuid4()
+    source = SimpleNamespace(
+        source_id=source_id,
+        country="SE",
+        brand="Volvo",
+        price_semantics="base_msrp",
+        source_type="manufacturer_official",
+        source_url="https://example.test/registry/xc60",
+        extractor_name="official-extractor",
+        extractor_version="v1",
+        enabled=True,
+    )
+    evidence_asset = SimpleNamespace(evidence_asset_id=evidence_asset_id)
+    evidence_ref = {
+        "evidenceAssetId": str(evidence_asset_id),
+        "sha256": "a" * 64,
+        "evidenceType": "uploaded_pdf",
+        "evidenceRole": "price_page",
+        "storageKey": f"assets/aa/{'a' * 64}.pdf",
+        "capturedAtUtc": "2026-07-15T08:00:00+00:00",
+    }
+    verification = EvidenceVerificationResult(
+        source_version_id=source_version_id,
+        evidence_refs=(evidence_ref,),
+        reasons=(),
+        source_gate=SimpleNamespace(),
+    )
+    persisted_links: list[object] = []
+    added_current_prices: list[CurrentPrice] = []
+
+    def add_scrape_batch(_session, batch):
+        batch.scrape_batch_id = uuid4()
+        return batch
+
+    def add_observations(_session, observations):
+        now = datetime(2026, 7, 15, 8, 0, tzinfo=timezone.utc)
+        for observation in observations:
+            observation.observation_id = uuid4()
+            observation.created_at_utc = now
+            observation.updated_at_utc = now
+        return observations
+
+    def add_links(_session, links):
+        events.append("add_links")
+        state["links_added"] = True
+        persisted_links.extend(links)
+        return links
+
+    def verify(_session, _observation, **kwargs):
+        if kwargs.get("links") is not None:
+            assert "commit" not in events
+            events.append("verify_transient_links")
+        else:
+            assert state["links_flushed"] is True
+            assert persisted_links
+            events.append("verify_fact_write")
+        return verification
+
+    monkeypatch.setattr(
+        msrp_workflow_service.msrp_repo,
+        "add_scrape_batch",
+        add_scrape_batch,
+    )
+    monkeypatch.setattr(
+        msrp_workflow_service.msrp_repo,
+        "has_price_history_table",
+        lambda _session: False,
+    )
+    monkeypatch.setattr(
+        msrp_workflow_service.msrp_repo,
+        "has_finance_observations_table",
+        lambda _session: False,
+    )
+    monkeypatch.setattr(
+        msrp_workflow_service.msrp_repo,
+        "get_source",
+        lambda *_args, **_kwargs: source,
+    )
+    monkeypatch.setattr(
+        msrp_workflow_service.msrp_repo,
+        "add_observations",
+        add_observations,
+    )
+    monkeypatch.setattr(
+        msrp_workflow_service.governance_repo,
+        "get_evidence_asset",
+        lambda *_args, **_kwargs: evidence_asset,
+    )
+    monkeypatch.setattr(
+        msrp_workflow_service,
+        "MsrpObservationEvidenceLink",
+        lambda **kwargs: SimpleNamespace(**kwargs, evidence_asset=None),
+    )
+    monkeypatch.setattr(
+        msrp_workflow_service.governance_repo,
+        "add_observation_evidence_links",
+        add_links,
+    )
+    monkeypatch.setattr(
+        msrp_workflow_service,
+        "verify_observation_evidence",
+        verify,
+    )
+    monkeypatch.setattr(
+        msrp_workflow_service,
+        "apply_canonical_mapping",
+        lambda *_args, **_kwargs: {"resolverKind": "observation_payload"},
+    )
+    monkeypatch.setattr(
+        msrp_workflow_service.msrp_repo,
+        "get_current_price_by_key",
+        lambda *_args, **_kwargs: None,
+    )
+    monkeypatch.setattr(
+        msrp_workflow_service.msrp_repo,
+        "add_current_price",
+        lambda _session, item: added_current_prices.append(item),
+    )
+    monkeypatch.setattr(
+        msrp_workflow_service,
+        "convert_amount_to_eur",
+        lambda amount, _currency, _observed_at: (
+            float(amount) * 0.1,
+            SimpleNamespace(
+                rate_to_eur=0.1,
+                as_of_date=date(2026, 7, 15),
+                source="unit-test",
+            ),
+        ),
+    )
+    monkeypatch.setattr(
+        msrp_workflow_service,
+        "current_price_payload",
+        lambda item: {
+            "sourceVersionId": str(item.source_version_id),
+            "evidenceRefs": item.evidence_refs_json,
+        },
+    )
+
+    result = msrp_workflow_service.create_scrape_batch_ingest(
+        FakeSession(),
+        {
+            "batch_code": "evidence-link-batch",
+            "scope_country": "SE",
+            "scope_brands": ["Volvo"],
+            "observations": [
+                {
+                    "source_id": str(source_id),
+                    "source_version_id": source_version_id,
+                    "evidence_refs": [
+                        {
+                            "evidence_asset_id": evidence_asset_id,
+                            "evidence_role": "price_page",
+                            "sha256": "a" * 64,
+                        }
+                    ],
+                    "country": "SE",
+                    "brand": "Volvo",
+                    "jato_model": "XC60",
+                    "jato_trim": "Ultra",
+                    "official_model": "XC60",
+                    "official_trim": "Ultra",
+                    "msrp_value": 773000,
+                    "currency": "SEK",
+                    "tax_included": True,
+                    "price_label": "List price",
+                    "observed_at_utc": datetime(
+                        2026,
+                        7,
+                        15,
+                        8,
+                        0,
+                        tzinfo=timezone.utc,
+                    ),
+                    "source_url": "https://example.test/xc60",
+                    "source_snapshot_path": "snapshots/xc60.html",
+                    "extraction_version": "v1",
+                    "match_confidence": 0.99,
+                    "match_status": "auto_accepted",
+                }
+            ],
+        },
+        actor="unit-test",
+    )
+
+    assert len(persisted_links) == 1
+    assert persisted_links[0].created_by == "unit-test"
+    assert len(added_current_prices) == 1
+    assert added_current_prices[0].source_version_id == source_version_id
+    assert added_current_prices[0].evidence_refs_json == [evidence_ref]
+    assert result["sampleObservations"][0]["evidenceRefs"] == [evidence_ref]
+    assert events.index("verify_transient_links") < events.index("add_links")
+    assert events.index("add_links") < events.index("flush_links")
+    assert events.index("flush_links") < events.index("verify_fact_write")
+    assert events.index("verify_fact_write") < events.index("commit")
 
 
 def test_payload_price_semantics_uses_explicit_observation_semantics_only() -> None:
@@ -1585,12 +1885,21 @@ def test_materialize_current_price_backfills_open_period_when_history_is_empty(
 ) -> None:
     observation = _make_observation()
     current_price = _make_current_price(observation)
+    _patch_verified_evidence(monkeypatch, observation)
     recorded: list[object] = []
 
     monkeypatch.setattr(
         msrp_workflow_service,
         "apply_canonical_mapping",
         lambda *args, **kwargs: {"resolverKind": "observation_payload"},
+    )
+    monkeypatch.setattr(
+        msrp_workflow_service.msrp_repo,
+        "get_source",
+        lambda *args, **kwargs: SimpleNamespace(
+            enabled=True,
+            source_type="manufacturer_official",
+        ),
     )
     monkeypatch.setattr(
         msrp_workflow_service.msrp_repo,
@@ -1625,6 +1934,10 @@ def test_materialize_current_price_applies_canonical_mapping_before_update(
 ) -> None:
     observation = _make_observation()
     current_price = _make_current_price(observation)
+    source_version_id, evidence_ref = _patch_verified_evidence(
+        monkeypatch,
+        observation,
+    )
 
     def _apply_mapping(_session, incoming_observation):
         incoming_observation.official_model = "XC60"
@@ -1636,6 +1949,14 @@ def test_materialize_current_price_applies_canonical_mapping_before_update(
         msrp_workflow_service,
         "apply_canonical_mapping",
         _apply_mapping,
+    )
+    monkeypatch.setattr(
+        msrp_workflow_service.msrp_repo,
+        "get_source",
+        lambda *args, **kwargs: SimpleNamespace(
+            enabled=True,
+            source_type="manufacturer_official",
+        ),
     )
     monkeypatch.setattr(
         msrp_workflow_service.msrp_repo,
@@ -1653,6 +1974,8 @@ def test_materialize_current_price_applies_canonical_mapping_before_update(
     assert current_price.official_model == "XC60"
     assert current_price.official_trim == "Ultra Dark"
     assert current_price.match_status == "override_applied"
+    assert current_price.source_version_id == source_version_id
+    assert current_price.evidence_refs_json == [evidence_ref]
 
 
 def test_record_price_period_replaces_open_period_at_same_timestamp(
@@ -1703,7 +2026,12 @@ def test_refreshes_open_period_when_price_is_unchanged(
 ) -> None:
     observation = _make_observation()
     current_price = _make_current_price(observation)
+    _patch_verified_evidence(monkeypatch, observation)
+    period_source_version_id = uuid4()
+    period_evidence_refs = [{"evidenceAssetId": str(uuid4()), "sha256": "b" * 64}]
     open_period = SimpleNamespace(
+        source_version_id=period_source_version_id,
+        evidence_refs_json=period_evidence_refs,
         last_confirmed_at_utc=observation.observed_at_utc.replace(day=10),
         last_confirmed_by_observation_id=uuid4(),
     )
@@ -1713,6 +2041,14 @@ def test_refreshes_open_period_when_price_is_unchanged(
         msrp_workflow_service,
         "apply_canonical_mapping",
         lambda *args, **kwargs: {"resolverKind": "observation_payload"},
+    )
+    monkeypatch.setattr(
+        msrp_workflow_service.msrp_repo,
+        "get_source",
+        lambda *args, **kwargs: SimpleNamespace(
+            enabled=True,
+            source_type="manufacturer_official",
+        ),
     )
     monkeypatch.setattr(
         msrp_workflow_service.msrp_repo,
@@ -1743,6 +2079,75 @@ def test_refreshes_open_period_when_price_is_unchanged(
         open_period.last_confirmed_by_observation_id
         == observation.observation_id
     )
+    assert open_period.source_version_id == period_source_version_id
+    assert open_period.evidence_refs_json == period_evidence_refs
+
+
+def test_materialization_rejects_missing_version_or_evidence(
+    monkeypatch,
+) -> None:
+    observation = _make_observation()
+    monkeypatch.setattr(
+        msrp_workflow_service,
+        "apply_canonical_mapping",
+        lambda *args, **kwargs: {"resolverKind": "observation_payload"},
+    )
+    monkeypatch.setattr(
+        msrp_workflow_service.msrp_repo,
+        "get_source",
+        lambda *args, **kwargs: SimpleNamespace(
+            enabled=True,
+            source_type="manufacturer_official",
+        ),
+    )
+    current_price_reads: list[str] = []
+    monkeypatch.setattr(
+        msrp_workflow_service.msrp_repo,
+        "get_current_price_by_key",
+        lambda *args, **kwargs: current_price_reads.append("read"),
+    )
+
+    missing_version = EvidenceVerificationResult(
+        source_version_id=None,
+        evidence_refs=(),
+        reasons=("source_version_missing",),
+        source_gate=SimpleNamespace(),
+    )
+    monkeypatch.setattr(
+        msrp_workflow_service,
+        "verify_observation_evidence",
+        lambda *_args, **_kwargs: missing_version,
+    )
+    assert (
+        msrp_workflow_service.materialize_current_price_from_observation(
+            None,
+            observation,
+            price_history_enabled=False,
+        )
+        is None
+    )
+
+    observation.source_version_id = uuid4()
+    missing_evidence = EvidenceVerificationResult(
+        source_version_id=observation.source_version_id,
+        evidence_refs=(),
+        reasons=(),
+        source_gate=SimpleNamespace(),
+    )
+    monkeypatch.setattr(
+        msrp_workflow_service,
+        "verify_observation_evidence",
+        lambda *_args, **_kwargs: missing_evidence,
+    )
+    assert (
+        msrp_workflow_service.materialize_current_price_from_observation(
+            None,
+            observation,
+            price_history_enabled=False,
+        )
+        is None
+    )
+    assert current_price_reads == []
 
 
 def test_commit_or_conflict_flushes_when_commit_is_disabled() -> None:

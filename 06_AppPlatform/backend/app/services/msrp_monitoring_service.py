@@ -14,6 +14,9 @@ from app.core.config import PROJECT_ROOT
 from app.db.models import CurrentPrice, MsrpObservation, MsrpSource, PriceHistory
 from app.infra import msrp_repository as msrp_repo
 from app.services.country_service import to_display_country
+from app.services.msrp_official_source_policy import (
+    is_enabled_official_msrp_source,
+)
 
 
 POWERTRAIN_COLORS = {
@@ -24,15 +27,6 @@ POWERTRAIN_COLORS = {
     "MHEV": "#f97316",
 }
 POWERTRAIN_FALLBACK_COLOR = "#94a3b8"
-OFFICIAL_SOURCE_TYPES = {
-    "manufacturer_official",
-    "official_api",
-    "official_configurator",
-    "official_price_list",
-    "official_price_list_pdf",
-    "official_website",
-    "manufacturer_site",
-}
 SOURCE_RISK_MATCH_STATUSES = {"review_required", "rejected", "failed"}
 DEFAULT_MONITORING_LIMIT = 500
 MIN_MONITORING_PRICE_HISTORY_LIMIT = 20
@@ -2533,7 +2527,7 @@ def _source_status(
         reasons.append("low_match_confidence")
     if source is None:
         reasons.append("missing_source_registry")
-    elif source_type not in OFFICIAL_SOURCE_TYPES:
+    elif not is_enabled_official_msrp_source(source):
         reasons.append(f"non_official_source:{source_type or 'unknown'}")
     if source_currency_changed:
         reasons.append("source_currency_changed")

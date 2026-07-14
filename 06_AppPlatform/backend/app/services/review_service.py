@@ -21,6 +21,9 @@ from app.services.msrp_mapping_service import (
     classify_mismatch_category,
 )
 from app.services.msrp_link_service import upsert_jato_msrp_link
+from app.services.msrp_official_source_policy import (
+    is_enabled_official_msrp_source,
+)
 from app.services.msrp_workflow_service import (
     materialize_current_price_from_observation,
 )
@@ -36,10 +39,6 @@ from app.services.payload_serializers import (
 
 AUTO_REVIEW_ELIGIBLE_STATUSES = {"auto_accepted", "override_applied"}
 AUTO_REVIEW_DIRECT_RESOLVER_KIND = "deterministic_auto_review"
-AUTO_REVIEW_DIRECT_SOURCE_TYPES = {
-    "manufacturer_official",
-    "official_price_list",
-}
 AUTO_REVIEW_DIRECT_MIN_COMPLETENESS = 85.0
 AUTO_REVIEW_DEFAULT_WEIGHTS = {
     "resolver": 0.35,
@@ -215,10 +214,6 @@ def _auto_review_assist(
     }
 
 
-def _source_type(source) -> str:
-    return str(getattr(source, "source_type", "") or "").strip().lower()
-
-
 def _ingest_auto_review_payload(observation) -> dict[str, object] | None:
     match_reason = getattr(observation, "match_reason_json", None)
     if not isinstance(match_reason, dict):
@@ -255,7 +250,7 @@ def _direct_auto_review_resolution(
 ) -> dict[str, object] | None:
     if source is None:
         return None
-    if _source_type(source) not in AUTO_REVIEW_DIRECT_SOURCE_TYPES:
+    if not is_enabled_official_msrp_source(source):
         return None
     if _ingest_auto_review_has_blockers(observation):
         return None
@@ -686,6 +681,9 @@ def auto_resolve_review_cases(
 
         previous_observation_state = _capture_observation_review_state(observation)
         source = source_by_id.get(observation.source_id)
+        if not is_enabled_official_msrp_source(source):
+            unresolved_count += 1
+            continue
         resolution = apply_canonical_mapping(session, observation)
         if (
             resolution["resolverKind"]
@@ -893,6 +891,19 @@ def create_review_decision(
             detail="accepted_observation_id only applies to approve",
         )
     decision_observation = accepted_source_observation or observation
+    if decision_name in {"approve", "remap"}:
+        selected_source = msrp_repository.get_source(
+            session,
+            decision_observation.source_id,
+        )
+        if not is_enabled_official_msrp_source(selected_source):
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    "Manual approval requires an enabled canonical official "
+                    "MSRP source"
+                ),
+            )
 
     decided_official_model = data.get("decided_official_model")
     decided_official_trim = data.get("decided_official_trim")

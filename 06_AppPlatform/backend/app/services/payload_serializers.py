@@ -54,11 +54,18 @@ def scrape_batch_payload(
 def observation_payload(
     obs: MsrpObservation,
     source: MsrpSource | None = None,
+    evidence_refs: list[dict[str, object]] | None = None,
 ) -> dict[str, object]:
     payload = {
         "observationId": str(obs.observation_id),
         "scrapeBatchId": str(obs.scrape_batch_id),
         "sourceId": str(obs.source_id),
+        "sourceVersionId": (
+            str(getattr(obs, "source_version_id", None))
+            if getattr(obs, "source_version_id", None) is not None
+            else None
+        ),
+        "evidenceRefs": list(evidence_refs or []),
         "country": to_display_country(obs.country),
         "brand": obs.brand,
         "jatoModel": obs.jato_model,
@@ -183,6 +190,12 @@ def current_price_payload(
         "effectiveObservationId": str(
             cp.effective_observation_id
         ),
+        "sourceVersionId": (
+            str(getattr(cp, "source_version_id", None))
+            if getattr(cp, "source_version_id", None) is not None
+            else None
+        ),
+        "evidenceRefs": list(getattr(cp, "evidence_refs_json", None) or []),
         "currentMsrpValue": float(cp.current_msrp_value),
         "currency": cp.currency,
         "sourceMsrpValue": float(cp.source_msrp_value),
@@ -368,6 +381,12 @@ def price_history_payload(
         "currency": ph.currency,
         "sourceMsrpValue": float(ph.source_msrp_value),
         "sourceCurrency": ph.source_currency,
+        "sourceVersionId": (
+            str(getattr(ph, "source_version_id", None))
+            if getattr(ph, "source_version_id", None) is not None
+            else None
+        ),
+        "evidenceRefs": list(getattr(ph, "evidence_refs_json", None) or []),
         "validFromUtc": ph.valid_from_utc.isoformat(),
         "validToUtc": (
             ph.valid_to_utc.isoformat()

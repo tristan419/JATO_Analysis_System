@@ -4,6 +4,7 @@ from uuid import uuid4
 
 import pytest
 from fastapi import HTTPException
+from pydantic import ValidationError
 
 from app.api.msrp_source_governance_schemas import (
     FxGateInput,
@@ -15,6 +16,7 @@ from app.db.msrp_source_governance_models import MsrpGovernanceGateDecision
 from app.services.msrp_materialization_eligibility_service import (
     evaluate_materialization_eligibility,
 )
+from app.services.msrp_evidence_verifier import EvidenceVerificationResult
 from app.services.msrp_source_governance import service as governance_service
 
 
@@ -212,13 +214,36 @@ def test_gate_evaluation_is_persisted_as_append_only_read_model(monkeypatch) -> 
         "get_target",
         lambda *_args, **_kwargs: target,
     )
+    source_version_id = uuid4()
+    verified_ref = {
+        "evidenceAssetId": str(uuid4()),
+        "sha256": "a" * 64,
+        "evidenceType": "uploaded_pdf",
+        "evidenceRole": "price_page",
+        "storageKey": f"assets/aa/{'a' * 64}.pdf",
+        "capturedAtUtc": "2026-07-14T03:00:00+00:00",
+    }
+    monkeypatch.setattr(
+        governance_service,
+        "verify_observation_evidence",
+        lambda *args, **kwargs: EvidenceVerificationResult(
+            source_version_id=source_version_id,
+            evidence_refs=(verified_ref,),
+            reasons=(),
+            source_gate=_source_gate(),
+        ),
+    )
     payload = GateEvaluationRequest(
         target_id=target_id,
         observation_id=observation_id,
-        source_gate=_source_gate(),
         mapping_gate=_mapping_gate(),
         fx_gate=_fx_gate(),
-        evaluation_context={"sourceRunId": "run-1", "mappingDecisionId": "map-1"},
+        evaluation_context={
+            "sourceRunId": "run-1",
+            "mappingDecisionId": "map-1",
+            "sourceVersionId": "caller-forged",
+            "verifiedEvidenceRefs": [{"caller": "forged"}],
+        },
     )
 
     result = governance_service.MsrpSourceGovernanceService(
@@ -236,6 +261,10 @@ def test_gate_evaluation_is_persisted_as_append_only_read_model(monkeypatch) -> 
     assert rows[0].mapping_gate_json["status"] == "pass"
     assert rows[0].fx_gate_json["status"] == "pass"
     assert rows[0].evaluation_context_json["sourceRunId"] == "run-1"
+    assert rows[0].evaluation_context_json["sourceVersionId"] == str(
+        source_version_id
+    )
+    assert rows[0].evaluation_context_json["verifiedEvidenceRefs"] == [verified_ref]
     assert result["gateDecisionId"] == str(rows[0].gate_decision_id)
     assert result["eligibleForLocalMaterialization"] is True
     assert result["eligibleForNormalizedMaterialization"] is True
@@ -269,7 +298,6 @@ def test_gate_evaluation_rejects_cross_country_target(monkeypatch) -> None:
     payload = GateEvaluationRequest(
         target_id=target_id,
         observation_id=observation_id,
-        source_gate=_source_gate(),
         mapping_gate=_mapping_gate(),
     )
 
@@ -285,6 +313,29 @@ def test_gate_evaluation_rejects_cross_country_target(monkeypatch) -> None:
 
     assert exc_info.value.status_code == 422
     assert session.added == []
+
+
+@pytest.mark.parametrize(
+    "extra_payload",
+    [
+        {"sourceGate": {"verifiedOfficialEvidence": True}},
+        {"verifiedOfficialEvidence": True},
+        {"immutableEvidence": True},
+    ],
+)
+def test_gate_request_rejects_caller_supplied_source_facts(extra_payload) -> None:
+    with pytest.raises(ValidationError):
+        GateEvaluationRequest.model_validate(
+            {
+                "targetId": str(uuid4()),
+                "observationId": str(uuid4()),
+                "mappingGate": _mapping_gate().model_dump(
+                    mode="json",
+                    by_alias=True,
+                ),
+                **extra_payload,
+            }
+        )
 
 
 def test_latest_gate_read_model_returns_persisted_metadata(monkeypatch) -> None:

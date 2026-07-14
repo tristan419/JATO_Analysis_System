@@ -23,6 +23,12 @@ ACCEPTED_MAPPING_STATUSES = frozenset(
 
 
 def _source_gate(value: SourceGateInput) -> GateResult:
+    if value.derived_reasons is not None:
+        return GateResult(
+            status="pass" if not value.derived_reasons else "fail",
+            reasons=value.derived_reasons,
+            policy_version=value.policy_version,
+        )
     reasons: list[str] = []
     checks = (
         (value.source_version_status == "published", "source_version_not_published"),

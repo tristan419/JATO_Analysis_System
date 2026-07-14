@@ -20,7 +20,7 @@ from sqlalchemy import (
 )
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.dialects.postgresql import UUID as PGUUID
-from sqlalchemy.orm import Mapped, mapped_column
+from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db.base import Base
 
@@ -434,6 +434,74 @@ class MsrpSourceEvidenceAsset(Base):
         DateTime(timezone=True),
         nullable=False,
         server_default=func.now(),
+    )
+
+
+class MsrpObservationEvidenceLink(Base):
+    __tablename__ = "observation_evidence_links"
+    __table_args__ = (
+        UniqueConstraint(
+            "observation_id",
+            "evidence_asset_id",
+            "evidence_role",
+            name="uq_msrp_observation_evidence_links_asset_role",
+        ),
+        CheckConstraint(
+            "evidence_role IN ('raw_payload', 'price_page', 'supporting')",
+            name="ck_msrp_observation_evidence_links_role",
+        ),
+        CheckConstraint(
+            "evidence_sha256 ~ '^[0-9a-f]{64}$'",
+            name="ck_msrp_observation_evidence_links_sha256",
+        ),
+        Index(
+            "ix_msrp_observation_evidence_links_observation_role",
+            "observation_id",
+            "evidence_role",
+        ),
+        Index(
+            "ix_msrp_observation_evidence_links_evidence_asset",
+            "evidence_asset_id",
+        ),
+        Index(
+            "ix_msrp_observation_evidence_links_source_version",
+            "source_version_id",
+        ),
+        {"schema": "msrp"},
+    )
+
+    observation_evidence_link_id: Mapped[UUID] = mapped_column(
+        PGUUID(as_uuid=True),
+        primary_key=True,
+        default=uuid4,
+    )
+    observation_id: Mapped[UUID] = mapped_column(
+        PGUUID(as_uuid=True),
+        ForeignKey("msrp.observations.observation_id"),
+        nullable=False,
+    )
+    evidence_asset_id: Mapped[UUID] = mapped_column(
+        PGUUID(as_uuid=True),
+        ForeignKey("msrp.source_evidence_assets.evidence_asset_id"),
+        nullable=False,
+    )
+    source_version_id: Mapped[UUID] = mapped_column(
+        PGUUID(as_uuid=True),
+        ForeignKey("msrp.source_versions.source_version_id"),
+        nullable=False,
+    )
+    evidence_role: Mapped[str] = mapped_column(Text, nullable=False)
+    evidence_sha256: Mapped[str] = mapped_column(Text, nullable=False)
+    created_by: Mapped[str] = mapped_column(Text, nullable=False)
+    linked_at_utc: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+    )
+    evidence_asset: Mapped["MsrpSourceEvidenceAsset"] = relationship(
+        "MsrpSourceEvidenceAsset",
+        lazy="joined",
+        viewonly=True,
     )
 
 

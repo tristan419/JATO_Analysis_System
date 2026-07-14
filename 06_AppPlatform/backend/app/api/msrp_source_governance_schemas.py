@@ -74,6 +74,7 @@ class SourceGateInput(GovernanceContract):
     unresolved_result_correction: bool = False
     schema_valid: bool
     targeted_dryrun_passed: bool
+    derived_reasons: list[str] | None = None
 
 
 class MappingGateInput(GovernanceContract):
@@ -98,7 +99,6 @@ class FxGateInput(GovernanceContract):
 class GateEvaluationRequest(GovernanceContract):
     target_id: UUID
     observation_id: UUID
-    source_gate: SourceGateInput
     mapping_gate: MappingGateInput
     fx_gate: FxGateInput | None = None
     evaluation_context: dict[str, object] | None = None

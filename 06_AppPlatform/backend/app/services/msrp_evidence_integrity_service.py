@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import hmac
 import os
 import re
 import stat
@@ -69,6 +70,111 @@ def _content_address_matches(storage_key: str, expected_sha256: str) -> bool:
         return False
     filename_hash = parts[2].split(".", 1)[0]
     return parts[1] == expected_sha256[:2] and filename_hash == expected_sha256
+
+
+def _audit_object_group(
+    root: Path,
+    storage_key: str,
+    grouped: list[object],
+) -> dict[str, object]:
+    expected_hashes = {
+        str(_row_value(row, "sha256") or "").casefold() for row in grouped
+    }
+    expected_sizes = {_row_value(row, "size_bytes") for row in grouped}
+    expected_sha256 = next(iter(expected_hashes)) if len(expected_hashes) == 1 else ""
+    expected_size = next(iter(expected_sizes)) if len(expected_sizes) == 1 else None
+    issues: list[str] = []
+    object_path, path_issue = _safe_object_path(root, storage_key)
+    if len(expected_hashes) != 1 or not SHA256_PATTERN.fullmatch(expected_sha256):
+        issues.append("invalid_sha256_metadata")
+    if not path_issue and not _content_address_matches(storage_key, expected_sha256):
+        issues.append("content_address_mismatch")
+    if len(expected_sizes) != 1 or not isinstance(expected_size, int) or expected_size < 0:
+        issues.append("invalid_size_metadata")
+
+    actual_size: int | None = None
+    actual_sha256: str | None = None
+    if path_issue:
+        issues.append(path_issue)
+    elif object_path is None:
+        issues.append("invalid_storage_key")
+    else:
+        try:
+            file_stat = object_path.lstat()
+        except FileNotFoundError:
+            issues.append("missing")
+        except OSError:
+            issues.append("unreadable")
+        else:
+            actual_size = file_stat.st_size
+            if stat.S_ISLNK(file_stat.st_mode) or not stat.S_ISREG(file_stat.st_mode):
+                issues.append("not_regular_file")
+            elif not os.access(object_path, os.R_OK):
+                issues.append("unreadable")
+            else:
+                try:
+                    actual_sha256 = _sha256_file(object_path)
+                except OSError:
+                    issues.append("unreadable")
+            if isinstance(expected_size, int) and actual_size != expected_size:
+                issues.append("size_mismatch")
+            if (
+                actual_sha256
+                and expected_sha256
+                and not hmac.compare_digest(actual_sha256, expected_sha256)
+            ):
+                issues.append("sha256_mismatch")
+
+    return {
+        "storageKey": storage_key,
+        "evidenceAssetIds": sorted(_asset_id(row) for row in grouped),
+        "replayable": any(
+            str(_row_value(row, "evidence_type") or "").strip()
+            in REPLAYABLE_EVIDENCE_TYPES
+            for row in grouped
+        ),
+        "expectedSizeBytes": expected_size,
+        "actualSizeBytes": actual_size,
+        "expectedSha256": expected_sha256 or None,
+        "actualSha256": actual_sha256,
+        "status": "healthy" if not issues else "unhealthy",
+        "issues": issues,
+    }
+
+
+def audit_evidence_object(row: object, evidence_root: Path) -> dict[str, object]:
+    root = evidence_root.expanduser().resolve()
+    evidence_type = str(_row_value(row, "evidence_type") or "").strip()
+    storage_key = str(_row_value(row, "storage_key") or "").strip()
+    if evidence_type not in OBJECT_BACKED_EVIDENCE_TYPES:
+        return {
+            "storageKey": storage_key or None,
+            "evidenceAssetIds": [_asset_id(row)],
+            "replayable": False,
+            "expectedSizeBytes": _row_value(row, "size_bytes"),
+            "actualSizeBytes": None,
+            "expectedSha256": str(_row_value(row, "sha256") or "").casefold(),
+            "actualSha256": None,
+            "status": "unhealthy",
+            "issues": [
+                "non_replayable_reference"
+                if evidence_type in NON_REPLAYABLE_REFERENCE_TYPES
+                else "unsupported_evidence_type"
+            ],
+        }
+    if not storage_key:
+        return {
+            "storageKey": None,
+            "evidenceAssetIds": [_asset_id(row)],
+            "replayable": evidence_type in REPLAYABLE_EVIDENCE_TYPES,
+            "expectedSizeBytes": _row_value(row, "size_bytes"),
+            "actualSizeBytes": None,
+            "expectedSha256": str(_row_value(row, "sha256") or "").casefold(),
+            "actualSha256": None,
+            "status": "unhealthy",
+            "issues": ["missing_storage_key"],
+        }
+    return _audit_object_group(root, storage_key, [row])
 
 
 def _orphan_payload(root: Path, path: Path) -> dict[str, object]:
@@ -151,79 +257,8 @@ def audit_msrp_evidence_integrity(
         grouped_rows[storage_key].append(row)
 
     for storage_key in sorted(grouped_rows):
-        grouped = grouped_rows[storage_key]
-        expected_hashes = {
-            str(_row_value(row, "sha256") or "").casefold() for row in grouped
-        }
-        expected_sizes = {_row_value(row, "size_bytes") for row in grouped}
-        expected_sha256 = (
-            next(iter(expected_hashes)) if len(expected_hashes) == 1 else ""
-        )
-        expected_size = next(iter(expected_sizes)) if len(expected_sizes) == 1 else None
-        issues: list[str] = []
-        object_path, path_issue = _safe_object_path(root, storage_key)
-        if len(expected_hashes) != 1 or not SHA256_PATTERN.fullmatch(expected_sha256):
-            issues.append("invalid_sha256_metadata")
-        if not path_issue and not _content_address_matches(storage_key, expected_sha256):
-            issues.append("content_address_mismatch")
-        if (
-            len(expected_sizes) != 1
-            or not isinstance(expected_size, int)
-            or expected_size < 0
-        ):
-            issues.append("invalid_size_metadata")
-
-        actual_size: int | None = None
-        actual_sha256: str | None = None
-        if path_issue:
-            issues.append(path_issue)
-        elif object_path is None:
-            issues.append("invalid_storage_key")
-        else:
-            try:
-                file_stat = object_path.lstat()
-            except FileNotFoundError:
-                issues.append("missing")
-            except OSError:
-                issues.append("unreadable")
-            else:
-                actual_size = file_stat.st_size
-                if stat.S_ISLNK(file_stat.st_mode) or not stat.S_ISREG(
-                    file_stat.st_mode
-                ):
-                    issues.append("not_regular_file")
-                elif not os.access(object_path, os.R_OK):
-                    issues.append("unreadable")
-                else:
-                    try:
-                        actual_sha256 = _sha256_file(object_path)
-                    except OSError:
-                        issues.append("unreadable")
-                if isinstance(expected_size, int) and actual_size != expected_size:
-                    issues.append("size_mismatch")
-                if (
-                    actual_sha256
-                    and expected_sha256
-                    and actual_sha256 != expected_sha256
-                ):
-                    issues.append("sha256_mismatch")
-
         object_results.append(
-            {
-                "storageKey": storage_key,
-                "evidenceAssetIds": sorted(_asset_id(row) for row in grouped),
-                "replayable": any(
-                    str(_row_value(row, "evidence_type") or "").strip()
-                    in REPLAYABLE_EVIDENCE_TYPES
-                    for row in grouped
-                ),
-                "expectedSizeBytes": expected_size,
-                "actualSizeBytes": actual_size,
-                "expectedSha256": expected_sha256 or None,
-                "actualSha256": actual_sha256,
-                "status": "healthy" if not issues else "unhealthy",
-                "issues": issues,
-            }
+            _audit_object_group(root, storage_key, grouped_rows[storage_key])
         )
 
     expected_storage_keys = set(grouped_rows)
