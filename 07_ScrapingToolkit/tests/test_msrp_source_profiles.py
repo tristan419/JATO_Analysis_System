@@ -563,3 +563,36 @@ def test_belgium_audi_q6_e_tron_profile_uses_only_the_official_including_vat_pri
     assert "(?P<price>\\d{2}\\.\\d{3},\\d{2})" in entry.pattern
     assert entry.price_label == "Vanaf incl. BTW"
     assert re.compile(entry.pattern)
+
+
+def test_belgium_audi_q4_e_tron_profile_uses_only_the_official_including_vat_price() -> None:
+    source_path = (
+        Path(__file__).resolve().parents[1]
+        / "source_drafts"
+        / "suv_only_country_model_top30"
+        / "be"
+        / "16_audi_q4_e_tron_be.yaml"
+    )
+    source = _load_yaml_mapping(source_path)
+    profile = _build_scrapling_profile(source["profile"])
+    entry = profile.text_regex.entry_patterns[0] if profile.text_regex else None
+
+    assert source["extractor_type"] == "scrapling"
+    assert source["source_type"] == "manufacturer_official"
+    assert source["source_url"] == "https://www.audi.be/nl/modellen/suv/"
+    assert profile.url == source["source_url"]
+    assert profile.tier == "http"
+    assert profile.network_idle is False
+    assert profile.load_dom is False
+    assert profile.fixed_jato_powertrain == "BEV"
+    assert profile.text_regex is not None
+    assert profile.text_regex.include_element_html is True
+    assert entry is not None
+    assert "Q4\\s+SUV\\s+e-tron" in entry.pattern
+    assert "data-testid=\"price\"" in entry.pattern
+    assert "incl\\.\\s*BTW" in entry.pattern
+    assert "EasyLease" not in entry.pattern
+    assert "maand" not in entry.pattern
+    assert "(?P<price>\\d{2}\\.\\d{3},\\d{2})" in entry.pattern
+    assert entry.price_label == "Vanaf incl. BTW"
+    assert re.compile(entry.pattern)
