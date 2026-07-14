@@ -173,16 +173,15 @@ def _collect_plan(session, source_code: str) -> SourceCleanupPlan | None:
 
 
 def _apply_plan(session, plan: SourceCleanupPlan) -> None:
+    if plan.current_price_ids or plan.price_history_ids:
+        raise RuntimeError(
+            "Direct CurrentPrice/PriceHistory cleanup is disabled; create a "
+            "persisted editor compensation approval and execution instead."
+        )
     if plan.review_decision_ids:
         session.execute(
             delete(ReviewDecision).where(
                 ReviewDecision.review_decision_id.in_(plan.review_decision_ids)
-            )
-        )
-    if plan.current_price_ids:
-        session.execute(
-            delete(CurrentPrice).where(
-                CurrentPrice.current_price_id.in_(plan.current_price_ids)
             )
         )
     if plan.finance_observation_ids:
@@ -191,12 +190,6 @@ def _apply_plan(session, plan: SourceCleanupPlan) -> None:
                 FinanceObservation.finance_observation_id.in_(
                     plan.finance_observation_ids
                 )
-            )
-        )
-    if plan.price_history_ids:
-        session.execute(
-            delete(PriceHistory).where(
-                PriceHistory.price_history_id.in_(plan.price_history_ids)
             )
         )
     if plan.review_case_ids:

@@ -120,3 +120,33 @@ def test_remove_country_pid_at_handles_last_pid_with_nounset():
     )
 
     assert result.returncode == 0, result.stderr
+
+
+def test_scheduled_runner_is_observation_only_even_when_env_flags_are_true():
+    script = SCRIPT_PATH.read_text(encoding="utf-8")
+
+    assert 'AUTO_REVIEW="${JATO_MSRP_AUTO_REVIEW:-false}"' in script
+    assert 'AUTO_MATERIALIZE="false"' in script
+    assert 'EXECUTION_CONTEXT="${JATO_MSRP_EXECUTION_CONTEXT:-unspecified}"' in script
+    assert '[[ "$EXECUTION_CONTEXT" != "interactive_editor" ]]' in script
+    assert "extra_args+=(--materialize" not in script
+
+
+def test_systemd_airflow_and_pipeline_wrapper_set_scheduled_context():
+    systemd_service = (
+        REPO_ROOT
+        / "03_Scripts"
+        / "deploy"
+        / "systemd"
+        / "jato-msrp-sync@.service"
+    ).read_text(encoding="utf-8")
+    airflow_dag = (
+        REPO_ROOT / "airflow" / "dags" / "jato_msrp_low_concurrency.py"
+    ).read_text(encoding="utf-8")
+    pipeline = (REPO_ROOT / "03_Scripts" / "run_msrp_pipeline.sh").read_text(
+        encoding="utf-8"
+    )
+
+    assert "JATO_MSRP_EXECUTION_CONTEXT=systemd_scheduled" in systemd_service
+    assert "JATO_MSRP_EXECUTION_CONTEXT=airflow_scheduled" in airflow_dag
+    assert pipeline.count("JATO_MSRP_EXECUTION_CONTEXT=pipeline_wrapper") == 2

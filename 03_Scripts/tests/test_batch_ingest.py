@@ -27,6 +27,15 @@ def load_module():
 batch_ingest = load_module()
 
 
+def test_batch_ingest_has_no_materialize_cli_or_env_default() -> None:
+    source = SCRIPT_PATH.read_text(encoding="utf-8")
+
+    assert 'parser.add_argument("--auto-review", action="store_true", default=False)' in source
+    assert "--materialize" not in source
+    assert "JATO_AUTO_MATERIALIZE" not in source
+    assert 'JATO_MSRP_EXECUTION_CONTEXT") or "unspecified"' in source
+
+
 def test_auto_resolve_reviews_passes_min_score(monkeypatch) -> None:
     requests = []
 

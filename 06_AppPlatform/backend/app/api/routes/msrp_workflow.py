@@ -5,8 +5,15 @@ from sqlalchemy.orm import Session
 
 from app.api.schemas import (
     CurrentPriceRemapRequest,
-    CurrentPriceMaterializeRequest,
     ScrapeBatchIngestRequest,
+)
+from app.api.msrp_materialization_schemas import (
+    MaterializationApprovalCreateRequest,
+    MaterializationBatchExecuteRequest,
+)
+from app.api.msrp_materialization_auth import (
+    MaterializationActor,
+    require_materialization_editor_session,
 )
 from app.core.security import require_min_role
 from app.db.session import get_db_session
@@ -27,8 +34,28 @@ from app.services.msrp_monitoring_service import (
     build_msrp_backfill_snapshot_preview,
     build_msrp_monitoring_events,
 )
+from app.services.msrp_materialization_service import create_editor_approval
 
 router = APIRouter(prefix="/msrp", tags=["msrp"])
+
+
+@router.post("/materialization-approvals")
+def post_materialization_approval(
+    payload: MaterializationApprovalCreateRequest,
+    session: Session = Depends(get_db_session),
+    user: MaterializationActor = Depends(
+        require_materialization_editor_session
+    ),
+) -> dict[str, object]:
+    return {
+        "item": create_editor_approval(
+            session,
+            payload.model_dump(),
+            actor_name=user.name,
+            actor_role=user.role,
+            actor_identity_source=user.identity_source,
+        )
+    }
 
 
 @router.post("/batches")
@@ -247,17 +274,23 @@ def get_current_price_alerts(
 
 @router.post("/current-prices/materialize")
 def post_materialize_current_prices(
-    payload: CurrentPriceMaterializeRequest,
+    payload: MaterializationBatchExecuteRequest,
     session: Session = Depends(get_db_session),
-    _=Depends(require_min_role("editor")),
+    user: MaterializationActor = Depends(
+        require_materialization_editor_session
+    ),
 ) -> dict[str, object]:
     return {
         "item": materialize_current_prices(
             session,
-            payload.country,
-            payload.brand,
-            payload.jato_model,
-            payload.limit,
+            approval_id=payload.approval_id,
+            run_id=payload.run_id,
+            idempotency_key=payload.idempotency_key,
+            executed_by_actor=user.name,
+            executed_by_role=user.role,
+            executed_by_identity_source=user.identity_source,
+            execution_context="interactive_editor",
+            limit=payload.limit,
         )
     }
 

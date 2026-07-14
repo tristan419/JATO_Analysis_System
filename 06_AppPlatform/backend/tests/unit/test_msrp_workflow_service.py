@@ -11,8 +11,23 @@ from sqlalchemy.exc import IntegrityError
 
 from app.api.schemas import MsrpObservationEvidenceRef, MsrpObservationIngest
 from app.db.models import CurrentPrice, FinanceObservation, MsrpObservation
-from app.services import advanced_analysis_service, msrp_workflow_service
+from app.services import (
+    advanced_analysis_service,
+    msrp_materialization_service,
+    msrp_workflow_service,
+)
 from app.services.msrp_evidence_verifier import EvidenceVerificationResult
+
+
+def _validated_materialization_context(observation_id):
+    return msrp_materialization_service.MaterializationExecutionContext(
+        execution_id=uuid4(),
+        approval_id=uuid4(),
+        operation="materialize",
+        observation_ids=frozenset({observation_id}),
+        gate_decision_ids=frozenset({uuid4()}),
+        _seal=msrp_materialization_service._CONTEXT_SEAL,
+    )
 
 
 def _make_observation() -> MsrpObservation:
@@ -1922,6 +1937,7 @@ def test_materialize_current_price_backfills_open_period_when_history_is_empty(
     result = msrp_workflow_service.materialize_current_price_from_observation(
         None,
         observation,
+        context=_validated_materialization_context(observation.observation_id),
         price_history_enabled=True,
     )
 
@@ -1967,6 +1983,7 @@ def test_materialize_current_price_applies_canonical_mapping_before_update(
     result = msrp_workflow_service.materialize_current_price_from_observation(
         None,
         observation,
+        context=_validated_materialization_context(observation.observation_id),
         price_history_enabled=False,
     )
 
@@ -2069,6 +2086,7 @@ def test_refreshes_open_period_when_price_is_unchanged(
     result = msrp_workflow_service.materialize_current_price_from_observation(
         None,
         observation,
+        context=_validated_materialization_context(observation.observation_id),
         price_history_enabled=True,
     )
 
@@ -2191,162 +2209,13 @@ def test_commit_or_conflict_rolls_back_integrity_errors() -> None:
     assert calls == ["commit", "rollback"]
 
 
-def test_remap_current_price_reopens_review_and_removes_current_price(
-    monkeypatch,
-) -> None:
-    now = datetime(2026, 4, 12, 8, 30, tzinfo=timezone.utc)
-    observation = _make_observation()
-    current_price = _make_current_price(observation)
-    current_price.effective_observation_id = observation.observation_id
-    review_case = SimpleNamespace(
-        review_case_id=uuid4(),
-        candidate_matches_json=[{"source": "existing-review"}],
-        review_status="approved",
-        current_assignee="analyst-1",
-        updated_at_utc=observation.updated_at_utc,
-    )
-    open_period = SimpleNamespace(
-        valid_to_utc=None,
-        ended_by_observation_id=uuid4(),
-    )
-    deleted_current_prices: list[object] = []
-    added_decisions: list[object] = []
-    refreshed: list[object] = []
-    ensured_calls: list[tuple[object, object, object]] = []
-
-    monkeypatch.setattr(msrp_workflow_service, "_utc_now", lambda: now)
-    monkeypatch.setattr(
-        msrp_workflow_service.msrp_repo,
-        "get_current_price",
-        lambda *args, **kwargs: current_price,
-    )
-    monkeypatch.setattr(
-        msrp_workflow_service.msrp_repo,
-        "get_observation",
-        lambda *args, **kwargs: observation,
-    )
-    monkeypatch.setattr(
-        msrp_workflow_service.review_repo,
-        "get_review_case_by_observation",
-        lambda *args, **kwargs: review_case,
-    )
-
-    def _ensure_review_case(
-        session,
-        incoming_observation,
-        candidate_matches_json,
-    ):
-        ensured_calls.append(
-            (session, incoming_observation, candidate_matches_json)
+def test_remap_current_price_is_fail_closed_without_compensation_execution() -> None:
+    with pytest.raises(HTTPException) as exc_info:
+        msrp_workflow_service.remap_current_price(
+            SimpleNamespace(),
+            str(uuid4()),
+            {"decided_by": "tester"},
         )
-        return review_case
 
-    monkeypatch.setattr(
-        msrp_workflow_service,
-        "_ensure_review_case",
-        _ensure_review_case,
-    )
-    monkeypatch.setattr(
-        msrp_workflow_service,
-        "_retire_active_overrides",
-        lambda *args, **kwargs: 2,
-    )
-    monkeypatch.setattr(
-        msrp_workflow_service.msrp_repo,
-        "has_price_history_table",
-        lambda *args, **kwargs: True,
-    )
-    monkeypatch.setattr(
-        msrp_workflow_service.msrp_repo,
-        "get_open_price_period",
-        lambda *args, **kwargs: open_period,
-    )
-    monkeypatch.setattr(
-        msrp_workflow_service.msrp_repo,
-        "delete_current_price",
-        lambda session, price: deleted_current_prices.append(price),
-    )
-    monkeypatch.setattr(
-        msrp_workflow_service.review_repo,
-        "add_review_decision",
-        lambda session, decision: added_decisions.append(decision),
-    )
-    monkeypatch.setattr(
-        msrp_workflow_service,
-        "_commit_or_conflict",
-        lambda *args, **kwargs: None,
-    )
-    monkeypatch.setattr(
-        msrp_workflow_service.msrp_repo,
-        "get_source",
-        lambda *args, **kwargs: SimpleNamespace(
-            source_id=observation.source_id
-        ),
-    )
-    monkeypatch.setattr(
-        msrp_workflow_service,
-        "review_case_payload",
-        lambda case, obs, source: {
-            "reviewCaseId": str(case.review_case_id),
-            "observationId": str(obs.observation_id),
-            "sourceId": str(source.source_id),
-        },
-    )
-    monkeypatch.setattr(
-        msrp_workflow_service,
-        "review_decision_payload",
-        lambda decision: {
-            "reviewDecisionId": str(decision.review_case_id),
-            "decision": decision.decision,
-            "note": decision.note,
-        },
-    )
-
-    session = SimpleNamespace(refresh=lambda obj: refreshed.append(obj))
-
-    payload = msrp_workflow_service.remap_current_price(
-        session,
-        str(current_price.current_price_id),
-        {
-            "decided_by": "tester",
-            "note": "source price looks wrong",
-        },
-    )
-
-    assert ensured_calls == [
-        (session, observation, review_case.candidate_matches_json)
-    ]
-    assert review_case.review_status == "open"
-    assert review_case.current_assignee is None
-    assert review_case.updated_at_utc == now
-    assert observation.match_status == "review_required"
-    assert observation.updated_at_utc == now
-    assert observation.match_reason_json["returnedFromCurrentPrice"] == {
-        "currentPriceId": str(current_price.current_price_id),
-        "returnedBy": "tester",
-        "returnedAtUtc": now.isoformat(),
-        "note": "source price looks wrong",
-    }
-    assert open_period.valid_to_utc == now
-    assert open_period.ended_by_observation_id is None
-    assert deleted_current_prices == [current_price]
-    assert len(added_decisions) == 1
-    assert added_decisions[0].decision == "reopen"
-    assert added_decisions[0].note == "source price looks wrong"
-    assert payload == {
-        "currentPriceId": str(current_price.current_price_id),
-        "observationId": str(observation.observation_id),
-        "reviewCase": {
-            "reviewCaseId": str(review_case.review_case_id),
-            "observationId": str(observation.observation_id),
-            "sourceId": str(observation.source_id),
-        },
-        "decision": {
-            "reviewDecisionId": str(review_case.review_case_id),
-            "decision": "reopen",
-            "note": "source price looks wrong",
-        },
-        "overridesRetired": 2,
-        "removedFromCurrentPrices": True,
-    }
-    assert refreshed == [review_case, added_decisions[0]]
+    assert exc_info.value.status_code == 409
+    assert "compensation approval/execution" in str(exc_info.value.detail)

@@ -15,6 +15,7 @@ EnvironmentFile=-/etc/jato-fullstack/msrp.env
 Environment=PYTHONUNBUFFERED=1
 Environment=REPO_DIR=/opt/JATO_Analysis_System-main
 Environment=JATO_MSRP_MODE=%i
+Environment=JATO_MSRP_EXECUTION_CONTEXT=systemd_scheduled
 
 ExecStart=/opt/JATO_Analysis_System-main/03_Scripts/run_msrp_low_concurrency.sh
 

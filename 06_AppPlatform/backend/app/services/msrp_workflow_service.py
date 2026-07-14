@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 from datetime import date, datetime, timedelta, timezone
 import re
 from typing import Any
@@ -31,6 +33,9 @@ from app.services.msrp_evidence_verifier import (
     EvidenceVerificationResult,
     verify_observation_evidence,
 )
+from app.services.msrp_materialization_service import (
+    MaterializationExecutionContext,
+)
 from app.services.msrp_official_source_policy import (
     is_enabled_official_msrp_source,
     is_official_msrp_source_type,
@@ -45,7 +50,6 @@ from app.services.payload_serializers import (
     review_decision_payload,
     scrape_batch_payload,
 )
-
 
 ELIGIBLE_CURRENT_PRICE_STATUSES = {
     "auto_accepted",
@@ -798,8 +802,15 @@ def materialize_current_price_from_observation(
     session: Session,
     observation: MsrpObservation,
     *,
+    context: MaterializationExecutionContext,
     price_history_enabled: bool | None = None,
 ) -> CurrentPrice | None:
+    if not isinstance(context, MaterializationExecutionContext):
+        raise HTTPException(
+            status_code=403,
+            detail="Materialization requires a validated execution context.",
+        )
+    context.require_observation(observation.observation_id, "materialize")
     source = msrp_repo.get_source(session, observation.source_id)
     if not is_enabled_official_msrp_source(source):
         return None
@@ -1108,11 +1119,9 @@ def create_scrape_batch_ingest(
 
     observations: list[MsrpObservation] = []
     review_cases: list[ReviewCase] = []
-    current_prices: list[CurrentPrice] = []
     sources: list[MsrpSource] = []
     finance_observations: list[FinanceObservation] = []
     finance_observations_skipped = 0
-    price_history_enabled = msrp_repo.has_price_history_table(session)
     finance_observations_enabled = (
         msrp_repo.has_finance_observations_table(session)
     )
@@ -1362,7 +1371,8 @@ def create_scrape_batch_ingest(
                     override_applied_count += 1
                 elif resolution["resolverKind"] == RESOLVER_KIND_LINK:
                     link_applied_count += 1
-                # Fall through to current price materialization below
+                # Mapping/review state may advance, but ingest is always
+                # observation-only. Fact writes require a separate approval.
             else:
                 review_case = _ensure_review_case(
                     session,
@@ -1379,23 +1389,6 @@ def create_scrape_batch_ingest(
             )
             if not _is_current_price_semantics(price_semantics):
                 non_msrp_price_observation_count += 1
-                success_count += 1
-                continue
-            current_price = materialize_current_price_from_observation(
-                session,
-                observation,
-                price_history_enabled=price_history_enabled,
-            )
-            if current_price is not None:
-                current_prices.append(current_price)
-                # The app session runs with autoflush disabled. Flush each
-                # materialized price so later observations in the same batch
-                # can see the current price and open history period.
-                _commit_or_conflict(
-                    session,
-                    "Scrape batch ingest hit a conflict",
-                    commit=False,
-                )
             success_count += 1
 
     batch.candidate_count = len(observations) + failed_count
@@ -1422,7 +1415,9 @@ def create_scrape_batch_ingest(
         "reviewCasesCreated": len(review_cases),
         "overrideAppliedCount": override_applied_count,
         "linkAppliedCount": link_applied_count,
-        "currentPricesTouched": len(current_prices),
+        "currentPricesTouched": 0,
+        "observationOnly": True,
+        "materializationRequiresEditorApproval": True,
         "nonMsrpPriceObservationCount": non_msrp_price_observation_count,
         "financeObservationsCreated": len(finance_observations),
         "financeObservationsSkipped": finance_observations_skipped,
@@ -1446,9 +1441,7 @@ def create_scrape_batch_ingest(
         "sampleReviewCases": [
             review_case_payload(item) for item in review_cases[:10]
         ],
-        "sampleCurrentPrices": [
-            current_price_payload(item) for item in current_prices[:10]
-        ],
+        "sampleCurrentPrices": [],
     }
 
 
@@ -2797,111 +2790,14 @@ def remap_current_price(
     current_price_id: str,
     data: dict[str, object],
 ) -> dict[str, object]:
-    current_price = msrp_repo.get_current_price(
-        session,
-        UUID(current_price_id),
-    )
-    if current_price is None:
-        raise HTTPException(status_code=404, detail="Current price not found")
-
-    decided_by = str(data.get("decided_by") or "").strip()
-    if not decided_by:
-        raise HTTPException(
-            status_code=400,
-            detail="decided_by is required",
-        )
-
-    observation = msrp_repo.get_observation(
-        session,
-        current_price.effective_observation_id,
-    )
-    if observation is None:
-        raise HTTPException(status_code=404, detail="Observation not found")
-
-    existing_review_case = review_repo.get_review_case_by_observation(
-        session,
-        observation.observation_id,
-    )
-    review_case = _ensure_review_case(
-        session,
-        observation,
-        (
-            existing_review_case.candidate_matches_json
-            if existing_review_case is not None
-            else None
+    del session, current_price_id, data
+    raise HTTPException(
+        status_code=409,
+        detail=(
+            "Direct current-price remap is disabled. A dedicated persisted "
+            "editor compensation approval/execution path is required."
         ),
     )
-
-    now = _utc_now()
-    review_case.review_status = "open"
-    review_case.current_assignee = None
-    review_case.updated_at_utc = now
-
-    observation.match_status = REVIEW_REQUIRED_STATUS
-    observation.updated_at_utc = now
-    match_reason = observation.match_reason_json or {}
-    if not isinstance(match_reason, dict):
-        match_reason = {"previous": match_reason}
-    match_reason["returnedFromCurrentPrice"] = {
-        "currentPriceId": str(current_price.current_price_id),
-        "returnedBy": decided_by,
-        "returnedAtUtc": now.isoformat(),
-        "note": str(data.get("note") or "").strip() or None,
-    }
-    observation.match_reason_json = match_reason
-
-    overrides_retired = _retire_active_overrides(
-        session,
-        observation,
-        as_of_date=now.date(),
-    )
-
-    if msrp_repo.has_price_history_table(session):
-        open_period = msrp_repo.get_open_price_period(
-            session,
-            current_price.country,
-            current_price.brand,
-            current_price.jato_model,
-            current_price.jato_trim,
-            current_price.jato_powertrain,
-        )
-        if open_period is not None:
-            open_period.valid_to_utc = now
-            open_period.ended_by_observation_id = None
-
-    msrp_repo.delete_current_price(session, current_price)
-
-    reopen_decision = ReviewDecision(
-        review_case_id=review_case.review_case_id,
-        observation_id=observation.observation_id,
-        decision="reopen",
-        decided_official_model=observation.official_model,
-        decided_official_trim=observation.official_trim,
-        note=(
-            str(data.get("note") or "").strip()
-            or "Returned from MSRP current price"
-        ),
-        decided_by=decided_by,
-    )
-    review_repo.add_review_decision(session, reopen_decision)
-
-    _commit_or_conflict(
-        session,
-        "Current price remap conflicted with existing data",
-    )
-
-    session.refresh(review_case)
-    session.refresh(reopen_decision)
-    source = msrp_repo.get_source(session, observation.source_id)
-
-    return {
-        "currentPriceId": current_price_id,
-        "observationId": str(observation.observation_id),
-        "reviewCase": review_case_payload(review_case, observation, source),
-        "decision": review_decision_payload(reopen_decision),
-        "overridesRetired": overrides_retired,
-        "removedFromCurrentPrices": True,
-    }
 
 
 def list_price_history(
@@ -2937,46 +2833,28 @@ def list_price_history(
 
 def materialize_current_prices(
     session: Session,
-    country: str | None,
-    brand: str | None,
-    jato_model: str | None,
-    limit: int,
+    *,
+    approval_id: UUID,
+    run_id: str,
+    idempotency_key: str,
+    executed_by_actor: str,
+    executed_by_role: str,
+    executed_by_identity_source: str,
+    execution_context: str,
+    limit: int = 500,
 ) -> dict[str, object]:
-    observations = msrp_repo.list_materializable_observations(
-        session,
-        country,
-        brand,
-        jato_model,
-        limit,
+    from app.services.msrp_materialization_service import (
+        execute_materialization,
     )
-    touched: list[CurrentPrice] = []
-    seen_keys: set[tuple[str, str, str, str, str]] = set()
-    price_history_enabled = msrp_repo.has_price_history_table(session)
-    for observation in observations:
-        business_key = (
-            observation.country,
-            observation.brand,
-            observation.jato_model,
-            observation.jato_trim,
-            _business_powertrain(observation.jato_powertrain),
-        )
-        if business_key in seen_keys:
-            continue
-        seen_keys.add(business_key)
-        current_price = materialize_current_price_from_observation(
-            session,
-            observation,
-            price_history_enabled=price_history_enabled,
-        )
-        if current_price is not None:
-            touched.append(current_price)
 
-    _commit_or_conflict(
+    return execute_materialization(
         session,
-        "Current price materialization hit a conflict",
+        approval_id=approval_id,
+        run_id=run_id,
+        idempotency_key=idempotency_key,
+        executed_by_actor=executed_by_actor,
+        executed_by_role=executed_by_role,
+        executed_by_identity_source=executed_by_identity_source,
+        execution_context=execution_context,
+        limit=limit,
     )
-    return {
-        "candidateObservations": len(observations),
-        "materializedKeys": len(touched),
-        "items": [current_price_payload(item) for item in touched[:50]],
-    }
