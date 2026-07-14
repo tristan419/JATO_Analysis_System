@@ -624,7 +624,13 @@ def _build_pdf_text_profile(profile: dict[str, Any]) -> PdfTextProfile:
     )
     return PdfTextProfile(
         url=profile["url"],
+        urls=tuple(
+            str(url).strip()
+            for url in profile.get("urls", [])
+            if str(url).strip()
+        ),
         entry_patterns=entry_patterns,
+        headers=profile.get("headers", {}),
         timeout_seconds=int(profile.get("timeout_seconds", 60)),
         retry_attempts=int(profile.get("retry_attempts", 0)),
         retry_delay_seconds=float(profile.get("retry_delay_seconds", 0.0) or 0.0),
@@ -700,6 +706,11 @@ def _build_http_text_profile(profile: dict[str, Any]) -> HttpTextProfile:
     )
     return HttpTextProfile(
         url=profile["url"],
+        urls=tuple(
+            str(url).strip()
+            for url in profile.get("urls", [])
+            if str(url).strip()
+        ),
         entry_patterns=entry_patterns,
         timeout_seconds=int(profile.get("timeout_seconds", 30)),
         headers=profile.get("headers", {}),

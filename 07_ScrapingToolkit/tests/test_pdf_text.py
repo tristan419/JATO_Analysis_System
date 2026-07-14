@@ -5,6 +5,7 @@ import requests
 
 from jato_scraper.base import ExtractorConfig
 from jato_scraper.config_loader import _build_pdf_text_profile
+from jato_scraper.extractors import pdf_text as pdf_text_module
 from jato_scraper.extractors.pdf_text import (
     PdfTextEntryPattern,
     PdfTextExtractor,
@@ -160,14 +161,14 @@ def test_pdf_text_uses_curl_fallback_after_requests_timeout(monkeypatch):
     monkeypatch.setattr(extractor._session, "get", fail_request)
     fallback_timeouts = []
 
-    def fetch_with_curl(timeout):
-        fallback_timeouts.append(timeout)
+    def fetch_with_curl(timeout, url=None):
+        fallback_timeouts.append((timeout, url))
         return b"%PDF-1.7\n"
 
     monkeypatch.setattr(extractor, "_fetch_pdf_bytes_with_curl", fetch_with_curl)
 
     assert extractor._fetch_pdf_bytes() == b"%PDF-1.7\n"
-    assert fallback_timeouts == [30]
+    assert fallback_timeouts == [(30, "https://example.invalid/x1.pdf")]
 
 
 def test_pdf_text_uses_browser_fallback_after_requests_timeout(monkeypatch):
@@ -232,14 +233,14 @@ def test_pdf_text_prefers_curl_download_before_requests(monkeypatch):
     monkeypatch.setattr(extractor._session, "get", fail_request)
     curl_timeouts = []
 
-    def fetch_with_curl(timeout):
-        curl_timeouts.append(timeout)
+    def fetch_with_curl(timeout, url=None):
+        curl_timeouts.append((timeout, url))
         return b"%PDF-1.7\n"
 
     monkeypatch.setattr(extractor, "_fetch_pdf_bytes_with_curl", fetch_with_curl)
 
     assert extractor._fetch_pdf_bytes() == b"%PDF-1.7\n"
-    assert curl_timeouts == [30]
+    assert curl_timeouts == [(30, "https://example.invalid/sealion.pdf")]
 
 
 def test_pdf_text_uses_poppler_when_pypdf_returns_blank_text(monkeypatch):
