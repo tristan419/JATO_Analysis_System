@@ -1,99 +1,51 @@
 source_code: toyota_corolla_cross_pl_draft_scrapling
 country: 波兰
 brand: TOYOTA
-source_url: https://www.toyota.pl/samochody/corolla-cross
-source_type: manufacturer_official
+source_url: https://pdf.sites.toyota.pl/spec_corolla_cross_rm26.pdf
+source_type: official_price_list
 price_semantics: base_msrp
-extractor_type: scrapling
+extractor_type: pdf_text
 profile:
-  url: https://www.toyota.pl/samochody/corolla-cross
-  headless: true
+  url: https://pdf.sites.toyota.pl/spec_corolla_cross_rm26.pdf
+  timeout_seconds: 60
+  retry_attempts: 1
+  curl_download_fallback: true
   default_currency: PLN
   default_tax_included: true
-  default_price_label: MSRP
+  default_price_label: Cena katalogowa brutto (PLN)
   fixed_model: COROLLA CROSS
   fixed_jato_model: COROLLA CROSS
-  fixed_jato_powertrain: null
-  model_rules: []
-  skip_if_model_unmapped: false
   copy_trim_to_jato_trim: true
-  confidence_rules:
-    base: 0.2
-    fixed_model_bonus: 0.18
-    fixed_jato_model_bonus: 0.12
-    model_rule_bonus: 0.12
-    trim_present_bonus: 0.1
-    copy_trim_to_jato_trim_bonus: 0.09
-    parsed_price_text_bonus: 0.03
-    currency_bonus: 0.01
-    price_label_bonus: 0.02
-    trim_keyword_bonuses: []
-    price_band_bonuses:
-    - key: price_band_entry
-      label: Entry price band matched
-      max: 0
-      delta: 0.0
-    - key: price_band_mid
-      label: Mid price band matched
-      min: 0
-      max: 0
-      delta: 0.01
-    - key: price_band_high
-      label: High price band matched
-      min: 0
-      delta: 0.03
-    powertrain_keyword_bonuses: []
-    powertrain_bonuses:
-    - key: powertrain_hev
-      label: 'Powertrain matched: HEV'
-      powertrain: HEV
-      delta: 0.03
-    clamp_min: 0.0
-    clamp_max: 1.0
-  structured_fields:
-    edition_rules:
-    - key: edition_special
-      label: Special Edition
-      keyword: special edition
-      special: true
-    powertrain_rules:
-    - key: powertrain_hev
-      powertrain: HEV
-      keywords:
-      - hev
-      - full hybrid
-      - self-charging hybrid
-      - self charging hybrid
-      - hybrid
-      - hybryda
-      - pelna hybryda
-  auto_accept_gates:
-    review_threshold: 0.95
-    semi_auto_threshold: 0.98
-    require_powertrain_match: true
-    force_review_if_powertrain_missing: true
-    force_review_if_powertrain_ambiguous: true
-    force_review_for_special_edition: true
-  json_script_selector: script[type='application/ld+json']
-  css:
-    vehicle_container: body
-    model: h2, h3
-    trim: h3
-    price: '[class*="price"]'
-  tier: stealth
-  network_idle: true
-  impersonate: chrome
+  match_confidence: 0.9
+  match_status: review_required
+  match_reason:
+    kind: pdf_price_list
+    source: official_toyota_pl_cennik
+    document_valid_from: '2026-07-01'
+    document_audited_on: '2026-07-15'
+    document_sha256_at_audit: 6ea8985175d2e7f215906bd67cf05da4fe93c70895ca31f75d6044e62ba8eaa9
+    note: Official 2026 Corolla Cross gross price table; extracts catalog prices only.
+  entry_patterns:
+  - pattern: '5-drzwiowy\s+crossover\s+Comfort.*?1\.8\s+Hybrid\s+140\s+KM\s+e\s*(?:-|\u2011)\s*CVT\s+cena\s+katalogowa\s+(?P<price>\d{3}\s+\d{3})'
+    official_trim: COMFORT
+    official_powertrain: 1.8 Hybrid 140 KM e-CVT
+    jato_powertrain: HEV
+  - pattern: '5-drzwiowy\s+crossover\s+Comfort.*?2\.0\s+Hybrid\s+Dynamic\s+Force\s+180\s+KM\s+e\s*(?:-|\u2011)\s*CVT\s+cena\s+katalogowa\s+(?P<price>\d{3}\s+\d{3})'
+    official_trim: COMFORT
+    official_powertrain: 2.0 Hybrid Dynamic Force 180 KM e-CVT
+    jato_powertrain: HEV
+  - pattern: '5-drzwiowy\s+crossover\s+Comfort.*?2\.0\s+Hybrid\s+Dynamic\s+Force\s+180\s+KM\s+AWD-i\s+e\s*(?:-|\u2011)\s*CVT\s+cena\s+katalogowa\s+(?:-|\u2013)?\s*(?P<price>\d{3}\s+\d{3})'
+    official_trim: STYLE
+    official_powertrain: 2.0 Hybrid Dynamic Force 180 KM AWD-i e-CVT
+    jato_powertrain: HEV
 schedule:
   frequency: manual_only
   run_window_start: 00:00
   run_window_end: 05:00
   preferred_weekday: monday
-notes: Draft scaffold generated from country×model top30 backlog. Replace source_url,
-  profile.url, selectors, currency, price label, and the single-model placeholders
-  before promoting to 07_ScrapingToolkit/sources. [URL filled from TOYOTA template]
-  [URL language corrected] [CSS selectors applied from brand probe] [Switched to playwright_card_flow
-  with toyota_trim_overview_playwright.yaml] [Reverted to scrapling — playwright preset
-  needs per-brand tuning]
+notes: Switched from a stale model page to the official Toyota Poland 2026 price-list
+  PDF valid from 2026-07-01. Extracts gross catalog prices only; promotional prices
+  and KINTO monthly payments remain outside base MSRP.
 bootstrap_meta:
   country_model_rank: 14
   suggested_scope_kind: single_model
