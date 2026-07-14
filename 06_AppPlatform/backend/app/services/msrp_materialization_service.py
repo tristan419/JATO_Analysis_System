@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
+import json
 import re
 from uuid import UUID, uuid4
 
@@ -18,6 +19,7 @@ from app.db.msrp_source_governance_models import MsrpGovernanceGateDecision
 from app.infra import msrp_materialization_repository as approval_repo
 from app.infra import msrp_repository as msrp_repo
 from app.infra import msrp_source_governance_repository as governance_repo
+from app.services.msrp_evidence_verifier import verify_observation_evidence
 
 
 _CONTEXT_SEAL = object()
@@ -74,12 +76,102 @@ def _gate_status_passed(value: object) -> bool:
     return isinstance(value, dict) and value.get("status") == "pass"
 
 
+def _canonical_evidence_ref_tokens(
+    evidence_refs: object,
+) -> tuple[str, ...]:
+    if not isinstance(evidence_refs, (list, tuple)):
+        return ()
+    tokens = [
+        json.dumps(
+            dict(item),
+            sort_keys=True,
+            separators=(",", ":"),
+            default=str,
+        )
+        for item in evidence_refs
+        if isinstance(item, dict)
+    ]
+    if len(tokens) != len(evidence_refs):
+        return ()
+    return tuple(sorted(tokens))
+
+
+@dataclass(frozen=True, slots=True)
+class MaterializationEvidenceBinding:
+    observation_id: UUID
+    gate_decision_id: UUID
+    source_version_id: UUID
+    evidence_ref_tokens: tuple[str, ...]
+
+    def payload(self) -> dict[str, object]:
+        return {
+            "observationId": str(self.observation_id),
+            "gateDecisionId": str(self.gate_decision_id),
+            "sourceVersionId": str(self.source_version_id),
+            "verifiedEvidenceRefs": [
+                json.loads(token) for token in self.evidence_ref_tokens
+            ],
+        }
+
+
+def _require_gate_evidence_binding(
+    session: Session,
+    observation: MsrpObservation,
+    gate_decision: MsrpGovernanceGateDecision,
+) -> MaterializationEvidenceBinding:
+    verification = verify_observation_evidence(
+        session,
+        observation,
+        target_id=gate_decision.target_id,
+    )
+    if (
+        not verification.passed
+        or verification.source_version_id is None
+        or not verification.evidence_refs
+    ):
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "message": "Current replayable evidence verification failed.",
+                "observationId": str(observation.observation_id),
+                "reasons": list(verification.reasons),
+            },
+        )
+
+    context = getattr(gate_decision, "evaluation_context_json", None)
+    context = context if isinstance(context, dict) else {}
+    expected_source_version_id = str(context.get("sourceVersionId") or "")
+    expected_tokens = _canonical_evidence_ref_tokens(
+        context.get("verifiedEvidenceRefs")
+    )
+    current_tokens = _canonical_evidence_ref_tokens(verification.evidence_refs)
+    if (
+        expected_source_version_id != str(verification.source_version_id)
+        or not expected_tokens
+        or expected_tokens != current_tokens
+    ):
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "message": "GateDecision evidence binding is stale or changed.",
+                "observationId": str(observation.observation_id),
+            },
+        )
+    return MaterializationEvidenceBinding(
+        observation_id=observation.observation_id,
+        gate_decision_id=gate_decision.gate_decision_id,
+        source_version_id=verification.source_version_id,
+        evidence_ref_tokens=current_tokens,
+    )
+
+
 def _require_current_gate_decision(
     session: Session,
     observation: MsrpObservation,
     gate_decision: MsrpGovernanceGateDecision | None,
     *,
     operation: str,
+    evidence_bindings: dict[UUID, MaterializationEvidenceBinding] | None = None,
 ) -> MsrpGovernanceGateDecision:
     if gate_decision is None:
         raise HTTPException(
@@ -133,6 +225,13 @@ def _require_current_gate_decision(
             raise HTTPException(status_code=409, detail="Source Gate did not pass.")
         if not _gate_status_passed(gate_decision.mapping_gate_json):
             raise HTTPException(status_code=409, detail="Mapping Gate did not pass.")
+        binding = _require_gate_evidence_binding(
+            session,
+            observation,
+            gate_decision,
+        )
+        if evidence_bindings is not None:
+            evidence_bindings[observation.observation_id] = binding
     return gate_decision
 
 
@@ -145,6 +244,7 @@ class MaterializationExecutionContext:
     operation: str
     observation_ids: frozenset[UUID]
     gate_decision_ids: frozenset[UUID]
+    evidence_bindings: tuple[MaterializationEvidenceBinding, ...]
     _seal: object
 
     def require_observation(self, observation_id: UUID, operation: str) -> None:
@@ -162,6 +262,34 @@ class MaterializationExecutionContext:
             raise HTTPException(
                 status_code=409,
                 detail="Observation is outside the approved materialization scope.",
+            )
+
+    def require_verified_evidence(
+        self,
+        observation_id: UUID,
+        source_version_id: UUID | None,
+        evidence_refs: object,
+    ) -> None:
+        self.require_observation(observation_id, "materialize")
+        binding = next(
+            (
+                item
+                for item in self.evidence_bindings
+                if item.observation_id == observation_id
+            ),
+            None,
+        )
+        if (
+            binding is None
+            or source_version_id != binding.source_version_id
+            or _canonical_evidence_ref_tokens(evidence_refs)
+            != binding.evidence_ref_tokens
+        ):
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    "Replayable evidence changed after GateDecision validation."
+                ),
             )
 
 
@@ -407,6 +535,20 @@ def _fact_refs(
                     if current_price
                     else None
                 ),
+                "currentSourceVersionId": (
+                    str(current_price.source_version_id)
+                    if current_price
+                    and getattr(current_price, "source_version_id", None)
+                    else None
+                ),
+                "currentEvidenceRefs": (
+                    list(
+                        getattr(current_price, "evidence_refs_json", None)
+                        or []
+                    )
+                    if current_price
+                    else []
+                ),
                 "lastPriceChangeAtUtc": (
                     current_price.last_price_change_at_utc.isoformat()
                     if current_price
@@ -445,6 +587,20 @@ def _fact_refs(
                 "priceHistorySourceCurrency": (
                     open_period.source_currency if open_period else None
                 ),
+                "priceHistorySourceVersionId": (
+                    str(open_period.source_version_id)
+                    if open_period
+                    and getattr(open_period, "source_version_id", None)
+                    else None
+                ),
+                "priceHistoryEvidenceRefs": (
+                    list(
+                        getattr(open_period, "evidence_refs_json", None)
+                        or []
+                    )
+                    if open_period
+                    else []
+                ),
                 "priceHistoryStartedByObservationId": (
                     str(open_period.started_by_observation_id)
                     if open_period
@@ -469,9 +625,14 @@ def _validated_execution_scope(
     session: Session,
     approval: MsrpMaterializationApproval,
     items: list[MsrpMaterializationApprovalItem],
-) -> tuple[list[MsrpObservation], list[MsrpGovernanceGateDecision]]:
+) -> tuple[
+    list[MsrpObservation],
+    list[MsrpGovernanceGateDecision],
+    tuple[MaterializationEvidenceBinding, ...],
+]:
     observations: list[MsrpObservation] = []
     decisions: list[MsrpGovernanceGateDecision] = []
+    evidence_bindings: dict[UUID, MaterializationEvidenceBinding] = {}
     for item in items:
         observation = msrp_repo.get_observation(session, item.observation_id)
         if observation is None:
@@ -483,9 +644,13 @@ def _validated_execution_scope(
                 observation,
                 gate,
                 operation=approval.operation,
+                evidence_bindings=evidence_bindings,
             )
         )
-        if approval.scope_kind == "batch" and observation.scrape_batch_id != approval.scrape_batch_id:
+        if (
+            approval.scope_kind == "batch"
+            and observation.scrape_batch_id != approval.scrape_batch_id
+        ):
             raise HTTPException(
                 status_code=409,
                 detail="Approved batch scope changed before execution.",
@@ -496,7 +661,14 @@ def _validated_execution_scope(
                 detail="Approved country scope changed before execution.",
             )
         observations.append(observation)
-    return observations, decisions
+    return (
+        observations,
+        decisions,
+        tuple(
+            evidence_bindings[observation.observation_id]
+            for observation in observations
+        ),
+    )
 
 
 def execute_materialization(
@@ -577,7 +749,11 @@ def execute_materialization(
             status_code=409,
             detail="Approval scope exceeds the requested materialization limit.",
         )
-    observations, decisions = _validated_execution_scope(session, approval, items)
+    observations, decisions, evidence_bindings = _validated_execution_scope(
+        session,
+        approval,
+        items,
+    )
     execution_id = uuid4()
     execution = MsrpMaterializationExecution(
         execution_id=execution_id,
@@ -599,6 +775,9 @@ def execute_materialization(
                 str(approval.scrape_batch_id) if approval.scrape_batch_id else None
             ),
             "requestedLimit": normalized_limit,
+            "verifiedEvidenceBindings": [
+                binding.payload() for binding in evidence_bindings
+            ],
         },
         gate_decision_ids_json=[str(item.gate_decision_id) for item in items],
         observation_ids_json=[str(item.observation_id) for item in items],
@@ -621,6 +800,7 @@ def execute_materialization(
         gate_decision_ids=frozenset(
             decision.gate_decision_id for decision in decisions
         ),
+        evidence_bindings=evidence_bindings,
         _seal=_CONTEXT_SEAL,
     )
     try:

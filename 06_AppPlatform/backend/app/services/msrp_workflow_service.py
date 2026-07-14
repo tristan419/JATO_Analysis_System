@@ -814,9 +814,6 @@ def materialize_current_price_from_observation(
     source = msrp_repo.get_source(session, observation.source_id)
     if not is_enabled_official_msrp_source(source):
         return None
-    apply_canonical_mapping(session, observation)
-    if observation.match_status not in ELIGIBLE_CURRENT_PRICE_STATUSES:
-        return None
 
     verification = verify_observation_evidence(session, observation)
     if (
@@ -825,8 +822,17 @@ def materialize_current_price_from_observation(
         or not verification.evidence_refs
     ):
         return None
+    context.require_verified_evidence(
+        observation.observation_id,
+        verification.source_version_id,
+        verification.evidence_refs,
+    )
     evidence_refs = list(verification.evidence_refs)
     verified_source_version_id = verification.source_version_id
+
+    apply_canonical_mapping(session, observation)
+    if observation.match_status not in ELIGIBLE_CURRENT_PRICE_STATUSES:
+        return None
 
     current_price = msrp_repo.get_current_price_by_key(
         session,

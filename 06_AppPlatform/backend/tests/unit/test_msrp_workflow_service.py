@@ -19,13 +19,30 @@ from app.services import (
 from app.services.msrp_evidence_verifier import EvidenceVerificationResult
 
 
-def _validated_materialization_context(observation_id):
+def _validated_materialization_context(
+    observation_id,
+    source_version_id,
+    evidence_refs,
+):
+    gate_decision_id = uuid4()
     return msrp_materialization_service.MaterializationExecutionContext(
         execution_id=uuid4(),
         approval_id=uuid4(),
         operation="materialize",
         observation_ids=frozenset({observation_id}),
-        gate_decision_ids=frozenset({uuid4()}),
+        gate_decision_ids=frozenset({gate_decision_id}),
+        evidence_bindings=(
+            msrp_materialization_service.MaterializationEvidenceBinding(
+                observation_id=observation_id,
+                gate_decision_id=gate_decision_id,
+                source_version_id=source_version_id,
+                evidence_ref_tokens=(
+                    msrp_materialization_service._canonical_evidence_ref_tokens(
+                        evidence_refs
+                    )
+                ),
+            ),
+        ),
         _seal=msrp_materialization_service._CONTEXT_SEAL,
     )
 
@@ -726,7 +743,7 @@ def test_create_scrape_batch_ingest_persists_finance_observations(
     )
 
 
-def test_ingest_flushes_evidence_links_before_fact_write_reverification(
+def test_ingest_flushes_evidence_links_without_materializing_facts(
     monkeypatch,
 ) -> None:
     events: list[str] = []
@@ -804,9 +821,7 @@ def test_ingest_flushes_evidence_links_before_fact_write_reverification(
             assert "commit" not in events
             events.append("verify_transient_links")
         else:
-            assert state["links_flushed"] is True
-            assert persisted_links
-            events.append("verify_fact_write")
+            events.append("unexpected_fact_write_verification")
         return verification
 
     monkeypatch.setattr(
@@ -938,14 +953,12 @@ def test_ingest_flushes_evidence_links_before_fact_write_reverification(
 
     assert len(persisted_links) == 1
     assert persisted_links[0].created_by == "unit-test"
-    assert len(added_current_prices) == 1
-    assert added_current_prices[0].source_version_id == source_version_id
-    assert added_current_prices[0].evidence_refs_json == [evidence_ref]
+    assert added_current_prices == []
     assert result["sampleObservations"][0]["evidenceRefs"] == [evidence_ref]
     assert events.index("verify_transient_links") < events.index("add_links")
     assert events.index("add_links") < events.index("flush_links")
-    assert events.index("flush_links") < events.index("verify_fact_write")
-    assert events.index("verify_fact_write") < events.index("commit")
+    assert events.index("flush_links") < events.index("commit")
+    assert "unexpected_fact_write_verification" not in events
 
 
 def test_payload_price_semantics_uses_explicit_observation_semantics_only() -> None:
@@ -1900,7 +1913,10 @@ def test_materialize_current_price_backfills_open_period_when_history_is_empty(
 ) -> None:
     observation = _make_observation()
     current_price = _make_current_price(observation)
-    _patch_verified_evidence(monkeypatch, observation)
+    source_version_id, evidence_ref = _patch_verified_evidence(
+        monkeypatch,
+        observation,
+    )
     recorded: list[object] = []
 
     monkeypatch.setattr(
@@ -1937,7 +1953,11 @@ def test_materialize_current_price_backfills_open_period_when_history_is_empty(
     result = msrp_workflow_service.materialize_current_price_from_observation(
         None,
         observation,
-        context=_validated_materialization_context(observation.observation_id),
+        context=_validated_materialization_context(
+            observation.observation_id,
+            source_version_id,
+            [evidence_ref],
+        ),
         price_history_enabled=True,
     )
 
@@ -1983,7 +2003,11 @@ def test_materialize_current_price_applies_canonical_mapping_before_update(
     result = msrp_workflow_service.materialize_current_price_from_observation(
         None,
         observation,
-        context=_validated_materialization_context(observation.observation_id),
+        context=_validated_materialization_context(
+            observation.observation_id,
+            source_version_id,
+            [evidence_ref],
+        ),
         price_history_enabled=False,
     )
 
@@ -2043,7 +2067,10 @@ def test_refreshes_open_period_when_price_is_unchanged(
 ) -> None:
     observation = _make_observation()
     current_price = _make_current_price(observation)
-    _patch_verified_evidence(monkeypatch, observation)
+    source_version_id, evidence_ref = _patch_verified_evidence(
+        monkeypatch,
+        observation,
+    )
     period_source_version_id = uuid4()
     period_evidence_refs = [{"evidenceAssetId": str(uuid4()), "sha256": "b" * 64}]
     open_period = SimpleNamespace(
@@ -2086,7 +2113,11 @@ def test_refreshes_open_period_when_price_is_unchanged(
     result = msrp_workflow_service.materialize_current_price_from_observation(
         None,
         observation,
-        context=_validated_materialization_context(observation.observation_id),
+        context=_validated_materialization_context(
+            observation.observation_id,
+            source_version_id,
+            [evidence_ref],
+        ),
         price_history_enabled=True,
     )
 
@@ -2136,10 +2167,16 @@ def test_materialization_rejects_missing_version_or_evidence(
         "verify_observation_evidence",
         lambda *_args, **_kwargs: missing_version,
     )
+    context = _validated_materialization_context(
+        observation.observation_id,
+        uuid4(),
+        [{"evidenceAssetId": str(uuid4()), "sha256": "a" * 64}],
+    )
     assert (
         msrp_workflow_service.materialize_current_price_from_observation(
             None,
             observation,
+            context=context,
             price_history_enabled=False,
         )
         is None
@@ -2161,11 +2198,66 @@ def test_materialization_rejects_missing_version_or_evidence(
         msrp_workflow_service.materialize_current_price_from_observation(
             None,
             observation,
+            context=context,
             price_history_enabled=False,
         )
         is None
     )
     assert current_price_reads == []
+
+
+def test_materialization_rejects_evidence_changed_after_context_validation(
+    monkeypatch,
+) -> None:
+    observation = _make_observation()
+    source_version_id = uuid4()
+    observation.source_version_id = source_version_id
+    approved_ref = {
+        "evidenceAssetId": str(uuid4()),
+        "sha256": "a" * 64,
+    }
+    changed_ref = {**approved_ref, "sha256": "b" * 64}
+    verification = EvidenceVerificationResult(
+        source_version_id=source_version_id,
+        evidence_refs=(changed_ref,),
+        reasons=(),
+        source_gate=SimpleNamespace(),
+    )
+    monkeypatch.setattr(
+        msrp_workflow_service.msrp_repo,
+        "get_source",
+        lambda *_args, **_kwargs: SimpleNamespace(
+            enabled=True,
+            source_type="manufacturer_official",
+        ),
+    )
+    monkeypatch.setattr(
+        msrp_workflow_service,
+        "verify_observation_evidence",
+        lambda *_args, **_kwargs: verification,
+    )
+    fact_reads: list[str] = []
+    monkeypatch.setattr(
+        msrp_workflow_service.msrp_repo,
+        "get_current_price_by_key",
+        lambda *_args, **_kwargs: fact_reads.append("read"),
+    )
+
+    with pytest.raises(HTTPException) as exc_info:
+        msrp_workflow_service.materialize_current_price_from_observation(
+            None,
+            observation,
+            context=_validated_materialization_context(
+                observation.observation_id,
+                source_version_id,
+                [approved_ref],
+            ),
+            price_history_enabled=False,
+        )
+
+    assert exc_info.value.status_code == 409
+    assert "changed after GateDecision" in str(exc_info.value.detail)
+    assert fact_reads == []
 
 
 def test_commit_or_conflict_flushes_when_commit_is_disabled() -> None:

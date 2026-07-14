@@ -16,6 +16,7 @@ from app.services import (
     msrp_materialization_service as service,
     msrp_workflow_service,
 )
+from app.services.msrp_evidence_verifier import EvidenceVerificationResult
 
 
 NOW = datetime(2026, 7, 14, 8, 0, tzinfo=timezone.utc)
@@ -42,9 +43,22 @@ class FakeSession:
 
 
 def _observation(country: str = "HU") -> SimpleNamespace:
+    source_version_id = uuid4()
+    evidence_refs = [
+        {
+            "evidenceAssetId": str(uuid4()),
+            "sha256": "a" * 64,
+            "evidenceType": "uploaded_pdf",
+            "evidenceRole": "price_page",
+            "storageKey": f"assets/aa/{'a' * 64}.pdf",
+            "capturedAtUtc": NOW.isoformat(),
+        }
+    ]
     return SimpleNamespace(
         observation_id=uuid4(),
         scrape_batch_id=uuid4(),
+        source_version_id=source_version_id,
+        _verified_evidence_refs=evidence_refs,
         country=country,
         brand="KGM",
         jato_model="Korando",
@@ -61,8 +75,41 @@ def _gate(observation, *, eligible: bool = True) -> SimpleNamespace:
         observation_id=observation.observation_id,
         source_gate_json={"status": "pass"},
         mapping_gate_json={"status": "pass"},
+        evaluation_context_json={
+            "sourceVersionId": str(observation.source_version_id),
+            "verifiedEvidenceRefs": list(observation._verified_evidence_refs),
+        },
         eligible_for_local_materialization=eligible,
         evaluated_at_utc=NOW + timedelta(minutes=1),
+    )
+
+
+def _evidence_result(observation) -> EvidenceVerificationResult:
+    return EvidenceVerificationResult(
+        source_version_id=observation.source_version_id,
+        evidence_refs=tuple(observation._verified_evidence_refs),
+        reasons=(),
+        source_gate=SimpleNamespace(),
+    )
+
+
+def _evidence_binding(observation, gate):
+    return service.MaterializationEvidenceBinding(
+        observation_id=observation.observation_id,
+        gate_decision_id=gate.gate_decision_id,
+        source_version_id=observation.source_version_id,
+        evidence_ref_tokens=service._canonical_evidence_ref_tokens(
+            observation._verified_evidence_refs
+        ),
+    )
+
+
+@pytest.fixture(autouse=True)
+def _verified_evidence(monkeypatch):
+    monkeypatch.setattr(
+        service,
+        "verify_observation_evidence",
+        lambda _session, observation, **_kwargs: _evidence_result(observation),
     )
 
 
@@ -299,6 +346,108 @@ def test_superseded_gate_decision_blocks_editor_approval(monkeypatch) -> None:
     assert "stale or superseded" in str(exc_info.value.detail)
 
 
+@pytest.mark.parametrize("evidence_change", ["deleted", "replaced"])
+def test_evidence_change_after_approval_blocks_execution_without_fact_writes(
+    monkeypatch,
+    evidence_change: str,
+) -> None:
+    observation = _observation()
+    gate = _gate(observation)
+    approval = _approval(observation, gate)
+    item = MsrpMaterializationApprovalItem(
+        approval_item_id=uuid4(),
+        approval_id=approval.approval_id,
+        observation_id=observation.observation_id,
+        gate_decision_id=gate.gate_decision_id,
+        ordinal=0,
+    )
+    session = FakeSession()
+    fact_writes: list[str] = []
+
+    monkeypatch.setattr(service, "_utc_now", lambda: NOW)
+    monkeypatch.setattr(
+        service.approval_repo,
+        "get_execution_by_idempotency_key",
+        lambda *_args: None,
+    )
+    monkeypatch.setattr(
+        service.approval_repo,
+        "get_approval",
+        lambda *_args, **_kwargs: approval,
+    )
+    monkeypatch.setattr(
+        service.approval_repo,
+        "list_approval_items",
+        lambda *_args: [item],
+    )
+    monkeypatch.setattr(
+        service.msrp_repo,
+        "get_observation",
+        lambda *_args: observation,
+    )
+    monkeypatch.setattr(
+        service.governance_repo,
+        "get_gate_decision",
+        lambda *_args: gate,
+    )
+    monkeypatch.setattr(
+        service.governance_repo,
+        "get_latest_gate_decision_for_target",
+        lambda *_args: gate,
+    )
+    monkeypatch.setattr(
+        service.governance_repo,
+        "get_target",
+        lambda *_args: SimpleNamespace(country="HU", brand="KGM"),
+    )
+    if evidence_change == "deleted":
+        verification = EvidenceVerificationResult(
+            source_version_id=observation.source_version_id,
+            evidence_refs=(),
+            reasons=("evidence_object_missing",),
+            source_gate=SimpleNamespace(),
+        )
+    else:
+        replacement_ref = {
+            **observation._verified_evidence_refs[0],
+            "sha256": "b" * 64,
+        }
+        verification = EvidenceVerificationResult(
+            source_version_id=observation.source_version_id,
+            evidence_refs=(replacement_ref,),
+            reasons=(),
+            source_gate=SimpleNamespace(),
+        )
+    monkeypatch.setattr(
+        service,
+        "verify_observation_evidence",
+        lambda *_args, **_kwargs: verification,
+    )
+    monkeypatch.setattr(
+        msrp_workflow_service,
+        "materialize_current_price_from_observation",
+        lambda *_args, **_kwargs: fact_writes.append("write"),
+    )
+
+    with pytest.raises(HTTPException) as exc_info:
+        service.execute_materialization(
+            session,
+            approval_id=approval.approval_id,
+            run_id=f"evidence-{evidence_change}-run",
+            idempotency_key=f"evidence-{evidence_change}-key",
+            executed_by_actor="human.executor",
+            executed_by_role="editor",
+            executed_by_identity_source="authenticated_session",
+            execution_context="interactive_editor",
+        )
+
+    assert exc_info.value.status_code == 409
+    assert fact_writes == []
+    assert session.added == []
+    assert session.commits == 0
+    assert approval.status == "approved"
+
+
 def test_editor_approved_scope_materializes_once_and_is_idempotent(
     monkeypatch,
 ) -> None:
@@ -342,7 +491,11 @@ def test_editor_approved_scope_materializes_once_and_is_idempotent(
     monkeypatch.setattr(
         service,
         "_validated_execution_scope",
-        lambda *_args: ([observation], [gate]),
+        lambda *_args: (
+            [observation],
+            [gate],
+            (_evidence_binding(observation, gate),),
+        ),
     )
     monkeypatch.setattr(
         service,
@@ -416,6 +569,15 @@ def test_editor_approved_scope_materializes_once_and_is_idempotent(
     assert state["execution"].rollback_ref
     assert state["execution"].compensation_ref == approval.compensation_plan_ref
     assert state["execution"].executed_by_actor == "human.executor"
+    binding_payload = state["execution"].scope_json["verifiedEvidenceBindings"][0]
+    assert binding_payload["observationId"] == str(observation.observation_id)
+    assert binding_payload["gateDecisionId"] == str(gate.gate_decision_id)
+    assert binding_payload["sourceVersionId"] == str(
+        observation.source_version_id
+    )
+    assert binding_payload["verifiedEvidenceRefs"] == (
+        observation._verified_evidence_refs
+    )
 
     with pytest.raises(HTTPException) as exc_info:
         service.execute_materialization(
@@ -473,7 +635,11 @@ def test_crash_after_reservation_leaves_approval_fail_closed(
     monkeypatch.setattr(
         service,
         "_validated_execution_scope",
-        lambda *_args: ([observation], [gate]),
+        lambda *_args: (
+            [observation],
+            [gate],
+            (_evidence_binding(observation, gate),),
+        ),
     )
     monkeypatch.setattr(service, "_fact_refs", lambda *_args: [])
 
@@ -555,15 +721,23 @@ def test_naive_gate_timestamp_is_compared_as_utc(monkeypatch) -> None:
 def test_fact_refs_capture_reversible_current_and_history_state(monkeypatch) -> None:
     observation = _observation()
     previous_observation_id = uuid4()
+    current_source_version_id = uuid4()
+    history_source_version_id = uuid4()
+    current_evidence_refs = [{"evidenceAssetId": str(uuid4()), "sha256": "a" * 64}]
+    history_evidence_refs = [{"evidenceAssetId": str(uuid4()), "sha256": "b" * 64}]
     current_price = SimpleNamespace(
         current_price_id=uuid4(),
         effective_observation_id=previous_observation_id,
+        source_version_id=current_source_version_id,
+        evidence_refs_json=current_evidence_refs,
         source_msrp_value=12345,
         source_currency="HUF",
         last_price_change_at_utc=NOW - timedelta(days=1),
     )
     open_period = SimpleNamespace(
         price_history_id=uuid4(),
+        source_version_id=history_source_version_id,
+        evidence_refs_json=history_evidence_refs,
         valid_from_utc=NOW - timedelta(days=10),
         valid_to_utc=None,
         last_confirmed_at_utc=NOW - timedelta(days=1),
@@ -603,9 +777,13 @@ def test_fact_refs_capture_reversible_current_and_history_state(monkeypatch) -> 
     assert ref["effectiveObservationId"] == str(previous_observation_id)
     assert ref["priceHistoryValidFromUtc"] == open_period.valid_from_utc.isoformat()
     assert ref["currentPriceValue"] == "12345"
+    assert ref["currentSourceVersionId"] == str(current_source_version_id)
+    assert ref["currentEvidenceRefs"] == current_evidence_refs
     assert ref["priceHistoryValue"] == "31.5"
     assert ref["priceHistorySourceValue"] == "12345"
     assert ref["priceHistorySourceCurrency"] == "HUF"
+    assert ref["priceHistorySourceVersionId"] == str(history_source_version_id)
+    assert ref["priceHistoryEvidenceRefs"] == history_evidence_refs
     assert ref["priceHistoryStartedByObservationId"] == str(
         previous_observation_id
     )
