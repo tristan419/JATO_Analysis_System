@@ -1293,12 +1293,7 @@ def get_dryrun_dashboard(run_id: str | None = None) -> dict[str, Any]:
         and run_id is None
         and (
             not current
-            or (
-                bool(current.get("partial"))
-                and current.get("runId") == (latest_shortcut or {}).get("runId")
-                and (latest_shortcut or {}).get("schemaVersion") == "msrp_dryrun_partial_v1"
-                and not _is_running()
-            )
+            or (bool(current.get("partial")) and not bool(current.get("running")))
         )
     ):
         report = _load_latest_indexed_v3_report(index_data)

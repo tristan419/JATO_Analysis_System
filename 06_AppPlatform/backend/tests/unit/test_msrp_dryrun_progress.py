@@ -2,6 +2,8 @@ import fcntl
 import json
 from pathlib import Path
 
+import pytest
+
 from app.services import msrp_dryrun_progress as progress
 
 
@@ -594,7 +596,18 @@ def test_dashboard_keeps_latest_stable_country_when_new_probe_regresses(tmp_path
     )
 
 
-def test_dashboard_uses_runs_index_when_latest_shortcut_is_stale_partial(tmp_path, monkeypatch):
+@pytest.mark.parametrize(
+    "shortcut_run_id",
+    [
+        "msrp-dryrun-20260612-070207",
+        "msrp-dryrun-20260614-010000",
+    ],
+)
+def test_dashboard_uses_runs_index_when_latest_shortcut_is_stale_partial(
+    tmp_path,
+    monkeypatch,
+    shortcut_run_id,
+):
     artifacts = tmp_path / "artifacts"
     logs = tmp_path / "logs"
     latest_run_id = "msrp-dryrun-20260612-070207"
@@ -662,7 +675,7 @@ def test_dashboard_uses_runs_index_when_latest_shortcut_is_stale_partial(tmp_pat
 
     (artifacts / "dryrun_report.json").write_text(json.dumps({
         "schemaVersion": "msrp_dryrun_partial_v1",
-        "runId": latest_run_id,
+        "runId": shortcut_run_id,
         "running": True,
         "partial": True,
     }), encoding="utf-8")
