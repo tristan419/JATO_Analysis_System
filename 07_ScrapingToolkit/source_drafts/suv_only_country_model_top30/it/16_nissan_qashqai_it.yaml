@@ -1,22 +1,21 @@
 source_code: nissan_qashqai_it_draft_scrapling
 country: 意大利
 brand: NISSAN
-source_url: https://www.nissan.it/veicoli/qashqai.html
+source_url: https://www.nissan.it/veicoli/veicoli-nuovi/qashqai.html
 source_type: manufacturer_official
 price_semantics: base_msrp
 extractor_type: scrapling
 profile:
-  url: https://www.nissan.it/veicoli/qashqai.html
+  url: https://www.nissan.it/veicoli/veicoli-nuovi/qashqai.html
   tier: stealth
   headless: true
   network_idle: true
   impersonate: chrome
-  json_script_selector: script[type='application/ld+json']
-  css:
-    vehicle_container: body
-    model: h1, h2
-    trim: h3
-    price: '[class*="price"]'
+  text_regex:
+    source_selector: body
+    entry_patterns:
+    - pattern: 'Qashqai\s+(?P<trim>Acenta|N-Connecta|Tekna\s*\+|Tekna).*?Listino a partire\s+Da\s+(?P<price>\d{2,3}(?:[ .\u00a0]\d{3}))\s*€'
+      price_label: Prezzo di listino chiavi in mano raccomandato
   default_currency: EUR
   default_tax_included: true
   default_price_label: MSRP
@@ -116,7 +115,8 @@ schedule:
 notes: Draft scaffold generated from country×model top30 backlog. Replace source_url,
   profile.url, selectors, currency, price label, and the single-model placeholders
   before promoting to 07_ScrapingToolkit/sources. [URL filled from NISSAN template]
-  [URL language corrected] [CSS selectors applied from brand probe]
+  [Official current Qashqai page verified 2026-07-15] [Trim-scoped list-price
+  regex excludes promo and finance offers]
 bootstrap_meta:
   country_model_rank: 16
   suggested_scope_kind: single_model

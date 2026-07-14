@@ -1,21 +1,22 @@
 source_code: audi_q3_pl_draft_scrapling
 country: 波兰
 brand: AUDI
-source_url: https://www.audi.pl/hr/web/hr/models/q3.html
+source_url: https://www.audi.pl/pl/modele/q3/q3/
 source_type: manufacturer_official
 price_semantics: base_msrp
 extractor_type: scrapling
 profile:
-  url: https://www.audi.pl/hr/web/hr/models/q3.html
+  url: https://www.audi.pl/pl/modele/q3/q3/
   tier: stealth
   headless: true
   network_idle: true
   impersonate: chrome
-  css:
-    vehicle_container: body
-    model: h2
-    trim: h3
-    price: '[class*="price"]'
+  text_regex:
+    source_selector: body
+    entry_patterns:
+    - pattern: 'Skonfiguruj swoje (?:Audi )?Q3.*?\bQ3\b\s+od\s+(?P<price>\d{2,3}(?:[ .\u00a0]\d{3}))\s*PLN\s+zawiera\s+VAT'
+      official_trim: Q3 entry price
+      price_label: Recommended retail price incl. VAT
   default_currency: PLN
   default_tax_included: true
   default_price_label: MSRP
@@ -113,7 +114,8 @@ schedule:
 notes: Draft scaffold generated from country×model top30 backlog. Replace source_url,
   profile.url, selectors, currency, price label, and the single-model placeholders
   before promoting to 07_ScrapingToolkit/sources. [URL filled from AUDI template]
-  [CSS selectors applied from brand probe]
+  [Official Audi Polska Q3 page verified 2026-07-15] [Base MSRP regex excludes
+  monthly lease offer]
 bootstrap_meta:
   country_model_rank: 5
   suggested_scope_kind: single_model
