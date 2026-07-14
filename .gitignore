@@ -55,5 +55,6 @@ hermes/sentinel_notification_state.json
 04_Processed_data/ops/grouped_time_series_cache/
 04_Processed_data/ops/metadata_cache/
 04_Processed_data/active-bundle.lock
+04_Processed_data/ops/msrp_source_evidence/
 .gitnexus
 .hermes_server_snapshot/

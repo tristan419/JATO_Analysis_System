@@ -40,6 +40,7 @@ from app.api.msrp_source_governance_schemas import (
     UrlEvidenceCreate,
     GateDecisionV1,
 )
+from app.core.config import resolve_msrp_governance_evidence_root
 from app.db.models import CurrentPrice, MsrpObservation, MsrpSource, PriceHistory
 from app.db.msrp_source_governance_models import (
     MsrpEvidenceUploadSession,
@@ -103,12 +104,6 @@ TERMINAL_AGENT_RUN_STATUSES = frozenset(
     }
 )
 SEVERITY_ORDER = {"low": 0, "medium": 1, "high": 2, "critical": 3}
-DEFAULT_EVIDENCE_ROOT = (
-    Path(__file__).resolve().parents[3]
-    / "artifacts"
-    / "msrp-source-governance"
-    / "evidence"
-)
 
 
 def _now() -> datetime:
@@ -197,11 +192,7 @@ def _verified_official_url(url: str, official_domain: str) -> tuple[str, str]:
 class MsrpSourceGovernanceService:
     def __init__(self, session: Session, *, evidence_root: Path | None = None):
         self.session = session
-        configured_root = os.getenv("MSRP_GOVERNANCE_EVIDENCE_ROOT")
-        self.evidence_root = (
-            evidence_root
-            or (Path(configured_root) if configured_root else DEFAULT_EVIDENCE_ROOT)
-        ).resolve()
+        self.evidence_root = resolve_msrp_governance_evidence_root(evidence_root)
 
     def _require_new_action(self, action: str, idempotency_key: str) -> None:
         key = idempotency_key.strip()

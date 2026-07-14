@@ -1,6 +1,7 @@
 from datetime import datetime, timezone
 import hashlib
 from pathlib import Path
+import subprocess
 from uuid import uuid4
 
 from app.api.msrp_source_governance_schemas import (
@@ -105,9 +106,13 @@ def test_resumable_pdf_upload_validates_hash_and_creates_immutable_asset(
         lambda *_args, **_kwargs: state["upload"],
     )
 
+    fixture_repo = tmp_path / "release-fixture"
+    evidence_root = (
+        fixture_repo / "04_Processed_data" / "ops" / "msrp_source_evidence"
+    )
     service = governance_service.MsrpSourceGovernanceService(
         session,
-        evidence_root=tmp_path,
+        evidence_root=evidence_root,
     )
     initiated = service.initiate_evidence_upload(
         EvidenceUploadInitiate(
@@ -154,5 +159,37 @@ def test_resumable_pdf_upload_validates_hash_and_creates_immutable_asset(
     assert completed["evidence"]["mimeSignature"] == "%PDF-"
     assert target.monitoring_status == "degraded"
     assert evidence.storage_key is not None
-    assert (tmp_path / evidence.storage_key).read_bytes() == content
-    assert not (tmp_path / upload.staging_key).exists()
+    object_path = evidence_root / evidence.storage_key
+    assert object_path.read_bytes() == content
+    assert not (evidence_root / upload.staging_key).exists()
+
+    before_release_hash = hashlib.sha256(object_path.read_bytes()).hexdigest()
+    release_tree = tmp_path / "new-release"
+    (fixture_repo / "06_AppPlatform" / "backend").mkdir(parents=True)
+    (fixture_repo / "06_AppPlatform" / "backend" / "old.txt").write_text("old")
+    (release_tree / "06_AppPlatform" / "backend").mkdir(parents=True)
+    (release_tree / "06_AppPlatform" / "backend" / "new.txt").write_text("new")
+    project_root = Path(__file__).resolve().parents[4]
+    helper = project_root / "03_Scripts" / "deploy" / "lib" / "release_paths.sh"
+    subprocess.run(
+        [
+            "bash",
+            "-c",
+            (
+                'source "$1"; '
+                'assert_path_outside_release_roots "$2" "$3" 06_AppPlatform; '
+                'replace_release_paths "$2" "$4" 06_AppPlatform'
+            ),
+            "_",
+            str(helper),
+            str(fixture_repo),
+            str(evidence_root),
+            str(release_tree),
+        ],
+        check=True,
+    )
+
+    assert (fixture_repo / "06_AppPlatform" / "backend" / "new.txt").is_file()
+    assert not (fixture_repo / "06_AppPlatform" / "backend" / "old.txt").exists()
+    assert object_path.is_file()
+    assert hashlib.sha256(object_path.read_bytes()).hexdigest() == before_release_hash

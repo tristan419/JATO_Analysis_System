@@ -109,6 +109,33 @@ PROJECT_ROOT = Path(
     os.getenv("APP_PROJECT_ROOT", str(_default_project_root()))
 ).resolve()
 
+
+def resolve_msrp_governance_evidence_root(
+    evidence_root: str | Path | None = None,
+    *,
+    project_root: Path | None = None,
+) -> Path:
+    base_root = (project_root or PROJECT_ROOT).resolve()
+    configured_root = (
+        str(evidence_root)
+        if evidence_root is not None
+        else os.getenv("MSRP_GOVERNANCE_EVIDENCE_ROOT", "").strip()
+    )
+    candidate = (
+        Path(configured_root).expanduser()
+        if configured_root
+        else base_root
+        / "04_Processed_data"
+        / "ops"
+        / "msrp_source_evidence"
+    )
+    if not candidate.is_absolute():
+        candidate = base_root / candidate
+    return candidate.resolve()
+
+
+MSRP_GOVERNANCE_EVIDENCE_ROOT = resolve_msrp_governance_evidence_root()
+
 PARQUET_PATH = Path(
     os.getenv(
         "JATO_PARQUET_PATH",

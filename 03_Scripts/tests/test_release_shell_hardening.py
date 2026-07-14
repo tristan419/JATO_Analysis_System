@@ -259,7 +259,8 @@ def test_frontend_public_permissions_reject_symlinks(tmp_path: Path) -> None:
 
 def _run_backup(tmp_path: Path, *, env_text: str, pg_dump_body: str) -> subprocess.CompletedProcess[str]:
     repo = tmp_path / "repo"
-    (repo / "04_Processed_data/ops").mkdir(parents=True)
+    evidence_root = repo / "04_Processed_data/ops/msrp_source_evidence"
+    evidence_root.mkdir(parents=True)
     env_file = tmp_path / "backend.env"
     env_file.write_text(env_text, encoding="utf-8")
     bin_dir = tmp_path / "bin"
@@ -267,6 +268,29 @@ def _run_backup(tmp_path: Path, *, env_text: str, pg_dump_body: str) -> subproce
     pg_dump = bin_dir / "pg_dump"
     pg_dump.write_text(pg_dump_body, encoding="utf-8")
     pg_dump.chmod(0o755)
+    integrity_script = tmp_path / "msrp_evidence_integrity.py"
+    integrity_script.write_text(
+        """#!/usr/bin/env python3
+import argparse
+import json
+
+parser = argparse.ArgumentParser()
+parser.add_argument("--evidence-root", required=True)
+parser.add_argument("--output", required=True)
+parser.add_argument("--object-list-output", required=True)
+args = parser.parse_args()
+payload = {
+    "status": "healthy",
+    "summary": {"healthyObjectCount": 0, "verifiedObjectBytes": 0},
+}
+with open(args.output, "w", encoding="utf-8") as handle:
+    json.dump(payload, handle)
+with open(args.object_list_output, "w", encoding="utf-8"):
+    pass
+""",
+        encoding="utf-8",
+    )
+    integrity_script.chmod(0o755)
     environment = os.environ.copy()
     environment.update(
         {
@@ -275,6 +299,11 @@ def _run_backup(tmp_path: Path, *, env_text: str, pg_dump_body: str) -> subproce
             "BACKEND_ENV_FILE": str(env_file),
             "BACKUP_ROOT": str(tmp_path / "backups"),
             "REQUIRE_DATABASE_BACKUP": "true",
+            "MSRP_EVIDENCE_INTEGRITY_SCRIPT": str(integrity_script),
+            "MSRP_GOVERNANCE_EVIDENCE_ROOT": str(evidence_root),
+            "MSRP_RELEASE_PATHS_LIB": str(
+                REPO_ROOT / "03_Scripts/deploy/lib/release_paths.sh"
+            ),
         }
     )
     return subprocess.run(
