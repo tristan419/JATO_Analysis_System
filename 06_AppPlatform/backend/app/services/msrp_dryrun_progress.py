@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import errno
+import fcntl
 import json
 import os
 import re
@@ -125,7 +127,21 @@ def _parse_run_dir_timestamp(name: str) -> datetime | None:
 
 
 def _is_running() -> bool:
-    return LOCK_FILE.exists()
+    """Return true only while another process actually holds the runner flock."""
+    try:
+        with LOCK_FILE.open("rb") as lock_handle:
+            try:
+                fcntl.flock(
+                    lock_handle.fileno(),
+                    fcntl.LOCK_EX | fcntl.LOCK_NB,
+                )
+            except OSError as exc:
+                return exc.errno in {errno.EACCES, errno.EAGAIN}
+            else:
+                fcntl.flock(lock_handle.fileno(), fcntl.LOCK_UN)
+                return False
+    except OSError:
+        return False
 
 
 def _load_json(path: Path) -> dict[str, Any] | None:
@@ -630,7 +646,8 @@ def _current_from_v3_report(report: dict[str, Any], index_data: dict[str, Any] |
         overall_pass_rate = float(summary.get("passPct") or 0)
     return {
         "available": True,
-        "running": _is_running(),
+        "running": False,
+        "partial": False,
         "runId": run_id,
         "batch": report.get("batch") or "",
         "schemaVersion": report.get("schemaVersion"),
