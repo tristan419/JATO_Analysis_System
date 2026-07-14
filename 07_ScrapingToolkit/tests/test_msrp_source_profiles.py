@@ -631,3 +631,39 @@ def test_belgium_volvo_ex30_profile_excludes_finance_and_monthly_payments() -> N
     assert "(?P<price>\\d{2}\\.\\d{3})" in entry.pattern
     assert entry.price_label == "Vanaf incl. btw"
     assert re.compile(entry.pattern)
+
+
+def test_belgium_volvo_xc40_profile_excludes_finance_and_limited_edition_offers() -> None:
+    source_path = (
+        Path(__file__).resolve().parents[1]
+        / "source_drafts"
+        / "suv_only_country_model_top30"
+        / "be"
+        / "27_volvo_xc40_be.yaml"
+    )
+    source = _load_yaml_mapping(source_path)
+    profile = _build_scrapling_profile(source["profile"])
+    entry = profile.text_regex.entry_patterns[0] if profile.text_regex else None
+
+    assert source["extractor_type"] == "scrapling"
+    assert source["source_type"] == "manufacturer_official"
+    assert source["source_url"] == "https://www.volvocars.com/nl-be/cars/xc40/"
+    assert profile.url == source["source_url"]
+    assert profile.tier == "http"
+    assert profile.network_idle is False
+    assert profile.load_dom is False
+    assert profile.fixed_jato_powertrain == "MHEV"
+    assert profile.text_regex is not None
+    assert profile.text_regex.include_element_html is True
+    assert entry is not None
+    assert "equipmentLevelsItem:title" in entry.pattern
+    assert "XC40\\s*<span[^>]*>Essential" in entry.pattern
+    assert "equipmentLevelsItem:price" in entry.pattern
+    assert "incl\\.\\s*btw" in entry.pattern
+    assert "Financi" not in entry.pattern
+    assert "Lease" not in entry.pattern
+    assert "Limited Edition" not in entry.pattern
+    assert "maand" not in entry.pattern
+    assert "(?P<price>\\d{2}\\.\\d{3})" in entry.pattern
+    assert entry.price_label == "Vanaf incl. btw"
+    assert re.compile(entry.pattern)
