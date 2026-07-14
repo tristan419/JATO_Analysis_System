@@ -1371,7 +1371,10 @@ def hermes_msrp_country_progress(
         return _read_json(report_path)
 
     static_progress = _read_json_if_exists(REPORTS_DIR / "msrp_country_progress.json")
-    latest_report = _load_msrp_dryrun_report() or _load_latest_indexed_msrp_dryrun_report()
+    # The index explicitly identifies the latest stable run. The canonical
+    # shortcut can be restored independently during local diagnostics, so it
+    # must remain a fallback instead of overriding indexed history.
+    latest_report = _load_latest_indexed_msrp_dryrun_report() or _load_msrp_dryrun_report()
     static_run_id = (static_progress or {}).get("status", {}).get("runId")
     latest_run_id = (latest_report or {}).get("runId")
     dashboard_context = _msrp_dashboard_context()

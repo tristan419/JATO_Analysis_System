@@ -851,6 +851,52 @@ class TestSentinelAndDeploy:
         assert data["countries"][0]["countryCode"] == "fi"
         assert data["status"]["gateStatus"] == "allowed"
 
+    def test_msrp_country_progress_prefers_indexed_run_over_stale_canonical_report(
+        self,
+        client,
+        tmp_path,
+    ):
+        reports_dir = tmp_path / "hermes" / "reports"
+        artifact_dir = tmp_path / "03_Scripts" / "diagnostics" / "artifacts"
+        stale_run_id = "msrp-dryrun-20260611-120000"
+        latest_run_id = "msrp-dryrun-20260714-030810"
+        stale_report = _make_msrp_v3_report(stale_run_id)
+        latest_report = _make_msrp_v3_report(latest_run_id)
+        latest_report["expectedCountries"] = ["se"]
+        latest_report["observedCountries"] = ["se"]
+        latest_report["countriesDetail"][0]["countryCode"] = "se"
+
+        _write_json(artifact_dir / "dryrun_report.json", stale_report)
+        _write_json(
+            artifact_dir / f"dryrun_report_{latest_run_id}.json",
+            latest_report,
+        )
+        _write_json(artifact_dir / "dryrun_runs_index.json", {
+            "schemaVersion": "msrp_dryrun_runs_index_v1",
+            "latestRunId": latest_run_id,
+            "runs": [
+                {
+                    "runId": latest_run_id,
+                    "artifactPath": str(
+                        artifact_dir / f"dryrun_report_{latest_run_id}.json"
+                    ),
+                }
+            ],
+        })
+
+        with (
+            patch("app.api.routes.hermes.PROJECT_ROOT", tmp_path),
+            patch("app.api.routes.hermes.REPORTS_DIR", reports_dir),
+            patch("app.api.routes.hermes._msrp_dashboard_context", return_value={}),
+            patch("app.api.routes.hermes._partial_msrp_progress", return_value=None),
+        ):
+            resp = client.get("/hermes/msrp-country-progress")
+
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["status"]["runId"] == latest_run_id
+        assert data["countries"][0]["countryCode"] == "se"
+
     def test_msrp_country_progress_run_id_falls_back_to_historical_dryrun_artifact(
         self,
         client,
