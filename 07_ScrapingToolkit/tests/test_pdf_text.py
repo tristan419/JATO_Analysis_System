@@ -1,9 +1,11 @@
 import subprocess
+from types import SimpleNamespace
 
 import requests
 
 from jato_scraper.base import ExtractorConfig
 from jato_scraper.config_loader import _build_pdf_text_profile
+from jato_scraper.extractors import pdf_text as pdf_text_module
 from jato_scraper.extractors.pdf_text import (
     PdfTextEntryPattern,
     PdfTextExtractor,
@@ -105,7 +107,21 @@ def test_pdf_text_profile_accepts_legacy_curl_download_fallback() -> None:
         }
     )
 
+    assert profile.curl_download_fallback is True
+    assert profile.browser_download_fallback is False
+
+
+def test_pdf_text_profile_accepts_browser_download_fallback() -> None:
+    profile = _build_pdf_text_profile(
+        {
+            "url": "https://example.invalid/2008.pdf",
+            "browser_download_fallback": True,
+            "entry_patterns": [],
+        }
+    )
+
     assert profile.browser_download_fallback is True
+    assert profile.curl_download_fallback is False
 
 
 def test_pdf_text_profile_accepts_preferred_curl_download() -> None:
@@ -135,7 +151,7 @@ def test_pdf_text_uses_curl_fallback_after_requests_timeout(monkeypatch):
             timeout_seconds=2,
             retry_attempts=1,
             retry_delay_seconds=0,
-            browser_download_fallback=True,
+            curl_download_fallback=True,
         ),
     )
 
@@ -145,14 +161,53 @@ def test_pdf_text_uses_curl_fallback_after_requests_timeout(monkeypatch):
     monkeypatch.setattr(extractor._session, "get", fail_request)
     fallback_timeouts = []
 
-    def fetch_with_curl(timeout):
-        fallback_timeouts.append(timeout)
+    def fetch_with_curl(timeout, url=None):
+        fallback_timeouts.append((timeout, url))
         return b"%PDF-1.7\n"
 
     monkeypatch.setattr(extractor, "_fetch_pdf_bytes_with_curl", fetch_with_curl)
 
     assert extractor._fetch_pdf_bytes() == b"%PDF-1.7\n"
-    assert fallback_timeouts == [30]
+    assert fallback_timeouts == [(30, "https://example.invalid/x1.pdf")]
+
+
+def test_pdf_text_uses_browser_fallback_after_requests_timeout(monkeypatch):
+    extractor = PdfTextExtractor(
+        ExtractorConfig(
+            source_code="peugeot_2008_it_draft_scrapling",
+            country="意大利",
+            brand="PEUGEOT",
+            source_url="https://www.peugeot.it/modelli/2008.html",
+            source_type="official_price_list",
+            price_semantics="base_msrp",
+        ),
+        PdfTextProfile(
+            url="https://example.invalid/2008.pdf",
+            timeout_seconds=2,
+            retry_attempts=1,
+            retry_delay_seconds=0,
+            browser_download_fallback=True,
+        ),
+    )
+
+    def fail_request(*_args, **_kwargs):
+        raise requests.ReadTimeout("read timed out")
+
+    monkeypatch.setattr(extractor._session, "get", fail_request)
+    browser_timeouts = []
+
+    def fetch_with_browser(timeout, url=None):
+        browser_timeouts.append((timeout, url))
+        return b"%PDF-1.7\n"
+
+    def fail_curl(*_args, **_kwargs):
+        raise AssertionError("curl should not run after successful browser fallback")
+
+    monkeypatch.setattr(extractor, "_fetch_pdf_bytes_with_browser", fetch_with_browser)
+    monkeypatch.setattr(extractor, "_fetch_pdf_bytes_with_curl", fail_curl)
+
+    assert extractor._fetch_pdf_bytes() == b"%PDF-1.7\n"
+    assert browser_timeouts == [(30, "https://example.invalid/2008.pdf")]
 
 
 def test_pdf_text_prefers_curl_download_before_requests(monkeypatch):
@@ -178,14 +233,49 @@ def test_pdf_text_prefers_curl_download_before_requests(monkeypatch):
     monkeypatch.setattr(extractor._session, "get", fail_request)
     curl_timeouts = []
 
-    def fetch_with_curl(timeout):
-        curl_timeouts.append(timeout)
+    def fetch_with_curl(timeout, url=None):
+        curl_timeouts.append((timeout, url))
         return b"%PDF-1.7\n"
 
     monkeypatch.setattr(extractor, "_fetch_pdf_bytes_with_curl", fetch_with_curl)
 
     assert extractor._fetch_pdf_bytes() == b"%PDF-1.7\n"
-    assert curl_timeouts == [30]
+    assert curl_timeouts == [(30, "https://example.invalid/sealion.pdf")]
+
+
+def test_pdf_text_uses_poppler_when_pypdf_returns_blank_text(monkeypatch):
+    extractor = PdfTextExtractor(
+        ExtractorConfig(
+            source_code="kgm_korando_hu_draft_scrapling",
+            country="匈牙利",
+            brand="KGM",
+            source_url="https://example.invalid/korando.pdf",
+            source_type="official_price_list",
+            price_semantics="base_msrp",
+        ),
+        PdfTextProfile(url="https://example.invalid/korando.pdf"),
+    )
+
+    class FakePage:
+        def extract_text(self):
+            return ""
+
+    class FakeReader:
+        def __init__(self, _stream):
+            self.pages = [FakePage()]
+
+    commands = []
+
+    def fake_run(command, **kwargs):
+        commands.append((command, kwargs))
+        return SimpleNamespace(returncode=0, stdout=b"Lista\xc3\xa1r 9 299 000 Ft", stderr=b"")
+
+    monkeypatch.setattr(pdf_text_module, "PdfReader", FakeReader)
+    monkeypatch.setattr(pdf_text_module.shutil, "which", lambda name: "/usr/bin/pdftotext")
+    monkeypatch.setattr(pdf_text_module.subprocess, "run", fake_run)
+
+    assert extractor._extract_text_from_pdf_bytes(b"%PDF-1.7\n") == "Listaár 9 299 000 Ft"
+    assert commands[0][0][:4] == ["/usr/bin/pdftotext", "-layout", "-enc", "UTF-8"]
 
 
 def test_pdf_text_curl_fallback_keeps_curl_default_user_agent(monkeypatch):

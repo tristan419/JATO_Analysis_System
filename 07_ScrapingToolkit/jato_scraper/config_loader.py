@@ -161,6 +161,18 @@ def _build_http_json_profile(profile: dict[str, Any]) -> HttpJsonProfile:
         text = str(raw).strip()
         return text or default
 
+    items_paths_raw = fm_raw.get("items_paths", [])
+    if items_paths_raw is None:
+        items_paths = ()
+    elif isinstance(items_paths_raw, list):
+        items_paths = tuple(
+            str(path).strip()
+            for path in items_paths_raw
+            if str(path).strip()
+        )
+    else:
+        raise ValueError("http_json items_paths must be a list")
+
     fm = FieldMapping(
         model=_path_field(fm_raw.get("model"), "model", allow_list=True),
         trim=_path_field(fm_raw.get("trim"), "trim", allow_list=True),
@@ -185,6 +197,7 @@ def _build_http_json_profile(profile: dict[str, Any]) -> HttpJsonProfile:
             if fm_raw.get("items_path") is not None
             else None
         ),
+        items_paths=items_paths,
     )
 
     filters_raw = profile.get("filters", [])
@@ -558,12 +571,8 @@ def _build_pdf_text_profile(profile: dict[str, Any]) -> PdfTextProfile:
     patterns_raw = profile.get("entry_patterns", [])
     if not isinstance(patterns_raw, list):
         raise ValueError("pdf_text entry_patterns must be a list")
-    browser_download_fallback = bool(
-        profile.get(
-            "browser_download_fallback",
-            profile.get("curl_download_fallback", False),
-        )
-    )
+    browser_download_fallback = bool(profile.get("browser_download_fallback", False))
+    curl_download_fallback = bool(profile.get("curl_download_fallback", False))
     prefer_curl_download = bool(
         profile.get(
             "prefer_curl_download",
@@ -615,11 +624,18 @@ def _build_pdf_text_profile(profile: dict[str, Any]) -> PdfTextProfile:
     )
     return PdfTextProfile(
         url=profile["url"],
+        urls=tuple(
+            str(url).strip()
+            for url in profile.get("urls", [])
+            if str(url).strip()
+        ),
         entry_patterns=entry_patterns,
+        headers=profile.get("headers", {}),
         timeout_seconds=int(profile.get("timeout_seconds", 60)),
         retry_attempts=int(profile.get("retry_attempts", 0)),
         retry_delay_seconds=float(profile.get("retry_delay_seconds", 0.0) or 0.0),
         prefer_curl_download=prefer_curl_download,
+        curl_download_fallback=curl_download_fallback,
         browser_download_fallback=browser_download_fallback,
         default_currency=profile.get("default_currency", "EUR"),
         default_tax_included=bool(profile.get("default_tax_included", True)),
@@ -690,9 +706,15 @@ def _build_http_text_profile(profile: dict[str, Any]) -> HttpTextProfile:
     )
     return HttpTextProfile(
         url=profile["url"],
+        urls=tuple(
+            str(url).strip()
+            for url in profile.get("urls", [])
+            if str(url).strip()
+        ),
         entry_patterns=entry_patterns,
         timeout_seconds=int(profile.get("timeout_seconds", 30)),
         headers=profile.get("headers", {}),
+        prefer_curl_fetch=bool(profile.get("prefer_curl_fetch", False)),
         default_currency=profile.get("default_currency", "EUR"),
         default_tax_included=bool(profile.get("default_tax_included", True)),
         default_price_label=profile.get(

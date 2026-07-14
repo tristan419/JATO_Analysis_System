@@ -5,7 +5,10 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from io import BytesIO
 import logging
+import os
+from pathlib import Path
 import re
+import shutil
 import subprocess
 import tempfile
 import time
@@ -15,9 +18,24 @@ from pypdf import PdfReader
 
 from jato_scraper.base import BaseExtractor, ExtractorConfig, RawObservation
 
+try:
+    from playwright.sync_api import Error as PlaywrightError
+    from playwright.sync_api import TimeoutError as PlaywrightTimeoutError
+    from playwright.sync_api import sync_playwright
+except ImportError:  # pragma: no cover - exercised only when dependency missing
+    PlaywrightError = Exception
+    PlaywrightTimeoutError = TimeoutError
+    sync_playwright = None
+
 log = logging.getLogger(__name__)
 DEFAULT_TIMEOUT = 60
 DEFAULT_CURL_FALLBACK_TIMEOUT = 30
+DEFAULT_BROWSER_USER_AGENT = (
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+    "AppleWebKit/537.36 (KHTML, like Gecko) "
+    "Chrome/126.0.0.0 Safari/537.36"
+)
+PDFTOTEXT_BINARY_ENV = "JATO_PDFTOTEXT_BIN"
 _PRICE_RE = re.compile(r"\d[\d\s.,'\u2019]*\d|\d")
 
 
@@ -37,11 +55,14 @@ class PdfTextEntryPattern:
 @dataclass(frozen=True)
 class PdfTextProfile:
     url: str
+    urls: tuple[str, ...] = field(default_factory=tuple)
     entry_patterns: tuple[PdfTextEntryPattern, ...] = field(default_factory=tuple)
+    headers: dict[str, str] = field(default_factory=dict)
     timeout_seconds: int = DEFAULT_TIMEOUT
     retry_attempts: int = 0
     retry_delay_seconds: float = 0.0
     prefer_curl_download: bool = False
+    curl_download_fallback: bool = False
     browser_download_fallback: bool = False
     default_currency: str = "EUR"
     default_tax_included: bool = True
@@ -88,6 +109,7 @@ class PdfTextExtractor(BaseExtractor):
             {
                 "User-Agent": "JATO-MSRP-Scraper/0.1",
                 "Accept": "application/pdf,application/octet-stream;q=0.9,*/*;q=0.8",
+                **profile.headers,
             }
         )
 
@@ -130,50 +152,89 @@ class PdfTextExtractor(BaseExtractor):
         )
         return results
 
+    def _profile_urls(self) -> tuple[str, ...]:
+        urls: list[str] = []
+        for url in (self.profile.url, *self.profile.urls):
+            clean_url = str(url or "").strip()
+            if clean_url and clean_url not in urls:
+                urls.append(clean_url)
+        return tuple(urls)
+
     def _fetch_pdf_bytes(self) -> bytes | None:
+        return self._fetch_pdf_bytes_url(self.profile.url)
+
+    def _fetch_pdf_bytes_url(self, url: str) -> bytes | None:
         last_error: Exception | None = None
         attempts = max(1, int(self.profile.retry_attempts or 0) + 1)
         timeout = max(1, int(self.profile.timeout_seconds or DEFAULT_TIMEOUT))
         if self.profile.prefer_curl_download:
             blob = self._fetch_pdf_bytes_with_curl(
                 max(timeout, DEFAULT_CURL_FALLBACK_TIMEOUT),
+                url,
             )
             if blob:
                 return blob
             log.warning(
-                "Preferred PDF curl download failed for %s; falling back to requests",
+                "Preferred PDF curl download failed for %s at %s; falling back to requests",
                 self.config.source_code,
+                url,
             )
 
         for attempt in range(1, attempts + 1):
             try:
-                response = self._session.get(self.profile.url, timeout=timeout)
+                response = self._session.get(url, timeout=timeout)
                 response.raise_for_status()
                 return response.content
             except requests.RequestException as exc:
                 last_error = exc
                 log.warning(
-                    "PDF request attempt %s/%s failed for %s: %s",
+                    "PDF request attempt %s/%s failed for %s at %s: %s",
                     attempt,
                     attempts,
                     self.config.source_code,
+                    url,
                     exc,
                 )
                 if attempt < attempts and self.profile.retry_delay_seconds > 0:
                     time.sleep(float(self.profile.retry_delay_seconds))
 
         if self.profile.browser_download_fallback:
+            blob = self._fetch_pdf_bytes_with_browser(
+                max(timeout, DEFAULT_CURL_FALLBACK_TIMEOUT),
+                url,
+            )
+            if blob:
+                return blob
+
+        if self.profile.curl_download_fallback or self.profile.browser_download_fallback:
             blob = self._fetch_pdf_bytes_with_curl(
                 max(timeout, DEFAULT_CURL_FALLBACK_TIMEOUT),
+                url,
             )
             if blob:
                 return blob
 
         if last_error:
-            log.error("PDF request failed for %s: %s", self.config.source_code, last_error)
+            log.error(
+                "PDF request failed for %s at %s: %s",
+                self.config.source_code,
+                url,
+                last_error,
+            )
         return None
 
-    def _fetch_pdf_bytes_with_curl(self, timeout: int) -> bytes | None:
+    def _fetch_pdf_bytes_with_curl(
+        self,
+        timeout: int,
+        url: str | None = None,
+    ) -> bytes | None:
+        fetch_url = str(url or self.profile.url)
+        header_args = [
+            arg
+            for key, value in self.profile.headers.items()
+            if str(key).strip()
+            for arg in ("-H", f"{str(key).strip()}: {str(value)}")
+        ]
         try:
             with tempfile.NamedTemporaryFile(
                 prefix="jato_pdf_",
@@ -189,7 +250,8 @@ class PdfTextExtractor(BaseExtractor):
                         str(timeout),
                         "-o",
                         tmp.name,
-                        self.profile.url,
+                        *header_args,
+                        fetch_url,
                     ],
                     check=False,
                     stdout=subprocess.PIPE,
@@ -216,16 +278,140 @@ class PdfTextExtractor(BaseExtractor):
             return None
         return blob
 
+    def _browser_user_agent(self) -> str:
+        for key, value in self.profile.headers.items():
+            if str(key).strip().lower() == "user-agent" and str(value).strip():
+                return str(value).strip()
+        return DEFAULT_BROWSER_USER_AGENT
+
+    def _browser_extra_headers(self) -> dict[str, str]:
+        return {
+            str(key).strip(): str(value)
+            for key, value in self.profile.headers.items()
+            if str(key).strip() and str(key).strip().lower() != "user-agent"
+        }
+
+    def _fetch_pdf_bytes_with_browser(
+        self,
+        timeout: int,
+        url: str | None = None,
+    ) -> bytes | None:
+        if sync_playwright is None:
+            log.error(
+                "PDF browser fallback unavailable for %s: playwright is not installed",
+                self.config.source_code,
+            )
+            return None
+
+        fetch_url = str(url or self.profile.url)
+        timeout_ms = max(1, int(timeout)) * 1000
+        browser = None
+        try:
+            with sync_playwright() as playwright:
+                browser = playwright.chromium.launch(headless=True)
+                context = browser.new_context(
+                    accept_downloads=True,
+                    user_agent=self._browser_user_agent(),
+                    extra_http_headers=self._browser_extra_headers(),
+                )
+                page = context.new_page()
+                page.set_default_timeout(timeout_ms)
+                try:
+                    with page.expect_download(timeout=timeout_ms) as download_info:
+                        try:
+                            page.goto(
+                                fetch_url,
+                                wait_until="commit",
+                                timeout=timeout_ms,
+                            )
+                        except PlaywrightError as exc:
+                            if "Download is starting" not in str(exc):
+                                raise
+                    download = download_info.value
+                    path = download.path()
+                    blob = Path(path).read_bytes()
+                finally:
+                    context.close()
+                browser.close()
+                browser = None
+        except (OSError, PlaywrightError, PlaywrightTimeoutError) as exc:
+            log.error(
+                "PDF browser fallback failed for %s at %s: %s",
+                self.config.source_code,
+                fetch_url,
+                exc,
+            )
+            return None
+        finally:
+            if browser is not None:
+                browser.close()
+
+        if not blob.startswith(b"%PDF"):
+            log.error(
+                "PDF browser fallback returned non-PDF content for %s",
+                self.config.source_code,
+            )
+            return None
+        return blob
+
     def _extract_text(self) -> str:
-        blob = self._fetch_pdf_bytes()
-        if blob is None:
+        chunks: list[str] = []
+        for url in self._profile_urls():
+            blob = self._fetch_pdf_bytes_url(url)
+            if blob is None:
+                continue
+            text = self._extract_text_from_pdf_bytes(blob)
+            if text:
+                chunks.append(f"\n\n--- JATO_PDF_TEXT_URL: {url} ---\n" + text)
+        return "\n".join(chunks).strip()
+
+    def _extract_text_from_pdf_bytes(self, blob: bytes) -> str:
+        """Extract text with pypdf first, then Poppler for glyph-only PDFs."""
+        try:
+            reader = PdfReader(BytesIO(blob))
+            text = "\n".join(
+                (page.extract_text() or "").replace("\xa0", " ")
+                for page in reader.pages
+            ).strip()
+        except Exception as exc:  # Third-party parser failures must not kill a source run.
+            log.warning("pypdf extraction failed for %s: %s", self.config.source_code, exc)
+            text = ""
+        if text:
+            return text
+        return self._extract_text_with_pdftotext(blob)
+
+    def _extract_text_with_pdftotext(self, blob: bytes) -> str:
+        binary = os.getenv(PDFTOTEXT_BINARY_ENV) or shutil.which("pdftotext")
+        if not binary:
+            log.warning(
+                "PDF text is empty for %s and Poppler pdftotext is unavailable; "
+                "install Poppler or set %s",
+                self.config.source_code,
+                PDFTOTEXT_BINARY_ENV,
+            )
             return ""
-        reader = PdfReader(BytesIO(blob))
-        pages = [
-            (page.extract_text() or "").replace("\xa0", " ")
-            for page in reader.pages
-        ]
-        return "\n".join(pages)
+        try:
+            with tempfile.NamedTemporaryFile(prefix="jato_pdf_", suffix=".pdf") as tmp:
+                tmp.write(blob)
+                tmp.flush()
+                result = subprocess.run(
+                    [binary, "-layout", "-enc", "UTF-8", tmp.name, "-"],
+                    check=False,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    timeout=max(1, int(self.profile.timeout_seconds or DEFAULT_TIMEOUT)),
+                )
+        except (OSError, subprocess.SubprocessError) as exc:
+            log.warning("Poppler extraction failed for %s: %s", self.config.source_code, exc)
+            return ""
+        if result.returncode != 0:
+            log.warning(
+                "Poppler extraction failed for %s: %s",
+                self.config.source_code,
+                result.stderr.decode(errors="replace")[:300],
+            )
+            return ""
+        return result.stdout.decode("utf-8", errors="replace").replace("\xa0", " ").strip()
 
     def _build_observation(
         self,
@@ -285,6 +471,7 @@ class PdfTextExtractor(BaseExtractor):
             availability_text=availability_text,
             raw_payload={
                 "pdf_url": self.profile.url,
+                "pdf_urls": list(self._profile_urls()),
                 "pattern": entry.pattern,
                 "match_groups": groups,
                 "price_delta": entry.price_delta,
