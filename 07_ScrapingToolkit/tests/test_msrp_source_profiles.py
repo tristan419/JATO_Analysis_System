@@ -739,3 +739,35 @@ def test_belgium_nissan_qashqai_profile_uses_the_official_catalogue_price_pdf() 
         "Mild-Hybrid 140 MT\nAcenta\n € 36.190\n € 6.281\n € 29.909 142",
         re.IGNORECASE | re.DOTALL,
     )
+
+
+def test_belgium_nissan_juke_profile_uses_only_the_vat_included_catalogue_price() -> None:
+    source_path = (
+        Path(__file__).resolve().parents[1]
+        / "source_drafts"
+        / "suv_only_country_model_top30"
+        / "be"
+        / "30_nissan_juke_be.yaml"
+    )
+    source = _load_yaml_mapping(source_path)
+    profile = _build_http_text_profile(source["profile"])
+    entry = profile.entry_patterns[0]
+
+    assert source["extractor_type"] == "http_text"
+    assert source["source_type"] == "manufacturer_official"
+    assert source["source_url"] == "https://nl.nissan.be/voertuigen/brochures.html"
+    assert profile.url == source["source_url"]
+    assert profile.default_currency == "EUR"
+    assert profile.default_tax_included is True
+    assert profile.fixed_jato_powertrain is None
+    assert entry.official_trim == "Juke Acenta entry price"
+    assert entry.price_label == "Catalogusprijs incl. BTW"
+    assert "juke-my25" in entry.pattern
+    assert "Retail with VAT" in entry.pattern
+    assert "Discount" not in entry.pattern
+    assert re.search(
+        entry.pattern,
+        '"juke-my25":{"Discount I with VAT":{"modelPrice":"2999.59"},'
+        '"Retail with VAT":{"priceDisclaimer":"","modelPrice":"27145"}}',
+        re.IGNORECASE | re.DOTALL,
+    )
