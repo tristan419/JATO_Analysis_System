@@ -399,6 +399,30 @@ def test_czech_mg_zs_profile_uses_current_official_list_price_pdf() -> None:
         assert re.compile(entry.pattern)
 
 
+def test_croatia_cupra_terramar_profile_uses_dynamic_official_model_price() -> None:
+    source_path = (
+        Path(__file__).resolve().parents[1]
+        / "source_drafts"
+        / "suv_only_country_model_top30"
+        / "hr"
+        / "23_cupra_terramar_hr.yaml"
+    )
+    source = _load_yaml_mapping(source_path)
+    profile = _build_http_text_profile(source["profile"])
+    entry = profile.entry_patterns[0]
+
+    assert source["extractor_type"] == "http_text"
+    assert source["source_type"] == "manufacturer_official"
+    assert profile.url == source["source_url"]
+    assert profile.prefer_curl_fetch is True
+    assert profile.default_currency == "EUR"
+    assert profile.default_tax_included is True
+    assert "CUPRA TERRAMAR" in entry.pattern
+    assert "39683" not in entry.pattern
+    assert "(?P<price>\\d+\\.\\d+)" in entry.pattern
+    assert re.compile(entry.pattern)
+
+
 def test_hungary_suzuki_profiles_use_official_configurator_list_prices_only() -> None:
     source_root = (
         Path(__file__).resolve().parents[1]
