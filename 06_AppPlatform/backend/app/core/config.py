@@ -134,8 +134,6 @@ def resolve_msrp_governance_evidence_root(
     return candidate.resolve()
 
 
-MSRP_GOVERNANCE_EVIDENCE_ROOT = resolve_msrp_governance_evidence_root()
-
 PARQUET_PATH = Path(
     os.getenv(
         "JATO_PARQUET_PATH",

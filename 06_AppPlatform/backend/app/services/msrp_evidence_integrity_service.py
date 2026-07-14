@@ -14,7 +14,11 @@ from typing import Any
 REPLAYABLE_EVIDENCE_TYPES = frozenset(
     {"uploaded_pdf", "downloaded_pdf", "html_snapshot", "api_snapshot"}
 )
-NON_REPLAYABLE_EVIDENCE_TYPES = frozenset({"official_url", "screenshot"})
+SUPPORTING_OBJECT_EVIDENCE_TYPES = frozenset({"screenshot"})
+OBJECT_BACKED_EVIDENCE_TYPES = (
+    REPLAYABLE_EVIDENCE_TYPES | SUPPORTING_OBJECT_EVIDENCE_TYPES
+)
+NON_REPLAYABLE_REFERENCE_TYPES = frozenset({"official_url"})
 SHA256_PATTERN = re.compile(r"^[0-9a-f]{64}$")
 
 
@@ -104,14 +108,14 @@ def audit_msrp_evidence_integrity(
     row_list = list(rows)
     grouped_rows: dict[str, list[object]] = defaultdict(list)
     ignored_assets: list[dict[str, object]] = []
-    ignored_storage_keys: set[str] = set()
     object_results: list[dict[str, object]] = []
     replayable_row_count = 0
+    supporting_object_row_count = 0
 
     for row in row_list:
         evidence_type = str(_row_value(row, "evidence_type") or "").strip()
         storage_key = str(_row_value(row, "storage_key") or "").strip()
-        if evidence_type not in REPLAYABLE_EVIDENCE_TYPES:
+        if evidence_type not in OBJECT_BACKED_EVIDENCE_TYPES:
             ignored_assets.append(
                 {
                     "evidenceAssetId": _asset_id(row),
@@ -119,20 +123,22 @@ def audit_msrp_evidence_integrity(
                     "storageKey": storage_key or None,
                     "reason": (
                         "non_replayable_reference"
-                        if evidence_type in NON_REPLAYABLE_EVIDENCE_TYPES
+                        if evidence_type in NON_REPLAYABLE_REFERENCE_TYPES
                         else "unsupported_evidence_type"
                     ),
                 }
             )
-            if storage_key and _safe_object_path(root, storage_key)[1] is None:
-                ignored_storage_keys.add(storage_key)
             continue
-        replayable_row_count += 1
+        if evidence_type in REPLAYABLE_EVIDENCE_TYPES:
+            replayable_row_count += 1
+        else:
+            supporting_object_row_count += 1
         if not storage_key:
             object_results.append(
                 {
                     "storageKey": None,
                     "evidenceAssetIds": [_asset_id(row)],
+                    "replayable": evidence_type in REPLAYABLE_EVIDENCE_TYPES,
                     "expectedSizeBytes": _row_value(row, "size_bytes"),
                     "actualSizeBytes": None,
                     "expectedSha256": str(_row_value(row, "sha256") or "").casefold(),
@@ -206,6 +212,11 @@ def audit_msrp_evidence_integrity(
             {
                 "storageKey": storage_key,
                 "evidenceAssetIds": sorted(_asset_id(row) for row in grouped),
+                "replayable": any(
+                    str(_row_value(row, "evidence_type") or "").strip()
+                    in REPLAYABLE_EVIDENCE_TYPES
+                    for row in grouped
+                ),
                 "expectedSizeBytes": expected_size,
                 "actualSizeBytes": actual_size,
                 "expectedSha256": expected_sha256 or None,
@@ -235,7 +246,7 @@ def audit_msrp_evidence_integrity(
             if candidate_stat is not None and stat.S_ISDIR(candidate_stat.st_mode):
                 continue
             storage_key = candidate.relative_to(root).as_posix()
-            if storage_key in expected_storage_keys or storage_key in ignored_storage_keys:
+            if storage_key in expected_storage_keys:
                 continue
             orphan_objects.append(_orphan_payload(root, candidate))
 
@@ -265,6 +276,7 @@ def audit_msrp_evidence_integrity(
         "summary": {
             "databaseAssetRowCount": len(row_list),
             "replayableAssetRowCount": replayable_row_count,
+            "supportingObjectAssetRowCount": supporting_object_row_count,
             "ignoredNonReplayableRowCount": len(ignored_assets),
             "expectedObjectCount": len(grouped_rows),
             "healthyObjectCount": len(healthy_objects),

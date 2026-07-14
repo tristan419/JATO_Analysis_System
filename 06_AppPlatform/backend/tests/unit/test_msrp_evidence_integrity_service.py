@@ -48,6 +48,16 @@ def _write_object(root: Path, row: _EvidenceRow, content: bytes) -> Path:
     return path
 
 
+def _load_integrity_cli_module():
+    project_root = Path(__file__).resolve().parents[4]
+    script_path = project_root / "03_Scripts" / "ops" / "msrp_evidence_integrity.py"
+    spec = importlib.util.spec_from_file_location("msrp_evidence_integrity_cli", script_path)
+    assert spec and spec.loader
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
 def test_evidence_root_uses_durable_project_path_and_preserves_override(
     monkeypatch,
     tmp_path: Path,
@@ -69,7 +79,7 @@ def test_evidence_root_uses_durable_project_path_and_preserves_override(
     ).resolve()
 
 
-def test_integrity_audit_accepts_healthy_objects_and_ignores_url_and_screenshot(
+def test_integrity_audit_backs_up_screenshot_without_marking_it_replayable(
     tmp_path: Path,
 ) -> None:
     content = b"official immutable pdf"
@@ -94,10 +104,11 @@ def test_integrity_audit_accepts_healthy_objects_and_ignores_url_and_screenshot(
     assert report["summary"] == {
         "databaseAssetRowCount": 3,
         "replayableAssetRowCount": 1,
-        "ignoredNonReplayableRowCount": 2,
-        "expectedObjectCount": 1,
-        "healthyObjectCount": 1,
-        "verifiedObjectBytes": len(content),
+        "supportingObjectAssetRowCount": 1,
+        "ignoredNonReplayableRowCount": 1,
+        "expectedObjectCount": 2,
+        "healthyObjectCount": 2,
+        "verifiedObjectBytes": len(content) + len(screenshot_content),
         "missingObjectCount": 0,
         "mismatchedObjectCount": 0,
         "unreadableObjectCount": 0,
@@ -107,9 +118,10 @@ def test_integrity_audit_accepts_healthy_objects_and_ignores_url_and_screenshot(
         "invalidContentAddressCount": 0,
         "orphanObjectCount": 0,
     }
-    assert [item["storageKey"] for item in report["objects"]] == [
-        replayable.storage_key
-    ]
+    objects = {item["storageKey"]: item for item in report["objects"]}
+    assert set(objects) == {replayable.storage_key, screenshot.storage_key}
+    assert objects[replayable.storage_key]["replayable"] is True
+    assert objects[screenshot.storage_key]["replayable"] is False
     assert {item["reason"] for item in report["ignoredAssets"]} == {
         "non_replayable_reference"
     }
@@ -183,22 +195,97 @@ def test_integrity_audit_rejects_traversal_symlink_non_regular_and_unreadable(
     assert report["summary"]["invalidContentAddressCount"] == 1
 
 
+def test_integrity_command_serializes_rows_before_closing_session(monkeypatch) -> None:
+    module = _load_integrity_cli_module()
+    evidence_asset_id = uuid4()
+
+    class ExpiringEvidenceRow:
+        def __init__(self) -> None:
+            self.expired = False
+
+        def value(self, value):
+            if self.expired:
+                raise RuntimeError("detached ORM row accessed after rollback")
+            return value
+
+        @property
+        def evidence_asset_id(self):
+            return self.value(evidence_asset_id)
+
+        @property
+        def evidence_type(self):
+            return self.value("uploaded_pdf")
+
+        @property
+        def storage_key(self):
+            return self.value("assets/aa/asset.pdf")
+
+        @property
+        def size_bytes(self):
+            return self.value(123)
+
+        @property
+        def sha256(self):
+            return self.value("a" * 64)
+
+    row = ExpiringEvidenceRow()
+
+    class FakeSession:
+        def __init__(self) -> None:
+            self.executed = False
+            self.rolled_back = False
+            self.closed = False
+
+        def execute(self, _statement) -> None:
+            self.executed = True
+
+        def rollback(self) -> None:
+            self.rolled_back = True
+            row.expired = True
+
+        def close(self) -> None:
+            self.closed = True
+
+    session = FakeSession()
+    monkeypatch.setattr(module, "get_session_factory", lambda: lambda: session)
+    monkeypatch.setattr(
+        module.repo,
+        "list_all_evidence_assets",
+        lambda received_session: [row] if received_session is session else [],
+    )
+
+    assert module._load_evidence_assets() == [
+        {
+            "evidence_asset_id": str(evidence_asset_id),
+            "evidence_type": "uploaded_pdf",
+            "storage_key": "assets/aa/asset.pdf",
+            "size_bytes": 123,
+            "sha256": "a" * 64,
+        }
+    ]
+    assert session.executed is True
+    assert session.rolled_back is True
+    assert session.closed is True
+
+
 def test_integrity_command_emits_json_object_list_and_nonzero_when_unhealthy(
     monkeypatch,
     tmp_path: Path,
     capsys,
 ) -> None:
-    project_root = Path(__file__).resolve().parents[4]
-    script_path = project_root / "03_Scripts" / "ops" / "msrp_evidence_integrity.py"
-    spec = importlib.util.spec_from_file_location("msrp_evidence_integrity_cli", script_path)
-    assert spec and spec.loader
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
+    module = _load_integrity_cli_module()
 
     content = b"cli object"
     healthy_row = _row(content)
     _write_object(tmp_path, healthy_row, content)
-    monkeypatch.setattr(module, "_load_evidence_assets", lambda: [healthy_row])
+    screenshot_content = b"cli screenshot"
+    screenshot_row = _row(screenshot_content, evidence_type="screenshot")
+    _write_object(tmp_path, screenshot_row, screenshot_content)
+    monkeypatch.setattr(
+        module,
+        "_load_evidence_assets",
+        lambda: [healthy_row, screenshot_row],
+    )
     report_path = tmp_path / "report.json"
     object_list_path = tmp_path / "objects.txt"
 
@@ -213,7 +300,10 @@ def test_integrity_command_emits_json_object_list_and_nonzero_when_unhealthy(
         ]
     ) == 0
     assert json.loads(report_path.read_text())["status"] == "healthy"
-    assert object_list_path.read_text() == f"{healthy_row.storage_key}\n"
+    assert set(object_list_path.read_text().splitlines()) == {
+        healthy_row.storage_key,
+        screenshot_row.storage_key,
+    }
     assert json.loads(capsys.readouterr().out)["status"] == "healthy"
 
     (tmp_path / str(healthy_row.storage_key)).unlink()

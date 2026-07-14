@@ -114,6 +114,7 @@ report = {
     'summary': {
         'databaseAssetRowCount': 1,
         'replayableAssetRowCount': 1,
+        'supportingObjectAssetRowCount': 0,
         'ignoredNonReplayableRowCount': 0,
         'expectedObjectCount': 1,
         'healthyObjectCount': 1 if healthy else 0,
@@ -131,6 +132,7 @@ report = {
     'objects': [{
         'storageKey': row['storage_key'],
         'evidenceAssetIds': [row['evidence_asset_id']],
+        'replayable': True,
         'expectedSizeBytes': row['size_bytes'],
         'actualSizeBytes': path.stat().st_size if path.exists() else None,
         'expectedSha256': row['sha256'],

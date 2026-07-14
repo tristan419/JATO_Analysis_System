@@ -9,7 +9,7 @@
 | Order Genius (BOM/FOB/order/lifecycle) | PostgreSQL `ordering` schema | PostgreSQL custom dump |
 | Auth (users/roles) | PostgreSQL `auth` schema | PostgreSQL custom dump |
 | MSRP source governance | PostgreSQL `msrp` schema | PostgreSQL custom dump |
-| MSRP replayable evidence | `04_Processed_data/ops/msrp_source_evidence/` | 内容寻址对象归档 + 完整性报告 |
+| MSRP object-backed evidence | `04_Processed_data/ops/msrp_source_evidence/` | 内容寻址对象归档 + 完整性报告 |
 | Market Scan / JATO | PostgreSQL + Parquet `04_Processed_data/` | Parquet 有文件，PG 无备份 |
 | COC Match 历史 | SQLite `04_Processed_data/ops/coc_match/` | runtime ops archive |
 | Order Genius 上传文件 | `04_Processed_data/ops/order_genius_uploads/` | runtime ops archive |
@@ -36,7 +36,7 @@ BACKEND_ENV_FILE=/etc/jato-fullstack/backend.env \
 
 同一次备份的四类核心产物使用相同 timestamp。manifest 记录 PostgreSQL
 dump、evidence archive 和 integrity report 的绝对路径、SHA-256 与字节数，
-并记录可重放 evidence object 数和对象原始总字节数。PostgreSQL dump 固定包含
+并记录经验证的 evidence object 数和对象原始总字节数。PostgreSQL dump 固定包含
 `auth`、`ordering`、`public` 和 `msrp` schema。evidence 完整性不健康时不会发布
 manifest，脚本以非零状态退出。
 
@@ -47,8 +47,9 @@ $APP_PROJECT_ROOT/04_Processed_data/ops/msrp_source_evidence
 ```
 
 可通过 `MSRP_GOVERNANCE_EVIDENCE_ROOT` 覆盖，但该路径必须位于 release
-替换目录外。`official_url` 和仅用于视觉佐证的 `screenshot` 不属于可重放对象，
-不会进入 evidence archive。
+替换目录外。`official_url` 没有归档字节，不进入 evidence archive。仅用于视觉佐证
+的 `screenshot` 不能满足 Source Gate 的可重放要求，但它仍是 Evidence Asset，必须
+经过 size/SHA-256 校验并随其他 content-addressed objects 一起备份和恢复。
 
 ### MSRP evidence 只读完整性检查
 

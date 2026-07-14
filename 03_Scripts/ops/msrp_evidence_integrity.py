@@ -43,11 +43,20 @@ def _parse_args(argv: Sequence[str] | None) -> argparse.Namespace:
     return parser.parse_args(argv)
 
 
-def _load_evidence_assets() -> list[object]:
+def _load_evidence_assets() -> list[dict[str, object]]:
     session = get_session_factory()()
     try:
         session.execute(text("SET TRANSACTION READ ONLY"))
-        return list(repo.list_all_evidence_assets(session))
+        return [
+            {
+                "evidence_asset_id": str(row.evidence_asset_id),
+                "evidence_type": row.evidence_type,
+                "storage_key": row.storage_key,
+                "size_bytes": row.size_bytes,
+                "sha256": row.sha256,
+            }
+            for row in repo.list_all_evidence_assets(session)
+        ]
     finally:
         session.rollback()
         session.close()
