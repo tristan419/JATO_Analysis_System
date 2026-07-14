@@ -771,3 +771,35 @@ def test_belgium_nissan_juke_profile_uses_only_the_vat_included_catalogue_price(
         '"Retail with VAT":{"priceDisclaimer":"","modelPrice":"27145"}}',
         re.IGNORECASE | re.DOTALL,
     )
+
+
+def test_belgium_citroen_c3_aircross_profile_uses_the_vat_included_price_column() -> None:
+    source_path = (
+        Path(__file__).resolve().parents[1]
+        / "source_drafts"
+        / "suv_only_country_model_top30"
+        / "be"
+        / "24_citroen_c3_aircross_be.yaml"
+    )
+    source = _load_yaml_mapping(source_path)
+    profile = _build_pdf_text_profile(source["profile"])
+    entry = profile.entry_patterns[0]
+
+    assert source["extractor_type"] == "pdf_text"
+    assert source["source_type"] == "official_price_list"
+    assert profile.url == source["source_url"]
+    assert profile.browser_download_fallback is True
+    assert profile.default_currency == "EUR"
+    assert profile.default_tax_included is True
+    assert profile.fixed_jato_powertrain == "ICE"
+    assert profile.match_reason["document_effective_date"] == "2026-04-01"
+    assert entry.official_trim == "C3 Aircross Turbo 100 Manual YOU"
+    assert entry.price_label == "Catalogusprijs incl. BTW"
+    match = re.search(
+        entry.pattern,
+        "C3 Aircross Turbo 100 ch Manual YOU 100 75 7 134 5,9 0 / "
+        "1CSJ SU E JL K L0 A0 32 16 181,82 19 580,00",
+        re.IGNORECASE | re.DOTALL,
+    )
+    assert match is not None
+    assert match.group("price") == "19 580,00"
