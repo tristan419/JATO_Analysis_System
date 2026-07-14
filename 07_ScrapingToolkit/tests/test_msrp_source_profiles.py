@@ -498,3 +498,35 @@ def test_hungary_volkswagen_profiles_use_official_configurator_list_price_api() 
             assert profile.min_price_group.price == "listPrice.gross"
         else:
             assert profile.min_price_group is None
+
+
+def test_belgium_ford_puma_profile_extracts_only_the_official_catalogue_price() -> None:
+    source_path = (
+        Path(__file__).resolve().parents[1]
+        / "source_drafts"
+        / "suv_only_country_model_top30"
+        / "be"
+        / "21_ford_puma_be.yaml"
+    )
+    source = _load_yaml_mapping(source_path)
+    profile = _build_scrapling_profile(source["profile"])
+    entry = profile.text_regex.entry_patterns[0] if profile.text_regex else None
+
+    assert source["extractor_type"] == "scrapling"
+    assert source["source_type"] == "manufacturer_official"
+    assert source["source_url"] == (
+        "https://www.nl.ford.be/alle-modellen/new-puma/aanbiedingen/particulieren"
+    )
+    assert profile.url == source["source_url"]
+    assert profile.tier == "http"
+    assert profile.network_idle is False
+    assert profile.load_dom is False
+    assert profile.text_regex is not None
+    assert profile.text_regex.include_element_html is True
+    assert entry is not None
+    assert "Aanbevolen\\s+catalogusprijs" in entry.pattern
+    assert "Nettoprijs" not in entry.pattern
+    assert "Promotionele" not in entry.pattern
+    assert "(?P<price>\\d{2}\\.\\d{3})" in entry.pattern
+    assert entry.price_label == "Aanbevolen catalogusprijs incl. btw"
+    assert re.compile(entry.pattern)
