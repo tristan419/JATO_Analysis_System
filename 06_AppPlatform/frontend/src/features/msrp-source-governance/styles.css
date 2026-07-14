@@ -1,0 +1,690 @@
+.msrp-governance-page {
+  --governance-ink: #172033;
+  --governance-muted: #667085;
+  --governance-border: #d9e0e8;
+  --governance-blue: #175cd3;
+  display: grid;
+  gap: 14px;
+  min-height: 100%;
+  padding: 18px;
+  background:
+    radial-gradient(circle at 85% 0%, rgba(37, 99, 235, 0.08), transparent 30%),
+    #f5f7fa;
+  color: var(--governance-ink);
+}
+
+.msrp-governance-hero {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 24px;
+  padding: 22px 24px;
+  border: 1px solid #cfd7e3;
+  background:
+    linear-gradient(90deg, #172033 0, #172033 12px, #fff 12px, #fff 100%);
+  box-shadow: 0 12px 30px rgba(23, 32, 51, 0.06);
+}
+
+.msrp-governance-hero h1 {
+  margin: 4px 0 0;
+  font-size: clamp(28px, 4vw, 44px);
+  font-weight: 330;
+  line-height: 1;
+}
+
+.msrp-governance-hero p {
+  max-width: 78ch;
+  margin: 10px 0 0;
+  color: var(--governance-muted);
+  font-size: 13px;
+  line-height: 1.6;
+}
+
+.msrp-governance-eyebrow {
+  color: var(--governance-blue);
+  font-size: 10px;
+  font-weight: 850;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+}
+
+.msrp-governance-hero-actions {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 10px;
+  flex: 0 0 auto;
+}
+
+.msrp-governance-hero-actions > span {
+  color: var(--governance-muted);
+  font-size: 11px;
+  font-weight: 750;
+  text-transform: uppercase;
+}
+
+.msrp-governance-create-target,
+.msrp-governance-filters {
+  display: grid;
+  align-items: end;
+  gap: 10px;
+  padding: 14px;
+  border: 1px solid var(--governance-border);
+  background: #fff;
+}
+
+.msrp-governance-create-target {
+  grid-template-columns: repeat(6, minmax(120px, 1fr)) auto;
+}
+
+.msrp-governance-create-target header {
+  grid-column: 1 / -1;
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+}
+
+.msrp-governance-create-target header small {
+  color: var(--governance-muted);
+}
+
+.msrp-governance-filters {
+  grid-template-columns: repeat(4, minmax(130px, 1fr)) auto auto;
+}
+
+.msrp-governance-create-target label,
+.msrp-governance-filters label,
+.msrp-governance-evidence-forms label,
+.msrp-governance-decision-reason {
+  display: grid;
+  gap: 5px;
+  color: #475467;
+  font-size: 10px;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.msrp-governance-create-target input,
+.msrp-governance-filters input,
+.msrp-governance-filters select,
+.msrp-governance-evidence-forms input,
+.msrp-governance-decision-reason input {
+  width: 100%;
+  min-height: 36px;
+  border: 1px solid #cfd7e3;
+  border-radius: 6px;
+  background: #fff;
+  color: var(--governance-ink);
+  padding: 7px 9px;
+  font: inherit;
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0;
+  text-transform: none;
+}
+
+.msrp-governance-summary {
+  display: grid;
+  grid-template-columns: repeat(6, minmax(118px, 1fr));
+  gap: 8px;
+}
+
+.msrp-governance-summary > button,
+.msrp-governance-summary > div {
+  display: grid;
+  align-content: space-between;
+  min-height: 96px;
+  border: 1px solid var(--governance-border);
+  border-radius: 8px;
+  background: #fff;
+  color: var(--governance-ink);
+  padding: 12px;
+  text-align: left;
+  box-shadow: 0 8px 20px rgba(23, 32, 51, 0.04);
+}
+
+.msrp-governance-summary > button {
+  cursor: pointer;
+  font: inherit;
+}
+
+.msrp-governance-summary > button:hover,
+.msrp-governance-summary > button:focus-visible {
+  border-color: #84adff;
+  outline: 2px solid rgba(23, 92, 211, 0.08);
+}
+
+.msrp-governance-summary span {
+  color: var(--governance-muted);
+  font-size: 10px;
+  font-weight: 800;
+  text-transform: uppercase;
+}
+
+.msrp-governance-summary strong {
+  font-size: 28px;
+  line-height: 1;
+}
+
+.msrp-governance-summary small {
+  color: #7c8799;
+  font-size: 10px;
+}
+
+.msrp-governance-targets {
+  min-width: 0;
+  border: 1px solid var(--governance-border);
+  background: #fff;
+  box-shadow: 0 12px 30px rgba(23, 32, 51, 0.05);
+}
+
+.msrp-governance-targets > header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 20px;
+  padding: 12px 14px;
+  border-bottom: 1px solid var(--governance-border);
+}
+
+.msrp-governance-targets > header div {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+}
+
+.msrp-governance-targets > header small,
+.msrp-governance-targets > header span {
+  color: var(--governance-muted);
+  font-size: 11px;
+}
+
+.msrp-governance-table-wrap {
+  max-height: calc(100vh - 430px);
+  min-height: 280px;
+  overflow: auto;
+  border: 0;
+}
+
+.msrp-governance-table tbody tr {
+  cursor: pointer;
+}
+
+.msrp-governance-table tbody tr:focus-visible {
+  outline: 2px solid #84adff;
+  outline-offset: -2px;
+}
+
+.msrp-governance-table td strong,
+.msrp-governance-table td small {
+  display: block;
+}
+
+.msrp-governance-table td small {
+  margin-top: 3px;
+  color: var(--governance-muted);
+  font-size: 10px;
+}
+
+.msrp-governance-table tr.is-selected td {
+  background: #eef4ff !important;
+}
+
+.msrp-governance-table tr.is-selected td:first-child {
+  box-shadow: inset 3px 0 0 var(--governance-blue);
+}
+
+.msrp-governance-badge {
+  display: inline-flex;
+  width: fit-content;
+  align-items: center;
+  min-height: 22px;
+  border: 1px solid #d0d5dd;
+  border-radius: 999px;
+  background: #f9fafb;
+  color: #475467;
+  padding: 3px 8px;
+  font-size: 9px;
+  font-weight: 850;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.msrp-governance-badge.is-active,
+.msrp-governance-badge.is-pass,
+.msrp-governance-badge.is-published,
+.msrp-governance-badge.is-verified,
+.msrp-governance-badge.is-approved,
+.msrp-governance-badge.is-resolved {
+  border-color: #a6f4c5;
+  background: #ecfdf3;
+  color: #027a48;
+}
+
+.msrp-governance-badge.is-fail,
+.msrp-governance-badge.is-critical,
+.msrp-governance-badge.is-rejected,
+.msrp-governance-badge.is-rolled-back {
+  border-color: #fecdca;
+  background: #fef3f2;
+  color: #b42318;
+}
+
+.msrp-governance-badge.is-degraded,
+.msrp-governance-badge.is-high,
+.msrp-governance-badge.is-awaiting-evidence,
+.msrp-governance-badge.is-manual-evidence-required,
+.msrp-governance-badge.is-awaiting-approval {
+  border-color: #fedf89;
+  background: #fffaeb;
+  color: #b54708;
+}
+
+.msrp-governance-badge.is-dryrun-passed,
+.msrp-governance-badge.is-proposal-ready,
+.msrp-governance-badge.is-diagnosing,
+.msrp-governance-badge.is-submitted {
+  border-color: #b2ddff;
+  background: #eff8ff;
+  color: #175cd3;
+}
+
+.msrp-governance-detail-drawer {
+  top: 78px;
+  right: 18px;
+  width: min(760px, calc(100vw - 36px));
+}
+
+.msrp-governance-detail-panel {
+  top: 0;
+  width: min(760px, calc(100vw - 36px));
+  height: min(84vh, 860px);
+  max-height: calc(100vh - 96px);
+  border-color: rgba(168, 184, 207, 0.72);
+  background: rgba(248, 250, 252, 0.94);
+}
+
+.msrp-governance-detail-body {
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  gap: 12px;
+  overflow: hidden;
+}
+
+.msrp-governance-tabs {
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+}
+
+.msrp-governance-tabs .deck-control-tab {
+  min-height: 52px;
+  padding: 7px 8px;
+}
+
+.msrp-governance-deck-section {
+  min-height: 0;
+  overflow-y: auto;
+  padding: 2px 4px 12px 0;
+}
+
+.msrp-governance-deck-footer {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  color: var(--governance-muted);
+  font-size: 10px;
+}
+
+.msrp-governance-truth-lanes {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+  margin-bottom: 10px;
+}
+
+.msrp-governance-truth-lanes article {
+  display: grid;
+  gap: 6px;
+  min-height: 100px;
+  border: 1px solid #d0d5dd;
+  border-left: 4px solid #f79009;
+  border-radius: 8px;
+  background: #fff;
+  padding: 12px;
+}
+
+.msrp-governance-truth-lanes article.is-pass { border-left-color: #12b76a; }
+.msrp-governance-truth-lanes article.is-blocked { border-left-color: #f04438; }
+.msrp-governance-truth-lanes span,
+.msrp-governance-truth-lanes small { color: var(--governance-muted); }
+.msrp-governance-truth-lanes strong { font-size: 22px; }
+
+.msrp-governance-gate-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.msrp-governance-gate-card,
+.msrp-governance-evidence-card,
+.msrp-governance-version-card,
+.msrp-governance-result-card,
+.msrp-governance-fx-card {
+  border: 1px solid var(--governance-border);
+  border-radius: 8px;
+  background: #fff;
+  padding: 12px;
+}
+
+.msrp-governance-gate-card header,
+.msrp-governance-evidence-card header,
+.msrp-governance-version-card header,
+.msrp-governance-result-card header,
+.msrp-governance-fx-card header,
+.msrp-governance-case-detail > header,
+.msrp-governance-proposals article header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.msrp-governance-gate-card header div,
+.msrp-governance-evidence-card header div,
+.msrp-governance-version-card header div,
+.msrp-governance-case-detail > header div {
+  display: grid;
+  gap: 3px;
+}
+
+.msrp-governance-gate-card header span,
+.msrp-governance-gate-card header small,
+.msrp-governance-evidence-card small,
+.msrp-governance-version-card small,
+.msrp-governance-result-card small,
+.msrp-governance-fx-card small,
+.msrp-governance-case-detail small {
+  color: var(--governance-muted);
+}
+
+.msrp-governance-gate-card p,
+.msrp-governance-evidence-card p,
+.msrp-governance-version-card p,
+.msrp-governance-result-card p {
+  margin: 10px 0 6px;
+  color: var(--governance-muted);
+  font-size: 11px;
+}
+
+.msrp-governance-gate-card ul {
+  margin: 8px 0 0;
+  padding-left: 18px;
+  color: #b42318;
+  font-size: 11px;
+}
+
+.msrp-governance-gate-card > strong {
+  display: block;
+  margin-top: 10px;
+  color: #027a48;
+  font-size: 11px;
+}
+
+.msrp-governance-target-meta,
+.msrp-governance-version-card dl,
+.msrp-governance-case-detail dl {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+  margin: 10px 0 0;
+}
+
+.msrp-governance-target-meta div,
+.msrp-governance-version-card dl div,
+.msrp-governance-case-detail dl div {
+  min-width: 0;
+  border: 1px solid #eaecf0;
+  border-radius: 6px;
+  background: #f9fafb;
+  padding: 8px;
+}
+
+.msrp-governance-target-meta dt,
+.msrp-governance-version-card dt,
+.msrp-governance-case-detail dt {
+  color: var(--governance-muted);
+  font-size: 9px;
+  font-weight: 800;
+  text-transform: uppercase;
+}
+
+.msrp-governance-target-meta dd,
+.msrp-governance-version-card dd,
+.msrp-governance-case-detail dd {
+  overflow: hidden;
+  margin: 4px 0 0;
+  font-size: 11px;
+  font-weight: 700;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.msrp-governance-evidence-forms {
+  display: grid;
+  grid-template-columns: minmax(0, 1.45fr) minmax(210px, 0.55fr);
+  gap: 10px;
+  margin-bottom: 10px;
+}
+
+.msrp-governance-evidence-forms form {
+  display: grid;
+  align-content: start;
+  gap: 9px;
+  border: 1px solid var(--governance-border);
+  border-radius: 8px;
+  background: #fff;
+  padding: 12px;
+}
+
+.msrp-governance-evidence-forms header {
+  display: grid;
+  gap: 2px;
+}
+
+.msrp-governance-evidence-forms header small,
+.msrp-governance-evidence-forms form > small {
+  color: var(--governance-muted);
+  font-size: 10px;
+}
+
+.msrp-governance-form-row {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.msrp-governance-stack {
+  display: grid;
+  gap: 8px;
+}
+
+.msrp-governance-evidence-card a {
+  display: inline-block;
+  margin-top: 8px;
+  color: var(--governance-blue);
+  font-size: 11px;
+  font-weight: 750;
+}
+
+.msrp-governance-decision-reason {
+  margin-bottom: 10px;
+}
+
+.msrp-governance-version-card details {
+  margin-top: 10px;
+}
+
+.msrp-governance-version-card summary {
+  cursor: pointer;
+  color: var(--governance-blue);
+  font-size: 11px;
+  font-weight: 750;
+}
+
+.msrp-governance-version-card pre,
+.msrp-governance-proposals pre {
+  max-height: 180px;
+  overflow: auto;
+  border: 1px solid #eaecf0;
+  border-radius: 5px;
+  background: #101828;
+  color: #d1e9ff;
+  padding: 9px;
+  font-size: 10px;
+  white-space: pre-wrap;
+}
+
+.msrp-governance-card-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.msrp-governance-repair-layout {
+  display: grid;
+  grid-template-columns: 220px minmax(0, 1fr);
+  gap: 10px;
+  overflow: hidden;
+}
+
+.msrp-governance-case-list,
+.msrp-governance-case-detail {
+  min-height: 0;
+  overflow-y: auto;
+}
+
+.msrp-governance-case-list {
+  display: grid;
+  align-content: start;
+  gap: 6px;
+}
+
+.msrp-governance-case-list > button {
+  display: grid;
+  gap: 4px;
+  border: 1px solid var(--governance-border);
+  border-radius: 7px;
+  background: #fff;
+  color: var(--governance-ink);
+  padding: 10px;
+  text-align: left;
+  cursor: pointer;
+  font: inherit;
+}
+
+.msrp-governance-case-list > button.is-selected {
+  border-color: #84adff;
+  background: #eef4ff;
+  box-shadow: inset 3px 0 0 var(--governance-blue);
+}
+
+.msrp-governance-case-list > button > span,
+.msrp-governance-case-list > button > small {
+  color: var(--governance-muted);
+  font-size: 9px;
+  text-transform: uppercase;
+}
+
+.msrp-governance-case-detail {
+  border: 1px solid var(--governance-border);
+  border-radius: 8px;
+  background: #fff;
+  padding: 12px;
+}
+
+.msrp-governance-manual-callout,
+.msrp-governance-result-rule {
+  border: 1px solid #fedf89;
+  border-radius: 7px;
+  background: #fffaeb;
+  color: #93370d;
+  padding: 10px;
+  font-size: 11px;
+}
+
+.msrp-governance-proposals {
+  display: grid;
+  gap: 8px;
+  margin-top: 14px;
+}
+
+.msrp-governance-proposals h4,
+.msrp-governance-deck-section > h4 {
+  margin: 8px 0 0;
+  font-size: 12px;
+}
+
+.msrp-governance-proposals article {
+  border: 1px solid #eaecf0;
+  border-radius: 7px;
+  background: #f9fafb;
+  padding: 10px;
+}
+
+.msrp-governance-proposals article p {
+  color: var(--governance-muted);
+  font-size: 10px;
+}
+
+.msrp-governance-result-rule {
+  display: grid;
+  gap: 3px;
+  margin-bottom: 10px;
+}
+
+.msrp-governance-fx-card > div {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 5px 12px;
+  margin: 10px 0;
+}
+
+.msrp-governance-fx-card > div span {
+  color: var(--governance-muted);
+  font-size: 10px;
+  text-transform: uppercase;
+}
+
+.msrp-governance-empty {
+  padding: 20px;
+  color: var(--governance-muted);
+  font-size: 11px;
+  text-align: center;
+}
+
+@media (max-width: 1100px) {
+  .msrp-governance-summary { grid-template-columns: repeat(3, minmax(130px, 1fr)); }
+  .msrp-governance-create-target { grid-template-columns: repeat(3, minmax(130px, 1fr)); }
+}
+
+@media (max-width: 760px) {
+  .msrp-governance-page { padding: 10px; }
+  .msrp-governance-hero { align-items: flex-start; flex-direction: column; }
+  .msrp-governance-hero-actions { align-items: flex-start; }
+  .msrp-governance-summary { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .msrp-governance-create-target,
+  .msrp-governance-filters { grid-template-columns: 1fr; }
+  .msrp-governance-create-target header { grid-column: auto; }
+  .msrp-governance-detail-drawer,
+  .msrp-governance-detail-panel { right: 8px; width: calc(100vw - 16px); }
+  .msrp-governance-detail-drawer { top: 66px; }
+  .msrp-governance-detail-panel { max-height: calc(100vh - 74px); }
+  .msrp-governance-tabs { display: flex; overflow-x: auto; }
+  .msrp-governance-tabs .deck-control-tab { min-width: 112px; }
+  .msrp-governance-gate-grid,
+  .msrp-governance-truth-lanes,
+  .msrp-governance-evidence-forms,
+  .msrp-governance-repair-layout { grid-template-columns: 1fr; }
+  .msrp-governance-case-list { max-height: 190px; }
+}
