@@ -1,30 +1,45 @@
 source_code: volvo_ex30_be_draft_scrapling
 country: 比利时
 brand: VOLVO
-source_url: https://todo.invalid/be/volvo/ex30
+source_url: https://www.volvocars.com/nl-be/cars/ex30-electric/
 source_type: manufacturer_official
 price_semantics: base_msrp
 extractor_type: scrapling
 profile:
-  url: https://todo.invalid/be/volvo/ex30
-  tier: stealth
+  url: https://www.volvocars.com/nl-be/cars/ex30-electric/
+  tier: http
   headless: true
-  network_idle: true
+  network_idle: false
+  load_dom: false
+  timeout_ms: 20000
   impersonate: chrome
-  css:
-    vehicle_container: body
-    model: h1
-    trim: '[class*="variant"], [class*="trim"], h2'
-    price: '[class*="price"], [data-automation*="price"]'
+  text_regex:
+    source_selector: body
+    include_element_html: true
+    entry_patterns:
+    - pattern: 'data-testid="equipmentLevelsItem:title"[^>]*>EX30\s*<span[^>]*>Essential</span></h3>[\s\S]{0,1000}?data-testid="equipmentLevelsItem:price"[^>]*>vanaf\s*<span>€\s*(?P<price>\d{2}\.\d{3})</span>\s*\(incl\.\s*btw\)'
+      official_trim: EX30 Essential MY27
+      official_powertrain: Elektrisch BEV
+      price_label: Vanaf incl. btw
   default_currency: EUR
   default_tax_included: true
-  default_price_label: MSRP
+  default_price_label: Vanaf incl. btw
   fixed_model: EX30
   fixed_jato_model: EX30
-  fixed_jato_powertrain: null
+  fixed_jato_powertrain: BEV
   model_rules: []
   skip_if_model_unmapped: false
   copy_trim_to_jato_trim: true
+  match_confidence: 0.88
+  match_status: review_required
+  match_reason:
+    kind: official_model_equipment_level_list_price
+    source: volvo_be_ex30_model_page
+    excluded_fields:
+    - Financiële Renting
+    - Private Lease
+    - per maand
+    note: Official Volvo Belgium EX30 model page exposes the Essential equipment-level price including VAT separately from finance offers.
   confidence_rules:
     base: 0.2
     fixed_model_bonus: 0.18
@@ -90,10 +105,9 @@ schedule:
   run_window_start: 00:00
   run_window_end: 05:00
   preferred_weekday: monday
-notes: Draft scaffold generated from country×model top30 backlog. Replace source_url,
-  profile.url, selectors, currency, price label, and the single-model placeholders
-  before promoting to 07_ScrapingToolkit/sources. [CSS selectors applied from brand
-  probe]
+notes: Official Volvo Belgium EX30 model page. The regex anchors the Essential
+  equipment-level title and its adjacent tax-included price. Finance, private
+  lease, monthly payment, and promotional net-price blocks are not extracted.
 bootstrap_meta:
   country_model_rank: 20
   suggested_scope_kind: single_model
