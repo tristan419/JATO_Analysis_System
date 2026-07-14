@@ -1,30 +1,41 @@
 source_code: audi_q6_e_tron_be_draft_scrapling
 country: 比利时
 brand: AUDI
-source_url: https://todo.invalid/be/audi/q6_e_tron
+source_url: https://www.audi.be/nl/modellen/suv/
 source_type: manufacturer_official
 price_semantics: base_msrp
 extractor_type: scrapling
 profile:
-  url: https://todo.invalid/be/audi/q6_e_tron
-  tier: stealth
+  url: https://www.audi.be/nl/modellen/suv/
+  tier: http
   headless: true
-  network_idle: true
+  network_idle: false
+  load_dom: false
+  timeout_ms: 20000
   impersonate: chrome
-  css:
-    vehicle_container: body
-    model: h2
-    trim: h3
-    price: '[class*="price"]'
+  text_regex:
+    source_selector: body
+    include_element_html: true
+    entry_patterns:
+    - pattern: '<h4[^>]*carlineTitle[^>]*>\s*Q6\s+SUV\s+e-tron\s*</h4>[\s\S]{0,1200}?data-testid="price">Vanaf\s*:\s*EUR\s*(?P<price>\d{2}\.\d{3},\d{2})</span>[\s\S]{0,300}?incl\.\s*BTW'
+      official_trim: Q6 SUV e-tron entry price
+      official_powertrain: Elektrisch
+      price_label: Vanaf incl. BTW
   default_currency: EUR
   default_tax_included: true
-  default_price_label: MSRP
+  default_price_label: Vanaf incl. BTW
   fixed_model: Q6 E-TRON
   fixed_jato_model: Q6 E-TRON
-  fixed_jato_powertrain: null
+  fixed_jato_powertrain: BEV
   model_rules: []
   skip_if_model_unmapped: false
   copy_trim_to_jato_trim: true
+  match_confidence: 0.86
+  match_status: review_required
+  match_reason:
+    kind: official_range_page_model_starting_price
+    source: audi_be_suv_model_overview
+    note: Official Audi Belgium SUV range page exposes the Q6 SUV e-tron starting price including VAT in its model card.
   confidence_rules:
     base: 0.2
     fixed_model_bonus: 0.18
@@ -90,10 +101,10 @@ schedule:
   run_window_start: 00:00
   run_window_end: 05:00
   preferred_weekday: monday
-notes: Draft scaffold generated from country×model top30 backlog. Replace source_url,
-  profile.url, selectors, currency, price label, and the single-model placeholders
-  before promoting to 07_ScrapingToolkit/sources. [CSS selectors applied from brand
-  probe]
+notes: Official Audi Belgium SUV range page. The regex anchors the Q6 SUV e-tron
+  model card and extracts only the tax-included "Vanaf" entry price. This is a
+  model-level price and remains review-required until a current trim-level
+  official price-list or configurator API is available.
 bootstrap_meta:
   country_model_rank: 5
   suggested_scope_kind: single_model
