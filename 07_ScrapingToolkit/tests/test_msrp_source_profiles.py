@@ -703,3 +703,39 @@ def test_belgium_volvo_ex40_profile_excludes_finance_and_business_edition_offers
     assert "(?P<price>\\d{2}\\.\\d{3})" in entry.pattern
     assert entry.price_label == "Vanaf incl. btw"
     assert re.compile(entry.pattern)
+
+
+def test_belgium_nissan_qashqai_profile_uses_the_official_catalogue_price_pdf() -> None:
+    source_path = (
+        Path(__file__).resolve().parents[1]
+        / "source_drafts"
+        / "suv_only_country_model_top30"
+        / "be"
+        / "28_nissan_qashqai_be.yaml"
+    )
+    source = _load_yaml_mapping(source_path)
+    profile = _build_pdf_text_profile(source["profile"])
+    entry = profile.entry_patterns[0]
+
+    assert source["extractor_type"] == "pdf_text"
+    assert source["source_type"] == "official_price_list"
+    assert source["source_url"] == (
+        "https://nl.nissan.be/content/dam/Nissan/be/nl/brochures/pricelists/"
+        "Prijslijst_Nissan_QASHQAI_BENL.pdf"
+    )
+    assert profile.url == source["source_url"]
+    assert profile.browser_download_fallback is True
+    assert profile.default_currency == "EUR"
+    assert profile.default_tax_included is True
+    assert profile.fixed_jato_powertrain == "MHEV"
+    assert profile.match_reason["document_valid_from"] == "2026-01-01"
+    assert entry.official_trim == "Qashqai Acenta Mild-Hybrid 140 MT"
+    assert entry.price_label == "Catalogusprijs incl. BTW"
+    assert "Mild-Hybrid" in entry.pattern
+    assert "maand" not in entry.pattern
+    assert re.compile(entry.pattern)
+    assert re.search(
+        entry.pattern,
+        "Mild-Hybrid 140 MT\nAcenta\n € 36.190\n € 6.281\n € 29.909 142",
+        re.IGNORECASE | re.DOTALL,
+    )
