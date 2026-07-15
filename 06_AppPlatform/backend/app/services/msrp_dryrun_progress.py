@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import errno
-import fcntl
 import json
 import os
 import re
@@ -127,21 +125,7 @@ def _parse_run_dir_timestamp(name: str) -> datetime | None:
 
 
 def _is_running() -> bool:
-    """Return true only while another process actually holds the runner flock."""
-    try:
-        with LOCK_FILE.open("rb") as lock_handle:
-            try:
-                fcntl.flock(
-                    lock_handle.fileno(),
-                    fcntl.LOCK_EX | fcntl.LOCK_NB,
-                )
-            except OSError as exc:
-                return exc.errno in {errno.EACCES, errno.EAGAIN}
-            else:
-                fcntl.flock(lock_handle.fileno(), fcntl.LOCK_UN)
-                return False
-    except OSError:
-        return False
+    return LOCK_FILE.exists()
 
 
 def _load_json(path: Path) -> dict[str, Any] | None:
@@ -646,8 +630,7 @@ def _current_from_v3_report(report: dict[str, Any], index_data: dict[str, Any] |
         overall_pass_rate = float(summary.get("passPct") or 0)
     return {
         "available": True,
-        "running": False,
-        "partial": False,
+        "running": _is_running(),
         "runId": run_id,
         "batch": report.get("batch") or "",
         "schemaVersion": report.get("schemaVersion"),
@@ -1293,7 +1276,12 @@ def get_dryrun_dashboard(run_id: str | None = None) -> dict[str, Any]:
         and run_id is None
         and (
             not current
-            or (bool(current.get("partial")) and not bool(current.get("running")))
+            or (
+                bool(current.get("partial"))
+                and current.get("runId") == (latest_shortcut or {}).get("runId")
+                and (latest_shortcut or {}).get("schemaVersion") == "msrp_dryrun_partial_v1"
+                and not _is_running()
+            )
         )
     ):
         report = _load_latest_indexed_v3_report(index_data)

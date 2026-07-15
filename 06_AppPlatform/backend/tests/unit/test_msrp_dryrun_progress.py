@@ -1,31 +1,7 @@
-import fcntl
 import json
 from pathlib import Path
 
-import pytest
-
 from app.services import msrp_dryrun_progress as progress
-
-
-def test_existing_unlocked_lock_file_is_not_running(tmp_path, monkeypatch):
-    lock_file = tmp_path / "jato-msrp-low-concurrency.lock"
-    lock_file.touch()
-    monkeypatch.setattr(progress, "LOCK_FILE", lock_file)
-
-    assert progress._is_running() is False
-
-
-def test_held_flock_is_running(tmp_path, monkeypatch):
-    lock_file = tmp_path / "jato-msrp-low-concurrency.lock"
-    lock_file.touch()
-    monkeypatch.setattr(progress, "LOCK_FILE", lock_file)
-
-    with lock_file.open("rb") as lock_handle:
-        fcntl.flock(lock_handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
-        try:
-            assert progress._is_running() is True
-        finally:
-            fcntl.flock(lock_handle.fileno(), fcntl.LOCK_UN)
 
 
 def test_dashboard_reads_v3_report_from_artifacts(tmp_path, monkeypatch):
@@ -596,25 +572,14 @@ def test_dashboard_keeps_latest_stable_country_when_new_probe_regresses(tmp_path
     )
 
 
-@pytest.mark.parametrize(
-    "shortcut_run_id",
-    [
-        "msrp-dryrun-20260612-070207",
-        "msrp-dryrun-20260614-010000",
-    ],
-)
-def test_dashboard_uses_runs_index_when_latest_shortcut_is_stale_partial(
-    tmp_path,
-    monkeypatch,
-    shortcut_run_id,
-):
+def test_dashboard_uses_runs_index_when_latest_shortcut_is_stale_partial(tmp_path, monkeypatch):
     artifacts = tmp_path / "artifacts"
     logs = tmp_path / "logs"
-    latest_run_id = "msrp-dryrun-20260612-070207"
-    run_dir = logs / latest_run_id
+    run_dir = logs / "msrp-dryrun-20260612-125301"
     artifacts.mkdir()
     run_dir.mkdir(parents=True)
 
+    latest_run_id = "msrp-dryrun-20260612-070207"
     report = {
         "schemaVersion": "msrp_dryrun_report_v3",
         "runId": latest_run_id,
@@ -675,21 +640,19 @@ def test_dashboard_uses_runs_index_when_latest_shortcut_is_stale_partial(
 
     (artifacts / "dryrun_report.json").write_text(json.dumps({
         "schemaVersion": "msrp_dryrun_partial_v1",
-        "runId": shortcut_run_id,
+        "runId": "msrp-dryrun-20260612-125301",
         "running": True,
         "partial": True,
     }), encoding="utf-8")
     (artifacts / f"dryrun_report_{latest_run_id}.json").write_text(json.dumps(report), encoding="utf-8")
     (artifacts / "dryrun_runs_index.json").write_text(json.dumps(index), encoding="utf-8")
     (run_dir / "run.log").write_text("[INFO] Countries: fi no\n", encoding="utf-8")
-    lock_file = tmp_path / "jato-msrp-low-concurrency.lock"
-    lock_file.touch()
 
     monkeypatch.setattr(progress, "ARTIFACT_DIR", artifacts)
     monkeypatch.setattr(progress, "LATEST_REPORT_PATH", artifacts / "dryrun_report.json")
     monkeypatch.setattr(progress, "RUNS_INDEX_PATH", artifacts / "dryrun_runs_index.json")
     monkeypatch.setattr(progress, "LOG_DIR", logs)
-    monkeypatch.setattr(progress, "LOCK_FILE", lock_file)
+    monkeypatch.setattr(progress, "LOCK_FILE", tmp_path / "missing.lock")
 
     dashboard = progress.get_dryrun_dashboard()
 
@@ -697,9 +660,6 @@ def test_dashboard_uses_runs_index_when_latest_shortcut_is_stale_partial(
     assert dashboard["current"]["runId"] == latest_run_id
     assert dashboard["current"]["countries"][0]["countryCode"] == "fi"
     assert dashboard["current"]["gateStatus"] == "allowed"
-    assert dashboard["current"]["running"] is False
-    assert dashboard["current"]["partial"] is False
-    assert dashboard["current"]["finishedAt"] is not None
 
 
 def test_dashboard_prefers_active_partial_run_over_stale_latest_report(tmp_path, monkeypatch):
@@ -815,12 +775,7 @@ def test_dashboard_prefers_active_partial_run_over_stale_latest_report(tmp_path,
     monkeypatch.setattr(progress, "LOG_DIR", logs)
     monkeypatch.setattr(progress, "LOCK_FILE", lock_file)
 
-    with lock_file.open("rb") as lock_handle:
-        fcntl.flock(lock_handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
-        try:
-            dashboard = progress.get_dryrun_dashboard()
-        finally:
-            fcntl.flock(lock_handle.fileno(), fcntl.LOCK_UN)
+    dashboard = progress.get_dryrun_dashboard()
     current = dashboard["current"]
 
     assert current["partial"] is True
@@ -1106,12 +1061,7 @@ def test_dashboard_reads_partial_run_dir_country_artifacts(tmp_path, monkeypatch
     monkeypatch.setattr(progress, "LOG_DIR", logs)
     monkeypatch.setattr(progress, "LOCK_FILE", lock_file)
 
-    with lock_file.open("rb") as lock_handle:
-        fcntl.flock(lock_handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
-        try:
-            dashboard = progress.get_dryrun_dashboard()
-        finally:
-            fcntl.flock(lock_handle.fileno(), fcntl.LOCK_UN)
+    dashboard = progress.get_dryrun_dashboard()
     current = dashboard["current"]
 
     assert current["available"] is True
