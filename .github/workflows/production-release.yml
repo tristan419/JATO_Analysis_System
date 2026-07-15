@@ -1,0 +1,606 @@
+name: production-release
+
+on:
+  push:
+    branches: ["main"]
+    paths:
+      - "06_AppPlatform/**"
+      - "07_ScrapingToolkit/**"
+      - "03_Scripts/**"
+      - "hermes/**"
+      - "!hermes/dev_events/**"
+      - "01_RAW_DATA/VOC_Nordic_SUV_Users_100.xlsx"
+      - ".nvmrc"
+      - ".github/workflows/production-release.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: production-release-main
+  cancel-in-progress: true
+
+env:
+  FRONTEND_NODE_VERSION: "20.19.0"
+
+jobs:
+  build_frontend:
+    if: ${{ github.ref == 'refs/heads/main' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    outputs:
+      artifact_name: ${{ steps.release.outputs.artifact-name }}
+      artifact_identity: ${{ steps.release.outputs.artifact-identity }}
+      artifact_checksum: ${{ steps.release.outputs.artifact-checksum }}
+      github_artifact_id: ${{ steps.upload.outputs.artifact-id }}
+      github_artifact_digest: ${{ steps.upload.outputs.artifact-digest }}
+      frontend_build_id: ${{ steps.release.outputs.frontend-build-id }}
+      node_version: ${{ steps.release.outputs.node-version }}
+      app_commit: ${{ steps.release.outputs.app-commit }}
+
+    steps:
+      - name: Checkout release source
+        uses: actions/checkout@v5
+
+      - name: Setup fixed frontend Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.FRONTEND_NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: 06_AppPlatform/frontend/package-lock.json
+
+      - name: Install locked frontend dependencies
+        working-directory: 06_AppPlatform/frontend
+        run: npm ci
+
+      - name: Build production frontend once
+        working-directory: 06_AppPlatform/frontend
+        env:
+          CF_PAGES: "1"
+          DEPLOY_COMMIT_SHA: ${{ github.sha }}
+          VITE_API_BASE: /v1
+          VITE_ASSET_BASE_URL: ""
+          VITE_USER_ROLE: viewer
+          VITE_USER_NAME: github-actions
+        run: npm run build
+
+      - name: Create immutable frontend release
+        id: release
+        env:
+          ARTIFACT_NAME: frontend-dist-${{ github.sha }}
+        run: |
+          set -euo pipefail
+          release_dir="$RUNNER_TEMP/frontend-release"
+          rm -rf "$release_dir"
+          python3 03_Scripts/deploy/frontend_release_artifact.py create \
+            --dist-dir 06_AppPlatform/frontend/dist \
+            --release-dir "$release_dir" \
+            --github-sha "$GITHUB_SHA" \
+            --artifact-name "$ARTIFACT_NAME" \
+            --repository "$GITHUB_REPOSITORY" \
+            --workflow "$GITHUB_WORKFLOW" \
+            --run-id "$GITHUB_RUN_ID" \
+            --run-attempt "$GITHUB_RUN_ATTEMPT" \
+            --github-output "$GITHUB_OUTPUT"
+
+      - name: Upload the only frontend artifact
+        id: upload
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.release.outputs.artifact-name }}
+          path: ${{ runner.temp }}/frontend-release
+          if-no-files-found: error
+          compression-level: 0
+          overwrite: false
+          retention-days: 14
+
+      - name: Validate strict build outputs
+        env:
+          ARTIFACT_NAME: ${{ steps.release.outputs.artifact-name }}
+          ARTIFACT_IDENTITY: ${{ steps.release.outputs.artifact-identity }}
+          ARTIFACT_CHECKSUM: ${{ steps.release.outputs.artifact-checksum }}
+          GITHUB_ARTIFACT_ID: ${{ steps.upload.outputs.artifact-id }}
+          GITHUB_ARTIFACT_DIGEST: ${{ steps.upload.outputs.artifact-digest }}
+          FRONTEND_BUILD_ID: ${{ steps.release.outputs.frontend-build-id }}
+          NODE_VERSION: ${{ steps.release.outputs.node-version }}
+          APP_COMMIT: ${{ steps.release.outputs.app-commit }}
+        run: |
+          set -euo pipefail
+          expected_name="frontend-dist-$GITHUB_SHA"
+          test "$ARTIFACT_NAME" = "$expected_name"
+          test -n "$ARTIFACT_IDENTITY"
+          [[ "$ARTIFACT_CHECKSUM" =~ ^[0-9a-f]{64}$ ]]
+          [[ "$GITHUB_ARTIFACT_ID" =~ ^[1-9][0-9]*$ ]]
+          [[ "$GITHUB_ARTIFACT_DIGEST" =~ ^(sha256:)?[0-9a-f]{64}$ ]]
+          [[ "$FRONTEND_BUILD_ID" =~ ^[0-9a-f]{64}$ ]]
+          [[ "$NODE_VERSION" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]
+          [[ "$APP_COMMIT" =~ ^[0-9a-f]{40}$ ]]
+
+  deploy_tencent:
+    if: ${{ github.ref == 'refs/heads/main' }}
+    needs: build_frontend
+    environment: production
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+
+    steps:
+      - name: Checkout release source
+        uses: actions/checkout@v5
+
+      - name: Download immutable frontend artifact by id
+        uses: actions/download-artifact@v5
+        with:
+          artifact-ids: ${{ needs.build_frontend.outputs.github_artifact_id }}
+          path: ${{ runner.temp }}/frontend-release
+
+      - name: Verify frontend artifact before Tencent deployment
+        env:
+          ARTIFACT_NAME: ${{ needs.build_frontend.outputs.artifact_name }}
+          ARTIFACT_IDENTITY: ${{ needs.build_frontend.outputs.artifact_identity }}
+          ARTIFACT_CHECKSUM: ${{ needs.build_frontend.outputs.artifact_checksum }}
+          GITHUB_ARTIFACT_ID: ${{ needs.build_frontend.outputs.github_artifact_id }}
+          GITHUB_ARTIFACT_DIGEST: ${{ needs.build_frontend.outputs.github_artifact_digest }}
+          FRONTEND_BUILD_ID: ${{ needs.build_frontend.outputs.frontend_build_id }}
+          NODE_VERSION: ${{ needs.build_frontend.outputs.node_version }}
+        run: |
+          set -euo pipefail
+          python3 03_Scripts/deploy/frontend_release_artifact.py verify \
+            --release-dir "$RUNNER_TEMP/frontend-release" \
+            --expected-github-sha "$GITHUB_SHA" \
+            --expected-artifact-name "$ARTIFACT_NAME" \
+            --expected-artifact-identity "$ARTIFACT_IDENTITY" \
+            --expected-artifact-checksum "$ARTIFACT_CHECKSUM" \
+            --expected-build-id "$FRONTEND_BUILD_ID" \
+            --expected-node-version "$NODE_VERSION" \
+            --expected-run-id "$GITHUB_RUN_ID" \
+            --expected-run-attempt "$GITHUB_RUN_ATTEMPT" \
+            --github-artifact-id "$GITHUB_ARTIFACT_ID" \
+            --github-artifact-digest "$GITHUB_ARTIFACT_DIGEST"
+
+      - name: Validate Tencent deploy credentials
+        id: auth
+        env:
+          SSH_HOST: ${{ secrets.SSH_HOST }}
+          SSH_USER: ${{ secrets.SSH_USER }}
+          SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
+          SSH_PASSWORD: ${{ secrets.SSH_PASSWORD }}
+        run: |
+          set -euo pipefail
+          : "${SSH_HOST:?Missing SSH_HOST}"
+          : "${SSH_USER:?Missing SSH_USER}"
+          if [ -n "${SSH_PRIVATE_KEY:-}" ]; then
+            echo "mode=key" >> "$GITHUB_OUTPUT"
+          elif [ -n "${SSH_PASSWORD:-}" ]; then
+            echo "mode=password" >> "$GITHUB_OUTPUT"
+          else
+            echo "::error::Provide either SSH_PRIVATE_KEY or SSH_PASSWORD"
+            exit 1
+          fi
+
+      - name: Package backend release with verified frontend artifact
+        env:
+          ARTIFACT_NAME: ${{ needs.build_frontend.outputs.artifact_name }}
+          ARTIFACT_IDENTITY: ${{ needs.build_frontend.outputs.artifact_identity }}
+          ARTIFACT_CHECKSUM: ${{ needs.build_frontend.outputs.artifact_checksum }}
+          GITHUB_ARTIFACT_ID: ${{ needs.build_frontend.outputs.github_artifact_id }}
+          GITHUB_ARTIFACT_DIGEST: ${{ needs.build_frontend.outputs.github_artifact_digest }}
+          FRONTEND_BUILD_ID: ${{ needs.build_frontend.outputs.frontend_build_id }}
+          NODE_VERSION: ${{ needs.build_frontend.outputs.node_version }}
+          APP_COMMIT: ${{ needs.build_frontend.outputs.app_commit }}
+          MIHOMO_SUB_URL: ${{ secrets.MIHOMO_SUB_URL }}
+        run: |
+          set -euo pipefail
+          required_workbook="01_RAW_DATA/VOC_Nordic_SUV_Users_100.xlsx"
+          if [ ! -f "$required_workbook" ]; then
+            echo "::error::Missing required workbook: $required_workbook"
+            exit 1
+          fi
+          msrp_pack="03_Scripts/diagnostics/artifacts/msrp_backfill/sweden_swiss_top30_suv"
+          msrp_candidates="$msrp_pack/top30_suv_price_movement_candidates.json"
+          msrp_evidence="$msrp_pack/official_evidence_leads.json"
+          for required_file in "$msrp_candidates" "$msrp_evidence"; do
+            if [ ! -f "$required_file" ]; then
+              echo "::error::Missing required MSRP monitor pack file: $required_file"
+              exit 1
+            fi
+          done
+
+          rm -rf hermes/frontend_release
+          mkdir -p hermes/frontend_release
+          cp "$RUNNER_TEMP/frontend-release/frontend-dist.tar.gz" hermes/frontend_release/
+          cp "$RUNNER_TEMP/frontend-release/frontend-release.json" hermes/frontend_release/
+
+          python3 - <<'PY'
+          import datetime as dt
+          import json
+          import os
+          from pathlib import Path
+
+          root = Path(os.environ["GITHUB_WORKSPACE"])
+          manifest = json.loads(
+              (root / "hermes/frontend_release/frontend-release.json").read_text(encoding="utf-8")
+          )
+          frontend_release = dict(manifest)
+          frontend_release["artifact"] = dict(frontend_release["artifact"])
+          frontend_release["artifact"]["githubId"] = os.environ["GITHUB_ARTIFACT_ID"]
+          digest = os.environ["GITHUB_ARTIFACT_DIGEST"]
+          frontend_release["artifact"]["githubDigest"] = (
+              digest if digest.startswith("sha256:") else f"sha256:{digest}"
+          )
+          sha = os.environ["GITHUB_SHA"]
+          payload = {
+              "releaseId": f"{os.environ['GITHUB_RUN_ID']}-{os.environ['GITHUB_RUN_ATTEMPT']}",
+              "service": "jato-fullstack-backend",
+              "environment": "production",
+              "expectedCommitSha": sha,
+              "commitSha": sha,
+              "shortSha": sha[:8],
+              "branch": os.environ.get("GITHUB_REF_NAME", ""),
+              "repository": os.environ.get("GITHUB_REPOSITORY", ""),
+              "workflow": os.environ.get("GITHUB_WORKFLOW", ""),
+              "workflowRunId": os.environ.get("GITHUB_RUN_ID", ""),
+              "workflowRunAttempt": os.environ.get("GITHUB_RUN_ATTEMPT", ""),
+              "deployMethod": "github_actions",
+              "packagedAt": dt.datetime.now(dt.UTC).isoformat(),
+              "source": "github_actions_archive",
+              "frontendRelease": frontend_release,
+          }
+          out = root / "hermes/deploy_release.json"
+          out.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+          PY
+
+          mihomo_payload_root="$RUNNER_TEMP/mihomo_payload"
+          mihomo_packaged_config="$mihomo_payload_root/hermes/runtime/mihomo/config.yaml"
+          if [ -n "${MIHOMO_SUB_URL:-}" ]; then
+            echo "[mihomo-sub] Building prebuilt mihomo config on GitHub runner"
+            if MIHOMO_OUTPUT_CONFIG="$mihomo_packaged_config" \
+              bash 03_Scripts/deploy/update_mihomo_subscription.sh; then
+              echo "[mihomo-sub] Prebuilt mihomo config ready"
+            else
+              echo "[WARN] Prebuilt mihomo config failed; server will try local refresh"
+              rm -f "$mihomo_packaged_config"
+            fi
+          fi
+
+          tar cf "$RUNNER_TEMP/JATO_deploy.tar" \
+            --exclude='.git' \
+            --exclude='node_modules' \
+            --exclude='.venv' \
+            --exclude='.claude' \
+            --exclude='tmp' \
+            --exclude='__pycache__' \
+            --exclude='*.pyc' \
+            --exclude='01_RAW_DATA' \
+            --exclude='04_Processed_data' \
+            --exclude='*.ipynb' \
+            --exclude='03_Scripts/diagnostics/artifacts' \
+            --exclude='03_Scripts/probe_results' \
+            --exclude='data_wangler' \
+            --exclude='Markdown_Readme' \
+            -C "$GITHUB_WORKSPACE" .
+          tar rf "$RUNNER_TEMP/JATO_deploy.tar" -C "$GITHUB_WORKSPACE" "$required_workbook"
+          tar rf "$RUNNER_TEMP/JATO_deploy.tar" -C "$GITHUB_WORKSPACE" "$msrp_pack"
+          if [ -f "$mihomo_packaged_config" ]; then
+            tar rf "$RUNNER_TEMP/JATO_deploy.tar" \
+              -C "$mihomo_payload_root" hermes/runtime/mihomo/config.yaml
+          fi
+          gzip -f "$RUNNER_TEMP/JATO_deploy.tar"
+          tar tzf "$RUNNER_TEMP/JATO_deploy.tar.gz" hermes/frontend_release/frontend-release.json
+          tar tzf "$RUNNER_TEMP/JATO_deploy.tar.gz" hermes/frontend_release/frontend-dist.tar.gz
+          tar tzf "$RUNNER_TEMP/JATO_deploy.tar.gz" "$required_workbook"
+          tar tzf "$RUNNER_TEMP/JATO_deploy.tar.gz" "$msrp_candidates" "$msrp_evidence"
+
+      - name: Upload complete release archive without fallback
+        id: upload_release
+        env:
+          AUTH_MODE: ${{ steps.auth.outputs.mode }}
+          SSH_HOST: ${{ secrets.SSH_HOST }}
+          SSH_USER: ${{ secrets.SSH_USER }}
+          SSH_PORT: ${{ secrets.SSH_PORT }}
+          SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
+          SSH_PASSWORD: ${{ secrets.SSH_PASSWORD }}
+        run: |
+          set -euo pipefail
+          SSH_PORT="${SSH_PORT:-22}"
+          archive="$RUNNER_TEMP/JATO_deploy.tar.gz"
+          remote_archive="JATO_deploy_${GITHUB_SHA}.tar.gz"
+          remote_temp="${remote_archive}.uploading"
+          chunk_dir="$RUNNER_TEMP/JATO_deploy_chunks"
+          archive_bytes="$(wc -c < "$archive" | tr -d '[:space:]')"
+
+          ssh_options=(
+            -T -p "$SSH_PORT"
+            -o StrictHostKeyChecking=no
+            -o UserKnownHostsFile=/dev/null
+            -o ConnectTimeout=20
+            -o ConnectionAttempts=2
+            -o ServerAliveInterval=10
+            -o ServerAliveCountMax=2
+            -o IPQoS=none
+          )
+          if [ "$AUTH_MODE" = "key" ]; then
+            install -d -m 700 ~/.ssh
+            printf '%s\n' "$SSH_PRIVATE_KEY" > ~/.ssh/github_actions_tencent_key
+            chmod 600 ~/.ssh/github_actions_tencent_key
+            ssh_command=(ssh -o BatchMode=yes -i ~/.ssh/github_actions_tencent_key)
+          else
+            sudo apt-get update -y
+            sudo apt-get install -y sshpass
+            export SSHPASS="$SSH_PASSWORD"
+            ssh_command=(sshpass -e ssh -o PreferredAuthentications=password -o PubkeyAuthentication=no)
+          fi
+
+          if timeout 180s "${ssh_command[@]}" "${ssh_options[@]}" "$SSH_USER@$SSH_HOST" \
+            "rm -f '$remote_temp' '$remote_archive' && cat > '$remote_temp'" < "$archive" \
+            && timeout 120s "${ssh_command[@]}" "${ssh_options[@]}" "$SSH_USER@$SSH_HOST" \
+              "remote_size=\$(wc -c < '$remote_temp' | tr -d '[:space:]'); test \"\$remote_size\" = '$archive_bytes'; mv '$remote_temp' '$remote_archive'"; then
+            echo "remote-archive=$remote_archive" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          timeout 120s "${ssh_command[@]}" "${ssh_options[@]}" "$SSH_USER@$SSH_HOST" \
+            "rm -f '$remote_temp' '$remote_archive'; : > '$remote_temp'"
+          rm -rf "$chunk_dir"
+          mkdir -p "$chunk_dir"
+          split -b 8M "$archive" "$chunk_dir/chunk_"
+          for chunk_path in "$chunk_dir"/chunk_*; do
+            timeout 120s "${ssh_command[@]}" "${ssh_options[@]}" "$SSH_USER@$SSH_HOST" \
+              "cat >> '$remote_temp'" < "$chunk_path"
+          done
+          timeout 120s "${ssh_command[@]}" "${ssh_options[@]}" "$SSH_USER@$SSH_HOST" \
+            "remote_size=\$(wc -c < '$remote_temp' | tr -d '[:space:]'); test \"\$remote_size\" = '$archive_bytes'; mv '$remote_temp' '$remote_archive'"
+          echo "remote-archive=$remote_archive" >> "$GITHUB_OUTPUT"
+
+      - name: Deploy verified release on Tencent
+        env:
+          AUTH_MODE: ${{ steps.auth.outputs.mode }}
+          DEPLOY_ARCHIVE_PATH: ${{ steps.upload_release.outputs.remote-archive }}
+          SSH_HOST: ${{ secrets.SSH_HOST }}
+          SSH_USER: ${{ secrets.SSH_USER }}
+          SSH_PORT: ${{ secrets.SSH_PORT }}
+          SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
+          SSH_PASSWORD: ${{ secrets.SSH_PASSWORD }}
+          DEPLOY_SERVER_NAME: ${{ vars.DEPLOY_SERVER_NAME }}
+          DEPLOY_ENABLE_HTTPS: ${{ vars.DEPLOY_ENABLE_HTTPS }}
+          DEPLOY_CERTBOT_EMAIL: ${{ secrets.DEPLOY_CERTBOT_EMAIL }}
+          DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
+          HERMES_SYNC_TOKEN: ${{ secrets.HERMES_SYNC_TOKEN }}
+          GOOGLE_CLIENT_ID: ${{ secrets.GOOGLE_CLIENT_ID }}
+          GOOGLE_CLIENT_SECRET: ${{ secrets.GOOGLE_CLIENT_SECRET }}
+          GOOGLE_OAUTH_PROXY_URL: ${{ secrets.GOOGLE_OAUTH_PROXY_URL }}
+          GOOGLE_OAUTH_RELAY_URL: ${{ secrets.GOOGLE_OAUTH_RELAY_URL }}
+          GOOGLE_OAUTH_RELAY_TOKEN: ${{ secrets.GOOGLE_OAUTH_RELAY_TOKEN }}
+          MIHOMO_SUB_URL: ${{ secrets.MIHOMO_SUB_URL }}
+          MIHOMO_DB_PATH: ${{ vars.MIHOMO_DB_PATH }}
+          ARTIFACT_NAME: ${{ needs.build_frontend.outputs.artifact_name }}
+          ARTIFACT_IDENTITY: ${{ needs.build_frontend.outputs.artifact_identity }}
+          ARTIFACT_CHECKSUM: ${{ needs.build_frontend.outputs.artifact_checksum }}
+          GITHUB_ARTIFACT_ID: ${{ needs.build_frontend.outputs.github_artifact_id }}
+          GITHUB_ARTIFACT_DIGEST: ${{ needs.build_frontend.outputs.github_artifact_digest }}
+          FRONTEND_BUILD_ID: ${{ needs.build_frontend.outputs.frontend_build_id }}
+          NODE_VERSION: ${{ needs.build_frontend.outputs.node_version }}
+        run: |
+          set -euo pipefail
+          SSH_PORT="${SSH_PORT:-22}"
+          DEPLOY_SERVER_NAME="${DEPLOY_SERVER_NAME:-ojeur.cloud www.ojeur.cloud}"
+          DEPLOY_ENABLE_HTTPS="${DEPLOY_ENABLE_HTTPS:-true}"
+          deploy_short_sha="${GITHUB_SHA:0:8}"
+
+          ssh_options=(
+            -T -p "$SSH_PORT"
+            -o StrictHostKeyChecking=no
+            -o UserKnownHostsFile=/dev/null
+            -o ConnectTimeout=20
+            -o ConnectionAttempts=2
+            -o ServerAliveInterval=10
+            -o ServerAliveCountMax=2
+          )
+          if [ "$AUTH_MODE" = "key" ]; then
+            install -d -m 700 ~/.ssh
+            printf '%s\n' "$SSH_PRIVATE_KEY" > ~/.ssh/github_actions_tencent_key
+            chmod 600 ~/.ssh/github_actions_tencent_key
+            ssh_command=(ssh -o BatchMode=yes -i ~/.ssh/github_actions_tencent_key)
+          else
+            export SSHPASS="$SSH_PASSWORD"
+            ssh_command=(sshpass -e ssh -o PreferredAuthentications=password -o PubkeyAuthentication=no)
+          fi
+
+          remote_exports="export DEPLOY_SERVER_NAME=$(printf '%q' "$DEPLOY_SERVER_NAME"); "
+          remote_exports+="export DEPLOY_ENABLE_HTTPS=$(printf '%q' "$DEPLOY_ENABLE_HTTPS"); "
+          remote_exports+="export DEPLOY_CERTBOT_EMAIL=$(printf '%q' "${DEPLOY_CERTBOT_EMAIL:-}"); "
+          remote_exports+="export DEPLOY_BRANCH=main; "
+          remote_exports+="export DEPLOY_COMMIT_SHA=$(printf '%q' "$GITHUB_SHA"); "
+          remote_exports+="export DEPLOY_SHORT_SHA=$(printf '%q' "$deploy_short_sha"); "
+          remote_exports+="export DEPLOY_RELEASE_ID=$(printf '%q' "$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"); "
+          remote_exports+="export DEPLOY_RUN_ID=$(printf '%q' "$GITHUB_RUN_ID"); "
+          remote_exports+="export DEPLOY_RUN_ATTEMPT=$(printf '%q' "$GITHUB_RUN_ATTEMPT"); "
+          remote_exports+="export DEPLOY_ARCHIVE_PATH=$(printf '%q' "$DEPLOY_ARCHIVE_PATH"); "
+          remote_exports+="export DEPLOY_REPOSITORY=$(printf '%q' "$GITHUB_REPOSITORY"); "
+          remote_exports+="export DEPLOY_WORKFLOW=$(printf '%q' "$GITHUB_WORKFLOW"); "
+          remote_exports+="export FRONTEND_ARTIFACT_NAME=$(printf '%q' "$ARTIFACT_NAME"); "
+          remote_exports+="export FRONTEND_ARTIFACT_IDENTITY=$(printf '%q' "$ARTIFACT_IDENTITY"); "
+          remote_exports+="export FRONTEND_ARTIFACT_CHECKSUM=$(printf '%q' "$ARTIFACT_CHECKSUM"); "
+          remote_exports+="export FRONTEND_GITHUB_ARTIFACT_ID=$(printf '%q' "$GITHUB_ARTIFACT_ID"); "
+          remote_exports+="export FRONTEND_GITHUB_ARTIFACT_DIGEST=$(printf '%q' "$GITHUB_ARTIFACT_DIGEST"); "
+          remote_exports+="export FRONTEND_BUILD_ID=$(printf '%q' "$FRONTEND_BUILD_ID"); "
+          remote_exports+="export FRONTEND_NODE_VERSION=$(printf '%q' "$NODE_VERSION"); "
+          for secret_name in DEEPSEEK_API_KEY HERMES_SYNC_TOKEN GOOGLE_CLIENT_ID GOOGLE_CLIENT_SECRET GOOGLE_OAUTH_PROXY_URL GOOGLE_OAUTH_RELAY_URL GOOGLE_OAUTH_RELAY_TOKEN MIHOMO_SUB_URL MIHOMO_DB_PATH; do
+            remote_exports+="export $secret_name=$(printf '%q' "${!secret_name:-}"); "
+          done
+
+          timeout 1800s "${ssh_command[@]}" "${ssh_options[@]}" "$SSH_USER@$SSH_HOST" \
+            "${remote_exports}bash -s" < 03_Scripts/deploy/fullstack_remote_release.sh
+
+      - name: Verify Tencent public release provenance
+        env:
+          ARTIFACT_NAME: ${{ needs.build_frontend.outputs.artifact_name }}
+          ARTIFACT_IDENTITY: ${{ needs.build_frontend.outputs.artifact_identity }}
+          ARTIFACT_CHECKSUM: ${{ needs.build_frontend.outputs.artifact_checksum }}
+          GITHUB_ARTIFACT_ID: ${{ needs.build_frontend.outputs.github_artifact_id }}
+          GITHUB_ARTIFACT_DIGEST: ${{ needs.build_frontend.outputs.github_artifact_digest }}
+          FRONTEND_BUILD_ID: ${{ needs.build_frontend.outputs.frontend_build_id }}
+          NODE_VERSION: ${{ needs.build_frontend.outputs.node_version }}
+          PUBLIC_ORIGINS: ${{ vars.DEPLOY_PUBLIC_BUILD_META_URLS || 'https://www.ojeur.cloud https://ojeur.cloud' }}
+        run: |
+          set -euo pipefail
+          origin_args=()
+          for origin in $PUBLIC_ORIGINS; do
+            origin_args+=(--origin "$origin")
+          done
+          python3 03_Scripts/deploy/frontend_release_artifact.py audit-public \
+            --release-dir "$RUNNER_TEMP/frontend-release" \
+            --expected-github-sha "$GITHUB_SHA" \
+            --expected-artifact-name "$ARTIFACT_NAME" \
+            --expected-artifact-identity "$ARTIFACT_IDENTITY" \
+            --expected-artifact-checksum "$ARTIFACT_CHECKSUM" \
+            --expected-build-id "$FRONTEND_BUILD_ID" \
+            --expected-node-version "$NODE_VERSION" \
+            --expected-run-id "$GITHUB_RUN_ID" \
+            --expected-run-attempt "$GITHUB_RUN_ATTEMPT" \
+            --github-artifact-id "$GITHUB_ARTIFACT_ID" \
+            --github-artifact-digest "$GITHUB_ARTIFACT_DIGEST" \
+            --attempts 24 \
+            --delay-seconds 10 \
+            "${origin_args[@]}"
+
+  deploy_intl:
+    if: ${{ github.ref == 'refs/heads/main' }}
+    needs: build_frontend
+    environment: production
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Checkout release source
+        uses: actions/checkout@v5
+
+      - name: Download immutable frontend artifact by id
+        uses: actions/download-artifact@v5
+        with:
+          artifact-ids: ${{ needs.build_frontend.outputs.github_artifact_id }}
+          path: ${{ runner.temp }}/frontend-release
+
+      - name: Verify and materialize frontend artifact before Cloudflare deployment
+        env:
+          ARTIFACT_NAME: ${{ needs.build_frontend.outputs.artifact_name }}
+          ARTIFACT_IDENTITY: ${{ needs.build_frontend.outputs.artifact_identity }}
+          ARTIFACT_CHECKSUM: ${{ needs.build_frontend.outputs.artifact_checksum }}
+          GITHUB_ARTIFACT_ID: ${{ needs.build_frontend.outputs.github_artifact_id }}
+          GITHUB_ARTIFACT_DIGEST: ${{ needs.build_frontend.outputs.github_artifact_digest }}
+          FRONTEND_BUILD_ID: ${{ needs.build_frontend.outputs.frontend_build_id }}
+          NODE_VERSION: ${{ needs.build_frontend.outputs.node_version }}
+        run: |
+          set -euo pipefail
+          python3 03_Scripts/deploy/frontend_release_artifact.py verify \
+            --release-dir "$RUNNER_TEMP/frontend-release" \
+            --expected-github-sha "$GITHUB_SHA" \
+            --expected-artifact-name "$ARTIFACT_NAME" \
+            --expected-artifact-identity "$ARTIFACT_IDENTITY" \
+            --expected-artifact-checksum "$ARTIFACT_CHECKSUM" \
+            --expected-build-id "$FRONTEND_BUILD_ID" \
+            --expected-node-version "$NODE_VERSION" \
+            --expected-run-id "$GITHUB_RUN_ID" \
+            --expected-run-attempt "$GITHUB_RUN_ATTEMPT" \
+            --github-artifact-id "$GITHUB_ARTIFACT_ID" \
+            --github-artifact-digest "$GITHUB_ARTIFACT_DIGEST" \
+            --materialize-dir "$RUNNER_TEMP/frontend-dist"
+
+      - name: Validate Cloudflare deploy configuration
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          CLOUDFLARE_PAGES_PROJECT_NAME: ${{ vars.CLOUDFLARE_PAGES_PROJECT_NAME || secrets.CLOUDFLARE_PAGES_PROJECT_NAME }}
+        run: |
+          set -euo pipefail
+          : "${CLOUDFLARE_API_TOKEN:?Missing CLOUDFLARE_API_TOKEN}"
+          : "${CLOUDFLARE_ACCOUNT_ID:?Missing CLOUDFLARE_ACCOUNT_ID}"
+          : "${CLOUDFLARE_PAGES_PROJECT_NAME:?Missing CLOUDFLARE_PAGES_PROJECT_NAME}"
+
+      - name: Deploy downloaded dist to Cloudflare Pages
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          CLOUDFLARE_PAGES_PROJECT_NAME: ${{ vars.CLOUDFLARE_PAGES_PROJECT_NAME || secrets.CLOUDFLARE_PAGES_PROJECT_NAME }}
+        run: |
+          set -euo pipefail
+          npx --yes wrangler@latest pages deploy "$RUNNER_TEMP/frontend-dist" \
+            --project-name "$CLOUDFLARE_PAGES_PROJECT_NAME" \
+            --branch "$GITHUB_REF_NAME" \
+            --commit-hash "$GITHUB_SHA" \
+            --commit-message "$GITHUB_SHA" \
+            --commit-dirty=true
+
+      - name: Verify intl public release provenance
+        env:
+          ARTIFACT_NAME: ${{ needs.build_frontend.outputs.artifact_name }}
+          ARTIFACT_IDENTITY: ${{ needs.build_frontend.outputs.artifact_identity }}
+          ARTIFACT_CHECKSUM: ${{ needs.build_frontend.outputs.artifact_checksum }}
+          GITHUB_ARTIFACT_ID: ${{ needs.build_frontend.outputs.github_artifact_id }}
+          GITHUB_ARTIFACT_DIGEST: ${{ needs.build_frontend.outputs.github_artifact_digest }}
+          FRONTEND_BUILD_ID: ${{ needs.build_frontend.outputs.frontend_build_id }}
+          NODE_VERSION: ${{ needs.build_frontend.outputs.node_version }}
+          JATO_INTL_ORIGIN: ${{ vars.JATO_INTL_ORIGIN || 'https://intl.ojeur.cloud' }}
+        run: |
+          set -euo pipefail
+          python3 03_Scripts/deploy/frontend_release_artifact.py audit-public \
+            --release-dir "$RUNNER_TEMP/frontend-release" \
+            --expected-github-sha "$GITHUB_SHA" \
+            --expected-artifact-name "$ARTIFACT_NAME" \
+            --expected-artifact-identity "$ARTIFACT_IDENTITY" \
+            --expected-artifact-checksum "$ARTIFACT_CHECKSUM" \
+            --expected-build-id "$FRONTEND_BUILD_ID" \
+            --expected-node-version "$NODE_VERSION" \
+            --expected-run-id "$GITHUB_RUN_ID" \
+            --expected-run-attempt "$GITHUB_RUN_ATTEMPT" \
+            --github-artifact-id "$GITHUB_ARTIFACT_ID" \
+            --github-artifact-digest "$GITHUB_ARTIFACT_DIGEST" \
+            --origin "$JATO_INTL_ORIGIN" \
+            --attempts 24 \
+            --delay-seconds 10
+
+  audit_frontend_parity:
+    if: ${{ github.ref == 'refs/heads/main' }}
+    needs: [build_frontend, deploy_tencent, deploy_intl]
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout release source
+        uses: actions/checkout@v5
+
+      - name: Download audited frontend artifact by id
+        uses: actions/download-artifact@v5
+        with:
+          artifact-ids: ${{ needs.build_frontend.outputs.github_artifact_id }}
+          path: ${{ runner.temp }}/frontend-release
+
+      - name: Require www and intl immutable release parity
+        env:
+          ARTIFACT_NAME: ${{ needs.build_frontend.outputs.artifact_name }}
+          ARTIFACT_IDENTITY: ${{ needs.build_frontend.outputs.artifact_identity }}
+          ARTIFACT_CHECKSUM: ${{ needs.build_frontend.outputs.artifact_checksum }}
+          GITHUB_ARTIFACT_ID: ${{ needs.build_frontend.outputs.github_artifact_id }}
+          GITHUB_ARTIFACT_DIGEST: ${{ needs.build_frontend.outputs.github_artifact_digest }}
+          FRONTEND_BUILD_ID: ${{ needs.build_frontend.outputs.frontend_build_id }}
+          NODE_VERSION: ${{ needs.build_frontend.outputs.node_version }}
+          WWW_ORIGIN: ${{ vars.JATO_WWW_ORIGIN || 'https://www.ojeur.cloud' }}
+          INTL_ORIGIN: ${{ vars.JATO_INTL_ORIGIN || 'https://intl.ojeur.cloud' }}
+        run: |
+          set -euo pipefail
+          python3 03_Scripts/deploy/frontend_release_artifact.py audit-public \
+            --release-dir "$RUNNER_TEMP/frontend-release" \
+            --expected-github-sha "$GITHUB_SHA" \
+            --expected-artifact-name "$ARTIFACT_NAME" \
+            --expected-artifact-identity "$ARTIFACT_IDENTITY" \
+            --expected-artifact-checksum "$ARTIFACT_CHECKSUM" \
+            --expected-build-id "$FRONTEND_BUILD_ID" \
+            --expected-node-version "$NODE_VERSION" \
+            --expected-run-id "$GITHUB_RUN_ID" \
+            --expected-run-attempt "$GITHUB_RUN_ATTEMPT" \
+            --github-artifact-id "$GITHUB_ARTIFACT_ID" \
+            --github-artifact-digest "$GITHUB_ARTIFACT_DIGEST" \
+            --origin "$WWW_ORIGIN" \
+            --origin "$INTL_ORIGIN" \
+            --attempts 6 \
+            --delay-seconds 10

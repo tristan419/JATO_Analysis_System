@@ -7,93 +7,79 @@ LOCAL_NO_PROXY_HOSTS="localhost,127.0.0.1,::1"
 export no_proxy="${no_proxy:+$no_proxy,}$LOCAL_NO_PROXY_HOSTS"
 export NO_PROXY="${NO_PROXY:+$NO_PROXY,}$LOCAL_NO_PROXY_HOSTS"
 
-if [ -z "${DEPLOY_COMMIT_SHA:-}" ]; then
-  echo "[ERROR] DEPLOY_COMMIT_SHA is required for sparse deployment"
+for required_name in \
+  DEPLOY_COMMIT_SHA \
+  DEPLOY_ARCHIVE_PATH \
+  DEPLOY_BRANCH \
+  DEPLOY_RUN_ID \
+  DEPLOY_RUN_ATTEMPT \
+  FRONTEND_ARTIFACT_NAME \
+  FRONTEND_ARTIFACT_IDENTITY \
+  FRONTEND_ARTIFACT_CHECKSUM \
+  FRONTEND_GITHUB_ARTIFACT_ID \
+  FRONTEND_GITHUB_ARTIFACT_DIGEST \
+  FRONTEND_BUILD_ID \
+  FRONTEND_NODE_VERSION
+do
+  if [ -z "${!required_name:-}" ]; then
+    echo "[ERROR] $required_name is required for immutable production release"
+    exit 1
+  fi
+done
+if [ "$DEPLOY_BRANCH" != "main" ]; then
+  echo "[ERROR] Immutable production release only accepts DEPLOY_BRANCH=main"
   exit 1
 fi
 
 RELEASE_WORKTREE="/tmp/JATO_deploy_work_${DEPLOY_COMMIT_SHA}"
-RELEASE_ARCHIVE="${DEPLOY_ARCHIVE_PATH:-/tmp/JATO_deploy.tar.gz}"
-RELEASE_REMOTE="https://github.com/tristan419/JATO_Analysis_System.git"
-DEPLOY_SOURCE="github_sparse_checkout"
+RELEASE_ARCHIVE="$DEPLOY_ARCHIVE_PATH"
+DEPLOY_SOURCE="github_actions_archive"
+PRODUCTION_RELEASE_WORKFLOW="true"
+PREBUILT_FRONTEND_DIR="$REPO_DIR/06_AppPlatform/frontend/.dist-${DEPLOY_COMMIT_SHA}.staged"
 RUNTIME_PRESERVE_DIR="$(mktemp -d /tmp/JATO_deploy_runtime.XXXXXX)"
 RUNTIME_PRESERVE_PATHS="
 03_Scripts/diagnostics/artifacts
 03_Scripts/logs
+06_AppPlatform/frontend/dist
 hermes/reports
 "
 
 rm -rf "$RELEASE_WORKTREE"
 mkdir -p "$RELEASE_WORKTREE"
-if [ -f "$RELEASE_ARCHIVE" ] && ! tar tzf "$RELEASE_ARCHIVE" >/dev/null 2>&1; then
-  echo "[WARN] Uploaded deploy archive is incomplete or invalid; falling back to sparse Git fetch"
-  rm -f "$RELEASE_ARCHIVE"
+if [ ! -f "$RELEASE_ARCHIVE" ]; then
+  echo "[ERROR] Uploaded production release archive is missing: $RELEASE_ARCHIVE"
+  exit 1
 fi
-ARCHIVE_READY=false
-if [ -f "$RELEASE_ARCHIVE" ]; then
-  echo "[INFO] Inspecting uploaded deploy archive: $RELEASE_ARCHIVE"
-  if tar xzf "$RELEASE_ARCHIVE" -C "$RELEASE_WORKTREE"; then
-    ARCHIVE_COMMIT="$(python3 -c 'import json, sys; from pathlib import Path; p = Path(sys.argv[1]); payload = json.loads(p.read_text(encoding="utf-8")) if p.exists() else {}; print(payload.get("expectedCommitSha") or payload.get("commitSha") or "")' "$RELEASE_WORKTREE/hermes/deploy_release.json")"
-    if [ "$ARCHIVE_COMMIT" = "$DEPLOY_COMMIT_SHA" ]; then
-      echo "[INFO] Using uploaded deploy archive for ${DEPLOY_SHORT_SHA:-$DEPLOY_COMMIT_SHA}"
-      DEPLOY_SOURCE="github_actions_archive"
-      ARCHIVE_READY=true
-      rm -f "$RELEASE_ARCHIVE"
-    else
-      echo "[WARN] Uploaded deploy archive commit mismatch: archive=${ARCHIVE_COMMIT:-missing} expected=$DEPLOY_COMMIT_SHA; falling back to sparse Git fetch"
-      rm -rf "$RELEASE_WORKTREE"
-      mkdir -p "$RELEASE_WORKTREE"
-      rm -f "$RELEASE_ARCHIVE"
-    fi
-  else
-    echo "[WARN] Uploaded deploy archive extraction failed; falling back to sparse Git fetch"
-    rm -rf "$RELEASE_WORKTREE"
-    mkdir -p "$RELEASE_WORKTREE"
-    rm -f "$RELEASE_ARCHIVE"
-  fi
+if ! tar tzf "$RELEASE_ARCHIVE" >/dev/null 2>&1; then
+  echo "[ERROR] Uploaded production release archive is incomplete or invalid"
+  exit 1
 fi
-if [ "$ARCHIVE_READY" != "true" ]; then
-  echo "[WARN] Uploaded deploy archive not found; falling back to sparse Git fetch"
-  git -C "$RELEASE_WORKTREE" init
-  git -C "$RELEASE_WORKTREE" remote add origin "$RELEASE_REMOTE"
-  git -C "$RELEASE_WORKTREE" config advice.detachedHead false
-  git -C "$RELEASE_WORKTREE" config core.sparseCheckout true
-  git -C "$RELEASE_WORKTREE" config core.sparseCheckoutCone false
-  git -C "$RELEASE_WORKTREE" config http.version HTTP/1.1
-  git -C "$RELEASE_WORKTREE" config http.lowSpeedLimit 1
-  git -C "$RELEASE_WORKTREE" config http.lowSpeedTime 600
-  mkdir -p "$RELEASE_WORKTREE/.git/info"
-  cat > "$RELEASE_WORKTREE/.git/info/sparse-checkout" <<'SPARSE'
-/03_Scripts/
-!/03_Scripts/diagnostics/artifacts/**
-/03_Scripts/diagnostics/artifacts/msrp_backfill/sweden_swiss_top30_suv/**
-/06_AppPlatform/
-/07_ScrapingToolkit/
-/hermes/
-/01_RAW_DATA/VOC_Nordic_SUV_Users_100.xlsx
-/.nvmrc
-/requirements.txt
-/CODEX.md
-SPARSE
-  FETCH_RC=1
-  for fetch_attempt in 1 2 3 4 5; do
-    echo "[INFO] Sparse fetch attempt ${fetch_attempt}/5 for ${DEPLOY_SHORT_SHA:-$DEPLOY_COMMIT_SHA}"
-    if git -C "$RELEASE_WORKTREE" fetch --depth=1 --filter=blob:none origin "$DEPLOY_COMMIT_SHA"; then
-      FETCH_RC=0
-      break
-    fi
-    FETCH_RC=$?
-    rm -f "$RELEASE_WORKTREE/.git/FETCH_HEAD.lock" \
-      "$RELEASE_WORKTREE/.git/index.lock" \
-      "$RELEASE_WORKTREE/.git/shallow.lock"
-    sleep $((fetch_attempt * 10))
-  done
-  if [ "$FETCH_RC" -ne 0 ]; then
-    echo "[ERROR] Sparse fetch failed after retries"
-    exit "$FETCH_RC"
-  fi
-  git -C "$RELEASE_WORKTREE" checkout --force FETCH_HEAD
+echo "[INFO] Extracting uploaded production release archive: $RELEASE_ARCHIVE"
+tar xzf "$RELEASE_ARCHIVE" -C "$RELEASE_WORKTREE"
+ARCHIVE_COMMIT="$(python3 -c 'import json, sys; from pathlib import Path; payload = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8")); print(payload.get("expectedCommitSha") or payload.get("commitSha") or "")' "$RELEASE_WORKTREE/hermes/deploy_release.json")"
+if [ "$ARCHIVE_COMMIT" != "$DEPLOY_COMMIT_SHA" ]; then
+  echo "[ERROR] Uploaded release commit mismatch: archive=${ARCHIVE_COMMIT:-missing} expected=$DEPLOY_COMMIT_SHA"
+  exit 1
 fi
+
+FRONTEND_RELEASE_DIR="$RELEASE_WORKTREE/hermes/frontend_release"
+FRONTEND_RELEASE_HELPER="$RELEASE_WORKTREE/03_Scripts/deploy/frontend_release_artifact.py"
+if [ ! -f "$FRONTEND_RELEASE_HELPER" ]; then
+  echo "[ERROR] Immutable frontend release verifier is missing"
+  exit 1
+fi
+python3 "$FRONTEND_RELEASE_HELPER" verify \
+  --release-dir "$FRONTEND_RELEASE_DIR" \
+  --expected-github-sha "$DEPLOY_COMMIT_SHA" \
+  --expected-artifact-name "$FRONTEND_ARTIFACT_NAME" \
+  --expected-artifact-identity "$FRONTEND_ARTIFACT_IDENTITY" \
+  --expected-artifact-checksum "$FRONTEND_ARTIFACT_CHECKSUM" \
+  --expected-build-id "$FRONTEND_BUILD_ID" \
+  --expected-node-version "$FRONTEND_NODE_VERSION" \
+  --expected-run-id "$DEPLOY_RUN_ID" \
+  --expected-run-attempt "$DEPLOY_RUN_ATTEMPT" \
+  --github-artifact-id "$FRONTEND_GITHUB_ARTIFACT_ID" \
+  --github-artifact-digest "$FRONTEND_GITHUB_ARTIFACT_DIGEST"
 
 for runtime_path in $RUNTIME_PRESERVE_PATHS; do
   if [ -e "$REPO_DIR/$runtime_path" ]; then
@@ -112,7 +98,7 @@ for release_path in 03_Scripts 06_AppPlatform 07_ScrapingToolkit hermes; do
   fi
 done
 if [ ! -f "$RELEASE_WORKTREE/01_RAW_DATA/VOC_Nordic_SUV_Users_100.xlsx" ]; then
-  echo "[ERROR] Sparse deploy missing required workbook"
+  echo "[ERROR] Production release archive is missing the required workbook"
   exit 1
 fi
 mkdir -p "$REPO_DIR/01_RAW_DATA"
@@ -137,7 +123,24 @@ for runtime_path in $RUNTIME_PRESERVE_PATHS; do
   fi
 done
 rm -rf "$RUNTIME_PRESERVE_DIR"
+
+rm -rf "$PREBUILT_FRONTEND_DIR"
+python3 "$FRONTEND_RELEASE_HELPER" verify \
+  --release-dir "$FRONTEND_RELEASE_DIR" \
+  --expected-github-sha "$DEPLOY_COMMIT_SHA" \
+  --expected-artifact-name "$FRONTEND_ARTIFACT_NAME" \
+  --expected-artifact-identity "$FRONTEND_ARTIFACT_IDENTITY" \
+  --expected-artifact-checksum "$FRONTEND_ARTIFACT_CHECKSUM" \
+  --expected-build-id "$FRONTEND_BUILD_ID" \
+  --expected-node-version "$FRONTEND_NODE_VERSION" \
+  --expected-run-id "$DEPLOY_RUN_ID" \
+  --expected-run-attempt "$DEPLOY_RUN_ATTEMPT" \
+  --github-artifact-id "$FRONTEND_GITHUB_ARTIFACT_ID" \
+  --github-artifact-digest "$FRONTEND_GITHUB_ARTIFACT_DIGEST" \
+  --materialize-dir "$PREBUILT_FRONTEND_DIR"
+
 rm -rf "$RELEASE_WORKTREE"
+rm -f "$RELEASE_ARCHIVE"
 
 echo "[INFO] Refreshing local mihomo subscription before backend restart..."
 mkdir -p "$REPO_DIR/hermes/reports"
@@ -163,7 +166,7 @@ PACKAGED_MIHOMO_CONFIG="$REPO_DIR/hermes/runtime/mihomo/config.yaml"
 } > "$MIHOMO_REFRESH_LOG" 2>&1 \
   || echo "[WARN] Local mihomo refresh failed; continuing with existing proxy config" >> "$MIHOMO_REFRESH_LOG"
 
-export REPO_DIR DEPLOY_SOURCE
+export REPO_DIR DEPLOY_SOURCE PREBUILT_FRONTEND_DIR PRODUCTION_RELEASE_WORKFLOW
 python3 - <<'PY'
 import datetime as _dt
 import json
@@ -172,7 +175,12 @@ import pathlib
 
 root = pathlib.Path(os.environ["REPO_DIR"])
 commit_sha = os.environ.get("DEPLOY_COMMIT_SHA", "")
-payload = {
+out = root / "hermes" / "deploy_release.json"
+try:
+    payload = json.loads(out.read_text(encoding="utf-8"))
+except (FileNotFoundError, json.JSONDecodeError, OSError):
+    payload = {}
+payload.update({
     "releaseId": os.environ.get("DEPLOY_RELEASE_ID", ""),
     "service": "jato-fullstack-backend",
     "environment": "production",
@@ -181,14 +189,15 @@ payload = {
     "shortSha": os.environ.get("DEPLOY_SHORT_SHA") or commit_sha[:8],
     "branch": os.environ.get("DEPLOY_BRANCH", "main"),
     "repository": os.environ.get("DEPLOY_REPOSITORY", "tristan419/JATO_Analysis_System"),
-    "workflow": os.environ.get("DEPLOY_WORKFLOW", "deploy-fullstack-tencent"),
+    "workflow": os.environ.get("DEPLOY_WORKFLOW", "production-release"),
     "workflowRunId": os.environ.get("DEPLOY_RUN_ID", ""),
     "workflowRunAttempt": os.environ.get("DEPLOY_RUN_ATTEMPT", ""),
     "deployMethod": "github_actions",
     "packagedAt": _dt.datetime.now(_dt.UTC).isoformat(),
-    "source": os.environ.get("DEPLOY_SOURCE", "github_sparse_checkout"),
-}
-out = root / "hermes" / "deploy_release.json"
+    "source": os.environ.get("DEPLOY_SOURCE", "github_actions_archive"),
+})
+if not isinstance(payload.get("frontendRelease"), dict):
+    raise SystemExit("[ERROR] deploy_release.json is missing frontendRelease provenance")
 out.parent.mkdir(parents=True, exist_ok=True)
 out.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
 print(f"[INFO] Wrote {out.relative_to(root)} for release {payload['shortSha']}")
@@ -299,10 +308,6 @@ fi
 cd "$REPO_DIR"
 export REPO_DIR SKIP_GIT_SYNC=true
 export BACKEND_SERVICE_NAME="jato-fullstack-backend@8000"
-export VITE_API_BASE="/v1"
-export VITE_ASSET_BASE_URL="${VITE_ASSET_BASE_URL:-}"
-export VITE_USER_ROLE="viewer"
-export VITE_USER_NAME="github-actions"
 set +e
 bash 03_Scripts/deploy_fullstack_server.sh 2>&1
 DEPLOY_RC=$?

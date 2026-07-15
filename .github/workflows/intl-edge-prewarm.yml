@@ -1,100 +1,151 @@
 name: intl-edge-prewarm
 
 on:
-  push:
-    branches: ["main"]
-  schedule:
-    - cron: "17 */4 * * *"
   workflow_run:
-    workflows: ["deploy-cloudflare-pages-intl"]
+    workflows: ["production-release"]
     types: [completed]
-  workflow_dispatch:
-    inputs:
-      origin:
-        description: "Frontend origin to prewarm"
-        required: false
-        default: "https://intl.ojeur.cloud"
-      roles:
-        description: "Comma-separated role scopes to prewarm"
-        required: false
-        default: "viewer,order_filler,editor,admin"
-      repetitions:
-        description: "Number of prewarm rounds"
-        required: false
-        default: "2"
-      dashboard_url:
-        description: "Optional Dashboard URL whose filter params should be prewarmed exactly"
-        required: false
-        default: ""
-      group_by:
-        description: "Comma-separated grouped time-series lenses"
-        required: false
-        default: "动总规整,国家,四驱占比,Business/Private 占比"
-      share_split_by:
-        description: "Comma-separated split keys for share-only grouped time-series lenses"
-        required: false
-        default: "segment,powertrain"
+    branches: ["main"]
+
+permissions:
+  actions: read
+  contents: read
 
 concurrency:
-  group: intl-edge-prewarm
+  group: intl-edge-prewarm-${{ github.event.workflow_run.id }}
   cancel-in-progress: true
 
 jobs:
   prewarm:
-    if: ${{ github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success' }}
+    if: >-
+      github.event.workflow_run.conclusion == 'success' &&
+      github.event.workflow_run.head_branch == 'main' &&
+      github.event.workflow_run.head_repository.full_name == github.repository
     runs-on: ubuntu-latest
     timeout-minutes: 20
 
     steps:
-      - name: Checkout
+      - name: Checkout completed production release
         uses: actions/checkout@v5
+        with:
+          ref: ${{ github.event.workflow_run.head_sha }}
 
-      - name: Setup Node
+      - name: Resolve the completed run artifact identity
+        id: artifact
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_RUN_ID: ${{ github.event.workflow_run.id }}
+          RELEASE_RUN_ATTEMPT: ${{ github.event.workflow_run.run_attempt }}
+          RELEASE_SHA: ${{ github.event.workflow_run.head_sha }}
+        run: |
+          set -euo pipefail
+          artifact_name="frontend-dist-$RELEASE_SHA"
+          artifacts="$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$RELEASE_RUN_ID/artifacts")"
+          matches="$(
+            printf '%s' "$artifacts" \
+              | jq --arg name "$artifact_name" \
+                '[.artifacts[] | select(.name == $name and .expired == false)]'
+          )"
+          count="$(printf '%s' "$matches" | jq 'length')"
+          if [ "$count" -ne 1 ]; then
+            echo "::error::Expected exactly one immutable artifact named $artifact_name; found $count"
+            exit 1
+          fi
+          artifact_id="$(printf '%s' "$matches" | jq -r '.[0].id // empty')"
+          artifact_digest="$(printf '%s' "$matches" | jq -r '.[0].digest // empty')"
+          [[ "$artifact_id" =~ ^[1-9][0-9]*$ ]]
+          [[ "$artifact_digest" =~ ^(sha256:)?[0-9a-f]{64}$ ]]
+          artifact_identity="gha://$GITHUB_REPOSITORY/actions/runs/$RELEASE_RUN_ID/attempts/$RELEASE_RUN_ATTEMPT/artifacts/$artifact_name"
+          echo "name=$artifact_name" >> "$GITHUB_OUTPUT"
+          echo "id=$artifact_id" >> "$GITHUB_OUTPUT"
+          echo "digest=$artifact_digest" >> "$GITHUB_OUTPUT"
+          echo "identity=$artifact_identity" >> "$GITHUB_OUTPUT"
+
+      - name: Download completed production artifact by id
+        uses: actions/download-artifact@v5
+        with:
+          artifact-ids: ${{ steps.artifact.outputs.id }}
+          path: ${{ runner.temp }}/frontend-release
+          github-token: ${{ github.token }}
+          repository: ${{ github.repository }}
+          run-id: ${{ github.event.workflow_run.id }}
+
+      - name: Read immutable manifest contract
+        id: manifest
+        run: |
+          set -euo pipefail
+          python3 - "$RUNNER_TEMP/frontend-release/frontend-release.json" "$GITHUB_OUTPUT" <<'PY'
+          import json
+          import re
+          import sys
+          from pathlib import Path
+
+          manifest_path = Path(sys.argv[1])
+          output_path = Path(sys.argv[2])
+          payload = json.loads(manifest_path.read_text(encoding="utf-8"))
+          artifact = payload["artifact"]
+          frontend = payload["frontend"]
+          values = {
+              "checksum": artifact["checksum"],
+              "build-id": frontend["buildId"],
+              "node-version": frontend["nodeVersion"],
+          }
+          if not re.fullmatch(r"[0-9a-f]{64}", values["checksum"]):
+              raise SystemExit("manifest checksum is invalid")
+          if not re.fullmatch(r"[0-9a-f]{64}", values["build-id"]):
+              raise SystemExit("manifest frontend build id is invalid")
+          if not re.fullmatch(r"v\d+\.\d+\.\d+", values["node-version"]):
+              raise SystemExit("manifest Node version is invalid")
+          with output_path.open("a", encoding="utf-8") as output:
+              for key, value in values.items():
+                  output.write(f"{key}={value}\n")
+          PY
+
+      - name: Verify completed immutable release and intl provenance
+        env:
+          RELEASE_RUN_ID: ${{ github.event.workflow_run.id }}
+          RELEASE_RUN_ATTEMPT: ${{ github.event.workflow_run.run_attempt }}
+          RELEASE_SHA: ${{ github.event.workflow_run.head_sha }}
+          ARTIFACT_NAME: ${{ steps.artifact.outputs.name }}
+          ARTIFACT_ID: ${{ steps.artifact.outputs.id }}
+          ARTIFACT_DIGEST: ${{ steps.artifact.outputs.digest }}
+          ARTIFACT_IDENTITY: ${{ steps.artifact.outputs.identity }}
+          ARTIFACT_CHECKSUM: ${{ steps.manifest.outputs.checksum }}
+          FRONTEND_BUILD_ID: ${{ steps.manifest.outputs.build-id }}
+          NODE_VERSION: ${{ steps.manifest.outputs.node-version }}
+          JATO_INTL_ORIGIN: ${{ vars.JATO_INTL_ORIGIN || 'https://intl.ojeur.cloud' }}
+        run: |
+          set -euo pipefail
+          python3 03_Scripts/deploy/frontend_release_artifact.py audit-public \
+            --release-dir "$RUNNER_TEMP/frontend-release" \
+            --expected-github-sha "$RELEASE_SHA" \
+            --expected-artifact-name "$ARTIFACT_NAME" \
+            --expected-artifact-identity "$ARTIFACT_IDENTITY" \
+            --expected-artifact-checksum "$ARTIFACT_CHECKSUM" \
+            --expected-build-id "$FRONTEND_BUILD_ID" \
+            --expected-node-version "$NODE_VERSION" \
+            --expected-run-id "$RELEASE_RUN_ID" \
+            --expected-run-attempt "$RELEASE_RUN_ATTEMPT" \
+            --github-artifact-id "$ARTIFACT_ID" \
+            --github-artifact-digest "$ARTIFACT_DIGEST" \
+            --origin "$JATO_INTL_ORIGIN" \
+            --attempts 12 \
+            --delay-seconds 10
+
+      - name: Setup release Node version
         uses: actions/setup-node@v4
         with:
-          node-version: "20.19.0"
-
-      - name: Wait for intl Pages commit
-        if: github.event_name != 'schedule'
-        working-directory: 06_AppPlatform/frontend
-        env:
-          EXPECTED_COMMIT: ${{ github.event.workflow_run.head_sha || github.sha }}
-          JATO_PREWARM_ORIGIN: ${{ inputs.origin || 'https://intl.ojeur.cloud' }}
-        run: |
-          node - <<'NODE'
-          const expected = process.env.EXPECTED_COMMIT;
-          const origin = String(process.env.JATO_PREWARM_ORIGIN || "https://intl.ojeur.cloud").replace(/\/+$/, "");
-          const deadline = Date.now() + 5 * 60 * 1000;
-          const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
-
-          async function fetchCommit() {
-            const response = await fetch(`${origin}/build-meta.json?ts=${Date.now()}`, { cache: "no-store" });
-            if (!response.ok) return "";
-            const payload = await response.json();
-            return typeof payload.commit === "string" ? payload.commit.trim() : "";
-          }
-
-          for (;;) {
-            const commit = await fetchCommit().catch(() => "");
-            console.log(`intl build commit: ${commit || "<unavailable>"}`);
-            if (commit === expected) process.exit(0);
-            if (Date.now() > deadline) {
-              console.error(`intl build metadata did not reach ${expected} within the propagation window`);
-              process.exit(1);
-            }
-            await sleep(15000);
-          }
-          NODE
+          node-version: ${{ steps.manifest.outputs.node-version }}
 
       - name: Prewarm intl edge cache
         working-directory: 06_AppPlatform/frontend
         env:
-          JATO_PREWARM_ORIGIN: ${{ inputs.origin || 'https://intl.ojeur.cloud' }}
-          JATO_PREWARM_ROLES: ${{ inputs.roles || 'viewer,order_filler,editor,admin' }}
-          JATO_PREWARM_REPETITIONS: ${{ inputs.repetitions || '2' }}
-          JATO_PREWARM_DASHBOARD_URL: ${{ inputs.dashboard_url || '' }}
-          JATO_PREWARM_GROUP_BY: ${{ inputs.group_by || '动总规整,国家,四驱占比,Business/Private 占比' }}
-          JATO_PREWARM_SHARE_SPLIT_BY: ${{ inputs.share_split_by || 'segment,powertrain' }}
+          JATO_PREWARM_ORIGIN: ${{ vars.JATO_INTL_ORIGIN || 'https://intl.ojeur.cloud' }}
+          JATO_PREWARM_USERNAME: ${{ secrets.JATO_PREWARM_USERNAME }}
+          JATO_PREWARM_PASSWORD: ${{ secrets.JATO_PREWARM_PASSWORD }}
+          JATO_PREWARM_ROLES: ${{ vars.JATO_PREWARM_ROLES || 'viewer,order_filler,editor,admin' }}
+          JATO_PREWARM_REPETITIONS: "2"
+          JATO_PREWARM_GROUP_BY: ${{ vars.JATO_PREWARM_GROUP_BY || '动总规整,国家,四驱占比,Business/Private 占比' }}
+          JATO_PREWARM_SHARE_SPLIT_BY: ${{ vars.JATO_PREWARM_SHARE_SPLIT_BY || 'segment,powertrain' }}
           JATO_PREWARM_TIMEOUT_MS: "120000"
           JATO_PREWARM_FAIL_ON_ERROR: "1"
         run: npm run perf:prewarm-edge
