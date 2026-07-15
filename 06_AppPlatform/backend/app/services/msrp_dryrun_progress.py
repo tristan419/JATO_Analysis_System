@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import fcntl
 import json
 import os
 import re
@@ -22,6 +23,14 @@ DRYRUN_LOG_PATTERN = re.compile(r"msrp-dryrun-(\d{8})-(\d{6})\.log")
 DRYRUN_RUN_DIR_PATTERN = re.compile(r"msrp-dryrun-(\d{8})-(\d{6})$")
 DRYRUN_RUN_ID_PATTERN = re.compile(r"\b(msrp-dryrun-\d{8}-\d{6})\b")
 COUNTRY_CODE_PATTERN = re.compile(r"^[a-z]{2}$")
+PIPELINE_TERMINAL_STATUSES = frozenset({
+    "success",
+    "degraded",
+    "partial_success",
+    "failed",
+    "failure",
+    "error",
+})
 
 _COUNTRY_NAMES: dict[str, str] = {
     "at": "Austria",
@@ -125,7 +134,38 @@ def _parse_run_dir_timestamp(name: str) -> datetime | None:
 
 
 def _is_running() -> bool:
-    return LOCK_FILE.exists()
+    """Return whether another process currently holds the dryrun flock.
+
+    The runner deliberately leaves the lock file on disk.  A non-blocking
+    exclusive probe distinguishes that persistent inode from a live holder on
+    both macOS and Linux.  Unexpected open/lock errors fail closed so the read
+    model does not claim a concurrent run has completed without evidence.
+    """
+    try:
+        lock_fd = os.open(LOCK_FILE, os.O_RDWR)
+    except FileNotFoundError:
+        return False
+    except OSError:
+        return True
+
+    acquired = False
+    try:
+        try:
+            fcntl.flock(lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            acquired = True
+        except BlockingIOError:
+            return True
+        except OSError:
+            return True
+        return False
+    finally:
+        if acquired:
+            try:
+                fcntl.flock(lock_fd, fcntl.LOCK_UN)
+            except OSError:
+                # Closing the descriptor below also releases the probe lock.
+                pass
+        os.close(lock_fd)
 
 
 def _load_json(path: Path) -> dict[str, Any] | None:
@@ -154,14 +194,16 @@ def _load_v3_report(run_id: str | None = None) -> dict[str, Any] | None:
     return None
 
 
-def _load_latest_indexed_v3_report(index_data: dict[str, Any] | None) -> dict[str, Any] | None:
-    latest_run_id = str((index_data or {}).get("latestRunId") or "")
-    if not latest_run_id:
+def _load_indexed_v3_report(
+    index_data: dict[str, Any] | None,
+    run_id: str,
+) -> dict[str, Any] | None:
+    if not run_id:
         return None
 
-    fallback_paths: list[Path] = [ARTIFACT_DIR / f"dryrun_report_{latest_run_id}.json"]
+    fallback_paths: list[Path] = [ARTIFACT_DIR / f"dryrun_report_{run_id}.json"]
     for run in (index_data or {}).get("runs") or []:
-        if run.get("runId") != latest_run_id:
+        if run.get("runId") != run_id:
             continue
         artifact_path = _artifact_path_from_ref(run.get("artifactPath"))
         if artifact_path:
@@ -174,9 +216,45 @@ def _load_latest_indexed_v3_report(index_data: dict[str, Any] | None) -> dict[st
             continue
         seen.add(path)
         data = _load_json(path)
-        if data and data.get("schemaVersion") == "msrp_dryrun_report_v3":
+        if (
+            data
+            and data.get("schemaVersion") == "msrp_dryrun_report_v3"
+            and data.get("runId") == run_id
+        ):
             return data
     return None
+
+
+def _load_latest_indexed_v3_report(index_data: dict[str, Any] | None) -> dict[str, Any] | None:
+    latest_run_id = str((index_data or {}).get("latestRunId") or "")
+    return _load_indexed_v3_report(index_data, latest_run_id)
+
+
+def _load_pipeline_confirmed_v3_report(
+    index_data: dict[str, Any] | None,
+    pipeline_status: dict[str, Any] | None,
+) -> dict[str, Any] | None:
+    """Load a final report only when pipeline and runs-index completion agree."""
+    status = str((pipeline_status or {}).get("status") or "").lower()
+    run_id = str((pipeline_status or {}).get("runId") or "")
+    if (
+        status not in PIPELINE_TERMINAL_STATUSES
+        or not run_id
+        or not (pipeline_status or {}).get("finishedAt")
+    ):
+        return None
+
+    run_meta = next(
+        (
+            run
+            for run in (index_data or {}).get("runs") or []
+            if run.get("runId") == run_id and run.get("finishedAt")
+        ),
+        None,
+    )
+    if not run_meta:
+        return None
+    return _load_indexed_v3_report(index_data, run_id)
 
 
 def _run_recency_key(run: dict[str, Any]) -> tuple[str, str]:
@@ -630,7 +708,7 @@ def _current_from_v3_report(report: dict[str, Any], index_data: dict[str, Any] |
         overall_pass_rate = float(summary.get("passPct") or 0)
     return {
         "available": True,
-        "running": _is_running(),
+        "running": False,
         "runId": run_id,
         "batch": report.get("batch") or "",
         "schemaVersion": report.get("schemaVersion"),
@@ -941,8 +1019,10 @@ def _current_from_partial_run_dir(run_id: str | None = None) -> dict[str, Any] |
     }
 
 
-def _current_from_running_pipeline_status() -> dict[str, Any] | None:
-    status = _load_json(PIPELINE_STATUS_PATH)
+def _current_from_running_pipeline_status(
+    status: dict[str, Any] | None = None,
+) -> dict[str, Any] | None:
+    status = status if status is not None else _load_json(PIPELINE_STATUS_PATH)
     if not status or str(status.get("status") or "").lower() != "running":
         return None
 
@@ -1266,26 +1346,42 @@ def _list_historical_runs() -> list[dict[str, Any]]:
 def get_dryrun_dashboard(run_id: str | None = None) -> dict[str, Any]:
     """Return combined dashboard data: live progress + history."""
     index_data = _load_json(RUNS_INDEX_PATH)
+    pipeline_status = _load_json(PIPELINE_STATUS_PATH)
     current = None
-    latest_shortcut = _load_json(LATEST_REPORT_PATH) if run_id is None else None
     if run_id is None:
-        current = _current_from_partial_run_dir() or _current_from_running_pipeline_status()
+        partial_current = _current_from_partial_run_dir()
+        pipeline_current = _current_from_running_pipeline_status(
+            pipeline_status,
+        )
+        current = (
+            partial_current
+            if partial_current and partial_current.get("running")
+            else pipeline_current or partial_current
+        )
     report = _load_v3_report(run_id)
+    completion_confirmed = False
+    if run_id is None:
+        completed_report = _load_pipeline_confirmed_v3_report(index_data, pipeline_status)
+        if completed_report and (
+            not current or current.get("runId") == completed_report.get("runId")
+        ):
+            report = completed_report
+            completion_confirmed = True
     if (
         not report
         and run_id is None
         and (
             not current
-            or (
-                bool(current.get("partial"))
-                and current.get("runId") == (latest_shortcut or {}).get("runId")
-                and (latest_shortcut or {}).get("schemaVersion") == "msrp_dryrun_partial_v1"
-                and not _is_running()
-            )
+            or (bool(current.get("partial")) and not bool(current.get("running")))
         )
     ):
         report = _load_latest_indexed_v3_report(index_data)
-    if current and current.get("running") and (_is_running() or current.get("pipelineMessage")):
+    if (
+        current
+        and current.get("running")
+        and (_is_running() or current.get("pipelineMessage"))
+        and not completion_confirmed
+    ):
         report = None
     if report:
         current = _current_from_v3_report(report, index_data)
