@@ -17,6 +17,8 @@ env:
 
 jobs:
   deploy:
+    if: ${{ github.ref == 'refs/heads/main' }}
+    environment: production
     runs-on: ubuntu-latest
     timeout-minutes: 45
 

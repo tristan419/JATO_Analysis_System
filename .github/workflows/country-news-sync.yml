@@ -18,6 +18,9 @@ on:
 
 jobs:
   sync:
+    if: ${{ github.event.inputs.dry_run == 'true' || github.ref == 'refs/heads/main' }}
+    environment:
+      name: ${{ github.event.inputs.dry_run == 'true' && 'preview' || 'production' }}
     runs-on: ubuntu-latest
     timeout-minutes: 30
 
@@ -59,9 +62,9 @@ jobs:
             ${{
               github.event.inputs.dry_run != 'true' && 'true' || 'false'
             }}
-          APP_DATABASE_URL: ${{ secrets.APP_DATABASE_URL }}
+          APP_DATABASE_URL: ${{ github.ref == 'refs/heads/main' && github.event.inputs.dry_run != 'true' && secrets.APP_DATABASE_URL || '' }}
           APP_COUNTRY_NEWS_LIVE_FETCH: "false"
-          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          GEMINI_API_KEY: ${{ github.ref == 'refs/heads/main' && github.event.inputs.dry_run != 'true' && secrets.GEMINI_API_KEY || '' }}
         run: |
           DRY_RUN_FLAG=""
           if [ "${{ github.event.inputs.dry_run || 'true' }}" = "true" ]; then

@@ -6,6 +6,25 @@ on:
   pull_request:
 
 jobs:
+  production-deployment-guard:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install workflow validation dependency
+        run: python -m pip install "PyYAML==6.0.2"
+
+      - name: Validate production workflow guards
+        run: python .github/scripts/validate_production_workflow_guards.py
+
   smoke:
     runs-on: ubuntu-latest
     continue-on-error: true
