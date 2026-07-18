@@ -4,8 +4,8 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parents[4]
 
 
-def test_tencent_deploy_workflow_excludes_local_tooling_and_temp_artifacts() -> None:
-    workflow = (REPO_ROOT / ".github/workflows/deploy-fullstack-tencent.yml").read_text(
+def test_production_release_excludes_local_tooling_and_temp_artifacts() -> None:
+    workflow = (REPO_ROOT / ".github/workflows/production-release.yml").read_text(
         encoding="utf-8",
     )
 
@@ -14,60 +14,57 @@ def test_tencent_deploy_workflow_excludes_local_tooling_and_temp_artifacts() -> 
     assert "--exclude='*.pyc'" in workflow
 
 
-def test_tencent_deploy_workflow_preserves_runtime_artifacts() -> None:
-    workflow = (REPO_ROOT / ".github/workflows/deploy-fullstack-tencent.yml").read_text(
+def test_tencent_remote_release_preserves_runtime_artifacts() -> None:
+    script = (REPO_ROOT / "03_Scripts/deploy/fullstack_remote_release.sh").read_text(
         encoding="utf-8",
     )
 
-    assert "03_Scripts/diagnostics/artifacts" in workflow
-    assert "03_Scripts/logs" in workflow
-    assert "06_AppPlatform/frontend/dist" in workflow
-    assert "hermes/reports" in workflow
-    assert "Preserved runtime path" in workflow
-    assert "Restored runtime path" in workflow
+    assert "03_Scripts/diagnostics/artifacts" in script
+    assert "03_Scripts/logs" in script
+    assert "06_AppPlatform/frontend/dist" in script
+    assert "hermes/reports" in script
+    assert "Preserved runtime path" in script
+    assert "Restored runtime path" in script
 
 
-def test_cloudflare_pages_deploy_prewarms_intl_edge_cache_after_build_verification() -> None:
-    workflow = (REPO_ROOT / ".github/workflows/deploy-cloudflare-pages-intl.yml").read_text(
+def test_intl_edge_prewarm_verifies_completed_release_provenance_first() -> None:
+    workflow = (REPO_ROOT / ".github/workflows/intl-edge-prewarm.yml").read_text(
         encoding="utf-8",
     )
 
-    assert "Verify intl build metadata" in workflow
+    assert "Verify completed immutable release and intl provenance" in workflow
     assert "Prewarm intl edge cache" in workflow
-    assert workflow.index("Verify intl build metadata") < workflow.index(
+    assert workflow.index("Verify completed immutable release and intl provenance") < workflow.index(
         "Prewarm intl edge cache",
     )
-    assert "continue-on-error: true" in workflow
     assert "npm run perf:prewarm-edge" in workflow
     assert "JATO_PREWARM_ROLES" in workflow
     assert "viewer,order_filler" in workflow
-    assert "JATO_PREWARM_COUNTRIES" in workflow
-    assert "JATO_PREWARM_POWERTRAINS" in workflow
     assert "JATO_PREWARM_GROUP_BY" in workflow
     assert "JATO_PREWARM_FAIL_ON_ERROR" in workflow
 
 
-def test_tencent_deploy_upload_timeout_allows_slow_tencent_scp() -> None:
-    workflow = (REPO_ROOT / ".github/workflows/deploy-fullstack-tencent.yml").read_text(
+def test_tencent_release_upload_retries_in_chunks_but_never_falls_back() -> None:
+    workflow = (REPO_ROOT / ".github/workflows/production-release.yml").read_text(
         encoding="utf-8",
     )
 
-    assert "timeout 600s scp" in workflow
-    assert 'timeout 600s sshpass -p "$SSH_PASSWORD"' in workflow
-    assert "timeout 180s ssh -T" in workflow
-    assert 'timeout 180s sshpass -p "$SSH_PASSWORD"' in workflow
+    assert "split -b 8M" in workflow
+    assert "Upload complete release archive without fallback" in workflow
+    assert "fallback to sparse" not in workflow
 
 
-def test_tencent_deploy_uploads_archive_before_deploy_step() -> None:
-    workflow = (REPO_ROOT / ".github/workflows/deploy-fullstack-tencent.yml").read_text(
+def test_tencent_uploads_verified_archive_before_deploy_step() -> None:
+    workflow = (REPO_ROOT / ".github/workflows/production-release.yml").read_text(
         encoding="utf-8",
     )
 
-    assert workflow.count('ARCHIVE_PATH="$RUNNER_TEMP/JATO_deploy.tar.gz"') >= 2
-    assert workflow.count('REMOTE_ARCHIVE="/tmp/JATO_deploy.tar.gz"') >= 2
-    assert 'REMOTE_ARCHIVE_TMP="${REMOTE_ARCHIVE}.uploading"' in workflow
-    assert workflow.count("timeout 600s scp") >= 1
-    assert workflow.count('timeout 600s sshpass -p "$SSH_PASSWORD"') >= 1
+    verify_index = workflow.index("Verify frontend artifact before Tencent deployment")
+    upload_index = workflow.index("Upload complete release archive without fallback")
+    deploy_index = workflow.index("Deploy verified release on Tencent")
+    assert verify_index < upload_index < deploy_index
+    assert "frontend-release.json" in workflow
+    assert "frontend-dist.tar.gz" in workflow
 
 
 def test_archive_deploy_reports_expected_commit_when_git_sync_is_skipped() -> None:
@@ -77,6 +74,19 @@ def test_archive_deploy_reports_expected_commit_when_git_sync_is_skipped() -> No
 
     assert '[[ "$SKIP_GIT_SYNC" == "true" && -n "${DEPLOY_COMMIT_SHA:-}" ]]' in script
     assert 'actual_commit="$DEPLOY_COMMIT_SHA"' in script
+
+
+def test_database_migration_requires_main_production_release_workflow() -> None:
+    script = (
+        REPO_ROOT / "03_Scripts/ops/deploy_fullstack_server.sh"
+    ).read_text(encoding="utf-8")
+
+    assert 'DEPLOY_BRANCH" != "main"' in script
+    assert 'PRODUCTION_RELEASE_WORKFLOW" != "true"' in script
+    assert "Database migrations require the main production release workflow" in script
+    assert script.index("Database migrations require the main production release workflow") < script.index(
+        "python -m alembic upgrade head"
+    )
 
 
 def test_msrp_systemd_service_does_not_force_local_proxy() -> None:
@@ -138,21 +148,21 @@ def test_msrp_runner_writes_running_status_and_caps_country_runtime() -> None:
 
 
 def test_public_deploy_status_reports_msrp_scheduler_and_artifacts() -> None:
-    workflow = (REPO_ROOT / ".github/workflows/deploy-fullstack-tencent.yml").read_text(
+    script = (REPO_ROOT / "03_Scripts/deploy/fullstack_remote_release.sh").read_text(
         encoding="utf-8",
     )
 
-    assert "---msrp scheduler---" in workflow
-    assert "systemctl status jato-msrp-dryrun.timer" in workflow
-    assert "systemctl status jato-msrp-sync@dryrun.service" in workflow
-    assert "systemctl list-timers --all 'jato-msrp*'" in workflow
-    assert "---msrp env---" in workflow
-    assert "03_Scripts/ops/print_msrp_env_status.sh" in workflow
-    assert "---msrp artifacts---" in workflow
-    assert "03_Scripts/diagnostics/artifacts/dryrun_report.json" in workflow
-    assert "03_Scripts/diagnostics/artifacts/dryrun_runs_index.json" in workflow
-    assert "hermes/reports/msrp_country_progress.json" in workflow
-    assert "hermes/reports/pipeline_status/msrp_dryrun.json" in workflow
+    assert "---msrp scheduler---" in script
+    assert "systemctl status jato-msrp-dryrun.timer" in script
+    assert "systemctl status jato-msrp-sync@dryrun.service" in script
+    assert "systemctl list-timers --all 'jato-msrp*'" in script
+    assert "---msrp env---" in script
+    assert "03_Scripts/ops/print_msrp_env_status.sh" in script
+    assert "---msrp artifacts---" in script
+    assert "03_Scripts/diagnostics/artifacts/dryrun_report.json" in script
+    assert "03_Scripts/diagnostics/artifacts/dryrun_runs_index.json" in script
+    assert "hermes/reports/msrp_country_progress.json" in script
+    assert "hermes/reports/pipeline_status/msrp_dryrun.json" in script
 
     script = (REPO_ROOT / "03_Scripts/ops/print_msrp_env_status.sh").read_text(
         encoding="utf-8",

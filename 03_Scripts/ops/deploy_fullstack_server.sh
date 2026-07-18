@@ -6,6 +6,7 @@ BACKEND_SERVICE_NAME="${BACKEND_SERVICE_NAME:-jato-fullstack-backend@8000}"
 BACKEND_PORT="${BACKEND_PORT:-}"
 BACKEND_ENV_FILE="${BACKEND_ENV_FILE:-/etc/jato-fullstack/backend.env}"
 RUN_DATABASE_MIGRATIONS="${RUN_DATABASE_MIGRATIONS:-auto}"
+PRODUCTION_RELEASE_WORKFLOW="${PRODUCTION_RELEASE_WORKFLOW:-false}"
 RUN_PRE_DEPLOY_BACKUP="${RUN_PRE_DEPLOY_BACKUP:-auto}"
 RUN_GROUPED_TIME_SERIES_PREWARM="${RUN_GROUPED_TIME_SERIES_PREWARM:-auto}"
 REMOTE_NAME="${REMOTE_NAME:-}"
@@ -18,14 +19,7 @@ DIAGNOSTIC_SCRIPT="$SCRIPT_DIR/print_fullstack_server_diagnostics.sh"
 BACKUP_SCRIPT="$SCRIPT_DIR/backup_production_data.sh"
 CURRENT_STEP="initialization"
 
-VITE_API_BASE="${VITE_API_BASE:-/v1}"
-VITE_ASSET_BASE_URL="${VITE_ASSET_BASE_URL:-}"
-VITE_AUTH_TOKEN="${VITE_AUTH_TOKEN:-}"
-VITE_USER_ROLE="${VITE_USER_ROLE:-viewer}"
-VITE_USER_NAME="${VITE_USER_NAME:-anonymous}"
-
 # ── China-friendly mirror defaults ──
-NPM_REGISTRY="${NPM_REGISTRY:-https://mirrors.cloud.tencent.com/npm/}"
 PIP_INDEX_URL="${PIP_INDEX_URL:-https://pypi.tuna.tsinghua.edu.cn/simple}"
 PIP_TRUSTED_HOST="${PIP_TRUSTED_HOST:-pypi.tuna.tsinghua.edu.cn}"
 LOCAL_NO_PROXY_HOSTS="localhost,127.0.0.1,::1"
@@ -57,6 +51,7 @@ REPO_DIR="$(resolve_repo_dir)"
 
 BACKEND_DIR="$REPO_DIR/06_AppPlatform/backend"
 FRONTEND_DIR="$REPO_DIR/06_AppPlatform/frontend"
+PREBUILT_FRONTEND_DIR="${PREBUILT_FRONTEND_DIR:-}"
 BACKEND_REQUIREMENTS="$BACKEND_DIR/requirements.txt"
 VENV_DIR="$REPO_DIR/.venv"
 TOOLKIT_DIR="$REPO_DIR/07_ScrapingToolkit"
@@ -227,8 +222,7 @@ require_command() {
 
 require_command git
 require_command curl
-require_command npm
-require_command node
+require_command python3
 
 echo "[INFO] Repository directory: $REPO_DIR"
 rm -f "$DEPLOY_FAILURE_FILE" 2>/dev/null || true
@@ -260,29 +254,34 @@ mark_release_deployed() {
     actual_commit="$(git -C "$REPO_DIR" rev-parse HEAD 2>/dev/null || true)"
   fi
 
-  node - "$DEPLOY_RELEASE_FILE" "$BACKEND_SERVICE_NAME" "$actual_commit" <<'JS' || true
-const fs = require("fs");
-const [path, serviceName, actualCommitFromGit] = process.argv.slice(2);
-const payload = JSON.parse(fs.readFileSync(path, "utf8"));
-const now = new Date().toISOString();
-const expectedCommit = payload.expectedCommitSha || payload.commitSha || payload.commit || "";
-const actualCommit = actualCommitFromGit || payload.actualCommitSha || payload.actualCommit || payload.commitSha || payload.commit || "";
+  python3 - "$DEPLOY_RELEASE_FILE" "$BACKEND_SERVICE_NAME" "$actual_commit" <<'PY' || true
+import datetime as dt
+import json
+import sys
+from pathlib import Path
 
-payload.service = payload.service || serviceName || "jato-fullstack-backend";
-payload.environment = payload.environment || "production";
-payload.deployMethod = payload.deployMethod || payload.source || "manual_script";
-payload.expectedCommitSha = expectedCommit;
-payload.expectedShortSha = payload.expectedShortSha || expectedCommit.slice(0, 8);
-payload.actualCommitSha = actualCommit;
-payload.actualShortSha = actualCommit.slice(0, 8);
-payload.commitSha = actualCommit || expectedCommit;
-payload.shortSha = payload.actualShortSha || payload.expectedShortSha;
-payload.deployedAt = now;
-payload.serviceRestartedAt = now;
-payload.healthz = "ok";
+path = Path(sys.argv[1])
+service_name = sys.argv[2]
+actual_commit_from_git = sys.argv[3]
+payload = json.loads(path.read_text(encoding="utf-8"))
+now = dt.datetime.now(dt.UTC).isoformat()
+expected_commit = payload.get("expectedCommitSha") or payload.get("commitSha") or payload.get("commit") or ""
+actual_commit = actual_commit_from_git or payload.get("actualCommitSha") or payload.get("actualCommit") or payload.get("commitSha") or payload.get("commit") or ""
 
-fs.writeFileSync(path, `${JSON.stringify(payload, null, 2)}\n`, "utf8");
-JS
+payload["service"] = payload.get("service") or service_name or "jato-fullstack-backend"
+payload["environment"] = payload.get("environment") or "production"
+payload["deployMethod"] = payload.get("deployMethod") or payload.get("source") or "manual_script"
+payload["expectedCommitSha"] = expected_commit
+payload["expectedShortSha"] = payload.get("expectedShortSha") or expected_commit[:8]
+payload["actualCommitSha"] = actual_commit
+payload["actualShortSha"] = actual_commit[:8]
+payload["commitSha"] = actual_commit or expected_commit
+payload["shortSha"] = payload["actualShortSha"] or payload["expectedShortSha"]
+payload["deployedAt"] = now
+payload["serviceRestartedAt"] = now
+payload["healthz"] = "ok"
+path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+PY
 }
 
 cleanup_known_untracked_paths() {
@@ -425,6 +424,37 @@ precompress_frontend_assets() {
   if [[ "$has_brotli" != "true" ]]; then
     echo "[INFO] brotli command not found; generated gzip assets only"
   fi
+}
+
+install_prebuilt_frontend() {
+  local target_dir="$FRONTEND_DIR/dist"
+  local backup_dir="$FRONTEND_DIR/.dist-previous"
+
+  if [[ -z "$PREBUILT_FRONTEND_DIR" || ! -d "$PREBUILT_FRONTEND_DIR" ]]; then
+    fail_deploy "Verified prebuilt frontend directory is missing" "$LINENO"
+  fi
+  for required_file in index.html build-meta.json release-provenance.json; do
+    if [[ ! -f "$PREBUILT_FRONTEND_DIR/$required_file" ]]; then
+      fail_deploy "Verified prebuilt frontend is missing $required_file" "$LINENO"
+    fi
+  done
+
+  precompress_frontend_assets "$PREBUILT_FRONTEND_DIR"
+  rm -rf "$backup_dir"
+  if [[ -e "$target_dir" ]]; then
+    mv "$target_dir" "$backup_dir"
+  fi
+  if mv "$PREBUILT_FRONTEND_DIR" "$target_dir"; then
+    rm -rf "$backup_dir"
+    echo "[INFO] Atomically installed verified prebuilt frontend dist"
+    return 0
+  fi
+
+  echo "[ERROR] Atomic frontend install failed; restoring previous dist"
+  if [[ -e "$backup_dir" && ! -e "$target_dir" ]]; then
+    mv "$backup_dir" "$target_dir"
+  fi
+  return 1
 }
 
 restart_timer_unit() {
@@ -689,26 +719,12 @@ if [[ ! -x "$VENV_DIR/bin/python" ]]; then
   fail_deploy "Python virtualenv not found: $VENV_DIR" "$LINENO"
 fi
 
-echo "[INFO] Validate Node.js version"
-CURRENT_STEP="Validate Node.js version"
+echo "[INFO] Validate immutable frontend staging directory"
+CURRENT_STEP="Validate immutable frontend staging directory"
 log_section "$CURRENT_STEP"
-node -v
-npm -v
-node - <<'EOF'
-const [major, minor, patch] = process.versions.node.split('.').map(Number);
-// Must match engines in 06_AppPlatform/frontend/package.json
-const ok = (
-  (major === 20 && minor >= 19) ||
-  (major === 22 && minor >= 12) ||
-  major > 22
-);
-if (!ok) {
-  console.error(`[ERROR] Node.js ${process.versions.node} detected.`);
-  console.error('[ERROR] Required: >=20.19.0 <21 or >=22.12.0 (see frontend package.json engines)');
-  process.exit(1);
-}
-console.log(`[INFO] Node.js ${process.versions.node} — matches frontend engines requirement`);
-EOF
+if [[ -z "$PREBUILT_FRONTEND_DIR" || ! -d "$PREBUILT_FRONTEND_DIR" ]]; then
+  fail_deploy "PREBUILT_FRONTEND_DIR must reference the verified release artifact" "$LINENO"
+fi
 
 echo "[INFO] Update repository"
 CURRENT_STEP="Update repository"
@@ -795,44 +811,19 @@ if [[ "$RUN_DATABASE_MIGRATIONS" == "auto" ]]; then
 fi
 
 if [[ "$RUN_DATABASE_MIGRATIONS" == "true" || "$RUN_DATABASE_MIGRATIONS" == "run" ]]; then
+  if [[ "$DEPLOY_BRANCH" != "main" || "$PRODUCTION_RELEASE_WORKFLOW" != "true" ]]; then
+    fail_deploy "Database migrations require the main production release workflow" "$LINENO"
+  fi
   run_privileged_bash 'set -Eeuo pipefail; set -a; . "$1"; set +a; export PYTHONPATH="$2"; . "$3/bin/activate"; cd "$2"; python -m alembic upgrade head' \
     "$BACKEND_ENV_FILE" "$BACKEND_DIR" "$VENV_DIR"
 else
   echo "[INFO] Database migrations skipped (database not configured)"
 fi
 
-echo "[INFO] Build frontend"
-CURRENT_STEP="Build frontend"
+echo "[INFO] Install verified prebuilt frontend atomically"
+CURRENT_STEP="Install verified prebuilt frontend atomically"
 log_section "$CURRENT_STEP"
-cd "$FRONTEND_DIR"
-npm config set registry "$NPM_REGISTRY"
-echo "[INFO] npm registry → $NPM_REGISTRY"
-npm ci
-export VITE_API_BASE
-export VITE_ASSET_BASE_URL
-export VITE_AUTH_TOKEN
-export VITE_USER_ROLE
-export VITE_USER_NAME
-if [[ -z "${DEPLOY_COMMIT_SHA:-}" && -f "$DEPLOY_RELEASE_FILE" ]]; then
-  DEPLOY_COMMIT_SHA="$(
-    node - "$DEPLOY_RELEASE_FILE" <<'JS' || true
-const fs = require("fs");
-const payload = JSON.parse(fs.readFileSync(process.argv[2], "utf8"));
-process.stdout.write(payload.commitSha || "");
-JS
-  )"
-fi
-export DEPLOY_COMMIT_SHA
-npm run build
-
-if [[ ! -f "$FRONTEND_DIR/dist/index.html" ]]; then
-  fail_deploy "Frontend build did not produce dist/index.html" "$LINENO"
-fi
-
-echo "[INFO] Precompress frontend static assets"
-CURRENT_STEP="Precompress frontend assets"
-log_section "$CURRENT_STEP"
-precompress_frontend_assets "$FRONTEND_DIR/dist"
+install_prebuilt_frontend
 
 echo "[INFO] Restart backend service"
 CURRENT_STEP="Restart backend service"
