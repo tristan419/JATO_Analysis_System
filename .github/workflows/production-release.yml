@@ -306,8 +306,9 @@ jobs:
           archive="$RUNNER_TEMP/JATO_deploy.tar.gz"
           remote_archive="JATO_deploy_${GITHUB_SHA}.tar.gz"
           remote_temp="${remote_archive}.uploading"
-          chunk_dir="$RUNNER_TEMP/JATO_deploy_chunks"
+          remote_checksum="${remote_temp}.sha256"
           archive_bytes="$(wc -c < "$archive" | tr -d '[:space:]')"
+          archive_sha256="$(sha256sum "$archive" | awk '{print $1}')"
 
           ssh_options=(
             -T -p "$SSH_PORT"
@@ -331,25 +332,100 @@ jobs:
             ssh_command=(sshpass -e ssh -o PreferredAuthentications=password -o PubkeyAuthentication=no)
           fi
 
-          if timeout 180s "${ssh_command[@]}" "${ssh_options[@]}" "$SSH_USER@$SSH_HOST" \
-            "rm -f '$remote_temp' '$remote_archive' && cat > '$remote_temp'" < "$archive" \
-            && timeout 120s "${ssh_command[@]}" "${ssh_options[@]}" "$SSH_USER@$SSH_HOST" \
-              "remote_size=\$(wc -c < '$remote_temp' | tr -d '[:space:]'); test \"\$remote_size\" = '$archive_bytes'; mv '$remote_temp' '$remote_archive'"; then
+          ssh_target="$SSH_USER@$SSH_HOST"
+          run_remote() {
+            local remote_command="$1"
+            local remote_attempt
+            for remote_attempt in 1 2 3; do
+              if timeout 120s "${ssh_command[@]}" "${ssh_options[@]}" \
+                "$ssh_target" "$remote_command"; then
+                return 0
+              fi
+              echo "::warning::Remote command attempt ${remote_attempt}/3 failed" >&2
+              sleep $((remote_attempt * 5))
+            done
+            return 1
+          }
+
+          remote_archive_sha="$(
+            run_remote \
+              "if [ -f '$remote_archive' ]; then sha256sum '$remote_archive' | awk '{print \$1}'; fi"
+          )"
+          if [ "$remote_archive_sha" = "$archive_sha256" ]; then
             echo "remote-archive=$remote_archive" >> "$GITHUB_OUTPUT"
             exit 0
           fi
 
-          timeout 120s "${ssh_command[@]}" "${ssh_options[@]}" "$SSH_USER@$SSH_HOST" \
-            "rm -f '$remote_temp' '$remote_archive'; : > '$remote_temp'"
-          rm -rf "$chunk_dir"
-          mkdir -p "$chunk_dir"
-          split -b 8M "$archive" "$chunk_dir/chunk_"
-          for chunk_path in "$chunk_dir"/chunk_*; do
-            timeout 120s "${ssh_command[@]}" "${ssh_options[@]}" "$SSH_USER@$SSH_HOST" \
-              "cat >> '$remote_temp'" < "$chunk_path"
+          run_remote \
+            "saved_checksum=''; \
+             if [ -f '$remote_checksum' ]; then saved_checksum=\$(cat '$remote_checksum'); fi; \
+             if [ \"\$saved_checksum\" != '$archive_sha256' ]; then \
+               rm -f '$remote_temp' '$remote_archive' '$remote_checksum'; \
+               : > '$remote_temp'; \
+               printf '%s\n' '$archive_sha256' > '$remote_checksum'; \
+             elif [ ! -f '$remote_temp' ]; then \
+               : > '$remote_temp'; \
+             fi"
+
+          stalled_attempts=0
+          for upload_attempt in $(seq 1 120); do
+            remote_size="$(
+              run_remote \
+                "if [ -f '$remote_temp' ]; then wc -c < '$remote_temp' | tr -d '[:space:]'; else printf '0'; fi"
+            )"
+            case "$remote_size" in
+              ''|*[!0-9]*)
+                echo "::error::Invalid remote archive size: $remote_size"
+                exit 1
+                ;;
+            esac
+            if [ "$remote_size" -eq "$archive_bytes" ]; then
+              break
+            fi
+            if [ "$remote_size" -gt "$archive_bytes" ]; then
+              echo "::error::Remote partial archive is larger than the local release"
+              exit 1
+            fi
+
+            echo "Resumable upload attempt ${upload_attempt}/120: ${remote_size}/${archive_bytes} bytes"
+            if tail -c "+$((remote_size + 1))" "$archive" \
+              | timeout 180s "${ssh_command[@]}" "${ssh_options[@]}" \
+                "$ssh_target" "cat >> '$remote_temp'"; then
+              upload_status=0
+            else
+              upload_status=$?
+              echo "::warning::Upload stream ended with status $upload_status; checking remote progress"
+            fi
+
+            next_remote_size="$(
+              run_remote \
+                "if [ -f '$remote_temp' ]; then wc -c < '$remote_temp' | tr -d '[:space:]'; else printf '0'; fi"
+            )"
+            case "$next_remote_size" in
+              ''|*[!0-9]*)
+                echo "::error::Invalid remote archive size after upload: $next_remote_size"
+                exit 1
+                ;;
+            esac
+            if [ "$next_remote_size" -gt "$remote_size" ]; then
+              stalled_attempts=0
+            else
+              stalled_attempts=$((stalled_attempts + 1))
+              if [ "$stalled_attempts" -ge 5 ]; then
+                echo "::error::Release upload made no progress in five consecutive attempts"
+                exit 1
+              fi
+              sleep $((stalled_attempts * 10))
+            fi
           done
-          timeout 120s "${ssh_command[@]}" "${ssh_options[@]}" "$SSH_USER@$SSH_HOST" \
-            "remote_size=\$(wc -c < '$remote_temp' | tr -d '[:space:]'); test \"\$remote_size\" = '$archive_bytes'; mv '$remote_temp' '$remote_archive'"
+
+          run_remote \
+            "remote_size=\$(wc -c < '$remote_temp' | tr -d '[:space:]'); \
+             test \"\$remote_size\" = '$archive_bytes'; \
+             remote_sha256=\$(sha256sum '$remote_temp' | awk '{print \$1}'); \
+             test \"\$remote_sha256\" = '$archive_sha256'; \
+             mv '$remote_temp' '$remote_archive'; \
+             rm -f '$remote_checksum'"
           echo "remote-archive=$remote_archive" >> "$GITHUB_OUTPUT"
 
       - name: Deploy verified release on Tencent

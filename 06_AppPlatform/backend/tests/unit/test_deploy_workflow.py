@@ -44,14 +44,21 @@ def test_intl_edge_prewarm_verifies_completed_release_provenance_first() -> None
     assert "JATO_PREWARM_FAIL_ON_ERROR" in workflow
 
 
-def test_tencent_release_upload_retries_in_chunks_but_never_falls_back() -> None:
+def test_tencent_release_upload_resumes_and_never_falls_back() -> None:
     workflow = (REPO_ROOT / ".github/workflows/production-release.yml").read_text(
         encoding="utf-8",
     )
 
-    assert "split -b 8M" in workflow
     assert "Upload complete release archive without fallback" in workflow
     assert "fallback to sparse" not in workflow
+    assert 'remote_checksum="${remote_temp}.sha256"' in workflow
+    assert 'tail -c "+$((remote_size + 1))" "$archive"' in workflow
+    assert "Resumable upload attempt" in workflow
+    assert "split -b 8M" not in workflow
+    assert "sha256sum '$remote_temp'" in workflow
+    assert workflow.index("sha256sum '$remote_temp'") < workflow.rindex(
+        'echo "remote-archive=$remote_archive"',
+    )
 
 
 def test_tencent_uploads_verified_archive_before_deploy_step() -> None:
