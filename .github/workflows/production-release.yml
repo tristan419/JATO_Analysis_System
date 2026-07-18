@@ -286,8 +286,8 @@ jobs:
               -C "$mihomo_payload_root" hermes/runtime/mihomo/config.yaml
           fi
           gzip -f "$RUNNER_TEMP/JATO_deploy.tar"
-          tar tzf "$RUNNER_TEMP/JATO_deploy.tar.gz" hermes/frontend_release/frontend-release.json
-          tar tzf "$RUNNER_TEMP/JATO_deploy.tar.gz" hermes/frontend_release/frontend-dist.tar.gz
+          tar tzf "$RUNNER_TEMP/JATO_deploy.tar.gz" ./hermes/frontend_release/frontend-release.json
+          tar tzf "$RUNNER_TEMP/JATO_deploy.tar.gz" ./hermes/frontend_release/frontend-dist.tar.gz
           tar tzf "$RUNNER_TEMP/JATO_deploy.tar.gz" "$required_workbook"
           tar tzf "$RUNNER_TEMP/JATO_deploy.tar.gz" "$msrp_candidates" "$msrp_evidence"
 
