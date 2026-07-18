@@ -67,6 +67,21 @@ def test_tencent_uploads_verified_archive_before_deploy_step() -> None:
     assert "frontend-dist.tar.gz" in workflow
 
 
+def test_tencent_archive_checks_initial_tar_members_with_dot_prefix() -> None:
+    workflow = (REPO_ROOT / ".github/workflows/production-release.yml").read_text(
+        encoding="utf-8",
+    )
+
+    assert (
+        'tar tzf "$RUNNER_TEMP/JATO_deploy.tar.gz" '
+        "./hermes/frontend_release/frontend-release.json"
+    ) in workflow
+    assert (
+        'tar tzf "$RUNNER_TEMP/JATO_deploy.tar.gz" '
+        "./hermes/frontend_release/frontend-dist.tar.gz"
+    ) in workflow
+
+
 def test_archive_deploy_reports_expected_commit_when_git_sync_is_skipped() -> None:
     script = (
         REPO_ROOT / "03_Scripts/ops/deploy_fullstack_server.sh"
