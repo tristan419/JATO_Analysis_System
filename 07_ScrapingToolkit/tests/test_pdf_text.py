@@ -124,6 +124,156 @@ def test_pdf_text_profile_accepts_browser_download_fallback() -> None:
     assert profile.curl_download_fallback is False
 
 
+def test_pdf_text_browser_fallback_reads_inline_pdf_response(monkeypatch) -> None:
+    state = SimpleNamespace(context_closed=False, browser_closed=False)
+    pdf_blob = b"%PDF-1.7\ninline response"
+
+    class FakeResponse:
+        def body(self):
+            return pdf_blob
+
+    class FakePage:
+        def set_default_timeout(self, timeout):
+            assert timeout == 30_000
+
+        def on(self, event, callback):
+            assert event == "download"
+            assert callable(callback)
+
+        def goto(self, url, *, wait_until, timeout):
+            assert url == "https://example.invalid/inline.pdf"
+            assert wait_until == "commit"
+            assert timeout == 30_000
+            return FakeResponse()
+
+    class FakeContext:
+        def new_page(self):
+            return FakePage()
+
+        def close(self):
+            state.context_closed = True
+
+    class FakeBrowser:
+        def new_context(self, **kwargs):
+            assert kwargs["accept_downloads"] is True
+            return FakeContext()
+
+        def close(self):
+            state.browser_closed = True
+
+    class FakeChromium:
+        def launch(self, *, headless):
+            assert headless is True
+            return FakeBrowser()
+
+    class FakePlaywrightManager:
+        def __enter__(self):
+            return SimpleNamespace(chromium=FakeChromium())
+
+        def __exit__(self, *_args):
+            return None
+
+    monkeypatch.setattr(
+        pdf_text_module,
+        "sync_playwright",
+        FakePlaywrightManager,
+    )
+    extractor = PdfTextExtractor(
+        ExtractorConfig(
+            source_code="inline_pdf",
+            country="波兰",
+            brand="SEAT",
+            source_url="https://example.invalid/inline.pdf",
+        ),
+        PdfTextProfile(
+            url="https://example.invalid/inline.pdf",
+            browser_download_fallback=True,
+        ),
+    )
+
+    assert extractor._fetch_pdf_bytes_with_browser(30) == pdf_blob
+    assert state.context_closed is True
+    assert state.browser_closed is True
+
+
+def test_pdf_text_browser_fallback_reads_attachment_download(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    state = SimpleNamespace(
+        browser_closed=False,
+        context_closed=False,
+        download_callback=None,
+    )
+    pdf_path = tmp_path / "price-list.pdf"
+    pdf_path.write_bytes(b"%PDF-1.7\nattachment")
+
+    class FakeDownload:
+        def path(self):
+            return str(pdf_path)
+
+    class FakePage:
+        def set_default_timeout(self, _timeout):
+            return None
+
+        def on(self, event, callback):
+            assert event == "download"
+            state.download_callback = callback
+
+        def goto(self, *_args, **_kwargs):
+            raise RuntimeError("Download is starting")
+
+        def wait_for_timeout(self, timeout):
+            assert timeout == 100
+            state.download_callback(FakeDownload())
+
+    class FakeContext:
+        def new_page(self):
+            return FakePage()
+
+        def close(self):
+            state.context_closed = True
+
+    class FakeBrowser:
+        def new_context(self, **_kwargs):
+            return FakeContext()
+
+        def close(self):
+            state.browser_closed = True
+
+    class FakeChromium:
+        def launch(self, **_kwargs):
+            return FakeBrowser()
+
+    class FakePlaywrightManager:
+        def __enter__(self):
+            return SimpleNamespace(chromium=FakeChromium())
+
+        def __exit__(self, *_args):
+            return None
+
+    monkeypatch.setattr(pdf_text_module, "sync_playwright", FakePlaywrightManager)
+    monkeypatch.setattr(pdf_text_module, "PlaywrightError", RuntimeError)
+    extractor = PdfTextExtractor(
+        ExtractorConfig(
+            source_code="attachment_pdf",
+            country="波兰",
+            brand="SEAT",
+            source_url="https://example.invalid/attachment.pdf",
+        ),
+        PdfTextProfile(
+            url="https://example.invalid/attachment.pdf",
+            browser_download_fallback=True,
+        ),
+    )
+
+    assert extractor._fetch_pdf_bytes_with_browser(30) == (
+        b"%PDF-1.7\nattachment"
+    )
+    assert state.context_closed is True
+    assert state.browser_closed is True
+
+
 def test_pdf_text_profile_accepts_preferred_curl_download() -> None:
     profile = _build_pdf_text_profile(
         {

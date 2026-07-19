@@ -305,21 +305,25 @@ class PdfTextExtractor(BaseExtractor):
 
         fetch_url = str(url or self.profile.url)
         timeout_ms = max(1, int(timeout)) * 1000
-        browser = None
         try:
             with sync_playwright() as playwright:
                 browser = playwright.chromium.launch(headless=True)
-                context = browser.new_context(
-                    accept_downloads=True,
-                    user_agent=self._browser_user_agent(),
-                    extra_http_headers=self._browser_extra_headers(),
-                )
-                page = context.new_page()
-                page.set_default_timeout(timeout_ms)
                 try:
-                    with page.expect_download(timeout=timeout_ms) as download_info:
+                    context = browser.new_context(
+                        accept_downloads=True,
+                        user_agent=self._browser_user_agent(),
+                        extra_http_headers=self._browser_extra_headers(),
+                    )
+                    try:
+                        page = context.new_page()
+                        page.set_default_timeout(timeout_ms)
+                        downloads = []
+                        page.on(
+                            "download",
+                            lambda download: downloads.append(download),
+                        )
                         try:
-                            page.goto(
+                            response = page.goto(
                                 fetch_url,
                                 wait_until="commit",
                                 timeout=timeout_ms,
@@ -327,13 +331,20 @@ class PdfTextExtractor(BaseExtractor):
                         except PlaywrightError as exc:
                             if "Download is starting" not in str(exc):
                                 raise
-                    download = download_info.value
-                    path = download.path()
-                    blob = Path(path).read_bytes()
+                            response = None
+                            if not downloads:
+                                page.wait_for_timeout(100)
+                        if downloads:
+                            path = downloads[0].path()
+                            blob = Path(path).read_bytes()
+                        elif response is not None:
+                            blob = response.body()
+                        else:
+                            blob = b""
+                    finally:
+                        context.close()
                 finally:
-                    context.close()
-                browser.close()
-                browser = None
+                    browser.close()
         except (OSError, PlaywrightError, PlaywrightTimeoutError) as exc:
             log.error(
                 "PDF browser fallback failed for %s at %s: %s",
@@ -342,9 +353,6 @@ class PdfTextExtractor(BaseExtractor):
                 exc,
             )
             return None
-        finally:
-            if browser is not None:
-                browser.close()
 
         if not blob.startswith(b"%PDF"):
             log.error(
