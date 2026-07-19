@@ -24,6 +24,12 @@ from app.api.routes.review_cases import router as review_cases_router
 from app.api.routes.msrp_dryrun_dashboard import router as msrp_dryrun_dashboard_router
 from app.api.routes.coc_match import router as coc_match_router
 from app.api.routes.advanced_analysis import router as advanced_analysis_router
+from app.api.routes.astrbot_tools import agent_router as astrbot_agent_router
+from app.api.routes.astrbot_tools import channel_router as astrbot_channel_router
+from app.api.routes.astrbot_tools import eval_router as astrbot_eval_router
+from app.api.routes.astrbot_tools import memory_router as astrbot_memory_router
+from app.api.routes.astrbot_tools import router as astrbot_tools_router
+from app.api.routes.astrbot_tools import usage_router as astrbot_usage_router
 from app.api.routes.order_genius import router as order_genius_router
 from app.api.routes.lease_comparison import router as lease_comparison_router
 from app.api.routes.order_genius_vehicle_allocation import router as order_genius_vehicle_allocation_router
@@ -77,3 +83,9 @@ app.include_router(order_genius_router, prefix=API_PREFIX)
 app.include_router(order_genius_vehicle_allocation_router, prefix=API_PREFIX)
 app.include_router(lease_comparison_router, prefix=API_PREFIX)
 app.include_router(advanced_analysis_router, prefix=API_PREFIX)
+app.include_router(astrbot_tools_router, prefix=API_PREFIX)
+app.include_router(astrbot_memory_router, prefix=API_PREFIX)
+app.include_router(astrbot_agent_router, prefix=API_PREFIX)
+app.include_router(astrbot_usage_router, prefix=API_PREFIX)
+app.include_router(astrbot_channel_router, prefix=API_PREFIX)
+app.include_router(astrbot_eval_router, prefix=API_PREFIX)
