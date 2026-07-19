@@ -12552,7 +12552,7 @@ def _market_monthly_series_evidence(evidence_package: dict[str, Any]) -> str:
         )
         return (
             f"{scope} 月度注册量从 {first_period} {_format_evidence_ref_value(first_ref)}"
-            f"到 {last_period} {_format_evidence_ref_value(last_ref)}，整体{direction}；"
+            f" 到 {last_period} {_format_evidence_ref_value(last_ref)}，整体{direction}；"
             f"最近三个月为 {recent}"
         )
     return ""

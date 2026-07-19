@@ -27,10 +27,12 @@ describe("astrbot api", () => {
 
   afterEach(() => {
     vi.restoreAllMocks();
+    vi.unstubAllEnvs();
     vi.unstubAllGlobals();
   });
 
   it("routes local AstrBot dev pages to their matching AstrBot backend port", () => {
+    vi.stubEnv("VITE_API_BASE", "");
     vi.stubGlobal("window", {
       location: {
         hostname: "127.0.0.1",

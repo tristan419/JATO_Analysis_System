@@ -235,6 +235,10 @@ def resolve_country_chat_model_id(requested_model: str | None) -> str:
         provider_prefix in {"deepseek", "gemini", "nvidia"}
         and provider_prefix not in available_providers
     ):
+        requested_model_name = requested.split(":", 1)[1].strip()
+        if not _is_known_provider_model(provider_prefix, requested_model_name):
+            allowed = ", ".join(option.id for option in options)
+            raise ValueError(f"不支持的聊天模型: {requested}（可选: {allowed}）")
         log.info(
             "Requested country chat provider %s is unavailable; falling back to default",
             provider_prefix,
@@ -245,6 +249,26 @@ def resolve_country_chat_model_id(requested_model: str | None) -> str:
         option.id for option in options
     )
     raise ValueError(f"不支持的聊天模型: {requested}（可选: {allowed}）")
+
+
+def _is_known_provider_model(provider: str, model: str) -> bool:
+    normalized_provider = str(provider or "").strip().lower()
+    normalized_model = str(model or "").strip()
+    if not normalized_provider or not normalized_model:
+        return False
+
+    configured_models = {
+        configured_model
+        for configured_provider, configured_model in _configured_provider_model_specs()
+        if configured_provider == normalized_provider
+        and configured_model != DISCOVERY_ALL_MODELS
+    }
+    if normalized_model in configured_models:
+        return True
+
+    known_models = set(_static_provider_model_names(normalized_provider))
+    known_models.add(_preferred_model_name_for_provider(normalized_provider))
+    return normalized_model in known_models
 
 
 def build_country_chat_execution_chain(
