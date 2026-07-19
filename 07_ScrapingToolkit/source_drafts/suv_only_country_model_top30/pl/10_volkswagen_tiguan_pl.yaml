@@ -1,56 +1,41 @@
 source_code: volkswagen_tiguan_pl_draft_scrapling
 country: 波兰
 brand: VOLKSWAGEN
-source_url: https://www.volkswagen.pl/pl/modele/tiguan.html
-source_type: manufacturer_official
+source_url: https://cenniki.volkswagen.pl/tiguan.html
+source_type: official_price_list
 price_semantics: base_msrp
-extractor_type: playwright
-profile_preset: ../_shared/presets/volkswagen_configurator_trim_overview_playwright.yaml
+extractor_type: http_json
+profile_preset: ../_shared/presets/volkswagen_pl_pricelist_http_json.yaml
 profile:
-  url: https://www.volkswagen.pl/pl/modele/tiguan.html
+  url: https://cenniki.volkswagen.pl/pricelists/244ea7b0-1e49-41ec-84b4-eb60d5fcc8be/pricelist.json
+  field_mapping:
+    price: oldPrice
   default_currency: PLN
   default_tax_included: true
+  default_price_label: Cena katalogowa brutto
   fixed_model: TIGUAN
   fixed_jato_model: TIGUAN
-  structured_fields:
-    powertrain_rules:
-    - key: powertrain_phev
-      powertrain: PHEV
-      keywords:
-      - phev
-      - plug-in hybrid
-      - plug in hybrid
-      - plugin hybrid
-      - hybryda plug-in
-    - key: powertrain_mhev
-      powertrain: MHEV
-      keywords:
-      - mhev
-      - mild hybrid
-      - mild-hybrid
-      - 48V
-      - miekka hybryda
-    - key: powertrain_ice
-      powertrain: ICE
-      keywords:
-      - ice
-      - petrol
-      - gasoline
-      - diesel
-      - combustion
-      - benzyna
-  default_price_label: MSRP
+  copy_trim_to_jato_trim: true
+  match_confidence: 0.9
+  match_status: review_required
+  match_reason:
+    kind: official_price_list_json
+    source: volkswagen_pl_cenniki
+    document_scope: MY2026/PY2026
+    document_valid_from: '2026-07-08'
+    document_audited_on: '2026-07-20'
+    price_field: oldPrice
+    note: The current official price-list payload exposes campaign price in `price`
+      and regular catalog gross price in `oldPrice`; this source selects only
+      `oldPrice` and excludes finance fields.
 schedule:
   frequency: manual_only
   run_window_start: 00:00
   run_window_end: 05:00
   preferred_weekday: monday
-notes: The raw HTML exposes a stable `car-technical-data-section-v2` block where the
-  first list item is `Cena specjalna` and the finance metrics follow in a separate
-  technical-data list. This draft intentionally extracts the total campaign price
-  and excludes monthly-payment copy, but still needs a semantic review before promotion
-  because the page label is promotional rather than explicit catalog MSRP. [Switched
-  to playwright_card_flow with volkswagen_configurator_trim_overview_playwright.yaml]
+notes: Replaced the retired Playwright trimcard flow with Volkswagen Poland's
+  current official cenniki JSON payload. Extracts all regular gross catalog prices
+  from `oldPrice`; campaign, 30-day comparison, and finance values are excluded.
 bootstrap_meta:
   country_model_rank: 10
   suggested_scope_kind: single_model
