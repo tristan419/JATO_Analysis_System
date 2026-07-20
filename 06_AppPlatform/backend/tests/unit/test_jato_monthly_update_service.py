@@ -2168,12 +2168,12 @@ def test_historical_sales_stability_detects_same_make_model_reclassification() -
     ]
 
 
-CONFIRMED_T5_UPLOAD_SHA256 = (
+LATEST_WASHED_UPLOAD_SHA256 = (
     "c12e4e1a58e7d292eb6aef6bdd9c34d0632449536d5351880c35142fa38b0453"
 )
 
 
-def _confirmed_t5_reclassification_frames() -> tuple[pd.DataFrame, pd.DataFrame]:
+def _confirmed_sc011_compared_months() -> list[str]:
     month_names = (
         "Jan",
         "Feb",
@@ -2193,6 +2193,11 @@ def _confirmed_t5_reclassification_frames() -> tuple[pd.DataFrame, pd.DataFrame]
         for year in (2023, 2024, 2025)
         for month in month_names
     ] + ["2026 Jan", "2026 Feb", "2026 Mar"]
+    return compared_months
+
+
+def _confirmed_t5_reclassification_frames() -> tuple[pd.DataFrame, pd.DataFrame]:
+    compared_months = _confirmed_sc011_compared_months()
     expected_transfer = {
         "2025 Apr": 3,
         "2025 May": 3,
@@ -2246,6 +2251,56 @@ def _confirmed_t5_reclassification_frames() -> tuple[pd.DataFrame, pd.DataFrame]
     return active, candidate
 
 
+def _confirmed_country_reclassification_frames(
+    country: str,
+) -> tuple[pd.DataFrame, pd.DataFrame, list[dict[str, object]]]:
+    compared_months = _confirmed_sc011_compared_months()
+    rules = [
+        rule
+        for rule in jato_monthly_update_service.CONFIRMED_SC011_RECLASSIFICATIONS
+        if rule["country"] == country
+    ]
+    active_rows: list[dict[str, object]] = []
+    candidate_rows: list[dict[str, object]] = []
+    for rule in rules:
+        source = rule["source"]
+        target = rule["target"]
+        expected_transfer = rule["expectedMonthlyTransfer"]
+        assert isinstance(source, dict)
+        assert isinstance(target, dict)
+        assert isinstance(expected_transfer, dict)
+        transfer = {
+            month: int(expected_transfer.get(month, 0))
+            for month in compared_months
+        }
+        zero_sales = {month: 0 for month in compared_months}
+        active_rows.extend([
+            {
+                "国家": country,
+                **source,
+                **transfer,
+            },
+            {
+                "国家": country,
+                **target,
+                **zero_sales,
+            },
+        ])
+        candidate_rows.extend([
+            {
+                "国家": country,
+                **source,
+                **zero_sales,
+            },
+            {
+                "国家": country,
+                **target,
+                **transfer,
+            },
+        ])
+    return pd.DataFrame(active_rows), pd.DataFrame(candidate_rows), rules
+
+
 def test_historical_sales_stability_applies_exact_confirmed_t5_mapping() -> None:
     active, candidate = _confirmed_t5_reclassification_frames()
 
@@ -2255,7 +2310,7 @@ def test_historical_sales_stability_applies_exact_confirmed_t5_mapping() -> None
             active_frame=active,
             candidate_frame=candidate,
             active_latest_month="2026 Mar",
-            source_upload_sha256=CONFIRMED_T5_UPLOAD_SHA256,
+            source_upload_sha256=LATEST_WASHED_UPLOAD_SHA256,
         )
     )
     feedback = jato_monthly_update_service._single_country_source_feedback(
@@ -2303,12 +2358,65 @@ def test_historical_sales_stability_applies_exact_confirmed_t5_mapping() -> None
             "comparedMonthsSha256": (
                 "d9cfcaa2bfd045a14c9ad0663be706bc9234bea64385cf46db11b0fb996e69f7"
             ),
-            "sourceUploadSha256": CONFIRMED_T5_UPLOAD_SHA256,
+            "sourceUploadSha256": LATEST_WASHED_UPLOAD_SHA256,
         }
     ]
     assert feedback is not None
     assert "车型重分类已完成业务确认" in feedback
     assert "FORTHING/T5→DFSK/T5 EVO（51 台）" in feedback
+
+
+@pytest.mark.parametrize(
+    ("country", "expected_confirmation_count"),
+    [("捷克", 13), ("丹麦", 4)],
+)
+def test_historical_sales_stability_applies_all_latest_washed_mappings(
+    country: str,
+    expected_confirmation_count: int,
+) -> None:
+    active, candidate, rules = _confirmed_country_reclassification_frames(country)
+    source_keys = {
+        (rule["source"]["Make"], rule["source"]["Model"])
+        for rule in rules
+    }
+    target_keys = {
+        (rule["target"]["Make"], rule["target"]["Model"])
+        for rule in rules
+    }
+    confirmation_ids = [rule["confirmationId"] for rule in rules]
+
+    stability = (
+        jato_monthly_update_service._single_country_historical_sales_stability(
+            country=country,
+            active_frame=active,
+            candidate_frame=candidate,
+            active_latest_month="2026 Mar",
+            source_upload_sha256=LATEST_WASHED_UPLOAD_SHA256,
+        )
+    )
+
+    assert len(rules) == expected_confirmation_count
+    assert len(source_keys) == expected_confirmation_count
+    assert len(target_keys) == expected_confirmation_count
+    assert len(set(confirmation_ids)) == expected_confirmation_count
+    assert source_keys.isdisjoint(target_keys)
+    assert stability["status"] == "confirmed"
+    assert stability["reason"] == "confirmed_make_model_reclassification"
+    assert stability["unconfirmedMakeModelMismatchCount"] == 0
+    assert stability["unconfirmedReclassificationCandidates"] == []
+    assert stability["unpairedMakeModels"] == []
+    assert [
+        item["confirmationId"] for item in stability["confirmedReclassifications"]
+    ] == confirmation_ids
+    assert all(
+        item["sourceUploadSha256"] == LATEST_WASHED_UPLOAD_SHA256
+        and item["comparedThrough"] == "2026 Mar"
+        and item["comparedMonthsSha256"]
+        == (
+            "d9cfcaa2bfd045a14c9ad0663be706bc9234bea64385cf46db11b0fb996e69f7"
+        )
+        for item in stability["confirmedReclassifications"]
+    )
 
 
 def test_historical_sales_stability_requires_full_confirmed_history_window() -> None:
@@ -2322,7 +2430,7 @@ def test_historical_sales_stability_requires_full_confirmed_history_window() -> 
             active_frame=active,
             candidate_frame=candidate,
             active_latest_month="2026 Mar",
-            source_upload_sha256=CONFIRMED_T5_UPLOAD_SHA256,
+            source_upload_sha256=LATEST_WASHED_UPLOAD_SHA256,
         )
     )
 
@@ -2345,7 +2453,7 @@ def test_historical_sales_stability_requires_exact_confirmed_month_sequence() ->
             active_frame=active,
             candidate_frame=candidate,
             active_latest_month="2026 Mar",
-            source_upload_sha256=CONFIRMED_T5_UPLOAD_SHA256,
+            source_upload_sha256=LATEST_WASHED_UPLOAD_SHA256,
         )
     )
 
@@ -2372,7 +2480,7 @@ def test_historical_sales_stability_binds_confirmation_to_upload_sha() -> None:
     assert stability["confirmedReclassifications"] == []
 
 
-def test_historical_sales_stability_keeps_other_model_remaps_blocking() -> None:
+def test_historical_sales_stability_keeps_unlisted_model_remaps_blocking() -> None:
     active, candidate = _confirmed_t5_reclassification_frames()
     active = pd.concat([
         active,
@@ -2380,13 +2488,13 @@ def test_historical_sales_stability_keeps_other_model_remaps_blocking() -> None:
             {
                 "国家": "捷克",
                 "Make": "AUDI",
-                "Model": "Q6 SPORTBACK E-TRON",
+                "Model": "Q4 E-TRON",
                 **{column: int(column == "2025 Nov") for column in active.columns if column[:4].isdigit()},
             },
             {
                 "国家": "捷克",
                 "Make": "AUDI",
-                "Model": "Q6 E-TRON",
+                "Model": "Q5 E-TRON",
                 **{column: 0 for column in active.columns if column[:4].isdigit()},
             },
         ]),
@@ -2397,13 +2505,13 @@ def test_historical_sales_stability_keeps_other_model_remaps_blocking() -> None:
             {
                 "国家": "捷克",
                 "Make": "AUDI",
-                "Model": "Q6 SPORTBACK E-TRON",
+                "Model": "Q4 E-TRON",
                 **{column: 0 for column in candidate.columns if column[:4].isdigit()},
             },
             {
                 "国家": "捷克",
                 "Make": "AUDI",
-                "Model": "Q6 E-TRON",
+                "Model": "Q5 E-TRON",
                 **{column: int(column == "2025 Nov") for column in candidate.columns if column[:4].isdigit()},
             },
         ]),
@@ -2415,7 +2523,7 @@ def test_historical_sales_stability_keeps_other_model_remaps_blocking() -> None:
             active_frame=active,
             candidate_frame=candidate,
             active_latest_month="2026 Mar",
-            source_upload_sha256=CONFIRMED_T5_UPLOAD_SHA256,
+            source_upload_sha256=LATEST_WASHED_UPLOAD_SHA256,
         )
     )
     feedback = jato_monthly_update_service._single_country_source_feedback(
@@ -2430,8 +2538,8 @@ def test_historical_sales_stability_keeps_other_model_remaps_blocking() -> None:
     assert stability["unconfirmedMakeModelMismatchCount"] == 2
     assert stability["unconfirmedReclassificationCandidates"] == [
         {
-            "source": {"Make": "AUDI", "Model": "Q6 SPORTBACK E-TRON"},
-            "target": {"Make": "AUDI", "Model": "Q6 E-TRON"},
+            "source": {"Make": "AUDI", "Model": "Q4 E-TRON"},
+            "target": {"Make": "AUDI", "Model": "Q5 E-TRON"},
             "transferredSales": 1,
             "transferredMonths": ["2025 Nov"],
             "monthlyTransfers": [{"month": "2025 Nov", "sales": 1}],
@@ -2439,7 +2547,7 @@ def test_historical_sales_stability_keeps_other_model_remaps_blocking() -> None:
     ]
     assert feedback is not None
     assert "已确认：FORTHING/T5→DFSK/T5 EVO（51 台）" in feedback
-    assert "待确认映射：AUDI/Q6 SPORTBACK E-TRON→AUDI/Q6 E-TRON（1 台）" in feedback
+    assert "待确认映射：AUDI/Q4 E-TRON→AUDI/Q5 E-TRON（1 台）" in feedback
 
 
 def test_historical_sales_stability_does_not_fuzzy_match_t5_names() -> None:
@@ -2452,7 +2560,7 @@ def test_historical_sales_stability_does_not_fuzzy_match_t5_names() -> None:
             active_frame=active,
             candidate_frame=candidate,
             active_latest_month="2026 Mar",
-            source_upload_sha256=CONFIRMED_T5_UPLOAD_SHA256,
+            source_upload_sha256=LATEST_WASHED_UPLOAD_SHA256,
         )
     )
 

@@ -77,35 +77,198 @@ DEPRECATED_OPTIONAL_STATIC_COLUMNS = frozenset(
         "curb weight (kg)",
     }
 )
-CONFIRMED_SC011_RECLASSIFICATIONS = (
+SC011_LATEST_WASHED_CONFIRMATION_SCOPE = {
+    "comparedThrough": "2026 Mar",
+    "expectedComparedMonthCount": 39,
+    "expectedComparedMonthsSha256": (
+        "d9cfcaa2bfd045a14c9ad0663be706bc9234bea64385cf46db11b0fb996e69f7"
+    ),
+    "sourceUploadSha256": (
+        "c12e4e1a58e7d292eb6aef6bdd9c34d0632449536d5351880c35142fa38b0453"
+    ),
+    "approvedBy": "JATO business owner",
+    "approvalReference": "user-confirmed-use-latest-washed-data-2026-07-20",
+}
+CONFIRMED_SC011_RECLASSIFICATIONS = tuple(
     {
-        "confirmationId": "CZ-FORTHING-T5-TO-DFSK-T5-EVO-20260720",
-        "country": "捷克",
-        "comparedThrough": "2026 Mar",
-        "expectedComparedMonthCount": 39,
-        "expectedComparedMonthsSha256": (
-            "d9cfcaa2bfd045a14c9ad0663be706bc9234bea64385cf46db11b0fb996e69f7"
-        ),
-        "sourceUploadSha256": (
-            "c12e4e1a58e7d292eb6aef6bdd9c34d0632449536d5351880c35142fa38b0453"
-        ),
-        "source": {"Make": "FORTHING", "Model": "T5"},
-        "target": {"Make": "DFSK", "Model": "T5 EVO"},
-        "expectedMonthlyTransfer": {
-            "2025 Apr": 3,
-            "2025 May": 3,
-            "2025 Jun": 8,
-            "2025 Jul": 4,
-            "2025 Aug": 4,
-            "2025 Sep": 6,
-            "2025 Nov": 3,
-            "2025 Dec": 19,
-            "2026 Jan": 1,
+        **SC011_LATEST_WASHED_CONFIRMATION_SCOPE,
+        **mapping,
+    }
+    for mapping in (
+        {
+            "confirmationId": "CZ-AUDI-Q6-SB-TO-Q6-20260720",
+            "country": "捷克",
+            "source": {"Make": "AUDI", "Model": "Q6 SPORTBACK E-TRON"},
+            "target": {"Make": "AUDI", "Model": "Q6 E-TRON"},
+            "expectedMonthlyTransfer": {"2025 Nov": 1},
+            "expectedTotal": 1,
         },
-        "expectedTotal": 51,
-        "approvedBy": "JATO business owner",
-        "approvalReference": "user-confirmed-2026-07-20",
-    },
+        {
+            "confirmationId": "CZ-BAIC-X5-TO-X7-20260720",
+            "country": "捷克",
+            "source": {"Make": "BAIC", "Model": "X5"},
+            "target": {"Make": "BAIC", "Model": "X7"},
+            "expectedMonthlyTransfer": {"2023 Dec": 1},
+            "expectedTotal": 1,
+        },
+        {
+            "confirmationId": "CZ-BYD-DOLPHIN-TO-SURF-20260720",
+            "country": "捷克",
+            "source": {"Make": "BYD", "Model": "DOLPHIN"},
+            "target": {"Make": "BYD", "Model": "DOLPHIN SURF"},
+            "expectedMonthlyTransfer": {
+                "2025 Nov": 2,
+                "2025 Dec": 2,
+                "2026 Mar": 2,
+            },
+            "expectedTotal": 6,
+        },
+        {
+            "confirmationId": "CZ-BYD-SEAL05-TO-SEAL5-20260720",
+            "country": "捷克",
+            "source": {"Make": "BYD", "Model": "SEAL 05"},
+            "target": {"Make": "BYD", "Model": "SEAL 5"},
+            "expectedMonthlyTransfer": {
+                "2025 Jun": 16,
+                "2025 Aug": 1,
+                "2025 Sep": 2,
+                "2025 Oct": 2,
+                "2025 Dec": 3,
+                "2026 Jan": 1,
+            },
+            "expectedTotal": 25,
+        },
+        {
+            "confirmationId": "CZ-FIAT-PANDINA-TO-PANDA-20260720",
+            "country": "捷克",
+            "source": {"Make": "FIAT", "Model": "PANDINA"},
+            "target": {"Make": "FIAT", "Model": "PANDA"},
+            "expectedMonthlyTransfer": {"2023 Mar": 1},
+            "expectedTotal": 1,
+        },
+        {
+            "confirmationId": "CZ-FORD-CONNECT-TO-CUSTOM-20260720",
+            "country": "捷克",
+            "source": {"Make": "FORD", "Model": "TOURNEO CONNECT"},
+            "target": {"Make": "FORD", "Model": "TOURNEO CUSTOM"},
+            "expectedMonthlyTransfer": {"2026 Mar": 1},
+            "expectedTotal": 1,
+        },
+        {
+            "confirmationId": "CZ-FORTHING-T5-TO-DFSK-T5-EVO-20260720",
+            "country": "捷克",
+            "source": {"Make": "FORTHING", "Model": "T5"},
+            "target": {"Make": "DFSK", "Model": "T5 EVO"},
+            "expectedMonthlyTransfer": {
+                "2025 Apr": 3,
+                "2025 May": 3,
+                "2025 Jun": 8,
+                "2025 Jul": 4,
+                "2025 Aug": 4,
+                "2025 Sep": 6,
+                "2025 Nov": 3,
+                "2025 Dec": 19,
+                "2026 Jan": 1,
+            },
+            "expectedTotal": 51,
+            "approvalReference": "user-confirmed-2026-07-20",
+        },
+        {
+            "confirmationId": "CZ-KGM-TORRES-EVX-TO-TORRES-20260720",
+            "country": "捷克",
+            "source": {"Make": "KGM", "Model": "TORRES EVX"},
+            "target": {"Make": "KGM", "Model": "TORRES"},
+            "expectedMonthlyTransfer": {"2025 Dec": 2},
+            "expectedTotal": 2,
+        },
+        {
+            "confirmationId": "CZ-MERCEDES-GLC-COUPE-TO-GLC-20260720",
+            "country": "捷克",
+            "source": {"Make": "MERCEDES", "Model": "GLC COUPE"},
+            "target": {"Make": "MERCEDES", "Model": "GLC"},
+            "expectedMonthlyTransfer": {"2026 Mar": 38},
+            "expectedTotal": 38,
+        },
+        {
+            "confirmationId": "CZ-MINI-MINI-TO-COOPER-20260720",
+            "country": "捷克",
+            "source": {"Make": "MINI", "Model": "MINI"},
+            "target": {"Make": "MINI", "Model": "COOPER"},
+            "expectedMonthlyTransfer": {
+                "2025 Feb": 3,
+                "2025 Apr": 3,
+                "2025 Jul": 5,
+                "2025 Aug": 4,
+                "2025 Sep": 3,
+                "2025 Nov": 1,
+                "2025 Dec": 1,
+            },
+            "expectedTotal": 20,
+        },
+        {
+            "confirmationId": "CZ-OMODA-5-TO-5-EV-20260720",
+            "country": "捷克",
+            "source": {"Make": "OMODA", "Model": "5"},
+            "target": {"Make": "OMODA", "Model": "5 EV"},
+            "expectedMonthlyTransfer": {"2026 Jan": 1},
+            "expectedTotal": 1,
+        },
+        {
+            "confirmationId": "CZ-PEUGEOT-EXPERT-TO-TRAVELLER-20260720",
+            "country": "捷克",
+            "source": {"Make": "PEUGEOT", "Model": "EXPERT"},
+            "target": {"Make": "PEUGEOT", "Model": "TRAVELLER"},
+            "expectedMonthlyTransfer": {"2026 Mar": 3},
+            "expectedTotal": 3,
+        },
+        {
+            "confirmationId": "CZ-PORSCHE-CAYENNE-COUPE-TO-CAYENNE-20260720",
+            "country": "捷克",
+            "source": {"Make": "PORSCHE", "Model": "CAYENNE COUPE"},
+            "target": {"Make": "PORSCHE", "Model": "CAYENNE"},
+            "expectedMonthlyTransfer": {"2026 Mar": 10},
+            "expectedTotal": 10,
+        },
+        {
+            "confirmationId": "DK-AUDI-Q6-TO-Q6-SB-20260720",
+            "country": "丹麦",
+            "source": {"Make": "AUDI", "Model": "Q6 E-TRON"},
+            "target": {"Make": "AUDI", "Model": "Q6 SPORTBACK E-TRON"},
+            "expectedMonthlyTransfer": {"2026 Mar": 1},
+            "expectedTotal": 1,
+        },
+        {
+            "confirmationId": "DK-FORD-TRANSIT-TO-TOURNEO-CUSTOM-20260720",
+            "country": "丹麦",
+            "source": {"Make": "FORD", "Model": "TRANSIT"},
+            "target": {"Make": "FORD", "Model": "TOURNEO CUSTOM"},
+            "expectedMonthlyTransfer": {"2026 Jan": 1},
+            "expectedTotal": 1,
+        },
+        {
+            "confirmationId": "DK-MERCEDES-GLC-COUPE-TO-GLC-20260720",
+            "country": "丹麦",
+            "source": {"Make": "MERCEDES", "Model": "GLC COUPE"},
+            "target": {"Make": "MERCEDES", "Model": "GLC"},
+            "expectedMonthlyTransfer": {
+                "2026 Jan": 4,
+                "2026 Feb": 5,
+                "2026 Mar": 7,
+            },
+            "expectedTotal": 16,
+        },
+        {
+            "confirmationId": "DK-RENAULT-5-TO-4-20260720",
+            "country": "丹麦",
+            "source": {"Make": "RENAULT", "Model": "5"},
+            "target": {"Make": "RENAULT", "Model": "4"},
+            "expectedMonthlyTransfer": {
+                "2026 Jan": 87,
+                "2026 Mar": 7,
+            },
+            "expectedTotal": 94,
+        },
+    )
 )
 STATIC_CARRY_FORWARD_KEY_CANDIDATES = (
     "国家",
