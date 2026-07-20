@@ -81,6 +81,19 @@ function formatDigestPreview(value: string | null | undefined): string {
   return value.length > 24 ? `${value.slice(0, 10)}...${value.slice(-8)}` : value;
 }
 
+function formatUploadRoute(value: string | null | undefined): string {
+  switch (value) {
+    case "single_country":
+      return "单国分区 Review";
+    case "partial_country":
+      return "多国分区 Review";
+    case "full_batch":
+      return "完整批次";
+    default:
+      return "待识别";
+  }
+}
+
 function formatSampleKeyRecord(item: Record<string, unknown>): string {
   const entries = Object.entries(item);
   if (entries.length === 0) {
@@ -132,6 +145,44 @@ function formatCleanupTierLabel(tier: "safe" | "cautious"): string {
   return tier === "cautious" ? "谨慎删" : "安全删";
 }
 
+function isBaselinePromotionActive(
+  promotion: JatoMonthlyUpdateBaselinePromotionResult | null
+): boolean {
+  return promotion?.status === "queued" || promotion?.status === "running";
+}
+
+function formatBaselinePromotionStatus(
+  status: JatoMonthlyUpdateBaselinePromotionResult["status"]
+): string {
+  switch (status) {
+    case "queued":
+      return "排队中";
+    case "running":
+      return "保存中";
+    case "success":
+      return "已完成";
+    case "failed":
+      return "失败";
+  }
+}
+
+function formatBaselinePromotionSuccess(
+  promotion: JatoMonthlyUpdateBaselinePromotionResult
+): string {
+  return `已保存新的 baseline：${promotion.baselinePath ?? "-"}；latest month ${promotion.detectedLatestMonth ?? "-"}；自动归档旧 baseline ${promotion.archivedBaselineCount} 个。`;
+}
+
+function formatBaselinePromotionFailure(
+  promotion: JatoMonthlyUpdateBaselinePromotionResult
+): string {
+  return (
+    promotion.failureDigest?.sourceFeedback
+    || promotion.failureDigest?.message
+    || promotion.error
+    || "baseline 保存失败，请查看 worker 日志后重试。"
+  );
+}
+
 type PendingMaintenanceAction =
   | { kind: "promote-baseline" }
   | { kind: "cleanup"; cleanupTier: "safe" | "cautious" };
@@ -150,7 +201,7 @@ export function JatoMonthlyUpdatePage() {
   const [cancellingJobId, setCancellingJobId] = useState<string | null>(null);
   const [publishingJobId, setPublishingJobId] = useState<string | null>(null);
   const [rollingBackJobId, setRollingBackJobId] = useState<string | null>(null);
-  const [promotingBaseline, setPromotingBaseline] = useState(false);
+  const [baselinePromotionSubmitting, setBaselinePromotionSubmitting] = useState(false);
   const [reviewLoadingJobId, setReviewLoadingJobId] = useState<string | null>(null);
   const [approvingReviewJobId, setApprovingReviewJobId] = useState<string | null>(null);
   const [copiedSourceFeedbackKey, setCopiedSourceFeedbackKey] = useState<string | null>(null);
@@ -175,11 +226,14 @@ export function JatoMonthlyUpdatePage() {
   const [uploadProgress, setUploadProgress] =
     useState<JatoMonthlyUpdateUploadProgress | null>(null);
   const [uploadFile, setUploadFile] = useState<File | null>(null);
+  const [abandoningUpload, setAbandoningUpload] = useState(false);
   const [heroCollapsed, setHeroCollapsed] = useState(false);
   const [publishBlocker, setPublishBlocker] = useState<PublishBlocker | null>(null);
   const [smartMergingJobId, setSmartMergingJobId] = useState<string | null>(null);
   const [infoCollapsed, setInfoCollapsed] = useState(true);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
+  const watchedBaselinePromotionIdRef = useRef<string | null>(null);
+  const abandonedUploadIdRef = useRef<string | null>(null);
 
   const refreshJobs = useCallback(async (preferredJobId?: string, silent = false) => {
     if (!silent) {
@@ -232,6 +286,7 @@ export function JatoMonthlyUpdatePage() {
     try {
       const response = await api.getJatoMonthlyUpdateMaintenanceStatus();
       setMaintenanceStatus(response.item);
+      setBaselinePromotion(response.item.baselinePromotion);
     } catch (err) {
       setError((err as Error).message);
     } finally {
@@ -265,6 +320,21 @@ export function JatoMonthlyUpdatePage() {
   }, [selectedJobId]);
 
   const hasActiveJob = shouldPollMonthlyUpdateJobs(jobs);
+  const baselinePromotionActive = isBaselinePromotionActive(baselinePromotion);
+  const promotingBaseline = baselinePromotionSubmitting || baselinePromotionActive;
+  const uploadOrJobBusy = submitting || hasActiveJob;
+  const maintenanceBusy = cleanupRunning || promotingBaseline;
+  const monthlyUpdateBusy = uploadOrJobBusy || maintenanceBusy;
+  const abandonableUploadId = uploadProgress?.uploadId && [
+    "verifying",
+    "resuming",
+    "uploading",
+    "retrying",
+    "assembling",
+    "digesting",
+  ].includes(uploadProgress.stage)
+    ? uploadProgress.uploadId
+    : null;
 
   useEffect(() => {
     if (!hasActiveJob) {
@@ -279,18 +349,76 @@ export function JatoMonthlyUpdatePage() {
     return () => window.clearInterval(timer);
   }, [hasActiveJob, loadJobDetail, refreshJobs, selectedJobId]);
 
+  useEffect(() => {
+    if (!baselinePromotionActive) {
+      return undefined;
+    }
+    const timer = window.setInterval(() => {
+      void refreshMaintenanceStatus(true);
+    }, 5000);
+    return () => window.clearInterval(timer);
+  }, [baselinePromotionActive, refreshMaintenanceStatus]);
+
+  useEffect(() => {
+    if (!baselinePromotion) {
+      return;
+    }
+    const operationId = baselinePromotion.operationId;
+    if (baselinePromotion.status === "queued") {
+      watchedBaselinePromotionIdRef.current = operationId;
+      setMaintenanceError("");
+      setMaintenanceNotice(
+        `baseline 保存任务 ${operationId || "-"} 已进入隔离队列，页面会自动刷新状态。`
+      );
+      return;
+    }
+    if (baselinePromotion.status === "running") {
+      watchedBaselinePromotionIdRef.current = operationId;
+      setMaintenanceError("");
+      setMaintenanceNotice(
+        `baseline 保存任务 ${operationId || "-"} 正在隔离 worker 中导出，页面会自动刷新状态。`
+      );
+      return;
+    }
+    if (watchedBaselinePromotionIdRef.current !== operationId) {
+      return;
+    }
+    watchedBaselinePromotionIdRef.current = null;
+    if (baselinePromotion.status === "success") {
+      const successMessage = formatBaselinePromotionSuccess(baselinePromotion);
+      setMaintenanceError("");
+      setMaintenanceNotice(successMessage);
+      setNotice(successMessage);
+      return;
+    }
+    setMaintenanceNotice("");
+    setMaintenanceError(formatBaselinePromotionFailure(baselinePromotion));
+  }, [baselinePromotion]);
+
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
+    if (monthlyUpdateBusy) {
+      return;
+    }
     if (!uploadFile) {
       setError("请选择一个 JATO Excel 文件后再启动月更任务。");
       return;
     }
     setSubmitting(true);
+    abandonedUploadIdRef.current = null;
     setError("");
     setNotice("");
     setUploadProgress(null);
     try {
-      const response = await api.createJatoMonthlyUpdateJob(uploadFile, setUploadProgress, uploadMonth ?? undefined);
+      const response = await api.createJatoMonthlyUpdateJob(
+        uploadFile,
+        (progress) => {
+          if (!abandonedUploadIdRef.current || progress.uploadId !== abandonedUploadIdRef.current) {
+            setUploadProgress(progress);
+          }
+        },
+        uploadMonth ?? undefined,
+      );
       setNotice(
         `已创建任务 ${response.item.jobId}，自动识别最新数据月 ${response.item.month || "-"}，批次 ${response.item.batchId || "-"}；系统会按国家范围选择分区 Review 或完整批次管线。`
       );
@@ -298,20 +426,24 @@ export function JatoMonthlyUpdatePage() {
       setSelectedJobId(response.item.jobId);
       setUploadFile(null);
       setDragActive(false);
-      setUploadProgress(null);
       if (fileInputRef.current) {
         fileInputRef.current.value = "";
       }
       await refreshJobs(response.item.jobId, true);
       await refreshMaintenanceStatus(true);
     } catch (err) {
-      setError((err as Error).message);
+      if (!abandonedUploadIdRef.current) {
+        setError((err as Error).message);
+      }
     } finally {
       setSubmitting(false);
     }
   }
 
   function applySelectedFile(nextFile: File | null) {
+    if (monthlyUpdateBusy) {
+      return;
+    }
     if (!nextFile) {
       setUploadFile(null);
       return;
@@ -331,10 +463,17 @@ export function JatoMonthlyUpdatePage() {
   }
 
   function handleFileChange(event: ChangeEvent<HTMLInputElement>) {
+    if (monthlyUpdateBusy) {
+      event.target.value = "";
+      return;
+    }
     applySelectedFile(event.target.files?.[0] ?? null);
   }
 
   function handleDropzoneKeyboard(event: KeyboardEvent<HTMLDivElement>) {
+    if (monthlyUpdateBusy) {
+      return;
+    }
     if (event.key !== "Enter" && event.key !== " ") {
       return;
     }
@@ -345,6 +484,10 @@ export function JatoMonthlyUpdatePage() {
   function handleDragState(event: DragEvent<HTMLDivElement>) {
     event.preventDefault();
     event.stopPropagation();
+    if (monthlyUpdateBusy) {
+      setDragActive(false);
+      return;
+    }
     if (event.type === "dragenter" || event.type === "dragover") {
       setDragActive(true);
       return;
@@ -358,6 +501,9 @@ export function JatoMonthlyUpdatePage() {
     event.preventDefault();
     event.stopPropagation();
     setDragActive(false);
+    if (monthlyUpdateBusy) {
+      return;
+    }
     const files = event.dataTransfer?.files;
     if (!files || files.length === 0) {
       return;
@@ -369,9 +515,33 @@ export function JatoMonthlyUpdatePage() {
     applySelectedFile(files[0]);
   }
 
+  async function handleAbandonUpload(): Promise<void> {
+    if (!abandonableUploadId || abandoningUpload) {
+      return;
+    }
+    setAbandoningUpload(true);
+    abandonedUploadIdRef.current = abandonableUploadId;
+    setError("");
+    try {
+      await api.abandonJatoMonthlyUpdateUpload(abandonableUploadId);
+      setUploadProgress(null);
+      setNotice("已放弃本次上传并清除本地续传信息；candidate 与 active 均未修改。");
+      await refreshMaintenanceStatus(true);
+    } catch (err) {
+      abandonedUploadIdRef.current = null;
+      setError((err as Error).message);
+    } finally {
+      setAbandoningUpload(false);
+    }
+  }
+
   function requestCleanup() {
-    if (hasActiveJob) {
-      setMaintenanceError("存在运行中的月更任务，请等待完成后再执行一键清理。");
+    if (uploadOrJobBusy) {
+      setMaintenanceError("上传、digest 或月更任务进行中，请等待完成后再执行一键清理。");
+      setMaintenanceNotice("");
+      return;
+    }
+    if (maintenanceBusy) {
       setMaintenanceNotice("");
       return;
     }
@@ -382,8 +552,11 @@ export function JatoMonthlyUpdatePage() {
   }
 
   async function executeCleanup(cleanupTier: "safe" | "cautious") {
-    if (hasActiveJob) {
-      setMaintenanceError("存在运行中的月更任务，请等待完成后再执行一键清理。");
+    if (uploadOrJobBusy) {
+      setMaintenanceError("上传、digest 或月更任务进行中，请等待完成后再执行一键清理。");
+      return;
+    }
+    if (maintenanceBusy) {
       return;
     }
     setCleanupRunning(true);
@@ -412,8 +585,12 @@ export function JatoMonthlyUpdatePage() {
   }
 
   function requestPromoteBaseline() {
-    if (hasActiveJob) {
-      setMaintenanceError("存在运行中的月更任务，请等待完成后再保存新的 baseline。");
+    if (uploadOrJobBusy) {
+      setMaintenanceError("上传、digest 或月更任务进行中，请等待完成后再保存新的 baseline。");
+      setMaintenanceNotice("");
+      return;
+    }
+    if (maintenanceBusy) {
       setMaintenanceNotice("");
       return;
     }
@@ -424,28 +601,42 @@ export function JatoMonthlyUpdatePage() {
   }
 
   async function executePromoteBaseline() {
-    if (hasActiveJob) {
-      setMaintenanceError("存在运行中的月更任务，请等待完成后再保存新的 baseline。");
+    if (uploadOrJobBusy) {
+      setMaintenanceError("上传、digest 或月更任务进行中，请等待完成后再保存新的 baseline。");
       return;
     }
-    setPromotingBaseline(true);
+    if (maintenanceBusy) {
+      return;
+    }
+    setBaselinePromotionSubmitting(true);
     setError("");
     setNotice("");
     setMaintenanceError("");
-    setMaintenanceNotice("正在从当前 active parquet 导出 baseline xlsx，数据量较大时需要等待一段时间。");
+    setMaintenanceNotice("正在提交 baseline 保存任务。");
     setPendingMaintenanceAction(null);
     try {
       const response = await api.promoteCurrentActiveToJatoBaseline();
       setBaselinePromotion(response.item);
-      const successMessage =
-        `已保存新的 baseline：${response.item.baselinePath ?? "-"}；latest month ${response.item.detectedLatestMonth ?? "-"}；自动归档旧 baseline ${response.item.archivedBaselineCount} 个。`
-      setMaintenanceNotice(successMessage);
-      setNotice(successMessage);
+      watchedBaselinePromotionIdRef.current = response.item.operationId;
+      if (response.item.status === "success") {
+        const successMessage = formatBaselinePromotionSuccess(response.item);
+        setMaintenanceNotice(successMessage);
+        setNotice(successMessage);
+      } else if (response.item.status === "failed") {
+        setMaintenanceNotice("");
+        setMaintenanceError(formatBaselinePromotionFailure(response.item));
+      } else {
+        setMaintenanceNotice(
+          response.item.status === "queued"
+            ? `baseline 保存任务 ${response.item.operationId || "-"} 已进入隔离队列，页面会自动刷新状态。`
+            : `baseline 保存任务 ${response.item.operationId || "-"} 正在隔离 worker 中导出，页面会自动刷新状态。`
+        );
+      }
       await refreshMaintenanceStatus(true);
     } catch (err) {
       setMaintenanceError((err as Error).message);
     } finally {
-      setPromotingBaseline(false);
+      setBaselinePromotionSubmitting(false);
     }
   }
 
@@ -577,7 +768,17 @@ export function JatoMonthlyUpdatePage() {
       const parsed = JSON.parse(detailStr) as Record<string, unknown>;
       if (
         typeof parsed.blockerType === "string"
-        && (parsed.blockerType === "country_regression" || parsed.blockerType === "sales_doubling")
+        && [
+          "country_regression",
+          "sales_doubling",
+          "historical_sales_changed",
+          "historical_configuration_changed",
+          "historical_configuration_guard_unavailable",
+          "ambiguous_logical_country",
+          "stale_candidate",
+          "candidate_bundle_invalid",
+          "rollback_target_stale",
+        ].includes(parsed.blockerType)
         && typeof parsed.message === "string"
       ) {
         return parsed as unknown as PublishBlocker;
@@ -603,9 +804,10 @@ export function JatoMonthlyUpdatePage() {
       const response = await api.publishJatoMonthlyUpdateJob(job.jobId);
       setSelectedJob(response.item);
       setSelectedJobId(response.item.jobId);
-      setNotice(
-        `已将任务 ${job.jobId} 的 staging candidate promote 到 active 数据集。备份目录：${response.item.publication?.backupDir ?? "-"}`
-      );
+      const operation = response.item.pendingOperation;
+      setNotice(operation?.status === "queued" || operation?.status === "running"
+        ? `任务 ${job.jobId} 已进入隔离 Publish 队列；active 尚未改变，页面会自动刷新结果。`
+        : `已将任务 ${job.jobId} 的 staging candidate promote 到 active 数据集。备份目录：${response.item.publication?.backupDir ?? "-"}`);
       await refreshJobs(response.item.jobId, true);
       await refreshMaintenanceStatus(true);
       await loadJobDetail(response.item.jobId, true);
@@ -635,9 +837,10 @@ export function JatoMonthlyUpdatePage() {
       const response = await api.rollbackJatoMonthlyUpdateJob(job.jobId);
       setSelectedJob(response.item);
       setSelectedJobId(response.item.jobId);
-      setNotice(
-        `已回滚任务 ${job.jobId} 的 publish。恢复来源：${response.item.publication?.backupDir ?? "-"}；回滚前快照：${response.item.publication?.rollbackBackupDir ?? "-"}`
-      );
+      const operation = response.item.pendingOperation;
+      setNotice(operation?.status === "queued" || operation?.status === "running"
+        ? `任务 ${job.jobId} 已进入隔离 Rollback 队列；active 尚未改变，页面会自动刷新结果。`
+        : `已回滚任务 ${job.jobId} 的 publish。恢复来源：${response.item.publication?.backupDir ?? "-"}；回滚前快照：${response.item.publication?.rollbackBackupDir ?? "-"}`);
       await refreshJobs(response.item.jobId, true);
       await refreshMaintenanceStatus(true);
       await loadJobDetail(response.item.jobId, true);
@@ -678,7 +881,12 @@ export function JatoMonthlyUpdatePage() {
 
   const successCount = jobs.filter((job) => job.status === "success").length;
   const failedCount = jobs.filter((job) => job.status === "failed").length;
-  const runningCount = jobs.filter((job) => job.status === "running" || job.status === "queued").length;
+  const runningCount = jobs.filter((job) => (
+    job.status === "running"
+    || job.status === "queued"
+    || job.pendingOperation?.status === "queued"
+    || job.pendingOperation?.status === "running"
+  )).length;
 
   const artifactEntries = buildMonthlyUpdateArtifactEntries(selectedJob);
 
@@ -755,7 +963,6 @@ export function JatoMonthlyUpdatePage() {
   const safeCleanupMetrics = maintenanceStatus?.storageMetrics.filter((metric) => metric.cleanupTier === "safe") ?? [];
   const cautiousCleanupMetrics = maintenanceStatus?.storageMetrics.filter((metric) => metric.cleanupTier === "cautious") ?? [];
   const protectedCleanupMetrics = maintenanceStatus?.storageMetrics.filter((metric) => metric.cleanupTier === "protected") ?? [];
-  const maintenanceBusy = cleanupRunning || promotingBaseline;
   const pendingMaintenanceTitle = pendingMaintenanceAction?.kind === "promote-baseline"
     ? "确认保存当前 active 为 baseline"
     : pendingMaintenanceAction
@@ -885,12 +1092,18 @@ export function JatoMonthlyUpdatePage() {
                 accept=".xlsx,.xlsm,.xls"
                 onChange={handleFileChange}
                 className="monthly-update-file-input"
+                disabled={monthlyUpdateBusy}
               />
               <div
-                className={`monthly-update-dropzone${dragActive ? " is-dragging" : ""}${uploadFile ? " has-file" : ""}`}
+                className={`monthly-update-dropzone${dragActive ? " is-dragging" : ""}${uploadFile ? " has-file" : ""}${monthlyUpdateBusy ? " is-disabled" : ""}`}
                 role="button"
-                tabIndex={0}
-                onClick={() => fileInputRef.current?.click()}
+                tabIndex={monthlyUpdateBusy ? -1 : 0}
+                aria-disabled={monthlyUpdateBusy}
+                onClick={() => {
+                  if (!monthlyUpdateBusy) {
+                    fileInputRef.current?.click();
+                  }
+                }}
                 onKeyDown={handleDropzoneKeyboard}
                 onDragEnter={handleDragState}
                 onDragOver={handleDragState}
@@ -911,12 +1124,13 @@ export function JatoMonthlyUpdatePage() {
 
           <div className="monthly-update-form-actions">
             <label style={{ display: "block", marginBottom: 12, fontSize: 12, fontWeight: 600, color: "#555" }}>
-              数据月份（可选，不填则从文件名自动解析；如 "2026-04"）
+              预期数据月份（可选；系统以工作簿 digest 的真实月份为准，不一致会拒绝）
               <input
                 type="text"
                 placeholder="2026-04"
                 value={uploadMonth ?? ""}
                 onChange={(e) => setUploadMonth(e.target.value.trim() || null)}
+                disabled={monthlyUpdateBusy}
                 style={{
                   display: "block", marginTop: 4, padding: "8px 12px",
                   border: "1px solid #d1d5db", borderRadius: 8, fontSize: 14, width: 200,
@@ -929,12 +1143,12 @@ export function JatoMonthlyUpdatePage() {
             <button
               type="submit"
               className="btn btn-primary"
-              disabled={submitting || uploadFile === null || hasActiveJob}
+              disabled={monthlyUpdateBusy || uploadFile === null}
             >
-              {submitting ? "上传并启动中..." : "启动月更任务"}
+              {submitting ? "上传并启动中..." : maintenanceBusy ? "维护进行中..." : "启动月更任务"}
             </button>
           </div>
-          {submitting && uploadProgress && (
+          {uploadProgress && (
             <div className="monthly-update-upload-progress">
               <div className="monthly-update-upload-progress-head">
                 <strong>{getMonthlyUpdateUploadStageLabel(uploadProgress.stage)}</strong>
@@ -957,9 +1171,56 @@ export function JatoMonthlyUpdatePage() {
                 </span>
                 <span>chunk size {formatMonthlyUpdateFileSize(uploadProgress.chunkSize)}</span>
               </div>
+              {abandonableUploadId && (
+                <div className="monthly-update-upload-progress-detail">
+                  <button
+                    type="button"
+                    className="btn btn-sm btn-secondary"
+                    disabled={abandoningUpload}
+                    onClick={() => {
+                      void handleAbandonUpload();
+                    }}
+                  >
+                    {abandoningUpload ? "正在放弃上传..." : "放弃本次上传"}
+                  </button>
+                  <span> 放弃后只结束上传会话；candidate 与 active 不会修改。</span>
+                </div>
+              )}
               {uploadProgress.detail && (
                 <div className="monthly-update-upload-progress-detail">
                   {uploadProgress.detail}
+                </div>
+              )}
+              {uploadProgress.ingestDigest && (
+                <div className="monthly-update-upload-progress-detail">
+                  <strong>
+                    {formatUploadRoute(uploadProgress.ingestDigest.route)}
+                    {" · "}
+                    {formatMonthlyUpdateNumber(uploadProgress.ingestDigest.dataRowCount)} rows
+                  </strong>
+                  <div>
+                    {uploadProgress.ingestDigest.countries.map((country) => (
+                      <span key={country} style={{ display: "inline-block", marginRight: 12 }}>
+                        {country}: {uploadProgress.ingestDigest?.activeLatestMonths[country] || "-"}
+                        {" → "}
+                        {uploadProgress.ingestDigest?.countryLatestMonths[country] || "-"}
+                      </span>
+                    ))}
+                  </div>
+                  {[
+                    ...uploadProgress.ingestDigest.blockers,
+                    ...uploadProgress.ingestDigest.warnings,
+                  ].map((issue) => (
+                    <div key={`${issue.code}-${issue.countries.join(",")}`}>
+                      {issue.code}: {issue.message}
+                      {issue.sourceFeedback ? `｜给洗数人员：${issue.sourceFeedback}` : ""}
+                    </div>
+                  ))}
+                </div>
+              )}
+              {uploadProgress.failureDigest && (
+                <div className="monthly-update-upload-progress-detail">
+                  {uploadProgress.failureDigest.code}: {uploadProgress.failureDigest.message}
                 </div>
               )}
             </div>
@@ -1037,16 +1298,20 @@ Smart Merge:  [SE:keep active 2026-03] [DE:patch 2026-03] [NL:patch 2026-02] [FR
 	              type="button"
 	              className="btn btn-secondary"
 	              onClick={requestPromoteBaseline}
-	              disabled={maintenanceBusy || hasActiveJob}
+              disabled={monthlyUpdateBusy}
 	            >
-	              {promotingBaseline ? "保存中..." : "保存当前 active 为 baseline"}
+	              {baselinePromotion?.status === "queued"
+	                ? "保存排队中..."
+	                : promotingBaseline
+	                  ? "保存中..."
+	                  : "保存当前 active 为 baseline"}
 	            </button>
             <div className="filter-group" style={{ minWidth: 180 }}>
               <label>一键清理级别</label>
               <select
 	                value={selectedCleanupTier}
 	                onChange={(event) => setSelectedCleanupTier(event.target.value as "safe" | "cautious")}
-	                disabled={maintenanceBusy || hasActiveJob}
+                disabled={monthlyUpdateBusy}
 	              >
 	                <option value="safe">安全删（推荐）</option>
 	                <option value="cautious">谨慎删</option>
@@ -1056,7 +1321,7 @@ Smart Merge:  [SE:keep active 2026-03] [DE:patch 2026-03] [NL:patch 2026-02] [FR
 	              type="button"
 	              className="btn btn-secondary"
 	              onClick={requestCleanup}
-	              disabled={maintenanceBusy || hasActiveJob}
+              disabled={monthlyUpdateBusy}
 	            >
 	              {cleanupRunning ? "清理中..." : `执行${formatCleanupTierLabel(selectedCleanupTier)}`}
 	            </button>
@@ -1086,7 +1351,7 @@ Smart Merge:  [SE:keep active 2026-03] [DE:patch 2026-03] [NL:patch 2026-02] [FR
 	              <button
 	                type="button"
 	                className="btn btn-primary"
-	                disabled={maintenanceBusy || hasActiveJob}
+                disabled={monthlyUpdateBusy}
 	                onClick={() => {
 	                  if (pendingMaintenanceAction.kind === "promote-baseline") {
 	                    void executePromoteBaseline();
@@ -1134,17 +1399,35 @@ Smart Merge:  [SE:keep active 2026-03] [DE:patch 2026-03] [NL:patch 2026-02] [FR
         {baselinePromotion && (
           <div className="monthly-update-cleanup-result">
             <div className="monthly-update-cleanup-result-head">
-              <span className="card-title">Last Baseline Save</span>
+              <span className="card-title">Baseline Save</span>
               <span className="section-note">
-                {formatMonthlyUpdateTimestamp(baselinePromotion.promotedAt)}
+                {formatMonthlyUpdateTimestamp(
+                  baselinePromotion.finishedAt
+                  ?? baselinePromotion.startedAt
+                  ?? baselinePromotion.requestedAt
+                )}
               </span>
             </div>
             <div className="monthly-update-cleanup-summary">
-              <span>baseline: {baselinePromotion.baselinePath ?? "-"}</span>
-              <span>latest month: {baselinePromotion.detectedLatestMonth ?? "-"}</span>
-              <span>countries: {formatMonthlyUpdateNumber(baselinePromotion.countryCount)}</span>
-              <span>rows: {formatMonthlyUpdateNumber(baselinePromotion.rowCount)}</span>
-              <span>archived baselines: {formatMonthlyUpdateNumber(baselinePromotion.archivedBaselineCount)}</span>
+              <span>status: {formatBaselinePromotionStatus(baselinePromotion.status)}</span>
+              <span>operation: {baselinePromotion.operationId || "-"}</span>
+              <span>requested by: {baselinePromotion.requestedBy ?? "-"}</span>
+              <span>source fingerprint: {formatDigestPreview(baselinePromotion.sourceActiveFingerprint)}</span>
+              {baselinePromotion.status === "success" && (
+                <>
+                  <span>baseline: {baselinePromotion.baselinePath ?? "-"}</span>
+                  <span>latest month: {baselinePromotion.detectedLatestMonth ?? "-"}</span>
+                  <span>countries: {formatMonthlyUpdateNumber(baselinePromotion.countryCount)}</span>
+                  <span>rows: {formatMonthlyUpdateNumber(baselinePromotion.rowCount)}</span>
+                  <span>archived baselines: {formatMonthlyUpdateNumber(baselinePromotion.archivedBaselineCount)}</span>
+                </>
+              )}
+              {baselinePromotion.status === "failed" && (
+                <>
+                  <span>error: {baselinePromotion.error ?? baselinePromotion.failureDigest?.message ?? "-"}</span>
+                  <span>source feedback: {baselinePromotion.failureDigest?.sourceFeedback ?? "-"}</span>
+                </>
+              )}
             </div>
           </div>
         )}
@@ -1456,6 +1739,8 @@ Smart Merge:  [SE:keep active 2026-03] [DE:patch 2026-03] [NL:patch 2026-02] [FR
                   刷新查验：{formatMonthlyUpdateTimestamp(selectedJob.runtimeCheck.checkedAt)}
                   {" · process "}
                   {selectedJob.runtimeCheck.processAlive ? "alive" : "not found"}
+                  {" · worker "}
+                  {selectedJob.runtimeCheck.workerAlive ? "alive" : "not found"}
                   {" · thread "}
                   {selectedJob.runtimeCheck.threadAlive ? "alive" : "not found"}
                   {" · log "}
@@ -1467,6 +1752,48 @@ Smart Merge:  [SE:keep active 2026-03] [DE:patch 2026-03] [NL:patch 2026-02] [FR
 
               {selectedJob.error && (
                 <div className="alert alert-error">{selectedJob.error}</div>
+              )}
+              {selectedJob.failureDigest && (
+                <div className="monthly-update-feedback-cell is-blocker">
+                  <strong>
+                    {selectedJob.failureDigest.code} · {selectedJob.failureDigest.phase}
+                  </strong>
+                  <div>{selectedJob.failureDigest.message}</div>
+                  {selectedJob.failureDigest.sourceFeedback && (
+                    <div>处理建议：{selectedJob.failureDigest.sourceFeedback}</div>
+                  )}
+                </div>
+              )}
+
+              {selectedJob.pendingOperation && (
+                <div className={`monthly-update-feedback-cell ${
+                  selectedJob.pendingOperation.status === "failed"
+                    ? "is-blocker"
+                    : "is-review"
+                }`}>
+                  <strong>
+                    {selectedJob.pendingOperation.type === "publish" ? "Publish" : "Rollback"}
+                    {" · "}
+                    {selectedJob.pendingOperation.status}
+                  </strong>
+                  <div>
+                    请求人：{selectedJob.pendingOperation.requestedBy || "-"}
+                    {" · "}
+                    {formatMonthlyUpdateTimestamp(selectedJob.pendingOperation.requestedAt)}
+                  </div>
+                  {(selectedJob.pendingOperation.status === "queued"
+                    || selectedJob.pendingOperation.status === "running") && (
+                    <div>正在独立 worker 中执行；active 只会在全部校验和预复制完成后切换。</div>
+                  )}
+                  {selectedJob.pendingOperation.failureDigest && (
+                    <>
+                      <div>{selectedJob.pendingOperation.failureDigest.message}</div>
+                      {selectedJob.pendingOperation.failureDigest.sourceFeedback && (
+                        <div>处理建议：{selectedJob.pendingOperation.failureDigest.sourceFeedback}</div>
+                      )}
+                    </>
+                  )}
+                </div>
               )}
 
               {isSelectedJobPublished && (
@@ -1495,6 +1822,11 @@ Smart Merge:  [SE:keep active 2026-03] [DE:patch 2026-03] [NL:patch 2026-02] [FR
                     <div>
                       <div className="card-title">Publish Blocked</div>
                       <p className="section-note">{publishBlocker.message}</p>
+                      {publishBlocker.sourceFeedback && (
+                        <p className="section-note">
+                          给洗数人员：{publishBlocker.sourceFeedback}
+                        </p>
+                      )}
                     </div>
                     <button
                       type="button"

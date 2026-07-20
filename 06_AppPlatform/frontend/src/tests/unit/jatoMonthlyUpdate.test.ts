@@ -114,9 +114,23 @@ describe("jato monthly update helpers", () => {
     expect(getMonthlyUpdateStatusBadgeClass("completed")).toBe("badge-inactive");
   });
 
-  it("polls only when queued or running jobs exist", () => {
+  it("polls while ETL or active-bundle operations are queued or running", () => {
     expect(shouldPollMonthlyUpdateJobs([makeJob({ status: "queued" })])).toBe(true);
     expect(shouldPollMonthlyUpdateJobs([makeJob({ status: "running" })])).toBe(true);
+    expect(shouldPollMonthlyUpdateJobs([makeJob({
+      status: "success",
+      pendingOperation: {
+        operationId: "jato-publish-1",
+        type: "publish",
+        status: "queued",
+        requestedAt: "2026-04-13T00:06:00+00:00",
+        requestedBy: "admin",
+        startedAt: null,
+        finishedAt: null,
+        error: null,
+        failureDigest: null,
+      },
+    })])).toBe(true);
     expect(shouldPollMonthlyUpdateJobs([makeJob({ status: "success" })])).toBe(false);
   });
 
@@ -143,6 +157,7 @@ describe("jato monthly update helpers", () => {
     expect(isMonthlyUpdateUploadFilenameAccepted("patch.xlsm")).toBe(true);
     expect(isMonthlyUpdateUploadFilenameAccepted("patch.csv")).toBe(false);
     expect(getMonthlyUpdateUploadStageLabel("uploading")).toBe("分片上传中");
+    expect(getMonthlyUpdateUploadStageLabel("verifying")).toBe("核对续传文件");
     expect(getMonthlyUpdateUploadStageLabel("retrying")).toBe("分片重试中");
     expect(getMonthlyUpdateUploadStageLabel("queued")).toBe("任务已入队");
     expect(getMonthlyUpdateUploadStageLabel("unknown")).toBe("准备上传");

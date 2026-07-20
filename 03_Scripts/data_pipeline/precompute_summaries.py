@@ -6,12 +6,14 @@
 """
 
 import json
+import argparse
 from pathlib import Path
 from typing import Any
 from urllib.parse import quote, unquote
 
 import pandas as pd
 import pyarrow.dataset as ds
+import pyarrow.parquet as pq
 
 
 def get_project_root() -> Path:
@@ -25,6 +27,14 @@ def load_analysis_data(parquet_path: str) -> pd.DataFrame:
         return dataset.to_table().to_pandas()
     else:
         return pd.read_parquet(parquet_path)
+
+
+def count_analysis_rows(parquet_path: str) -> int:
+    """Read row counts from parquet metadata without materializing the dataset."""
+    path = Path(parquet_path)
+    if path.is_dir():
+        return int(ds.dataset(path, format="parquet").count_rows())
+    return int(pq.ParquetFile(path).metadata.num_rows)
 
 
 def load_existing_summary(
@@ -88,8 +98,22 @@ def compute_country_summary_incremental(
             "removedCountryCount": 0,
         }
 
-    keys_to_recompute = sorted(normalized_changed & current_keys)
-    removed_keys = sorted(normalized_changed - current_keys)
+    existing_keys = (
+        {
+            str(item).strip()
+            for item in existing["国家"].dropna().tolist()
+            if str(item).strip()
+        }
+        if not existing.empty and "国家" in existing.columns
+        else set()
+    )
+    missing_existing_keys = current_keys - existing_keys
+    keys_to_recompute = sorted(
+        (normalized_changed & current_keys) | missing_existing_keys
+    )
+    removed_keys = sorted(
+        (normalized_changed - current_keys) | (existing_keys - current_keys)
+    )
 
     refreshed_rows: list[pd.DataFrame] = []
     for country_key in keys_to_recompute:
@@ -102,11 +126,20 @@ def compute_country_summary_incremental(
         try:
             dataset = ds.dataset(str(partition_path), format="parquet")
             partition_df = dataset.to_table().to_pandas()
-        except Exception:
-            continue
+        except Exception as error:
+            raise ValueError(
+                f"国家分区读取失败，不能生成完整 summary: {country_key}"
+            ) from error
+        # Partition files intentionally omit the partition column. Restore it
+        # from the directory key before aggregating the country row.
+        if "国家" not in partition_df.columns:
+            partition_df["国家"] = country_key
         partition_summary = compute_country_summary(partition_df)
-        if not partition_summary.empty:
-            refreshed_rows.append(partition_summary)
+        if partition_summary.empty:
+            raise ValueError(
+                f"国家分区无法生成 summary: {country_key}"
+            )
+        refreshed_rows.append(partition_summary)
 
     refreshed_df = (
         pd.concat(refreshed_rows, ignore_index=True)
@@ -115,21 +148,42 @@ def compute_country_summary_incremental(
     )
 
     if not existing.empty and "国家" in existing.columns:
-        country_series = existing["国家"].astype(str)
-        existing = existing[~country_series.isin(normalized_changed)]
+        country_series = existing["国家"].astype(str).str.strip()
+        reusable_keys = current_keys - set(keys_to_recompute)
+        existing = existing[country_series.isin(reusable_keys)]
 
     merged = pd.concat([existing, refreshed_df], ignore_index=True)
     if "国家" in merged.columns:
         merged = merged.sort_values("国家").reset_index(drop=True)
+
+    merged_keys = (
+        {
+            str(item).strip()
+            for item in merged["国家"].dropna().tolist()
+            if str(item).strip()
+        }
+        if "国家" in merged.columns
+        else set()
+    )
+    if merged_keys != current_keys or len(merged) != len(current_keys):
+        missing_keys = sorted(current_keys - merged_keys)
+        unexpected_keys = sorted(merged_keys - current_keys)
+        raise ValueError(
+            "增量国家 summary 与当前分区不一致："
+            f"missing={missing_keys}, unexpected={unexpected_keys}, "
+            f"summaryRows={len(merged)}, partitionCountries={len(current_keys)}"
+        )
 
     return merged, {
         "mode": "incremental-country",
         "reason": "changed-country-keys",
         "changedCountryCount": len(normalized_changed),
         "recomputedCountryCount": len(keys_to_recompute),
+        "backfilledCountryCount": len(missing_existing_keys),
         "removedCountryCount": len(removed_keys),
         "changedCountryKeys": sorted(normalized_changed),
         "recomputedCountryKeys": keys_to_recompute,
+        "backfilledCountryKeys": sorted(missing_existing_keys),
         "removedCountryKeys": removed_keys,
     }
 
@@ -310,20 +364,33 @@ def precompute_all_summaries(
     output_dir: str = "04_Processed_data/summaries",
     partitioned_dataset_path: str | None = None,
     changed_partition_keys: list[str] | None = None,
+    existing_country_summary_dir: str | None = None,
 ) -> dict[str, Any]:
     """
     主入口：加载数据并预聚合所有统计汇总。
+
+    ``existing_country_summary_dir`` 仅作为未变化国家的只读来源；
+    其余 summary 始终从 ``output_dir`` 读取或基于当前 parquet 重算。
     返回清单信息。
     """
     changed_keys = changed_partition_keys or []
     incremental_country_enabled = bool(
         partitioned_dataset_path and changed_keys
     )
+    country_summary_source_dir = existing_country_summary_dir or output_dir
 
     print(f"📊 开始预聚合：读取 {parquet_path}...")
 
-    # 先拿行数，供清单中的压缩比计算。
-    original_rows = len(load_analysis_data(parquet_path))
+    # Row count comes from parquet metadata. Loading the full archive just to count
+    # rows previously doubled the candidate worker's peak memory.
+    original_rows = count_analysis_rows(parquet_path)
+    full_df: pd.DataFrame | None = None
+
+    def get_full_df() -> pd.DataFrame:
+        nonlocal full_df
+        if full_df is None:
+            full_df = load_analysis_data(parquet_path)
+        return full_df
 
     incremental_info: dict[str, Any] = {
         "mode": "full",
@@ -334,22 +401,33 @@ def precompute_all_summaries(
         country_summary, incremental_info = (
             compute_country_summary_incremental(
                 partitioned_dataset_path=partitioned_dataset_path,
-                output_dir=output_dir,
+                output_dir=country_summary_source_dir,
                 changed_country_keys=changed_keys,
             )
         )
         print(f"   ✓ 国家汇总已更新，共 {len(country_summary)} 行")
     else:
         print("📊 计算国家汇总（全量）...")
-        df_for_country = load_analysis_data(parquet_path)
-        country_summary = compute_country_summary(df_for_country)
+        country_summary = compute_country_summary(get_full_df())
         print(f"   ✓ {len(country_summary)} 个国家")
 
     # 第一阶段优先减少刷新开销：非国家汇总优先复用已有结果。
-    year_month_summary = load_existing_summary(output_dir, "yearMonth")
-    powertrain_summary = load_existing_summary(output_dir, "powertrain")
-    segment_summary = load_existing_summary(output_dir, "segment")
-    top_makes_summary = load_existing_summary(output_dir, "topMakes")
+    year_month_summary = load_existing_summary(
+        output_dir,
+        "yearMonth",
+    )
+    powertrain_summary = load_existing_summary(
+        output_dir,
+        "powertrain",
+    )
+    segment_summary = load_existing_summary(
+        output_dir,
+        "segment",
+    )
+    top_makes_summary = load_existing_summary(
+        output_dir,
+        "topMakes",
+    )
 
     missing_non_country = (
         year_month_summary.empty
@@ -359,7 +437,7 @@ def precompute_all_summaries(
     )
     if missing_non_country:
         print("📊 检测到非国家汇总缺失，执行一次全量兜底计算...")
-        df = load_analysis_data(parquet_path)
+        df = get_full_df()
         if year_month_summary.empty:
             year_month_summary = compute_year_month_summary(df)
         if powertrain_summary.empty:
@@ -368,6 +446,12 @@ def precompute_all_summaries(
             segment_summary = compute_segment_summary(df)
         if top_makes_summary.empty:
             top_makes_summary = compute_top_makes_summary(df, top_n=20)
+        del df
+
+    # Keep exactly one full DataFrame alive and release it before serializing the
+    # compact outputs. This is important when the isolated worker has a hard
+    # address-space limit.
+    full_df = None
 
     summaries = {
         "country": country_summary,
@@ -406,11 +490,27 @@ def precompute_all_summaries(
 
 
 if __name__ == "__main__":
+    parser = argparse.ArgumentParser(
+        description="Precompute dashboard summaries from one parquet candidate."
+    )
+    parser.add_argument(
+        "--parquet",
+        default=None,
+        help="Input parquet file or dataset directory.",
+    )
+    parser.add_argument(
+        "--output-dir",
+        default=None,
+        help="Destination directory for summary parquet/csv files.",
+    )
+    args = parser.parse_args()
     project_root = get_project_root()
-    parquet_path = str(
+    parquet_path = args.parquet or str(
         project_root / "04_Processed_data" / "fullParquetV1.parquet"
     )
-    output_dir = str(project_root / "04_Processed_data" / "summaries")
+    output_dir = args.output_dir or str(
+        project_root / "04_Processed_data" / "summaries"
+    )
 
     manifest = precompute_all_summaries(parquet_path, output_dir)
     print(

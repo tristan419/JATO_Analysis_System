@@ -293,7 +293,14 @@ def should_skip_for_unchanged(
     previous_fingerprint = read_json_if_exists(fingerprint_path)
     if not previous_fingerprint:
         return False, None
-    return previous_fingerprint == current_fingerprint, previous_fingerprint
+    previous_input_fingerprint = {
+        key: previous_fingerprint.get(key)
+        for key in current_fingerprint
+    }
+    return (
+        previous_input_fingerprint == current_fingerprint,
+        previous_fingerprint,
+    )
 
 
 def resolve_existing_output_paths(
@@ -1010,29 +1017,92 @@ def run_refresh_job(args: argparse.Namespace) -> dict:
             regression_summary.get("changedPartitionKeys", [])
         )
 
-        # 步骤：预聚合数据（降低前端带宽占用）
+        # Candidate refreshes must never mutate the canonical dashboard summaries.
+        # They are rebuilt only from a published active dataset.
         summaries_manifest = None
-        try:
-            from precompute_summaries import precompute_all_summaries
-            step_start = time.time()
-            summaries_output = resolve_path("04_Processed_data/summaries")
-            emit("📊 预聚合数据（减少前端传输）...")
-            summaries_manifest = precompute_all_summaries(
-                parquet_path=str(output_parquet),
-                output_dir=str(summaries_output),
-                partitioned_dataset_path=str(partition_dir),
-                changed_partition_keys=changed_partition_keys,
-            )
-            step_durations["precomputeSeconds"] = round(
-                time.time() - step_start,
-                3,
-            )
-            total_rows = summaries_manifest['totalSummaryRows']
-            bw_red = summaries_manifest['bandwidthReduction']
-            emit(f"   ✓ 预聚合完成：{total_rows} 行（"f"带宽降低 {bw_red}）")
-        except Exception as precompute_error:
-            emit(f"⚠️  预聚合失败（非致命）: {precompute_error}")
-            logger.warning("预聚合失败，继续处理", exc_info=True)
+        summaries_output: Path | None = None
+        if bool(getattr(args, "skip_precompute", False)):
+            emit("⏭️ 跳过 canonical 预聚合：candidate 不得改写线上 summaries。")
+        else:
+            try:
+                from precompute_summaries import precompute_all_summaries
+                step_start = time.time()
+                requested_summaries_output = str(
+                    getattr(args, "summaries_output", "") or ""
+                ).strip()
+                summaries_output = resolve_path(
+                    requested_summaries_output
+                    or "04_Processed_data/summaries"
+                )
+                temp_summaries_output = summaries_output.with_name(
+                    f".{summaries_output.name}.{job_id}.tmp"
+                )
+                _remove_path(temp_summaries_output)
+                emit("📊 预聚合数据（减少前端传输）...")
+                summaries_manifest = precompute_all_summaries(
+                    parquet_path=str(output_parquet),
+                    output_dir=str(temp_summaries_output),
+                    partitioned_dataset_path=str(partition_dir),
+                    changed_partition_keys=(
+                        []
+                        if requested_summaries_output
+                        else changed_partition_keys
+                    ),
+                    existing_country_summary_dir=(
+                        str(summaries_output)
+                        if (
+                            not requested_summaries_output
+                            and summaries_output.exists()
+                        )
+                        else None
+                    ),
+                )
+                expected_rows = int(full_manifest_payload.get("rows", 0) or 0)
+                summary_rows = int(
+                    summaries_manifest.get("originalRowCount", -1) or -1
+                )
+                if summary_rows != expected_rows:
+                    raise ValueError(
+                        "预聚合行数与 candidate manifest 不一致："
+                        f"summary={summary_rows}, candidate={expected_rows}"
+                    )
+                if not (
+                    temp_summaries_output / "summaries_manifest.json"
+                ).exists():
+                    raise ValueError("预聚合缺少 summaries_manifest.json。")
+                _remove_path(summaries_output)
+                temp_summaries_output.replace(summaries_output)
+                summary_files = summaries_manifest.get("summaries")
+                if isinstance(summary_files, dict):
+                    for item in summary_files.values():
+                        if not isinstance(item, dict):
+                            continue
+                        for key in ("csv", "parquet"):
+                            value = item.get(key)
+                            if isinstance(value, str):
+                                item[key] = value.replace(
+                                    str(temp_summaries_output),
+                                    str(summaries_output),
+                                    1,
+                                )
+                write_json(
+                    summaries_output / "summaries_manifest.json",
+                    summaries_manifest,
+                )
+                step_durations["precomputeSeconds"] = round(
+                    time.time() - step_start,
+                    3,
+                )
+                total_rows = summaries_manifest['totalSummaryRows']
+                bw_red = summaries_manifest['bandwidthReduction']
+                emit(f"   ✓ 预聚合完成：{total_rows} 行（"f"带宽降低 {bw_red}）")
+            except Exception as precompute_error:
+                if str(getattr(args, "summaries_output", "") or "").strip():
+                    emit(f"❌ candidate 预聚合失败（阻断）: {precompute_error}")
+                    logger.exception("candidate 预聚合失败，阻断 candidate")
+                    raise
+                emit(f"⚠️  canonical 预聚合失败（非致命）: {precompute_error}")
+                logger.warning("canonical 预聚合失败，继续处理", exc_info=True)
 
         benchmark_summary = None
         if not args.skip_benchmark:
@@ -1085,9 +1155,11 @@ def run_refresh_job(args: argparse.Namespace) -> dict:
                 "conflictReport": to_project_relative(
                     resolved_conflict_report_path
                 ),
-                "summariesDir": ("04_Processed_data/summaries"
-                                 if summaries_manifest
-                                 else None),
+                "summariesDir": (
+                    to_project_relative(summaries_output)
+                    if summaries_manifest and summaries_output is not None
+                    else None
+                ),
             },
             "stepDurations": step_durations,
             "fullManifest": {
@@ -1128,7 +1200,31 @@ def run_refresh_job(args: argparse.Namespace) -> dict:
         }
 
         if incremental_enabled:
-            write_json(fingerprint_path, current_fingerprint)
+            write_json(
+                fingerprint_path,
+                {
+                    **current_fingerprint,
+                    "datasetSha256": str(
+                        full_manifest_payload.get("sha256") or ""
+                    ),
+                    "rowCount": int(
+                        full_manifest_payload.get("rows", 0) or 0
+                    ),
+                    "columnCount": int(
+                        full_manifest_payload.get("columns", 0) or 0
+                    ),
+                    "fileSizeBytes": int(
+                        full_manifest_payload.get(
+                            "fileSizeBytes",
+                            full_manifest_payload.get(
+                                "outputParquetBytes",
+                                0,
+                            ),
+                        )
+                        or 0
+                    ),
+                },
+            )
 
         report_path = write_report(args.report, report)
 
@@ -1243,6 +1339,17 @@ def build_parser() -> argparse.ArgumentParser:
         "--skip-benchmark",
         action="store_true",
         help="跳过 dashboard 基准测试。",
+    )
+    parser.add_argument(
+        "--skip-precompute",
+        action="store_true",
+        help="跳过 canonical dashboard summaries；candidate/staging 刷新必须启用。",
+    )
+    parser.add_argument(
+        "--summaries-output",
+        type=str,
+        default=None,
+        help="将完整预聚合写入指定 staging 目录；失败时整个 candidate 失败。",
     )
     parser.add_argument(
         "--incremental",

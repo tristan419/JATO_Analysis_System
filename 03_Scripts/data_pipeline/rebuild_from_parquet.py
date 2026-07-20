@@ -2,7 +2,8 @@
 
 Used by Smart Merge to refresh derived artifacts after merging regressed countries
 from the active dataset into the staging candidate. Avoids re-running the full
-xlsx→parquet ETL.
+xlsx→parquet ETL. Summaries are intentionally excluded: the caller must build
+them into the same staging bundle and must never mutate canonical active data.
 
 Usage:
     python rebuild_from_parquet.py \\
@@ -65,6 +66,25 @@ def main() -> None:
 
     job_id = build_job_id()
     steps: dict[str, float] = {}
+    schema_names = [str(column).strip() for column in pq.read_schema(input_path).names]
+    schema_lookup = {
+        column.casefold(): column
+        for column in schema_names
+    }
+    partition_column = next(
+        (
+            schema_lookup[candidate.casefold()]
+            for candidate in ("国家", "Country", "Countries")
+            if candidate.casefold() in schema_lookup
+        ),
+        None,
+    )
+    if partition_column is None:
+        print(
+            "ERROR: input parquet missing country partition column",
+            file=sys.stderr,
+        )
+        sys.exit(1)
 
     # 1. Build partitioned dataset
     t0 = time.time()
@@ -73,6 +93,7 @@ def main() -> None:
     partition_dir, partition_manifest = build_partitioned_dataset(
         input_path=str(input_path),
         output_dir=str(partition_output),
+        partition_cols=[partition_column],
         overwrite=True,
         incremental=False,
         job_id=job_id,
@@ -118,23 +139,6 @@ def main() -> None:
     )
     steps["fingerprintSeconds"] = round(time.time() - t0, 3)
     print(f"[ok] fingerprint → {fingerprint_path}")
-
-    # 4. Precompute summaries (best-effort)
-    try:
-        t0 = time.time()
-        from precompute_summaries import precompute_all_summaries  # type: ignore
-
-        summaries_output = PROJECT_ROOT / "04_Processed_data" / "summaries"
-        precompute_all_summaries(
-            parquet_path=str(input_path),
-            output_dir=str(summaries_output),
-            partitioned_dataset_path=str(partition_output),
-        )
-        steps["precomputeSeconds"] = round(time.time() - t0, 3)
-        print(f"[ok] precomputed summaries → {summaries_output}")
-    except Exception as exc:
-        steps["precomputeSeconds"] = -1.0
-        print(f"[warn] precompute_summaries skipped: {exc}")
 
     report = {
         "jobStatus": "success",

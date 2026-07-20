@@ -1,7 +1,8 @@
-from fastapi import APIRouter, Depends, File, Form, Query, Request, UploadFile
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, Request, UploadFile
 
 from app.core.security import UserContext, require_min_role
 from app.services.jato_monthly_update_service import (
+    abandon_jato_monthly_update_upload,
     approve_jato_monthly_update_review,
     cancel_jato_monthly_update_job,
     complete_jato_monthly_update_upload,
@@ -13,6 +14,7 @@ from app.services.jato_monthly_update_service import (
     get_jato_monthly_update_job,
     get_jato_monthly_update_maintenance_status,
     get_jato_monthly_update_review,
+    get_jato_monthly_update_expected_chunk_size,
     initiate_jato_monthly_update_upload,
     list_jato_monthly_update_jobs,
     promote_current_active_to_baseline,
@@ -52,6 +54,7 @@ def post_monthly_update_job_from_upload(
         "item": create_jato_monthly_update_job_from_upload(
             upload_id=str(payload.get("uploadId", "")),
             triggered_by=user.name,
+            triggered_role=user.role,
             month=str(month_raw).strip() if month_raw else None,
         )
     }
@@ -214,9 +217,15 @@ def post_monthly_update_upload_session(
 @router.get("/monthly-update-uploads/{upload_id}")
 def get_monthly_update_upload_session(
     upload_id: str,
-    _user: UserContext = Depends(require_min_role("editor")),
+    user: UserContext = Depends(require_min_role("editor")),
 ) -> dict[str, object]:
-    return {"item": get_jato_monthly_update_upload(upload_id)}
+    return {
+        "item": get_jato_monthly_update_upload(
+            upload_id,
+            requested_by=user.name,
+            requested_role=user.role,
+        )
+    }
 
 
 @router.put("/monthly-update-uploads/{upload_id}/parts/{part_number}")
@@ -224,14 +233,35 @@ async def put_monthly_update_upload_chunk(
     upload_id: str,
     part_number: int,
     request: Request,
-    _user: UserContext = Depends(require_min_role("editor")),
+    user: UserContext = Depends(require_min_role("editor")),
 ) -> dict[str, object]:
+    expected_size = get_jato_monthly_update_expected_chunk_size(
+        upload_id=upload_id,
+        part_number=part_number,
+        requested_by=user.name,
+        requested_role=user.role,
+    )
+    content_length = request.headers.get("Content-Length")
+    if content_length:
+        try:
+            declared_size = int(content_length)
+        except ValueError:
+            raise HTTPException(status_code=400, detail="Content-Length 无效。") from None
+        if declared_size > expected_size:
+            raise HTTPException(status_code=413, detail="上传分片超过该会话允许的大小。")
+    content = bytearray()
+    async for block in request.stream():
+        content.extend(block)
+        if len(content) > expected_size:
+            raise HTTPException(status_code=413, detail="上传分片超过该会话允许的大小。")
     return {
         "item": upload_jato_monthly_update_chunk(
             upload_id=upload_id,
             part_number=part_number,
-            content=await request.body(),
+            content=bytes(content),
             chunk_sha256=request.headers.get("X-Chunk-SHA256", ""),
+            requested_by=user.name,
+            requested_role=user.role,
         )
     }
 
@@ -239,9 +269,29 @@ async def put_monthly_update_upload_chunk(
 @router.post("/monthly-update-uploads/{upload_id}/complete")
 def post_monthly_update_upload_complete(
     upload_id: str,
-    _user: UserContext = Depends(require_min_role("editor")),
+    user: UserContext = Depends(require_min_role("editor")),
 ) -> dict[str, object]:
-    return {"item": complete_jato_monthly_update_upload(upload_id=upload_id)}
+    return {
+        "item": complete_jato_monthly_update_upload(
+            upload_id=upload_id,
+            requested_by=user.name,
+            requested_role=user.role,
+        )
+    }
+
+
+@router.post("/monthly-update-uploads/{upload_id}/abandon")
+def post_monthly_update_upload_abandon(
+    upload_id: str,
+    user: UserContext = Depends(require_min_role("editor")),
+) -> dict[str, object]:
+    return {
+        "item": abandon_jato_monthly_update_upload(
+            upload_id=upload_id,
+            triggered_by=user.name,
+            triggered_role=user.role,
+        )
+    }
 
 
 @router.post("/monthly-update-maintenance/cleanup")

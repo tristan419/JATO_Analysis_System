@@ -2323,6 +2323,8 @@ export interface JatoMonthlyUpdateArtifacts {
   partitionOutputPath?: string | null;
   refreshReportPath?: string | null;
   fingerprintPath?: string | null;
+  summariesOutputPath?: string | null;
+  reviewBundlePath?: string | null;
 }
 
 export interface JatoMonthlyUpdatePublication {
@@ -2334,9 +2336,27 @@ export interface JatoMonthlyUpdatePublication {
   activePartitionPath?: string | null;
   activeFingerprintPath?: string | null;
   activeRefreshReportPath?: string | null;
+  activeSummariesPath?: string | null;
+  summariesState?: string | null;
   rolledBackAt?: string | null;
   rolledBackBy?: string | null;
   rollbackBackupDir?: string | null;
+  activeFingerprintBefore?: string | null;
+  activeFingerprintAfter?: string | null;
+  rollbackActiveFingerprintBefore?: string | null;
+  rollbackActiveFingerprintAfter?: string | null;
+}
+
+export interface JatoMonthlyUpdatePendingOperation {
+  operationId: string;
+  type: "publish" | "rollback";
+  status: "queued" | "running" | "success" | "failed";
+  requestedAt: string;
+  requestedBy: string;
+  startedAt: string | null;
+  finishedAt: string | null;
+  error: string | null;
+  failureDigest: JatoMonthlyUpdateFailureDigest | null;
 }
 
 export interface JatoMonthlyUpdateRawCompareSummary {
@@ -2395,6 +2415,8 @@ export interface JatoMonthlyUpdateRuntimeCheck {
   statusAtCheck?: string;
   phaseAtCheck?: string;
   threadAlive?: boolean;
+  workerPid?: number | null;
+  workerAlive?: boolean;
   processPid?: number | null;
   processAlive?: boolean;
   log?: Record<string, unknown>;
@@ -2416,6 +2438,7 @@ export interface JatoMonthlyUpdateReviewApproval {
   reviewedAt: string;
   reviewedBy: string;
   candidateFingerprint: string;
+  activeBaseFingerprint?: string | null;
   note?: string | null;
 }
 
@@ -2434,6 +2457,11 @@ export interface JatoMonthlyUpdateJob {
   startedAt: string | null;
   finishedAt: string | null;
   error: string | null;
+  ingestionKey?: string | null;
+  ingestDigest?: JatoMonthlyUpdateIngestDigest | null;
+  failureDigest?: JatoMonthlyUpdateFailureDigest | null;
+  duplicateOfJobId?: string | null;
+  activeBaseFingerprint?: string | null;
   upload: JatoMonthlyUpdateUpload | null;
   plan: JatoMonthlyUpdatePlan | null;
   artifacts: JatoMonthlyUpdateArtifacts | null;
@@ -2443,6 +2471,7 @@ export interface JatoMonthlyUpdateJob {
   runtimeCheck?: JatoMonthlyUpdateRuntimeCheck | null;
   cancellation?: JatoMonthlyUpdateCancellation | null;
   reviewApproval?: JatoMonthlyUpdateReviewApproval | null;
+  pendingOperation?: JatoMonthlyUpdatePendingOperation | null;
   logPath?: string | null;
   logTail?: string | null;
 }
@@ -2579,13 +2608,23 @@ export interface JatoMonthlyUpdateMaintenanceStatus {
   latestPatchBatch: string | null;
   jobCount: number;
   uploadSessionCount: number;
+  baselinePromotion: JatoMonthlyUpdateBaselinePromotionResult | null;
   trackedStorageBytes: number;
   storageMetrics: JatoMonthlyUpdateStorageMetric[];
 }
 
 export interface JatoMonthlyUpdateBaselinePromotionResult {
-  promotedAt: string;
-  triggeredBy: string;
+  operationId: string;
+  status: "queued" | "running" | "success" | "failed";
+  requestedAt: string | null;
+  requestedBy: string | null;
+  startedAt: string | null;
+  finishedAt: string | null;
+  error: string | null;
+  failureDigest: JatoMonthlyUpdateFailureDigest | null;
+  sourceActiveFingerprint: string | null;
+  promotedAt: string | null;
+  triggeredBy: string | null;
   sourceParquetPath: string | null;
   baselinePath: string | null;
   detectedLatestMonth: string | null;
@@ -2593,6 +2632,62 @@ export interface JatoMonthlyUpdateBaselinePromotionResult {
   rowCount: number;
   archivedBaselineCount: number;
   archivedBaselines: string[];
+}
+
+export type JatoMonthlyUpdateUploadStatus =
+  | "pending"
+  | "uploading"
+  | "assembling"
+  | "digesting"
+  | "ready"
+  | "invalid"
+  | "consumed"
+  | "abandoned"
+  | "expired";
+
+export type JatoMonthlyUpdateUploadRoute =
+  | "single_country"
+  | "partial_country"
+  | "full_batch";
+
+export interface JatoMonthlyUpdateIngestIssue {
+  code: string;
+  message: string;
+  countries: string[];
+  fields: string[];
+  sourceFeedback: string | null;
+}
+
+export interface JatoMonthlyUpdateIngestDigest {
+  schemaVersion: number;
+  status: "ready" | "invalid";
+  fileSha256: string;
+  sizeBytes: number;
+  sheetName: string | null;
+  route: JatoMonthlyUpdateUploadRoute | null;
+  candidateScope: string | null;
+  countries: string[];
+  countryLatestMonths: Record<string, string | null>;
+  activeLatestMonths: Record<string, string | null>;
+  latestMonth: string | null;
+  dataRowCount: number;
+  advancedCountries: string[];
+  unchangedCountries: string[];
+  regressedCountries: string[];
+  activeDatasetVersion: string | null;
+  blockers: JatoMonthlyUpdateIngestIssue[];
+  warnings: JatoMonthlyUpdateIngestIssue[];
+}
+
+export interface JatoMonthlyUpdateFailureDigest {
+  code: string;
+  category: string;
+  phase: string;
+  retryable: boolean;
+  message: string;
+  sourceFeedback: string | null;
+  technicalDetail: unknown;
+  nextAction: string;
 }
 
 export interface JatoMonthlyUpdateUploadSession {
@@ -2603,8 +2698,9 @@ export interface JatoMonthlyUpdateUploadSession {
   totalChunks: number;
   receivedChunkCount: number;
   receivedChunks: number[];
+  chunkDigests: Record<string, string>;
   uploadedBytes: number;
-  status: string;
+  status: JatoMonthlyUpdateUploadStatus;
   createdAt: string | null;
   updatedAt: string | null;
   completedAt: string | null;
@@ -2612,16 +2708,25 @@ export interface JatoMonthlyUpdateUploadSession {
   resumeKey: string | null;
   fileSha256: string | null;
   triggeredBy: string | null;
+  ingestDigest: JatoMonthlyUpdateIngestDigest | null;
+  failureDigest: JatoMonthlyUpdateFailureDigest | null;
+  consumedJobId: string | null;
+  digestPid: number | null;
+  digestLaunchedAt: string | null;
+  digestAttempts: number;
 }
 
 export interface JatoMonthlyUpdateUploadProgress {
-  stage: "initiating" | "resuming" | "uploading" | "retrying" | "assembling" | "creating_job" | "queued";
+  uploadId?: string | null;
+  stage: "initiating" | "verifying" | "resuming" | "uploading" | "retrying" | "assembling" | "digesting" | "invalid" | "creating_job" | "queued";
   uploadedBytes: number;
   totalBytes: number;
   uploadedChunks: number;
   totalChunks: number;
   chunkSize: number;
   detail?: string | null;
+  ingestDigest?: JatoMonthlyUpdateIngestDigest | null;
+  failureDigest?: JatoMonthlyUpdateFailureDigest | null;
 }
 
 export interface PublishCountryRegression {
@@ -2645,8 +2750,18 @@ export interface PublishSalesDoublingAnomaly {
 }
 
 export interface PublishBlocker {
-  blockerType: "country_regression" | "sales_doubling";
+  blockerType:
+    | "country_regression"
+    | "sales_doubling"
+    | "historical_sales_changed"
+    | "historical_configuration_changed"
+    | "historical_configuration_guard_unavailable"
+    | "ambiguous_logical_country"
+    | "stale_candidate"
+    | "candidate_bundle_invalid"
+    | "rollback_target_stale";
   message: string;
+  sourceFeedback?: string | null;
   regressions?: PublishCountryRegression[];
   anomalies?: PublishSalesDoublingAnomaly[];
 }
