@@ -1,136 +1,48 @@
 source_code: volvo_xc40_pl_draft_scrapling
 country: 波兰
 brand: VOLVO
-source_url: https://www.volvocars.com/pl/samochody/xc40
-source_type: manufacturer_official
+source_url: https://azure-eu-assets.contentstack.com/v3/assets/blt84e01a6904dbd2e8/bltbf3a5b70286bf69c/69d7e85539037317bbdd3a0a/Cennik_Volvo_XC40_MY27_26W11_-_30.03v1.0.pdf
+source_type: official_price_list
 price_semantics: base_msrp
-extractor_type: scrapling
+extractor_type: pdf_text
 profile:
-  url: https://www.volvocars.com/pl/samochody/xc40
-  tier: stealth
-  headless: true
-  network_idle: true
-  impersonate: chrome
-  json_script_selector: script[type='application/ld+json']
-  css:
-    vehicle_container: body
-    model: h1
-    trim: '[class*="variant"], [class*="trim"], h2'
-    price: '[class*="price"], [data-automation*="price"]'
+  url: https://azure-eu-assets.contentstack.com/v3/assets/blt84e01a6904dbd2e8/bltbf3a5b70286bf69c/69d7e85539037317bbdd3a0a/Cennik_Volvo_XC40_MY27_26W11_-_30.03v1.0.pdf
+  timeout_seconds: 60
+  retry_attempts: 1
+  prefer_curl_download: true
+  curl_download_fallback: true
   default_currency: PLN
   default_tax_included: true
-  default_price_label: MSRP
+  default_price_label: Cena z VAT (PLN)
   fixed_model: XC40
   fixed_jato_model: XC40
-  fixed_jato_powertrain: null
-  model_rules: []
-  skip_if_model_unmapped: false
   copy_trim_to_jato_trim: true
-  confidence_rules:
-    base: 0.2
-    fixed_model_bonus: 0.18
-    fixed_jato_model_bonus: 0.12
-    model_rule_bonus: 0.12
-    trim_present_bonus: 0.1
-    copy_trim_to_jato_trim_bonus: 0.09
-    parsed_price_text_bonus: 0.03
-    currency_bonus: 0.01
-    price_label_bonus: 0.02
-    trim_keyword_bonuses: []
-    price_band_bonuses:
-    - key: price_band_entry
-      label: Entry price band matched
-      max: 0
-      delta: 0.0
-    - key: price_band_mid
-      label: Mid price band matched
-      min: 0
-      max: 0
-      delta: 0.01
-    - key: price_band_high
-      label: High price band matched
-      min: 0
-      delta: 0.03
-    powertrain_keyword_bonuses: []
-    powertrain_bonuses:
-    - key: powertrain_bev
-      label: 'Powertrain matched: BEV'
-      powertrain: BEV
-      delta: 0.03
-    - key: powertrain_phev
-      label: 'Powertrain matched: PHEV'
-      powertrain: PHEV
-      delta: 0.03
-    - key: powertrain_mhev
-      label: 'Powertrain matched: MHEV'
-      powertrain: MHEV
-      delta: 0.03
-    - key: powertrain_ice
-      label: 'Powertrain matched: ICE'
-      powertrain: ICE
-      delta: 0.03
-    clamp_min: 0.0
-    clamp_max: 1.0
-  structured_fields:
-    edition_rules:
-    - key: edition_special
-      label: Special Edition
-      keyword: special edition
-      special: true
-    powertrain_rules:
-    - key: powertrain_bev
-      powertrain: BEV
-      keywords:
-      - bev
-      - ev
-      - electric
-      - battery electric
-      - fully electric
-      - electric vehicle
-      - elektryczny
-      - w pelni elektryczny
-      - samochod elektryczny
-    - key: powertrain_phev
-      powertrain: PHEV
-      keywords:
-      - phev
-      - plug-in hybrid
-      - plug in hybrid
-      - plugin hybrid
-      - hybryda plug-in
-    - key: powertrain_mhev
-      powertrain: MHEV
-      keywords:
-      - mhev
-      - mild hybrid
-      - mild-hybrid
-      - 48V
-      - miekka hybryda
-    - key: powertrain_ice
-      powertrain: ICE
-      keywords:
-      - ice
-      - petrol
-      - gasoline
-      - diesel
-      - combustion
-      - benzyna
-  auto_accept_gates:
-    review_threshold: 0.95
-    semi_auto_threshold: 0.98
-    require_powertrain_match: true
-    force_review_if_powertrain_missing: true
-    force_review_if_powertrain_ambiguous: true
-    force_review_for_special_edition: true
+  match_confidence: 0.9
+  match_status: review_required
+  match_reason:
+    kind: pdf_price_list
+    source: official_volvo_pl_cennik
+    document_scope: XC40 MY27
+    document_price_date: '2026-02-02'
+    document_audited_on: '2026-07-15'
+    document_sha256_at_audit: 1adcce16ac777564ab8d37b46d6e3df65a0e4931e75b25fa773ca8eb5a301456
+    note: Official XC40 MY27 price table explicitly labelled Cena z VAT.
+  entry_patterns:
+  - pattern: 'B3\s+FWD.*?147\s*-\s*164\*?\s+(?P<price>\d{3}\s+\d{3})'
+    official_trim: ESSENTIAL
+    official_powertrain: B3 FWD 2.0 163+14 KM
+    jato_powertrain: MHEV
+  - pattern: 'B4\s+FWD.*?148\s*-\s*164\*?\s+(?:-|–)\s+(?P<price>\d{3}\s+\d{3})'
+    official_trim: CORE
+    official_powertrain: B4 FWD 2.0 197+14 KM
+    jato_powertrain: MHEV
 schedule:
   frequency: manual_only
   run_window_start: 00:00
   run_window_end: 05:00
   preferred_weekday: monday
-notes: Draft scaffold generated from country×model top30 backlog. Replace source_url,
-  profile.url, selectors, currency, price label, and the single-model placeholders
-  before promoting to 07_ScrapingToolkit/sources. [URL filled from VOLVO template]
-  [URL language corrected] [CSS selectors applied from brand probe]
+notes: Switched from a 404 model page to the current Volvo Poland XC40 MY27 PDF.
+  Extracts VAT-inclusive vehicle prices only and remains review-required.
 bootstrap_meta:
   country_model_rank: 22
   suggested_scope_kind: single_model

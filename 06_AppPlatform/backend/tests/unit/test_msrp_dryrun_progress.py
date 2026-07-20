@@ -1,7 +1,75 @@
+from contextlib import contextmanager
 import json
 from pathlib import Path
+import subprocess
+import sys
+
+import pytest
 
 from app.services import msrp_dryrun_progress as progress
+
+
+@contextmanager
+def _lock_held_by_child_process(lock_file: Path):
+    holder = subprocess.Popen(
+        [
+            sys.executable,
+            "-c",
+            (
+                "import fcntl, pathlib, sys\n"
+                "with pathlib.Path(sys.argv[1]).open('a+') as lock:\n"
+                "    fcntl.flock(lock.fileno(), fcntl.LOCK_EX)\n"
+                "    sys.stdout.write('1')\n"
+                "    sys.stdout.flush()\n"
+                "    sys.stdin.read(1)\n"
+            ),
+            str(lock_file),
+        ],
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        text=True,
+    )
+    try:
+        assert holder.stdout is not None
+        assert holder.stdout.read(1) == "1"
+        yield
+    finally:
+        if holder.stdin is not None:
+            holder.stdin.write("1")
+            holder.stdin.close()
+        holder.wait(timeout=5)
+
+
+def test_is_running_ignores_unlocked_persistent_lock_file(tmp_path, monkeypatch):
+    lock_file = tmp_path / "jato-msrp-low-concurrency.lock"
+    lock_file.write_text("", encoding="utf-8")
+    monkeypatch.setattr(progress, "LOCK_FILE", lock_file)
+
+    assert progress._is_running() is False
+    assert lock_file.exists()
+
+
+def test_is_running_detects_lock_held_by_another_process(tmp_path, monkeypatch):
+    lock_file = tmp_path / "jato-msrp-low-concurrency.lock"
+    monkeypatch.setattr(progress, "LOCK_FILE", lock_file)
+
+    with _lock_held_by_child_process(lock_file):
+        assert progress._is_running() is True
+
+    assert progress._is_running() is False
+
+
+def test_is_running_fails_closed_when_lock_probe_errors(tmp_path, monkeypatch):
+    lock_file = tmp_path / "jato-msrp-low-concurrency.lock"
+    lock_file.write_text("", encoding="utf-8")
+    monkeypatch.setattr(progress, "LOCK_FILE", lock_file)
+
+    def raise_probe_error(*_args):
+        raise OSError("flock probe failed")
+
+    monkeypatch.setattr(progress.fcntl, "flock", raise_probe_error)
+
+    assert progress._is_running() is True
 
 
 def test_dashboard_reads_v3_report_from_artifacts(tmp_path, monkeypatch):
@@ -572,14 +640,34 @@ def test_dashboard_keeps_latest_stable_country_when_new_probe_regresses(tmp_path
     )
 
 
-def test_dashboard_uses_runs_index_when_latest_shortcut_is_stale_partial(tmp_path, monkeypatch):
+@pytest.mark.parametrize(
+    ("partial_run_id", "shortcut_run_id"),
+    [
+        (
+            "msrp-dryrun-20260714-064856",
+            "msrp-dryrun-20260714-064856",
+        ),
+        (
+            "msrp-dryrun-20260715-010000",
+            "msrp-dryrun-20260716-020000",
+        ),
+    ],
+)
+def test_dashboard_uses_completed_pipeline_and_index_over_stale_partial(
+    tmp_path,
+    monkeypatch,
+    partial_run_id,
+    shortcut_run_id,
+):
     artifacts = tmp_path / "artifacts"
     logs = tmp_path / "logs"
-    run_dir = logs / "msrp-dryrun-20260612-125301"
+    status_dir = tmp_path / "pipeline_status"
+    latest_run_id = "msrp-dryrun-20260714-064856"
+    run_dir = logs / partial_run_id
     artifacts.mkdir()
     run_dir.mkdir(parents=True)
+    status_dir.mkdir()
 
-    latest_run_id = "msrp-dryrun-20260612-070207"
     report = {
         "schemaVersion": "msrp_dryrun_report_v3",
         "runId": latest_run_id,
@@ -615,7 +703,7 @@ def test_dashboard_uses_runs_index_when_latest_shortcut_is_stale_partial(tmp_pat
             }
         ],
         "results": [],
-        "generatedAt": "2026-06-12T09:31:08Z",
+        "generatedAt": "2026-07-14T07:38:14Z",
     }
     index = {
         "schemaVersion": "msrp_dryrun_runs_index_v1",
@@ -624,7 +712,7 @@ def test_dashboard_uses_runs_index_when_latest_shortcut_is_stale_partial(tmp_pat
             {
                 "runId": latest_run_id,
                 "batch": "batch_a",
-                "finishedAt": "2026-06-12T09:31:08Z",
+                "finishedAt": "2026-07-14T07:38:14Z",
                 "status": "success",
                 "gateStatus": "allowed",
                 "passPct": 100.0,
@@ -640,26 +728,41 @@ def test_dashboard_uses_runs_index_when_latest_shortcut_is_stale_partial(tmp_pat
 
     (artifacts / "dryrun_report.json").write_text(json.dumps({
         "schemaVersion": "msrp_dryrun_partial_v1",
-        "runId": "msrp-dryrun-20260612-125301",
+        "runId": shortcut_run_id,
         "running": True,
         "partial": True,
     }), encoding="utf-8")
     (artifacts / f"dryrun_report_{latest_run_id}.json").write_text(json.dumps(report), encoding="utf-8")
     (artifacts / "dryrun_runs_index.json").write_text(json.dumps(index), encoding="utf-8")
     (run_dir / "run.log").write_text("[INFO] Countries: fi no\n", encoding="utf-8")
+    pipeline_status_path = status_dir / "msrp_dryrun.json"
+    pipeline_status_path.write_text(json.dumps({
+        "pipelineId": "msrp_dryrun",
+        "status": "degraded",
+        "finishedAt": "2026-07-14T07:38:14Z",
+        "exitCode": 0,
+        "recordsProcessed": 344,
+        "runId": latest_run_id,
+    }), encoding="utf-8")
+    lock_file = tmp_path / "jato-msrp-low-concurrency.lock"
+    lock_file.write_text("", encoding="utf-8")
 
     monkeypatch.setattr(progress, "ARTIFACT_DIR", artifacts)
     monkeypatch.setattr(progress, "LATEST_REPORT_PATH", artifacts / "dryrun_report.json")
     monkeypatch.setattr(progress, "RUNS_INDEX_PATH", artifacts / "dryrun_runs_index.json")
+    monkeypatch.setattr(progress, "PIPELINE_STATUS_PATH", pipeline_status_path)
     monkeypatch.setattr(progress, "LOG_DIR", logs)
-    monkeypatch.setattr(progress, "LOCK_FILE", tmp_path / "missing.lock")
+    monkeypatch.setattr(progress, "LOCK_FILE", lock_file)
 
     dashboard = progress.get_dryrun_dashboard()
 
     assert dashboard["current"]["schemaVersion"] == "msrp_dryrun_report_v3"
     assert dashboard["current"]["runId"] == latest_run_id
+    assert dashboard["current"]["running"] is False
     assert dashboard["current"]["countries"][0]["countryCode"] == "fi"
     assert dashboard["current"]["gateStatus"] == "allowed"
+    assert dashboard["stableCoverage"]["activeRunRunning"] is False
+    assert dashboard["stableCoverage"]["activeRunPartial"] is False
 
 
 def test_dashboard_prefers_active_partial_run_over_stale_latest_report(tmp_path, monkeypatch):
@@ -767,7 +870,6 @@ def test_dashboard_prefers_active_partial_run_over_stale_latest_report(tmp_path,
         }],
     }), encoding="utf-8")
     lock_file = tmp_path / "jato-msrp-low-concurrency.lock"
-    lock_file.write_text("locked", encoding="utf-8")
 
     monkeypatch.setattr(progress, "ARTIFACT_DIR", artifacts)
     monkeypatch.setattr(progress, "LATEST_REPORT_PATH", artifacts / "dryrun_report.json")
@@ -775,7 +877,8 @@ def test_dashboard_prefers_active_partial_run_over_stale_latest_report(tmp_path,
     monkeypatch.setattr(progress, "LOG_DIR", logs)
     monkeypatch.setattr(progress, "LOCK_FILE", lock_file)
 
-    dashboard = progress.get_dryrun_dashboard()
+    with _lock_held_by_child_process(lock_file):
+        dashboard = progress.get_dryrun_dashboard()
     current = dashboard["current"]
 
     assert current["partial"] is True
@@ -908,6 +1011,12 @@ def test_dashboard_uses_running_pipeline_status_when_partial_artifacts_are_pendi
     artifacts.mkdir()
     logs.mkdir()
     status_dir.mkdir()
+    stale_run_dir = logs / "msrp-dryrun-20260612-090000"
+    stale_run_dir.mkdir()
+    (stale_run_dir / "run.log").write_text(
+        "[INFO] Countries: no\n",
+        encoding="utf-8",
+    )
 
     old_report = {
         "schemaVersion": "msrp_dryrun_report_v3",
@@ -970,6 +1079,12 @@ def test_dashboard_uses_pending_run_id_for_queued_pipeline_status(tmp_path, monk
     artifacts.mkdir()
     logs.mkdir()
     status_dir.mkdir()
+    stale_run_dir = logs / "msrp-dryrun-20260612-090000"
+    stale_run_dir.mkdir()
+    (stale_run_dir / "run.log").write_text(
+        "[INFO] Countries: no\n",
+        encoding="utf-8",
+    )
 
     old_report = {
         "schemaVersion": "msrp_dryrun_report_v3",
@@ -1053,7 +1168,6 @@ def test_dashboard_reads_partial_run_dir_country_artifacts(tmp_path, monkeypatch
         }],
     }), encoding="utf-8")
     lock_file = tmp_path / "jato-msrp-low-concurrency.lock"
-    lock_file.write_text("locked", encoding="utf-8")
 
     monkeypatch.setattr(progress, "ARTIFACT_DIR", artifacts)
     monkeypatch.setattr(progress, "LATEST_REPORT_PATH", artifacts / "dryrun_report.json")
@@ -1061,7 +1175,8 @@ def test_dashboard_reads_partial_run_dir_country_artifacts(tmp_path, monkeypatch
     monkeypatch.setattr(progress, "LOG_DIR", logs)
     monkeypatch.setattr(progress, "LOCK_FILE", lock_file)
 
-    dashboard = progress.get_dryrun_dashboard()
+    with _lock_held_by_child_process(lock_file):
+        dashboard = progress.get_dryrun_dashboard()
     current = dashboard["current"]
 
     assert current["available"] is True

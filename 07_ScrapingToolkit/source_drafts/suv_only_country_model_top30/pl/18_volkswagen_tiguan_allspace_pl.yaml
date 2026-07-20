@@ -2,27 +2,30 @@ source_code: volkswagen_tiguan_allspace_pl_draft_http_json
 country: 波兰
 brand: VOLKSWAGEN
 source_url: https://cenniki.volkswagen.pl/Tiguan-Allspace.html
-source_type: manufacturer_official
+source_type: official_price_list
 price_semantics: base_msrp
-extractor_type: playwright
-profile_preset: ../_shared/presets/volkswagen_configurator_trim_overview_playwright.yaml
+extractor_type: http_json
+profile_preset: ../_shared/presets/volkswagen_pl_pricelist_http_json.yaml
 profile:
   url: https://cenniki.volkswagen.pl/pricelists/1bbcd298-c6ac-432c-a76f-66cc27a0f3c6/pricelist.json
   default_currency: PLN
   default_tax_included: true
   default_price_label: Cena katalogowa brutto
   fixed_model: TIGUAN ALLSPACE
-  structured_fields:
-    powertrain_rules:
-    - key: powertrain_ice
-      powertrain: ICE
-      keywords:
-      - ice
-      - petrol
-      - gasoline
-      - diesel
-      - combustion
-      - benzyna
+  fixed_jato_model: TIGUAN ALLSPACE
+  copy_trim_to_jato_trim: true
+  match_confidence: 0.82
+  match_status: review_required
+  match_reason:
+    kind: official_last_known_price_list_json
+    source: volkswagen_pl_cenniki
+    document_scope: MY2024/PY2024
+    document_valid_from: '2024-06-03'
+    document_audited_on: '2026-07-20'
+    price_field: price
+    note: The discontinued Allspace model remains available only as Volkswagen
+      Poland's last-known official price-list payload and must not be treated as a
+      current orderable model without a newer observation.
 schedule:
   frequency: manual_only
   run_window_start: 00:00
@@ -31,8 +34,8 @@ schedule:
 notes: The main Volkswagen Poland site no longer exposes a dedicated Allspace model
   page and current public URLs redirect back to Tiguan, but the official cenniki index
   still publishes `Tiguan-Allspace.html` and a matching `pricelist.json`. This draft
-  now consumes that archived official price-list payload directly. [Switched to playwright_card_flow
-  with volkswagen_configurator_trim_overview_playwright.yaml]
+  consumes that last-known official price-list payload directly and records its
+  MY2024/PY2024 scope instead of using the retired Playwright trimcard flow.
 bootstrap_meta:
   country_model_rank: 18
   suggested_scope_kind: single_model
