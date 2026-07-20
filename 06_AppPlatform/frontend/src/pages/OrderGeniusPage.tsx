@@ -18,6 +18,7 @@ import { useAuth } from "../contexts/AuthContext";
 import { useAccountCountryOptions } from "../hooks/useAccountCountryOptions";
 import { useResolvedCountry } from "../hooks/useResolvedCountry";
 import { formatCountryCodeTooltip } from "../utils/jatoCountries";
+import { resolveCommonParentMaterialRemark } from "../utils/orderGeniusRemarks";
 import { getCachedPageValue, setCachedPageValue } from "../utils/pageCache";
 import type { CellValueChangedEvent } from "ag-grid-community";
 import {
@@ -906,13 +907,11 @@ export function OrderGeniusPage() {
     };
 
     const commonParentMaterialRemark = (rows: MatrixRowWithCountry[]): string | undefined => {
-      const templates = new Set(rows.map(bomTemplateForRow));
-      if (templates.size !== 1) return undefined;
-      for (const row of rows) {
-        const remark = parentMaterialRemarkForRow(row);
-        if (remark) return remark;
-      }
-      return undefined;
+      return resolveCommonParentMaterialRemark(
+        rows,
+        bomTemplateForRow,
+        parentMaterialRemarkForRow,
+      );
     };
 
     const getEffectiveQuantity = (r: MatrixRowWithCountry, month: number): number => {
@@ -1025,7 +1024,7 @@ export function OrderGeniusPage() {
         fobEur: aggregate.floorFob,
         lifecycleStatus: "active",
         editable: false,
-        remark: params.kind === "bom" ? commonParentMaterialRemark(params.rows) : undefined,
+        remark: commonParentMaterialRemark(params.rows),
         _countryCode: params.countryCode,
         _versions: {},
         _errors: {},
