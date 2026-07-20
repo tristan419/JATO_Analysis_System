@@ -75,6 +75,62 @@ def test_detect_latest_month_from_upload_uses_last_non_empty_month(tmp_path: Pat
     assert detected == "2026-03"
 
 
+def test_inspect_upload_scope_uses_data_export_instead_of_first_sheet(
+    tmp_path: Path,
+) -> None:
+    upload_path = tmp_path / "Czech-Denmark-2026-06.xlsx"
+    with pd.ExcelWriter(upload_path, engine="openpyxl") as writer:
+        pd.DataFrame(
+            {
+                "车型类别": ["国家", "捷克", "丹麦"],
+                "(多项)": ["求和项:YTD 2026 (Jun)", 10, 20],
+            }
+        ).to_excel(writer, index=False, sheet_name="Summary")
+        pd.DataFrame(
+            {
+                "国家": ["捷克", "丹麦"],
+                "Model": ["A", "B"],
+                "2026 May": [1, 2],
+                "2026 Jun": [3, 0],
+            }
+        ).to_excel(writer, index=False, sheet_name="Data Export")
+
+    inspection = jato_monthly_update_service._inspect_upload_scope(upload_path)
+
+    assert inspection["countries"] == ["捷克", "丹麦"]
+    assert inspection["latestMonth"] == "2026-06"
+    assert inspection["countryLatestMonths"] == {
+        "捷克": "2026-06",
+        "丹麦": "2026-06",
+    }
+    assert inspection["dataRowCount"] == 2
+
+
+def test_detect_partial_country_upload_uses_active_partition_scope(
+    tmp_path: Path, monkeypatch
+) -> None:
+    project_root = tmp_path / "project"
+    partition_root = project_root / "04_Processed_data" / "partitioned_dataset_v1"
+    for encoded_country in ("%E6%8D%B7%E5%85%8B", "%E4%B8%B9%E9%BA%A6", "%E5%BE%B7%E5%9B%BD"):
+        (partition_root / f"国家={encoded_country}").mkdir(parents=True, exist_ok=True)
+    monkeypatch.setattr(jato_monthly_update_service, "PROJECT_ROOT", project_root)
+
+    upload_path = tmp_path / "partial.xlsx"
+    pd.DataFrame(
+        {
+            "国家": ["捷克", "丹麦"],
+            "2026 May": [1, 2],
+            "2026 Jun": [3, 4],
+        }
+    ).to_excel(upload_path, index=False, sheet_name="Data Export")
+
+    inspection = jato_monthly_update_service._detect_partial_country_upload(upload_path)
+
+    assert inspection is not None
+    assert inspection["countries"] == ["捷克", "丹麦"]
+    assert inspection["latestMonth"] == "2026-06"
+
+
 def test_allocate_batch_id_increments_existing_revisions(
     tmp_path: Path, monkeypatch
 ) -> None:
@@ -398,6 +454,11 @@ def test_run_job_marks_success_and_collects_summaries(
         "_run_logged_command",
         fake_run_logged_command,
     )
+    monkeypatch.setattr(
+        jato_monthly_update_service,
+        "_detect_partial_country_upload",
+        lambda _path: None,
+    )
 
     jato_monthly_update_service._run_job("jato-update-1234abcd")
     payload = jato_monthly_update_service._load_job_state("jato-update-1234abcd")
@@ -539,6 +600,11 @@ def test_run_job_injects_active_parquet_supplement_into_refresh(
         "_run_logged_command",
         fake_run_logged_command,
     )
+    monkeypatch.setattr(
+        jato_monthly_update_service,
+        "_detect_partial_country_upload",
+        lambda _path: None,
+    )
 
     jato_monthly_update_service._run_job("jato-update-merge")
     payload = jato_monthly_update_service._load_job_state("jato-update-merge")
@@ -609,6 +675,11 @@ def test_run_job_marks_failed_when_stage_raises(
         jato_monthly_update_service,
         "_run_logged_command",
         fake_run_logged_command,
+    )
+    monkeypatch.setattr(
+        jato_monthly_update_service,
+        "_detect_partial_country_upload",
+        lambda _path: None,
     )
 
     jato_monthly_update_service._run_job("jato-update-failed")
@@ -1889,7 +1960,20 @@ def test_publish_monthly_update_job_allows_republish_after_rollback(
     assert "rolledBackAt" not in published["publication"]
 
 
-def test_single_country_candidate_cannot_publish(tmp_path: Path, monkeypatch) -> None:
+@pytest.mark.parametrize(
+    ("job_type", "candidate_scope", "country_scope"),
+    [
+        ("single_country", "target_country_partition_only", ["匈牙利"]),
+        ("partial_country", "target_country_partitions_only", ["捷克", "丹麦"]),
+    ],
+)
+def test_country_partition_candidate_cannot_publish(
+    tmp_path: Path,
+    monkeypatch,
+    job_type: str,
+    candidate_scope: str,
+    country_scope: list[str],
+) -> None:
     project_root = tmp_path / "project"
     job_root = project_root / "04_Processed_data" / "ops" / "jato_monthly_update_jobs"
     monkeypatch.setattr(jato_monthly_update_service, "PROJECT_ROOT", project_root)
@@ -1908,10 +1992,11 @@ def test_single_country_candidate_cannot_publish(tmp_path: Path, monkeypatch) ->
     state.update({
         "status": "success",
         "phase": "completed",
-        "jobType": "single_country",
-        "country": "匈牙利",
+        "jobType": job_type,
+        "country": country_scope[0] if len(country_scope) == 1 else None,
+        "countryScope": country_scope,
         "summaries": {"refresh": {"jobStatus": "success"}},
-        "artifacts": {"candidateScope": "target_country_partition_only"},
+        "artifacts": {"candidateScope": candidate_scope},
     })
     jato_monthly_update_service._persist_job_state(state)
 
@@ -1920,6 +2005,44 @@ def test_single_country_candidate_cannot_publish(tmp_path: Path, monkeypatch) ->
             job_id=job_id,
             triggered_by="publisher",
         )
+
+
+def test_partial_country_review_aggregates_country_findings(monkeypatch) -> None:
+    def fake_country_review(payload: dict[str, object]) -> dict[str, object]:
+        country = str(payload["country"])
+        severity = "blocker" if country == "丹麦" else "info"
+        return {
+            "reviewFindings": [{"severity": severity, "target": country}],
+            "compareKeyColumns": ["国家", "Model"],
+            "checklistMarkdown": f"- {country}",
+            "overlapChangeSummary": [],
+            "countryFreshnessSummary": [{"country": country}],
+            "countryCoverageSummary": [{"country": country}],
+            "countryMonthlySalesSummary": [{"country": country, "rows": []}],
+            "timeAxisCheck": {"targetCountry": country},
+            "refreshSummary": {"jobStatus": "success"},
+            "candidateFingerprint": "fingerprint",
+        }
+
+    monkeypatch.setattr(
+        jato_monthly_update_service,
+        "_build_single_country_review",
+        fake_country_review,
+    )
+    review = jato_monthly_update_service._build_partial_country_review(
+        {
+            "jobId": "jato-partial",
+            "countryScope": ["捷克", "丹麦"],
+            "artifacts": {
+                "untouchedPartitionCheck": {"status": "pass"},
+            },
+        }
+    )
+
+    assert review["decisionSuggestion"] == "reject_input_batch"
+    assert review["sampledCountries"] == ["捷克", "丹麦"]
+    assert review["compareKeyColumns"] == ["国家", "Model"]
+    assert [item["country"] for item in review["countryFreshnessSummary"]] == ["捷克", "丹麦"]
 
 
 def test_single_country_source_feedback_reports_exact_washer_request() -> None:

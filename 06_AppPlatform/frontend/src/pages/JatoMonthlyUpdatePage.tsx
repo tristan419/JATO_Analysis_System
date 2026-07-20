@@ -292,7 +292,7 @@ export function JatoMonthlyUpdatePage() {
     try {
       const response = await api.createJatoMonthlyUpdateJob(uploadFile, setUploadProgress, uploadMonth ?? undefined);
       setNotice(
-        `已创建任务 ${response.item.jobId}，自动识别最新数据月 ${response.item.month || "-"}，批次 ${response.item.batchId || "-"}，后台开始串行执行 prepare / compare / refresh。`
+        `已创建任务 ${response.item.jobId}，自动识别最新数据月 ${response.item.month || "-"}，批次 ${response.item.batchId || "-"}；系统会按国家范围选择分区 Review 或完整批次管线。`
       );
       setSelectedJob(response.item);
       setSelectedJobId(response.item.jobId);
@@ -684,16 +684,19 @@ export function JatoMonthlyUpdatePage() {
 
   const rawCompare = selectedJob?.summaries?.rawCompare;
   const refresh = selectedJob?.summaries?.refresh;
-  const isSingleCountryReview = selectedJob?.jobType === "single_country";
+  const isPartitionScopedReview = (
+    selectedJob?.jobType === "single_country"
+    || selectedJob?.jobType === "partial_country"
+  );
   const canReviewSelectedJob = Boolean(
     selectedJob?.artifacts?.rawCompareReportPath
-    || (isSingleCountryReview && selectedJob.status === "success")
+    || (isPartitionScopedReview && selectedJob.status === "success")
   );
   const canPublishSelectedJob = Boolean(
     selectedJob
     && selectedJob.status === "success"
     && selectedJob.phase === "completed"
-    && !isSingleCountryReview
+    && !isPartitionScopedReview
   );
   const canCancelSelectedJob = Boolean(
     selectedJob
@@ -921,7 +924,7 @@ export function JatoMonthlyUpdatePage() {
               />
             </label>
             <p className="monthly-update-note">
-              系统会自动识别上传文件中的国家数量：仅 1 个国家则走快速路径（跳过 prepare/compare，直接 refresh + supplement），多个国家则走完整批次管线。快速路径会自动检查上传月份必须比 active 中该国家的最新月份新。
+              系统会读取 Data Export 的国家范围：只覆盖 active 中部分国家时走低内存分区 Review（跳过全量 baseline Raw Compare），覆盖全部国家时才走完整批次管线。分区路径会逐国检查月份回退、字段缺失、历史销量和未上传分区指纹。
             </p>
             <button
               type="submit"
@@ -1593,8 +1596,8 @@ Smart Merge:  [SE:keep active 2026-03] [DE:patch 2026-03] [NL:patch 2026-02] [FR
                     <div>
                       <div className="card-title">Review Candidate</div>
                       <p className="section-note">
-                        {isSingleCountryReview
-                          ? "单国任务 success 只表示 Review 候选已生成；它没有改动 active，因此 Dashboard 仍显示原月份。"
+                        {isPartitionScopedReview
+                          ? "部分国家任务 success 只表示分区 Review 候选已生成；它没有改动 active，因此 Dashboard 仍显示原月份。"
                           : "这里集中展示 raw compare checklist 与人工 review 要点；没有 blocker 时仍需 Approve Review 才能 Publish。"}
                       </p>
                     </div>
@@ -1604,8 +1607,8 @@ Smart Merge:  [SE:keep active 2026-03] [DE:patch 2026-03] [NL:patch 2026-02] [FR
                     </div>
                   </div>
                   <div className={reviewBundle.approval?.decision === "approved" ? "alert alert-success" : "alert alert-info"}>
-                    {isSingleCountryReview
-                      ? "单国候选为隔离测试产物，只读验证目标国家和未上传分区；不能直接 Publish。"
+                    {isPartitionScopedReview
+                      ? "部分国家候选为隔离 Review 产物，只读验证上传国家和未上传分区；不能直接 Publish。"
                       : reviewBundle.approval?.decision === "approved"
                         ? `Review 已由 ${reviewBundle.approval.reviewedBy || "-"} 批准（${formatMonthlyUpdateTimestamp(reviewBundle.approval.reviewedAt)}）。`
                         : "Review 尚未批准；核对所有 findings 后再执行 Approve Review。"}

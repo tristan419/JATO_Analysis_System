@@ -15,7 +15,7 @@ import traceback
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
-from urllib.parse import quote
+from urllib.parse import quote, unquote
 from uuid import uuid4
 
 import pandas as pd
@@ -250,7 +250,12 @@ def _load_active_country_partition_subset(partition_root: Path, country: str) ->
         ) from exc
 
 
-def _untouched_partition_snapshot(*, partition_root: Path, country: str) -> dict[str, Any]:
+def _untouched_partition_snapshot(
+    *,
+    partition_root: Path,
+    country: str | None = None,
+    countries: list[str] | None = None,
+) -> dict[str, Any]:
     """Fingerprint non-target manifest entries without touching their parquet files."""
     manifest_path = partition_root / "manifest.json"
     manifest = _read_json_if_exists(_relative_to_project(manifest_path)) or {}
@@ -263,16 +268,23 @@ def _untouched_partition_snapshot(*, partition_root: Path, country: str) -> dict
         if isinstance(partition_columns, list) and partition_columns
         else "国家"
     )
-    target_prefix = f"{column}={quote(country, safe='')}"
+    target_countries = _ordered_distinct_strings(
+        [*(countries or []), *([country] if country else [])]
+    )
+    target_prefixes = [
+        f"{column}={quote(target_country, safe='')}"
+        for target_country in target_countries
+    ]
     untouched = {
         str(key): value
         for key, value in partition_stats.items()
-        if not str(key).startswith(target_prefix)
+        if not any(str(key).startswith(prefix) for prefix in target_prefixes)
     }
     encoded = json.dumps(untouched, ensure_ascii=False, sort_keys=True).encode("utf-8")
     return {
         "status": "pass",
-        "targetPartitionPrefix": target_prefix,
+        "targetPartitionPrefix": target_prefixes[0] if len(target_prefixes) == 1 else None,
+        "targetPartitionPrefixes": target_prefixes,
         "untouchedPartitionCount": len(untouched),
         "untouchedPartitionFingerprint": hashlib.sha256(encoded).hexdigest(),
     }
@@ -2118,7 +2130,7 @@ def _build_single_country_review(payload: dict[str, Any]) -> dict[str, Any]:
     country = str(payload.get("country") or "").strip()
     artifacts = payload.get("artifacts")
     if not country or not isinstance(artifacts, dict):
-        raise HTTPException(status_code=409, detail="单国任务缺少 Review 所需信息。")
+        raise HTTPException(status_code=409, detail="目标国家任务缺少 Review 所需信息。")
     candidate_path = _project_path(str(artifacts.get("stagingOutputPath") or "").strip())
     active_paths = _active_data_paths()
     if candidate_path is None or not candidate_path.exists():
@@ -2191,37 +2203,37 @@ def _build_single_country_review(payload: dict[str, Any]) -> dict[str, Any]:
     if not month_columns:
         add_finding("blocker", "SC001", "candidate 缺少月份列。", {})
     if schema_contract["missingMaterial"]:
-        add_finding("blocker", "SC009", "单国 candidate 缺少 active 业务列：" + "、".join(schema_contract["missingMaterial"]) + "。", {
+        add_finding("blocker", "SC009", "目标国家 candidate 缺少 active 业务列：" + "、".join(schema_contract["missingMaterial"]) + "。", {
             "missingMaterialColumns": schema_contract["missingMaterial"],
             "missingDerivedYtdColumns": schema_contract["missingDerivedYtd"],
             "missingNullOnlyColumns": schema_contract["missingNullOnly"],
         })
     if schema_contract["missingDerivedYtd"]:
-        add_finding("review", "SC013", "单国 candidate 缺少旧月份 YTD 派生列：" + "、".join(schema_contract["missingDerivedYtd"]) + "。", {
+        add_finding("review", "SC013", "目标国家 candidate 缺少旧月份 YTD 派生列：" + "、".join(schema_contract["missingDerivedYtd"]) + "。", {
             "missingDerivedYtdColumns": schema_contract["missingDerivedYtd"],
         })
     if schema_contract["extra"]:
-        add_finding("review", "SC010", "单国 candidate 包含 active 中没有的新业务列：" + "、".join(schema_contract["extra"]) + "。", {
+        add_finding("review", "SC010", "目标国家 candidate 包含 active 中没有的新业务列：" + "、".join(schema_contract["extra"]) + "。", {
             "extraColumns": schema_contract["extra"],
         })
     if candidate_latest is None:
         add_finding("blocker", "SC002", "candidate 没有有效销量月份。", {})
     if active_latest and candidate_latest and _time_sort_key(candidate_latest) < _time_sort_key(active_latest):
-        add_finding("blocker", "SC003", "单国最新月份发生回退。", {"active": active_latest, "candidate": candidate_latest})
+        add_finding("blocker", "SC003", "目标国家最新月份发生回退。", {"active": active_latest, "candidate": candidate_latest})
     if duplicate_count:
-        add_finding("blocker", "SC004", "单国 candidate 存在完全相同的配置指纹。", {
+        add_finding("blocker", "SC004", "目标国家 candidate 存在完全相同的配置指纹。", {
             "duplicateRows": duplicate_count,
             "keyColumnCount": len(key_columns),
         })
     if negative_sales_count:
-        add_finding("blocker", "SC005", "单国 candidate 存在负销量。", {"negativeSalesCells": negative_sales_count})
+        add_finding("blocker", "SC005", "目标国家 candidate 存在负销量。", {"negativeSalesCells": negative_sales_count})
     if len(doubled_months) >= SALES_DOUBLING_MIN_MONTH_COUNT:
-        add_finding("blocker", "SC006", "单国 candidate 疑似销量翻倍。", {"months": doubled_months})
+        add_finding("blocker", "SC006", "目标国家 candidate 疑似销量翻倍。", {"months": doubled_months})
     if historical_stability.get("status") == "fail":
-        add_finding("blocker", "SC011", "单国 candidate 改写了 active 已有历史销量。", historical_stability)
+        add_finding("blocker", "SC011", "目标国家 candidate 改写了 active 已有历史销量。", historical_stability)
     row_delta = int(len(candidate_frame) - len(active_frame))
     if row_delta:
-        add_finding("review", "SC012", "单国 candidate 的配置行数与 active 不同。", {
+        add_finding("review", "SC012", "目标国家 candidate 的配置行数与 active 不同。", {
             "activeRows": int(len(active_frame)),
             "candidateRows": int(len(candidate_frame)),
             "rowDelta": row_delta,
@@ -2236,7 +2248,7 @@ def _build_single_country_review(payload: dict[str, Any]) -> dict[str, Any]:
         "scope": "country",
         "target": country,
         "ruleId": "SC201",
-        "message": "单国 candidate 仅读取目标国家分区；未上传国家 active 分区保持只读。",
+        "message": "candidate 仅读取目标国家分区；未上传国家 active 分区保持只读。",
         "metrics": {"rowCount": int(len(candidate_frame)), "latestMonth": candidate_latest},
         "suggestedAction": "manual_review_required",
     })
@@ -2296,6 +2308,106 @@ def _build_single_country_review(payload: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _build_partial_country_review(payload: dict[str, Any]) -> dict[str, Any]:
+    countries = _ordered_distinct_strings(
+        [
+            str(country)
+            for country in (
+                payload.get("countryScope")
+                if isinstance(payload.get("countryScope"), list)
+                else []
+            )
+        ]
+    )
+    if len(countries) < 2:
+        raise HTTPException(status_code=409, detail="部分国家任务缺少至少两个目标国家。")
+
+    country_reviews = [
+        _build_single_country_review({**payload, "country": country})
+        for country in countries
+    ]
+    findings = [
+        finding
+        for review in country_reviews
+        for finding in review["reviewFindings"]
+    ]
+    compare_key_columns = _ordered_distinct_strings(
+        [
+            column
+            for review in country_reviews
+            for column in review["compareKeyColumns"]
+        ]
+    )
+    checklist_sections = [
+        "\n".join(
+            [
+                f"## {country}",
+                review["checklistMarkdown"],
+            ]
+        )
+        for country, review in zip(countries, country_reviews, strict=True)
+    ]
+    artifacts = payload.get("artifacts")
+    partition_check = (
+        artifacts.get("untouchedPartitionCheck")
+        if isinstance(artifacts, dict)
+        else None
+    )
+    if not isinstance(partition_check, dict):
+        partition_check = {"status": "unavailable"}
+    return {
+        "jobId": str(payload.get("jobId") or ""),
+        "reviewDir": None,
+        "compareId": f"{payload.get('jobId')}-partial-country",
+        "decisionSuggestion": (
+            "reject_input_batch"
+            if any(item["severity"] == "blocker" for item in findings)
+            else "manual_review_required"
+        ),
+        "compareKeyColumns": compare_key_columns,
+        "checklistMarkdown": "\n\n".join(checklist_sections),
+        "reviewFindings": findings,
+        "sampledCountries": countries,
+        "conflictSampleCount": 0,
+        "conflictSamples": [],
+        "overlapChangeSummary": [
+            item
+            for review in country_reviews
+            for item in review["overlapChangeSummary"]
+        ],
+        "countryFreshnessSummary": [
+            item
+            for review in country_reviews
+            for item in review["countryFreshnessSummary"]
+        ],
+        "countryCoverageSummary": [
+            item
+            for review in country_reviews
+            for item in review["countryCoverageSummary"]
+        ],
+        "countrySalesReferenceLabel": "网站当前 active",
+        "countryMonthlySalesSummary": [
+            item
+            for review in country_reviews
+            for item in review["countryMonthlySalesSummary"]
+        ],
+        "countryMonthlySalesError": None,
+        "timeAxisCheck": {
+            "countries": {
+                country: review["timeAxisCheck"]
+                for country, review in zip(countries, country_reviews, strict=True)
+            },
+        },
+        "countryScopeSummary": {
+            "targetCountries": countries,
+            "untouchedPartitionCheck": partition_check,
+        },
+        "refreshSummary": country_reviews[0]["refreshSummary"],
+        "candidateFingerprint": country_reviews[0]["candidateFingerprint"],
+        "approval": payload.get("reviewApproval"),
+    }
+
+
 def get_jato_monthly_update_review(job_id: str) -> dict[str, Any]:
     payload = _load_job_state(job_id)
     artifacts = payload.get("artifacts")
@@ -2306,8 +2418,11 @@ def get_jato_monthly_update_review(job_id: str) -> dict[str, Any]:
     review_dir = str(artifacts.get("reviewDir") or "").strip()
     raw_compare_report = _read_json_if_exists(raw_compare_report_path)
     if raw_compare_report is None:
-        if str(payload.get("jobType") or "") == "single_country":
+        job_type = str(payload.get("jobType") or "")
+        if job_type == "single_country":
             return _build_single_country_review(payload)
+        if job_type == "partial_country":
+            return _build_partial_country_review(payload)
         raise HTTPException(status_code=409, detail="当前任务暂无可 review 的 compare 报告。")
 
     checklist_markdown = _read_text_if_exists(
@@ -2505,10 +2620,13 @@ def publish_jato_monthly_update_job(
     artifacts = payload.get("artifacts")
     if not isinstance(artifacts, dict):
         raise HTTPException(status_code=409, detail="当前任务缺少 staging 产物信息，不能 publish。")
-    if artifacts.get("candidateScope") == "target_country_partition_only":
+    if artifacts.get("candidateScope") in {
+        "target_country_partition_only",
+        "target_country_partitions_only",
+    }:
         raise HTTPException(
             status_code=409,
-            detail="单国 candidate 仅用于 Review，不能直接 Publish。请使用已批准的完整 promotion 流程生成 active 产物。",
+            detail="部分国家 candidate 仅用于 Review，不能直接 Publish。请使用已批准的完整 promotion 流程生成 active 产物。",
         )
     approval = payload.get("reviewApproval")
     if not isinstance(approval, dict) or approval.get("decision") != "approved":
@@ -3096,23 +3214,47 @@ def _run_job(job_id: str) -> None:
     state["status"] = "running"
     state["startedAt"] = _utc_now().isoformat()
 
-    detected_single_country = _detect_single_country_upload(stored_upload_path)
-    if detected_single_country is not None:
-        country, detected_month = detected_single_country
-        state["jobType"] = "single_country"
-        state["country"] = country
-        state["countryScope"] = [country]
+    try:
+        partial_inspection = _detect_partial_country_upload(stored_upload_path)
+    except Exception as exc:
+        state["status"] = "failed"
+        state["phase"] = "failed"
+        state["finishedAt"] = _utc_now().isoformat()
+        state["error"] = f"上传范围识别失败：{exc}"
+        _persist_job_state(state)
+        _write_jato_etl_pipeline_status(state)
+        _append_log(log_path, f"[{_utc_now().isoformat()}] {state['error']}")
+        _RUNNING_THREADS.pop(job_id, None)
+        return
+
+    if partial_inspection is not None:
+        countries = [
+            str(country).strip()
+            for country in partial_inspection["countries"]
+            if str(country).strip()
+        ]
+        detected_month = str(partial_inspection["latestMonth"])
+        is_single_country = len(countries) == 1
+        state["jobType"] = "single_country" if is_single_country else "partial_country"
+        state["country"] = countries[0] if is_single_country else None
+        state["countryScope"] = countries
         state["month"] = detected_month
-        state["batchId"] = f"{detected_month}-{country}-single"
+        state["batchId"] = (
+            f"{detected_month}-{countries[0]}-single"
+            if is_single_country
+            else f"{detected_month}-partial-{len(countries)}c"
+        )
+        state["uploadInspection"] = partial_inspection
         _persist_job_state(state)
         _append_log(
             log_path,
             (
-                f"[{_utc_now().isoformat()}] 自动识别单国上传："
-                f"country={country}, month={detected_month}；转入目标分区 Review 路径。"
+                f"[{_utc_now().isoformat()}] 自动识别部分国家上传："
+                f"countries={','.join(countries)}, month={detected_month}；"
+                "跳过全量 baseline Raw Compare，转入目标分区 Review 路径。"
             ),
         )
-        _run_single_country_job(job_id)
+        _run_country_partition_job(job_id)
         return
 
     batch_id = str(state.get("batchId") or "")
@@ -3287,20 +3429,151 @@ def _launch_job_thread(job_id: str) -> None:
     worker.start()
 
 
+def _active_partition_country_names(partition_root: Path | None = None) -> list[str]:
+    root = partition_root or _active_data_paths()["partition"]
+    if not root.exists():
+        return []
+    prefix = "国家="
+    return sorted(
+        {
+            unquote(path.name[len(prefix):])
+            for path in root.iterdir()
+            if path.is_dir() and path.name.startswith(prefix)
+        }
+    )
+
+
+def _normalized_month_from_label(label: str) -> str:
+    parsed = datetime.strptime(str(label).strip().title(), "%Y %b")
+    return f"{parsed.year}-{parsed.month:02d}"
+
+
+def _inspect_upload_scope(path: Path) -> dict[str, Any]:
+    """Inspect country/month scope without materializing every Excel column."""
+    suffix = path.suffix.lower()
+    if suffix in {".xlsx", ".xlsm"}:
+        try:
+            from openpyxl import load_workbook
+
+            workbook = load_workbook(
+                path,
+                read_only=True,
+                data_only=True,
+                keep_links=False,
+            )
+            try:
+                if DEFAULT_UPLOAD_SHEET_NAME not in workbook.sheetnames:
+                    raise RuntimeError(
+                        f"上传 Excel 缺少工作表：{DEFAULT_UPLOAD_SHEET_NAME}。"
+                    )
+                worksheet = workbook[DEFAULT_UPLOAD_SHEET_NAME]
+                rows = worksheet.iter_rows(values_only=True)
+                header_row = next(rows, None)
+                if header_row is None:
+                    raise RuntimeError("上传 Excel 的 Data Export 为空。")
+                columns = [str(value).strip() if value is not None else "" for value in header_row]
+                country_column = _find_country_column(columns)
+                if country_column is None:
+                    raise RuntimeError("上传 Excel 的 Data Export 缺少国家列。")
+                country_index = columns.index(country_column)
+                month_columns = _detect_month_columns(columns)
+                if not month_columns:
+                    raise RuntimeError("上传 Excel 的 Data Export 缺少可识别月份列。")
+                month_indexes = [
+                    (columns.index(month_column), month_column)
+                    for month_column in month_columns
+                ]
+                countries: list[str] = []
+                seen_countries: set[str] = set()
+                country_latest_labels: dict[str, str | None] = {}
+                data_row_count = 0
+                for row in rows:
+                    raw_country = row[country_index] if country_index < len(row) else None
+                    country = str(raw_country).strip() if raw_country is not None else ""
+                    if not country:
+                        continue
+                    data_row_count += 1
+                    if country not in seen_countries:
+                        seen_countries.add(country)
+                        countries.append(country)
+                        country_latest_labels[country] = None
+                    for month_index, month_label in reversed(month_indexes):
+                        value = row[month_index] if month_index < len(row) else None
+                        if value is None or (isinstance(value, str) and not value.strip()):
+                            continue
+                        current = country_latest_labels[country]
+                        if current is None or _time_sort_key(month_label) > _time_sort_key(current):
+                            country_latest_labels[country] = month_label
+                        break
+            finally:
+                workbook.close()
+        except RuntimeError:
+            raise
+        except Exception as exc:
+            raise RuntimeError(f"无法轻量读取上传 Excel：{exc}") from exc
+    else:
+        frame = _read_excel_with_fallback(path, sheet_name=DEFAULT_UPLOAD_SHEET_NAME)
+        frame.columns = [str(column).strip() for column in frame.columns]
+        country_column = _find_country_column(list(frame.columns))
+        if country_column is None:
+            raise RuntimeError("上传 Excel 的 Data Export 缺少国家列。")
+        month_columns = _detect_month_columns(list(frame.columns))
+        if not month_columns:
+            raise RuntimeError("上传 Excel 的 Data Export 缺少可识别月份列。")
+        frame[country_column] = frame[country_column].astype("string").fillna("").str.strip()
+        countries = _ordered_distinct_strings(frame[country_column].tolist())
+        country_latest_labels = {}
+        for country in countries:
+            country_frame = frame.loc[frame[country_column] == country]
+            country_latest_labels[country] = _latest_month_from_frame(country_frame)
+        data_row_count = int((frame[country_column] != "").sum())
+
+    if not countries:
+        raise RuntimeError("上传 Excel 的 Data Export 不包含有效国家。")
+    latest_labels = [
+        label for label in country_latest_labels.values()
+        if label is not None
+    ]
+    if not latest_labels:
+        raise RuntimeError("上传 Excel 的月份列均为空。")
+    latest_label = max(latest_labels, key=_time_sort_key)
+    return {
+        "sheetName": DEFAULT_UPLOAD_SHEET_NAME,
+        "countries": countries,
+        "countryLatestMonths": {
+            country: (
+                _normalized_month_from_label(label)
+                if label is not None
+                else None
+            )
+            for country, label in country_latest_labels.items()
+        },
+        "latestMonth": _normalized_month_from_label(latest_label),
+        "dataRowCount": data_row_count,
+    }
+
+
+def _detect_partial_country_upload(path: Path) -> dict[str, Any] | None:
+    inspection = _inspect_upload_scope(path)
+    active_countries = _active_partition_country_names()
+    uploaded_countries = set(inspection["countries"])
+    if (
+        active_countries
+        and uploaded_countries.issubset(set(active_countries))
+        and len(uploaded_countries) < len(active_countries)
+    ):
+        return inspection
+    return None
+
+
 def _detect_single_country_upload(path: Path) -> tuple[str, str] | None:
-    """Read uploaded xlsx and return (country, month) if single-country, else None."""
+    """Return (country, month) for a one-country Data Export."""
     try:
-        frame = _read_excel_with_fallback(path, sheet_name=0)
-        frame.columns = [str(c).strip() for c in frame.columns]
-        country_col = _find_country_column(list(frame.columns))
-        if country_col is None:
-            return None
-        frame[country_col] = frame[country_col].astype("string").fillna("").str.strip()
-        countries = _ordered_distinct_strings(frame[country_col].tolist())
+        inspection = _inspect_upload_scope(path)
+        countries = inspection["countries"]
         if len(countries) != 1:
             return None
-        month = _detect_latest_month_from_dataset_frame(frame, path_label="upload")
-        return countries[0], month
+        return countries[0], str(inspection["latestMonth"])
     except Exception:
         return None
 
@@ -3553,11 +3826,11 @@ def retry_failed_jato_monthly_update_job(
     return _serialize_job_state(payload, include_log_tail=True)
 
 
-# ── Single-Country Upload ──────────────────────────────────────────────────────
+# ── Country-Partition Upload ───────────────────────────────────────────────────
 
 
-def _run_single_country_job(job_id: str) -> None:
-    """Background runner: validates single-country upload and runs refresh pipeline."""
+def _run_country_partition_job(job_id: str) -> None:
+    """Build a Review-only candidate for a strict subset of active countries."""
     state = _load_job_state(job_id)
     if str(state.get("status") or "") == "cancelled":
         _RUNNING_THREADS.pop(job_id, None)
@@ -3575,48 +3848,71 @@ def _run_single_country_job(job_id: str) -> None:
         if stored_upload_path is None or not stored_upload_path.exists():
             raise RuntimeError("上传文件不存在。")
 
-        country = str(state.get("country", "")).strip()
+        countries = _ordered_distinct_strings(
+            [
+                str(country)
+                for country in (
+                    state.get("countryScope")
+                    if isinstance(state.get("countryScope"), list)
+                    else [state.get("country")]
+                )
+                if country is not None
+            ]
+        )
         month = str(state.get("month", "")).strip()
-        if not country or not month:
-            raise RuntimeError("任务状态缺少 country 或 month。")
+        if not countries or not month:
+            raise RuntimeError("任务状态缺少 countryScope 或 month。")
 
         suffix = stored_upload_path.suffix.lower()
         if suffix not in ALLOWED_UPLOAD_EXTENSIONS:
             raise RuntimeError(f"不支持的文件格式：{suffix}，仅支持 Excel。")
 
-        # Validate uploaded file has the expected country
-        frame = _read_excel_with_fallback(stored_upload_path, sheet_name=0)
-        frame.columns = [str(c).strip() for c in frame.columns]
-        country_col = _find_country_column(list(frame.columns))
-        if country_col is None:
-            raise RuntimeError("上传文件必须包含国家列。")
-        frame[country_col] = frame[country_col].astype("string").fillna("").str.strip()
-        uploaded_countries = _ordered_distinct_strings(frame[country_col].tolist())
-        if uploaded_countries != [country]:
+        inspection = state.get("uploadInspection")
+        if not isinstance(inspection, dict):
+            inspection = _inspect_upload_scope(stored_upload_path)
+        uploaded_countries = _ordered_distinct_strings(
+            [str(country) for country in inspection.get("countries", [])]
+        )
+        if uploaded_countries != countries:
             raise RuntimeError(
-                "单国上传必须且只能包含目标国家「"
-                f"{country}」。检测到：{', '.join(uploaded_countries) or '-'}"
+                "上传文件的国家范围与任务绑定范围不一致："
+                f"expected={','.join(countries)}，actual={','.join(uploaded_countries) or '-'}"
             )
-        del frame
 
         _append_log(
             log_path,
-            f"[{_utc_now().isoformat()}] 验证通过：country={country}, month={month}",
+            (
+                f"[{_utc_now().isoformat()}] 验证通过："
+                f"countries={','.join(countries)}, month={month}"
+            ),
         )
 
         # Staging paths under job dir
         job_dir = _job_dir(job_id)
         staging_dir = job_dir / "staging"
         staging_dir.mkdir(parents=True, exist_ok=True)
-        staging_output = staging_dir / "single_country_candidate.parquet"
+        staging_output = staging_dir / "country_partition_candidate.parquet"
         manifest_path = staging_dir / "manifest.json"
         report_path = staging_dir / "refresh_job_report.json"
         active_paths = _active_data_paths()
         if not active_paths["partition"].exists():
-            raise RuntimeError("单国刷新需要 active partitioned dataset，当前分区目录不存在。")
+            raise RuntimeError("部分国家刷新需要 active partitioned dataset，当前分区目录不存在。")
+        missing_active_countries = [
+            country
+            for country in countries
+            if not (
+                active_paths["partition"]
+                / f"国家={quote(country, safe='')}"
+            ).exists()
+        ]
+        if missing_active_countries:
+            raise RuntimeError(
+                "active 分区缺少上传国家："
+                + "、".join(missing_active_countries)
+            )
         untouched_before = _untouched_partition_snapshot(
             partition_root=active_paths["partition"],
-            country=country,
+            countries=countries,
         )
 
         state["phase"] = "refreshing"
@@ -3637,41 +3933,93 @@ def _run_single_country_job(job_id: str) -> None:
         ]
 
         _run_logged_command(
-            label="单国家目标分区转换",
+            label="部分国家目标分区转换",
             args=refresh_args,
             log_path=log_path,
         )
-        candidate_frame = _load_parquet_country_subset(
-            staging_output,
-            country,
-            path_label="single-country candidate",
+        country_latest_months = (
+            inspection.get("countryLatestMonths")
+            if isinstance(inspection.get("countryLatestMonths"), dict)
+            else {}
         )
-        candidate_latest = _latest_month_from_frame(candidate_frame)
-        expected_month_label = datetime.strptime(month, "%Y-%m").strftime("%Y %b")
-        if candidate_latest != expected_month_label:
-            raise RuntimeError(
-                "单国 candidate 的最新月份与上传请求不一致："
-                f"expected={expected_month_label}, actual={candidate_latest or '-'}"
+        country_results: list[dict[str, Any]] = []
+        total_rows = 0
+        candidate_column_count = 0
+        for country in countries:
+            candidate_frame = _load_parquet_country_subset(
+                staging_output,
+                country,
+                path_label="country-partition candidate",
             )
+            if candidate_frame.empty:
+                raise RuntimeError(f"candidate 不包含目标国家：{country}")
+            candidate_latest = _latest_month_from_frame(candidate_frame)
+            expected_month = str(country_latest_months.get(country) or "").strip()
+            expected_month_label = (
+                datetime.strptime(expected_month, "%Y-%m").strftime("%Y %b")
+                if expected_month
+                else None
+            )
+            if candidate_latest != expected_month_label:
+                raise RuntimeError(
+                    f"{country} candidate 的最新月份与上传识别不一致："
+                    f"expected={expected_month_label or '-'}, actual={candidate_latest or '-'}"
+                )
+            active_frame = _load_active_country_partition_subset(
+                active_paths["partition"],
+                country,
+            )
+            active_latest = _latest_month_from_frame(active_frame)
+            if (
+                active_latest
+                and candidate_latest
+                and _time_sort_key(candidate_latest) < _time_sort_key(active_latest)
+            ):
+                raise RuntimeError(
+                    f"{country} 最新月份发生回退："
+                    f"active={active_latest}, candidate={candidate_latest}"
+                )
+            total_rows += int(len(candidate_frame))
+            candidate_column_count = max(
+                candidate_column_count,
+                int(len(candidate_frame.columns)),
+            )
+            country_results.append(
+                {
+                    "country": country,
+                    "rows": int(len(candidate_frame)),
+                    "activeLatestMonth": active_latest,
+                    "candidateLatestMonth": candidate_latest,
+                }
+            )
+            del active_frame
+            del candidate_frame
         untouched_after = _untouched_partition_snapshot(
             partition_root=active_paths["partition"],
-            country=country,
+            countries=countries,
         )
         untouched_partition_check = _verify_untouched_partition_stability(
             before=untouched_before,
             after=untouched_after,
         )
+        candidate_scope = (
+            "target_country_partition_only"
+            if len(countries) == 1
+            else "target_country_partitions_only"
+        )
         refresh_report = {
             "jobStatus": "success",
             "fullManifest": {
-                "rows": int(len(candidate_frame)),
-                "columns": int(len(candidate_frame.columns)),
+                "rows": total_rows,
+                "columns": candidate_column_count,
             },
-            "partitionManifest": {"parquetFileCount": 1},
+            "partitionManifest": {"parquetFileCount": len(countries)},
             "incremental": {
                 "enabled": True,
-                "scope": "target_country_partition_only",
-                "targetCountry": country,
+                "scope": candidate_scope,
+                "targetCountry": countries[0] if len(countries) == 1 else None,
+                "targetCountries": countries,
+                "countryResults": country_results,
                 "untouchedPartitionCheck": untouched_partition_check,
             },
         }
@@ -3692,15 +4040,16 @@ def _run_single_country_job(job_id: str) -> None:
             "reviewDir": None,
             "rawCompareReportPath": None,
             "planPath": None,
-            "candidateScope": "target_country_partition_only",
+            "candidateScope": candidate_scope,
             "untouchedPartitionCheck": untouched_partition_check,
         }
         state["summaries"] = {
             "refresh": _summarize_refresh_report(refresh_report),
             "jobInfo": {
-                "country": country,
+                "country": countries[0] if len(countries) == 1 else None,
+                "countries": countries,
                 "month": month,
-                "type": "single_country",
+                "type": str(state.get("jobType") or "partial_country"),
             },
         }
         state["plan"] = None
@@ -3711,7 +4060,10 @@ def _run_single_country_job(job_id: str) -> None:
         _write_jato_etl_pipeline_status(state)
         _append_log(
             log_path,
-            f"[{_utc_now().isoformat()}] 单国家任务完成：{country} {month}。可前往 Review（不改变 active）。",
+            (
+                f"[{_utc_now().isoformat()}] 部分国家任务完成："
+                f"{','.join(countries)} {month}。可前往 Review（不改变 active）。"
+            ),
         )
 
     except _JobCancelled as exc:
@@ -3736,6 +4088,11 @@ def _run_single_country_job(job_id: str) -> None:
         _append_log(log_path, traceback.format_exc())
     finally:
         _RUNNING_THREADS.pop(job_id, None)
+
+
+def _run_single_country_job(job_id: str) -> None:
+    """Compatibility wrapper for the explicit single-country API."""
+    _run_country_partition_job(job_id)
 
 
 def create_single_country_job(
