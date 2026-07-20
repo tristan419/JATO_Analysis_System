@@ -2,6 +2,7 @@ from fastapi import APIRouter, Depends, File, Form, Query, Request, UploadFile
 
 from app.core.security import UserContext, require_min_role
 from app.services.jato_monthly_update_service import (
+    approve_jato_monthly_update_review,
     cancel_jato_monthly_update_job,
     complete_jato_monthly_update_upload,
     create_jato_monthly_update_job,
@@ -134,6 +135,22 @@ def get_monthly_update_review(
     _user: UserContext = Depends(require_min_role("editor")),
 ) -> dict[str, object]:
     return {"item": get_jato_monthly_update_review(job_id)}
+
+
+@router.post("/monthly-update-jobs/{job_id}/review-approval")
+def post_monthly_update_review_approval(
+    job_id: str,
+    payload: dict[str, object],
+    user: UserContext = Depends(require_min_role("admin")),
+) -> dict[str, object]:
+    return {
+        "item": approve_jato_monthly_update_review(
+            job_id=job_id,
+            triggered_by=user.name,
+            decision=str(payload.get("decision", "")),
+            note=str(payload.get("note", "")) if payload.get("note") is not None else None,
+        )
+    }
 
 
 @router.post("/monthly-update-jobs/{job_id}/publish")

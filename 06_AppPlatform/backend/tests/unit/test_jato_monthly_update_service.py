@@ -47,6 +47,18 @@ def _configure_raw_roots(
     return project_root, baseline_path, archive_path
 
 
+def _approve_candidate_state(state: dict[str, object]) -> None:
+    artifacts = state.get("artifacts")
+    assert isinstance(artifacts, dict)
+    state["reviewApproval"] = {
+        "decision": "approved",
+        "reviewedAt": "2026-07-20T00:00:00+00:00",
+        "reviewedBy": "tester",
+        "candidateFingerprint": jato_monthly_update_service._candidate_fingerprint_id(artifacts),
+        "note": None,
+    }
+
+
 def test_detect_latest_month_from_upload_uses_last_non_empty_month(tmp_path: Path) -> None:
     upload_path = tmp_path / "patch.xlsx"
     pd.DataFrame(
@@ -1500,6 +1512,7 @@ def test_publish_monthly_update_job_promotes_staging_outputs(
         "refreshReportPath": "04_Processed_data/staging/2026-03-mixed/refresh_job_report.json",
     }
     state["summaries"] = {"refresh": {"jobStatus": "success"}}
+    _approve_candidate_state(state)
     jato_monthly_update_service._persist_job_state(state)
     evidence_calls = []
     cache_invalidation = {
@@ -1628,6 +1641,7 @@ def test_publish_monthly_update_job_blocks_country_regression(
         "refreshReportPath": "04_Processed_data/staging/2026-03-mixed/refresh_job_report.json",
     }
     state["summaries"] = {"refresh": {"jobStatus": "success"}}
+    _approve_candidate_state(state)
     jato_monthly_update_service._persist_job_state(state)
 
     with pytest.raises(HTTPException) as exc_info:
@@ -1710,6 +1724,7 @@ def test_publish_monthly_update_job_blocks_likely_doubled_sales(
         "refreshReportPath": "04_Processed_data/staging/2026-03-mixed/refresh_job_report.json",
     }
     state["summaries"] = {"refresh": {"jobStatus": "success"}}
+    _approve_candidate_state(state)
     jato_monthly_update_service._persist_job_state(state)
 
     with pytest.raises(HTTPException) as exc_info:
@@ -1851,6 +1866,7 @@ def test_publish_monthly_update_job_allows_republish_after_rollback(
         "refreshReportPath": "04_Processed_data/staging/2026-03-mixed/refresh_job_report.json",
     }
     state["summaries"] = {"refresh": {"jobStatus": "success"}}
+    _approve_candidate_state(state)
     state["publication"] = {
         "publishedAt": "2026-04-20T12:02:33+00:00",
         "publishedBy": "tester",
@@ -1871,3 +1887,56 @@ def test_publish_monthly_update_job_allows_republish_after_rollback(
         "04_Processed_data/.refresh_backups/manual-promote-"
     )
     assert "rolledBackAt" not in published["publication"]
+
+
+def test_single_country_candidate_cannot_publish(tmp_path: Path, monkeypatch) -> None:
+    project_root = tmp_path / "project"
+    job_root = project_root / "04_Processed_data" / "ops" / "jato_monthly_update_jobs"
+    monkeypatch.setattr(jato_monthly_update_service, "PROJECT_ROOT", project_root)
+    monkeypatch.setattr(jato_monthly_update_service, "MONTHLY_UPDATE_JOB_ROOT", job_root)
+    job_id = "jato-sc-review-only"
+    upload_path = job_root / job_id / "uploads" / "Hungary-2026-05.xlsx"
+    upload_path.parent.mkdir(parents=True, exist_ok=True)
+    upload_path.write_bytes(b"candidate")
+    state = jato_monthly_update_service._prepare_initial_job_state(
+        job_id=job_id,
+        month="2026-05",
+        triggered_by="tester",
+        upload_filename=upload_path.name,
+        stored_upload_path=upload_path,
+    )
+    state.update({
+        "status": "success",
+        "phase": "completed",
+        "jobType": "single_country",
+        "country": "匈牙利",
+        "summaries": {"refresh": {"jobStatus": "success"}},
+        "artifacts": {"candidateScope": "target_country_partition_only"},
+    })
+    jato_monthly_update_service._persist_job_state(state)
+
+    with pytest.raises(HTTPException, match="仅用于 Review"):
+        jato_monthly_update_service.publish_jato_monthly_update_job(
+            job_id=job_id,
+            triggered_by="publisher",
+        )
+
+
+def test_single_country_source_feedback_reports_exact_washer_request() -> None:
+    schema_feedback = jato_monthly_update_service._single_country_source_feedback(
+        rule_id="SC009",
+        country="匈牙利",
+        metrics={"missingMaterialColumns": ["MSRP including delivery charge"]},
+    )
+    row_delta_feedback = jato_monthly_update_service._single_country_source_feedback(
+        rule_id="SC012",
+        country="匈牙利",
+        metrics={"rowDelta": -358, "historicalSalesStability": {"status": "pass"}},
+    )
+
+    assert schema_feedback is not None
+    assert "MSRP including delivery charge" in schema_feedback
+    assert "不能用 Retail price" in schema_feedback
+    assert row_delta_feedback is not None
+    assert "减少 358 行" in row_delta_feedback
+    assert "历史销量已通过核对" in row_delta_feedback

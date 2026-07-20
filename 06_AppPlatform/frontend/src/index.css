@@ -10901,6 +10901,19 @@ table.data-table tr.data-table-group-row.contains-selection td {
   flex-wrap: wrap;
 }
 
+.monthly-update-feedback-cell {
+  display: grid;
+  gap: 8px;
+  min-width: 280px;
+  line-height: 1.55;
+  word-break: break-word;
+}
+
+.monthly-update-feedback-cell .btn {
+  justify-self: start;
+  white-space: nowrap;
+}
+
 .monthly-update-blocker-panel {
   margin-bottom: 16px;
   padding: 12px 16px;

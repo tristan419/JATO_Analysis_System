@@ -15,6 +15,7 @@ import traceback
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
+from urllib.parse import quote
 from uuid import uuid4
 
 import pandas as pd
@@ -38,6 +39,7 @@ PREPARE_SCRIPT_PATH = (
 REBUILD_SCRIPT_PATH = (
     PROJECT_ROOT / "03_Scripts" / "data_pipeline" / "rebuild_from_parquet.py"
 )
+SINGLE_COUNTRY_ETL_SCRIPT_PATH = PROJECT_ROOT / "03_Scripts" / "elt_worker.py"
 STATE_FILENAME = "job_state.json"
 LOG_FILENAME = "job.log"
 UPLOAD_STATE_FILENAME = "upload_state.json"
@@ -51,6 +53,7 @@ MONTH_COLUMN_PATTERN = re.compile(
     re.IGNORECASE,
 )
 YEAR_COLUMN_PATTERN = re.compile(r"^\d{4}$")
+YTD_COLUMN_PATTERN = re.compile(r"^YTD\s+\d{4}\s+\([A-Za-z]{3}\)$", re.IGNORECASE)
 BATCH_ID_PATTERN = re.compile(r"^(20\d{2}-\d{2})-r(\d+)$")
 COUNTRY_COLUMN_CANDIDATES = ("国家", "country")
 SAFE_CLEANUP_TIER = "safe"
@@ -193,6 +196,240 @@ def _collect_dataset_country_latest_months(path: Path) -> dict[str, str | None]:
         ]
         info[country] = present_months[-1] if present_months else None
     return info
+
+
+def _candidate_fingerprint_id(artifacts: dict[str, Any]) -> str:
+    """Bind a human approval to the exact candidate that was reviewed."""
+    candidate_path = _project_path(str(artifacts.get("stagingOutputPath") or "").strip())
+    if candidate_path is None or not candidate_path.exists():
+        raise HTTPException(status_code=409, detail="缺少 candidate parquet，不能确认 Review。")
+    manifest_value = str(artifacts.get("manifestPath") or "").strip()
+    manifest_path = _project_path(manifest_value) if manifest_value else None
+    hasher = hashlib.sha256()
+    hasher.update(_sha256_hex_for_path(candidate_path).encode("ascii"))
+    if manifest_path is not None and manifest_path.exists():
+        hasher.update(_sha256_hex_for_path(manifest_path).encode("ascii"))
+    return hasher.hexdigest()
+
+
+def _load_parquet_country_subset(path: Path, country: str, *, path_label: str) -> pd.DataFrame:
+    """Read exactly one country from a parquet file; never materialize the archive."""
+    try:
+        import pyarrow.parquet as pq
+
+        schema = pq.read_schema(path)
+        country_column = _find_country_column([str(column) for column in schema.names])
+        if country_column is None:
+            raise HTTPException(status_code=409, detail=f"{path_label} 缺少国家列。")
+        frame = pd.read_parquet(path, filters=[(country_column, "==", country)])
+        frame.columns = [str(column).strip() for column in frame.columns]
+        return frame
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(
+            status_code=409,
+            detail=f"读取 {path_label} 的 {country} 分区失败。",
+        ) from exc
+
+
+def _load_active_country_partition_subset(partition_root: Path, country: str) -> pd.DataFrame:
+    country_dir = partition_root / f"国家={quote(country, safe='')}"
+    if not country_dir.exists():
+        raise HTTPException(status_code=409, detail=f"找不到 active 的 {country} 国家分区。")
+    try:
+        frame = pd.read_parquet(country_dir)
+        frame.columns = [str(column).strip() for column in frame.columns]
+        if _find_country_column(list(frame.columns)) is None:
+            frame["国家"] = country
+        return frame
+    except Exception as exc:
+        raise HTTPException(
+            status_code=409,
+            detail=f"读取 active 的 {country} 国家分区失败。",
+        ) from exc
+
+
+def _untouched_partition_snapshot(*, partition_root: Path, country: str) -> dict[str, Any]:
+    """Fingerprint non-target manifest entries without touching their parquet files."""
+    manifest_path = partition_root / "manifest.json"
+    manifest = _read_json_if_exists(_relative_to_project(manifest_path)) or {}
+    partition_stats = manifest.get("partitionStats")
+    partition_columns = manifest.get("partitionColumns")
+    if not isinstance(partition_stats, dict):
+        return {"status": "unavailable", "reason": "missing_partition_stats"}
+    column = (
+        str(partition_columns[0])
+        if isinstance(partition_columns, list) and partition_columns
+        else "国家"
+    )
+    target_prefix = f"{column}={quote(country, safe='')}"
+    untouched = {
+        str(key): value
+        for key, value in partition_stats.items()
+        if not str(key).startswith(target_prefix)
+    }
+    encoded = json.dumps(untouched, ensure_ascii=False, sort_keys=True).encode("utf-8")
+    return {
+        "status": "pass",
+        "targetPartitionPrefix": target_prefix,
+        "untouchedPartitionCount": len(untouched),
+        "untouchedPartitionFingerprint": hashlib.sha256(encoded).hexdigest(),
+    }
+
+
+def _verify_untouched_partition_stability(*, before: dict[str, Any], after: dict[str, Any]) -> dict[str, Any]:
+    if before.get("status") != "pass" or after.get("status") != "pass":
+        return {"status": "unavailable", "before": before, "after": after}
+    changed = before.get("untouchedPartitionFingerprint") != after.get("untouchedPartitionFingerprint")
+    return {
+        "status": "fail" if changed else "pass",
+        "untouchedPartitionCount": int(before.get("untouchedPartitionCount", 0) or 0),
+        "beforeFingerprint": before.get("untouchedPartitionFingerprint"),
+        "afterFingerprint": after.get("untouchedPartitionFingerprint"),
+    }
+
+
+def _latest_month_from_frame(frame: pd.DataFrame) -> str | None:
+    for column in reversed(_detect_month_columns(list(frame.columns))):
+        if _series_has_data(frame[column]):
+            return column
+    return None
+
+
+def _is_derived_ytd_column(column: str) -> bool:
+    return bool(YTD_COLUMN_PATTERN.fullmatch(str(column).strip()))
+
+
+def _single_country_schema_contract(*, active_frame: pd.DataFrame, candidate_frame: pd.DataFrame) -> dict[str, list[str]]:
+    active_months = set(_detect_month_columns(list(active_frame.columns)))
+    candidate_months = set(_detect_month_columns(list(candidate_frame.columns)))
+    active_static = set(active_frame.columns) - active_months
+    candidate_static = set(candidate_frame.columns) - candidate_months
+    missing = sorted(active_static - candidate_static)
+    null_only: list[str] = []
+    derived_ytd: list[str] = []
+    material: list[str] = []
+    for column in missing:
+        if not _series_has_data(active_frame[column]):
+            null_only.append(column)
+        elif _is_derived_ytd_column(column):
+            derived_ytd.append(column)
+        else:
+            material.append(column)
+    return {
+        "missing": missing,
+        "missingNullOnly": null_only,
+        "missingDerivedYtd": derived_ytd,
+        "missingMaterial": material,
+        "extra": sorted(candidate_static - active_static),
+    }
+
+
+def _single_country_configuration_key_columns(frame: pd.DataFrame) -> list[str]:
+    month_columns = set(_detect_month_columns(list(frame.columns)))
+    return [
+        str(column)
+        for column in frame.columns
+        if str(column) not in month_columns
+        and not YEAR_COLUMN_PATTERN.fullmatch(str(column).strip())
+        and not _is_derived_ytd_column(str(column))
+    ]
+
+
+def _single_country_historical_sales_stability(
+    *,
+    active_frame: pd.DataFrame,
+    candidate_frame: pd.DataFrame,
+    active_latest_month: str | None,
+) -> dict[str, Any]:
+    if active_latest_month is None:
+        return {"status": "unavailable", "reason": "active_latest_month_missing"}
+    active_months = set(_detect_month_columns(list(active_frame.columns)))
+    candidate_months = set(_detect_month_columns(list(candidate_frame.columns)))
+    historical_months = sorted(
+        [month for month in active_months if _time_sort_key(month) <= _time_sort_key(active_latest_month)],
+        key=_time_sort_key,
+    )
+    missing = [month for month in historical_months if month not in candidate_months]
+    if missing:
+        return {"status": "fail", "reason": "candidate_missing_historical_months", "missingMonths": missing}
+
+    active_sales = active_frame[historical_months].apply(pd.to_numeric, errors="coerce").fillna(0)
+    candidate_sales = candidate_frame[historical_months].apply(pd.to_numeric, errors="coerce").fillna(0)
+    samples: list[dict[str, Any]] = []
+
+    def compare(left: pd.Series, right: pd.Series, *, scope: str) -> None:
+        for month in historical_months:
+            left_value = float(left.get(month, 0) or 0)
+            right_value = float(right.get(month, 0) or 0)
+            if left_value != right_value:
+                samples.append({
+                    "scope": scope,
+                    "month": month,
+                    "activeSales": _serialize_numeric_value(left_value),
+                    "candidateSales": _serialize_numeric_value(right_value),
+                    "deltaSales": _serialize_numeric_value(right_value - left_value),
+                })
+
+    compare(active_sales.sum(), candidate_sales.sum(), scope="country")
+    compared_make_count = 0
+    if "Make" in active_frame.columns and "Make" in candidate_frame.columns:
+        active_grouped = active_sales.groupby(active_frame["Make"].astype("string").fillna("").str.strip(), dropna=False).sum()
+        candidate_grouped = candidate_sales.groupby(candidate_frame["Make"].astype("string").fillna("").str.strip(), dropna=False).sum()
+        for make in sorted(set(active_grouped.index) | set(candidate_grouped.index)):
+            compared_make_count += 1
+            compare(
+                active_grouped.loc[make] if make in active_grouped.index else pd.Series(0, index=historical_months),
+                candidate_grouped.loc[make] if make in candidate_grouped.index else pd.Series(0, index=historical_months),
+                scope=f"make:{make}",
+            )
+    return {
+        "status": "pass" if not samples else "fail",
+        "comparedThrough": active_latest_month,
+        "comparedMonthCount": len(historical_months),
+        "comparedMakeCount": compared_make_count,
+        "mismatchCount": len(samples),
+        "mismatchSamples": samples[:20],
+    }
+
+
+def _single_country_source_feedback(*, rule_id: str, country: str, metrics: dict[str, Any]) -> str | None:
+    """Translate measured validation failures into copy-ready washer feedback."""
+    def columns(name: str) -> str:
+        values = metrics.get(name)
+        return "、".join(str(value) for value in values) if isinstance(values, list) else ""
+
+    if rule_id == "SC001":
+        return f"请重新导出 {country} 的完整月份列。当前文件未识别到有效月份；请保留历史月份和本次最新月份，并确保销量字段为可解析数字。"
+    if rule_id == "SC002":
+        return f"请检查 {country} 的月份销量值。文件包含月份标题但没有可用数值；请不要把销量列清空、转成文本或用格式符号替代数值。"
+    if rule_id == "SC003":
+        return f"请提供不早于当前 active {metrics.get('active') or '月份'} 的 {country} 数据。本次最新月份为 {metrics.get('candidate') or '未知'}，发生回退；请确认导出筛选条件包含本次要推进的最新月份。"
+    if rule_id == "SC004":
+        return f"请去除 {country} 文件中的完全相同配置行（检测到 {metrics.get('duplicateRows', 0)} 行）。只删除所有配置字段均相同的重复记录；价格、Registration type、动力或车身不同的版本不能合并。"
+    if rule_id == "SC005":
+        return f"请修正 {country} 文件中的负销量（检测到 {metrics.get('negativeSalesCells', 0)} 个单元格）。请按原始 JATO 导出确认更正、冲销或缺失值的处理方式，不能直接把负数绝对值化。"
+    if rule_id == "SC006":
+        return f"请检查 {country} 的历史月份是否被重复拼接或重复累计{f'：{columns('months')}' if columns('months') else ''}。候选销量接近 active 的两倍；请从原始导出重新生成，不要把历史全量文件再追加到已有历史上。"
+    if rule_id == "SC007":
+        return f"请仅提供 {country} 的单国数据。系统发现未上传国家的分区也发生变化；请检查洗数流程是否混入其他国家或复写了共享数据。"
+    if rule_id == "SC008":
+        return "本次无法证明未上传国家未被影响。请保留单国文件的国家范围、源文件哈希和分区清单，以便重新提交时完成隔离校验。"
+    if rule_id == "SC009":
+        return f"请在 {country} 的洗数后 Data Export 中保留业务字段：{columns('missingMaterialColumns') or '见 Review 明细'}。这些列在当前 active 数据中有实际值，不能用 Retail price 或其他相近字段自动替代；请从原始 JATO 导出补齐后重新输出同一月份文件。"
+    if rule_id == "SC010":
+        return f"{country} 文件新增字段：{columns('extraColumns') or '见 Review 明细'}。请提供字段定义、单位和是否应保留的确认；新增列不应覆盖或改名现有业务列。"
+    if rule_id == "SC011":
+        return f"请恢复 {country} 在 {metrics.get('comparedThrough') or '已有'} 之前的历史销量。系统发现 {metrics.get('mismatchCount', 0)} 处历史销量差异；本次更新只能新增或修正经确认的最新月份，不能重写已发布历史月份。"
+    if rule_id == "SC012":
+        row_delta = int(metrics.get("rowDelta", 0) or 0)
+        stability = metrics.get("historicalSalesStability")
+        history_note = "历史销量已通过核对" if isinstance(stability, dict) and stability.get("status") == "pass" else "历史销量需要一并复核"
+        return f"{country} 本次配置行较 active {'减少' if row_delta < 0 else '增加'} {abs(row_delta)} 行，{history_note}。请说明洗数时的去重、零销量配置过滤和车型下架规则，并提供清洗前后配置行数；不要仅为凑行数复制或补造车型。"
+    if rule_id == "SC013":
+        return f"{country} 缺少旧月份 YTD 派生列：{columns('missingDerivedYtdColumns') or '见 Review 明细'}。这不是发布 blocker；请确认最新月份的 YTD 字段仍由 Jan 至当月销量计算，并在后续导出中保持 YTD 列命名和口径一致。"
+    return None
 
 
 def _ordered_distinct_strings(values: list[str]) -> list[str]:
@@ -1667,6 +1904,13 @@ def _serialize_job_state(
         ),
         "status": str(payload.get("status", "")),
         "phase": str(payload.get("phase", "")),
+        "jobType": payload.get("jobType"),
+        "country": payload.get("country"),
+        "countryScope": (
+            [str(country) for country in payload.get("countryScope", [])]
+            if isinstance(payload.get("countryScope"), list)
+            else []
+        ),
         "triggeredBy": str(payload.get("triggeredBy", "")),
         "createdAt": str(payload.get("createdAt", "")),
         "updatedAt": str(payload.get("updatedAt", "")),
@@ -1706,6 +1950,11 @@ def _serialize_job_state(
             if isinstance(payload.get("cancellation"), dict)
             else None
         ),
+        "reviewApproval": (
+            payload.get("reviewApproval")
+            if isinstance(payload.get("reviewApproval"), dict)
+            else None
+        ),
     }
     if include_log_tail:
         log_path = _job_log_path(item["jobId"])
@@ -1725,6 +1974,11 @@ def _sanitize_review_finding(item: Any) -> dict[str, Any] | None:
         "message": str(item.get("message", "")),
         "metrics": metrics if isinstance(metrics, dict) else {},
         "suggestedAction": str(item.get("suggestedAction", "")),
+        "sourceFeedback": (
+            None
+            if item.get("sourceFeedback") in {None, ""}
+            else str(item.get("sourceFeedback"))
+        ),
     }
 
 
@@ -1860,6 +2114,188 @@ def _require_no_running_monthly_update_jobs(*, excluding_job_id: str | None = No
         )
 
 
+def _build_single_country_review(payload: dict[str, Any]) -> dict[str, Any]:
+    country = str(payload.get("country") or "").strip()
+    artifacts = payload.get("artifacts")
+    if not country or not isinstance(artifacts, dict):
+        raise HTTPException(status_code=409, detail="单国任务缺少 Review 所需信息。")
+    candidate_path = _project_path(str(artifacts.get("stagingOutputPath") or "").strip())
+    active_paths = _active_data_paths()
+    if candidate_path is None or not candidate_path.exists():
+        raise HTTPException(status_code=409, detail="单国任务尚未生成可 Review 的 candidate。")
+    candidate_frame = _load_parquet_country_subset(candidate_path, country, path_label="candidate")
+    if candidate_frame.empty:
+        raise HTTPException(status_code=409, detail="单国 candidate 不包含目标国家。")
+    if active_paths["partition"].exists():
+        active_frame = _load_active_country_partition_subset(active_paths["partition"], country)
+    elif active_paths["parquet"].exists():
+        active_frame = _load_parquet_country_subset(active_paths["parquet"], country, path_label="active")
+    else:
+        raise HTTPException(status_code=409, detail="缺少 active 数据，不能生成单国 Review。")
+    if active_frame.empty:
+        raise HTTPException(status_code=409, detail="active 不包含目标国家，不能生成单国 Review。")
+
+    month_columns = _detect_month_columns(list(candidate_frame.columns))
+    schema_contract = _single_country_schema_contract(
+        active_frame=active_frame,
+        candidate_frame=candidate_frame,
+    )
+    key_columns = _single_country_configuration_key_columns(candidate_frame)
+    duplicate_count = int(candidate_frame.duplicated(subset=key_columns, keep=False).sum()) if key_columns else 0
+    negative_sales_count = int(sum(
+        pd.to_numeric(candidate_frame[column], errors="coerce").lt(0).sum()
+        for column in month_columns
+    ))
+    active_latest = _latest_month_from_frame(active_frame)
+    candidate_latest = _latest_month_from_frame(candidate_frame)
+    historical_stability = _single_country_historical_sales_stability(
+        active_frame=active_frame,
+        candidate_frame=candidate_frame,
+        active_latest_month=active_latest,
+    )
+    active_sales = _collect_country_monthly_sales(active_frame, countries=[country], path_label="active").get(country, {})
+    candidate_sales = _collect_country_monthly_sales(candidate_frame, countries=[country], path_label="candidate").get(country, {})
+    common_months = sorted(set(active_sales) & set(candidate_sales), key=_time_sort_key)
+    doubled_months = [
+        month for month in common_months
+        if _is_near_sales_doubling(
+            reference_sales=active_sales.get(month),
+            candidate_sales=candidate_sales.get(month),
+        )[0]
+    ]
+    partition_check = artifacts.get("untouchedPartitionCheck")
+    if not isinstance(partition_check, dict):
+        partition_check = {"status": "unavailable", "changedPartitions": []}
+
+    findings: list[dict[str, Any]] = []
+
+    def add_finding(severity: str, rule_id: str, message: str, metrics: dict[str, Any]) -> None:
+        finding: dict[str, Any] = {
+            "severity": severity,
+            "scope": "country",
+            "target": country,
+            "ruleId": rule_id,
+            "message": message,
+            "metrics": metrics,
+            "suggestedAction": "reject_input_batch" if severity == "blocker" else "manual_review_required",
+        }
+        source_feedback = _single_country_source_feedback(
+            rule_id=rule_id,
+            country=country,
+            metrics=metrics,
+        )
+        if source_feedback:
+            finding["sourceFeedback"] = source_feedback
+        findings.append(finding)
+
+    if not month_columns:
+        add_finding("blocker", "SC001", "candidate 缺少月份列。", {})
+    if schema_contract["missingMaterial"]:
+        add_finding("blocker", "SC009", "单国 candidate 缺少 active 业务列：" + "、".join(schema_contract["missingMaterial"]) + "。", {
+            "missingMaterialColumns": schema_contract["missingMaterial"],
+            "missingDerivedYtdColumns": schema_contract["missingDerivedYtd"],
+            "missingNullOnlyColumns": schema_contract["missingNullOnly"],
+        })
+    if schema_contract["missingDerivedYtd"]:
+        add_finding("review", "SC013", "单国 candidate 缺少旧月份 YTD 派生列：" + "、".join(schema_contract["missingDerivedYtd"]) + "。", {
+            "missingDerivedYtdColumns": schema_contract["missingDerivedYtd"],
+        })
+    if schema_contract["extra"]:
+        add_finding("review", "SC010", "单国 candidate 包含 active 中没有的新业务列：" + "、".join(schema_contract["extra"]) + "。", {
+            "extraColumns": schema_contract["extra"],
+        })
+    if candidate_latest is None:
+        add_finding("blocker", "SC002", "candidate 没有有效销量月份。", {})
+    if active_latest and candidate_latest and _time_sort_key(candidate_latest) < _time_sort_key(active_latest):
+        add_finding("blocker", "SC003", "单国最新月份发生回退。", {"active": active_latest, "candidate": candidate_latest})
+    if duplicate_count:
+        add_finding("blocker", "SC004", "单国 candidate 存在完全相同的配置指纹。", {
+            "duplicateRows": duplicate_count,
+            "keyColumnCount": len(key_columns),
+        })
+    if negative_sales_count:
+        add_finding("blocker", "SC005", "单国 candidate 存在负销量。", {"negativeSalesCells": negative_sales_count})
+    if len(doubled_months) >= SALES_DOUBLING_MIN_MONTH_COUNT:
+        add_finding("blocker", "SC006", "单国 candidate 疑似销量翻倍。", {"months": doubled_months})
+    if historical_stability.get("status") == "fail":
+        add_finding("blocker", "SC011", "单国 candidate 改写了 active 已有历史销量。", historical_stability)
+    row_delta = int(len(candidate_frame) - len(active_frame))
+    if row_delta:
+        add_finding("review", "SC012", "单国 candidate 的配置行数与 active 不同。", {
+            "activeRows": int(len(active_frame)),
+            "candidateRows": int(len(candidate_frame)),
+            "rowDelta": row_delta,
+            "historicalSalesStability": historical_stability,
+        })
+    if partition_check.get("status") == "fail":
+        add_finding("blocker", "SC007", "未上传国家的分区签名发生变化。", partition_check)
+    elif partition_check.get("status") == "unavailable":
+        add_finding("review", "SC008", "无法验证未上传国家分区稳定性。", partition_check)
+    findings.append({
+        "severity": "info",
+        "scope": "country",
+        "target": country,
+        "ruleId": "SC201",
+        "message": "单国 candidate 仅读取目标国家分区；未上传国家 active 分区保持只读。",
+        "metrics": {"rowCount": int(len(candidate_frame)), "latestMonth": candidate_latest},
+        "suggestedAction": "manual_review_required",
+    })
+
+    rows = []
+    for month in sorted(set(active_sales) | set(candidate_sales), key=_time_sort_key):
+        reference_sales = active_sales.get(month)
+        proposed_sales = candidate_sales.get(month)
+        rows.append({
+            "month": month,
+            "referenceSales": reference_sales,
+            "candidateSales": proposed_sales,
+            "deltaSales": _serialize_numeric_value((proposed_sales or 0) - (reference_sales or 0)) if month in active_sales and month in candidate_sales else None,
+            "changeStatus": "unchanged" if reference_sales == proposed_sales else "changed",
+        })
+    return {
+        "jobId": str(payload.get("jobId") or ""),
+        "reviewDir": None,
+        "compareId": f"{payload.get('jobId')}-single-country",
+        "decisionSuggestion": "reject_input_batch" if any(item["severity"] == "blocker" for item in findings) else "manual_review_required",
+        "compareKeyColumns": key_columns,
+        "checklistMarkdown": "\n".join(f"- {item['severity']}: {item['message']}" for item in findings),
+        "reviewFindings": findings,
+        "sampledCountries": [country],
+        "conflictSampleCount": 0,
+        "conflictSamples": [],
+        "overlapChangeSummary": [],
+        "countryFreshnessSummary": [{
+            "country": country,
+            "oldLatestMonth": active_latest,
+            "newLatestMonth": candidate_latest,
+            "freshnessStatus": "advanced" if active_latest and candidate_latest and _time_sort_key(candidate_latest) > _time_sort_key(active_latest) else "unchanged_latest",
+            "rowDelta": row_delta,
+        }],
+        "countryCoverageSummary": [{
+            "country": country,
+            "oldMonths": _detect_month_columns(list(active_frame.columns)),
+            "newMonths": month_columns,
+            "addedMonths": sorted(set(month_columns) - set(_detect_month_columns(list(active_frame.columns))), key=_time_sort_key),
+            "removedMonths": sorted(set(_detect_month_columns(list(active_frame.columns))) - set(month_columns), key=_time_sort_key),
+            "overlappingMonths": common_months,
+            "coverageStatus": "single_country",
+        }],
+        "countrySalesReferenceLabel": "网站当前 active",
+        "countryMonthlySalesSummary": [{"country": country, "rows": rows}],
+        "countryMonthlySalesError": None,
+        "timeAxisCheck": {
+            "targetCountry": country,
+            "activeLatestMonth": active_latest,
+            "candidateLatestMonth": candidate_latest,
+            "schema": schema_contract,
+        },
+        "countryScopeSummary": {"targetCountry": country, "untouchedPartitionCheck": partition_check},
+        "refreshSummary": _summarize_refresh_report(_read_json_if_exists(str(artifacts.get("refreshReportPath") or "")) or {}),
+        "candidateFingerprint": _candidate_fingerprint_id(artifacts),
+        "approval": payload.get("reviewApproval"),
+    }
+
+
 def get_jato_monthly_update_review(job_id: str) -> dict[str, Any]:
     payload = _load_job_state(job_id)
     artifacts = payload.get("artifacts")
@@ -1870,6 +2306,8 @@ def get_jato_monthly_update_review(job_id: str) -> dict[str, Any]:
     review_dir = str(artifacts.get("reviewDir") or "").strip()
     raw_compare_report = _read_json_if_exists(raw_compare_report_path)
     if raw_compare_report is None:
+        if str(payload.get("jobType") or "") == "single_country":
+            return _build_single_country_review(payload)
         raise HTTPException(status_code=409, detail="当前任务暂无可 review 的 compare 报告。")
 
     checklist_markdown = _read_text_if_exists(
@@ -1996,7 +2434,46 @@ def get_jato_monthly_update_review(job_id: str) -> dict[str, Any]:
             if isinstance(refresh_report, dict)
             else None
         ),
+        "candidateFingerprint": _candidate_fingerprint_id(artifacts),
+        "approval": payload.get("reviewApproval"),
     }
+
+
+def approve_jato_monthly_update_review(
+    *,
+    job_id: str,
+    triggered_by: str,
+    decision: str,
+    note: str | None = None,
+) -> dict[str, Any]:
+    normalized_decision = decision.strip().lower()
+    if normalized_decision not in {"approve", "reject"}:
+        raise HTTPException(status_code=400, detail="review decision 只支持 approve 或 reject。")
+    payload = _load_job_state(job_id)
+    artifacts = payload.get("artifacts")
+    if not isinstance(artifacts, dict):
+        raise HTTPException(status_code=409, detail="当前任务缺少 candidate，不能确认 Review。")
+    review = get_jato_monthly_update_review(job_id)
+    findings = review.get("reviewFindings")
+    has_blocker = isinstance(findings, list) and any(
+        isinstance(item, dict) and item.get("severity") == "blocker"
+        for item in findings
+    )
+    if normalized_decision == "approve" and has_blocker:
+        raise HTTPException(status_code=409, detail="Review 存在 blocker，不能批准 Publish。")
+    payload["reviewApproval"] = {
+        "decision": "approved" if normalized_decision == "approve" else "rejected",
+        "reviewedAt": _utc_now().isoformat(),
+        "reviewedBy": triggered_by.strip() or "anonymous",
+        "candidateFingerprint": _candidate_fingerprint_id(artifacts),
+        "note": str(note or "").strip() or None,
+    }
+    _persist_job_state(payload)
+    _append_log(
+        _job_log_path(job_id),
+        f"[{_utc_now().isoformat()}] Review {normalized_decision} by {triggered_by.strip() or 'anonymous'}.",
+    )
+    return _serialize_job_state(payload, include_log_tail=True)
 
 
 def publish_jato_monthly_update_job(
@@ -2028,6 +2505,16 @@ def publish_jato_monthly_update_job(
     artifacts = payload.get("artifacts")
     if not isinstance(artifacts, dict):
         raise HTTPException(status_code=409, detail="当前任务缺少 staging 产物信息，不能 publish。")
+    if artifacts.get("candidateScope") == "target_country_partition_only":
+        raise HTTPException(
+            status_code=409,
+            detail="单国 candidate 仅用于 Review，不能直接 Publish。请使用已批准的完整 promotion 流程生成 active 产物。",
+        )
+    approval = payload.get("reviewApproval")
+    if not isinstance(approval, dict) or approval.get("decision") != "approved":
+        raise HTTPException(status_code=409, detail="必须先完成并批准当前 candidate 的 Review，才能 publish。")
+    if str(approval.get("candidateFingerprint") or "") != _candidate_fingerprint_id(artifacts):
+        raise HTTPException(status_code=409, detail="candidate 在 Review 后已变化，请重新 Review 并批准。")
 
     source_paths = {
         "parquet": _project_path(str(artifacts.get("stagingOutputPath") or "").strip()),
@@ -2609,6 +3096,25 @@ def _run_job(job_id: str) -> None:
     state["status"] = "running"
     state["startedAt"] = _utc_now().isoformat()
 
+    detected_single_country = _detect_single_country_upload(stored_upload_path)
+    if detected_single_country is not None:
+        country, detected_month = detected_single_country
+        state["jobType"] = "single_country"
+        state["country"] = country
+        state["countryScope"] = [country]
+        state["month"] = detected_month
+        state["batchId"] = f"{detected_month}-{country}-single"
+        _persist_job_state(state)
+        _append_log(
+            log_path,
+            (
+                f"[{_utc_now().isoformat()}] 自动识别单国上传："
+                f"country={country}, month={detected_month}；转入目标分区 Review 路径。"
+            ),
+        )
+        _run_single_country_job(job_id)
+        return
+
     batch_id = str(state.get("batchId") or "")
     if not batch_id:
         raise RuntimeError("任务缺少批次标识")
@@ -2815,8 +3321,14 @@ def _queue_single_country_job(
     active_paths = _active_data_paths()
     if active_paths["parquet"].exists():
         try:
-            latest_months = _collect_dataset_country_latest_months(active_paths["parquet"])
-            active_latest = latest_months.get(normalized_country)
+            active_frame = (
+                _load_active_country_partition_subset(active_paths["partition"], normalized_country)
+                if active_paths["partition"].exists()
+                else _load_parquet_country_subset(
+                    active_paths["parquet"], normalized_country, path_label="active"
+                )
+            )
+            active_latest = _latest_month_from_frame(active_frame)
             if active_latest and normalized_month <= active_latest:
                 raise HTTPException(
                     status_code=409,
@@ -2839,8 +3351,10 @@ def _queue_single_country_job(
         "batchId": batch_id,
         "status": "queued",
         "phase": "queued",
+        "jobType": "single_country",
         "triggeredBy": triggered_by.strip() or "anonymous",
         "country": normalized_country,
+        "countryScope": [normalized_country],
         "createdAt": now,
         "updatedAt": now,
         "startedAt": None,
@@ -3078,10 +3592,12 @@ def _run_single_country_job(job_id: str) -> None:
             raise RuntimeError("上传文件必须包含国家列。")
         frame[country_col] = frame[country_col].astype("string").fillna("").str.strip()
         uploaded_countries = _ordered_distinct_strings(frame[country_col].tolist())
-        if country not in uploaded_countries:
+        if uploaded_countries != [country]:
             raise RuntimeError(
-                f"上传文件中未找到国家「{country}」。可用国家：{', '.join(uploaded_countries)}"
+                "单国上传必须且只能包含目标国家「"
+                f"{country}」。检测到：{', '.join(uploaded_countries) or '-'}"
             )
+        del frame
 
         _append_log(
             log_path,
@@ -3092,17 +3608,15 @@ def _run_single_country_job(job_id: str) -> None:
         job_dir = _job_dir(job_id)
         staging_dir = job_dir / "staging"
         staging_dir.mkdir(parents=True, exist_ok=True)
-        staging_output = staging_dir / "jato_full_archive.parquet"
+        staging_output = staging_dir / "single_country_candidate.parquet"
         manifest_path = staging_dir / "manifest.json"
-        partition_output = staging_dir / "partitioned_dataset_v1"
-        fingerprint_path = staging_dir / "dataset_fingerprint.json"
         report_path = staging_dir / "refresh_job_report.json"
-
-        baseline_path, baseline_source = _require_latest_baseline()
-
-        _append_log(
-            log_path,
-            f"[{_utc_now().isoformat()}] baseline: {_relative_to_project(baseline_path) or baseline_path}",
+        active_paths = _active_data_paths()
+        if not active_paths["partition"].exists():
+            raise RuntimeError("单国刷新需要 active partitioned dataset，当前分区目录不存在。")
+        untouched_before = _untouched_partition_snapshot(
+            partition_root=active_paths["partition"],
+            country=country,
         )
 
         state["phase"] = "refreshing"
@@ -3111,63 +3625,75 @@ def _run_single_country_job(job_id: str) -> None:
 
         refresh_args = [
             sys.executable,
-            str(PROJECT_ROOT / "03_Scripts" / "data_pipeline" / "run_data_refresh_job.py"),
-            "--baseline-input",
-            str(baseline_path.resolve()),
-            "--patch-input-files",
+            str(SINGLE_COUNTRY_ETL_SCRIPT_PATH),
+            "--input",
             str(stored_upload_path.resolve()),
             "--output",
             str(staging_output.resolve()),
             "--manifest",
             str(manifest_path.resolve()),
-            "--partition-output",
-            str(partition_output.resolve()),
-            "--report",
-            str(report_path.resolve()),
-            "--fingerprint",
-            str(fingerprint_path.resolve()),
-            "--incremental",
-            "--skip-benchmark",
+            "--job-id",
+            job_id,
         ]
 
-        active_paths = _active_data_paths()
-        if active_paths["parquet"].exists():
-            refresh_args.extend(
-                [
-                    "--supplement-missing-countries-from-parquet",
-                    str(active_paths["parquet"].resolve()),
-                ]
-            )
-
         _run_logged_command(
-            label="单国家刷新",
+            label="单国家目标分区转换",
             args=refresh_args,
             log_path=log_path,
         )
-
-        refresh_report = _read_json_if_exists(str(report_path.resolve()))
-        if refresh_report is None:
-            raise RuntimeError("Refresh 完成后未找到 refresh_job_report.json。")
+        candidate_frame = _load_parquet_country_subset(
+            staging_output,
+            country,
+            path_label="single-country candidate",
+        )
+        candidate_latest = _latest_month_from_frame(candidate_frame)
+        expected_month_label = datetime.strptime(month, "%Y-%m").strftime("%Y %b")
+        if candidate_latest != expected_month_label:
+            raise RuntimeError(
+                "单国 candidate 的最新月份与上传请求不一致："
+                f"expected={expected_month_label}, actual={candidate_latest or '-'}"
+            )
+        untouched_after = _untouched_partition_snapshot(
+            partition_root=active_paths["partition"],
+            country=country,
+        )
+        untouched_partition_check = _verify_untouched_partition_stability(
+            before=untouched_before,
+            after=untouched_after,
+        )
+        refresh_report = {
+            "jobStatus": "success",
+            "fullManifest": {
+                "rows": int(len(candidate_frame)),
+                "columns": int(len(candidate_frame.columns)),
+            },
+            "partitionManifest": {"parquetFileCount": 1},
+            "incremental": {
+                "enabled": True,
+                "scope": "target_country_partition_only",
+                "targetCountry": country,
+                "untouchedPartitionCheck": untouched_partition_check,
+            },
+        }
+        _write_json(report_path, refresh_report)
 
         state["artifacts"] = {
             "jobDir": _relative_to_project(job_dir),
             "logPath": _relative_to_project(log_path),
-            "baselinePath": _relative_to_project(baseline_path),
-            "baselineSource": baseline_source,
+            "baselinePath": None,
+            "baselineSource": "active_country_partition",
             "stagedPatchPath": _relative_to_project(stored_upload_path),
-            "supplementParquetPath": (
-                _relative_to_project(active_paths["parquet"])
-                if active_paths["parquet"].exists()
-                else None
-            ),
+            "supplementParquetPath": None,
             "stagingOutputPath": _relative_to_project(staging_output),
             "manifestPath": _relative_to_project(manifest_path),
-            "partitionOutputPath": _relative_to_project(partition_output),
+            "partitionOutputPath": None,
             "refreshReportPath": _relative_to_project(report_path),
-            "fingerprintPath": _relative_to_project(fingerprint_path),
+            "fingerprintPath": None,
             "reviewDir": None,
             "rawCompareReportPath": None,
             "planPath": None,
+            "candidateScope": "target_country_partition_only",
+            "untouchedPartitionCheck": untouched_partition_check,
         }
         state["summaries"] = {
             "refresh": _summarize_refresh_report(refresh_report),
@@ -3185,7 +3711,7 @@ def _run_single_country_job(job_id: str) -> None:
         _write_jato_etl_pipeline_status(state)
         _append_log(
             log_path,
-            f"[{_utc_now().isoformat()}] 单国家任务完成：{country} {month}。可前往 Publish。",
+            f"[{_utc_now().isoformat()}] 单国家任务完成：{country} {month}。可前往 Review（不改变 active）。",
         )
 
     except _JobCancelled as exc:

@@ -2411,10 +2411,21 @@ export interface JatoMonthlyUpdateCancellation {
   termination?: Record<string, unknown>;
 }
 
+export interface JatoMonthlyUpdateReviewApproval {
+  decision: "approved" | "rejected";
+  reviewedAt: string;
+  reviewedBy: string;
+  candidateFingerprint: string;
+  note?: string | null;
+}
+
 export interface JatoMonthlyUpdateJob {
   jobId: string;
   month: string;
   batchId?: string | null;
+  jobType?: string | null;
+  country?: string | null;
+  countryScope?: string[];
   status: string;
   phase: string;
   triggeredBy: string;
@@ -2431,6 +2442,7 @@ export interface JatoMonthlyUpdateJob {
   currentProcess?: JatoMonthlyUpdateCurrentProcess | null;
   runtimeCheck?: JatoMonthlyUpdateRuntimeCheck | null;
   cancellation?: JatoMonthlyUpdateCancellation | null;
+  reviewApproval?: JatoMonthlyUpdateReviewApproval | null;
   logPath?: string | null;
   logTail?: string | null;
 }
@@ -2443,6 +2455,7 @@ export interface JatoMonthlyUpdateReviewFinding {
   message: string;
   metrics: Record<string, unknown>;
   suggestedAction: string;
+  sourceFeedback?: string | null;
 }
 
 export interface JatoMonthlyUpdateConflictSample {
@@ -2518,6 +2531,8 @@ export interface JatoMonthlyUpdateReviewBundle {
   timeAxisCheck: Record<string, unknown>;
   countryScopeSummary: Record<string, unknown>;
   refreshSummary?: JatoMonthlyUpdateRefreshSummary | null;
+  candidateFingerprint?: string | null;
+  approval?: JatoMonthlyUpdateReviewApproval | null;
 }
 
 export interface JatoMonthlyUpdateCleanupResult {

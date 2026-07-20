@@ -52,6 +52,18 @@ function formatReviewMetrics(metrics: Record<string, unknown>): string {
     .join(" · ");
 }
 
+async function copySourceFeedback(value: string): Promise<boolean> {
+  if (!navigator.clipboard?.writeText) {
+    return false;
+  }
+  try {
+    await navigator.clipboard.writeText(value);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 function formatConflictSampleBusinessKey(
   businessKey: JatoMonthlyUpdateConflictSample["businessKey"]
 ): string {
@@ -140,6 +152,8 @@ export function JatoMonthlyUpdatePage() {
   const [rollingBackJobId, setRollingBackJobId] = useState<string | null>(null);
   const [promotingBaseline, setPromotingBaseline] = useState(false);
   const [reviewLoadingJobId, setReviewLoadingJobId] = useState<string | null>(null);
+  const [approvingReviewJobId, setApprovingReviewJobId] = useState<string | null>(null);
+  const [copiedSourceFeedbackKey, setCopiedSourceFeedbackKey] = useState<string | null>(null);
   const [reviewBundle, setReviewBundle] = useState<JatoMonthlyUpdateReviewBundle | null>(null);
   const [selectedReviewCountry, setSelectedReviewCountry] = useState<string | null>(null);
   const [dragActive, setDragActive] = useState(false);
@@ -526,6 +540,33 @@ export function JatoMonthlyUpdatePage() {
     }
   }
 
+  async function handleApproveReview(job: JatoMonthlyUpdateJob) {
+    if (!reviewBundle || reviewBundle.jobId !== job.jobId) {
+      setError("请先打开并核对 Review Candidate，再执行批准。");
+      return;
+    }
+    if (!window.confirm("确认批准当前 candidate 的 Review？批准将绑定当前候选指纹；任何重建后都必须重新 Review。")) {
+      return;
+    }
+    setApprovingReviewJobId(job.jobId);
+    setError("");
+    setNotice("");
+    try {
+      const response = await api.approveJatoMonthlyUpdateReview(job.jobId);
+      setSelectedJob(response.item);
+      setReviewBundle((current) => current?.jobId === job.jobId
+        ? { ...current, approval: response.item.reviewApproval ?? null }
+        : current);
+      setNotice(`Review 已批准：${job.jobId}。Publish 只接受这一候选指纹。`);
+      await refreshJobs(job.jobId, true);
+      await loadJobDetail(job.jobId, true);
+    } catch (err) {
+      setError((err as Error).message);
+    } finally {
+      setApprovingReviewJobId(null);
+    }
+  }
+
   function parsePublishBlocker(error: unknown): PublishBlocker | null {
     const msg = error instanceof Error ? error.message : String(error);
     const spaceIndex = msg.indexOf(" ");
@@ -643,11 +684,16 @@ export function JatoMonthlyUpdatePage() {
 
   const rawCompare = selectedJob?.summaries?.rawCompare;
   const refresh = selectedJob?.summaries?.refresh;
-  const canReviewSelectedJob = Boolean(selectedJob?.artifacts?.rawCompareReportPath);
+  const isSingleCountryReview = selectedJob?.jobType === "single_country";
+  const canReviewSelectedJob = Boolean(
+    selectedJob?.artifacts?.rawCompareReportPath
+    || (isSingleCountryReview && selectedJob.status === "success")
+  );
   const canPublishSelectedJob = Boolean(
     selectedJob
     && selectedJob.status === "success"
     && selectedJob.phase === "completed"
+    && !isSingleCountryReview
   );
   const canCancelSelectedJob = Boolean(
     selectedJob
@@ -668,6 +714,11 @@ export function JatoMonthlyUpdatePage() {
     selectedJob?.publication?.publishedAt && !selectedJob?.publication?.rolledBackAt
   );
   const hasReviewedSelectedJob = reviewBundle?.jobId === selectedJob?.jobId;
+  const hasApprovedSelectedJob = Boolean(
+    selectedJob?.reviewApproval?.decision === "approved"
+    && reviewBundle?.candidateFingerprint
+    && selectedJob.reviewApproval.candidateFingerprint === reviewBundle.candidateFingerprint
+  );
   const availableReviewCountries = reviewBundle
     ? Array.from(
       new Set(
@@ -1275,6 +1326,24 @@ Smart Merge:  [SE:keep active 2026-03] [DE:patch 2026-03] [NL:patch 2026-02] [FR
                           : "Review Candidate"}
                     </button>
                   )}
+                  {canPublishSelectedJob && hasReviewedSelectedJob && (
+                    <button
+                      type="button"
+                      className="btn btn-secondary"
+                      onClick={() => void handleApproveReview(selectedJob)}
+                      disabled={
+                        hasApprovedSelectedJob
+                        || approvingReviewJobId === selectedJob.jobId
+                        || Boolean(reviewBundle?.reviewFindings.some((finding) => finding.severity === "blocker"))
+                      }
+                    >
+                      {hasApprovedSelectedJob
+                        ? "Review Approved"
+                        : approvingReviewJobId === selectedJob.jobId
+                          ? "批准中..."
+                          : "Approve Review"}
+                    </button>
+                  )}
                   {canPublishSelectedJob && (
                     <button
                       type="button"
@@ -1282,15 +1351,15 @@ Smart Merge:  [SE:keep active 2026-03] [DE:patch 2026-03] [NL:patch 2026-02] [FR
                       onClick={() => void handlePublishJob(selectedJob)}
                       disabled={
                         isSelectedJobPublished
-                        || !hasReviewedSelectedJob
+                        || !hasApprovedSelectedJob
                         || publishingJobId === selectedJob.jobId
                         || hasActiveJob
                       }
                     >
                       {isSelectedJobPublished
                         ? "Published"
-                        : !hasReviewedSelectedJob
-                          ? "先 Review 再 Publish"
+                        : !hasApprovedSelectedJob
+                          ? "先批准 Review 再 Publish"
                           : publishingJobId === selectedJob.jobId
                             ? "Publishing..."
                             : "Publish Candidate"}
@@ -1524,13 +1593,22 @@ Smart Merge:  [SE:keep active 2026-03] [DE:patch 2026-03] [NL:patch 2026-02] [FR
                     <div>
                       <div className="card-title">Review Candidate</div>
                       <p className="section-note">
-                        这里集中展示 raw compare checklist 与人工 review 要点；确认后可直接点击 Publish Candidate。
+                        {isSingleCountryReview
+                          ? "单国任务 success 只表示 Review 候选已生成；它没有改动 active，因此 Dashboard 仍显示原月份。"
+                          : "这里集中展示 raw compare checklist 与人工 review 要点；没有 blocker 时仍需 Approve Review 才能 Publish。"}
                       </p>
                     </div>
                     <div className="table-status-chip">
                       <span>Decision</span>
                       <strong>{reviewBundle.decisionSuggestion || "-"}</strong>
                     </div>
+                  </div>
+                  <div className={reviewBundle.approval?.decision === "approved" ? "alert alert-success" : "alert alert-info"}>
+                    {isSingleCountryReview
+                      ? "单国候选为隔离测试产物，只读验证目标国家和未上传分区；不能直接 Publish。"
+                      : reviewBundle.approval?.decision === "approved"
+                        ? `Review 已由 ${reviewBundle.approval.reviewedBy || "-"} 批准（${formatMonthlyUpdateTimestamp(reviewBundle.approval.reviewedAt)}）。`
+                        : "Review 尚未批准；核对所有 findings 后再执行 Approve Review。"}
                   </div>
                   <div className="monthly-update-summary-grid">
                     <article className="monthly-update-summary-card">
@@ -1678,18 +1756,40 @@ Smart Merge:  [SE:keep active 2026-03] [DE:patch 2026-03] [NL:patch 2026-02] [FR
                               <th>Rule</th>
                               <th>Message</th>
                               <th>Details</th>
+                              <th>给洗数方反馈</th>
                             </tr>
                           </thead>
                           <tbody>
-                            {reviewBundle.reviewFindings.map((finding, index) => (
-                              <tr key={`${finding.ruleId}-${finding.target}-${index}`}>
-                                <td>{finding.severity}</td>
-                                <td>{finding.target || "-"}</td>
-                                <td>{finding.ruleId || "-"}</td>
-                                <td>{finding.message || "-"}</td>
-                                <td>{formatReviewMetrics(finding.metrics)}</td>
-                              </tr>
-                            ))}
+                            {reviewBundle.reviewFindings.map((finding, index) => {
+                              const findingKey = `${finding.ruleId}-${finding.target}-${index}`;
+                              return (
+                                <tr key={findingKey}>
+                                  <td>{finding.severity}</td>
+                                  <td>{finding.target || "-"}</td>
+                                  <td>{finding.ruleId || "-"}</td>
+                                  <td>{finding.message || "-"}</td>
+                                  <td>{formatReviewMetrics(finding.metrics)}</td>
+                                  <td>
+                                    {finding.sourceFeedback ? (
+                                      <div className="monthly-update-feedback-cell">
+                                        <span>{finding.sourceFeedback}</span>
+                                        <button
+                                          type="button"
+                                          className="btn btn-secondary"
+                                          onClick={() => {
+                                            void copySourceFeedback(finding.sourceFeedback!).then((copied) => {
+                                              if (copied) setCopiedSourceFeedbackKey(findingKey);
+                                            });
+                                          }}
+                                        >
+                                          {copiedSourceFeedbackKey === findingKey ? "已复制" : "复制反馈"}
+                                        </button>
+                                      </div>
+                                    ) : "-"}
+                                  </td>
+                                </tr>
+                              );
+                            })}
                           </tbody>
                         </table>
                       </div>
