@@ -1,106 +1,84 @@
 source_code: land_rover_range_rover_evoque_pl_draft_scrapling
 country: 波兰
 brand: LAND ROVER
-source_url: https://www.rangerover.com/pl-pl/range-rover-evoque/index.html
-source_type: manufacturer_official
+source_url: https://www.rangerover.com/content/dam/lrdx/pdfs/pl/brochures/Cennik_Range_Rover_Evoque_MY26_5_fin_M1_2026.pdf
+source_type: official_price_list
 price_semantics: base_msrp
-extractor_type: scrapling
+extractor_type: pdf_text
 profile:
-  url: https://www.rangerover.com/pl-pl/range-rover-evoque/index.html
-  tier: stealth
-  headless: true
-  network_idle: true
-  impersonate: chrome
-  css:
-    vehicle_container: body
-    model: h1, h2
-    trim: h3
-    price: '[class*="price"]'
+  url: https://www.rangerover.com/content/dam/lrdx/pdfs/pl/brochures/Cennik_Range_Rover_Evoque_MY26_5_fin_M1_2026.pdf
+  headers:
+    User-Agent: Mozilla/5.0
+  timeout_seconds: 60
+  retry_attempts: 1
+  curl_download_fallback: true
   default_currency: PLN
   default_tax_included: true
-  default_price_label: MSRP
+  default_price_label: Cena brutto (PLN)
   fixed_model: RANGE ROVER EVOQUE
   fixed_jato_model: RANGE ROVER EVOQUE
-  fixed_jato_powertrain: null
-  model_rules: []
-  skip_if_model_unmapped: false
   copy_trim_to_jato_trim: true
-  confidence_rules:
-    base: 0.2
-    fixed_model_bonus: 0.18
-    fixed_jato_model_bonus: 0.12
-    model_rule_bonus: 0.12
-    trim_present_bonus: 0.1
-    copy_trim_to_jato_trim_bonus: 0.09
-    parsed_price_text_bonus: 0.03
-    currency_bonus: 0.01
-    price_label_bonus: 0.02
-    trim_keyword_bonuses: []
-    price_band_bonuses:
-    - key: price_band_entry
-      label: Entry price band matched
-      max: 0
-      delta: 0.0
-    - key: price_band_mid
-      label: Mid price band matched
-      min: 0
-      max: 0
-      delta: 0.01
-    - key: price_band_high
-      label: High price band matched
-      min: 0
-      delta: 0.03
-    powertrain_keyword_bonuses: []
-    powertrain_bonuses:
-    - key: powertrain_phev
-      label: 'Powertrain matched: PHEV'
-      powertrain: PHEV
-      delta: 0.03
-    - key: powertrain_mhev
-      label: 'Powertrain matched: MHEV'
-      powertrain: MHEV
-      delta: 0.03
-    clamp_min: 0.0
-    clamp_max: 1.0
-  structured_fields:
-    edition_rules:
-    - key: edition_special
-      label: Special Edition
-      keyword: special edition
-      special: true
-    powertrain_rules:
-    - key: powertrain_phev
-      powertrain: PHEV
-      keywords:
-      - phev
-      - plug-in hybrid
-      - plug in hybrid
-      - plugin hybrid
-      - hybryda plug-in
-    - key: powertrain_mhev
-      powertrain: MHEV
-      keywords:
-      - mhev
-      - mild hybrid
-      - mild-hybrid
-      - 48V
-      - miekka hybryda
-  auto_accept_gates:
-    review_threshold: 0.95
-    semi_auto_threshold: 0.98
-    require_powertrain_match: true
-    force_review_if_powertrain_missing: true
-    force_review_if_powertrain_ambiguous: true
-    force_review_for_special_edition: true
+  match_confidence: 0.92
+  match_status: review_required
+  match_reason:
+    kind: pdf_price_list
+    source: official_range_rover_pl_cennik
+    document_scope: MY2026.5
+    document_updated_on: '2025-06-11'
+    document_audited_on: '2026-07-20'
+    document_sha256_at_audit: e936d725459100dbc5d64211d77ec560d9a96e0bac3ce870ba5aa5b340f92141
+    price_column: gross_list_price
+    note: Official gross price table; leasing installments and finance simulations
+      are excluded.
+  entry_patterns:
+  - pattern: '2\.0\s+L\s+R4\s+Diesel\s+163\s+KM\s+AWD\s+Automatyczna\s+(?P<price>240\s+500)'
+    official_trim: S
+    official_powertrain: 2.0 L R4 Diesel 163 KM AWD
+    jato_powertrain: MHEV
+  - pattern: '2\.0\s+L\s+R4\s+Diesel\s+204\s+KM\s+AWD\s+Automatyczna\s+(?P<price>258\s+300)'
+    official_trim: S
+    official_powertrain: 2.0 L R4 Diesel 204 KM AWD
+    jato_powertrain: MHEV
+  - pattern: '1\.5\s+L\s+R3\s+Benzyna\s+160\s+KM\s+FWD\s+Automatyczna\s+(?P<price>218\s+900)'
+    official_trim: S
+    official_powertrain: 1.5 L R3 Benzyna 160 KM FWD
+    jato_powertrain: MHEV
+  - pattern: '1\.5\s+L\s+R3\s+Hybryda\s+PHEV\s+269\s+KM\s+AWD\s+Automatyczna\s+(?P<price>305\s+600)'
+    official_trim: S
+    official_powertrain: 1.5 L R3 Hybryda PHEV 269 KM AWD
+    jato_powertrain: PHEV
+  - pattern: '2\.0\s+L\s+R4\s+Diesel\s+163\s+KM\s+AWD\s+Automatyczna\s+(?P<price>276\s+300)'
+    official_trim: Dynamic SE
+    official_powertrain: 2.0 L R4 Diesel 163 KM AWD
+    jato_powertrain: MHEV
+  - pattern: '2\.0\s+L\s+R4\s+Diesel\s+204\s+KM\s+AWD\s+Automatyczna\s+(?P<price>291\s+200)'
+    official_trim: Dynamic SE
+    official_powertrain: 2.0 L R4 Diesel 204 KM AWD
+    jato_powertrain: MHEV
+  - pattern: '1\.5\s+L\s+R3\s+Benzyna\s+160\s+KM\s+FWD\s+Automatyczna\s+(?P<price>256\s+800)'
+    official_trim: Dynamic SE
+    official_powertrain: 1.5 L R3 Benzyna 160 KM FWD
+    jato_powertrain: MHEV
+  - pattern: '1\.5\s+L\s+R3\s+Hybryda\s+PHEV\s+269\s+KM\s+AWD\s+Automatyczna\s+(?P<price>340\s+000)'
+    official_trim: Dynamic SE
+    official_powertrain: 1.5 L R3 Hybryda PHEV 269 KM AWD
+    jato_powertrain: PHEV
+  - pattern: '2\.0\s+L\s+R4\s+Diesel\s+204\s+KM\s+AWD\s+Automatyczna\s+(?P<price>328\s+400)'
+    official_trim: Autobiography
+    official_powertrain: 2.0 L R4 Diesel 204 KM AWD
+    jato_powertrain: MHEV
+  - pattern: '1\.5\s+L\s+R3\s+Hybryda\s+PHEV\s+269\s+KM\s+AWD\s+Automatyczna\s+(?P<price>379\s+500)'
+    official_trim: Autobiography
+    official_powertrain: 1.5 L R3 Hybryda PHEV 269 KM AWD
+    jato_powertrain: PHEV
 schedule:
   frequency: manual_only
   run_window_start: 00:00
   run_window_end: 05:00
   preferred_weekday: monday
-notes: Draft scaffold generated from country×model top30 backlog. Replace source_url,
-  profile.url, selectors, currency, price label, and the single-model placeholders
-  before promoting to 07_ScrapingToolkit/sources. [CSS selectors applied from brand
-  probe]
+notes: Replaced the generic model-page CSS probe with the official Range Rover Poland
+  MY2026.5 price-list PDF. Extracts all ten gross list-price rows and excludes the
+  leasing installment table.
 bootstrap_meta:
   country_model_rank: 4
   suggested_scope_kind: single_model

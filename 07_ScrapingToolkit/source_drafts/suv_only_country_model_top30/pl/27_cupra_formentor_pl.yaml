@@ -1,119 +1,58 @@
 source_code: cupra_formentor_pl_draft_scrapling
 country: 波兰
 brand: CUPRA
-source_url: https://www.cupraofficial.pl/modele/formentor
-source_type: manufacturer_official
+source_url: https://www.cupraofficial.pl/content/dam/countries/pl/cupra-website/cenniki/my26py26/actual/CENNIK_CUPRA_FORMENTOR_KMP_MY26PY26W01_2026_07_02_V01M.pdf
+source_type: official_price_list
 price_semantics: base_msrp
-extractor_type: scrapling
+extractor_type: pdf_text
 profile:
-  url: https://www.cupraofficial.pl/modele/formentor
-  tier: stealth
-  headless: true
-  network_idle: true
-  impersonate: chrome
-  css:
-    vehicle_container: body
-    model: h2
-    trim: h3
-    price: '[class*="price"]'
+  url: https://www.cupraofficial.pl/content/dam/countries/pl/cupra-website/cenniki/my26py26/actual/CENNIK_CUPRA_FORMENTOR_KMP_MY26PY26W01_2026_07_02_V01M.pdf
+  headers:
+    User-Agent: Mozilla/5.0
+  timeout_seconds: 90
+  browser_download_fallback: true
   default_currency: PLN
   default_tax_included: true
-  default_price_label: MSRP
+  default_price_label: Cena brutto przed ofertą specjalną (PLN)
   fixed_model: FORMENTOR
   fixed_jato_model: FORMENTOR
-  fixed_jato_powertrain: null
-  model_rules: []
-  skip_if_model_unmapped: false
   copy_trim_to_jato_trim: true
-  confidence_rules:
-    base: 0.2
-    fixed_model_bonus: 0.18
-    fixed_jato_model_bonus: 0.12
-    model_rule_bonus: 0.12
-    trim_present_bonus: 0.1
-    copy_trim_to_jato_trim_bonus: 0.09
-    parsed_price_text_bonus: 0.03
-    currency_bonus: 0.01
-    price_label_bonus: 0.02
-    trim_keyword_bonuses: []
-    price_band_bonuses:
-    - key: price_band_entry
-      label: Entry price band matched
-      max: 0
-      delta: 0.0
-    - key: price_band_mid
-      label: Mid price band matched
-      min: 0
-      max: 0
-      delta: 0.01
-    - key: price_band_high
-      label: High price band matched
-      min: 0
-      delta: 0.03
-    powertrain_keyword_bonuses: []
-    powertrain_bonuses:
-    - key: powertrain_phev
-      label: 'Powertrain matched: PHEV'
-      powertrain: PHEV
-      delta: 0.03
-    - key: powertrain_mhev
-      label: 'Powertrain matched: MHEV'
-      powertrain: MHEV
-      delta: 0.03
-    - key: powertrain_ice
-      label: 'Powertrain matched: ICE'
-      powertrain: ICE
-      delta: 0.03
-    clamp_min: 0.0
-    clamp_max: 1.0
-  structured_fields:
-    edition_rules:
-    - key: edition_special
-      label: Special Edition
-      keyword: special edition
-      special: true
-    powertrain_rules:
-    - key: powertrain_phev
-      powertrain: PHEV
-      keywords:
-      - phev
-      - plug-in hybrid
-      - plug in hybrid
-      - plugin hybrid
-      - hybryda plug-in
-    - key: powertrain_mhev
-      powertrain: MHEV
-      keywords:
-      - mhev
-      - mild hybrid
-      - mild-hybrid
-      - 48V
-      - miekka hybryda
-    - key: powertrain_ice
-      powertrain: ICE
-      keywords:
-      - ice
-      - petrol
-      - gasoline
-      - diesel
-      - combustion
-      - benzyna
-  auto_accept_gates:
-    review_threshold: 0.95
-    semi_auto_threshold: 0.98
-    require_powertrain_match: true
-    force_review_if_powertrain_missing: true
-    force_review_if_powertrain_ambiguous: true
-    force_review_for_special_edition: true
+  match_confidence: 0.9
+  match_status: review_required
+  match_reason:
+    kind: pdf_price_list
+    source: official_cupra_pl_cennik
+    document_scope: MY2026/PY2026
+    document_valid_from: '2026-07-02'
+    document_audited_on: '2026-07-15'
+    document_sha256_at_audit: b049f91852a469208633e30028aa0baefbfe5efc8b81a8d5a5b667ea0fe28656
+    price_column: gross_regular_price_before_special_offer
+    note: Official gross price table; promotional, 30-day, and monthly finance values are excluded.
+  entry_patterns:
+  - pattern: 'Cena\s+brutto\s+dla\s+produktów\s+Leasing\s+i\s+Kredyt\s+Klasyczny.*?Formentor\s+1\.5\s+TSI\s+150\s+KM\s+manualna\s+6-biegowa\s+benzyna\s+(?P<price>\d{3}\s+\d{3})\s+zł'
+    official_trim: FORMENTOR
+    official_powertrain: 1.5 TSI 150 KM 6MT
+    jato_powertrain: ICE
+  - pattern: 'Cena\s+brutto\s+dla\s+produktów\s+Leasing\s+i\s+Kredyt\s+Klasyczny.*?Formentor\s+1\.5\s+eTSI\s+mHEV\s+150\s+KM\s+DSG\s+automatyczna\s+7-biegowa\s+hybryda\s+mHEV\s+(?P<price>\d{3}\s+\d{3})\s+zł'
+    official_trim: FORMENTOR
+    official_powertrain: 1.5 eTSI mHEV 150 KM 7DSG
+    jato_powertrain: MHEV
+  - pattern: 'Cena\s+brutto\s+dla\s+produktów\s+Leasing\s+i\s+Kredyt\s+Klasyczny.*?Formentor\s+1\.5\s+e-HYBRID\s+204\s+KM\s+DSG\s+automatyczna\s+6-biegowa\s+hybryda\s+Plug-in\s+\d{3}\s+\d{3}\s+zł\s+(?P<price>\d{3}\s+\d{3})\s+zł'
+    official_trim: FORMENTOR
+    official_powertrain: 1.5 e-HYBRID 204 KM 6DSG
+    jato_powertrain: PHEV
+  - pattern: 'Cena\s+brutto\s+dla\s+produktów\s+Leasing\s+i\s+Kredyt\s+Klasyczny.*?Formentor\s+2\.0\s+TDI\s+150\s+KM\s+DSG\s+automatyczna\s+7-biegowa\s+diesel\s+(?P<price>\d{3}\s+\d{3})\s+zł'
+    official_trim: FORMENTOR
+    official_powertrain: 2.0 TDI 150 KM 7DSG
+    jato_powertrain: ICE
 schedule:
   frequency: manual_only
   run_window_start: 00:00
   run_window_end: 05:00
   preferred_weekday: monday
-notes: Draft scaffold generated from country×model top30 backlog. Replace source_url,
-  profile.url, selectors, currency, price label, and the single-model placeholders
-  before promoting to 07_ScrapingToolkit/sources. [URL filled from CUPRA template]
-  [URL language corrected] [CSS selectors applied from brand probe]
+notes: Switched from a stale model URL to the official CUPRA Poland MY2026/PY2026
+  PDF valid from 2026-07-02. Uses the existing browser download fallback because
+  the CDN denies direct server requests; extracts gross regular prices only.
 bootstrap_meta:
   country_model_rank: 27
   suggested_scope_kind: single_model

@@ -11,20 +11,29 @@ profile:
   headless: true
   network_idle: true
   impersonate: chrome
-  css:
-    vehicle_container: body
-    model: h1
-    trim: h2, h3
-    price: '[class*="price"]'
+  text_regex:
+    source_selector: body
+    entry_patterns:
+    - pattern: 'SUV\s+X1\s+Modelli\s+Benzina\s+Da\s+(?P<price>44\.400)\s*€'
+      official_trim: X1 Benzina
+      official_powertrain: Benzina
+      price_label: Prezzo raccomandato, IVA inclusa e consegna esclusa
   default_currency: EUR
   default_tax_included: true
-  default_price_label: MSRP
+  default_price_label: Prezzo raccomandato, IVA inclusa e consegna esclusa
   fixed_model: X1
   fixed_jato_model: X1
-  fixed_jato_powertrain: null
+  fixed_jato_powertrain: ICE
   model_rules: []
   skip_if_model_unmapped: false
   copy_trim_to_jato_trim: true
+  match_reason:
+    kind: official_configurator_model_card
+    source: official_bmw_it
+    page_audited_on: '2026-07-20'
+    price_scope: petrol_model_starting_price
+    note: Model-scoped recommended starting price including 22% VAT and excluding
+      delivery. Other BMW model cards are excluded.
   confidence_rules:
     base: 0.2
     fixed_model_bonus: 0.18
@@ -39,66 +48,17 @@ profile:
     price_band_bonuses:
     - key: price_band_entry
       label: Entry price band matched
-      max: 0
-      delta: 0.0
-    - key: price_band_mid
-      label: Mid price band matched
-      min: 0
-      max: 0
-      delta: 0.01
-    - key: price_band_high
-      label: High price band matched
-      min: 0
+      min: 44000
+      max: 45000
       delta: 0.03
     powertrain_keyword_bonuses: []
     powertrain_bonuses:
-    - key: powertrain_phev
-      label: 'Powertrain matched: PHEV'
-      powertrain: PHEV
-      delta: 0.03
-    - key: powertrain_mhev
-      label: 'Powertrain matched: MHEV'
-      powertrain: MHEV
-      delta: 0.03
     - key: powertrain_ice
       label: 'Powertrain matched: ICE'
       powertrain: ICE
       delta: 0.03
     clamp_min: 0.0
     clamp_max: 1.0
-  structured_fields:
-    edition_rules:
-    - key: edition_special
-      label: Special Edition
-      keyword: special edition
-      special: true
-    powertrain_rules:
-    - key: powertrain_phev
-      powertrain: PHEV
-      keywords:
-      - phev
-      - plug-in hybrid
-      - plug in hybrid
-      - plugin hybrid
-      - ibrida plug-in
-      - ibrido plug-in
-    - key: powertrain_mhev
-      powertrain: MHEV
-      keywords:
-      - mhev
-      - mild hybrid
-      - mild-hybrid
-      - 48V
-      - ibrida mild hybrid
-    - key: powertrain_ice
-      powertrain: ICE
-      keywords:
-      - ice
-      - petrol
-      - gasoline
-      - diesel
-      - combustion
-      - benzina
   auto_accept_gates:
     review_threshold: 0.95
     semi_auto_threshold: 0.98
@@ -111,10 +71,8 @@ schedule:
   run_window_start: 00:00
   run_window_end: 05:00
   preferred_weekday: monday
-notes: Draft scaffold generated from country×model top30 backlog. Replace source_url,
-  profile.url, selectors, currency, price label, and the single-model placeholders
-  before promoting to 07_ScrapingToolkit/sources. [URL filled from BMW template] [URL
-  language corrected] [CSS selectors applied from brand probe]
+notes: Replaced the generic configurator CSS selector, which returned another
+  model's 35,500 EUR price, with the X1 petrol model-card contract.
 bootstrap_meta:
   country_model_rank: 10
   suggested_scope_kind: single_model

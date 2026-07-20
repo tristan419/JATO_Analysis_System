@@ -23,6 +23,43 @@ is_truthy() {
   esac
 }
 
+resolve_python_bin() {
+  if [[ -n "${JATO_MSRP_PYTHON:-}" ]]; then
+    printf '%s\n' "$JATO_MSRP_PYTHON"
+    return 0
+  fi
+
+  local candidate
+  for candidate in \
+    "$REPO_DIR/.venv/bin/python" \
+    "$REPO_DIR/venv/bin/python"; do
+    if [[ -x "$candidate" ]]; then
+      printf '%s\n' "$candidate"
+      return 0
+    fi
+  done
+
+  local common_git_dir
+  local shared_repo_dir
+  common_git_dir="$(git -C "$REPO_DIR" rev-parse --path-format=absolute --git-common-dir 2>/dev/null || true)"
+  if [[ -n "$common_git_dir" ]]; then
+    shared_repo_dir="$(cd "$(dirname "$common_git_dir")" && pwd)"
+    if [[ "$shared_repo_dir" != "$REPO_DIR" ]]; then
+      for candidate in \
+        "$shared_repo_dir/.venv/bin/python" \
+        "$shared_repo_dir/venv/bin/python"; do
+        if [[ -x "$candidate" ]]; then
+          printf '%s\n' "$candidate"
+          return 0
+        fi
+      done
+    fi
+  fi
+
+  # Preserve the previous deterministic error path when no project venv exists.
+  printf '%s\n' "$REPO_DIR/.venv/bin/python"
+}
+
 _write_msrp_status() {
   local pipeline="$1"
   local status="$2"
@@ -71,7 +108,7 @@ MODE="${JATO_MSRP_MODE:-dryrun}"
 COUNTRIES_RAW="${JATO_MSRP_COUNTRIES:-batch_a}"
 PAUSE_SECONDS="${JATO_MSRP_PAUSE_SECONDS:-20}"
 STOP_ON_FAILURE="${JATO_MSRP_STOP_ON_FAILURE:-false}"
-PYTHON_BIN="${JATO_MSRP_PYTHON:-$REPO_DIR/.venv/bin/python}"
+PYTHON_BIN="$(resolve_python_bin)"
 LOG_DIR="${JATO_MSRP_LOG_DIR:-$REPO_DIR/03_Scripts/logs}"
 LOCK_FILE="${JATO_MSRP_LOCK_FILE:-/tmp/jato-msrp-low-concurrency.lock}"
 BACKEND_PORT="${BACKEND_PORT:-8000}"
@@ -211,6 +248,7 @@ echo "[INFO] Max dryrun concurrency: $MAX_DRYRUN_CONCURRENCY"
 echo "[INFO] Allow high concurrency: $ALLOW_HIGH_CONCURRENCY"
 echo "[INFO] Backend env: $BACKEND_ENV_FILE"
 echo "[INFO] MSRP env: $MSRP_ENV_FILE"
+echo "[INFO] Python: $PYTHON_BIN"
 echo "[INFO] API base: $JATO_API_BASE"
 echo "[INFO] Log file: $LOG_FILE"
 echo "[INFO] Auto review: $AUTO_REVIEW"

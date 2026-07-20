@@ -1,108 +1,57 @@
 source_code: skoda_kamiq_pl_draft_scrapling
 country: 波兰
 brand: SKODA
-source_url: https://www.skoda.pl/modele/kamiq
-source_type: manufacturer_official
+source_url: https://www.skoda.pl/_doc/63922a8f-5c52-4772-b757-d24afe10dc81
+source_type: official_price_list
 price_semantics: base_msrp
-extractor_type: scrapling
+extractor_type: pdf_text
 profile:
-  url: https://www.skoda.pl/modele/kamiq
-  headless: true
+  url: https://www.skoda.pl/_doc/63922a8f-5c52-4772-b757-d24afe10dc81
+  headers:
+    User-Agent: Mozilla/5.0
+    Accept: application/pdf,*/*;q=0.8
+  timeout_seconds: 120
+  retry_attempts: 1
+  prefer_curl_download: true
+  curl_download_fallback: true
   default_currency: PLN
   default_tax_included: true
-  default_price_label: MSRP
+  default_price_label: Cena regularna brutto przed obniżką (PLN)
   fixed_model: KAMIQ
   fixed_jato_model: KAMIQ
-  fixed_jato_powertrain: null
-  model_rules: []
-  skip_if_model_unmapped: false
   copy_trim_to_jato_trim: true
-  confidence_rules:
-    base: 0.2
-    fixed_model_bonus: 0.18
-    fixed_jato_model_bonus: 0.12
-    model_rule_bonus: 0.12
-    trim_present_bonus: 0.1
-    copy_trim_to_jato_trim_bonus: 0.09
-    parsed_price_text_bonus: 0.03
-    currency_bonus: 0.01
-    price_label_bonus: 0.02
-    trim_keyword_bonuses: []
-    price_band_bonuses:
-    - key: price_band_entry
-      label: Entry price band matched
-      max: 0
-      delta: 0.0
-    - key: price_band_mid
-      label: Mid price band matched
-      min: 0
-      max: 0
-      delta: 0.01
-    - key: price_band_high
-      label: High price band matched
-      min: 0
-      delta: 0.03
-    powertrain_keyword_bonuses: []
-    powertrain_bonuses:
-    - key: powertrain_ice
-      label: 'Powertrain matched: ICE'
-      powertrain: ICE
-      delta: 0.03
-    - key: powertrain_lpg
-      label: 'Powertrain matched: LPG'
-      powertrain: LPG
-      delta: 0.03
-    clamp_min: 0.0
-    clamp_max: 1.0
-  structured_fields:
-    edition_rules:
-    - key: edition_special
-      label: Special Edition
-      keyword: special edition
-      special: true
-    powertrain_rules:
-    - key: powertrain_ice
-      powertrain: ICE
-      keywords:
-      - ice
-      - petrol
-      - gasoline
-      - diesel
-      - combustion
-      - benzyna
-    - key: powertrain_lpg
-      powertrain: LPG
-      keywords:
-      - lpg
-      - autogas
-      - autogaz
-  auto_accept_gates:
-    review_threshold: 0.95
-    semi_auto_threshold: 0.98
-    require_powertrain_match: true
-    force_review_if_powertrain_missing: true
-    force_review_if_powertrain_ambiguous: true
-    force_review_for_special_edition: true
-  json_script_selector: script[type="application/json"]
-  css:
-    vehicle_container: body
-    model: h2, h3
-    trim: h3
-    price: '[class*="price"]'
-  tier: stealth
-  network_idle: true
-  impersonate: chrome
+  match_confidence: 0.9
+  match_status: review_required
+  match_reason:
+    kind: pdf_price_list
+    source: official_skoda_pl_cennik
+    document_scope: RP2026/MY2027
+    document_pdf_created_on: '2026-05-15'
+    document_audited_on: '2026-07-15'
+    document_sha256_at_audit: c3109695d95220ed71c8876e5cb2112402e2463e27477f70c4a4515a0c99fb01
+    price_column: crossed_out_regular_price_before_reduction
+    note: Official consumer price table; promotional and 30-day reference prices are excluded.
+  entry_patterns:
+  - pattern: '1\.0\s+TSI\s+70\s+kW\s*\(\s*95\s*KM\s*\).*?manualna,\s*5-biegowa\s+\d{2,3}\s+\d{3}\s+zł\s+(?P<price>\d{2,3}\s+\d{3})\s+zł'
+    official_trim: ESSENCE
+    official_powertrain: 1.0 TSI 70 kW 5MT
+    jato_powertrain: ICE
+  - pattern: '1\.0\s+TSI\s+85\s+kW\s*\(\s*115\s+KM\s*\).*?automatyczna,\s*7-biegowa\s+DSG\s+\d{2,3}\s+\d{3}\s+zł\s+(?P<price>\d{3}\s+\d{3})\s+zł'
+    official_trim: ESSENCE
+    official_powertrain: 1.0 TSI 85 kW 7DSG
+    jato_powertrain: ICE
+  - pattern: '1\.5\s+TSI\s+110\s+kW\s*\(\s*150\s+KM\s*\).*?automatyczna,\s*7-biegowa\s+DSG\s+(?:-|–)\s+(?:-|–)\s+\d{3}\s+\d{3}\s+zł\s+(?P<price>\d{3}\s+\d{3})\s+zł'
+    official_trim: SELECTION
+    official_powertrain: 1.5 TSI 110 kW 7DSG
+    jato_powertrain: ICE
 schedule:
   frequency: manual_only
   run_window_start: 00:00
   run_window_end: 05:00
   preferred_weekday: monday
-notes: Draft scaffold generated from country×model top30 backlog. Replace source_url,
-  profile.url, selectors, currency, price label, and the single-model placeholders
-  before promoting to 07_ScrapingToolkit/sources. [URL filled from SKODA template]
-  [URL language corrected] [CSS selectors applied from brand probe] [Switched to playwright_card_flow
-  with skoda_trim_overview_playwright.yaml] [Reverted to scrapling — playwright preset
-  needs per-brand tuning]
+notes: Switched from a non-extracting model page to the official Škoda Poland
+  RP2026/MY2027 price-list PDF. Extracts crossed-out regular consumer prices only;
+  promotional prices, 30-day reference prices, and financing remain outside MSRP.
 bootstrap_meta:
   country_model_rank: 20
   suggested_scope_kind: single_model

@@ -1,121 +1,52 @@
 source_code: suzuki_vitara_pl_draft_scrapling
 country: 波兰
 brand: SUZUKI
-source_url: https://auto.suzuki.pl/modele/vitara
-source_type: manufacturer_official
+source_url: https://suzuki.pl/auto/cennik
+source_type: official_price_list
 price_semantics: base_msrp
 extractor_type: scrapling
 profile:
-  url: https://auto.suzuki.pl/modele/vitara
+  url: https://suzuki.pl/auto/cennik
   tier: stealth
   headless: true
-  network_idle: true
-  impersonate: chrome
-  css:
-    vehicle_container: body
-    model: h1, h2
-    trim: h3
-    price: '[class*="price"]'
+  network_idle: false
+  load_dom: true
+  timeout_ms: 30000
+  wait_ms: 800
+  retries: 1
+  text_regex:
+    source_selector: 'div.tab-content[tab-content-id="2026-232"]'
+    entry_patterns:
+    - pattern: '(?P<trim>1\.4\s+BoosterJet\s+mild\s+Hybrid\s+(?:2WD|4WD)\s+(?:6MT|6AT)\s+(?:Premium(?:\s+Plus)?|Elegance(?:\s+(?:Fuji|Sun))?))\s+\d{1,3}(?:\s+\d{3})?\s*zł\s+\d{1,3}(?:\s+\d{3})?\s*zł\s+(?P<price>\d{3}\s+\d{3})\s*zł\s+\d{2,3}\s+\d{3}\s*zł'
+      official_powertrain: 1.4 BoosterJet mild Hybrid
+      price_label: Cena detaliczna
   default_currency: PLN
   default_tax_included: true
-  default_price_label: MSRP
+  default_price_label: Cena detaliczna
   fixed_model: VITARA
   fixed_jato_model: VITARA
-  fixed_jato_powertrain: null
-  model_rules: []
-  skip_if_model_unmapped: false
+  fixed_jato_powertrain: MHEV
   copy_trim_to_jato_trim: true
-  confidence_rules:
-    base: 0.2
-    fixed_model_bonus: 0.18
-    fixed_jato_model_bonus: 0.12
-    model_rule_bonus: 0.12
-    trim_present_bonus: 0.1
-    copy_trim_to_jato_trim_bonus: 0.09
-    parsed_price_text_bonus: 0.03
-    currency_bonus: 0.01
-    price_label_bonus: 0.02
-    trim_keyword_bonuses: []
-    price_band_bonuses:
-    - key: price_band_entry
-      label: Entry price band matched
-      max: 0
-      delta: 0.0
-    - key: price_band_mid
-      label: Mid price band matched
-      min: 0
-      max: 0
-      delta: 0.01
-    - key: price_band_high
-      label: High price band matched
-      min: 0
-      delta: 0.03
-    powertrain_keyword_bonuses: []
-    powertrain_bonuses:
-    - key: powertrain_hev
-      label: 'Powertrain matched: HEV'
-      powertrain: HEV
-      delta: 0.03
-    - key: powertrain_mhev
-      label: 'Powertrain matched: MHEV'
-      powertrain: MHEV
-      delta: 0.03
-    - key: powertrain_ice
-      label: 'Powertrain matched: ICE'
-      powertrain: ICE
-      delta: 0.03
-    clamp_min: 0.0
-    clamp_max: 1.0
-  structured_fields:
-    edition_rules:
-    - key: edition_special
-      label: Special Edition
-      keyword: special edition
-      special: true
-    powertrain_rules:
-    - key: powertrain_hev
-      powertrain: HEV
-      keywords:
-      - hev
-      - full hybrid
-      - self-charging hybrid
-      - self charging hybrid
-      - hybrid
-      - hybryda
-      - pelna hybryda
-    - key: powertrain_mhev
-      powertrain: MHEV
-      keywords:
-      - mhev
-      - mild hybrid
-      - mild-hybrid
-      - 48V
-      - miekka hybryda
-    - key: powertrain_ice
-      powertrain: ICE
-      keywords:
-      - ice
-      - petrol
-      - gasoline
-      - diesel
-      - combustion
-      - benzyna
-  auto_accept_gates:
-    review_threshold: 0.95
-    semi_auto_threshold: 0.98
-    require_powertrain_match: true
-    force_review_if_powertrain_missing: true
-    force_review_if_powertrain_ambiguous: true
-    force_review_for_special_edition: true
+  match_confidence: 0.88
+  match_status: review_required
+  match_reason:
+    kind: official_price_table
+    source: suzuki_motor_poland_cennik
+    document_scope: MY2026
+    document_audited_on: '2026-07-20'
+    price_column: Cena detaliczna
+    note: Stealth browser is required because the official central price page
+      returns HTTP 403 to plain clients. The regex requires both monthly-payment
+      columns before the retail price and therefore excludes the 2025 table and
+      promotional price column.
 schedule:
   frequency: manual_only
   run_window_start: 00:00
   run_window_end: 05:00
   preferred_weekday: monday
-notes: Draft scaffold generated from country×model top30 backlog. Replace source_url,
-  profile.url, selectors, currency, price label, and the single-model placeholders
-  before promoting to 07_ScrapingToolkit/sources. [URL filled from SUZUKI template]
-  [URL language corrected] [CSS selectors applied from brand probe]
+notes: Replaced the retired auto.suzuki.pl URL and generic price CSS with Suzuki
+  Motor Poland's official 2026 price table. Extracts all regular retail prices and
+  excludes monthly rental and promotional amounts.
 bootstrap_meta:
   country_model_rank: 25
   suggested_scope_kind: single_model

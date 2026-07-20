@@ -1,27 +1,29 @@
 source_code: porsche_cayenne_coupe_pl_draft_scrapling
 country: 波兰
 brand: PORSCHE
-source_url: https://www.porsche.com/norway/models/macan/
+source_url: https://models.porsche.com/pl-PL/model-start/cayenne
 source_type: manufacturer_official
 price_semantics: base_msrp
 extractor_type: scrapling
 profile:
-  url: https://www.porsche.com/norway/models/macan/
-  tier: stealth
+  url: https://models.porsche.com/pl-PL/model-start/cayenne
+  tier: http
   headless: true
-  network_idle: true
+  network_idle: false
   impersonate: chrome
-  css:
-    vehicle_container: body
-    model: h1
-    trim: h2, h3
-    price: '[class*="price"]'
+  text_regex:
+    source_selector: body
+    entry_patterns:
+    - pattern: 'Cayenne\s+Coup(?:é|e)\s+Od\s+(?P<price>\d{3}[\s\u00a0]\d{3})\s*PLN\s+353\s+KM'
+      official_trim: Cayenne Coupe
+      official_powertrain: 3.0 V6 petrol
+      price_label: Recommended retail starting price incl. VAT
   default_currency: PLN
   default_tax_included: true
-  default_price_label: MSRP
+  default_price_label: Recommended retail starting price incl. VAT
   fixed_model: CAYENNE COUPE
   fixed_jato_model: CAYENNE COUPE
-  fixed_jato_powertrain: null
+  fixed_jato_powertrain: ICE
   model_rules: []
   skip_if_model_unmapped: false
   copy_trim_to_jato_trim: true
@@ -98,10 +100,10 @@ schedule:
   run_window_start: 00:00
   run_window_end: 05:00
   preferred_weekday: monday
-notes: Draft scaffold generated from country×model top30 backlog. Replace source_url,
-  profile.url, selectors, currency, price label, and the single-model placeholders
-  before promoting to 07_ScrapingToolkit/sources. [URL filled from PORSCHE template]
-  [CSS selectors applied from brand probe]
+notes: Replaced the incorrect Norway Macan URL with the official Porsche Poland
+  Cayenne model chooser. The regex is anchored to the non-electric Cayenne Coupe
+  card and its 353 KM line so electric, Black Edition, and hybrid variants do not
+  override the base ICE starting price.
 bootstrap_meta:
   country_model_rank: 28
   suggested_scope_kind: single_model
