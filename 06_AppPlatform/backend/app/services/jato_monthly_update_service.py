@@ -77,6 +77,36 @@ DEPRECATED_OPTIONAL_STATIC_COLUMNS = frozenset(
         "curb weight (kg)",
     }
 )
+CONFIRMED_SC011_RECLASSIFICATIONS = (
+    {
+        "confirmationId": "CZ-FORTHING-T5-TO-DFSK-T5-EVO-20260720",
+        "country": "捷克",
+        "comparedThrough": "2026 Mar",
+        "expectedComparedMonthCount": 39,
+        "expectedComparedMonthsSha256": (
+            "d9cfcaa2bfd045a14c9ad0663be706bc9234bea64385cf46db11b0fb996e69f7"
+        ),
+        "sourceUploadSha256": (
+            "c12e4e1a58e7d292eb6aef6bdd9c34d0632449536d5351880c35142fa38b0453"
+        ),
+        "source": {"Make": "FORTHING", "Model": "T5"},
+        "target": {"Make": "DFSK", "Model": "T5 EVO"},
+        "expectedMonthlyTransfer": {
+            "2025 Apr": 3,
+            "2025 May": 3,
+            "2025 Jun": 8,
+            "2025 Jul": 4,
+            "2025 Aug": 4,
+            "2025 Sep": 6,
+            "2025 Nov": 3,
+            "2025 Dec": 19,
+            "2026 Jan": 1,
+        },
+        "expectedTotal": 51,
+        "approvedBy": "JATO business owner",
+        "approvalReference": "user-confirmed-2026-07-20",
+    },
+)
 STATIC_CARRY_FORWARD_KEY_CANDIDATES = (
     "国家",
     "Countries",
@@ -399,11 +429,226 @@ def _single_country_configuration_key_columns(frame: pd.DataFrame) -> list[str]:
     ]
 
 
-def _single_country_historical_sales_stability(
+def _single_country_make_model_deltas(
     *,
     active_frame: pd.DataFrame,
     candidate_frame: pd.DataFrame,
+    active_sales: pd.DataFrame,
+    candidate_sales: pd.DataFrame,
+    historical_months: list[str],
+) -> tuple[dict[tuple[str, str], pd.Series], list[dict[str, Any]], int]:
+    dimensions = ("Make", "Model")
+    if any(
+        column not in active_frame.columns or column not in candidate_frame.columns
+        for column in dimensions
+    ):
+        return {}, [], 0
+
+    def grouped(frame: pd.DataFrame, sales: pd.DataFrame) -> pd.DataFrame:
+        keys = [
+            frame[column].astype("string").fillna("").str.strip().rename(column)
+            for column in dimensions
+        ]
+        return sales.groupby(keys, dropna=False).sum()
+
+    active_grouped = grouped(active_frame, active_sales)
+    candidate_grouped = grouped(candidate_frame, candidate_sales)
+    all_keys = active_grouped.index.union(candidate_grouped.index)
+    active_aligned = active_grouped.reindex(all_keys, fill_value=0)
+    candidate_aligned = candidate_grouped.reindex(all_keys, fill_value=0)
+    delta_frame = candidate_aligned - active_aligned
+    delta_vectors: dict[tuple[str, str], pd.Series] = {}
+    samples: list[dict[str, Any]] = []
+
+    for raw_key, delta in delta_frame.iterrows():
+        if not bool(delta.ne(0).any()):
+            continue
+        make, model = (str(value).strip() for value in raw_key)
+        key = (make, model)
+        delta_vectors[key] = delta.astype(float)
+        active_row = active_aligned.loc[raw_key]
+        candidate_row = candidate_aligned.loc[raw_key]
+        for month in historical_months:
+            delta_value = float(delta.get(month, 0) or 0)
+            if delta_value == 0:
+                continue
+            samples.append({
+                "scope": f"makeModel:{make}/{model}",
+                "make": make,
+                "model": model,
+                "month": month,
+                "activeSales": _serialize_numeric_value(active_row.get(month, 0)),
+                "candidateSales": _serialize_numeric_value(candidate_row.get(month, 0)),
+                "deltaSales": _serialize_numeric_value(delta_value),
+            })
+    return delta_vectors, samples, len(all_keys)
+
+
+def _sc011_transfer_payload(
+    *,
+    source: tuple[str, str],
+    target: tuple[str, str],
+    transfer: pd.Series,
+    historical_months: list[str],
+) -> dict[str, Any]:
+    monthly_transfers = [
+        {
+            "month": month,
+            "sales": _serialize_numeric_value(transfer.get(month, 0)),
+        }
+        for month in historical_months
+        if float(transfer.get(month, 0) or 0) != 0
+    ]
+    return {
+        "source": {"Make": source[0], "Model": source[1]},
+        "target": {"Make": target[0], "Model": target[1]},
+        "transferredSales": _serialize_numeric_value(transfer.sum()),
+        "transferredMonths": [item["month"] for item in monthly_transfers],
+        "monthlyTransfers": monthly_transfers,
+    }
+
+
+def _apply_confirmed_sc011_reclassifications(
+    *,
+    country: str,
+    active_latest_month: str,
+    historical_months: list[str],
+    delta_vectors: dict[tuple[str, str], pd.Series],
+    source_upload_sha256: str | None,
+) -> tuple[list[dict[str, Any]], dict[tuple[str, str], pd.Series]]:
+    residual = {key: value.copy() for key, value in delta_vectors.items()}
+    confirmed: list[dict[str, Any]] = []
+    normalized_upload_sha256 = str(source_upload_sha256 or "").strip().lower()
+    compared_months_sha256 = hashlib.sha256(
+        "\n".join(historical_months).encode("utf-8")
+    ).hexdigest()
+    for rule in CONFIRMED_SC011_RECLASSIFICATIONS:
+        if (
+            str(rule.get("country") or "") != country
+            or str(rule.get("comparedThrough") or "") != active_latest_month
+            or int(rule.get("expectedComparedMonthCount") or 0)
+            != len(historical_months)
+            or str(rule.get("expectedComparedMonthsSha256") or "")
+            != compared_months_sha256
+            or str(rule.get("sourceUploadSha256") or "").strip().lower()
+            != normalized_upload_sha256
+        ):
+            continue
+        source_value = rule.get("source")
+        target_value = rule.get("target")
+        expected_value = rule.get("expectedMonthlyTransfer")
+        if not (
+            isinstance(source_value, dict)
+            and isinstance(target_value, dict)
+            and isinstance(expected_value, dict)
+        ):
+            continue
+        source = (
+            str(source_value.get("Make") or "").strip(),
+            str(source_value.get("Model") or "").strip(),
+        )
+        target = (
+            str(target_value.get("Make") or "").strip(),
+            str(target_value.get("Model") or "").strip(),
+        )
+        if source == target or source not in residual or target not in residual:
+            continue
+        if any(month not in historical_months for month in expected_value):
+            continue
+        expected = pd.Series(0.0, index=historical_months)
+        valid_expected = True
+        for month, raw_sales in expected_value.items():
+            numeric_sales = pd.to_numeric(pd.Series([raw_sales]), errors="coerce").iloc[0]
+            if pd.isna(numeric_sales) or float(numeric_sales) < 0:
+                valid_expected = False
+                break
+            expected.loc[str(month)] = float(numeric_sales)
+        if not valid_expected:
+            continue
+        expected_total = float(rule.get("expectedTotal") or 0)
+        source_delta = residual[source].reindex(historical_months, fill_value=0)
+        target_delta = residual[target].reindex(historical_months, fill_value=0)
+        if (
+            float(expected.sum()) != expected_total
+            or not bool(source_delta.eq(-expected).all())
+            or not bool(target_delta.eq(expected).all())
+        ):
+            continue
+        payload = _sc011_transfer_payload(
+            source=source,
+            target=target,
+            transfer=expected,
+            historical_months=historical_months,
+        )
+        payload.update({
+            "confirmationId": str(rule.get("confirmationId") or ""),
+            "approvedBy": str(rule.get("approvedBy") or ""),
+            "approvalReference": str(rule.get("approvalReference") or ""),
+            "comparedThrough": active_latest_month,
+            "comparedMonthsSha256": compared_months_sha256,
+            "sourceUploadSha256": normalized_upload_sha256,
+        })
+        confirmed.append(payload)
+        residual.pop(source)
+        residual.pop(target)
+    return confirmed, residual
+
+
+def _unconfirmed_sc011_reclassification_candidates(
+    *,
+    residual: dict[tuple[str, str], pd.Series],
+    historical_months: list[str],
+) -> tuple[list[dict[str, Any]], list[dict[str, str]]]:
+    sources_by_signature: dict[tuple[str, tuple[float, ...]], list[tuple[str, str]]] = {}
+    targets_by_signature: dict[tuple[str, tuple[float, ...]], list[tuple[str, str]]] = {}
+    for key, delta in residual.items():
+        values = delta.reindex(historical_months, fill_value=0).astype(float)
+        if bool(values.le(0).all()) and bool(values.lt(0).any()):
+            signature = tuple(float(-value) for value in values)
+            sources_by_signature.setdefault((key[0], signature), []).append(key)
+        elif bool(values.ge(0).all()) and bool(values.gt(0).any()):
+            signature = tuple(float(value) for value in values)
+            targets_by_signature.setdefault((key[0], signature), []).append(key)
+
+    candidates: list[dict[str, Any]] = []
+    paired_keys: set[tuple[str, str]] = set()
+    for signature_key, sources in sources_by_signature.items():
+        targets = targets_by_signature.get(signature_key, [])
+        if len(sources) != 1 or len(targets) != 1:
+            continue
+        source = sources[0]
+        target = targets[0]
+        transfer = -residual[source].reindex(historical_months, fill_value=0)
+        candidates.append(
+            _sc011_transfer_payload(
+                source=source,
+                target=target,
+                transfer=transfer,
+                historical_months=historical_months,
+            )
+        )
+        paired_keys.update({source, target})
+    candidates.sort(
+        key=lambda item: (
+            str(item["source"]["Make"]),
+            str(item["source"]["Model"]),
+            str(item["target"]["Model"]),
+        )
+    )
+    unpaired = [
+        {"Make": make, "Model": model}
+        for make, model in sorted(set(residual) - paired_keys)
+    ]
+    return candidates, unpaired
+
+
+def _single_country_historical_sales_stability(
+    *,
+    country: str,
+    active_frame: pd.DataFrame,
+    candidate_frame: pd.DataFrame,
     active_latest_month: str | None,
+    source_upload_sha256: str | None = None,
 ) -> dict[str, Any]:
     if active_latest_month is None:
         return {"status": "unavailable", "reason": "active_latest_month_missing"}
@@ -459,31 +704,91 @@ def _single_country_historical_sales_stability(
                 scope=f"make:{make}",
                 destination=make_samples,
             )
-    samples = [*country_samples, *make_samples]
-    cause = None
+
+    make_model_deltas, make_model_samples, compared_make_model_count = (
+        _single_country_make_model_deltas(
+            active_frame=active_frame,
+            candidate_frame=candidate_frame,
+            active_sales=active_sales,
+            candidate_sales=candidate_sales,
+            historical_months=historical_months,
+        )
+    )
+    confirmed: list[dict[str, Any]] = []
+    residual = make_model_deltas
+    if not country_samples and make_model_deltas:
+        confirmed, residual = _apply_confirmed_sc011_reclassifications(
+            country=country,
+            active_latest_month=active_latest_month,
+            historical_months=historical_months,
+            delta_vectors=make_model_deltas,
+            source_upload_sha256=source_upload_sha256,
+        )
+    unconfirmed_candidates, unpaired_make_models = (
+        _unconfirmed_sc011_reclassification_candidates(
+            residual=residual,
+            historical_months=historical_months,
+        )
+    )
+
+    effective_dimension_samples = (
+        make_model_samples if compared_make_model_count else make_samples
+    )
+    samples = [*country_samples, *effective_dimension_samples]
     if country_samples:
+        status = "fail"
         cause = "historical_sales_changed"
+    elif residual:
+        status = "fail"
+        cause = "unconfirmed_make_model_reclassification"
+    elif confirmed:
+        status = "confirmed"
+        cause = "confirmed_make_model_reclassification"
     elif make_samples:
+        status = "fail"
         cause = "make_dimension_reclassification"
+    else:
+        status = "pass"
+        cause = None
+
+    residual_mismatch_count = sum(
+        int(delta.reindex(historical_months, fill_value=0).ne(0).sum())
+        for delta in residual.values()
+    )
+    impacted_make_models = [
+        {"Make": make, "Model": model}
+        for make, model in sorted(make_model_deltas)
+    ]
     return {
-        "status": "pass" if not samples else "fail",
+        "status": status,
         "reason": cause,
         "comparedThrough": active_latest_month,
         "comparedMonthCount": len(historical_months),
         "comparedMakeCount": compared_make_count,
+        "comparedMakeModelCount": compared_make_model_count,
         "mismatchCount": len(samples),
         "countryMismatchCount": len(country_samples),
         "makeMismatchCount": len(make_samples),
+        "makeModelMismatchCount": len(make_model_samples),
+        "unconfirmedMakeModelMismatchCount": residual_mismatch_count,
         "impactedMakes": sorted(
             {
+                make
+                for make, _model in make_model_deltas
+            }
+            | {
                 str(sample["scope"]).removeprefix("make:")
                 for sample in make_samples
             }
         ),
+        "impactedMakeModels": impacted_make_models,
         "impactedMonths": sorted(
             {str(sample["month"]) for sample in samples},
             key=_time_sort_key,
         ),
+        "confirmedReclassifications": confirmed,
+        "unconfirmedReclassificationCandidates": unconfirmed_candidates,
+        "unpairedMakeModels": unpaired_make_models,
         "mismatchSamples": samples[:20],
     }
 
@@ -515,13 +820,74 @@ def _single_country_source_feedback(*, rule_id: str, country: str, metrics: dict
     if rule_id == "SC010":
         return f"{country} 文件新增字段：{columns('extraColumns') or '见 Review 明细'}。请提供字段定义、单位和是否应保留的确认；新增列不应覆盖或改名现有业务列。"
     if rule_id == "SC011":
+        confirmed = metrics.get("confirmedReclassifications")
+        unconfirmed = metrics.get("unconfirmedReclassificationCandidates")
+        unpaired = metrics.get("unpairedMakeModels")
+        confirmed_text = ""
+        if isinstance(confirmed, list) and confirmed:
+            confirmed_items = []
+            for item in confirmed:
+                if not isinstance(item, dict):
+                    continue
+                source = item.get("source") if isinstance(item.get("source"), dict) else {}
+                target = item.get("target") if isinstance(item.get("target"), dict) else {}
+                confirmed_items.append(
+                    f"{source.get('Make')}/{source.get('Model')}→"
+                    f"{target.get('Make')}/{target.get('Model')}"
+                    f"（{item.get('transferredSales', 0)} 台）"
+                )
+            if confirmed_items:
+                confirmed_text = "已确认：" + "；".join(confirmed_items) + "。"
+        if metrics.get("reason") == "confirmed_make_model_reclassification":
+            return (
+                f"{country} 的国家历史月销量总量与 active 一致，且车型重分类已完成业务确认。"
+                f"{confirmed_text}Review 时请核对确认编号、逐月转移量和 candidate 指纹；"
+                "不得把该确认扩展到名称相似的其他车型。"
+            )
+        if metrics.get("reason") == "unconfirmed_make_model_reclassification":
+            unconfirmed_items = []
+            if isinstance(unconfirmed, list):
+                for item in unconfirmed:
+                    if not isinstance(item, dict):
+                        continue
+                    source = item.get("source") if isinstance(item.get("source"), dict) else {}
+                    target = item.get("target") if isinstance(item.get("target"), dict) else {}
+                    unconfirmed_items.append(
+                        f"{source.get('Make')}/{source.get('Model')}→"
+                        f"{target.get('Make')}/{target.get('Model')}"
+                        f"（{item.get('transferredSales', 0)} 台）"
+                    )
+            unpaired_items = []
+            if isinstance(unpaired, list):
+                for item in unpaired:
+                    if isinstance(item, dict):
+                        unpaired_items.append(
+                            f"{item.get('Make')}/{item.get('Model')}"
+                        )
+            unpaired_text = (
+                f"另有未能成对解释的车型：{'、'.join(unpaired_items)}。"
+                if unpaired_items
+                else ""
+            )
+            return (
+                f"{country} 的国家历史月销量总量与 active 一致，但仍有未确认的 Make/Model 重分类。"
+                f"{confirmed_text}"
+                f"待确认映射：{'；'.join(unconfirmed_items) or '见 Review 明细'}。"
+                f"{unpaired_text}"
+                "请逐项确认旧 Make/Model → 新 Make/Model 映射；未确认项目请恢复已发布历史归类。"
+            )
         if metrics.get("reason") == "make_dimension_reclassification":
             return f"{country} 的国家历史月销量总量与 active 一致，但 Make 归类发生变化。受影响品牌：{columns('impactedMakes') or '见 Review 明细'}；受影响月份：{columns('impactedMonths') or '见 Review 明细'}。请确认是否调整了品牌/车型映射；若为有意重分类，请提供旧 Make → 新 Make/Model 映射和业务确认，否则恢复已发布历史归类。"
         return f"请恢复 {country} 在 {metrics.get('comparedThrough') or '已有'} 之前的历史销量。系统发现 {metrics.get('mismatchCount', 0)} 处历史销量差异；本次更新只能新增或修正经确认的最新月份，不能重写已发布历史月份。"
     if rule_id == "SC012":
         row_delta = int(metrics.get("rowDelta", 0) or 0)
         stability = metrics.get("historicalSalesStability")
-        history_note = "历史销量已通过核对" if isinstance(stability, dict) and stability.get("status") == "pass" else "历史销量需要一并复核"
+        if isinstance(stability, dict) and stability.get("status") == "confirmed":
+            history_note = "历史国家总量守恒，重分类已按确认映射核对"
+        elif isinstance(stability, dict) and stability.get("status") == "pass":
+            history_note = "历史销量已通过核对"
+        else:
+            history_note = "历史销量需要一并复核"
         return f"{country} 本次配置行较 active {'减少' if row_delta < 0 else '增加'} {abs(row_delta)} 行，{history_note}。请说明洗数时的去重、零销量配置过滤和车型下架规则，并提供清洗前后配置行数；不要仅为凑行数复制或补造车型。"
     if rule_id == "SC013":
         return f"{country} 缺少旧月份 YTD 派生列：{columns('missingDerivedYtdColumns') or '见 Review 明细'}。这不是发布 blocker；请确认最新月份的 YTD 字段仍由 Jan 至当月销量计算，并在后续导出中保持 YTD 列命名和口径一致。"
@@ -2246,10 +2612,20 @@ def _build_single_country_review(payload: dict[str, Any]) -> dict[str, Any]:
     ))
     active_latest = _latest_month_from_frame(active_frame)
     candidate_latest = _latest_month_from_frame(candidate_frame)
+    upload_payload = payload.get("upload")
+    source_upload_sha256 = None
+    if isinstance(upload_payload, dict):
+        stored_upload_path = _project_path(
+            str(upload_payload.get("storedPath") or "").strip()
+        )
+        if stored_upload_path is not None and stored_upload_path.is_file():
+            source_upload_sha256 = _sha256_hex_for_path(stored_upload_path)
     historical_stability = _single_country_historical_sales_stability(
+        country=country,
         active_frame=active_frame,
         candidate_frame=candidate_frame,
         active_latest_month=active_latest,
+        source_upload_sha256=source_upload_sha256,
     )
     active_sales = _collect_country_monthly_sales(active_frame, countries=[country], path_label="active").get(country, {})
     candidate_sales = _collect_country_monthly_sales(candidate_frame, countries=[country], path_label="candidate").get(country, {})
@@ -2338,6 +2714,13 @@ def _build_single_country_review(payload: dict[str, Any]) -> dict[str, Any]:
         add_finding("blocker", "SC006", "目标国家 candidate 疑似销量翻倍。", {"months": doubled_months})
     if historical_stability.get("status") == "fail":
         add_finding("blocker", "SC011", "目标国家 candidate 改写了 active 已有历史销量。", historical_stability)
+    elif historical_stability.get("status") == "confirmed":
+        add_finding(
+            "review",
+            "SC011",
+            "目标国家 candidate 包含已精确核验并经业务确认的历史车型重分类。",
+            historical_stability,
+        )
     row_delta = int(len(candidate_frame) - len(active_frame))
     if row_delta:
         add_finding("review", "SC012", "目标国家 candidate 的配置行数与 active 不同。", {

@@ -2101,6 +2101,7 @@ def test_historical_sales_stability_identifies_make_reclassification() -> None:
 
     stability = (
         jato_monthly_update_service._single_country_historical_sales_stability(
+            country="捷克",
             active_frame=active,
             candidate_frame=candidate,
             active_latest_month="2026 Jan",
@@ -2122,6 +2123,344 @@ def test_historical_sales_stability_identifies_make_reclassification() -> None:
     assert "国家历史月销量总量与 active 一致" in feedback
     assert "DFSK、FORTHING" in feedback
     assert "旧 Make → 新 Make/Model 映射" in feedback
+
+
+def test_historical_sales_stability_detects_same_make_model_reclassification() -> None:
+    active = pd.DataFrame(
+        {
+            "国家": ["丹麦", "丹麦"],
+            "Make": ["AUDI", "AUDI"],
+            "Model": ["Q6 E-TRON", "Q6 SPORTBACK E-TRON"],
+            "2026 Jan": [1, 0],
+        }
+    )
+    candidate = pd.DataFrame(
+        {
+            "国家": ["丹麦", "丹麦"],
+            "Make": ["AUDI", "AUDI"],
+            "Model": ["Q6 E-TRON", "Q6 SPORTBACK E-TRON"],
+            "2026 Jan": [0, 1],
+        }
+    )
+
+    stability = (
+        jato_monthly_update_service._single_country_historical_sales_stability(
+            country="丹麦",
+            active_frame=active,
+            candidate_frame=candidate,
+            active_latest_month="2026 Jan",
+        )
+    )
+
+    assert stability["status"] == "fail"
+    assert stability["reason"] == "unconfirmed_make_model_reclassification"
+    assert stability["countryMismatchCount"] == 0
+    assert stability["makeMismatchCount"] == 0
+    assert stability["makeModelMismatchCount"] == 2
+    assert stability["unconfirmedReclassificationCandidates"] == [
+        {
+            "source": {"Make": "AUDI", "Model": "Q6 E-TRON"},
+            "target": {"Make": "AUDI", "Model": "Q6 SPORTBACK E-TRON"},
+            "transferredSales": 1,
+            "transferredMonths": ["2026 Jan"],
+            "monthlyTransfers": [{"month": "2026 Jan", "sales": 1}],
+        }
+    ]
+
+
+CONFIRMED_T5_UPLOAD_SHA256 = (
+    "c12e4e1a58e7d292eb6aef6bdd9c34d0632449536d5351880c35142fa38b0453"
+)
+
+
+def _confirmed_t5_reclassification_frames() -> tuple[pd.DataFrame, pd.DataFrame]:
+    month_names = (
+        "Jan",
+        "Feb",
+        "Mar",
+        "Apr",
+        "May",
+        "Jun",
+        "Jul",
+        "Aug",
+        "Sep",
+        "Oct",
+        "Nov",
+        "Dec",
+    )
+    compared_months = [
+        f"{year} {month}"
+        for year in (2023, 2024, 2025)
+        for month in month_names
+    ] + ["2026 Jan", "2026 Feb", "2026 Mar"]
+    expected_transfer = {
+        "2025 Apr": 3,
+        "2025 May": 3,
+        "2025 Jun": 8,
+        "2025 Jul": 4,
+        "2025 Aug": 4,
+        "2025 Sep": 6,
+        "2025 Nov": 3,
+        "2025 Dec": 19,
+        "2026 Jan": 1,
+    }
+    transfer = {
+        month: expected_transfer.get(month, 0)
+        for month in compared_months
+    }
+    zero_sales = {month: 0 for month in compared_months}
+    active = pd.DataFrame([
+        {
+            "国家": "捷克",
+            "Make": "FORTHING",
+            "Model": "T5",
+            **transfer,
+        },
+        {
+            "国家": "捷克",
+            "Make": "DFSK",
+            "Model": "T5 EVO",
+            **zero_sales,
+        },
+        {
+            "国家": "捷克",
+            "Make": "FORTHING",
+            "Model": "T5 EVO",
+            **zero_sales,
+        },
+    ])
+    candidate = pd.DataFrame([
+        {
+            "国家": "捷克",
+            "Make": "DFSK",
+            "Model": "T5 EVO",
+            **transfer,
+        },
+        {
+            "国家": "捷克",
+            "Make": "FORTHING",
+            "Model": "T5 EVO",
+            **zero_sales,
+        },
+    ])
+    return active, candidate
+
+
+def test_historical_sales_stability_applies_exact_confirmed_t5_mapping() -> None:
+    active, candidate = _confirmed_t5_reclassification_frames()
+
+    stability = (
+        jato_monthly_update_service._single_country_historical_sales_stability(
+            country="捷克",
+            active_frame=active,
+            candidate_frame=candidate,
+            active_latest_month="2026 Mar",
+            source_upload_sha256=CONFIRMED_T5_UPLOAD_SHA256,
+        )
+    )
+    feedback = jato_monthly_update_service._single_country_source_feedback(
+        rule_id="SC011",
+        country="捷克",
+        metrics=stability,
+    )
+
+    assert stability["status"] == "confirmed"
+    assert stability["reason"] == "confirmed_make_model_reclassification"
+    assert stability["countryMismatchCount"] == 0
+    assert stability["unconfirmedMakeModelMismatchCount"] == 0
+    assert stability["unconfirmedReclassificationCandidates"] == []
+    assert stability["confirmedReclassifications"] == [
+        {
+            "source": {"Make": "FORTHING", "Model": "T5"},
+            "target": {"Make": "DFSK", "Model": "T5 EVO"},
+            "transferredSales": 51,
+            "transferredMonths": [
+                "2025 Apr",
+                "2025 May",
+                "2025 Jun",
+                "2025 Jul",
+                "2025 Aug",
+                "2025 Sep",
+                "2025 Nov",
+                "2025 Dec",
+                "2026 Jan",
+            ],
+            "monthlyTransfers": [
+                {"month": "2025 Apr", "sales": 3},
+                {"month": "2025 May", "sales": 3},
+                {"month": "2025 Jun", "sales": 8},
+                {"month": "2025 Jul", "sales": 4},
+                {"month": "2025 Aug", "sales": 4},
+                {"month": "2025 Sep", "sales": 6},
+                {"month": "2025 Nov", "sales": 3},
+                {"month": "2025 Dec", "sales": 19},
+                {"month": "2026 Jan", "sales": 1},
+            ],
+            "confirmationId": "CZ-FORTHING-T5-TO-DFSK-T5-EVO-20260720",
+            "approvedBy": "JATO business owner",
+            "approvalReference": "user-confirmed-2026-07-20",
+            "comparedThrough": "2026 Mar",
+            "comparedMonthsSha256": (
+                "d9cfcaa2bfd045a14c9ad0663be706bc9234bea64385cf46db11b0fb996e69f7"
+            ),
+            "sourceUploadSha256": CONFIRMED_T5_UPLOAD_SHA256,
+        }
+    ]
+    assert feedback is not None
+    assert "车型重分类已完成业务确认" in feedback
+    assert "FORTHING/T5→DFSK/T5 EVO（51 台）" in feedback
+
+
+def test_historical_sales_stability_requires_full_confirmed_history_window() -> None:
+    active, candidate = _confirmed_t5_reclassification_frames()
+    active = active.drop(columns=["2023 Jan"])
+    candidate = candidate.drop(columns=["2023 Jan"])
+
+    stability = (
+        jato_monthly_update_service._single_country_historical_sales_stability(
+            country="捷克",
+            active_frame=active,
+            candidate_frame=candidate,
+            active_latest_month="2026 Mar",
+            source_upload_sha256=CONFIRMED_T5_UPLOAD_SHA256,
+        )
+    )
+
+    assert stability["status"] == "fail"
+    assert stability["reason"] == "unconfirmed_make_model_reclassification"
+    assert stability["comparedMonthCount"] == 38
+    assert stability["confirmedReclassifications"] == []
+
+
+def test_historical_sales_stability_requires_exact_confirmed_month_sequence() -> None:
+    active, candidate = _confirmed_t5_reclassification_frames()
+    active = active.drop(columns=["2023 Jan"])
+    candidate = candidate.drop(columns=["2023 Jan"])
+    active["2022 Dec"] = 0
+    candidate["2022 Dec"] = 0
+
+    stability = (
+        jato_monthly_update_service._single_country_historical_sales_stability(
+            country="捷克",
+            active_frame=active,
+            candidate_frame=candidate,
+            active_latest_month="2026 Mar",
+            source_upload_sha256=CONFIRMED_T5_UPLOAD_SHA256,
+        )
+    )
+
+    assert stability["status"] == "fail"
+    assert stability["comparedMonthCount"] == 39
+    assert stability["confirmedReclassifications"] == []
+
+
+def test_historical_sales_stability_binds_confirmation_to_upload_sha() -> None:
+    active, candidate = _confirmed_t5_reclassification_frames()
+
+    stability = (
+        jato_monthly_update_service._single_country_historical_sales_stability(
+            country="捷克",
+            active_frame=active,
+            candidate_frame=candidate,
+            active_latest_month="2026 Mar",
+            source_upload_sha256="0" * 64,
+        )
+    )
+
+    assert stability["status"] == "fail"
+    assert stability["reason"] == "unconfirmed_make_model_reclassification"
+    assert stability["confirmedReclassifications"] == []
+
+
+def test_historical_sales_stability_keeps_other_model_remaps_blocking() -> None:
+    active, candidate = _confirmed_t5_reclassification_frames()
+    active = pd.concat([
+        active,
+        pd.DataFrame([
+            {
+                "国家": "捷克",
+                "Make": "AUDI",
+                "Model": "Q6 SPORTBACK E-TRON",
+                **{column: int(column == "2025 Nov") for column in active.columns if column[:4].isdigit()},
+            },
+            {
+                "国家": "捷克",
+                "Make": "AUDI",
+                "Model": "Q6 E-TRON",
+                **{column: 0 for column in active.columns if column[:4].isdigit()},
+            },
+        ]),
+    ], ignore_index=True)
+    candidate = pd.concat([
+        candidate,
+        pd.DataFrame([
+            {
+                "国家": "捷克",
+                "Make": "AUDI",
+                "Model": "Q6 SPORTBACK E-TRON",
+                **{column: 0 for column in candidate.columns if column[:4].isdigit()},
+            },
+            {
+                "国家": "捷克",
+                "Make": "AUDI",
+                "Model": "Q6 E-TRON",
+                **{column: int(column == "2025 Nov") for column in candidate.columns if column[:4].isdigit()},
+            },
+        ]),
+    ], ignore_index=True)
+
+    stability = (
+        jato_monthly_update_service._single_country_historical_sales_stability(
+            country="捷克",
+            active_frame=active,
+            candidate_frame=candidate,
+            active_latest_month="2026 Mar",
+            source_upload_sha256=CONFIRMED_T5_UPLOAD_SHA256,
+        )
+    )
+    feedback = jato_monthly_update_service._single_country_source_feedback(
+        rule_id="SC011",
+        country="捷克",
+        metrics=stability,
+    )
+
+    assert stability["status"] == "fail"
+    assert stability["reason"] == "unconfirmed_make_model_reclassification"
+    assert len(stability["confirmedReclassifications"]) == 1
+    assert stability["unconfirmedMakeModelMismatchCount"] == 2
+    assert stability["unconfirmedReclassificationCandidates"] == [
+        {
+            "source": {"Make": "AUDI", "Model": "Q6 SPORTBACK E-TRON"},
+            "target": {"Make": "AUDI", "Model": "Q6 E-TRON"},
+            "transferredSales": 1,
+            "transferredMonths": ["2025 Nov"],
+            "monthlyTransfers": [{"month": "2025 Nov", "sales": 1}],
+        }
+    ]
+    assert feedback is not None
+    assert "已确认：FORTHING/T5→DFSK/T5 EVO（51 台）" in feedback
+    assert "待确认映射：AUDI/Q6 SPORTBACK E-TRON→AUDI/Q6 E-TRON（1 台）" in feedback
+
+
+def test_historical_sales_stability_does_not_fuzzy_match_t5_names() -> None:
+    active, candidate = _confirmed_t5_reclassification_frames()
+    candidate.loc[candidate["Make"].eq("DFSK"), "Model"] = "T5"
+
+    stability = (
+        jato_monthly_update_service._single_country_historical_sales_stability(
+            country="捷克",
+            active_frame=active,
+            candidate_frame=candidate,
+            active_latest_month="2026 Mar",
+            source_upload_sha256=CONFIRMED_T5_UPLOAD_SHA256,
+        )
+    )
+
+    assert stability["status"] == "fail"
+    assert stability["reason"] == "unconfirmed_make_model_reclassification"
+    assert stability["confirmedReclassifications"] == []
+    assert {"Make": "DFSK", "Model": "T5"} in stability["impactedMakeModels"]
+    assert {"Make": "FORTHING", "Model": "T5"} in stability["impactedMakeModels"]
 
 
 def test_deprecated_static_fields_carry_forward_only_for_consistent_active_values() -> None:
