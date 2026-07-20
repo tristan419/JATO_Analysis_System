@@ -157,10 +157,40 @@ def _resolve_scraper_functions() -> tuple[Callable, Callable]:
     return load_all_sources, run_scrape
 
 
-def _promoted_code_for_draft(code: str) -> str:
-    if not code.endswith("_draft_scrapling"):
-        return code
-    return code.replace("_draft_scrapling", "_scrapling")
+def _draft_source_identity(code: str) -> tuple[str, str] | None:
+    source_code, draft_marker, extractor_name = code.rpartition("_draft_")
+    if not draft_marker or not source_code or not extractor_name:
+        return None
+
+    source_prefix, country_separator, country_code = source_code.rpartition("_")
+    if not country_separator or not source_prefix or not country_code:
+        return None
+
+    return country_code, f"{source_code}_{extractor_name}"
+
+
+def _select_draft_sources(
+    draft_codes: list[str],
+    promoted_codes: set[str],
+    countries: list[str],
+) -> tuple[list[tuple[str, str]], list[tuple[str, str]]]:
+    target_codes: list[tuple[str, str]] = []
+    skipped_promoted: list[tuple[str, str]] = []
+    country_codes = set(countries)
+
+    for code in draft_codes:
+        identity = _draft_source_identity(code)
+        if identity is None:
+            continue
+
+        country_code, promoted_code = identity
+        if promoted_code in promoted_codes:
+            skipped_promoted.append((code, promoted_code))
+            continue
+        if country_code in country_codes:
+            target_codes.append((country_code, code))
+
+    return sorted(target_codes), skipped_promoted
 
 
 def _failure_classification(
@@ -1031,23 +1061,11 @@ def main():
     # Load both promoted sources and draft sources
     promoted_codes = set(load_all_sources())
     draft_codes = load_all_sources(sources_dir=_DRAFTS_DIR)
-    draft_codes = [c for c in draft_codes if c.endswith("_draft_scrapling")]
-    target_codes = []
-    skipped_promoted = []
-    for code in draft_codes:
-        promoted_code = _promoted_code_for_draft(code)
-        if promoted_code in promoted_codes:
-            skipped_promoted.append((code, promoted_code))
-            continue
-        # source code format: brand_model_COUNTRY_draft_scrapling
-        # Extract country suffix: last segment before "_draft_scrapling"
-        parts = code.replace("_draft_scrapling", "").rsplit("_", 1)
-        if len(parts) >= 2:
-            cc = parts[-1]
-            if cc in countries:
-                target_codes.append((cc, code))
-
-    target_codes.sort()
+    target_codes, skipped_promoted = _select_draft_sources(
+        draft_codes,
+        promoted_codes,
+        countries,
+    )
     print(f"Batch {batch}: {len(target_codes)} sources across {countries}")
     if skipped_promoted:
         print(
