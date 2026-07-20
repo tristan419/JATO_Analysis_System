@@ -20,6 +20,13 @@ import type {
   HeroProductDeckResponse,
   HeroProductPriceOverridePayload,
   HeroProductSpecOverridePayload,
+  JatoHistoricalReclassificationCountryReport,
+  JatoHistoricalReclassificationDimensionSummary,
+  JatoHistoricalReclassificationExactChange,
+  JatoHistoricalReclassificationMonthlyTransfer,
+  JatoHistoricalReclassificationReport,
+  JatoHistoricalReclassificationValueSummary,
+  JatoHistoricalReclassificationDecisionInput,
   JatoMonthlyUpdateCleanupResult,
   JatoMonthlyUpdateArtifacts,
   JatoMonthlyUpdateJob,
@@ -1476,6 +1483,9 @@ function mapJatoMonthlyUpdateJob(raw: Record<string, unknown>): JatoMonthlyUpdat
   } : null;
 
   const artifacts: JatoMonthlyUpdateArtifacts | null = artifactsRaw ? {
+    candidateScope: artifactsRaw.candidateScope === undefined || artifactsRaw.candidateScope === null
+      ? null
+      : String(artifactsRaw.candidateScope),
     jobDir: artifactsRaw.jobDir === undefined || artifactsRaw.jobDir === null ? null : String(artifactsRaw.jobDir),
     logPath: artifactsRaw.logPath === undefined || artifactsRaw.logPath === null ? null : String(artifactsRaw.logPath),
     baselinePath: artifactsRaw.baselinePath === undefined || artifactsRaw.baselinePath === null ? null : String(artifactsRaw.baselinePath),
@@ -1763,6 +1773,122 @@ function mapJatoMonthlyUpdateCountryMonthlySalesSummary(
   };
 }
 
+function mapJatoHistoricalReclassificationValueSummary(
+  raw: Record<string, unknown>
+): JatoHistoricalReclassificationValueSummary {
+  return {
+    value: String(raw.value ?? ""),
+    sales: Number(raw.sales ?? 0),
+    monthCount: Number(raw.monthCount ?? 0),
+  };
+}
+
+function mapJatoHistoricalReclassificationDimensionSummary(
+  raw: Record<string, unknown>
+): JatoHistoricalReclassificationDimensionSummary {
+  return {
+    dimension: String(raw.dimension ?? ""),
+    mismatchCellCount: Number(raw.mismatchCellCount ?? 0),
+    movedSales: Number(raw.movedSales ?? 0),
+    oldValues: Array.isArray(raw.oldValues)
+      ? raw.oldValues.map((item) => (
+        mapJatoHistoricalReclassificationValueSummary(item as Record<string, unknown>)
+      ))
+      : [],
+    newValues: Array.isArray(raw.newValues)
+      ? raw.newValues.map((item) => (
+        mapJatoHistoricalReclassificationValueSummary(item as Record<string, unknown>)
+      ))
+      : [],
+  };
+}
+
+function mapJatoHistoricalReclassificationMonthlyTransfer(
+  raw: Record<string, unknown>
+): JatoHistoricalReclassificationMonthlyTransfer {
+  return {
+    month: String(raw.month ?? ""),
+    sales: Number(raw.sales ?? 0),
+  };
+}
+
+function mapJatoHistoricalReclassificationExactChange(
+  raw: Record<string, unknown>
+): JatoHistoricalReclassificationExactChange {
+  return {
+    dimension: String(raw.dimension ?? ""),
+    make: String(raw.make ?? ""),
+    model: String(raw.model ?? ""),
+    oldValue: String(raw.oldValue ?? ""),
+    newValue: String(raw.newValue ?? ""),
+    transferredSales: Number(raw.transferredSales ?? 0),
+    affectedMonths: Array.isArray(raw.affectedMonths)
+      ? raw.affectedMonths.map((item) => String(item))
+      : [],
+    monthlyTransfers: Array.isArray(raw.monthlyTransfers)
+      ? raw.monthlyTransfers.map((item) => (
+        mapJatoHistoricalReclassificationMonthlyTransfer(item as Record<string, unknown>)
+      ))
+      : [],
+    confidence: String(raw.confidence ?? ""),
+  };
+}
+
+function mapJatoHistoricalReclassificationCountryReport(
+  raw: Record<string, unknown>
+): JatoHistoricalReclassificationCountryReport {
+  const truncation = raw.truncation && typeof raw.truncation === "object"
+    ? raw.truncation as Record<string, unknown>
+    : {};
+  return {
+    country: String(raw.country ?? ""),
+    decision: raw.decision === "use_latest" || raw.decision === "keep_active"
+      ? raw.decision
+      : null,
+    comparedThrough: raw.comparedThrough === undefined || raw.comparedThrough === null
+      ? null
+      : String(raw.comparedThrough),
+    historicalMonthCount: Number(raw.historicalMonthCount ?? 0),
+    jointMismatchCellCount: Number(raw.jointMismatchCellCount ?? 0),
+    jointMovedSales: Number(raw.jointMovedSales ?? 0),
+    monthlyTotalsStable: Boolean(raw.monthlyTotalsStable),
+    decisionRequired: Boolean(raw.decisionRequired),
+    dimensionSummaries: Array.isArray(raw.dimensionSummaries)
+      ? raw.dimensionSummaries.map((item) => (
+        mapJatoHistoricalReclassificationDimensionSummary(item as Record<string, unknown>)
+      ))
+      : [],
+    exactChanges: Array.isArray(raw.exactChanges)
+      ? raw.exactChanges.map((item) => (
+        mapJatoHistoricalReclassificationExactChange(item as Record<string, unknown>)
+      ))
+      : [],
+    exactChangeCount: Number(raw.exactChangeCount ?? 0),
+    complexChangeCount: Number(raw.complexChangeCount ?? 0),
+    truncation: {
+      truncated: Boolean(truncation.truncated),
+      exactChangeLimit: Number(truncation.exactChangeLimit ?? 0),
+      valueLimitPerDirection: Number(truncation.valueLimitPerDirection ?? 0),
+    },
+  };
+}
+
+function mapJatoHistoricalReclassificationReport(
+  raw: Record<string, unknown>
+): JatoHistoricalReclassificationReport {
+  const status = raw.status === "decision_required" || raw.status === "resolved"
+    ? raw.status
+    : "not_required";
+  return {
+    status,
+    countries: Array.isArray(raw.countries)
+      ? raw.countries.map((item) => (
+        mapJatoHistoricalReclassificationCountryReport(item as Record<string, unknown>)
+      ))
+      : [],
+  };
+}
+
 function mapJatoMonthlyUpdateReviewBundle(
   raw: Record<string, unknown>
 ): JatoMonthlyUpdateReviewBundle {
@@ -1818,6 +1944,14 @@ function mapJatoMonthlyUpdateReviewBundle(
     approval: raw.approval && typeof raw.approval === "object"
       ? mapJatoMonthlyUpdateReviewApproval(raw.approval as Record<string, unknown>)
       : null,
+    historicalReclassificationReport: (
+      raw.historicalReclassificationReport
+      && typeof raw.historicalReclassificationReport === "object"
+    )
+      ? mapJatoHistoricalReclassificationReport(
+        raw.historicalReclassificationReport as Record<string, unknown>
+      )
+      : { status: "not_required", countries: [] },
   };
 }
 
@@ -3871,6 +4005,19 @@ export const api = {
       method: "POST",
       body: JSON.stringify({ decision: "approve", note: note || undefined }),
     }).then((res) => ({
+      item: mapJatoMonthlyUpdateJob(res.item),
+    })),
+  resolveJatoMonthlyUpdateHistoricalReclassification: (
+    jobId: string,
+    decisions: JatoHistoricalReclassificationDecisionInput[],
+  ) =>
+    request<{ item: Record<string, unknown> }>(
+      `/msrp/monthly-update-jobs/${jobId}/historical-reclassification-resolution`,
+      {
+        method: "POST",
+        body: JSON.stringify({ decisions }),
+      },
+    ).then((res) => ({
       item: mapJatoMonthlyUpdateJob(res.item),
     })),
   retryFailedJatoMonthlyUpdateJob: (jobId: string) =>

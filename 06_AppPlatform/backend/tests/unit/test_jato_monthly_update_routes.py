@@ -671,6 +671,53 @@ def test_get_monthly_update_review_route_returns_review_bundle(monkeypatch) -> N
     assert payload["countryMonthlySalesSummary"][0]["rows"][1]["candidateSales"] == 120
 
 
+def test_historical_reclassification_resolution_route_passes_decisions(
+    monkeypatch,
+) -> None:
+    captured: dict[str, object] = {}
+
+    def resolve(*, job_id, triggered_by, decisions):
+        captured.update(
+            {
+                "jobId": job_id,
+                "triggeredBy": triggered_by,
+                "decisions": decisions,
+            }
+        )
+        return {"jobId": job_id, "status": "queued"}
+
+    monkeypatch.setattr(
+        msrp_monthly_update,
+        "resolve_jato_historical_reclassification",
+        resolve,
+    )
+    client = TestClient(app)
+    response = client.post(
+        (
+            "/v1/msrp/monthly-update-jobs/jato-update-1234abcd/"
+            "historical-reclassification-resolution"
+        ),
+        headers=_admin_headers(monkeypatch),
+        json={
+            "decisions": [
+                {"country": "捷克", "decision": "use_latest"},
+                {"country": "丹麦", "decision": "keep_active"},
+            ]
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.json()["item"]["status"] == "queued"
+    assert captured == {
+        "jobId": "jato-update-1234abcd",
+        "triggeredBy": "tester",
+        "decisions": [
+            {"country": "捷克", "decision": "use_latest"},
+            {"country": "丹麦", "decision": "keep_active"},
+        ],
+    }
+
+
 def test_publish_monthly_update_job_route_returns_queued_operation(monkeypatch) -> None:
     monkeypatch.setattr(
         msrp_monthly_update,

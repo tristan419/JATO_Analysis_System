@@ -20,6 +20,7 @@ from app.services.jato_monthly_update_service import (
     promote_current_active_to_baseline,
     publish_jato_monthly_update_job,
     recheck_jato_monthly_update_job,
+    resolve_jato_historical_reclassification,
     rollback_jato_monthly_update_job,
     retry_failed_jato_monthly_update_job,
     run_jato_monthly_update_cleanup,
@@ -152,6 +153,23 @@ def post_monthly_update_review_approval(
             triggered_by=user.name,
             decision=str(payload.get("decision", "")),
             note=str(payload.get("note", "")) if payload.get("note") is not None else None,
+        )
+    }
+
+
+@router.post(
+    "/monthly-update-jobs/{job_id}/historical-reclassification-resolution"
+)
+def post_historical_reclassification_resolution(
+    job_id: str,
+    payload: dict[str, object],
+    user: UserContext = Depends(require_min_role("admin")),
+) -> dict[str, object]:
+    return {
+        "item": resolve_jato_historical_reclassification(
+            job_id=job_id,
+            triggered_by=user.name,
+            decisions=payload.get("decisions"),
         )
     }
 

@@ -1744,7 +1744,10 @@ def test_get_review_bundle_reads_compare_outputs(tmp_path: Path, monkeypatch) ->
     (summaries_path / "marker").write_text("summaries", encoding="utf-8")
     jato_monthly_update_service._persist_job_state(state)
 
-    review = jato_monthly_update_service.get_jato_monthly_update_review(job_id)
+    review = jato_monthly_update_service.get_jato_monthly_update_review(
+        job_id,
+        allow_build=True,
+    )
 
     assert review["jobId"] == job_id
     assert review["compareId"] == "2026-02_vs_2026-03"

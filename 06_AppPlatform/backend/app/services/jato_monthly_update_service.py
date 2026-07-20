@@ -330,6 +330,11 @@ HISTORICAL_DIMENSION_ALIASES: tuple[tuple[str, ...], ...] = (
     ("Fuel type", "Fuel"),
     ("Version name", "Trim level"),
 )
+HISTORICAL_RECLASSIFICATION_DECISIONS = frozenset(
+    {"use_latest", "keep_active"}
+)
+HISTORICAL_RECLASSIFICATION_VALUE_LIMIT = 8
+HISTORICAL_RECLASSIFICATION_EXACT_CHANGE_LIMIT = 20
 _WRITE_LOCK = threading.Lock()
 _RUNNING_THREADS: dict[str, threading.Thread] = {}
 RUNNING_JOB_STATUSES = {"queued", "running"}
@@ -909,7 +914,11 @@ def _collect_dataset_country_latest_months(path: Path) -> dict[str, str | None]:
     try:
         import pyarrow.parquet as pq
 
-        schema_columns = [str(column).strip() for column in pq.read_schema(path).names]
+        parquet_file = pq.ParquetFile(path)
+        schema_columns = [
+            str(column).strip()
+            for column in parquet_file.schema_arrow.names
+        ]
         country_column = _find_country_column(schema_columns)
         month_columns = _detect_month_columns(schema_columns)
         selected_columns = [
@@ -917,47 +926,96 @@ def _collect_dataset_country_latest_months(path: Path) -> dict[str, str | None]:
             for column in [country_column, *month_columns]
             if column is not None
         ]
-        frame = pd.read_parquet(path, columns=selected_columns)
+        if country_column is None or not month_columns:
+            raise ValueError("country/month columns unavailable")
+        display_variants: dict[str, list[str]] = {}
+        present_months: dict[str, set[str]] = {}
+        for batch in parquet_file.iter_batches(
+            batch_size=65_536,
+            columns=selected_columns,
+        ):
+            frame = batch.to_pandas()
+            frame.columns = [
+                str(column).strip()
+                for column in frame.columns
+            ]
+            normalized = (
+                frame[country_column]
+                .astype("string")
+                .fillna("")
+                .str.strip()
+            )
+            country_keys = normalized.str.casefold()
+            for country_key, display in zip(
+                country_keys,
+                normalized,
+                strict=False,
+            ):
+                key = str(country_key)
+                rendered = str(display)
+                if not key or not rendered:
+                    continue
+                variants = display_variants.setdefault(key, [])
+                if rendered not in variants:
+                    variants.append(rendered)
+            for country_key, row_indices in frame.groupby(
+                country_keys,
+                dropna=False,
+                sort=False,
+            ).groups.items():
+                key = str(country_key)
+                if not key:
+                    continue
+                country_months = present_months.setdefault(key, set())
+                country_frame = frame.loc[row_indices]
+                for month in month_columns:
+                    if (
+                        month not in country_months
+                        and _series_has_data(country_frame[month])
+                    ):
+                        country_months.add(month)
+            del frame
+        ambiguous = {
+            key: variants
+            for key, variants in display_variants.items()
+            if len(variants) > 1
+        }
+        if ambiguous:
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "blockerType": "ambiguous_logical_country",
+                    "message": (
+                        f"{path.name} 中同一逻辑国家存在多个大小写/空格"
+                        "展示值，继续会造成国家重复累加；请先统一国家字段。"
+                    ),
+                    "countries": [
+                        {
+                            "logicalKey": key,
+                            "displayValues": variants,
+                        }
+                        for key, variants in sorted(ambiguous.items())
+                    ],
+                },
+            )
+        return {
+            variants[0]: (
+                max(
+                    present_months.get(country_key, set()),
+                    key=_time_sort_key,
+                )
+                if present_months.get(country_key)
+                else None
+            )
+            for country_key, variants in display_variants.items()
+        }
+    except HTTPException:
+        raise
     except Exception as exc:
         raise HTTPException(
             status_code=409,
             detail=f"无法读取 {path.name} 的国家/月字段，不能执行 publish 校验。",
         ) from exc
-    frame.columns = [str(column).strip() for column in frame.columns]
-    country_col = _find_country_column(list(frame.columns))
-    if country_col is None:
-        raise HTTPException(
-            status_code=409,
-            detail=f"无法从 {path.name} 识别国家列，不能执行 publish 校验。",
-        )
-    month_columns = _detect_month_columns(list(frame.columns))
-    if not month_columns:
-        raise HTTPException(
-            status_code=409,
-            detail=f"无法从 {path.name} 识别月份列，不能执行 publish 校验。",
-        )
-
-    normalized_countries = (
-        frame[country_col].astype("string").fillna("").str.strip()
-    )
-    country_display = _logical_country_display_map(
-        normalized_countries,
-        path_label=path.name,
-    )
-    country_keys = normalized_countries.str.casefold()
-    info: dict[str, str | None] = {}
-    grouped = frame.groupby(country_keys, dropna=False, sort=False)
-    for country_key, group_df in grouped:
-        country = country_display.get(str(country_key))
-        if not country:
-            continue
-        present_months = [
-            column
-            for column in month_columns
-            if column in group_df.columns and _series_has_data(group_df[column])
-        ]
-        info[country] = present_months[-1] if present_months else None
-    return info
 
 
 def _candidate_fingerprint_id(artifacts: dict[str, Any]) -> str:
@@ -1914,6 +1972,520 @@ def _single_country_analysis_dimension_samples(
     return samples, [label for label, _left, _right in shared], len(all_keys)
 
 
+def _historical_value_display_map(*series_values: pd.Series) -> dict[str, str]:
+    """Keep report labels readable while grouping case/whitespace variants."""
+    display: dict[str, str] = {}
+    for series in series_values:
+        normalized = _normalized_static_value_series(series)
+        raw_values = series.astype("string").fillna("").str.strip()
+        for normalized_value, raw_value in zip(
+            normalized,
+            raw_values,
+            strict=False,
+        ):
+            key = str(normalized_value)
+            if key in display:
+                continue
+            rendered = str(raw_value).strip()
+            display[key] = rendered if rendered else "?"
+    return display
+
+
+def _build_historical_reclassification_country_report(
+    *,
+    country: str,
+    active_frame: pd.DataFrame,
+    candidate_frame: pd.DataFrame,
+    active_sales: pd.DataFrame,
+    candidate_sales: pd.DataFrame,
+    historical_months: list[str],
+    country_mismatch_count: int,
+    analysis_dimension_samples: list[dict[str, Any]],
+    confirmed_make_model_reclassifications: list[dict[str, Any]],
+    unconfirmed_make_model_candidates: list[dict[str, Any]],
+    unpaired_make_models: list[dict[str, str]],
+) -> dict[str, Any] | None:
+    """Build a bounded, human-readable projection of historical relabelling.
+
+    The input frames already contain only one country.  Each dimension is
+    aggregated and discarded before the next one, so report generation never
+    materialises the full archive or a cartesian row-level diff.
+    """
+    shared = _shared_historical_dimension_columns(
+        active_frame,
+        candidate_frame,
+    )
+    dimension_summaries: list[dict[str, Any]] = []
+    exact_changes: list[dict[str, Any]] = []
+    exact_change_count = 0
+    complex_change_count = len(unpaired_make_models)
+    payload_truncated = False
+
+    def retain_top_exact_change(change: dict[str, Any]) -> None:
+        nonlocal payload_truncated
+        exact_changes.append(change)
+        exact_changes.sort(
+            key=lambda item: (
+                -float(item.get("transferredSales") or 0),
+                str(item.get("dimension") or ""),
+                str(item.get("make") or ""),
+                str(item.get("model") or ""),
+                str(item.get("oldValue") or ""),
+            )
+        )
+        if (
+            len(exact_changes)
+            > HISTORICAL_RECLASSIFICATION_EXACT_CHANGE_LIMIT
+        ):
+            exact_changes.pop()
+            payload_truncated = True
+
+    make_available = (
+        "Make" in active_frame.columns
+        and "Make" in candidate_frame.columns
+    )
+    model_available = (
+        "Model" in active_frame.columns
+        and "Model" in candidate_frame.columns
+    )
+    make_display = (
+        _historical_value_display_map(
+            active_frame["Make"],
+            candidate_frame["Make"],
+        )
+        if make_available
+        else {}
+    )
+    model_display = (
+        _historical_value_display_map(
+            active_frame["Model"],
+            candidate_frame["Model"],
+        )
+        if model_available
+        else {}
+    )
+
+    for label, active_column, candidate_column in shared:
+        active_dimension = _normalized_static_value_series(
+            active_frame[active_column]
+        )
+        candidate_dimension = _normalized_static_value_series(
+            candidate_frame[candidate_column]
+        )
+        value_display = _historical_value_display_map(
+            active_frame[active_column],
+            candidate_frame[candidate_column],
+        )
+        active_make = (
+            _normalized_static_value_series(active_frame["Make"])
+            if make_available
+            else pd.Series("", index=active_frame.index, dtype="string")
+        )
+        candidate_make = (
+            _normalized_static_value_series(candidate_frame["Make"])
+            if make_available
+            else pd.Series("", index=candidate_frame.index, dtype="string")
+        )
+        active_model = (
+            _normalized_static_value_series(active_frame["Model"])
+            if model_available
+            else pd.Series("", index=active_frame.index, dtype="string")
+        )
+        candidate_model = (
+            _normalized_static_value_series(candidate_frame["Model"])
+            if model_available
+            else pd.Series("", index=candidate_frame.index, dtype="string")
+        )
+
+        active_dimension_grouped = active_sales.groupby(
+            active_dimension.rename(label),
+            dropna=False,
+        ).sum()
+        candidate_dimension_grouped = candidate_sales.groupby(
+            candidate_dimension.rename(label),
+            dropna=False,
+        ).sum()
+        dimension_keys = active_dimension_grouped.index.union(
+            candidate_dimension_grouped.index
+        )
+        dimension_delta = candidate_dimension_grouped.reindex(
+            dimension_keys,
+            fill_value=0,
+        ) - active_dimension_grouped.reindex(
+            dimension_keys,
+            fill_value=0,
+        )
+        dimension_changed = dimension_delta.loc[
+            dimension_delta.ne(0).any(axis=1)
+        ]
+
+        old_aggregates: dict[str, dict[str, Any]] = {}
+        new_aggregates: dict[str, dict[str, Any]] = {}
+        for raw_value, delta in dimension_changed.iterrows():
+            value_key = str(raw_value)
+            values = delta.reindex(
+                historical_months,
+                fill_value=0,
+            ).astype(float)
+            negative = values.where(values.lt(0), 0)
+            positive = values.where(values.gt(0), 0)
+            if bool(negative.lt(0).any()):
+                old_aggregates[value_key] = {
+                    "sales": float(-negative.sum()),
+                    "months": {
+                        month
+                        for month in historical_months
+                        if float(negative.get(month, 0) or 0) < 0
+                    },
+                }
+            if bool(positive.gt(0).any()):
+                new_aggregates[value_key] = {
+                    "sales": float(positive.sum()),
+                    "months": {
+                        month
+                        for month in historical_months
+                        if float(positive.get(month, 0) or 0) > 0
+                    },
+                }
+
+        def top_values(
+            values: dict[str, dict[str, Any]],
+        ) -> list[dict[str, Any]]:
+            nonlocal payload_truncated
+            ordered = sorted(
+                values.items(),
+                key=lambda item: (-float(item[1]["sales"]), item[0]),
+            )
+            if len(ordered) > HISTORICAL_RECLASSIFICATION_VALUE_LIMIT:
+                payload_truncated = True
+            return [
+                {
+                    "value": value_display.get(value, value or "?"),
+                    "sales": _serialize_numeric_value(metrics["sales"]),
+                    "monthCount": len(metrics["months"]),
+                }
+                for value, metrics in ordered[
+                    :HISTORICAL_RECLASSIFICATION_VALUE_LIMIT
+                ]
+            ]
+
+        if not dimension_changed.empty:
+            negative_delta = dimension_changed.where(
+                dimension_changed.lt(0),
+                0,
+            )
+            positive_delta = dimension_changed.where(
+                dimension_changed.gt(0),
+                0,
+            )
+            moved_sales = float(positive_delta.sum().sum())
+            if moved_sales == 0:
+                moved_sales = float(-negative_delta.sum().sum())
+            dimension_summaries.append(
+                {
+                    "dimension": label,
+                    "mismatchCellCount": int(
+                        dimension_changed.ne(0).sum().sum()
+                    ),
+                    "movedSales": _serialize_numeric_value(
+                        moved_sales
+                    ),
+                    "oldValues": top_values(old_aggregates),
+                    "newValues": top_values(new_aggregates),
+                }
+            )
+
+        def grouped_for_exact_changes(
+            make: pd.Series,
+            model: pd.Series,
+            dimension: pd.Series,
+            sales: pd.DataFrame,
+        ) -> pd.DataFrame:
+            return sales.groupby(
+                [
+                    make.rename("Make"),
+                    model.rename("Model"),
+                    dimension.rename(label),
+                ],
+                dropna=False,
+            ).sum()
+
+        active_grouped = grouped_for_exact_changes(
+            active_make,
+            active_model,
+            active_dimension,
+            active_sales,
+        )
+        candidate_grouped = grouped_for_exact_changes(
+            candidate_make,
+            candidate_model,
+            candidate_dimension,
+            candidate_sales,
+        )
+        all_keys = active_grouped.index.union(candidate_grouped.index)
+        active_aligned = active_grouped.reindex(all_keys, fill_value=0)
+        candidate_aligned = candidate_grouped.reindex(
+            all_keys,
+            fill_value=0,
+        )
+        delta_frame = candidate_aligned - active_aligned
+        changed = delta_frame.loc[delta_frame.ne(0).any(axis=1)]
+
+        sources: dict[
+            tuple[str, str, tuple[float, ...]],
+            list[tuple[str, pd.Series]],
+        ] = {}
+        targets: dict[
+            tuple[str, str, tuple[float, ...]],
+            list[tuple[str, pd.Series]],
+        ] = {}
+        for raw_key, delta in changed.iterrows():
+            make_key, model_key, value_key = (
+                str(value)
+                for value in (
+                    raw_key
+                    if isinstance(raw_key, tuple)
+                    else ("", "", raw_key)
+                )
+            )
+            values = delta.reindex(
+                historical_months,
+                fill_value=0,
+            ).astype(float)
+            if bool(values.le(0).all()) and bool(values.lt(0).any()):
+                signature = tuple(float(-value) for value in values)
+                sources.setdefault(
+                    (make_key, model_key, signature),
+                    [],
+                ).append((value_key, -values))
+            elif bool(values.ge(0).all()) and bool(values.gt(0).any()):
+                signature = tuple(float(value) for value in values)
+                targets.setdefault(
+                    (make_key, model_key, signature),
+                    [],
+                ).append((value_key, values))
+
+        dimension_exact_count = 0
+        for signature_key, source_values in sources.items():
+            target_values = targets.get(signature_key, [])
+            if len(source_values) != 1 or len(target_values) != 1:
+                continue
+            make_key, model_key, _signature = signature_key
+            old_value, transfer = source_values[0]
+            new_value, _target_transfer = target_values[0]
+            if old_value == new_value:
+                continue
+            monthly_transfers = [
+                {
+                    "month": month,
+                    "sales": _serialize_numeric_value(
+                        transfer.get(month, 0)
+                    ),
+                }
+                for month in historical_months
+                if float(transfer.get(month, 0) or 0) != 0
+            ]
+            exact_change_count += 1
+            dimension_exact_count += 1
+            retain_top_exact_change(
+                {
+                    "dimension": label,
+                    "make": make_display.get(
+                        make_key,
+                        make_key or "?",
+                    ),
+                    "model": model_display.get(
+                        model_key,
+                        model_key or "?",
+                    ),
+                    "oldValue": value_display.get(
+                        old_value,
+                        old_value or "?",
+                    ),
+                    "newValue": value_display.get(
+                        new_value,
+                        new_value or "?",
+                    ),
+                    "transferredSales": _serialize_numeric_value(
+                        transfer.sum()
+                    ),
+                    "affectedMonths": [
+                        item["month"]
+                        for item in monthly_transfers
+                    ],
+                    "monthlyTransfers": monthly_transfers,
+                    "confidence": "candidate_exact_vector",
+                }
+            )
+        complex_change_count += max(
+            0,
+            int(len(changed)) - (dimension_exact_count * 2),
+        )
+        del active_dimension_grouped
+        del candidate_dimension_grouped
+        del dimension_delta
+        del dimension_changed
+        del active_grouped
+        del candidate_grouped
+        del active_aligned
+        del candidate_aligned
+        del delta_frame
+        del changed
+
+    for candidate in unconfirmed_make_model_candidates:
+        source = candidate.get("source")
+        target = candidate.get("target")
+        monthly_transfers = candidate.get("monthlyTransfers")
+        if not (
+            isinstance(source, dict)
+            and isinstance(target, dict)
+            and isinstance(monthly_transfers, list)
+        ):
+            continue
+        exact_change_count += 1
+        retain_top_exact_change(
+            {
+                "dimension": "Make/Model",
+                "make": str(source.get("Make") or "?"),
+                "model": str(source.get("Model") or "?"),
+                "oldValue": "/".join(
+                    [
+                        str(source.get("Make") or "?"),
+                        str(source.get("Model") or "?"),
+                    ]
+                ),
+                "newValue": "/".join(
+                    [
+                        str(target.get("Make") or "?"),
+                        str(target.get("Model") or "?"),
+                    ]
+                ),
+                "transferredSales": candidate.get(
+                    "transferredSales"
+                ),
+                "affectedMonths": [
+                    str(month)
+                    for month in candidate.get(
+                        "transferredMonths",
+                        [],
+                    )
+                ],
+                "monthlyTransfers": [
+                    {
+                        "month": str(item.get("month") or ""),
+                        "sales": item.get("sales"),
+                    }
+                    for item in monthly_transfers
+                    if isinstance(item, dict)
+                ],
+                "confidence": "candidate_exact_vector",
+            }
+        )
+
+    for confirmed_change in confirmed_make_model_reclassifications:
+        source = confirmed_change.get("source")
+        target = confirmed_change.get("target")
+        monthly_transfers = confirmed_change.get("monthlyTransfers")
+        if not (
+            isinstance(source, dict)
+            and isinstance(target, dict)
+            and isinstance(monthly_transfers, list)
+        ):
+            continue
+        exact_change_count += 1
+        retain_top_exact_change(
+            {
+                "dimension": "Make/Model",
+                "make": str(source.get("Make") or "?"),
+                "model": str(source.get("Model") or "?"),
+                "oldValue": "/".join(
+                    [
+                        str(source.get("Make") or "?"),
+                        str(source.get("Model") or "?"),
+                    ]
+                ),
+                "newValue": "/".join(
+                    [
+                        str(target.get("Make") or "?"),
+                        str(target.get("Model") or "?"),
+                    ]
+                ),
+                "transferredSales": confirmed_change.get(
+                    "transferredSales"
+                ),
+                "affectedMonths": [
+                    str(month)
+                    for month in confirmed_change.get(
+                        "transferredMonths",
+                        [],
+                    )
+                ],
+                "monthlyTransfers": [
+                    {
+                        "month": str(item.get("month") or ""),
+                        "sales": item.get("sales"),
+                    }
+                    for item in monthly_transfers
+                    if isinstance(item, dict)
+                ],
+                "confidence": "confirmed_upload_bound",
+            }
+        )
+
+    joint_mismatch_cell_count = len(analysis_dimension_samples)
+    joint_moved_sales = sum(
+        float(item.get("deltaSales") or 0)
+        for item in analysis_dimension_samples
+        if float(item.get("deltaSales") or 0) > 0
+    )
+    monthly_totals_stable = country_mismatch_count == 0
+    decision_required = bool(
+        monthly_totals_stable
+        and (
+            joint_mismatch_cell_count
+            or confirmed_make_model_reclassifications
+            or unconfirmed_make_model_candidates
+            or unpaired_make_models
+        )
+    )
+    if not (
+        joint_mismatch_cell_count
+        or confirmed_make_model_reclassifications
+        or unconfirmed_make_model_candidates
+        or unpaired_make_models
+        or country_mismatch_count
+    ):
+        return None
+    return {
+        "country": country,
+        "comparedThrough": (
+            historical_months[-1]
+            if historical_months
+            else None
+        ),
+        "historicalMonthCount": len(historical_months),
+        "jointMismatchCellCount": joint_mismatch_cell_count,
+        "jointMovedSales": _serialize_numeric_value(
+            joint_moved_sales
+        ),
+        "monthlyTotalsStable": monthly_totals_stable,
+        "decisionRequired": decision_required,
+        "dimensionSummaries": dimension_summaries,
+        "exactChanges": exact_changes,
+        "exactChangeCount": exact_change_count,
+        "complexChangeCount": complex_change_count,
+        "truncation": {
+            "truncated": payload_truncated,
+            "exactChangeLimit": (
+                HISTORICAL_RECLASSIFICATION_EXACT_CHANGE_LIMIT
+            ),
+            "valueLimitPerDirection": (
+                HISTORICAL_RECLASSIFICATION_VALUE_LIMIT
+            ),
+        },
+    }
+
+
 def _sc011_transfer_payload(
     *,
     source: tuple[str, str],
@@ -2171,6 +2743,21 @@ def _single_country_historical_sales_stability(
             historical_months=historical_months,
         )
     )
+    historical_reclassification = (
+        _build_historical_reclassification_country_report(
+            country=country,
+            active_frame=active_frame,
+            candidate_frame=candidate_frame,
+            active_sales=active_sales,
+            candidate_sales=candidate_sales,
+            historical_months=historical_months,
+            country_mismatch_count=len(country_samples),
+            analysis_dimension_samples=analysis_dimension_samples,
+            confirmed_make_model_reclassifications=confirmed,
+            unconfirmed_make_model_candidates=unconfirmed_candidates,
+            unpaired_make_models=unpaired_make_models,
+        )
+    )
 
     effective_dimension_samples = (
         make_model_samples if compared_make_model_count else make_samples
@@ -2238,6 +2825,7 @@ def _single_country_historical_sales_stability(
         "confirmedReclassifications": confirmed,
         "unconfirmedReclassificationCandidates": unconfirmed_candidates,
         "unpairedMakeModels": unpaired_make_models,
+        "historicalReclassification": historical_reclassification,
         "mismatchSamples": [
             *samples,
             *analysis_dimension_samples,
@@ -2916,6 +3504,7 @@ def _load_country_configuration_history_frame(
                     country_column,
                     make_column,
                     model_column,
+                    *dimension_columns,
                     *month_columns,
                 ]
             )
@@ -2953,6 +3542,7 @@ def _find_publish_historical_configuration_changes(
     active_parquet_path: Path,
     candidate_parquet_path: Path,
     source_upload_sha256: str | None = None,
+    approved_reclassification_decisions: dict[str, str] | None = None,
 ) -> list[dict[str, Any]]:
     """Block unapproved Make/Model redistribution inside published months.
 
@@ -2966,6 +3556,12 @@ def _find_publish_historical_configuration_changes(
     candidate_country_by_key = {
         country.casefold(): country
         for country in candidate_latest
+    }
+    approved_decisions = {
+        str(country).strip().casefold(): str(decision).strip().lower()
+        for country, decision in (
+            approved_reclassification_decisions or {}
+        ).items()
     }
     changes: list[dict[str, Any]] = []
     for country, active_latest_month in active_latest.items():
@@ -2989,7 +3585,19 @@ def _find_publish_historical_configuration_changes(
             active_latest_month=active_latest_month,
             source_upload_sha256=source_upload_sha256,
         )
-        if stability.get("status") in {"pass", "confirmed"}:
+        if stability.get("status") == "pass":
+            continue
+        if (
+            approved_decisions.get(country.casefold()) == "use_latest"
+            and int(stability.get("countryMismatchCount") or 0) == 0
+            and stability.get("reason")
+            in {
+                "unconfirmed_make_model_reclassification",
+                "historical_analysis_dimension_reclassification",
+                "make_dimension_reclassification",
+                "confirmed_make_model_reclassification",
+            }
+        ):
             continue
         changes.append(
             {
@@ -3128,6 +3736,95 @@ def _build_country_monthly_sales_summary(
             )
         summaries.append({"country": country, "rows": rows})
     return summaries
+
+
+def _build_historical_reclassification_report_from_paths(
+    *,
+    payload: dict[str, Any],
+    countries: list[str],
+    active_path: Path | None,
+    candidate_path: Path | None,
+) -> dict[str, Any]:
+    if (
+        active_path is None
+        or candidate_path is None
+        or active_path.suffix.casefold() != ".parquet"
+        or candidate_path.suffix.casefold() != ".parquet"
+        or not active_path.exists()
+        or not candidate_path.exists()
+    ):
+        return _build_historical_reclassification_report(
+            payload=payload,
+            current_countries=[],
+        )
+    active_latest = _collect_dataset_country_latest_months(active_path)
+    active_by_key = {
+        country.casefold(): (country, latest_month)
+        for country, latest_month in active_latest.items()
+    }
+    candidate_latest = _collect_dataset_country_latest_months(
+        candidate_path
+    )
+    candidate_by_key = {
+        country.casefold(): country
+        for country in candidate_latest
+    }
+    upload = (
+        payload.get("upload")
+        if isinstance(payload.get("upload"), dict)
+        else {}
+    )
+    source_upload_sha256 = str(upload.get("sha256") or "").strip().lower()
+    if not re.fullmatch(r"[0-9a-f]{64}", source_upload_sha256):
+        source_upload_sha256 = None
+    reports: list[dict[str, Any]] = []
+    unavailable_countries: list[dict[str, Any]] = []
+    for requested_country in countries:
+        country_key = requested_country.strip().casefold()
+        active_entry = active_by_key.get(country_key)
+        candidate_country = candidate_by_key.get(country_key)
+        if active_entry is None or candidate_country is None:
+            continue
+        active_country, active_latest_month = active_entry
+        try:
+            active_frame = _load_country_configuration_history_frame(
+                active_path,
+                country=active_country,
+                path_label=f"Review active（{active_country}）",
+            )
+            candidate_frame = _load_country_configuration_history_frame(
+                candidate_path,
+                country=candidate_country,
+                path_label=f"Review candidate（{candidate_country}）",
+            )
+        except HTTPException as exc:
+            unavailable_countries.append(
+                {
+                    "country": active_country,
+                    "detail": exc.detail,
+                }
+            )
+            continue
+        stability = _single_country_historical_sales_stability(
+            country=active_country,
+            active_frame=active_frame,
+            candidate_frame=candidate_frame,
+            active_latest_month=active_latest_month,
+            source_upload_sha256=source_upload_sha256,
+        )
+        country_report = stability.get("historicalReclassification")
+        if isinstance(country_report, dict):
+            reports.append(country_report)
+        del active_frame
+        del candidate_frame
+    report = _build_historical_reclassification_report(
+        payload=payload,
+        current_countries=reports,
+    )
+    report["unavailableCountries"] = unavailable_countries[:10]
+    if len(unavailable_countries) > 10:
+        report["truncation"]["truncated"] = True
+    return report
 
 
 def _find_publish_country_regressions(
@@ -5009,6 +5706,261 @@ def _require_no_running_monthly_update_jobs(*, excluding_job_id: str | None = No
         )
 
 
+def _historical_reclassification_report_fingerprint(
+    countries: list[dict[str, Any]],
+) -> str:
+    return hashlib.sha256(
+        json.dumps(
+            countries,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
+    ).hexdigest()
+
+
+def _historical_reclassification_resolution(
+    payload: dict[str, Any],
+) -> dict[str, Any] | None:
+    value = payload.get("historicalReclassificationResolution")
+    return value if isinstance(value, dict) else None
+
+
+def _historical_reclassification_decision_map(
+    resolution: dict[str, Any] | None,
+) -> dict[str, str]:
+    if not isinstance(resolution, dict):
+        return {}
+    raw_decisions = resolution.get("decisions")
+    if not isinstance(raw_decisions, list):
+        return {}
+    decisions: dict[str, str] = {}
+    for item in raw_decisions:
+        if not isinstance(item, dict):
+            continue
+        country = str(item.get("country") or "").strip()
+        decision = str(item.get("decision") or "").strip().lower()
+        if (
+            country
+            and decision in HISTORICAL_RECLASSIFICATION_DECISIONS
+        ):
+            decisions[country.casefold()] = decision
+    return decisions
+
+
+def _validated_historical_reclassification_resolution(
+    resolution: dict[str, Any],
+) -> dict[str, str]:
+    report = resolution.get("report")
+    raw_countries = (
+        report.get("countries")
+        if isinstance(report, dict)
+        else None
+    )
+    if (
+        not isinstance(report, dict)
+        or not isinstance(raw_countries, list)
+        or any(not isinstance(item, dict) for item in raw_countries)
+    ):
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "blockerType": (
+                    "historical_reclassification_resolution_invalid"
+                ),
+                "message": "历史重分类 resolution 缺少原始结构化报告。",
+            },
+        )
+    countries = [dict(item) for item in raw_countries]
+    computed_fingerprint = (
+        _historical_reclassification_report_fingerprint(countries)
+    )
+    declared_fingerprint = str(
+        resolution.get("reportFingerprint") or ""
+    )
+    nested_fingerprint = str(report.get("reportFingerprint") or "")
+    if (
+        not re.fullmatch(r"[0-9a-f]{64}", declared_fingerprint)
+        or nested_fingerprint != declared_fingerprint
+        or computed_fingerprint != declared_fingerprint
+    ):
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "blockerType": (
+                    "historical_reclassification_resolution_invalid"
+                ),
+                "message": (
+                    "历史重分类报告内容与声明指纹不一致，"
+                    "拒绝应用可能被篡改或过期的决策。"
+                ),
+                "declaredReportFingerprint": (
+                    declared_fingerprint or None
+                ),
+                "computedReportFingerprint": computed_fingerprint,
+            },
+        )
+
+    required_by_key: dict[str, str] = {}
+    for item in countries:
+        if not bool(item.get("decisionRequired")):
+            continue
+        country = str(item.get("country") or "").strip()
+        country_key = country.casefold()
+        if not country or country_key in required_by_key:
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "blockerType": (
+                        "historical_reclassification_resolution_invalid"
+                    ),
+                    "message": (
+                        "原始历史重分类报告包含空国家或重复逻辑国家。"
+                    ),
+                },
+            )
+        required_by_key[country_key] = country
+
+    raw_decisions = resolution.get("decisions")
+    if not isinstance(raw_decisions, list):
+        raw_decisions = []
+    decisions: dict[str, str] = {}
+    for item in raw_decisions:
+        if not isinstance(item, dict):
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "blockerType": (
+                        "historical_reclassification_resolution_invalid"
+                    ),
+                    "message": "历史重分类 decisions 格式无效。",
+                },
+            )
+        country = str(item.get("country") or "").strip()
+        country_key = country.casefold()
+        decision = str(item.get("decision") or "").strip().lower()
+        if (
+            not country
+            or country_key in decisions
+            or decision not in HISTORICAL_RECLASSIFICATION_DECISIONS
+        ):
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "blockerType": (
+                        "historical_reclassification_resolution_invalid"
+                    ),
+                    "message": (
+                        "历史重分类 decisions 包含空国家、重复国家"
+                        "或无效 decision。"
+                    ),
+                },
+            )
+        decisions[country_key] = decision
+    missing_keys = set(required_by_key) - set(decisions)
+    extra_keys = set(decisions) - set(required_by_key)
+    if missing_keys or extra_keys:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "blockerType": (
+                    "historical_reclassification_resolution_invalid"
+                ),
+                "message": (
+                    "历史重分类 decisions 未精确覆盖原报告所有受影响国家。"
+                ),
+                "missingCountries": [
+                    required_by_key[key]
+                    for key in sorted(missing_keys)
+                ],
+                "extraCountries": sorted(extra_keys),
+            },
+        )
+    return decisions
+
+
+def _build_historical_reclassification_report(
+    *,
+    payload: dict[str, Any],
+    current_countries: list[dict[str, Any]],
+) -> dict[str, Any]:
+    resolution = _historical_reclassification_resolution(payload)
+    resolved_report = (
+        resolution.get("report")
+        if isinstance(resolution, dict)
+        and isinstance(resolution.get("report"), dict)
+        else None
+    )
+    if isinstance(resolved_report, dict):
+        decisions = _validated_historical_reclassification_resolution(
+            resolution
+        )
+        stored_countries = resolved_report.get("countries")
+        countries = [
+            dict(item)
+            for item in (
+                stored_countries
+                if isinstance(stored_countries, list)
+                else []
+            )
+            if isinstance(item, dict)
+        ]
+    else:
+        decisions = {}
+        countries = [
+            dict(item)
+            for item in current_countries
+            if isinstance(item, dict)
+        ]
+    resolution_is_resolved = bool(
+        isinstance(resolution, dict)
+        and resolution.get("status") == "resolved"
+    )
+    if resolution_is_resolved and decisions:
+        for item in countries:
+            country_key = str(item.get("country") or "").strip().casefold()
+            if country_key in decisions:
+                item["decision"] = decisions[country_key]
+    if resolution_is_resolved and countries:
+        status = "resolved"
+    elif any(bool(item.get("decisionRequired")) for item in countries):
+        status = "decision_required"
+    else:
+        status = "not_required"
+    report_fingerprint = (
+        str(resolution.get("reportFingerprint") or "")
+        if isinstance(resolution, dict)
+        else _historical_reclassification_report_fingerprint(countries)
+    )
+    return {
+        "status": status,
+        "countries": countries,
+        "reportFingerprint": report_fingerprint,
+        "truncation": {
+            "truncated": any(
+                bool(
+                    (
+                        item.get("truncation")
+                        if isinstance(item.get("truncation"), dict)
+                        else {}
+                    ).get("truncated")
+                )
+                for item in countries
+            ),
+            "countryCount": len(countries),
+        },
+    }
+
+
+def _resolved_historical_reclassification_decision(
+    payload: dict[str, Any],
+    country: str,
+) -> str | None:
+    return _historical_reclassification_decision_map(
+        _historical_reclassification_resolution(payload)
+    ).get(country.strip().casefold())
+
+
 def _build_single_country_review(payload: dict[str, Any]) -> dict[str, Any]:
     country = str(payload.get("country") or "").strip()
     artifacts = payload.get("artifacts")
@@ -5057,6 +6009,25 @@ def _build_single_country_review(payload: dict[str, Any]) -> dict[str, Any]:
         candidate_frame=candidate_frame,
         active_latest_month=active_latest,
         source_upload_sha256=source_upload_sha256,
+    )
+    current_reclassification = historical_stability.get(
+        "historicalReclassification"
+    )
+    historical_reclassification_report = (
+        _build_historical_reclassification_report(
+            payload=payload,
+            current_countries=(
+                [current_reclassification]
+                if isinstance(current_reclassification, dict)
+                else []
+            ),
+        )
+    )
+    resolved_reclassification_decision = (
+        _resolved_historical_reclassification_decision(
+            payload,
+            country,
+        )
     )
     active_sales = _collect_country_monthly_sales(active_frame, countries=[country], path_label="active").get(country, {})
     candidate_sales = _collect_country_monthly_sales(candidate_frame, countries=[country], path_label="candidate").get(country, {})
@@ -5144,7 +6115,38 @@ def _build_single_country_review(payload: dict[str, Any]) -> dict[str, Any]:
     if len(doubled_months) >= SALES_DOUBLING_MIN_MONTH_COUNT:
         add_finding("blocker", "SC006", "目标国家 candidate 疑似销量翻倍。", {"months": doubled_months})
     if historical_stability.get("status") == "fail":
-        add_finding("blocker", "SC011", "目标国家 candidate 改写了 active 已有历史销量。", historical_stability)
+        decision_required = bool(
+            isinstance(current_reclassification, dict)
+            and current_reclassification.get("decisionRequired")
+        )
+        monthly_totals_stable = bool(
+            isinstance(current_reclassification, dict)
+            and current_reclassification.get("monthlyTotalsStable")
+        )
+        if (
+            monthly_totals_stable
+            and resolved_reclassification_decision == "use_latest"
+        ):
+            add_finding(
+                "review",
+                "SC011",
+                "已选择以最新 washed 分类替换该国家历史分析维度。",
+                historical_stability,
+            )
+        elif decision_required:
+            add_finding(
+                "review",
+                "SC011",
+                "目标国家历史销量总量稳定，但分析维度被重新分类；必须先选择采用最新分类或维持 active 历史分类。",
+                historical_stability,
+            )
+        else:
+            add_finding(
+                "blocker",
+                "SC011",
+                "目标国家 candidate 改写了 active 已有历史销量。",
+                historical_stability,
+            )
     elif historical_stability.get("status") == "confirmed":
         add_finding(
             "review",
@@ -5225,6 +6227,9 @@ def _build_single_country_review(payload: dict[str, Any]) -> dict[str, Any]:
         "countryScopeSummary": {"targetCountry": country, "untouchedPartitionCheck": partition_check},
         "refreshSummary": _summarize_refresh_report(_read_json_if_exists(str(artifacts.get("refreshReportPath") or "")) or {}),
         "candidateFingerprint": _candidate_fingerprint_id(artifacts),
+        "historicalReclassificationReport": (
+            historical_reclassification_report
+        ),
         "approval": payload.get("reviewApproval"),
     }
 
@@ -5276,6 +6281,30 @@ def _build_partial_country_review(payload: dict[str, Any]) -> dict[str, Any]:
     )
     if not isinstance(partition_check, dict):
         partition_check = {"status": "unavailable"}
+    current_reclassification_countries: list[dict[str, Any]] = []
+    seen_reclassification_countries: set[str] = set()
+    for review in country_reviews:
+        report = review.get("historicalReclassificationReport")
+        raw_countries = (
+            report.get("countries")
+            if isinstance(report, dict)
+            and isinstance(report.get("countries"), list)
+            else []
+        )
+        for item in raw_countries:
+            if not isinstance(item, dict):
+                continue
+            country_key = str(item.get("country") or "").strip().casefold()
+            if not country_key or country_key in seen_reclassification_countries:
+                continue
+            seen_reclassification_countries.add(country_key)
+            current_reclassification_countries.append(item)
+    historical_reclassification_report = (
+        _build_historical_reclassification_report(
+            payload=payload,
+            current_countries=current_reclassification_countries,
+        )
+    )
     return {
         "jobId": str(payload.get("jobId") or ""),
         "reviewDir": None,
@@ -5325,11 +6354,18 @@ def _build_partial_country_review(payload: dict[str, Any]) -> dict[str, Any]:
         },
         "refreshSummary": country_reviews[0]["refreshSummary"],
         "candidateFingerprint": country_reviews[0]["candidateFingerprint"],
+        "historicalReclassificationReport": (
+            historical_reclassification_report
+        ),
         "approval": payload.get("reviewApproval"),
     }
 
 
-def get_jato_monthly_update_review(job_id: str) -> dict[str, Any]:
+def get_jato_monthly_update_review(
+    job_id: str,
+    *,
+    allow_build: bool = False,
+) -> dict[str, Any]:
     payload = _load_job_state(job_id)
     artifacts = payload.get("artifacts")
     if not isinstance(artifacts, dict):
@@ -5358,6 +6394,17 @@ def get_jato_monthly_update_review(job_id: str) -> dict[str, Any]:
             )
         review_bundle["approval"] = payload.get("reviewApproval")
         return review_bundle
+    if not allow_build:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "blockerType": "review_bundle_not_ready",
+                "message": (
+                    "Review bundle 尚未由隔离 worker 生成完成；"
+                    "请稍后刷新，Web 请求不会同步读取大型 candidate。"
+                ),
+            },
+        )
 
     raw_compare_report_path = str(artifacts.get("rawCompareReportPath") or "").strip()
     review_dir = str(artifacts.get("reviewDir") or "").strip()
@@ -5439,16 +6486,18 @@ def get_jato_monthly_update_review(job_id: str) -> dict[str, Any]:
     country_monthly_sales_summary: list[dict[str, Any]] = []
     country_sales_reference_label = "-"
     country_monthly_sales_error: str | None = None
+    reference_path: Path | None = None
     candidate_path = _project_path(str(artifacts.get("stagingOutputPath") or "").strip())
+    if candidate_path is not None:
+        reference_path, country_sales_reference_label = (
+            _resolve_review_reference_dataset(artifacts)
+        )
     if review_countries:
         if candidate_path is None:
             country_monthly_sales_error = (
                 "缺少 candidate parquet 产物，无法生成逐月销量核对表。"
             )
         else:
-            reference_path, country_sales_reference_label = (
-                _resolve_review_reference_dataset(artifacts)
-            )
             try:
                 country_monthly_sales_summary = _build_country_monthly_sales_summary(
                     countries=review_countries,
@@ -5457,6 +6506,102 @@ def get_jato_monthly_update_review(job_id: str) -> dict[str, Any]:
                 )
             except HTTPException as exc:
                 country_monthly_sales_error = str(exc.detail)
+    historical_report_countries = review_countries
+    if (
+        candidate_path is not None
+        and str(artifacts.get("candidateScope") or "")
+        not in {
+            "target_country_partition_only",
+            "target_country_partitions_only",
+        }
+    ):
+        historical_report_countries = list(
+            _collect_dataset_country_latest_months(candidate_path)
+        )
+    historical_reclassification_report = (
+        _build_historical_reclassification_report_from_paths(
+            payload=payload,
+            countries=historical_report_countries,
+            active_path=reference_path,
+            candidate_path=candidate_path,
+        )
+    )
+    existing_sc011_targets = {
+        str(item.get("target") or "").strip().casefold()
+        for item in findings
+        if isinstance(item, dict)
+        and item.get("ruleId") == "SC011"
+    }
+    for country_report in historical_reclassification_report["countries"]:
+        country = str(country_report.get("country") or "").strip()
+        if not country or country.casefold() in existing_sc011_targets:
+            continue
+        monthly_totals_stable = bool(
+            country_report.get("monthlyTotalsStable")
+        )
+        decision_required = bool(
+            country_report.get("decisionRequired")
+        )
+        if decision_required:
+            findings.append(
+                {
+                    "severity": "review",
+                    "scope": "country",
+                    "target": country,
+                    "ruleId": "SC011",
+                    "message": (
+                        "历史月总量稳定，但分析维度发生重分类；"
+                        "必须逐国选择 use_latest 或 keep_active。"
+                    ),
+                    "metrics": country_report,
+                    "suggestedAction": "manual_review_required",
+                    "sourceFeedback": (
+                        "请核对报告中的旧值→新值、月份和转移销量。"
+                    ),
+                }
+            )
+        elif not monthly_totals_stable:
+            findings.append(
+                {
+                    "severity": "blocker",
+                    "scope": "country",
+                    "target": country,
+                    "ruleId": "SC011",
+                    "message": "历史国家/月销量总量变化，不能通过分类选择放行。",
+                    "metrics": country_report,
+                    "suggestedAction": "reject_input_batch",
+                    "sourceFeedback": (
+                        "请恢复 active 已有月份的国家总销量。"
+                    ),
+                }
+            )
+    for unavailable in historical_reclassification_report.get(
+        "unavailableCountries",
+        [],
+    ):
+        if not isinstance(unavailable, dict):
+            continue
+        country = str(unavailable.get("country") or "").strip()
+        findings.append(
+            {
+                "severity": "blocker",
+                "scope": "country",
+                "target": country,
+                "ruleId": "SC011",
+                "message": (
+                    "缺少 Make/Model、分析维度或月份列，"
+                    "无法生成历史重分类报告。"
+                ),
+                "metrics": {
+                    "reason": "historical_configuration_guard_unavailable",
+                    "detail": unavailable.get("detail"),
+                },
+                "suggestedAction": "reject_input_batch",
+                "sourceFeedback": (
+                    "请保留 Country、Make、Model、分析维度和历史月份列。"
+                ),
+            }
+        )
 
     return {
         "jobId": job_id,
@@ -5495,6 +6640,9 @@ def get_jato_monthly_update_review(job_id: str) -> dict[str, Any]:
             else None
         ),
         "candidateFingerprint": _candidate_fingerprint_id(artifacts),
+        "historicalReclassificationReport": (
+            historical_reclassification_report
+        ),
         "approval": payload.get("reviewApproval"),
     }
 
@@ -5509,7 +6657,10 @@ def _cache_jato_monthly_update_review(job_id: str) -> Path:
         artifacts.pop("reviewBundlePath", None)
         payload["artifacts"] = artifacts
         _persist_job_state(payload)
-    review = get_jato_monthly_update_review(job_id)
+    review = get_jato_monthly_update_review(
+        job_id,
+        allow_build=True,
+    )
     artifacts = _load_job_state(job_id).get("artifacts")
     if not isinstance(artifacts, dict):
         raise HTTPException(
@@ -5563,6 +6714,32 @@ def approve_jato_monthly_update_review(
                 detail="该 candidate 已进入发布记录，不能重新写入旧 Review 决策。",
             )
         review = get_jato_monthly_update_review(job_id)
+        historical_reclassification_report = review.get(
+            "historicalReclassificationReport"
+        )
+        if (
+            normalized_decision == "approve"
+            and isinstance(historical_reclassification_report, dict)
+            and historical_reclassification_report.get("status")
+            == "decision_required"
+        ):
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "blockerType": (
+                        "historical_reclassification_decision_required"
+                    ),
+                    "message": (
+                        "历史分析维度变化尚未逐国选择；请先选择"
+                        " use_latest 或 keep_active 并生成新的完整 candidate。"
+                    ),
+                    "reportFingerprint": (
+                        historical_reclassification_report.get(
+                            "reportFingerprint"
+                        )
+                    ),
+                },
+            )
         findings = review.get("reviewFindings")
         has_blocker = isinstance(findings, list) and any(
             isinstance(item, dict) and item.get("severity") == "blocker"
@@ -5614,12 +6791,295 @@ def approve_jato_monthly_update_review(
             "activeBaseFingerprint": candidate_active_fingerprint,
             "note": str(note or "").strip() or None,
         }
+        if (
+            normalized_decision == "approve"
+            and isinstance(historical_reclassification_report, dict)
+            and historical_reclassification_report.get("status")
+            == "resolved"
+        ):
+            resolution = _historical_reclassification_resolution(
+                payload
+            )
+            validated_decisions = (
+                _validated_historical_reclassification_resolution(
+                    resolution
+                )
+                if isinstance(resolution, dict)
+                else {}
+            )
+            if not (
+                isinstance(resolution, dict)
+                and resolution.get("status") == "resolved"
+                and bool(validated_decisions)
+                and str(
+                    resolution.get(
+                        "resolvedCandidateFingerprint"
+                    )
+                    or ""
+                )
+                == candidate_fingerprint
+                and str(resolution.get("reportFingerprint") or "")
+                == str(
+                    historical_reclassification_report.get(
+                        "reportFingerprint"
+                    )
+                    or ""
+                )
+            ):
+                raise HTTPException(
+                    status_code=409,
+                    detail={
+                        "blockerType": (
+                            "historical_reclassification_resolution_stale"
+                        ),
+                        "message": (
+                            "历史分类决策与当前 candidate/report 指纹不一致，"
+                            "请重新选择并生成 candidate。"
+                        ),
+                    },
+                )
+            payload["reviewApproval"][
+                "historicalReclassification"
+            ] = {
+                "reportFingerprint": resolution.get(
+                    "reportFingerprint"
+                ),
+                "resolvedCandidateFingerprint": resolution.get(
+                    "resolvedCandidateFingerprint"
+                ),
+                "decisions": [
+                    {
+                        "country": item["country"],
+                        "decision": validated_decisions[
+                            str(item["country"]).strip().casefold()
+                        ],
+                    }
+                    for item in resolution.get("decisions", [])
+                    if isinstance(item, dict)
+                    and str(item.get("country") or "").strip().casefold()
+                    in validated_decisions
+                ],
+            }
         _persist_job_state(payload)
     _append_log(
         _job_log_path(job_id),
         f"[{_utc_now().isoformat()}] Review {normalized_decision} by {triggered_by.strip() or 'anonymous'}.",
     )
     return _serialize_job_state(payload, include_log_tail=True)
+
+
+def resolve_jato_historical_reclassification(
+    *,
+    job_id: str,
+    triggered_by: str,
+    decisions: Any,
+) -> dict[str, Any]:
+    """Bind per-country choices, then queue the existing isolated rebuild."""
+    if not isinstance(decisions, list):
+        raise HTTPException(
+            status_code=400,
+            detail="decisions 必须是逐国决策数组。",
+        )
+    with _exclusive_file_lock(_job_state_lock_path(job_id)) as acquired:
+        if not acquired:
+            raise HTTPException(
+                status_code=503,
+                detail="历史重分类状态锁暂不可用，请稍后重试。",
+            )
+        payload = _load_job_state(job_id)
+        review = get_jato_monthly_update_review(job_id)
+        findings = review.get("reviewFindings")
+        blockers = [
+            item
+            for item in (
+                findings
+                if isinstance(findings, list)
+                else []
+            )
+            if isinstance(item, dict)
+            and item.get("severity") == "blocker"
+        ]
+        if blockers:
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "blockerType": "review_blockers_present",
+                    "message": (
+                        "Review 仍有不可通过历史分类决策解决的 blocker，"
+                        "拒绝生成 candidate。"
+                    ),
+                    "rules": [
+                        str(item.get("ruleId") or "")
+                        for item in blockers
+                    ],
+                },
+            )
+        report = review.get("historicalReclassificationReport")
+        if (
+            not isinstance(report, dict)
+            or report.get("status") != "decision_required"
+        ):
+            raise HTTPException(
+                status_code=409,
+                detail="当前 Review 没有待处理的历史重分类决策。",
+            )
+        raw_countries = report.get("countries")
+        report_countries = (
+            [
+                item
+                for item in raw_countries
+                if isinstance(item, dict)
+            ]
+            if isinstance(raw_countries, list)
+            else []
+        )
+        required_by_key: dict[str, str] = {}
+        for item in report_countries:
+            if not bool(item.get("decisionRequired")):
+                continue
+            if not bool(item.get("monthlyTotalsStable")):
+                raise HTTPException(
+                    status_code=409,
+                    detail={
+                        "blockerType": "historical_sales_changed",
+                        "message": (
+                            "国家历史月总量发生变化，不能通过分类决策放行。"
+                        ),
+                        "country": item.get("country"),
+                    },
+                )
+            country = str(item.get("country") or "").strip()
+            country_key = country.casefold()
+            if not country or country_key in required_by_key:
+                raise HTTPException(
+                    status_code=409,
+                    detail="Review 报告包含重复或空国家，拒绝写入决策。",
+                )
+            required_by_key[country_key] = country
+        if not required_by_key:
+            raise HTTPException(
+                status_code=409,
+                detail="当前 Review 没有可决策的历史分类变化。",
+            )
+
+        submitted: dict[str, str] = {}
+        for raw_item in decisions:
+            if not isinstance(raw_item, dict):
+                raise HTTPException(
+                    status_code=400,
+                    detail="每项 decision 必须包含 country 和 decision。",
+                )
+            country = str(raw_item.get("country") or "").strip()
+            country_key = country.casefold()
+            decision = str(
+                raw_item.get("decision") or ""
+            ).strip().lower()
+            if not country or country_key in submitted:
+                raise HTTPException(
+                    status_code=400,
+                    detail="decisions 国家不能为空且每国只能出现一次。",
+                )
+            if decision not in HISTORICAL_RECLASSIFICATION_DECISIONS:
+                raise HTTPException(
+                    status_code=400,
+                    detail=(
+                        f"{country} decision 只支持 use_latest 或 "
+                        "keep_active。"
+                    ),
+                )
+            submitted[country_key] = decision
+        missing_keys = set(required_by_key) - set(submitted)
+        extra_keys = set(submitted) - set(required_by_key)
+        if missing_keys or extra_keys:
+            raise HTTPException(
+                status_code=400,
+                detail={
+                    "blockerType": (
+                        "historical_reclassification_decisions_incomplete"
+                    ),
+                    "message": "必须严格覆盖所有受影响国家，不能缺少或增加国家。",
+                    "missingCountries": [
+                        required_by_key[key]
+                        for key in sorted(missing_keys)
+                    ],
+                    "extraCountries": sorted(extra_keys),
+                },
+            )
+
+        candidate_fingerprint = str(
+            review.get("candidateFingerprint") or ""
+        ).strip()
+        report_fingerprint = str(
+            report.get("reportFingerprint") or ""
+        ).strip()
+        active_fingerprint = str(
+            payload.get("activeBaseFingerprint") or ""
+        ).strip()
+        if not (
+            re.fullmatch(r"[0-9a-f]{64}", candidate_fingerprint)
+            and re.fullmatch(r"[0-9a-f]{64}", report_fingerprint)
+            and re.fullmatch(r"[0-9a-f]{64}", active_fingerprint)
+        ):
+            raise HTTPException(
+                status_code=409,
+                detail="Review 缺少 candidate/active/report 指纹，请重新生成 Review。",
+            )
+        if _active_dataset_version() != active_fingerprint:
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "blockerType": "stale_candidate",
+                    "message": (
+                        "Review 后 active 已变化，不能应用旧的历史分类决策。"
+                    ),
+                },
+            )
+        canonical_decisions = [
+            {
+                "country": required_by_key[key],
+                "decision": submitted[key],
+            }
+            for key in sorted(required_by_key)
+        ]
+        payload["historicalReclassificationResolution"] = {
+            "status": "queued",
+            "requestedAt": _utc_now().isoformat(),
+            "requestedBy": triggered_by.strip() or "anonymous",
+            "activeBaseFingerprint": active_fingerprint,
+            "sourceCandidateFingerprint": candidate_fingerprint,
+            "reportFingerprint": report_fingerprint,
+            "decisions": canonical_decisions,
+            "report": {
+                "status": "decision_required",
+                "countries": report_countries,
+                "reportFingerprint": report_fingerprint,
+                "truncation": (
+                    report.get("truncation")
+                    if isinstance(report.get("truncation"), dict)
+                    else {}
+                ),
+            },
+        }
+        _persist_job_state(payload)
+        try:
+            return _create_smart_merge_candidate_locked(
+                job_id=job_id,
+                triggered_by=triggered_by,
+            )
+        except Exception as exc:
+            failed_payload = _load_job_state(job_id)
+            failed_resolution = (
+                _historical_reclassification_resolution(failed_payload)
+            )
+            if isinstance(failed_resolution, dict):
+                failed_resolution["status"] = "failed"
+                failed_resolution["failedAt"] = _utc_now().isoformat()
+                failed_resolution["error"] = str(exc)
+                failed_payload[
+                    "historicalReclassificationResolution"
+                ] = failed_resolution
+                _persist_job_state(failed_payload)
+            raise
 
 
 def _pending_operation(payload: dict[str, Any]) -> dict[str, Any] | None:
@@ -5983,11 +7443,37 @@ def _publish_jato_monthly_update_job_locked(
                 and stored_upload_path.is_file()
                 else None
             )
+        approved_reclassification_decisions: dict[str, str] = {}
+        approved_reclassification = approval.get(
+            "historicalReclassification"
+        )
+        if (
+            isinstance(approved_reclassification, dict)
+            and str(
+                approved_reclassification.get(
+                    "resolvedCandidateFingerprint"
+                )
+                or ""
+            )
+            == str(approval.get("candidateFingerprint") or "")
+        ):
+            approved_reclassification_decisions = (
+                _historical_reclassification_decision_map(
+                    {
+                        "decisions": approved_reclassification.get(
+                            "decisions"
+                        )
+                    }
+                )
+            )
         historical_configuration_changes = (
             _find_publish_historical_configuration_changes(
                 active_parquet_path=active_paths["parquet"],
                 candidate_parquet_path=source_paths["parquet"],
                 source_upload_sha256=source_upload_sha256,
+                approved_reclassification_decisions=(
+                    approved_reclassification_decisions
+                ),
             )
         )
         if historical_configuration_changes:
@@ -9292,6 +10778,42 @@ def retry_failed_jato_monthly_update_job(
 # ── Country-Partition Upload ───────────────────────────────────────────────────
 
 
+def _validate_candidate_logical_country_scope(
+    *,
+    candidate_path: Path,
+    expected_countries: list[str],
+) -> list[str]:
+    expected_by_key: dict[str, str] = {}
+    for raw_country in expected_countries:
+        country = str(raw_country).strip()
+        country_key = country.casefold()
+        if not country or country_key in expected_by_key:
+            raise RuntimeError(
+                "任务绑定 countryScope 包含空国家或重复逻辑国家。"
+            )
+        expected_by_key[country_key] = country
+    actual_countries = list(
+        _collect_dataset_country_latest_months(candidate_path)
+    )
+    actual_by_key = {
+        country.strip().casefold(): country.strip()
+        for country in actual_countries
+        if country.strip()
+    }
+    missing_keys = set(expected_by_key) - set(actual_by_key)
+    extra_keys = set(actual_by_key) - set(expected_by_key)
+    if missing_keys or extra_keys:
+        raise RuntimeError(
+            "部分国家 ETL 输出国家范围与任务绑定范围不一致："
+            f"missing={','.join(expected_by_key[key] for key in sorted(missing_keys)) or '-'}，"
+            f"extra={','.join(actual_by_key[key] for key in sorted(extra_keys)) or '-'}"
+        )
+    return [
+        actual_by_key[key]
+        for key in expected_by_key
+    ]
+
+
 def _run_country_partition_job(job_id: str) -> None:
     """Build a Review-only candidate for a strict subset of active countries."""
     state = _load_job_state(job_id)
@@ -9410,6 +10932,10 @@ def _run_country_partition_job(job_id: str) -> None:
             label="部分国家目标分区转换",
             args=refresh_args,
             log_path=log_path,
+        )
+        _validate_candidate_logical_country_scope(
+            candidate_path=staging_output,
+            expected_countries=countries,
         )
         country_latest_months = (
             inspection.get("countryLatestMonths")
@@ -9683,6 +11209,19 @@ def _normalized_static_key_frame(
     )
 
 
+def _canonical_country_content_signature(
+    frame: pd.DataFrame,
+    columns: list[str],
+) -> str:
+    normalized = pd.DataFrame(
+        {
+            column: _normalized_static_value_series(frame[column])
+            for column in columns
+        }
+    )
+    return _partition_payload_signature(normalized)
+
+
 def _carry_forward_deprecated_static_columns(
     *,
     active_frame: pd.DataFrame,
@@ -9883,11 +11422,238 @@ def _smart_merge_dataframes(
     )
 
 
+def _keep_active_history_country_frame(
+    *,
+    active_frame: pd.DataFrame,
+    candidate_frame: pd.DataFrame,
+) -> tuple[pd.DataFrame, dict[str, Any]]:
+    """Use active through its latest month and candidate only afterwards.
+
+    Rows are combined only when every normalized static configuration field is
+    exactly equal.  Similar model/version labels are never guessed or merged.
+    """
+    active_latest = _latest_month_from_frame(active_frame)
+    if active_latest is None:
+        raise HTTPException(
+            status_code=409,
+            detail="keep_active 无法识别 active 最新月份。",
+        )
+    all_columns = list(
+        dict.fromkeys(
+            [
+                *[str(column) for column in active_frame.columns],
+                *[str(column) for column in candidate_frame.columns],
+            ]
+        )
+    )
+    active = active_frame.copy()
+    candidate = candidate_frame.copy()
+    for frame in (active, candidate):
+        for column in all_columns:
+            if column not in frame.columns:
+                frame[column] = None
+    active = active[all_columns]
+    candidate = candidate[all_columns]
+    key_columns = _single_country_configuration_key_columns(
+        pd.DataFrame(columns=all_columns)
+    )
+    if not key_columns:
+        raise HTTPException(
+            status_code=409,
+            detail="keep_active 无法识别精确静态配置键。",
+        )
+    month_columns = _detect_month_columns(all_columns)
+    historical_months = [
+        month
+        for month in month_columns
+        if _time_sort_key(month) <= _time_sort_key(active_latest)
+    ]
+    future_months = [
+        month
+        for month in month_columns
+        if _time_sort_key(month) > _time_sort_key(active_latest)
+    ]
+    if not future_months:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "keep_active candidate 没有晚于 active 的月份，"
+                "不能生成推进后的完整 candidate。"
+            ),
+        )
+
+    active_expected = (
+        active[historical_months]
+        .apply(pd.to_numeric, errors="coerce")
+        .fillna(0)
+        .sum()
+    )
+    candidate_expected = (
+        candidate[future_months]
+        .apply(pd.to_numeric, errors="coerce")
+        .fillna(0)
+        .sum()
+    )
+    for month in future_months:
+        active[month] = 0
+    for month in historical_months:
+        candidate[month] = 0
+    candidate_future_sales = (
+        candidate[future_months]
+        .apply(pd.to_numeric, errors="coerce")
+        .fillna(0)
+    )
+    candidate = candidate.loc[
+        candidate_future_sales.ne(0).any(axis=1)
+    ].copy()
+
+    for source_name, source_frame in (
+        ("active", active),
+        ("candidate_future", candidate),
+    ):
+        source_keys = _normalized_static_key_frame(
+            source_frame,
+            key_columns,
+        )
+        duplicate_mask = source_keys.duplicated(keep=False)
+        if bool(duplicate_mask.any()):
+            duplicate_group_count = int(
+                source_keys.loc[duplicate_mask]
+                .drop_duplicates()
+                .shape[0]
+            )
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "blockerType": "duplicate_configurations",
+                    "message": (
+                        f"keep_active 检测到 {source_name} 内部存在"
+                        "归一化后完全相同的静态配置；"
+                        "拒绝自动相加。"
+                    ),
+                    "source": source_name,
+                    "duplicateRows": int(duplicate_mask.sum()),
+                    "duplicateGroupCount": duplicate_group_count,
+                    "keyColumnCount": len(key_columns),
+                },
+            )
+
+    combined = pd.DataFrame(
+        {
+            column: pd.concat(
+                [
+                    active[column].reset_index(drop=True),
+                    candidate[column].reset_index(drop=True),
+                ],
+                ignore_index=True,
+            )
+            for column in all_columns
+        }
+    )
+    normalized_keys = _normalized_static_key_frame(
+        combined,
+        key_columns,
+    )
+    group_codes, _unique_keys = pd.factorize(
+        pd.MultiIndex.from_frame(normalized_keys),
+        sort=False,
+    )
+    grouped_static = combined.groupby(
+        group_codes,
+        sort=False,
+        dropna=False,
+    ).first()
+    grouped_sales = (
+        combined[month_columns]
+        .apply(pd.to_numeric, errors="coerce")
+        .fillna(0)
+        .groupby(group_codes, sort=False)
+        .sum()
+    )
+    for month in month_columns:
+        grouped_static[month] = grouped_sales[month]
+    merged = grouped_static[all_columns].reset_index(drop=True)
+    merged_keys = _normalized_static_key_frame(merged, key_columns)
+    duplicate_rows = int(merged_keys.duplicated(keep=False).sum())
+    if duplicate_rows:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "blockerType": "duplicate_configurations",
+                "message": (
+                    "keep_active 仅允许完整静态键精确合并；"
+                    "结果仍有重复配置，拒绝继续。"
+                ),
+                "duplicateRows": duplicate_rows,
+            },
+        )
+
+    merged_numeric = (
+        merged[month_columns]
+        .apply(pd.to_numeric, errors="coerce")
+        .fillna(0)
+    )
+    mismatches: list[dict[str, Any]] = []
+    for month in historical_months:
+        expected = float(active_expected.get(month, 0) or 0)
+        actual = float(merged_numeric[month].sum())
+        if actual != expected:
+            mismatches.append(
+                {
+                    "month": month,
+                    "expectedSource": "active",
+                    "expectedSales": _serialize_numeric_value(expected),
+                    "actualSales": _serialize_numeric_value(actual),
+                }
+            )
+    for month in future_months:
+        expected = float(candidate_expected.get(month, 0) or 0)
+        actual = float(merged_numeric[month].sum())
+        if actual != expected:
+            mismatches.append(
+                {
+                    "month": month,
+                    "expectedSource": "candidate",
+                    "expectedSales": _serialize_numeric_value(expected),
+                    "actualSales": _serialize_numeric_value(actual),
+                }
+            )
+    if mismatches:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "blockerType": "keep_active_month_boundary_invalid",
+                "message": (
+                    "keep_active 时间切片校验失败；拒绝生成可能累加或"
+                    "改写历史的 candidate。"
+                ),
+                "mismatches": mismatches[:10],
+            },
+        )
+    return (
+        merged,
+        {
+            "policy": "keep_active",
+            "activeLatestMonth": active_latest,
+            "historicalMonthsFrom": "active",
+            "futureMonthsFrom": "candidate",
+            "historicalMonthCount": len(historical_months),
+            "futureMonthCount": len(future_months),
+            "activeInputRows": int(len(active_frame)),
+            "candidateInputRows": int(len(candidate_frame)),
+            "outputRows": int(len(merged)),
+            "exactStaticKeyColumnCount": len(key_columns),
+            "monthBoundaryCheck": "pass",
+        },
+    )
+
+
 def _smart_merge_parquet_streaming(
     *,
     active_path: Path,
     candidate_path: Path,
     regressed_countries: list[dict[str, str | None]],
+    historical_reclassification_decisions: dict[str, str] | None = None,
 ) -> tuple[int, dict[str, Any]]:
     """Write Smart Merge one logical country at a time.
 
@@ -9944,6 +11710,22 @@ def _smart_merge_parquet_streaming(
         for entry in regressed_countries
         if str(entry.get("country") or "").strip()
     }
+    decision_map = {
+        str(country).strip().casefold(): str(decision).strip().lower()
+        for country, decision in (
+            historical_reclassification_decisions or {}
+        ).items()
+    }
+    invalid_decisions = {
+        decision
+        for decision in decision_map.values()
+        if decision not in HISTORICAL_RECLASSIFICATION_DECISIONS
+    }
+    if invalid_decisions:
+        raise HTTPException(
+            status_code=409,
+            detail="Smart Merge 收到无效历史重分类决策。",
+        )
     output_country_keys = [
         *active_by_key,
         *(
@@ -9969,6 +11751,8 @@ def _smart_merge_parquet_streaming(
         "activeDuplicateKeyRowCount": 0,
         "columnResults": {},
         "countryResults": {},
+        "historicalReclassificationPolicies": {},
+        "untouchedCountryChecks": {},
     }
     try:
         writer = pq.ParquetWriter(
@@ -9977,6 +11761,7 @@ def _smart_merge_parquet_streaming(
             compression="snappy",
         )
         for country_key in output_country_keys:
+            untouched_check_context: dict[str, Any] | None = None
             use_candidate = (
                 country_key in candidate_by_key
                 and country_key not in regressed_keys
@@ -10008,6 +11793,27 @@ def _smart_merge_parquet_streaming(
                             candidate_frame=frame,
                         )
                     )
+                    history_policy = decision_map.get(country_key)
+                    if history_policy == "keep_active":
+                        frame, history_policy_summary = (
+                            _keep_active_history_country_frame(
+                                active_frame=active_frame,
+                                candidate_frame=frame,
+                            )
+                        )
+                    else:
+                        history_policy_summary = {
+                            "policy": (
+                                history_policy or "use_candidate"
+                            ),
+                            "historicalMonthsFrom": "candidate",
+                            "monthBoundaryCheck": (
+                                "not_applicable"
+                            ),
+                        }
+                    aggregate_summary[
+                        "historicalReclassificationPolicies"
+                    ][active_country] = history_policy_summary
                     del active_frame
                 else:
                     country_summary = {
@@ -10037,6 +11843,26 @@ def _smart_merge_parquet_streaming(
                     "candidateDuplicateKeyRowCount": 0,
                     "activeDuplicateKeyRowCount": 0,
                     "columnResults": {},
+                }
+                original_columns = [
+                    column
+                    for column in active_schema.names
+                    if column in frame.columns
+                ]
+                untouched_check_context = {
+                    "sourceSignature": (
+                        _canonical_country_content_signature(
+                            frame,
+                            original_columns,
+                        )
+                    ),
+                    "sourceColumns": original_columns,
+                    "candidateOnlyColumns": [
+                        column
+                        for column in candidate_schema.names
+                        if column not in active_schema.names
+                    ],
+                    "rowCount": int(len(frame)),
                 }
 
             aggregate_summary["countryResults"][output_country] = (
@@ -10107,6 +11933,55 @@ def _smart_merge_parquet_streaming(
                 preserve_index=False,
                 safe=False,
             )
+            if untouched_check_context is not None:
+                source_columns = untouched_check_context[
+                    "sourceColumns"
+                ]
+                output_original_frame = table.select(
+                    source_columns
+                ).to_pandas()
+                output_signature = (
+                    _canonical_country_content_signature(
+                        output_original_frame,
+                        source_columns,
+                    )
+                )
+                non_null_candidate_only_columns = [
+                    column
+                    for column in untouched_check_context[
+                        "candidateOnlyColumns"
+                    ]
+                    if table[column].null_count != table.num_rows
+                ]
+                if (
+                    output_signature
+                    != untouched_check_context["sourceSignature"]
+                    or non_null_candidate_only_columns
+                ):
+                    raise HTTPException(
+                        status_code=409,
+                        detail={
+                            "blockerType": (
+                                "untouched_country_changed"
+                            ),
+                            "message": (
+                                f"{output_country} 未选择更新但输出内容变化。"
+                            ),
+                            "nonNullCandidateOnlyColumns": (
+                                non_null_candidate_only_columns
+                            ),
+                        },
+                    )
+                aggregate_summary["untouchedCountryChecks"][
+                    output_country
+                ] = {
+                    "status": "pass",
+                    "rowCount": untouched_check_context[
+                        "rowCount"
+                    ],
+                    "canonicalSignature": output_signature,
+                    "candidateOnlyColumnsNull": True,
+                }
             writer.write_table(table)
             row_count += int(table.num_rows)
             del table
@@ -10137,6 +12012,11 @@ def _run_smart_merge(job_id: str) -> None:
     try:
         state["status"] = "running"
         state["phase"] = "smart_merging"
+        resolution = _historical_reclassification_resolution(state)
+        if isinstance(resolution, dict):
+            resolution["status"] = "running"
+            resolution["startedAt"] = _utc_now().isoformat()
+            state["historicalReclassificationResolution"] = resolution
         _persist_job_state(state)
         _append_log(log_path, f"[{_utc_now().isoformat()}] Smart Merge: 开始合并数据...")
 
@@ -10148,6 +12028,29 @@ def _run_smart_merge(job_id: str) -> None:
             raise RuntimeError("找不到 candidate staging parquet。")
         if not active_paths["parquet"].exists():
             raise RuntimeError("找不到 active 数据集，无法执行 Smart Merge。")
+        resolution = _historical_reclassification_resolution(state)
+        validated_reclassification_decisions: dict[str, str] = {}
+        if isinstance(resolution, dict):
+            validated_reclassification_decisions = (
+                _validated_historical_reclassification_resolution(
+                    resolution
+                )
+            )
+            source_candidate_fingerprint = str(
+                resolution.get("sourceCandidateFingerprint") or ""
+            )
+            current_candidate_fingerprint = (
+                _candidate_fingerprint_id(artifacts)
+            )
+            if (
+                not source_candidate_fingerprint
+                or source_candidate_fingerprint
+                != current_candidate_fingerprint
+            ):
+                raise RuntimeError(
+                    "历史分类决策后 candidate 内容已变化；"
+                    "旧决策不得应用，请重新生成 Review。"
+                )
 
         regressions = _find_publish_country_regressions(
             active_parquet_path=active_paths["parquet"],
@@ -10158,7 +12061,14 @@ def _run_smart_merge(job_id: str) -> None:
             "target_country_partition_only",
             "target_country_partitions_only",
         }
-        if not regressions and not requires_full_rebuild:
+        requires_decision_rebuild = bool(
+            validated_reclassification_decisions
+        )
+        if (
+            not regressions
+            and not requires_full_rebuild
+            and not requires_decision_rebuild
+        ):
             _append_log(log_path, f"[{_utc_now().isoformat()}] Smart Merge: 无回归国家，不需要合并。")
             state["phase"] = "building_review"
             _persist_job_state(state)
@@ -10203,6 +12113,9 @@ def _run_smart_merge(job_id: str) -> None:
                     active_path=active_paths["parquet"],
                     candidate_path=candidate_path,
                     regressed_countries=regressions,
+                    historical_reclassification_decisions=(
+                        validated_reclassification_decisions
+                    ),
                 )
             )
         regressed_names = sorted(r["country"] for r in regressions if r.get("country"))
@@ -10382,6 +12295,14 @@ def _run_smart_merge(job_id: str) -> None:
                 "deprecatedStaticCarryForward": deprecated_static_summary,
             },
         }
+        resolution = _historical_reclassification_resolution(state)
+        if isinstance(resolution, dict):
+            resolution["status"] = "resolved"
+            resolution["resolvedAt"] = _utc_now().isoformat()
+            resolution["resolvedCandidateFingerprint"] = (
+                _candidate_fingerprint_id(artifacts)
+            )
+            state["historicalReclassificationResolution"] = resolution
         state["phase"] = "building_review"
         _persist_job_state(state)
         _cache_jato_monthly_update_review(job_id)
@@ -10410,6 +12331,12 @@ def _run_smart_merge(job_id: str) -> None:
         state["phase"] = "smart_merge_failed"
         state["finishedAt"] = _utc_now().isoformat()
         state["error"] = str(exc)
+        resolution = _historical_reclassification_resolution(state)
+        if isinstance(resolution, dict):
+            resolution["status"] = "failed"
+            resolution["failedAt"] = _utc_now().isoformat()
+            resolution["error"] = str(exc)
+            state["historicalReclassificationResolution"] = resolution
         _persist_job_state(state)
         _append_log(log_path, "\n=== Smart Merge Failed ===")
         _append_log(log_path, str(exc))
@@ -10484,6 +12411,35 @@ def _create_smart_merge_candidate_locked(
         raise HTTPException(status_code=409, detail="找不到 candidate staging parquet，不能执行 Smart Merge。")
     if not active_paths["parquet"].exists():
         raise HTTPException(status_code=409, detail="找不到 active 数据集，不能执行 Smart Merge。")
+    review = get_jato_monthly_update_review(job_id)
+    historical_report = review.get("historicalReclassificationReport")
+    resolution = _historical_reclassification_resolution(payload)
+    if (
+        isinstance(historical_report, dict)
+        and historical_report.get("status") == "decision_required"
+    ):
+        if (
+            not isinstance(resolution, dict)
+            or resolution.get("status") != "queued"
+            or str(
+                resolution.get("sourceCandidateFingerprint") or ""
+            )
+            != str(review.get("candidateFingerprint") or "")
+            or str(resolution.get("reportFingerprint") or "")
+            != str(historical_report.get("reportFingerprint") or "")
+        ):
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "blockerType": (
+                        "historical_reclassification_decision_required"
+                    ),
+                    "message": (
+                        "请先通过 historical-reclassification-resolution"
+                        " 提交所有受影响国家的决策。"
+                    ),
+                },
+            )
     candidate_active_fingerprint = str(
         payload.get("activeBaseFingerprint") or ""
     ).strip()

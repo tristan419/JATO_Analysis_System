@@ -4,6 +4,8 @@ import { api } from "../api/client";
 import { CollapsibleDeckHero } from "../components/CollapsibleDeckHero";
 import { LoadingSurface } from "../components/LoadingSurface";
 import type {
+  JatoHistoricalReclassificationDecision,
+  JatoHistoricalReclassificationDecisionInput,
   JatoMonthlyUpdateBaselinePromotionResult,
   JatoMonthlyUpdateConflictSample,
   JatoMonthlyUpdateCleanupResult,
@@ -204,8 +206,16 @@ export function JatoMonthlyUpdatePage() {
   const [baselinePromotionSubmitting, setBaselinePromotionSubmitting] = useState(false);
   const [reviewLoadingJobId, setReviewLoadingJobId] = useState<string | null>(null);
   const [approvingReviewJobId, setApprovingReviewJobId] = useState<string | null>(null);
+  const [
+    resolvingHistoricalReclassificationJobId,
+    setResolvingHistoricalReclassificationJobId,
+  ] = useState<string | null>(null);
   const [copiedSourceFeedbackKey, setCopiedSourceFeedbackKey] = useState<string | null>(null);
   const [reviewBundle, setReviewBundle] = useState<JatoMonthlyUpdateReviewBundle | null>(null);
+  const [
+    historicalReclassificationDecisions,
+    setHistoricalReclassificationDecisions,
+  ] = useState<Record<string, JatoHistoricalReclassificationDecision>>({});
   const [selectedReviewCountry, setSelectedReviewCountry] = useState<string | null>(null);
   const [dragActive, setDragActive] = useState(false);
   const [uploadMonth, setUploadMonth] = useState<string | null>(null);
@@ -717,6 +727,7 @@ export function JatoMonthlyUpdatePage() {
   async function handleReviewJob(job: JatoMonthlyUpdateJob) {
     if (reviewBundle?.jobId === job.jobId) {
       setReviewBundle(null);
+      setHistoricalReclassificationDecisions({});
       return;
     }
     setReviewLoadingJobId(job.jobId);
@@ -724,6 +735,7 @@ export function JatoMonthlyUpdatePage() {
     try {
       const response = await api.getJatoMonthlyUpdateReview(job.jobId);
       setReviewBundle(response.item);
+      setHistoricalReclassificationDecisions({});
     } catch (err) {
       setError((err as Error).message);
     } finally {
@@ -734,6 +746,10 @@ export function JatoMonthlyUpdatePage() {
   async function handleApproveReview(job: JatoMonthlyUpdateJob) {
     if (!reviewBundle || reviewBundle.jobId !== job.jobId) {
       setError("请先打开并核对 Review Candidate，再执行批准。");
+      return;
+    }
+    if (reviewBundle.historicalReclassificationReport.status === "decision_required") {
+      setError("请先应用历史分类选择并等待完整 Candidate 重建，再执行批准。");
       return;
     }
     if (!window.confirm("确认批准当前 candidate 的 Review？批准将绑定当前候选指纹；任何重建后都必须重新 Review。")) {
@@ -755,6 +771,62 @@ export function JatoMonthlyUpdatePage() {
       setError((err as Error).message);
     } finally {
       setApprovingReviewJobId(null);
+    }
+  }
+
+  async function handleResolveHistoricalReclassification(job: JatoMonthlyUpdateJob) {
+    if (!reviewBundle || reviewBundle.jobId !== job.jobId) {
+      setError("请先打开 Review Candidate，再处理历史分类变化。");
+      return;
+    }
+    const requiredCountries = reviewBundle.historicalReclassificationReport.countries
+      .filter((countryReport) => countryReport.decisionRequired);
+    const missingCountries = requiredCountries
+      .filter((countryReport) => !historicalReclassificationDecisions[countryReport.country])
+      .map((countryReport) => countryReport.country);
+    if (missingCountries.length > 0) {
+      setError(`请先为所有历史重分类国家做决定：${missingCountries.join("、")}。`);
+      return;
+    }
+    const decisions: JatoHistoricalReclassificationDecisionInput[] = requiredCountries.map(
+      (countryReport) => ({
+        country: countryReport.country,
+        decision: historicalReclassificationDecisions[countryReport.country],
+      })
+    );
+    const decisionSummary = decisions
+      .map(({ country, decision }) => (
+        `${country}：${decision === "use_latest" ? "采用最新 washed 分类" : "保留当前 active 历史"}`
+      ))
+      .join("\n");
+    if (!window.confirm(
+      `确认应用以下历史分类选择并生成完整 Candidate？\n\n${decisionSummary}\n\n这一步只重建 staging，不会修改 active；完成后仍需重新 Review、Approve 和 Publish。`
+    )) {
+      return;
+    }
+    setResolvingHistoricalReclassificationJobId(job.jobId);
+    setError("");
+    setNotice("");
+    try {
+      const response = await api.resolveJatoMonthlyUpdateHistoricalReclassification(
+        job.jobId,
+        decisions,
+      );
+      setSelectedJob(response.item);
+      setSelectedJobId(response.item.jobId);
+      setJobs((current) => [
+        response.item,
+        ...current.filter((item) => item.jobId !== response.item.jobId),
+      ]);
+      setReviewBundle(null);
+      setHistoricalReclassificationDecisions({});
+      setNotice(
+        `已应用 ${decisions.length} 个国家的历史分类选择，完整 Candidate 正在隔离重建；active 尚未改变。`
+      );
+    } catch (err) {
+      setError((err as Error).message);
+    } finally {
+      setResolvingHistoricalReclassificationJobId(null);
     }
   }
 
@@ -892,13 +964,28 @@ export function JatoMonthlyUpdatePage() {
 
   const rawCompare = selectedJob?.summaries?.rawCompare;
   const refresh = selectedJob?.summaries?.refresh;
-  const isPartitionScopedReview = (
+  const candidateScope = selectedJob?.artifacts?.candidateScope;
+  const isOriginallyPartitionScoped = (
     selectedJob?.jobType === "single_country"
     || selectedJob?.jobType === "partial_country"
   );
+  const isPartitionScopedReview = (
+    candidateScope === "target_country_partition_only"
+    || candidateScope === "target_country_partitions_only"
+    || (
+      isOriginallyPartitionScoped
+      && candidateScope !== "full_smart_merge"
+    )
+  );
   const canReviewSelectedJob = Boolean(
     selectedJob?.artifacts?.rawCompareReportPath
-    || (isPartitionScopedReview && selectedJob.status === "success")
+    || selectedJob?.artifacts?.reviewBundlePath
+    || (isPartitionScopedReview && selectedJob?.status === "success")
+    || (
+      candidateScope === "full_smart_merge"
+      && selectedJob?.status === "success"
+      && selectedJob?.phase === "completed"
+    )
   );
   const canPublishSelectedJob = Boolean(
     selectedJob
@@ -960,6 +1047,36 @@ export function JatoMonthlyUpdatePage() {
   const activeConflictSamples = activeReviewCountry
     ? (reviewBundle?.conflictSamples.filter((item) => item.country === activeReviewCountry) ?? [])
     : (reviewBundle?.conflictSamples ?? []);
+  const historicalReclassificationReport = reviewBundle?.historicalReclassificationReport ?? null;
+  const historicalReclassificationDecisionCountries = (
+    historicalReclassificationReport?.countries.filter(
+      (countryReport) => countryReport.decisionRequired
+    ) ?? []
+  );
+  const requiredHistoricalReclassificationCountries = (
+    historicalReclassificationReport?.status === "decision_required"
+      ? historicalReclassificationDecisionCountries
+      : []
+  );
+  const missingHistoricalReclassificationCountries = requiredHistoricalReclassificationCountries
+    .filter((countryReport) => !historicalReclassificationDecisions[countryReport.country])
+    .map((countryReport) => countryReport.country);
+  const hasCompletedHistoricalReclassificationDecisions = (
+    missingHistoricalReclassificationCountries.length === 0
+  );
+  const appliedHistoricalReclassificationDecisionCount = (
+    historicalReclassificationReport?.status === "resolved"
+      ? historicalReclassificationDecisionCountries.filter(
+        (countryReport) => Boolean(countryReport.decision)
+      ).length
+      : historicalReclassificationDecisionCountries.length
+        - missingHistoricalReclassificationCountries.length
+  );
+  const hasRecordedResolvedHistoricalReclassificationDecisions = (
+    historicalReclassificationReport?.status !== "resolved"
+    || appliedHistoricalReclassificationDecisionCount
+      === historicalReclassificationDecisionCountries.length
+  );
   const safeCleanupMetrics = maintenanceStatus?.storageMetrics.filter((metric) => metric.cleanupTier === "safe") ?? [];
   const cautiousCleanupMetrics = maintenanceStatus?.storageMetrics.filter((metric) => metric.cleanupTier === "cautious") ?? [];
   const protectedCleanupMetrics = maintenanceStatus?.storageMetrics.filter((metric) => metric.cleanupTier === "protected") ?? [];
@@ -1612,7 +1729,9 @@ Smart Merge:  [SE:keep active 2026-03] [DE:patch 2026-03] [NL:patch 2026-02] [FR
                           : "Review Candidate"}
                     </button>
                   )}
-                  {canPublishSelectedJob && hasReviewedSelectedJob && (
+                  {canPublishSelectedJob
+                    && hasReviewedSelectedJob
+                    && historicalReclassificationReport?.status !== "decision_required" && (
                     <button
                       type="button"
                       className="btn btn-secondary"
@@ -1620,6 +1739,7 @@ Smart Merge:  [SE:keep active 2026-03] [DE:patch 2026-03] [NL:patch 2026-02] [FR
                       disabled={
                         hasApprovedSelectedJob
                         || approvingReviewJobId === selectedJob.jobId
+                        || !hasRecordedResolvedHistoricalReclassificationDecisions
                         || Boolean(reviewBundle?.reviewFindings.some((finding) => finding.severity === "blocker"))
                       }
                     >
@@ -1628,6 +1748,24 @@ Smart Merge:  [SE:keep active 2026-03] [DE:patch 2026-03] [NL:patch 2026-02] [FR
                         : approvingReviewJobId === selectedJob.jobId
                           ? "批准中..."
                           : "Approve Review"}
+                    </button>
+                  )}
+                  {hasReviewedSelectedJob
+                    && historicalReclassificationReport?.status === "decision_required" && (
+                    <button
+                      type="button"
+                      className="btn btn-primary"
+                      onClick={() => void handleResolveHistoricalReclassification(selectedJob)}
+                      disabled={
+                        !hasCompletedHistoricalReclassificationDecisions
+                        || resolvingHistoricalReclassificationJobId === selectedJob.jobId
+                      }
+                    >
+                      {resolvingHistoricalReclassificationJobId === selectedJob.jobId
+                        ? "正在生成完整 Candidate..."
+                        : !hasCompletedHistoricalReclassificationDecisions
+                          ? `还需选择 ${missingHistoricalReclassificationCountries.length} 个国家`
+                          : "应用选择并生成完整 Candidate"}
                     </button>
                   )}
                   {canPublishSelectedJob && (
@@ -1945,6 +2083,238 @@ Smart Merge:  [SE:keep active 2026-03] [DE:patch 2026-03] [NL:patch 2026-02] [FR
                         ? `Review 已由 ${reviewBundle.approval.reviewedBy || "-"} 批准（${formatMonthlyUpdateTimestamp(reviewBundle.approval.reviewedAt)}）。`
                         : "Review 尚未批准；核对所有 findings 后再执行 Approve Review。"}
                   </div>
+                  {historicalReclassificationReport && historicalReclassificationReport.countries.length > 0 && (
+                    <section className="monthly-update-reclassification">
+                      <div className="detail-section-head">
+                        <div>
+                          <div className="card-title">Historical Classification Changes</div>
+                          <p className="section-note">
+                            这里展示 washed 文件对 active 历史分析标签的重新分桶。销量没有累加；
+                            只有逐月总销量稳定的国家才允许在“采用最新分类”和“保留 active 历史”之间选择。
+                          </p>
+                        </div>
+                        <div className="table-status-chip">
+                          <span>Decision progress</span>
+                          <strong>
+                            {appliedHistoricalReclassificationDecisionCount}
+                            /{historicalReclassificationDecisionCountries.length}
+                          </strong>
+                        </div>
+                      </div>
+                      {missingHistoricalReclassificationCountries.length > 0 && (
+                        <div className="alert alert-warning">
+                          批准已锁定：请为以下国家明确选择历史处理方式：
+                          {missingHistoricalReclassificationCountries.join("、")}。系统不会默认替你选择。
+                        </div>
+                      )}
+                      {historicalReclassificationReport.status === "resolved" && (
+                        <div className={
+                          hasRecordedResolvedHistoricalReclassificationDecisions
+                            ? "alert alert-success"
+                            : "alert alert-warning"
+                        }>
+                          {hasRecordedResolvedHistoricalReclassificationDecisions
+                            ? "历史分类选择已应用到当前完整 Candidate。请重新核对本报告与 findings，然后再执行标准 Approve Review；active 仍未改变。"
+                            : "报告缺少部分国家的已应用选择。为避免无法审计的默认行为，Approve Review 已锁定；请刷新 Review。"}
+                        </div>
+                      )}
+                      <div className="monthly-update-reclassification-list">
+                        {historicalReclassificationReport.countries.map((countryReport) => {
+                          const selectedDecision = historicalReclassificationDecisions[countryReport.country];
+                          const decisionGroupName = `historical-reclassification-${countryReport.country}`;
+                          return (
+                            <article
+                              key={countryReport.country}
+                              className="monthly-update-reclassification-country"
+                            >
+                              <div className="monthly-update-reclassification-country-head">
+                                <div>
+                                  <h4>{countryReport.country}</h4>
+                                  <p>
+                                    比较至 {countryReport.comparedThrough || "-"} ·
+                                    {" "}{formatMonthlyUpdateNumber(countryReport.historicalMonthCount)} 个历史月份
+                                  </p>
+                                </div>
+                                <div className="monthly-update-reclassification-kpis">
+                                  <span>
+                                    组合差异格
+                                    <strong>{formatMonthlyUpdateNumber(countryReport.jointMismatchCellCount)}</strong>
+                                  </span>
+                                  <span>
+                                    重新分桶销量
+                                    <strong>{formatMonthlyUpdateNumber(countryReport.jointMovedSales)}</strong>
+                                  </span>
+                                  <span className={countryReport.monthlyTotalsStable ? "is-safe" : "is-danger"}>
+                                    逐月总销量
+                                    <strong>{countryReport.monthlyTotalsStable ? "一致" : "不一致"}</strong>
+                                  </span>
+                                </div>
+                              </div>
+
+                              {historicalReclassificationReport.status === "decision_required"
+                                && countryReport.decisionRequired && (
+                                <fieldset className="monthly-update-reclassification-decisions">
+                                  <legend>选择 {countryReport.country} 的历史分类处理方式（必选）</legend>
+                                  <label className={selectedDecision === "use_latest" ? "is-selected" : ""}>
+                                    <input
+                                      type="radio"
+                                      name={decisionGroupName}
+                                      value="use_latest"
+                                      checked={selectedDecision === "use_latest"}
+                                      onChange={() => setHistoricalReclassificationDecisions((current) => ({
+                                        ...current,
+                                        [countryReport.country]: "use_latest",
+                                      }))}
+                                    />
+                                    <span>
+                                      <strong>采用最新 washed 分类</strong>
+                                      <small>以本次文件为准，替换该国家受影响历史月份的分析标签。</small>
+                                    </span>
+                                  </label>
+                                  <label className={selectedDecision === "keep_active" ? "is-selected" : ""}>
+                                    <input
+                                      type="radio"
+                                      name={decisionGroupName}
+                                      value="keep_active"
+                                      checked={selectedDecision === "keep_active"}
+                                      onChange={() => setHistoricalReclassificationDecisions((current) => ({
+                                        ...current,
+                                        [countryReport.country]: "keep_active",
+                                      }))}
+                                    />
+                                    <span>
+                                      <strong>保留当前 active 历史</strong>
+                                      <small>历史月份沿用现有标签，只让本次上传覆盖允许推进的月份。</small>
+                                    </span>
+                                  </label>
+                                </fieldset>
+                              )}
+                              {historicalReclassificationReport.status === "resolved"
+                                && countryReport.decisionRequired && (
+                                <div className={
+                                  countryReport.decision ? "alert alert-success" : "alert alert-warning"
+                                }>
+                                  {countryReport.decision === "use_latest"
+                                    ? "已应用选择：采用最新 washed 分类。当前完整 Candidate 使用本次文件中的历史分析标签。"
+                                    : countryReport.decision === "keep_active"
+                                      ? "已应用选择：保留当前 active 历史。当前完整 Candidate 沿用 active 的历史分析标签。"
+                                      : "当前报告已标记 resolved，但未返回该国家的已应用选择；请刷新 Review 后再批准。"}
+                                </div>
+                              )}
+
+                              <div className="table-wrapper">
+                                <table className="data-table">
+                                  <thead>
+                                    <tr>
+                                      <th>分析字段</th>
+                                      <th>差异格</th>
+                                      <th>重新分桶销量</th>
+                                      <th>主要旧值</th>
+                                      <th>主要新值</th>
+                                    </tr>
+                                  </thead>
+                                  <tbody>
+                                    {countryReport.dimensionSummaries.map((dimension) => (
+                                      <tr key={`${countryReport.country}-${dimension.dimension}`}>
+                                        <td>{dimension.dimension || "-"}</td>
+                                        <td>{formatMonthlyUpdateNumber(dimension.mismatchCellCount)}</td>
+                                        <td>{formatMonthlyUpdateNumber(dimension.movedSales)}</td>
+                                        <td>
+                                          {dimension.oldValues.map((item) => (
+                                            `${item.value || "?"} (${formatMonthlyUpdateNumber(item.sales)})`
+                                          )).join(" · ") || "-"}
+                                        </td>
+                                        <td>
+                                          {dimension.newValues.map((item) => (
+                                            `${item.value || "?"} (${formatMonthlyUpdateNumber(item.sales)})`
+                                          )).join(" · ") || "-"}
+                                        </td>
+                                      </tr>
+                                    ))}
+                                  </tbody>
+                                </table>
+                              </div>
+
+                              <details className="monthly-update-reclassification-details">
+                                <summary>
+                                  查看可精确配对的 old → new 明细
+                                  （展示 {formatMonthlyUpdateNumber(countryReport.exactChanges.length)}
+                                  /{formatMonthlyUpdateNumber(countryReport.exactChangeCount)} 项）
+                                </summary>
+                                {countryReport.exactChanges.length === 0 ? (
+                                  <div className="crud-empty-state">暂无可精确配对的变化</div>
+                                ) : (
+                                  <div className="table-wrapper">
+                                    <table className="data-table">
+                                      <thead>
+                                        <tr>
+                                          <th>字段</th>
+                                          <th>Make / Model</th>
+                                          <th>Old → New</th>
+                                          <th>月份</th>
+                                          <th>销量</th>
+                                        </tr>
+                                      </thead>
+                                      <tbody>
+                                        {countryReport.exactChanges.map((change, index) => {
+                                          const monthlyTransferTitle = change.monthlyTransfers
+                                            .map((item) => `${item.month}: ${formatMonthlyUpdateNumber(item.sales)}`)
+                                            .join(" · ");
+                                          return (
+                                            <tr
+                                              key={[
+                                                countryReport.country,
+                                                change.dimension,
+                                                change.make,
+                                                change.model,
+                                                change.oldValue,
+                                                change.newValue,
+                                                index,
+                                              ].join("-")}
+                                            >
+                                              <td>{change.dimension || "-"}</td>
+                                              <td>{[change.make, change.model].filter(Boolean).join(" ") || "-"}</td>
+                                              <td>
+                                                <span className="monthly-update-reclassification-change">
+                                                  <del>{change.oldValue || "?"}</del>
+                                                  <span aria-hidden="true">→</span>
+                                                  <ins>{change.newValue || "?"}</ins>
+                                                </span>
+                                              </td>
+                                              <td title={monthlyTransferTitle || undefined}>
+                                                {change.affectedMonths.join(", ") || "-"}
+                                              </td>
+                                              <td>{formatMonthlyUpdateNumber(change.transferredSales)}</td>
+                                            </tr>
+                                          );
+                                        })}
+                                      </tbody>
+                                    </table>
+                                  </div>
+                                )}
+                              </details>
+                              {countryReport.truncation.truncated && (
+                                <div className="alert alert-info">
+                                  为控制 Review 体积，页面最多展示
+                                  {" "}{formatMonthlyUpdateNumber(countryReport.truncation.exactChangeLimit)}
+                                  {" "}条精确变化，并为每个方向展示前
+                                  {" "}{formatMonthlyUpdateNumber(
+                                    countryReport.truncation.valueLimitPerDirection
+                                  )} 个主要值；上方总数仍为完整统计。
+                                </div>
+                              )}
+                              {countryReport.complexChangeCount > 0 && (
+                                <div className="alert alert-info">
+                                  另有 {formatMonthlyUpdateNumber(countryReport.complexChangeCount)} 项属于合并、
+                                  拆分或交叉抵消，无法可靠地一一配对；请选择时以字段汇总和洗数说明为准。
+                                </div>
+                              )}
+                            </article>
+                          );
+                        })}
+                      </div>
+                    </section>
+                  )}
                   <div className="monthly-update-summary-grid">
                     <article className="monthly-update-summary-card">
                       <span>Compare ID</span>

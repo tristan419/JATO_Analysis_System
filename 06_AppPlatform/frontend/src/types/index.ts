@@ -2310,6 +2310,7 @@ export interface JatoMonthlyUpdatePlan {
 }
 
 export interface JatoMonthlyUpdateArtifacts {
+  candidateScope?: string | null;
   jobDir?: string | null;
   logPath?: string | null;
   baselinePath?: string | null;
@@ -2540,6 +2541,69 @@ export interface JatoMonthlyUpdateCountryMonthlySalesSummary {
   rows: JatoMonthlyUpdateCountryMonthlySalesRow[];
 }
 
+export type JatoHistoricalReclassificationDecision = "use_latest" | "keep_active";
+
+export interface JatoHistoricalReclassificationDecisionInput {
+  country: string;
+  decision: JatoHistoricalReclassificationDecision;
+}
+
+export interface JatoHistoricalReclassificationValueSummary {
+  value: string;
+  sales: number;
+  monthCount: number;
+}
+
+export interface JatoHistoricalReclassificationDimensionSummary {
+  dimension: string;
+  mismatchCellCount: number;
+  movedSales: number;
+  oldValues: JatoHistoricalReclassificationValueSummary[];
+  newValues: JatoHistoricalReclassificationValueSummary[];
+}
+
+export interface JatoHistoricalReclassificationMonthlyTransfer {
+  month: string;
+  sales: number;
+}
+
+export interface JatoHistoricalReclassificationExactChange {
+  dimension: string;
+  make: string;
+  model: string;
+  oldValue: string;
+  newValue: string;
+  transferredSales: number;
+  affectedMonths: string[];
+  monthlyTransfers: JatoHistoricalReclassificationMonthlyTransfer[];
+  confidence: string;
+}
+
+export interface JatoHistoricalReclassificationCountryReport {
+  country: string;
+  decision?: JatoHistoricalReclassificationDecision | null;
+  comparedThrough: string | null;
+  historicalMonthCount: number;
+  jointMismatchCellCount: number;
+  jointMovedSales: number;
+  monthlyTotalsStable: boolean;
+  decisionRequired: boolean;
+  dimensionSummaries: JatoHistoricalReclassificationDimensionSummary[];
+  exactChanges: JatoHistoricalReclassificationExactChange[];
+  exactChangeCount: number;
+  complexChangeCount: number;
+  truncation: {
+    truncated: boolean;
+    exactChangeLimit: number;
+    valueLimitPerDirection: number;
+  };
+}
+
+export interface JatoHistoricalReclassificationReport {
+  status: "not_required" | "decision_required" | "resolved";
+  countries: JatoHistoricalReclassificationCountryReport[];
+}
+
 export interface JatoMonthlyUpdateReviewBundle {
   jobId: string;
   reviewDir?: string | null;
@@ -2562,6 +2626,7 @@ export interface JatoMonthlyUpdateReviewBundle {
   refreshSummary?: JatoMonthlyUpdateRefreshSummary | null;
   candidateFingerprint?: string | null;
   approval?: JatoMonthlyUpdateReviewApproval | null;
+  historicalReclassificationReport: JatoHistoricalReclassificationReport;
 }
 
 export interface JatoMonthlyUpdateCleanupResult {
