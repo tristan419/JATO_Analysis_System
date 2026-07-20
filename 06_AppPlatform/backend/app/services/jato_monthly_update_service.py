@@ -66,6 +66,42 @@ SALES_DOUBLING_MIN_REFERENCE_SALES = 1000.0
 SALES_DOUBLING_MIN_ABSOLUTE_DELTA = 1000.0
 SALES_DOUBLING_MIN_MONTH_COUNT = 2
 SALES_DOUBLING_SAMPLE_LIMIT = 6
+DEPRECATED_OPTIONAL_STATIC_COLUMNS = frozenset(
+    {
+        "Base price",
+        "CO2 level - (g/km) combined",
+        "MSRP including delivery charge",
+        "Maximum power kW",
+        "WLTP Emission combined",
+        "cargo volume (l)",
+        "curb weight (kg)",
+    }
+)
+STATIC_CARRY_FORWARD_KEY_CANDIDATES = (
+    "国家",
+    "Countries",
+    "Registration type",
+    "Make group",
+    "Make",
+    "Model group",
+    "Model",
+    "Version name",
+    "Powertrain type",
+    "Trim level",
+    "Body type",
+    "Fuel type",
+    "Transmission type",
+    "Driven wheels",
+    "Battery type",
+    "Battery kwh",
+    "Useable battery kilowatt hour (kWh)",
+    "Battery range",
+    "Seating capacity",
+    "length (mm)",
+    "width (mm)",
+    "height (mm)",
+    "wheelbase (mm)",
+)
 _WRITE_LOCK = threading.Lock()
 _RUNNING_THREADS: dict[str, threading.Thread] = {}
 RUNNING_JOB_STATUSES = {"queued", "running"}
@@ -145,6 +181,16 @@ def _series_has_data(series: pd.Series) -> bool:
         normalized = series.astype("string").fillna("").str.strip()
         return bool((normalized != "").any())
     return bool(series.notna().any())
+
+
+def _series_missing_value_mask(series: pd.Series) -> pd.Series:
+    missing = series.isna()
+    if (
+        pd.api.types.is_string_dtype(series.dtype)
+        or pd.api.types.is_object_dtype(series.dtype)
+    ):
+        missing = missing | series.astype("string").fillna("").str.strip().eq("")
+    return missing
 
 
 def _find_country_column(columns: list[str]) -> str | None:
@@ -321,18 +367,22 @@ def _single_country_schema_contract(*, active_frame: pd.DataFrame, candidate_fra
     missing = sorted(active_static - candidate_static)
     null_only: list[str] = []
     derived_ytd: list[str] = []
+    deprecated_optional: list[str] = []
     material: list[str] = []
     for column in missing:
         if not _series_has_data(active_frame[column]):
             null_only.append(column)
         elif _is_derived_ytd_column(column):
             derived_ytd.append(column)
+        elif column in DEPRECATED_OPTIONAL_STATIC_COLUMNS:
+            deprecated_optional.append(column)
         else:
             material.append(column)
     return {
         "missing": missing,
         "missingNullOnly": null_only,
         "missingDerivedYtd": derived_ytd,
+        "missingDeprecatedOptional": deprecated_optional,
         "missingMaterial": material,
         "extra": sorted(candidate_static - active_static),
     }
@@ -441,6 +491,8 @@ def _single_country_source_feedback(*, rule_id: str, country: str, metrics: dict
         return f"{country} 本次配置行较 active {'减少' if row_delta < 0 else '增加'} {abs(row_delta)} 行，{history_note}。请说明洗数时的去重、零销量配置过滤和车型下架规则，并提供清洗前后配置行数；不要仅为凑行数复制或补造车型。"
     if rule_id == "SC013":
         return f"{country} 缺少旧月份 YTD 派生列：{columns('missingDerivedYtdColumns') or '见 Review 明细'}。这不是发布 blocker；请确认最新月份的 YTD 字段仍由 Jan 至当月销量计算，并在后续导出中保持 YTD 列命名和口径一致。"
+    if rule_id == "SC014":
+        return f"{country} 缺少已停用的可选静态字段：{columns('missingDeprecatedOptionalColumns') or '见 Review 明细'}。无需为本次月更补齐；系统只会在配置键匹配且 active 旧值一致时沿用旧值，新配置或旧值冲突的配置保持为空，且不会用 Retail price 等相近字段冒充原字段。"
     return None
 
 
@@ -2208,6 +2260,27 @@ def _build_single_country_review(payload: dict[str, Any]) -> dict[str, Any]:
             "missingDerivedYtdColumns": schema_contract["missingDerivedYtd"],
             "missingNullOnlyColumns": schema_contract["missingNullOnly"],
         })
+    if schema_contract["missingDeprecatedOptional"]:
+        add_finding(
+            "review",
+            "SC014",
+            "目标国家 candidate 缺少已停用的可选静态字段："
+            + "、".join(schema_contract["missingDeprecatedOptional"])
+            + "。Smart Merge 仅在配置键匹配且 active 旧值一致时沿用旧值。",
+            {
+                "missingDeprecatedOptionalColumns": schema_contract[
+                    "missingDeprecatedOptional"
+                ],
+                "activePopulatedRowsByColumn": {
+                    column: int(
+                        (~_series_missing_value_mask(active_frame[column])).sum()
+                    )
+                    for column in schema_contract["missingDeprecatedOptional"]
+                },
+                "carryForwardPolicy": "consistent_active_key_values_only",
+                "unmatchedPolicy": "leave_null",
+            },
+        )
     if schema_contract["missingDerivedYtd"]:
         add_finding("review", "SC013", "目标国家 candidate 缺少旧月份 YTD 派生列：" + "、".join(schema_contract["missingDerivedYtd"]) + "。", {
             "missingDerivedYtdColumns": schema_contract["missingDerivedYtd"],
@@ -4132,12 +4205,176 @@ def create_single_country_job(
 # ── Smart Merge ──────────────────────────────────────────────────────────────
 
 
+def _static_carry_forward_key_columns(
+    *,
+    active_frame: pd.DataFrame,
+    candidate_frame: pd.DataFrame,
+) -> list[str]:
+    shared = [
+        column
+        for column in STATIC_CARRY_FORWARD_KEY_CANDIDATES
+        if column in active_frame.columns and column in candidate_frame.columns
+    ]
+    if "Make" not in shared or "Model" not in shared:
+        return []
+    if "Version name" not in shared and "Trim level" not in shared:
+        return []
+    return shared
+
+
+def _normalized_static_value_series(series: pd.Series) -> pd.Series:
+    if pd.api.types.is_numeric_dtype(series.dtype):
+        numbers = pd.to_numeric(series, errors="coerce")
+        return numbers.map(
+            lambda value: (
+                ""
+                if pd.isna(value)
+                else format(float(value), ".15g")
+            )
+        )
+    return (
+        series.astype("string")
+        .fillna("")
+        .str.strip()
+        .str.casefold()
+    )
+
+
+def _normalized_static_key_frame(
+    frame: pd.DataFrame,
+    key_columns: list[str],
+) -> pd.DataFrame:
+    return pd.DataFrame(
+        {
+            f"__key_{index}": _normalized_static_value_series(frame[column])
+            for index, column in enumerate(key_columns)
+        },
+        index=frame.index,
+    )
+
+
+def _carry_forward_deprecated_static_columns(
+    *,
+    active_frame: pd.DataFrame,
+    candidate_frame: pd.DataFrame,
+) -> tuple[pd.DataFrame, dict[str, Any]]:
+    """Retain deprecated values only when an active config key has one value."""
+    columns = sorted(
+        column
+        for column in DEPRECATED_OPTIONAL_STATIC_COLUMNS
+        if column in active_frame.columns
+        and (
+            column not in candidate_frame.columns
+            or bool(_series_missing_value_mask(candidate_frame[column]).any())
+        )
+        and _series_has_data(active_frame[column])
+    )
+    summary: dict[str, Any] = {
+        "enabled": bool(columns),
+        "policy": "consistent_active_key_values_only",
+        "columns": columns,
+        "keyColumns": [],
+        "candidateRowCount": int(len(candidate_frame)),
+        "matchedConfigurationRowCount": 0,
+        "candidateDuplicateKeyRowCount": 0,
+        "activeDuplicateKeyRowCount": 0,
+        "columnResults": {},
+    }
+    if not columns:
+        return candidate_frame, summary
+
+    key_columns = _static_carry_forward_key_columns(
+        active_frame=active_frame,
+        candidate_frame=candidate_frame,
+    )
+    summary["keyColumns"] = key_columns
+    if not key_columns:
+        summary["enabled"] = False
+        summary["reason"] = "stable_configuration_keys_unavailable"
+        return candidate_frame, summary
+
+    active_keys = _normalized_static_key_frame(active_frame, key_columns)
+    candidate_keys = _normalized_static_key_frame(candidate_frame, key_columns)
+    key_names = list(active_keys.columns)
+    summary["activeDuplicateKeyRowCount"] = int(
+        active_keys.duplicated(keep=False).sum()
+    )
+    summary["candidateDuplicateKeyRowCount"] = int(
+        candidate_keys.duplicated(keep=False).sum()
+    )
+
+    candidate_lookup = candidate_keys.copy()
+    candidate_lookup["__candidate_index"] = candidate_lookup.index
+    result = candidate_frame.copy()
+    matched_candidate_indices: set[Any] = set()
+    for index, column in enumerate(columns):
+        if column not in result.columns:
+            result[column] = pd.NA
+        carry_column = f"__carry_{index}"
+        value_signature_column = f"__carry_signature_{index}"
+        active_values = pd.concat(
+            [
+                active_keys,
+                active_frame[column].rename(carry_column),
+                _normalized_static_value_series(active_frame[column]).rename(
+                    value_signature_column
+                ),
+            ],
+            axis=1,
+        )
+        active_values = active_values.loc[
+            ~_series_missing_value_mask(active_values[carry_column])
+        ]
+        distinct_values = active_values.drop_duplicates(
+            subset=[*key_names, value_signature_column]
+        )
+        unambiguous_values = distinct_values.loc[
+            ~distinct_values.duplicated(subset=key_names, keep=False)
+        ]
+        matched = candidate_lookup.reset_index(drop=True).merge(
+            unambiguous_values[[*key_names, carry_column]],
+            how="inner",
+            on=key_names,
+            validate="many_to_one",
+        )
+        candidate_indices = matched["__candidate_index"].tolist()
+        current_missing = _series_missing_value_mask(
+            result.loc[candidate_indices, column]
+        )
+        rows_to_fill = matched.loc[current_missing.to_numpy()]
+        if not rows_to_fill.empty:
+            result.loc[
+                rows_to_fill["__candidate_index"].tolist(),
+                column,
+            ] = rows_to_fill[carry_column].tolist()
+        matched_candidate_indices.update(rows_to_fill["__candidate_index"].tolist())
+        summary["columnResults"][column] = {
+            "inheritedRowCount": int(len(rows_to_fill)),
+            "ambiguousActiveKeyCount": int(
+                distinct_values.loc[
+                    distinct_values.duplicated(
+                        subset=key_names,
+                        keep=False,
+                    ),
+                    key_names,
+                ]
+                .drop_duplicates()
+                .shape[0]
+            ),
+            "remainingNullRowCount": int(
+                _series_missing_value_mask(result[column]).sum()
+            ),
+        }
+    summary["matchedConfigurationRowCount"] = len(matched_candidate_indices)
+    return result, summary
+
+
 def _smart_merge_dataframes(
     *,
     active_path: Path,
     candidate_path: Path,
     regressed_countries: list[dict[str, str | None]],
-) -> pd.DataFrame:
+) -> tuple[pd.DataFrame, dict[str, Any]]:
     """Merge active + candidate parquet data for Smart Merge.
 
     - Regressed countries: use active data (has more recent months)
@@ -4167,6 +4404,14 @@ def _smart_merge_dataframes(
     candidate_keep = candidate_df[~candidate_df[country_col].isin(regressed_set)].copy()
     # From active: keep rows for regressed countries + countries missing in candidate
     active_keep = active_df[active_df[country_col].isin(regressed_set | missing_from_candidate)].copy()
+    candidate_keep, deprecated_static_summary = (
+        _carry_forward_deprecated_static_columns(
+            active_frame=active_df[
+                active_df[country_col].isin(set(candidate_keep[country_col].unique()))
+            ],
+            candidate_frame=candidate_keep,
+        )
+    )
 
     # Align columns: union of all columns from both dataframes
     all_columns = list(dict.fromkeys(list(active_df.columns) + list(candidate_df.columns)))
@@ -4176,7 +4421,10 @@ def _smart_merge_dataframes(
                 df[col] = None
 
     merged = pd.concat([candidate_keep, active_keep], ignore_index=True)
-    return merged[[col for col in all_columns if col in merged.columns]]
+    return (
+        merged[[col for col in all_columns if col in merged.columns]],
+        deprecated_static_summary,
+    )
 
 
 def _run_smart_merge(job_id: str) -> None:
@@ -4222,7 +4470,7 @@ def _run_smart_merge(job_id: str) -> None:
             _persist_job_state(state)
             return
 
-        merged_df = _smart_merge_dataframes(
+        merged_df, deprecated_static_summary = _smart_merge_dataframes(
             active_path=active_paths["parquet"],
             candidate_path=candidate_path,
             regressed_countries=regressions,
@@ -4238,6 +4486,21 @@ def _run_smart_merge(job_id: str) -> None:
             f"[{_utc_now().isoformat()}] Smart Merge: 合并完成，共 {row_count} 行。"
             f" 回归国家({len(regressed_names)}): {', '.join(regressed_names)}",
         )
+        if deprecated_static_summary.get("enabled"):
+            inherited_rows = sum(
+                int(item.get("inheritedRowCount", 0) or 0)
+                for item in deprecated_static_summary.get(
+                    "columnResults",
+                    {},
+                ).values()
+                if isinstance(item, dict)
+            )
+            _append_log(
+                log_path,
+                f"[{_utc_now().isoformat()}] Smart Merge: 已停用静态字段仅在配置键匹配且 active 旧值一致时沿用，"
+                f"columns={len(deprecated_static_summary.get('columns', []))}, "
+                f"inheritedCells={inherited_rows}。",
+            )
 
         # Rebuild partition/manifest/fingerprint from merged parquet
         job_dir = _job_dir(job_id)
@@ -4280,6 +4543,7 @@ def _run_smart_merge(job_id: str) -> None:
                 "regressedCountryCount": len(regressions),
                 "regressedCountries": regressed_names,
                 "totalRowCount": row_count,
+                "deprecatedStaticCarryForward": deprecated_static_summary,
             },
         }
         state["status"] = "success"

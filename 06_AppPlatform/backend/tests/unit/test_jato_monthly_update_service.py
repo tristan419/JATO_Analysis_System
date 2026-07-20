@@ -2045,21 +2045,127 @@ def test_partial_country_review_aggregates_country_findings(monkeypatch) -> None
     assert [item["country"] for item in review["countryFreshnessSummary"]] == ["捷克", "丹麦"]
 
 
+def test_single_country_schema_contract_downgrades_deprecated_optional_columns() -> None:
+    active = pd.DataFrame(
+        {
+            "国家": ["捷克"],
+            "Make": ["SKODA"],
+            "Model": ["ENYAQ"],
+            "Version name": ["85"],
+            "MSRP including delivery charge": [50000.0],
+            "Base price": [48000.0],
+            "Seating capacity": [5],
+            "2026 May": [10],
+        }
+    )
+    candidate = pd.DataFrame(
+        {
+            "国家": ["捷克"],
+            "Make": ["SKODA"],
+            "Model": ["ENYAQ"],
+            "Version name": ["85"],
+            "MSRP规整": [49900.0],
+            "2026 May": [10],
+            "2026 Jun": [12],
+        }
+    )
+
+    contract = jato_monthly_update_service._single_country_schema_contract(
+        active_frame=active,
+        candidate_frame=candidate,
+    )
+
+    assert contract["missingDeprecatedOptional"] == [
+        "Base price",
+        "MSRP including delivery charge",
+    ]
+    assert contract["missingMaterial"] == ["Seating capacity"]
+    assert contract["extra"] == ["MSRP规整"]
+
+
+def test_deprecated_static_fields_carry_forward_only_for_unique_config_matches() -> None:
+    active = pd.DataFrame(
+        {
+            "国家": ["捷克", "捷克", "捷克", "捷克", "捷克"],
+            "Make": ["SKODA", "SKODA", "SKODA", "SKODA", "SKODA"],
+            "Model": ["ENYAQ", "ENYAQ", "ENYAQ", "ELROQ", "ELROQ"],
+            "Version name": ["85", "RS", "RS", "60", "60"],
+            "Trim level": ["Core", "Sport", "Sport", "Plus", "Plus"],
+            "MSRP including delivery charge": [
+                50000.0,
+                60000.0,
+                61000.0,
+                45000.0,
+                45000.0,
+            ],
+            "Base price": [48000.0, 58000.0, 59000.0, 43000.0, 43000.0],
+        }
+    )
+    candidate = pd.DataFrame(
+        {
+            "国家": ["捷克", "捷克", "捷克", "捷克"],
+            "Make": ["SKODA", "SKODA", "SKODA", "SKODA"],
+            "Model": ["ENYAQ", "ENYAQ", "ELROQ", "ELROQ"],
+            "Version name": ["85", "RS", "60", "80"],
+            "Trim level": ["Core", "Sport", "Plus", "Core"],
+        }
+    )
+
+    carried, summary = (
+        jato_monthly_update_service._carry_forward_deprecated_static_columns(
+            active_frame=active,
+            candidate_frame=candidate,
+        )
+    )
+
+    assert carried.loc[0, "MSRP including delivery charge"] == 50000.0
+    assert carried.loc[0, "Base price"] == 48000.0
+    assert pd.isna(carried.loc[1, "MSRP including delivery charge"])
+    assert carried.loc[2, "MSRP including delivery charge"] == 45000.0
+    assert pd.isna(carried.loc[3, "MSRP including delivery charge"])
+    assert summary["matchedConfigurationRowCount"] == 2
+    assert summary["activeDuplicateKeyRowCount"] == 4
+    assert (
+        summary["columnResults"]["MSRP including delivery charge"][
+            "inheritedRowCount"
+        ]
+        == 2
+    )
+    assert (
+        summary["columnResults"]["MSRP including delivery charge"][
+            "ambiguousActiveKeyCount"
+        ]
+        == 1
+    )
+
+
 def test_single_country_source_feedback_reports_exact_washer_request() -> None:
     schema_feedback = jato_monthly_update_service._single_country_source_feedback(
         rule_id="SC009",
         country="匈牙利",
-        metrics={"missingMaterialColumns": ["MSRP including delivery charge"]},
+        metrics={"missingMaterialColumns": ["Seating capacity"]},
     )
     row_delta_feedback = jato_monthly_update_service._single_country_source_feedback(
         rule_id="SC012",
         country="匈牙利",
         metrics={"rowDelta": -358, "historicalSalesStability": {"status": "pass"}},
     )
+    deprecated_feedback = jato_monthly_update_service._single_country_source_feedback(
+        rule_id="SC014",
+        country="匈牙利",
+        metrics={
+            "missingDeprecatedOptionalColumns": [
+                "MSRP including delivery charge"
+            ]
+        },
+    )
 
     assert schema_feedback is not None
-    assert "MSRP including delivery charge" in schema_feedback
+    assert "Seating capacity" in schema_feedback
     assert "不能用 Retail price" in schema_feedback
     assert row_delta_feedback is not None
     assert "减少 358 行" in row_delta_feedback
     assert "历史销量已通过核对" in row_delta_feedback
+    assert deprecated_feedback is not None
+    assert "无需为本次月更补齐" in deprecated_feedback
+    assert "不会用 Retail price" in deprecated_feedback
