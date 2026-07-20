@@ -419,14 +419,21 @@ def _single_country_historical_sales_stability(
 
     active_sales = active_frame[historical_months].apply(pd.to_numeric, errors="coerce").fillna(0)
     candidate_sales = candidate_frame[historical_months].apply(pd.to_numeric, errors="coerce").fillna(0)
-    samples: list[dict[str, Any]] = []
+    country_samples: list[dict[str, Any]] = []
+    make_samples: list[dict[str, Any]] = []
 
-    def compare(left: pd.Series, right: pd.Series, *, scope: str) -> None:
+    def compare(
+        left: pd.Series,
+        right: pd.Series,
+        *,
+        scope: str,
+        destination: list[dict[str, Any]],
+    ) -> None:
         for month in historical_months:
             left_value = float(left.get(month, 0) or 0)
             right_value = float(right.get(month, 0) or 0)
             if left_value != right_value:
-                samples.append({
+                destination.append({
                     "scope": scope,
                     "month": month,
                     "activeSales": _serialize_numeric_value(left_value),
@@ -434,7 +441,12 @@ def _single_country_historical_sales_stability(
                     "deltaSales": _serialize_numeric_value(right_value - left_value),
                 })
 
-    compare(active_sales.sum(), candidate_sales.sum(), scope="country")
+    compare(
+        active_sales.sum(),
+        candidate_sales.sum(),
+        scope="country",
+        destination=country_samples,
+    )
     compared_make_count = 0
     if "Make" in active_frame.columns and "Make" in candidate_frame.columns:
         active_grouped = active_sales.groupby(active_frame["Make"].astype("string").fillna("").str.strip(), dropna=False).sum()
@@ -445,13 +457,33 @@ def _single_country_historical_sales_stability(
                 active_grouped.loc[make] if make in active_grouped.index else pd.Series(0, index=historical_months),
                 candidate_grouped.loc[make] if make in candidate_grouped.index else pd.Series(0, index=historical_months),
                 scope=f"make:{make}",
+                destination=make_samples,
             )
+    samples = [*country_samples, *make_samples]
+    cause = None
+    if country_samples:
+        cause = "historical_sales_changed"
+    elif make_samples:
+        cause = "make_dimension_reclassification"
     return {
         "status": "pass" if not samples else "fail",
+        "reason": cause,
         "comparedThrough": active_latest_month,
         "comparedMonthCount": len(historical_months),
         "comparedMakeCount": compared_make_count,
         "mismatchCount": len(samples),
+        "countryMismatchCount": len(country_samples),
+        "makeMismatchCount": len(make_samples),
+        "impactedMakes": sorted(
+            {
+                str(sample["scope"]).removeprefix("make:")
+                for sample in make_samples
+            }
+        ),
+        "impactedMonths": sorted(
+            {str(sample["month"]) for sample in samples},
+            key=_time_sort_key,
+        ),
         "mismatchSamples": samples[:20],
     }
 
@@ -483,6 +515,8 @@ def _single_country_source_feedback(*, rule_id: str, country: str, metrics: dict
     if rule_id == "SC010":
         return f"{country} 文件新增字段：{columns('extraColumns') or '见 Review 明细'}。请提供字段定义、单位和是否应保留的确认；新增列不应覆盖或改名现有业务列。"
     if rule_id == "SC011":
+        if metrics.get("reason") == "make_dimension_reclassification":
+            return f"{country} 的国家历史月销量总量与 active 一致，但 Make 归类发生变化。受影响品牌：{columns('impactedMakes') or '见 Review 明细'}；受影响月份：{columns('impactedMonths') or '见 Review 明细'}。请确认是否调整了品牌/车型映射；若为有意重分类，请提供旧 Make → 新 Make/Model 映射和业务确认，否则恢复已发布历史归类。"
         return f"请恢复 {country} 在 {metrics.get('comparedThrough') or '已有'} 之前的历史销量。系统发现 {metrics.get('mismatchCount', 0)} 处历史销量差异；本次更新只能新增或修正经确认的最新月份，不能重写已发布历史月份。"
     if rule_id == "SC012":
         row_delta = int(metrics.get("rowDelta", 0) or 0)

@@ -2083,7 +2083,48 @@ def test_single_country_schema_contract_downgrades_deprecated_optional_columns()
     assert contract["extra"] == ["MSRP规整"]
 
 
-def test_deprecated_static_fields_carry_forward_only_for_unique_config_matches() -> None:
+def test_historical_sales_stability_identifies_make_reclassification() -> None:
+    active = pd.DataFrame(
+        {
+            "国家": ["捷克", "捷克"],
+            "Make": ["DFSK", "FORTHING"],
+            "2026 Jan": [2, 3],
+        }
+    )
+    candidate = pd.DataFrame(
+        {
+            "国家": ["捷克"],
+            "Make": ["DFSK"],
+            "2026 Jan": [5],
+        }
+    )
+
+    stability = (
+        jato_monthly_update_service._single_country_historical_sales_stability(
+            active_frame=active,
+            candidate_frame=candidate,
+            active_latest_month="2026 Jan",
+        )
+    )
+    feedback = jato_monthly_update_service._single_country_source_feedback(
+        rule_id="SC011",
+        country="捷克",
+        metrics=stability,
+    )
+
+    assert stability["status"] == "fail"
+    assert stability["reason"] == "make_dimension_reclassification"
+    assert stability["countryMismatchCount"] == 0
+    assert stability["makeMismatchCount"] == 2
+    assert stability["impactedMakes"] == ["DFSK", "FORTHING"]
+    assert stability["impactedMonths"] == ["2026 Jan"]
+    assert feedback is not None
+    assert "国家历史月销量总量与 active 一致" in feedback
+    assert "DFSK、FORTHING" in feedback
+    assert "旧 Make → 新 Make/Model 映射" in feedback
+
+
+def test_deprecated_static_fields_carry_forward_only_for_consistent_active_values() -> None:
     active = pd.DataFrame(
         {
             "国家": ["捷克", "捷克", "捷克", "捷克", "捷克"],

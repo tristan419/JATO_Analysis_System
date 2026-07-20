@@ -27,6 +27,8 @@ DEFAULT_DB_DIR = PROJECT_ROOT / "04_Processed_data" / "chroma_db"
 DEFAULT_COLLECTION_NAME = "vehicle_wiki"
 DEFAULT_MANIFEST_NAME = "vehicle_wiki_manifest.json"
 DEFAULT_EMBED_DIMENSIONS = 256
+NORMALIZED_MSRP_COLUMN = "MSRP规整"
+NORMALIZED_MSRP_CURRENCY = "EUR"
 
 _TOKEN_PATTERN = re.compile(r"[A-Za-z0-9]+|[\u4e00-\u9fff]+")
 _GROUP_COLUMNS = [
@@ -252,7 +254,7 @@ def build_vehicle_documents(
         version = _normalize_text(row.get("Version name"))
         powertrain = _normalize_text(row.get("Powertrain type"))
         currency = _normalize_text(row.get("Currency"))
-        msrp = _format_number(row.get("MSRP including delivery charge"))
+        normalized_msrp = _format_number(row.get(NORMALIZED_MSRP_COLUMN))
         base_price = _format_number(row.get("Base price"))
         retail_price = _format_number(row.get("Retail price"))
         length = _format_number(row.get("length (mm)"))
@@ -286,7 +288,7 @@ def build_vehicle_documents(
             ),
             (
                 "- Price: "
-                f"MSRP {msrp} {currency} | "
+                f"MSRP {normalized_msrp} {NORMALIZED_MSRP_CURRENCY} (normalized) | "
                 f"Base {base_price} {currency} | "
                 f"Retail {retail_price} {currency}"
             ),

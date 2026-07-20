@@ -507,6 +507,7 @@ def test_query_local_wiki_returns_xc60_price_and_dimensions(
                 "Powertrain type": "PHEV",
                 "Version name": "XC60 Ultra T8",
                 "Currency": "EUR",
+                "MSRP规整": 51500,
                 "MSRP including delivery charge": 52000,
                 "Base price": 50000,
                 "Retail price": 51850,
@@ -530,6 +531,7 @@ def test_query_local_wiki_returns_xc60_price_and_dimensions(
                 "Powertrain type": "ICE",
                 "Version name": "GLC 300",
                 "Currency": "EUR",
+                "MSRP规整": 60000,
                 "MSRP including delivery charge": 61000,
                 "Base price": 59000,
                 "Retail price": 60500,
@@ -569,7 +571,8 @@ def test_query_local_wiki_returns_xc60_price_and_dimensions(
     assert docs
     assert "XC60" in docs[0]
     assert "4708" in docs[0]
-    assert "52000" in docs[0]
+    assert "51500 EUR (normalized)" in docs[0]
+    assert "52000" not in docs[0]
 
     local_wiki_service.clear_local_wiki_caches()
 
