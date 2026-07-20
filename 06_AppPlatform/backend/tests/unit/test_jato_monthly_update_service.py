@@ -47,6 +47,81 @@ def _configure_raw_roots(
     return project_root, baseline_path, archive_path
 
 
+def _approve_candidate_state(state: dict[str, object]) -> None:
+    artifacts = state.get("artifacts")
+    assert isinstance(artifacts, dict)
+    active_base_fingerprint = jato_monthly_update_service._active_dataset_version()
+    state["activeBaseFingerprint"] = active_base_fingerprint
+    state["reviewApproval"] = {
+        "decision": "approved",
+        "reviewedAt": "2026-07-20T00:00:00+00:00",
+        "reviewedBy": "tester",
+        "candidateFingerprint": jato_monthly_update_service._candidate_fingerprint_id(artifacts),
+        "activeBaseFingerprint": active_base_fingerprint,
+        "note": None,
+    }
+
+
+def _ready_full_batch_ingest_digest(
+    *,
+    month: str,
+    file_sha256: str = "a" * 64,
+    size_bytes: int = 9,
+    countries: list[str] | None = None,
+) -> dict[str, object]:
+    country_scope = countries or ["瑞典"]
+    country_latest_months = {
+        country: month
+        for country in country_scope
+    }
+    return {
+        "schemaVersion": 1,
+        "status": "ready",
+        "fileSha256": file_sha256,
+        "sizeBytes": size_bytes,
+        "sheetName": "Data Export",
+        "route": "full_batch",
+        "candidateScope": "full_candidate",
+        "countries": country_scope,
+        "countryLatestMonths": country_latest_months,
+        "activeLatestMonths": {
+            country: "2026-02"
+            for country in country_scope
+        },
+        "latestMonth": month,
+        "dataRowCount": len(country_scope),
+        "advancedCountries": country_scope,
+        "unchangedCountries": [],
+        "regressedCountries": [],
+        "activeDatasetVersion": "active-test-version",
+        "blockers": [],
+        "warnings": [],
+    }
+
+
+def _attach_full_batch_ingest_digest(
+    state: dict[str, object],
+    *,
+    month: str,
+    countries: list[str] | None = None,
+) -> None:
+    digest = _ready_full_batch_ingest_digest(
+        month=month,
+        countries=countries,
+    )
+    country_scope = list(digest["countries"])
+    country_latest_months = dict(digest["countryLatestMonths"])
+    state["ingestDigest"] = digest
+    state["activeBaseFingerprint"] = digest["activeDatasetVersion"]
+    state["uploadInspection"] = {
+        "sheetName": digest["sheetName"],
+        "countries": country_scope,
+        "countryLatestMonths": country_latest_months,
+        "latestMonth": month,
+        "dataRowCount": len(country_scope),
+    }
+
+
 def test_detect_latest_month_from_upload_uses_last_non_empty_month(tmp_path: Path) -> None:
     upload_path = tmp_path / "patch.xlsx"
     pd.DataFrame(
@@ -61,6 +136,62 @@ def test_detect_latest_month_from_upload_uses_last_non_empty_month(tmp_path: Pat
     detected = jato_monthly_update_service._detect_latest_month_from_upload(upload_path)
 
     assert detected == "2026-03"
+
+
+def test_inspect_upload_scope_uses_data_export_instead_of_first_sheet(
+    tmp_path: Path,
+) -> None:
+    upload_path = tmp_path / "Czech-Denmark-2026-06.xlsx"
+    with pd.ExcelWriter(upload_path, engine="openpyxl") as writer:
+        pd.DataFrame(
+            {
+                "车型类别": ["国家", "捷克", "丹麦"],
+                "(多项)": ["求和项:YTD 2026 (Jun)", 10, 20],
+            }
+        ).to_excel(writer, index=False, sheet_name="Summary")
+        pd.DataFrame(
+            {
+                "国家": ["捷克", "丹麦"],
+                "Model": ["A", "B"],
+                "2026 May": [1, 2],
+                "2026 Jun": [3, 0],
+            }
+        ).to_excel(writer, index=False, sheet_name="Data Export")
+
+    inspection = jato_monthly_update_service._inspect_upload_scope(upload_path)
+
+    assert inspection["countries"] == ["捷克", "丹麦"]
+    assert inspection["latestMonth"] == "2026-06"
+    assert inspection["countryLatestMonths"] == {
+        "捷克": "2026-06",
+        "丹麦": "2026-06",
+    }
+    assert inspection["dataRowCount"] == 2
+
+
+def test_detect_partial_country_upload_uses_active_partition_scope(
+    tmp_path: Path, monkeypatch
+) -> None:
+    project_root = tmp_path / "project"
+    partition_root = project_root / "04_Processed_data" / "partitioned_dataset_v1"
+    for encoded_country in ("%E6%8D%B7%E5%85%8B", "%E4%B8%B9%E9%BA%A6", "%E5%BE%B7%E5%9B%BD"):
+        (partition_root / f"国家={encoded_country}").mkdir(parents=True, exist_ok=True)
+    monkeypatch.setattr(jato_monthly_update_service, "PROJECT_ROOT", project_root)
+
+    upload_path = tmp_path / "partial.xlsx"
+    pd.DataFrame(
+        {
+            "国家": ["捷克", "丹麦"],
+            "2026 May": [1, 2],
+            "2026 Jun": [3, 4],
+        }
+    ).to_excel(upload_path, index=False, sheet_name="Data Export")
+
+    inspection = jato_monthly_update_service._detect_partial_country_upload(upload_path)
+
+    assert inspection is not None
+    assert inspection["countries"] == ["捷克", "丹麦"]
+    assert inspection["latestMonth"] == "2026-06"
 
 
 def test_allocate_batch_id_increments_existing_revisions(
@@ -114,7 +245,7 @@ def test_parse_plan_markdown_extracts_commands_and_artifacts(tmp_path: Path) -> 
                 "## 步骤 2 · Candidate Refresh",
                 "",
                 "```bash",
-                "python 03_Scripts/data_pipeline/run_data_refresh_job.py --baseline-input 01_RAW_DATA/baseline/JATO-2026.2-full-baseline.xlsx --patch-input-files 01_RAW_DATA/patches/2026-03-r1/JATO-2026.3-partial.xlsx --output 04_Processed_data/staging/2026-03-r1-mixed/jato_full_archive.parquet --manifest 04_Processed_data/staging/2026-03-r1-mixed/manifest.json --partition-output 04_Processed_data/staging/2026-03-r1-mixed/partitioned_dataset_v1 --report 04_Processed_data/staging/2026-03-r1-mixed/refresh_job_report.json --fingerprint 04_Processed_data/staging/2026-03-r1-mixed/dataset_fingerprint.json --incremental --skip-benchmark",
+                "python 03_Scripts/data_pipeline/run_data_refresh_job.py --baseline-input 01_RAW_DATA/baseline/JATO-2026.2-full-baseline.xlsx --patch-input-files 01_RAW_DATA/patches/2026-03-r1/JATO-2026.3-partial.xlsx --output 04_Processed_data/staging/2026-03-r1-mixed/jato_full_archive.parquet --manifest 04_Processed_data/staging/2026-03-r1-mixed/manifest.json --partition-output 04_Processed_data/staging/2026-03-r1-mixed/partitioned_dataset_v1 --report 04_Processed_data/staging/2026-03-r1-mixed/refresh_job_report.json --fingerprint 04_Processed_data/staging/2026-03-r1-mixed/dataset_fingerprint.json --summaries-output 04_Processed_data/staging/2026-03-r1-mixed/summaries --incremental --skip-benchmark",
                 "```",
             ]
         ),
@@ -133,6 +264,7 @@ def test_parse_plan_markdown_extracts_commands_and_artifacts(tmp_path: Path) -> 
     assert parsed["refreshReportPath"] == "04_Processed_data/staging/2026-03-r1-mixed/refresh_job_report.json"
     assert parsed["manifestPath"] == "04_Processed_data/staging/2026-03-r1-mixed/manifest.json"
     assert parsed["fingerprintPath"] == "04_Processed_data/staging/2026-03-r1-mixed/dataset_fingerprint.json"
+    assert parsed["summariesOutputPath"] == "04_Processed_data/staging/2026-03-r1-mixed/summaries"
 
 
 def test_summarize_raw_compare_report_counts_findings() -> None:
@@ -247,7 +379,7 @@ def _write_plan(project_root: Path, month: str, compare_id: str) -> None:
                 "## 步骤 2 · Candidate Refresh",
                 "",
                 "```bash",
-                f"python 03_Scripts/data_pipeline/run_data_refresh_job.py --baseline-input 01_RAW_DATA/baseline/JATO-2026.2-full-baseline.xlsx --patch-input-files 01_RAW_DATA/patches/{month}/JATO-2026.3-partial.xlsx --output 04_Processed_data/staging/{month}-mixed/jato_full_archive.parquet --manifest 04_Processed_data/staging/{month}-mixed/manifest.json --partition-output 04_Processed_data/staging/{month}-mixed/partitioned_dataset_v1 --report 04_Processed_data/staging/{month}-mixed/refresh_job_report.json --fingerprint 04_Processed_data/staging/{month}-mixed/dataset_fingerprint.json --incremental --skip-benchmark",
+                f"python 03_Scripts/data_pipeline/run_data_refresh_job.py --baseline-input 01_RAW_DATA/baseline/JATO-2026.2-full-baseline.xlsx --patch-input-files 01_RAW_DATA/patches/{month}/JATO-2026.3-partial.xlsx --output 04_Processed_data/staging/{month}-mixed/jato_full_archive.parquet --manifest 04_Processed_data/staging/{month}-mixed/manifest.json --partition-output 04_Processed_data/staging/{month}-mixed/partitioned_dataset_v1 --report 04_Processed_data/staging/{month}-mixed/refresh_job_report.json --fingerprint 04_Processed_data/staging/{month}-mixed/dataset_fingerprint.json --summaries-output 04_Processed_data/staging/{month}-mixed/summaries --incremental --skip-benchmark",
                 "```",
             ]
         ),
@@ -258,6 +390,72 @@ def _write_plan(project_root: Path, month: str, compare_id: str) -> None:
 def _write_dataset_parquet(path: Path, rows: list[dict[str, object]]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     pd.DataFrame(rows).to_parquet(path, index=False)
+
+
+def _attach_staged_summaries_bundle(
+    *,
+    state: dict[str, object],
+    project_root: Path,
+    staging_root: Path,
+    candidate_rows: int,
+) -> Path:
+    artifacts = state.get("artifacts")
+    assert isinstance(artifacts, dict)
+    candidate_manifest_path = project_root / str(artifacts["manifestPath"])
+    candidate_manifest = json.loads(
+        candidate_manifest_path.read_text(encoding="utf-8")
+    )
+    candidate_manifest["rows"] = candidate_rows
+    candidate_manifest_path.write_text(
+        json.dumps(candidate_manifest),
+        encoding="utf-8",
+    )
+
+    summaries_root = staging_root / "summaries"
+    summary_frame = pd.DataFrame(
+        [{"country": "瑞典", "month": "2026 Mar", "sales": 12}]
+    )
+    csv_path = summaries_root / "country_monthly_sales_summary.csv"
+    parquet_path = summaries_root / "country_monthly_sales_summary.parquet"
+    summaries_root.mkdir(parents=True, exist_ok=True)
+    summary_frame.to_csv(csv_path, index=False)
+    summary_frame.to_parquet(parquet_path, index=False)
+
+    relative_csv = csv_path.relative_to(project_root).as_posix()
+    relative_parquet = parquet_path.relative_to(project_root).as_posix()
+    relative_manifest = candidate_manifest_path.relative_to(project_root).as_posix()
+    relative_candidate = (
+        project_root / str(artifacts["stagingOutputPath"])
+    ).relative_to(project_root).as_posix()
+    summaries_manifest = {
+        "generatedAt": "2026-07-20T00:00:00+00:00",
+        "originalRowCount": candidate_rows,
+        "totalSummaryRows": len(summary_frame),
+        "bandwidthReduction": "0.0%",
+        "precomputeMode": "full",
+        "incremental": {"mode": "full"},
+        "lineage": {
+            "candidateManifestPath": relative_manifest,
+            "candidateParquetPath": relative_candidate,
+        },
+        "summaries": {
+            "country_monthly_sales": {
+                "csv": relative_csv,
+                "parquet": relative_parquet,
+                "rows": len(summary_frame),
+                "columns": len(summary_frame.columns),
+            }
+        },
+    }
+    (summaries_root / "summaries_manifest.json").write_text(
+        json.dumps(summaries_manifest, ensure_ascii=False),
+        encoding="utf-8",
+    )
+    artifacts["summariesOutputPath"] = (
+        summaries_root.relative_to(project_root).as_posix()
+    )
+    state["artifacts"] = artifacts
+    return summaries_root
 
 
 def test_run_job_marks_success_and_collects_summaries(
@@ -299,6 +497,7 @@ def test_run_job_marks_success_and_collects_summaries(
         baseline_path=baseline_path,
         baseline_source="active",
     )
+    _attach_full_batch_ingest_digest(state, month=month)
     jato_monthly_update_service._persist_job_state(state)
 
     def fake_run_logged_command(
@@ -349,13 +548,13 @@ def test_run_job_marks_success_and_collects_summaries(
                 encoding="utf-8",
             )
         elif label == "Candidate refresh":
-            refresh_path = (
+            candidate_root = (
                 project_root
                 / "04_Processed_data"
                 / "staging"
                 / f"{month}-mixed"
-                / "refresh_job_report.json"
             )
+            refresh_path = candidate_root / "refresh_job_report.json"
             refresh_path.parent.mkdir(parents=True, exist_ok=True)
             refresh_path.write_text(
                 json.dumps(
@@ -380,11 +579,29 @@ def test_run_job_marks_success_and_collects_summaries(
                 ),
                 encoding="utf-8",
             )
+            _write_dataset_parquet(
+                candidate_root / "jato_full_archive.parquet",
+                [{"国家": "瑞典", "Model": "EX30", "2026 Mar": 1}],
+            )
+            (candidate_root / "manifest.json").write_text(
+                '{"rows": 1}',
+                encoding="utf-8",
+            )
 
     monkeypatch.setattr(
         jato_monthly_update_service,
         "_run_logged_command",
         fake_run_logged_command,
+    )
+    monkeypatch.setattr(
+        jato_monthly_update_service,
+        "_detect_partial_country_upload",
+        lambda _path: None,
+    )
+    monkeypatch.setattr(
+        jato_monthly_update_service,
+        "_cache_jato_monthly_update_review",
+        lambda _job_id: Path("review_bundle.json"),
     )
 
     jato_monthly_update_service._run_job("jato-update-1234abcd")
@@ -445,6 +662,7 @@ def test_run_job_injects_active_parquet_supplement_into_refresh(
         baseline_path=baseline_path,
         baseline_source="active",
     )
+    _attach_full_batch_ingest_digest(state, month=month)
     jato_monthly_update_service._persist_job_state(state)
 
     def fake_run_logged_command(
@@ -490,13 +708,13 @@ def test_run_job_injects_active_parquet_supplement_into_refresh(
             assert args[args.index("--supplement-missing-countries-from-parquet") + 1] == str(
                 processed_root / "jato_full_archive.parquet"
             )
-            refresh_path = (
+            candidate_root = (
                 project_root
                 / "04_Processed_data"
                 / "staging"
                 / f"{month}-mixed"
-                / "refresh_job_report.json"
             )
+            refresh_path = candidate_root / "refresh_job_report.json"
             refresh_path.parent.mkdir(parents=True, exist_ok=True)
             refresh_path.write_text(
                 json.dumps(
@@ -521,11 +739,24 @@ def test_run_job_injects_active_parquet_supplement_into_refresh(
                 ),
                 encoding="utf-8",
             )
+            _write_dataset_parquet(
+                candidate_root / "jato_full_archive.parquet",
+                [{"国家": "瑞典", "Model": "EX30", "2026 Mar": 1}],
+            )
+            (candidate_root / "manifest.json").write_text(
+                '{"rows": 1}',
+                encoding="utf-8",
+            )
 
     monkeypatch.setattr(
         jato_monthly_update_service,
         "_run_logged_command",
         fake_run_logged_command,
+    )
+    monkeypatch.setattr(
+        jato_monthly_update_service,
+        "_detect_partial_country_upload",
+        lambda _path: None,
     )
 
     jato_monthly_update_service._run_job("jato-update-merge")
@@ -575,6 +806,7 @@ def test_run_job_marks_failed_when_stage_raises(
         baseline_path=baseline_path,
         baseline_source="active",
     )
+    _attach_full_batch_ingest_digest(state, month=month)
     jato_monthly_update_service._persist_job_state(state)
 
     def fake_run_logged_command(
@@ -597,6 +829,11 @@ def test_run_job_marks_failed_when_stage_raises(
         jato_monthly_update_service,
         "_run_logged_command",
         fake_run_logged_command,
+    )
+    monkeypatch.setattr(
+        jato_monthly_update_service,
+        "_detect_partial_country_upload",
+        lambda _path: None,
     )
 
     jato_monthly_update_service._run_job("jato-update-failed")
@@ -762,7 +999,10 @@ def test_cautious_cleanup_removes_regenerable_artifacts_and_archives(
 
     upload_session_dir = job_root / "_upload_sessions" / "session-1"
     upload_session_dir.mkdir(parents=True, exist_ok=True)
-    (upload_session_dir / "upload_state.json").write_text("{}", encoding="utf-8")
+    (upload_session_dir / "upload_state.json").write_text(
+        '{"uploadId":"session-1","status":"consumed"}',
+        encoding="utf-8",
+    )
 
     monkeypatch.setattr(jato_monthly_update_service, "PROJECT_ROOT", project_root)
     monkeypatch.setattr(jato_monthly_update_service, "RAW_DATA_ROOT", raw_root)
@@ -792,6 +1032,42 @@ def test_cautious_cleanup_removes_regenerable_artifacts_and_archives(
     assert not (history_root / "patches" / "2026-01").exists()
 
 
+def test_cleanup_refuses_active_digest_and_preserves_session(
+    tmp_path: Path, monkeypatch
+) -> None:
+    project_root, _baseline_path, _archive_path = _configure_raw_roots(
+        tmp_path,
+        monkeypatch,
+        active_baseline_name="JATO-2026.3-full-baseline.xlsx",
+    )
+    job_root = (
+        project_root
+        / "04_Processed_data"
+        / "ops"
+        / "jato_monthly_update_jobs"
+    )
+    monkeypatch.setattr(
+        jato_monthly_update_service,
+        "MONTHLY_UPDATE_JOB_ROOT",
+        job_root,
+    )
+    session_dir = job_root / "_upload_sessions" / "digesting-upload"
+    session_dir.mkdir(parents=True, exist_ok=True)
+    (session_dir / "upload_state.json").write_text(
+        '{"uploadId":"digesting-upload","status":"digesting"}',
+        encoding="utf-8",
+    )
+
+    with pytest.raises(HTTPException) as exc_info:
+        jato_monthly_update_service.run_jato_monthly_update_cleanup(
+            triggered_by="tester",
+        )
+
+    assert exc_info.value.status_code == 409
+    assert "digesting-upload" in str(exc_info.value.detail)
+    assert session_dir.exists()
+
+
 def test_promote_current_active_to_baseline_exports_snapshot_and_archives_old(
     tmp_path: Path, monkeypatch
 ) -> None:
@@ -817,11 +1093,30 @@ def test_promote_current_active_to_baseline_exports_snapshot_and_archives_old(
     monkeypatch.setattr(
         jato_monthly_update_service, "MONTHLY_UPDATE_JOB_ROOT", job_root
     )
+    monkeypatch.setattr(
+        jato_monthly_update_service,
+        "_launch_job_thread",
+        lambda _job_id: None,
+    )
 
     result = jato_monthly_update_service.promote_current_active_to_baseline(
         triggered_by="tester"
     )
 
+    assert result["status"] == "queued"
+    assert result["requestedBy"] == "tester"
+    operation_id = result["operationId"]
+    assert (
+        jato_monthly_update_service._run_baseline_promotion_operation()
+        == operation_id
+    )
+    result = (
+        jato_monthly_update_service._serialize_baseline_promotion_state(
+            jato_monthly_update_service._load_baseline_promotion_state()
+        )
+        or {}
+    )
+    assert result["status"] == "success"
     assert result["triggeredBy"] == "tester"
     assert result["detectedLatestMonth"] == "2026-03"
     assert result["countryCount"] == 2
@@ -843,6 +1138,49 @@ def test_promote_current_active_to_baseline_exports_snapshot_and_archives_old(
         / "baseline"
         / "JATO-2026.2-full-21countries-baseline.xlsx"
     ).exists()
+
+
+def test_promote_baseline_refuses_ready_upload_session(
+    tmp_path: Path, monkeypatch
+) -> None:
+    project_root, _baseline_path, _archive_path = _configure_raw_roots(
+        tmp_path,
+        monkeypatch,
+        active_baseline_name="JATO-2026.3-full-baseline.xlsx",
+    )
+    job_root = (
+        project_root
+        / "04_Processed_data"
+        / "ops"
+        / "jato_monthly_update_jobs"
+    )
+    monkeypatch.setattr(
+        jato_monthly_update_service,
+        "MONTHLY_UPDATE_JOB_ROOT",
+        job_root,
+    )
+    session_dir = job_root / "_upload_sessions" / "ready-upload"
+    session_dir.mkdir(parents=True, exist_ok=True)
+    (session_dir / "upload_state.json").write_text(
+        json.dumps(
+            {
+                "uploadId": "ready-upload",
+                "status": "ready",
+                "updatedAt": (
+                    jato_monthly_update_service._utc_now().isoformat()
+                ),
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(HTTPException) as exc_info:
+        jato_monthly_update_service.promote_current_active_to_baseline(
+            triggered_by="tester",
+        )
+
+    assert exc_info.value.status_code == 409
+    assert "ready-upload" in str(exc_info.value.detail)
 
 
 def test_get_monthly_update_maintenance_status_summarizes_storage(
@@ -898,6 +1236,50 @@ def test_get_monthly_update_maintenance_status_summarizes_storage(
     assert metrics["patch-batches"]["bytes"] > 0
 
 
+def test_maintenance_status_marks_orphaned_baseline_promotion_failed(
+    tmp_path: Path, monkeypatch
+) -> None:
+    project_root, _baseline_path, _archive_path = _configure_raw_roots(
+        tmp_path,
+        monkeypatch,
+        active_baseline_name="JATO-2026.3-full-21countries-baseline.xlsx",
+    )
+    job_root = (
+        project_root
+        / "04_Processed_data"
+        / "ops"
+        / "jato_monthly_update_jobs"
+    )
+    monkeypatch.setattr(
+        jato_monthly_update_service,
+        "MONTHLY_UPDATE_JOB_ROOT",
+        job_root,
+    )
+    monkeypatch.setattr(
+        jato_monthly_update_service,
+        "_process_exists",
+        lambda _pid: False,
+    )
+    jato_monthly_update_service._write_json(
+        jato_monthly_update_service._baseline_promotion_state_path(),
+        {
+            "operationId": "jato-baseline-orphaned",
+            "status": "running",
+            "workerPid": 424242,
+        },
+    )
+
+    status = (
+        jato_monthly_update_service
+        .get_jato_monthly_update_maintenance_status()
+    )
+
+    promotion = status["baselinePromotion"]
+    assert promotion["status"] == "failed"
+    assert promotion["failureDigest"]["code"] == "WORKER_LOST"
+    assert promotion["finishedAt"]
+
+
 def test_chunked_upload_session_can_be_completed_and_queued(
     tmp_path: Path, monkeypatch
 ) -> None:
@@ -916,13 +1298,27 @@ def test_chunked_upload_session_can_be_completed_and_queued(
     )
     monkeypatch.setattr(
         jato_monthly_update_service,
-        "_detect_latest_month_from_upload",
-        lambda _path: "2026-03",
+        "_launch_upload_digest_process",
+        lambda _upload_id: 4242,
+    )
+    monkeypatch.setattr(
+        jato_monthly_update_service,
+        "_build_upload_ingest_digest",
+        lambda *, path, file_sha256, size_bytes: _ready_full_batch_ingest_digest(
+            month="2026-03",
+            file_sha256=file_sha256,
+            size_bytes=size_bytes,
+        ),
     )
     monkeypatch.setattr(
         jato_monthly_update_service,
         "_allocate_batch_id",
         lambda month: f"{month}-r1",
+    )
+    monkeypatch.setattr(
+        jato_monthly_update_service,
+        "_active_dataset_version",
+        lambda: "active-test-version",
     )
 
     initiated = jato_monthly_update_service.initiate_jato_monthly_update_upload(
@@ -947,30 +1343,48 @@ def test_chunked_upload_session_can_be_completed_and_queued(
         part_number=1,
         content=b"abcd",
         chunk_sha256=hashlib.sha256(b"abcd").hexdigest(),
+        requested_by="tester",
+        requested_role="editor",
     )
     assert status["receivedChunks"] == [1]
-    status = jato_monthly_update_service.get_jato_monthly_update_upload(upload_id)
+    status = jato_monthly_update_service.get_jato_monthly_update_upload(
+        upload_id,
+        requested_by="tester",
+        requested_role="editor",
+    )
     assert status["uploadedBytes"] == 4
     jato_monthly_update_service.upload_jato_monthly_update_chunk(
         upload_id=upload_id,
         part_number=2,
         content=b"efgh",
         chunk_sha256=hashlib.sha256(b"efgh").hexdigest(),
+        requested_by="tester",
+        requested_role="editor",
     )
     completed = jato_monthly_update_service.upload_jato_monthly_update_chunk(
         upload_id=upload_id,
         part_number=3,
         content=b"ij",
         chunk_sha256=hashlib.sha256(b"ij").hexdigest(),
+        requested_by="tester",
+        requested_role="editor",
     )
     assert completed["receivedChunkCount"] == 3
 
     assembled = jato_monthly_update_service.complete_jato_monthly_update_upload(
-        upload_id=upload_id
+        upload_id=upload_id,
+        requested_by="tester",
+        requested_role="editor",
     )
-    assert assembled["status"] == "completed"
-    assert assembled["uploadedBytes"] == 10
-    assert assembled["fileSha256"] == hashlib.sha256(b"abcdefghij").hexdigest()
+    assert assembled["status"] == "assembling"
+
+    digested = jato_monthly_update_service.run_jato_monthly_update_upload_digest(
+        upload_id
+    )
+    assert digested["status"] == "ready"
+    assert digested["uploadedBytes"] == 10
+    assert digested["fileSha256"] == hashlib.sha256(b"abcdefghij").hexdigest()
+    assert digested["ingestDigest"]["route"] == "full_batch"
 
     job = jato_monthly_update_service.create_jato_monthly_update_job_from_upload(
         upload_id=upload_id,
@@ -985,7 +1399,13 @@ def test_chunked_upload_session_can_be_completed_and_queued(
     assert job["upload"]["sha256"] == hashlib.sha256(b"abcdefghij").hexdigest()
     stored_path = job_root / job["jobId"] / "uploads" / "JATO-2026.03-patch.xlsx"
     assert stored_path.read_bytes() == b"abcdefghij"
-    assert not (job_root / "_upload_sessions" / upload_id).exists()
+    upload_state = jato_monthly_update_service.get_jato_monthly_update_upload(
+        upload_id,
+        requested_by="tester",
+        requested_role="editor",
+    )
+    assert upload_state["status"] == "consumed"
+    assert upload_state["consumedJobId"] == job["jobId"]
 
 
 def test_retry_failed_job_reuses_stored_upload_copy(
@@ -1061,6 +1481,25 @@ def test_create_job_from_upload_restores_assembled_file_when_queue_fails(
         jato_monthly_update_service, "MONTHLY_UPDATE_JOB_ROOT", job_root
     )
     monkeypatch.setattr(jato_monthly_update_service, "UPLOAD_CHUNK_SIZE_BYTES", 4)
+    monkeypatch.setattr(
+        jato_monthly_update_service,
+        "_launch_upload_digest_process",
+        lambda _upload_id: 4242,
+    )
+    monkeypatch.setattr(
+        jato_monthly_update_service,
+        "_build_upload_ingest_digest",
+        lambda *, path, file_sha256, size_bytes: _ready_full_batch_ingest_digest(
+            month="2026-03",
+            file_sha256=file_sha256,
+            size_bytes=size_bytes,
+        ),
+    )
+    monkeypatch.setattr(
+        jato_monthly_update_service,
+        "_active_dataset_version",
+        lambda: "active-test-version",
+    )
 
     initiated = jato_monthly_update_service.initiate_jato_monthly_update_upload(
         filename="JATO-2026.03-patch.xlsx",
@@ -1074,22 +1513,35 @@ def test_create_job_from_upload_restores_assembled_file_when_queue_fails(
         part_number=1,
         content=b"abcd",
         chunk_sha256=hashlib.sha256(b"abcd").hexdigest(),
+        requested_by="tester",
+        requested_role="editor",
     )
     jato_monthly_update_service.upload_jato_monthly_update_chunk(
         upload_id=upload_id,
         part_number=2,
         content=b"efgh",
         chunk_sha256=hashlib.sha256(b"efgh").hexdigest(),
+        requested_by="tester",
+        requested_role="editor",
     )
     jato_monthly_update_service.upload_jato_monthly_update_chunk(
         upload_id=upload_id,
         part_number=3,
         content=b"ij",
         chunk_sha256=hashlib.sha256(b"ij").hexdigest(),
+        requested_by="tester",
+        requested_role="editor",
     )
     assembled = jato_monthly_update_service.complete_jato_monthly_update_upload(
-        upload_id=upload_id
+        upload_id=upload_id,
+        requested_by="tester",
+        requested_role="editor",
     )
+    assert assembled["status"] == "assembling"
+    digested = jato_monthly_update_service.run_jato_monthly_update_upload_digest(
+        upload_id
+    )
+    assert digested["status"] == "ready"
     assembled_path = jato_monthly_update_service._upload_session_assembled_path(
         upload_id,
         "JATO-2026.03-patch.xlsx",
@@ -1117,8 +1569,12 @@ def test_create_job_from_upload_restores_assembled_file_when_queue_fails(
     assert assembled_path.exists()
     assert assembled_path.read_bytes() == b"abcdefghij"
     assert not any(path.name.startswith("jato-update-") for path in job_root.iterdir() if path.is_dir())
-    upload_state = jato_monthly_update_service.get_jato_monthly_update_upload(upload_id)
-    assert upload_state["status"] == "completed"
+    upload_state = jato_monthly_update_service.get_jato_monthly_update_upload(
+        upload_id,
+        requested_by="tester",
+        requested_role="editor",
+    )
+    assert upload_state["status"] == "ready"
 
 
 def test_get_review_bundle_reads_compare_outputs(tmp_path: Path, monkeypatch) -> None:
@@ -1267,10 +1723,31 @@ def test_get_review_bundle_reads_compare_outputs(tmp_path: Path, monkeypatch) ->
         "rawCompareReportPath": "04_Processed_data/reviews/raw_compare/2026-02_vs_2026-03/raw_compare_report.json",
         "refreshReportPath": "04_Processed_data/staging/2026-03-mixed/refresh_job_report.json",
         "stagingOutputPath": "04_Processed_data/staging/2026-03-mixed/jato_full_archive.parquet",
+        "manifestPath": "04_Processed_data/staging/2026-03-mixed/manifest.json",
+        "partitionOutputPath": "04_Processed_data/staging/2026-03-mixed/partitioned_dataset_v1",
+        "fingerprintPath": "04_Processed_data/staging/2026-03-mixed/dataset_fingerprint.json",
+        "summariesOutputPath": "04_Processed_data/staging/2026-03-mixed/summaries",
     }
+    (candidate_parquet.parent / "manifest.json").write_text(
+        "{}",
+        encoding="utf-8",
+    )
+    partition_path = candidate_parquet.parent / "partitioned_dataset_v1"
+    partition_path.mkdir(parents=True, exist_ok=True)
+    (partition_path / "marker").write_text("partition", encoding="utf-8")
+    (candidate_parquet.parent / "dataset_fingerprint.json").write_text(
+        "{}",
+        encoding="utf-8",
+    )
+    summaries_path = candidate_parquet.parent / "summaries"
+    summaries_path.mkdir(parents=True, exist_ok=True)
+    (summaries_path / "marker").write_text("summaries", encoding="utf-8")
     jato_monthly_update_service._persist_job_state(state)
 
-    review = jato_monthly_update_service.get_jato_monthly_update_review(job_id)
+    review = jato_monthly_update_service.get_jato_monthly_update_review(
+        job_id,
+        allow_build=True,
+    )
 
     assert review["jobId"] == job_id
     assert review["compareId"] == "2026-02_vs_2026-03"
@@ -1356,10 +1833,10 @@ def test_recheck_monthly_update_job_marks_missing_worker_stale_failed(
     )
 
     assert result["status"] == "failed"
-    assert result["phase"] == "stale_failed"
+    assert result["phase"] == "worker_lost"
     assert result["currentProcess"] is None
-    assert result["runtimeCheck"]["resolvedAs"] == "stale_failed"
-    assert "Stale monthly update job" in result["error"]
+    assert result["runtimeCheck"]["resolvedAs"] == "reconciled"
+    assert "worker" in result["error"]
 
 
 def test_cancel_monthly_update_job_terminates_process_group(
@@ -1377,7 +1854,11 @@ def test_cancel_monthly_update_job_terminates_process_group(
         "processAliveBefore": True,
         "processAliveAfter": False,
     }
-    monkeypatch.setattr(jato_monthly_update_service, "_terminate_process_group", lambda _pid: termination)
+    monkeypatch.setattr(
+        jato_monthly_update_service,
+        "_terminate_process_group",
+        lambda _pid, **_kwargs: termination,
+    )
 
     job_id = "jato-update-cancel"
     upload_path = job_root / job_id / "uploads" / "patch.xlsx"
@@ -1460,7 +1941,14 @@ def test_publish_monthly_update_job_promotes_staging_outputs(
     active_partition.mkdir(parents=True, exist_ok=True)
     _write_dataset_parquet(
         processed_root / "jato_full_archive.parquet",
-        [{"国家": "瑞典", "Model": "EX30", "2026 Jan": 10}],
+        [
+            {
+                "国家": "瑞典",
+                "Make": "VOLVO",
+                "Model": "EX30",
+                "2026 Jan": 10,
+            }
+        ],
     )
     (processed_root / "manifest.json").write_text('{"version":"old"}', encoding="utf-8")
     (processed_root / "dataset_fingerprint.json").write_text('{"hash":"old"}', encoding="utf-8")
@@ -1472,7 +1960,15 @@ def test_publish_monthly_update_job_promotes_staging_outputs(
     staging_partition.mkdir(parents=True, exist_ok=True)
     _write_dataset_parquet(
         staging_root / "jato_full_archive.parquet",
-        [{"国家": "瑞典", "Model": "EX30", "2026 Jan": 10, "2026 Mar": 12}],
+        [
+            {
+                "国家": "瑞典",
+                "Make": "VOLVO",
+                "Model": "EX30",
+                "2026 Jan": 10,
+                "2026 Mar": 12,
+            }
+        ],
     )
     (staging_root / "manifest.json").write_text('{"version":"new"}', encoding="utf-8")
     (staging_root / "dataset_fingerprint.json").write_text('{"hash":"new"}', encoding="utf-8")
@@ -1500,6 +1996,13 @@ def test_publish_monthly_update_job_promotes_staging_outputs(
         "refreshReportPath": "04_Processed_data/staging/2026-03-mixed/refresh_job_report.json",
     }
     state["summaries"] = {"refresh": {"jobStatus": "success"}}
+    staged_summaries = _attach_staged_summaries_bundle(
+        state=state,
+        project_root=project_root,
+        staging_root=staging_root,
+        candidate_rows=1,
+    )
+    _approve_candidate_state(state)
     jato_monthly_update_service._persist_job_state(state)
     evidence_calls = []
     cache_invalidation = {
@@ -1516,28 +2019,79 @@ def test_publish_monthly_update_job_promotes_staging_outputs(
         "_write_jato_publish_cache_invalidation_evidence",
         lambda **kwargs: evidence_calls.append(kwargs),
     )
+    monkeypatch.setattr(
+        jato_monthly_update_service,
+        "_launch_job_thread",
+        lambda _job_id: None,
+    )
+    monkeypatch.setattr(
+        jato_monthly_update_service,
+        "_validate_candidate_full_bundle",
+        lambda **_kwargs: {},
+    )
 
-    published = jato_monthly_update_service.publish_jato_monthly_update_job(
+    queued = jato_monthly_update_service.publish_jato_monthly_update_job(
         job_id=job_id,
         triggered_by="publisher",
     )
+    assert queued["pendingOperation"]["type"] == "publish"
+    assert queued["pendingOperation"]["status"] == "queued"
+    assert queued["publication"] is None
 
+    worker_result = jato_monthly_update_service.run_jato_monthly_update_worker_once()
+    assert worker_result["processedJobId"] == job_id
+    published = jato_monthly_update_service.get_jato_monthly_update_job(job_id)
+
+    assert published["pendingOperation"]["status"] == "success"
     assert published["publication"]["publishedBy"] == "publisher"
     assert published["publication"]["backupDir"].startswith("04_Processed_data/.refresh_backups/manual-promote-")
     assert published["publication"]["cacheInvalidation"] == cache_invalidation
     assert evidence_calls[0]["job_id"] == job_id
     assert evidence_calls[0]["cache_invalidation"] == cache_invalidation
     assert pd.read_parquet(processed_root / "jato_full_archive.parquet").to_dict("records") == [
-        {"国家": "瑞典", "Model": "EX30", "2026 Jan": 10, "2026 Mar": 12}
+        {
+            "国家": "瑞典",
+            "Make": "VOLVO",
+            "Model": "EX30",
+            "2026 Jan": 10,
+            "2026 Mar": 12,
+        }
     ]
-    assert (processed_root / "manifest.json").read_text(encoding="utf-8") == '{"version":"new"}'
+    assert json.loads(
+        (processed_root / "manifest.json").read_text(encoding="utf-8")
+    ) == {"version": "new", "rows": 1}
     assert (processed_root / "dataset_fingerprint.json").read_text(encoding="utf-8") == '{"hash":"new"}'
     assert (processed_root / "refresh_job_report.json").read_text(encoding="utf-8") == '{"jobStatus":"success"}'
     assert (active_partition / "part-000.parquet").read_text(encoding="utf-8") == "new-partition"
+    active_summaries_manifest = json.loads(
+        (
+            processed_root / "summaries" / "summaries_manifest.json"
+        ).read_text(encoding="utf-8")
+    )
+    staged_summaries_manifest = json.loads(
+        (staged_summaries / "summaries_manifest.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    assert active_summaries_manifest["originalRowCount"] == 1
+    assert active_summaries_manifest["precomputeMode"] == "full"
+    assert active_summaries_manifest["lineage"] == (
+        staged_summaries_manifest["lineage"]
+    )
+    active_summary_entry = active_summaries_manifest["summaries"][
+        "country_monthly_sales"
+    ]
+    assert Path(active_summary_entry["csv"]).parent == processed_root / "summaries"
+    assert Path(active_summary_entry["parquet"]).parent == processed_root / "summaries"
 
     backup_dir = project_root / published["publication"]["backupDir"]
     assert pd.read_parquet(backup_dir / "jato_full_archive.parquet").to_dict("records") == [
-        {"国家": "瑞典", "Model": "EX30", "2026 Jan": 10}
+        {
+            "国家": "瑞典",
+            "Make": "VOLVO",
+            "Model": "EX30",
+            "2026 Jan": 10,
+        }
     ]
     assert (backup_dir / "manifest.json").read_text(encoding="utf-8") == '{"version":"old"}'
     assert (backup_dir / "dataset_fingerprint.json").read_text(encoding="utf-8") == '{"hash":"old"}'
@@ -1545,7 +2099,7 @@ def test_publish_monthly_update_job_promotes_staging_outputs(
     assert (backup_dir / "partitioned_dataset_v1" / "part-000.parquet").read_text(encoding="utf-8") == "old-partition"
 
 
-def test_publish_monthly_update_job_blocks_country_regression(
+def test_publish_monthly_update_job_blocks_historical_month_removal(
     tmp_path: Path, monkeypatch
 ) -> None:
     project_root = tmp_path / "project"
@@ -1628,20 +2182,42 @@ def test_publish_monthly_update_job_blocks_country_regression(
         "refreshReportPath": "04_Processed_data/staging/2026-03-mixed/refresh_job_report.json",
     }
     state["summaries"] = {"refresh": {"jobStatus": "success"}}
+    _attach_staged_summaries_bundle(
+        state=state,
+        project_root=project_root,
+        staging_root=staging_root,
+        candidate_rows=2,
+    )
+    _approve_candidate_state(state)
     jato_monthly_update_service._persist_job_state(state)
+    monkeypatch.setattr(
+        jato_monthly_update_service,
+        "_launch_job_thread",
+        lambda _job_id: None,
+    )
+    monkeypatch.setattr(
+        jato_monthly_update_service,
+        "_validate_candidate_full_bundle",
+        lambda **_kwargs: {},
+    )
 
-    with pytest.raises(HTTPException) as exc_info:
-        jato_monthly_update_service.publish_jato_monthly_update_job(
-            job_id=job_id,
-            triggered_by="publisher",
-        )
+    queued = jato_monthly_update_service.publish_jato_monthly_update_job(
+        job_id=job_id,
+        triggered_by="publisher",
+    )
+    assert queued["pendingOperation"]["status"] == "queued"
+    jato_monthly_update_service.run_jato_monthly_update_worker_once()
+    failed = jato_monthly_update_service.get_jato_monthly_update_job(job_id)
 
-    assert exc_info.value.status_code == 409
-    assert "瑞典" in str(exc_info.value.detail)
-    assert "2026 Mar -> 2026 Jan" in str(exc_info.value.detail)
+    assert failed["pendingOperation"]["status"] == "failed"
+    failure_digest = failed["pendingOperation"]["failureDigest"]
+    assert failure_digest["category"] == "safety_gate"
+    assert failure_digest["technicalDetail"]["blockerType"] == "historical_sales_changed"
+    assert failure_digest["technicalDetail"]["changes"][0]["country"] == "瑞典"
+    assert "不能累加或重写历史" in failure_digest["message"]
 
 
-def test_publish_monthly_update_job_blocks_likely_doubled_sales(
+def test_publish_monthly_update_job_blocks_historical_sales_doubling_before_switch(
     tmp_path: Path, monkeypatch
 ) -> None:
     project_root = tmp_path / "project"
@@ -1710,17 +2286,38 @@ def test_publish_monthly_update_job_blocks_likely_doubled_sales(
         "refreshReportPath": "04_Processed_data/staging/2026-03-mixed/refresh_job_report.json",
     }
     state["summaries"] = {"refresh": {"jobStatus": "success"}}
+    _attach_staged_summaries_bundle(
+        state=state,
+        project_root=project_root,
+        staging_root=staging_root,
+        candidate_rows=1,
+    )
+    _approve_candidate_state(state)
     jato_monthly_update_service._persist_job_state(state)
+    monkeypatch.setattr(
+        jato_monthly_update_service,
+        "_launch_job_thread",
+        lambda _job_id: None,
+    )
+    monkeypatch.setattr(
+        jato_monthly_update_service,
+        "_validate_candidate_full_bundle",
+        lambda **_kwargs: {},
+    )
 
-    with pytest.raises(HTTPException) as exc_info:
-        jato_monthly_update_service.publish_jato_monthly_update_job(
-            job_id=job_id,
-            triggered_by="publisher",
-        )
+    queued = jato_monthly_update_service.publish_jato_monthly_update_job(
+        job_id=job_id,
+        triggered_by="publisher",
+    )
+    assert queued["pendingOperation"]["status"] == "queued"
+    jato_monthly_update_service.run_jato_monthly_update_worker_once()
+    failed = jato_monthly_update_service.get_jato_monthly_update_job(job_id)
 
-    assert exc_info.value.status_code == 409
-    assert "重复合并" in str(exc_info.value.detail)
-    assert "瑞典" in str(exc_info.value.detail)
+    assert failed["pendingOperation"]["status"] == "failed"
+    failure_digest = failed["pendingOperation"]["failureDigest"]
+    assert failure_digest["technicalDetail"]["blockerType"] == "historical_sales_changed"
+    assert failure_digest["technicalDetail"]["changes"][0]["country"] == "瑞典"
+    assert "不能累加或重写历史" in failure_digest["message"]
     active_records = pd.read_parquet(
         processed_root / "jato_full_archive.parquet"
     ).to_dict("records")
@@ -1777,14 +2374,25 @@ def test_rollback_monthly_update_job_restores_publish_backup(
         "publishedAt": "2026-04-20T12:02:33+00:00",
         "publishedBy": "tester",
         "backupDir": "04_Processed_data/.refresh_backups/manual-promote-jato-update-publish-20260420-120233",
+        "activeFingerprintAfter": jato_monthly_update_service._active_dataset_version(),
     }
     jato_monthly_update_service._persist_job_state(state)
+    monkeypatch.setattr(
+        jato_monthly_update_service,
+        "_launch_job_thread",
+        lambda _job_id: None,
+    )
 
-    rolled_back = jato_monthly_update_service.rollback_jato_monthly_update_job(
+    queued = jato_monthly_update_service.rollback_jato_monthly_update_job(
         job_id=job_id,
         triggered_by="operator",
     )
+    assert queued["pendingOperation"]["type"] == "rollback"
+    assert queued["pendingOperation"]["status"] == "queued"
+    jato_monthly_update_service.run_jato_monthly_update_worker_once()
+    rolled_back = jato_monthly_update_service.get_jato_monthly_update_job(job_id)
 
+    assert rolled_back["pendingOperation"]["status"] == "success"
     assert (processed_root / "jato_full_archive.parquet").read_text(encoding="utf-8") == "good-parquet"
     assert (processed_root / "manifest.json").read_text(encoding="utf-8") == '{"version":"good"}'
     assert (processed_root / "dataset_fingerprint.json").read_text(encoding="utf-8") == '{"hash":"good"}'
@@ -1798,7 +2406,7 @@ def test_rollback_monthly_update_job_restores_publish_backup(
     assert (restore_backup_dir / "jato_full_archive.parquet").read_text(encoding="utf-8") == "bad-parquet"
 
 
-def test_publish_monthly_update_job_allows_republish_after_rollback(
+def test_publish_monthly_update_job_rejects_republish_after_rollback(
     tmp_path: Path, monkeypatch
 ) -> None:
     project_root = tmp_path / "project"
@@ -1851,6 +2459,13 @@ def test_publish_monthly_update_job_allows_republish_after_rollback(
         "refreshReportPath": "04_Processed_data/staging/2026-03-mixed/refresh_job_report.json",
     }
     state["summaries"] = {"refresh": {"jobStatus": "success"}}
+    _attach_staged_summaries_bundle(
+        state=state,
+        project_root=project_root,
+        staging_root=staging_root,
+        candidate_rows=1,
+    )
+    _approve_candidate_state(state)
     state["publication"] = {
         "publishedAt": "2026-04-20T12:02:33+00:00",
         "publishedBy": "tester",
@@ -1861,13 +2476,707 @@ def test_publish_monthly_update_job_allows_republish_after_rollback(
     }
     jato_monthly_update_service._persist_job_state(state)
 
-    published = jato_monthly_update_service.publish_jato_monthly_update_job(
+    with pytest.raises(HTTPException, match="不能复用旧 candidate"):
+        jato_monthly_update_service.publish_jato_monthly_update_job(
+            job_id=job_id,
+            triggered_by="publisher",
+        )
+
+
+@pytest.mark.parametrize(
+    ("job_type", "candidate_scope", "country_scope"),
+    [
+        ("single_country", "target_country_partition_only", ["匈牙利"]),
+        ("partial_country", "target_country_partitions_only", ["捷克", "丹麦"]),
+    ],
+)
+def test_country_partition_candidate_cannot_publish(
+    tmp_path: Path,
+    monkeypatch,
+    job_type: str,
+    candidate_scope: str,
+    country_scope: list[str],
+) -> None:
+    project_root = tmp_path / "project"
+    job_root = project_root / "04_Processed_data" / "ops" / "jato_monthly_update_jobs"
+    monkeypatch.setattr(jato_monthly_update_service, "PROJECT_ROOT", project_root)
+    monkeypatch.setattr(jato_monthly_update_service, "MONTHLY_UPDATE_JOB_ROOT", job_root)
+    job_id = "jato-sc-review-only"
+    upload_path = job_root / job_id / "uploads" / "Hungary-2026-05.xlsx"
+    upload_path.parent.mkdir(parents=True, exist_ok=True)
+    upload_path.write_bytes(b"candidate")
+    state = jato_monthly_update_service._prepare_initial_job_state(
         job_id=job_id,
-        triggered_by="publisher",
+        month="2026-05",
+        triggered_by="tester",
+        upload_filename=upload_path.name,
+        stored_upload_path=upload_path,
+    )
+    state.update({
+        "status": "success",
+        "phase": "completed",
+        "jobType": job_type,
+        "country": country_scope[0] if len(country_scope) == 1 else None,
+        "countryScope": country_scope,
+        "summaries": {"refresh": {"jobStatus": "success"}},
+        "artifacts": {"candidateScope": candidate_scope},
+    })
+    jato_monthly_update_service._persist_job_state(state)
+
+    with pytest.raises(HTTPException, match="只能 Review"):
+        jato_monthly_update_service.publish_jato_monthly_update_job(
+            job_id=job_id,
+            triggered_by="publisher",
+        )
+
+
+def test_partial_country_review_aggregates_country_findings(monkeypatch) -> None:
+    def fake_country_review(payload: dict[str, object]) -> dict[str, object]:
+        country = str(payload["country"])
+        severity = "blocker" if country == "丹麦" else "info"
+        return {
+            "reviewFindings": [{"severity": severity, "target": country}],
+            "compareKeyColumns": ["国家", "Model"],
+            "checklistMarkdown": f"- {country}",
+            "overlapChangeSummary": [],
+            "countryFreshnessSummary": [{"country": country}],
+            "countryCoverageSummary": [{"country": country}],
+            "countryMonthlySalesSummary": [{"country": country, "rows": []}],
+            "timeAxisCheck": {"targetCountry": country},
+            "refreshSummary": {"jobStatus": "success"},
+            "candidateFingerprint": "fingerprint",
+        }
+
+    monkeypatch.setattr(
+        jato_monthly_update_service,
+        "_build_single_country_review",
+        fake_country_review,
+    )
+    review = jato_monthly_update_service._build_partial_country_review(
+        {
+            "jobId": "jato-partial",
+            "countryScope": ["捷克", "丹麦"],
+            "artifacts": {
+                "untouchedPartitionCheck": {"status": "pass"},
+            },
+        }
     )
 
-    assert published["publication"]["publishedBy"] == "publisher"
-    assert published["publication"]["backupDir"].startswith(
-        "04_Processed_data/.refresh_backups/manual-promote-"
+    assert review["decisionSuggestion"] == "reject_input_batch"
+    assert review["sampledCountries"] == ["捷克", "丹麦"]
+    assert review["compareKeyColumns"] == ["国家", "Model"]
+    assert [item["country"] for item in review["countryFreshnessSummary"]] == ["捷克", "丹麦"]
+
+
+def test_single_country_schema_contract_downgrades_deprecated_optional_columns() -> None:
+    active = pd.DataFrame(
+        {
+            "国家": ["捷克"],
+            "Make": ["SKODA"],
+            "Model": ["ENYAQ"],
+            "Version name": ["85"],
+            "MSRP including delivery charge": [50000.0],
+            "Base price": [48000.0],
+            "Seating capacity": [5],
+            "2026 May": [10],
+        }
     )
-    assert "rolledBackAt" not in published["publication"]
+    candidate = pd.DataFrame(
+        {
+            "国家": ["捷克"],
+            "Make": ["SKODA"],
+            "Model": ["ENYAQ"],
+            "Version name": ["85"],
+            "MSRP规整": [49900.0],
+            "2026 May": [10],
+            "2026 Jun": [12],
+        }
+    )
+
+    contract = jato_monthly_update_service._single_country_schema_contract(
+        active_frame=active,
+        candidate_frame=candidate,
+    )
+
+    assert contract["missingDeprecatedOptional"] == [
+        "Base price",
+        "MSRP including delivery charge",
+    ]
+    assert contract["missingMaterial"] == ["Seating capacity"]
+    assert contract["extra"] == ["MSRP规整"]
+
+
+def test_historical_sales_stability_identifies_make_reclassification() -> None:
+    active = pd.DataFrame(
+        {
+            "国家": ["捷克", "捷克"],
+            "Make": ["DFSK", "FORTHING"],
+            "2026 Jan": [2, 3],
+        }
+    )
+    candidate = pd.DataFrame(
+        {
+            "国家": ["捷克"],
+            "Make": ["DFSK"],
+            "2026 Jan": [5],
+        }
+    )
+
+    stability = (
+        jato_monthly_update_service._single_country_historical_sales_stability(
+            country="捷克",
+            active_frame=active,
+            candidate_frame=candidate,
+            active_latest_month="2026 Jan",
+        )
+    )
+    feedback = jato_monthly_update_service._single_country_source_feedback(
+        rule_id="SC011",
+        country="捷克",
+        metrics=stability,
+    )
+
+    assert stability["status"] == "fail"
+    assert stability["reason"] == "make_dimension_reclassification"
+    assert stability["countryMismatchCount"] == 0
+    assert stability["makeMismatchCount"] == 2
+    assert stability["impactedMakes"] == ["DFSK", "FORTHING"]
+    assert stability["impactedMonths"] == ["2026 Jan"]
+    assert feedback is not None
+    assert "国家历史月销量总量与 active 一致" in feedback
+    assert "DFSK、FORTHING" in feedback
+    assert "旧 Make → 新 Make/Model 映射" in feedback
+
+
+def test_historical_sales_stability_detects_same_make_model_reclassification() -> None:
+    active = pd.DataFrame(
+        {
+            "国家": ["丹麦", "丹麦"],
+            "Make": ["AUDI", "AUDI"],
+            "Model": ["Q6 E-TRON", "Q6 SPORTBACK E-TRON"],
+            "2026 Jan": [1, 0],
+        }
+    )
+    candidate = pd.DataFrame(
+        {
+            "国家": ["丹麦", "丹麦"],
+            "Make": ["AUDI", "AUDI"],
+            "Model": ["Q6 E-TRON", "Q6 SPORTBACK E-TRON"],
+            "2026 Jan": [0, 1],
+        }
+    )
+
+    stability = (
+        jato_monthly_update_service._single_country_historical_sales_stability(
+            country="丹麦",
+            active_frame=active,
+            candidate_frame=candidate,
+            active_latest_month="2026 Jan",
+        )
+    )
+
+    assert stability["status"] == "fail"
+    assert stability["reason"] == "unconfirmed_make_model_reclassification"
+    assert stability["countryMismatchCount"] == 0
+    assert stability["makeMismatchCount"] == 0
+    assert stability["makeModelMismatchCount"] == 2
+    assert stability["unconfirmedReclassificationCandidates"] == [
+        {
+            "source": {"Make": "AUDI", "Model": "Q6 E-TRON"},
+            "target": {"Make": "AUDI", "Model": "Q6 SPORTBACK E-TRON"},
+            "transferredSales": 1,
+            "transferredMonths": ["2026 Jan"],
+            "monthlyTransfers": [{"month": "2026 Jan", "sales": 1}],
+        }
+    ]
+
+
+LATEST_WASHED_UPLOAD_SHA256 = (
+    "c12e4e1a58e7d292eb6aef6bdd9c34d0632449536d5351880c35142fa38b0453"
+)
+
+
+def _confirmed_sc011_compared_months() -> list[str]:
+    month_names = (
+        "Jan",
+        "Feb",
+        "Mar",
+        "Apr",
+        "May",
+        "Jun",
+        "Jul",
+        "Aug",
+        "Sep",
+        "Oct",
+        "Nov",
+        "Dec",
+    )
+    compared_months = [
+        f"{year} {month}"
+        for year in (2023, 2024, 2025)
+        for month in month_names
+    ] + ["2026 Jan", "2026 Feb", "2026 Mar"]
+    return compared_months
+
+
+def _confirmed_t5_reclassification_frames() -> tuple[pd.DataFrame, pd.DataFrame]:
+    compared_months = _confirmed_sc011_compared_months()
+    expected_transfer = {
+        "2025 Apr": 3,
+        "2025 May": 3,
+        "2025 Jun": 8,
+        "2025 Jul": 4,
+        "2025 Aug": 4,
+        "2025 Sep": 6,
+        "2025 Nov": 3,
+        "2025 Dec": 19,
+        "2026 Jan": 1,
+    }
+    transfer = {
+        month: expected_transfer.get(month, 0)
+        for month in compared_months
+    }
+    zero_sales = {month: 0 for month in compared_months}
+    active = pd.DataFrame([
+        {
+            "国家": "捷克",
+            "Make": "FORTHING",
+            "Model": "T5",
+            **transfer,
+        },
+        {
+            "国家": "捷克",
+            "Make": "DFSK",
+            "Model": "T5 EVO",
+            **zero_sales,
+        },
+        {
+            "国家": "捷克",
+            "Make": "FORTHING",
+            "Model": "T5 EVO",
+            **zero_sales,
+        },
+    ])
+    candidate = pd.DataFrame([
+        {
+            "国家": "捷克",
+            "Make": "DFSK",
+            "Model": "T5 EVO",
+            **transfer,
+        },
+        {
+            "国家": "捷克",
+            "Make": "FORTHING",
+            "Model": "T5 EVO",
+            **zero_sales,
+        },
+    ])
+    return active, candidate
+
+
+def _confirmed_country_reclassification_frames(
+    country: str,
+) -> tuple[pd.DataFrame, pd.DataFrame, list[dict[str, object]]]:
+    compared_months = _confirmed_sc011_compared_months()
+    rules = [
+        rule
+        for rule in jato_monthly_update_service.CONFIRMED_SC011_RECLASSIFICATIONS
+        if rule["country"] == country
+    ]
+    active_rows: list[dict[str, object]] = []
+    candidate_rows: list[dict[str, object]] = []
+    for rule in rules:
+        source = rule["source"]
+        target = rule["target"]
+        expected_transfer = rule["expectedMonthlyTransfer"]
+        assert isinstance(source, dict)
+        assert isinstance(target, dict)
+        assert isinstance(expected_transfer, dict)
+        transfer = {
+            month: int(expected_transfer.get(month, 0))
+            for month in compared_months
+        }
+        zero_sales = {month: 0 for month in compared_months}
+        active_rows.extend([
+            {
+                "国家": country,
+                **source,
+                **transfer,
+            },
+            {
+                "国家": country,
+                **target,
+                **zero_sales,
+            },
+        ])
+        candidate_rows.extend([
+            {
+                "国家": country,
+                **source,
+                **zero_sales,
+            },
+            {
+                "国家": country,
+                **target,
+                **transfer,
+            },
+        ])
+    return pd.DataFrame(active_rows), pd.DataFrame(candidate_rows), rules
+
+
+def test_historical_sales_stability_applies_exact_confirmed_t5_mapping() -> None:
+    active, candidate = _confirmed_t5_reclassification_frames()
+
+    stability = (
+        jato_monthly_update_service._single_country_historical_sales_stability(
+            country="捷克",
+            active_frame=active,
+            candidate_frame=candidate,
+            active_latest_month="2026 Mar",
+            source_upload_sha256=LATEST_WASHED_UPLOAD_SHA256,
+        )
+    )
+    feedback = jato_monthly_update_service._single_country_source_feedback(
+        rule_id="SC011",
+        country="捷克",
+        metrics=stability,
+    )
+
+    assert stability["status"] == "confirmed"
+    assert stability["reason"] == "confirmed_make_model_reclassification"
+    assert stability["countryMismatchCount"] == 0
+    assert stability["unconfirmedMakeModelMismatchCount"] == 0
+    assert stability["unconfirmedReclassificationCandidates"] == []
+    assert stability["confirmedReclassifications"] == [
+        {
+            "source": {"Make": "FORTHING", "Model": "T5"},
+            "target": {"Make": "DFSK", "Model": "T5 EVO"},
+            "transferredSales": 51,
+            "transferredMonths": [
+                "2025 Apr",
+                "2025 May",
+                "2025 Jun",
+                "2025 Jul",
+                "2025 Aug",
+                "2025 Sep",
+                "2025 Nov",
+                "2025 Dec",
+                "2026 Jan",
+            ],
+            "monthlyTransfers": [
+                {"month": "2025 Apr", "sales": 3},
+                {"month": "2025 May", "sales": 3},
+                {"month": "2025 Jun", "sales": 8},
+                {"month": "2025 Jul", "sales": 4},
+                {"month": "2025 Aug", "sales": 4},
+                {"month": "2025 Sep", "sales": 6},
+                {"month": "2025 Nov", "sales": 3},
+                {"month": "2025 Dec", "sales": 19},
+                {"month": "2026 Jan", "sales": 1},
+            ],
+            "confirmationId": "CZ-FORTHING-T5-TO-DFSK-T5-EVO-20260720",
+            "approvedBy": "JATO business owner",
+            "approvalReference": "user-confirmed-2026-07-20",
+            "comparedThrough": "2026 Mar",
+            "comparedMonthsSha256": (
+                "d9cfcaa2bfd045a14c9ad0663be706bc9234bea64385cf46db11b0fb996e69f7"
+            ),
+            "sourceUploadSha256": LATEST_WASHED_UPLOAD_SHA256,
+        }
+    ]
+    assert feedback is not None
+    assert "车型重分类已完成业务确认" in feedback
+    assert "FORTHING/T5→DFSK/T5 EVO（51 台）" in feedback
+
+
+@pytest.mark.parametrize(
+    ("country", "expected_confirmation_count"),
+    [("捷克", 13), ("丹麦", 4)],
+)
+def test_historical_sales_stability_applies_all_latest_washed_mappings(
+    country: str,
+    expected_confirmation_count: int,
+) -> None:
+    active, candidate, rules = _confirmed_country_reclassification_frames(country)
+    source_keys = {
+        (rule["source"]["Make"], rule["source"]["Model"])
+        for rule in rules
+    }
+    target_keys = {
+        (rule["target"]["Make"], rule["target"]["Model"])
+        for rule in rules
+    }
+    confirmation_ids = [rule["confirmationId"] for rule in rules]
+
+    stability = (
+        jato_monthly_update_service._single_country_historical_sales_stability(
+            country=country,
+            active_frame=active,
+            candidate_frame=candidate,
+            active_latest_month="2026 Mar",
+            source_upload_sha256=LATEST_WASHED_UPLOAD_SHA256,
+        )
+    )
+
+    assert len(rules) == expected_confirmation_count
+    assert len(source_keys) == expected_confirmation_count
+    assert len(target_keys) == expected_confirmation_count
+    assert len(set(confirmation_ids)) == expected_confirmation_count
+    assert source_keys.isdisjoint(target_keys)
+    assert stability["status"] == "confirmed"
+    assert stability["reason"] == "confirmed_make_model_reclassification"
+    assert stability["unconfirmedMakeModelMismatchCount"] == 0
+    assert stability["unconfirmedReclassificationCandidates"] == []
+    assert stability["unpairedMakeModels"] == []
+    assert [
+        item["confirmationId"] for item in stability["confirmedReclassifications"]
+    ] == confirmation_ids
+    assert all(
+        item["sourceUploadSha256"] == LATEST_WASHED_UPLOAD_SHA256
+        and item["comparedThrough"] == "2026 Mar"
+        and item["comparedMonthsSha256"]
+        == (
+            "d9cfcaa2bfd045a14c9ad0663be706bc9234bea64385cf46db11b0fb996e69f7"
+        )
+        for item in stability["confirmedReclassifications"]
+    )
+
+
+def test_historical_sales_stability_requires_full_confirmed_history_window() -> None:
+    active, candidate = _confirmed_t5_reclassification_frames()
+    active = active.drop(columns=["2023 Jan"])
+    candidate = candidate.drop(columns=["2023 Jan"])
+
+    stability = (
+        jato_monthly_update_service._single_country_historical_sales_stability(
+            country="捷克",
+            active_frame=active,
+            candidate_frame=candidate,
+            active_latest_month="2026 Mar",
+            source_upload_sha256=LATEST_WASHED_UPLOAD_SHA256,
+        )
+    )
+
+    assert stability["status"] == "fail"
+    assert stability["reason"] == "unconfirmed_make_model_reclassification"
+    assert stability["comparedMonthCount"] == 38
+    assert stability["confirmedReclassifications"] == []
+
+
+def test_historical_sales_stability_requires_exact_confirmed_month_sequence() -> None:
+    active, candidate = _confirmed_t5_reclassification_frames()
+    active = active.drop(columns=["2023 Jan"])
+    candidate = candidate.drop(columns=["2023 Jan"])
+    active["2022 Dec"] = 0
+    candidate["2022 Dec"] = 0
+
+    stability = (
+        jato_monthly_update_service._single_country_historical_sales_stability(
+            country="捷克",
+            active_frame=active,
+            candidate_frame=candidate,
+            active_latest_month="2026 Mar",
+            source_upload_sha256=LATEST_WASHED_UPLOAD_SHA256,
+        )
+    )
+
+    assert stability["status"] == "fail"
+    assert stability["comparedMonthCount"] == 39
+    assert stability["confirmedReclassifications"] == []
+
+
+def test_historical_sales_stability_binds_confirmation_to_upload_sha() -> None:
+    active, candidate = _confirmed_t5_reclassification_frames()
+
+    stability = (
+        jato_monthly_update_service._single_country_historical_sales_stability(
+            country="捷克",
+            active_frame=active,
+            candidate_frame=candidate,
+            active_latest_month="2026 Mar",
+            source_upload_sha256="0" * 64,
+        )
+    )
+
+    assert stability["status"] == "fail"
+    assert stability["reason"] == "unconfirmed_make_model_reclassification"
+    assert stability["confirmedReclassifications"] == []
+
+
+def test_historical_sales_stability_keeps_unlisted_model_remaps_blocking() -> None:
+    active, candidate = _confirmed_t5_reclassification_frames()
+    active = pd.concat([
+        active,
+        pd.DataFrame([
+            {
+                "国家": "捷克",
+                "Make": "AUDI",
+                "Model": "Q4 E-TRON",
+                **{column: int(column == "2025 Nov") for column in active.columns if column[:4].isdigit()},
+            },
+            {
+                "国家": "捷克",
+                "Make": "AUDI",
+                "Model": "Q5 E-TRON",
+                **{column: 0 for column in active.columns if column[:4].isdigit()},
+            },
+        ]),
+    ], ignore_index=True)
+    candidate = pd.concat([
+        candidate,
+        pd.DataFrame([
+            {
+                "国家": "捷克",
+                "Make": "AUDI",
+                "Model": "Q4 E-TRON",
+                **{column: 0 for column in candidate.columns if column[:4].isdigit()},
+            },
+            {
+                "国家": "捷克",
+                "Make": "AUDI",
+                "Model": "Q5 E-TRON",
+                **{column: int(column == "2025 Nov") for column in candidate.columns if column[:4].isdigit()},
+            },
+        ]),
+    ], ignore_index=True)
+
+    stability = (
+        jato_monthly_update_service._single_country_historical_sales_stability(
+            country="捷克",
+            active_frame=active,
+            candidate_frame=candidate,
+            active_latest_month="2026 Mar",
+            source_upload_sha256=LATEST_WASHED_UPLOAD_SHA256,
+        )
+    )
+    feedback = jato_monthly_update_service._single_country_source_feedback(
+        rule_id="SC011",
+        country="捷克",
+        metrics=stability,
+    )
+
+    assert stability["status"] == "fail"
+    assert stability["reason"] == "unconfirmed_make_model_reclassification"
+    assert len(stability["confirmedReclassifications"]) == 1
+    assert stability["unconfirmedMakeModelMismatchCount"] == 2
+    assert stability["unconfirmedReclassificationCandidates"] == [
+        {
+            "source": {"Make": "AUDI", "Model": "Q4 E-TRON"},
+            "target": {"Make": "AUDI", "Model": "Q5 E-TRON"},
+            "transferredSales": 1,
+            "transferredMonths": ["2025 Nov"],
+            "monthlyTransfers": [{"month": "2025 Nov", "sales": 1}],
+        }
+    ]
+    assert feedback is not None
+    assert "已确认：FORTHING/T5→DFSK/T5 EVO（51 台）" in feedback
+    assert "待确认映射：AUDI/Q4 E-TRON→AUDI/Q5 E-TRON（1 台）" in feedback
+
+
+def test_historical_sales_stability_does_not_fuzzy_match_t5_names() -> None:
+    active, candidate = _confirmed_t5_reclassification_frames()
+    candidate.loc[candidate["Make"].eq("DFSK"), "Model"] = "T5"
+
+    stability = (
+        jato_monthly_update_service._single_country_historical_sales_stability(
+            country="捷克",
+            active_frame=active,
+            candidate_frame=candidate,
+            active_latest_month="2026 Mar",
+            source_upload_sha256=LATEST_WASHED_UPLOAD_SHA256,
+        )
+    )
+
+    assert stability["status"] == "fail"
+    assert stability["reason"] == "unconfirmed_make_model_reclassification"
+    assert stability["confirmedReclassifications"] == []
+    assert {"Make": "DFSK", "Model": "T5"} in stability["impactedMakeModels"]
+    assert {"Make": "FORTHING", "Model": "T5"} in stability["impactedMakeModels"]
+
+
+def test_deprecated_static_fields_carry_forward_only_for_consistent_active_values() -> None:
+    active = pd.DataFrame(
+        {
+            "国家": ["捷克", "捷克", "捷克", "捷克", "捷克"],
+            "Make": ["SKODA", "SKODA", "SKODA", "SKODA", "SKODA"],
+            "Model": ["ENYAQ", "ENYAQ", "ENYAQ", "ELROQ", "ELROQ"],
+            "Version name": ["85", "RS", "RS", "60", "60"],
+            "Trim level": ["Core", "Sport", "Sport", "Plus", "Plus"],
+            "MSRP including delivery charge": [
+                50000.0,
+                60000.0,
+                61000.0,
+                45000.0,
+                45000.0,
+            ],
+            "Base price": [48000.0, 58000.0, 59000.0, 43000.0, 43000.0],
+        }
+    )
+    candidate = pd.DataFrame(
+        {
+            "国家": ["捷克", "捷克", "捷克", "捷克"],
+            "Make": ["SKODA", "SKODA", "SKODA", "SKODA"],
+            "Model": ["ENYAQ", "ENYAQ", "ELROQ", "ELROQ"],
+            "Version name": ["85", "RS", "60", "80"],
+            "Trim level": ["Core", "Sport", "Plus", "Core"],
+        }
+    )
+
+    carried, summary = (
+        jato_monthly_update_service._carry_forward_deprecated_static_columns(
+            active_frame=active,
+            candidate_frame=candidate,
+        )
+    )
+
+    assert carried.loc[0, "MSRP including delivery charge"] == 50000.0
+    assert carried.loc[0, "Base price"] == 48000.0
+    assert pd.isna(carried.loc[1, "MSRP including delivery charge"])
+    assert carried.loc[2, "MSRP including delivery charge"] == 45000.0
+    assert pd.isna(carried.loc[3, "MSRP including delivery charge"])
+    assert summary["matchedConfigurationRowCount"] == 2
+    assert summary["activeDuplicateKeyRowCount"] == 4
+    assert (
+        summary["columnResults"]["MSRP including delivery charge"][
+            "inheritedRowCount"
+        ]
+        == 2
+    )
+    assert (
+        summary["columnResults"]["MSRP including delivery charge"][
+            "ambiguousActiveKeyCount"
+        ]
+        == 1
+    )
+
+
+def test_single_country_source_feedback_reports_exact_washer_request() -> None:
+    schema_feedback = jato_monthly_update_service._single_country_source_feedback(
+        rule_id="SC009",
+        country="匈牙利",
+        metrics={"missingMaterialColumns": ["Seating capacity"]},
+    )
+    row_delta_feedback = jato_monthly_update_service._single_country_source_feedback(
+        rule_id="SC012",
+        country="匈牙利",
+        metrics={"rowDelta": -358, "historicalSalesStability": {"status": "pass"}},
+    )
+    deprecated_feedback = jato_monthly_update_service._single_country_source_feedback(
+        rule_id="SC014",
+        country="匈牙利",
+        metrics={
+            "missingDeprecatedOptionalColumns": [
+                "MSRP including delivery charge"
+            ]
+        },
+    )
+
+    assert schema_feedback is not None
+    assert "Seating capacity" in schema_feedback
+    assert "不能用 Retail price" in schema_feedback
+    assert row_delta_feedback is not None
+    assert "减少 358 行" in row_delta_feedback
+    assert "历史销量已通过核对" in row_delta_feedback
+    assert deprecated_feedback is not None
+    assert "无需为本次月更补齐" in deprecated_feedback
+    assert "不会用 Retail price" in deprecated_feedback

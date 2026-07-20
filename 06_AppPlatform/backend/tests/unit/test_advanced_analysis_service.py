@@ -15,6 +15,25 @@ def clear_advanced_analysis_cache(monkeypatch: pytest.MonkeyPatch):
     advanced_analysis_service.clear_advanced_analysis_cache()
 
 
+def test_mutable_analysis_cache_is_separate_from_active_summaries(
+    tmp_path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    active_summaries = tmp_path / "summaries"
+    analysis_cache = tmp_path / "analysis-cache"
+    monkeypatch.setenv("JATO_PRECOMPUTED_DIR", str(active_summaries))
+    monkeypatch.setenv("JATO_ANALYSIS_CACHE_DIR", str(analysis_cache))
+
+    assert advanced_analysis_service._precomputed_dir() == analysis_cache
+    assert (
+        advanced_analysis_service._precomputed_path("profile:test").parent
+        == analysis_cache
+    )
+    assert active_summaries not in (
+        advanced_analysis_service._precomputed_path("profile:test").parents
+    )
+
+
 def test_transfer_mart_repeated_scope_filters_are_or_filters(monkeypatch: pytest.MonkeyPatch) -> None:
     fact = pd.DataFrame(
         [

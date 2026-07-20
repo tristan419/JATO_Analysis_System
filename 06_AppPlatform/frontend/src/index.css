@@ -10901,12 +10901,222 @@ table.data-table tr.data-table-group-row.contains-selection td {
   flex-wrap: wrap;
 }
 
+.monthly-update-feedback-cell {
+  display: grid;
+  gap: 8px;
+  min-width: 280px;
+  line-height: 1.55;
+  word-break: break-word;
+}
+
+.monthly-update-feedback-cell .btn {
+  justify-self: start;
+  white-space: nowrap;
+}
+
 .monthly-update-blocker-panel {
   margin-bottom: 16px;
   padding: 12px 16px;
   border: 1px solid var(--c-danger-border, #e5484d);
   border-radius: var(--card-radius, 8px);
   background: var(--c-danger-bg, rgba(229, 72, 77, 0.04));
+}
+
+.monthly-update-reclassification {
+  display: grid;
+  gap: 14px;
+  padding: 16px;
+  border: 1px solid rgba(28, 105, 212, 0.22);
+  border-radius: 14px;
+  background: rgba(239, 246, 255, 0.56);
+}
+
+.monthly-update-reclassification-list {
+  display: grid;
+  gap: 14px;
+}
+
+.monthly-update-reclassification-country {
+  display: grid;
+  gap: 14px;
+  padding: 16px;
+  border: 1px solid var(--c-border-soft);
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.9);
+}
+
+.monthly-update-reclassification-country-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.monthly-update-reclassification-country-head h4,
+.monthly-update-reclassification-country-head p {
+  margin: 0;
+}
+
+.monthly-update-reclassification-country-head h4 {
+  color: var(--c-text-primary);
+  font-size: 18px;
+}
+
+.monthly-update-reclassification-country-head p {
+  margin-top: 4px;
+  color: var(--c-text-muted);
+  font-size: 12px;
+}
+
+.monthly-update-reclassification-kpis {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.monthly-update-reclassification-kpis > span {
+  display: grid;
+  gap: 2px;
+  min-width: 106px;
+  padding: 8px 10px;
+  border: 1px solid var(--c-border-soft);
+  border-radius: 10px;
+  color: var(--c-text-muted);
+  font-size: 11px;
+}
+
+.monthly-update-reclassification-kpis strong {
+  color: var(--c-text-primary);
+  font-size: 16px;
+}
+
+.monthly-update-reclassification-kpis .is-safe {
+  border-color: rgba(22, 163, 74, 0.32);
+  background: rgba(22, 163, 74, 0.06);
+}
+
+.monthly-update-reclassification-kpis .is-danger {
+  border-color: rgba(229, 72, 77, 0.38);
+  background: rgba(229, 72, 77, 0.06);
+}
+
+.monthly-update-reclassification-decisions {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+
+.monthly-update-reclassification-decisions legend {
+  grid-column: 1 / -1;
+  margin-bottom: 2px;
+  color: var(--c-text-primary);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.monthly-update-reclassification-decisions label {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  min-width: 0;
+  padding: 12px;
+  border: 1px solid var(--c-border-soft);
+  border-radius: 12px;
+  background: #fff;
+  cursor: pointer;
+  transition: border-color 140ms ease, background 140ms ease, box-shadow 140ms ease;
+}
+
+.monthly-update-reclassification-decisions label:hover {
+  border-color: rgba(28, 105, 212, 0.48);
+}
+
+.monthly-update-reclassification-decisions label.is-selected {
+  border-color: #1c69d4;
+  background: rgba(28, 105, 212, 0.07);
+  box-shadow: 0 0 0 2px rgba(28, 105, 212, 0.08);
+}
+
+.monthly-update-reclassification-decisions input {
+  flex: 0 0 auto;
+  margin-top: 3px;
+  accent-color: #1c69d4;
+}
+
+.monthly-update-reclassification-decisions label > span {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+}
+
+.monthly-update-reclassification-decisions strong {
+  color: var(--c-text-primary);
+  font-size: 13px;
+}
+
+.monthly-update-reclassification-decisions small {
+  color: var(--c-text-secondary);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.monthly-update-reclassification-details {
+  border: 1px solid var(--c-border-soft);
+  border-radius: 12px;
+  overflow: hidden;
+}
+
+.monthly-update-reclassification-details summary {
+  padding: 11px 12px;
+  color: var(--c-text-primary);
+  font-size: 12px;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.monthly-update-reclassification-details[open] summary {
+  border-bottom: 1px solid var(--c-border-soft);
+  background: rgba(15, 23, 42, 0.03);
+}
+
+.monthly-update-reclassification-details .table-wrapper {
+  max-height: 420px;
+}
+
+.monthly-update-reclassification-change {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  min-width: 220px;
+}
+
+.monthly-update-reclassification-change del {
+  color: var(--c-danger, #c9363e);
+}
+
+.monthly-update-reclassification-change ins {
+  color: var(--c-success, #15803d);
+  font-weight: 600;
+  text-decoration: none;
+}
+
+@media (max-width: 760px) {
+  .monthly-update-reclassification-country-head {
+    flex-direction: column;
+  }
+
+  .monthly-update-reclassification-kpis {
+    justify-content: flex-start;
+  }
+
+  .monthly-update-reclassification-decisions {
+    grid-template-columns: 1fr;
+  }
 }
 
 /* 4WD Animation CSS */

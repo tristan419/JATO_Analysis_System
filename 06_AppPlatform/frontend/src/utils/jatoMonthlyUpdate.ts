@@ -63,6 +63,8 @@ export function getMonthlyUpdateUploadStageLabel(stage?: string | null): string 
   switch (stage) {
     case "initiating":
       return "初始化上传会话";
+    case "verifying":
+      return "核对续传文件";
     case "resuming":
       return "恢复上传会话";
     case "uploading":
@@ -71,6 +73,10 @@ export function getMonthlyUpdateUploadStageLabel(stage?: string | null): string 
       return "分片重试中";
     case "assembling":
       return "服务端组装文件";
+    case "digesting":
+      return "识别数据范围";
+    case "invalid":
+      return "文件校验未通过";
     case "creating_job":
       return "创建月更任务";
     case "queued":
@@ -118,7 +124,12 @@ export function getMonthlyUpdateStatusBadgeClass(status: string): string {
 }
 
 export function shouldPollMonthlyUpdateJobs(jobs: JatoMonthlyUpdateJob[]): boolean {
-  return jobs.some((job) => job.status === "queued" || job.status === "running");
+  return jobs.some((job) => (
+    job.status === "queued"
+    || job.status === "running"
+    || job.pendingOperation?.status === "queued"
+    || job.pendingOperation?.status === "running"
+  ));
 }
 
 export function buildMonthlyUpdateArtifactEntries(
@@ -138,5 +149,7 @@ export function buildMonthlyUpdateArtifactEntries(
     ["Partition output", job.artifacts.partitionOutputPath],
     ["Manifest", job.artifacts.manifestPath],
     ["Fingerprint", job.artifacts.fingerprintPath],
+    ["Summaries", job.artifacts.summariesOutputPath],
+    ["Review bundle", job.artifacts.reviewBundlePath],
   ].filter((entry): entry is [string, string] => Boolean(entry[1]));
 }

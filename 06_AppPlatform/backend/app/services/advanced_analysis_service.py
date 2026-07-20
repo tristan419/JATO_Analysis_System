@@ -222,14 +222,18 @@ def _cache_key(prefix: str, **kwargs) -> str:
     return f"{prefix}:v{_CACHE_SCHEMA}:{digest}"
 
 
-# Precomputed disk cache — survives server restarts.
-# Path mirrors config.PRECOMPUTED_DIR used by parquet_repository.load_precomputed().
+# Mutable query cache — survives server restarts but is not part of the
+# immutable JATO active summaries bundle.
 def _precomputed_dir() -> Path:
-    env = os.getenv("JATO_PRECOMPUTED_DIR", "")
+    env = os.getenv("JATO_ANALYSIS_CACHE_DIR", "")
     if env:
         return Path(env)
-    # Fallback: repo root / 04_Processed_data / summaries
-    return Path(__file__).resolve().parents[4] / "04_Processed_data" / "summaries"
+    return (
+        Path(__file__).resolve().parents[4]
+        / "04_Processed_data"
+        / "cache"
+        / "advanced_analysis"
+    )
 
 
 def _precomputed_path(key: str) -> Path:

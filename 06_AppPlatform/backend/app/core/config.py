@@ -149,6 +149,15 @@ JATO_MONTHLY_UPDATE_UPLOAD_CHUNK_SIZE_BYTES = max(
     int(os.getenv("APP_JATO_MONTHLY_UPDATE_UPLOAD_CHUNK_SIZE_BYTES", str(8 * 1024 * 1024))),
     1024 * 1024,
 )
+JATO_MONTHLY_UPDATE_UPLOAD_MAX_BYTES = max(
+    int(
+        os.getenv(
+            "APP_JATO_MONTHLY_UPDATE_UPLOAD_MAX_BYTES",
+            str(1024 * 1024 * 1024),
+        )
+    ),
+    1024 * 1024,
+)
 COC_MATCH_JOB_ROOT = Path(
     os.getenv(
         "APP_COC_MATCH_JOB_ROOT",

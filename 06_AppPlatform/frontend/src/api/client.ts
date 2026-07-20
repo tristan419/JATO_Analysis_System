@@ -20,6 +20,13 @@ import type {
   HeroProductDeckResponse,
   HeroProductPriceOverridePayload,
   HeroProductSpecOverridePayload,
+  JatoHistoricalReclassificationCountryReport,
+  JatoHistoricalReclassificationDimensionSummary,
+  JatoHistoricalReclassificationExactChange,
+  JatoHistoricalReclassificationMonthlyTransfer,
+  JatoHistoricalReclassificationReport,
+  JatoHistoricalReclassificationValueSummary,
+  JatoHistoricalReclassificationDecisionInput,
   JatoMonthlyUpdateCleanupResult,
   JatoMonthlyUpdateArtifacts,
   JatoMonthlyUpdateJob,
@@ -32,16 +39,22 @@ import type {
   JatoMonthlyUpdateBaselinePromotionResult,
   JatoMonthlyUpdatePublication,
   JatoMonthlyUpdateOverlapChangeSummary,
+  JatoMonthlyUpdatePendingOperation,
   JatoMonthlyUpdateMaintenanceStatus,
   JatoMonthlyUpdateRawCompareSummary,
+  JatoMonthlyUpdateReviewApproval,
   JatoMonthlyUpdateReviewBundle,
   JatoMonthlyUpdateReviewFinding,
   JatoMonthlyUpdateRefreshSummary,
+  JatoMonthlyUpdateFailureDigest,
+  JatoMonthlyUpdateIngestDigest,
+  JatoMonthlyUpdateIngestIssue,
   JatoMonthlyUpdateSmartMergeSummary,
   JatoMonthlyUpdateSummaries,
   JatoMonthlyUpdateStorageMetric,
   JatoMonthlyUpdateUploadProgress,
   JatoMonthlyUpdateUploadSession,
+  JatoMonthlyUpdateUploadStatus,
   JatoMonthlyUpdateUpload,
   MarketScanDeckRequest,
   MarketScanDeckResponse,
@@ -192,6 +205,8 @@ export const API_BASE = import.meta.env.VITE_API_BASE ?? "/v1";
 const MONTHLY_UPDATE_RESUME_PROBE_BYTES = 1024 * 1024;
 const MONTHLY_UPDATE_UPLOAD_SESSION_STORAGE_PREFIX = "jato_monthly_update_upload_session:";
 const MONTHLY_UPDATE_UPLOAD_MAX_ATTEMPTS = 4;
+const MONTHLY_UPDATE_DIGEST_POLL_MS = 2000;
+const MONTHLY_UPDATE_DIGEST_MAX_POLLS = 300;
 
 export function apiUrl(path: string): string {
   const normalizedBase = API_BASE.endsWith("/") ? API_BASE.slice(0, -1) : API_BASE;
@@ -442,6 +457,17 @@ function clearStoredMonthlyUpdateUploadId(resumeKey: string): void {
     localStorage.removeItem(getMonthlyUpdateUploadSessionStorageKey(resumeKey));
   } catch {
     // Ignore storage failures when clearing local resume state.
+  }
+}
+
+function clearStoredMonthlyUpdateUploadIdByUploadId(uploadId: string): void {
+  try {
+    const matchingKeys = Array.from({ length: localStorage.length }, (_value, index) => localStorage.key(index))
+      .filter((key): key is string => Boolean(key?.startsWith(MONTHLY_UPDATE_UPLOAD_SESSION_STORAGE_PREFIX)))
+      .filter((key) => localStorage.getItem(key) === uploadId);
+    matchingKeys.forEach((key) => localStorage.removeItem(key));
+  } catch {
+    // The server-side session is still abandoned when browser storage is unavailable.
   }
 }
 
@@ -1025,9 +1051,47 @@ function mapJatoMonthlyUpdatePublication(
     activePartitionPath: raw.activePartitionPath === undefined || raw.activePartitionPath === null ? null : String(raw.activePartitionPath),
     activeFingerprintPath: raw.activeFingerprintPath === undefined || raw.activeFingerprintPath === null ? null : String(raw.activeFingerprintPath),
     activeRefreshReportPath: raw.activeRefreshReportPath === undefined || raw.activeRefreshReportPath === null ? null : String(raw.activeRefreshReportPath),
+    activeSummariesPath: raw.activeSummariesPath === undefined || raw.activeSummariesPath === null ? null : String(raw.activeSummariesPath),
+    summariesState: raw.summariesState === undefined || raw.summariesState === null ? null : String(raw.summariesState),
     rolledBackAt: raw.rolledBackAt === undefined || raw.rolledBackAt === null ? null : String(raw.rolledBackAt),
     rolledBackBy: raw.rolledBackBy === undefined || raw.rolledBackBy === null ? null : String(raw.rolledBackBy),
-    rollbackBackupDir: raw.rollbackBackupDir === undefined || raw.rollbackBackupDir === null ? null : String(raw.rollbackBackupDir)
+    rollbackBackupDir: raw.rollbackBackupDir === undefined || raw.rollbackBackupDir === null ? null : String(raw.rollbackBackupDir),
+    activeFingerprintBefore: raw.activeFingerprintBefore === undefined || raw.activeFingerprintBefore === null
+      ? null
+      : String(raw.activeFingerprintBefore),
+    activeFingerprintAfter: raw.activeFingerprintAfter === undefined || raw.activeFingerprintAfter === null
+      ? null
+      : String(raw.activeFingerprintAfter),
+    rollbackActiveFingerprintBefore: raw.rollbackActiveFingerprintBefore === undefined || raw.rollbackActiveFingerprintBefore === null
+      ? null
+      : String(raw.rollbackActiveFingerprintBefore),
+    rollbackActiveFingerprintAfter: raw.rollbackActiveFingerprintAfter === undefined || raw.rollbackActiveFingerprintAfter === null
+      ? null
+      : String(raw.rollbackActiveFingerprintAfter)
+  };
+}
+
+function mapJatoMonthlyUpdatePendingOperation(
+  raw: Record<string, unknown>,
+): JatoMonthlyUpdatePendingOperation {
+  const operationType = raw.type === "rollback" ? "rollback" : "publish";
+  const operationStatus = (
+    raw.status === "running"
+    || raw.status === "success"
+    || raw.status === "failed"
+  ) ? raw.status : "queued";
+  return {
+    operationId: String(raw.operationId ?? ""),
+    type: operationType,
+    status: operationStatus,
+    requestedAt: String(raw.requestedAt ?? ""),
+    requestedBy: String(raw.requestedBy ?? ""),
+    startedAt: raw.startedAt === undefined || raw.startedAt === null ? null : String(raw.startedAt),
+    finishedAt: raw.finishedAt === undefined || raw.finishedAt === null ? null : String(raw.finishedAt),
+    error: raw.error === undefined || raw.error === null ? null : String(raw.error),
+    failureDigest: raw.failureDigest && typeof raw.failureDigest === "object"
+      ? mapJatoMonthlyUpdateFailureDigest(raw.failureDigest as Record<string, unknown>)
+      : null,
   };
 }
 
@@ -1365,6 +1429,22 @@ function mapPublishBaselineResponse(raw: Record<string, unknown>): PublishBaseli
   };
 }
 
+function mapJatoMonthlyUpdateReviewApproval(
+  raw: Record<string, unknown>,
+): JatoMonthlyUpdateReviewApproval {
+  return {
+    decision: raw.decision === "rejected" ? "rejected" : "approved",
+    reviewedAt: String(raw.reviewedAt ?? ""),
+    reviewedBy: String(raw.reviewedBy ?? ""),
+    candidateFingerprint: String(raw.candidateFingerprint ?? ""),
+    activeBaseFingerprint:
+      raw.activeBaseFingerprint === undefined || raw.activeBaseFingerprint === null
+        ? null
+        : String(raw.activeBaseFingerprint),
+    note: raw.note === undefined || raw.note === null ? null : String(raw.note),
+  };
+}
+
 function mapJatoMonthlyUpdateJob(raw: Record<string, unknown>): JatoMonthlyUpdateJob {
   const uploadRaw = raw.upload && typeof raw.upload === "object"
     ? raw.upload as Record<string, unknown>
@@ -1403,6 +1483,9 @@ function mapJatoMonthlyUpdateJob(raw: Record<string, unknown>): JatoMonthlyUpdat
   } : null;
 
   const artifacts: JatoMonthlyUpdateArtifacts | null = artifactsRaw ? {
+    candidateScope: artifactsRaw.candidateScope === undefined || artifactsRaw.candidateScope === null
+      ? null
+      : String(artifactsRaw.candidateScope),
     jobDir: artifactsRaw.jobDir === undefined || artifactsRaw.jobDir === null ? null : String(artifactsRaw.jobDir),
     logPath: artifactsRaw.logPath === undefined || artifactsRaw.logPath === null ? null : String(artifactsRaw.logPath),
     baselinePath: artifactsRaw.baselinePath === undefined || artifactsRaw.baselinePath === null ? null : String(artifactsRaw.baselinePath),
@@ -1429,7 +1512,13 @@ function mapJatoMonthlyUpdateJob(raw: Record<string, unknown>): JatoMonthlyUpdat
       : String(artifactsRaw.refreshReportPath),
     fingerprintPath: artifactsRaw.fingerprintPath === undefined || artifactsRaw.fingerprintPath === null
       ? null
-      : String(artifactsRaw.fingerprintPath)
+      : String(artifactsRaw.fingerprintPath),
+    summariesOutputPath: artifactsRaw.summariesOutputPath === undefined || artifactsRaw.summariesOutputPath === null
+      ? null
+      : String(artifactsRaw.summariesOutputPath),
+    reviewBundlePath: artifactsRaw.reviewBundlePath === undefined || artifactsRaw.reviewBundlePath === null
+      ? null
+      : String(artifactsRaw.reviewBundlePath),
   } : null;
 
   const summaries: JatoMonthlyUpdateSummaries | null = summariesRaw ? {
@@ -1455,11 +1544,20 @@ function mapJatoMonthlyUpdateJob(raw: Record<string, unknown>): JatoMonthlyUpdat
   const cancellationRaw = raw.cancellation && typeof raw.cancellation === "object"
     ? raw.cancellation as Record<string, unknown>
     : null;
+  const reviewApprovalRaw = raw.reviewApproval && typeof raw.reviewApproval === "object"
+    ? raw.reviewApproval as Record<string, unknown>
+    : null;
+  const pendingOperationRaw = raw.pendingOperation && typeof raw.pendingOperation === "object"
+    ? raw.pendingOperation as Record<string, unknown>
+    : null;
 
   return {
     jobId: String(raw.jobId ?? ""),
     month: String(raw.month ?? ""),
     batchId: raw.batchId === undefined || raw.batchId === null ? null : String(raw.batchId),
+    jobType: raw.jobType === undefined || raw.jobType === null ? null : String(raw.jobType),
+    country: raw.country === undefined || raw.country === null ? null : String(raw.country),
+    countryScope: Array.isArray(raw.countryScope) ? raw.countryScope.map((item) => String(item)) : [],
     status: String(raw.status ?? ""),
     phase: String(raw.phase ?? ""),
     triggeredBy: String(raw.triggeredBy ?? ""),
@@ -1468,6 +1566,23 @@ function mapJatoMonthlyUpdateJob(raw: Record<string, unknown>): JatoMonthlyUpdat
     startedAt: raw.startedAt === undefined || raw.startedAt === null ? null : String(raw.startedAt),
     finishedAt: raw.finishedAt === undefined || raw.finishedAt === null ? null : String(raw.finishedAt),
     error: raw.error === undefined || raw.error === null ? null : String(raw.error),
+    ingestionKey: raw.ingestionKey === undefined || raw.ingestionKey === null
+      ? null
+      : String(raw.ingestionKey),
+    ingestDigest: raw.ingestDigest && typeof raw.ingestDigest === "object"
+      ? mapJatoMonthlyUpdateIngestDigest(raw.ingestDigest as Record<string, unknown>)
+      : null,
+    failureDigest: raw.failureDigest && typeof raw.failureDigest === "object"
+      ? mapJatoMonthlyUpdateFailureDigest(raw.failureDigest as Record<string, unknown>)
+      : null,
+    duplicateOfJobId:
+      raw.duplicateOfJobId === undefined || raw.duplicateOfJobId === null
+        ? null
+        : String(raw.duplicateOfJobId),
+    activeBaseFingerprint:
+      raw.activeBaseFingerprint === undefined || raw.activeBaseFingerprint === null
+        ? null
+        : String(raw.activeBaseFingerprint),
     upload,
     plan,
     artifacts,
@@ -1485,6 +1600,10 @@ function mapJatoMonthlyUpdateJob(raw: Record<string, unknown>): JatoMonthlyUpdat
       statusAtCheck: runtimeCheckRaw.statusAtCheck === undefined ? undefined : String(runtimeCheckRaw.statusAtCheck),
       phaseAtCheck: runtimeCheckRaw.phaseAtCheck === undefined ? undefined : String(runtimeCheckRaw.phaseAtCheck),
       threadAlive: runtimeCheckRaw.threadAlive === undefined ? undefined : Boolean(runtimeCheckRaw.threadAlive),
+      workerPid: runtimeCheckRaw.workerPid === undefined || runtimeCheckRaw.workerPid === null
+        ? null
+        : Number(runtimeCheckRaw.workerPid),
+      workerAlive: runtimeCheckRaw.workerAlive === undefined ? undefined : Boolean(runtimeCheckRaw.workerAlive),
       processPid: runtimeCheckRaw.processPid === undefined || runtimeCheckRaw.processPid === null
         ? null
         : Number(runtimeCheckRaw.processPid),
@@ -1509,6 +1628,10 @@ function mapJatoMonthlyUpdateJob(raw: Record<string, unknown>): JatoMonthlyUpdat
         ? cancellationRaw.termination as Record<string, unknown>
         : undefined,
     } : null,
+    reviewApproval: reviewApprovalRaw ? mapJatoMonthlyUpdateReviewApproval(reviewApprovalRaw) : null,
+    pendingOperation: pendingOperationRaw
+      ? mapJatoMonthlyUpdatePendingOperation(pendingOperationRaw)
+      : null,
     logPath: raw.logPath === undefined || raw.logPath === null ? null : String(raw.logPath),
     logTail: raw.logTail === undefined || raw.logTail === null ? null : String(raw.logTail)
   };
@@ -1526,7 +1649,10 @@ function mapJatoMonthlyUpdateReviewFinding(
     metrics: raw.metrics && typeof raw.metrics === "object"
       ? raw.metrics as Record<string, unknown>
       : {},
-    suggestedAction: String(raw.suggestedAction ?? "")
+    suggestedAction: String(raw.suggestedAction ?? ""),
+    sourceFeedback: raw.sourceFeedback === undefined || raw.sourceFeedback === null
+      ? null
+      : String(raw.sourceFeedback),
   };
 }
 
@@ -1647,6 +1773,122 @@ function mapJatoMonthlyUpdateCountryMonthlySalesSummary(
   };
 }
 
+function mapJatoHistoricalReclassificationValueSummary(
+  raw: Record<string, unknown>
+): JatoHistoricalReclassificationValueSummary {
+  return {
+    value: String(raw.value ?? ""),
+    sales: Number(raw.sales ?? 0),
+    monthCount: Number(raw.monthCount ?? 0),
+  };
+}
+
+function mapJatoHistoricalReclassificationDimensionSummary(
+  raw: Record<string, unknown>
+): JatoHistoricalReclassificationDimensionSummary {
+  return {
+    dimension: String(raw.dimension ?? ""),
+    mismatchCellCount: Number(raw.mismatchCellCount ?? 0),
+    movedSales: Number(raw.movedSales ?? 0),
+    oldValues: Array.isArray(raw.oldValues)
+      ? raw.oldValues.map((item) => (
+        mapJatoHistoricalReclassificationValueSummary(item as Record<string, unknown>)
+      ))
+      : [],
+    newValues: Array.isArray(raw.newValues)
+      ? raw.newValues.map((item) => (
+        mapJatoHistoricalReclassificationValueSummary(item as Record<string, unknown>)
+      ))
+      : [],
+  };
+}
+
+function mapJatoHistoricalReclassificationMonthlyTransfer(
+  raw: Record<string, unknown>
+): JatoHistoricalReclassificationMonthlyTransfer {
+  return {
+    month: String(raw.month ?? ""),
+    sales: Number(raw.sales ?? 0),
+  };
+}
+
+function mapJatoHistoricalReclassificationExactChange(
+  raw: Record<string, unknown>
+): JatoHistoricalReclassificationExactChange {
+  return {
+    dimension: String(raw.dimension ?? ""),
+    make: String(raw.make ?? ""),
+    model: String(raw.model ?? ""),
+    oldValue: String(raw.oldValue ?? ""),
+    newValue: String(raw.newValue ?? ""),
+    transferredSales: Number(raw.transferredSales ?? 0),
+    affectedMonths: Array.isArray(raw.affectedMonths)
+      ? raw.affectedMonths.map((item) => String(item))
+      : [],
+    monthlyTransfers: Array.isArray(raw.monthlyTransfers)
+      ? raw.monthlyTransfers.map((item) => (
+        mapJatoHistoricalReclassificationMonthlyTransfer(item as Record<string, unknown>)
+      ))
+      : [],
+    confidence: String(raw.confidence ?? ""),
+  };
+}
+
+function mapJatoHistoricalReclassificationCountryReport(
+  raw: Record<string, unknown>
+): JatoHistoricalReclassificationCountryReport {
+  const truncation = raw.truncation && typeof raw.truncation === "object"
+    ? raw.truncation as Record<string, unknown>
+    : {};
+  return {
+    country: String(raw.country ?? ""),
+    decision: raw.decision === "use_latest" || raw.decision === "keep_active"
+      ? raw.decision
+      : null,
+    comparedThrough: raw.comparedThrough === undefined || raw.comparedThrough === null
+      ? null
+      : String(raw.comparedThrough),
+    historicalMonthCount: Number(raw.historicalMonthCount ?? 0),
+    jointMismatchCellCount: Number(raw.jointMismatchCellCount ?? 0),
+    jointMovedSales: Number(raw.jointMovedSales ?? 0),
+    monthlyTotalsStable: Boolean(raw.monthlyTotalsStable),
+    decisionRequired: Boolean(raw.decisionRequired),
+    dimensionSummaries: Array.isArray(raw.dimensionSummaries)
+      ? raw.dimensionSummaries.map((item) => (
+        mapJatoHistoricalReclassificationDimensionSummary(item as Record<string, unknown>)
+      ))
+      : [],
+    exactChanges: Array.isArray(raw.exactChanges)
+      ? raw.exactChanges.map((item) => (
+        mapJatoHistoricalReclassificationExactChange(item as Record<string, unknown>)
+      ))
+      : [],
+    exactChangeCount: Number(raw.exactChangeCount ?? 0),
+    complexChangeCount: Number(raw.complexChangeCount ?? 0),
+    truncation: {
+      truncated: Boolean(truncation.truncated),
+      exactChangeLimit: Number(truncation.exactChangeLimit ?? 0),
+      valueLimitPerDirection: Number(truncation.valueLimitPerDirection ?? 0),
+    },
+  };
+}
+
+function mapJatoHistoricalReclassificationReport(
+  raw: Record<string, unknown>
+): JatoHistoricalReclassificationReport {
+  const status = raw.status === "decision_required" || raw.status === "resolved"
+    ? raw.status
+    : "not_required";
+  return {
+    status,
+    countries: Array.isArray(raw.countries)
+      ? raw.countries.map((item) => (
+        mapJatoHistoricalReclassificationCountryReport(item as Record<string, unknown>)
+      ))
+      : [],
+  };
+}
+
 function mapJatoMonthlyUpdateReviewBundle(
   raw: Record<string, unknown>
 ): JatoMonthlyUpdateReviewBundle {
@@ -1695,7 +1937,21 @@ function mapJatoMonthlyUpdateReviewBundle(
       : {},
     refreshSummary: raw.refreshSummary && typeof raw.refreshSummary === "object"
       ? mapJatoMonthlyUpdateRefreshSummary(raw.refreshSummary as Record<string, unknown>)
-      : null
+      : null,
+    candidateFingerprint: raw.candidateFingerprint === undefined || raw.candidateFingerprint === null
+      ? null
+      : String(raw.candidateFingerprint),
+    approval: raw.approval && typeof raw.approval === "object"
+      ? mapJatoMonthlyUpdateReviewApproval(raw.approval as Record<string, unknown>)
+      : null,
+    historicalReclassificationReport: (
+      raw.historicalReclassificationReport
+      && typeof raw.historicalReclassificationReport === "object"
+    )
+      ? mapJatoHistoricalReclassificationReport(
+        raw.historicalReclassificationReport as Record<string, unknown>
+      )
+      : { status: "not_required", countries: [] },
   };
 }
 
@@ -1789,6 +2045,12 @@ function mapJatoMonthlyUpdateMaintenanceStatus(
         : String(raw.latestPatchBatch),
     jobCount: Number(raw.jobCount ?? 0),
     uploadSessionCount: Number(raw.uploadSessionCount ?? 0),
+    baselinePromotion:
+      raw.baselinePromotion && typeof raw.baselinePromotion === "object"
+        ? mapJatoMonthlyUpdateBaselinePromotionResult(
+          raw.baselinePromotion as Record<string, unknown>
+        )
+        : null,
     trackedStorageBytes: Number(raw.trackedStorageBytes ?? 0),
     storageMetrics: Array.isArray(raw.storageMetrics)
       ? raw.storageMetrics.map((item) => mapJatoMonthlyUpdateStorageMetric(item as Record<string, unknown>))
@@ -1796,12 +2058,64 @@ function mapJatoMonthlyUpdateMaintenanceStatus(
   };
 }
 
+function mapJatoMonthlyUpdateBaselinePromotionStatus(
+  value: unknown
+): JatoMonthlyUpdateBaselinePromotionResult["status"] {
+  switch (value) {
+    case "queued":
+    case "running":
+    case "success":
+    case "failed":
+      return value;
+    default:
+      return "failed";
+  }
+}
+
 function mapJatoMonthlyUpdateBaselinePromotionResult(
   raw: Record<string, unknown>
 ): JatoMonthlyUpdateBaselinePromotionResult {
   return {
-    promotedAt: String(raw.promotedAt ?? ""),
-    triggeredBy: String(raw.triggeredBy ?? ""),
+    operationId: String(raw.operationId ?? ""),
+    status: mapJatoMonthlyUpdateBaselinePromotionStatus(raw.status),
+    requestedAt:
+      raw.requestedAt === undefined || raw.requestedAt === null
+        ? null
+        : String(raw.requestedAt),
+    requestedBy:
+      raw.requestedBy === undefined || raw.requestedBy === null
+        ? null
+        : String(raw.requestedBy),
+    startedAt:
+      raw.startedAt === undefined || raw.startedAt === null
+        ? null
+        : String(raw.startedAt),
+    finishedAt:
+      raw.finishedAt === undefined || raw.finishedAt === null
+        ? null
+        : String(raw.finishedAt),
+    error:
+      raw.error === undefined || raw.error === null
+        ? null
+        : String(raw.error),
+    failureDigest:
+      raw.failureDigest && typeof raw.failureDigest === "object"
+        ? mapJatoMonthlyUpdateFailureDigest(
+          raw.failureDigest as Record<string, unknown>
+        )
+        : null,
+    sourceActiveFingerprint:
+      raw.sourceActiveFingerprint === undefined || raw.sourceActiveFingerprint === null
+        ? null
+        : String(raw.sourceActiveFingerprint),
+    promotedAt:
+      raw.promotedAt === undefined || raw.promotedAt === null
+        ? null
+        : String(raw.promotedAt),
+    triggeredBy:
+      raw.triggeredBy === undefined || raw.triggeredBy === null
+        ? null
+        : String(raw.triggeredBy),
     sourceParquetPath:
       raw.sourceParquetPath === undefined || raw.sourceParquetPath === null
         ? null
@@ -1823,9 +2137,135 @@ function mapJatoMonthlyUpdateBaselinePromotionResult(
   };
 }
 
+function mapJatoMonthlyUpdateIngestIssue(
+  raw: Record<string, unknown>
+): JatoMonthlyUpdateIngestIssue {
+  return {
+    code: String(raw.code ?? ""),
+    message: String(raw.message ?? ""),
+    countries: Array.isArray(raw.countries)
+      ? raw.countries.map((item) => String(item))
+      : [],
+    fields: Array.isArray(raw.fields)
+      ? raw.fields.map((item) => String(item))
+      : [],
+    sourceFeedback:
+      raw.sourceFeedback === undefined || raw.sourceFeedback === null
+        ? null
+        : String(raw.sourceFeedback),
+  };
+}
+
+function mapNullableMonthRecord(raw: unknown): Record<string, string | null> {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
+    return {};
+  }
+  return Object.fromEntries(
+    Object.entries(raw as Record<string, unknown>).map(([country, month]) => [
+      country,
+      month === undefined || month === null ? null : String(month),
+    ])
+  );
+}
+
+function mapJatoMonthlyUpdateIngestDigest(
+  raw: Record<string, unknown>
+): JatoMonthlyUpdateIngestDigest {
+  const route = raw.route;
+  const normalizedRoute = route === "single_country"
+    || route === "partial_country"
+    || route === "full_batch"
+    ? route
+    : null;
+  return {
+    schemaVersion: Number(raw.schemaVersion ?? 1),
+    status: raw.status === "invalid" ? "invalid" : "ready",
+    fileSha256: String(raw.fileSha256 ?? ""),
+    sizeBytes: Number(raw.sizeBytes ?? 0),
+    sheetName: raw.sheetName === undefined || raw.sheetName === null
+      ? null
+      : String(raw.sheetName),
+    route: normalizedRoute,
+    candidateScope:
+      raw.candidateScope === undefined || raw.candidateScope === null
+        ? null
+        : String(raw.candidateScope),
+    countries: Array.isArray(raw.countries)
+      ? raw.countries.map((item) => String(item))
+      : [],
+    countryLatestMonths: mapNullableMonthRecord(raw.countryLatestMonths),
+    activeLatestMonths: mapNullableMonthRecord(raw.activeLatestMonths),
+    latestMonth:
+      raw.latestMonth === undefined || raw.latestMonth === null
+        ? null
+        : String(raw.latestMonth),
+    dataRowCount: Number(raw.dataRowCount ?? 0),
+    advancedCountries: Array.isArray(raw.advancedCountries)
+      ? raw.advancedCountries.map((item) => String(item))
+      : [],
+    unchangedCountries: Array.isArray(raw.unchangedCountries)
+      ? raw.unchangedCountries.map((item) => String(item))
+      : [],
+    regressedCountries: Array.isArray(raw.regressedCountries)
+      ? raw.regressedCountries.map((item) => String(item))
+      : [],
+    activeDatasetVersion:
+      raw.activeDatasetVersion === undefined || raw.activeDatasetVersion === null
+        ? null
+        : String(raw.activeDatasetVersion),
+    blockers: Array.isArray(raw.blockers)
+      ? raw.blockers
+        .filter((item): item is Record<string, unknown> => (
+          typeof item === "object" && item !== null
+        ))
+        .map(mapJatoMonthlyUpdateIngestIssue)
+      : [],
+    warnings: Array.isArray(raw.warnings)
+      ? raw.warnings
+        .filter((item): item is Record<string, unknown> => (
+          typeof item === "object" && item !== null
+        ))
+        .map(mapJatoMonthlyUpdateIngestIssue)
+      : [],
+  };
+}
+
+function mapJatoMonthlyUpdateFailureDigest(
+  raw: Record<string, unknown>
+): JatoMonthlyUpdateFailureDigest {
+  return {
+    code: String(raw.code ?? ""),
+    category: String(raw.category ?? ""),
+    phase: String(raw.phase ?? ""),
+    retryable: Boolean(raw.retryable),
+    message: String(raw.message ?? ""),
+    sourceFeedback:
+      raw.sourceFeedback === undefined || raw.sourceFeedback === null
+        ? null
+        : String(raw.sourceFeedback),
+    technicalDetail: raw.technicalDetail,
+    nextAction: String(raw.nextAction ?? ""),
+  };
+}
+
 function mapJatoMonthlyUpdateUploadSession(
   raw: Record<string, unknown>
 ): JatoMonthlyUpdateUploadSession {
+  const statusValue = String(raw.status ?? "pending");
+  const validStatuses: JatoMonthlyUpdateUploadStatus[] = [
+    "pending",
+    "uploading",
+    "assembling",
+    "digesting",
+    "ready",
+    "invalid",
+    "consumed",
+    "abandoned",
+    "expired",
+  ];
+  const status = validStatuses.includes(statusValue as JatoMonthlyUpdateUploadStatus)
+    ? statusValue as JatoMonthlyUpdateUploadStatus
+    : "pending";
   return {
     uploadId: String(raw.uploadId ?? ""),
     filename: String(raw.filename ?? ""),
@@ -1836,8 +2276,14 @@ function mapJatoMonthlyUpdateUploadSession(
     receivedChunks: Array.isArray(raw.receivedChunks)
       ? raw.receivedChunks.map((item) => Number(item))
       : [],
+    chunkDigests: raw.chunkDigests && typeof raw.chunkDigests === "object"
+      ? Object.fromEntries(
+        Object.entries(raw.chunkDigests as Record<string, unknown>)
+          .map(([partNumber, digest]) => [partNumber, String(digest)])
+      )
+      : {},
     uploadedBytes: Number(raw.uploadedBytes ?? 0),
-    status: String(raw.status ?? ""),
+    status,
     createdAt:
       raw.createdAt === undefined || raw.createdAt === null
         ? null
@@ -1866,6 +2312,31 @@ function mapJatoMonthlyUpdateUploadSession(
       raw.triggeredBy === undefined || raw.triggeredBy === null
         ? null
         : String(raw.triggeredBy),
+    ingestDigest:
+      raw.ingestDigest && typeof raw.ingestDigest === "object"
+        ? mapJatoMonthlyUpdateIngestDigest(
+          raw.ingestDigest as Record<string, unknown>
+        )
+        : null,
+    failureDigest:
+      raw.failureDigest && typeof raw.failureDigest === "object"
+        ? mapJatoMonthlyUpdateFailureDigest(
+          raw.failureDigest as Record<string, unknown>
+        )
+        : null,
+    consumedJobId:
+      raw.consumedJobId === undefined || raw.consumedJobId === null
+        ? null
+        : String(raw.consumedJobId),
+    digestPid:
+      raw.digestPid === undefined || raw.digestPid === null
+        ? null
+        : Number(raw.digestPid),
+    digestLaunchedAt:
+      raw.digestLaunchedAt === undefined || raw.digestLaunchedAt === null
+        ? null
+        : String(raw.digestLaunchedAt),
+    digestAttempts: Number(raw.digestAttempts ?? 0),
   };
 }
 
@@ -1926,6 +2397,45 @@ async function initiateJatoMonthlyUpdateUploadSession(
       resumeKey,
     })
   }).then((res) => mapJatoMonthlyUpdateUploadSession(res.item));
+}
+
+async function uploadSessionMatchesFile(
+  session: JatoMonthlyUpdateUploadSession,
+  file: File,
+  onVerifiedChunk?: (partNumber: number, checkedCount: number) => void,
+): Promise<boolean> {
+  if (
+    session.filename !== file.name
+    || session.sizeBytes !== file.size
+    || session.totalChunks < 1
+  ) {
+    return false;
+  }
+  if (
+    ["assembling", "digesting", "ready", "consumed"].includes(session.status)
+    && session.receivedChunkCount !== session.totalChunks
+  ) {
+    return false;
+  }
+  let checkedCount = 0;
+  for (const partNumber of session.receivedChunks) {
+    const expectedDigest = session.chunkDigests[String(partNumber)]?.toLowerCase();
+    if (!expectedDigest || !/^[0-9a-f]{64}$/.test(expectedDigest)) {
+      return false;
+    }
+    const start = (partNumber - 1) * session.chunkSize;
+    const end = Math.min(file.size, start + session.chunkSize);
+    if (start < 0 || start >= end) {
+      return false;
+    }
+    const actualDigest = await sha256ForBlob(file.slice(start, end));
+    if (actualDigest !== expectedDigest) {
+      return false;
+    }
+    checkedCount += 1;
+    onVerifiedChunk?.(partNumber, checkedCount);
+  }
+  return true;
 }
 
 async function completeJatoMonthlyUpdateUploadSession(
@@ -3160,7 +3670,11 @@ export const api = {
       lastModified: file.lastModified,
       probeSha256,
     });
-    onProgress?.({
+    let session: JatoMonthlyUpdateUploadSession | null = null;
+    const emitProgress = (progress: JatoMonthlyUpdateUploadProgress): void => {
+      onProgress?.({ ...progress, uploadId: session?.uploadId ?? null });
+    };
+    emitProgress({
       stage: "initiating",
       uploadedBytes: 0,
       totalBytes: file.size,
@@ -3170,7 +3684,6 @@ export const api = {
       detail: "准备上传会话与续传信息",
     });
 
-    let session: JatoMonthlyUpdateUploadSession | null = null;
     const storedUploadId = readStoredMonthlyUpdateUploadId(resumeKey);
     if (storedUploadId) {
       try {
@@ -3183,85 +3696,183 @@ export const api = {
     if (!session) {
       session = await initiateJatoMonthlyUpdateUploadSession(file, resumeKey);
     }
+    if (["invalid", "abandoned", "expired"].includes(session.status)) {
+      clearStoredMonthlyUpdateUploadId(resumeKey);
+      session = await initiateJatoMonthlyUpdateUploadSession(
+        file,
+        `${resumeKey}:terminal-${Date.now()}`,
+      );
+    }
+    if (
+      session.receivedChunkCount > 0
+      || ["assembling", "digesting", "ready", "consumed"].includes(session.status)
+    ) {
+      emitProgress({
+        stage: "verifying",
+        uploadedBytes: session.uploadedBytes,
+        totalBytes: file.size,
+        uploadedChunks: 0,
+        totalChunks: session.receivedChunkCount,
+        chunkSize: session.chunkSize,
+        detail: "正在逐分片核对本地文件与续传会话，防止同名文件串用旧任务",
+      });
+      const matchesExistingSession = await uploadSessionMatchesFile(
+        session,
+        file,
+        (_partNumber, checkedCount) => {
+          emitProgress({
+            stage: "verifying",
+            uploadedBytes: session?.uploadedBytes ?? 0,
+            totalBytes: file.size,
+            uploadedChunks: checkedCount,
+            totalChunks: session?.receivedChunkCount ?? 0,
+            chunkSize: session?.chunkSize ?? 0,
+            detail: `已核对 ${checkedCount}/${session?.receivedChunkCount ?? 0} 个既有分片`,
+          });
+        },
+      );
+      if (!matchesExistingSession) {
+        clearStoredMonthlyUpdateUploadId(resumeKey);
+        session = await initiateJatoMonthlyUpdateUploadSession(
+          file,
+          `${resumeKey}:content-${Date.now()}`,
+        );
+      }
+    }
     writeStoredMonthlyUpdateUploadId(resumeKey, session.uploadId);
 
-    onProgress?.({
-      stage: session.receivedChunkCount > 0 ? "resuming" : "uploading",
-      uploadedBytes: session.uploadedBytes,
-      totalBytes: file.size,
-      uploadedChunks: session.receivedChunkCount,
-      totalChunks: session.totalChunks,
-      chunkSize: session.chunkSize,
-      detail: session.receivedChunkCount > 0
-        ? `已恢复 ${session.receivedChunkCount}/${session.totalChunks} 个分片`
-        : "开始分片上传",
-    });
-
-    const receivedChunks = new Set(session.receivedChunks);
-    for (let chunkIndex = 0; chunkIndex < session.totalChunks; chunkIndex += 1) {
-      const partNumber = chunkIndex + 1;
-      if (receivedChunks.has(partNumber)) {
-        continue;
-      }
-      const start = chunkIndex * session.chunkSize;
-      const end = Math.min(file.size, start + session.chunkSize);
-      const chunk = file.slice(start, end);
-      const chunkSha256 = await sha256ForBlob(chunk);
-      let uploaded = false;
-      for (let attempt = 1; attempt <= MONTHLY_UPDATE_UPLOAD_MAX_ATTEMPTS; attempt += 1) {
-        try {
-          session = await requestJatoMonthlyUpdateUploadChunk(
-            session.uploadId,
-            partNumber,
-            chunk,
-            chunkSha256
-          );
-          uploaded = true;
-          break;
-        } catch (error) {
-          if (attempt >= MONTHLY_UPDATE_UPLOAD_MAX_ATTEMPTS) {
-            throw error;
-          }
-          onProgress?.({
-            stage: "retrying",
-            uploadedBytes: session.uploadedBytes,
-            totalBytes: file.size,
-            uploadedChunks: session.receivedChunkCount,
-            totalChunks: session.totalChunks,
-            chunkSize: session.chunkSize,
-            detail: `分片 ${partNumber}/${session.totalChunks} 上传失败，正在第 ${attempt + 1} 次重试`,
-          });
-          await sleep(getMonthlyUpdateRetryDelayMs(attempt));
-        }
-      }
-      if (!uploaded) {
-        throw new Error(`分片 ${partNumber} 上传失败。`);
-      }
-      onProgress?.({
-        stage: "uploading",
+    if (session.status === "pending" || session.status === "uploading") {
+      emitProgress({
+        stage: session.receivedChunkCount > 0 ? "resuming" : "uploading",
         uploadedBytes: session.uploadedBytes,
         totalBytes: file.size,
         uploadedChunks: session.receivedChunkCount,
         totalChunks: session.totalChunks,
         chunkSize: session.chunkSize,
-        detail: `分片 ${partNumber}/${session.totalChunks} 已完成`,
+        detail: session.receivedChunkCount > 0
+          ? `已恢复 ${session.receivedChunkCount}/${session.totalChunks} 个分片`
+          : "开始分片上传",
       });
-    }
 
-    if (session.status !== "completed") {
-      onProgress?.({
+      const receivedChunks = new Set(session.receivedChunks);
+      for (let chunkIndex = 0; chunkIndex < session.totalChunks; chunkIndex += 1) {
+        const partNumber = chunkIndex + 1;
+        if (receivedChunks.has(partNumber)) {
+          continue;
+        }
+        const start = chunkIndex * session.chunkSize;
+        const end = Math.min(file.size, start + session.chunkSize);
+        const chunk = file.slice(start, end);
+        const chunkSha256 = await sha256ForBlob(chunk);
+        let uploaded = false;
+        for (let attempt = 1; attempt <= MONTHLY_UPDATE_UPLOAD_MAX_ATTEMPTS; attempt += 1) {
+          try {
+            session = await requestJatoMonthlyUpdateUploadChunk(
+              session.uploadId,
+              partNumber,
+              chunk,
+              chunkSha256
+            );
+            uploaded = true;
+            break;
+          } catch (error) {
+            if (attempt >= MONTHLY_UPDATE_UPLOAD_MAX_ATTEMPTS) {
+              throw error;
+            }
+            emitProgress({
+              stage: "retrying",
+              uploadedBytes: session.uploadedBytes,
+              totalBytes: file.size,
+              uploadedChunks: session.receivedChunkCount,
+              totalChunks: session.totalChunks,
+              chunkSize: session.chunkSize,
+              detail: `分片 ${partNumber}/${session.totalChunks} 上传失败，正在第 ${attempt + 1} 次重试`,
+            });
+            await sleep(getMonthlyUpdateRetryDelayMs(attempt));
+          }
+        }
+        if (!uploaded) {
+          throw new Error(`分片 ${partNumber} 上传失败。`);
+        }
+        emitProgress({
+          stage: "uploading",
+          uploadedBytes: session.uploadedBytes,
+          totalBytes: file.size,
+          uploadedChunks: session.receivedChunkCount,
+          totalChunks: session.totalChunks,
+          chunkSize: session.chunkSize,
+          detail: `分片 ${partNumber}/${session.totalChunks} 已完成`,
+        });
+      }
+
+      emitProgress({
         stage: "assembling",
         uploadedBytes: file.size,
         totalBytes: file.size,
         uploadedChunks: session.totalChunks,
         totalChunks: session.totalChunks,
         chunkSize: session.chunkSize,
-        detail: "服务端正在校验分片并组装整文件",
+        detail: "分片已齐全，服务端将异步组装并校验工作簿",
       });
-      session = await completeJatoMonthlyUpdateUploadSession(session.uploadId);
+      try {
+        session = await completeJatoMonthlyUpdateUploadSession(session.uploadId);
+      } catch {
+        session = await getJatoMonthlyUpdateUploadSession(session.uploadId);
+        if (session.status === "pending" || session.status === "uploading") {
+          session = await completeJatoMonthlyUpdateUploadSession(session.uploadId);
+        }
+      }
     }
 
-    onProgress?.({
+    let digestPollCount = 0;
+    while (session.status === "assembling" || session.status === "digesting") {
+      emitProgress({
+        stage: "digesting",
+        uploadedBytes: file.size,
+        totalBytes: file.size,
+        uploadedChunks: session.totalChunks,
+        totalChunks: session.totalChunks,
+        chunkSize: session.chunkSize,
+        detail: session.status === "assembling"
+          ? "隔离 worker 正在流式组装文件"
+          : "正在识别国家、真实最新月份并对照 active",
+        ingestDigest: session.ingestDigest,
+        failureDigest: session.failureDigest,
+      });
+      if (digestPollCount >= MONTHLY_UPDATE_DIGEST_MAX_POLLS) {
+        throw new Error("上传 digest 超时；会话已保留，刷新页面可继续查询，不会重复建任务。");
+      }
+      digestPollCount += 1;
+      await sleep(MONTHLY_UPDATE_DIGEST_POLL_MS);
+      session = await getJatoMonthlyUpdateUploadSession(session.uploadId);
+    }
+
+    if (session.status === "invalid") {
+      emitProgress({
+        stage: "invalid",
+        uploadedBytes: file.size,
+        totalBytes: file.size,
+        uploadedChunks: session.totalChunks,
+        totalChunks: session.totalChunks,
+        chunkSize: session.chunkSize,
+        detail: session.failureDigest?.message
+          ?? session.ingestDigest?.blockers[0]?.message
+          ?? "上传 digest 未通过",
+        ingestDigest: session.ingestDigest,
+        failureDigest: session.failureDigest,
+      });
+      const feedback = session.ingestDigest?.blockers
+        .map((issue) => issue.sourceFeedback || issue.message)
+        .filter((value) => value.length > 0)
+        .join("；");
+      throw new Error(feedback || session.failureDigest?.message || "上传 digest 未通过。");
+    }
+    if (session.status === "abandoned" || session.status === "expired") {
+      clearStoredMonthlyUpdateUploadId(resumeKey);
+      throw new Error("上传会话已结束。请重新点击启动月更，系统会为同一文件建立新的安全会话。");
+    }
+
+    emitProgress({
       stage: "creating_job",
       uploadedBytes: file.size,
       totalBytes: file.size,
@@ -3269,20 +3880,88 @@ export const api = {
       totalChunks: session.totalChunks,
       chunkSize: session.chunkSize,
       detail: session.fileSha256
-        ? `文件 SHA-256 ${session.fileSha256.slice(0, 12)}...`
+        ? `${session.ingestDigest?.countries.join("、") || "工作簿"} · ${session.ingestDigest?.latestMonth || "-"} · SHA ${session.fileSha256.slice(0, 12)}...`
         : "准备创建月更任务",
+      ingestDigest: session.ingestDigest,
+      failureDigest: session.failureDigest,
     });
 
-    const item = await request<{ item: Record<string, unknown> }>("/msrp/monthly-update-jobs/from-upload", {
-      method: "POST",
-      body: JSON.stringify({
-        uploadId: session.uploadId,
-        month: month || undefined,
-      }),
-    }).then((res) => mapJatoMonthlyUpdateJob(res.item));
+    const uploadId = session.uploadId;
+    const requestJobFromUpload = () => request<{ item: Record<string, unknown> }>(
+      "/msrp/monthly-update-jobs/from-upload",
+      {
+        method: "POST",
+        body: JSON.stringify({
+          uploadId,
+          month: month || undefined,
+        }),
+      }
+    ).then((res) => mapJatoMonthlyUpdateJob(res.item));
+
+    let item: JatoMonthlyUpdateJob;
+    try {
+      // Always replay through the idempotent creation endpoint. Even consumed
+      // sessions must re-check the active dataset version before an old job is
+      // returned after a browser refresh.
+      item = await requestJobFromUpload();
+    } catch (error) {
+        const errorMessage = error instanceof Error ? error.message : String(error);
+        if (errorMessage.includes("STALE_UPLOAD_DIGEST_REFRESHING")) {
+          let refreshPollCount = 0;
+          session = await getJatoMonthlyUpdateUploadSession(session.uploadId);
+          while (session.status === "assembling" || session.status === "digesting") {
+            emitProgress({
+              stage: "digesting",
+              uploadedBytes: file.size,
+              totalBytes: file.size,
+              uploadedChunks: session.totalChunks,
+              totalChunks: session.totalChunks,
+              chunkSize: session.chunkSize,
+              detail: "active 已变化，正在复用已组装文件刷新 digest，无需重新上传",
+              ingestDigest: session.ingestDigest,
+              failureDigest: session.failureDigest,
+            });
+            if (refreshPollCount >= MONTHLY_UPDATE_DIGEST_MAX_POLLS) {
+              throw new Error("active 版本刷新 digest 超时；会话已保留，请刷新页面后继续。");
+            }
+            refreshPollCount += 1;
+            await sleep(MONTHLY_UPDATE_DIGEST_POLL_MS);
+            session = await getJatoMonthlyUpdateUploadSession(session.uploadId);
+          }
+          if (session.status === "invalid") {
+            throw new Error(
+              session.failureDigest?.message
+              ?? session.ingestDigest?.blockers[0]?.message
+              ?? "active 版本刷新 digest 未通过。"
+            );
+          }
+          if (session.status === "abandoned" || session.status === "expired") {
+            clearStoredMonthlyUpdateUploadId(resumeKey);
+            throw new Error("上传会话已结束。请重新点击启动月更，系统会为同一文件建立新的安全会话。");
+          }
+          item = await requestJobFromUpload();
+        } else if (errorMessage.includes("STALE_UPLOAD_DIGEST")) {
+          clearStoredMonthlyUpdateUploadId(resumeKey);
+          throw new Error(
+            "该上传会话已绑定旧 active 任务。请重新点击启动月更；系统会为同一文件建立新会话。"
+          );
+        } else {
+          session = await getJatoMonthlyUpdateUploadSession(session.uploadId);
+          if (session.status === "consumed" && session.consumedJobId) {
+            item = await request<{ item: Record<string, unknown> }>(
+              `/msrp/monthly-update-jobs/${session.consumedJobId}`
+            ).then((res) => mapJatoMonthlyUpdateJob(res.item));
+          } else {
+            // A non-successful create response is not evidence that it is safe to
+            // repeat the POST. The only recovery path is a server-confirmed
+            // consumed upload, whose existing job can be read idempotently.
+            throw error;
+          }
+        }
+    }
     clearStoredMonthlyUpdateUploadId(resumeKey);
 
-    onProgress?.({
+    emitProgress({
       stage: "queued",
       uploadedBytes: file.size,
       totalBytes: file.size,
@@ -3292,10 +3971,20 @@ export const api = {
       detail: item.upload?.sha256
         ? `已入队，文件指纹 ${item.upload.sha256.slice(0, 12)}...`
         : "已入队，后台开始执行脚本",
+      ingestDigest: session.ingestDigest,
+      failureDigest: session.failureDigest,
     });
 
     return { item };
   },
+  abandonJatoMonthlyUpdateUpload: (uploadId: string) =>
+    request<{ item: Record<string, unknown> }>(
+      `/msrp/monthly-update-uploads/${uploadId}/abandon`,
+      { method: "POST" },
+    ).then((res) => {
+      clearStoredMonthlyUpdateUploadIdByUploadId(uploadId);
+      return mapJatoMonthlyUpdateUploadSession(res.item);
+    }),
   listJatoMonthlyUpdateJobs: (limit = 20) =>
     request<{ rows: number; items: Record<string, unknown>[] }>(
       `/msrp/monthly-update-jobs?limit=${limit}`
@@ -3310,6 +3999,26 @@ export const api = {
   getJatoMonthlyUpdateReview: (jobId: string) =>
     request<{ item: Record<string, unknown> }>(`/msrp/monthly-update-jobs/${jobId}/review`).then((res) => ({
       item: mapJatoMonthlyUpdateReviewBundle(res.item)
+    })),
+  approveJatoMonthlyUpdateReview: (jobId: string, note?: string) =>
+    request<{ item: Record<string, unknown> }>(`/msrp/monthly-update-jobs/${jobId}/review-approval`, {
+      method: "POST",
+      body: JSON.stringify({ decision: "approve", note: note || undefined }),
+    }).then((res) => ({
+      item: mapJatoMonthlyUpdateJob(res.item),
+    })),
+  resolveJatoMonthlyUpdateHistoricalReclassification: (
+    jobId: string,
+    decisions: JatoHistoricalReclassificationDecisionInput[],
+  ) =>
+    request<{ item: Record<string, unknown> }>(
+      `/msrp/monthly-update-jobs/${jobId}/historical-reclassification-resolution`,
+      {
+        method: "POST",
+        body: JSON.stringify({ decisions }),
+      },
+    ).then((res) => ({
+      item: mapJatoMonthlyUpdateJob(res.item),
     })),
   retryFailedJatoMonthlyUpdateJob: (jobId: string) =>
     request<{ item: Record<string, unknown> }>(`/msrp/monthly-update-jobs/${jobId}/retry`, {

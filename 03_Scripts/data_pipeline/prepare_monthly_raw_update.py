@@ -195,6 +195,7 @@ def main() -> None:
         "--partition-output", _rel(staging_dir / "partitioned_dataset_v1"),
         "--report", _rel(staging_dir / "refresh_job_report.json"),
         "--fingerprint", _rel(staging_dir / "dataset_fingerprint.json"),
+        "--summaries-output", _rel(staging_dir / "summaries"),
         "--incremental", "--skip-benchmark",
     ]
     supplement_line = ""

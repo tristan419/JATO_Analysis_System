@@ -1,4 +1,5 @@
 import argparse
+import hashlib
 import json
 import re
 import sys
@@ -192,6 +193,106 @@ def _collect_non_empty_string_values(series: pd.Series) -> set[str]:
     return values
 
 
+def replace_baseline_countries_with_patch_rows(
+    df: pd.DataFrame,
+    *,
+    patch_source_indices: set[int] | None,
+) -> tuple[pd.DataFrame, dict[str, Any]]:
+    """Treat every patch country as a complete snapshot, never as rows to append.
+
+    Explicit baseline + patch refreshes carry both inputs in one frame.  The
+    replacement must happen even when the active parquet supplement is missing;
+    otherwise baseline rows for an uploaded country survive beside the patch and
+    monthly sales can be counted twice.
+    """
+    summary: dict[str, Any] = {
+        "enabled": bool(patch_source_indices),
+        "patchSourceIndices": sorted(patch_source_indices or set()),
+        "replacedCountryCount": 0,
+        "replacedCountries": [],
+        "removedBaselineRowCount": 0,
+    }
+    if not patch_source_indices:
+        return df, summary
+
+    country_column = resolve_first_matching_column(
+        columns=[str(column) for column in df.columns],
+        candidates=RECOMMENDED_DIMENSION_CANDIDATES["country"],
+    )
+    if not country_column:
+        raise ValueError("输入数据缺少国家列，无法执行 baseline + patch 整国替换。")
+    source_index_column = SOURCE_TRACK_COLUMNS[1]
+    if source_index_column not in df.columns:
+        raise ValueError("输入数据缺少来源序号，无法安全区分 baseline 与 patch。")
+
+    patch_mask = df[source_index_column].isin(sorted(patch_source_indices))
+    if not bool(patch_mask.any()):
+        raise ValueError("未找到 patch 来源行，拒绝退化为 baseline 与 patch 直接拼接。")
+    normalized_country_values = (
+        df[country_column]
+        .astype("string")
+        .fillna("")
+        .str.strip()
+    )
+    country_match_keys = normalized_country_values.str.casefold()
+    patch_country_source_counts = (
+        pd.DataFrame(
+            {
+                "countryKey": country_match_keys.loc[patch_mask],
+                source_index_column: df.loc[patch_mask, source_index_column],
+            }
+        )
+        .loc[lambda frame: frame["countryKey"] != ""]
+        .drop_duplicates()
+        .groupby("countryKey", dropna=False)[source_index_column]
+        .nunique()
+    )
+    patch_country_display = {
+        key: display
+        for key, display in zip(
+            country_match_keys.loc[patch_mask],
+            normalized_country_values.loc[patch_mask],
+            strict=False,
+        )
+        if key and display
+    }
+    duplicate_patch_countries = sorted(
+        patch_country_display.get(str(country_key), str(country_key))
+        for country_key, source_count in patch_country_source_counts.items()
+        if int(source_count) > 1 and str(country_key)
+    )
+    if duplicate_patch_countries:
+        raise ValueError(
+            "同一国家出现在多份 patch source 中，继续会造成 washed 快照累加："
+            + "、".join(duplicate_patch_countries)
+        )
+    patch_country_keys = {
+        str(country_key)
+        for country_key in country_match_keys.loc[patch_mask]
+        if str(country_key)
+    }
+    if not patch_country_keys:
+        raise ValueError("patch 不包含有效国家，不能执行整国替换。")
+
+    baseline_patch_country_mask = (
+        country_match_keys.isin(patch_country_keys) & ~patch_mask
+    )
+    result = df.loc[~baseline_patch_country_mask].copy()
+    result[country_column] = normalized_country_values.loc[result.index]
+    patch_countries = {
+        patch_country_display.get(country_key, country_key)
+        for country_key in patch_country_keys
+    }
+    summary.update(
+        {
+            "replacedCountryCount": int(len(patch_countries)),
+            "replacedCountries": sorted(patch_countries),
+            "removedBaselineRowCount": int(baseline_patch_country_mask.sum()),
+        }
+    )
+    return result, summary
+
+
 def supplement_missing_countries_from_parquet(
     df: pd.DataFrame,
     supplement_parquet_path: str | None,
@@ -232,21 +333,76 @@ def supplement_missing_countries_from_parquet(
         )
         supplement_country_column = country_column
 
-    current_countries = _collect_non_empty_string_values(df[country_column])
-    available_countries = _collect_non_empty_string_values(
-        supplement_df[supplement_country_column]
+    current_country_values = (
+        df[country_column].astype("string").fillna("").str.strip()
     )
-    patch_countries: set[str] = set(current_countries)
+    current_country_keys = current_country_values.str.casefold()
+    supplement_country_values = (
+        supplement_df[supplement_country_column]
+        .astype("string")
+        .fillna("")
+        .str.strip()
+    )
+    supplement_country_keys = supplement_country_values.str.casefold()
+    supplement_display_variants = (
+        pd.DataFrame(
+            {
+                "countryKey": supplement_country_keys,
+                "countryDisplay": supplement_country_values,
+            }
+        )
+        .loc[lambda frame: frame["countryKey"] != ""]
+        .drop_duplicates()
+        .groupby("countryKey", dropna=False)["countryDisplay"]
+        .agg(list)
+    )
+    ambiguous_supplement_countries = {
+        str(country_key): sorted(str(value) for value in display_values)
+        for country_key, display_values in supplement_display_variants.items()
+        if len(display_values) > 1
+    }
+    if ambiguous_supplement_countries:
+        rendered = "；".join(
+            f"{country_key}={display_values}"
+            for country_key, display_values in sorted(
+                ambiguous_supplement_countries.items()
+            )
+        )
+        raise ValueError(
+            "补齐 parquet 中同一逻辑国家存在多个大小写/空格展示值，"
+            f"继续会造成国家重复累加：{rendered}"
+        )
+    supplement_country_display = {
+        str(country_key): str(display_values[0])
+        for country_key, display_values in supplement_display_variants.items()
+    }
+    current_country_key_set = {
+        str(country_key)
+        for country_key in current_country_keys
+        if str(country_key)
+    }
+    available_country_keys = set(supplement_country_display)
+    patch_country_keys: set[str] = set(current_country_key_set)
     patch_mask = pd.Series(False, index=df.index)
     if patch_source_indices and SOURCE_TRACK_COLUMNS[1] in df.columns:
         patch_mask = df[SOURCE_TRACK_COLUMNS[1]].isin(list(patch_source_indices))
         if patch_mask.any():
-            patch_countries = _collect_non_empty_string_values(
-                df.loc[patch_mask, country_column]
-            )
+            patch_country_keys = {
+                str(country_key)
+                for country_key in current_country_keys.loc[patch_mask]
+                if str(country_key)
+            }
 
-    supplemented_countries = sorted(available_countries - patch_countries)
-    replaced_countries = sorted(current_countries & set(supplemented_countries))
+    supplemented_country_keys = available_country_keys - patch_country_keys
+    replaced_country_keys = current_country_key_set & supplemented_country_keys
+    supplemented_countries = sorted(
+        supplement_country_display[country_key]
+        for country_key in supplemented_country_keys
+    )
+    replaced_countries = sorted(
+        supplement_country_display.get(country_key, country_key)
+        for country_key in replaced_country_keys
+    )
 
     summary = {
         "enabled": True,
@@ -257,24 +413,61 @@ def supplement_missing_countries_from_parquet(
         "replacedCountryCount": int(len(replaced_countries)),
         "replacedCountries": replaced_countries,
     }
-    if not supplemented_countries:
-        if patch_mask.any() and patch_countries:
+    if not supplemented_country_keys:
+        if patch_mask.any() and patch_country_keys:
             preserved_df = df[
-                (~df[country_column].isin(patch_countries)) | patch_mask
+                (~current_country_keys.isin(patch_country_keys)) | patch_mask
             ].copy()
+            preserved_keys = current_country_keys.loc[preserved_df.index]
+            preserved_df[country_column] = [
+                supplement_country_display.get(str(country_key), str(display))
+                for country_key, display in zip(
+                    preserved_keys,
+                    current_country_values.loc[preserved_df.index],
+                    strict=False,
+                )
+            ]
             return preserved_df, summary
-        return df, summary
+        result = df.copy()
+        result[country_column] = [
+            supplement_country_display.get(str(country_key), str(display))
+            for country_key, display in zip(
+                current_country_keys,
+                current_country_values,
+                strict=False,
+            )
+        ]
+        return result, summary
 
-    if patch_mask.any() and patch_countries:
+    if patch_mask.any() and patch_country_keys:
         preserved_df = df[
-            (~df[country_column].isin(supplemented_countries))
-            & ((~df[country_column].isin(patch_countries)) | patch_mask)
+            (~current_country_keys.isin(supplemented_country_keys))
+            & ((~current_country_keys.isin(patch_country_keys)) | patch_mask)
         ].copy()
     else:
-        preserved_df = df[~df[country_column].isin(supplemented_countries)].copy()
+        preserved_df = df[
+            ~current_country_keys.isin(supplemented_country_keys)
+        ].copy()
     appended_df = supplement_df[
-        supplement_df[supplement_country_column].isin(supplemented_countries)
+        supplement_country_keys.isin(supplemented_country_keys)
     ].copy()
+    preserved_keys = current_country_keys.loc[preserved_df.index]
+    preserved_df[country_column] = [
+        supplement_country_display.get(str(country_key), str(display))
+        for country_key, display in zip(
+            preserved_keys,
+            current_country_values.loc[preserved_df.index],
+            strict=False,
+        )
+    ]
+    appended_df[country_column] = [
+        supplement_country_display.get(str(country_key), str(display))
+        for country_key, display in zip(
+            supplement_country_keys.loc[appended_df.index],
+            supplement_country_values.loc[appended_df.index],
+            strict=False,
+        )
+    ]
     appended_df = add_source_tracking_columns(
         appended_df,
         source_file=resolved_parquet_path,
@@ -566,6 +759,14 @@ def to_project_relative(path: Path) -> str:
         return str(path.resolve())
 
 
+def sha256_file(path: Path) -> str:
+    hasher = hashlib.sha256()
+    with path.open("rb") as handle:
+        for block in iter(lambda: handle.read(1024 * 1024), b""):
+            hasher.update(block)
+    return hasher.hexdigest()
+
+
 def write_manifest(
     manifest_path: Path,
     source_files: list[Path],
@@ -581,6 +782,7 @@ def write_manifest(
         if source_files
         else ""
     )
+    output_size = int(output_file.stat().st_size)
     manifest = {
         "generatedAtUtc": datetime.now(timezone.utc).isoformat(),
         "manifestSchemaVersion": MANIFEST_SCHEMA_VERSION,
@@ -596,7 +798,9 @@ def write_manifest(
         "rows": int(len(df)),
         "columns": int(len(df.columns)),
         "columnNames": [str(column) for column in df.columns],
-        "outputParquetBytes": int(output_file.stat().st_size),
+        "outputParquetBytes": output_size,
+        "fileSizeBytes": output_size,
+        "sha256": sha256_file(output_file),
         "elapsedSeconds": round(elapsed_seconds, 3),
         "validationSummary": validation_summary,
         "mergeSummary": merge_summary,
@@ -699,6 +903,18 @@ def convert_jato_to_parquet(
 
     emit("🧹 执行基础清洗与类型标准化...")
     df = normalize_dataframe(df)
+    df, baseline_patch_replacement = replace_baseline_countries_with_patch_rows(
+        df,
+        patch_source_indices=patch_source_indices,
+    )
+    if baseline_patch_replacement["enabled"]:
+        emit(
+            "🛡️ baseline + patch 整国替换: countries=%s, removedBaselineRows=%s"
+            % (
+                baseline_patch_replacement["replacedCountryCount"],
+                baseline_patch_replacement["removedBaselineRowCount"],
+            )
+        )
 
     supplement_summary = {
         "enabled": False,
@@ -708,6 +924,7 @@ def convert_jato_to_parquet(
         "supplementedRowCount": 0,
         "replacedCountryCount": 0,
         "replacedCountries": [],
+        "baselinePatchReplacement": baseline_patch_replacement,
     }
     if supplement_parquet_path:
         df, supplement_summary = supplement_missing_countries_from_parquet(
@@ -727,6 +944,7 @@ def convert_jato_to_parquet(
             )
         else:
             emit("🧩 patch 已覆盖现有 parquet 的全部国家，无需沿用 active 国家。")
+        supplement_summary["baselinePatchReplacement"] = baseline_patch_replacement
 
     conflict_key_list = parse_csv_list(conflict_keys)
     conflict_summary = detect_cross_file_conflicts(

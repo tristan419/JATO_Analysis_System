@@ -3,6 +3,7 @@ import hashlib
 from fastapi.testclient import TestClient
 
 from app.api.routes import msrp_monthly_update
+from app.core import security
 from app.main import app
 from app.services import jato_monthly_update_service
 
@@ -45,6 +46,78 @@ def _headers() -> dict[str, str]:
     }
 
 
+def _admin_headers(monkeypatch) -> dict[str, str]:
+    monkeypatch.setitem(
+        security.TOKEN_ROLE_MAP,
+        "jato-monthly-admin-test-token",
+        "admin",
+    )
+    return {
+        "X-Auth-Token": "jato-monthly-admin-test-token",
+        "X-User-Name": "tester",
+    }
+
+
+def _ready_upload_digest(
+    *,
+    file_sha256: str,
+    size_bytes: int,
+) -> dict[str, object]:
+    return {
+        "schemaVersion": 1,
+        "status": "ready",
+        "fileSha256": file_sha256,
+        "sizeBytes": size_bytes,
+        "sheetName": "Data Export",
+        "route": "full_batch",
+        "candidateScope": "full_candidate",
+        "countries": ["瑞典"],
+        "countryLatestMonths": {"瑞典": "2026-03"},
+        "activeLatestMonths": {"瑞典": "2026-02"},
+        "latestMonth": "2026-03",
+        "dataRowCount": 1,
+        "advancedCountries": ["瑞典"],
+        "unchangedCountries": [],
+        "regressedCountries": [],
+        "activeDatasetVersion": "active-test-version",
+        "blockers": [],
+        "warnings": [],
+    }
+
+
+def test_abandon_monthly_update_upload_route(
+    monkeypatch,
+) -> None:
+    calls: list[dict[str, str]] = []
+    monkeypatch.setattr(
+        msrp_monthly_update,
+        "abandon_jato_monthly_update_upload",
+        lambda **kwargs: (
+            calls.append(kwargs)
+            or {
+                "uploadId": kwargs["upload_id"],
+                "status": "abandoned",
+            }
+        ),
+    )
+    client = TestClient(app)
+
+    response = client.post(
+        "/v1/msrp/monthly-update-uploads/upload-123/abandon",
+        headers=_headers(),
+    )
+
+    assert response.status_code == 200
+    assert response.json()["item"]["status"] == "abandoned"
+    assert calls == [
+            {
+                "upload_id": "upload-123",
+                "triggered_by": "tester",
+                "triggered_role": "editor",
+            }
+        ]
+
+
 def test_create_monthly_update_job_route_persists_job(
     tmp_path, monkeypatch
 ) -> None:
@@ -70,7 +143,6 @@ def test_create_monthly_update_job_route_persists_job(
         "_allocate_batch_id",
         lambda month: f"{month}-r1",
     )
-
     client = TestClient(app)
     response = client.post(
         "/v1/msrp/monthly-update-jobs",
@@ -190,7 +262,7 @@ def test_monthly_update_cleanup_route_returns_summary(monkeypatch) -> None:
     response = client.post(
         "/v1/msrp/monthly-update-maintenance/cleanup",
         json={"cleanupTier": "cautious"},
-        headers=_headers(),
+        headers=_admin_headers(monkeypatch),
     )
 
     assert response.status_code == 200
@@ -262,7 +334,7 @@ def test_monthly_update_promote_baseline_route_returns_summary(monkeypatch) -> N
     client = TestClient(app)
     response = client.post(
         "/v1/msrp/monthly-update-maintenance/promote-baseline",
-        headers=_headers(),
+        headers=_admin_headers(monkeypatch),
     )
 
     assert response.status_code == 200
@@ -290,13 +362,26 @@ def test_chunked_monthly_update_upload_routes_create_job(
     )
     monkeypatch.setattr(
         jato_monthly_update_service,
-        "_detect_latest_month_from_upload",
-        lambda _path: "2026-03",
+        "_launch_upload_digest_process",
+        lambda _upload_id: 4242,
+    )
+    monkeypatch.setattr(
+        jato_monthly_update_service,
+        "_build_upload_ingest_digest",
+        lambda *, path, file_sha256, size_bytes: _ready_upload_digest(
+            file_sha256=file_sha256,
+            size_bytes=size_bytes,
+        ),
     )
     monkeypatch.setattr(
         jato_monthly_update_service,
         "_allocate_batch_id",
         lambda month: f"{month}-r1",
+    )
+    monkeypatch.setattr(
+        jato_monthly_update_service,
+        "_active_dataset_version",
+        lambda: "active-test-version",
     )
 
     client = TestClient(app)
@@ -361,8 +446,20 @@ def test_chunked_monthly_update_upload_routes_create_job(
         headers=_headers(),
     )
     assert complete_response.status_code == 200
-    assert complete_response.json()["item"]["status"] == "completed"
-    assert complete_response.json()["item"]["fileSha256"] == hashlib.sha256(b"abcdefghij").hexdigest()
+    assert complete_response.json()["item"]["status"] == "assembling"
+
+    digested = jato_monthly_update_service.run_jato_monthly_update_upload_digest(
+        upload_id
+    )
+    assert digested["status"] == "ready"
+    assert digested["fileSha256"] == hashlib.sha256(b"abcdefghij").hexdigest()
+    digest_status_response = client.get(
+        f"/v1/msrp/monthly-update-uploads/{upload_id}",
+        headers=_headers(),
+    )
+    assert digest_status_response.status_code == 200
+    assert digest_status_response.json()["item"]["status"] == "ready"
+    assert digest_status_response.json()["item"]["ingestDigest"]["route"] == "full_batch"
 
     create_response = client.post(
         "/v1/msrp/monthly-update-jobs/from-upload",
@@ -376,6 +473,12 @@ def test_chunked_monthly_update_upload_routes_create_job(
     assert payload["phase"] == "queued"
     assert payload["upload"]["sizeBytes"] == 10
     assert payload["upload"]["sha256"] == hashlib.sha256(b"abcdefghij").hexdigest()
+    consumed_response = client.get(
+        f"/v1/msrp/monthly-update-uploads/{upload_id}",
+        headers=_headers(),
+    )
+    assert consumed_response.json()["item"]["status"] == "consumed"
+    assert consumed_response.json()["item"]["consumedJobId"] == payload["jobId"]
 
 
 def test_retry_failed_monthly_update_job_route_requeues_existing_upload(
@@ -481,7 +584,7 @@ def test_cancel_monthly_update_job_route_returns_cancelled_job(monkeypatch) -> N
     client = TestClient(app)
     response = client.post(
         "/v1/msrp/monthly-update-jobs/jato-update-1234abcd/cancel",
-        headers=_headers(),
+        headers=_admin_headers(monkeypatch),
     )
 
     assert response.status_code == 200
@@ -568,7 +671,54 @@ def test_get_monthly_update_review_route_returns_review_bundle(monkeypatch) -> N
     assert payload["countryMonthlySalesSummary"][0]["rows"][1]["candidateSales"] == 120
 
 
-def test_publish_monthly_update_job_route_returns_published_job(monkeypatch) -> None:
+def test_historical_reclassification_resolution_route_passes_decisions(
+    monkeypatch,
+) -> None:
+    captured: dict[str, object] = {}
+
+    def resolve(*, job_id, triggered_by, decisions):
+        captured.update(
+            {
+                "jobId": job_id,
+                "triggeredBy": triggered_by,
+                "decisions": decisions,
+            }
+        )
+        return {"jobId": job_id, "status": "queued"}
+
+    monkeypatch.setattr(
+        msrp_monthly_update,
+        "resolve_jato_historical_reclassification",
+        resolve,
+    )
+    client = TestClient(app)
+    response = client.post(
+        (
+            "/v1/msrp/monthly-update-jobs/jato-update-1234abcd/"
+            "historical-reclassification-resolution"
+        ),
+        headers=_admin_headers(monkeypatch),
+        json={
+            "decisions": [
+                {"country": "捷克", "decision": "use_latest"},
+                {"country": "丹麦", "decision": "keep_active"},
+            ]
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.json()["item"]["status"] == "queued"
+    assert captured == {
+        "jobId": "jato-update-1234abcd",
+        "triggeredBy": "tester",
+        "decisions": [
+            {"country": "捷克", "decision": "use_latest"},
+            {"country": "丹麦", "decision": "keep_active"},
+        ],
+    }
+
+
+def test_publish_monthly_update_job_route_returns_queued_operation(monkeypatch) -> None:
     monkeypatch.setattr(
         msrp_monthly_update,
         "publish_jato_monthly_update_job",
@@ -577,10 +727,12 @@ def test_publish_monthly_update_job_route_returns_published_job(monkeypatch) -> 
             "status": "success",
             "phase": "completed",
             "triggeredBy": "builder",
-            "publication": {
-                "publishedAt": "2026-04-20T16:00:00+00:00",
-                "publishedBy": triggered_by,
-                "backupDir": "04_Processed_data/.refresh_backups/manual-promote-test",
+            "publication": None,
+            "pendingOperation": {
+                "operationId": "jato-publish-test",
+                "type": "publish",
+                "status": "queued",
+                "requestedBy": triggered_by,
             },
         },
     )
@@ -588,16 +740,19 @@ def test_publish_monthly_update_job_route_returns_published_job(monkeypatch) -> 
     client = TestClient(app)
     response = client.post(
         "/v1/msrp/monthly-update-jobs/jato-update-1234abcd/publish",
-        headers=_headers(),
+        headers=_admin_headers(monkeypatch),
     )
 
     assert response.status_code == 200
     payload = response.json()["item"]
     assert payload["jobId"] == "jato-update-1234abcd"
-    assert payload["publication"]["publishedBy"] == "tester"
+    assert payload["publication"] is None
+    assert payload["pendingOperation"]["type"] == "publish"
+    assert payload["pendingOperation"]["status"] == "queued"
+    assert payload["pendingOperation"]["requestedBy"] == "tester"
 
 
-def test_rollback_monthly_update_job_route_returns_rolled_back_job(monkeypatch) -> None:
+def test_rollback_monthly_update_job_route_returns_queued_operation(monkeypatch) -> None:
     monkeypatch.setattr(
         msrp_monthly_update,
         "rollback_jato_monthly_update_job",
@@ -609,8 +764,12 @@ def test_rollback_monthly_update_job_route_returns_rolled_back_job(monkeypatch) 
                 "publishedAt": "2026-04-20T16:00:00+00:00",
                 "publishedBy": "tester",
                 "backupDir": "04_Processed_data/.refresh_backups/manual-promote-test",
-                "rolledBackAt": "2026-04-20T16:10:00+00:00",
-                "rolledBackBy": triggered_by,
+            },
+            "pendingOperation": {
+                "operationId": "jato-rollback-test",
+                "type": "rollback",
+                "status": "queued",
+                "requestedBy": triggered_by,
             },
         },
     )
@@ -618,10 +777,13 @@ def test_rollback_monthly_update_job_route_returns_rolled_back_job(monkeypatch) 
     client = TestClient(app)
     response = client.post(
         "/v1/msrp/monthly-update-jobs/jato-update-1234abcd/rollback",
-        headers=_headers(),
+        headers=_admin_headers(monkeypatch),
     )
 
     assert response.status_code == 200
     payload = response.json()["item"]
     assert payload["jobId"] == "jato-update-1234abcd"
-    assert payload["publication"]["rolledBackBy"] == "tester"
+    assert "rolledBackAt" not in payload["publication"]
+    assert payload["pendingOperation"]["type"] == "rollback"
+    assert payload["pendingOperation"]["status"] == "queued"
+    assert payload["pendingOperation"]["requestedBy"] == "tester"
