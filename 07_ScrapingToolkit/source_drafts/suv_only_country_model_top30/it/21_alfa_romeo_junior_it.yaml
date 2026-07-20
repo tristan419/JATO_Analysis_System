@@ -1,30 +1,51 @@
 source_code: alfa_romeo_junior_it_draft_scrapling
 country: 意大利
 brand: ALFA ROMEO
-source_url: https://www.alfaromeo.it/modelli/junior-ibrida
+source_url: https://www.alfaromeo.it/models/junior-ibrida
 source_type: manufacturer_official
 price_semantics: base_msrp
 extractor_type: scrapling
 profile:
-  url: https://www.alfaromeo.it/modelli/junior-ibrida
-  tier: stealth
+  url: https://www.alfaromeo.it/models/junior-ibrida
+  tier: http
   headless: true
-  network_idle: true
+  network_idle: false
   impersonate: chrome
-  css:
-    vehicle_container: body
-    model: h1, h2
-    trim: h3
-    price: '[class*="price"]'
+  text_regex:
+    source_selector: body
+    entry_patterns:
+    - pattern: 'IBRIDA\s+Prezzo\s+di\s+listino\s+da\s+(?P<price>31\.050)\s*€'
+      official_trim: Ibrida
+      official_powertrain: 1.2 Hybrid 145 CV eDCT6
+      price_label: Prezzo di listino, IVA e MIS incluse
+    - pattern: 'IBRIDA\s+SPRINT\s+Prezzo\s+di\s+listino\s+da\s+(?P<price>32\.950)\s*€'
+      official_trim: Ibrida Sprint
+      official_powertrain: 1.2 Hybrid 145 CV eDCT6
+      price_label: Prezzo di listino, IVA e MIS incluse
+    - pattern: 'IBRIDA\s+TI\s+Prezzo\s+di\s+listino\s+da\s+(?P<price>34\.450)\s*€'
+      official_trim: Ibrida TI
+      official_powertrain: 1.2 Hybrid 145 CV eDCT6
+      price_label: Prezzo di listino, IVA e MIS incluse
+    - pattern: 'IBRIDA\s+SPORT\s+SPECIALE\s+Prezzo\s+di\s+listino\s+da\s+(?P<price>36\.150)\s*€'
+      official_trim: Ibrida Sport Speciale
+      official_powertrain: 1.2 Hybrid 145 CV eDCT6
+      price_label: Prezzo di listino, IVA e MIS incluse
   default_currency: EUR
   default_tax_included: true
-  default_price_label: MSRP
+  default_price_label: Prezzo di listino, IVA e MIS incluse
   fixed_model: JUNIOR
   fixed_jato_model: JUNIOR
-  fixed_jato_powertrain: null
+  fixed_jato_powertrain: MHEV
   model_rules: []
   skip_if_model_unmapped: false
   copy_trim_to_jato_trim: true
+  match_reason:
+    kind: official_model_page
+    source: official_alfa_romeo_it
+    page_audited_on: '2026-07-20'
+    price_scope: hybrid_trim_starting_list_price
+    note: Prices include VAT and road preparation. Promotions, installments,
+      deposits, final payments, IPT and PFU are excluded.
   confidence_rules:
     base: 0.2
     fixed_model_bonus: 0.18
@@ -39,55 +60,17 @@ profile:
     price_band_bonuses:
     - key: price_band_entry
       label: Entry price band matched
-      max: 0
-      delta: 0.0
-    - key: price_band_mid
-      label: Mid price band matched
-      min: 0
-      max: 0
-      delta: 0.01
-    - key: price_band_high
-      label: High price band matched
-      min: 0
+      min: 30000
+      max: 40000
       delta: 0.03
     powertrain_keyword_bonuses: []
     powertrain_bonuses:
-    - key: powertrain_bev
-      label: 'Powertrain matched: BEV'
-      powertrain: BEV
-      delta: 0.03
     - key: powertrain_mhev
       label: 'Powertrain matched: MHEV'
       powertrain: MHEV
       delta: 0.03
     clamp_min: 0.0
     clamp_max: 1.0
-  structured_fields:
-    edition_rules:
-    - key: edition_special
-      label: Special Edition
-      keyword: special edition
-      special: true
-    powertrain_rules:
-    - key: powertrain_bev
-      powertrain: BEV
-      keywords:
-      - bev
-      - ev
-      - electric
-      - battery electric
-      - fully electric
-      - electric vehicle
-      - elettrico
-      - 100% elettrico
-    - key: powertrain_mhev
-      powertrain: MHEV
-      keywords:
-      - mhev
-      - mild hybrid
-      - mild-hybrid
-      - 48V
-      - ibrida mild hybrid
   auto_accept_gates:
     review_threshold: 0.95
     semi_auto_threshold: 0.98
@@ -100,10 +83,8 @@ schedule:
   run_window_start: 00:00
   run_window_end: 05:00
   preferred_weekday: monday
-notes: Draft scaffold generated from country×model top30 backlog. Replace source_url,
-  profile.url, selectors, currency, price label, and the single-model placeholders
-  before promoting to 07_ScrapingToolkit/sources. [CSS selectors applied from brand
-  probe]
+notes: Replaced a broad CSS price probe that selected a monthly installment with
+  trim-scoped official list-price patterns from the current Junior Hybrid page.
 bootstrap_meta:
   country_model_rank: 21
   suggested_scope_kind: single_model
