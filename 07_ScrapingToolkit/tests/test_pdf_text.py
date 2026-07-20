@@ -223,9 +223,12 @@ def test_pdf_text_browser_fallback_reads_attachment_download(
         def goto(self, *_args, **_kwargs):
             raise RuntimeError("Download is starting")
 
-        def wait_for_timeout(self, timeout):
-            assert timeout == 100
-            state.download_callback(FakeDownload())
+        def wait_for_event(self, event, *, timeout):
+            assert event == "download"
+            assert timeout == 30_000
+            download = FakeDownload()
+            state.download_callback(download)
+            return download
 
     class FakeContext:
         def new_page(self):

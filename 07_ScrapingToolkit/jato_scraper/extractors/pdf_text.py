@@ -333,7 +333,12 @@ class PdfTextExtractor(BaseExtractor):
                                 raise
                             response = None
                             if not downloads:
-                                page.wait_for_timeout(100)
+                                download = page.wait_for_event(
+                                    "download",
+                                    timeout=timeout_ms,
+                                )
+                                if not downloads:
+                                    downloads.append(download)
                         if downloads:
                             path = downloads[0].path()
                             blob = Path(path).read_bytes()
