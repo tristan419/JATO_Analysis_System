@@ -2160,6 +2160,317 @@ def test_publish_monthly_update_job_promotes_staging_outputs(
     assert (backup_dir / "partitioned_dataset_v1" / "part-000.parquet").read_text(encoding="utf-8") == "old-partition"
 
 
+def _prepare_duplicate_guard_publish_job(
+    *,
+    tmp_path: Path,
+    monkeypatch,
+    job_id: str,
+) -> tuple[Path, Path]:
+    project_root = tmp_path / "project"
+    processed_root = project_root / "04_Processed_data"
+    job_root = (
+        processed_root / "ops" / "jato_monthly_update_jobs"
+    )
+    monkeypatch.setattr(
+        jato_monthly_update_service,
+        "PROJECT_ROOT",
+        project_root,
+    )
+    monkeypatch.setattr(
+        jato_monthly_update_service,
+        "MONTHLY_UPDATE_JOB_ROOT",
+        job_root,
+    )
+
+    active_partition = processed_root / "partitioned_dataset_v1"
+    active_partition.mkdir(parents=True, exist_ok=True)
+    _write_dataset_parquet(
+        processed_root / "jato_full_archive.parquet",
+        [
+            {
+                "国家": "奥地利",
+                "Make": "LEGACY",
+                "Model": "DUPLICATE",
+                "2026 Jan": 1,
+            },
+            {
+                "国家": "奥地利",
+                "Make": "LEGACY",
+                "Model": "DUPLICATE",
+                "2026 Jan": 2,
+            },
+        ],
+    )
+    (processed_root / "manifest.json").write_text(
+        '{"version":"active"}',
+        encoding="utf-8",
+    )
+    (processed_root / "dataset_fingerprint.json").write_text(
+        '{"hash":"active"}',
+        encoding="utf-8",
+    )
+    (processed_root / "refresh_job_report.json").write_text(
+        '{"jobStatus":"active"}',
+        encoding="utf-8",
+    )
+    (active_partition / "part-000.parquet").write_text(
+        "active-partition",
+        encoding="utf-8",
+    )
+
+    staging_root = processed_root / "staging" / "duplicate-guard"
+    staging_partition = staging_root / "partitioned_dataset_v1"
+    staging_partition.mkdir(parents=True, exist_ok=True)
+    _write_dataset_parquet(
+        staging_root / "jato_full_archive.parquet",
+        [
+            {
+                "国家": "奥地利",
+                "Make": "LEGACY",
+                "Model": "DUPLICATE",
+                "2026 Jan": 1,
+                "2026 Jun": 0,
+            },
+            {
+                "国家": "奥地利",
+                "Make": "LEGACY",
+                "Model": "DUPLICATE",
+                "2026 Jan": 2,
+                "2026 Jun": 0,
+            },
+        ],
+    )
+    (staging_root / "manifest.json").write_text(
+        '{"version":"candidate"}',
+        encoding="utf-8",
+    )
+    (staging_root / "dataset_fingerprint.json").write_text(
+        '{"hash":"candidate"}',
+        encoding="utf-8",
+    )
+    (staging_root / "refresh_job_report.json").write_text(
+        '{"jobStatus":"success"}',
+        encoding="utf-8",
+    )
+    (staging_partition / "part-000.parquet").write_text(
+        "candidate-partition",
+        encoding="utf-8",
+    )
+
+    upload_path = job_root / job_id / "uploads" / "patch.xlsx"
+    upload_path.parent.mkdir(parents=True, exist_ok=True)
+    upload_path.write_bytes(b"fake")
+    state = jato_monthly_update_service._prepare_initial_job_state(
+        job_id=job_id,
+        month="2026-06",
+        triggered_by="tester",
+        upload_filename="patch.xlsx",
+        stored_upload_path=upload_path,
+    )
+    state["status"] = "success"
+    state["phase"] = "completed"
+    state["artifacts"] = {
+        "stagingOutputPath": (
+            "04_Processed_data/staging/duplicate-guard/"
+            "jato_full_archive.parquet"
+        ),
+        "manifestPath": (
+            "04_Processed_data/staging/duplicate-guard/manifest.json"
+        ),
+        "partitionOutputPath": (
+            "04_Processed_data/staging/duplicate-guard/"
+            "partitioned_dataset_v1"
+        ),
+        "fingerprintPath": (
+            "04_Processed_data/staging/duplicate-guard/"
+            "dataset_fingerprint.json"
+        ),
+        "refreshReportPath": (
+            "04_Processed_data/staging/duplicate-guard/"
+            "refresh_job_report.json"
+        ),
+    }
+    state["summaries"] = {"refresh": {"jobStatus": "success"}}
+    _attach_staged_summaries_bundle(
+        state=state,
+        project_root=project_root,
+        staging_root=staging_root,
+        candidate_rows=2,
+    )
+    _approve_candidate_state(state)
+    jato_monthly_update_service._persist_job_state(state)
+    monkeypatch.setattr(
+        jato_monthly_update_service,
+        "_launch_job_thread",
+        lambda _job_id: None,
+    )
+    monkeypatch.setattr(
+        jato_monthly_update_service,
+        "_validate_candidate_full_bundle",
+        lambda **_kwargs: {},
+    )
+    return project_root, processed_root
+
+
+def test_publish_worker_duplicate_guard_blocks_before_active_switch(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    job_id = "jato-update-duplicate-block"
+    project_root, processed_root = _prepare_duplicate_guard_publish_job(
+        tmp_path=tmp_path,
+        monkeypatch=monkeypatch,
+        job_id=job_id,
+    )
+    active_parquet_before = (
+        processed_root / "jato_full_archive.parquet"
+    ).read_bytes()
+    active_manifest_before = (
+        processed_root / "manifest.json"
+    ).read_bytes()
+    active_partition_before = (
+        processed_root
+        / "partitioned_dataset_v1"
+        / "part-000.parquet"
+    ).read_bytes()
+    swap_calls: list[dict[str, object]] = []
+    monkeypatch.setattr(
+        jato_monthly_update_service,
+        "_publish_duplicate_configuration_assessment",
+        lambda **_kwargs: {
+            "blocking": [
+                {
+                    "country": "奥地利",
+                    "duplicateRows": 2,
+                    "duplicateGroupCount": 1,
+                    "keyColumnCount": 4,
+                    "duplicateStatus": (
+                        "untouched_country_content_changed"
+                    ),
+                }
+            ],
+            "inherited": [],
+            "guard": {
+                "status": "fail",
+                "policy": "exact_untouched_country_content_only",
+            },
+        },
+    )
+    monkeypatch.setattr(
+        jato_monthly_update_service,
+        "_swap_staged_active_bundle",
+        lambda **kwargs: swap_calls.append(kwargs),
+    )
+
+    queued = jato_monthly_update_service.publish_jato_monthly_update_job(
+        job_id=job_id,
+        triggered_by="publisher",
+    )
+    assert queued["pendingOperation"]["status"] == "queued"
+    jato_monthly_update_service.run_jato_monthly_update_worker_once()
+    failed = jato_monthly_update_service.get_jato_monthly_update_job(
+        job_id
+    )
+
+    assert failed["pendingOperation"]["status"] == "failed"
+    failure = failed["pendingOperation"]["failureDigest"]
+    assert failure["category"] == "safety_gate"
+    assert failure["technicalDetail"]["blockerType"] == (
+        "duplicate_configurations"
+    )
+    assert "平台管理员检查 Smart Merge" in failure["sourceFeedback"]
+    assert failed["publication"] is None
+    assert swap_calls == []
+    assert (
+        processed_root / "jato_full_archive.parquet"
+    ).read_bytes() == active_parquet_before
+    assert (
+        processed_root / "manifest.json"
+    ).read_bytes() == active_manifest_before
+    assert (
+        processed_root
+        / "partitioned_dataset_v1"
+        / "part-000.parquet"
+    ).read_bytes() == active_partition_before
+    backup_root = project_root / "04_Processed_data" / ".refresh_backups"
+    assert not list(backup_root.glob(f"manual-promote-{job_id}-*"))
+
+
+def test_publish_worker_records_inherited_duplicate_and_guard_evidence(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    job_id = "jato-update-duplicate-inherited"
+    _project_root, processed_root = _prepare_duplicate_guard_publish_job(
+        tmp_path=tmp_path,
+        monkeypatch=monkeypatch,
+        job_id=job_id,
+    )
+    inherited = {
+        "country": "奥地利",
+        "duplicateRows": 2,
+        "duplicateGroupCount": 1,
+        "keyColumnCount": 4,
+        "duplicateFingerprint": "c" * 64,
+        "activeDuplicateFingerprint": "d" * 64,
+        "contentFingerprint": "e" * 64,
+        "duplicateStatus": "unchanged_active_duplicate",
+    }
+    guard = {
+        "status": "pass",
+        "policy": "exact_untouched_country_content_only",
+        "targetCountries": ["德国"],
+        "untouchedCountries": ["奥地利"],
+    }
+    monkeypatch.setattr(
+        jato_monthly_update_service,
+        "_publish_duplicate_configuration_assessment",
+        lambda **_kwargs: {
+            "blocking": [],
+            "inherited": [inherited],
+            "guard": guard,
+        },
+    )
+    for gate_name in (
+        "_find_publish_historical_sales_changes",
+        "_find_publish_historical_configuration_changes",
+        "_find_publish_country_regressions",
+        "_find_publish_sales_doubling_anomalies",
+    ):
+        monkeypatch.setattr(
+            jato_monthly_update_service,
+            gate_name,
+            lambda **_kwargs: [],
+        )
+    monkeypatch.setattr(
+        jato_monthly_update_service,
+        "_invalidate_jato_publish_runtime_caches",
+        lambda: {"status": "cleared"},
+    )
+    monkeypatch.setattr(
+        jato_monthly_update_service,
+        "_write_jato_publish_cache_invalidation_evidence",
+        lambda **_kwargs: None,
+    )
+
+    jato_monthly_update_service.publish_jato_monthly_update_job(
+        job_id=job_id,
+        triggered_by="publisher",
+    )
+    jato_monthly_update_service.run_jato_monthly_update_worker_once()
+    published = jato_monthly_update_service.get_jato_monthly_update_job(
+        job_id
+    )
+
+    assert published["pendingOperation"]["status"] == "success"
+    publication = published["publication"]
+    assert publication["duplicateConfigurationGuard"] == guard
+    assert publication["inheritedDuplicateConfigurations"] == [inherited]
+    assert pd.read_parquet(
+        processed_root / "jato_full_archive.parquet"
+    )["2026 Jun"].tolist() == [0, 0]
+
+
 def test_publish_monthly_update_job_blocks_historical_month_removal(
     tmp_path: Path, monkeypatch
 ) -> None:
