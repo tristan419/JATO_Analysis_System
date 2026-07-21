@@ -20,6 +20,7 @@ from app.services.jato_monthly_update_service import (
     promote_current_active_to_baseline,
     publish_jato_monthly_update_job,
     recheck_jato_monthly_update_job,
+    recover_failed_jato_monthly_update_job,
     resolve_jato_historical_reclassification,
     retry_jato_monthly_update_upload_digest,
     rollback_jato_monthly_update_job,
@@ -103,6 +104,21 @@ def post_retry_monthly_update_job(
     return {
         "item": retry_failed_jato_monthly_update_job(
             source_job_id=job_id,
+            triggered_by=user.name,
+        )
+    }
+
+
+@router.post("/monthly-update-jobs/{job_id}/recover")
+def post_recover_monthly_update_job(
+    job_id: str,
+    payload: dict[str, object],
+    user: UserContext = Depends(require_min_role("admin")),
+) -> dict[str, object]:
+    return {
+        "item": recover_failed_jato_monthly_update_job(
+            source_job_id=job_id,
+            recovery_key=str(payload.get("recoveryKey") or ""),
             triggered_by=user.name,
         )
     }

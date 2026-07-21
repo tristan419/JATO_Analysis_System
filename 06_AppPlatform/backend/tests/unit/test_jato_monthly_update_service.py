@@ -194,6 +194,46 @@ def test_detect_partial_country_upload_uses_active_partition_scope(
     assert inspection["latestMonth"] == "2026-06"
 
 
+def test_partial_country_streaming_cli_args_preserves_legacy_xls_path(
+    tmp_path: Path,
+) -> None:
+    active_paths = {
+        "parquet": tmp_path / "missing.parquet",
+        "partition": tmp_path / "missing-partitions",
+    }
+
+    args = jato_monthly_update_service._partial_country_streaming_cli_args(
+        upload_suffix=".xls",
+        active_paths=active_paths,
+    )
+
+    assert args == []
+
+
+def test_partial_country_streaming_cli_args_binds_xlsx_to_active_schema(
+    tmp_path: Path,
+) -> None:
+    active_parquet = tmp_path / "active.parquet"
+    pd.DataFrame(
+        {"国家": ["捷克"], "2026 May": pd.Series([1], dtype="int64")}
+    ).to_parquet(active_parquet, index=False)
+    active_paths = {
+        "parquet": active_parquet,
+        "partition": tmp_path / "missing-partitions",
+    }
+
+    args = jato_monthly_update_service._partial_country_streaming_cli_args(
+        upload_suffix=".xlsx",
+        active_paths=active_paths,
+    )
+
+    assert args == [
+        "--streaming-xlsx",
+        "--schema-from-parquet",
+        str(active_parquet.resolve()),
+    ]
+
+
 def test_allocate_batch_id_increments_existing_revisions(
     tmp_path: Path, monkeypatch
 ) -> None:
