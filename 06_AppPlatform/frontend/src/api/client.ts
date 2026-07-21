@@ -53,6 +53,7 @@ import type {
   JatoMonthlyUpdateIngestDigest,
   JatoMonthlyUpdateIngestIssue,
   JatoMonthlyUpdateSmartMergeSummary,
+  JatoMonthlyUpdateSmartMergeResumeRequest,
   JatoMonthlyUpdateSummaries,
   JatoMonthlyUpdateStorageMetric,
   JatoMonthlyUpdateUploadProgress,
@@ -1179,9 +1180,11 @@ function mapJatoMonthlyUpdatePendingOperation(
 ): JatoMonthlyUpdatePendingOperation {
   const operationType = raw.type === "rollback"
     ? "rollback"
-    : raw.type === "review_refresh"
-      ? "review_refresh"
-      : "publish";
+    : raw.type === "smart_merge_resume"
+      ? "smart_merge_resume"
+      : raw.type === "review_refresh"
+        ? "review_refresh"
+        : "publish";
   const operationStatus = (
     raw.status === "running"
     || raw.status === "success"
@@ -1209,10 +1212,22 @@ function mapJatoMonthlyUpdatePendingOperation(
       || raw.expectedCandidateFingerprint === null
       ? null
       : String(raw.expectedCandidateFingerprint),
+    expectedSourceCandidateFingerprint: raw.expectedSourceCandidateFingerprint === undefined
+      || raw.expectedSourceCandidateFingerprint === null
+      ? null
+      : String(raw.expectedSourceCandidateFingerprint),
     expectedActiveFingerprint: raw.expectedActiveFingerprint === undefined
       || raw.expectedActiveFingerprint === null
       ? null
       : String(raw.expectedActiveFingerprint),
+    expectedReportFingerprint: raw.expectedReportFingerprint === undefined
+      || raw.expectedReportFingerprint === null
+      ? null
+      : String(raw.expectedReportFingerprint),
+    expectedResolutionFingerprint: raw.expectedResolutionFingerprint === undefined
+      || raw.expectedResolutionFingerprint === null
+      ? null
+      : String(raw.expectedResolutionFingerprint),
     resultCandidateFingerprint: raw.resultCandidateFingerprint === undefined
       || raw.resultCandidateFingerprint === null
       ? null
@@ -1678,6 +1693,11 @@ function mapJatoMonthlyUpdateJob(raw: Record<string, unknown>): JatoMonthlyUpdat
   const pendingOperationRaw = raw.pendingOperation && typeof raw.pendingOperation === "object"
     ? raw.pendingOperation as Record<string, unknown>
     : null;
+  const smartMergeRecoveryRaw = raw.smartMergeRecovery
+    && typeof raw.smartMergeRecovery === "object"
+    && !Array.isArray(raw.smartMergeRecovery)
+    ? raw.smartMergeRecovery as Record<string, unknown>
+    : null;
 
   return {
     jobId: String(raw.jobId ?? ""),
@@ -1760,6 +1780,25 @@ function mapJatoMonthlyUpdateJob(raw: Record<string, unknown>): JatoMonthlyUpdat
     pendingOperation: pendingOperationRaw
       ? mapJatoMonthlyUpdatePendingOperation(pendingOperationRaw)
       : null,
+    smartMergeRecovery: smartMergeRecoveryRaw ? {
+      canResume: smartMergeRecoveryRaw.canResume === true,
+      sourceCandidateFingerprint: smartMergeRecoveryRaw.sourceCandidateFingerprint === undefined
+        || smartMergeRecoveryRaw.sourceCandidateFingerprint === null
+        ? null
+        : String(smartMergeRecoveryRaw.sourceCandidateFingerprint),
+      activeBaseFingerprint: smartMergeRecoveryRaw.activeBaseFingerprint === undefined
+        || smartMergeRecoveryRaw.activeBaseFingerprint === null
+        ? null
+        : String(smartMergeRecoveryRaw.activeBaseFingerprint),
+      reportFingerprint: smartMergeRecoveryRaw.reportFingerprint === undefined
+        || smartMergeRecoveryRaw.reportFingerprint === null
+        ? null
+        : String(smartMergeRecoveryRaw.reportFingerprint),
+      resolutionFingerprint: smartMergeRecoveryRaw.resolutionFingerprint === undefined
+        || smartMergeRecoveryRaw.resolutionFingerprint === null
+        ? null
+        : String(smartMergeRecoveryRaw.resolutionFingerprint),
+    } : null,
     logPath: raw.logPath === undefined || raw.logPath === null ? null : String(raw.logPath),
     logTail: raw.logTail === undefined || raw.logTail === null ? null : String(raw.logTail)
   };
@@ -4359,6 +4398,18 @@ export const api = {
     }).then((res) => ({
       item: mapJatoMonthlyUpdateJob(res.item)
     })),
+  resumeJatoMonthlyUpdateSmartMerge: (
+    jobId: string,
+    payload: JatoMonthlyUpdateSmartMergeResumeRequest,
+  ) => request<{ item: Record<string, unknown> }>(
+    `/msrp/monthly-update-jobs/${jobId}/smart-merge-resume`,
+    {
+      method: "POST",
+      body: JSON.stringify(payload),
+    },
+  ).then((res) => ({
+    item: mapJatoMonthlyUpdateJob(res.item),
+  })),
   getJatoMonthlyUpdateMaintenanceStatus: () =>
     request<{ item: Record<string, unknown> }>("/msrp/monthly-update-maintenance/status").then((res) => ({
       item: mapJatoMonthlyUpdateMaintenanceStatus(res.item)

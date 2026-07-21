@@ -8,6 +8,8 @@ from pathlib import Path
 from urllib.parse import quote
 
 import pandas as pd
+import pyarrow as pa
+import pyarrow.parquet as pq
 
 SCRIPTS_ROOT = Path(__file__).resolve().parents[1]
 if str(SCRIPTS_ROOT) not in sys.path:
@@ -487,6 +489,160 @@ def build_partitioned_dataset(
     )
 
     emit("✅ 分区构建完成")
+    emit(f"📦 目录: {to_project_relative(target_dir)}")
+    emit(f"🧾 Manifest: {to_project_relative(manifest_path)}")
+    emit(f"⏱️ 总耗时: {elapsed:.2f} 秒")
+    return target_dir, manifest_path
+
+
+def build_partitioned_dataset_streaming(
+    input_path: str,
+    output_dir: str,
+    partition_cols: list[str],
+    overwrite: bool,
+    job_id: str | None = None,
+    batch_size: int = 4_096,
+) -> tuple[Path, Path]:
+    """Bounded-memory full rebuild for an immutable parquet candidate.
+
+    This path intentionally supports only one partition column. It preserves
+    the existing manifest/signature contract while writing several small part
+    files per country instead of materialising the full archive in pandas.
+    """
+    logger = get_logger("jato.partition", job_id=job_id)
+
+    def emit(message: str) -> None:
+        print(message)
+        logger.info(message)
+
+    source_file = resolve_path(input_path, DEFAULT_INPUT_FILE)
+    target_dir = resolve_path(output_dir, DEFAULT_OUTPUT_DIR)
+    if not source_file.exists():
+        raise FileNotFoundError(f"输入 Parquet 不存在: {source_file}")
+    if target_dir.exists() and not overwrite:
+        raise ValueError("输出目录已存在，请使用 overwrite。")
+    if target_dir.exists():
+        shutil.rmtree(target_dir)
+    target_dir.mkdir(parents=True, exist_ok=True)
+
+    parquet_file = pq.ParquetFile(source_file)
+    schema_columns = [
+        str(column).strip()
+        for column in parquet_file.schema_arrow.names
+    ]
+    partition_columns = resolve_partition_columns(
+        pd.DataFrame(columns=schema_columns),
+        partition_cols,
+    )
+    if len(partition_columns) != 1:
+        raise ValueError("流式分区重建当前只支持一个分区列。")
+    partition_column = partition_columns[0]
+    source_manifest_schema_version = validate_source_manifest_schema(
+        source_file
+    )
+    emit(f"🚀 开始流式构建分区数据: {to_project_relative(source_file)}")
+    start_time = time.time()
+    partition_rows: dict[str, int] = {}
+    partition_checksums: dict[str, int] = {}
+    partition_parts: dict[str, int] = {}
+    input_rows = 0
+    partition_values: set[str] = set()
+    modulus = 1 << 64
+
+    try:
+        for batch in parquet_file.iter_batches(
+            batch_size=batch_size,
+            use_threads=False,
+        ):
+            table = pa.Table.from_batches([batch]).rename_columns(
+                schema_columns
+            )
+            frame = table.to_pandas(use_threads=False)
+            frame = normalize_partition_values(frame, partition_columns)
+            input_rows += int(len(frame))
+            grouped = frame.groupby(
+                partition_columns,
+                dropna=False,
+                sort=False,
+            )
+            for key, group_frame in grouped:
+                key_values = key_to_tuple(key, partition_columns)
+                partition_dir = build_partition_dir(
+                    partition_columns,
+                    key_values,
+                )
+                partition_values.update(key_values)
+                payload = group_frame.drop(columns=partition_columns)
+                part_number = partition_parts.get(partition_dir, 0)
+                partition_path = target_dir / partition_dir
+                partition_path.mkdir(parents=True, exist_ok=True)
+                positions = pa.array(
+                    [int(position) for position in group_frame.index],
+                    type=pa.int64(),
+                )
+                payload_table = table.take(positions).drop(
+                    partition_columns
+                )
+                pq.write_table(
+                    payload_table,
+                    partition_path / f"part-{part_number:06d}.parquet",
+                    compression="snappy",
+                    use_dictionary=True,
+                )
+                partition_parts[partition_dir] = part_number + 1
+                partition_rows[partition_dir] = (
+                    partition_rows.get(partition_dir, 0) + len(payload)
+                )
+                partition_checksums[partition_dir] = (
+                    partition_checksums.get(partition_dir, 0)
+                    + int(compute_partition_signature(payload))
+                ) % modulus
+            del frame
+            del table
+    except Exception:
+        shutil.rmtree(target_dir, ignore_errors=True)
+        raise
+
+    if input_rows <= 0:
+        shutil.rmtree(target_dir, ignore_errors=True)
+        raise ValueError("输入数据为空，无法构建分区数据集。")
+    partition_stats = {
+        partition_dir: {
+            "rows": int(partition_rows[partition_dir]),
+            "signature": str(partition_checksums[partition_dir]),
+        }
+        for partition_dir in sorted(partition_rows)
+    }
+    elapsed = time.time() - start_time
+    manifest_path = write_manifest(
+        output_dir=target_dir,
+        source_file=source_file,
+        partition_columns=partition_columns,
+        row_count=input_rows,
+        column_count=len(schema_columns),
+        elapsed_seconds=elapsed,
+        validation_summary={
+            "inputRows": input_rows,
+            "inputColumns": len(schema_columns),
+            "partitionCardinality": {
+                partition_column: len(partition_values)
+            },
+            "streaming": {
+                "batchRows": int(batch_size),
+                "maxMaterializedRows": int(batch_size),
+            },
+        },
+        source_manifest_schema_version=source_manifest_schema_version,
+        partition_stats=partition_stats,
+        update_summary={
+            "mode": "full_rebuild_streaming",
+            "addedPartitions": len(partition_stats),
+            "updatedPartitions": 0,
+            "removedPartitions": 0,
+            "rewrittenPartitions": len(partition_stats),
+        },
+    )
+    emit("✅ 流式分区构建完成")
     emit(f"📦 目录: {to_project_relative(target_dir)}")
     emit(f"🧾 Manifest: {to_project_relative(manifest_path)}")
     emit(f"⏱️ 总耗时: {elapsed:.2f} 秒")

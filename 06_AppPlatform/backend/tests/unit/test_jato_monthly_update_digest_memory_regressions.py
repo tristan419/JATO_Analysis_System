@@ -61,12 +61,13 @@ def _configure_upload_root(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> P
     return job_root
 
 
-def test_full_precompute_loads_archive_once_and_counts_from_metadata(
+def test_full_precompute_uses_bounded_aggregator_and_metadata_count(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     parquet_path = str(tmp_path / "candidate.parquet")
     load_calls: list[str] = []
+    bounded_calls: list[tuple[str, Path]] = []
     metadata_calls: list[str] = []
     full_frame = pd.DataFrame(
         {
@@ -83,39 +84,26 @@ def test_full_precompute_loads_archive_once_and_counts_from_metadata(
         load_calls.append(path)
         return full_frame.copy()
 
+    def fake_bounded(
+        path: str,
+        *,
+        scratch_parent: Path,
+    ) -> dict[str, pd.DataFrame]:
+        bounded_calls.append((path, scratch_parent))
+        return {
+            "country": pd.DataFrame({"country": ["all"]}),
+            "yearMonth": pd.DataFrame({"month": ["2026-06"]}),
+            "powertrain": pd.DataFrame({"powertrain": ["all"]}),
+            "segment": pd.DataFrame({"segment": ["all"]}),
+            "topMakes": pd.DataFrame({"make": ["top-20"]}),
+        }
+
     monkeypatch.setattr(precompute_summaries, "count_analysis_rows", fake_count)
     monkeypatch.setattr(precompute_summaries, "load_analysis_data", fake_load)
     monkeypatch.setattr(
         precompute_summaries,
-        "load_existing_summary",
-        lambda _output_dir, _summary_name: pd.DataFrame(),
-    )
-    monkeypatch.setattr(
-        precompute_summaries,
-        "compute_country_summary",
-        lambda _df: pd.DataFrame({"country": ["all"]}),
-    )
-    monkeypatch.setattr(
-        precompute_summaries,
-        "compute_year_month_summary",
-        lambda _df: pd.DataFrame({"month": ["2026-06"]}),
-    )
-    monkeypatch.setattr(
-        precompute_summaries,
-        "compute_powertrain_summary",
-        lambda _df: pd.DataFrame({"powertrain": ["all"]}),
-    )
-    monkeypatch.setattr(
-        precompute_summaries,
-        "compute_segment_summary",
-        lambda _df: pd.DataFrame({"segment": ["all"]}),
-    )
-    monkeypatch.setattr(
-        precompute_summaries,
-        "compute_top_makes_summary",
-        lambda _df, top_n: pd.DataFrame(
-            {"make": [f"top-{top_n}"]}
-        ),
+        "compute_all_summaries_bounded",
+        fake_bounded,
     )
 
     manifest = precompute_summaries.precompute_all_summaries(
@@ -124,9 +112,155 @@ def test_full_precompute_loads_archive_once_and_counts_from_metadata(
     )
 
     assert metadata_calls == [parquet_path]
-    assert load_calls == [parquet_path]
+    assert load_calls == []
+    assert bounded_calls == [
+        (parquet_path, tmp_path),
+    ]
     assert manifest["originalRowCount"] == 321
     assert manifest["totalSummaryRows"] == 5
+
+
+def test_review_monthly_sales_uses_bounded_parquet_batches(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    parquet_path = tmp_path / "candidate.parquet"
+    pd.DataFrame(
+        [
+            {"Country": "Hungary", "2026 May": 1, "2026 Jun": None},
+            {"Country": "Czechia", "2026 May": 100, "2026 Jun": 200},
+            {"Country": " Hungary ", "2026 May": 2, "2026 Jun": 3},
+            {"Country": "Denmark", "2026 May": None, "2026 Jun": None},
+            {"Country": "Hungary", "2026 May": 4, "2026 Jun": 5},
+        ]
+    ).to_parquet(parquet_path, index=False)
+    monkeypatch.setattr(
+        jato_monthly_update_service,
+        "SMART_MERGE_SCAN_BATCH_ROWS",
+        2,
+    )
+    monkeypatch.setattr(
+        pd,
+        "read_parquet",
+        lambda *_args, **_kwargs: pytest.fail(
+            "bounded Review aggregation must not call pd.read_parquet"
+        ),
+    )
+
+    result = (
+        jato_monthly_update_service._collect_country_monthly_sales_from_path(
+            parquet_path,
+            countries=["Hungary", "Denmark"],
+            path_label="candidate 数据集",
+        )
+    )
+
+    assert result == {
+        "Hungary": {"2026 May": 7, "2026 Jun": 8},
+        "Denmark": {},
+    }
+
+
+def test_review_monthly_sales_detects_ambiguous_country_across_batches(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    parquet_path = tmp_path / "candidate.parquet"
+    pd.DataFrame(
+        [
+            {"Country": "Hungary", "2026 Jun": 1},
+            {"Country": "Czechia", "2026 Jun": 2},
+            {"Country": "hungary", "2026 Jun": 3},
+        ]
+    ).to_parquet(parquet_path, index=False)
+    monkeypatch.setattr(
+        jato_monthly_update_service,
+        "SMART_MERGE_SCAN_BATCH_ROWS",
+        2,
+    )
+
+    with pytest.raises(HTTPException) as exc_info:
+        jato_monthly_update_service._collect_country_monthly_sales_from_path(
+            parquet_path,
+            countries=["Hungary"],
+            path_label="candidate 数据集",
+        )
+
+    assert exc_info.value.status_code == 409
+    assert exc_info.value.detail["blockerType"] == "ambiguous_logical_country"
+
+
+def test_publish_sales_gates_reuse_bounded_parquet_aggregation(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    active_path = tmp_path / "active.parquet"
+    candidate_path = tmp_path / "candidate.parquet"
+    pd.DataFrame(
+        [
+            {"Country": "Hungary", "2026 Jan": 1_000, "2026 Feb": 2_000},
+            {"Country": "Czechia", "2026 Jan": 500, "2026 Feb": 600},
+        ]
+    ).to_parquet(active_path, index=False)
+    pd.DataFrame(
+        [
+            {"Country": "Hungary", "2026 Jan": 2_000, "2026 Feb": 4_000},
+            {"Country": "Czechia", "2026 Jan": 500, "2026 Feb": 600},
+        ]
+    ).to_parquet(candidate_path, index=False)
+    monkeypatch.setattr(
+        jato_monthly_update_service,
+        "SMART_MERGE_SCAN_BATCH_ROWS",
+        1,
+    )
+    monkeypatch.setattr(
+        pd,
+        "read_parquet",
+        lambda *_args, **_kwargs: pytest.fail(
+            "publish sales gates must not call pd.read_parquet"
+        ),
+    )
+
+    changes = (
+        jato_monthly_update_service._find_publish_historical_sales_changes(
+            active_parquet_path=active_path,
+            candidate_parquet_path=candidate_path,
+        )
+    )
+    anomalies = (
+        jato_monthly_update_service._find_publish_sales_doubling_anomalies(
+            active_parquet_path=active_path,
+            candidate_parquet_path=candidate_path,
+        )
+    )
+
+    assert [item["country"] for item in changes] == ["Hungary"]
+    assert changes[0]["changedMonthCount"] == 2
+    assert [item["country"] for item in anomalies] == ["Hungary"]
+    assert anomalies[0]["suspiciousMonthCount"] == 2
+
+
+def test_smart_merge_country_scan_rejects_blank_country_rows(
+    tmp_path: Path,
+) -> None:
+    parquet_path = tmp_path / "candidate.parquet"
+    pd.DataFrame(
+        [
+            {"Country": "Hungary", "2026 Jun": 1},
+            {"Country": " ", "2026 Jun": 2},
+        ]
+    ).to_parquet(parquet_path, index=False)
+
+    with pytest.raises(HTTPException) as exc_info:
+        jato_monthly_update_service._smart_merge_country_value_map(
+            parquet_path,
+            country_column="Country",
+            path_label="candidate 数据集",
+        )
+
+    assert exc_info.value.status_code == 409
+    assert exc_info.value.detail["blockerType"] == "missing_country_rows"
+    assert exc_info.value.detail["rowCount"] == 1
 
 
 @pytest.mark.parametrize("upload_status", ["assembling", "digesting"])

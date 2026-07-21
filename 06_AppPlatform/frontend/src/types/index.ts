@@ -2350,7 +2350,7 @@ export interface JatoMonthlyUpdatePublication {
 
 export interface JatoMonthlyUpdatePendingOperation {
   operationId: string;
-  type: "publish" | "rollback" | "review_refresh";
+  type: "publish" | "rollback" | "review_refresh" | "smart_merge_resume";
   status: "queued" | "running" | "success" | "failed";
   phase?: string;
   requestedAt: string;
@@ -2361,9 +2361,28 @@ export interface JatoMonthlyUpdatePendingOperation {
   failureDigest: JatoMonthlyUpdateFailureDigest | null;
   requestId?: string | null;
   expectedCandidateFingerprint?: string | null;
+  expectedSourceCandidateFingerprint?: string | null;
   expectedActiveFingerprint?: string | null;
+  expectedReportFingerprint?: string | null;
+  expectedResolutionFingerprint?: string | null;
   resultCandidateFingerprint?: string | null;
   recoveredAfterWorkerLoss?: boolean;
+}
+
+export interface JatoMonthlyUpdateSmartMergeRecovery {
+  canResume: boolean;
+  sourceCandidateFingerprint: string | null;
+  activeBaseFingerprint: string | null;
+  reportFingerprint: string | null;
+  resolutionFingerprint: string | null;
+}
+
+export interface JatoMonthlyUpdateSmartMergeResumeRequest {
+  requestId: string;
+  expectedSourceCandidateFingerprint: string;
+  expectedActiveFingerprint: string;
+  expectedReportFingerprint: string;
+  expectedResolutionFingerprint: string;
 }
 
 export interface JatoMonthlyUpdateReviewIssue {
@@ -2491,6 +2510,7 @@ export interface JatoMonthlyUpdateJob {
   cancellation?: JatoMonthlyUpdateCancellation | null;
   reviewApproval?: JatoMonthlyUpdateReviewApproval | null;
   pendingOperation?: JatoMonthlyUpdatePendingOperation | null;
+  smartMergeRecovery?: JatoMonthlyUpdateSmartMergeRecovery | null;
   logPath?: string | null;
   logTail?: string | null;
 }

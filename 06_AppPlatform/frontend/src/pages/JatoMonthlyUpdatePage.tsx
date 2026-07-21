@@ -345,8 +345,11 @@ export function JatoMonthlyUpdatePage() {
   const [heroCollapsed, setHeroCollapsed] = useState(false);
   const [publishBlocker, setPublishBlocker] = useState<PublishBlocker | null>(null);
   const [smartMergingJobId, setSmartMergingJobId] = useState<string | null>(null);
+  const [smartMergeResumeSubmittingJobId, setSmartMergeResumeSubmittingJobId] =
+    useState<string | null>(null);
   const [infoCollapsed, setInfoCollapsed] = useState(true);
   const reviewRefreshRequestRef = useRef<{ jobId: string; requestId: string } | null>(null);
+  const smartMergeResumeRequestRef = useRef<{ jobId: string; requestId: string } | null>(null);
   const handledReviewRefreshOperationIdRef = useRef<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const watchedBaselinePromotionIdRef = useRef<string | null>(null);
@@ -852,6 +855,98 @@ export function JatoMonthlyUpdatePage() {
     }
   }
 
+  async function handleResumeSmartMerge(job: JatoMonthlyUpdateJob) {
+    const recovery = job.smartMergeRecovery;
+    if (
+      job.status !== "failed"
+      || job.phase !== "smart_merge_failed"
+      || !recovery?.canResume
+      || !recovery.sourceCandidateFingerprint
+      || !recovery.activeBaseFingerprint
+      || !recovery.reportFingerprint
+      || !recovery.resolutionFingerprint
+    ) {
+      setError("当前 Smart Merge 失败任务未通过安全续跑校验，请刷新任务状态后再检查。");
+      return;
+    }
+    if (smartMergeResumeRequestRef.current?.jobId === job.jobId) {
+      return;
+    }
+    const confirmed = window.confirm(
+      [
+        "仅续跑当前 Smart Merge？",
+        "",
+        "将复用当前 Candidate 和已保存的历史分类决策；不重新上传文件、不重跑 ETL，也不会修改 active。",
+        "续跑完成后仍需重新 Review、批准并手动 Publish。",
+      ].join("\n")
+    );
+    if (!confirmed) {
+      return;
+    }
+
+    const requestId = crypto.randomUUID();
+    smartMergeResumeRequestRef.current = { jobId: job.jobId, requestId };
+    setSmartMergeResumeSubmittingJobId(job.jobId);
+    setError("");
+    setNotice("");
+    setReviewBundle(null);
+    setReviewIssue(null);
+    setHistoricalReclassificationDecisions({});
+    setPublishBlocker(null);
+    try {
+      const response = await api.resumeJatoMonthlyUpdateSmartMerge(job.jobId, {
+        requestId,
+        expectedSourceCandidateFingerprint: recovery.sourceCandidateFingerprint,
+        expectedActiveFingerprint: recovery.activeBaseFingerprint,
+        expectedReportFingerprint: recovery.reportFingerprint,
+        expectedResolutionFingerprint: recovery.resolutionFingerprint,
+      });
+      setSelectedJob(response.item);
+      setSelectedJobId(response.item.jobId);
+      setNotice(
+        `任务 ${job.jobId} 已进入 Smart Merge 安全续跑队列；页面只读轮询，不会重新上传或重跑 ETL。`
+      );
+      await refreshJobs(job.jobId, true);
+      await loadJobDetail(job.jobId, true);
+    } catch (err) {
+      const originalMessage = err instanceof Error ? err.message : String(err);
+      try {
+        const jobResponse = await api.getJatoMonthlyUpdateJob(job.jobId);
+        setSelectedJob(jobResponse.item);
+        setJobs((current) => [
+          jobResponse.item,
+          ...current.filter((item) => item.jobId !== jobResponse.item.jobId),
+        ]);
+        const operation = jobResponse.item.pendingOperation;
+        if (
+          operation?.type === "smart_merge_resume"
+          && operation.requestId === requestId
+        ) {
+          if (operation.status === "failed") {
+            setError(
+              operation.failureDigest?.message
+              || operation.error
+              || "Smart Merge 安全续跑已受理，但隔离 worker 执行失败。"
+            );
+          } else if (operation.status === "success") {
+            setNotice("Smart Merge 安全续跑已完成，请重新打开并核对 Review。");
+          } else {
+            setNotice(
+              "Smart Merge 安全续跑请求已被服务端受理；页面将只读轮询状态，不会重复提交。"
+            );
+          }
+        } else {
+          setError(`${originalMessage}；未自动重试写请求，请刷新任务状态后确认。`);
+        }
+      } catch {
+        setError(`${originalMessage}；未自动重试写请求，请刷新任务状态后确认。`);
+      }
+    } finally {
+      setSmartMergeResumeSubmittingJobId(null);
+      smartMergeResumeRequestRef.current = null;
+    }
+  }
+
   async function handleReviewJob(job: JatoMonthlyUpdateJob) {
     if (reviewRefreshBlocksMutation(job)) {
       return;
@@ -1248,6 +1343,21 @@ export function JatoMonthlyUpdatePage() {
     ? selectedRuntimeLog.ageSeconds
     : null;
   const hasSelectedJobBeenRolledBack = Boolean(selectedJob?.publication?.rolledBackAt);
+  const isSelectedSmartMergeFailure = Boolean(
+    selectedJob?.status === "failed" && selectedJob.phase === "smart_merge_failed"
+  );
+  const canResumeSelectedSmartMerge = Boolean(
+    selectedJob?.smartMergeRecovery?.canResume
+    && selectedJob.smartMergeRecovery.sourceCandidateFingerprint
+    && selectedJob.smartMergeRecovery.activeBaseFingerprint
+    && selectedJob.smartMergeRecovery.reportFingerprint
+    && selectedJob.smartMergeRecovery.resolutionFingerprint
+  );
+  const selectedSmartMergeResume = selectedJob?.pendingOperation?.type === "smart_merge_resume"
+    ? selectedJob.pendingOperation
+    : null;
+  const isSmartMergeResumePending = selectedSmartMergeResume?.status === "queued"
+    || selectedSmartMergeResume?.status === "running";
   const selectedReviewRefresh = selectedJob?.pendingOperation?.type === "review_refresh"
     ? selectedJob.pendingOperation
     : null;
@@ -2132,16 +2242,32 @@ Smart Merge:  [SE:keep active 2026-03] [DE:patch 2026-03] [NL:patch 2026-02] [FR
                           : "Rollback Publish"}
                     </button>
                   )}
-                  {selectedJob.status === "failed" && (
+                  {isSelectedSmartMergeFailure && (
                     <button
                       type="button"
-                    className="btn btn-secondary"
-                    onClick={() => void handleRetryFailedJob(selectedJob)}
-                    disabled={retryingJobId === selectedJob.jobId || !selectedJob.upload?.storedPath}
-                  >
-                    {retryingJobId === selectedJob.jobId ? "重试中..." : "Retry Failed Job"}
-                  </button>
-                )}
+                      className="btn btn-secondary"
+                      onClick={() => void handleResumeSmartMerge(selectedJob)}
+                      disabled={
+                        smartMergeResumeSubmittingJobId === selectedJob.jobId
+                        || isSmartMergeResumePending
+                        || !canResumeSelectedSmartMerge
+                      }
+                    >
+                      {smartMergeResumeSubmittingJobId === selectedJob.jobId
+                        ? "提交续跑中..."
+                        : "仅续跑 Smart Merge"}
+                    </button>
+                  )}
+                  {selectedJob.status === "failed" && !isSelectedSmartMergeFailure && (
+                    <button
+                      type="button"
+                      className="btn btn-secondary"
+                      onClick={() => void handleRetryFailedJob(selectedJob)}
+                      disabled={retryingJobId === selectedJob.jobId || !selectedJob.upload?.storedPath}
+                    >
+                      {retryingJobId === selectedJob.jobId ? "重试中..." : "Retry Failed Job"}
+                    </button>
+                  )}
                 <div className="table-status-chip">
                   <span>Job</span>
                   <strong>{selectedJob.jobId}</strong>
@@ -2279,6 +2405,8 @@ Smart Merge:  [SE:keep active 2026-03] [DE:patch 2026-03] [NL:patch 2026-02] [FR
                   <strong>
                     {selectedJob.pendingOperation.type === "publish"
                       ? "Publish"
+                      : selectedJob.pendingOperation.type === "smart_merge_resume"
+                        ? "Smart Merge 安全续跑"
                       : selectedJob.pendingOperation.type === "review_refresh"
                         ? "Review 重建"
                         : "Rollback"}
@@ -2295,7 +2423,9 @@ Smart Merge:  [SE:keep active 2026-03] [DE:patch 2026-03] [NL:patch 2026-02] [FR
                     <div>
                       {selectedJob.pendingOperation.type === "review_refresh"
                         ? "正在独立 worker 中校验并重建报告；不会重跑 ETL、Smart Merge，也不会修改 Candidate 或 active。"
-                        : "正在独立 worker 中执行；active 只会在全部校验和预复制完成后切换。"}
+                        : selectedJob.pendingOperation.type === "smart_merge_resume"
+                          ? "正在独立 worker 中仅续跑 Smart Merge；复用当前 Candidate 与已保存决策，不重新上传、不重跑 ETL，也不会修改 active。"
+                          : "正在独立 worker 中执行；active 只会在全部校验和预复制完成后切换。"}
                     </div>
                   )}
                   {selectedJob.pendingOperation.failureDigest && (
