@@ -2461,10 +2461,8 @@ async function retryJatoMonthlyUpdateUploadDigest(
 function canRetryJatoMonthlyUpdateUploadDigest(
   session: JatoMonthlyUpdateUploadSession
 ): boolean {
-  const failureCode = session.failureDigest?.code;
   return session.status === "invalid"
-    && session.failureDigest?.retryable === true
-    && (failureCode === "DIGEST_TIMEOUT" || failureCode === "DIGEST_WORKER_LOST");
+    && session.failureDigest?.retryable === true;
 }
 
 function mapReviewScopeCountrySummary(raw: Record<string, unknown>): ReviewScopeCountrySummary {

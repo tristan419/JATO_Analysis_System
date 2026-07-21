@@ -635,6 +635,12 @@ def test_upload_complete_digest_and_create_are_idempotent(
     assert completing_once["status"] == "assembling"
     assert completing_replay["status"] == "assembling"
     assert launched_uploads == [upload_id]
+    monkeypatch.setenv(
+        "APP_JATO_DIGEST_ATTEMPT_ID",
+        jato_monthly_update_service._load_upload_session(upload_id)[
+            "digestAttempt"
+        ]["attemptId"],
+    )
 
     digested_once = (
         jato_monthly_update_service.run_jato_monthly_update_upload_digest(

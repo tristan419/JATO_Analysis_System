@@ -885,12 +885,114 @@ def test_retry_digest_reuses_verified_assembly_and_is_idempotent(
         "_build_upload_ingest_digest",
         lambda **_kwargs: {"status": "ready"},
     )
+    monkeypatch.setenv(
+        "APP_JATO_DIGEST_ATTEMPT_ID",
+        jato_monthly_update_service._load_upload_session(upload_id)[
+            "digestAttempt"
+        ]["attemptId"],
+    )
     digested = jato_monthly_update_service.run_jato_monthly_update_upload_digest(
         upload_id
     )
 
     assert digested["status"] == "ready"
     assert assembled_path.read_bytes() == content
+    assert not chunk_dir.exists()
+
+
+def test_retry_digest_reassembles_complete_chunks_without_reupload(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _configure_upload_root(tmp_path, monkeypatch)
+    upload_id = "jato-upload-retry-complete-chunks"
+    content = b"data"
+    state = jato_monthly_update_service._prepare_upload_session_state(
+        upload_id=upload_id,
+        filename="JATO-2026.06.xlsx",
+        size_bytes=len(content),
+        resume_key="retry-complete-chunks",
+        triggered_by="alice",
+    )
+    chunk_dir = jato_monthly_update_service._upload_session_chunk_dir(
+        upload_id
+    )
+    chunk_dir.mkdir(parents=True)
+    chunk_path = chunk_dir / (
+        jato_monthly_update_service._chunk_file_name(1)
+    )
+    chunk_path.write_bytes(content)
+    state["status"] = "uploading"
+    state["receivedChunks"] = [1]
+    state["uploadedBytes"] = len(content)
+    state["chunkDigests"] = {
+        "1": hashlib.sha256(content).hexdigest(),
+    }
+    jato_monthly_update_service._persist_upload_session(state)
+    launched: list[str] = []
+
+    def launch_digest(current_upload_id: str) -> int:
+        launched.append(current_upload_id)
+        if len(launched) == 1:
+            raise OSError("simulated supervisor launch failure")
+        return 24680
+
+    monkeypatch.setattr(
+        jato_monthly_update_service,
+        "_launch_upload_digest_process",
+        launch_digest,
+    )
+    monkeypatch.setattr(
+        jato_monthly_update_service,
+        "_read_process_identity",
+        lambda _pid: {"startTimeTicks": "123", "cmdlineSha256": "a" * 64},
+    )
+    failed = jato_monthly_update_service.complete_jato_monthly_update_upload(
+        upload_id=upload_id,
+        requested_by="alice",
+        requested_role="editor",
+    )
+
+    restarted = (
+        jato_monthly_update_service.retry_jato_monthly_update_upload_digest(
+            upload_id=upload_id,
+            requested_by="alice",
+            requested_role="editor",
+        )
+    )
+
+    assert failed["status"] == "invalid"
+    assert failed["failureDigest"]["code"] == "DIGEST_WORKER_UNAVAILABLE"
+    assert restarted["status"] == "assembling"
+    assert launched == [upload_id, upload_id]
+    assert chunk_path.read_bytes() == content
+    assert restarted["uploadedBytes"] == len(content)
+    assert restarted["fileSha256"] is None
+    monkeypatch.setattr(
+        jato_monthly_update_service,
+        "_build_upload_ingest_digest",
+        lambda **_kwargs: {"status": "ready"},
+    )
+    monkeypatch.setenv(
+        "APP_JATO_DIGEST_ATTEMPT_ID",
+        jato_monthly_update_service._load_upload_session(upload_id)[
+            "digestAttempt"
+        ]["attemptId"],
+    )
+
+    digested = jato_monthly_update_service.run_jato_monthly_update_upload_digest(
+        upload_id
+    )
+
+    assembled_path = (
+        jato_monthly_update_service._upload_session_assembled_path(
+            upload_id,
+            state["filename"],
+        )
+    )
+    assert digested["status"] == "ready"
+    assert assembled_path.read_bytes() == content
+    assert digested["fileSha256"] == hashlib.sha256(content).hexdigest()
     assert not chunk_dir.exists()
 
 

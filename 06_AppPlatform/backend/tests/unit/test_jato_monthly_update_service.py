@@ -1377,6 +1377,12 @@ def test_chunked_upload_session_can_be_completed_and_queued(
         requested_role="editor",
     )
     assert assembled["status"] == "assembling"
+    monkeypatch.setenv(
+        "APP_JATO_DIGEST_ATTEMPT_ID",
+        jato_monthly_update_service._load_upload_session(upload_id)[
+            "digestAttempt"
+        ]["attemptId"],
+    )
 
     digested = jato_monthly_update_service.run_jato_monthly_update_upload_digest(
         upload_id
@@ -1547,6 +1553,12 @@ def test_create_job_from_upload_restores_assembled_file_when_queue_fails(
         requested_role="editor",
     )
     assert assembled["status"] == "assembling"
+    monkeypatch.setenv(
+        "APP_JATO_DIGEST_ATTEMPT_ID",
+        jato_monthly_update_service._load_upload_session(upload_id)[
+            "digestAttempt"
+        ]["attemptId"],
+    )
     digested = jato_monthly_update_service.run_jato_monthly_update_upload_digest(
         upload_id
     )

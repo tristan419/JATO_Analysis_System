@@ -68,6 +68,19 @@ DIGEST_WORKER_BASE_TIMEOUT_SECONDS = 10 * 60
 DIGEST_WORKER_BASE_SIZE_BYTES = 16 * 1024 * 1024
 DIGEST_WORKER_EXTRA_SECONDS_PER_MIB = 4
 DIGEST_WORKER_MAX_SECONDS = 45 * 60
+DIGEST_EXIT_RECEIPT_GRACE_SECONDS = 5
+DIGEST_ATTEMPT_DIRNAME = "digest_attempts"
+DIGEST_ATTEMPT_LOG_TAIL_BYTES = 16 * 1024
+DIGEST_RETRYABLE_FAILURE_CODES = frozenset(
+    {
+        "DIGEST_TIMEOUT",
+        "DIGEST_WORKER_LOST",
+        "DIGEST_WORKER_SIGNALLED",
+        "DIGEST_WORKER_EXITED",
+        "DIGEST_RESULT_MISSING",
+        "DIGEST_WORKER_UNAVAILABLE",
+    }
+)
 UPLOAD_SESSION_STALE_SECONDS = 24 * 60 * 60
 BASELINE_XLSX_MAX_ROWS = 1_048_576
 BASELINE_EXPORT_BATCH_ROWS = 2_048
@@ -3885,6 +3898,84 @@ def _upload_session_chunk_dir(upload_id: str) -> Path:
     return _upload_session_dir(upload_id) / "chunks"
 
 
+def _upload_digest_attempt_dir(upload_id: str) -> Path:
+    return _upload_session_dir(upload_id) / DIGEST_ATTEMPT_DIRNAME
+
+
+def _new_upload_digest_attempt(
+    *,
+    upload_id: str,
+    attempt_number: int,
+) -> dict[str, Any]:
+    attempt_id = f"{attempt_number}-{uuid4().hex[:12]}"
+    attempt_dir = _upload_digest_attempt_dir(upload_id)
+    attempt_dir.mkdir(parents=True, exist_ok=True)
+    return {
+        "attemptId": attempt_id,
+        "attemptNumber": attempt_number,
+        "status": "launching",
+        "logPath": _relative_to_project(
+            attempt_dir / f"{attempt_id}.log"
+        ),
+        "receiptPath": _relative_to_project(
+            attempt_dir / f"{attempt_id}.exit.json"
+        ),
+        "supervisorPid": None,
+        "workerPid": None,
+        "launchedAt": _utc_now().isoformat(),
+        "supervisorMissingAt": None,
+        "exit": None,
+    }
+
+
+def _upload_digest_attempt_artifact_path(
+    state: dict[str, Any],
+    key: str,
+) -> Path | None:
+    attempt = state.get("digestAttempt")
+    if not isinstance(attempt, dict):
+        return None
+    candidate = _project_path(attempt.get(key))
+    upload_id = str(state.get("uploadId") or "").strip()
+    if candidate is None or not upload_id:
+        return None
+    expected_parent = _upload_digest_attempt_dir(upload_id).resolve()
+    resolved = candidate.resolve()
+    if resolved.parent != expected_parent:
+        return None
+    return resolved
+
+
+def _read_digest_attempt_log_tail(state: dict[str, Any]) -> str | None:
+    log_path = _upload_digest_attempt_artifact_path(state, "logPath")
+    if log_path is None or not log_path.is_file():
+        return None
+    try:
+        with log_path.open("rb") as handle:
+            handle.seek(0, os.SEEK_END)
+            size = handle.tell()
+            handle.seek(max(size - DIGEST_ATTEMPT_LOG_TAIL_BYTES, 0))
+            return handle.read(DIGEST_ATTEMPT_LOG_TAIL_BYTES).decode(
+                "utf-8",
+                errors="replace",
+            )
+    except OSError:
+        return None
+
+
+def _digest_attempt_matches(
+    state: dict[str, Any],
+    attempt_id: str | None,
+) -> bool:
+    attempt = state.get("digestAttempt")
+    if not isinstance(attempt, dict):
+        return attempt_id is None
+    return bool(
+        attempt_id
+        and str(attempt.get("attemptId") or "") == attempt_id
+    )
+
+
 def _safe_internal_upload_filename(filename: str) -> str:
     """Return a bounded ASCII storage name while keeping display names in state."""
     normalized = _validate_upload_filename(filename)
@@ -4560,12 +4651,18 @@ def _terminate_digest_worker_with_evidence(
     pid: int,
     upload_id: str,
     expected_identity: dict[str, Any] | None,
+    attempt_id: str | None = None,
 ) -> dict[str, Any]:
+    required_tokens = (
+        ("--supervise-digest-upload", upload_id, attempt_id)
+        if attempt_id
+        else ("--digest-upload", upload_id)
+    )
     try:
         return _terminate_process_group(
             pid,
             expected_identity=expected_identity,
-            required_command_tokens=("--digest-upload", upload_id),
+            required_command_tokens=required_tokens,
         )
     except Exception as exc:
         return {
@@ -4707,6 +4804,186 @@ def _digest_worker_timeout_seconds(size_bytes: Any) -> int:
         + extra_mib * DIGEST_WORKER_EXTRA_SECONDS_PER_MIB,
         DIGEST_WORKER_MAX_SECONDS,
     )
+
+
+def _digest_failure_from_exit_receipt(
+    *,
+    state: dict[str, Any],
+    receipt: dict[str, Any],
+    digest_pid: int,
+    phase: str,
+    digest_process_identity: dict[str, Any] | None,
+) -> dict[str, Any]:
+    return_code_value = receipt.get("returnCode")
+    return_code = (
+        int(return_code_value)
+        if isinstance(return_code_value, int)
+        and not isinstance(return_code_value, bool)
+        else None
+    )
+    termination_reason = str(receipt.get("terminationReason") or "")
+    oom_kill_delta = int(receipt.get("oomKillDelta") or 0)
+    supervisor_error = str(receipt.get("supervisorError") or "").strip()
+    try:
+        rss_limit_bytes = int(receipt.get("rssLimitBytes") or 0)
+    except (TypeError, ValueError):
+        rss_limit_bytes = 0
+    rss_limit_gib = rss_limit_bytes / (1024**3)
+    if termination_reason == "rss_limit" or return_code == 72:
+        code = "DIGEST_MEMORY_LIMIT"
+        category = "resource"
+        message = (
+            "上传文件 digest 的实际 RSS 连续超过"
+            f" {rss_limit_gib:.1f} GiB 安全线，"
+            "worker 已被隔离 supervisor 停止；active 未修改。"
+        )
+        next_action = "inspect_worker_memory_or_reduce_source"
+    elif oom_kill_delta > 0:
+        code = "DIGEST_CGROUP_OOM"
+        category = "resource"
+        message = (
+            "digest 运行期间 cgroup 记录了 OOM kill；"
+            "这不是已证明的数据错误，active 未修改。"
+        )
+        next_action = "inspect_worker_cgroup"
+    elif return_code is not None and return_code < 0:
+        code = "DIGEST_WORKER_SIGNALLED"
+        category = "resource"
+        message = (
+            "上传文件 digest worker 被系统信号终止"
+            f"（{receipt.get('signalName') or return_code}）；active 未修改。"
+        )
+        next_action = "retry_digest_or_contact_admin"
+    elif return_code == 0:
+        code = "DIGEST_RESULT_MISSING"
+        category = "platform"
+        message = (
+            "digest worker 正常退出，但没有生成最终 digest 状态；"
+            "active 未修改。"
+        )
+        next_action = "retry_digest_or_contact_admin"
+    elif return_code is not None:
+        code = "DIGEST_WORKER_EXITED"
+        category = "platform"
+        message = (
+            f"digest worker 异常退出（退出码 {return_code}）；"
+            "active 未修改。"
+        )
+        next_action = "retry_digest_or_contact_admin"
+    else:
+        code = "DIGEST_WORKER_UNAVAILABLE"
+        category = "platform"
+        message = (
+            "digest supervisor 未能启动或等待 worker；active 未修改。"
+        )
+        next_action = "contact_admin"
+    if supervisor_error and code == "DIGEST_RESULT_MISSING":
+        code = "DIGEST_WORKER_UNAVAILABLE"
+        message = "digest supervisor 运行失败；active 未修改。"
+        next_action = "contact_admin"
+    attempt = state.get("digestAttempt")
+    attempt_id = (
+        str(attempt.get("attemptId") or "")
+        if isinstance(attempt, dict)
+        else ""
+    )
+    return {
+        "code": code,
+        "category": category,
+        "phase": phase or "digesting",
+        "retryable": code in DIGEST_RETRYABLE_FAILURE_CODES,
+        "message": message,
+        "sourceFeedback": (
+            "这不是已证明的 washed 数据错误；请把退出码、信号、"
+            "峰值 RSS 和日志摘要交给平台管理员。"
+        ),
+        "technicalDetail": {
+            "digestPid": digest_pid or None,
+            "digestProcessIdentity": digest_process_identity,
+            "digestAttemptId": attempt_id or None,
+            "fileSizeBytes": int(state.get("sizeBytes") or 0),
+            "exitReceipt": receipt,
+            "logTail": _read_digest_attempt_log_tail(state),
+        },
+        "nextAction": next_action,
+    }
+
+
+def _reconcile_digest_attempt_receipt_locked(
+    state: dict[str, Any],
+) -> dict[str, Any]:
+    """Fold one durable supervisor receipt into state under state.lock."""
+    attempt = state.get("digestAttempt")
+    if not isinstance(attempt, dict):
+        return state
+    receipt_path = _upload_digest_attempt_artifact_path(
+        state,
+        "receiptPath",
+    )
+    if receipt_path is None or not receipt_path.is_file():
+        return state
+    try:
+        receipt = _read_json(receipt_path)
+    except Exception:
+        return state
+    attempt_id = str(attempt.get("attemptId") or "")
+    if (
+        str(receipt.get("uploadId") or "")
+        != str(state.get("uploadId") or "")
+        or str(receipt.get("attemptId") or "") != attempt_id
+    ):
+        return state
+    changed = False
+    worker_pid = int(receipt.get("workerPid") or 0)
+    if worker_pid > 0 and int(attempt.get("workerPid") or 0) != worker_pid:
+        attempt["workerPid"] = worker_pid
+        state["digestWorkerPid"] = worker_pid
+        changed = True
+    if str(receipt.get("status") or "") != "finished":
+        if str(attempt.get("status") or "") != "running":
+            attempt["status"] = "running"
+            changed = True
+        if changed:
+            state["digestAttempt"] = attempt
+            _persist_upload_session(state)
+        return state
+
+    with _exclusive_file_lock(
+        _upload_digest_lock_path(str(state.get("uploadId") or "")),
+        blocking=False,
+    ) as digest_lock_acquired:
+        if not digest_lock_acquired:
+            return state
+
+    digest_pid = int(state.get("digestPid") or 0)
+    digest_process_identity = (
+        state.get("digestProcessIdentity")
+        if isinstance(state.get("digestProcessIdentity"), dict)
+        else None
+    )
+    status = str(state.get("status") or "")
+    receipt = dict(receipt)
+    receipt["logPath"] = attempt.get("logPath")
+    attempt["status"] = "finished"
+    attempt["exit"] = receipt
+    attempt["workerPid"] = worker_pid or None
+    attempt["supervisorMissingAt"] = None
+    state["digestAttempt"] = attempt
+    state["digestPid"] = None
+    state["digestWorkerPid"] = None
+    state["digestProcessIdentity"] = None
+    if status in {"assembling", "digesting"}:
+        state["status"] = "invalid"
+        state["completedAt"] = _utc_now().isoformat()
+        state["failureDigest"] = _digest_failure_from_exit_receipt(
+            state=state,
+            receipt=receipt,
+            digest_pid=digest_pid,
+            phase=status,
+            digest_process_identity=digest_process_identity,
+        )
+    _persist_upload_session(state)
+    return state
 
 
 def _normalize_sha256(value: Any, *, detail: str) -> str:
@@ -4923,6 +5200,52 @@ def _validate_uploaded_chunks_complete(state: dict[str, Any]) -> tuple[list[int]
     return received_chunks, uploaded_bytes
 
 
+def _serialize_upload_digest_attempt(
+    payload: Any,
+) -> dict[str, Any] | None:
+    """Expose operational progress without leaking host paths or cmdlines."""
+    if not isinstance(payload, dict):
+        return None
+    serialized = {
+        key: payload.get(key)
+        for key in (
+            "attemptId",
+            "attemptNumber",
+            "status",
+            "supervisorPid",
+            "workerPid",
+            "launchedAt",
+            "supervisorMissingAt",
+            "workerFinishedAt",
+        )
+    }
+    exit_payload = payload.get("exit")
+    serialized["exit"] = (
+        {
+            key: exit_payload.get(key)
+            for key in (
+                "status",
+                "startedAt",
+                "finishedAt",
+                "elapsedSeconds",
+                "returnCode",
+                "signalNumber",
+                "signalName",
+                "terminationReason",
+                "peakRssBytes",
+                "rssWarningBytes",
+                "rssLimitBytes",
+                "rssWarningExceeded",
+                "cgroupEventDelta",
+                "oomKillDelta",
+            )
+        }
+        if isinstance(exit_payload, dict)
+        else None
+    )
+    return serialized
+
+
 def _serialize_upload_session(payload: dict[str, Any]) -> dict[str, Any]:
     upload_id = str(payload["uploadId"])
     persisted_chunks = payload.get("receivedChunks")
@@ -4979,8 +5302,12 @@ def _serialize_upload_session(payload: dict[str, Any]) -> dict[str, Any]:
         ),
         "consumedJobId": payload.get("consumedJobId"),
         "digestPid": payload.get("digestPid"),
+        "digestWorkerPid": payload.get("digestWorkerPid"),
         "digestLaunchedAt": payload.get("digestLaunchedAt"),
         "digestAttempts": int(payload.get("digestAttempts") or 0),
+        "digestAttempt": _serialize_upload_digest_attempt(
+            payload.get("digestAttempt")
+        ),
     }
 
 
@@ -8243,9 +8570,11 @@ def _prepare_upload_session_state(
         "failureDigest": None,
         "consumedJobId": None,
         "digestPid": None,
+        "digestWorkerPid": None,
         "digestProcessIdentity": None,
         "digestLaunchedAt": None,
         "digestAttempts": 0,
+        "digestAttempt": None,
     }
 
 
@@ -8352,6 +8681,18 @@ def get_jato_monthly_update_upload(
         requested_by=requested_by,
         requested_role=requested_role,
     )
+    if isinstance(state.get("digestAttempt"), dict):
+        with _exclusive_file_lock(
+            _upload_state_lock_path(upload_id)
+        ) as acquired:
+            if acquired:
+                state = _load_upload_session(upload_id)
+                _require_upload_session_access(
+                    state,
+                    requested_by=requested_by,
+                    requested_role=requested_role,
+                )
+                state = _reconcile_digest_attempt_receipt_locked(state)
     status = str(state.get("status") or "")
     if status in {"assembling", "digesting"}:
         digest_pid = int(state.get("digestPid") or 0)
@@ -8382,6 +8723,43 @@ def get_jato_monthly_update_upload(
                 digest_timed_out = elapsed_seconds > timeout_seconds
             except ValueError:
                 launch_stale = True
+        attempt = state.get("digestAttempt")
+        if (
+            isinstance(attempt, dict)
+            and (worker_missing or launch_stale)
+            and not digest_timed_out
+        ):
+            missing_at = str(attempt.get("supervisorMissingAt") or "")
+            missing_elapsed: float | None = None
+            if missing_at:
+                try:
+                    missing_elapsed = (
+                        _utc_now() - datetime.fromisoformat(missing_at)
+                    ).total_seconds()
+                except ValueError:
+                    missing_elapsed = DIGEST_EXIT_RECEIPT_GRACE_SECONDS + 1
+            if missing_elapsed is None:
+                with _exclusive_file_lock(
+                    _upload_state_lock_path(upload_id)
+                ) as acquired:
+                    if acquired:
+                        state = _load_upload_session(upload_id)
+                        state = _reconcile_digest_attempt_receipt_locked(state)
+                        if str(state.get("status") or "") not in {
+                            "assembling",
+                            "digesting",
+                        }:
+                            return _serialize_upload_session(state)
+                        current_attempt = state.get("digestAttempt")
+                        if isinstance(current_attempt, dict):
+                            current_attempt["supervisorMissingAt"] = (
+                                _utc_now().isoformat()
+                            )
+                            state["digestAttempt"] = current_attempt
+                            _persist_upload_session(state)
+                return _serialize_upload_session(state)
+            if missing_elapsed <= DIGEST_EXIT_RECEIPT_GRACE_SECONDS:
+                return _serialize_upload_session(state)
         if worker_missing or launch_stale or digest_timed_out:
             termination: dict[str, Any] | None = None
             if (
@@ -8400,10 +8778,33 @@ def get_jato_monthly_update_upload(
                         )
                         else None
                     ),
+                    attempt_id=(
+                        str(state["digestAttempt"].get("attemptId") or "")
+                        if isinstance(state.get("digestAttempt"), dict)
+                        else None
+                    ),
                 )
             with ExitStack() as digest_probe_stack:
                 digest_lock_held: bool | None = None
-                if launch_stale and digest_pid <= 0:
+                if (
+                    (launch_stale and digest_pid <= 0)
+                    or (
+                        worker_missing
+                        and isinstance(state.get("digestAttempt"), dict)
+                    )
+                ):
+                    digest_lock_acquired = digest_probe_stack.enter_context(
+                        _exclusive_file_lock(
+                            _upload_digest_lock_path(upload_id),
+                            blocking=False,
+                        )
+                    )
+                    digest_lock_held = not digest_lock_acquired
+                if (
+                    digest_lock_held is None
+                    and isinstance(state.get("digestAttempt"), dict)
+                    and not _process_exists(digest_pid)
+                ):
                     digest_lock_acquired = digest_probe_stack.enter_context(
                         _exclusive_file_lock(
                             _upload_digest_lock_path(upload_id),
@@ -8450,6 +8851,8 @@ def get_jato_monthly_update_upload(
                                 ),
                                 "fileSizeBytes": file_size_bytes,
                                 "termination": termination,
+                                "digestAttempt": state.get("digestAttempt"),
+                                "logTail": _read_digest_attempt_log_tail(state),
                             }
                             launch_worker_lost = (
                                 launch_stale and digest_pid <= 0
@@ -8541,7 +8944,16 @@ def abandon_jato_monthly_update_upload(
         with ExitStack() as digest_probe_stack:
             digest_pid = int(state.get("digestPid") or 0)
             digest_lock_held: bool | None = None
-            if status in {"assembling", "digesting"} and digest_pid <= 0:
+            if (
+                status in {"assembling", "digesting"}
+                and (
+                    digest_pid <= 0
+                    or (
+                        isinstance(state.get("digestAttempt"), dict)
+                        and not _process_exists(digest_pid)
+                    )
+                )
+            ):
                 digest_lock_acquired = digest_probe_stack.enter_context(
                     _exclusive_file_lock(
                         _upload_digest_lock_path(upload_id),
@@ -8560,7 +8972,24 @@ def abandon_jato_monthly_update_upload(
                     pid=digest_pid,
                     upload_id=upload_id,
                     expected_identity=digest_identity,
+                    attempt_id=(
+                        str(state["digestAttempt"].get("attemptId") or "")
+                        if isinstance(state.get("digestAttempt"), dict)
+                        else None
+                    ),
                 )
+            if (
+                digest_lock_held is None
+                and isinstance(state.get("digestAttempt"), dict)
+                and not _process_exists(digest_pid)
+            ):
+                digest_lock_acquired = digest_probe_stack.enter_context(
+                    _exclusive_file_lock(
+                        _upload_digest_lock_path(upload_id),
+                        blocking=False,
+                    )
+                )
+                digest_lock_held = not digest_lock_acquired
             termination_confirmed = (
                 digest_lock_held is not True
                 and _digest_process_termination_confirmed(
@@ -9079,6 +9508,9 @@ def _build_upload_ingest_digest(
 
 def run_jato_monthly_update_upload_digest(upload_id: str) -> dict[str, Any]:
     """Assemble and inspect one upload outside the FastAPI request process."""
+    attempt_id = str(
+        os.getenv("APP_JATO_DIGEST_ATTEMPT_ID", "")
+    ).strip() or None
     with _exclusive_file_lock(
         _upload_digest_lock_path(upload_id),
         blocking=False,
@@ -9086,6 +9518,8 @@ def run_jato_monthly_update_upload_digest(upload_id: str) -> dict[str, Any]:
         if not acquired:
             return _serialize_upload_session(_load_upload_session(upload_id))
         state = _load_upload_session(upload_id)
+        if not _digest_attempt_matches(state, attempt_id):
+            return _serialize_upload_session(state)
         if str(state.get("status", "")) in {
             "ready",
             "invalid",
@@ -9116,102 +9550,181 @@ def run_jato_monthly_update_upload_digest(upload_id: str) -> dict[str, Any]:
                 assembled_path, file_sha256 = (
                     _assemble_monthly_update_upload(state)
                 )
-            state["status"] = "digesting"
-            state["digestPid"] = os.getpid()
-            state["digestProcessIdentity"] = _read_process_identity(
-                os.getpid()
-            )
-            state["digestLaunchedAt"] = (
-                state.get("digestLaunchedAt") or _utc_now().isoformat()
-            )
-            state["assembledPath"] = _relative_to_project(assembled_path)
-            state["fileSha256"] = file_sha256
-            state["uploadedBytes"] = assembled_path.stat().st_size
-            _persist_upload_session(state)
+            with _exclusive_file_lock(
+                _upload_state_lock_path(upload_id)
+            ) as state_acquired:
+                if not state_acquired:
+                    raise RuntimeError("digest 状态锁暂不可用。")
+                state = _load_upload_session(upload_id)
+                if not _digest_attempt_matches(state, attempt_id):
+                    return _serialize_upload_session(state)
+                if str(state.get("status") or "") in {
+                    "abandoned",
+                    "expired",
+                }:
+                    return _serialize_upload_session(state)
+                state["status"] = "digesting"
+                state["digestWorkerPid"] = os.getpid()
+                if attempt_id:
+                    attempt = state.get("digestAttempt")
+                    if isinstance(attempt, dict):
+                        attempt["status"] = "digesting"
+                        attempt["workerPid"] = os.getpid()
+                        state["digestAttempt"] = attempt
+                else:
+                    state["digestPid"] = os.getpid()
+                    state["digestProcessIdentity"] = _read_process_identity(
+                        os.getpid()
+                    )
+                state["digestLaunchedAt"] = (
+                    state.get("digestLaunchedAt") or _utc_now().isoformat()
+                )
+                state["assembledPath"] = _relative_to_project(assembled_path)
+                state["fileSha256"] = file_sha256
+                state["uploadedBytes"] = assembled_path.stat().st_size
+                _persist_upload_session(state)
             digest = _build_upload_ingest_digest(
                 path=assembled_path,
                 file_sha256=file_sha256,
                 size_bytes=assembled_path.stat().st_size,
             )
-            latest = _load_upload_session(upload_id)
-            latest_failure = latest.get("failureDigest")
-            if str(latest.get("status") or "") in {
-                "abandoned",
-                "expired",
-            }:
-                return _serialize_upload_session(latest)
-            if (
-                str(latest.get("status") or "") == "invalid"
-                and isinstance(latest_failure, dict)
-                and str(latest_failure.get("code") or "")
-                in {"DIGEST_TIMEOUT", "DIGEST_WORKER_LOST"}
-            ):
-                return _serialize_upload_session(latest)
-            state = latest
-            state["ingestDigest"] = digest
-            state["failureDigest"] = None
-            state["status"] = str(digest["status"])
-            state["completedAt"] = _utc_now().isoformat()
-            state["digestPid"] = None
-            state["digestProcessIdentity"] = None
+            with _exclusive_file_lock(
+                _upload_state_lock_path(upload_id)
+            ) as state_acquired:
+                if not state_acquired:
+                    raise RuntimeError("digest 结果状态锁暂不可用。")
+                latest = _load_upload_session(upload_id)
+                if not _digest_attempt_matches(latest, attempt_id):
+                    return _serialize_upload_session(latest)
+                latest_failure = latest.get("failureDigest")
+                if str(latest.get("status") or "") in {
+                    "abandoned",
+                    "expired",
+                }:
+                    return _serialize_upload_session(latest)
+                if (
+                    str(latest.get("status") or "") == "invalid"
+                    and isinstance(latest_failure, dict)
+                    and str(latest_failure.get("code") or "")
+                    in DIGEST_RETRYABLE_FAILURE_CODES
+                ):
+                    return _serialize_upload_session(latest)
+                state = latest
+                state["ingestDigest"] = digest
+                state["failureDigest"] = None
+                state["status"] = str(digest["status"])
+                state["completedAt"] = _utc_now().isoformat()
+                state["digestWorkerPid"] = None
+                if attempt_id:
+                    attempt = state.get("digestAttempt")
+                    if isinstance(attempt, dict):
+                        attempt["status"] = "worker_finished"
+                        attempt["workerFinishedAt"] = _utc_now().isoformat()
+                        state["digestAttempt"] = attempt
+                else:
+                    state["digestPid"] = None
+                    state["digestProcessIdentity"] = None
+                _persist_upload_session(state)
             shutil.rmtree(_upload_session_chunk_dir(upload_id), ignore_errors=True)
+        except MemoryError:
+            raise
         except Exception as exc:
-            latest = _load_upload_session(upload_id)
-            latest_failure = latest.get("failureDigest")
-            if str(latest.get("status") or "") in {
-                "abandoned",
-                "expired",
-            }:
-                return _serialize_upload_session(latest)
-            if (
-                str(latest.get("status") or "") == "invalid"
-                and isinstance(latest_failure, dict)
-                and str(latest_failure.get("code") or "")
-                in {"DIGEST_TIMEOUT", "DIGEST_WORKER_LOST"}
-            ):
-                return _serialize_upload_session(latest)
-            state = latest
-            state["status"] = "invalid"
-            state["completedAt"] = _utc_now().isoformat()
-            state["digestPid"] = None
-            state["digestProcessIdentity"] = None
-            state["failureDigest"] = {
-                "code": "UPLOAD_DIGEST_FAILED",
-                "category": "input_validation",
-                "phase": "digesting",
-                "retryable": False,
-                "message": f"上传文件 digest 失败：{exc}",
-                "sourceFeedback": "请确认工作表名为 Data Export、国家列存在、月份列有真实数据；若文件可正常打开仍失败，请把此错误交给平台管理员。",
-                "technicalDetail": traceback.format_exc(limit=8),
-                "nextAction": "fix_source_or_contact_admin",
-            }
-        _persist_upload_session(state)
+            with _exclusive_file_lock(
+                _upload_state_lock_path(upload_id)
+            ) as state_acquired:
+                if not state_acquired:
+                    raise
+                latest = _load_upload_session(upload_id)
+                if not _digest_attempt_matches(latest, attempt_id):
+                    return _serialize_upload_session(latest)
+                latest_failure = latest.get("failureDigest")
+                if str(latest.get("status") or "") in {
+                    "abandoned",
+                    "expired",
+                }:
+                    return _serialize_upload_session(latest)
+                if (
+                    str(latest.get("status") or "") == "invalid"
+                    and isinstance(latest_failure, dict)
+                    and str(latest_failure.get("code") or "")
+                    in DIGEST_RETRYABLE_FAILURE_CODES
+                ):
+                    return _serialize_upload_session(latest)
+                state = latest
+                state["status"] = "invalid"
+                state["completedAt"] = _utc_now().isoformat()
+                state["digestWorkerPid"] = None
+                if attempt_id:
+                    attempt = state.get("digestAttempt")
+                    if isinstance(attempt, dict):
+                        attempt["status"] = "worker_finished"
+                        attempt["workerFinishedAt"] = _utc_now().isoformat()
+                        state["digestAttempt"] = attempt
+                else:
+                    state["digestPid"] = None
+                    state["digestProcessIdentity"] = None
+                state["failureDigest"] = {
+                    "code": "UPLOAD_DIGEST_FAILED",
+                    "category": "input_validation",
+                    "phase": "digesting",
+                    "retryable": False,
+                    "message": f"上传文件 digest 失败：{exc}",
+                    "sourceFeedback": "请确认工作表名为 Data Export、国家列存在、月份列有真实数据；若文件可正常打开仍失败，请把此错误交给平台管理员。",
+                    "technicalDetail": traceback.format_exc(limit=8),
+                    "nextAction": "fix_source_or_contact_admin",
+                }
+                _persist_upload_session(state)
         return _serialize_upload_session(state)
 
 
 def _launch_upload_digest_process(upload_id: str) -> int:
     if not MONTHLY_WORKER_SCRIPT_PATH.exists():
         raise RuntimeError("JATO monthly worker 脚本不存在，无法启动 digest。")
+    state = _load_upload_session(upload_id)
+    attempt = state.get("digestAttempt")
+    if not isinstance(attempt, dict):
+        raise RuntimeError("JATO digest attempt 状态缺失，拒绝无审计启动。")
+    attempt_id = str(attempt.get("attemptId") or "").strip()
+    log_path = _upload_digest_attempt_artifact_path(state, "logPath")
+    receipt_path = _upload_digest_attempt_artifact_path(
+        state,
+        "receiptPath",
+    )
+    if not attempt_id or log_path is None or receipt_path is None:
+        raise RuntimeError("JATO digest attempt 路径无效，拒绝启动。")
     env = dict(os.environ)
+    env["APP_JATO_MONTHLY_WORKER_MEMORY_LIMIT_BYTES"] = "0"
     env.setdefault(
-        "APP_JATO_MONTHLY_WORKER_MEMORY_LIMIT_BYTES",
+        "APP_JATO_DIGEST_RSS_WARNING_BYTES",
         str(1024 * 1024 * 1024),
     )
-    process = subprocess.Popen(
-        [
-            sys.executable,
-            str(MONTHLY_WORKER_SCRIPT_PATH),
-            "--digest-upload",
-            upload_id,
-        ],
-        cwd=PROJECT_ROOT,
-        stdin=subprocess.DEVNULL,
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
-        env=env,
-        start_new_session=True,
-        close_fds=True,
+    env.setdefault(
+        "APP_JATO_DIGEST_RSS_LIMIT_BYTES",
+        str(1536 * 1024 * 1024),
     )
+    log_path.parent.mkdir(parents=True, exist_ok=True)
+    with log_path.open("ab", buffering=0) as output:
+        process = subprocess.Popen(
+            [
+                sys.executable,
+                str(MONTHLY_WORKER_SCRIPT_PATH),
+                "--supervise-digest-upload",
+                upload_id,
+                "--attempt-id",
+                attempt_id,
+                "--attempt-log",
+                str(log_path),
+                "--attempt-receipt",
+                str(receipt_path),
+            ],
+            cwd=PROJECT_ROOT,
+            stdin=subprocess.DEVNULL,
+            stdout=output,
+            stderr=subprocess.STDOUT,
+            env=env,
+            start_new_session=True,
+            close_fds=True,
+        )
     return int(process.pid)
 
 
@@ -9223,9 +9736,15 @@ def _start_upload_digest_locked(state: dict[str, Any]) -> dict[str, Any]:
     state["failureDigest"] = None
     state["completedAt"] = None
     state["digestPid"] = None
+    state["digestWorkerPid"] = None
     state["digestProcessIdentity"] = None
     state["digestLaunchedAt"] = _utc_now().isoformat()
-    state["digestAttempts"] = int(state.get("digestAttempts") or 0) + 1
+    attempt_number = int(state.get("digestAttempts") or 0) + 1
+    state["digestAttempts"] = attempt_number
+    state["digestAttempt"] = _new_upload_digest_attempt(
+        upload_id=upload_id,
+        attempt_number=attempt_number,
+    )
     _persist_upload_session(state)
     try:
         digest_pid = _launch_upload_digest_process(upload_id)
@@ -9235,6 +9754,14 @@ def _start_upload_digest_locked(state: dict[str, Any]) -> dict[str, Any]:
             latest["digestProcessIdentity"] = _read_process_identity(
                 digest_pid
             )
+            attempt = latest.get("digestAttempt")
+            if isinstance(attempt, dict):
+                attempt["status"] = "running"
+                attempt["supervisorPid"] = digest_pid
+                attempt["supervisorIdentity"] = latest[
+                    "digestProcessIdentity"
+                ]
+                latest["digestAttempt"] = attempt
             _persist_upload_session(latest)
         return latest
     except Exception as exc:
@@ -9248,10 +9775,15 @@ def _start_upload_digest_locked(state: dict[str, Any]) -> dict[str, Any]:
             "retryable": True,
             "message": str(exc),
             "sourceFeedback": None,
-            "technicalDetail": traceback.format_exc(limit=4),
+            "technicalDetail": {
+                "traceback": traceback.format_exc(limit=4),
+                "digestAttempt": state.get("digestAttempt"),
+                "logTail": _read_digest_attempt_log_tail(state),
+            },
             "nextAction": "contact_admin",
         }
         state["digestPid"] = None
+        state["digestWorkerPid"] = None
         state["digestProcessIdentity"] = None
         _persist_upload_session(state)
         return state
@@ -9332,7 +9864,7 @@ def _retry_jato_monthly_update_upload_digest_locked(
     retryable_failure = (
         isinstance(failure, dict)
         and failure.get("retryable") is True
-        and failure_code in {"DIGEST_TIMEOUT", "DIGEST_WORKER_LOST"}
+        and failure_code in DIGEST_RETRYABLE_FAILURE_CODES
     )
     if status != "invalid" or not retryable_failure:
         raise HTTPException(
@@ -9340,7 +9872,7 @@ def _retry_jato_monthly_update_upload_digest_locked(
             detail={
                 "code": "DIGEST_RETRY_NOT_ALLOWED",
                 "message": (
-                    "仅允许恢复超时或丢失的 digest worker；"
+                    "仅允许恢复已确认停止且可重试的 digest worker；"
                     "输入校验失败必须修正源文件后重新上传。"
                 ),
                 "failureCode": failure_code or None,
@@ -9354,6 +9886,7 @@ def _retry_jato_monthly_update_upload_digest_locked(
     )
     old_digest_pid = 0
     expected_process_identity: dict[str, Any] | None = None
+    expected_attempt_id: str | None = None
     if isinstance(technical_detail, dict):
         try:
             old_digest_pid = int(technical_detail.get("digestPid") or 0)
@@ -9363,6 +9896,9 @@ def _retry_jato_monthly_update_upload_digest_locked(
         expected_process_identity = (
             raw_identity if isinstance(raw_identity, dict) else None
         )
+        expected_attempt_id = str(
+            technical_detail.get("digestAttemptId") or ""
+        ).strip() or None
     if old_digest_pid > 0 and _process_exists(old_digest_pid):
         if expected_process_identity is None:
             raise HTTPException(
@@ -9379,7 +9915,15 @@ def _retry_jato_monthly_update_upload_digest_locked(
         identity_matches, current_process_identity = _process_identity_matches(
             pid=old_digest_pid,
             expected_identity=expected_process_identity,
-            required_command_tokens=("--digest-upload", upload_id),
+            required_command_tokens=(
+                (
+                    "--supervise-digest-upload",
+                    upload_id,
+                    expected_attempt_id,
+                )
+                if expected_attempt_id
+                else ("--digest-upload", upload_id)
+            ),
         )
         if identity_matches:
             raise HTTPException(
@@ -9409,39 +9953,59 @@ def _retry_jato_monthly_update_upload_digest_locked(
     _require_no_running_monthly_update_jobs()
     _require_no_active_upload_sessions(action="恢复上传 digest")
 
-    assembled_path = _persisted_upload_session_assembled_path(state)
-    if assembled_path is None or not assembled_path.is_file():
-        raise HTTPException(
-            status_code=409,
-            detail={
-                "code": "DIGEST_RETRY_SOURCE_MISSING",
-                "message": "已组装文件不存在，无法只重启 digest，请重新上传。",
-            },
-        )
     expected_size = int(state.get("sizeBytes") or 0)
-    actual_size = assembled_path.stat().st_size
+    assembled_path = _persisted_upload_session_assembled_path(state)
     expected_sha256 = str(state.get("fileSha256") or "").strip().lower()
-    if (
-        expected_size <= 0
-        or actual_size != expected_size
-        or not re.fullmatch(r"[0-9a-f]{64}", expected_sha256)
-    ):
+    if expected_size <= 0:
         raise HTTPException(
             status_code=409,
             detail={
                 "code": "DIGEST_RETRY_SOURCE_INVALID",
-                "message": "已组装文件大小或 SHA-256 状态无效，请重新上传。",
+                "message": "上传文件大小状态无效，请重新上传。",
             },
         )
-    if _sha256_hex_for_path(assembled_path) != expected_sha256:
-        raise HTTPException(
-            status_code=409,
-            detail={
-                "code": "DIGEST_RETRY_SOURCE_CHANGED",
-                "message": "已组装文件 SHA-256 已变化，请重新上传。",
-            },
-        )
-    state["uploadedBytes"] = actual_size
+    if assembled_path is not None and assembled_path.is_file():
+        actual_size = assembled_path.stat().st_size
+        if (
+            actual_size != expected_size
+            or not re.fullmatch(r"[0-9a-f]{64}", expected_sha256)
+        ):
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "code": "DIGEST_RETRY_SOURCE_INVALID",
+                    "message": "已组装文件大小或 SHA-256 状态无效，请重新上传。",
+                },
+            )
+        if _sha256_hex_for_path(assembled_path) != expected_sha256:
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "code": "DIGEST_RETRY_SOURCE_CHANGED",
+                    "message": "已组装文件 SHA-256 已变化，请重新上传。",
+                },
+            )
+        state["uploadedBytes"] = actual_size
+    else:
+        try:
+            received_chunks, uploaded_bytes = (
+                _validate_uploaded_chunks_complete(state)
+            )
+        except HTTPException as exc:
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "code": "DIGEST_RETRY_SOURCE_MISSING",
+                    "message": (
+                        "已组装文件和完整上传分片均不存在，"
+                        "无法恢复 digest，请重新上传。"
+                    ),
+                },
+            ) from exc
+        state["receivedChunks"] = received_chunks
+        state["uploadedBytes"] = uploaded_bytes
+        state["assembledPath"] = None
+        state["fileSha256"] = None
     state = _start_upload_digest_locked(state)
     return _serialize_upload_session(state)
 
@@ -9630,53 +10194,24 @@ def _ensure_upload_digest_matches_current_active(
                 detail="上传 digest 状态已变化，请刷新后重试。",
             )
 
-        latest["status"] = "digesting"
-        latest["ingestDigest"] = None
-        latest["failureDigest"] = None
-        latest["completedAt"] = None
-        latest["digestPid"] = None
-        latest["digestProcessIdentity"] = None
-        latest["digestLaunchedAt"] = _utc_now().isoformat()
-        latest["digestAttempts"] = int(
-            latest.get("digestAttempts") or 0
-        ) + 1
-        _persist_upload_session(latest)
-        try:
-            digest_pid = _launch_upload_digest_process(upload_id)
-            refreshed = _load_upload_session(upload_id)
-            if str(refreshed.get("status") or "") in {
-                "assembling",
-                "digesting",
-            }:
-                refreshed["digestPid"] = digest_pid
-                refreshed["digestProcessIdentity"] = (
-                    _read_process_identity(digest_pid)
-                )
-                _persist_upload_session(refreshed)
-        except Exception as exc:
-            failed = _load_upload_session(upload_id)
-            failed["status"] = "invalid"
-            failed["completedAt"] = _utc_now().isoformat()
-            failed["digestPid"] = None
-            failed["digestProcessIdentity"] = None
-            failed["failureDigest"] = {
-                "code": "DIGEST_WORKER_UNAVAILABLE",
-                "category": "platform",
-                "phase": "digesting",
-                "retryable": True,
-                "message": str(exc),
-                "sourceFeedback": None,
-                "technicalDetail": traceback.format_exc(limit=4),
-                "nextAction": "contact_admin",
-            }
-            _persist_upload_session(failed)
+        refreshed = _start_upload_digest_locked(latest)
+        refreshed_failure = refreshed.get("failureDigest")
+        if (
+            str(refreshed.get("status") or "") == "invalid"
+            and isinstance(refreshed_failure, dict)
+            and str(refreshed_failure.get("code") or "")
+            == "DIGEST_WORKER_UNAVAILABLE"
+        ):
             raise HTTPException(
                 status_code=503,
                 detail={
                     "code": "DIGEST_WORKER_UNAVAILABLE",
-                    "message": str(exc),
+                    "message": str(
+                        refreshed_failure.get("message")
+                        or "digest worker 无法启动。"
+                    ),
                 },
-            ) from exc
+            )
     raise HTTPException(
         status_code=409,
         detail={
