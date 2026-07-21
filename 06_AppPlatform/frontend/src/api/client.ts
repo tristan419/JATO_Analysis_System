@@ -47,6 +47,7 @@ import type {
   JatoMonthlyUpdateReviewApproval,
   JatoMonthlyUpdateReviewBundle,
   JatoMonthlyUpdateReviewFinding,
+  JatoMonthlyUpdateReviewIssue,
   JatoMonthlyUpdateRefreshSummary,
   JatoMonthlyUpdateFailureDigest,
   JatoMonthlyUpdateIngestDigest,
@@ -329,6 +330,93 @@ function isAbortLikeError(error: unknown): boolean {
   return false;
 }
 
+function parseJatoMonthlyUpdateReviewIssue(
+  path: string,
+  status: number,
+  message: string,
+): JatoMonthlyUpdateReviewIssue | null {
+  if (status !== 409 || !/\/monthly-update-jobs\/[^/]+\/review$/.test(path)) {
+    return null;
+  }
+  try {
+    const raw = JSON.parse(message) as Record<string, unknown>;
+    if (
+      raw.blockerType !== "review_bundle_stale"
+      && raw.blockerType !== "review_bundle_not_ready"
+    ) {
+      return null;
+    }
+    if (
+      typeof raw.reason !== "string"
+      || raw.reason.length === 0
+      || typeof raw.message !== "string"
+      || raw.message.length === 0
+      || typeof raw.canRebuild !== "boolean"
+      || !(
+        raw.rebuildBlockerReason === null
+        || (
+          typeof raw.rebuildBlockerReason === "string"
+          && raw.rebuildBlockerReason.length > 0
+        )
+      )
+    ) {
+      return null;
+    }
+    const parseNullableFingerprint = (value: unknown): string | null | undefined => {
+      if (value === null) {
+        return null;
+      }
+      return typeof value === "string" && /^[0-9a-f]{64}$/i.test(value)
+        ? value.toLowerCase()
+        : undefined;
+    };
+    const candidateFingerprint = parseNullableFingerprint(raw.candidateFingerprint);
+    const activeBaseFingerprint = parseNullableFingerprint(raw.activeBaseFingerprint);
+    const currentActiveFingerprint = parseNullableFingerprint(raw.currentActiveFingerprint);
+    if (
+      candidateFingerprint === undefined
+      || activeBaseFingerprint === undefined
+      || currentActiveFingerprint === undefined
+    ) {
+      return null;
+    }
+    let reviewRefresh: JatoMonthlyUpdatePendingOperation | null = null;
+    if (raw.reviewRefresh !== null) {
+      if (
+        typeof raw.reviewRefresh !== "object"
+        || Array.isArray(raw.reviewRefresh)
+      ) {
+        return null;
+      }
+      const reviewRefreshRaw = raw.reviewRefresh as Record<string, unknown>;
+      if (
+        reviewRefreshRaw.type !== "review_refresh"
+        || typeof reviewRefreshRaw.operationId !== "string"
+        || reviewRefreshRaw.operationId.length === 0
+        || !["queued", "running", "success", "failed"].includes(
+          String(reviewRefreshRaw.status ?? "")
+        )
+      ) {
+        return null;
+      }
+      reviewRefresh = mapJatoMonthlyUpdatePendingOperation(reviewRefreshRaw);
+    }
+    return {
+      blockerType: raw.blockerType,
+      reason: raw.reason,
+      rebuildBlockerReason: raw.rebuildBlockerReason,
+      message: raw.message,
+      canRebuild: raw.canRebuild,
+      candidateFingerprint,
+      activeBaseFingerprint,
+      currentActiveFingerprint,
+      reviewRefresh,
+    };
+  } catch {
+    return null;
+  }
+}
+
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const shouldDedupe = !(init?.body instanceof FormData) && !init?.signal;
   const key = shouldDedupe ? dedupeKey(path, init) : null;
@@ -353,7 +441,18 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
     }
     if (!response.ok) {
       const message = await readErrorMessage(response);
-      throw new Error(`${response.status} ${message}`);
+      const error = new Error(`${response.status} ${message}`) as Error & {
+        reviewIssue?: JatoMonthlyUpdateReviewIssue;
+      };
+      const reviewIssue = parseJatoMonthlyUpdateReviewIssue(
+        path,
+        response.status,
+        message,
+      );
+      if (reviewIssue) {
+        error.reviewIssue = reviewIssue;
+      }
+      throw error;
     }
     return (await response.json()) as T;
   })();
@@ -1078,7 +1177,11 @@ function mapJatoMonthlyUpdatePublication(
 function mapJatoMonthlyUpdatePendingOperation(
   raw: Record<string, unknown>,
 ): JatoMonthlyUpdatePendingOperation {
-  const operationType = raw.type === "rollback" ? "rollback" : "publish";
+  const operationType = raw.type === "rollback"
+    ? "rollback"
+    : raw.type === "review_refresh"
+      ? "review_refresh"
+      : "publish";
   const operationStatus = (
     raw.status === "running"
     || raw.status === "success"
@@ -1088,6 +1191,9 @@ function mapJatoMonthlyUpdatePendingOperation(
     operationId: String(raw.operationId ?? ""),
     type: operationType,
     status: operationStatus,
+    phase: raw.phase === undefined || raw.phase === null
+      ? undefined
+      : String(raw.phase),
     requestedAt: String(raw.requestedAt ?? ""),
     requestedBy: String(raw.requestedBy ?? ""),
     startedAt: raw.startedAt === undefined || raw.startedAt === null ? null : String(raw.startedAt),
@@ -1096,6 +1202,24 @@ function mapJatoMonthlyUpdatePendingOperation(
     failureDigest: raw.failureDigest && typeof raw.failureDigest === "object"
       ? mapJatoMonthlyUpdateFailureDigest(raw.failureDigest as Record<string, unknown>)
       : null,
+    requestId: raw.requestId === undefined || raw.requestId === null
+      ? null
+      : String(raw.requestId),
+    expectedCandidateFingerprint: raw.expectedCandidateFingerprint === undefined
+      || raw.expectedCandidateFingerprint === null
+      ? null
+      : String(raw.expectedCandidateFingerprint),
+    expectedActiveFingerprint: raw.expectedActiveFingerprint === undefined
+      || raw.expectedActiveFingerprint === null
+      ? null
+      : String(raw.expectedActiveFingerprint),
+    resultCandidateFingerprint: raw.resultCandidateFingerprint === undefined
+      || raw.resultCandidateFingerprint === null
+      ? null
+      : String(raw.resultCandidateFingerprint),
+    recoveredAfterWorkerLoss: raw.recoveredAfterWorkerLoss === undefined
+      ? undefined
+      : Boolean(raw.recoveredAfterWorkerLoss),
   };
 }
 
@@ -4165,6 +4289,20 @@ export const api = {
     request<{ item: Record<string, unknown> }>(`/msrp/monthly-update-jobs/${jobId}/review`).then((res) => ({
       item: mapJatoMonthlyUpdateReviewBundle(res.item)
     })),
+  refreshJatoMonthlyUpdateReview: (
+    jobId: string,
+    requestId: string,
+    expectedCandidateFingerprint?: string | null,
+  ) => request<{ item: Record<string, unknown> }>(
+    `/msrp/monthly-update-jobs/${jobId}/review-refresh`,
+    {
+      method: "POST",
+      body: JSON.stringify({
+        requestId,
+        expectedCandidateFingerprint: expectedCandidateFingerprint || undefined,
+      }),
+    },
+  ).then((res) => ({ item: mapJatoMonthlyUpdateJob(res.item) })),
   approveJatoMonthlyUpdateReview: (jobId: string, note?: string) =>
     request<{ item: Record<string, unknown> }>(`/msrp/monthly-update-jobs/${jobId}/review-approval`, {
       method: "POST",

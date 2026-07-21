@@ -2592,7 +2592,12 @@ def test_country_partition_candidate_cannot_publish(
 
 
 def test_partial_country_review_aggregates_country_findings(monkeypatch) -> None:
-    def fake_country_review(payload: dict[str, object]) -> dict[str, object]:
+    def fake_country_review(
+        payload: dict[str, object],
+        *,
+        candidate_fingerprint: str | None = None,
+    ) -> dict[str, object]:
+        _ = candidate_fingerprint
         country = str(payload["country"])
         severity = "blocker" if country == "丹麦" else "info"
         return {

@@ -2350,14 +2350,32 @@ export interface JatoMonthlyUpdatePublication {
 
 export interface JatoMonthlyUpdatePendingOperation {
   operationId: string;
-  type: "publish" | "rollback";
+  type: "publish" | "rollback" | "review_refresh";
   status: "queued" | "running" | "success" | "failed";
+  phase?: string;
   requestedAt: string;
   requestedBy: string;
   startedAt: string | null;
   finishedAt: string | null;
   error: string | null;
   failureDigest: JatoMonthlyUpdateFailureDigest | null;
+  requestId?: string | null;
+  expectedCandidateFingerprint?: string | null;
+  expectedActiveFingerprint?: string | null;
+  resultCandidateFingerprint?: string | null;
+  recoveredAfterWorkerLoss?: boolean;
+}
+
+export interface JatoMonthlyUpdateReviewIssue {
+  blockerType: "review_bundle_stale" | "review_bundle_not_ready";
+  reason: string;
+  rebuildBlockerReason: string | null;
+  message: string;
+  canRebuild: boolean;
+  candidateFingerprint: string | null;
+  activeBaseFingerprint: string | null;
+  currentActiveFingerprint: string | null;
+  reviewRefresh: JatoMonthlyUpdatePendingOperation | null;
 }
 
 export interface JatoMonthlyUpdateRawCompareSummary {
