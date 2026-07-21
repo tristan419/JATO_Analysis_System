@@ -551,6 +551,105 @@ def test_cached_review_and_approval_do_not_hash_large_candidate_in_web(
         jato_monthly_update_service.get_jato_monthly_update_review(job_id)
 
 
+def test_cached_legacy_review_exposes_server_normalized_allowed_decisions(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    _project_root, _job_root = _configure_project(tmp_path, monkeypatch)
+    job_id = "jato-update-cached-legacy-history"
+    legacy_countries = [
+        {
+            "country": "荷兰",
+            "monthlyTotalsStable": False,
+            "decisionRequired": False,
+        }
+    ]
+    legacy_fingerprint = (
+        jato_monthly_update_service
+        ._historical_reclassification_report_fingerprint(
+            legacy_countries
+        )
+    )
+    review_path = jato_monthly_update_service._job_review_bundle_path(
+        job_id
+    )
+    review_path.parent.mkdir(parents=True, exist_ok=True)
+    jato_monthly_update_service._write_json(
+        review_path,
+        {
+            "jobId": job_id,
+            "reviewFindings": [],
+            "historicalReclassificationReport": {
+                "status": "not_required",
+                "countries": legacy_countries,
+                "reportFingerprint": legacy_fingerprint,
+            },
+        },
+    )
+    jato_monthly_update_service._persist_job_state(
+        {
+            "jobId": job_id,
+            "status": "success",
+            "phase": "completed",
+            "artifacts": {
+                "reviewBundlePath": (
+                    jato_monthly_update_service._relative_to_project(
+                        review_path
+                    )
+                )
+            },
+        }
+    )
+
+    review = jato_monthly_update_service.get_jato_monthly_update_review(
+        job_id
+    )
+
+    normalized_report = review["historicalReclassificationReport"]
+    assert normalized_report["status"] == "decision_required"
+    assert normalized_report["countries"] == [
+        {
+            "country": "荷兰",
+            "monthlyTotalsStable": False,
+            "decisionRequired": True,
+            "allowedDecisions": ["keep_active"],
+        }
+    ]
+    assert normalized_report["reportFingerprint"] != legacy_fingerprint
+
+    empty_fingerprint = (
+        jato_monthly_update_service
+        ._historical_reclassification_report_fingerprint([])
+    )
+    cached_bundle = jato_monthly_update_service._read_json(review_path)
+    cached_bundle["historicalReclassificationReport"] = {
+        "status": "not_required",
+        "countries": [],
+        "reportFingerprint": empty_fingerprint,
+    }
+    jato_monthly_update_service._write_json(review_path, cached_bundle)
+    empty_review = (
+        jato_monthly_update_service.get_jato_monthly_update_review(job_id)
+    )
+    assert empty_review["historicalReclassificationReport"] == {
+        "status": "not_required",
+        "countries": [],
+        "reportFingerprint": empty_fingerprint,
+        "truncation": {},
+    }
+
+    cached_bundle["historicalReclassificationReport"][
+        "reportFingerprint"
+    ] = "invalid"
+    jato_monthly_update_service._write_json(review_path, cached_bundle)
+    with pytest.raises(HTTPException) as exc_info:
+        jato_monthly_update_service.get_jato_monthly_update_review(job_id)
+    assert (
+        exc_info.value.detail["blockerType"]
+        == "historical_reclassification_resolution_invalid"
+    )
+
+
 def test_upload_complete_digest_and_create_are_idempotent(
     tmp_path: Path,
     monkeypatch,
@@ -1081,6 +1180,49 @@ def test_historical_reclassification_report_uses_single_dimension_totals() -> No
     assert report["exactChanges"][0]["transferredSales"] == 10
 
 
+def test_historical_sales_change_requires_keep_active_decision() -> None:
+    active = pd.DataFrame(
+        [
+            {
+                "国家": "荷兰",
+                "Make": "BRAND",
+                "Model": "MODEL",
+                "Body type": "Sedan",
+                "2026 Jan": 10,
+            }
+        ]
+    )
+    candidate = pd.DataFrame(
+        [
+            {
+                "国家": "荷兰",
+                "Make": "BRAND",
+                "Model": "MODEL",
+                "Body type": "SUV",
+                "2026 Jan": 11,
+                "2026 Feb": 2,
+            }
+        ]
+    )
+
+    stability = (
+        jato_monthly_update_service
+        ._single_country_historical_sales_stability(
+            country="荷兰",
+            active_frame=active,
+            candidate_frame=candidate,
+            active_latest_month="2026 Jan",
+        )
+    )
+
+    assert stability["status"] == "fail"
+    assert stability["reason"] == "historical_sales_changed"
+    report = stability["historicalReclassification"]
+    assert report["monthlyTotalsStable"] is False
+    assert report["decisionRequired"] is True
+    assert report["allowedDecisions"] == ["keep_active"]
+
+
 def test_keep_active_history_slices_months_without_accumulation() -> None:
     active = pd.DataFrame(
         [
@@ -1236,6 +1378,19 @@ def test_historical_reclassification_resolution_rejects_other_blockers(
         "activeBaseFingerprint": "a" * 64,
     }
     jato_monthly_update_service._persist_job_state(state)
+    country_reports = [
+        {
+            "country": "捷克",
+            "monthlyTotalsStable": True,
+            "decisionRequired": True,
+        }
+    ]
+    report_fingerprint = (
+        jato_monthly_update_service
+        ._historical_reclassification_report_fingerprint(
+            country_reports
+        )
+    )
     monkeypatch.setattr(
         jato_monthly_update_service,
         "get_jato_monthly_update_review",
@@ -1246,14 +1401,8 @@ def test_historical_reclassification_resolution_rejects_other_blockers(
             ],
             "historicalReclassificationReport": {
                 "status": "decision_required",
-                "reportFingerprint": "c" * 64,
-                "countries": [
-                    {
-                        "country": "捷克",
-                        "monthlyTotalsStable": True,
-                        "decisionRequired": True,
-                    }
-                ],
+                "reportFingerprint": report_fingerprint,
+                "countries": country_reports,
             },
         },
     )
@@ -1284,6 +1433,24 @@ def test_historical_reclassification_resolution_requires_exact_country_scope(
         "activeBaseFingerprint": "a" * 64,
     }
     jato_monthly_update_service._persist_job_state(state)
+    country_reports = [
+        {
+            "country": "捷克",
+            "monthlyTotalsStable": True,
+            "decisionRequired": True,
+        },
+        {
+            "country": "丹麦",
+            "monthlyTotalsStable": True,
+            "decisionRequired": True,
+        },
+    ]
+    report_fingerprint = (
+        jato_monthly_update_service
+        ._historical_reclassification_report_fingerprint(
+            country_reports
+        )
+    )
     monkeypatch.setattr(
         jato_monthly_update_service,
         "get_jato_monthly_update_review",
@@ -1292,19 +1459,8 @@ def test_historical_reclassification_resolution_requires_exact_country_scope(
             "reviewFindings": [],
             "historicalReclassificationReport": {
                 "status": "decision_required",
-                "reportFingerprint": "c" * 64,
-                "countries": [
-                    {
-                        "country": "捷克",
-                        "monthlyTotalsStable": True,
-                        "decisionRequired": True,
-                    },
-                    {
-                        "country": "丹麦",
-                        "monthlyTotalsStable": True,
-                        "decisionRequired": True,
-                    },
-                ],
+                "reportFingerprint": report_fingerprint,
+                "countries": country_reports,
             },
         },
     )
@@ -1325,6 +1481,336 @@ def test_historical_reclassification_resolution_requires_exact_country_scope(
 
     assert exc_info.value.status_code == 400
     assert exc_info.value.detail["missingCountries"] == ["丹麦"]
+
+
+def test_legacy_historical_sales_blocker_normalizes_and_queues_keep_active(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    _project_root, _job_root = _configure_project(tmp_path, monkeypatch)
+    job_id = "jato-resolution-legacy-sales-change"
+    jato_monthly_update_service._persist_job_state(
+        {
+            "jobId": job_id,
+            "status": "success",
+            "phase": "completed",
+            "activeBaseFingerprint": "a" * 64,
+            "artifacts": {},
+        }
+    )
+    legacy_countries = [
+        {
+            "country": "捷克",
+            "monthlyTotalsStable": True,
+            "decisionRequired": True,
+        },
+        {
+            "country": "荷兰",
+            "monthlyTotalsStable": False,
+            "decisionRequired": False,
+            "jointMismatchCellCount": 1,
+        },
+    ]
+    legacy_fingerprint = (
+        jato_monthly_update_service
+        ._historical_reclassification_report_fingerprint(
+            legacy_countries
+        )
+    )
+    review = {
+        "candidateFingerprint": "b" * 64,
+        "reviewFindings": [
+            {
+                "severity": "blocker",
+                "scope": "country",
+                "ruleId": "SC011",
+                "target": " 荷兰 ",
+                "metrics": {
+                    "reason": "historical_sales_changed",
+                    "countryMismatchCount": 1,
+                },
+            }
+        ],
+        "historicalReclassificationReport": {
+            "status": "decision_required",
+            "countries": legacy_countries,
+            "reportFingerprint": legacy_fingerprint,
+            "truncation": {"truncated": False},
+        },
+    }
+    monkeypatch.setattr(
+        jato_monthly_update_service,
+        "get_jato_monthly_update_review",
+        lambda _job_id: review,
+    )
+    monkeypatch.setattr(
+        jato_monthly_update_service,
+        "_active_dataset_version",
+        lambda: "a" * 64,
+    )
+    queued: dict[str, object] = {}
+
+    def fake_queue(*, job_id: str, triggered_by: str) -> dict[str, object]:
+        queued["jobId"] = job_id
+        queued["triggeredBy"] = triggered_by
+        return {"jobId": job_id, "status": "queued"}
+
+    monkeypatch.setattr(
+        jato_monthly_update_service,
+        "_create_smart_merge_candidate_locked",
+        fake_queue,
+    )
+
+    result = (
+        jato_monthly_update_service
+        ._resolve_jato_historical_reclassification_with_job_lock(
+            job_id=job_id,
+            triggered_by="admin",
+            decisions=[
+                {"country": "捷克", "decision": "keep_active"},
+                {"country": "荷兰", "decision": "keep_active"},
+            ],
+        )
+    )
+
+    assert result["status"] == "queued"
+    assert queued == {"jobId": job_id, "triggeredBy": "admin"}
+    resolution = (
+        jato_monthly_update_service._load_job_state(job_id)[
+            "historicalReclassificationResolution"
+        ]
+    )
+    normalized_countries = resolution["report"]["countries"]
+    netherlands = next(
+        item
+        for item in normalized_countries
+        if item["country"] == "荷兰"
+    )
+    assert netherlands["decisionRequired"] is True
+    assert netherlands["allowedDecisions"] == ["keep_active"]
+    assert resolution["decisions"] == [
+        {"country": "捷克", "decision": "keep_active"},
+        {"country": "荷兰", "decision": "keep_active"},
+    ]
+    assert resolution["reportFingerprint"] == (
+        jato_monthly_update_service
+        ._historical_reclassification_report_fingerprint(
+            normalized_countries
+        )
+    )
+    assert (
+        resolution["report"]["reportFingerprint"]
+        == resolution["reportFingerprint"]
+    )
+
+
+def test_historical_sales_change_use_latest_is_rejected_at_endpoint(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    _project_root, _job_root = _configure_project(tmp_path, monkeypatch)
+    job_id = "jato-resolution-sales-change-use-latest"
+    jato_monthly_update_service._persist_job_state(
+        {
+            "jobId": job_id,
+            "activeBaseFingerprint": "a" * 64,
+            "artifacts": {},
+        }
+    )
+    legacy_countries = [
+        {
+            "country": "瑞士",
+            "monthlyTotalsStable": False,
+            "decisionRequired": False,
+        }
+    ]
+    report_fingerprint = (
+        jato_monthly_update_service
+        ._historical_reclassification_report_fingerprint(
+            legacy_countries
+        )
+    )
+    monkeypatch.setattr(
+        jato_monthly_update_service,
+        "get_jato_monthly_update_review",
+        lambda _job_id: {
+            "candidateFingerprint": "b" * 64,
+            "reviewFindings": [
+                {
+                    "severity": "blocker",
+                    "scope": "country",
+                    "ruleId": "SC011",
+                    "target": "瑞士",
+                    "metrics": {
+                        "blockerType": "historical_sales_changed",
+                        "countryMismatchCount": 2,
+                    },
+                }
+            ],
+            "historicalReclassificationReport": {
+                "status": "not_required",
+                "countries": legacy_countries,
+                "reportFingerprint": report_fingerprint,
+            },
+        },
+    )
+
+    with pytest.raises(HTTPException) as exc_info:
+        (
+            jato_monthly_update_service
+            ._resolve_jato_historical_reclassification_with_job_lock(
+                job_id=job_id,
+                triggered_by="admin",
+                decisions=[
+                    {"country": "瑞士", "decision": "use_latest"}
+                ],
+            )
+        )
+
+    assert exc_info.value.status_code == 409
+    assert (
+        exc_info.value.detail["blockerType"]
+        == "historical_sales_changed_requires_keep_active"
+    )
+    assert (
+        jato_monthly_update_service
+        ._historical_reclassification_resolution(
+            jato_monthly_update_service._load_job_state(job_id)
+        )
+        is None
+    )
+
+
+def test_persisted_historical_sales_change_use_latest_is_rejected() -> None:
+    country_reports = [
+        {
+            "country": "瑞士",
+            "monthlyTotalsStable": False,
+            "decisionRequired": True,
+            "allowedDecisions": ["keep_active"],
+        }
+    ]
+    report_fingerprint = (
+        jato_monthly_update_service
+        ._historical_reclassification_report_fingerprint(
+            country_reports
+        )
+    )
+    resolution = {
+        "status": "queued",
+        "reportFingerprint": report_fingerprint,
+        "decisions": [
+            {"country": "瑞士", "decision": "use_latest"}
+        ],
+        "report": {
+            "status": "decision_required",
+            "countries": country_reports,
+            "reportFingerprint": report_fingerprint,
+        },
+    }
+
+    with pytest.raises(HTTPException) as exc_info:
+        (
+            jato_monthly_update_service
+            ._validated_historical_reclassification_resolution(
+                resolution
+            )
+        )
+
+    assert exc_info.value.status_code == 409
+    assert (
+        exc_info.value.detail["blockerType"]
+        == "historical_sales_changed_requires_keep_active"
+    )
+
+
+def test_sc011_non_sales_blocker_is_not_resolved_by_keep_active(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    _project_root, _job_root = _configure_project(tmp_path, monkeypatch)
+    job_id = "jato-resolution-other-sc011"
+    jato_monthly_update_service._persist_job_state(
+        {
+            "jobId": job_id,
+            "activeBaseFingerprint": "a" * 64,
+            "artifacts": {},
+        }
+    )
+    country_reports = [
+        {
+            "country": "荷兰",
+            "monthlyTotalsStable": False,
+            "decisionRequired": True,
+        }
+    ]
+    report_fingerprint = (
+        jato_monthly_update_service
+        ._historical_reclassification_report_fingerprint(
+            country_reports
+        )
+    )
+    monkeypatch.setattr(
+        jato_monthly_update_service,
+        "get_jato_monthly_update_review",
+        lambda _job_id: {
+            "candidateFingerprint": "b" * 64,
+            "reviewFindings": [
+                {
+                    "severity": "blocker",
+                    "scope": "country",
+                    "ruleId": "SC011",
+                    "target": "荷兰",
+                    "metrics": {
+                        "reason": (
+                            "historical_configuration_guard_unavailable"
+                        ),
+                        "countryMismatchCount": 1,
+                    },
+                }
+            ],
+            "historicalReclassificationReport": {
+                "status": "decision_required",
+                "countries": country_reports,
+                "reportFingerprint": report_fingerprint,
+            },
+        },
+    )
+
+    with pytest.raises(HTTPException) as exc_info:
+        (
+            jato_monthly_update_service
+            ._resolve_jato_historical_reclassification_with_job_lock(
+                job_id=job_id,
+                triggered_by="admin",
+                decisions=[
+                    {"country": "荷兰", "decision": "keep_active"}
+                ],
+            )
+        )
+
+    assert exc_info.value.status_code == 409
+    assert exc_info.value.detail["blockerType"] == "review_blockers_present"
+    assert exc_info.value.detail["rules"] == ["SC011"]
+
+
+def test_historical_sales_blocker_requires_country_scope() -> None:
+    finding = {
+        "severity": "blocker",
+        "scope": "dataset",
+        "ruleId": "SC011",
+        "target": "荷兰",
+        "metrics": {
+            "reason": "historical_sales_changed",
+            "countryMismatchCount": 1,
+        },
+    }
+
+    assert (
+        jato_monthly_update_service
+        ._historical_sales_changed_blocker_country_key(finding)
+        is None
+    )
 
 
 def test_resolved_report_preserves_affected_country_and_rejects_tampering() -> None:
@@ -1746,6 +2232,137 @@ def test_approval_binds_resolved_decisions_and_rejects_stale_resolution(
     ]
 
 
+def test_approval_requires_exact_passed_keep_active_validation(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    _project_root, _job_root = _configure_project(tmp_path, monkeypatch)
+    job_id = "jato-resolution-keep-active-approval"
+    country_reports = [
+        {
+            "country": "荷兰",
+            "monthlyTotalsStable": False,
+            "decisionRequired": True,
+            "allowedDecisions": ["keep_active"],
+        }
+    ]
+    report_fingerprint = (
+        jato_monthly_update_service
+        ._historical_reclassification_report_fingerprint(
+            country_reports
+        )
+    )
+    jato_monthly_update_service._persist_job_state(
+        {
+            "jobId": job_id,
+            "status": "success",
+            "phase": "completed",
+            "artifacts": {},
+            "activeBaseFingerprint": "a" * 64,
+            "historicalReclassificationResolution": {
+                "status": "resolved",
+                "reportFingerprint": report_fingerprint,
+                "resolvedCandidateFingerprint": "b" * 64,
+                "decisions": [
+                    {"country": "荷兰", "decision": "keep_active"}
+                ],
+                "report": {
+                    "status": "decision_required",
+                    "countries": country_reports,
+                    "reportFingerprint": report_fingerprint,
+                },
+            },
+        }
+    )
+    review_report: dict[str, object] = {
+        "status": "resolved",
+        "reportFingerprint": report_fingerprint,
+        "countries": country_reports,
+    }
+    monkeypatch.setattr(
+        jato_monthly_update_service,
+        "_active_dataset_version",
+        lambda: "a" * 64,
+    )
+    monkeypatch.setattr(
+        jato_monthly_update_service,
+        "get_jato_monthly_update_review",
+        lambda _job_id: {
+            "candidateFingerprint": "b" * 64,
+            "reviewFindings": [],
+            "historicalReclassificationReport": review_report,
+        },
+    )
+    invalid_validations: list[object] = [
+        None,
+        [
+            {
+                "country": "荷兰",
+                "decision": "keep_active",
+                "status": "fail",
+            }
+        ],
+        [
+            {
+                "country": "荷兰",
+                "decision": "keep_active",
+                "status": "pass",
+            },
+            {
+                "country": "荷兰",
+                "decision": "keep_active",
+                "status": "pass",
+            },
+        ],
+        [
+            {
+                "country": "荷兰",
+                "decision": "keep_active",
+                "status": "pass",
+            },
+            {
+                "country": "德国",
+                "decision": "keep_active",
+                "status": "pass",
+            },
+        ],
+    ]
+    for validation in invalid_validations:
+        if validation is None:
+            review_report.pop("resolutionValidation", None)
+        else:
+            review_report["resolutionValidation"] = validation
+        with pytest.raises(HTTPException) as exc_info:
+            jato_monthly_update_service.approve_jato_monthly_update_review(
+                job_id=job_id,
+                triggered_by="admin",
+                decision="approve",
+            )
+        assert (
+            exc_info.value.detail["blockerType"]
+            == "historical_keep_active_validation_failed"
+        )
+
+    review_report["resolutionValidation"] = [
+        {
+            "country": "荷兰",
+            "decision": "keep_active",
+            "status": "pass",
+        }
+    ]
+    approved = jato_monthly_update_service.approve_jato_monthly_update_review(
+        job_id=job_id,
+        triggered_by="admin",
+        decision="approve",
+    )
+    assert (
+        approved["reviewApproval"]["historicalReclassification"][
+            "decisions"
+        ]
+        == [{"country": "荷兰", "decision": "keep_active"}]
+    )
+
+
 def test_streaming_smart_merge_applies_keep_active_and_proves_untouched(
     tmp_path: Path,
 ) -> None:
@@ -1777,7 +2394,7 @@ def test_streaming_smart_merge_applies_keep_active_and_proves_untouched(
                 "Model": "MODEL",
                 "Version name": "New",
                 "New dimension": "latest",
-                "2026 Jan": 10,
+                "2026 Jan": 99,
                 "2026 Feb": 12,
             }
         ]
@@ -1798,6 +2415,20 @@ def test_streaming_smart_merge_applies_keep_active_and_proves_untouched(
     germany = merged.loc[merged["Country"] == "Germany"]
     assert czechia["2026 Jan"].sum() == 10
     assert czechia["2026 Feb"].sum() == 12
+    assert (
+        czechia.loc[
+            czechia["Version name"] == "Old",
+            "2026 Jan",
+        ].sum()
+        == 10
+    )
+    assert (
+        czechia.loc[
+            czechia["Version name"] == "New",
+            "2026 Feb",
+        ].sum()
+        == 12
+    )
     assert germany["2026 Jan"].sum() == 20
     assert germany["New dimension"].isna().all()
     assert (
@@ -1811,6 +2442,285 @@ def test_streaming_smart_merge_applies_keep_active_and_proves_untouched(
             "candidateOnlyColumnsNull"
         ]
         is True
+    )
+    assert (
+        jato_monthly_update_service
+        ._find_publish_historical_sales_changes(
+            active_parquet_path=active_path,
+            candidate_parquet_path=candidate_path,
+        )
+        == []
+    )
+    assert (
+        jato_monthly_update_service
+        ._find_publish_historical_configuration_changes(
+            active_parquet_path=active_path,
+            candidate_parquet_path=candidate_path,
+        )
+        == []
+    )
+
+
+def test_resolved_keep_active_review_blocks_remaining_dimension_drift(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    project_root, _job_root = _configure_project(tmp_path, monkeypatch)
+    active_path = (
+        project_root / "04_Processed_data" / "jato_full_archive.parquet"
+    )
+    active_path.parent.mkdir(parents=True, exist_ok=True)
+    pd.DataFrame(
+        [
+            {
+                "Country": "Czechia",
+                "Make": "BRAND",
+                "Model": "MODEL",
+                "Body type": "Sedan",
+                "2026 Jan": 10,
+            }
+        ]
+    ).to_parquet(active_path, index=False)
+    candidate_path = project_root / "candidate.parquet"
+    pd.DataFrame(
+        [
+            {
+                "Country": "Czechia",
+                "Make": "BRAND",
+                "Model": "MODEL",
+                "Body type": "SUV",
+                "2026 Jan": 10,
+                "2026 Feb": 2,
+            }
+        ]
+    ).to_parquet(candidate_path, index=False)
+    (project_root / "manifest.json").write_text("{}", encoding="utf-8")
+    (project_root / "refresh.json").write_text("{}", encoding="utf-8")
+    country_reports = [
+        {
+            "country": "Czechia",
+            "monthlyTotalsStable": True,
+            "decisionRequired": True,
+            "allowedDecisions": ["use_latest", "keep_active"],
+        }
+    ]
+    report_fingerprint = (
+        jato_monthly_update_service
+        ._historical_reclassification_report_fingerprint(
+            country_reports
+        )
+    )
+    payload = {
+        "jobId": "jato-keep-active-validation",
+        "country": "Czechia",
+        "artifacts": {
+            "stagingOutputPath": "candidate.parquet",
+            "manifestPath": "manifest.json",
+            "refreshReportPath": "refresh.json",
+            "candidateScope": "target_country_partition_only",
+            "untouchedPartitionCheck": {"status": "pass"},
+        },
+        "historicalReclassificationResolution": {
+            "status": "resolved",
+            "reportFingerprint": report_fingerprint,
+            "decisions": [
+                {"country": "Czechia", "decision": "keep_active"}
+            ],
+            "report": {
+                "status": "decision_required",
+                "countries": country_reports,
+                "reportFingerprint": report_fingerprint,
+            },
+        },
+    }
+
+    review = jato_monthly_update_service._build_single_country_review(
+        payload
+    )
+
+    blocker = next(
+        finding
+        for finding in review["reviewFindings"]
+        if finding["ruleId"] == "SC011"
+    )
+    assert blocker["severity"] == "blocker"
+    assert (
+        blocker["metrics"]["blockerType"]
+        == "historical_keep_active_validation_failed"
+    )
+
+
+def test_full_review_drops_legacy_sales_blocker_only_after_keep_active_pass(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    project_root, _job_root = _configure_project(tmp_path, monkeypatch)
+    processed_root = project_root / "04_Processed_data"
+    active_path = processed_root / "jato_full_archive.parquet"
+    active_path.parent.mkdir(parents=True, exist_ok=True)
+    pd.DataFrame(
+        [
+            {
+                "Country": "Netherlands",
+                "Make": "BRAND",
+                "Model": "MODEL",
+                "Body type": "Sedan",
+                "2026 Jan": 10,
+            }
+        ]
+    ).to_parquet(active_path, index=False)
+    staging = processed_root / "staging" / "review"
+    staging.mkdir(parents=True, exist_ok=True)
+    candidate_path = staging / "candidate.parquet"
+    pd.DataFrame(
+        [
+            {
+                "Country": "Netherlands",
+                "Make": "BRAND",
+                "Model": "MODEL",
+                "Body type": "Sedan",
+                "2026 Jan": 10,
+                "2026 Feb": 0,
+            },
+            {
+                "Country": "Netherlands",
+                "Make": "BRAND",
+                "Model": "MODEL",
+                "Body type": "SUV",
+                "2026 Jan": 0,
+                "2026 Feb": 2,
+            },
+        ]
+    ).to_parquet(candidate_path, index=False)
+    raw_report_path = staging / "raw.json"
+    jato_monthly_update_service._write_json(
+        raw_report_path,
+        {
+            "decisionSuggestion": "reject_input_batch",
+            "reviewFindings": [
+                {
+                    "severity": "blocker",
+                    "scope": "country",
+                    "target": "Netherlands",
+                    "ruleId": "SC011",
+                    "message": "legacy historical sales blocker",
+                    "metrics": {
+                        "reason": "historical_sales_changed",
+                        "countryMismatchCount": 1,
+                    },
+                    "suggestedAction": "reject_input_batch",
+                }
+            ],
+        },
+    )
+    artifact_paths = {
+        "manifestPath": staging / "manifest.json",
+        "fingerprintPath": staging / "fingerprint.json",
+        "refreshReportPath": staging / "refresh.json",
+    }
+    for path in artifact_paths.values():
+        path.write_text("{}", encoding="utf-8")
+    partition_path = staging / "partition"
+    summaries_path = staging / "summaries"
+    partition_path.mkdir()
+    summaries_path.mkdir()
+    (partition_path / "part.txt").write_text("partition", encoding="utf-8")
+    (summaries_path / "summary.txt").write_text("summary", encoding="utf-8")
+    country_reports = [
+        {
+            "country": "Netherlands",
+            "monthlyTotalsStable": False,
+            "decisionRequired": True,
+            "allowedDecisions": ["keep_active"],
+        }
+    ]
+    report_fingerprint = (
+        jato_monthly_update_service
+        ._historical_reclassification_report_fingerprint(
+            country_reports
+        )
+    )
+    job_id = "jato-full-review-legacy-blocker"
+    jato_monthly_update_service._persist_job_state(
+        {
+            "jobId": job_id,
+            "status": "success",
+            "phase": "completed",
+            "artifacts": {
+                "stagingOutputPath": (
+                    jato_monthly_update_service._relative_to_project(
+                        candidate_path
+                    )
+                ),
+                "rawCompareReportPath": (
+                    jato_monthly_update_service._relative_to_project(
+                        raw_report_path
+                    )
+                ),
+                "candidateScope": "full_smart_merge",
+                "manifestPath": (
+                    jato_monthly_update_service._relative_to_project(
+                        artifact_paths["manifestPath"]
+                    )
+                ),
+                "partitionOutputPath": (
+                    jato_monthly_update_service._relative_to_project(
+                        partition_path
+                    )
+                ),
+                "fingerprintPath": (
+                    jato_monthly_update_service._relative_to_project(
+                        artifact_paths["fingerprintPath"]
+                    )
+                ),
+                "refreshReportPath": (
+                    jato_monthly_update_service._relative_to_project(
+                        artifact_paths["refreshReportPath"]
+                    )
+                ),
+                "summariesOutputPath": (
+                    jato_monthly_update_service._relative_to_project(
+                        summaries_path
+                    )
+                ),
+            },
+            "historicalReclassificationResolution": {
+                "status": "resolved",
+                "reportFingerprint": report_fingerprint,
+                "decisions": [
+                    {
+                        "country": "Netherlands",
+                        "decision": "keep_active",
+                    }
+                ],
+                "report": {
+                    "status": "decision_required",
+                    "countries": country_reports,
+                    "reportFingerprint": report_fingerprint,
+                },
+            },
+        }
+    )
+
+    review = jato_monthly_update_service.get_jato_monthly_update_review(
+        job_id,
+        allow_build=True,
+    )
+
+    assert review["historicalReclassificationReport"][
+        "resolutionValidation"
+    ] == [
+        {
+            "country": "Netherlands",
+            "decision": "keep_active",
+            "status": "pass",
+            "currentStabilityStatus": "pass",
+            "reason": None,
+        }
+    ]
+    assert not any(
+        finding["severity"] == "blocker"
+        for finding in review["reviewFindings"]
     )
 
 

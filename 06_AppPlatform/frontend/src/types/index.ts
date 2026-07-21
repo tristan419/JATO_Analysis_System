@@ -2582,6 +2582,7 @@ export interface JatoHistoricalReclassificationExactChange {
 export interface JatoHistoricalReclassificationCountryReport {
   country: string;
   decision?: JatoHistoricalReclassificationDecision | null;
+  allowedDecisions: JatoHistoricalReclassificationDecision[];
   comparedThrough: string | null;
   historicalMonthCount: number;
   jointMismatchCellCount: number;
@@ -2599,9 +2600,18 @@ export interface JatoHistoricalReclassificationCountryReport {
   };
 }
 
+export interface JatoHistoricalReclassificationResolutionValidation {
+  country: string;
+  decision: "keep_active";
+  status: "pass" | "fail";
+  currentStabilityStatus: string | null;
+  reason: string | null;
+}
+
 export interface JatoHistoricalReclassificationReport {
   status: "not_required" | "decision_required" | "resolved";
   countries: JatoHistoricalReclassificationCountryReport[];
+  resolutionValidation: JatoHistoricalReclassificationResolutionValidation[];
 }
 
 export interface JatoMonthlyUpdateReviewBundle {

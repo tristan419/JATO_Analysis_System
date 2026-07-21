@@ -85,6 +85,7 @@ function makeCountryReport(
   country: string,
   mismatchCellCount: number,
   decision: JatoHistoricalReclassificationDecision | null = null,
+  allowedDecisions: JatoHistoricalReclassificationDecision[] = ["use_latest", "keep_active"],
 ) {
   return {
     country,
@@ -95,6 +96,7 @@ function makeCountryReport(
     jointMovedSales: country === "捷克" ? 8035 : 6207,
     monthlyTotalsStable: true,
     decisionRequired: true,
+    allowedDecisions,
     dimensionSummaries: [{
       dimension: "Powertrain",
       mismatchCellCount: 3,
@@ -157,6 +159,15 @@ function makeReviewBundle(
         makeCountryReport("捷克", 5217, status === "resolved" ? "use_latest" : null),
         makeCountryReport("丹麦", 1101, status === "resolved" ? "keep_active" : null),
       ],
+      resolutionValidation: status === "resolved"
+        ? [{
+          country: "丹麦",
+          decision: "keep_active",
+          status: "pass",
+          currentStabilityStatus: "pass",
+          reason: null,
+        }]
+        : [],
     },
   };
 }
@@ -181,6 +192,50 @@ describe("JATO historical reclassification review interaction", () => {
       }),
     });
     vi.spyOn(window, "confirm").mockReturnValue(true);
+  });
+
+  it("only offers keep_active for unstable historical sales and submits that allowed choice", async () => {
+    vi.mocked(api.getJatoMonthlyUpdateReview).mockResolvedValue({
+      item: {
+        ...makeReviewBundle(),
+        historicalReclassificationReport: {
+          status: "decision_required",
+          countries: [
+            makeCountryReport("捷克", 5217),
+            {
+              ...makeCountryReport("丹麦", 1101, null, ["keep_active"]),
+              monthlyTotalsStable: false,
+            },
+          ],
+          resolutionValidation: [],
+        },
+      },
+    });
+
+    await act(async () => {
+      render(<JatoMonthlyUpdatePage />);
+    });
+    fireEvent.click(await screen.findByRole("button", { name: "Review Candidate" }));
+
+    expect(await screen.findByText("use_latest 已锁定；active latest 之后仍取上传。")).toBeTruthy();
+    expect(screen.getAllByRole("radio", { name: /采用最新 washed 分类/ })).toHaveLength(1);
+    const keepActiveRadios = screen.getAllByRole("radio", { name: /保留当前 active 历史/ });
+    expect(keepActiveRadios).toHaveLength(2);
+    expect(keepActiveRadios.every((radio) => !(radio as HTMLInputElement).checked)).toBe(true);
+
+    fireEvent.click(keepActiveRadios[0]);
+    expect((screen.getByRole("button", { name: "还需选择 1 个国家" }) as HTMLButtonElement).disabled)
+      .toBe(true);
+    fireEvent.click(keepActiveRadios[1]);
+    fireEvent.click(screen.getByRole("button", { name: "应用选择并生成完整 Candidate" }));
+
+    expect(api.resolveJatoMonthlyUpdateHistoricalReclassification).toHaveBeenCalledWith(
+      "jato-review-1",
+      [
+        { country: "捷克", decision: "keep_active" },
+        { country: "丹麦", decision: "keep_active" },
+      ],
+    );
   });
 
   afterEach(() => {
@@ -292,7 +347,7 @@ describe("JATO historical reclassification review interaction", () => {
     expect(await screen.findByRole("button", { name: "Approve Review" })).toBeTruthy();
     expect(screen.getByText("2/2")).toBeTruthy();
     expect(screen.getByText(/已应用选择：采用最新 washed 分类/)).toBeTruthy();
-    expect(screen.getByText(/已应用选择：保留当前 active 历史/)).toBeTruthy();
+    expect(screen.getByText(/最终 Candidate 复核通过：已保留当前 active 历史/)).toBeTruthy();
     expect(screen.queryByRole("button", { name: /应用选择并生成完整 Candidate/ })).toBeNull();
     const publishBeforeApproval = screen.getByRole("button", {
       name: "先批准 Review 再 Publish",
@@ -314,6 +369,37 @@ describe("JATO historical reclassification review interaction", () => {
       name: "Publish Candidate",
     });
     expect((publishAfterApproval as HTMLButtonElement).disabled).toBe(false);
+  });
+
+  it("keeps approval locked when resolved keep_active verification is missing", async () => {
+    const fullSmartMergeJob = makeJob({
+      jobType: "partial_country",
+      artifacts: {
+        ...makeArtifacts("full_smart_merge"),
+        rawCompareReportPath: null,
+        reviewBundlePath: "04_Processed_data/reviews/jato-review-1/review_bundle.json",
+      },
+    });
+    const unresolvedVerification = makeReviewBundle("resolved");
+    unresolvedVerification.historicalReclassificationReport.resolutionValidation = [];
+    vi.mocked(api.listJatoMonthlyUpdateJobs).mockResolvedValue({
+      rows: 1,
+      items: [fullSmartMergeJob],
+    });
+    vi.mocked(api.getJatoMonthlyUpdateJob).mockResolvedValue({ item: fullSmartMergeJob });
+    vi.mocked(api.getJatoMonthlyUpdateReview).mockResolvedValue({
+      item: unresolvedVerification,
+    });
+
+    await act(async () => {
+      render(<JatoMonthlyUpdatePage />);
+    });
+    fireEvent.click(await screen.findByRole("button", { name: "Review Candidate" }));
+
+    expect(await screen.findAllByText(/最终 Candidate 历史复核缺失或失败/)).toHaveLength(2);
+    expect((screen.getByRole("button", { name: "Approve Review" }) as HTMLButtonElement).disabled)
+      .toBe(true);
+    expect(screen.getByText(/当前不能批准 Publish/)).toBeTruthy();
   });
 
   it("keeps a legacy partial job fail-closed when candidateScope is missing", async () => {

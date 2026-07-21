@@ -21,10 +21,12 @@ import type {
   HeroProductPriceOverridePayload,
   HeroProductSpecOverridePayload,
   JatoHistoricalReclassificationCountryReport,
+  JatoHistoricalReclassificationDecision,
   JatoHistoricalReclassificationDimensionSummary,
   JatoHistoricalReclassificationExactChange,
   JatoHistoricalReclassificationMonthlyTransfer,
   JatoHistoricalReclassificationReport,
+  JatoHistoricalReclassificationResolutionValidation,
   JatoHistoricalReclassificationValueSummary,
   JatoHistoricalReclassificationDecisionInput,
   JatoMonthlyUpdateCleanupResult,
@@ -1836,17 +1838,41 @@ function mapJatoHistoricalReclassificationExactChange(
   };
 }
 
+function mapJatoHistoricalReclassificationAllowedDecisions(
+  raw: unknown
+): JatoHistoricalReclassificationDecision[] {
+  if (!Array.isArray(raw)) {
+    return [];
+  }
+  const decisions: JatoHistoricalReclassificationDecision[] = [];
+  for (const value of raw) {
+    if (
+      (value !== "use_latest" && value !== "keep_active")
+      || decisions.includes(value)
+    ) {
+      return [];
+    }
+    decisions.push(value);
+  }
+  return decisions;
+}
+
 function mapJatoHistoricalReclassificationCountryReport(
   raw: Record<string, unknown>
 ): JatoHistoricalReclassificationCountryReport {
   const truncation = raw.truncation && typeof raw.truncation === "object"
     ? raw.truncation as Record<string, unknown>
     : {};
+  const allowedDecisions = mapJatoHistoricalReclassificationAllowedDecisions(
+    raw.allowedDecisions
+  );
+  const decision = raw.decision === "use_latest" || raw.decision === "keep_active"
+    ? raw.decision
+    : null;
   return {
     country: String(raw.country ?? ""),
-    decision: raw.decision === "use_latest" || raw.decision === "keep_active"
-      ? raw.decision
-      : null,
+    decision: decision && allowedDecisions.includes(decision) ? decision : null,
+    allowedDecisions,
     comparedThrough: raw.comparedThrough === undefined || raw.comparedThrough === null
       ? null
       : String(raw.comparedThrough),
@@ -1878,16 +1904,86 @@ function mapJatoHistoricalReclassificationCountryReport(
 function mapJatoHistoricalReclassificationReport(
   raw: Record<string, unknown>
 ): JatoHistoricalReclassificationReport {
-  const status = raw.status === "decision_required" || raw.status === "resolved"
-    ? raw.status
-    : "not_required";
+  if (
+    raw.status !== "not_required"
+    && raw.status !== "decision_required"
+    && raw.status !== "resolved"
+  ) {
+    throw new Error("JATO Review 的历史重分类状态无效，已拒绝继续。");
+  }
+  const status = raw.status;
+  const rawCountries = raw.countries;
+  const countriesValid = Array.isArray(rawCountries) && rawCountries.every(
+    (item) => Boolean(item) && typeof item === "object" && !Array.isArray(item)
+  );
+  if (
+    !countriesValid
+    || (
+      status !== "not_required"
+      && (!Array.isArray(rawCountries) || rawCountries.length === 0)
+    )
+  ) {
+    throw new Error("JATO Review 的历史重分类逐国报告无效，已拒绝继续。");
+  }
+  const countries = Array.isArray(rawCountries)
+    ? rawCountries.map((item) => (
+      mapJatoHistoricalReclassificationCountryReport(item as Record<string, unknown>)
+    ))
+    : [];
+  const countryKeys = countries.map((country) => country.country.trim().toLocaleLowerCase());
+  const requiredCountryCount = countries.filter(
+    (country) => country.decisionRequired
+  ).length;
+  if (
+    countryKeys.some((country) => !country)
+    || new Set(countryKeys).size !== countryKeys.length
+    || (status === "not_required" && requiredCountryCount > 0)
+    || (status !== "not_required" && requiredCountryCount === 0)
+  ) {
+    throw new Error("JATO Review 的历史重分类状态与逐国范围不一致，已拒绝继续。");
+  }
+  const rawResolutionValidation = raw.resolutionValidation;
+  const resolutionValidation: JatoHistoricalReclassificationResolutionValidation[] = [];
+  let resolutionValidationValid = (
+    rawResolutionValidation === undefined
+    || Array.isArray(rawResolutionValidation)
+  );
+  for (const item of Array.isArray(rawResolutionValidation) ? rawResolutionValidation : []) {
+    if (!item || typeof item !== "object") {
+      resolutionValidationValid = false;
+      break;
+    }
+    const record = item as Record<string, unknown>;
+    const country = String(record.country ?? "").trim();
+    if (
+      !country
+      || record.decision !== "keep_active"
+      || (record.status !== "pass" && record.status !== "fail")
+      || resolutionValidation.some((entry) => entry.country === country)
+    ) {
+      resolutionValidationValid = false;
+      break;
+    }
+    resolutionValidation.push({
+      country,
+      decision: "keep_active",
+      status: record.status,
+      currentStabilityStatus: record.currentStabilityStatus === undefined
+        || record.currentStabilityStatus === null
+        ? null
+        : String(record.currentStabilityStatus),
+      reason: record.reason === undefined || record.reason === null
+        ? null
+        : String(record.reason),
+    });
+  }
+  if (!resolutionValidationValid) {
+    throw new Error("JATO Review 的 keep_active 最终复核结构无效，已拒绝继续。");
+  }
   return {
     status,
-    countries: Array.isArray(raw.countries)
-      ? raw.countries.map((item) => (
-        mapJatoHistoricalReclassificationCountryReport(item as Record<string, unknown>)
-      ))
-      : [],
+    countries,
+    resolutionValidation,
   };
 }
 
@@ -1946,14 +2042,18 @@ function mapJatoMonthlyUpdateReviewBundle(
     approval: raw.approval && typeof raw.approval === "object"
       ? mapJatoMonthlyUpdateReviewApproval(raw.approval as Record<string, unknown>)
       : null,
-    historicalReclassificationReport: (
-      raw.historicalReclassificationReport
-      && typeof raw.historicalReclassificationReport === "object"
-    )
-      ? mapJatoHistoricalReclassificationReport(
+    historicalReclassificationReport: (() => {
+      if (
+        !raw.historicalReclassificationReport
+        || typeof raw.historicalReclassificationReport !== "object"
+        || Array.isArray(raw.historicalReclassificationReport)
+      ) {
+        throw new Error("JATO Review 缺少历史重分类报告，已拒绝继续。");
+      }
+      return mapJatoHistoricalReclassificationReport(
         raw.historicalReclassificationReport as Record<string, unknown>
-      )
-      : { status: "not_required", countries: [] },
+      );
+    })(),
   };
 }
 
