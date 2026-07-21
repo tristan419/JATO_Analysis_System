@@ -7,7 +7,8 @@ import { api } from "../../api/client";
 const SHA256_OF_TEST_FILE = "0".repeat(64);
 
 function uploadSession(
-  status: "ready" | "invalid" | "consumed" | "abandoned"
+  status: "ready" | "invalid" | "consumed" | "abandoned",
+  failureCode = "DIGEST_TIMEOUT",
 ) {
   return {
     uploadId: "upload-123",
@@ -24,7 +25,7 @@ function uploadSession(
     fileSha256: status === "invalid" ? SHA256_OF_TEST_FILE : null,
     failureDigest: status === "invalid"
       ? {
-        code: "DIGEST_TIMEOUT",
+        code: failureCode,
         category: "resource",
         phase: "digesting",
         retryable: true,
@@ -132,12 +133,19 @@ describe("JATO monthly update upload job creation", () => {
     expect(localStorage.getItem("jato_monthly_update_upload_session:resume-b")).toBe("another-upload");
   });
 
-  it("retries a timed-out digest without uploading file chunks again", async () => {
+  it.each([
+    "DIGEST_TIMEOUT",
+    "DIGEST_WORKER_LOST",
+    "DIGEST_WORKER_SIGNALLED",
+    "DIGEST_WORKER_EXITED",
+    "DIGEST_RESULT_MISSING",
+    "DIGEST_WORKER_UNAVAILABLE",
+  ])("retries retryable digest failure %s without uploading file chunks again", async (failureCode) => {
     const progressStages: string[] = [];
     const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input);
       if (url.endsWith("/msrp/monthly-update-uploads/initiate")) {
-        return Response.json({ item: uploadSession("invalid") });
+        return Response.json({ item: uploadSession("invalid", failureCode) });
       }
       if (url.endsWith("/msrp/monthly-update-uploads/upload-123/retry-digest")) {
         expect(init?.method).toBe("POST");
@@ -168,8 +176,9 @@ describe("JATO monthly update upload job creation", () => {
     expect(response.item.jobId).toBe("jato-update-recovered");
     expect(progressStages).toContain("retrying");
     expect(fetchMock.mock.calls.filter(([_input, init]) => init?.method === "PUT")).toHaveLength(0);
-    expect(fetchMock.mock.calls.filter(([input]) => (
+    expect(fetchMock.mock.calls.filter(([input, init]) => (
       String(input).endsWith("/msrp/monthly-update-uploads/upload-123/retry-digest")
+      && init?.method === "POST"
     ))).toHaveLength(1);
   });
 

@@ -349,7 +349,7 @@ def test_ready_stale_digest_requeues_same_assembled_file_without_reupload(
     assert refreshing.value.detail["startNewUploadRequired"] is False
     assert launches == [upload_id]
     persisted = jato_monthly_update_service._load_upload_session(upload_id)
-    assert persisted["status"] == "digesting"
+    assert persisted["status"] == "assembling"
     assert persisted["ingestDigest"] is None
     assert persisted["digestPid"] == 4242
     assert persisted["digestAttempts"] == 1

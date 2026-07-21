@@ -649,6 +649,331 @@ def test_concurrent_complete_replay_launches_digest_once(
     assert persisted["digestPid"] == 424242
 
 
+def _persist_supervised_digest_attempt(
+    *,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    upload_id: str,
+    status: str = "digesting",
+) -> tuple[dict[str, Any], Path]:
+    _configure_upload_root(tmp_path, monkeypatch)
+    state = jato_monthly_update_service._prepare_upload_session_state(
+        upload_id=upload_id,
+        filename="JATO-2026.06.xlsx",
+        size_bytes=4,
+        resume_key=f"resume-{upload_id}",
+        triggered_by="tester",
+    )
+    state["status"] = status
+    state["digestPid"] = 424242
+    state["digestProcessIdentity"] = {
+        "startTimeTicks": "123",
+        "cmdlineSha256": "a" * 64,
+    }
+    state["digestLaunchedAt"] = (
+        jato_monthly_update_service._utc_now().isoformat()
+    )
+    state["digestAttempts"] = 1
+    state["digestAttempt"] = (
+        jato_monthly_update_service._new_upload_digest_attempt(
+            upload_id=upload_id,
+            attempt_number=1,
+        )
+    )
+    state["digestAttempt"]["status"] = "running"
+    state["digestAttempt"]["supervisorPid"] = 424242
+    state["digestAttempt"]["supervisorIdentity"] = {
+        "arguments": ["/private/server/path/jato_monthly_worker.py"],
+    }
+    jato_monthly_update_service._persist_upload_session(state)
+    receipt_path = (
+        jato_monthly_update_service._upload_digest_attempt_artifact_path(
+            state,
+            "receiptPath",
+        )
+    )
+    assert receipt_path is not None
+    return state, receipt_path
+
+
+def _write_finished_digest_receipt(
+    *,
+    state: dict[str, Any],
+    receipt_path: Path,
+    return_code: int,
+    termination_reason: str | None = None,
+    peak_rss_bytes: int = 128 * 1024 * 1024,
+) -> None:
+    attempt = state["digestAttempt"]
+    jato_monthly_update_service._write_json(
+        receipt_path,
+        {
+            "schemaVersion": 1,
+            "status": "finished",
+            "uploadId": state["uploadId"],
+            "attemptId": attempt["attemptId"],
+            "supervisorPid": state["digestPid"],
+            "workerPid": 434343,
+            "returnCode": return_code,
+            "signalNumber": abs(return_code) if return_code < 0 else None,
+            "signalName": "SIGKILL" if return_code == -9 else None,
+            "terminationReason": termination_reason,
+            "elapsedSeconds": 3.5,
+            "peakRssBytes": peak_rss_bytes,
+            "rssWarningBytes": 1024 * 1024 * 1024,
+            "rssLimitBytes": 1536 * 1024 * 1024,
+            "oomKillDelta": 0,
+            "cgroupEventDelta": {"oom": 0, "oom_kill": 0},
+            "supervisorError": None,
+            "logPath": "/must/not/leak/absolute/path.log",
+        },
+    )
+
+
+def test_get_upload_reconciles_sigkill_receipt(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    state, receipt_path = _persist_supervised_digest_attempt(
+        tmp_path=tmp_path,
+        monkeypatch=monkeypatch,
+        upload_id="upload-receipt-sigkill",
+    )
+    _write_finished_digest_receipt(
+        state=state,
+        receipt_path=receipt_path,
+        return_code=-9,
+    )
+
+    result = jato_monthly_update_service.get_jato_monthly_update_upload(
+        state["uploadId"],
+        requested_by="tester",
+        requested_role="editor",
+    )
+
+    assert result["status"] == "invalid"
+    assert result["failureDigest"]["code"] == "DIGEST_WORKER_SIGNALLED"
+    assert result["failureDigest"]["phase"] == "digesting"
+    detail = result["failureDigest"]["technicalDetail"]
+    assert detail["exitReceipt"]["returnCode"] == -9
+    assert detail["exitReceipt"]["signalName"] == "SIGKILL"
+    assert detail["exitReceipt"]["logPath"] == state["digestAttempt"]["logPath"]
+    assert detail["digestProcessIdentity"] == state["digestProcessIdentity"]
+    assert result["digestPid"] is None
+    assert "supervisorIdentity" not in result["digestAttempt"]
+    assert "logPath" not in result["digestAttempt"]
+    assert "receiptPath" not in result["digestAttempt"]
+
+
+def test_get_upload_reconciles_actual_rss_limit_receipt(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    state, receipt_path = _persist_supervised_digest_attempt(
+        tmp_path=tmp_path,
+        monkeypatch=monkeypatch,
+        upload_id="upload-receipt-memory-limit",
+    )
+    _write_finished_digest_receipt(
+        state=state,
+        receipt_path=receipt_path,
+        return_code=-15,
+        termination_reason="rss_limit",
+        peak_rss_bytes=1600 * 1024 * 1024,
+    )
+
+    result = jato_monthly_update_service.get_jato_monthly_update_upload(
+        state["uploadId"],
+        requested_by="tester",
+        requested_role="editor",
+    )
+
+    assert result["status"] == "invalid"
+    assert result["failureDigest"]["code"] == "DIGEST_MEMORY_LIMIT"
+    assert result["failureDigest"]["retryable"] is False
+    receipt = result["failureDigest"]["technicalDetail"]["exitReceipt"]
+    assert receipt["peakRssBytes"] == 1600 * 1024 * 1024
+    assert receipt["rssLimitBytes"] == 1536 * 1024 * 1024
+
+
+def test_get_upload_reconciles_zero_exit_without_result(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    state, receipt_path = _persist_supervised_digest_attempt(
+        tmp_path=tmp_path,
+        monkeypatch=monkeypatch,
+        upload_id="upload-receipt-no-result",
+    )
+    _write_finished_digest_receipt(
+        state=state,
+        receipt_path=receipt_path,
+        return_code=0,
+    )
+
+    result = jato_monthly_update_service.get_jato_monthly_update_upload(
+        state["uploadId"],
+        requested_by="tester",
+        requested_role="editor",
+    )
+
+    assert result["status"] == "invalid"
+    assert result["failureDigest"]["code"] == "DIGEST_RESULT_MISSING"
+    assert result["failureDigest"]["retryable"] is True
+
+
+def test_finished_receipt_does_not_misclassify_ready_digest(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    state, receipt_path = _persist_supervised_digest_attempt(
+        tmp_path=tmp_path,
+        monkeypatch=monkeypatch,
+        upload_id="upload-receipt-ready",
+        status="ready",
+    )
+    state["completedAt"] = jato_monthly_update_service._utc_now().isoformat()
+    state["ingestDigest"] = {"status": "ready", "blockers": []}
+    jato_monthly_update_service._persist_upload_session(state)
+    _write_finished_digest_receipt(
+        state=state,
+        receipt_path=receipt_path,
+        return_code=0,
+    )
+
+    result = jato_monthly_update_service.get_jato_monthly_update_upload(
+        state["uploadId"],
+        requested_by="tester",
+        requested_role="editor",
+    )
+
+    assert result["status"] == "ready"
+    assert result["failureDigest"] is None
+    assert result["ingestDigest"] == {"status": "ready", "blockers": []}
+    assert result["digestAttempt"]["exit"]["returnCode"] == 0
+    assert result["digestPid"] is None
+
+
+def test_mismatched_attempt_receipt_is_ignored(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    state, receipt_path = _persist_supervised_digest_attempt(
+        tmp_path=tmp_path,
+        monkeypatch=monkeypatch,
+        upload_id="upload-receipt-attempt-mismatch",
+    )
+    _write_finished_digest_receipt(
+        state=state,
+        receipt_path=receipt_path,
+        return_code=-9,
+    )
+    receipt = jato_monthly_update_service._read_json(receipt_path)
+    receipt["attemptId"] = "old-attempt"
+    jato_monthly_update_service._write_json(receipt_path, receipt)
+
+    with jato_monthly_update_service._exclusive_file_lock(
+        jato_monthly_update_service._upload_state_lock_path(state["uploadId"])
+    ) as acquired:
+        assert acquired
+        reconciled = (
+            jato_monthly_update_service._reconcile_digest_attempt_receipt_locked(
+                jato_monthly_update_service._load_upload_session(
+                    state["uploadId"]
+                )
+            )
+        )
+
+    assert reconciled["status"] == "digesting"
+    assert reconciled["digestPid"] == 424242
+    assert reconciled["failureDigest"] is None
+    assert reconciled["digestAttempt"]["exit"] is None
+
+
+def test_missing_supervisor_with_live_child_keeps_resource_quarantine(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    state, _receipt_path = _persist_supervised_digest_attempt(
+        tmp_path=tmp_path,
+        monkeypatch=monkeypatch,
+        upload_id="upload-supervisor-missing-child-live",
+    )
+    state["digestAttempt"]["supervisorMissingAt"] = (
+        jato_monthly_update_service._utc_now()
+        - timedelta(
+            seconds=(
+                jato_monthly_update_service.DIGEST_EXIT_RECEIPT_GRACE_SECONDS
+                + 1
+            )
+        )
+    ).isoformat()
+    jato_monthly_update_service._persist_upload_session(state)
+    monkeypatch.setattr(
+        jato_monthly_update_service,
+        "_process_exists",
+        lambda _pid: False,
+    )
+    lock_ready = threading.Event()
+    release_lock = threading.Event()
+
+    def hold_digest_lock() -> None:
+        with jato_monthly_update_service._exclusive_file_lock(
+            jato_monthly_update_service._upload_digest_lock_path(
+                state["uploadId"]
+            )
+        ) as acquired:
+            assert acquired
+            lock_ready.set()
+            assert release_lock.wait(timeout=3)
+
+    holder = threading.Thread(target=hold_digest_lock)
+    holder.start()
+    assert lock_ready.wait(timeout=3)
+    try:
+        result = jato_monthly_update_service.get_jato_monthly_update_upload(
+            state["uploadId"],
+            requested_by="tester",
+            requested_role="editor",
+        )
+    finally:
+        release_lock.set()
+        holder.join(timeout=3)
+
+    assert result["status"] == "digesting"
+    assert result["failureDigest"]["code"] == "RESOURCE_QUARANTINED"
+    assert result["failureDigest"]["retryable"] is False
+    assert result["failureDigest"]["technicalDetail"][
+        "digestLockHeld"
+    ] is True
+
+
+def test_digest_child_refuses_stale_attempt_before_any_write(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    state, _receipt_path = _persist_supervised_digest_attempt(
+        tmp_path=tmp_path,
+        monkeypatch=monkeypatch,
+        upload_id="upload-stale-child-attempt",
+    )
+    monkeypatch.setenv("APP_JATO_DIGEST_ATTEMPT_ID", "old-attempt")
+
+    result = jato_monthly_update_service.run_jato_monthly_update_upload_digest(
+        state["uploadId"]
+    )
+
+    assert result["status"] == "digesting"
+    persisted = jato_monthly_update_service._load_upload_session(
+        state["uploadId"]
+    )
+    assert persisted["digestPid"] == 424242
+    assert persisted["digestWorkerPid"] is None
+    assert persisted["digestAttempt"]["attemptId"] == state["digestAttempt"][
+        "attemptId"
+    ]
+
+
 def test_worker_drain_waits_when_cycle_lock_is_held(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

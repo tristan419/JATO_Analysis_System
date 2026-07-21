@@ -447,6 +447,12 @@ def test_chunked_monthly_update_upload_routes_create_job(
     )
     assert complete_response.status_code == 200
     assert complete_response.json()["item"]["status"] == "assembling"
+    monkeypatch.setenv(
+        "APP_JATO_DIGEST_ATTEMPT_ID",
+        jato_monthly_update_service._load_upload_session(upload_id)[
+            "digestAttempt"
+        ]["attemptId"],
+    )
 
     digested = jato_monthly_update_service.run_jato_monthly_update_upload_digest(
         upload_id
