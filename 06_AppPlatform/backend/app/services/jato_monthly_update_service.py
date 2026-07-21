@@ -3703,6 +3703,8 @@ def _find_publish_historical_sales_changes(
 
 def _find_candidate_duplicate_configurations(
     candidate_parquet_path: Path,
+    *,
+    countries: list[str] | None = None,
 ) -> list[dict[str, Any]]:
     """Find exact static configuration duplicates one country at a time.
 
@@ -3714,8 +3716,18 @@ def _find_candidate_duplicate_configurations(
     candidate_latest = _collect_dataset_country_latest_months(
         candidate_parquet_path
     )
+    requested_country_keys = {
+        country.strip().casefold()
+        for country in (countries or [])
+        if country.strip()
+    }
     duplicates: list[dict[str, Any]] = []
     for country in candidate_latest:
+        if (
+            requested_country_keys
+            and country.strip().casefold() not in requested_country_keys
+        ):
+            continue
         frame = _load_parquet_country_subset(
             candidate_parquet_path,
             country,
@@ -3738,10 +3750,11 @@ def _find_candidate_duplicate_configurations(
                     "sourceFeedback": None,
                 },
             )
-        duplicate_mask = frame.duplicated(
-            subset=key_columns,
-            keep=False,
+        normalized_keys = _normalized_static_key_frame(
+            frame,
+            key_columns,
         )
+        duplicate_mask = normalized_keys.duplicated(keep=False)
         duplicate_rows = int(duplicate_mask.sum())
         if duplicate_rows <= 0:
             continue
@@ -3765,21 +3778,597 @@ def _find_candidate_duplicate_configurations(
             .drop_duplicates()
             .head(10)
         )
+        duplicate_keys = normalized_keys.loc[duplicate_mask]
+        duplicate_keys = duplicate_keys.sort_values(
+            by=list(duplicate_keys.columns),
+            kind="stable",
+        ).reset_index(drop=True)
+        duplicate_fingerprint = hashlib.sha256()
+        duplicate_fingerprint.update(
+            json.dumps(
+                key_columns,
+                ensure_ascii=False,
+                separators=(",", ":"),
+            ).encode("utf-8")
+        )
+        duplicate_fingerprint.update(b"\n")
+        duplicate_fingerprint.update(
+            duplicate_keys.to_csv(
+                index=False,
+                lineterminator="\n",
+            ).encode("utf-8")
+        )
         duplicates.append(
             {
                 "country": country,
                 "duplicateRows": duplicate_rows,
                 "duplicateGroupCount": int(
-                    frame.loc[duplicate_mask]
-                    .groupby(key_columns, dropna=False, sort=False)
-                    .ngroups
+                    duplicate_keys.drop_duplicates().shape[0]
                 ),
                 "keyColumnCount": len(key_columns),
+                "duplicateFingerprint": duplicate_fingerprint.hexdigest(),
                 "samples": sample_frame.to_dict(orient="records"),
             }
         )
         del frame
     return duplicates
+
+
+def _publish_exact_content_value_series(
+    series: pd.Series,
+) -> pd.Series:
+    """Canonicalize storage dtypes while preserving raw string labels."""
+    if pd.api.types.is_numeric_dtype(series.dtype):
+        numbers = pd.to_numeric(series, errors="coerce")
+        return numbers.map(
+            lambda value: (
+                "null:"
+                if pd.isna(value)
+                else f"number:{format(float(value), '.17g')}"
+            )
+        )
+    return series.map(
+        lambda value: (
+            "null:"
+            if pd.isna(value)
+            else f"string:{value}"
+        )
+    )
+
+
+def _canonical_country_content_fingerprint(
+    frame: pd.DataFrame,
+    columns: list[str],
+) -> str:
+    """Hash the normalized row multiset without making row order significant."""
+    canonical = pd.DataFrame(
+        {
+            column: _publish_exact_content_value_series(frame[column])
+            for column in columns
+        }
+    )
+    row_digests = sorted(
+        hashlib.sha256(
+            json.dumps(
+                row,
+                ensure_ascii=False,
+                separators=(",", ":"),
+            ).encode("utf-8")
+        ).digest()
+        for row in canonical.itertuples(index=False, name=None)
+    )
+    fingerprint = hashlib.sha256()
+    fingerprint.update(
+        json.dumps(
+            columns,
+            ensure_ascii=False,
+            separators=(",", ":"),
+        ).encode("utf-8")
+    )
+    fingerprint.update(b"\n")
+    for row_digest in row_digests:
+        fingerprint.update(row_digest)
+    return fingerprint.hexdigest()
+
+
+def _logical_country_map(
+    countries: list[str],
+) -> dict[str, str] | None:
+    result: dict[str, str] = {}
+    for raw_country in countries:
+        country = str(raw_country).strip()
+        country_key = country.casefold()
+        if not country or country_key in result:
+            return None
+        result[country_key] = country
+    return result
+
+
+def _publish_duplicate_scope_contract(
+    *,
+    payload: dict[str, Any],
+    active_countries: list[str],
+    candidate_countries: list[str],
+    refresh_report: dict[str, Any],
+) -> dict[str, Any]:
+    """Validate the immutable lineage used by the legacy-duplicate exception."""
+    artifacts = payload.get("artifacts")
+    approval = payload.get("reviewApproval")
+    ingest_digest = payload.get("ingestDigest")
+    upload_inspection = payload.get("uploadInspection")
+    summaries = payload.get("summaries")
+    smart_merge = (
+        summaries.get("smartMerge")
+        if isinstance(summaries, dict)
+        and isinstance(summaries.get("smartMerge"), dict)
+        else {}
+    )
+    static_summary = (
+        smart_merge.get("deprecatedStaticCarryForward")
+        if isinstance(
+            smart_merge.get("deprecatedStaticCarryForward"),
+            dict,
+        )
+        else {}
+    )
+    stored_untouched_checks = (
+        static_summary.get("untouchedCountryChecks")
+        if isinstance(
+            static_summary.get("untouchedCountryChecks"),
+            dict,
+        )
+        else {}
+    )
+    partition_check = (
+        artifacts.get("untouchedPartitionCheck")
+        if isinstance(artifacts, dict)
+        and isinstance(artifacts.get("untouchedPartitionCheck"), dict)
+        else {}
+    )
+    incremental = (
+        refresh_report.get("incremental")
+        if isinstance(refresh_report.get("incremental"), dict)
+        else {}
+    )
+
+    country_scope = (
+        [str(country) for country in payload.get("countryScope", [])]
+        if isinstance(payload.get("countryScope"), list)
+        else []
+    )
+    ingest_countries = (
+        [str(country) for country in ingest_digest.get("countries", [])]
+        if isinstance(ingest_digest, dict)
+        and isinstance(ingest_digest.get("countries"), list)
+        else []
+    )
+    inspected_countries = (
+        [
+            str(country)
+            for country in upload_inspection.get("countries", [])
+        ]
+        if isinstance(upload_inspection, dict)
+        and isinstance(upload_inspection.get("countries"), list)
+        else []
+    )
+    scope_map = _logical_country_map(country_scope)
+    ingest_map = _logical_country_map(ingest_countries)
+    inspected_map = _logical_country_map(inspected_countries)
+    active_map = _logical_country_map(active_countries)
+    candidate_map = _logical_country_map(candidate_countries)
+    stored_check_map = _logical_country_map(
+        [str(country) for country in stored_untouched_checks]
+    )
+
+    job_type = str(payload.get("jobType") or "")
+    expected_route = {
+        "single_country": "single_country",
+        "partial_country": "partial_country",
+    }.get(job_type)
+    expected_source_scope = {
+        "single_country": "target_country_partition_only",
+        "partial_country": "target_country_partitions_only",
+    }.get(job_type)
+    errors: list[str] = []
+    if not isinstance(artifacts, dict):
+        errors.append("artifacts_missing")
+    elif str(artifacts.get("candidateScope") or "") != "full_smart_merge":
+        errors.append("candidate_scope_not_full_smart_merge")
+    if expected_route is None:
+        errors.append("job_type_not_partial")
+    if not isinstance(ingest_digest, dict):
+        errors.append("ingest_digest_missing")
+    elif str(ingest_digest.get("route") or "") != expected_route:
+        errors.append("ingest_route_mismatch")
+    if not isinstance(upload_inspection, dict):
+        errors.append("upload_inspection_missing")
+    if (
+        scope_map is None
+        or ingest_map is None
+        or inspected_map is None
+        or not scope_map
+        or set(scope_map) != set(ingest_map)
+        or set(scope_map) != set(inspected_map)
+    ):
+        errors.append("target_country_lineage_mismatch")
+    if active_map is None or candidate_map is None:
+        errors.append("dataset_country_identity_ambiguous")
+    elif set(active_map) != set(candidate_map):
+        errors.append("full_candidate_country_set_changed")
+    elif scope_map is not None and not (
+        set(scope_map) < set(active_map)
+    ):
+        errors.append("target_scope_not_strict_active_subset")
+    if partition_check.get("status") != "pass":
+        errors.append("untouched_partition_check_not_pass")
+    if str(incremental.get("scope") or "") != "full_smart_merge":
+        errors.append("refresh_scope_not_full_smart_merge")
+    if (
+        expected_source_scope is None
+        or str(incremental.get("sourceCandidateScope") or "")
+        != expected_source_scope
+    ):
+        errors.append("refresh_source_scope_mismatch")
+    if isinstance(ingest_digest, dict) and (
+        str(ingest_digest.get("candidateScope") or "")
+        != expected_source_scope
+    ):
+        errors.append("digest_candidate_scope_mismatch")
+
+    active_base_fingerprint = str(
+        payload.get("activeBaseFingerprint") or ""
+    )
+    approved_active_fingerprint = (
+        str(approval.get("activeBaseFingerprint") or "")
+        if isinstance(approval, dict)
+        else ""
+    )
+    digest_active_fingerprint = (
+        str(ingest_digest.get("activeDatasetVersion") or "")
+        if isinstance(ingest_digest, dict)
+        else ""
+    )
+    if not (
+        _valid_sha256(active_base_fingerprint)
+        and active_base_fingerprint == approved_active_fingerprint
+        and active_base_fingerprint == digest_active_fingerprint
+    ):
+        errors.append("active_lineage_mismatch")
+
+    expected_untouched_keys = (
+        set(active_map) - set(scope_map)
+        if active_map is not None and scope_map is not None
+        else set()
+    )
+    if (
+        stored_check_map is None
+        or set(stored_check_map) != expected_untouched_keys
+    ):
+        errors.append("smart_merge_untouched_proof_coverage_mismatch")
+    return {
+        "status": "pass" if not errors else "fail",
+        "errors": errors,
+        "targetCountryMap": scope_map or {},
+        "activeCountryMap": active_map or {},
+        "candidateCountryMap": candidate_map or {},
+        "untouchedCountryKeys": sorted(expected_untouched_keys),
+        "storedUntouchedChecks": stored_untouched_checks,
+        "activeBaseFingerprint": active_base_fingerprint or None,
+        "approvedActiveFingerprint": approved_active_fingerprint or None,
+        "ingestActiveFingerprint": digest_active_fingerprint or None,
+        "candidateFingerprint": (
+            approval.get("candidateFingerprint")
+            if isinstance(approval, dict)
+            else None
+        ),
+    }
+
+
+def _publish_untouched_country_content_evidence(
+    *,
+    country: str,
+    active_frame: pd.DataFrame,
+    candidate_frame: pd.DataFrame,
+    stored_check: dict[str, Any] | None,
+) -> dict[str, Any]:
+    """Re-prove one untouched country against current active at Publish."""
+    active_columns = [str(column) for column in active_frame.columns]
+    candidate_columns = [str(column) for column in candidate_frame.columns]
+    missing_active_columns = [
+        column for column in active_columns if column not in candidate_frame
+    ]
+    candidate_only_columns = [
+        column for column in candidate_columns if column not in active_frame
+    ]
+    non_null_candidate_only_columns = [
+        column
+        for column in candidate_only_columns
+        if bool(candidate_frame[column].notna().any())
+    ]
+    row_count_equal = len(active_frame) == len(candidate_frame)
+    signatures_available = not missing_active_columns
+    active_signature: str | None = None
+    candidate_signature: str | None = None
+    active_fingerprint: str | None = None
+    candidate_fingerprint: str | None = None
+    if signatures_available:
+        active_signature = _canonical_country_content_signature(
+            active_frame,
+            active_columns,
+        )
+        candidate_signature = _canonical_country_content_signature(
+            candidate_frame,
+            active_columns,
+        )
+        active_fingerprint = _canonical_country_content_fingerprint(
+            active_frame,
+            active_columns,
+        )
+        candidate_fingerprint = _canonical_country_content_fingerprint(
+            candidate_frame,
+            active_columns,
+        )
+
+    stored_proof_pass = bool(
+        isinstance(stored_check, dict)
+        and stored_check.get("status") == "pass"
+        and int(stored_check.get("rowCount", -1) or -1)
+        == len(active_frame)
+        and str(stored_check.get("canonicalSignature") or "")
+        == str(active_signature or "")
+        and stored_check.get("candidateOnlyColumnsNull") is True
+    )
+    content_equal = bool(
+        row_count_equal
+        and signatures_available
+        and not non_null_candidate_only_columns
+        and active_signature == candidate_signature
+        and active_fingerprint == candidate_fingerprint
+        and stored_proof_pass
+    )
+    return {
+        "country": country,
+        "status": "pass" if content_equal else "fail",
+        "activeRows": int(len(active_frame)),
+        "candidateRows": int(len(candidate_frame)),
+        "rowCountEqual": row_count_equal,
+        "missingActiveColumns": missing_active_columns,
+        "candidateOnlyColumns": candidate_only_columns,
+        "nonNullCandidateOnlyColumns": non_null_candidate_only_columns,
+        "activeCanonicalSignature": active_signature,
+        "candidateCanonicalSignature": candidate_signature,
+        "activeContentFingerprint": active_fingerprint,
+        "candidateContentFingerprint": candidate_fingerprint,
+        "storedSmartMergeProofPass": stored_proof_pass,
+    }
+
+
+def _publish_duplicate_configuration_assessment(
+    *,
+    payload: dict[str, Any],
+    active_parquet_path: Path,
+    candidate_parquet_path: Path,
+    refresh_report_path: Path | None = None,
+) -> dict[str, Any]:
+    """Separate new duplicates from unchanged active legacy duplicates."""
+    candidate_duplicates = _find_candidate_duplicate_configurations(
+        candidate_parquet_path
+    )
+    artifacts = payload.get("artifacts")
+    ingest_digest = payload.get("ingestDigest")
+    scoped_smart_merge_claim = bool(
+        str(payload.get("jobType") or "")
+        in {"single_country", "partial_country"}
+        or (
+            isinstance(ingest_digest, dict)
+            and str(ingest_digest.get("route") or "")
+            in {"single_country", "partial_country"}
+        )
+    )
+    if not scoped_smart_merge_claim:
+        return {
+            "blocking": [
+                {**entry, "duplicateStatus": "candidate_duplicate"}
+                for entry in candidate_duplicates
+            ],
+            "inherited": [],
+            "guard": {
+                "status": "not_applicable",
+                "policy": "full_candidate_zero_duplicates",
+            },
+        }
+
+    try:
+        refresh_report = (
+            _read_json(refresh_report_path)
+            if refresh_report_path is not None
+            else {}
+        )
+    except Exception:
+        refresh_report = {}
+    active_latest = _collect_dataset_country_latest_months(
+        active_parquet_path
+    )
+    candidate_latest = _collect_dataset_country_latest_months(
+        candidate_parquet_path
+    )
+    scope_contract = _publish_duplicate_scope_contract(
+        payload=payload,
+        active_countries=list(active_latest),
+        candidate_countries=list(candidate_latest),
+        refresh_report=refresh_report,
+    )
+    if scope_contract["status"] != "pass":
+        return {
+            "blocking": [
+                {
+                    "country": None,
+                    "duplicateRows": sum(
+                        int(entry.get("duplicateRows", 0) or 0)
+                        for entry in candidate_duplicates
+                    ),
+                    "duplicateGroupCount": sum(
+                        int(entry.get("duplicateGroupCount", 0) or 0)
+                        for entry in candidate_duplicates
+                    ),
+                    "keyColumnCount": None,
+                    "samples": [],
+                    "duplicateStatus": "duplicate_guard_scope_invalid",
+                    "scopeErrors": scope_contract["errors"],
+                },
+                *[
+                    {**entry, "duplicateStatus": "candidate_duplicate"}
+                    for entry in candidate_duplicates
+                ],
+            ],
+            "inherited": [],
+            "guard": scope_contract,
+        }
+
+    target_country_keys = set(scope_contract["targetCountryMap"])
+    target_duplicates: list[dict[str, Any]] = []
+    candidate_untouched_duplicates: dict[str, dict[str, Any]] = {}
+    for entry in candidate_duplicates:
+        country_key = str(entry.get("country") or "").strip().casefold()
+        if country_key in target_country_keys:
+            target_duplicates.append(
+                {**entry, "duplicateStatus": "target_country_duplicate"}
+            )
+        else:
+            candidate_untouched_duplicates[country_key] = entry
+
+    untouched_country_keys = list(
+        scope_contract["untouchedCountryKeys"]
+    )
+    active_duplicates = _find_candidate_duplicate_configurations(
+        active_parquet_path,
+        countries=[
+            scope_contract["activeCountryMap"][country_key]
+            for country_key in untouched_country_keys
+        ],
+    )
+    active_by_country = {
+        str(entry.get("country") or "").strip().casefold(): entry
+        for entry in active_duplicates
+    }
+    blocking = list(target_duplicates)
+    inherited: list[dict[str, Any]] = []
+    content_evidence: list[dict[str, Any]] = []
+    stored_checks = scope_contract["storedUntouchedChecks"]
+    stored_checks_by_key = {
+        str(country).strip().casefold(): check
+        for country, check in stored_checks.items()
+        if isinstance(check, dict)
+    }
+    for country_key in untouched_country_keys:
+        country = scope_contract["activeCountryMap"][country_key]
+        active_frame = _load_parquet_country_subset(
+            active_parquet_path,
+            country,
+            path_label=f"Publish active（{country}）",
+        )
+        candidate_country = scope_contract["candidateCountryMap"][
+            country_key
+        ]
+        candidate_frame = _load_parquet_country_subset(
+            candidate_parquet_path,
+            candidate_country,
+            path_label=f"Publish candidate（{candidate_country}）",
+        )
+        evidence = _publish_untouched_country_content_evidence(
+            country=country,
+            active_frame=active_frame,
+            candidate_frame=candidate_frame,
+            stored_check=stored_checks_by_key.get(country_key),
+        )
+        content_evidence.append(evidence)
+        del active_frame
+        del candidate_frame
+
+        candidate_entry = candidate_untouched_duplicates.get(country_key)
+        active_entry = active_by_country.get(country_key)
+        if evidence["status"] != "pass":
+            source_entry = candidate_entry or active_entry or {
+                "country": country,
+                "duplicateRows": 0,
+                "duplicateGroupCount": 0,
+                "keyColumnCount": None,
+                "samples": [],
+            }
+            blocking.append(
+                {
+                    **source_entry,
+                    "duplicateStatus": "untouched_country_content_changed",
+                    "activeDuplicateRows": (
+                        active_entry.get("duplicateRows")
+                        if isinstance(active_entry, dict)
+                        else 0
+                    ),
+                    "candidateDuplicateRows": (
+                        candidate_entry.get("duplicateRows")
+                        if isinstance(candidate_entry, dict)
+                        else 0
+                    ),
+                    "contentEvidence": evidence,
+                }
+            )
+            continue
+        if isinstance(candidate_entry, dict) and isinstance(
+            active_entry,
+            dict,
+        ):
+            inherited.append(
+                {
+                    **candidate_entry,
+                    "duplicateStatus": "unchanged_active_duplicate",
+                    "activeDuplicateFingerprint": active_entry.get(
+                        "duplicateFingerprint"
+                    ),
+                    "contentFingerprint": evidence.get(
+                        "candidateContentFingerprint"
+                    ),
+                }
+            )
+        elif candidate_entry is not None or active_entry is not None:
+            source_entry = candidate_entry or active_entry
+            blocking.append(
+                {
+                    **source_entry,
+                    "duplicateStatus": (
+                        "untouched_country_duplicate_changed"
+                    ),
+                    "activeDuplicateRows": (
+                        active_entry.get("duplicateRows")
+                        if isinstance(active_entry, dict)
+                        else 0
+                    ),
+                    "candidateDuplicateRows": (
+                        candidate_entry.get("duplicateRows")
+                        if isinstance(candidate_entry, dict)
+                        else 0
+                    ),
+                    "contentEvidence": evidence,
+                }
+            )
+    guard = {
+        **scope_contract,
+        "status": "pass" if not blocking else "fail",
+        "policy": "exact_untouched_country_content_only",
+        "targetCountries": list(
+            scope_contract["targetCountryMap"].values()
+        ),
+        "untouchedCountries": [
+            scope_contract["activeCountryMap"][country_key]
+            for country_key in untouched_country_keys
+        ],
+        "untouchedContentEvidence": content_evidence,
+    }
+    guard.pop("storedUntouchedChecks", None)
+    return {
+        "blocking": blocking,
+        "inherited": inherited,
+        "guard": guard,
+    }
 
 
 def _load_country_configuration_history_frame(
@@ -9605,13 +10194,28 @@ def _publish_jato_monthly_update_job_locked(
         refresh_report_path=source_paths["refreshReport"],
         summaries_path=source_paths["summaries"],
     )
-    duplicate_configurations = _find_candidate_duplicate_configurations(
-        source_paths["parquet"]
+    active_paths = _active_data_paths()
+    duplicate_assessment = _publish_duplicate_configuration_assessment(
+        payload=payload,
+        active_parquet_path=active_paths["parquet"],
+        candidate_parquet_path=source_paths["parquet"],
+        refresh_report_path=source_paths["refreshReport"],
     )
+    duplicate_configurations = duplicate_assessment["blocking"]
+    inherited_duplicate_configurations = duplicate_assessment["inherited"]
     if duplicate_configurations:
+        platform_guard_failure = any(
+            entry.get("duplicateStatus")
+            in {
+                "duplicate_guard_scope_invalid",
+                "untouched_country_content_changed",
+                "untouched_country_duplicate_changed",
+            }
+            for entry in duplicate_configurations
+        )
         rendered = "；".join(
             (
-                f"{entry['country']} "
+                f"{entry.get('country') or '范围证明'} "
                 f"({entry['duplicateRows']} 行/"
                 f"{entry['duplicateGroupCount']} 组)"
             )
@@ -9626,15 +10230,44 @@ def _publish_jato_monthly_update_job_locked(
                     f"造成销量重复累加，拒绝 Publish：{rendered}。"
                 ),
                 "sourceFeedback": (
-                    "请洗数人员按全部非月份业务字段去除真正重复的配置行；"
-                    "价格、Registration type、动力、车身或版本不同的记录"
-                    "不能合并。请同时提供去重前后行数。"
+                    (
+                        "未上传国家的完整内容或范围证明与 active 不一致；"
+                        "这不是本批源文件"
+                        "可修复的范围。请平台管理员检查 Smart Merge 与未触碰"
+                        "国家分区，禁止让洗数人员修改未上传国家。"
+                    )
+                    if platform_guard_failure
+                    else (
+                        "请洗数人员按全部非月份业务字段去除真正重复的配置行；"
+                        "价格、Registration type、动力、车身或版本不同的记录"
+                        "不能合并。请同时提供去重前后行数。"
+                    )
                 ),
                 "countries": duplicate_configurations,
+                "duplicateConfigurationGuard": (
+                    duplicate_assessment.get("guard")
+                ),
             },
         )
+    if inherited_duplicate_configurations:
+        inherited_rendered = "；".join(
+            (
+                f"{entry['country']} "
+                f"({entry['duplicateRows']} 行/"
+                f"{entry['duplicateGroupCount']} 组)"
+            )
+            for entry in inherited_duplicate_configurations
+        )
+        _append_log(
+            _job_log_path(job_id),
+            (
+                f"[{_utc_now().isoformat()}] Publish: 未上传国家的重复配置"
+                "经逐国完整内容指纹证明与 active 完全一致，"
+                "按历史遗留只读保留："
+                f"{inherited_rendered}。"
+            ),
+        )
 
-    active_paths = _active_data_paths()
     if active_paths["parquet"].exists():
         historical_sales_changes = _find_publish_historical_sales_changes(
             active_parquet_path=active_paths["parquet"],
@@ -9849,6 +10482,30 @@ def _publish_jato_monthly_update_job_locked(
             "activeFingerprintAfter": active_fingerprint_after,
             "bundleSwitch": bundle_switch,
             "cacheInvalidation": cache_invalidation,
+            "duplicateConfigurationGuard": duplicate_assessment.get(
+                "guard"
+            ),
+            "inheritedDuplicateConfigurations": [
+                {
+                    "country": entry.get("country"),
+                    "duplicateRows": entry.get("duplicateRows"),
+                    "duplicateGroupCount": entry.get(
+                        "duplicateGroupCount"
+                    ),
+                    "keyColumnCount": entry.get("keyColumnCount"),
+                    "duplicateFingerprint": entry.get(
+                        "duplicateFingerprint"
+                    ),
+                    "duplicateStatus": entry.get("duplicateStatus"),
+                    "activeDuplicateFingerprint": entry.get(
+                        "activeDuplicateFingerprint"
+                    ),
+                    "contentFingerprint": entry.get(
+                        "contentFingerprint"
+                    ),
+                }
+                for entry in inherited_duplicate_configurations
+            ],
         }
         _persist_job_state(payload)
     except Exception:
@@ -12809,7 +13466,12 @@ def _active_operation_failure_digest(
             "phase": f"{operation_type}_validating",
             "retryable": False,
             "message": message,
-            "sourceFeedback": None,
+            "sourceFeedback": (
+                str(detail.get("sourceFeedback") or "").strip()
+                or None
+                if isinstance(detail, dict)
+                else None
+            ),
             "technicalDetail": detail,
             "nextAction": "review_blocker",
         }
