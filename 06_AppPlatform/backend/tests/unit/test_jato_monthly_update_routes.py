@@ -547,6 +547,60 @@ def test_retry_failed_monthly_update_job_route_requeues_existing_upload(
     assert payload["artifacts"]["retriedFromJobId"] == source_job_id
 
 
+def test_recover_monthly_update_job_route_requires_admin_and_forwards_key(
+    monkeypatch,
+) -> None:
+    calls: list[dict[str, str]] = []
+    monkeypatch.setattr(
+        msrp_monthly_update,
+        "recover_failed_jato_monthly_update_job",
+        lambda **kwargs: (
+            calls.append(kwargs)
+            or {
+                "jobId": "jato-update-recovery",
+                "status": "queued",
+                "recoveryOfJobId": kwargs["source_job_id"],
+                "recoveryKey": kwargs["recovery_key"],
+            }
+        ),
+    )
+    monkeypatch.setitem(
+        security.TOKEN_ROLE_MAP,
+        "jato-monthly-recovery-editor",
+        "editor",
+    )
+    client = TestClient(app)
+    source_job_id = "jato-update-failed"
+    recovery_key = "recovery-route-20260721"
+
+    forbidden = client.post(
+        f"/v1/msrp/monthly-update-jobs/{source_job_id}/recover",
+        headers={
+            "X-Auth-Token": "jato-monthly-recovery-editor",
+            "X-User-Name": "editor-user",
+        },
+        json={"recoveryKey": recovery_key},
+    )
+    assert forbidden.status_code == 403
+    assert calls == []
+
+    response = client.post(
+        f"/v1/msrp/monthly-update-jobs/{source_job_id}/recover",
+        headers=_admin_headers(monkeypatch),
+        json={"recoveryKey": recovery_key},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["item"]["jobId"] == "jato-update-recovery"
+    assert calls == [
+        {
+            "source_job_id": source_job_id,
+            "recovery_key": recovery_key,
+            "triggered_by": "tester",
+        }
+    ]
+
+
 def test_recheck_monthly_update_job_route_returns_updated_job(monkeypatch) -> None:
     monkeypatch.setattr(
         msrp_monthly_update,

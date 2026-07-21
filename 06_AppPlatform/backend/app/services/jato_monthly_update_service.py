@@ -53,6 +53,7 @@ REVIEW_BUNDLE_FILENAME = "review_bundle.json"
 CANCEL_REQUEST_FILENAME = "cancel.request.json"
 WORKER_LOCK_FILENAME = "worker.lock"
 INGESTION_LOCK_FILENAME = "ingestion.lock"
+RECOVERY_LOCK_FILENAME = "recovery.lock"
 UPLOAD_INITIATE_LOCK_FILENAME = "upload-initiate.lock"
 UPLOAD_STATE_LOCK_FILENAME = "state.lock"
 JOB_STATE_LOCK_FILENAME = "state.lock"
@@ -98,6 +99,8 @@ MONTH_COLUMN_PATTERN = re.compile(
 YEAR_COLUMN_PATTERN = re.compile(r"^\d{4}$")
 YTD_COLUMN_PATTERN = re.compile(r"^YTD\s+\d{4}\s+\([A-Za-z]{3}\)$", re.IGNORECASE)
 BATCH_ID_PATTERN = re.compile(r"^(20\d{2}-\d{2})-r(\d+)$")
+RECOVERY_KEY_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{7,127}$")
+RECOVERY_ALLOWED_FAILURE_CATEGORIES = frozenset({"platform", "resource"})
 COUNTRY_COLUMN_CANDIDATES = ("国家", "country")
 SAFE_CLEANUP_TIER = "safe"
 CAUTIOUS_CLEANUP_TIER = "cautious"
@@ -539,6 +542,43 @@ def _active_data_paths() -> dict[str, Path]:
         "summaries": processed_root / "summaries",
         "backupRoot": processed_root / ".refresh_backups",
     }
+
+
+def _active_parquet_schema_reference(
+    active_paths: dict[str, Path] | None = None,
+) -> Path:
+    """Return one immutable active parquet schema source for bounded XLSX ETL."""
+    paths = active_paths or _active_data_paths()
+    active_parquet = paths["parquet"]
+    if active_parquet.is_file():
+        return active_parquet
+    partition_root = paths["partition"]
+    if partition_root.exists():
+        for parquet_path in sorted(partition_root.rglob("*.parquet")):
+            if parquet_path.is_file():
+                return parquet_path
+    raise RuntimeError(
+        "部分国家刷新缺少 active parquet schema；"
+        "拒绝猜测 washed 字段类型。"
+    )
+
+
+def _partial_country_streaming_cli_args(
+    *,
+    upload_suffix: str,
+    active_paths: dict[str, Path],
+) -> list[str]:
+    if upload_suffix.lower() not in {".xlsx", ".xlsm"}:
+        # Legacy .xls remains on the existing pandas path. Its worksheet row
+        # limit is 65,536, so it does not carry the 762k-row XLSX allocation
+        # risk that this bounded path addresses.
+        return []
+    active_schema_reference = _active_parquet_schema_reference(active_paths)
+    return [
+        "--streaming-xlsx",
+        "--schema-from-parquet",
+        str(active_schema_reference.resolve()),
+    ]
 
 
 ACTIVE_BUNDLE_KEYS = (
@@ -5977,6 +6017,14 @@ def _serialize_job_state(
             else None
         ),
     }
+    if "recoveryOfJobId" in payload or "recoveryKey" in payload:
+        item["recoveryOfJobId"] = payload.get("recoveryOfJobId")
+        item["recoveryKey"] = payload.get("recoveryKey")
+        item["recoverySource"] = (
+            payload.get("recoverySource")
+            if isinstance(payload.get("recoverySource"), dict)
+            else None
+        )
     if include_log_tail:
         log_path = _job_log_path(item["jobId"])
         item["logTail"] = _tail_text(log_path)
@@ -10100,6 +10148,90 @@ def _build_ingestion_key(ingest_digest: dict[str, Any]) -> str:
     ).hexdigest()
 
 
+def _normalize_recovery_key(recovery_key: str) -> str:
+    normalized = str(recovery_key or "").strip()
+    if not RECOVERY_KEY_PATTERN.fullmatch(normalized):
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "code": "INVALID_RECOVERY_KEY",
+                "message": (
+                    "recoveryKey 必须为 8-128 位字母、数字或 ._:- 组成的"
+                    "幂等键。"
+                ),
+            },
+        )
+    return normalized
+
+
+def _find_recovery_job_for_source(
+    *,
+    source_job_id: str,
+    recovery_key: str,
+) -> dict[str, Any] | None:
+    source_matches = [
+        payload
+        for payload in _list_job_state_payloads()
+        if str(payload.get("recoveryOfJobId") or "") == source_job_id
+    ]
+    matching_key = [
+        payload
+        for payload in source_matches
+        if str(payload.get("recoveryKey") or "") == recovery_key
+    ]
+    if len(matching_key) == 1:
+        return matching_key[0]
+    if len(matching_key) > 1:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "RECOVERY_STATE_AMBIGUOUS",
+                "message": "同一 recoveryKey 已对应多个恢复任务，拒绝自动选择。",
+                "jobIds": [
+                    str(payload.get("jobId") or "")
+                    for payload in matching_key
+                ],
+            },
+        )
+    if source_matches:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "RECOVERY_ALREADY_CREATED",
+                "message": "该失败任务已创建过另一个 recovery attempt。",
+                "jobIds": [
+                    str(payload.get("jobId") or "")
+                    for payload in source_matches
+                ],
+            },
+        )
+    return None
+
+
+def _consumed_upload_session_for_job(source_job_id: str) -> dict[str, Any]:
+    matches = [
+        payload
+        for payload in _iter_upload_session_payloads()
+        if (
+            str(payload.get("status") or "") == "consumed"
+            and str(payload.get("consumedJobId") or "") == source_job_id
+        )
+    ]
+    if len(matches) != 1:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "RECOVERY_SOURCE_UPLOAD_NOT_UNIQUE",
+                "message": (
+                    "恢复要求唯一 consumed upload 绑定原失败任务；"
+                    "当前证据缺失或不唯一。"
+                ),
+                "matchCount": len(matches),
+            },
+        )
+    return matches[0]
+
+
 def _find_existing_job_for_ingestion_key(
     ingestion_key: str,
 ) -> dict[str, Any] | None:
@@ -10241,6 +10373,9 @@ def _queue_monthly_update_job_from_stored_upload(
     file_sha256: str | None = None,
     ingest_digest: dict[str, Any] | None = None,
     ingestion_key: str | None = None,
+    recovery_of_job_id: str | None = None,
+    recovery_key: str | None = None,
+    recovery_source: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     if stored_upload_path.stat().st_size <= 0:
         raise HTTPException(status_code=400, detail="上传文件为空，无法启动月更任务。")
@@ -10282,6 +10417,10 @@ def _queue_monthly_update_job_from_stored_upload(
         "summaries": {},
         "logPath": _relative_to_project(_job_log_path(job_id)),
     }
+    if recovery_of_job_id is not None or recovery_key is not None:
+        state["recoveryOfJobId"] = recovery_of_job_id
+        state["recoveryKey"] = recovery_key
+        state["recoverySource"] = recovery_source
     if isinstance(ingest_digest, dict):
         countries = _ordered_distinct_strings(
             [str(country) for country in ingest_digest.get("countries", [])]
@@ -11818,6 +11957,386 @@ def create_jato_monthly_update_job_from_upload(
             )
 
 
+def _recover_failed_jato_monthly_update_job_in_start_window(
+    *,
+    source_job_id: str,
+    recovery_key: str,
+    triggered_by: str,
+) -> dict[str, Any]:
+    existing_recovery = _find_recovery_job_for_source(
+        source_job_id=source_job_id,
+        recovery_key=recovery_key,
+    )
+    if existing_recovery is not None:
+        return _serialize_job_state(existing_recovery, include_log_tail=False)
+
+    _require_no_active_upload_sessions(action="创建恢复任务")
+    _require_no_running_monthly_update_jobs()
+
+    with _exclusive_file_lock(
+        _job_state_lock_path(source_job_id)
+    ) as source_acquired:
+        if not source_acquired:
+            raise HTTPException(
+                status_code=503,
+                detail="原任务状态锁暂不可用，请稍后重试。",
+            )
+        source_state = _load_job_state(source_job_id)
+        if str(source_state.get("status") or "") != "failed":
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "code": "RECOVERY_SOURCE_NOT_FAILED",
+                    "message": "只允许为 failed 的月更任务创建恢复 attempt。",
+                },
+            )
+        source_failure = source_state.get("failureDigest")
+        source_failure_category = (
+            str(source_failure.get("category") or "").strip().lower()
+            if isinstance(source_failure, dict)
+            else ""
+        )
+        if source_failure_category not in RECOVERY_ALLOWED_FAILURE_CATEGORIES:
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "code": "RECOVERY_FAILURE_NOT_ELIGIBLE",
+                    "message": (
+                        "只允许恢复 resource/platform 类平台失败；"
+                        "数据或 processing 失败必须修正源数据。"
+                    ),
+                    "failureCode": (
+                        source_failure.get("code")
+                        if isinstance(source_failure, dict)
+                        else None
+                    ),
+                    "failureCategory": source_failure_category or None,
+                },
+            )
+        if isinstance(source_state.get("publication"), dict):
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "code": "RECOVERY_SOURCE_HAS_PUBLICATION",
+                    "message": "原任务已进入过 publish 记录，不能从原文件恢复。",
+                },
+            )
+        if isinstance(source_state.get("reviewApproval"), dict):
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "code": "RECOVERY_SOURCE_HAS_APPROVAL",
+                    "message": "原任务已有 Review 决策，不能作为恢复源。",
+                },
+            )
+        if isinstance(source_state.get("pendingOperation"), dict):
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "code": "RECOVERY_SOURCE_HAS_PENDING_OPERATION",
+                    "message": "原任务已有 Publish/Rollback 操作记录，不能恢复。",
+                },
+            )
+
+        ingest_digest = source_state.get("ingestDigest")
+        if not isinstance(ingest_digest, dict):
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "code": "RECOVERY_DIGEST_MISSING",
+                    "message": "原任务缺少 ingestDigest，不能绕过重新上传校验。",
+                },
+            )
+        if (
+            str(ingest_digest.get("status") or "") != "ready"
+            or ingest_digest.get("blockers")
+        ):
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "code": "RECOVERY_DIGEST_NOT_READY",
+                    "message": "原任务 digest 未通过，不能创建 recovery attempt。",
+                },
+            )
+        if str(ingest_digest.get("route") or "") != "partial_country":
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "code": "RECOVERY_ROUTE_NOT_ALLOWED",
+                    "message": "受控恢复当前仅支持 partial_country 目标分区路径。",
+                },
+            )
+
+        source_ingestion_key = str(
+            source_state.get("ingestionKey") or ""
+        ).strip()
+        rebuilt_ingestion_key = _build_ingestion_key(ingest_digest)
+        if (
+            not re.fullmatch(r"[0-9a-f]{64}", source_ingestion_key)
+            or source_ingestion_key != rebuilt_ingestion_key
+        ):
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "code": "RECOVERY_INGESTION_KEY_MISMATCH",
+                    "message": "原任务 ingestionKey 与 ingestDigest 不一致，拒绝恢复。",
+                },
+            )
+        duplicate = _find_existing_job_for_ingestion_key(
+            source_ingestion_key
+        )
+        if duplicate is not None:
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "code": "RECOVERY_INGESTION_ALREADY_ACTIVE",
+                    "message": "同一 ingestionKey 已有非 failed 任务，不能再创建恢复任务。",
+                    "existingJobId": duplicate.get("jobId"),
+                },
+            )
+
+        consumed_upload = _consumed_upload_session_for_job(source_job_id)
+        upload_digest = consumed_upload.get("ingestDigest")
+        if not isinstance(upload_digest, dict) or upload_digest != ingest_digest:
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "code": "RECOVERY_UPLOAD_DIGEST_MISMATCH",
+                    "message": "consumed upload 与原任务的 digest 不一致。",
+                },
+            )
+        if str(consumed_upload.get("ingestionKey") or "") != source_ingestion_key:
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "code": "RECOVERY_UPLOAD_INGESTION_KEY_MISMATCH",
+                    "message": "consumed upload 与原任务的 ingestionKey 不一致。",
+                },
+            )
+
+        source_upload = source_state.get("upload")
+        if not isinstance(source_upload, dict):
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "code": "RECOVERY_SOURCE_UPLOAD_MISSING",
+                    "message": "原任务缺少上传文件记录。",
+                },
+            )
+        stored_path_value = str(source_upload.get("storedPath") or "").strip()
+        source_upload_path = _project_path(stored_path_value)
+        expected_upload_dir = (_job_dir(source_job_id) / "uploads").resolve()
+        if (
+            source_upload_path is None
+            or not source_upload_path.is_file()
+            or source_upload_path.resolve().parent != expected_upload_dir
+        ):
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "code": "RECOVERY_SOURCE_FILE_MISSING",
+                    "message": "原任务上传副本不存在或路径越界。",
+                },
+            )
+
+        try:
+            expected_size = int(source_upload.get("sizeBytes") or 0)
+            digest_size = int(ingest_digest.get("sizeBytes") or 0)
+            session_size = int(consumed_upload.get("sizeBytes") or 0)
+        except (TypeError, ValueError):
+            expected_size = digest_size = session_size = 0
+        expected_sha256 = str(source_upload.get("sha256") or "").lower()
+        digest_sha256 = str(ingest_digest.get("fileSha256") or "").lower()
+        session_sha256 = str(consumed_upload.get("fileSha256") or "").lower()
+        if (
+            expected_size <= 0
+            or expected_size != digest_size
+            or expected_size != session_size
+            or not re.fullmatch(r"[0-9a-f]{64}", expected_sha256)
+            or expected_sha256 != digest_sha256
+            or expected_sha256 != session_sha256
+        ):
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "code": "RECOVERY_SOURCE_METADATA_MISMATCH",
+                    "message": "原任务、consumed upload 与 digest 的文件大小/SHA-256 不一致。",
+                },
+            )
+
+        stat_before = source_upload_path.stat()
+        actual_sha256 = _sha256_hex_for_path(source_upload_path)
+        stat_after = source_upload_path.stat()
+        stable_stat_before = (
+            stat_before.st_dev,
+            stat_before.st_ino,
+            stat_before.st_size,
+            stat_before.st_mtime_ns,
+        )
+        stable_stat_after = (
+            stat_after.st_dev,
+            stat_after.st_ino,
+            stat_after.st_size,
+            stat_after.st_mtime_ns,
+        )
+        if stable_stat_before != stable_stat_after:
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "code": "RECOVERY_SOURCE_CHANGED_DURING_CHECK",
+                    "message": "原任务上传副本在校验期间发生变化。",
+                },
+            )
+        if stat_after.st_size != expected_size or actual_sha256 != expected_sha256:
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "code": "RECOVERY_SOURCE_FILE_MISMATCH",
+                    "message": "原任务上传副本的实际大小/SHA-256 与审计记录不一致。",
+                    "actualSizeBytes": stat_after.st_size,
+                    "actualSha256": actual_sha256,
+                },
+            )
+
+        active_base_fingerprint = str(
+            source_state.get("activeBaseFingerprint") or ""
+        ).strip()
+        digest_active_fingerprint = str(
+            ingest_digest.get("activeDatasetVersion") or ""
+        ).strip()
+        current_active_fingerprint = _active_dataset_version()
+        if (
+            not re.fullmatch(r"[0-9a-f]{64}", active_base_fingerprint)
+            or active_base_fingerprint != digest_active_fingerprint
+            or active_base_fingerprint != current_active_fingerprint
+        ):
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "code": "RECOVERY_ACTIVE_LINEAGE_CHANGED",
+                    "message": "原 digest 绑定的 active lineage 已缺失或变化，拒绝复用。",
+                    "sourceActiveBaseFingerprint": (
+                        active_base_fingerprint or None
+                    ),
+                    "digestActiveDatasetVersion": (
+                        digest_active_fingerprint or None
+                    ),
+                    "currentActiveFingerprint": current_active_fingerprint,
+                },
+            )
+
+        digest_month = _normalize_month(
+            str(ingest_digest.get("latestMonth") or "")
+        )
+        source_month = _normalize_month(str(source_state.get("month") or ""))
+        if digest_month != source_month:
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "code": "RECOVERY_MONTH_MISMATCH",
+                    "message": "原任务月份与 digest 真实最新月份不一致。",
+                },
+            )
+
+        recovery_job_id = f"jato-update-{uuid4().hex[:8]}"
+        filename = _validate_upload_filename(
+            str(
+                source_upload.get("originalFilename")
+                or source_upload_path.name
+            )
+        )
+        recovery_upload_path = _job_upload_storage_path(
+            recovery_job_id,
+            filename,
+        )
+        recovery_upload_path.parent.mkdir(parents=True, exist_ok=True)
+        storage_method = "hardlink"
+        try:
+            os.link(source_upload_path, recovery_upload_path)
+        except OSError:
+            storage_method = "copy"
+            shutil.copy2(source_upload_path, recovery_upload_path)
+        try:
+            if recovery_upload_path.stat().st_size != expected_size:
+                raise HTTPException(
+                    status_code=409,
+                    detail={
+                        "code": "RECOVERY_COPY_SIZE_MISMATCH",
+                        "message": "recovery attempt 文件大小校验失败。",
+                    },
+                )
+            if _sha256_hex_for_path(recovery_upload_path) != expected_sha256:
+                raise HTTPException(
+                    status_code=409,
+                    detail={
+                        "code": "RECOVERY_TARGET_SHA_MISMATCH",
+                        "message": "recovery attempt 文件 SHA-256 校验失败。",
+                    },
+                )
+            if _active_dataset_version() != active_base_fingerprint:
+                raise HTTPException(
+                    status_code=409,
+                    detail={
+                        "code": "RECOVERY_ACTIVE_LINEAGE_CHANGED",
+                        "message": "创建 recovery attempt 期间 active lineage 发生变化。",
+                    },
+                )
+            result = _queue_monthly_update_job_from_stored_upload(
+                job_id=recovery_job_id,
+                triggered_by=triggered_by,
+                upload_filename=filename,
+                stored_upload_path=recovery_upload_path,
+                month=digest_month,
+                file_sha256=actual_sha256,
+                ingest_digest=ingest_digest,
+                ingestion_key=source_ingestion_key,
+                recovery_of_job_id=source_job_id,
+                recovery_key=recovery_key,
+                recovery_source={
+                    "uploadId": consumed_upload.get("uploadId"),
+                    "validatedAt": _utc_now().isoformat(),
+                    "sizeBytes": expected_size,
+                    "sha256": actual_sha256,
+                    "activeBaseFingerprint": active_base_fingerprint,
+                    "storageMethod": storage_method,
+                },
+            )
+        except Exception:
+            shutil.rmtree(_job_dir(recovery_job_id), ignore_errors=True)
+            raise
+        return result
+
+
+def recover_failed_jato_monthly_update_job(
+    *,
+    source_job_id: str,
+    recovery_key: str,
+    triggered_by: str,
+) -> dict[str, Any]:
+    normalized_recovery_key = _normalize_recovery_key(recovery_key)
+    action = "创建月更 recovery attempt"
+    recovery_lock = MONTHLY_UPDATE_JOB_ROOT / RECOVERY_LOCK_FILENAME
+    with _exclusive_file_lock(recovery_lock) as recovery_acquired:
+        if not recovery_acquired:
+            raise HTTPException(
+                status_code=503,
+                detail="月更恢复幂等锁暂不可用，请稍后重试。",
+            )
+        with _monthly_update_resource_start_locks(action=action):
+            ingestion_lock = MONTHLY_UPDATE_JOB_ROOT / INGESTION_LOCK_FILENAME
+            with _exclusive_file_lock(ingestion_lock) as ingestion_acquired:
+                if not ingestion_acquired:
+                    raise HTTPException(
+                        status_code=503,
+                        detail="月更恢复摄入锁暂不可用，请稍后重试。",
+                    )
+                return _recover_failed_jato_monthly_update_job_in_start_window(
+                    source_job_id=source_job_id,
+                    recovery_key=normalized_recovery_key,
+                    triggered_by=triggered_by,
+                )
+
+
 def _retry_failed_jato_monthly_update_job_in_start_window(
     *,
     source_job_id: str,
@@ -11956,6 +12475,14 @@ def _run_country_partition_job(job_id: str) -> None:
         stored_upload_path = _project_path(str(stored_path_value or "").strip())
         if stored_upload_path is None or not stored_upload_path.exists():
             raise RuntimeError("上传文件不存在。")
+        expected_upload_sha = str(upload.get("sha256") or "").strip().lower()
+        if not re.fullmatch(r"[0-9a-f]{64}", expected_upload_sha):
+            raise RuntimeError("任务缺少有效上传 SHA-256，拒绝转换未绑定文件。")
+        actual_upload_sha = _sha256_hex_for_path(stored_upload_path)
+        if actual_upload_sha != expected_upload_sha:
+            raise RuntimeError(
+                "任务上传副本 SHA-256 已变化，拒绝构建 candidate。"
+            )
 
         countries = _ordered_distinct_strings(
             [
@@ -12034,7 +12561,6 @@ def _run_country_partition_job(job_id: str) -> None:
             partition_root=active_paths["partition"],
             countries=countries,
         )
-
         state["phase"] = "refreshing"
         _persist_job_state(state)
         _ensure_job_not_cancelled(job_id)
@@ -12051,6 +12577,12 @@ def _run_country_partition_job(job_id: str) -> None:
             "--job-id",
             job_id,
         ]
+        refresh_args.extend(
+            _partial_country_streaming_cli_args(
+                upload_suffix=suffix,
+                active_paths=active_paths,
+            )
+        )
 
         _run_logged_command(
             label="部分国家目标分区转换",
@@ -12118,6 +12650,12 @@ def _run_country_partition_job(job_id: str) -> None:
             )
             del active_frame
             del candidate_frame
+        expected_row_count = int(inspection.get("dataRowCount", 0) or 0)
+        if expected_row_count <= 0 or total_rows != expected_row_count:
+            raise RuntimeError(
+                "部分国家 ETL 输出行数与 Digest 不一致："
+                f"expected={expected_row_count}, actual={total_rows}"
+            )
         untouched_after = _untouched_partition_snapshot(
             partition_root=active_paths["partition"],
             countries=countries,

@@ -1,10 +1,13 @@
 import argparse
 import hashlib
 import json
+import math
+import os
 import re
 import sys
 import time
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
+from decimal import Decimal, InvalidOperation
 from pathlib import Path
 from typing import Any
 
@@ -32,6 +35,8 @@ MONTH_COL_PATTERN = re.compile(
     r"^\d{4}\s+(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)$",
     re.IGNORECASE,
 )
+YTD_COL_PATTERN = re.compile(r"^YTD\s+\d{4}\b", re.IGNORECASE)
+DEFAULT_STREAMING_BATCH_ROWS = 4_096
 
 RECOMMENDED_DIMENSION_CANDIDATES: dict[str, tuple[str, ...]] = {
     "country": ("国家", "country"),
@@ -713,7 +718,18 @@ def apply_optional_deduplication(
 
 
 def evaluate_output_schema(df: pd.DataFrame) -> dict[str, object]:
-    columns = [str(column).strip() for column in df.columns]
+    return evaluate_output_schema_values(
+        columns=[str(column).strip() for column in df.columns],
+        row_count=int(len(df)),
+    )
+
+
+def evaluate_output_schema_values(
+    *,
+    columns: list[str],
+    row_count: int,
+) -> dict[str, object]:
+    columns = [str(column).strip() for column in columns]
     col_map = {column.lower(): column for column in columns}
 
     year_columns = [
@@ -728,7 +744,7 @@ def evaluate_output_schema(df: pd.DataFrame) -> dict[str, object]:
     ]
 
     critical_errors: list[str] = []
-    if df.empty:
+    if row_count <= 0:
         critical_errors.append("输出数据为空（0 行）。")
     if not columns:
         critical_errors.append("输出数据无字段。")
@@ -777,6 +793,31 @@ def write_manifest(
     validation_summary: dict[str, object],
     merge_summary: dict[str, Any],
 ) -> None:
+    write_manifest_values(
+        manifest_path=manifest_path,
+        source_files=source_files,
+        output_file=output_file,
+        sheet_name=sheet_name,
+        row_count=int(len(df)),
+        column_names=[str(column) for column in df.columns],
+        elapsed_seconds=elapsed_seconds,
+        validation_summary=validation_summary,
+        merge_summary=merge_summary,
+    )
+
+
+def write_manifest_values(
+    *,
+    manifest_path: Path,
+    source_files: list[Path],
+    output_file: Path,
+    sheet_name: str,
+    row_count: int,
+    column_names: list[str],
+    elapsed_seconds: float,
+    validation_summary: dict[str, object],
+    merge_summary: dict[str, Any],
+) -> None:
     source_excel = (
         to_project_relative(source_files[0])
         if source_files
@@ -795,9 +836,9 @@ def write_manifest(
         "inputMode": "multi" if len(source_files) > 1 else "single",
         "sheetName": sheet_name,
         "outputParquet": to_project_relative(output_file),
-        "rows": int(len(df)),
-        "columns": int(len(df.columns)),
-        "columnNames": [str(column) for column in df.columns],
+        "rows": int(row_count),
+        "columns": int(len(column_names)),
+        "columnNames": [str(column) for column in column_names],
         "outputParquetBytes": output_size,
         "fileSizeBytes": output_size,
         "sha256": sha256_file(output_file),
@@ -811,6 +852,363 @@ def write_manifest(
         json.dumps(manifest, ensure_ascii=False, indent=2),
         encoding="utf-8",
     )
+
+
+def _streaming_arrow_type(
+    *,
+    column: str,
+    hinted_type: Any | None,
+) -> Any:
+    import pyarrow as pa
+
+    if hinted_type is not None:
+        if pa.types.is_string(hinted_type) or pa.types.is_large_string(
+            hinted_type
+        ):
+            return hinted_type
+        if (
+            pa.types.is_integer(hinted_type)
+            or pa.types.is_floating(hinted_type)
+            or pa.types.is_decimal(hinted_type)
+        ):
+            return hinted_type
+        if pa.types.is_boolean(hinted_type):
+            return hinted_type
+        if pa.types.is_date(hinted_type) or pa.types.is_timestamp(hinted_type):
+            return hinted_type
+
+    if (
+        YEAR_COL_PATTERN.fullmatch(column)
+        or MONTH_COL_PATTERN.fullmatch(column)
+        or YTD_COL_PATTERN.match(column)
+    ):
+        return pa.float64()
+    # Unknown new fields stay lossless strings. Existing business fields use
+    # the active parquet schema supplied by the partial-country runner.
+    return pa.string()
+
+
+def _streaming_value_for_type(
+    value: Any,
+    *,
+    arrow_type: Any,
+    column: str,
+    row_number: int,
+) -> Any:
+    import pyarrow as pa
+
+    if value is None or value is pd.NA:
+        return None
+    # Excel formulas that render as an empty string are treated as missing by
+    # pandas.read_excel; preserve that established ETL behavior.
+    if isinstance(value, str) and value == "":
+        return None
+    if isinstance(value, float) and math.isnan(value):
+        return None
+    if pa.types.is_string(arrow_type) or pa.types.is_large_string(arrow_type):
+        return str(value)
+    if pa.types.is_integer(arrow_type):
+        if isinstance(value, bool):
+            raise ValueError(
+                f"第 {row_number} 行字段 {column} 是布尔值，不能作为整数写入。"
+            )
+        try:
+            numeric = Decimal(str(value))
+        except (InvalidOperation, TypeError, ValueError) as exc:
+            raise ValueError(
+                f"第 {row_number} 行字段 {column} 包含非整数：{value!r}。"
+            ) from exc
+        if not numeric.is_finite() or numeric != numeric.to_integral_value():
+            raise ValueError(
+                f"第 {row_number} 行字段 {column} 包含非整数：{value!r}。"
+            )
+        return int(numeric)
+    if pa.types.is_floating(arrow_type):
+        if isinstance(value, bool):
+            raise ValueError(
+                f"第 {row_number} 行字段 {column} 是布尔值，不能作为数值写入。"
+            )
+        try:
+            numeric = float(value)
+        except (TypeError, ValueError) as exc:
+            raise ValueError(
+                f"第 {row_number} 行字段 {column} 包含非数值：{value!r}。"
+            ) from exc
+        if not math.isfinite(numeric):
+            raise ValueError(
+                f"第 {row_number} 行字段 {column} 包含非有限数值。"
+            )
+        return numeric
+    if pa.types.is_decimal(arrow_type):
+        if isinstance(value, bool):
+            raise ValueError(
+                f"第 {row_number} 行字段 {column} 是布尔值，不能作为小数写入。"
+            )
+        try:
+            numeric_decimal = Decimal(str(value))
+        except (InvalidOperation, TypeError, ValueError) as exc:
+            raise ValueError(
+                f"第 {row_number} 行字段 {column} 包含非法小数：{value!r}。"
+            ) from exc
+        if not numeric_decimal.is_finite():
+            raise ValueError(
+                f"第 {row_number} 行字段 {column} 包含非有限小数。"
+            )
+        return numeric_decimal
+    if pa.types.is_boolean(arrow_type):
+        if isinstance(value, bool):
+            return value
+        raise ValueError(
+            f"第 {row_number} 行字段 {column} 不是布尔值。"
+        )
+    if pa.types.is_date(arrow_type):
+        if isinstance(value, datetime):
+            return value.date()
+        if isinstance(value, date):
+            return value
+        raise ValueError(
+            f"第 {row_number} 行字段 {column} 不是日期。"
+        )
+    if pa.types.is_timestamp(arrow_type):
+        if isinstance(value, datetime):
+            return value
+        if isinstance(value, date):
+            return datetime.combine(value, datetime.min.time())
+        raise ValueError(
+            f"第 {row_number} 行字段 {column} 不是日期时间。"
+        )
+    return value
+
+
+def convert_jato_xlsx_to_parquet_streaming(
+    *,
+    input_path: str,
+    output_path: str,
+    manifest_path: str | None,
+    sheet_name: str,
+    schema_from_parquet: str,
+    batch_rows: int = DEFAULT_STREAMING_BATCH_ROWS,
+    job_id: str | None = None,
+) -> tuple[Path, Path]:
+    """Convert one washed XLSX with bounded memory.
+
+    This path is intentionally narrow: partial-country candidates already
+    passed Digest and do not need multi-file merge, supplement, conflict or
+    dedupe behavior.  It streams rows with openpyxl and writes bounded Arrow
+    row groups, avoiding calamine's whole-sheet allocation.
+    """
+    if batch_rows < 256 or batch_rows > 65_536:
+        raise ValueError("streaming batch rows 必须在 256 到 65536 之间。")
+
+    from openpyxl import load_workbook
+    import pyarrow as pa
+    import pyarrow.parquet as pq
+
+    logger = get_logger("jato.etl", job_id=job_id)
+
+    def emit(message: str) -> None:
+        print(message, flush=True)
+        logger.info(message)
+
+    source_file = resolve_explicit_file(input_path)
+    if source_file.suffix.lower() not in {".xlsx", ".xlsm"}:
+        raise ValueError("有界内存转换仅支持 .xlsx/.xlsm。")
+    schema_file = resolve_explicit_file(schema_from_parquet)
+    output_file = Path(output_path)
+    if not output_file.is_absolute():
+        output_file = PROJECT_ROOT / output_file
+    output_file.parent.mkdir(parents=True, exist_ok=True)
+    manifest_file = (
+        Path(manifest_path)
+        if manifest_path
+        else output_file.parent / "manifest.json"
+    )
+    if not manifest_file.is_absolute():
+        manifest_file = PROJECT_ROOT / manifest_file
+
+    start_time = time.time()
+    emit(f"🚀 开始有界内存转换: {to_project_relative(source_file)}")
+    hint_schema = pq.read_schema(schema_file)
+    hint_types = {
+        str(field.name).strip(): field.type
+        for field in hint_schema
+    }
+    workbook = load_workbook(
+        source_file,
+        read_only=True,
+        data_only=True,
+        keep_links=False,
+    )
+    writer: pq.ParquetWriter | None = None
+    temp_output = output_file.with_name(
+        f".{output_file.name}.{os.getpid()}.partial"
+    )
+    temp_output.unlink(missing_ok=True)
+    row_count = 0
+    batch_count = 0
+    hinted_column_count = 0
+    columns: list[str] = []
+    try:
+        if sheet_name not in workbook.sheetnames:
+            raise ValueError(f"Excel 缺少工作表：{sheet_name}。")
+        worksheet = workbook[sheet_name]
+        row_iterator = worksheet.iter_rows(values_only=True)
+        header = next(row_iterator, None)
+        if header is None:
+            raise ValueError("Excel 工作表为空。")
+        columns = [
+            str(value).strip() if value is not None else ""
+            for value in header
+        ]
+        empty_headers = [index + 1 for index, value in enumerate(columns) if not value]
+        if empty_headers:
+            raise ValueError(
+                "Excel 表头包含空字段，列号："
+                + "、".join(str(value) for value in empty_headers[:20])
+            )
+        duplicate_headers = sorted(
+            {
+                column
+                for column in columns
+                if columns.count(column) > 1
+            }
+        )
+        if duplicate_headers:
+            raise ValueError(
+                "Excel 表头包含重复字段：" + "、".join(duplicate_headers)
+            )
+
+        fields: list[Any] = []
+        for column in columns:
+            hinted_type = hint_types.get(column)
+            if hinted_type is not None:
+                hinted_column_count += 1
+            fields.append(
+                pa.field(
+                    column,
+                    _streaming_arrow_type(
+                        column=column,
+                        hinted_type=hinted_type,
+                    ),
+                )
+            )
+        output_schema = pa.schema(fields)
+        writer = pq.ParquetWriter(
+            temp_output,
+            output_schema,
+            compression="snappy",
+        )
+
+        batch_values: list[list[Any]] = [[] for _ in columns]
+
+        def flush_batch() -> None:
+            nonlocal batch_count
+            if not batch_values or not batch_values[0]:
+                return
+            arrays = [
+                pa.array(values, type=field.type, safe=True)
+                for values, field in zip(
+                    batch_values,
+                    output_schema,
+                    strict=True,
+                )
+            ]
+            table = pa.Table.from_arrays(arrays, schema=output_schema)
+            assert writer is not None
+            writer.write_table(table, row_group_size=batch_rows)
+            batch_count += 1
+            for values in batch_values:
+                values.clear()
+
+        for excel_row_number, raw_row in enumerate(row_iterator, start=2):
+            if len(raw_row) > len(columns) and any(
+                value is not None for value in raw_row[len(columns):]
+            ):
+                raise ValueError(
+                    f"第 {excel_row_number} 行在表头范围外仍有数据。"
+                )
+            for column_index, (column, field) in enumerate(
+                zip(columns, output_schema, strict=True)
+            ):
+                value = (
+                    raw_row[column_index]
+                    if column_index < len(raw_row)
+                    else None
+                )
+                batch_values[column_index].append(
+                    _streaming_value_for_type(
+                        value,
+                        arrow_type=field.type,
+                        column=column,
+                        row_number=excel_row_number,
+                    )
+                )
+            row_count += 1
+            if len(batch_values[0]) >= batch_rows:
+                flush_batch()
+            if row_count % 50_000 == 0:
+                emit(f"📥 已流式读取 {row_count} 行")
+        flush_batch()
+        if row_count <= 0:
+            raise ValueError("Excel 工作表没有数据行。")
+        writer.close()
+        writer = None
+        os.replace(temp_output, output_file)
+    except Exception:
+        if writer is not None:
+            writer.close()
+        temp_output.unlink(missing_ok=True)
+        output_file.unlink(missing_ok=True)
+        raise
+    finally:
+        workbook.close()
+
+    validation_summary = evaluate_output_schema_values(
+        columns=columns,
+        row_count=row_count,
+    )
+    elapsed = time.time() - start_time
+    write_manifest_values(
+        manifest_path=manifest_file,
+        source_files=[source_file],
+        output_file=output_file,
+        sheet_name=sheet_name,
+        row_count=row_count,
+        column_names=columns,
+        elapsed_seconds=elapsed,
+        validation_summary=validation_summary,
+        merge_summary={
+            "sourceFileCount": 1,
+            "preMergeRows": row_count,
+            "mergedRows": row_count,
+            "finalRows": row_count,
+            "streamingXlsx": True,
+            "streamingBatchRows": batch_rows,
+            "streamingBatchCount": batch_count,
+            "schemaHintParquet": to_project_relative(schema_file),
+            "schemaHintedColumnCount": hinted_column_count,
+            "schemaFallbackStringColumnCount": (
+                len(columns) - hinted_column_count
+                - sum(
+                    1
+                    for column in columns
+                    if column not in hint_types
+                    and (
+                        YEAR_COL_PATTERN.fullmatch(column)
+                        or MONTH_COL_PATTERN.fullmatch(column)
+                        or YTD_COL_PATTERN.match(column)
+                    )
+                )
+            ),
+        },
+    )
+    emit(
+        "✅ 有界内存转换完成: rows=%s, batches=%s, output=%s"
+        % (row_count, batch_count, to_project_relative(output_file))
+    )
+    emit(f"🧾 Manifest: {to_project_relative(manifest_file)}")
+    emit(f"⏱️ 总耗时: {elapsed:.2f} 秒")
+    return output_file, manifest_file
 
 
 def convert_jato_to_parquet(
@@ -1115,6 +1513,23 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
         help="日志作业 ID（不传则自动生成）。",
     )
+    parser.add_argument(
+        "--streaming-xlsx",
+        action="store_true",
+        help="使用 openpyxl + PyArrow 有界批次转换单个 washed XLSX。",
+    )
+    parser.add_argument(
+        "--schema-from-parquet",
+        type=str,
+        default=None,
+        help="有界内存转换的 active parquet 字段类型来源。",
+    )
+    parser.add_argument(
+        "--streaming-batch-rows",
+        type=int,
+        default=DEFAULT_STREAMING_BATCH_ROWS,
+        help="有界内存转换每批行数（默认 4096）。",
+    )
     return parser
 
 
@@ -1123,6 +1538,34 @@ def main() -> None:
     job_id = args.job_id or build_job_id("etl")
     logger = get_logger("jato.etl", job_id=job_id)
     try:
+        if args.streaming_xlsx:
+            if not args.input:
+                raise ValueError("--streaming-xlsx 必须显式传入 --input。")
+            if not args.schema_from_parquet:
+                raise ValueError(
+                    "--streaming-xlsx 必须传入 --schema-from-parquet。"
+                )
+            if (
+                args.input_files
+                or args.merge_all_xlsx
+                or args.dedupe_keys
+                or args.conflict_keys
+                or args.supplement_missing_countries_from_parquet
+            ):
+                raise ValueError(
+                    "有界内存路径仅用于已通过 Digest 的单文件目标国家候选，"
+                    "不支持 merge/dedupe/conflict/supplement。"
+                )
+            convert_jato_xlsx_to_parquet_streaming(
+                input_path=args.input,
+                output_path=args.output,
+                manifest_path=args.manifest,
+                sheet_name=args.sheet,
+                schema_from_parquet=args.schema_from_parquet,
+                batch_rows=args.streaming_batch_rows,
+                job_id=job_id,
+            )
+            return
         convert_jato_to_parquet(
             input_path=args.input,
             input_files=args.input_files,
