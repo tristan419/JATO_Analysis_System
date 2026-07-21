@@ -17,7 +17,7 @@ PRODUCTION_ENVIRONMENT = "production"
 PRODUCTION_RELEASE_WORKFLOW = ".github/workflows/production-release.yml"
 
 PRODUCTION_JOBS = {
-    PRODUCTION_RELEASE_WORKFLOW: ("deploy_tencent", "deploy_intl"),
+    PRODUCTION_RELEASE_WORKFLOW: ("deploy_tencent",),
     ".github/workflows/deploy-aws-ecs.yml": ("deploy",),
     ".github/workflows/deploy-ec2-auto-update.yml": ("deploy",),
     ".github/workflows/hermes-devsync.yml": ("devsync",),
