@@ -131,6 +131,20 @@ describe("jato monthly update helpers", () => {
         failureDigest: null,
       },
     })])).toBe(true);
+    expect(shouldPollMonthlyUpdateJobs([makeJob({
+      status: "success",
+      pendingOperation: {
+        operationId: "jato-review-refresh-1",
+        type: "review_refresh",
+        status: "running",
+        requestedAt: "2026-04-13T00:06:00+00:00",
+        requestedBy: "admin",
+        startedAt: "2026-04-13T00:06:01+00:00",
+        finishedAt: null,
+        error: null,
+        failureDigest: null,
+      },
+    })])).toBe(true);
     expect(shouldPollMonthlyUpdateJobs([makeJob({ status: "success" })])).toBe(false);
   });
 

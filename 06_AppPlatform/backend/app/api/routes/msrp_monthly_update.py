@@ -1,4 +1,5 @@
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, Request, UploadFile
+from pydantic import BaseModel, Field
 
 from app.core.security import UserContext, require_min_role
 from app.services.jato_monthly_update_service import (
@@ -21,6 +22,7 @@ from app.services.jato_monthly_update_service import (
     publish_jato_monthly_update_job,
     recheck_jato_monthly_update_job,
     recover_failed_jato_monthly_update_job,
+    refresh_jato_monthly_update_review,
     resolve_jato_historical_reclassification,
     retry_jato_monthly_update_upload_digest,
     rollback_jato_monthly_update_job,
@@ -30,6 +32,16 @@ from app.services.jato_monthly_update_service import (
 )
 
 router = APIRouter(prefix="/msrp", tags=["msrp"])
+
+
+class JatoMonthlyUpdateReviewRefreshBody(BaseModel):
+    requestId: str = Field(min_length=8, max_length=128)
+    expectedCandidateFingerprint: str | None = Field(
+        default=None,
+        min_length=64,
+        max_length=64,
+        pattern=r"^[0-9a-fA-F]{64}$",
+    )
 
 
 @router.post("/monthly-update-jobs")
@@ -156,6 +168,24 @@ def get_monthly_update_review(
     _user: UserContext = Depends(require_min_role("editor")),
 ) -> dict[str, object]:
     return {"item": get_jato_monthly_update_review(job_id)}
+
+
+@router.post("/monthly-update-jobs/{job_id}/review-refresh")
+def post_monthly_update_review_refresh(
+    job_id: str,
+    payload: JatoMonthlyUpdateReviewRefreshBody,
+    user: UserContext = Depends(require_min_role("admin")),
+) -> dict[str, object]:
+    return {
+        "item": refresh_jato_monthly_update_review(
+            job_id=job_id,
+            triggered_by=user.name,
+            request_id=payload.requestId,
+            expected_candidate_fingerprint=(
+                payload.expectedCandidateFingerprint
+            ),
+        )
+    }
 
 
 @router.post("/monthly-update-jobs/{job_id}/review-approval")

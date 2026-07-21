@@ -1,5 +1,6 @@
 import hashlib
 import importlib.util
+import os
 import sys
 import warnings
 from pathlib import Path
@@ -43,6 +44,32 @@ def _configure_project(tmp_path: Path, monkeypatch) -> tuple[Path, Path]:
         job_root,
     )
     return project_root, job_root
+
+
+def _write_review_refresh_candidate(
+    project_root: Path,
+) -> tuple[dict[str, str], Path]:
+    staging_dir = project_root / "04_Processed_data" / "staging" / "review"
+    staging_dir.mkdir(parents=True, exist_ok=True)
+    candidate_path = staging_dir / "candidate.parquet"
+    manifest_path = staging_dir / "manifest.json"
+    report_path = staging_dir / "refresh.json"
+    candidate_path.write_bytes(b"candidate-v1")
+    manifest_path.write_text('{"version":1}', encoding="utf-8")
+    report_path.write_text('{"status":"success"}', encoding="utf-8")
+    return (
+        {
+            "candidateScope": "target_country_partition_only",
+            "stagingOutputPath": (
+                "04_Processed_data/staging/review/candidate.parquet"
+            ),
+            "manifestPath": "04_Processed_data/staging/review/manifest.json",
+            "refreshReportPath": (
+                "04_Processed_data/staging/review/refresh.json"
+            ),
+        },
+        candidate_path,
+    )
 
 
 def _write_country_partition(
@@ -516,6 +543,8 @@ def test_cached_review_and_approval_do_not_hash_large_candidate_in_web(
             "jobId": job_id,
             "reviewFindings": [],
             "candidateFingerprint": "a" * 64,
+            "reviewBundleSchemaVersion": 2,
+            "candidateArtifactStatSignatureVersion": 2,
             "candidateArtifactStatSignature": signature,
         },
     )
@@ -546,16 +575,601 @@ def test_cached_review_and_approval_do_not_hash_large_candidate_in_web(
     assert review["candidateFingerprint"] == "a" * 64
     assert approved["reviewApproval"]["candidateFingerprint"] == "a" * 64
 
-    candidate_path.write_bytes(b"candidate-drift-with-different-size")
-    with pytest.raises(HTTPException, match="candidate 在 Review bundle 生成后已变化"):
+    cached_bundle = jato_monthly_update_service._read_json(review_path)
+    cached_bundle.pop("candidateFingerprint")
+    jato_monthly_update_service._write_json(review_path, cached_bundle)
+    with pytest.raises(HTTPException) as missing_fingerprint:
         jato_monthly_update_service.get_jato_monthly_update_review(job_id)
+    assert missing_fingerprint.value.detail["reason"] == (
+        "candidate_fingerprint_unavailable"
+    )
+    assert missing_fingerprint.value.detail["canRebuild"] is False
+    cached_bundle["candidateFingerprint"] = "a" * 64
+    jato_monthly_update_service._write_json(review_path, cached_bundle)
+
+    candidate_path.write_bytes(b"candidate-drift-with-different-size")
+    with pytest.raises(HTTPException) as exc_info:
+        jato_monthly_update_service.get_jato_monthly_update_review(job_id)
+    assert exc_info.value.detail["blockerType"] == "review_bundle_stale"
+    assert exc_info.value.detail["reason"] == "candidate_metadata_changed"
+
+
+def test_candidate_stat_signature_v2_ignores_inode_and_ctime(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    project_root, _job_root = _configure_project(tmp_path, monkeypatch)
+    artifacts, candidate_path = _write_review_refresh_candidate(project_root)
+    original_stat = candidate_path.stat()
+    original_signature = (
+        jato_monthly_update_service._candidate_artifact_stat_signature(
+            artifacts
+        )
+    )
+
+    replacement = candidate_path.with_suffix(".replacement")
+    replacement.write_bytes(candidate_path.read_bytes())
+    os.utime(
+        replacement,
+        ns=(original_stat.st_atime_ns, original_stat.st_mtime_ns),
+    )
+    os.replace(replacement, candidate_path)
+
+    replaced_stat = candidate_path.stat()
+    assert (
+        replaced_stat.st_ino != original_stat.st_ino
+        or replaced_stat.st_ctime_ns != original_stat.st_ctime_ns
+    )
+    assert (
+        jato_monthly_update_service._candidate_artifact_stat_signature(
+            artifacts
+        )
+        == original_signature
+    )
+    assert original_signature.startswith("v2:")
+
+    candidate_path.write_bytes(b"candidate-v2")
+    os.utime(
+        candidate_path,
+        ns=(replaced_stat.st_atime_ns, replaced_stat.st_mtime_ns),
+    )
+    assert (
+        jato_monthly_update_service._candidate_artifact_stat_signature(
+            artifacts
+        )
+        == original_signature
+    )
+    candidate_path.write_bytes(b"candidate-with-a-new-size")
+    os.utime(
+        candidate_path,
+        ns=(replaced_stat.st_atime_ns, replaced_stat.st_mtime_ns),
+    )
+    assert (
+        jato_monthly_update_service._candidate_artifact_stat_signature(
+            artifacts
+        )
+        != original_signature
+    )
+
+
+def test_legacy_review_bundle_fails_closed_without_web_content_hash(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    project_root, _job_root = _configure_project(tmp_path, monkeypatch)
+    artifacts, _candidate_path = _write_review_refresh_candidate(project_root)
+    job_id = "jato-review-legacy-signature"
+    candidate_fingerprint = (
+        jato_monthly_update_service._candidate_fingerprint_id(artifacts)
+    )
+    review_path = jato_monthly_update_service._job_review_bundle_path(job_id)
+    review_path.parent.mkdir(parents=True, exist_ok=True)
+    jato_monthly_update_service._write_json(
+        review_path,
+        {
+            "jobId": job_id,
+            "candidateFingerprint": candidate_fingerprint,
+            "candidateArtifactStatSignature": "1" * 64,
+        },
+    )
+    artifacts["reviewBundlePath"] = (
+        jato_monthly_update_service._relative_to_project(review_path)
+    )
+    jato_monthly_update_service._persist_job_state(
+        {
+            "jobId": job_id,
+            "status": "success",
+            "phase": "completed",
+            "activeBaseFingerprint": "b" * 64,
+            "artifacts": artifacts,
+        }
+    )
+    monkeypatch.setattr(
+        jato_monthly_update_service,
+        "_active_dataset_version",
+        lambda: "b" * 64,
+    )
+    monkeypatch.setattr(
+        jato_monthly_update_service,
+        "_candidate_fingerprint_id",
+        lambda _artifacts: (_ for _ in ()).throw(
+            AssertionError("GET Review must not content-hash candidate")
+        ),
+    )
+
+    with pytest.raises(HTTPException) as exc_info:
+        jato_monthly_update_service.get_jato_monthly_update_review(job_id)
+
+    assert exc_info.value.detail["blockerType"] == "review_bundle_stale"
+    assert exc_info.value.detail["reason"] == "legacy_review_bundle_schema"
+    assert exc_info.value.detail["canRebuild"] is True
+    assert exc_info.value.detail["candidateFingerprint"] == (
+        candidate_fingerprint
+    )
+
+    legacy_bundle = jato_monthly_update_service._read_json(review_path)
+    legacy_bundle.update(
+        {
+            "reviewBundleSchemaVersion": 2,
+            "candidateArtifactStatSignatureVersion": 1,
+            "candidateArtifactStatSignature": (
+                jato_monthly_update_service
+                ._candidate_artifact_stat_signature(artifacts)
+            ),
+        }
+    )
+    jato_monthly_update_service._write_json(review_path, legacy_bundle)
+    with pytest.raises(HTTPException) as wrong_metadata_version:
+        jato_monthly_update_service.get_jato_monthly_update_review(job_id)
+    assert wrong_metadata_version.value.detail["reason"] == (
+        "legacy_stat_signature_metadata"
+    )
+
+    legacy_bundle.pop("candidateFingerprint")
+    jato_monthly_update_service._write_json(review_path, legacy_bundle)
+    with pytest.raises(HTTPException) as missing_fingerprint:
+        jato_monthly_update_service.get_jato_monthly_update_review(job_id)
+    assert missing_fingerprint.value.detail["reason"] == (
+        "legacy_stat_signature_metadata"
+    )
+    assert missing_fingerprint.value.detail["canRebuild"] is False
+    assert missing_fingerprint.value.detail["rebuildBlockerReason"] == (
+        "candidate_fingerprint_unavailable"
+    )
+    with pytest.raises(HTTPException) as queue_error:
+        (
+            jato_monthly_update_service
+            ._queue_jato_monthly_update_review_refresh_locked(
+                job_id=job_id,
+                triggered_by="tester",
+                request_id="review-request-missing-fingerprint",
+                expected_candidate_fingerprint=None,
+            )
+        )
+    assert queue_error.value.detail["reason"] == (
+        "candidate_fingerprint_unavailable"
+    )
+
+
+@pytest.mark.parametrize("bundle_text", ["{not-json", "[]"])
+def test_corrupt_review_bundle_is_structured_and_cannot_rebuild(
+    tmp_path: Path,
+    monkeypatch,
+    bundle_text: str,
+) -> None:
+    project_root, _job_root = _configure_project(tmp_path, monkeypatch)
+    artifacts, _candidate_path = _write_review_refresh_candidate(project_root)
+    job_id = "jato-review-corrupt"
+    review_path = jato_monthly_update_service._job_review_bundle_path(job_id)
+    review_path.parent.mkdir(parents=True, exist_ok=True)
+    review_path.write_text(bundle_text, encoding="utf-8")
+    artifacts["reviewBundlePath"] = (
+        jato_monthly_update_service._relative_to_project(review_path)
+    )
+    jato_monthly_update_service._persist_job_state(
+        {
+            "jobId": job_id,
+            "status": "success",
+            "phase": "completed",
+            "activeBaseFingerprint": "b" * 64,
+            "artifacts": artifacts,
+        }
+    )
+    monkeypatch.setattr(
+        jato_monthly_update_service,
+        "_active_dataset_version",
+        lambda: "b" * 64,
+    )
+    monkeypatch.setattr(
+        jato_monthly_update_service,
+        "_candidate_fingerprint_id",
+        lambda _artifacts: (_ for _ in ()).throw(
+            AssertionError("corrupt bundle must not trigger a Web content hash")
+        ),
+    )
+
+    with pytest.raises(HTTPException) as review_error:
+        jato_monthly_update_service.get_jato_monthly_update_review(job_id)
+    assert review_error.value.detail["blockerType"] == "review_bundle_stale"
+    assert review_error.value.detail["reason"] == "review_bundle_corrupt"
+    assert review_error.value.detail["canRebuild"] is False
+    assert review_error.value.detail["rebuildBlockerReason"] == (
+        "candidate_fingerprint_unavailable"
+    )
+
+    with pytest.raises(HTTPException) as queue_error:
+        (
+            jato_monthly_update_service
+            ._queue_jato_monthly_update_review_refresh_locked(
+                job_id=job_id,
+                triggered_by="tester",
+                request_id="review-request-corrupt",
+                expected_candidate_fingerprint=None,
+            )
+        )
+    assert queue_error.value.detail["reason"] == "review_bundle_corrupt"
+    assert queue_error.value.detail["canRebuild"] is False
+
+
+def test_review_refresh_worker_rejects_same_stat_content_drift_and_keeps_bundle(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    project_root, _job_root = _configure_project(tmp_path, monkeypatch)
+    artifacts, candidate_path = _write_review_refresh_candidate(project_root)
+    job_id = "jato-review-content-drift"
+    candidate_fingerprint = (
+        jato_monthly_update_service._candidate_fingerprint_id(artifacts)
+    )
+    original_stat = candidate_path.stat()
+    original_signature = (
+        jato_monthly_update_service._candidate_artifact_stat_signature(
+            artifacts
+        )
+    )
+    review_path = jato_monthly_update_service._job_review_bundle_path(job_id)
+    review_path.parent.mkdir(parents=True, exist_ok=True)
+    jato_monthly_update_service._write_json(
+        review_path,
+        {"sentinel": "old-review", "candidateFingerprint": candidate_fingerprint},
+    )
+    artifacts["reviewBundlePath"] = (
+        jato_monthly_update_service._relative_to_project(review_path)
+    )
+    jato_monthly_update_service._persist_job_state(
+        {
+            "jobId": job_id,
+            "status": "success",
+            "phase": "completed",
+            "activeBaseFingerprint": "b" * 64,
+            "artifacts": artifacts,
+        }
+    )
+    candidate_path.write_bytes(b"candidate-v2")
+    os.utime(
+        candidate_path,
+        ns=(original_stat.st_atime_ns, original_stat.st_mtime_ns),
+    )
+    assert (
+        jato_monthly_update_service._candidate_artifact_stat_signature(
+            artifacts
+        )
+        == original_signature
+    )
+    monkeypatch.setattr(
+        jato_monthly_update_service,
+        "_active_dataset_version",
+        lambda: "b" * 64,
+    )
+
+    with pytest.raises(HTTPException) as exc_info:
+        jato_monthly_update_service._cache_jato_monthly_update_review(
+            job_id,
+            expected_candidate_fingerprint=candidate_fingerprint,
+            expected_active_fingerprint="b" * 64,
+            review_generation_id="review-generation-1",
+        )
+
+    assert exc_info.value.detail["blockerType"] == "candidate_content_drift"
+    assert jato_monthly_update_service._read_json(review_path)["sentinel"] == (
+        "old-review"
+    )
+
+
+def test_review_refresh_queue_reuses_one_operation_and_clears_approval(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    project_root, _job_root = _configure_project(tmp_path, monkeypatch)
+    artifacts, candidate_path = _write_review_refresh_candidate(project_root)
+    job_id = "jato-review-double-click"
+    candidate_fingerprint = (
+        jato_monthly_update_service._candidate_fingerprint_id(artifacts)
+    )
+    review_path = jato_monthly_update_service._job_review_bundle_path(job_id)
+    review_path.parent.mkdir(parents=True, exist_ok=True)
+    jato_monthly_update_service._write_json(
+        review_path,
+        {
+            "candidateFingerprint": candidate_fingerprint,
+            "reviewBundleSchemaVersion": 2,
+            "candidateArtifactStatSignatureVersion": 1,
+            "candidateArtifactStatSignature": (
+                jato_monthly_update_service
+                ._candidate_artifact_stat_signature(artifacts)
+            ),
+        },
+    )
+    artifacts["reviewBundlePath"] = (
+        jato_monthly_update_service._relative_to_project(review_path)
+    )
+    jato_monthly_update_service._persist_job_state(
+        {
+            "jobId": job_id,
+            "status": "success",
+            "phase": "completed",
+            "activeBaseFingerprint": "b" * 64,
+            "artifacts": artifacts,
+            "reviewApproval": {
+                "decision": "approved",
+                "candidateFingerprint": candidate_fingerprint,
+            },
+        }
+    )
+    launches: list[str] = []
+    monkeypatch.setattr(
+        jato_monthly_update_service,
+        "_active_dataset_version",
+        lambda: "b" * 64,
+    )
+    monkeypatch.setattr(
+        jato_monthly_update_service,
+        "_launch_job_thread",
+        lambda launched_job_id: launches.append(launched_job_id),
+    )
+    candidate_before = candidate_path.read_bytes()
+
+    first = (
+        jato_monthly_update_service
+        ._queue_jato_monthly_update_review_refresh_locked(
+            job_id=job_id,
+            triggered_by="tester",
+            request_id="review-request-1",
+            expected_candidate_fingerprint=candidate_fingerprint,
+        )
+    )
+    replay = (
+        jato_monthly_update_service
+        ._queue_jato_monthly_update_review_refresh_locked(
+            job_id=job_id,
+            triggered_by="tester",
+            request_id="review-request-1",
+            expected_candidate_fingerprint=candidate_fingerprint,
+        )
+    )
+
+    assert replay["pendingOperation"]["operationId"] == (
+        first["pendingOperation"]["operationId"]
+    )
+    assert replay["pendingOperation"]["type"] == "review_refresh"
+    assert replay["pendingOperation"]["status"] == "queued"
+    assert launches == [job_id, job_id]
+    persisted = jato_monthly_update_service._load_job_state(job_id)
+    assert persisted["status"] == "success"
+    assert persisted["phase"] == "completed"
+    assert persisted["reviewApproval"] is None
+    assert candidate_path.read_bytes() == candidate_before
+
+    with pytest.raises(HTTPException, match="另一个 candidate"):
+        (
+            jato_monthly_update_service
+            ._queue_jato_monthly_update_review_refresh_locked(
+                job_id=job_id,
+                triggered_by="tester",
+                request_id="review-request-2",
+                expected_candidate_fingerprint="c" * 64,
+            )
+        )
+
+
+def test_review_refresh_worker_and_reconcile_require_durable_generation(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    project_root, _job_root = _configure_project(tmp_path, monkeypatch)
+    artifacts, candidate_path = _write_review_refresh_candidate(project_root)
+    job_id = "jato-review-durable-worker"
+    candidate_fingerprint = (
+        jato_monthly_update_service._candidate_fingerprint_id(artifacts)
+    )
+    operation_id = "jato-review_refresh-test"
+    operation = {
+        "operationId": operation_id,
+        "type": "review_refresh",
+        "status": "queued",
+        "phase": "queued",
+        "requestId": "review-request-durable",
+        "requestedAt": "2026-07-21T00:00:00+00:00",
+        "requestedBy": "tester",
+        "expectedCandidateFingerprint": candidate_fingerprint,
+        "expectedActiveFingerprint": "b" * 64,
+        "candidateArtifactStatSignature": (
+            jato_monthly_update_service._candidate_artifact_stat_signature(
+                artifacts
+            )
+        ),
+    }
+    jato_monthly_update_service._persist_job_state(
+        {
+            "jobId": job_id,
+            "status": "success",
+            "phase": "completed",
+            "activeBaseFingerprint": "b" * 64,
+            "artifacts": artifacts,
+            "pendingOperation": operation,
+        }
+    )
+    monkeypatch.setattr(
+        jato_monthly_update_service,
+        "_active_dataset_version",
+        lambda: "b" * 64,
+    )
+    candidate_before = candidate_path.read_bytes()
+
+    def cache_review(
+        requested_job_id: str,
+        *,
+        expected_candidate_fingerprint: str | None = None,
+        expected_active_fingerprint: str | None = None,
+        review_generation_id: str | None = None,
+    ) -> Path:
+        assert requested_job_id == job_id
+        assert expected_candidate_fingerprint == candidate_fingerprint
+        assert expected_active_fingerprint == "b" * 64
+        latest = jato_monthly_update_service._load_job_state(job_id)
+        latest_artifacts = latest["artifacts"]
+        bundle_path = jato_monthly_update_service._job_review_bundle_path(
+            job_id
+        )
+        bundle_path.parent.mkdir(parents=True, exist_ok=True)
+        jato_monthly_update_service._write_json(
+            bundle_path,
+            {
+                "reviewGenerationId": review_generation_id,
+                "candidateFingerprint": candidate_fingerprint,
+                "reviewBundleSchemaVersion": (
+                    jato_monthly_update_service.REVIEW_BUNDLE_SCHEMA_VERSION
+                ),
+                "candidateArtifactStatSignatureVersion": (
+                    jato_monthly_update_service
+                    .CANDIDATE_ARTIFACT_STAT_SIGNATURE_VERSION
+                ),
+                "candidateArtifactStatSignature": (
+                    jato_monthly_update_service
+                    ._candidate_artifact_stat_signature(latest_artifacts)
+                ),
+            },
+        )
+        latest_artifacts["reviewBundlePath"] = (
+            jato_monthly_update_service._relative_to_project(bundle_path)
+        )
+        latest["artifacts"] = latest_artifacts
+        jato_monthly_update_service._persist_job_state(latest)
+        return bundle_path
+
+    monkeypatch.setattr(
+        jato_monthly_update_service,
+        "_cache_jato_monthly_update_review",
+        cache_review,
+    )
+
+    jato_monthly_update_service._run_active_bundle_operation(
+        job_id=job_id,
+        operation_type="review_refresh",
+    )
+
+    completed = jato_monthly_update_service._load_job_state(job_id)
+    assert completed["status"] == "success"
+    assert completed["phase"] == "completed"
+    assert completed["pendingOperation"]["status"] == "success"
+    assert completed["pendingOperation"]["phase"] == "completed"
+    assert candidate_path.read_bytes() == candidate_before
+
+    completed["artifacts"]["reviewBundlePath"] = "legacy/review_bundle.json"
+    completed["pendingOperation"]["status"] = "running"
+    completed["workerPid"] = 2_000_000_000
+    jato_monthly_update_service._persist_job_state(completed)
+    reconciled = (
+        jato_monthly_update_service._reconcile_stale_monthly_update_jobs()
+    )
+    recovered = jato_monthly_update_service._load_job_state(job_id)
+    assert reconciled == [job_id]
+    assert recovered["pendingOperation"]["status"] == "success"
+    assert recovered["pendingOperation"]["recoveredAfterWorkerLoss"] is True
+    assert recovered["artifacts"]["reviewBundlePath"] == (
+        jato_monthly_update_service._relative_to_project(
+            jato_monthly_update_service._job_review_bundle_path(job_id)
+        )
+    )
+
+    bundle_path = jato_monthly_update_service._job_review_bundle_path(job_id)
+    bundle = jato_monthly_update_service._read_json(bundle_path)
+    bundle["reviewGenerationId"] = "different-generation"
+    jato_monthly_update_service._write_json(bundle_path, bundle)
+    recovered["pendingOperation"]["status"] = "running"
+    recovered["workerPid"] = 2_000_000_000
+    jato_monthly_update_service._persist_job_state(recovered)
+    jato_monthly_update_service._reconcile_stale_monthly_update_jobs()
+    failed = jato_monthly_update_service._load_job_state(job_id)
+    assert failed["status"] == "success"
+    assert failed["phase"] == "completed"
+    assert failed["pendingOperation"]["status"] == "failed"
+    assert failed["pendingOperation"]["failureDigest"]["code"] == (
+        "REVIEW_REFRESH_WORKER_LOST"
+    )
+    assert failed["pendingOperation"]["failureDigest"]["retryable"] is True
+
+
+def test_review_refresh_worker_rejects_queue_snapshot_drift_before_hashing(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    project_root, _job_root = _configure_project(tmp_path, monkeypatch)
+    artifacts, candidate_path = _write_review_refresh_candidate(project_root)
+    job_id = "jato-review-queued-stat-drift"
+    queued_signature = (
+        jato_monthly_update_service._candidate_artifact_stat_signature(
+            artifacts
+        )
+    )
+    jato_monthly_update_service._persist_job_state(
+        {
+            "jobId": job_id,
+            "status": "success",
+            "phase": "completed",
+            "activeBaseFingerprint": "b" * 64,
+            "artifacts": artifacts,
+            "pendingOperation": {
+                "operationId": "jato-review_refresh-stat-drift",
+                "type": "review_refresh",
+                "status": "queued",
+                "phase": "queued",
+                "requestedAt": "2026-07-21T00:00:00+00:00",
+                "requestedBy": "tester",
+                "expectedCandidateFingerprint": None,
+                "expectedActiveFingerprint": "b" * 64,
+                "candidateArtifactStatSignature": queued_signature,
+            },
+        }
+    )
+    candidate_path.write_bytes(b"candidate-drift-after-queue")
+    monkeypatch.setattr(
+        jato_monthly_update_service,
+        "_candidate_fingerprint_id",
+        lambda _artifacts: (_ for _ in ()).throw(
+            AssertionError("metadata drift must fail before content hashing")
+        ),
+    )
+
+    jato_monthly_update_service._run_active_bundle_operation(
+        job_id=job_id,
+        operation_type="review_refresh",
+    )
+
+    failed = jato_monthly_update_service._load_job_state(job_id)
+    assert failed["status"] == "success"
+    assert failed["phase"] == "completed"
+    assert failed["pendingOperation"]["status"] == "failed"
+    assert failed["pendingOperation"]["failureDigest"]["technicalDetail"][
+        "blockerType"
+    ] == "candidate_metadata_changed"
 
 
 def test_cached_legacy_review_exposes_server_normalized_allowed_decisions(
     tmp_path: Path,
     monkeypatch,
 ) -> None:
-    _project_root, _job_root = _configure_project(tmp_path, monkeypatch)
+    project_root, _job_root = _configure_project(tmp_path, monkeypatch)
     job_id = "jato-update-cached-legacy-history"
     legacy_countries = [
         {
@@ -574,11 +1188,26 @@ def test_cached_legacy_review_exposes_server_normalized_allowed_decisions(
         job_id
     )
     review_path.parent.mkdir(parents=True, exist_ok=True)
+    candidate_path = project_root / "candidate.parquet"
+    candidate_path.write_bytes(b"candidate")
+    artifacts = {
+        "stagingOutputPath": "candidate.parquet",
+        "reviewBundlePath": (
+            jato_monthly_update_service._relative_to_project(review_path)
+        ),
+    }
     jato_monthly_update_service._write_json(
         review_path,
         {
             "jobId": job_id,
             "reviewFindings": [],
+            "candidateFingerprint": "a" * 64,
+            "reviewBundleSchemaVersion": 2,
+            "candidateArtifactStatSignatureVersion": 2,
+            "candidateArtifactStatSignature": (
+                jato_monthly_update_service
+                ._candidate_artifact_stat_signature(artifacts)
+            ),
             "historicalReclassificationReport": {
                 "status": "not_required",
                 "countries": legacy_countries,
@@ -591,13 +1220,7 @@ def test_cached_legacy_review_exposes_server_normalized_allowed_decisions(
             "jobId": job_id,
             "status": "success",
             "phase": "completed",
-            "artifacts": {
-                "reviewBundlePath": (
-                    jato_monthly_update_service._relative_to_project(
-                        review_path
-                    )
-                )
-            },
+            "artifacts": artifacts,
         }
     )
 

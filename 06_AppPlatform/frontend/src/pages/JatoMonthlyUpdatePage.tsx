@@ -14,6 +14,7 @@ import type {
   JatoMonthlyUpdateJob,
   JatoMonthlyUpdateMaintenanceStatus,
   JatoMonthlyUpdateReviewBundle,
+  JatoMonthlyUpdateReviewIssue,
   JatoMonthlyUpdateStorageMetric,
   JatoMonthlyUpdateUploadProgress,
   PublishBlocker,
@@ -30,6 +31,21 @@ import {
   isMonthlyUpdateUploadFilenameAccepted,
   shouldPollMonthlyUpdateJobs,
 } from "../utils/jatoMonthlyUpdate";
+
+type ReviewIssueState = {
+  jobId: string;
+  issue: JatoMonthlyUpdateReviewIssue;
+};
+
+function reviewIssueFromError(error: unknown): JatoMonthlyUpdateReviewIssue | null {
+  if (typeof error !== "object" || error === null || !("reviewIssue" in error)) {
+    return null;
+  }
+  const issue = error.reviewIssue;
+  return typeof issue === "object" && issue !== null
+    ? issue as JatoMonthlyUpdateReviewIssue
+    : null;
+}
 
 const historicalReclassificationDecisionCopy: Record<
   JatoHistoricalReclassificationDecision,
@@ -292,6 +308,8 @@ export function JatoMonthlyUpdatePage() {
   const [rollingBackJobId, setRollingBackJobId] = useState<string | null>(null);
   const [baselinePromotionSubmitting, setBaselinePromotionSubmitting] = useState(false);
   const [reviewLoadingJobId, setReviewLoadingJobId] = useState<string | null>(null);
+  const [reviewRefreshSubmittingJobId, setReviewRefreshSubmittingJobId] = useState<string | null>(null);
+  const [reviewIssue, setReviewIssue] = useState<ReviewIssueState | null>(null);
   const [approvingReviewJobId, setApprovingReviewJobId] = useState<string | null>(null);
   const [
     resolvingHistoricalReclassificationJobId,
@@ -328,9 +346,29 @@ export function JatoMonthlyUpdatePage() {
   const [publishBlocker, setPublishBlocker] = useState<PublishBlocker | null>(null);
   const [smartMergingJobId, setSmartMergingJobId] = useState<string | null>(null);
   const [infoCollapsed, setInfoCollapsed] = useState(true);
+  const reviewRefreshRequestRef = useRef<{ jobId: string; requestId: string } | null>(null);
+  const handledReviewRefreshOperationIdRef = useRef<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const watchedBaselinePromotionIdRef = useRef<string | null>(null);
   const abandonedUploadIdRef = useRef<string | null>(null);
+
+  function reviewRefreshBlocksMutation(job: JatoMonthlyUpdateJob): boolean {
+    const operation = job.pendingOperation;
+    return reviewRefreshSubmittingJobId === job.jobId
+      || reviewRefreshRequestRef.current?.jobId === job.jobId
+      || (
+        operation?.type === "review_refresh"
+        && (operation.status === "queued" || operation.status === "running")
+      );
+  }
+
+  function guardReviewRefreshMutation(job: JatoMonthlyUpdateJob): boolean {
+    if (!reviewRefreshBlocksMutation(job)) {
+      return false;
+    }
+    setError("Review 正在隔离重建；完成并重新核对前不能修改 Candidate、审批或 active。");
+    return true;
+  }
 
   const refreshJobs = useCallback(async (preferredJobId?: string, silent = false) => {
     if (!silent) {
@@ -412,11 +450,14 @@ export function JatoMonthlyUpdatePage() {
   useEffect(() => {
     setReviewBundle(null);
     setReviewLoadingJobId(null);
+    setReviewRefreshSubmittingJobId(null);
+    setReviewIssue(null);
     setSelectedReviewCountry(null);
     setPublishBlocker(null);
   }, [selectedJobId]);
 
-  const hasActiveJob = shouldPollMonthlyUpdateJobs(jobs);
+  const hasActiveJob = shouldPollMonthlyUpdateJobs(jobs)
+    || Boolean(selectedJob && shouldPollMonthlyUpdateJobs([selectedJob]));
   const baselinePromotionActive = isBaselinePromotionActive(baselinePromotion);
   const promotingBaseline = baselinePromotionSubmitting || baselinePromotionActive;
   const uploadOrJobBusy = submitting || hasActiveJob;
@@ -812,6 +853,9 @@ export function JatoMonthlyUpdatePage() {
   }
 
   async function handleReviewJob(job: JatoMonthlyUpdateJob) {
+    if (reviewRefreshBlocksMutation(job)) {
+      return;
+    }
     if (reviewBundle?.jobId === job.jobId) {
       setReviewBundle(null);
       setHistoricalReclassificationDecisions({});
@@ -822,15 +866,96 @@ export function JatoMonthlyUpdatePage() {
     try {
       const response = await api.getJatoMonthlyUpdateReview(job.jobId);
       setReviewBundle(response.item);
+      setReviewIssue(null);
       setHistoricalReclassificationDecisions({});
     } catch (err) {
-      setError((err as Error).message);
+      const issue = reviewIssueFromError(err);
+      setReviewBundle(null);
+      setHistoricalReclassificationDecisions({});
+      setSelectedReviewCountry(null);
+      setPublishBlocker(null);
+      if (issue) {
+        setReviewIssue({ jobId: job.jobId, issue });
+        setError("");
+      } else {
+        setReviewIssue(null);
+        setError((err as Error).message);
+      }
     } finally {
       setReviewLoadingJobId(null);
     }
   }
 
+  async function handleRefreshReview(job: JatoMonthlyUpdateJob) {
+    const issue = reviewIssue?.jobId === job.jobId ? reviewIssue.issue : null;
+    if (!issue?.canRebuild || isReviewRefreshPending) {
+      return;
+    }
+    if (reviewRefreshRequestRef.current?.jobId === job.jobId) {
+      return;
+    }
+    const requestId = `review-${job.jobId}-${Date.now().toString(36)}`;
+    reviewRefreshRequestRef.current = { jobId: job.jobId, requestId };
+    setReviewRefreshSubmittingJobId(job.jobId);
+    setReviewBundle(null);
+    setHistoricalReclassificationDecisions({});
+    setSelectedReviewCountry(null);
+    setPublishBlocker(null);
+    setError("");
+    setNotice("");
+    try {
+      const response = await api.refreshJatoMonthlyUpdateReview(
+        job.jobId,
+        requestId,
+        issue.candidateFingerprint,
+      );
+      setSelectedJob(response.item);
+      setNotice(
+        `Review 已进入隔离重建队列；Candidate 与 active 均不会改变。`
+      );
+      await refreshJobs(job.jobId, true);
+      await loadJobDetail(job.jobId, true);
+    } catch (err) {
+      const originalMessage = err instanceof Error ? err.message : String(err);
+      try {
+        const jobResponse = await api.getJatoMonthlyUpdateJob(job.jobId);
+        setSelectedJob(jobResponse.item);
+        setJobs((current) => [
+          jobResponse.item,
+          ...current.filter((item) => item.jobId !== jobResponse.item.jobId),
+        ]);
+        const operation = jobResponse.item.pendingOperation;
+        if (
+          operation?.type === "review_refresh"
+          && operation.requestId === requestId
+          && (operation.status === "queued" || operation.status === "running")
+        ) {
+          setNotice("Review 重建请求已被服务端受理；页面将只读轮询状态，不会重复提交。");
+        } else {
+          const reviewResponse = await api.getJatoMonthlyUpdateReview(job.jobId);
+          if (
+            issue.candidateFingerprint
+            && reviewResponse.item.candidateFingerprint !== issue.candidateFingerprint
+          ) {
+            throw new Error("重建后的 Review 未绑定原 Candidate 指纹。");
+          }
+          setReviewBundle(reviewResponse.item);
+          setReviewIssue(null);
+          setNotice("Review 已重建完成。请重新核对后再执行任何决策或批准。");
+        }
+      } catch {
+        setError(`${originalMessage}；未自动重试写请求，请刷新任务状态后确认。`);
+      }
+    } finally {
+      setReviewRefreshSubmittingJobId(null);
+      reviewRefreshRequestRef.current = null;
+    }
+  }
+
   async function handleApproveReview(job: JatoMonthlyUpdateJob) {
+    if (guardReviewRefreshMutation(job)) {
+      return;
+    }
     if (!reviewBundle || reviewBundle.jobId !== job.jobId) {
       setError("请先打开并核对 Review Candidate，再执行批准。");
       return;
@@ -877,6 +1002,9 @@ export function JatoMonthlyUpdatePage() {
   }
 
   async function handleResolveHistoricalReclassification(job: JatoMonthlyUpdateJob) {
+    if (guardReviewRefreshMutation(job)) {
+      return;
+    }
     if (!reviewBundle || reviewBundle.jobId !== job.jobId) {
       setError("请先打开 Review Candidate，再处理历史分类变化。");
       return;
@@ -921,6 +1049,7 @@ export function JatoMonthlyUpdatePage() {
         ...current.filter((item) => item.jobId !== response.item.jobId),
       ]);
       setReviewBundle(null);
+      setReviewIssue(null);
       setHistoricalReclassificationDecisions({});
       setNotice(
         `已应用 ${decisions.length} 个国家的历史分类选择，完整 Candidate 正在隔离重建；active 尚未改变。`
@@ -964,6 +1093,9 @@ export function JatoMonthlyUpdatePage() {
   }
 
   async function handlePublishJob(job: JatoMonthlyUpdateJob) {
+    if (guardReviewRefreshMutation(job)) {
+      return;
+    }
     const confirmed = window.confirm(
       "将把当前 staging candidate promote 为 active 数据集，并自动备份现有 active parquet / manifest / partitioned_dataset_v1 / fingerprint。继续吗？"
     );
@@ -998,6 +1130,9 @@ export function JatoMonthlyUpdatePage() {
   }
 
   async function handleRollbackJob(job: JatoMonthlyUpdateJob) {
+    if (guardReviewRefreshMutation(job)) {
+      return;
+    }
     const confirmed = window.confirm(
       "将把当前 active 数据集恢复到这次 publish 之前的备份，并额外保留一份回滚前快照。继续吗？"
     );
@@ -1029,6 +1164,9 @@ export function JatoMonthlyUpdatePage() {
   const isSmartMerging = smartMergingJobId === selectedJob?.jobId;
 
   async function handleSmartMerge(job: JatoMonthlyUpdateJob) {
+    if (guardReviewRefreshMutation(job)) {
+      return;
+    }
     const confirmed = window.confirm(
       "将对回归国家使用 active 最新数据、前进/持平国家使用 patch 数据，生成 Smart-Merged Candidate。这将在当前 staging 产物基础上重建分区、清单和指纹。继续吗？"
     );
@@ -1043,6 +1181,9 @@ export function JatoMonthlyUpdatePage() {
       const response = await api.smartMergeJatoMonthlyUpdateCandidate(job.jobId);
       setSelectedJob(response.item);
       setSelectedJobId(response.item.jobId);
+      setReviewBundle(null);
+      setReviewIssue(null);
+      setHistoricalReclassificationDecisions({});
       setNotice(`已触发任务 ${job.jobId} 的 Smart Merge，后台合并中，请稍候刷新查看进度。`);
       await refreshJobs(response.item.jobId, true);
       await loadJobDetail(response.item.jobId, true);
@@ -1107,6 +1248,53 @@ export function JatoMonthlyUpdatePage() {
     ? selectedRuntimeLog.ageSeconds
     : null;
   const hasSelectedJobBeenRolledBack = Boolean(selectedJob?.publication?.rolledBackAt);
+  const selectedReviewRefresh = selectedJob?.pendingOperation?.type === "review_refresh"
+    ? selectedJob.pendingOperation
+    : null;
+  const isReviewRefreshPending = selectedReviewRefresh?.status === "queued"
+    || selectedReviewRefresh?.status === "running";
+  const isReviewRefreshActionLocked = Boolean(
+    selectedJob && reviewRefreshBlocksMutation(selectedJob)
+  );
+  const selectedReviewIssue = reviewIssue && selectedJob
+    && reviewIssue.jobId === selectedJob.jobId
+    ? reviewIssue.issue
+    : null;
+  useEffect(() => {
+    if (!selectedReviewRefresh) {
+      return;
+    }
+    if (
+      selectedReviewRefresh.status === "queued"
+      || selectedReviewRefresh.status === "running"
+    ) {
+      setReviewBundle(null);
+      setHistoricalReclassificationDecisions({});
+      setPublishBlocker(null);
+      return;
+    }
+    if (handledReviewRefreshOperationIdRef.current === selectedReviewRefresh.operationId) {
+      return;
+    }
+    setReviewBundle(null);
+    setHistoricalReclassificationDecisions({});
+    setPublishBlocker(null);
+    if (selectedReviewRefresh.status === "success") {
+      handledReviewRefreshOperationIdRef.current = selectedReviewRefresh.operationId;
+      setReviewIssue(null);
+      setError("");
+      setNotice("Review 重建完成；请重新打开并核对 Review，旧审批不会沿用。");
+      return;
+    }
+    if (selectedReviewRefresh.status === "failed") {
+      handledReviewRefreshOperationIdRef.current = selectedReviewRefresh.operationId;
+      setError(
+        selectedReviewRefresh.failureDigest?.message
+        || selectedReviewRefresh.error
+        || "Review 重建失败；Candidate 与 active 均未修改。"
+      );
+    }
+  }, [selectedReviewRefresh]);
   const isSelectedJobPublished = Boolean(
     selectedJob?.publication?.publishedAt && !selectedJob?.publication?.rolledBackAt
   );
@@ -1832,7 +2020,7 @@ Smart Merge:  [SE:keep active 2026-03] [DE:patch 2026-03] [NL:patch 2026-02] [FR
                     onClick={() => void handleRecheckJob(selectedJob)}
                     disabled={recheckingJobId === selectedJob.jobId}
                   >
-                    {recheckingJobId === selectedJob.jobId ? "查验中..." : "刷新查验"}
+                    {recheckingJobId === selectedJob.jobId ? "刷新中..." : "刷新任务状态"}
                   </button>
                   {canCancelSelectedJob && (
                     <button
@@ -1849,7 +2037,7 @@ Smart Merge:  [SE:keep active 2026-03] [DE:patch 2026-03] [NL:patch 2026-02] [FR
                       type="button"
                       className="btn btn-secondary"
                       onClick={() => void handleReviewJob(selectedJob)}
-                      disabled={reviewLoadingJobId === selectedJob.jobId}
+                      disabled={reviewLoadingJobId === selectedJob.jobId || isReviewRefreshActionLocked}
                     >
                       {reviewLoadingJobId === selectedJob.jobId
                         ? "加载 review..."
@@ -1868,6 +2056,7 @@ Smart Merge:  [SE:keep active 2026-03] [DE:patch 2026-03] [NL:patch 2026-02] [FR
                       disabled={
                         hasApprovedSelectedJob
                         || approvingReviewJobId === selectedJob.jobId
+                        || isReviewRefreshActionLocked
                         || !hasValidHistoricalReclassificationReport
                         || !hasRecordedResolvedHistoricalReclassificationDecisions
                         || !hasVerifiedResolvedKeepActiveDecisions
@@ -1890,6 +2079,7 @@ Smart Merge:  [SE:keep active 2026-03] [DE:patch 2026-03] [NL:patch 2026-02] [FR
                       disabled={
                         !hasCompletedHistoricalReclassificationDecisions
                         || resolvingHistoricalReclassificationJobId === selectedJob.jobId
+                        || isReviewRefreshActionLocked
                       }
                     >
                       {resolvingHistoricalReclassificationJobId === selectedJob.jobId
@@ -1910,6 +2100,7 @@ Smart Merge:  [SE:keep active 2026-03] [DE:patch 2026-03] [NL:patch 2026-02] [FR
                         isSelectedJobPublished
                         || !hasApprovedSelectedJob
                         || publishingJobId === selectedJob.jobId
+                        || isReviewRefreshActionLocked
                         || hasActiveJob
                       }
                     >
@@ -1930,6 +2121,7 @@ Smart Merge:  [SE:keep active 2026-03] [DE:patch 2026-03] [NL:patch 2026-02] [FR
                       disabled={
                         hasSelectedJobBeenRolledBack
                         || rollingBackJobId === selectedJob.jobId
+                        || isReviewRefreshActionLocked
                         || hasActiveJob
                       }
                     >
@@ -1995,6 +2187,48 @@ Smart Merge:  [SE:keep active 2026-03] [DE:patch 2026-03] [NL:patch 2026-02] [FR
                 </div>
               </div>
 
+              {selectedReviewIssue && (
+                <div className="monthly-update-feedback-cell is-review">
+                  <strong>
+                    {selectedReviewIssue.blockerType === "review_bundle_stale"
+                      ? "Review 已过期"
+                      : "Review 尚未就绪"}
+                  </strong>
+                  <div>{selectedReviewIssue.message}</div>
+                  <div>
+                    原因：{selectedReviewIssue.reason}
+                    {selectedReviewIssue.candidateFingerprint
+                      ? ` · Candidate ${selectedReviewIssue.candidateFingerprint.slice(0, 12)}…`
+                      : ""}
+                  </div>
+                  {selectedReviewIssue.canRebuild ? (
+                    <div className="crud-row-actions" style={{ marginTop: 10 }}>
+                      <button
+                        type="button"
+                        className="btn btn-primary"
+                        onClick={() => void handleRefreshReview(selectedJob)}
+                        disabled={
+                          isReviewRefreshPending
+                          || reviewRefreshSubmittingJobId === selectedJob.jobId
+                        }
+                      >
+                        {isReviewRefreshPending
+                          || reviewRefreshSubmittingJobId === selectedJob.jobId
+                          ? "正在重建 Review…"
+                          : "重建 Review（不改 Candidate）"}
+                      </button>
+                    </div>
+                  ) : (
+                    <div>
+                      当前安全门禁不允许重建
+                      {selectedReviewIssue.rebuildBlockerReason
+                        ? `：${selectedReviewIssue.rebuildBlockerReason}`
+                        : "；请先处理上述原因。"}
+                    </div>
+                  )}
+                </div>
+              )}
+
               {selectedJob.currentProcess && (
                 <div className="alert alert-info">
                   当前子进程：PID {selectedJob.currentProcess.pid}
@@ -2043,7 +2277,11 @@ Smart Merge:  [SE:keep active 2026-03] [DE:patch 2026-03] [NL:patch 2026-02] [FR
                     : "is-review"
                 }`}>
                   <strong>
-                    {selectedJob.pendingOperation.type === "publish" ? "Publish" : "Rollback"}
+                    {selectedJob.pendingOperation.type === "publish"
+                      ? "Publish"
+                      : selectedJob.pendingOperation.type === "review_refresh"
+                        ? "Review 重建"
+                        : "Rollback"}
                     {" · "}
                     {selectedJob.pendingOperation.status}
                   </strong>
@@ -2054,7 +2292,11 @@ Smart Merge:  [SE:keep active 2026-03] [DE:patch 2026-03] [NL:patch 2026-02] [FR
                   </div>
                   {(selectedJob.pendingOperation.status === "queued"
                     || selectedJob.pendingOperation.status === "running") && (
-                    <div>正在独立 worker 中执行；active 只会在全部校验和预复制完成后切换。</div>
+                    <div>
+                      {selectedJob.pendingOperation.type === "review_refresh"
+                        ? "正在独立 worker 中校验并重建报告；不会重跑 ETL、Smart Merge，也不会修改 Candidate 或 active。"
+                        : "正在独立 worker 中执行；active 只会在全部校验和预复制完成后切换。"}
+                    </div>
                   )}
                   {selectedJob.pendingOperation.failureDigest && (
                     <>
@@ -2138,7 +2380,7 @@ Smart Merge:  [SE:keep active 2026-03] [DE:patch 2026-03] [NL:patch 2026-02] [FR
                         <button
                           type="button"
                           className="btn btn-secondary"
-                          disabled={isSmartMerging || hasSmartMerge}
+                          disabled={isSmartMerging || hasSmartMerge || isReviewRefreshActionLocked}
                           onClick={() => void handleSmartMerge(selectedJob!)}
                           title={hasSmartMerge ? "已执行过 Smart Merge" : "对回归国家使用 active 数据创建合并候选"}
                         >

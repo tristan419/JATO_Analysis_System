@@ -731,6 +731,69 @@ def test_get_monthly_update_review_route_returns_review_bundle(monkeypatch) -> N
     assert payload["countryMonthlySalesSummary"][0]["rows"][1]["candidateSales"] == 120
 
 
+def test_review_refresh_route_passes_idempotency_and_candidate_seal(
+    monkeypatch,
+) -> None:
+    captured: dict[str, object] = {}
+
+    def refresh(
+        *,
+        job_id: str,
+        triggered_by: str,
+        request_id: str,
+        expected_candidate_fingerprint: str | None,
+    ) -> dict[str, object]:
+        captured.update(
+            {
+                "jobId": job_id,
+                "triggeredBy": triggered_by,
+                "requestId": request_id,
+                "expectedCandidateFingerprint": (
+                    expected_candidate_fingerprint
+                ),
+            }
+        )
+        return {
+            "jobId": job_id,
+            "status": "success",
+            "phase": "completed",
+            "pendingOperation": {
+                "type": "review_refresh",
+                "status": "queued",
+                "requestId": request_id,
+            },
+        }
+
+    monkeypatch.setattr(
+        msrp_monthly_update,
+        "refresh_jato_monthly_update_review",
+        refresh,
+    )
+    client = TestClient(app)
+    response = client.post(
+        (
+            "/v1/msrp/monthly-update-jobs/jato-update-1234abcd/"
+            "review-refresh"
+        ),
+        headers=_admin_headers(monkeypatch),
+        json={
+            "requestId": "review-request-123",
+            "expectedCandidateFingerprint": "a" * 64,
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.json()["item"]["pendingOperation"]["type"] == (
+        "review_refresh"
+    )
+    assert captured == {
+        "jobId": "jato-update-1234abcd",
+        "triggeredBy": "tester",
+        "requestId": "review-request-123",
+        "expectedCandidateFingerprint": "a" * 64,
+    }
+
+
 def test_historical_reclassification_resolution_route_passes_decisions(
     monkeypatch,
 ) -> None:

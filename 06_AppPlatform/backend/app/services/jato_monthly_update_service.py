@@ -50,6 +50,19 @@ STATE_FILENAME = "job_state.json"
 LOG_FILENAME = "job.log"
 UPLOAD_STATE_FILENAME = "upload_state.json"
 REVIEW_BUNDLE_FILENAME = "review_bundle.json"
+REVIEW_BUNDLE_SCHEMA_VERSION = 2
+CANDIDATE_ARTIFACT_STAT_SIGNATURE_VERSION = 2
+CANDIDATE_ARTIFACT_FIELDS = (
+    ("parquet", "stagingOutputPath"),
+    ("manifest", "manifestPath"),
+    ("partition", "partitionOutputPath"),
+    ("fingerprint", "fingerprintPath"),
+    ("refreshReport", "refreshReportPath"),
+    ("summaries", "summariesOutputPath"),
+)
+PARTITION_SCOPED_CANDIDATE_SCOPES = frozenset(
+    {"target_country_partition_only", "target_country_partitions_only"}
+)
 CANCEL_REQUEST_FILENAME = "cancel.request.json"
 WORKER_LOCK_FILENAME = "worker.lock"
 INGESTION_LOCK_FILENAME = "ingestion.lock"
@@ -100,6 +113,9 @@ YEAR_COLUMN_PATTERN = re.compile(r"^\d{4}$")
 YTD_COLUMN_PATTERN = re.compile(r"^YTD\s+\d{4}\s+\([A-Za-z]{3}\)$", re.IGNORECASE)
 BATCH_ID_PATTERN = re.compile(r"^(20\d{2}-\d{2})-r(\d+)$")
 RECOVERY_KEY_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{7,127}$")
+REVIEW_REFRESH_REQUEST_ID_PATTERN = re.compile(
+    r"^[A-Za-z0-9][A-Za-z0-9._:-]{7,127}$"
+)
 RECOVERY_ALLOWED_FAILURE_CATEGORIES = frozenset({"platform", "resource"})
 COUNTRY_COLUMN_CANDIDATES = ("国家", "country")
 SAFE_CLEANUP_TIER = "safe"
@@ -1081,26 +1097,15 @@ def _collect_dataset_country_latest_months(path: Path) -> dict[str, str | None]:
 
 def _candidate_fingerprint_id(artifacts: dict[str, Any]) -> str:
     """Bind a human approval to the exact candidate that was reviewed."""
-    artifact_fields = (
-        ("parquet", "stagingOutputPath"),
-        ("manifest", "manifestPath"),
-        ("partition", "partitionOutputPath"),
-        ("fingerprint", "fingerprintPath"),
-        ("refreshReport", "refreshReportPath"),
-        ("summaries", "summariesOutputPath"),
-    )
     candidate_scope = str(artifacts.get("candidateScope") or "")
-    partial_scope = candidate_scope in {
-        "target_country_partition_only",
-        "target_country_partitions_only",
-    }
+    partial_scope = candidate_scope in PARTITION_SCOPED_CANDIDATE_SCOPES
     required_names = (
         {"parquet", "manifest", "refreshReport"}
         if partial_scope
-        else {name for name, _field in artifact_fields}
+        else {name for name, _field in CANDIDATE_ARTIFACT_FIELDS}
     )
     hasher = hashlib.sha256()
-    for artifact_name, artifact_field in artifact_fields:
+    for artifact_name, artifact_field in CANDIDATE_ARTIFACT_FIELDS:
         raw_path = str(artifacts.get(artifact_field) or "").strip()
         path = _project_path(raw_path) if raw_path else None
         hasher.update(artifact_name.encode("utf-8"))
@@ -1128,23 +1133,19 @@ def _candidate_fingerprint_id(artifacts: dict[str, Any]) -> str:
 
 
 def _candidate_artifact_stat_signature(artifacts: dict[str, Any]) -> str:
-    """Build a metadata-only drift token for latency-sensitive HTTP reads.
+    """Build a deployment-stable metadata drift token for HTTP reads.
 
     The isolated worker still computes the content SHA used by Review approval,
     and Publish recomputes that content SHA before touching active.  This token
     lets GET/approval detect ordinary staging drift without rereading a large
-    parquet and every summary file inside a web worker.
+    parquet and every summary file inside a web worker.  inode and ctime are
+    intentionally excluded because immutable-release extraction and chown can
+    change them without changing candidate content.  The explicit version keeps
+    old signatures fail-closed instead of comparing incompatible formats.
     """
     artifact_entries: list[dict[str, Any]] = []
-    for artifact_name in (
-        "stagingOutputPath",
-        "manifestPath",
-        "partitionOutputPath",
-        "fingerprintPath",
-        "refreshReportPath",
-        "summariesOutputPath",
-    ):
-        raw_path = str(artifacts.get(artifact_name) or "").strip()
+    for artifact_name, artifact_field in CANDIDATE_ARTIFACT_FIELDS:
+        raw_path = str(artifacts.get(artifact_field) or "").strip()
         path = _project_path(raw_path) if raw_path else None
         if path is None:
             artifact_entries.append(
@@ -1162,21 +1163,22 @@ def _candidate_artifact_stat_signature(artifacts: dict[str, Any]) -> str:
                     for candidate in path.rglob("*")
                     if candidate.is_file()
                 )
+                file_entries: list[dict[str, Any]] = []
+                for candidate in files:
+                    stat = candidate.stat()
+                    file_entries.append(
+                        {
+                            "path": str(candidate.relative_to(path)),
+                            "size": stat.st_size,
+                            "mtimeNs": stat.st_mtime_ns,
+                        }
+                    )
                 artifact_entries.append(
                     {
                         "artifact": artifact_name,
                         "path": _relative_to_project(path),
                         "kind": "directory",
-                        "files": [
-                            {
-                                "path": str(candidate.relative_to(path)),
-                                "size": candidate.stat().st_size,
-                                "mtimeNs": candidate.stat().st_mtime_ns,
-                                "ctimeNs": candidate.stat().st_ctime_ns,
-                                "inode": candidate.stat().st_ino,
-                            }
-                            for candidate in files
-                        ],
+                        "files": file_entries,
                     }
                 )
             elif path.is_file():
@@ -1188,8 +1190,6 @@ def _candidate_artifact_stat_signature(artifacts: dict[str, Any]) -> str:
                         "kind": "file",
                         "size": stat.st_size,
                         "mtimeNs": stat.st_mtime_ns,
-                        "ctimeNs": stat.st_ctime_ns,
-                        "inode": stat.st_ino,
                     }
                 )
             else:
@@ -1211,7 +1211,44 @@ def _candidate_artifact_stat_signature(artifacts: dict[str, Any]) -> str:
         sort_keys=True,
         separators=(",", ":"),
     ).encode("utf-8")
-    return hashlib.sha256(encoded).hexdigest()
+    return (
+        f"v{CANDIDATE_ARTIFACT_STAT_SIGNATURE_VERSION}:"
+        f"{hashlib.sha256(encoded).hexdigest()}"
+    )
+
+
+def _candidate_artifact_stat_signature_version(signature: str) -> int | None:
+    match = re.fullmatch(r"v([1-9][0-9]*):[0-9a-f]{64}", signature.strip())
+    return int(match.group(1)) if match else None
+
+
+def _review_bundle_contract_error(
+    review_bundle: dict[str, Any],
+) -> str | None:
+    schema_version = review_bundle.get("reviewBundleSchemaVersion")
+    if (
+        type(schema_version) is not int
+        or schema_version != REVIEW_BUNDLE_SCHEMA_VERSION
+    ):
+        return "legacy_review_bundle_schema"
+    signature_metadata_version = review_bundle.get(
+        "candidateArtifactStatSignatureVersion"
+    )
+    if (
+        type(signature_metadata_version) is not int
+        or signature_metadata_version
+        != CANDIDATE_ARTIFACT_STAT_SIGNATURE_VERSION
+    ):
+        return "legacy_stat_signature_metadata"
+    signature = str(
+        review_bundle.get("candidateArtifactStatSignature") or ""
+    )
+    if (
+        _candidate_artifact_stat_signature_version(signature)
+        != CANDIDATE_ARTIFACT_STAT_SIGNATURE_VERSION
+    ):
+        return "legacy_stat_signature" if signature else "missing_stat_signature"
+    return None
 
 
 def _validate_candidate_summaries_bundle(
@@ -6739,7 +6776,11 @@ def _resolved_historical_reclassification_decision(
     ).get(country.strip().casefold())
 
 
-def _build_single_country_review(payload: dict[str, Any]) -> dict[str, Any]:
+def _build_single_country_review(
+    payload: dict[str, Any],
+    *,
+    candidate_fingerprint: str | None = None,
+) -> dict[str, Any]:
     country = str(payload.get("country") or "").strip()
     artifacts = payload.get("artifacts")
     if not country or not isinstance(artifacts, dict):
@@ -7040,7 +7081,11 @@ def _build_single_country_review(payload: dict[str, Any]) -> dict[str, Any]:
         },
         "countryScopeSummary": {"targetCountry": country, "untouchedPartitionCheck": partition_check},
         "refreshSummary": _summarize_refresh_report(_read_json_if_exists(str(artifacts.get("refreshReportPath") or "")) or {}),
-        "candidateFingerprint": _candidate_fingerprint_id(artifacts),
+        "candidateFingerprint": (
+            candidate_fingerprint
+            if candidate_fingerprint is not None
+            else _candidate_fingerprint_id(artifacts)
+        ),
         "historicalReclassificationReport": (
             historical_reclassification_report
         ),
@@ -7048,7 +7093,11 @@ def _build_single_country_review(payload: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def _build_partial_country_review(payload: dict[str, Any]) -> dict[str, Any]:
+def _build_partial_country_review(
+    payload: dict[str, Any],
+    *,
+    candidate_fingerprint: str | None = None,
+) -> dict[str, Any]:
     countries = _ordered_distinct_strings(
         [
             str(country)
@@ -7063,7 +7112,10 @@ def _build_partial_country_review(payload: dict[str, Any]) -> dict[str, Any]:
         raise HTTPException(status_code=409, detail="部分国家任务缺少至少两个目标国家。")
 
     country_reviews = [
-        _build_single_country_review({**payload, "country": country})
+        _build_single_country_review(
+            {**payload, "country": country},
+            candidate_fingerprint=candidate_fingerprint,
+        )
         for country in countries
     ]
     findings = [
@@ -7175,36 +7227,239 @@ def _build_partial_country_review(payload: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _review_refresh_operation(
+    payload: dict[str, Any],
+) -> dict[str, Any] | None:
+    value = _pending_operation(payload)
+    return (
+        value
+        if isinstance(value, dict)
+        and str(value.get("type") or "") == "review_refresh"
+        else None
+    )
+
+
+def _valid_sha256(value: Any) -> str | None:
+    normalized = str(value or "").strip().lower()
+    return normalized if re.fullmatch(r"[0-9a-f]{64}", normalized) else None
+
+
+def _review_refresh_eligibility(
+    *,
+    payload: dict[str, Any],
+    cached_candidate_fingerprint: str | None,
+    bundle_exists: bool,
+) -> tuple[bool, str, str | None]:
+    operation = _review_refresh_operation(payload)
+    if isinstance(operation, dict) and str(operation.get("status") or "") in {
+        "queued",
+        "running",
+    }:
+        return False, "review_refresh_in_progress", None
+    if (
+        str(payload.get("status") or "") != "success"
+        or str(payload.get("phase") or "") != "completed"
+    ):
+        return False, "job_not_completed", None
+    publication = payload.get("publication")
+    if isinstance(publication, dict) and publication.get("publishedAt"):
+        return False, "candidate_already_published", None
+    pending = _pending_operation(payload)
+    if isinstance(pending, dict) and str(pending.get("status") or "") in {
+        "queued",
+        "running",
+    }:
+        return False, "active_operation_in_progress", None
+    active_base_fingerprint = _valid_sha256(
+        payload.get("activeBaseFingerprint")
+    )
+    if active_base_fingerprint is None:
+        return False, "active_lineage_missing", None
+    try:
+        current_active_fingerprint = _active_dataset_version()
+    except Exception:
+        return False, "active_lineage_unavailable", None
+    if current_active_fingerprint != active_base_fingerprint:
+        return False, "active_lineage_changed", current_active_fingerprint
+    artifacts = payload.get("artifacts")
+    if not isinstance(artifacts, dict):
+        return False, "candidate_artifacts_missing", current_active_fingerprint
+    candidate_scope = str(artifacts.get("candidateScope") or "")
+    required_names = (
+        {"parquet", "manifest", "refreshReport"}
+        if candidate_scope in PARTITION_SCOPED_CANDIDATE_SCOPES
+        else {name for name, _field in CANDIDATE_ARTIFACT_FIELDS}
+    )
+    if any(
+        (
+            path := _project_path(
+                str(artifacts.get(artifact_field) or "").strip()
+            )
+        )
+        is None
+        or not path.exists()
+        for artifact_name, artifact_field in CANDIDATE_ARTIFACT_FIELDS
+        if artifact_name in required_names
+    ):
+        return False, "candidate_artifacts_missing", current_active_fingerprint
+    if bundle_exists and cached_candidate_fingerprint is None:
+        return (
+            False,
+            "candidate_fingerprint_unavailable",
+            current_active_fingerprint,
+        )
+    return True, "review_refresh_available", current_active_fingerprint
+
+
+def _review_bundle_unavailable_detail(
+    *,
+    payload: dict[str, Any],
+    blocker_type: str,
+    reason: str,
+    message: str,
+    cached_candidate_fingerprint: str | None,
+    bundle_exists: bool,
+) -> dict[str, Any]:
+    can_rebuild, eligibility_reason, current_active_fingerprint = (
+        _review_refresh_eligibility(
+            payload=payload,
+            cached_candidate_fingerprint=cached_candidate_fingerprint,
+            bundle_exists=bundle_exists,
+        )
+    )
+    return {
+        "blockerType": blocker_type,
+        "reason": reason,
+        "rebuildBlockerReason": (
+            None if can_rebuild else eligibility_reason
+        ),
+        "message": message,
+        "canRebuild": can_rebuild,
+        "candidateFingerprint": cached_candidate_fingerprint,
+        "activeBaseFingerprint": _valid_sha256(
+            payload.get("activeBaseFingerprint")
+        ),
+        "currentActiveFingerprint": current_active_fingerprint,
+        "reviewRefresh": _review_refresh_operation(payload),
+    }
+
+
+def _configured_review_bundle_path(
+    *,
+    job_id: str,
+    artifacts: dict[str, Any],
+) -> Path:
+    configured = str(artifacts.get("reviewBundlePath") or "").strip()
+    return (
+        _project_path(configured)
+        if configured
+        else _job_review_bundle_path(job_id)
+    ) or _job_review_bundle_path(job_id)
+
+
+def _read_cached_review_bundle(
+    path: Path,
+) -> tuple[dict[str, Any] | None, str | None]:
+    if not path.exists():
+        return None, None
+    try:
+        return _read_json(path), None
+    except (OSError, UnicodeError, json.JSONDecodeError, RuntimeError):
+        return None, "review_bundle_corrupt"
+
+
 def get_jato_monthly_update_review(
     job_id: str,
     *,
     allow_build: bool = False,
+    force_rebuild: bool = False,
+    candidate_fingerprint: str | None = None,
 ) -> dict[str, Any]:
+    if force_rebuild and not allow_build:
+        raise ValueError("force_rebuild 只允许隔离 worker 构建 Review。")
     payload = _load_job_state(job_id)
     artifacts = payload.get("artifacts")
     if not isinstance(artifacts, dict):
         raise HTTPException(status_code=409, detail="当前任务暂无可 review 的 compare 产物。")
-    review_bundle_value = str(
-        artifacts.get("reviewBundlePath") or ""
-    ).strip()
-    review_bundle_path = (
-        _project_path(review_bundle_value)
-        if review_bundle_value
-        else _job_review_bundle_path(job_id)
+    review_bundle_path = _configured_review_bundle_path(
+        job_id=job_id,
+        artifacts=artifacts,
     )
-    if review_bundle_path is not None and review_bundle_path.exists():
-        review_bundle = _read_json(review_bundle_path)
+    if not force_rebuild and review_bundle_path.exists():
+        review_bundle, read_error = _read_cached_review_bundle(
+            review_bundle_path
+        )
+        if read_error or review_bundle is None:
+            raise HTTPException(
+                status_code=409,
+                detail=_review_bundle_unavailable_detail(
+                    payload=payload,
+                    blocker_type="review_bundle_stale",
+                    reason=read_error or "review_bundle_corrupt",
+                    message=(
+                        "Review bundle 无法解析为可信 JSON object；"
+                        "已拒绝在 Web 请求中重建。"
+                    ),
+                    cached_candidate_fingerprint=None,
+                    bundle_exists=True,
+                ),
+            )
         cached_stat_signature = str(
             review_bundle.get("candidateArtifactStatSignature") or ""
         )
-        if (
-            cached_stat_signature
-            and cached_stat_signature
-            != _candidate_artifact_stat_signature(artifacts)
-        ):
+        cached_candidate_fingerprint = _valid_sha256(
+            review_bundle.get("candidateFingerprint")
+        )
+        contract_error = _review_bundle_contract_error(review_bundle)
+        if contract_error:
             raise HTTPException(
                 status_code=409,
-                detail="candidate 在 Review bundle 生成后已变化，请由 worker 重新生成 Review。",
+                detail=_review_bundle_unavailable_detail(
+                    payload=payload,
+                    blocker_type="review_bundle_stale",
+                    reason=contract_error,
+                    message=(
+                        "Review bundle 使用旧版或缺失的 schema / 候选签名；"
+                        "请在隔离 worker 中重建 Review。"
+                    ),
+                    cached_candidate_fingerprint=(
+                        cached_candidate_fingerprint
+                    ),
+                    bundle_exists=True,
+                ),
+            )
+        if cached_candidate_fingerprint is None:
+            raise HTTPException(
+                status_code=409,
+                detail=_review_bundle_unavailable_detail(
+                    payload=payload,
+                    blocker_type="review_bundle_stale",
+                    reason="candidate_fingerprint_unavailable",
+                    message=(
+                        "Review bundle 缺少可信 candidate 内容指纹；"
+                        "拒绝在 Web 请求中接受或重建。"
+                    ),
+                    cached_candidate_fingerprint=None,
+                    bundle_exists=True,
+                ),
+            )
+        current_stat_signature = _candidate_artifact_stat_signature(artifacts)
+        if cached_stat_signature != current_stat_signature:
+            raise HTTPException(
+                status_code=409,
+                detail=_review_bundle_unavailable_detail(
+                    payload=payload,
+                    blocker_type="review_bundle_stale",
+                    reason="candidate_metadata_changed",
+                    message=(
+                        "candidate 的部署稳定元数据与 Review bundle 不一致；"
+                        "请由隔离 worker 校验内容指纹并重建 Review。"
+                    ),
+                    cached_candidate_fingerprint=(
+                        cached_candidate_fingerprint
+                    ),
+                    bundle_exists=True,
+                ),
             )
         cached_historical_report = review_bundle.get(
             "historicalReclassificationReport"
@@ -7223,13 +7478,17 @@ def get_jato_monthly_update_review(
     if not allow_build:
         raise HTTPException(
             status_code=409,
-            detail={
-                "blockerType": "review_bundle_not_ready",
-                "message": (
+            detail=_review_bundle_unavailable_detail(
+                payload=payload,
+                blocker_type="review_bundle_not_ready",
+                reason="review_bundle_missing",
+                message=(
                     "Review bundle 尚未由隔离 worker 生成完成；"
-                    "请稍后刷新，Web 请求不会同步读取大型 candidate。"
+                    "Web 请求不会同步读取大型 candidate。"
                 ),
-            },
+                cached_candidate_fingerprint=None,
+                bundle_exists=False,
+            ),
         )
 
     raw_compare_report_path = str(artifacts.get("rawCompareReportPath") or "").strip()
@@ -7238,9 +7497,15 @@ def get_jato_monthly_update_review(
     if raw_compare_report is None:
         job_type = str(payload.get("jobType") or "")
         if job_type == "single_country":
-            return _build_single_country_review(payload)
+            return _build_single_country_review(
+                payload,
+                candidate_fingerprint=candidate_fingerprint,
+            )
         if job_type == "partial_country":
-            return _build_partial_country_review(payload)
+            return _build_partial_country_review(
+                payload,
+                candidate_fingerprint=candidate_fingerprint,
+            )
         raise HTTPException(status_code=409, detail="当前任务暂无可 review 的 compare 报告。")
 
     checklist_markdown = _read_text_if_exists(
@@ -7542,7 +7807,11 @@ def get_jato_monthly_update_review(
             if isinstance(refresh_report, dict)
             else None
         ),
-        "candidateFingerprint": _candidate_fingerprint_id(artifacts),
+        "candidateFingerprint": (
+            candidate_fingerprint
+            if candidate_fingerprint is not None
+            else _candidate_fingerprint_id(artifacts)
+        ),
         "historicalReclassificationReport": (
             historical_reclassification_report
         ),
@@ -7550,29 +7819,136 @@ def get_jato_monthly_update_review(
     }
 
 
-def _cache_jato_monthly_update_review(job_id: str) -> Path:
-    """Generate the potentially heavy Review once in the isolated worker."""
-    bundle_path = _job_review_bundle_path(job_id)
-    bundle_path.unlink(missing_ok=True)
+def _cache_jato_monthly_update_review(
+    job_id: str,
+    *,
+    expected_candidate_fingerprint: str | None = None,
+    expected_active_fingerprint: str | None = None,
+    review_generation_id: str | None = None,
+) -> Path:
+    """Generate and atomically replace Review in the isolated worker.
+
+    The previous bundle remains in place until the new report has passed the
+    candidate-content, metadata-snapshot and active-lineage gates.
+    """
     payload = _load_job_state(job_id)
     artifacts = payload.get("artifacts")
-    if isinstance(artifacts, dict):
-        artifacts.pop("reviewBundlePath", None)
-        payload["artifacts"] = artifacts
-        _persist_job_state(payload)
-    review = get_jato_monthly_update_review(
-        job_id,
-        allow_build=True,
-    )
-    artifacts = _load_job_state(job_id).get("artifacts")
     if not isinstance(artifacts, dict):
         raise HTTPException(
             status_code=409,
             detail="当前任务缺少 candidate 产物，不能缓存 Review。",
         )
-    review["candidateArtifactStatSignature"] = (
-        _candidate_artifact_stat_signature(artifacts)
+    bundle_path = _job_review_bundle_path(job_id)
+    active_fingerprint = _valid_sha256(payload.get("activeBaseFingerprint"))
+    normalized_expected_active = _valid_sha256(expected_active_fingerprint)
+    if expected_active_fingerprint is not None and normalized_expected_active is None:
+        raise HTTPException(
+            status_code=409,
+            detail="Review 重建缺少有效 active lineage 指纹。",
+        )
+    if (
+        normalized_expected_active is not None
+        and (
+            active_fingerprint != normalized_expected_active
+            or _active_dataset_version() != normalized_expected_active
+        )
+    ):
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "blockerType": "stale_candidate",
+                "message": "Review 重建前 active lineage 已变化。",
+            },
+        )
+    stat_signature_before = _candidate_artifact_stat_signature(artifacts)
+    actual_candidate_fingerprint = _candidate_fingerprint_id(artifacts)
+    normalized_expected_candidate = _valid_sha256(
+        expected_candidate_fingerprint
     )
+    if (
+        expected_candidate_fingerprint is not None
+        and normalized_expected_candidate is None
+    ):
+        raise HTTPException(
+            status_code=409,
+            detail="Review 重建缺少有效 candidate 指纹。",
+        )
+    if (
+        normalized_expected_candidate is not None
+        and actual_candidate_fingerprint != normalized_expected_candidate
+    ):
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "blockerType": "candidate_content_drift",
+                "message": (
+                    "candidate 内容指纹与旧 Review 不一致；"
+                    "已保留旧 bundle，未修改 candidate 或 active。"
+                ),
+                "expectedCandidateFingerprint": (
+                    normalized_expected_candidate
+                ),
+                "actualCandidateFingerprint": (
+                    actual_candidate_fingerprint
+                ),
+            },
+        )
+    review = get_jato_monthly_update_review(
+        job_id,
+        allow_build=True,
+        force_rebuild=True,
+        candidate_fingerprint=actual_candidate_fingerprint,
+    )
+    latest_payload = _load_job_state(job_id)
+    latest_artifacts = latest_payload.get("artifacts")
+    if not isinstance(latest_artifacts, dict):
+        raise HTTPException(
+            status_code=409,
+            detail="当前任务缺少 candidate 产物，不能缓存 Review。",
+        )
+    stat_signature_after = _candidate_artifact_stat_signature(
+        latest_artifacts
+    )
+    if stat_signature_after != stat_signature_before:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "blockerType": "candidate_content_drift",
+                "message": (
+                    "candidate 在 Review 重建期间发生变化；"
+                    "已保留旧 bundle，未修改 candidate 或 active。"
+                ),
+            },
+        )
+    if str(review.get("candidateFingerprint") or "") != (
+        actual_candidate_fingerprint
+    ):
+        raise HTTPException(
+            status_code=409,
+            detail="Review candidate 指纹与 worker 校验结果不一致。",
+        )
+    if (
+        normalized_expected_active is not None
+        and (
+            _valid_sha256(latest_payload.get("activeBaseFingerprint"))
+            != normalized_expected_active
+            or _active_dataset_version() != normalized_expected_active
+        )
+    ):
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "blockerType": "stale_candidate",
+                "message": "Review 重建期间 active lineage 已变化。",
+            },
+        )
+    review["reviewBundleSchemaVersion"] = REVIEW_BUNDLE_SCHEMA_VERSION
+    review["candidateArtifactStatSignatureVersion"] = (
+        CANDIDATE_ARTIFACT_STAT_SIGNATURE_VERSION
+    )
+    review["candidateArtifactStatSignature"] = stat_signature_after
+    review["generatedAt"] = _utc_now().isoformat()
+    review["reviewGenerationId"] = review_generation_id
     _write_json(bundle_path, review)
     payload = _load_job_state(job_id)
     artifacts = payload.get("artifacts")
@@ -7580,6 +7956,264 @@ def _cache_jato_monthly_update_review(job_id: str) -> Path:
     payload["artifacts"]["reviewBundlePath"] = _relative_to_project(bundle_path)
     _persist_job_state(payload)
     return bundle_path
+
+
+def _review_refresh_failure_digest(exc: BaseException) -> dict[str, Any]:
+    detail: Any = exc.detail if isinstance(exc, HTTPException) else None
+    message = (
+        str(detail.get("message") or detail)
+        if isinstance(detail, dict)
+        else str(detail or exc)
+    )
+    return {
+        "code": "REVIEW_REFRESH_BLOCKED",
+        "category": "safety_gate" if isinstance(exc, HTTPException) else "processing",
+        "phase": "review_refresh",
+        "retryable": not isinstance(exc, HTTPException),
+        "message": message,
+        "sourceFeedback": None,
+        "technicalDetail": detail or type(exc).__name__,
+        "nextAction": "inspect_review_refresh",
+    }
+
+
+def _review_refresh_bundle_is_durable(
+    *,
+    payload: dict[str, Any],
+    operation: dict[str, Any],
+) -> bool:
+    operation_id = str(operation.get("operationId") or "")
+    expected_candidate_fingerprint = _valid_sha256(
+        operation.get("expectedCandidateFingerprint")
+    )
+    expected_active_fingerprint = _valid_sha256(
+        operation.get("expectedActiveFingerprint")
+    )
+    artifacts = payload.get("artifacts")
+    bundle_path = _job_review_bundle_path(str(payload.get("jobId") or ""))
+    if (
+        not operation_id
+        or expected_candidate_fingerprint is None
+        or expected_active_fingerprint is None
+        or not isinstance(artifacts, dict)
+        or not bundle_path.is_file()
+    ):
+        return False
+    try:
+        bundle = _read_json(bundle_path)
+        return bool(
+            str(bundle.get("reviewGenerationId") or "") == operation_id
+            and _valid_sha256(bundle.get("candidateFingerprint"))
+            == expected_candidate_fingerprint
+            and int(bundle.get("reviewBundleSchemaVersion") or 0)
+            == REVIEW_BUNDLE_SCHEMA_VERSION
+            and int(
+                bundle.get("candidateArtifactStatSignatureVersion") or 0
+            )
+            == CANDIDATE_ARTIFACT_STAT_SIGNATURE_VERSION
+            and str(bundle.get("candidateArtifactStatSignature") or "")
+            == _candidate_artifact_stat_signature(artifacts)
+            and _valid_sha256(payload.get("activeBaseFingerprint"))
+            == expected_active_fingerprint
+            and _active_dataset_version() == expected_active_fingerprint
+        )
+    except Exception:
+        return False
+
+
+def _queue_jato_monthly_update_review_refresh_locked(
+    *,
+    job_id: str,
+    triggered_by: str,
+    request_id: str,
+    expected_candidate_fingerprint: str | None,
+) -> dict[str, Any]:
+    payload = _load_job_state(job_id)
+    existing = _review_refresh_operation(payload)
+    normalized_expected = _valid_sha256(expected_candidate_fingerprint)
+    if expected_candidate_fingerprint is not None and normalized_expected is None:
+        raise HTTPException(
+            status_code=400,
+            detail="expectedCandidateFingerprint 必须是 64 位 SHA-256。",
+        )
+    if isinstance(existing, dict):
+        existing_status = str(existing.get("status") or "")
+        existing_expected = _valid_sha256(
+            existing.get("expectedCandidateFingerprint")
+        )
+        same_candidate = (
+            normalized_expected is None
+            or existing_expected == normalized_expected
+        )
+        if existing_status in {"queued", "running"}:
+            if not same_candidate:
+                raise HTTPException(
+                    status_code=409,
+                    detail="另一个 candidate 的 Review 重建正在运行。",
+                )
+            if existing_status == "queued":
+                _launch_job_thread(job_id)
+            return _serialize_job_state(payload, include_log_tail=False)
+        if (
+            existing_status == "success"
+            and str(existing.get("requestId") or "") == request_id
+            and same_candidate
+        ):
+            return _serialize_job_state(payload, include_log_tail=False)
+
+    if (
+        str(payload.get("status") or "") != "success"
+        or str(payload.get("phase") or "") != "completed"
+    ):
+        raise HTTPException(
+            status_code=409,
+            detail="只有 success/completed 的任务才能重建 Review。",
+        )
+    publication = payload.get("publication")
+    if isinstance(publication, dict) and publication.get("publishedAt"):
+        raise HTTPException(
+            status_code=409,
+            detail="已发布或已回滚的 candidate 不能重建旧 Review。",
+        )
+    pending = _pending_operation(payload)
+    if isinstance(pending, dict) and str(pending.get("status") or "") in {
+        "queued",
+        "running",
+    }:
+        raise HTTPException(
+            status_code=409,
+            detail="Publish/Rollback 正在排队或运行，不能重建 Review。",
+        )
+    artifacts = payload.get("artifacts")
+    if not isinstance(artifacts, dict):
+        raise HTTPException(
+            status_code=409,
+            detail="当前任务缺少 candidate 产物，不能重建 Review。",
+        )
+    bundle_path = _configured_review_bundle_path(
+        job_id=job_id,
+        artifacts=artifacts,
+    )
+    cached_bundle, bundle_read_error = _read_cached_review_bundle(bundle_path)
+    if bundle_read_error:
+        raise HTTPException(
+            status_code=409,
+            detail=_review_bundle_unavailable_detail(
+                payload=payload,
+                blocker_type="review_bundle_stale",
+                reason=bundle_read_error,
+                message=(
+                    "Review bundle 无法解析为可信 JSON object；"
+                    "旧 candidate 指纹不可用，拒绝自动重建。"
+                ),
+                cached_candidate_fingerprint=None,
+                bundle_exists=True,
+            ),
+        )
+    cached_candidate_fingerprint = (
+        _valid_sha256(cached_bundle.get("candidateFingerprint"))
+        if isinstance(cached_bundle, dict)
+        else None
+    )
+    if (
+        cached_bundle is not None
+        and cached_candidate_fingerprint is None
+    ):
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "blockerType": "review_bundle_stale",
+                "reason": "candidate_fingerprint_unavailable",
+                "message": "旧 Review 缺少可信 candidate 指纹，拒绝自动重建。",
+                "canRebuild": False,
+            },
+        )
+    if (
+        normalized_expected is not None
+        and cached_candidate_fingerprint is not None
+        and normalized_expected != cached_candidate_fingerprint
+    ):
+        raise HTTPException(
+            status_code=409,
+            detail="页面绑定的 candidate 指纹与当前旧 Review 不一致。",
+        )
+    source_candidate_fingerprint = (
+        normalized_expected or cached_candidate_fingerprint
+    )
+    active_fingerprint = _valid_sha256(payload.get("activeBaseFingerprint"))
+    if (
+        active_fingerprint is None
+        or _active_dataset_version() != active_fingerprint
+    ):
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "blockerType": "stale_candidate",
+                "message": "active lineage 已变化，不能重建旧 candidate 的 Review。",
+            },
+        )
+    current_stat_signature = _candidate_artifact_stat_signature(artifacts)
+    if isinstance(cached_bundle, dict):
+        cached_signature = str(
+            cached_bundle.get("candidateArtifactStatSignature") or ""
+        )
+        if (
+            _review_bundle_contract_error(cached_bundle) is None
+            and cached_signature == current_stat_signature
+        ):
+            raise HTTPException(
+                status_code=409,
+                detail="当前 Review bundle 已是最新，无需重建。",
+            )
+    payload["reviewApproval"] = None
+    return _queue_active_bundle_operation(
+        payload=payload,
+        operation_type="review_refresh",
+        triggered_by=triggered_by,
+        operation_fields={
+            "requestId": request_id,
+            "phase": "queued",
+            "expectedCandidateFingerprint": source_candidate_fingerprint,
+            "expectedActiveFingerprint": active_fingerprint,
+            "candidateArtifactStatSignature": current_stat_signature,
+            "candidateArtifactStatSignatureVersion": (
+                CANDIDATE_ARTIFACT_STAT_SIGNATURE_VERSION
+            ),
+        },
+    )
+
+
+def refresh_jato_monthly_update_review(
+    *,
+    job_id: str,
+    triggered_by: str,
+    request_id: str,
+    expected_candidate_fingerprint: str | None,
+) -> dict[str, Any]:
+    normalized_request_id = request_id.strip()
+    if not REVIEW_REFRESH_REQUEST_ID_PATTERN.fullmatch(normalized_request_id):
+        raise HTTPException(
+            status_code=400,
+            detail="requestId 格式无效。",
+        )
+    with _monthly_update_worker_start_window(
+        action="重建 Review",
+        excluding_job_id=job_id,
+    ):
+        with _exclusive_file_lock(_job_state_lock_path(job_id)) as acquired:
+            if not acquired:
+                raise HTTPException(
+                    status_code=503,
+                    detail="Review 重建状态锁暂不可用，请稍后刷新状态。",
+                )
+            return _queue_jato_monthly_update_review_refresh_locked(
+                job_id=job_id,
+                triggered_by=triggered_by,
+                request_id=normalized_request_id,
+                expected_candidate_fingerprint=(
+                    expected_candidate_fingerprint
+                ),
+            )
 
 
 def approve_jato_monthly_update_review(
@@ -7608,7 +8242,7 @@ def approve_jato_monthly_update_review(
         ) in {"queued", "running"}:
             raise HTTPException(
                 status_code=409,
-                detail="Publish/Rollback 操作已排队或运行，不能覆盖 Review 状态。",
+                detail="后台月更操作已排队或运行，不能覆盖 Review 状态。",
             )
         publication = payload.get("publication")
         if isinstance(publication, dict) and publication.get("publishedAt"):
@@ -7874,6 +8508,14 @@ def _resolve_jato_historical_reclassification_with_job_lock(
                 detail="历史重分类状态锁暂不可用，请稍后重试。",
             )
         payload = _load_job_state(job_id)
+        pending = _pending_operation(payload)
+        if isinstance(pending, dict) and str(
+            pending.get("status") or ""
+        ) in {"queued", "running"}:
+            raise HTTPException(
+                status_code=409,
+                detail="后台月更操作正在运行，不能应用历史重分类决策。",
+            )
         review = get_jato_monthly_update_review(job_id)
         report = review.get("historicalReclassificationReport")
         if not isinstance(report, dict):
@@ -8139,6 +8781,7 @@ def _queue_active_bundle_operation(
     payload: dict[str, Any],
     operation_type: str,
     triggered_by: str,
+    operation_fields: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     existing = _pending_operation(payload)
     if isinstance(existing, dict) and str(existing.get("status") or "") in {
@@ -8171,6 +8814,7 @@ def _queue_active_bundle_operation(
         "finishedAt": None,
         "error": None,
         "failureDigest": None,
+        **(operation_fields or {}),
     }
     _persist_job_state(payload)
     try:
@@ -8181,9 +8825,13 @@ def _queue_active_bundle_operation(
         operation["status"] = "failed"
         operation["finishedAt"] = _utc_now().isoformat()
         operation["error"] = str(exc)
-        operation["failureDigest"] = _failure_digest_from_exception(
-            phase=f"{operation_type}_queued",
-            exc=exc,
+        operation["failureDigest"] = (
+            _review_refresh_failure_digest(exc)
+            if operation_type == "review_refresh"
+            else _failure_digest_from_exception(
+                phase=f"{operation_type}_queued",
+                exc=exc,
+            )
         )
         latest["pendingOperation"] = operation
         _persist_job_state(latest)
@@ -11270,6 +11918,8 @@ def _active_operation_failure_digest(
     operation_type: str,
     exc: BaseException,
 ) -> dict[str, Any]:
+    if operation_type == "review_refresh":
+        return _review_refresh_failure_digest(exc)
     if isinstance(exc, HTTPException):
         detail: Any = exc.detail
         message = (
@@ -11309,6 +11959,8 @@ def _run_active_bundle_operation(
         return
     operation_id = str(operation.get("operationId") or "")
     operation["status"] = "running"
+    if operation_type == "review_refresh":
+        operation["phase"] = "verifying_candidate"
     operation["startedAt"] = _utc_now().isoformat()
     operation["error"] = None
     operation["failureDigest"] = None
@@ -11330,6 +11982,65 @@ def _run_active_bundle_operation(
                 job_id=job_id,
                 triggered_by=actor,
             )
+        elif operation_type == "review_refresh":
+            artifacts = state.get("artifacts")
+            if not isinstance(artifacts, dict):
+                raise HTTPException(
+                    status_code=409,
+                    detail="当前任务缺少 candidate 产物，不能重建 Review。",
+                )
+            queued_stat_signature = str(
+                operation.get("candidateArtifactStatSignature") or ""
+            )
+            current_stat_signature = _candidate_artifact_stat_signature(
+                artifacts
+            )
+            if (
+                _candidate_artifact_stat_signature_version(
+                    queued_stat_signature
+                )
+                != CANDIDATE_ARTIFACT_STAT_SIGNATURE_VERSION
+                or current_stat_signature != queued_stat_signature
+            ):
+                raise HTTPException(
+                    status_code=409,
+                    detail={
+                        "blockerType": "candidate_metadata_changed",
+                        "message": (
+                            "candidate 与 Review 重建排队时的元数据快照不一致；"
+                            "未读取大型内容，也未修改 Candidate 或 active。"
+                        ),
+                    },
+                )
+            if _valid_sha256(
+                operation.get("expectedCandidateFingerprint")
+            ) is None:
+                operation["expectedCandidateFingerprint"] = (
+                    _candidate_fingerprint_id(artifacts)
+                )
+            operation["phase"] = "building_review"
+            state["pendingOperation"] = operation
+            _persist_job_state(state)
+            _cache_jato_monthly_update_review(
+                job_id,
+                expected_candidate_fingerprint=str(
+                    operation.get("expectedCandidateFingerprint") or ""
+                ),
+                expected_active_fingerprint=str(
+                    operation.get("expectedActiveFingerprint") or ""
+                ),
+                review_generation_id=operation_id,
+            )
+            refreshed_state = _load_job_state(job_id)
+            refreshed_operation = _pending_operation(refreshed_state)
+            if (
+                not isinstance(refreshed_operation, dict)
+                or not _review_refresh_bundle_is_durable(
+                    payload=refreshed_state,
+                    operation=refreshed_operation,
+                )
+            ):
+                raise RuntimeError("Review bundle durable seal 校验失败。")
         else:
             raise RuntimeError(f"Unsupported active operation: {operation_type}")
         state = _load_job_state(job_id)
@@ -11349,6 +12060,11 @@ def _run_active_bundle_operation(
             return
         operation = current_operation
         operation["status"] = "success"
+        if operation_type == "review_refresh":
+            operation["phase"] = "completed"
+            operation["resultCandidateFingerprint"] = operation.get(
+                "expectedCandidateFingerprint"
+            )
         operation["finishedAt"] = _utc_now().isoformat()
         operation["error"] = None
         operation["failureDigest"] = None
@@ -11407,9 +12123,10 @@ def _reconcile_stale_monthly_update_jobs() -> list[str]:
                 pending.get("operationId") or ""
             )
             publication = payload.get("publication")
-            durable_completion = (
-                isinstance(publication, dict)
-                and (
+            durable_completion = bool(
+                (
+                    isinstance(publication, dict)
+                    and (
                     (
                         pending_type == "publish"
                         and publication.get("publishedAt")
@@ -11428,13 +12145,36 @@ def _reconcile_stale_monthly_update_jobs() -> list[str]:
                         == pending_operation_id
                     )
                 )
+                )
+                or (
+                    pending_type == "review_refresh"
+                    and _review_refresh_bundle_is_durable(
+                        payload=payload,
+                        operation=pending,
+                    )
+                )
             )
             if durable_completion:
                 pending["status"] = "success"
+                if pending_type == "review_refresh":
+                    pending["phase"] = "completed"
+                    pending["resultCandidateFingerprint"] = pending.get(
+                        "expectedCandidateFingerprint"
+                    )
                 pending["finishedAt"] = _utc_now().isoformat()
                 pending["error"] = None
                 pending["failureDigest"] = None
                 pending["recoveredAfterWorkerLoss"] = True
+                if pending_type == "review_refresh":
+                    artifacts = payload.get("artifacts")
+                    if not isinstance(artifacts, dict):
+                        artifacts = {}
+                    artifacts["reviewBundlePath"] = _relative_to_project(
+                        _job_review_bundle_path(
+                            str(payload.get("jobId") or "")
+                        )
+                    )
+                    payload["artifacts"] = artifacts
                 payload["pendingOperation"] = pending
                 payload["workerPid"] = None
                 payload["currentProcess"] = None
@@ -11463,24 +12203,41 @@ def _reconcile_stale_monthly_update_jobs() -> list[str]:
                 continue
             pending["status"] = "failed"
             pending["finishedAt"] = _utc_now().isoformat()
-            pending["error"] = (
-                "独立月更 worker 在 active bundle 操作完成前退出；"
-                "下一次操作前将按 transaction 记录检查 active。"
-            )
-            pending["failureDigest"] = {
-                "code": "WORKER_LOST",
-                "category": "resource",
-                "phase": f"{pending.get('type') or 'active'}_running",
-                "retryable": False,
-                "message": pending["error"],
-                "sourceFeedback": None,
-                "technicalDetail": {
-                    "workerPid": worker_pid or None,
-                    "childPid": child_pid,
-                    "orphanTermination": orphan_termination,
-                },
-                "nextAction": "inspect_worker_and_active_transaction",
-            }
+            if pending_type == "review_refresh":
+                pending["phase"] = "worker_lost"
+                pending["error"] = (
+                    "Review 重建 worker 在 durable bundle 提交前退出；"
+                    "candidate 与 active 均未修改，可人工重新发起。"
+                )
+                pending["failureDigest"] = {
+                    "code": "REVIEW_REFRESH_WORKER_LOST",
+                    "category": "resource",
+                    "phase": "review_refresh",
+                    "retryable": True,
+                    "message": pending["error"],
+                    "sourceFeedback": None,
+                    "technicalDetail": {"workerPid": worker_pid or None},
+                    "nextAction": "retry_review_refresh",
+                }
+            else:
+                pending["error"] = (
+                    "独立月更 worker 在 active bundle 操作完成前退出；"
+                    "下一次操作前将按 transaction 记录检查 active。"
+                )
+                pending["failureDigest"] = {
+                    "code": "WORKER_LOST",
+                    "category": "resource",
+                    "phase": f"{pending.get('type') or 'active'}_running",
+                    "retryable": False,
+                    "message": pending["error"],
+                    "sourceFeedback": None,
+                    "technicalDetail": {
+                        "workerPid": worker_pid or None,
+                        "childPid": child_pid,
+                        "orphanTermination": orphan_termination,
+                    },
+                    "nextAction": "inspect_worker_and_active_transaction",
+                }
             payload["pendingOperation"] = pending
             payload["workerPid"] = None
             payload["currentProcess"] = None
