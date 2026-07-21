@@ -270,6 +270,8 @@ def assert_tencent_resumable_upload_contract(workflow: Mapping[str, Any]) -> Non
         'remote_temp="${remote_archive}.uploading.v2"',
         'remote_lock="${remote_temp}.lock"',
         "command -v flock",
+        "local remote_output",
+        'printf \'%s\' "$remote_output"',
         "reset_upload_state()",
         r"if [ \"\$current_size\" -gt '$archive_bytes' ]; then",
         "rm -f '$remote_temp' '$remote_checksum'",
@@ -277,6 +279,7 @@ def assert_tencent_resumable_upload_contract(workflow: Mapping[str, Any]) -> Non
         "flock -w 270 9",
         "oflag=seek_bytes conv=notrunc",
         "idle_timeout_seconds=1800",
+        "while true; do",
         "last_progress_at",
         "Remote immutable archive exists with an unexpected SHA-256",
         "if [ -f '$remote_archive' ]; then",
@@ -292,6 +295,8 @@ def assert_tencent_resumable_upload_contract(workflow: Mapping[str, Any]) -> Non
         raise AssertionError("append-based resume is unsafe after an SSH timeout")
     if "five consecutive attempts" in upload:
         raise AssertionError("attempt-count stalls must not bypass the idle-time budget")
+    if "seq 1 120" in upload or "${upload_attempt}/120" in upload:
+        raise AssertionError("attempt counts must not bypass the idle-time and job budgets")
     if "fallback to sparse" in upload or "split -b 8M" in upload:
         raise AssertionError("Tencent upload must not retain a sparse or fixed-chunk fallback")
 

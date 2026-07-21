@@ -63,6 +63,10 @@ def test_tencent_release_upload_resumes_and_never_falls_back() -> None:
     assert "cat >> '$remote_temp'" not in workflow
     assert "idle_timeout_seconds=1800" in workflow
     assert "last_progress_at" in workflow
+    assert "local remote_output" in workflow
+    assert 'printf \'%s\' "$remote_output"' in workflow
+    assert "while true; do" in workflow
+    assert "seq 1 120" not in workflow
     assert "five consecutive attempts" not in workflow
     assert "Resumable upload attempt" in workflow
     assert "split -b 8M" not in workflow
