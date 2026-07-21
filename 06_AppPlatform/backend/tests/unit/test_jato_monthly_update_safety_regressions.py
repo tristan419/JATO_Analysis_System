@@ -544,7 +544,9 @@ def test_cached_review_and_approval_do_not_hash_large_candidate_in_web(
             "jobId": job_id,
             "reviewFindings": [],
             "candidateFingerprint": "a" * 64,
-            "reviewBundleSchemaVersion": 2,
+            "reviewBundleSchemaVersion": (
+                jato_monthly_update_service.REVIEW_BUNDLE_SCHEMA_VERSION
+            ),
             "candidateArtifactStatSignatureVersion": 2,
             "candidateArtifactStatSignature": signature,
         },
@@ -711,7 +713,9 @@ def test_legacy_review_bundle_fails_closed_without_web_content_hash(
     legacy_bundle = jato_monthly_update_service._read_json(review_path)
     legacy_bundle.update(
         {
-            "reviewBundleSchemaVersion": 2,
+            "reviewBundleSchemaVersion": (
+                jato_monthly_update_service.REVIEW_BUNDLE_SCHEMA_VERSION
+            ),
             "candidateArtifactStatSignatureVersion": 1,
             "candidateArtifactStatSignature": (
                 jato_monthly_update_service
@@ -1203,7 +1207,9 @@ def test_cached_legacy_review_exposes_server_normalized_allowed_decisions(
             "jobId": job_id,
             "reviewFindings": [],
             "candidateFingerprint": "a" * 64,
-            "reviewBundleSchemaVersion": 2,
+            "reviewBundleSchemaVersion": (
+                jato_monthly_update_service.REVIEW_BUNDLE_SCHEMA_VERSION
+            ),
             "candidateArtifactStatSignatureVersion": 2,
             "candidateArtifactStatSignature": (
                 jato_monthly_update_service
