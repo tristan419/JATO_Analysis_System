@@ -1,6 +1,7 @@
 import hashlib
 import importlib.util
 import os
+import shutil
 import sys
 import warnings
 from pathlib import Path
@@ -1502,6 +1503,9 @@ def test_single_country_smart_merge_builds_full_canonical_candidate(
         jato_monthly_update_service._job_review_bundle_path(job_id)
     )
     old_review_path.write_text("old review", encoding="utf-8")
+    source_candidate_sha = (
+        jato_monthly_update_service._sha256_hex_for_path(candidate_path)
+    )
 
     commands: list[str] = []
 
@@ -1536,7 +1540,7 @@ def test_single_country_smart_merge_builds_full_canonical_candidate(
     monkeypatch.setattr(
         jato_monthly_update_service,
         "_cache_jato_monthly_update_review",
-        lambda cached_job_id: (
+        lambda cached_job_id, **_kwargs: (
             cached_jobs.append(cached_job_id)
             or jato_monthly_update_service._job_review_bundle_path(
                 cached_job_id
@@ -1554,7 +1558,15 @@ def test_single_country_smart_merge_builds_full_canonical_candidate(
     assert commands == ["Smart Merge rebuild", "Smart Merge summaries"]
     assert len(validation_calls) == 1
     assert cached_jobs == [job_id]
-    merged = pd.read_parquet(candidate_path)
+    assert (
+        jato_monthly_update_service._sha256_hex_for_path(candidate_path)
+        == source_candidate_sha
+    )
+    merged_path = project_root / persisted["artifacts"][
+        "stagingOutputPath"
+    ]
+    assert merged_path != candidate_path
+    merged = pd.read_parquet(merged_path)
     assert sorted(merged["Country"].tolist()) == ["Germany", "Hungary"]
     assert len(merged.loc[merged["Country"] == "Hungary"]) == 1
     assert (
@@ -1664,6 +1676,7 @@ def test_full_candidate_resolution_forces_smart_merge_without_regression(
         merge_calls.append(
             kwargs["historical_reclassification_decisions"]
         )
+        shutil.copy2(kwargs["candidate_path"], kwargs["output_path"])
         return 2, {"enabled": False, "columnResults": {}}
 
     def fake_command(*, label, args, log_path, job_id=None):
@@ -1705,7 +1718,7 @@ def test_full_candidate_resolution_forces_smart_merge_without_regression(
     monkeypatch.setattr(
         jato_monthly_update_service,
         "_cache_jato_monthly_update_review",
-        lambda cached_job_id: (
+        lambda cached_job_id, **_kwargs: (
             jato_monthly_update_service._job_review_bundle_path(
                 cached_job_id
             )

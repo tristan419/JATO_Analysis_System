@@ -7,6 +7,7 @@
 
 import json
 import argparse
+import tempfile
 from pathlib import Path
 from typing import Any
 from urllib.parse import quote, unquote
@@ -35,6 +36,208 @@ def count_analysis_rows(parquet_path: str) -> int:
     if path.is_dir():
         return int(ds.dataset(path, format="parquet").count_rows())
     return int(pq.ParquetFile(path).metadata.num_rows)
+
+
+def _quote_identifier(value: str) -> str:
+    return '"' + str(value).replace('"', '""') + '"'
+
+
+def _duckdb_summary_query(
+    connection: Any,
+    *,
+    group_column: str,
+    numeric_columns: list[str],
+    include_min_max: bool,
+    include_numeric_count: bool = True,
+    limit: int | None = None,
+) -> pd.DataFrame:
+    group = _quote_identifier(group_column)
+    projections = [group, f"count({group}) AS {_quote_identifier(group_column + '_count')}"]
+    order_terms = [f"count({group}) DESC"] if limit else [f"{group} ASC"]
+    for column in numeric_columns:
+        quoted = _quote_identifier(column)
+        projections.append(
+            f"avg({quoted}) AS {_quote_identifier(column + '_mean')}"
+        )
+        if include_min_max:
+            projections.extend(
+                [
+                    f"min({quoted}) AS {_quote_identifier(column + '_min')}",
+                    f"max({quoted}) AS {_quote_identifier(column + '_max')}",
+                    f"count({quoted}) AS {_quote_identifier(column + '_count')}",
+                ]
+            )
+        elif include_numeric_count:
+            projections.append(
+                f"count({quoted}) AS {_quote_identifier(column + '_count')}"
+            )
+        if limit:
+            order_terms.append(f"avg({quoted}) DESC NULLS LAST")
+    limit_sql = f" LIMIT {int(limit)}" if limit else ""
+    return connection.execute(
+        "SELECT "
+        + ", ".join(projections)
+        + " FROM jato_source"
+        + f" WHERE {group} IS NOT NULL"
+        + f" GROUP BY {group}"
+        + " ORDER BY "
+        + ", ".join(order_terms)
+        + limit_sql
+    ).df()
+
+
+def compute_all_summaries_bounded(
+    parquet_path: str,
+    *,
+    scratch_parent: Path,
+) -> dict[str, pd.DataFrame]:
+    """Aggregate the full archive in DuckDB with disk spill and one thread."""
+    import duckdb
+    import pyarrow as pa
+
+    source = Path(parquet_path)
+    schema = (
+        ds.dataset(source, format="parquet").schema
+        if source.is_dir()
+        else pq.read_schema(source)
+    )
+    columns = [str(column) for column in schema.names]
+    numeric_columns = [
+        field.name
+        for field in schema
+        if (
+            pa.types.is_integer(field.type)
+            or pa.types.is_floating(field.type)
+            or pa.types.is_decimal(field.type)
+        )
+    ]
+    month_columns = sorted(
+        [column for column in columns if column.startswith("20") and len(column) > 4]
+    )
+    source_glob = str(source / "**" / "*.parquet") if source.is_dir() else str(source)
+    escaped_source = source_glob.replace("'", "''")
+    scratch_parent.mkdir(parents=True, exist_ok=True)
+    with tempfile.TemporaryDirectory(
+        prefix=".jato-summary-duckdb-",
+        dir=scratch_parent,
+    ) as scratch_dir:
+        connection = duckdb.connect(database=":memory:")
+        try:
+            escaped_scratch = str(scratch_dir).replace("'", "''")
+            connection.execute("SET threads=1")
+            connection.execute("SET memory_limit='512MB'")
+            connection.execute("SET preserve_insertion_order=false")
+            connection.execute(
+                f"SET temp_directory='{escaped_scratch}'"
+            )
+            connection.execute(
+                "CREATE VIEW jato_source AS SELECT * FROM "
+                f"read_parquet('{escaped_source}')"
+            )
+
+            country_summary = (
+                _duckdb_summary_query(
+                    connection,
+                    group_column="国家",
+                    numeric_columns=numeric_columns,
+                    include_min_max=True,
+                )
+                if "国家" in columns
+                else pd.DataFrame()
+            )
+            if month_columns:
+                month_projection: list[str] = []
+                for index, column in enumerate(month_columns):
+                    quoted = _quote_identifier(column)
+                    month_projection.extend(
+                        [
+                            f"sum({quoted}) AS total_{index}",
+                            f"avg({quoted}) AS average_{index}",
+                        ]
+                    )
+                month_values = connection.execute(
+                    "SELECT "
+                    + ", ".join(month_projection)
+                    + " FROM jato_source"
+                ).fetchone()
+                year_month_summary = pd.DataFrame(
+                    [
+                        {
+                            "yearMonth": column,
+                            "totalCount": int(month_values[index * 2] or 0),
+                            "avgValue": float(
+                                month_values[index * 2 + 1] or 0
+                            ),
+                        }
+                        for index, column in enumerate(month_columns)
+                    ]
+                )
+            else:
+                year_month_summary = pd.DataFrame()
+
+            powertrain_column = (
+                "动力系统"
+                if "动力系统" in columns
+                else "Powertrain"
+                if "Powertrain" in columns
+                else None
+            )
+            powertrain_summary = (
+                _duckdb_summary_query(
+                    connection,
+                    group_column=powertrain_column,
+                    numeric_columns=numeric_columns[:5],
+                    include_min_max=False,
+                )
+                if powertrain_column
+                else pd.DataFrame()
+            )
+            segment_column = (
+                "车形分类"
+                if "车形分类" in columns
+                else "Segment"
+                if "Segment" in columns
+                else None
+            )
+            segment_summary = (
+                _duckdb_summary_query(
+                    connection,
+                    group_column=segment_column,
+                    numeric_columns=numeric_columns[:5],
+                    include_min_max=False,
+                    include_numeric_count=False,
+                )
+                if segment_column
+                else pd.DataFrame()
+            )
+            make_column = (
+                "品牌"
+                if "品牌" in columns
+                else "Make"
+                if "Make" in columns
+                else None
+            )
+            top_makes_summary = (
+                _duckdb_summary_query(
+                    connection,
+                    group_column=make_column,
+                    numeric_columns=numeric_columns[:3],
+                    include_min_max=False,
+                    include_numeric_count=False,
+                    limit=20,
+                )
+                if make_column
+                else pd.DataFrame()
+            )
+        finally:
+            connection.close()
+    return {
+        "country": country_summary,
+        "yearMonth": year_month_summary,
+        "powertrain": powertrain_summary,
+        "segment": segment_summary,
+        "topMakes": top_makes_summary,
+    }
 
 
 def load_existing_summary(
@@ -384,6 +587,28 @@ def precompute_all_summaries(
     # Row count comes from parquet metadata. Loading the full archive just to count
     # rows previously doubled the candidate worker's peak memory.
     original_rows = count_analysis_rows(parquet_path)
+    if not incremental_country_enabled:
+        print("📊 使用 DuckDB 单线程流式聚合并允许磁盘溢写...")
+        summaries = compute_all_summaries_bounded(
+            parquet_path,
+            scratch_parent=Path(output_dir).parent,
+        )
+        print(f"\n💾 保存预聚合表到 {output_dir}...")
+        saved_files = save_summary_tables(summaries, output_dir)
+        manifest = generate_summaries_manifest(
+            saved_files=saved_files,
+            original_row_count=original_rows,
+            precompute_mode="full",
+            incremental_info={"mode": "full"},
+        )
+        manifest_path = Path(output_dir) / "summaries_manifest.json"
+        manifest_path.parent.mkdir(parents=True, exist_ok=True)
+        manifest_path.write_text(
+            json.dumps(manifest, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+        print(f"   ✓ 清单已保存: {manifest_path}")
+        return manifest
     full_df: pd.DataFrame | None = None
 
     def get_full_df() -> pd.DataFrame:

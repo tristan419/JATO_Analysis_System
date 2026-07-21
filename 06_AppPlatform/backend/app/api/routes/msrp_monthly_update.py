@@ -23,6 +23,7 @@ from app.services.jato_monthly_update_service import (
     recheck_jato_monthly_update_job,
     recover_failed_jato_monthly_update_job,
     refresh_jato_monthly_update_review,
+    resume_failed_jato_smart_merge,
     resolve_jato_historical_reclassification,
     retry_jato_monthly_update_upload_digest,
     rollback_jato_monthly_update_job,
@@ -38,6 +39,34 @@ class JatoMonthlyUpdateReviewRefreshBody(BaseModel):
     requestId: str = Field(min_length=8, max_length=128)
     expectedCandidateFingerprint: str | None = Field(
         default=None,
+        min_length=64,
+        max_length=64,
+        pattern=r"^[0-9a-fA-F]{64}$",
+    )
+
+
+class JatoSmartMergeResumeBody(BaseModel):
+    requestId: str = Field(
+        min_length=8,
+        max_length=128,
+        pattern=r"^[A-Za-z0-9][A-Za-z0-9._:-]{7,127}$",
+    )
+    expectedSourceCandidateFingerprint: str = Field(
+        min_length=64,
+        max_length=64,
+        pattern=r"^[0-9a-fA-F]{64}$",
+    )
+    expectedActiveFingerprint: str = Field(
+        min_length=64,
+        max_length=64,
+        pattern=r"^[0-9a-fA-F]{64}$",
+    )
+    expectedReportFingerprint: str = Field(
+        min_length=64,
+        max_length=64,
+        pattern=r"^[0-9a-fA-F]{64}$",
+    )
+    expectedResolutionFingerprint: str = Field(
         min_length=64,
         max_length=64,
         pattern=r"^[0-9a-fA-F]{64}$",
@@ -256,6 +285,33 @@ def post_smart_merge_candidate(
         "item": create_smart_merge_candidate(
             job_id=job_id,
             triggered_by=user.name,
+        )
+    }
+
+
+@router.post("/monthly-update-jobs/{job_id}/smart-merge-resume")
+def post_smart_merge_resume(
+    job_id: str,
+    payload: JatoSmartMergeResumeBody,
+    user: UserContext = Depends(require_min_role("admin")),
+) -> dict[str, object]:
+    return {
+        "item": resume_failed_jato_smart_merge(
+            job_id=job_id,
+            triggered_by=user.name,
+            request_id=payload.requestId,
+            expected_source_candidate_fingerprint=(
+                payload.expectedSourceCandidateFingerprint
+            ),
+            expected_active_fingerprint=(
+                payload.expectedActiveFingerprint
+            ),
+            expected_report_fingerprint=(
+                payload.expectedReportFingerprint
+            ),
+            expected_resolution_fingerprint=(
+                payload.expectedResolutionFingerprint
+            ),
         )
     }
 

@@ -29,7 +29,9 @@ SCRIPTS_ROOT = Path(__file__).resolve().parents[1]
 if str(SCRIPTS_ROOT) not in sys.path:
     sys.path.insert(0, str(SCRIPTS_ROOT))
 
-from data_pipeline.build_partitioned_dataset import build_partitioned_dataset
+from data_pipeline.build_partitioned_dataset import (
+    build_partitioned_dataset_streaming,
+)
 from logging_utils import build_job_id
 
 
@@ -41,6 +43,14 @@ def resolve_path(path_text: str) -> Path:
     if not path.is_absolute():
         path = PROJECT_ROOT / path
     return path
+
+
+def sha256_for_path(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        while chunk := handle.read(1024 * 1024):
+            digest.update(chunk)
+    return digest.hexdigest()
 
 
 def main() -> None:
@@ -90,12 +100,11 @@ def main() -> None:
     t0 = time.time()
     if partition_output.exists():
         shutil.rmtree(partition_output)
-    partition_dir, partition_manifest = build_partitioned_dataset(
+    partition_dir, partition_manifest = build_partitioned_dataset_streaming(
         input_path=str(input_path),
         output_dir=str(partition_output),
         partition_cols=[partition_column],
         overwrite=True,
-        incremental=False,
         job_id=job_id,
     )
     steps["partitionSeconds"] = round(time.time() - t0, 3)
@@ -107,7 +116,7 @@ def main() -> None:
     row_count = pf.metadata.num_rows
     col_count = pf.metadata.num_columns
     file_size = input_path.stat().st_size
-    file_hash = hashlib.sha256(input_path.read_bytes()).hexdigest()
+    file_hash = sha256_for_path(input_path)
 
     manifest = {
         "schemaVersion": "1.0",

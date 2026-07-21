@@ -98,6 +98,9 @@ DIGEST_RETRYABLE_FAILURE_CODES = frozenset(
 UPLOAD_SESSION_STALE_SECONDS = 24 * 60 * 60
 BASELINE_XLSX_MAX_ROWS = 1_048_576
 BASELINE_EXPORT_BATCH_ROWS = 2_048
+SMART_MERGE_SCAN_BATCH_ROWS = 4_096
+SMART_MERGE_HASH_BUCKET_COUNT = 128
+SMART_MERGE_MAX_BUCKET_ROWS = 16_384
 MONTH_PATTERN = re.compile(r"(20\d{2})[-./]?(0?[1-9]|1[0-2])")
 CODE_BLOCK_PATTERN = re.compile(r"```bash\s*(.*?)\s*```", re.DOTALL)
 ALLOWED_UPLOAD_EXTENSIONS = {".xlsx", ".xlsm", ".xls"}
@@ -114,6 +117,9 @@ YTD_COLUMN_PATTERN = re.compile(r"^YTD\s+\d{4}\s+\([A-Za-z]{3}\)$", re.IGNORECAS
 BATCH_ID_PATTERN = re.compile(r"^(20\d{2}-\d{2})-r(\d+)$")
 RECOVERY_KEY_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{7,127}$")
 REVIEW_REFRESH_REQUEST_ID_PATTERN = re.compile(
+    r"^[A-Za-z0-9][A-Za-z0-9._:-]{7,127}$"
+)
+SMART_MERGE_RESUME_REQUEST_ID_PATTERN = re.compile(
     r"^[A-Za-z0-9][A-Za-z0-9._:-]{7,127}$"
 )
 RECOVERY_ALLOWED_FAILURE_CATEGORIES = frozenset({"platform", "resource"})
@@ -424,6 +430,28 @@ def _failure_digest_from_exception(
                 "signalName": signal_name,
             },
             "nextAction": "inspect_worker_resources",
+        }
+    memory_markers = (
+        "arrowmemoryerror",
+        "out of memory",
+        "cannot allocate memory",
+        "realloc of size",
+        "memory limit",
+    )
+    memory_detail = f"{type(exc).__name__}: {message}".casefold()
+    if any(marker in memory_detail for marker in memory_markers):
+        return {
+            "code": "MEMORY_LIMIT_EXCEEDED",
+            "category": "resource",
+            "phase": phase,
+            "retryable": True,
+            "message": message,
+            "sourceFeedback": (
+                "这不是已证明的数据错误；任务超过了当前 worker 的"
+                "内存边界。请保留 Candidate 和决策，仅续跑失败阶段。"
+            ),
+            "technicalDetail": type(exc).__name__,
+            "nextAction": "resume_failed_stage",
         }
     return {
         "code": "JOB_STEP_FAILED",
@@ -1008,10 +1036,11 @@ def _collect_dataset_country_latest_months(path: Path) -> dict[str, str | None]:
         display_variants: dict[str, list[str]] = {}
         present_months: dict[str, set[str]] = {}
         for batch in parquet_file.iter_batches(
-            batch_size=65_536,
+            batch_size=SMART_MERGE_SCAN_BATCH_ROWS,
             columns=selected_columns,
+            use_threads=False,
         ):
-            frame = batch.to_pandas()
+            frame = batch.to_pandas(use_threads=False)
             frame.columns = [
                 str(column).strip()
                 for column in frame.columns
@@ -1406,6 +1435,41 @@ def _partition_payload_signature(frame: pd.DataFrame) -> str:
     return str(int(hash_values.astype("uint64").sum()))
 
 
+def _stream_parquet_payload_signature(
+    path: Path,
+    *,
+    columns: list[str],
+    filter_column: str | None = None,
+    filter_values: list[str] | None = None,
+) -> tuple[int, str]:
+    """Compute the existing pandas signature with bounded Arrow batches."""
+    import pyarrow.dataset as ds
+
+    expression = None
+    if filter_column is not None:
+        expression = ds.field(filter_column).isin(filter_values or [])
+    scanner = ds.dataset(path, format="parquet").scanner(
+        columns=columns,
+        filter=expression,
+        batch_size=SMART_MERGE_SCAN_BATCH_ROWS,
+        use_threads=False,
+        batch_readahead=1,
+        fragment_readahead=1,
+    )
+    checksum = 0
+    row_count = 0
+    modulus = 1 << 64
+    for batch in scanner.to_batches():
+        if not batch.num_rows:
+            continue
+        frame = batch.to_pandas(use_threads=False)
+        checksum = (
+            checksum + int(_partition_payload_signature(frame))
+        ) % modulus
+        row_count += int(batch.num_rows)
+    return row_count, str(checksum)
+
+
 def _validate_candidate_full_bundle(
     *,
     parquet_path: Path,
@@ -1417,6 +1481,7 @@ def _validate_candidate_full_bundle(
 ) -> dict[str, Any]:
     """Fail closed unless all six staged artifacts describe one dataset."""
     try:
+        import pyarrow.dataset as ds
         import pyarrow.parquet as pq
 
         manifest = _read_json(manifest_path)
@@ -1515,36 +1580,27 @@ def _validate_candidate_full_bundle(
             declaredFileCount=declared_file_count,
         )
 
-    country_values = pd.read_parquet(
+    country_value_map = _smart_merge_country_value_map(
         parquet_path,
-        columns=[country_column],
-    )[country_column]
-    normalized_country_values = (
-        country_values.astype("string").fillna("").str.strip()
-    )
-    if bool(normalized_country_values.eq("").any()):
-        _raise_candidate_bundle_invalid(
-            "candidate parquet 存在空国家，无法证明 partition 完整性。",
-        )
-    country_display = _logical_country_display_map(
-        normalized_country_values,
+        country_column=country_column,
         path_label="candidate parquet",
     )
-    raw_values_by_key: dict[str, list[str]] = {}
-    for raw_value, country_key in zip(
-        country_values,
-        normalized_country_values.str.casefold(),
-        strict=False,
-    ):
-        key = str(country_key)
-        raw = str(raw_value)
-        values = raw_values_by_key.setdefault(key, [])
-        if raw not in values:
-            values.append(raw)
+    observed_country_rows = sum(
+        int(batch.num_rows)
+        for batch in parquet_file.iter_batches(
+            batch_size=SMART_MERGE_SCAN_BATCH_ROWS,
+            columns=[country_column],
+            use_threads=False,
+        )
+    )
+    if observed_country_rows != parquet_rows:
+        _raise_candidate_bundle_invalid(
+            "candidate parquet 国家列行数与 metadata 不一致。",
+        )
 
     expected_partition_dirs = {
-        f"{country_column}={quote(display, safe='')}"
-        for display in country_display.values()
+        f"{country_column}={quote(str(item['display']), safe='')}"
+        for item in country_value_map.values()
     }
     if declared_partition_dirs != expected_partition_dirs:
         _raise_candidate_bundle_invalid(
@@ -1555,6 +1611,11 @@ def _validate_candidate_full_bundle(
 
     verified_rows = 0
     signature_mismatches: list[dict[str, Any]] = []
+    payload_columns = [
+        str(column)
+        for column in parquet_schema.names
+        if str(column) != country_column
+    ]
     for partition_dir in sorted(declared_partition_dirs):
         raw_stats = partition_stats.get(partition_dir)
         if not isinstance(raw_stats, dict):
@@ -1564,64 +1625,70 @@ def _validate_candidate_full_bundle(
             continue
         country = unquote(partition_dir.split("=", 1)[-1]).strip()
         country_key = country.casefold()
-        raw_values = raw_values_by_key.get(country_key, [])
+        country_info = country_value_map.get(country_key)
+        raw_values = (
+            list(country_info.get("rawValues", []))
+            if isinstance(country_info, dict)
+            else []
+        )
         if not raw_values:
             signature_mismatches.append(
                 {"partition": partition_dir, "reason": "country_not_in_parquet"}
             )
             continue
-        country_filter = (
-            (country_column, "==", raw_values[0])
-            if len(raw_values) == 1
-            else (country_column, "in", raw_values)
+        candidate_rows, candidate_signature = (
+            _stream_parquet_payload_signature(
+                parquet_path,
+                columns=payload_columns,
+                filter_column=country_column,
+                filter_values=raw_values,
+            )
         )
-        candidate_country = pd.read_parquet(
-            parquet_path,
-            filters=[country_filter],
-        )
-        candidate_country.columns = [
+        partition_country_path = partition_path / partition_dir
+        try:
+            partition_schema = ds.dataset(
+                partition_country_path,
+                format="parquet",
+            ).schema
+        except Exception as exc:
+            signature_mismatches.append(
+                {
+                    "partition": partition_dir,
+                    "reason": f"partition_schema_unreadable:{exc}",
+                }
+            )
+            continue
+        partition_columns_actual = [
             str(column).strip()
-            for column in candidate_country.columns
+            for column in partition_schema.names
         ]
-        candidate_payload = candidate_country.drop(
-            columns=[country_column],
+        partition_rows_actual, partition_signature = (
+            _stream_parquet_payload_signature(
+                partition_country_path,
+                columns=partition_columns_actual,
+            )
         )
-        partition_payload = pd.read_parquet(partition_path / partition_dir)
-        partition_payload.columns = [
-            str(column).strip()
-            for column in partition_payload.columns
-        ]
         expected_rows = int(raw_stats.get("rows", -1) or -1)
-        candidate_signature = _partition_payload_signature(
-            candidate_payload
-        )
-        partition_signature = _partition_payload_signature(
-            partition_payload
-        )
         expected_signature = str(raw_stats.get("signature") or "")
         if (
-            list(candidate_payload.columns)
-            != list(partition_payload.columns)
-            or len(candidate_payload) != expected_rows
-            or len(partition_payload) != expected_rows
+            payload_columns != partition_columns_actual
+            or candidate_rows != expected_rows
+            or partition_rows_actual != expected_rows
             or candidate_signature != expected_signature
             or partition_signature != expected_signature
         ):
             signature_mismatches.append(
                 {
                     "partition": partition_dir,
-                    "candidateRows": int(len(candidate_payload)),
-                    "partitionRows": int(len(partition_payload)),
+                    "candidateRows": candidate_rows,
+                    "partitionRows": partition_rows_actual,
                     "expectedRows": expected_rows,
                     "candidateSignature": candidate_signature,
                     "partitionSignature": partition_signature,
                     "expectedSignature": expected_signature,
                 }
             )
-        verified_rows += int(len(partition_payload))
-        del candidate_country
-        del candidate_payload
-        del partition_payload
+        verified_rows += partition_rows_actual
 
     if signature_mismatches or verified_rows != parquet_rows:
         _raise_candidate_bundle_invalid(
@@ -3218,6 +3285,152 @@ def _collect_country_monthly_sales(
     return result
 
 
+def _raise_for_missing_country_rows(
+    *,
+    path_label: str,
+    row_count: int,
+) -> None:
+    if row_count <= 0:
+        return
+    raise HTTPException(
+        status_code=409,
+        detail={
+            "blockerType": "missing_country_rows",
+            "message": (
+                f"{path_label} 有 {row_count} 行国家字段为空；"
+                "为避免月更流程静默丢行，已停止处理。"
+            ),
+            "sourceFeedback": (
+                "请洗数人员补齐每一条数据的 Country/国家字段，"
+                "不得留空或仅包含空格。"
+            ),
+            "rowCount": row_count,
+        },
+    )
+
+
+def _collect_country_monthly_sales_from_path(
+    path: Path,
+    *,
+    countries: list[str],
+    path_label: str,
+) -> dict[str, dict[str, int | float]]:
+    """Aggregate requested country/month totals without loading a parquet whole."""
+    if path.suffix.lower() != ".parquet":
+        return _collect_country_monthly_sales(
+            _load_monthly_sales_frame(path, path_label=path_label),
+            countries=countries,
+            path_label=path_label,
+        )
+    if not path.exists():
+        raise HTTPException(status_code=409, detail=f"{path_label} 不存在：{path}")
+    if not countries:
+        return {}
+
+    try:
+        import pyarrow.parquet as pq
+
+        parquet_file = pq.ParquetFile(path)
+        schema_columns = [
+            str(column).strip()
+            for column in parquet_file.schema_arrow.names
+        ]
+        country_column = _find_country_column(schema_columns)
+        month_columns = _detect_month_columns(schema_columns)
+        if country_column is None or not month_columns:
+            raise HTTPException(
+                status_code=409,
+                detail=f"{path_label} 缺少国家列或月份列。",
+            )
+
+        requested_country_keys = {
+            str(country).strip().casefold(): str(country).strip()
+            for country in countries
+            if str(country).strip()
+        }
+        totals: dict[str, dict[str, int | float]] = {}
+        display_values: list[str] = []
+        seen_display_values: set[str] = set()
+        missing_country_rows = 0
+        for batch in parquet_file.iter_batches(
+            batch_size=SMART_MERGE_SCAN_BATCH_ROWS,
+            columns=[country_column, *month_columns],
+            use_threads=False,
+        ):
+            frame = batch.to_pandas(use_threads=False)
+            frame.columns = [str(column).strip() for column in frame.columns]
+            normalized = (
+                frame[country_column]
+                .astype("string")
+                .fillna("")
+                .str.strip()
+            )
+            missing_country_rows += int(normalized.eq("").sum())
+            for display in normalized.unique().tolist():
+                value = str(display)
+                if value and value not in seen_display_values:
+                    seen_display_values.add(value)
+                    display_values.append(value)
+            country_keys = normalized.str.casefold()
+            requested_mask = country_keys.isin(requested_country_keys)
+            if not bool(requested_mask.any()):
+                continue
+            working = frame.loc[requested_mask, month_columns].copy()
+            logical_country_column = "__jato_logical_country"
+            working[logical_country_column] = country_keys.loc[
+                requested_mask
+            ].to_numpy()
+            for column in month_columns:
+                working[column] = pd.to_numeric(
+                    working[column], errors="coerce"
+                )
+            grouped = working.groupby(
+                logical_country_column,
+                dropna=False,
+                sort=False,
+            )[month_columns].sum(min_count=1)
+            for country_key, values in grouped.iterrows():
+                country_totals = totals.setdefault(str(country_key), {})
+                for month in month_columns:
+                    value = values.get(month)
+                    if value is None or pd.isna(value):
+                        continue
+                    if month in country_totals:
+                        country_totals[month] += value
+                    else:
+                        country_totals[month] = value
+
+        _raise_for_missing_country_rows(
+            path_label=path_label,
+            row_count=missing_country_rows,
+        )
+        _logical_country_display_map(
+            pd.Series(display_values, dtype="string"),
+            path_label=path_label,
+        )
+        return {
+            country: {
+                month: serialized
+                for month in month_columns
+                if (
+                    serialized := _serialize_numeric_value(
+                        totals.get(str(country).strip().casefold(), {}).get(month)
+                    )
+                )
+                is not None
+            }
+            for country in countries
+            if str(country).strip().casefold() in totals
+        }
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(
+            status_code=409,
+            detail=f"读取 {path_label} 的国家/月字段失败。",
+        ) from exc
+
+
 def _collect_frame_countries(frame: pd.DataFrame, *, path_label: str) -> list[str]:
     country_column = _find_country_column(list(frame.columns))
     if country_column is None:
@@ -3232,6 +3445,50 @@ def _collect_frame_countries(frame: pd.DataFrame, *, path_label: str) -> list[st
             path_label=path_label,
         ).values()
     )
+
+
+def _collect_countries_from_path(
+    path: Path,
+    *,
+    path_label: str,
+) -> list[str]:
+    """Collect country labels without materializing an entire parquet column."""
+    if path.suffix.lower() != ".parquet":
+        return _collect_frame_countries(
+            _load_monthly_sales_frame(path, path_label=path_label),
+            path_label=path_label,
+        )
+    if not path.exists():
+        raise HTTPException(status_code=409, detail=f"{path_label} 不存在：{path}")
+    try:
+        import pyarrow.parquet as pq
+
+        schema_columns = [
+            str(column).strip()
+            for column in pq.read_schema(path).names
+        ]
+        country_column = _find_country_column(schema_columns)
+        if country_column is None:
+            raise HTTPException(
+                status_code=409,
+                detail=f"{path_label} 缺少国家列，无法执行 publish 销量防重校验。",
+            )
+        country_value_map = _smart_merge_country_value_map(
+            path,
+            country_column=country_column,
+            path_label=path_label,
+        )
+        return [
+            str(item["display"])
+            for item in country_value_map.values()
+        ]
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(
+            status_code=409,
+            detail=f"读取 {path_label} 的国家字段失败。",
+        ) from exc
 
 
 def _is_near_sales_doubling(
@@ -3259,40 +3516,21 @@ def _find_publish_sales_doubling_anomalies(
     candidate_parquet_path: Path,
 ) -> list[dict[str, Any]]:
     """Detect likely duplicate country merges before candidate data becomes active."""
-    active_frame = _load_monthly_sales_frame(
+    active_countries = _collect_countries_from_path(
         active_parquet_path,
         path_label="当前 active 数据集",
     )
-    candidate_frame = _load_monthly_sales_frame(
-        candidate_parquet_path,
-        path_label="candidate 数据集",
-    )
-    active_countries = _collect_frame_countries(
-        active_frame,
-        path_label="当前 active 数据集",
-    )
-    candidate_country_keys = {
-        country.casefold()
-        for country in _collect_frame_countries(
-            candidate_frame,
-            path_label="candidate 数据集",
-        )
-    }
-    countries = sorted(
-        country
-        for country in active_countries
-        if country.casefold() in candidate_country_keys
-    )
+    countries = sorted(active_countries)
     if not countries:
         return []
 
-    active_totals = _collect_country_monthly_sales(
-        active_frame,
+    active_totals = _collect_country_monthly_sales_from_path(
+        active_parquet_path,
         countries=countries,
         path_label="当前 active 数据集",
     )
-    candidate_totals = _collect_country_monthly_sales(
-        candidate_frame,
+    candidate_totals = _collect_country_monthly_sales_from_path(
+        candidate_parquet_path,
         countries=countries,
         path_label="candidate 数据集",
     )
@@ -3364,25 +3602,17 @@ def _find_publish_historical_sales_changes(
     This invariant catches a one-unit append just as reliably as a 2x append.
     New months are intentionally outside the comparison window.
     """
-    active_frame = _load_monthly_sales_frame(
+    active_countries = _collect_countries_from_path(
         active_parquet_path,
         path_label="当前 active 数据集",
     )
-    candidate_frame = _load_monthly_sales_frame(
-        candidate_parquet_path,
-        path_label="candidate 数据集",
-    )
-    active_countries = _collect_frame_countries(
-        active_frame,
-        path_label="当前 active 数据集",
-    )
-    active_totals = _collect_country_monthly_sales(
-        active_frame,
+    active_totals = _collect_country_monthly_sales_from_path(
+        active_parquet_path,
         countries=active_countries,
         path_label="当前 active 数据集",
     )
-    candidate_totals = _collect_country_monthly_sales(
-        candidate_frame,
+    candidate_totals = _collect_country_monthly_sales_from_path(
+        candidate_parquet_path,
         countries=active_countries,
         path_label="candidate 数据集",
     )
@@ -3560,30 +3790,14 @@ def _load_country_configuration_history_frame(
                     "sourceFeedback": None,
                 },
             )
-        country_values_frame = pd.read_parquet(
+        requested_key = country.strip().casefold()
+        country_value_map = _smart_merge_country_value_map(
             path,
-            columns=[country_column],
-        )
-        raw_country_values = country_values_frame[country_column]
-        normalized_country_values = (
-            raw_country_values.astype("string").fillna("").str.strip()
-        )
-        _logical_country_display_map(
-            normalized_country_values,
+            country_column=country_column,
             path_label=path_label,
         )
-        requested_key = country.strip().casefold()
         matching_raw_values = list(
-            dict.fromkeys(
-                str(raw_value)
-                for raw_value, country_key in zip(
-                    raw_country_values,
-                    normalized_country_values.str.casefold(),
-                    strict=False,
-                )
-                if not pd.isna(raw_value)
-                and str(country_key) == requested_key
-            )
+            country_value_map.get(requested_key, {}).get("rawValues", [])
         )
         if not matching_raw_values:
             return pd.DataFrame(
@@ -3780,21 +3994,15 @@ def _build_country_monthly_sales_summary(
     candidate_path: Path,
     reference_path: Path | None,
 ) -> list[dict[str, Any]]:
-    candidate_frame = _load_monthly_sales_frame(
-        candidate_path, path_label="candidate 数据集"
-    )
-    candidate_totals = _collect_country_monthly_sales(
-        candidate_frame,
+    candidate_totals = _collect_country_monthly_sales_from_path(
+        candidate_path,
         countries=countries,
         path_label="candidate 数据集",
     )
     reference_totals: dict[str, dict[str, int | float]] = {}
     if reference_path is not None:
-        reference_frame = _load_monthly_sales_frame(
-            reference_path, path_label="参考数据集"
-        )
-        reference_totals = _collect_country_monthly_sales(
-            reference_frame,
+        reference_totals = _collect_country_monthly_sales_from_path(
+            reference_path,
             countries=countries,
             path_label="参考数据集",
         )
@@ -6110,6 +6318,7 @@ def _serialize_job_state(
             if isinstance(payload.get("pendingOperation"), dict)
             else None
         ),
+        "smartMergeRecovery": _smart_merge_recovery_view(payload),
     }
     if "recoveryOfJobId" in payload or "recoveryKey" in payload:
         item["recoveryOfJobId"] = payload.get("recoveryOfJobId")
@@ -6514,6 +6723,135 @@ def _historical_reclassification_resolution(
 ) -> dict[str, Any] | None:
     value = payload.get("historicalReclassificationResolution")
     return value if isinstance(value, dict) else None
+
+
+def _historical_reclassification_resolution_fingerprint(
+    resolution: dict[str, Any],
+) -> str:
+    """Seal the exact active/candidate/report/decision recovery contract."""
+    raw_decisions = resolution.get("decisions")
+    canonical_decisions = sorted(
+        (
+            {
+                "country": str(item.get("country") or "").strip(),
+                "decision": str(item.get("decision") or "")
+                .strip()
+                .lower(),
+            }
+            for item in (
+                raw_decisions if isinstance(raw_decisions, list) else []
+            )
+            if isinstance(item, dict)
+        ),
+        key=lambda item: (
+            item["country"].casefold(),
+            item["country"],
+            item["decision"],
+        ),
+    )
+    sealed = {
+        "activeBaseFingerprint": str(
+            resolution.get("activeBaseFingerprint") or ""
+        ).strip().lower(),
+        "sourceCandidateFingerprint": str(
+            resolution.get("sourceCandidateFingerprint") or ""
+        ).strip().lower(),
+        "reportFingerprint": str(
+            resolution.get("reportFingerprint") or ""
+        ).strip().lower(),
+        "decisions": canonical_decisions,
+    }
+    return hashlib.sha256(
+        json.dumps(
+            sealed,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
+    ).hexdigest()
+
+
+def _smart_merge_recovery_view(
+    payload: dict[str, Any],
+) -> dict[str, Any] | None:
+    """Expose only immutable seals needed by the admin resume control."""
+    resolution = _historical_reclassification_resolution(payload)
+    if not isinstance(resolution, dict):
+        return None
+    artifacts = payload.get("artifacts")
+    candidate_scope = (
+        str(artifacts.get("candidateScope") or "")
+        if isinstance(artifacts, dict)
+        else ""
+    )
+    source_candidate_fingerprint = _valid_sha256(
+        resolution.get("sourceCandidateFingerprint")
+    )
+    active_fingerprint = _valid_sha256(
+        resolution.get("activeBaseFingerprint")
+    )
+    report_fingerprint = _valid_sha256(
+        resolution.get("reportFingerprint")
+    )
+    resolution_fingerprint = (
+        _historical_reclassification_resolution_fingerprint(resolution)
+    )
+    pending = _pending_operation(payload)
+    pending_active = bool(
+        isinstance(pending, dict)
+        and str(pending.get("status") or "") in {"queued", "running"}
+    )
+    publication = payload.get("publication")
+    published = bool(
+        isinstance(publication, dict)
+        and publication.get("publishedAt")
+        and not publication.get("rolledBackAt")
+    )
+    reason: str | None = None
+    if pending_active:
+        reason = "operation_in_progress"
+    elif (
+        str(payload.get("status") or "") != "failed"
+        or str(payload.get("phase") or "") != "smart_merge_failed"
+        or str(payload.get("operation") or "") != "smart_merge"
+    ):
+        reason = "job_not_smart_merge_failed"
+    elif published:
+        reason = "candidate_already_published"
+    elif isinstance(payload.get("reviewApproval"), dict):
+        reason = "review_already_approved"
+    elif candidate_scope not in {
+        *PARTITION_SCOPED_CANDIDATE_SCOPES,
+        "full_smart_merge",
+    }:
+        reason = "candidate_scope_invalid"
+    elif not all(
+        (
+            source_candidate_fingerprint,
+            active_fingerprint,
+            report_fingerprint,
+        )
+    ):
+        reason = "recovery_seal_missing"
+    elif (
+        _valid_sha256(payload.get("activeBaseFingerprint"))
+        != active_fingerprint
+    ):
+        reason = "active_lineage_mismatch"
+    elif (
+        candidate_scope == "full_smart_merge"
+        and str(resolution.get("status") or "") != "resolved"
+    ):
+        reason = "committed_bundle_not_resolved"
+    return {
+        "canResume": reason is None,
+        "reason": reason,
+        "candidateScope": candidate_scope or None,
+        "sourceCandidateFingerprint": source_candidate_fingerprint,
+        "activeBaseFingerprint": active_fingerprint,
+        "reportFingerprint": report_fingerprint,
+        "resolutionFingerprint": resolution_fingerprint,
+    }
 
 
 def _historical_reclassification_decision_map(
@@ -11913,6 +12251,349 @@ def _launch_job_thread(job_id: str) -> None:
     )
 
 
+def _normalized_smart_merge_resume_request_id(request_id: str) -> str:
+    normalized = str(request_id or "").strip()
+    if not SMART_MERGE_RESUME_REQUEST_ID_PATTERN.fullmatch(normalized):
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "code": "INVALID_SMART_MERGE_RESUME_REQUEST_ID",
+                "message": (
+                    "requestId 必须为 8-128 位字母、数字或 ._:- "
+                    "组成的幂等键。"
+                ),
+            },
+        )
+    return normalized
+
+
+def _normalized_required_resume_sha(value: str, *, field: str) -> str:
+    normalized = _valid_sha256(value)
+    if normalized is None:
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "code": "INVALID_SMART_MERGE_RESUME_SEAL",
+                "message": f"{field} 必须是 64 位 SHA-256。",
+                "field": field,
+            },
+        )
+    return normalized
+
+
+def _smart_merge_resume_replay(
+    *,
+    payload: dict[str, Any],
+    request_id: str,
+    expected_seals: dict[str, str],
+) -> dict[str, Any] | None:
+    existing = _pending_operation(payload)
+    if not isinstance(existing, dict):
+        return None
+    existing_status = str(existing.get("status") or "")
+    existing_type = str(existing.get("type") or "")
+    existing_request_id = str(existing.get("requestId") or "")
+    if (
+        existing_type == "smart_merge_resume"
+        and existing_request_id == request_id
+    ):
+        if any(
+            str(existing.get(field) or "").lower() != value
+            for field, value in expected_seals.items()
+        ):
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "code": "SMART_MERGE_RESUME_REQUEST_CONFLICT",
+                    "message": (
+                        "相同 requestId 已绑定另一组恢复指纹，"
+                        "拒绝重复提交。"
+                    ),
+                    "jobId": payload.get("jobId"),
+                },
+            )
+        if existing_status == "queued":
+            _launch_job_thread(str(payload.get("jobId") or ""))
+        return _serialize_job_state(payload, include_log_tail=False)
+    if existing_status in {"queued", "running"}:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "SMART_MERGE_RESUME_OPERATION_IN_PROGRESS",
+                "message": (
+                    f"{existing_type or 'active bundle'} 操作仍在"
+                    f" {existing_status}，不能排队新的 Smart Merge 续跑。"
+                ),
+                "jobId": payload.get("jobId"),
+            },
+        )
+    return None
+
+
+def _queue_smart_merge_resume_locked(
+    *,
+    job_id: str,
+    triggered_by: str,
+    request_id: str,
+    expected_source_candidate_fingerprint: str,
+    expected_active_fingerprint: str,
+    expected_report_fingerprint: str,
+    expected_resolution_fingerprint: str,
+) -> dict[str, Any]:
+    payload = _load_job_state(job_id)
+    expected_seals = {
+        "expectedSourceCandidateFingerprint": (
+            expected_source_candidate_fingerprint
+        ),
+        "expectedActiveFingerprint": expected_active_fingerprint,
+        "expectedReportFingerprint": expected_report_fingerprint,
+        "expectedResolutionFingerprint": expected_resolution_fingerprint,
+    }
+    replay = _smart_merge_resume_replay(
+        payload=payload,
+        request_id=request_id,
+        expected_seals=expected_seals,
+    )
+    if replay is not None:
+        return replay
+
+    recovery = _smart_merge_recovery_view(payload)
+    if not isinstance(recovery, dict) or not recovery.get("canResume"):
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "SMART_MERGE_RESUME_NOT_ALLOWED",
+                "blockerType": "smart_merge_resume_not_allowed",
+                "message": "当前任务不满足原地续跑 Smart Merge 的安全条件。",
+                "reason": (
+                    recovery.get("reason")
+                    if isinstance(recovery, dict)
+                    else "recovery_contract_missing"
+                ),
+                "jobId": job_id,
+            },
+        )
+    if any(
+        str(recovery.get(field) or "").lower() != value
+        for field, value in {
+            "sourceCandidateFingerprint": (
+                expected_source_candidate_fingerprint
+            ),
+            "activeBaseFingerprint": expected_active_fingerprint,
+            "reportFingerprint": expected_report_fingerprint,
+            "resolutionFingerprint": expected_resolution_fingerprint,
+        }.items()
+    ):
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "SMART_MERGE_RESUME_SEAL_CHANGED",
+                "blockerType": "smart_merge_resume_seal_changed",
+                "message": (
+                    "页面读取后 Smart Merge 恢复合同已变化；"
+                    "请刷新任务后重新确认。"
+                ),
+                "jobId": job_id,
+            },
+        )
+
+    resolution = _historical_reclassification_resolution(payload)
+    if not isinstance(resolution, dict):
+        raise HTTPException(
+            status_code=409,
+            detail="任务缺少已保存的历史变化决策，不能续跑。",
+        )
+    _validated_historical_reclassification_resolution(resolution)
+    if _active_dataset_version() != expected_active_fingerprint:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "SMART_MERGE_RESUME_ACTIVE_CHANGED",
+                "blockerType": "stale_candidate",
+                "message": (
+                    "失败后 active lineage 已变化；"
+                    "旧 Candidate 与决策不得继续应用。"
+                ),
+                "jobId": job_id,
+            },
+        )
+    artifacts = payload.get("artifacts")
+    if not isinstance(artifacts, dict):
+        raise HTTPException(
+            status_code=409,
+            detail="任务缺少 candidate artifacts，不能续跑。",
+        )
+    candidate_scope = str(artifacts.get("candidateScope") or "")
+    required_names = (
+        {"parquet", "manifest", "refreshReport"}
+        if candidate_scope in PARTITION_SCOPED_CANDIDATE_SCOPES
+        else {name for name, _field in CANDIDATE_ARTIFACT_FIELDS}
+    )
+    missing = [
+        artifact_name
+        for artifact_name, artifact_field in CANDIDATE_ARTIFACT_FIELDS
+        if artifact_name in required_names
+        and (
+            (path := _project_path(artifacts.get(artifact_field))) is None
+            or not path.exists()
+        )
+    ]
+    if missing:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "SMART_MERGE_RESUME_ARTIFACT_MISSING",
+                "message": "Smart Merge 续跑所需 Candidate 产物缺失。",
+                "missingArtifacts": missing,
+                "jobId": job_id,
+            },
+        )
+    return _queue_active_bundle_operation(
+        payload=payload,
+        operation_type="smart_merge_resume",
+        triggered_by=triggered_by,
+        operation_fields={
+            "requestId": request_id,
+            **expected_seals,
+            "candidateArtifactStatSignature": (
+                _candidate_artifact_stat_signature(artifacts)
+            ),
+            "resumeMode": (
+                "merge_and_review"
+                if candidate_scope in PARTITION_SCOPED_CANDIDATE_SCOPES
+                else "review_only"
+            ),
+        },
+    )
+
+
+def resume_failed_jato_smart_merge(
+    *,
+    job_id: str,
+    triggered_by: str,
+    request_id: str,
+    expected_source_candidate_fingerprint: str,
+    expected_active_fingerprint: str,
+    expected_report_fingerprint: str,
+    expected_resolution_fingerprint: str,
+) -> dict[str, Any]:
+    normalized_request_id = _normalized_smart_merge_resume_request_id(
+        request_id
+    )
+    expected_source = _normalized_required_resume_sha(
+        expected_source_candidate_fingerprint,
+        field="expectedSourceCandidateFingerprint",
+    )
+    expected_active = _normalized_required_resume_sha(
+        expected_active_fingerprint,
+        field="expectedActiveFingerprint",
+    )
+    expected_report = _normalized_required_resume_sha(
+        expected_report_fingerprint,
+        field="expectedReportFingerprint",
+    )
+    expected_resolution = _normalized_required_resume_sha(
+        expected_resolution_fingerprint,
+        field="expectedResolutionFingerprint",
+    )
+    expected_seals = {
+        "expectedSourceCandidateFingerprint": expected_source,
+        "expectedActiveFingerprint": expected_active,
+        "expectedReportFingerprint": expected_report,
+        "expectedResolutionFingerprint": expected_resolution,
+    }
+
+    # Fast idempotent replay path: do not make a lost HTTP response wait for
+    # unrelated upload/resource gates.
+    with _exclusive_file_lock(_job_state_lock_path(job_id)) as acquired:
+        if not acquired:
+            raise HTTPException(
+                status_code=503,
+                detail="Smart Merge 续跑状态锁暂不可用。",
+            )
+        replay = _smart_merge_resume_replay(
+            payload=_load_job_state(job_id),
+            request_id=normalized_request_id,
+            expected_seals=expected_seals,
+        )
+        if replay is not None:
+            return replay
+
+    with _monthly_update_worker_start_window(
+        action="仅续跑 Smart Merge",
+        excluding_job_id=job_id,
+    ):
+        with _exclusive_file_lock(_job_state_lock_path(job_id)) as acquired:
+            if not acquired:
+                raise HTTPException(
+                    status_code=503,
+                    detail="Smart Merge 续跑状态锁暂不可用。",
+                )
+            return _queue_smart_merge_resume_locked(
+                job_id=job_id,
+                triggered_by=triggered_by,
+                request_id=normalized_request_id,
+                expected_source_candidate_fingerprint=expected_source,
+                expected_active_fingerprint=expected_active,
+                expected_report_fingerprint=expected_report,
+                expected_resolution_fingerprint=expected_resolution,
+            )
+
+
+def _smart_merge_resume_bundle_is_durable(
+    *,
+    payload: dict[str, Any],
+    operation: dict[str, Any],
+) -> bool:
+    operation_id = str(operation.get("operationId") or "")
+    expected_active = _valid_sha256(
+        operation.get("expectedActiveFingerprint")
+    )
+    resolution = _historical_reclassification_resolution(payload)
+    artifacts = payload.get("artifacts")
+    bundle_path = _job_review_bundle_path(str(payload.get("jobId") or ""))
+    if (
+        not operation_id
+        or expected_active is None
+        or str(payload.get("status") or "") != "success"
+        or str(payload.get("phase") or "") != "completed"
+        or not isinstance(resolution, dict)
+        or str(resolution.get("status") or "") != "resolved"
+        or not isinstance(artifacts, dict)
+        or str(artifacts.get("candidateScope") or "")
+        != "full_smart_merge"
+        or not bundle_path.is_file()
+    ):
+        return False
+    try:
+        bundle = _read_json(bundle_path)
+        resolved_candidate = _valid_sha256(
+            resolution.get("resolvedCandidateFingerprint")
+        )
+        return bool(
+            resolved_candidate is not None
+            and str(bundle.get("reviewGenerationId") or "")
+            == operation_id
+            and _valid_sha256(bundle.get("candidateFingerprint"))
+            == resolved_candidate
+            and int(bundle.get("reviewBundleSchemaVersion") or 0)
+            == REVIEW_BUNDLE_SCHEMA_VERSION
+            and str(bundle.get("candidateArtifactStatSignature") or "")
+            == _candidate_artifact_stat_signature(artifacts)
+            and _valid_sha256(payload.get("activeBaseFingerprint"))
+            == expected_active
+            and _active_dataset_version() == expected_active
+            and _historical_reclassification_resolution_fingerprint(
+                resolution
+            )
+            == _valid_sha256(
+                operation.get("expectedResolutionFingerprint")
+            )
+        )
+    except Exception:
+        return False
+
+
 def _active_operation_failure_digest(
     *,
     operation_type: str,
@@ -11959,7 +12640,7 @@ def _run_active_bundle_operation(
         return
     operation_id = str(operation.get("operationId") or "")
     operation["status"] = "running"
-    if operation_type == "review_refresh":
+    if operation_type in {"review_refresh", "smart_merge_resume"}:
         operation["phase"] = "verifying_candidate"
     operation["startedAt"] = _utc_now().isoformat()
     operation["error"] = None
@@ -12041,6 +12722,153 @@ def _run_active_bundle_operation(
                 )
             ):
                 raise RuntimeError("Review bundle durable seal 校验失败。")
+        elif operation_type == "smart_merge_resume":
+            artifacts = state.get("artifacts")
+            resolution = _historical_reclassification_resolution(state)
+            if not isinstance(artifacts, dict) or not isinstance(
+                resolution,
+                dict,
+            ):
+                raise HTTPException(
+                    status_code=409,
+                    detail="Smart Merge 续跑缺少 Candidate 或决策合同。",
+                )
+            current_stat_signature = _candidate_artifact_stat_signature(
+                artifacts
+            )
+            if current_stat_signature != str(
+                operation.get("candidateArtifactStatSignature") or ""
+            ):
+                raise HTTPException(
+                    status_code=409,
+                    detail={
+                        "blockerType": "candidate_metadata_changed",
+                        "message": (
+                            "Candidate 与续跑排队时的元数据快照不一致；"
+                            "未执行合并，也未修改 active。"
+                        ),
+                    },
+                )
+            expected_active = _valid_sha256(
+                operation.get("expectedActiveFingerprint")
+            )
+            expected_source = _valid_sha256(
+                operation.get("expectedSourceCandidateFingerprint")
+            )
+            expected_report = _valid_sha256(
+                operation.get("expectedReportFingerprint")
+            )
+            expected_resolution = _valid_sha256(
+                operation.get("expectedResolutionFingerprint")
+            )
+            if (
+                expected_active is None
+                or expected_source is None
+                or expected_report is None
+                or expected_resolution is None
+                or _valid_sha256(state.get("activeBaseFingerprint"))
+                != expected_active
+                or _valid_sha256(
+                    resolution.get("activeBaseFingerprint")
+                )
+                != expected_active
+                or _active_dataset_version() != expected_active
+                or _valid_sha256(resolution.get("reportFingerprint"))
+                != expected_report
+                or _valid_sha256(
+                    resolution.get("sourceCandidateFingerprint")
+                )
+                != expected_source
+                or _historical_reclassification_resolution_fingerprint(
+                    resolution
+                )
+                != expected_resolution
+            ):
+                raise HTTPException(
+                    status_code=409,
+                    detail={
+                        "blockerType": "smart_merge_resume_seal_changed",
+                        "message": (
+                            "Smart Merge 续跑合同已变化；"
+                            "拒绝应用旧 Candidate 或决策。"
+                        ),
+                    },
+                )
+            _validated_historical_reclassification_resolution(resolution)
+            candidate_scope = str(
+                artifacts.get("candidateScope") or ""
+            )
+            if candidate_scope in PARTITION_SCOPED_CANDIDATE_SCOPES:
+                actual_source = _candidate_fingerprint_id(artifacts)
+                if actual_source != expected_source:
+                    raise HTTPException(
+                        status_code=409,
+                        detail={
+                            "blockerType": "candidate_content_drift",
+                            "message": (
+                                "原 Candidate 内容指纹已变化；"
+                                "未执行 Smart Merge，也未修改 active。"
+                            ),
+                            "expectedCandidateFingerprint": (
+                                expected_source
+                            ),
+                            "actualCandidateFingerprint": actual_source,
+                        },
+                    )
+                operation["phase"] = "smart_merging"
+            elif (
+                candidate_scope == "full_smart_merge"
+                and str(resolution.get("status") or "") == "resolved"
+            ):
+                operation["phase"] = "building_review"
+            else:
+                raise HTTPException(
+                    status_code=409,
+                    detail="Smart Merge 续跑 Candidate scope 无效。",
+                )
+            state["pendingOperation"] = operation
+            _persist_job_state(state)
+            _run_smart_merge(
+                job_id,
+                review_generation_id=operation_id,
+            )
+            refreshed_state = _load_job_state(job_id)
+            if not (
+                str(refreshed_state.get("status") or "") == "success"
+                and str(refreshed_state.get("phase") or "")
+                == "completed"
+                and isinstance(
+                    _historical_reclassification_resolution(
+                        refreshed_state
+                    ),
+                    dict,
+                )
+                and str(
+                    (
+                        _historical_reclassification_resolution(
+                            refreshed_state
+                        )
+                        or {}
+                    ).get("status")
+                    or ""
+                )
+                == "resolved"
+            ):
+                raise RuntimeError(
+                    str(
+                        refreshed_state.get("error")
+                        or "Smart Merge 续跑未形成 completed Review。"
+                    )
+                )
+            refreshed_operation = _pending_operation(refreshed_state)
+            if not isinstance(
+                refreshed_operation,
+                dict,
+            ) or not _smart_merge_resume_bundle_is_durable(
+                payload=refreshed_state,
+                operation=refreshed_operation,
+            ):
+                raise RuntimeError("Smart Merge 续跑 durable seal 校验失败。")
         else:
             raise RuntimeError(f"Unsupported active operation: {operation_type}")
         state = _load_job_state(job_id)
@@ -12060,11 +12888,21 @@ def _run_active_bundle_operation(
             return
         operation = current_operation
         operation["status"] = "success"
-        if operation_type == "review_refresh":
+        if operation_type in {"review_refresh", "smart_merge_resume"}:
             operation["phase"] = "completed"
-            operation["resultCandidateFingerprint"] = operation.get(
-                "expectedCandidateFingerprint"
-            )
+            if operation_type == "review_refresh":
+                operation["resultCandidateFingerprint"] = operation.get(
+                    "expectedCandidateFingerprint"
+                )
+            else:
+                resolution = _historical_reclassification_resolution(
+                    state
+                )
+                operation["resultCandidateFingerprint"] = (
+                    resolution.get("resolvedCandidateFingerprint")
+                    if isinstance(resolution, dict)
+                    else None
+                )
         operation["finishedAt"] = _utc_now().isoformat()
         operation["error"] = None
         operation["failureDigest"] = None
@@ -12091,9 +12929,15 @@ def _run_active_bundle_operation(
         operation["status"] = "failed"
         operation["finishedAt"] = _utc_now().isoformat()
         operation["error"] = str(exc)
-        operation["failureDigest"] = _active_operation_failure_digest(
-            operation_type=operation_type,
-            exc=exc,
+        job_failure_digest = state.get("failureDigest")
+        operation["failureDigest"] = (
+            job_failure_digest
+            if operation_type == "smart_merge_resume"
+            and isinstance(job_failure_digest, dict)
+            else _active_operation_failure_digest(
+                operation_type=operation_type,
+                exc=exc,
+            )
         )
         state["pendingOperation"] = operation
         _persist_job_state(state)
@@ -12153,14 +12997,38 @@ def _reconcile_stale_monthly_update_jobs() -> list[str]:
                         operation=pending,
                     )
                 )
+                or (
+                    pending_type == "smart_merge_resume"
+                    and _smart_merge_resume_bundle_is_durable(
+                        payload=payload,
+                        operation=pending,
+                    )
+                )
             )
             if durable_completion:
                 pending["status"] = "success"
-                if pending_type == "review_refresh":
+                if pending_type in {
+                    "review_refresh",
+                    "smart_merge_resume",
+                }:
                     pending["phase"] = "completed"
-                    pending["resultCandidateFingerprint"] = pending.get(
-                        "expectedCandidateFingerprint"
-                    )
+                    if pending_type == "review_refresh":
+                        pending["resultCandidateFingerprint"] = (
+                            pending.get("expectedCandidateFingerprint")
+                        )
+                    else:
+                        resolution = (
+                            _historical_reclassification_resolution(
+                                payload
+                            )
+                        )
+                        pending["resultCandidateFingerprint"] = (
+                            resolution.get(
+                                "resolvedCandidateFingerprint"
+                            )
+                            if isinstance(resolution, dict)
+                            else None
+                        )
                 pending["finishedAt"] = _utc_now().isoformat()
                 pending["error"] = None
                 pending["failureDigest"] = None
@@ -12219,6 +13087,50 @@ def _reconcile_stale_monthly_update_jobs() -> list[str]:
                     "technicalDetail": {"workerPid": worker_pid or None},
                     "nextAction": "retry_review_refresh",
                 }
+            elif pending_type == "smart_merge_resume":
+                pending["phase"] = "worker_lost"
+                pending["error"] = (
+                    "Smart Merge 续跑 worker 在 durable Review 提交前退出；"
+                    "active 未修改，可用新 requestId 再次仅续跑。"
+                )
+                pending["failureDigest"] = {
+                    "code": "SMART_MERGE_RESUME_WORKER_LOST",
+                    "category": "resource",
+                    "phase": "smart_merge_resume",
+                    "retryable": True,
+                    "message": pending["error"],
+                    "sourceFeedback": None,
+                    "technicalDetail": {
+                        "workerPid": worker_pid or None,
+                        "childPid": child_pid,
+                        "orphanTermination": orphan_termination,
+                    },
+                    "nextAction": "resume_smart_merge",
+                }
+                payload["status"] = "failed"
+                payload["phase"] = "smart_merge_failed"
+                payload["error"] = pending["error"]
+                payload["failureDigest"] = pending["failureDigest"]
+                resolution = _historical_reclassification_resolution(
+                    payload
+                )
+                artifacts = payload.get("artifacts")
+                if (
+                    isinstance(resolution, dict)
+                    and not (
+                        isinstance(artifacts, dict)
+                        and str(artifacts.get("candidateScope") or "")
+                        == "full_smart_merge"
+                        and str(resolution.get("status") or "")
+                        == "resolved"
+                    )
+                ):
+                    resolution["status"] = "failed"
+                    resolution["failedAt"] = _utc_now().isoformat()
+                    resolution["error"] = pending["error"]
+                    payload[
+                        "historicalReclassificationResolution"
+                    ] = resolution
             else:
                 pending["error"] = (
                     "独立月更 worker 在 active bundle 操作完成前退出；"
@@ -12274,18 +13186,34 @@ def _reconcile_stale_monthly_update_jobs() -> list[str]:
         job_id = str(payload.get("jobId") or "")
         if not job_id:
             continue
+        smart_merge_worker_lost = (
+            str(payload.get("operation") or "") == "smart_merge"
+        )
         payload["status"] = "failed"
-        payload["phase"] = "worker_lost"
+        payload["phase"] = (
+            "smart_merge_failed"
+            if smart_merge_worker_lost
+            else "worker_lost"
+        )
         payload["finishedAt"] = _utc_now().isoformat()
         payload["error"] = (
-            "独立月更 worker 在任务完成前退出；上传与 candidate 已保留，"
-            "未修改 active。"
+            "Smart Merge worker 在 durable Review 完成前退出；"
+            "Candidate 与决策已保留，未修改 active。"
+            if smart_merge_worker_lost
+            else (
+                "独立月更 worker 在任务完成前退出；上传与 candidate 已保留，"
+                "未修改 active。"
+            )
         )
         payload["failureDigest"] = {
-            "code": "WORKER_LOST",
+            "code": (
+                "SMART_MERGE_WORKER_LOST"
+                if smart_merge_worker_lost
+                else "WORKER_LOST"
+            ),
             "category": "resource",
-            "phase": "worker_lost",
-            "retryable": False,
+            "phase": payload["phase"],
+            "retryable": smart_merge_worker_lost,
             "message": payload["error"],
             "sourceFeedback": None,
             "technicalDetail": {
@@ -12293,8 +13221,31 @@ def _reconcile_stale_monthly_update_jobs() -> list[str]:
                 "childPid": child_pid,
                 "orphanTermination": orphan_termination,
             },
-            "nextAction": "inspect_worker_service",
+            "nextAction": (
+                "resume_smart_merge"
+                if smart_merge_worker_lost
+                else "inspect_worker_service"
+            ),
         }
+        if smart_merge_worker_lost:
+            resolution = _historical_reclassification_resolution(payload)
+            artifacts = payload.get("artifacts")
+            if (
+                isinstance(resolution, dict)
+                and not (
+                    isinstance(artifacts, dict)
+                    and str(artifacts.get("candidateScope") or "")
+                    == "full_smart_merge"
+                    and str(resolution.get("status") or "")
+                    == "resolved"
+                )
+            ):
+                resolution["status"] = "failed"
+                resolution["failedAt"] = _utc_now().isoformat()
+                resolution["error"] = payload["error"]
+                payload[
+                    "historicalReclassificationResolution"
+                ] = resolution
         payload["workerPid"] = None
         payload["currentProcess"] = None
         _persist_job_state(payload)
@@ -13588,6 +14539,23 @@ def _retry_failed_jato_monthly_update_job_in_start_window(
             status_code=409,
             detail="只有 failed 的月更任务才能直接重试。",
         )
+    if (
+        str(source_state.get("phase") or "") == "smart_merge_failed"
+        or str(source_state.get("operation") or "") == "smart_merge"
+    ):
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "SMART_MERGE_RESUME_REQUIRED",
+                "blockerType": "smart_merge_resume_required",
+                "message": (
+                    "Smart Merge 失败必须在原任务仅续跑；"
+                    "禁止复制上传文件或重跑 ETL。"
+                ),
+                "jobId": source_job_id,
+                "nextAction": "resume_smart_merge",
+            },
+        )
 
     source_upload = source_state.get("upload")
     if not isinstance(source_upload, dict):
@@ -14343,13 +15311,16 @@ def _keep_active_history_country_frame(
     *,
     active_frame: pd.DataFrame,
     candidate_frame: pd.DataFrame,
+    active_latest_month: str | None = None,
 ) -> tuple[pd.DataFrame, dict[str, Any]]:
     """Use active through its latest month and candidate only afterwards.
 
     Rows are combined only when every normalized static configuration field is
     exactly equal.  Similar model/version labels are never guessed or merged.
     """
-    active_latest = _latest_month_from_frame(active_frame)
+    active_latest = active_latest_month or _latest_month_from_frame(
+        active_frame
+    )
     if active_latest is None:
         raise HTTPException(
             status_code=409,
@@ -14565,7 +15536,437 @@ def _keep_active_history_country_frame(
     )
 
 
-def _smart_merge_parquet_streaming(
+def _smart_merge_country_value_map(
+    path: Path,
+    *,
+    country_column: str,
+    path_label: str,
+) -> dict[str, dict[str, Any]]:
+    """Collect only distinct country tokens with a bounded Arrow scan."""
+    import pyarrow.parquet as pq
+
+    display_variants: dict[str, list[str]] = {}
+    raw_values: dict[str, list[str]] = {}
+    missing_country_rows = 0
+    parquet_file = pq.ParquetFile(path)
+    for batch in parquet_file.iter_batches(
+        batch_size=SMART_MERGE_SCAN_BATCH_ROWS,
+        columns=[country_column],
+        use_threads=False,
+    ):
+        for raw_value in batch.column(0).to_pylist():
+            if raw_value is None:
+                missing_country_rows += 1
+                continue
+            raw = str(raw_value)
+            display = raw.strip()
+            key = display.casefold()
+            if not key:
+                missing_country_rows += 1
+                continue
+            variants = display_variants.setdefault(key, [])
+            if display not in variants:
+                variants.append(display)
+            values = raw_values.setdefault(key, [])
+            if raw not in values:
+                values.append(raw)
+    _raise_for_missing_country_rows(
+        path_label=path_label,
+        row_count=missing_country_rows,
+    )
+    ambiguous = {
+        key: variants
+        for key, variants in display_variants.items()
+        if len(variants) > 1
+    }
+    if ambiguous:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "blockerType": "ambiguous_logical_country",
+                "message": (
+                    f"{path_label} 中同一逻辑国家存在多个大小写/空格"
+                    "展示值，继续会造成国家重复累加；请先统一国家字段。"
+                ),
+                "countries": [
+                    {
+                        "logicalKey": key,
+                        "displayValues": variants,
+                    }
+                    for key, variants in sorted(ambiguous.items())
+                ],
+            },
+        )
+    return {
+        key: {
+            "display": variants[0],
+            "rawValues": raw_values.get(key, []),
+        }
+        for key, variants in display_variants.items()
+    }
+
+
+def _iter_smart_merge_country_tables(
+    path: Path,
+    *,
+    country_column: str,
+    raw_values: list[str],
+) -> Any:
+    """Yield one logical country in fixed-size, low-readahead Arrow batches."""
+    import pyarrow as pa
+    import pyarrow.dataset as ds
+
+    if not raw_values:
+        return
+    scanner = ds.dataset(path, format="parquet").scanner(
+        filter=ds.field(country_column).isin(raw_values),
+        batch_size=SMART_MERGE_SCAN_BATCH_ROWS,
+        use_threads=False,
+        batch_readahead=1,
+        fragment_readahead=1,
+    )
+    for batch in scanner.to_batches():
+        if batch.num_rows:
+            yield pa.Table.from_batches([batch])
+
+
+def _align_arrow_table_to_schema(table: Any, schema: Any) -> Any:
+    import pyarrow as pa
+
+    arrays: list[Any] = []
+    for field in schema:
+        if field.name not in table.column_names:
+            arrays.append(
+                pa.chunked_array(
+                    [pa.nulls(table.num_rows, type=field.type)],
+                    type=field.type,
+                )
+            )
+            continue
+        column = table[field.name]
+        if not column.type.equals(field.type):
+            column = column.cast(field.type, safe=False)
+        arrays.append(column)
+    return pa.Table.from_arrays(arrays, schema=schema)
+
+
+def _empty_smart_merge_static_summary() -> dict[str, Any]:
+    return {
+        "enabled": False,
+        "policy": "consistent_active_key_values_only",
+        "columns": [],
+        "keyColumns": [],
+        "candidateRowCount": 0,
+        "matchedConfigurationRowCount": 0,
+        "candidateDuplicateKeyRowCount": 0,
+        "activeDuplicateKeyRowCount": 0,
+        "columnResults": {},
+    }
+
+
+def _merge_smart_merge_static_summary(
+    target: dict[str, Any],
+    source: dict[str, Any],
+) -> None:
+    target["enabled"] = bool(
+        target.get("enabled") or source.get("enabled")
+    )
+    for counter_name in (
+        "candidateRowCount",
+        "matchedConfigurationRowCount",
+        "candidateDuplicateKeyRowCount",
+        "activeDuplicateKeyRowCount",
+    ):
+        target[counter_name] = int(target.get(counter_name, 0) or 0) + int(
+            source.get(counter_name, 0) or 0
+        )
+    target["columns"] = sorted(
+        {
+            *[str(value) for value in target.get("columns", [])],
+            *[str(value) for value in source.get("columns", [])],
+        }
+    )
+    if not target.get("keyColumns") and source.get("keyColumns"):
+        target["keyColumns"] = [
+            str(value) for value in source.get("keyColumns", [])
+        ]
+    target_results = target.setdefault("columnResults", {})
+    for column, raw_result in (
+        source.get("columnResults", {})
+        if isinstance(source.get("columnResults"), dict)
+        else {}
+    ).items():
+        result = target_results.setdefault(
+            str(column),
+            {
+                "inheritedRowCount": 0,
+                "ambiguousActiveKeyCount": 0,
+                "remainingNullRowCount": 0,
+            },
+        )
+        if not isinstance(raw_result, dict):
+            continue
+        for counter_name in result:
+            result[counter_name] += int(
+                raw_result.get(counter_name, 0) or 0
+            )
+
+
+def _smart_merge_bucket_key_columns(
+    *,
+    active_schema: Any,
+    candidate_schema: Any,
+    output_schema: Any,
+) -> list[str]:
+    active_columns = set(active_schema.names)
+    candidate_columns = set(candidate_schema.names)
+    shared = [
+        column
+        for column in STATIC_CARRY_FORWARD_KEY_CANDIDATES
+        if column in active_columns and column in candidate_columns
+    ]
+    if (
+        "Make" in shared
+        and "Model" in shared
+        and ("Version name" in shared or "Trim level" in shared)
+    ):
+        return shared
+    return _single_country_configuration_key_columns(
+        pd.DataFrame(columns=output_schema.names)
+    )
+
+
+def _spill_smart_merge_country_to_buckets(
+    *,
+    source_path: Path,
+    country_column: str,
+    raw_values: list[str],
+    output_country: str | None,
+    output_schema: Any,
+    bucket_columns: list[str],
+    bucket_root: Path,
+    source_name: str,
+) -> dict[str, Any]:
+    import pyarrow as pa
+    import pyarrow.parquet as pq
+
+    if not bucket_columns:
+        raise HTTPException(
+            status_code=409,
+            detail="Smart Merge 无法识别稳定的配置分桶键。",
+        )
+    counts = [0] * SMART_MERGE_HASH_BUCKET_COUNT
+    part_numbers = [0] * SMART_MERGE_HASH_BUCKET_COUNT
+    max_input_batch_rows = 0
+    total_rows = 0
+    for raw_table in _iter_smart_merge_country_tables(
+        source_path,
+        country_column=country_column,
+        raw_values=raw_values,
+    ):
+        max_input_batch_rows = max(
+            max_input_batch_rows,
+            int(raw_table.num_rows),
+        )
+        table = _align_arrow_table_to_schema(raw_table, output_schema)
+        frame = table.to_pandas(use_threads=False)
+        if output_country is not None:
+            frame[country_column] = output_country
+        normalized_keys = pd.DataFrame(
+            {
+                f"__bucket_key_{index}": (
+                    _normalized_static_value_series(frame[column])
+                )
+                for index, column in enumerate(bucket_columns)
+            }
+        )
+        bucket_ids = pd.util.hash_pandas_object(
+            normalized_keys,
+            index=False,
+            categorize=True,
+        ).map(
+            lambda value: int(value) % SMART_MERGE_HASH_BUCKET_COUNT
+        )
+        normalized_table = pa.Table.from_pandas(
+            frame[output_schema.names],
+            schema=output_schema,
+            preserve_index=False,
+            safe=False,
+        )
+        for bucket_id in sorted(int(value) for value in bucket_ids.unique()):
+            positions = [
+                int(position)
+                for position in bucket_ids.index[bucket_ids == bucket_id]
+            ]
+            bucket_table = normalized_table.take(
+                pa.array(positions, type=pa.int64())
+            )
+            destination = (
+                bucket_root
+                / source_name
+                / f"bucket-{bucket_id:03d}"
+                / f"part-{part_numbers[bucket_id]:06d}.parquet"
+            )
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            pq.write_table(
+                bucket_table,
+                destination,
+                compression="snappy",
+                use_dictionary=True,
+            )
+            part_numbers[bucket_id] += 1
+            counts[bucket_id] += int(bucket_table.num_rows)
+            total_rows += int(bucket_table.num_rows)
+        del normalized_table
+        del normalized_keys
+        del frame
+        del table
+    return {
+        "counts": counts,
+        "rowCount": total_rows,
+        "maxInputBatchRows": max_input_batch_rows,
+    }
+
+
+def _read_smart_merge_bucket_frame(
+    bucket_path: Path,
+    *,
+    output_schema: Any,
+) -> pd.DataFrame:
+    import pyarrow.parquet as pq
+
+    if not bucket_path.exists():
+        return output_schema.empty_table().to_pandas()
+    table = pq.read_table(bucket_path, use_threads=False)
+    table = _align_arrow_table_to_schema(table, output_schema)
+    return table.to_pandas(use_threads=False)
+
+
+def _write_smart_merge_frame(
+    *,
+    writer: Any,
+    frame: pd.DataFrame,
+    output_schema: Any,
+) -> int:
+    import pyarrow as pa
+
+    for field in output_schema:
+        if field.name not in frame.columns:
+            frame[field.name] = None
+    table = pa.Table.from_pandas(
+        frame[output_schema.names],
+        schema=output_schema,
+        preserve_index=False,
+        safe=False,
+    )
+    writer.write_table(table)
+    return int(table.num_rows)
+
+
+def _stream_smart_merge_country_to_writer(
+    *,
+    writer: Any,
+    source_path: Path,
+    country_column: str,
+    raw_values: list[str],
+    output_country: str | None,
+    source_schema: Any,
+    output_schema: Any,
+    verify_untouched: bool,
+) -> tuple[int, dict[str, Any] | None, int]:
+    import pyarrow as pa
+
+    source_signature = 0
+    output_signature = 0
+    signature_modulus = 1 << 64
+    candidate_only_columns = [
+        column
+        for column in output_schema.names
+        if column not in source_schema.names
+    ]
+    non_null_candidate_only: set[str] = set()
+    row_count = 0
+    max_input_batch_rows = 0
+    for raw_table in _iter_smart_merge_country_tables(
+        source_path,
+        country_column=country_column,
+        raw_values=raw_values,
+    ):
+        max_input_batch_rows = max(
+            max_input_batch_rows,
+            int(raw_table.num_rows),
+        )
+        if verify_untouched:
+            source_frame = raw_table.select(
+                source_schema.names
+            ).to_pandas(use_threads=False)
+            source_signature = (
+                source_signature
+                + int(
+                    _canonical_country_content_signature(
+                        source_frame,
+                        list(source_schema.names),
+                    )
+                )
+            ) % signature_modulus
+        table = _align_arrow_table_to_schema(raw_table, output_schema)
+        if output_country is not None:
+            frame = table.to_pandas(use_threads=False)
+            frame[country_column] = output_country
+            table = _align_arrow_table_to_schema(
+                pa.Table.from_pandas(
+                    frame[output_schema.names],
+                    schema=output_schema,
+                    preserve_index=False,
+                    safe=False,
+                ),
+                output_schema,
+            )
+            del frame
+        if verify_untouched:
+            output_frame = table.select(
+                source_schema.names
+            ).to_pandas(use_threads=False)
+            output_signature = (
+                output_signature
+                + int(
+                    _canonical_country_content_signature(
+                        output_frame,
+                        list(source_schema.names),
+                    )
+                )
+            ) % signature_modulus
+            for column in candidate_only_columns:
+                if table[column].null_count != table.num_rows:
+                    non_null_candidate_only.add(column)
+        writer.write_table(table)
+        row_count += int(table.num_rows)
+    if not verify_untouched:
+        return row_count, None, max_input_batch_rows
+    if source_signature != output_signature or non_null_candidate_only:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "blockerType": "untouched_country_changed",
+                "message": "未选择更新的国家在 Smart Merge 输出中发生变化。",
+                "nonNullCandidateOnlyColumns": sorted(
+                    non_null_candidate_only
+                ),
+            },
+        )
+    return (
+        row_count,
+        {
+            "status": "pass",
+            "rowCount": row_count,
+            "canonicalSignature": str(output_signature),
+            "candidateOnlyColumnsNull": True,
+        },
+        max_input_batch_rows,
+    )
+
+
+def _legacy_smart_merge_parquet_by_country(
     *,
     active_path: Path,
     candidate_path: Path,
@@ -14918,19 +16319,407 @@ def _smart_merge_parquet_streaming(
     return row_count, aggregate_summary
 
 
-def _run_smart_merge(job_id: str) -> None:
+def _smart_merge_parquet_streaming(
+    *,
+    active_path: Path,
+    candidate_path: Path,
+    regressed_countries: list[dict[str, str | None]],
+    historical_reclassification_decisions: dict[str, str] | None = None,
+    output_path: Path | None = None,
+) -> tuple[int, dict[str, Any]]:
+    """Build a complete candidate with bounded Arrow scans and disk spill."""
+    import pyarrow as pa
+    import pyarrow.parquet as pq
+
+    active_schema = pq.read_schema(active_path)
+    candidate_schema = pq.read_schema(candidate_path)
+    active_country_column = _find_country_column(
+        [str(column).strip() for column in active_schema.names]
+    )
+    candidate_country_column = _find_country_column(
+        [str(column).strip() for column in candidate_schema.names]
+    )
+    if active_country_column is None or candidate_country_column is None:
+        raise HTTPException(
+            status_code=409,
+            detail="Smart Merge 无法识别 active/candidate 国家列。",
+        )
+    if active_country_column != candidate_country_column:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "Smart Merge 的 active/candidate 国家列名不一致；"
+                "为避免跨国家错误补值，已拒绝自动兼容。"
+            ),
+        )
+    try:
+        output_schema = pa.unify_schemas(
+            [active_schema, candidate_schema],
+            promote_options="permissive",
+        )
+    except Exception as exc:
+        raise HTTPException(
+            status_code=409,
+            detail=f"Smart Merge schema 无法安全统一：{exc}",
+        ) from exc
+
+    active_latest = _collect_dataset_country_latest_months(active_path)
+    candidate_latest = _collect_dataset_country_latest_months(candidate_path)
+    active_country_values = _smart_merge_country_value_map(
+        active_path,
+        country_column=active_country_column,
+        path_label="Smart Merge active 数据集",
+    )
+    candidate_country_values = _smart_merge_country_value_map(
+        candidate_path,
+        country_column=candidate_country_column,
+        path_label="Smart Merge candidate 数据集",
+    )
+    active_by_key = {
+        country.casefold(): str(
+            active_country_values[country.casefold()]["display"]
+        )
+        for country in active_latest
+    }
+    candidate_by_key = {
+        country.casefold(): str(
+            candidate_country_values[country.casefold()]["display"]
+        )
+        for country in candidate_latest
+    }
+    regressed_keys = {
+        str(entry.get("country") or "").strip().casefold()
+        for entry in regressed_countries
+        if str(entry.get("country") or "").strip()
+    }
+    decision_map = {
+        str(country).strip().casefold(): str(decision).strip().lower()
+        for country, decision in (
+            historical_reclassification_decisions or {}
+        ).items()
+    }
+    if any(
+        decision not in HISTORICAL_RECLASSIFICATION_DECISIONS
+        for decision in decision_map.values()
+    ):
+        raise HTTPException(
+            status_code=409,
+            detail="Smart Merge 收到无效历史重分类决策。",
+        )
+
+    output_country_keys = [
+        *active_by_key,
+        *(key for key in candidate_by_key if key not in active_by_key),
+    ]
+    destination_path = output_path or candidate_path
+    destination_path.parent.mkdir(parents=True, exist_ok=True)
+    temp_output = destination_path.with_name(
+        f".{destination_path.name}.{uuid4().hex}.smart-merge.tmp"
+    )
+    spill_root = destination_path.with_name(
+        f".{destination_path.name}.{uuid4().hex}.smart-merge-spill"
+    )
+    bucket_columns = _smart_merge_bucket_key_columns(
+        active_schema=active_schema,
+        candidate_schema=candidate_schema,
+        output_schema=output_schema,
+    )
+    writer: pq.ParquetWriter | None = None
+    row_count = 0
+    aggregate_summary: dict[str, Any] = {
+        **_empty_smart_merge_static_summary(),
+        "streamingByCountry": True,
+        "countryResults": {},
+        "historicalReclassificationPolicies": {},
+        "untouchedCountryChecks": {},
+        "resourceProfile": {
+            "scanBatchRows": SMART_MERGE_SCAN_BATCH_ROWS,
+            "hashBucketCount": SMART_MERGE_HASH_BUCKET_COUNT,
+            "maxBucketRows": 0,
+            "maxInputBatchRows": 0,
+            "spilledRows": 0,
+        },
+    }
+
+    try:
+        writer = pq.ParquetWriter(
+            temp_output,
+            output_schema,
+            compression="snappy",
+        )
+        for country_key in output_country_keys:
+            use_candidate = (
+                country_key in candidate_by_key
+                and country_key not in regressed_keys
+            )
+            country_summary = _empty_smart_merge_static_summary()
+            if not use_candidate:
+                output_country = active_by_key[country_key]
+                direct_rows, untouched_check, max_batch = (
+                    _stream_smart_merge_country_to_writer(
+                        writer=writer,
+                        source_path=active_path,
+                        country_column=active_country_column,
+                        raw_values=list(
+                            active_country_values[country_key]["rawValues"]
+                        ),
+                        output_country=None,
+                        source_schema=active_schema,
+                        output_schema=output_schema,
+                        verify_untouched=True,
+                    )
+                )
+                row_count += direct_rows
+                if untouched_check is not None:
+                    aggregate_summary["untouchedCountryChecks"][
+                        output_country
+                    ] = untouched_check
+                aggregate_summary["resourceProfile"][
+                    "maxInputBatchRows"
+                ] = max(
+                    int(
+                        aggregate_summary["resourceProfile"][
+                            "maxInputBatchRows"
+                        ]
+                    ),
+                    max_batch,
+                )
+            else:
+                candidate_country = candidate_by_key[country_key]
+                active_country = active_by_key.get(country_key)
+                if active_country is None:
+                    output_country = candidate_country
+                    direct_rows, _untouched, max_batch = (
+                        _stream_smart_merge_country_to_writer(
+                            writer=writer,
+                            source_path=candidate_path,
+                            country_column=candidate_country_column,
+                            raw_values=list(
+                                candidate_country_values[country_key][
+                                    "rawValues"
+                                ]
+                            ),
+                            output_country=None,
+                            source_schema=candidate_schema,
+                            output_schema=output_schema,
+                            verify_untouched=False,
+                        )
+                    )
+                    row_count += direct_rows
+                    country_summary["candidateRowCount"] = direct_rows
+                    aggregate_summary["resourceProfile"][
+                        "maxInputBatchRows"
+                    ] = max(
+                        int(
+                            aggregate_summary["resourceProfile"][
+                                "maxInputBatchRows"
+                            ]
+                        ),
+                        max_batch,
+                    )
+                else:
+                    output_country = active_country
+                    country_spill_root = spill_root / hashlib.sha256(
+                        country_key.encode("utf-8")
+                    ).hexdigest()[:16]
+                    active_spill = _spill_smart_merge_country_to_buckets(
+                        source_path=active_path,
+                        country_column=active_country_column,
+                        raw_values=list(
+                            active_country_values[country_key]["rawValues"]
+                        ),
+                        output_country=None,
+                        output_schema=output_schema,
+                        bucket_columns=bucket_columns,
+                        bucket_root=country_spill_root,
+                        source_name="active",
+                    )
+                    candidate_spill = _spill_smart_merge_country_to_buckets(
+                        source_path=candidate_path,
+                        country_column=candidate_country_column,
+                        raw_values=list(
+                            candidate_country_values[country_key]["rawValues"]
+                        ),
+                        output_country=active_country,
+                        output_schema=output_schema,
+                        bucket_columns=bucket_columns,
+                        bucket_root=country_spill_root,
+                        source_name="candidate",
+                    )
+                    resource_profile = aggregate_summary["resourceProfile"]
+                    resource_profile["spilledRows"] += int(
+                        active_spill["rowCount"]
+                    ) + int(candidate_spill["rowCount"])
+                    resource_profile["maxInputBatchRows"] = max(
+                        int(resource_profile["maxInputBatchRows"]),
+                        int(active_spill["maxInputBatchRows"]),
+                        int(candidate_spill["maxInputBatchRows"]),
+                    )
+                    history_policy = decision_map.get(country_key)
+                    history_summary: dict[str, Any] = {
+                        "policy": history_policy or "use_candidate",
+                        "historicalMonthsFrom": "candidate",
+                        "monthBoundaryCheck": "not_applicable",
+                    }
+                    for bucket_id in range(
+                        SMART_MERGE_HASH_BUCKET_COUNT
+                    ):
+                        bucket_rows = int(
+                            active_spill["counts"][bucket_id]
+                        ) + int(candidate_spill["counts"][bucket_id])
+                        if bucket_rows <= 0:
+                            continue
+                        resource_profile["maxBucketRows"] = max(
+                            int(resource_profile["maxBucketRows"]),
+                            bucket_rows,
+                        )
+                        if bucket_rows > SMART_MERGE_MAX_BUCKET_ROWS:
+                            raise HTTPException(
+                                status_code=503,
+                                detail={
+                                    "blockerType": (
+                                        "smart_merge_bucket_resource_guard"
+                                    ),
+                                    "message": (
+                                        f"{active_country} 的单个配置桶有"
+                                        f" {bucket_rows} 行，已在进入 pandas"
+                                        " 前停止；Candidate 与 active 均未修改。"
+                                    ),
+                                    "country": active_country,
+                                    "bucketRows": bucket_rows,
+                                    "maxBucketRows": (
+                                        SMART_MERGE_MAX_BUCKET_ROWS
+                                    ),
+                                    "sourceFeedback": None,
+                                    "nextAction": "split_smart_merge_bucket",
+                                },
+                            )
+                        active_frame = _read_smart_merge_bucket_frame(
+                            country_spill_root
+                            / "active"
+                            / f"bucket-{bucket_id:03d}",
+                            output_schema=output_schema,
+                        )
+                        candidate_frame = _read_smart_merge_bucket_frame(
+                            country_spill_root
+                            / "candidate"
+                            / f"bucket-{bucket_id:03d}",
+                            output_schema=output_schema,
+                        )
+                        candidate_frame, bucket_summary = (
+                            _carry_forward_deprecated_static_columns(
+                                active_frame=active_frame,
+                                candidate_frame=candidate_frame,
+                            )
+                        )
+                        _merge_smart_merge_static_summary(
+                            country_summary,
+                            bucket_summary,
+                        )
+                        if history_policy == "keep_active":
+                            merged_frame, bucket_history = (
+                                _keep_active_history_country_frame(
+                                    active_frame=active_frame,
+                                    candidate_frame=candidate_frame,
+                                    active_latest_month=active_latest.get(
+                                        active_country
+                                    ),
+                                )
+                            )
+                            if "activeInputRows" not in history_summary:
+                                history_summary = {
+                                    **bucket_history,
+                                    "activeInputRows": 0,
+                                    "candidateInputRows": 0,
+                                    "outputRows": 0,
+                                }
+                            for counter_name in (
+                                "activeInputRows",
+                                "candidateInputRows",
+                                "outputRows",
+                            ):
+                                history_summary[counter_name] += int(
+                                    bucket_history.get(counter_name, 0) or 0
+                                )
+                        else:
+                            merged_frame = candidate_frame
+                        row_count += _write_smart_merge_frame(
+                            writer=writer,
+                            frame=merged_frame,
+                            output_schema=output_schema,
+                        )
+                        del active_frame
+                        del candidate_frame
+                        del merged_frame
+                    aggregate_summary[
+                        "historicalReclassificationPolicies"
+                    ][active_country] = history_summary
+                    _remove_file_or_tree(country_spill_root)
+
+            aggregate_summary["countryResults"][output_country] = (
+                country_summary
+            )
+            _merge_smart_merge_static_summary(
+                aggregate_summary,
+                country_summary,
+            )
+        writer.close()
+        writer = None
+        if row_count <= 0:
+            raise HTTPException(
+                status_code=409,
+                detail="Smart Merge 结果为空，拒绝覆盖 candidate。",
+            )
+        os.replace(temp_output, destination_path)
+    finally:
+        if writer is not None:
+            writer.close()
+        temp_output.unlink(missing_ok=True)
+        _remove_file_or_tree(spill_root)
+    return row_count, aggregate_summary
+
+
+def _cache_smart_merge_review(
+    job_id: str,
+    *,
+    review_generation_id: str | None,
+    expected_active_fingerprint: str,
+) -> Path:
+    review_kwargs: dict[str, Any] = {
+        "expected_active_fingerprint": expected_active_fingerprint,
+    }
+    if review_generation_id is not None:
+        review_kwargs["review_generation_id"] = review_generation_id
+    return _cache_jato_monthly_update_review(job_id, **review_kwargs)
+
+
+def _run_smart_merge(
+    job_id: str,
+    *,
+    review_generation_id: str | None = None,
+) -> None:
     """Background runner: smart merge → rebuild partitions/manifest/fingerprint."""
     state = _load_job_state(job_id)
     if str(state.get("status") or "") == "cancelled":
         _RUNNING_THREADS.pop(job_id, None)
         return
     log_path = _job_log_path(job_id)
+    working_bundle_dir: Path | None = None
+    bundle_committed = False
 
     try:
         state["status"] = "running"
         state["phase"] = "smart_merging"
         resolution = _historical_reclassification_resolution(state)
-        if isinstance(resolution, dict):
+        initial_artifacts = state.get("artifacts")
+        committed_bundle_resume = bool(
+            isinstance(initial_artifacts, dict)
+            and str(initial_artifacts.get("candidateScope") or "")
+            == "full_smart_merge"
+            and isinstance(resolution, dict)
+            and str(resolution.get("status") or "") == "resolved"
+        )
+        if isinstance(resolution, dict) and not committed_bundle_resume:
             resolution["status"] = "running"
             resolution["startedAt"] = _utc_now().isoformat()
             state["historicalReclassificationResolution"] = resolution
@@ -14946,6 +16735,64 @@ def _run_smart_merge(job_id: str) -> None:
         if not active_paths["parquet"].exists():
             raise RuntimeError("找不到 active 数据集，无法执行 Smart Merge。")
         resolution = _historical_reclassification_resolution(state)
+        candidate_scope = str(artifacts.get("candidateScope") or "")
+        if (
+            candidate_scope == "full_smart_merge"
+            and isinstance(resolution, dict)
+            and resolution.get("status") == "resolved"
+        ):
+            durable_paths = {
+                "parquet": candidate_path,
+                "manifest": _project_path(artifacts.get("manifestPath")),
+                "partition": _project_path(
+                    artifacts.get("partitionOutputPath")
+                ),
+                "fingerprint": _project_path(
+                    artifacts.get("fingerprintPath")
+                ),
+                "refreshReport": _project_path(
+                    artifacts.get("refreshReportPath")
+                ),
+                "summaries": _project_path(
+                    artifacts.get("summariesOutputPath")
+                ),
+            }
+            if any(path is None for path in durable_paths.values()):
+                raise RuntimeError(
+                    "已提交 Smart Merge bundle 缺少路径，拒绝重复合并。"
+                )
+            _validate_candidate_full_bundle(
+                parquet_path=durable_paths["parquet"],
+                manifest_path=durable_paths["manifest"],
+                partition_path=durable_paths["partition"],
+                fingerprint_path=durable_paths["fingerprint"],
+                refresh_report_path=durable_paths["refreshReport"],
+                summaries_path=durable_paths["summaries"],
+            )
+            if _active_dataset_version() != str(
+                state.get("activeBaseFingerprint") or ""
+            ):
+                raise RuntimeError(
+                    "Smart Merge bundle 完成后 active lineage 已变化；"
+                    "不能补建旧 Review。"
+                )
+            state["phase"] = "building_review"
+            _persist_job_state(state)
+            _cache_smart_merge_review(
+                job_id,
+                review_generation_id=review_generation_id,
+                expected_active_fingerprint=str(
+                    state.get("activeBaseFingerprint") or ""
+                ),
+            )
+            state = _load_job_state(job_id)
+            state["status"] = "success"
+            state["phase"] = "completed"
+            state["finishedAt"] = _utc_now().isoformat()
+            state["error"] = None
+            state["failureDigest"] = None
+            _persist_job_state(state)
+            return
         validated_reclassification_decisions: dict[str, str] = {}
         if isinstance(resolution, dict):
             validated_reclassification_decisions = (
@@ -14973,7 +16820,6 @@ def _run_smart_merge(job_id: str) -> None:
             active_parquet_path=active_paths["parquet"],
             candidate_parquet_path=candidate_path,
         )
-        candidate_scope = str(artifacts.get("candidateScope") or "")
         requires_full_rebuild = candidate_scope in {
             "target_country_partition_only",
             "target_country_partitions_only",
@@ -14989,10 +16835,19 @@ def _run_smart_merge(job_id: str) -> None:
             _append_log(log_path, f"[{_utc_now().isoformat()}] Smart Merge: 无回归国家，不需要合并。")
             state["phase"] = "building_review"
             _persist_job_state(state)
-            _cache_jato_monthly_update_review(job_id)
+            _cache_smart_merge_review(
+                job_id,
+                review_generation_id=review_generation_id,
+                expected_active_fingerprint=str(
+                    state.get("activeBaseFingerprint") or ""
+                ),
+            )
             state = _load_job_state(job_id)
             state["status"] = "success"
             state["phase"] = "completed"
+            state["finishedAt"] = _utc_now().isoformat()
+            state["error"] = None
+            state["failureDigest"] = None
             state["summaries"] = {
                 **(state.get("summaries") or {}),
                 "smartMerge": {
@@ -15008,6 +16863,13 @@ def _run_smart_merge(job_id: str) -> None:
         expected_active_fingerprint = str(
             state.get("activeBaseFingerprint") or ""
         ).strip()
+        job_dir = _job_dir(job_id)
+        working_bundle_dir = job_dir / "smart_merge_candidate_bundle"
+        _remove_file_or_tree(working_bundle_dir)
+        working_bundle_dir.mkdir(parents=True, exist_ok=False)
+        merged_candidate_path = (
+            working_bundle_dir / "jato_full_archive.parquet"
+        )
         with _exclusive_file_lock(_active_bundle_lock_path()) as acquired:
             if not acquired:
                 raise RuntimeError(
@@ -15033,6 +16895,7 @@ def _run_smart_merge(job_id: str) -> None:
                     historical_reclassification_decisions=(
                         validated_reclassification_decisions
                     ),
+                    output_path=merged_candidate_path,
                 )
             )
         regressed_names = sorted(r["country"] for r in regressions if r.get("country"))
@@ -15057,39 +16920,14 @@ def _run_smart_merge(job_id: str) -> None:
                 f"inheritedCells={inherited_rows}。",
             )
 
-        # Rebuild partition/manifest/fingerprint from merged parquet
-        job_dir = _job_dir(job_id)
-        staging_dir = candidate_path.parent
-        partition_output = _project_path(str(artifacts.get("partitionOutputPath") or "").strip())
-        manifest_path = _project_path(str(artifacts.get("manifestPath") or "").strip())
-        fingerprint_path = _project_path(str(artifacts.get("fingerprintPath") or "").strip())
-        refresh_report_path = _project_path(
-            str(artifacts.get("refreshReportPath") or "").strip()
-        )
-        summaries_output = _project_path(
-            str(artifacts.get("summariesOutputPath") or "").strip()
-        )
-        partition_output = partition_output or staging_dir / "partitioned_dataset_v1"
-        manifest_path = manifest_path or staging_dir / "manifest.json"
-        fingerprint_path = fingerprint_path or staging_dir / "dataset_fingerprint.json"
-        refresh_report_path = (
-            refresh_report_path
-            or staging_dir / "refresh_job_report.json"
-        )
-        summaries_output = summaries_output or staging_dir / "summaries"
-        artifacts["partitionOutputPath"] = _relative_to_project(partition_output)
-        artifacts["manifestPath"] = _relative_to_project(manifest_path)
-        artifacts["fingerprintPath"] = _relative_to_project(fingerprint_path)
-        artifacts["refreshReportPath"] = _relative_to_project(
-            refresh_report_path
-        )
-        artifacts["summariesOutputPath"] = _relative_to_project(summaries_output)
-        artifacts["candidateScope"] = "full_smart_merge"
-        artifacts.pop("reviewBundlePath", None)
-        state["artifacts"] = artifacts
-        state["reviewApproval"] = None
-        _job_review_bundle_path(job_id).unlink(missing_ok=True)
-        _persist_job_state(state)
+        # Build every derived artifact in an unreferenced directory. The job
+        # state remains bound to the original candidate until all six files
+        # validate, so a later subprocess failure cannot leave a half-bundle.
+        partition_output = working_bundle_dir / "partitioned_dataset_v1"
+        manifest_path = working_bundle_dir / "manifest.json"
+        fingerprint_path = working_bundle_dir / "dataset_fingerprint.json"
+        refresh_report_path = working_bundle_dir / "refresh_job_report.json"
+        summaries_output = working_bundle_dir / "summaries"
 
         if not REBUILD_SCRIPT_PATH.exists():
             raise RuntimeError(f"找不到重建脚本: {REBUILD_SCRIPT_PATH}")
@@ -15102,9 +16940,9 @@ def _run_smart_merge(job_id: str) -> None:
             sys.executable,
             str(REBUILD_SCRIPT_PATH),
             "--input-parquet",
-            str(candidate_path),
+            str(merged_candidate_path),
             "--output-dir",
-            str(job_dir / "smart_merge"),
+            str(working_bundle_dir / "rebuild"),
             "--partition-output",
             str(partition_output),
             "--manifest",
@@ -15123,7 +16961,7 @@ def _run_smart_merge(job_id: str) -> None:
         )
         import pyarrow.parquet as pq
 
-        rebuilt_parquet = pq.ParquetFile(candidate_path)
+        rebuilt_parquet = pq.ParquetFile(merged_candidate_path)
         rebuilt_partition_manifest = _read_json(
             partition_output / "manifest.json"
         )
@@ -15171,7 +17009,7 @@ def _run_smart_merge(job_id: str) -> None:
                     sys.executable,
                     str(PRECOMPUTE_SUMMARIES_SCRIPT_PATH),
                     "--parquet",
-                    str(candidate_path),
+                    str(merged_candidate_path),
                     "--output-dir",
                     str(temp_summaries_output),
                 ],
@@ -15186,7 +17024,7 @@ def _run_smart_merge(job_id: str) -> None:
         finally:
             _remove_file_or_tree(temp_summaries_output)
         _validate_candidate_full_bundle(
-            parquet_path=candidate_path,
+            parquet_path=merged_candidate_path,
             manifest_path=manifest_path,
             partition_path=partition_output,
             fingerprint_path=fingerprint_path,
@@ -15199,6 +17037,25 @@ def _run_smart_merge(job_id: str) -> None:
                 "candidate 已保留但不能审批，请创建新 attempt。"
             )
 
+        committed_artifacts = {
+            **artifacts,
+            "stagingOutputPath": _relative_to_project(
+                merged_candidate_path
+            ),
+            "partitionOutputPath": _relative_to_project(
+                partition_output
+            ),
+            "manifestPath": _relative_to_project(manifest_path),
+            "fingerprintPath": _relative_to_project(fingerprint_path),
+            "refreshReportPath": _relative_to_project(
+                refresh_report_path
+            ),
+            "summariesOutputPath": _relative_to_project(
+                summaries_output
+            ),
+            "candidateScope": "full_smart_merge",
+        }
+        committed_artifacts.pop("reviewBundlePath", None)
         state["summaries"] = {
             **(state.get("summaries") or {}),
             "refresh": _summarize_refresh_report(
@@ -15217,16 +17074,26 @@ def _run_smart_merge(job_id: str) -> None:
             resolution["status"] = "resolved"
             resolution["resolvedAt"] = _utc_now().isoformat()
             resolution["resolvedCandidateFingerprint"] = (
-                _candidate_fingerprint_id(artifacts)
+                _candidate_fingerprint_id(committed_artifacts)
             )
             state["historicalReclassificationResolution"] = resolution
+        state["artifacts"] = committed_artifacts
+        state["reviewApproval"] = None
         state["phase"] = "building_review"
+        _job_review_bundle_path(job_id).unlink(missing_ok=True)
         _persist_job_state(state)
-        _cache_jato_monthly_update_review(job_id)
+        bundle_committed = True
+        _cache_smart_merge_review(
+            job_id,
+            review_generation_id=review_generation_id,
+            expected_active_fingerprint=expected_active_fingerprint,
+        )
         state = _load_job_state(job_id)
         state["status"] = "success"
         state["phase"] = "completed"
         state["finishedAt"] = _utc_now().isoformat()
+        state["error"] = None
+        state["failureDigest"] = None
         _persist_job_state(state)
         _append_log(
             log_path,
@@ -15244,21 +17111,36 @@ def _run_smart_merge(job_id: str) -> None:
         _write_jato_etl_pipeline_status(state)
         _append_log(log_path, f"[{_utc_now().isoformat()}] Cancelled: {exc}")
     except Exception as exc:
+        state = _load_job_state(job_id)
         state["status"] = "failed"
         state["phase"] = "smart_merge_failed"
         state["finishedAt"] = _utc_now().isoformat()
         state["error"] = str(exc)
+        state["failureDigest"] = _failure_digest_from_exception(
+            phase="smart_merge",
+            exc=exc,
+        )
         resolution = _historical_reclassification_resolution(state)
         if isinstance(resolution, dict):
-            resolution["status"] = "failed"
-            resolution["failedAt"] = _utc_now().isoformat()
-            resolution["error"] = str(exc)
+            if bundle_committed:
+                # The complete candidate bundle is durable.  Preserve the
+                # resolved decisions so a safe resume only rebuilds Review.
+                resolution["reviewBuildError"] = str(exc)
+                resolution["reviewBuildFailedAt"] = (
+                    _utc_now().isoformat()
+                )
+            else:
+                resolution["status"] = "failed"
+                resolution["failedAt"] = _utc_now().isoformat()
+                resolution["error"] = str(exc)
             state["historicalReclassificationResolution"] = resolution
         _persist_job_state(state)
         _append_log(log_path, "\n=== Smart Merge Failed ===")
         _append_log(log_path, str(exc))
         _append_log(log_path, traceback.format_exc())
     finally:
+        if working_bundle_dir is not None and not bundle_committed:
+            _remove_file_or_tree(working_bundle_dir)
         _RUNNING_THREADS.pop(job_id, None)
 
 
