@@ -206,7 +206,9 @@ const MONTHLY_UPDATE_RESUME_PROBE_BYTES = 1024 * 1024;
 const MONTHLY_UPDATE_UPLOAD_SESSION_STORAGE_PREFIX = "jato_monthly_update_upload_session:";
 const MONTHLY_UPDATE_UPLOAD_MAX_ATTEMPTS = 4;
 const MONTHLY_UPDATE_DIGEST_POLL_MS = 2000;
-const MONTHLY_UPDATE_DIGEST_MAX_POLLS = 300;
+const MONTHLY_UPDATE_DIGEST_MAX_POLLS = Math.ceil(
+  (46 * 60 * 1000) / MONTHLY_UPDATE_DIGEST_POLL_MS
+);
 
 export function apiUrl(path: string): string {
   const normalizedBase = API_BASE.endsWith("/") ? API_BASE.slice(0, -1) : API_BASE;
@@ -2447,6 +2449,24 @@ async function completeJatoMonthlyUpdateUploadSession(
   ).then((res) => mapJatoMonthlyUpdateUploadSession(res.item));
 }
 
+async function retryJatoMonthlyUpdateUploadDigest(
+  uploadId: string
+): Promise<JatoMonthlyUpdateUploadSession> {
+  return request<{ item: Record<string, unknown> }>(
+    `/msrp/monthly-update-uploads/${uploadId}/retry-digest`,
+    { method: "POST" }
+  ).then((res) => mapJatoMonthlyUpdateUploadSession(res.item));
+}
+
+function canRetryJatoMonthlyUpdateUploadDigest(
+  session: JatoMonthlyUpdateUploadSession
+): boolean {
+  const failureCode = session.failureDigest?.code;
+  return session.status === "invalid"
+    && session.failureDigest?.retryable === true
+    && (failureCode === "DIGEST_TIMEOUT" || failureCode === "DIGEST_WORKER_LOST");
+}
+
 function mapReviewScopeCountrySummary(raw: Record<string, unknown>): ReviewScopeCountrySummary {
   return {
     country: String(raw.country ?? ""),
@@ -3696,7 +3716,13 @@ export const api = {
     if (!session) {
       session = await initiateJatoMonthlyUpdateUploadSession(file, resumeKey);
     }
-    if (["invalid", "abandoned", "expired"].includes(session.status)) {
+    if (
+      ["abandoned", "expired"].includes(session.status)
+      || (
+        session.status === "invalid"
+        && !canRetryJatoMonthlyUpdateUploadDigest(session)
+      )
+    ) {
       clearStoredMonthlyUpdateUploadId(resumeKey);
       session = await initiateJatoMonthlyUpdateUploadSession(
         file,
@@ -3825,7 +3851,45 @@ export const api = {
     }
 
     let digestPollCount = 0;
-    while (session.status === "assembling" || session.status === "digesting") {
+    let digestRetryAttempted = false;
+    while (true) {
+      if (session.failureDigest?.code === "RESOURCE_QUARANTINED") {
+        emitProgress({
+          stage: "invalid",
+          uploadedBytes: file.size,
+          totalBytes: file.size,
+          uploadedChunks: session.totalChunks,
+          totalChunks: session.totalChunks,
+          chunkSize: session.chunkSize,
+          detail: session.failureDigest.message,
+          ingestDigest: session.ingestDigest,
+          failureDigest: session.failureDigest,
+        });
+        throw new Error(session.failureDigest.message);
+      }
+      if (
+        canRetryJatoMonthlyUpdateUploadDigest(session)
+        && !digestRetryAttempted
+      ) {
+        emitProgress({
+          stage: "retrying",
+          uploadedBytes: file.size,
+          totalBytes: file.size,
+          uploadedChunks: session.totalChunks,
+          totalChunks: session.totalChunks,
+          chunkSize: session.chunkSize,
+          detail: "digest worker 已中断，正在复用已组装文件恢复，无需重新上传",
+          ingestDigest: session.ingestDigest,
+          failureDigest: session.failureDigest,
+        });
+        session = await retryJatoMonthlyUpdateUploadDigest(session.uploadId);
+        digestRetryAttempted = true;
+        digestPollCount = 0;
+        continue;
+      }
+      if (session.status !== "assembling" && session.status !== "digesting") {
+        break;
+      }
       emitProgress({
         stage: "digesting",
         uploadedBytes: file.size,
@@ -3910,6 +3974,9 @@ export const api = {
           let refreshPollCount = 0;
           session = await getJatoMonthlyUpdateUploadSession(session.uploadId);
           while (session.status === "assembling" || session.status === "digesting") {
+            if (session.failureDigest?.code === "RESOURCE_QUARANTINED") {
+              throw new Error(session.failureDigest.message);
+            }
             emitProgress({
               stage: "digesting",
               uploadedBytes: file.size,

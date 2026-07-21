@@ -6,7 +6,9 @@ import { api } from "../../api/client";
 
 const SHA256_OF_TEST_FILE = "0".repeat(64);
 
-function uploadSession(status: "ready" | "consumed" | "abandoned") {
+function uploadSession(
+  status: "ready" | "invalid" | "consumed" | "abandoned"
+) {
   return {
     uploadId: "upload-123",
     filename: "patch.xlsx",
@@ -18,6 +20,20 @@ function uploadSession(status: "ready" | "consumed" | "abandoned") {
     chunkDigests: { "1": SHA256_OF_TEST_FILE },
     uploadedBytes: 4,
     status,
+    assembledPath: status === "invalid" ? "uploads/assembled/upload-safe.xlsx" : null,
+    fileSha256: status === "invalid" ? SHA256_OF_TEST_FILE : null,
+    failureDigest: status === "invalid"
+      ? {
+        code: "DIGEST_TIMEOUT",
+        category: "resource",
+        phase: "digesting",
+        retryable: true,
+        message: "digest timeout",
+        sourceFeedback: null,
+        technicalDetail: null,
+        nextAction: "retry_digest",
+      }
+      : null,
     consumedJobId: status === "consumed" ? "jato-update-existing" : null,
   };
 }
@@ -114,5 +130,112 @@ describe("JATO monthly update upload job creation", () => {
     expect(session.status).toBe("abandoned");
     expect(localStorage.getItem("jato_monthly_update_upload_session:resume-a")).toBeNull();
     expect(localStorage.getItem("jato_monthly_update_upload_session:resume-b")).toBe("another-upload");
+  });
+
+  it("retries a timed-out digest without uploading file chunks again", async () => {
+    const progressStages: string[] = [];
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.endsWith("/msrp/monthly-update-uploads/initiate")) {
+        return Response.json({ item: uploadSession("invalid") });
+      }
+      if (url.endsWith("/msrp/monthly-update-uploads/upload-123/retry-digest")) {
+        expect(init?.method).toBe("POST");
+        return Response.json({ item: uploadSession("ready") });
+      }
+      if (url.endsWith("/msrp/monthly-update-jobs/from-upload")) {
+        return Response.json({
+          item: {
+            jobId: "jato-update-recovered",
+            status: "queued",
+          },
+        });
+      }
+      throw new Error(`Unexpected request: ${url}`);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    vi.stubGlobal("crypto", {
+      subtle: {
+        digest: vi.fn(async () => new Uint8Array(32).buffer),
+      },
+    });
+
+    const response = await api.createJatoMonthlyUpdateJob(
+      new File([new Uint8Array([1, 2, 3, 4])], "patch.xlsx"),
+      (progress) => progressStages.push(progress.stage),
+    );
+
+    expect(response.item.jobId).toBe("jato-update-recovered");
+    expect(progressStages).toContain("retrying");
+    expect(fetchMock.mock.calls.filter(([_input, init]) => init?.method === "PUT")).toHaveLength(0);
+    expect(fetchMock.mock.calls.filter(([input]) => (
+      String(input).endsWith("/msrp/monthly-update-uploads/upload-123/retry-digest")
+    ))).toHaveLength(1);
+  });
+
+  it("stops before job creation when the digest resource is quarantined", async () => {
+    const quarantinedSession = {
+      ...uploadSession("ready"),
+      status: "digesting",
+      digestPid: 24680,
+      failureDigest: {
+        code: "RESOURCE_QUARANTINED",
+        category: "resource",
+        phase: "digesting",
+        retryable: false,
+        message: "旧 digest worker 状态无法确认，请联系管理员。",
+        sourceFeedback: null,
+        technicalDetail: { digestPid: 24680 },
+        nextAction: "contact_admin_verify_digest_process",
+      },
+    };
+    const progressStages: string[] = [];
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.endsWith("/msrp/monthly-update-uploads/initiate")) {
+        return Response.json({ item: quarantinedSession });
+      }
+      throw new Error(`Unexpected request: ${url}`);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    vi.stubGlobal("crypto", {
+      subtle: {
+        digest: vi.fn(async () => new Uint8Array(32).buffer),
+      },
+    });
+
+    await expect(api.createJatoMonthlyUpdateJob(
+      new File([new Uint8Array([1, 2, 3, 4])], "patch.xlsx"),
+      (progress) => progressStages.push(progress.stage),
+    )).rejects.toThrow("旧 digest worker 状态无法确认");
+
+    expect(progressStages).toContain("invalid");
+    expect(fetchMock.mock.calls.some(([input]) => (
+      String(input).endsWith("/msrp/monthly-update-jobs/from-upload")
+    ))).toBe(false);
+    expect(fetchMock.mock.calls.some(([input]) => (
+      String(input).includes("/retry-digest")
+    ))).toBe(false);
+  });
+
+  it("keeps the resume key when abandon returns resource quarantine", async () => {
+    localStorage.setItem("jato_monthly_update_upload_session:resume-a", "upload-123");
+    const fetchMock = vi.fn(async () => Response.json(
+      {
+        detail: {
+          code: "RESOURCE_QUARANTINED",
+          message: "旧 digest worker 仍存活。",
+        },
+      },
+      { status: 409 },
+    ));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(
+      api.abandonJatoMonthlyUpdateUpload("upload-123")
+    ).rejects.toThrow("RESOURCE_QUARANTINED");
+    expect(
+      localStorage.getItem("jato_monthly_update_upload_session:resume-a")
+    ).toBe("upload-123");
   });
 });

@@ -1397,7 +1397,12 @@ def test_chunked_upload_session_can_be_completed_and_queued(
     assert job["phase"] == "queued"
     assert job["upload"]["sizeBytes"] == 10
     assert job["upload"]["sha256"] == hashlib.sha256(b"abcdefghij").hexdigest()
-    stored_path = job_root / job["jobId"] / "uploads" / "JATO-2026.03-patch.xlsx"
+    assert job["upload"]["originalFilename"] == "JATO-2026.03-patch.xlsx"
+    stored_path = jato_monthly_update_service._project_path(
+        job["upload"]["storedPath"]
+    )
+    assert stored_path is not None
+    assert stored_path.parent == job_root / job["jobId"] / "uploads"
     assert stored_path.read_bytes() == b"abcdefghij"
     upload_state = jato_monthly_update_service.get_jato_monthly_update_upload(
         upload_id,
@@ -1467,7 +1472,11 @@ def test_retry_failed_job_reuses_stored_upload_copy(
     assert retried["upload"]["sha256"] == hashlib.sha256(b"retry-me").hexdigest()
     assert retried["artifacts"]["retriedFromJobId"] == "jato-update-failed"
 
-    retried_upload = job_root / retried["jobId"] / "uploads" / "patch.xlsx"
+    retried_upload = jato_monthly_update_service._project_path(
+        retried["upload"]["storedPath"]
+    )
+    assert retried_upload is not None
+    assert retried_upload.parent == job_root / retried["jobId"] / "uploads"
     assert retried_upload.exists()
     assert retried_upload.read_bytes() == b"retry-me"
     assert source_upload.read_bytes() == b"retry-me"

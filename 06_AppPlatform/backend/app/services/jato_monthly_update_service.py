@@ -12,7 +12,7 @@ import sys
 import threading
 import time
 import traceback
-from contextlib import contextmanager
+from contextlib import ExitStack, contextmanager
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -64,7 +64,10 @@ BASELINE_INSTALL_JOURNAL_FILENAME = "baseline_install_journal.json"
 MAINTENANCE_COORDINATION_LOCK_FILENAME = "maintenance-coordination.lock"
 UPLOAD_ASSEMBLY_BUFFER_BYTES = 1024 * 1024
 DIGEST_WORKER_STALE_GRACE_SECONDS = 15
-DIGEST_WORKER_MAX_SECONDS = 10 * 60
+DIGEST_WORKER_BASE_TIMEOUT_SECONDS = 10 * 60
+DIGEST_WORKER_BASE_SIZE_BYTES = 16 * 1024 * 1024
+DIGEST_WORKER_EXTRA_SECONDS_PER_MIB = 4
+DIGEST_WORKER_MAX_SECONDS = 45 * 60
 UPLOAD_SESSION_STALE_SECONDS = 24 * 60 * 60
 BASELINE_XLSX_MAX_ROWS = 1_048_576
 BASELINE_EXPORT_BATCH_ROWS = 2_048
@@ -73,6 +76,7 @@ CODE_BLOCK_PATTERN = re.compile(r"```bash\s*(.*?)\s*```", re.DOTALL)
 ALLOWED_UPLOAD_EXTENSIONS = {".xlsx", ".xlsm", ".xls"}
 UPLOAD_CHUNK_SIZE_BYTES = JATO_MONTHLY_UPDATE_UPLOAD_CHUNK_SIZE_BYTES
 UPLOAD_MAX_BYTES = JATO_MONTHLY_UPDATE_UPLOAD_MAX_BYTES
+UPLOAD_INTERNAL_FILENAME_DIGEST_LENGTH = 24
 DEFAULT_UPLOAD_SHEET_NAME = "Data Export"
 MONTH_COLUMN_PATTERN = re.compile(
     r"^\d{4}\s(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)$",
@@ -3881,8 +3885,49 @@ def _upload_session_chunk_dir(upload_id: str) -> Path:
     return _upload_session_dir(upload_id) / "chunks"
 
 
+def _safe_internal_upload_filename(filename: str) -> str:
+    """Return a bounded ASCII storage name while keeping display names in state."""
+    normalized = _validate_upload_filename(filename)
+    suffix = Path(normalized).suffix.lower()
+    filename_digest = hashlib.sha256(normalized.encode("utf-8")).hexdigest()
+    return (
+        f"upload-{filename_digest[:UPLOAD_INTERNAL_FILENAME_DIGEST_LENGTH]}"
+        f"{suffix}"
+    )
+
+
 def _upload_session_assembled_path(upload_id: str, filename: str) -> Path:
-    return _upload_session_dir(upload_id) / "assembled" / filename
+    return (
+        _upload_session_dir(upload_id)
+        / "assembled"
+        / _safe_internal_upload_filename(filename)
+    )
+
+
+def _persisted_upload_session_assembled_path(
+    state: dict[str, Any],
+) -> Path | None:
+    """Resolve a persisted path, including legacy display-named assemblies, safely."""
+    assembled_value = str(state.get("assembledPath") or "").strip()
+    if not assembled_value:
+        return None
+    upload_id = str(state.get("uploadId") or "").strip()
+    candidate = _project_path(assembled_value)
+    if not upload_id or candidate is None:
+        raise RuntimeError("上传会话的 assembledPath 无效，请重新上传。")
+    assembled_root = (_upload_session_dir(upload_id) / "assembled").resolve()
+    resolved = candidate.resolve()
+    if resolved.parent != assembled_root:
+        raise RuntimeError("上传会话的 assembledPath 越界，请重新上传。")
+    return resolved
+
+
+def _job_upload_storage_path(job_id: str, filename: str) -> Path:
+    return (
+        _job_dir(job_id)
+        / "uploads"
+        / _safe_internal_upload_filename(filename)
+    )
 
 
 def _iter_upload_session_payloads() -> list[dict[str, Any]]:
@@ -3969,8 +4014,21 @@ def _active_upload_session_payloads() -> list[dict[str, Any]]:
     ]
 
 
-def _require_no_active_upload_sessions(*, action: str) -> None:
-    active_uploads = _active_upload_session_payloads()
+def _require_no_active_upload_sessions(
+    *,
+    action: str,
+    excluding_ready_upload_id: str | None = None,
+) -> None:
+    excluded_upload_id = str(excluding_ready_upload_id or "").strip()
+    active_uploads = [
+        payload
+        for payload in _active_upload_session_payloads()
+        if not (
+            excluded_upload_id
+            and str(payload.get("uploadId") or "") == excluded_upload_id
+            and str(payload.get("status") or "") == "ready"
+        )
+    ]
     if not active_uploads:
         return
     upload_ids = [
@@ -4483,6 +4541,43 @@ def _terminate_process_group(
     return result
 
 
+def _digest_process_termination_confirmed(
+    pid: int,
+    termination: dict[str, Any] | None,
+) -> bool:
+    """Only release resource gates after the old digest is conclusively gone."""
+    if pid <= 0 or not _process_exists(pid):
+        return True
+    return bool(
+        isinstance(termination, dict)
+        and int(termination.get("pid") or 0) == pid
+        and termination.get("processAliveAfter") is False
+    )
+
+
+def _terminate_digest_worker_with_evidence(
+    *,
+    pid: int,
+    upload_id: str,
+    expected_identity: dict[str, Any] | None,
+) -> dict[str, Any]:
+    try:
+        return _terminate_process_group(
+            pid,
+            expected_identity=expected_identity,
+            required_command_tokens=("--digest-upload", upload_id),
+        )
+    except Exception as exc:
+        return {
+            "pid": pid,
+            "processAliveBefore": True,
+            "processAliveAfter": _process_exists(pid),
+            "identityVerified": False,
+            "error": str(exc),
+            "technicalDetail": traceback.format_exc(limit=4),
+        }
+
+
 def _job_log_probe(log_path: Path) -> dict[str, Any]:
     if not log_path.exists():
         return {
@@ -4549,7 +4644,10 @@ def _infer_month_token(value: str) -> str | None:
 
 
 def _normalize_filename(value: str | None) -> str:
-    candidate = Path(value or "jato-update.xlsx").name.strip()
+    # Browsers normally submit a basename, but normalize both POSIX and Windows
+    # separators so a client-controlled path can never become a storage path.
+    raw_value = str(value or "jato-update.xlsx").replace("\\", "/")
+    candidate = Path(raw_value).name.strip()
     if not candidate or candidate in {".", ".."}:
         return "jato-update.xlsx"
     return candidate
@@ -4561,6 +4659,12 @@ def _validate_upload(file: UploadFile) -> str:
 
 def _validate_upload_filename(filename: str) -> str:
     normalized = _normalize_filename(filename)
+    if any(ord(character) < 32 or ord(character) == 127 for character in normalized):
+        raise HTTPException(status_code=400, detail="上传文件名包含无效控制字符。")
+    try:
+        normalized.encode("utf-8")
+    except UnicodeEncodeError as exc:
+        raise HTTPException(status_code=400, detail="上传文件名不是有效 UTF-8 文本。") from exc
     suffix = Path(normalized).suffix.lower()
     if suffix not in ALLOWED_UPLOAD_EXTENSIONS:
         raise HTTPException(
@@ -4588,6 +4692,21 @@ def _normalize_size_bytes(value: Any) -> int:
             ),
         )
     return size_bytes
+
+
+def _digest_worker_timeout_seconds(size_bytes: Any) -> int:
+    """Scale digest time with compressed upload size, capped at 45 minutes."""
+    try:
+        normalized_size = max(int(size_bytes or 0), 0)
+    except (TypeError, ValueError):
+        normalized_size = 0
+    extra_bytes = max(normalized_size - DIGEST_WORKER_BASE_SIZE_BYTES, 0)
+    extra_mib = (extra_bytes + 1024 * 1024 - 1) // (1024 * 1024)
+    return min(
+        DIGEST_WORKER_BASE_TIMEOUT_SECONDS
+        + extra_mib * DIGEST_WORKER_EXTRA_SECONDS_PER_MIB,
+        DIGEST_WORKER_MAX_SECONDS,
+    )
 
 
 def _normalize_sha256(value: Any, *, detail: str) -> str:
@@ -5704,6 +5823,54 @@ def _require_no_running_monthly_update_jobs(*, excluding_job_id: str | None = No
             status_code=409,
             detail="正在保存 active baseline，请等待隔离 worker 完成后再执行 publish / rollback。",
         )
+
+
+@contextmanager
+def _monthly_update_resource_start_locks(
+    *,
+    action: str,
+) -> Any:
+    """Acquire the shared heavy-resource locks in the canonical order."""
+    with _exclusive_file_lock(
+        _maintenance_coordination_lock_path(),
+        blocking=False,
+    ) as coordinated:
+        if not coordinated:
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    "JATO 清理或 baseline 操作正在准备中，"
+                    f"请稍后再{action}。"
+                ),
+            )
+        with _exclusive_file_lock(
+            _upload_initiate_lock_path()
+        ) as global_upload:
+            if not global_upload:
+                raise HTTPException(
+                    status_code=503,
+                    detail="JATO 全局资源锁暂不可用，请稍后重试。",
+                )
+            yield
+
+
+@contextmanager
+def _monthly_update_worker_start_window(
+    *,
+    action: str,
+    excluding_ready_upload_id: str | None = None,
+    excluding_job_id: str | None = None,
+) -> Any:
+    """Serialize every heavy-worker check and launch against upload/maintenance."""
+    with _monthly_update_resource_start_locks(action=action):
+        _require_no_active_upload_sessions(
+            action=action,
+            excluding_ready_upload_id=excluding_ready_upload_id,
+        )
+        _require_no_running_monthly_update_jobs(
+            excluding_job_id=excluding_job_id,
+        )
+        yield
 
 
 def _historical_reclassification_report_fingerprint(
@@ -6868,7 +7035,7 @@ def approve_jato_monthly_update_review(
     return _serialize_job_state(payload, include_log_tail=True)
 
 
-def resolve_jato_historical_reclassification(
+def _resolve_jato_historical_reclassification_with_job_lock(
     *,
     job_id: str,
     triggered_by: str,
@@ -7082,6 +7249,28 @@ def resolve_jato_historical_reclassification(
             raise
 
 
+def resolve_jato_historical_reclassification(
+    *,
+    job_id: str,
+    triggered_by: str,
+    decisions: Any,
+) -> dict[str, Any]:
+    if not isinstance(decisions, list):
+        raise HTTPException(
+            status_code=400,
+            detail="decisions 必须是逐国决策数组。",
+        )
+    with _monthly_update_worker_start_window(
+        action="应用历史重分类决策",
+        excluding_job_id=job_id,
+    ):
+        return _resolve_jato_historical_reclassification_with_job_lock(
+            job_id=job_id,
+            triggered_by=triggered_by,
+            decisions=decisions,
+        )
+
+
 def _pending_operation(payload: dict[str, Any]) -> dict[str, Any] | None:
     value = payload.get("pendingOperation")
     return value if isinstance(value, dict) else None
@@ -7150,7 +7339,7 @@ def _queue_active_bundle_operation(
     )
 
 
-def publish_jato_monthly_update_job(
+def _publish_jato_monthly_update_job_with_job_lock(
     *,
     job_id: str,
     triggered_by: str,
@@ -7162,6 +7351,21 @@ def publish_jato_monthly_update_job(
                 detail="Publish 状态锁暂不可用，请稍后重试。",
             )
         return _queue_publish_jato_monthly_update_job_locked(
+            job_id=job_id,
+            triggered_by=triggered_by,
+        )
+
+
+def publish_jato_monthly_update_job(
+    *,
+    job_id: str,
+    triggered_by: str,
+) -> dict[str, Any]:
+    with _monthly_update_worker_start_window(
+        action="排队 Publish",
+        excluding_job_id=job_id,
+    ):
+        return _publish_jato_monthly_update_job_with_job_lock(
             job_id=job_id,
             triggered_by=triggered_by,
         )
@@ -7658,7 +7862,7 @@ def _publish_jato_monthly_update_job_locked(
     return _serialize_job_state(payload, include_log_tail=True)
 
 
-def rollback_jato_monthly_update_job(
+def _rollback_jato_monthly_update_job_with_job_lock(
     *,
     job_id: str,
     triggered_by: str,
@@ -7670,6 +7874,21 @@ def rollback_jato_monthly_update_job(
                 detail="Rollback 状态锁暂不可用，请稍后重试。",
             )
         return _queue_rollback_jato_monthly_update_job_locked(
+            job_id=job_id,
+            triggered_by=triggered_by,
+        )
+
+
+def rollback_jato_monthly_update_job(
+    *,
+    job_id: str,
+    triggered_by: str,
+) -> dict[str, Any]:
+    with _monthly_update_worker_start_window(
+        action="排队 Rollback",
+        excluding_job_id=job_id,
+    ):
+        return _rollback_jato_monthly_update_job_with_job_lock(
             job_id=job_id,
             triggered_by=triggered_by,
         )
@@ -8136,7 +8355,19 @@ def get_jato_monthly_update_upload(
     status = str(state.get("status") or "")
     if status in {"assembling", "digesting"}:
         digest_pid = int(state.get("digestPid") or 0)
+        existing_failure = state.get("failureDigest")
+        if (
+            isinstance(existing_failure, dict)
+            and str(existing_failure.get("code") or "")
+            == "RESOURCE_QUARANTINED"
+            and digest_pid > 0
+            and _process_exists(digest_pid)
+        ):
+            return _serialize_upload_session(state)
         launched_at = str(state.get("digestLaunchedAt") or "")
+        file_size_bytes = int(state.get("sizeBytes") or 0)
+        timeout_seconds = _digest_worker_timeout_seconds(file_size_bytes)
+        elapsed_seconds: float | None = None
         worker_missing = digest_pid > 0 and not _process_exists(digest_pid)
         launch_stale = False
         digest_timed_out = False
@@ -8148,7 +8379,7 @@ def get_jato_monthly_update_upload(
                     digest_pid <= 0
                     and elapsed_seconds > DIGEST_WORKER_STALE_GRACE_SECONDS
                 )
-                digest_timed_out = elapsed_seconds > DIGEST_WORKER_MAX_SECONDS
+                digest_timed_out = elapsed_seconds > timeout_seconds
             except ValueError:
                 launch_stale = True
         if worker_missing or launch_stale or digest_timed_out:
@@ -8156,13 +8387,11 @@ def get_jato_monthly_update_upload(
             if (
                 digest_timed_out
                 and digest_pid > 0
-                and _process_is_digest_worker_for_upload(
-                    digest_pid,
-                    upload_id,
-                )
+                and _process_exists(digest_pid)
             ):
-                termination = _terminate_process_group(
-                    digest_pid,
+                termination = _terminate_digest_worker_with_evidence(
+                    pid=digest_pid,
+                    upload_id=upload_id,
                     expected_identity=(
                         state.get("digestProcessIdentity")
                         if isinstance(
@@ -8171,50 +8400,114 @@ def get_jato_monthly_update_upload(
                         )
                         else None
                     ),
-                    required_command_tokens=(
-                        "--digest-upload",
-                        upload_id,
-                    ),
                 )
-            with _exclusive_file_lock(
-                _upload_state_lock_path(upload_id)
-            ) as acquired:
-                if acquired:
-                    state = _load_upload_session(upload_id)
-                    if str(state.get("status") or "") in {
-                        "assembling",
-                        "digesting",
-                    }:
-                        state["status"] = "invalid"
-                        state["completedAt"] = _utc_now().isoformat()
-                        state["digestPid"] = None
-                        state["digestProcessIdentity"] = None
-                        state["failureDigest"] = {
-                            "code": (
-                                "DIGEST_TIMEOUT"
-                                if digest_timed_out
-                                else "DIGEST_WORKER_LOST"
-                            ),
-                            "category": "resource",
-                            "phase": "digesting",
-                            "retryable": True,
-                            "message": (
-                                (
-                                    "上传文件 digest 超过 10 分钟，已停止等待；"
-                                    if digest_timed_out
-                                    else "上传文件 digest worker 在生成报告前退出；"
+            with ExitStack() as digest_probe_stack:
+                digest_lock_held: bool | None = None
+                if launch_stale and digest_pid <= 0:
+                    digest_lock_acquired = digest_probe_stack.enter_context(
+                        _exclusive_file_lock(
+                            _upload_digest_lock_path(upload_id),
+                            blocking=False,
+                        )
+                    )
+                    digest_lock_held = not digest_lock_acquired
+                with _exclusive_file_lock(
+                    _upload_state_lock_path(upload_id)
+                ) as acquired:
+                    if acquired:
+                        state = _load_upload_session(upload_id)
+                        if str(state.get("status") or "") in {
+                            "assembling",
+                            "digesting",
+                        }:
+                            current_digest_pid = int(state.get("digestPid") or 0)
+                            failed_process_identity = (
+                                state.get("digestProcessIdentity")
+                                if isinstance(
+                                    state.get("digestProcessIdentity"),
+                                    dict,
                                 )
-                                + "active 未修改。"
-                            ),
-                            "sourceFeedback": None,
-                            "technicalDetail": {
-                                "digestPid": digest_pid or None,
+                                else None
+                            )
+                            termination_confirmed = (
+                                current_digest_pid == digest_pid
+                                and digest_lock_held is not True
+                                and _digest_process_termination_confirmed(
+                                    current_digest_pid,
+                                    termination,
+                                )
+                            )
+                            technical_detail = {
+                                "digestPid": current_digest_pid or None,
+                                "digestProcessIdentity": failed_process_identity,
                                 "digestLaunchedAt": launched_at or None,
+                                "digestLockHeld": digest_lock_held,
+                                "timeoutSeconds": timeout_seconds,
+                                "elapsedSeconds": (
+                                    round(elapsed_seconds, 3)
+                                    if elapsed_seconds is not None
+                                    else None
+                                ),
+                                "fileSizeBytes": file_size_bytes,
                                 "termination": termination,
-                            },
-                            "nextAction": "select_file_again_or_contact_admin",
-                        }
-                        _persist_upload_session(state)
+                            }
+                            launch_worker_lost = (
+                                launch_stale and digest_pid <= 0
+                            )
+                            if termination_confirmed:
+                                state["status"] = "invalid"
+                                state["completedAt"] = _utc_now().isoformat()
+                                state["digestPid"] = None
+                                state["digestProcessIdentity"] = None
+                                state["failureDigest"] = {
+                                    "code": (
+                                        "DIGEST_WORKER_LOST"
+                                        if launch_worker_lost
+                                        else (
+                                            "DIGEST_TIMEOUT"
+                                            if digest_timed_out
+                                            else "DIGEST_WORKER_LOST"
+                                        )
+                                    ),
+                                    "category": "resource",
+                                    "phase": "digesting",
+                                    "retryable": True,
+                                    "message": (
+                                        (
+                                            "上传文件 digest worker 在写回 PID 前退出；"
+                                            if launch_worker_lost
+                                            else (
+                                                "上传文件 digest 超过当前安全时限"
+                                                f"（{timeout_seconds / 60:.1f} 分钟），"
+                                                "已确认旧 worker 停止；"
+                                                if digest_timed_out
+                                                else "上传文件 digest worker 在生成报告前退出；"
+                                            )
+                                        )
+                                        + "active 未修改。"
+                                    ),
+                                    "sourceFeedback": None,
+                                    "technicalDetail": technical_detail,
+                                    "nextAction": (
+                                        "retry_digest_or_contact_admin"
+                                    ),
+                                }
+                            else:
+                                state["completedAt"] = None
+                                state["failureDigest"] = {
+                                    "code": "RESOURCE_QUARANTINED",
+                                    "category": "resource",
+                                    "phase": "digesting",
+                                    "retryable": False,
+                                    "message": (
+                                        "digest worker 超时或失联，但系统未能确认进程已停止；"
+                                        "会话继续占用资源隔离门禁，禁止新上传、任务和清理。"
+                                    ),
+                                    "sourceFeedback": None,
+                                    "technicalDetail": technical_detail,
+                                    "nextAction": "contact_admin_verify_digest_process",
+                                }
+                            _persist_upload_session(state)
     return _serialize_upload_session(state)
 
 
@@ -8245,53 +8538,87 @@ def abandon_jato_monthly_update_upload(
             )
         if status in {"abandoned", "expired", "invalid"}:
             return _serialize_upload_session(state)
-        digest_pid = int(state.get("digestPid") or 0)
-        digest_identity = (
-            state.get("digestProcessIdentity")
-            if isinstance(state.get("digestProcessIdentity"), dict)
-            else None
-        )
-        now = _utc_now().isoformat()
-        state["status"] = "abandoned"
-        state["completedAt"] = now
-        state["abandonedAt"] = now
-        state["abandonedBy"] = triggered_by.strip() or "anonymous"
-        state["digestPid"] = None
-        state["digestProcessIdentity"] = None
-        state["failureDigest"] = {
-            "code": "UPLOAD_SESSION_ABANDONED",
-            "category": "lifecycle",
-            "phase": status or "upload",
-            "retryable": True,
-            "message": "用户已明确放弃上传；candidate 与 active 均未修改。",
-            "sourceFeedback": None,
-            "technicalDetail": None,
-            "nextAction": "start_new_upload",
-        }
-        _persist_upload_session(state)
-        termination = None
-        if (
-            digest_pid > 0
-            and _process_exists(digest_pid)
-            and _process_is_digest_worker_for_upload(
-                digest_pid,
-                upload_id,
+        with ExitStack() as digest_probe_stack:
+            digest_pid = int(state.get("digestPid") or 0)
+            digest_lock_held: bool | None = None
+            if status in {"assembling", "digesting"} and digest_pid <= 0:
+                digest_lock_acquired = digest_probe_stack.enter_context(
+                    _exclusive_file_lock(
+                        _upload_digest_lock_path(upload_id),
+                        blocking=False,
+                    )
+                )
+                digest_lock_held = not digest_lock_acquired
+            digest_identity = (
+                state.get("digestProcessIdentity")
+                if isinstance(state.get("digestProcessIdentity"), dict)
+                else None
             )
-        ):
-            termination = _terminate_process_group(
-                digest_pid,
-                expected_identity=digest_identity,
-                required_command_tokens=(
-                    "--digest-upload",
-                    upload_id,
-                ),
+            termination: dict[str, Any] | None = None
+            if digest_pid > 0 and _process_exists(digest_pid):
+                termination = _terminate_digest_worker_with_evidence(
+                    pid=digest_pid,
+                    upload_id=upload_id,
+                    expected_identity=digest_identity,
+                )
+            termination_confirmed = (
+                digest_lock_held is not True
+                and _digest_process_termination_confirmed(
+                    digest_pid,
+                    termination,
+                )
             )
-        state["failureDigest"]["technicalDetail"] = {
-            "digestPid": digest_pid or None,
-            "termination": termination,
-        }
-        _persist_upload_session(state)
-        return _serialize_upload_session(state)
+            now = _utc_now().isoformat()
+            technical_detail = {
+                "digestPid": digest_pid or None,
+                "digestProcessIdentity": digest_identity,
+                "digestLockHeld": digest_lock_held,
+                "termination": termination,
+                "abandonRequestedAt": now,
+                "abandonRequestedBy": triggered_by.strip() or "anonymous",
+            }
+            if not termination_confirmed:
+                state["completedAt"] = None
+                state["failureDigest"] = {
+                    "code": "RESOURCE_QUARANTINED",
+                    "category": "resource",
+                    "phase": status or "digesting",
+                    "retryable": False,
+                    "message": (
+                        "已收到放弃请求，但无法确认 digest worker 已停止；"
+                        "会话仍保持 active，禁止释放资源门禁。"
+                    ),
+                    "sourceFeedback": None,
+                    "technicalDetail": technical_detail,
+                    "nextAction": "contact_admin_verify_digest_process",
+                }
+                _persist_upload_session(state)
+                raise HTTPException(
+                    status_code=409,
+                    detail={
+                        "code": "RESOURCE_QUARANTINED",
+                        "message": state["failureDigest"]["message"],
+                        "technicalDetail": technical_detail,
+                    },
+                )
+            state["status"] = "abandoned"
+            state["completedAt"] = now
+            state["abandonedAt"] = now
+            state["abandonedBy"] = triggered_by.strip() or "anonymous"
+            state["digestPid"] = None
+            state["digestProcessIdentity"] = None
+            state["failureDigest"] = {
+                "code": "UPLOAD_SESSION_ABANDONED",
+                "category": "lifecycle",
+                "phase": status or "upload",
+                "retryable": True,
+                "message": "用户已明确放弃上传；candidate 与 active 均未修改。",
+                "sourceFeedback": None,
+                "technicalDetail": technical_detail,
+                "nextAction": "start_new_upload",
+            }
+            _persist_upload_session(state)
+            return _serialize_upload_session(state)
 
 
 def _upload_jato_monthly_update_chunk_locked(
@@ -8436,7 +8763,7 @@ def _assemble_monthly_update_upload(state: dict[str, Any]) -> tuple[Path, str]:
     digest_map = digest_payload if isinstance(digest_payload, dict) else {}
     assembled_path.parent.mkdir(parents=True, exist_ok=True)
     temp_path = assembled_path.with_name(
-        f".{assembled_path.name}.{os.getpid()}.{uuid4().hex}.assembling"
+        f".assemble-{os.getpid()}-{uuid4().hex}.tmp"
     )
     file_hasher = hashlib.sha256()
     total_bytes_written = 0
@@ -8768,11 +9095,8 @@ def run_jato_monthly_update_upload_digest(upload_id: str) -> dict[str, Any]:
         }:
             return _serialize_upload_session(state)
         try:
-            assembled_value = str(state.get("assembledPath") or "").strip()
-            existing_assembled_path = (
-                _project_path(assembled_value)
-                if assembled_value
-                else None
+            existing_assembled_path = _persisted_upload_session_assembled_path(
+                state
             )
             expected_sha256 = str(
                 state.get("fileSha256") or ""
@@ -8781,7 +9105,6 @@ def run_jato_monthly_update_upload_digest(upload_id: str) -> dict[str, Any]:
                 existing_assembled_path is not None
                 and existing_assembled_path.is_file()
                 and re.fullmatch(r"[0-9a-f]{64}", expected_sha256)
-                and not _upload_session_chunk_dir(upload_id).exists()
             ):
                 assembled_path = existing_assembled_path
                 file_sha256 = _sha256_hex_for_path(assembled_path)
@@ -8892,6 +9215,48 @@ def _launch_upload_digest_process(upload_id: str) -> int:
     return int(process.pid)
 
 
+def _start_upload_digest_locked(state: dict[str, Any]) -> dict[str, Any]:
+    """Persist one digest launch while the caller holds the session state lock."""
+    upload_id = str(state["uploadId"])
+    state["status"] = "assembling"
+    state["ingestDigest"] = None
+    state["failureDigest"] = None
+    state["completedAt"] = None
+    state["digestPid"] = None
+    state["digestProcessIdentity"] = None
+    state["digestLaunchedAt"] = _utc_now().isoformat()
+    state["digestAttempts"] = int(state.get("digestAttempts") or 0) + 1
+    _persist_upload_session(state)
+    try:
+        digest_pid = _launch_upload_digest_process(upload_id)
+        latest = _load_upload_session(upload_id)
+        if str(latest.get("status") or "") in {"assembling", "digesting"}:
+            latest["digestPid"] = digest_pid
+            latest["digestProcessIdentity"] = _read_process_identity(
+                digest_pid
+            )
+            _persist_upload_session(latest)
+        return latest
+    except Exception as exc:
+        state = _load_upload_session(upload_id)
+        state["status"] = "invalid"
+        state["completedAt"] = _utc_now().isoformat()
+        state["failureDigest"] = {
+            "code": "DIGEST_WORKER_UNAVAILABLE",
+            "category": "platform",
+            "phase": "assembling",
+            "retryable": True,
+            "message": str(exc),
+            "sourceFeedback": None,
+            "technicalDetail": traceback.format_exc(limit=4),
+            "nextAction": "contact_admin",
+        }
+        state["digestPid"] = None
+        state["digestProcessIdentity"] = None
+        _persist_upload_session(state)
+        return state
+
+
 def _complete_jato_monthly_update_upload_locked(
     *,
     upload_id: str,
@@ -8919,36 +9284,7 @@ def _complete_jato_monthly_update_upload_locked(
 
     state["receivedChunks"] = received_chunks
     state["uploadedBytes"] = uploaded_bytes
-    state["status"] = "assembling"
-    state["failureDigest"] = None
-    state["digestLaunchedAt"] = _utc_now().isoformat()
-    state["digestAttempts"] = int(state.get("digestAttempts") or 0) + 1
-    _persist_upload_session(state)
-    try:
-        digest_pid = _launch_upload_digest_process(upload_id)
-        latest = _load_upload_session(upload_id)
-        if str(latest.get("status") or "") in {"assembling", "digesting"}:
-            latest["digestPid"] = digest_pid
-            latest["digestProcessIdentity"] = _read_process_identity(
-                digest_pid
-            )
-            _persist_upload_session(latest)
-        state = latest
-    except Exception as exc:
-        state["status"] = "invalid"
-        state["failureDigest"] = {
-            "code": "DIGEST_WORKER_UNAVAILABLE",
-            "category": "platform",
-            "phase": "assembling",
-            "retryable": True,
-            "message": str(exc),
-            "sourceFeedback": None,
-            "technicalDetail": traceback.format_exc(limit=4),
-            "nextAction": "contact_admin",
-        }
-        state["digestPid"] = None
-        state["digestProcessIdentity"] = None
-        _persist_upload_session(state)
+    state = _start_upload_digest_locked(state)
     return _serialize_upload_session(state)
 
 
@@ -8970,6 +9306,182 @@ def complete_jato_monthly_update_upload(
             requested_by=requested_by,
             requested_role=requested_role,
         )
+
+
+def _retry_jato_monthly_update_upload_digest_locked(
+    *,
+    upload_id: str,
+    requested_by: str,
+    requested_role: str,
+) -> dict[str, Any]:
+    state = _load_upload_session(upload_id)
+    _require_upload_session_access(
+        state,
+        requested_by=requested_by,
+        requested_role=requested_role,
+    )
+    status = str(state.get("status") or "")
+    if status in {"assembling", "digesting", "ready", "consumed"}:
+        return _serialize_upload_session(state)
+    failure = state.get("failureDigest")
+    failure_code = (
+        str(failure.get("code") or "")
+        if isinstance(failure, dict)
+        else ""
+    )
+    retryable_failure = (
+        isinstance(failure, dict)
+        and failure.get("retryable") is True
+        and failure_code in {"DIGEST_TIMEOUT", "DIGEST_WORKER_LOST"}
+    )
+    if status != "invalid" or not retryable_failure:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "DIGEST_RETRY_NOT_ALLOWED",
+                "message": (
+                    "仅允许恢复超时或丢失的 digest worker；"
+                    "输入校验失败必须修正源文件后重新上传。"
+                ),
+                "failureCode": failure_code or None,
+            },
+        )
+
+    technical_detail = (
+        failure.get("technicalDetail")
+        if isinstance(failure, dict)
+        else None
+    )
+    old_digest_pid = 0
+    expected_process_identity: dict[str, Any] | None = None
+    if isinstance(technical_detail, dict):
+        try:
+            old_digest_pid = int(technical_detail.get("digestPid") or 0)
+        except (TypeError, ValueError):
+            old_digest_pid = 0
+        raw_identity = technical_detail.get("digestProcessIdentity")
+        expected_process_identity = (
+            raw_identity if isinstance(raw_identity, dict) else None
+        )
+    if old_digest_pid > 0 and _process_exists(old_digest_pid):
+        if expected_process_identity is None:
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "code": "DIGEST_RETRY_WORKER_IDENTITY_UNKNOWN",
+                    "message": (
+                        "原 digest PID 仍存活，但失败记录缺少进程身份；"
+                        "无法排除旧 worker 仍在运行，请管理员确认。"
+                    ),
+                    "digestPid": old_digest_pid,
+                },
+            )
+        identity_matches, current_process_identity = _process_identity_matches(
+            pid=old_digest_pid,
+            expected_identity=expected_process_identity,
+            required_command_tokens=("--digest-upload", upload_id),
+        )
+        if identity_matches:
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "code": "DIGEST_RETRY_WORKER_STILL_RUNNING",
+                    "message": (
+                        "原 digest worker 仍在运行，系统拒绝叠加第二个 worker；"
+                        "请等待或由管理员先安全终止旧进程。"
+                    ),
+                    "digestPid": old_digest_pid,
+                },
+            )
+        if current_process_identity is None:
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "code": "DIGEST_RETRY_WORKER_IDENTITY_UNKNOWN",
+                    "message": (
+                        "原 digest PID 仍存活，但当前进程身份不可读；"
+                        "无法安全判断 PID 是否复用，请管理员确认。"
+                    ),
+                    "digestPid": old_digest_pid,
+                },
+            )
+
+    _require_no_running_monthly_update_jobs()
+    _require_no_active_upload_sessions(action="恢复上传 digest")
+
+    assembled_path = _persisted_upload_session_assembled_path(state)
+    if assembled_path is None or not assembled_path.is_file():
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "DIGEST_RETRY_SOURCE_MISSING",
+                "message": "已组装文件不存在，无法只重启 digest，请重新上传。",
+            },
+        )
+    expected_size = int(state.get("sizeBytes") or 0)
+    actual_size = assembled_path.stat().st_size
+    expected_sha256 = str(state.get("fileSha256") or "").strip().lower()
+    if (
+        expected_size <= 0
+        or actual_size != expected_size
+        or not re.fullmatch(r"[0-9a-f]{64}", expected_sha256)
+    ):
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "DIGEST_RETRY_SOURCE_INVALID",
+                "message": "已组装文件大小或 SHA-256 状态无效，请重新上传。",
+            },
+        )
+    if _sha256_hex_for_path(assembled_path) != expected_sha256:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "DIGEST_RETRY_SOURCE_CHANGED",
+                "message": "已组装文件 SHA-256 已变化，请重新上传。",
+            },
+        )
+    state["uploadedBytes"] = actual_size
+    state = _start_upload_digest_locked(state)
+    return _serialize_upload_session(state)
+
+
+def retry_jato_monthly_update_upload_digest(
+    *,
+    upload_id: str,
+    requested_by: str,
+    requested_role: str,
+) -> dict[str, Any]:
+    """Restart only a lost/timed-out digest inside the global resource window."""
+    with _exclusive_file_lock(
+        _maintenance_coordination_lock_path(),
+        blocking=False,
+    ) as coordinated:
+        if not coordinated:
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    "JATO 清理或 baseline 操作正在准备中，"
+                    "请稍后再恢复上传 digest。"
+                ),
+            )
+        with _exclusive_file_lock(_upload_initiate_lock_path()) as global_upload:
+            if not global_upload:
+                raise HTTPException(
+                    status_code=503,
+                    detail="上传会话全局锁暂不可用，请稍后重试。",
+                )
+            with _exclusive_file_lock(_upload_state_lock_path(upload_id)) as acquired:
+                if not acquired:
+                    raise HTTPException(
+                        status_code=503,
+                        detail="上传 digest 状态锁暂不可用，请稍后重试。",
+                    )
+                return _retry_jato_monthly_update_upload_digest_locked(
+                    upload_id=upload_id,
+                    requested_by=requested_by,
+                    requested_role=requested_role,
+                )
 
 
 def _parse_month_from_filename(filename: str) -> str | None:
@@ -9048,6 +9560,7 @@ def _ensure_upload_digest_matches_current_active(
     *,
     upload_id: str,
     state: dict[str, Any],
+    state_lock_held: bool = False,
 ) -> None:
     ingest_digest = state.get("ingestDigest")
     if not isinstance(ingest_digest, dict):
@@ -9059,15 +9572,18 @@ def _ensure_upload_digest_matches_current_active(
     if digest_active_version == current_active_version:
         return
 
-    with _exclusive_file_lock(
-        _upload_state_lock_path(upload_id)
-    ) as acquired:
+    with ExitStack() as state_lock_stack:
+        acquired = True
+        if not state_lock_held:
+            acquired = state_lock_stack.enter_context(
+                _exclusive_file_lock(_upload_state_lock_path(upload_id))
+            )
         if not acquired:
             raise HTTPException(
                 status_code=503,
                 detail="上传 digest 状态锁暂不可用，请稍后重试。",
             )
-        latest = _load_upload_session(upload_id)
+        latest = state if state_lock_held else _load_upload_session(upload_id)
         latest_digest = latest.get("ingestDigest")
         latest_digest_active_version = (
             str(latest_digest.get("activeDatasetVersion") or "")
@@ -10494,7 +11010,7 @@ def _queue_single_country_job(
     return _serialize_job_state(state, include_log_tail=False)
 
 
-def create_jato_monthly_update_job(
+def _create_jato_monthly_update_job_in_start_window(
     *,
     file: UploadFile,
     triggered_by: str,
@@ -10514,7 +11030,7 @@ def create_jato_monthly_update_job(
     job_id = f"jato-update-{uuid4().hex[:8]}"
     uploads_dir = _job_dir(job_id) / "uploads"
     uploads_dir.mkdir(parents=True, exist_ok=True)
-    stored_upload_path = uploads_dir / filename
+    stored_upload_path = _job_upload_storage_path(job_id, filename)
 
     with stored_upload_path.open("wb") as handle:
         shutil.copyfileobj(file.file, handle)
@@ -10532,7 +11048,19 @@ def create_jato_monthly_update_job(
     )
 
 
-def create_jato_monthly_update_job_from_upload(
+def create_jato_monthly_update_job(
+    *,
+    file: UploadFile,
+    triggered_by: str,
+) -> dict[str, Any]:
+    with _monthly_update_worker_start_window(action="启动月更任务"):
+        return _create_jato_monthly_update_job_in_start_window(
+            file=file,
+            triggered_by=triggered_by,
+        )
+
+
+def _create_jato_monthly_update_job_from_upload_in_start_window(
     *,
     upload_id: str,
     triggered_by: str,
@@ -10550,6 +11078,7 @@ def create_jato_monthly_update_job_from_upload(
         _ensure_upload_digest_matches_current_active(
             upload_id=upload_id,
             state=state,
+            state_lock_held=True,
         )
         return get_jato_monthly_update_job(consumed_job_id)
     if str(state.get("status", "")) == "invalid":
@@ -10569,7 +11098,10 @@ def create_jato_monthly_update_job_from_upload(
         )
 
     filename = _validate_upload_filename(str(state.get("filename", "jato-update.xlsx")))
-    assembled_path = _upload_session_assembled_path(upload_id, filename)
+    assembled_path = (
+        _persisted_upload_session_assembled_path(state)
+        or _upload_session_assembled_path(upload_id, filename)
+    )
     if not assembled_path.exists():
         raise HTTPException(status_code=409, detail="组装后的上传文件不存在，请重新上传。")
     declared_size = int(state.get("sizeBytes", 0) or 0)
@@ -10620,6 +11152,7 @@ def create_jato_monthly_update_job_from_upload(
     _ensure_upload_digest_matches_current_active(
         upload_id=upload_id,
         state=state,
+        state_lock_held=True,
     )
 
     resolved_month = (
@@ -10658,6 +11191,7 @@ def create_jato_monthly_update_job_from_upload(
             _ensure_upload_digest_matches_current_active(
                 upload_id=upload_id,
                 state=state,
+                state_lock_held=True,
             )
             consumed_job = get_jato_monthly_update_job(consumed_job_id)
             if str(consumed_job.get("status") or "") == "queued":
@@ -10680,7 +11214,7 @@ def create_jato_monthly_update_job_from_upload(
         job_id = f"jato-update-{uuid4().hex[:8]}"
         uploads_dir = _job_dir(job_id) / "uploads"
         uploads_dir.mkdir(parents=True, exist_ok=True)
-        stored_upload_path = uploads_dir / filename
+        stored_upload_path = _job_upload_storage_path(job_id, filename)
         try:
             os.link(assembled_path, stored_upload_path)
         except OSError:
@@ -10706,7 +11240,50 @@ def create_jato_monthly_update_job_from_upload(
         return result
 
 
-def retry_failed_jato_monthly_update_job(
+def create_jato_monthly_update_job_from_upload(
+    *,
+    upload_id: str,
+    triggered_by: str,
+    triggered_role: str = "editor",
+    month: str | None = None,
+) -> dict[str, Any]:
+    state = _load_upload_session(upload_id)
+    _require_upload_session_access(
+        state,
+        requested_by=triggered_by,
+        requested_role=triggered_role,
+    )
+    action = "从上传创建月更任务"
+    with _monthly_update_resource_start_locks(action=action):
+        with _exclusive_file_lock(
+            _upload_state_lock_path(upload_id)
+        ) as state_acquired:
+            if not state_acquired:
+                raise HTTPException(
+                    status_code=503,
+                    detail="上传会话状态锁暂不可用，请稍后重试。",
+                )
+            state = _load_upload_session(upload_id)
+            _require_upload_session_access(
+                state,
+                requested_by=triggered_by,
+                requested_role=triggered_role,
+            )
+            if str(state.get("status") or "") == "ready":
+                _require_no_active_upload_sessions(
+                    action=action,
+                    excluding_ready_upload_id=upload_id,
+                )
+                _require_no_running_monthly_update_jobs()
+            return _create_jato_monthly_update_job_from_upload_in_start_window(
+                upload_id=upload_id,
+                triggered_by=triggered_by,
+                triggered_role=triggered_role,
+                month=month,
+            )
+
+
+def _retry_failed_jato_monthly_update_job_in_start_window(
     *,
     source_job_id: str,
     triggered_by: str,
@@ -10742,7 +11319,7 @@ def retry_failed_jato_monthly_update_job(
     job_id = f"jato-update-{uuid4().hex[:8]}"
     uploads_dir = _job_dir(job_id) / "uploads"
     uploads_dir.mkdir(parents=True, exist_ok=True)
-    stored_upload_path = uploads_dir / filename
+    stored_upload_path = _job_upload_storage_path(job_id, filename)
     shutil.copy2(source_upload_path, stored_upload_path)
     source_month = str(source_state.get("month") or "").strip()
     retry_month = (
@@ -10773,6 +11350,18 @@ def retry_failed_jato_monthly_update_job(
     payload["artifacts"]["retriedFromJobId"] = source_job_id
     _persist_job_state(payload)
     return _serialize_job_state(payload, include_log_tail=True)
+
+
+def retry_failed_jato_monthly_update_job(
+    *,
+    source_job_id: str,
+    triggered_by: str,
+) -> dict[str, Any]:
+    with _monthly_update_worker_start_window(action="重试失败的月更任务"):
+        return _retry_failed_jato_monthly_update_job_in_start_window(
+            source_job_id=source_job_id,
+            triggered_by=triggered_by,
+        )
 
 
 # ── Country-Partition Upload ───────────────────────────────────────────────────
@@ -11124,7 +11713,7 @@ def _run_single_country_job(job_id: str) -> None:
     _run_country_partition_job(job_id)
 
 
-def create_single_country_job(
+def _create_single_country_job_in_start_window(
     *,
     country: str,
     month: str,
@@ -11132,7 +11721,6 @@ def create_single_country_job(
     triggered_by: str,
 ) -> dict[str, Any]:
     """Create a lightweight single-country single-month upload job (no prepare/raw_compare)."""
-    _require_no_running_monthly_update_jobs()
     filename = _validate_upload(file)
     normalized_month = _normalize_month(month)
     normalized_country = country.strip()
@@ -11143,7 +11731,7 @@ def create_single_country_job(
     job_dir = _job_dir(job_id)
     uploads_dir = job_dir / "uploads"
     uploads_dir.mkdir(parents=True, exist_ok=True)
-    stored_upload_path = uploads_dir / filename
+    stored_upload_path = _job_upload_storage_path(job_id, filename)
 
     with stored_upload_path.open("wb") as handle:
         shutil.copyfileobj(file.file, handle)
@@ -11156,6 +11744,22 @@ def create_single_country_job(
         upload_filename=filename,
         stored_upload_path=stored_upload_path,
     )
+
+
+def create_single_country_job(
+    *,
+    country: str,
+    month: str,
+    file: UploadFile,
+    triggered_by: str,
+) -> dict[str, Any]:
+    with _monthly_update_worker_start_window(action="启动单国家月更任务"):
+        return _create_single_country_job_in_start_window(
+            country=country,
+            month=month,
+            file=file,
+            triggered_by=triggered_by,
+        )
 
 
 # ── Smart Merge ──────────────────────────────────────────────────────────────
@@ -12349,7 +12953,7 @@ def _launch_smart_merge_thread(job_id: str) -> None:
     _launch_job_thread(job_id)
 
 
-def create_smart_merge_candidate(
+def _create_smart_merge_candidate_with_job_lock(
     *,
     job_id: str,
     triggered_by: str,
@@ -12361,6 +12965,21 @@ def create_smart_merge_candidate(
                 detail="Smart Merge 状态锁暂不可用，请稍后重试。",
             )
         return _create_smart_merge_candidate_locked(
+            job_id=job_id,
+            triggered_by=triggered_by,
+        )
+
+
+def create_smart_merge_candidate(
+    *,
+    job_id: str,
+    triggered_by: str,
+) -> dict[str, Any]:
+    with _monthly_update_worker_start_window(
+        action="排队 Smart Merge",
+        excluding_job_id=job_id,
+    ):
+        return _create_smart_merge_candidate_with_job_lock(
             job_id=job_id,
             triggered_by=triggered_by,
         )
@@ -12527,10 +13146,33 @@ def recheck_jato_monthly_update_job(
         )
     wake_error = None
     if should_wake:
-        try:
-            _launch_job_thread(job_id)
-        except Exception as exc:
-            wake_error = str(exc)
+        with _monthly_update_worker_start_window(
+            action="唤醒排队中的月更任务",
+            excluding_job_id=job_id,
+        ):
+            with _exclusive_file_lock(
+                _job_state_lock_path(job_id)
+            ) as acquired:
+                if not acquired:
+                    raise HTTPException(
+                        status_code=503,
+                        detail="任务复核状态锁暂不可用，请稍后重试。",
+                    )
+                payload = _load_job_state(job_id)
+                runtime_check = _build_runtime_check(payload)
+                pending = _pending_operation(payload)
+                should_wake = (
+                    str(payload.get("status") or "") == "queued"
+                    or (
+                        isinstance(pending, dict)
+                        and str(pending.get("status") or "") == "queued"
+                    )
+                )
+                if should_wake:
+                    try:
+                        _launch_job_thread(job_id)
+                    except Exception as exc:
+                        wake_error = str(exc)
     # Runtime diagnostics are response-only. Persisting a stale whole payload
     # here used to erase publication/rollback fields written concurrently.
     payload["runtimeCheck"] = {
