@@ -51,14 +51,62 @@ def test_tencent_release_upload_resumes_and_never_falls_back() -> None:
 
     assert "Upload complete release archive without fallback" in workflow
     assert "fallback to sparse" not in workflow
+    assert "timeout-minutes: 240" in workflow
+    assert "cancel-in-progress: false" in workflow
     assert 'remote_checksum="${remote_temp}.sha256"' in workflow
+    assert 'remote_lock="${remote_temp}.lock"' in workflow
+    assert 'remote_temp="${remote_archive}.uploading.v2"' in workflow
     assert 'tail -c "+$((remote_size + 1))" "$archive"' in workflow
+    assert 'head -c "$remaining_bytes"' in workflow
+    assert "flock -w 270 9" in workflow
+    assert "oflag=seek_bytes conv=notrunc" in workflow
+    assert "cat >> '$remote_temp'" not in workflow
+    assert "idle_timeout_seconds=1800" in workflow
+    assert "last_progress_at" in workflow
+    assert "local remote_output" in workflow
+    assert 'printf \'%s\' "$remote_output"' in workflow
+    assert "while true; do" in workflow
+    assert "seq 1 120" not in workflow
+    assert "five consecutive attempts" not in workflow
     assert "Resumable upload attempt" in workflow
     assert "split -b 8M" not in workflow
     assert "sha256sum '$remote_temp'" in workflow
     assert workflow.index("sha256sum '$remote_temp'") < workflow.rindex(
         'echo "remote-archive=$remote_archive"',
     )
+
+
+def test_tencent_release_upload_replaces_unsafe_scratch_without_overwriting_final() -> None:
+    workflow = (REPO_ROOT / ".github/workflows/production-release.yml").read_text(
+        encoding="utf-8",
+    )
+
+    assert "reset_upload_state()" in workflow
+    assert r"if [ \"\$current_size\" -gt '$archive_bytes' ]; then" in workflow
+    assert "rm -f '$remote_temp' '$remote_checksum'" in workflow
+    assert "rm -f '$remote_temp' '$remote_archive'" not in workflow
+    assert "Remote immutable archive exists with an unexpected SHA-256" in workflow
+    assert "final_sha256" in workflow
+    assert "if [ -f '$remote_archive' ]; then" in workflow
+    assert "test ! -e '$remote_archive'" in workflow
+    assert workflow.index("test ! -e '$remote_archive'") < workflow.index(
+        "mv '$remote_temp' '$remote_archive'",
+    )
+
+
+def test_www_and_intl_switch_the_shared_artifact_in_one_protected_job() -> None:
+    workflow = (REPO_ROOT / ".github/workflows/production-release.yml").read_text(
+        encoding="utf-8",
+    )
+
+    assert "\n  deploy_intl:" not in workflow
+    assert workflow.index("Validate Cloudflare deploy configuration") < workflow.index(
+        "Upload complete release archive without fallback",
+    )
+    assert workflow.index("Deploy verified release on Tencent") < workflow.index(
+        "Deploy downloaded dist to Cloudflare Pages",
+    )
+    assert "needs: [build_frontend, deploy_tencent]" in workflow
 
 
 def test_tencent_uploads_verified_archive_before_deploy_step() -> None:

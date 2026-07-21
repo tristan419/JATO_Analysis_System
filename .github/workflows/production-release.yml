@@ -19,7 +19,7 @@ permissions:
 
 concurrency:
   group: production-release-main
-  cancel-in-progress: true
+  cancel-in-progress: false
 
 env:
   FRONTEND_NODE_VERSION: "20.19.0"
@@ -122,7 +122,7 @@ jobs:
     needs: build_frontend
     environment: production
     runs-on: ubuntu-latest
-    timeout-minutes: 35
+    timeout-minutes: 240
 
     steps:
       - name: Checkout release source
@@ -156,7 +156,8 @@ jobs:
             --expected-run-id "$GITHUB_RUN_ID" \
             --expected-run-attempt "$GITHUB_RUN_ATTEMPT" \
             --github-artifact-id "$GITHUB_ARTIFACT_ID" \
-            --github-artifact-digest "$GITHUB_ARTIFACT_DIGEST"
+            --github-artifact-digest "$GITHUB_ARTIFACT_DIGEST" \
+            --materialize-dir "$RUNNER_TEMP/frontend-dist"
 
       - name: Validate Tencent deploy credentials
         id: auth
@@ -177,6 +178,17 @@ jobs:
             echo "::error::Provide either SSH_PRIVATE_KEY or SSH_PASSWORD"
             exit 1
           fi
+
+      - name: Validate Cloudflare deploy configuration
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          CLOUDFLARE_PAGES_PROJECT_NAME: ${{ vars.CLOUDFLARE_PAGES_PROJECT_NAME || secrets.CLOUDFLARE_PAGES_PROJECT_NAME }}
+        run: |
+          set -euo pipefail
+          : "${CLOUDFLARE_API_TOKEN:?Missing CLOUDFLARE_API_TOKEN}"
+          : "${CLOUDFLARE_ACCOUNT_ID:?Missing CLOUDFLARE_ACCOUNT_ID}"
+          : "${CLOUDFLARE_PAGES_PROJECT_NAME:?Missing CLOUDFLARE_PAGES_PROJECT_NAME}"
 
       - name: Package backend release with verified frontend artifact
         env:
@@ -304,11 +316,12 @@ jobs:
           set -euo pipefail
           SSH_PORT="${SSH_PORT:-22}"
           archive="$RUNNER_TEMP/JATO_deploy.tar.gz"
-          remote_archive="JATO_deploy_${GITHUB_SHA}.tar.gz"
-          remote_temp="${remote_archive}.uploading"
-          remote_checksum="${remote_temp}.sha256"
           archive_bytes="$(wc -c < "$archive" | tr -d '[:space:]')"
           archive_sha256="$(sha256sum "$archive" | awk '{print $1}')"
+          remote_archive="JATO_deploy_${GITHUB_SHA}_${archive_sha256}.tar.gz"
+          remote_temp="${remote_archive}.uploading.v2"
+          remote_checksum="${remote_temp}.sha256"
+          remote_lock="${remote_temp}.lock"
 
           ssh_options=(
             -T -p "$SSH_PORT"
@@ -316,8 +329,8 @@ jobs:
             -o UserKnownHostsFile=/dev/null
             -o ConnectTimeout=20
             -o ConnectionAttempts=2
-            -o ServerAliveInterval=10
-            -o ServerAliveCountMax=2
+            -o ServerAliveInterval=15
+            -o ServerAliveCountMax=18
             -o IPQoS=none
           )
           if [ "$AUTH_MODE" = "key" ]; then
@@ -336,9 +349,13 @@ jobs:
           run_remote() {
             local remote_command="$1"
             local remote_attempt
+            local remote_output
             for remote_attempt in 1 2 3; do
-              if timeout 120s "${ssh_command[@]}" "${ssh_options[@]}" \
-                "$ssh_target" "$remote_command"; then
+              if remote_output="$(
+                timeout 360s "${ssh_command[@]}" "${ssh_options[@]}" \
+                  "$ssh_target" "$remote_command"
+              )"; then
+                printf '%s' "$remote_output"
                 return 0
               fi
               echo "::warning::Remote command attempt ${remote_attempt}/3 failed" >&2
@@ -346,6 +363,23 @@ jobs:
             done
             return 1
           }
+
+          read_remote_size() {
+            run_remote \
+              "set -eu; \
+               exec 9>'$remote_lock'; \
+               flock -w 300 9; \
+               if [ -f '$remote_temp' ]; then \
+                 wc -c < '$remote_temp' | tr -d '[:space:]'; \
+               else \
+                 printf '0'; \
+               fi"
+          }
+
+          run_remote \
+            "command -v flock >/dev/null && \
+             command -v dd >/dev/null && \
+             command -v sha256sum >/dev/null"
 
           remote_archive_sha="$(
             run_remote \
@@ -355,24 +389,43 @@ jobs:
             echo "remote-archive=$remote_archive" >> "$GITHUB_OUTPUT"
             exit 0
           fi
+          if [ -n "$remote_archive_sha" ]; then
+            echo "::error::Remote immutable archive exists with an unexpected SHA-256"
+            exit 1
+          fi
 
           run_remote \
-            "saved_checksum=''; \
-             if [ -f '$remote_checksum' ]; then saved_checksum=\$(cat '$remote_checksum'); fi; \
-             if [ \"\$saved_checksum\" != '$archive_sha256' ]; then \
-               rm -f '$remote_temp' '$remote_archive' '$remote_checksum'; \
+            "set -eu; \
+             exec 9>'$remote_lock'; \
+             flock -w 300 9; \
+             reset_upload_state() { \
+               rm -f '$remote_temp' '$remote_checksum'; \
                : > '$remote_temp'; \
                printf '%s\n' '$archive_sha256' > '$remote_checksum'; \
-             elif [ ! -f '$remote_temp' ]; then \
-               : > '$remote_temp'; \
+             }; \
+             saved_checksum=''; \
+             if [ -f '$remote_checksum' ]; then saved_checksum=\$(cat '$remote_checksum'); fi; \
+             if [ \"\$saved_checksum\" != '$archive_sha256' ] || [ ! -f '$remote_temp' ]; then \
+               reset_upload_state; \
+             else \
+               current_size=\$(wc -c < '$remote_temp' | tr -d '[:space:]'); \
+               if [ \"\$current_size\" -gt '$archive_bytes' ]; then \
+                 reset_upload_state; \
+               elif [ \"\$current_size\" -eq '$archive_bytes' ]; then \
+                 current_sha256=\$(sha256sum '$remote_temp' | awk '{print \$1}'); \
+                 if [ \"\$current_sha256\" != '$archive_sha256' ]; then \
+                   reset_upload_state; \
+                 fi; \
+               fi; \
              fi"
 
-          stalled_attempts=0
-          for upload_attempt in $(seq 1 120); do
-            remote_size="$(
-              run_remote \
-                "if [ -f '$remote_temp' ]; then wc -c < '$remote_temp' | tr -d '[:space:]'; else printf '0'; fi"
-            )"
+          last_progress_at="$(date +%s)"
+          last_progress_bytes=-1
+          idle_timeout_seconds=1800
+          upload_attempt=0
+          while true; do
+            upload_attempt=$((upload_attempt + 1))
+            remote_size="$(read_remote_size)"
             case "$remote_size" in
               ''|*[!0-9]*)
                 echo "::error::Invalid remote archive size: $remote_size"
@@ -386,44 +439,73 @@ jobs:
               echo "::error::Remote partial archive is larger than the local release"
               exit 1
             fi
+            if [ "$remote_size" -gt "$last_progress_bytes" ]; then
+              last_progress_at="$(date +%s)"
+              last_progress_bytes="$remote_size"
+            fi
 
-            echo "Resumable upload attempt ${upload_attempt}/120: ${remote_size}/${archive_bytes} bytes"
+            echo "Resumable upload attempt ${upload_attempt}: ${remote_size}/${archive_bytes} bytes"
+            remaining_bytes=$((archive_bytes - remote_size))
             if tail -c "+$((remote_size + 1))" "$archive" \
-              | timeout 180s "${ssh_command[@]}" "${ssh_options[@]}" \
-                "$ssh_target" "cat >> '$remote_temp'"; then
+              | head -c "$remaining_bytes" \
+              | timeout 300s "${ssh_command[@]}" "${ssh_options[@]}" \
+                "$ssh_target" \
+                "set -eu; \
+                 exec 9>'$remote_lock'; \
+                 flock -w 270 9; \
+                 current_size=\$(wc -c < '$remote_temp' | tr -d '[:space:]'); \
+                 test \"\$current_size\" = '$remote_size'; \
+                 dd of='$remote_temp' bs=64K seek='$remote_size' \
+                   oflag=seek_bytes conv=notrunc status=none"; then
               upload_status=0
             else
               upload_status=$?
               echo "::warning::Upload stream ended with status $upload_status; checking remote progress"
             fi
 
-            next_remote_size="$(
-              run_remote \
-                "if [ -f '$remote_temp' ]; then wc -c < '$remote_temp' | tr -d '[:space:]'; else printf '0'; fi"
-            )"
+            next_remote_size="$(read_remote_size)"
             case "$next_remote_size" in
               ''|*[!0-9]*)
                 echo "::error::Invalid remote archive size after upload: $next_remote_size"
                 exit 1
                 ;;
             esac
+            if [ "$next_remote_size" -gt "$archive_bytes" ]; then
+              echo "::error::Remote positional upload exceeded the local release size"
+              exit 1
+            fi
             if [ "$next_remote_size" -gt "$remote_size" ]; then
-              stalled_attempts=0
+              last_progress_at="$(date +%s)"
+              last_progress_bytes="$next_remote_size"
             else
-              stalled_attempts=$((stalled_attempts + 1))
-              if [ "$stalled_attempts" -ge 5 ]; then
-                echo "::error::Release upload made no progress in five consecutive attempts"
+              now="$(date +%s)"
+              idle_seconds=$((now - last_progress_at))
+              echo "::warning::Release upload idle for ${idle_seconds}s at ${next_remote_size}/${archive_bytes} bytes"
+              if [ "$idle_seconds" -ge "$idle_timeout_seconds" ]; then
+                echo "::error::Release upload made no byte progress for ${idle_seconds}s"
                 exit 1
               fi
-              sleep $((stalled_attempts * 10))
+              sleep 15
             fi
           done
 
           run_remote \
-            "remote_size=\$(wc -c < '$remote_temp' | tr -d '[:space:]'); \
+            "set -eu; \
+             exec 9>'$remote_lock'; \
+             flock -w 300 9; \
+             if [ -f '$remote_archive' ]; then \
+               final_size=\$(wc -c < '$remote_archive' | tr -d '[:space:]'); \
+               test \"\$final_size\" = '$archive_bytes'; \
+               final_sha256=\$(sha256sum '$remote_archive' | awk '{print \$1}'); \
+               test \"\$final_sha256\" = '$archive_sha256'; \
+               rm -f '$remote_checksum'; \
+               exit 0; \
+             fi; \
+             remote_size=\$(wc -c < '$remote_temp' | tr -d '[:space:]'); \
              test \"\$remote_size\" = '$archive_bytes'; \
              remote_sha256=\$(sha256sum '$remote_temp' | awk '{print \$1}'); \
              test \"\$remote_sha256\" = '$archive_sha256'; \
+             test ! -e '$remote_archive'; \
              mv '$remote_temp' '$remote_archive'; \
              rm -f '$remote_checksum'"
           echo "remote-archive=$remote_archive" >> "$GITHUB_OUTPUT"
@@ -540,59 +622,6 @@ jobs:
             --delay-seconds 10 \
             "${origin_args[@]}"
 
-  deploy_intl:
-    if: ${{ github.ref == 'refs/heads/main' }}
-    needs: build_frontend
-    environment: production
-    runs-on: ubuntu-latest
-    timeout-minutes: 20
-
-    steps:
-      - name: Checkout release source
-        uses: actions/checkout@v5
-
-      - name: Download immutable frontend artifact by id
-        uses: actions/download-artifact@v5
-        with:
-          artifact-ids: ${{ needs.build_frontend.outputs.github_artifact_id }}
-          path: ${{ runner.temp }}/frontend-release
-
-      - name: Verify and materialize frontend artifact before Cloudflare deployment
-        env:
-          ARTIFACT_NAME: ${{ needs.build_frontend.outputs.artifact_name }}
-          ARTIFACT_IDENTITY: ${{ needs.build_frontend.outputs.artifact_identity }}
-          ARTIFACT_CHECKSUM: ${{ needs.build_frontend.outputs.artifact_checksum }}
-          GITHUB_ARTIFACT_ID: ${{ needs.build_frontend.outputs.github_artifact_id }}
-          GITHUB_ARTIFACT_DIGEST: ${{ needs.build_frontend.outputs.github_artifact_digest }}
-          FRONTEND_BUILD_ID: ${{ needs.build_frontend.outputs.frontend_build_id }}
-          NODE_VERSION: ${{ needs.build_frontend.outputs.node_version }}
-        run: |
-          set -euo pipefail
-          python3 03_Scripts/deploy/frontend_release_artifact.py verify \
-            --release-dir "$RUNNER_TEMP/frontend-release" \
-            --expected-github-sha "$GITHUB_SHA" \
-            --expected-artifact-name "$ARTIFACT_NAME" \
-            --expected-artifact-identity "$ARTIFACT_IDENTITY" \
-            --expected-artifact-checksum "$ARTIFACT_CHECKSUM" \
-            --expected-build-id "$FRONTEND_BUILD_ID" \
-            --expected-node-version "$NODE_VERSION" \
-            --expected-run-id "$GITHUB_RUN_ID" \
-            --expected-run-attempt "$GITHUB_RUN_ATTEMPT" \
-            --github-artifact-id "$GITHUB_ARTIFACT_ID" \
-            --github-artifact-digest "$GITHUB_ARTIFACT_DIGEST" \
-            --materialize-dir "$RUNNER_TEMP/frontend-dist"
-
-      - name: Validate Cloudflare deploy configuration
-        env:
-          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-          CLOUDFLARE_PAGES_PROJECT_NAME: ${{ vars.CLOUDFLARE_PAGES_PROJECT_NAME || secrets.CLOUDFLARE_PAGES_PROJECT_NAME }}
-        run: |
-          set -euo pipefail
-          : "${CLOUDFLARE_API_TOKEN:?Missing CLOUDFLARE_API_TOKEN}"
-          : "${CLOUDFLARE_ACCOUNT_ID:?Missing CLOUDFLARE_ACCOUNT_ID}"
-          : "${CLOUDFLARE_PAGES_PROJECT_NAME:?Missing CLOUDFLARE_PAGES_PROJECT_NAME}"
-
       - name: Deploy downloaded dist to Cloudflare Pages
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
@@ -637,7 +666,7 @@ jobs:
 
   audit_frontend_parity:
     if: ${{ github.ref == 'refs/heads/main' }}
-    needs: [build_frontend, deploy_tencent, deploy_intl]
+    needs: [build_frontend, deploy_tencent]
     runs-on: ubuntu-latest
     timeout-minutes: 10
 

@@ -25,7 +25,7 @@ PREWARM_CONDITION = " ".join(
     )
 )
 BUILD_JOB = "build_frontend"
-DEPLOY_JOBS = ("deploy_tencent", "deploy_intl")
+DEPLOY_JOBS = ("deploy_tencent",)
 REQUIRED_BUILD_OUTPUTS = {
     "artifact_name",
     "artifact_identity",
@@ -111,7 +111,6 @@ def assert_main_only_production_workflow(workflow: Mapping[str, Any]) -> None:
     expected_jobs = {
         BUILD_JOB,
         "deploy_tencent",
-        "deploy_intl",
         "audit_frontend_parity",
     }
     if set(jobs) != expected_jobs:
@@ -173,8 +172,12 @@ def assert_single_build_and_strict_outputs(workflow: Mapping[str, Any]) -> None:
 def assert_deploy_jobs_share_one_artifact(workflow: Mapping[str, Any]) -> None:
     for name in DEPLOY_JOBS:
         deploy_job = job(workflow, name)
-        if deploy_job.get("needs") != BUILD_JOB:
-            raise AssertionError(f"{name} must directly need {BUILD_JOB}")
+        expected_needs: Any = BUILD_JOB
+        if deploy_job.get("needs") != expected_needs:
+            raise AssertionError(
+                f"{name} needs mismatch: expected {expected_needs!r}, "
+                f"found {deploy_job.get('needs')!r}"
+            )
         deploy_steps = steps(deploy_job, name)
         downloads = [
             step
@@ -211,16 +214,100 @@ def assert_deploy_jobs_share_one_artifact(workflow: Mapping[str, Any]) -> None:
 
     tencent_steps = steps(job(workflow, "deploy_tencent"), "deploy_tencent")
     tencent_names = [str(step.get("name") or "") for step in tencent_steps]
+    cloudflare_preflight = tencent_names.index("Validate Cloudflare deploy configuration")
+    if cloudflare_preflight > tencent_names.index(
+        "Upload complete release archive without fallback"
+    ):
+        raise AssertionError("Cloudflare configuration must fail before any production mutation")
     if tencent_names.index("Verify frontend artifact before Tencent deployment") > tencent_names.index(
         "Deploy verified release on Tencent"
     ):
         raise AssertionError("Tencent must verify the artifact before deployment")
-    intl_steps = steps(job(workflow, "deploy_intl"), "deploy_intl")
-    intl_names = [str(step.get("name") or "") for step in intl_steps]
-    if intl_names.index(
-        "Verify and materialize frontend artifact before Cloudflare deployment"
-    ) > intl_names.index("Deploy downloaded dist to Cloudflare Pages"):
-        raise AssertionError("Cloudflare must verify the artifact before deployment")
+    verify_step = step_by_name(
+        tencent_steps,
+        "Verify frontend artifact before Tencent deployment",
+    )
+    if '--materialize-dir "$RUNNER_TEMP/frontend-dist"' not in str(
+        verify_step.get("run") or ""
+    ):
+        raise AssertionError("the shared artifact must be materialized before either deployment")
+    cloudflare_index = tencent_names.index("Deploy downloaded dist to Cloudflare Pages")
+    if tencent_names.index("Deploy verified release on Tencent") > cloudflare_index:
+        raise AssertionError("Tencent must succeed before Cloudflare switches the shared artifact")
+    if cloudflare_index > tencent_names.index("Verify intl public release provenance"):
+        raise AssertionError("Cloudflare deployment must be verified before release completion")
+
+    audit_needs = job(workflow, "audit_frontend_parity").get("needs")
+    if audit_needs != [BUILD_JOB, "deploy_tencent"]:
+        raise AssertionError("parity audit must wait for the single production deployment job")
+
+
+def assert_tencent_resumable_upload_contract(workflow: Mapping[str, Any]) -> None:
+    concurrency = mapping(workflow.get("concurrency"), "production concurrency")
+    if concurrency.get("group") != "production-release-main":
+        raise AssertionError("production releases must share one serialization group")
+    if concurrency.get("cancel-in-progress") != "false":
+        raise AssertionError("an active production release must not be cancelled by a newer push")
+
+    tencent = job(workflow, "deploy_tencent")
+    try:
+        timeout_minutes = int(str(tencent.get("timeout-minutes") or "0"))
+    except ValueError as exc:
+        raise AssertionError("deploy_tencent timeout-minutes must be numeric") from exc
+    if timeout_minutes < 120:
+        raise AssertionError("deploy_tencent needs at least 120 minutes for a slow resumable upload")
+
+    upload_steps = [
+        step
+        for step in steps(tencent, "deploy_tencent")
+        if step.get("name") == "Upload complete release archive without fallback"
+    ]
+    if len(upload_steps) != 1:
+        raise AssertionError("Tencent must have exactly one fail-closed archive upload step")
+    upload = str(upload_steps[0].get("run") or "")
+    required_tokens = (
+        'remote_archive="JATO_deploy_${GITHUB_SHA}_${archive_sha256}.tar.gz"',
+        'remote_temp="${remote_archive}.uploading.v2"',
+        'remote_lock="${remote_temp}.lock"',
+        "command -v flock",
+        "local remote_output",
+        'printf \'%s\' "$remote_output"',
+        "reset_upload_state()",
+        r"if [ \"\$current_size\" -gt '$archive_bytes' ]; then",
+        "rm -f '$remote_temp' '$remote_checksum'",
+        'head -c "$remaining_bytes"',
+        "flock -w 270 9",
+        "oflag=seek_bytes conv=notrunc",
+        "idle_timeout_seconds=1800",
+        "while true; do",
+        "last_progress_at",
+        "Remote immutable archive exists with an unexpected SHA-256",
+        "if [ -f '$remote_archive' ]; then",
+        "final_sha256",
+        "test ! -e '$remote_archive'",
+        "sha256sum '$remote_temp'",
+        "mv '$remote_temp' '$remote_archive'",
+    )
+    missing = [token for token in required_tokens if token not in upload]
+    if missing:
+        raise AssertionError(f"Tencent resumable upload contract is incomplete: {missing}")
+    if "cat >> '$remote_temp'" in upload:
+        raise AssertionError("append-based resume is unsafe after an SSH timeout")
+    if "five consecutive attempts" in upload:
+        raise AssertionError("attempt-count stalls must not bypass the idle-time budget")
+    if "seq 1 120" in upload or "${upload_attempt}/120" in upload:
+        raise AssertionError("attempt counts must not bypass the idle-time and job budgets")
+    if "fallback to sparse" in upload or "split -b 8M" in upload:
+        raise AssertionError("Tencent upload must not retain a sparse or fixed-chunk fallback")
+
+    size_check = upload.rfind(r"test \"\$remote_size\" = '$archive_bytes'")
+    sha_check = upload.rfind(r"test \"\$remote_sha256\" = '$archive_sha256'")
+    no_overwrite = upload.rfind("test ! -e '$remote_archive'")
+    atomic_move = upload.rfind("mv '$remote_temp' '$remote_archive'")
+    if not (0 <= size_check < sha_check < no_overwrite < atomic_move):
+        raise AssertionError(
+            "Tencent finalization must verify exact size and SHA before the atomic move"
+        )
 
 
 def assert_server_consumes_only_prebuilt_dist() -> None:
@@ -296,6 +383,7 @@ def main() -> None:
     assert_main_only_production_workflow(production)
     assert_single_build_and_strict_outputs(production)
     assert_deploy_jobs_share_one_artifact(production)
+    assert_tencent_resumable_upload_contract(production)
     assert_server_consumes_only_prebuilt_dist()
     assert_prewarm_contract(production_name)
     print(
