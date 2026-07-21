@@ -493,6 +493,14 @@ def test_committed_full_bundle_resume_only_rebuilds_review(
     queued = _resume(job_id=job_id, request_id=REQUEST_ID, seals=seals)
     operation_id = queued["pendingOperation"]["operationId"]
     assert queued["pendingOperation"]["resumeMode"] == "review_only"
+    queued_state = jato_monthly_update_service._load_job_state(job_id)
+    queued_state["historicalReclassificationResolution"][
+        "reviewBuildError"
+    ] = "old review failure"
+    queued_state["historicalReclassificationResolution"][
+        "reviewBuildFailedAt"
+    ] = "2026-07-21T00:00:00+00:00"
+    jato_monthly_update_service._persist_job_state(queued_state)
 
     monkeypatch.setattr(
         jato_monthly_update_service,
@@ -544,8 +552,92 @@ def test_committed_full_bundle_resume_only_rebuilds_review(
     assert persisted["historicalReclassificationResolution"][
         "resolvedCandidateFingerprint"
     ] == RESOLVED_CANDIDATE_FINGERPRINT
+    assert "reviewBuildError" not in (
+        persisted["historicalReclassificationResolution"]
+    )
+    assert "reviewBuildFailedAt" not in (
+        persisted["historicalReclassificationResolution"]
+    )
     assert len(validation_calls) == 1
     assert review_calls == [(job_id, operation_id, ACTIVE_FINGERPRINT)]
+
+
+def test_review_memory_failure_preserves_committed_bundle_and_resolution(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    project_root, job_root = _configure_project(tmp_path, monkeypatch)
+    job_id = "jato-smart-merge-review-memory-retry"
+    _state, seals = _prepare_failed_smart_merge_job(
+        project_root=project_root,
+        job_root=job_root,
+        job_id=job_id,
+        candidate_scope="full_smart_merge",
+    )
+    active_parquet = (
+        project_root / "04_Processed_data" / "jato_full_archive.parquet"
+    )
+    active_parquet.parent.mkdir(parents=True, exist_ok=True)
+    active_parquet.write_text("active", encoding="utf-8")
+    launches: list[str] = []
+    _patch_resume_queue_runtime(monkeypatch, launches=launches)
+    queued = _resume(job_id=job_id, request_id=REQUEST_ID, seals=seals)
+    assert queued["pendingOperation"]["resumeMode"] == "review_only"
+
+    monkeypatch.setattr(
+        jato_monthly_update_service,
+        "_validate_candidate_full_bundle",
+        lambda **_kwargs: {},
+    )
+    monkeypatch.setattr(
+        jato_monthly_update_service,
+        "_release_worker_memory_before_review",
+        lambda **_kwargs: None,
+    )
+    monkeypatch.setattr(
+        jato_monthly_update_service,
+        "_cache_jato_monthly_update_review",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            MemoryError("Unable to allocate 14.8 MiB")
+        ),
+    )
+    monkeypatch.setattr(
+        jato_monthly_update_service,
+        "_smart_merge_parquet_streaming",
+        lambda **_kwargs: (_ for _ in ()).throw(
+            AssertionError("committed bundle must not be merged again")
+        ),
+    )
+
+    jato_monthly_update_service._run_active_bundle_operation(
+        job_id=job_id,
+        operation_type="smart_merge_resume",
+    )
+
+    persisted = jato_monthly_update_service._load_job_state(job_id)
+    resolution = persisted["historicalReclassificationResolution"]
+    assert persisted["status"] == "failed"
+    assert persisted["phase"] == "smart_merge_failed"
+    assert persisted["artifacts"]["candidateScope"] == "full_smart_merge"
+    assert resolution["status"] == "resolved"
+    assert resolution["resolvedCandidateFingerprint"] == (
+        RESOLVED_CANDIDATE_FINGERPRINT
+    )
+    assert resolution["decisions"] == [
+        {"country": "德国", "decision": "keep_active"}
+    ]
+    digest = persisted["failureDigest"]
+    assert digest["code"] == "MEMORY_LIMIT_EXCEEDED"
+    assert digest["phase"] == "building_review"
+    assert digest["nextAction"] == "resume_smart_merge"
+    assert persisted["pendingOperation"]["status"] == "failed"
+    assert persisted["pendingOperation"]["failureDigest"] == digest
+    assert (
+        jato_monthly_update_service._smart_merge_recovery_view(persisted)[
+            "canResume"
+        ]
+        is True
+    )
 
 
 def test_smart_merge_resume_route_is_admin_only_and_forwards_all_seals(

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import gc
 import hashlib
 import json
 import os
@@ -50,7 +51,7 @@ STATE_FILENAME = "job_state.json"
 LOG_FILENAME = "job.log"
 UPLOAD_STATE_FILENAME = "upload_state.json"
 REVIEW_BUNDLE_FILENAME = "review_bundle.json"
-REVIEW_BUNDLE_SCHEMA_VERSION = 2
+REVIEW_BUNDLE_SCHEMA_VERSION = 3
 CANDIDATE_ARTIFACT_STAT_SIGNATURE_VERSION = 2
 CANDIDATE_ARTIFACT_FIELDS = (
     ("parquet", "stagingOutputPath"),
@@ -101,6 +102,7 @@ BASELINE_EXPORT_BATCH_ROWS = 2_048
 SMART_MERGE_SCAN_BATCH_ROWS = 4_096
 SMART_MERGE_HASH_BUCKET_COUNT = 128
 SMART_MERGE_MAX_BUCKET_ROWS = 16_384
+MONTHLY_WORKER_DEFAULT_MEMORY_LIMIT_BYTES = 6 * 1024 * 1024 * 1024
 MONTH_PATTERN = re.compile(r"(20\d{2})[-./]?(0?[1-9]|1[0-2])")
 CODE_BLOCK_PATTERN = re.compile(r"```bash\s*(.*?)\s*```", re.DOTALL)
 ALLOWED_UPLOAD_EXTENSIONS = {".xlsx", ".xlsm", ".xls"}
@@ -435,11 +437,19 @@ def _failure_digest_from_exception(
         "arrowmemoryerror",
         "out of memory",
         "cannot allocate memory",
+        "unable to allocate",
         "realloc of size",
         "memory limit",
+        "std::bad_alloc",
     )
     memory_detail = f"{type(exc).__name__}: {message}".casefold()
-    if any(marker in memory_detail for marker in memory_markers):
+    if isinstance(exc, MemoryError) or any(
+        marker in memory_detail for marker in memory_markers
+    ):
+        smart_merge_failure = (
+            phase == "building_review"
+            or phase.startswith("smart_merge")
+        )
         return {
             "code": "MEMORY_LIMIT_EXCEEDED",
             "category": "resource",
@@ -447,11 +457,19 @@ def _failure_digest_from_exception(
             "retryable": True,
             "message": message,
             "sourceFeedback": (
-                "这不是已证明的数据错误；任务超过了当前 worker 的"
-                "内存边界。请保留 Candidate 和决策，仅续跑失败阶段。"
+                "无需重新洗数或重新上传；这不是源数据错误。"
+                + (
+                    "Candidate 和决策已保留，请仅续跑 Smart Merge。"
+                    if smart_merge_failure
+                    else "请保留 Candidate 和决策，仅续跑失败阶段。"
+                )
             ),
             "technicalDetail": type(exc).__name__,
-            "nextAction": "resume_failed_stage",
+            "nextAction": (
+                "resume_smart_merge"
+                if smart_merge_failure
+                else "resume_failed_stage"
+            ),
         }
     return {
         "code": "JOB_STEP_FAILED",
@@ -2808,6 +2826,28 @@ def _unconfirmed_sc011_reclassification_candidates(
     return candidates, unpaired
 
 
+def _historical_sales_frame(
+    frame: pd.DataFrame,
+    historical_months: list[str],
+) -> pd.DataFrame:
+    """Normalize sales columns without materializing a second 2-D block.
+
+    Clean numeric columns may share their buffers with ``frame``. Callers
+    must therefore treat the returned frame as read-only.
+    """
+    numeric_columns: dict[str, pd.Series] = {}
+    for month in historical_months:
+        numeric = pd.to_numeric(frame[month], errors="coerce")
+        if bool(numeric.isna().any()):
+            numeric = numeric.fillna(0)
+        numeric_columns[month] = numeric
+    return pd.DataFrame(
+        numeric_columns,
+        index=frame.index,
+        copy=False,
+    )
+
+
 def _single_country_historical_sales_stability(
     *,
     country: str,
@@ -2828,8 +2868,14 @@ def _single_country_historical_sales_stability(
     if missing:
         return {"status": "fail", "reason": "candidate_missing_historical_months", "missingMonths": missing}
 
-    active_sales = active_frame[historical_months].apply(pd.to_numeric, errors="coerce").fillna(0)
-    candidate_sales = candidate_frame[historical_months].apply(pd.to_numeric, errors="coerce").fillna(0)
+    active_sales = _historical_sales_frame(
+        active_frame,
+        historical_months,
+    )
+    candidate_sales = _historical_sales_frame(
+        candidate_frame,
+        historical_months,
+    )
     country_samples: list[dict[str, Any]] = []
     make_samples: list[dict[str, Any]] = []
 
@@ -4140,9 +4186,16 @@ def _build_historical_reclassification_report_from_paths(
         current_countries=reports,
     )
     resolution = _historical_reclassification_resolution(payload)
+    artifacts = payload.get("artifacts")
+    candidate_scope = (
+        str(artifacts.get("candidateScope") or "")
+        if isinstance(artifacts, dict)
+        else ""
+    )
     if (
         report.get("status") == "resolved"
         and isinstance(resolution, dict)
+        and candidate_scope == "full_smart_merge"
     ):
         decisions = _validated_historical_reclassification_resolution(
             resolution
@@ -4158,27 +4211,19 @@ def _build_historical_reclassification_report_from_paths(
                 continue
             country = str(country_report.get("country") or "").strip()
             country_key = country.casefold()
-            if decisions.get(country_key) != "keep_active":
-                continue
             current_stability = current_stability_by_key.get(
                 country_key,
                 {"status": "unavailable", "reason": "country_not_checked"},
             )
-            validation.append(
-                {
-                    "country": country,
-                    "decision": "keep_active",
-                    "status": (
-                        "pass"
-                        if current_stability.get("status") == "pass"
-                        else "fail"
-                    ),
-                    "currentStabilityStatus": current_stability.get(
-                        "status"
-                    ),
-                    "reason": current_stability.get("reason"),
-                }
+            validation_entry = (
+                _historical_keep_active_resolution_validation(
+                    country=country,
+                    decision=decisions.get(country_key),
+                    historical_stability=current_stability,
+                )
             )
+            if validation_entry is not None:
+                validation.append(validation_entry)
         report["resolutionValidation"] = validation
     report["unavailableCountries"] = unavailable_countries[:10]
     if len(unavailable_countries) > 10:
@@ -7114,6 +7159,98 @@ def _resolved_historical_reclassification_decision(
     ).get(country.strip().casefold())
 
 
+def _historical_keep_active_resolution_validation(
+    *,
+    country: str,
+    decision: str | None,
+    historical_stability: dict[str, Any],
+) -> dict[str, Any] | None:
+    """Bind one keep-active decision to this full candidate's history check."""
+    if decision != "keep_active":
+        return None
+    current_status = str(
+        historical_stability.get("status") or "unavailable"
+    )
+    return {
+        "country": country,
+        "decision": "keep_active",
+        "status": "pass" if current_status == "pass" else "fail",
+        "currentStabilityStatus": current_status,
+        "reason": historical_stability.get("reason"),
+    }
+
+
+def _exact_partial_keep_active_resolution_validation(
+    *,
+    payload: dict[str, Any],
+    raw_validation: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Return one validation per keep-active decision or fail closed."""
+    resolution = _historical_reclassification_resolution(payload)
+    if not isinstance(resolution, dict):
+        return []
+    validated_decisions = (
+        _validated_historical_reclassification_resolution(resolution)
+    )
+    raw_decisions = resolution.get("decisions")
+    expected: list[tuple[str, str]] = []
+    for item in (
+        raw_decisions if isinstance(raw_decisions, list) else []
+    ):
+        if not isinstance(item, dict):
+            continue
+        country = str(item.get("country") or "").strip()
+        country_key = country.casefold()
+        if (
+            country_key
+            and validated_decisions.get(country_key) == "keep_active"
+        ):
+            expected.append((country_key, country))
+
+    validation_by_key: dict[str, dict[str, Any]] = {}
+    duplicate_countries: list[str] = []
+    invalid_entries = False
+    for item in raw_validation:
+        country = str(item.get("country") or "").strip()
+        country_key = country.casefold()
+        if not country_key or item.get("decision") != "keep_active":
+            invalid_entries = True
+            continue
+        if country_key in validation_by_key:
+            duplicate_countries.append(country)
+            continue
+        validation_by_key[country_key] = item
+
+    expected_by_key = dict(expected)
+    missing_keys = set(expected_by_key) - set(validation_by_key)
+    extra_keys = set(validation_by_key) - set(expected_by_key)
+    if (
+        invalid_entries
+        or duplicate_countries
+        or missing_keys
+        or extra_keys
+    ):
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "blockerType": (
+                    "historical_keep_active_validation_failed"
+                ),
+                "message": (
+                    "完整 Candidate 的 keep_active 逐国复核证明不完整，"
+                    "拒绝生成可批准的 Review。"
+                ),
+                "missingCountries": [
+                    expected_by_key[key]
+                    for key in sorted(missing_keys)
+                ],
+                "duplicateCountries": sorted(duplicate_countries),
+                "extraCountries": sorted(extra_keys),
+            },
+        )
+    return [validation_by_key[key] for key, _country in expected]
+
+
 def _build_single_country_review(
     payload: dict[str, Any],
     *,
@@ -7186,6 +7323,22 @@ def _build_single_country_review(
             country,
         )
     )
+    candidate_scope = str(artifacts.get("candidateScope") or "")
+    if (
+        historical_reclassification_report.get("status") == "resolved"
+        and candidate_scope == "full_smart_merge"
+    ):
+        resolution_validation = (
+            _historical_keep_active_resolution_validation(
+                country=country,
+                decision=resolved_reclassification_decision,
+                historical_stability=historical_stability,
+            )
+        )
+        if resolution_validation is not None:
+            historical_reclassification_report[
+                "resolutionValidation"
+            ] = [resolution_validation]
     reclassification_resolution = (
         _historical_reclassification_resolution(payload)
     )
@@ -7486,6 +7639,7 @@ def _build_partial_country_review(
     if not isinstance(partition_check, dict):
         partition_check = {"status": "unavailable"}
     current_reclassification_countries: list[dict[str, Any]] = []
+    resolution_validation: list[dict[str, Any]] = []
     seen_reclassification_countries: set[str] = set()
     for review in country_reviews:
         report = review.get("historicalReclassificationReport")
@@ -7503,12 +7657,35 @@ def _build_partial_country_review(
                 continue
             seen_reclassification_countries.add(country_key)
             current_reclassification_countries.append(item)
+        raw_resolution_validation = (
+            report.get("resolutionValidation")
+            if isinstance(report, dict)
+            and isinstance(report.get("resolutionValidation"), list)
+            else []
+        )
+        resolution_validation.extend(
+            dict(item)
+            for item in raw_resolution_validation
+            if isinstance(item, dict)
+        )
     historical_reclassification_report = (
         _build_historical_reclassification_report(
             payload=payload,
             current_countries=current_reclassification_countries,
         )
     )
+    if (
+        historical_reclassification_report.get("status") == "resolved"
+        and isinstance(artifacts, dict)
+        and str(artifacts.get("candidateScope") or "")
+        == "full_smart_merge"
+    ):
+        historical_reclassification_report[
+            "resolutionValidation"
+        ] = _exact_partial_keep_active_resolution_validation(
+            payload=payload,
+            raw_validation=resolution_validation,
+        )
     return {
         "jobId": str(payload.get("jobId") or ""),
         "reviewDir": None,
@@ -8297,6 +8474,19 @@ def _cache_jato_monthly_update_review(
 
 
 def _review_refresh_failure_digest(exc: BaseException) -> dict[str, Any]:
+    resource_digest = _failure_digest_from_exception(
+        phase="review_refresh",
+        exc=exc,
+    )
+    if resource_digest.get("code") == "MEMORY_LIMIT_EXCEEDED":
+        return {
+            **resource_digest,
+            "sourceFeedback": (
+                "无需重新洗数或重新上传；Candidate 和 active 均未修改。"
+                "请仅重试刷新 Review。"
+            ),
+            "nextAction": "retry_review_refresh",
+        }
     detail: Any = exc.detail if isinstance(exc, HTTPException) else None
     message = (
         str(detail.get("message") or detail)
@@ -12237,8 +12427,13 @@ def _launch_job_thread(job_id: str) -> None:
     env = dict(os.environ)
     env.setdefault(
         "APP_JATO_MONTHLY_WORKER_MEMORY_LIMIT_BYTES",
-        str(4 * 1024 * 1024 * 1024),
+        str(MONTHLY_WORKER_DEFAULT_MEMORY_LIMIT_BYTES),
     )
+    env["MALLOC_ARENA_MAX"] = "2"
+    env["OMP_NUM_THREADS"] = "1"
+    env["OPENBLAS_NUM_THREADS"] = "1"
+    env["MKL_NUM_THREADS"] = "1"
+    env["NUMEXPR_NUM_THREADS"] = "1"
     subprocess.Popen(
         [sys.executable, str(MONTHLY_WORKER_SCRIPT_PATH), "--drain"],
         cwd=PROJECT_ROOT,
@@ -16693,6 +16888,41 @@ def _cache_smart_merge_review(
     return _cache_jato_monthly_update_review(job_id, **review_kwargs)
 
 
+def _release_worker_memory_before_review(*, log_path: Path) -> None:
+    """Best-effort release of merge allocations before Pandas Review work."""
+    notes: list[str] = []
+    gc.collect()
+    try:
+        import pyarrow as pa
+
+        pa.default_memory_pool().release_unused()
+        notes.append("arrow_pool=released")
+    except Exception as exc:  # pragma: no cover - platform-dependent fallback
+        notes.append(f"arrow_pool={type(exc).__name__}")
+    if sys.platform.startswith("linux"):
+        try:
+            import ctypes
+
+            malloc_trim = getattr(ctypes.CDLL(None), "malloc_trim", None)
+            if malloc_trim is not None:
+                malloc_trim.argtypes = [ctypes.c_size_t]
+                malloc_trim.restype = ctypes.c_int
+                notes.append(f"malloc_trim={int(malloc_trim(0))}")
+            else:  # pragma: no cover - non-glibc Linux
+                notes.append("malloc_trim=unavailable")
+        except Exception as exc:  # pragma: no cover - platform-dependent
+            notes.append(f"malloc_trim={type(exc).__name__}")
+    gc.collect()
+    _append_log(
+        log_path,
+        (
+            f"[{_utc_now().isoformat()}] Smart Merge: Review 前释放临时内存 "
+            + ", ".join(notes)
+            + "。"
+        ),
+    )
+
+
 def _run_smart_merge(
     job_id: str,
     *,
@@ -16769,6 +16999,7 @@ def _run_smart_merge(
                 refresh_report_path=durable_paths["refreshReport"],
                 summaries_path=durable_paths["summaries"],
             )
+            bundle_committed = True
             if _active_dataset_version() != str(
                 state.get("activeBaseFingerprint") or ""
             ):
@@ -16778,6 +17009,7 @@ def _run_smart_merge(
                 )
             state["phase"] = "building_review"
             _persist_job_state(state)
+            _release_worker_memory_before_review(log_path=log_path)
             _cache_smart_merge_review(
                 job_id,
                 review_generation_id=review_generation_id,
@@ -16786,6 +17018,11 @@ def _run_smart_merge(
                 ),
             )
             state = _load_job_state(job_id)
+            resolution = _historical_reclassification_resolution(state)
+            if isinstance(resolution, dict):
+                resolution.pop("reviewBuildError", None)
+                resolution.pop("reviewBuildFailedAt", None)
+                state["historicalReclassificationResolution"] = resolution
             state["status"] = "success"
             state["phase"] = "completed"
             state["finishedAt"] = _utc_now().isoformat()
@@ -17083,12 +17320,19 @@ def _run_smart_merge(
         _job_review_bundle_path(job_id).unlink(missing_ok=True)
         _persist_job_state(state)
         bundle_committed = True
+        del rebuilt_parquet
+        _release_worker_memory_before_review(log_path=log_path)
         _cache_smart_merge_review(
             job_id,
             review_generation_id=review_generation_id,
             expected_active_fingerprint=expected_active_fingerprint,
         )
         state = _load_job_state(job_id)
+        resolution = _historical_reclassification_resolution(state)
+        if isinstance(resolution, dict):
+            resolution.pop("reviewBuildError", None)
+            resolution.pop("reviewBuildFailedAt", None)
+            state["historicalReclassificationResolution"] = resolution
         state["status"] = "success"
         state["phase"] = "completed"
         state["finishedAt"] = _utc_now().isoformat()
@@ -17112,12 +17356,13 @@ def _run_smart_merge(
         _append_log(log_path, f"[{_utc_now().isoformat()}] Cancelled: {exc}")
     except Exception as exc:
         state = _load_job_state(job_id)
+        failed_phase = str(state.get("phase") or "smart_merge")
         state["status"] = "failed"
         state["phase"] = "smart_merge_failed"
         state["finishedAt"] = _utc_now().isoformat()
         state["error"] = str(exc)
         state["failureDigest"] = _failure_digest_from_exception(
-            phase="smart_merge",
+            phase=failed_phase,
             exc=exc,
         )
         resolution = _historical_reclassification_resolution(state)
