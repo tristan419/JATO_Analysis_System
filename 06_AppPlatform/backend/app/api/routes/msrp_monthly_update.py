@@ -21,6 +21,7 @@ from app.services.jato_monthly_update_service import (
     publish_jato_monthly_update_job,
     recheck_jato_monthly_update_job,
     resolve_jato_historical_reclassification,
+    retry_jato_monthly_update_upload_digest,
     rollback_jato_monthly_update_job,
     retry_failed_jato_monthly_update_job,
     run_jato_monthly_update_cleanup,
@@ -291,6 +292,20 @@ def post_monthly_update_upload_complete(
 ) -> dict[str, object]:
     return {
         "item": complete_jato_monthly_update_upload(
+            upload_id=upload_id,
+            requested_by=user.name,
+            requested_role=user.role,
+        )
+    }
+
+
+@router.post("/monthly-update-uploads/{upload_id}/retry-digest")
+def post_monthly_update_upload_retry_digest(
+    upload_id: str,
+    user: UserContext = Depends(require_min_role("editor")),
+) -> dict[str, object]:
+    return {
+        "item": retry_jato_monthly_update_upload_digest(
             upload_id=upload_id,
             requested_by=user.name,
             requested_role=user.role,

@@ -12,6 +12,7 @@ from typing import Any, Iterator
 
 import pandas as pd
 import pytest
+from fastapi import HTTPException
 from openpyxl import Workbook
 
 from app.services import jato_monthly_update_service
@@ -168,6 +169,123 @@ def test_get_upload_marks_dead_digest_worker_invalid(
     assert result["failureDigest"]["retryable"] is True
 
 
+def test_launch_stale_without_pid_quarantines_while_digest_lock_is_held(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _configure_upload_root(tmp_path, monkeypatch)
+    upload_id = "upload-launch-stale-lock-held"
+    state = jato_monthly_update_service._prepare_upload_session_state(
+        upload_id=upload_id,
+        filename="JATO-2026.06.xlsx",
+        size_bytes=4,
+        resume_key="resume-launch-stale-lock-held",
+        triggered_by="tester",
+    )
+    state["status"] = "assembling"
+    state["digestPid"] = None
+    state["digestLaunchedAt"] = (
+        jato_monthly_update_service._utc_now()
+        - timedelta(
+            seconds=(
+                jato_monthly_update_service.DIGEST_WORKER_STALE_GRACE_SECONDS
+                + 1
+            )
+        )
+    ).isoformat()
+    jato_monthly_update_service._persist_upload_session(state)
+
+    lock_ready = threading.Event()
+    release_lock = threading.Event()
+
+    def hold_digest_lock() -> None:
+        with jato_monthly_update_service._exclusive_file_lock(
+            jato_monthly_update_service._upload_digest_lock_path(upload_id)
+        ) as acquired:
+            assert acquired
+            lock_ready.set()
+            assert release_lock.wait(timeout=3)
+
+    holder = threading.Thread(target=hold_digest_lock)
+    holder.start()
+    assert lock_ready.wait(timeout=3)
+    try:
+        result = jato_monthly_update_service.get_jato_monthly_update_upload(
+            upload_id,
+            requested_by="tester",
+            requested_role="editor",
+        )
+
+        assert result["status"] == "assembling"
+        assert result["failureDigest"]["code"] == "RESOURCE_QUARANTINED"
+        assert result["failureDigest"]["retryable"] is False
+        assert result["failureDigest"]["technicalDetail"][
+            "digestLockHeld"
+        ] is True
+        assert [
+            payload["uploadId"]
+            for payload in jato_monthly_update_service._active_upload_session_payloads()
+        ] == [upload_id]
+        with pytest.raises(HTTPException) as initiate_blocked:
+            jato_monthly_update_service.initiate_jato_monthly_update_upload(
+                filename="other.xlsx",
+                size_bytes=4,
+                resume_key="other-launch-stale",
+                triggered_by="other-user",
+            )
+        assert initiate_blocked.value.status_code == 409
+        with pytest.raises(HTTPException) as cleanup_blocked:
+            jato_monthly_update_service.run_jato_monthly_update_cleanup(
+                triggered_by="admin",
+            )
+        assert cleanup_blocked.value.status_code == 409
+    finally:
+        release_lock.set()
+        holder.join(timeout=3)
+    assert not holder.is_alive()
+
+
+def test_launch_stale_without_pid_becomes_worker_lost_when_digest_lock_is_free(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _configure_upload_root(tmp_path, monkeypatch)
+    upload_id = "upload-launch-stale-lock-free"
+    state = jato_monthly_update_service._prepare_upload_session_state(
+        upload_id=upload_id,
+        filename="JATO-2026.06.xlsx",
+        size_bytes=4,
+        resume_key="resume-launch-stale-lock-free",
+        triggered_by="tester",
+    )
+    state["status"] = "assembling"
+    state["digestPid"] = None
+    state["digestLaunchedAt"] = (
+        jato_monthly_update_service._utc_now()
+        - timedelta(
+            seconds=(
+                jato_monthly_update_service.DIGEST_WORKER_STALE_GRACE_SECONDS
+                + 1
+            )
+        )
+    ).isoformat()
+    jato_monthly_update_service._persist_upload_session(state)
+
+    result = jato_monthly_update_service.get_jato_monthly_update_upload(
+        upload_id,
+        requested_by="tester",
+        requested_role="editor",
+    )
+
+    assert result["status"] == "invalid"
+    assert result["failureDigest"]["code"] == "DIGEST_WORKER_LOST"
+    assert result["failureDigest"]["retryable"] is True
+    assert result["failureDigest"]["technicalDetail"][
+        "digestLockHeld"
+    ] is False
+    assert jato_monthly_update_service._active_upload_session_payloads() == []
+
+
 def test_get_upload_terminates_verified_digest_worker_after_timeout(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -191,7 +309,9 @@ def test_get_upload_terminates_verified_digest_worker_after_timeout(
         jato_monthly_update_service._utc_now()
         - timedelta(
             seconds=(
-                jato_monthly_update_service.DIGEST_WORKER_MAX_SECONDS
+                jato_monthly_update_service._digest_worker_timeout_seconds(
+                    state["sizeBytes"]
+                )
                 + 1
             )
         )
@@ -237,6 +357,168 @@ def test_get_upload_terminates_verified_digest_worker_after_timeout(
     assert result["failureDigest"]["technicalDetail"]["termination"][
         "processAliveAfter"
     ] is False
+    technical_detail = result["failureDigest"]["technicalDetail"]
+    assert technical_detail["timeoutSeconds"] == 10 * 60
+    assert technical_detail["elapsedSeconds"] > technical_detail["timeoutSeconds"]
+    assert technical_detail["fileSizeBytes"] == 4
+    assert technical_detail["digestProcessIdentity"] == {
+        "startTimeTicks": "123",
+        "cmdlineSha256": "a" * 64,
+    }
+    assert result["digestPid"] is None
+    assert jato_monthly_update_service._active_upload_session_payloads() == []
+
+
+@pytest.mark.parametrize(
+    "termination_error",
+    [
+        "SIGKILL failed",
+        "process identity could not be verified",
+    ],
+)
+def test_timeout_quarantines_live_worker_and_keeps_resource_gates_closed(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    termination_error: str,
+) -> None:
+    _configure_upload_root(tmp_path, monkeypatch)
+    upload_id = "upload-timeout-quarantined"
+    state = jato_monthly_update_service._prepare_upload_session_state(
+        upload_id=upload_id,
+        filename="JATO-2026.06.xlsx",
+        size_bytes=4,
+        resume_key="resume-timeout-quarantined",
+        triggered_by="tester",
+    )
+    state["status"] = "digesting"
+    state["digestPid"] = 24680
+    state["digestProcessIdentity"] = {
+        "startTimeTicks": "123",
+        "cmdlineSha256": "a" * 64,
+    }
+    state["digestLaunchedAt"] = (
+        jato_monthly_update_service._utc_now()
+        - timedelta(
+            seconds=(
+                jato_monthly_update_service._digest_worker_timeout_seconds(4)
+                + 1
+            )
+        )
+    ).isoformat()
+    jato_monthly_update_service._persist_upload_session(state)
+    monkeypatch.setattr(
+        jato_monthly_update_service,
+        "_process_exists",
+        lambda pid: pid == 24680,
+    )
+    monkeypatch.setattr(
+        jato_monthly_update_service,
+        "_terminate_process_group",
+        lambda pid, **_kwargs: {
+            "pid": pid,
+            "processAliveBefore": True,
+            "processAliveAfter": True,
+            "identityVerified": "identity" not in termination_error,
+            "error": termination_error,
+        },
+    )
+
+    result = jato_monthly_update_service.get_jato_monthly_update_upload(
+        upload_id,
+        requested_by="tester",
+        requested_role="editor",
+    )
+
+    assert result["status"] == "digesting"
+    assert result["digestPid"] == 24680
+    assert result["failureDigest"]["code"] == "RESOURCE_QUARANTINED"
+    assert result["failureDigest"]["retryable"] is False
+    assert result["failureDigest"]["technicalDetail"]["termination"][
+        "processAliveAfter"
+    ] is True
+    assert [
+        payload["uploadId"]
+        for payload in jato_monthly_update_service._active_upload_session_payloads()
+    ] == [upload_id]
+    with pytest.raises(HTTPException) as initiate_blocked:
+        jato_monthly_update_service.initiate_jato_monthly_update_upload(
+            filename="other.xlsx",
+            size_bytes=4,
+            resume_key="other",
+            triggered_by="other-user",
+        )
+    assert initiate_blocked.value.status_code == 409
+    with pytest.raises(HTTPException) as cleanup_blocked:
+        jato_monthly_update_service.run_jato_monthly_update_cleanup(
+            triggered_by="admin",
+        )
+    assert cleanup_blocked.value.status_code == 409
+
+
+def test_digest_timeout_is_size_aware_and_bounded() -> None:
+    small_timeout = jato_monthly_update_service._digest_worker_timeout_seconds(
+        4 * 1024 * 1024
+    )
+    production_sample_timeout = (
+        jato_monthly_update_service._digest_worker_timeout_seconds(339_874_111)
+    )
+    huge_timeout = jato_monthly_update_service._digest_worker_timeout_seconds(
+        10 * 1024 * 1024 * 1024
+    )
+
+    assert small_timeout == 10 * 60
+    assert 30 * 60 <= production_sample_timeout <= 32 * 60
+    assert huge_timeout == 45 * 60
+
+
+def test_large_upload_digest_is_not_killed_at_ten_minutes(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _configure_upload_root(tmp_path, monkeypatch)
+    upload_id = "upload-large-still-digesting"
+    file_size_bytes = 339_874_111
+    state = jato_monthly_update_service._prepare_upload_session_state(
+        upload_id=upload_id,
+        filename="JATO-2026.06-16-countries.xlsx",
+        size_bytes=file_size_bytes,
+        resume_key="resume-large",
+        triggered_by="tester",
+    )
+    state["status"] = "digesting"
+    state["digestPid"] = 24681
+    state["digestLaunchedAt"] = (
+        jato_monthly_update_service._utc_now()
+        - timedelta(minutes=10, seconds=5)
+    ).isoformat()
+    jato_monthly_update_service._persist_upload_session(state)
+    monkeypatch.setattr(
+        jato_monthly_update_service,
+        "_process_exists",
+        lambda _pid: True,
+    )
+    terminated: list[int] = []
+    monkeypatch.setattr(
+        jato_monthly_update_service,
+        "_terminate_process_group",
+        lambda pid, **_kwargs: terminated.append(pid),
+    )
+
+    result = jato_monthly_update_service.get_jato_monthly_update_upload(
+        upload_id,
+        requested_by="tester",
+        requested_role="editor",
+    )
+
+    assert terminated == []
+    assert result["status"] == "digesting"
+    assert result["failureDigest"] is None
+    assert (
+        jato_monthly_update_service._digest_worker_timeout_seconds(
+            file_size_bytes
+        )
+        > 10 * 60 + 5
+    )
 
 
 def test_invalid_upload_session_is_not_reused_by_resume(
