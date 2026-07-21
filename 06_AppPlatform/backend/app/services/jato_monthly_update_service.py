@@ -353,6 +353,10 @@ HISTORICAL_DIMENSION_ALIASES: tuple[tuple[str, ...], ...] = (
 HISTORICAL_RECLASSIFICATION_DECISIONS = frozenset(
     {"use_latest", "keep_active"}
 )
+HISTORICAL_RECLASSIFICATION_DECISION_ORDER = (
+    "use_latest",
+    "keep_active",
+)
 HISTORICAL_RECLASSIFICATION_VALUE_LIMIT = 8
 HISTORICAL_RECLASSIFICATION_EXACT_CHANGE_LIMIT = 20
 _WRITE_LOCK = threading.Lock()
@@ -2496,23 +2500,21 @@ def _build_historical_reclassification_country_report(
         if float(item.get("deltaSales") or 0) > 0
     )
     monthly_totals_stable = country_mismatch_count == 0
-    decision_required = bool(
-        monthly_totals_stable
-        and (
-            joint_mismatch_cell_count
-            or confirmed_make_model_reclassifications
-            or unconfirmed_make_model_candidates
-            or unpaired_make_models
-        )
-    )
-    if not (
+    has_historical_change = bool(
         joint_mismatch_cell_count
         or confirmed_make_model_reclassifications
         or unconfirmed_make_model_candidates
         or unpaired_make_models
         or country_mismatch_count
-    ):
+    )
+    if not has_historical_change:
         return None
+    decision_required = True
+    allowed_decisions = (
+        HISTORICAL_RECLASSIFICATION_DECISION_ORDER
+        if monthly_totals_stable
+        else ("keep_active",)
+    )
     return {
         "country": country,
         "comparedThrough": (
@@ -2527,6 +2529,7 @@ def _build_historical_reclassification_country_report(
         ),
         "monthlyTotalsStable": monthly_totals_stable,
         "decisionRequired": decision_required,
+        "allowedDecisions": list(allowed_decisions),
         "dimensionSummaries": dimension_summaries,
         "exactChanges": exact_changes,
         "exactChangeCount": exact_change_count,
@@ -3836,11 +3839,16 @@ def _build_historical_reclassification_report_from_paths(
         source_upload_sha256 = None
     reports: list[dict[str, Any]] = []
     unavailable_countries: list[dict[str, Any]] = []
+    current_stability_by_key: dict[str, dict[str, Any]] = {}
     for requested_country in countries:
         country_key = requested_country.strip().casefold()
         active_entry = active_by_key.get(country_key)
         candidate_country = candidate_by_key.get(country_key)
         if active_entry is None or candidate_country is None:
+            current_stability_by_key[country_key] = {
+                "status": "unavailable",
+                "reason": "country_missing_from_active_or_candidate",
+            }
             continue
         active_country, active_latest_month = active_entry
         try:
@@ -3855,6 +3863,10 @@ def _build_historical_reclassification_report_from_paths(
                 path_label=f"Review candidate（{candidate_country}）",
             )
         except HTTPException as exc:
+            current_stability_by_key[country_key] = {
+                "status": "unavailable",
+                "reason": "historical_configuration_guard_unavailable",
+            }
             unavailable_countries.append(
                 {
                     "country": active_country,
@@ -3869,6 +3881,10 @@ def _build_historical_reclassification_report_from_paths(
             active_latest_month=active_latest_month,
             source_upload_sha256=source_upload_sha256,
         )
+        current_stability_by_key[country_key] = {
+            "status": str(stability.get("status") or "unavailable"),
+            "reason": stability.get("reason"),
+        }
         country_report = stability.get("historicalReclassification")
         if isinstance(country_report, dict):
             reports.append(country_report)
@@ -3878,6 +3894,47 @@ def _build_historical_reclassification_report_from_paths(
         payload=payload,
         current_countries=reports,
     )
+    resolution = _historical_reclassification_resolution(payload)
+    if (
+        report.get("status") == "resolved"
+        and isinstance(resolution, dict)
+    ):
+        decisions = _validated_historical_reclassification_resolution(
+            resolution
+        )
+        validation: list[dict[str, Any]] = []
+        raw_resolved_countries = report.get("countries")
+        for country_report in (
+            raw_resolved_countries
+            if isinstance(raw_resolved_countries, list)
+            else []
+        ):
+            if not isinstance(country_report, dict):
+                continue
+            country = str(country_report.get("country") or "").strip()
+            country_key = country.casefold()
+            if decisions.get(country_key) != "keep_active":
+                continue
+            current_stability = current_stability_by_key.get(
+                country_key,
+                {"status": "unavailable", "reason": "country_not_checked"},
+            )
+            validation.append(
+                {
+                    "country": country,
+                    "decision": "keep_active",
+                    "status": (
+                        "pass"
+                        if current_stability.get("status") == "pass"
+                        else "fail"
+                    ),
+                    "currentStabilityStatus": current_stability.get(
+                        "status"
+                    ),
+                    "reason": current_stability.get("reason"),
+                }
+            )
+        report["resolutionValidation"] = validation
     report["unavailableCountries"] = unavailable_countries[:10]
     if len(unavailable_countries) > 10:
         report["truncation"]["truncated"] = True
@@ -6261,6 +6318,160 @@ def _historical_reclassification_report_fingerprint(
     ).hexdigest()
 
 
+def _historical_reclassification_allowed_decisions(
+    country_report: dict[str, Any],
+) -> tuple[str, ...]:
+    """Return the only safe choices for one immutable Review report row."""
+    monthly_totals_stable = country_report.get("monthlyTotalsStable")
+    if monthly_totals_stable is False:
+        return ("keep_active",)
+    if monthly_totals_stable is True:
+        return HISTORICAL_RECLASSIFICATION_DECISION_ORDER
+    return ()
+
+
+def _normalize_historical_reclassification_countries_for_resolution(
+    countries: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Upgrade legacy Review rows before binding a decision fingerprint.
+
+    Older cached Reviews marked countries with changed historical country/month
+    totals as non-decisionable.  They are safely decisionable only because the
+    existing keep_active merge takes all published months from active.  This
+    normalization is shared by the endpoint and Smart Merge preflight so the
+    exact same country payload is fingerprinted in both places.
+    """
+    normalized: list[dict[str, Any]] = []
+    for raw_country in countries:
+        country_report = dict(raw_country)
+        if country_report.get("monthlyTotalsStable") is False:
+            country_report["decisionRequired"] = True
+        if bool(country_report.get("decisionRequired")):
+            country_report["allowedDecisions"] = list(
+                _historical_reclassification_allowed_decisions(
+                    country_report
+                )
+            )
+        normalized.append(country_report)
+    return normalized
+
+
+def _normalized_historical_reclassification_report_for_resolution(
+    report: dict[str, Any],
+) -> dict[str, Any]:
+    raw_countries = report.get("countries")
+    if not isinstance(raw_countries, list) or any(
+        not isinstance(item, dict) for item in raw_countries
+    ):
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "blockerType": (
+                    "historical_reclassification_resolution_invalid"
+                ),
+                "message": "历史重分类报告缺少有效的逐国结构。",
+            },
+        )
+    countries = (
+        _normalize_historical_reclassification_countries_for_resolution(
+            [dict(item) for item in raw_countries]
+        )
+    )
+    report_fingerprint = (
+        _historical_reclassification_report_fingerprint(countries)
+    )
+    return {
+        "status": (
+            "decision_required"
+            if any(bool(item.get("decisionRequired")) for item in countries)
+            else "not_required"
+        ),
+        "countries": countries,
+        "reportFingerprint": report_fingerprint,
+        "truncation": (
+            dict(report.get("truncation"))
+            if isinstance(report.get("truncation"), dict)
+            else {}
+        ),
+    }
+
+
+def _validated_normalized_historical_reclassification_report(
+    report: dict[str, Any],
+) -> dict[str, Any]:
+    """Validate a cached Review snapshot, then upgrade its decision contract."""
+    raw_countries = report.get("countries")
+    if not isinstance(raw_countries, list) or any(
+        not isinstance(item, dict) for item in raw_countries
+    ):
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "blockerType": (
+                    "historical_reclassification_resolution_invalid"
+                ),
+                "message": "Review 历史重分类报告结构无效。",
+            },
+        )
+    countries = [dict(item) for item in raw_countries]
+    declared_fingerprint = str(
+        report.get("reportFingerprint") or ""
+    ).strip()
+    computed_fingerprint = (
+        _historical_reclassification_report_fingerprint(countries)
+    )
+    if (
+        not re.fullmatch(r"[0-9a-f]{64}", declared_fingerprint)
+        or declared_fingerprint != computed_fingerprint
+    ):
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "blockerType": (
+                    "historical_reclassification_resolution_invalid"
+                ),
+                "message": (
+                    "Review 历史重分类报告与其指纹不一致，"
+                    "拒绝绑定决策。"
+                ),
+            },
+        )
+    return _normalized_historical_reclassification_report_for_resolution(
+        report
+    )
+
+
+def _historical_sales_changed_blocker_country_key(
+    finding: dict[str, Any],
+) -> str | None:
+    """Identify only the legacy SC011 blocker that keep_active can repair."""
+    metrics = (
+        finding.get("metrics")
+        if isinstance(finding.get("metrics"), dict)
+        else {}
+    )
+    blocker_type = str(
+        finding.get("blockerType")
+        or metrics.get("blockerType")
+        or metrics.get("reason")
+        or ""
+    ).strip()
+    mismatch_count = metrics.get("countryMismatchCount")
+    target_key = str(finding.get("target") or "").strip().casefold()
+    if not (
+        finding.get("severity") == "blocker"
+        and finding.get("scope") == "country"
+        and finding.get("ruleId") == "SC011"
+        and blocker_type == "historical_sales_changed"
+        and isinstance(mismatch_count, (int, float))
+        and not isinstance(mismatch_count, bool)
+        and mismatch_count > 0
+        and target_key
+    ):
+        return None
+    return target_key
+
+
 def _historical_reclassification_resolution(
     payload: dict[str, Any],
 ) -> dict[str, Any] | None:
@@ -6344,6 +6555,7 @@ def _validated_historical_reclassification_resolution(
         )
 
     required_by_key: dict[str, str] = {}
+    required_reports_by_key: dict[str, dict[str, Any]] = {}
     for item in countries:
         if not bool(item.get("decisionRequired")):
             continue
@@ -6362,6 +6574,7 @@ def _validated_historical_reclassification_resolution(
                 },
             )
         required_by_key[country_key] = country
+        required_reports_by_key[country_key] = item
 
     raw_decisions = resolution.get("decisions")
     if not isinstance(raw_decisions, list):
@@ -6396,6 +6609,29 @@ def _validated_historical_reclassification_resolution(
                         "历史重分类 decisions 包含空国家、重复国家"
                         "或无效 decision。"
                     ),
+                },
+            )
+        country_report = required_reports_by_key.get(country_key)
+        if (
+            country_report is not None
+            and decision
+            not in _historical_reclassification_allowed_decisions(
+                country_report
+            )
+        ):
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "blockerType": (
+                        "historical_sales_changed_requires_keep_active"
+                    ),
+                    "message": (
+                        f"{required_by_key[country_key]} 的历史国家/月总量"
+                        "发生变化，只能选择 keep_active；"
+                        "拒绝 use_latest 改写已发布历史。"
+                    ),
+                    "country": required_by_key[country_key],
+                    "allowedDecisions": ["keep_active"],
                 },
             )
         decisions[country_key] = decision
@@ -6571,6 +6807,9 @@ def _build_single_country_review(payload: dict[str, Any]) -> dict[str, Any]:
             country,
         )
     )
+    reclassification_resolution = (
+        _historical_reclassification_resolution(payload)
+    )
     active_sales = _collect_country_monthly_sales(active_frame, countries=[country], path_label="active").get(country, {})
     candidate_sales = _collect_country_monthly_sales(candidate_frame, countries=[country], path_label="candidate").get(country, {})
     common_months = sorted(set(active_sales) & set(candidate_sales), key=_time_sort_key)
@@ -6656,7 +6895,29 @@ def _build_single_country_review(payload: dict[str, Any]) -> dict[str, Any]:
         add_finding("blocker", "SC005", "目标国家 candidate 存在负销量。", {"negativeSalesCells": negative_sales_count})
     if len(doubled_months) >= SALES_DOUBLING_MIN_MONTH_COUNT:
         add_finding("blocker", "SC006", "目标国家 candidate 疑似销量翻倍。", {"months": doubled_months})
-    if historical_stability.get("status") == "fail":
+    keep_active_validation_failed = bool(
+        isinstance(reclassification_resolution, dict)
+        and reclassification_resolution.get("status") == "resolved"
+        and resolved_reclassification_decision == "keep_active"
+        and historical_stability.get("status") != "pass"
+    )
+    if keep_active_validation_failed:
+        add_finding(
+            "blocker",
+            "SC011",
+            (
+                "keep_active 合并后的 candidate 仍与 active 历史不一致；"
+                "拒绝批准 Publish。"
+            ),
+            {
+                **historical_stability,
+                "blockerType": (
+                    "historical_keep_active_validation_failed"
+                ),
+                "requiredStatus": "pass",
+            },
+        )
+    elif historical_stability.get("status") == "fail":
         decision_required = bool(
             isinstance(current_reclassification, dict)
             and current_reclassification.get("decisionRequired")
@@ -6673,6 +6934,17 @@ def _build_single_country_review(payload: dict[str, Any]) -> dict[str, Any]:
                 "review",
                 "SC011",
                 "已选择以最新 washed 分类替换该国家历史分析维度。",
+                historical_stability,
+            )
+        elif decision_required and not monthly_totals_stable:
+            add_finding(
+                "review",
+                "SC011",
+                (
+                    "目标国家历史月总量发生变化；"
+                    "只能选择 keep_active，以 active 保留全部已发布历史，"
+                    "并仅从 candidate 读取之后的新月份。"
+                ),
                 historical_stability,
             )
         elif decision_required:
@@ -6934,6 +7206,18 @@ def get_jato_monthly_update_review(
                 status_code=409,
                 detail="candidate 在 Review bundle 生成后已变化，请由 worker 重新生成 Review。",
             )
+        cached_historical_report = review_bundle.get(
+            "historicalReclassificationReport"
+        )
+        if (
+            isinstance(cached_historical_report, dict)
+            and cached_historical_report.get("status") != "resolved"
+        ):
+            review_bundle["historicalReclassificationReport"] = (
+                _validated_normalized_historical_reclassification_report(
+                    cached_historical_report
+                )
+            )
         review_bundle["approval"] = payload.get("reviewApproval")
         return review_bundle
     if not allow_build:
@@ -7068,6 +7352,76 @@ def get_jato_monthly_update_review(
             candidate_path=candidate_path,
         )
     )
+    resolution_validation = (
+        historical_reclassification_report.get("resolutionValidation")
+        if isinstance(
+            historical_reclassification_report.get(
+                "resolutionValidation"
+            ),
+            list,
+        )
+        else []
+    )
+    keep_active_validation_by_key = {
+        str(item.get("country") or "").strip().casefold(): item
+        for item in resolution_validation
+        if isinstance(item, dict)
+        and item.get("decision") == "keep_active"
+        and str(item.get("country") or "").strip()
+    }
+    if historical_reclassification_report.get("status") == "resolved":
+        findings = [
+            item
+            for item in findings
+            if not (
+                isinstance(item, dict)
+                and (
+                    blocker_country_key := (
+                        _historical_sales_changed_blocker_country_key(
+                            item
+                        )
+                    )
+                )
+                and (
+                    keep_active_validation_by_key.get(
+                        blocker_country_key,
+                        {},
+                    ).get("status")
+                    == "pass"
+                )
+            )
+        ]
+        for country_key, validation in (
+            keep_active_validation_by_key.items()
+        ):
+            if validation.get("status") == "pass":
+                continue
+            findings.append(
+                {
+                    "severity": "blocker",
+                    "scope": "country",
+                    "target": validation.get("country"),
+                    "ruleId": "SC011",
+                    "blockerType": (
+                        "historical_keep_active_validation_failed"
+                    ),
+                    "message": (
+                        "keep_active 合并后的 candidate 仍与 active "
+                        "历史不一致；拒绝批准 Publish。"
+                    ),
+                    "metrics": {
+                        **validation,
+                        "blockerType": (
+                            "historical_keep_active_validation_failed"
+                        ),
+                    },
+                    "suggestedAction": "reject_input_batch",
+                    "sourceFeedback": (
+                        "请保留 active 的全部已发布历史，仅让上传数据"
+                        "提供 active 最新月之后的新月份。"
+                    ),
+                }
+            )
     existing_sc011_targets = {
         str(item.get("target") or "").strip().casefold()
         for item in findings
@@ -7092,8 +7446,15 @@ def get_jato_monthly_update_review(
                     "target": country,
                     "ruleId": "SC011",
                     "message": (
-                        "历史月总量稳定，但分析维度发生重分类；"
-                        "必须逐国选择 use_latest 或 keep_active。"
+                        (
+                            "历史月总量稳定，但分析维度发生重分类；"
+                            "必须逐国选择 use_latest 或 keep_active。"
+                        )
+                        if monthly_totals_stable
+                        else (
+                            "历史国家/月总量发生变化；只能选择 "
+                            "keep_active，以 active 保留已发布历史。"
+                        )
                     ),
                     "metrics": country_report,
                     "suggestedAction": "manual_review_required",
@@ -7380,6 +7741,90 @@ def approve_jato_monthly_update_review(
                         ),
                     },
                 )
+            expected_keep_active = {
+                country_key: country
+                for country_key, country in (
+                    (
+                        str(item.get("country") or "").strip().casefold(),
+                        str(item.get("country") or "").strip(),
+                    )
+                    for item in resolution.get("decisions", [])
+                    if isinstance(item, dict)
+                    and str(item.get("country") or "").strip()
+                )
+                if validated_decisions.get(country_key) == "keep_active"
+            }
+            raw_resolution_validation = (
+                historical_reclassification_report.get(
+                    "resolutionValidation"
+                )
+            )
+            validated_keep_active: dict[str, dict[str, Any]] = {}
+            invalid_keep_active_validation = bool(
+                expected_keep_active
+                and not isinstance(raw_resolution_validation, list)
+            )
+            for item in (
+                raw_resolution_validation
+                if isinstance(raw_resolution_validation, list)
+                else []
+            ):
+                if not isinstance(item, dict):
+                    invalid_keep_active_validation = True
+                    continue
+                country_key = str(
+                    item.get("country") or ""
+                ).strip().casefold()
+                if (
+                    not country_key
+                    or country_key in validated_keep_active
+                    or item.get("decision") != "keep_active"
+                ):
+                    invalid_keep_active_validation = True
+                    continue
+                validated_keep_active[country_key] = item
+            missing_keep_active = (
+                set(expected_keep_active) - set(validated_keep_active)
+            )
+            extra_keep_active = (
+                set(validated_keep_active) - set(expected_keep_active)
+            )
+            failed_keep_active = [
+                expected_keep_active[country_key]
+                for country_key, item in validated_keep_active.items()
+                if country_key in expected_keep_active
+                and item.get("status") != "pass"
+            ]
+            if (
+                invalid_keep_active_validation
+                or missing_keep_active
+                or extra_keep_active
+                or failed_keep_active
+            ):
+                raise HTTPException(
+                    status_code=409,
+                    detail={
+                        "blockerType": (
+                            "historical_keep_active_validation_failed"
+                        ),
+                        "message": (
+                            "keep_active 尚未被当前完整 Candidate 逐国复核通过，"
+                            "拒绝批准 Publish。"
+                        ),
+                        "missingCountries": [
+                            expected_keep_active[country_key]
+                            for country_key in sorted(
+                                missing_keep_active
+                            )
+                        ],
+                        "failedCountries": sorted(
+                            failed_keep_active
+                        ),
+                        "extraCountries": sorted(
+                            extra_keep_active
+                        ),
+                    },
+                )
             payload["reviewApproval"][
                 "historicalReclassification"
             ] = {
@@ -7430,6 +7875,45 @@ def _resolve_jato_historical_reclassification_with_job_lock(
             )
         payload = _load_job_state(job_id)
         review = get_jato_monthly_update_review(job_id)
+        report = review.get("historicalReclassificationReport")
+        if not isinstance(report, dict):
+            raise HTTPException(
+                status_code=409,
+                detail="当前 Review 没有待处理的历史重分类决策。",
+            )
+        normalized_report = (
+            _validated_normalized_historical_reclassification_report(
+                report
+            )
+        )
+        if normalized_report.get("status") != "decision_required":
+            raise HTTPException(
+                status_code=409,
+                detail="当前 Review 没有待处理的历史重分类决策。",
+            )
+        report_countries = normalized_report["countries"]
+        required_by_key: dict[str, str] = {}
+        required_reports_by_key: dict[str, dict[str, Any]] = {}
+        for item in report_countries:
+            if not bool(item.get("decisionRequired")):
+                continue
+            country = str(item.get("country") or "").strip()
+            country_key = country.casefold()
+            if not country or country_key in required_by_key:
+                raise HTTPException(
+                    status_code=409,
+                    detail=(
+                        "Review 报告包含重复或空国家，拒绝写入决策。"
+                    ),
+                )
+            required_by_key[country_key] = country
+            required_reports_by_key[country_key] = item
+        if not required_by_key:
+            raise HTTPException(
+                status_code=409,
+                detail="当前 Review 没有可决策的历史分类变化。",
+            )
+
         findings = review.get("reviewFindings")
         blockers = [
             item
@@ -7441,7 +7925,20 @@ def _resolve_jato_historical_reclassification_with_job_lock(
             if isinstance(item, dict)
             and item.get("severity") == "blocker"
         ]
-        if blockers:
+        unresolved_blockers: list[dict[str, Any]] = []
+        for blocker in blockers:
+            target_key = (
+                _historical_sales_changed_blocker_country_key(blocker)
+            )
+            country_report = required_reports_by_key.get(target_key)
+            resolves_with_keep_active = bool(
+                target_key
+                and country_report is not None
+                and country_report.get("monthlyTotalsStable") is False
+            )
+            if not resolves_with_keep_active:
+                unresolved_blockers.append(blocker)
+        if unresolved_blockers:
             raise HTTPException(
                 status_code=409,
                 detail={
@@ -7452,56 +7949,28 @@ def _resolve_jato_historical_reclassification_with_job_lock(
                     ),
                     "rules": [
                         str(item.get("ruleId") or "")
-                        for item in blockers
+                        for item in unresolved_blockers
+                    ],
+                    "blockerTypes": [
+                        str(
+                            item.get("blockerType")
+                            or (
+                                item.get("metrics", {}).get(
+                                    "blockerType"
+                                )
+                                if isinstance(item.get("metrics"), dict)
+                                else ""
+                            )
+                            or (
+                                item.get("metrics", {}).get("reason")
+                                if isinstance(item.get("metrics"), dict)
+                                else ""
+                            )
+                            or ""
+                        )
+                        for item in unresolved_blockers
                     ],
                 },
-            )
-        report = review.get("historicalReclassificationReport")
-        if (
-            not isinstance(report, dict)
-            or report.get("status") != "decision_required"
-        ):
-            raise HTTPException(
-                status_code=409,
-                detail="当前 Review 没有待处理的历史重分类决策。",
-            )
-        raw_countries = report.get("countries")
-        report_countries = (
-            [
-                item
-                for item in raw_countries
-                if isinstance(item, dict)
-            ]
-            if isinstance(raw_countries, list)
-            else []
-        )
-        required_by_key: dict[str, str] = {}
-        for item in report_countries:
-            if not bool(item.get("decisionRequired")):
-                continue
-            if not bool(item.get("monthlyTotalsStable")):
-                raise HTTPException(
-                    status_code=409,
-                    detail={
-                        "blockerType": "historical_sales_changed",
-                        "message": (
-                            "国家历史月总量发生变化，不能通过分类决策放行。"
-                        ),
-                        "country": item.get("country"),
-                    },
-                )
-            country = str(item.get("country") or "").strip()
-            country_key = country.casefold()
-            if not country or country_key in required_by_key:
-                raise HTTPException(
-                    status_code=409,
-                    detail="Review 报告包含重复或空国家，拒绝写入决策。",
-                )
-            required_by_key[country_key] = country
-        if not required_by_key:
-            raise HTTPException(
-                status_code=409,
-                detail="当前 Review 没有可决策的历史分类变化。",
             )
 
         submitted: dict[str, str] = {}
@@ -7529,6 +7998,29 @@ def _resolve_jato_historical_reclassification_with_job_lock(
                         "keep_active。"
                     ),
                 )
+            country_report = required_reports_by_key.get(country_key)
+            if (
+                country_report is not None
+                and decision
+                not in _historical_reclassification_allowed_decisions(
+                    country_report
+                )
+            ):
+                raise HTTPException(
+                    status_code=409,
+                    detail={
+                        "blockerType": (
+                            "historical_sales_changed_requires_keep_active"
+                        ),
+                        "message": (
+                            f"{required_by_key[country_key]} 的历史国家/月"
+                            "总量发生变化，只能选择 keep_active；"
+                            "拒绝 use_latest 改写已发布历史。"
+                        ),
+                        "country": required_by_key[country_key],
+                        "allowedDecisions": ["keep_active"],
+                    },
+                )
             submitted[country_key] = decision
         missing_keys = set(required_by_key) - set(submitted)
         extra_keys = set(submitted) - set(required_by_key)
@@ -7552,7 +8044,7 @@ def _resolve_jato_historical_reclassification_with_job_lock(
             review.get("candidateFingerprint") or ""
         ).strip()
         report_fingerprint = str(
-            report.get("reportFingerprint") or ""
+            normalized_report.get("reportFingerprint") or ""
         ).strip()
         active_fingerprint = str(
             payload.get("activeBaseFingerprint") or ""
@@ -7591,16 +8083,7 @@ def _resolve_jato_historical_reclassification_with_job_lock(
             "sourceCandidateFingerprint": candidate_fingerprint,
             "reportFingerprint": report_fingerprint,
             "decisions": canonical_decisions,
-            "report": {
-                "status": "decision_required",
-                "countries": report_countries,
-                "reportFingerprint": report_fingerprint,
-                "truncation": (
-                    report.get("truncation")
-                    if isinstance(report.get("truncation"), dict)
-                    else {}
-                ),
-            },
+            "report": normalized_report,
         }
         _persist_job_state(payload)
         try:
@@ -14110,6 +14593,23 @@ def _create_smart_merge_candidate_locked(
         isinstance(historical_report, dict)
         and historical_report.get("status") == "decision_required"
     ):
+        raw_historical_countries = historical_report.get("countries")
+        normalized_current_report = (
+            _normalized_historical_reclassification_report_for_resolution(
+                historical_report
+            )
+        )
+        current_raw_fingerprint = (
+            _historical_reclassification_report_fingerprint(
+                [
+                    dict(item)
+                    for item in raw_historical_countries
+                    if isinstance(item, dict)
+                ]
+            )
+            if isinstance(raw_historical_countries, list)
+            else ""
+        )
         if (
             not isinstance(resolution, dict)
             or resolution.get("status") != "queued"
@@ -14118,7 +14618,11 @@ def _create_smart_merge_candidate_locked(
             )
             != str(review.get("candidateFingerprint") or "")
             or str(resolution.get("reportFingerprint") or "")
-            != str(historical_report.get("reportFingerprint") or "")
+            != str(
+                normalized_current_report.get("reportFingerprint") or ""
+            )
+            or str(historical_report.get("reportFingerprint") or "")
+            != current_raw_fingerprint
         ):
             raise HTTPException(
                 status_code=409,
@@ -14132,6 +14636,7 @@ def _create_smart_merge_candidate_locked(
                     ),
                 },
             )
+        _validated_historical_reclassification_resolution(resolution)
     candidate_active_fingerprint = str(
         payload.get("activeBaseFingerprint") or ""
     ).strip()

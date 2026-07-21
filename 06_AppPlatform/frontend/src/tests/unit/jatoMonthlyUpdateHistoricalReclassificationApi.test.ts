@@ -17,13 +17,14 @@ describe("JATO monthly update historical reclassification API", () => {
           status: "resolved",
           countries: [{
             country: "捷克",
-            decision: "use_latest",
+            decision: "keep_active",
             comparedThrough: "2026-03",
             historicalMonthCount: 39,
             jointMismatchCellCount: 5217,
             jointMovedSales: 8035,
             monthlyTotalsStable: true,
             decisionRequired: true,
+            allowedDecisions: ["use_latest", "keep_active"],
             dimensionSummaries: [{
               dimension: "Powertrain",
               mismatchCellCount: 73,
@@ -53,6 +54,13 @@ describe("JATO monthly update historical reclassification API", () => {
               valueLimitPerDirection: 8,
             },
           }],
+          resolutionValidation: [{
+            country: "捷克",
+            decision: "keep_active",
+            status: "pass",
+            currentStabilityStatus: "pass",
+            reason: null,
+          }],
         },
       },
     })));
@@ -63,10 +71,11 @@ describe("JATO monthly update historical reclassification API", () => {
       status: "resolved",
       countries: [{
         country: "捷克",
-        decision: "use_latest",
+        decision: "keep_active",
         comparedThrough: "2026-03",
         jointMismatchCellCount: 5217,
         monthlyTotalsStable: true,
+        allowedDecisions: ["use_latest", "keep_active"],
         dimensionSummaries: [{
           dimension: "Powertrain",
           movedSales: 332,
@@ -84,7 +93,104 @@ describe("JATO monthly update historical reclassification API", () => {
           ],
         }],
       }],
+      resolutionValidation: [{
+        country: "捷克",
+        decision: "keep_active",
+        status: "pass",
+        currentStabilityStatus: "pass",
+        reason: null,
+      }],
     });
+  });
+
+  it("fails closed when allowed decisions are missing or contain an invalid value", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => Response.json({
+      item: {
+        jobId: "jato-review-1",
+        historicalReclassificationReport: {
+          status: "decision_required",
+          countries: [
+            { country: "捷克", decisionRequired: true, allowedDecisions: ["keep_active"] },
+            { country: "丹麦", decisionRequired: true },
+            { country: "瑞典", decisionRequired: true, allowedDecisions: ["use_latest", "invalid"] },
+            {
+              country: "挪威",
+              decision: "use_latest",
+              decisionRequired: true,
+              allowedDecisions: ["keep_active"],
+            },
+          ],
+        },
+      },
+    })));
+
+    const response = await api.getJatoMonthlyUpdateReview("jato-review-1");
+
+    expect(response.item.historicalReclassificationReport.countries.map((country) => (
+      country.allowedDecisions
+    ))).toEqual([["keep_active"], [], [], ["keep_active"]]);
+    expect(response.item.historicalReclassificationReport.countries[3]?.decision).toBeNull();
+    expect(response.item.historicalReclassificationReport.resolutionValidation).toEqual([]);
+  });
+
+  it("rejects a missing or invalid outer historical report contract", async () => {
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(Response.json({ item: { jobId: "jato-review-1" } }))
+      .mockResolvedValueOnce(Response.json({
+        item: {
+          jobId: "jato-review-1",
+          historicalReclassificationReport: {
+            status: "unknown",
+            countries: [],
+          },
+        },
+      }))
+      .mockResolvedValueOnce(Response.json({
+        item: {
+          jobId: "jato-review-1",
+          historicalReclassificationReport: {
+            status: "not_required",
+            countries: [{
+              country: "荷兰",
+              decisionRequired: true,
+              allowedDecisions: ["keep_active"],
+            }],
+          },
+        },
+      }))
+      .mockResolvedValueOnce(Response.json({
+        item: {
+          jobId: "jato-review-1",
+          historicalReclassificationReport: {
+            status: "resolved",
+            countries: [{
+              country: "荷兰",
+              decision: "keep_active",
+              decisionRequired: true,
+              allowedDecisions: ["keep_active"],
+            }],
+            resolutionValidation: [{
+              country: "荷兰",
+              decision: "keep_active",
+              status: "unknown",
+            }],
+          },
+        },
+      }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(api.getJatoMonthlyUpdateReview("jato-review-1")).rejects.toThrow(
+      /缺少历史重分类报告/
+    );
+    await expect(api.getJatoMonthlyUpdateReview("jato-review-1")).rejects.toThrow(
+      /历史重分类状态无效/
+    );
+    await expect(api.getJatoMonthlyUpdateReview("jato-review-1")).rejects.toThrow(
+      /状态与逐国范围不一致/
+    );
+    await expect(api.getJatoMonthlyUpdateReview("jato-review-1")).rejects.toThrow(
+      /keep_active 最终复核结构无效/
+    );
   });
 
   it("submits one explicit decision per country to the resolution endpoint", async () => {
