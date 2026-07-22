@@ -14,6 +14,13 @@ SERVER_SCRIPT = REPO_ROOT / "03_Scripts/ops/deploy_fullstack_server.sh"
 BACKUP_SCRIPT = REPO_ROOT / "03_Scripts/ops/backup_production_data.sh"
 
 
+def _shell_function(script_path: Path, name: str) -> str:
+    script = script_path.read_text(encoding="utf-8")
+    start = script.index(f"{name}() {{")
+    end = script.index("\n}\n", start) + len("\n}\n")
+    return script[start:end]
+
+
 def test_remote_release_validates_content_address_and_finishes_checkpoint_last() -> None:
     script = REMOTE_SCRIPT.read_text(encoding="utf-8")
     for token in (
@@ -31,9 +38,11 @@ def test_remote_release_validates_content_address_and_finishes_checkpoint_last()
     assert "release_evidence_matches" in script
     assert 'EVIDENCE_HELPER="$RELEASE_WORKTREE/03_Scripts/deploy/release_evidence.py"' in script
     assert 'sudo -n "${verifier[@]}"' in script
+    assert 'python3 -B "$EVIDENCE_HELPER" verify' in script
     assert "evidence_sha256=" in script
     assert "source_install_started" in script
     assert "source_installed" in script
+    assert 'chmod a+x "$public_parent"' in script
     lock_acquired = script.index("flock -w 300 9")
     helper_extracted = script.index(
         'CHECKPOINT_HELPER="$RELEASE_WORKTREE/03_Scripts/deploy/release_checkpoint.py"'
@@ -46,6 +55,19 @@ def test_remote_release_validates_content_address_and_finishes_checkpoint_last()
         "--phase backend_healthy --status completed --retry-class automatic"
     )
     assert status_publish < healthy_complete
+
+
+def test_successful_remote_release_cleanup_cannot_override_deploy_result() -> None:
+    script = REMOTE_SCRIPT.read_text(encoding="utf-8")
+    cleanup = _shell_function(REMOTE_SCRIPT, "remove_transient_release_paths")
+
+    assert 'if ! rm -rf -- "$transient_path"; then' in cleanup
+    assert 'echo "[WARN] Failed to remove transient deployment path:' in cleanup
+    assert cleanup.rstrip().endswith("return 0\n}")
+    successful_cleanup = script.index('if [[ "$REMOTE_DEPLOY_SUCCEEDED" == "true" ]]')
+    cleanup_call = script.index("remove_transient_release_paths", successful_cleanup)
+    cleanup_return = script.index("return", cleanup_call)
+    assert successful_cleanup < cleanup_call < cleanup_return
 
 
 def _archive_member_validator() -> str:
@@ -146,7 +168,7 @@ def test_server_checkpoint_boundaries_are_fail_closed_and_resume_safe() -> None:
     assert '1|true|yes|on)' in script
     assert "if checkpoint_enabled \\\n" in script
     assert "verify_release_evidence" in script
-    assert 'sudo -n python3 "$RELEASE_EVIDENCE_HELPER" verify' in script
+    assert 'sudo -n python3 -B "$RELEASE_EVIDENCE_HELPER" verify' in script
     assert "CHECKPOINT_ALREADY_COMPLETE" in script
     assert "direct server deploy is a no-op" in script
     assert "backend_healthy completed" not in script
@@ -155,6 +177,84 @@ def test_server_checkpoint_boundaries_are_fail_closed_and_resume_safe() -> None:
         'echo "[INFO] Reconcile scraper schedulers after backend health"'
     )
     assert health < schedulers
+
+
+def test_frontend_public_permissions_are_normalized_under_private_umask(
+    tmp_path: Path,
+) -> None:
+    repo_dir = tmp_path / "repo"
+    frontend_dir = repo_dir / "06_AppPlatform/frontend"
+    dist_dir = frontend_dir / "dist"
+    asset_dir = dist_dir / "assets"
+    asset_dir.mkdir(parents=True)
+    (dist_dir / "index.html").write_text("ok", encoding="utf-8")
+    (asset_dir / "app.js").write_text("ok", encoding="utf-8")
+    for directory in (repo_dir, repo_dir / "06_AppPlatform", frontend_dir, dist_dir, asset_dir):
+        directory.chmod(0o700)
+    for file_path in (dist_dir / "index.html", asset_dir / "app.js"):
+        file_path.chmod(0o600)
+
+    result = subprocess.run(
+        [
+            "bash",
+            "-c",
+            "set -Eeuo pipefail\n"
+            + _shell_function(SERVER_SCRIPT, "normalize_frontend_public_permissions")
+            + '\nnormalize_frontend_public_permissions "$FRONTEND_DIR/dist"\n',
+        ],
+        env={
+            **os.environ,
+            "REPO_DIR": str(repo_dir),
+            "FRONTEND_DIR": str(frontend_dir),
+        },
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stderr + result.stdout
+    for directory in (repo_dir, repo_dir / "06_AppPlatform", frontend_dir):
+        assert directory.stat().st_mode & 0o777 == 0o711
+    for directory in (dist_dir, asset_dir):
+        assert directory.stat().st_mode & 0o777 == 0o755
+    for file_path in (dist_dir / "index.html", asset_dir / "app.js"):
+        assert file_path.stat().st_mode & 0o777 == 0o644
+
+    install = _shell_function(SERVER_SCRIPT, "install_prebuilt_frontend")
+    normalize_staging = install.index(
+        'normalize_frontend_public_permissions "$PREBUILT_FRONTEND_DIR"'
+    )
+    move_live_dist = install.index('mv "$target_dir" "$backup_dir"')
+    assert normalize_staging < move_live_dist
+
+
+def test_frontend_public_permissions_reject_symlinks(tmp_path: Path) -> None:
+    repo_dir = tmp_path / "repo"
+    frontend_dir = repo_dir / "06_AppPlatform/frontend"
+    dist_dir = frontend_dir / "dist"
+    dist_dir.mkdir(parents=True)
+    (dist_dir / "unsafe-link").symlink_to(tmp_path / "outside")
+
+    result = subprocess.run(
+        [
+            "bash",
+            "-c",
+            "set -Eeuo pipefail\n"
+            + _shell_function(SERVER_SCRIPT, "normalize_frontend_public_permissions")
+            + '\nnormalize_frontend_public_permissions "$FRONTEND_DIR/dist"\n',
+        ],
+        env={
+            **os.environ,
+            "REPO_DIR": str(repo_dir),
+            "FRONTEND_DIR": str(frontend_dir),
+        },
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert result.returncode != 0
+    assert "Frontend dist must not contain symlinks" in result.stdout
 
 
 def _run_backup(tmp_path: Path, *, env_text: str, pg_dump_body: str) -> subprocess.CompletedProcess[str]:
