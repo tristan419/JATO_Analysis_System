@@ -84,6 +84,7 @@ import type {
 } from "../types";
 
 type MarketScanSalesMode = "month" | "ytd" | "rolling12";
+type MarketScanLoadingPresentation = "view" | "refresh" | null;
 
 const DEFAULT_FUEL_TYPES = ["ICE", "MHEV", "HEV", "PHEV", "BEV"];
 const DEFAULT_MARKET_SCAN_COUNTRY = "瑞典";
@@ -169,6 +170,13 @@ function isMarketScanPageKey(value: string | null): value is MarketScanPageKey {
 
 function isMarketScanSalesMode(value: string | null): value is MarketScanSalesMode {
   return value === "month" || value === "ytd" || value === "rolling12";
+}
+
+export function resolveMarketScanLoadingPresentation(
+  lastRequestedPage: MarketScanPageKey,
+  requestedPage: MarketScanPageKey,
+): Exclude<MarketScanLoadingPresentation, null> {
+  return lastRequestedPage === requestedPage ? "refresh" : "view";
 }
 
 function normalizeMarketScanRankingLimit(value: number | string | null | undefined): number {
@@ -1066,7 +1074,28 @@ export function buildMarketScanFuelTrendChartData(
     buildFuelTrendData(items, fuelOrder),
     exportSettings,
   );
-  if (exportSettings.dataLabelMode === "off" || exportSettings.dataLabelPosition !== "auto") {
+  if (exportSettings.dataLabelMode === "off") {
+    return [
+      ...traces,
+      {
+        type: "scatter",
+        mode: "text",
+        name: "Total Labels",
+        x: items.map((item) => item.label),
+        y: items.map((item) => item.totalVolume),
+        text: items.map((item) => formatVolume(item.totalVolume)),
+        textposition: "top center",
+        textfont: {
+          size: Math.max(8, exportSettings.labelFontSize ?? 10),
+          color: "#0f172a",
+        },
+        cliponaxis: false,
+        hoverinfo: "skip",
+        showlegend: false,
+      } as Data,
+    ];
+  }
+  if (exportSettings.dataLabelPosition !== "auto") {
     return traces;
   }
   return traces.map((trace) => (
@@ -1076,12 +1105,12 @@ export function buildMarketScanFuelTrendChartData(
   ));
 }
 
-function fuelTrendYAxisMax(items: MarketScanFuelTrendItem[], showDataLabels: boolean): number {
+function fuelTrendYAxisMax(items: MarketScanFuelTrendItem[]): number {
   const maxTotal = items.reduce((max, item) => Math.max(max, item.totalVolume || 0), 0);
   if (maxTotal <= 0) {
     return 1;
   }
-  return maxTotal * (showDataLabels ? 1.16 : 1.04);
+  return maxTotal * 1.16;
 }
 
 function dominantFuelForRanking(item: MarketScanRankingItem): string {
@@ -2278,7 +2307,7 @@ function DrilldownSection({
                 xaxis: { type: "category", automargin: true, fixedrange: true },
                 yaxis: {
                   title: { text: activeFuelTrendYAxisTitle },
-                  range: [0, fuelTrendYAxisMax(activeFuelTrend.items, showDataLabels)],
+                  range: [0, fuelTrendYAxisMax(activeFuelTrend.items)],
                   automargin: true,
                   fixedrange: true,
                 },
@@ -2347,6 +2376,7 @@ export function MarketScanPage({
   );
   const [deck, setDeck] = useState<MarketScanDeckResponse | null>(null);
   const [loading, setLoading] = useState(false);
+  const [loadingPresentation, setLoadingPresentation] = useState<MarketScanLoadingPresentation>(null);
   const [requestError, setRequestError] = useState<{
     requestKey: string;
     message: string;
@@ -2463,6 +2493,7 @@ export function MarketScanPage({
   const deckCache = useRef<Partial<Record<MarketScanPageKey, MarketScanDeckResponse>>>({});
   const deckCacheKey = useRef<Partial<Record<MarketScanPageKey, string>>>({});
   const requestRef = useRef(0);
+  const lastRequestedPageRef = useRef<MarketScanPageKey>(activePage);
   const slideRef = useRef<HTMLDivElement | null>(null);
   const drilldownPickerRef = useRef<HTMLDivElement | null>(null);
   const bodyTypePickerRef = useRef<HTMLDivElement | null>(null);
@@ -2562,6 +2593,11 @@ export function MarketScanPage({
   useEffect(() => {
     let active = true;
     const requestId = ++requestRef.current;
+    const nextLoadingPresentation = resolveMarketScanLoadingPresentation(
+      lastRequestedPageRef.current,
+      activePage,
+    );
+    lastRequestedPageRef.current = activePage;
 
     // Fast path: use per-view cache if params haven't changed
     const cachedView = deckCache.current[activePage];
@@ -2569,10 +2605,12 @@ export function MarketScanPage({
     if (cachedView && cachedKey === activeRequestKey) {
       setDeck(cachedView);
       setLoading(false);
+      setLoadingPresentation(null);
       return () => { active = false; };
     }
 
     setLoading(true);
+    setLoadingPresentation(nextLoadingPresentation);
     setRequestError(null);
 
     api.marketScanDeck({
@@ -2610,6 +2648,7 @@ export function MarketScanPage({
       .finally(() => {
         if (active && requestId === requestRef.current) {
           setLoading(false);
+          setLoadingPresentation(null);
         }
       });
 
@@ -2680,6 +2719,7 @@ export function MarketScanPage({
   const refreshingActiveView = deck !== null
     && deckCacheKey.current[activePage] !== activeRequestKey
     && requestError?.requestKey !== activeRequestKey;
+  const showViewTransitionOverlay = refreshingActiveView && loadingPresentation === "view";
   const previewWidth = normalizeMarketScanExportDimension(exportSettings.exportWidth, 1920, 400);
   const previewHeight = normalizeMarketScanExportDimension(exportSettings.exportHeight, 1080, 300);
   const slidePreview = useFixedCanvasPreview({
@@ -3278,7 +3318,7 @@ export function MarketScanPage({
 
         {deck ? (
           <div className="market-scan-content" aria-busy={refreshingActiveView}>
-            {refreshingActiveView ? (
+            {showViewTransitionOverlay ? (
               <div className="market-scan-refresh-layer">
                 <LoadingSurface
                   mode="overlay"

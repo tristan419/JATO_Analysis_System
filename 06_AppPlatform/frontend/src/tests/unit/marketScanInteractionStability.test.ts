@@ -1,7 +1,10 @@
 import { describe, expect, it } from "vitest";
 
 import { DEFAULT_EXPORT, type ExportSettings } from "../../components/ExportPanelHelpers";
-import { buildMarketScanFuelTrendChartData } from "../../pages/MarketScanPage";
+import {
+  buildMarketScanFuelTrendChartData,
+  resolveMarketScanLoadingPresentation,
+} from "../../pages/MarketScanPage";
 import marketScanPageSource from "../../pages/MarketScanPage.tsx?raw";
 import type { MarketScanFuelTrendItem } from "../../types";
 
@@ -35,16 +38,23 @@ function traceTextPosition(trace: unknown): unknown {
   return (trace as { textposition?: unknown }).textposition;
 }
 
+function traceShowLegend(trace: unknown): unknown {
+  return (trace as { showlegend?: unknown }).showlegend;
+}
+
 describe("Monthly Fuel Trend data labels", () => {
-  it("hides every label in Off mode without adding a total-label trace", () => {
+  it("keeps only total value labels in Off mode", () => {
     const traces = buildMarketScanFuelTrendChartData(
       fuelTrendItems,
       ["ICE", "BEV"],
       settings("off"),
     );
 
-    expect(traces.map((trace) => trace.name)).toEqual(["ICE", "BEV"]);
-    expect(traces.every((trace) => traceText(trace) === undefined)).toBe(true);
+    expect(traces.map((trace) => trace.name)).toEqual(["ICE", "BEV", "Total Labels"]);
+    expect(traces.slice(0, 2).every((trace) => traceText(trace) === undefined)).toBe(true);
+    expect(traceText(traces[2])).toEqual(["100", "100"]);
+    expect(traceTextPosition(traces[2])).toBe("top center");
+    expect(traceShowLegend(traces[2])).toBe(false);
   });
 
   it("shows each fuel segment's data value in Value mode", () => {
@@ -75,6 +85,11 @@ describe("Monthly Fuel Trend data labels", () => {
 });
 
 describe("Market Scan async loading feedback", () => {
+  it("uses a blocking overlay only when switching views", () => {
+    expect(resolveMarketScanLoadingPresentation("suvAll", "suvAll")).toBe("refresh");
+    expect(resolveMarketScanLoadingPresentation("overview", "suvAll")).toBe("view");
+  });
+
   it("binds the refresh overlay to the real request lifecycle", () => {
     const source = marketScanPageSource;
     const requestStart = source.indexOf("setLoading(true);");
@@ -86,7 +101,8 @@ describe("Market Scan async loading feedback", () => {
     expect(requestCall).toBeGreaterThan(requestStart);
     expect(requestFinally).toBeGreaterThan(requestCall);
     expect(requestStop).toBeGreaterThan(requestFinally);
-    expect(source).toContain('{refreshingActiveView ? (\n              <div className="market-scan-refresh-layer">');
+    expect(source).toContain('const showViewTransitionOverlay = refreshingActiveView && loadingPresentation === "view";');
+    expect(source).toContain('{showViewTransitionOverlay ? (\n              <div className="market-scan-refresh-layer">');
     expect(source).toContain('mode="overlay"');
   });
 });
