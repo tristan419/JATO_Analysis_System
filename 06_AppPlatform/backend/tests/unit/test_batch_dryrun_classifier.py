@@ -18,6 +18,68 @@ assert spec and spec.loader
 spec.loader.exec_module(dryrun_mod)
 
 
+# ── draft source discovery tests ───────────────────────────────────
+
+
+def test_select_draft_sources_includes_hr_and_pl_http_json_extractors():
+    """HTTP JSON drafts in the 12-country roster are not silently omitted."""
+    draft_codes = [
+        "suzuki_vitara_hr_draft_http_json",
+        "suzuki_s_cross_hr_draft_http_json",
+        "volkswagen_touareg_pl_draft_http_json",
+        "volkswagen_tiguan_allspace_pl_draft_http_json",
+        "volvo_xc60_se_draft_scrapling",
+    ]
+
+    target_codes, skipped_promoted = dryrun_mod._select_draft_sources(
+        draft_codes,
+        promoted_codes=set(),
+        countries=["hr", "pl"],
+    )
+
+    assert target_codes == [
+        ("hr", "suzuki_s_cross_hr_draft_http_json"),
+        ("hr", "suzuki_vitara_hr_draft_http_json"),
+        ("pl", "volkswagen_tiguan_allspace_pl_draft_http_json"),
+        ("pl", "volkswagen_touareg_pl_draft_http_json"),
+    ]
+    assert skipped_promoted == []
+
+
+def test_select_draft_sources_keeps_scrapling_and_deduplicates_promoted():
+    """All draft extractor suffixes use the same promoted-source dedupe."""
+    draft_codes = [
+        "skoda_karoq_pl_draft_scrapling",
+        "volvo_xc60_se_draft_scrapling",
+        "suzuki_vitara_hr_draft_http_json",
+        "not_a_draft_source",
+    ]
+    promoted_codes = {
+        "volvo_xc60_se_scrapling",
+        "suzuki_vitara_hr_http_json",
+    }
+
+    target_codes, skipped_promoted = dryrun_mod._select_draft_sources(
+        draft_codes,
+        promoted_codes=promoted_codes,
+        countries=["hr", "pl", "se"],
+    )
+
+    assert target_codes == [
+        ("pl", "skoda_karoq_pl_draft_scrapling"),
+    ]
+    assert skipped_promoted == [
+        (
+            "volvo_xc60_se_draft_scrapling",
+            "volvo_xc60_se_scrapling",
+        ),
+        (
+            "suzuki_vitara_hr_draft_http_json",
+            "suzuki_vitara_hr_http_json",
+        ),
+    ]
+
+
 # ── classify_dryrun_failure tests ──────────────────────────────────
 
 
