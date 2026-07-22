@@ -125,6 +125,9 @@ jobs:
     environment: production
     runs-on: ubuntu-latest
     timeout-minutes: 240
+    permissions:
+      contents: read
+      id-token: write
 
     steps:
       - name: Checkout release source
@@ -172,12 +175,27 @@ jobs:
         env:
           SSH_HOST: ${{ secrets.SSH_HOST }}
           SSH_USER: ${{ secrets.SSH_USER }}
+          SSH_PORT: ${{ secrets.SSH_PORT }}
           SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
           SSH_PASSWORD: ${{ secrets.SSH_PASSWORD }}
+          SSH_KNOWN_HOSTS: ${{ secrets.SSH_KNOWN_HOSTS }}
         run: |
           set -euo pipefail
           : "${SSH_HOST:?Missing SSH_HOST}"
           : "${SSH_USER:?Missing SSH_USER}"
+          : "${SSH_KNOWN_HOSTS:?Missing pinned SSH_KNOWN_HOSTS}"
+          SSH_PORT="${SSH_PORT:-22}"
+          install -d -m 700 ~/.ssh
+          printf '%s\n' "$SSH_KNOWN_HOSTS" > ~/.ssh/known_hosts
+          chmod 600 ~/.ssh/known_hosts
+          known_host="$SSH_HOST"
+          if [ "$SSH_PORT" != "22" ]; then
+            known_host="[$SSH_HOST]:$SSH_PORT"
+          fi
+          if ! ssh-keygen -F "$known_host" -f ~/.ssh/known_hosts >/dev/null; then
+            echo "::error::SSH_KNOWN_HOSTS does not pin the configured Tencent host and port"
+            exit 1
+          fi
           if [ -n "${SSH_PRIVATE_KEY:-}" ]; then
             echo "mode=key" >> "$GITHUB_OUTPUT"
           elif [ -n "${SSH_PASSWORD:-}" ]; then
@@ -333,217 +351,65 @@ jobs:
           tar tzf "$RUNNER_TEMP/JATO_deploy.tar.gz" "$required_workbook"
           tar tzf "$RUNNER_TEMP/JATO_deploy.tar.gz" "$msrp_candidates" "$msrp_evidence"
 
-      - name: Upload complete release archive without fallback
-        id: upload_release
+      - name: Install pinned Tencent COS upload SDK
+        run: >-
+          python3 -m pip install
+          --require-hashes
+          --requirement 03_Scripts/deploy/requirements-cos-release.txt
+
+      - name: Upload and HEAD-verify immutable release in COS
+        id: cos_release
         env:
-          AUTH_MODE: ${{ steps.auth.outputs.mode }}
-          SSH_HOST: ${{ secrets.SSH_HOST }}
-          SSH_USER: ${{ secrets.SSH_USER }}
-          SSH_PORT: ${{ secrets.SSH_PORT }}
-          SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
-          SSH_PASSWORD: ${{ secrets.SSH_PASSWORD }}
+          COS_RELEASE_BUCKET: ${{ vars.COS_RELEASE_BUCKET }}
+          COS_RELEASE_REGION: ${{ vars.COS_RELEASE_REGION }}
+          COS_RELEASE_UPLOAD_ROLE_ARN: ${{ vars.COS_RELEASE_UPLOAD_ROLE_ARN }}
+          COS_RELEASE_OIDC_PROVIDER_ID: ${{ vars.COS_RELEASE_OIDC_PROVIDER_ID }}
+          COS_RELEASE_OIDC_AUDIENCE: ${{ vars.COS_RELEASE_OIDC_AUDIENCE }}
         run: |
           set -euo pipefail
-          SSH_PORT="${SSH_PORT:-22}"
-          archive="$RUNNER_TEMP/JATO_deploy.tar.gz"
-          archive_bytes="$(wc -c < "$archive" | tr -d '[:space:]')"
-          archive_sha256="$(sha256sum "$archive" | awk '{print $1}')"
-          remote_archive="JATO_deploy_${GITHUB_SHA}_${archive_sha256}.tar.gz"
-          remote_temp="${remote_archive}.uploading.v2"
-          remote_checksum="${remote_temp}.sha256"
-          remote_lock="${remote_temp}.lock"
+          : "${COS_RELEASE_BUCKET:?Missing production variable COS_RELEASE_BUCKET}"
+          : "${COS_RELEASE_REGION:?Missing production variable COS_RELEASE_REGION}"
+          : "${COS_RELEASE_UPLOAD_ROLE_ARN:?Missing production variable COS_RELEASE_UPLOAD_ROLE_ARN}"
+          : "${COS_RELEASE_OIDC_PROVIDER_ID:?Missing production variable COS_RELEASE_OIDC_PROVIDER_ID}"
+          : "${COS_RELEASE_OIDC_AUDIENCE:?Missing production variable COS_RELEASE_OIDC_AUDIENCE}"
+          python3 03_Scripts/deploy/cos_release_transport.py upload \
+            --archive "$RUNNER_TEMP/JATO_deploy.tar.gz" \
+            --github-sha "$GITHUB_SHA" \
+            --bucket "$COS_RELEASE_BUCKET" \
+            --region "$COS_RELEASE_REGION" \
+            --prefix releases \
+            --role-arn "$COS_RELEASE_UPLOAD_ROLE_ARN" \
+            --provider-id "$COS_RELEASE_OIDC_PROVIDER_ID" \
+            --audience "$COS_RELEASE_OIDC_AUDIENCE" \
+            --repository "$GITHUB_REPOSITORY" \
+            --environment production \
+            --run-id "$GITHUB_RUN_ID" \
+            --run-attempt "$GITHUB_RUN_ATTEMPT" \
+            --receipt "$RUNNER_TEMP/cos-release-candidate.json" \
+            --github-output "$GITHUB_OUTPUT" \
+            --part-size-mib 8 \
+            --threads 4
 
-          ssh_options=(
-            -T -p "$SSH_PORT"
-            -o StrictHostKeyChecking=no
-            -o UserKnownHostsFile=/dev/null
-            -o ConnectTimeout=20
-            -o ConnectionAttempts=2
-            -o ServerAliveInterval=15
-            -o ServerAliveCountMax=18
-            -o IPQoS=none
-          )
-          if [ "$AUTH_MODE" = "key" ]; then
-            install -d -m 700 ~/.ssh
-            printf '%s\n' "$SSH_PRIVATE_KEY" > ~/.ssh/github_actions_tencent_key
-            chmod 600 ~/.ssh/github_actions_tencent_key
-            ssh_command=(ssh -o BatchMode=yes -i ~/.ssh/github_actions_tencent_key)
-          else
-            sudo apt-get update -y
-            sudo apt-get install -y sshpass
-            export SSHPASS="$SSH_PASSWORD"
-            ssh_command=(sshpass -e ssh -o PreferredAuthentications=password -o PubkeyAuthentication=no)
-          fi
-
-          ssh_target="$SSH_USER@$SSH_HOST"
-          run_remote() {
-            local remote_command="$1"
-            local remote_attempt
-            local remote_output
-            for remote_attempt in 1 2 3; do
-              if remote_output="$(
-                timeout 360s "${ssh_command[@]}" "${ssh_options[@]}" \
-                  "$ssh_target" "$remote_command"
-              )"; then
-                printf '%s' "$remote_output"
-                return 0
-              fi
-              echo "::warning::Remote command attempt ${remote_attempt}/3 failed" >&2
-              sleep $((remote_attempt * 5))
-            done
-            return 1
-          }
-
-          read_remote_size() {
-            run_remote \
-              "set -eu; \
-               exec 9>'$remote_lock'; \
-               flock -w 300 9; \
-               if [ -f '$remote_temp' ]; then \
-                 wc -c < '$remote_temp' | tr -d '[:space:]'; \
-               else \
-                 printf '0'; \
-               fi"
-          }
-
-          run_remote \
-            "command -v flock >/dev/null && \
-             command -v dd >/dev/null && \
-             command -v sha256sum >/dev/null"
-
-          remote_archive_sha="$(
-            run_remote \
-              "if [ -f '$remote_archive' ]; then sha256sum '$remote_archive' | awk '{print \$1}'; fi"
-          )"
-          if [ "$remote_archive_sha" = "$archive_sha256" ]; then
-            echo "remote-archive=$remote_archive" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-          if [ -n "$remote_archive_sha" ]; then
-            echo "::error::Remote immutable archive exists with an unexpected SHA-256"
-            exit 1
-          fi
-
-          run_remote \
-            "set -eu; \
-             exec 9>'$remote_lock'; \
-             flock -w 300 9; \
-             reset_upload_state() { \
-               rm -f '$remote_temp' '$remote_checksum'; \
-               : > '$remote_temp'; \
-               printf '%s\n' '$archive_sha256' > '$remote_checksum'; \
-             }; \
-             saved_checksum=''; \
-             if [ -f '$remote_checksum' ]; then saved_checksum=\$(cat '$remote_checksum'); fi; \
-             if [ \"\$saved_checksum\" != '$archive_sha256' ] || [ ! -f '$remote_temp' ]; then \
-               reset_upload_state; \
-             else \
-               current_size=\$(wc -c < '$remote_temp' | tr -d '[:space:]'); \
-               if [ \"\$current_size\" -gt '$archive_bytes' ]; then \
-                 reset_upload_state; \
-               elif [ \"\$current_size\" -eq '$archive_bytes' ]; then \
-                 current_sha256=\$(sha256sum '$remote_temp' | awk '{print \$1}'); \
-                 if [ \"\$current_sha256\" != '$archive_sha256' ]; then \
-                   reset_upload_state; \
-                 fi; \
-               fi; \
-             fi"
-
-          last_progress_at="$(date +%s)"
-          last_progress_bytes=-1
-          idle_timeout_seconds=1800
-          upload_attempt=0
-          while true; do
-            upload_attempt=$((upload_attempt + 1))
-            remote_size="$(read_remote_size)"
-            case "$remote_size" in
-              ''|*[!0-9]*)
-                echo "::error::Invalid remote archive size: $remote_size"
-                exit 1
-                ;;
-            esac
-            if [ "$remote_size" -eq "$archive_bytes" ]; then
-              break
-            fi
-            if [ "$remote_size" -gt "$archive_bytes" ]; then
-              echo "::error::Remote partial archive is larger than the local release"
-              exit 1
-            fi
-            if [ "$remote_size" -gt "$last_progress_bytes" ]; then
-              last_progress_at="$(date +%s)"
-              last_progress_bytes="$remote_size"
-            fi
-
-            echo "Resumable upload attempt ${upload_attempt}: ${remote_size}/${archive_bytes} bytes"
-            remaining_bytes=$((archive_bytes - remote_size))
-            if tail -c "+$((remote_size + 1))" "$archive" \
-              | head -c "$remaining_bytes" \
-              | timeout 300s "${ssh_command[@]}" "${ssh_options[@]}" \
-                "$ssh_target" \
-                "set -eu; \
-                 exec 9>'$remote_lock'; \
-                 flock -w 270 9; \
-                 current_size=\$(wc -c < '$remote_temp' | tr -d '[:space:]'); \
-                 test \"\$current_size\" = '$remote_size'; \
-                 dd of='$remote_temp' bs=64K seek='$remote_size' \
-                   oflag=seek_bytes conv=notrunc status=none"; then
-              upload_status=0
-            else
-              upload_status=$?
-              echo "::warning::Upload stream ended with status $upload_status; checking remote progress"
-            fi
-
-            next_remote_size="$(read_remote_size)"
-            case "$next_remote_size" in
-              ''|*[!0-9]*)
-                echo "::error::Invalid remote archive size after upload: $next_remote_size"
-                exit 1
-                ;;
-            esac
-            if [ "$next_remote_size" -gt "$archive_bytes" ]; then
-              echo "::error::Remote positional upload exceeded the local release size"
-              exit 1
-            fi
-            if [ "$next_remote_size" -gt "$remote_size" ]; then
-              last_progress_at="$(date +%s)"
-              last_progress_bytes="$next_remote_size"
-            else
-              now="$(date +%s)"
-              idle_seconds=$((now - last_progress_at))
-              echo "::warning::Release upload idle for ${idle_seconds}s at ${next_remote_size}/${archive_bytes} bytes"
-              if [ "$idle_seconds" -ge "$idle_timeout_seconds" ]; then
-                echo "::error::Release upload made no byte progress for ${idle_seconds}s"
-                exit 1
-              fi
-              sleep 15
-            fi
-          done
-
-          run_remote \
-            "set -eu; \
-             exec 9>'$remote_lock'; \
-             flock -w 300 9; \
-             if [ -f '$remote_archive' ]; then \
-               final_size=\$(wc -c < '$remote_archive' | tr -d '[:space:]'); \
-               test \"\$final_size\" = '$archive_bytes'; \
-               final_sha256=\$(sha256sum '$remote_archive' | awk '{print \$1}'); \
-               test \"\$final_sha256\" = '$archive_sha256'; \
-               rm -f '$remote_checksum'; \
-               exit 0; \
-             fi; \
-             remote_size=\$(wc -c < '$remote_temp' | tr -d '[:space:]'); \
-             test \"\$remote_size\" = '$archive_bytes'; \
-             remote_sha256=\$(sha256sum '$remote_temp' | awk '{print \$1}'); \
-             test \"\$remote_sha256\" = '$archive_sha256'; \
-             test ! -e '$remote_archive'; \
-             mv '$remote_temp' '$remote_archive'; \
-             rm -f '$remote_checksum'"
-          echo "remote-archive=$remote_archive" >> "$GITHUB_OUTPUT"
+      - name: Retain candidate COS receipt for final parity
+        uses: actions/upload-artifact@v4
+        with:
+          name: cos-release-candidate-${{ github.sha }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/cos-release-candidate.json
+          if-no-files-found: error
+          compression-level: 0
+          overwrite: false
+          retention-days: 7
 
       - name: Deploy verified release on Tencent
         env:
           AUTH_MODE: ${{ steps.auth.outputs.mode }}
-          DEPLOY_ARCHIVE_PATH: ${{ steps.upload_release.outputs.remote-archive }}
+          DEPLOY_COS_BUCKET: ${{ steps.cos_release.outputs.bucket }}
+          DEPLOY_COS_REGION: ${{ steps.cos_release.outputs.region }}
+          DEPLOY_COS_OBJECT_KEY: ${{ steps.cos_release.outputs.object-key }}
+          DEPLOY_ARCHIVE_BYTES: ${{ steps.cos_release.outputs.archive-bytes }}
+          DEPLOY_ARCHIVE_SHA256: ${{ steps.cos_release.outputs.archive-sha256 }}
+          DEPLOY_ARCHIVE_CRC64: ${{ steps.cos_release.outputs.archive-crc64 }}
+          DEPLOY_COS_CVM_ROLE_NAME: ${{ vars.COS_RELEASE_CVM_ROLE_NAME }}
           SSH_HOST: ${{ secrets.SSH_HOST }}
           SSH_USER: ${{ secrets.SSH_USER }}
           SSH_PORT: ${{ secrets.SSH_PORT }}
@@ -570,6 +436,7 @@ jobs:
           NODE_VERSION: ${{ needs.build_frontend.outputs.node_version }}
         run: |
           set -euo pipefail
+          : "${DEPLOY_COS_CVM_ROLE_NAME:?Missing production variable COS_RELEASE_CVM_ROLE_NAME}"
           SSH_PORT="${SSH_PORT:-22}"
           DEPLOY_SERVER_NAME="${DEPLOY_SERVER_NAME:-ojeur.cloud www.ojeur.cloud}"
           DEPLOY_ENABLE_HTTPS="${DEPLOY_ENABLE_HTTPS:-true}"
@@ -577,8 +444,8 @@ jobs:
 
           ssh_options=(
             -T -p "$SSH_PORT"
-            -o StrictHostKeyChecking=no
-            -o UserKnownHostsFile=/dev/null
+            -o StrictHostKeyChecking=yes
+            -o UserKnownHostsFile="$HOME/.ssh/known_hosts"
             -o ConnectTimeout=20
             -o ConnectionAttempts=2
             -o ServerAliveInterval=10
@@ -594,31 +461,50 @@ jobs:
             ssh_command=(sshpass -e ssh -o PreferredAuthentications=password -o PubkeyAuthentication=no)
           fi
 
-          remote_exports="export DEPLOY_SERVER_NAME=$(printf '%q' "$DEPLOY_SERVER_NAME"); "
-          remote_exports+="export DEPLOY_ENABLE_HTTPS=$(printf '%q' "$DEPLOY_ENABLE_HTTPS"); "
-          remote_exports+="export DEPLOY_CERTBOT_EMAIL=$(printf '%q' "${DEPLOY_CERTBOT_EMAIL:-}"); "
-          remote_exports+="export DEPLOY_BRANCH=main; "
-          remote_exports+="export DEPLOY_COMMIT_SHA=$(printf '%q' "$GITHUB_SHA"); "
-          remote_exports+="export DEPLOY_SHORT_SHA=$(printf '%q' "$deploy_short_sha"); "
-          remote_exports+="export DEPLOY_RELEASE_ID=$(printf '%q' "$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"); "
-          remote_exports+="export DEPLOY_RUN_ID=$(printf '%q' "$GITHUB_RUN_ID"); "
-          remote_exports+="export DEPLOY_RUN_ATTEMPT=$(printf '%q' "$GITHUB_RUN_ATTEMPT"); "
-          remote_exports+="export DEPLOY_ARCHIVE_PATH=$(printf '%q' "$DEPLOY_ARCHIVE_PATH"); "
-          remote_exports+="export DEPLOY_REPOSITORY=$(printf '%q' "$GITHUB_REPOSITORY"); "
-          remote_exports+="export DEPLOY_WORKFLOW=$(printf '%q' "$GITHUB_WORKFLOW"); "
-          remote_exports+="export FRONTEND_ARTIFACT_NAME=$(printf '%q' "$ARTIFACT_NAME"); "
-          remote_exports+="export FRONTEND_ARTIFACT_IDENTITY=$(printf '%q' "$ARTIFACT_IDENTITY"); "
-          remote_exports+="export FRONTEND_ARTIFACT_CHECKSUM=$(printf '%q' "$ARTIFACT_CHECKSUM"); "
-          remote_exports+="export FRONTEND_GITHUB_ARTIFACT_ID=$(printf '%q' "$GITHUB_ARTIFACT_ID"); "
-          remote_exports+="export FRONTEND_GITHUB_ARTIFACT_DIGEST=$(printf '%q' "$GITHUB_ARTIFACT_DIGEST"); "
-          remote_exports+="export FRONTEND_BUILD_ID=$(printf '%q' "$FRONTEND_BUILD_ID"); "
-          remote_exports+="export FRONTEND_NODE_VERSION=$(printf '%q' "$NODE_VERSION"); "
-          for secret_name in DEEPSEEK_API_KEY HERMES_SYNC_TOKEN GOOGLE_CLIENT_ID GOOGLE_CLIENT_SECRET GOOGLE_OAUTH_PROXY_URL GOOGLE_OAUTH_RELAY_URL GOOGLE_OAUTH_RELAY_TOKEN MIHOMO_SUB_URL MIHOMO_DB_PATH; do
-            remote_exports+="export $secret_name=$(printf '%q' "${!secret_name:-}"); "
-          done
+          remote_payload="$(mktemp "$RUNNER_TEMP/jato-remote-release.XXXXXX")"
+          cleanup_remote_payload() {
+            rm -f "$remote_payload" ~/.ssh/github_actions_tencent_key
+          }
+          trap cleanup_remote_payload EXIT
+          emit_export() {
+            printf 'export %s=%q\n' "$1" "$2"
+          }
+          {
+            emit_export DEPLOY_SERVER_NAME "$DEPLOY_SERVER_NAME"
+            emit_export DEPLOY_ENABLE_HTTPS "$DEPLOY_ENABLE_HTTPS"
+            emit_export DEPLOY_CERTBOT_EMAIL "${DEPLOY_CERTBOT_EMAIL:-}"
+            emit_export DEPLOY_BRANCH main
+            emit_export DEPLOY_COMMIT_SHA "$GITHUB_SHA"
+            emit_export DEPLOY_SHORT_SHA "$deploy_short_sha"
+            emit_export DEPLOY_RELEASE_ID "$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
+            emit_export DEPLOY_RUN_ID "$GITHUB_RUN_ID"
+            emit_export DEPLOY_RUN_ATTEMPT "$GITHUB_RUN_ATTEMPT"
+            emit_export DEPLOY_COS_BUCKET "$DEPLOY_COS_BUCKET"
+            emit_export DEPLOY_COS_REGION "$DEPLOY_COS_REGION"
+            emit_export DEPLOY_COS_OBJECT_KEY "$DEPLOY_COS_OBJECT_KEY"
+            emit_export DEPLOY_ARCHIVE_BYTES "$DEPLOY_ARCHIVE_BYTES"
+            emit_export DEPLOY_ARCHIVE_SHA256 "$DEPLOY_ARCHIVE_SHA256"
+            emit_export DEPLOY_ARCHIVE_CRC64 "$DEPLOY_ARCHIVE_CRC64"
+            emit_export DEPLOY_COS_CVM_ROLE_NAME "$DEPLOY_COS_CVM_ROLE_NAME"
+            emit_export DEPLOY_REPOSITORY "$GITHUB_REPOSITORY"
+            emit_export DEPLOY_WORKFLOW "$GITHUB_WORKFLOW"
+            emit_export FRONTEND_ARTIFACT_NAME "$ARTIFACT_NAME"
+            emit_export FRONTEND_ARTIFACT_IDENTITY "$ARTIFACT_IDENTITY"
+            emit_export FRONTEND_ARTIFACT_CHECKSUM "$ARTIFACT_CHECKSUM"
+            emit_export FRONTEND_GITHUB_ARTIFACT_ID "$GITHUB_ARTIFACT_ID"
+            emit_export FRONTEND_GITHUB_ARTIFACT_DIGEST "$GITHUB_ARTIFACT_DIGEST"
+            emit_export FRONTEND_BUILD_ID "$FRONTEND_BUILD_ID"
+            emit_export FRONTEND_NODE_VERSION "$NODE_VERSION"
+            for secret_name in DEEPSEEK_API_KEY HERMES_SYNC_TOKEN GOOGLE_CLIENT_ID GOOGLE_CLIENT_SECRET GOOGLE_OAUTH_PROXY_URL GOOGLE_OAUTH_RELAY_URL GOOGLE_OAUTH_RELAY_TOKEN MIHOMO_SUB_URL MIHOMO_DB_PATH; do
+              emit_export "$secret_name" "${!secret_name:-}"
+            done
+            printf '\n'
+            sed '1{/^#!.*bash$/d;}' 03_Scripts/deploy/fullstack_remote_release.sh
+          } > "$remote_payload"
+          chmod 600 "$remote_payload"
 
-          timeout 1800s "${ssh_command[@]}" "${ssh_options[@]}" "$SSH_USER@$SSH_HOST" \
-            "${remote_exports}bash -s" < 03_Scripts/deploy/fullstack_remote_release.sh
+          timeout 1800s "${ssh_command[@]}" "${ssh_options[@]}" \
+            "$SSH_USER@$SSH_HOST" 'exec bash -s' < "$remote_payload"
 
       - name: Verify Tencent public release provenance
         env:
@@ -751,3 +637,28 @@ jobs:
             --origin "$INTL_ORIGIN" \
             --attempts 6 \
             --delay-seconds 10
+
+      - name: Download candidate COS receipt after final parity
+        uses: actions/download-artifact@v5
+        with:
+          name: cos-release-candidate-${{ github.sha }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/cos-release-candidate
+
+      - name: Seal verified production COS receipt
+        run: |
+          set -euo pipefail
+          python3 03_Scripts/deploy/cos_release_transport.py seal \
+            --receipt "$RUNNER_TEMP/cos-release-candidate/cos-release-candidate.json" \
+            --github-sha "$GITHUB_SHA" \
+            --repository "$GITHUB_REPOSITORY" \
+            --output "$RUNNER_TEMP/cos-release-verified.json"
+
+      - name: Retain verified production COS receipt
+        uses: actions/upload-artifact@v4
+        with:
+          name: cos-release-receipt-${{ github.sha }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/cos-release-verified.json
+          if-no-files-found: error
+          compression-level: 0
+          overwrite: false
+          retention-days: 30

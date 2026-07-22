@@ -9,7 +9,13 @@ export NO_PROXY="${NO_PROXY:+$NO_PROXY,}$LOCAL_NO_PROXY_HOSTS"
 
 for required_name in \
   DEPLOY_COMMIT_SHA \
-  DEPLOY_ARCHIVE_PATH \
+  DEPLOY_COS_BUCKET \
+  DEPLOY_COS_REGION \
+  DEPLOY_COS_OBJECT_KEY \
+  DEPLOY_COS_CVM_ROLE_NAME \
+  DEPLOY_ARCHIVE_BYTES \
+  DEPLOY_ARCHIVE_SHA256 \
+  DEPLOY_ARCHIVE_CRC64 \
   DEPLOY_BRANCH \
   DEPLOY_RUN_ID \
   DEPLOY_RUN_ATTEMPT \
@@ -31,12 +37,55 @@ if [ "$DEPLOY_BRANCH" != "main" ]; then
   exit 1
 fi
 
+if [[ ! "$DEPLOY_COMMIT_SHA" =~ ^[0-9a-f]{40}$ ]]; then
+  echo "[ERROR] DEPLOY_COMMIT_SHA must be a full lowercase git SHA"
+  exit 1
+fi
+if [[ ! "$DEPLOY_ARCHIVE_SHA256" =~ ^[0-9a-f]{64}$ ]]; then
+  echo "[ERROR] DEPLOY_ARCHIVE_SHA256 must be a lowercase SHA-256"
+  exit 1
+fi
+if [[ ! "$DEPLOY_ARCHIVE_BYTES" =~ ^[1-9][0-9]*$ ]]; then
+  echo "[ERROR] DEPLOY_ARCHIVE_BYTES must be a positive integer"
+  exit 1
+fi
+if [[ ! "$DEPLOY_ARCHIVE_CRC64" =~ ^[0-9]+$ ]]; then
+  echo "[ERROR] DEPLOY_ARCHIVE_CRC64 must be an unsigned decimal CRC64"
+  exit 1
+fi
+if [[ ! "$DEPLOY_COS_BUCKET" =~ ^[a-z0-9][a-z0-9-]{0,49}-[1-9][0-9]{4,}$ ]]; then
+  echo "[ERROR] DEPLOY_COS_BUCKET has an invalid format"
+  exit 1
+fi
+if [[ ! "$DEPLOY_COS_REGION" =~ ^[a-z][a-z0-9-]{1,31}$ ]]; then
+  echo "[ERROR] DEPLOY_COS_REGION has an invalid format"
+  exit 1
+fi
+if [[ ! "$DEPLOY_COS_CVM_ROLE_NAME" =~ ^[A-Za-z0-9+=,.@_-]{1,64}$ ]]; then
+  echo "[ERROR] DEPLOY_COS_CVM_ROLE_NAME has an invalid format"
+  exit 1
+fi
+EXPECTED_COS_OBJECT_KEY="releases/${DEPLOY_COMMIT_SHA}/${DEPLOY_ARCHIVE_SHA256}.tar.gz"
+if [ "$DEPLOY_COS_OBJECT_KEY" != "$EXPECTED_COS_OBJECT_KEY" ]; then
+  echo "[ERROR] COS object key is outside the immutable production release namespace"
+  exit 1
+fi
+
 RELEASE_WORKTREE="/tmp/JATO_deploy_work_${DEPLOY_COMMIT_SHA}"
-RELEASE_ARCHIVE="$DEPLOY_ARCHIVE_PATH"
-DEPLOY_SOURCE="github_actions_archive"
+RELEASE_ARCHIVE="/tmp/JATO_deploy_${DEPLOY_COMMIT_SHA}_${DEPLOY_ARCHIVE_SHA256}.tar.gz"
+COSCLI_BIN="${COSCLI_BIN:-/usr/local/bin/coscli}"
+COS_INTERNAL_ENDPOINT="cos-internal.${DEPLOY_COS_REGION}.tencentcos.cn"
+COS_INTERNAL_HOST="${DEPLOY_COS_BUCKET}.${COS_INTERNAL_ENDPOINT}"
+COS_NO_PROXY_HOSTS="metadata.tencentyun.com,169.254.0.23,${COS_INTERNAL_HOST}"
+export no_proxy="${no_proxy:+$no_proxy,}$COS_NO_PROXY_HOSTS"
+export NO_PROXY="${NO_PROXY:+$NO_PROXY,}$COS_NO_PROXY_HOSTS"
+COS_CONFIG_PATH=""
+COS_DOWNLOAD_TEMP=""
+RUNTIME_PRESERVE_DIR=""
+PRODUCTION_MUTATION_STARTED="false"
+DEPLOY_SOURCE="tencent_cos_immutable_release"
 PRODUCTION_RELEASE_WORKFLOW="true"
-PREBUILT_FRONTEND_DIR="$REPO_DIR/06_AppPlatform/frontend/.dist-${DEPLOY_COMMIT_SHA}.staged"
-RUNTIME_PRESERVE_DIR="$(mktemp -d /tmp/JATO_deploy_runtime.XXXXXX)"
+PREBUILT_FRONTEND_DIR="/tmp/JATO_frontend_${DEPLOY_COMMIT_SHA}_${DEPLOY_ARCHIVE_SHA256}.staged"
 RUNTIME_PRESERVE_PATHS="
 03_Scripts/diagnostics/artifacts
 03_Scripts/logs
@@ -44,18 +93,210 @@ RUNTIME_PRESERVE_PATHS="
 hermes/reports
 "
 
+cleanup_transport_files() {
+  if [ -n "$COS_CONFIG_PATH" ]; then
+    rm -f "$COS_CONFIG_PATH"
+  fi
+  if [ -n "$COS_DOWNLOAD_TEMP" ]; then
+    rm -f "$COS_DOWNLOAD_TEMP"
+  fi
+  if [ -n "${PREBUILT_FRONTEND_DIR:-}" ] && [ -d "$PREBUILT_FRONTEND_DIR" ]; then
+    rm -rf "$PREBUILT_FRONTEND_DIR"
+  fi
+  if [ "$PRODUCTION_MUTATION_STARTED" = "false" ]; then
+    rm -rf "$RELEASE_WORKTREE"
+    if [ -n "${RUNTIME_PRESERVE_DIR:-}" ]; then
+      rm -rf "$RUNTIME_PRESERVE_DIR"
+    fi
+    rm -f "$RELEASE_ARCHIVE"
+  else
+    for recovery_path in "$RELEASE_WORKTREE" "${RUNTIME_PRESERVE_DIR:-}"; do
+      if [ -n "$recovery_path" ] && [ -e "$recovery_path" ]; then
+        echo "[WARN] Retained deployment recovery path after production mutation: $recovery_path" >&2
+      fi
+    done
+  fi
+}
+trap cleanup_transport_files EXIT
+
+archive_crc64() {
+  python3 - "$1" <<'PY'
+import pathlib
+import sys
+
+mask = (1 << 64) - 1
+polynomial = 0xC96C5795D7870F42
+table = []
+for byte in range(256):
+    value = byte
+    for _ in range(8):
+        value = (value >> 1) ^ polynomial if value & 1 else value >> 1
+    table.append(value & mask)
+
+crc = mask
+with pathlib.Path(sys.argv[1]).open("rb") as handle:
+    for block in iter(lambda: handle.read(1024 * 1024), b""):
+        for byte in block:
+            crc = table[(crc ^ byte) & 0xFF] ^ (crc >> 8)
+print(crc ^ mask)
+PY
+}
+
+verify_release_archive_identity() {
+  local archive_path="$1"
+  local actual_bytes
+  local actual_sha256
+  local actual_crc64
+  if [ ! -f "$archive_path" ]; then
+    echo "[ERROR] COS release archive is missing after download"
+    return 1
+  fi
+  actual_bytes="$(wc -c < "$archive_path" | tr -d '[:space:]')"
+  if [ "$actual_bytes" != "$DEPLOY_ARCHIVE_BYTES" ]; then
+    echo "[ERROR] COS release archive size mismatch: actual=$actual_bytes expected=$DEPLOY_ARCHIVE_BYTES"
+    return 1
+  fi
+  actual_sha256="$(sha256sum "$archive_path" | awk '{print $1}')"
+  if [ "$actual_sha256" != "$DEPLOY_ARCHIVE_SHA256" ]; then
+    echo "[ERROR] COS release archive SHA-256 mismatch"
+    return 1
+  fi
+  actual_crc64="$(archive_crc64 "$archive_path")"
+  if [ "$actual_crc64" != "$DEPLOY_ARCHIVE_CRC64" ]; then
+    echo "[ERROR] COS release archive CRC64 mismatch: actual=$actual_crc64 expected=$DEPLOY_ARCHIVE_CRC64"
+    return 1
+  fi
+}
+
+if [ ! -x "$COSCLI_BIN" ]; then
+  echo "[ERROR] Pinned COSCLI is not installed at $COSCLI_BIN"
+  exit 1
+fi
+if ! "$COSCLI_BIN" --version 2>&1 | grep -Fq 'v1.0.8'; then
+  echo "[ERROR] COSCLI v1.0.8 is required for production release download"
+  exit 1
+fi
+
+if [ -f "$RELEASE_ARCHIVE" ]; then
+  echo "[INFO] Reusing locally cached immutable COS release archive"
+  verify_release_archive_identity "$RELEASE_ARCHIVE"
+else
+  COS_CONFIG_PATH="$(mktemp /tmp/jato-cos-release.XXXXXX.yaml)"
+  chmod 600 "$COS_CONFIG_PATH"
+  {
+    echo 'cos:'
+    echo '  base:'
+    echo '    mode: CvmRole'
+    echo "    cvmrolename: $DEPLOY_COS_CVM_ROLE_NAME"
+    echo '    protocol: https'
+    echo '    closeautoswitchhost: "true"'
+    echo '    disableencryption: "true"'
+    echo '    disableautofetchbuckettype: "true"'
+    echo '  buckets:'
+    echo "    - name: $DEPLOY_COS_BUCKET"
+    echo '      alias: release'
+    echo "      region: $DEPLOY_COS_REGION"
+    echo "      endpoint: $COS_INTERNAL_ENDPOINT"
+    echo '      ofs: false'
+  } > "$COS_CONFIG_PATH"
+  COS_DOWNLOAD_TEMP="$(mktemp "/tmp/JATO_deploy_${DEPLOY_COMMIT_SHA}.downloading.XXXXXX")"
+  echo "[INFO] Downloading immutable release from COS over the derived regional endpoint"
+  "$COSCLI_BIN" \
+    --config-path "$COS_CONFIG_PATH" \
+    --disable-log \
+    --bucket-type COS \
+    cp "cos://$DEPLOY_COS_BUCKET/$DEPLOY_COS_OBJECT_KEY" "$COS_DOWNLOAD_TEMP" \
+    --part-size 8 \
+    --thread-num 4 \
+    --routines 1 \
+    --disable-crc64=false \
+    --disable-checksum=false \
+    --fail-output=false \
+    --process-log=false \
+    --check-point=false
+  verify_release_archive_identity "$COS_DOWNLOAD_TEMP"
+  mv "$COS_DOWNLOAD_TEMP" "$RELEASE_ARCHIVE"
+  COS_DOWNLOAD_TEMP=""
+  rm -f "$COS_CONFIG_PATH"
+  COS_CONFIG_PATH=""
+fi
+
 rm -rf "$RELEASE_WORKTREE"
 mkdir -p "$RELEASE_WORKTREE"
-if [ ! -f "$RELEASE_ARCHIVE" ]; then
-  echo "[ERROR] Uploaded production release archive is missing: $RELEASE_ARCHIVE"
-  exit 1
-fi
 if ! tar tzf "$RELEASE_ARCHIVE" >/dev/null 2>&1; then
-  echo "[ERROR] Uploaded production release archive is incomplete or invalid"
+  echo "[ERROR] COS production release archive is incomplete or invalid"
   exit 1
 fi
-echo "[INFO] Extracting uploaded production release archive: $RELEASE_ARCHIVE"
+python3 - "$RELEASE_ARCHIVE" <<'PY'
+import pathlib
+import sys
+import tarfile
+
+with tarfile.open(sys.argv[1], mode="r:gz") as archive:
+    for member in archive.getmembers():
+        name = pathlib.PurePosixPath(member.name)
+        if name.is_absolute() or ".." in name.parts:
+            raise SystemExit(f"[ERROR] Unsafe release archive path: {member.name}")
+        if member.issym() or member.islnk() or member.isdev():
+            raise SystemExit(f"[ERROR] Unsupported release archive member: {member.name}")
+print("[INFO] Release archive member paths passed fail-closed validation")
+PY
+echo "[INFO] Extracting verified COS production release archive: $RELEASE_ARCHIVE"
 tar xzf "$RELEASE_ARCHIVE" -C "$RELEASE_WORKTREE"
+
+required_release_files=(
+  hermes/deploy_release.json
+  hermes/frontend_release/frontend-release.json
+  hermes/frontend_release/frontend-dist.tar.gz
+  01_RAW_DATA/VOC_Nordic_SUV_Users_100.xlsx
+  03_Scripts/deploy/frontend_release_artifact.py
+  03_Scripts/deploy_fullstack_server.sh
+  03_Scripts/ops/deploy_fullstack_server.sh
+  03_Scripts/deploy/nginx/enable_jato_fullstack_https.sh
+  03_Scripts/deploy/nginx/install_jato_fullstack_nginx.sh
+  03_Scripts/deploy/systemd/jato-country-news.env.example
+  03_Scripts/deploy/systemd/jato-msrp.env.example
+  03_Scripts/deploy/systemd/jato-voc.env.example
+  03_Scripts/deploy/systemd/jato-country-news-sync.service
+  03_Scripts/deploy/systemd/jato-country-news-sync.timer
+  03_Scripts/deploy/systemd/jato-country-news-sync-b.service
+  03_Scripts/deploy/systemd/jato-country-news-sync-b.timer
+  03_Scripts/deploy/systemd/jato-msrp-sync@.service
+  03_Scripts/deploy/systemd/jato-msrp-dryrun.timer
+  03_Scripts/deploy/systemd/jato-msrp-ingest.timer
+  03_Scripts/deploy/systemd/jato-voc-forum-sync.service
+  03_Scripts/deploy/systemd/jato-voc-forum-sync.timer
+  03_Scripts/deploy/systemd/hermes-source-quality.service
+  03_Scripts/deploy/systemd/hermes-source-quality.timer
+  06_AppPlatform/backend/requirements.txt
+  06_AppPlatform/backend/alembic.ini
+  06_AppPlatform/backend/alembic/env.py
+  06_AppPlatform/backend/app/main.py
+  07_ScrapingToolkit/pyproject.toml
+  03_Scripts/diagnostics/artifacts/msrp_backfill/sweden_swiss_top30_suv/top30_suv_price_movement_candidates.json
+  03_Scripts/diagnostics/artifacts/msrp_backfill/sweden_swiss_top30_suv/official_evidence_leads.json
+)
+for release_file in "${required_release_files[@]}"; do
+  if [ ! -f "$RELEASE_WORKTREE/$release_file" ]; then
+    echo "[ERROR] Production release archive is missing required file: $release_file"
+    exit 1
+  fi
+done
+
+required_release_directories=(
+  03_Scripts/deploy/systemd
+  06_AppPlatform/backend/app
+  06_AppPlatform/frontend
+  07_ScrapingToolkit/jato_scraper
+  hermes/frontend_release
+)
+for release_directory in "${required_release_directories[@]}"; do
+  if [ ! -d "$RELEASE_WORKTREE/$release_directory" ]; then
+    echo "[ERROR] Production release archive is missing required directory: $release_directory"
+    exit 1
+  fi
+done
+
 ARCHIVE_COMMIT="$(python3 -c 'import json, sys; from pathlib import Path; payload = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8")); print(payload.get("expectedCommitSha") or payload.get("commitSha") or "")' "$RELEASE_WORKTREE/hermes/deploy_release.json")"
 if [ "$ARCHIVE_COMMIT" != "$DEPLOY_COMMIT_SHA" ]; then
   echo "[ERROR] Uploaded release commit mismatch: archive=${ARCHIVE_COMMIT:-missing} expected=$DEPLOY_COMMIT_SHA"
@@ -64,10 +305,7 @@ fi
 
 FRONTEND_RELEASE_DIR="$RELEASE_WORKTREE/hermes/frontend_release"
 FRONTEND_RELEASE_HELPER="$RELEASE_WORKTREE/03_Scripts/deploy/frontend_release_artifact.py"
-if [ ! -f "$FRONTEND_RELEASE_HELPER" ]; then
-  echo "[ERROR] Immutable frontend release verifier is missing"
-  exit 1
-fi
+rm -rf "$PREBUILT_FRONTEND_DIR"
 python3 "$FRONTEND_RELEASE_HELPER" verify \
   --release-dir "$FRONTEND_RELEASE_DIR" \
   --expected-github-sha "$DEPLOY_COMMIT_SHA" \
@@ -79,7 +317,27 @@ python3 "$FRONTEND_RELEASE_HELPER" verify \
   --expected-run-id "$DEPLOY_RUN_ID" \
   --expected-run-attempt "$DEPLOY_RUN_ATTEMPT" \
   --github-artifact-id "$FRONTEND_GITHUB_ARTIFACT_ID" \
-  --github-artifact-digest "$FRONTEND_GITHUB_ARTIFACT_DIGEST"
+  --github-artifact-digest "$FRONTEND_GITHUB_ARTIFACT_DIGEST" \
+  --materialize-dir "$PREBUILT_FRONTEND_DIR"
+for frontend_file in index.html build-meta.json release-provenance.json; do
+  if [ ! -f "$PREBUILT_FRONTEND_DIR/$frontend_file" ]; then
+    echo "[ERROR] Verified frontend staging is missing required file: $frontend_file"
+    exit 1
+  fi
+done
+
+if [ -d "$REPO_DIR/06_AppPlatform/frontend" ]; then
+  staging_device="$(stat -c '%d' "$PREBUILT_FRONTEND_DIR")"
+  production_device="$(stat -c '%d' "$REPO_DIR/06_AppPlatform/frontend")"
+  if [ "$staging_device" != "$production_device" ]; then
+    echo "[ERROR] Frontend staging and production directories must share a filesystem for atomic install"
+    exit 1
+  fi
+fi
+
+echo "[INFO] Release archive and materialized frontend passed all pre-mutation checks"
+
+RUNTIME_PRESERVE_DIR="$(mktemp -d /tmp/JATO_deploy_runtime.XXXXXX)"
 
 for runtime_path in $RUNTIME_PRESERVE_PATHS; do
   if [ -e "$REPO_DIR/$runtime_path" ]; then
@@ -89,6 +347,9 @@ for runtime_path in $RUNTIME_PRESERVE_PATHS; do
   fi
 done
 
+# Production mutation boundary: every archive, helper, config, workbook, and
+# materialized frontend check above must succeed before this point.
+PRODUCTION_MUTATION_STARTED="true"
 sudo mkdir -p "$REPO_DIR"
 sudo chown -R "$USER":"$USER" "$REPO_DIR"
 for release_path in 03_Scripts 06_AppPlatform 07_ScrapingToolkit hermes; do
@@ -97,10 +358,6 @@ for release_path in 03_Scripts 06_AppPlatform 07_ScrapingToolkit hermes; do
     (cd "$RELEASE_WORKTREE" && tar cf - "$release_path") | (cd "$REPO_DIR" && tar xf -)
   fi
 done
-if [ ! -f "$RELEASE_WORKTREE/01_RAW_DATA/VOC_Nordic_SUV_Users_100.xlsx" ]; then
-  echo "[ERROR] Production release archive is missing the required workbook"
-  exit 1
-fi
 mkdir -p "$REPO_DIR/01_RAW_DATA"
 cp -f "$RELEASE_WORKTREE/01_RAW_DATA/VOC_Nordic_SUV_Users_100.xlsx" \
   "$REPO_DIR/01_RAW_DATA/VOC_Nordic_SUV_Users_100.xlsx"
@@ -123,21 +380,6 @@ for runtime_path in $RUNTIME_PRESERVE_PATHS; do
   fi
 done
 rm -rf "$RUNTIME_PRESERVE_DIR"
-
-rm -rf "$PREBUILT_FRONTEND_DIR"
-python3 "$FRONTEND_RELEASE_HELPER" verify \
-  --release-dir "$FRONTEND_RELEASE_DIR" \
-  --expected-github-sha "$DEPLOY_COMMIT_SHA" \
-  --expected-artifact-name "$FRONTEND_ARTIFACT_NAME" \
-  --expected-artifact-identity "$FRONTEND_ARTIFACT_IDENTITY" \
-  --expected-artifact-checksum "$FRONTEND_ARTIFACT_CHECKSUM" \
-  --expected-build-id "$FRONTEND_BUILD_ID" \
-  --expected-node-version "$FRONTEND_NODE_VERSION" \
-  --expected-run-id "$DEPLOY_RUN_ID" \
-  --expected-run-attempt "$DEPLOY_RUN_ATTEMPT" \
-  --github-artifact-id "$FRONTEND_GITHUB_ARTIFACT_ID" \
-  --github-artifact-digest "$FRONTEND_GITHUB_ARTIFACT_DIGEST" \
-  --materialize-dir "$PREBUILT_FRONTEND_DIR"
 
 rm -rf "$RELEASE_WORKTREE"
 rm -f "$RELEASE_ARCHIVE"
@@ -166,7 +408,17 @@ PACKAGED_MIHOMO_CONFIG="$REPO_DIR/hermes/runtime/mihomo/config.yaml"
 } > "$MIHOMO_REFRESH_LOG" 2>&1 \
   || echo "[WARN] Local mihomo refresh failed; continuing with existing proxy config" >> "$MIHOMO_REFRESH_LOG"
 
-export REPO_DIR DEPLOY_SOURCE PREBUILT_FRONTEND_DIR PRODUCTION_RELEASE_WORKFLOW
+export \
+  REPO_DIR \
+  DEPLOY_SOURCE \
+  PREBUILT_FRONTEND_DIR \
+  PRODUCTION_RELEASE_WORKFLOW \
+  DEPLOY_COS_BUCKET \
+  DEPLOY_COS_REGION \
+  DEPLOY_COS_OBJECT_KEY \
+  DEPLOY_ARCHIVE_BYTES \
+  DEPLOY_ARCHIVE_SHA256 \
+  DEPLOY_ARCHIVE_CRC64
 python3 - <<'PY'
 import datetime as _dt
 import json
@@ -195,6 +447,15 @@ payload.update({
     "deployMethod": "github_actions",
     "packagedAt": _dt.datetime.now(_dt.UTC).isoformat(),
     "source": os.environ.get("DEPLOY_SOURCE", "github_actions_archive"),
+    "releaseTransport": {
+        "kind": "tencent-cos",
+        "bucket": os.environ.get("DEPLOY_COS_BUCKET", ""),
+        "region": os.environ.get("DEPLOY_COS_REGION", ""),
+        "objectKey": os.environ.get("DEPLOY_COS_OBJECT_KEY", ""),
+        "archiveBytes": int(os.environ.get("DEPLOY_ARCHIVE_BYTES", "0")),
+        "archiveSha256": os.environ.get("DEPLOY_ARCHIVE_SHA256", ""),
+        "archiveCrc64Ecma": os.environ.get("DEPLOY_ARCHIVE_CRC64", ""),
+    },
 })
 if not isinstance(payload.get("frontendRelease"), dict):
     raise SystemExit("[ERROR] deploy_release.json is missing frontendRelease provenance")

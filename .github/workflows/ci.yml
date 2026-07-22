@@ -48,6 +48,12 @@ jobs:
       - name: Install workflow validation dependency
         run: python -m pip install "PyYAML==6.0.2"
 
+      - name: Install hash-locked COS transport dependencies
+        run: >-
+          python -m pip install
+          --require-hashes
+          --requirement 03_Scripts/deploy/requirements-cos-release.txt
+
       - name: Install locked edge contract dependencies
         working-directory: 06_AppPlatform/frontend
         run: npm ci
@@ -59,6 +65,7 @@ jobs:
         run: >-
           python -m unittest
           03_Scripts/tests/test_frontend_release_artifact.py
+          03_Scripts/tests/test_cos_release_transport.py
           03_Scripts/tests/test_verify_intl_runtime_contract.py
           -v
 

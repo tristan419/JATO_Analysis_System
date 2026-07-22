@@ -8,6 +8,16 @@ Tencent/www and Cloudflare/intl both consume that exact artifact by the numeric
 GitHub artifact id; neither deployment reads runtime frontend code from an
 unverified checkout path.
 
+The complete backend release archive uses Tencent COS only as its transport.
+GitHub obtains a short-lived upload credential through OIDC, uploads to the
+globally accelerated endpoint, and verifies object bytes, SHA-256 metadata, and
+CRC64 with a HEAD request. The object key is content-addressed as
+`releases/<main commit>/<archive sha256>.tar.gz` and forbids overwrite. SSH no
+longer carries archive bytes; the host-pinned channel sends release controls,
+the existing deploy environment, and the release script through a mode-`0600`
+stdin payload instead of process arguments. The CVM downloads with its read-only
+instance role through the derived same-region internal endpoint.
+
 ## Artifact and provenance fields
 
 - `artifact.name`: deterministic artifact name for the source revision.
@@ -47,6 +57,23 @@ Pages project containing only the artifact's verified Functions tree. A pinned
 Node/Wrangler pair compiles the tree before any production mutation, and the
 generated routes must contain all three required routes.
 
+The outer COS archive is also fail-closed. The GitHub uploader validates every
+multipart part's CRC64, the completed object's CRC64, exact size, SHA-256
+metadata, commit metadata, and object-key namespace. The CVM downloads to a
+temporary file and independently recomputes size, SHA-256, and CRC64 before an
+atomic local rename. Archive paths are checked before extraction. None of these
+transport failures reaches the production code directories. COS does not make
+the later backend directory copy or database migration transactional; those
+continue to use the existing deployment and migration failure boundaries.
+
+Only after Tencent provenance, Cloudflare provenance, and the intl runtime API
+gate and the final www/intl parity audit all succeed does the workflow seal a
+`verified-production` COS receipt. An uploaded candidate without that sealed
+receipt is not an approved rollback source. Candidate evidence is retained for
+7 days; the sealed receipt is retained for 30 days to match the `releases/`
+object lifecycle. Longer-lived rollback objects require a separate,
+administrator-approved copy into the protected `rollback/` prefix.
+
 After Cloudflare switches, the workflow rejects an intl release unless root
 health, API data freshness, and OAuth relay health all return real JSON with
 their expected edge markers. A SPA fallback returning `200 text/html` is a
@@ -68,9 +95,12 @@ cache prewarm script. It is not a deployment entry point.
 Run the deterministic local checks without production secrets:
 
 ```bash
+python -m pip install --require-hashes \
+  --requirement 03_Scripts/deploy/requirements-cos-release.txt
 python .github/scripts/validate_frontend_release_workflow.py
 python -m unittest \
   03_Scripts/tests/test_frontend_release_artifact.py \
+  03_Scripts/tests/test_cos_release_transport.py \
   03_Scripts/tests/test_verify_intl_runtime_contract.py \
   -v
 ```

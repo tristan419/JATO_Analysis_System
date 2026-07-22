@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
+import json
 from pathlib import Path
 import re
 from typing import Any
@@ -16,6 +17,12 @@ PRODUCTION_WORKFLOW_PATH = REPO_ROOT / ".github/workflows/production-release.yml
 PREWARM_WORKFLOW_PATH = REPO_ROOT / ".github/workflows/intl-edge-prewarm.yml"
 CI_WORKFLOW_PATH = REPO_ROOT / ".github/workflows/ci.yml"
 REMOTE_RELEASE_PATH = REPO_ROOT / "03_Scripts/deploy/fullstack_remote_release.sh"
+COS_REQUIREMENTS_PATH = REPO_ROOT / "03_Scripts/deploy/requirements-cos-release.txt"
+COSCLI_INSTALLER_PATH = REPO_ROOT / "03_Scripts/deploy/install_cos_release_transport.sh"
+COS_UPLOAD_POLICY_PATH = (
+    REPO_ROOT / "03_Scripts/deploy/cos/github-upload-policy.template.json"
+)
+COS_CVM_POLICY_PATH = REPO_ROOT / "03_Scripts/deploy/cos/cvm-read-policy.template.json"
 SERVER_RELEASE_PATH = REPO_ROOT / "03_Scripts/ops/deploy_fullstack_server.sh"
 MAIN_CONDITION = "github.ref == 'refs/heads/main'"
 PREWARM_CONDITION = " ".join(
@@ -39,6 +46,18 @@ REQUIRED_BUILD_OUTPUTS = {
 }
 CLOUDFLARE_PROJECT_DIRECTORY = "${{ runner.temp }}/cloudflare-pages-project"
 PINNED_WRANGLER_VERSION = "4.86.0"
+COS_LOCKED_PACKAGES = {
+    "certifi",
+    "charset-normalizer",
+    "cos-python-sdk-v5",
+    "crcmod",
+    "idna",
+    "pycryptodome",
+    "requests",
+    "six",
+    "urllib3",
+    "xmltodict",
+}
 FORBIDDEN_BUILD_COMMANDS = (
     "npm ci",
     "npm install",
@@ -47,6 +66,88 @@ FORBIDDEN_BUILD_COMMANDS = (
     "yarn build",
     "pnpm build",
 )
+
+
+def assert_cos_policy_templates() -> None:
+    object_resource = "qcs::cos:<REGION>:uid/<APPID>:<BUCKET-APPID>/releases/*"
+    rollback_resource = "qcs::cos:<REGION>:uid/<APPID>:<BUCKET-APPID>/rollback/*"
+    secure = {"bool_equal": {"cos:secure-transport": "true"}}
+    insecure = {"bool_equal": {"cos:secure-transport": "false"}}
+    boundary_actions = [
+        "name/cos:InitiateMultipartUpload",
+        "name/cos:CompleteMultipartUpload",
+    ]
+    transport_actions = [
+        "name/cos:HeadObject",
+        "name/cos:UploadPart",
+        "name/cos:AbortMultipartUpload",
+    ]
+    expected_upload = {
+        "version": "2.0",
+        "statement": [
+            {
+                "effect": "allow",
+                "action": transport_actions,
+                "resource": [object_resource],
+                "condition": secure,
+            },
+            {
+                "effect": "allow",
+                "action": boundary_actions,
+                "resource": [object_resource],
+                "condition": {
+                    **secure,
+                    "string_equal": {"cos:x-cos-forbid-overwrite": "true"},
+                },
+            },
+            {
+                "effect": "deny",
+                "action": boundary_actions,
+                "resource": [object_resource],
+                "condition": {
+                    "string_not_equal_if_exist": {
+                        "cos:x-cos-forbid-overwrite": "true"
+                    }
+                },
+            },
+            {
+                "effect": "deny",
+                "action": [
+                    "name/cos:HeadObject",
+                    "name/cos:InitiateMultipartUpload",
+                    "name/cos:UploadPart",
+                    "name/cos:CompleteMultipartUpload",
+                    "name/cos:AbortMultipartUpload",
+                ],
+                "resource": [object_resource],
+                "condition": insecure,
+            },
+        ],
+    }
+    expected_cvm = {
+        "version": "2.0",
+        "statement": [
+            {
+                "effect": "allow",
+                "action": ["name/cos:HeadObject", "name/cos:GetObject"],
+                "resource": [object_resource, rollback_resource],
+                "condition": secure,
+            },
+            {
+                "effect": "deny",
+                "action": ["name/cos:HeadObject", "name/cos:GetObject"],
+                "resource": [object_resource, rollback_resource],
+                "condition": insecure,
+            },
+        ],
+    }
+    for path, expected in (
+        (COS_UPLOAD_POLICY_PATH, expected_upload),
+        (COS_CVM_POLICY_PATH, expected_cvm),
+    ):
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        if payload != expected:
+            raise AssertionError(f"least-privilege COS policy template drifted: {path}")
 
 
 def load_workflow(path: Path) -> Mapping[str, Any]:
@@ -242,7 +343,7 @@ def assert_deploy_jobs_share_one_artifact(workflow: Mapping[str, Any]) -> None:
             "the shared artifact must be verified and materialized before Cloudflare preflight"
         )
     if cloudflare_preflight > tencent_names.index(
-        "Upload complete release archive without fallback"
+        "Upload and HEAD-verify immutable release in COS"
     ):
         raise AssertionError("Cloudflare configuration must fail before any production mutation")
     if tencent_names.index("Verify frontend artifact before Tencent deployment") > tencent_names.index(
@@ -336,7 +437,17 @@ def assert_deploy_jobs_share_one_artifact(workflow: Mapping[str, Any]) -> None:
         raise AssertionError("parity audit must wait for the single production deployment job")
 
 
-def assert_tencent_resumable_upload_contract(workflow: Mapping[str, Any]) -> None:
+def assert_tencent_cos_transport_contract(workflow: Mapping[str, Any]) -> None:
+    workflow_source = PRODUCTION_WORKFLOW_PATH.read_text(encoding="utf-8")
+    for forbidden in (
+        "secrets.COS_SECRET_ID",
+        "secrets.COS_SECRET_KEY",
+        "secrets.COS_BOOTSTRAP_SECRET_ID",
+        "secrets.COS_BOOTSTRAP_SECRET_KEY",
+    ):
+        if forbidden in workflow_source:
+            raise AssertionError("COS production upload must not use long-lived credentials")
+
     concurrency = mapping(workflow.get("concurrency"), "production concurrency")
     if concurrency.get("group") != "production-release-main":
         raise AssertionError("production releases must share one serialization group")
@@ -348,59 +459,241 @@ def assert_tencent_resumable_upload_contract(workflow: Mapping[str, Any]) -> Non
         timeout_minutes = int(str(tencent.get("timeout-minutes") or "0"))
     except ValueError as exc:
         raise AssertionError("deploy_tencent timeout-minutes must be numeric") from exc
-    if timeout_minutes < 120:
-        raise AssertionError("deploy_tencent needs at least 120 minutes for a slow resumable upload")
+    if timeout_minutes < 60:
+        raise AssertionError("deploy_tencent needs enough time for verified multi-platform release")
+
+    permissions = mapping(tencent.get("permissions"), "deploy_tencent permissions")
+    if permissions != {"contents": "read", "id-token": "write"}:
+        raise AssertionError(
+            "Tencent deploy must grant only contents:read and OIDC id-token:write"
+        )
+
+    tencent_steps = steps(tencent, "deploy_tencent")
+    install_step = step_by_name(tencent_steps, "Install pinned Tencent COS upload SDK")
+    install_command = " ".join(str(install_step.get("run") or "").split())
+    required_install_tokens = (
+        "python3 -m pip install",
+        "--require-hashes",
+        "--requirement 03_Scripts/deploy/requirements-cos-release.txt",
+    )
+    if any(token not in install_command for token in required_install_tokens):
+        raise AssertionError("COS SDK install must use the checked-in hash-locked requirements")
+
+    requirements = COS_REQUIREMENTS_PATH.read_text(encoding="utf-8")
+    locked_packages = set(
+        re.findall(r"(?m)^([a-z0-9][a-z0-9-]*)==[^\\\s]+ \\$", requirements)
+    )
+    if locked_packages != COS_LOCKED_PACKAGES:
+        raise AssertionError(
+            "COS requirements package set drifted: "
+            f"missing={sorted(COS_LOCKED_PACKAGES - locked_packages)}, "
+            f"extra={sorted(locked_packages - COS_LOCKED_PACKAGES)}"
+        )
+    requirement_blocks = re.split(r"(?m)(?=^[a-z0-9][a-z0-9-]*==)", requirements)
+    for block in requirement_blocks[1:]:
+        package = block.split("==", 1)[0]
+        if "--hash=sha256:" not in block.split("# via", 1)[0]:
+            raise AssertionError(f"COS requirement {package} is missing SHA-256 hashes")
+
+    installer = COSCLI_INSTALLER_PATH.read_text(encoding="utf-8")
+    required_installer_tokens = (
+        'COSCLI_VERSION="v1.0.8"',
+        "https://cosbrowser.cloud.tencent.com/software/coscli",
+        "https://github.com/tencentyun/coscli/releases/download/${COSCLI_VERSION}",
+        "7165f2ae16c5f7ac495864c963ca574a76e04ec72680d7bc8a8eee3234d8cf91",
+        "0404b4da5b1d0c230c7d7522cb3bbec2909e314ab998889a0aeb8dc6094a2d21",
+        "--proto '=https' --tlsv1.2",
+    )
+    if any(token not in installer for token in required_installer_tokens):
+        raise AssertionError("COSCLI installer version, sources, or hashes have drifted")
+    if "http://" in installer or "curl -k" in installer:
+        raise AssertionError("COSCLI installer must use verified HTTPS only")
 
     upload_steps = [
         step
         for step in steps(tencent, "deploy_tencent")
-        if step.get("name") == "Upload complete release archive without fallback"
+        if step.get("name") == "Upload and HEAD-verify immutable release in COS"
     ]
     if len(upload_steps) != 1:
-        raise AssertionError("Tencent must have exactly one fail-closed archive upload step")
-    upload = str(upload_steps[0].get("run") or "")
+        raise AssertionError("Tencent must have exactly one fail-closed COS archive upload step")
+    upload_step = upload_steps[0]
+    if upload_step.get("id") != "cos_release":
+        raise AssertionError("COS upload step must expose the immutable receipt outputs")
+    upload = str(upload_step.get("run") or "")
     required_tokens = (
-        'remote_archive="JATO_deploy_${GITHUB_SHA}_${archive_sha256}.tar.gz"',
-        'remote_temp="${remote_archive}.uploading.v2"',
-        'remote_lock="${remote_temp}.lock"',
-        "command -v flock",
-        "local remote_output",
-        'printf \'%s\' "$remote_output"',
-        "reset_upload_state()",
-        r"if [ \"\$current_size\" -gt '$archive_bytes' ]; then",
-        "rm -f '$remote_temp' '$remote_checksum'",
-        'head -c "$remaining_bytes"',
-        "flock -w 270 9",
-        "oflag=seek_bytes conv=notrunc",
-        "idle_timeout_seconds=1800",
-        "while true; do",
-        "last_progress_at",
-        "Remote immutable archive exists with an unexpected SHA-256",
-        "if [ -f '$remote_archive' ]; then",
-        "final_sha256",
-        "test ! -e '$remote_archive'",
-        "sha256sum '$remote_temp'",
-        "mv '$remote_temp' '$remote_archive'",
+        "cos_release_transport.py upload",
+        '--archive "$RUNNER_TEMP/JATO_deploy.tar.gz"',
+        '--github-sha "$GITHUB_SHA"',
+        "--prefix releases",
+        '--role-arn "$COS_RELEASE_UPLOAD_ROLE_ARN"',
+        '--provider-id "$COS_RELEASE_OIDC_PROVIDER_ID"',
+        '--audience "$COS_RELEASE_OIDC_AUDIENCE"',
+        "--environment production",
+        '--github-output "$GITHUB_OUTPUT"',
+        "--part-size-mib 8",
+        "--threads 4",
     )
     missing = [token for token in required_tokens if token not in upload]
     if missing:
-        raise AssertionError(f"Tencent resumable upload contract is incomplete: {missing}")
-    if "cat >> '$remote_temp'" in upload:
-        raise AssertionError("append-based resume is unsafe after an SSH timeout")
-    if "five consecutive attempts" in upload:
-        raise AssertionError("attempt-count stalls must not bypass the idle-time budget")
-    if "seq 1 120" in upload or "${upload_attempt}/120" in upload:
-        raise AssertionError("attempt counts must not bypass the idle-time and job budgets")
-    if "fallback to sparse" in upload or "split -b 8M" in upload:
-        raise AssertionError("Tencent upload must not retain a sparse or fixed-chunk fallback")
+        raise AssertionError(f"Tencent COS upload contract is incomplete: {missing}")
+    upload_env = mapping(upload_step.get("env"), "COS upload env")
+    required_variables = {
+        "COS_RELEASE_BUCKET",
+        "COS_RELEASE_REGION",
+        "COS_RELEASE_UPLOAD_ROLE_ARN",
+        "COS_RELEASE_OIDC_PROVIDER_ID",
+        "COS_RELEASE_OIDC_AUDIENCE",
+    }
+    if set(upload_env) != required_variables:
+        raise AssertionError("COS upload environment variables have drifted")
+    if any("secrets." in str(value) for value in upload_env.values()):
+        raise AssertionError("COS upload must use OIDC, not long-lived GitHub secrets")
+    forbidden_upload_tokens = (
+        "ssh ",
+        "sshpass",
+        "tail -c",
+        "head -c",
+        "DEPLOY_ARCHIVE_PATH",
+        "presigned",
+        "signurl",
+    )
+    if any(token in upload for token in forbidden_upload_tokens):
+        raise AssertionError("COS upload step retains a forbidden SSH or signed-URL path")
 
-    size_check = upload.rfind(r"test \"\$remote_size\" = '$archive_bytes'")
-    sha_check = upload.rfind(r"test \"\$remote_sha256\" = '$archive_sha256'")
-    no_overwrite = upload.rfind("test ! -e '$remote_archive'")
-    atomic_move = upload.rfind("mv '$remote_temp' '$remote_archive'")
-    if not (0 <= size_check < sha_check < no_overwrite < atomic_move):
+    deploy = step_by_name(tencent_steps, "Deploy verified release on Tencent")
+    deploy_env = mapping(deploy.get("env"), "Tencent deploy env")
+    expected_outputs = {
+        "DEPLOY_COS_BUCKET": "bucket",
+        "DEPLOY_COS_REGION": "region",
+        "DEPLOY_COS_OBJECT_KEY": "object-key",
+        "DEPLOY_ARCHIVE_BYTES": "archive-bytes",
+        "DEPLOY_ARCHIVE_SHA256": "archive-sha256",
+        "DEPLOY_ARCHIVE_CRC64": "archive-crc64",
+    }
+    for env_name, output_name in expected_outputs.items():
+        expected = f"${{{{ steps.cos_release.outputs.{output_name} }}}}"
+        if deploy_env.get(env_name) != expected:
+            raise AssertionError(f"{env_name} must come from the verified COS receipt")
+    deploy_command = str(deploy.get("run") or "")
+    if "DEPLOY_ARCHIVE_PATH" in deploy_command:
+        raise AssertionError("Tencent control command must not reference an SSH-uploaded archive")
+    for name in (*expected_outputs, "DEPLOY_COS_CVM_ROLE_NAME"):
+        if f"export {name}=" not in deploy_command:
+            if f"emit_export {name} " not in deploy_command:
+                raise AssertionError(f"Tencent control command does not pass {name}")
+
+    auth_step = step_by_name(tencent_steps, "Validate Tencent deploy credentials")
+    auth_env = mapping(auth_step.get("env"), "Tencent SSH auth env")
+    if auth_env.get("SSH_KNOWN_HOSTS") != "${{ secrets.SSH_KNOWN_HOSTS }}":
+        raise AssertionError("Tencent SSH host identity must come from SSH_KNOWN_HOSTS")
+    auth_command = str(auth_step.get("run") or "")
+    if "ssh-keygen -F" not in auth_command:
+        raise AssertionError("Tencent SSH preflight must verify the pinned host and port")
+    forbidden_ssh_tokens = (
+        "StrictHostKeyChecking=no",
+        "UserKnownHostsFile=/dev/null",
+        "remote_exports=",
+        '"${remote_exports}bash -s"',
+    )
+    if any(token in deploy_command for token in forbidden_ssh_tokens):
+        raise AssertionError("Tencent control channel retains an insecure SSH path")
+    required_ssh_tokens = (
+        "StrictHostKeyChecking=yes",
+        'UserKnownHostsFile="$HOME/.ssh/known_hosts"',
+        'remote_payload="$(mktemp',
+        "'exec bash -s' < \"$remote_payload\"",
+    )
+    if any(token not in deploy_command for token in required_ssh_tokens):
+        raise AssertionError("Tencent control channel must pin SSH and keep secrets out of argv")
+
+    names = [str(step.get("name") or "") for step in tencent_steps]
+    if "Seal verified production COS receipt" in names:
+        raise AssertionError("COS receipt must not be sealed before the final parity job")
+    candidate = step_by_name(
+        tencent_steps,
+        "Retain candidate COS receipt for final parity",
+    )
+    candidate_with = mapping(candidate.get("with"), "candidate COS receipt artifact")
+    if candidate.get("uses") != "actions/upload-artifact@v4":
+        raise AssertionError("candidate COS receipt must be retained for the final parity job")
+    if candidate_with.get("retention-days") != "7":
+        raise AssertionError("candidate COS receipt retention must remain bounded to 7 days")
+
+    audit_steps = steps(job(workflow, "audit_frontend_parity"), "audit_frontend_parity")
+    audit_names = [str(step.get("name") or "") for step in audit_steps]
+    parity_index = audit_names.index("Require www and intl immutable release parity")
+    candidate_download_index = audit_names.index(
+        "Download candidate COS receipt after final parity"
+    )
+    seal_index = audit_names.index("Seal verified production COS receipt")
+    retain_index = audit_names.index("Retain verified production COS receipt")
+    if not parity_index < candidate_download_index < seal_index < retain_index:
+        raise AssertionError("COS receipt may only be sealed after final www/intl parity")
+    seal_step = step_by_name(audit_steps, "Seal verified production COS receipt")
+    seal_command = str(seal_step.get("run") or "")
+    required_seal_tokens = (
+        "cos_release_transport.py seal",
+        '--github-sha "$GITHUB_SHA"',
+        '--repository "$GITHUB_REPOSITORY"',
+        "cos-release-candidate/cos-release-candidate.json",
+    )
+    if any(token not in seal_command for token in required_seal_tokens):
+        raise AssertionError("final COS receipt seal is not bound to this main workflow run")
+    retain = step_by_name(audit_steps, "Retain verified production COS receipt")
+    retain_with = mapping(retain.get("with"), "verified COS receipt artifact")
+    if retain.get("uses") != "actions/upload-artifact@v4":
+        raise AssertionError("verified COS receipt must be retained as immutable run evidence")
+    if retain_with.get("retention-days") != "30":
+        raise AssertionError("verified receipt retention must match the 30-day release lifecycle")
+
+    remote_release = REMOTE_RELEASE_PATH.read_text(encoding="utf-8")
+    required_remote_tokens = (
+        'EXPECTED_COS_OBJECT_KEY="releases/${DEPLOY_COMMIT_SHA}/${DEPLOY_ARCHIVE_SHA256}.tar.gz"',
+        'COS_INTERNAL_ENDPOINT="cos-internal.${DEPLOY_COS_REGION}.tencentcos.cn"',
+        'COS_NO_PROXY_HOSTS="metadata.tencentyun.com,169.254.0.23,${COS_INTERNAL_HOST}"',
+        "mode: CvmRole",
+        "--disable-checksum=false",
+        'verify_release_archive_identity "$COS_DOWNLOAD_TEMP"',
+        'mv "$COS_DOWNLOAD_TEMP" "$RELEASE_ARCHIVE"',
+        'verify_release_archive_identity "$RELEASE_ARCHIVE"',
+        "Release archive member paths passed fail-closed validation",
+        "01_RAW_DATA/VOC_Nordic_SUV_Users_100.xlsx",
+        "top30_suv_price_movement_candidates.json",
+        "official_evidence_leads.json",
+        "06_AppPlatform/backend/alembic/env.py",
+    )
+    missing_remote = [token for token in required_remote_tokens if token not in remote_release]
+    if missing_remote:
+        raise AssertionError(f"Tencent COS download contract is incomplete: {missing_remote}")
+    if "cos.accelerate" in remote_release or "presigned" in remote_release:
+        raise AssertionError("CVM download must use the derived regional internal endpoint")
+    verify_index = remote_release.index('verify_release_archive_identity "$COS_DOWNLOAD_TEMP"')
+    safe_paths_index = remote_release.index(
+        "Release archive member paths passed fail-closed validation"
+    )
+    extract_index = remote_release.index('tar xzf "$RELEASE_ARCHIVE"')
+    required_files_index = remote_release.index("required_release_files=(")
+    required_directories_index = remote_release.index("required_release_directories=(")
+    materialize_index = remote_release.index(
+        '--materialize-dir "$PREBUILT_FRONTEND_DIR"'
+    )
+    preflight_complete_index = remote_release.index(
+        "Release archive and materialized frontend passed all pre-mutation checks"
+    )
+    mutate_index = remote_release.index('sudo mkdir -p "$REPO_DIR"')
+    if not (
+        verify_index
+        < safe_paths_index
+        < extract_index
+        < required_files_index
+        < required_directories_index
+        < materialize_index
+        < preflight_complete_index
+        < mutate_index
+    ):
         raise AssertionError(
-            "Tencent finalization must verify exact size and SHA before the atomic move"
+            "CVM must verify COS bytes, archive paths, required members, and frontend "
+            "materialization before production mutation"
         )
 
 
@@ -477,10 +770,24 @@ def assert_required_ci_contract() -> None:
     if setup_node_with.get("node-version") != "20.19.0":
         raise AssertionError("edge contract CI must use the production Node version")
 
+    cos_install = step_by_name(
+        contract_steps,
+        "Install hash-locked COS transport dependencies",
+    )
+    cos_install_command = " ".join(str(cos_install.get("run") or "").split())
+    for token in (
+        "python -m pip install",
+        "--require-hashes",
+        "--requirement 03_Scripts/deploy/requirements-cos-release.txt",
+    ):
+        if token not in cos_install_command:
+            raise AssertionError("required CI must install the hash-locked COS SDK")
+
     commands = combined_run(contract_job, "frontend-release-contract")
     required_tokens = (
         "npm ci",
         "test_frontend_release_artifact.py",
+        "test_cos_release_transport.py",
         "test_verify_intl_runtime_contract.py",
         "npx vitest run",
         "edgeCacheFunction.test.ts",
@@ -504,7 +811,8 @@ def main() -> None:
     assert_main_only_production_workflow(production)
     assert_single_build_and_strict_outputs(production)
     assert_deploy_jobs_share_one_artifact(production)
-    assert_tencent_resumable_upload_contract(production)
+    assert_cos_policy_templates()
+    assert_tencent_cos_transport_contract(production)
     assert_server_consumes_only_prebuilt_dist()
     assert_prewarm_contract(production_name)
     assert_required_ci_contract()
