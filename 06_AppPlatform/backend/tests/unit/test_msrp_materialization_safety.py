@@ -448,6 +448,111 @@ def test_evidence_change_after_approval_blocks_execution_without_fact_writes(
     assert approval.status == "approved"
 
 
+def test_gate_superseded_after_reservation_blocks_fact_writes(monkeypatch) -> None:
+    observation = _observation()
+    gate = _gate(observation)
+    approval = _approval(observation, gate)
+    item = MsrpMaterializationApprovalItem(
+        approval_item_id=uuid4(),
+        approval_id=approval.approval_id,
+        observation_id=observation.observation_id,
+        gate_decision_id=gate.gate_decision_id,
+        ordinal=0,
+    )
+    session = FakeSession()
+    state: dict[str, MsrpMaterializationExecution | None] = {
+        "execution": None
+    }
+    latest_calls = 0
+    fact_writes: list[str] = []
+
+    monkeypatch.setattr(service, "_utc_now", lambda: NOW)
+    monkeypatch.setattr(
+        service.approval_repo,
+        "get_execution_by_idempotency_key",
+        lambda *_args: None,
+    )
+    monkeypatch.setattr(
+        service.approval_repo,
+        "get_approval",
+        lambda *_args, **_kwargs: approval,
+    )
+    monkeypatch.setattr(
+        service.approval_repo,
+        "list_approval_items",
+        lambda *_args: [item],
+    )
+    monkeypatch.setattr(
+        service.msrp_repo,
+        "get_observation",
+        lambda *_args: observation,
+    )
+    monkeypatch.setattr(
+        service.governance_repo,
+        "get_gate_decision",
+        lambda *_args: gate,
+    )
+
+    def _latest_gate(*_args):
+        nonlocal latest_calls
+        latest_calls += 1
+        if latest_calls == 1:
+            return gate
+        return SimpleNamespace(gate_decision_id=uuid4())
+
+    monkeypatch.setattr(
+        service.governance_repo,
+        "get_latest_gate_decision_for_target",
+        _latest_gate,
+    )
+    monkeypatch.setattr(
+        service.governance_repo,
+        "get_target",
+        lambda *_args: SimpleNamespace(country="HU", brand="KGM"),
+    )
+    monkeypatch.setattr(service, "_fact_refs", lambda *_args: [])
+
+    def _add(_session, item_to_add):
+        session.add(item_to_add)
+        if isinstance(item_to_add, MsrpMaterializationExecution):
+            state["execution"] = item_to_add
+        return item_to_add
+
+    monkeypatch.setattr(service.approval_repo, "add", _add)
+    monkeypatch.setattr(
+        service.approval_repo,
+        "get_execution",
+        lambda *_args, **_kwargs: state["execution"],
+    )
+    monkeypatch.setattr(
+        msrp_workflow_service,
+        "materialize_current_price_from_observation",
+        lambda *_args, **_kwargs: fact_writes.append("write"),
+    )
+
+    with pytest.raises(HTTPException) as exc_info:
+        service.execute_materialization(
+            session,
+            approval_id=approval.approval_id,
+            run_id="superseded-after-reservation-run",
+            idempotency_key="superseded-after-reservation-key",
+            executed_by_actor="human.executor",
+            executed_by_role="editor",
+            executed_by_identity_source="authenticated_session",
+            execution_context="interactive_editor",
+        )
+
+    assert exc_info.value.status_code == 409
+    assert "stale or superseded" in str(exc_info.value.detail)
+    assert latest_calls == 2
+    assert fact_writes == []
+    assert session.rollbacks == 1
+    assert session.commits == 2
+    assert approval.status == "consumed"
+    assert state["execution"] is not None
+    assert state["execution"].status == "failed"
+
+
 def test_editor_approved_scope_materializes_once_and_is_idempotent(
     monkeypatch,
 ) -> None:

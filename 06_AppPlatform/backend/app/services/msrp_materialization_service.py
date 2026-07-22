@@ -792,18 +792,26 @@ def execute_materialization(
     approval.reserved_at_utc = now
     session.commit()
 
-    context = MaterializationExecutionContext(
-        execution_id=execution.execution_id,
-        approval_id=approval.approval_id,
-        operation="materialize",
-        observation_ids=frozenset(item.observation_id for item in items),
-        gate_decision_ids=frozenset(
-            decision.gate_decision_id for decision in decisions
-        ),
-        evidence_bindings=evidence_bindings,
-        _seal=_CONTEXT_SEAL,
-    )
     try:
+        # Reservation is committed separately so a crashed worker cannot make the
+        # approval reusable. Revalidate in the fact-write transaction because a
+        # newer GateDecision or changed evidence may appear after that commit.
+        observations, decisions, evidence_bindings = _validated_execution_scope(
+            session,
+            approval,
+            items,
+        )
+        context = MaterializationExecutionContext(
+            execution_id=execution.execution_id,
+            approval_id=approval.approval_id,
+            operation="materialize",
+            observation_ids=frozenset(item.observation_id for item in items),
+            gate_decision_ids=frozenset(
+                decision.gate_decision_id for decision in decisions
+            ),
+            evidence_bindings=evidence_bindings,
+            _seal=_CONTEXT_SEAL,
+        )
         from app.services.msrp_workflow_service import (
             materialize_current_price_from_observation,
         )
