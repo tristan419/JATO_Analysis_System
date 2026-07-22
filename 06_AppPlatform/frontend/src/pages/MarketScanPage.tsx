@@ -55,6 +55,7 @@ import { RankingTrendPopover } from "../components/RankingTrendDrawer";
 import {
   buildDefaultMarketScanSlideLayouts,
   buildMarketScanSlideFitAssessment,
+  reconcileMarketScanPeriodSelection,
   resetMarketScanActiveSlideLayout,
   toggleMarketScanSlideEditModeState,
   updateMarketScanActiveSlideLayout,
@@ -1044,10 +1045,9 @@ function buildRegistrationChannelChartData(
 function buildFuelTrendData(
   items: MarketScanFuelTrendItem[],
   fuelOrder: string[],
-  showDataLabels: boolean,
 ): Data[] {
   const labels = items.map((item) => item.label);
-  const traces: Data[] = fuelOrder.map((fuel) => ({
+  return fuelOrder.map((fuel) => ({
     type: "bar",
     name: fuel,
     x: labels,
@@ -1055,22 +1055,25 @@ function buildFuelTrendData(
     marker: { color: fuelColor(fuel) },
     hovertemplate: `%{x}<br>${fuel}: %{y:,.0f} 台<extra></extra>`,
   }));
-  if (showDataLabels) {
-    traces.push({
-      type: "scatter",
-      mode: "text",
-      name: "Total Labels",
-      x: labels,
-      y: items.map((item) => item.totalVolume),
-      text: items.map((item) => formatVolume(item.totalVolume)),
-      textposition: "top center",
-      textfont: { size: 10, color: "#0f172a" },
-      cliponaxis: false,
-      hoverinfo: "skip",
-      showlegend: false,
-    });
+}
+
+export function buildMarketScanFuelTrendChartData(
+  items: MarketScanFuelTrendItem[],
+  fuelOrder: string[],
+  exportSettings: ExportSettings,
+): Data[] {
+  const traces = applyMarketScanExportToTraces(
+    buildFuelTrendData(items, fuelOrder),
+    exportSettings,
+  );
+  if (exportSettings.dataLabelMode === "off" || exportSettings.dataLabelPosition !== "auto") {
+    return traces;
   }
-  return traces;
+  return traces.map((trace) => (
+    trace.type === "bar"
+      ? { ...trace, textposition: "inside", insidetextanchor: "middle" } as Data
+      : trace
+  ));
 }
 
 function fuelTrendYAxisMax(items: MarketScanFuelTrendItem[], showDataLabels: boolean): number {
@@ -2267,11 +2270,7 @@ function DrilldownSection({
           subtitle={activeFuelTrendSubtitle}
         >
           <PlotlyChart
-            data={applyMarketScanExportToTraces(
-              buildFuelTrendData(activeFuelTrend.items, fuelOrder, showDataLabels),
-              exportSettings,
-              { rewriteDataLabels: false },
-            )}
+            data={buildMarketScanFuelTrendChartData(activeFuelTrend.items, fuelOrder, exportSettings)}
             layout={applyMarketScanExportToLayout({
               ...CHART_LAYOUT,
               barmode: "stack",
@@ -2348,7 +2347,10 @@ export function MarketScanPage({
   );
   const [deck, setDeck] = useState<MarketScanDeckResponse | null>(null);
   const [loading, setLoading] = useState(false);
-  const [error, setError] = useState("");
+  const [requestError, setRequestError] = useState<{
+    requestKey: string;
+    message: string;
+  } | null>(null);
   const [exportError, setExportError] = useState("");
   const [exportingSlide, setExportingSlide] = useState(false);
   const [exportSettings, setExportSettings] = useState<ExportSettings>(() => {
@@ -2407,11 +2409,13 @@ export function MarketScanPage({
       return null;
     },
   );
-  const [selectedPeriod, setSelectedPeriod] = useState<string | null>(
-    () => searchParams.get("period"),
-  );
-  const [selectedTimeRange, setSelectedTimeRange] = useState<MarketScanPeriodRange | null>(
-    () => readSearchTimeRange(searchParams),
+  const [periodSelection, setPeriodSelection] = useState<MarketScanPeriodRange | null>(
+    () => {
+      const range = readSearchTimeRange(searchParams);
+      if (range) return range;
+      const period = searchParams.get("period");
+      return period ? { start: period, end: period } : null;
+    },
   );
   const [salesMode, setSalesMode] = useState<MarketScanSalesMode>(
     () => {
@@ -2464,15 +2468,32 @@ export function MarketScanPage({
   const bodyTypePickerRef = useRef<HTMLDivElement | null>(null);
   const countryOptions = deck?.metadata.availableCountries ?? [];
   const currentCountry = selectedCountry ?? defaultMarketScanCountry;
+  const selectedPeriod = periodSelection && !isCustomTimeRange(periodSelection)
+    ? periodSelection.end
+    : null;
+  const selectedTimeRange = isCustomTimeRange(periodSelection) ? periodSelection : null;
+  const activeRequestKey = [
+    currentCountry,
+    selectedFuelTypes.slice().sort().join(","),
+    selectedPeriod || "_",
+    JSON.stringify(selectedTimeRange),
+    selectedDrilldownSegments.slice().sort().join(",") || "_",
+    selectedBodyTypes.slice().sort().join(",") || "_",
+    rankingLimit,
+    reloadToken,
+  ].join("|");
 
   // Sync filter state back to URL search params
   const syncUrlParams = useCallback(() => {
     const params = new URLSearchParams();
     if (selectedCountry) params.set("country", selectedCountry);
-    if (selectedPeriod) params.set("period", selectedPeriod);
-    if (selectedTimeRange) {
-      params.set("timeStart", selectedTimeRange.start);
-      params.set("timeEnd", selectedTimeRange.end);
+    if (periodSelection) {
+      if (isCustomTimeRange(periodSelection)) {
+        params.set("timeStart", periodSelection.start);
+        params.set("timeEnd", periodSelection.end);
+      } else {
+        params.set("period", periodSelection.end);
+      }
     }
     if (activePage !== "overview") params.set("activePage", activePage);
     if (salesMode !== DEFAULT_MARKET_SCAN_SALES_MODE) params.set("salesMode", salesMode);
@@ -2486,7 +2507,7 @@ export function MarketScanPage({
     if (ft !== defaultFt) params.set("fuelTypes", selectedFuelTypes.join(","));
     setSearchParams(params, { replace: true });
     try { sessionStorage.setItem("ms_activePage", activePage); } catch { /* ignore */ }
-  }, [activePage, rankingLimit, salesMode, selectedBodyTypes, selectedCountry, selectedDrilldownSegments, selectedFuelTypes, selectedPeriod, selectedTimeRange, setSearchParams]);
+  }, [activePage, periodSelection, rankingLimit, salesMode, selectedBodyTypes, selectedCountry, selectedDrilldownSegments, selectedFuelTypes, setSearchParams]);
 
   useEffect(() => {
     syncUrlParams();
@@ -2543,17 +2564,16 @@ export function MarketScanPage({
     const requestId = ++requestRef.current;
 
     // Fast path: use per-view cache if params haven't changed
-    const paramKey = `${currentCountry}|${selectedFuelTypes.slice().sort().join(",")}|${selectedPeriod || "_"}|${JSON.stringify(selectedTimeRange)}|${selectedDrilldownSegments.slice().sort().join(",") || "_"}|${selectedBodyTypes.slice().sort().join(",") || "_"}|${rankingLimit}`;
     const cachedView = deckCache.current[activePage];
     const cachedKey = deckCacheKey.current[activePage];
-    if (cachedView && cachedKey === paramKey) {
+    if (cachedView && cachedKey === activeRequestKey) {
       setDeck(cachedView);
       setLoading(false);
       return () => { active = false; };
     }
 
     setLoading(true);
-    setError("");
+    setRequestError(null);
 
     api.marketScanDeck({
       country: currentCountry,
@@ -2573,7 +2593,7 @@ export function MarketScanPage({
           return;
         }
         deckCache.current[activePage] = response;
-        deckCacheKey.current[activePage] = paramKey;
+        deckCacheKey.current[activePage] = activeRequestKey;
         const keys = Object.keys(deckCache.current) as MarketScanPageKey[];
         if (keys.length > 2) { const oldest = keys.find(k => k !== activePage); if (oldest) { delete deckCache.current[oldest]; delete deckCacheKey.current[oldest]; } }
         setDeck(response);
@@ -2585,7 +2605,7 @@ export function MarketScanPage({
         if (reason.name === "AbortError") {
           return;
         }
-        setError(reason.message);
+        setRequestError({ requestKey: activeRequestKey, message: reason.message });
       })
       .finally(() => {
         if (active && requestId === requestRef.current) {
@@ -2596,7 +2616,7 @@ export function MarketScanPage({
     return () => {
       active = false;
     };
-  }, [activePage, currentCountry, rankingLimit, reloadToken, selectedBodyTypes, selectedDrilldownSegments, selectedFuelTypes, selectedPeriod, selectedTimeRange]);
+  }, [activePage, activeRequestKey, currentCountry, selectedBodyTypes, selectedDrilldownSegments, selectedFuelTypes, selectedPeriod, selectedTimeRange]);
 
   useEffect(() => {
     if (!deck) {
@@ -2610,25 +2630,16 @@ export function MarketScanPage({
       setSelectedCountry(deck.metadata.selectedCountry);
     }
 
-    if (
-      selectedPeriod
-      && !deck.metadata.availablePeriods.some((option) => option.value === selectedPeriod)
-    ) {
-      setSelectedPeriod(deck.metadata.resolvedPeriod);
-    }
-    if (selectedTimeRange) {
-      const availablePeriodSet = new Set(deck.metadata.availablePeriods.map((option) => option.value));
-      const nextRange = deck.metadata.selectedTimeRange ?? null;
-      const isCurrentRangeValid = availablePeriodSet.has(selectedTimeRange.start) && availablePeriodSet.has(selectedTimeRange.end);
-      if (!isCurrentRangeValid) {
-        setSelectedTimeRange(nextRange);
-      } else if (
-        nextRange
-        && (nextRange.start !== selectedTimeRange.start || nextRange.end !== selectedTimeRange.end)
+    setPeriodSelection((current) => {
+      const reconciled = reconcileMarketScanPeriodSelection(current, deck.metadata.availablePeriods);
+      if (
+        reconciled?.start === current?.start
+        && reconciled?.end === current?.end
       ) {
-        setSelectedTimeRange(nextRange);
+        return current;
       }
-    }
+      return reconciled;
+    });
 
     if (selectedDrilldownSegments.length > 0) {
       const availableSet = new Set(deck.metadata.availableSegments.map((s) => s.value));
@@ -2651,11 +2662,11 @@ export function MarketScanPage({
     if (normalizedFuelTypes.length !== selectedFuelTypes.length && deck.metadata.selectedFuelTypes.length > 0) {
       setSelectedFuelTypes(deck.metadata.selectedFuelTypes);
     }
-  }, [deck, selectedBodyTypes, selectedCountry, selectedDrilldownSegments, selectedFuelTypes, selectedPeriod, selectedTimeRange]);
+  }, [deck, selectedBodyTypes, selectedCountry, selectedDrilldownSegments, selectedFuelTypes]);
 
-  const resolvedTimeRange = selectedTimeRange ?? deck?.metadata.selectedTimeRange ?? null;
+  const resolvedTimeRange = periodSelection ?? deck?.metadata.selectedTimeRange ?? null;
   const customRangeActive = isCustomTimeRange(resolvedTimeRange);
-  const currentPeriod = resolvedTimeRange?.end ?? selectedPeriod ?? deck?.metadata.resolvedPeriod ?? "";
+  const currentPeriod = resolvedTimeRange?.end ?? deck?.metadata.resolvedPeriod ?? "";
   const fuelOptions = deck?.metadata.availableFuelTypes ?? selectedFuelTypes;
   const activeFuelTypes = selectedFuelTypes.length > 0
     ? selectedFuelTypes
@@ -2666,6 +2677,9 @@ export function MarketScanPage({
   usePageTransition(activePage, ".market-scan-slide-content");
   const narrative = deck ? pageNarrative(deck, activePage) : "按国家、月份与动力组合切换市场扫描页。";
   const activeTab = TAB_ITEMS.find((item) => item.key === activePage) ?? TAB_ITEMS[0];
+  const refreshingActiveView = deck !== null
+    && deckCacheKey.current[activePage] !== activeRequestKey
+    && requestError?.requestKey !== activeRequestKey;
   const previewWidth = normalizeMarketScanExportDimension(exportSettings.exportWidth, 1920, 400);
   const previewHeight = normalizeMarketScanExportDimension(exportSettings.exportHeight, 1080, 300);
   const slidePreview = useFixedCanvasPreview({
@@ -2947,7 +2961,7 @@ export function MarketScanPage({
                 <span className="market-scan-hero-chip">
                   下钻 {(deck?.metadata.selectedDrilldownSegments ?? selectedDrilldownSegments).join(", ")}
                 </span>
-                {loading && deck ? (
+                {refreshingActiveView ? (
                   <span className="market-scan-hero-chip market-scan-hero-chip--live">Refreshing</span>
                 ) : null}
               </div>
@@ -3141,7 +3155,7 @@ export function MarketScanPage({
                     type="button"
                     className={`btn btn-sm ${!customRangeActive && salesMode === option.value ? "btn-primary" : "btn-ghost"}`}
                     onClick={() => {
-                      setSelectedTimeRange(null);
+                      setPeriodSelection(null);
                       setSalesMode(option.value);
                     }}
                   >
@@ -3164,11 +3178,8 @@ export function MarketScanPage({
             <div className="market-scan-field deck-panel-grid__wide">
               <DeckPeriodTimeline
                 options={deck?.metadata.availablePeriods ?? []}
-                value={resolvedTimeRange ?? (selectedPeriod ? { start: selectedPeriod, end: selectedPeriod } : null)}
-                onChange={(value) => {
-                  setSelectedTimeRange(isCustomTimeRange(value) ? value : null);
-                  setSelectedPeriod(value?.end ?? null);
-                }}
+                value={resolvedTimeRange}
+                onChange={setPeriodSelection}
                 disabled={!deck}
                 commitOnIdle={false}
               />
@@ -3218,7 +3229,7 @@ export function MarketScanPage({
                   className="btn btn-ghost btn-sm"
                   onClick={() => {
                     setSelectedCountry(null);
-                    setSelectedPeriod(null);
+                    setPeriodSelection(null);
                     setSalesMode(DEFAULT_MARKET_SCAN_SALES_MODE);
                     setSelectedFuelTypes(DEFAULT_FUEL_TYPES);
                     setSelectedDrilldownSegments(["SUV A0"]);
@@ -3244,11 +3255,11 @@ export function MarketScanPage({
 
         <PageBannerStack
           items={[
-            ...(error ? [{
+            ...(requestError ? [{
               id: "market-scan-error",
               tone: "error" as const,
               title: "Market Scan 加载失败",
-              message: error,
+              message: requestError.message,
               action: (
                 <button
                   type="button"
@@ -3266,7 +3277,17 @@ export function MarketScanPage({
         {loading && !deck ? <MarketScanDeckSkeleton /> : null}
 
         {deck ? (
-          <div className="market-scan-content" aria-busy={loading}>
+          <div className="market-scan-content" aria-busy={refreshingActiveView}>
+            {refreshingActiveView ? (
+              <div className="market-scan-refresh-layer">
+                <LoadingSurface
+                  mode="overlay"
+                  kicker="Refreshing"
+                  label={`正在刷新 ${activeTab.label}`}
+                  detail="保留当前画布尺寸，等待新的筛选结果完成。"
+                />
+              </div>
+            ) : null}
             <div className="market-scan-slide-shell-actions">
               <div className="market-scan-slide-shell-meta">
                 <span className={`market-scan-toolbar-chip slide-edit-shell-chip${slideEditMode ? " is-active" : ""}`}>

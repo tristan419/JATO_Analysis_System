@@ -13,6 +13,7 @@ import type {
 import {
   buildDefaultMarketScanSlideLayouts,
   buildMarketScanSlideFitAssessment,
+  reconcileMarketScanPeriodSelection,
   resetMarketScanActiveSlideLayout,
   toggleMarketScanFuelSelection,
   toggleMarketScanSlideEditModeState,
@@ -374,6 +375,32 @@ describe("toggleMarketScanFuelSelection", () => {
   it("adds or removes fuels when more than one option is active", () => {
     expect(toggleMarketScanFuelSelection(["ICE", "BEV"], "ICE")).toEqual(["BEV"]);
     expect(toggleMarketScanFuelSelection(["ICE"], "BEV")).toEqual(["ICE", "BEV"]);
+  });
+});
+
+describe("reconcileMarketScanPeriodSelection", () => {
+  const availablePeriods = [
+    { value: "2026-04", label: "26.04" },
+    { value: "2026-05", label: "26.05" },
+    { value: "2026-06", label: "26.06" },
+  ];
+
+  it("preserves a user-selected month when refetched metadata still contains it", () => {
+    expect(
+      reconcileMarketScanPeriodSelection(
+        { start: "2026-05", end: "2026-05" },
+        availablePeriods,
+      ),
+    ).toEqual({ start: "2026-05", end: "2026-05" });
+  });
+
+  it("clamps deterministically only when the selection is outside the new data range", () => {
+    expect(
+      reconcileMarketScanPeriodSelection(
+        { start: "2026-02", end: "2026-08" },
+        availablePeriods,
+      ),
+    ).toEqual({ start: "2026-04", end: "2026-06" });
   });
 });
 
