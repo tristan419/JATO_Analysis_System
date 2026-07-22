@@ -22,7 +22,7 @@ from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 PAYLOAD_NAME = "frontend-dist.tar.gz"
 MANIFEST_NAME = "frontend-release.json"
 PUBLIC_PROVENANCE_NAME = "release-provenance.json"
@@ -30,6 +30,17 @@ BUILD_META_NAME = "build-meta.json"
 SHA_PATTERN = re.compile(r"^[0-9a-f]{40}$")
 SHA256_PATTERN = re.compile(r"^[0-9a-f]{64}$")
 FRONTEND_BUILD_ID_IGNORES = {BUILD_META_NAME, PUBLIC_PROVENANCE_NAME}
+PAYLOAD_ROOTS = ("dist", "functions")
+REQUIRED_EDGE_FUNCTIONS = (
+    "healthz.js",
+    "oauth-relay/[[path]].js",
+    "v1/[[path]].js",
+)
+REQUIRED_EDGE_ROUTES = (
+    "/healthz",
+    "/oauth-relay/*",
+    "/v1/*",
+)
 
 
 class ReleaseValidationError(ValueError):
@@ -119,20 +130,60 @@ def sha256_file(path: Path) -> str:
     return digest.hexdigest()
 
 
-def frontend_build_id(dist_dir: Path) -> str:
-    if not dist_dir.is_dir():
-        raise ReleaseValidationError(f"frontend dist directory is missing: {dist_dir}")
+def directory_content_id(root: Path, *, ignored_paths: set[str] | None = None) -> str:
+    if not root.is_dir():
+        raise ReleaseValidationError(f"content directory is missing: {root}")
+    ignored = ignored_paths or set()
     digest = hashlib.sha256()
-    files = sorted(path for path in dist_dir.rglob("*") if path.is_file())
-    for path in files:
-        relative = path.relative_to(dist_dir).as_posix()
-        if relative in FRONTEND_BUILD_ID_IGNORES:
+    entries = sorted(root.rglob("*"))
+    for path in entries:
+        if path.is_symlink():
+            raise ReleaseValidationError(f"content directory contains a symlink: {path}")
+    for path in (entry for entry in entries if entry.is_file()):
+        relative = path.relative_to(root).as_posix()
+        if relative in ignored:
             continue
         digest.update(relative.encode("utf-8"))
         digest.update(b"\0")
         digest.update(path.read_bytes())
         digest.update(b"\0")
     return digest.hexdigest()
+
+
+def frontend_build_id(dist_dir: Path) -> str:
+    if not dist_dir.is_dir():
+        raise ReleaseValidationError(f"frontend dist directory is missing: {dist_dir}")
+    return directory_content_id(
+        dist_dir,
+        ignored_paths=FRONTEND_BUILD_ID_IGNORES,
+    )
+
+
+def _validate_edge_functions(functions_dir: Path) -> dict[str, Any]:
+    if not functions_dir.is_dir():
+        raise ReleaseValidationError(
+            f"Cloudflare Pages Functions directory is missing: {functions_dir}"
+        )
+    missing = [
+        relative
+        for relative in REQUIRED_EDGE_FUNCTIONS
+        if not (functions_dir / relative).is_file()
+    ]
+    if missing:
+        raise ReleaseValidationError(
+            f"required Cloudflare Pages Functions are missing: {missing}"
+        )
+    files = sorted(path for path in functions_dir.rglob("*") if path.is_file())
+    if not files:
+        raise ReleaseValidationError("Cloudflare Pages Functions directory is empty")
+    return {
+        "fileCount": len(files),
+        "requiredEntrypoints": list(REQUIRED_EDGE_FUNCTIONS),
+        "requiredRoutes": list(REQUIRED_EDGE_ROUTES),
+        "rootPath": "functions",
+        "treeId": directory_content_id(functions_dir),
+        "treeIdSemantics": "SHA256 over sorted function file paths and bytes",
+    }
 
 
 def artifact_identity(
@@ -214,18 +265,24 @@ def _normalized_tar_info(path: Path, archive_name: str) -> tarfile.TarInfo:
     info.gid = 0
     info.uname = ""
     info.gname = ""
+    if path.is_symlink():
+        raise ReleaseValidationError(f"unsupported frontend release symlink: {path}")
     if path.is_dir():
         info.type = tarfile.DIRTYPE
         info.mode = 0o755
         return info
-    if not path.is_file() or path.is_symlink():
-        raise ReleaseValidationError(f"unsupported frontend dist entry: {path}")
+    if not path.is_file():
+        raise ReleaseValidationError(f"unsupported frontend release entry: {path}")
     info.size = path.stat().st_size
     info.mode = 0o644
     return info
 
 
-def _write_deterministic_payload(dist_dir: Path, payload_path: Path) -> None:
+def _write_deterministic_payload(
+    dist_dir: Path,
+    functions_dir: Path,
+    payload_path: Path,
+) -> None:
     with payload_path.open("wb") as raw_handle:
         with gzip.GzipFile(
             filename="",
@@ -234,22 +291,27 @@ def _write_deterministic_payload(dist_dir: Path, payload_path: Path) -> None:
             mtime=0,
         ) as gzip_handle:
             with tarfile.open(fileobj=gzip_handle, mode="w") as archive:
-                root_info = _normalized_tar_info(dist_dir, "dist")
-                archive.addfile(root_info)
-                for path in sorted(dist_dir.rglob("*")):
-                    relative = path.relative_to(dist_dir).as_posix()
-                    archive_name = f"dist/{relative}"
-                    info = _normalized_tar_info(path, archive_name)
-                    if path.is_file():
-                        with path.open("rb") as source:
-                            archive.addfile(info, source)
-                    else:
-                        archive.addfile(info)
+                for source_dir, root_name in (
+                    (dist_dir, "dist"),
+                    (functions_dir, "functions"),
+                ):
+                    root_info = _normalized_tar_info(source_dir, root_name)
+                    archive.addfile(root_info)
+                    for path in sorted(source_dir.rglob("*")):
+                        relative = path.relative_to(source_dir).as_posix()
+                        archive_name = f"{root_name}/{relative}"
+                        info = _normalized_tar_info(path, archive_name)
+                        if path.is_file():
+                            with path.open("rb") as source:
+                                archive.addfile(info, source)
+                        else:
+                            archive.addfile(info)
 
 
 def create_release(
     *,
     dist_dir: Path,
+    functions_dir: Path,
     release_dir: Path,
     github_sha: str,
     artifact_name: str,
@@ -277,13 +339,14 @@ def create_release(
         dist_dir,
         expected_github_sha=normalized_sha,
     )
+    edge_functions_metadata = _validate_edge_functions(functions_dir)
     if release_dir.exists() and any(release_dir.iterdir()):
         raise ReleaseValidationError(
             f"release directory must be empty before creation: {release_dir}"
         )
     release_dir.mkdir(parents=True, exist_ok=True)
     payload_path = release_dir / PAYLOAD_NAME
-    _write_deterministic_payload(dist_dir, payload_path)
+    _write_deterministic_payload(dist_dir, functions_dir, payload_path)
     payload_checksum = sha256_file(payload_path)
     identity = artifact_identity(repository, run_id, run_attempt, artifact_name)
 
@@ -323,12 +386,13 @@ def create_release(
             ),
             "nodeVersion": dist_metadata["nodeVersion"],
         },
+        "edgeFunctions": edge_functions_metadata,
     }
     _write_json(release_dir / MANIFEST_NAME, manifest)
     return manifest
 
 
-def _safe_extract_payload(payload_path: Path, destination: Path) -> Path:
+def _safe_extract_payload(payload_path: Path, destination: Path) -> tuple[Path, Path]:
     destination.mkdir(parents=True, exist_ok=True)
     seen_names: set[str] = set()
     try:
@@ -345,7 +409,7 @@ def _safe_extract_payload(payload_path: Path, destination: Path) -> Path:
                 pure_name.is_absolute()
                 or ".." in pure_name.parts
                 or not pure_name.parts
-                or pure_name.parts[0] != "dist"
+                or pure_name.parts[0] not in PAYLOAD_ROOTS
             ):
                 raise ReleaseValidationError(
                     f"unsafe frontend payload path: {member.name!r}"
@@ -373,7 +437,13 @@ def _safe_extract_payload(payload_path: Path, destination: Path) -> Path:
             with source, target.open("wb") as output:
                 shutil.copyfileobj(source, output)
             target.chmod(0o644)
-    return destination / "dist"
+    extracted_dist = destination / "dist"
+    extracted_functions = destination / "functions"
+    if not extracted_dist.is_dir() or not extracted_functions.is_dir():
+        raise ReleaseValidationError(
+            "frontend payload must contain both dist and functions roots"
+        )
+    return extracted_dist, extracted_functions
 
 
 def _validate_manifest(
@@ -396,6 +466,7 @@ def _validate_manifest(
     source = _mapping(manifest, "source")
     artifact = _mapping(manifest, "artifact")
     frontend = _mapping(manifest, "frontend")
+    edge_functions = _mapping(manifest, "edgeFunctions")
 
     normalized_sha = _require_sha(expected_github_sha, "expected github sha")
     manifest_sha = _require_sha(
@@ -492,6 +563,25 @@ def _validate_manifest(
     if _required_string(frontend, "buildMetaPath", "frontend") != BUILD_META_NAME:
         raise ReleaseValidationError("frontend.buildMetaPath is invalid")
     _required_string(frontend, "buildIdSemantics", "frontend")
+
+    if _required_string(edge_functions, "rootPath", "edgeFunctions") != "functions":
+        raise ReleaseValidationError("edgeFunctions.rootPath must be functions")
+    _require_sha256(
+        _required_string(edge_functions, "treeId", "edgeFunctions"),
+        "edgeFunctions.treeId",
+    )
+    _required_string(edge_functions, "treeIdSemantics", "edgeFunctions")
+    file_count = edge_functions.get("fileCount")
+    if not isinstance(file_count, int) or file_count <= 0:
+        raise ReleaseValidationError("edgeFunctions.fileCount must be a positive integer")
+    if edge_functions.get("requiredEntrypoints") != list(REQUIRED_EDGE_FUNCTIONS):
+        raise ReleaseValidationError(
+            "edgeFunctions.requiredEntrypoints does not match the release contract"
+        )
+    if edge_functions.get("requiredRoutes") != list(REQUIRED_EDGE_ROUTES):
+        raise ReleaseValidationError(
+            "edgeFunctions.requiredRoutes does not match the release contract"
+        )
     if not app_commit:
         raise ReleaseValidationError("source.appCommit is required")
 
@@ -508,6 +598,7 @@ def public_provenance(
     artifact["githubDigest"] = _normalize_artifact_digest(github_artifact_digest)
     payload["verification"] = {
         "artifactIdentityVerified": True,
+        "edgeFunctionsVerified": True,
         "githubShaVerified": True,
         "manifestComplete": True,
         "payloadChecksumVerified": True,
@@ -523,6 +614,7 @@ def _enrich_build_meta(
     source = _mapping(provenance, "source")
     artifact = _mapping(provenance, "artifact")
     frontend = _mapping(provenance, "frontend")
+    edge_functions = _mapping(provenance, "edgeFunctions")
     enriched = copy.deepcopy(build_meta)
     enriched.update(
         {
@@ -550,6 +642,9 @@ def _enrich_build_meta(
             "buildTimestamp": release["buildTimestamp"],
             "deployCommitSemantics": source["deployCommitSemantics"],
             "frontendBuildIdSemantics": frontend["buildIdSemantics"],
+            "edgeFunctionsTreeId": edge_functions["treeId"],
+            "edgeFunctionsEntrypoints": edge_functions["requiredEntrypoints"],
+            "edgeFunctionsRoutes": edge_functions["requiredRoutes"],
         }
     )
     return enriched
@@ -595,6 +690,7 @@ def verify_release(
     github_artifact_id: str,
     github_artifact_digest: str,
     materialize_dir: Path | None = None,
+    materialize_functions_dir: Path | None = None,
 ) -> dict[str, Any]:
     manifest = _read_json(release_dir / MANIFEST_NAME)
     _validate_manifest(
@@ -628,7 +724,10 @@ def verify_release(
         github_artifact_digest=github_digest,
     )
     with tempfile.TemporaryDirectory(prefix="frontend-release-verify-") as temp_dir:
-        extracted_dist = _safe_extract_payload(payload_path, Path(temp_dir))
+        extracted_dist, extracted_functions = _safe_extract_payload(
+            payload_path,
+            Path(temp_dir),
+        )
         dist_metadata = _validate_dist(
             extracted_dist,
             expected_github_sha=_require_sha(
@@ -643,6 +742,12 @@ def verify_release(
             raise ReleaseValidationError("dist app commit does not match the manifest")
         if dist_metadata["buildTimestamp"] != _mapping(manifest, "release")["buildTimestamp"]:
             raise ReleaseValidationError("dist build timestamp does not match the manifest")
+        edge_functions_metadata = _validate_edge_functions(extracted_functions)
+        manifest_edge_functions = _mapping(manifest, "edgeFunctions")
+        if edge_functions_metadata != manifest_edge_functions:
+            raise ReleaseValidationError(
+                "Cloudflare Pages Functions tree does not match the manifest"
+            )
 
         if materialize_dir is not None:
             build_meta = _read_json(extracted_dist / BUILD_META_NAME)
@@ -652,6 +757,11 @@ def verify_release(
             )
             _write_json(extracted_dist / PUBLIC_PROVENANCE_NAME, provenance)
             _atomic_replace_directory(extracted_dist, materialize_dir)
+        if materialize_functions_dir is not None:
+            _atomic_replace_directory(
+                extracted_functions,
+                materialize_functions_dir,
+            )
 
     return provenance
 
@@ -685,6 +795,9 @@ def validate_public_documents(
         "buildTimestamp",
         "deployCommitSemantics",
         "frontendBuildIdSemantics",
+        "edgeFunctionsTreeId",
+        "edgeFunctionsEntrypoints",
+        "edgeFunctionsRoutes",
     ):
         if build_meta.get(key) != expected_meta.get(key):
             raise ReleaseValidationError(
@@ -779,6 +892,7 @@ def _parse_args(argv: list[str]) -> argparse.Namespace:
 
     create_parser = subparsers.add_parser("create")
     create_parser.add_argument("--dist-dir", type=Path, required=True)
+    create_parser.add_argument("--functions-dir", type=Path, required=True)
     create_parser.add_argument("--release-dir", type=Path, required=True)
     create_parser.add_argument("--github-sha", required=True)
     create_parser.add_argument("--artifact-name", required=True)
@@ -791,6 +905,7 @@ def _parse_args(argv: list[str]) -> argparse.Namespace:
     verify_parser = subparsers.add_parser("verify")
     _add_common_verify_arguments(verify_parser)
     verify_parser.add_argument("--materialize-dir", type=Path)
+    verify_parser.add_argument("--materialize-functions-dir", type=Path)
 
     audit_parser = subparsers.add_parser("audit-public")
     _add_common_verify_arguments(audit_parser)
@@ -801,7 +916,11 @@ def _parse_args(argv: list[str]) -> argparse.Namespace:
     return parser.parse_args(argv)
 
 
-def _verify_from_args(args: argparse.Namespace, materialize_dir: Path | None = None) -> dict[str, Any]:
+def _verify_from_args(
+    args: argparse.Namespace,
+    materialize_dir: Path | None = None,
+    materialize_functions_dir: Path | None = None,
+) -> dict[str, Any]:
     return verify_release(
         release_dir=args.release_dir,
         expected_github_sha=args.expected_github_sha,
@@ -815,6 +934,7 @@ def _verify_from_args(args: argparse.Namespace, materialize_dir: Path | None = N
         github_artifact_id=args.github_artifact_id,
         github_artifact_digest=args.github_artifact_digest,
         materialize_dir=materialize_dir,
+        materialize_functions_dir=materialize_functions_dir,
     )
 
 
@@ -824,6 +944,7 @@ def main(argv: list[str] | None = None) -> int:
         if args.command == "create":
             manifest = create_release(
                 dist_dir=args.dist_dir,
+                functions_dir=args.functions_dir,
                 release_dir=args.release_dir,
                 github_sha=args.github_sha,
                 artifact_name=args.artifact_name,
@@ -850,7 +971,11 @@ def main(argv: list[str] | None = None) -> int:
             return 0
 
         if args.command == "verify":
-            provenance = _verify_from_args(args, args.materialize_dir)
+            provenance = _verify_from_args(
+                args,
+                args.materialize_dir,
+                args.materialize_functions_dir,
+            )
             artifact = _mapping(provenance, "artifact")
             print(
                 "[frontend-release] verified "

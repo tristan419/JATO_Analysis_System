@@ -38,14 +38,36 @@ jobs:
         with:
           python-version: "3.12"
 
+      - name: Setup fixed edge contract Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20.19.0"
+          cache: npm
+          cache-dependency-path: 06_AppPlatform/frontend/package-lock.json
+
       - name: Install workflow validation dependency
         run: python -m pip install "PyYAML==6.0.2"
+
+      - name: Install locked edge contract dependencies
+        working-directory: 06_AppPlatform/frontend
+        run: npm ci
 
       - name: Validate immutable production release workflow
         run: python .github/scripts/validate_frontend_release_workflow.py
 
       - name: Test frontend release fail-closed behavior
-        run: python -m unittest 03_Scripts/tests/test_frontend_release_artifact.py -v
+        run: >-
+          python -m unittest
+          03_Scripts/tests/test_frontend_release_artifact.py
+          03_Scripts/tests/test_verify_intl_runtime_contract.py
+          -v
+
+      - name: Test intl Pages Function contracts
+        working-directory: 06_AppPlatform/frontend
+        run: >-
+          npx vitest run
+          src/tests/unit/edgeCacheFunction.test.ts
+          src/tests/unit/healthzEdgeFunction.test.ts
 
   smoke:
     runs-on: ubuntu-latest

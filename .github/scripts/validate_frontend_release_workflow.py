@@ -14,6 +14,7 @@ import yaml
 REPO_ROOT = Path(__file__).resolve().parents[2]
 PRODUCTION_WORKFLOW_PATH = REPO_ROOT / ".github/workflows/production-release.yml"
 PREWARM_WORKFLOW_PATH = REPO_ROOT / ".github/workflows/intl-edge-prewarm.yml"
+CI_WORKFLOW_PATH = REPO_ROOT / ".github/workflows/ci.yml"
 REMOTE_RELEASE_PATH = REPO_ROOT / "03_Scripts/deploy/fullstack_remote_release.sh"
 SERVER_RELEASE_PATH = REPO_ROOT / "03_Scripts/ops/deploy_fullstack_server.sh"
 MAIN_CONDITION = "github.ref == 'refs/heads/main'"
@@ -36,6 +37,8 @@ REQUIRED_BUILD_OUTPUTS = {
     "node_version",
     "app_commit",
 }
+CLOUDFLARE_PROJECT_DIRECTORY = "${{ runner.temp }}/cloudflare-pages-project"
+PINNED_WRANGLER_VERSION = "4.86.0"
 FORBIDDEN_BUILD_COMMANDS = (
     "npm ci",
     "npm install",
@@ -168,6 +171,13 @@ def assert_single_build_and_strict_outputs(workflow: Mapping[str, Any]) -> None:
     if upload_with.get("overwrite") != "false":
         raise AssertionError("immutable artifact overwrite must be disabled")
 
+    create_step = step_by_name(build_steps, "Create immutable frontend release")
+    create_command = str(create_step.get("run") or "")
+    if "--functions-dir 06_AppPlatform/frontend/functions" not in create_command:
+        raise AssertionError(
+            "the immutable frontend release must include Cloudflare Pages Functions"
+        )
+
 
 def assert_deploy_jobs_share_one_artifact(workflow: Mapping[str, Any]) -> None:
     for name in DEPLOY_JOBS:
@@ -214,7 +224,23 @@ def assert_deploy_jobs_share_one_artifact(workflow: Mapping[str, Any]) -> None:
 
     tencent_steps = steps(job(workflow, "deploy_tencent"), "deploy_tencent")
     tencent_names = [str(step.get("name") or "") for step in tencent_steps]
+    cloudflare_node_step = step_by_name(tencent_steps, "Setup fixed Cloudflare Node")
+    if cloudflare_node_step.get("uses") != "actions/setup-node@v4":
+        raise AssertionError("Cloudflare deployment must use actions/setup-node@v4")
+    cloudflare_node_with = mapping(
+        cloudflare_node_step.get("with"),
+        "Cloudflare setup-node with",
+    )
+    if cloudflare_node_with.get("node-version") != "${{ env.FRONTEND_NODE_VERSION }}":
+        raise AssertionError("Cloudflare deployment must use the fixed frontend Node version")
     cloudflare_preflight = tencent_names.index("Validate Cloudflare deploy configuration")
+    artifact_verify_index = tencent_names.index(
+        "Verify frontend artifact before Tencent deployment"
+    )
+    if artifact_verify_index > cloudflare_preflight:
+        raise AssertionError(
+            "the shared artifact must be verified and materialized before Cloudflare preflight"
+        )
     if cloudflare_preflight > tencent_names.index(
         "Upload complete release archive without fallback"
     ):
@@ -231,11 +257,79 @@ def assert_deploy_jobs_share_one_artifact(workflow: Mapping[str, Any]) -> None:
         verify_step.get("run") or ""
     ):
         raise AssertionError("the shared artifact must be materialized before either deployment")
+    if (
+        '--materialize-functions-dir '
+        '"$RUNNER_TEMP/cloudflare-pages-project/functions"'
+        not in str(verify_step.get("run") or "")
+    ):
+        raise AssertionError(
+            "Cloudflare Pages Functions must be materialized from the shared artifact"
+        )
+
+    workflow_env = mapping(workflow.get("env"), "production workflow env")
+    if workflow_env.get("WRANGLER_VERSION") != PINNED_WRANGLER_VERSION:
+        raise AssertionError(
+            f"Wrangler must be pinned to {PINNED_WRANGLER_VERSION}"
+        )
+    preflight_step = step_by_name(
+        tencent_steps,
+        "Validate Cloudflare deploy configuration",
+    )
+    if preflight_step.get("working-directory") != CLOUDFLARE_PROJECT_DIRECTORY:
+        raise AssertionError(
+            "Cloudflare preflight must run from the materialized Pages project"
+        )
+    preflight_command = str(preflight_step.get("run") or "")
+    required_preflight_tokens = (
+        'npx --yes "wrangler@$WRANGLER_VERSION" pages functions build functions',
+        '--project-directory .',
+        '--output-routes-path "$routes_manifest"',
+        'required = {"/healthz", "/oauth-relay/*", "/v1/*"}',
+    )
+    missing_preflight = [
+        token for token in required_preflight_tokens if token not in preflight_command
+    ]
+    if missing_preflight:
+        raise AssertionError(
+            f"Cloudflare Pages Functions preflight is incomplete: {missing_preflight}"
+        )
+
     cloudflare_index = tencent_names.index("Deploy downloaded dist to Cloudflare Pages")
+    cloudflare_step = step_by_name(
+        tencent_steps,
+        "Deploy downloaded dist to Cloudflare Pages",
+    )
+    if cloudflare_step.get("working-directory") != CLOUDFLARE_PROJECT_DIRECTORY:
+        raise AssertionError(
+            "Cloudflare deployment must run from the materialized Pages project"
+        )
+    cloudflare_command = str(cloudflare_step.get("run") or "")
+    if (
+        'npx --yes "wrangler@$WRANGLER_VERSION" pages deploy '
+        '"$RUNNER_TEMP/frontend-dist"'
+        not in cloudflare_command
+    ):
+        raise AssertionError(
+            "Cloudflare must deploy the verified dist with the pinned Wrangler"
+        )
+    if "wrangler@latest" in cloudflare_command:
+        raise AssertionError("Cloudflare deployment must not use a floating Wrangler version")
     if tencent_names.index("Deploy verified release on Tencent") > cloudflare_index:
         raise AssertionError("Tencent must succeed before Cloudflare switches the shared artifact")
     if cloudflare_index > tencent_names.index("Verify intl public release provenance"):
         raise AssertionError("Cloudflare deployment must be verified before release completion")
+    runtime_verify_index = tencent_names.index("Verify intl API routing contract")
+    if runtime_verify_index < tencent_names.index("Verify intl public release provenance"):
+        raise AssertionError(
+            "intl API routing must be checked after release provenance converges"
+        )
+    runtime_verify_step = step_by_name(
+        tencent_steps,
+        "Verify intl API routing contract",
+    )
+    runtime_verify_command = str(runtime_verify_step.get("run") or "")
+    if "verify_intl_runtime_contract.py" not in runtime_verify_command:
+        raise AssertionError("intl runtime verification must use the fail-closed helper")
 
     audit_needs = job(workflow, "audit_frontend_parity").get("needs")
     if audit_needs != [BUILD_JOB, "deploy_tencent"]:
@@ -370,6 +464,33 @@ def assert_prewarm_contract(production_name: str) -> None:
         raise AssertionError("prewarm must verify public provenance")
 
 
+def assert_required_ci_contract() -> None:
+    ci = load_workflow(CI_WORKFLOW_PATH)
+    contract_job = job(ci, "frontend-release-contract")
+    if contract_job.get("continue-on-error") == "true":
+        raise AssertionError("frontend-release-contract must be a required CI job")
+    contract_steps = steps(contract_job, "frontend-release-contract")
+    setup_node = step_by_name(contract_steps, "Setup fixed edge contract Node")
+    if setup_node.get("uses") != "actions/setup-node@v4":
+        raise AssertionError("edge contract CI must use actions/setup-node@v4")
+    setup_node_with = mapping(setup_node.get("with"), "edge contract setup-node with")
+    if setup_node_with.get("node-version") != "20.19.0":
+        raise AssertionError("edge contract CI must use the production Node version")
+
+    commands = combined_run(contract_job, "frontend-release-contract")
+    required_tokens = (
+        "npm ci",
+        "test_frontend_release_artifact.py",
+        "test_verify_intl_runtime_contract.py",
+        "npx vitest run",
+        "edgeCacheFunction.test.ts",
+        "healthzEdgeFunction.test.ts",
+    )
+    missing = [token for token in required_tokens if token not in commands]
+    if missing:
+        raise AssertionError(f"required edge contract CI is incomplete: {missing}")
+
+
 def main() -> None:
     if (REPO_ROOT / ".github/workflows/deploy-fullstack-tencent.yml").exists():
         raise AssertionError("legacy Tencent workflow must not coexist with production release")
@@ -386,9 +507,11 @@ def main() -> None:
     assert_tencent_resumable_upload_contract(production)
     assert_server_consumes_only_prebuilt_dist()
     assert_prewarm_contract(production_name)
+    assert_required_ci_contract()
     print(
         "Validated immutable production release, shared artifact parity, "
-        "server no-build semantics, and main-only prewarm provenance."
+        "artifact-bound edge functions, intl runtime routing, server no-build "
+        "semantics, and main-only prewarm provenance."
     )
 
 

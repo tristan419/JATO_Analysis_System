@@ -37,12 +37,27 @@ class FrontendReleaseArtifactTests(unittest.TestCase):
         self.temp_dir = tempfile.TemporaryDirectory()
         self.root = Path(self.temp_dir.name)
         self.dist_dir = self.root / "dist"
+        self.functions_dir = self.root / "functions"
         self.release_dir = self.root / "release"
         self.dist_dir.mkdir()
+        (self.functions_dir / "v1").mkdir(parents=True)
+        (self.functions_dir / "oauth-relay").mkdir(parents=True)
         (self.dist_dir / "index.html").write_text("<main>release</main>\n", encoding="utf-8")
         assets = self.dist_dir / "assets"
         assets.mkdir()
         (assets / "app.js").write_text("console.log('immutable');\n", encoding="utf-8")
+        (self.functions_dir / "healthz.js").write_text(
+            "export const onRequest = () => Response.json({status: 'ok'});\n",
+            encoding="utf-8",
+        )
+        (self.functions_dir / "v1" / "[[path]].js").write_text(
+            "export const onRequest = () => Response.json({route: 'v1'});\n",
+            encoding="utf-8",
+        )
+        (self.functions_dir / "oauth-relay" / "[[path]].js").write_text(
+            "export const onRequest = () => Response.json({route: 'oauth'});\n",
+            encoding="utf-8",
+        )
         build_id = release_artifact.frontend_build_id(self.dist_dir)
         (self.dist_dir / release_artifact.BUILD_META_NAME).write_text(
             json.dumps(
@@ -61,6 +76,7 @@ class FrontendReleaseArtifactTests(unittest.TestCase):
         )
         self.manifest = release_artifact.create_release(
             dist_dir=self.dist_dir,
+            functions_dir=self.functions_dir,
             release_dir=self.release_dir,
             github_sha=GITHUB_SHA,
             artifact_name=ARTIFACT_NAME,
@@ -94,9 +110,15 @@ class FrontendReleaseArtifactTests(unittest.TestCase):
 
     def test_create_and_verify_materializes_public_provenance(self) -> None:
         materialized = self.root / "materialized"
-        provenance = self.verify(materialize_dir=materialized)
+        materialized_functions = self.root / "materialized-functions"
+        provenance = self.verify(
+            materialize_dir=materialized,
+            materialize_functions_dir=materialized_functions,
+        )
 
         self.assertTrue((materialized / "index.html").is_file())
+        self.assertTrue((materialized_functions / "healthz.js").is_file())
+        self.assertTrue((materialized_functions / "v1" / "[[path]].js").is_file())
         public_provenance = json.loads(
             (materialized / release_artifact.PUBLIC_PROVENANCE_NAME).read_text(
                 encoding="utf-8"
@@ -111,11 +133,16 @@ class FrontendReleaseArtifactTests(unittest.TestCase):
         self.assertEqual(build_meta["appCommit"], APP_COMMIT)
         self.assertEqual(build_meta["githubSha"], GITHUB_SHA)
         self.assertEqual(build_meta["nodeVersion"], NODE_VERSION)
+        self.assertEqual(
+            build_meta["edgeFunctionsTreeId"],
+            provenance["edgeFunctions"]["treeId"],
+        )
 
     def test_payload_is_deterministic(self) -> None:
         second_release = self.root / "second-release"
         second_manifest = release_artifact.create_release(
             dist_dir=self.dist_dir,
+            functions_dir=self.functions_dir,
             release_dir=second_release,
             github_sha=GITHUB_SHA,
             artifact_name=ARTIFACT_NAME,
@@ -171,6 +198,59 @@ class FrontendReleaseArtifactTests(unittest.TestCase):
             "frontend.nodeVersion must be a non-empty string",
         ):
             self.verify()
+
+    def test_tampered_edge_functions_manifest_fails_closed(self) -> None:
+        manifest_path = self.release_dir / release_artifact.MANIFEST_NAME
+        tampered = copy.deepcopy(self.manifest)
+        tampered["edgeFunctions"]["treeId"] = "f" * 64
+        manifest_path.write_text(
+            json.dumps(tampered, indent=2) + "\n",
+            encoding="utf-8",
+        )
+        with self.assertRaisesRegex(
+            release_artifact.ReleaseValidationError,
+            "Functions tree does not match",
+        ):
+            self.verify()
+
+    def test_missing_required_edge_function_fails_closed(self) -> None:
+        (self.functions_dir / "healthz.js").unlink()
+        with self.assertRaisesRegex(
+            release_artifact.ReleaseValidationError,
+            "required Cloudflare Pages Functions are missing",
+        ):
+            release_artifact.create_release(
+                dist_dir=self.dist_dir,
+                functions_dir=self.functions_dir,
+                release_dir=self.root / "missing-function-release",
+                github_sha=GITHUB_SHA,
+                artifact_name=ARTIFACT_NAME,
+                repository=REPOSITORY,
+                workflow=WORKFLOW,
+                run_id=RUN_ID,
+                run_attempt=RUN_ATTEMPT,
+            )
+
+    def test_edge_function_directory_symlink_fails_closed(self) -> None:
+        (self.functions_dir / "linked-v1").symlink_to(
+            self.functions_dir / "v1",
+            target_is_directory=True,
+        )
+        with self.assertRaisesRegex(
+            release_artifact.ReleaseValidationError,
+            "content directory contains a symlink",
+        ):
+            release_artifact.create_release(
+                dist_dir=self.dist_dir,
+                functions_dir=self.functions_dir,
+                release_dir=self.root / "symlink-release",
+                github_sha=GITHUB_SHA,
+                artifact_name=ARTIFACT_NAME,
+                repository=REPOSITORY,
+                workflow=WORKFLOW,
+                run_id=RUN_ID,
+                run_attempt=RUN_ATTEMPT,
+            )
 
     def test_wrong_artifact_identity_fails_closed(self) -> None:
         with self.assertRaisesRegex(
