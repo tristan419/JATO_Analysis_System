@@ -119,6 +119,7 @@ RUNTIME_PRESERVE_PATHS="
 06_AppPlatform/frontend/dist
 hermes/reports
 "
+RELEASE_REPLACEMENT_PATHS="03_Scripts 06_AppPlatform 07_ScrapingToolkit hermes"
 
 remove_transient_release_paths() {
   local transient_path=""
@@ -224,6 +225,7 @@ required_release_files=(
   03_Scripts/deploy/frontend_release_artifact.py
   03_Scripts/deploy/release_checkpoint.py
   03_Scripts/deploy/release_evidence.py
+  03_Scripts/deploy/lib/release_paths.sh
   03_Scripts/deploy_fullstack_server.sh
   03_Scripts/ops/deploy_fullstack_server.sh
   03_Scripts/ops/backup_production_data.sh
@@ -271,6 +273,34 @@ for release_directory in "${required_release_directories[@]}"; do
     exit 1
   fi
 done
+
+RELEASE_PATHS_LIB="$RELEASE_WORKTREE/03_Scripts/deploy/lib/release_paths.sh"
+# shellcheck disable=SC1090
+source "$RELEASE_PATHS_LIB"
+MSRP_PROJECT_ROOT_OVERRIDE="${APP_PROJECT_ROOT:-}"
+MSRP_EVIDENCE_ROOT_OVERRIDE="${MSRP_GOVERNANCE_EVIDENCE_ROOT:-}"
+if sudo -n test -f "$ENV_FILE" 2>/dev/null; then
+  if [[ -z "$MSRP_PROJECT_ROOT_OVERRIDE" ]]; then
+    MSRP_PROJECT_ROOT_OVERRIDE="$(
+      sudo -n bash -c 'set -a; . "$1"; set +a; printf "%s" "${APP_PROJECT_ROOT:-}"' _ "$ENV_FILE"
+    )"
+  fi
+  if [[ -z "$MSRP_EVIDENCE_ROOT_OVERRIDE" ]]; then
+    MSRP_EVIDENCE_ROOT_OVERRIDE="$(
+      sudo -n bash -c 'set -a; . "$1"; set +a; printf "%s" "${MSRP_GOVERNANCE_EVIDENCE_ROOT:-}"' _ "$ENV_FILE"
+    )"
+  fi
+fi
+MSRP_EVIDENCE_ROOT="$(
+  resolve_msrp_evidence_root \
+    "${MSRP_PROJECT_ROOT_OVERRIDE:-$REPO_DIR}" \
+    "$MSRP_EVIDENCE_ROOT_OVERRIDE"
+)"
+assert_path_outside_release_roots \
+  "$REPO_DIR" \
+  "$MSRP_EVIDENCE_ROOT" \
+  $RELEASE_REPLACEMENT_PATHS
+echo "[INFO] Durable MSRP evidence root is outside release replacement paths: $MSRP_EVIDENCE_ROOT"
 
 ARCHIVE_COMMIT="$(python3 -c 'import json, sys; from pathlib import Path; payload = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8")); print(payload.get("expectedCommitSha") or payload.get("commitSha") or "")' "$RELEASE_WORKTREE/hermes/deploy_release.json")"
 if [[ "$ARCHIVE_COMMIT" != "$DEPLOY_COMMIT_SHA" ]]; then

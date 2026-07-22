@@ -167,6 +167,14 @@ def list_evidence_for_target(
     return session.execute(stmt).scalars().all()
 
 
+def list_all_evidence_assets(session: Session) -> list[MsrpSourceEvidenceAsset]:
+    stmt = select(MsrpSourceEvidenceAsset).order_by(
+        MsrpSourceEvidenceAsset.storage_key.asc().nullslast(),
+        MsrpSourceEvidenceAsset.evidence_asset_id.asc(),
+    )
+    return session.execute(stmt).scalars().all()
+
+
 def get_evidence_upload_session(
     session: Session,
     upload_session_id: UUID,
