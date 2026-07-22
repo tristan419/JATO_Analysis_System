@@ -52,12 +52,12 @@ const historicalReclassificationDecisionCopy: Record<
   { title: string; description: string }
 > = {
   use_latest: {
-    title: "采用最新 washed 分类",
-    description: "以本次文件为准，替换该国家受影响历史月份的分析标签。",
+    title: "使用本次上传覆盖历史",
+    description: "该国家截至 active latest 的历史月份以本次 washed 文件为准；这是整国替换，不会与 active 累加。",
   },
   keep_active: {
     title: "保留当前 active 历史",
-    description: "历史月份沿用现有标签，只让本次上传覆盖允许推进的月份。",
+    description: "截至 active latest 的历史月份保持不变，只采用上传中的后续新月份。",
   },
 };
 
@@ -874,7 +874,7 @@ export function JatoMonthlyUpdatePage() {
       [
         "仅续跑当前 Smart Merge？",
         "",
-        "将复用当前 Candidate 和已保存的历史分类决策；不重新上传文件、不重跑 ETL，也不会修改 active。",
+        "将复用当前 Candidate 和已保存的历史处理决策；不重新上传文件、不重跑 ETL，也不会修改 active。",
         "续跑完成后仍需重新 Review、批准并手动 Publish。",
       ].join("\n")
     );
@@ -1056,11 +1056,11 @@ export function JatoMonthlyUpdatePage() {
     if (!hasValidHistoricalReclassificationScope(
       reviewBundle.historicalReclassificationReport
     )) {
-      setError("历史重分类报告状态与逐国范围不一致，不能批准当前 Candidate。");
+      setError("历史数据变化报告状态与逐国范围不一致，不能批准当前 Candidate。");
       return;
     }
     if (reviewBundle.historicalReclassificationReport.status === "decision_required") {
-      setError("请先应用历史分类选择并等待完整 Candidate 重建，再执行批准。");
+      setError("请先应用历史处理选择并等待完整 Candidate 重建，再执行批准。");
       return;
     }
     if (
@@ -1069,7 +1069,7 @@ export function JatoMonthlyUpdatePage() {
         reviewBundle.historicalReclassificationReport
       )
     ) {
-      setError("历史分类决策或 keep_active 最终复核不完整，不能批准当前 Candidate。");
+      setError("历史处理决策或 keep_active 最终复核不完整，不能批准当前 Candidate。");
       return;
     }
     if (!window.confirm("确认批准当前 candidate 的 Review？批准将绑定当前候选指纹；任何重建后都必须重新 Review。")) {
@@ -1099,7 +1099,7 @@ export function JatoMonthlyUpdatePage() {
       return;
     }
     if (!reviewBundle || reviewBundle.jobId !== job.jobId) {
-      setError("请先打开 Review Candidate，再处理历史分类变化。");
+      setError("请先打开 Review Candidate，再处理历史数据变化。");
       return;
     }
     const requiredCountries = reviewBundle.historicalReclassificationReport.countries
@@ -1112,18 +1112,29 @@ export function JatoMonthlyUpdatePage() {
     for (const countryReport of requiredCountries) {
       const decision = historicalReclassificationDecisions[countryReport.country];
       if (!isAllowedHistoricalReclassificationDecision(countryReport, decision)) {
-        setError(`请先为所有历史重分类国家选择后端允许的处理方式：${countryReport.country}。`);
+        setError(`请先为所有历史数据变化国家选择后端允许的处理方式：${countryReport.country}。`);
         return;
       }
       decisions.push({ country: countryReport.country, decision });
     }
     const decisionSummary = decisions
       .map(({ country, decision }) => (
-        `${country}：${decision === "use_latest" ? "采用最新 washed 分类" : "保留当前 active 历史"}`
+        `${country}：${decision === "use_latest" ? "使用本次上传覆盖历史" : "保留当前 active 历史"}`
       ))
       .join("\n");
+    const useLatestImpactSummary = requiredCountries
+      .filter((countryReport) => (
+        historicalReclassificationDecisions[countryReport.country] === "use_latest"
+      ))
+      .map((countryReport) => (
+        `${countryReport.country}：覆盖至 ${countryReport.comparedThrough || "active latest"} 的 ${formatMonthlyUpdateNumber(countryReport.historicalMonthCount)} 个历史月份（${countryReport.monthlyTotalsStable ? "国家逐月总量一致，分析分类按新值" : "销量和分析分类均按新值，历史 Dashboard、同比与份额会变化"}）`
+      ))
+      .join("\n");
+    const useLatestConfirmation = useLatestImpactSummary
+      ? `\n\n历史覆盖影响：\n${useLatestImpactSummary}\n\n覆盖是整国替换，不会把上传数据与 active 累加；未上传国家不变。选择 keep_active 的国家已发布历史不变，正常新增月份仍按月更规则处理。`
+      : "";
     if (!window.confirm(
-      `确认应用以下历史分类选择并生成完整 Candidate？\n\n${decisionSummary}\n\n这一步只重建 staging，不会修改 active；完成后仍需重新 Review、Approve 和 Publish。`
+      `确认应用以下历史处理选择并生成完整 Candidate？\n\n${decisionSummary}${useLatestConfirmation}\n\n这一步只重建 staging，不会修改 active；完成后仍需重新 Review、Approve 和 Publish。`
     )) {
       return;
     }
@@ -1145,7 +1156,7 @@ export function JatoMonthlyUpdatePage() {
       setReviewIssue(null);
       setHistoricalReclassificationDecisions({});
       setNotice(
-        `已应用 ${decisions.length} 个国家的历史分类选择，完整 Candidate 正在隔离重建；active 尚未改变。`
+        `已应用 ${decisions.length} 个国家的历史处理选择，完整 Candidate 正在隔离重建；active 尚未改变。`
       );
     } catch (err) {
       setError((err as Error).message);
@@ -2576,10 +2587,10 @@ Smart Merge:  [SE:keep active 2026-03] [DE:patch 2026-03] [NL:patch 2026-02] [FR
                     <section className="monthly-update-reclassification">
                       <div className="detail-section-head">
                         <div>
-                          <div className="card-title">Historical Classification Changes</div>
+                          <div className="card-title">Historical Data Changes</div>
                           <p className="section-note">
-                            这里展示 washed 文件对 active 历史分析标签的重新分桶。销量没有累加；
-                            可选处理方式由后端按国家的历史销量校验结果限定。
+                            这里展示 washed 文件与 active 的历史销量和分析分类差异。
+                            每个受影响国家都必须明确选择覆盖历史或保留 active；系统不会默认选择。
                           </p>
                         </div>
                         <div className="table-status-chip">
@@ -2605,16 +2616,17 @@ Smart Merge:  [SE:keep active 2026-03] [DE:patch 2026-03] [NL:patch 2026-02] [FR
                         }>
                           {hasRecordedResolvedHistoricalReclassificationDecisions
                             && hasVerifiedResolvedKeepActiveDecisions
-                            ? "历史分类选择已应用到当前完整 Candidate。请重新核对本报告与 findings，然后再执行标准 Approve Review；active 仍未改变。"
+                            ? "历史处理选择已应用到当前完整 Candidate。请重新核对本报告与 findings，然后再执行标准 Approve Review；active 仍未改变。"
                             : !hasRecordedResolvedHistoricalReclassificationDecisions
                               ? "报告缺少部分国家的已应用选择。为避免无法审计的默认行为，Approve Review 已锁定；请刷新 Review。"
                               : "keep_active 的最终 Candidate 历史复核缺失或失败。Approve Review 已锁定；请查看 SC011 findings。"}
                         </div>
                       )}
                       <div className="monthly-update-reclassification-list">
-                        {historicalReclassificationReport.countries.map((countryReport) => {
+                        {historicalReclassificationReport.countries.map((countryReport, countryIndex) => {
                           const selectedDecision = historicalReclassificationDecisions[countryReport.country];
                           const decisionGroupName = `historical-reclassification-${countryReport.country}`;
+                          const riskDescriptionId = `historical-reclassification-risk-${countryIndex}`;
                           const keepActiveValidation = keepActiveValidationByCountry.get(
                             countryReport.country.trim().toLocaleLowerCase()
                           );
@@ -2650,14 +2662,27 @@ Smart Merge:  [SE:keep active 2026-03] [DE:patch 2026-03] [NL:patch 2026-02] [FR
                               {historicalReclassificationReport.status === "decision_required"
                                 && countryReport.decisionRequired && (
                                 <fieldset className="monthly-update-reclassification-decisions">
-                                  <legend>选择 {countryReport.country} 的历史分类处理方式（必选）</legend>
+                                  <legend>选择 {countryReport.country} 的历史数据处理方式（必选）</legend>
                                   {countryReport.allowedDecisions.map((decision) => (
-                                    <label key={decision} className={selectedDecision === decision ? "is-selected" : ""}>
+                                    <label
+                                      key={decision}
+                                      className={[
+                                        selectedDecision === decision ? "is-selected" : "",
+                                        decision === "use_latest" && !countryReport.monthlyTotalsStable
+                                          ? "is-destructive"
+                                          : "",
+                                      ].filter(Boolean).join(" ")}
+                                    >
                                       <input
                                         type="radio"
                                         name={decisionGroupName}
                                         value={decision}
                                         checked={selectedDecision === decision}
+                                        aria-describedby={
+                                          decision === "use_latest" && !countryReport.monthlyTotalsStable
+                                            ? riskDescriptionId
+                                            : undefined
+                                        }
                                         onChange={() => setHistoricalReclassificationDecisions((current) => ({
                                           ...current,
                                           [countryReport.country]: decision,
@@ -2669,10 +2694,16 @@ Smart Merge:  [SE:keep active 2026-03] [DE:patch 2026-03] [NL:patch 2026-02] [FR
                                       </span>
                                     </label>
                                   ))}
-                                  {countryReport.allowedDecisions.length === 1
-                                    && countryReport.allowedDecisions[0] === "keep_active" && (
-                                    <div className="alert alert-warning">
-                                      use_latest 已锁定；active latest 之后仍取上传。
+                                  {!countryReport.monthlyTotalsStable && (
+                                    <div
+                                      id={riskDescriptionId}
+                                      className="alert alert-danger monthly-update-reclassification-risk"
+                                    >
+                                      本次上传与 active 的历史逐月总销量不一致。
+                                      选择「使用本次上传覆盖历史」会替换截至 {countryReport.comparedThrough || "active latest"} 的
+                                      {" "}{formatMonthlyUpdateNumber(countryReport.historicalMonthCount)} 个已发布月份，包括销量与分类；
+                                      历史 Dashboard、同比和份额会变化。选择「保留当前 active 历史」则历史不变。
+                                      系统不会默认选择。
                                     </div>
                                   )}
                                 </fieldset>
@@ -2681,6 +2712,9 @@ Smart Merge:  [SE:keep active 2026-03] [DE:patch 2026-03] [NL:patch 2026-02] [FR
                                 && countryReport.decisionRequired && (
                                 <div className={
                                   countryReport.decision === "use_latest"
+                                    && !countryReport.monthlyTotalsStable
+                                    ? "alert alert-danger"
+                                    : countryReport.decision === "use_latest"
                                     || (
                                       countryReport.decision === "keep_active"
                                       && keepActiveValidation?.status === "pass"
@@ -2689,7 +2723,9 @@ Smart Merge:  [SE:keep active 2026-03] [DE:patch 2026-03] [NL:patch 2026-02] [FR
                                     : "alert alert-warning"
                                 }>
                                   {countryReport.decision === "use_latest"
-                                    ? "已应用选择：采用最新 washed 分类。当前完整 Candidate 使用本次文件中的历史分析标签。"
+                                    ? countryReport.monthlyTotalsStable
+                                      ? "已应用选择：当前完整 Candidate 使用本次 washed 文件中的历史分析分类，国家逐月总量与 active 一致。"
+                                      : "高风险选择已应用：当前完整 Candidate 以本次 washed 文件整国覆盖已发布历史，包括历史销量和分析分类；尚未修改 active。若后续批准并 Publish，历史 Dashboard、同比和份额会变化。"
                                     : countryReport.decision === "keep_active"
                                       ? keepActiveValidation?.status === "pass"
                                         ? "最终 Candidate 复核通过：已保留当前 active 历史，active latest 之后月份来自本次上传。"

@@ -11042,6 +11042,26 @@ table.data-table tr.data-table-group-row.contains-selection td {
   box-shadow: 0 0 0 2px rgba(28, 105, 212, 0.08);
 }
 
+.monthly-update-reclassification-decisions label.is-destructive {
+  border-color: rgba(229, 72, 77, 0.5);
+  background: rgba(229, 72, 77, 0.04);
+}
+
+.monthly-update-reclassification-decisions label.is-destructive.is-selected {
+  border-color: var(--c-danger, #c9363e);
+  background: rgba(229, 72, 77, 0.1);
+  box-shadow: 0 0 0 2px rgba(229, 72, 77, 0.1);
+}
+
+.monthly-update-reclassification-decisions label.is-destructive input {
+  accent-color: var(--c-danger, #c9363e);
+}
+
+.monthly-update-reclassification-risk {
+  grid-column: 1 / -1;
+  margin: 0;
+}
+
 .monthly-update-reclassification-decisions input {
   flex: 0 0 auto;
   margin-top: 3px;

@@ -1242,7 +1242,7 @@ def test_cached_legacy_review_exposes_server_normalized_allowed_decisions(
             "country": "荷兰",
             "monthlyTotalsStable": False,
             "decisionRequired": True,
-            "allowedDecisions": ["keep_active"],
+            "allowedDecisions": ["use_latest", "keep_active"],
         }
     ]
     assert normalized_report["reportFingerprint"] != legacy_fingerprint
@@ -1822,7 +1822,7 @@ def test_historical_reclassification_report_uses_single_dimension_totals() -> No
     assert report["exactChanges"][0]["transferredSales"] == 10
 
 
-def test_historical_sales_change_requires_keep_active_decision() -> None:
+def test_historical_sales_change_requires_explicit_history_decision() -> None:
     active = pd.DataFrame(
         [
             {
@@ -1862,7 +1862,7 @@ def test_historical_sales_change_requires_keep_active_decision() -> None:
     report = stability["historicalReclassification"]
     assert report["monthlyTotalsStable"] is False
     assert report["decisionRequired"] is True
-    assert report["allowedDecisions"] == ["keep_active"]
+    assert report["allowedDecisions"] == ["use_latest", "keep_active"]
 
 
 def test_keep_active_history_slices_months_without_accumulation() -> None:
@@ -2229,7 +2229,10 @@ def test_legacy_historical_sales_blocker_normalizes_and_queues_keep_active(
         if item["country"] == "荷兰"
     )
     assert netherlands["decisionRequired"] is True
-    assert netherlands["allowedDecisions"] == ["keep_active"]
+    assert netherlands["allowedDecisions"] == [
+        "use_latest",
+        "keep_active",
+    ]
     assert resolution["decisions"] == [
         {"country": "捷克", "decision": "keep_active"},
         {"country": "荷兰", "decision": "keep_active"},
@@ -2246,7 +2249,7 @@ def test_legacy_historical_sales_blocker_normalizes_and_queues_keep_active(
     )
 
 
-def test_historical_sales_change_use_latest_is_rejected_at_endpoint(
+def test_historical_sales_change_use_latest_is_queued_at_endpoint(
     tmp_path: Path,
     monkeypatch,
 ) -> None:
@@ -2297,39 +2300,57 @@ def test_historical_sales_change_use_latest_is_rejected_at_endpoint(
         },
     )
 
-    with pytest.raises(HTTPException) as exc_info:
-        (
-            jato_monthly_update_service
-            ._resolve_jato_historical_reclassification_with_job_lock(
-                job_id=job_id,
-                triggered_by="admin",
-                decisions=[
-                    {"country": "瑞士", "decision": "use_latest"}
-                ],
-            )
-        )
-
-    assert exc_info.value.status_code == 409
-    assert (
-        exc_info.value.detail["blockerType"]
-        == "historical_sales_changed_requires_keep_active"
+    monkeypatch.setattr(
+        jato_monthly_update_service,
+        "_active_dataset_version",
+        lambda: "a" * 64,
     )
-    assert (
+    monkeypatch.setattr(
+        jato_monthly_update_service,
+        "_create_smart_merge_candidate_locked",
+        lambda *, job_id, triggered_by: {
+            "jobId": job_id,
+            "triggeredBy": triggered_by,
+            "status": "queued",
+        },
+    )
+
+    result = (
+        jato_monthly_update_service
+        ._resolve_jato_historical_reclassification_with_job_lock(
+            job_id=job_id,
+            triggered_by="admin",
+            decisions=[
+                {"country": "瑞士", "decision": "use_latest"}
+            ],
+        )
+    )
+
+    assert result["status"] == "queued"
+    resolution = (
         jato_monthly_update_service
         ._historical_reclassification_resolution(
             jato_monthly_update_service._load_job_state(job_id)
         )
-        is None
     )
+    assert resolution is not None
+    assert resolution["activeBaseFingerprint"] == "a" * 64
+    assert resolution["sourceCandidateFingerprint"] == "b" * 64
+    assert resolution["reportFingerprint"] == (
+        resolution["report"]["reportFingerprint"]
+    )
+    assert resolution["decisions"] == [
+        {"country": "瑞士", "decision": "use_latest"}
+    ]
 
 
-def test_persisted_historical_sales_change_use_latest_is_rejected() -> None:
+def test_persisted_historical_sales_change_use_latest_is_validated() -> None:
     country_reports = [
         {
             "country": "瑞士",
             "monthlyTotalsStable": False,
             "decisionRequired": True,
-            "allowedDecisions": ["keep_active"],
+            "allowedDecisions": ["use_latest", "keep_active"],
         }
     ]
     report_fingerprint = (
@@ -2351,18 +2372,10 @@ def test_persisted_historical_sales_change_use_latest_is_rejected() -> None:
         },
     }
 
-    with pytest.raises(HTTPException) as exc_info:
-        (
-            jato_monthly_update_service
-            ._validated_historical_reclassification_resolution(
-                resolution
-            )
-        )
-
-    assert exc_info.value.status_code == 409
     assert (
-        exc_info.value.detail["blockerType"]
-        == "historical_sales_changed_requires_keep_active"
+        jato_monthly_update_service
+        ._validated_historical_reclassification_resolution(resolution)
+        == {"瑞士".casefold(): "use_latest"}
     )
 
 
@@ -2665,12 +2678,135 @@ def test_publish_configuration_guard_only_allows_bound_use_latest(
     changed_total = pd.read_parquet(candidate_path)
     changed_total.loc[:, "2026 Jan"] = 11
     changed_total.to_parquet(candidate_path, index=False)
-    assert (
+    historical_sales_changes = (
         jato_monthly_update_service._find_publish_historical_sales_changes(
             active_parquet_path=active_path,
             candidate_parquet_path=candidate_path,
         )
+    )
+    assert historical_sales_changes != []
+    assert historical_sales_changes[0]["monthChanges"] == [
+        {
+            "month": "2026 Jan",
+            "activeSales": 10.0,
+            "candidateSales": 11.0,
+            "deltaSales": 1,
+        }
+    ]
+    blocking, authorized = (
+        jato_monthly_update_service
+        ._partition_publish_historical_sales_changes(
+            changes=historical_sales_changes,
+            approved_sales_overwrite_countries={"czechia"},
+        )
+    )
+    assert blocking == []
+    assert authorized == historical_sales_changes
+    assert (
+        jato_monthly_update_service
+        ._find_publish_historical_configuration_changes(
+            active_parquet_path=active_path,
+            candidate_parquet_path=candidate_path,
+            approved_reclassification_decisions={
+                "Czechia": "use_latest"
+            },
+        )
         != []
+    )
+    assert (
+        jato_monthly_update_service
+        ._find_publish_historical_configuration_changes(
+            active_parquet_path=active_path,
+            candidate_parquet_path=candidate_path,
+            approved_reclassification_decisions={
+                "Czechia": "use_latest"
+            },
+            approved_sales_overwrite_countries={"czechia"},
+        )
+        == []
+    )
+
+    changed_total.drop(columns=["2026 Jan"]).to_parquet(
+        candidate_path,
+        index=False,
+    )
+    missing_month_changes = (
+        jato_monthly_update_service._find_publish_historical_sales_changes(
+            active_parquet_path=active_path,
+            candidate_parquet_path=candidate_path,
+        )
+    )
+    blocking, authorized = (
+        jato_monthly_update_service
+        ._partition_publish_historical_sales_changes(
+            changes=missing_month_changes,
+            approved_sales_overwrite_countries={"czechia"},
+        )
+    )
+    assert authorized == []
+    assert blocking[0]["missingCandidateMonths"] == ["2026 Jan"]
+
+
+def test_publish_context_only_authorizes_unstable_use_latest_sales() -> None:
+    candidate_fingerprint = "b" * 64
+    decisions, audit, sales_overwrite_countries = (
+        jato_monthly_update_service
+        ._approved_historical_reclassification_publish_context(
+            {
+                "candidateFingerprint": candidate_fingerprint,
+                "historicalReclassification": {
+                    "resolvedCandidateFingerprint": candidate_fingerprint,
+                    "decisions": [
+                        {
+                            "country": "Czechia",
+                            "decision": "use_latest",
+                            "monthlyTotalsStable": True,
+                        },
+                        {
+                            "country": "Denmark",
+                            "decision": "use_latest",
+                            "monthlyTotalsStable": False,
+                        },
+                        {
+                            "country": "Austria",
+                            "decision": "keep_active",
+                            "monthlyTotalsStable": False,
+                        },
+                    ],
+                },
+            }
+        )
+    )
+
+    assert decisions == {
+        "czechia": "use_latest",
+        "denmark": "use_latest",
+        "austria": "keep_active",
+    }
+    assert [item["country"] for item in audit] == [
+        "Czechia",
+        "Denmark",
+        "Austria",
+    ]
+    assert sales_overwrite_countries == {"denmark"}
+    assert (
+        jato_monthly_update_service
+        ._approved_historical_reclassification_publish_context(
+            {
+                "candidateFingerprint": candidate_fingerprint,
+                "historicalReclassification": {
+                    "resolvedCandidateFingerprint": "c" * 64,
+                    "decisions": [
+                        {
+                            "country": "Denmark",
+                            "decision": "use_latest",
+                            "monthlyTotalsStable": False,
+                        }
+                    ],
+                },
+            }
+        )
+        == ({}, [], set())
     )
 
 
@@ -2870,7 +3006,11 @@ def test_approval_binds_resolved_decisions_and_rejects_stale_resolution(
     assert bound["reportFingerprint"] == report_fingerprint
     assert bound["resolvedCandidateFingerprint"] == "b" * 64
     assert bound["decisions"] == [
-        {"country": "捷克", "decision": "use_latest"}
+        {
+            "country": "捷克",
+            "decision": "use_latest",
+            "monthlyTotalsStable": True,
+        }
     ]
 
 
@@ -3001,7 +3141,13 @@ def test_approval_requires_exact_passed_keep_active_validation(
         approved["reviewApproval"]["historicalReclassification"][
             "decisions"
         ]
-        == [{"country": "荷兰", "decision": "keep_active"}]
+        == [
+            {
+                "country": "荷兰",
+                "decision": "keep_active",
+                "monthlyTotalsStable": False,
+            }
+        ]
     )
 
 
@@ -3100,6 +3246,74 @@ def test_streaming_smart_merge_applies_keep_active_and_proves_untouched(
             candidate_parquet_path=candidate_path,
         )
         == []
+    )
+
+
+def test_streaming_smart_merge_use_latest_replaces_without_accumulation(
+    tmp_path: Path,
+) -> None:
+    active_path = tmp_path / "active.parquet"
+    candidate_path = tmp_path / "candidate.parquet"
+    pd.DataFrame(
+        [
+            {
+                "Country": "Czechia",
+                "Make": "BRAND",
+                "Model": "MODEL",
+                "Version name": "Old",
+                "2026 Jan": 10,
+            },
+            {
+                "Country": "Germany",
+                "Make": "OTHER",
+                "Model": "UNCHANGED",
+                "Version name": "Stable",
+                "2026 Jan": 20,
+            },
+        ]
+    ).to_parquet(active_path, index=False)
+    pd.DataFrame(
+        [
+            {
+                "Country": "Czechia",
+                "Make": "BRAND",
+                "Model": "MODEL",
+                "Version name": "Washed",
+                "New dimension": "latest",
+                "2026 Jan": 11,
+                "2026 Feb": 12,
+            }
+        ]
+    ).to_parquet(candidate_path, index=False)
+
+    _rows, summary = (
+        jato_monthly_update_service._smart_merge_parquet_streaming(
+            active_path=active_path,
+            candidate_path=candidate_path,
+            regressed_countries=[],
+            historical_reclassification_decisions={
+                "Czechia": "use_latest"
+            },
+        )
+    )
+
+    merged = pd.read_parquet(candidate_path)
+    czechia = merged.loc[merged["Country"] == "Czechia"]
+    germany = merged.loc[merged["Country"] == "Germany"]
+    assert czechia["2026 Jan"].sum() == 11
+    assert czechia["2026 Jan"].sum() != 21
+    assert czechia["2026 Feb"].sum() == 12
+    assert czechia["Version name"].tolist() == ["Washed"]
+    assert germany["2026 Jan"].sum() == 20
+    assert germany["Version name"].tolist() == ["Stable"]
+    assert germany["New dimension"].isna().all()
+    assert summary["historicalReclassificationPolicies"]["Czechia"] == {
+        "policy": "use_latest",
+        "historicalMonthsFrom": "candidate",
+        "monthBoundaryCheck": "not_applicable",
+    }
+    assert summary["untouchedCountryChecks"]["Germany"]["status"] == (
+        "pass"
     )
 
 

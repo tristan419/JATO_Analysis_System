@@ -2632,11 +2632,6 @@ def _build_historical_reclassification_country_report(
     if not has_historical_change:
         return None
     decision_required = True
-    allowed_decisions = (
-        HISTORICAL_RECLASSIFICATION_DECISION_ORDER
-        if monthly_totals_stable
-        else ("keep_active",)
-    )
     return {
         "country": country,
         "comparedThrough": (
@@ -2651,7 +2646,9 @@ def _build_historical_reclassification_country_report(
         ),
         "monthlyTotalsStable": monthly_totals_stable,
         "decisionRequired": decision_required,
-        "allowedDecisions": list(allowed_decisions),
+        "allowedDecisions": list(
+            HISTORICAL_RECLASSIFICATION_DECISION_ORDER
+        ),
         "dimensionSummaries": dimension_summaries,
         "exactChanges": exact_changes,
         "exactChangeCount": exact_change_count,
@@ -3142,7 +3139,19 @@ def _single_country_source_feedback(*, rule_id: str, country: str, metrics: dict
                 "Body、Powertrain、Fuel、Version/Trim 归类；若确需重分类，"
                 "请提供逐月、旧值→新值及销量转移量的业务确认。"
             )
-        return f"请恢复 {country} 在 {metrics.get('comparedThrough') or '已有'} 之前的历史销量。系统发现 {metrics.get('mismatchCount', 0)} 处历史销量差异；本次更新只能新增或修正经确认的最新月份，不能重写已发布历史月份。"
+        if metrics.get("decision") == "use_latest":
+            return (
+                f"{country} 已明确选择以本次 washed 数据覆盖 "
+                f"{metrics.get('comparedThrough') or '已有'} 及之前的历史。"
+                "请洗数人员只需确认这些销量与分类变化是有意修订；"
+                "无需为通过校验而恢复 active 旧值。"
+            )
+        return (
+            f"{country} 在 {metrics.get('comparedThrough') or '已有'} 及之前"
+            f"有 {metrics.get('mismatchCount', 0)} 处历史销量差异。"
+            "若这是有意的 washed 修订，请核对逐月差异后选择 "
+            "use_latest；否则选择 keep_active 或请洗数人员恢复 active 历史。"
+        )
     if rule_id == "SC012":
         row_delta = int(metrics.get("rowDelta", 0) or 0)
         stability = metrics.get("historicalSalesStability")
@@ -3643,10 +3652,12 @@ def _find_publish_historical_sales_changes(
     active_parquet_path: Path,
     candidate_parquet_path: Path,
 ) -> list[dict[str, Any]]:
-    """Block any country/month sales rewrite already present in active.
+    """Identify country/month sales rewrites already present in active.
 
     This invariant catches a one-unit append just as reliably as a 2x append.
-    New months are intentionally outside the comparison window.
+    New months are intentionally outside the comparison window. Active months
+    missing from the candidate are reported separately so an explicit
+    overwrite can never erase published history.
     """
     active_countries = _collect_countries_from_path(
         active_parquet_path,
@@ -3691,14 +3702,54 @@ def _find_publish_historical_sales_changes(
                 }
             )
         if month_changes:
+            missing_candidate_months = [
+                str(item["month"])
+                for item in month_changes
+                if item.get("candidateSales") is None
+            ]
             changes.append(
                 {
                     "country": country,
                     "changedMonthCount": len(month_changes),
+                    "monthChanges": month_changes,
                     "sampleMonths": month_changes[:6],
+                    "missingCandidateMonthCount": len(
+                        missing_candidate_months
+                    ),
+                    "missingCandidateMonths": missing_candidate_months[:12],
                 }
             )
     return changes
+
+
+def _partition_publish_historical_sales_changes(
+    *,
+    changes: list[dict[str, Any]],
+    approved_sales_overwrite_countries: set[str],
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    """Split historical sales changes by fingerprint-bound country approval.
+
+    ``use_latest`` authorizes a whole-country replacement, but never authorizes
+    removing a month that already exists in active. The caller derives the
+    decision map only from the approved Review bound to the exact candidate.
+    """
+    approved_use_latest = {
+        str(country).strip().casefold()
+        for country in approved_sales_overwrite_countries
+        if str(country).strip()
+    }
+    blocking: list[dict[str, Any]] = []
+    authorized: list[dict[str, Any]] = []
+    for change in changes:
+        country_key = str(change.get("country") or "").strip().casefold()
+        if (
+            country_key in approved_use_latest
+            and int(change.get("missingCandidateMonthCount") or 0) == 0
+        ):
+            authorized.append(change)
+        else:
+            blocking.append(change)
+    return blocking, authorized
 
 
 def _find_candidate_duplicate_configurations(
@@ -4489,6 +4540,7 @@ def _find_publish_historical_configuration_changes(
     candidate_parquet_path: Path,
     source_upload_sha256: str | None = None,
     approved_reclassification_decisions: dict[str, str] | None = None,
+    approved_sales_overwrite_countries: set[str] | None = None,
 ) -> list[dict[str, Any]]:
     """Block unapproved Make/Model redistribution inside published months.
 
@@ -4508,6 +4560,11 @@ def _find_publish_historical_configuration_changes(
         for country, decision in (
             approved_reclassification_decisions or {}
         ).items()
+    }
+    approved_sales_overwrites = {
+        str(country).strip().casefold()
+        for country in (approved_sales_overwrite_countries or set())
+        if str(country).strip()
     }
     changes: list[dict[str, Any]] = []
     for country, active_latest_month in active_latest.items():
@@ -4535,14 +4592,21 @@ def _find_publish_historical_configuration_changes(
             continue
         if (
             approved_decisions.get(country.casefold()) == "use_latest"
-            and int(stability.get("countryMismatchCount") or 0) == 0
-            and stability.get("reason")
-            in {
-                "unconfirmed_make_model_reclassification",
-                "historical_analysis_dimension_reclassification",
-                "make_dimension_reclassification",
-                "confirmed_make_model_reclassification",
-            }
+            and (
+                stability.get("reason")
+                in {
+                    "unconfirmed_make_model_reclassification",
+                    "historical_analysis_dimension_reclassification",
+                    "make_dimension_reclassification",
+                    "confirmed_make_model_reclassification",
+                }
+                or (
+                    stability.get("reason")
+                    == "historical_sales_changed"
+                    and country.casefold()
+                    in approved_sales_overwrites
+                )
+            )
         ):
             continue
         changes.append(
@@ -7201,11 +7265,9 @@ def _historical_reclassification_report_fingerprint(
 def _historical_reclassification_allowed_decisions(
     country_report: dict[str, Any],
 ) -> tuple[str, ...]:
-    """Return the only safe choices for one immutable Review report row."""
+    """Return choices that can be bound to one immutable Review row."""
     monthly_totals_stable = country_report.get("monthlyTotalsStable")
-    if monthly_totals_stable is False:
-        return ("keep_active",)
-    if monthly_totals_stable is True:
+    if monthly_totals_stable is True or monthly_totals_stable is False:
         return HISTORICAL_RECLASSIFICATION_DECISION_ORDER
     return ()
 
@@ -7216,10 +7278,11 @@ def _normalize_historical_reclassification_countries_for_resolution(
     """Upgrade legacy Review rows before binding a decision fingerprint.
 
     Older cached Reviews marked countries with changed historical country/month
-    totals as non-decisionable.  They are safely decisionable only because the
-    existing keep_active merge takes all published months from active.  This
-    normalization is shared by the endpoint and Smart Merge preflight so the
-    exact same country payload is fingerprinted in both places.
+    totals as non-decisionable.  They become decisionable only through the
+    existing full-candidate rebuild: keep_active retains published history,
+    while an explicit use_latest choice replaces that country's history with
+    the upload.  This normalization is shared by the endpoint and Smart Merge
+    preflight so the same country payload is fingerprinted in both places.
     """
     normalized: list[dict[str, Any]] = []
     for raw_country in countries:
@@ -7324,7 +7387,7 @@ def _validated_normalized_historical_reclassification_report(
 def _historical_sales_changed_blocker_country_key(
     finding: dict[str, Any],
 ) -> str | None:
-    """Identify only the legacy SC011 blocker that keep_active can repair."""
+    """Identify the SC011 blocker an explicit history decision can resolve."""
     metrics = (
         finding.get("metrics")
         if isinstance(finding.get("metrics"), dict)
@@ -7510,6 +7573,58 @@ def _historical_reclassification_decision_map(
     return decisions
 
 
+def _approved_historical_reclassification_publish_context(
+    approval: dict[str, Any],
+) -> tuple[dict[str, str], list[dict[str, Any]], set[str]]:
+    """Return candidate-bound decisions and the narrower sales overwrite set."""
+    approved = approval.get("historicalReclassification")
+    candidate_fingerprint = str(
+        approval.get("candidateFingerprint") or ""
+    ).strip()
+    if (
+        not isinstance(approved, dict)
+        or not re.fullmatch(r"[0-9a-f]{64}", candidate_fingerprint)
+        or str(approved.get("resolvedCandidateFingerprint") or "")
+        != candidate_fingerprint
+    ):
+        return {}, [], set()
+    decisions = _historical_reclassification_decision_map(
+        {"decisions": approved.get("decisions")}
+    )
+    raw_decisions = (
+        approved.get("decisions")
+        if isinstance(approved.get("decisions"), list)
+        else []
+    )
+    audit = [
+        {
+            "country": str(item.get("country") or "").strip(),
+            "decision": decisions[
+                str(item.get("country") or "").strip().casefold()
+            ],
+            "monthlyTotalsStable": (
+                item.get("monthlyTotalsStable")
+                if isinstance(item.get("monthlyTotalsStable"), bool)
+                else None
+            ),
+        }
+        for item in raw_decisions
+        if isinstance(item, dict)
+        and str(item.get("country") or "").strip().casefold()
+        in decisions
+    ]
+    sales_overwrite_countries = {
+        str(item.get("country") or "").strip().casefold()
+        for item in raw_decisions
+        if isinstance(item, dict)
+        and str(item.get("decision") or "").strip().lower()
+        == "use_latest"
+        and item.get("monthlyTotalsStable") is False
+        and str(item.get("country") or "").strip()
+    }
+    return decisions, audit, sales_overwrite_countries
+
+
 def _validated_historical_reclassification_resolution(
     resolution: dict[str, Any],
 ) -> dict[str, str]:
@@ -7632,15 +7747,18 @@ def _validated_historical_reclassification_resolution(
                 status_code=409,
                 detail={
                     "blockerType": (
-                        "historical_sales_changed_requires_keep_active"
+                        "historical_reclassification_decision_not_allowed"
                     ),
                     "message": (
-                        f"{required_by_key[country_key]} 的历史国家/月总量"
-                        "发生变化，只能选择 keep_active；"
-                        "拒绝 use_latest 改写已发布历史。"
+                        f"{required_by_key[country_key]} 的历史处理方式"
+                        "不在当前 Review 允许范围内。"
                     ),
                     "country": required_by_key[country_key],
-                    "allowedDecisions": ["keep_active"],
+                    "allowedDecisions": list(
+                        _historical_reclassification_allowed_decisions(
+                            country_report
+                        )
+                    ),
                 },
             )
         decisions[country_key] = decision
@@ -8047,15 +8165,21 @@ def _build_single_country_review(
             isinstance(current_reclassification, dict)
             and current_reclassification.get("monthlyTotalsStable")
         )
-        if (
-            monthly_totals_stable
-            and resolved_reclassification_decision == "use_latest"
-        ):
+        if resolved_reclassification_decision == "use_latest":
+            resolved_historical_stability = {
+                **historical_stability,
+                "decision": "use_latest",
+            }
             add_finding(
                 "review",
                 "SC011",
-                "已选择以最新 washed 分类替换该国家历史分析维度。",
-                historical_stability,
+                (
+                    "已明确选择以本次 washed 数据覆盖该国家已发布历史"
+                    "（包含逐月销量与分析分类）。"
+                    if not monthly_totals_stable
+                    else "已选择以最新 washed 分类替换该国家历史分析维度。"
+                ),
+                resolved_historical_stability,
             )
         elif decision_required and not monthly_totals_stable:
             add_finding(
@@ -8063,8 +8187,7 @@ def _build_single_country_review(
                 "SC011",
                 (
                     "目标国家历史月总量发生变化；"
-                    "只能选择 keep_active，以 active 保留全部已发布历史，"
-                    "并仅从 candidate 读取之后的新月份。"
+                    "必须明确选择使用本次上传覆盖历史，或保留 active 历史。"
                 ),
                 historical_stability,
             )
@@ -8738,6 +8861,18 @@ def get_jato_monthly_update_review(
         and item.get("decision") == "keep_active"
         and str(item.get("country") or "").strip()
     }
+    resolved_decisions = (
+        _historical_reclassification_decision_map(
+            _historical_reclassification_resolution(payload)
+        )
+        if historical_reclassification_report.get("status") == "resolved"
+        else {}
+    )
+    use_latest_country_keys = {
+        country_key
+        for country_key, decision in resolved_decisions.items()
+        if decision == "use_latest"
+    }
     if historical_reclassification_report.get("status") == "resolved":
         findings = [
             item
@@ -8752,11 +8887,11 @@ def get_jato_monthly_update_review(
                     )
                 )
                 and (
-                    keep_active_validation_by_key.get(
+                    blocker_country_key in use_latest_country_keys
+                    or keep_active_validation_by_key.get(
                         blocker_country_key,
                         {},
-                    ).get("status")
-                    == "pass"
+                    ).get("status") == "pass"
                 )
             )
         ]
@@ -8804,6 +8939,9 @@ def get_jato_monthly_update_review(
         monthly_totals_stable = bool(
             country_report.get("monthlyTotalsStable")
         )
+        resolved_decision = str(
+            country_report.get("decision") or ""
+        ).strip().lower()
         decision_required = bool(
             country_report.get("decisionRequired")
         )
@@ -8821,8 +8959,20 @@ def get_jato_monthly_update_review(
                         )
                         if monthly_totals_stable
                         else (
-                            "历史国家/月总量发生变化；只能选择 "
-                            "keep_active，以 active 保留已发布历史。"
+                            (
+                                "历史国家/月总量发生变化；已明确选择 "
+                                "use_latest，本次上传将覆盖该国家已发布历史。"
+                            )
+                            if resolved_decision == "use_latest"
+                            else (
+                                "历史国家/月总量发生变化；已明确选择 "
+                                "keep_active，继续保留 active 历史。"
+                            )
+                            if resolved_decision == "keep_active"
+                            else (
+                                "历史国家/月总量发生变化；必须逐国选择 "
+                                "use_latest 或 keep_active。"
+                            )
                         )
                     ),
                     "metrics": country_report,
@@ -9576,6 +9726,19 @@ def approve_jato_monthly_update_review(
                         ),
                     },
                 )
+            approved_report_countries_by_key = {
+                str(item.get("country") or "").strip().casefold(): item
+                for item in (
+                    historical_reclassification_report.get("countries")
+                    if isinstance(
+                        historical_reclassification_report.get("countries"),
+                        list,
+                    )
+                    else []
+                )
+                if isinstance(item, dict)
+                and str(item.get("country") or "").strip()
+            }
             payload["reviewApproval"][
                 "historicalReclassification"
             ] = {
@@ -9591,6 +9754,14 @@ def approve_jato_monthly_update_review(
                         "decision": validated_decisions[
                             str(item["country"]).strip().casefold()
                         ],
+                        "monthlyTotalsStable": (
+                            approved_report_countries_by_key.get(
+                                str(item["country"])
+                                .strip()
+                                .casefold(),
+                                {},
+                            ).get("monthlyTotalsStable")
+                        ),
                     }
                     for item in resolution.get("decisions", [])
                     if isinstance(item, dict)
@@ -9690,12 +9861,12 @@ def _resolve_jato_historical_reclassification_with_job_lock(
                 _historical_sales_changed_blocker_country_key(blocker)
             )
             country_report = required_reports_by_key.get(target_key)
-            resolves_with_keep_active = bool(
+            resolves_with_history_decision = bool(
                 target_key
                 and country_report is not None
                 and country_report.get("monthlyTotalsStable") is False
             )
-            if not resolves_with_keep_active:
+            if not resolves_with_history_decision:
                 unresolved_blockers.append(blocker)
         if unresolved_blockers:
             raise HTTPException(
@@ -9769,15 +9940,18 @@ def _resolve_jato_historical_reclassification_with_job_lock(
                     status_code=409,
                     detail={
                         "blockerType": (
-                            "historical_sales_changed_requires_keep_active"
+                            "historical_reclassification_decision_not_allowed"
                         ),
                         "message": (
-                            f"{required_by_key[country_key]} 的历史国家/月"
-                            "总量发生变化，只能选择 keep_active；"
-                            "拒绝 use_latest 改写已发布历史。"
+                            f"{required_by_key[country_key]} 的历史处理方式"
+                            "不在当前 Review 允许范围内。"
                         ),
                         "country": required_by_key[country_key],
-                        "allowedDecisions": ["keep_active"],
+                        "allowedDecisions": list(
+                            _historical_reclassification_allowed_decisions(
+                                country_report
+                            )
+                        ),
                     },
                 )
             submitted[country_key] = decision
@@ -10268,10 +10442,25 @@ def _publish_jato_monthly_update_job_locked(
             ),
         )
 
+    (
+        approved_reclassification_decisions,
+        approved_reclassification_audit,
+        approved_sales_overwrite_countries,
+    ) = _approved_historical_reclassification_publish_context(approval)
+
+    approved_historical_sales_overwrites: list[dict[str, Any]] = []
     if active_paths["parquet"].exists():
-        historical_sales_changes = _find_publish_historical_sales_changes(
-            active_parquet_path=active_paths["parquet"],
-            candidate_parquet_path=source_paths["parquet"],
+        (
+            historical_sales_changes,
+            approved_historical_sales_overwrites,
+        ) = _partition_publish_historical_sales_changes(
+            changes=_find_publish_historical_sales_changes(
+                active_parquet_path=active_paths["parquet"],
+                candidate_parquet_path=source_paths["parquet"],
+            ),
+            approved_sales_overwrite_countries=(
+                approved_sales_overwrite_countries
+            ),
         )
         if historical_sales_changes:
             rendered = "；".join(
@@ -10287,14 +10476,33 @@ def _publish_jato_monthly_update_job_locked(
                     "blockerType": "historical_sales_changed",
                     "message": (
                         "candidate 改写了已经发布的国家/月销量，拒绝 Publish："
-                        f"{rendered}。本次月更只能新增最新月份，不能累加或重写历史。"
+                        f"{rendered}。只有与当前 candidate 指纹绑定、"
+                        "已明确选择 use_latest 且未缺失历史月份的国家"
+                        "才能覆盖历史；未获该授权时不能累加或重写历史。"
                     ),
                     "sourceFeedback": (
-                        "请洗数人员恢复 active 已有月份的国家总销量；"
-                        "本次文件只能推进新月份，不能把历史快照追加、翻倍或重算。"
+                        "如果是有意的 washed 历史修订，请在 Review 中"
+                        "逐国选择 use_latest；否则选择 keep_active 或恢复"
+                        " active 历史。上传不得缺失 active 已有历史月份。"
                     ),
                     "changes": historical_sales_changes,
                 },
+            )
+        if approved_historical_sales_overwrites:
+            rendered = "；".join(
+                (
+                    f"{entry['country']} "
+                    f"({entry['changedMonthCount']} 个历史月)"
+                )
+                for entry in approved_historical_sales_overwrites[:5]
+            )
+            _append_log(
+                _job_log_path(job_id),
+                (
+                    f"[{_utc_now().isoformat()}] Publish: 已根据指纹绑定"
+                    "的 use_latest 决策授权整国历史覆盖："
+                    f"{rendered}。"
+                ),
             )
         upload_payload = (
             payload.get("upload")
@@ -10314,29 +10522,6 @@ def _publish_jato_monthly_update_job_locked(
                 and stored_upload_path.is_file()
                 else None
             )
-        approved_reclassification_decisions: dict[str, str] = {}
-        approved_reclassification = approval.get(
-            "historicalReclassification"
-        )
-        if (
-            isinstance(approved_reclassification, dict)
-            and str(
-                approved_reclassification.get(
-                    "resolvedCandidateFingerprint"
-                )
-                or ""
-            )
-            == str(approval.get("candidateFingerprint") or "")
-        ):
-            approved_reclassification_decisions = (
-                _historical_reclassification_decision_map(
-                    {
-                        "decisions": approved_reclassification.get(
-                            "decisions"
-                        )
-                    }
-                )
-            )
         historical_configuration_changes = (
             _find_publish_historical_configuration_changes(
                 active_parquet_path=active_paths["parquet"],
@@ -10344,6 +10529,9 @@ def _publish_jato_monthly_update_job_locked(
                 source_upload_sha256=source_upload_sha256,
                 approved_reclassification_decisions=(
                     approved_reclassification_decisions
+                ),
+                approved_sales_overwrite_countries=(
+                    approved_sales_overwrite_countries
                 ),
             )
         )
@@ -10506,6 +10694,12 @@ def _publish_jato_monthly_update_job_locked(
                 }
                 for entry in inherited_duplicate_configurations
             ],
+            "historicalReclassificationDecisions": (
+                approved_reclassification_audit
+            ),
+            "historicalSalesOverwrites": (
+                approved_historical_sales_overwrites
+            ),
         }
         _persist_job_state(payload)
     except Exception:
