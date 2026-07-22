@@ -612,7 +612,7 @@ def assert_server_consumes_only_prebuilt_dist() -> None:
         raise AssertionError("remote release must require the shared evidence verifier")
     if 'sudo -n "${verifier[@]}"' not in remote_release:
         raise AssertionError("remote release evidence must be verified with private-file access")
-    if 'sudo -n python3 "$RELEASE_EVIDENCE_HELPER" verify' not in server_release:
+    if 'sudo -n python3 -B "$RELEASE_EVIDENCE_HELPER" verify' not in server_release:
         raise AssertionError("server recovery must reuse the privileged evidence verifier")
     if "--materialize-dir \"$PREBUILT_FRONTEND_DIR\"" not in remote_release:
         raise AssertionError("remote release must materialize only the verified artifact")

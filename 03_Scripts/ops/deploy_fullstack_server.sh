@@ -264,11 +264,11 @@ verify_release_evidence() {
   local identity_args=()
   mapfile -d '' -t identity_args < <(checkpoint_identity_args)
   if [[ "$(id -u)" -eq 0 ]]; then
-    python3 "$RELEASE_EVIDENCE_HELPER" verify \
+    python3 -B "$RELEASE_EVIDENCE_HELPER" verify \
       "$RELEASE_CHECKPOINT_FILE" "$RELEASE_EVIDENCE_FILE" \
       --backup-root "$RELEASE_BACKUP_ROOT" "${identity_args[@]}"
   else
-    sudo -n python3 "$RELEASE_EVIDENCE_HELPER" verify \
+    sudo -n python3 -B "$RELEASE_EVIDENCE_HELPER" verify \
       "$RELEASE_CHECKPOINT_FILE" "$RELEASE_EVIDENCE_FILE" \
       --backup-root "$RELEASE_BACKUP_ROOT" "${identity_args[@]}"
   fi
@@ -840,6 +840,32 @@ precompress_frontend_assets() {
   fi
 }
 
+normalize_frontend_public_permissions() {
+  local dist_dir="$1"
+  local parent_dir=""
+  local unsafe_link=""
+
+  if [[ ! -d "$dist_dir" || -L "$dist_dir" ]]; then
+    echo "[ERROR] Frontend dist directory is missing or unsafe: $dist_dir"
+    return 1
+  fi
+  unsafe_link="$(find "$dist_dir" -type l -print -quit)"
+  if [[ -n "$unsafe_link" ]]; then
+    echo "[ERROR] Frontend dist must not contain symlinks: $unsafe_link"
+    return 1
+  fi
+  for parent_dir in "$REPO_DIR" "$REPO_DIR/06_AppPlatform" "$FRONTEND_DIR"; do
+    if [[ ! -d "$parent_dir" ]]; then
+      echo "[ERROR] Frontend parent directory is missing: $parent_dir"
+      return 1
+    fi
+    chmod a+x "$parent_dir"
+  done
+  find "$dist_dir" -type d -exec chmod 755 {} +
+  find "$dist_dir" -type f -exec chmod 644 {} +
+  echo "[INFO] Normalized public frontend permissions"
+}
+
 install_prebuilt_frontend() {
   local target_dir="$FRONTEND_DIR/dist"
   local backup_dir="$FRONTEND_DIR/.dist-previous"
@@ -871,11 +897,13 @@ if (
     raise SystemExit(1)
 PY
   then
+    normalize_frontend_public_permissions "$target_dir"
     echo "[INFO] Verified frontend is already active; preserving existing rollback directory"
     return 0
   fi
 
   precompress_frontend_assets "$PREBUILT_FRONTEND_DIR"
+  normalize_frontend_public_permissions "$PREBUILT_FRONTEND_DIR"
   if [[ -e "$backup_dir" ]]; then
     fail_deploy "Existing frontend rollback directory requires inspection: $backup_dir" "$LINENO"
   fi
@@ -883,6 +911,7 @@ PY
     mv "$target_dir" "$backup_dir"
   fi
   if mv "$PREBUILT_FRONTEND_DIR" "$target_dir"; then
+    normalize_frontend_public_permissions "$target_dir"
     echo "[INFO] Atomically installed verified prebuilt frontend dist; previous dist retained until backend health"
     return 0
   fi
@@ -1343,6 +1372,7 @@ if ! checkpoint_at_least switched; then
 else
   echo "[INFO] Exact release checkpoint already switched; restarting backend for recovery verification"
   CURRENT_STEP="Restart backend service for checkpoint recovery"
+  normalize_frontend_public_permissions "$FRONTEND_DIR/dist"
   if ! sudo -n systemctl cat "$BACKEND_SERVICE_NAME" >/dev/null 2>&1; then
     fail_deploy "systemd service not found: $BACKEND_SERVICE_NAME" "$LINENO"
   fi

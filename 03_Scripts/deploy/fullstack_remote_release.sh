@@ -120,13 +120,27 @@ RUNTIME_PRESERVE_PATHS="
 hermes/reports
 "
 
+remove_transient_release_paths() {
+  local transient_path=""
+
+  for transient_path in "$RELEASE_WORKTREE" "$RUNTIME_PRESERVE_DIR" "$PREBUILT_FRONTEND_DIR"; do
+    if [[ -z "$transient_path" || ! -e "$transient_path" ]]; then
+      continue
+    fi
+    if ! rm -rf -- "$transient_path"; then
+      echo "[WARN] Failed to remove transient deployment path: $transient_path" >&2
+    fi
+  done
+  return 0
+}
+
 cleanup_release_staging() {
   if [[ "$REMOTE_DEPLOY_SUCCEEDED" == "true" ]]; then
-    rm -rf "$RELEASE_WORKTREE" "$RUNTIME_PRESERVE_DIR" "$PREBUILT_FRONTEND_DIR"
+    remove_transient_release_paths
     return
   fi
   if [[ "$PRODUCTION_MUTATION_STARTED" == "false" ]]; then
-    rm -rf "$RELEASE_WORKTREE" "$RUNTIME_PRESERVE_DIR" "$PREBUILT_FRONTEND_DIR"
+    remove_transient_release_paths
   else
     for recovery_path in "$RELEASE_WORKTREE" "$RUNTIME_PRESERVE_DIR" "$PREBUILT_FRONTEND_DIR"; do
       if [[ -n "$recovery_path" && -e "$recovery_path" ]]; then
@@ -329,7 +343,7 @@ echo "[INFO] Cross-release production checkpoint gate passed: $CROSS_RELEASE_STA
 release_evidence_matches() {
   local evidence_file="${CHECKPOINT_FILE%.json}.evidence.json"
   local verifier=(
-    python3 "$EVIDENCE_HELPER" verify
+    python3 -B "$EVIDENCE_HELPER" verify
     "$CHECKPOINT_FILE" "$evidence_file"
     --backup-root "$RELEASE_BACKUP_ROOT"
     "${checkpoint_identity_args[@]}"
@@ -471,6 +485,13 @@ else
         echo "[INFO] Restored runtime path: $runtime_path"
       fi
     fi
+  done
+  for public_parent in "$REPO_DIR" "$REPO_DIR/06_AppPlatform" "$REPO_DIR/06_AppPlatform/frontend"; do
+    if [[ ! -d "$public_parent" ]]; then
+      echo "[ERROR] Frontend parent directory is missing after source installation: $public_parent"
+      exit 1
+    fi
+    chmod a+x "$public_parent"
   done
   python3 "$REPO_DIR/03_Scripts/deploy/release_checkpoint.py" write \
     --checkpoint "$CHECKPOINT_FILE" --journal "$CHECKPOINT_JOURNAL" \
