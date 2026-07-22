@@ -4,6 +4,7 @@ import { DEFAULT_EXPORT, type ExportSettings } from "../../components/ExportPane
 import {
   buildMarketScanFuelTrendChartData,
   resolveMarketScanLoadingPresentation,
+  resolveMarketScanRangeLabel,
 } from "../../pages/MarketScanPage";
 import marketScanPageSource from "../../pages/MarketScanPage.tsx?raw";
 import type { MarketScanFuelTrendItem } from "../../types";
@@ -90,6 +91,21 @@ describe("Market Scan async loading feedback", () => {
     expect(resolveMarketScanLoadingPresentation("overview", "suvAll")).toBe("view");
   });
 
+  it("builds a custom-range label without requiring overview data", () => {
+    expect(resolveMarketScanRangeLabel(
+      { start: "2025-12", end: "2026-02" },
+      [
+        { value: "2025-12", label: "25.12" },
+        { value: "2026-02", label: "26.02" },
+      ],
+    )).toBe("25.12 - 26.02");
+    expect(resolveMarketScanRangeLabel(
+      { start: "2025-12", end: "2026-02" },
+      [],
+      "2025年12月 - 2026年2月",
+    )).toBe("2025年12月 - 2026年2月");
+  });
+
   it("binds the refresh overlay to the real request lifecycle", () => {
     const source = marketScanPageSource;
     const requestStart = source.indexOf("setLoading(true);");
@@ -104,5 +120,6 @@ describe("Market Scan async loading feedback", () => {
     expect(source).toContain('const showViewTransitionOverlay = refreshingActiveView && loadingPresentation === "view";');
     expect(source).toContain('{showViewTransitionOverlay ? (\n              <div className="market-scan-refresh-layer">');
     expect(source).toContain('mode="overlay"');
+    expect(source).not.toContain("results.overview.summary.customRangeLabel");
   });
 });

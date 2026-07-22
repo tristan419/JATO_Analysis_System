@@ -791,6 +791,24 @@ function periodWithinRange(period: string, range: MarketScanPeriodRange | null |
   return period >= range.start && period <= range.end;
 }
 
+export function resolveMarketScanRangeLabel(
+  range: MarketScanPeriodRange | null | undefined,
+  options: ReadonlyArray<{ value: string; label: string }>,
+  overviewLabel?: string | null,
+): string {
+  const normalizedOverviewLabel = overviewLabel?.trim();
+  if (normalizedOverviewLabel) {
+    return normalizedOverviewLabel;
+  }
+  if (!range) {
+    return "自定义区间";
+  }
+  const labelByValue = new Map(options.map((option) => [option.value, option.label]));
+  const startLabel = labelByValue.get(range.start) ?? range.start;
+  const endLabel = labelByValue.get(range.end) ?? range.end;
+  return range.start === range.end ? endLabel : `${startLabel} - ${endLabel}`;
+}
+
 function overviewTrendTrailingItems(items: MarketScanOverviewTrendItem[]): MarketScanOverviewTrendItem[] {
   return [...items].sort((left, right) => left.period.localeCompare(right.period)).slice(-12);
 }
@@ -2705,6 +2723,11 @@ export function MarketScanPage({
 
   const resolvedTimeRange = periodSelection ?? deck?.metadata.selectedTimeRange ?? null;
   const customRangeActive = isCustomTimeRange(resolvedTimeRange);
+  const customRangeLabel = resolveMarketScanRangeLabel(
+    resolvedTimeRange,
+    deck?.metadata.availablePeriods ?? [],
+    deck?.results.overview?.summary?.customRangeLabel,
+  );
   const currentPeriod = resolvedTimeRange?.end ?? deck?.metadata.resolvedPeriod ?? "";
   const fuelOptions = deck?.metadata.availableFuelTypes ?? selectedFuelTypes;
   const activeFuelTypes = selectedFuelTypes.length > 0
@@ -2857,7 +2880,7 @@ export function MarketScanPage({
           fuelOrder={d.metadata.selectedFuelTypes}
           salesMode={salesMode}
           customRangeActive={customRangeActive}
-          customRangeLabel={d.results.overview?.summary?.customRangeLabel}
+          customRangeLabel={customRangeLabel}
           showDataLabels={showDataLabels}
           exportSettings={exportSettings}
           compact={compact}
@@ -2873,7 +2896,7 @@ export function MarketScanPage({
           fuelOrder={d.metadata.selectedFuelTypes}
           salesMode={salesMode}
           customRangeActive={customRangeActive}
-          customRangeLabel={d.results.overview?.summary?.customRangeLabel}
+          customRangeLabel={customRangeLabel}
           showDataLabels={showDataLabels}
           exportSettings={exportSettings}
           compact={compact}
@@ -2889,7 +2912,7 @@ export function MarketScanPage({
           fuelOrder={d.metadata.selectedFuelTypes}
           salesMode={salesMode}
           customRangeActive={customRangeActive}
-          customRangeLabel={d.results.overview?.summary?.customRangeLabel}
+          customRangeLabel={customRangeLabel}
           showDataLabels={showDataLabels}
           exportSettings={exportSettings}
           compact={compact}
@@ -2905,7 +2928,7 @@ export function MarketScanPage({
           fuelOrder={d.metadata.selectedFuelTypes}
           salesMode={salesMode}
           customRangeActive={customRangeActive}
-          customRangeLabel={d.results.overview?.summary?.customRangeLabel}
+          customRangeLabel={customRangeLabel}
           showDataLabels={showDataLabels}
           exportSettings={exportSettings}
           compact={compact}
@@ -2920,7 +2943,7 @@ export function MarketScanPage({
           fuelOrder={d.metadata.selectedFuelTypes}
           salesMode={salesMode}
           customRangeActive={customRangeActive}
-          customRangeLabel={d.results.overview?.summary?.customRangeLabel}
+          customRangeLabel={customRangeLabel}
           showDataLabels={showDataLabels}
           exportSettings={exportSettings}
         compact={compact}
@@ -2990,7 +3013,7 @@ export function MarketScanPage({
                   国家 {deck?.metadata.selectedCountryLabel ?? "Sweden"}
                 </span>
                 <span className="market-scan-hero-chip">
-                  月份 {customRangeActive ? (deck?.results.overview.summary.customRangeLabel ?? deck?.metadata.labels.currentMonthShort ?? "Latest") : (deck?.metadata.labels.currentMonthShort ?? "Latest")}
+                  月份 {customRangeActive ? customRangeLabel : (deck?.metadata.labels.currentMonthShort ?? "Latest")}
                 </span>
                 <span className="market-scan-hero-chip">
                   口径 {customRangeActive ? "自定义区间累计" : (MARKET_SCAN_SALES_MODE_OPTIONS.find((option) => option.value === salesMode)?.label ?? "当月")}
@@ -3204,7 +3227,7 @@ export function MarketScanPage({
                 ))}
                 {customRangeActive ? (
                   <span className="btn btn-sm btn-primary">
-                    {deck?.results.overview.summary.customRangeLabel ?? "自定义区间"}
+                    {customRangeLabel}
                   </span>
                 ) : null}
               </div>
