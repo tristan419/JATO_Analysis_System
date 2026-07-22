@@ -36,6 +36,9 @@ REQUIRED_BUILD_OUTPUTS = {
     "frontend_build_id",
     "node_version",
     "app_commit",
+    "release_id",
+    "workflow_run_attempt",
+    "build_timestamp",
 }
 CLOUDFLARE_PROJECT_DIRECTORY = "${{ runner.temp }}/cloudflare-pages-project"
 PINNED_WRANGLER_VERSION = "4.86.0"
@@ -217,6 +220,9 @@ def assert_deploy_jobs_share_one_artifact(workflow: Mapping[str, Any]) -> None:
             "github_artifact_digest",
             "frontend_build_id",
             "node_version",
+            "release_id",
+            "workflow_run_attempt",
+            "build_timestamp",
         ):
             expression = f"${{{{ needs.build_frontend.outputs.{output_name} }}}}"
             if expression not in str(deploy_job):
@@ -330,6 +336,20 @@ def assert_deploy_jobs_share_one_artifact(workflow: Mapping[str, Any]) -> None:
     runtime_verify_command = str(runtime_verify_step.get("run") or "")
     if "verify_intl_runtime_contract.py" not in runtime_verify_command:
         raise AssertionError("intl runtime verification must use the fail-closed helper")
+    www_runtime_step = step_by_name(
+        tencent_steps,
+        "Verify www runtime API contract",
+    )
+    www_runtime_command = str(www_runtime_step.get("run") or "")
+    if (
+        "verify_intl_runtime_contract.py" not in www_runtime_command
+        or "--profile www" not in www_runtime_command
+    ):
+        raise AssertionError("www runtime verification must use the compatible JSON profile")
+    if tencent_names.index("Verify www runtime API contract") > tencent_names.index(
+        "Record www-verified candidate checkpoint"
+    ):
+        raise AssertionError("www runtime APIs must pass before www_verified is recorded")
 
     audit_needs = job(workflow, "audit_frontend_parity").get("needs")
     if audit_needs != [BUILD_JOB, "deploy_tencent"]:
@@ -360,48 +380,217 @@ def assert_tencent_resumable_upload_contract(workflow: Mapping[str, Any]) -> Non
         raise AssertionError("Tencent must have exactly one fail-closed archive upload step")
     upload = str(upload_steps[0].get("run") or "")
     required_tokens = (
-        'remote_archive="JATO_deploy_${GITHUB_SHA}_${archive_sha256}.tar.gz"',
-        'remote_temp="${remote_archive}.uploading.v2"',
-        'remote_lock="${remote_temp}.lock"',
+        'remote_dir=".cache/jato-releases/archives/${GITHUB_SHA}"',
+        'remote_archive="${remote_dir}/${archive_sha256}.tar.gz"',
+        'remote_temp="${remote_archive}.partial"',
+        'remote_lock="${remote_archive}.lock"',
+        "missing_packages+=(rsync)",
+        "missing_packages+=(sshpass)",
+        'sudo apt-get install -y "${missing_packages[@]}"',
+        "require_rsync_3",
+        "Remote rsync >= 3.0 is required",
+        "--partial",
+        "--append-verify",
+        "--protect-args",
+        "--rsync-path=",
+        "flock -w 870",
+        "df -Pk",
+        "required_bytes",
         "command -v flock",
         "local remote_output",
         'printf \'%s\' "$remote_output"',
-        "reset_upload_state()",
-        r"if [ \"\$current_size\" -gt '$archive_bytes' ]; then",
+        "reset_bad_partial()",
+        "partial_reset_used",
         "rm -f '$remote_temp' '$remote_checksum'",
-        'head -c "$remaining_bytes"',
-        "flock -w 270 9",
-        "oflag=seek_bytes conv=notrunc",
-        "idle_timeout_seconds=1800",
-        "while true; do",
-        "last_progress_at",
-        "Remote immutable archive exists with an unexpected SHA-256",
-        "if [ -f '$remote_archive' ]; then",
-        "final_sha256",
+        "Remote immutable archive exists but size or SHA-256 is wrong",
+        "FINAL_BAD",
+        "PARTIAL_BAD",
+        "REUSE",
+        "SEALED",
         "test ! -e '$remote_archive'",
         "sha256sum '$remote_temp'",
-        "mv '$remote_temp' '$remote_archive'",
+        "ln '$remote_temp' '$remote_archive'",
+        'echo "archive-bytes=$archive_bytes"',
+        'echo "archive-sha256=$archive_sha256"',
     )
     missing = [token for token in required_tokens if token not in upload]
     if missing:
         raise AssertionError(f"Tencent resumable upload contract is incomplete: {missing}")
-    if "cat >> '$remote_temp'" in upload:
-        raise AssertionError("append-based resume is unsafe after an SSH timeout")
-    if "five consecutive attempts" in upload:
-        raise AssertionError("attempt-count stalls must not bypass the idle-time budget")
-    if "seq 1 120" in upload or "${upload_attempt}/120" in upload:
-        raise AssertionError("attempt counts must not bypass the idle-time and job budgets")
-    if "fallback to sparse" in upload or "split -b 8M" in upload:
-        raise AssertionError("Tencent upload must not retain a sparse or fixed-chunk fallback")
+    forbidden_tokens = (
+        "StrictHostKeyChecking=no",
+        "UserKnownHostsFile=/dev/null",
+        "tail -c",
+        "head -c",
+        "oflag=seek_bytes",
+        "cat >> '$remote_temp'",
+        "fallback to sparse",
+        "split -b 8M",
+        "--compress",
+        " -z",
+    )
+    forbidden = [token for token in forbidden_tokens if token in upload]
+    if forbidden:
+        raise AssertionError(f"Tencent rsync upload retains unsafe tokens: {forbidden}")
 
-    size_check = upload.rfind(r"test \"\$remote_size\" = '$archive_bytes'")
-    sha_check = upload.rfind(r"test \"\$remote_sha256\" = '$archive_sha256'")
+    size_check = upload.rfind(r"[ \"\$partial_size\" != '$archive_bytes' ]")
+    sha_check = upload.rfind(r"[ \"\$partial_sha\" != '$archive_sha256' ]")
     no_overwrite = upload.rfind("test ! -e '$remote_archive'")
-    atomic_move = upload.rfind("mv '$remote_temp' '$remote_archive'")
-    if not (0 <= size_check < sha_check < no_overwrite < atomic_move):
+    atomic_seal = upload.rfind("ln '$remote_temp' '$remote_archive'")
+    if not (0 <= size_check <= sha_check < no_overwrite < atomic_seal):
         raise AssertionError(
-            "Tencent finalization must verify exact size and SHA before the atomic move"
+            "Tencent finalization must verify exact size and SHA before no-clobber sealing"
         )
+
+    tencent_steps = steps(tencent, "deploy_tencent")
+    auth = step_by_name(tencent_steps, "Validate Tencent deploy credentials")
+    auth_text = str(auth)
+    for token in (
+        "SSH_KNOWN_HOSTS",
+        "StrictHostKeyChecking=yes",
+    ):
+        if token not in auth_text and token not in upload:
+            raise AssertionError(f"Tencent SSH host pinning is missing {token}")
+    deploy = str(step_by_name(tencent_steps, "Deploy verified release on Tencent").get("run") or "")
+    if "StrictHostKeyChecking=yes" not in deploy or "UserKnownHostsFile=" not in deploy:
+        raise AssertionError("Tencent deployment must enforce the pinned known_hosts file")
+    if "remote_exports" in deploy or '"${remote_exports}bash -s"' in deploy:
+        raise AssertionError("deployment secrets must not be exposed in remote command argv")
+    if '"umask 077; exec bash -s" < "$control_payload"' not in deploy:
+        raise AssertionError("deployment must send a mode-0600 control payload over SSH stdin")
+
+
+def assert_deterministic_backend_package(workflow: Mapping[str, Any]) -> None:
+    tencent_steps = steps(job(workflow, "deploy_tencent"), "deploy_tencent")
+    package = str(
+        step_by_name(
+            tencent_steps,
+            "Package backend release with verified frontend artifact",
+        ).get("run")
+        or ""
+    )
+    required_tokens = (
+        '"releaseId": release["releaseId"]',
+        '"workflowRunAttempt": release["workflowRunAttempt"]',
+        '"packagedAt": release["buildTimestamp"]',
+        'release-source-date-epoch',
+        "--sort=name",
+        "--owner=0",
+        "--group=0",
+        "--numeric-owner",
+        '--mtime="@$source_date_epoch"',
+        'gzip -n -f "$RUNNER_TEMP/JATO_deploy.tar"',
+        'value.get("localPath")',
+        "missing MSRP localPath evidence",
+        'tar tzf "$RUNNER_TEMP/JATO_deploy.tar.gz" "$evidence_path"',
+    )
+    missing = [token for token in required_tokens if token not in package]
+    if missing:
+        raise AssertionError(f"deterministic backend package is incomplete: {missing}")
+    forbidden = (
+        "GITHUB_RUN_ATTEMPT']}",
+        "dt.datetime.now",
+        "update_mihomo_subscription.sh",
+    )
+    found = [token for token in forbidden if token in package]
+    if found:
+        raise AssertionError(f"backend package retains rerun-varying input: {found}")
+
+
+def assert_release_checkpoint_contract(workflow: Mapping[str, Any]) -> None:
+    tencent_steps = steps(job(workflow, "deploy_tencent"), "deploy_tencent")
+    names = [str(step.get("name") or "") for step in tencent_steps]
+    required_order = (
+        "Record transport-verified candidate checkpoint",
+        "Deploy verified release on Tencent",
+        "Fetch and attest server release checkpoint",
+        "Verify Tencent public release provenance",
+        "Verify www runtime API contract",
+        "Record www-verified candidate checkpoint",
+        "Check whether intl already serves the immutable release",
+        "Record intl deployment ambiguity boundary",
+        "Deploy downloaded dist to Cloudflare Pages",
+        "Verify intl public release provenance",
+        "Verify intl API routing contract",
+        "Record intl-verified candidate checkpoint",
+        "Retain candidate release checkpoint",
+    )
+    indexes = [names.index(name) for name in required_order]
+    if indexes != sorted(indexes):
+        raise AssertionError("release checkpoint and deploy steps are out of order")
+    commands = combined_run(job(workflow, "deploy_tencent"), "deploy_tencent")
+    for phase in ("transport_verified", "www_verified", "intl_deploy_started", "intl_verified"):
+        if f"--phase {phase}" not in commands:
+            raise AssertionError(f"candidate checkpoint is missing phase {phase}")
+    if "release-candidate-${{ github.sha }}-${{ github.run_attempt }}" not in str(
+        job(workflow, "deploy_tencent")
+    ):
+        raise AssertionError("candidate checkpoint must be retained per deploy attempt")
+    candidate_upload = step_by_name(tencent_steps, "Retain candidate release checkpoint")
+    candidate_with = mapping(candidate_upload.get("with"), "candidate receipt upload with")
+    if candidate_with.get("retention-days") != "7":
+        raise AssertionError("candidate checkpoint must be retained for seven days")
+    server_attestation = step_by_name(
+        tencent_steps,
+        "Fetch and attest server release checkpoint",
+    )
+    server_attestation_run = str(server_attestation.get("run") or "")
+    required_attestation_tokens = (
+        "StrictHostKeyChecking=yes",
+        'UserKnownHostsFile="$HOME/.ssh/known_hosts"',
+        "backend-healthy.json",
+        "backend-healthy.evidence.json",
+        "attestation_complete=false",
+        'rm -rf "$server_dir"',
+        'checkpoint.get("phase") != "backend_healthy"',
+        'checkpoint.get("status") != "completed"',
+        "server checkpoint evidence binding mismatch",
+        'evidence.get("identity") != expected_identity',
+        'echo "attestation-sha256=$attestation_sha256"',
+    )
+    missing_attestation = [
+        token for token in required_attestation_tokens if token not in server_attestation_run
+    ]
+    if missing_attestation:
+        raise AssertionError(
+            f"server checkpoint attestation is incomplete: {missing_attestation}"
+        )
+    deploy_outputs = mapping(
+        job(workflow, "deploy_tencent").get("outputs"),
+        "deploy_tencent.outputs",
+    )
+    if (
+        deploy_outputs.get("server_attestation_sha256")
+        != "${{ steps.server_attestation.outputs.attestation-sha256 }}"
+    ):
+        raise AssertionError("deploy job must expose the server attestation SHA-256")
+    cloudflare = step_by_name(tencent_steps, "Deploy downloaded dist to Cloudflare Pages")
+    if cloudflare.get("if") != "${{ steps.intl_current.outputs.current != 'true' }}":
+        raise AssertionError("an already-current intl release must skip redeployment")
+    cloudflare_run = str(cloudflare.get("run") or "")
+    if "for deploy_attempt in 1 2 3" not in cloudflare_run:
+        raise AssertionError("an outdated intl release must have three bounded deploy attempts")
+
+    audit = job(workflow, "audit_frontend_parity")
+    audit_commands = combined_run(audit, "audit_frontend_parity")
+    for phase in ("parity_verified", "complete"):
+        if f"--phase {phase}" not in audit_commands:
+            raise AssertionError(f"verified receipt is missing phase {phase}")
+    if (
+        "SERVER_ATTESTATION_SHA256" not in audit_commands
+        or '--message "server_attestation_sha256=$actual_attestation_sha256"'
+        not in audit_commands
+    ):
+        raise AssertionError("complete receipt must bind the verified server attestation")
+    audit_text = str(audit)
+    if "release-verified-${{ github.sha }}-${{ github.run_attempt }}" not in audit_text:
+        raise AssertionError("final parity must retain a verified production receipt")
+    verified_upload = step_by_name(
+        steps(audit, "audit_frontend_parity"),
+        "Retain verified production release receipt",
+    )
+    verified_with = mapping(verified_upload.get("with"), "verified receipt upload with")
+    if verified_with.get("retention-days") != "30":
+        raise AssertionError("verified receipt must be retained for thirty days")
 
 
 def assert_server_consumes_only_prebuilt_dist() -> None:
@@ -419,6 +608,12 @@ def assert_server_consumes_only_prebuilt_dist() -> None:
             raise AssertionError(f"remote release retains forbidden fallback: {forbidden}")
     if 'python3 "$FRONTEND_RELEASE_HELPER" verify' not in remote_release:
         raise AssertionError("remote release must invoke the shared artifact verifier")
+    if '03_Scripts/deploy/release_evidence.py' not in remote_release:
+        raise AssertionError("remote release must require the shared evidence verifier")
+    if 'sudo -n "${verifier[@]}"' not in remote_release:
+        raise AssertionError("remote release evidence must be verified with private-file access")
+    if 'sudo -n python3 "$RELEASE_EVIDENCE_HELPER" verify' not in server_release:
+        raise AssertionError("server recovery must reuse the privileged evidence verifier")
     if "--materialize-dir \"$PREBUILT_FRONTEND_DIR\"" not in remote_release:
         raise AssertionError("remote release must materialize only the verified artifact")
     if "install_prebuilt_frontend" not in server_release:
@@ -479,9 +674,18 @@ def assert_required_ci_contract() -> None:
 
     commands = combined_run(contract_job, "frontend-release-contract")
     required_tokens = (
+        'python -m pip install "PyYAML==6.0.2" "pytest<9"',
         "npm ci",
         "test_frontend_release_artifact.py",
         "test_verify_intl_runtime_contract.py",
+        "bash -n",
+        "fullstack_remote_release.sh",
+        "deploy_fullstack_server.sh",
+        "backup_production_data.sh",
+        "test_release_checkpoint.py",
+        "test_release_evidence.py",
+        "test_release_shell_hardening.py",
+        "test_deploy_workflow.py",
         "npx vitest run",
         "edgeCacheFunction.test.ts",
         "healthzEdgeFunction.test.ts",
@@ -505,6 +709,8 @@ def main() -> None:
     assert_single_build_and_strict_outputs(production)
     assert_deploy_jobs_share_one_artifact(production)
     assert_tencent_resumable_upload_contract(production)
+    assert_deterministic_backend_package(production)
+    assert_release_checkpoint_contract(production)
     assert_server_consumes_only_prebuilt_dist()
     assert_prewarm_contract(production_name)
     assert_required_ci_contract()

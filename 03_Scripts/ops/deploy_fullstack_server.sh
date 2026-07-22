@@ -17,6 +17,7 @@ DEPLOY_UNTRACKED_CLEAN_PATTERNS="${DEPLOY_UNTRACKED_CLEAN_PATTERNS:-04_Processed
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 DIAGNOSTIC_SCRIPT="$SCRIPT_DIR/print_fullstack_server_diagnostics.sh"
 BACKUP_SCRIPT="$SCRIPT_DIR/backup_production_data.sh"
+RELEASE_BACKUP_ROOT="${BACKUP_ROOT:-/opt/backups/jato}"
 CURRENT_STEP="initialization"
 
 # ── China-friendly mirror defaults ──
@@ -62,6 +63,375 @@ SYSTEMD_TARGET_DIR="/etc/systemd/system"
 JATO_ETC_DIR="/etc/jato-fullstack"
 ENABLE_SCRAPER_SCHEDULERS="${ENABLE_SCRAPER_SCHEDULERS:-true}"
 BOOTSTRAP_MSRP_DRYRUN_IF_MISSING="${BOOTSTRAP_MSRP_DRYRUN_IF_MISSING:-true}"
+RELEASE_CHECKPOINT_FILE="${RELEASE_CHECKPOINT_FILE:-}"
+RELEASE_CHECKPOINT_JOURNAL="${RELEASE_CHECKPOINT_JOURNAL:-}"
+RELEASE_CHECKPOINT_REPOSITORY="${RELEASE_CHECKPOINT_REPOSITORY:-}"
+RELEASE_CHECKPOINT_COMMIT="${RELEASE_CHECKPOINT_COMMIT:-${DEPLOY_COMMIT_SHA:-}}"
+RELEASE_CHECKPOINT_ARCHIVE_SHA256="${RELEASE_CHECKPOINT_ARCHIVE_SHA256:-}"
+RELEASE_CHECKPOINT_ARCHIVE_BYTES="${RELEASE_CHECKPOINT_ARCHIVE_BYTES:-}"
+RELEASE_CHECKPOINT_RUN_ID="${RELEASE_CHECKPOINT_RUN_ID:-}"
+RELEASE_CHECKPOINT_RUN_ATTEMPT="${RELEASE_CHECKPOINT_RUN_ATTEMPT:-}"
+RELEASE_CHECKPOINT_FRONTEND_IDENTITY="${RELEASE_CHECKPOINT_FRONTEND_IDENTITY:-}"
+RELEASE_CHECKPOINT_FRONTEND_CHECKSUM="${RELEASE_CHECKPOINT_FRONTEND_CHECKSUM:-}"
+CHECKPOINT_HELPER="$REPO_DIR/03_Scripts/deploy/release_checkpoint.py"
+RELEASE_EVIDENCE_HELPER="${RELEASE_EVIDENCE_HELPER:-$REPO_DIR/03_Scripts/deploy/release_evidence.py}"
+CURRENT_CHECKPOINT_PHASE=""
+CURRENT_CHECKPOINT_STATUS=""
+CHECKPOINT_WRITING_FAILURE="false"
+CHECKPOINT_ALREADY_COMPLETE="false"
+RELEASE_EVIDENCE_FILE="${RELEASE_CHECKPOINT_FILE%.json}.evidence.json"
+LAST_BACKUP_MANIFEST_PATH=""
+LAST_BACKUP_MANIFEST_BYTES="0"
+LAST_BACKUP_MANIFEST_SHA256=""
+MIGRATION_PRE_REVISION=""
+MIGRATION_TARGET_REVISION=""
+MIGRATION_RESULT_REVISION=""
+RELEASE_EVIDENCE_SHA256=""
+
+checkpoint_enabled() {
+  [[ -n "$RELEASE_CHECKPOINT_FILE" ]]
+}
+
+checkpoint_phase_rank() {
+  case "$1" in
+    packaged) echo 0 ;;
+    transport_verified) echo 1 ;;
+    prepared) echo 2 ;;
+    source_install_started) echo 3 ;;
+    source_installed) echo 4 ;;
+    backup_verified) echo 5 ;;
+    migration_started) echo 6 ;;
+    migrated) echo 7 ;;
+    switch_started) echo 8 ;;
+    switched) echo 9 ;;
+    backend_healthy) echo 10 ;;
+    www_verified) echo 11 ;;
+    intl_deploy_started) echo 12 ;;
+    intl_verified) echo 13 ;;
+    parity_verified) echo 14 ;;
+    complete) echo 15 ;;
+    *) echo -1 ;;
+  esac
+}
+
+checkpoint_at_least() {
+  local wanted="$1"
+  [[ "$(checkpoint_phase_rank "$CURRENT_CHECKPOINT_PHASE")" -ge "$(checkpoint_phase_rank "$wanted")" ]]
+}
+
+checkpoint_completed_or_past() {
+  local wanted="$1"
+  local current_rank="$(checkpoint_phase_rank "$CURRENT_CHECKPOINT_PHASE")"
+  local wanted_rank="$(checkpoint_phase_rank "$wanted")"
+  [[ "$current_rank" -gt "$wanted_rank" ]] \
+    || [[ "$current_rank" -eq "$wanted_rank" && "$CURRENT_CHECKPOINT_STATUS" == "completed" ]]
+}
+
+checkpoint_identity_args() {
+  printf '%s\0' \
+    --repository "$RELEASE_CHECKPOINT_REPOSITORY" \
+    --commit "$RELEASE_CHECKPOINT_COMMIT" \
+    --archive-sha256 "$RELEASE_CHECKPOINT_ARCHIVE_SHA256" \
+    --archive-bytes "$RELEASE_CHECKPOINT_ARCHIVE_BYTES" \
+    --run-id "$RELEASE_CHECKPOINT_RUN_ID" \
+    --run-attempt "$RELEASE_CHECKPOINT_RUN_ATTEMPT" \
+    --frontend-identity "$RELEASE_CHECKPOINT_FRONTEND_IDENTITY" \
+    --frontend-checksum "$RELEASE_CHECKPOINT_FRONTEND_CHECKSUM"
+}
+
+write_release_checkpoint() {
+  local phase="$1"
+  local status="$2"
+  local retry_class="$3"
+  local message="$4"
+  local identity_args=()
+
+  if ! checkpoint_enabled; then
+    return 0
+  fi
+  if [[ -f "$RELEASE_EVIDENCE_FILE" && "$message" != *"evidence_sha256="* ]]; then
+    RELEASE_EVIDENCE_SHA256="$(sha256sum "$RELEASE_EVIDENCE_FILE" | awk '{print $1}')"
+    message="$message; evidence_path=$RELEASE_EVIDENCE_FILE evidence_sha256=$RELEASE_EVIDENCE_SHA256"
+  fi
+  mapfile -d '' -t identity_args < <(checkpoint_identity_args)
+  python3 "$CHECKPOINT_HELPER" write \
+    --checkpoint "$RELEASE_CHECKPOINT_FILE" \
+    --journal "$RELEASE_CHECKPOINT_JOURNAL" \
+    "${identity_args[@]}" \
+    --phase "$phase" \
+    --status "$status" \
+    --retry-class "$retry_class" \
+    --message "$message" >/dev/null
+  CURRENT_CHECKPOINT_PHASE="$phase"
+  CURRENT_CHECKPOINT_STATUS="$status"
+}
+
+write_release_evidence() {
+  local migration_status="$1"
+
+  if ! checkpoint_enabled; then
+    return 0
+  fi
+  RELEASE_EVIDENCE_SHA256="$(python3 - "$RELEASE_EVIDENCE_FILE" \
+    "$LAST_BACKUP_MANIFEST_PATH" "$LAST_BACKUP_MANIFEST_BYTES" "$LAST_BACKUP_MANIFEST_SHA256" \
+    "$MIGRATION_PRE_REVISION" "$MIGRATION_TARGET_REVISION" "$MIGRATION_RESULT_REVISION" \
+    "$migration_status" "$RELEASE_CHECKPOINT_REPOSITORY" "$RELEASE_CHECKPOINT_COMMIT" \
+    "$RELEASE_CHECKPOINT_ARCHIVE_SHA256" "$RELEASE_CHECKPOINT_ARCHIVE_BYTES" \
+    "$RELEASE_CHECKPOINT_RUN_ID" "$RELEASE_CHECKPOINT_RUN_ATTEMPT" \
+    "$RELEASE_CHECKPOINT_FRONTEND_IDENTITY" "$RELEASE_CHECKPOINT_FRONTEND_CHECKSUM" <<'PY'
+import hashlib
+import json
+import os
+from pathlib import Path
+import sys
+import tempfile
+
+(
+    evidence_path,
+    backup_path,
+    backup_bytes,
+    backup_sha256,
+    pre_revision,
+    target_revision,
+    result_revision,
+    migration_status,
+    repository,
+    commit,
+    archive_sha256,
+    archive_bytes,
+    run_id,
+    run_attempt,
+    frontend_identity,
+    frontend_checksum,
+) = sys.argv[1:]
+payload = {
+    "identity": {
+        "repository": repository,
+        "commit": commit,
+        "archiveSha256": archive_sha256,
+        "archiveBytes": int(archive_bytes),
+        "runId": int(run_id),
+        "runAttempt": int(run_attempt),
+        "frontendIdentity": frontend_identity,
+        "frontendChecksum": frontend_checksum,
+    },
+    "backup": {
+        "manifestPath": backup_path or None,
+        "manifestBytes": int(backup_bytes),
+        "manifestSha256": backup_sha256 or None,
+    },
+    "migration": {
+        "status": migration_status,
+        "preRevision": pre_revision or None,
+        "targetRevision": target_revision or None,
+        "resultRevision": result_revision or None,
+    },
+}
+path = Path(evidence_path)
+path.parent.mkdir(parents=True, exist_ok=True)
+fd, temporary_name = tempfile.mkstemp(prefix=f".{path.name}.", suffix=".tmp", dir=path.parent)
+try:
+    os.fchmod(fd, 0o600)
+    with os.fdopen(fd, "w", encoding="utf-8") as handle:
+        json.dump(payload, handle, indent=2, sort_keys=True)
+        handle.write("\n")
+        handle.flush()
+        os.fsync(handle.fileno())
+    os.replace(temporary_name, path)
+    os.chmod(path, 0o600)
+    directory_flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0)
+    directory_fd = os.open(path.parent, directory_flags)
+    try:
+        os.fsync(directory_fd)
+    finally:
+        os.close(directory_fd)
+finally:
+    try:
+        os.close(fd)
+    except OSError:
+        pass
+    try:
+        Path(temporary_name).unlink()
+    except FileNotFoundError:
+        pass
+digest = hashlib.sha256(path.read_bytes()).hexdigest()
+print(digest)
+PY
+)"
+}
+
+verify_release_evidence() {
+  local identity_args=()
+  mapfile -d '' -t identity_args < <(checkpoint_identity_args)
+  if [[ "$(id -u)" -eq 0 ]]; then
+    python3 "$RELEASE_EVIDENCE_HELPER" verify \
+      "$RELEASE_CHECKPOINT_FILE" "$RELEASE_EVIDENCE_FILE" \
+      --backup-root "$RELEASE_BACKUP_ROOT" "${identity_args[@]}"
+  else
+    sudo -n python3 "$RELEASE_EVIDENCE_HELPER" verify \
+      "$RELEASE_CHECKPOINT_FILE" "$RELEASE_EVIDENCE_FILE" \
+      --backup-root "$RELEASE_BACKUP_ROOT" "${identity_args[@]}"
+  fi
+}
+
+verify_live_migration_revision_if_available() {
+  local evidence_status=""
+  local evidence_result=""
+  local live_result=""
+
+  if ! checkpoint_at_least migrated || [[ ! -f "$RELEASE_EVIDENCE_FILE" ]]; then
+    return 0
+  fi
+  evidence_status="$(python3 -c 'import json,sys; print((json.load(open(sys.argv[1], encoding="utf-8")).get("migration") or {}).get("status") or "")' "$RELEASE_EVIDENCE_FILE")"
+  if [[ "$evidence_status" == "not_required" ]]; then
+    if [[ "${DATABASE_MIGRATION_REQUIRED:-false}" == "true" ]]; then
+      echo "[ERROR] Live database is enabled but release evidence says migration was not required"
+      return 1
+    fi
+    return 0
+  fi
+  if [[ "$evidence_status" != "completed" ]]; then
+    echo "[ERROR] Migrated checkpoint lacks completed migration evidence"
+    return 1
+  fi
+  if [[ "${DATABASE_MIGRATION_REQUIRED:-false}" != "true" ]]; then
+    echo "[WARN] Database is not safely readable; relying on bound migration evidence"
+    return 0
+  fi
+  evidence_result="$(python3 -c 'import json,sys; print((json.load(open(sys.argv[1], encoding="utf-8")).get("migration") or {}).get("resultRevision") or "")' "$RELEASE_EVIDENCE_FILE")"
+  live_result="$(run_privileged_bash 'set -Eeuo pipefail; set -a; . "$1"; set +a; export PYTHONPATH="$2"; . "$3/bin/activate"; cd "$2"; python -m alembic current' \
+    "$BACKEND_ENV_FILE" "$BACKEND_DIR" "$VENV_DIR")"
+  python3 - "$evidence_result" "$live_result" <<'PY'
+import re
+import sys
+
+pattern = re.compile(r"(?m)^([0-9]{8}_[0-9]{4})\b")
+expected = set(pattern.findall(sys.argv[1]))
+live = set(pattern.findall(sys.argv[2]))
+if not expected or expected != live:
+    raise SystemExit(
+        "[ERROR] Live Alembic revision does not match bound migration evidence: "
+        f"expected={sorted(expected)} live={sorted(live)}"
+    )
+PY
+}
+
+initialize_release_checkpoint() {
+  local state=""
+  local resume_state=""
+  local identity_args=()
+  local evidence_fields=()
+  local required_value=""
+
+  if ! checkpoint_enabled; then
+    if [[ "$PRODUCTION_RELEASE_WORKFLOW" == "true" ]]; then
+      echo "[ERROR] Production release requires a persistent checkpoint path"
+      return 1
+    fi
+    return 0
+  fi
+  for required_value in \
+    "$RELEASE_CHECKPOINT_FILE" "$RELEASE_CHECKPOINT_JOURNAL" \
+    "$RELEASE_CHECKPOINT_REPOSITORY" "$RELEASE_CHECKPOINT_COMMIT" \
+    "$RELEASE_CHECKPOINT_ARCHIVE_SHA256" "$RELEASE_CHECKPOINT_ARCHIVE_BYTES" \
+    "$RELEASE_CHECKPOINT_RUN_ID" "$RELEASE_CHECKPOINT_RUN_ATTEMPT" \
+    "$RELEASE_CHECKPOINT_FRONTEND_IDENTITY" "$RELEASE_CHECKPOINT_FRONTEND_CHECKSUM"
+  do
+    if [[ -z "$required_value" ]]; then
+      echo "[ERROR] Production release checkpoint identity is incomplete"
+      return 1
+    fi
+  done
+  if [[ ! -f "$CHECKPOINT_HELPER" || -L "$CHECKPOINT_HELPER" ]]; then
+    echo "[ERROR] Release checkpoint helper is missing or unsafe: $CHECKPOINT_HELPER"
+    return 1
+  fi
+  if [[ ! -f "$RELEASE_EVIDENCE_HELPER" || -L "$RELEASE_EVIDENCE_HELPER" ]]; then
+    echo "[ERROR] Release evidence helper is missing or unsafe"
+    return 1
+  fi
+  mapfile -d '' -t identity_args < <(checkpoint_identity_args)
+  resume_state="$(python3 "$CHECKPOINT_HELPER" assert-resumable \
+    --checkpoint "$RELEASE_CHECKPOINT_FILE" "${identity_args[@]}")"
+  if [[ "$(python3 -c 'import json,sys; print(json.load(sys.stdin)["decision"])' <<< "$resume_state")" == "already-complete" ]]; then
+    CHECKPOINT_ALREADY_COMPLETE="true"
+  fi
+  state="$(python3 "$CHECKPOINT_HELPER" show --checkpoint "$RELEASE_CHECKPOINT_FILE")"
+  read -r CURRENT_CHECKPOINT_PHASE CURRENT_CHECKPOINT_STATUS < <(
+    python3 -c 'import json,sys; p=json.load(sys.stdin); print(p["phase"], p["status"])' <<< "$state"
+  )
+  if checkpoint_completed_or_past backup_verified; then
+    verify_release_evidence
+  fi
+  if [[ -f "$RELEASE_EVIDENCE_FILE" ]]; then
+    mapfile -d '' -t evidence_fields < <(python3 - "$RELEASE_EVIDENCE_FILE" <<'PY'
+import json
+from pathlib import Path
+import sys
+
+payload = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
+backup = payload.get("backup") or {}
+migration = payload.get("migration") or {}
+for value in (
+    backup.get("manifestPath") or "",
+    str(backup.get("manifestBytes") or 0),
+    backup.get("manifestSha256") or "",
+    migration.get("preRevision") or "",
+    migration.get("targetRevision") or "",
+    migration.get("resultRevision") or "",
+):
+    sys.stdout.write(str(value) + "\0")
+PY
+    )
+    LAST_BACKUP_MANIFEST_PATH="${evidence_fields[0]:-}"
+    LAST_BACKUP_MANIFEST_BYTES="${evidence_fields[1]:-0}"
+    LAST_BACKUP_MANIFEST_SHA256="${evidence_fields[2]:-}"
+    MIGRATION_PRE_REVISION="${evidence_fields[3]:-}"
+    MIGRATION_TARGET_REVISION="${evidence_fields[4]:-}"
+    MIGRATION_RESULT_REVISION="${evidence_fields[5]:-}"
+  fi
+}
+
+completed_checkpoint_matches_local() {
+  verify_release_evidence \
+    && curl --noproxy '*' -fsS --max-time 10 "http://127.0.0.1:${BACKEND_PORT}/healthz" >/dev/null 2>&1 \
+    && python3 - "$DEPLOY_RELEASE_FILE" "$RELEASE_CHECKPOINT_COMMIT" \
+      "$RELEASE_CHECKPOINT_FRONTEND_IDENTITY" "$RELEASE_CHECKPOINT_FRONTEND_CHECKSUM" <<'PY'
+import json
+from pathlib import Path
+import sys
+
+path = Path(sys.argv[1])
+if not path.is_file():
+    raise SystemExit(1)
+payload = json.loads(path.read_text(encoding="utf-8"))
+frontend = payload.get("frontendRelease") or {}
+artifact = frontend.get("artifact") or {}
+commit = payload.get("actualCommitSha") or payload.get("commitSha") or ""
+if commit != sys.argv[2] or artifact.get("id") != sys.argv[3] or artifact.get("checksum") != sys.argv[4]:
+    raise SystemExit(1)
+PY
+}
+
+record_failure_checkpoint() {
+  local message="$1"
+  local phase="${CURRENT_CHECKPOINT_PHASE:-prepared}"
+  local retry_class="inspect_then_resume"
+
+  if ! checkpoint_enabled || [[ "$CHECKPOINT_WRITING_FAILURE" == "true" ]]; then
+    return 0
+  fi
+  CHECKPOINT_WRITING_FAILURE="true"
+  case "$phase" in
+    migration_started) retry_class="manual_db_recovery" ;;
+    switch_started|switched) retry_class="rollback_required" ;;
+    backend_healthy) retry_class="automatic" ;;
+    prepared|backup_verified|migrated) retry_class="inspect_then_resume" ;;
+    *) retry_class="inspect_then_resume" ;;
+  esac
+  write_release_checkpoint "$phase" failed "$retry_class" "$message" || true
+  CHECKPOINT_WRITING_FAILURE="false"
+}
 
 log_section() {
   printf '\n[STEP] %s\n' "$1"
@@ -184,8 +554,10 @@ fail_deploy() {
   local line_no="${2:-$LINENO}"
 
   echo "[ERROR] $message"
+  record_failure_checkpoint "$message"
   write_deploy_failure_context "$line_no" "$message" 1
   run_diagnostics
+  trap - ERR
   exit 1
 }
 
@@ -199,6 +571,7 @@ on_error() {
   echo "[ERROR] step=$CURRENT_STEP"
   echo "[ERROR] line=$line_no"
   echo "[ERROR] command=$command"
+  record_failure_checkpoint "step=$CURRENT_STEP line=$line_no command=$command rc=$rc"
   write_deploy_failure_context "$line_no" "$command" "$rc"
   run_diagnostics
 }
@@ -223,6 +596,18 @@ require_command() {
 require_command git
 require_command curl
 require_command python3
+require_command sha256sum
+
+CURRENT_STEP="Validate persistent release checkpoint"
+initialize_release_checkpoint
+if [[ "$CHECKPOINT_ALREADY_COMPLETE" == "true" ]]; then
+  if completed_checkpoint_matches_local; then
+    echo "[INFO] Exact completed release is already healthy; direct server deploy is a no-op"
+    exit 0
+  fi
+  echo "[ERROR] Complete checkpoint is immutable but local health/provenance does not match"
+  exit 1
+fi
 
 echo "[INFO] Repository directory: $REPO_DIR"
 rm -f "$DEPLOY_FAILURE_FILE" 2>/dev/null || true
@@ -244,8 +629,12 @@ mark_release_deployed() {
   local actual_commit=""
 
   if [[ ! -f "$DEPLOY_RELEASE_FILE" ]]; then
+    if checkpoint_enabled; then
+      echo "[ERROR] Cannot update missing deploy release metadata: $DEPLOY_RELEASE_FILE"
+      return 1
+    fi
     echo "[WARN] Cannot update missing deploy release metadata: $DEPLOY_RELEASE_FILE"
-    return
+    return 0
   fi
 
   if [[ "$SKIP_GIT_SYNC" == "true" && -n "${DEPLOY_COMMIT_SHA:-}" ]]; then
@@ -254,7 +643,7 @@ mark_release_deployed() {
     actual_commit="$(git -C "$REPO_DIR" rev-parse HEAD 2>/dev/null || true)"
   fi
 
-  python3 - "$DEPLOY_RELEASE_FILE" "$BACKEND_SERVICE_NAME" "$actual_commit" <<'PY' || true
+  python3 - "$DEPLOY_RELEASE_FILE" "$BACKEND_SERVICE_NAME" "$actual_commit" <<'PY'
 import datetime as dt
 import json
 import sys
@@ -366,23 +755,48 @@ install_env_file_if_missing() {
 }
 
 run_pre_deploy_backup() {
+  local database_required="${1:-false}"
+  local backup_output=""
+
   if [[ "$RUN_PRE_DEPLOY_BACKUP" == "false" || "$RUN_PRE_DEPLOY_BACKUP" == "0" ]]; then
+    if [[ "$database_required" == "true" ]] || checkpoint_enabled; then
+      echo "[ERROR] Checkpointed production releases require a verified pre-deploy backup manifest"
+      return 1
+    fi
     echo "[INFO] Skipping pre-deploy backup because RUN_PRE_DEPLOY_BACKUP=$RUN_PRE_DEPLOY_BACKUP"
     return 0
   fi
 
   if [[ ! -f "$BACKUP_SCRIPT" ]]; then
-    echo "[WARN] Pre-deploy backup script missing: $BACKUP_SCRIPT"
+    if [[ "$database_required" == "true" ]] || checkpoint_enabled; then
+      echo "[ERROR] Required pre-deploy backup script missing: $BACKUP_SCRIPT"
+      return 1
+    fi
+    echo "[WARN] Optional pre-deploy backup script missing: $BACKUP_SCRIPT"
     return 0
   fi
 
   echo "[INFO] Running pre-deploy production data backup"
-  if run_privileged_bash 'REPO_DIR="$1" BACKEND_ENV_FILE="$2" bash "$3"' "$REPO_DIR" "$BACKEND_ENV_FILE" "$BACKUP_SCRIPT"; then
+  if backup_output="$(run_privileged_bash 'REPO_DIR="$1" BACKEND_ENV_FILE="$2" REQUIRE_DATABASE_BACKUP="$4" BACKUP_ROOT="$5" bash "$3"' \
+    "$REPO_DIR" "$BACKEND_ENV_FILE" "$BACKUP_SCRIPT" "$database_required" "$RELEASE_BACKUP_ROOT")"; then
+    printf '%s\n' "$backup_output"
+    LAST_BACKUP_MANIFEST_PATH="$(sed -n 's/.*manifest=\([^ ]*\).*/\1/p' <<< "$backup_output" | tail -1)"
+    LAST_BACKUP_MANIFEST_BYTES="$(sed -n 's/.*manifestBytes=\([0-9][0-9]*\).*/\1/p' <<< "$backup_output" | tail -1)"
+    LAST_BACKUP_MANIFEST_SHA256="$(sed -n 's/.*manifestSha256=\([0-9a-f]\{64\}\).*/\1/p' <<< "$backup_output" | tail -1)"
+    if checkpoint_enabled && {
+      [[ -z "$LAST_BACKUP_MANIFEST_PATH" ]] \
+        || [[ ! "$LAST_BACKUP_MANIFEST_BYTES" =~ ^[1-9][0-9]*$ ]] \
+        || [[ ! "$LAST_BACKUP_MANIFEST_SHA256" =~ ^[0-9a-f]{64}$ ]];
+    }; then
+      echo "[ERROR] Backup completed without durable manifest identity"
+      return 1
+    fi
     echo "[INFO] Pre-deploy backup completed"
     return 0
   fi
 
-  if [[ "$RUN_PRE_DEPLOY_BACKUP" == "true" || "$RUN_PRE_DEPLOY_BACKUP" == "1" ]]; then
+  if checkpoint_enabled \
+    || [[ "$database_required" == "true" || "$RUN_PRE_DEPLOY_BACKUP" == "true" || "$RUN_PRE_DEPLOY_BACKUP" == "1" ]]; then
     echo "[ERROR] Pre-deploy backup failed"
     return 1
   fi
@@ -439,14 +853,37 @@ install_prebuilt_frontend() {
     fi
   done
 
+  if python3 - "$target_dir/build-meta.json" "$RELEASE_CHECKPOINT_COMMIT" \
+    "$RELEASE_CHECKPOINT_FRONTEND_IDENTITY" "$RELEASE_CHECKPOINT_FRONTEND_CHECKSUM" <<'PY'
+import json
+from pathlib import Path
+import sys
+
+path = Path(sys.argv[1])
+if not path.is_file():
+    raise SystemExit(1)
+payload = json.loads(path.read_text(encoding="utf-8"))
+if (
+    payload.get("deployCommit") != sys.argv[2]
+    or payload.get("artifactId") != sys.argv[3]
+    or payload.get("artifactChecksum") != sys.argv[4]
+):
+    raise SystemExit(1)
+PY
+  then
+    echo "[INFO] Verified frontend is already active; preserving existing rollback directory"
+    return 0
+  fi
+
   precompress_frontend_assets "$PREBUILT_FRONTEND_DIR"
-  rm -rf "$backup_dir"
+  if [[ -e "$backup_dir" ]]; then
+    fail_deploy "Existing frontend rollback directory requires inspection: $backup_dir" "$LINENO"
+  fi
   if [[ -e "$target_dir" ]]; then
     mv "$target_dir" "$backup_dir"
   fi
   if mv "$PREBUILT_FRONTEND_DIR" "$target_dir"; then
-    rm -rf "$backup_dir"
-    echo "[INFO] Atomically installed verified prebuilt frontend dist"
+    echo "[INFO] Atomically installed verified prebuilt frontend dist; previous dist retained until backend health"
     return 0
   fi
 
@@ -455,6 +892,14 @@ install_prebuilt_frontend() {
     mv "$backup_dir" "$target_dir"
   fi
   return 1
+}
+
+cleanup_previous_frontend_after_health() {
+  local backup_dir="$FRONTEND_DIR/.dist-previous"
+  if [[ -e "$backup_dir" ]]; then
+    rm -rf "$backup_dir"
+    echo "[INFO] Removed previous frontend only after backend health succeeded"
+  fi
 }
 
 restart_timer_unit() {
@@ -784,62 +1229,125 @@ else
   echo "[INFO] Playwright not installed; skipping browser install"
 fi
 
-echo "[INFO] Reconcile scraper schedulers"
-CURRENT_STEP="Reconcile scraper schedulers"
-log_section "$CURRENT_STEP"
-reconcile_scraper_schedulers
-record_active_msrp_dryrun_status
-
-echo "[INFO] Run pre-deploy backup when configured"
-CURRENT_STEP="Run pre-deploy backup"
-log_section "$CURRENT_STEP"
-run_pre_deploy_backup
-
-echo "[INFO] Run database migrations when configured"
-CURRENT_STEP="Run database migrations"
+echo "[INFO] Resolve database migration policy"
+CURRENT_STEP="Resolve database migration policy"
 log_section "$CURRENT_STEP"
 if [[ "$RUN_DATABASE_MIGRATIONS" == "auto" ]]; then
   if [[ -f "$BACKEND_ENV_FILE" ]]; then
-    if db_state="$(run_privileged_bash 'set -a; . "$1"; set +a; if [[ -n "${APP_DATABASE_URL:-}" ]] && [[ "${APP_DATABASE_ENABLED:-false}" =~ ^(1|true|yes|on)$ ]]; then echo run; else echo skip; fi' "$BACKEND_ENV_FILE" 2>/dev/null)"; then
+    if db_state="$(run_privileged_bash 'set -a; . "$1"; set +a; enabled="$(printf "%s" "${APP_DATABASE_ENABLED:-false}" | tr "[:upper:]" "[:lower:]")"; case "$enabled" in 1|true|yes|on) [[ -n "${APP_DATABASE_URL:-${DATABASE_URL:-}}" ]] || exit 2; echo run ;; *) echo skip ;; esac' "$BACKEND_ENV_FILE" 2>/dev/null)"; then
       RUN_DATABASE_MIGRATIONS="$db_state"
     else
-      RUN_DATABASE_MIGRATIONS="skip"
+      fail_deploy "Cannot resolve database migration policy from backend env" "$LINENO"
     fi
   else
+    if checkpoint_enabled; then
+      fail_deploy "Cannot resolve database migration policy because backend env is missing" "$LINENO"
+    fi
     RUN_DATABASE_MIGRATIONS="skip"
   fi
 fi
 
+DATABASE_MIGRATION_REQUIRED="false"
 if [[ "$RUN_DATABASE_MIGRATIONS" == "true" || "$RUN_DATABASE_MIGRATIONS" == "run" ]]; then
+  DATABASE_MIGRATION_REQUIRED="true"
   if [[ "$DEPLOY_BRANCH" != "main" || "$PRODUCTION_RELEASE_WORKFLOW" != "true" ]]; then
     fail_deploy "Database migrations require the main production release workflow" "$LINENO"
   fi
+fi
+
+verify_live_migration_revision_if_available
+
+if checkpoint_completed_or_past backup_verified; then
+  echo "[INFO] Exact release checkpoint already has a verified backup"
+else
+  echo "[INFO] Run pre-deploy backup when configured"
+  CURRENT_STEP="Run pre-deploy backup"
+  log_section "$CURRENT_STEP"
+  write_release_checkpoint backup_verified in_progress automatic "pre-deploy backup started"
+  run_pre_deploy_backup "$DATABASE_MIGRATION_REQUIRED"
+  write_release_evidence "not_started"
+  write_release_checkpoint backup_verified completed automatic \
+    "pre-deploy backup verified; evidence=$RELEASE_EVIDENCE_FILE sha256=$RELEASE_EVIDENCE_SHA256"
+  verify_release_evidence
+fi
+
+if checkpoint_at_least migrated; then
+  echo "[INFO] Exact release checkpoint already passed database migration"
+elif [[ "$DATABASE_MIGRATION_REQUIRED" == "true" ]]; then
+  echo "[INFO] Run database migrations when configured"
+  CURRENT_STEP="Run database migrations"
+  log_section "$CURRENT_STEP"
+  MIGRATION_PRE_REVISION="$(run_privileged_bash 'set -Eeuo pipefail; set -a; . "$1"; set +a; export PYTHONPATH="$2"; . "$3/bin/activate"; cd "$2"; python -m alembic current' \
+    "$BACKEND_ENV_FILE" "$BACKEND_DIR" "$VENV_DIR")"
+  MIGRATION_TARGET_REVISION="$(run_privileged_bash 'set -Eeuo pipefail; export PYTHONPATH="$1"; . "$2/bin/activate"; cd "$1"; python -m alembic heads' \
+    "$BACKEND_DIR" "$VENV_DIR")"
+  write_release_evidence "in_progress"
+  write_release_checkpoint migration_started in_progress manual_db_recovery \
+    "database migration started; evidence=$RELEASE_EVIDENCE_FILE sha256=$RELEASE_EVIDENCE_SHA256; interruption requires manual database inspection"
+  verify_release_evidence
   run_privileged_bash 'set -Eeuo pipefail; set -a; . "$1"; set +a; export PYTHONPATH="$2"; . "$3/bin/activate"; cd "$2"; python -m alembic upgrade head' \
     "$BACKEND_ENV_FILE" "$BACKEND_DIR" "$VENV_DIR"
+  MIGRATION_RESULT_REVISION="$(run_privileged_bash 'set -Eeuo pipefail; set -a; . "$1"; set +a; export PYTHONPATH="$2"; . "$3/bin/activate"; cd "$2"; python -m alembic current' \
+    "$BACKEND_ENV_FILE" "$BACKEND_DIR" "$VENV_DIR")"
+  python3 - "$MIGRATION_TARGET_REVISION" "$MIGRATION_RESULT_REVISION" <<'PY'
+import re
+import sys
+
+pattern = re.compile(r"(?m)^([0-9]{8}_[0-9]{4})\b")
+target = set(pattern.findall(sys.argv[1]))
+result = set(pattern.findall(sys.argv[2]))
+if not target or target != result:
+    raise SystemExit(
+        "[ERROR] Database revision after migration does not match Alembic heads: "
+        f"target={sorted(target)} result={sorted(result)}"
+    )
+PY
+  write_release_evidence "completed"
+  write_release_checkpoint migrated completed automatic \
+    "database migration completed; evidence=$RELEASE_EVIDENCE_FILE sha256=$RELEASE_EVIDENCE_SHA256"
+  verify_release_evidence
 else
   echo "[INFO] Database migrations skipped (database not configured)"
+  write_release_evidence "not_required"
+  write_release_checkpoint migrated completed automatic \
+    "database migration not required; evidence=$RELEASE_EVIDENCE_FILE sha256=$RELEASE_EVIDENCE_SHA256"
+  verify_release_evidence
 fi
 
-echo "[INFO] Install verified prebuilt frontend atomically"
-CURRENT_STEP="Install verified prebuilt frontend atomically"
-log_section "$CURRENT_STEP"
-install_prebuilt_frontend
+if ! checkpoint_at_least switched; then
+  write_release_checkpoint switch_started in_progress rollback_required \
+    "frontend/backend switch started; interruption requires rollback inspection"
 
-echo "[INFO] Restart backend service"
-CURRENT_STEP="Restart backend service"
-log_section "$CURRENT_STEP"
-if ! sudo -n systemctl cat "$BACKEND_SERVICE_NAME" >/dev/null 2>&1; then
-  fail_deploy "systemd service not found: $BACKEND_SERVICE_NAME" "$LINENO"
-fi
-sudo -n systemctl restart "$BACKEND_SERVICE_NAME"
-sleep 2
-sudo -n systemctl --no-pager status "$BACKEND_SERVICE_NAME" 2>&1 | sed -n '1,30p' || true
-
-if systemctl is-active --quiet nginx; then
-  echo "[INFO] Reload nginx"
-  CURRENT_STEP="Reload nginx"
+  echo "[INFO] Install verified prebuilt frontend atomically"
+  CURRENT_STEP="Install verified prebuilt frontend atomically"
   log_section "$CURRENT_STEP"
-  sudo -n systemctl reload nginx
+  install_prebuilt_frontend
+
+  echo "[INFO] Restart backend service"
+  CURRENT_STEP="Restart backend service"
+  log_section "$CURRENT_STEP"
+  if ! sudo -n systemctl cat "$BACKEND_SERVICE_NAME" >/dev/null 2>&1; then
+    fail_deploy "systemd service not found: $BACKEND_SERVICE_NAME" "$LINENO"
+  fi
+  sudo -n systemctl restart "$BACKEND_SERVICE_NAME"
+  sleep 2
+  sudo -n systemctl --no-pager status "$BACKEND_SERVICE_NAME" 2>&1 | sed -n '1,30p' || true
+
+  if systemctl is-active --quiet nginx; then
+    echo "[INFO] Reload nginx"
+    CURRENT_STEP="Reload nginx"
+    log_section "$CURRENT_STEP"
+    sudo -n systemctl reload nginx
+  fi
+  write_release_checkpoint switched completed automatic "frontend and backend switch completed"
+else
+  echo "[INFO] Exact release checkpoint already switched; restarting backend for recovery verification"
+  CURRENT_STEP="Restart backend service for checkpoint recovery"
+  if ! sudo -n systemctl cat "$BACKEND_SERVICE_NAME" >/dev/null 2>&1; then
+    fail_deploy "systemd service not found: $BACKEND_SERVICE_NAME" "$LINENO"
+  fi
+  sudo -n systemctl restart "$BACKEND_SERVICE_NAME"
+  sleep 2
 fi
 
 echo "[INFO] Verify backend health"
@@ -857,12 +1365,22 @@ for i in $(seq 1 15); do
   sleep 5
 done
 
+mark_release_deployed
+cleanup_previous_frontend_after_health
+verify_release_evidence
+write_release_checkpoint backend_healthy in_progress automatic \
+  "backend health and release provenance verified; post-health reconciliation pending"
+
+echo "[INFO] Reconcile scraper schedulers after backend health"
+CURRENT_STEP="Reconcile scraper schedulers"
+log_section "$CURRENT_STEP"
+reconcile_scraper_schedulers
+record_active_msrp_dryrun_status
+
 echo "[INFO] Prewarm grouped time-series cache"
 CURRENT_STEP="Prewarm grouped time-series cache"
 log_section "$CURRENT_STEP"
 run_grouped_time_series_prewarm
-
-mark_release_deployed
 
 echo "[INFO] Bootstrap MSRP dryrun after backend health"
 CURRENT_STEP="Bootstrap MSRP dryrun"
@@ -873,6 +1391,8 @@ echo "[INFO] Run post-deploy readiness audits"
 CURRENT_STEP="Run post-deploy readiness audits"
 log_section "$CURRENT_STEP"
 run_post_deploy_readiness_audits
+
+echo "[INFO] Server-side post-health work completed; outer release controller owns backend_healthy completion"
 
 echo "[INFO] Current revision"
 CURRENT_STEP="Print revision"

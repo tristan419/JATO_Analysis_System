@@ -5,7 +5,7 @@ from pathlib import Path
 import sys
 import unittest
 from unittest import mock
-from urllib.error import URLError
+from urllib.error import HTTPError, URLError
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -277,6 +277,115 @@ class IntlRuntimeContractTests(unittest.TestCase):
                 attempts=1,
                 delay_seconds=0,
                 timeout_seconds=2,
+            )
+
+    @mock.patch.object(runtime_contract, "urlopen")
+    def test_www_profile_accepts_backend_json_without_edge_headers(
+        self,
+        mocked_urlopen: mock.Mock,
+    ) -> None:
+        mocked_urlopen.side_effect = [
+            FakeResponse({"status": "ok"}),
+            FakeResponse({"items": [{"country": "Hungary"}]}),
+        ]
+
+        responses = runtime_contract.verify_runtime_contract(
+            "https://www.example.test",
+            attempts=1,
+            delay_seconds=0,
+            timeout_seconds=2,
+            profile="www",
+        )
+
+        self.assertEqual(
+            [response.path for response in responses],
+            ["/healthz", runtime_contract.FRESHNESS_PATH],
+        )
+        self.assertEqual(mocked_urlopen.call_count, 2)
+
+    @mock.patch.object(runtime_contract, "urlopen")
+    def test_www_profile_rejects_empty_freshness_json(
+        self,
+        mocked_urlopen: mock.Mock,
+    ) -> None:
+        mocked_urlopen.side_effect = [
+            FakeResponse({"status": "ok"}),
+            FakeResponse({}),
+        ]
+
+        with self.assertRaisesRegex(
+            runtime_contract.ContractValidationError,
+            "expected payload items to be a non-empty list",
+        ):
+            runtime_contract.verify_runtime_contract(
+                "https://www.example.test",
+                attempts=1,
+                delay_seconds=0,
+                timeout_seconds=2,
+                profile="www",
+            )
+
+    @mock.patch.object(runtime_contract, "urlopen")
+    def test_www_profile_rejects_error_shaped_freshness_json(
+        self,
+        mocked_urlopen: mock.Mock,
+    ) -> None:
+        mocked_urlopen.side_effect = [
+            FakeResponse({"status": "ok"}),
+            FakeResponse({"detail": "upstream unavailable"}),
+        ]
+
+        with self.assertRaisesRegex(
+            runtime_contract.ContractValidationError,
+            "expected payload items to be a non-empty list",
+        ):
+            runtime_contract.verify_runtime_contract(
+                "https://www.example.test",
+                attempts=1,
+                delay_seconds=0,
+                timeout_seconds=2,
+                profile="www",
+            )
+
+    @mock.patch.object(runtime_contract, "urlopen")
+    def test_www_profile_rejects_html_and_502(
+        self,
+        mocked_urlopen: mock.Mock,
+    ) -> None:
+        mocked_urlopen.side_effect = [
+            FakeResponse(
+                headers={"content-type": "text/html"},
+                body=b"<html>bad gateway</html>",
+            ),
+            HTTPError(
+                f"{ORIGIN}{runtime_contract.FRESHNESS_PATH}",
+                502,
+                "Bad Gateway",
+                hdrs=None,
+                fp=None,
+            ),
+        ]
+
+        with self.assertRaisesRegex(
+            runtime_contract.ContractValidationError,
+            r"/healthz: expected application/json.*data-freshness: HTTP 502",
+        ):
+            runtime_contract.verify_runtime_contract(
+                "https://www.example.test",
+                attempts=1,
+                delay_seconds=0,
+                timeout_seconds=2,
+                profile="www",
+            )
+
+    def test_unknown_profile_is_rejected(self) -> None:
+        with self.assertRaisesRegex(ValueError, "unsupported runtime contract profile"):
+            runtime_contract.verify_runtime_contract(
+                ORIGIN,
+                attempts=1,
+                delay_seconds=0,
+                timeout_seconds=2,
+                profile="unknown",
             )
 
 

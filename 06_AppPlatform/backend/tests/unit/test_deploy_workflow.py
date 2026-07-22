@@ -53,27 +53,25 @@ def test_tencent_release_upload_resumes_and_never_falls_back() -> None:
     assert "fallback to sparse" not in workflow
     assert "timeout-minutes: 240" in workflow
     assert "cancel-in-progress: false" in workflow
-    assert 'remote_checksum="${remote_temp}.sha256"' in workflow
-    assert 'remote_lock="${remote_temp}.lock"' in workflow
-    assert 'remote_temp="${remote_archive}.uploading.v2"' in workflow
-    assert 'tail -c "+$((remote_size + 1))" "$archive"' in workflow
-    assert 'head -c "$remaining_bytes"' in workflow
-    assert "flock -w 270 9" in workflow
-    assert "oflag=seek_bytes conv=notrunc" in workflow
+    assert 'remote_archive="${remote_dir}/${archive_sha256}.tar.gz"' in workflow
+    assert 'remote_temp="${remote_archive}.partial"' in workflow
+    assert 'remote_lock="${remote_archive}.lock"' in workflow
+    assert "--partial" in workflow
+    assert "--append-verify" in workflow
+    assert "flock -w 870" in workflow
+    assert "df -Pk" in workflow
     assert "cat >> '$remote_temp'" not in workflow
-    assert "idle_timeout_seconds=1800" in workflow
-    assert "last_progress_at" in workflow
     assert "local remote_output" in workflow
     assert 'printf \'%s\' "$remote_output"' in workflow
-    assert "while true; do" in workflow
-    assert "seq 1 120" not in workflow
-    assert "five consecutive attempts" not in workflow
-    assert "Resumable upload attempt" in workflow
+    assert "for upload_attempt in 1 2 3 4 5 6" in workflow
     assert "split -b 8M" not in workflow
     assert "sha256sum '$remote_temp'" in workflow
     assert workflow.index("sha256sum '$remote_temp'") < workflow.rindex(
         'echo "remote-archive=$remote_archive"',
     )
+    assert "StrictHostKeyChecking=no" not in workflow
+    assert "UserKnownHostsFile=/dev/null" not in workflow
+    assert "--compress" not in workflow
 
 
 def test_tencent_release_upload_replaces_unsafe_scratch_without_overwriting_final() -> None:
@@ -81,17 +79,99 @@ def test_tencent_release_upload_replaces_unsafe_scratch_without_overwriting_fina
         encoding="utf-8",
     )
 
-    assert "reset_upload_state()" in workflow
-    assert r"if [ \"\$current_size\" -gt '$archive_bytes' ]; then" in workflow
+    assert "reset_bad_partial()" in workflow
+    assert "partial_reset_used=0" in workflow
+    assert 'if [ "$partial_reset_used" -ne 0 ]; then' in workflow
     assert "rm -f '$remote_temp' '$remote_checksum'" in workflow
     assert "rm -f '$remote_temp' '$remote_archive'" not in workflow
-    assert "Remote immutable archive exists with an unexpected SHA-256" in workflow
-    assert "final_sha256" in workflow
-    assert "if [ -f '$remote_archive' ]; then" in workflow
+    assert "Remote immutable archive exists but size or SHA-256 is wrong" in workflow
+    assert "FINAL_BAD" in workflow
+    assert "if [ -e '$remote_archive' ]; then" in workflow
     assert "test ! -e '$remote_archive'" in workflow
     assert workflow.index("test ! -e '$remote_archive'") < workflow.index(
-        "mv '$remote_temp' '$remote_archive'",
+        "ln '$remote_temp' '$remote_archive'",
     )
+
+
+def test_tencent_release_requires_host_pin_and_hides_secrets_from_remote_argv() -> None:
+    workflow = (REPO_ROOT / ".github/workflows/production-release.yml").read_text(
+        encoding="utf-8",
+    )
+
+    assert "SSH_KNOWN_HOSTS" in workflow
+    assert "StrictHostKeyChecking=yes" in workflow
+    assert 'UserKnownHostsFile="$HOME/.ssh/known_hosts"' in workflow
+    assert "missing_packages+=(rsync)" in workflow
+    assert "missing_packages+=(sshpass)" in workflow
+    assert 'sudo apt-get install -y "${missing_packages[@]}"' in workflow
+    assert "remote_exports" not in workflow
+    assert 'chmod 600 "$control_payload"' in workflow
+    assert '"umask 077; exec bash -s" < "$control_payload"' in workflow
+
+
+def test_backend_release_is_deterministic_and_closes_msrp_evidence_references() -> None:
+    workflow = (REPO_ROOT / ".github/workflows/production-release.yml").read_text(
+        encoding="utf-8",
+    )
+
+    assert '"releaseId": release["releaseId"]' in workflow
+    assert '"workflowRunAttempt": release["workflowRunAttempt"]' in workflow
+    assert '"packagedAt": release["buildTimestamp"]' in workflow
+    assert "--sort=name" in workflow
+    assert "--owner=0" in workflow
+    assert "--group=0" in workflow
+    assert '--mtime="@$source_date_epoch"' in workflow
+    assert 'gzip -n -f "$RUNNER_TEMP/JATO_deploy.tar"' in workflow
+    assert 'value.get("localPath")' in workflow
+    assert "missing MSRP localPath evidence" in workflow
+    assert 'tar tzf "$RUNNER_TEMP/JATO_deploy.tar.gz" "$evidence_path"' in workflow
+    assert "update_mihomo_subscription.sh" not in workflow
+
+
+def test_release_checkpoints_cover_transport_ambiguity_and_final_parity() -> None:
+    workflow = (REPO_ROOT / ".github/workflows/production-release.yml").read_text(
+        encoding="utf-8",
+    )
+
+    for phase in (
+        "transport_verified",
+        "www_verified",
+        "intl_deploy_started",
+        "intl_verified",
+        "parity_verified",
+        "complete",
+    ):
+        assert f"--phase {phase}" in workflow
+    assert "retention-days: 7" in workflow
+    assert "retention-days: 30" in workflow
+    assert "steps.intl_current.outputs.current != 'true'" in workflow
+    assert "for deploy_attempt in 1 2 3" in workflow
+    assert workflow.index("Verify Tencent public release provenance") < workflow.index(
+        "Verify www runtime API contract",
+    ) < workflow.index("Record www-verified candidate checkpoint")
+    assert "--profile www" in workflow
+
+
+def test_server_checkpoint_and_evidence_are_bound_into_final_receipt() -> None:
+    workflow = (REPO_ROOT / ".github/workflows/production-release.yml").read_text(
+        encoding="utf-8",
+    )
+
+    assert "Fetch and attest server release checkpoint" in workflow
+    assert "backend-healthy.json" in workflow
+    assert "backend-healthy.evidence.json" in workflow
+    assert "attestation_complete=false" in workflow
+    assert 'rm -rf "$server_dir"' in workflow
+    assert 'checkpoint.get("phase") != "backend_healthy"' in workflow
+    assert 'checkpoint.get("status") != "completed"' in workflow
+    assert "server checkpoint evidence binding mismatch" in workflow
+    assert 'evidence.get("identity") != expected_identity' in workflow
+    assert 'echo "attestation-sha256=$attestation_sha256"' in workflow
+    assert "server_attestation_sha256" in workflow
+    assert '--message "server_attestation_sha256=$actual_attestation_sha256"' in workflow
+    assert workflow.index("Deploy verified release on Tencent") < workflow.index(
+        "Fetch and attest server release checkpoint",
+    ) < workflow.index("Verify Tencent public release provenance")
 
 
 def test_www_and_intl_switch_the_shared_artifact_in_one_protected_job() -> None:

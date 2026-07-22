@@ -52,6 +52,23 @@ health, API data freshness, and OAuth relay health all return real JSON with
 their expected edge markers. A SPA fallback returning `200 text/html` is a
 release failure, not a successful health check.
 
+## Backend transport and recovery
+
+The backend release uses the existing SSH connection and CVM disk; it does not
+require COS, a CDN, or another long-lived cloud credential. The deterministic
+archive is addressed by its SHA-256 and transferred with resumable rsync. The
+server independently verifies its byte length and checksum before sealing it,
+and never overwrites a different immutable archive.
+
+Durable checkpoints bind every deploy phase to the main commit, backend archive,
+workflow build identity, and the single verified frontend artifact. Transport
+and preparation failures may resume the exact artifact. An interrupted database
+migration fails closed for manual revision and backup inspection, while an
+ambiguous intl deployment is resolved by reading public provenance before any
+repeat publish. The operational state machine, retry classes, prerequisites,
+and interruption tests are documented in
+[`FREE_RELEASE_RECOVERY_RUNBOOK.md`](FREE_RELEASE_RECOVERY_RUNBOOK.md).
+
 Schema v2 intentionally fails closed on schema-v1 artifacts. The first
 successful schema-v2 production release becomes the new directly reusable
 rollback baseline. An older schema-v1 release may only be restored together
