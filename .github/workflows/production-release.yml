@@ -39,6 +39,9 @@ jobs:
       frontend_build_id: ${{ steps.release.outputs.frontend-build-id }}
       node_version: ${{ steps.release.outputs.node-version }}
       app_commit: ${{ steps.release.outputs.app-commit }}
+      release_id: ${{ steps.release_metadata.outputs.release-id }}
+      workflow_run_attempt: ${{ steps.release_metadata.outputs.workflow-run-attempt }}
+      build_timestamp: ${{ steps.release_metadata.outputs.build-timestamp }}
 
     steps:
       - name: Checkout release source
@@ -86,6 +89,35 @@ jobs:
             --run-attempt "$GITHUB_RUN_ATTEMPT" \
             --github-output "$GITHUB_OUTPUT"
 
+      - name: Read immutable frontend release metadata
+        id: release_metadata
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          manifest = json.loads(
+              (Path(os.environ["RUNNER_TEMP"]) / "frontend-release/frontend-release.json")
+              .read_text(encoding="utf-8")
+          )
+          release = manifest.get("release")
+          if not isinstance(release, dict):
+              raise SystemExit("frontend release manifest is missing release metadata")
+          values = {
+              "release-id": release.get("releaseId"),
+              "workflow-run-attempt": release.get("workflowRunAttempt"),
+              "build-timestamp": release.get("buildTimestamp"),
+          }
+          for name, value in values.items():
+              if not isinstance(value, str) or not value or "\n" in value or "\r" in value:
+                  raise SystemExit(f"invalid release metadata field: {name}")
+          with Path(os.environ["GITHUB_OUTPUT"]).open("a", encoding="utf-8") as output:
+              for name, value in values.items():
+                  output.write(f"{name}={value}\n")
+          PY
+
       - name: Upload the only frontend artifact
         id: upload
         uses: actions/upload-artifact@v4
@@ -107,6 +139,9 @@ jobs:
           FRONTEND_BUILD_ID: ${{ steps.release.outputs.frontend-build-id }}
           NODE_VERSION: ${{ steps.release.outputs.node-version }}
           APP_COMMIT: ${{ steps.release.outputs.app-commit }}
+          RELEASE_ID: ${{ steps.release_metadata.outputs.release-id }}
+          BUILD_RUN_ATTEMPT: ${{ steps.release_metadata.outputs.workflow-run-attempt }}
+          BUILD_TIMESTAMP: ${{ steps.release_metadata.outputs.build-timestamp }}
         run: |
           set -euo pipefail
           expected_name="frontend-dist-$GITHUB_SHA"
@@ -118,6 +153,9 @@ jobs:
           [[ "$FRONTEND_BUILD_ID" =~ ^[0-9a-f]{64}$ ]]
           [[ "$NODE_VERSION" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]
           [[ "$APP_COMMIT" =~ ^[0-9a-f]{40}$ ]]
+          test "$RELEASE_ID" = "$GITHUB_RUN_ID-$BUILD_RUN_ATTEMPT"
+          [[ "$BUILD_RUN_ATTEMPT" =~ ^[1-9][0-9]*$ ]]
+          test -n "$BUILD_TIMESTAMP"
 
   deploy_tencent:
     if: ${{ github.ref == 'refs/heads/main' }}
@@ -125,9 +163,11 @@ jobs:
     environment: production
     runs-on: ubuntu-latest
     timeout-minutes: 240
-    permissions:
-      contents: read
-      id-token: write
+    outputs:
+      remote_archive: ${{ steps.upload_release.outputs.remote-archive }}
+      archive_bytes: ${{ steps.upload_release.outputs.archive-bytes }}
+      archive_sha256: ${{ steps.upload_release.outputs.archive-sha256 }}
+      server_attestation_sha256: ${{ steps.server_attestation.outputs.attestation-sha256 }}
 
     steps:
       - name: Checkout release source
@@ -153,6 +193,7 @@ jobs:
           GITHUB_ARTIFACT_DIGEST: ${{ needs.build_frontend.outputs.github_artifact_digest }}
           FRONTEND_BUILD_ID: ${{ needs.build_frontend.outputs.frontend_build_id }}
           NODE_VERSION: ${{ needs.build_frontend.outputs.node_version }}
+          BUILD_RUN_ATTEMPT: ${{ needs.build_frontend.outputs.workflow_run_attempt }}
         run: |
           set -euo pipefail
           python3 03_Scripts/deploy/frontend_release_artifact.py verify \
@@ -164,7 +205,7 @@ jobs:
             --expected-build-id "$FRONTEND_BUILD_ID" \
             --expected-node-version "$NODE_VERSION" \
             --expected-run-id "$GITHUB_RUN_ID" \
-            --expected-run-attempt "$GITHUB_RUN_ATTEMPT" \
+            --expected-run-attempt "$BUILD_RUN_ATTEMPT" \
             --github-artifact-id "$GITHUB_ARTIFACT_ID" \
             --github-artifact-digest "$GITHUB_ARTIFACT_DIGEST" \
             --materialize-dir "$RUNNER_TEMP/frontend-dist" \
@@ -183,7 +224,7 @@ jobs:
           set -euo pipefail
           : "${SSH_HOST:?Missing SSH_HOST}"
           : "${SSH_USER:?Missing SSH_USER}"
-          : "${SSH_KNOWN_HOSTS:?Missing pinned SSH_KNOWN_HOSTS}"
+          : "${SSH_KNOWN_HOSTS:?Missing production secret SSH_KNOWN_HOSTS}"
           SSH_PORT="${SSH_PORT:-22}"
           install -d -m 700 ~/.ssh
           printf '%s\n' "$SSH_KNOWN_HOSTS" > ~/.ssh/known_hosts
@@ -248,7 +289,9 @@ jobs:
           FRONTEND_BUILD_ID: ${{ needs.build_frontend.outputs.frontend_build_id }}
           NODE_VERSION: ${{ needs.build_frontend.outputs.node_version }}
           APP_COMMIT: ${{ needs.build_frontend.outputs.app_commit }}
-          MIHOMO_SUB_URL: ${{ secrets.MIHOMO_SUB_URL }}
+          RELEASE_ID: ${{ needs.build_frontend.outputs.release_id }}
+          BUILD_RUN_ATTEMPT: ${{ needs.build_frontend.outputs.workflow_run_attempt }}
+          BUILD_TIMESTAMP: ${{ needs.build_frontend.outputs.build_timestamp }}
         run: |
           set -euo pipefail
           required_workbook="01_RAW_DATA/VOC_Nordic_SUV_Users_100.xlsx"
@@ -281,6 +324,28 @@ jobs:
           manifest = json.loads(
               (root / "hermes/frontend_release/frontend-release.json").read_text(encoding="utf-8")
           )
+          release = manifest.get("release")
+          if not isinstance(release, dict):
+              raise SystemExit("frontend release manifest is missing release metadata")
+          expected_release = {
+              "releaseId": os.environ["RELEASE_ID"],
+              "workflowRunAttempt": os.environ["BUILD_RUN_ATTEMPT"],
+              "buildTimestamp": os.environ["BUILD_TIMESTAMP"],
+          }
+          for key, expected in expected_release.items():
+              if release.get(key) != expected:
+                  raise SystemExit(
+                      f"frontend release metadata mismatch for {key}: "
+                      f"{release.get(key)!r} != {expected!r}"
+                  )
+          timestamp = str(release["buildTimestamp"])
+          parsed_timestamp = dt.datetime.fromisoformat(timestamp.replace("Z", "+00:00"))
+          if parsed_timestamp.tzinfo is None:
+              raise SystemExit("frontend buildTimestamp must include a timezone")
+          (Path(os.environ["RUNNER_TEMP"]) / "release-source-date-epoch").write_text(
+              f"{int(parsed_timestamp.timestamp())}\n",
+              encoding="utf-8",
+          )
           frontend_release = dict(manifest)
           frontend_release["artifact"] = dict(frontend_release["artifact"])
           frontend_release["artifact"]["githubId"] = os.environ["GITHUB_ARTIFACT_ID"]
@@ -290,19 +355,19 @@ jobs:
           )
           sha = os.environ["GITHUB_SHA"]
           payload = {
-              "releaseId": f"{os.environ['GITHUB_RUN_ID']}-{os.environ['GITHUB_RUN_ATTEMPT']}",
+              "releaseId": release["releaseId"],
               "service": "jato-fullstack-backend",
               "environment": "production",
               "expectedCommitSha": sha,
               "commitSha": sha,
               "shortSha": sha[:8],
               "branch": os.environ.get("GITHUB_REF_NAME", ""),
-              "repository": os.environ.get("GITHUB_REPOSITORY", ""),
-              "workflow": os.environ.get("GITHUB_WORKFLOW", ""),
-              "workflowRunId": os.environ.get("GITHUB_RUN_ID", ""),
-              "workflowRunAttempt": os.environ.get("GITHUB_RUN_ATTEMPT", ""),
+              "repository": release["repository"],
+              "workflow": release["workflow"],
+              "workflowRunId": release["workflowRunId"],
+              "workflowRunAttempt": release["workflowRunAttempt"],
               "deployMethod": "github_actions",
-              "packagedAt": dt.datetime.now(dt.UTC).isoformat(),
+              "packagedAt": release["buildTimestamp"],
               "source": "github_actions_archive",
               "frontendRelease": frontend_release,
           }
@@ -310,20 +375,63 @@ jobs:
           out.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
           PY
 
-          mihomo_payload_root="$RUNNER_TEMP/mihomo_payload"
-          mihomo_packaged_config="$mihomo_payload_root/hermes/runtime/mihomo/config.yaml"
-          if [ -n "${MIHOMO_SUB_URL:-}" ]; then
-            echo "[mihomo-sub] Building prebuilt mihomo config on GitHub runner"
-            if MIHOMO_OUTPUT_CONFIG="$mihomo_packaged_config" \
-              bash 03_Scripts/deploy/update_mihomo_subscription.sh; then
-              echo "[mihomo-sub] Prebuilt mihomo config ready"
-            else
-              echo "[WARN] Prebuilt mihomo config failed; server will try local refresh"
-              rm -f "$mihomo_packaged_config"
-            fi
-          fi
+          msrp_local_paths_file="$RUNNER_TEMP/msrp-local-paths.bin"
+          MSRP_CANDIDATES="$msrp_candidates" \
+          MSRP_EVIDENCE="$msrp_evidence" \
+          MSRP_LOCAL_PATHS_FILE="$msrp_local_paths_file" \
+          python3 - <<'PY'
+          import json
+          import os
+          from pathlib import Path, PurePosixPath
 
-          tar cf "$RUNNER_TEMP/JATO_deploy.tar" \
+          root = Path(os.environ["GITHUB_WORKSPACE"]).resolve()
+          referenced: set[str] = set()
+
+          def collect_local_paths(value: object) -> None:
+              if isinstance(value, dict):
+                  local_path = value.get("localPath")
+                  if local_path is not None:
+                      if not isinstance(local_path, str) or not local_path:
+                          raise SystemExit("MSRP localPath must be a non-empty string")
+                      referenced.add(local_path)
+                  for child in value.values():
+                      collect_local_paths(child)
+              elif isinstance(value, list):
+                  for child in value:
+                      collect_local_paths(child)
+
+          for env_name in ("MSRP_CANDIDATES", "MSRP_EVIDENCE"):
+              source = root / os.environ[env_name]
+              collect_local_paths(json.loads(source.read_text(encoding="utf-8")))
+
+          safe_paths: list[str] = []
+          for local_path in sorted(referenced):
+              pure = PurePosixPath(local_path)
+              if pure.is_absolute() or ".." in pure.parts:
+                  raise SystemExit(f"unsafe MSRP localPath: {local_path!r}")
+              source = root.joinpath(*pure.parts)
+              if not source.is_file():
+                  raise SystemExit(f"missing MSRP localPath evidence: {local_path}")
+              if source.resolve() != source.absolute():
+                  raise SystemExit(f"MSRP localPath may not traverse symlinks: {local_path}")
+              safe_paths.append(pure.as_posix())
+
+          output = Path(os.environ["MSRP_LOCAL_PATHS_FILE"])
+          output.write_bytes(b"".join(path.encode("utf-8") + b"\0" for path in safe_paths))
+          print(f"Validated {len(safe_paths)} unique MSRP localPath evidence files")
+          PY
+
+          source_date_epoch="$(tr -d '[:space:]' < "$RUNNER_TEMP/release-source-date-epoch")"
+          [[ "$source_date_epoch" =~ ^[0-9]+$ ]]
+          tar_normalize=(
+            --sort=name
+            --format=gnu
+            --owner=0
+            --group=0
+            --numeric-owner
+            --mtime="@$source_date_epoch"
+          )
+          tar "${tar_normalize[@]}" -cf "$RUNNER_TEMP/JATO_deploy.tar" \
             --exclude='.git' \
             --exclude='node_modules' \
             --exclude='.venv' \
@@ -339,77 +447,366 @@ jobs:
             --exclude='data_wangler' \
             --exclude='Markdown_Readme' \
             -C "$GITHUB_WORKSPACE" .
-          tar rf "$RUNNER_TEMP/JATO_deploy.tar" -C "$GITHUB_WORKSPACE" "$required_workbook"
-          tar rf "$RUNNER_TEMP/JATO_deploy.tar" -C "$GITHUB_WORKSPACE" "$msrp_pack"
-          if [ -f "$mihomo_packaged_config" ]; then
-            tar rf "$RUNNER_TEMP/JATO_deploy.tar" \
-              -C "$mihomo_payload_root" hermes/runtime/mihomo/config.yaml
-          fi
-          gzip -f "$RUNNER_TEMP/JATO_deploy.tar"
+          tar "${tar_normalize[@]}" -rf "$RUNNER_TEMP/JATO_deploy.tar" \
+            -C "$GITHUB_WORKSPACE" "$required_workbook"
+          tar "${tar_normalize[@]}" -rf "$RUNNER_TEMP/JATO_deploy.tar" \
+            -C "$GITHUB_WORKSPACE" "$msrp_pack"
+          mapfile -d '' -t msrp_local_paths < "$msrp_local_paths_file"
+          for evidence_path in "${msrp_local_paths[@]}"; do
+            case "$evidence_path" in
+              "$msrp_pack"/*) ;;
+              *)
+                tar "${tar_normalize[@]}" -rf "$RUNNER_TEMP/JATO_deploy.tar" \
+                  -C "$GITHUB_WORKSPACE" "$evidence_path"
+                ;;
+            esac
+          done
+          gzip -n -f "$RUNNER_TEMP/JATO_deploy.tar"
           tar tzf "$RUNNER_TEMP/JATO_deploy.tar.gz" ./hermes/frontend_release/frontend-release.json
           tar tzf "$RUNNER_TEMP/JATO_deploy.tar.gz" ./hermes/frontend_release/frontend-dist.tar.gz
           tar tzf "$RUNNER_TEMP/JATO_deploy.tar.gz" "$required_workbook"
           tar tzf "$RUNNER_TEMP/JATO_deploy.tar.gz" "$msrp_candidates" "$msrp_evidence"
+          for evidence_path in "${msrp_local_paths[@]}"; do
+            tar tzf "$RUNNER_TEMP/JATO_deploy.tar.gz" "$evidence_path"
+          done
 
-      - name: Install pinned Tencent COS upload SDK
-        run: >-
-          python3 -m pip install
-          --require-hashes
-          --requirement 03_Scripts/deploy/requirements-cos-release.txt
-
-      - name: Upload and HEAD-verify immutable release in COS
-        id: cos_release
+      - name: Upload complete release archive without fallback
+        id: upload_release
         env:
-          COS_RELEASE_BUCKET: ${{ vars.COS_RELEASE_BUCKET }}
-          COS_RELEASE_REGION: ${{ vars.COS_RELEASE_REGION }}
-          COS_RELEASE_UPLOAD_ROLE_ARN: ${{ vars.COS_RELEASE_UPLOAD_ROLE_ARN }}
-          COS_RELEASE_OIDC_PROVIDER_ID: ${{ vars.COS_RELEASE_OIDC_PROVIDER_ID }}
-          COS_RELEASE_OIDC_AUDIENCE: ${{ vars.COS_RELEASE_OIDC_AUDIENCE }}
+          AUTH_MODE: ${{ steps.auth.outputs.mode }}
+          SSH_HOST: ${{ secrets.SSH_HOST }}
+          SSH_USER: ${{ secrets.SSH_USER }}
+          SSH_PORT: ${{ secrets.SSH_PORT }}
+          SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
+          SSH_PASSWORD: ${{ secrets.SSH_PASSWORD }}
         run: |
           set -euo pipefail
-          : "${COS_RELEASE_BUCKET:?Missing production variable COS_RELEASE_BUCKET}"
-          : "${COS_RELEASE_REGION:?Missing production variable COS_RELEASE_REGION}"
-          : "${COS_RELEASE_UPLOAD_ROLE_ARN:?Missing production variable COS_RELEASE_UPLOAD_ROLE_ARN}"
-          : "${COS_RELEASE_OIDC_PROVIDER_ID:?Missing production variable COS_RELEASE_OIDC_PROVIDER_ID}"
-          : "${COS_RELEASE_OIDC_AUDIENCE:?Missing production variable COS_RELEASE_OIDC_AUDIENCE}"
-          python3 03_Scripts/deploy/cos_release_transport.py upload \
-            --archive "$RUNNER_TEMP/JATO_deploy.tar.gz" \
-            --github-sha "$GITHUB_SHA" \
-            --bucket "$COS_RELEASE_BUCKET" \
-            --region "$COS_RELEASE_REGION" \
-            --prefix releases \
-            --role-arn "$COS_RELEASE_UPLOAD_ROLE_ARN" \
-            --provider-id "$COS_RELEASE_OIDC_PROVIDER_ID" \
-            --audience "$COS_RELEASE_OIDC_AUDIENCE" \
-            --repository "$GITHUB_REPOSITORY" \
-            --environment production \
-            --run-id "$GITHUB_RUN_ID" \
-            --run-attempt "$GITHUB_RUN_ATTEMPT" \
-            --receipt "$RUNNER_TEMP/cos-release-candidate.json" \
-            --github-output "$GITHUB_OUTPUT" \
-            --part-size-mib 8 \
-            --threads 4
+          SSH_PORT="${SSH_PORT:-22}"
+          archive="$RUNNER_TEMP/JATO_deploy.tar.gz"
+          archive_bytes="$(wc -c < "$archive" | tr -d '[:space:]')"
+          archive_sha256="$(sha256sum "$archive" | awk '{print $1}')"
+          remote_dir=".cache/jato-releases/archives/${GITHUB_SHA}"
+          remote_archive="${remote_dir}/${archive_sha256}.tar.gz"
+          remote_temp="${remote_archive}.partial"
+          remote_checksum="${remote_archive}.sha256"
+          remote_lock="${remote_archive}.lock"
 
-      - name: Retain candidate COS receipt for final parity
-        uses: actions/upload-artifact@v4
-        with:
-          name: cos-release-candidate-${{ github.sha }}-${{ github.run_attempt }}
-          path: ${{ runner.temp }}/cos-release-candidate.json
-          if-no-files-found: error
-          compression-level: 0
-          overwrite: false
-          retention-days: 7
+          ssh_options=(
+            -T -p "$SSH_PORT"
+            -o StrictHostKeyChecking=yes
+            -o UserKnownHostsFile="$HOME/.ssh/known_hosts"
+            -o ConnectTimeout=20
+            -o ConnectionAttempts=2
+            -o ServerAliveInterval=15
+            -o ServerAliveCountMax=18
+            -o IPQoS=none
+          )
+          missing_packages=()
+          command -v rsync >/dev/null || missing_packages+=(rsync)
+          if [ "$AUTH_MODE" = "password" ]; then
+            command -v sshpass >/dev/null || missing_packages+=(sshpass)
+          fi
+          if [ "${#missing_packages[@]}" -gt 0 ]; then
+            sudo apt-get update -y
+            sudo apt-get install -y "${missing_packages[@]}"
+          fi
+          if [ "$AUTH_MODE" = "key" ]; then
+            install -d -m 700 ~/.ssh
+            printf '%s\n' "$SSH_PRIVATE_KEY" > ~/.ssh/github_actions_tencent_key
+            chmod 600 ~/.ssh/github_actions_tencent_key
+            ssh_command=(ssh -o BatchMode=yes -i ~/.ssh/github_actions_tencent_key)
+          else
+            command -v sshpass >/dev/null
+            export SSHPASS="$SSH_PASSWORD"
+            ssh_command=(sshpass -e ssh -o PreferredAuthentications=password -o PubkeyAuthentication=no)
+          fi
+          test -s "$HOME/.ssh/known_hosts"
+
+          ssh_target="$SSH_USER@$SSH_HOST"
+          run_remote() {
+            local remote_command="$1"
+            local remote_attempt
+            local remote_output
+            for remote_attempt in 1 2 3; do
+              if remote_output="$(
+                timeout 360s "${ssh_command[@]}" "${ssh_options[@]}" \
+                  "$ssh_target" "$remote_command"
+              )"; then
+                printf '%s' "$remote_output"
+                return 0
+              fi
+              echo "::warning::Remote command attempt ${remote_attempt}/3 failed" >&2
+              sleep $((remote_attempt * 5))
+            done
+            return 1
+          }
+
+          require_rsync_3() {
+            local version="$1"
+            local major="${version%%.*}"
+            local remainder="${version#*.}"
+            local minor="${remainder%%.*}"
+            case "$major:$minor" in
+              *[!0-9:]*|:*) return 1 ;;
+            esac
+            [ "$major" -gt 3 ] || { [ "$major" -eq 3 ] && [ "$minor" -ge 0 ]; }
+          }
+
+          local_rsync_version="$(rsync --version | awk 'NR == 1 {print $3}')"
+          if ! require_rsync_3 "$local_rsync_version"; then
+            echo "::error::Local rsync >= 3.0 is required; found $local_rsync_version"
+            exit 1
+          fi
+          remote_rsync_version="$(
+            run_remote \
+              "set -eu; \
+               command -v flock >/dev/null; \
+               command -v sha256sum >/dev/null; \
+               command -v rsync >/dev/null; \
+               rsync --version | awk 'NR == 1 {print \$3}'"
+          )"
+          if ! require_rsync_3 "$remote_rsync_version"; then
+            echo "::error::Remote rsync >= 3.0 is required; found $remote_rsync_version"
+            exit 1
+          fi
+
+          run_remote \
+            "set -eu; \
+             umask 077; \
+             install -d -m 700 '.cache' '.cache/jato-releases' \
+               '.cache/jato-releases/archives' '$remote_dir'; \
+             test ! -L '$remote_dir'"
+
+          inspect_remote_state() {
+            run_remote \
+              "set -eu; \
+               umask 077; \
+               exec 9>'$remote_lock'; \
+               flock -w 300 9; \
+               if [ -e '$remote_archive' ]; then \
+                 if [ ! -f '$remote_archive' ] || [ -L '$remote_archive' ]; then \
+                   printf 'FINAL_BAD|not-a-regular-file'; exit 0; \
+                 fi; \
+                 final_size=\$(wc -c < '$remote_archive' | tr -d '[:space:]'); \
+                 final_sha=\$(sha256sum '$remote_archive' | awk '{print \$1}'); \
+                 if [ \"\$final_size\" = '$archive_bytes' ] && [ \"\$final_sha\" = '$archive_sha256' ]; then \
+                   rm -f '$remote_temp' '$remote_checksum'; \
+                   printf 'REUSE|%s|%s' \"\$final_size\" \"\$final_sha\"; \
+                 else \
+                   printf 'FINAL_BAD|%s|%s' \"\$final_size\" \"\$final_sha\"; \
+                 fi; \
+                 exit 0; \
+               fi; \
+               saved_sha=''; \
+               if [ -f '$remote_checksum' ]; then saved_sha=\$(cat '$remote_checksum'); fi; \
+               if [ -e '$remote_temp' ]; then \
+                 if [ ! -f '$remote_temp' ] || [ -L '$remote_temp' ]; then \
+                   printf 'PARTIAL_BAD|not-a-regular-file'; exit 0; \
+                 fi; \
+                 partial_size=\$(wc -c < '$remote_temp' | tr -d '[:space:]'); \
+                 if [ \"\$saved_sha\" != '$archive_sha256' ] || [ \"\$partial_size\" -gt '$archive_bytes' ]; then \
+                   printf 'PARTIAL_BAD|%s|%s' \"\$partial_size\" \"\$saved_sha\"; exit 0; \
+                 fi; \
+                 if [ \"\$partial_size\" -eq '$archive_bytes' ]; then \
+                   partial_sha=\$(sha256sum '$remote_temp' | awk '{print \$1}'); \
+                   if [ \"\$partial_sha\" != '$archive_sha256' ]; then \
+                     printf 'PARTIAL_BAD|%s|%s' \"\$partial_size\" \"\$partial_sha\"; exit 0; \
+                   fi; \
+                 fi; \
+               else \
+                 if [ -n \"\$saved_sha\" ] && [ \"\$saved_sha\" != '$archive_sha256' ]; then \
+                   printf 'PARTIAL_BAD|missing|%s' \"\$saved_sha\"; exit 0; \
+                 fi; \
+                 : > '$remote_temp'; \
+                 partial_size=0; \
+               fi; \
+               printf '%s\n' '$archive_sha256' > '$remote_checksum'; \
+               available_kib=\$(df -Pk '$remote_dir' | awk 'NR == 2 {print \$4}'); \
+               case \"\$available_kib\" in ''|*[!0-9]*) printf 'DISK_BAD|%s' \"\$available_kib\"; exit 0;; esac; \
+               available_bytes=\$((available_kib * 1024)); \
+               expected_bytes='$archive_bytes'; \
+               required_bytes=\$((expected_bytes - partial_size + 67108864)); \
+               if [ \"\$available_bytes\" -lt \"\$required_bytes\" ]; then \
+                 printf 'NO_SPACE|%s|%s' \"\$available_bytes\" \"\$required_bytes\"; exit 0; \
+               fi; \
+               printf 'READY|%s|%s' \"\$partial_size\" \"\$available_bytes\""
+          }
+
+          partial_reset_used=0
+          reset_bad_partial() {
+            if [ "$partial_reset_used" -ne 0 ]; then
+              echo "::error::Remote partial archive remained invalid after its one allowed reset"
+              return 1
+            fi
+            run_remote \
+              "set -eu; \
+               umask 077; \
+               exec 9>'$remote_lock'; \
+               flock -w 300 9; \
+               test ! -e '$remote_archive'; \
+               rm -f '$remote_temp' '$remote_checksum'; \
+               : > '$remote_temp'; \
+               printf '%s\n' '$archive_sha256' > '$remote_checksum'"
+            partial_reset_used=1
+            echo "::warning::Cleared one invalid remote partial; the next transfer is a full verified upload"
+          }
+
+          printf -v rsync_rsh '%q ' "${ssh_command[@]}" "${ssh_options[@]}"
+          rsync_rsh="${rsync_rsh% }"
+          upload_complete=0
+          for transfer_cycle in 1 2; do
+            remote_state="$(inspect_remote_state)"
+            state_kind="${remote_state%%|*}"
+            case "$state_kind" in
+              REUSE)
+                upload_complete=1
+                echo "Reusing verified immutable remote archive"
+                break
+                ;;
+              PARTIAL_BAD)
+                reset_bad_partial
+                remote_state="$(inspect_remote_state)"
+                state_kind="${remote_state%%|*}"
+                ;;
+              FINAL_BAD)
+                echo "::error::Remote immutable archive exists but size or SHA-256 is wrong: $remote_state"
+                exit 1
+                ;;
+              NO_SPACE)
+                echo "::error::Insufficient remote disk space for resumable release upload: $remote_state"
+                exit 1
+                ;;
+              DISK_BAD)
+                echo "::error::Could not determine remote disk capacity: $remote_state"
+                exit 1
+                ;;
+            esac
+            if [ "$state_kind" != "READY" ]; then
+              echo "::error::Unexpected remote upload state: $remote_state"
+              exit 1
+            fi
+
+            upload_succeeded=0
+            for upload_attempt in 1 2 3 4 5 6; do
+              echo "Rsync append-verify attempt ${upload_attempt}/6 (${remote_state#READY|})"
+              if timeout 900s rsync \
+                --partial \
+                --append-verify \
+                --timeout=300 \
+                --protect-args \
+                --chmod=F600 \
+                -e "$rsync_rsh" \
+                --rsync-path="umask 077 && exec flock -w 870 '$remote_lock' rsync" \
+                "$archive" "$ssh_target:$remote_temp"; then
+                upload_succeeded=1
+                break
+              fi
+              echo "::warning::Rsync attempt ${upload_attempt}/6 disconnected; retained partial will resume"
+              sleep $((upload_attempt * 5))
+            done
+            if [ "$upload_succeeded" -ne 1 ]; then
+              echo "::error::Rsync exhausted six resumable transfer attempts"
+              exit 1
+            fi
+
+            finalize_state="$(
+              run_remote \
+                "set -eu; \
+                 umask 077; \
+                 exec 9>'$remote_lock'; \
+                 flock -w 300 9; \
+                 if [ -e '$remote_archive' ]; then \
+                   if [ ! -f '$remote_archive' ] || [ -L '$remote_archive' ]; then \
+                     printf 'FINAL_BAD|not-a-regular-file'; exit 0; \
+                   fi; \
+                   final_size=\$(wc -c < '$remote_archive' | tr -d '[:space:]'); \
+                   final_sha=\$(sha256sum '$remote_archive' | awk '{print \$1}'); \
+                   if [ \"\$final_size\" = '$archive_bytes' ] && [ \"\$final_sha\" = '$archive_sha256' ]; then \
+                     rm -f '$remote_temp' '$remote_checksum'; \
+                     printf 'REUSE|%s|%s' \"\$final_size\" \"\$final_sha\"; \
+                   else \
+                     printf 'FINAL_BAD|%s|%s' \"\$final_size\" \"\$final_sha\"; \
+                   fi; \
+                   exit 0; \
+                 fi; \
+                 partial_size=\$(wc -c < '$remote_temp' | tr -d '[:space:]'); \
+                 partial_sha=\$(sha256sum '$remote_temp' | awk '{print \$1}'); \
+                 if [ \"\$partial_size\" != '$archive_bytes' ] || [ \"\$partial_sha\" != '$archive_sha256' ]; then \
+                   printf 'PARTIAL_BAD|%s|%s' \"\$partial_size\" \"\$partial_sha\"; exit 0; \
+                 fi; \
+                 test ! -e '$remote_archive'; \
+                 ln '$remote_temp' '$remote_archive'; \
+                 chmod 600 '$remote_archive'; \
+                 rm -f '$remote_temp' '$remote_checksum'; \
+                 printf 'SEALED|%s|%s' \"\$partial_size\" \"\$partial_sha\""
+            )"
+            case "${finalize_state%%|*}" in
+              SEALED|REUSE)
+                upload_complete=1
+                break
+                ;;
+              PARTIAL_BAD)
+                reset_bad_partial
+                ;;
+              FINAL_BAD)
+                echo "::error::Remote immutable archive failed closed: $finalize_state"
+                exit 1
+                ;;
+              *)
+                echo "::error::Unexpected remote finalization state: $finalize_state"
+                exit 1
+                ;;
+            esac
+          done
+          if [ "$upload_complete" -ne 1 ]; then
+            echo "::error::Remote archive was not sealed after the allowed full retransmit"
+            exit 1
+          fi
+
+          echo "remote-archive=$remote_archive" >> "$GITHUB_OUTPUT"
+          echo "archive-bytes=$archive_bytes" >> "$GITHUB_OUTPUT"
+          echo "archive-sha256=$archive_sha256" >> "$GITHUB_OUTPUT"
+          {
+            echo "### Tencent release transport"
+            echo "- Remote path: \`$remote_archive\`"
+            echo "- Bytes: \`$archive_bytes\`"
+            echo "- SHA-256: \`$archive_sha256\`"
+            echo "- Rsync: local \`$local_rsync_version\`, remote \`$remote_rsync_version\`"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Record transport-verified candidate checkpoint
+        env:
+          ARCHIVE_BYTES: ${{ steps.upload_release.outputs.archive-bytes }}
+          ARCHIVE_SHA256: ${{ steps.upload_release.outputs.archive-sha256 }}
+          BUILD_RUN_ATTEMPT: ${{ needs.build_frontend.outputs.workflow_run_attempt }}
+          FRONTEND_IDENTITY: ${{ needs.build_frontend.outputs.artifact_identity }}
+          FRONTEND_CHECKSUM: ${{ needs.build_frontend.outputs.artifact_checksum }}
+        run: |
+          set -euo pipefail
+          checkpoint_dir="$RUNNER_TEMP/release-checkpoint"
+          install -d -m 700 "$checkpoint_dir"
+          python3 03_Scripts/deploy/release_checkpoint.py write \
+            --checkpoint "$checkpoint_dir/candidate.json" \
+            --journal "$checkpoint_dir/journal.jsonl" \
+            --repository "$GITHUB_REPOSITORY" \
+            --commit "$GITHUB_SHA" \
+            --archive-sha256 "$ARCHIVE_SHA256" \
+            --archive-bytes "$ARCHIVE_BYTES" \
+            --run-id "$GITHUB_RUN_ID" \
+            --run-attempt "$BUILD_RUN_ATTEMPT" \
+            --frontend-identity "$FRONTEND_IDENTITY" \
+            --frontend-checksum "$FRONTEND_CHECKSUM" \
+            --phase transport_verified \
+            --status completed \
+            --retry-class inspect_then_resume \
+            --message "Immutable SSH archive size and SHA-256 verified on Tencent"
 
       - name: Deploy verified release on Tencent
         env:
           AUTH_MODE: ${{ steps.auth.outputs.mode }}
-          DEPLOY_COS_BUCKET: ${{ steps.cos_release.outputs.bucket }}
-          DEPLOY_COS_REGION: ${{ steps.cos_release.outputs.region }}
-          DEPLOY_COS_OBJECT_KEY: ${{ steps.cos_release.outputs.object-key }}
-          DEPLOY_ARCHIVE_BYTES: ${{ steps.cos_release.outputs.archive-bytes }}
-          DEPLOY_ARCHIVE_SHA256: ${{ steps.cos_release.outputs.archive-sha256 }}
-          DEPLOY_ARCHIVE_CRC64: ${{ steps.cos_release.outputs.archive-crc64 }}
-          DEPLOY_COS_CVM_ROLE_NAME: ${{ vars.COS_RELEASE_CVM_ROLE_NAME }}
+          DEPLOY_ARCHIVE_PATH: ${{ steps.upload_release.outputs.remote-archive }}
+          DEPLOY_ARCHIVE_BYTES: ${{ steps.upload_release.outputs.archive-bytes }}
+          DEPLOY_ARCHIVE_SHA256: ${{ steps.upload_release.outputs.archive-sha256 }}
           SSH_HOST: ${{ secrets.SSH_HOST }}
           SSH_USER: ${{ secrets.SSH_USER }}
           SSH_PORT: ${{ secrets.SSH_PORT }}
@@ -434,9 +831,10 @@ jobs:
           GITHUB_ARTIFACT_DIGEST: ${{ needs.build_frontend.outputs.github_artifact_digest }}
           FRONTEND_BUILD_ID: ${{ needs.build_frontend.outputs.frontend_build_id }}
           NODE_VERSION: ${{ needs.build_frontend.outputs.node_version }}
+          RELEASE_ID: ${{ needs.build_frontend.outputs.release_id }}
+          BUILD_RUN_ATTEMPT: ${{ needs.build_frontend.outputs.workflow_run_attempt }}
         run: |
           set -euo pipefail
-          : "${DEPLOY_COS_CVM_ROLE_NAME:?Missing production variable COS_RELEASE_CVM_ROLE_NAME}"
           SSH_PORT="${SSH_PORT:-22}"
           DEPLOY_SERVER_NAME="${DEPLOY_SERVER_NAME:-ojeur.cloud www.ojeur.cloud}"
           DEPLOY_ENABLE_HTTPS="${DEPLOY_ENABLE_HTTPS:-true}"
@@ -457,54 +855,255 @@ jobs:
             chmod 600 ~/.ssh/github_actions_tencent_key
             ssh_command=(ssh -o BatchMode=yes -i ~/.ssh/github_actions_tencent_key)
           else
+            command -v sshpass >/dev/null
             export SSHPASS="$SSH_PASSWORD"
             ssh_command=(sshpass -e ssh -o PreferredAuthentications=password -o PubkeyAuthentication=no)
           fi
 
-          remote_payload="$(mktemp "$RUNNER_TEMP/jato-remote-release.XXXXXX")"
-          cleanup_remote_payload() {
-            rm -f "$remote_payload" ~/.ssh/github_actions_tencent_key
+          control_payload="$RUNNER_TEMP/tencent-release-control.sh"
+          umask 077
+          : > "$control_payload"
+          chmod 600 "$control_payload"
+          trap 'rm -f "$control_payload"' EXIT
+          write_remote_export() {
+            local name="$1"
+            local value="$2"
+            printf 'export %s=%q\n' "$name" "$value" >> "$control_payload"
           }
-          trap cleanup_remote_payload EXIT
-          emit_export() {
-            printf 'export %s=%q\n' "$1" "$2"
-          }
-          {
-            emit_export DEPLOY_SERVER_NAME "$DEPLOY_SERVER_NAME"
-            emit_export DEPLOY_ENABLE_HTTPS "$DEPLOY_ENABLE_HTTPS"
-            emit_export DEPLOY_CERTBOT_EMAIL "${DEPLOY_CERTBOT_EMAIL:-}"
-            emit_export DEPLOY_BRANCH main
-            emit_export DEPLOY_COMMIT_SHA "$GITHUB_SHA"
-            emit_export DEPLOY_SHORT_SHA "$deploy_short_sha"
-            emit_export DEPLOY_RELEASE_ID "$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
-            emit_export DEPLOY_RUN_ID "$GITHUB_RUN_ID"
-            emit_export DEPLOY_RUN_ATTEMPT "$GITHUB_RUN_ATTEMPT"
-            emit_export DEPLOY_COS_BUCKET "$DEPLOY_COS_BUCKET"
-            emit_export DEPLOY_COS_REGION "$DEPLOY_COS_REGION"
-            emit_export DEPLOY_COS_OBJECT_KEY "$DEPLOY_COS_OBJECT_KEY"
-            emit_export DEPLOY_ARCHIVE_BYTES "$DEPLOY_ARCHIVE_BYTES"
-            emit_export DEPLOY_ARCHIVE_SHA256 "$DEPLOY_ARCHIVE_SHA256"
-            emit_export DEPLOY_ARCHIVE_CRC64 "$DEPLOY_ARCHIVE_CRC64"
-            emit_export DEPLOY_COS_CVM_ROLE_NAME "$DEPLOY_COS_CVM_ROLE_NAME"
-            emit_export DEPLOY_REPOSITORY "$GITHUB_REPOSITORY"
-            emit_export DEPLOY_WORKFLOW "$GITHUB_WORKFLOW"
-            emit_export FRONTEND_ARTIFACT_NAME "$ARTIFACT_NAME"
-            emit_export FRONTEND_ARTIFACT_IDENTITY "$ARTIFACT_IDENTITY"
-            emit_export FRONTEND_ARTIFACT_CHECKSUM "$ARTIFACT_CHECKSUM"
-            emit_export FRONTEND_GITHUB_ARTIFACT_ID "$GITHUB_ARTIFACT_ID"
-            emit_export FRONTEND_GITHUB_ARTIFACT_DIGEST "$GITHUB_ARTIFACT_DIGEST"
-            emit_export FRONTEND_BUILD_ID "$FRONTEND_BUILD_ID"
-            emit_export FRONTEND_NODE_VERSION "$NODE_VERSION"
-            for secret_name in DEEPSEEK_API_KEY HERMES_SYNC_TOKEN GOOGLE_CLIENT_ID GOOGLE_CLIENT_SECRET GOOGLE_OAUTH_PROXY_URL GOOGLE_OAUTH_RELAY_URL GOOGLE_OAUTH_RELAY_TOKEN MIHOMO_SUB_URL MIHOMO_DB_PATH; do
-              emit_export "$secret_name" "${!secret_name:-}"
-            done
-            printf '\n'
-            sed '1{/^#!.*bash$/d;}' 03_Scripts/deploy/fullstack_remote_release.sh
-          } > "$remote_payload"
-          chmod 600 "$remote_payload"
+          write_remote_export DEPLOY_SERVER_NAME "$DEPLOY_SERVER_NAME"
+          write_remote_export DEPLOY_ENABLE_HTTPS "$DEPLOY_ENABLE_HTTPS"
+          write_remote_export DEPLOY_CERTBOT_EMAIL "${DEPLOY_CERTBOT_EMAIL:-}"
+          # export DEPLOY_BRANCH=main is carried inside the private stdin payload.
+          write_remote_export DEPLOY_BRANCH main
+          write_remote_export DEPLOY_COMMIT_SHA "$GITHUB_SHA"
+          write_remote_export DEPLOY_SHORT_SHA "$deploy_short_sha"
+          write_remote_export DEPLOY_RELEASE_ID "$RELEASE_ID"
+          write_remote_export DEPLOY_RUN_ID "$GITHUB_RUN_ID"
+          write_remote_export DEPLOY_RUN_ATTEMPT "$BUILD_RUN_ATTEMPT"
+          write_remote_export DEPLOY_ARCHIVE_PATH "$DEPLOY_ARCHIVE_PATH"
+          write_remote_export DEPLOY_ARCHIVE_BYTES "$DEPLOY_ARCHIVE_BYTES"
+          write_remote_export DEPLOY_ARCHIVE_SHA256 "$DEPLOY_ARCHIVE_SHA256"
+          write_remote_export DEPLOY_REPOSITORY "$GITHUB_REPOSITORY"
+          write_remote_export DEPLOY_WORKFLOW "$GITHUB_WORKFLOW"
+          write_remote_export FRONTEND_ARTIFACT_NAME "$ARTIFACT_NAME"
+          write_remote_export FRONTEND_ARTIFACT_IDENTITY "$ARTIFACT_IDENTITY"
+          write_remote_export FRONTEND_ARTIFACT_CHECKSUM "$ARTIFACT_CHECKSUM"
+          write_remote_export FRONTEND_GITHUB_ARTIFACT_ID "$GITHUB_ARTIFACT_ID"
+          write_remote_export FRONTEND_GITHUB_ARTIFACT_DIGEST "$GITHUB_ARTIFACT_DIGEST"
+          write_remote_export FRONTEND_BUILD_ID "$FRONTEND_BUILD_ID"
+          write_remote_export FRONTEND_NODE_VERSION "$NODE_VERSION"
+          for secret_name in DEEPSEEK_API_KEY HERMES_SYNC_TOKEN GOOGLE_CLIENT_ID GOOGLE_CLIENT_SECRET GOOGLE_OAUTH_PROXY_URL GOOGLE_OAUTH_RELAY_URL GOOGLE_OAUTH_RELAY_TOKEN MIHOMO_SUB_URL MIHOMO_DB_PATH; do
+            write_remote_export "$secret_name" "${!secret_name:-}"
+          done
+          cat 03_Scripts/deploy/fullstack_remote_release.sh >> "$control_payload"
 
-          timeout 1800s "${ssh_command[@]}" "${ssh_options[@]}" \
-            "$SSH_USER@$SSH_HOST" 'exec bash -s' < "$remote_payload"
+          timeout 1800s "${ssh_command[@]}" "${ssh_options[@]}" "$SSH_USER@$SSH_HOST" \
+            "umask 077; exec bash -s" < "$control_payload"
+
+      - name: Fetch and attest server release checkpoint
+        id: server_attestation
+        env:
+          AUTH_MODE: ${{ steps.auth.outputs.mode }}
+          ARCHIVE_BYTES: ${{ steps.upload_release.outputs.archive-bytes }}
+          ARCHIVE_SHA256: ${{ steps.upload_release.outputs.archive-sha256 }}
+          SSH_HOST: ${{ secrets.SSH_HOST }}
+          SSH_USER: ${{ secrets.SSH_USER }}
+          SSH_PORT: ${{ secrets.SSH_PORT }}
+          SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
+          SSH_PASSWORD: ${{ secrets.SSH_PASSWORD }}
+          BUILD_RUN_ATTEMPT: ${{ needs.build_frontend.outputs.workflow_run_attempt }}
+          RELEASE_ID: ${{ needs.build_frontend.outputs.release_id }}
+          FRONTEND_IDENTITY: ${{ needs.build_frontend.outputs.artifact_identity }}
+          FRONTEND_CHECKSUM: ${{ needs.build_frontend.outputs.artifact_checksum }}
+        run: |
+          set -euo pipefail
+          SSH_PORT="${SSH_PORT:-22}"
+          ssh_options=(
+            -T -p "$SSH_PORT"
+            -o StrictHostKeyChecking=yes
+            -o UserKnownHostsFile="$HOME/.ssh/known_hosts"
+            -o ConnectTimeout=20
+            -o ConnectionAttempts=2
+            -o ServerAliveInterval=10
+            -o ServerAliveCountMax=2
+          )
+          if [ "$AUTH_MODE" = "key" ]; then
+            install -d -m 700 ~/.ssh
+            printf '%s\n' "$SSH_PRIVATE_KEY" > ~/.ssh/github_actions_tencent_key
+            chmod 600 ~/.ssh/github_actions_tencent_key
+            ssh_command=(ssh -o BatchMode=yes -i ~/.ssh/github_actions_tencent_key)
+          else
+            command -v sshpass >/dev/null
+            export SSHPASS="$SSH_PASSWORD"
+            ssh_command=(sshpass -e ssh -o PreferredAuthentications=password -o PubkeyAuthentication=no)
+          fi
+          command -v rsync >/dev/null
+          test -s "$HOME/.ssh/known_hosts"
+          ssh_target="$SSH_USER@$SSH_HOST"
+          server_dir="$RUNNER_TEMP/release-checkpoint/server"
+          install -d -m 700 "$server_dir"
+          attestation_complete=false
+          trap 'if [ "$attestation_complete" != true ]; then rm -rf "$server_dir"; fi' EXIT
+
+          remote_home="$(
+            timeout 60s "${ssh_command[@]}" "${ssh_options[@]}" "$ssh_target" \
+              'set -eu; printf "%s" "$HOME"'
+          )"
+          case "$remote_home" in
+            /*) remote_home="${remote_home%/}" ;;
+            *) echo "::error::Tencent SSH returned an invalid home directory"; exit 1 ;;
+          esac
+          remote_state_dir=".local/state/jato-production-release/checkpoints/${GITHUB_SHA}"
+          remote_checkpoint="${remote_state_dir}/${ARCHIVE_SHA256}.json"
+          remote_evidence="${remote_state_dir}/${ARCHIVE_SHA256}.evidence.json"
+          printf -v rsync_rsh '%q ' "${ssh_command[@]}" "${ssh_options[@]}"
+          rsync_rsh="${rsync_rsh% }"
+          timeout 120s rsync --links --times --protect-args --chmod=F600 \
+            --no-owner --no-group -e "$rsync_rsh" \
+            "$ssh_target:$remote_checkpoint" "$server_dir/backend-healthy.json"
+          timeout 120s rsync --links --times --protect-args --chmod=F600 \
+            --no-owner --no-group -e "$rsync_rsh" \
+            "$ssh_target:$remote_evidence" "$server_dir/backend-healthy.evidence.json"
+
+          python3 03_Scripts/deploy/release_checkpoint.py show \
+            --checkpoint "$server_dir/backend-healthy.json" >/dev/null
+          python3 - \
+            "$server_dir/backend-healthy.json" \
+            "$server_dir/backend-healthy.evidence.json" \
+            "$server_dir/attestation.json" \
+            "$remote_home/$remote_evidence" \
+            "$GITHUB_REPOSITORY" "$GITHUB_SHA" "$ARCHIVE_SHA256" "$ARCHIVE_BYTES" \
+            "$GITHUB_RUN_ID" "$BUILD_RUN_ATTEMPT" "$FRONTEND_IDENTITY" \
+            "$FRONTEND_CHECKSUM" "$RELEASE_ID" <<'PY'
+          import hashlib
+          import json
+          from pathlib import Path
+          import re
+          import stat
+          import sys
+
+          (
+              checkpoint_name,
+              evidence_name,
+              attestation_name,
+              remote_evidence_path,
+              repository,
+              commit,
+              archive_sha256,
+              archive_bytes,
+              run_id,
+              run_attempt,
+              frontend_identity,
+              frontend_checksum,
+              release_id,
+          ) = sys.argv[1:]
+
+          def read_private_json(name: str, label: str) -> tuple[dict[str, object], bytes]:
+              path = Path(name)
+              mode = path.lstat().st_mode
+              if not stat.S_ISREG(mode) or path.is_symlink():
+                  raise SystemExit(f"{label} must be a regular non-symlink file")
+              raw = path.read_bytes()
+              if not raw or len(raw) > 1_048_576:
+                  raise SystemExit(f"{label} has an invalid size")
+              payload = json.loads(raw.decode("utf-8"))
+              if not isinstance(payload, dict):
+                  raise SystemExit(f"{label} root must be an object")
+              return payload, raw
+
+          checkpoint, checkpoint_raw = read_private_json(
+              checkpoint_name,
+              "server checkpoint",
+          )
+          evidence, evidence_raw = read_private_json(
+              evidence_name,
+              "server evidence",
+          )
+          expected_identity = {
+              "repository": repository,
+              "commit": commit,
+              "archiveSha256": archive_sha256,
+              "archiveBytes": int(archive_bytes),
+              "runId": int(run_id),
+              "runAttempt": int(run_attempt),
+              "frontendIdentity": frontend_identity,
+              "frontendChecksum": frontend_checksum,
+          }
+          if checkpoint.get("identity") != expected_identity:
+              raise SystemExit("server checkpoint identity mismatch")
+          if checkpoint.get("phase") != "backend_healthy" or checkpoint.get("status") != "completed":
+              raise SystemExit("server checkpoint is not backend_healthy/completed")
+          if checkpoint.get("retryClass") != "automatic":
+              raise SystemExit("server checkpoint has an unexpected retry class")
+
+          evidence_sha256 = hashlib.sha256(evidence_raw).hexdigest()
+          message = checkpoint.get("message")
+          if not isinstance(message, str):
+              raise SystemExit("server checkpoint does not bind release evidence")
+          binding = re.search(
+              r"(?:^|[; ])evidence_path=(\S+) evidence_sha256=([0-9a-f]{64})(?:$|[; ])",
+              message,
+          )
+          if (
+              binding is None
+              or binding.group(1) != remote_evidence_path
+              or binding.group(2) != evidence_sha256
+          ):
+              raise SystemExit("server checkpoint evidence binding mismatch")
+          if evidence.get("identity") != expected_identity:
+              raise SystemExit("server evidence identity mismatch")
+
+          backup = evidence.get("backup")
+          if not isinstance(backup, dict):
+              raise SystemExit("server evidence is missing backup metadata")
+          manifest_path = backup.get("manifestPath")
+          manifest_bytes = backup.get("manifestBytes")
+          manifest_sha256 = backup.get("manifestSha256")
+          if (
+              not isinstance(manifest_path, str)
+              or not manifest_path.startswith("/")
+              or not isinstance(manifest_bytes, int)
+              or manifest_bytes <= 0
+              or not isinstance(manifest_sha256, str)
+              or re.fullmatch(r"[0-9a-f]{64}", manifest_sha256) is None
+          ):
+              raise SystemExit("server evidence backup manifest identity is incomplete")
+          migration = evidence.get("migration")
+          if not isinstance(migration, dict) or migration.get("status") not in {
+              "completed",
+              "not_required",
+          }:
+              raise SystemExit("server evidence migration outcome is not final")
+
+          attestation = {
+              "schemaVersion": 1,
+              "releaseId": release_id,
+              "identity": expected_identity,
+              "serverCheckpoint": {
+                  "remotePath": remote_evidence_path.removesuffix(".evidence.json") + ".json",
+                  "sha256": hashlib.sha256(checkpoint_raw).hexdigest(),
+                  "phase": "backend_healthy",
+                  "status": "completed",
+              },
+              "serverEvidence": {
+                  "remotePath": remote_evidence_path,
+                  "sha256": evidence_sha256,
+                  "backupManifestBytes": manifest_bytes,
+                  "backupManifestSha256": manifest_sha256,
+                  "migrationStatus": migration["status"],
+              },
+          }
+          output = Path(attestation_name)
+          output.write_text(
+              json.dumps(attestation, indent=2, sort_keys=True) + "\n",
+              encoding="utf-8",
+          )
+          output.chmod(0o600)
+          PY
+          attestation_sha256="$(sha256sum "$server_dir/attestation.json" | awk '{print $1}')"
+          echo "attestation-sha256=$attestation_sha256" >> "$GITHUB_OUTPUT"
+          echo "Server checkpoint/evidence attestation SHA-256: $attestation_sha256"
+          attestation_complete=true
 
       - name: Verify Tencent public release provenance
         env:
@@ -515,6 +1114,7 @@ jobs:
           GITHUB_ARTIFACT_DIGEST: ${{ needs.build_frontend.outputs.github_artifact_digest }}
           FRONTEND_BUILD_ID: ${{ needs.build_frontend.outputs.frontend_build_id }}
           NODE_VERSION: ${{ needs.build_frontend.outputs.node_version }}
+          BUILD_RUN_ATTEMPT: ${{ needs.build_frontend.outputs.workflow_run_attempt }}
           PUBLIC_ORIGINS: ${{ vars.DEPLOY_PUBLIC_BUILD_META_URLS || 'https://www.ojeur.cloud https://ojeur.cloud' }}
         run: |
           set -euo pipefail
@@ -531,14 +1131,144 @@ jobs:
             --expected-build-id "$FRONTEND_BUILD_ID" \
             --expected-node-version "$NODE_VERSION" \
             --expected-run-id "$GITHUB_RUN_ID" \
-            --expected-run-attempt "$GITHUB_RUN_ATTEMPT" \
+            --expected-run-attempt "$BUILD_RUN_ATTEMPT" \
             --github-artifact-id "$GITHUB_ARTIFACT_ID" \
             --github-artifact-digest "$GITHUB_ARTIFACT_DIGEST" \
             --attempts 24 \
             --delay-seconds 10 \
             "${origin_args[@]}"
 
+      - name: Verify www runtime API contract
+        env:
+          PUBLIC_ORIGINS: ${{ vars.DEPLOY_PUBLIC_BUILD_META_URLS || 'https://www.ojeur.cloud https://ojeur.cloud' }}
+        run: |
+          set -euo pipefail
+          for origin in $PUBLIC_ORIGINS; do
+            python3 03_Scripts/deploy/verify_intl_runtime_contract.py \
+              --profile www \
+              --origin "$origin" \
+              --attempts 24 \
+              --delay-seconds 10 \
+              --timeout-seconds 20
+          done
+
+      - name: Record www-verified candidate checkpoint
+        env:
+          ARCHIVE_BYTES: ${{ steps.upload_release.outputs.archive-bytes }}
+          ARCHIVE_SHA256: ${{ steps.upload_release.outputs.archive-sha256 }}
+          BUILD_RUN_ATTEMPT: ${{ needs.build_frontend.outputs.workflow_run_attempt }}
+          FRONTEND_IDENTITY: ${{ needs.build_frontend.outputs.artifact_identity }}
+          FRONTEND_CHECKSUM: ${{ needs.build_frontend.outputs.artifact_checksum }}
+        run: |
+          set -euo pipefail
+          python3 03_Scripts/deploy/release_checkpoint.py write \
+            --checkpoint "$RUNNER_TEMP/release-checkpoint/candidate.json" \
+            --journal "$RUNNER_TEMP/release-checkpoint/journal.jsonl" \
+            --repository "$GITHUB_REPOSITORY" \
+            --commit "$GITHUB_SHA" \
+            --archive-sha256 "$ARCHIVE_SHA256" \
+            --archive-bytes "$ARCHIVE_BYTES" \
+            --run-id "$GITHUB_RUN_ID" \
+            --run-attempt "$BUILD_RUN_ATTEMPT" \
+            --frontend-identity "$FRONTEND_IDENTITY" \
+            --frontend-checksum "$FRONTEND_CHECKSUM" \
+            --phase www_verified \
+            --status completed \
+            --retry-class automatic
+
+      - name: Check whether intl already serves the immutable release
+        id: intl_current
+        env:
+          ARTIFACT_NAME: ${{ needs.build_frontend.outputs.artifact_name }}
+          ARTIFACT_IDENTITY: ${{ needs.build_frontend.outputs.artifact_identity }}
+          ARTIFACT_CHECKSUM: ${{ needs.build_frontend.outputs.artifact_checksum }}
+          GITHUB_ARTIFACT_ID: ${{ needs.build_frontend.outputs.github_artifact_id }}
+          GITHUB_ARTIFACT_DIGEST: ${{ needs.build_frontend.outputs.github_artifact_digest }}
+          FRONTEND_BUILD_ID: ${{ needs.build_frontend.outputs.frontend_build_id }}
+          NODE_VERSION: ${{ needs.build_frontend.outputs.node_version }}
+          BUILD_RUN_ATTEMPT: ${{ needs.build_frontend.outputs.workflow_run_attempt }}
+          EXPECTED_SHA: ${{ github.sha }}
+          JATO_INTL_ORIGIN: ${{ vars.JATO_INTL_ORIGIN || 'https://intl.ojeur.cloud' }}
+        run: |
+          set -euo pipefail
+          if python3 03_Scripts/deploy/frontend_release_artifact.py audit-public \
+            --release-dir "$RUNNER_TEMP/frontend-release" \
+            --expected-github-sha "$GITHUB_SHA" \
+            --expected-artifact-name "$ARTIFACT_NAME" \
+            --expected-artifact-identity "$ARTIFACT_IDENTITY" \
+            --expected-artifact-checksum "$ARTIFACT_CHECKSUM" \
+            --expected-build-id "$FRONTEND_BUILD_ID" \
+            --expected-node-version "$NODE_VERSION" \
+            --expected-run-id "$GITHUB_RUN_ID" \
+            --expected-run-attempt "$BUILD_RUN_ATTEMPT" \
+            --github-artifact-id "$GITHUB_ARTIFACT_ID" \
+            --github-artifact-digest "$GITHUB_ARTIFACT_DIGEST" \
+            --origin "$JATO_INTL_ORIGIN" \
+            --attempts 1 \
+            --delay-seconds 0; then
+            echo "current=true" >> "$GITHUB_OUTPUT"
+            echo "Intl already serves the exact immutable release; deployment will be skipped"
+            exit 0
+          fi
+
+          provenance="$RUNNER_TEMP/intl-current-provenance.json"
+          status="$(curl --silent --show-error --location \
+            --connect-timeout 10 --max-time 30 \
+            --output "$provenance" --write-out '%{http_code}' \
+            "$JATO_INTL_ORIGIN/release-provenance.json?release_probe=$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT")"
+          if [ "$status" != "200" ]; then
+            echo "::error::Intl provenance probe was ambiguous (HTTP $status); refusing to redeploy"
+            exit 1
+          fi
+          current_sha="$(python3 - "$provenance" <<'PY'
+          import json
+          import sys
+          from pathlib import Path
+
+          payload = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
+          source = payload.get("source")
+          if not isinstance(source, dict):
+              raise SystemExit("intl provenance is missing source metadata")
+          sha = source.get("githubSha")
+          if not isinstance(sha, str) or len(sha) != 40:
+              raise SystemExit("intl provenance has an invalid githubSha")
+          print(sha)
+          PY
+          )"
+          if [ "$current_sha" = "$EXPECTED_SHA" ]; then
+            echo "::error::Intl serves the target SHA with conflicting artifact provenance; refusing to redeploy"
+            exit 1
+          fi
+          echo "current=false" >> "$GITHUB_OUTPUT"
+          echo "Intl currently serves $current_sha; target deployment is required"
+
+      - name: Record intl deployment ambiguity boundary
+        env:
+          ARCHIVE_BYTES: ${{ steps.upload_release.outputs.archive-bytes }}
+          ARCHIVE_SHA256: ${{ steps.upload_release.outputs.archive-sha256 }}
+          BUILD_RUN_ATTEMPT: ${{ needs.build_frontend.outputs.workflow_run_attempt }}
+          FRONTEND_IDENTITY: ${{ needs.build_frontend.outputs.artifact_identity }}
+          FRONTEND_CHECKSUM: ${{ needs.build_frontend.outputs.artifact_checksum }}
+        run: |
+          set -euo pipefail
+          python3 03_Scripts/deploy/release_checkpoint.py write \
+            --checkpoint "$RUNNER_TEMP/release-checkpoint/candidate.json" \
+            --journal "$RUNNER_TEMP/release-checkpoint/journal.jsonl" \
+            --repository "$GITHUB_REPOSITORY" \
+            --commit "$GITHUB_SHA" \
+            --archive-sha256 "$ARCHIVE_SHA256" \
+            --archive-bytes "$ARCHIVE_BYTES" \
+            --run-id "$GITHUB_RUN_ID" \
+            --run-attempt "$BUILD_RUN_ATTEMPT" \
+            --frontend-identity "$FRONTEND_IDENTITY" \
+            --frontend-checksum "$FRONTEND_CHECKSUM" \
+            --phase intl_deploy_started \
+            --status in_progress \
+            --retry-class inspect_then_resume \
+            --message "Inspect public intl provenance before retrying an interrupted deploy"
+
       - name: Deploy downloaded dist to Cloudflare Pages
+        if: ${{ steps.intl_current.outputs.current != 'true' }}
         working-directory: ${{ runner.temp }}/cloudflare-pages-project
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
@@ -546,12 +1276,21 @@ jobs:
           CLOUDFLARE_PAGES_PROJECT_NAME: ${{ vars.CLOUDFLARE_PAGES_PROJECT_NAME || secrets.CLOUDFLARE_PAGES_PROJECT_NAME }}
         run: |
           set -euo pipefail
-          npx --yes "wrangler@$WRANGLER_VERSION" pages deploy "$RUNNER_TEMP/frontend-dist" \
-            --project-name "$CLOUDFLARE_PAGES_PROJECT_NAME" \
-            --branch "$GITHUB_REF_NAME" \
-            --commit-hash "$GITHUB_SHA" \
-            --commit-message "$GITHUB_SHA" \
-            --commit-dirty=true
+          for deploy_attempt in 1 2 3; do
+            if npx --yes "wrangler@$WRANGLER_VERSION" pages deploy "$RUNNER_TEMP/frontend-dist" \
+              --project-name "$CLOUDFLARE_PAGES_PROJECT_NAME" \
+              --branch "$GITHUB_REF_NAME" \
+              --commit-hash "$GITHUB_SHA" \
+              --commit-message "$GITHUB_SHA" \
+              --commit-dirty=true; then
+              exit 0
+            fi
+            if [ "$deploy_attempt" -eq 3 ]; then
+              echo "::error::Cloudflare deployment failed after three bounded attempts"
+              exit 1
+            fi
+            sleep $((deploy_attempt * 10))
+          done
 
       - name: Verify intl public release provenance
         env:
@@ -562,6 +1301,7 @@ jobs:
           GITHUB_ARTIFACT_DIGEST: ${{ needs.build_frontend.outputs.github_artifact_digest }}
           FRONTEND_BUILD_ID: ${{ needs.build_frontend.outputs.frontend_build_id }}
           NODE_VERSION: ${{ needs.build_frontend.outputs.node_version }}
+          BUILD_RUN_ATTEMPT: ${{ needs.build_frontend.outputs.workflow_run_attempt }}
           JATO_INTL_ORIGIN: ${{ vars.JATO_INTL_ORIGIN || 'https://intl.ojeur.cloud' }}
         run: |
           set -euo pipefail
@@ -574,7 +1314,7 @@ jobs:
             --expected-build-id "$FRONTEND_BUILD_ID" \
             --expected-node-version "$NODE_VERSION" \
             --expected-run-id "$GITHUB_RUN_ID" \
-            --expected-run-attempt "$GITHUB_RUN_ATTEMPT" \
+            --expected-run-attempt "$BUILD_RUN_ATTEMPT" \
             --github-artifact-id "$GITHUB_ARTIFACT_ID" \
             --github-artifact-digest "$GITHUB_ARTIFACT_DIGEST" \
             --origin "$JATO_INTL_ORIGIN" \
@@ -592,6 +1332,41 @@ jobs:
             --delay-seconds 10 \
             --timeout-seconds 20
 
+      - name: Record intl-verified candidate checkpoint
+        env:
+          ARCHIVE_BYTES: ${{ steps.upload_release.outputs.archive-bytes }}
+          ARCHIVE_SHA256: ${{ steps.upload_release.outputs.archive-sha256 }}
+          BUILD_RUN_ATTEMPT: ${{ needs.build_frontend.outputs.workflow_run_attempt }}
+          FRONTEND_IDENTITY: ${{ needs.build_frontend.outputs.artifact_identity }}
+          FRONTEND_CHECKSUM: ${{ needs.build_frontend.outputs.artifact_checksum }}
+        run: |
+          set -euo pipefail
+          python3 03_Scripts/deploy/release_checkpoint.py write \
+            --checkpoint "$RUNNER_TEMP/release-checkpoint/candidate.json" \
+            --journal "$RUNNER_TEMP/release-checkpoint/journal.jsonl" \
+            --repository "$GITHUB_REPOSITORY" \
+            --commit "$GITHUB_SHA" \
+            --archive-sha256 "$ARCHIVE_SHA256" \
+            --archive-bytes "$ARCHIVE_BYTES" \
+            --run-id "$GITHUB_RUN_ID" \
+            --run-attempt "$BUILD_RUN_ATTEMPT" \
+            --frontend-identity "$FRONTEND_IDENTITY" \
+            --frontend-checksum "$FRONTEND_CHECKSUM" \
+            --phase intl_verified \
+            --status completed \
+            --retry-class automatic
+
+      - name: Retain candidate release checkpoint
+        if: ${{ always() && steps.upload_release.outcome == 'success' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-candidate-${{ github.sha }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/release-checkpoint
+          if-no-files-found: error
+          compression-level: 0
+          overwrite: false
+          retention-days: 7
+
   audit_frontend_parity:
     if: ${{ github.ref == 'refs/heads/main' }}
     needs: [build_frontend, deploy_tencent]
@@ -608,6 +1383,12 @@ jobs:
           artifact-ids: ${{ needs.build_frontend.outputs.github_artifact_id }}
           path: ${{ runner.temp }}/frontend-release
 
+      - name: Download candidate release checkpoint
+        uses: actions/download-artifact@v5
+        with:
+          name: release-candidate-${{ github.sha }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/release-checkpoint
+
       - name: Require www and intl immutable release parity
         env:
           ARTIFACT_NAME: ${{ needs.build_frontend.outputs.artifact_name }}
@@ -617,6 +1398,7 @@ jobs:
           GITHUB_ARTIFACT_DIGEST: ${{ needs.build_frontend.outputs.github_artifact_digest }}
           FRONTEND_BUILD_ID: ${{ needs.build_frontend.outputs.frontend_build_id }}
           NODE_VERSION: ${{ needs.build_frontend.outputs.node_version }}
+          BUILD_RUN_ATTEMPT: ${{ needs.build_frontend.outputs.workflow_run_attempt }}
           WWW_ORIGIN: ${{ vars.JATO_WWW_ORIGIN || 'https://www.ojeur.cloud' }}
           INTL_ORIGIN: ${{ vars.JATO_INTL_ORIGIN || 'https://intl.ojeur.cloud' }}
         run: |
@@ -630,7 +1412,7 @@ jobs:
             --expected-build-id "$FRONTEND_BUILD_ID" \
             --expected-node-version "$NODE_VERSION" \
             --expected-run-id "$GITHUB_RUN_ID" \
-            --expected-run-attempt "$GITHUB_RUN_ATTEMPT" \
+            --expected-run-attempt "$BUILD_RUN_ATTEMPT" \
             --github-artifact-id "$GITHUB_ARTIFACT_ID" \
             --github-artifact-digest "$GITHUB_ARTIFACT_DIGEST" \
             --origin "$WWW_ORIGIN" \
@@ -638,26 +1420,51 @@ jobs:
             --attempts 6 \
             --delay-seconds 10
 
-      - name: Download candidate COS receipt after final parity
-        uses: actions/download-artifact@v5
-        with:
-          name: cos-release-candidate-${{ github.sha }}-${{ github.run_attempt }}
-          path: ${{ runner.temp }}/cos-release-candidate
-
-      - name: Seal verified production COS receipt
+      - name: Seal verified production release checkpoint
+        env:
+          ARCHIVE_BYTES: ${{ needs.deploy_tencent.outputs.archive_bytes }}
+          ARCHIVE_SHA256: ${{ needs.deploy_tencent.outputs.archive_sha256 }}
+          BUILD_RUN_ATTEMPT: ${{ needs.build_frontend.outputs.workflow_run_attempt }}
+          FRONTEND_IDENTITY: ${{ needs.build_frontend.outputs.artifact_identity }}
+          FRONTEND_CHECKSUM: ${{ needs.build_frontend.outputs.artifact_checksum }}
+          SERVER_ATTESTATION_SHA256: ${{ needs.deploy_tencent.outputs.server_attestation_sha256 }}
         run: |
           set -euo pipefail
-          python3 03_Scripts/deploy/cos_release_transport.py seal \
-            --receipt "$RUNNER_TEMP/cos-release-candidate/cos-release-candidate.json" \
-            --github-sha "$GITHUB_SHA" \
-            --repository "$GITHUB_REPOSITORY" \
-            --output "$RUNNER_TEMP/cos-release-verified.json"
+          checkpoint="$RUNNER_TEMP/release-checkpoint/candidate.json"
+          journal="$RUNNER_TEMP/release-checkpoint/journal.jsonl"
+          attestation="$RUNNER_TEMP/release-checkpoint/server/attestation.json"
+          actual_attestation_sha256="$(sha256sum "$attestation" | awk '{print $1}')"
+          [[ "$SERVER_ATTESTATION_SHA256" =~ ^[0-9a-f]{64}$ ]]
+          test "$actual_attestation_sha256" = "$SERVER_ATTESTATION_SHA256"
+          checkpoint_args=(
+            --checkpoint "$checkpoint"
+            --journal "$journal"
+            --repository "$GITHUB_REPOSITORY"
+            --commit "$GITHUB_SHA"
+            --archive-sha256 "$ARCHIVE_SHA256"
+            --archive-bytes "$ARCHIVE_BYTES"
+            --run-id "$GITHUB_RUN_ID"
+            --run-attempt "$BUILD_RUN_ATTEMPT"
+            --frontend-identity "$FRONTEND_IDENTITY"
+            --frontend-checksum "$FRONTEND_CHECKSUM"
+          )
+          python3 03_Scripts/deploy/release_checkpoint.py write \
+            "${checkpoint_args[@]}" \
+            --phase parity_verified \
+            --status completed \
+            --retry-class automatic
+          python3 03_Scripts/deploy/release_checkpoint.py write \
+            "${checkpoint_args[@]}" \
+            --phase complete \
+            --status completed \
+            --retry-class complete \
+            --message "server_attestation_sha256=$actual_attestation_sha256"
 
-      - name: Retain verified production COS receipt
+      - name: Retain verified production release receipt
         uses: actions/upload-artifact@v4
         with:
-          name: cos-release-receipt-${{ github.sha }}-${{ github.run_attempt }}
-          path: ${{ runner.temp }}/cos-release-verified.json
+          name: release-verified-${{ github.sha }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/release-checkpoint
           if-no-files-found: error
           compression-level: 0
           overwrite: false

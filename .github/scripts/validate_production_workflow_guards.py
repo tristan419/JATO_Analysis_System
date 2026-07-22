@@ -235,10 +235,7 @@ def assert_database_migration_is_behind_main_release_gate() -> None:
 
     if "03_Scripts/deploy/fullstack_remote_release.sh" not in production_workflow:
         raise AssertionError("production release no longer invokes Tencent remote release")
-    if not any(
-        token in production_workflow
-        for token in ("export DEPLOY_BRANCH=main", "emit_export DEPLOY_BRANCH main")
-    ):
+    if "export DEPLOY_BRANCH=main" not in production_workflow:
         raise AssertionError("production release must pin Tencent DEPLOY_BRANCH=main")
     if "bash 03_Scripts/deploy_fullstack_server.sh" not in remote_release:
         raise AssertionError("remote release no longer invokes the guarded server deploy")

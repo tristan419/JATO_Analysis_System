@@ -46,13 +46,7 @@ jobs:
           cache-dependency-path: 06_AppPlatform/frontend/package-lock.json
 
       - name: Install workflow validation dependency
-        run: python -m pip install "PyYAML==6.0.2"
-
-      - name: Install hash-locked COS transport dependencies
-        run: >-
-          python -m pip install
-          --require-hashes
-          --requirement 03_Scripts/deploy/requirements-cos-release.txt
+        run: python -m pip install "PyYAML==6.0.2" "pytest<9"
 
       - name: Install locked edge contract dependencies
         working-directory: 06_AppPlatform/frontend
@@ -65,9 +59,20 @@ jobs:
         run: >-
           python -m unittest
           03_Scripts/tests/test_frontend_release_artifact.py
-          03_Scripts/tests/test_cos_release_transport.py
           03_Scripts/tests/test_verify_intl_runtime_contract.py
           -v
+
+      - name: Test release recovery and shell hardening
+        run: |
+          bash -n \
+            03_Scripts/deploy/fullstack_remote_release.sh \
+            03_Scripts/ops/deploy_fullstack_server.sh \
+            03_Scripts/ops/backup_production_data.sh
+          python -m pytest -q \
+            03_Scripts/tests/test_release_checkpoint.py \
+            03_Scripts/tests/test_release_evidence.py \
+            03_Scripts/tests/test_release_shell_hardening.py \
+            06_AppPlatform/backend/tests/unit/test_deploy_workflow.py
 
       - name: Test intl Pages Function contracts
         working-directory: 06_AppPlatform/frontend

@@ -8,16 +8,6 @@ Tencent/www and Cloudflare/intl both consume that exact artifact by the numeric
 GitHub artifact id; neither deployment reads runtime frontend code from an
 unverified checkout path.
 
-The complete backend release archive uses Tencent COS only as its transport.
-GitHub obtains a short-lived upload credential through OIDC, uploads to the
-globally accelerated endpoint, and verifies object bytes, SHA-256 metadata, and
-CRC64 with a HEAD request. The object key is content-addressed as
-`releases/<main commit>/<archive sha256>.tar.gz` and forbids overwrite. SSH no
-longer carries archive bytes; the host-pinned channel sends release controls,
-the existing deploy environment, and the release script through a mode-`0600`
-stdin payload instead of process arguments. The CVM downloads with its read-only
-instance role through the derived same-region internal endpoint.
-
 ## Artifact and provenance fields
 
 - `artifact.name`: deterministic artifact name for the source revision.
@@ -57,27 +47,27 @@ Pages project containing only the artifact's verified Functions tree. A pinned
 Node/Wrangler pair compiles the tree before any production mutation, and the
 generated routes must contain all three required routes.
 
-The outer COS archive is also fail-closed. The GitHub uploader validates every
-multipart part's CRC64, the completed object's CRC64, exact size, SHA-256
-metadata, commit metadata, and object-key namespace. The CVM downloads to a
-temporary file and independently recomputes size, SHA-256, and CRC64 before an
-atomic local rename. Archive paths are checked before extraction. None of these
-transport failures reaches the production code directories. COS does not make
-the later backend directory copy or database migration transactional; those
-continue to use the existing deployment and migration failure boundaries.
-
-Only after Tencent provenance, Cloudflare provenance, and the intl runtime API
-gate and the final www/intl parity audit all succeed does the workflow seal a
-`verified-production` COS receipt. An uploaded candidate without that sealed
-receipt is not an approved rollback source. Candidate evidence is retained for
-7 days; the sealed receipt is retained for 30 days to match the `releases/`
-object lifecycle. Longer-lived rollback objects require a separate,
-administrator-approved copy into the protected `rollback/` prefix.
-
 After Cloudflare switches, the workflow rejects an intl release unless root
 health, API data freshness, and OAuth relay health all return real JSON with
 their expected edge markers. A SPA fallback returning `200 text/html` is a
 release failure, not a successful health check.
+
+## Backend transport and recovery
+
+The backend release uses the existing SSH connection and CVM disk; it does not
+require COS, a CDN, or another long-lived cloud credential. The deterministic
+archive is addressed by its SHA-256 and transferred with resumable rsync. The
+server independently verifies its byte length and checksum before sealing it,
+and never overwrites a different immutable archive.
+
+Durable checkpoints bind every deploy phase to the main commit, backend archive,
+workflow build identity, and the single verified frontend artifact. Transport
+and preparation failures may resume the exact artifact. An interrupted database
+migration fails closed for manual revision and backup inspection, while an
+ambiguous intl deployment is resolved by reading public provenance before any
+repeat publish. The operational state machine, retry classes, prerequisites,
+and interruption tests are documented in
+[`FREE_RELEASE_RECOVERY_RUNBOOK.md`](FREE_RELEASE_RECOVERY_RUNBOOK.md).
 
 Schema v2 intentionally fails closed on schema-v1 artifacts. The first
 successful schema-v2 production release becomes the new directly reusable
@@ -95,12 +85,9 @@ cache prewarm script. It is not a deployment entry point.
 Run the deterministic local checks without production secrets:
 
 ```bash
-python -m pip install --require-hashes \
-  --requirement 03_Scripts/deploy/requirements-cos-release.txt
 python .github/scripts/validate_frontend_release_workflow.py
 python -m unittest \
   03_Scripts/tests/test_frontend_release_artifact.py \
-  03_Scripts/tests/test_cos_release_transport.py \
   03_Scripts/tests/test_verify_intl_runtime_contract.py \
   -v
 ```

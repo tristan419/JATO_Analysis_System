@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Fail-closed runtime contract check for the international frontend."""
+"""Fail-closed runtime contract checks for public JATO frontends."""
 
 from __future__ import annotations
 
@@ -18,6 +18,7 @@ from urllib.request import Request, urlopen
 MAX_RESPONSE_BYTES = 1_048_576
 FRESHNESS_PATH = "/v1/analysis/data-freshness"
 ALLOWED_EDGE_CACHE_STATES = frozenset({"MISS", "HIT", "STALE", "BYPASS"})
+PROFILES = ("intl", "www")
 
 
 class ContractValidationError(RuntimeError):
@@ -159,6 +160,23 @@ def validate_health(response: JsonResponse) -> None:
         )
 
 
+def validate_www_health(response: JsonResponse) -> None:
+    payload = _require_object(response)
+    if payload.get("status") != "ok":
+        raise ContractValidationError(
+            f"{response.path}: expected payload status='ok'"
+        )
+
+
+def validate_www_freshness(response: JsonResponse) -> None:
+    payload = _require_object(response)
+    items = payload.get("items")
+    if not isinstance(items, list) or not items:
+        raise ContractValidationError(
+            f"{response.path}: expected payload items to be a non-empty list"
+        )
+
+
 def validate_freshness(response: JsonResponse) -> None:
     payload = _require_object(response)
     items = payload.get("items")
@@ -207,12 +225,29 @@ CHECKS: tuple[tuple[str, Validator], ...] = (
     (FRESHNESS_PATH, validate_freshness),
     ("/oauth-relay/healthz", validate_oauth_relay_health),
 )
+WWW_CHECKS: tuple[tuple[str, Validator], ...] = (
+    ("/healthz", validate_www_health),
+    (FRESHNESS_PATH, validate_www_freshness),
+)
+CHECKS_BY_PROFILE: Mapping[str, tuple[tuple[str, Validator], ...]] = {
+    "intl": CHECKS,
+    "www": WWW_CHECKS,
+}
 
 
-def verify_once(origin: str, timeout_seconds: float) -> tuple[JsonResponse, ...]:
+def verify_once(
+    origin: str,
+    timeout_seconds: float,
+    *,
+    profile: str = "intl",
+) -> tuple[JsonResponse, ...]:
+    try:
+        checks = CHECKS_BY_PROFILE[profile]
+    except KeyError as error:
+        raise ValueError(f"unsupported runtime contract profile: {profile}") from error
     responses: list[JsonResponse] = []
     errors: list[str] = []
-    for path, validator in CHECKS:
+    for path, validator in checks:
         try:
             response = fetch_json(origin, path, timeout_seconds)
             validator(response)
@@ -230,6 +265,7 @@ def verify_runtime_contract(
     attempts: int,
     delay_seconds: float,
     timeout_seconds: float,
+    profile: str = "intl",
     sleeper: Callable[[float], None] = time.sleep,
 ) -> tuple[JsonResponse, ...]:
     normalized_origin = normalize_origin(origin)
@@ -239,18 +275,24 @@ def verify_runtime_contract(
         raise ValueError("delay_seconds must be zero or greater")
     if timeout_seconds <= 0:
         raise ValueError("timeout_seconds must be greater than zero")
+    if profile not in CHECKS_BY_PROFILE:
+        raise ValueError(f"unsupported runtime contract profile: {profile}")
 
     failures: list[str] = []
     for attempt in range(1, attempts + 1):
         try:
-            return verify_once(normalized_origin, timeout_seconds)
+            return verify_once(
+                normalized_origin,
+                timeout_seconds,
+                profile=profile,
+            )
         except ContractValidationError as error:
             failures.append(f"attempt {attempt}/{attempts}: {error}")
             if attempt < attempts:
                 sleeper(delay_seconds)
 
     raise ContractValidationError(
-        f"intl runtime contract failed after {attempts} attempt(s): "
+        f"{profile} runtime contract failed after {attempts} attempt(s): "
         + " | ".join(failures)
     )
 
@@ -260,7 +302,13 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument(
         "--origin",
         required=True,
-        help="International site origin, for example https://intl.ojeur.cloud",
+        help="Public site origin, for example https://intl.ojeur.cloud",
+    )
+    parser.add_argument(
+        "--profile",
+        choices=PROFILES,
+        default="intl",
+        help="Runtime contract profile (default: intl)",
     )
     parser.add_argument(
         "--attempts",
@@ -291,13 +339,17 @@ def main(argv: list[str] | None = None) -> int:
             attempts=args.attempts,
             delay_seconds=args.delay_seconds,
             timeout_seconds=args.timeout_seconds,
+            profile=args.profile,
         )
     except (ContractValidationError, ValueError) as error:
         print(f"FAIL: {error}", file=sys.stderr)
         return 1
 
     checked_paths = ", ".join(response.path for response in responses)
-    print(f"PASS: intl runtime contract satisfied for {args.origin}: {checked_paths}")
+    print(
+        f"PASS: {args.profile} runtime contract satisfied for "
+        f"{args.origin}: {checked_paths}"
+    )
     return 0
 
 
