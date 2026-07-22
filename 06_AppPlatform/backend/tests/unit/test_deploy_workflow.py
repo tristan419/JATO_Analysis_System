@@ -168,6 +168,11 @@ def test_server_checkpoint_and_evidence_are_bound_into_final_receipt() -> None:
     assert 'evidence.get("identity") != expected_identity' in workflow
     assert 'echo "attestation-sha256=$attestation_sha256"' in workflow
     assert "server_attestation_sha256" in workflow
+    assert 'candidate_identity != attestation.get("identity")' in workflow
+    assert 'candidate_identity.get("archiveBytes")' in workflow
+    assert 'candidate_identity.get("archiveSha256")' in workflow
+    assert "needs.deploy_tencent.outputs.archive_bytes" not in workflow
+    assert "needs.deploy_tencent.outputs.archive_sha256" not in workflow
     assert '--message "server_attestation_sha256=$actual_attestation_sha256"' in workflow
     assert workflow.index("Deploy verified release on Tencent") < workflow.index(
         "Fetch and attest server release checkpoint",

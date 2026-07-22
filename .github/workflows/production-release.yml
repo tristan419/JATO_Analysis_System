@@ -164,9 +164,6 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 240
     outputs:
-      remote_archive: ${{ steps.upload_release.outputs.remote-archive }}
-      archive_bytes: ${{ steps.upload_release.outputs.archive-bytes }}
-      archive_sha256: ${{ steps.upload_release.outputs.archive-sha256 }}
       server_attestation_sha256: ${{ steps.server_attestation.outputs.attestation-sha256 }}
 
     steps:
@@ -1422,8 +1419,6 @@ jobs:
 
       - name: Seal verified production release checkpoint
         env:
-          ARCHIVE_BYTES: ${{ needs.deploy_tencent.outputs.archive_bytes }}
-          ARCHIVE_SHA256: ${{ needs.deploy_tencent.outputs.archive_sha256 }}
           BUILD_RUN_ATTEMPT: ${{ needs.build_frontend.outputs.workflow_run_attempt }}
           FRONTEND_IDENTITY: ${{ needs.build_frontend.outputs.artifact_identity }}
           FRONTEND_CHECKSUM: ${{ needs.build_frontend.outputs.artifact_checksum }}
@@ -1436,13 +1431,40 @@ jobs:
           actual_attestation_sha256="$(sha256sum "$attestation" | awk '{print $1}')"
           [[ "$SERVER_ATTESTATION_SHA256" =~ ^[0-9a-f]{64}$ ]]
           test "$actual_attestation_sha256" = "$SERVER_ATTESTATION_SHA256"
+          python3 03_Scripts/deploy/release_checkpoint.py show \
+            --checkpoint "$checkpoint" >/dev/null
+          read -r archive_bytes archive_sha256 < <(
+            python3 - "$checkpoint" "$attestation" <<'PY'
+          import json
+          from pathlib import Path
+          import re
+          import sys
+
+          checkpoint = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
+          attestation = json.loads(Path(sys.argv[2]).read_text(encoding="utf-8"))
+          candidate_identity = checkpoint.get("identity")
+          if not isinstance(candidate_identity, dict):
+              raise SystemExit("candidate checkpoint identity is missing")
+          if candidate_identity != attestation.get("identity"):
+              raise SystemExit("candidate checkpoint and server attestation identity mismatch")
+          archive_bytes = candidate_identity.get("archiveBytes")
+          archive_sha256 = candidate_identity.get("archiveSha256")
+          if isinstance(archive_bytes, bool) or not isinstance(archive_bytes, int) or archive_bytes <= 0:
+              raise SystemExit("attested archive bytes must be a positive integer")
+          if not isinstance(archive_sha256, str) or not re.fullmatch(r"[0-9a-f]{64}", archive_sha256):
+              raise SystemExit("attested archive SHA-256 is invalid")
+          print(archive_bytes, archive_sha256)
+          PY
+          )
+          [[ "$archive_bytes" =~ ^[1-9][0-9]*$ ]]
+          [[ "$archive_sha256" =~ ^[0-9a-f]{64}$ ]]
           checkpoint_args=(
             --checkpoint "$checkpoint"
             --journal "$journal"
             --repository "$GITHUB_REPOSITORY"
             --commit "$GITHUB_SHA"
-            --archive-sha256 "$ARCHIVE_SHA256"
-            --archive-bytes "$ARCHIVE_BYTES"
+            --archive-sha256 "$archive_sha256"
+            --archive-bytes "$archive_bytes"
             --run-id "$GITHUB_RUN_ID"
             --run-attempt "$BUILD_RUN_ATTEMPT"
             --frontend-identity "$FRONTEND_IDENTITY"
