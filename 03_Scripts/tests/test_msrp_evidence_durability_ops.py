@@ -99,6 +99,7 @@ import os
 from pathlib import Path
 
 parser = argparse.ArgumentParser()
+parser.add_argument('--allow-uninitialized', action='store_true')
 parser.add_argument('--evidence-root', type=Path, required=True)
 parser.add_argument('--output', type=Path, required=True)
 parser.add_argument('--object-list-output', type=Path, required=True)

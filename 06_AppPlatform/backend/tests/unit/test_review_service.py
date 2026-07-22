@@ -3,6 +3,9 @@ from decimal import Decimal
 from types import SimpleNamespace
 from uuid import uuid4
 
+import pytest
+from fastapi import HTTPException
+
 from app.services import review_service
 
 
@@ -54,9 +57,10 @@ def test_list_review_cases_returns_window_metadata(
         source_id=source_id,
         source_code="volvo_xc60_se",
         source_url="https://example.test/source-registry",
-        source_type="brand_site",
+        source_type="manufacturer_official",
         extractor_name="scrapling",
         extractor_version="v1",
+        enabled=True,
     )
 
     monkeypatch.setattr(
@@ -138,9 +142,10 @@ def test_create_review_decision_persists_link_and_mismatch_category(
         source_id=source_id,
         source_code="volvo_xc60_se",
         source_url="https://example.test/source-registry",
-        source_type="brand_site",
+        source_type="manufacturer_official",
         extractor_name="scrapling",
         extractor_version="v1",
+        enabled=True,
     )
     link = SimpleNamespace(
         link_id=uuid4(),
@@ -332,10 +337,14 @@ def test_create_review_decision_approves_selected_source_observation(
         original_source_id: SimpleNamespace(
             source_id=original_source_id,
             source_code="primary",
+            source_type="manufacturer_official",
+            enabled=True,
         ),
         selected_source_id: SimpleNamespace(
             source_id=selected_source_id,
             source_code="pdf",
+            source_type="official_price_list_pdf",
+            enabled=True,
         ),
     }
     link = SimpleNamespace(
@@ -506,9 +515,10 @@ def test_auto_resolve_review_cases_approves_link_backed_open_cases(
         source_id=source_id,
         source_code="volvo_xc60_se",
         source_url="https://example.test/source-registry",
-        source_type="brand_site",
+        source_type="manufacturer_official",
         extractor_name="scrapling",
         extractor_version="v1",
+        enabled=True,
     )
     current_price = SimpleNamespace(
         current_price_id=uuid4(),
@@ -678,6 +688,7 @@ def test_auto_resolve_review_cases_approves_high_score_official_source(
         extractor_name="_ConfiguredScrapling",
         extractor_version="0.6.2-scrapling",
         tier=3,
+        enabled=True,
     )
     current_price = SimpleNamespace(
         current_price_id=uuid4(),
@@ -823,10 +834,11 @@ def test_auto_resolve_review_cases_holds_low_score_candidates(
         source_id=source_id,
         source_code="volvo_xc60_se",
         source_url="https://example.test/source-registry",
-        source_type="brand_site",
+        source_type="manufacturer_official",
         extractor_name="scrapling",
         extractor_version="v1",
         tier=3,
+        enabled=True,
     )
     added_decisions = []
     materialized = []
@@ -901,3 +913,180 @@ def test_auto_resolve_review_cases_holds_low_score_candidates(
     assert payload["scoreRejectedCount"] == 1
     assert payload["unresolvedCount"] == 1
     assert payload["sampleScreens"][0]["passed"] is False
+
+
+def test_reference_catalog_cannot_auto_approve_through_link_or_override(
+    monkeypatch,
+) -> None:
+    observation_id = uuid4()
+    source_id = uuid4()
+    review_case = SimpleNamespace(
+        review_case_id=uuid4(),
+        observation_id=observation_id,
+        review_status="open",
+    )
+    observation = SimpleNamespace(
+        observation_id=observation_id,
+        source_id=source_id,
+        match_status="review_required",
+    )
+    source = SimpleNamespace(
+        source_id=source_id,
+        source_type="reference_catalog",
+        enabled=True,
+    )
+    monkeypatch.setattr(
+        review_service.repo,
+        "list_review_cases",
+        lambda *_args, **_kwargs: [review_case],
+    )
+    monkeypatch.setattr(
+        review_service.msrp_repository,
+        "list_observations_by_ids",
+        lambda *_args, **_kwargs: [observation],
+    )
+    monkeypatch.setattr(
+        review_service.msrp_repository,
+        "list_sources_by_ids",
+        lambda *_args, **_kwargs: [source],
+    )
+    monkeypatch.setattr(
+        review_service,
+        "apply_canonical_mapping",
+        lambda *_args, **_kwargs: pytest.fail(
+            "nonofficial source reached link/override resolution"
+        ),
+    )
+    monkeypatch.setattr(
+        review_service,
+        "_commit_or_conflict",
+        lambda *_args, **_kwargs: None,
+    )
+
+    payload = review_service.auto_resolve_review_cases(
+        None,
+        {"decided_by": "unit-test", "limit": 10},
+    )
+
+    assert payload["autoApprovedCount"] == 0
+    assert payload["unresolvedCount"] == 1
+    assert review_case.review_status == "open"
+    assert observation.match_status == "review_required"
+
+
+@pytest.mark.parametrize(
+    ("source_type", "enabled"),
+    [("reference_catalog", True), ("official_pdf", False)],
+)
+def test_manual_approval_rejects_nonofficial_or_disabled_source(
+    monkeypatch,
+    source_type: str,
+    enabled: bool,
+) -> None:
+    review_case = SimpleNamespace(
+        review_case_id=uuid4(),
+        observation_id=uuid4(),
+    )
+    observation = SimpleNamespace(
+        observation_id=review_case.observation_id,
+        source_id=uuid4(),
+    )
+    monkeypatch.setattr(
+        review_service.repo,
+        "get_review_case",
+        lambda *_args, **_kwargs: review_case,
+    )
+    monkeypatch.setattr(
+        review_service.msrp_repository,
+        "get_observation",
+        lambda *_args, **_kwargs: observation,
+    )
+    monkeypatch.setattr(
+        review_service.msrp_repository,
+        "get_source",
+        lambda *_args, **_kwargs: SimpleNamespace(
+            source_type=source_type,
+            enabled=enabled,
+        ),
+    )
+
+    with pytest.raises(HTTPException) as exc_info:
+        review_service.create_review_decision(
+            None,
+            str(review_case.review_case_id),
+            {"decision": "approve", "decided_by": "analyst"},
+        )
+
+    assert exc_info.value.status_code == 409
+
+
+def test_manual_reject_remains_allowed_for_nonofficial_source(monkeypatch) -> None:
+    now = datetime(2026, 7, 15, 9, 0, tzinfo=timezone.utc)
+    review_case = SimpleNamespace(
+        review_case_id=uuid4(),
+        observation_id=uuid4(),
+        review_status="open",
+        current_assignee=None,
+        updated_at_utc=now,
+    )
+    observation = SimpleNamespace(
+        observation_id=review_case.observation_id,
+        source_id=uuid4(),
+        match_status="review_required",
+        match_reason_json={},
+        updated_at_utc=now,
+    )
+    source = SimpleNamespace(
+        source_type="reference_catalog",
+        enabled=True,
+    )
+    monkeypatch.setattr(
+        review_service.repo,
+        "get_review_case",
+        lambda *_args, **_kwargs: review_case,
+    )
+    monkeypatch.setattr(
+        review_service.msrp_repository,
+        "get_observation",
+        lambda *_args, **_kwargs: observation,
+    )
+    monkeypatch.setattr(
+        review_service.msrp_repository,
+        "get_source",
+        lambda *_args, **_kwargs: source,
+    )
+    monkeypatch.setattr(
+        review_service.repo,
+        "add_review_decision",
+        lambda *_args, **_kwargs: None,
+    )
+    monkeypatch.setattr(
+        review_service,
+        "_commit_or_conflict",
+        lambda *_args, **_kwargs: None,
+    )
+    monkeypatch.setattr(
+        review_service,
+        "review_case_payload",
+        lambda *_args, **_kwargs: {"reviewStatus": review_case.review_status},
+    )
+    monkeypatch.setattr(
+        review_service,
+        "review_decision_payload",
+        lambda decision: {"decision": decision.decision},
+    )
+    monkeypatch.setattr(
+        review_service,
+        "observation_payload",
+        lambda item: {"matchStatus": item.match_status},
+    )
+
+    payload = review_service.create_review_decision(
+        SimpleNamespace(refresh=lambda *_args, **_kwargs: None),
+        str(review_case.review_case_id),
+        {"decision": "reject", "decided_by": "analyst"},
+    )
+
+    assert payload["decision"]["decision"] == "reject"
+    assert observation.match_status == "rejected"
+    assert review_case.review_status == "rejected"

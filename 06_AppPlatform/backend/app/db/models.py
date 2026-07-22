@@ -873,6 +873,10 @@ class MsrpObservation(TimestampMixin, Base):
             "ix_msrp_observations_source_payload_hash",
             "source_payload_hash",
         ),
+        Index(
+            "ix_msrp_observations_source_version",
+            "source_version_id",
+        ),
         {"schema": "msrp"},
     )
 
@@ -890,6 +894,11 @@ class MsrpObservation(TimestampMixin, Base):
         PGUUID(as_uuid=True),
         ForeignKey("msrp.sources.source_id"),
         nullable=False,
+    )
+    source_version_id: Mapped[UUID | None] = mapped_column(
+        PGUUID(as_uuid=True),
+        ForeignKey("msrp.source_versions.source_version_id"),
+        nullable=True,
     )
     country: Mapped[str] = mapped_column(Text, nullable=False)
     brand: Mapped[str] = mapped_column(Text, nullable=False)
@@ -1105,6 +1114,10 @@ class CurrentPrice(Base):
             "ix_msrp_current_prices_effective_observation",
             "effective_observation_id",
         ),
+        Index(
+            "ix_msrp_current_prices_source_version",
+            "source_version_id",
+        ),
         {"schema": "msrp"},
     )
 
@@ -1133,6 +1146,17 @@ class CurrentPrice(Base):
         PGUUID(as_uuid=True),
         ForeignKey("msrp.observations.observation_id"),
         nullable=False,
+    )
+    source_version_id: Mapped[UUID | None] = mapped_column(
+        PGUUID(as_uuid=True),
+        ForeignKey("msrp.source_versions.source_version_id"),
+        nullable=True,
+    )
+    evidence_refs_json: Mapped[list[dict[str, object]]] = mapped_column(
+        JSONB,
+        nullable=False,
+        default=list,
+        server_default=text("'[]'::jsonb"),
     )
     current_msrp_value: Mapped[float] = mapped_column(
         Numeric(14, 2),
@@ -1287,6 +1311,10 @@ class PriceHistory(Base):
             "last_confirmed_by_observation_id",
         ),
         Index(
+            "ix_msrp_price_history_source_version",
+            "source_version_id",
+        ),
+        Index(
             "ix_msrp_price_history_open_period",
             "country",
             "brand",
@@ -1319,6 +1347,17 @@ class PriceHistory(Base):
         nullable=False,
     )
     source_currency: Mapped[str] = mapped_column(Text, nullable=False)
+    source_version_id: Mapped[UUID | None] = mapped_column(
+        PGUUID(as_uuid=True),
+        ForeignKey("msrp.source_versions.source_version_id"),
+        nullable=True,
+    )
+    evidence_refs_json: Mapped[list[dict[str, object]]] = mapped_column(
+        JSONB,
+        nullable=False,
+        default=list,
+        server_default=text("'[]'::jsonb"),
+    )
     valid_from_utc: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         nullable=False,

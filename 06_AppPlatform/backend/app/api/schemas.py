@@ -1,7 +1,8 @@
 from datetime import date, datetime
 from typing import Literal
+from uuid import UUID
 
-from pydantic import BaseModel, Field
+from pydantic import AliasChoices, BaseModel, ConfigDict, Field
 
 
 class FiltersOptionsRequest(BaseModel):
@@ -341,8 +342,28 @@ class MsrpSourcePatch(BaseModel):
     notes: str | None = None
 
 
+class MsrpObservationEvidenceRef(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    evidence_asset_id: UUID = Field(
+        validation_alias=AliasChoices("evidence_asset_id", "evidenceAssetId")
+    )
+    evidence_role: Literal["raw_payload", "price_page", "supporting"] = Field(
+        validation_alias=AliasChoices("evidence_role", "evidenceRole")
+    )
+    sha256: str = Field(pattern=r"^[0-9a-fA-F]{64}$")
+
+
 class MsrpObservationIngest(BaseModel):
     source_id: str
+    source_version_id: UUID | None = Field(
+        default=None,
+        validation_alias=AliasChoices("source_version_id", "sourceVersionId"),
+    )
+    evidence_refs: list[MsrpObservationEvidenceRef] = Field(
+        default_factory=list,
+        validation_alias=AliasChoices("evidence_refs", "evidenceRefs"),
+    )
     country: str
     brand: str
     jato_model: str

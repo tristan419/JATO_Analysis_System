@@ -16,6 +16,7 @@ from app.db.models import (
     ReviewDecision,
 )
 from app.infra import msrp_repository as repo
+from app.infra import msrp_source_governance_repository as governance_repo
 from app.infra import review_repository
 from app.services.fx_service import convert_amount_to_eur
 from app.services.msrp_workflow_service import (
@@ -26,6 +27,7 @@ from app.services.msrp_workflow_service import (
     materialize_current_price_from_observation,
 )
 from app.services.msrp_link_service import upsert_jato_msrp_link
+from app.services.msrp_evidence_verifier import evidence_references_by_observation
 from app.services.payload_serializers import (
     jato_msrp_link_payload,
     observation_payload,
@@ -246,10 +248,20 @@ def list_observations(
         [item.source_id for item in items],
     )
     source_by_id = {item.source_id: item for item in sources}
+    evidence_by_observation = evidence_references_by_observation(
+        governance_repo.list_observation_evidence_links(
+            session,
+            [item.observation_id for item in items],
+        )
+    )
     return {
         "rows": len(items),
         "items": [
-            observation_payload(item, source_by_id.get(item.source_id))
+            observation_payload(
+                item,
+                source_by_id.get(item.source_id),
+                evidence_by_observation.get(item.observation_id, []),
+            )
             for item in items
         ],
     }
@@ -352,12 +364,24 @@ def _serialize_observation_row(
     observation: MsrpObservation,
 ) -> dict[str, object]:
     source = repo.get_source(session, observation.source_id)
-    return observation_payload(observation, source)
+    evidence_by_observation = evidence_references_by_observation(
+        governance_repo.list_observation_evidence_links(
+            session,
+            [observation.observation_id],
+        )
+    )
+    return observation_payload(
+        observation,
+        source,
+        evidence_by_observation.get(observation.observation_id, []),
+    )
 
 
 def create_observation(
     session: Session,
     data: dict[str, object],
+    *,
+    actor: str = "msrp-observation-editor",
 ) -> dict[str, object]:
     normalized, _ = _normalize_observation_mutation(session, data)
     batch_code = (
@@ -377,6 +401,8 @@ def create_observation(
             "observations": [
                 {
                     "source_id": str(data["source_id"]),
+                    "source_version_id": data.get("source_version_id"),
+                    "evidence_refs": list(data.get("evidence_refs") or []),
                     "country": normalized["country"],
                     "brand": normalized["brand"],
                     "jato_model": normalized["jato_model"],
@@ -406,6 +432,7 @@ def create_observation(
                 }
             ],
         },
+        actor=actor,
     )
     sample_observations = list(result.get("sampleObservations") or [])
     if not sample_observations:

@@ -18,6 +18,7 @@ from app.db.models import (
     ReviewDecision,
     ScrapeBatch,
 )
+from app.db.msrp_source_governance_models import MsrpObservationEvidenceLink
 from app.infra import msrp_repository as msrp_repo
 from app.infra import review_repository as review_repo
 from app.services.fx_service import convert_amount_to_eur
@@ -26,6 +27,15 @@ from app.services.msrp_mapping_service import (
     RESOLVER_KIND_OVERRIDE,
     apply_canonical_mapping,
 )
+from app.services.msrp_evidence_verifier import (
+    EvidenceVerificationResult,
+    verify_observation_evidence,
+)
+from app.services.msrp_official_source_policy import (
+    is_enabled_official_msrp_source,
+    is_official_msrp_source_type,
+)
+from app.infra import msrp_source_governance_repository as governance_repo
 from app.services.payload_serializers import (
     current_price_payload,
     finance_observation_payload,
@@ -81,16 +91,6 @@ AUTO_REVIEW_DEFAULT_WEIGHTS = {
     "finance_completeness": 0.06,
 }
 AUTO_REVIEW_FORCE_REVIEW_SCORE = 60.0
-AUTO_REVIEW_OFFICIAL_SOURCE_TYPES = {
-    "official_api",
-    "official_configurator",
-    "official_price_list",
-    "official_price_list_pdf",
-    "official_website",
-    "manufacturer_site",
-}
-
-
 def _utc_now() -> datetime:
     return datetime.now(timezone.utc)
 
@@ -346,7 +346,7 @@ def _source_traceability_score(
     ).strip()
     source_url_ok = _valid_http_url(source_url)
     registry_url_ok = _valid_http_url(registry_url)
-    official_source = source_type in AUTO_REVIEW_OFFICIAL_SOURCE_TYPES
+    official_source = is_enabled_official_msrp_source(source)
     extractor_ok = bool(extractor_name and extractor_version)
     snapshot_ok = bool(str(item.get("source_snapshot_path") or "").strip())
     score = (
@@ -357,6 +357,10 @@ def _source_traceability_score(
         + (0.10 if snapshot_ok else 0.0)
     )
     blockers = [] if source_url_ok else ["missing_source_url"]
+    if getattr(source, "enabled", False) is not True:
+        blockers.append("source_disabled")
+    if not is_official_msrp_source_type(source_type):
+        blockers.append("source_type_not_official")
     return score, {
         "sourceUrlPresent": source_url_ok,
         "registryUrlPresent": registry_url_ok,
@@ -796,9 +800,22 @@ def materialize_current_price_from_observation(
     *,
     price_history_enabled: bool | None = None,
 ) -> CurrentPrice | None:
+    source = msrp_repo.get_source(session, observation.source_id)
+    if not is_enabled_official_msrp_source(source):
+        return None
     apply_canonical_mapping(session, observation)
     if observation.match_status not in ELIGIBLE_CURRENT_PRICE_STATUSES:
         return None
+
+    verification = verify_observation_evidence(session, observation)
+    if (
+        not verification.passed
+        or verification.source_version_id is None
+        or not verification.evidence_refs
+    ):
+        return None
+    evidence_refs = list(verification.evidence_refs)
+    verified_source_version_id = verification.source_version_id
 
     current_price = msrp_repo.get_current_price_by_key(
         session,
@@ -829,6 +846,8 @@ def materialize_current_price_from_observation(
             observation.jato_powertrain
         )
         current_price.effective_observation_id = observation.observation_id
+        current_price.source_version_id = verified_source_version_id
+        current_price.evidence_refs_json = evidence_refs
         current_price.current_msrp_value = observation.msrp_value
         current_price.currency = observation.currency
         current_price.source_msrp_value = observation.source_msrp_value
@@ -858,6 +877,8 @@ def materialize_current_price_from_observation(
             official_edition=observation.official_edition,
             official_powertrain=observation.official_powertrain,
             effective_observation_id=observation.observation_id,
+            source_version_id=verified_source_version_id,
+            evidence_refs_json=evidence_refs,
             current_msrp_value=observation.msrp_value,
             currency=observation.currency,
             source_msrp_value=observation.source_msrp_value,
@@ -887,9 +908,18 @@ def materialize_current_price_from_observation(
             observation.jato_powertrain,
         )
         if price_changed or open_period is None:
-            _record_price_period(session, observation, open_period=open_period)
+            _record_price_period(
+                session,
+                observation,
+                open_period=open_period,
+                source_version_id=verified_source_version_id,
+                evidence_refs=evidence_refs,
+            )
         else:
-            _refresh_open_price_period(open_period, observation)
+            _refresh_open_price_period(
+                open_period,
+                observation,
+            )
 
     return current_price
 
@@ -899,6 +929,8 @@ def _record_price_period(
     observation: MsrpObservation,
     *,
     open_period: PriceHistory | None = None,
+    source_version_id: UUID | None = None,
+    evidence_refs: list[dict[str, object]] | None = None,
 ) -> None:
     """Close any open price period and open a new one.
 
@@ -916,7 +948,12 @@ def _record_price_period(
         )
     if open_period is not None:
         if observation.observed_at_utc == open_period.valid_from_utc:
-            _replace_open_price_period(open_period, observation)
+            _replace_open_price_period(
+                open_period,
+                observation,
+                source_version_id=source_version_id,
+                evidence_refs=evidence_refs,
+            )
             return
         if observation.observed_at_utc < open_period.valid_from_utc:
             return
@@ -933,6 +970,8 @@ def _record_price_period(
         currency=observation.currency,
         source_msrp_value=observation.source_msrp_value,
         source_currency=observation.source_currency,
+        source_version_id=source_version_id,
+        evidence_refs_json=list(evidence_refs or []),
         valid_from_utc=observation.observed_at_utc,
         last_confirmed_at_utc=observation.observed_at_utc,
         started_by_observation_id=observation.observation_id,
@@ -944,11 +983,16 @@ def _record_price_period(
 def _replace_open_price_period(
     open_period: PriceHistory,
     observation: MsrpObservation,
+    *,
+    source_version_id: UUID | None = None,
+    evidence_refs: list[dict[str, object]] | None = None,
 ) -> None:
     open_period.msrp_value = observation.msrp_value
     open_period.currency = observation.currency
     open_period.source_msrp_value = observation.source_msrp_value
     open_period.source_currency = observation.source_currency
+    open_period.source_version_id = source_version_id
+    open_period.evidence_refs_json = list(evidence_refs or [])
     open_period.valid_from_utc = observation.observed_at_utc
     open_period.valid_to_utc = None
     open_period.started_by_observation_id = observation.observation_id
@@ -1021,6 +1065,7 @@ def create_scrape_batch_ingest(
     data: dict[str, object],
     *,
     commit: bool = True,
+    actor: str = "msrp-ingest",
 ) -> dict[str, object]:
     observations_payload = list(data.get("observations") or [])
     failed_count = max(0, int(data.get("failed_count") or 0))
@@ -1098,6 +1143,17 @@ def create_scrape_batch_ingest(
         observed_at_utc = item.get("observed_at_utc") or _utc_now()
         source_msrp_value = float(item["msrp_value"])
         source_currency = str(item.get("currency") or "").strip().upper()
+        source_version_id = (
+            UUID(str(item["source_version_id"]))
+            if item.get("source_version_id") is not None
+            else None
+        )
+        evidence_ref_payloads = list(item.get("evidence_refs") or [])
+        if evidence_ref_payloads and source_version_id is None:
+            raise HTTPException(
+                status_code=422,
+                detail="Evidence refs require sourceVersionId",
+            )
         match_confidence = float(item.get("match_confidence") or 0.0)
         input_match_status = str(
             item.get("match_status") or REVIEW_REQUIRED_STATUS
@@ -1114,6 +1170,22 @@ def create_scrape_batch_ingest(
             auto_review,
             match_confidence,
         )
+        if (
+            match_status != "rejected"
+            and (
+                not is_enabled_official_msrp_source(source)
+                or (
+                    _is_current_price_semantics(
+                        _payload_price_semantics(item, source.price_semantics)
+                    )
+                    and (
+                        source_version_id is None
+                        or not evidence_ref_payloads
+                    )
+                )
+            )
+        ):
+            match_status = REVIEW_REQUIRED_STATUS
         match_reason_json = _merge_auto_review_match_reason(
             item.get("match_reason_json"),
             auto_review,
@@ -1128,6 +1200,7 @@ def create_scrape_batch_ingest(
         observation = MsrpObservation(
             scrape_batch_id=batch.scrape_batch_id,
             source_id=source.source_id,
+            source_version_id=source_version_id,
             country=observation_country,
             brand=observation_brand,
             jato_model=str(item.get("jato_model") or "").strip(),
@@ -1188,6 +1261,60 @@ def create_scrape_batch_ingest(
     msrp_repo.add_observations(session, observations)
     session.flush()
 
+    evidence_verification_by_observation: dict[
+        UUID,
+        EvidenceVerificationResult,
+    ] = {}
+    evidence_links: list[MsrpObservationEvidenceLink] = []
+    for observation, payload in zip(
+        observations,
+        observations_payload,
+        strict=False,
+    ):
+        evidence_ref_payloads = list(payload.get("evidence_refs") or [])
+        if observation.source_version_id is None or not evidence_ref_payloads:
+            continue
+        observation_links: list[MsrpObservationEvidenceLink] = []
+        for ref in evidence_ref_payloads:
+            evidence_asset_id = UUID(str(ref["evidence_asset_id"]))
+            asset = governance_repo.get_evidence_asset(session, evidence_asset_id)
+            if asset is None:
+                raise HTTPException(
+                    status_code=422,
+                    detail={
+                        "message": "Evidence asset not found",
+                        "evidenceAssetId": str(evidence_asset_id),
+                    },
+                )
+            link = MsrpObservationEvidenceLink(
+                observation_id=observation.observation_id,
+                evidence_asset_id=evidence_asset_id,
+                source_version_id=observation.source_version_id,
+                evidence_role=str(ref["evidence_role"]),
+                evidence_sha256=str(ref["sha256"]).casefold(),
+                created_by=actor,
+            )
+            link.evidence_asset = asset
+            observation_links.append(link)
+        verification = verify_observation_evidence(
+            session,
+            observation,
+            links=observation_links,
+        )
+        if not verification.passed:
+            raise HTTPException(
+                status_code=422,
+                detail={
+                    "message": "Observation evidence verification failed",
+                    "reasons": list(verification.reasons),
+                },
+            )
+        evidence_links.extend(observation_links)
+        evidence_verification_by_observation[observation.observation_id] = verification
+    if evidence_links:
+        governance_repo.add_observation_evidence_links(session, evidence_links)
+        session.flush()
+
     for observation, payload, source in zip(
         observations,
         observations_payload,
@@ -1221,7 +1348,15 @@ def create_scrape_batch_ingest(
         strict=False,
     ):
         if observation.match_status == REVIEW_REQUIRED_STATUS:
-            resolution = apply_canonical_mapping(session, observation)
+            resolution = (
+                apply_canonical_mapping(session, observation)
+                if is_enabled_official_msrp_source(source)
+                else {
+                    "resolverKind": "none",
+                    "linkId": None,
+                    "overrideId": None,
+                }
+            )
             if observation.match_status in ELIGIBLE_CURRENT_PRICE_STATUSES:
                 if resolution["resolverKind"] == RESOLVER_KIND_OVERRIDE:
                     override_applied_count += 1
@@ -1292,7 +1427,17 @@ def create_scrape_batch_ingest(
         "financeObservationsCreated": len(finance_observations),
         "financeObservationsSkipped": finance_observations_skipped,
         "sampleObservations": [
-            observation_payload(item) for item in observations[:10]
+            observation_payload(
+                item,
+                evidence_refs=list(
+                    evidence_verification_by_observation.get(
+                        item.observation_id
+                    ).evidence_refs
+                )
+                if item.observation_id in evidence_verification_by_observation
+                else [],
+            )
+            for item in observations[:10]
         ],
         "sampleFinanceObservations": [
             finance_observation_payload(item)

@@ -14,6 +14,8 @@ def test_current_price_payload_uses_current_price_contract() -> None:
     last_change = datetime(2026, 4, 10, 8, 0, tzinfo=timezone.utc)
     updated_at = datetime(2026, 4, 10, 9, 0, tzinfo=timezone.utc)
 
+    source_version_id = uuid4()
+    evidence_refs = [{"evidenceAssetId": str(uuid4()), "sha256": "a" * 64}]
     current_price = CurrentPrice(
         current_price_id=uuid4(),
         country="瑞典",
@@ -26,6 +28,8 @@ def test_current_price_payload_uses_current_price_contract() -> None:
         official_edition="Black Edition",
         official_powertrain="PHEV",
         effective_observation_id=uuid4(),
+        source_version_id=source_version_id,
+        evidence_refs_json=evidence_refs,
         current_msrp_value=Decimal("529900.00"),
         currency="EUR",
         source_msrp_value=Decimal("569900.00"),
@@ -53,6 +57,8 @@ def test_current_price_payload_uses_current_price_contract() -> None:
     assert payload["officialPowertrain"] == "PHEV"
     assert payload["lastPriceChangeAtUtc"] == last_change.isoformat()
     assert payload["updatedAtUtc"] == updated_at.isoformat()
+    assert payload["sourceVersionId"] == str(source_version_id)
+    assert payload["evidenceRefs"] == evidence_refs
     assert "msrpValue" not in payload
     assert "observedAtUtc" not in payload
     assert "materializedAt" not in payload
@@ -111,6 +117,8 @@ def test_current_price_payload_can_include_source_metadata() -> None:
     assert payload["sourceType"] == "reference_catalog"
     assert payload["extractorName"] == "evkx_catalog"
     assert payload["extractorVersion"] == "v1"
+    assert payload["sourceVersionId"] is None
+    assert payload["evidenceRefs"] == []
 
 
 def test_observation_payload_keeps_observation_contract() -> None:
@@ -153,7 +161,10 @@ def test_observation_payload_keeps_observation_contract() -> None:
         updated_at_utc=updated_at,
     )
 
-    payload = observation_payload(observation)
+    source_version_id = uuid4()
+    observation.source_version_id = source_version_id
+    evidence_refs = [{"evidenceAssetId": str(uuid4()), "sha256": "b" * 64}]
+    payload = observation_payload(observation, evidence_refs=evidence_refs)
 
     assert payload["msrpValue"] == 529900.0
     assert payload["country"] == "Sweden"
@@ -165,6 +176,8 @@ def test_observation_payload_keeps_observation_contract() -> None:
     assert payload["observedAtUtc"] == observed_at.isoformat()
     assert payload["updatedAtUtc"] == updated_at.isoformat()
     assert payload["sourceContext"] == {"source": "EVKX", "evId": "07828991"}
+    assert payload["sourceVersionId"] == str(source_version_id)
+    assert payload["evidenceRefs"] == evidence_refs
     assert "currentMsrpValue" not in payload
     assert "lastPriceChangeAtUtc" not in payload
 
@@ -172,6 +185,8 @@ def test_observation_payload_keeps_observation_contract() -> None:
 def test_price_history_payload_exposes_last_confirmation_fields() -> None:
     now = datetime(2026, 4, 10, 8, 0, tzinfo=timezone.utc)
     confirmed_at = datetime(2026, 4, 11, 8, 0, tzinfo=timezone.utc)
+    source_version_id = uuid4()
+    evidence_refs = [{"evidenceAssetId": str(uuid4()), "sha256": "c" * 64}]
     price_history = PriceHistory(
         price_history_id=uuid4(),
         country="瑞典",
@@ -183,6 +198,8 @@ def test_price_history_payload_exposes_last_confirmation_fields() -> None:
         currency="EUR",
         source_msrp_value=Decimal("569900.00"),
         source_currency="SEK",
+        source_version_id=source_version_id,
+        evidence_refs_json=evidence_refs,
         valid_from_utc=now,
         valid_to_utc=None,
         last_confirmed_at_utc=confirmed_at,
@@ -200,6 +217,8 @@ def test_price_history_payload_exposes_last_confirmation_fields() -> None:
     assert payload["lastConfirmedByObservationId"] == str(
         price_history.last_confirmed_by_observation_id
     )
+    assert payload["sourceVersionId"] == str(source_version_id)
+    assert payload["evidenceRefs"] == evidence_refs
 
 
 # ── review_case_payload ──────────────────────────

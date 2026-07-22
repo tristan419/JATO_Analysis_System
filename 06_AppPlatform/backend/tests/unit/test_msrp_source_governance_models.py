@@ -20,6 +20,7 @@ def test_governance_foundation_registers_feature_local_tables() -> None:
         "msrp.governance_gate_decisions",
         "msrp.source_versions",
         "msrp.source_evidence_assets",
+        "msrp.observation_evidence_links",
         "msrp.evidence_upload_sessions",
         "msrp.repair_cases",
         "msrp.repair_proposals",
@@ -45,6 +46,23 @@ def test_evidence_and_source_version_tables_are_immutable_by_api_shape() -> None
     assert "profile_sha256" in versions.c
     assert versions.c.profile_sha256.nullable is False
     assert "updated_at_utc" not in evidence.c
+
+
+def test_observation_evidence_links_are_append_only_and_restrict_deletion() -> None:
+    links = Base.metadata.tables["msrp.observation_evidence_links"]
+    observations = Base.metadata.tables["msrp.observations"]
+    current_prices = Base.metadata.tables["msrp.current_prices"]
+    price_history = Base.metadata.tables["msrp.price_history"]
+
+    observation_fk = next(iter(links.c.observation_id.foreign_keys))
+    assert observation_fk.ondelete is None
+    assert links.c.source_version_id.nullable is False
+    assert links.c.evidence_asset_id.nullable is False
+    assert links.c.evidence_sha256.nullable is False
+    assert "updated_at_utc" not in links.c
+    assert observations.c.source_version_id.nullable is True
+    assert current_prices.c.evidence_refs_json.nullable is False
+    assert price_history.c.evidence_refs_json.nullable is False
 
 
 def test_gate_decisions_are_append_only_materialization_snapshots() -> None:

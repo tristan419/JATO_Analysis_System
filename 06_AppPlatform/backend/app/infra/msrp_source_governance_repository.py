@@ -3,7 +3,7 @@ from __future__ import annotations
 from uuid import UUID
 
 from sqlalchemy import Select, func, or_, select
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, joinedload
 
 from app.db.msrp_source_governance_models import (
     MsrpEvidenceUploadSession,
@@ -12,6 +12,7 @@ from app.db.msrp_source_governance_models import (
     MsrpGovernanceGateDecision,
     MsrpGovernanceRepairCase,
     MsrpMonitoringTarget,
+    MsrpObservationEvidenceLink,
     MsrpRepairProposal,
     MsrpResultCorrectionDecision,
     MsrpSourceEvidenceAsset,
@@ -139,6 +140,33 @@ def get_evidence_asset(
     evidence_asset_id: UUID,
 ) -> MsrpSourceEvidenceAsset | None:
     return session.get(MsrpSourceEvidenceAsset, evidence_asset_id)
+
+
+def add_observation_evidence_links(
+    session: Session,
+    links: list[MsrpObservationEvidenceLink],
+) -> list[MsrpObservationEvidenceLink]:
+    session.add_all(links)
+    return links
+
+
+def list_observation_evidence_links(
+    session: Session,
+    observation_ids: list[UUID],
+) -> list[MsrpObservationEvidenceLink]:
+    if not observation_ids:
+        return []
+    stmt = (
+        select(MsrpObservationEvidenceLink)
+        .options(joinedload(MsrpObservationEvidenceLink.evidence_asset))
+        .where(MsrpObservationEvidenceLink.observation_id.in_(observation_ids))
+        .order_by(
+            MsrpObservationEvidenceLink.observation_id.asc(),
+            MsrpObservationEvidenceLink.evidence_role.asc(),
+            MsrpObservationEvidenceLink.evidence_asset_id.asc(),
+        )
+    )
+    return session.execute(stmt).scalars().unique().all()
 
 
 def get_evidence_by_sha256(

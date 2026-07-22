@@ -21,6 +21,9 @@ from app.db.models import (
     ScrapeBatch,
 )
 from app.services.country_service import country_filter_aliases
+from app.services.msrp_official_source_policy import (
+    enabled_official_msrp_source_predicate,
+)
 
 
 def _normalize_powertrain(value: str | None) -> str:
@@ -588,8 +591,16 @@ def list_materializable_observations(
     jato_model: str | None,
     limit: int,
 ) -> list[MsrpObservation]:
-    stmt: Select[tuple[MsrpObservation]] = select(MsrpObservation).where(
-        MsrpObservation.match_status.in_(["auto_accepted", "human_approved"])
+    stmt: Select[tuple[MsrpObservation]] = (
+        select(MsrpObservation)
+        .join(MsrpSource, MsrpSource.source_id == MsrpObservation.source_id)
+        .where(
+            MsrpObservation.match_status.in_(["auto_accepted", "human_approved"]),
+            enabled_official_msrp_source_predicate(
+                MsrpSource.source_type,
+                MsrpSource.enabled,
+            ),
+        )
     )
     if country:
         stmt = stmt.where(
@@ -623,9 +634,17 @@ def list_reconciliation_observations(
     jato_model: str | None,
     limit: int,
 ) -> list[MsrpObservation]:
-    stmt: Select[tuple[MsrpObservation]] = select(MsrpObservation).where(
-        MsrpObservation.match_status.in_(
-            ["auto_accepted", "human_approved", "override_applied"]
+    stmt: Select[tuple[MsrpObservation]] = (
+        select(MsrpObservation)
+        .join(MsrpSource, MsrpSource.source_id == MsrpObservation.source_id)
+        .where(
+            MsrpObservation.match_status.in_(
+                ["auto_accepted", "human_approved", "override_applied"]
+            ),
+            enabled_official_msrp_source_predicate(
+                MsrpSource.source_type,
+                MsrpSource.enabled,
+            ),
         )
     )
     if country:

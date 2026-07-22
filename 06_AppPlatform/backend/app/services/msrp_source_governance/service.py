@@ -58,6 +58,11 @@ from app.infra import msrp_source_governance_repository as repo
 from app.services.msrp_materialization_eligibility_service import (
     evaluate_materialization_eligibility,
 )
+from app.services.msrp_evidence_verifier import (
+    has_blocking_conflict as _blocking_conflict,
+    summary_passed as _passed,
+    verify_observation_evidence,
+)
 from app.services.msrp_source_governance.serializers import (
     audit_event_payload,
     evidence_payload,
@@ -145,31 +150,6 @@ def _case_dedupe_key(value: RepairCaseFindingCreate) -> str:
     }
     encoded = json.dumps(identity, sort_keys=True, separators=(",", ":"))
     return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
-
-
-def _passed(result: dict[str, object] | None) -> bool:
-    if not result:
-        return False
-    if result.get("passed") is True:
-        return True
-    return str(result.get("status") or "").casefold() in {
-        "pass",
-        "passed",
-        "success",
-        "succeeded",
-    }
-
-
-def _blocking_conflict(result: dict[str, object] | None) -> bool:
-    if not result:
-        return False
-    if result.get("blocking") is True:
-        return True
-    return str(result.get("status") or "").casefold() in {
-        "blocking",
-        "conflict",
-        "failed",
-    }
 
 
 def _verified_official_url(url: str, official_domain: str) -> tuple[str, str]:
@@ -374,13 +354,32 @@ class MsrpSourceGovernanceService:
                 detail="Gate target brand differs from observation",
             )
 
+        verification = verify_observation_evidence(
+            self.session,
+            observation,
+            target_id=value.target_id,
+            evidence_root=self.evidence_root,
+        )
         decision = evaluate_materialization_eligibility(
             target_id=value.target_id,
             observation_id=value.observation_id,
-            source_gate=value.source_gate,
+            source_gate=verification.source_gate,
             mapping_gate=value.mapping_gate,
             fx_gate=value.fx_gate,
         )
+        evaluation_context = {
+            **(value.evaluation_context or {}),
+            "sourceVersionId": (
+                str(verification.source_version_id)
+                if verification.source_version_id is not None
+                else None
+            ),
+            "verifiedEvidenceRefs": list(verification.evidence_refs),
+            "evidenceVerificationReasons": list(verification.reasons),
+            "evidenceVerificationPolicyVersion": (
+                verification.source_gate.policy_version
+            ),
+        }
         row = MsrpGovernanceGateDecision(
             gate_decision_id=uuid4(),
             schema_version=decision.schema_version,
@@ -405,7 +404,7 @@ class MsrpSourceGovernanceService:
             eligible_for_normalized_materialization=(
                 decision.eligible_for_normalized_materialization
             ),
-            evaluation_context_json=value.evaluation_context,
+            evaluation_context_json=evaluation_context,
             evaluated_at_utc=decision.evaluated_at,
             created_by=actor,
         )

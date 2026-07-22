@@ -91,9 +91,15 @@ def get_msrp_observations(
 def post_msrp_observation(
     payload: MsrpObservationCreate,
     session: Session = Depends(get_db_session),
-    _=Depends(require_min_role("editor")),
+    user=Depends(require_min_role("editor")),
 ) -> dict[str, object]:
-    return {"item": create_observation(session, payload.model_dump())}
+    return {
+        "item": create_observation(
+            session,
+            payload.model_dump(),
+            actor=user.name,
+        )
+    }
 
 
 @router.patch("/observations/{observation_id}")
