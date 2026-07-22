@@ -470,11 +470,12 @@ def test_chunked_monthly_update_upload_routes_create_job(
     create_response = client.post(
         "/v1/msrp/monthly-update-jobs/from-upload",
         headers=_headers(),
-        json={"uploadId": upload_id},
+        json={"uploadId": upload_id, "month": "2025-12"},
     )
     assert create_response.status_code == 200
     payload = create_response.json()["item"]
     assert payload["status"] == "queued"
+    assert payload["month"] == "2026-03"
     assert payload["batchId"] is not None  # from filename parse "JATO-2026.03-patch"
     assert payload["phase"] == "queued"
     assert payload["upload"]["sizeBytes"] == 10

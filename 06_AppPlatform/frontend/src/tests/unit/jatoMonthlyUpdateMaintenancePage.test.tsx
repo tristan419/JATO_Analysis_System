@@ -105,7 +105,7 @@ describe("JATO monthly update baseline promotion status", () => {
     const queuedButton = screen.getByRole("button", { name: "保存排队中..." });
     expect((queuedButton as HTMLButtonElement).disabled).toBe(true);
     expect((document.querySelector(".monthly-update-file-input") as HTMLInputElement).disabled).toBe(true);
-    expect((screen.getByPlaceholderText("2026-04") as HTMLInputElement).disabled).toBe(true);
+    expect(screen.queryByText(/预期数据月份/)).toBeNull();
     expect(screen.getByRole("button", { name: /拖拽 JATO Excel 到这里/ }).getAttribute("aria-disabled")).toBe("true");
     expect(screen.getByText("status: 排队中")).toBeTruthy();
 
@@ -171,7 +171,8 @@ describe("JATO monthly update baseline promotion status", () => {
     });
 
     expect((document.querySelector(".monthly-update-file-input") as HTMLInputElement).disabled).toBe(true);
-    expect((screen.getByPlaceholderText("2026-04") as HTMLInputElement).disabled).toBe(true);
+    expect(screen.queryByText(/预期数据月份/)).toBeNull();
+    expect(screen.getByText(/无需填写月份/)).toBeTruthy();
     expect(screen.getByRole("button", { name: /拖拽 JATO Excel 到这里/ }).getAttribute("aria-disabled")).toBe("true");
     expect((screen.getByRole("button", { name: "保存当前 active 为 baseline" }) as HTMLButtonElement).disabled).toBe(true);
     expect((screen.getByRole("button", { name: /执行安全删/ }) as HTMLButtonElement).disabled).toBe(true);
@@ -206,9 +207,13 @@ describe("JATO monthly update baseline promotion status", () => {
     fireEvent.change(fileInput, {
       target: { files: [new File([new Uint8Array([1, 2, 3, 4])], "patch.xlsx")] },
     });
-    fireEvent.click(screen.getByRole("button", { name: "启动月更任务" }));
+    fireEvent.click(screen.getByRole("button", { name: "上传并启动月更" }));
 
     await act(async () => {});
+    expect(api.createJatoMonthlyUpdateJob).toHaveBeenCalledWith(
+      expect.any(File),
+      expect.any(Function),
+    );
     fireEvent.click(screen.getByRole("button", { name: "放弃本次上传" }));
 
     await act(async () => {});
@@ -242,7 +247,7 @@ describe("JATO monthly update baseline promotion status", () => {
     fireEvent.change(fileInput, {
       target: { files: [new File([new Uint8Array([1, 2, 3, 4])], "patch.xlsx")] },
     });
-    fireEvent.click(screen.getByRole("button", { name: "启动月更任务" }));
+    fireEvent.click(screen.getByRole("button", { name: "上传并启动月更" }));
 
     await act(async () => {});
     expect(screen.queryByRole("button", { name: "放弃本次上传" })).toBeNull();

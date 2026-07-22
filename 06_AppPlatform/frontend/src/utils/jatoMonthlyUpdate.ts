@@ -3,12 +3,6 @@ import type { JatoMonthlyUpdateJob } from "../types";
 const MONTHLY_UPDATE_ALLOWED_EXTENSIONS = [".xlsx", ".xlsm", ".xls"];
 const MONTHLY_UPDATE_RETRY_BASE_DELAY_MS = 1200;
 
-export function getDefaultMonthlyUpdateMonth(now: Date = new Date()): string {
-  const year = now.getFullYear();
-  const month = String(now.getMonth() + 1).padStart(2, "0");
-  return `${year}-${month}`;
-}
-
 export function formatMonthlyUpdateTimestamp(value?: string | null): string {
   if (!value) {
     return "-";

@@ -14787,7 +14787,6 @@ def _create_jato_monthly_update_job_from_upload_in_start_window(
     upload_id: str,
     triggered_by: str,
     triggered_role: str = "editor",
-    month: str | None = None,
 ) -> dict[str, Any]:
     state = _load_upload_session(upload_id)
     _require_upload_session_access(
@@ -14877,25 +14876,13 @@ def _create_jato_monthly_update_job_from_upload_in_start_window(
         state_lock_held=True,
     )
 
-    resolved_month = (
-        month
-        or str(ingest_digest.get("latestMonth") or "").strip()
-    )
-    if not resolved_month:
+    digest_month_raw = str(ingest_digest.get("latestMonth") or "").strip()
+    if not digest_month_raw:
         raise HTTPException(
             status_code=400,
             detail="无法从工作簿 digest 识别真实月份。",
         )
-    resolved_month = _normalize_month(resolved_month)
-    digest_month = _normalize_month(str(ingest_digest.get("latestMonth") or ""))
-    if resolved_month != digest_month:
-        raise HTTPException(
-            status_code=409,
-            detail=(
-                f"请求月份 {resolved_month} 与工作簿真实最新月份 "
-                f"{digest_month} 不一致。"
-            ),
-        )
+    digest_month = _normalize_month(digest_month_raw)
 
     ingestion_key = _build_ingestion_key(ingest_digest)
     ingestion_lock = MONTHLY_UPDATE_JOB_ROOT / INGESTION_LOCK_FILENAME
@@ -14947,7 +14934,7 @@ def _create_jato_monthly_update_job_from_upload_in_start_window(
                 triggered_by=triggered_by,
                 upload_filename=filename,
                 stored_upload_path=stored_upload_path,
-                month=resolved_month,
+                month=digest_month,
                 file_sha256=file_sha256,
                 ingest_digest=ingest_digest,
                 ingestion_key=ingestion_key,
@@ -14967,7 +14954,6 @@ def create_jato_monthly_update_job_from_upload(
     upload_id: str,
     triggered_by: str,
     triggered_role: str = "editor",
-    month: str | None = None,
 ) -> dict[str, Any]:
     state = _load_upload_session(upload_id)
     _require_upload_session_access(
@@ -15001,7 +14987,6 @@ def create_jato_monthly_update_job_from_upload(
                 upload_id=upload_id,
                 triggered_by=triggered_by,
                 triggered_role=triggered_role,
-                month=month,
             )
 
 

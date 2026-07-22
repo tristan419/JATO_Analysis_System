@@ -323,7 +323,6 @@ export function JatoMonthlyUpdatePage() {
   ] = useState<Record<string, JatoHistoricalReclassificationDecision>>({});
   const [selectedReviewCountry, setSelectedReviewCountry] = useState<string | null>(null);
   const [dragActive, setDragActive] = useState(false);
-  const [uploadMonth, setUploadMonth] = useState<string | null>(null);
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
   const [cleanupResult, setCleanupResult] =
@@ -558,7 +557,6 @@ export function JatoMonthlyUpdatePage() {
             setUploadProgress(progress);
           }
         },
-        uploadMonth ?? undefined,
       );
       setNotice(
         `已创建任务 ${response.item.jobId}，自动识别最新数据月 ${response.item.month || "-"}，批次 ${response.item.batchId || "-"}；系统会按国家范围选择分区 Review 或完整批次管线。`
@@ -1667,29 +1665,15 @@ export function JatoMonthlyUpdatePage() {
           </div>
 
           <div className="monthly-update-form-actions">
-            <label style={{ display: "block", marginBottom: 12, fontSize: 12, fontWeight: 600, color: "#555" }}>
-              预期数据月份（可选；系统以工作簿 digest 的真实月份为准，不一致会拒绝）
-              <input
-                type="text"
-                placeholder="2026-04"
-                value={uploadMonth ?? ""}
-                onChange={(e) => setUploadMonth(e.target.value.trim() || null)}
-                disabled={monthlyUpdateBusy}
-                style={{
-                  display: "block", marginTop: 4, padding: "8px 12px",
-                  border: "1px solid #d1d5db", borderRadius: 8, fontSize: 14, width: 200,
-                }}
-              />
-            </label>
             <p className="monthly-update-note">
-              系统会读取 Data Export 的国家范围：只覆盖 active 中部分国家时走低内存分区 Review（跳过全量 baseline Raw Compare），覆盖全部国家时才走完整批次管线。分区路径会逐国检查月份回退、字段缺失、历史销量和未上传分区指纹。
+              无需填写月份。系统会先从 Data Export 自动识别每个国家的真实最新月份和国家范围：只覆盖 active 中部分国家时走低内存分区 Review（跳过全量 baseline Raw Compare），覆盖全部国家时才走完整批次管线。分区路径会逐国检查月份回退、字段缺失、历史销量和未上传分区指纹。
             </p>
             <button
               type="submit"
               className="btn btn-primary"
               disabled={monthlyUpdateBusy || uploadFile === null}
             >
-              {submitting ? "上传并启动中..." : maintenanceBusy ? "维护进行中..." : "启动月更任务"}
+              {submitting ? "上传并启动中..." : maintenanceBusy ? "维护进行中..." : "上传并启动月更"}
             </button>
           </div>
           {uploadProgress && (
