@@ -582,6 +582,30 @@ def assert_release_checkpoint_contract(workflow: Mapping[str, Any]) -> None:
     ):
         raise AssertionError("complete receipt must bind the verified server attestation")
     audit_text = str(audit)
+    required_receipt_identity_tokens = (
+        "release_checkpoint.py show",
+        'candidate_identity != attestation.get("identity")',
+        'candidate_identity.get("archiveBytes")',
+        'candidate_identity.get("archiveSha256")',
+        '--archive-bytes "$archive_bytes"',
+        '--archive-sha256 "$archive_sha256"',
+    )
+    missing_receipt_identity = [
+        token for token in required_receipt_identity_tokens if token not in audit_commands
+    ]
+    if missing_receipt_identity:
+        raise AssertionError(
+            "verified receipt must reuse the attested candidate identity: "
+            f"{missing_receipt_identity}"
+        )
+    for masked_output in (
+        "needs.deploy_tencent.outputs.archive_bytes",
+        "needs.deploy_tencent.outputs.archive_sha256",
+    ):
+        if masked_output in audit_text:
+            raise AssertionError(
+                f"verified receipt must not depend on secret-maskable output {masked_output}"
+            )
     if "release-verified-${{ github.sha }}-${{ github.run_attempt }}" not in audit_text:
         raise AssertionError("final parity must retain a verified production receipt")
     verified_upload = step_by_name(
