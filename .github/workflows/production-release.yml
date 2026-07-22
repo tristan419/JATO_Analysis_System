@@ -23,6 +23,7 @@ concurrency:
 
 env:
   FRONTEND_NODE_VERSION: "20.19.0"
+  WRANGLER_VERSION: "4.86.0"
 
 jobs:
   build_frontend:
@@ -75,6 +76,7 @@ jobs:
           rm -rf "$release_dir"
           python3 03_Scripts/deploy/frontend_release_artifact.py create \
             --dist-dir 06_AppPlatform/frontend/dist \
+            --functions-dir 06_AppPlatform/frontend/functions \
             --release-dir "$release_dir" \
             --github-sha "$GITHUB_SHA" \
             --artifact-name "$ARTIFACT_NAME" \
@@ -128,6 +130,11 @@ jobs:
       - name: Checkout release source
         uses: actions/checkout@v5
 
+      - name: Setup fixed Cloudflare Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.FRONTEND_NODE_VERSION }}
+
       - name: Download immutable frontend artifact by id
         uses: actions/download-artifact@v5
         with:
@@ -157,7 +164,8 @@ jobs:
             --expected-run-attempt "$GITHUB_RUN_ATTEMPT" \
             --github-artifact-id "$GITHUB_ARTIFACT_ID" \
             --github-artifact-digest "$GITHUB_ARTIFACT_DIGEST" \
-            --materialize-dir "$RUNNER_TEMP/frontend-dist"
+            --materialize-dir "$RUNNER_TEMP/frontend-dist" \
+            --materialize-functions-dir "$RUNNER_TEMP/cloudflare-pages-project/functions"
 
       - name: Validate Tencent deploy credentials
         id: auth
@@ -180,6 +188,7 @@ jobs:
           fi
 
       - name: Validate Cloudflare deploy configuration
+        working-directory: ${{ runner.temp }}/cloudflare-pages-project
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
@@ -189,6 +198,27 @@ jobs:
           : "${CLOUDFLARE_API_TOKEN:?Missing CLOUDFLARE_API_TOKEN}"
           : "${CLOUDFLARE_ACCOUNT_ID:?Missing CLOUDFLARE_ACCOUNT_ID}"
           : "${CLOUDFLARE_PAGES_PROJECT_NAME:?Missing CLOUDFLARE_PAGES_PROJECT_NAME}"
+          worker_bundle="$RUNNER_TEMP/cloudflare-pages-worker.js"
+          routes_manifest="$RUNNER_TEMP/cloudflare-pages-routes.json"
+          npx --yes "wrangler@$WRANGLER_VERSION" pages functions build functions \
+            --project-directory . \
+            --outfile "$worker_bundle" \
+            --output-routes-path "$routes_manifest"
+          test -s "$worker_bundle"
+          test -s "$routes_manifest"
+          python3 - "$routes_manifest" <<'PY'
+          import json
+          import sys
+          from pathlib import Path
+
+          routes = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
+          included = set(routes.get("include", []))
+          required = {"/healthz", "/oauth-relay/*", "/v1/*"}
+          missing = sorted(required - included)
+          if missing:
+              raise SystemExit(f"Missing Cloudflare Pages Function routes: {missing}")
+          print(f"Validated Cloudflare Pages Function routes: {sorted(required)}")
+          PY
 
       - name: Package backend release with verified frontend artifact
         env:
@@ -623,13 +653,14 @@ jobs:
             "${origin_args[@]}"
 
       - name: Deploy downloaded dist to Cloudflare Pages
+        working-directory: ${{ runner.temp }}/cloudflare-pages-project
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
           CLOUDFLARE_PAGES_PROJECT_NAME: ${{ vars.CLOUDFLARE_PAGES_PROJECT_NAME || secrets.CLOUDFLARE_PAGES_PROJECT_NAME }}
         run: |
           set -euo pipefail
-          npx --yes wrangler@latest pages deploy "$RUNNER_TEMP/frontend-dist" \
+          npx --yes "wrangler@$WRANGLER_VERSION" pages deploy "$RUNNER_TEMP/frontend-dist" \
             --project-name "$CLOUDFLARE_PAGES_PROJECT_NAME" \
             --branch "$GITHUB_REF_NAME" \
             --commit-hash "$GITHUB_SHA" \
@@ -663,6 +694,17 @@ jobs:
             --origin "$JATO_INTL_ORIGIN" \
             --attempts 24 \
             --delay-seconds 10
+
+      - name: Verify intl API routing contract
+        env:
+          JATO_INTL_ORIGIN: ${{ vars.JATO_INTL_ORIGIN || 'https://intl.ojeur.cloud' }}
+        run: |
+          set -euo pipefail
+          python3 03_Scripts/deploy/verify_intl_runtime_contract.py \
+            --origin "$JATO_INTL_ORIGIN" \
+            --attempts 24 \
+            --delay-seconds 10 \
+            --timeout-seconds 20
 
   audit_frontend_parity:
     if: ${{ github.ref == 'refs/heads/main' }}
