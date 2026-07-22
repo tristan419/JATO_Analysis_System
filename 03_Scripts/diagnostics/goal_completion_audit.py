@@ -23,9 +23,16 @@ from urllib.request import Request, urlopen
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
+SCRIPT_DIR = Path(__file__).resolve().parent
 HERMES_SCRIPT_DIR = REPO_ROOT / "03_Scripts" / "hermes"
-if str(HERMES_SCRIPT_DIR) not in sys.path:
-    sys.path.insert(0, str(HERMES_SCRIPT_DIR))
+for path in (SCRIPT_DIR, HERMES_SCRIPT_DIR):
+    if str(path) not in sys.path:
+        sys.path.insert(0, str(path))
+
+from production_audit_evidence import (  # noqa: E402
+    is_external_https_api,
+    validate_deploy_status,
+)
 
 try:
     from pipeline_status_writer import write_pipeline_status
@@ -419,6 +426,8 @@ def _remote_checks(
     if not remote_api_base:
         return {
             "status": "not_checked",
+            "auditScope": "local_candidate",
+            "productionReady": False,
             "note": "Pass --remote-api-base to verify deployed API state.",
         }
     base = remote_api_base.rstrip("/")
@@ -442,13 +451,24 @@ def _remote_checks(
         timeout_seconds,
         resolve_ip=resolve_ip,
     )
+    deploy, deploy_error, deploy_code = _fetch_json(
+        f"{base}/hermes/deploy/status",
+        timeout_seconds,
+        resolve_ip=resolve_ip,
+    )
     progress_status = progress.get("status") if isinstance(progress, dict) else {}
     if not isinstance(progress_status, dict):
         progress_status = {}
     progress_gate = _effective_progress_gate(progress)
     stable_coverage = progress_gate["stableCoverage"]
+    external_https = is_external_https_api(base)
+    deploy_evidence = validate_deploy_status(
+        deploy,
+        http_status=deploy_code,
+    )
     passed = (
-        snapshot_code == 200
+        external_https
+        and snapshot_code == 200
         and isinstance(snapshot, dict)
         and snapshot.get("schemaVersion") == "msrp_current_price_snapshot_v1"
         and progress_code == 200
@@ -459,9 +479,14 @@ def _remote_checks(
         and monitoring_code == 200
         and isinstance(monitoring, dict)
         and monitoring.get("schemaVersion") == "msrp_monitoring_events_v1"
+        and deploy_evidence["metadataValid"]
     )
     return {
         "status": "passed" if passed else "missing",
+        "auditScope": "remote_production",
+        "productionReady": passed,
+        "fetchedAt": _utc_now_iso(),
+        "source": base,
         "apiBase": base,
         "resolveIp": resolve_ip,
         "snapshot": {
@@ -519,6 +544,20 @@ def _remote_checks(
                 else None
             ),
             "error": monitoring_error,
+        },
+        "deployStatus": {
+            "httpStatus": deploy_code,
+            "httpStatusBasis": (
+                "returned_by_remote_request" if deploy_code else "request_failed"
+            ),
+            "deployedCommit": deploy_evidence["deployedCommit"],
+            "externalHttpsApi": external_https,
+            "metadataValid": deploy_evidence["metadataValid"],
+            "status": deploy_evidence["status"],
+            "environment": deploy_evidence["environment"],
+            "branch": deploy_evidence["branch"],
+            "isDrift": deploy_evidence["isDrift"],
+            "error": deploy_error,
         },
     }
 
@@ -640,10 +679,17 @@ def build_goal_completion_report(
         ),
     ]
     status_counts = dict(sorted(Counter(item["status"] for item in requirements).items()))
+    deploy_runtime = (
+        remote.get("deployStatus")
+        if isinstance(remote.get("deployStatus"), dict)
+        else {}
+    )
     return {
         "schemaVersion": SCHEMA_VERSION,
         "status": _overall_status(requirements),
         "generatedAtUtc": _utc_now_iso(),
+        "auditScope": remote.get("auditScope", "local_candidate"),
+        "productionReady": bool(remote.get("productionReady")),
         "summary": {
             "requirementCount": len(requirements),
             "statusCounts": status_counts,
@@ -660,6 +706,8 @@ def build_goal_completion_report(
             "sourceDraftTodoPlaceholderCount": source_coverage["todoPlaceholderCount"],
             "sourceDraftCountryCount": source_coverage["countryCount"],
             "productionStatus": remote.get("status"),
+            "productionReady": bool(remote.get("productionReady")),
+            "deployedCommit": deploy_runtime.get("deployedCommit"),
         },
         "requirements": requirements,
     }

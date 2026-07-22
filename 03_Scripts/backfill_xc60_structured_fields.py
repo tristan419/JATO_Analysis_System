@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
-"""One-time backfill / cleanup for XC60 review cases.
+"""Read-only backfill / cleanup preview for XC60 review cases.
 
 This script:
-1. Fills NULL structured fields (jato_powertrain,
+1. Reports proposed values for NULL structured fields (jato_powertrain,
    official_edition, official_powertrain) on existing XC60
    observations, current_prices, and review_cases by re-running
    the powertrain/edition evidence engine on stored trim text.
-2. Closes open review_cases that have been superseded by a
+2. Reports open review_cases that have been superseded by a
    newer observation for the same (country, brand, jato_model,
    jato_trim) key.
 
@@ -14,8 +14,7 @@ Usage:
   cd 06_AppPlatform/backend
   python ../../03_Scripts/backfill_xc60_structured_fields.py \
       --dry-run          # preview only
-  python ../../03_Scripts/backfill_xc60_structured_fields.py \
-      --commit           # apply changes
+  # --commit is fail-closed until an approval-gated compensation path exists.
 
 Requires APP_DATABASE_URL env var or defaults to local dev DB.
 """
@@ -27,13 +26,22 @@ import logging
 import os
 import re
 import sys
-from datetime import datetime, timezone
 
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s %(levelname)s %(message)s",
 )
 log = logging.getLogger(__name__)
+
+FACT_WRITE_DISABLED_MESSAGE = (
+    "--commit is disabled: CurrentPrice changes require the approval-gated "
+    "materialization/compensation path"
+)
+
+
+def require_read_only_mode(*, commit: bool) -> None:
+    if commit:
+        raise RuntimeError(FACT_WRITE_DISABLED_MESSAGE)
 
 # ── canonical JATO powertrain types ──────────────
 CANONICAL_POWERTRAINS = frozenset(
@@ -113,14 +121,14 @@ def _db_url() -> str:
 def main() -> None:
     parser = argparse.ArgumentParser(
         description=(
-            "Backfill structured fields on XC60 "
-            "observations / review_cases"
+            "Preview structured-field backfill on XC60 "
+            "observations / review_cases (read-only)"
         ),
     )
     parser.add_argument(
         "--commit",
         action="store_true",
-        help="Apply changes (default is dry-run)",
+        help="Disabled until an approval-gated compensation path is implemented.",
     )
     parser.add_argument(
         "--dry-run",
@@ -143,7 +151,10 @@ def main() -> None:
         parser.error(
             "--commit and --dry-run are mutually exclusive"
         )
-    do_commit = args.commit
+    try:
+        require_read_only_mode(commit=args.commit)
+    except RuntimeError as exc:
+        parser.error(str(exc))
 
     try:
         from sqlalchemy import create_engine, text
@@ -156,7 +167,7 @@ def main() -> None:
 
     engine = create_engine(_db_url())
 
-    with engine.begin() as conn:
+    with engine.connect() as conn:
         # ── Step 1: backfill structured fields ───
         rows = conn.execute(
             text(
@@ -188,22 +199,14 @@ def main() -> None:
                 continue
 
             sets = []
-            params: dict = {"oid": obs_id}
             if pt:
                 sets.append(
                     "jato_powertrain = :pt, "
                     "official_powertrain = :pt"
                 )
-                params["pt"] = pt
             if ed:
                 sets.append("official_edition = :ed")
-                params["ed"] = ed
 
-            sql = (
-                "UPDATE msrp.observations SET "
-                + ", ".join(sets)
-                + " WHERE observation_id = :oid"
-            )
             log.info(
                 "  obs %s  trim=%s  pt=%s  ed=%s",
                 obs_id,
@@ -211,8 +214,6 @@ def main() -> None:
                 pt,
                 ed,
             )
-            if do_commit:
-                conn.execute(text(sql), params)
             obs_updated += 1
 
         # ── propagate to current_prices ──────────
@@ -238,27 +239,16 @@ def main() -> None:
         for row in cp_rows:
             cpid, jp, op, oe = row
             sets = []
-            params = {"cpid": cpid}
             if jp:
                 sets.append("jato_powertrain = :jp")
-                params["jp"] = jp
             if op:
                 sets.append(
                     "official_powertrain = :op"
                 )
-                params["op"] = op
             if oe:
                 sets.append("official_edition = :oe")
-                params["oe"] = oe
             if not sets:
                 continue
-            sql = (
-                "UPDATE msrp.current_prices SET "
-                + ", ".join(sets)
-                + " WHERE current_price_id = :cpid"
-            )
-            if do_commit:
-                conn.execute(text(sql), params)
             cp_updated += 1
 
         # ── propagate to review_cases ────────────
@@ -284,31 +274,19 @@ def main() -> None:
         for row in rc_rows:
             rcid, jp, op, oe = row
             sets = []
-            params = {"rcid": rcid}
             if jp:
                 sets.append("jato_powertrain = :jp")
-                params["jp"] = jp
             if op:
                 sets.append(
                     "official_powertrain = :op"
                 )
-                params["op"] = op
             if oe:
                 sets.append("official_edition = :oe")
-                params["oe"] = oe
             if not sets:
                 continue
-            sql = (
-                "UPDATE review.review_cases SET "
-                + ", ".join(sets)
-                + " WHERE review_case_id = :rcid"
-            )
-            if do_commit:
-                conn.execute(text(sql), params)
             rc_updated += 1
 
         # ── Step 2: close superseded review cases ─
-        now_utc = datetime.now(timezone.utc)
         superseded = conn.execute(
             text(
                 "WITH latest AS ( "
@@ -341,21 +319,7 @@ def main() -> None:
             log.info(
                 "  closing superseded case %s", rcid
             )
-            if do_commit:
-                conn.execute(
-                    text(
-                        "UPDATE review.review_cases "
-                        "SET review_status = "
-                        "'closed_superseded', "
-                        "updated_at_utc = :now "
-                        "WHERE review_case_id = :rcid"
-                    ),
-                    {"rcid": rcid, "now": now_utc},
-                )
             closed += 1
-
-        if not do_commit:
-            conn.rollback()
 
         log.info("─── Summary ───")
         log.info(
@@ -368,11 +332,10 @@ def main() -> None:
             "Review cases propagated: %d", rc_updated
         )
         log.info("Superseded cases closed: %d", closed)
-        if not do_commit:
-            log.info(
-                "DRY RUN — no changes committed. "
-                "Re-run with --commit to apply."
-            )
+        log.info(
+            "READ-ONLY DRY RUN — no changes committed; fact writes require "
+            "the approval-gated compensation path."
+        )
 
 
 if __name__ == "__main__":

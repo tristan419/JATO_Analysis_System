@@ -24,9 +24,6 @@ from app.services.msrp_link_service import upsert_jato_msrp_link
 from app.services.msrp_official_source_policy import (
     is_enabled_official_msrp_source,
 )
-from app.services.msrp_workflow_service import (
-    materialize_current_price_from_observation,
-)
 from app.services.payload_serializers import (
     current_price_payload,
     jato_msrp_link_payload,
@@ -657,7 +654,6 @@ def auto_resolve_review_cases(
 
     approved_cases = []
     review_decisions = []
-    current_prices = []
     unresolved_count = 0
     missing_observation_count = 0
     score_rejected_count = 0
@@ -789,23 +785,8 @@ def auto_resolve_review_cases(
             decided_by=decided_by,
         )
         repo.add_review_decision(session, review_decision)
-        current_price = materialize_current_price_from_observation(
-            session,
-            observation,
-        )
         approved_cases.append(review_case)
         review_decisions.append(review_decision)
-        if current_price is not None:
-            current_prices.append(current_price)
-            # The app session runs with autoflush disabled. Flush each
-            # materialized price so later approved cases can see the current
-            # price row for the same business key instead of inserting a
-            # duplicate.
-            _commit_or_conflict(
-                session,
-                "Auto-resolving review cases conflicted with existing data",
-                commit=False,
-            )
 
     _commit_or_conflict(
         session,
@@ -840,17 +821,9 @@ def auto_resolve_review_cases(
         "sampleDecisions": [
             review_decision_payload(item) for item in review_decisions[:10]
         ],
-        "sampleCurrentPrices": [
-            current_price_payload(
-                item,
-                source_by_id.get(
-                    observation_by_id[item.effective_observation_id].source_id
-                )
-                if item.effective_observation_id in observation_by_id
-                else None,
-            )
-            for item in current_prices[:10]
-        ],
+        "sampleCurrentPrices": [],
+        "observationOnly": True,
+        "materializationRequiresEditorApproval": True,
         "sampleScreens": sample_screens,
     }
 
@@ -993,10 +966,6 @@ def create_review_decision(
                 )
             ),
         )
-        current_price = materialize_current_price_from_observation(
-            session,
-            decision_observation,
-        )
     elif decision_name == "reject":
         observation.match_status = "rejected"
         review_case.review_status = "rejected"
@@ -1135,6 +1104,9 @@ def create_review_decision(
             current_price_payload(current_price, current_price_source)
             if current_price is not None
             else None
+        ),
+        "materializationRequiresEditorApproval": (
+            decision_name in {"approve", "remap"}
         ),
         "override": (
             override_payload(override) if override is not None else None

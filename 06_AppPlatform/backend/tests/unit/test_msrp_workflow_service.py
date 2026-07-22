@@ -11,8 +11,40 @@ from sqlalchemy.exc import IntegrityError
 
 from app.api.schemas import MsrpObservationEvidenceRef, MsrpObservationIngest
 from app.db.models import CurrentPrice, FinanceObservation, MsrpObservation
-from app.services import advanced_analysis_service, msrp_workflow_service
+from app.services import (
+    advanced_analysis_service,
+    msrp_materialization_service,
+    msrp_workflow_service,
+)
 from app.services.msrp_evidence_verifier import EvidenceVerificationResult
+
+
+def _validated_materialization_context(
+    observation_id,
+    source_version_id,
+    evidence_refs,
+):
+    gate_decision_id = uuid4()
+    return msrp_materialization_service.MaterializationExecutionContext(
+        execution_id=uuid4(),
+        approval_id=uuid4(),
+        operation="materialize",
+        observation_ids=frozenset({observation_id}),
+        gate_decision_ids=frozenset({gate_decision_id}),
+        evidence_bindings=(
+            msrp_materialization_service.MaterializationEvidenceBinding(
+                observation_id=observation_id,
+                gate_decision_id=gate_decision_id,
+                source_version_id=source_version_id,
+                evidence_ref_tokens=(
+                    msrp_materialization_service._canonical_evidence_ref_tokens(
+                        evidence_refs
+                    )
+                ),
+            ),
+        ),
+        _seal=msrp_materialization_service._CONTEXT_SEAL,
+    )
 
 
 def _make_observation() -> MsrpObservation:
@@ -711,7 +743,7 @@ def test_create_scrape_batch_ingest_persists_finance_observations(
     )
 
 
-def test_ingest_flushes_evidence_links_before_fact_write_reverification(
+def test_ingest_flushes_evidence_links_without_materializing_facts(
     monkeypatch,
 ) -> None:
     events: list[str] = []
@@ -789,9 +821,7 @@ def test_ingest_flushes_evidence_links_before_fact_write_reverification(
             assert "commit" not in events
             events.append("verify_transient_links")
         else:
-            assert state["links_flushed"] is True
-            assert persisted_links
-            events.append("verify_fact_write")
+            events.append("unexpected_fact_write_verification")
         return verification
 
     monkeypatch.setattr(
@@ -923,14 +953,12 @@ def test_ingest_flushes_evidence_links_before_fact_write_reverification(
 
     assert len(persisted_links) == 1
     assert persisted_links[0].created_by == "unit-test"
-    assert len(added_current_prices) == 1
-    assert added_current_prices[0].source_version_id == source_version_id
-    assert added_current_prices[0].evidence_refs_json == [evidence_ref]
+    assert added_current_prices == []
     assert result["sampleObservations"][0]["evidenceRefs"] == [evidence_ref]
     assert events.index("verify_transient_links") < events.index("add_links")
     assert events.index("add_links") < events.index("flush_links")
-    assert events.index("flush_links") < events.index("verify_fact_write")
-    assert events.index("verify_fact_write") < events.index("commit")
+    assert events.index("flush_links") < events.index("commit")
+    assert "unexpected_fact_write_verification" not in events
 
 
 def test_payload_price_semantics_uses_explicit_observation_semantics_only() -> None:
@@ -1885,7 +1913,10 @@ def test_materialize_current_price_backfills_open_period_when_history_is_empty(
 ) -> None:
     observation = _make_observation()
     current_price = _make_current_price(observation)
-    _patch_verified_evidence(monkeypatch, observation)
+    source_version_id, evidence_ref = _patch_verified_evidence(
+        monkeypatch,
+        observation,
+    )
     recorded: list[object] = []
 
     monkeypatch.setattr(
@@ -1922,6 +1953,11 @@ def test_materialize_current_price_backfills_open_period_when_history_is_empty(
     result = msrp_workflow_service.materialize_current_price_from_observation(
         None,
         observation,
+        context=_validated_materialization_context(
+            observation.observation_id,
+            source_version_id,
+            [evidence_ref],
+        ),
         price_history_enabled=True,
     )
 
@@ -1967,6 +2003,11 @@ def test_materialize_current_price_applies_canonical_mapping_before_update(
     result = msrp_workflow_service.materialize_current_price_from_observation(
         None,
         observation,
+        context=_validated_materialization_context(
+            observation.observation_id,
+            source_version_id,
+            [evidence_ref],
+        ),
         price_history_enabled=False,
     )
 
@@ -2026,7 +2067,10 @@ def test_refreshes_open_period_when_price_is_unchanged(
 ) -> None:
     observation = _make_observation()
     current_price = _make_current_price(observation)
-    _patch_verified_evidence(monkeypatch, observation)
+    source_version_id, evidence_ref = _patch_verified_evidence(
+        monkeypatch,
+        observation,
+    )
     period_source_version_id = uuid4()
     period_evidence_refs = [{"evidenceAssetId": str(uuid4()), "sha256": "b" * 64}]
     open_period = SimpleNamespace(
@@ -2069,6 +2113,11 @@ def test_refreshes_open_period_when_price_is_unchanged(
     result = msrp_workflow_service.materialize_current_price_from_observation(
         None,
         observation,
+        context=_validated_materialization_context(
+            observation.observation_id,
+            source_version_id,
+            [evidence_ref],
+        ),
         price_history_enabled=True,
     )
 
@@ -2118,10 +2167,16 @@ def test_materialization_rejects_missing_version_or_evidence(
         "verify_observation_evidence",
         lambda *_args, **_kwargs: missing_version,
     )
+    context = _validated_materialization_context(
+        observation.observation_id,
+        uuid4(),
+        [{"evidenceAssetId": str(uuid4()), "sha256": "a" * 64}],
+    )
     assert (
         msrp_workflow_service.materialize_current_price_from_observation(
             None,
             observation,
+            context=context,
             price_history_enabled=False,
         )
         is None
@@ -2143,11 +2198,66 @@ def test_materialization_rejects_missing_version_or_evidence(
         msrp_workflow_service.materialize_current_price_from_observation(
             None,
             observation,
+            context=context,
             price_history_enabled=False,
         )
         is None
     )
     assert current_price_reads == []
+
+
+def test_materialization_rejects_evidence_changed_after_context_validation(
+    monkeypatch,
+) -> None:
+    observation = _make_observation()
+    source_version_id = uuid4()
+    observation.source_version_id = source_version_id
+    approved_ref = {
+        "evidenceAssetId": str(uuid4()),
+        "sha256": "a" * 64,
+    }
+    changed_ref = {**approved_ref, "sha256": "b" * 64}
+    verification = EvidenceVerificationResult(
+        source_version_id=source_version_id,
+        evidence_refs=(changed_ref,),
+        reasons=(),
+        source_gate=SimpleNamespace(),
+    )
+    monkeypatch.setattr(
+        msrp_workflow_service.msrp_repo,
+        "get_source",
+        lambda *_args, **_kwargs: SimpleNamespace(
+            enabled=True,
+            source_type="manufacturer_official",
+        ),
+    )
+    monkeypatch.setattr(
+        msrp_workflow_service,
+        "verify_observation_evidence",
+        lambda *_args, **_kwargs: verification,
+    )
+    fact_reads: list[str] = []
+    monkeypatch.setattr(
+        msrp_workflow_service.msrp_repo,
+        "get_current_price_by_key",
+        lambda *_args, **_kwargs: fact_reads.append("read"),
+    )
+
+    with pytest.raises(HTTPException) as exc_info:
+        msrp_workflow_service.materialize_current_price_from_observation(
+            None,
+            observation,
+            context=_validated_materialization_context(
+                observation.observation_id,
+                source_version_id,
+                [approved_ref],
+            ),
+            price_history_enabled=False,
+        )
+
+    assert exc_info.value.status_code == 409
+    assert "changed after GateDecision" in str(exc_info.value.detail)
+    assert fact_reads == []
 
 
 def test_commit_or_conflict_flushes_when_commit_is_disabled() -> None:
@@ -2191,162 +2301,13 @@ def test_commit_or_conflict_rolls_back_integrity_errors() -> None:
     assert calls == ["commit", "rollback"]
 
 
-def test_remap_current_price_reopens_review_and_removes_current_price(
-    monkeypatch,
-) -> None:
-    now = datetime(2026, 4, 12, 8, 30, tzinfo=timezone.utc)
-    observation = _make_observation()
-    current_price = _make_current_price(observation)
-    current_price.effective_observation_id = observation.observation_id
-    review_case = SimpleNamespace(
-        review_case_id=uuid4(),
-        candidate_matches_json=[{"source": "existing-review"}],
-        review_status="approved",
-        current_assignee="analyst-1",
-        updated_at_utc=observation.updated_at_utc,
-    )
-    open_period = SimpleNamespace(
-        valid_to_utc=None,
-        ended_by_observation_id=uuid4(),
-    )
-    deleted_current_prices: list[object] = []
-    added_decisions: list[object] = []
-    refreshed: list[object] = []
-    ensured_calls: list[tuple[object, object, object]] = []
-
-    monkeypatch.setattr(msrp_workflow_service, "_utc_now", lambda: now)
-    monkeypatch.setattr(
-        msrp_workflow_service.msrp_repo,
-        "get_current_price",
-        lambda *args, **kwargs: current_price,
-    )
-    monkeypatch.setattr(
-        msrp_workflow_service.msrp_repo,
-        "get_observation",
-        lambda *args, **kwargs: observation,
-    )
-    monkeypatch.setattr(
-        msrp_workflow_service.review_repo,
-        "get_review_case_by_observation",
-        lambda *args, **kwargs: review_case,
-    )
-
-    def _ensure_review_case(
-        session,
-        incoming_observation,
-        candidate_matches_json,
-    ):
-        ensured_calls.append(
-            (session, incoming_observation, candidate_matches_json)
+def test_remap_current_price_is_fail_closed_without_compensation_execution() -> None:
+    with pytest.raises(HTTPException) as exc_info:
+        msrp_workflow_service.remap_current_price(
+            SimpleNamespace(),
+            str(uuid4()),
+            {"decided_by": "tester"},
         )
-        return review_case
 
-    monkeypatch.setattr(
-        msrp_workflow_service,
-        "_ensure_review_case",
-        _ensure_review_case,
-    )
-    monkeypatch.setattr(
-        msrp_workflow_service,
-        "_retire_active_overrides",
-        lambda *args, **kwargs: 2,
-    )
-    monkeypatch.setattr(
-        msrp_workflow_service.msrp_repo,
-        "has_price_history_table",
-        lambda *args, **kwargs: True,
-    )
-    monkeypatch.setattr(
-        msrp_workflow_service.msrp_repo,
-        "get_open_price_period",
-        lambda *args, **kwargs: open_period,
-    )
-    monkeypatch.setattr(
-        msrp_workflow_service.msrp_repo,
-        "delete_current_price",
-        lambda session, price: deleted_current_prices.append(price),
-    )
-    monkeypatch.setattr(
-        msrp_workflow_service.review_repo,
-        "add_review_decision",
-        lambda session, decision: added_decisions.append(decision),
-    )
-    monkeypatch.setattr(
-        msrp_workflow_service,
-        "_commit_or_conflict",
-        lambda *args, **kwargs: None,
-    )
-    monkeypatch.setattr(
-        msrp_workflow_service.msrp_repo,
-        "get_source",
-        lambda *args, **kwargs: SimpleNamespace(
-            source_id=observation.source_id
-        ),
-    )
-    monkeypatch.setattr(
-        msrp_workflow_service,
-        "review_case_payload",
-        lambda case, obs, source: {
-            "reviewCaseId": str(case.review_case_id),
-            "observationId": str(obs.observation_id),
-            "sourceId": str(source.source_id),
-        },
-    )
-    monkeypatch.setattr(
-        msrp_workflow_service,
-        "review_decision_payload",
-        lambda decision: {
-            "reviewDecisionId": str(decision.review_case_id),
-            "decision": decision.decision,
-            "note": decision.note,
-        },
-    )
-
-    session = SimpleNamespace(refresh=lambda obj: refreshed.append(obj))
-
-    payload = msrp_workflow_service.remap_current_price(
-        session,
-        str(current_price.current_price_id),
-        {
-            "decided_by": "tester",
-            "note": "source price looks wrong",
-        },
-    )
-
-    assert ensured_calls == [
-        (session, observation, review_case.candidate_matches_json)
-    ]
-    assert review_case.review_status == "open"
-    assert review_case.current_assignee is None
-    assert review_case.updated_at_utc == now
-    assert observation.match_status == "review_required"
-    assert observation.updated_at_utc == now
-    assert observation.match_reason_json["returnedFromCurrentPrice"] == {
-        "currentPriceId": str(current_price.current_price_id),
-        "returnedBy": "tester",
-        "returnedAtUtc": now.isoformat(),
-        "note": "source price looks wrong",
-    }
-    assert open_period.valid_to_utc == now
-    assert open_period.ended_by_observation_id is None
-    assert deleted_current_prices == [current_price]
-    assert len(added_decisions) == 1
-    assert added_decisions[0].decision == "reopen"
-    assert added_decisions[0].note == "source price looks wrong"
-    assert payload == {
-        "currentPriceId": str(current_price.current_price_id),
-        "observationId": str(observation.observation_id),
-        "reviewCase": {
-            "reviewCaseId": str(review_case.review_case_id),
-            "observationId": str(observation.observation_id),
-            "sourceId": str(observation.source_id),
-        },
-        "decision": {
-            "reviewDecisionId": str(review_case.review_case_id),
-            "decision": "reopen",
-            "note": "source price looks wrong",
-        },
-        "overridesRetired": 2,
-        "removedFromCurrentPrices": True,
-    }
-    assert refreshed == [review_case, added_decisions[0]]
+    assert exc_info.value.status_code == 409
+    assert "compensation approval/execution" in str(exc_info.value.detail)

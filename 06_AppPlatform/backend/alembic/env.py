@@ -13,6 +13,8 @@ if str(BACKEND_ROOT) not in sys.path:
 from app.core.config import DATABASE_URL  # noqa: E402
 from app.db.base import Base  # noqa: E402
 import app.db.models  # noqa: F401,E402
+import app.db.msrp_materialization_models  # noqa: F401,E402
+import app.db.msrp_source_governance_models  # noqa: F401,E402
 
 
 config = context.config

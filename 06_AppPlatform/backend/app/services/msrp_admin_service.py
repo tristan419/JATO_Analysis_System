@@ -24,7 +24,6 @@ from app.services.msrp_workflow_service import (
     REVIEW_REQUIRED_STATUS,
     _ensure_review_case,
     create_scrape_batch_ingest,
-    materialize_current_price_from_observation,
 )
 from app.services.msrp_link_service import upsert_jato_msrp_link
 from app.services.msrp_evidence_verifier import evidence_references_by_observation
@@ -606,16 +605,14 @@ def update_observation(
         )
         review_case.updated_at_utc = datetime.now(timezone.utc)
 
-    if observation.match_status in ELIGIBLE_CURRENT_PRICE_STATUSES:
-        materialize_current_price_from_observation(
-            session,
-            observation,
-            price_history_enabled=repo.has_price_history_table(session),
-        )
-
     _commit_or_conflict(session, "Observation update conflicted with data")
     session.refresh(observation)
-    return _serialize_observation_row(session, observation)
+    payload = _serialize_observation_row(session, observation)
+    payload["observationOnly"] = True
+    payload["materializationRequiresEditorApproval"] = (
+        observation.match_status in ELIGIBLE_CURRENT_PRICE_STATUSES
+    )
+    return payload
 
 
 def delete_observation(

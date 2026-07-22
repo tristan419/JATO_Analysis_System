@@ -116,6 +116,33 @@ def _write_source_drafts(
         )
 
 
+def _valid_deploy_status() -> dict:
+    return {
+        "status": "ok",
+        "release": {
+            "actualCommitSha": "5418104154395b8166f97d891764bac99ade802f",
+            "source": "deploy_release_file",
+            "environment": "production",
+            "branch": "main",
+        },
+        "drift": {"isDrift": False},
+    }
+
+
+def _passing_remote_response(url: str):
+    if url.endswith("/msrp/current-prices/snapshot"):
+        return {"schemaVersion": "msrp_current_price_snapshot_v1"}, None, 200
+    if url.endswith("/hermes/msrp-country-progress"):
+        return {"status": {"gateStatus": "allowed", "overallPassPct": 96.4}}, None, 200
+    if url.endswith("/hermes/pipeline/status/unified_scraping_readiness"):
+        return {"status": "success", "readinessStatus": "passed"}, None, 200
+    if url.endswith("/msrp/monitoring/events"):
+        return {"schemaVersion": "msrp_monitoring_events_v1", "summary": {}}, None, 200
+    if url.endswith("/hermes/deploy/status"):
+        return _valid_deploy_status(), None, 200
+    raise AssertionError(url)
+
+
 def test_build_report_separates_local_p0_from_unchecked_production(tmp_path: Path) -> None:
     _write_statuses(tmp_path)
     source_root = tmp_path / "source_drafts"
@@ -198,6 +225,8 @@ def test_remote_checks_can_mark_production_passed(monkeypatch, tmp_path: Path) -
                 "summary": {"eventCount": 1, "timelineEventCount": 1, "sourceRiskCount": 0},
                 "warnings": [],
             }, None, 200
+        if url.endswith("/hermes/deploy/status"):
+            return _valid_deploy_status(), None, 200
         raise AssertionError(url)
 
     monkeypatch.setattr(audit, "_fetch_json", fake_fetch_json)
@@ -211,7 +240,53 @@ def test_remote_checks_can_mark_production_passed(monkeypatch, tmp_path: Path) -
     by_key = {item["key"]: item for item in report["requirements"]}
 
     assert by_key["production_deployment_state"]["status"] == "passed"
+    assert report["auditScope"] == "remote_production"
+    assert report["productionReady"] is True
+    assert report["summary"]["deployedCommit"] == "5418104154395b8166f97d891764bac99ade802f"
     assert report["status"] == "complete"
+
+
+def test_remote_checks_reject_localhost_as_production(monkeypatch) -> None:
+    def fake_fetch_json(
+        url: str,
+        timeout_seconds: int,
+        *,
+        resolve_ip: str | None = None,
+    ):
+        assert resolve_ip is None
+        return _passing_remote_response(url)
+
+    monkeypatch.setattr(audit, "_fetch_json", fake_fetch_json)
+
+    result = audit._remote_checks("http://127.0.0.1:8000/v1", 10)
+
+    assert result["status"] == "missing"
+    assert result["productionReady"] is False
+    assert result["deployStatus"]["externalHttpsApi"] is False
+    assert result["deployStatus"]["metadataValid"] is True
+
+
+def test_remote_checks_reject_missing_deploy_metadata(monkeypatch) -> None:
+    def fake_fetch_json(
+        url: str,
+        timeout_seconds: int,
+        *,
+        resolve_ip: str | None = None,
+    ):
+        assert resolve_ip is None
+        if url.endswith("/hermes/deploy/status"):
+            return {"status": "ok", "release": {}, "drift": {}}, None, 200
+        return _passing_remote_response(url)
+
+    monkeypatch.setattr(audit, "_fetch_json", fake_fetch_json)
+
+    result = audit._remote_checks("https://api.example.test/v1", 10)
+
+    assert result["status"] == "missing"
+    assert result["productionReady"] is False
+    assert result["deployStatus"]["httpStatus"] == 200
+    assert result["deployStatus"]["deployedCommit"] is None
+    assert result["deployStatus"]["metadataValid"] is False
 
 
 def test_remote_checks_can_use_stable_progress_when_active_probe_regresses(
@@ -263,6 +338,8 @@ def test_remote_checks_can_use_stable_progress_when_active_probe_regresses(
             }, None, 200
         if url.endswith("/msrp/monitoring/events"):
             return {"schemaVersion": "msrp_monitoring_events_v1", "summary": {}}, None, 200
+        if url.endswith("/hermes/deploy/status"):
+            return _valid_deploy_status(), None, 200
         raise AssertionError(url)
 
     monkeypatch.setattr(audit, "_fetch_json", fake_fetch_json)
@@ -325,6 +402,8 @@ def test_remote_checks_rejects_stable_progress_with_blocked_country(
             return {"status": "success", "readinessStatus": "passed"}, None, 200
         if url.endswith("/msrp/monitoring/events"):
             return {"schemaVersion": "msrp_monitoring_events_v1", "summary": {}}, None, 200
+        if url.endswith("/hermes/deploy/status"):
+            return _valid_deploy_status(), None, 200
         raise AssertionError(url)
 
     monkeypatch.setattr(audit, "_fetch_json", fake_fetch_json)
@@ -367,6 +446,8 @@ def test_remote_checks_passes_resolve_ip_to_fetcher(monkeypatch, tmp_path: Path)
             return {"status": "success", "readinessStatus": "passed"}, None, 200
         if url.endswith("/msrp/monitoring/events"):
             return {"schemaVersion": "msrp_monitoring_events_v1", "summary": {}}, None, 200
+        if url.endswith("/hermes/deploy/status"):
+            return _valid_deploy_status(), None, 200
         raise AssertionError(url)
 
     monkeypatch.setattr(audit, "_fetch_json", fake_fetch_json)

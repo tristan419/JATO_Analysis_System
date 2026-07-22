@@ -27,6 +27,7 @@ with DAG(
             """
             {% set conf = dag_run.conf if dag_run and dag_run.conf else {} %}
             JATO_MSRP_MODE=dryrun \
+            JATO_MSRP_EXECUTION_CONTEXT=airflow_scheduled \
             JATO_MSRP_COUNTRIES="{{ conf.get('countries', params.countries) }}" \
             JATO_MSRP_PAUSE_SECONDS="{{ conf.get('pause_seconds', params.pause_seconds) }}" \
             JATO_MSRP_STOP_ON_FAILURE="{{ conf.get('stop_on_failure', params.stop_on_failure) }}" \
@@ -43,6 +44,7 @@ with DAG(
             """
             {% set conf = dag_run.conf if dag_run and dag_run.conf else {} %}
             JATO_MSRP_MODE=ingest \
+            JATO_MSRP_EXECUTION_CONTEXT=airflow_scheduled \
             JATO_MSRP_COUNTRIES="{{ conf.get('countries', params.countries) }}" \
             JATO_MSRP_PAUSE_SECONDS="{{ conf.get('pause_seconds', params.pause_seconds) }}" \
             JATO_MSRP_STOP_ON_FAILURE="{{ conf.get('stop_on_failure', params.stop_on_failure) }}" \

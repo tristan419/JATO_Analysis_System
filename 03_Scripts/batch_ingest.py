@@ -5,7 +5,7 @@ Usage:
     python batch_ingest.py batch_a
     python batch_ingest.py se
     python batch_ingest.py fi,dk
-    python batch_ingest.py batch_a --auto-review --materialize
+    python batch_ingest.py batch_a --auto-review
 """
 
 from __future__ import annotations
@@ -53,10 +53,6 @@ STRICT_EXIT = os.getenv("JATO_STRICT_EXIT", "").strip().lower() in {
     "on",
 }
 log = logging.getLogger(__name__)
-
-
-def _is_truthy(value: str | None) -> bool:
-    return str(value or "").strip().lower() in {"1", "true", "yes", "on"}
 
 
 def _float_env(name: str) -> float | None:
@@ -290,43 +286,6 @@ def _auto_resolve_reviews(
     return totals
 
 
-def _materialize_current_prices(
-    countries: list[str],
-    *,
-    limit: int,
-    auth_token: str | None,
-    user_name: str | None,
-) -> dict[str, int]:
-    totals = {
-        "candidateObservations": 0,
-        "materializedKeys": 0,
-    }
-    for country in countries:
-        payload = {
-            "country": country.upper(),
-            "limit": limit,
-        }
-        result = _post_backend_json(
-            "/msrp/current-prices/materialize",
-            payload,
-            auth_token=auth_token,
-            user_name=user_name,
-        ).get("item", {})
-        print(
-            "  [materialize]"
-            f" country={country}"
-            f" candidates={result.get('candidateObservations', 0)}"
-            f" materialized={result.get('materializedKeys', 0)}"
-        )
-        totals["candidateObservations"] += int(
-            result.get("candidateObservations", 0) or 0
-        )
-        totals["materializedKeys"] += int(
-            result.get("materializedKeys", 0) or 0
-        )
-    return totals
-
-
 def _write_ingest_status(
     countries: list[str],
     ok_count: int,
@@ -395,20 +354,11 @@ def main() -> None:
     parser = argparse.ArgumentParser(
         description=(
             "Run MSRP ingest for a country list or named batch and optionally "
-            "auto-resolve review cases plus current-price materialization."
+            "auto-resolve review state without writing current-price facts."
         )
     )
     parser.add_argument("target", nargs="?", default="batch_a")
-    parser.add_argument(
-        "--auto-review",
-        action="store_true",
-        default=_is_truthy(os.getenv("JATO_AUTO_REVIEW")),
-    )
-    parser.add_argument(
-        "--materialize",
-        action="store_true",
-        default=_is_truthy(os.getenv("JATO_AUTO_MATERIALIZE")),
-    )
+    parser.add_argument("--auto-review", action="store_true", default=False)
     parser.add_argument(
         "--decided-by",
         default=(
@@ -432,11 +382,6 @@ def main() -> None:
         default=_float_env("JATO_MSRP_AUTO_REVIEW_MIN_SCORE"),
     )
     parser.add_argument(
-        "--materialize-limit",
-        type=int,
-        default=int(os.getenv("JATO_MATERIALIZE_LIMIT", "500")),
-    )
-    parser.add_argument(
         "--auth-token",
         default=os.getenv("JATO_AUTH_TOKEN") or os.getenv("APP_AUTH_TOKEN"),
     )
@@ -445,6 +390,15 @@ def main() -> None:
         default=os.getenv("JATO_USER_NAME") or os.getenv("APP_USER_NAME"),
     )
     args = parser.parse_args()
+    execution_context = str(
+        os.getenv("JATO_MSRP_EXECUTION_CONTEXT") or "unspecified"
+    ).strip().lower()
+    if execution_context != "interactive_editor" and args.auto_review:
+        print(
+            f"[WARN] {execution_context} context is observation-only; "
+            "--auto-review ignored"
+        )
+        args.auto_review = False
 
     logging.basicConfig(
         level=logging.WARNING,
@@ -537,19 +491,6 @@ def main() -> None:
             f" score_rejected={auto_review_totals['scoreRejectedCount']}"
             f" links={auto_review_totals['linkAppliedCount']}"
             f" overrides={auto_review_totals['overrideAppliedCount']}"
-        )
-
-    if args.materialize:
-        materialize_totals = _materialize_current_prices(
-            countries,
-            limit=args.materialize_limit,
-            auth_token=args.auth_token,
-            user_name=args.user_name,
-        )
-        print(
-            "Materialize:"
-            f" candidates={materialize_totals['candidateObservations']}"
-            f" materialized={materialize_totals['materializedKeys']}"
         )
 
     print(f"{'='*70}")

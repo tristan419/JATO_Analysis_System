@@ -3,8 +3,7 @@ from __future__ import annotations
 import argparse
 import sys
 from dataclasses import dataclass
-from datetime import datetime, timedelta, timezone
-from decimal import Decimal, ROUND_HALF_UP
+from decimal import Decimal
 from pathlib import Path
 
 from sqlalchemy import select
@@ -14,7 +13,7 @@ BACKEND_ROOT = Path(__file__).resolve().parents[1]
 if str(BACKEND_ROOT) not in sys.path:
     sys.path.insert(0, str(BACKEND_ROOT))
 
-from app.db.models import CurrentPrice, MsrpObservation, PriceHistory, ScrapeBatch
+from app.db.models import CurrentPrice, MsrpObservation, PriceHistory
 from app.db.session import get_session_factory
 
 
@@ -176,20 +175,14 @@ BACKFILL_ROWS = [
     ),
 ]
 
-
-def _money(value: Decimal) -> Decimal:
-    return value.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+FACT_WRITE_DISABLED_MESSAGE = (
+    "--apply is disabled: PriceHistory backfill requires the approval-gated "
+    "materialization/compensation path"
+)
 
 
 def _powertrain(value: str | None) -> str:
     return str(value or "").strip()
-
-
-def _batch_code(row: SwedenBackfillRow) -> str:
-    safe_brand = row.brand.lower().replace(" ", "-")
-    safe_model = row.jato_model.lower().replace(" ", "-")
-    safe_trim = row.jato_trim.lower().replace(" ", "-")
-    return f"msrp-backfill-se-2026-official-{safe_brand}-{safe_model}-{safe_trim}"
 
 
 def _find_current_price(session: Session, row: SwedenBackfillRow) -> CurrentPrice:
@@ -267,158 +260,9 @@ def _find_existing_period_for_observation(
     return session.execute(stmt).scalar_one_or_none()
 
 
-def _get_or_create_batch(
-    session: Session,
-    row: SwedenBackfillRow,
-    now: datetime,
-) -> ScrapeBatch:
-    batch_code = _batch_code(row)
-    stmt = select(ScrapeBatch).where(ScrapeBatch.batch_code == batch_code)
-    batch = session.execute(stmt).scalar_one_or_none()
-    if batch is not None:
-        return batch
-    batch = ScrapeBatch(
-        batch_code=batch_code,
-        trigger_type="historical_backfill",
-        scope_country=row.country,
-        scope_brands_json=[row.brand],
-        candidate_count=1,
-        success_count=1,
-        review_required_count=0,
-        failed_count=0,
-        status="completed",
-        started_at_utc=now,
-        finished_at_utc=now,
-        notes=row.notes,
-    )
-    session.add(batch)
-    session.flush()
-    return batch
-
-
-def _build_observation(
-    row: SwedenBackfillRow,
-    current_observation: MsrpObservation,
-    batch: ScrapeBatch,
-    open_period: PriceHistory,
-) -> MsrpObservation:
-    fx_rate = Decimal(str(current_observation.fx_rate_to_eur))
-    previous_msrp_eur = _money(row.previous_source_msrp_value * fx_rate)
-    observed_at = open_period.valid_from_utc - timedelta(seconds=1)
-    official_evidence = {}
-    if row.pdf_url:
-        official_evidence = {
-            "pdfUrl": row.pdf_url,
-            "pdfSnapshotPath": row.pdf_snapshot_path,
-            "pdfPayloadHash": row.pdf_payload_hash,
-        }
-    related_official_evidence = {}
-    if row.secondary_evidence_url:
-        related_official_evidence = {
-            "url": row.secondary_evidence_url,
-            "snapshotPath": row.secondary_evidence_snapshot_path,
-            "payloadHash": row.secondary_evidence_payload_hash,
-            "label": row.secondary_evidence_label,
-        }
-    return MsrpObservation(
-        scrape_batch_id=batch.scrape_batch_id,
-        source_id=current_observation.source_id,
-        country=row.country,
-        brand=row.brand,
-        jato_model=row.jato_model,
-        jato_trim=row.jato_trim,
-        jato_powertrain=row.jato_powertrain,
-        official_model=current_observation.official_model,
-        official_trim=current_observation.official_trim,
-        official_edition=current_observation.official_edition,
-        official_powertrain=current_observation.official_powertrain,
-        msrp_value=previous_msrp_eur,
-        currency=current_observation.currency,
-        source_msrp_value=row.previous_source_msrp_value,
-        source_currency=row.previous_source_currency,
-        fx_rate_to_eur=current_observation.fx_rate_to_eur,
-        fx_rate_as_of_date=current_observation.fx_rate_as_of_date,
-        fx_source=current_observation.fx_source,
-        tax_included=current_observation.tax_included,
-        price_label="Official ordinary price baseline",
-        availability_text=row.availability_text,
-        observed_at_utc=observed_at,
-        source_url=row.evidence_url,
-        source_snapshot_path=row.evidence_snapshot_path,
-        source_payload_hash=row.evidence_payload_hash,
-        extraction_version="historical-backfill-v1",
-        match_confidence=Decimal("0.9800"),
-        match_status="auto_accepted",
-        match_reason_json={
-            "resolver": "sweden_2026_official_backfill",
-            "matchedAgainstCurrentObservationId": str(current_observation.observation_id),
-            "matchBasis": (
-                "same country/brand/model/trim/powertrain with official Sweden "
-                "backfill evidence"
-            ),
-        },
-        source_context_json={
-            "historicalPriceBackfill": {
-                "enabled": True,
-                "kind": row.evidence_kind,
-                "sourceLabel": row.source_label,
-                "effectiveDate": row.effective_date,
-                "evidenceUrl": row.evidence_url,
-                "snapshotPath": row.evidence_snapshot_path,
-                "capturedAtUtc": datetime.now(timezone.utc).isoformat(),
-                "notes": row.notes,
-            },
-            "pricePeriodBackfill": {
-                "validFromStrategy": "one_second_before_current_open_period",
-                "validToObservationId": str(open_period.started_by_observation_id),
-                "validToUtc": open_period.valid_from_utc.isoformat(),
-            },
-            "officialEvidence": official_evidence,
-            "relatedOfficialEvidence": related_official_evidence,
-            "campaignPrice": {
-                "sourceMsrpValue": str(row.current_source_msrp_value),
-                "sourceCurrency": row.previous_source_currency,
-            },
-            "ordinaryPrice": {
-                "sourceMsrpValue": str(row.previous_source_msrp_value),
-                "sourceCurrency": row.previous_source_currency,
-            },
-        },
-        created_at_utc=datetime.now(timezone.utc),
-        updated_at_utc=datetime.now(timezone.utc),
-    )
-
-
-def _insert_price_period(
-    session: Session,
-    row: SwedenBackfillRow,
-    observation: MsrpObservation,
-    open_period: PriceHistory,
-) -> PriceHistory:
-    period = PriceHistory(
-        country=row.country,
-        brand=row.brand,
-        jato_model=row.jato_model,
-        jato_trim=row.jato_trim,
-        jato_powertrain=_powertrain(row.jato_powertrain),
-        msrp_value=observation.msrp_value,
-        currency=observation.currency,
-        source_msrp_value=observation.source_msrp_value,
-        source_currency=observation.source_currency,
-        valid_from_utc=observation.observed_at_utc,
-        valid_to_utc=open_period.valid_from_utc,
-        last_confirmed_at_utc=observation.observed_at_utc,
-        started_by_observation_id=observation.observation_id,
-        ended_by_observation_id=open_period.started_by_observation_id,
-        last_confirmed_by_observation_id=observation.observation_id,
-        created_at_utc=datetime.now(timezone.utc),
-    )
-    session.add(period)
-    session.flush()
-    return period
-
-
 def apply_row(session: Session, row: SwedenBackfillRow, *, apply: bool) -> dict[str, object]:
+    if apply:
+        raise RuntimeError(FACT_WRITE_DISABLED_MESSAGE)
     current_price = _find_current_price(session, row)
     current_observation = _find_current_observation(session, current_price)
     open_period = _find_open_period(session, row)
@@ -442,34 +286,16 @@ def apply_row(session: Session, row: SwedenBackfillRow, *, apply: bool) -> dict[
         / row.previous_source_msrp_value
         * Decimal("100")
     )
-    if not apply:
-        return {
-            "status": "dry_run",
-            "brand": row.brand,
-            "model": row.jato_model,
-            "trim": row.jato_trim,
-            "previousSourceMsrp": float(row.previous_source_msrp_value),
-            "currentSourceMsrp": float(row.current_source_msrp_value),
-            "changePct": float(change_pct.quantize(Decimal("0.01"))),
-            "currentPriceId": str(current_price.current_price_id),
-            "openPriceHistoryId": str(open_period.price_history_id),
-        }
-
-    batch = _get_or_create_batch(session, row, datetime.now(timezone.utc))
-    observation = _build_observation(row, current_observation, batch, open_period)
-    session.add(observation)
-    session.flush()
-    period = _insert_price_period(session, row, observation, open_period)
     return {
-        "status": "inserted",
-        "observationId": str(observation.observation_id),
-        "priceHistoryId": str(period.price_history_id),
+        "status": "dry_run",
         "brand": row.brand,
         "model": row.jato_model,
         "trim": row.jato_trim,
         "previousSourceMsrp": float(row.previous_source_msrp_value),
         "currentSourceMsrp": float(row.current_source_msrp_value),
         "changePct": float(change_pct.quantize(Decimal("0.01"))),
+        "currentPriceId": str(current_price.current_price_id),
+        "openPriceHistoryId": str(open_period.price_history_id),
     }
 
 
@@ -480,20 +306,19 @@ def main() -> None:
     parser.add_argument(
         "--apply",
         action="store_true",
-        help="Write observations and price_history periods. Defaults to dry-run.",
+        help="Disabled until an approval-gated compensation path is implemented.",
     )
     args = parser.parse_args()
+    if args.apply:
+        parser.error(FACT_WRITE_DISABLED_MESSAGE)
 
     session_factory = get_session_factory()
     with session_factory() as session:
         results = [
-            apply_row(session, row, apply=args.apply)
+            apply_row(session, row, apply=False)
             for row in BACKFILL_ROWS
         ]
-        if args.apply:
-            session.commit()
-        else:
-            session.rollback()
+        session.rollback()
     for result in results:
         print(result)
 

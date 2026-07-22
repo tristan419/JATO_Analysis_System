@@ -417,7 +417,7 @@ fi
 
 if ! is_truthy "${JATO_MSRP_PIPELINE_SKIP_DRYRUN:-false}"; then
   echo "[PIPELINE] Phase 2/4: dryrun"
-  if ! JATO_MSRP_MODE=dryrun JATO_MSRP_COUNTRIES="$COUNTRIES_RAW" "$RUNNER"; then
+  if ! JATO_MSRP_EXECUTION_CONTEXT=pipeline_wrapper JATO_MSRP_MODE=dryrun JATO_MSRP_COUNTRIES="$COUNTRIES_RAW" "$RUNNER"; then
     write_pipeline_status "failed" "Dryrun phase failed" 1 "dryrun"
     exit 1
   fi
@@ -483,7 +483,7 @@ if is_truthy "${JATO_MSRP_PIPELINE_SKIP_INGEST:-false}"; then
 fi
 
 echo "[PIPELINE] Phase 3/4: ingest"
-if ! JATO_MSRP_MODE=ingest JATO_MSRP_COUNTRIES="$COUNTRIES_RAW" "$RUNNER"; then
+if ! JATO_MSRP_EXECUTION_CONTEXT=pipeline_wrapper JATO_MSRP_MODE=ingest JATO_MSRP_COUNTRIES="$COUNTRIES_RAW" "$RUNNER"; then
   write_pipeline_status "failed" "Ingest phase failed" 1 "ingest"
   exit 1
 fi

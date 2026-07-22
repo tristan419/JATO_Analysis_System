@@ -63,11 +63,13 @@ class FakeReadinessClient:
         auth_role: str = "editor",
         missing_all_country_latest: bool = False,
         missing_monitoring: bool = False,
+        missing_dryrun_remote: bool = False,
     ) -> None:
         self.missing_snapshot = missing_snapshot
         self.auth_role = auth_role
         self.missing_all_country_latest = missing_all_country_latest
         self.missing_monitoring = missing_monitoring
+        self.missing_dryrun_remote = missing_dryrun_remote
 
     def request_json(
         self,
@@ -149,6 +151,8 @@ class FakeReadinessClient:
                 "items": [{}],
             }
         if path == "/hermes/msrp-country-progress":
+            if self.missing_dryrun_remote:
+                raise audit_module.SmokeFailure("remote progress 503")
             payload = {
                 "overall": "ok",
                 "status": {
@@ -185,9 +189,24 @@ class FakeReadinessClient:
                 ]
             return payload
         if path == "/hermes/msrp-dryrun-history":
+            if self.missing_dryrun_remote:
+                raise audit_module.SmokeFailure("remote history 503")
             return {
                 "latestRunId": "msrp-dryrun-test",
                 "runs": [{"runId": "msrp-dryrun-test"}],
+            }
+        if path == "/hermes/deploy/status":
+            if self.missing_dryrun_remote:
+                raise audit_module.SmokeFailure("remote deploy 503")
+            return {
+                "status": "ok",
+                "release": {
+                    "actualCommitSha": "5418104154395b8166f97d891764bac99ade802f",
+                    "source": "deploy_release_file",
+                    "environment": "production",
+                    "branch": "main",
+                },
+                "drift": {"isDrift": False},
             }
         raise AssertionError(f"Unexpected request: {path}")
 
@@ -327,7 +346,7 @@ def test_build_readiness_report_degrades_without_all_country_latest_progress() -
     assert dryrun_requirement["runtime"]["stableLatestRunId"] == "msrp-dryrun-stable"
 
 
-def test_build_readiness_report_uses_latest_dryrun_artifact_fallback(
+def test_local_dryrun_artifact_never_overrides_api_evidence(
     tmp_path: Path,
     monkeypatch,
 ) -> None:
@@ -424,14 +443,97 @@ def test_build_readiness_report_uses_latest_dryrun_artifact_fallback(
         for item in report["requirements"]
     }
     dryrun_runtime = requirements["dryrun_governance"]["runtime"]
-    assert dryrun_runtime["latestRunId"] == "msrp-dryrun-artifact-latest"
-    assert dryrun_runtime["activeRunId"] == "msrp-dryrun-artifact-latest"
-    assert dryrun_runtime["artifactFallbackUsed"] is True
+    assert dryrun_runtime["latestRunId"] == "msrp-dryrun-test"
+    assert dryrun_runtime["activeRunId"] == "msrp-dryrun-active"
+    assert dryrun_runtime["artifactFallbackUsed"] is False
     assert dryrun_runtime["allCountryLatestCount"] == 2
-    assert dryrun_runtime["stableCoverage"]["readyCountries"] == ["fr", "se"]
-    assert dryrun_runtime["passPct"] == 96.3
-    assert report["summary"]["runtimeCounts"]["dryrunRunCount"] == 3
+    assert dryrun_runtime["passPct"] == 96.4
+    assert report["summary"]["runtimeCounts"]["dryrunRunCount"] == 1
     assert report["summary"]["runtimeCounts"]["dryrunAllCountryLatestCount"] == 2
+    assert report["auditScope"] == "local_candidate"
+    assert report["productionReady"] is False
+    assert report["localCandidateEvidence"]["available"] is True
+    assert report["localCandidateEvidence"]["maySetProductionReady"] is False
+
+
+def test_remote_production_scope_records_deploy_evidence() -> None:
+    report = audit_module.build_readiness_report(
+        client=FakeReadinessClient(),
+        filters={},
+        audit_scope="remote_production",
+    )
+
+    assert report["auditScope"] == "remote_production"
+    assert report["productionReady"] is True
+    assert report["productionEvidence"]["httpStatus"] == 200
+    assert report["productionEvidence"]["source"].endswith(
+        "/hermes/deploy/status"
+    )
+    assert report["productionEvidence"]["deployedCommit"] == (
+        "5418104154395b8166f97d891764bac99ade802f"
+    )
+    assert report["productionEvidence"]["fetchedAt"]
+    assert report["productionEvidence"]["deployMetadataValid"] is True
+
+
+def test_localhost_cannot_be_declared_remote_production_ready() -> None:
+    client = FakeReadinessClient()
+    client.api_base = "https://localhost:8000/v1"
+
+    report = audit_module.build_readiness_report(
+        client=client,
+        filters={},
+        audit_scope="remote_production",
+    )
+
+    assert report["productionReady"] is False
+    assert report["productionEvidence"]["externalHttpsApi"] is False
+
+
+def test_old_local_artifact_cannot_clear_remote_production_errors(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    runs_index = tmp_path / "dryrun_runs_index.json"
+    runs_index.write_text(
+        json.dumps(
+            {
+                "latestRunId": "old-local-pass",
+                "runs": [
+                    {
+                        "runId": "old-local-pass",
+                        "batch": "hu",
+                        "gateStatus": "allowed",
+                        "passPct": 100,
+                        "total": 1,
+                        "pass": 1,
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(audit_module, "DRYRUN_RUNS_INDEX_PATH", runs_index)
+
+    report = audit_module.build_readiness_report(
+        client=FakeReadinessClient(missing_dryrun_remote=True),
+        filters={},
+        audit_scope="remote_production",
+    )
+
+    requirement = next(
+        item for item in report["requirements"]
+        if item["key"] == "dryrun_governance"
+    )
+    assert requirement["status"] == "missing"
+    assert requirement["runtime"]["artifactFallbackUsed"] is False
+    assert requirement["runtime"]["errors"] == [
+        "remote progress 503",
+        "remote history 503",
+    ]
+    assert report["productionReady"] is False
+    assert report["localCandidateEvidence"]["available"] is True
+    assert report["productionEvidence"]["error"] == "remote deploy 503"
 
 
 def test_main_prints_json_report(capsys, monkeypatch) -> None:

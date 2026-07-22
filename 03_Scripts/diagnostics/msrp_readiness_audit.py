@@ -51,6 +51,10 @@ from engineering_config_source_sync import (  # noqa: E402
     build_source_sync_report,
 )
 from msrp_workflow_smoke import ApiClient, DEFAULT_API_BASE, SmokeFailure  # noqa: E402
+from production_audit_evidence import (  # noqa: E402
+    is_external_https_api,
+    validate_deploy_status,
+)
 
 try:
     from pipeline_status_writer import write_pipeline_status
@@ -496,6 +500,7 @@ def build_readiness_report(
     *,
     client: ApiClient,
     filters: dict[str, Any],
+    audit_scope: str = "local_candidate",
 ) -> dict[str, Any]:
     query = {key: value for key, value in filters.items() if value not in (None, "")}
     limit_query = {**query, "limit": 50}
@@ -568,22 +573,15 @@ def build_readiness_report(
         client,
         "/hermes/msrp-dryrun-history",
     )
-    artifact_dryrun_history = _dryrun_history_from_artifacts()
-    dryrun_artifact_fallback_used = _should_use_dryrun_artifact_fallback(
-        api_history=dryrun_history,
-        api_progress=country_progress,
-        artifact_history=artifact_dryrun_history,
+    deploy_status, deploy_status_error = _safe_get(
+        client,
+        "/hermes/deploy/status",
     )
-    if dryrun_artifact_fallback_used:
-        artifact_country_progress = _dryrun_country_progress_from_artifacts(
-            artifact_dryrun_history
-        )
-        if artifact_country_progress:
-            country_progress = artifact_country_progress
-            country_progress_error = None
-        if artifact_dryrun_history:
-            dryrun_history = artifact_dryrun_history
-            dryrun_history_error = None
+    artifact_dryrun_history = _dryrun_history_from_artifacts()
+    dryrun_artifact_fallback_used = False
+    local_candidate_country_progress = _dryrun_country_progress_from_artifacts(
+        artifact_dryrun_history
+    )
     try:
         config_source_sync = build_source_sync_report(
             repo_root=REPO_ROOT,
@@ -794,7 +792,11 @@ def build_readiness_report(
                 "GET /msrp/current-prices",
                 TEST_EVIDENCE["workflowSmoke"],
             ],
-            note="Confirms official MSRP observations can materialize into current prices.",
+            note=(
+                "Confirms official MSRP observations are retained independently; "
+                "CurrentPrice/PriceHistory writes require a separate persisted "
+                "editor approval execution."
+            ),
         ),
         _requirement(
             key="weekly_snapshot",
@@ -1133,10 +1135,12 @@ def build_readiness_report(
             ],
             note=(
                 "Runs official config source sync first, then dryrun and only "
-                "proceeds to ingest when the v3 dryrun gate allows it; ingest "
-                "reuses auto-review/materialize and snapshot/readiness refresh "
-                "from the low-concurrency runner before full-pipeline unified "
-                "readiness and goal completion audits are refreshed."
+                "proceeds to observation ingest when the v3 dryrun gate allows "
+                "it. Scheduled ingest is observation-only; auto-review defaults "
+                "off and is restricted to interactive editor context, while "
+                "CurrentPrice/PriceHistory materialization requires a separate "
+                "persisted editor approval execution. Snapshot/readiness and "
+                "full-pipeline unified/goal audits are then refreshed read-only."
             ),
         ),
         _requirement(
@@ -1161,10 +1165,55 @@ def build_readiness_report(
         item_status = str(item.get("status") or "unknown")
         status_counts[item_status] = status_counts.get(item_status, 0) + 1
 
+    normalized_scope = (
+        "remote_production"
+        if audit_scope == "remote_production"
+        else "local_candidate"
+    )
+    overall_status = _overall_status(requirements)
+    deploy_http_status = 200 if deploy_status_error is None else None
+    external_https = is_external_https_api(client.api_base)
+    deploy_evidence = validate_deploy_status(
+        deploy_status,
+        http_status=deploy_http_status,
+    )
+    production_ready = bool(
+        normalized_scope == "remote_production"
+        and external_https
+        and overall_status == "passed"
+        and deploy_http_status == 200
+        and deploy_evidence["metadataValid"]
+    )
     return {
         "schemaVersion": SCHEMA_VERSION,
-        "status": _overall_status(requirements),
+        "status": overall_status,
         "generatedAtUtc": _utc_now_iso(),
+        "auditScope": normalized_scope,
+        "productionReady": production_ready,
+        "productionEvidence": {
+            "fetchedAt": _utc_now_iso(),
+            "source": f"{client.api_base.rstrip('/')}/hermes/deploy/status",
+            "httpStatus": deploy_http_status,
+            "httpStatusBasis": (
+                "inferred_from_successful_json_response"
+                if deploy_http_status == 200
+                else "request_failed"
+            ),
+            "deployedCommit": deploy_evidence["deployedCommit"],
+            "externalHttpsApi": external_https,
+            "deployMetadataValid": deploy_evidence["metadataValid"],
+            "error": deploy_status_error,
+        },
+        "localCandidateEvidence": {
+            "classification": "local_candidate",
+            "source": _display_path(DRYRUN_RUNS_INDEX_PATH),
+            "available": bool(
+                artifact_dryrun_history.get("latestRunId")
+                or artifact_dryrun_history.get("runs")
+            ),
+            "countryProgressAvailable": bool(local_candidate_country_progress),
+            "maySetProductionReady": False,
+        },
         "apiBase": client.api_base,
         "filters": {
             "country": filters.get("country"),
@@ -1203,6 +1252,11 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         description="Audit MSRP official price enrichment readiness without writes.",
     )
     parser.add_argument("--api-base", default=DEFAULT_API_BASE)
+    parser.add_argument(
+        "--audit-scope",
+        choices=("local_candidate", "remote_production"),
+        default="local_candidate",
+    )
     parser.add_argument("--country", default=None)
     parser.add_argument("--brand", default=None)
     parser.add_argument("--jato-model", default=None)
@@ -1241,6 +1295,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     started = time.time()
     report = build_readiness_report(
         client=client,
+        audit_scope=args.audit_scope,
         filters={
             "country": args.country,
             "brand": args.brand,

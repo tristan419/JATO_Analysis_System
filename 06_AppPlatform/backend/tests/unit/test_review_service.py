@@ -165,10 +165,6 @@ def test_create_review_decision_persists_link_and_mismatch_category(
         created_at_utc=datetime(2026, 4, 12, 10, 5, tzinfo=timezone.utc),
         updated_at_utc=datetime(2026, 4, 12, 10, 5, tzinfo=timezone.utc),
     )
-    current_price = SimpleNamespace(
-        current_price_id=uuid4(),
-        effective_observation_id=observation_id,
-    )
     captured = {}
 
     def _upsert_link(*args, **kwargs):
@@ -189,11 +185,6 @@ def test_create_review_decision_persists_link_and_mismatch_category(
         review_service.msrp_repository,
         "get_source",
         lambda *args, **kwargs: source,
-    )
-    monkeypatch.setattr(
-        review_service,
-        "materialize_current_price_from_observation",
-        lambda *args, **kwargs: current_price,
     )
     monkeypatch.setattr(
         review_service.repo,
@@ -262,6 +253,8 @@ def test_create_review_decision_persists_link_and_mismatch_category(
     assert captured["link_payload"]["confidence"] == 99
     assert observation.match_reason_json["mismatchCategory"] == "naming_mismatch"
     assert payload["link"]["officialTrim"] == "Ultra Dark"
+    assert payload["currentPrice"] is None
+    assert payload["materializationRequiresEditorApproval"] is True
 
 
 def test_create_review_decision_approves_selected_source_observation(
@@ -351,12 +344,7 @@ def test_create_review_decision_approves_selected_source_observation(
         link_id=uuid4(),
         official_trim="Base",
     )
-    current_price = SimpleNamespace(
-        current_price_id=uuid4(),
-        effective_observation_id=selected_observation_id,
-    )
     added_decisions = []
-    materialized = []
 
     monkeypatch.setattr(
         review_service.repo,
@@ -380,13 +368,6 @@ def test_create_review_decision_approves_selected_source_observation(
         review_service.msrp_repository,
         "get_source",
         lambda _session, source_id: source_by_id.get(source_id),
-    )
-    monkeypatch.setattr(
-        review_service,
-        "materialize_current_price_from_observation",
-        lambda _session, observation: (
-            materialized.append(observation) or current_price
-        ),
     )
     monkeypatch.setattr(
         review_service.repo,
@@ -461,7 +442,6 @@ def test_create_review_decision_approves_selected_source_observation(
     assert review_case.review_status == "approved"
     assert selected_observation.match_status == "human_approved"
     assert original_observation.match_status == "auto_accepted"
-    assert materialized == [selected_observation]
     assert len(added_decisions) == 1
     assert added_decisions[0].observation_id == original_observation_id
     assert selected_observation.match_reason_json[
@@ -473,7 +453,8 @@ def test_create_review_decision_approves_selected_source_observation(
     assert payload["acceptedObservation"]["observationId"] == str(
         selected_observation_id
     )
-    assert payload["currentPrice"]["sourceCode"] == "pdf"
+    assert payload["currentPrice"] is None
+    assert payload["materializationRequiresEditorApproval"] is True
 
 
 def test_auto_resolve_review_cases_approves_link_backed_open_cases(
@@ -520,10 +501,6 @@ def test_auto_resolve_review_cases_approves_link_backed_open_cases(
         extractor_version="v1",
         enabled=True,
     )
-    current_price = SimpleNamespace(
-        current_price_id=uuid4(),
-        effective_observation_id=observation_id,
-    )
     added_decisions = []
 
     def _apply_mapping(_session, incoming_observation):
@@ -556,11 +533,6 @@ def test_auto_resolve_review_cases_approves_link_backed_open_cases(
         _apply_mapping,
     )
     monkeypatch.setattr(review_service, "_utc_now", lambda: now)
-    monkeypatch.setattr(
-        review_service,
-        "materialize_current_price_from_observation",
-        lambda *args, **kwargs: current_price,
-    )
     monkeypatch.setattr(
         review_service.repo,
         "add_review_decision",
@@ -635,6 +607,8 @@ def test_auto_resolve_review_cases_approves_link_backed_open_cases(
     assert payload["scoreRejectedCount"] == 0
     assert payload["autoReviewScore"]["threshold"] == 70.0
     assert payload["sampleScreens"][0]["passed"] is True
+    assert payload["sampleCurrentPrices"] == []
+    assert payload["materializationRequiresEditorApproval"] is True
 
 
 def test_auto_resolve_review_cases_approves_high_score_official_source(
@@ -690,12 +664,7 @@ def test_auto_resolve_review_cases_approves_high_score_official_source(
         tier=3,
         enabled=True,
     )
-    current_price = SimpleNamespace(
-        current_price_id=uuid4(),
-        effective_observation_id=observation_id,
-    )
     added_decisions = []
-    materialized = []
 
     monkeypatch.setattr(
         review_service.repo,
@@ -722,11 +691,6 @@ def test_auto_resolve_review_cases_approves_high_score_official_source(
         },
     )
     monkeypatch.setattr(review_service, "_utc_now", lambda: now)
-    monkeypatch.setattr(
-        review_service,
-        "materialize_current_price_from_observation",
-        lambda _session, obs: materialized.append(obs) or current_price,
-    )
     monkeypatch.setattr(
         review_service.repo,
         "add_review_decision",
@@ -776,7 +740,6 @@ def test_auto_resolve_review_cases_approves_high_score_official_source(
     assert review_case.review_status == "approved"
     assert review_case.current_assignee == "msrp-auto-review"
     assert observation.match_status == "auto_accepted"
-    assert materialized == [observation]
     assert len(added_decisions) == 1
     decision = observation.match_reason_json["autoReviewDecision"]
     assert decision["resolverKind"] == "deterministic_auto_review"
@@ -790,7 +753,8 @@ def test_auto_resolve_review_cases_approves_high_score_official_source(
     assert payload["linkAppliedCount"] == 0
     assert payload["overrideAppliedCount"] == 0
     assert payload["unresolvedCount"] == 0
-    assert payload["sampleCurrentPrices"][0]["sourceCode"] == source.source_code
+    assert payload["sampleCurrentPrices"] == []
+    assert payload["materializationRequiresEditorApproval"] is True
 
 
 def test_auto_resolve_review_cases_holds_low_score_candidates(
@@ -841,7 +805,6 @@ def test_auto_resolve_review_cases_holds_low_score_candidates(
         enabled=True,
     )
     added_decisions = []
-    materialized = []
 
     def _apply_mapping(_session, incoming_observation):
         incoming_observation.official_trim = "Ultra Dark"
@@ -874,11 +837,6 @@ def test_auto_resolve_review_cases_holds_low_score_candidates(
     )
     monkeypatch.setattr(review_service, "_utc_now", lambda: now)
     monkeypatch.setattr(
-        review_service,
-        "materialize_current_price_from_observation",
-        lambda *args, **kwargs: materialized.append(args[1]) or None,
-    )
-    monkeypatch.setattr(
         review_service.repo,
         "add_review_decision",
         lambda _session, decision: added_decisions.append(decision),
@@ -907,7 +865,6 @@ def test_auto_resolve_review_cases_holds_low_score_candidates(
     assert observation.match_reason_json["autoReviewScreen"]["passed"] is False
     assert observation.match_reason_json["autoReviewScreen"]["reviewAssist"]["preferred"] == "human_review"
     assert added_decisions == []
-    assert materialized == []
     assert payload["candidateCases"] == 1
     assert payload["autoApprovedCount"] == 0
     assert payload["scoreRejectedCount"] == 1

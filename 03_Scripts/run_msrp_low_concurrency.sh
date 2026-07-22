@@ -115,11 +115,11 @@ BACKEND_PORT="${BACKEND_PORT:-8000}"
 export JATO_API_BASE="${JATO_API_BASE:-http://127.0.0.1:${BACKEND_PORT}/v1}"
 export JATO_STRICT_EXIT="${JATO_STRICT_EXIT:-true}"
 export APP_USER_NAME="${APP_USER_NAME:-msrp-cron}"
-AUTO_REVIEW="${JATO_MSRP_AUTO_REVIEW:-true}"
-AUTO_MATERIALIZE="${JATO_MSRP_AUTO_MATERIALIZE:-true}"
+EXECUTION_CONTEXT="${JATO_MSRP_EXECUTION_CONTEXT:-unspecified}"
+AUTO_REVIEW="${JATO_MSRP_AUTO_REVIEW:-false}"
+AUTO_MATERIALIZE="false"
 AUTO_REVIEW_LIMIT="${JATO_MSRP_AUTO_REVIEW_LIMIT:-500}"
 AUTO_REVIEW_MIN_SCORE="${JATO_MSRP_AUTO_REVIEW_MIN_SCORE:-70}"
-MATERIALIZE_LIMIT="${JATO_MSRP_MATERIALIZE_LIMIT:-500}"
 AUTO_REVIEW_DECIDED_BY="${JATO_AUTO_REVIEW_DECIDED_BY:-${APP_USER_NAME:-msrp-cron}}"
 REFRESH_CURRENT_SNAPSHOT="${JATO_MSRP_REFRESH_CURRENT_SNAPSHOT:-true}"
 CURRENT_SNAPSHOT_LIMIT="${JATO_MSRP_CURRENT_SNAPSHOT_LIMIT:-500}"
@@ -129,6 +129,13 @@ REFRESH_READINESS_AUDIT="${JATO_MSRP_REFRESH_READINESS_AUDIT:-true}"
 READINESS_AUDIT_TIMEOUT_SECONDS="${JATO_MSRP_READINESS_AUDIT_TIMEOUT_SECONDS:-30}"
 COUNTRY_TIMEOUT_SECONDS="${JATO_MSRP_COUNTRY_TIMEOUT_SECONDS:-3600}"
 export NVAPI_KEY="${NVAPI_KEY:-${NVIDIA_API_KEY:-}}"
+
+if [[ "$EXECUTION_CONTEXT" != "interactive_editor" ]]; then
+  if is_truthy "$AUTO_REVIEW" || is_truthy "${JATO_MSRP_AUTO_MATERIALIZE:-false}"; then
+    echo "[WARN] $EXECUTION_CONTEXT context is observation-only; auto flags ignored."
+  fi
+  AUTO_REVIEW="false"
+fi
 
 if ! [[ "$COUNTRY_TIMEOUT_SECONDS" =~ ^[0-9]+$ ]]; then
   echo "[WARN] Invalid JATO_MSRP_COUNTRY_TIMEOUT_SECONDS=$COUNTRY_TIMEOUT_SECONDS; disabling per-country timeout"
@@ -251,6 +258,7 @@ echo "[INFO] MSRP env: $MSRP_ENV_FILE"
 echo "[INFO] Python: $PYTHON_BIN"
 echo "[INFO] API base: $JATO_API_BASE"
 echo "[INFO] Log file: $LOG_FILE"
+echo "[INFO] Execution context: $EXECUTION_CONTEXT"
 echo "[INFO] Auto review: $AUTO_REVIEW"
 echo "[INFO] Auto materialize: $AUTO_MATERIALIZE"
 echo "[INFO] Auto review min score: $AUTO_REVIEW_MIN_SCORE"
@@ -352,9 +360,6 @@ while (( country_idx < total || active > 0 )); do
     if [[ "$MODE" == "ingest" ]]; then
       if is_truthy "$AUTO_REVIEW"; then
         extra_args+=(--auto-review --decided-by "$AUTO_REVIEW_DECIDED_BY" --auto-review-limit "$AUTO_REVIEW_LIMIT" --auto-review-min-score "$AUTO_REVIEW_MIN_SCORE")
-      fi
-      if is_truthy "$AUTO_MATERIALIZE"; then
-        extra_args+=(--materialize --materialize-limit "$MATERIALIZE_LIMIT")
       fi
     fi
 

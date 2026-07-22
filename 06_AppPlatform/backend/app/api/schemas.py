@@ -461,13 +461,6 @@ class ScrapeBatchIngestRequest(BaseModel):
     observations: list[MsrpObservationIngest] = Field(default_factory=list)
 
 
-class CurrentPriceMaterializeRequest(BaseModel):
-    country: str | None = None
-    brand: str | None = None
-    jato_model: str | None = None
-    limit: int = 500
-
-
 class CurrentPriceRemapRequest(BaseModel):
     decided_by: str
     note: str | None = None
