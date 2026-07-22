@@ -275,6 +275,7 @@ import argparse
 import json
 
 parser = argparse.ArgumentParser()
+parser.add_argument("--allow-uninitialized", action="store_true")
 parser.add_argument("--evidence-root", required=True)
 parser.add_argument("--output", required=True)
 parser.add_argument("--object-list-output", required=True)

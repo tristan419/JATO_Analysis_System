@@ -365,6 +365,7 @@ main() {
 
     log "checking DB Evidence Asset rows against $evidence_root"
     "$PYTHON_BIN" "$INTEGRITY_SCRIPT" \
+      --allow-uninitialized \
       --evidence-root "$evidence_root" \
       --output "$integrity_temp" \
       --object-list-output "$object_list"

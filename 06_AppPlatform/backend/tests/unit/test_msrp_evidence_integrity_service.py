@@ -232,12 +232,19 @@ def test_integrity_command_serializes_rows_before_closing_session(monkeypatch) -
 
     class FakeSession:
         def __init__(self) -> None:
-            self.executed = False
+            self.executed: list[str] = []
             self.rolled_back = False
             self.closed = False
 
-        def execute(self, _statement) -> None:
-            self.executed = True
+        def execute(self, statement, _params=None):
+            self.executed.append(str(statement))
+            if "to_regclass" in str(statement):
+                return type(
+                    "TableResult",
+                    (),
+                    {"scalar_one_or_none": lambda self: module.EVIDENCE_TABLE_REGCLASS},
+                )()
+            return None
 
         def rollback(self) -> None:
             self.rolled_back = True
@@ -263,7 +270,69 @@ def test_integrity_command_serializes_rows_before_closing_session(monkeypatch) -
             "sha256": "a" * 64,
         }
     ]
-    assert session.executed is True
+    assert len(session.executed) == 2
+    assert session.rolled_back is True
+    assert session.closed is True
+
+
+def test_integrity_command_allows_only_empty_pre_governance_bootstrap(
+    monkeypatch,
+    tmp_path: Path,
+    capsys,
+) -> None:
+    module = _load_integrity_cli_module()
+    monkeypatch.setattr(module, "_load_evidence_assets", lambda: None)
+
+    assert module.main(["--evidence-root", str(tmp_path)]) == 2
+    strict_report = json.loads(capsys.readouterr().out)
+    assert strict_report["status"] == "error"
+    assert module.EVIDENCE_TABLE_REGCLASS in strict_report["error"]["message"]
+
+    assert module.main(
+        ["--allow-uninitialized", "--evidence-root", str(tmp_path)]
+    ) == 0
+    bootstrap_report = json.loads(capsys.readouterr().out)
+    assert bootstrap_report["status"] == "not_initialized"
+    assert bootstrap_report["summary"]["databaseAssetRowCount"] == 0
+
+    orphan_path = tmp_path / "assets/aa/untracked.pdf"
+    orphan_path.parent.mkdir(parents=True)
+    orphan_path.write_bytes(b"untracked")
+    assert module.main(
+        ["--allow-uninitialized", "--evidence-root", str(tmp_path)]
+    ) == 1
+    unsafe_report = json.loads(capsys.readouterr().out)
+    assert unsafe_report["status"] == "unhealthy"
+    assert unsafe_report["summary"]["orphanObjectCount"] == 1
+
+
+def test_integrity_command_detects_missing_governance_table(monkeypatch) -> None:
+    module = _load_integrity_cli_module()
+
+    class TableResult:
+        def scalar_one_or_none(self):
+            return None
+
+    class FakeSession:
+        def __init__(self) -> None:
+            self.rolled_back = False
+            self.closed = False
+
+        def execute(self, statement, _params=None):
+            if "to_regclass" in str(statement):
+                return TableResult()
+            return None
+
+        def rollback(self) -> None:
+            self.rolled_back = True
+
+        def close(self) -> None:
+            self.closed = True
+
+    session = FakeSession()
+    monkeypatch.setattr(module, "get_session_factory", lambda: lambda: session)
+
+    assert module._load_evidence_assets() is None
     assert session.rolled_back is True
     assert session.closed is True
 
