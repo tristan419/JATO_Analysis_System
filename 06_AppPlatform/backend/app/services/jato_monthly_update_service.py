@@ -381,6 +381,7 @@ HISTORICAL_RECLASSIFICATION_DECISION_ORDER = (
     "use_latest",
     "keep_active",
 )
+HISTORICAL_RECLASSIFICATION_DEFAULT_DECISION = "keep_active"
 HISTORICAL_RECLASSIFICATION_VALUE_LIMIT = 8
 HISTORICAL_RECLASSIFICATION_EXACT_CHANGE_LIMIT = 20
 _WRITE_LOCK = threading.Lock()
@@ -2632,7 +2633,8 @@ def _build_historical_reclassification_country_report(
     if not has_historical_change:
         return None
     decision_required = True
-    return {
+    allowed_decisions = HISTORICAL_RECLASSIFICATION_DECISION_ORDER
+    report = {
         "country": country,
         "comparedThrough": (
             historical_months[-1]
@@ -2646,9 +2648,7 @@ def _build_historical_reclassification_country_report(
         ),
         "monthlyTotalsStable": monthly_totals_stable,
         "decisionRequired": decision_required,
-        "allowedDecisions": list(
-            HISTORICAL_RECLASSIFICATION_DECISION_ORDER
-        ),
+        "allowedDecisions": list(allowed_decisions),
         "dimensionSummaries": dimension_summaries,
         "exactChanges": exact_changes,
         "exactChangeCount": exact_change_count,
@@ -2663,6 +2663,12 @@ def _build_historical_reclassification_country_report(
             ),
         },
     }
+    default_decision = _historical_reclassification_default_decision(
+        allowed_decisions
+    )
+    if default_decision is not None:
+        report["defaultDecision"] = default_decision
+    return report
 
 
 def _sc011_transfer_payload(
@@ -7272,6 +7278,18 @@ def _historical_reclassification_allowed_decisions(
     return ()
 
 
+def _historical_reclassification_default_decision(
+    allowed_decisions: tuple[str, ...],
+) -> str | None:
+    """Declare the safe UI default without resolving a country decision."""
+    if (
+        HISTORICAL_RECLASSIFICATION_DEFAULT_DECISION
+        in allowed_decisions
+    ):
+        return HISTORICAL_RECLASSIFICATION_DEFAULT_DECISION
+    return None
+
+
 def _normalize_historical_reclassification_countries_for_resolution(
     countries: list[dict[str, Any]],
 ) -> list[dict[str, Any]]:
@@ -7290,11 +7308,23 @@ def _normalize_historical_reclassification_countries_for_resolution(
         if country_report.get("monthlyTotalsStable") is False:
             country_report["decisionRequired"] = True
         if bool(country_report.get("decisionRequired")):
-            country_report["allowedDecisions"] = list(
+            allowed_decisions = (
                 _historical_reclassification_allowed_decisions(
                     country_report
                 )
             )
+            country_report["allowedDecisions"] = list(allowed_decisions)
+            default_decision = (
+                _historical_reclassification_default_decision(
+                    allowed_decisions
+                )
+            )
+            if default_decision is not None:
+                country_report["defaultDecision"] = default_decision
+            else:
+                country_report.pop("defaultDecision", None)
+        else:
+            country_report.pop("defaultDecision", None)
         normalized.append(country_report)
     return normalized
 

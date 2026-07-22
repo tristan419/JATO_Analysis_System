@@ -2032,9 +2032,15 @@ function mapJatoHistoricalReclassificationCountryReport(
   const decision = raw.decision === "use_latest" || raw.decision === "keep_active"
     ? raw.decision
     : null;
+  const defaultDecision = raw.defaultDecision === "keep_active"
+    ? raw.defaultDecision
+    : null;
   return {
     country: String(raw.country ?? ""),
     decision: decision && allowedDecisions.includes(decision) ? decision : null,
+    defaultDecision: defaultDecision && allowedDecisions.includes(defaultDecision)
+      ? defaultDecision
+      : null,
     allowedDecisions,
     comparedThrough: raw.comparedThrough === undefined || raw.comparedThrough === null
       ? null

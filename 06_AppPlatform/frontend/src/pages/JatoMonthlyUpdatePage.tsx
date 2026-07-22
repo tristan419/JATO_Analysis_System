@@ -61,11 +61,32 @@ const historicalReclassificationDecisionCopy: Record<
   },
 };
 
+const defaultHistoricalReclassificationDecision:
+  JatoHistoricalReclassificationDecision = "keep_active";
+
 function isAllowedHistoricalReclassificationDecision(
   countryReport: JatoHistoricalReclassificationCountryReport,
   decision: JatoHistoricalReclassificationDecision | undefined,
 ): decision is JatoHistoricalReclassificationDecision {
   return decision !== undefined && countryReport.allowedDecisions.includes(decision);
+}
+
+function effectiveHistoricalReclassificationDecision(
+  countryReport: JatoHistoricalReclassificationCountryReport,
+  overrides: Record<string, JatoHistoricalReclassificationDecision>,
+): JatoHistoricalReclassificationDecision | undefined {
+  const explicitDecision = overrides[countryReport.country];
+  if (isAllowedHistoricalReclassificationDecision(
+    countryReport,
+    explicitDecision,
+  )) {
+    return explicitDecision;
+  }
+  const reportDefault = countryReport.defaultDecision
+    ?? defaultHistoricalReclassificationDecision;
+  return countryReport.allowedDecisions.includes(reportDefault)
+    ? reportDefault
+    : undefined;
 }
 
 function hasValidHistoricalReclassificationScope(
@@ -451,6 +472,7 @@ export function JatoMonthlyUpdatePage() {
 
   useEffect(() => {
     setReviewBundle(null);
+    setHistoricalReclassificationDecisions({});
     setReviewLoadingJobId(null);
     setReviewRefreshSubmittingJobId(null);
     setReviewIssue(null);
@@ -1033,6 +1055,7 @@ export function JatoMonthlyUpdatePage() {
             throw new Error("重建后的 Review 未绑定原 Candidate 指纹。");
           }
           setReviewBundle(reviewResponse.item);
+          setHistoricalReclassificationDecisions({});
           setReviewIssue(null);
           setNotice("Review 已重建完成。请重新核对后再执行任何决策或批准。");
         }
@@ -1110,7 +1133,10 @@ export function JatoMonthlyUpdatePage() {
     }
     const decisions: JatoHistoricalReclassificationDecisionInput[] = [];
     for (const countryReport of requiredCountries) {
-      const decision = historicalReclassificationDecisions[countryReport.country];
+      const decision = effectiveHistoricalReclassificationDecision(
+        countryReport,
+        historicalReclassificationDecisions,
+      );
       if (!isAllowedHistoricalReclassificationDecision(countryReport, decision)) {
         setError(`请先为所有历史数据变化国家选择后端允许的处理方式：${countryReport.country}。`);
         return;
@@ -1123,9 +1149,10 @@ export function JatoMonthlyUpdatePage() {
       ))
       .join("\n");
     const useLatestImpactSummary = requiredCountries
-      .filter((countryReport) => (
-        historicalReclassificationDecisions[countryReport.country] === "use_latest"
-      ))
+      .filter((countryReport) => effectiveHistoricalReclassificationDecision(
+        countryReport,
+        historicalReclassificationDecisions,
+      ) === "use_latest")
       .map((countryReport) => (
         `${countryReport.country}：覆盖至 ${countryReport.comparedThrough || "active latest"} 的 ${formatMonthlyUpdateNumber(countryReport.historicalMonthCount)} 个历史月份（${countryReport.monthlyTotalsStable ? "国家逐月总量一致，分析分类按新值" : "销量和分析分类均按新值，历史 Dashboard、同比与份额会变化"}）`
       ))
@@ -1133,9 +1160,12 @@ export function JatoMonthlyUpdatePage() {
     const useLatestConfirmation = useLatestImpactSummary
       ? `\n\n历史覆盖影响：\n${useLatestImpactSummary}\n\n覆盖是整国替换，不会把上传数据与 active 累加；未上传国家不变。选择 keep_active 的国家已发布历史不变，正常新增月份仍按月更规则处理。`
       : "";
-    if (!window.confirm(
-      `确认应用以下历史处理选择并生成完整 Candidate？\n\n${decisionSummary}${useLatestConfirmation}\n\n这一步只重建 staging，不会修改 active；完成后仍需重新 Review、Approve 和 Publish。`
-    )) {
+    if (
+      useLatestImpactSummary
+      && !window.confirm(
+        `确认应用以下历史处理选择并生成完整 Candidate？\n\n${decisionSummary}${useLatestConfirmation}\n\n这一步只重建 staging，不会修改 active；完成后仍需重新 Review、Approve 和 Publish。`,
+      )
+    ) {
       return;
     }
     setResolvingHistoricalReclassificationJobId(job.jobId);
@@ -1476,12 +1506,45 @@ export function JatoMonthlyUpdatePage() {
   const missingHistoricalReclassificationCountries = requiredHistoricalReclassificationCountries
     .filter((countryReport) => !isAllowedHistoricalReclassificationDecision(
       countryReport,
-      historicalReclassificationDecisions[countryReport.country],
+      effectiveHistoricalReclassificationDecision(
+        countryReport,
+        historicalReclassificationDecisions,
+      ),
     ))
     .map((countryReport) => countryReport.country);
   const hasCompletedHistoricalReclassificationDecisions = (
     requiredHistoricalReclassificationCountries.length > 0
     && missingHistoricalReclassificationCountries.length === 0
+  );
+  const canBulkKeepActiveHistoricalReclassification = (
+    requiredHistoricalReclassificationCountries.length > 0
+    && requiredHistoricalReclassificationCountries.every(
+      (countryReport) => countryReport.allowedDecisions.includes("keep_active")
+    )
+  );
+  const canBulkUseLatestHistoricalReclassification = (
+    requiredHistoricalReclassificationCountries.length > 0
+    && requiredHistoricalReclassificationCountries.every(
+      (countryReport) => countryReport.allowedDecisions.includes("use_latest")
+    )
+  );
+  const allHistoricalReclassificationDecisionsAreKeepActive = (
+    canBulkKeepActiveHistoricalReclassification
+    && requiredHistoricalReclassificationCountries.every(
+      (countryReport) => effectiveHistoricalReclassificationDecision(
+        countryReport,
+        historicalReclassificationDecisions,
+      ) === "keep_active"
+    )
+  );
+  const allHistoricalReclassificationDecisionsUseLatest = (
+    canBulkUseLatestHistoricalReclassification
+    && requiredHistoricalReclassificationCountries.every(
+      (countryReport) => effectiveHistoricalReclassificationDecision(
+        countryReport,
+        historicalReclassificationDecisions,
+      ) === "use_latest"
+    )
   );
   const appliedHistoricalReclassificationDecisionCount = (
     historicalReclassificationReport?.status === "resolved"
@@ -1513,6 +1576,30 @@ export function JatoMonthlyUpdatePage() {
       historicalReclassificationReport
     )
   );
+
+  function handleSetAllHistoricalReclassificationDecisions(
+    decision: JatoHistoricalReclassificationDecision,
+  ): void {
+    const canApplyToEveryCountry = requiredHistoricalReclassificationCountries.every(
+      (countryReport) => countryReport.allowedDecisions.includes(decision)
+    );
+    if (
+      requiredHistoricalReclassificationCountries.length === 0
+      || !canApplyToEveryCountry
+      || resolvingHistoricalReclassificationJobId === selectedJob?.jobId
+    ) {
+      return;
+    }
+    if (decision === defaultHistoricalReclassificationDecision) {
+      setHistoricalReclassificationDecisions({});
+      return;
+    }
+    setHistoricalReclassificationDecisions(Object.fromEntries(
+      requiredHistoricalReclassificationCountries.map(
+        (countryReport) => [countryReport.country, decision]
+      )
+    ));
+  }
   const safeCleanupMetrics = maintenanceStatus?.storageMetrics.filter((metric) => metric.cleanupTier === "safe") ?? [];
   const cautiousCleanupMetrics = maintenanceStatus?.storageMetrics.filter((metric) => metric.cleanupTier === "cautious") ?? [];
   const protectedCleanupMetrics = maintenanceStatus?.storageMetrics.filter((metric) => metric.cleanupTier === "protected") ?? [];
@@ -2193,7 +2280,9 @@ Smart Merge:  [SE:keep active 2026-03] [DE:patch 2026-03] [NL:patch 2026-02] [FR
                           ? "Review 决策契约无效"
                         : !hasCompletedHistoricalReclassificationDecisions
                           ? `还需选择 ${missingHistoricalReclassificationCountries.length} 个国家`
-                          : "应用选择并生成完整 Candidate"}
+                          : allHistoricalReclassificationDecisionsAreKeepActive
+                            ? "按默认保留 active 并生成完整 Candidate"
+                            : "应用选择并生成完整 Candidate"}
                     </button>
                   )}
                   {canPublishSelectedJob && (
@@ -2589,22 +2678,70 @@ Smart Merge:  [SE:keep active 2026-03] [DE:patch 2026-03] [NL:patch 2026-02] [FR
                         <div>
                           <div className="card-title">Historical Data Changes</div>
                           <p className="section-note">
-                            这里展示 washed 文件与 active 的历史销量和分析分类差异。
-                            每个受影响国家都必须明确选择覆盖历史或保留 active；系统不会默认选择。
+                            {historicalReclassificationReport.status === "decision_required"
+                              ? "这里展示 washed 文件与 active 的历史销量和分析分类差异。系统已安全默认保留 active 历史；需要时可批量或逐国切换为使用本次上传覆盖历史。"
+                              : "这里展示 washed 文件与 active 的历史销量和分析分类差异，以及已经写入当前 Candidate 的逐国处理选择。"}
                           </p>
                         </div>
                         <div className="table-status-chip">
-                          <span>Decision progress</span>
+                          <span>
+                            {historicalReclassificationReport.status === "decision_required"
+                              ? "当前待提交选择"
+                              : "已应用选择"}
+                          </span>
                           <strong>
                             {appliedHistoricalReclassificationDecisionCount}
                             /{historicalReclassificationDecisionCountries.length}
                           </strong>
                         </div>
                       </div>
+                      {historicalReclassificationReport.status === "decision_required" && (
+                        <div className="monthly-update-reclassification-bulk">
+                          <div>
+                            <strong>安全默认：保留当前 active 历史</strong>
+                            <small>
+                              已为 {requiredHistoricalReclassificationCountries.length} 个国家应用待提交默认值；
+                              直接生成 Candidate 即可。只有应用选择并完成重建后，策略才会写入 Candidate。
+                            </small>
+                          </div>
+                          <div
+                            className="monthly-update-reclassification-bulk-actions"
+                            role="group"
+                            aria-label="批量设置所有国家的历史数据处理方式"
+                          >
+                            <button
+                              type="button"
+                              className={allHistoricalReclassificationDecisionsAreKeepActive
+                                ? "btn btn-primary"
+                                : "btn btn-secondary"}
+                              aria-pressed={allHistoricalReclassificationDecisionsAreKeepActive}
+                              disabled={
+                                !canBulkKeepActiveHistoricalReclassification
+                                || resolvingHistoricalReclassificationJobId === selectedJob.jobId
+                              }
+                              onClick={() => handleSetAllHistoricalReclassificationDecisions("keep_active")}
+                            >
+                              全部保留 active 历史
+                            </button>
+                            <button
+                              type="button"
+                              className="btn btn-danger"
+                              aria-pressed={allHistoricalReclassificationDecisionsUseLatest}
+                              disabled={
+                                !canBulkUseLatestHistoricalReclassification
+                                || resolvingHistoricalReclassificationJobId === selectedJob.jobId
+                              }
+                              onClick={() => handleSetAllHistoricalReclassificationDecisions("use_latest")}
+                            >
+                              高风险：全部使用上传覆盖历史
+                            </button>
+                          </div>
+                        </div>
+                      )}
                       {missingHistoricalReclassificationCountries.length > 0 && (
                         <div className="alert alert-warning">
-                          批准已锁定：请为以下国家明确选择历史处理方式：
-                          {missingHistoricalReclassificationCountries.join("、")}。系统不会默认替你选择。
+                          以下国家没有可用的 keep_active 默认策略，不能生成 Candidate：
+                          {missingHistoricalReclassificationCountries.join("、")}。请先修复后端决策契约。
                         </div>
                       )}
                       {historicalReclassificationReport.status === "resolved" && (
@@ -2624,7 +2761,10 @@ Smart Merge:  [SE:keep active 2026-03] [DE:patch 2026-03] [NL:patch 2026-02] [FR
                       )}
                       <div className="monthly-update-reclassification-list">
                         {historicalReclassificationReport.countries.map((countryReport, countryIndex) => {
-                          const selectedDecision = historicalReclassificationDecisions[countryReport.country];
+                          const selectedDecision = effectiveHistoricalReclassificationDecision(
+                            countryReport,
+                            historicalReclassificationDecisions,
+                          );
                           const decisionGroupName = `historical-reclassification-${countryReport.country}`;
                           const riskDescriptionId = `historical-reclassification-risk-${countryIndex}`;
                           const keepActiveValidation = keepActiveValidationByCountry.get(
@@ -2661,8 +2801,13 @@ Smart Merge:  [SE:keep active 2026-03] [DE:patch 2026-03] [NL:patch 2026-02] [FR
 
                               {historicalReclassificationReport.status === "decision_required"
                                 && countryReport.decisionRequired && (
-                                <fieldset className="monthly-update-reclassification-decisions">
-                                  <legend>选择 {countryReport.country} 的历史数据处理方式（必选）</legend>
+                                <fieldset
+                                  className="monthly-update-reclassification-decisions"
+                                  disabled={
+                                    resolvingHistoricalReclassificationJobId === selectedJob.jobId
+                                  }
+                                >
+                                  <legend>选择 {countryReport.country} 的历史数据处理方式</legend>
                                   {countryReport.allowedDecisions.map((decision) => (
                                     <label
                                       key={decision}
@@ -2703,7 +2848,7 @@ Smart Merge:  [SE:keep active 2026-03] [DE:patch 2026-03] [NL:patch 2026-02] [FR
                                       选择「使用本次上传覆盖历史」会替换截至 {countryReport.comparedThrough || "active latest"} 的
                                       {" "}{formatMonthlyUpdateNumber(countryReport.historicalMonthCount)} 个已发布月份，包括销量与分类；
                                       历史 Dashboard、同比和份额会变化。选择「保留当前 active 历史」则历史不变。
-                                      系统不会默认选择。
+                                      当前默认保留 active；只有切换为覆盖并完成后续批准与 Publish 才会改变历史。
                                     </div>
                                   )}
                                 </fieldset>

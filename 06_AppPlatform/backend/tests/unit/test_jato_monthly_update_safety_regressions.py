@@ -1243,9 +1243,27 @@ def test_cached_legacy_review_exposes_server_normalized_allowed_decisions(
             "monthlyTotalsStable": False,
             "decisionRequired": True,
             "allowedDecisions": ["use_latest", "keep_active"],
+            "defaultDecision": "keep_active",
         }
     ]
     assert normalized_report["reportFingerprint"] != legacy_fingerprint
+    assert normalized_report["reportFingerprint"] == (
+        jato_monthly_update_service
+        ._historical_reclassification_report_fingerprint(
+            normalized_report["countries"]
+        )
+    )
+    changed_default = [
+        {
+            **normalized_report["countries"][0],
+            "defaultDecision": "use_latest",
+        }
+    ]
+    assert (
+        jato_monthly_update_service
+        ._historical_reclassification_report_fingerprint(changed_default)
+        != normalized_report["reportFingerprint"]
+    )
 
     empty_fingerprint = (
         jato_monthly_update_service
@@ -1278,6 +1296,39 @@ def test_cached_legacy_review_exposes_server_normalized_allowed_decisions(
         exc_info.value.detail["blockerType"]
         == "historical_reclassification_resolution_invalid"
     )
+
+
+def test_historical_reclassification_default_requires_keep_active_allowed(
+) -> None:
+    assert (
+        jato_monthly_update_service
+        ._historical_reclassification_default_decision(("use_latest",))
+        is None
+    )
+    assert (
+        jato_monthly_update_service
+        ._historical_reclassification_default_decision(
+            ("use_latest", "keep_active")
+        )
+        == "keep_active"
+    )
+
+    normalized = (
+        jato_monthly_update_service
+        ._normalize_historical_reclassification_countries_for_resolution(
+            [
+                {
+                    "country": "未知",
+                    "monthlyTotalsStable": None,
+                    "decisionRequired": True,
+                    "allowedDecisions": ["use_latest"],
+                    "defaultDecision": "keep_active",
+                }
+            ]
+        )
+    )
+    assert normalized[0]["allowedDecisions"] == []
+    assert "defaultDecision" not in normalized[0]
 
 
 def test_upload_complete_digest_and_create_are_idempotent(
@@ -1863,6 +1914,7 @@ def test_historical_sales_change_requires_explicit_history_decision() -> None:
     assert report["monthlyTotalsStable"] is False
     assert report["decisionRequired"] is True
     assert report["allowedDecisions"] == ["use_latest", "keep_active"]
+    assert report["defaultDecision"] == "keep_active"
 
 
 def test_keep_active_history_slices_months_without_accumulation() -> None:
@@ -2063,7 +2115,7 @@ def test_historical_reclassification_resolution_rejects_other_blockers(
     assert exc_info.value.detail["rules"] == ["SC005"]
 
 
-def test_historical_reclassification_resolution_requires_exact_country_scope(
+def test_historical_reclassification_default_does_not_relax_exact_country_scope(
     tmp_path: Path,
     monkeypatch,
 ) -> None:
@@ -2080,11 +2132,15 @@ def test_historical_reclassification_resolution_requires_exact_country_scope(
             "country": "捷克",
             "monthlyTotalsStable": True,
             "decisionRequired": True,
+            "allowedDecisions": ["use_latest", "keep_active"],
+            "defaultDecision": "keep_active",
         },
         {
             "country": "丹麦",
             "monthlyTotalsStable": True,
             "decisionRequired": True,
+            "allowedDecisions": ["use_latest", "keep_active"],
+            "defaultDecision": "keep_active",
         },
     ]
     report_fingerprint = (
@@ -2233,6 +2289,7 @@ def test_legacy_historical_sales_blocker_normalizes_and_queues_keep_active(
         "use_latest",
         "keep_active",
     ]
+    assert netherlands["defaultDecision"] == "keep_active"
     assert resolution["decisions"] == [
         {"country": "捷克", "decision": "keep_active"},
         {"country": "荷兰", "decision": "keep_active"},
@@ -2505,6 +2562,8 @@ def test_resolved_report_preserves_affected_country_and_rejects_tampering() -> N
     assert report["status"] == "resolved"
     assert report["countries"][0]["decisionRequired"] is True
     assert report["countries"][0]["decision"] == "use_latest"
+    assert "defaultDecision" not in report["countries"][0]
+    assert report["reportFingerprint"] == report_fingerprint
 
     tampered_resolution = {
         **resolution,
