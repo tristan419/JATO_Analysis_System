@@ -82,11 +82,28 @@ cache prewarm script. It is not a deployment entry point.
 
 ## Validation and governance
 
+Before any build or production environment, the release coordination preflight
+checks the unpublished range from the last successful verified production SHA
+through the target main SHA. Explicit `Release-Group` and `Depends-On`
+contracts are stored as append-only
+`.github/release-coordination/contracts/pr-<PR>.json` receipts. Production
+loads each receipt from that PR's exact merge SHA, so later body, label, issue,
+or target-tree edits cannot erase a partial group. The gate fails closed on
+partial groups, unresolved dependencies, disagreeing immutable snapshots,
+malformed metadata, stale main, cycles, PR-file visibility limits, or GitHub
+API ambiguity. Its decision is frozen as a same-run immutable artifact. After
+production approval and before deployment credentials, the workflow consumes
+that frozen plan and rechecks that the target is still current `main`; it does
+not re-read mutable PR bodies.
+See [`RELEASE_COORDINATION.md`](RELEASE_COORDINATION.md).
+
 Run the deterministic local checks without production secrets:
 
 ```bash
+python .github/scripts/validate_production_workflow_guards.py
 python .github/scripts/validate_frontend_release_workflow.py
 python -m unittest \
+  03_Scripts/tests/test_release_coordination_guard.py \
   03_Scripts/tests/test_frontend_release_artifact.py \
   03_Scripts/tests/test_verify_intl_runtime_contract.py \
   -v
