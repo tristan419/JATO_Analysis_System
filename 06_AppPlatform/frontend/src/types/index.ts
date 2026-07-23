@@ -2620,6 +2620,7 @@ export interface JatoHistoricalReclassificationExactChange {
 export interface JatoHistoricalReclassificationCountryReport {
   country: string;
   decision?: JatoHistoricalReclassificationDecision | null;
+  defaultDecision?: "keep_active" | null;
   allowedDecisions: JatoHistoricalReclassificationDecision[];
   comparedThrough: string | null;
   historicalMonthCount: number;

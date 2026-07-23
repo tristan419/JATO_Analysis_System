@@ -2032,9 +2032,15 @@ function mapJatoHistoricalReclassificationCountryReport(
   const decision = raw.decision === "use_latest" || raw.decision === "keep_active"
     ? raw.decision
     : null;
+  const defaultDecision = raw.defaultDecision === "keep_active"
+    ? raw.defaultDecision
+    : null;
   return {
     country: String(raw.country ?? ""),
     decision: decision && allowedDecisions.includes(decision) ? decision : null,
+    defaultDecision: defaultDecision && allowedDecisions.includes(defaultDecision)
+      ? defaultDecision
+      : null,
     allowedDecisions,
     comparedThrough: raw.comparedThrough === undefined || raw.comparedThrough === null
       ? null
@@ -3940,7 +3946,6 @@ export const api = {
   createJatoMonthlyUpdateJob: async (
     file: File,
     onProgress?: (progress: JatoMonthlyUpdateUploadProgress) => void,
-    month?: string,
   ) => {
     const probeSha256 = await sha256ForBlob(
       file.slice(0, Math.min(file.size, MONTHLY_UPDATE_RESUME_PROBE_BYTES))
@@ -4216,10 +4221,7 @@ export const api = {
       "/msrp/monthly-update-jobs/from-upload",
       {
         method: "POST",
-        body: JSON.stringify({
-          uploadId,
-          month: month || undefined,
-        }),
+        body: JSON.stringify({ uploadId }),
       }
     ).then((res) => mapJatoMonthlyUpdateJob(res.item));
 

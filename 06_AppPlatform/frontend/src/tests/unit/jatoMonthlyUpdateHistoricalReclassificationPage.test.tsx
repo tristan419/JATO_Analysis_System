@@ -194,7 +194,7 @@ describe("JATO historical reclassification review interaction", () => {
     vi.spyOn(window, "confirm").mockReturnValue(true);
   });
 
-  it("only offers keep_active for unstable historical sales and submits that allowed choice", async () => {
+  it("allows a per-country mixed override and confirms only the overwrite impact", async () => {
     vi.mocked(api.getJatoMonthlyUpdateReview).mockResolvedValue({
       item: {
         ...makeReviewBundle(),
@@ -203,7 +203,7 @@ describe("JATO historical reclassification review interaction", () => {
           countries: [
             makeCountryReport("捷克", 5217),
             {
-              ...makeCountryReport("丹麦", 1101, null, ["keep_active"]),
+              ...makeCountryReport("丹麦", 1101),
               monthlyTotalsStable: false,
             },
           ],
@@ -217,24 +217,43 @@ describe("JATO historical reclassification review interaction", () => {
     });
     fireEvent.click(await screen.findByRole("button", { name: "Review Candidate" }));
 
-    expect(await screen.findByText("use_latest 已锁定；active latest 之后仍取上传。")).toBeTruthy();
-    expect(screen.getAllByRole("radio", { name: /采用最新 washed 分类/ })).toHaveLength(1);
+    expect(await screen.findByText(/本次上传与 active 的历史逐月总销量不一致/)).toBeTruthy();
+    const useLatestRadios = await screen.findAllByRole("radio", {
+      name: /使用本次上传覆盖历史/,
+    });
+    expect(useLatestRadios).toHaveLength(2);
     const keepActiveRadios = screen.getAllByRole("radio", { name: /保留当前 active 历史/ });
     expect(keepActiveRadios).toHaveLength(2);
-    expect(keepActiveRadios.every((radio) => !(radio as HTMLInputElement).checked)).toBe(true);
+    expect(useLatestRadios.every((radio) => !(radio as HTMLInputElement).checked)).toBe(true);
+    expect(keepActiveRadios.every((radio) => (radio as HTMLInputElement).checked)).toBe(true);
+    const unstableRiskId = useLatestRadios[1].getAttribute("aria-describedby");
+    expect(unstableRiskId).toBeTruthy();
+    expect(document.getElementById(unstableRiskId as string)?.textContent).toContain(
+      "历史 Dashboard、同比和份额会变化",
+    );
+    expect(useLatestRadios[0].getAttribute("aria-describedby")).toBeNull();
 
-    fireEvent.click(keepActiveRadios[0]);
-    expect((screen.getByRole("button", { name: "还需选择 1 个国家" }) as HTMLButtonElement).disabled)
-      .toBe(true);
-    fireEvent.click(keepActiveRadios[1]);
+    fireEvent.click(useLatestRadios[1]);
     fireEvent.click(screen.getByRole("button", { name: "应用选择并生成完整 Candidate" }));
 
     expect(api.resolveJatoMonthlyUpdateHistoricalReclassification).toHaveBeenCalledWith(
       "jato-review-1",
       [
         { country: "捷克", decision: "keep_active" },
-        { country: "丹麦", decision: "keep_active" },
+        { country: "丹麦", decision: "use_latest" },
       ],
+    );
+    expect(window.confirm).toHaveBeenCalledWith(
+      expect.stringContaining("丹麦：覆盖至 2026-03 的 39 个历史月份"),
+    );
+    expect(window.confirm).toHaveBeenCalledWith(
+      expect.stringContaining("历史 Dashboard、同比与份额会变化"),
+    );
+    expect(window.confirm).toHaveBeenCalledWith(
+      expect.stringContaining("整国替换，不会把上传数据与 active 累加"),
+    );
+    expect(window.confirm).toHaveBeenCalledWith(
+      expect.stringContaining("未上传国家不变"),
     );
   });
 
@@ -244,66 +263,173 @@ describe("JATO historical reclassification review interaction", () => {
     vi.restoreAllMocks();
   });
 
-  it("requires every country decision before starting the full candidate rebuild", async () => {
+  it("defaults every country to keep_active and submits without a confirmation", async () => {
     await act(async () => {
       render(<JatoMonthlyUpdatePage />);
     });
 
     fireEvent.click(await screen.findByRole("button", { name: "Review Candidate" }));
-    expect(await screen.findByText("Historical Classification Changes")).toBeTruthy();
+    expect(await screen.findByText("Historical Data Changes")).toBeTruthy();
     expect(screen.getByText("5,217")).toBeTruthy();
     expect(screen.getAllByText("KIA Sportage").length).toBeGreaterThan(0);
 
-    const lockedButton = screen.getByRole("button", { name: "还需选择 2 个国家" });
-    expect((lockedButton as HTMLButtonElement).disabled).toBe(true);
     expect(screen.queryByRole("button", { name: "Approve Review" })).toBeNull();
 
-    const useLatestRadios = screen.getAllByRole("radio", { name: /采用最新 washed 分类/ });
+    const useLatestRadios = screen.getAllByRole("radio", {
+      name: /使用本次上传覆盖历史/,
+    });
     const keepActiveRadios = screen.getAllByRole("radio", { name: /保留当前 active 历史/ });
     expect(useLatestRadios).toHaveLength(2);
     expect(keepActiveRadios).toHaveLength(2);
     expect(useLatestRadios.every((radio) => !(radio as HTMLInputElement).checked)).toBe(true);
-    expect(keepActiveRadios.every((radio) => !(radio as HTMLInputElement).checked)).toBe(true);
+    expect(keepActiveRadios.every((radio) => (radio as HTMLInputElement).checked)).toBe(true);
+    expect(screen.getByText("2/2")).toBeTruthy();
 
-    fireEvent.click(useLatestRadios[0]);
-    expect((screen.getByRole("button", { name: "还需选择 1 个国家" }) as HTMLButtonElement).disabled)
-      .toBe(true);
-    fireEvent.click(keepActiveRadios[1]);
+    expect(screen.getByRole("group", {
+      name: "批量设置所有国家的历史数据处理方式",
+    })).toBeTruthy();
+    expect(screen.getByRole("button", {
+      name: "全部保留 active 历史",
+    }).getAttribute("aria-pressed")).toBe("true");
+    expect(screen.getByRole("button", {
+      name: "高风险：全部使用上传覆盖历史",
+    }).getAttribute("aria-pressed")).toBe("false");
 
     const resolveButton = screen.getByRole("button", {
-      name: "应用选择并生成完整 Candidate",
+      name: "按默认保留 active 并生成完整 Candidate",
     });
     expect((resolveButton as HTMLButtonElement).disabled).toBe(false);
-    vi.mocked(api.listJatoMonthlyUpdateJobs)
-      .mockRejectedValueOnce(new Error("temporary list failure"))
-      .mockResolvedValue({
-        rows: 1,
-        items: [makeJob({
-          status: "running",
-          phase: "historical_reclassification_resolution",
-        })],
-      });
-    vi.useFakeTimers();
-    await act(async () => {
-      fireEvent.click(resolveButton);
+    fireEvent.click(resolveButton);
+
+    await waitFor(() => {
+      expect(api.resolveJatoMonthlyUpdateHistoricalReclassification).toHaveBeenCalledWith(
+        "jato-review-1",
+        [
+          { country: "捷克", decision: "keep_active" },
+          { country: "丹麦", decision: "keep_active" },
+        ],
+      );
     });
+    expect(window.confirm).not.toHaveBeenCalled();
+    expect(api.approveJatoMonthlyUpdateReview).not.toHaveBeenCalled();
+  });
+
+  it("toggles every country between bulk use_latest and bulk keep_active", async () => {
+    await act(async () => {
+      render(<JatoMonthlyUpdatePage />);
+    });
+
+    fireEvent.click(await screen.findByRole("button", { name: "Review Candidate" }));
+    const keepAllButton = await screen.findByRole("button", {
+      name: "全部保留 active 历史",
+    });
+    const useLatestAllButton = screen.getByRole("button", {
+      name: "高风险：全部使用上传覆盖历史",
+    });
+    const useLatestRadios = screen.getAllByRole("radio", {
+      name: /使用本次上传覆盖历史/,
+    });
+    const keepActiveRadios = screen.getAllByRole("radio", {
+      name: /保留当前 active 历史/,
+    });
+
+    expect(keepAllButton.getAttribute("aria-pressed")).toBe("true");
+    expect(useLatestAllButton.getAttribute("aria-pressed")).toBe("false");
+
+    fireEvent.click(useLatestAllButton);
+    expect(keepAllButton.getAttribute("aria-pressed")).toBe("false");
+    expect(useLatestAllButton.getAttribute("aria-pressed")).toBe("true");
+    expect(useLatestRadios.every((radio) => (radio as HTMLInputElement).checked)).toBe(true);
+    expect(keepActiveRadios.every((radio) => !(radio as HTMLInputElement).checked)).toBe(true);
+
+    fireEvent.click(keepAllButton);
+    expect(keepAllButton.getAttribute("aria-pressed")).toBe("true");
+    expect(useLatestAllButton.getAttribute("aria-pressed")).toBe("false");
+    expect(useLatestRadios.every((radio) => !(radio as HTMLInputElement).checked)).toBe(true);
+    expect(keepActiveRadios.every((radio) => (radio as HTMLInputElement).checked)).toBe(true);
+
+    fireEvent.click(useLatestAllButton);
+    fireEvent.click(screen.getByRole("button", {
+      name: "应用选择并生成完整 Candidate",
+    }));
+
     expect(api.resolveJatoMonthlyUpdateHistoricalReclassification).toHaveBeenCalledWith(
       "jato-review-1",
       [
         { country: "捷克", decision: "use_latest" },
-        { country: "丹麦", decision: "keep_active" },
+        { country: "丹麦", decision: "use_latest" },
       ],
     );
-    expect(api.approveJatoMonthlyUpdateReview).not.toHaveBeenCalled();
+    expect(window.confirm).toHaveBeenCalledWith(
+      expect.stringContaining("捷克：覆盖至 2026-03 的 39 个历史月份"),
+    );
+    expect(window.confirm).toHaveBeenCalledWith(
+      expect.stringContaining("丹麦：覆盖至 2026-03 的 39 个历史月份"),
+    );
+  });
+
+  it("locks bulk and individual choices while the candidate rebuild request is pending", async () => {
+    let completeResolution!: (value: { item: JatoMonthlyUpdateJob }) => void;
+    vi.mocked(api.resolveJatoMonthlyUpdateHistoricalReclassification).mockReturnValue(
+      new Promise((resolve) => {
+        completeResolution = resolve;
+      }),
+    );
 
     await act(async () => {
-      await vi.advanceTimersByTimeAsync(5000);
+      render(<JatoMonthlyUpdatePage />);
     });
-    expect(api.listJatoMonthlyUpdateJobs).toHaveBeenCalledTimes(2);
+    fireEvent.click(await screen.findByRole("button", { name: "Review Candidate" }));
+    fireEvent.click(await screen.findByRole("button", {
+      name: "按默认保留 active 并生成完整 Candidate",
+    }));
+
+    await waitFor(() => {
+      expect(api.resolveJatoMonthlyUpdateHistoricalReclassification).toHaveBeenCalledTimes(1);
+      expect((screen.getByRole("button", {
+        name: "全部保留 active 历史",
+      }) as HTMLButtonElement).disabled).toBe(true);
+    });
+    expect((screen.getByRole("button", {
+      name: "高风险：全部使用上传覆盖历史",
+    }) as HTMLButtonElement).disabled).toBe(true);
+    expect(screen.getAllByRole("radio").every(
+      (radio) => radio.matches(":disabled")
+    )).toBe(true);
+
     await act(async () => {
-      await vi.advanceTimersByTimeAsync(5000);
+      completeResolution({
+        item: makeJob({
+          status: "queued",
+          phase: "historical_reclassification_resolution",
+        }),
+      });
     });
-    expect(api.listJatoMonthlyUpdateJobs).toHaveBeenCalledTimes(3);
+  });
+
+  it("restores the safe default after closing and reopening Review", async () => {
+    await act(async () => {
+      render(<JatoMonthlyUpdatePage />);
+    });
+    fireEvent.click(await screen.findByRole("button", { name: "Review Candidate" }));
+    fireEvent.click(await screen.findByRole("button", {
+      name: "高风险：全部使用上传覆盖历史",
+    }));
+    expect(screen.getAllByRole("radio", {
+      name: /使用本次上传覆盖历史/,
+    }).every((radio) => (radio as HTMLInputElement).checked)).toBe(true);
+
+    fireEvent.click(screen.getByRole("button", { name: "收起 Review" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Review Candidate" }));
+
+    await waitFor(() => {
+      expect(screen.getAllByRole("radio", {
+        name: /保留当前 active 历史/,
+      }).every((radio) => (radio as HTMLInputElement).checked)).toBe(true);
+    });
+    expect(screen.getByRole("button", {
+      name: "全部保留 active 历史",
+    }).getAttribute("aria-pressed")).toBe("true");
   });
 
   it("unlocks standard approval and publish after a partial job becomes full_smart_merge", async () => {
@@ -346,7 +472,7 @@ describe("JATO historical reclassification review interaction", () => {
 
     expect(await screen.findByRole("button", { name: "Approve Review" })).toBeTruthy();
     expect(screen.getByText("2/2")).toBeTruthy();
-    expect(screen.getByText(/已应用选择：采用最新 washed 分类/)).toBeTruthy();
+    expect(screen.getByText(/已应用选择：当前完整 Candidate 使用本次 washed 文件/)).toBeTruthy();
     expect(screen.getByText(/最终 Candidate 复核通过：已保留当前 active 历史/)).toBeTruthy();
     expect(screen.queryByRole("button", { name: /应用选择并生成完整 Candidate/ })).toBeNull();
     const publishBeforeApproval = screen.getByRole("button", {
@@ -369,6 +495,118 @@ describe("JATO historical reclassification review interaction", () => {
       name: "Publish Candidate",
     });
     expect((publishAfterApproval as HTMLButtonElement).disabled).toBe(false);
+  });
+
+  it("keeps unstable use_latest visibly high-risk after the candidate rebuild", async () => {
+    const fullSmartMergeJob = makeJob({
+      artifacts: {
+        ...makeArtifacts("full_smart_merge"),
+        reviewBundlePath: "04_Processed_data/reviews/jato-review-1/review_bundle.json",
+      },
+    });
+    const resolvedReview = makeReviewBundle("resolved");
+    resolvedReview.historicalReclassificationReport.countries[0] = {
+      ...resolvedReview.historicalReclassificationReport.countries[0],
+      monthlyTotalsStable: false,
+      decision: "use_latest",
+    };
+    vi.mocked(api.listJatoMonthlyUpdateJobs).mockResolvedValue({
+      rows: 1,
+      items: [fullSmartMergeJob],
+    });
+    vi.mocked(api.getJatoMonthlyUpdateJob).mockResolvedValue({
+      item: fullSmartMergeJob,
+    });
+    vi.mocked(api.getJatoMonthlyUpdateReview).mockResolvedValue({
+      item: resolvedReview,
+    });
+
+    await act(async () => {
+      render(<JatoMonthlyUpdatePage />);
+    });
+    fireEvent.click(await screen.findByRole("button", { name: "Review Candidate" }));
+
+    const warning = await screen.findByText(/高风险选择已应用/);
+    expect(warning.className).toContain("alert-danger");
+    expect(warning.textContent).toContain("历史 Dashboard、同比和份额会变化");
+    expect(screen.getByRole("button", { name: "Approve Review" })).toBeTruthy();
+    expect(screen.queryByRole("group", {
+      name: "批量设置所有国家的历史数据处理方式",
+    })).toBeNull();
+    expect(screen.queryByRole("button", { name: "全部保留 active 历史" })).toBeNull();
+    expect(screen.queryByRole("button", {
+      name: "高风险：全部使用上传覆盖历史",
+    })).toBeNull();
+  });
+
+  it("does not rebuild when the explicit overwrite confirmation is cancelled", async () => {
+    vi.mocked(window.confirm).mockReturnValue(false);
+    await act(async () => {
+      render(<JatoMonthlyUpdatePage />);
+    });
+    fireEvent.click(await screen.findByRole("button", { name: "Review Candidate" }));
+    const useLatestRadios = await screen.findAllByRole("radio", {
+      name: /使用本次上传覆盖历史/,
+    });
+    fireEvent.click(useLatestRadios[0]);
+    fireEvent.click(useLatestRadios[1]);
+    fireEvent.click(screen.getByRole("button", {
+      name: "应用选择并生成完整 Candidate",
+    }));
+
+    expect(api.resolveJatoMonthlyUpdateHistoricalReclassification).not.toHaveBeenCalled();
+  });
+
+  it("fails closed when no common keep_active default strategy is available", async () => {
+    vi.mocked(api.getJatoMonthlyUpdateReview).mockResolvedValue({
+      item: {
+        ...makeReviewBundle(),
+        historicalReclassificationReport: {
+          status: "decision_required",
+          countries: [
+            {
+              ...makeCountryReport("捷克", 5217, null, ["use_latest"]),
+              defaultDecision: null,
+            },
+            {
+              ...makeCountryReport("丹麦", 1101, null, ["keep_active"]),
+              defaultDecision: "keep_active",
+            },
+          ],
+          resolutionValidation: [],
+        },
+      },
+    });
+
+    await act(async () => {
+      render(<JatoMonthlyUpdatePage />);
+    });
+    fireEvent.click(await screen.findByRole("button", { name: "Review Candidate" }));
+
+    expect(await screen.findByText(/以下国家没有可用的 keep_active 默认策略/)).toBeTruthy();
+    expect(screen.getByText(/捷克。请先修复后端决策契约/)).toBeTruthy();
+    const keepAllButton = screen.getByRole("button", {
+      name: "全部保留 active 历史",
+    }) as HTMLButtonElement;
+    const useLatestAllButton = screen.getByRole("button", {
+      name: "高风险：全部使用上传覆盖历史",
+    }) as HTMLButtonElement;
+    expect(keepAllButton.disabled).toBe(true);
+    expect(useLatestAllButton.disabled).toBe(true);
+    expect(keepAllButton.getAttribute("aria-pressed")).toBe("false");
+    expect(useLatestAllButton.getAttribute("aria-pressed")).toBe("false");
+
+    const useLatestRadio = screen.getByRole("radio", {
+      name: /使用本次上传覆盖历史/,
+    }) as HTMLInputElement;
+    const keepActiveRadio = screen.getByRole("radio", {
+      name: /保留当前 active 历史/,
+    }) as HTMLInputElement;
+    expect(useLatestRadio.checked).toBe(false);
+    expect(keepActiveRadio.checked).toBe(true);
+    const lockedButton = screen.getByRole("button", { name: "还需选择 1 个国家" });
+    expect((lockedButton as HTMLButtonElement).disabled).toBe(true);
+    expect(api.resolveJatoMonthlyUpdateHistoricalReclassification).not.toHaveBeenCalled();
   });
 
   it("keeps approval locked when resolved keep_active verification is missing", async () => {

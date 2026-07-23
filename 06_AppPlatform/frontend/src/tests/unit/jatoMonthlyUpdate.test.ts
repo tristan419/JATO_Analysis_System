@@ -9,7 +9,6 @@ import {
   formatMonthlyUpdatePhase,
   formatMonthlyUpdateSeconds,
   formatMonthlyUpdateTimestamp,
-  getDefaultMonthlyUpdateMonth,
   getMonthlyUpdateStatusBadgeClass,
   getMonthlyUpdateRetryDelayMs,
   getMonthlyUpdateUploadStageLabel,
@@ -88,10 +87,6 @@ function makeJob(overrides: Partial<JatoMonthlyUpdateJob> = {}): JatoMonthlyUpda
 }
 
 describe("jato monthly update helpers", () => {
-  it("derives the default month from a provided date", () => {
-    expect(getDefaultMonthlyUpdateMonth(new Date("2026-04-16T10:32:09.326Z"))).toBe("2026-04");
-  });
-
   it("formats timestamps, numbers and seconds defensively", () => {
     expect(formatMonthlyUpdateTimestamp("2026-04-13T00:00:00+00:00")).toBeTruthy();
     expect(formatMonthlyUpdateTimestamp(null)).toBe("-");
