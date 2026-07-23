@@ -52,6 +52,7 @@ describe("JATO monthly update upload job creation", () => {
         return Response.json({ item: uploadSession("ready") });
       }
       if (url.endsWith("/msrp/monthly-update-jobs/from-upload")) {
+        expect(JSON.parse(String(init?.body))).toEqual({ uploadId: "upload-123" });
         return new Response("gateway unavailable", { status: 502 });
       }
       if (url.endsWith("/msrp/monthly-update-uploads/upload-123") && !init?.method) {

@@ -10931,6 +10931,42 @@ table.data-table tr.data-table-group-row.contains-selection td {
   background: rgba(239, 246, 255, 0.56);
 }
 
+.monthly-update-reclassification-bulk {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 14px;
+  border: 1px solid rgba(28, 105, 212, 0.24);
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.82);
+}
+
+.monthly-update-reclassification-bulk > div:first-child {
+  display: grid;
+  gap: 4px;
+}
+
+.monthly-update-reclassification-bulk strong {
+  color: var(--c-text-primary);
+  font-size: 13px;
+}
+
+.monthly-update-reclassification-bulk small {
+  max-width: 680px;
+  color: var(--c-text-secondary);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.monthly-update-reclassification-bulk-actions {
+  display: flex;
+  flex: 0 0 auto;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
 .monthly-update-reclassification-list {
   display: grid;
   gap: 14px;
@@ -11042,6 +11078,26 @@ table.data-table tr.data-table-group-row.contains-selection td {
   box-shadow: 0 0 0 2px rgba(28, 105, 212, 0.08);
 }
 
+.monthly-update-reclassification-decisions label.is-destructive {
+  border-color: rgba(229, 72, 77, 0.5);
+  background: rgba(229, 72, 77, 0.04);
+}
+
+.monthly-update-reclassification-decisions label.is-destructive.is-selected {
+  border-color: var(--c-danger, #c9363e);
+  background: rgba(229, 72, 77, 0.1);
+  box-shadow: 0 0 0 2px rgba(229, 72, 77, 0.1);
+}
+
+.monthly-update-reclassification-decisions label.is-destructive input {
+  accent-color: var(--c-danger, #c9363e);
+}
+
+.monthly-update-reclassification-risk {
+  grid-column: 1 / -1;
+  margin: 0;
+}
+
 .monthly-update-reclassification-decisions input {
   flex: 0 0 auto;
   margin-top: 3px;
@@ -11106,6 +11162,16 @@ table.data-table tr.data-table-group-row.contains-selection td {
 }
 
 @media (max-width: 760px) {
+  .monthly-update-reclassification-bulk {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .monthly-update-reclassification-bulk-actions {
+    display: grid;
+    grid-template-columns: 1fr;
+  }
+
   .monthly-update-reclassification-country-head {
     flex-direction: column;
   }

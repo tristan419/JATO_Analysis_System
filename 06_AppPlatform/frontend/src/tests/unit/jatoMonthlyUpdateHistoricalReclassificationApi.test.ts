@@ -110,13 +110,24 @@ describe("JATO monthly update historical reclassification API", () => {
         historicalReclassificationReport: {
           status: "decision_required",
           countries: [
-            { country: "捷克", decisionRequired: true, allowedDecisions: ["keep_active"] },
+            {
+              country: "捷克",
+              decisionRequired: true,
+              defaultDecision: "keep_active",
+              allowedDecisions: ["keep_active"],
+            },
             { country: "丹麦", decisionRequired: true },
-            { country: "瑞典", decisionRequired: true, allowedDecisions: ["use_latest", "invalid"] },
+            {
+              country: "瑞典",
+              decisionRequired: true,
+              defaultDecision: "use_latest",
+              allowedDecisions: ["use_latest", "invalid"],
+            },
             {
               country: "挪威",
               decision: "use_latest",
               decisionRequired: true,
+              defaultDecision: "keep_active",
               allowedDecisions: ["keep_active"],
             },
           ],
@@ -129,6 +140,9 @@ describe("JATO monthly update historical reclassification API", () => {
     expect(response.item.historicalReclassificationReport.countries.map((country) => (
       country.allowedDecisions
     ))).toEqual([["keep_active"], [], [], ["keep_active"]]);
+    expect(response.item.historicalReclassificationReport.countries.map((country) => (
+      country.defaultDecision
+    ))).toEqual(["keep_active", null, null, "keep_active"]);
     expect(response.item.historicalReclassificationReport.countries[3]?.decision).toBeNull();
     expect(response.item.historicalReclassificationReport.resolutionValidation).toEqual([]);
   });
