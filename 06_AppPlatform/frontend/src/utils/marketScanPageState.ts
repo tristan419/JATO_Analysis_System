@@ -1,8 +1,10 @@
 import type {
+  MarketScanCountryOption,
   MarketScanDeckResponse,
   MarketScanDrilldownPage,
   MarketScanMatrix,
   MarketScanPageKey,
+  MarketScanPeriodRange,
   MarketScanRankingItem,
 } from "../types";
 
@@ -240,4 +242,33 @@ export function toggleMarketScanFuelSelection(
       : current;
   }
   return [...current, fuel];
+}
+
+export function reconcileMarketScanPeriodSelection(
+  selection: MarketScanPeriodRange | null,
+  availablePeriods: MarketScanCountryOption[],
+): MarketScanPeriodRange | null {
+  if (!selection || availablePeriods.length === 0) {
+    return selection;
+  }
+
+  const orderedPeriods = [...new Set(availablePeriods.map((option) => option.value))]
+    .sort((left, right) => left.localeCompare(right));
+  const firstPeriod = orderedPeriods[0];
+  const lastPeriod = orderedPeriods[orderedPeriods.length - 1];
+  if (!firstPeriod || !lastPeriod) {
+    return selection;
+  }
+
+  const clampToAvailableRange = (period: string): string => {
+    if (period < firstPeriod) return firstPeriod;
+    if (period > lastPeriod) return lastPeriod;
+    return period;
+  };
+  const nextStart = clampToAvailableRange(selection.start);
+  const nextEnd = clampToAvailableRange(selection.end);
+
+  return nextStart <= nextEnd
+    ? { start: nextStart, end: nextEnd }
+    : { start: nextEnd, end: nextStart };
 }
