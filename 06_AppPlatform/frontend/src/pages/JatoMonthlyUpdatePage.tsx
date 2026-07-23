@@ -14,6 +14,7 @@ import type {
   JatoMonthlyUpdateJob,
   JatoMonthlyUpdateMaintenanceStatus,
   JatoMonthlyUpdateReviewBundle,
+  JatoMonthlyUpdateReviewFinding,
   JatoMonthlyUpdateReviewIssue,
   JatoMonthlyUpdateStorageMetric,
   JatoMonthlyUpdateUploadProgress,
@@ -107,6 +108,57 @@ function hasValidHistoricalReclassificationScope(
         : requiredCountryCount > 0
     )
   );
+}
+
+function reviewFindingBlockerType(
+  finding: JatoMonthlyUpdateReviewFinding,
+): string {
+  const candidates = [
+    finding.blockerType,
+    finding.metrics.blockerType,
+    finding.metrics.reason,
+  ];
+  for (const candidate of candidates) {
+    if (typeof candidate === "string" && candidate.trim()) {
+      return candidate.trim();
+    }
+  }
+  return "";
+}
+
+function isBlockerResolvableByHistoricalReclassification(
+  finding: JatoMonthlyUpdateReviewFinding,
+  report: JatoHistoricalReclassificationReport,
+): boolean {
+  const countryMismatchCount = finding.metrics.countryMismatchCount;
+  const targetKey = finding.target.trim().toLocaleLowerCase();
+  if (
+    finding.severity !== "blocker"
+    || finding.scope !== "country"
+    || finding.ruleId !== "SC011"
+    || reviewFindingBlockerType(finding) !== "historical_sales_changed"
+    || typeof countryMismatchCount !== "number"
+    || !Number.isFinite(countryMismatchCount)
+    || countryMismatchCount <= 0
+    || !targetKey
+  ) {
+    return false;
+  }
+  return report.countries.some((countryReport) => (
+    countryReport.decisionRequired
+    && !countryReport.monthlyTotalsStable
+    && countryReport.country.trim().toLocaleLowerCase() === targetKey
+  ));
+}
+
+function historicalReclassificationBlockingFindings(
+  findings: JatoMonthlyUpdateReviewFinding[],
+  report: JatoHistoricalReclassificationReport,
+): JatoMonthlyUpdateReviewFinding[] {
+  return findings.filter((finding) => (
+    finding.severity === "blocker"
+    && !isBlockerResolvableByHistoricalReclassification(finding, report)
+  ));
 }
 
 function isResolvedHistoricalReclassificationReady(
@@ -1125,6 +1177,19 @@ export function JatoMonthlyUpdatePage() {
       setError("请先打开 Review Candidate，再处理历史数据变化。");
       return;
     }
+    const blockingFindings = historicalReclassificationBlockingFindings(
+      reviewBundle.reviewFindings,
+      reviewBundle.historicalReclassificationReport,
+    );
+    if (blockingFindings.length > 0) {
+      const blockerSummary = blockingFindings
+        .map((finding) => `${finding.ruleId || "未知规则"}（${finding.target || "未指定目标"}）`)
+        .join("、");
+      setError(
+        `Review 仍有无法通过历史处理选择解决的 blocker：${blockerSummary}。请先按反馈修复上传文件并重新生成 Review。`
+      );
+      return;
+    }
     const requiredCountries = reviewBundle.historicalReclassificationReport.countries
       .filter((countryReport) => countryReport.decisionRequired);
     if (requiredCountries.length === 0) {
@@ -1487,6 +1552,15 @@ export function JatoMonthlyUpdatePage() {
     ? (reviewBundle?.conflictSamples.filter((item) => item.country === activeReviewCountry) ?? [])
     : (reviewBundle?.conflictSamples ?? []);
   const historicalReclassificationReport = reviewBundle?.historicalReclassificationReport ?? null;
+  const unresolvedHistoricalReclassificationBlockers = (
+    reviewBundle
+    && historicalReclassificationReport?.status === "decision_required"
+      ? historicalReclassificationBlockingFindings(
+        reviewBundle.reviewFindings,
+        historicalReclassificationReport,
+      )
+      : []
+  );
   const hasValidHistoricalReclassificationReport = Boolean(
     historicalReclassificationReport
     && hasValidHistoricalReclassificationScope(
@@ -2270,12 +2344,20 @@ Smart Merge:  [SE:keep active 2026-03] [DE:patch 2026-03] [NL:patch 2026-02] [FR
                       onClick={() => void handleResolveHistoricalReclassification(selectedJob)}
                       disabled={
                         !hasCompletedHistoricalReclassificationDecisions
+                        || unresolvedHistoricalReclassificationBlockers.length > 0
                         || resolvingHistoricalReclassificationJobId === selectedJob.jobId
                         || isReviewRefreshActionLocked
+                      }
+                      aria-describedby={
+                        unresolvedHistoricalReclassificationBlockers.length > 0
+                          ? "historical-reclassification-blockers"
+                          : undefined
                       }
                     >
                       {resolvingHistoricalReclassificationJobId === selectedJob.jobId
                         ? "正在生成完整 Candidate..."
+                        : unresolvedHistoricalReclassificationBlockers.length > 0
+                          ? "先修复 Review blocker 再生成 Candidate"
                         : requiredHistoricalReclassificationCountries.length === 0
                           ? "Review 决策契约无效"
                         : !hasCompletedHistoricalReclassificationDecisions
@@ -2359,6 +2441,32 @@ Smart Merge:  [SE:keep active 2026-03] [DE:patch 2026-03] [NL:patch 2026-02] [FR
               </div>
             )}
           </div>
+
+          {selectedJob
+            && hasReviewedSelectedJob
+            && historicalReclassificationReport?.status === "decision_required"
+            && unresolvedHistoricalReclassificationBlockers.length > 0 && (
+            <div
+              id="historical-reclassification-blockers"
+              className="monthly-update-blocker-panel"
+              role="alert"
+            >
+              <strong>当前 Review 有规则 blocker，历史选择不能消解，暂不能生成完整 Candidate。</strong>
+              <p className="section-note">
+                请先修复下列数据问题并重新上传；SC011 historical_sales_changed 仍可通过 keep_active / use_latest 正常决策。
+              </p>
+              {unresolvedHistoricalReclassificationBlockers.map((finding, index) => (
+                <div
+                  key={`${finding.ruleId}-${finding.target}-${index}`}
+                  className="monthly-update-feedback-cell"
+                >
+                  <strong>规则 {finding.ruleId || "-"} · 目标 {finding.target || "-"}</strong>
+                  <div>{finding.message || "-"}</div>
+                  <div>给洗数方：{finding.sourceFeedback || "-"}</div>
+                </div>
+              ))}
+            </div>
+          )}
 
           {detailLoading && !selectedJob ? (
             <LoadingSurface mode="inline" label="正在加载详情" detail="同步当前任务状态" kicker="JATO" />

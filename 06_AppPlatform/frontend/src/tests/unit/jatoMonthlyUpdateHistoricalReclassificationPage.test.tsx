@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 
-import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { api } from "../../api/client";
@@ -11,6 +11,7 @@ import type {
   JatoMonthlyUpdateJob,
   JatoMonthlyUpdateMaintenanceStatus,
   JatoMonthlyUpdateReviewBundle,
+  JatoMonthlyUpdateReviewFinding,
 } from "../../types";
 
 vi.mock("../../api/client", () => ({
@@ -172,6 +173,25 @@ function makeReviewBundle(
   };
 }
 
+function makeBlockerFinding(
+  overrides: Partial<JatoMonthlyUpdateReviewFinding> = {},
+): JatoMonthlyUpdateReviewFinding {
+  return {
+    severity: "blocker",
+    scope: "country",
+    target: "奥地利",
+    ruleId: "SC004",
+    message: "目标国家 candidate 存在完全相同的配置指纹。",
+    metrics: {
+      duplicateRows: 5987,
+      keyColumnCount: 12,
+    },
+    suggestedAction: "修复重复配置后重新上传。",
+    sourceFeedback: "奥地利存在 5,987 行重复配置，请恢复配置区分字段后重新导出。",
+    ...overrides,
+  };
+}
+
 describe("JATO historical reclassification review interaction", () => {
   const job = makeJob();
 
@@ -312,6 +332,113 @@ describe("JATO historical reclassification review interaction", () => {
     });
     expect(window.confirm).not.toHaveBeenCalled();
     expect(api.approveJatoMonthlyUpdateReview).not.toHaveBeenCalled();
+  });
+
+  it("blocks candidate generation and surfaces non-resolvable Review feedback beside the action", async () => {
+    const review = makeReviewBundle();
+    review.reviewFindings = [makeBlockerFinding()];
+    vi.mocked(api.getJatoMonthlyUpdateReview).mockResolvedValue({ item: review });
+
+    await act(async () => {
+      render(<JatoMonthlyUpdatePage />);
+    });
+    fireEvent.click(await screen.findByRole("button", { name: "Review Candidate" }));
+
+    const lockedButton = await screen.findByRole("button", {
+      name: "先修复 Review blocker 再生成 Candidate",
+    }) as HTMLButtonElement;
+    expect(lockedButton.disabled).toBe(true);
+    expect(lockedButton.getAttribute("aria-describedby"))
+      .toBe("historical-reclassification-blockers");
+    const blockerAlert = screen.getByRole("alert");
+    expect(within(blockerAlert).getByText(/当前 Review 有规则 blocker，历史选择不能消解/))
+      .toBeTruthy();
+    expect(within(blockerAlert).getByText("规则 SC004 · 目标 奥地利")).toBeTruthy();
+    expect(within(blockerAlert).getByText(/奥地利存在 5,987 行重复配置/)).toBeTruthy();
+
+    fireEvent.click(lockedButton);
+    expect(api.resolveJatoMonthlyUpdateHistoricalReclassification).not.toHaveBeenCalled();
+  });
+
+  it("keeps SC011 historical_sales_changed eligible for keep_active or use_latest resolution", async () => {
+    const review = makeReviewBundle();
+    review.historicalReclassificationReport.countries[0] = {
+      ...review.historicalReclassificationReport.countries[0],
+      monthlyTotalsStable: false,
+    };
+    review.reviewFindings = [makeBlockerFinding({
+      target: "捷克",
+      ruleId: "SC011",
+      message: "目标国家 candidate 改写了 active 已有历史销量。",
+      metrics: {
+        reason: "historical_sales_changed",
+        countryMismatchCount: 27,
+      },
+      sourceFeedback: "请确认使用最新 washed 历史，或保留 active 历史。",
+    })];
+    vi.mocked(api.getJatoMonthlyUpdateReview).mockResolvedValue({ item: review });
+
+    await act(async () => {
+      render(<JatoMonthlyUpdatePage />);
+    });
+    fireEvent.click(await screen.findByRole("button", { name: "Review Candidate" }));
+
+    expect(screen.queryByText(/当前 Review 有规则 blocker，历史选择不能消解/)).toBeNull();
+    const useLatestRadios = await screen.findAllByRole("radio", {
+      name: /使用本次上传覆盖历史/,
+    });
+    fireEvent.click(useLatestRadios[0]);
+    const resolveButton = screen.getByRole("button", {
+      name: "应用选择并生成完整 Candidate",
+    }) as HTMLButtonElement;
+    expect(resolveButton.disabled).toBe(false);
+    fireEvent.click(resolveButton);
+
+    await waitFor(() => {
+      expect(api.resolveJatoMonthlyUpdateHistoricalReclassification).toHaveBeenCalledWith(
+        "jato-review-1",
+        [
+          { country: "捷克", decision: "use_latest" },
+          { country: "丹麦", decision: "keep_active" },
+        ],
+      );
+    });
+  });
+
+  it("honors top-level blockerType precedence and locks non-sales SC011 blockers", async () => {
+    const review = makeReviewBundle();
+    review.historicalReclassificationReport.countries[0] = {
+      ...review.historicalReclassificationReport.countries[0],
+      monthlyTotalsStable: false,
+    };
+    review.reviewFindings = [makeBlockerFinding({
+      target: "捷克",
+      ruleId: "SC011",
+      blockerType: "historical_configuration_changed",
+      message: "目标国家历史配置变化无法由销量历史选择消解。",
+      metrics: {
+        blockerType: "historical_sales_changed",
+        reason: "historical_sales_changed",
+        countryMismatchCount: 27,
+      },
+      sourceFeedback: "请先核对捷克历史配置变化后重新导出。",
+    })];
+    vi.mocked(api.getJatoMonthlyUpdateReview).mockResolvedValue({ item: review });
+
+    await act(async () => {
+      render(<JatoMonthlyUpdatePage />);
+    });
+    fireEvent.click(await screen.findByRole("button", { name: "Review Candidate" }));
+
+    const lockedButton = await screen.findByRole("button", {
+      name: "先修复 Review blocker 再生成 Candidate",
+    }) as HTMLButtonElement;
+    expect(lockedButton.disabled).toBe(true);
+    const blockerAlert = screen.getByRole("alert");
+    expect(within(blockerAlert).getByText("规则 SC011 · 目标 捷克")).toBeTruthy();
+    expect(within(blockerAlert).getByText(/请先核对捷克历史配置变化后重新导出/))
+      .toBeTruthy();
+    expect(api.resolveJatoMonthlyUpdateHistoricalReclassification).not.toHaveBeenCalled();
   });
 
   it("toggles every country between bulk use_latest and bulk keep_active", async () => {

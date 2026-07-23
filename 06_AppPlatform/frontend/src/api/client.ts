@@ -1812,6 +1812,9 @@ function mapJatoMonthlyUpdateReviewFinding(
     scope: String(raw.scope ?? ""),
     target: String(raw.target ?? ""),
     ruleId: String(raw.ruleId ?? ""),
+    blockerType: raw.blockerType === undefined || raw.blockerType === null
+      ? null
+      : String(raw.blockerType),
     message: String(raw.message ?? ""),
     metrics: raw.metrics && typeof raw.metrics === "object"
       ? raw.metrics as Record<string, unknown>

@@ -13,6 +13,19 @@ describe("JATO monthly update historical reclassification API", () => {
     vi.stubGlobal("fetch", vi.fn(async () => Response.json({
       item: {
         jobId: "jato-review-1",
+        reviewFindings: [{
+          severity: "blocker",
+          scope: "country",
+          target: "捷克",
+          ruleId: "SC011",
+          blockerType: "historical_configuration_changed",
+          message: "历史配置发生变化。",
+          metrics: {
+            blockerType: "historical_sales_changed",
+          },
+          suggestedAction: "核对配置变化。",
+          sourceFeedback: "请核对捷克历史配置变化。",
+        }],
         historicalReclassificationReport: {
           status: "resolved",
           countries: [{
@@ -67,6 +80,13 @@ describe("JATO monthly update historical reclassification API", () => {
 
     const response = await api.getJatoMonthlyUpdateReview("jato-review-1");
 
+    expect(response.item.reviewFindings[0]).toMatchObject({
+      ruleId: "SC011",
+      blockerType: "historical_configuration_changed",
+      metrics: {
+        blockerType: "historical_sales_changed",
+      },
+    });
     expect(response.item.historicalReclassificationReport).toMatchObject({
       status: "resolved",
       countries: [{
