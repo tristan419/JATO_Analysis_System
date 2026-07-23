@@ -2520,6 +2520,7 @@ export interface JatoMonthlyUpdateReviewFinding {
   scope: string;
   target: string;
   ruleId: string;
+  blockerType?: string | null;
   message: string;
   metrics: Record<string, unknown>;
   suggestedAction: string;
