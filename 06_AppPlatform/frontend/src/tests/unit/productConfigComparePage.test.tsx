@@ -10871,6 +10871,7 @@ describe("ProductConfigComparePage", () => {
     expect(api.getEngineeringConfigLocalWorkbookDigest).not.toHaveBeenCalled();
     const compareCallCount = vi.mocked(api.compareEngineeringConfigTrims).mock.calls.length;
 
+    await screen.findByLabelText("配置表筛选和目标列");
     fireEvent.click(tableDeltaFilterButton(/差异行/));
 
     await waitFor(() => {

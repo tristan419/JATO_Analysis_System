@@ -17,7 +17,6 @@ from pathlib import Path
 import sys
 from typing import Any, Iterable, Sequence
 
-
 REPO_ROOT = Path(__file__).resolve().parents[2]
 BACKEND_DIR = REPO_ROOT / "06_AppPlatform" / "backend"
 if str(BACKEND_DIR) not in sys.path:
@@ -104,12 +103,7 @@ def _runtime_environment() -> dict[str, Any]:
 
 def _history_suffix(report: dict[str, Any]) -> str:
     generated = str(report.get("generatedAtUtc") or _utc_now_iso())
-    stamp = (
-        generated.replace(":", "")
-        .replace("-", "")
-        .replace("+", "z")
-        .replace(".", "-")
-    )
+    stamp = generated.replace(":", "").replace("-", "").replace("+", "z").replace(".", "-")
     return _safe_token(stamp, "unknown-time")
 
 
@@ -168,16 +162,20 @@ def _selected_vs_alternates(
     for candidate in candidates:
         if candidate is selected:
             continue
-        result.append({
-            "engine": candidate.get("engine") or "unknown",
-            "featureDelta": _int_value(selected, "featureCount") - _int_value(candidate, "featureCount"),
-            "candidateTrimDelta": _int_value(selected, "candidateTrimCount") - _int_value(candidate, "candidateTrimCount"),
-            "differenceDelta": _int_value(selected, "differenceCount") - _int_value(candidate, "differenceCount"),
-            "nonEmptyDelta": _int_value(selected, "nonEmptyCount") - _int_value(candidate, "nonEmptyCount"),
-            "selectedComparable": bool(selected.get("comparableTableDetected")),
-            "alternateComparable": bool(candidate.get("comparableTableDetected")),
-            "alternateMessage": _safe_text(candidate.get("message"), 140),
-        })
+        result.append(
+            {
+                "engine": candidate.get("engine") or "unknown",
+                "featureDelta": _int_value(selected, "featureCount") - _int_value(candidate, "featureCount"),
+                "candidateTrimDelta": (
+                    _int_value(selected, "candidateTrimCount") - _int_value(candidate, "candidateTrimCount")
+                ),
+                "differenceDelta": _int_value(selected, "differenceCount") - _int_value(candidate, "differenceCount"),
+                "nonEmptyDelta": _int_value(selected, "nonEmptyCount") - _int_value(candidate, "nonEmptyCount"),
+                "selectedComparable": bool(selected.get("comparableTableDetected")),
+                "alternateComparable": bool(candidate.get("comparableTableDetected")),
+                "alternateMessage": _safe_text(candidate.get("message"), 140),
+            }
+        )
     return result
 
 
@@ -196,11 +194,7 @@ def _selected_vs_alternates_text(item: dict[str, Any]) -> str:
             ("diffs", _int_value(comparison, "differenceDelta")),
             ("non-empty", _int_value(comparison, "nonEmptyDelta")),
         ]
-        delta_text = ", ".join(
-            f"{value:+d} {label}"
-            for label, value in deltas
-            if value != 0
-        )
+        delta_text = ", ".join(f"{value:+d} {label}" for label, value in deltas if value != 0)
         parts.append(f"vs {engine}: {delta_text or 'same score'}")
     if len(comparisons) > 2:
         parts.append(f"+{len(comparisons) - 2} alternates")
@@ -249,20 +243,20 @@ def _group_summary(digest: dict[str, Any]) -> list[dict[str, Any]]:
     for group in groups[:5]:
         if not isinstance(group, dict):
             continue
-        result.append({
-            "groupId": str(group.get("groupId") or ""),
-            "modelName": str(group.get("modelName") or group.get("title") or ""),
-            "trimCount": _int_value(group, "trimCount"),
-            "featureCount": _int_value(group, "featureCount"),
-            "differenceCount": _int_value(group, "differenceCount"),
-            "sourceKind": str(group.get("sourceKind") or ""),
-            "identityStatus": str(group.get("identityStatus") or ""),
-            "reviewRowCount": sum(
-                1
-                for row in group.get("rows") or []
-                if isinstance(row, dict) and row.get("reviewNotes")
-            ),
-        })
+        result.append(
+            {
+                "groupId": str(group.get("groupId") or ""),
+                "modelName": str(group.get("modelName") or group.get("title") or ""),
+                "trimCount": _int_value(group, "trimCount"),
+                "featureCount": _int_value(group, "featureCount"),
+                "differenceCount": _int_value(group, "differenceCount"),
+                "sourceKind": str(group.get("sourceKind") or ""),
+                "identityStatus": str(group.get("identityStatus") or ""),
+                "reviewRowCount": sum(
+                    1 for row in group.get("rows") or [] if isinstance(row, dict) and row.get("reviewNotes")
+                ),
+            }
+        )
     return result
 
 
@@ -275,20 +269,23 @@ def _engine_candidate_metrics(items: list[dict[str, Any]]) -> list[dict[str, Any
             if not isinstance(candidate, dict):
                 continue
             engine = str(candidate.get("engine") or "unknown").strip() or "unknown"
-            metrics = by_engine.setdefault(engine, {
-                "engine": engine,
-                "candidateCount": 0,
-                "comparableCandidateCount": 0,
-                "selectedCount": 0,
-                "failedCandidateCount": 0,
-                "featureCount": 0,
-                "candidateTrimCount": 0,
-                "differenceCount": 0,
-                "rowCount": 0,
-                "columnCount": 0,
-                "nonEmptyCount": 0,
-                "files": [],
-            })
+            metrics = by_engine.setdefault(
+                engine,
+                {
+                    "engine": engine,
+                    "candidateCount": 0,
+                    "comparableCandidateCount": 0,
+                    "selectedCount": 0,
+                    "failedCandidateCount": 0,
+                    "featureCount": 0,
+                    "candidateTrimCount": 0,
+                    "differenceCount": 0,
+                    "rowCount": 0,
+                    "columnCount": 0,
+                    "nonEmptyCount": 0,
+                    "files": [],
+                },
+            )
             metrics["candidateCount"] += 1
             if candidate.get("comparableTableDetected"):
                 metrics["comparableCandidateCount"] += 1
@@ -371,16 +368,21 @@ def _engine_recommendation(items: list[dict[str, Any]]) -> dict[str, Any]:
         )
     else:
         decision = "use_recommended_engine"
-        confidence = "high" if (
-            _int_value(winner, "comparableCandidateCount") > _int_value(runner_up, "comparableCandidateCount")
-            and _int_value(winner, "selectedCount") >= _int_value(runner_up, "selectedCount")
-        ) else "medium"
+        confidence = (
+            "high"
+            if (
+                _int_value(winner, "comparableCandidateCount") > _int_value(runner_up, "comparableCandidateCount")
+                and _int_value(winner, "selectedCount") >= _int_value(runner_up, "selectedCount")
+            )
+            else "medium"
+        )
         reason = (
-            f"{recommended_engine} leads {runner_up.get('engine') or 'runner-up'} by "
-            f"{_int_value(winner, 'comparableCandidateCount') - _int_value(runner_up, 'comparableCandidateCount'):+d} comparable candidates, "
-            f"{_int_value(winner, 'featureCount') - _int_value(runner_up, 'featureCount'):+d} features, "
-            f"{_int_value(winner, 'candidateTrimCount') - _int_value(runner_up, 'candidateTrimCount'):+d} trims, "
-            f"{_int_value(winner, 'nonEmptyCount') - _int_value(runner_up, 'nonEmptyCount'):+d} non-empty cells."
+            f"{recommended_engine} leads {runner_up.get('engine') or 'runner-up'} by"
+            f" {_int_value(winner, 'comparableCandidateCount') - _int_value(runner_up, 'comparableCandidateCount'):+d}"
+            f" comparable candidates, {_int_value(winner, 'featureCount') - _int_value(runner_up, 'featureCount'):+d}"
+            f" features, {_int_value(winner, 'candidateTrimCount') - _int_value(runner_up, 'candidateTrimCount'):+d}"
+            f" trims, {_int_value(winner, 'nonEmptyCount') - _int_value(runner_up, 'nonEmptyCount'):+d} non-empty"
+            " cells."
         )
 
     return {
@@ -407,10 +409,7 @@ def _recommended_action(
     groups = digest.get("compareGroups") if isinstance(digest.get("compareGroups"), list) else []
     has_temporary_identity = any(
         isinstance(group, dict)
-        and (
-            group.get("sourceKind") == "ocr_headerless"
-            or group.get("identityStatus") == "temporary_ocr_column"
-        )
+        and (group.get("sourceKind") == "ocr_headerless" or group.get("identityStatus") == "temporary_ocr_column")
         for group in groups
     )
     if selected_engine and digest.get("status") == "ready" and groups and not has_temporary_identity:
@@ -512,9 +511,7 @@ def audit_source_file(path: Path) -> dict[str, Any]:
         "candidateCount": _int_value(evaluation, "candidateCount") or len(candidates),
         "comparableCandidateCount": _int_value(evaluation, "comparableCandidateCount"),
         "selectedReasonDetails": [
-            _safe_text(item)
-            for item in evaluation.get("selectedReasonDetails") or []
-            if str(item).strip()
+            _safe_text(item) for item in evaluation.get("selectedReasonDetails") or [] if str(item).strip()
         ],
         "summary": {
             "comparableGroupCount": _int_value(summary, "comparableGroupCount"),
@@ -545,22 +542,17 @@ def audit_source_file(path: Path) -> dict[str, Any]:
 def _summary(items: list[dict[str, Any]]) -> dict[str, Any]:
     status_counts = Counter(str(item.get("status") or "unknown") for item in items)
     action_counts = Counter(str(item.get("recommendedAction") or "unknown") for item in items)
-    selected_engine_counts = Counter(
-        str(item.get("selectedEngine"))
-        for item in items
-        if item.get("selectedEngine")
-    )
-    comparison_status_counts = Counter(
-        str(item.get("ocrComparisonStatus") or "unknown")
-        for item in items
-    )
+    selected_engine_counts = Counter(str(item.get("selectedEngine")) for item in items if item.get("selectedEngine"))
+    comparison_status_counts = Counter(str(item.get("ocrComparisonStatus") or "unknown") for item in items)
     ready_items = [
-        item for item in items
+        item
+        for item in items
         if item.get("status") == "ready"
         and _int_value(item.get("summary") if isinstance(item.get("summary"), dict) else {}, "comparableGroupCount") > 0
     ]
     ground_truth_review_items = [
-        item for item in items
+        item
+        for item in items
         if isinstance(item.get("groundTruthQualification"), dict)
         and item["groundTruthQualification"].get("manualReviewRequired")
     ]
@@ -604,11 +596,14 @@ def render_markdown(report: dict[str, Any], *, limit: int = DEFAULT_MARKDOWN_LIM
     runtime = report.get("runtime") if isinstance(report.get("runtime"), dict) else {}
     modules = runtime.get("modules") if isinstance(runtime.get("modules"), dict) else {}
     recommendation = (
-        summary.get("engineRecommendation")
-        if isinstance(summary.get("engineRecommendation"), dict)
-        else {}
+        summary.get("engineRecommendation") if isinstance(summary.get("engineRecommendation"), dict) else {}
     )
     items = [item for item in report.get("items") or [] if isinstance(item, dict)]
+    source_digest_import = (
+        "ok"
+        if runtime.get("sourceDigestImportOk")
+        else runtime.get("sourceDigestImportError") or "failed"
+    )
     lines = [
         "# Engineering Config OCR Quality Audit",
         "",
@@ -621,29 +616,41 @@ def render_markdown(report: dict[str, Any], *, limit: int = DEFAULT_MARKDOWN_LIM
         "",
         "## Runtime",
         "",
-        f"- **Python:** {_markdown_cell(runtime.get('pythonExecutable'))} ({_markdown_cell(runtime.get('pythonVersion'))})",
-        f"- **Source Digest import:** {_markdown_cell('ok' if runtime.get('sourceDigestImportOk') else runtime.get('sourceDigestImportError') or 'failed')}",
+        (
+            f"- **Python:** {_markdown_cell(runtime.get('pythonExecutable'))}"
+            f" ({_markdown_cell(runtime.get('pythonVersion'))})"
+        ),
+        (
+            "- **Source Digest import:**"
+            f" {_markdown_cell(source_digest_import)}"
+        ),
     ]
     for module_name in ("paddleocr", "paddle", "pypdfium2"):
         module_status = modules.get(module_name) if isinstance(modules.get(module_name), dict) else {}
         availability = "available" if module_status.get("available") else "missing"
         version = module_status.get("version")
         lines.append(f"- **{module_name}:** {availability}{f' {version}' if version else ''}")
-    lines.extend([
-        "",
-        "## Engine Recommendation",
-        "",
-        f"- **Decision:** {_markdown_cell(recommendation.get('decision'))}",
-        f"- **Recommended engine:** {_markdown_cell(recommendation.get('recommendedEngine'))}",
-        f"- **Confidence:** {_markdown_cell(recommendation.get('confidence'))}",
-        f"- **Reason:** {_markdown_cell(recommendation.get('reason'))}",
-        "",
-    ])
-    lines.extend([
-        "| Engine | Candidates | Comparable | Selected | Features | Trims | Non-empty | Failures |",
-        "|---|---:|---:|---:|---:|---:|---:|---:|",
-    ])
-    engine_metrics = recommendation.get("engineMetrics") if isinstance(recommendation.get("engineMetrics"), list) else []
+    lines.extend(
+        [
+            "",
+            "## Engine Recommendation",
+            "",
+            f"- **Decision:** {_markdown_cell(recommendation.get('decision'))}",
+            f"- **Recommended engine:** {_markdown_cell(recommendation.get('recommendedEngine'))}",
+            f"- **Confidence:** {_markdown_cell(recommendation.get('confidence'))}",
+            f"- **Reason:** {_markdown_cell(recommendation.get('reason'))}",
+            "",
+        ]
+    )
+    lines.extend(
+        [
+            "| Engine | Candidates | Comparable | Selected | Features | Trims | Non-empty | Failures |",
+            "|---|---:|---:|---:|---:|---:|---:|---:|",
+        ]
+    )
+    engine_metrics = (
+        recommendation.get("engineMetrics") if isinstance(recommendation.get("engineMetrics"), list) else []
+    )
     if engine_metrics:
         for metrics in engine_metrics:
             if not isinstance(metrics, dict):
@@ -661,30 +668,41 @@ def render_markdown(report: dict[str, Any], *, limit: int = DEFAULT_MARKDOWN_LIM
             )
     else:
         lines.append("| - | 0 | 0 | 0 | 0 | 0 | 0 | 0 |")
-    lines.extend([
-        "",
-        "## Engine Selection",
-        "",
-        "| Engine | Count |",
-        "|---|---:|",
-    ])
-    selected_counts = summary.get("selectedEngineCounts") if isinstance(summary.get("selectedEngineCounts"), dict) else {}
+    lines.extend(
+        [
+            "",
+            "## Engine Selection",
+            "",
+            "| Engine | Count |",
+            "|---|---:|",
+        ]
+    )
+    selected_counts = (
+        summary.get("selectedEngineCounts") if isinstance(summary.get("selectedEngineCounts"), dict) else {}
+    )
     if selected_counts:
         for engine, count in sorted(selected_counts.items()):
             lines.append(f"| {_markdown_cell(engine)} | {_markdown_cell(count)} |")
     else:
         lines.append("| - | 0 |")
-    lines.extend([
-        "",
-        "## Files",
-        "",
-        "| File | Status | Selected OCR | Groups | Features | Action | Qualification | OCR Compare | OCR Delta | Reason |",
-        "|---|---|---|---:|---:|---|---|---|---|---|",
-    ])
+    lines.extend(
+        [
+            "",
+            "## Files",
+            "",
+            (
+                "| File | Status | Selected OCR | Groups | Features | Action | Qualification | OCR Compare | OCR Delta"
+                " | Reason |"
+            ),
+            "|---|---|---|---:|---:|---|---|---|---|---|",
+        ]
+    )
     for item in items[:limit]:
         item_summary = item.get("summary") if isinstance(item.get("summary"), dict) else {}
         reason = "; ".join(item.get("selectedReasonDetails") or []) or item.get("message") or ""
-        qualification = item.get("groundTruthQualification") if isinstance(item.get("groundTruthQualification"), dict) else {}
+        qualification = (
+            item.get("groundTruthQualification") if isinstance(item.get("groundTruthQualification"), dict) else {}
+        )
         delta = _selected_vs_alternates_text(item)
         comparison_status = _ocr_comparison_status_text(item)
         lines.append(
@@ -701,7 +719,9 @@ def render_markdown(report: dict[str, Any], *, limit: int = DEFAULT_MARKDOWN_LIM
             f"{_markdown_cell(reason)} |"
         )
     if len(items) > limit:
-        lines.append(f"| ... | ... | ... | ... | ... | ... | ... | ... | ... | {len(items) - limit} more files omitted |")
+        lines.append(
+            f"| ... | ... | ... | ... | ... | ... | ... | ... | ... | {len(items) - limit} more files omitted |"
+        )
     return "\n".join(lines) + "\n"
 
 

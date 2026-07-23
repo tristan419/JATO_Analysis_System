@@ -5,12 +5,7 @@ import json
 from pathlib import Path
 import sys
 
-
-SCRIPT_PATH = (
-    Path(__file__).resolve().parents[1]
-    / "diagnostics"
-    / "engineering_config_ocr_quality_audit.py"
-)
+SCRIPT_PATH = Path(__file__).resolve().parents[1] / "diagnostics" / "engineering_config_ocr_quality_audit.py"
 
 
 def load_module():
@@ -124,7 +119,10 @@ def test_build_report_summarizes_selected_ocr_engine(tmp_path, monkeypatch) -> N
     assert item["groundTruthQualification"] == {
         "status": "unverified",
         "manualReviewRequired": True,
-        "reason": "OCR engine scoring measures parseability only. Verify the original source type, trim headers, and sampled values against a labelled configuration-table source before use.",
+        "reason": (
+            "OCR engine scoring measures parseability only. Verify the original source type, trim headers, and sampled"
+            " values against a labelled configuration-table source before use."
+        ),
     }
     assert report["summary"]["groundTruthQualifiedFileCount"] == 0
     assert report["summary"]["groundTruthReviewRequiredFileCount"] == 1
@@ -157,50 +155,54 @@ def test_engine_recommendation_can_choose_legacy_when_it_beats_paddle(tmp_path, 
     source_path = tmp_path / "legacy-wins.png"
     source_path.write_bytes(b"fake image")
 
-    monkeypatch.setattr(audit_module, "build_source_digest", lambda _path, _name: {
-        "status": "ready",
-        "digestType": "image_ocr",
-        "sourceFormat": "image_ocr",
-        "ocrEngine": "legacy_image_ocr",
-        "ocrEvaluation": {
-            "candidateCount": 2,
-            "comparableCandidateCount": 1,
-            "selectedEngine": "legacy_image_ocr",
-        },
-        "ocrEngineCandidates": [
-            {
-                "engine": "paddleocr",
-                "selected": False,
-                "comparableTableDetected": False,
-                "score": {"featureCount": 1, "candidateTrimCount": 1, "differenceCount": 0, "nonEmptyCount": 8},
-                "message": "paddleocr OCR text did not contain comparable table rows.",
+    monkeypatch.setattr(
+        audit_module,
+        "build_source_digest",
+        lambda _path, _name: {
+            "status": "ready",
+            "digestType": "image_ocr",
+            "sourceFormat": "image_ocr",
+            "ocrEngine": "legacy_image_ocr",
+            "ocrEvaluation": {
+                "candidateCount": 2,
+                "comparableCandidateCount": 1,
+                "selectedEngine": "legacy_image_ocr",
             },
-            {
-                "engine": "legacy_image_ocr",
-                "selected": True,
-                "comparableTableDetected": True,
-                "score": {
-                    "featureCount": 8,
-                    "candidateTrimCount": 3,
-                    "differenceCount": 5,
-                    "rowCount": 9,
-                    "columnCount": 4,
-                    "nonEmptyCount": 36,
+            "ocrEngineCandidates": [
+                {
+                    "engine": "paddleocr",
+                    "selected": False,
+                    "comparableTableDetected": False,
+                    "score": {"featureCount": 1, "candidateTrimCount": 1, "differenceCount": 0, "nonEmptyCount": 8},
+                    "message": "paddleocr OCR text did not contain comparable table rows.",
                 },
-            },
-        ],
-        "summary": {"comparableGroupCount": 1, "candidateTrimCount": 3, "featureCount": 8, "differenceCount": 5},
-        "compareGroups": [
-            {
-                "groupId": "legacy",
-                "modelName": "Legacy Better",
-                "trimCount": 3,
-                "featureCount": 8,
-                "differenceCount": 5,
-                "rows": [],
-            },
-        ],
-    })
+                {
+                    "engine": "legacy_image_ocr",
+                    "selected": True,
+                    "comparableTableDetected": True,
+                    "score": {
+                        "featureCount": 8,
+                        "candidateTrimCount": 3,
+                        "differenceCount": 5,
+                        "rowCount": 9,
+                        "columnCount": 4,
+                        "nonEmptyCount": 36,
+                    },
+                },
+            ],
+            "summary": {"comparableGroupCount": 1, "candidateTrimCount": 3, "featureCount": 8, "differenceCount": 5},
+            "compareGroups": [
+                {
+                    "groupId": "legacy",
+                    "modelName": "Legacy Better",
+                    "trimCount": 3,
+                    "featureCount": 8,
+                    "differenceCount": 5,
+                    "rows": [],
+                },
+            ],
+        },
+    )
 
     report = audit_module.build_report([source_path])
 
@@ -217,36 +219,40 @@ def test_build_report_marks_selected_ocr_without_alternate_candidate(tmp_path, m
     source_path = tmp_path / "config-card.png"
     source_path.write_bytes(b"fake image")
 
-    monkeypatch.setattr(audit_module, "build_source_digest", lambda _path, _name: {
-        "status": "ready",
-        "digestType": "image_ocr",
-        "sourceFormat": "image_ocr",
-        "ocrEngine": "paddleocr",
-        "ocrEvaluation": {
-            "candidateCount": 1,
-            "comparableCandidateCount": 1,
-            "selectedEngine": "paddleocr",
+    monkeypatch.setattr(
+        audit_module,
+        "build_source_digest",
+        lambda _path, _name: {
+            "status": "ready",
+            "digestType": "image_ocr",
+            "sourceFormat": "image_ocr",
+            "ocrEngine": "paddleocr",
+            "ocrEvaluation": {
+                "candidateCount": 1,
+                "comparableCandidateCount": 1,
+                "selectedEngine": "paddleocr",
+            },
+            "ocrEngineCandidates": [
+                {
+                    "engine": "paddleocr",
+                    "selected": True,
+                    "comparableTableDetected": True,
+                    "score": {"featureCount": 6, "candidateTrimCount": 3, "differenceCount": 4},
+                },
+            ],
+            "summary": {"comparableGroupCount": 1, "candidateTrimCount": 3, "featureCount": 6, "differenceCount": 4},
+            "compareGroups": [
+                {
+                    "groupId": "image-ocr",
+                    "modelName": "OCR Model",
+                    "trimCount": 3,
+                    "featureCount": 6,
+                    "differenceCount": 4,
+                    "rows": [],
+                },
+            ],
         },
-        "ocrEngineCandidates": [
-            {
-                "engine": "paddleocr",
-                "selected": True,
-                "comparableTableDetected": True,
-                "score": {"featureCount": 6, "candidateTrimCount": 3, "differenceCount": 4},
-            },
-        ],
-        "summary": {"comparableGroupCount": 1, "candidateTrimCount": 3, "featureCount": 6, "differenceCount": 4},
-        "compareGroups": [
-            {
-                "groupId": "image-ocr",
-                "modelName": "OCR Model",
-                "trimCount": 3,
-                "featureCount": 6,
-                "differenceCount": 4,
-                "rows": [],
-            },
-        ],
-    })
+    )
 
     report = audit_module.build_report([source_path])
 
@@ -263,38 +269,42 @@ def test_build_report_marks_temporary_ocr_identity_for_review(tmp_path, monkeypa
     source_path = tmp_path / "scan.pdf"
     source_path.write_bytes(b"%PDF fake")
 
-    monkeypatch.setattr(audit_module, "build_source_digest", lambda _path, _name: {
-        "status": "ready",
-        "digestType": "pdf_ocr",
-        "sourceFormat": "pdf_ocr",
-        "ocrEngine": "paddleocr",
-        "ocrEvaluation": {
-            "candidateCount": 1,
-            "comparableCandidateCount": 1,
-            "selectedEngine": "paddleocr",
+    monkeypatch.setattr(
+        audit_module,
+        "build_source_digest",
+        lambda _path, _name: {
+            "status": "ready",
+            "digestType": "pdf_ocr",
+            "sourceFormat": "pdf_ocr",
+            "ocrEngine": "paddleocr",
+            "ocrEvaluation": {
+                "candidateCount": 1,
+                "comparableCandidateCount": 1,
+                "selectedEngine": "paddleocr",
+            },
+            "ocrEngineCandidates": [
+                {
+                    "engine": "paddleocr",
+                    "selected": True,
+                    "comparableTableDetected": True,
+                    "score": {"featureCount": 5, "candidateTrimCount": 2, "differenceCount": 2},
+                },
+            ],
+            "summary": {"comparableGroupCount": 1, "candidateTrimCount": 2, "featureCount": 5, "differenceCount": 2},
+            "compareGroups": [
+                {
+                    "groupId": "ocr-headerless",
+                    "modelName": "OCR Image 1",
+                    "sourceKind": "ocr_headerless",
+                    "identityStatus": "temporary_ocr_column",
+                    "trimCount": 2,
+                    "featureCount": 5,
+                    "differenceCount": 2,
+                    "rows": [{"reviewNotes": ["long mixed value"]}],
+                },
+            ],
         },
-        "ocrEngineCandidates": [
-            {
-                "engine": "paddleocr",
-                "selected": True,
-                "comparableTableDetected": True,
-                "score": {"featureCount": 5, "candidateTrimCount": 2, "differenceCount": 2},
-            },
-        ],
-        "summary": {"comparableGroupCount": 1, "candidateTrimCount": 2, "featureCount": 5, "differenceCount": 2},
-        "compareGroups": [
-            {
-                "groupId": "ocr-headerless",
-                "modelName": "OCR Image 1",
-                "sourceKind": "ocr_headerless",
-                "identityStatus": "temporary_ocr_column",
-                "trimCount": 2,
-                "featureCount": 5,
-                "differenceCount": 2,
-                "rows": [{"reviewNotes": ["long mixed value"]}],
-            },
-        ],
-    })
+    )
 
     report = audit_module.build_report([source_path])
 
@@ -308,22 +318,26 @@ def test_build_report_treats_ready_text_pdf_as_non_ocr_success(tmp_path, monkeyp
     source_path = tmp_path / "text-config.pdf"
     source_path.write_bytes(b"%PDF text")
 
-    monkeypatch.setattr(audit_module, "build_source_digest", lambda _path, _name: {
-        "status": "ready",
-        "digestType": "pdf_text",
-        "sourceFormat": "pdf_text",
-        "summary": {"comparableGroupCount": 1, "candidateTrimCount": 2, "featureCount": 2, "differenceCount": 2},
-        "compareGroups": [
-            {
-                "groupId": "pdf-text",
-                "modelName": "PDF Text Model",
-                "trimCount": 2,
-                "featureCount": 2,
-                "differenceCount": 2,
-                "rows": [],
-            },
-        ],
-    })
+    monkeypatch.setattr(
+        audit_module,
+        "build_source_digest",
+        lambda _path, _name: {
+            "status": "ready",
+            "digestType": "pdf_text",
+            "sourceFormat": "pdf_text",
+            "summary": {"comparableGroupCount": 1, "candidateTrimCount": 2, "featureCount": 2, "differenceCount": 2},
+            "compareGroups": [
+                {
+                    "groupId": "pdf-text",
+                    "modelName": "PDF Text Model",
+                    "trimCount": 2,
+                    "featureCount": 2,
+                    "differenceCount": 2,
+                    "rows": [],
+                },
+            ],
+        },
+    )
 
     report = audit_module.build_report([source_path])
 
@@ -340,23 +354,29 @@ def test_main_writes_json_and_markdown_outputs(tmp_path, monkeypatch, capsys) ->
     json_path = tmp_path / "audit.json"
     markdown_path = tmp_path / "audit.md"
 
-    monkeypatch.setattr(audit_module, "build_source_digest", lambda _path, _name: {
-        "status": "pending",
-        "digestType": "image_ocr",
-        "sourceFormat": "image_ocr",
-        "message": "OCR engine is not configured.",
-        "summary": {"comparableGroupCount": 0, "candidateTrimCount": 0, "featureCount": 0, "differenceCount": 0},
-        "compareGroups": [],
-    })
+    monkeypatch.setattr(
+        audit_module,
+        "build_source_digest",
+        lambda _path, _name: {
+            "status": "pending",
+            "digestType": "image_ocr",
+            "sourceFormat": "image_ocr",
+            "message": "OCR engine is not configured.",
+            "summary": {"comparableGroupCount": 0, "candidateTrimCount": 0, "featureCount": 0, "differenceCount": 0},
+            "compareGroups": [],
+        },
+    )
 
-    exit_code = audit_module.main([
-        str(source_path),
-        "--json-output",
-        str(json_path),
-        "--markdown-output",
-        str(markdown_path),
-        "--markdown",
-    ])
+    exit_code = audit_module.main(
+        [
+            str(source_path),
+            "--json-output",
+            str(json_path),
+            "--markdown-output",
+            str(markdown_path),
+            "--markdown",
+        ]
+    )
 
     assert exit_code == 0
     captured = capsys.readouterr()

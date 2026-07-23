@@ -5,11 +5,17 @@ import sys
 from pathlib import Path
 from typing import Any
 
-
-SCRIPT_PATH = (
-    Path(__file__).resolve().parents[1]
-    / "diagnostics"
-    / "engineering_config_compare_readiness_audit.py"
+SCRIPT_PATH = Path(__file__).resolve().parents[1] / "diagnostics" / "engineering_config_compare_readiness_audit.py"
+FRONTEND_ARTIFACT_ROOT = "06_AppPlatform/frontend/artifacts"
+COMPETITOR_ENTRY_ARTIFACT_DIR = f"{FRONTEND_ARTIFACT_ROOT}/product-config-competitor-entry-smoke/run"
+EDIT_EXPORT_ARTIFACT_DIR = f"{FRONTEND_ARTIFACT_ROOT}/product-config-edit-export-smoke/run"
+MULTISOURCE_ARTIFACT_DIR = f"{FRONTEND_ARTIFACT_ROOT}/product-config-multisource-same-model-smoke/run"
+CROSS_SCOPE_ARTIFACT_DIR = f"{FRONTEND_ARTIFACT_ROOT}/product-config-cross-scope-direct-picker-smoke/run"
+CROSS_USER_ARTIFACT_DIR = f"{FRONTEND_ARTIFACT_ROOT}/product-config-cross-user-source-library-smoke/run"
+REVIEW_ROW_ARTIFACT_DIR = f"{FRONTEND_ARTIFACT_ROOT}/product-config-review-row-smoke/run"
+COMPETITOR_RECOMMENDATION_PATH = (
+    "/engineering-config/recommendations/competitors"
+    "?country=Germany&model_name=T19C+MY+ICE&powertrain=ICE&segment=SUV+C&limit=10"
 )
 
 
@@ -161,7 +167,9 @@ def _write_ocr_quality_artifact(
                 "candidateEngineCount": candidate_engine_count,
                 "candidateCount": 4,
                 "comparableCandidateCount": comparable_candidate_count,
-                "runnerUpEngine": "legacy_image_ocr" if recommended_engine == "paddleocr" and candidate_engine_count > 1 else None,
+                "runnerUpEngine": (
+                    "legacy_image_ocr" if recommended_engine == "paddleocr" and candidate_engine_count > 1 else None
+                ),
                 "engineMetrics": [
                     {
                         "engine": recommended_engine or "paddleocr",
@@ -270,7 +278,9 @@ def test_goal_coverage_promotes_proved_items_from_smoke_checks(monkeypatch) -> N
         "_floatingdeck_multisource_smoke_checks",
         lambda **_kwargs: [
             passed_check("floatingdeck_multisource_same_model", "FloatingDeck same-model multi-source smoke"),
-            passed_check("floatingdeck_cross_scope_direct_picker", "FloatingDeck cross-country/cross-model picker smoke"),
+            passed_check(
+                "floatingdeck_cross_scope_direct_picker", "FloatingDeck cross-country/cross-model picker smoke"
+            ),
         ],
     )
     monkeypatch.setattr(
@@ -616,7 +626,9 @@ def test_build_readiness_report_fails_when_editor_value_save_is_blocked() -> Non
         include_auth_contract_smoke=True,
         auth_contract_clients={
             "viewer": _auth_role_client(role="viewer", source_delete_status=403, trim_patch_status=403),
-            "editor": _auth_role_client(role="editor", source_delete_status=404, trim_patch_status=404, value_patch_status=403),
+            "editor": _auth_role_client(
+                role="editor", source_delete_status=404, trim_patch_status=404, value_patch_status=403
+            ),
         },
     )
 
@@ -993,7 +1005,12 @@ def test_ai_summary_compose_smoke_degrades_when_required_evidence_boundary_is_mi
                     {
                         "displayValue": "5",
                         "availability": "EQUIPPED",
-                        "source": {"sheetName": "Sheet A", "cell": "E12", "sourceCell": "D12", "mergedRange": "D12:E12"},
+                        "source": {
+                            "sheetName": "Sheet A",
+                            "cell": "E12",
+                            "sourceCell": "D12",
+                            "mergedRange": "D12:E12",
+                        },
                     },
                 ],
             },
@@ -1074,9 +1091,7 @@ def test_build_readiness_report_marks_export_signature_failure() -> None:
 
 def test_build_readiness_report_can_include_competitor_recommendation_smoke() -> None:
     responses = _ready_responses()
-    responses[
-        "/engineering-config/recommendations/competitors?country=Germany&model_name=T19C+MY+ICE&powertrain=ICE&segment=SUV+C&limit=10"
-    ] = {
+    responses[COMPETITOR_RECOMMENDATION_PATH] = {
         "country": "Germany",
         "modelName": "T19C MY ICE",
         "powertrain": "ICE",
@@ -1101,7 +1116,12 @@ def test_build_readiness_report_can_include_competitor_recommendation_smoke() ->
                 "sourceDigestTrimCount": 2,
                 "nextAction": "create_from_source_digest",
             },
-            {"modelName": "Urus", "configAvailable": False, "sourceDigestAvailable": False, "nextAction": "upload_source"},
+            {
+                "modelName": "Urus",
+                "configAvailable": False,
+                "sourceDigestAvailable": False,
+                "nextAction": "upload_source",
+            },
         ],
         "message": "ok",
     }
@@ -1138,21 +1158,24 @@ def test_build_readiness_report_can_include_competitor_entry_ui_smoke(monkeypatc
     class Completed:
         returncode = 0
         stderr = ""
-        stdout = audit.json.dumps({
-            "summaryPath": "06_AppPlatform/frontend/artifacts/product-config-competitor-entry-smoke/run/product_config_competitor_entry_smoke.json",
-            "artifactDir": "06_AppPlatform/frontend/artifacts/product-config-competitor-entry-smoke/run",
-            "targetUrl": "http://127.0.0.1:5177/product/compare/config?market=Germany&model=T19C%20MY%20ICE",
-            "screenshotPath": "06_AppPlatform/frontend/artifacts/product-config-competitor-entry-smoke/run/product_config_competitor_entry_smoke.png",
-            "recommendationState": {
-                "summary": "推荐范围Top 10/10库内可用1待生成0待上传9",
-                "queue": "补齐队列优先补上传缺口Urus 库内可用1待上传9上传 Urus 来源",
+        stdout = audit.json.dumps(
+            {
+                "summaryPath": f"{COMPETITOR_ENTRY_ARTIFACT_DIR}/product_config_competitor_entry_smoke.json",
+                "artifactDir": COMPETITOR_ENTRY_ARTIFACT_DIR,
+                "targetUrl": "http://127.0.0.1:5177/product/compare/config?market=Germany&model=T19C%20MY%20ICE",
+                "screenshotPath": f"{COMPETITOR_ENTRY_ARTIFACT_DIR}/product_config_competitor_entry_smoke.png",
+                "recommendationState": {
+                    "summary": "推荐范围Top 10/10库内可用1待生成0待上传9",
+                    "queue": "补齐队列优先补上传缺口Urus 库内可用1待上传9上传 Urus 来源",
+                },
+                "sourceHandoffState": {
+                    "sourceSearchValue": "LAMBORGHINI Urus Germany ICE SUV C",
+                },
+                "checks": {key: True for key in audit.COMPETITOR_ENTRY_UI_REQUIRED_CHECKS},
+                "passed": True,
             },
-            "sourceHandoffState": {
-                "sourceSearchValue": "LAMBORGHINI Urus Germany ICE SUV C",
-            },
-            "checks": {key: True for key in audit.COMPETITOR_ENTRY_UI_REQUIRED_CHECKS},
-            "passed": True,
-        }, ensure_ascii=False)
+            ensure_ascii=False,
+        )
 
     def fake_run(command, **kwargs):
         observed["command"] = command
@@ -1228,10 +1251,13 @@ def test_build_readiness_report_fails_when_competitor_entry_ui_smoke_lacks_queue
     class Completed:
         returncode = 0
         stderr = ""
-        stdout = audit.json.dumps({
-            "passed": True,
-            "checks": checks,
-        }, ensure_ascii=False)
+        stdout = audit.json.dumps(
+            {
+                "passed": True,
+                "checks": checks,
+            },
+            ensure_ascii=False,
+        )
 
     monkeypatch.setattr(audit.subprocess, "run", lambda *_args, **_kwargs: Completed())
 
@@ -1407,37 +1433,40 @@ def test_build_readiness_report_can_include_ui_edit_export_smoke(monkeypatch) ->
     class Completed:
         returncode = 0
         stderr = ""
-        stdout = audit.json.dumps({
-            "summaryPath": "06_AppPlatform/frontend/artifacts/product-config-edit-export-smoke/run/product_config_edit_export_smoke.json",
-            "artifactDir": "06_AppPlatform/frontend/artifacts/product-config-edit-export-smoke/run",
-            "targetUrl": "http://127.0.0.1:5177/product/compare/config?trimIds=t1,t2",
-            "sourceFormat": "pdf-text",
-            "contentType": "application/pdf",
-            "sourceId": "source-ui",
-            "trimIds": ["t1", "t2"],
-            "editResult": {
-                "scenario": "wireless_charging",
-                "savedAsExpected": True,
-                "savedAsOptional": True,
-                "saveStatus": 200,
-            },
-            "exports": {
-                "xlsx": {
-                    "editedValueInPayload": True,
-                    "signatureOk": True,
+        stdout = audit.json.dumps(
+            {
+                "summaryPath": f"{EDIT_EXPORT_ARTIFACT_DIR}/product_config_edit_export_smoke.json",
+                "artifactDir": EDIT_EXPORT_ARTIFACT_DIR,
+                "targetUrl": "http://127.0.0.1:5177/product/compare/config?trimIds=t1,t2",
+                "sourceFormat": "pdf-text",
+                "contentType": "application/pdf",
+                "sourceId": "source-ui",
+                "trimIds": ["t1", "t2"],
+                "editResult": {
+                    "scenario": "wireless_charging",
+                    "savedAsExpected": True,
+                    "savedAsOptional": True,
+                    "saveStatus": 200,
                 },
-                "pdf": {
-                    "editedValueInPayload": True,
-                    "signatureOk": True,
+                "exports": {
+                    "xlsx": {
+                        "editedValueInPayload": True,
+                        "signatureOk": True,
+                    },
+                    "pdf": {
+                        "editedValueInPayload": True,
+                        "signatureOk": True,
+                    },
                 },
+                "cleanup": {
+                    "errors": [],
+                    "sourceTrashCleared": 1,
+                    "trimTrashCleared": 2,
+                },
+                "passed": True,
             },
-            "cleanup": {
-                "errors": [],
-                "sourceTrashCleared": 1,
-                "trimTrashCleared": 2,
-            },
-            "passed": True,
-        }, ensure_ascii=False)
+            ensure_ascii=False,
+        )
 
     def fake_run(command, **kwargs):
         observed["command"] = command
@@ -1505,37 +1534,40 @@ def test_build_readiness_report_can_include_price_list_ui_edit_export_smoke(monk
     class Completed:
         returncode = 0
         stderr = ""
-        stdout = audit.json.dumps({
-            "summaryPath": "06_AppPlatform/frontend/artifacts/product-config-edit-export-smoke/run/product_config_edit_export_smoke.json",
-            "artifactDir": "06_AppPlatform/frontend/artifacts/product-config-edit-export-smoke/run",
-            "targetUrl": "http://127.0.0.1:5177/product/compare/config?trimIds=t1,t2",
-            "sourceFormat": "price-list-csv",
-            "contentType": "text/csv",
-            "sourceId": "source-price-ui",
-            "trimIds": ["t1", "t2"],
-            "editResult": {
-                "scenario": "msrp",
-                "savedAsExpected": True,
-                "savedAsOptional": False,
-                "saveStatus": 200,
-            },
-            "exports": {
-                "xlsx": {
-                    "editedValueInPayload": True,
-                    "signatureOk": True,
+        stdout = audit.json.dumps(
+            {
+                "summaryPath": f"{EDIT_EXPORT_ARTIFACT_DIR}/product_config_edit_export_smoke.json",
+                "artifactDir": EDIT_EXPORT_ARTIFACT_DIR,
+                "targetUrl": "http://127.0.0.1:5177/product/compare/config?trimIds=t1,t2",
+                "sourceFormat": "price-list-csv",
+                "contentType": "text/csv",
+                "sourceId": "source-price-ui",
+                "trimIds": ["t1", "t2"],
+                "editResult": {
+                    "scenario": "msrp",
+                    "savedAsExpected": True,
+                    "savedAsOptional": False,
+                    "saveStatus": 200,
                 },
-                "pdf": {
-                    "editedValueInPayload": True,
-                    "signatureOk": True,
+                "exports": {
+                    "xlsx": {
+                        "editedValueInPayload": True,
+                        "signatureOk": True,
+                    },
+                    "pdf": {
+                        "editedValueInPayload": True,
+                        "signatureOk": True,
+                    },
                 },
+                "cleanup": {
+                    "errors": [],
+                    "sourceTrashCleared": 1,
+                    "trimTrashCleared": 2,
+                },
+                "passed": True,
             },
-            "cleanup": {
-                "errors": [],
-                "sourceTrashCleared": 1,
-                "trimTrashCleared": 2,
-            },
-            "passed": True,
-        }, ensure_ascii=False)
+            ensure_ascii=False,
+        )
 
     def fake_run(command, **kwargs):
         observed["command"] = command
@@ -1579,40 +1611,50 @@ def test_build_readiness_report_can_include_floatingdeck_multisource_smokes(monk
         observed["commands"].append(command)
         observed["kwargs"] = kwargs
         if "smoke:product-config-multisource" in command:
-            return Completed({
-                "summaryPath": "06_AppPlatform/frontend/artifacts/product-config-multisource-same-model-smoke/run/product_config_multisource_same_model_smoke.json",
-                "artifactDir": "06_AppPlatform/frontend/artifacts/product-config-multisource-same-model-smoke/run",
-                "sourceIds": ["source-a", "source-b"],
-                "trimIds": ["a-basic", "a-premium", "b-basic", "b-premium"],
-                "compareApi": {
-                    "trimCount": 4,
-                    "duplicateBasicPremiumKept": True,
-                },
-                "floatingDeckSearch": {"passed": True},
-                "formalCompareUi": {"noHorizontalOverflow": True},
-                "cleanup": {"errors": [], "sourceTrashCleared": 2, "trimTrashCleared": 4},
-                "observed": {"api": [{"step": "source_uploaded"}], "ui": [{"step": "floating_deck_multisource_search"}]},
-                "passed": True,
-            })
+            return Completed(
+                {
+                    "summaryPath": f"{MULTISOURCE_ARTIFACT_DIR}/product_config_multisource_same_model_smoke.json",
+                    "artifactDir": MULTISOURCE_ARTIFACT_DIR,
+                    "sourceIds": ["source-a", "source-b"],
+                    "trimIds": ["a-basic", "a-premium", "b-basic", "b-premium"],
+                    "compareApi": {
+                        "trimCount": 4,
+                        "duplicateBasicPremiumKept": True,
+                    },
+                    "floatingDeckSearch": {"passed": True},
+                    "formalCompareUi": {"noHorizontalOverflow": True},
+                    "cleanup": {"errors": [], "sourceTrashCleared": 2, "trimTrashCleared": 4},
+                    "observed": {
+                        "api": [{"step": "source_uploaded"}],
+                        "ui": [{"step": "floating_deck_multisource_search"}],
+                    },
+                    "passed": True,
+                }
+            )
         if "smoke:product-config-cross-scope" in command:
-            return Completed({
-                "summaryPath": "06_AppPlatform/frontend/artifacts/product-config-cross-scope-direct-picker-smoke/run/product_config_cross_scope_direct_picker_smoke.json",
-                "artifactDir": "06_AppPlatform/frontend/artifacts/product-config-cross-scope-direct-picker-smoke/run",
-                "sourceIds": ["source-de", "source-fr"],
-                "trimIds": ["de-basic", "de-premium", "fr-basic", "fr-premium"],
-                "directPickerFlow": {
-                    "countriesVisible": True,
-                    "modelsVisible": True,
-                    "sourcesVisible": True,
-                    "selectedFourColumns": True,
-                    "noModeText": True,
-                    "noHorizontalOverflow": True,
-                    "rowsStatus": "当前展示 12/12 配置行",
-                },
-                "cleanup": {"errors": [], "sourceTrashClearedByCountry": {"Germany": 1, "France": 1}},
-                "observed": {"api": [{"step": "source_uploaded"}], "ui": [{"step": "direct_picker_cross_scope_add"}]},
-                "passed": True,
-            })
+            return Completed(
+                {
+                    "summaryPath": f"{CROSS_SCOPE_ARTIFACT_DIR}/product_config_cross_scope_direct_picker_smoke.json",
+                    "artifactDir": CROSS_SCOPE_ARTIFACT_DIR,
+                    "sourceIds": ["source-de", "source-fr"],
+                    "trimIds": ["de-basic", "de-premium", "fr-basic", "fr-premium"],
+                    "directPickerFlow": {
+                        "countriesVisible": True,
+                        "modelsVisible": True,
+                        "sourcesVisible": True,
+                        "selectedFourColumns": True,
+                        "noModeText": True,
+                        "noHorizontalOverflow": True,
+                        "rowsStatus": "当前展示 12/12 配置行",
+                    },
+                    "cleanup": {"errors": [], "sourceTrashClearedByCountry": {"Germany": 1, "France": 1}},
+                    "observed": {
+                        "api": [{"step": "source_uploaded"}],
+                        "ui": [{"step": "direct_picker_cross_scope_add"}],
+                    },
+                    "passed": True,
+                }
+            )
         raise AssertionError(f"unexpected command: {command}")
 
     monkeypatch.setattr(audit.subprocess, "run", fake_run)
@@ -1682,7 +1724,9 @@ def test_build_readiness_report_can_include_t19c_ai_ui_smoke(monkeypatch, tmp_pa
                 "baseTrimId": "t1",
                 "expectedRows": 229,
                 "viewportMode": "desktop",
-                "initialScreenshotPath": "06_AppPlatform/frontend/artifacts/product-config-t19c-ai-smoke/run/desktop_initial.png",
+                "initialScreenshotPath": (
+                    "06_AppPlatform/frontend/artifacts/product-config-t19c-ai-smoke/run/desktop_initial.png"
+                ),
                 "initialScreenshotPaths": {
                     "desktop": "06_AppPlatform/frontend/artifacts/product-config-t19c-ai-smoke/run/desktop_initial.png",
                 },
@@ -1762,10 +1806,13 @@ def test_build_readiness_report_fails_when_t19c_ai_ui_smoke_lacks_required_check
     class Completed:
         returncode = 0
         stderr = ""
-        stdout = audit.json.dumps({
-            "passed": True,
-            "checks": checks,
-        }, ensure_ascii=False)
+        stdout = audit.json.dumps(
+            {
+                "passed": True,
+                "checks": checks,
+            },
+            ensure_ascii=False,
+        )
 
     monkeypatch.setattr(audit.subprocess, "run", lambda *_args, **_kwargs: Completed())
 
@@ -1787,48 +1834,51 @@ def test_build_readiness_report_can_include_cross_user_source_library_smoke(monk
     class Completed:
         returncode = 0
         stderr = ""
-        stdout = audit.json.dumps({
-            "summaryPath": "06_AppPlatform/frontend/artifacts/product-config-cross-user-source-library-smoke/run/product_config_cross_user_source_library_smoke.json",
-            "artifactDir": "06_AppPlatform/frontend/artifacts/product-config-cross-user-source-library-smoke/run",
-            "targetUrl": "http://127.0.0.1:5177/product/compare/config?market=CrossUser",
-            "screenshotPath": "06_AppPlatform/frontend/artifacts/product-config-cross-user-source-library-smoke/run/product_config_cross_user_source_library_smoke.png",
-            "csvPath": "06_AppPlatform/frontend/artifacts/product-config-cross-user-source-library-smoke/run/cross-user-source.csv",
-            "fileName": "cross-user-source.csv",
-            "uploaderUserName": "product-config-uploader-smoke",
-            "consumerUserName": "product-config-consumer-smoke",
-            "sourceId": "source-cross-user",
-            "trimIds": ["shared-basic", "shared-premium"],
-            "consumerSourceList": {
-                "itemCount": 1,
-                "found": True,
-                "createdBy": "product-config-uploader-smoke",
+        stdout = audit.json.dumps(
+            {
+                "summaryPath": f"{CROSS_USER_ARTIFACT_DIR}/product_config_cross_user_source_library_smoke.json",
+                "artifactDir": CROSS_USER_ARTIFACT_DIR,
+                "targetUrl": "http://127.0.0.1:5177/product/compare/config?market=CrossUser",
+                "screenshotPath": f"{CROSS_USER_ARTIFACT_DIR}/product_config_cross_user_source_library_smoke.png",
+                "csvPath": f"{CROSS_USER_ARTIFACT_DIR}/cross-user-source.csv",
+                "fileName": "cross-user-source.csv",
+                "uploaderUserName": "product-config-uploader-smoke",
+                "consumerUserName": "product-config-consumer-smoke",
                 "sourceId": "source-cross-user",
+                "trimIds": ["shared-basic", "shared-premium"],
+                "consumerSourceList": {
+                    "itemCount": 1,
+                    "found": True,
+                    "createdBy": "product-config-uploader-smoke",
+                    "sourceId": "source-cross-user",
+                },
+                "uiResult": {
+                    "rowsStatus": "当前展示 12/12 配置行",
+                    "fileVisible": True,
+                    "uploaderVisible": True,
+                    "consumerVisible": True,
+                    "successVisible": True,
+                    "basicVisible": True,
+                    "premiumVisible": True,
+                    "noHorizontalOverflow": True,
+                },
+                "cleanup": {
+                    "errors": [],
+                    "sourceTrashCleared": 1,
+                    "trimTrashCleared": 2,
+                },
+                "observed": {
+                    "api": [
+                        {"step": "source_uploaded_by_uploader"},
+                        {"step": "consumer_can_list_uploaded_source"},
+                        {"step": "consumer_created_draft_from_shared_source"},
+                    ],
+                    "ui": [{"step": "consumer_ui_created_formal_compare"}],
+                },
+                "passed": True,
             },
-            "uiResult": {
-                "rowsStatus": "当前展示 12/12 配置行",
-                "fileVisible": True,
-                "uploaderVisible": True,
-                "consumerVisible": True,
-                "successVisible": True,
-                "basicVisible": True,
-                "premiumVisible": True,
-                "noHorizontalOverflow": True,
-            },
-            "cleanup": {
-                "errors": [],
-                "sourceTrashCleared": 1,
-                "trimTrashCleared": 2,
-            },
-            "observed": {
-                "api": [
-                    {"step": "source_uploaded_by_uploader"},
-                    {"step": "consumer_can_list_uploaded_source"},
-                    {"step": "consumer_created_draft_from_shared_source"},
-                ],
-                "ui": [{"step": "consumer_ui_created_formal_compare"}],
-            },
-            "passed": True,
-        }, ensure_ascii=False)
+            ensure_ascii=False,
+        )
 
     def fake_run(command, **kwargs):
         observed["command"] = command
@@ -1898,52 +1948,55 @@ def test_build_readiness_report_can_include_source_review_row_smoke(monkeypatch)
     class Completed:
         returncode = 0
         stderr = ""
-        stdout = audit.json.dumps({
-            "summaryPath": "06_AppPlatform/frontend/artifacts/product-config-review-row-smoke/run/product_config_review_row_smoke.json",
-            "artifactDir": "06_AppPlatform/frontend/artifacts/product-config-review-row-smoke/run",
-            "targetUrl": "http://127.0.0.1:5177/product/compare/config?market=Review",
-            "sourceId": "source-review-row",
-            "trimIds": ["ocr-basic", "ocr-premium", "ocr-luxury"],
-            "fileName": "review-row-source.jpg",
-            "imageFormat": "JPEG",
-            "mimeType": "image/jpeg",
-            "selectedReviewFeature": "Roof rack",
-            "reviewRowCount": 2,
-            "cleanup": {
-                "errors": [],
-                "sourceTrashed": True,
-                "sourceTrashCleared": 1,
-                "trimTrashCleared": 3,
+        stdout = audit.json.dumps(
+            {
+                "summaryPath": f"{REVIEW_ROW_ARTIFACT_DIR}/product_config_review_row_smoke.json",
+                "artifactDir": REVIEW_ROW_ARTIFACT_DIR,
+                "targetUrl": "http://127.0.0.1:5177/product/compare/config?market=Review",
+                "sourceId": "source-review-row",
+                "trimIds": ["ocr-basic", "ocr-premium", "ocr-luxury"],
+                "fileName": "review-row-source.jpg",
+                "imageFormat": "JPEG",
+                "mimeType": "image/jpeg",
+                "selectedReviewFeature": "Roof rack",
+                "reviewRowCount": 2,
+                "cleanup": {
+                    "errors": [],
+                    "sourceTrashed": True,
+                    "sourceTrashCleared": 1,
+                    "trimTrashCleared": 3,
+                },
+                "observed": {
+                    "api": [{"step": "source_uploaded"}],
+                    "ui": [
+                        {"step": "selected_review_row", "feature": "Roof rack"},
+                        {"step": "formal_row_highlighted", "feature": "Roof rack"},
+                        {
+                            "step": "edited_selected_review_feature",
+                            "feature": "Roof rack",
+                            "savedAsOptional": True,
+                            "saveStatus": 200,
+                        },
+                        {
+                            "step": "export_xlsx_after_review_edit",
+                            "feature": "Roof rack",
+                            "status": 200,
+                            "signatureOk": True,
+                            "editedValueInPayload": True,
+                        },
+                        {
+                            "step": "export_pdf_after_review_edit",
+                            "feature": "Roof rack",
+                            "status": 200,
+                            "signatureOk": True,
+                            "editedValueInPayload": True,
+                        },
+                    ],
+                },
+                "passed": True,
             },
-            "observed": {
-                "api": [{"step": "source_uploaded"}],
-                "ui": [
-                    {"step": "selected_review_row", "feature": "Roof rack"},
-                    {"step": "formal_row_highlighted", "feature": "Roof rack"},
-                    {
-                        "step": "edited_selected_review_feature",
-                        "feature": "Roof rack",
-                        "savedAsOptional": True,
-                        "saveStatus": 200,
-                    },
-                    {
-                        "step": "export_xlsx_after_review_edit",
-                        "feature": "Roof rack",
-                        "status": 200,
-                        "signatureOk": True,
-                        "editedValueInPayload": True,
-                    },
-                    {
-                        "step": "export_pdf_after_review_edit",
-                        "feature": "Roof rack",
-                        "status": 200,
-                        "signatureOk": True,
-                        "editedValueInPayload": True,
-                    },
-                ],
-            },
-            "passed": True,
-        }, ensure_ascii=False)
+            ensure_ascii=False,
+        )
 
     def fake_run(command, **kwargs):
         observed["command"] = command
@@ -2091,9 +2144,7 @@ def test_build_readiness_report_degrades_when_local_workbook_has_no_compare_grou
 
 def test_build_readiness_report_degrades_when_competitor_recommendations_are_empty() -> None:
     responses = _ready_responses()
-    responses[
-        "/engineering-config/recommendations/competitors?country=Germany&model_name=T19C+MY+ICE&powertrain=ICE&segment=SUV+C&limit=10"
-    ] = {
+    responses[COMPETITOR_RECOMMENDATION_PATH] = {
         "country": "Germany",
         "modelName": "T19C MY ICE",
         "rows": 0,
@@ -2140,4 +2191,8 @@ def test_render_markdown_and_write_outputs(tmp_path: Path) -> None:
     assert "Only PaddleOCR is available" in markdown
     assert "| Runtime AI summary readiness | `passed` |" in markdown
     assert Path(artifacts["latestJson"]).exists()
-    assert Path(artifacts["latestMarkdown"]).read_text(encoding="utf-8").startswith("# Engineering Config Compare Readiness")
+    assert (
+        Path(artifacts["latestMarkdown"])
+        .read_text(encoding="utf-8")
+        .startswith("# Engineering Config Compare Readiness")
+    )

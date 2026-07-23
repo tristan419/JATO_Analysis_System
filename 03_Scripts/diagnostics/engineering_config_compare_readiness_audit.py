@@ -120,7 +120,9 @@ class ApiClient:
         headers = self._headers()
         request = urllib.request.Request(url, headers=headers, method="GET")
         try:
-            with urllib.request.urlopen(request, timeout=self.timeout) as response:  # noqa: S310 - local/provided API endpoint.
+            with urllib.request.urlopen(
+                request, timeout=self.timeout
+            ) as response:  # noqa: S310 - local/provided API endpoint.
                 body = response.read().decode("utf-8")
                 if not body.strip():
                     return {"ok": True, "status": response.status}
@@ -138,7 +140,9 @@ class ApiClient:
         data = json.dumps(payload, ensure_ascii=False).encode("utf-8")
         request = urllib.request.Request(url, data=data, headers=headers, method="POST")
         try:
-            with urllib.request.urlopen(request, timeout=self.timeout) as response:  # noqa: S310 - local/provided API endpoint.
+            with urllib.request.urlopen(
+                request, timeout=self.timeout
+            ) as response:  # noqa: S310 - local/provided API endpoint.
                 return response.read(), response.headers.get("Content-Type")
         except urllib.error.HTTPError as exc:
             body = exc.read().decode("utf-8", errors="replace")
@@ -160,7 +164,9 @@ class ApiClient:
         headers = self._headers(content_type=content_type)
         request = urllib.request.Request(url, data=body, headers=headers, method="PUT")
         try:
-            with urllib.request.urlopen(request, timeout=self.timeout) as response:  # noqa: S310 - local/provided API endpoint.
+            with urllib.request.urlopen(
+                request, timeout=self.timeout
+            ) as response:  # noqa: S310 - local/provided API endpoint.
                 response_body = response.read().decode("utf-8")
                 if not response_body.strip():
                     return {"ok": True, "status": response.status}
@@ -181,7 +187,9 @@ class ApiClient:
             data = json.dumps(payload, ensure_ascii=False).encode("utf-8")
         request = urllib.request.Request(url, data=data, headers=headers, method=method)
         try:
-            with urllib.request.urlopen(request, timeout=self.timeout) as response:  # noqa: S310 - local/provided API endpoint.
+            with urllib.request.urlopen(
+                request, timeout=self.timeout
+            ) as response:  # noqa: S310 - local/provided API endpoint.
                 body = response.read().decode("utf-8")
                 if not body.strip():
                     return {"ok": True, "status": response.status}
@@ -263,7 +271,10 @@ def _ocr_comparison_status(payload: dict[str, Any], *, image_ready: bool) -> tup
     if paddle_ready:
         return (
             "paddle_only",
-            "Only PaddleOCR is available; image/scanned PDF OCR can run, but PaddleOCR-vs-legacy/custom comparison is unavailable.",
+            (
+                "Only PaddleOCR is available; image/scanned PDF OCR can run, but PaddleOCR-vs-legacy/custom comparison"
+                " is unavailable."
+            ),
             False,
         )
     if legacy_ready:
@@ -275,7 +286,10 @@ def _ocr_comparison_status(payload: dict[str, Any], *, image_ready: bool) -> tup
     if image_ready:
         return (
             "single_engine_unknown",
-            "OCR can run, but the readiness payload does not identify both PaddleOCR and legacy/custom engines for comparison.",
+            (
+                "OCR can run, but the readiness payload does not identify both PaddleOCR and legacy/custom engines for"
+                " comparison."
+            ),
             False,
         )
     return (
@@ -288,27 +302,51 @@ def _ocr_comparison_status(payload: dict[str, Any], *, image_ready: bool) -> tup
 def _ocr_runtime_next_actions(comparison_status: str) -> list[str]:
     if comparison_status == "ready":
         return [
-            "Run engineering_config_ocr_quality_audit.py on real scanned PDF/image config samples to choose the better OCR engine.",
-            "Keep PaddleOCR/custom/tesseract candidates visible in Source Digest evidence before changing the runtime default.",
+            (
+                "Run engineering_config_ocr_quality_audit.py on real scanned PDF/image config samples to choose the"
+                " better OCR engine."
+            ),
+            (
+                "Keep PaddleOCR/custom/tesseract candidates visible in Source Digest evidence before changing the"
+                " runtime default."
+            ),
         ]
     if comparison_status == "paddle_only":
         return [
-            "Install tesseract or set JATO_CONFIG_OCR_COMMAND to the previous PDF/image OCR command so the audit can compare a legacy/custom candidate against PaddleOCR.",
+            (
+                "Install tesseract or set JATO_CONFIG_OCR_COMMAND to the previous PDF/image OCR command so the audit"
+                " can compare a legacy/custom candidate against PaddleOCR."
+            ),
             "Run engineering_config_ocr_quality_audit.py again after the second engine is available.",
-            "Use PaddleOCR as the current default only as a single-engine runtime choice until a two-engine quality artifact exists.",
+            (
+                "Use PaddleOCR as the current default only as a single-engine runtime choice until a two-engine quality"
+                " artifact exists."
+            ),
         ]
     if comparison_status == "legacy_only":
         return [
             "Install paddleocr and paddlepaddle so the legacy/custom OCR result can be compared against PaddleOCR.",
-            "Run engineering_config_ocr_quality_audit.py on the same real scanned PDF/image samples after PaddleOCR is available.",
+            (
+                "Run engineering_config_ocr_quality_audit.py on the same real scanned PDF/image samples after PaddleOCR"
+                " is available."
+            ),
         ]
     if comparison_status == "single_engine_unknown":
         return [
-            "Check OCR readiness components and configure either PaddleOCR plus tesseract or JATO_CONFIG_OCR_COMMAND for a named two-engine comparison.",
-            "Run engineering_config_ocr_quality_audit.py and verify ocrComparisonStatus includes selected_compared_with_alternates.",
+            (
+                "Check OCR readiness components and configure either PaddleOCR plus tesseract or"
+                " JATO_CONFIG_OCR_COMMAND for a named two-engine comparison."
+            ),
+            (
+                "Run engineering_config_ocr_quality_audit.py and verify ocrComparisonStatus includes"
+                " selected_compared_with_alternates."
+            ),
         ]
     return [
-        "Install paddleocr+paddlepaddle or configure JATO_CONFIG_OCR_COMMAND/tesseract before using scanned PDF/image Source Digest.",
+        (
+            "Install paddleocr+paddlepaddle or configure JATO_CONFIG_OCR_COMMAND/tesseract before using scanned"
+            " PDF/image Source Digest."
+        ),
         "After OCR is ready, run engineering_config_ocr_quality_audit.py with real config-table samples.",
     ]
 
@@ -318,7 +356,9 @@ def _ocr_evaluator(payload: dict[str, Any]) -> tuple[str, str, dict[str, Any]]:
     pdf_ready = bool(payload.get("pdfOcrReady"))
     status = str(payload.get("status") or "unknown")
     default_engine = payload.get("defaultEngine")
-    paddle_ready = bool(payload.get("paddleOcrReady")) or (image_ready and str(default_engine or "").lower() == "paddleocr")
+    paddle_ready = bool(payload.get("paddleOcrReady")) or (
+        image_ready and str(default_engine or "").lower() == "paddleocr"
+    )
     comparison_status, comparison_message, comparison_ready = _ocr_comparison_status(payload, image_ready=image_ready)
     if image_ready and pdf_ready:
         result = "passed"
@@ -348,7 +388,9 @@ def _ocr_evaluator(payload: dict[str, Any]) -> tuple[str, str, dict[str, Any]]:
     )
 
 
-def _ocr_quality_artifact_runtime_issue(payload: dict[str, Any], ocr_runtime_details: dict[str, Any] | None) -> str | None:
+def _ocr_quality_artifact_runtime_issue(
+    payload: dict[str, Any], ocr_runtime_details: dict[str, Any] | None
+) -> str | None:
     runtime = payload.get("runtime") if isinstance(payload.get("runtime"), dict) else {}
     if not runtime:
         return None
@@ -393,19 +435,27 @@ def _latest_ocr_quality_artifact(artifact_dir: Path, ocr_runtime_details: dict[s
     return latest_candidates[0]
 
 
-def _ocr_quality_artifact_check(artifact_path: Path | None, ocr_runtime_details: dict[str, Any] | None = None) -> dict[str, Any]:
+def _ocr_quality_artifact_check(
+    artifact_path: Path | None, ocr_runtime_details: dict[str, Any] | None = None
+) -> dict[str, Any]:
     if artifact_path is None:
         return {
             "key": "ocr_quality_recommendation",
             "label": "OCR quality recommendation",
             "status": "degraded",
             "path": None,
-            "message": "no OCR quality audit artifact found; run engineering_config_ocr_quality_audit.py with real PDF/image samples",
+            "message": (
+                "no OCR quality audit artifact found; run engineering_config_ocr_quality_audit.py with real PDF/image"
+                " samples"
+            ),
             "details": {
                 "artifactFound": False,
                 "nextActions": [
                     "Run engineering_config_ocr_quality_audit.py against real PDF/image configuration samples.",
-                    "Include at least two OCR engines by installing tesseract or setting JATO_CONFIG_OCR_COMMAND when comparing PaddleOCR with a previous OCR path.",
+                    (
+                        "Include at least two OCR engines by installing tesseract or setting JATO_CONFIG_OCR_COMMAND"
+                        " when comparing PaddleOCR with a previous OCR path."
+                    ),
                 ],
             },
         }
@@ -421,7 +471,10 @@ def _ocr_quality_artifact_check(artifact_path: Path | None, ocr_runtime_details:
                 "artifactPath": _display_path(artifact_path),
                 "nextActions": [
                     "Run engineering_config_ocr_quality_audit.py and write a fresh JSON artifact.",
-                    "Configure a second OCR engine before the audit if the goal is to compare PaddleOCR with a previous PDF/image OCR path.",
+                    (
+                        "Configure a second OCR engine before the audit if the goal is to compare PaddleOCR with a"
+                        " previous PDF/image OCR path."
+                    ),
                 ],
             },
         }
@@ -463,13 +516,21 @@ def _ocr_quality_artifact_check(artifact_path: Path | None, ocr_runtime_details:
                 "artifactRuntime": runtime,
                 "backendOcrRuntime": ocr_runtime_details or {},
                 "nextActions": [
-                    "Re-run engineering_config_ocr_quality_audit.py with the same Python environment used by the backend.",
-                    "Prefer the project .venv/bin/python locally so PaddleOCR/PaddlePaddle availability matches /engineering-config/ocr/readiness.",
+                    (
+                        "Re-run engineering_config_ocr_quality_audit.py with the same Python environment used by the"
+                        " backend."
+                    ),
+                    (
+                        "Prefer the project .venv/bin/python locally so PaddleOCR/PaddlePaddle availability matches"
+                        " /engineering-config/ocr/readiness."
+                    ),
                 ],
             },
         }
     summary = payload.get("summary") if isinstance(payload.get("summary"), dict) else {}
-    recommendation = summary.get("engineRecommendation") if isinstance(summary.get("engineRecommendation"), dict) else {}
+    recommendation = (
+        summary.get("engineRecommendation") if isinstance(summary.get("engineRecommendation"), dict) else {}
+    )
     decision = str(recommendation.get("decision") or "missing_recommendation")
     recommended_engine = recommendation.get("recommendedEngine")
     confidence = str(recommendation.get("confidence") or "unknown")
@@ -485,7 +546,10 @@ def _ocr_quality_artifact_check(artifact_path: Path | None, ocr_runtime_details:
             f"from {candidate_engine_count} engines and {comparable_candidate_count} comparable candidates"
         )
         next_actions = [
-            f"Use {recommended_engine} as the preferred OCR engine for config-table digest while keeping per-file OCR evidence visible.",
+            (
+                f"Use {recommended_engine} as the preferred OCR engine for config-table digest while keeping per-file"
+                " OCR evidence visible."
+            ),
             "Re-run the OCR quality audit when new scanned PDF/image source formats are added.",
         ]
     elif decision == "single_engine_candidate" and recommended_engine:
@@ -496,19 +560,31 @@ def _ocr_quality_artifact_check(artifact_path: Path | None, ocr_runtime_details:
         )
         next_actions = [
             "Install tesseract or set JATO_CONFIG_OCR_COMMAND to the previous PDF/image OCR command.",
-            "Re-run engineering_config_ocr_quality_audit.py on the same samples and require candidateEngineCount >= 2 before calling PaddleOCR the winner.",
+            (
+                "Re-run engineering_config_ocr_quality_audit.py on the same samples and require candidateEngineCount >="
+                " 2 before calling PaddleOCR the winner."
+            ),
             f"Keep {recommended_engine} as the current runtime fallback, not as a final quality winner.",
         ]
     elif decision == "tie_needs_more_samples":
         status = "degraded"
-        message = "OCR quality audit found tied engines; collect more scanned PDF/image samples before choosing a runtime engine"
+        message = (
+            "OCR quality audit found tied engines; collect more scanned PDF/image samples before choosing a runtime"
+            " engine"
+        )
         next_actions = [
             "Add more real scanned PDF/image config samples from different source formats.",
-            "Re-run the OCR quality audit and choose an engine only after one candidate leads on comparable tables and non-empty config cells.",
+            (
+                "Re-run the OCR quality audit and choose an engine only after one candidate leads on comparable tables"
+                " and non-empty config cells."
+            ),
         ]
     elif decision == "insufficient_evidence":
         status = "degraded"
-        message = "OCR quality audit has insufficient comparable OCR evidence; run real scanned PDF/image samples before choosing a runtime engine"
+        message = (
+            "OCR quality audit has insufficient comparable OCR evidence; run real scanned PDF/image samples before"
+            " choosing a runtime engine"
+        )
         next_actions = [
             "Use real PDF/image files that contain horizontal config matrices with at least two trims/options.",
             "Verify the audit reports readyComparableFileCount > 0 and comparableCandidateCount > 0.",
@@ -542,9 +618,15 @@ def _ocr_quality_artifact_check(artifact_path: Path | None, ocr_runtime_details:
             "candidateCount": _safe_int(recommendation.get("candidateCount")),
             "comparableCandidateCount": comparable_candidate_count,
             "runnerUpEngine": recommendation.get("runnerUpEngine"),
-            "engineMetrics": recommendation.get("engineMetrics") if isinstance(recommendation.get("engineMetrics"), list) else [],
+            "engineMetrics": (
+                recommendation.get("engineMetrics") if isinstance(recommendation.get("engineMetrics"), list) else []
+            ),
             "statusCounts": summary.get("statusCounts") if isinstance(summary.get("statusCounts"), dict) else {},
-            "ocrComparisonStatusCounts": summary.get("ocrComparisonStatusCounts") if isinstance(summary.get("ocrComparisonStatusCounts"), dict) else {},
+            "ocrComparisonStatusCounts": (
+                summary.get("ocrComparisonStatusCounts")
+                if isinstance(summary.get("ocrComparisonStatusCounts"), dict)
+                else {}
+            ),
             "nextActions": next_actions,
         },
     }
@@ -685,10 +767,12 @@ def _auth_role_detail(
     if len(compare_trim_ids) >= 2:
         query = urllib.parse.urlencode({"trim_ids": ",".join(compare_trim_ids[:4])})
         compare = _request_result(client, "GET", f"/engineering-config/compare?{query}")
-        detail.update({
-            "compareReadStatus": compare.get("status"),
-            "compareReadOk": bool(compare.get("ok")),
-        })
+        detail.update(
+            {
+                "compareReadStatus": compare.get("status"),
+                "compareReadOk": bool(compare.get("ok")),
+            }
+        )
     return detail
 
 
@@ -766,15 +850,21 @@ def _mint_local_auth_token(
 ) -> str:
     now = int(time.time())
     header = _base64url_json({"alg": "HS256", "typ": "JWT"})
-    body = _base64url_json({
-        "username": username,
-        "role": role,
-        "exp": now + ttl_seconds,
-        "iat": now,
-    })
-    signature = base64.urlsafe_b64encode(
-        hmac.new(jwt_secret.encode("utf-8"), f"{header}.{body}".encode("utf-8"), hashlib.sha256).digest()
-    ).decode("ascii").rstrip("=")
+    body = _base64url_json(
+        {
+            "username": username,
+            "role": role,
+            "exp": now + ttl_seconds,
+            "iat": now,
+        }
+    )
+    signature = (
+        base64.urlsafe_b64encode(
+            hmac.new(jwt_secret.encode("utf-8"), f"{header}.{body}".encode("utf-8"), hashlib.sha256).digest()
+        )
+        .decode("ascii")
+        .rstrip("=")
+    )
     return f"{header}.{body}.{signature}"
 
 
@@ -790,7 +880,7 @@ def _auth_contract_check(
     compare_trim_ids: list[str] | None = None,
     role_clients: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    compare_ids = [trim_id for trim_id in (compare_trim_ids or []) if trim_id]
+    compare_ids = [trim_id for trim_id in compare_trim_ids or [] if trim_id]
     role_clients = role_clients or {}
     details: dict[str, Any] = {
         "compareTrimIds": compare_ids,
@@ -999,19 +1089,26 @@ def _compare_export_payload(compare_payload: dict[str, Any], file_name: str) -> 
             "baseLabel": base_label,
             "targetLabel": target_label,
         },
-        "summary": summary or {
-            "totalFeatures": compare_payload.get("totalFeatures") or len(rows),
-            "shownFeatures": compare_payload.get("shownFeatures") or len(rows),
-        },
+        "summary": (
+            summary
+            or {
+                "totalFeatures": compare_payload.get("totalFeatures") or len(rows),
+                "shownFeatures": compare_payload.get("shownFeatures") or len(rows),
+            }
+        ),
         "trims": trims,
         "rows": rows,
         "businessSummary": business_summary,
-        "businessSummaryUsage": {
-            "provider": "readiness-smoke",
-            "model": "deterministic-fixture",
-            "status": "ok",
-            "source": "readiness_export_payload",
-        } if business_summary else None,
+        "businessSummaryUsage": (
+            {
+                "provider": "readiness-smoke",
+                "model": "deterministic-fixture",
+                "status": "ok",
+                "source": "readiness_export_payload",
+            }
+            if business_summary
+            else None
+        ),
     }
 
 
@@ -1150,21 +1247,23 @@ def _source_evidence_summary(evidence_facts: list[dict[str, Any]]) -> dict[str, 
 
 def _export_business_summary(compare_payload: dict[str, Any]) -> list[dict[str, Any]]:
     compose_payload = _business_summary_compose_payload(compare_payload)
-    base_label = _trim_label(compose_payload.get("baseTrim") if isinstance(compose_payload.get("baseTrim"), dict) else {})
+    base_label = _trim_label(
+        compose_payload.get("baseTrim") if isinstance(compose_payload.get("baseTrim"), dict) else {}
+    )
     summaries: list[dict[str, Any]] = []
     targets = compose_payload.get("targets") if isinstance(compose_payload.get("targets"), list) else []
     for target in targets:
         if not isinstance(target, dict):
             continue
         target_label = str(target.get("targetLabel") or "目标配置列")
-        source_summary = target.get("sourceEvidenceSummary") if isinstance(target.get("sourceEvidenceSummary"), dict) else {}
+        source_summary = (
+            target.get("sourceEvidenceSummary") if isinstance(target.get("sourceEvidenceSummary"), dict) else {}
+        )
         evidence_facts = target.get("evidenceFacts") if isinstance(target.get("evidenceFacts"), list) else []
         main_upgrades = [
-            (
-                f"{str(fact.get('category') or '配置')}："
-                f"{str(fact.get('featureName') or fact.get('featureCode') or '配置项')} "
-                f"{str(fact.get('baseValue') or '空')} -> {str(fact.get('targetValue') or '空')}"
-            )
+            f"{str(fact.get('category') or '配置')}："
+            f"{str(fact.get('featureName') or fact.get('featureCode') or '配置项')} "
+            f"{str(fact.get('baseValue') or '空')} -> {str(fact.get('targetValue') or '空')}"
             for fact in evidence_facts[:4]
             if isinstance(fact, dict)
         ]
@@ -1175,36 +1274,46 @@ def _export_business_summary(compare_payload: dict[str, Any]) -> list[dict[str, 
                 "source": fact.get("source"),
             }
             for fact in evidence_facts[:4]
-            if isinstance(fact, dict) and _source_has_evidence(fact.get("source") if isinstance(fact.get("source"), dict) else {})
+            if isinstance(fact, dict)
+            and _source_has_evidence(fact.get("source") if isinstance(fact.get("source"), dict) else {})
         ]
-        summaries.append({
-            "targetTrimId": target.get("targetTrimId"),
-            "targetLabel": target_label,
-            "headline": f"{target_label} 相比 {base_label} 的配置差异 readiness smoke 摘要。",
-            "mainUpgrades": main_upgrades or ["暂无可归纳升级项，需查看完整配置表。"],
-            "replacementsOrReductions": ["以配置表和 evidence drawer 为准。"],
-            "evidenceStatus": [
-                (
-                    f"{source_summary.get('inferredCount', 0)} 项规则推断，"
-                    f"{source_summary.get('missingSourceEvidenceCount', 0)} 项缺少 source evidence，"
-                    f"{source_summary.get('mergedCellExpandedCount', 0)} 项来自合并单元格展开。"
-                ),
-                "引用到卖点前请点开 source evidence 核对。",
-            ],
-            "recommendedUse": "readiness smoke export fixture，用于验证导出能携带 AI 摘要结构。",
-            "evidenceRefs": evidence_refs,
-        })
+        summaries.append(
+            {
+                "targetTrimId": target.get("targetTrimId"),
+                "targetLabel": target_label,
+                "headline": f"{target_label} 相比 {base_label} 的配置差异 readiness smoke 摘要。",
+                "mainUpgrades": main_upgrades or ["暂无可归纳升级项，需查看完整配置表。"],
+                "replacementsOrReductions": ["以配置表和 evidence drawer 为准。"],
+                "evidenceStatus": [
+                    (
+                        f"{source_summary.get('inferredCount', 0)} 项规则推断，"
+                        f"{source_summary.get('missingSourceEvidenceCount', 0)} 项缺少 source evidence，"
+                        f"{source_summary.get('mergedCellExpandedCount', 0)} 项来自合并单元格展开。"
+                    ),
+                    "引用到卖点前请点开 source evidence 核对。",
+                ],
+                "recommendedUse": "readiness smoke export fixture，用于验证导出能携带 AI 摘要结构。",
+                "evidenceRefs": evidence_refs,
+            }
+        )
     return summaries
 
 
 def _business_summary_compose_payload(compare_payload: dict[str, Any]) -> dict[str, Any]:
-    trims = [trim for trim in (compare_payload.get("trims") if isinstance(compare_payload.get("trims"), list) else []) if isinstance(trim, dict)]
-    rows = [row for row in (compare_payload.get("rows") if isinstance(compare_payload.get("rows"), list) else []) if isinstance(row, dict)]
+    trims = [
+        trim
+        for trim in (compare_payload.get("trims") if isinstance(compare_payload.get("trims"), list) else [])
+        if isinstance(trim, dict)
+    ]
+    rows = [
+        row
+        for row in (compare_payload.get("rows") if isinstance(compare_payload.get("rows"), list) else [])
+        if isinstance(row, dict)
+    ]
     summary = compare_payload.get("summary") if isinstance(compare_payload.get("summary"), dict) else {}
     base_trim = trims[0] if trims else {}
     difference_rows = [
-        row for row in rows
-        if str(row.get("comparisonType") or "").upper() not in {"SAME", "COMMON", "COMMON_SAME"}
+        row for row in rows if str(row.get("comparisonType") or "").upper() not in {"SAME", "COMMON", "COMMON_SAME"}
     ]
     if not difference_rows:
         difference_rows = rows[:12]
@@ -1231,46 +1340,56 @@ def _business_summary_compose_payload(compare_payload: dict[str, Any]) -> dict[s
             _business_summary_evidence_fact(row, base_index=0, target_index=target_index)
             for row in difference_rows[:24]
         ]
-        targets.append({
-            "targetTrimId": _trim_id(target_trim),
-            "targetLabel": _trim_label(target_trim),
-            "targetTrim": _summary_trim_fact(target_trim),
-            "differenceCounts": {
-                "totalDifference": summary.get("differenceCount") or summary.get("confirmedDifferenceCount") or len(difference_rows),
-                "inferred": summary.get("inferredDifferenceCount") or 0,
-                "unknown": summary.get("missingOrUnknownCount") or 0,
-                "missingSourceEvidence": _source_evidence_summary(evidence_facts).get("missingSourceEvidenceCount"),
-            },
-            "sourceEvidenceSummary": _source_evidence_summary(evidence_facts),
-            "evidenceFacts": evidence_facts,
-            "addedFeatures": [str(row.get("featureName") or row.get("featureCode") or "") for row in difference_rows[:8]],
-            "removedFeatures": [],
-            "changedFeatures": [
-                {
-                    "feature": row.get("featureName") or row.get("featureCode"),
-                    "baseValue": _display_value(_row_value(row, 0)),
-                    "targetValue": _display_value(_row_value(row, target_index)),
-                }
-                for row in difference_rows[:8]
-            ],
-            "businessFocusGroups": [
-                {
-                    "label": fact["category"],
-                    "count": fact["totalDifferenceCount"],
-                    "evidence": "readiness smoke compare facts",
-                    "sampleFeatures": fact["sampleFeatures"],
-                }
-                for fact in category_facts[:5]
-            ],
-            "categoryFacts": category_facts,
-            "evidence": {
-                "inferredCount": summary.get("inferredDifferenceCount") or 0,
-                "unknownCount": summary.get("missingOrUnknownCount") or 0,
-                "missingSourceEvidenceCount": _source_evidence_summary(evidence_facts).get("missingSourceEvidenceCount"),
-                "sourceSheetNames": _source_evidence_summary(evidence_facts).get("sourceSheetNames"),
-                "warning": "引用到卖点前仍需点开 source evidence 核对。",
-            },
-        })
+        targets.append(
+            {
+                "targetTrimId": _trim_id(target_trim),
+                "targetLabel": _trim_label(target_trim),
+                "targetTrim": _summary_trim_fact(target_trim),
+                "differenceCounts": {
+                    "totalDifference": (
+                        summary.get("differenceCount")
+                        or summary.get("confirmedDifferenceCount")
+                        or len(difference_rows)
+                    ),
+                    "inferred": summary.get("inferredDifferenceCount") or 0,
+                    "unknown": summary.get("missingOrUnknownCount") or 0,
+                    "missingSourceEvidence": _source_evidence_summary(evidence_facts).get("missingSourceEvidenceCount"),
+                },
+                "sourceEvidenceSummary": _source_evidence_summary(evidence_facts),
+                "evidenceFacts": evidence_facts,
+                "addedFeatures": [
+                    str(row.get("featureName") or row.get("featureCode") or "") for row in difference_rows[:8]
+                ],
+                "removedFeatures": [],
+                "changedFeatures": [
+                    {
+                        "feature": row.get("featureName") or row.get("featureCode"),
+                        "baseValue": _display_value(_row_value(row, 0)),
+                        "targetValue": _display_value(_row_value(row, target_index)),
+                    }
+                    for row in difference_rows[:8]
+                ],
+                "businessFocusGroups": [
+                    {
+                        "label": fact["category"],
+                        "count": fact["totalDifferenceCount"],
+                        "evidence": "readiness smoke compare facts",
+                        "sampleFeatures": fact["sampleFeatures"],
+                    }
+                    for fact in category_facts[:5]
+                ],
+                "categoryFacts": category_facts,
+                "evidence": {
+                    "inferredCount": summary.get("inferredDifferenceCount") or 0,
+                    "unknownCount": summary.get("missingOrUnknownCount") or 0,
+                    "missingSourceEvidenceCount": (
+                        _source_evidence_summary(evidence_facts).get("missingSourceEvidenceCount")
+                    ),
+                    "sourceSheetNames": _source_evidence_summary(evidence_facts).get("sourceSheetNames"),
+                    "warning": "引用到卖点前仍需点开 source evidence 核对。",
+                },
+            }
+        )
     source_evidence_summaries = [
         target.get("sourceEvidenceSummary")
         for target in targets
@@ -1287,8 +1406,12 @@ def _business_summary_compose_payload(compare_payload: dict[str, Any]) -> dict[s
                 "modelYearScope": "readiness_smoke",
                 "identityScope": "direct_config_column_compare",
                 "inferredCount": summary.get("inferredDifferenceCount") or 0,
-                "missingSourceEvidenceCount": sum(_safe_int(item.get("missingSourceEvidenceCount")) for item in source_evidence_summaries),
-                "mergedCellExpandedCount": sum(_safe_int(item.get("mergedCellExpandedCount")) for item in source_evidence_summaries),
+                "missingSourceEvidenceCount": sum(
+                    _safe_int(item.get("missingSourceEvidenceCount")) for item in source_evidence_summaries
+                ),
+                "mergedCellExpandedCount": sum(
+                    _safe_int(item.get("mergedCellExpandedCount")) for item in source_evidence_summaries
+                ),
             },
             "instruction": (
                 "Use the LLM to write concise Chinese business summaries from these Product Config Compare facts. "
@@ -1335,7 +1458,10 @@ def _evidence_text_covers(kind: str, text: str) -> bool:
     if kind == "merged":
         return any(token in text for token in ("合并格", "合并单元格", "merged"))
     if kind == "multi_source":
-        return any(token in text for token in ("多个 sheet", "多 sheet", "多个 source", "多来源", "multi_source", "multi source"))
+        return any(
+            token in text
+            for token in ("多个 sheet", "多 sheet", "多个 source", "多来源", "multi_source", "multi source")
+        )
     return False
 
 
@@ -1355,7 +1481,9 @@ def _target_requires_review_notice(target: dict[str, Any]) -> bool:
 
 
 def _required_evidence_boundary_kinds(target: dict[str, Any]) -> list[str]:
-    source_summary = target.get("sourceEvidenceSummary") if isinstance(target.get("sourceEvidenceSummary"), dict) else {}
+    source_summary = (
+        target.get("sourceEvidenceSummary") if isinstance(target.get("sourceEvidenceSummary"), dict) else {}
+    )
     kinds: list[str] = []
     if _target_requires_review_notice(target):
         kinds.append("review")
@@ -1368,28 +1496,31 @@ def _required_evidence_boundary_kinds(target: dict[str, Any]) -> list[str]:
     if _safe_int(source_summary.get("mergedCellExpandedCount")) > 0:
         kinds.append("merged")
     source_sheet_names = source_summary.get("sourceSheetNames")
-    if isinstance(source_sheet_names, list) and len([name for name in source_sheet_names if str(name or "").strip()]) > 1:
+    if (
+        isinstance(source_sheet_names, list)
+        and len([name for name in source_sheet_names if str(name or "").strip()]) > 1
+    ):
         kinds.append("multi_source")
     return kinds
 
 
-def _ai_summary_evidence_boundary_coverage(targets: list[dict[str, Any]], summaries: list[dict[str, Any]]) -> list[dict[str, Any]]:
+def _ai_summary_evidence_boundary_coverage(
+    targets: list[dict[str, Any]], summaries: list[dict[str, Any]]
+) -> list[dict[str, Any]]:
     coverage: list[dict[str, Any]] = []
     for index, target in enumerate(targets):
         required_kinds = _required_evidence_boundary_kinds(target)
         summary = _summary_for_target(summaries, target, index)
         status_text = _summary_evidence_status_text(summary)
-        missing_kinds = [
-            kind
-            for kind in required_kinds
-            if not _evidence_text_covers(kind, status_text)
-        ]
-        coverage.append({
-            "target": _target_identity(target),
-            "requiredKinds": required_kinds,
-            "missingKinds": missing_kinds,
-            "satisfied": not missing_kinds,
-        })
+        missing_kinds = [kind for kind in required_kinds if not _evidence_text_covers(kind, status_text)]
+        coverage.append(
+            {
+                "target": _target_identity(target),
+                "requiredKinds": required_kinds,
+                "missingKinds": missing_kinds,
+                "satisfied": not missing_kinds,
+            }
+        )
     return coverage
 
 
@@ -1506,7 +1637,10 @@ def _ai_summary_smoke_check(
                 "label": "Runtime AI summary compose smoke",
                 "status": "degraded",
                 "path": "/engineering-config/business-summary/compose",
-                "message": f"runtime AI compose returned provider status {usage_status}; compare table and evidence remain usable",
+                "message": (
+                    f"runtime AI compose returned provider status {usage_status}; compare table and evidence remain"
+                    " usable"
+                ),
                 "details": details,
             }
         ]
@@ -1517,7 +1651,9 @@ def _ai_summary_smoke_check(
                 "label": "Runtime AI summary compose smoke",
                 "status": "degraded",
                 "path": "/engineering-config/business-summary/compose",
-                "message": "runtime AI compose responded but did not return a complete business summary for every target",
+                "message": (
+                    "runtime AI compose responded but did not return a complete business summary for every target"
+                ),
                 "details": details,
             }
         ]
@@ -1528,7 +1664,10 @@ def _ai_summary_smoke_check(
                 "label": "Runtime AI summary compose smoke",
                 "status": "degraded",
                 "path": "/engineering-config/business-summary/compose",
-                "message": "runtime AI compose responded, but source evidence boundary was not fully present in request/response",
+                "message": (
+                    "runtime AI compose responded, but source evidence boundary was not fully present in"
+                    " request/response"
+                ),
                 "details": details,
             }
         ]
@@ -1539,7 +1678,10 @@ def _ai_summary_smoke_check(
                 "label": "Runtime AI summary compose smoke",
                 "status": "degraded",
                 "path": "/engineering-config/business-summary/compose",
-                "message": "runtime AI compose responded, but required evidence boundary warnings were missing from evidenceStatus",
+                "message": (
+                    "runtime AI compose responded, but required evidence boundary warnings were missing from"
+                    " evidenceStatus"
+                ),
                 "details": details,
             }
         ]
@@ -1549,7 +1691,10 @@ def _ai_summary_smoke_check(
             "label": "Runtime AI summary compose smoke",
             "status": "passed",
             "path": "/engineering-config/business-summary/compose",
-            "message": f"runtime AI compose returned {len(summaries)} business summaries via {usage.get('provider')}/{usage.get('model')}",
+            "message": (
+                f"runtime AI compose returned {len(summaries)} business summaries via"
+                f" {usage.get('provider')}/{usage.get('model')}"
+            ),
             "details": details,
         }
     ]
@@ -1633,9 +1778,18 @@ def _export_payload_summary(payload: dict[str, Any]) -> dict[str, Any]:
         "trimCount": len(trims),
         "businessSummaryCount": len(summaries),
         "hasBusinessSummaryUsage": isinstance(payload.get("businessSummaryUsage"), dict),
-        "allSummaryItemsHaveEvidenceStatus": bool(summaries) and all(isinstance(item.get("evidenceStatus"), list) and bool(item.get("evidenceStatus")) for item in summaries),
-        "allSummaryItemsHaveRecommendedUse": bool(summaries) and all(bool(str(item.get("recommendedUse") or "").strip()) for item in summaries),
-        "hasEvidenceRefs": any(isinstance(item.get("evidenceRefs"), list) and bool(item.get("evidenceRefs")) for item in summaries),
+        "allSummaryItemsHaveEvidenceStatus": (
+            bool(summaries)
+            and all(
+                isinstance(item.get("evidenceStatus"), list) and bool(item.get("evidenceStatus")) for item in summaries
+            )
+        ),
+        "allSummaryItemsHaveRecommendedUse": (
+            bool(summaries) and all(bool(str(item.get("recommendedUse") or "").strip()) for item in summaries)
+        ),
+        "hasEvidenceRefs": any(
+            isinstance(item.get("evidenceRefs"), list) and bool(item.get("evidenceRefs")) for item in summaries
+        ),
     }
 
 
@@ -1724,19 +1878,25 @@ def _competitor_recommendation_check(client: ApiClient, scope: dict[str, Any] | 
         if isinstance(item, dict) and bool(item.get("configAvailable")) and bool(item.get("sourceDigestAvailable"))
     )
     source_digest_coverage_count = sum(
-        1
-        for item in items
-        if isinstance(item, dict) and bool(item.get("sourceDigestAvailable"))
+        1 for item in items if isinstance(item, dict) and bool(item.get("sourceDigestAvailable"))
     )
     source_digest_ready_count = sum(
         1
         for item in items
         if isinstance(item, dict) and not bool(item.get("configAvailable")) and bool(item.get("sourceDigestAvailable"))
     )
-    upload_needed_count = sum(1 for item in items if isinstance(item, dict) and item.get("nextAction") == "upload_source")
-    source_digest_source_count = sum(_safe_int(item.get("sourceDigestSourceCount")) for item in items if isinstance(item, dict))
-    source_digest_group_count = sum(_safe_int(item.get("sourceDigestGroupCount")) for item in items if isinstance(item, dict))
-    source_digest_trim_count = sum(_safe_int(item.get("sourceDigestTrimCount")) for item in items if isinstance(item, dict))
+    upload_needed_count = sum(
+        1 for item in items if isinstance(item, dict) and item.get("nextAction") == "upload_source"
+    )
+    source_digest_source_count = sum(
+        _safe_int(item.get("sourceDigestSourceCount")) for item in items if isinstance(item, dict)
+    )
+    source_digest_group_count = sum(
+        _safe_int(item.get("sourceDigestGroupCount")) for item in items if isinstance(item, dict)
+    )
+    source_digest_trim_count = sum(
+        _safe_int(item.get("sourceDigestTrimCount")) for item in items if isinstance(item, dict)
+    )
     next_actions: dict[str, int] = {}
     for item in items:
         if not isinstance(item, dict):
@@ -1828,7 +1988,7 @@ def _recommendation_profile_text(recommendation: dict[str, Any], key: str) -> st
 
 def _csv_cell(value: Any) -> str:
     text = str(value or "")
-    if any(char in text for char in [",", "\"", "\n", "\r"]):
+    if any(char in text for char in [",", '"', "\n", "\r"]):
         return '"' + text.replace('"', '""') + '"'
     return text
 
@@ -1940,18 +2100,24 @@ def _competitor_entry_ui_smoke_check(
         "failedRequiredChecks": failed_required_checks,
     }
     if summary:
-        recommendation_state = summary.get("recommendationState") if isinstance(summary.get("recommendationState"), dict) else {}
-        source_handoff_state = summary.get("sourceHandoffState") if isinstance(summary.get("sourceHandoffState"), dict) else {}
-        details.update({
-            "summaryPath": summary.get("summaryPath"),
-            "artifactDir": summary.get("artifactDir"),
-            "targetUrl": summary.get("targetUrl"),
-            "screenshotPath": summary.get("screenshotPath"),
-            "recommendationSummary": recommendation_state.get("summary"),
-            "recommendationQueue": recommendation_state.get("queue"),
-            "sourceSearchValue": source_handoff_state.get("sourceSearchValue"),
-            "passed": bool(summary.get("passed")),
-        })
+        recommendation_state = (
+            summary.get("recommendationState") if isinstance(summary.get("recommendationState"), dict) else {}
+        )
+        source_handoff_state = (
+            summary.get("sourceHandoffState") if isinstance(summary.get("sourceHandoffState"), dict) else {}
+        )
+        details.update(
+            {
+                "summaryPath": summary.get("summaryPath"),
+                "artifactDir": summary.get("artifactDir"),
+                "targetUrl": summary.get("targetUrl"),
+                "screenshotPath": summary.get("screenshotPath"),
+                "recommendationSummary": recommendation_state.get("summary"),
+                "recommendationQueue": recommendation_state.get("queue"),
+                "sourceSearchValue": source_handoff_state.get("sourceSearchValue"),
+                "passed": bool(summary.get("passed")),
+            }
+        )
     if completed.returncode != 0:
         return [
             {
@@ -1981,7 +2147,10 @@ def _competitor_entry_ui_smoke_check(
                 "label": "Competitor recommendation entry UI smoke",
                 "status": "failed",
                 "path": "npm run smoke:product-config-competitor-entry",
-                "message": "Competitor entry UI smoke summary did not prove recommendation coverage, completion queue, and missing-source handoff",
+                "message": (
+                    "Competitor entry UI smoke summary did not prove recommendation coverage, completion queue, and"
+                    " missing-source handoff"
+                ),
                 "details": details,
             }
         ]
@@ -1991,7 +2160,10 @@ def _competitor_entry_ui_smoke_check(
             "label": "Competitor recommendation entry UI smoke",
             "status": "passed",
             "path": "npm run smoke:product-config-competitor-entry",
-            "message": "real UI proved Advanced Analysis top-10 recommendation coverage, competitor completion queue, and upload-needed source handoff without writes",
+            "message": (
+                "real UI proved Advanced Analysis top-10 recommendation coverage, competitor completion queue, and"
+                " upload-needed source handoff without writes"
+            ),
             "details": details,
         }
     ]
@@ -2003,7 +2175,9 @@ def _first_importable_digest_group(snapshot: dict[str, Any]) -> dict[str, Any] |
     for group in groups:
         if not isinstance(group, dict):
             continue
-        trim_count = _safe_int(group.get("trimCount")) or len(group.get("trims") if isinstance(group.get("trims"), list) else [])
+        trim_count = _safe_int(group.get("trimCount")) or len(
+            group.get("trims") if isinstance(group.get("trims"), list) else []
+        )
         row_count = len(group.get("rows") if isinstance(group.get("rows"), list) else [])
         group_id = str(group.get("groupId") or "").strip()
         if group_id and trim_count >= 2 and row_count > 0:
@@ -2030,14 +2204,18 @@ def _cleanup_competitor_workflow_artifacts(
             client.patch_json(f"/engineering-config/trims/{urllib.parse.quote(trim_id)}", {"status": "trashed"})
             cleanup["trimTrashRequests"] = _safe_int(cleanup.get("trimTrashRequests")) + 1
         except ReadinessHttpError as exc:
-            cleanup["errors"].append({"step": "trash_trim", "trimId": trim_id, "message": exc.message, "status": exc.status})
+            cleanup["errors"].append(
+                {"step": "trash_trim", "trimId": trim_id, "message": exc.message, "status": exc.status}
+            )
     if source_id:
         try:
             query = urllib.parse.urlencode({"country": country})
             client.delete_json(f"/engineering-config/source/snapshots/{urllib.parse.quote(source_id)}?{query}")
             cleanup["sourceTrashed"] = True
         except ReadinessHttpError as exc:
-            cleanup["errors"].append({"step": "trash_source", "sourceId": source_id, "message": exc.message, "status": exc.status})
+            cleanup["errors"].append(
+                {"step": "trash_source", "sourceId": source_id, "message": exc.message, "status": exc.status}
+            )
         try:
             query = urllib.parse.urlencode({"country": country})
             result = client.delete_json(f"/engineering-config/source/trash?{query}")
@@ -2102,7 +2280,10 @@ def _competitor_workflow_smoke_check(
                         "recommendationRows": before_payload.get("rows") or len(before_items),
                         "nextActions": {
                             str(item.get("nextAction") or "unknown"): sum(
-                                1 for candidate in before_items if str(candidate.get("nextAction") or "unknown") == str(item.get("nextAction") or "unknown")
+                                1
+                                for candidate in before_items
+                                if str(candidate.get("nextAction") or "unknown")
+                                == str(item.get("nextAction") or "unknown")
                             )
                             for item in before_items
                         },
@@ -2111,8 +2292,16 @@ def _competitor_workflow_smoke_check(
             ]
         competitor_model = str(recommendation.get("modelName") or "").strip()
         competitor_brand = str(recommendation.get("brand") or "WorkflowRival").strip() or "WorkflowRival"
-        competitor_powertrain = _recommendation_profile_text(recommendation, "powertrain") or str(scope.get("powertrain") or "").strip() or "Powertrain 待补"
-        competitor_segment = _recommendation_profile_text(recommendation, "segment") or str(scope.get("segment") or "").strip() or "Segment 待补"
+        competitor_powertrain = (
+            _recommendation_profile_text(recommendation, "powertrain")
+            or str(scope.get("powertrain") or "").strip()
+            or "Powertrain 待补"
+        )
+        competitor_segment = (
+            _recommendation_profile_text(recommendation, "segment")
+            or str(scope.get("segment") or "").strip()
+            or "Segment 待补"
+        )
         stamp = _utc_stamp().lower().replace("z", "")
         file_name = f"config-compare-workflow-{_safe_file_slug(competitor_model)}-{stamp}.csv"
         csv_bytes = _competitor_workflow_csv(
@@ -2123,15 +2312,19 @@ def _competitor_workflow_smoke_check(
             segment=competitor_segment,
             stamp=stamp,
         )
-        initiate_query = urllib.parse.urlencode({
-            "file_name": file_name,
-            "total_size": str(len(csv_bytes)),
-            "mime_type": "text/csv",
-        })
+        initiate_query = urllib.parse.urlencode(
+            {
+                "file_name": file_name,
+                "total_size": str(len(csv_bytes)),
+                "mime_type": "text/csv",
+            }
+        )
         initiate = client.post_json(f"/engineering-config/source/upload/initiate?{initiate_query}")
         upload_id = str(initiate.get("uploadId") or "").strip()
         if not upload_id:
-            raise ReadinessHttpError("/engineering-config/source/upload/initiate", None, "upload session did not return uploadId")
+            raise ReadinessHttpError(
+                "/engineering-config/source/upload/initiate", None, "upload session did not return uploadId"
+            )
         client.put_bytes(f"/engineering-config/source/upload/{urllib.parse.quote(upload_id)}/parts/0", csv_bytes)
         snapshot = client.post_json(
             f"/engineering-config/source/upload/{urllib.parse.quote(upload_id)}/complete",
@@ -2149,25 +2342,40 @@ def _competitor_workflow_smoke_check(
                 }
             },
         )
-        source_id = str(
-            snapshot.get("sourceId")
-            or snapshot.get("source_id")
-            or snapshot.get("importBatchId")
-            or snapshot.get("import_batch_id")
-            or "",
-        ).strip() or None
+        source_id = (
+            str(
+                snapshot.get("sourceId")
+                or snapshot.get("source_id")
+                or snapshot.get("importBatchId")
+                or snapshot.get("import_batch_id")
+                or "",
+            ).strip()
+            or None
+        )
         group = _first_importable_digest_group(snapshot)
         if group is None:
-            raise ReadinessHttpError("/engineering-config/source/upload/complete", None, "uploaded source did not produce an importable Source Digest group")
+            raise ReadinessHttpError(
+                "/engineering-config/source/upload/complete",
+                None,
+                "uploaded source did not produce an importable Source Digest group",
+            )
         group_id = str(group.get("groupId") or "").strip()
+        source_path_id = urllib.parse.quote(source_id or "")
+        group_path_id = urllib.parse.quote(group_id)
+        draft_path = (
+            f"/engineering-config/source/snapshots/{source_path_id}"
+            f"/digest-groups/{group_path_id}/draft"
+        )
         draft = client.post_json(
-            f"/engineering-config/source/snapshots/{urllib.parse.quote(source_id or '')}/digest-groups/{urllib.parse.quote(group_id)}/draft",
+            draft_path,
             {},
         )
         raw_trim_ids = draft.get("compareTrimIds") or draft.get("trimIds")
         draft_trim_ids = [str(trim_id) for trim_id in raw_trim_ids if trim_id] if isinstance(raw_trim_ids, list) else []
         if len(draft_trim_ids) < 2:
-            raise ReadinessHttpError("/engineering-config/source/draft", None, "draft creation returned fewer than 2 compare trim ids")
+            raise ReadinessHttpError(
+                "/engineering-config/source/draft", None, "draft creation returned fewer than 2 compare trim ids"
+            )
         compare_ids = draft_trim_ids[:2]
         compare_query = urllib.parse.urlencode({"trim_ids": ",".join(compare_ids)})
         compare_payload = client.get_json(f"/engineering-config/compare?{compare_query}")
@@ -2194,7 +2402,9 @@ def _competitor_workflow_smoke_check(
         ]
         _after_upload_path, after_items, _after_payload = _recommendation_items(client, scope)
         after_recommendation = _find_recommendation_by_model(after_items, competitor_model)
-        cleanup = _cleanup_competitor_workflow_artifacts(client, source_id=source_id, trim_ids=draft_trim_ids, country=country)
+        cleanup = _cleanup_competitor_workflow_artifacts(
+            client, source_id=source_id, trim_ids=draft_trim_ids, country=country
+        )
         export_failed = [check for check in export_checks if check.get("status") == "failed"]
         cleanup_errors = cleanup.get("errors") if isinstance(cleanup.get("errors"), list) else []
         status = "passed"
@@ -2224,8 +2434,12 @@ def _competitor_workflow_smoke_check(
                         "modelName": competitor_model,
                         "beforeNextAction": recommendation.get("nextAction"),
                         "afterNextAction": after_recommendation.get("nextAction") if after_recommendation else None,
-                        "afterConfigAvailable": bool(after_recommendation.get("configAvailable")) if after_recommendation else None,
-                        "afterSourceDigestAvailable": bool(after_recommendation.get("sourceDigestAvailable")) if after_recommendation else None,
+                        "afterConfigAvailable": (
+                            bool(after_recommendation.get("configAvailable")) if after_recommendation else None
+                        ),
+                        "afterSourceDigestAvailable": (
+                            bool(after_recommendation.get("sourceDigestAvailable")) if after_recommendation else None
+                        ),
                     },
                     "upload": {
                         "fileName": file_name,
@@ -2242,14 +2456,23 @@ def _competitor_workflow_smoke_check(
                         "valueRecordCount": draft.get("valueRecordCount"),
                     },
                     "compare": {**compare_details, "status": compare_status, "message": compare_message},
-                    "exports": {check["key"]: {"status": check.get("status"), "message": check.get("message"), "details": check.get("details")} for check in export_checks},
+                    "exports": {
+                        check["key"]: {
+                            "status": check.get("status"),
+                            "message": check.get("message"),
+                            "details": check.get("details"),
+                        }
+                        for check in export_checks
+                    },
                     "cleanup": cleanup,
                 },
             }
         ]
     except ReadinessHttpError as exc:
         if cleanup is None and (source_id or draft_trim_ids):
-            cleanup = _cleanup_competitor_workflow_artifacts(client, source_id=source_id, trim_ids=draft_trim_ids, country=country)
+            cleanup = _cleanup_competitor_workflow_artifacts(
+                client, source_id=source_id, trim_ids=draft_trim_ids, country=country
+            )
         return [
             {
                 "key": "competitor_workflow",
@@ -2358,7 +2581,7 @@ def _parse_smoke_summary(stdout: str) -> dict[str, Any] | None:
     end = stdout.rfind("}")
     if start >= 0 and end > start:
         try:
-            payload = json.loads(stdout[start:end + 1])
+            payload = json.loads(stdout[start : end + 1])
         except json.JSONDecodeError:
             payload = None
         if isinstance(payload, dict):
@@ -2449,27 +2672,31 @@ def _ui_edit_export_smoke_check(
         cleanup = summary.get("cleanup") if isinstance(summary.get("cleanup"), dict) else {}
         xlsx = exports.get("xlsx") if isinstance(exports.get("xlsx"), dict) else {}
         pdf = exports.get("pdf") if isinstance(exports.get("pdf"), dict) else {}
-        details.update({
-            "summaryPath": summary.get("summaryPath"),
-            "artifactDir": summary.get("artifactDir"),
-            "targetUrl": summary.get("targetUrl"),
-            "sourceId": summary.get("sourceId"),
-            "trimIds": summary.get("trimIds"),
-            "smokeSourceFormat": summary.get("sourceFormat"),
-            "smokeContentType": summary.get("contentType"),
-            "editScenario": edit_result.get("scenario"),
-            "editSavedAsExpected": bool(edit_result.get("savedAsExpected")) or bool(edit_result.get("savedAsOptional")),
-            "editSavedAsOptional": bool(edit_result.get("savedAsOptional")),
-            "saveStatus": edit_result.get("saveStatus"),
-            "xlsxEditedValueInPayload": bool(xlsx.get("editedValueInPayload")),
-            "xlsxSignatureOk": bool(xlsx.get("signatureOk")),
-            "pdfEditedValueInPayload": bool(pdf.get("editedValueInPayload")),
-            "pdfSignatureOk": bool(pdf.get("signatureOk")),
-            "cleanupErrors": cleanup.get("errors") if isinstance(cleanup.get("errors"), list) else [],
-            "sourceTrashCleared": cleanup.get("sourceTrashCleared"),
-            "sourceGloballyTrashed": cleanup.get("sourceGloballyTrashed"),
-            "trimTrashCleared": cleanup.get("trimTrashCleared"),
-        })
+        details.update(
+            {
+                "summaryPath": summary.get("summaryPath"),
+                "artifactDir": summary.get("artifactDir"),
+                "targetUrl": summary.get("targetUrl"),
+                "sourceId": summary.get("sourceId"),
+                "trimIds": summary.get("trimIds"),
+                "smokeSourceFormat": summary.get("sourceFormat"),
+                "smokeContentType": summary.get("contentType"),
+                "editScenario": edit_result.get("scenario"),
+                "editSavedAsExpected": (
+                    bool(edit_result.get("savedAsExpected")) or bool(edit_result.get("savedAsOptional"))
+                ),
+                "editSavedAsOptional": bool(edit_result.get("savedAsOptional")),
+                "saveStatus": edit_result.get("saveStatus"),
+                "xlsxEditedValueInPayload": bool(xlsx.get("editedValueInPayload")),
+                "xlsxSignatureOk": bool(xlsx.get("signatureOk")),
+                "pdfEditedValueInPayload": bool(pdf.get("editedValueInPayload")),
+                "pdfSignatureOk": bool(pdf.get("signatureOk")),
+                "cleanupErrors": cleanup.get("errors") if isinstance(cleanup.get("errors"), list) else [],
+                "sourceTrashCleared": cleanup.get("sourceTrashCleared"),
+                "sourceGloballyTrashed": cleanup.get("sourceGloballyTrashed"),
+                "trimTrashCleared": cleanup.get("trimTrashCleared"),
+            }
+        )
     if completed.returncode != 0:
         return [
             {
@@ -2525,7 +2752,10 @@ def _ui_edit_export_smoke_check(
             "label": "UI edit-after-digest export smoke",
             "status": "passed",
             "path": "npm run smoke:product-config-edit-export",
-            "message": "real UI created editable config columns, edited a value through FloatingDeck, and exported XLSX/PDF with the edited value",
+            "message": (
+                "real UI created editable config columns, edited a value through FloatingDeck, and exported XLSX/PDF"
+                " with the edited value"
+            ),
             "details": details,
         }
     ]
@@ -2611,37 +2841,49 @@ def _run_floatingdeck_multisource_smoke(
     if summary:
         cleanup = summary.get("cleanup") if isinstance(summary.get("cleanup"), dict) else {}
         observed = summary.get("observed") if isinstance(summary.get("observed"), dict) else {}
-        details.update({
-            "summaryPath": summary.get("summaryPath"),
-            "artifactDir": summary.get("artifactDir"),
-            "sourceIds": summary.get("sourceIds"),
-            "trimIds": summary.get("trimIds"),
-            "passed": bool(summary.get("passed")),
-            "cleanupErrors": cleanup.get("errors") if isinstance(cleanup.get("errors"), list) else [],
-            "observedApiSteps": len(observed.get("api", [])) if isinstance(observed.get("api"), list) else 0,
-            "observedUiSteps": len(observed.get("ui", [])) if isinstance(observed.get("ui"), list) else 0,
-        })
+        details.update(
+            {
+                "summaryPath": summary.get("summaryPath"),
+                "artifactDir": summary.get("artifactDir"),
+                "sourceIds": summary.get("sourceIds"),
+                "trimIds": summary.get("trimIds"),
+                "passed": bool(summary.get("passed")),
+                "cleanupErrors": cleanup.get("errors") if isinstance(cleanup.get("errors"), list) else [],
+                "observedApiSteps": len(observed.get("api", [])) if isinstance(observed.get("api"), list) else 0,
+                "observedUiSteps": len(observed.get("ui", [])) if isinstance(observed.get("ui"), list) else 0,
+            }
+        )
         if key == "floatingdeck_multisource_same_model":
             compare_api = summary.get("compareApi") if isinstance(summary.get("compareApi"), dict) else {}
-            floating_deck_search = summary.get("floatingDeckSearch") if isinstance(summary.get("floatingDeckSearch"), dict) else {}
-            formal_compare_ui = summary.get("formalCompareUi") if isinstance(summary.get("formalCompareUi"), dict) else {}
-            details.update({
-                "compareTrimCount": compare_api.get("trimCount"),
-                "duplicateBasicPremiumKept": bool(compare_api.get("duplicateBasicPremiumKept")),
-                "floatingDeckSearchPassed": bool(floating_deck_search.get("passed")),
-                "formalCompareNoHorizontalOverflow": bool(formal_compare_ui.get("noHorizontalOverflow")),
-            })
+            floating_deck_search = (
+                summary.get("floatingDeckSearch") if isinstance(summary.get("floatingDeckSearch"), dict) else {}
+            )
+            formal_compare_ui = (
+                summary.get("formalCompareUi") if isinstance(summary.get("formalCompareUi"), dict) else {}
+            )
+            details.update(
+                {
+                    "compareTrimCount": compare_api.get("trimCount"),
+                    "duplicateBasicPremiumKept": bool(compare_api.get("duplicateBasicPremiumKept")),
+                    "floatingDeckSearchPassed": bool(floating_deck_search.get("passed")),
+                    "formalCompareNoHorizontalOverflow": bool(formal_compare_ui.get("noHorizontalOverflow")),
+                }
+            )
         if key == "floatingdeck_cross_scope_direct_picker":
-            direct_picker_flow = summary.get("directPickerFlow") if isinstance(summary.get("directPickerFlow"), dict) else {}
-            details.update({
-                "countriesVisible": bool(direct_picker_flow.get("countriesVisible")),
-                "modelsVisible": bool(direct_picker_flow.get("modelsVisible")),
-                "sourcesVisible": bool(direct_picker_flow.get("sourcesVisible")),
-                "selectedFourColumns": bool(direct_picker_flow.get("selectedFourColumns")),
-                "noOwnCompetitorModeText": bool(direct_picker_flow.get("noModeText")),
-                "noHorizontalOverflow": bool(direct_picker_flow.get("noHorizontalOverflow")),
-                "rowsStatus": direct_picker_flow.get("rowsStatus"),
-            })
+            direct_picker_flow = (
+                summary.get("directPickerFlow") if isinstance(summary.get("directPickerFlow"), dict) else {}
+            )
+            details.update(
+                {
+                    "countriesVisible": bool(direct_picker_flow.get("countriesVisible")),
+                    "modelsVisible": bool(direct_picker_flow.get("modelsVisible")),
+                    "sourcesVisible": bool(direct_picker_flow.get("sourcesVisible")),
+                    "selectedFourColumns": bool(direct_picker_flow.get("selectedFourColumns")),
+                    "noOwnCompetitorModeText": bool(direct_picker_flow.get("noModeText")),
+                    "noHorizontalOverflow": bool(direct_picker_flow.get("noHorizontalOverflow")),
+                    "rowsStatus": direct_picker_flow.get("rowsStatus"),
+                }
+            )
     if completed.returncode != 0:
         return {
             "key": key,
@@ -2794,20 +3036,22 @@ def _t19c_ai_ui_smoke_check(
         "failedRequiredChecks": failed_required_checks,
     }
     if summary:
-        details.update({
-            "summaryPath": summary.get("summaryPath"),
-            "artifactDir": summary.get("artifactDir"),
-            "targetUrl": summary.get("targetUrl"),
-            "summaryTrimIds": summary.get("trimIds"),
-            "summaryBaseTrimId": summary.get("baseTrimId"),
-            "summaryExpectedRows": summary.get("expectedRows"),
-            "viewportMode": summary.get("viewportMode"),
-            "initialScreenshotPath": summary.get("initialScreenshotPath"),
-            "initialScreenshotPaths": summary.get("initialScreenshotPaths"),
-            "screenshotPath": summary.get("screenshotPath"),
-            "screenshotPaths": summary.get("screenshotPaths"),
-            "passed": bool(summary.get("passed")),
-        })
+        details.update(
+            {
+                "summaryPath": summary.get("summaryPath"),
+                "artifactDir": summary.get("artifactDir"),
+                "targetUrl": summary.get("targetUrl"),
+                "summaryTrimIds": summary.get("trimIds"),
+                "summaryBaseTrimId": summary.get("baseTrimId"),
+                "summaryExpectedRows": summary.get("expectedRows"),
+                "viewportMode": summary.get("viewportMode"),
+                "initialScreenshotPath": summary.get("initialScreenshotPath"),
+                "initialScreenshotPaths": summary.get("initialScreenshotPaths"),
+                "screenshotPath": summary.get("screenshotPath"),
+                "screenshotPaths": summary.get("screenshotPaths"),
+                "passed": bool(summary.get("passed")),
+            }
+        )
     if completed.returncode != 0:
         return [
             {
@@ -2837,7 +3081,10 @@ def _t19c_ai_ui_smoke_check(
                 "label": "T19C simple-mode AI UI smoke",
                 "status": "failed",
                 "path": "npm run smoke:product-config-ai",
-                "message": "T19C AI UI smoke summary did not prove simple-mode full-row table, scoped navigator, source picker, and FloatingDeck edit gate",
+                "message": (
+                    "T19C AI UI smoke summary did not prove simple-mode full-row table, scoped navigator, source"
+                    " picker, and FloatingDeck edit gate"
+                ),
                 "details": details,
             }
         ]
@@ -2847,7 +3094,10 @@ def _t19c_ai_ui_smoke_check(
             "label": "T19C simple-mode AI UI smoke",
             "status": "passed",
             "path": "npm run smoke:product-config-ai",
-            "message": "T19C UI proved AI-first simple mode, full-row default table, scoped difference navigator, source picker, and FloatingDeck edit gate",
+            "message": (
+                "T19C UI proved AI-first simple mode, full-row default table, scoped difference navigator, source"
+                " picker, and FloatingDeck edit gate"
+            ),
             "details": details,
         }
     ]
@@ -2906,38 +3156,42 @@ def _cross_user_source_library_smoke_check(
     }
     if summary:
         cleanup = summary.get("cleanup") if isinstance(summary.get("cleanup"), dict) else {}
-        consumer_source_list = summary.get("consumerSourceList") if isinstance(summary.get("consumerSourceList"), dict) else {}
+        consumer_source_list = (
+            summary.get("consumerSourceList") if isinstance(summary.get("consumerSourceList"), dict) else {}
+        )
         ui_result = summary.get("uiResult") if isinstance(summary.get("uiResult"), dict) else {}
         observed = summary.get("observed") if isinstance(summary.get("observed"), dict) else {}
-        details.update({
-            "summaryPath": summary.get("summaryPath"),
-            "artifactDir": summary.get("artifactDir"),
-            "targetUrl": summary.get("targetUrl"),
-            "screenshotPath": summary.get("screenshotPath"),
-            "csvPath": summary.get("csvPath"),
-            "fileName": summary.get("fileName"),
-            "uploaderUserName": summary.get("uploaderUserName"),
-            "consumerUserName": summary.get("consumerUserName"),
-            "sourceId": summary.get("sourceId"),
-            "trimIds": summary.get("trimIds"),
-            "consumerSourceFound": bool(consumer_source_list.get("found")),
-            "consumerSourceCreatedBy": consumer_source_list.get("createdBy"),
-            "consumerSourceItemCount": consumer_source_list.get("itemCount"),
-            "rowsStatus": ui_result.get("rowsStatus"),
-            "fileVisible": bool(ui_result.get("fileVisible")),
-            "uploaderVisible": bool(ui_result.get("uploaderVisible")),
-            "consumerVisible": bool(ui_result.get("consumerVisible")),
-            "successVisible": bool(ui_result.get("successVisible")),
-            "basicVisible": bool(ui_result.get("basicVisible")),
-            "premiumVisible": bool(ui_result.get("premiumVisible")),
-            "noHorizontalOverflow": bool(ui_result.get("noHorizontalOverflow")),
-            "cleanupErrors": cleanup.get("errors") if isinstance(cleanup.get("errors"), list) else [],
-            "sourceTrashCleared": cleanup.get("sourceTrashCleared"),
-            "trimTrashCleared": cleanup.get("trimTrashCleared"),
-            "observedApiSteps": len(observed.get("api", [])) if isinstance(observed.get("api"), list) else 0,
-            "observedUiSteps": len(observed.get("ui", [])) if isinstance(observed.get("ui"), list) else 0,
-            "passed": bool(summary.get("passed")),
-        })
+        details.update(
+            {
+                "summaryPath": summary.get("summaryPath"),
+                "artifactDir": summary.get("artifactDir"),
+                "targetUrl": summary.get("targetUrl"),
+                "screenshotPath": summary.get("screenshotPath"),
+                "csvPath": summary.get("csvPath"),
+                "fileName": summary.get("fileName"),
+                "uploaderUserName": summary.get("uploaderUserName"),
+                "consumerUserName": summary.get("consumerUserName"),
+                "sourceId": summary.get("sourceId"),
+                "trimIds": summary.get("trimIds"),
+                "consumerSourceFound": bool(consumer_source_list.get("found")),
+                "consumerSourceCreatedBy": consumer_source_list.get("createdBy"),
+                "consumerSourceItemCount": consumer_source_list.get("itemCount"),
+                "rowsStatus": ui_result.get("rowsStatus"),
+                "fileVisible": bool(ui_result.get("fileVisible")),
+                "uploaderVisible": bool(ui_result.get("uploaderVisible")),
+                "consumerVisible": bool(ui_result.get("consumerVisible")),
+                "successVisible": bool(ui_result.get("successVisible")),
+                "basicVisible": bool(ui_result.get("basicVisible")),
+                "premiumVisible": bool(ui_result.get("premiumVisible")),
+                "noHorizontalOverflow": bool(ui_result.get("noHorizontalOverflow")),
+                "cleanupErrors": cleanup.get("errors") if isinstance(cleanup.get("errors"), list) else [],
+                "sourceTrashCleared": cleanup.get("sourceTrashCleared"),
+                "trimTrashCleared": cleanup.get("trimTrashCleared"),
+                "observedApiSteps": len(observed.get("api", [])) if isinstance(observed.get("api"), list) else 0,
+                "observedUiSteps": len(observed.get("ui", [])) if isinstance(observed.get("ui"), list) else 0,
+                "passed": bool(summary.get("passed")),
+            }
+        )
     if completed.returncode != 0:
         return [
             {
@@ -2956,7 +3210,9 @@ def _cross_user_source_library_smoke_check(
                 "label": "Cross-user source-library smoke",
                 "status": "failed",
                 "path": path,
-                "message": "Cross-user source-library smoke passed process execution but did not emit a parseable summary",
+                "message": (
+                    "Cross-user source-library smoke passed process execution but did not emit a parseable summary"
+                ),
                 "details": details,
             }
         ]
@@ -2996,7 +3252,10 @@ def _cross_user_source_library_smoke_check(
                 "label": "Cross-user source-library smoke",
                 "status": "failed",
                 "path": path,
-                "message": "Cross-user source-library smoke summary did not prove upload-by-user-A, search-by-user-B, and FloatingDeck reuse",
+                "message": (
+                    "Cross-user source-library smoke summary did not prove upload-by-user-A, search-by-user-B, and"
+                    " FloatingDeck reuse"
+                ),
                 "details": details,
             }
         ]
@@ -3006,7 +3265,9 @@ def _cross_user_source_library_smoke_check(
             "label": "Cross-user source-library smoke",
             "status": "passed",
             "path": path,
-            "message": "temporary source uploaded by one user was listed and reused by another user through FloatingDeck",
+            "message": (
+                "temporary source uploaded by one user was listed and reused by another user through FloatingDeck"
+            ),
             "details": details,
         }
     ]
@@ -3071,45 +3332,48 @@ def _source_review_row_smoke_check(
         observed = summary.get("observed") if isinstance(summary.get("observed"), dict) else {}
         ui_steps = observed.get("ui") if isinstance(observed.get("ui"), list) else []
         edit_steps = [
-            item for item in ui_steps
-            if isinstance(item, dict) and item.get("step") == "edited_selected_review_feature"
+            item for item in ui_steps if isinstance(item, dict) and item.get("step") == "edited_selected_review_feature"
         ]
         export_xlsx_steps = [
-            item for item in ui_steps
-            if isinstance(item, dict) and item.get("step") == "export_xlsx_after_review_edit"
+            item for item in ui_steps if isinstance(item, dict) and item.get("step") == "export_xlsx_after_review_edit"
         ]
         export_pdf_steps = [
-            item for item in ui_steps
-            if isinstance(item, dict) and item.get("step") == "export_pdf_after_review_edit"
+            item for item in ui_steps if isinstance(item, dict) and item.get("step") == "export_pdf_after_review_edit"
         ]
         edit_step = edit_steps[0] if edit_steps else {}
         export_xlsx = export_xlsx_steps[0] if export_xlsx_steps else {}
         export_pdf = export_pdf_steps[0] if export_pdf_steps else {}
-        details.update({
-            "summaryPath": summary.get("summaryPath"),
-            "artifactDir": summary.get("artifactDir"),
-            "targetUrl": summary.get("targetUrl"),
-            "sourceId": summary.get("sourceId"),
-            "trimIds": summary.get("trimIds"),
-            "fileName": summary.get("fileName"),
-            "imageFormat": summary.get("imageFormat") or image_format,
-            "mimeType": summary.get("mimeType"),
-            "selectedReviewFeature": summary.get("selectedReviewFeature"),
-            "reviewRowCount": summary.get("reviewRowCount"),
-            "selectedReviewRow": any(item.get("step") == "selected_review_row" for item in ui_steps if isinstance(item, dict)),
-            "formalRowHighlighted": any(item.get("step") == "formal_row_highlighted" for item in ui_steps if isinstance(item, dict)),
-            "reviewEditSavedAsOptional": bool(edit_step.get("savedAsOptional")),
-            "reviewEditSaveStatus": edit_step.get("saveStatus"),
-            "xlsxEditedValueInPayload": bool(export_xlsx.get("editedValueInPayload")),
-            "xlsxSignatureOk": bool(export_xlsx.get("signatureOk")),
-            "pdfEditedValueInPayload": bool(export_pdf.get("editedValueInPayload")),
-            "pdfSignatureOk": bool(export_pdf.get("signatureOk")),
-            "cleanupErrors": cleanup.get("errors") if isinstance(cleanup.get("errors"), list) else [],
-            "sourceTrashed": bool(cleanup.get("sourceTrashed")),
-            "sourceTrashCleared": cleanup.get("sourceTrashCleared"),
-            "trimTrashCleared": cleanup.get("trimTrashCleared"),
-            "passed": bool(summary.get("passed")),
-        })
+        details.update(
+            {
+                "summaryPath": summary.get("summaryPath"),
+                "artifactDir": summary.get("artifactDir"),
+                "targetUrl": summary.get("targetUrl"),
+                "sourceId": summary.get("sourceId"),
+                "trimIds": summary.get("trimIds"),
+                "fileName": summary.get("fileName"),
+                "imageFormat": summary.get("imageFormat") or image_format,
+                "mimeType": summary.get("mimeType"),
+                "selectedReviewFeature": summary.get("selectedReviewFeature"),
+                "reviewRowCount": summary.get("reviewRowCount"),
+                "selectedReviewRow": any(
+                    item.get("step") == "selected_review_row" for item in ui_steps if isinstance(item, dict)
+                ),
+                "formalRowHighlighted": any(
+                    item.get("step") == "formal_row_highlighted" for item in ui_steps if isinstance(item, dict)
+                ),
+                "reviewEditSavedAsOptional": bool(edit_step.get("savedAsOptional")),
+                "reviewEditSaveStatus": edit_step.get("saveStatus"),
+                "xlsxEditedValueInPayload": bool(export_xlsx.get("editedValueInPayload")),
+                "xlsxSignatureOk": bool(export_xlsx.get("signatureOk")),
+                "pdfEditedValueInPayload": bool(export_pdf.get("editedValueInPayload")),
+                "pdfSignatureOk": bool(export_pdf.get("signatureOk")),
+                "cleanupErrors": cleanup.get("errors") if isinstance(cleanup.get("errors"), list) else [],
+                "sourceTrashed": bool(cleanup.get("sourceTrashed")),
+                "sourceTrashCleared": cleanup.get("sourceTrashCleared"),
+                "trimTrashCleared": cleanup.get("trimTrashCleared"),
+                "passed": bool(summary.get("passed")),
+            }
+        )
     if completed.returncode != 0:
         return [
             {
@@ -3128,7 +3392,9 @@ def _source_review_row_smoke_check(
                 "label": "Source Digest review-row smoke",
                 "status": "failed",
                 "path": path,
-                "message": "Source Digest review-row smoke passed process execution but did not emit a parseable summary",
+                "message": (
+                    "Source Digest review-row smoke passed process execution but did not emit a parseable summary"
+                ),
                 "details": details,
             }
         ]
@@ -3151,14 +3417,22 @@ def _source_review_row_smoke_check(
         and bool(details.get("pdfEditedValueInPayload"))
         and bool(details.get("pdfSignatureOk"))
     )
-    if not (bool(summary.get("passed")) and details.get("selectedReviewRow") and details.get("formalRowHighlighted") and edit_export_ok):
+    if not (
+        bool(summary.get("passed"))
+        and details.get("selectedReviewRow")
+        and details.get("formalRowHighlighted")
+        and edit_export_ok
+    ):
         return [
             {
                 "key": "source_review_row_smoke",
                 "label": "Source Digest review-row smoke",
                 "status": "failed",
                 "path": path,
-                "message": "Source Digest review-row smoke summary did not prove review-row selection, formal-table focus, edit, and XLSX/PDF export",
+                "message": (
+                    "Source Digest review-row smoke summary did not prove review-row selection, formal-table focus,"
+                    " edit, and XLSX/PDF export"
+                ),
                 "details": details,
             }
         ]
@@ -3168,7 +3442,10 @@ def _source_review_row_smoke_check(
             "label": "Source Digest review-row smoke",
             "status": "passed",
             "path": path,
-            "message": "real Source Digest OCR review-row flow selected a risky row, created editable config columns, edited the formal row, and exported XLSX/PDF",
+            "message": (
+                "real Source Digest OCR review-row flow selected a risky row, created editable config columns, edited"
+                " the formal row, and exported XLSX/PDF"
+            ),
             "details": details,
         }
     ]
@@ -3215,7 +3492,7 @@ def _config_columns_and_compare_checks(
     compare_trim_market: str | None = None,
     ai_summary_timeout: float | None = None,
 ) -> list[dict[str, Any]]:
-    direct_compare_trim_ids = [trim_id for trim_id in (compare_trim_ids or []) if trim_id]
+    direct_compare_trim_ids = [trim_id for trim_id in compare_trim_ids or [] if trim_id]
     list_limit = 8 if (compare_trim_query or compare_trim_market) else 4
     trim_list_path = _config_column_list_path(
         limit=list_limit,
@@ -3241,8 +3518,16 @@ def _config_columns_and_compare_checks(
                 "path": "/engineering-config/compare",
                 "message": "compare smoke skipped because config column library failed",
             },
-            *(_skipped_export_checks("export smoke skipped because config column library failed") if include_export_smoke else []),
-            *(_skipped_ai_summary_compose_checks("AI compose smoke skipped because config column library failed") if include_ai_summary_smoke else []),
+            *(
+                _skipped_export_checks("export smoke skipped because config column library failed")
+                if include_export_smoke
+                else []
+            ),
+            *(
+                _skipped_ai_summary_compose_checks("AI compose smoke skipped because config column library failed")
+                if include_ai_summary_smoke
+                else []
+            ),
         ]
     list_status, list_message, list_details = _list_evaluator("config column")(trim_payload)
     config_check = {
@@ -3275,8 +3560,18 @@ def _config_columns_and_compare_checks(
                     "directCompareTrimIds": direct_compare_trim_ids,
                 },
             },
-            *(_skipped_export_checks("export smoke skipped because fewer than 2 config columns are available") if include_export_smoke else []),
-            *(_skipped_ai_summary_compose_checks("AI compose smoke skipped because fewer than 2 config columns are available") if include_ai_summary_smoke else []),
+            *(
+                _skipped_export_checks("export smoke skipped because fewer than 2 config columns are available")
+                if include_export_smoke
+                else []
+            ),
+            *(
+                _skipped_ai_summary_compose_checks(
+                    "AI compose smoke skipped because fewer than 2 config columns are available"
+                )
+                if include_ai_summary_smoke
+                else []
+            ),
         ]
     compare_ids = trim_ids[:4]
     query = urllib.parse.urlencode({"trim_ids": ",".join(compare_ids)})
@@ -3295,8 +3590,16 @@ def _config_columns_and_compare_checks(
                 "message": exc.message,
                 "details": {"trimIds": compare_ids},
             },
-            *(_skipped_export_checks("export smoke skipped because compare API failed") if include_export_smoke else []),
-            *(_skipped_ai_summary_compose_checks("AI compose smoke skipped because compare API failed") if include_ai_summary_smoke else []),
+            *(
+                _skipped_export_checks("export smoke skipped because compare API failed")
+                if include_export_smoke
+                else []
+            ),
+            *(
+                _skipped_ai_summary_compose_checks("AI compose smoke skipped because compare API failed")
+                if include_ai_summary_smoke
+                else []
+            ),
         ]
     compare_status, compare_message, compare_details = _compare_evaluator(compare_payload)
     compare_details = {**compare_details, "trimIds": compare_ids}
@@ -3321,7 +3624,9 @@ def _config_columns_and_compare_checks(
         checks.extend(
             _ai_summary_smoke_check(client, compare_payload, enabled=True, timeout=ai_summary_timeout)
             if compare_status == "passed"
-            else _skipped_ai_summary_compose_checks("AI compose smoke skipped because compare API did not return config rows")
+            else _skipped_ai_summary_compose_checks(
+                "AI compose smoke skipped because compare API did not return config rows"
+            )
         )
     return checks
 
@@ -3408,7 +3713,9 @@ def _goal_coverage(checks: list[dict[str, Any]]) -> dict[str, Any]:
             grouped,
             key="simple_excel_mode",
             label="Simple Excel-like compare UI",
-            requirement="Default users should see AI conclusions and a full Excel-like config table before expert diagnostics.",
+            requirement=(
+                "Default users should see AI conclusions and a full Excel-like config table before expert diagnostics."
+            ),
             proved_by=["t19c_ai_ui_smoke"],
             partial_by=["compare_api", "ai_summary"],
             next_evidence="Run --include-t19c-ai-ui-smoke on the target environment.",
@@ -3417,34 +3724,55 @@ def _goal_coverage(checks: list[dict[str, Any]]) -> dict[str, Any]:
             grouped,
             key="multi_format_digest_to_editable_export",
             label="Multi-format digest -> editable table -> export",
-            requirement="XLSX, PDF/price-list, and image/JPG sources should digest into editable config columns and export to XLSX/PDF after edits.",
+            requirement=(
+                "XLSX, PDF/price-list, and image/JPG sources should digest into editable config columns and export to"
+                " XLSX/PDF after edits."
+            ),
             proved_by=["ui_edit_export_smoke", "source_review_row_smoke"],
             partial_by=["local_workbook_digest", "ui_edit_export_smoke", "export_xlsx", "export_pdf"],
-            next_evidence="Run --include-ui-edit-export-smoke with xlsx/pdf-text/price-list-csv and --include-source-review-row-smoke --source-review-row-image-format=jpeg.",
+            next_evidence=(
+                "Run --include-ui-edit-export-smoke with xlsx/pdf-text/price-list-csv and"
+                " --include-source-review-row-smoke --source-review-row-image-format=jpeg."
+            ),
         ),
         _goal_coverage_item(
             grouped,
             key="floatingdeck_multisource_direct_picker",
             label="FloatingDeck multi-source direct picker",
-            requirement="Users should add any brand/model/config column from library or Source Digest without own-vs-competitor mode switches.",
+            requirement=(
+                "Users should add any brand/model/config column from library or Source Digest without own-vs-competitor"
+                " mode switches."
+            ),
             proved_by=["floatingdeck_multisource_same_model", "floatingdeck_cross_scope_direct_picker"],
             partial_by=["config_columns", "t19c_ai_ui_smoke"],
-            next_evidence="Run --include-floatingdeck-multisource-smoke with temporary write data, then repeat on staging/prod data.",
+            next_evidence=(
+                "Run --include-floatingdeck-multisource-smoke with temporary write data, then repeat on staging/prod"
+                " data."
+            ),
         ),
         _goal_coverage_item(
             grouped,
             key="competitor_recommendation_and_upload_gap",
             label="Advanced Analysis competitor recommendation entry",
-            requirement="Same-country/powertrain/segment top competitors should show library-ready, Source-Digest-ready, and upload-needed states with a clear next action.",
+            requirement=(
+                "Same-country/powertrain/segment top competitors should show library-ready, Source-Digest-ready, and"
+                " upload-needed states with a clear next action."
+            ),
             proved_by=["competitor_entry_ui_smoke", "competitor_workflow"],
             partial_by=["competitor_recommendations"],
-            next_evidence="Run --include-competitor-entry-ui-smoke for read-only entry and --include-competitor-workflow-smoke for the upload-needed write path.",
+            next_evidence=(
+                "Run --include-competitor-entry-ui-smoke for read-only entry and --include-competitor-workflow-smoke"
+                " for the upload-needed write path."
+            ),
         ),
         _goal_coverage_item(
             grouped,
             key="cross_user_country_source_library_trash",
             label="Shared country-scoped source library and trash",
-            requirement="Uploaded sources should be shared across users, scoped by country, and support trash/restore/clear without leaking across countries.",
+            requirement=(
+                "Uploaded sources should be shared across users, scoped by country, and support trash/restore/clear"
+                " without leaking across countries."
+            ),
             proved_by=["cross_user_source_library_smoke"],
             partial_by=["source_library", "source_review_row_smoke", "ui_edit_export_smoke"],
             next_evidence="Run --include-cross-user-source-library-smoke and production auth/data-retention checks.",
@@ -3453,28 +3781,45 @@ def _goal_coverage(checks: list[dict[str, Any]]) -> dict[str, Any]:
             grouped,
             key="admin_editor_edit_governance",
             label="Editor/admin gated online editing",
-            requirement="Online config editing should be guarded by editor/admin/developer permissions and opened from FloatingDeck only.",
+            requirement=(
+                "Online config editing should be guarded by editor/admin/developer permissions and opened from"
+                " FloatingDeck only."
+            ),
             proved_by=["auth_contract", "ui_edit_export_smoke"],
             partial_by=["auth_contract", "t19c_ai_ui_smoke", "ui_edit_export_smoke"],
-            next_evidence="Run --include-auth-contract-smoke with viewer/editor/admin tokens plus --include-ui-edit-export-smoke.",
+            next_evidence=(
+                "Run --include-auth-contract-smoke with viewer/editor/admin tokens plus --include-ui-edit-export-smoke."
+            ),
         ),
         _goal_coverage_item(
             grouped,
             key="paddle_vs_legacy_ocr_decision",
             label="PaddleOCR vs legacy/custom OCR decision",
-            requirement="OCR source parsing should use the best engine after real-sample PaddleOCR-vs-legacy/custom quality comparison.",
+            requirement=(
+                "OCR source parsing should use the best engine after real-sample PaddleOCR-vs-legacy/custom quality"
+                " comparison."
+            ),
             proved_by=["ocr_quality_recommendation"],
             partial_by=["ocr"],
-            next_evidence="Run engineering_config_ocr_quality_audit.py in the target runtime and feed the JSON through --ocr-quality-artifact.",
+            next_evidence=(
+                "Run engineering_config_ocr_quality_audit.py in the target runtime and feed the JSON through"
+                " --ocr-quality-artifact."
+            ),
         ),
         _goal_coverage_item(
             grouped,
             key="runtime_ai_business_summary",
             label="Runtime AI business summary",
-            requirement="AI summaries should be generated from current compare facts, include evidence warnings, and not masquerade as persisted digest artifacts.",
+            requirement=(
+                "AI summaries should be generated from current compare facts, include evidence warnings, and not"
+                " masquerade as persisted digest artifacts."
+            ),
             proved_by=["ai_summary", "ai_summary_compose"],
             partial_by=["ai_summary"],
-            next_evidence="Run --include-ai-summary-smoke against real compare columns and inspect evidenceStatus/mainUpgrades output.",
+            next_evidence=(
+                "Run --include-ai-summary-smoke against real compare columns and inspect evidenceStatus/mainUpgrades"
+                " output."
+            ),
         ),
     ]
     counts = {
@@ -3541,14 +3886,30 @@ def build_readiness_report(
     local_workbook_timeout: float = DEFAULT_LOCAL_WORKBOOK_TIMEOUT,
     competitor_scope: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    ocr_readiness_check = _endpoint_result("ocr", "OCR readiness", "/engineering-config/ocr/readiness", client, _ocr_evaluator)
+    ocr_readiness_check = _endpoint_result(
+        "ocr", "OCR readiness", "/engineering-config/ocr/readiness", client, _ocr_evaluator
+    )
     checks = [
         _endpoint_result("health", "Backend health", "/healthz", client, _health_evaluator),
         ocr_readiness_check,
-        _endpoint_result("ai_summary", "Runtime AI summary readiness", "/engineering-config/business-summary/readiness", client, _ai_evaluator),
-        _endpoint_result("source_library", "Source snapshot library", "/engineering-config/source/snapshots?limit=1", client, _list_evaluator("source snapshot")),
+        _endpoint_result(
+            "ai_summary",
+            "Runtime AI summary readiness",
+            "/engineering-config/business-summary/readiness",
+            client,
+            _ai_evaluator,
+        ),
+        _endpoint_result(
+            "source_library",
+            "Source snapshot library",
+            "/engineering-config/source/snapshots?limit=1",
+            client,
+            _list_evaluator("source snapshot"),
+        ),
     ]
-    ocr_runtime_details = ocr_readiness_check.get("details") if isinstance(ocr_readiness_check.get("details"), dict) else None
+    ocr_runtime_details = (
+        ocr_readiness_check.get("details") if isinstance(ocr_readiness_check.get("details"), dict) else None
+    )
     resolved_ocr_quality_artifact = ocr_quality_artifact
     if include_ocr_quality_audit and resolved_ocr_quality_artifact is None:
         resolved_ocr_quality_artifact = _latest_ocr_quality_artifact(ocr_quality_artifact_dir, ocr_runtime_details)
@@ -3731,7 +4092,10 @@ def render_markdown(report: dict[str, Any]) -> str:
         f"- API base: `{report.get('apiBase')}`",
         f"- Generated: `{report.get('generatedAt')}`",
         f"- Read-only: `{report.get('readOnly')}`",
-        f"- Checks: passed {summary.get('passed', 0)}, degraded {summary.get('degraded', 0)}, failed {summary.get('failed', 0)}",
+        (
+            f"- Checks: passed {summary.get('passed', 0)}, degraded {summary.get('degraded', 0)}, failed"
+            f" {summary.get('failed', 0)}"
+        ),
         "",
         "| Check | Status | Message |",
         "| --- | --- | --- |",
@@ -3743,18 +4107,20 @@ def render_markdown(report: dict[str, Any]) -> str:
         )
     coverage_items = goal_coverage.get("items") if isinstance(goal_coverage.get("items"), list) else []
     if coverage_items:
-        lines.extend([
-            "",
-            "## Goal Coverage",
-            "",
-            (
-                f"- Proved {coverage_summary.get('proved', 0)}, partial {coverage_summary.get('partial', 0)}, "
-                f"unverified {coverage_summary.get('unverified', 0)}, risk {coverage_summary.get('risk', 0)}"
-            ),
-            "",
-            "| Goal | Coverage | Next evidence |",
-            "| --- | --- | --- |",
-        ])
+        lines.extend(
+            [
+                "",
+                "## Goal Coverage",
+                "",
+                (
+                    f"- Proved {coverage_summary.get('proved', 0)}, partial {coverage_summary.get('partial', 0)}, "
+                    f"unverified {coverage_summary.get('unverified', 0)}, risk {coverage_summary.get('risk', 0)}"
+                ),
+                "",
+                "| Goal | Coverage | Next evidence |",
+                "| --- | --- | --- |",
+            ]
+        )
         for item in coverage_items:
             lines.append(
                 "| "
@@ -3789,14 +4155,19 @@ def write_outputs(report: dict[str, Any], output_dir: Path) -> dict[str, str]:
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Audit Product Config Compare readiness through read-only API calls.")
     parser.add_argument("--api-base", default=os.getenv("JATO_CONFIG_COMPARE_API_BASE", DEFAULT_API_BASE))
-    parser.add_argument("--frontend-base", default=os.getenv("JATO_CONFIG_COMPARE_FRONTEND_BASE", DEFAULT_FRONTEND_BASE))
+    parser.add_argument(
+        "--frontend-base", default=os.getenv("JATO_CONFIG_COMPARE_FRONTEND_BASE", DEFAULT_FRONTEND_BASE)
+    )
     parser.add_argument("--token", default=os.getenv("JATO_API_TOKEN") or os.getenv("JATO_AUTH_TOKEN"))
     parser.add_argument("--timeout", type=float, default=10.0)
     parser.add_argument("--output-dir", type=Path)
     parser.add_argument(
         "--skip-ocr-quality-audit",
         action="store_true",
-        help="Skip the real-sample OCR quality recommendation check. By default the latest local OCR quality artifact is included.",
+        help=(
+            "Skip the real-sample OCR quality recommendation check. By default the latest local OCR quality artifact is"
+            " included."
+        ),
     )
     parser.add_argument(
         "--ocr-quality-artifact",
@@ -3807,21 +4178,27 @@ def main(argv: list[str] | None = None) -> int:
         "--ocr-quality-artifact-dir",
         type=Path,
         default=DEFAULT_OCR_QUALITY_ARTIFACT_DIR,
-        help="Directory used to discover the latest OCR quality audit JSON when --ocr-quality-artifact is not provided.",
+        help=(
+            "Directory used to discover the latest OCR quality audit JSON when --ocr-quality-artifact is not provided."
+        ),
     )
     parser.add_argument(
         "--include-auth-contract-smoke",
         action="store_true",
         help=(
-            "Also verify live auth role boundaries for Product Config Compare. "
-            "This sends read requests plus fake-id DELETE/PATCH requests to prove viewer denial and writer handler reachability."
+            "Also verify live auth role boundaries for Product Config Compare. This sends read requests plus fake-id"
+            " DELETE/PATCH requests to prove viewer denial and writer handler reachability."
         ),
     )
     parser.add_argument("--auth-viewer-token", default=os.getenv("JATO_CONFIG_COMPARE_VIEWER_TOKEN"))
     parser.add_argument("--auth-editor-token", default=os.getenv("JATO_CONFIG_COMPARE_EDITOR_TOKEN"))
     parser.add_argument("--auth-admin-token", default=os.getenv("JATO_CONFIG_COMPARE_ADMIN_TOKEN"))
-    parser.add_argument("--auth-viewer-user", default=os.getenv("JATO_CONFIG_COMPARE_VIEWER_USER", "config-viewer-smoke"))
-    parser.add_argument("--auth-editor-user", default=os.getenv("JATO_CONFIG_COMPARE_EDITOR_USER", "config-editor-smoke"))
+    parser.add_argument(
+        "--auth-viewer-user", default=os.getenv("JATO_CONFIG_COMPARE_VIEWER_USER", "config-viewer-smoke")
+    )
+    parser.add_argument(
+        "--auth-editor-user", default=os.getenv("JATO_CONFIG_COMPARE_EDITOR_USER", "config-editor-smoke")
+    )
     parser.add_argument("--auth-admin-user", default=os.getenv("JATO_CONFIG_COMPARE_ADMIN_USER", "config-admin-smoke"))
     parser.add_argument(
         "--auth-mint-local-tokens",
@@ -3842,11 +4219,18 @@ def main(argv: list[str] | None = None) -> int:
         default=24 * 3600,
         help="Lifetime for local minted auth-contract JWTs.",
     )
-    parser.add_argument("--include-export-smoke", action="store_true", help="Also POST the compare payload to XLSX/PDF export endpoints. This does not persist data.")
+    parser.add_argument(
+        "--include-export-smoke",
+        action="store_true",
+        help="Also POST the compare payload to XLSX/PDF export endpoints. This does not persist data.",
+    )
     parser.add_argument(
         "--include-ai-summary-smoke",
         action="store_true",
-        help="Also POST the compare payload facts to the runtime LLM business-summary composer. This does not persist source/config data.",
+        help=(
+            "Also POST the compare payload facts to the runtime LLM business-summary composer. This does not persist"
+            " source/config data."
+        ),
     )
     parser.add_argument(
         "--ai-summary-timeout",
@@ -3859,74 +4243,87 @@ def main(argv: list[str] | None = None) -> int:
     )
     parser.add_argument(
         "--compare-trim-ids",
-        help="Optional comma- or space-separated config column ids to use for compare/export/AI smoke. Uses the first 2-4 ids.",
+        help=(
+            "Optional comma- or space-separated config column ids to use for compare/export/AI smoke. Uses the first"
+            " 2-4 ids."
+        ),
     )
-    parser.add_argument("--compare-trim-query", help="Optional config-column library search text for compare/export/AI smoke.")
-    parser.add_argument("--compare-trim-market", help="Optional market filter for config-column library search used by compare/export/AI smoke.")
-    parser.add_argument("--include-local-workbook-smoke", action="store_true", help="Also GET the local workbook digest endpoint to verify xlsx parser facts. This does not persist data.")
+    parser.add_argument(
+        "--compare-trim-query", help="Optional config-column library search text for compare/export/AI smoke."
+    )
+    parser.add_argument(
+        "--compare-trim-market",
+        help="Optional market filter for config-column library search used by compare/export/AI smoke.",
+    )
+    parser.add_argument(
+        "--include-local-workbook-smoke",
+        action="store_true",
+        help="Also GET the local workbook digest endpoint to verify xlsx parser facts. This does not persist data.",
+    )
     parser.add_argument(
         "--local-workbook-timeout",
         type=float,
         default=float(os.getenv("JATO_CONFIG_COMPARE_LOCAL_WORKBOOK_TIMEOUT", DEFAULT_LOCAL_WORKBOOK_TIMEOUT)),
         help=(
-            "Timeout for the optional local workbook digest smoke. This endpoint parses and returns a large xlsx digest, "
-            "so it intentionally has a wider default than ordinary API health checks."
+            "Timeout for the optional local workbook digest smoke. This endpoint parses and returns a large xlsx"
+            " digest, so it intentionally has a wider default than ordinary API health checks."
         ),
     )
     parser.add_argument(
         "--include-competitor-entry-ui-smoke",
         action="store_true",
         help=(
-            "Also run the read-only real browser competitor recommendation entry smoke through npm. "
-            "This verifies Advanced Analysis top-10 coverage, the competitor completion queue, and upload-needed source handoff."
+            "Also run the read-only real browser competitor recommendation entry smoke through npm. This verifies"
+            " Advanced Analysis top-10 coverage, the competitor completion queue, and upload-needed source handoff."
         ),
     )
     parser.add_argument(
         "--include-competitor-workflow-smoke",
         action="store_true",
         help=(
-            "Also run a write-path competitor workflow smoke: choose an upload-needed recommendation, "
-            "upload a temporary CSV source, create editable config columns, compare/export, then clean temporary artifacts."
+            "Also run a write-path competitor workflow smoke: choose an upload-needed recommendation, upload a"
+            " temporary CSV source, create editable config columns, compare/export, then clean temporary artifacts."
         ),
     )
     parser.add_argument(
         "--include-ui-edit-export-smoke",
         action="store_true",
         help=(
-            "Also run the real browser edit-after-digest export smoke through npm. "
-            "This writes a temporary source/config columns, edits one value from FloatingDeck, exports XLSX/PDF, then cleans up."
+            "Also run the real browser edit-after-digest export smoke through npm. This writes a temporary"
+            " source/config columns, edits one value from FloatingDeck, exports XLSX/PDF, then cleans up."
         ),
     )
     parser.add_argument(
         "--include-floatingdeck-multisource-smoke",
         action="store_true",
         help=(
-            "Also run real browser FloatingDeck multi-source smokes through npm. "
-            "This writes temporary sources/config columns for same-model multi-source and cross-country/cross-model selection, then cleans up."
+            "Also run real browser FloatingDeck multi-source smokes through npm. This writes temporary sources/config"
+            " columns for same-model multi-source and cross-country/cross-model selection, then cleans up."
         ),
     )
     parser.add_argument(
         "--include-t19c-ai-ui-smoke",
         action="store_true",
         help=(
-            "Also run the read-only real browser T19C simple-mode AI UI smoke through npm. "
-            "This verifies full-row default display, scoped difference navigation, source/model/trim picker labels, and FloatingDeck edit gating."
+            "Also run the read-only real browser T19C simple-mode AI UI smoke through npm. This verifies full-row"
+            " default display, scoped difference navigation, source/model/trim picker labels, and FloatingDeck edit"
+            " gating."
         ),
     )
     parser.add_argument(
         "--include-cross-user-source-library-smoke",
         action="store_true",
         help=(
-            "Also run the real browser cross-user source-library smoke through npm. "
-            "This uploads a temporary source as one user, searches/reuses it as another user from FloatingDeck, then cleans up."
+            "Also run the real browser cross-user source-library smoke through npm. This uploads a temporary source as"
+            " one user, searches/reuses it as another user from FloatingDeck, then cleans up."
         ),
     )
     parser.add_argument(
         "--include-source-review-row-smoke",
         action="store_true",
         help=(
-            "Also run the real browser Source Digest review-row smoke through npm. "
-            "This writes a temporary OCR image source, selects a review row, creates editable columns, verifies row focus, then cleans up."
+            "Also run the real browser Source Digest review-row smoke through npm. This writes a temporary OCR image"
+            " source, selects a review row, creates editable columns, verifies row focus, then cleans up."
         ),
     )
     parser.add_argument(
@@ -3958,7 +4355,8 @@ def main(argv: list[str] | None = None) -> int:
     )
     parser.add_argument(
         "--competitor-entry-ui-smoke-channel",
-        default=os.getenv("JATO_CONFIG_COMPARE_COMPETITOR_ENTRY_UI_SMOKE_CHANNEL") or os.getenv("JATO_CONFIG_COMPARE_BROWSER_CHANNEL"),
+        default=os.getenv("JATO_CONFIG_COMPARE_COMPETITOR_ENTRY_UI_SMOKE_CHANNEL")
+        or os.getenv("JATO_CONFIG_COMPARE_BROWSER_CHANNEL"),
         help="Optional Playwright browser channel for --include-competitor-entry-ui-smoke, e.g. chrome.",
     )
     parser.add_argument(
@@ -3969,7 +4367,8 @@ def main(argv: list[str] | None = None) -> int:
     )
     parser.add_argument(
         "--t19c-ai-ui-smoke-channel",
-        default=os.getenv("JATO_CONFIG_COMPARE_T19C_AI_UI_SMOKE_CHANNEL") or os.getenv("JATO_CONFIG_COMPARE_BROWSER_CHANNEL"),
+        default=os.getenv("JATO_CONFIG_COMPARE_T19C_AI_UI_SMOKE_CHANNEL")
+        or os.getenv("JATO_CONFIG_COMPARE_BROWSER_CHANNEL"),
         help="Optional Playwright browser channel for --include-t19c-ai-ui-smoke, e.g. chrome.",
     )
     parser.add_argument(
@@ -4026,10 +4425,14 @@ def main(argv: list[str] | None = None) -> int:
         default=os.getenv("JATO_CONFIG_COMPARE_SOURCE_REVIEW_ROW_IMAGE_FORMAT", "png"),
         help="Image format for --include-source-review-row-smoke. Use png, jpg, or jpeg.",
     )
-    parser.add_argument("--local-workbook-file", help="Optional file name under 02_Config_MetaData for local workbook digest smoke.")
+    parser.add_argument(
+        "--local-workbook-file", help="Optional file name under 02_Config_MetaData for local workbook digest smoke."
+    )
     parser.add_argument("--competitor-country", help="Optional country/market for competitor recommendation smoke.")
     parser.add_argument("--competitor-model", help="Optional target model for competitor recommendation smoke.")
-    parser.add_argument("--competitor-powertrain", help="Optional powertrain filter for competitor recommendation smoke.")
+    parser.add_argument(
+        "--competitor-powertrain", help="Optional powertrain filter for competitor recommendation smoke."
+    )
     parser.add_argument("--competitor-segment", help="Optional segment filter for competitor recommendation smoke.")
     parser.add_argument("--competitor-limit", type=int, default=10, help="Competitor recommendation limit, max 10.")
     parser.add_argument("--markdown", action="store_true", help="Print Markdown instead of JSON.")
