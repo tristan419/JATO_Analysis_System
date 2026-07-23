@@ -527,8 +527,19 @@ def assert_release_checkpoint_contract(workflow: Mapping[str, Any]) -> None:
         raise AssertionError("candidate checkpoint must be retained per deploy attempt")
     candidate_upload = step_by_name(tencent_steps, "Retain candidate release checkpoint")
     candidate_with = mapping(candidate_upload.get("with"), "candidate receipt upload with")
-    if candidate_with.get("retention-days") != "7":
-        raise AssertionError("candidate checkpoint must be retained for seven days")
+    expected_candidate_artifact = {
+        "name": "release-candidate-${{ github.sha }}-${{ github.run_attempt }}",
+        "path": "${{ runner.temp }}/release-checkpoint",
+        "if-no-files-found": "error",
+        "compression-level": "0",
+        "overwrite": "false",
+        "retention-days": "7",
+    }
+    for key, expected in expected_candidate_artifact.items():
+        if candidate_with.get(key) != expected:
+            raise AssertionError(
+                f"candidate checkpoint artifact {key} must be {expected!r}"
+            )
     server_attestation = step_by_name(
         tencent_steps,
         "Fetch and attest server release checkpoint",
@@ -545,7 +556,7 @@ def assert_release_checkpoint_contract(workflow: Mapping[str, Any]) -> None:
         'checkpoint.get("status") != "completed"',
         "server checkpoint evidence binding mismatch",
         'evidence.get("identity") != expected_identity',
-        'echo "attestation-sha256=$attestation_sha256"',
+        'echo "Server checkpoint/evidence attestation SHA-256: $attestation_sha256"',
     )
     missing_attestation = [
         token for token in required_attestation_tokens if token not in server_attestation_run
@@ -554,15 +565,18 @@ def assert_release_checkpoint_contract(workflow: Mapping[str, Any]) -> None:
         raise AssertionError(
             f"server checkpoint attestation is incomplete: {missing_attestation}"
         )
-    deploy_outputs = mapping(
-        job(workflow, "deploy_tencent").get("outputs"),
-        "deploy_tencent.outputs",
-    )
+    if 'echo "attestation-sha256=$attestation_sha256"' in server_attestation_run:
+        raise AssertionError(
+            "server attestation SHA-256 must not cross jobs through GITHUB_OUTPUT"
+        )
+    deploy_outputs = job(workflow, "deploy_tencent").get("outputs")
     if (
-        deploy_outputs.get("server_attestation_sha256")
-        != "${{ steps.server_attestation.outputs.attestation-sha256 }}"
+        isinstance(deploy_outputs, dict)
+        and "server_attestation_sha256" in deploy_outputs
     ):
-        raise AssertionError("deploy job must expose the server attestation SHA-256")
+        raise AssertionError(
+            "server attestation SHA-256 must stay inside the immutable candidate artifact"
+        )
     cloudflare = step_by_name(tencent_steps, "Deploy downloaded dist to Cloudflare Pages")
     if cloudflare.get("if") != "${{ steps.intl_current.outputs.current != 'true' }}":
         raise AssertionError("an already-current intl release must skip redeployment")
@@ -571,16 +585,37 @@ def assert_release_checkpoint_contract(workflow: Mapping[str, Any]) -> None:
         raise AssertionError("an outdated intl release must have three bounded deploy attempts")
 
     audit = job(workflow, "audit_frontend_parity")
+    audit_steps = steps(audit, "audit_frontend_parity")
+    audit_names = [str(step.get("name") or "") for step in audit_steps]
+    candidate_download = step_by_name(
+        audit_steps,
+        "Download candidate release checkpoint",
+    )
+    candidate_download_with = mapping(
+        candidate_download.get("with"),
+        "candidate receipt download with",
+    )
+    for key in ("name", "path"):
+        if candidate_download_with.get(key) != expected_candidate_artifact[key]:
+            raise AssertionError(
+                f"candidate checkpoint download {key} must match its upload"
+            )
+    if audit_names.index("Download candidate release checkpoint") >= audit_names.index(
+        "Seal verified production release checkpoint"
+    ):
+        raise AssertionError("candidate checkpoint must be downloaded before sealing")
     audit_commands = combined_run(audit, "audit_frontend_parity")
     for phase in ("parity_verified", "complete"):
         if f"--phase {phase}" not in audit_commands:
             raise AssertionError(f"verified receipt is missing phase {phase}")
     if (
-        "SERVER_ATTESTATION_SHA256" not in audit_commands
+        'actual_attestation_sha256="$(sha256sum "$attestation"' not in audit_commands
         or '--message "server_attestation_sha256=$actual_attestation_sha256"'
         not in audit_commands
     ):
-        raise AssertionError("complete receipt must bind the verified server attestation")
+        raise AssertionError(
+            "complete receipt must hash and bind the artifact-contained server attestation"
+        )
     audit_text = str(audit)
     required_receipt_identity_tokens = (
         "release_checkpoint.py show",
@@ -601,6 +636,7 @@ def assert_release_checkpoint_contract(workflow: Mapping[str, Any]) -> None:
     for masked_output in (
         "needs.deploy_tencent.outputs.archive_bytes",
         "needs.deploy_tencent.outputs.archive_sha256",
+        "needs.deploy_tencent.outputs.server_attestation_sha256",
     ):
         if masked_output in audit_text:
             raise AssertionError(
