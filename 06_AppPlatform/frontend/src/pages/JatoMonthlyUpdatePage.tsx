@@ -1,7 +1,22 @@
-import { ChangeEvent, DragEvent, FormEvent, KeyboardEvent, useCallback, useEffect, useRef, useState } from "react";
+import {
+  ChangeEvent,
+  DragEvent,
+  FormEvent,
+  KeyboardEvent,
+  ReactNode,
+  useCallback,
+  useEffect,
+  useRef,
+  useState,
+} from "react";
 
 import { api } from "../api/client";
 import { CollapsibleDeckHero } from "../components/CollapsibleDeckHero";
+import {
+  ConfirmDialog,
+  type ConfirmDialogError,
+  type ConfirmDialogTone,
+} from "../components/ConfirmDialog";
 import { LoadingSurface } from "../components/LoadingSurface";
 import type {
   JatoHistoricalReclassificationDecision,
@@ -37,6 +52,108 @@ type ReviewIssueState = {
   jobId: string;
   issue: JatoMonthlyUpdateReviewIssue;
 };
+
+type JatoConfirmationAction =
+  | "cancel_job"
+  | "resume_smart_merge"
+  | "approve_review"
+  | "resolve_historical_reclassification"
+  | "publish_candidate"
+  | "rollback_publish"
+  | "smart_merge";
+
+type JatoConfirmationRequest = {
+  action: JatoConfirmationAction;
+  title: string;
+  description: ReactNode;
+  content: ReactNode;
+  cancelLabel: string;
+  confirmLabel: string;
+  loadingLabel: string;
+  tone?: ConfirmDialogTone;
+  execute: () => Promise<void>;
+};
+
+type ConfirmationFact = {
+  label: string;
+  value: string;
+};
+
+function ConfirmationFacts({ items }: { items: ConfirmationFact[] }) {
+  return (
+    <dl className="confirm-dialog-facts">
+      {items.map((item) => (
+        <div key={`${item.label}-${item.value}`}>
+          <dt>{item.label}</dt>
+          <dd>{item.value}</dd>
+        </div>
+      ))}
+    </dl>
+  );
+}
+
+function recordString(
+  record: Record<string, unknown>,
+  key: string,
+): string | undefined {
+  const value = record[key];
+  return typeof value === "string" && value.trim() ? value.trim() : undefined;
+}
+
+function parseConfirmationError(error: unknown): ConfirmDialogError {
+  const rawMessage = error instanceof Error ? error.message : String(error);
+  const statusMatch = rawMessage.match(/^(\d{3})\s+([\s\S]+)$/);
+  const statusCode = statusMatch ? Number(statusMatch[1]) : undefined;
+  const detailText = statusMatch?.[2]?.trim() || rawMessage;
+  let detail: Record<string, unknown> | null = null;
+  try {
+    const parsed: unknown = JSON.parse(detailText);
+    if (typeof parsed === "object" && parsed !== null && !Array.isArray(parsed)) {
+      detail = parsed as Record<string, unknown>;
+    }
+  } catch {
+    detail = null;
+  }
+
+  const blockerType = detail ? recordString(detail, "blockerType") : undefined;
+  const ruleId = detail ? recordString(detail, "ruleId") : undefined;
+  const target = detail ? recordString(detail, "target") : undefined;
+  const suggestedAction = detail ? recordString(detail, "suggestedAction") : undefined;
+  const sourceFeedback = detail ? recordString(detail, "sourceFeedback") : undefined;
+  const structuredMessage = detail ? recordString(detail, "message") : undefined;
+  const containsHtmlDocument = /<(?:!doctype|html|head|body)\b/i.test(
+    structuredMessage || detailText
+  );
+  const message = containsHtmlDocument
+    ? "网关未返回结构化失败原因。请先刷新任务状态确认操作是否已受理，不要立即重复提交。"
+    : structuredMessage || detailText;
+  const details = [
+    statusCode ? { label: "HTTP 状态", value: String(statusCode) } : null,
+    blockerType ? { label: "门禁类型", value: blockerType } : null,
+    ruleId ? { label: "规则", value: ruleId } : null,
+    target ? { label: "对象", value: target } : null,
+    suggestedAction ? { label: "建议处理", value: suggestedAction } : null,
+  ].filter((item): item is { label: string; value: string } => item !== null);
+
+  let title = "操作未完成";
+  if (statusCode === 401 || statusCode === 403) {
+    title = "当前账号无权执行";
+  } else if (statusCode === 409 || blockerType) {
+    title = "数据门禁阻止了本次操作";
+  } else if (statusCode !== undefined && statusCode >= 500) {
+    title = "服务暂时未完成操作";
+  }
+  return {
+    title,
+    message,
+    details: details.length > 0 ? details : undefined,
+    sourceFeedback,
+    retryBlocked: (
+      (statusCode !== undefined && statusCode >= 500)
+      || rawMessage.startsWith("网络请求失败：")
+    ),
+  };
+}
 
 function reviewIssueFromError(error: unknown): JatoMonthlyUpdateReviewIssue | null {
   if (typeof error !== "object" || error === null || !("reviewIssue" in error)) {
@@ -419,13 +536,54 @@ export function JatoMonthlyUpdatePage() {
   const [smartMergingJobId, setSmartMergingJobId] = useState<string | null>(null);
   const [smartMergeResumeSubmittingJobId, setSmartMergeResumeSubmittingJobId] =
     useState<string | null>(null);
+  const [confirmationRequest, setConfirmationRequest] =
+    useState<JatoConfirmationRequest | null>(null);
+  const [confirmationSubmitting, setConfirmationSubmitting] = useState(false);
+  const [confirmationError, setConfirmationError] =
+    useState<ConfirmDialogError | null>(null);
   const [infoCollapsed, setInfoCollapsed] = useState(true);
   const reviewRefreshRequestRef = useRef<{ jobId: string; requestId: string } | null>(null);
   const smartMergeResumeRequestRef = useRef<{ jobId: string; requestId: string } | null>(null);
+  const confirmationSubmittingRef = useRef(false);
   const handledReviewRefreshOperationIdRef = useRef<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const watchedBaselinePromotionIdRef = useRef<string | null>(null);
   const abandonedUploadIdRef = useRef<string | null>(null);
+
+  function openConfirmation(request: JatoConfirmationRequest) {
+    if (confirmationSubmittingRef.current) {
+      return;
+    }
+    setConfirmationError(null);
+    setConfirmationRequest(request);
+  }
+
+  function closeConfirmation() {
+    if (confirmationSubmittingRef.current) {
+      return;
+    }
+    setConfirmationError(null);
+    setConfirmationRequest(null);
+  }
+
+  async function submitConfirmation() {
+    if (!confirmationRequest || confirmationSubmittingRef.current) {
+      return;
+    }
+    const request = confirmationRequest;
+    confirmationSubmittingRef.current = true;
+    setConfirmationSubmitting(true);
+    setConfirmationError(null);
+    try {
+      await request.execute();
+      setConfirmationRequest(null);
+    } catch (err) {
+      setConfirmationError(parseConfirmationError(err));
+    } finally {
+      confirmationSubmittingRef.current = false;
+      setConfirmationSubmitting(false);
+    }
+  }
 
   function reviewRefreshBlocksMutation(job: JatoMonthlyUpdateJob): boolean {
     const operation = job.pendingOperation;
@@ -876,37 +1034,47 @@ export function JatoMonthlyUpdatePage() {
     }
   }
 
-  async function handleCancelJob(job: JatoMonthlyUpdateJob) {
-    const confirmed = window.confirm(
-      [
-        "确认终止当前 JATO 月更任务？",
-        "",
-        `Job: ${job.jobId}`,
-        `Phase: ${formatMonthlyUpdatePhase(job.phase)}`,
-        `Batch: ${job.batchId || job.plan?.batchId || "-"}`,
-        "",
-        "这会停止后台脚本，并将任务标记为 cancelled。已生成的 staging/review 临时产物不会自动 publish。",
-      ].join("\n")
-    );
-    if (!confirmed) {
-      return;
-    }
-    setCancellingJobId(job.jobId);
-    setError("");
-    setNotice("");
-    try {
-      const response = await api.cancelJatoMonthlyUpdateJob(job.jobId);
-      setSelectedJob(response.item);
-      setSelectedJobId(response.item.jobId);
-      setNotice(`已终止任务 ${job.jobId}。`);
-      await refreshJobs(response.item.jobId, true);
-      await loadJobDetail(response.item.jobId, true);
-      await refreshMaintenanceStatus(true);
-    } catch (err) {
-      setError((err as Error).message);
-    } finally {
-      setCancellingJobId(null);
-    }
+  function handleCancelJob(job: JatoMonthlyUpdateJob) {
+    openConfirmation({
+      action: "cancel_job",
+      title: "确认终止月更任务",
+      description: "终止会停止当前后台脚本并把任务标记为 cancelled，但不会发布任何临时产物。",
+      tone: "danger",
+      cancelLabel: "返回",
+      confirmLabel: "确认终止任务",
+      loadingLabel: "正在终止...",
+      content: (
+        <>
+          <ConfirmationFacts
+            items={[
+              { label: "Job", value: job.jobId },
+              { label: "当前阶段", value: formatMonthlyUpdatePhase(job.phase) },
+              { label: "批次", value: job.batchId || job.plan?.batchId || "-" },
+            ]}
+          />
+          <div className="confirm-dialog-risk">
+            <strong>后台任务将被中断</strong>
+            <span>已生成的 staging / review 临时产物仍不会自动 Publish，active 数据不会因终止动作改变。</span>
+          </div>
+        </>
+      ),
+      execute: async () => {
+        setCancellingJobId(job.jobId);
+        setError("");
+        setNotice("");
+        try {
+          const response = await api.cancelJatoMonthlyUpdateJob(job.jobId);
+          setSelectedJob(response.item);
+          setSelectedJobId(response.item.jobId);
+          setNotice(`已终止任务 ${job.jobId}。`);
+          await refreshJobs(response.item.jobId, true);
+          await loadJobDetail(response.item.jobId, true);
+          await refreshMaintenanceStatus(true);
+        } finally {
+          setCancellingJobId(null);
+        }
+      },
+    });
   }
 
   async function handleRetryFailedJob(job: JatoMonthlyUpdateJob) {
@@ -927,7 +1095,7 @@ export function JatoMonthlyUpdatePage() {
     }
   }
 
-  async function handleResumeSmartMerge(job: JatoMonthlyUpdateJob) {
+  function handleResumeSmartMerge(job: JatoMonthlyUpdateJob) {
     const recovery = job.smartMergeRecovery;
     if (
       job.status !== "failed"
@@ -944,79 +1112,105 @@ export function JatoMonthlyUpdatePage() {
     if (smartMergeResumeRequestRef.current?.jobId === job.jobId) {
       return;
     }
-    const confirmed = window.confirm(
-      [
-        "仅续跑当前 Smart Merge？",
-        "",
-        "将复用当前 Candidate 和已保存的历史处理决策；不重新上传文件、不重跑 ETL，也不会修改 active。",
-        "续跑完成后仍需重新 Review、批准并手动 Publish。",
-      ].join("\n")
-    );
-    if (!confirmed) {
-      return;
-    }
-
-    const requestId = crypto.randomUUID();
-    smartMergeResumeRequestRef.current = { jobId: job.jobId, requestId };
-    setSmartMergeResumeSubmittingJobId(job.jobId);
-    setError("");
-    setNotice("");
-    setReviewBundle(null);
-    setReviewIssue(null);
-    setHistoricalReclassificationDecisions({});
-    setPublishBlocker(null);
-    try {
-      const response = await api.resumeJatoMonthlyUpdateSmartMerge(job.jobId, {
-        requestId,
-        expectedSourceCandidateFingerprint: recovery.sourceCandidateFingerprint,
-        expectedActiveFingerprint: recovery.activeBaseFingerprint,
-        expectedReportFingerprint: recovery.reportFingerprint,
-        expectedResolutionFingerprint: recovery.resolutionFingerprint,
-      });
-      setSelectedJob(response.item);
-      setSelectedJobId(response.item.jobId);
-      setNotice(
-        `任务 ${job.jobId} 已进入 Smart Merge 安全续跑队列；页面只读轮询，不会重新上传或重跑 ETL。`
-      );
-      await refreshJobs(job.jobId, true);
-      await loadJobDetail(job.jobId, true);
-    } catch (err) {
-      const originalMessage = err instanceof Error ? err.message : String(err);
-      try {
-        const jobResponse = await api.getJatoMonthlyUpdateJob(job.jobId);
-        setSelectedJob(jobResponse.item);
-        setJobs((current) => [
-          jobResponse.item,
-          ...current.filter((item) => item.jobId !== jobResponse.item.jobId),
-        ]);
-        const operation = jobResponse.item.pendingOperation;
-        if (
-          operation?.type === "smart_merge_resume"
-          && operation.requestId === requestId
-        ) {
-          if (operation.status === "failed") {
-            setError(
-              operation.failureDigest?.message
-              || operation.error
-              || "Smart Merge 安全续跑已受理，但隔离 worker 执行失败。"
-            );
-          } else if (operation.status === "success") {
-            setNotice("Smart Merge 安全续跑已完成，请重新打开并核对 Review。");
-          } else {
-            setNotice(
-              "Smart Merge 安全续跑请求已被服务端受理；页面将只读轮询状态，不会重复提交。"
+    const sourceCandidateFingerprint = recovery.sourceCandidateFingerprint;
+    const activeBaseFingerprint = recovery.activeBaseFingerprint;
+    const reportFingerprint = recovery.reportFingerprint;
+    const resolutionFingerprint = recovery.resolutionFingerprint;
+    openConfirmation({
+      action: "resume_smart_merge",
+      title: "确认续跑 Smart Merge",
+      description: "只复用失败任务现有 Candidate 与已保存决策，从 Smart Merge 断点继续。",
+      tone: "warning",
+      cancelLabel: "返回",
+      confirmLabel: "确认安全续跑",
+      loadingLabel: "正在提交续跑...",
+      content: (
+        <>
+          <ConfirmationFacts
+            items={[
+              { label: "Job", value: job.jobId },
+              { label: "Candidate 校验", value: formatDigestPreview(sourceCandidateFingerprint) },
+              { label: "Active 校验", value: formatDigestPreview(activeBaseFingerprint) },
+              { label: "决策报告校验", value: formatDigestPreview(reportFingerprint) },
+              { label: "选择结果校验", value: formatDigestPreview(resolutionFingerprint) },
+            ]}
+          />
+          <div className="confirm-dialog-note">
+            <strong>本次只续跑 Smart Merge</strong>
+            <span>不会重新上传、不重跑 ETL、不会修改 active。完成后仍需重新 Review、批准并手动 Publish。</span>
+          </div>
+        </>
+      ),
+      execute: async () => {
+        const requestId = crypto.randomUUID();
+        smartMergeResumeRequestRef.current = { jobId: job.jobId, requestId };
+        setSmartMergeResumeSubmittingJobId(job.jobId);
+        setError("");
+        setNotice("");
+        setReviewBundle(null);
+        setReviewIssue(null);
+        setHistoricalReclassificationDecisions({});
+        setPublishBlocker(null);
+        try {
+          const response = await api.resumeJatoMonthlyUpdateSmartMerge(job.jobId, {
+            requestId,
+            expectedSourceCandidateFingerprint: sourceCandidateFingerprint,
+            expectedActiveFingerprint: activeBaseFingerprint,
+            expectedReportFingerprint: reportFingerprint,
+            expectedResolutionFingerprint: resolutionFingerprint,
+          });
+          setSelectedJob(response.item);
+          setSelectedJobId(response.item.jobId);
+          setNotice(
+            `任务 ${job.jobId} 已进入 Smart Merge 安全续跑队列；页面只读轮询，不会重新上传或重跑 ETL。`
+          );
+          await refreshJobs(job.jobId, true);
+          await loadJobDetail(job.jobId, true);
+        } catch (err) {
+          const originalMessage = err instanceof Error ? err.message : String(err);
+          let jobResponse: Awaited<
+            ReturnType<typeof api.getJatoMonthlyUpdateJob>
+          >;
+          try {
+            jobResponse = await api.getJatoMonthlyUpdateJob(job.jobId);
+          } catch {
+            throw new Error(
+              `${originalMessage}；状态回读失败，未自动重试写请求，请刷新任务状态后确认。`
             );
           }
-        } else {
-          setError(`${originalMessage}；未自动重试写请求，请刷新任务状态后确认。`);
+          setSelectedJob(jobResponse.item);
+          setJobs((current) => [
+            jobResponse.item,
+            ...current.filter((item) => item.jobId !== jobResponse.item.jobId),
+          ]);
+          const operation = jobResponse.item.pendingOperation;
+          if (
+            operation?.type === "smart_merge_resume"
+            && operation.requestId === requestId
+          ) {
+            if (operation.status === "failed") {
+              throw new Error(
+                operation.failureDigest?.message
+                || operation.error
+                || "Smart Merge 安全续跑已受理，但隔离 worker 执行失败。"
+              );
+            }
+            if (operation.status === "success") {
+              setNotice("Smart Merge 安全续跑已完成，请重新打开并核对 Review。");
+            } else {
+              setNotice(
+                "Smart Merge 安全续跑请求已被服务端受理；页面将只读轮询状态，不会重复提交。"
+              );
+            }
+            return;
+          }
+          throw new Error(`${originalMessage}；未自动重试写请求，请刷新任务状态后确认。`);
+        } finally {
+          setSmartMergeResumeSubmittingJobId(null);
+          smartMergeResumeRequestRef.current = null;
         }
-      } catch {
-        setError(`${originalMessage}；未自动重试写请求，请刷新任务状态后确认。`);
-      }
-    } finally {
-      setSmartMergeResumeSubmittingJobId(null);
-      smartMergeResumeRequestRef.current = null;
-    }
+      },
+    });
   }
 
   async function handleReviewJob(job: JatoMonthlyUpdateJob) {
@@ -1120,7 +1314,7 @@ export function JatoMonthlyUpdatePage() {
     }
   }
 
-  async function handleApproveReview(job: JatoMonthlyUpdateJob) {
+  function handleApproveReview(job: JatoMonthlyUpdateJob) {
     if (guardReviewRefreshMutation(job)) {
       return;
     }
@@ -1147,29 +1341,64 @@ export function JatoMonthlyUpdatePage() {
       setError("历史处理决策或 keep_active 最终复核不完整，不能批准当前 Candidate。");
       return;
     }
-    if (!window.confirm("确认批准当前 candidate 的 Review？批准将绑定当前候选指纹；任何重建后都必须重新 Review。")) {
-      return;
-    }
-    setApprovingReviewJobId(job.jobId);
-    setError("");
-    setNotice("");
-    try {
-      const response = await api.approveJatoMonthlyUpdateReview(job.jobId);
-      setSelectedJob(response.item);
-      setReviewBundle((current) => current?.jobId === job.jobId
-        ? { ...current, approval: response.item.reviewApproval ?? null }
-        : current);
-      setNotice(`Review 已批准：${job.jobId}。Publish 只接受这一候选指纹。`);
-      await refreshJobs(job.jobId, true);
-      await loadJobDetail(job.jobId, true);
-    } catch (err) {
-      setError((err as Error).message);
-    } finally {
-      setApprovingReviewJobId(null);
-    }
+    const decisionCountries = reviewBundle.historicalReclassificationReport.countries
+      .filter((countryReport) => countryReport.decisionRequired);
+    openConfirmation({
+      action: "approve_review",
+      title: "确认批准 Review",
+      description: "批准会绑定当前 Candidate 指纹并解锁后续 Publish；任何重建都会让本次批准失效。",
+      tone: "warning",
+      cancelLabel: "返回检查",
+      confirmLabel: "确认批准",
+      loadingLabel: "正在批准...",
+      content: (
+        <>
+          <ConfirmationFacts
+            items={[
+              { label: "Job", value: job.jobId },
+              {
+                label: "Candidate 指纹",
+                value: formatDigestPreview(reviewBundle.candidateFingerprint),
+              },
+              {
+                label: "历史处理国家",
+                value: formatMonthlyUpdateNumber(decisionCountries.length),
+              },
+              {
+                label: "Review blocker",
+                value: formatMonthlyUpdateNumber(
+                  reviewBundle.reviewFindings.filter((finding) => finding.severity === "blocker").length
+                ),
+              },
+            ]}
+          />
+          <div className="confirm-dialog-note">
+            <strong>批准不等于发布</strong>
+            <span>此步骤只记录对当前指纹的治理确认；active 数据仍保持不变，之后仍需单独确认 Publish。</span>
+          </div>
+        </>
+      ),
+      execute: async () => {
+        setApprovingReviewJobId(job.jobId);
+        setError("");
+        setNotice("");
+        try {
+          const response = await api.approveJatoMonthlyUpdateReview(job.jobId);
+          setSelectedJob(response.item);
+          setReviewBundle((current) => current?.jobId === job.jobId
+            ? { ...current, approval: response.item.reviewApproval ?? null }
+            : current);
+          setNotice(`Review 已批准：${job.jobId}。Publish 只接受这一候选指纹。`);
+          await refreshJobs(job.jobId, true);
+          await loadJobDetail(job.jobId, true);
+        } finally {
+          setApprovingReviewJobId(null);
+        }
+      },
+    });
   }
 
-  async function handleResolveHistoricalReclassification(job: JatoMonthlyUpdateJob) {
+  function handleResolveHistoricalReclassification(job: JatoMonthlyUpdateJob) {
     if (guardReviewRefreshMutation(job)) {
       return;
     }
@@ -1208,56 +1437,111 @@ export function JatoMonthlyUpdatePage() {
       }
       decisions.push({ country: countryReport.country, decision });
     }
-    const decisionSummary = decisions
-      .map(({ country, decision }) => (
-        `${country}：${decision === "use_latest" ? "使用本次上传覆盖历史" : "保留当前 active 历史"}`
-      ))
-      .join("\n");
-    const useLatestImpactSummary = requiredCountries
-      .filter((countryReport) => effectiveHistoricalReclassificationDecision(
-        countryReport,
-        historicalReclassificationDecisions,
-      ) === "use_latest")
-      .map((countryReport) => (
-        `${countryReport.country}：覆盖至 ${countryReport.comparedThrough || "active latest"} 的 ${formatMonthlyUpdateNumber(countryReport.historicalMonthCount)} 个历史月份（${countryReport.monthlyTotalsStable ? "国家逐月总量一致，分析分类按新值" : "销量和分析分类均按新值，历史 Dashboard、同比与份额会变化"}）`
-      ))
-      .join("\n");
-    const useLatestConfirmation = useLatestImpactSummary
-      ? `\n\n历史覆盖影响：\n${useLatestImpactSummary}\n\n覆盖是整国替换，不会把上传数据与 active 累加；未上传国家不变。选择 keep_active 的国家已发布历史不变，正常新增月份仍按月更规则处理。`
-      : "";
-    if (
-      useLatestImpactSummary
-      && !window.confirm(
-        `确认应用以下历史处理选择并生成完整 Candidate？\n\n${decisionSummary}${useLatestConfirmation}\n\n这一步只重建 staging，不会修改 active；完成后仍需重新 Review、Approve 和 Publish。`,
-      )
-    ) {
-      return;
-    }
-    setResolvingHistoricalReclassificationJobId(job.jobId);
-    setError("");
-    setNotice("");
-    try {
-      const response = await api.resolveJatoMonthlyUpdateHistoricalReclassification(
-        job.jobId,
-        decisions,
-      );
-      setSelectedJob(response.item);
-      setSelectedJobId(response.item.jobId);
-      setJobs((current) => [
-        response.item,
-        ...current.filter((item) => item.jobId !== response.item.jobId),
-      ]);
-      setReviewBundle(null);
-      setReviewIssue(null);
-      setHistoricalReclassificationDecisions({});
-      setNotice(
-        `已应用 ${decisions.length} 个国家的历史处理选择，完整 Candidate 正在隔离重建；active 尚未改变。`
-      );
-    } catch (err) {
-      setError((err as Error).message);
-    } finally {
-      setResolvingHistoricalReclassificationJobId(null);
-    }
+    const decisionsByCountry = new Map(
+      decisions.map((decision) => [decision.country, decision.decision])
+    );
+    const keepActiveCount = decisions.filter(
+      (decision) => decision.decision === "keep_active"
+    ).length;
+    const useLatestCountries = requiredCountries.filter(
+      (countryReport) => decisionsByCountry.get(countryReport.country) === "use_latest"
+    );
+    openConfirmation({
+      action: "resolve_historical_reclassification",
+      title: "确认生成完整 Candidate",
+      description: "请核对本批次逐国历史处理方式。默认保留 active 历史；只有明确选择 use_latest 的国家会改用本次上传历史。",
+      tone: useLatestCountries.length > 0 ? "warning" : "default",
+      cancelLabel: "返回修改",
+      confirmLabel: "确认并生成 Candidate",
+      loadingLabel: "正在生成 Candidate...",
+      content: (
+        <>
+          <ConfirmationFacts
+            items={[
+              { label: "Job", value: job.jobId },
+              {
+                label: "保留 active 历史",
+                value: `${formatMonthlyUpdateNumber(keepActiveCount)} 个国家`,
+              },
+              {
+                label: "使用上传覆盖历史",
+                value: `${formatMonthlyUpdateNumber(useLatestCountries.length)} 个国家`,
+              },
+            ]}
+          />
+          <div className="confirm-dialog-choice-list">
+            <strong>逐国选择</strong>
+            {requiredCountries.map((countryReport) => {
+              const decision = decisionsByCountry.get(countryReport.country);
+              const useLatest = decision === "use_latest";
+              return (
+                <div
+                  key={countryReport.country}
+                  className="confirm-dialog-choice"
+                  data-decision={decision}
+                >
+                  <span className="confirm-dialog-choice-country">
+                    {countryReport.country}
+                  </span>
+                  <span className="confirm-dialog-choice-copy">
+                    <strong>
+                      {useLatest ? "使用本次上传覆盖历史" : "保留当前 active 历史"}
+                    </strong>
+                    <span>
+                      {useLatest
+                        ? `覆盖至 ${countryReport.comparedThrough || "active latest"} 的 ${formatMonthlyUpdateNumber(countryReport.historicalMonthCount)} 个历史月份；${countryReport.monthlyTotalsStable ? "逐月总销量保持一致，分析分类按新值" : "销量和分析分类均按新值，历史 Dashboard、同比与份额会变化"}。`
+                        : "已发布历史保持不变，只让本次上传中的后续新月份进入 Candidate。"}
+                    </span>
+                  </span>
+                </div>
+              );
+            })}
+          </div>
+          {useLatestCountries.length > 0 ? (
+            <div className="confirm-dialog-risk">
+              <strong>整国替换历史，不与 active 累加</strong>
+              <span>
+                use_latest 会用该国上传历史整体替换 Candidate 中对应历史；未上传国家及选择 keep_active 的国家历史均不变。
+              </span>
+            </div>
+          ) : (
+            <div className="confirm-dialog-note">
+              <strong>本批次全部保留 active 历史</strong>
+              <span>现有历史不会被上传文件覆盖；正常新增月份仍按月更规则写入 Candidate。</span>
+            </div>
+          )}
+          <div className="confirm-dialog-note">
+            <strong>当前只重建 staging</strong>
+            <span>这一步不会修改 active；完成后仍需重新 Review、Approve 和 Publish。</span>
+          </div>
+        </>
+      ),
+      execute: async () => {
+        setResolvingHistoricalReclassificationJobId(job.jobId);
+        setError("");
+        setNotice("");
+        try {
+          const response = await api.resolveJatoMonthlyUpdateHistoricalReclassification(
+            job.jobId,
+            decisions,
+          );
+          setSelectedJob(response.item);
+          setSelectedJobId(response.item.jobId);
+          setJobs((current) => [
+            response.item,
+            ...current.filter((item) => item.jobId !== response.item.jobId),
+          ]);
+          setReviewBundle(null);
+          setReviewIssue(null);
+          setHistoricalReclassificationDecisions({});
+          setNotice(
+            `已应用 ${decisions.length} 个国家的历史处理选择，完整 Candidate 正在隔离重建；active 尚未改变。`
+          );
+        } finally {
+          setResolvingHistoricalReclassificationJobId(null);
+        }
+      },
+    });
   }
 
   function parsePublishBlocker(error: unknown): PublishBlocker | null {
@@ -1291,106 +1575,208 @@ export function JatoMonthlyUpdatePage() {
     return null;
   }
 
-  async function handlePublishJob(job: JatoMonthlyUpdateJob) {
+  function handlePublishJob(job: JatoMonthlyUpdateJob) {
     if (guardReviewRefreshMutation(job)) {
       return;
     }
-    const confirmed = window.confirm(
-      "将把当前 staging candidate promote 为 active 数据集，并自动备份现有 active parquet / manifest / partitioned_dataset_v1 / fingerprint。继续吗？"
-    );
-    if (!confirmed) {
-      return;
-    }
-    setPublishingJobId(job.jobId);
-    setError("");
-    setNotice("");
-    setPublishBlocker(null);
-    try {
-      const response = await api.publishJatoMonthlyUpdateJob(job.jobId);
-      setSelectedJob(response.item);
-      setSelectedJobId(response.item.jobId);
-      const operation = response.item.pendingOperation;
-      setNotice(operation?.status === "queued" || operation?.status === "running"
-        ? `任务 ${job.jobId} 已进入隔离 Publish 队列；active 尚未改变，页面会自动刷新结果。`
-        : `已将任务 ${job.jobId} 的 staging candidate promote 到 active 数据集。备份目录：${response.item.publication?.backupDir ?? "-"}`);
-      await refreshJobs(response.item.jobId, true);
-      await refreshMaintenanceStatus(true);
-      await loadJobDetail(response.item.jobId, true);
-    } catch (err) {
-      const blocker = parsePublishBlocker(err);
-      if (blocker) {
-        setPublishBlocker(blocker);
-      } else {
-        setError((err as Error).message);
-      }
-    } finally {
-      setPublishingJobId(null);
-    }
+    openConfirmation({
+      action: "publish_candidate",
+      title: "确认发布 Candidate",
+      description: "这是实际的 active 数据切换。系统会先备份现有 active，再把当前已批准 Candidate 提升为生产数据。",
+      tone: "danger",
+      cancelLabel: "返回检查",
+      confirmLabel: "确认发布",
+      loadingLabel: "正在发布...",
+      content: (
+        <>
+          <ConfirmationFacts
+            items={[
+              { label: "Job", value: job.jobId },
+              { label: "数据月份", value: job.month || "-" },
+              {
+                label: "国家范围",
+                value: job.countryScope?.length
+                  ? job.countryScope.join("、")
+                  : job.country || "完整数据集",
+              },
+              {
+                label: "批准指纹",
+                value: formatDigestPreview(job.reviewApproval?.candidateFingerprint),
+              },
+              {
+                label: "批准人",
+                value: job.reviewApproval?.reviewedBy || "-",
+              },
+            ]}
+          />
+          <div className="confirm-dialog-risk">
+            <strong>确认后会改变 active 数据</strong>
+            <span>发布前会自动备份 active parquet、manifest、partitioned_dataset_v1 与 fingerprint；发布失败时旧 active 保持运行。</span>
+          </div>
+        </>
+      ),
+      execute: async () => {
+        setPublishingJobId(job.jobId);
+        setError("");
+        setNotice("");
+        setPublishBlocker(null);
+        try {
+          const response = await api.publishJatoMonthlyUpdateJob(job.jobId);
+          setSelectedJob(response.item);
+          setSelectedJobId(response.item.jobId);
+          const operation = response.item.pendingOperation;
+          setNotice(operation?.status === "queued" || operation?.status === "running"
+            ? `任务 ${job.jobId} 已进入隔离 Publish 队列；active 尚未改变，页面会自动刷新结果。`
+            : `已将任务 ${job.jobId} 的 staging candidate promote 到 active 数据集。备份目录：${response.item.publication?.backupDir ?? "-"}`);
+          await refreshJobs(response.item.jobId, true);
+          await refreshMaintenanceStatus(true);
+          await loadJobDetail(response.item.jobId, true);
+        } catch (err) {
+          const blocker = parsePublishBlocker(err);
+          if (blocker) {
+            setPublishBlocker(blocker);
+          }
+          throw err;
+        } finally {
+          setPublishingJobId(null);
+        }
+      },
+    });
   }
 
-  async function handleRollbackJob(job: JatoMonthlyUpdateJob) {
+  function handleRollbackJob(job: JatoMonthlyUpdateJob) {
     if (guardReviewRefreshMutation(job)) {
       return;
     }
-    const confirmed = window.confirm(
-      "将把当前 active 数据集恢复到这次 publish 之前的备份，并额外保留一份回滚前快照。继续吗？"
-    );
-    if (!confirmed) {
-      return;
-    }
-    setRollingBackJobId(job.jobId);
-    setError("");
-    setNotice("");
-    try {
-      const response = await api.rollbackJatoMonthlyUpdateJob(job.jobId);
-      setSelectedJob(response.item);
-      setSelectedJobId(response.item.jobId);
-      const operation = response.item.pendingOperation;
-      setNotice(operation?.status === "queued" || operation?.status === "running"
-        ? `任务 ${job.jobId} 已进入隔离 Rollback 队列；active 尚未改变，页面会自动刷新结果。`
-        : `已回滚任务 ${job.jobId} 的 publish。恢复来源：${response.item.publication?.backupDir ?? "-"}；回滚前快照：${response.item.publication?.rollbackBackupDir ?? "-"}`);
-      await refreshJobs(response.item.jobId, true);
-      await refreshMaintenanceStatus(true);
-      await loadJobDetail(response.item.jobId, true);
-    } catch (err) {
-      setError((err as Error).message);
-    } finally {
-      setRollingBackJobId(null);
-    }
+    openConfirmation({
+      action: "rollback_publish",
+      title: "确认回滚 active",
+      description: "回滚会把生产 active 恢复到本次 Publish 前的备份，并额外保存回滚前快照。",
+      tone: "danger",
+      cancelLabel: "返回",
+      confirmLabel: "确认回滚",
+      loadingLabel: "正在回滚...",
+      content: (
+        <>
+          <ConfirmationFacts
+            items={[
+              { label: "Job", value: job.jobId },
+              {
+                label: "原发布时间",
+                value: formatMonthlyUpdateTimestamp(job.publication?.publishedAt ?? null),
+              },
+              { label: "原发布人", value: job.publication?.publishedBy || "-" },
+              { label: "恢复来源", value: job.publication?.backupDir || "-" },
+            ]}
+          />
+          <div className="confirm-dialog-risk">
+            <strong>确认后会改变 active 数据</strong>
+            <span>系统会先保留当前 active 的回滚前快照，再恢复指定备份；不会使用未验证的临时产物。</span>
+          </div>
+        </>
+      ),
+      execute: async () => {
+        setRollingBackJobId(job.jobId);
+        setError("");
+        setNotice("");
+        try {
+          const response = await api.rollbackJatoMonthlyUpdateJob(job.jobId);
+          setSelectedJob(response.item);
+          setSelectedJobId(response.item.jobId);
+          const operation = response.item.pendingOperation;
+          setNotice(operation?.status === "queued" || operation?.status === "running"
+            ? `任务 ${job.jobId} 已进入隔离 Rollback 队列；active 尚未改变，页面会自动刷新结果。`
+            : `已回滚任务 ${job.jobId} 的 publish。恢复来源：${response.item.publication?.backupDir ?? "-"}；回滚前快照：${response.item.publication?.rollbackBackupDir ?? "-"}`);
+          await refreshJobs(response.item.jobId, true);
+          await refreshMaintenanceStatus(true);
+          await loadJobDetail(response.item.jobId, true);
+        } finally {
+          setRollingBackJobId(null);
+        }
+      },
+    });
   }
 
   const hasSmartMerge = Boolean(selectedJob?.summaries?.smartMerge);
   const isSmartMerging = smartMergingJobId === selectedJob?.jobId;
 
-  async function handleSmartMerge(job: JatoMonthlyUpdateJob) {
+  function handleSmartMerge(job: JatoMonthlyUpdateJob) {
     if (guardReviewRefreshMutation(job)) {
       return;
     }
-    const confirmed = window.confirm(
-      "将对回归国家使用 active 最新数据、前进/持平国家使用 patch 数据，生成 Smart-Merged Candidate。这将在当前 staging 产物基础上重建分区、清单和指纹。继续吗？"
-    );
-    if (!confirmed) {
-      return;
-    }
-    setSmartMergingJobId(job.jobId);
-    setError("");
-    setNotice("");
-    setPublishBlocker(null);
-    try {
-      const response = await api.smartMergeJatoMonthlyUpdateCandidate(job.jobId);
-      setSelectedJob(response.item);
-      setSelectedJobId(response.item.jobId);
-      setReviewBundle(null);
-      setReviewIssue(null);
-      setHistoricalReclassificationDecisions({});
-      setNotice(`已触发任务 ${job.jobId} 的 Smart Merge，后台合并中，请稍候刷新查看进度。`);
-      await refreshJobs(response.item.jobId, true);
-      await loadJobDetail(response.item.jobId, true);
-    } catch (err) {
-      setError((err as Error).message);
-    } finally {
-      setSmartMergingJobId(null);
-    }
+    const regressions = publishBlocker?.blockerType === "country_regression"
+      ? publishBlocker.regressions ?? []
+      : [];
+    openConfirmation({
+      action: "smart_merge",
+      title: "确认生成 Smart-Merged Candidate",
+      description: "回归国家将继续使用 active 最新数据，前进或持平国家使用本次 patch，随后重建完整 staging。",
+      tone: "warning",
+      cancelLabel: "返回检查",
+      confirmLabel: "确认 Smart Merge",
+      loadingLabel: "正在合并...",
+      content: (
+        <>
+          <ConfirmationFacts
+            items={[
+              { label: "Job", value: job.jobId },
+              {
+                label: "回归国家",
+                value: regressions.length > 0
+                  ? regressions.map((item) => item.country).join("、")
+                  : formatMonthlyUpdateNumber(
+                    job.summaries?.rawCompare?.regressedCountryCount ?? 0
+                  ),
+              },
+              {
+                label: "重建产物",
+                value: "分区 / manifest / fingerprint",
+              },
+            ]}
+          />
+          {regressions.length > 0 ? (
+            <div className="confirm-dialog-choice-list">
+              <strong>回归国家月份</strong>
+              {regressions.map((regression) => (
+                <div key={regression.country} className="confirm-dialog-choice">
+                  <span className="confirm-dialog-choice-country">
+                    {regression.country}
+                  </span>
+                  <span className="confirm-dialog-choice-copy">
+                    <span>
+                      Candidate {regression.candidateLatestMonth || "-"}；保留 active {regression.activeLatestMonth || "-"}
+                    </span>
+                  </span>
+                </div>
+              ))}
+            </div>
+          ) : null}
+          <div className="confirm-dialog-note">
+            <strong>active 不会在此步骤改变</strong>
+            <span>当前 Review 与批准会失效；Smart Merge 完成后必须重新 Review、批准并手动 Publish。</span>
+          </div>
+        </>
+      ),
+      execute: async () => {
+        setSmartMergingJobId(job.jobId);
+        setError("");
+        setNotice("");
+        setPublishBlocker(null);
+        try {
+          const response = await api.smartMergeJatoMonthlyUpdateCandidate(job.jobId);
+          setSelectedJob(response.item);
+          setSelectedJobId(response.item.jobId);
+          setReviewBundle(null);
+          setReviewIssue(null);
+          setHistoricalReclassificationDecisions({});
+          setNotice(`已触发任务 ${job.jobId} 的 Smart Merge，后台合并中，请稍候刷新查看进度。`);
+          await refreshJobs(response.item.jobId, true);
+          await loadJobDetail(response.item.jobId, true);
+        } finally {
+          setSmartMergingJobId(null);
+        }
+      },
+    });
   }
 
   const successCount = jobs.filter((job) => job.status === "success").length;
@@ -3400,6 +3786,25 @@ Smart Merge:  [SE:keep active 2026-03] [DE:patch 2026-03] [NL:patch 2026-02] [FR
           )}
         </div>
       </div>
+      {confirmationRequest ? (
+        <ConfirmDialog
+          key={confirmationRequest.action}
+          title={confirmationRequest.title}
+          description={confirmationRequest.description}
+          cancelLabel={confirmationRequest.cancelLabel}
+          confirmLabel={confirmationRequest.confirmLabel}
+          loadingLabel={confirmationRequest.loadingLabel}
+          submitting={confirmationSubmitting}
+          error={confirmationError}
+          tone={confirmationRequest.tone}
+          onCancel={closeConfirmation}
+          onConfirm={() => {
+            void submitConfirmation();
+          }}
+        >
+          {confirmationRequest.content}
+        </ConfirmDialog>
+      ) : null}
     </section>
   );
 }
