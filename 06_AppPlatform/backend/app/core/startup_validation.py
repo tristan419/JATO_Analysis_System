@@ -35,7 +35,11 @@ def _validation_mode(environ: Mapping[str, str]) -> str:
     if raw_mode in {"off", "warn", "strict"}:
         return raw_mode
     app_env = environ.get("APP_ENV", "").strip().lower()
-    return "strict" if app_env in {"prod", "production"} else "warn"
+    if app_env in {"prod", "production"}:
+        return "strict"
+    database_url = environ.get("APP_DATABASE_URL", "").strip()
+    database_enabled = _parse_bool(environ.get("APP_DATABASE_ENABLED"), bool(database_url))
+    return "strict" if database_enabled else "warn"
 
 
 def validate_startup_environment(
@@ -64,6 +68,14 @@ def validate_startup_environment(
             code="env.database_disabled_with_url",
             severity="warning",
             message="APP_DATABASE_URL is set but APP_DATABASE_ENABLED=false; DB writes are disabled.",
+        ))
+
+    auth_enabled = _parse_bool(env.get("APP_AUTH_ENABLED"), True)
+    if mode == "strict" and not auth_enabled:
+        issues.append(StartupValidationIssue(
+            code="env.auth_disabled_in_production",
+            severity="error",
+            message="Production startup requires APP_AUTH_ENABLED=true.",
         ))
 
     country_copilot_enabled = _parse_bool(env.get("APP_COUNTRY_COPILOT_ENABLED"), True)

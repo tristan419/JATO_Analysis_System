@@ -67,7 +67,7 @@ def test_alembic_revision_chain_has_single_head() -> None:
             _revision_values(_literal_assignment(module, "down_revision"))
         )
 
-    assert sorted(revisions - parent_revisions) == ["20260715_0046"]
+    assert sorted(revisions - parent_revisions) == ["20260723_0048"]
 
 
 def test_governance_revision_generates_isolated_postgresql_sql() -> None:

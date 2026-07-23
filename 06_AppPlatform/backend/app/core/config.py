@@ -201,6 +201,29 @@ API_PREFIX = "/v1"
 APP_NAME = "JATO Fullstack API"
 APP_VERSION = "0.1.0"
 
+# Config owns its optional compare-summary provider contract. DPV4/DeepSeek is
+# the default API provider, but Config does not import AstrBot runtime settings.
+ENGINEERING_CONFIG_SUMMARY_PROVIDER_ID = os.getenv(
+    "APP_ENGINEERING_CONFIG_SUMMARY_PROVIDER_ID",
+    "deepseek",
+).strip() or "deepseek"
+ENGINEERING_CONFIG_SUMMARY_PROVIDER_KEY_ENV = os.getenv(
+    "APP_ENGINEERING_CONFIG_SUMMARY_PROVIDER_KEY_ENV",
+    "DEEPSEEK_API_KEY",
+).strip() or "DEEPSEEK_API_KEY"
+ENGINEERING_CONFIG_SUMMARY_PROVIDER_MODEL = os.getenv(
+    "APP_ENGINEERING_CONFIG_SUMMARY_PROVIDER_MODEL",
+    os.getenv("APP_DEEPSEEK_CHAT_MODEL", "deepseek-chat"),
+).strip() or "deepseek-chat"
+ENGINEERING_CONFIG_SUMMARY_PROVIDER_API_BASE = os.getenv(
+    "APP_ENGINEERING_CONFIG_SUMMARY_PROVIDER_API_BASE",
+    "https://api.deepseek.com",
+).strip().rstrip("/") or "https://api.deepseek.com"
+ENGINEERING_CONFIG_SUMMARY_RUNTIME_URL = os.getenv(
+    "APP_ENGINEERING_CONFIG_SUMMARY_RUNTIME_URL",
+    "",
+).strip()
+
 MAX_RAW_ROWS = int(os.getenv("APP_MAX_RAW_ROWS", "5000"))
 MAX_GROUP_METRICS = int(os.getenv("APP_MAX_GROUP_METRICS", "6"))
 DEFAULT_GROUP_BY = os.getenv("APP_DEFAULT_GROUP_BY", "国家")
@@ -402,6 +425,22 @@ if _raw_token_role_map:
             TOKEN_ROLE_MAP[tok.strip()] = role.strip().lower()
 if not TOKEN_ROLE_MAP and AUTH_TOKEN:
     TOKEN_ROLE_MAP[AUTH_TOKEN] = "editor"
+
+# Optional server-owned actor names for static tokens:
+# "token1:config-importer,token2:release-automation".
+# Unknown entries keep the security layer's deterministic static-{role}
+# fallback, so callers cannot forge audit ownership through X-User-Name.
+_raw_token_actor_map = os.getenv("APP_TOKEN_ACTOR_MAP", "").strip()
+TOKEN_ACTOR_MAP: dict[str, str] = {}
+if _raw_token_actor_map:
+    for pair in _raw_token_actor_map.split(","):
+        pair = pair.strip()
+        if ":" in pair:
+            tok, actor = pair.split(":", 1)
+            token = tok.strip()
+            actor_name = actor.strip()
+            if token and actor_name:
+                TOKEN_ACTOR_MAP[token] = actor_name
 
 # ── Feishu OAuth ──
 FEISHU_APP_ID = os.getenv("APP_FEISHU_APP_ID", "").strip()

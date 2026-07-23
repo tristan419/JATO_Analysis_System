@@ -5,27 +5,31 @@ from app.core import security
 from app.core.security import UserContext
 
 
-def test_anonymous_current_user_is_viewer(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_protected_current_user_rejects_anonymous(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     monkeypatch.setattr(security, "AUTH_ENABLED", True)
 
-    user = security.get_current_user(x_auth_token=None, x_user_name="")
+    with pytest.raises(HTTPException) as exc_info:
+        security.get_current_user(x_auth_token=None, x_user_name="")
 
-    assert user == UserContext(role="viewer", name="anonymous")
+    assert exc_info.value.status_code == 401
 
 
-def test_invalid_token_downgrades_to_anonymous_viewer(
+def test_protected_current_user_rejects_invalid_token(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr(security, "AUTH_ENABLED", True)
     monkeypatch.setattr(security.session_store, "lookup", lambda _token: None)
     monkeypatch.setattr(security, "TOKEN_ROLE_MAP", {})
 
-    user = security.get_current_user(
-        x_auth_token="expired-or-invalid",
-        x_user_name="stale-user",
-    )
+    with pytest.raises(HTTPException) as exc_info:
+        security.get_current_user(
+            x_auth_token="expired-or-invalid",
+            x_user_name="stale-user",
+        )
 
-    assert user == UserContext(role="viewer", name="stale-user")
+    assert exc_info.value.status_code == 401
 
 
 def test_static_token_role_map_still_applies(
@@ -34,13 +38,34 @@ def test_static_token_role_map_still_applies(
     monkeypatch.setattr(security, "AUTH_ENABLED", True)
     monkeypatch.setattr(security.session_store, "lookup", lambda _token: None)
     monkeypatch.setattr(security, "TOKEN_ROLE_MAP", {"editor-token": "editor"})
+    monkeypatch.setattr(security, "TOKEN_ACTOR_MAP", {})
 
     user = security.get_current_user(
         x_auth_token="editor-token",
         x_user_name="ops",
     )
 
-    assert user == UserContext(role="editor", name="ops")
+    assert user == UserContext(role="editor", name="static-editor")
+
+
+def test_static_token_uses_server_owned_actor_mapping(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(security, "AUTH_ENABLED", True)
+    monkeypatch.setattr(security.session_store, "lookup", lambda _token: None)
+    monkeypatch.setattr(security, "TOKEN_ROLE_MAP", {"editor-token": "editor"})
+    monkeypatch.setattr(
+        security,
+        "TOKEN_ACTOR_MAP",
+        {"editor-token": "config-importer"},
+    )
+
+    user = security.get_current_user(
+        x_auth_token="editor-token",
+        x_user_name="forged-user",
+    )
+
+    assert user == UserContext(role="editor", name="config-importer")
 
 
 def test_editor_endpoint_rejects_anonymous_viewer() -> None:
