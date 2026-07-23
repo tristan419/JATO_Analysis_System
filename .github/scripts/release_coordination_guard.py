@@ -253,6 +253,29 @@ def _mapping(value: Any, context: str) -> Mapping[str, Any]:
 
 
 def _strict_json_mapping(text: str, context: str) -> Mapping[str, Any]:
+    depth = 0
+    in_string = False
+    escaped = False
+    for character in text:
+        if in_string:
+            if escaped:
+                escaped = False
+            elif character == "\\":
+                escaped = True
+            elif character == '"':
+                in_string = False
+            continue
+        if character == '"':
+            in_string = True
+        elif character in "[{":
+            depth += 1
+            if depth > 100:
+                raise GuardError(
+                    f"{context} is not valid JSON: nesting exceeds the safe limit"
+                )
+        elif character in "]}":
+            depth -= 1
+
     def reject_duplicates(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
         result: dict[str, Any] = {}
         for key, value in pairs:
