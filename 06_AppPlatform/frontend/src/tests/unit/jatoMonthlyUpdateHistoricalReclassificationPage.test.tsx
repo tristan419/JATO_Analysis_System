@@ -211,7 +211,6 @@ describe("JATO historical reclassification review interaction", () => {
         phase: "historical_reclassification_resolution",
       }),
     });
-    vi.spyOn(window, "confirm").mockReturnValue(true);
   });
 
   it("allows a per-country mixed override and confirms only the overwrite impact", async () => {
@@ -256,25 +255,33 @@ describe("JATO historical reclassification review interaction", () => {
     fireEvent.click(useLatestRadios[1]);
     fireEvent.click(screen.getByRole("button", { name: "应用选择并生成完整 Candidate" }));
 
-    expect(api.resolveJatoMonthlyUpdateHistoricalReclassification).toHaveBeenCalledWith(
-      "jato-review-1",
-      [
-        { country: "捷克", decision: "keep_active" },
-        { country: "丹麦", decision: "use_latest" },
-      ],
-    );
-    expect(window.confirm).toHaveBeenCalledWith(
-      expect.stringContaining("丹麦：覆盖至 2026-03 的 39 个历史月份"),
-    );
-    expect(window.confirm).toHaveBeenCalledWith(
-      expect.stringContaining("历史 Dashboard、同比与份额会变化"),
-    );
-    expect(window.confirm).toHaveBeenCalledWith(
-      expect.stringContaining("整国替换，不会把上传数据与 active 累加"),
-    );
-    expect(window.confirm).toHaveBeenCalledWith(
-      expect.stringContaining("未上传国家不变"),
-    );
+    const dialog = await screen.findByRole("dialog", {
+      name: "确认生成完整 Candidate",
+    });
+    expect(api.resolveJatoMonthlyUpdateHistoricalReclassification).not.toHaveBeenCalled();
+    expect(dialog.textContent).toContain("保留 active 历史1 个国家");
+    expect(dialog.textContent).toContain("使用上传覆盖历史1 个国家");
+    expect(dialog.textContent).toContain("捷克");
+    expect(dialog.textContent).toContain("保留当前 active 历史");
+    expect(dialog.textContent).toContain("丹麦");
+    expect(dialog.textContent).toContain("覆盖至 2026-03 的 39 个历史月份");
+    expect(dialog.textContent).toContain("历史 Dashboard、同比与份额会变化");
+    expect(within(dialog).getByText("整国替换历史，不与 active 累加")).toBeTruthy();
+    expect(dialog.textContent).toContain("未上传国家");
+
+    fireEvent.click(within(dialog).getByRole("button", {
+      name: "确认并生成 Candidate",
+    }));
+
+    await waitFor(() => {
+      expect(api.resolveJatoMonthlyUpdateHistoricalReclassification).toHaveBeenCalledWith(
+        "jato-review-1",
+        [
+          { country: "捷克", decision: "keep_active" },
+          { country: "丹麦", decision: "use_latest" },
+        ],
+      );
+    });
   });
 
   afterEach(() => {
@@ -283,7 +290,7 @@ describe("JATO historical reclassification review interaction", () => {
     vi.restoreAllMocks();
   });
 
-  it("defaults every country to keep_active and submits without a confirmation", async () => {
+  it("defaults every country to keep_active and confirms the safe summary before submitting", async () => {
     await act(async () => {
       render(<JatoMonthlyUpdatePage />);
     });
@@ -321,6 +328,20 @@ describe("JATO historical reclassification review interaction", () => {
     expect((resolveButton as HTMLButtonElement).disabled).toBe(false);
     fireEvent.click(resolveButton);
 
+    const dialog = await screen.findByRole("dialog", {
+      name: "确认生成完整 Candidate",
+    });
+    expect(api.resolveJatoMonthlyUpdateHistoricalReclassification).not.toHaveBeenCalled();
+    expect(dialog.textContent).toContain("保留 active 历史2 个国家");
+    expect(dialog.textContent).toContain("使用上传覆盖历史0 个国家");
+    expect(within(dialog).getByText("本批次全部保留 active 历史")).toBeTruthy();
+    expect(dialog.textContent).toContain("现有历史不会被上传文件覆盖");
+    expect(within(dialog).queryByText("整国替换历史，不与 active 累加")).toBeNull();
+
+    fireEvent.click(within(dialog).getByRole("button", {
+      name: "确认并生成 Candidate",
+    }));
+
     await waitFor(() => {
       expect(api.resolveJatoMonthlyUpdateHistoricalReclassification).toHaveBeenCalledWith(
         "jato-review-1",
@@ -330,7 +351,6 @@ describe("JATO historical reclassification review interaction", () => {
         ],
       );
     });
-    expect(window.confirm).not.toHaveBeenCalled();
     expect(api.approveJatoMonthlyUpdateReview).not.toHaveBeenCalled();
   });
 
@@ -393,6 +413,16 @@ describe("JATO historical reclassification review interaction", () => {
     }) as HTMLButtonElement;
     expect(resolveButton.disabled).toBe(false);
     fireEvent.click(resolveButton);
+
+    const dialog = await screen.findByRole("dialog", {
+      name: "确认生成完整 Candidate",
+    });
+    expect(dialog.textContent).toContain("捷克");
+    expect(dialog.textContent).toContain("使用本次上传覆盖历史");
+    expect(within(dialog).getByText("整国替换历史，不与 active 累加")).toBeTruthy();
+    fireEvent.click(within(dialog).getByRole("button", {
+      name: "确认并生成 Candidate",
+    }));
 
     await waitFor(() => {
       expect(api.resolveJatoMonthlyUpdateHistoricalReclassification).toHaveBeenCalledWith(
@@ -480,19 +510,28 @@ describe("JATO historical reclassification review interaction", () => {
       name: "应用选择并生成完整 Candidate",
     }));
 
-    expect(api.resolveJatoMonthlyUpdateHistoricalReclassification).toHaveBeenCalledWith(
-      "jato-review-1",
-      [
-        { country: "捷克", decision: "use_latest" },
-        { country: "丹麦", decision: "use_latest" },
-      ],
-    );
-    expect(window.confirm).toHaveBeenCalledWith(
-      expect.stringContaining("捷克：覆盖至 2026-03 的 39 个历史月份"),
-    );
-    expect(window.confirm).toHaveBeenCalledWith(
-      expect.stringContaining("丹麦：覆盖至 2026-03 的 39 个历史月份"),
-    );
+    const dialog = await screen.findByRole("dialog", {
+      name: "确认生成完整 Candidate",
+    });
+    expect(api.resolveJatoMonthlyUpdateHistoricalReclassification).not.toHaveBeenCalled();
+    expect(dialog.textContent).toContain("保留 active 历史0 个国家");
+    expect(dialog.textContent).toContain("使用上传覆盖历史2 个国家");
+    expect(dialog.textContent).toContain("捷克");
+    expect(dialog.textContent).toContain("丹麦");
+    expect(dialog.textContent?.match(/覆盖至 2026-03 的 39 个历史月份/g)).toHaveLength(2);
+    fireEvent.click(within(dialog).getByRole("button", {
+      name: "确认并生成 Candidate",
+    }));
+
+    await waitFor(() => {
+      expect(api.resolveJatoMonthlyUpdateHistoricalReclassification).toHaveBeenCalledWith(
+        "jato-review-1",
+        [
+          { country: "捷克", decision: "use_latest" },
+          { country: "丹麦", decision: "use_latest" },
+        ],
+      );
+    });
   });
 
   it("locks bulk and individual choices while the candidate rebuild request is pending", async () => {
@@ -510,6 +549,14 @@ describe("JATO historical reclassification review interaction", () => {
     fireEvent.click(await screen.findByRole("button", {
       name: "按默认保留 active 并生成完整 Candidate",
     }));
+    const dialog = await screen.findByRole("dialog", {
+      name: "确认生成完整 Candidate",
+    });
+    const confirmButton = within(dialog).getByRole("button", {
+      name: "确认并生成 Candidate",
+    });
+    fireEvent.click(confirmButton);
+    fireEvent.click(confirmButton);
 
     await waitFor(() => {
       expect(api.resolveJatoMonthlyUpdateHistoricalReclassification).toHaveBeenCalledTimes(1);
@@ -523,6 +570,9 @@ describe("JATO historical reclassification review interaction", () => {
     expect(screen.getAllByRole("radio").every(
       (radio) => radio.matches(":disabled")
     )).toBe(true);
+    expect((within(dialog).getByRole("button", {
+      name: "正在生成 Candidate...",
+    }) as HTMLButtonElement).disabled).toBe(true);
 
     await act(async () => {
       completeResolution({
@@ -615,6 +665,15 @@ describe("JATO historical reclassification review interaction", () => {
     vi.mocked(api.getJatoMonthlyUpdateJob).mockResolvedValue({ item: approvedJob });
     fireEvent.click(screen.getByRole("button", { name: "Approve Review" }));
 
+    const approvalDialog = await screen.findByRole("dialog", {
+      name: "确认批准 Review",
+    });
+    expect(api.approveJatoMonthlyUpdateReview).not.toHaveBeenCalled();
+    expect(approvalDialog.textContent).toContain("批准不等于发布");
+    fireEvent.click(within(approvalDialog).getByRole("button", {
+      name: "确认批准",
+    }));
+
     await waitFor(() => {
       expect(api.approveJatoMonthlyUpdateReview).toHaveBeenCalledWith("jato-review-1");
     });
@@ -666,8 +725,7 @@ describe("JATO historical reclassification review interaction", () => {
     })).toBeNull();
   });
 
-  it("does not rebuild when the explicit overwrite confirmation is cancelled", async () => {
-    vi.mocked(window.confirm).mockReturnValue(false);
+  it("returns to the country choices without rebuilding when confirmation is cancelled", async () => {
     await act(async () => {
       render(<JatoMonthlyUpdatePage />);
     });
@@ -681,7 +739,99 @@ describe("JATO historical reclassification review interaction", () => {
       name: "应用选择并生成完整 Candidate",
     }));
 
+    const dialog = await screen.findByRole("dialog", {
+      name: "确认生成完整 Candidate",
+    });
+    fireEvent.click(within(dialog).getByRole("button", { name: "返回修改" }));
+
+    await waitFor(() => {
+      expect(screen.queryByRole("dialog", {
+        name: "确认生成完整 Candidate",
+      })).toBeNull();
+    });
     expect(api.resolveJatoMonthlyUpdateHistoricalReclassification).not.toHaveBeenCalled();
+    expect(screen.getAllByRole("radio", {
+      name: /使用本次上传覆盖历史/,
+    }).every((radio) => (radio as HTMLInputElement).checked)).toBe(true);
+  });
+
+  it("keeps structured API failure feedback inside the confirmation dialog", async () => {
+    vi.mocked(api.resolveJatoMonthlyUpdateHistoricalReclassification).mockRejectedValue(
+      new Error(
+        "409 {\"blockerType\":\"historical_configuration_changed\",\"message\":\"历史分类变化\",\"ruleId\":\"SC011\",\"target\":\"丹麦\",\"suggestedAction\":\"联系洗数人员\",\"sourceFeedback\":\"丹麦字段需修正\"}"
+      ),
+    );
+    await act(async () => {
+      render(<JatoMonthlyUpdatePage />);
+    });
+    fireEvent.click(await screen.findByRole("button", { name: "Review Candidate" }));
+    fireEvent.click(await screen.findByRole("button", {
+      name: "按默认保留 active 并生成完整 Candidate",
+    }));
+    const dialog = await screen.findByRole("dialog", {
+      name: "确认生成完整 Candidate",
+    });
+    const confirmButton = within(dialog).getByRole("button", {
+      name: "确认并生成 Candidate",
+    }) as HTMLButtonElement;
+    fireEvent.click(confirmButton);
+
+    const alert = await within(dialog).findByRole("alert");
+    expect(within(alert).getByText("数据门禁阻止了本次操作")).toBeTruthy();
+    expect(within(alert).getByText("历史分类变化")).toBeTruthy();
+    expect(within(alert).getByText("HTTP 状态")).toBeTruthy();
+    expect(within(alert).getByText("409")).toBeTruthy();
+    expect(within(alert).getByText("门禁类型")).toBeTruthy();
+    expect(within(alert).getByText("historical_configuration_changed")).toBeTruthy();
+    expect(within(alert).getByText("规则")).toBeTruthy();
+    expect(within(alert).getByText("SC011")).toBeTruthy();
+    expect(within(alert).getByText("对象")).toBeTruthy();
+    expect(within(alert).getByText("丹麦")).toBeTruthy();
+    expect(within(alert).getByText("建议处理")).toBeTruthy();
+    expect(within(alert).getByText("联系洗数人员")).toBeTruthy();
+    expect(within(alert).getByText("给洗数人员")).toBeTruthy();
+    expect(within(alert).getByText("丹麦字段需修正")).toBeTruthy();
+    expect(api.resolveJatoMonthlyUpdateHistoricalReclassification).toHaveBeenCalledTimes(1);
+    expect(screen.getByRole("dialog", {
+      name: "确认生成完整 Candidate",
+    })).toBeTruthy();
+    await waitFor(() => {
+      expect(confirmButton.disabled).toBe(false);
+    });
+  });
+
+  it("replaces a gateway HTML failure page with safe retry guidance", async () => {
+    vi.mocked(api.resolveJatoMonthlyUpdateHistoricalReclassification).mockRejectedValue(
+      new Error(
+        "502 <html><head><title>502 Bad Gateway</title></head><body><h1>502 Bad Gateway</h1></body></html>"
+      ),
+    );
+    await act(async () => {
+      render(<JatoMonthlyUpdatePage />);
+    });
+    fireEvent.click(await screen.findByRole("button", { name: "Review Candidate" }));
+    fireEvent.click(await screen.findByRole("button", {
+      name: "按默认保留 active 并生成完整 Candidate",
+    }));
+    const dialog = await screen.findByRole("dialog", {
+      name: "确认生成完整 Candidate",
+    });
+    fireEvent.click(within(dialog).getByRole("button", {
+      name: "确认并生成 Candidate",
+    }));
+
+    const alert = await within(dialog).findByRole("alert");
+    expect(alert.textContent).toContain("服务暂时未完成操作");
+    expect(alert.textContent).toContain("HTTP 状态");
+    expect(alert.textContent).toContain("502");
+    expect(alert.textContent).toContain("网关未返回结构化失败原因");
+    expect(alert.textContent).toContain("不要立即重复提交");
+    expect(alert.textContent).toContain("已锁定再次提交");
+    expect(alert.textContent).not.toContain("<html>");
+    expect((within(dialog).getByRole("button", {
+      name: "确认并生成 Candidate",
+    }) as HTMLButtonElement).disabled).toBe(true);
+    expect(api.resolveJatoMonthlyUpdateHistoricalReclassification).toHaveBeenCalledTimes(1);
   });
 
   it("fails closed when no common keep_active default strategy is available", async () => {

@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 
-import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { api } from "../../api/client";
@@ -93,7 +93,6 @@ describe("JATO Smart Merge safe resume interaction", () => {
     vi.mocked(api.getJatoMonthlyUpdateMaintenanceStatus).mockResolvedValue({
       item: makeMaintenanceStatus(),
     });
-    vi.spyOn(window, "confirm").mockReturnValue(true);
   });
 
   afterEach(() => {
@@ -146,7 +145,20 @@ describe("JATO Smart Merge safe resume interaction", () => {
     });
     expect(screen.queryByRole("button", { name: "Retry Failed Job" })).toBeNull();
     fireEvent.click(resumeButton);
-    fireEvent.click(resumeButton);
+
+    const dialog = await screen.findByRole("dialog", {
+      name: "确认续跑 Smart Merge",
+    });
+    expect(api.resumeJatoMonthlyUpdateSmartMerge).not.toHaveBeenCalled();
+    expect(dialog.textContent).toContain("本次只续跑 Smart Merge");
+    expect(dialog.textContent).toContain("不会重新上传");
+    expect(dialog.textContent).toContain("不重跑 ETL");
+    expect(dialog.textContent).toContain("不会修改 active");
+    const confirmButton = screen.getByRole("button", {
+      name: "确认安全续跑",
+    });
+    fireEvent.click(confirmButton);
+    fireEvent.click(confirmButton);
 
     await waitFor(() => {
       expect(api.resumeJatoMonthlyUpdateSmartMerge).toHaveBeenCalledTimes(1);
@@ -164,9 +176,45 @@ describe("JATO Smart Merge safe resume interaction", () => {
     );
     expect(api.retryFailedJatoMonthlyUpdateJob).not.toHaveBeenCalled();
     expect(api.getJatoMonthlyUpdateJob).toHaveBeenCalledTimes(2);
-    expect(window.confirm).toHaveBeenCalledWith(expect.stringContaining("不重跑 ETL"));
-    expect(window.confirm).toHaveBeenCalledWith(expect.stringContaining("不会修改 active"));
     expect(screen.getByText(/Smart Merge 安全续跑 · running/)).toBeTruthy();
+  });
+
+  it("does not retry when both the resume response and the status readback fail", async () => {
+    vi.mocked(api.getJatoMonthlyUpdateJob)
+      .mockResolvedValueOnce({ item: failedJob })
+      .mockRejectedValueOnce(new Error("status readback unavailable"));
+    vi.mocked(api.resumeJatoMonthlyUpdateSmartMerge)
+      .mockRejectedValue(new Error("502 Bad Gateway"));
+
+    await act(async () => {
+      render(<JatoMonthlyUpdatePage />);
+    });
+    fireEvent.click(await screen.findByRole("button", {
+      name: "仅续跑 Smart Merge",
+    }));
+    const dialog = await screen.findByRole("dialog", {
+      name: "确认续跑 Smart Merge",
+    });
+    const confirmButton = within(dialog).getByRole("button", {
+      name: "确认安全续跑",
+    });
+    fireEvent.click(confirmButton);
+    fireEvent.click(confirmButton);
+
+    const alert = await within(dialog).findByRole("alert");
+    expect(alert.textContent).toContain("Bad Gateway");
+    expect(alert.textContent).toContain("HTTP 状态");
+    expect(alert.textContent).toContain("502");
+    expect(alert.textContent).toContain("状态回读失败");
+    expect(alert.textContent).toContain("未自动重试写请求");
+    expect(alert.textContent).toContain("请刷新任务状态后确认");
+    expect(alert.textContent).toContain("已锁定再次提交");
+    expect((within(dialog).getByRole("button", {
+      name: "确认安全续跑",
+    }) as HTMLButtonElement).disabled).toBe(true);
+    expect(api.resumeJatoMonthlyUpdateSmartMerge).toHaveBeenCalledTimes(1);
+    expect(api.getJatoMonthlyUpdateJob).toHaveBeenCalledTimes(2);
+    expect(api.retryFailedJatoMonthlyUpdateJob).not.toHaveBeenCalled();
   });
 
   it("keeps the dedicated action visible but locked when recovery seals fail", async () => {
