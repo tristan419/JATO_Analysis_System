@@ -25,6 +25,9 @@ jobs:
       - name: Validate production workflow guards
         run: python .github/scripts/validate_production_workflow_guards.py
 
+      - name: Test release coordination fail-closed behavior
+        run: python -m unittest 03_Scripts/tests/test_release_coordination_guard.py -v
+
   frontend-release-contract:
     runs-on: ubuntu-latest
     timeout-minutes: 10

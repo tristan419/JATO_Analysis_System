@@ -1,0 +1,56 @@
+name: release-coordination
+
+on:
+  pull_request_target:
+    branches: ["main"]
+    types:
+      - opened
+      - reopened
+      - synchronize
+      - edited
+      - labeled
+      - unlabeled
+      - ready_for_review
+      - converted_to_draft
+      - closed
+  issues:
+    types: [opened, edited, closed, reopened, labeled, unlabeled]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: read
+  pull-requests: read
+  statuses: write
+
+concurrency:
+  group: release-coordination-status-sweeper
+  cancel-in-progress: false
+
+jobs:
+  evaluate:
+    name: release-coordination-evaluator
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+      - name: Checkout trusted main guard
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          ref: refs/heads/main
+          persist-credentials: false
+
+      - name: Revoke stale PR success before evaluation
+        if: ${{ github.event_name == 'pull_request_target' && github.event.action != 'closed' }}
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          TARGET_PULL_REQUEST: ${{ github.event.pull_request.number }}
+        run: >-
+          python3 .github/scripts/release_coordination_guard.py
+          mark-pending
+          --pull-request "$TARGET_PULL_REQUEST"
+
+      - name: Refresh release coordination status on open PR heads
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: python3 .github/scripts/release_coordination_guard.py sweep

@@ -15,7 +15,10 @@ on:
   workflow_dispatch:
 
 permissions:
+  actions: read
   contents: read
+  issues: read
+  pull-requests: read
 
 concurrency:
   group: production-release-main
@@ -26,8 +29,40 @@ env:
   WRANGLER_VERSION: "4.86.0"
 
 jobs:
+  release_coordination_guard:
+    if: ${{ github.ref == 'refs/heads/main' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout release coordination guard
+        uses: actions/checkout@v5
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+
+      - name: Validate unpublished release coordination
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: >-
+          python3 .github/scripts/release_coordination_guard.py
+          production
+          --main-sha "$GITHUB_SHA"
+          --plan-output "$RUNNER_TEMP/release-coordination-plan.json"
+
+      - name: Freeze release coordination plan
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-coordination-plan-${{ github.sha }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/release-coordination-plan.json
+          if-no-files-found: error
+          compression-level: 0
+          overwrite: false
+          retention-days: 7
+
   build_frontend:
     if: ${{ github.ref == 'refs/heads/main' }}
+    needs: release_coordination_guard
     runs-on: ubuntu-latest
     timeout-minutes: 30
     outputs:
@@ -167,6 +202,24 @@ jobs:
     steps:
       - name: Checkout release source
         uses: actions/checkout@v5
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+
+      - name: Download frozen release coordination plan
+        uses: actions/download-artifact@v5
+        with:
+          name: release-coordination-plan-${{ github.sha }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/release-coordination-plan
+
+      - name: Revalidate frozen coordination plan after approval
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: >-
+          python3 .github/scripts/release_coordination_guard.py
+          verify-plan
+          --main-sha "$GITHUB_SHA"
+          --plan "$RUNNER_TEMP/release-coordination-plan/release-coordination-plan.json"
 
       - name: Setup fixed Cloudflare Node
         uses: actions/setup-node@v4
@@ -795,6 +848,15 @@ jobs:
             --status completed \
             --retry-class inspect_then_resume \
             --message "Immutable SSH archive size and SHA-256 verified on Tencent"
+
+      - name: Reconfirm current main before first production mutation
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: >-
+          python3 .github/scripts/release_coordination_guard.py
+          verify-plan
+          --main-sha "$GITHUB_SHA"
+          --plan "$RUNNER_TEMP/release-coordination-plan/release-coordination-plan.json"
 
       - name: Deploy verified release on Tencent
         env:

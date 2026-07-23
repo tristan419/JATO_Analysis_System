@@ -26,6 +26,7 @@ PREWARM_CONDITION = " ".join(
     )
 )
 BUILD_JOB = "build_frontend"
+COORDINATION_JOB = "release_coordination_guard"
 DEPLOY_JOBS = ("deploy_tencent",)
 REQUIRED_BUILD_OUTPUTS = {
     "artifact_name",
@@ -115,6 +116,7 @@ def assert_main_only_production_workflow(workflow: Mapping[str, Any]) -> None:
 
     jobs = mapping(workflow.get("jobs"), "production workflow jobs")
     expected_jobs = {
+        COORDINATION_JOB,
         BUILD_JOB,
         "deploy_tencent",
         "audit_frontend_parity",
@@ -135,6 +137,10 @@ def assert_main_only_production_workflow(workflow: Mapping[str, Any]) -> None:
 
 def assert_single_build_and_strict_outputs(workflow: Mapping[str, Any]) -> None:
     build = job(workflow, BUILD_JOB)
+    if build.get("needs") != COORDINATION_JOB:
+        raise AssertionError(
+            "build_frontend must wait for the no-environment coordination preflight"
+        )
     outputs = mapping(build.get("outputs"), "build_frontend.outputs")
     if set(outputs) != REQUIRED_BUILD_OUTPUTS:
         raise AssertionError(
@@ -197,9 +203,24 @@ def assert_deploy_jobs_share_one_artifact(workflow: Mapping[str, Any]) -> None:
             for step in deploy_steps
             if step.get("uses") == "actions/download-artifact@v5"
         ]
-        if len(downloads) != 1:
-            raise AssertionError(f"{name} must download exactly one v5 artifact")
-        download_with = mapping(downloads[0].get("with"), f"{name} download with")
+        if len(downloads) != 2:
+            raise AssertionError(
+                f"{name} must download the coordination plan and one frontend artifact"
+            )
+        frontend_downloads = [
+            step
+            for step in downloads
+            if "artifact-ids"
+            in mapping(step.get("with"), f"{name} download with")
+        ]
+        if len(frontend_downloads) != 1:
+            raise AssertionError(
+                f"{name} must select exactly one frontend artifact by numeric id"
+            )
+        download_with = mapping(
+            frontend_downloads[0].get("with"),
+            f"{name} frontend download with",
+        )
         if (
             download_with.get("artifact-ids")
             != "${{ needs.build_frontend.outputs.github_artifact_id }}"
@@ -753,6 +774,20 @@ def assert_required_ci_contract() -> None:
     missing = [token for token in required_tokens if token not in commands]
     if missing:
         raise AssertionError(f"required edge contract CI is incomplete: {missing}")
+
+    production_guard = job(ci, "production-deployment-guard")
+    production_guard_commands = combined_run(
+        production_guard,
+        "production-deployment-guard",
+    )
+    for required in (
+        "validate_production_workflow_guards.py",
+        "test_release_coordination_guard.py",
+    ):
+        if required not in production_guard_commands:
+            raise AssertionError(
+                f"required production guard CI is missing {required}"
+            )
 
 
 def main() -> None:
