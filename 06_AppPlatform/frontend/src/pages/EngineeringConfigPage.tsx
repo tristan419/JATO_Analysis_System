@@ -10,8 +10,8 @@ type TabId = "trims" | "compare" | "matrix" | "upload" | "diff" | "detail";
 type UploadStage = "select" | "uploading" | "parsing" | "matching" | "preview" | "confirming" | "done";
 
 const TAB_LABELS: Record<TabId, string> = { trims: "车型列表", compare: "配置对比", matrix: "矩阵编辑", upload: "上传导入", diff: "变更历史", detail: "详情" };
-const AVAIL_LABELS: Record<AvailabilityState, string> = { STANDARD: "标配", OPTIONAL: "选装", NOT_AVAILABLE: "不配备", NOT_APPLICABLE: "不适用", VALUE: "参数", UNKNOWN: "未知" };
-const AVAIL_CLASSES: Record<AvailabilityState, string> = { STANDARD: "chip-positive", OPTIONAL: "chip-warning", NOT_AVAILABLE: "chip-muted", NOT_APPLICABLE: "chip-muted", VALUE: "chip-info", UNKNOWN: "chip-error" };
+const AVAIL_LABELS: Record<AvailabilityState, string> = { STANDARD: "标配", OPTIONAL: "选装", NOT_AVAILABLE: "不配备", NOT_APPLICABLE: "不适用", VALUE: "参数", UNKNOWN: "未知", CANCELLED_OR_REMOVED: "已停售/移除" };
+const AVAIL_CLASSES: Record<AvailabilityState, string> = { STANDARD: "chip-positive", OPTIONAL: "chip-warning", NOT_AVAILABLE: "chip-muted", NOT_APPLICABLE: "chip-muted", VALUE: "chip-info", UNKNOWN: "chip-error", CANCELLED_OR_REMOVED: "chip-muted" };
 
 function getRole() { return localStorage.getItem("jato_user_role") || "viewer"; }
 
