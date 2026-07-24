@@ -51,6 +51,13 @@ FORBIDDEN_BUILD_COMMANDS = (
     "yarn build",
     "pnpm build",
 )
+REQUIRED_CI_JOBS = (
+    "production-deployment-guard",
+    "frontend-release-contract",
+    "smoke",
+    "fullstack-backend",
+    "fullstack-frontend",
+)
 
 
 def load_workflow(path: Path) -> Mapping[str, Any]:
@@ -103,6 +110,72 @@ def step_by_name(
 
 def combined_run(job_payload: Mapping[str, Any], context: str) -> str:
     return "\n".join(str(step.get("run") or "") for step in steps(job_payload, context))
+
+
+def assert_continue_on_error_disabled(
+    payload: Mapping[str, Any],
+    context: str,
+) -> None:
+    value = payload.get("continue-on-error")
+    if value is None or value is False or value == "false":
+        return
+    raise AssertionError(
+        f"{context} must fail closed; continue-on-error cannot be {value!r}"
+    )
+
+
+def assert_required_ci_jobs_fail_closed(ci: Mapping[str, Any]) -> None:
+    for job_name in REQUIRED_CI_JOBS:
+        ci_job = job(ci, job_name)
+        display_name = ci_job.get("name")
+        if display_name not in (None, job_name):
+            raise AssertionError(
+                f"CI job {job_name} must retain its required context name"
+            )
+        if "if" in ci_job:
+            raise AssertionError(
+                f"CI job {job_name} must not be conditional"
+            )
+        assert_continue_on_error_disabled(ci_job, f"CI job {job_name}")
+        for index, ci_step in enumerate(steps(ci_job, f"CI job {job_name}")):
+            if "if" in ci_step:
+                raise AssertionError(
+                    f"CI job {job_name} step {index + 1} must not be conditional"
+                )
+            assert_continue_on_error_disabled(
+                ci_step,
+                f"CI job {job_name} step {index + 1}",
+            )
+
+
+def assert_pull_request_merge_result_checkout(ci: Mapping[str, Any]) -> None:
+    triggers = mapping(ci.get("on"), "CI workflow on")
+    if "pull_request" not in triggers:
+        raise AssertionError("CI must retain the pull_request merge-result trigger")
+
+    for job_name in REQUIRED_CI_JOBS:
+        checkouts = [
+            ci_step
+            for ci_step in steps(job(ci, job_name), f"CI job {job_name}")
+            if ci_step.get("uses") == "actions/checkout@v4"
+        ]
+        if len(checkouts) != 1:
+            raise AssertionError(
+                f"CI job {job_name} must use exactly one actions/checkout@v4 step"
+            )
+        checkout_with = checkouts[0].get("with")
+        if checkout_with is None:
+            continue
+        checkout_options = mapping(
+            checkout_with,
+            f"CI job {job_name} checkout with",
+        )
+        forbidden_options = {"ref", "repository"} & set(checkout_options)
+        if forbidden_options:
+            raise AssertionError(
+                f"CI job {job_name} must checkout the pull_request merge result; "
+                f"remove overrides {sorted(forbidden_options)}"
+            )
 
 
 def assert_main_only_production_workflow(workflow: Mapping[str, Any]) -> None:
@@ -740,11 +813,69 @@ def assert_prewarm_contract(production_name: str) -> None:
         raise AssertionError("prewarm must verify public provenance")
 
 
+def assert_backend_readiness_ci_contract(
+    ci: Mapping[str, Any],
+) -> None:
+    backend_job = job(ci, "fullstack-backend")
+    backend_steps = steps(backend_job, "fullstack-backend")
+    api_contract_step = step_by_name(backend_steps, "API contract tests")
+    if "if" in api_contract_step:
+        raise AssertionError(
+            "backend API and readiness test step must not be conditional"
+        )
+    if api_contract_step.get("working-directory") != "06_AppPlatform/backend":
+        raise AssertionError(
+            "backend readiness tests must run from the backend working directory"
+        )
+
+    command = str(api_contract_step.get("run") or "")
+    pytest_invocations = [
+        line
+        for line in command.splitlines()
+        if "python -m pytest" in line
+    ]
+    if len(pytest_invocations) != 1:
+        raise AssertionError(
+            "backend API and readiness tests must share one pytest invocation"
+        )
+    pytest_command = " ".join(command.split())
+    pytest_match = re.search(
+        (
+            r'timeout 180s python -m pytest .*?'
+            r'2>&1 \| tee "\$pytest_log" \|\| status=\$\?'
+        ),
+        pytest_command,
+    )
+    if pytest_match is None:
+        raise AssertionError(
+            "backend API and readiness tests must share the bounded pytest command"
+        )
+    bounded_pytest_command = pytest_match.group(0)
+    required_tokens = (
+        "tests/integration/test_api_contracts.py",
+        "tests/unit/test_readiness_service.py",
+        '|| status=$?',
+    )
+    missing = [
+        token
+        for token in required_tokens
+        if token not in bounded_pytest_command
+    ]
+    if 'exit "$status"' not in pytest_command:
+        missing.append('exit "$status"')
+    if missing:
+        raise AssertionError(
+            f"required backend readiness CI is incomplete: {missing}"
+        )
+
+
 def assert_required_ci_contract() -> None:
     ci = load_workflow(CI_WORKFLOW_PATH)
+    assert_required_ci_jobs_fail_closed(ci)
+    assert_pull_request_merge_result_checkout(ci)
+    assert_backend_readiness_ci_contract(ci)
+
     contract_job = job(ci, "frontend-release-contract")
-    if contract_job.get("continue-on-error") == "true":
-        raise AssertionError("frontend-release-contract must be a required CI job")
     contract_steps = steps(contract_job, "frontend-release-contract")
     setup_node = step_by_name(contract_steps, "Setup fixed edge contract Node")
     if setup_node.get("uses") != "actions/setup-node@v4":

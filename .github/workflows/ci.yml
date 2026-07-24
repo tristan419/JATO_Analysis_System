@@ -61,6 +61,7 @@ jobs:
       - name: Test frontend release fail-closed behavior
         run: >-
           python -m unittest
+          03_Scripts/tests/test_ci_workflow_guards.py
           03_Scripts/tests/test_frontend_release_artifact.py
           03_Scripts/tests/test_verify_intl_runtime_contract.py
           -v
@@ -86,7 +87,6 @@ jobs:
 
   smoke:
     runs-on: ubuntu-latest
-    continue-on-error: true
     timeout-minutes: 20
 
     steps:
@@ -161,7 +161,10 @@ jobs:
           set -o pipefail
           pytest_log="$(mktemp)"
           status=0
-          timeout 180s python -m pytest tests/integration/test_api_contracts.py -q 2>&1 | tee "$pytest_log" || status=$?
+          timeout 180s python -m pytest \
+            tests/integration/test_api_contracts.py \
+            tests/unit/test_readiness_service.py \
+            -q 2>&1 | tee "$pytest_log" || status=$?
           if [ "$status" -eq 124 ] && grep -Eq '^[0-9]+ passed(, [0-9]+ warnings?)? in ' "$pytest_log"; then
             echo "::warning::pytest reported success but did not exit cleanly; cleaning up residual Python child processes."
             pkill -P $$ python || true
@@ -172,7 +175,6 @@ jobs:
 
   fullstack-frontend:
     runs-on: ubuntu-latest
-    continue-on-error: true
     timeout-minutes: 30
 
     steps:

@@ -51,25 +51,18 @@ def _read_json(path: Path) -> dict[str, Any]:
     return data if isinstance(data, dict) else {}
 
 
-def _write_json(path: Path, payload: dict[str, Any]) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True) + "\n", encoding="utf-8")
-
-
-def _clean_sha(value: Any) -> str:
+def normalize_commit_sha(value: Any) -> str:
+    """Return a normalized commit identifier suitable for comparisons."""
     text = str(value or "").strip()
     if not text:
         return ""
     return "".join(ch for ch in text if ch.isalnum())[:40]
 
 
-def _short_sha(value: Any) -> str:
-    return _clean_sha(value)[:8]
-
-
-def _sha_matches(left: str, right: str) -> bool:
-    left_clean = _clean_sha(left)
-    right_clean = _clean_sha(right)
+def commit_shas_match(left: str, right: str) -> bool:
+    """Compare full or unambiguous abbreviated commit identifiers."""
+    left_clean = normalize_commit_sha(left)
+    right_clean = normalize_commit_sha(right)
     if not left_clean or not right_clean:
         return False
     if left_clean == right_clean:
@@ -77,6 +70,68 @@ def _sha_matches(left: str, right: str) -> bool:
     if min(len(left_clean), len(right_clean)) < 7:
         return False
     return left_clean.startswith(right_clean) or right_clean.startswith(left_clean)
+
+
+def normalize_release_metadata(
+    payload: dict[str, Any],
+) -> dict[str, Any]:
+    """Normalize an already-read immutable release metadata payload."""
+    if not isinstance(payload, dict):
+        return {}
+    release = dict(payload)
+
+    expected_sha = normalize_commit_sha(
+        release.get("expectedCommitSha")
+        or release.get("commitSha")
+        or release.get("commit")
+    )
+    actual_sha = normalize_commit_sha(
+        release.get("actualCommitSha")
+        or release.get("actualCommit")
+        or release.get("commitSha")
+        or release.get("commit")
+        or release.get("gitSha")
+    )
+    release["expectedCommitSha"] = expected_sha
+    release["actualCommitSha"] = actual_sha
+    release["commitSha"] = actual_sha
+    release["shortSha"] = release.get("shortSha") or _short_sha(actual_sha)
+    release["actualShortSha"] = (
+        release.get("actualShortSha") or _short_sha(actual_sha)
+    )
+    release["expectedShortSha"] = (
+        release.get("expectedShortSha") or _short_sha(expected_sha)
+    )
+    release["source"] = release.get("source") or "deploy_release_file"
+    release["environment"] = release.get("environment") or "production"
+    release["confidence"] = "high"
+    return release
+
+
+def read_release_metadata_file(path: Path | None = None) -> dict[str, Any]:
+    """Read and normalize immutable release metadata without fallbacks."""
+    release_path = path or _deploy_release_path()
+    release = _read_json(release_path)
+    if not release or release.get("parseError"):
+        return release
+    return normalize_release_metadata(release)
+
+
+def _write_json(path: Path, payload: dict[str, Any]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+
+
+def _clean_sha(value: Any) -> str:
+    return normalize_commit_sha(value)
+
+
+def _short_sha(value: Any) -> str:
+    return _clean_sha(value)[:8]
+
+
+def _sha_matches(left: str, right: str) -> bool:
+    return commit_shas_match(left, right)
 
 
 def _current_git_sha() -> str:
@@ -150,26 +205,9 @@ def record_expected_deploy(payload: dict[str, Any], *, source: str | None = None
 
 def get_release_metadata() -> dict[str, Any]:
     """Return the deployed release metadata, preferring archive metadata."""
-    release = _read_json(_deploy_release_path())
+    release = read_release_metadata_file()
     if release and not release.get("parseError"):
-        expected_sha = _clean_sha(release.get("expectedCommitSha") or release.get("commitSha") or release.get("commit"))
-        actual_sha = _clean_sha(
-            release.get("actualCommitSha")
-            or release.get("actualCommit")
-            or release.get("commitSha")
-            or release.get("commit")
-            or release.get("gitSha")
-        )
-        release["expectedCommitSha"] = expected_sha
-        release["actualCommitSha"] = actual_sha
-        release["commitSha"] = actual_sha
-        release["shortSha"] = release.get("shortSha") or _short_sha(actual_sha)
-        release["actualShortSha"] = release.get("actualShortSha") or _short_sha(actual_sha)
-        release["expectedShortSha"] = release.get("expectedShortSha") or _short_sha(expected_sha)
-        release["source"] = release.get("source") or "deploy_release_file"
-        release["environment"] = release.get("environment") or "production"
         release["metadataPath"] = str(_deploy_release_path().relative_to(_root()))
-        release["confidence"] = "high"
         return release
 
     env_sha = _clean_sha(os.getenv("APP_GIT_SHA") or os.getenv("APP_RELEASE_SHA") or os.getenv("GITHUB_SHA"))

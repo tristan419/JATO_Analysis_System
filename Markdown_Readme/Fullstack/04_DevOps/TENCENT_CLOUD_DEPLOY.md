@@ -7,7 +7,7 @@
 - FastAPI 后端通过 systemd 常驻
 - 服务器更新通过 SSH 拉代码并执行发布脚本
 
-如果你想尽量少输命令，当前推荐直接使用：`bash 03_Scripts/tencent_fullstack_bootstrap.sh`。
+如果你想尽量少输命令，使用第 3.1 节的一键脚本；启动前仍必须先解析并显式传入本次代码对应的完整 `DEPLOY_COMMIT_SHA`。
 
 ## 当前生产实例基线（2026-04-11）
 
@@ -93,8 +93,21 @@ sudo mkdir -p /opt
 sudo chown "$USER":"$USER" /opt
 
 cd /opt
-curl -# -L --connect-timeout 15 --max-time 600 https://codeload.github.com/tristan419/JATO_Analysis_System/tar.gz/refs/heads/main -o JATO_Analysis_System-main.tar.gz
-tar -xzf JATO_Analysis_System-main.tar.gz
+DEPLOY_COMMIT_SHA="$(
+  curl -fsSL https://api.github.com/repos/tristan419/JATO_Analysis_System/commits/main \
+    | python3 -c 'import json,sys; print(json.load(sys.stdin)["sha"])'
+)"
+[[ "$DEPLOY_COMMIT_SHA" =~ ^[0-9a-f]{40}$ ]] || {
+  echo "无法解析 main 的完整 commit SHA" >&2
+  exit 1
+}
+curl -# -L --connect-timeout 15 --max-time 600 \
+  "https://codeload.github.com/tristan419/JATO_Analysis_System/tar.gz/${DEPLOY_COMMIT_SHA}" \
+  -o JATO_Analysis_System-main.tar.gz
+mkdir -p JATO_Analysis_System-main
+tar -xzf JATO_Analysis_System-main.tar.gz \
+  --strip-components=1 -C JATO_Analysis_System-main
+printf '%s\n' "$DEPLOY_COMMIT_SHA" > JATO_Analysis_System-main/.bootstrap-commit-sha
 cd /opt/JATO_Analysis_System-main
 
 python3 -m venv .venv
@@ -109,12 +122,24 @@ pip install -r 06_AppPlatform/backend/requirements.txt
 
 ```bash
 # 在你自己的电脑上执行
-curl -# -L --connect-timeout 15 --max-time 600 https://codeload.github.com/tristan419/JATO_Analysis_System/tar.gz/refs/heads/main -o JATO_Analysis_System-main.tar.gz
-scp JATO_Analysis_System-main.tar.gz root@<你的腾讯云IP>:/opt/
+DEPLOY_COMMIT_SHA="$(
+  curl -fsSL https://api.github.com/repos/tristan419/JATO_Analysis_System/commits/main \
+    | python3 -c 'import json,sys; print(json.load(sys.stdin)["sha"])'
+)"
+[[ "$DEPLOY_COMMIT_SHA" =~ ^[0-9a-f]{40}$ ]] || exit 1
+curl -# -L --connect-timeout 15 --max-time 600 \
+  "https://codeload.github.com/tristan419/JATO_Analysis_System/tar.gz/${DEPLOY_COMMIT_SHA}" \
+  -o JATO_Analysis_System-main.tar.gz
+printf '%s\n' "$DEPLOY_COMMIT_SHA" > JATO_Analysis_System-main.sha
+scp JATO_Analysis_System-main.tar.gz JATO_Analysis_System-main.sha \
+  root@<你的腾讯云IP>:/opt/
 
 # 在腾讯云服务器上执行
 cd /opt
-tar -xzf JATO_Analysis_System-main.tar.gz
+mkdir -p JATO_Analysis_System-main
+tar -xzf JATO_Analysis_System-main.tar.gz \
+  --strip-components=1 -C JATO_Analysis_System-main
+mv JATO_Analysis_System-main.sha JATO_Analysis_System-main/.bootstrap-commit-sha
 cd /opt/JATO_Analysis_System-main
 ```
 
@@ -124,20 +149,39 @@ cd /opt/JATO_Analysis_System-main
 
 ```bash
 cd /opt/JATO_Analysis_System-main
-bash 03_Scripts/tencent_fullstack_bootstrap.sh
+if git -C . rev-parse --verify HEAD >/dev/null 2>&1; then
+  DEPLOY_COMMIT_SHA="$(git -C . rev-parse --verify HEAD)"
+else
+  DEPLOY_COMMIT_SHA="$(cat .bootstrap-commit-sha)"
+fi
+[[ "$DEPLOY_COMMIT_SHA" =~ ^[0-9a-f]{40}$ ]] || {
+  echo "缺少与下载内容绑定的完整 DEPLOY_COMMIT_SHA" >&2
+  exit 1
+}
+DEPLOY_COMMIT_SHA="$DEPLOY_COMMIT_SHA" \
+  bash 03_Scripts/tencent_fullstack_bootstrap.sh
 ```
 
 常用覆盖参数：
 
 ```bash
 cd /opt/JATO_Analysis_System-main
+if git -C . rev-parse --verify HEAD >/dev/null 2>&1; then
+  DEPLOY_COMMIT_SHA="$(git -C . rev-parse --verify HEAD)"
+else
+  DEPLOY_COMMIT_SHA="$(cat .bootstrap-commit-sha)"
+fi
+[[ "$DEPLOY_COMMIT_SHA" =~ ^[0-9a-f]{40}$ ]] || exit 1
 SERVER_NAME=your.domain.com \
 BACKEND_PORT=8000 \
 APP_BACKEND_WORKERS=2 \
 APP_AUTH_ENABLED=false \
 VITE_API_BASE=/v1 \
-bash 03_Scripts/tencent_fullstack_bootstrap.sh
+DEPLOY_COMMIT_SHA="$DEPLOY_COMMIT_SHA" \
+  bash 03_Scripts/tencent_fullstack_bootstrap.sh
 ```
+
+不要把 `refs/heads/main` 当作部署身份传给 bootstrap：它是可变引用。archive 路径必须先解析一次 full SHA，用同一个 SHA 下载 tarball，并通过 `DEPLOY_COMMIT_SHA` 显式传给脚本。
 
 这个脚本会自动做完：
 
@@ -427,7 +471,6 @@ bash 03_Scripts/print_fullstack_server_diagnostics.sh
 - Variables: `FULLSTACK_VITE_USER_NAME`
 - Variables: `VITE_ASSET_BASE_URL`（可选，海外 CDN 静态资源 base URL）
 - Environment / deploy script: `REPO_REMOTE_URL`
-- Environment / deploy script: `REPO_ARCHIVE_URL`
 
 推荐默认值：
 
@@ -439,7 +482,6 @@ bash 03_Scripts/print_fullstack_server_diagnostics.sh
 - `FULLSTACK_VITE_API_BASE=/v1`
 - `VITE_ASSET_BASE_URL=`（未接 CDN 时留空；接海外 CDN 后填 CDN 域名并保留结尾 `/`）
 - `REPO_REMOTE_URL=https://gitclone.com/github.com/tristan419/JATO_Analysis_System.git`
-- `REPO_ARCHIVE_URL=https://codeload.github.com/tristan419/JATO_Analysis_System/tar.gz/refs/heads/main`
 
 GitHub Actions 自动部署现在会在代码发布后补一遍 ingress：
 
