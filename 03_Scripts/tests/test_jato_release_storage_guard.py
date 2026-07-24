@@ -1014,11 +1014,18 @@ def test_inode_replacement_before_quarantine_fails_closed(
     )
     kwargs["reference_provider"] = references
 
-    with pytest.raises(
-        MODULE.StorageGuardError,
-        match="changed between validation and pruning",
-    ):
-        MODULE.guard_release_storage(**kwargs)
+    descriptor = os.open(
+        path,
+        os.O_RDONLY | getattr(os, "O_DIRECTORY", 0),
+    )
+    try:
+        with pytest.raises(
+            MODULE.StorageGuardError,
+            match="changed between validation and pruning",
+        ):
+            MODULE.guard_release_storage(**kwargs)
+    finally:
+        os.close(descriptor)
 
     assert path.is_dir()
 
