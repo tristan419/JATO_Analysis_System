@@ -1,0 +1,16 @@
+{
+  "schema": 1,
+  "repository": "tristan419/JATO_Analysis_System",
+  "pullRequest": 185,
+  "releaseGroup": {
+    "issue": 186,
+    "anchor": 185,
+    "members": [
+      184,
+      185
+    ]
+  },
+  "dependsOn": [
+    184
+  ]
+}
