@@ -27,8 +27,22 @@ BLUEGREEN_QUIESCENCE_TIMEOUT="${BLUEGREEN_QUIESCENCE_TIMEOUT:-1800}"
 BLUEGREEN_DRAIN_SECONDS="${BLUEGREEN_DRAIN_SECONDS:-30}"
 BLUEGREEN_CANDIDATE_MEMORY_HIGH="${BLUEGREEN_CANDIDATE_MEMORY_HIGH:-3G}"
 BLUEGREEN_CANDIDATE_MEMORY_MAX="${BLUEGREEN_CANDIDATE_MEMORY_MAX:-4G}"
+BLUEGREEN_CANDIDATE_BUILD_TIMEOUT="${BLUEGREEN_CANDIDATE_BUILD_TIMEOUT:-1800}"
 BLUEGREEN_ACTIVE_MEMORY_HIGH="${BLUEGREEN_ACTIVE_MEMORY_HIGH:-6G}"
 BLUEGREEN_ACTIVE_MEMORY_MAX="${BLUEGREEN_ACTIVE_MEMORY_MAX:-8G}"
+BLUEGREEN_MIN_TOTAL_MEMORY_BYTES=$((14 * 1024 * 1024 * 1024))
+BLUEGREEN_MIN_AVAILABLE_MEMORY_BYTES=$((5 * 1024 * 1024 * 1024))
+BLUEGREEN_CANDIDATE_MAX_MEMORY_BYTES=$((4 * 1024 * 1024 * 1024))
+BLUEGREEN_OS_MEMORY_RESERVE_BYTES=$((2 * 1024 * 1024 * 1024))
+BLUEGREEN_ACTIVE_MEMORY_HIGH_BYTES=$((6 * 1024 * 1024 * 1024))
+BLUEGREEN_ACTIVE_MEMORY_MAX_BYTES=$((8 * 1024 * 1024 * 1024))
+BLUEGREEN_PREPARE_DISK_RESERVE_BYTES=$((15 * 1024 * 1024 * 1024))
+BLUEGREEN_PREPARE_DISK_RESERVE_PERCENT=8
+BLUEGREEN_RUNTIME_DISK_RESERVE_BYTES=$((10 * 1024 * 1024 * 1024))
+BLUEGREEN_RUNTIME_DISK_RESERVE_PERCENT=5
+BLUEGREEN_RELEASE_KEEP_UNREFERENCED=3
+BLUEGREEN_RELEASE_NORMAL_GC_AGE_SECONDS=$((14 * 24 * 60 * 60))
+BLUEGREEN_RELEASE_EMERGENCY_GC_AGE_SECONDS=$((24 * 60 * 60))
 BLUEGREEN_FAULT="${BLUEGREEN_FAULT:-}"
 BLUEGREEN_MODE="${1:-prepare-and-switch}"
 SERVICE_PREFIX="jato-fullstack-backend@"
@@ -93,6 +107,73 @@ require_environment() {
     || [[ ! "$DEPLOY_ARCHIVE_SHA256" =~ ^[0-9a-f]{64}$ ]]; then
     fail "release identity is malformed"
   fi
+  if [[ "$BLUEGREEN_ROOT" != "/opt/jato" ]] \
+    || [[ "$RELEASES_ROOT" != "/opt/jato/releases" ]] \
+    || [[ "$SLOTS_ROOT" != "/opt/jato/slots" ]] \
+    || [[ "$ACTIVE_RELEASE_LINK" != "/opt/jato/active" ]] \
+    || [[ "$BLUEGREEN_STATE_ROOT" != "/var/lib/jato-release" ]]; then
+    fail "production blue/green storage roots must use the reviewed /opt/jato layout"
+  fi
+  if [[ -n "${BLUEGREEN_CHECKPOINT_HELPER_OVERRIDE:-}" ]] \
+    || [[ -n "${BLUEGREEN_STORAGE_GUARD_OVERRIDE:-}" ]]; then
+    fail "production blue/green release does not accept helper overrides"
+  fi
+}
+
+ensure_bluegreen_state_root() {
+  if sudo -n test -L "$BLUEGREEN_STATE_ROOT" \
+    || {
+      sudo -n test -e "$BLUEGREEN_STATE_ROOT" \
+        && ! sudo -n test -d "$BLUEGREEN_STATE_ROOT";
+    }; then
+    fail "blue/green state root must be a real directory"
+    return 1
+  fi
+  sudo -n install -d -m 0755 "$BLUEGREEN_STATE_ROOT"
+}
+
+assert_inherited_production_lock() {
+  local expected_lock=""
+  local mutation_lock_helper="$RELEASE_WORKTREE/03_Scripts/deploy/lib/production_mutation_lock.sh"
+  if [[ ! -f "$mutation_lock_helper" ]] || [[ -L "$mutation_lock_helper" ]]; then
+    fail "production mutation lock helper is missing or unsafe"
+    return 1
+  fi
+  if [[ -z "${DEPLOY_STATE_DIR:-}" || "$DEPLOY_STATE_DIR" != /* ]] \
+    || [[ -z "${DEPLOY_LOCK_PATH:-}" || "$DEPLOY_LOCK_PATH" != /* ]]; then
+    fail "production deployment lock paths are missing or relative"
+    return 1
+  fi
+  expected_lock="${DEPLOY_STATE_DIR%/}/production-deploy.lock"
+  if [[ "$DEPLOY_LOCK_PATH" != "$expected_lock" ]]; then
+    fail "production deployment lock path differs from its state namespace"
+    return 1
+  fi
+  # shellcheck source=03_Scripts/deploy/lib/production_mutation_lock.sh
+  source "$mutation_lock_helper"
+  jato_validate_inherited_production_lock "$DEPLOY_LOCK_PATH"
+}
+
+ensure_bluegreen_runtime_roots() {
+  local path=""
+  for path in \
+    "$BLUEGREEN_ROOT" \
+    "$RELEASES_ROOT" \
+    "$RELEASES_ROOT/$DEPLOY_COMMIT_SHA" \
+    "$SLOTS_ROOT" \
+    "$SLOTS_ROOT/8000" \
+    "$SLOTS_ROOT/8001" \
+    "$SHARED_ROOT"; do
+    if sudo -n test -L "$path" \
+      || {
+        sudo -n test -e "$path" \
+          && ! sudo -n test -d "$path";
+      }; then
+      fail "blue/green runtime directory is unsafe: $path"
+      return 1
+    fi
+    sudo -n install -d -m 0755 "$path" || return 1
+  done
 }
 
 checkpoint_identity_args=(
@@ -116,7 +197,8 @@ RELEASE_DIR="$RELEASES_ROOT/$DEPLOY_COMMIT_SHA/$DEPLOY_ARCHIVE_SHA256"
 RELEASE_IDENTITY_FILE="$RELEASE_DIR/.jato-release-identity"
 RELEASE_SOURCE_SEAL_FILE="$RELEASE_DIR/.jato-source-seal.json"
 RELEASE_RUNTIME_SEAL_FILE="$RELEASE_DIR/.jato-runtime-seal.json"
-CHECKPOINT_HELPER="$RELEASE_WORKTREE/03_Scripts/deploy/release_checkpoint.py"
+CHECKPOINT_HELPER="${BLUEGREEN_CHECKPOINT_HELPER_OVERRIDE:-$RELEASE_WORKTREE/03_Scripts/deploy/release_checkpoint.py}"
+RELEASE_STORAGE_GUARD="${BLUEGREEN_STORAGE_GUARD_OVERRIDE:-$RELEASE_WORKTREE/03_Scripts/deploy/jato_release_storage_guard.py}"
 READINESS_HELPER="$RELEASE_WORKTREE/03_Scripts/deploy/verify_backend_readiness.py"
 QUIESCENCE_HELPER="$RELEASE_WORKTREE/03_Scripts/deploy/jato_quiescence_gate.py"
 SYSTEMD_TEMPLATE="$RELEASE_WORKTREE/03_Scripts/deploy/systemd/jato-fullstack-backend@.service"
@@ -135,7 +217,8 @@ NGINX_BOOT_DROPIN_TARGET="/etc/systemd/system/nginx.service.d/20-jato-bluegreen-
 BOOT_RECONCILE_UNIT="jato-bluegreen-boot-reconcile.service"
 INNER_DEPLOY="$RELEASE_DIR/03_Scripts/ops/deploy_fullstack_server.sh"
 EVIDENCE_FILE="${CHECKPOINT_FILE%.json}.evidence.json"
-PREVIOUS_RELEASE_METADATA_PATH="${CHECKPOINT_FILE%.json}.previous-release.json"
+CHECKPOINTS_ROOT="${CHECKPOINTS_ROOT:-$(dirname "$(dirname "$CHECKPOINT_FILE")")}"
+PREVIOUS_RELEASE_METADATA_PATH="$BLUEGREEN_STATE_ROOT/previous-metadata/$DEPLOY_COMMIT_SHA/$DEPLOY_ARCHIVE_SHA256.json"
 CURRENT_ACTIVE_SLOT="${CURRENT_ACTIVE_SLOT:-}"
 CANDIDATE_SLOT="${CANDIDATE_SLOT:-}"
 CURRENT_FRONTEND_ROOT=""
@@ -810,20 +893,35 @@ ensure_current_slot_restartable() {
 
 preserve_previous_release_metadata() {
   if [[ -n "${PREVIOUS_DEPLOY_RELEASE_FILE:-}" ]]; then
-    return
+    if [[ "$PREVIOUS_DEPLOY_RELEASE_FILE" != "$PREVIOUS_RELEASE_METADATA_PATH" ]] \
+      || [[ ! -f "$PREVIOUS_DEPLOY_RELEASE_FILE" ]] \
+      || [[ -L "$PREVIOUS_DEPLOY_RELEASE_FILE" ]]; then
+      fail "previous release metadata override is not the candidate-scoped sidecar"
+      return 1
+    fi
+    return 0
   fi
-  if [[ -f "$PREVIOUS_RELEASE_METADATA_PATH" ]]; then
-    PREVIOUS_DEPLOY_RELEASE_FILE="$PREVIOUS_RELEASE_METADATA_PATH"
-    export PREVIOUS_DEPLOY_RELEASE_FILE
-    return
+  local current_root=""
+  local current_metadata=""
+  current_root="$(slot_release_root "$CURRENT_ACTIVE_SLOT")" \
+    || fail "current active release root is unavailable for metadata preservation" \
+    || return 1
+  current_metadata="$current_root/hermes/deploy_release.json"
+  sudo -n python3 -B "$CHECKPOINT_HELPER" preserve-previous-metadata \
+    --state-root "$BLUEGREEN_STATE_ROOT" \
+    --source "$current_metadata" \
+    --candidate-commit "$DEPLOY_COMMIT_SHA" \
+    --archive-sha256 "$DEPLOY_ARCHIVE_SHA256" \
+    --owner-uid "$(id -u)" \
+    --owner-gid "$(id -g)" >/dev/null \
+    || return 1
+  if [[ ! -f "$PREVIOUS_RELEASE_METADATA_PATH" ]] \
+    || [[ -L "$PREVIOUS_RELEASE_METADATA_PATH" ]]; then
+    fail "candidate-scoped previous release metadata was not durably created"
+    return 1
   fi
-  local current_metadata="$LEGACY_ROOT/hermes/deploy_release.json"
-  if [[ -f "$current_metadata" && ! -L "$current_metadata" ]]; then
-    install -m 0600 "$current_metadata" "${PREVIOUS_RELEASE_METADATA_PATH}.new"
-    mv -f "${PREVIOUS_RELEASE_METADATA_PATH}.new" "$PREVIOUS_RELEASE_METADATA_PATH"
-    PREVIOUS_DEPLOY_RELEASE_FILE="$PREVIOUS_RELEASE_METADATA_PATH"
-    export PREVIOUS_DEPLOY_RELEASE_FILE
-  fi
+  PREVIOUS_DEPLOY_RELEASE_FILE="$PREVIOUS_RELEASE_METADATA_PATH"
+  export PREVIOUS_DEPLOY_RELEASE_FILE
 }
 
 run_inner_prepare() {
@@ -852,6 +950,171 @@ run_inner_prepare() {
   RELEASE_CHECKPOINT_FRONTEND_IDENTITY="$FRONTEND_ARTIFACT_IDENTITY" \
   RELEASE_CHECKPOINT_FRONTEND_CHECKSUM="$FRONTEND_ARTIFACT_CHECKSUM" \
     bash "$INNER_DEPLOY"
+}
+
+candidate_build_scope_unit_name() {
+  printf 'jato-bluegreen-candidate-build.scope\n'
+}
+
+assert_candidate_build_scope() {
+  local actual_group=""
+  local actual_high=""
+  local actual_max=""
+  local actual_tasks=""
+  local expected_high=$((3 * 1024 * 1024 * 1024))
+  local expected_max=$((4 * 1024 * 1024 * 1024))
+  local unit=""
+  unit="$(candidate_build_scope_unit_name)"
+  if [[ ! "${BLUEGREEN_CANDIDATE_BUILD_UID:-}" =~ ^[0-9]+$ ]] \
+    || [[ ! "${BLUEGREEN_CANDIDATE_BUILD_GID:-}" =~ ^[0-9]+$ ]] \
+    || [[ "$(id -u)" != "$BLUEGREEN_CANDIDATE_BUILD_UID" ]] \
+    || [[ "$(id -g)" != "$BLUEGREEN_CANDIDATE_BUILD_GID" ]]; then
+    fail "candidate build scope did not retain the deploy user identity"
+    return 1
+  fi
+  actual_high="$(systemctl show "$unit" -p MemoryHigh --value)" || return 1
+  actual_max="$(systemctl show "$unit" -p MemoryMax --value)" || return 1
+  actual_tasks="$(systemctl show "$unit" -p TasksMax --value)" || return 1
+  actual_group="$(systemctl show "$unit" -p ControlGroup --value)" || return 1
+  if [[ "$BLUEGREEN_CANDIDATE_MEMORY_HIGH" != "3G" ]] \
+    || [[ "$actual_high" != "$expected_high" ]] \
+    || [[ "$BLUEGREEN_CANDIDATE_MEMORY_MAX" != "4G" ]] \
+    || [[ "$actual_max" != "$expected_max" ]] \
+    || [[ "$actual_tasks" != "512" ]] \
+    || [[ -z "$actual_group" || "$actual_group" == "/" ]]; then
+    fail "candidate build scope resource limits are not the reviewed 3G/4G/512 contract"
+    return 1
+  fi
+  python3 -B - "$actual_group" "$$" <<'PY'
+from pathlib import Path
+import sys
+
+group = sys.argv[1]
+pid = sys.argv[2]
+if ".." in Path(group).parts:
+    raise SystemExit("[ERROR] candidate build scope control group is unsafe")
+members = Path("/sys/fs/cgroup") / group.lstrip("/") / "cgroup.procs"
+try:
+    processes = set(members.read_text(encoding="utf-8").splitlines())
+except OSError as exc:
+    raise SystemExit(
+        f"[ERROR] cannot verify candidate build scope membership: {exc}"
+    ) from exc
+if pid not in processes:
+    raise SystemExit("[ERROR] candidate build shell is outside its resource scope")
+PY
+}
+
+build_candidate_runtime_locked() {
+  require_environment
+  assert_candidate_build_scope
+  assert_inherited_production_lock
+  if [[ "$CURRENT_ACTIVE_SLOT" != "8000" && "$CURRENT_ACTIVE_SLOT" != "8001" ]] \
+    || [[ "$CANDIDATE_SLOT" != "8000" && "$CANDIDATE_SLOT" != "8001" ]] \
+    || [[ "$CURRENT_ACTIVE_SLOT" == "$CANDIDATE_SLOT" ]]; then
+    fail "candidate build slot identity is invalid"
+    return 1
+  fi
+  if [[ -n "${PREVIOUS_DEPLOY_RELEASE_FILE:-}" ]] \
+    && {
+      [[ ! -f "$PREVIOUS_DEPLOY_RELEASE_FILE" ]] \
+        || [[ -L "$PREVIOUS_DEPLOY_RELEASE_FILE" ]];
+    }; then
+    fail "candidate build previous release metadata is missing or unsafe"
+    return 1
+  fi
+  prepare_candidate_runtime
+  if [[ "$RUNTIME_ALREADY_SEALED" != "true" ]]; then
+    run_inner_prepare
+    verify_materialized_release_source
+    assert_no_database_migration_delta
+    write_candidate_deploy_status
+    finalize_runtime_seal
+  else
+    assert_no_database_migration_delta
+  fi
+  verify_final_runtime_seal
+}
+
+run_candidate_build_scope() {
+  local bash_bin=""
+  local controller="$RELEASE_DIR/03_Scripts/deploy/tencent_bluegreen_release.sh"
+  local unit=""
+  if ! [[ "$BLUEGREEN_CANDIDATE_BUILD_TIMEOUT" =~ ^[1-9][0-9]*$ ]]; then
+    fail "candidate build timeout must be a positive integer"
+    return 1
+  fi
+  if [[ -z "${HOME:-}" || "$HOME" != /* ]] \
+    || [[ -z "${PATH:-}" ]]; then
+    fail "candidate build requires an absolute HOME and non-empty PATH"
+    return 1
+  fi
+  if [[ ! -f "$controller" || -L "$controller" ]]; then
+    fail "sealed candidate build controller is missing or unsafe"
+    return 1
+  fi
+  bash_bin="$(command -v bash)" || return 1
+  unit="$(candidate_build_scope_unit_name)"
+  sudo -n systemd-run \
+    --quiet \
+    --collect \
+    --scope \
+    --unit="$unit" \
+    --uid="$(id -u)" \
+    --gid="$(id -g)" \
+    --working-directory="$RELEASE_DIR" \
+    --property="RuntimeMaxSec=${BLUEGREEN_CANDIDATE_BUILD_TIMEOUT}s" \
+    --property="MemoryHigh=$BLUEGREEN_CANDIDATE_MEMORY_HIGH" \
+    --property="MemoryMax=$BLUEGREEN_CANDIDATE_MEMORY_MAX" \
+    --property="CPUQuota=100%" \
+    --property="TasksMax=512" \
+    --setenv="HOME=$HOME" \
+    --setenv="PATH=$PATH" \
+    --setenv="BLUEGREEN_MODE=build-candidate-runtime" \
+    --setenv="BLUEGREEN_CANDIDATE_BUILD_UID=$(id -u)" \
+    --setenv="BLUEGREEN_CANDIDATE_BUILD_GID=$(id -g)" \
+    --setenv="BLUEGREEN_ROOT=$BLUEGREEN_ROOT" \
+    --setenv="RELEASES_ROOT=$RELEASES_ROOT" \
+    --setenv="SLOTS_ROOT=$SLOTS_ROOT" \
+    --setenv="SHARED_ROOT=$SHARED_ROOT" \
+    --setenv="ACTIVE_RELEASE_LINK=$ACTIVE_RELEASE_LINK" \
+    --setenv="BLUEGREEN_STATE_ROOT=$BLUEGREEN_STATE_ROOT" \
+    --setenv="ACTIVE_SLOT_FILE=$ACTIVE_SLOT_FILE" \
+    --setenv="DEPLOYMENT_MARKER=$DEPLOYMENT_MARKER" \
+    --setenv="NGINX_ACTIVE_RELEASE_CONF=$NGINX_ACTIVE_RELEASE_CONF" \
+    --setenv="SLOT_ENV_ROOT=$SLOT_ENV_ROOT" \
+    --setenv="BACKEND_ENV_FILE=$BACKEND_ENV_FILE" \
+    --setenv="LEGACY_ROOT=$LEGACY_ROOT" \
+    --setenv="JATO_JOB_ROOT=$JATO_JOB_ROOT" \
+    --setenv="BLUEGREEN_CANDIDATE_MEMORY_HIGH=$BLUEGREEN_CANDIDATE_MEMORY_HIGH" \
+    --setenv="BLUEGREEN_CANDIDATE_MEMORY_MAX=$BLUEGREEN_CANDIDATE_MEMORY_MAX" \
+    --setenv="BLUEGREEN_CANDIDATE_BUILD_TIMEOUT=$BLUEGREEN_CANDIDATE_BUILD_TIMEOUT" \
+    --setenv="BLUEGREEN_ACTIVE_MEMORY_HIGH=$BLUEGREEN_ACTIVE_MEMORY_HIGH" \
+    --setenv="BLUEGREEN_ACTIVE_MEMORY_MAX=$BLUEGREEN_ACTIVE_MEMORY_MAX" \
+    --setenv="BLUEGREEN_FAULT=$BLUEGREEN_FAULT" \
+    --setenv="DEPLOY_COMMIT_SHA=$DEPLOY_COMMIT_SHA" \
+    --setenv="DEPLOY_ARCHIVE_SHA256=$DEPLOY_ARCHIVE_SHA256" \
+    --setenv="DEPLOY_ARCHIVE_BYTES=$DEPLOY_ARCHIVE_BYTES" \
+    --setenv="DEPLOY_REPOSITORY=$DEPLOY_REPOSITORY" \
+    --setenv="DEPLOY_RUN_ID=$DEPLOY_RUN_ID" \
+    --setenv="DEPLOY_RUN_ATTEMPT=$DEPLOY_RUN_ATTEMPT" \
+    --setenv="DEPLOY_BRANCH=$DEPLOY_BRANCH" \
+    --setenv="DEPLOY_SERVER_NAME=${DEPLOY_SERVER_NAME:-_}" \
+    --setenv="FRONTEND_ARTIFACT_IDENTITY=$FRONTEND_ARTIFACT_IDENTITY" \
+    --setenv="FRONTEND_ARTIFACT_CHECKSUM=$FRONTEND_ARTIFACT_CHECKSUM" \
+    --setenv="RELEASE_WORKTREE=$RELEASE_WORKTREE" \
+    --setenv="PREBUILT_FRONTEND_DIR=$PREBUILT_FRONTEND_DIR" \
+    --setenv="CHECKPOINT_FILE=$CHECKPOINT_FILE" \
+    --setenv="CHECKPOINT_JOURNAL=$CHECKPOINT_JOURNAL" \
+    --setenv="CURRENT_ACTIVE_SLOT=$CURRENT_ACTIVE_SLOT" \
+    --setenv="CANDIDATE_SLOT=$CANDIDATE_SLOT" \
+    --setenv="PREVIOUS_DEPLOY_RELEASE_FILE=${PREVIOUS_DEPLOY_RELEASE_FILE:-}" \
+    --setenv="DEPLOY_STATE_DIR=${DEPLOY_STATE_DIR:-}" \
+    --setenv="DEPLOY_LOCK_PATH=${DEPLOY_LOCK_PATH:-}" \
+    --setenv="DEPLOY_LOCK_HELD=${DEPLOY_LOCK_HELD:-}" \
+    --setenv="DEPLOY_LOCK_HOLDER_PID=${DEPLOY_LOCK_HOLDER_PID:-}" \
+    --setenv="DEPLOY_LOCK_FD=${DEPLOY_LOCK_FD:-}" \
+    "$bash_bin" "$controller" build-candidate-runtime
 }
 
 assert_no_database_migration_delta() {
@@ -1384,47 +1647,121 @@ remove_candidate_sandbox_before_switch() {
   verify_candidate || return 1
 }
 
+release_storage_reference_args() {
+  local current_root=""
+  local path=""
+  current_root="$(slot_release_root "$CURRENT_ACTIVE_SLOT")" \
+    || fail "current active release root is unavailable for storage protection" \
+    || return 1
+  if sudo -n test -e "$ACTIVE_RELEASE_LINK" \
+    || sudo -n test -L "$ACTIVE_RELEASE_LINK"; then
+    if ! sudo -n test -L "$ACTIVE_RELEASE_LINK" \
+      || [[ "$(sudo -n realpath "$ACTIVE_RELEASE_LINK")" != "$current_root" ]]; then
+      fail "active release link differs from the controller active slot"
+      return 1
+    fi
+  fi
+  for path in \
+    "$current_root" \
+    "$CURRENT_FRONTEND_ROOT" \
+    "$ACTIVE_RELEASE_LINK" \
+    "$SLOTS_ROOT/8000/current" \
+    "$SLOTS_ROOT/8001/current"; do
+    if sudo -n test -e "$path" || sudo -n test -L "$path"; then
+      printf '%s\n' "$path"
+    fi
+  done
+}
+
+run_release_storage_guard() {
+  local minimum_bytes="$1"
+  local minimum_percent="$2"
+  local check_only="${3:-false}"
+  local current_root=""
+  local legacy_option=()
+  local protected_args=()
+  local protected_output=""
+  local protected_root=""
+  if [[ ! -f "$RELEASE_STORAGE_GUARD" ]] \
+    || [[ -L "$RELEASE_STORAGE_GUARD" ]]; then
+    fail "release storage guard is missing or unsafe"
+    return 1
+  fi
+  current_root="$(slot_release_root "$CURRENT_ACTIVE_SLOT")" \
+    || fail "current active release root is unavailable for storage protection" \
+    || return 1
+  if sudo -n test -L "$NGINX_ACTIVE_RELEASE_CONF"; then
+    fail "Nginx active release include must not be a symlink"
+    return 1
+  fi
+  if ! sudo -n test -f "$NGINX_ACTIVE_RELEASE_CONF"; then
+    if [[ "$current_root" != "$LEGACY_ROOT" ]]; then
+      fail "Nginx release include is absent after immutable releases became active"
+      return 1
+    fi
+    legacy_option+=(--allow-missing-nginx-legacy)
+  fi
+  protected_output="$(release_storage_reference_args)" || return 1
+  while IFS= read -r protected_root; do
+    if [[ -n "$protected_root" ]]; then
+      protected_args+=(--protected-root "$protected_root")
+    fi
+  done <<< "$protected_output"
+
+  local check_only_args=()
+  if [[ "$check_only" == "true" ]]; then
+    check_only_args+=(--check-only)
+  fi
+  sudo -n python3 -B "$RELEASE_STORAGE_GUARD" storage \
+    --releases-root "$RELEASES_ROOT" \
+    --target-root "$RELEASE_DIR" \
+    "${protected_args[@]}" \
+    --checkpoints-root "$CHECKPOINTS_ROOT" \
+    --current-checkpoint "$CHECKPOINT_FILE" \
+    --expected-repository "$DEPLOY_REPOSITORY" \
+    --nginx-active-release-conf "$NGINX_ACTIVE_RELEASE_CONF" \
+    --expected-active-slot "$CURRENT_ACTIVE_SLOT" \
+    --expected-active-root "$current_root" \
+    --minimum-available-bytes "$minimum_bytes" \
+    --minimum-available-percent "$minimum_percent" \
+    --keep-unreferenced "$BLUEGREEN_RELEASE_KEEP_UNREFERENCED" \
+    --normal-min-age-seconds "$BLUEGREEN_RELEASE_NORMAL_GC_AGE_SECONDS" \
+    --emergency-min-age-seconds "$BLUEGREEN_RELEASE_EMERGENCY_GC_AGE_SECONDS" \
+    "${legacy_option[@]}" \
+    "${check_only_args[@]}"
+}
+
+guard_release_storage() {
+  run_release_storage_guard \
+    "$BLUEGREEN_PREPARE_DISK_RESERVE_BYTES" \
+    "$BLUEGREEN_PREPARE_DISK_RESERVE_PERCENT" \
+    false
+}
+
+assert_runtime_storage_reserve() {
+  run_release_storage_guard \
+    "$BLUEGREEN_RUNTIME_DISK_RESERVE_BYTES" \
+    "$BLUEGREEN_RUNTIME_DISK_RESERVE_PERCENT" \
+    true
+}
+
 assert_host_memory_budget() {
-  if [[ "$BLUEGREEN_CANDIDATE_MEMORY_MAX" != "4G" ]] \
+  if [[ "$BLUEGREEN_CANDIDATE_MEMORY_HIGH" != "3G" ]] \
+    || [[ "$BLUEGREEN_CANDIDATE_MEMORY_MAX" != "4G" ]] \
+    || [[ "$BLUEGREEN_ACTIVE_MEMORY_HIGH" != "6G" ]] \
     || [[ "$BLUEGREEN_ACTIVE_MEMORY_MAX" != "8G" ]]; then
     fail "non-default blue/green memory limits require a reviewed controller update"
   fi
-  python3 - "${SERVICE_PREFIX}${CURRENT_ACTIVE_SLOT}" <<'PY'
-from pathlib import Path
-import subprocess
-import sys
-
-values: dict[str, int] = {}
-for line in Path("/proc/meminfo").read_text(encoding="utf-8").splitlines():
-    key, raw = line.split(":", 1)
-    token = raw.strip().split()[0]
-    values[key] = int(token) * 1024
-total = values.get("MemTotal", 0)
-available = values.get("MemAvailable", 0)
-gib = 1024**3
-if total < 14 * gib:
-    raise SystemExit(
-        f"[ERROR] Blue/green requires at least 14GiB RAM; detected {total / gib:.1f}GiB"
-    )
-if available < 2 * gib:
-    raise SystemExit(
-        f"[ERROR] Blue/green requires 2GiB available before candidate start; "
-        f"detected {available / gib:.1f}GiB"
-    )
-active_current = subprocess.check_output(
-    ["systemctl", "show", sys.argv[1], "-p", "MemoryCurrent", "--value"],
-    text=True,
-).strip()
-try:
-    active_bytes = int(active_current)
-except ValueError as exc:
-    raise SystemExit("[ERROR] Active slot MemoryCurrent is unavailable") from exc
-if active_bytes + 4 * gib > total - 2 * gib:
-    raise SystemExit(
-        "[ERROR] Active memory plus candidate 4GiB cap leaves less than 2GiB "
-        "for the OS and shared services"
-    )
-PY
+  python3 -B "$RELEASE_STORAGE_GUARD" memory \
+    --active-service "${SERVICE_PREFIX}${CURRENT_ACTIVE_SLOT}" \
+    --expected-active-memory-high-bytes \
+      "$BLUEGREEN_ACTIVE_MEMORY_HIGH_BYTES" \
+    --expected-active-memory-max-bytes \
+      "$BLUEGREEN_ACTIVE_MEMORY_MAX_BYTES" \
+    --minimum-total-bytes "$BLUEGREEN_MIN_TOTAL_MEMORY_BYTES" \
+    --minimum-available-bytes "$BLUEGREEN_MIN_AVAILABLE_MEMORY_BYTES" \
+    --candidate-max-bytes "$BLUEGREEN_CANDIDATE_MAX_MEMORY_BYTES" \
+    --os-reserve-bytes "$BLUEGREEN_OS_MEMORY_RESERVE_BYTES"
 }
 
 verify_candidate_cgroup() {
@@ -2886,6 +3223,9 @@ prepare_and_switch() {
   local orphaned_scheduler_snapshot=false
   local supervisor_rc=0
   require_environment
+  assert_inherited_production_lock
+  ensure_bluegreen_state_root
+  ensure_bluegreen_runtime_roots
   assert_no_active_switch_unit
   if [[ -e "$SCHEDULER_STATE_FILE" || -L "$SCHEDULER_STATE_FILE" ]]; then
     orphaned_scheduler_snapshot=true
@@ -2931,18 +3271,13 @@ prepare_and_switch() {
   prepare_shared_runtime
   ensure_current_slot_restartable
   preserve_previous_release_metadata
+  guard_release_storage
+  assert_host_memory_budget
   materialize_release_source
-  prepare_candidate_runtime
-  if [[ "$RUNTIME_ALREADY_SEALED" != "true" ]]; then
-    run_inner_prepare
-    verify_materialized_release_source
-    assert_no_database_migration_delta
-    write_candidate_deploy_status
-    finalize_runtime_seal
-  else
-    assert_no_database_migration_delta
-  fi
+  run_candidate_build_scope
   verify_final_runtime_seal
+  assert_no_database_migration_delta
+  assert_runtime_storage_reserve
   assert_host_memory_budget
   install_slot_runtime
   prepare_stable_nginx_boot_infrastructure
@@ -3033,6 +3368,9 @@ case "$BLUEGREEN_MODE" in
     trap 'switch_signal_handler 15' TERM
     switch_locked
     trap - EXIT HUP INT TERM
+    ;;
+  build-candidate-runtime)
+    build_candidate_runtime_locked
     ;;
   *)
     fail "unknown Tencent blue/green mode: $BLUEGREEN_MODE"

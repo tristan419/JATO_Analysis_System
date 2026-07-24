@@ -244,6 +244,7 @@ required_release_files=(
   03_Scripts/deploy/prepare_backend_release.py
   03_Scripts/deploy/verify_backend_readiness.py
   03_Scripts/deploy/jato_quiescence_gate.py
+  03_Scripts/deploy/jato_release_storage_guard.py
   03_Scripts/deploy/tencent_bluegreen_release.sh
   03_Scripts/deploy/verify_release_source_seal.py
   03_Scripts/deploy/lib/production_mutation_lock.sh

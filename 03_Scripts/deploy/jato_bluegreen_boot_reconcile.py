@@ -15,6 +15,7 @@ import os
 from pathlib import Path
 import re
 import secrets
+import shlex
 import stat
 import subprocess
 import sys
@@ -180,6 +181,68 @@ def read_active_slot(
     max_bytes: int = MAX_ACTIVE_RELEASE_BYTES,
 ) -> str:
     return parse_active_slot(
+        _read_safe_regular_file(
+            active_release_conf,
+            max_bytes=max_bytes,
+            description="active release include",
+        )
+    )
+
+
+def parse_active_frontend_root(payload: str) -> Path:
+    """Return the unique frontend root bound to the active backend route."""
+
+    clean = _strip_nginx_comments(payload)
+    declaration = re.compile(
+        r"\bmap\s+\$host\s+\$jato_frontend_root\b"
+    )
+    if len(declaration.findall(clean)) != 1:
+        raise ReconcileError(
+            "active release include must declare exactly one frontend root map"
+        )
+    block_pattern = re.compile(
+        r"\bmap\s+\$host\s+\$jato_frontend_root\s*"
+        r"\{(?P<body>[^{}]*)\}",
+        re.DOTALL,
+    )
+    blocks = list(block_pattern.finditer(clean))
+    if len(blocks) != 1:
+        raise ReconcileError(
+            "active frontend root map is malformed or ambiguous"
+        )
+    directives: list[list[str]] = []
+    for raw_directive in blocks[0].group("body").split(";"):
+        try:
+            tokens = shlex.split(raw_directive, posix=True)
+        except ValueError as exc:
+            raise ReconcileError(
+                "active frontend root directive has invalid quoting"
+            ) from exc
+        if tokens:
+            directives.append(tokens)
+    if len(directives) != 1 or len(directives[0]) != 2:
+        raise ReconcileError(
+            "active frontend root map must contain one default directive"
+        )
+    directive, raw_root = directives[0]
+    root = Path(raw_root)
+    if (
+        directive != "default"
+        or not root.is_absolute()
+        or ".." in root.parts
+        or not str(root).startswith("/opt/")
+        or not str(root).endswith("/06_AppPlatform/frontend/dist")
+    ):
+        raise ReconcileError("active frontend root is unsafe")
+    return root
+
+
+def read_active_frontend_root(
+    active_release_conf: Path,
+    *,
+    max_bytes: int = MAX_ACTIVE_RELEASE_BYTES,
+) -> Path:
+    return parse_active_frontend_root(
         _read_safe_regular_file(
             active_release_conf,
             max_bytes=max_bytes,

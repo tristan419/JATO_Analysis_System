@@ -277,9 +277,9 @@ def test_bluegreen_controller_alone_publishes_status_and_target_health() -> None
     assert "checkpoint_write backend_healthy" not in outer
     assert "merge_previous_frontend_assets" not in controller
     assert 'cp -p "$source" "$target"' not in controller
-    prepare = _shell_function(BLUEGREEN_SCRIPT, "prepare_and_switch")
-    status_write = prepare.index("\n    write_candidate_deploy_status\n")
-    runtime_seal = prepare.index("\n    finalize_runtime_seal\n")
+    build = _shell_function(BLUEGREEN_SCRIPT, "build_candidate_runtime_locked")
+    status_write = build.index("\n    write_candidate_deploy_status\n")
+    runtime_seal = build.index("\n    finalize_runtime_seal\n")
     switch_checkpoint = switch.index(
         "\n  checkpoint_write switched completed automatic",
     )

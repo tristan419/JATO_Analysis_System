@@ -757,6 +757,28 @@ NODE_OPTIONS="--max-old-space-size=1024" npm run build
 10. 月更 mutation fence 位于持久路径
     `/var/lib/jato-release/deployment-maintenance`。主机重启不会让一个未完成
     的发布静默丢失门禁；只有控制器完成恢复或确认切换后才能移除 marker。
+11. Candidate 构建前要求 `MemAvailable >= 5 GiB`，并再次确认宿主机总内存
+    至少 14 GiB、active unit 的实际 `MemoryHigh=6G/MemoryMax=8G` 未漂移，
+    且 active 实际内存加 Candidate 4 GiB 上限仍为操作系统保留 2 GiB。
+    随后 venv、pip、Playwright 与前端安装全部在同步的
+    `jato-bluegreen-candidate-build.scope` 中执行；该 scope 固定为
+    `MemoryHigh=3G`、`MemoryMax=4G`、`TasksMax=512` 和 30 分钟上限。
+    子进程会在执行重依赖安装前验证自己的 UID、cgroup membership 和实际
+    systemd 属性，不满足即失败。最终 runtime seal 完成后、启动 Candidate
+    前会重复宿主机内存检查。
+12. Candidate 构建前磁盘必须保留
+    `max(15 GiB, filesystem 8%)`；runtime seal 后还必须保留
+    `max(10 GiB, filesystem 5%)`。空间不足时只允许回收
+    `/opt/jato/releases/<commit>/<archive-sha256>` 中具有匹配 identity、
+    已达到 settled checkpoint 且未被 active、两个 slot、Nginx、运行进程或
+    未完成 checkpoint 引用的旧版本。正常保留最新 3 个未引用版本并只清理
+    14 天以上版本；低空间时也绝不清理 24 小时内版本。删除前会原子移入
+    可恢复 quarantine 并重新扫描引用，任何歧义都在 Candidate 启动前失败。
+    上传 archive、checkpoint、journal 和共享 JATO 数据不属于自动清理范围。
+13. 上一版本的 `hermes/deploy_release.json` 固定保存在
+    `/var/lib/jato-release/previous-metadata/<candidate-commit>/<archive>.json`。
+    该目录与严格 checkpoint namespace 分离；同一 artifact 重试只接受完全
+    相同的 metadata，避免后续 SHA 被旁路 JSON 阻断或引用错误回滚版本。
 
 运行时位置：
 
@@ -768,6 +790,7 @@ NODE_OPTIONS="--max-old-space-size=1024" npm run build
 /var/lib/jato-release/active-slot            JATO worker owner
 /var/lib/jato-release/deployment-maintenance durable mutation fence
 /var/lib/jato-release/scheduler-state.tsv    durable timer state snapshot
+/var/lib/jato-release/previous-metadata/...  candidate-bound rollback metadata
 /etc/jato-fullstack/nginx/active-release.conf API + frontend atomic route
 127.0.0.1:18000                              stable active-slot API for host jobs
 ```

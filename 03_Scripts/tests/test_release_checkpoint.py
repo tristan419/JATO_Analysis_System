@@ -711,6 +711,140 @@ class ReleaseCheckpointTests(unittest.TestCase):
         self.assertTrue(result["currentCheckpointPresent"])
         self.assertEqual(resume["decision"], "resumable")
 
+    def test_second_sha_gate_ignores_previous_metadata_outside_checkpoint_namespace(
+        self,
+    ) -> None:
+        state_root = self.root / "state"
+        checkpoints_root = state_root / "checkpoints"
+        first_identity = self.namespaced_identity(
+            commit="d" * 40,
+            archive_sha256="e" * 64,
+            run_id=234567,
+        )
+        self.write_namespaced(
+            checkpoints_root,
+            first_identity,
+            "backend_healthy",
+        )
+        second_identity = self.namespaced_identity(
+            commit="f" * 40,
+            archive_sha256="1" * 64,
+            run_id=345678,
+        )
+        current_path = self.write_namespaced(
+            checkpoints_root,
+            second_identity,
+            "prepared",
+        )
+        previous_metadata = (
+            state_root
+            / "previous-metadata"
+            / second_identity.commit
+            / f"{second_identity.archiveSha256}.json"
+        )
+        previous_metadata.parent.mkdir(parents=True)
+        previous_metadata.write_bytes(
+            json.dumps(
+                {"actualCommitSha": first_identity.commit},
+                sort_keys=True,
+                separators=(",", ":"),
+            ).encode("utf-8")
+            + b"\n"
+        )
+
+        result = checkpoint.assert_cross_release_safe(
+            checkpoints_root=checkpoints_root,
+            current_checkpoint=current_path,
+            expected_identity=second_identity,
+        )
+
+        self.assertEqual(result["decision"], "cross-release-safe")
+        self.assertEqual(result["checkpointsScanned"], 2)
+        self.assertTrue(previous_metadata.is_file())
+        self.assertFalse(previous_metadata.is_relative_to(checkpoints_root))
+
+    def test_previous_metadata_sidecar_inside_checkpoint_namespace_is_rejected(
+        self,
+    ) -> None:
+        checkpoints_root = self.root / "checkpoints"
+        current_path = self.write_namespaced(
+            checkpoints_root,
+            self.identity,
+            "prepared",
+        )
+        forbidden_sidecar = current_path.with_name(
+            f"{self.identity.archiveSha256}.previous-release.json"
+        )
+        forbidden_sidecar.write_text(
+            json.dumps({"actualCommitSha": "d" * 40}),
+            encoding="utf-8",
+        )
+
+        with self.assertRaisesRegex(
+            checkpoint.CheckpointError,
+            "invalid checkpoint filename",
+        ):
+            checkpoint.assert_cross_release_safe(
+                checkpoints_root=checkpoints_root,
+                current_checkpoint=current_path,
+                expected_identity=self.identity,
+            )
+
+    def test_previous_metadata_owner_preserves_shared_state_root_mode(self) -> None:
+        resolved_root = self.root.resolve()
+        state_root = resolved_root / "state"
+        state_root.mkdir(mode=0o755)
+        os.chmod(state_root, 0o755)
+        source = resolved_root / "deploy_release.json"
+        source.write_text(
+            json.dumps({"actualCommitSha": "d" * 40}),
+            encoding="utf-8",
+        )
+        uid = os.getuid()
+        gid = os.getgid()
+
+        first = checkpoint.preserve_previous_release_metadata(
+            state_root=state_root,
+            source=source,
+            candidate_commit=self.identity.commit,
+            archive_sha256=self.identity.archiveSha256,
+            owner_uid=uid,
+            owner_gid=gid,
+        )
+        second = checkpoint.preserve_previous_release_metadata(
+            state_root=state_root,
+            source=source,
+            candidate_commit=self.identity.commit,
+            archive_sha256=self.identity.archiveSha256,
+            owner_uid=uid,
+            owner_gid=gid,
+        )
+
+        metadata_root = state_root / "previous-metadata"
+        candidate_root = metadata_root / self.identity.commit
+        sidecar = candidate_root / f"{self.identity.archiveSha256}.json"
+        self.assertEqual(stat.S_IMODE(state_root.stat().st_mode), 0o755)
+        self.assertEqual(stat.S_IMODE(metadata_root.stat().st_mode), 0o700)
+        self.assertEqual(stat.S_IMODE(candidate_root.stat().st_mode), 0o700)
+        self.assertEqual(stat.S_IMODE(sidecar.stat().st_mode), 0o600)
+        for path in (metadata_root, candidate_root, sidecar):
+            self.assertEqual(path.stat().st_uid, uid)
+            self.assertEqual(path.stat().st_gid, gid)
+        self.assertFalse(first["reused"])
+        self.assertTrue(second["reused"])
+
+        with self.assertRaisesRegex(
+            checkpoint.CheckpointError,
+            "must be provided together",
+        ):
+            checkpoint.preserve_previous_release_metadata(
+                state_root=state_root,
+                source=source,
+                candidate_commit="e" * 40,
+                archive_sha256="f" * 64,
+                owner_uid=uid,
+            )
+
     def test_cross_release_gate_treats_completed_rollback_as_settled(self) -> None:
         checkpoints_root = self.root / "checkpoints"
         rolled_back_identity = self.namespaced_identity(

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import os
 import subprocess
 from pathlib import Path
@@ -61,20 +62,64 @@ def _controller_environment(tmp_path: Path) -> dict[str, str]:
         "PREBUILT_FRONTEND_DIR": str(tmp_path / "transient-frontend"),
         "CHECKPOINT_FILE": str(tmp_path / "checkpoint.json"),
         "CHECKPOINT_JOURNAL": str(tmp_path / "checkpoint.jsonl"),
+        "BLUEGREEN_CHECKPOINT_HELPER_OVERRIDE": str(
+            REPO_ROOT / "03_Scripts/deploy/release_checkpoint.py"
+        ),
+        "BLUEGREEN_STORAGE_GUARD_OVERRIDE": str(
+            REPO_ROOT / "03_Scripts/deploy/jato_release_storage_guard.py"
+        ),
     }
 
 
 def _run_controller_harness(
     tmp_path: Path,
     body: str,
+    *,
+    env_overrides: dict[str, str] | None = None,
 ) -> subprocess.CompletedProcess[str]:
+    environment = _controller_environment(tmp_path)
+    if env_overrides:
+        environment.update(env_overrides)
     return subprocess.run(
         ["bash", "-c", f"{_controller_prelude()}\n{body}\n"],
-        env=_controller_environment(tmp_path),
+        env=environment,
         text=True,
         capture_output=True,
         check=False,
     )
+
+
+def _release_metadata_bytes(commit: str, *, marker: str) -> bytes:
+    return (
+        json.dumps(
+            {
+                "actualCommitSha": commit,
+                "marker": marker,
+            },
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
+        + b"\n"
+    )
+
+
+def _expected_previous_metadata_path(tmp_path: Path) -> Path:
+    return (
+        tmp_path
+        / "state"
+        / "previous-metadata"
+        / TARGET_SHA
+        / f"{'c' * 64}.json"
+    )
+
+
+def _candidate_previous_metadata_path(
+    tmp_path: Path,
+    *,
+    commit: str,
+    archive: str,
+) -> Path:
+    return tmp_path / "state" / "previous-metadata" / commit / f"{archive}.json"
 
 
 def test_outer_unconditionally_hands_off_without_legacy_live_tree_mutation() -> None:
@@ -91,6 +136,232 @@ def test_outer_unconditionally_hands_off_without_legacy_live_tree_mutation() -> 
     assert "03_Scripts/deploy/jato_quiescence_gate.py" in outer
     assert "03_Scripts/deploy/tencent_bluegreen_release.sh" in outer
     assert "jato-fullstack-backend-slot.env.example" in outer
+
+
+def test_previous_metadata_sidecar_uses_release_identity_outside_checkpoints() -> None:
+    script = CONTROLLER.read_text(encoding="utf-8")
+    preserve = _shell_function(script, "preserve_previous_release_metadata")
+    prepare = _shell_function(script, "prepare_and_switch")
+
+    assert "$BLUEGREEN_STATE_ROOT/previous-metadata" in script
+    assert "$DEPLOY_COMMIT_SHA/$DEPLOY_ARCHIVE_SHA256.json" in script
+    assert (
+        'PREVIOUS_RELEASE_METADATA_PATH="${CHECKPOINT_FILE%.json}.'
+        'previous-release.json"'
+        not in script
+    )
+    assert 'sudo -n python3 -B "$CHECKPOINT_HELPER"' in preserve
+    assert '--owner-uid "$(id -u)"' in preserve
+    assert '--owner-gid "$(id -g)"' in preserve
+    assert prepare.index("ensure_bluegreen_state_root") < prepare.index(
+        "preserve_previous_release_metadata"
+    )
+
+
+def test_first_bluegreen_release_preserves_exact_legacy_metadata(
+    tmp_path: Path,
+) -> None:
+    legacy_metadata = tmp_path / "legacy/hermes/deploy_release.json"
+    legacy_metadata.parent.mkdir(parents=True)
+    expected_bytes = _release_metadata_bytes(OLD_SHA, marker="legacy-first")
+    legacy_metadata.write_bytes(expected_bytes)
+    result = _run_controller_harness(
+        tmp_path,
+        """
+sudo() {
+  if [[ "${1:-}" == "-n" ]]; then shift; fi
+  "$@"
+}
+CURRENT_ACTIVE_SLOT=8000
+preserve_previous_release_metadata
+printf 'sidecar=%s\\n' "$PREVIOUS_DEPLOY_RELEASE_FILE"
+""",
+    )
+    sidecar = _expected_previous_metadata_path(tmp_path)
+
+    assert result.returncode == 0, result.stderr + result.stdout
+    assert f"sidecar={sidecar}" in result.stdout
+    assert sidecar.read_bytes() == expected_bytes
+    assert not (tmp_path / "checkpoint.previous-release.json").exists()
+
+
+def test_later_release_prefers_active_slot_metadata_over_legacy(
+    tmp_path: Path,
+) -> None:
+    active_root = tmp_path / f"bluegreen/releases/{OLD_SHA}/{'e' * 64}"
+    active_metadata = active_root / "hermes/deploy_release.json"
+    active_metadata.parent.mkdir(parents=True)
+    expected_bytes = _release_metadata_bytes(OLD_SHA, marker="active-slot")
+    active_metadata.write_bytes(expected_bytes)
+    slot_link = tmp_path / "bluegreen/slots/8000/current"
+    slot_link.parent.mkdir(parents=True)
+    slot_link.symlink_to(active_root)
+    legacy_metadata = tmp_path / "legacy/hermes/deploy_release.json"
+    legacy_metadata.parent.mkdir(parents=True)
+    legacy_metadata.write_bytes(
+        _release_metadata_bytes("9" * 40, marker="stale-legacy")
+    )
+    result = _run_controller_harness(
+        tmp_path,
+        """
+sudo() {
+  if [[ "${1:-}" == "-n" ]]; then shift; fi
+  "$@"
+}
+CURRENT_ACTIVE_SLOT=8000
+preserve_previous_release_metadata
+""",
+    )
+
+    assert result.returncode == 0, result.stderr + result.stdout
+    assert _expected_previous_metadata_path(tmp_path).read_bytes() == expected_bytes
+
+
+def test_previous_metadata_retry_reuses_exact_bytes_and_rejects_source_drift(
+    tmp_path: Path,
+) -> None:
+    legacy_metadata = tmp_path / "legacy/hermes/deploy_release.json"
+    legacy_metadata.parent.mkdir(parents=True)
+    original_bytes = _release_metadata_bytes(OLD_SHA, marker="stable")
+    legacy_metadata.write_bytes(original_bytes)
+    result = _run_controller_harness(
+        tmp_path,
+        f"""
+sudo() {{
+  if [[ "${{1:-}}" == "-n" ]]; then shift; fi
+  "$@"
+}}
+CURRENT_ACTIVE_SLOT=8000
+preserve_previous_release_metadata
+first_digest="$(sha256sum "$PREVIOUS_DEPLOY_RELEASE_FILE" | awk '{{print $1}}')"
+unset PREVIOUS_DEPLOY_RELEASE_FILE
+preserve_previous_release_metadata
+second_digest="$(sha256sum "$PREVIOUS_DEPLOY_RELEASE_FILE" | awk '{{print $1}}')"
+printf 'retry=%s:%s\\n' "$first_digest" "$second_digest"
+printf '%s' '{json.dumps({"actualCommitSha": "9" * 40, "marker": "drift"})}' \
+  > "{legacy_metadata}"
+unset PREVIOUS_DEPLOY_RELEASE_FILE
+if preserve_previous_release_metadata; then
+  printf 'unexpected-source-drift-acceptance\\n'
+  exit 91
+fi
+""",
+    )
+    sidecar = _expected_previous_metadata_path(tmp_path)
+
+    assert result.returncode == 0, result.stderr + result.stdout
+    first_digest, second_digest = (
+        result.stdout.split("retry=", 1)[1].splitlines()[0].split(":")
+    )
+    assert first_digest == second_digest
+    assert sidecar.read_bytes() == original_bytes
+    assert "unexpected-source-drift-acceptance" not in result.stdout
+
+
+def test_consecutive_a_then_b_release_preserves_previous_metadata_chain(
+    tmp_path: Path,
+) -> None:
+    legacy_metadata = tmp_path / "legacy/hermes/deploy_release.json"
+    legacy_metadata.parent.mkdir(parents=True)
+    legacy_bytes = _release_metadata_bytes(OLD_SHA, marker="legacy-before-a")
+    legacy_metadata.write_bytes(legacy_bytes)
+
+    first = _run_controller_harness(
+        tmp_path,
+        """
+sudo() {
+  if [[ "${1:-}" == "-n" ]]; then shift; fi
+  "$@"
+}
+CURRENT_ACTIVE_SLOT=8000
+preserve_previous_release_metadata
+""",
+    )
+    sidecar_a = _candidate_previous_metadata_path(
+        tmp_path,
+        commit=TARGET_SHA,
+        archive="c" * 64,
+    )
+    assert first.returncode == 0, first.stderr + first.stdout
+    assert sidecar_a.read_bytes() == legacy_bytes
+
+    active_a_root = tmp_path / f"bluegreen/releases/{TARGET_SHA}/{'c' * 64}"
+    active_a_metadata = active_a_root / "hermes/deploy_release.json"
+    active_a_metadata.parent.mkdir(parents=True)
+    active_a_bytes = _release_metadata_bytes(TARGET_SHA, marker="active-a")
+    active_a_metadata.write_bytes(active_a_bytes)
+    active_link = tmp_path / "bluegreen/slots/8000/current"
+    active_link.parent.mkdir(parents=True)
+    active_link.symlink_to(active_a_root)
+
+    commit_b = "e" * 40
+    archive_b = "f" * 64
+    second = _run_controller_harness(
+        tmp_path,
+        """
+sudo() {
+  if [[ "${1:-}" == "-n" ]]; then shift; fi
+  "$@"
+}
+CURRENT_ACTIVE_SLOT=8000
+preserve_previous_release_metadata
+""",
+        env_overrides={
+            "DEPLOY_COMMIT_SHA": commit_b,
+            "DEPLOY_ARCHIVE_SHA256": archive_b,
+            "CHECKPOINT_FILE": str(tmp_path / "checkpoint-b.json"),
+            "CHECKPOINT_JOURNAL": str(tmp_path / "checkpoint-b.jsonl"),
+        },
+    )
+    sidecar_b = _candidate_previous_metadata_path(
+        tmp_path,
+        commit=commit_b,
+        archive=archive_b,
+    )
+
+    assert second.returncode == 0, second.stderr + second.stdout
+    assert sidecar_a.read_bytes() == legacy_bytes
+    assert sidecar_b.read_bytes() == active_a_bytes
+    assert sidecar_a != sidecar_b
+    assert "checkpoint" not in str(sidecar_a.relative_to(tmp_path / "state"))
+    assert "checkpoint" not in str(sidecar_b.relative_to(tmp_path / "state"))
+
+
+@pytest.mark.parametrize("symlink_kind", ("source", "sidecar"))
+def test_previous_metadata_symlinks_fail_closed(
+    tmp_path: Path,
+    symlink_kind: str,
+) -> None:
+    legacy_metadata = tmp_path / "legacy/hermes/deploy_release.json"
+    legacy_metadata.parent.mkdir(parents=True)
+    real_metadata = tmp_path / "real-deploy-release.json"
+    real_metadata.write_bytes(_release_metadata_bytes(OLD_SHA, marker="real"))
+    if symlink_kind == "source":
+        legacy_metadata.symlink_to(real_metadata)
+    else:
+        matching_bytes = _release_metadata_bytes(OLD_SHA, marker="legacy")
+        legacy_metadata.write_bytes(matching_bytes)
+        real_metadata.write_bytes(matching_bytes)
+        sidecar = _expected_previous_metadata_path(tmp_path)
+        sidecar.parent.mkdir(parents=True)
+        sidecar.symlink_to(real_metadata)
+    result = _run_controller_harness(
+        tmp_path,
+        """
+sudo() {
+  if [[ "${1:-}" == "-n" ]]; then shift; fi
+  "$@"
+}
+CURRENT_ACTIVE_SLOT=8000
+if preserve_previous_release_metadata; then
+  printf 'unexpected-symlink-acceptance\\n'
+  exit 92
+fi
+""",
+    )
+
+    assert result.returncode == 0, result.stderr + result.stdout
+    assert "unexpected-symlink-acceptance" not in result.stdout
 
 
 def test_candidate_is_verified_before_quiescence_and_nginx_switch() -> None:
@@ -1095,6 +1366,8 @@ def test_runtime_seal_retry_and_switch_order_is_fail_closed() -> None:
     verify_candidate = _shell_function(script, "verify_candidate")
     unsandbox = _shell_function(script, "remove_candidate_sandbox_before_switch")
     switch = _shell_function(script, "switch_locked")
+    build = _shell_function(script, "build_candidate_runtime_locked")
+    build_scope = _shell_function(script, "run_candidate_build_scope")
     prepare = _shell_function(script, "prepare_and_switch")
 
     assert prepare_runtime.index("verify_final_runtime_seal") < prepare_runtime.index(
@@ -1111,10 +1384,195 @@ def test_runtime_seal_retry_and_switch_order_is_fail_closed() -> None:
     assert switch.index("verify_switch_prerequisites") < switch.index(
         'durable_install_file "$NGINX_ACTIVE_RELEASE_CONF" "$SWITCH_BACKUP"',
     )
-    assert prepare.index("write_candidate_deploy_status") < prepare.index(
+    assert build.index("assert_candidate_build_scope") < build.index(
+        "assert_inherited_production_lock",
+    ) < build.index("prepare_candidate_runtime")
+    assert build.index("write_candidate_deploy_status") < build.index(
         "finalize_runtime_seal",
-    ) < prepare.index("install_slot_runtime")
+    ) < build.index("verify_final_runtime_seal")
+    assert "--scope" in build_scope
+    assert "--wait" not in build_scope
+    assert "--property=\"MemoryHigh=$BLUEGREEN_CANDIDATE_MEMORY_HIGH\"" in build_scope
+    assert "--property=\"MemoryMax=$BLUEGREEN_CANDIDATE_MEMORY_MAX\"" in build_scope
+    assert "--property=\"TasksMax=512\"" in build_scope
+    assert "build-candidate-runtime" in build_scope
+    assert prepare.index("materialize_release_source") < prepare.index(
+        "run_candidate_build_scope",
+    ) < prepare.index("verify_final_runtime_seal") < prepare.index(
+        "assert_no_database_migration_delta",
+    ) < prepare.index(
+        "install_slot_runtime",
+    )
     assert "write_candidate_deploy_status" not in switch
+
+
+def test_runtime_roots_are_0755_under_umask_077(tmp_path: Path) -> None:
+    paths = (
+        tmp_path / "state",
+        tmp_path / "bluegreen",
+        tmp_path / "bluegreen/releases",
+        tmp_path / f"bluegreen/releases/{TARGET_SHA}",
+        tmp_path / "bluegreen/slots",
+        tmp_path / "bluegreen/slots/8000",
+        tmp_path / "bluegreen/slots/8001",
+        tmp_path / "bluegreen/shared",
+    )
+    result = _run_controller_harness(
+        tmp_path,
+        f"""
+umask 077
+mkdir -p {" ".join(str(path) for path in paths)}
+chmod 0700 {" ".join(str(path) for path in paths)}
+sudo() {{
+  if [[ "${{1:-}}" == "-n" ]]; then shift; fi
+  "$@"
+}}
+ensure_bluegreen_state_root
+ensure_bluegreen_runtime_roots
+""",
+    )
+
+    assert result.returncode == 0, result.stderr + result.stdout
+    for path in paths:
+        assert path.is_dir()
+        assert path.stat().st_mode & 0o777 == 0o755
+
+
+def test_candidate_build_scope_propagates_systemd_run_failure(
+    tmp_path: Path,
+) -> None:
+    controller = (
+        tmp_path
+        / f"bluegreen/releases/{TARGET_SHA}/{'c' * 64}"
+        / "03_Scripts/deploy/tencent_bluegreen_release.sh"
+    )
+    controller.parent.mkdir(parents=True)
+    controller.write_text("#!/usr/bin/env bash\nexit 0\n", encoding="utf-8")
+    result = _run_controller_harness(
+        tmp_path,
+        """
+sudo() {
+  if [[ "${1:-}" == "-n" ]]; then shift; fi
+  if [[ "${1:-}" == "systemd-run" ]]; then
+    printf 'scope-args:%s\\n' "$*"
+    return 73
+  fi
+  return 1
+}
+set +e
+run_candidate_build_scope
+rc=$?
+set -e
+printf 'scope-rc=%s\\n' "$rc"
+""",
+    )
+
+    assert result.returncode == 0, result.stderr + result.stdout
+    assert "scope-rc=73" in result.stdout
+    assert "--scope" in result.stdout
+    assert "--collect" in result.stdout
+    assert "--wait" not in result.stdout
+    assert "MemoryHigh=3G" in result.stdout
+    assert "MemoryMax=4G" in result.stdout
+    assert "TasksMax=512" in result.stdout
+
+
+@pytest.mark.parametrize(
+    "failure_stage",
+    ("pre_disk", "pre_memory", "post_disk", "post_memory"),
+)
+def test_prepare_resource_failure_blocks_candidate_mutation(
+    tmp_path: Path,
+    failure_stage: str,
+) -> None:
+    trace = tmp_path / "trace"
+    result = _run_controller_harness(
+        tmp_path,
+        f"""
+TRACE={trace}
+MEMORY_CALLS=0
+record() {{ printf '%s\\n' "$1" >> "$TRACE"; }}
+require_environment() {{ record require; }}
+assert_inherited_production_lock() {{ record lock; }}
+ensure_bluegreen_state_root() {{ record state-root; }}
+ensure_bluegreen_runtime_roots() {{ record runtime-roots; }}
+assert_no_active_switch_unit() {{ record no-switch; }}
+read_checkpoint_phase_status() {{
+  CHECKPOINT_PHASE=prepared
+  CHECKPOINT_STATUS=completed
+}}
+resolve_active_slot() {{ CURRENT_ACTIVE_SLOT=8000; CANDIDATE_SLOT=8001; }}
+resolve_current_frontend_root() {{ record frontend; }}
+prepare_shared_runtime() {{ record shared; }}
+ensure_current_slot_restartable() {{ record restartable; }}
+preserve_previous_release_metadata() {{ record metadata; }}
+guard_release_storage() {{
+  record pre-disk
+  [[ "{failure_stage}" != "pre_disk" ]]
+}}
+assert_host_memory_budget() {{
+  MEMORY_CALLS=$((MEMORY_CALLS + 1))
+  record "memory-$MEMORY_CALLS"
+  if [[ "{failure_stage}" == "pre_memory" && "$MEMORY_CALLS" -eq 1 ]]; then
+    return 1
+  fi
+  if [[ "{failure_stage}" == "post_memory" && "$MEMORY_CALLS" -eq 2 ]]; then
+    return 1
+  fi
+}}
+materialize_release_source() {{ record materialize; }}
+run_candidate_build_scope() {{ record build-scope; }}
+verify_final_runtime_seal() {{ record final-seal; }}
+assert_no_database_migration_delta() {{ record database-gate; }}
+assert_runtime_storage_reserve() {{
+  record post-disk
+  [[ "{failure_stage}" != "post_disk" ]]
+}}
+install_slot_runtime() {{ record unexpected-install; }}
+prepare_stable_nginx_boot_infrastructure() {{ record unexpected-nginx; }}
+verify_candidate() {{ record unexpected-start; }}
+prepare_and_switch
+""",
+    )
+    events = trace.read_text(encoding="utf-8").splitlines()
+
+    assert result.returncode != 0, result.stderr + result.stdout
+    assert "unexpected-install" not in events
+    assert "unexpected-nginx" not in events
+    assert "unexpected-start" not in events
+    if failure_stage.startswith("pre_"):
+        assert "materialize" not in events
+        assert "build-scope" not in events
+    else:
+        assert "materialize" in events
+        assert "build-scope" in events
+        assert "final-seal" in events
+
+
+def test_inherited_lock_failure_precedes_all_storage_mutation(
+    tmp_path: Path,
+) -> None:
+    trace = tmp_path / "trace"
+    result = _run_controller_harness(
+        tmp_path,
+        f"""
+TRACE={trace}
+require_environment() {{ printf 'require\\n' >> "$TRACE"; }}
+assert_inherited_production_lock() {{
+  printf 'lock-rejected\\n' >> "$TRACE"
+  return 1
+}}
+ensure_bluegreen_state_root() {{ printf 'unexpected-state\\n' >> "$TRACE"; }}
+ensure_bluegreen_runtime_roots() {{ printf 'unexpected-runtime\\n' >> "$TRACE"; }}
+guard_release_storage() {{ printf 'unexpected-gc\\n' >> "$TRACE"; }}
+materialize_release_source() {{ printf 'unexpected-materialize\\n' >> "$TRACE"; }}
+prepare_and_switch
+""",
+    )
+    events = trace.read_text(encoding="utf-8").splitlines()
+
+    assert result.returncode != 0, result.stderr + result.stdout
+    assert events == ["require", "lock-rejected"]
 
 
 def test_candidate_template_handoff_is_reboot_safe_before_commit() -> None:

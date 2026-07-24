@@ -44,6 +44,92 @@ def test_tencent_bluegreen_release_links_durable_runtime_artifacts() -> None:
     assert "Restored runtime path" not in outer
 
 
+def test_bluegreen_storage_guard_is_packaged_and_runs_before_candidate_runtime() -> None:
+    outer = (REPO_ROOT / "03_Scripts/deploy/fullstack_remote_release.sh").read_text(
+        encoding="utf-8",
+    )
+    controller = (
+        REPO_ROOT / "03_Scripts/deploy/tencent_bluegreen_release.sh"
+    ).read_text(encoding="utf-8")
+    boot_reconcile = (
+        REPO_ROOT / "03_Scripts/deploy/jato_bluegreen_boot_reconcile.py"
+    ).read_text(encoding="utf-8")
+    storage_guard = (
+        REPO_ROOT / "03_Scripts/deploy/jato_release_storage_guard.py"
+    ).read_text(encoding="utf-8")
+
+    assert "03_Scripts/deploy/jato_release_storage_guard.py" in outer
+    for required in (
+        "BLUEGREEN_MIN_TOTAL_MEMORY_BYTES=$((14 * 1024 * 1024 * 1024))",
+        "BLUEGREEN_MIN_AVAILABLE_MEMORY_BYTES=$((5 * 1024 * 1024 * 1024))",
+        "BLUEGREEN_CANDIDATE_MAX_MEMORY_BYTES=$((4 * 1024 * 1024 * 1024))",
+        "BLUEGREEN_OS_MEMORY_RESERVE_BYTES=$((2 * 1024 * 1024 * 1024))",
+        "BLUEGREEN_PREPARE_DISK_RESERVE_BYTES=$((15 * 1024 * 1024 * 1024))",
+        "BLUEGREEN_PREPARE_DISK_RESERVE_PERCENT=8",
+        "BLUEGREEN_RUNTIME_DISK_RESERVE_BYTES=$((10 * 1024 * 1024 * 1024))",
+        "BLUEGREEN_RUNTIME_DISK_RESERVE_PERCENT=5",
+        "BLUEGREEN_RELEASE_KEEP_UNREFERENCED=3",
+        "BLUEGREEN_RELEASE_NORMAL_GC_AGE_SECONDS=$((14 * 24 * 60 * 60))",
+        "BLUEGREEN_RELEASE_EMERGENCY_GC_AGE_SECONDS=$((24 * 60 * 60))",
+    ):
+        assert required in controller
+
+    prepare = controller[controller.index("prepare_and_switch()") :]
+    inherited_lock = prepare.index("\n  assert_inherited_production_lock\n")
+    state_root = prepare.index("\n  ensure_bluegreen_state_root\n")
+    runtime_roots = prepare.index("\n  ensure_bluegreen_runtime_roots\n")
+    preflight = prepare.index("\n  guard_release_storage\n")
+    preflight_memory = prepare.index("\n  assert_host_memory_budget\n", preflight)
+    materialize = prepare.index("\n  materialize_release_source\n")
+    build_scope = prepare.index("\n  run_candidate_build_scope\n")
+    final_seal = prepare.index("\n  verify_final_runtime_seal\n")
+    database_gate = prepare.index(
+        "\n  assert_no_database_migration_delta\n",
+        final_seal,
+    )
+    post_seal = prepare.index("\n  assert_runtime_storage_reserve\n")
+    runtime_memory = prepare.index("\n  assert_host_memory_budget\n", post_seal)
+    install = prepare.index("\n  install_slot_runtime\n")
+    assert (
+        inherited_lock
+        < state_root
+        < runtime_roots
+        < preflight
+        < preflight_memory
+        < materialize
+        < build_scope
+        < final_seal
+        < database_gate
+        < post_seal
+        < runtime_memory
+        < install
+    )
+    constrained_build = controller[
+        controller.index("run_candidate_build_scope()"):
+        controller.index("\n}\n", controller.index("run_candidate_build_scope()"))
+    ]
+    assert "--scope" in constrained_build
+    assert "--wait" not in constrained_build
+    assert '--property="MemoryHigh=$BLUEGREEN_CANDIDATE_MEMORY_HIGH"' in constrained_build
+    assert '--property="MemoryMax=$BLUEGREEN_CANDIDATE_MEMORY_MAX"' in constrained_build
+    assert '--property="TasksMax=512"' in constrained_build
+
+    assert "jato_release_storage_guard" not in boot_reconcile
+    assert "guard_release_storage" not in boot_reconcile
+    assert "shutil.rmtree" not in boot_reconcile
+    assert "rm -rf" not in boot_reconcile
+
+    for forbidden in (
+        "rm -rf",
+        "shutil.rmtree(releases_root)",
+        "shutil.rmtree(args.releases_root)",
+        "shutil.rmtree(jato_root)",
+        'glob("*")',
+        'rglob("*")',
+    ):
+        assert forbidden not in storage_guard
+
+
 def test_intl_edge_prewarm_verifies_completed_release_provenance_first() -> None:
     workflow = (REPO_ROOT / ".github/workflows/intl-edge-prewarm.yml").read_text(
         encoding="utf-8",
@@ -830,9 +916,14 @@ def test_deploy_prepares_frozen_release_identity_before_backend_restart() -> Non
     assert "install_backend_env_atomically" not in outer
     prepare = controller[controller.index("prepare_and_switch()"):]
     materialize = prepare.index("\n  materialize_release_source\n")
-    inner_prepare = prepare.index("\n    run_inner_prepare\n", materialize)
-    candidate = prepare.index("\n  verify_candidate\n", inner_prepare)
-    assert materialize < inner_prepare < candidate
+    build_scope = prepare.index("\n  run_candidate_build_scope\n", materialize)
+    frozen_seal = prepare.index("\n  verify_final_runtime_seal\n", build_scope)
+    candidate = prepare.index("\n  verify_candidate\n", frozen_seal)
+    assert materialize < build_scope < frozen_seal < candidate
+    build = _shell_function(controller, "build_candidate_runtime_locked")
+    inner_prepare = build.index("\n    run_inner_prepare\n")
+    finalize = build.index("\n    finalize_runtime_seal\n", inner_prepare)
+    assert inner_prepare < finalize
     run_inner = _shell_function(controller, "run_inner_prepare")
     assert "BLUEGREEN_PREPARE_ONLY=true" in run_inner
     assert "RUN_DATABASE_MIGRATIONS=false" in run_inner

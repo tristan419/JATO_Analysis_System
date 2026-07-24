@@ -25,6 +25,55 @@ upstream jato_fullstack_api {{
 """
 
 
+def active_frontend_map(root: str) -> str:
+    return f"""map $host $jato_frontend_root {{
+    default "{root}";
+}}
+"""
+
+
+def test_parses_exact_active_frontend_root() -> None:
+    root = (
+        "/opt/jato/releases/"
+        f"{'a' * 40}/{'b' * 64}/06_AppPlatform/frontend/dist"
+    )
+
+    assert MODULE.parse_active_frontend_root(active_frontend_map(root)) == Path(root)
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        active_frontend_map("../06_AppPlatform/frontend/dist"),
+        active_frontend_map("/tmp/release/06_AppPlatform/frontend/dist"),
+        """map $host $jato_frontend_root {
+            default "/opt/one/06_AppPlatform/frontend/dist";
+            example.com "/opt/two/06_AppPlatform/frontend/dist";
+        }""",
+        (
+            active_frontend_map("/opt/one/06_AppPlatform/frontend/dist")
+            + active_frontend_map("/opt/two/06_AppPlatform/frontend/dist")
+        ),
+    ],
+)
+def test_rejects_ambiguous_or_unsafe_active_frontend_root(payload: str) -> None:
+    with pytest.raises(MODULE.ReconcileError):
+        MODULE.parse_active_frontend_root(payload)
+
+
+def test_active_frontend_reader_rejects_symlink(tmp_path: Path) -> None:
+    target = tmp_path / "target.conf"
+    target.write_text(
+        active_frontend_map("/opt/legacy/06_AppPlatform/frontend/dist"),
+        encoding="utf-8",
+    )
+    link = tmp_path / "active-release.conf"
+    link.symlink_to(target)
+
+    with pytest.raises(MODULE.ReconcileError, match="unsafe"):
+        MODULE.read_active_frontend_root(link)
+
+
 def write_slot_env(
     tmp_path: Path,
     slot: str,
