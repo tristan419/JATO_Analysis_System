@@ -22,13 +22,18 @@ from typing import Any
 
 SCRIPT_DIR = Path(__file__).resolve().parent
 REPO_ROOT = Path(__file__).resolve().parent.parent
+BACKEND_DIR = REPO_ROOT / "06_AppPlatform" / "backend"
 if str(SCRIPT_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPT_DIR))
+if str(BACKEND_DIR) not in sys.path:
+    sys.path.insert(0, str(BACKEND_DIR))
 
 try:
     from msrp_dryrun_aggregate import _write_source_repair_backlog as _write_v3_source_repair_backlog
 except ImportError:  # pragma: no cover - keeps old-report fallback usable in stripped script contexts.
     _write_v3_source_repair_backlog = None  # type: ignore[assignment]
+
+from app.services.msrp_source_issue_classifier import enrich_msrp_source_issue
 
 
 def _load_dryrun_report(path: str | None) -> dict:
@@ -87,7 +92,12 @@ def _build_backlog(report: dict) -> dict:
     results = report.get("results") or []
     total = report.get("total") or len(results)
     pass_count = report.get("pass") or sum(1 for r in results if r.get("failureReason") is None)
-    failed = [r for r in results if r.get("failureReason") is not None]
+    failed = [
+        enrich_msrp_source_issue(r)
+        for r in results
+        if r.get("failureReason") is not None
+        or str(r.get("httpStatus") or "") == "403"
+    ]
     pass_pct = report.get("passPct") or round(pass_count / total * 100, 1) if total else 0.0
 
     # Group by failure reason
@@ -104,6 +114,8 @@ def _build_backlog(report: dict) -> dict:
                 "country": src.get("country", "?"),
                 "sourceCode": src.get("code") or src.get("sourceCode", "?"),
                 "sourceUrl": src.get("sourceUrl", ""),
+                "finalUrl": src.get("finalUrl", ""),
+                "httpStatus": src.get("httpStatus"),
                 "extractorType": src.get("extractorType", ""),
                 "tier": src.get("tier", ""),
                 "status": src.get("status", "?"),
@@ -113,6 +125,17 @@ def _build_backlog(report: dict) -> dict:
                 "failureReason": reason,
                 "elapsed": src.get("elapsed", 0),
             }
+            for key in (
+                "issueClass",
+                "sourceLifecycleStatus",
+                "blockingDisposition",
+                "likelyCause",
+                "recommendedAction",
+                "originalFailureReason",
+                "originalRecommendedStrategy",
+            ):
+                if src.get(key) not in (None, ""):
+                    item[key] = src[key]
             if reason == "no_observation_extracted":
                 item["recommendedStrategy"] = _classify_no_observation(src)
             elif reason == "validation_rejected_all":
@@ -127,9 +150,15 @@ def _build_backlog(report: dict) -> dict:
 
     # Compute strategy counts
     strategy_counts: dict[str, int] = {}
+    issue_class_counts: dict[str, int] = {}
     for item in backlog_items:
         strat = item.get("recommendedStrategy", "unknown")
         strategy_counts[strat] = strategy_counts.get(strat, 0) + 1
+        issue_class = str(item.get("issueClass") or "")
+        if issue_class:
+            issue_class_counts[issue_class] = (
+                issue_class_counts.get(issue_class, 0) + 1
+            )
 
     return {
         "schemaVersion": "msrp_source_repair_backlog_v1",
@@ -144,6 +173,7 @@ def _build_backlog(report: dict) -> dict:
         },
         "failureBreakdown": {reason: len(sources) for reason, sources in sorted(by_reason.items())},
         "strategyRecommendations": strategy_counts,
+        "issueClassBreakdown": issue_class_counts,
         "backlog": backlog_items,
     }
 
@@ -193,15 +223,60 @@ def _render_markdown(backlog: dict) -> str:
                 lines.append(f"| {item['country']} | `{item['sourceCode'][:40]}` "
                            f"| {item.get('likelyCause', '?')} | {item.get('recommendedFix', '?')} |")
         else:
-            lines.append("| Country | Source | Extractor | Tier | Recommended Strategy | Elapsed |")
-            lines.append("|---|---|---|---|---|---|")
+            lines.append(
+                "| Country | Source | Issue Class | Recommended Strategy "
+                "| Recommended Action |"
+            )
+            lines.append("|---|---|---|---|---|")
             for item in items:
                 lines.append(f"| {item['country']} | `{item['sourceCode'][:40]}` "
-                           f"| {item.get('extractorType', '-')} | {item.get('tier', '-')} "
-                           f"| {item['recommendedStrategy']} | {item['elapsed']}s |")
+                           f"| {item.get('issueClass', '-')} "
+                           f"| {item['recommendedStrategy']} "
+                           f"| {item.get('recommendedAction', '-')} |")
         lines.append("")
 
     return "\n".join(lines)
+
+
+def _attach_structured_issue_summary(
+    backlog: dict,
+    report: dict,
+    json_path: Path,
+    markdown_path: Path,
+) -> dict:
+    """Add canonical failure feedback without discarding v3 priority metadata."""
+    structured = _build_backlog(report)
+    backlog["structuredIssueSummary"] = {
+        "failureBreakdown": structured["failureBreakdown"],
+        "strategyRecommendations": structured["strategyRecommendations"],
+        "issueClassBreakdown": structured["issueClassBreakdown"],
+        "items": structured["backlog"],
+    }
+    json_path.write_text(
+        json.dumps(backlog, indent=2, ensure_ascii=False) + "\n",
+        encoding="utf-8",
+    )
+
+    lines = [
+        "",
+        "## Structured Failure Feedback",
+        "",
+        "| Country | Source | Failure reason | Issue class | Recommended action |",
+        "|---|---|---|---|---|",
+    ]
+    for item in structured["backlog"]:
+        lines.append(
+            "| {country} | `{source}` | {reason} | {issue_class} | {action} |".format(
+                country=str(item.get("country") or "-").upper(),
+                source=item.get("sourceCode") or "-",
+                reason=item.get("failureReason") or "-",
+                issue_class=item.get("issueClass") or "-",
+                action=item.get("recommendedAction") or "-",
+            )
+        )
+    with markdown_path.open("a", encoding="utf-8") as handle:
+        handle.write("\n".join(lines) + "\n")
+    return backlog
 
 
 def run(dryrun_path: str | None = None, out_dir: str | None = None) -> dict:
@@ -222,6 +297,12 @@ def run(dryrun_path: str | None = None, out_dir: str | None = None) -> dict:
             backlog = json.loads(json_path.read_text(encoding="utf-8"))
         except Exception:
             backlog = {}
+        backlog = _attach_structured_issue_summary(
+            backlog,
+            report,
+            json_path,
+            md_path,
+        )
         print(f"[backlog] JSON: {json_path}")
         print(f"[backlog] Markdown: {md_path}")
         print(
