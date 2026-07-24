@@ -17,6 +17,9 @@ PREWARM_WORKFLOW_PATH = REPO_ROOT / ".github/workflows/intl-edge-prewarm.yml"
 CI_WORKFLOW_PATH = REPO_ROOT / ".github/workflows/ci.yml"
 REMOTE_RELEASE_PATH = REPO_ROOT / "03_Scripts/deploy/fullstack_remote_release.sh"
 SERVER_RELEASE_PATH = REPO_ROOT / "03_Scripts/ops/deploy_fullstack_server.sh"
+BLUEGREEN_RELEASE_PATH = (
+    REPO_ROOT / "03_Scripts/deploy/tencent_bluegreen_release.sh"
+)
 MAIN_CONDITION = "github.ref == 'refs/heads/main'"
 PREWARM_CONDITION = " ".join(
     (
@@ -551,6 +554,26 @@ def assert_tencent_resumable_upload_contract(workflow: Mapping[str, Any]) -> Non
         raise AssertionError("deployment secrets must not be exposed in remote command argv")
     if '"umask 077; exec bash -s" < "$control_payload"' not in deploy:
         raise AssertionError("deployment must send a mode-0600 control payload over SSH stdin")
+    remote_timeout = re.search(
+        r'timeout\s+([0-9]+)s\s+"\$\{ssh_command\[@\]\}"',
+        deploy,
+    )
+    controller_text = BLUEGREEN_RELEASE_PATH.read_text(encoding="utf-8")
+    controller_timeout = re.search(
+        r'BLUEGREEN_CONTROLLER_TIMEOUT="\$\{BLUEGREEN_CONTROLLER_TIMEOUT:-([0-9]+)\}"',
+        controller_text,
+    )
+    if remote_timeout is None or controller_timeout is None:
+        raise AssertionError(
+            "Tencent SSH/controller timeout budgets must be explicit and numeric"
+        )
+    remote_timeout_seconds = int(remote_timeout.group(1))
+    controller_timeout_seconds = int(controller_timeout.group(1))
+    if remote_timeout_seconds < controller_timeout_seconds + 600:
+        raise AssertionError(
+            "Tencent SSH timeout must exceed the persistent controller budget "
+            "by at least 600 seconds"
+        )
 
 
 def assert_deterministic_backend_package(workflow: Mapping[str, Any]) -> None:
@@ -645,12 +668,17 @@ def assert_release_checkpoint_contract(workflow: Mapping[str, Any]) -> None:
         "backend-healthy.json",
         "backend-healthy.evidence.json",
         "attestation_complete=false",
-        'rm -rf "$server_dir"',
+        "record_checkpoint_fetch_exit",
+        'trap record_checkpoint_fetch_exit EXIT',
+        '"$server_dir/fetch-status.json"',
+        '"backendHealthyAttested"',
         'checkpoint.get("phase") != "backend_healthy"',
         'checkpoint.get("status") != "completed"',
         "server checkpoint evidence binding mismatch",
         'evidence.get("identity") != expected_identity',
         'echo "Server checkpoint/evidence attestation SHA-256: $attestation_sha256"',
+        '"$server_dir/backend-healthy.json"',
+        '"$RUNNER_TEMP/release-checkpoint/candidate.json"',
     )
     missing_attestation = [
         token for token in required_attestation_tokens if token not in server_attestation_run
@@ -658,6 +686,16 @@ def assert_release_checkpoint_contract(workflow: Mapping[str, Any]) -> None:
     if missing_attestation:
         raise AssertionError(
             f"server checkpoint attestation is incomplete: {missing_attestation}"
+        )
+    if server_attestation.get("if") != (
+        "${{ always() && steps.upload_release.outcome == 'success' }}"
+    ):
+        raise AssertionError(
+            "server checkpoint evidence must be fetched even when deployment fails",
+        )
+    if 'rm -rf "$server_dir"' in server_attestation_run:
+        raise AssertionError(
+            "failed server attestation must retain raw checkpoint evidence",
         )
     if 'echo "attestation-sha256=$attestation_sha256"' in server_attestation_run:
         raise AssertionError(
@@ -746,10 +784,15 @@ def assert_release_checkpoint_contract(workflow: Mapping[str, Any]) -> None:
     if verified_with.get("retention-days") != "30":
         raise AssertionError("verified receipt must be retained for thirty days")
 
-
 def assert_server_consumes_only_prebuilt_dist() -> None:
     remote_release = REMOTE_RELEASE_PATH.read_text(encoding="utf-8")
     server_release = SERVER_RELEASE_PATH.read_text(encoding="utf-8")
+    bluegreen_release_path = (
+        REPO_ROOT / "03_Scripts/deploy/tencent_bluegreen_release.sh"
+    )
+    if not bluegreen_release_path.is_file():
+        raise AssertionError("Tencent blue/green release controller is missing")
+    bluegreen_release = bluegreen_release_path.read_text(encoding="utf-8")
     for path, script in (
         (REMOTE_RELEASE_PATH, remote_release),
         (SERVER_RELEASE_PATH, server_release),
@@ -770,6 +813,50 @@ def assert_server_consumes_only_prebuilt_dist() -> None:
         raise AssertionError("server recovery must reuse the privileged evidence verifier")
     if "--materialize-dir \"$PREBUILT_FRONTEND_DIR\"" not in remote_release:
         raise AssertionError("remote release must materialize only the verified artifact")
+    handoff = (
+        'bash "$RELEASE_WORKTREE/03_Scripts/deploy/'
+        'tencent_bluegreen_release.sh"'
+    )
+    if handoff not in remote_release:
+        raise AssertionError("production remote release must use Tencent blue/green")
+    if 'rm -rf "$REPO_DIR/$release_path"' in remote_release:
+        raise AssertionError(
+            "production remote release must not retain legacy live-tree mutation",
+        )
+    for forbidden in (
+        "merge_previous_frontend_assets",
+        'cp -p "$source" "$target"',
+    ):
+        if forbidden in bluegreen_release:
+            raise AssertionError(
+                "Tencent blue/green must not mutate the verified frontend "
+                f"artifact with old-slot assets: {forbidden!r}",
+            )
+    handoff_exit = 'exit "$BLUEGREEN_RC"'
+    if handoff_exit not in remote_release[remote_release.index(handoff) :]:
+        raise AssertionError("Tencent blue/green handoff must terminate the outer verifier")
+    if remote_release[remote_release.index(handoff_exit) + len(handoff_exit) :].strip():
+        raise AssertionError(
+            "production remote release must not retain a legacy deployment tail",
+        )
+    for token in (
+        '"$python_bin" -B "$helper" hold',
+        "--active-main-pid",
+        "--expected-project-root",
+        "--active-bundle-lock",
+        "verify_candidate",
+        "restore_previous_route",
+        "rollback_completed",
+        "BLUEGREEN_CANDIDATE_MEMORY_HIGH:-3G",
+        "BLUEGREEN_CANDIDATE_MEMORY_MAX:-4G",
+        "BLUEGREEN_ACTIVE_MEMORY_HIGH:-6G",
+        "BLUEGREEN_ACTIVE_MEMORY_MAX:-8G",
+        "Blue/green v1 forbids Alembic changes",
+    ):
+        if token not in bluegreen_release:
+            raise AssertionError(
+                f"Tencent blue/green release contract is missing {token!r}",
+            )
     if "install_prebuilt_frontend" not in server_release:
         raise AssertionError("server release must atomically install the prebuilt dist")
     if 'mv "$PREBUILT_FRONTEND_DIR" "$target_dir"' not in server_release:
@@ -853,6 +940,7 @@ def assert_backend_readiness_ci_contract(
     bounded_pytest_command = pytest_match.group(0)
     required_tokens = (
         "tests/integration/test_api_contracts.py",
+        "tests/unit/test_jato_monthly_update_enabled_gate.py",
         "tests/unit/test_readiness_service.py",
         '|| status=$?',
     )
@@ -892,10 +980,21 @@ def assert_required_ci_contract() -> None:
         "test_verify_intl_runtime_contract.py",
         "bash -n",
         "fullstack_remote_release.sh",
+        "tencent_bluegreen_release.sh",
+        "production_mutation_lock.sh",
+        "enable_jato_fullstack_https.sh",
+        "install_jato_fullstack_nginx.sh",
         "deploy_fullstack_server.sh",
         "backup_production_data.sh",
+        "sync_data_to_cloud.sh",
+        "sync_msrp_db_to_cloud.sh",
         "test_release_checkpoint.py",
         "test_release_evidence.py",
+        "test_bluegreen_systemd_nginx_contract.py",
+        "test_jato_bluegreen_boot_reconcile.py",
+        "test_jato_quiescence_gate.py",
+        "test_tencent_bluegreen_release.py",
+        "test_release_source_seal.py",
         "test_release_shell_hardening.py",
         "test_deploy_workflow.py",
         "npx vitest run",

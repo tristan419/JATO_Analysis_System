@@ -9,6 +9,9 @@ RUN_DATABASE_MIGRATIONS="${RUN_DATABASE_MIGRATIONS:-auto}"
 PRODUCTION_RELEASE_WORKFLOW="${PRODUCTION_RELEASE_WORKFLOW:-false}"
 RUN_PRE_DEPLOY_BACKUP="${RUN_PRE_DEPLOY_BACKUP:-auto}"
 RUN_GROUPED_TIME_SERIES_PREWARM="${RUN_GROUPED_TIME_SERIES_PREWARM:-auto}"
+BLUEGREEN_PREPARE_ONLY="${BLUEGREEN_PREPARE_ONLY:-false}"
+BLUEGREEN_POST_ACTIVATION_ONLY="${BLUEGREEN_POST_ACTIVATION_ONLY:-false}"
+BLUEGREEN_GLOBAL_RECONCILE_ONLY="${BLUEGREEN_GLOBAL_RECONCILE_ONLY:-false}"
 REMOTE_NAME="${REMOTE_NAME:-}"
 REPO_REMOTE_URL="${REPO_REMOTE_URL:-git@github.com:tristan419/JATO_Analysis_System.git}"
 SKIP_GIT_SYNC="${SKIP_GIT_SYNC:-false}"
@@ -61,8 +64,10 @@ PREVIOUS_DEPLOY_RELEASE_FILE="${PREVIOUS_DEPLOY_RELEASE_FILE:-}"
 DEPLOY_FAILURE_FILE="${DEPLOY_FAILURE_FILE:-$REPO_DIR/hermes/deploy_failure_context.txt}"
 SYSTEMD_SOURCE_DIR="$REPO_DIR/03_Scripts/deploy/systemd"
 SYSTEMD_TARGET_DIR="/etc/systemd/system"
+SYSTEMD_RUNTIME_ROOT="${SYSTEMD_RUNTIME_ROOT:-$REPO_DIR}"
 JATO_ETC_DIR="/etc/jato-fullstack"
 ENABLE_SCRAPER_SCHEDULERS="${ENABLE_SCRAPER_SCHEDULERS:-true}"
+RECONCILE_SCRAPER_TIMER_STATE="${RECONCILE_SCRAPER_TIMER_STATE:-true}"
 BOOTSTRAP_MSRP_DRYRUN_IF_MISSING="${BOOTSTRAP_MSRP_DRYRUN_IF_MISSING:-true}"
 RELEASE_CHECKPOINT_FILE="${RELEASE_CHECKPOINT_FILE:-}"
 RELEASE_CHECKPOINT_JOURNAL="${RELEASE_CHECKPOINT_JOURNAL:-}"
@@ -108,12 +113,14 @@ checkpoint_phase_rank() {
     migrated) echo 7 ;;
     switch_started) echo 8 ;;
     switched) echo 9 ;;
-    backend_healthy) echo 10 ;;
-    www_verified) echo 11 ;;
-    intl_deploy_started) echo 12 ;;
-    intl_verified) echo 13 ;;
-    parity_verified) echo 14 ;;
-    complete) echo 15 ;;
+    rollback_started) echo 10 ;;
+    rollback_completed) echo 11 ;;
+    backend_healthy) echo 12 ;;
+    www_verified) echo 13 ;;
+    intl_deploy_started) echo 14 ;;
+    intl_verified) echo 15 ;;
+    parity_verified) echo 16 ;;
+    complete) echo 17 ;;
     *) echo -1 ;;
   esac
 }
@@ -542,7 +549,11 @@ prepare_target_release_metadata() {
 }
 
 prepare_target_backend_identity() {
-  install_target_release_sha_atomically
+  if [[ "$BLUEGREEN_PREPARE_ONLY" == "true" ]]; then
+    echo "[INFO] Blue/green candidate SHA is isolated in its slot env; common backend.env remains unchanged"
+  else
+    install_target_release_sha_atomically
+  fi
   prepare_target_release_metadata
 }
 
@@ -853,7 +864,7 @@ install_systemd_file() {
   fi
 
   temp_file="$(mktemp)"
-  sed "s|/opt/JATO_Analysis_System-main|$REPO_DIR|g" "$source_path" > "$temp_file"
+  sed "s|/opt/JATO_Analysis_System-main|$SYSTEMD_RUNTIME_ROOT|g" "$source_path" > "$temp_file"
   sudo -n install -D -m 644 "$temp_file" "$SYSTEMD_TARGET_DIR/$target_name"
   rm -f "$temp_file"
 }
@@ -874,10 +885,57 @@ install_env_file_if_missing() {
   fi
 
   temp_file="$(mktemp)"
-  sed "s|/opt/JATO_Analysis_System-main|$REPO_DIR|g" "$source_path" > "$temp_file"
+  sed "s|/opt/JATO_Analysis_System-main|$SYSTEMD_RUNTIME_ROOT|g" "$source_path" > "$temp_file"
   sudo -n install -D -m "$mode" "$temp_file" "$target_path"
   rm -f "$temp_file"
   echo "[INFO] Installed default env file: $target_path"
+}
+
+upsert_managed_env_value() {
+  local target_path="$1"
+  local key="$2"
+  local value="$3"
+  local local_candidate=""
+  local remote_candidate="${target_path}.new.$$"
+
+  if sudo -n test -L "$target_path" \
+    || ! sudo -n test -f "$target_path"; then
+    fail_deploy "Managed env target must be a regular non-symlink file: $target_path" "$LINENO"
+  fi
+  local_candidate="$(mktemp)"
+  sudo -n cat "$target_path" > "$local_candidate"
+  python3 - "$local_candidate" "$key" "$value" <<'PY'
+from pathlib import Path
+import re
+import shlex
+import sys
+
+path = Path(sys.argv[1])
+key = sys.argv[2]
+value = sys.argv[3]
+if not re.fullmatch(r"[A-Z][A-Z0-9_]*", key):
+    raise SystemExit("[ERROR] invalid managed env key")
+if "\n" in value or "\r" in value:
+    raise SystemExit("[ERROR] invalid managed env value")
+pattern = re.compile(rf"^[ \t]*{re.escape(key)}=")
+lines = [
+    line
+    for line in path.read_text(encoding="utf-8").splitlines()
+    if not pattern.match(line)
+]
+lines.append(f"{key}={shlex.quote(value)}")
+path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+PY
+  if ! bash -n "$local_candidate" \
+    || ! sudo -n install -m 0600 "$local_candidate" "$remote_candidate" \
+    || ! sudo -n bash -n "$remote_candidate" \
+    || ! sudo -n mv -f "$remote_candidate" "$target_path"; then
+    rm -f "$local_candidate"
+    sudo -n rm -f "$remote_candidate" >/dev/null 2>&1 || true
+    fail_deploy "Failed to atomically update managed env value $key in $target_path" "$LINENO"
+  fi
+  rm -f "$local_candidate"
+  echo "[INFO] Reconciled managed env value $key in $target_path"
 }
 
 run_pre_deploy_backup() {
@@ -1189,6 +1247,10 @@ reconcile_scraper_schedulers() {
   install_env_file_if_missing \
     "$SYSTEMD_SOURCE_DIR/jato-msrp.env.example" \
     "$JATO_ETC_DIR/msrp.env"
+  upsert_managed_env_value \
+    "$JATO_ETC_DIR/msrp.env" \
+    JATO_API_BASE \
+    "http://127.0.0.1:18000/v1"
   install_env_file_if_missing \
     "$SYSTEMD_SOURCE_DIR/jato-voc.env.example" \
     "$JATO_ETC_DIR/voc.env"
@@ -1206,6 +1268,11 @@ reconcile_scraper_schedulers() {
   install_systemd_file "$SYSTEMD_SOURCE_DIR/hermes-source-quality.timer"
 
   sudo -n systemctl daemon-reload
+
+  if ! is_truthy "$RECONCILE_SCRAPER_TIMER_STATE"; then
+    echo "[INFO] Scheduler definitions refreshed without changing timer enabled/active state"
+    return 0
+  fi
 
   restart_timer_unit jato-country-news-sync.timer
   restart_timer_unit jato-country-news-sync-b.timer
@@ -1270,6 +1337,46 @@ run_post_deploy_readiness_audits() {
     echo "[WARN] Unified scraping readiness script missing: $script"
   fi
 }
+
+if [[ "$BLUEGREEN_GLOBAL_RECONCILE_ONLY" == "true" ]]; then
+  if [[ "$BLUEGREEN_PREPARE_ONLY" == "true" ]] \
+    || [[ "$BLUEGREEN_POST_ACTIVATION_ONLY" == "true" ]]; then
+    fail_deploy "blue/green global reconcile mode is mutually exclusive" "$LINENO"
+  fi
+  echo "[INFO] Blue/green committed global scheduler definition reconciliation"
+  if ! checkpoint_enabled || ! checkpoint_at_least backend_healthy; then
+    fail_deploy "global reconciliation requires backend_healthy checkpoint" "$LINENO"
+  fi
+  resolve_target_backend_commit
+  RECONCILE_SCRAPER_TIMER_STATE=false
+  reconcile_scraper_schedulers
+  echo "[INFO] Blue/green committed global scheduler definitions reconciled"
+  exit 0
+fi
+
+if [[ "$BLUEGREEN_POST_ACTIVATION_ONLY" == "true" ]]; then
+  if [[ "$BLUEGREEN_PREPARE_ONLY" == "true" ]]; then
+    fail_deploy "blue/green prepare-only and post-activation-only are mutually exclusive" "$LINENO"
+  fi
+  echo "[INFO] Blue/green post-activation reconciliation"
+  if ! checkpoint_enabled || ! checkpoint_at_least switched; then
+    fail_deploy "blue/green post-activation requires a switched release checkpoint" "$LINENO"
+  fi
+  resolve_target_backend_commit
+  if ! curl --noproxy '*' -fsS --max-time 10 \
+    "http://127.0.0.1:${BACKEND_PORT}/healthz" >/dev/null; then
+    fail_deploy "blue/green active backend liveness failed" "$LINENO"
+  fi
+  verify_backend_readiness 10
+  mark_release_deployed
+  verify_release_evidence
+  record_active_msrp_dryrun_status
+  run_grouped_time_series_prewarm
+  bootstrap_msrp_dryrun_if_missing
+  run_post_deploy_readiness_audits
+  echo "[INFO] Blue/green post-activation reconciliation completed"
+  exit 0
+fi
 
 CURRENT_STEP="Validate sudo access"
 log_section "$CURRENT_STEP"
@@ -1472,6 +1579,17 @@ else
   write_release_checkpoint migrated completed automatic \
     "database migration not required; evidence=$RELEASE_EVIDENCE_FILE sha256=$RELEASE_EVIDENCE_SHA256"
   verify_release_evidence
+fi
+
+if [[ "$BLUEGREEN_PREPARE_ONLY" == "true" ]]; then
+  echo "[INFO] Prepare backend release identity without switching production"
+  CURRENT_STEP="Prepare blue/green backend release identity"
+  prepare_target_backend_identity
+  echo "[INFO] Install verified frontend inside the immutable candidate release"
+  CURRENT_STEP="Install blue/green candidate frontend"
+  install_prebuilt_frontend
+  echo "[INFO] Blue/green candidate preparation completed before service start"
+  exit 0
 fi
 
 if ! checkpoint_at_least switched; then

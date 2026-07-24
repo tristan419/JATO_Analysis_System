@@ -730,7 +730,10 @@ def test_concurrent_complete_replay_launches_digest_once(
         requested_role="editor",
     )
 
-    completion_lock = threading.Lock()
+    # Completion now acquires the canonical maintenance, global-upload and
+    # per-session locks in one thread.  Model those distinct file locks with a
+    # re-entrant test lock while still serializing both concurrent replays.
+    completion_lock = threading.RLock()
 
     @contextmanager
     def locked(

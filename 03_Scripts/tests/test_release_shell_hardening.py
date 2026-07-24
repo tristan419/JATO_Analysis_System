@@ -10,6 +10,7 @@ import tarfile
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 REMOTE_SCRIPT = REPO_ROOT / "03_Scripts/deploy/fullstack_remote_release.sh"
+BLUEGREEN_SCRIPT = REPO_ROOT / "03_Scripts/deploy/tencent_bluegreen_release.sh"
 SERVER_SCRIPT = REPO_ROOT / "03_Scripts/ops/deploy_fullstack_server.sh"
 BACKUP_SCRIPT = REPO_ROOT / "03_Scripts/ops/backup_production_data.sh"
 
@@ -21,7 +22,7 @@ def _shell_function(script_path: Path, name: str) -> str:
     return script[start:end]
 
 
-def test_remote_release_validates_content_address_and_finishes_checkpoint_last() -> None:
+def test_remote_release_validates_content_address_before_bluegreen_handoff() -> None:
     script = REMOTE_SCRIPT.read_text(encoding="utf-8")
     for token in (
         "DEPLOY_ARCHIVE_PATH",
@@ -39,35 +40,159 @@ def test_remote_release_validates_content_address_and_finishes_checkpoint_last()
     assert 'EVIDENCE_HELPER="$RELEASE_WORKTREE/03_Scripts/deploy/release_evidence.py"' in script
     assert 'sudo -n "${verifier[@]}"' in script
     assert 'python3 -B "$EVIDENCE_HELPER" verify' in script
-    assert "evidence_sha256=" in script
-    assert "source_install_started" in script
-    assert "source_installed" in script
-    assert 'chmod a+x "$public_parent"' in script
     lock_acquired = script.index("flock -w 300 9")
     helper_extracted = script.index(
         'CHECKPOINT_HELPER="$RELEASE_WORKTREE/03_Scripts/deploy/release_checkpoint.py"'
     )
     cross_release_gate = script.index("assert-cross-release-safe")
     prepared_write = script.index("--phase prepared", cross_release_gate)
-    assert lock_acquired < helper_extracted < cross_release_gate < prepared_write
-    status_publish = script.index('mv -f "$STATUS_TEMP" "$DIST/_deploy_status.txt"')
-    healthy_complete = script.index(
-        "--phase backend_healthy --status completed --retry-class automatic"
+    handoff = script.index(
+        'bash "$RELEASE_WORKTREE/03_Scripts/deploy/tencent_bluegreen_release.sh"',
     )
-    assert status_publish < healthy_complete
+    handoff_exit = script.index('exit "$BLUEGREEN_RC"', handoff)
+    assert (
+        lock_acquired
+        < helper_extracted
+        < cross_release_gate
+        < prepared_write
+        < handoff
+        < handoff_exit
+    )
+    assert script.rstrip().endswith('exit "$BLUEGREEN_RC"')
+    for legacy_token in (
+        'rm -rf "$REPO_DIR/$release_path"',
+        "install_backend_env_atomically",
+        "bash 03_Scripts/deploy_fullstack_server.sh",
+        "PRODUCTION_MUTATION_STARTED",
+        'mv -f "$STATUS_TEMP" "$DIST/_deploy_status.txt"',
+        "--phase backend_healthy",
+    ):
+        assert legacy_token not in script
 
 
-def test_successful_remote_release_cleanup_cannot_override_deploy_result() -> None:
+def test_remote_release_cleanup_is_best_effort_for_every_handoff_result() -> None:
     script = REMOTE_SCRIPT.read_text(encoding="utf-8")
     cleanup = _shell_function(REMOTE_SCRIPT, "remove_transient_release_paths")
+    exit_cleanup = _shell_function(REMOTE_SCRIPT, "cleanup_release_staging")
 
     assert 'if ! rm -rf -- "$transient_path"; then' in cleanup
     assert 'echo "[WARN] Failed to remove transient deployment path:' in cleanup
     assert cleanup.rstrip().endswith("return 0\n}")
-    successful_cleanup = script.index('if [[ "$REMOTE_DEPLOY_SUCCEEDED" == "true" ]]')
-    cleanup_call = script.index("remove_transient_release_paths", successful_cleanup)
-    cleanup_return = script.index("return", cleanup_call)
-    assert successful_cleanup < cleanup_call < cleanup_return
+    assert (
+        'for transient_path in "$RELEASE_WORKTREE" "$PREBUILT_FRONTEND_DIR"; do'
+        in cleanup
+    )
+    assert "remove_transient_release_paths" in exit_cleanup
+    assert "PRODUCTION_MUTATION_STARTED" not in script
+    assert "REMOTE_DEPLOY_SUCCEEDED" not in script
+    assert "trap cleanup_release_staging EXIT" in script
+    assert "BLUEGREEN_RC=$?" in script
+    assert script.rstrip().endswith('exit "$BLUEGREEN_RC"')
+
+
+def test_outer_disconnect_cleanup_preserves_durable_bluegreen_supervisor_files(
+    tmp_path: Path,
+) -> None:
+    transient_worktree = tmp_path / "transient-worktree"
+    transient_frontend = tmp_path / "transient-frontend"
+    durable_release = tmp_path / "releases/target/archive"
+    for path in (transient_worktree, transient_frontend, durable_release):
+        path.mkdir(parents=True)
+    durable_controller = (
+        durable_release / "03_Scripts/deploy/tencent_bluegreen_release.sh"
+    )
+    durable_helper = durable_release / "03_Scripts/deploy/jato_quiescence_gate.py"
+    durable_controller.parent.mkdir(parents=True)
+    durable_controller.write_text("controller", encoding="utf-8")
+    durable_helper.write_text("helper", encoding="utf-8")
+
+    result = subprocess.run(
+        [
+            "bash",
+            "-c",
+            "set -Eeuo pipefail\n"
+            + _shell_function(REMOTE_SCRIPT, "remove_transient_release_paths")
+            + _shell_function(REMOTE_SCRIPT, "cleanup_release_staging")
+            + "\ncleanup_release_staging\n",
+        ],
+        env={
+            **os.environ,
+            "RELEASE_WORKTREE": str(transient_worktree),
+            "PREBUILT_FRONTEND_DIR": str(transient_frontend),
+        },
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stderr + result.stdout
+    assert not transient_worktree.exists()
+    assert not transient_frontend.exists()
+    assert durable_controller.read_text(encoding="utf-8") == "controller"
+    assert durable_helper.read_text(encoding="utf-8") == "helper"
+
+
+def test_outer_noop_requires_exact_active_release_and_verified_source_seal(
+    tmp_path: Path,
+) -> None:
+    script = REMOTE_SCRIPT.read_text(encoding="utf-8")
+    local_match = _shell_function(REMOTE_SCRIPT, "local_release_matches")
+    source_match = _shell_function(
+        REMOTE_SCRIPT,
+        "verified_active_source_seal_matches",
+    )
+    runtime_match = _shell_function(
+        REMOTE_SCRIPT,
+        "verified_active_runtime_seal_matches",
+    )
+    assert '[[ "$active_root" == "$expected_root" ]]' in local_match
+    assert 'verified_active_source_seal_matches "$active_root"' in local_match
+    assert 'verified_active_runtime_seal_matches "$active_root"' in local_match
+    assert 'sudo -n cmp -s "$expected_seal" "$stored_seal"' in source_match
+    assert '"$helper" verify' in source_match
+    assert "--profile runtime" in runtime_match
+    assert '--commit "$DEPLOY_COMMIT_SHA"' in runtime_match
+
+    expected_root = tmp_path / "releases" / ("a" * 40) / ("b" * 64)
+    result = subprocess.run(
+        [
+            "bash",
+            "-c",
+            "set -Eeuo pipefail\n"
+            + local_match
+            + source_match
+            + runtime_match
+            + "\nverified_active_source_seal_matches() { return 1; }\n"
+            + "verified_active_runtime_seal_matches() { return 0; }\n"
+            + "sudo() {\n"
+            + "  [[ \"${1:-}\" == -n ]] && shift\n"
+            + "  case \"$*\" in\n"
+            + "    \"test -f $ACTIVE_SLOT_FILE\") return 0 ;;\n"
+            + "    \"cat $ACTIVE_SLOT_FILE\") printf '8000\\n' ;;\n"
+            + "    \"test -L /opt/jato/active\") return 0 ;;\n"
+            + f"    \"realpath /opt/jato/active\") printf '%s\\n' '{expected_root}' ;;\n"
+            + "    *) return 0 ;;\n"
+            + "  esac\n"
+            + "}\n"
+            + "set +e\nlocal_release_matches\nrc=$?\nset -e\n"
+            + "printf 'rc=%s\\n' \"$rc\"\n",
+        ],
+        env={
+            **os.environ,
+            "ACTIVE_SLOT_FILE": str(tmp_path / "active-slot"),
+            "BLUEGREEN_RELEASES_ROOT": str(tmp_path / "releases"),
+            "DEPLOY_COMMIT_SHA": "a" * 40,
+            "DEPLOY_ARCHIVE_SHA256": "b" * 64,
+            "REPO_DIR": str(tmp_path / "legacy"),
+            "RELEASE_WORKTREE": str(tmp_path / "worktree"),
+        },
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stderr + result.stdout
+    assert "rc=1" in result.stdout
 
 
 def _archive_member_validator() -> str:
@@ -141,19 +266,35 @@ def test_archive_member_validator_rejects_traversal_link_and_duplicate(
         assert result.returncode != 0, name
 
 
-def test_migration_failure_cannot_advance_when_status_publish_also_fails() -> None:
-    script = REMOTE_SCRIPT.read_text(encoding="utf-8")
-    start = script.index('if ! mv -f "$STATUS_TEMP" "$DIST/_deploy_status.txt"; then')
-    end = script.index('if [[ "$FINAL_RC" -ne 0 ]]; then', start)
-    status_failure = script[start:end]
-    guard = status_failure.index('if [[ "$DEPLOY_RC" -eq 0 ]]; then')
-    healthy_failure = status_failure.index(
-        "--phase backend_healthy --status failed --retry-class automatic"
+def test_bluegreen_controller_alone_publishes_status_and_target_health() -> None:
+    outer = REMOTE_SCRIPT.read_text(encoding="utf-8")
+    controller = BLUEGREEN_SCRIPT.read_text(encoding="utf-8")
+    switch = _shell_function(BLUEGREEN_SCRIPT, "switch_locked")
+    activate = _shell_function(BLUEGREEN_SCRIPT, "complete_candidate_activation")
+
+    assert "_deploy_status.txt" in outer
+    assert "write_candidate_deploy_status" not in outer
+    assert "checkpoint_write backend_healthy" not in outer
+    assert "merge_previous_frontend_assets" not in controller
+    assert 'cp -p "$source" "$target"' not in controller
+    prepare = _shell_function(BLUEGREEN_SCRIPT, "prepare_and_switch")
+    status_write = prepare.index("\n    write_candidate_deploy_status\n")
+    runtime_seal = prepare.index("\n    finalize_runtime_seal\n")
+    switch_checkpoint = switch.index(
+        "\n  checkpoint_write switched completed automatic",
     )
-    assert guard < healthy_failure
-    assert status_failure.count(
-        "--phase backend_healthy --status failed --retry-class automatic"
-    ) == 1
+    activation_call = switch.index(
+        "\n  complete_candidate_activation",
+        switch_checkpoint,
+    )
+    healthy_checkpoint = activate.index(
+        "\n  checkpoint_write backend_healthy completed automatic",
+    )
+    assert status_write < runtime_seal
+    assert switch_checkpoint < activation_call
+    assert healthy_checkpoint > activate.index("verify_active_cgroup")
+    assert "restore_previous_route" in controller
+    assert "checkpoint_write rollback_completed completed automatic" in controller
 
 
 def test_server_checkpoint_boundaries_are_fail_closed_and_resume_safe() -> None:

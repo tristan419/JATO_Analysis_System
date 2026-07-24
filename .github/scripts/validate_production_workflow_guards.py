@@ -534,6 +534,9 @@ def assert_database_migration_is_behind_main_release_gate() -> None:
     remote_release = (
         REPO_ROOT / "03_Scripts/deploy/fullstack_remote_release.sh"
     ).read_text(encoding="utf-8")
+    bluegreen_release = (
+        REPO_ROOT / "03_Scripts/deploy/tencent_bluegreen_release.sh"
+    ).read_text(encoding="utf-8")
     server_deploy = (
         REPO_ROOT / "03_Scripts/ops/deploy_fullstack_server.sh"
     ).read_text(encoding="utf-8")
@@ -542,10 +545,16 @@ def assert_database_migration_is_behind_main_release_gate() -> None:
         raise AssertionError("production release no longer invokes Tencent remote release")
     if "export DEPLOY_BRANCH=main" not in production_workflow:
         raise AssertionError("production release must pin Tencent DEPLOY_BRANCH=main")
-    if "bash 03_Scripts/deploy_fullstack_server.sh" not in remote_release:
-        raise AssertionError("remote release no longer invokes the guarded server deploy")
-    if 'PRODUCTION_RELEASE_WORKFLOW="true"' not in remote_release:
-        raise AssertionError("remote release must identify the production release workflow")
+    if 'bash "$RELEASE_WORKTREE/03_Scripts/deploy/tencent_bluegreen_release.sh"' not in remote_release:
+        raise AssertionError("remote release no longer invokes the blue/green controller")
+    if 'bash "$INNER_DEPLOY"' not in bluegreen_release:
+        raise AssertionError("blue/green controller no longer invokes the guarded server deploy")
+    if "PRODUCTION_RELEASE_WORKFLOW=true" not in bluegreen_release:
+        raise AssertionError("blue/green controller must identify the production release workflow")
+    if "RUN_DATABASE_MIGRATIONS=false" not in bluegreen_release:
+        raise AssertionError(
+            "blue/green v1 must keep schema mutation outside the slot switch",
+        )
     if "python -m alembic upgrade head" not in server_deploy:
         raise AssertionError("expected Alembic production migration command was not found")
     if 'DEPLOY_BRANCH" != "main"' not in server_deploy:

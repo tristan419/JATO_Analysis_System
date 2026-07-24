@@ -24,17 +24,24 @@ def test_production_release_excludes_local_tooling_and_temp_artifacts() -> None:
     assert "--exclude='*.pyc'" in workflow
 
 
-def test_tencent_remote_release_preserves_runtime_artifacts() -> None:
-    script = (REPO_ROOT / "03_Scripts/deploy/fullstack_remote_release.sh").read_text(
+def test_tencent_bluegreen_release_links_durable_runtime_artifacts() -> None:
+    outer = (REPO_ROOT / "03_Scripts/deploy/fullstack_remote_release.sh").read_text(
         encoding="utf-8",
     )
+    controller = (
+        REPO_ROOT / "03_Scripts/deploy/tencent_bluegreen_release.sh"
+    ).read_text(encoding="utf-8")
 
-    assert "03_Scripts/diagnostics/artifacts" in script
-    assert "03_Scripts/logs" in script
-    assert "06_AppPlatform/frontend/dist" in script
-    assert "hermes/reports" in script
-    assert "Preserved runtime path" in script
-    assert "Restored runtime path" in script
+    assert "03_Scripts/deploy/tencent_bluegreen_release.sh" in outer
+    assert 'ensure_shared_link "$SHARED_ROOT/01_RAW_DATA"' in controller
+    assert 'ensure_shared_link "$SHARED_ROOT/04_Processed_data"' in controller
+    assert '"03_Scripts/diagnostics/artifacts"' in controller
+    assert '"03_Scripts/logs"' in controller
+    assert '"hermes/reports"' in controller
+    assert 'link_release_runtime_path "01_RAW_DATA"' in controller
+    assert 'link_release_runtime_path "04_Processed_data"' in controller
+    assert "Preserved runtime path" not in outer
+    assert "Restored runtime path" not in outer
 
 
 def test_intl_edge_prewarm_verifies_completed_release_provenance_first() -> None:
@@ -160,6 +167,8 @@ def test_release_checkpoints_cover_transport_ambiguity_and_final_parity() -> Non
     assert "retention-days: 30" in workflow
     assert "steps.intl_current.outputs.current != 'true'" in workflow
     assert "for deploy_attempt in 1 2 3" in workflow
+    assert 'timeout 5400s "${ssh_command[@]}"' in workflow
+    assert 'timeout 1800s "${ssh_command[@]}"' not in workflow
     assert workflow.index("Verify Tencent public release provenance") < workflow.index(
         "Verify www runtime API contract",
     ) < workflow.index("Record www-verified candidate checkpoint")
@@ -175,11 +184,24 @@ def test_server_checkpoint_and_evidence_are_bound_into_final_receipt() -> None:
     assert "backend-healthy.json" in workflow
     assert "backend-healthy.evidence.json" in workflow
     assert "attestation_complete=false" in workflow
-    assert 'rm -rf "$server_dir"' in workflow
+    assert "record_checkpoint_fetch_exit" in workflow
+    assert 'trap record_checkpoint_fetch_exit EXIT' in workflow
+    assert '"$server_dir/fetch-status.json"' in workflow
+    assert '"backendHealthyAttested"' in workflow
+    assert 'rm -rf "$server_dir"' not in workflow
+    assert (
+        "if: ${{ always() && steps.upload_release.outcome == 'success' }}"
+        in workflow
+    )
     assert 'checkpoint.get("phase") != "backend_healthy"' in workflow
     assert 'checkpoint.get("status") != "completed"' in workflow
     assert "server checkpoint evidence binding mismatch" in workflow
     assert 'evidence.get("identity") != expected_identity' in workflow
+    assert (
+        'install -m 600 \\\n'
+        '            "$server_dir/backend-healthy.json" \\\n'
+        '            "$RUNNER_TEMP/release-checkpoint/candidate.json"'
+    ) in workflow
     assert (
         'echo "Server checkpoint/evidence attestation SHA-256: '
         '$attestation_sha256"'
@@ -324,26 +346,26 @@ def test_msrp_runner_writes_running_status_and_caps_country_runtime() -> None:
     assert 'pid="${pids[0]}"' not in script
 
 
-def test_public_deploy_status_reports_msrp_scheduler_and_artifacts() -> None:
-    script = (REPO_ROOT / "03_Scripts/deploy/fullstack_remote_release.sh").read_text(
-        encoding="utf-8",
-    )
+def test_bluegreen_public_deploy_status_is_atomic_and_binds_active_slot() -> None:
+    script = (
+        REPO_ROOT / "03_Scripts/deploy/tencent_bluegreen_release.sh"
+    ).read_text(encoding="utf-8")
+    status = _shell_function(script, "write_candidate_deploy_status")
 
-    assert "---msrp scheduler---" in script
-    assert "systemctl status jato-msrp-dryrun.timer" in script
-    assert "systemctl status jato-msrp-sync@dryrun.service" in script
-    assert "systemctl list-timers --all 'jato-msrp*'" in script
-    assert "---msrp env---" in script
-    assert "03_Scripts/ops/print_msrp_env_status.sh" in script
-    assert "---msrp artifacts---" in script
-    assert "03_Scripts/diagnostics/artifacts/dryrun_report.json" in script
-    assert "03_Scripts/diagnostics/artifacts/dryrun_runs_index.json" in script
-    assert "hermes/reports/msrp_country_progress.json" in script
-    assert "hermes/reports/pipeline_status/msrp_dryrun.json" in script
+    assert 'echo "deploy_exit_code=0"' in status
+    assert 'echo "release_sha=$DEPLOY_COMMIT_SHA"' in status
+    assert 'echo "active_slot=$CANDIDATE_SLOT"' in status
+    assert 'echo "deployment_mode=tencent_bluegreen"' in status
+    assert 'echo "candidate_memory_high=$BLUEGREEN_CANDIDATE_MEMORY_HIGH"' in status
+    assert 'echo "candidate_memory_max=$BLUEGREEN_CANDIDATE_MEMORY_MAX"' in status
+    assert 'mv -f "$temp" "$dist/_deploy_status.txt"' in status
 
+
+def test_msrp_env_status_reports_controls_without_printing_secrets() -> None:
     script = (REPO_ROOT / "03_Scripts/ops/print_msrp_env_status.sh").read_text(
         encoding="utf-8",
     )
+
     assert "JATO_MSRP_CONCURRENCY" in script
     assert "JATO_MSRP_MAX_DRYRUN_CONCURRENCY" in script
     assert "JATO_MSRP_ALLOW_HIGH_CONCURRENCY" in script
@@ -747,6 +769,9 @@ def test_deploy_gates_completed_and_new_releases_on_liveness_and_readiness() -> 
     outer = (
         REPO_ROOT / "03_Scripts/deploy/fullstack_remote_release.sh"
     ).read_text(encoding="utf-8")
+    controller = (
+        REPO_ROOT / "03_Scripts/deploy/tencent_bluegreen_release.sh"
+    ).read_text(encoding="utf-8")
 
     assert 'BACKEND_READINESS_HELPER="${BACKEND_READINESS_HELPER:-' in inner
     assert "completed_checkpoint_matches_local() {" in inner
@@ -759,11 +784,32 @@ def test_deploy_gates_completed_and_new_releases_on_liveness_and_readiness() -> 
 
     assert "03_Scripts/deploy/verify_backend_readiness.py" in outer
     assert "local_release_matches() {" in outer
-    assert "http://127.0.0.1:8000/healthz" in outer
-    assert 'http://127.0.0.1:8000/readyz' in outer
-    assert 'final_readiness_exit_code=$FINAL_READINESS_RC' in outer
-    assert "---readyz---" in outer
-    assert "readiness_rc=$FINAL_READINESS_RC" in outer
+    assert "http://127.0.0.1:${active_port}/healthz" in outer
+    assert '--url "http://127.0.0.1:${backend_port}/readyz"' in outer
+    assert 'ACTIVE_SLOT_FILE="${ACTIVE_SLOT_FILE:-$BLUEGREEN_STATE_ROOT/active-slot}"' in outer
+    assert "/opt/jato/active" in outer
+    handoff = outer.index(
+        'bash "$RELEASE_WORKTREE/03_Scripts/deploy/tencent_bluegreen_release.sh"',
+    )
+    assert outer.rstrip().endswith('exit "$BLUEGREEN_RC"')
+    assert handoff < outer.index('exit "$BLUEGREEN_RC"', handoff)
+    candidate = controller.index("verify_candidate()")
+    assert "http://127.0.0.1:${CANDIDATE_SLOT}/healthz" in controller[candidate:]
+    assert 'expected-commit "$DEPLOY_COMMIT_SHA"' in controller[candidate:]
+    switch = _shell_function(controller, "switch_locked")
+    activation = _shell_function(controller, "complete_candidate_activation")
+    nginx_verify = switch.index(
+        "\n  if [[ \"$BLUEGREEN_FAULT\" == \"post_switch_readiness\" ]]",
+    )
+    activation_call = switch.index(
+        "\n  complete_candidate_activation",
+        nginx_verify,
+    )
+    healthy_checkpoint = activation.index(
+        "\n  checkpoint_write backend_healthy completed automatic",
+    )
+    assert nginx_verify < activation_call
+    assert activation.index("verify_active_cgroup") < healthy_checkpoint
 
 
 def test_deploy_prepares_frozen_release_identity_before_backend_restart() -> None:
@@ -773,18 +819,25 @@ def test_deploy_prepares_frozen_release_identity_before_backend_restart() -> Non
     outer = (
         REPO_ROOT / "03_Scripts/deploy/fullstack_remote_release.sh"
     ).read_text(encoding="utf-8")
+    controller = (
+        REPO_ROOT / "03_Scripts/deploy/tencent_bluegreen_release.sh"
+    ).read_text(encoding="utf-8")
     bootstrap = (
         REPO_ROOT / "03_Scripts/ops/tencent_fullstack_bootstrap.sh"
     ).read_text(encoding="utf-8")
 
     assert "03_Scripts/deploy/prepare_backend_release.py" in outer
-    env_function = _shell_function(outer, "install_backend_env_atomically")
-    assert "update-env" in env_function
-    assert '--commit "$DEPLOY_COMMIT_SHA"' in env_function
-    assert 'sudo -n mv -f "$privileged_candidate" "$ENV_FILE"' in env_function
-    env_install = outer.index("install_backend_env_atomically\n")
-    inner_deploy = outer.index("bash 03_Scripts/deploy_fullstack_server.sh")
-    assert env_install < inner_deploy
+    assert "install_backend_env_atomically" not in outer
+    prepare = controller[controller.index("prepare_and_switch()"):]
+    materialize = prepare.index("\n  materialize_release_source\n")
+    inner_prepare = prepare.index("\n    run_inner_prepare\n", materialize)
+    candidate = prepare.index("\n  verify_candidate\n", inner_prepare)
+    assert materialize < inner_prepare < candidate
+    run_inner = _shell_function(controller, "run_inner_prepare")
+    assert "BLUEGREEN_PREPARE_ONLY=true" in run_inner
+    assert "RUN_DATABASE_MIGRATIONS=false" in run_inner
+    assert 'RELEASE_CHECKPOINT_COMMIT="$DEPLOY_COMMIT_SHA"' in run_inner
+    assert 'PREBUILT_FRONTEND_DIR="$PREBUILT_FRONTEND_DIR"' in run_inner
 
     update_repository = inner.index('CURRENT_STEP="Update repository"')
     resolve_identity = inner.index(
@@ -819,8 +872,8 @@ def test_deploy_prepares_frozen_release_identity_before_backend_restart() -> Non
     assert '"http://127.0.0.1:${BACKEND_PORT}/readyz"' in bootstrap
     assert '[[ -d "$REPO_DIR/.git" ]]' not in bootstrap
     assert '[[ -d "$REPO_DIR/.git" ]]' not in inner
-    assert '"actualCommitSha": ""' in outer
-    assert '"commitSha": ""' in outer
+    assert "preserve_previous_release_metadata" in controller
+    assert 'RELEASE_CHECKPOINT_COMMIT="$DEPLOY_COMMIT_SHA"' in controller
 
 
 def test_bootstrap_docs_bind_archive_and_command_to_one_full_sha() -> None:

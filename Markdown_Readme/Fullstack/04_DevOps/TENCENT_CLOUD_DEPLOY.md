@@ -364,7 +364,10 @@ bash 03_Scripts/deploy_fullstack_server.sh
 | `jato-msrp-dryrun.timer` | 每日 `03:30` | 低并发 nightly dry-run |
 | `jato-msrp-ingest.timer` | 每周六 `05:30` | 低并发正式 ingest |
 
-部署脚本每次都会把这些 unit / timer 同步到 `/etc/systemd/system`，并重启 timer 以应用新的时间表。
+传统单槽部署会把这些 unit / timer 同步到 `/etc/systemd/system`，并重启 timer
+以应用新的时间表。蓝绿发布只刷新 unit 定义：切换前原子记录每个 timer 的
+enabled/active 状态，结束或回滚时逐项恢复并验真；原本 disabled 或 inactive
+的 timer 不会被部署流程意外启动。
 
 ## 7. 安装 nginx
 
@@ -718,3 +721,65 @@ echo '/swapfile none swap sw 0 0' | sudo tee -a /etc/fstab
 # 方案 2：限制 Node.js 内存
 NODE_OPTIONS="--max-old-space-size=1024" npm run build
 ```
+
+## 13. 腾讯云 8000/8001 蓝绿发布
+
+生产发布不再先覆盖 `/opt/JATO_Analysis_System-main`。主流程由
+`03_Scripts/deploy/tencent_bluegreen_release.sh` 管理：
+
+1. 把已校验的不可变 artifact 安装到
+   `/opt/jato/releases/<commit>/<archive-sha256>/`，并创建独立 `.venv`。
+2. 从 8000/8001 中选择非 active 端口作为 candidate。candidate 使用 2 个
+   Uvicorn worker，但关闭全部预热，cgroup 为 `MemoryHigh=3G`、
+   `MemoryMax=4G`。
+3. candidate 必须先通过直连 `/healthz`、精确 commit `/readyz`、JATO
+   月更 HTTP 423 门禁、cgroup 和无 `jato_monthly_worker.py` 子进程检查。
+4. 首版蓝绿禁止 Alembic revision 变化。检测到 `current != heads` 时在
+   Nginx 切换前失败，数据库变更必须另走 expand/contract 发布。
+5. 部署 marker 先让 Nginx 阻断月更路径，再持有 JATO
+   `maintenance-coordination.lock`、worker、active bundle、upload/digest
+   等最终锁；已有任务只能自然完成，发布脚本不会取消、重试或改写任务状态。
+6. `/etc/jato-fullstack/nginx/active-release.conf` 是唯一切换对象，同时绑定
+   backend port 和 frontend root。candidate 配置先执行 `nginx -t`，reload
+   后再经 Nginx 校验 `/readyz` 与 `build-meta.json`。`DEPLOY_SERVER_NAME`
+   可以包含空格分隔的多个域名；控制器会先校验每个 hostname，再以各自的
+   TLS SNI/Host 逐个验真，绝不会把整串域名交给一次 `curl`。
+7. 任一步失败都会恢复旧 active include、旧 active-slot 和
+   `/opt/jato/active`，验证旧槽仍存活，并记录 `rollback_completed`。
+8. 新槽完全就绪后才停止旧槽，再把新槽提升到
+   `MemoryHigh=6G`、`MemoryMax=8G`；这样双槽窗口的服务 cgroup 上限为
+   8G + 4G，不会同时出现两个 8G 槽。
+9. 宿主机上的 MSRP 等定时任务统一访问
+   `http://127.0.0.1:18000/v1`。该端口只监听 loopback，并由同一个
+   `active-release.conf` 代理到当前 active 槽；禁止把消费者固定到 8000
+   或 8001。post-activation 会原子迁移既有 `msrp.env` 中的
+   `JATO_API_BASE`，但不会改变 timer 的启用或运行状态。
+10. 月更 mutation fence 位于持久路径
+    `/var/lib/jato-release/deployment-maintenance`。主机重启不会让一个未完成
+    的发布静默丢失门禁；只有控制器完成恢复或确认切换后才能移除 marker。
+
+运行时位置：
+
+```text
+/opt/jato/releases/<commit>/<archive-sha256>  immutable release
+/opt/jato/slots/8000/current                 slot symlink
+/opt/jato/slots/8001/current                 slot symlink
+/opt/jato/active                             scheduler code symlink
+/var/lib/jato-release/active-slot            JATO worker owner
+/var/lib/jato-release/deployment-maintenance durable mutation fence
+/var/lib/jato-release/scheduler-state.tsv    durable timer state snapshot
+/etc/jato-fullstack/nginx/active-release.conf API + frontend atomic route
+127.0.0.1:18000                              stable active-slot API for host jobs
+```
+
+故障演练由测试环境设置 `BLUEGREEN_FAULT`，支持：
+
+- `candidate_start`
+- `candidate_ready`
+- `nginx_test`
+- `nginx_reload`
+- `post_switch_readiness`
+
+生产 workflow 不设置该变量。发生失败时不要手工重试 JATO 任务；先读取
+release checkpoint、quiescence evidence、两个 slot 状态和 Nginx active
+include，确认旧槽已恢复。

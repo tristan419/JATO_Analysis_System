@@ -8,6 +8,7 @@ import re
 import signal
 import shlex
 import shutil
+import stat
 import subprocess
 import sys
 import threading
@@ -77,6 +78,13 @@ BASELINE_PROMOTION_STATE_FILENAME = "baseline_promotion_state.json"
 BASELINE_PROMOTION_LOCK_FILENAME = "baseline-promotion.lock"
 BASELINE_INSTALL_JOURNAL_FILENAME = "baseline_install_journal.json"
 MAINTENANCE_COORDINATION_LOCK_FILENAME = "maintenance-coordination.lock"
+JATO_MONTHLY_ENABLED_ENV = "APP_JATO_MONTHLY_ENABLED"
+RELEASE_SLOT_ENV = "APP_RELEASE_SLOT"
+JATO_MONTHLY_ACTIVE_SLOT_FILE_ENV = "APP_JATO_MONTHLY_ACTIVE_SLOT_FILE"
+JATO_MONTHLY_DEPLOYMENT_MARKER_ENV = "APP_JATO_MONTHLY_DEPLOYMENT_MARKER"
+JATO_MONTHLY_RELEASE_SLOTS = frozenset({"8000", "8001"})
+JATO_MONTHLY_TRUE_VALUES = frozenset({"1", "true", "yes", "on"})
+JATO_MONTHLY_FALSE_VALUES = frozenset({"0", "false", "no", "off"})
 UPLOAD_ASSEMBLY_BUFFER_BYTES = 1024 * 1024
 DIGEST_WORKER_STALE_GRACE_SECONDS = 15
 DIGEST_WORKER_BASE_TIMEOUT_SECONDS = 10 * 60
@@ -124,6 +132,182 @@ REVIEW_REFRESH_REQUEST_ID_PATTERN = re.compile(
 SMART_MERGE_RESUME_REQUEST_ID_PATTERN = re.compile(
     r"^[A-Za-z0-9][A-Za-z0-9._:-]{7,127}$"
 )
+
+
+def _jato_monthly_availability_result(
+    *,
+    enabled: bool,
+    reason: str,
+    release_slot: str | None,
+    active_slot: str | None,
+) -> dict[str, Any]:
+    return {
+        "enabled": enabled,
+        "code": (
+            "JATO_MONTHLY_ENABLED"
+            if enabled
+            else "JATO_MONTHLY_DISABLED"
+        ),
+        "reason": reason,
+        "releaseSlot": release_slot,
+        "activeSlot": active_slot,
+    }
+
+
+def jato_monthly_availability() -> dict[str, Any]:
+    """Resolve the runtime JATO worker owner without caching slot state.
+
+    Legacy deployments do not declare ``APP_RELEASE_SLOT`` and remain enabled.
+    Blue/green slots must match the durable active-slot file, while a deployment
+    marker temporarily disables both slots during the atomic handover.
+    """
+    enabled_value = os.getenv(JATO_MONTHLY_ENABLED_ENV)
+    explicitly_enabled = (
+        enabled_value.strip().lower()
+        if enabled_value is not None
+        else "true"
+    )
+    if explicitly_enabled in JATO_MONTHLY_FALSE_VALUES:
+        return _jato_monthly_availability_result(
+            enabled=False,
+            reason="explicitly_disabled",
+            release_slot=None,
+            active_slot=None,
+        )
+    if explicitly_enabled not in JATO_MONTHLY_TRUE_VALUES:
+        return _jato_monthly_availability_result(
+            enabled=False,
+            reason="enabled_flag_invalid",
+            release_slot=None,
+            active_slot=None,
+        )
+
+    release_slot = os.getenv(RELEASE_SLOT_ENV, "").strip()
+    if not release_slot:
+        return _jato_monthly_availability_result(
+            enabled=True,
+            reason="legacy_no_release_slot",
+            release_slot=None,
+            active_slot=None,
+        )
+    if release_slot not in JATO_MONTHLY_RELEASE_SLOTS:
+        return _jato_monthly_availability_result(
+            enabled=False,
+            reason="release_slot_invalid",
+            release_slot=release_slot,
+            active_slot=None,
+        )
+
+    marker_value = os.getenv(JATO_MONTHLY_DEPLOYMENT_MARKER_ENV, "").strip()
+    if not marker_value:
+        return _jato_monthly_availability_result(
+            enabled=False,
+            reason="deployment_marker_not_configured",
+            release_slot=release_slot,
+            active_slot=None,
+        )
+    marker_path = Path(marker_value)
+    try:
+        marker_path.lstat()
+    except FileNotFoundError:
+        marker_exists = False
+    except OSError:
+        return _jato_monthly_availability_result(
+            enabled=False,
+            reason="deployment_marker_unavailable",
+            release_slot=release_slot,
+            active_slot=None,
+        )
+    else:
+        marker_exists = True
+    if marker_exists:
+        return _jato_monthly_availability_result(
+            enabled=False,
+            reason="deployment_in_progress",
+            release_slot=release_slot,
+            active_slot=None,
+        )
+
+    active_slot_file_value = os.getenv(
+        JATO_MONTHLY_ACTIVE_SLOT_FILE_ENV,
+        "",
+    ).strip()
+    if not active_slot_file_value:
+        return _jato_monthly_availability_result(
+            enabled=False,
+            reason="active_slot_file_not_configured",
+            release_slot=release_slot,
+            active_slot=None,
+        )
+    active_slot_file = Path(active_slot_file_value)
+    try:
+        before = active_slot_file.lstat()
+        if (
+            stat.S_ISLNK(before.st_mode)
+            or not stat.S_ISREG(before.st_mode)
+            or before.st_size <= 0
+            or before.st_size > 256
+        ):
+            raise OSError("active slot file is missing or invalid")
+        raw_active_slot = active_slot_file.read_bytes()
+        after = active_slot_file.lstat()
+        if (
+            before.st_dev != after.st_dev
+            or before.st_ino != after.st_ino
+            or before.st_size != after.st_size
+            or before.st_mtime_ns != after.st_mtime_ns
+            or len(raw_active_slot) != before.st_size
+        ):
+            raise OSError("active slot file changed while reading")
+        active_slot = raw_active_slot.decode("utf-8").strip()
+    except (OSError, UnicodeError):
+        return _jato_monthly_availability_result(
+            enabled=False,
+            reason="active_slot_unavailable",
+            release_slot=release_slot,
+            active_slot=None,
+        )
+    if active_slot not in JATO_MONTHLY_RELEASE_SLOTS:
+        return _jato_monthly_availability_result(
+            enabled=False,
+            reason="active_slot_invalid",
+            release_slot=release_slot,
+            active_slot=active_slot or None,
+        )
+    if active_slot != release_slot:
+        return _jato_monthly_availability_result(
+            enabled=False,
+            reason="inactive_release_slot",
+            release_slot=release_slot,
+            active_slot=active_slot or None,
+        )
+    return _jato_monthly_availability_result(
+        enabled=True,
+        reason="active_release_slot",
+        release_slot=release_slot,
+        active_slot=active_slot,
+    )
+
+
+def require_jato_monthly_enabled() -> None:
+    """Fail closed before a candidate slot can observe or launch JATO work."""
+    availability = jato_monthly_availability()
+    if availability["enabled"]:
+        return
+    raise HTTPException(
+        status_code=423,
+        detail={
+            **availability,
+            "message": (
+                "JATO 月更在当前发布槽已锁定；不会读取会唤醒 worker 的状态，"
+                "也不会启动 digest、Review、Smart Merge、Publish 或 Rollback。"
+            ),
+            "retryable": True,
+            "nextAction": "retry_after_release_switch",
+        },
+    )
+
+
 RECOVERY_ALLOWED_FAILURE_CATEGORIES = frozenset({"platform", "resource"})
 COUNTRY_COLUMN_CANDIDATES = ("国家", "country")
 SAFE_CLEANUP_TIER = "safe"
@@ -7225,6 +7409,11 @@ def _monthly_update_resource_start_locks(
                     f"请稍后再{action}。"
                 ),
             )
+        # The router dependency may have passed immediately before the release
+        # supervisor created its durable deployment marker.  Re-evaluate the
+        # uncached slot/marker contract only after the maintenance admission
+        # lock is held, and before any upload/job state or file is created.
+        require_jato_monthly_enabled()
         with _exclusive_file_lock(
             _upload_initiate_lock_path()
         ) as global_upload:
@@ -11223,15 +11412,7 @@ def initiate_jato_monthly_update_upload(
     triggered_by: str,
 ) -> dict[str, Any]:
     """Create or resume exactly one session across all Uvicorn workers."""
-    with _exclusive_file_lock(
-        _maintenance_coordination_lock_path(),
-        blocking=False,
-    ) as coordinated:
-        if not coordinated:
-            raise HTTPException(
-                status_code=409,
-                detail="JATO 清理或 baseline 操作正在准备中，请稍后再开始上传。",
-            )
+    with _monthly_update_resource_start_locks(action="开始上传"):
         baseline_promotion = _load_baseline_promotion_state()
         if (
             isinstance(baseline_promotion, dict)
@@ -11243,18 +11424,12 @@ def initiate_jato_monthly_update_upload(
                 detail="正在保存 active baseline，请完成后再开始新的上传/digest。",
             )
         _require_no_running_monthly_update_jobs()
-        with _exclusive_file_lock(_upload_initiate_lock_path()) as acquired:
-            if not acquired:  # blocking lock always acquires on supported platforms
-                raise HTTPException(
-                    status_code=503,
-                    detail="上传会话锁暂不可用，请稍后重试。",
-                )
-            return _initiate_jato_monthly_update_upload_locked(
-                filename=filename,
-                size_bytes=size_bytes,
-                resume_key=resume_key,
-                triggered_by=triggered_by,
-            )
+        return _initiate_jato_monthly_update_upload_locked(
+            filename=filename,
+            size_bytes=size_bytes,
+            resume_key=resume_key,
+            triggered_by=triggered_by,
+        )
 
 
 def get_jato_monthly_update_upload(
@@ -12096,6 +12271,7 @@ def _build_upload_ingest_digest(
 
 def run_jato_monthly_update_upload_digest(upload_id: str) -> dict[str, Any]:
     """Assemble and inspect one upload outside the FastAPI request process."""
+    require_jato_monthly_enabled()
     attempt_id = str(
         os.getenv("APP_JATO_DIGEST_ATTEMPT_ID", "")
     ).strip() or None
@@ -12266,6 +12442,7 @@ def run_jato_monthly_update_upload_digest(upload_id: str) -> dict[str, Any]:
 
 
 def _launch_upload_digest_process(upload_id: str) -> int:
+    require_jato_monthly_enabled()
     if not MONTHLY_WORKER_SCRIPT_PATH.exists():
         raise RuntimeError("JATO monthly worker 脚本不存在，无法启动 digest。")
     state = _load_upload_session(upload_id)
@@ -12415,17 +12592,20 @@ def complete_jato_monthly_update_upload(
     requested_role: str,
 ) -> dict[str, Any]:
     """Make complete idempotent even when two Web workers receive the replay."""
-    with _exclusive_file_lock(_upload_state_lock_path(upload_id)) as acquired:
-        if not acquired:  # blocking lock always acquires on supported platforms
-            raise HTTPException(
-                status_code=503,
-                detail="上传完成状态锁暂不可用，请稍后重试。",
+    with _monthly_update_resource_start_locks(
+        action="完成上传并启动 digest"
+    ):
+        with _exclusive_file_lock(_upload_state_lock_path(upload_id)) as acquired:
+            if not acquired:  # blocking lock always acquires on supported platforms
+                raise HTTPException(
+                    status_code=503,
+                    detail="上传完成状态锁暂不可用，请稍后重试。",
+                )
+            return _complete_jato_monthly_update_upload_locked(
+                upload_id=upload_id,
+                requested_by=requested_by,
+                requested_role=requested_role,
             )
-        return _complete_jato_monthly_update_upload_locked(
-            upload_id=upload_id,
-            requested_by=requested_by,
-            requested_role=requested_role,
-        )
 
 
 def _retry_jato_monthly_update_upload_digest_locked(
@@ -12605,35 +12785,18 @@ def retry_jato_monthly_update_upload_digest(
     requested_role: str,
 ) -> dict[str, Any]:
     """Restart only a lost/timed-out digest inside the global resource window."""
-    with _exclusive_file_lock(
-        _maintenance_coordination_lock_path(),
-        blocking=False,
-    ) as coordinated:
-        if not coordinated:
-            raise HTTPException(
-                status_code=409,
-                detail=(
-                    "JATO 清理或 baseline 操作正在准备中，"
-                    "请稍后再恢复上传 digest。"
-                ),
-            )
-        with _exclusive_file_lock(_upload_initiate_lock_path()) as global_upload:
-            if not global_upload:
+    with _monthly_update_resource_start_locks(action="恢复上传 digest"):
+        with _exclusive_file_lock(_upload_state_lock_path(upload_id)) as acquired:
+            if not acquired:
                 raise HTTPException(
                     status_code=503,
-                    detail="上传会话全局锁暂不可用，请稍后重试。",
+                    detail="上传 digest 状态锁暂不可用，请稍后重试。",
                 )
-            with _exclusive_file_lock(_upload_state_lock_path(upload_id)) as acquired:
-                if not acquired:
-                    raise HTTPException(
-                        status_code=503,
-                        detail="上传 digest 状态锁暂不可用，请稍后重试。",
-                    )
-                return _retry_jato_monthly_update_upload_digest_locked(
-                    upload_id=upload_id,
-                    requested_by=requested_by,
-                    requested_role=requested_role,
-                )
+            return _retry_jato_monthly_update_upload_digest_locked(
+                upload_id=upload_id,
+                requested_by=requested_by,
+                requested_role=requested_role,
+            )
 
 
 def _parse_month_from_filename(filename: str) -> str | None:
@@ -13292,6 +13455,7 @@ def _run_job(job_id: str) -> None:
 
 def _launch_job_thread(job_id: str) -> None:
     """Wake an isolated worker; never execute Pandas ETL in FastAPI."""
+    require_jato_monthly_enabled()
     _ = job_id
     execution_mode = os.getenv(
         "APP_JATO_MONTHLY_EXECUTION_MODE",
@@ -14463,6 +14627,7 @@ def _run_baseline_promotion_operation() -> str | None:
 
 def run_jato_monthly_update_worker_once() -> dict[str, Any]:
     """Claim and run at most one job under a cross-process flock."""
+    require_jato_monthly_enabled()
     with _exclusive_worker_cycle() as acquired:
         if not acquired:
             return {
@@ -18743,15 +18908,9 @@ def _serialize_baseline_promotion_state(
 
 
 def promote_current_active_to_baseline(*, triggered_by: str) -> dict[str, Any]:
-    with _exclusive_file_lock(
-        _maintenance_coordination_lock_path(),
-        blocking=False,
-    ) as coordinated:
-        if not coordinated:
-            raise HTTPException(
-                status_code=409,
-                detail="JATO 上传或清理操作正在准备中，请稍后再保存 baseline。",
-            )
+    with _monthly_update_resource_start_locks(
+        action="保存 active baseline"
+    ):
         _require_no_active_upload_sessions(action="保存 active baseline")
         return _promote_current_active_to_baseline_coordinated(
             triggered_by=triggered_by,

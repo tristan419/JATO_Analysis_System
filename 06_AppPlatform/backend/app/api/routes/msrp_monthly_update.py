@@ -22,6 +22,7 @@ from app.services.jato_monthly_update_service import (
     publish_jato_monthly_update_job,
     recheck_jato_monthly_update_job,
     recover_failed_jato_monthly_update_job,
+    require_jato_monthly_enabled,
     refresh_jato_monthly_update_review,
     resume_failed_jato_smart_merge,
     resolve_jato_historical_reclassification,
@@ -32,7 +33,11 @@ from app.services.jato_monthly_update_service import (
     upload_jato_monthly_update_chunk,
 )
 
-router = APIRouter(prefix="/msrp", tags=["msrp"])
+router = APIRouter(
+    prefix="/msrp",
+    tags=["msrp"],
+    dependencies=[Depends(require_jato_monthly_enabled)],
+)
 
 
 class JatoMonthlyUpdateReviewRefreshBody(BaseModel):

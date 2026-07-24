@@ -33,6 +33,8 @@ PHASES = (
     "migrated",
     "switch_started",
     "switched",
+    "rollback_started",
+    "rollback_completed",
     "backend_healthy",
     "www_verified",
     "intl_deploy_started",
@@ -41,6 +43,38 @@ PHASES = (
     "complete",
 )
 PHASE_INDEX = {phase: index for index, phase in enumerate(PHASES)}
+ALLOWED_PHASE_TRANSITIONS = {
+    "packaged": frozenset({"transport_verified"}),
+    "transport_verified": frozenset({"prepared"}),
+    "prepared": frozenset({"source_install_started", "backup_verified"}),
+    "source_install_started": frozenset({"source_installed"}),
+    "source_installed": frozenset({"backup_verified"}),
+    "backup_verified": frozenset({"migration_started", "migrated"}),
+    "migration_started": frozenset({"migrated"}),
+    "migrated": frozenset({"switch_started"}),
+    "switch_started": frozenset({"switched", "rollback_started"}),
+    "switched": frozenset({"backend_healthy", "rollback_started"}),
+    "rollback_started": frozenset({"rollback_completed"}),
+    "rollback_completed": frozenset(),
+    "backend_healthy": frozenset({"www_verified"}),
+    "www_verified": frozenset({"intl_deploy_started"}),
+    "intl_deploy_started": frozenset({"intl_verified"}),
+    "intl_verified": frozenset({"parity_verified"}),
+    "parity_verified": frozenset({"complete"}),
+    "complete": frozenset(),
+}
+ALLOWED_SAME_PHASE_STATUS_TRANSITIONS = {
+    "in_progress": frozenset({"completed", "failed"}),
+    "failed": frozenset({"completed"}),
+    "completed": frozenset(),
+}
+REQUIRED_PREDECESSOR_STATUSES = {
+    ("switched", "backend_healthy"): frozenset({"completed"}),
+    ("rollback_started", "rollback_completed"): frozenset(
+        {"in_progress", "failed"}
+    ),
+    ("parity_verified", "complete"): frozenset({"completed"}),
+}
 STATUSES = ("in_progress", "completed", "failed")
 RETRY_CLASSES = (
     "automatic",
@@ -239,7 +273,13 @@ def _validate_terminal_contract(
     status: str,
     retry_class: str,
 ) -> None:
-    if phase == "complete":
+    if phase == "rollback_completed":
+        if status != "completed" or retry_class != "automatic":
+            raise CheckpointError(
+                "rollback_completed phase requires status=completed and "
+                "retryClass=automatic"
+            )
+    elif phase == "complete":
         if status != "completed" or retry_class != "complete":
             raise CheckpointError(
                 "complete phase requires status=completed and retryClass=complete"
@@ -435,12 +475,44 @@ def write_checkpoint(
         existing = load_checkpoint(checkpoint_path)
         _assert_same_identity(existing, identity)
         existing_phase = existing["phase"]
-        if PHASE_INDEX[phase] < PHASE_INDEX[existing_phase]:
+        existing_status = existing["status"]
+        if existing_phase in {"rollback_completed", "complete"}:
             raise CheckpointError(
-                f"phase regression is forbidden: {existing_phase} -> {phase}"
+                f"{existing_phase} checkpoint is immutable",
             )
-        if existing_phase == "complete":
-            raise CheckpointError("complete checkpoint is immutable")
+        if phase == existing_phase and status == existing_status:
+            if retry_class != existing["retryClass"]:
+                raise CheckpointError(
+                    "an idempotent checkpoint write cannot change retryClass"
+                )
+            return existing
+        if phase == existing_phase:
+            if status not in ALLOWED_SAME_PHASE_STATUS_TRANSITIONS[existing_status]:
+                raise CheckpointError(
+                    "same-phase status regression is forbidden: "
+                    f"{existing_phase}/{existing_status} -> {phase}/{status}"
+                )
+        elif phase not in ALLOWED_PHASE_TRANSITIONS[existing_phase]:
+            if PHASE_INDEX[phase] < PHASE_INDEX[existing_phase]:
+                raise CheckpointError(
+                    f"phase regression is forbidden: {existing_phase} -> {phase}"
+                )
+            raise CheckpointError(
+                "illegal checkpoint phase transition: "
+                f"{existing_phase}/{existing_status} -> {phase}/{status}"
+            )
+        else:
+            allowed_source_statuses = REQUIRED_PREDECESSOR_STATUSES.get(
+                (existing_phase, phase)
+            )
+            if (
+                allowed_source_statuses is not None
+                and existing_status not in allowed_source_statuses
+            ):
+                raise CheckpointError(
+                    "checkpoint predecessor status is invalid: "
+                    f"{existing_phase}/{existing_status} -> {phase}/{status}"
+                )
         sequence = existing["sequence"] + 1
 
     checkpoint: dict[str, Any] = {
@@ -478,6 +550,22 @@ def assert_resumable(
     if phase == "complete":
         return {
             "decision": "already-complete",
+            "phase": phase,
+            "status": status,
+            "retryClass": retry_class,
+            "sequence": checkpoint["sequence"],
+        }
+    if phase == "rollback_completed":
+        return {
+            "decision": "already-rolled-back",
+            "phase": phase,
+            "status": status,
+            "retryClass": retry_class,
+            "sequence": checkpoint["sequence"],
+        }
+    if phase in {"switch_started", "switched", "rollback_started"}:
+        return {
+            "decision": "reconcile-required",
             "phase": phase,
             "status": status,
             "retryClass": retry_class,
@@ -526,6 +614,10 @@ def _cross_release_is_settled(checkpoint: Mapping[str, Any]) -> bool:
     phase = checkpoint["phase"]
     if phase == "complete":
         return True
+    if phase == "rollback_completed":
+        return checkpoint["status"] == "completed"
+    if phase == "rollback_started":
+        return False
     return (
         PHASE_INDEX[phase] >= PHASE_INDEX["backend_healthy"]
         and checkpoint["status"] == "completed"

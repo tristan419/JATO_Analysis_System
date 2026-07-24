@@ -30,8 +30,20 @@ CLOUD_HOST="${CLOUD_HOST:-150.158.141.14}"
 CLOUD_USER="${CLOUD_USER:-root}"
 CLOUD_REPO="${CLOUD_REPO:-/opt/JATO_Analysis_System-main}"
 CLOUD_DATA_DIR="${CLOUD_REPO}/04_Processed_data"
+# This service is a legacy-only fallback. Blue/green hosts are rejected before
+# any local ETL or remote mutation, so this script can never restart an
+# inactive 8000/8001 slot.
 BACKEND_SERVICE="${BACKEND_SERVICE:-jato-fullstack-backend@8000}"
 ALLOW_STALE_LOCAL_DATA_SYNC="${ALLOW_STALE_LOCAL_DATA_SYNC:-false}"
+REMOTE_BLUEGREEN_STATE_ROOT="${REMOTE_BLUEGREEN_STATE_ROOT:-/var/lib/jato-release}"
+REMOTE_ACTIVE_SLOT_FILE="${REMOTE_ACTIVE_SLOT_FILE:-$REMOTE_BLUEGREEN_STATE_ROOT/active-slot}"
+REMOTE_DEPLOYMENT_MARKER="${REMOTE_DEPLOYMENT_MARKER:-$REMOTE_BLUEGREEN_STATE_ROOT/deployment-maintenance}"
+REMOTE_ACTIVE_RELEASE_LINK="${REMOTE_ACTIVE_RELEASE_LINK:-/opt/jato/active}"
+REMOTE_SLOTS_ROOT="${REMOTE_SLOTS_ROOT:-/opt/jato/slots}"
+REMOTE_RELEASES_ROOT="${REMOTE_RELEASES_ROOT:-/opt/jato/releases}"
+REMOTE_DEPLOY_STATE_DIR="${REMOTE_DEPLOY_STATE_DIR:-}"
+REMOTE_BLUEGREEN_SWITCH_UNIT="${REMOTE_BLUEGREEN_SWITCH_UNIT:-jato-bluegreen-production.service}"
+REMOTE_DEPLOY_LOCK_WAIT="${REMOTE_DEPLOY_LOCK_WAIT:-300}"
 
 # ── 本地路径 ──
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -61,6 +73,276 @@ is_truthy() {
   case "${1,,}" in
     1|true|yes|on) return 0 ;;
     *) return 1 ;;
+  esac
+}
+
+remote_apply_legacy_payload() {
+  local data_dir="$1"
+  local backend_service="$2"
+  local active_slot_file="$3"
+  local deployment_marker="$4"
+  local active_release_link="$5"
+  local deploy_state_dir="$6"
+  local switch_unit="$7"
+  local lock_wait="$8"
+  local lock_path=""
+  local lock_parent=""
+  local load_state=""
+  local active_state=""
+  local sub_state=""
+  local archive=""
+  local backup_dir=""
+  local self_path="${BASH_SOURCE[0]}"
+
+  cleanup_remote_apply() {
+    rm -f "${archive:-}"
+    case "$self_path" in
+      /tmp/jato_data_sync_apply.*.sh) rm -f "$self_path" ;;
+    esac
+  }
+  trap cleanup_remote_apply EXIT
+
+  if [[ -z "$deploy_state_dir" ]]; then
+    deploy_state_dir="$HOME/.local/state/jato-production-release"
+  fi
+  if [[ "$data_dir" != /* ]] \
+    || [[ "$deploy_state_dir" != /* ]] \
+    || [[ ! "$lock_wait" =~ ^[0-9]+$ ]]; then
+    echo "[ERROR] legacy data sync remote paths or lock wait are invalid" >&2
+    return 1
+  fi
+  for required_command in flock systemctl tar curl python3; do
+    if ! command -v "$required_command" >/dev/null 2>&1; then
+      echo "[ERROR] missing remote legacy sync command: $required_command" >&2
+      return 1
+    fi
+  done
+
+  lock_path="${deploy_state_dir%/}/production-deploy.lock"
+  lock_parent="$(dirname "$lock_path")"
+  python3 -B - "$lock_parent" false <<'PY'
+import os
+from pathlib import Path
+import stat
+import sys
+
+path = Path(sys.argv[1])
+require_all = sys.argv[2] == "true"
+cursor = Path(path.anchor)
+for part in path.parts[1:]:
+    cursor /= part
+    try:
+        mode = os.lstat(cursor).st_mode
+    except FileNotFoundError:
+        if require_all:
+            raise SystemExit(
+                f"[ERROR] production deploy lock ancestor disappeared: {cursor}"
+            )
+        continue
+    if stat.S_ISLNK(mode) or not stat.S_ISDIR(mode):
+        raise SystemExit(
+            f"[ERROR] production deploy lock ancestor is unsafe: {cursor}"
+        )
+PY
+  mkdir -p "$lock_parent"
+  python3 -B - "$lock_parent" true <<'PY'
+import os
+from pathlib import Path
+import stat
+import sys
+
+path = Path(sys.argv[1])
+cursor = Path(path.anchor)
+for part in path.parts[1:]:
+    cursor /= part
+    mode = os.lstat(cursor).st_mode
+    if stat.S_ISLNK(mode) or not stat.S_ISDIR(mode):
+        raise SystemExit(
+            f"[ERROR] production deploy lock ancestor became unsafe: {cursor}"
+        )
+PY
+  chmod 700 "$lock_parent"
+  if [[ -L "$lock_path" ]] \
+    || [[ -e "$lock_path" && ! -f "$lock_path" ]]; then
+    echo "[ERROR] production deploy lock is unsafe" >&2
+    return 1
+  fi
+  exec 9>"$lock_path"
+  if ! flock -w "$lock_wait" 9; then
+    echo "[ERROR] another production mutation holds the server-wide deploy lock" >&2
+    return 1
+  fi
+
+  if ! load_state="$(
+    systemctl show "$switch_unit" -p LoadState --value 2>/dev/null
+  )" \
+    || ! active_state="$(
+      systemctl show "$switch_unit" -p ActiveState --value 2>/dev/null
+    )" \
+    || ! sub_state="$(
+      systemctl show "$switch_unit" -p SubState --value 2>/dev/null
+    )"; then
+    echo "[ERROR] cannot inspect the blue/green production switch unit" >&2
+    return 1
+  fi
+  if [[ "$load_state" != "not-found" ]] \
+    && {
+      [[ "$load_state" != "loaded" ]] \
+        || {
+          [[ "$active_state" != "inactive" ]] \
+            && [[ "$active_state" != "failed" ]]
+        }
+    }; then
+    echo "[ERROR] blue/green production switch is not quiescent: load=$load_state active=$active_state sub=$sub_state" >&2
+    return 1
+  fi
+  if [[ "$load_state" == "not-found" ]] \
+    && [[ -n "$active_state" && "$active_state" != "inactive" ]]; then
+    echo "[ERROR] unloaded blue/green switch unit reported state=$active_state" >&2
+    return 1
+  fi
+
+  # Re-check the deployment mode only after the global lock is held.  Any
+  # durable blue/green state means this legacy direct-replacement path is no
+  # longer authorized.
+  if [[ -e "$deployment_marker" || -L "$deployment_marker" ]] \
+    || [[ -e "$active_slot_file" || -L "$active_slot_file" ]] \
+    || [[ -e "$active_release_link" || -L "$active_release_link" ]]; then
+    echo "[ERROR] Tencent host changed to blue/green; refusing legacy data upload and replacement" >&2
+    return 1
+  fi
+
+  archive="$(mktemp /tmp/jato_data_sync.XXXXXX.tar.gz)"
+  cat > "$archive"
+  if [[ ! -s "$archive" ]] || ! tar tzf "$archive" >/dev/null 2>&1; then
+    echo "[ERROR] streamed legacy data archive is empty or invalid" >&2
+    return 1
+  fi
+
+  backup_dir="${data_dir}/.refresh_backups/pre-sync-$(date +%Y%m%d-%H%M%S)"
+  echo "  备份当前数据..."
+  mkdir -p "$backup_dir"
+  if [[ -f "${data_dir}/jato_full_archive.parquet" ]]; then
+    cp "${data_dir}/jato_full_archive.parquet" "$backup_dir/"
+  fi
+  if [[ -f "${data_dir}/manifest.json" ]]; then
+    cp "${data_dir}/manifest.json" "$backup_dir/"
+  fi
+
+  echo "  解压新数据..."
+  if [[ -d "${data_dir}/partitioned_dataset_v1" ]]; then
+    rm -rf "${data_dir}/partitioned_dataset_v1"
+  fi
+  tar xzf "$archive" -C "$data_dir"
+  rm -f "$archive"
+  archive=""
+
+  echo "  重启后端..."
+  systemctl restart "$backend_service"
+  sleep 2
+  echo "  健康检查..."
+  if ! curl -fsS --connect-timeout 5 --max-time 10 \
+    http://127.0.0.1:8000/healthz >/dev/null 2>&1; then
+    echo "[ERROR] legacy backend failed health after data replacement" >&2
+    return 1
+  fi
+  echo "  ✅ 后端健康检查通过"
+  echo "  当前数据状态:"
+  ls -lh "${data_dir}/jato_full_archive.parquet"
+  echo "  分区数: $(find "${data_dir}/partitioned_dataset_v1" -mindepth 1 -maxdepth 1 -type d | wc -l)"
+}
+
+if [[ "${1:-}" == "--remote-apply" ]]; then
+  if [[ "$#" -ne 9 ]]; then
+    echo "[ERROR] --remote-apply received an invalid argument count" >&2
+    exit 1
+  fi
+  shift
+  remote_apply_legacy_payload "$@"
+  exit $?
+fi
+
+assert_cloud_deployment_compatible() {
+  local remote_mode=""
+  local remote_mode_file=""
+  remote_mode_file="$(mktemp)"
+  chmod 0600 "$remote_mode_file"
+  if ! ssh -o ConnectTimeout=30 "$SSH_ALIAS" bash -s -- \
+    "$REMOTE_ACTIVE_SLOT_FILE" \
+    "$REMOTE_DEPLOYMENT_MARKER" \
+    "$REMOTE_ACTIVE_RELEASE_LINK" \
+    "$REMOTE_SLOTS_ROOT" \
+    "$REMOTE_RELEASES_ROOT" > "$remote_mode_file" <<'REMOTE_SCRIPT'
+set -Eeuo pipefail
+active_slot_file="$1"
+deployment_marker="$2"
+active_release_link="$3"
+slots_root="$4"
+releases_root="$5"
+
+if [[ ! -e "$active_slot_file" && ! -L "$active_slot_file" \
+  && ! -e "$active_release_link" && ! -L "$active_release_link" ]]; then
+  printf 'legacy\n'
+  exit 0
+fi
+if [[ ! -f "$active_slot_file" || -L "$active_slot_file" ]]; then
+  echo "[ERROR] blue/green active-slot is missing or unsafe" >&2
+  exit 1
+fi
+active_slot="$(cat "$active_slot_file")"
+case "$active_slot" in
+  8000|8001) ;;
+  *)
+    echo "[ERROR] blue/green active-slot is malformed" >&2
+    exit 1
+    ;;
+esac
+slot_link="$slots_root/$active_slot/current"
+if [[ ! -L "$active_release_link" || ! -L "$slot_link" ]]; then
+  echo "[ERROR] blue/green active release links are missing" >&2
+  exit 1
+fi
+active_root="$(realpath "$active_release_link")"
+slot_root="$(realpath "$slot_link")"
+releases_root="$(realpath "$releases_root")"
+if [[ "$active_root" != "$slot_root" || "$active_root" != "$releases_root/"* ]]; then
+  echo "[ERROR] blue/green active release does not match durable active-slot" >&2
+  exit 1
+fi
+if ! curl -fsS --connect-timeout 5 --max-time 15 \
+  "http://127.0.0.1:$active_slot/healthz" >/dev/null \
+  || ! curl -fsS --connect-timeout 5 --max-time 15 \
+    "http://127.0.0.1:$active_slot/readyz" >/dev/null; then
+  echo "[ERROR] durable active blue/green slot did not pass direct health probes" >&2
+  exit 1
+fi
+if [[ -e "$deployment_marker" || -L "$deployment_marker" ]]; then
+  printf 'bluegreen-maintenance:%s\n' "$active_slot"
+else
+  printf 'bluegreen:%s\n' "$active_slot"
+fi
+REMOTE_SCRIPT
+  then
+    rm -f "$remote_mode_file"
+    log_fail "无法验证腾讯云当前部署槽，已在本地数据变更前停止"
+    return 1
+  fi
+  remote_mode="$(cat "$remote_mode_file")"
+  rm -f "$remote_mode_file"
+  case "$remote_mode" in
+    legacy)
+      log_info "腾讯云仍为 legacy 单槽；仅允许 legacy 兼容路径"
+      ;;
+    bluegreen:*|bluegreen-maintenance:*)
+      log_fail "检测到腾讯云蓝绿部署（active ${remote_mode##*:}），禁止此脚本直接覆盖 active JATO 数据"
+      echo "  请使用网站 Data Ops → JATO Monthly Update 完成数据 Candidate / Review / Publish。"
+      echo "  代码或运行时资产变更请通过 main 的 production-release；不要重启 8000/8001 槽。"
+      return 1
+      ;;
+    *)
+      log_fail "腾讯云部署模式返回异常: ${remote_mode:-empty}"
+      return 1
+      ;;
   esac
 }
 
@@ -282,6 +564,11 @@ else
   fi
 fi
 
+# Blue/green owns immutable code slots and a shared, transactional JATO active
+# bundle. This legacy sync script rewrites canonical files directly, so detect
+# and reject blue/green before Step 1 can mutate local or remote data.
+assert_cloud_deployment_compatible
+
 # ═══════════════════════════════════════════════════════════════════
 #  Step 1: 读取 xlsx → 对比 → 合并 → 写 parquet
 # ═══════════════════════════════════════════════════════════════════
@@ -433,68 +720,49 @@ tar czf "$ARCHIVE_PATH" \
 archive_size=$(du -h "$ARCHIVE_PATH" | awk '{print $1}')
 log_info "归档大小: $archive_size"
 
-log_info "上传中 (scp)..."
-scp -o ConnectTimeout=30 -o ServerAliveInterval=15 "$ARCHIVE_PATH" "$SSH_ALIAS:/tmp/jato_data_sync.tar.gz"
-
-if [[ $? -ne 0 ]]; then
-  log_fail "上传失败"
+REMOTE_APPLY_SCRIPT="$(
+  ssh -o ConnectTimeout=30 "$SSH_ALIAS" \
+    'umask 077; mktemp /tmp/jato_data_sync_apply.XXXXXX.sh'
+)"
+if [[ "$REMOTE_APPLY_SCRIPT" != /tmp/jato_data_sync_apply.*.sh ]]; then
+  log_fail "远端 apply helper 临时路径异常"
   rm -rf "$TMPDIR_ARCHIVE"
   exit 1
 fi
-log_ok "上传完成"
-
-rm -rf "$TMPDIR_ARCHIVE"
+log_info "上传受锁控制的远端 apply helper..."
+if ! scp -o ConnectTimeout=30 -o ServerAliveInterval=15 \
+  "${BASH_SOURCE[0]}" "$SSH_ALIAS:$REMOTE_APPLY_SCRIPT"; then
+  log_fail "远端 apply helper 上传失败"
+  ssh -o ConnectTimeout=10 "$SSH_ALIAS" "rm -f -- $(printf '%q' "$REMOTE_APPLY_SCRIPT")" \
+    >/dev/null 2>&1 || true
+  rm -rf "$TMPDIR_ARCHIVE"
+  exit 1
+fi
+log_ok "远端 apply helper 已就绪；数据归档尚未上传"
 
 # ═══════════════════════════════════════════════════════════════════
 #  Step 5: 服务器端解压 + 替换 + 重启
 # ═══════════════════════════════════════════════════════════════════
 log_step "5/6 服务器端解压并替换数据..."
 
-ssh -o ConnectTimeout=30 "$SSH_ALIAS" bash -s <<REMOTE_SCRIPT
-set -Eeuo pipefail
-
-DATA_DIR="${CLOUD_DATA_DIR}"
-ARCHIVE="/tmp/jato_data_sync.tar.gz"
-BACKUP_DIR="\${DATA_DIR}/.refresh_backups/pre-sync-\$(date +%Y%m%d-%H%M%S)"
-
-echo "  备份当前数据..."
-mkdir -p "\$BACKUP_DIR"
-
-if [[ -f "\${DATA_DIR}/jato_full_archive.parquet" ]]; then
-  cp "\${DATA_DIR}/jato_full_archive.parquet" "\$BACKUP_DIR/"
-fi
-if [[ -f "\${DATA_DIR}/manifest.json" ]]; then
-  cp "\${DATA_DIR}/manifest.json" "\$BACKUP_DIR/"
-fi
-
-echo "  解压新数据..."
-if [[ -d "\${DATA_DIR}/partitioned_dataset_v1" ]]; then
-  rm -rf "\${DATA_DIR}/partitioned_dataset_v1"
-fi
-
-tar xzf "\$ARCHIVE" -C "\$DATA_DIR"
-rm -f "\$ARCHIVE"
-
-echo "  重启后端..."
-systemctl restart ${BACKEND_SERVICE}
-sleep 2
-
-echo "  健康检查..."
-if curl -fsS --connect-timeout 5 --max-time 10 http://127.0.0.1:8000/healthz >/dev/null 2>&1; then
-  echo "  ✅ 后端健康检查通过"
-else
-  echo "  ⚠️  后端可能还在启动中，请稍后手动验证"
-fi
-
-echo "  当前数据状态:"
-ls -lh "\${DATA_DIR}/jato_full_archive.parquet"
-echo "  分区数: \$(find \${DATA_DIR}/partitioned_dataset_v1 -mindepth 1 -maxdepth 1 -type d | wc -l)"
-REMOTE_SCRIPT
-
-if [[ $? -ne 0 ]]; then
+printf -v REMOTE_APPLY_COMMAND \
+  'bash %q --remote-apply %q %q %q %q %q %q %q %q' \
+  "$REMOTE_APPLY_SCRIPT" \
+  "$CLOUD_DATA_DIR" \
+  "$BACKEND_SERVICE" \
+  "$REMOTE_ACTIVE_SLOT_FILE" \
+  "$REMOTE_DEPLOYMENT_MARKER" \
+  "$REMOTE_ACTIVE_RELEASE_LINK" \
+  "$REMOTE_DEPLOY_STATE_DIR" \
+  "$REMOTE_BLUEGREEN_SWITCH_UNIT" \
+  "$REMOTE_DEPLOY_LOCK_WAIT"
+if ! ssh -o ConnectTimeout=30 -o ServerAliveInterval=15 "$SSH_ALIAS" \
+  "$REMOTE_APPLY_COMMAND" < "$ARCHIVE_PATH"; then
   log_fail "服务器端部署失败"
+  rm -rf "$TMPDIR_ARCHIVE"
   exit 1
 fi
+rm -rf "$TMPDIR_ARCHIVE"
 log_ok "服务器端部署完成"
 
 # ═══════════════════════════════════════════════════════════════════
