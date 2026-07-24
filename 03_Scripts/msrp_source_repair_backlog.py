@@ -33,7 +33,10 @@ try:
 except ImportError:  # pragma: no cover - keeps old-report fallback usable in stripped script contexts.
     _write_v3_source_repair_backlog = None  # type: ignore[assignment]
 
-from app.services.msrp_source_issue_classifier import enrich_msrp_source_issue
+from app.services.msrp_source_issue_classifier import (
+    enrich_msrp_source_issue,
+    is_msrp_source_issue,
+)
 
 
 def _load_dryrun_report(path: str | None) -> dict:
@@ -47,6 +50,26 @@ def _load_dryrun_report(path: str | None) -> dict:
             except Exception:
                 pass
     return {}
+
+
+def _int_field(payload: dict, key: str, default: int) -> int:
+    value = payload.get(key)
+    if value is None:
+        return default
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return default
+
+
+def _float_field(payload: dict, key: str, default: float) -> float:
+    value = payload.get(key)
+    if value is None:
+        return default
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return default
 
 
 def _classify_no_observation(src: dict) -> str:
@@ -90,15 +113,31 @@ def _classify_validation_fix(src: dict) -> tuple[str, str]:
 def _build_backlog(report: dict) -> dict:
     """Build structured repair backlog from dryrun report."""
     results = report.get("results") or []
-    total = report.get("total") or len(results)
-    pass_count = report.get("pass") or sum(1 for r in results if r.get("failureReason") is None)
-    failed = [
-        enrich_msrp_source_issue(r)
-        for r in results
-        if r.get("failureReason") is not None
-        or str(r.get("httpStatus") or "") == "403"
+    failed_rows = [
+        row
+        for row in results
+        if isinstance(row, dict) and is_msrp_source_issue(row)
     ]
-    pass_pct = report.get("passPct") or round(pass_count / total * 100, 1) if total else 0.0
+    failed = [
+        enrich_msrp_source_issue(row)
+        for row in failed_rows
+    ]
+    total = _int_field(report, "total", len(results))
+    derived_pass_count = sum(
+        1
+        for row in results
+        if isinstance(row, dict) and not is_msrp_source_issue(row)
+    )
+    pass_count = _int_field(report, "pass", derived_pass_count)
+    if results:
+        pass_count = min(pass_count, max(0, total - len(failed)))
+    computed_pass_pct = (
+        round(pass_count / total * 100, 1) if total else 0.0
+    )
+    pass_pct = _float_field(report, "passPct", computed_pass_pct)
+    if results:
+        pass_pct = min(pass_pct, computed_pass_pct)
+    gate_threshold = _float_field(report, "gateThreshold", 70.0)
 
     # Group by failure reason
     by_reason: dict[str, list[dict]] = {}
@@ -168,8 +207,10 @@ def _build_backlog(report: dict) -> dict:
             "successCount": pass_count,
             "failedCount": len(failed),
             "passPct": pass_pct,
-            "gateThreshold": report.get("gateThreshold", 70),
-            "gateStatus": "blocked" if pass_pct < (report.get("gateThreshold") or 70) else "allowed",
+            "gateThreshold": gate_threshold,
+            "gateStatus": (
+                "blocked" if pass_pct < gate_threshold else "allowed"
+            ),
         },
         "failureBreakdown": {reason: len(sources) for reason, sources in sorted(by_reason.items())},
         "strategyRecommendations": strategy_counts,

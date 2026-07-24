@@ -1378,3 +1378,38 @@ def test_normalized_country_exposes_structured_source_failure_feedback():
     )
     assert sources["tesla_model_y_no"]["issueClass"] == "access_control"
     assert sources["volvo_xc60_no"]["issueClass"] == "extractor_strategy"
+
+
+def test_sampled_issue_does_not_inflate_unmatched_aggregate_failure_bucket():
+    normalized = progress._normalize_country_from_v3(
+        {
+            "countryCode": "se",
+            "total": 2,
+            "pass": 0,
+            "empty": 2,
+            "fail": 0,
+            "errors": 0,
+            "passPct": 0.0,
+            "status": "failure",
+            "failureBreakdown": {"http_timeout": 2},
+            "strategyRecommendations": {"retry": 2},
+            "sources": [
+                {
+                    "sourceCode": "tesla_model_y_se",
+                    "status": "error",
+                    "failureReason": "http_error",
+                    "recommendedStrategy": "retry",
+                    "sourceUrl": "https://www.tesla.com/sv_se/modely",
+                    "httpStatus": 403,
+                }
+            ],
+        }
+    )
+
+    assert normalized["failureBreakdown"] == {"http_timeout": 2}
+    assert sum(normalized["failureBreakdown"].values()) == 2
+    assert normalized["strategyRecommendations"] == {
+        "manual_review_or_proxy_required": 1,
+        "retry": 1,
+    }
+    assert sum(normalized["strategyRecommendations"].values()) == 2

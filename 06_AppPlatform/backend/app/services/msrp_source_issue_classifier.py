@@ -118,7 +118,8 @@ def _failed_status(source: dict[str, Any]) -> bool:
     return status in _FAILED_SOURCE_STATUSES
 
 
-def _has_classifiable_failure(source: dict[str, Any]) -> bool:
+def is_msrp_source_issue(source: dict[str, Any]) -> bool:
+    """Return whether a source row represents a classifiable failed probe."""
     return bool(
         source.get("failureReason")
         or _http_status(source) == 403
@@ -256,14 +257,16 @@ def _replace_count(
     counts: dict[str, int],
     original: str,
     canonical: str,
-) -> None:
+) -> bool:
     if original == canonical:
-        return
-    if counts.get(original, 0) > 0:
-        counts[original] -= 1
-        if counts[original] <= 0:
-            counts.pop(original, None)
+        return True
+    if counts.get(original, 0) <= 0:
+        return False
+    counts[original] -= 1
+    if counts[original] <= 0:
+        counts.pop(original, None)
     counts[canonical] = counts.get(canonical, 0) + 1
+    return True
 
 
 def effective_msrp_country_issue_maps(
@@ -278,7 +281,7 @@ def effective_msrp_country_issue_maps(
     sources = [
         source
         for source in country.get("sources") or []
-        if isinstance(source, dict) and _has_classifiable_failure(source)
+        if isinstance(source, dict) and is_msrp_source_issue(source)
     ]
     existing_failures = _normalized_count_map(country.get("failureBreakdown"))
     existing_strategies = _normalized_count_map(

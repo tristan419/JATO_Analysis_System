@@ -143,3 +143,33 @@ def test_existing_unavailable_reason_gets_canonical_lifecycle_metadata() -> None
     assert issue["originalFailureReason"] == "model_not_currently_available"
     assert issue["issueClass"] == "source_lifecycle"
     assert issue["sourceLifecycleStatus"] == "official_unavailable"
+
+
+def test_403_without_failure_reason_is_failed_and_preserves_zero_summary() -> None:
+    backlog = backlog_mod._build_backlog(
+        {
+            "total": 1,
+            "pass": 0,
+            "passPct": 0.0,
+            "gateThreshold": 70,
+            "results": [
+                {
+                    "country": "se",
+                    "code": "tesla_model_y_se",
+                    "status": "error",
+                    "sourceUrl": "https://www.tesla.com/sv_se/modely",
+                    "httpStatus": 403,
+                }
+            ],
+        }
+    )
+
+    assert backlog["summary"] == {
+        "totalSources": 1,
+        "successCount": 0,
+        "failedCount": 1,
+        "passPct": 0.0,
+        "gateThreshold": 70.0,
+        "gateStatus": "blocked",
+    }
+    assert backlog["failureBreakdown"] == {"forbidden_403": 1}
