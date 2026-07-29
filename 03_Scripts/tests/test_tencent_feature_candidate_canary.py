@@ -3,6 +3,7 @@ from __future__ import annotations
 import importlib.util
 import json
 from pathlib import Path
+import socket
 import subprocess
 import textwrap
 from types import ModuleType
@@ -238,6 +239,17 @@ def test_feature_canary_holds_lock_and_cleans_only_its_namespace() -> None:
     assert run_body.index('capture_snapshot "$BEFORE_SNAPSHOT"') < run_body.index(
         "run_build_scope",
     )
+    finalizer_body = script.split("finalize_canary() {", 1)[1].split(
+        "\nrun_canary() {",
+        1,
+    )[0]
+    assert finalizer_body.index("cleanup_candidate") < finalizer_body.index(
+        "wait_for_candidate_port_release",
+    )
+    assert finalizer_body.index(
+        "wait_for_candidate_port_release",
+    ) < finalizer_body.index('capture_snapshot "$AFTER_SNAPSHOT"')
+    assert "SO_REUSEADDR, 0" in GUARD_PATH.read_text(encoding="utf-8")
 
 
 def test_baseline_accepts_absent_legacy_bluegreen_markers() -> None:
@@ -253,6 +265,14 @@ def test_baseline_accepts_absent_legacy_bluegreen_markers() -> None:
     with pytest.raises(
         guard.CanaryGuardError,
         match="already references",
+    ):
+        guard.verify_baseline(snapshot)
+
+    snapshot = _snapshot()
+    snapshot["candidatePortFree"] = False
+    with pytest.raises(
+        guard.CanaryGuardError,
+        match="already occupied",
     ):
         guard.verify_baseline(snapshot)
 
@@ -298,6 +318,32 @@ def test_before_after_comparison_ignores_time_but_not_production_state() -> None
         match="production state changed",
     ):
         guard.compare_snapshots(before, after)
+
+    after = json.loads(json.dumps(before))
+    after["candidatePortFree"] = False
+    with pytest.raises(
+        guard.CanaryGuardError,
+        match="candidatePortFree",
+    ):
+        guard.compare_snapshots(before, after)
+
+
+def test_strict_candidate_port_probe_rejects_an_active_listener() -> None:
+    guard = _guard()
+    listener = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    listener.bind(("127.0.0.1", 0))
+    listener.listen(1)
+    port = listener.getsockname()[1]
+    try:
+        with pytest.raises(
+            guard.CanaryGuardError,
+            match="not yet available",
+        ):
+            guard.verify_port_free(port)
+    finally:
+        listener.close()
+
+    guard.verify_port_free(port)
 
 
 def test_failed_receipt_records_identity_with_missing_early_snapshots(
@@ -564,6 +610,7 @@ def test_guard_cli_parser_builds_without_conflicting_options() -> None:
     (
         "original_rc",
         "cleanup_rc",
+        "port_release_rc",
         "compare_rc",
         "checkpoint_rc",
         "fault",
@@ -571,9 +618,10 @@ def test_guard_cli_parser_builds_without_conflicting_options() -> None:
         "expected_outcome",
     ),
     (
-        (0, 0, 0, 0, "", 0, "passed"),
+        (0, 0, 0, 0, 0, "", 0, "passed"),
         (
             97,
+            0,
             0,
             0,
             0,
@@ -581,15 +629,57 @@ def test_guard_cli_parser_builds_without_conflicting_options() -> None:
             0,
             "expected_failure_verified",
         ),
-        (0, 1, 0, 0, "", 1, "failed"),
-        (0, 0, 1, 0, "", 1, "failed"),
-        (0, 0, 0, 1, "", 1, "failed"),
+        (0, 1, 0, 0, 0, "", 1, "failed"),
+        (0, 0, 1, 0, 0, "", 1, "failed"),
+        (0, 0, 0, 1, 0, "", 1, "failed"),
+        (0, 0, 0, 0, 1, "", 1, "failed"),
+        (
+            97,
+            1,
+            0,
+            0,
+            0,
+            "after_candidate_start",
+            1,
+            "failed",
+        ),
+        (
+            97,
+            0,
+            1,
+            0,
+            0,
+            "after_candidate_start",
+            1,
+            "failed",
+        ),
+        (
+            97,
+            0,
+            0,
+            1,
+            0,
+            "after_candidate_start",
+            1,
+            "failed",
+        ),
+        (
+            97,
+            0,
+            0,
+            0,
+            1,
+            "after_candidate_start",
+            1,
+            "failed",
+        ),
     ),
 )
 def test_finalizer_control_flow_is_fail_closed(
     tmp_path: Path,
     original_rc: int,
     cleanup_rc: int,
+    port_release_rc: int,
     compare_rc: int,
     checkpoint_rc: int,
     fault: str,
@@ -605,9 +695,10 @@ def test_finalizer_control_flow_is_fail_closed(
             root="$2"
             original_rc="$3"
             stub_cleanup_rc="$4"
-            stub_compare_rc="$5"
-            stub_checkpoint_rc="$6"
-            CANARY_FAULT="$7"
+            stub_port_release_rc="$5"
+            stub_compare_rc="$6"
+            stub_checkpoint_rc="$7"
+            CANARY_FAULT="$8"
             log="$root/calls.log"
             BEFORE_SNAPSHOT="$root/before.json"
             AFTER_SNAPSHOT="$root/after.json"
@@ -630,6 +721,10 @@ def test_finalizer_control_flow_is_fail_closed(
             cleanup_candidate() {
               printf 'cleanup\\n' >>"$log"
               return "$stub_cleanup_rc"
+            }
+            wait_for_candidate_port_release() {
+              printf 'port-wait\\n' >>"$log"
+              return "$stub_port_release_rc"
             }
             capture_snapshot() {
               printf 'capture\\n' >>"$log"
@@ -683,6 +778,7 @@ def test_finalizer_control_flow_is_fail_closed(
             str(tmp_path),
             str(original_rc),
             str(cleanup_rc),
+            str(port_release_rc),
             str(compare_rc),
             str(checkpoint_rc),
             fault,
@@ -693,7 +789,11 @@ def test_finalizer_control_flow_is_fail_closed(
     )
     assert result.returncode == expected_rc, result.stderr
     calls = (tmp_path / "calls.log").read_text(encoding="utf-8")
-    assert calls.startswith("cleanup\ncapture\n")
+    expected_prefix = "cleanup\n"
+    if cleanup_rc == 0:
+        expected_prefix += "port-wait\n"
+    expected_prefix += "capture\n"
+    assert calls.startswith(expected_prefix)
     assert f"outcome:{expected_outcome}\n" in calls
     if expected_outcome == "passed":
         assert "record:cleanup_verified:completed\n" in calls
@@ -704,6 +804,66 @@ def test_finalizer_control_flow_is_fail_closed(
             "record:cleanup_verified:failed\n" in calls
             or checkpoint_rc == 1
         )
+
+
+@pytest.mark.parametrize(
+    ("succeed_after", "expected_rc", "expected_attempts", "expected_sleeps"),
+    (
+        (3, 0, 3, 2),
+        (0, 1, 76, 75),
+    ),
+)
+def test_port_release_wait_is_bounded_and_retries_strict_guard(
+    tmp_path: Path,
+    succeed_after: int,
+    expected_rc: int,
+    expected_attempts: int,
+    expected_sleeps: int,
+) -> None:
+    harness = tmp_path / "port-wait-harness.sh"
+    calls = tmp_path / "calls.log"
+    harness.write_text(
+        textwrap.dedent(
+            """\
+            #!/usr/bin/env bash
+            source "$1"
+            calls="$2"
+            succeed_after="$3"
+            attempts=0
+            sleeps=0
+            python3() {
+              attempts=$((attempts + 1))
+              printf 'attempt:%s:%s\\n' "$attempts" "$*" >>"$calls"
+              [[ "$succeed_after" -gt 0 && "$attempts" -ge "$succeed_after" ]]
+            }
+            sleep() {
+              sleeps=$((sleeps + 1))
+              printf 'sleep:%s\\n' "$sleeps" >>"$calls"
+            }
+            wait_for_candidate_port_release
+            """
+        ),
+        encoding="utf-8",
+    )
+    result = subprocess.run(
+        [
+            "bash",
+            str(harness),
+            str(CONTROLLER),
+            str(calls),
+            str(succeed_after),
+        ],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert result.returncode == expected_rc
+    call_lines = calls.read_text(encoding="utf-8").splitlines()
+    attempts = [line for line in call_lines if line.startswith("attempt:")]
+    sleeps = [line for line in call_lines if line.startswith("sleep:")]
+    assert len(attempts) == expected_attempts
+    assert len(sleeps) == expected_sleeps
+    assert all(" verify-port-free --port 18001" in line for line in attempts)
 
 
 @pytest.mark.parametrize("unsafe_identity", (False, True))

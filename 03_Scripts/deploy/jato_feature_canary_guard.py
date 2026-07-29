@@ -384,6 +384,15 @@ def _port_is_free(port: int) -> bool:
     return True
 
 
+def verify_port_free(port: int) -> None:
+    if port < 1 or port > 65535:
+        raise CanaryGuardError("candidate loopback port is outside 1..65535")
+    if not _port_is_free(port):
+        raise CanaryGuardError(
+            "candidate loopback port is not yet available for a strict bind",
+        )
+
+
 def _monthly_worker_processes() -> list[dict[str, Any]]:
     found: list[dict[str, Any]] = []
     for entry in Path("/proc").iterdir():
@@ -765,6 +774,9 @@ def _build_parser() -> argparse.ArgumentParser:
     compare.add_argument("--before", type=Path, required=True)
     compare.add_argument("--after", type=Path, required=True)
 
+    port_free = commands.add_parser("verify-port-free")
+    port_free.add_argument("--port", type=int, required=True)
+
     record = commands.add_parser("record")
     record.add_argument("--path", type=Path, required=True)
     _add_identity_arguments(record)
@@ -806,6 +818,8 @@ def main() -> int:
                 _load_json(arguments.before),
                 _load_json(arguments.after),
             )
+        elif arguments.command == "verify-port-free":
+            verify_port_free(arguments.port)
         elif arguments.command == "record":
             record_checkpoint(
                 path=arguments.path,

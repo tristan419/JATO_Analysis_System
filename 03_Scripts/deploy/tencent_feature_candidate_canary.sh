@@ -21,6 +21,7 @@ CANARY_PUBLIC_ORIGIN="${CANARY_PUBLIC_ORIGIN:-https://www.ojeur.cloud}"
 CANARY_FAULT="${CANARY_FAULT:-}"
 LEGACY_ROOT="${LEGACY_ROOT:-/opt/JATO_Analysis_System-main}"
 CANARY_MAX_SOURCE_BYTES=$((256 * 1024 * 1024))
+CANARY_PORT_RELEASE_TIMEOUT_SECONDS=75
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 CANARY_GUARD="$SCRIPT_DIR/jato_feature_canary_guard.py"
@@ -1094,11 +1095,29 @@ cleanup_candidate() {
   return "$cleanup_rc"
 }
 
+wait_for_candidate_port_release() {
+  local attempt=0
+  for attempt in $(seq 0 "$CANARY_PORT_RELEASE_TIMEOUT_SECONDS"); do
+    if python3 -B "$CANARY_GUARD" verify-port-free \
+      --port "$CANARY_PORT" >/dev/null 2>&1; then
+      return 0
+    fi
+    if [[ "$attempt" -lt "$CANARY_PORT_RELEASE_TIMEOUT_SECONDS" ]]; then
+      sleep 1
+    fi
+  done
+  echo \
+    "[ERROR] candidate loopback port did not quiesce within ${CANARY_PORT_RELEASE_TIMEOUT_SECONDS}s" \
+    >&2
+  return 1
+}
+
 finalize_canary() {
   local original_rc="$?"
   local final_rc="$original_rc"
   local comparison_rc=0
   local cleanup_rc=0
+  local port_release_rc=0
   local checkpoint_rc=0
   local identity=()
   if [[ "$CANARY_FINALIZING" == "true" ]]; then
@@ -1118,6 +1137,13 @@ finalize_canary() {
   if [[ "$cleanup_rc" -ne 0 ]]; then
     CANARY_ERROR="${CANARY_ERROR:+$CANARY_ERROR; }candidate cleanup failed"
     final_rc=1
+  else
+    wait_for_candidate_port_release
+    port_release_rc=$?
+    if [[ "$port_release_rc" -ne 0 ]]; then
+      CANARY_ERROR="${CANARY_ERROR:+$CANARY_ERROR; }candidate loopback port did not quiesce after cleanup"
+      final_rc=1
+    fi
   fi
 
   if [[ -n "$ACTIVE_UNIT" && -f "$BEFORE_SNAPSHOT" ]]; then
