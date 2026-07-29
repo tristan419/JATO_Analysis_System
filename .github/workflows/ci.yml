@@ -70,6 +70,7 @@ jobs:
         run: |
           bash -n \
             03_Scripts/deploy/fullstack_remote_release.sh \
+            03_Scripts/deploy/tencent_feature_candidate_canary.sh \
             03_Scripts/deploy/tencent_bluegreen_release.sh \
             03_Scripts/deploy/lib/production_mutation_lock.sh \
             03_Scripts/deploy/nginx/enable_jato_fullstack_https.sh \
@@ -83,6 +84,7 @@ jobs:
             03_Scripts/tests/test_jato_bluegreen_boot_reconcile.py \
             03_Scripts/tests/test_jato_quiescence_gate.py \
             03_Scripts/tests/test_jato_release_storage_guard.py \
+            03_Scripts/tests/test_tencent_feature_candidate_canary.py \
             03_Scripts/tests/test_tencent_bluegreen_release.py \
             03_Scripts/tests/test_release_source_seal.py \
             03_Scripts/tests/test_release_checkpoint.py \

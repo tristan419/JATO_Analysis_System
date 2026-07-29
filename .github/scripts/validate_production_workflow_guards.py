@@ -563,6 +563,114 @@ def assert_database_migration_is_behind_main_release_gate() -> None:
         raise AssertionError("database migration must require the production release workflow")
 
 
+def assert_feature_canary_cannot_route_or_mutate_production() -> None:
+    controller_path = (
+        REPO_ROOT / "03_Scripts/deploy/tencent_feature_candidate_canary.sh"
+    )
+    guard_path = (
+        REPO_ROOT / "03_Scripts/deploy/jato_feature_canary_guard.py"
+    )
+    if not controller_path.is_file() or not guard_path.is_file():
+        raise AssertionError("Tencent feature canary controller/guard is missing")
+    controller = controller_path.read_text(encoding="utf-8")
+    guard = guard_path.read_text(encoding="utf-8")
+    required = (
+        'CANARY_ROOT="${CANARY_ROOT:-/opt/jato-canary}"',
+        'CANARY_STATE_ROOT="${CANARY_STATE_ROOT:-/var/lib/jato-canary}"',
+        'CANARY_PORT="${CANARY_PORT:-18001}"',
+        'CANARY_MEMORY_HIGH="${CANARY_MEMORY_HIGH:-3G}"',
+        'CANARY_MEMORY_MAX="${CANARY_MEMORY_MAX:-4G}"',
+        'CANARY_TASKS_MAX="${CANARY_TASKS_MAX:-512}"',
+        "jato_acquire_production_mutation_lock",
+        "canary requires the canonical production deploy state directory",
+        'RUN_KEY="${CANARY_COMMIT_SHA:0:12}-${CANARY_RUN_ID}"',
+        'RUNTIME_ROOT="$CANARY_ROOT/runtime/$RUN_KEY"',
+        'SERVICE_UNIT="jato-feature-canary-$RUN_KEY.service"',
+        "canary run id already has durable state and cannot be reused",
+        "--wait",
+        "--pipe",
+        '--service-type=exec',
+        '--property="DynamicUser=yes"',
+        '--property="ProtectSystem=strict"',
+        '--property="ProtectHome=yes"',
+        '--property="MemorySwapMax=0"',
+        '--property="InaccessiblePaths=$LEGACY_ROOT/01_RAW_DATA $LEGACY_ROOT/04_Processed_data /etc/jato-fullstack"',
+        '--setenv="APP_REDIS_ENABLED=false"',
+        '--setenv="APP_JATO_MONTHLY_ENABLED=false"',
+        '--setenv="APP_JATO_MONTHLY_EXECUTION_MODE=disabled"',
+        '--setenv="APP_GROUPED_TIME_SERIES_PREWARM_ENABLED=false"',
+        '--setenv="APP_DASHBOARD_OVERVIEW_PREWARM_ENABLED=false"',
+        '--setenv="APP_METADATA_PREWARM_ENABLED=false"',
+        '--setenv="APP_ADVANCED_ANALYSIS_WARMUP_ENABLED=false"',
+        'sudo -n systemctl stop "$unit"',
+        "refusing to stop a unit without exact canary identity",
+        "len(worker_pids) != 2",
+        "Feature canary receipt retained",
+    )
+    missing = [token for token in required if token not in controller]
+    if missing:
+        raise AssertionError(
+            f"feature canary safety contract is incomplete: {missing}",
+        )
+    forbidden = (
+        "install_jato_fullstack_nginx.sh",
+        "enable_jato_fullstack_https.sh",
+        "systemctl reload nginx",
+        "systemctl restart nginx",
+        "systemctl daemon-reload",
+        "tencent_bluegreen_release.sh",
+        "jato_release_storage_guard.py",
+        "release_checkpoint.py",
+        'sudo -n systemctl stop "$ACTIVE_UNIT"',
+        "pause_schedulers",
+    )
+    present = [token for token in forbidden if token in controller]
+    if present:
+        raise AssertionError(
+            f"feature canary gained a production mutation primitive: {present}",
+        )
+    if "\n    --scope \\" in controller:
+        raise AssertionError(
+            "feature canary build must use a filesystem-sandboxed service, not a scope",
+        )
+    run_body = controller.split("run_canary() {", 1)[1]
+    if run_body.index("jato_acquire_production_mutation_lock") > run_body.index(
+        'capture_snapshot "$BEFORE_SNAPSHOT"',
+    ) or run_body.index('capture_snapshot "$BEFORE_SNAPSHOT"') > run_body.index(
+        "run_build_scope",
+    ):
+        raise AssertionError(
+            "feature canary must lock and snapshot production before its build",
+        )
+    for forbidden_override in (
+        'RUNTIME_ROOT="${RUNTIME_ROOT:-',
+        'CHECKPOINT_FILE="${CHECKPOINT_FILE:-',
+        'RECEIPT_FILE="${RECEIPT_FILE:-',
+        'SERVICE_UNIT="${SERVICE_UNIT:-',
+    ):
+        if forbidden_override in controller:
+            raise AssertionError(
+                "feature canary derived path/unit became environment-overridable: "
+                f"{forbidden_override}",
+            )
+    for required_guard_token in (
+        "/var/lib/jato-release/active-slot",
+        "/opt/jato/active",
+        "/etc/jato-fullstack/nginx/active-release.conf",
+        "jato-monthly-worker.service",
+        "EXPECTED_ACTIVE_MEMORY_HIGH",
+        "EXPECTED_ACTIVE_MEMORY_MAX",
+        "candidatePortFree",
+        "candidatePortReferenced",
+        "compare_snapshots",
+    ):
+        if required_guard_token not in guard:
+            raise AssertionError(
+                "feature canary no longer records production invariant "
+                f"{required_guard_token!r}",
+            )
+
+
 def main() -> None:
     assert_all_deploy_workflows_are_registered()
     assert_pull_request_release_coordination_guard()
@@ -581,6 +689,7 @@ def main() -> None:
 
     assert_country_news_production_write_is_main_only()
     assert_database_migration_is_behind_main_release_gate()
+    assert_feature_canary_cannot_route_or_mutate_production()
     print(
         "Validated release coordination and main-only production gates for "
         f"{sum(len(job_names) for job_names in PRODUCTION_JOBS.values())} "

@@ -806,3 +806,85 @@ NODE_OPTIONS="--max-old-space-size=1024" npm run build
 生产 workflow 不设置该变量。发生失败时不要手工重试 JATO 任务；先读取
 release checkpoint、quiescence evidence、两个 slot 状态和 Nginx active
 include，确认旧槽已恢复。
+
+## 14. Feature Candidate canary（不切公网）
+
+PR 合并前的腾讯云验证使用
+`03_Scripts/deploy/tencent_feature_candidate_canary.sh`，它不是 production
+release 的缩小版，也不能切换流量。调用方必须先用与 production package
+相同的排除规则生成不可变 feature archive，上传后提供真实 feature branch、
+40 位 commit、archive 字节数和 SHA-256。脚本拒绝 `main`，不会为了复用现有
+门禁而把 feature SHA 伪装成 production main。
+
+安全边界如下：
+
+1. 只使用 `/opt/jato-canary` 和 `/var/lib/jato-canary`。checkpoint、evidence
+   与最终 receipt 都与 `/var/lib/jato-release` 分离。
+2. 与 production 唯一共享的可变资源是 deploy 账号真实 home 下的 canonical
+   `production-deploy.lock`；canary 在 staging/build/runtime/cleanup 及
+   before/after 比较的整个周期持锁，因此不会与真正发布并发。任意伪造
+   `HOME`、`DEPLOY_STATE_DIR` 或 lock path 都会拒绝。
+3. source archive 最大 256 MiB、最多 50,000 个成员且展开不超过 2 GiB；
+   controller、guard、lock helper 与 readiness verifier 必须和 archive 内
+   文件逐个同 SHA。输入会先复制为 root-owned 只读文件。build 使用独立
+   transient service，固定 `MemoryHigh=3G`、`MemoryMax=4G`、
+   `MemorySwapMax=0`、`TasksMax=512`；deploy 用户 home、JATO 数据和
+   `/etc/jato-fullstack` 在 build namespace 内不可见，唯一可写位置是本次
+   runtime。runtime 另用 transient service，只监听 `127.0.0.1:18001`，
+   运行 2 个 Uvicorn worker，
+   并设置 `DynamicUser=yes` 与 `ProtectSystem=strict`。验证读取 candidate
+   cgroup，要求实际存活的 `spawn_main` worker 恰好为 2 个，而不只检查命令行
+   声明。
+4. runtime 中的 production 数据只读，数据库与 Redis 均关闭；
+   `APP_JATO_MONTHLY_ENABLED=false` 和
+   `APP_JATO_MONTHLY_EXECUTION_MODE=disabled` 是显式设置。验证必须看到月更
+   endpoint 返回结构化 HTTP 423，且 candidate cgroup 中没有
+   `jato_monthly_worker.py`。Grouped time series、Dashboard overview、
+   metadata 与 advanced analysis 四类启动预热也全部显式关闭，避免 canary
+   扫描大数据、写入缓存或击穿 4G 上限。
+5. canary 不调用 Nginx installer、`nginx reload`、production unit/env/drop-in
+   installer、scheduler reconcile、release GC 或 production checkpoint。
+6. 启动前和清理后会比较公网 `/healthz`、`build-meta.json` SHA、`nginx -T`
+   hash、active unit PID/命令/6G/8G/2 workers、monthly worker、scheduler
+   状态，以及 active-slot、`/opt/jato/active` 和 production unit/env/drop-in
+   的存在状态与指纹。旧部署中这些路径为 absent 也属于合法且必须保持的状态。
+   现有公网 `/readyz` 可能为 404，所以旧服务 baseline 只使用
+   `/healthz + build-meta`；candidate 自身仍必须通过精确 feature SHA
+   `/readyz`。
+7. 无论成功、build 失败、runtime 失败或信号中断，只有先验证两个 transient
+   unit 的 FragmentPath、ExecStart、Environment 与 cgroup 身份并确认停止，
+   才会删除临时 runtime、control copy 与 staged archive；结构化 receipt
+   则保留。持久 run ID 不可复用。`passed` 或
+   `expected_failure_verified` receipt 必须再次验证完整 before/after、
+   candidate evidence 与 terminal checkpoint；任一 production 指纹变化或
+   evidence 缺失都会失败。
+
+服务器上的调用形式：
+
+```bash
+archive="$HOME/.cache/jato-canary/archives/<feature-sha>/<archive-sha256>.tar.gz"
+
+DEPLOY_STATE_DIR="$HOME/.local/state/jato-production-release" \
+CANARY_REPOSITORY="tristan419/JATO_Analysis_System" \
+CANARY_BRANCH="codex/tencent-bluegreen-release" \
+CANARY_COMMIT_SHA="<真实 40 位 feature SHA>" \
+CANARY_SOURCE_ARCHIVE="$archive" \
+CANARY_SOURCE_BYTES="<stat 得到的字节数>" \
+CANARY_SOURCE_SHA256="<sha256sum 得到的摘要>" \
+CANARY_RUN_ID="<唯一 canary id>" \
+bash 03_Scripts/deploy/tencent_feature_candidate_canary.sh
+```
+
+成功或失败后查看：
+
+```text
+/var/lib/jato-canary/checkpoints/<run-key>.json
+/var/lib/jato-canary/evidence/<run-key>.json
+/var/lib/jato-canary/receipts/<run-key>.json
+```
+
+受控失败演练增加 `CANARY_FAULT=after_candidate_start`。脚本会先产生内部
+故障退出码，只有 cleanup 和 production before/after comparison 全部通过后，
+才把 checkpoint/receipt 收敛为 `expected_failure_verified` 并向调用方返回
+成功；任何清理或旧服务一致性失败仍返回非零。公网旧服务必须始终健康。这个
+演练不会批准、发布或重试任何 JATO 月更数据任务。
