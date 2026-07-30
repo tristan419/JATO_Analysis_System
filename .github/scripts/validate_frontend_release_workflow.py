@@ -1288,7 +1288,11 @@ def assert_required_ci_contract() -> None:
 
     commands = combined_run(contract_job, "frontend-release-contract")
     required_tokens = (
-        'python -m pip install "PyYAML==6.0.2" "pytest<9"',
+        "python -m pip install",
+        '"PyYAML==6.0.2"',
+        '"pytest<9"',
+        '"setuptools==81.0.0"',
+        '"wheel==0.46.3"',
         "npm ci",
         "test_frontend_release_artifact.py",
         "test_verify_intl_runtime_contract.py",
