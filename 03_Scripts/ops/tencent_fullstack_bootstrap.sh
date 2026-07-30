@@ -4,11 +4,11 @@ set -Eeuo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_DIR="${REPO_DIR:-$(cd "$SCRIPT_DIR/../.." && pwd)}"
 DEPLOY_BRANCH="${DEPLOY_BRANCH:-main}"
+DEPLOY_COMMIT_SHA="${DEPLOY_COMMIT_SHA:-}"
 BACKEND_PORT="${BACKEND_PORT:-8000}"
 BACKEND_SERVICE_NAME="${BACKEND_SERVICE_NAME:-jato-fullstack-backend@${BACKEND_PORT}}"
 SERVER_NAME="${SERVER_NAME:-_}"
 REPO_REMOTE_URL="${REPO_REMOTE_URL:-git@github.com:tristan419/JATO_Analysis_System.git}"
-REPO_ARCHIVE_URL="${REPO_ARCHIVE_URL:-https://codeload.github.com/tristan419/JATO_Analysis_System/tar.gz/refs/heads/main}"
 ENABLE_HTTPS="${ENABLE_HTTPS:-false}"
 CERTBOT_EMAIL="${CERTBOT_EMAIL:-}"
 APP_AUTH_ENABLED="${APP_AUTH_ENABLED:-false}"
@@ -44,6 +44,7 @@ SYSTEMD_TARGET="/etc/systemd/system/jato-fullstack-backend@.service"
 NGINX_INSTALL_SCRIPT="$REPO_DIR/03_Scripts/deploy/nginx/install_jato_fullstack_nginx.sh"
 HTTPS_INSTALL_SCRIPT="$REPO_DIR/03_Scripts/deploy/nginx/enable_jato_fullstack_https.sh"
 FRONTEND_ROOT="$REPO_DIR/06_AppPlatform/frontend/dist"
+BACKEND_READINESS_HELPER="$REPO_DIR/03_Scripts/deploy/verify_backend_readiness.py"
 CURRENT_STEP="initialization"
 
 log_section() {
@@ -55,6 +56,31 @@ is_truthy() {
     1|true|yes|on) return 0 ;;
     *) return 1 ;;
   esac
+}
+
+git_repository_available() {
+  git -C "$REPO_DIR" rev-parse --git-dir >/dev/null 2>&1
+}
+
+resolve_bootstrap_commit() {
+  local git_commit=""
+
+  if git_repository_available; then
+    git_commit="$(git -C "$REPO_DIR" rev-parse --verify HEAD 2>/dev/null || true)"
+  fi
+  if [[ -z "$DEPLOY_COMMIT_SHA" ]]; then
+    DEPLOY_COMMIT_SHA="$git_commit"
+  fi
+  if [[ ! "$DEPLOY_COMMIT_SHA" =~ ^[0-9a-f]{40}$ ]]; then
+    echo "[ERROR] Archive bootstrap requires explicit full lowercase DEPLOY_COMMIT_SHA"
+    return 1
+  fi
+  if [[ -n "$git_commit" && "$git_commit" != "$DEPLOY_COMMIT_SHA" ]]; then
+    echo "[ERROR] DEPLOY_COMMIT_SHA does not match the bootstrap Git HEAD"
+    return 1
+  fi
+  export DEPLOY_COMMIT_SHA
+  echo "[INFO] Bootstrap target commit: $DEPLOY_COMMIT_SHA"
 }
 
 generate_token() {
@@ -106,11 +132,12 @@ if [[ ! -d "$REPO_DIR" ]]; then
   exit 1
 fi
 
-if [[ -d "$REPO_DIR/.git" ]]; then
+if git_repository_available; then
   echo "[INFO] Git repository metadata found"
 else
   echo "[INFO] No .git metadata found; continuing with archive-based bootstrap"
 fi
+resolve_bootstrap_commit
 
 CURRENT_STEP="Validate sudo access"
 log_section "$CURRENT_STEP"
@@ -159,6 +186,7 @@ cat >"$TMP_ENV_FILE" <<EOF
 APP_AUTH_ENABLED=$APP_AUTH_ENABLED
 APP_AUTH_TOKEN=$APP_AUTH_TOKEN
 APP_BACKEND_WORKERS=$APP_BACKEND_WORKERS
+APP_RELEASE_SHA=$DEPLOY_COMMIT_SHA
 APP_PROJECT_ROOT=$REPO_DIR
 JATO_PARQUET_PATH=${JATO_PARQUET_PATH:-$REPO_DIR/04_Processed_data/jato_full_archive.parquet}
 JATO_PARTITIONED_PATH=${JATO_PARTITIONED_PATH:-$REPO_DIR/04_Processed_data/partitioned_dataset_v1}
@@ -194,6 +222,8 @@ export BACKEND_ENV_FILE
 export REPO_REMOTE_URL
 export RUN_DATABASE_MIGRATIONS
 export SKIP_GIT_SYNC=true
+export DEPLOY_COMMIT_SHA
+export DEPLOY_SOURCE=tencent_fullstack_bootstrap
 export VITE_API_BASE
 export VITE_ASSET_BASE_URL
 export VITE_USER_ROLE
@@ -246,6 +276,10 @@ fi
 CURRENT_STEP="Final verification"
 log_section "$CURRENT_STEP"
 curl -fsS "http://127.0.0.1:${BACKEND_PORT}/healthz" >/dev/null
+python3 -B "$BACKEND_READINESS_HELPER" \
+  --url "http://127.0.0.1:${BACKEND_PORT}/readyz" \
+  --expected-commit "$DEPLOY_COMMIT_SHA" \
+  --timeout-seconds 20
 curl -fsS "http://127.0.0.1/healthz" >/dev/null
 
 echo

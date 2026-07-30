@@ -151,6 +151,10 @@ git push JATO_Analysis_System main
 - `03_Scripts/tencent_fullstack_bootstrap.sh`
 
 这是“从一台新机器开始初始化”的脚本。
+Git clone 场景应传 `git rev-parse --verify HEAD` 得到的 full SHA；archive
+场景必须使用同一个 full SHA 下载 codeload tarball，并显式设置
+`DEPLOY_COMMIT_SHA=<full-sha>` 后再运行，不能把可变的 `main` 分支 URL
+当作部署身份。
 
 ---
 

@@ -1,7 +1,17 @@
+import importlib.util
+import json
 from pathlib import Path
+import subprocess
+import sys
+
+import pytest
 
 
 REPO_ROOT = Path(__file__).resolve().parents[4]
+RELEASE_PREPARATION_HELPER = (
+    REPO_ROOT / "03_Scripts/deploy/prepare_backend_release.py"
+)
+READINESS_HELPER = REPO_ROOT / "03_Scripts/deploy/verify_backend_readiness.py"
 
 
 def test_production_release_excludes_local_tooling_and_temp_artifacts() -> None:
@@ -126,6 +136,10 @@ def test_backend_release_is_deterministic_and_closes_msrp_evidence_references() 
     assert "missing MSRP localPath evidence" in workflow
     assert 'tar tzf "$RUNNER_TEMP/JATO_deploy.tar.gz" "$evidence_path"' in workflow
     assert "update_mihomo_subscription.sh" not in workflow
+    assert '"expectedCommitSha": sha' in workflow
+    assert '"actualCommitSha": ""' in workflow
+    assert '"commitSha": ""' in workflow
+    assert '"commitSha": sha' not in workflow
 
 
 def test_release_checkpoints_cover_transport_ambiguity_and_final_parity() -> None:
@@ -235,8 +249,8 @@ def test_archive_deploy_reports_expected_commit_when_git_sync_is_skipped() -> No
         REPO_ROOT / "03_Scripts/ops/deploy_fullstack_server.sh"
     ).read_text(encoding="utf-8")
 
-    assert '[[ "$SKIP_GIT_SYNC" == "true" && -n "${DEPLOY_COMMIT_SHA:-}" ]]' in script
-    assert 'actual_commit="$DEPLOY_COMMIT_SHA"' in script
+    assert 'if [[ -n "${DEPLOY_COMMIT_SHA:-}" ]]; then' in script
+    assert 'actual_commit="$(target_backend_commit 2>/dev/null || true)"' in script
 
 
 def test_database_migration_requires_main_production_release_workflow() -> None:
@@ -335,6 +349,498 @@ def test_public_deploy_status_reports_msrp_scheduler_and_artifacts() -> None:
     assert "JATO_MSRP_ALLOW_HIGH_CONCURRENCY" in script
     assert "proxy_configured=" in script
     assert "DEEPSEEK_API_KEY" not in script
+
+
+def _load_readiness_helper():
+    spec = importlib.util.spec_from_file_location(
+        "verify_backend_readiness_test_module",
+        READINESS_HELPER,
+    )
+    assert spec is not None
+    assert spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module
+    spec.loader.exec_module(module)
+    return module
+
+
+def _shell_function(script: str, name: str) -> str:
+    start = script.index(f"{name}() {{")
+    end = script.index("\n}\n", start) + len("\n}\n")
+    return script[start:end]
+
+
+def test_backend_readiness_helper_requires_ready_status_and_target_commit(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    helper = _load_readiness_helper()
+    target_commit = "a" * 40
+
+    monkeypatch.setattr(
+        helper,
+        "_read_payload",
+        lambda _url, _timeout: {
+            "status": "ready",
+            "release": {"commitSha": target_commit},
+        },
+    )
+    observed = helper.verify_backend_readiness(
+        url="http://127.0.0.1:8000/readyz",
+        expected_commit=target_commit,
+        timeout_seconds=10,
+    )
+    assert observed == {
+        "status": "ready",
+        "release": {"commitSha": target_commit},
+    }
+
+    monkeypatch.setattr(
+        helper,
+        "_read_payload",
+        lambda _url, _timeout: {
+            "status": "ready",
+            "release": {"commitSha": "b" * 40},
+        },
+    )
+    with pytest.raises(helper.ReadinessError, match="does not match") as error:
+        helper.verify_backend_readiness(
+            url="http://127.0.0.1:8000/readyz",
+            expected_commit=target_commit,
+            timeout_seconds=10,
+        )
+    assert error.value.code == "commit_mismatch"
+
+    monkeypatch.setattr(
+        helper,
+        "_read_payload",
+        lambda _url, _timeout: {
+            "status": "degraded",
+            "release": {"commitSha": target_commit},
+        },
+    )
+    with pytest.raises(helper.ReadinessError, match="not ready") as error:
+        helper.verify_backend_readiness(
+            url="http://127.0.0.1:8000/readyz",
+            expected_commit=target_commit,
+            timeout_seconds=10,
+        )
+    assert error.value.code == "status_not_ready"
+
+
+def test_backend_readiness_helper_emits_structured_failure() -> None:
+    result = subprocess.run(
+        [
+            sys.executable,
+            str(READINESS_HELPER),
+            "--url",
+            "http://127.0.0.1:8000/readyz",
+            "--expected-commit",
+            "not-a-commit",
+        ],
+        capture_output=True,
+        check=False,
+        text=True,
+    )
+
+    assert result.returncode == 1
+    payload = json.loads(result.stderr)
+    assert payload["check"] == "backend_readyz"
+    assert payload["ok"] is False
+    assert payload["error"]["code"] == "invalid_expected_commit"
+
+
+def test_backend_release_preparation_replaces_env_sha_and_creates_metadata(
+    tmp_path: Path,
+) -> None:
+    target_commit = "a" * 40
+    env_path = tmp_path / "backend.env"
+    env_path.write_text(
+        "APP_AUTH_ENABLED=false\n"
+        "APP_RELEASE_SHA=old\n"
+        "export APP_RELEASE_SHA=duplicate\n",
+        encoding="utf-8",
+    )
+    env_result = subprocess.run(
+        [
+            sys.executable,
+            str(RELEASE_PREPARATION_HELPER),
+            "update-env",
+            "--path",
+            str(env_path),
+            "--commit",
+            target_commit,
+        ],
+        capture_output=True,
+        check=False,
+        text=True,
+    )
+    assert env_result.returncode == 0, env_result.stderr
+    env_lines = env_path.read_text(encoding="utf-8").splitlines()
+    assert "APP_AUTH_ENABLED=false" in env_lines
+    assert env_lines.count(f"APP_RELEASE_SHA={target_commit}") == 1
+    assert sum("APP_RELEASE_SHA" in line for line in env_lines) == 1
+
+    metadata_path = tmp_path / "hermes/deploy_release.json"
+    metadata_result = subprocess.run(
+        [
+            sys.executable,
+            str(RELEASE_PREPARATION_HELPER),
+            "prepare-metadata",
+            "--path",
+            str(metadata_path),
+            "--commit",
+            target_commit,
+            "--branch",
+            "main",
+            "--source",
+            "direct_git_sync",
+        ],
+        capture_output=True,
+        check=False,
+        text=True,
+    )
+    assert metadata_result.returncode == 0, metadata_result.stderr
+    metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+    assert metadata["expectedCommitSha"] == target_commit
+    assert metadata["actualCommitSha"] == ""
+    assert metadata["commitSha"] == ""
+    assert metadata["source"] == "direct_git_sync"
+    assert not list(metadata_path.parent.glob(f".{metadata_path.name}.*.tmp"))
+
+    previous_commit = "b" * 40
+    metadata["expectedCommitSha"] = previous_commit
+    metadata["expectedShortSha"] = previous_commit[:8]
+    metadata["actualCommitSha"] = previous_commit
+    metadata["actualShortSha"] = previous_commit[:8]
+    metadata["commitSha"] = previous_commit
+    metadata["shortSha"] = previous_commit[:8]
+    metadata["source"] = "stale_github_actions_archive"
+    metadata_path.write_text(json.dumps(metadata) + "\n", encoding="utf-8")
+    direct_recovery_result = subprocess.run(
+        [
+            sys.executable,
+            str(RELEASE_PREPARATION_HELPER),
+            "prepare-metadata",
+            "--path",
+            str(metadata_path),
+            "--commit",
+            target_commit,
+            "--branch",
+            "main",
+            "--source",
+            "direct_git_recovery",
+        ],
+        capture_output=True,
+        check=False,
+        text=True,
+    )
+    assert direct_recovery_result.returncode == 0, direct_recovery_result.stderr
+    recovered_metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+    assert recovered_metadata["expectedCommitSha"] == target_commit
+    assert recovered_metadata["actualCommitSha"] == previous_commit
+    assert recovered_metadata["commitSha"] == previous_commit
+    assert recovered_metadata["source"] == "direct_git_recovery"
+
+    confirm_result = subprocess.run(
+        [
+            sys.executable,
+            str(RELEASE_PREPARATION_HELPER),
+            "confirm-metadata",
+            "--path",
+            str(metadata_path),
+            "--commit",
+            target_commit,
+            "--service",
+            "jato-fullstack-backend@8000",
+        ],
+        capture_output=True,
+        check=False,
+        text=True,
+    )
+    assert confirm_result.returncode == 0, confirm_result.stderr
+    confirmed_metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+    assert confirmed_metadata["actualCommitSha"] == target_commit
+    assert confirmed_metadata["commitSha"] == target_commit
+    assert confirmed_metadata["readyz"] == "ready"
+
+
+def test_checkpoint_release_preparation_rejects_missing_or_mismatched_metadata(
+    tmp_path: Path,
+) -> None:
+    metadata_path = tmp_path / "deploy_release.json"
+    target_commit = "a" * 40
+    command = [
+        sys.executable,
+        str(RELEASE_PREPARATION_HELPER),
+        "prepare-metadata",
+        "--path",
+        str(metadata_path),
+        "--commit",
+        target_commit,
+        "--branch",
+        "main",
+        "--source",
+        "production_release",
+        "--require-existing",
+    ]
+
+    missing_result = subprocess.run(
+        command,
+        capture_output=True,
+        check=False,
+        text=True,
+    )
+    assert missing_result.returncode == 1
+    assert "checkpoint release metadata is missing" in missing_result.stderr
+
+    original_payload = {
+        "expectedCommitSha": "b" * 40,
+        "commitSha": "b" * 40,
+    }
+    metadata_path.write_text(
+        json.dumps(original_payload) + "\n",
+        encoding="utf-8",
+    )
+    mismatch_result = subprocess.run(
+        command,
+        capture_output=True,
+        check=False,
+        text=True,
+    )
+    assert mismatch_result.returncode == 1
+    assert "does not match the target commit" in mismatch_result.stderr
+    assert json.loads(metadata_path.read_text(encoding="utf-8")) == original_payload
+
+    packaged_payload = {
+        "expectedCommitSha": target_commit,
+        "actualCommitSha": "",
+        "commitSha": "",
+        "source": "github_actions_archive",
+    }
+    metadata_path.write_text(
+        json.dumps(packaged_payload) + "\n",
+        encoding="utf-8",
+    )
+    valid_result = subprocess.run(
+        command,
+        capture_output=True,
+        check=False,
+        text=True,
+    )
+    assert valid_result.returncode == 0, valid_result.stderr
+    assert (
+        json.loads(metadata_path.read_text(encoding="utf-8"))["source"]
+        == "github_actions_archive"
+    )
+    prepared_packaged = json.loads(metadata_path.read_text(encoding="utf-8"))
+    assert prepared_packaged["actualCommitSha"] == ""
+    assert prepared_packaged["commitSha"] == ""
+
+    previous_commit = "c" * 40
+    previous_path = tmp_path / "previous_deploy_release.json"
+    previous_path.write_text(
+        json.dumps(
+            {
+                "expectedCommitSha": previous_commit,
+                "actualCommitSha": previous_commit,
+                "commitSha": previous_commit,
+            },
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    preserve_result = subprocess.run(
+        command + ["--previous-metadata", str(previous_path)],
+        capture_output=True,
+        check=False,
+        text=True,
+    )
+    assert preserve_result.returncode == 0, preserve_result.stderr
+    preserved_metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+    assert preserved_metadata["expectedCommitSha"] == target_commit
+    assert preserved_metadata["actualCommitSha"] == previous_commit
+    assert preserved_metadata["commitSha"] == previous_commit
+
+
+def test_target_backend_commit_supports_git_worktree_metadata_file(
+    tmp_path: Path,
+) -> None:
+    repository = tmp_path / "repository"
+    worktree = tmp_path / "worktree"
+    repository.mkdir()
+    subprocess.run(
+        ["git", "-C", str(repository), "init", "--quiet"],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    (repository / "seed.txt").write_text("seed\n", encoding="utf-8")
+    subprocess.run(
+        ["git", "-C", str(repository), "add", "seed.txt"],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    subprocess.run(
+        [
+            "git",
+            "-C",
+            str(repository),
+            "-c",
+            "user.name=Readiness Test",
+            "-c",
+            "user.email=readiness@example.invalid",
+            "commit",
+            "--quiet",
+            "-m",
+            "seed",
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    subprocess.run(
+        ["git", "-C", str(repository), "worktree", "add", "--quiet", "--detach", str(worktree)],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    assert (worktree / ".git").is_file()
+    expected_commit = subprocess.run(
+        ["git", "-C", str(worktree), "rev-parse", "--verify", "HEAD"],
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+
+    server_script = (
+        REPO_ROOT / "03_Scripts/ops/deploy_fullstack_server.sh"
+    ).read_text(encoding="utf-8")
+    result = subprocess.run(
+        [
+            "bash",
+            "-c",
+            "\n".join(
+                (
+                    "set -Eeuo pipefail",
+                    'DEPLOY_COMMIT_SHA=""',
+                    'RELEASE_CHECKPOINT_COMMIT=""',
+                    f"REPO_DIR={str(worktree)!r}",
+                    _shell_function(server_script, "target_backend_commit"),
+                    "target_backend_commit",
+                )
+            ),
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip() == expected_commit
+
+
+def test_deploy_gates_completed_and_new_releases_on_liveness_and_readiness() -> None:
+    inner = (
+        REPO_ROOT / "03_Scripts/ops/deploy_fullstack_server.sh"
+    ).read_text(encoding="utf-8")
+    outer = (
+        REPO_ROOT / "03_Scripts/deploy/fullstack_remote_release.sh"
+    ).read_text(encoding="utf-8")
+
+    assert 'BACKEND_READINESS_HELPER="${BACKEND_READINESS_HELPER:-' in inner
+    assert "completed_checkpoint_matches_local() {" in inner
+    assert (
+        '"http://127.0.0.1:${BACKEND_PORT}/healthz" >/dev/null 2>&1 \\\n'
+        "    && verify_backend_readiness 10"
+    ) in inner
+    assert "Backend liveness and release readiness passed" in inner
+    assert 'healthz=$health_ok readyz=$readiness_ok' in inner
+
+    assert "03_Scripts/deploy/verify_backend_readiness.py" in outer
+    assert "local_release_matches() {" in outer
+    assert "http://127.0.0.1:8000/healthz" in outer
+    assert 'http://127.0.0.1:8000/readyz' in outer
+    assert 'final_readiness_exit_code=$FINAL_READINESS_RC' in outer
+    assert "---readyz---" in outer
+    assert "readiness_rc=$FINAL_READINESS_RC" in outer
+
+
+def test_deploy_prepares_frozen_release_identity_before_backend_restart() -> None:
+    inner = (
+        REPO_ROOT / "03_Scripts/ops/deploy_fullstack_server.sh"
+    ).read_text(encoding="utf-8")
+    outer = (
+        REPO_ROOT / "03_Scripts/deploy/fullstack_remote_release.sh"
+    ).read_text(encoding="utf-8")
+    bootstrap = (
+        REPO_ROOT / "03_Scripts/ops/tencent_fullstack_bootstrap.sh"
+    ).read_text(encoding="utf-8")
+
+    assert "03_Scripts/deploy/prepare_backend_release.py" in outer
+    env_function = _shell_function(outer, "install_backend_env_atomically")
+    assert "update-env" in env_function
+    assert '--commit "$DEPLOY_COMMIT_SHA"' in env_function
+    assert 'sudo -n mv -f "$privileged_candidate" "$ENV_FILE"' in env_function
+    env_install = outer.index("install_backend_env_atomically\n")
+    inner_deploy = outer.index("bash 03_Scripts/deploy_fullstack_server.sh")
+    assert env_install < inner_deploy
+
+    update_repository = inner.index('CURRENT_STEP="Update repository"')
+    resolve_identity = inner.index(
+        'CURRENT_STEP="Resolve target backend release identity"',
+    )
+    switch_started = inner.index("switch_started in_progress rollback_required")
+    prepare_identity = inner.index(
+        'CURRENT_STEP="Prepare backend release identity"',
+    )
+    backend_restart = inner.index(
+        'sudo -n systemctl restart "$BACKEND_SERVICE_NAME"',
+        prepare_identity,
+    )
+    assert update_repository < resolve_identity < switch_started < prepare_identity
+    assert prepare_identity < backend_restart
+    assert "arguments+=(--require-existing)" in inner
+    assert "Checkpointed production release requires explicit DEPLOY_COMMIT_SHA" in inner
+    assert (
+        'if ! checkpoint_enabled \\\n'
+        '    && [[ -n "$git_commit" ]] \\\n'
+        '    && [[ "$git_commit" != "$candidate" ]]'
+    ) in inner
+    health_loop = inner.index('echo "[INFO] Verify backend health"')
+    readiness_call = inner.index("if verify_backend_readiness 10; then", health_loop)
+    mark_call = inner.index("\nmark_release_deployed\n", readiness_call)
+    assert readiness_call < mark_call
+    assert "confirm-metadata" in _shell_function(inner, "mark_release_deployed")
+
+    assert "APP_RELEASE_SHA=$DEPLOY_COMMIT_SHA" in bootstrap
+    assert "Archive bootstrap requires explicit full lowercase DEPLOY_COMMIT_SHA" in bootstrap
+    assert "DEPLOY_SOURCE=tencent_fullstack_bootstrap" in bootstrap
+    assert '"http://127.0.0.1:${BACKEND_PORT}/readyz"' in bootstrap
+    assert '[[ -d "$REPO_DIR/.git" ]]' not in bootstrap
+    assert '[[ -d "$REPO_DIR/.git" ]]' not in inner
+    assert '"actualCommitSha": ""' in outer
+    assert '"commitSha": ""' in outer
+
+
+def test_bootstrap_docs_bind_archive_and_command_to_one_full_sha() -> None:
+    tencent_guide = (
+        REPO_ROOT
+        / "Markdown_Readme/Fullstack/04_DevOps/TENCENT_CLOUD_DEPLOY.md"
+    ).read_text(encoding="utf-8")
+    beginner_guide = (
+        REPO_ROOT
+        / "Markdown_Readme/Fullstack/04_DevOps/"
+        "FULLSTACK_DEPLOY_BEGINNER_GUIDE_2026-04-14.md"
+    ).read_text(encoding="utf-8")
+
+    assert "commits/main" in tencent_guide
+    assert "tar.gz/${DEPLOY_COMMIT_SHA}" in tencent_guide
+    assert ".bootstrap-commit-sha" in tencent_guide
+    assert 'DEPLOY_COMMIT_SHA="$DEPLOY_COMMIT_SHA" \\\n' in tencent_guide
+    assert "\nbash 03_Scripts/tencent_fullstack_bootstrap.sh" not in tencent_guide
+    assert "refs/heads/main -o JATO_Analysis_System-main.tar.gz" not in tencent_guide
+    assert "DEPLOY_COMMIT_SHA=<full-sha>" in beginner_guide
 
 
 def test_gitignore_covers_local_tooling_and_temp_artifacts() -> None:

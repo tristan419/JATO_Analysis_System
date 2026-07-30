@@ -57,6 +57,7 @@ BACKEND_REQUIREMENTS="$BACKEND_DIR/requirements.txt"
 VENV_DIR="$REPO_DIR/.venv"
 TOOLKIT_DIR="$REPO_DIR/07_ScrapingToolkit"
 DEPLOY_RELEASE_FILE="$REPO_DIR/hermes/deploy_release.json"
+PREVIOUS_DEPLOY_RELEASE_FILE="${PREVIOUS_DEPLOY_RELEASE_FILE:-}"
 DEPLOY_FAILURE_FILE="${DEPLOY_FAILURE_FILE:-$REPO_DIR/hermes/deploy_failure_context.txt}"
 SYSTEMD_SOURCE_DIR="$REPO_DIR/03_Scripts/deploy/systemd"
 SYSTEMD_TARGET_DIR="/etc/systemd/system"
@@ -75,6 +76,9 @@ RELEASE_CHECKPOINT_FRONTEND_IDENTITY="${RELEASE_CHECKPOINT_FRONTEND_IDENTITY:-}"
 RELEASE_CHECKPOINT_FRONTEND_CHECKSUM="${RELEASE_CHECKPOINT_FRONTEND_CHECKSUM:-}"
 CHECKPOINT_HELPER="$REPO_DIR/03_Scripts/deploy/release_checkpoint.py"
 RELEASE_EVIDENCE_HELPER="${RELEASE_EVIDENCE_HELPER:-$REPO_DIR/03_Scripts/deploy/release_evidence.py}"
+BACKEND_RELEASE_HELPER="${BACKEND_RELEASE_HELPER:-$REPO_DIR/03_Scripts/deploy/prepare_backend_release.py}"
+BACKEND_READINESS_HELPER="${BACKEND_READINESS_HELPER:-$REPO_DIR/03_Scripts/deploy/verify_backend_readiness.py}"
+TARGET_BACKEND_COMMIT=""
 CURRENT_CHECKPOINT_PHASE=""
 CURRENT_CHECKPOINT_STATUS=""
 CHECKPOINT_WRITING_FAILURE="false"
@@ -395,6 +399,7 @@ PY
 completed_checkpoint_matches_local() {
   verify_release_evidence \
     && curl --noproxy '*' -fsS --max-time 10 "http://127.0.0.1:${BACKEND_PORT}/healthz" >/dev/null 2>&1 \
+    && verify_backend_readiness 10 \
     && python3 - "$DEPLOY_RELEASE_FILE" "$RELEASE_CHECKPOINT_COMMIT" \
       "$RELEASE_CHECKPOINT_FRONTEND_IDENTITY" "$RELEASE_CHECKPOINT_FRONTEND_CHECKSUM" <<'PY'
 import json
@@ -411,6 +416,152 @@ commit = payload.get("actualCommitSha") or payload.get("commitSha") or ""
 if commit != sys.argv[2] or artifact.get("id") != sys.argv[3] or artifact.get("checksum") != sys.argv[4]:
     raise SystemExit(1)
 PY
+}
+
+target_backend_commit() {
+  local git_commit=""
+
+  if [[ -n "${TARGET_BACKEND_COMMIT:-}" ]]; then
+    printf '%s\n' "$TARGET_BACKEND_COMMIT"
+    return 0
+  fi
+  if [[ -n "${DEPLOY_COMMIT_SHA:-}" ]]; then
+    printf '%s\n' "$DEPLOY_COMMIT_SHA"
+    return 0
+  fi
+  if [[ -n "$RELEASE_CHECKPOINT_COMMIT" ]]; then
+    printf '%s\n' "$RELEASE_CHECKPOINT_COMMIT"
+    return 0
+  fi
+  if git_commit="$(git -C "$REPO_DIR" rev-parse --verify HEAD 2>/dev/null)" \
+    && [[ -n "$git_commit" ]]; then
+    printf '%s\n' "$git_commit"
+    return 0
+  fi
+  return 1
+}
+
+git_repository_available() {
+  git -C "$REPO_DIR" rev-parse --git-dir >/dev/null 2>&1
+}
+
+resolve_target_backend_commit() {
+  local candidate="${DEPLOY_COMMIT_SHA:-}"
+  local git_commit=""
+
+  if checkpoint_enabled && [[ -z "$candidate" ]]; then
+    fail_deploy \
+      "Checkpointed production release requires explicit DEPLOY_COMMIT_SHA" \
+      "$LINENO"
+  fi
+  if git_repository_available; then
+    git_commit="$(git -C "$REPO_DIR" rev-parse --verify HEAD 2>/dev/null || true)"
+  fi
+  if [[ -z "$candidate" ]]; then
+    candidate="$git_commit"
+  fi
+  if [[ ! "$candidate" =~ ^[0-9a-f]{40}$ ]]; then
+    fail_deploy \
+      "Target backend release requires a full lowercase DEPLOY_COMMIT_SHA or Git HEAD" \
+      "$LINENO"
+  fi
+  if ! checkpoint_enabled \
+    && [[ -n "$git_commit" ]] \
+    && [[ "$git_commit" != "$candidate" ]]; then
+    fail_deploy \
+      "Target backend commit does not match the checked-out Git HEAD" \
+      "$LINENO"
+  fi
+  if checkpoint_enabled \
+    && [[ -n "$RELEASE_CHECKPOINT_COMMIT" ]] \
+    && [[ "$RELEASE_CHECKPOINT_COMMIT" != "$candidate" ]]; then
+    fail_deploy \
+      "Target backend commit does not match the production release checkpoint" \
+      "$LINENO"
+  fi
+
+  TARGET_BACKEND_COMMIT="$candidate"
+  DEPLOY_COMMIT_SHA="$candidate"
+  export DEPLOY_COMMIT_SHA
+  echo "[INFO] Target backend release commit: $TARGET_BACKEND_COMMIT"
+}
+
+install_target_release_sha_atomically() {
+  local candidate=""
+  local privileged_candidate=""
+
+  if [[ ! -f "$BACKEND_RELEASE_HELPER" ]]; then
+    echo "[ERROR] Backend release preparation helper is missing: $BACKEND_RELEASE_HELPER"
+    return 1
+  fi
+  if ! sudo -n test -f "$BACKEND_ENV_FILE"; then
+    echo "[ERROR] Backend env file is required to freeze the target release SHA"
+    return 1
+  fi
+
+  candidate="$(mktemp /tmp/jato-backend-release-env.XXXXXX)"
+  privileged_candidate="${BACKEND_ENV_FILE}.candidate.release.$$"
+  if ! {
+    sudo -n cat "$BACKEND_ENV_FILE" > "$candidate" \
+      && python3 -B "$BACKEND_RELEASE_HELPER" update-env \
+        --path "$candidate" \
+        --commit "$TARGET_BACKEND_COMMIT" \
+      && bash -n "$candidate" \
+      && sudo -n install -D -m 600 "$candidate" "$privileged_candidate" \
+      && sudo -n bash -n "$privileged_candidate" \
+      && sudo -n mv -f "$privileged_candidate" "$BACKEND_ENV_FILE"
+  }; then
+    rm -f "$candidate"
+    sudo -n rm -f "$privileged_candidate" 2>/dev/null || true
+    return 1
+  fi
+  rm -f "$candidate"
+  echo "[INFO] Backend process release SHA prepared atomically"
+}
+
+prepare_target_release_metadata() {
+  local arguments=(
+    prepare-metadata
+    --path "$DEPLOY_RELEASE_FILE"
+    --commit "$TARGET_BACKEND_COMMIT"
+    --branch "$DEPLOY_BRANCH"
+    --source "${DEPLOY_SOURCE:-direct_server_deploy}"
+  )
+
+  if checkpoint_enabled; then
+    arguments+=(--require-existing)
+  fi
+  if [[ -n "$PREVIOUS_DEPLOY_RELEASE_FILE" ]]; then
+    if [[ ! -f "$PREVIOUS_DEPLOY_RELEASE_FILE" || -L "$PREVIOUS_DEPLOY_RELEASE_FILE" ]]; then
+      echo "[ERROR] Previous deploy release metadata is missing or unsafe"
+      return 1
+    fi
+    arguments+=(--previous-metadata "$PREVIOUS_DEPLOY_RELEASE_FILE")
+  fi
+  python3 -B "$BACKEND_RELEASE_HELPER" "${arguments[@]}"
+}
+
+prepare_target_backend_identity() {
+  install_target_release_sha_atomically
+  prepare_target_release_metadata
+}
+
+verify_backend_readiness() {
+  local timeout_seconds="${1:-10}"
+  local expected_commit=""
+
+  if [[ ! -f "$BACKEND_READINESS_HELPER" ]]; then
+    echo '{"check":"backend_readyz","ok":false,"error":{"code":"helper_missing","message":"backend readiness helper is missing"}}' >&2
+    return 1
+  fi
+  if ! expected_commit="$(target_backend_commit)" || [[ -z "$expected_commit" ]]; then
+    echo '{"check":"backend_readyz","ok":false,"error":{"code":"target_commit_missing","message":"target backend commit cannot be resolved"}}' >&2
+    return 1
+  fi
+  python3 -B "$BACKEND_READINESS_HELPER" \
+    --url "http://127.0.0.1:${BACKEND_PORT}/readyz" \
+    --expected-commit "$expected_commit" \
+    --timeout-seconds "$timeout_seconds"
 }
 
 record_failure_checkpoint() {
@@ -637,40 +788,15 @@ mark_release_deployed() {
     return 0
   fi
 
-  if [[ "$SKIP_GIT_SYNC" == "true" && -n "${DEPLOY_COMMIT_SHA:-}" ]]; then
-    actual_commit="$DEPLOY_COMMIT_SHA"
-  elif [[ -d "$REPO_DIR/.git" ]]; then
-    actual_commit="$(git -C "$REPO_DIR" rev-parse HEAD 2>/dev/null || true)"
+  actual_commit="$(target_backend_commit 2>/dev/null || true)"
+  if [[ ! "$actual_commit" =~ ^[0-9a-f]{40}$ ]]; then
+    echo "[ERROR] Cannot confirm deployed release without a full target commit"
+    return 1
   fi
-
-  python3 - "$DEPLOY_RELEASE_FILE" "$BACKEND_SERVICE_NAME" "$actual_commit" <<'PY'
-import datetime as dt
-import json
-import sys
-from pathlib import Path
-
-path = Path(sys.argv[1])
-service_name = sys.argv[2]
-actual_commit_from_git = sys.argv[3]
-payload = json.loads(path.read_text(encoding="utf-8"))
-now = dt.datetime.now(dt.UTC).isoformat()
-expected_commit = payload.get("expectedCommitSha") or payload.get("commitSha") or payload.get("commit") or ""
-actual_commit = actual_commit_from_git or payload.get("actualCommitSha") or payload.get("actualCommit") or payload.get("commitSha") or payload.get("commit") or ""
-
-payload["service"] = payload.get("service") or service_name or "jato-fullstack-backend"
-payload["environment"] = payload.get("environment") or "production"
-payload["deployMethod"] = payload.get("deployMethod") or payload.get("source") or "manual_script"
-payload["expectedCommitSha"] = expected_commit
-payload["expectedShortSha"] = payload.get("expectedShortSha") or expected_commit[:8]
-payload["actualCommitSha"] = actual_commit
-payload["actualShortSha"] = actual_commit[:8]
-payload["commitSha"] = actual_commit or expected_commit
-payload["shortSha"] = payload["actualShortSha"] or payload["expectedShortSha"]
-payload["deployedAt"] = now
-payload["serviceRestartedAt"] = now
-payload["healthz"] = "ok"
-path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
-PY
+  python3 -B "$BACKEND_RELEASE_HELPER" confirm-metadata \
+    --path "$DEPLOY_RELEASE_FILE" \
+    --commit "$actual_commit" \
+    --service "$BACKEND_SERVICE_NAME"
 }
 
 cleanup_known_untracked_paths() {
@@ -684,7 +810,7 @@ cleanup_known_untracked_paths() {
     return
   fi
 
-  if [[ ! -d "$REPO_DIR/.git" ]]; then
+  if ! git_repository_available; then
     echo "[INFO] Skipping untracked cleanup because git metadata is unavailable"
     return
   fi
@@ -1154,7 +1280,7 @@ if [[ "$(id -u)" -ne 0 ]]; then
   fi
 fi
 
-if [[ ! -d "$REPO_DIR/.git" ]]; then
+if ! git_repository_available; then
   if [[ ! -d "$REPO_DIR" ]]; then
     fail_deploy "Repository directory not found at $REPO_DIR" "$LINENO"
   fi
@@ -1165,7 +1291,7 @@ CURRENT_STEP="Prune known untracked paths"
 log_section "$CURRENT_STEP"
 cleanup_known_untracked_paths
 
-if [[ "$SKIP_GIT_SYNC" != "true" && -d "$REPO_DIR/.git" ]]; then
+if [[ "$SKIP_GIT_SYNC" != "true" ]] && git_repository_available; then
   if [[ -z "$REMOTE_NAME" ]]; then
     if git -C "$REPO_DIR" remote get-url origin >/dev/null 2>&1; then
       REMOTE_NAME="origin"
@@ -1205,7 +1331,7 @@ CURRENT_STEP="Update repository"
 log_section "$CURRENT_STEP"
 if [[ "$SKIP_GIT_SYNC" == "true" ]]; then
   echo "[INFO] SKIP_GIT_SYNC=true; using the local tree without git pull"
-elif [[ -d "$REPO_DIR/.git" ]]; then
+elif git_repository_available; then
   cd "$REPO_DIR"
   git fetch "$REMOTE_NAME" "$DEPLOY_BRANCH"
   if git rev-parse --verify HEAD >/dev/null 2>&1; then
@@ -1218,6 +1344,11 @@ elif [[ -d "$REPO_DIR/.git" ]]; then
 else
   echo "[INFO] No git repository metadata; skipping sync and using local tree"
 fi
+
+echo "[INFO] Resolve target backend release identity"
+CURRENT_STEP="Resolve target backend release identity"
+log_section "$CURRENT_STEP"
+resolve_target_backend_commit
 
 echo "[INFO] Install backend dependencies"
 CURRENT_STEP="Install backend dependencies"
@@ -1347,6 +1478,11 @@ if ! checkpoint_at_least switched; then
   write_release_checkpoint switch_started in_progress rollback_required \
     "frontend/backend switch started; interruption requires rollback inspection"
 
+  echo "[INFO] Prepare backend release identity atomically"
+  CURRENT_STEP="Prepare backend release identity"
+  log_section "$CURRENT_STEP"
+  prepare_target_backend_identity
+
   echo "[INFO] Install verified prebuilt frontend atomically"
   CURRENT_STEP="Install verified prebuilt frontend atomically"
   log_section "$CURRENT_STEP"
@@ -1372,6 +1508,7 @@ if ! checkpoint_at_least switched; then
 else
   echo "[INFO] Exact release checkpoint already switched; restarting backend for recovery verification"
   CURRENT_STEP="Restart backend service for checkpoint recovery"
+  prepare_target_backend_identity
   normalize_frontend_public_permissions "$FRONTEND_DIR/dist"
   if ! sudo -n systemctl cat "$BACKEND_SERVICE_NAME" >/dev/null 2>&1; then
     fail_deploy "systemd service not found: $BACKEND_SERVICE_NAME" "$LINENO"
@@ -1384,14 +1521,25 @@ echo "[INFO] Verify backend health"
 CURRENT_STEP="Verify backend health"
 log_section "$CURRENT_STEP"
 for i in $(seq 1 15); do
-  if curl --noproxy '*' -fsS "http://127.0.0.1:${BACKEND_PORT}/healthz" >/dev/null 2>&1; then
-    echo "[INFO] Health check passed on attempt $i"
+  health_ok="false"
+  readiness_ok="false"
+  if curl --noproxy '*' -fsS --max-time 10 \
+    "http://127.0.0.1:${BACKEND_PORT}/healthz" >/dev/null 2>&1; then
+    health_ok="true"
+  fi
+  if verify_backend_readiness 10; then
+    readiness_ok="true"
+  fi
+  if [[ "$health_ok" == "true" && "$readiness_ok" == "true" ]]; then
+    echo "[INFO] Backend liveness and release readiness passed on attempt $i"
     break
   fi
   if [[ "$i" -eq 15 ]]; then
-    fail_deploy "Health check failed after 15 attempts" "$LINENO"
+    fail_deploy \
+      "Backend liveness/readiness failed after 15 attempts (healthz=$health_ok readyz=$readiness_ok)" \
+      "$LINENO"
   fi
-  echo "[INFO] Health check attempt $i failed, retrying in 5s …"
+  echo "[INFO] Backend check attempt $i failed (healthz=$health_ok readyz=$readiness_ok), retrying in 5s …"
   sleep 5
 done
 
@@ -1399,7 +1547,7 @@ mark_release_deployed
 cleanup_previous_frontend_after_health
 verify_release_evidence
 write_release_checkpoint backend_healthy in_progress automatic \
-  "backend health and release provenance verified; post-health reconciliation pending"
+  "backend liveness, release readiness, and provenance verified; post-health reconciliation pending"
 
 echo "[INFO] Reconcile scraper schedulers after backend health"
 CURRENT_STEP="Reconcile scraper schedulers"
@@ -1427,7 +1575,7 @@ echo "[INFO] Server-side post-health work completed; outer release controller ow
 echo "[INFO] Current revision"
 CURRENT_STEP="Print revision"
 log_section "$CURRENT_STEP"
-if [[ -d "$REPO_DIR/.git" ]]; then
+if git_repository_available; then
   git -C "$REPO_DIR" rev-parse --short HEAD
 else
   echo "[INFO] No git revision available for archive-based bootstrap"

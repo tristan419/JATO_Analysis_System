@@ -106,10 +106,12 @@ fi
 
 CHECKPOINT_FILE="$DEPLOY_STATE_DIR/checkpoints/$DEPLOY_COMMIT_SHA/${DEPLOY_ARCHIVE_SHA256}.json"
 CHECKPOINT_JOURNAL="$DEPLOY_STATE_DIR/journals/$DEPLOY_COMMIT_SHA/${DEPLOY_ARCHIVE_SHA256}.jsonl"
+PREVIOUS_RELEASE_METADATA_PATH="${CHECKPOINT_FILE%.json}.previous-release.json"
 RELEASE_WORKTREE="$(mktemp -d "/tmp/JATO_deploy_work_${DEPLOY_COMMIT_SHA}.XXXXXX")"
 DEPLOY_SOURCE="github_actions_resumable_ssh_archive"
 PRODUCTION_RELEASE_WORKFLOW="true"
 PREBUILT_FRONTEND_DIR="$REPO_DIR/.release-staging/frontend_${DEPLOY_COMMIT_SHA}_${DEPLOY_ARCHIVE_SHA256}.staged"
+PREVIOUS_DEPLOY_RELEASE_FILE=""
 RUNTIME_PRESERVE_DIR=""
 PRODUCTION_MUTATION_STARTED="false"
 REMOTE_DEPLOY_SUCCEEDED="false"
@@ -225,6 +227,8 @@ required_release_files=(
   03_Scripts/deploy/frontend_release_artifact.py
   03_Scripts/deploy/release_checkpoint.py
   03_Scripts/deploy/release_evidence.py
+  03_Scripts/deploy/prepare_backend_release.py
+  03_Scripts/deploy/verify_backend_readiness.py
   03_Scripts/deploy/lib/release_paths.sh
   03_Scripts/deploy_fullstack_server.sh
   03_Scripts/ops/deploy_fullstack_server.sh
@@ -312,6 +316,8 @@ FRONTEND_RELEASE_DIR="$RELEASE_WORKTREE/hermes/frontend_release"
 FRONTEND_RELEASE_HELPER="$RELEASE_WORKTREE/03_Scripts/deploy/frontend_release_artifact.py"
 CHECKPOINT_HELPER="$RELEASE_WORKTREE/03_Scripts/deploy/release_checkpoint.py"
 EVIDENCE_HELPER="$RELEASE_WORKTREE/03_Scripts/deploy/release_evidence.py"
+BACKEND_RELEASE_HELPER="$RELEASE_WORKTREE/03_Scripts/deploy/prepare_backend_release.py"
+BACKEND_READINESS_HELPER="$RELEASE_WORKTREE/03_Scripts/deploy/verify_backend_readiness.py"
 rm -rf "$PREBUILT_FRONTEND_DIR"
 mkdir -p "$(dirname "$PREBUILT_FRONTEND_DIR")"
 python3 "$FRONTEND_RELEASE_HELPER" verify \
@@ -386,8 +392,18 @@ release_evidence_matches() {
   fi
 }
 
+verify_backend_readiness() {
+  local timeout_seconds="${1:-10}"
+
+  python3 -B "$BACKEND_READINESS_HELPER" \
+    --url "http://127.0.0.1:8000/readyz" \
+    --expected-commit "$DEPLOY_COMMIT_SHA" \
+    --timeout-seconds "$timeout_seconds"
+}
+
 local_release_matches() {
   curl --noproxy '*' -fsS --max-time 10 http://127.0.0.1:8000/healthz >/dev/null 2>&1 \
+    && verify_backend_readiness 10 \
     && grep -Fxq 'deploy_exit_code=0' "$REPO_DIR/06_AppPlatform/frontend/dist/_deploy_status.txt" \
     && release_evidence_matches \
     && python3 - "$REPO_DIR/hermes/deploy_release.json" "$DEPLOY_COMMIT_SHA" \
@@ -465,10 +481,30 @@ fi
 
 echo "[INFO] Release archive and materialized frontend passed all pre-mutation checks"
 
+if [[ -e "$PREVIOUS_RELEASE_METADATA_PATH" ]]; then
+  if [[ ! -f "$PREVIOUS_RELEASE_METADATA_PATH" || -L "$PREVIOUS_RELEASE_METADATA_PATH" ]]; then
+    echo "[ERROR] Durable previous release metadata is unsafe"
+    exit 1
+  fi
+  PREVIOUS_DEPLOY_RELEASE_FILE="$PREVIOUS_RELEASE_METADATA_PATH"
+fi
+
 if remote_checkpoint_at_least source_installed; then
   echo "[INFO] Exact release source is already installed; skipping live tree replacement"
 else
   RUNTIME_PRESERVE_DIR="$(mktemp -d /tmp/JATO_deploy_runtime.XXXXXX)"
+  if [[ -z "$PREVIOUS_DEPLOY_RELEASE_FILE" && -e "$REPO_DIR/hermes/deploy_release.json" ]]; then
+    if [[ ! -f "$REPO_DIR/hermes/deploy_release.json" || -L "$REPO_DIR/hermes/deploy_release.json" ]]; then
+      echo "[ERROR] Existing deploy release metadata is unsafe"
+      exit 1
+    fi
+    previous_metadata_temp="${PREVIOUS_RELEASE_METADATA_PATH}.tmp.$$"
+    cp "$REPO_DIR/hermes/deploy_release.json" "$previous_metadata_temp"
+    chmod 600 "$previous_metadata_temp"
+    mv -f "$previous_metadata_temp" "$PREVIOUS_RELEASE_METADATA_PATH"
+    PREVIOUS_DEPLOY_RELEASE_FILE="$PREVIOUS_RELEASE_METADATA_PATH"
+    echo "[INFO] Preserved previous actual release identity"
+  fi
   for runtime_path in $RUNTIME_PRESERVE_PATHS; do
     if [[ -e "$REPO_DIR/$runtime_path" ]]; then
       mkdir -p "$RUNTIME_PRESERVE_DIR/$(dirname "$runtime_path")"
@@ -565,6 +601,7 @@ import datetime as _dt
 import json
 import os
 import pathlib
+import tempfile
 
 root = pathlib.Path(os.environ["REPO_DIR"])
 commit_sha = os.environ.get("DEPLOY_COMMIT_SHA", "")
@@ -578,8 +615,11 @@ payload.update({
     "service": "jato-fullstack-backend",
     "environment": "production",
     "expectedCommitSha": commit_sha,
-    "commitSha": commit_sha,
-    "shortSha": os.environ.get("DEPLOY_SHORT_SHA") or commit_sha[:8],
+    "expectedShortSha": os.environ.get("DEPLOY_SHORT_SHA") or commit_sha[:8],
+    "actualCommitSha": "",
+    "actualShortSha": "",
+    "commitSha": "",
+    "shortSha": "",
     "branch": os.environ.get("DEPLOY_BRANCH", "main"),
     "repository": os.environ.get("DEPLOY_REPOSITORY", "tristan419/JATO_Analysis_System"),
     "workflow": os.environ.get("DEPLOY_WORKFLOW", "production-release"),
@@ -598,17 +638,34 @@ payload.update({
 if not isinstance(payload.get("frontendRelease"), dict):
     raise SystemExit("[ERROR] deploy_release.json is missing frontendRelease provenance")
 out.parent.mkdir(parents=True, exist_ok=True)
-out.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
-print(f"[INFO] Wrote {out.relative_to(root)} for release {payload['shortSha']}")
+descriptor, temporary_name = tempfile.mkstemp(
+    prefix=f".{out.name}.",
+    suffix=".tmp",
+    dir=out.parent,
+)
+try:
+    os.fchmod(descriptor, out.stat().st_mode & 0o777 if out.exists() else 0o644)
+    with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
+        json.dump(payload, handle, indent=2, sort_keys=True)
+        handle.write("\n")
+        handle.flush()
+        os.fsync(handle.fileno())
+    os.replace(temporary_name, out)
+finally:
+    try:
+        os.unlink(temporary_name)
+    except FileNotFoundError:
+        pass
+print(
+    f"[INFO] Prepared {out.relative_to(root)} "
+    f"for expected release {payload['expectedShortSha']}"
+)
 PY
 
 install_backend_env_atomically() {
   local candidate=""
   local privileged_candidate=""
 
-  if [[ -z "${DEEPSEEK_API_KEY:-}" && -z "${GOOGLE_CLIENT_ID:-}" ]]; then
-    return 0
-  fi
   if ! sudo -n test -f "$ENV_FILE"; then
     echo "[ERROR] Backend env file is required before managed settings can be updated: $ENV_FILE"
     return 1
@@ -707,6 +764,9 @@ if google:
         add(key, value)
 path.write_text("\n".join(lines).rstrip() + "\n", encoding="utf-8")
 PY
+  python3 -B "$BACKEND_RELEASE_HELPER" update-env \
+    --path "$candidate" \
+    --commit "$DEPLOY_COMMIT_SHA"
   bash -n "$candidate"
   sudo -n install -D -m 600 "$candidate" "$privileged_candidate"
   sudo -n bash -n "$privileged_candidate"
@@ -746,6 +806,7 @@ fi
 cd "$REPO_DIR"
 export \
   REPO_DIR SKIP_GIT_SYNC=true \
+  PREVIOUS_DEPLOY_RELEASE_FILE \
   BACKEND_SERVICE_NAME="jato-fullstack-backend@8000" \
   RELEASE_CHECKPOINT_FILE="$CHECKPOINT_FILE" \
   RELEASE_CHECKPOINT_JOURNAL="$CHECKPOINT_JOURNAL" \
@@ -808,15 +869,23 @@ if [[ "$DEPLOY_RC" -eq 0 && -n "${DEPLOY_SERVER_NAME:-}" && "$DEPLOY_SERVER_NAME
 fi
 
 FINAL_HEALTH_RC=1
-if [[ "$DEPLOY_RC" -eq 0 && "$NGINX_RC" -eq 0 ]] && curl --noproxy '*' -fsS --max-time 20 \
-  http://127.0.0.1:8000/healthz >/dev/null 2>&1; then
-  FINAL_HEALTH_RC=0
+FINAL_READINESS_RC=1
+if [[ "$DEPLOY_RC" -eq 0 && "$NGINX_RC" -eq 0 ]]; then
+  if curl --noproxy '*' -fsS --max-time 20 \
+    http://127.0.0.1:8000/healthz >/dev/null 2>&1; then
+    FINAL_HEALTH_RC=0
+  fi
+  if verify_backend_readiness 20; then
+    FINAL_READINESS_RC=0
+  fi
 fi
 FINAL_RC="$DEPLOY_RC"
 if [[ "$FINAL_RC" -eq 0 && "$NGINX_RC" -ne 0 ]]; then
   FINAL_RC="$NGINX_RC"
 elif [[ "$FINAL_RC" -eq 0 && "$FINAL_HEALTH_RC" -ne 0 ]]; then
   FINAL_RC="$FINAL_HEALTH_RC"
+elif [[ "$FINAL_RC" -eq 0 && "$FINAL_READINESS_RC" -ne 0 ]]; then
+  FINAL_RC="$FINAL_READINESS_RC"
 fi
 
 DIST="$REPO_DIR/06_AppPlatform/frontend/dist"
@@ -827,11 +896,14 @@ STATUS_TEMP="$(mktemp "$DIST/.deploy_status.XXXXXX.tmp")"
   echo "inner_deploy_exit_code=$DEPLOY_RC"
   echo "nginx_exit_code=$NGINX_RC"
   echo "final_health_exit_code=$FINAL_HEALTH_RC"
+  echo "final_readiness_exit_code=$FINAL_READINESS_RC"
   echo "timestamp=$(date -u)"
   echo "---systemctl---"
   sudo -n systemctl status jato-fullstack-backend@8000 --no-pager 2>&1 || true
   echo "---healthz---"
   curl --noproxy '*' -fsS http://127.0.0.1:8000/healthz 2>&1 || echo "HEALTHZ_FAILED"
+  echo "---readyz---"
+  verify_backend_readiness 20 2>&1 || echo "READYZ_FAILED"
   echo "---google oauth proxy---"
   sudo -n awk -F= '/^(APP_GOOGLE_OAUTH_PROXY_URL|APP_GOOGLE_OAUTH_RELAY_URL|APP_GOOGLE_OAUTH_TIMEOUT_SECONDS|APP_GOOGLE_REDIRECT_URI|APP_FRONTEND_ORIGIN|APP_FRONTEND_ORIGINS|APP_CORS_ORIGINS|APP_GROUPED_TIME_SERIES_PERSISTENT_CACHE_ENABLED|APP_GROUPED_TIME_SERIES_PREWARM_ENABLED|APP_GROUPED_TIME_SERIES_PREWARM_GROUP_BY|APP_GROUPED_TIME_SERIES_PREWARM_GRAINS|APP_GROUPED_TIME_SERIES_PREWARM_SCOPES|APP_GROUPED_TIME_SERIES_PREWARM_FILTERS_JSON|APP_ADVANCED_ANALYSIS_WARMUP_[A-Z_]+)=/ {print}' "$ENV_FILE" 2>&1 || true
   sudo -n awk -F= '/^APP_GOOGLE_OAUTH_RELAY_TOKEN=/ {print "APP_GOOGLE_OAUTH_RELAY_TOKEN=configured"}' "$ENV_FILE" 2>&1 || true
@@ -892,7 +964,7 @@ if [[ "$FINAL_RC" -ne 0 ]]; then
       --checkpoint "$CHECKPOINT_FILE" --journal "$CHECKPOINT_JOURNAL" \
       "${checkpoint_identity_args[@]}" \
       --phase backend_healthy --status failed --retry-class automatic \
-      --message "outer release verification failed: nginx_rc=$NGINX_RC health_rc=$FINAL_HEALTH_RC; $OUTER_EVIDENCE_BINDING" >/dev/null || true
+      --message "outer release verification failed: nginx_rc=$NGINX_RC health_rc=$FINAL_HEALTH_RC readiness_rc=$FINAL_READINESS_RC; $OUTER_EVIDENCE_BINDING" >/dev/null || true
   fi
   exit "$FINAL_RC"
 fi
@@ -900,5 +972,5 @@ python3 "$REPO_DIR/03_Scripts/deploy/release_checkpoint.py" write \
   --checkpoint "$CHECKPOINT_FILE" --journal "$CHECKPOINT_JOURNAL" \
   "${checkpoint_identity_args[@]}" \
   --phase backend_healthy --status completed --retry-class automatic \
-  --message "nginx, final local health, and atomic deploy status completed; $OUTER_EVIDENCE_BINDING" >/dev/null
+  --message "nginx, final local liveness, release readiness, and atomic deploy status completed; $OUTER_EVIDENCE_BINDING" >/dev/null
 REMOTE_DEPLOY_SUCCEEDED="true"
