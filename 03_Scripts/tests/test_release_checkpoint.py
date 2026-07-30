@@ -143,6 +143,39 @@ class ReleaseCheckpointTests(unittest.TestCase):
             [],
         )
 
+    def test_atomic_owned_replace_is_safe_if_power_fails_after_rename(self) -> None:
+        uid = os.getuid()
+        gid = os.getgid()
+        real_replace = os.replace
+
+        def replace_then_fail(source: Path, target: Path) -> None:
+            metadata = source.stat()
+            self.assertEqual((metadata.st_uid, metadata.st_gid), (uid, gid))
+            self.assertEqual(stat.S_IMODE(metadata.st_mode), 0o600)
+            real_replace(source, target)
+            raise OSError("simulated power loss after rename")
+
+        with mock.patch.object(
+            checkpoint.os,
+            "replace",
+            side_effect=replace_then_fail,
+        ):
+            with self.assertRaisesRegex(OSError, "simulated power loss"):
+                checkpoint.atomic_write_json(
+                    self.checkpoint_path,
+                    {"value": "new"},
+                    owner_uid=uid,
+                    owner_gid=gid,
+                )
+
+        persisted = self.checkpoint_path.stat()
+        self.assertEqual((persisted.st_uid, persisted.st_gid), (uid, gid))
+        self.assertEqual(stat.S_IMODE(persisted.st_mode), 0o600)
+        self.assertEqual(
+            json.loads(self.checkpoint_path.read_text(encoding="utf-8")),
+            {"value": "new"},
+        )
+
     def test_existing_checkpoint_identity_mismatch_fails_closed(self) -> None:
         self.write("packaged")
         different = checkpoint.ReleaseIdentity.create(

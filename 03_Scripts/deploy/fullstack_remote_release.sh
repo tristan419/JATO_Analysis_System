@@ -547,6 +547,10 @@ if [[ "$CHECKPOINT_DECISION" == "already-rolled-back" ]]; then
     exit 1
   fi
 fi
+if [[ "$CHECKPOINT_DECISION" == "already-pre-switch-aborted" ]]; then
+  echo "[ERROR] This exact release was abandoned before Candidate start; create a new reviewed release instead of replaying it"
+  exit 1
+fi
 if [[ "$CHECKPOINT_PHASE" == "backend_healthy" && "$CHECKPOINT_STATUS" == "completed" ]] \
   && bluegreen_local_noop_allowed; then
   echo "[INFO] Exact server release is already healthy; remote deploy is a no-op"

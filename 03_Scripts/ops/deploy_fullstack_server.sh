@@ -120,12 +120,13 @@ checkpoint_phase_rank() {
     switched) echo 9 ;;
     rollback_started) echo 10 ;;
     rollback_completed) echo 11 ;;
-    backend_healthy) echo 12 ;;
-    www_verified) echo 13 ;;
-    intl_deploy_started) echo 14 ;;
-    intl_verified) echo 15 ;;
-    parity_verified) echo 16 ;;
-    complete) echo 17 ;;
+    pre_switch_aborted) echo 12 ;;
+    backend_healthy) echo 13 ;;
+    www_verified) echo 14 ;;
+    intl_deploy_started) echo 15 ;;
+    intl_verified) echo 16 ;;
+    parity_verified) echo 17 ;;
+    complete) echo 18 ;;
     *) echo -1 ;;
   esac
 }
@@ -358,7 +359,16 @@ initialize_release_checkpoint() {
   mapfile -d '' -t identity_args < <(checkpoint_identity_args)
   resume_state="$(python3 "$CHECKPOINT_HELPER" assert-resumable \
     --checkpoint "$RELEASE_CHECKPOINT_FILE" "${identity_args[@]}")"
-  if [[ "$(python3 -c 'import json,sys; print(json.load(sys.stdin)["decision"])' <<< "$resume_state")" == "already-complete" ]]; then
+  local resume_decision=""
+  resume_decision="$(
+    python3 -c 'import json,sys; print(json.load(sys.stdin)["decision"])' \
+      <<< "$resume_state"
+  )"
+  if [[ "$resume_decision" == "already-pre-switch-aborted" ]]; then
+    echo "[ERROR] This exact release was abandoned before Candidate start; refusing replay"
+    return 1
+  fi
+  if [[ "$resume_decision" == "already-complete" ]]; then
     CHECKPOINT_ALREADY_COMPLETE="true"
   fi
   state="$(python3 "$CHECKPOINT_HELPER" show --checkpoint "$RELEASE_CHECKPOINT_FILE")"

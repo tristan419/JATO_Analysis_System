@@ -106,6 +106,7 @@ and frontend artifact identity/checksum.
 | `intl_verified` | GitHub | Run final cross-origin parity. |
 | `parity_verified` | GitHub | Seal the verified release receipt. |
 | `complete` | GitHub | No-op when public provenance and health still match. |
+| `pre_switch_aborted` | Reviewed recovery only | A specific failed release was proven never to have started Candidate or switched traffic, then sealed as abandoned by an immutable recovery receipt. It is not a successful deployment or migration. |
 
 The retry classes exposed to operators are:
 
@@ -165,6 +166,59 @@ If `migration_started` exists without a completed `migrated` transition:
 Do not automatically run `alembic downgrade` and do not deploy a different
 application artifact over an unresolved migration.
 
+## Reviewed pre-switch checkpoint recovery
+
+A legacy release may have reached `migrated/completed/automatic` with an
+invalid `database enabled + migration not_required` evidence signature even
+though it never started a Candidate or changed traffic. Do not edit or delete
+that checkpoint, do not rewrite its original evidence, and do not rerun the
+failed workflow.
+
+Use `.github/workflows/production-checkpoint-recovery.yml` only when a reviewed,
+versioned incident plan exists on `main`. The workflow shares the normal
+production concurrency group, requires the `production` environment approval,
+and defaults to `dry-run`. Dry-run and apply both hold the canonical production
+lock and prove:
+
+- the exact checkpoint, journal, archive, legacy evidence, backup manifest, and
+  dump still match their reviewed byte lengths and SHA-256 values;
+- the live database is queried with read-only transactions and its Alembic
+  current revisions equal the old source heads, new source heads, and backup
+  revision;
+- the Candidate unit, listener, slot link, Nginx target, maintenance marker, and
+  scheduler snapshot are absent;
+- the old active release and both public origins remain healthy at the reviewed
+  commit, with two workers, `MemoryHigh=6G`, `MemoryMax=8G`, and the JATO
+  monthly worker disabled.
+
+Apply repeats every proof instead of trusting a prior dry-run. It writes a
+private, append-only recovery receipt and transitions the old checkpoint to
+`pre_switch_aborted/completed/automatic`. This terminal means the reviewed
+release was abandoned before Candidate start or traffic switch; it is not a
+successful migration, deployment, or rollback. A generic checkpoint write
+cannot enter this phase.
+
+Run the recovery in this exact order:
+
+1. Dispatch `production-checkpoint-recovery` from the current `main` with
+   `mode=dry-run` and an empty confirmation, then approve its `production`
+   environment gate.
+2. Download the `checkpoint-recovery-result` artifact and require
+   `decision=dry-run-eligible` and `trafficChanged=false`. Review the bound
+   checkpoint, journal, receipt destination, database revisions, runtime
+   identity, and public identity in that result.
+3. Dispatch the same workflow from the same reviewed `main` with `mode=apply`
+   and the exact confirmation `ABORT 2026-07-30-ce5 PRE-SWITCH`, then approve
+   the environment gate. Require `decision=pre-switch-aborted` (or the fully
+   revalidated idempotent result `already-pre-switch-aborted`) and
+   `trafficChanged=false`.
+4. Start a fresh production release from the current immutable `main` artifact
+   and verify final public parity.
+
+Never rerun the old failed production workflow. If any digest, revision,
+runtime, or public identity differs, stop and review the new state instead of
+weakening the incident plan.
+
 ## Public platform ambiguity
 
 Tencent/www is verified before Cloudflare/intl is switched. The two providers
@@ -216,3 +270,9 @@ Before production rollout, test without publishing JATO data:
   health result;
 - verify www/intl expose the same immutable artifact;
 - verify two backend workers, cgroup `6G/8G`, and disabled JATO monthly worker.
+- require checkpoint-recovery dry-run to leave the checkpoint, journal, receipt
+  directory, Candidate, Nginx route, database, and public traffic unchanged;
+- require checkpoint-recovery apply to write exactly one bound receipt and the
+  `pre_switch_aborted` terminal, then prove an idempotent replay changes nothing;
+- reject checkpoint recovery when any reviewed digest, database revision,
+  runtime identity, or public identity differs.

@@ -70,6 +70,7 @@ jobs:
         run: |
           bash -n \
             03_Scripts/deploy/fullstack_remote_release.sh \
+            03_Scripts/deploy/tencent_pre_switch_checkpoint_recovery.sh \
             03_Scripts/deploy/tencent_feature_candidate_canary.sh \
             03_Scripts/deploy/tencent_bluegreen_release.sh \
             03_Scripts/deploy/lib/production_mutation_lock.sh \
@@ -87,6 +88,7 @@ jobs:
             03_Scripts/tests/test_tencent_feature_candidate_canary.py \
             03_Scripts/tests/test_tencent_bluegreen_release.py \
             03_Scripts/tests/test_release_source_seal.py \
+            03_Scripts/tests/test_pre_switch_checkpoint_recovery.py \
             03_Scripts/tests/test_release_checkpoint.py \
             03_Scripts/tests/test_release_evidence.py \
             03_Scripts/tests/test_release_shell_hardening.py \

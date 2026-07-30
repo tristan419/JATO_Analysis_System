@@ -1,10 +1,12 @@
 import importlib.util
 import json
 from pathlib import Path
+import re
 import subprocess
 import sys
 
 import pytest
+import yaml
 
 
 REPO_ROOT = Path(__file__).resolve().parents[4]
@@ -12,6 +14,9 @@ RELEASE_PREPARATION_HELPER = (
     REPO_ROOT / "03_Scripts/deploy/prepare_backend_release.py"
 )
 READINESS_HELPER = REPO_ROOT / "03_Scripts/deploy/verify_backend_readiness.py"
+CHECKPOINT_RECOVERY_WORKFLOW = (
+    REPO_ROOT / ".github/workflows/production-checkpoint-recovery.yml"
+)
 
 
 def test_production_release_excludes_local_tooling_and_temp_artifacts() -> None:
@@ -22,6 +27,155 @@ def test_production_release_excludes_local_tooling_and_temp_artifacts() -> None:
     assert "--exclude='.claude'" in workflow
     assert "--exclude='tmp'" in workflow
     assert "--exclude='*.pyc'" in workflow
+
+
+def test_checkpoint_recovery_workflow_is_exactly_gated_and_read_only() -> None:
+    workflow_text = CHECKPOINT_RECOVERY_WORKFLOW.read_text(encoding="utf-8")
+    workflow = yaml.load(workflow_text, Loader=yaml.BaseLoader)
+    assert isinstance(workflow, dict)
+    assert workflow["name"] == "production-checkpoint-recovery"
+    assert set(workflow["on"]) == {"workflow_dispatch"}
+    inputs = workflow["on"]["workflow_dispatch"]["inputs"]
+    assert set(inputs) == {"mode", "confirmation"}
+    assert inputs["mode"]["required"] == "true"
+    assert inputs["mode"]["default"] == "dry-run"
+    assert inputs["mode"]["type"] == "choice"
+    assert inputs["mode"]["options"] == ["dry-run", "apply"]
+    assert {
+        "required": inputs["confirmation"]["required"],
+        "default": inputs["confirmation"]["default"],
+        "type": inputs["confirmation"]["type"],
+    } == {
+        "required": "false",
+        "default": "",
+        "type": "string",
+    }
+    assert workflow["concurrency"] == {
+        "group": "production-release-main",
+        "cancel-in-progress": "false",
+    }
+    assert set(workflow["jobs"]) == {
+        "recovery_coordination_guard",
+        "recover_checkpoint",
+    }
+
+    guard = workflow["jobs"]["recovery_coordination_guard"]
+    recovery = workflow["jobs"]["recover_checkpoint"]
+    main_guard = "${{ github.ref == 'refs/heads/main' }}"
+    assert guard["if"] == main_guard
+    assert "environment" not in guard
+    assert recovery["if"] == main_guard
+    assert recovery["needs"] == "recovery_coordination_guard"
+    assert recovery["environment"] == "production"
+
+    guard_steps = guard["steps"]
+    assert [step["name"] for step in guard_steps] == [
+        "Checkout recovery source",
+        "Validate recovery dispatch intent",
+        "Validate unpublished release coordination",
+        "Freeze recovery coordination plan",
+    ]
+    assert "secrets." not in str(guard_steps)
+    frozen_artifact = guard_steps[3]
+    assert frozen_artifact["uses"] == "actions/upload-artifact@v4"
+    assert frozen_artifact["with"] == {
+        "name": (
+            "checkpoint-recovery-plan-${{ github.sha }}-"
+            "${{ github.run_attempt }}"
+        ),
+        "path": "${{ runner.temp }}/recovery-coordination-plan.json",
+        "if-no-files-found": "error",
+        "compression-level": "0",
+        "overwrite": "false",
+        "retention-days": "7",
+    }
+
+    recovery_steps = recovery["steps"]
+    assert [step["name"] for step in recovery_steps] == [
+        "Checkout recovery source",
+        "Download frozen recovery coordination plan",
+        "Revalidate frozen coordination plan after approval",
+        "Revalidate recovery dispatch intent after approval",
+        "Build immutable recovery control bundle",
+        "Validate Tencent recovery credentials",
+        "Reconfirm current main before recovery transport",
+        "Run reviewed checkpoint recovery on Tencent",
+        "Upload checkpoint recovery result",
+    ]
+    assert "secrets." not in str(recovery_steps[:4])
+    assert recovery_steps[1]["with"] == {
+        "name": (
+            "checkpoint-recovery-plan-${{ github.sha }}-"
+            "${{ github.run_attempt }}"
+        ),
+        "path": "${{ runner.temp }}/recovery-coordination-plan",
+    }
+    assert "verify-plan" in recovery_steps[2]["run"]
+    assert "ABORT 2026-07-30-ce5 PRE-SWITCH" in recovery_steps[3]["run"]
+    assert "recovery-control-manifest.json" in recovery_steps[4]["run"]
+    assert "SSH_KNOWN_HOSTS" in str(recovery_steps[5]["env"])
+    assert "verify-plan" in recovery_steps[6]["run"]
+    assert "StrictHostKeyChecking=yes" in recovery_steps[7]["run"]
+    result_artifact = recovery_steps[8]
+    assert result_artifact["if"] == "${{ always() }}"
+    assert result_artifact["uses"] == "actions/upload-artifact@v4"
+    assert result_artifact["with"] == {
+        "name": (
+            "checkpoint-recovery-result-${{ github.sha }}-"
+            "${{ github.run_attempt }}"
+        ),
+        "path": "${{ runner.temp }}/checkpoint-recovery-result.json",
+        "if-no-files-found": "warn",
+        "compression-level": "0",
+        "overwrite": "false",
+        "retention-days": "30",
+    }
+
+    controller = (
+        REPO_ROOT
+        / "03_Scripts/deploy/tencent_pre_switch_checkpoint_recovery.sh"
+    ).read_text(encoding="utf-8")
+    helper = (
+        REPO_ROOT / "03_Scripts/deploy/pre_switch_checkpoint_recovery.py"
+    ).read_text(encoding="utf-8")
+    lock_library = (
+        REPO_ROOT
+        / "03_Scripts/deploy/lib/production_mutation_lock.sh"
+    ).read_text(encoding="utf-8")
+    recovery_sources = "\n".join(
+        (workflow_text, controller, helper, lock_library)
+    )
+    systemctl_verbs = set(
+        re.findall(
+            r"(?m)^[ \t]*systemctl\s+([a-z-]+)",
+            recovery_sources,
+        )
+    )
+    systemctl_verbs.update(
+        re.findall(
+            r"""["']systemctl["']\s*,\s*["']([a-z-]+)["']""",
+            recovery_sources,
+        )
+    )
+    assert systemctl_verbs == {"show"}
+    assert set(
+        re.findall(r"-m\s+alembic\s+([a-z-]+)", recovery_sources)
+    ) == {"current", "heads"}
+    for forbidden in (
+        "systemctl start",
+        "systemctl stop",
+        "systemctl restart",
+        "systemctl reload",
+        "systemctl enable",
+        "systemctl disable",
+        "alembic upgrade",
+        "alembic downgrade",
+        "alembic stamp",
+        "nginx -s",
+        "fullstack_remote_release.sh",
+        "tencent_bluegreen_release.sh",
+    ):
+        assert forbidden not in recovery_sources
 
 
 def test_tencent_bluegreen_release_links_durable_runtime_artifacts() -> None:
