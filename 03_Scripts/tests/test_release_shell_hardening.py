@@ -1,17 +1,22 @@
 from __future__ import annotations
 
 import io
+import hashlib
 import json
 import os
 from pathlib import Path
 import subprocess
 import tarfile
+import textwrap
 
 import pytest
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 REMOTE_SCRIPT = REPO_ROOT / "03_Scripts/deploy/fullstack_remote_release.sh"
+ARCHIVE_VALIDATOR = (
+    REPO_ROOT / "03_Scripts/deploy/validate_release_archive.py"
+)
 BLUEGREEN_SCRIPT = REPO_ROOT / "03_Scripts/deploy/tencent_bluegreen_release.sh"
 SERVER_SCRIPT = REPO_ROOT / "03_Scripts/ops/deploy_fullstack_server.sh"
 BACKUP_SCRIPT = REPO_ROOT / "03_Scripts/ops/backup_production_data.sh"
@@ -39,7 +44,7 @@ def test_remote_release_validates_content_address_before_bluegreen_handoff() -> 
         "DEPLOY_ARCHIVE_SHA256",
         '.cache/jato-releases/archives/${DEPLOY_COMMIT_SHA}/${DEPLOY_ARCHIVE_SHA256}.tar.gz',
         "flock -w 300 9",
-        "Unsupported release archive member",
+        "validate_release_archive.py=$SEALED_ARCHIVE_VALIDATOR",
         "Release archive size mismatch",
         "Release archive SHA-256 mismatch",
     ):
@@ -87,16 +92,114 @@ def test_remote_release_cleanup_is_best_effort_for_every_handoff_result() -> Non
     assert 'if ! rm -rf -- "$transient_path"; then' in cleanup
     assert 'echo "[WARN] Failed to remove transient deployment path:' in cleanup
     assert cleanup.rstrip().endswith("return 0\n}")
-    assert (
-        'for transient_path in "$RELEASE_WORKTREE" "$PREBUILT_FRONTEND_DIR"; do'
-        in cleanup
-    )
+    for transient in (
+        '"$RELEASE_WORKTREE"',
+        '"$TRUSTED_ARCHIVE_VALIDATOR_TEMP"',
+        '"$PREBUILT_FRONTEND_DIR"',
+    ):
+        assert transient in cleanup
     assert "remove_transient_release_paths" in exit_cleanup
     assert "PRODUCTION_MUTATION_STARTED" not in script
     assert "REMOTE_DEPLOY_SUCCEEDED" not in script
     assert "trap cleanup_release_staging EXIT" in script
     assert "BLUEGREEN_RC=$?" in script
     assert script.rstrip().endswith('exit "$BLUEGREEN_RC"')
+
+
+def test_remote_release_seals_archive_before_validation_and_extraction() -> None:
+    script = REMOTE_SCRIPT.read_text(encoding="utf-8")
+    trap_index = script.index("trap cleanup_release_staging EXIT")
+    worktree_index = script.index('RELEASE_WORKTREE="$(mktemp')
+    validator_temp_index = script.index(
+        'TRUSTED_ARCHIVE_VALIDATOR_TEMP="$(',
+        worktree_index,
+    )
+    seal_index = script.index("seal_release_archive_input\n")
+    helper_install_index = script.index(
+        "sudo -n install -m 0550 -o root",
+        seal_index,
+    )
+    validate_index = script.index(
+        'sudo -n python3 -B "$SEALED_ARCHIVE_VALIDATOR"',
+        helper_install_index,
+    )
+    extract_index = script.index(
+        '-xzf "$SEALED_RELEASE_ARCHIVE" -C "$RELEASE_WORKTREE"',
+    )
+    assert (
+        trap_index
+        < worktree_index
+        < validator_temp_index
+        < seal_index
+        < helper_install_index
+        < validate_index
+        < extract_index
+    )
+    assert (
+        '"$TRUSTED_ARCHIVE_VALIDATOR_TEMP" "$SEALED_ARCHIVE_VALIDATOR"'
+        in script
+    )
+    assert script.count(
+        'sudo -n python3 -B "$SEALED_ARCHIVE_VALIDATOR"',
+    ) == 1
+    assert '--archive "$SEALED_RELEASE_ARCHIVE"' in script
+    assert script.count('--output "$ARCHIVE_VALIDATION_RECEIPT"') == 1
+    assert script.count("--headroom-target") == 2
+    assert (
+        '--validation-run-id "$DEPLOY_RUN_ID"'
+        in script
+    )
+    assert (
+        '--validation-run-attempt "$DEPLOY_RUN_ATTEMPT"'
+        in script
+    )
+    assert (
+        '--sealed-root "$SEALED_TRUST_ROOT"'
+        in script
+    )
+    assert (
+        '"03_Scripts/deploy/validate_release_archive.py=$SEALED_ARCHIVE_VALIDATOR"'
+        in script
+    )
+    assert "/var/lib/jato-sealed-inputs" in script
+    assert "select_bluegreen_release_headroom_target" in script
+    selector = _shell_function(
+        REMOTE_SCRIPT,
+        "select_bluegreen_release_headroom_target",
+    )
+    for token in (
+        'Path("/opt")',
+        'Path("/opt/jato")',
+        'Path("/opt/jato/releases")',
+        "except FileNotFoundError:",
+        "metadata.st_uid not in {0, deploy_uid}",
+        "mode & 0o022",
+        "print(deepest)",
+    ):
+        assert token in selector
+    for mutation in ("os.mkdir", "os.chown", "os.chmod", "install -d"):
+        assert mutation not in selector
+    assert '--headroom-target "$BLUEGREEN_HEADROOM_TARGET" 1' in script
+    assert "verify_archive_validation_receipt" in script
+    assert script.count("verify_sealed_release_bundle") >= 5
+    assert "--headroom-path" not in script
+    assert "--headroom-materialization-copies" not in script
+
+
+def test_remote_release_sealed_bundle_requires_exact_attempt_depth() -> None:
+    verifier = _shell_function(REMOTE_SCRIPT, "verify_sealed_release_bundle")
+
+    for token in (
+        '"$DEPLOY_COMMIT_SHA" "$DEPLOY_RUN_ID" "$DEPLOY_RUN_ATTEMPT"',
+        "expected_run_dir = (",
+        '/ "inputs"',
+        "/ commit",
+        "/ archive_sha256",
+        '/ f"{run_id}-{run_attempt}"',
+        "run_dir != expected_run_dir",
+    ):
+        assert token in verifier
+    assert "run_dir.parent.parent.parent !=" not in verifier
 
 
 def test_outer_disconnect_cleanup_preserves_durable_bluegreen_supervisor_files(
@@ -127,7 +230,11 @@ def test_outer_disconnect_cleanup_preserves_durable_bluegreen_supervisor_files(
         env={
             **os.environ,
             "RELEASE_WORKTREE": str(transient_worktree),
+            "TRUSTED_ARCHIVE_VALIDATOR_TEMP": str(
+                tmp_path / "transient-validator.py",
+            ),
             "PREBUILT_FRONTEND_DIR": str(transient_frontend),
+            "SEALED_ARCHIVE_DIR": "",
         },
         text=True,
         capture_output=True,
@@ -139,6 +246,101 @@ def test_outer_disconnect_cleanup_preserves_durable_bluegreen_supervisor_files(
     assert not transient_frontend.exists()
     assert durable_controller.read_text(encoding="utf-8") == "controller"
     assert durable_helper.read_text(encoding="utf-8") == "helper"
+
+
+def test_uploaded_path_replacement_does_not_change_root_sealed_archive(
+    tmp_path: Path,
+) -> None:
+    uploaded = tmp_path / "uploaded.tar.gz"
+    replacement = tmp_path / "replacement.tar.gz"
+    for archive_path, member_name in (
+        (uploaded, "validated.txt"),
+        (replacement, "replaced.txt"),
+    ):
+        with tarfile.open(archive_path, "w:gz") as archive:
+            payload = member_name.encode("utf-8")
+            member = tarfile.TarInfo(member_name)
+            member.size = len(payload)
+            member.mode = 0o644
+            archive.addfile(member, io.BytesIO(payload))
+    original = uploaded.read_bytes()
+    digest = hashlib.sha256(original).hexdigest()
+    sealed_root = tmp_path / "sealed"
+    sealed_dir = sealed_root / "commit" / digest / "1-1"
+    sealed_archive = sealed_dir / "release.tar.gz"
+    extracted = tmp_path / "extracted"
+    extracted.mkdir()
+    harness = tmp_path / "seal-race.sh"
+    harness.write_text(
+        "set -Eeuo pipefail\n"
+        + _shell_function(REMOTE_SCRIPT, "verify_release_archive_identity")
+        + _shell_function(REMOTE_SCRIPT, "seal_release_archive_input")
+        + textwrap.dedent(
+            """\
+            ensure_sealed_trust_roots() {
+              mkdir -p "$(dirname "$SEALED_ARCHIVE_DIR")"
+            }
+            sudo() {
+              [[ "${1:-}" == "-n" ]] && shift
+              if [[ "${1:-}" == "install" ]]; then
+                if [[ " $* " == *" -d "* ]]; then
+                  mkdir -p "${@: -1}"
+                else
+                  cp "${@: -2:1}" "${@: -1}"
+                fi
+                return
+              fi
+              "$@"
+            }
+            stat() {
+              local format="$2"
+              local path="$3"
+              case "$format" in
+                "%s")
+                  wc -c <"$path" | tr -d ' '
+                  ;;
+                "%u:%g:%a")
+                  if [[ "$path" == "$SEALED_ARCHIVE_DIR" ]]; then
+                    printf '0:%s:750\\n' "$(id -g)"
+                  else
+                    printf '0:%s:440\\n' "$(id -g)"
+                  fi
+                  ;;
+                *)
+                  return 1
+                  ;;
+              esac
+            }
+            seal_release_archive_input
+            cp "$REPLACEMENT_ARCHIVE" "$RELEASE_ARCHIVE"
+            verify_release_archive_identity "$SEALED_RELEASE_ARCHIVE"
+            tar -xzf "$SEALED_RELEASE_ARCHIVE" -C "$EXTRACTED_ROOT"
+            [[ -f "$EXTRACTED_ROOT/validated.txt" ]]
+            [[ ! -e "$EXTRACTED_ROOT/replaced.txt" ]]
+            """
+        ),
+        encoding="utf-8",
+    )
+    result = subprocess.run(
+        ["bash", str(harness)],
+        env={
+            **os.environ,
+            "DEPLOY_ARCHIVE_BYTES": str(len(original)),
+            "DEPLOY_ARCHIVE_SHA256": digest,
+            "DEPLOY_COMMIT_SHA": "a" * 40,
+            "RELEASE_ARCHIVE": str(uploaded),
+            "REPLACEMENT_ARCHIVE": str(replacement),
+            "SEALED_ARCHIVE_ROOT": str(sealed_root),
+            "SEALED_ARCHIVE_DIR": str(sealed_dir),
+            "SEALED_RELEASE_ARCHIVE": str(sealed_archive),
+            "DEPLOY_GID": str(os.getgid()),
+            "EXTRACTED_ROOT": str(extracted),
+        },
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert result.returncode == 0, result.stderr + result.stdout
 
 
 def test_outer_noop_requires_exact_active_release_and_verified_source_seal(
@@ -204,16 +406,8 @@ def test_outer_noop_requires_exact_active_release_and_verified_source_seal(
     assert "rc=1" in result.stdout
 
 
-def _archive_member_validator() -> str:
-    script = REMOTE_SCRIPT.read_text(encoding="utf-8")
-    marker = "<<'PY_VALIDATE_RELEASE_ARCHIVE'\n"
-    start = script.index(marker) + len(marker)
-    end = script.index("\nPY_VALIDATE_RELEASE_ARCHIVE\n", start)
-    return script[start:end]
-
-
 def _write_archive(path: Path, members: list[tarfile.TarInfo]) -> None:
-    with tarfile.open(path, mode="w:gz") as archive:
+    with tarfile.open(path, mode="w:gz", format=tarfile.GNU_FORMAT) as archive:
         for member in members:
             payload = None
             if member.isfile():
@@ -224,9 +418,18 @@ def _write_archive(path: Path, members: list[tarfile.TarInfo]) -> None:
 
 
 def _run_archive_member_validator(path: Path) -> subprocess.CompletedProcess[str]:
+    raw = path.read_bytes()
     return subprocess.run(
-        ["python3", "-", str(path)],
-        input=_archive_member_validator(),
+        [
+            "python3",
+            str(ARCHIVE_VALIDATOR),
+            "--archive",
+            str(path.resolve()),
+            "--expected-sha256",
+            hashlib.sha256(raw).hexdigest(),
+            "--expected-bytes",
+            str(len(raw)),
+        ],
         text=True,
         capture_output=True,
         check=False,
@@ -240,27 +443,79 @@ def _root_tar_info() -> tarfile.TarInfo:
     return root
 
 
+def _valid_archive_members() -> list[tarfile.TarInfo]:
+    raw_data = tarfile.TarInfo("01_RAW_DATA")
+    raw_data.type = tarfile.DIRTYPE
+    raw_data.mode = 0o711
+    workbook = tarfile.TarInfo(
+        "01_RAW_DATA/VOC_Nordic_SUV_Users_100.xlsx",
+    )
+    workbook.mode = 0o600
+    scripts = tarfile.TarInfo("03_Scripts")
+    scripts.type = tarfile.DIRTYPE
+    scripts.mode = 0o755
+    diagnostics = tarfile.TarInfo("03_Scripts/diagnostics")
+    diagnostics.type = tarfile.DIRTYPE
+    diagnostics.mode = 0o755
+    artifacts = tarfile.TarInfo("03_Scripts/diagnostics/artifacts")
+    artifacts.type = tarfile.DIRTYPE
+    artifacts.mode = 0o711
+    msrp_backfill = tarfile.TarInfo(
+        "03_Scripts/diagnostics/artifacts/msrp_backfill",
+    )
+    msrp_backfill.type = tarfile.DIRTYPE
+    msrp_backfill.mode = 0o711
+    evidence_pack = tarfile.TarInfo(
+        "03_Scripts/diagnostics/artifacts/msrp_backfill/"
+        "sweden_swiss_top30_suv",
+    )
+    evidence_pack.type = tarfile.DIRTYPE
+    evidence_pack.mode = 0o711
+    official_evidence = tarfile.TarInfo(
+        "03_Scripts/diagnostics/artifacts/msrp_backfill/"
+        "sweden_swiss_top30_suv/official_evidence_leads.json",
+    )
+    official_evidence.mode = 0o600
+    candidates = tarfile.TarInfo(
+        "03_Scripts/diagnostics/artifacts/msrp_backfill/"
+        "sweden_swiss_top30_suv/"
+        "top30_suv_price_movement_candidates.json",
+    )
+    candidates.mode = 0o600
+    payload = tarfile.TarInfo("./payload.txt")
+    payload.mode = 0o644
+    return [
+        _root_tar_info(),
+        raw_data,
+        workbook,
+        scripts,
+        diagnostics,
+        artifacts,
+        msrp_backfill,
+        evidence_pack,
+        official_evidence,
+        candidates,
+        payload,
+    ]
+
+
 def test_archive_member_validator_accepts_single_gnu_tar_root_directory(
     tmp_path: Path,
 ) -> None:
     archive_path = tmp_path / "valid.tar.gz"
-    payload = tarfile.TarInfo("./payload.txt")
-    payload.mode = 0o644
-    _write_archive(archive_path, [_root_tar_info(), payload])
+    _write_archive(archive_path, _valid_archive_members())
 
     result = _run_archive_member_validator(archive_path)
 
     assert result.returncode == 0, result.stderr
-    assert "passed fail-closed validation" in result.stdout
+    assert '"status":"validated"' in result.stdout
 
 
 def test_archive_member_validator_accepts_private_business_asset_mode(
     tmp_path: Path,
 ) -> None:
     archive_path = tmp_path / "private-valid.tar.gz"
-    payload = tarfile.TarInfo("./01_RAW_DATA/private.xlsx")
-    payload.mode = 0o600
-    _write_archive(archive_path, [_root_tar_info(), payload])
+    _write_archive(archive_path, _valid_archive_members())
 
     result = _run_archive_member_validator(archive_path)
 
@@ -271,31 +526,29 @@ def test_archive_member_validator_rejects_traversal_link_and_duplicate(
     tmp_path: Path,
 ) -> None:
     invalid_members: dict[str, list[tarfile.TarInfo]] = {
-        "root_file": [tarfile.TarInfo(".")],
-        "traversal": [_root_tar_info(), tarfile.TarInfo("../escaped.txt")],
-        "link": [_root_tar_info(), tarfile.TarInfo("payload.txt")],
-        "duplicate": [
-            _root_tar_info(),
-            tarfile.TarInfo("./payload.txt"),
-            tarfile.TarInfo("payload.txt"),
-        ],
+        "root_file": [tarfile.TarInfo(".")] + _valid_archive_members()[1:],
+        "traversal": _valid_archive_members() + [tarfile.TarInfo("../escaped.txt")],
+        "link": _valid_archive_members() + [tarfile.TarInfo("public-link")],
+        "duplicate": _valid_archive_members() + [tarfile.TarInfo("payload.txt")],
     }
-    invalid_members["link"][1].type = tarfile.SYMTYPE
-    invalid_members["link"][1].linkname = "/etc/passwd"
+    invalid_members["link"][-1].type = tarfile.SYMTYPE
+    invalid_members["link"][-1].linkname = "/etc/passwd"
     group_writable = tarfile.TarInfo("./group-writable.txt")
     group_writable.mode = 0o664
-    invalid_members["group_writable"] = [_root_tar_info(), group_writable]
+    invalid_members["group_writable"] = _valid_archive_members() + [group_writable]
     special_mode = tarfile.TarInfo("./setuid")
     special_mode.mode = 0o4755
-    invalid_members["special_mode"] = [_root_tar_info(), special_mode]
+    invalid_members["special_mode"] = _valid_archive_members() + [special_mode]
     private_directory = tarfile.TarInfo("./private")
     private_directory.type = tarfile.DIRTYPE
     private_directory.mode = 0o700
-    invalid_members["private_directory"] = [_root_tar_info(), private_directory]
+    invalid_members["private_directory"] = _valid_archive_members() + [
+        private_directory
+    ]
     public_file_with_private_mode = tarfile.TarInfo("./public.py")
     public_file_with_private_mode.mode = 0o600
     invalid_members["public_file_with_private_mode"] = [
-        _root_tar_info(),
+        *_valid_archive_members(),
         public_file_with_private_mode,
     ]
     private_file_with_public_mode = tarfile.TarInfo(
@@ -303,7 +556,7 @@ def test_archive_member_validator_rejects_traversal_link_and_duplicate(
     )
     private_file_with_public_mode.mode = 0o644
     invalid_members["private_file_with_public_mode"] = [
-        _root_tar_info(),
+        *_valid_archive_members(),
         private_file_with_public_mode,
     ]
 
@@ -372,7 +625,7 @@ def test_archive_permissions_survive_both_remote_extractions() -> None:
     controller = BLUEGREEN_SCRIPT.read_text(encoding="utf-8")
 
     assert "tar --same-permissions --no-overwrite-dir" in outer
-    assert '-xzf "$RELEASE_ARCHIVE" -C "$RELEASE_WORKTREE"' in outer
+    assert '-xzf "$SEALED_RELEASE_ARCHIVE" -C "$RELEASE_WORKTREE"' in outer
     assert (
         ") | sudo -n tar --same-permissions --no-overwrite-dir"
         in controller

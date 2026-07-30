@@ -375,7 +375,7 @@ def test_remote_release_preserves_normalized_archive_permissions() -> None:
     ).read_text(encoding="utf-8")
 
     assert "tar --same-permissions --no-overwrite-dir" in outer
-    assert '-xzf "$RELEASE_ARCHIVE" -C "$RELEASE_WORKTREE"' in outer
+    assert '-xzf "$SEALED_RELEASE_ARCHIVE" -C "$RELEASE_WORKTREE"' in outer
     assert (
         ") | sudo -n tar --same-permissions --no-overwrite-dir"
         in controller
@@ -397,7 +397,9 @@ def test_backend_release_is_deterministic_and_closes_msrp_evidence_references() 
     assert '--mtime="@$source_date_epoch"' in workflow
     assert "--mode='u=rwX,go=rX'" in workflow
     assert "--mode='u=rwX,go=X'" in workflow
-    assert 'tar "${tar_private_normalize[@]}" -rf' in workflow
+    assert 'tar "${tar_private_normalize[@]}" --no-recursion' in workflow
+    assert '"${private_dirs[@]}"' in workflow
+    assert '"${private_files[@]}"' in workflow
     assert "--exclude='06_AppPlatform/backend/*.parquet'" in workflow
     assert "--no-acls" in workflow
     assert "--no-xattrs" in workflow

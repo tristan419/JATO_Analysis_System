@@ -550,11 +550,330 @@ def compare_snapshots(before: dict[str, Any], after: dict[str, Any]) -> None:
     )
 
 
+def _sha256_json_receipt(payload: dict[str, Any]) -> str:
+    encoded = (
+        json.dumps(payload, indent=2, sort_keys=True) + "\n"
+    ).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()
+
+
+def _verify_candidate_build_evidence_v3(
+    build: object,
+    identity: dict[str, Any],
+) -> None:
+    if not isinstance(build, dict) or build.get("schemaVersion") != 3:
+        raise CanaryGuardError(
+            "candidate evidence lacks schema-v3 trusted build evidence",
+        )
+    archive = build.get("archiveValidation")
+    anchor = build.get("referenceAnchor")
+    materialization = build.get("materialization")
+    source_seal = build.get("sourceSeal")
+    private_materialization = build.get("privateMaterialization")
+    if (
+        not isinstance(archive, dict)
+        or not isinstance(anchor, dict)
+        or not isinstance(materialization, dict)
+        or not isinstance(source_seal, dict)
+        or not isinstance(private_materialization, dict)
+    ):
+        raise CanaryGuardError(
+            "candidate evidence lacks trusted archive, anchor or "
+            "materialization metadata",
+        )
+
+    expected_mode_policy = {
+        "publicFiles": ["0644", "0755"],
+        "publicDirectories": ["0755"],
+        "privatePrefixes": [
+            "01_RAW_DATA",
+            "03_Scripts/diagnostics/artifacts",
+        ],
+        "privateFiles": ["0600", "0711"],
+        "privateDirectories": ["0711"],
+    }
+    required_controls = {
+        "03_Scripts/deploy/tencent_feature_candidate_canary.sh",
+        "03_Scripts/deploy/jato_feature_canary_guard.py",
+        "03_Scripts/deploy/lib/production_mutation_lock.sh",
+        "03_Scripts/deploy/verify_backend_readiness.py",
+        "03_Scripts/deploy/validate_release_archive.py",
+        "03_Scripts/deploy/cleanup_toolkit_egg_info.py",
+        "03_Scripts/deploy/verify_release_source_seal.py",
+    }
+    trusted_controls = archive.get("trustedControls")
+    member_count = archive.get("memberCount")
+    expanded_bytes = archive.get("expandedBytes")
+    member_classes = archive.get("memberClasses")
+    private_entries = archive.get("privateEntries")
+    private_files = (
+        private_entries.get("files")
+        if isinstance(private_entries, dict)
+        else None
+    )
+    private_directories = (
+        private_entries.get("directories")
+        if isinstance(private_entries, dict)
+        else None
+    )
+    if (
+        archive.get("schemaVersion") != 2
+        or archive.get("status") != "validated"
+        or archive.get("archiveSha256") != identity["archiveSha256"]
+        or archive.get("archiveBytes") != identity["archiveBytes"]
+        or archive.get("rootMode") != "0755"
+        or archive.get("modePolicy") != expected_mode_policy
+        or isinstance(member_count, bool)
+        or not isinstance(member_count, int)
+        or not 0 < member_count <= 50_000
+        or isinstance(expanded_bytes, bool)
+        or not isinstance(expanded_bytes, int)
+        or not 0 < expanded_bytes <= 2 * 1024 * 1024 * 1024
+        or not isinstance(member_classes, dict)
+        or not isinstance(private_files, list)
+        or not private_files
+        or not isinstance(private_directories, list)
+        or not private_directories
+        or not isinstance(trusted_controls, dict)
+        or set(trusted_controls) != required_controls
+        or any(
+            not isinstance(digest, str)
+            or ARCHIVE_PATTERN.fullmatch(digest) is None
+            for digest in trusted_controls.values()
+        )
+    ):
+        raise CanaryGuardError(
+            "candidate evidence has an invalid archive-validation receipt",
+        )
+
+    expected_files: dict[str, dict[str, Any]] = {}
+    for item in private_files:
+        if (
+            not isinstance(item, dict)
+            or set(item) != {"path", "mode", "sha256", "bytes"}
+            or not isinstance(item.get("path"), str)
+            or not any(
+                item["path"] == prefix
+                or item["path"].startswith(f"{prefix}/")
+                for prefix in expected_mode_policy["privatePrefixes"]
+            )
+            or item.get("mode") not in {"0600", "0711"}
+            or not isinstance(item.get("sha256"), str)
+            or ARCHIVE_PATTERN.fullmatch(item["sha256"]) is None
+            or isinstance(item.get("bytes"), bool)
+            or not isinstance(item.get("bytes"), int)
+            or item["bytes"] < 0
+            or item["path"] in expected_files
+        ):
+            raise CanaryGuardError(
+                "candidate archive receipt has malformed private files",
+            )
+        expected_files[item["path"]] = item
+
+    expected_directories: dict[str, dict[str, Any]] = {}
+    for item in private_directories:
+        if (
+            not isinstance(item, dict)
+            or set(item) != {"path", "mode"}
+            or not isinstance(item.get("path"), str)
+            or not any(
+                item["path"] == prefix
+                or item["path"].startswith(f"{prefix}/")
+                for prefix in expected_mode_policy["privatePrefixes"]
+            )
+            or item.get("mode") != "0711"
+            or item["path"] in expected_directories
+        ):
+            raise CanaryGuardError(
+                "candidate archive receipt has malformed private directories",
+            )
+        expected_directories[item["path"]] = item
+
+    required_private_files = {
+        "01_RAW_DATA/VOC_Nordic_SUV_Users_100.xlsx",
+        (
+            "03_Scripts/diagnostics/artifacts/msrp_backfill/"
+            "sweden_swiss_top30_suv/official_evidence_leads.json"
+        ),
+        (
+            "03_Scripts/diagnostics/artifacts/msrp_backfill/"
+            "sweden_swiss_top30_suv/"
+            "top30_suv_price_movement_candidates.json"
+        ),
+    }
+    required_private_directories = {
+        "01_RAW_DATA",
+        "03_Scripts/diagnostics/artifacts",
+        "03_Scripts/diagnostics/artifacts/msrp_backfill",
+        (
+            "03_Scripts/diagnostics/artifacts/msrp_backfill/"
+            "sweden_swiss_top30_suv"
+        ),
+    }
+    if (
+        not required_private_files.issubset(expected_files)
+        or not required_private_directories.issubset(expected_directories)
+        or member_classes.get("privateFiles") != len(expected_files)
+        or member_classes.get("privateDirectories")
+        != len(expected_directories)
+    ):
+        raise CanaryGuardError(
+            "candidate archive receipt lacks complete private assets",
+        )
+    for relative in set(expected_files) | set(expected_directories):
+        parts = relative.split("/")
+        for depth in range(1, len(parts)):
+            parent = "/".join(parts[:depth])
+            if any(
+                parent == prefix or parent.startswith(f"{prefix}/")
+                for prefix in expected_mode_policy["privatePrefixes"]
+            ) and parent not in expected_directories:
+                raise CanaryGuardError(
+                    "candidate archive receipt lacks a private parent chain",
+                )
+
+    roots = materialization.get("roots")
+    if (
+        materialization.get("referenceRootMode") != "0700"
+        or materialization.get("candidateRootMode") != "0711"
+        or materialization.get("extractFlags")
+        != ["--same-permissions", "--no-overwrite-dir"]
+        or materialization.get("copyMethod")
+        != "independent-sealed-archive-extraction"
+        or not isinstance(roots, dict)
+        or set(roots) != {"reference", "candidate"}
+    ):
+        raise CanaryGuardError(
+            "candidate evidence lacks independent trusted materialization",
+        )
+    reference_root = roots.get("reference")
+    candidate_root = roots.get("candidate")
+    if (
+        reference_root != {"uid": 0, "gid": 0, "mode": "0700"}
+        or not isinstance(candidate_root, dict)
+        or set(candidate_root) != {"uid", "gid", "mode"}
+        or isinstance(candidate_root.get("uid"), bool)
+        or not isinstance(candidate_root.get("uid"), int)
+        or candidate_root["uid"] <= 0
+        or isinstance(candidate_root.get("gid"), bool)
+        or not isinstance(candidate_root.get("gid"), int)
+        or candidate_root["gid"] < 0
+        or candidate_root.get("mode") != "0711"
+    ):
+        raise CanaryGuardError(
+            "candidate evidence has invalid root ownership or modes",
+        )
+
+    if (
+        anchor.get("schemaVersion") != 1
+        or anchor.get("archiveSha256") != identity["archiveSha256"]
+        or anchor.get("archiveBytes") != identity["archiveBytes"]
+        or anchor.get("archiveValidationSha256")
+        != _sha256_json_receipt(archive)
+        or anchor.get("roots") != roots
+        or not isinstance(anchor.get("sourceSealSha256"), str)
+        or ARCHIVE_PATTERN.fullmatch(anchor["sourceSealSha256"]) is None
+        or source_seal.get("profile") != "source"
+        or source_seal.get("sha256") != anchor["sourceSealSha256"]
+        or source_seal.get("verifiedAfterBuild") is not True
+        or build.get("toolkitEggInfo")
+        != {
+            "cleanBeforeEditableInstall": True,
+            "cleanAfterEditableInstall": True,
+        }
+    ):
+        raise CanaryGuardError(
+            "candidate evidence has an invalid root-owned reference anchor",
+        )
+
+    if set(private_materialization) != {"reference", "candidate"}:
+        raise CanaryGuardError(
+            "candidate evidence lacks both private materializations",
+        )
+    expected_root_identity = {
+        "reference": reference_root,
+        "candidate": candidate_root,
+    }
+    for label in ("reference", "candidate"):
+        observed = private_materialization.get(label)
+        observed_files = observed.get("files") if isinstance(observed, dict) else None
+        observed_directories = (
+            observed.get("directories") if isinstance(observed, dict) else None
+        )
+        if (
+            not isinstance(observed, dict)
+            or set(observed) != {"files", "directories"}
+            or not isinstance(observed_files, list)
+            or not isinstance(observed_directories, list)
+        ):
+            raise CanaryGuardError(
+                "candidate evidence has malformed private materialization",
+            )
+        root_identity = expected_root_identity[label]
+        assert isinstance(root_identity, dict)
+        actual_files: dict[str, dict[str, Any]] = {}
+        for item in observed_files:
+            path = item.get("path") if isinstance(item, dict) else None
+            expected = expected_files.get(path) if isinstance(path, str) else None
+            if (
+                not isinstance(item, dict)
+                or set(item) != {
+                    "path",
+                    "mode",
+                    "sha256",
+                    "bytes",
+                    "uid",
+                    "gid",
+                }
+                or expected is None
+                or item.get("mode") != expected["mode"]
+                or item.get("sha256") != expected["sha256"]
+                or item.get("bytes") != expected["bytes"]
+                or item.get("uid") != root_identity["uid"]
+                or item.get("gid") != root_identity["gid"]
+                or path in actual_files
+            ):
+                raise CanaryGuardError(
+                    "candidate private file materialization differs from "
+                    "the archive receipt",
+                )
+            actual_files[path] = item
+        actual_directories: dict[str, dict[str, Any]] = {}
+        for item in observed_directories:
+            path = item.get("path") if isinstance(item, dict) else None
+            expected = (
+                expected_directories.get(path) if isinstance(path, str) else None
+            )
+            if (
+                not isinstance(item, dict)
+                or set(item) != {"path", "mode", "uid", "gid"}
+                or expected is None
+                or item.get("mode") != expected["mode"]
+                or item.get("uid") != root_identity["uid"]
+                or item.get("gid") != root_identity["gid"]
+                or path in actual_directories
+            ):
+                raise CanaryGuardError(
+                    "candidate private directory materialization differs from "
+                    "the archive receipt",
+                )
+            actual_directories[path] = item
+        if (
+            set(actual_files) != set(expected_files)
+            or set(actual_directories) != set(expected_directories)
+        ):
+            raise CanaryGuardError(
+                "candidate private materialization path set is incomplete",
+            )
+
+
 def verify_candidate_evidence(
     payload: dict[str, Any],
     identity: dict[str, Any],
 ) -> str:
     if (
+        payload.get("evidenceSchemaVersion") != 2
+        or
         payload.get("status") != "verified"
         or payload.get("featureCommit") != identity["commit"]
         or payload.get("port") != identity["port"]
@@ -564,6 +883,8 @@ def verify_candidate_evidence(
         raise CanaryGuardError(
             "successful canary receipt has invalid candidate evidence",
         )
+    build_evidence = payload.get("buildEvidence")
+    _verify_candidate_build_evidence_v3(build_evidence, identity)
     health = payload.get("healthz")
     if not isinstance(health, dict) or health.get("status") != "ok":
         raise CanaryGuardError("candidate evidence lacks healthz status=ok")
@@ -592,6 +913,7 @@ def verify_candidate_evidence(
         "ProtectHome": "yes",
         "NoNewPrivileges": "yes",
         "Restart": "no",
+        "UMask": "0022",
         "MemoryHigh": str(3 * 1024 * 1024 * 1024),
         "MemoryMax": str(4 * 1024 * 1024 * 1024),
         "MemorySwapMax": "0",
@@ -763,6 +1085,41 @@ def verify_checkpoint_marker(
         )
 
 
+def verify_ordered_checkpoint_markers(
+    checkpoint: dict[str, Any],
+    identity: dict[str, Any],
+    *,
+    phases: tuple[str, ...],
+) -> None:
+    events = checkpoint.get("events")
+    if not isinstance(events, list):
+        raise CanaryGuardError("checkpoint marker events are malformed")
+    marker_indexes: list[int] = []
+    for phase in phases:
+        verify_checkpoint_marker(
+            checkpoint,
+            identity,
+            phase=phase,
+            status="completed",
+        )
+        marker_indexes.append(
+            next(
+                index
+                for index, event in enumerate(events)
+                if isinstance(event, dict)
+                and event.get("phase") == phase
+                and event.get("status") == "completed"
+            ),
+        )
+    if marker_indexes != sorted(marker_indexes) or (
+        len(set(marker_indexes)) != len(marker_indexes)
+    ):
+        raise CanaryGuardError(
+            "durable canary source, candidate and terminal markers "
+            "are out of order",
+        )
+
+
 def ensure_checkpoint_marker(
     *,
     path: Path,
@@ -895,27 +1252,19 @@ def verify_receipt_payload(
         phase=controller_terminal_phase,
         status="completed",
     )
-    events = checkpoint.get("events")
-    assert isinstance(events, list)
     ordered_phases = (
+        "source_anchored",
+        "source_verified",
+        "candidate_verified",
         marker_phase,
         controller_terminal_phase,
         "supervisor_reconciled",
     )
-    marker_indexes = [
-        next(
-            index
-            for index, event in enumerate(events)
-            if isinstance(event, dict)
-            and event.get("phase") == phase
-            and event.get("status") == "completed"
-        )
-        for phase in ordered_phases
-    ]
-    if marker_indexes != sorted(marker_indexes) or len(set(marker_indexes)) != 3:
-        raise CanaryGuardError(
-            "durable controller, cleanup and supervisor markers are out of order",
-        )
+    verify_ordered_checkpoint_markers(
+        checkpoint,
+        identity,
+        phases=ordered_phases,
+    )
     fault = payload.get("faultInjection")
     error = payload.get("error")
     if outcome == "passed" and (fault is not None or error is not None):
@@ -994,6 +1343,23 @@ def finalize_receipt(
             raise CanaryGuardError(
                 "successful canary receipt lacks supervisor reconciliation",
             )
+        marker_phase = (
+            "fault_observed"
+            if outcome == "expected_failure_verified"
+            else "controller_completed"
+        )
+        verify_ordered_checkpoint_markers(
+            checkpoint,
+            identity,
+            phases=(
+                "source_anchored",
+                "source_verified",
+                "candidate_verified",
+                marker_phase,
+                controller_terminal_phase,
+                "supervisor_reconciled",
+            ),
+        )
         if outcome == "passed" and (fault or error):
             raise CanaryGuardError(
                 "passed canary receipt cannot contain a fault or error",
@@ -1021,6 +1387,200 @@ def finalize_receipt(
     }
     verify_receipt_payload(payload, identity)
     _atomic_json(path, payload)
+
+
+def cleanup_launch_state(
+    *,
+    state_root: Path,
+    run_key: str,
+    expected_uid: int,
+    expected_gid: int,
+    anchor: Path = Path("/var/lib"),
+    expected_anchor_uid: int = 0,
+    expected_anchor_gid: int = 0,
+) -> None:
+    if (
+        not state_root.is_absolute()
+        or not anchor.is_absolute()
+        or state_root.parent != anchor
+        or state_root.name != "jato-canary"
+        or re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,127}", run_key)
+        is None
+        or min(
+            expected_uid,
+            expected_gid,
+            expected_anchor_uid,
+            expected_anchor_gid,
+        )
+        < 0
+    ):
+        raise CanaryGuardError(
+            "refusing non-canonical canary state cleanup",
+        )
+    directory_flags = (
+        os.O_RDONLY
+        | getattr(os, "O_DIRECTORY", 0)
+        | getattr(os, "O_NOFOLLOW", 0)
+    )
+    descriptors: list[int] = []
+
+    def verify_directory(
+        descriptor: int,
+        *,
+        label: str,
+        uid: int,
+        gid: int,
+        exact_mode: int | None,
+    ) -> None:
+        metadata = os.fstat(descriptor)
+        mode = stat.S_IMODE(metadata.st_mode)
+        if (
+            not stat.S_ISDIR(metadata.st_mode)
+            or metadata.st_uid != uid
+            or metadata.st_gid != gid
+            or (exact_mode is None and mode & 0o022)
+            or (exact_mode is not None and mode != exact_mode)
+        ):
+            raise CanaryGuardError(
+                "refusing cleanup through unsafe canary state directory: "
+                f"{label}",
+            )
+
+    def open_directory(
+        name: str,
+        *,
+        parent_fd: int | None,
+        label: str,
+        uid: int,
+        gid: int,
+        exact_mode: int | None,
+    ) -> int:
+        try:
+            descriptor = os.open(name, directory_flags, dir_fd=parent_fd)
+        except OSError as exc:
+            raise CanaryGuardError(
+                "refusing cleanup through unavailable or linked canary "
+                f"state directory: {label}",
+            ) from exc
+        descriptors.append(descriptor)
+        verify_directory(
+            descriptor,
+            label=label,
+            uid=uid,
+            gid=gid,
+            exact_mode=exact_mode,
+        )
+        return descriptor
+
+    try:
+        anchor_fd = open_directory(
+            str(anchor),
+            parent_fd=None,
+            label=str(anchor),
+            uid=expected_anchor_uid,
+            gid=expected_anchor_gid,
+            exact_mode=None,
+        )
+        root_fd = open_directory(
+            state_root.name,
+            parent_fd=anchor_fd,
+            label=str(state_root),
+            uid=expected_uid,
+            gid=expected_gid,
+            exact_mode=0o750,
+        )
+        state_directories = {
+            "": root_fd,
+            "checkpoints": open_directory(
+                "checkpoints",
+                parent_fd=root_fd,
+                label=str(state_root / "checkpoints"),
+                uid=expected_uid,
+                gid=expected_gid,
+                exact_mode=0o750,
+            ),
+            "receipts": open_directory(
+                "receipts",
+                parent_fd=root_fd,
+                label=str(state_root / "receipts"),
+                uid=expected_uid,
+                gid=expected_gid,
+                exact_mode=0o750,
+            ),
+            "evidence": open_directory(
+                "evidence",
+                parent_fd=root_fd,
+                label=str(state_root / "evidence"),
+                uid=expected_uid,
+                gid=expected_gid,
+                exact_mode=0o750,
+            ),
+            "snapshots": open_directory(
+                "snapshots",
+                parent_fd=root_fd,
+                label=str(state_root / "snapshots"),
+                uid=expected_uid,
+                gid=expected_gid,
+                exact_mode=0o750,
+            ),
+        }
+        cleanup_entries = (
+            ("checkpoints", f"{run_key}.json"),
+            ("receipts", f"{run_key}.json"),
+            ("evidence", f"{run_key}.json"),
+            ("snapshots", f"{run_key}.before.json"),
+            ("snapshots", f"{run_key}.after.json"),
+            ("", f".{run_key}.supervisor-invocation-id.source"),
+            ("", f".{run_key}.candidate-start-permit.source"),
+        )
+        for directory_name, entry_name in cleanup_entries:
+            directory_fd = state_directories[directory_name]
+            try:
+                metadata = os.stat(
+                    entry_name,
+                    dir_fd=directory_fd,
+                    follow_symlinks=False,
+                )
+            except FileNotFoundError:
+                continue
+            except OSError as exc:
+                raise CanaryGuardError(
+                    f"canary state residue cannot be inspected: {entry_name}",
+                ) from exc
+            if not (
+                stat.S_ISREG(metadata.st_mode)
+                or stat.S_ISLNK(metadata.st_mode)
+            ):
+                raise CanaryGuardError(
+                    "refusing to unlink non-file canary state residue: "
+                    f"{directory_name}/{entry_name}",
+                )
+            try:
+                os.unlink(entry_name, dir_fd=directory_fd)
+            except OSError as exc:
+                raise CanaryGuardError(
+                    f"canary state residue cannot be unlinked: {entry_name}",
+                ) from exc
+        for directory_name, entry_name in cleanup_entries:
+            try:
+                os.stat(
+                    entry_name,
+                    dir_fd=state_directories[directory_name],
+                    follow_symlinks=False,
+                )
+            except FileNotFoundError:
+                continue
+            except OSError as exc:
+                raise CanaryGuardError(
+                    f"canary state cleanup cannot be verified: {entry_name}",
+                ) from exc
+            raise CanaryGuardError(
+                "pre-supervisor canary state residue remained: "
+                f"{directory_name}/{entry_name}",
+            )
+    finally:
+        for descriptor in reversed(descriptors):
+            os.close(descriptor)
 
 
 def _identity(arguments: argparse.Namespace) -> dict[str, Any]:
@@ -1073,6 +1633,12 @@ def _build_parser() -> argparse.ArgumentParser:
 
     port_free = commands.add_parser("verify-port-free")
     port_free.add_argument("--port", type=int, required=True)
+
+    cleanup_state = commands.add_parser("cleanup-launch-state")
+    cleanup_state.add_argument("--state-root", type=Path, required=True)
+    cleanup_state.add_argument("--run-key", required=True)
+    cleanup_state.add_argument("--expected-uid", type=int, required=True)
+    cleanup_state.add_argument("--expected-gid", type=int, required=True)
 
     record = commands.add_parser("record")
     record.add_argument("--path", type=Path, required=True)
@@ -1140,6 +1706,17 @@ def main() -> int:
             )
         elif arguments.command == "verify-port-free":
             verify_port_free(arguments.port)
+        elif arguments.command == "cleanup-launch-state":
+            if arguments.state_root != Path("/var/lib/jato-canary"):
+                raise CanaryGuardError(
+                    "canary launch state cleanup root is not reviewed",
+                )
+            cleanup_launch_state(
+                state_root=arguments.state_root,
+                run_key=arguments.run_key,
+                expected_uid=arguments.expected_uid,
+                expected_gid=arguments.expected_gid,
+            )
         elif arguments.command == "record":
             record_checkpoint(
                 path=arguments.path,

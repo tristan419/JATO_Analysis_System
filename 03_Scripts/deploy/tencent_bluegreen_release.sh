@@ -667,6 +667,7 @@ finalize_runtime_seal() {
 }
 
 prepare_candidate_runtime() {
+  umask 0022
   if sudo -n test -e "$RELEASE_RUNTIME_SEAL_FILE" \
     || sudo -n test -L "$RELEASE_RUNTIME_SEAL_FILE"; then
     verify_final_runtime_seal || return 1
@@ -1010,6 +1011,7 @@ PY
 }
 
 build_candidate_runtime_locked() {
+  umask 0022
   require_environment
   assert_candidate_build_scope
   assert_inherited_production_lock
