@@ -432,6 +432,104 @@ def test_manifest_partition_limit_fails_before_path_enumeration(
     ]
 
 
+def test_partitioned_dataset_accepts_current_production_file_count(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    _write_release(tmp_path)
+    partition_names = [f"country={index:02d}" for index in range(21)]
+    parquet_file_count = 264
+    for index in range(parquet_file_count):
+        parquet_path = (
+            tmp_path
+            / "active"
+            / partition_names[index % len(partition_names)]
+            / f"part-{index:03d}.parquet"
+        )
+        parquet_path.parent.mkdir(parents=True, exist_ok=True)
+        parquet_path.touch()
+    _write_json(
+        tmp_path / "active" / "manifest.json",
+        {
+            "parquetFileCount": parquet_file_count,
+            "partitionDirectories": partition_names,
+        },
+    )
+    monkeypatch.setattr(
+        readiness_service,
+        "_read_parquet_shape",
+        lambda _path: (1, 1),
+    )
+
+    report = build_readiness_report(
+        _settings(tmp_path),
+        runtime_release=_runtime(),
+    )
+
+    assert report["status"] == "ready"
+    assert report["checks"]["activeDataset"] == {
+        "status": "ok",
+        "code": "partitioned_dataset_readable",
+        "source": "partitioned",
+        "partitionCount": 21,
+        "parquetFileCount": parquet_file_count,
+    }
+
+
+def test_default_parquet_file_limit_accepts_512_and_rejects_513(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    _write_release(tmp_path)
+    partition_name = "country=SE"
+    partition = tmp_path / "active" / partition_name
+    partition.mkdir(parents=True)
+    for index in range(512):
+        (partition / f"part-{index:03d}.parquet").touch()
+    manifest_path = tmp_path / "active" / "manifest.json"
+    _write_json(
+        manifest_path,
+        {
+            "parquetFileCount": 512,
+            "partitionDirectories": [partition_name],
+        },
+    )
+    monkeypatch.setattr(
+        readiness_service,
+        "_read_parquet_shape",
+        lambda _path: (1, 1),
+    )
+
+    accepted = build_readiness_report(
+        _settings(tmp_path),
+        runtime_release=_runtime(),
+    )
+
+    assert accepted["status"] == "ready"
+
+    (partition / "part-512.parquet").touch()
+    _write_json(
+        manifest_path,
+        {
+            "parquetFileCount": 513,
+            "partitionDirectories": [partition_name],
+        },
+    )
+
+    rejected = build_readiness_report(
+        _settings(tmp_path),
+        runtime_release=_runtime(),
+    )
+
+    assert rejected["status"] == "not_ready"
+    assert rejected["failures"] == [
+        {
+            "check": "activeDataset",
+            "code": "dataset_manifest_limit_exceeded",
+        }
+    ]
+
+
 def test_manifest_parquet_limit_fails_before_file_enumeration(
     tmp_path: Path,
     monkeypatch,

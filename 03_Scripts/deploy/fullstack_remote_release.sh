@@ -4,6 +4,12 @@ set -Eeuo pipefail
 REPO_DIR="/opt/JATO_Analysis_System-main"
 ENV_FILE="/etc/jato-fullstack/backend.env"
 RELEASE_BACKUP_ROOT="${BACKUP_ROOT:-/opt/backups/jato}"
+BLUEGREEN_STATE_ROOT="${BLUEGREEN_STATE_ROOT:-/var/lib/jato-release}"
+BLUEGREEN_RELEASES_ROOT="${BLUEGREEN_RELEASES_ROOT:-/opt/jato/releases}"
+ACTIVE_SLOT_FILE="${ACTIVE_SLOT_FILE:-$BLUEGREEN_STATE_ROOT/active-slot}"
+DEPLOYMENT_MARKER="${DEPLOYMENT_MARKER:-$BLUEGREEN_STATE_ROOT/deployment-maintenance}"
+SCHEDULER_STATE_FILE="${SCHEDULER_STATE_FILE:-$BLUEGREEN_STATE_ROOT/scheduler-state.tsv}"
+BLUEGREEN_SWITCH_UNIT="jato-bluegreen-production.service"
 LOCAL_NO_PROXY_HOSTS="localhost,127.0.0.1,::1"
 export no_proxy="${no_proxy:+$no_proxy,}$LOCAL_NO_PROXY_HOSTS"
 export NO_PROXY="${NO_PROXY:+$NO_PROXY,}$LOCAL_NO_PROXY_HOSTS"
@@ -67,7 +73,7 @@ if [[ "$DEPLOY_ARCHIVE_PATH" == *".."* ]]; then
   exit 1
 fi
 
-for required_command in flock realpath sha256sum stat tar python3; do
+for required_command in flock realpath sha256sum stat tar python3 systemd-run; do
   if ! command -v "$required_command" >/dev/null 2>&1; then
     echo "[ERROR] Missing required deployment command: $required_command"
     exit 1
@@ -94,39 +100,59 @@ for depth in range(1, len(relative.parts) + 1):
 PY
 
 DEPLOY_STATE_DIR="${DEPLOY_STATE_DIR:-$HOME/.local/state/jato-production-release}"
+if [[ "$DEPLOY_STATE_DIR" != /* ]] \
+  || [[ -L "$DEPLOY_STATE_DIR" ]] \
+  || [[ -e "$DEPLOY_STATE_DIR" && ! -d "$DEPLOY_STATE_DIR" ]]; then
+  echo "[ERROR] DEPLOY_STATE_DIR must be an absolute, non-symlink directory"
+  exit 1
+fi
+python3 -B - "$DEPLOY_STATE_DIR" <<'PY'
+import os
+from pathlib import Path
+import stat
+import sys
+
+path = Path(sys.argv[1])
+cursor = Path(path.anchor)
+for part in path.parts[1:]:
+    cursor /= part
+    try:
+        mode = os.lstat(cursor).st_mode
+    except FileNotFoundError:
+        continue
+    if stat.S_ISLNK(mode) or not stat.S_ISDIR(mode):
+        raise SystemExit(
+            f"[ERROR] DEPLOY_STATE_DIR ancestor is unsafe: {cursor}"
+        )
+PY
 mkdir -p "$DEPLOY_STATE_DIR/checkpoints/$DEPLOY_COMMIT_SHA" "$DEPLOY_STATE_DIR/journals/$DEPLOY_COMMIT_SHA"
 chmod 700 "$DEPLOY_STATE_DIR" "$DEPLOY_STATE_DIR/checkpoints" "$DEPLOY_STATE_DIR/journals" \
   "$DEPLOY_STATE_DIR/checkpoints/$DEPLOY_COMMIT_SHA" "$DEPLOY_STATE_DIR/journals/$DEPLOY_COMMIT_SHA"
 DEPLOY_LOCK_PATH="$DEPLOY_STATE_DIR/production-deploy.lock"
+if [[ -L "$DEPLOY_LOCK_PATH" ]] \
+  || [[ -e "$DEPLOY_LOCK_PATH" && ! -f "$DEPLOY_LOCK_PATH" ]]; then
+  echo "[ERROR] Production deploy lock must be a regular non-symlink file"
+  exit 1
+fi
 exec 9>"$DEPLOY_LOCK_PATH"
 if ! flock -w 300 9; then
   echo "[ERROR] Another production deployment holds the global server-side lock"
   exit 1
 fi
+DEPLOY_LOCK_HELD=1
+DEPLOY_LOCK_HOLDER_PID="$$"
+DEPLOY_LOCK_FD=9
 
 CHECKPOINT_FILE="$DEPLOY_STATE_DIR/checkpoints/$DEPLOY_COMMIT_SHA/${DEPLOY_ARCHIVE_SHA256}.json"
 CHECKPOINT_JOURNAL="$DEPLOY_STATE_DIR/journals/$DEPLOY_COMMIT_SHA/${DEPLOY_ARCHIVE_SHA256}.jsonl"
-PREVIOUS_RELEASE_METADATA_PATH="${CHECKPOINT_FILE%.json}.previous-release.json"
 RELEASE_WORKTREE="$(mktemp -d "/tmp/JATO_deploy_work_${DEPLOY_COMMIT_SHA}.XXXXXX")"
-DEPLOY_SOURCE="github_actions_resumable_ssh_archive"
-PRODUCTION_RELEASE_WORKFLOW="true"
 PREBUILT_FRONTEND_DIR="$REPO_DIR/.release-staging/frontend_${DEPLOY_COMMIT_SHA}_${DEPLOY_ARCHIVE_SHA256}.staged"
-PREVIOUS_DEPLOY_RELEASE_FILE=""
-RUNTIME_PRESERVE_DIR=""
-PRODUCTION_MUTATION_STARTED="false"
-REMOTE_DEPLOY_SUCCEEDED="false"
-RUNTIME_PRESERVE_PATHS="
-03_Scripts/diagnostics/artifacts
-03_Scripts/logs
-06_AppPlatform/frontend/dist
-hermes/reports
-"
 RELEASE_REPLACEMENT_PATHS="03_Scripts 06_AppPlatform 07_ScrapingToolkit hermes"
 
 remove_transient_release_paths() {
   local transient_path=""
 
-  for transient_path in "$RELEASE_WORKTREE" "$RUNTIME_PRESERVE_DIR" "$PREBUILT_FRONTEND_DIR"; do
+  for transient_path in "$RELEASE_WORKTREE" "$PREBUILT_FRONTEND_DIR"; do
     if [[ -z "$transient_path" || ! -e "$transient_path" ]]; then
       continue
     fi
@@ -138,19 +164,7 @@ remove_transient_release_paths() {
 }
 
 cleanup_release_staging() {
-  if [[ "$REMOTE_DEPLOY_SUCCEEDED" == "true" ]]; then
-    remove_transient_release_paths
-    return
-  fi
-  if [[ "$PRODUCTION_MUTATION_STARTED" == "false" ]]; then
-    remove_transient_release_paths
-  else
-    for recovery_path in "$RELEASE_WORKTREE" "$RUNTIME_PRESERVE_DIR" "$PREBUILT_FRONTEND_DIR"; do
-      if [[ -n "$recovery_path" && -e "$recovery_path" ]]; then
-        echo "[WARN] Retained deployment recovery path: $recovery_path" >&2
-      fi
-    done
-  fi
+  remove_transient_release_paths
   # The verified content-addressed archive is intentionally retained.  A later
   # workflow checkpoint owns cleanup after www/intl parity reaches complete.
 }
@@ -229,6 +243,11 @@ required_release_files=(
   03_Scripts/deploy/release_evidence.py
   03_Scripts/deploy/prepare_backend_release.py
   03_Scripts/deploy/verify_backend_readiness.py
+  03_Scripts/deploy/jato_quiescence_gate.py
+  03_Scripts/deploy/jato_release_storage_guard.py
+  03_Scripts/deploy/tencent_bluegreen_release.sh
+  03_Scripts/deploy/verify_release_source_seal.py
+  03_Scripts/deploy/lib/production_mutation_lock.sh
   03_Scripts/deploy/lib/release_paths.sh
   03_Scripts/deploy_fullstack_server.sh
   03_Scripts/ops/deploy_fullstack_server.sh
@@ -238,6 +257,8 @@ required_release_files=(
   03_Scripts/deploy/systemd/jato-country-news.env.example
   03_Scripts/deploy/systemd/jato-msrp.env.example
   03_Scripts/deploy/systemd/jato-voc.env.example
+  03_Scripts/deploy/systemd/jato-fullstack-backend-slot.env.example
+  03_Scripts/deploy/systemd/jato-fullstack-backend@.service
   03_Scripts/deploy/systemd/jato-country-news-sync.service
   03_Scripts/deploy/systemd/jato-country-news-sync.timer
   03_Scripts/deploy/systemd/jato-country-news-sync-b.service
@@ -316,7 +337,6 @@ FRONTEND_RELEASE_DIR="$RELEASE_WORKTREE/hermes/frontend_release"
 FRONTEND_RELEASE_HELPER="$RELEASE_WORKTREE/03_Scripts/deploy/frontend_release_artifact.py"
 CHECKPOINT_HELPER="$RELEASE_WORKTREE/03_Scripts/deploy/release_checkpoint.py"
 EVIDENCE_HELPER="$RELEASE_WORKTREE/03_Scripts/deploy/release_evidence.py"
-BACKEND_RELEASE_HELPER="$RELEASE_WORKTREE/03_Scripts/deploy/prepare_backend_release.py"
 BACKEND_READINESS_HELPER="$RELEASE_WORKTREE/03_Scripts/deploy/verify_backend_readiness.py"
 rm -rf "$PREBUILT_FRONTEND_DIR"
 mkdir -p "$(dirname "$PREBUILT_FRONTEND_DIR")"
@@ -394,19 +414,35 @@ release_evidence_matches() {
 
 verify_backend_readiness() {
   local timeout_seconds="${1:-10}"
+  local backend_port="${2:-8000}"
 
   python3 -B "$BACKEND_READINESS_HELPER" \
-    --url "http://127.0.0.1:8000/readyz" \
+    --url "http://127.0.0.1:${backend_port}/readyz" \
     --expected-commit "$DEPLOY_COMMIT_SHA" \
     --timeout-seconds "$timeout_seconds"
 }
 
 local_release_matches() {
-  curl --noproxy '*' -fsS --max-time 10 http://127.0.0.1:8000/healthz >/dev/null 2>&1 \
-    && verify_backend_readiness 10 \
-    && grep -Fxq 'deploy_exit_code=0' "$REPO_DIR/06_AppPlatform/frontend/dist/_deploy_status.txt" \
+  local active_port="8000"
+  local active_root="$REPO_DIR"
+  local expected_root="$BLUEGREEN_RELEASES_ROOT/$DEPLOY_COMMIT_SHA/$DEPLOY_ARCHIVE_SHA256"
+  if sudo -n test -f "$ACTIVE_SLOT_FILE" 2>/dev/null; then
+    active_port="$(sudo -n cat "$ACTIVE_SLOT_FILE")"
+  fi
+  if sudo -n test -L /opt/jato/active 2>/dev/null; then
+    active_root="$(sudo -n realpath /opt/jato/active)"
+  fi
+  [[ "$active_root" == "$expected_root" ]] \
+    && verified_active_source_seal_matches "$active_root" \
+    && verified_active_runtime_seal_matches "$active_root" \
+    && [[ "$active_port" == "8000" || "$active_port" == "8001" ]] \
+    && curl --noproxy '*' -fsS --max-time 10 \
+      "http://127.0.0.1:${active_port}/healthz" >/dev/null 2>&1 \
+    && verify_backend_readiness 10 "$active_port" \
+    && grep -Fxq 'deploy_exit_code=0' \
+      "$active_root/06_AppPlatform/frontend/dist/_deploy_status.txt" \
     && release_evidence_matches \
-    && python3 - "$REPO_DIR/hermes/deploy_release.json" "$DEPLOY_COMMIT_SHA" \
+    && python3 - "$active_root/hermes/deploy_release.json" "$DEPLOY_COMMIT_SHA" \
       "$FRONTEND_ARTIFACT_IDENTITY" "$FRONTEND_ARTIFACT_CHECKSUM" <<'PY'
 import json
 import pathlib
@@ -424,47 +460,102 @@ if commit != sys.argv[2] or artifact.get("id") != sys.argv[3] or artifact.get("c
 PY
 }
 
+verified_active_source_seal_matches() {
+  local active_root="$1"
+  local expected_seal=""
+  local helper="$RELEASE_WORKTREE/03_Scripts/deploy/verify_release_source_seal.py"
+  local stored_seal="$active_root/.jato-source-seal.json"
+  expected_seal="$(mktemp)"
+  if ! python3 -B "$helper" build \
+    --root "$RELEASE_WORKTREE" \
+    --output "$expected_seal" \
+    || sudo -n test -L "$stored_seal" \
+    || ! sudo -n test -f "$stored_seal" \
+    || ! sudo -n cmp -s "$expected_seal" "$stored_seal" \
+    || ! python3 -B "$helper" verify \
+      --root "$active_root" \
+      --manifest "$expected_seal"; then
+    rm -f "$expected_seal"
+    return 1
+  fi
+  rm -f "$expected_seal"
+}
+
+verified_active_runtime_seal_matches() {
+  local active_root="$1"
+  local helper="$RELEASE_WORKTREE/03_Scripts/deploy/verify_release_source_seal.py"
+  local stored_seal="$active_root/.jato-runtime-seal.json"
+  if sudo -n test -L "$stored_seal" \
+    || ! sudo -n test -f "$stored_seal" \
+    || ! python3 -B "$helper" verify \
+      --profile runtime \
+      --root "$active_root" \
+      --manifest "$stored_seal" \
+      --commit "$DEPLOY_COMMIT_SHA" \
+      --archive-sha256 "$DEPLOY_ARCHIVE_SHA256" \
+      --frontend-identity "$FRONTEND_ARTIFACT_IDENTITY" \
+      --frontend-checksum "$FRONTEND_ARTIFACT_CHECKSUM"; then
+    return 1
+  fi
+}
+
+bluegreen_reconciliation_pending() {
+  local active_state=""
+  local load_state=""
+  if sudo -n test -e "$DEPLOYMENT_MARKER" \
+    || sudo -n test -L "$DEPLOYMENT_MARKER" \
+    || sudo -n test -e "$SCHEDULER_STATE_FILE" \
+    || sudo -n test -L "$SCHEDULER_STATE_FILE"; then
+    return 0
+  fi
+  if ! active_state="$(
+    systemctl show "$BLUEGREEN_SWITCH_UNIT" -p ActiveState --value 2>/dev/null
+  )" \
+    || ! load_state="$(
+      systemctl show "$BLUEGREEN_SWITCH_UNIT" -p LoadState --value 2>/dev/null
+    )"; then
+    return 0
+  fi
+  if [[ "$load_state" != "not-found" ]] \
+    || [[ -n "$active_state" && "$active_state" != "inactive" ]]; then
+    return 0
+  fi
+  return 1
+}
+
+bluegreen_local_noop_allowed() {
+  local_release_matches && ! bluegreen_reconciliation_pending
+}
+
 if [[ "$CHECKPOINT_DECISION" == "already-complete" ]]; then
-  if local_release_matches; then
+  if bluegreen_local_noop_allowed; then
     echo "[INFO] Exact completed release is already healthy; remote deploy is a no-op"
-    REMOTE_DEPLOY_SUCCEEDED="true"
     exit 0
   fi
-  echo "[ERROR] Complete checkpoint exists but local health/provenance does not match; refusing mutation"
-  exit 1
+  if local_release_matches; then
+    echo "[WARN] Exact completed release is healthy but durable blue/green reconciliation is pending"
+  else
+    echo "[ERROR] Complete checkpoint exists but local health/provenance does not match; refusing mutation"
+    exit 1
+  fi
+fi
+if [[ "$CHECKPOINT_DECISION" == "already-rolled-back" ]]; then
+  if bluegreen_reconciliation_pending; then
+    echo "[WARN] Rolled-back release still has durable blue/green state to reconcile"
+  else
+    echo "[ERROR] This exact release was already rolled back; create a new reviewed release instead of replaying it"
+    exit 1
+  fi
+fi
+if [[ "$CHECKPOINT_PHASE" == "backend_healthy" && "$CHECKPOINT_STATUS" == "completed" ]] \
+  && bluegreen_local_noop_allowed; then
+  echo "[INFO] Exact server release is already healthy; remote deploy is a no-op"
+  exit 0
 fi
 if [[ "$CHECKPOINT_PHASE" == "backend_healthy" && "$CHECKPOINT_STATUS" == "completed" ]] \
   && local_release_matches; then
-  echo "[INFO] Exact server release is already healthy; remote deploy is a no-op"
-  REMOTE_DEPLOY_SUCCEEDED="true"
-  exit 0
+  echo "[WARN] Exact server release is healthy but durable blue/green reconciliation is pending"
 fi
-
-remote_checkpoint_phase_rank() {
-  case "$1" in
-    packaged) echo 0 ;;
-    transport_verified) echo 1 ;;
-    prepared) echo 2 ;;
-    source_install_started) echo 3 ;;
-    source_installed) echo 4 ;;
-    backup_verified) echo 5 ;;
-    migration_started) echo 6 ;;
-    migrated) echo 7 ;;
-    switch_started) echo 8 ;;
-    switched) echo 9 ;;
-    backend_healthy) echo 10 ;;
-    www_verified) echo 11 ;;
-    intl_deploy_started) echo 12 ;;
-    intl_verified) echo 13 ;;
-    parity_verified) echo 14 ;;
-    complete) echo 15 ;;
-    *) echo -1 ;;
-  esac
-}
-
-remote_checkpoint_at_least() {
-  [[ "$(remote_checkpoint_phase_rank "$CHECKPOINT_PHASE")" -ge "$(remote_checkpoint_phase_rank "$1")" ]]
-}
 
 if [[ -z "$CHECKPOINT_PHASE" || "$CHECKPOINT_PHASE" == "prepared" ]]; then
   python3 "$CHECKPOINT_HELPER" write \
@@ -481,496 +572,23 @@ fi
 
 echo "[INFO] Release archive and materialized frontend passed all pre-mutation checks"
 
-if [[ -e "$PREVIOUS_RELEASE_METADATA_PATH" ]]; then
-  if [[ ! -f "$PREVIOUS_RELEASE_METADATA_PATH" || -L "$PREVIOUS_RELEASE_METADATA_PATH" ]]; then
-    echo "[ERROR] Durable previous release metadata is unsafe"
-    exit 1
-  fi
-  PREVIOUS_DEPLOY_RELEASE_FILE="$PREVIOUS_RELEASE_METADATA_PATH"
-fi
-
-if remote_checkpoint_at_least source_installed; then
-  echo "[INFO] Exact release source is already installed; skipping live tree replacement"
-else
-  RUNTIME_PRESERVE_DIR="$(mktemp -d /tmp/JATO_deploy_runtime.XXXXXX)"
-  if [[ -z "$PREVIOUS_DEPLOY_RELEASE_FILE" && -e "$REPO_DIR/hermes/deploy_release.json" ]]; then
-    if [[ ! -f "$REPO_DIR/hermes/deploy_release.json" || -L "$REPO_DIR/hermes/deploy_release.json" ]]; then
-      echo "[ERROR] Existing deploy release metadata is unsafe"
-      exit 1
-    fi
-    previous_metadata_temp="${PREVIOUS_RELEASE_METADATA_PATH}.tmp.$$"
-    cp "$REPO_DIR/hermes/deploy_release.json" "$previous_metadata_temp"
-    chmod 600 "$previous_metadata_temp"
-    mv -f "$previous_metadata_temp" "$PREVIOUS_RELEASE_METADATA_PATH"
-    PREVIOUS_DEPLOY_RELEASE_FILE="$PREVIOUS_RELEASE_METADATA_PATH"
-    echo "[INFO] Preserved previous actual release identity"
-  fi
-  for runtime_path in $RUNTIME_PRESERVE_PATHS; do
-    if [[ -e "$REPO_DIR/$runtime_path" ]]; then
-      mkdir -p "$RUNTIME_PRESERVE_DIR/$(dirname "$runtime_path")"
-      cp -a "$REPO_DIR/$runtime_path" "$RUNTIME_PRESERVE_DIR/$runtime_path"
-      echo "[INFO] Preserved runtime path: $runtime_path"
-    fi
-  done
-
-  # Production mutation boundary: every archive, path, helper, provenance,
-  # workbook/evidence, and materialized frontend check above passed first.
-  python3 "$CHECKPOINT_HELPER" write \
-    --checkpoint "$CHECKPOINT_FILE" --journal "$CHECKPOINT_JOURNAL" \
-    "${checkpoint_identity_args[@]}" \
-    --phase source_install_started --status in_progress --retry-class rollback_required \
-    --message "live source installation started; interruption requires rollback inspection"
-  CHECKPOINT_PHASE="source_install_started"
-  CHECKPOINT_STATUS="in_progress"
-  PRODUCTION_MUTATION_STARTED="true"
-  sudo mkdir -p "$REPO_DIR"
-  sudo chown -R "$USER":"$USER" "$REPO_DIR"
-  for release_path in 03_Scripts 06_AppPlatform 07_ScrapingToolkit hermes; do
-    if [[ -e "$RELEASE_WORKTREE/$release_path" ]]; then
-      rm -rf "$REPO_DIR/$release_path"
-      (cd "$RELEASE_WORKTREE" && tar cf - "$release_path") | (cd "$REPO_DIR" && tar xf -)
-    fi
-  done
-  mkdir -p "$REPO_DIR/01_RAW_DATA"
-  cp -f "$RELEASE_WORKTREE/01_RAW_DATA/VOC_Nordic_SUV_Users_100.xlsx" \
-    "$REPO_DIR/01_RAW_DATA/VOC_Nordic_SUV_Users_100.xlsx"
-  for release_file in .nvmrc requirements.txt CODEX.md; do
-    if [[ -f "$RELEASE_WORKTREE/$release_file" ]]; then
-      cp -f "$RELEASE_WORKTREE/$release_file" "$REPO_DIR/$release_file"
-    fi
-  done
-  for runtime_path in $RUNTIME_PRESERVE_PATHS; do
-    if [[ -e "$RUNTIME_PRESERVE_DIR/$runtime_path" ]]; then
-      if [[ -d "$RUNTIME_PRESERVE_DIR/$runtime_path" && -d "$REPO_DIR/$runtime_path" ]]; then
-        (cd "$RUNTIME_PRESERVE_DIR" && tar cf - "$runtime_path") | (cd "$REPO_DIR" && tar xf -)
-        echo "[INFO] Merged runtime path: $runtime_path"
-      else
-        rm -rf "$REPO_DIR/$runtime_path"
-        mkdir -p "$(dirname "$REPO_DIR/$runtime_path")"
-        cp -a "$RUNTIME_PRESERVE_DIR/$runtime_path" "$REPO_DIR/$runtime_path"
-        echo "[INFO] Restored runtime path: $runtime_path"
-      fi
-    fi
-  done
-  for public_parent in "$REPO_DIR" "$REPO_DIR/06_AppPlatform" "$REPO_DIR/06_AppPlatform/frontend"; do
-    if [[ ! -d "$public_parent" ]]; then
-      echo "[ERROR] Frontend parent directory is missing after source installation: $public_parent"
-      exit 1
-    fi
-    chmod a+x "$public_parent"
-  done
-  python3 "$REPO_DIR/03_Scripts/deploy/release_checkpoint.py" write \
-    --checkpoint "$CHECKPOINT_FILE" --journal "$CHECKPOINT_JOURNAL" \
-    "${checkpoint_identity_args[@]}" \
-    --phase source_installed --status completed --retry-class automatic \
-    --message "live source tree and preserved runtime paths installed"
-  CHECKPOINT_PHASE="source_installed"
-  CHECKPOINT_STATUS="completed"
-fi
-
-echo "[INFO] Refreshing local mihomo subscription before backend restart..."
-mkdir -p "$REPO_DIR/hermes/reports"
-MIHOMO_REFRESH_LOG="$REPO_DIR/hermes/reports/mihomo_refresh_status.txt"
-PACKAGED_MIHOMO_CONFIG="$REPO_DIR/hermes/runtime/mihomo/config.yaml"
-{
-  date -u
-  if [ -n "${MIHOMO_SUB_URL:-}" ]; then
-    echo "[mihomo-sub] MIHOMO_SUB_URL configured from deploy environment"
-  else
-    echo "[mihomo-sub] MIHOMO_SUB_URL not configured; trying local protected file and 0dcloud discovery"
-  fi
-  echo "[mihomo-sub] MIHOMO_SUB_URL_FILE=${MIHOMO_SUB_URL_FILE:-/etc/mihomo/subscription_url}"
-  echo "[mihomo-sub] MIHOMO_DB_PATH=${MIHOMO_DB_PATH:-auto}"
-  if [ -r "$PACKAGED_MIHOMO_CONFIG" ]; then
-    echo "[mihomo-sub] Using packaged mihomo config from GitHub runner"
-    MIHOMO_LOCAL=true MIHOMO_SOURCE_CONFIG="$PACKAGED_MIHOMO_CONFIG" \
-      bash "$REPO_DIR/03_Scripts/deploy/update_mihomo_subscription.sh"
-  else
-    MIHOMO_LOCAL=true bash "$REPO_DIR/03_Scripts/deploy/update_mihomo_subscription.sh"
-  fi
-  rm -f "$PACKAGED_MIHOMO_CONFIG"
-} > "$MIHOMO_REFRESH_LOG" 2>&1 \
-  || echo "[WARN] Local mihomo refresh failed; continuing with existing proxy config" >> "$MIHOMO_REFRESH_LOG"
-
+# Production releases use the independent 8000/8001 Tencent blue/green
+# controller.  It owns all source materialization, candidate verification,
+# JATO quiescence, Nginx switching, rollback, and final slot promotion.  This
+# outer verifier never mutates the live source tree or publishes target health.
 export \
-  REPO_DIR DEPLOY_SOURCE PREBUILT_FRONTEND_DIR PRODUCTION_RELEASE_WORKFLOW \
-  DEPLOY_REPOSITORY DEPLOY_ARCHIVE_PATH DEPLOY_ARCHIVE_BYTES DEPLOY_ARCHIVE_SHA256 \
-  CHECKPOINT_FILE CHECKPOINT_JOURNAL
-python3 - <<'PY'
-import datetime as _dt
-import json
-import os
-import pathlib
-import tempfile
-
-root = pathlib.Path(os.environ["REPO_DIR"])
-commit_sha = os.environ.get("DEPLOY_COMMIT_SHA", "")
-out = root / "hermes" / "deploy_release.json"
-try:
-    payload = json.loads(out.read_text(encoding="utf-8"))
-except (FileNotFoundError, json.JSONDecodeError, OSError):
-    payload = {}
-payload.update({
-    "releaseId": os.environ.get("DEPLOY_RELEASE_ID", ""),
-    "service": "jato-fullstack-backend",
-    "environment": "production",
-    "expectedCommitSha": commit_sha,
-    "expectedShortSha": os.environ.get("DEPLOY_SHORT_SHA") or commit_sha[:8],
-    "actualCommitSha": "",
-    "actualShortSha": "",
-    "commitSha": "",
-    "shortSha": "",
-    "branch": os.environ.get("DEPLOY_BRANCH", "main"),
-    "repository": os.environ.get("DEPLOY_REPOSITORY", "tristan419/JATO_Analysis_System"),
-    "workflow": os.environ.get("DEPLOY_WORKFLOW", "production-release"),
-    "workflowRunId": os.environ.get("DEPLOY_RUN_ID", ""),
-    "workflowRunAttempt": os.environ.get("DEPLOY_RUN_ATTEMPT", ""),
-    "deployMethod": "github_actions",
-    "packagedAt": _dt.datetime.now(_dt.UTC).isoformat(),
-    "source": os.environ.get("DEPLOY_SOURCE", "github_actions_archive"),
-    "releaseTransport": {
-        "kind": "resumable-ssh",
-        "archivePath": os.environ.get("DEPLOY_ARCHIVE_PATH", ""),
-        "archiveBytes": int(os.environ.get("DEPLOY_ARCHIVE_BYTES", "0")),
-        "archiveSha256": os.environ.get("DEPLOY_ARCHIVE_SHA256", ""),
-    },
-})
-if not isinstance(payload.get("frontendRelease"), dict):
-    raise SystemExit("[ERROR] deploy_release.json is missing frontendRelease provenance")
-out.parent.mkdir(parents=True, exist_ok=True)
-descriptor, temporary_name = tempfile.mkstemp(
-    prefix=f".{out.name}.",
-    suffix=".tmp",
-    dir=out.parent,
-)
-try:
-    os.fchmod(descriptor, out.stat().st_mode & 0o777 if out.exists() else 0o644)
-    with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
-        json.dump(payload, handle, indent=2, sort_keys=True)
-        handle.write("\n")
-        handle.flush()
-        os.fsync(handle.fileno())
-    os.replace(temporary_name, out)
-finally:
-    try:
-        os.unlink(temporary_name)
-    except FileNotFoundError:
-        pass
-print(
-    f"[INFO] Prepared {out.relative_to(root)} "
-    f"for expected release {payload['expectedShortSha']}"
-)
-PY
-
-install_backend_env_atomically() {
-  local candidate=""
-  local privileged_candidate=""
-
-  if ! sudo -n test -f "$ENV_FILE"; then
-    echo "[ERROR] Backend env file is required before managed settings can be updated: $ENV_FILE"
-    return 1
-  fi
-  if [[ -n "${GOOGLE_CLIENT_ID:-}" && -z "${GOOGLE_CLIENT_SECRET:-}" ]]; then
-    echo "[ERROR] GOOGLE_CLIENT_SECRET is required when GOOGLE_CLIENT_ID is configured"
-    return 1
-  fi
-
-  GOOGLE_OAUTH_PROXY_URL="${GOOGLE_OAUTH_PROXY_URL:-http://127.0.0.1:7897}"
-  export GOOGLE_OAUTH_PROXY_URL
-  candidate="$(mktemp /tmp/jato-backend-env.XXXXXX)"
-  privileged_candidate="${ENV_FILE}.candidate.${DEPLOY_RUN_ID}.${DEPLOY_RUN_ATTEMPT}"
-  sudo -n cat "$ENV_FILE" > "$candidate"
-  python3 - "$candidate" <<'PY'
-import os
-from pathlib import Path
-import re
-import shlex
-import sys
-
-path = Path(sys.argv[1])
-deepseek = bool(os.environ.get("DEEPSEEK_API_KEY"))
-google = bool(os.environ.get("GOOGLE_CLIENT_ID"))
-managed = set()
-if deepseek:
-    managed.update({
-        "DEEPSEEK_API_KEY", "HERMES_SYNC_TOKEN",
-        "APP_COUNTRY_CHAT_DEEPSEEK_TIMEOUT_SECONDS",
-        "APP_COUNTRY_CHAT_MODEL_OPTIONS",
-    })
-if google:
-    managed.update({
-        "APP_GOOGLE_CLIENT_ID", "APP_GOOGLE_CLIENT_SECRET",
-        "APP_GOOGLE_REDIRECT_URI", "APP_FRONTEND_ORIGIN",
-        "APP_FRONTEND_ORIGINS", "APP_CORS_ORIGINS",
-        "APP_GOOGLE_OAUTH_PROXY_URL", "APP_GOOGLE_OAUTH_RELAY_URL",
-        "APP_GOOGLE_OAUTH_RELAY_TOKEN", "APP_GOOGLE_OAUTH_TIMEOUT_SECONDS",
-        "APP_GROUPED_TIME_SERIES_PERSISTENT_CACHE_ENABLED",
-        "APP_GROUPED_TIME_SERIES_PREWARM_ENABLED",
-        "APP_GROUPED_TIME_SERIES_PREWARM_GROUP_BY",
-        "APP_GROUPED_TIME_SERIES_PREWARM_GRAINS",
-        "APP_GROUPED_TIME_SERIES_PREWARM_SCOPES",
-        "APP_GROUPED_TIME_SERIES_PREWARM_FILTERS_JSON",
-        "APP_ADVANCED_ANALYSIS_WARMUP_ENABLED",
-        "APP_ADVANCED_ANALYSIS_WARMUP_COUNTRIES",
-        "APP_ADVANCED_ANALYSIS_WARMUP_SCOPES",
-        "APP_ADVANCED_ANALYSIS_WARMUP_SALES_MODES",
-        "APP_ADVANCED_ANALYSIS_WARMUP_TOP_N",
-        "APP_ADVANCED_ANALYSIS_WARMUP_PROFILE_OPTIONS",
-        "APP_ADVANCED_ANALYSIS_WARMUP_COMPETITOR_SET",
-    })
-lines = []
-for line in path.read_text(encoding="utf-8").splitlines():
-    match = re.match(r"^([A-Za-z_][A-Za-z0-9_]*)=", line)
-    if not match or match.group(1) not in managed:
-        lines.append(line)
-
-def add(key: str, value: str) -> None:
-    lines.append(f"{key}={shlex.quote(value)}")
-
-if deepseek:
-    add("DEEPSEEK_API_KEY", os.environ["DEEPSEEK_API_KEY"])
-    add("HERMES_SYNC_TOKEN", os.environ.get("HERMES_SYNC_TOKEN", ""))
-    add("APP_COUNTRY_CHAT_DEEPSEEK_TIMEOUT_SECONDS", "60")
-    add("APP_COUNTRY_CHAT_MODEL_OPTIONS", "deepseek:deepseek-chat")
-if google:
-    values = {
-        "APP_GOOGLE_CLIENT_ID": os.environ["GOOGLE_CLIENT_ID"],
-        "APP_GOOGLE_CLIENT_SECRET": os.environ["GOOGLE_CLIENT_SECRET"],
-        "APP_GOOGLE_REDIRECT_URI": "https://www.ojeur.cloud/v1/auth/google/callback",
-        "APP_FRONTEND_ORIGIN": "https://www.ojeur.cloud",
-        "APP_FRONTEND_ORIGINS": "https://www.ojeur.cloud,https://intl.ojeur.cloud",
-        "APP_CORS_ORIGINS": "https://www.ojeur.cloud,https://intl.ojeur.cloud,http://localhost:5173,http://127.0.0.1:5173,http://localhost:3000",
-        "APP_GOOGLE_OAUTH_PROXY_URL": os.environ["GOOGLE_OAUTH_PROXY_URL"],
-        "APP_GOOGLE_OAUTH_TIMEOUT_SECONDS": "30",
-        "APP_GROUPED_TIME_SERIES_PERSISTENT_CACHE_ENABLED": "true",
-        "APP_GROUPED_TIME_SERIES_PREWARM_ENABLED": "true",
-        "APP_GROUPED_TIME_SERIES_PREWARM_GROUP_BY": "动总规整,国家",
-        "APP_GROUPED_TIME_SERIES_PREWARM_GRAINS": "month,year",
-        "APP_GROUPED_TIME_SERIES_PREWARM_SCOPES": "viewer,order_filler,editor,admin",
-        "APP_GROUPED_TIME_SERIES_PREWARM_FILTERS_JSON": '[{"国家":["丹麦","克罗地亚","匈牙利","奥地利","希腊","德国","意大利","挪威","捷克","斯洛伐克","斯洛文尼亚","比利时","法国","波兰","瑞典","瑞士","罗马尼亚","芬兰","荷兰","葡萄牙","西班牙"],"动总规整":["ICE","HEV","BEV","MHEV","PHEV"]}]',
-        "APP_ADVANCED_ANALYSIS_WARMUP_ENABLED": "true",
-        "APP_ADVANCED_ANALYSIS_WARMUP_COUNTRIES": "瑞典",
-        "APP_ADVANCED_ANALYSIS_WARMUP_SCOPES": "viewer,order_filler,editor,admin",
-        "APP_ADVANCED_ANALYSIS_WARMUP_SALES_MODES": "month",
-        "APP_ADVANCED_ANALYSIS_WARMUP_TOP_N": "15",
-        "APP_ADVANCED_ANALYSIS_WARMUP_PROFILE_OPTIONS": "true",
-        "APP_ADVANCED_ANALYSIS_WARMUP_COMPETITOR_SET": "false",
-    }
-    if os.environ.get("GOOGLE_OAUTH_RELAY_URL"):
-        values["APP_GOOGLE_OAUTH_RELAY_URL"] = os.environ["GOOGLE_OAUTH_RELAY_URL"]
-    if os.environ.get("GOOGLE_OAUTH_RELAY_TOKEN"):
-        values["APP_GOOGLE_OAUTH_RELAY_TOKEN"] = os.environ["GOOGLE_OAUTH_RELAY_TOKEN"]
-    for key, value in values.items():
-        add(key, value)
-path.write_text("\n".join(lines).rstrip() + "\n", encoding="utf-8")
-PY
-  python3 -B "$BACKEND_RELEASE_HELPER" update-env \
-    --path "$candidate" \
-    --commit "$DEPLOY_COMMIT_SHA"
-  bash -n "$candidate"
-  sudo -n install -D -m 600 "$candidate" "$privileged_candidate"
-  sudo -n bash -n "$privileged_candidate"
-  sudo -n mv -f "$privileged_candidate" "$ENV_FILE"
-  rm -f "$candidate"
-  echo "[INFO] Backend env validated and atomically installed"
-}
-
-install_backend_env_atomically
-
-if [[ -n "${GOOGLE_CLIENT_ID:-}" ]]; then
-  if [ -n "${GOOGLE_OAUTH_RELAY_URL:-}" ]; then
-    echo "[INFO] Google OAuth relay check via ${GOOGLE_OAUTH_RELAY_URL}"
-    curl -fsS --max-time 20 "${GOOGLE_OAUTH_RELAY_URL%/}/healthz" || true
-  else
-    check_google_oauth_proxy() {
-      local label="$1"
-      local proxy_url="${GOOGLE_OAUTH_PROXY_URL:-http://127.0.0.1:7897}"
-      echo "[INFO] Google OAuth proxy check (${label}) via ${proxy_url}"
-      curl -I --max-time 20 --proxy "$proxy_url" https://oauth2.googleapis.com/token
-    }
-    if ! check_google_oauth_proxy "before-mihomo-restart"; then
-      echo "[WARN] Google OAuth proxy check failed; restarting mihomo"
-      sudo -n systemctl restart mihomo.service 2>/dev/null \
-        || sudo -n systemctl restart mihomo 2>/dev/null \
-        || true
-      sleep 5
-      if ! check_google_oauth_proxy "after-mihomo-restart"; then
-        echo "[WARN] Google OAuth proxy still failed; selecting a working mihomo node"
-        bash "$REPO_DIR/03_Scripts/deploy/select_mihomo_google_proxy.sh" || true
-        check_google_oauth_proxy "after-mihomo-select" || true
-      fi
-    fi
-  fi
-fi
-
-cd "$REPO_DIR"
-export \
-  REPO_DIR SKIP_GIT_SYNC=true \
-  PREVIOUS_DEPLOY_RELEASE_FILE \
-  BACKEND_SERVICE_NAME="jato-fullstack-backend@8000" \
-  RELEASE_CHECKPOINT_FILE="$CHECKPOINT_FILE" \
-  RELEASE_CHECKPOINT_JOURNAL="$CHECKPOINT_JOURNAL" \
-  RELEASE_CHECKPOINT_REPOSITORY="$DEPLOY_REPOSITORY" \
-  RELEASE_CHECKPOINT_COMMIT="$DEPLOY_COMMIT_SHA" \
-  RELEASE_CHECKPOINT_ARCHIVE_SHA256="$DEPLOY_ARCHIVE_SHA256" \
-  RELEASE_CHECKPOINT_ARCHIVE_BYTES="$DEPLOY_ARCHIVE_BYTES" \
-  RELEASE_CHECKPOINT_RUN_ID="$DEPLOY_RUN_ID" \
-  RELEASE_CHECKPOINT_RUN_ATTEMPT="$DEPLOY_RUN_ATTEMPT" \
-  RELEASE_CHECKPOINT_FRONTEND_IDENTITY="$FRONTEND_ARTIFACT_IDENTITY" \
-  RELEASE_CHECKPOINT_FRONTEND_CHECKSUM="$FRONTEND_ARTIFACT_CHECKSUM"
+  RELEASE_WORKTREE PREBUILT_FRONTEND_DIR \
+  CHECKPOINT_FILE CHECKPOINT_JOURNAL \
+  DEPLOY_STATE_DIR DEPLOY_LOCK_PATH DEPLOY_LOCK_HELD \
+  DEPLOY_LOCK_HOLDER_PID DEPLOY_LOCK_FD \
+  BLUEGREEN_STATE_ROOT ACTIVE_SLOT_FILE DEPLOYMENT_MARKER SCHEDULER_STATE_FILE \
+  DEPLOY_REPOSITORY DEPLOY_COMMIT_SHA DEPLOY_ARCHIVE_SHA256 \
+  DEPLOY_ARCHIVE_BYTES DEPLOY_RUN_ID DEPLOY_RUN_ATTEMPT DEPLOY_BRANCH \
+  FRONTEND_ARTIFACT_IDENTITY FRONTEND_ARTIFACT_CHECKSUM \
+  DEPLOY_SERVER_NAME="${DEPLOY_SERVER_NAME:-_}"
 set +e
-bash 03_Scripts/deploy_fullstack_server.sh 2>&1
-DEPLOY_RC=$?
+bash "$RELEASE_WORKTREE/03_Scripts/deploy/tencent_bluegreen_release.sh" \
+  prepare-and-switch
+BLUEGREEN_RC=$?
 set -e
-
-FRONTEND_ROOT="$REPO_DIR/06_AppPlatform/frontend/dist"
-OUTER_EVIDENCE_FILE="${CHECKPOINT_FILE%.json}.evidence.json"
-OUTER_EVIDENCE_SHA256=""
-if [[ "$DEPLOY_RC" -eq 0 ]]; then
-  if [[ ! -f "$OUTER_EVIDENCE_FILE" || -L "$OUTER_EVIDENCE_FILE" ]]; then
-    echo "[ERROR] Durable release evidence is missing before outer verification"
-    DEPLOY_RC=1
-  elif ! release_evidence_matches; then
-    echo "[ERROR] Privileged durable release evidence verification failed"
-    DEPLOY_RC=1
-  else
-    OUTER_EVIDENCE_SHA256="$(sha256sum "$OUTER_EVIDENCE_FILE" | awk '{print $1}')"
-  fi
-fi
-OUTER_EVIDENCE_BINDING="evidence_path=$OUTER_EVIDENCE_FILE evidence_sha256=$OUTER_EVIDENCE_SHA256"
-NGINX_RC=0
-
-if [[ "$DEPLOY_RC" -eq 0 && -n "${DEPLOY_SERVER_NAME:-}" && "$DEPLOY_SERVER_NAME" != "_" ]]; then
-  set +e
-  if [ "${DEPLOY_ENABLE_HTTPS,,}" = "true" ]; then
-    sudo SERVER_NAME="$DEPLOY_SERVER_NAME" BACKEND_PORT=8000 FRONTEND_ROOT="$FRONTEND_ROOT" \
-      CERTBOT_EMAIL="$DEPLOY_CERTBOT_EMAIL" CERTBOT_RENEW_DRY_RUN=false \
-      bash 03_Scripts/deploy/nginx/enable_jato_fullstack_https.sh
-  else
-    sudo SERVER_NAME="$DEPLOY_SERVER_NAME" BACKEND_PORT=8000 FRONTEND_ROOT="$FRONTEND_ROOT" \
-      bash 03_Scripts/deploy/nginx/install_jato_fullstack_nginx.sh
-  fi
-  NGINX_RC=$?
-  set -e
-  if [[ "$NGINX_RC" -eq 0 ]]; then
-    NGINX_CONF="$(sudo -n grep -l 'proxy_pass http://jato_fullstack_api' /etc/nginx/sites-enabled/* /etc/nginx/conf.d/* 2>/dev/null | sed -n '1p' || true)"
-    if [[ -n "$NGINX_CONF" ]] && sudo -n test -f "$NGINX_CONF"; then
-      set +e
-      sudo -n sed -i 's/proxy_buffering on;/proxy_buffering off;/g' "$NGINX_CONF" \
-        && sudo -n nginx -t \
-        && sudo -n systemctl reload nginx
-      NGINX_RC=$?
-      set -e
-      if [[ "$NGINX_RC" -eq 0 ]]; then
-        echo "[INFO] nginx proxy_buffering disabled for SSE streaming"
-      fi
-    fi
-  fi
-fi
-
-FINAL_HEALTH_RC=1
-FINAL_READINESS_RC=1
-if [[ "$DEPLOY_RC" -eq 0 && "$NGINX_RC" -eq 0 ]]; then
-  if curl --noproxy '*' -fsS --max-time 20 \
-    http://127.0.0.1:8000/healthz >/dev/null 2>&1; then
-    FINAL_HEALTH_RC=0
-  fi
-  if verify_backend_readiness 20; then
-    FINAL_READINESS_RC=0
-  fi
-fi
-FINAL_RC="$DEPLOY_RC"
-if [[ "$FINAL_RC" -eq 0 && "$NGINX_RC" -ne 0 ]]; then
-  FINAL_RC="$NGINX_RC"
-elif [[ "$FINAL_RC" -eq 0 && "$FINAL_HEALTH_RC" -ne 0 ]]; then
-  FINAL_RC="$FINAL_HEALTH_RC"
-elif [[ "$FINAL_RC" -eq 0 && "$FINAL_READINESS_RC" -ne 0 ]]; then
-  FINAL_RC="$FINAL_READINESS_RC"
-fi
-
-DIST="$REPO_DIR/06_AppPlatform/frontend/dist"
-mkdir -p "$DIST"
-STATUS_TEMP="$(mktemp "$DIST/.deploy_status.XXXXXX.tmp")"
-{
-  echo "deploy_exit_code=$FINAL_RC"
-  echo "inner_deploy_exit_code=$DEPLOY_RC"
-  echo "nginx_exit_code=$NGINX_RC"
-  echo "final_health_exit_code=$FINAL_HEALTH_RC"
-  echo "final_readiness_exit_code=$FINAL_READINESS_RC"
-  echo "timestamp=$(date -u)"
-  echo "---systemctl---"
-  sudo -n systemctl status jato-fullstack-backend@8000 --no-pager 2>&1 || true
-  echo "---healthz---"
-  curl --noproxy '*' -fsS http://127.0.0.1:8000/healthz 2>&1 || echo "HEALTHZ_FAILED"
-  echo "---readyz---"
-  verify_backend_readiness 20 2>&1 || echo "READYZ_FAILED"
-  echo "---google oauth proxy---"
-  sudo -n awk -F= '/^(APP_GOOGLE_OAUTH_PROXY_URL|APP_GOOGLE_OAUTH_RELAY_URL|APP_GOOGLE_OAUTH_TIMEOUT_SECONDS|APP_GOOGLE_REDIRECT_URI|APP_FRONTEND_ORIGIN|APP_FRONTEND_ORIGINS|APP_CORS_ORIGINS|APP_GROUPED_TIME_SERIES_PERSISTENT_CACHE_ENABLED|APP_GROUPED_TIME_SERIES_PREWARM_ENABLED|APP_GROUPED_TIME_SERIES_PREWARM_GROUP_BY|APP_GROUPED_TIME_SERIES_PREWARM_GRAINS|APP_GROUPED_TIME_SERIES_PREWARM_SCOPES|APP_GROUPED_TIME_SERIES_PREWARM_FILTERS_JSON|APP_ADVANCED_ANALYSIS_WARMUP_[A-Z_]+)=/ {print}' "$ENV_FILE" 2>&1 || true
-  sudo -n awk -F= '/^APP_GOOGLE_OAUTH_RELAY_TOKEN=/ {print "APP_GOOGLE_OAUTH_RELAY_TOKEN=configured"}' "$ENV_FILE" 2>&1 || true
-  if [ -n "${GOOGLE_OAUTH_RELAY_URL:-}" ]; then
-    curl -fsS --max-time 20 "${GOOGLE_OAUTH_RELAY_URL%/}/healthz" 2>&1 || true
-  fi
-  systemctl is-active mihomo 2>&1 || true
-  ss -ltnp | grep -E '(:7897)\b' 2>&1 || true
-  curl -I --max-time 20 --proxy "${GOOGLE_OAUTH_PROXY_URL:-http://127.0.0.1:7897}" https://oauth2.googleapis.com/token 2>&1 || true
-  echo "---mihomo refresh---"
-  cat "$REPO_DIR/hermes/reports/mihomo_refresh_status.txt" 2>&1 || echo "MIHOMO_REFRESH_STATUS_MISSING"
-  echo "---release---"
-  cat "$REPO_DIR/hermes/deploy_release.json" 2>&1 || echo "RELEASE_METADATA_MISSING"
-  echo "---deploy failure context---"
-  cat "$REPO_DIR/hermes/deploy_failure_context.txt" 2>&1 || echo "DEPLOY_FAILURE_CONTEXT_MISSING"
-  echo "---release checkpoint---"
-  python3 "$REPO_DIR/03_Scripts/deploy/release_checkpoint.py" show \
-    --checkpoint "$CHECKPOINT_FILE" 2>&1 || echo "RELEASE_CHECKPOINT_MISSING_OR_INVALID"
-  echo "---nginx---"
-  sudo -n systemctl status nginx --no-pager 2>&1 | sed -n '1,5p' || true
-  echo "---msrp scheduler---"
-  sudo -n systemctl status jato-msrp-dryrun.timer --no-pager 2>&1 || true
-  sudo -n systemctl status jato-msrp-sync@dryrun.service --no-pager 2>&1 || true
-  echo "---msrp timers---"
-  sudo -n systemctl list-timers --all 'jato-msrp*' --no-pager 2>&1 || true
-  echo "---msrp env---"
-  bash "$REPO_DIR/03_Scripts/ops/print_msrp_env_status.sh" 2>&1 || true
-  echo "---msrp artifacts---"
-  for artifact_path in \
-    03_Scripts/diagnostics/artifacts/dryrun_report.json \
-    03_Scripts/diagnostics/artifacts/dryrun_runs_index.json \
-    hermes/reports/msrp_country_progress.json \
-    hermes/reports/pipeline_status/msrp_dryrun.json
-  do
-    if [ -e "$REPO_DIR/$artifact_path" ]; then
-      stat -c "$artifact_path size=%s mtime=%y" "$REPO_DIR/$artifact_path" 2>&1 || true
-    else
-      echo "missing $artifact_path"
-    fi
-  done
-  echo "---index.html---"
-  head -1 "$DIST/index.html" 2>&1 || echo "INDEX_MISSING"
-} > "$STATUS_TEMP" 2>&1
-if ! mv -f "$STATUS_TEMP" "$DIST/_deploy_status.txt"; then
-  if [[ "$DEPLOY_RC" -eq 0 ]]; then
-    python3 "$REPO_DIR/03_Scripts/deploy/release_checkpoint.py" write \
-      --checkpoint "$CHECKPOINT_FILE" --journal "$CHECKPOINT_JOURNAL" \
-      "${checkpoint_identity_args[@]}" \
-      --phase backend_healthy --status failed --retry-class automatic \
-      --message "atomic deploy status publication failed; $OUTER_EVIDENCE_BINDING" >/dev/null || true
-  fi
-  exit 1
-fi
-
-if [[ "$FINAL_RC" -ne 0 ]]; then
-  if [[ "$DEPLOY_RC" -eq 0 ]]; then
-    python3 "$REPO_DIR/03_Scripts/deploy/release_checkpoint.py" write \
-      --checkpoint "$CHECKPOINT_FILE" --journal "$CHECKPOINT_JOURNAL" \
-      "${checkpoint_identity_args[@]}" \
-      --phase backend_healthy --status failed --retry-class automatic \
-      --message "outer release verification failed: nginx_rc=$NGINX_RC health_rc=$FINAL_HEALTH_RC readiness_rc=$FINAL_READINESS_RC; $OUTER_EVIDENCE_BINDING" >/dev/null || true
-  fi
-  exit "$FINAL_RC"
-fi
-python3 "$REPO_DIR/03_Scripts/deploy/release_checkpoint.py" write \
-  --checkpoint "$CHECKPOINT_FILE" --journal "$CHECKPOINT_JOURNAL" \
-  "${checkpoint_identity_args[@]}" \
-  --phase backend_healthy --status completed --retry-class automatic \
-  --message "nginx, final local liveness, release readiness, and atomic deploy status completed; $OUTER_EVIDENCE_BINDING" >/dev/null
-REMOTE_DEPLOY_SUCCEEDED="true"
+exit "$BLUEGREEN_RC"

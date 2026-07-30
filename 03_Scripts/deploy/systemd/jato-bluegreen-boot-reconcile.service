@@ -1,0 +1,16 @@
+[Unit]
+Description=Reconcile the durable JATO blue/green route before Nginx starts
+Wants=network-online.target
+After=local-fs.target network-online.target
+Before=nginx.service
+RequiresMountsFor=/usr/local/libexec /var/lib/jato-release /etc/jato-fullstack/nginx /etc/jato-fullstack/slots
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/python3 -B /usr/local/libexec/jato-bluegreen-boot-reconcile.py --active-slot-file /var/lib/jato-release/active-slot --nginx-active-release-conf /etc/jato-fullstack/nginx/active-release.conf --slot-env-dir /etc/jato-fullstack/slots --timeout-seconds 45 --request-timeout-seconds 2
+RemainAfterExit=yes
+TimeoutStartSec=60
+UMask=0022
+
+[Install]
+WantedBy=multi-user.target

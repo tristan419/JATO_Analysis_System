@@ -5,8 +5,18 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_DIR="${REPO_DIR:-$(cd "$SCRIPT_DIR/../.." && pwd)}"
 SSH_ALIAS="${SSH_ALIAS:-tencent-cloud}"
 REMOTE_BACKEND_ENV_FILE="${REMOTE_BACKEND_ENV_FILE:-/etc/jato-fullstack/backend.env}"
-REMOTE_BACKEND_SERVICE="${REMOTE_BACKEND_SERVICE:-jato-fullstack-backend@8000}"
+REMOTE_BACKEND_SERVICE="${REMOTE_BACKEND_SERVICE:-}"
 REMOTE_BACKEND_PORT="${REMOTE_BACKEND_PORT:-}"
+REMOTE_BLUEGREEN_STATE_ROOT="${REMOTE_BLUEGREEN_STATE_ROOT:-/var/lib/jato-release}"
+REMOTE_ACTIVE_SLOT_FILE="${REMOTE_ACTIVE_SLOT_FILE:-$REMOTE_BLUEGREEN_STATE_ROOT/active-slot}"
+REMOTE_DEPLOYMENT_MARKER="${REMOTE_DEPLOYMENT_MARKER:-$REMOTE_BLUEGREEN_STATE_ROOT/deployment-maintenance}"
+REMOTE_ACTIVE_RELEASE_LINK="${REMOTE_ACTIVE_RELEASE_LINK:-/opt/jato/active}"
+REMOTE_SLOTS_ROOT="${REMOTE_SLOTS_ROOT:-/opt/jato/slots}"
+REMOTE_RELEASES_ROOT="${REMOTE_RELEASES_ROOT:-/opt/jato/releases}"
+REMOTE_DEPLOY_STATE_DIR="${REMOTE_DEPLOY_STATE_DIR:-}"
+REMOTE_BLUEGREEN_SWITCH_UNIT="${REMOTE_BLUEGREEN_SWITCH_UNIT:-jato-bluegreen-production.service}"
+REMOTE_DEPLOY_LOCK_WAIT="${REMOTE_DEPLOY_LOCK_WAIT:-300}"
+REMOTE_DEPLOYMENT_MODE=""
 LOCAL_POSTGRES_RUNTIME_FILE="${LOCAL_POSTGRES_RUNTIME_FILE:-$REPO_DIR/06_AppPlatform/.runtime/postgres.env}"
 LOCAL_DATABASE_URL="${LOCAL_DATABASE_URL:-${APP_DATABASE_URL:-}}"
 PG_DUMP_BIN="${PG_DUMP_BIN:-pg_dump}"
@@ -115,10 +125,126 @@ select_compatible_pg_dump_bin() {
   fi
 }
 
-if [[ -z "$REMOTE_BACKEND_PORT" && "$REMOTE_BACKEND_SERVICE" =~ @([0-9]+)$ ]]; then
-  REMOTE_BACKEND_PORT="${BASH_REMATCH[1]}"
+resolve_remote_backend_target() {
+  local requested_service="$REMOTE_BACKEND_SERVICE"
+  local requested_port="$REMOTE_BACKEND_PORT"
+  local remote_target=""
+  local remote_target_file=""
+  local detected_mode=""
+  local detected_slot=""
+
+  remote_target_file="$(mktemp)"
+  chmod 0600 "$remote_target_file"
+  if ! ssh -o ConnectTimeout=30 "$SSH_ALIAS" bash -s -- \
+    "$REMOTE_ACTIVE_SLOT_FILE" \
+    "$REMOTE_DEPLOYMENT_MARKER" \
+    "$REMOTE_ACTIVE_RELEASE_LINK" \
+    "$REMOTE_SLOTS_ROOT" \
+    "$REMOTE_RELEASES_ROOT" > "$remote_target_file" <<'REMOTE_SCRIPT'
+set -Eeuo pipefail
+active_slot_file="$1"
+deployment_marker="$2"
+active_release_link="$3"
+slots_root="$4"
+releases_root="$5"
+
+if [[ ! -e "$active_slot_file" && ! -L "$active_slot_file" \
+  && ! -e "$active_release_link" && ! -L "$active_release_link" ]]; then
+  printf 'legacy\t-\n'
+  exit 0
 fi
-REMOTE_BACKEND_PORT="${REMOTE_BACKEND_PORT:-8000}"
+if [[ -e "$deployment_marker" || -L "$deployment_marker" ]]; then
+  echo "[ERROR] deployment maintenance fence is active; refusing MSRP DB sync" >&2
+  exit 1
+fi
+if [[ ! -f "$active_slot_file" || -L "$active_slot_file" ]]; then
+  echo "[ERROR] blue/green active-slot is missing or unsafe" >&2
+  exit 1
+fi
+active_slot="$(cat "$active_slot_file")"
+case "$active_slot" in
+  8000) inactive_slot=8001 ;;
+  8001) inactive_slot=8000 ;;
+  *)
+    echo "[ERROR] blue/green active-slot is malformed" >&2
+    exit 1
+    ;;
+esac
+slot_link="$slots_root/$active_slot/current"
+if [[ ! -L "$active_release_link" || ! -L "$slot_link" ]]; then
+  echo "[ERROR] blue/green active release links are missing" >&2
+  exit 1
+fi
+active_root="$(realpath "$active_release_link")"
+slot_root="$(realpath "$slot_link")"
+releases_root="$(realpath "$releases_root")"
+if [[ "$active_root" != "$slot_root" || "$active_root" != "$releases_root/"* ]]; then
+  echo "[ERROR] blue/green active release does not match durable active-slot" >&2
+  exit 1
+fi
+if systemctl is-active --quiet "jato-fullstack-backend@$inactive_slot"; then
+  echo "[ERROR] inactive blue/green slot is running; a deployment may be in progress" >&2
+  exit 1
+fi
+if ! systemctl is-active --quiet "jato-fullstack-backend@$active_slot" \
+  || ! curl -fsS --connect-timeout 5 --max-time 15 \
+    "http://127.0.0.1:$active_slot/healthz" >/dev/null \
+  || ! curl -fsS --connect-timeout 5 --max-time 15 \
+    "http://127.0.0.1:$active_slot/readyz" >/dev/null; then
+  echo "[ERROR] durable active blue/green slot did not pass direct health probes" >&2
+  exit 1
+fi
+printf 'bluegreen\t%s\n' "$active_slot"
+REMOTE_SCRIPT
+  then
+    rm -f "$remote_target_file"
+    log_fail "无法验证腾讯云当前部署槽，已在上传数据库 dump 前停止"
+    return 1
+  fi
+  remote_target="$(cat "$remote_target_file")"
+  rm -f "$remote_target_file"
+  IFS=$'\t' read -r detected_mode detected_slot <<< "$remote_target"
+  case "$detected_mode" in
+    bluegreen)
+      if [[ -n "$requested_service" \
+        && "$requested_service" != "jato-fullstack-backend@$detected_slot" ]]; then
+        log_fail "REMOTE_BACKEND_SERVICE 指向 inactive/错误槽: $requested_service"
+        return 1
+      fi
+      if [[ -n "$requested_port" && "$requested_port" != "$detected_slot" ]]; then
+        log_fail "REMOTE_BACKEND_PORT 指向 inactive/错误槽: $requested_port"
+        return 1
+      fi
+      REMOTE_DEPLOYMENT_MODE=bluegreen
+      REMOTE_BACKEND_SERVICE="jato-fullstack-backend@$detected_slot"
+      REMOTE_BACKEND_PORT="$detected_slot"
+      ;;
+    legacy)
+      REMOTE_DEPLOYMENT_MODE=legacy
+      REMOTE_BACKEND_SERVICE="${requested_service:-jato-fullstack-backend@8000}"
+      if [[ -n "$requested_port" ]]; then
+        REMOTE_BACKEND_PORT="$requested_port"
+      elif [[ "$REMOTE_BACKEND_SERVICE" =~ @([0-9]+)$ ]]; then
+        REMOTE_BACKEND_PORT="${BASH_REMATCH[1]}"
+      else
+        log_fail "legacy REMOTE_BACKEND_SERVICE 无法推导端口，请显式设置 REMOTE_BACKEND_PORT"
+        return 1
+      fi
+      ;;
+    *)
+      log_fail "远端部署模式返回异常: ${detected_mode:-empty}"
+      return 1
+      ;;
+  esac
+  if [[ ! "$REMOTE_BACKEND_PORT" =~ ^[0-9]+$ ]] \
+    || (( REMOTE_BACKEND_PORT < 1 || REMOTE_BACKEND_PORT > 65535 )); then
+    log_fail "远端后端端口无效: $REMOTE_BACKEND_PORT"
+    return 1
+  fi
+  log_info "远端后端目标: mode=$REMOTE_DEPLOYMENT_MODE service=$REMOTE_BACKEND_SERVICE port=$REMOTE_BACKEND_PORT"
+}
+
+resolve_remote_backend_target
 resolve_local_database_url
 LOCAL_PGTOOLS_URL="$(normalize_pgtool_url "$LOCAL_DATABASE_URL")"
 
@@ -168,6 +294,19 @@ ARCHIVE_PATH="/tmp/$ARCHIVE_NAME"
 BACKEND_ENV_FILE="$REMOTE_BACKEND_ENV_FILE"
 BACKEND_SERVICE="$REMOTE_BACKEND_SERVICE"
 BACKEND_PORT="$REMOTE_BACKEND_PORT"
+DEPLOYMENT_MODE="$REMOTE_DEPLOYMENT_MODE"
+ACTIVE_SLOT_FILE="$REMOTE_ACTIVE_SLOT_FILE"
+DEPLOYMENT_MARKER="$REMOTE_DEPLOYMENT_MARKER"
+ACTIVE_RELEASE_LINK="$REMOTE_ACTIVE_RELEASE_LINK"
+SLOTS_ROOT="$REMOTE_SLOTS_ROOT"
+RELEASES_ROOT="$REMOTE_RELEASES_ROOT"
+DEPLOY_STATE_DIR="$REMOTE_DEPLOY_STATE_DIR"
+BLUEGREEN_SWITCH_UNIT="$REMOTE_BLUEGREEN_SWITCH_UNIT"
+DEPLOY_LOCK_WAIT="$REMOTE_DEPLOY_LOCK_WAIT"
+if [[ -z "\$DEPLOY_STATE_DIR" ]]; then
+  DEPLOY_STATE_DIR="\$HOME/.local/state/jato-production-release"
+fi
+DEPLOY_LOCK_PATH="\${DEPLOY_STATE_DIR%/}/production-deploy.lock"
 
 normalize_pgtool_url() {
   local value="\$1"
@@ -176,6 +315,105 @@ normalize_pgtool_url() {
     return 0
   fi
   printf '%s\n' "\$value"
+}
+
+assert_bluegreen_switch_quiescent() {
+  local active_state=""
+  local load_state=""
+  local sub_state=""
+  if ! load_state="\$(
+    systemctl show "\$BLUEGREEN_SWITCH_UNIT" -p LoadState --value 2>/dev/null
+  )" \
+    || ! active_state="\$(
+      systemctl show "\$BLUEGREEN_SWITCH_UNIT" -p ActiveState --value 2>/dev/null
+    )" \
+    || ! sub_state="\$(
+      systemctl show "\$BLUEGREEN_SWITCH_UNIT" -p SubState --value 2>/dev/null
+    )"; then
+    echo "[ERROR] cannot inspect the blue/green production switch unit" >&2
+    return 1
+  fi
+  if [[ "\$load_state" == "not-found" ]]; then
+    if [[ -n "\$active_state" && "\$active_state" != "inactive" ]]; then
+      echo "[ERROR] unloaded blue/green switch unit reported state=\$active_state" >&2
+      return 1
+    fi
+    return 0
+  fi
+  if [[ "\$load_state" != "loaded" ]] \
+    || [[ "\$active_state" != "inactive" && "\$active_state" != "failed" ]]; then
+    echo "[ERROR] blue/green production switch is not quiescent: load=\$load_state active=\$active_state sub=\$sub_state" >&2
+    return 1
+  fi
+}
+
+acquire_production_mutation_lock() {
+  local lock_parent=""
+  if ! command -v flock >/dev/null 2>&1 \
+    || ! command -v systemctl >/dev/null 2>&1 \
+    || ! command -v python3 >/dev/null 2>&1; then
+    echo "[ERROR] flock, systemctl, and python3 are required for MSRP DB restore" >&2
+    return 1
+  fi
+  if [[ "\$DEPLOY_STATE_DIR" != /* ]] \
+    || [[ ! "\$DEPLOY_LOCK_WAIT" =~ ^[0-9]+\$ ]]; then
+    echo "[ERROR] remote production deploy lock configuration is invalid" >&2
+    return 1
+  fi
+  lock_parent="\$(dirname "\$DEPLOY_LOCK_PATH")"
+  python3 -B - "\$lock_parent" false <<'PY_LOCK_PATH'
+import os
+from pathlib import Path
+import stat
+import sys
+
+path = Path(sys.argv[1])
+require_all = sys.argv[2] == "true"
+cursor = Path(path.anchor)
+for part in path.parts[1:]:
+    cursor /= part
+    try:
+        mode = os.lstat(cursor).st_mode
+    except FileNotFoundError:
+        if require_all:
+            raise SystemExit(
+                f"[ERROR] production deploy lock ancestor disappeared: {cursor}"
+            )
+        continue
+    if stat.S_ISLNK(mode) or not stat.S_ISDIR(mode):
+        raise SystemExit(
+            f"[ERROR] production deploy lock ancestor is unsafe: {cursor}"
+        )
+PY_LOCK_PATH
+  mkdir -p "\$lock_parent"
+  python3 -B - "\$lock_parent" true <<'PY_LOCK_PATH'
+import os
+from pathlib import Path
+import stat
+import sys
+
+path = Path(sys.argv[1])
+cursor = Path(path.anchor)
+for part in path.parts[1:]:
+    cursor /= part
+    mode = os.lstat(cursor).st_mode
+    if stat.S_ISLNK(mode) or not stat.S_ISDIR(mode):
+        raise SystemExit(
+            f"[ERROR] production deploy lock ancestor became unsafe: {cursor}"
+        )
+PY_LOCK_PATH
+  chmod 700 "\$lock_parent"
+  if [[ -L "\$DEPLOY_LOCK_PATH" ]] \
+    || [[ -e "\$DEPLOY_LOCK_PATH" && ! -f "\$DEPLOY_LOCK_PATH" ]]; then
+    echo "[ERROR] production deploy lock is unsafe" >&2
+    return 1
+  fi
+  exec 9>"\$DEPLOY_LOCK_PATH"
+  if ! flock -w "\$DEPLOY_LOCK_WAIT" 9; then
+    echo "[ERROR] another production mutation holds the server-wide deploy lock" >&2
+    return 1
+  fi
+  assert_bluegreen_switch_quiescent
 }
 
 restart_needed=false
@@ -203,7 +441,63 @@ wait_for_http_ok() {
   done
 }
 
+verify_backend_target() {
+  local active_slot=""
+  local inactive_slot=""
+  local active_root=""
+  local slot_root=""
+  local releases_root=""
+  if [[ "\$DEPLOYMENT_MODE" != "bluegreen" ]]; then
+    return 0
+  fi
+  if [[ -e "\$DEPLOYMENT_MARKER" || -L "\$DEPLOYMENT_MARKER" ]] \
+    || [[ ! -f "\$ACTIVE_SLOT_FILE" || -L "\$ACTIVE_SLOT_FILE" ]]; then
+    echo "[ERROR] blue/green state changed or maintenance began before DB restore" >&2
+    return 1
+  fi
+  active_slot="\$(cat "\$ACTIVE_SLOT_FILE")"
+  if [[ "\$active_slot" != "\$BACKEND_PORT" ]] \
+    || [[ "\$BACKEND_SERVICE" != "jato-fullstack-backend@\$active_slot" ]]; then
+    echo "[ERROR] refusing to stop or restart an inactive blue/green slot" >&2
+    return 1
+  fi
+  if [[ "\$active_slot" == "8000" ]]; then
+    inactive_slot=8001
+  elif [[ "\$active_slot" == "8001" ]]; then
+    inactive_slot=8000
+  else
+    echo "[ERROR] blue/green active-slot became malformed" >&2
+    return 1
+  fi
+  if [[ ! -L "\$ACTIVE_RELEASE_LINK" \
+    || ! -L "\$SLOTS_ROOT/\$active_slot/current" ]]; then
+    echo "[ERROR] blue/green active release links disappeared" >&2
+    return 1
+  fi
+  active_root="\$(realpath "\$ACTIVE_RELEASE_LINK")"
+  slot_root="\$(realpath "\$SLOTS_ROOT/\$active_slot/current")"
+  releases_root="\$(realpath "\$RELEASES_ROOT")"
+  if [[ "\$active_root" != "\$slot_root" \
+    || "\$active_root" != "\$releases_root/"* ]]; then
+    echo "[ERROR] blue/green active release identity changed before DB restore" >&2
+    return 1
+  fi
+  if systemctl is-active --quiet "jato-fullstack-backend@\$inactive_slot"; then
+    echo "[ERROR] inactive slot started; refusing DB restore during deployment" >&2
+    return 1
+  fi
+  if ! systemctl is-active --quiet "\$BACKEND_SERVICE" \
+    || ! curl -fsS --connect-timeout 5 --max-time 15 \
+      "http://127.0.0.1:\$BACKEND_PORT/readyz" >/dev/null; then
+    echo "[ERROR] selected active backend is not ready" >&2
+    return 1
+  fi
+}
+
 trap ensure_backend_started EXIT
+
+acquire_production_mutation_lock
+verify_backend_target
 
 if [[ ! -f "\$ARCHIVE_PATH" ]]; then
   echo "[ERROR] dump 文件不存在: \$ARCHIVE_PATH" >&2

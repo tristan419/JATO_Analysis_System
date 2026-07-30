@@ -33,6 +33,8 @@ PHASES = (
     "migrated",
     "switch_started",
     "switched",
+    "rollback_started",
+    "rollback_completed",
     "backend_healthy",
     "www_verified",
     "intl_deploy_started",
@@ -41,6 +43,38 @@ PHASES = (
     "complete",
 )
 PHASE_INDEX = {phase: index for index, phase in enumerate(PHASES)}
+ALLOWED_PHASE_TRANSITIONS = {
+    "packaged": frozenset({"transport_verified"}),
+    "transport_verified": frozenset({"prepared"}),
+    "prepared": frozenset({"source_install_started", "backup_verified"}),
+    "source_install_started": frozenset({"source_installed"}),
+    "source_installed": frozenset({"backup_verified"}),
+    "backup_verified": frozenset({"migration_started", "migrated"}),
+    "migration_started": frozenset({"migrated"}),
+    "migrated": frozenset({"switch_started"}),
+    "switch_started": frozenset({"switched", "rollback_started"}),
+    "switched": frozenset({"backend_healthy", "rollback_started"}),
+    "rollback_started": frozenset({"rollback_completed"}),
+    "rollback_completed": frozenset(),
+    "backend_healthy": frozenset({"www_verified"}),
+    "www_verified": frozenset({"intl_deploy_started"}),
+    "intl_deploy_started": frozenset({"intl_verified"}),
+    "intl_verified": frozenset({"parity_verified"}),
+    "parity_verified": frozenset({"complete"}),
+    "complete": frozenset(),
+}
+ALLOWED_SAME_PHASE_STATUS_TRANSITIONS = {
+    "in_progress": frozenset({"completed", "failed"}),
+    "failed": frozenset({"completed"}),
+    "completed": frozenset(),
+}
+REQUIRED_PREDECESSOR_STATUSES = {
+    ("switched", "backend_healthy"): frozenset({"completed"}),
+    ("rollback_started", "rollback_completed"): frozenset(
+        {"in_progress", "failed"}
+    ),
+    ("parity_verified", "complete"): frozenset({"completed"}),
+}
 STATUSES = ("in_progress", "completed", "failed")
 RETRY_CLASSES = (
     "automatic",
@@ -78,6 +112,7 @@ CHECKPOINT_FIELDS = {
     "updatedAt",
 }
 OPTIONAL_CHECKPOINT_FIELDS = {"message"}
+MAX_RELEASE_METADATA_BYTES = 64 * 1024
 
 
 class CheckpointError(ValueError):
@@ -239,7 +274,13 @@ def _validate_terminal_contract(
     status: str,
     retry_class: str,
 ) -> None:
-    if phase == "complete":
+    if phase == "rollback_completed":
+        if status != "completed" or retry_class != "automatic":
+            raise CheckpointError(
+                "rollback_completed phase requires status=completed and "
+                "retryClass=automatic"
+            )
+    elif phase == "complete":
         if status != "completed" or retry_class != "complete":
             raise CheckpointError(
                 "complete phase requires status=completed and retryClass=complete"
@@ -323,6 +364,240 @@ def _fsync_directory(path: Path) -> None:
         os.fsync(directory_fd)
     finally:
         os.close(directory_fd)
+
+
+def _ensure_private_real_directory(
+    path: Path,
+    *,
+    owner_uid: int | None = None,
+    owner_gid: int | None = None,
+) -> Path:
+    """Create a private state directory without accepting symlink components."""
+
+    path = _absolute_without_resolution(path)
+    if path == Path("/"):
+        raise CheckpointError("private state directory must not be the root")
+    missing: list[Path] = []
+    current = path
+    while True:
+        try:
+            metadata = current.lstat()
+        except FileNotFoundError:
+            missing.append(current)
+            if current.parent == current:
+                raise CheckpointError(
+                    f"cannot find an existing parent for private state: {path}"
+                )
+            current = current.parent
+            continue
+        if not stat.S_ISDIR(metadata.st_mode) or stat.S_ISLNK(metadata.st_mode):
+            raise CheckpointError(
+                f"private state ancestor must be a real directory: {current}"
+            )
+        break
+    for directory in reversed(missing):
+        try:
+            directory.mkdir(mode=0o700)
+        except FileExistsError:
+            pass
+        metadata = directory.lstat()
+        if not stat.S_ISDIR(metadata.st_mode) or stat.S_ISLNK(metadata.st_mode):
+            raise CheckpointError(
+                f"private state directory is unsafe: {directory}"
+            )
+        os.chmod(directory, 0o700)
+        if owner_uid is not None and owner_gid is not None:
+            os.chown(directory, owner_uid, owner_gid)
+        _fsync_directory(directory.parent)
+    if path.resolve(strict=True) != path:
+        raise CheckpointError(
+            f"private state directory traverses a symlink: {path}"
+        )
+    if owner_uid is not None and owner_gid is not None:
+        os.chown(path, owner_uid, owner_gid)
+        os.chmod(path, 0o700)
+    return path
+
+
+def _read_small_regular_file(path: Path, *, label: str) -> bytes:
+    _reject_symlink(path, label)
+    try:
+        before = path.lstat()
+    except FileNotFoundError as exc:
+        raise CheckpointError(f"{label} does not exist: {path}") from exc
+    if (
+        not stat.S_ISREG(before.st_mode)
+        or before.st_size > MAX_RELEASE_METADATA_BYTES
+    ):
+        raise CheckpointError(
+            f"{label} must be a regular file no larger than "
+            f"{MAX_RELEASE_METADATA_BYTES} bytes: {path}"
+        )
+    flags = os.O_RDONLY
+    if hasattr(os, "O_NOFOLLOW"):
+        flags |= os.O_NOFOLLOW
+    descriptor = os.open(path, flags)
+    try:
+        opened = os.fstat(descriptor)
+        if (opened.st_dev, opened.st_ino) != (before.st_dev, before.st_ino):
+            raise CheckpointError(f"{label} changed while being opened: {path}")
+        chunks: list[bytes] = []
+        remaining = MAX_RELEASE_METADATA_BYTES + 1
+        while remaining:
+            chunk = os.read(descriptor, min(64 * 1024, remaining))
+            if not chunk:
+                break
+            chunks.append(chunk)
+            remaining -= len(chunk)
+        raw = b"".join(chunks)
+    finally:
+        os.close(descriptor)
+    if len(raw) > MAX_RELEASE_METADATA_BYTES:
+        raise CheckpointError(f"{label} is oversized: {path}")
+    return raw
+
+
+def _release_metadata_commit(raw: bytes, *, label: str) -> str:
+    try:
+        payload = json.loads(raw.decode("utf-8"))
+    except (UnicodeError, json.JSONDecodeError) as exc:
+        raise CheckpointError(f"{label} is not valid JSON") from exc
+    if not isinstance(payload, dict):
+        raise CheckpointError(f"{label} must contain one JSON object")
+    commits = [
+        _require_hash(
+            payload[field],
+            GIT_SHA_PATTERN,
+            f"{label} {field}",
+            40,
+        )
+        for field in ("actualCommitSha", "commitSha")
+        if field in payload and payload[field] not in (None, "")
+    ]
+    if not commits or len(set(commits)) != 1:
+        raise CheckpointError(
+            f"{label} must contain one unambiguous full release commit"
+        )
+    return commits[0]
+
+
+def preserve_previous_release_metadata(
+    *,
+    state_root: Path,
+    source: Path,
+    candidate_commit: str,
+    archive_sha256: str,
+    owner_uid: int | None = None,
+    owner_gid: int | None = None,
+) -> dict[str, object]:
+    """Durably bind the exact previous release metadata to one candidate.
+
+    The sidecar intentionally lives outside ``checkpoints/`` so it cannot be
+    misinterpreted as another release checkpoint during the next deployment.
+    Exact retries may reuse it only when the source bytes are unchanged.
+    """
+
+    candidate_commit = _require_hash(
+        candidate_commit,
+        GIT_SHA_PATTERN,
+        "candidate commit",
+        40,
+    )
+    archive_sha256 = _require_hash(
+        archive_sha256,
+        SHA256_PATTERN,
+        "archive SHA256",
+        64,
+    )
+    if (owner_uid is None) != (owner_gid is None):
+        raise CheckpointError("metadata owner UID and GID must be provided together")
+    for value, label in ((owner_uid, "owner UID"), (owner_gid, "owner GID")):
+        if value is not None and (
+            isinstance(value, bool) or not isinstance(value, int) or value < 0
+        ):
+            raise CheckpointError(f"{label} must be a non-negative integer")
+    source = _absolute_without_resolution(source)
+    raw = _read_small_regular_file(source, label="previous release metadata")
+    previous_commit = _release_metadata_commit(
+        raw,
+        label="previous release metadata",
+    )
+    if previous_commit == candidate_commit:
+        raise CheckpointError(
+            "previous release metadata unexpectedly identifies the candidate"
+        )
+
+    state_root = _ensure_private_real_directory(state_root)
+    metadata_root = _ensure_private_real_directory(
+        state_root / "previous-metadata",
+        owner_uid=owner_uid,
+        owner_gid=owner_gid,
+    )
+    candidate_root = _ensure_private_real_directory(
+        metadata_root / candidate_commit,
+        owner_uid=owner_uid,
+        owner_gid=owner_gid,
+    )
+    target = candidate_root / f"{archive_sha256}.json"
+    _reject_symlink(target, "previous release metadata sidecar")
+    if target.exists():
+        existing = _read_small_regular_file(
+            target,
+            label="previous release metadata sidecar",
+        )
+        existing_commit = _release_metadata_commit(
+            existing,
+            label="previous release metadata sidecar",
+        )
+        if existing != raw or existing_commit != previous_commit:
+            raise CheckpointError(
+                "previous release metadata changed during an exact release retry"
+            )
+        if owner_uid is not None and owner_gid is not None:
+            os.chown(target, owner_uid, owner_gid)
+            os.chmod(target, 0o600)
+        return {
+            "path": str(target),
+            "previousCommit": previous_commit,
+            "reused": True,
+        }
+
+    descriptor, temporary_name = tempfile.mkstemp(
+        prefix=f".{target.name}.",
+        suffix=".tmp",
+        dir=candidate_root,
+    )
+    temporary = Path(temporary_name)
+    try:
+        os.fchmod(descriptor, 0o600)
+        if owner_uid is not None and owner_gid is not None:
+            os.fchown(descriptor, owner_uid, owner_gid)
+        with os.fdopen(descriptor, "wb") as handle:
+            handle.write(raw)
+            handle.flush()
+            os.fsync(handle.fileno())
+        if target.exists() or target.is_symlink():
+            raise CheckpointError(
+                f"previous release metadata sidecar appeared concurrently: {target}"
+            )
+        os.replace(temporary, target)
+        os.chmod(target, 0o600)
+        _fsync_directory(candidate_root)
+    except BaseException:
+        try:
+            os.close(descriptor)
+        except OSError:
+            pass
+        try:
+            temporary.unlink()
+        except FileNotFoundError:
+            pass
+        raise
+    return {
+        "path": str(target),
+        "previousCommit": previous_commit,
+        "reused": False,
+    }
 
 
 def atomic_write_json(path: Path, payload: Mapping[str, Any]) -> None:
@@ -435,12 +710,44 @@ def write_checkpoint(
         existing = load_checkpoint(checkpoint_path)
         _assert_same_identity(existing, identity)
         existing_phase = existing["phase"]
-        if PHASE_INDEX[phase] < PHASE_INDEX[existing_phase]:
+        existing_status = existing["status"]
+        if existing_phase in {"rollback_completed", "complete"}:
             raise CheckpointError(
-                f"phase regression is forbidden: {existing_phase} -> {phase}"
+                f"{existing_phase} checkpoint is immutable",
             )
-        if existing_phase == "complete":
-            raise CheckpointError("complete checkpoint is immutable")
+        if phase == existing_phase and status == existing_status:
+            if retry_class != existing["retryClass"]:
+                raise CheckpointError(
+                    "an idempotent checkpoint write cannot change retryClass"
+                )
+            return existing
+        if phase == existing_phase:
+            if status not in ALLOWED_SAME_PHASE_STATUS_TRANSITIONS[existing_status]:
+                raise CheckpointError(
+                    "same-phase status regression is forbidden: "
+                    f"{existing_phase}/{existing_status} -> {phase}/{status}"
+                )
+        elif phase not in ALLOWED_PHASE_TRANSITIONS[existing_phase]:
+            if PHASE_INDEX[phase] < PHASE_INDEX[existing_phase]:
+                raise CheckpointError(
+                    f"phase regression is forbidden: {existing_phase} -> {phase}"
+                )
+            raise CheckpointError(
+                "illegal checkpoint phase transition: "
+                f"{existing_phase}/{existing_status} -> {phase}/{status}"
+            )
+        else:
+            allowed_source_statuses = REQUIRED_PREDECESSOR_STATUSES.get(
+                (existing_phase, phase)
+            )
+            if (
+                allowed_source_statuses is not None
+                and existing_status not in allowed_source_statuses
+            ):
+                raise CheckpointError(
+                    "checkpoint predecessor status is invalid: "
+                    f"{existing_phase}/{existing_status} -> {phase}/{status}"
+                )
         sequence = existing["sequence"] + 1
 
     checkpoint: dict[str, Any] = {
@@ -483,6 +790,22 @@ def assert_resumable(
             "retryClass": retry_class,
             "sequence": checkpoint["sequence"],
         }
+    if phase == "rollback_completed":
+        return {
+            "decision": "already-rolled-back",
+            "phase": phase,
+            "status": status,
+            "retryClass": retry_class,
+            "sequence": checkpoint["sequence"],
+        }
+    if phase in {"switch_started", "switched", "rollback_started"}:
+        return {
+            "decision": "reconcile-required",
+            "phase": phase,
+            "status": status,
+            "retryClass": retry_class,
+            "sequence": checkpoint["sequence"],
+        }
     if phase == "migration_started" and status in {"in_progress", "failed"}:
         raise CheckpointError(
             "database migration outcome is unknown; manual database recovery is "
@@ -520,12 +843,16 @@ def _absolute_without_resolution(path: Path) -> Path:
     return Path(os.path.abspath(os.fspath(path)))
 
 
-def _cross_release_is_settled(checkpoint: Mapping[str, Any]) -> bool:
+def cross_release_is_settled(checkpoint: Mapping[str, Any]) -> bool:
     """Return whether an older release has crossed the safe health boundary."""
 
     phase = checkpoint["phase"]
     if phase == "complete":
         return True
+    if phase == "rollback_completed":
+        return checkpoint["status"] == "completed"
+    if phase == "rollback_started":
+        return False
     return (
         PHASE_INDEX[phase] >= PHASE_INDEX["backend_healthy"]
         and checkpoint["status"] == "completed"
@@ -631,7 +958,7 @@ def assert_cross_release_safe(
                 )
             if (
                 PHASE_INDEX[phase] >= PHASE_INDEX["source_install_started"]
-                and not _cross_release_is_settled(payload)
+                and not cross_release_is_settled(payload)
             ):
                 raise CheckpointError(
                     "another release may have mutated production without reaching "
@@ -725,6 +1052,40 @@ def build_parser() -> argparse.ArgumentParser:
         type=Path,
     )
     _add_identity_arguments(cross_release_parser)
+
+    previous_metadata_parser = subparsers.add_parser(
+        "preserve-previous-metadata",
+        help=(
+            "copy the exact previous release metadata into a candidate-scoped "
+            "state namespace outside checkpoints"
+        ),
+    )
+    previous_metadata_parser.add_argument(
+        "--state-root",
+        required=True,
+        type=Path,
+    )
+    previous_metadata_parser.add_argument(
+        "--source",
+        required=True,
+        type=Path,
+    )
+    previous_metadata_parser.add_argument(
+        "--candidate-commit",
+        required=True,
+    )
+    previous_metadata_parser.add_argument(
+        "--archive-sha256",
+        required=True,
+    )
+    previous_metadata_parser.add_argument(
+        "--owner-uid",
+        type=int,
+    )
+    previous_metadata_parser.add_argument(
+        "--owner-gid",
+        type=int,
+    )
     return parser
 
 
@@ -757,6 +1118,15 @@ def main(argv: Sequence[str] | None = None) -> int:
                 checkpoints_root=arguments.checkpoints_root,
                 current_checkpoint=arguments.current_checkpoint,
                 expected_identity=_identity_from_arguments(arguments),
+            )
+        elif arguments.command == "preserve-previous-metadata":
+            result = preserve_previous_release_metadata(
+                state_root=arguments.state_root,
+                source=arguments.source,
+                candidate_commit=arguments.candidate_commit,
+                archive_sha256=arguments.archive_sha256,
+                owner_uid=arguments.owner_uid,
+                owner_gid=arguments.owner_gid,
             )
         else:  # pragma: no cover - argparse enforces the command set.
             raise CheckpointError(f"unsupported command: {arguments.command}")

@@ -26,7 +26,9 @@ _COMMIT_SHA_PATTERN = re.compile(r"^[0-9a-f]{40}$")
 _MAX_RELEASE_METADATA_BYTES = 256 * 1024
 _MAX_DATASET_MANIFEST_BYTES = 2 * 1024 * 1024
 _MAX_PARTITION_DIRECTORIES = 128
-_MAX_PARQUET_FILES = 256
+# Production currently has 264 partition files. Keep a fixed hard ceiling with
+# bounded headroom instead of deriving an unbounded limit from the manifest.
+_MAX_PARQUET_FILES = 512
 _MAX_DATASET_ENTRIES = 4096
 _MAX_PARQUET_FOOTER_METADATA_BYTES = 4 * 1024 * 1024
 _PARQUET_MAGIC = b"PAR1"

@@ -957,10 +957,11 @@ jobs:
           done
           cat 03_Scripts/deploy/fullstack_remote_release.sh >> "$control_payload"
 
-          timeout 1800s "${ssh_command[@]}" "${ssh_options[@]}" "$SSH_USER@$SSH_HOST" \
+          timeout 5400s "${ssh_command[@]}" "${ssh_options[@]}" "$SSH_USER@$SSH_HOST" \
             "umask 077; exec bash -s" < "$control_payload"
 
       - name: Fetch and attest server release checkpoint
+        if: ${{ always() && steps.upload_release.outcome == 'success' }}
         env:
           AUTH_MODE: ${{ steps.auth.outputs.mode }}
           ARCHIVE_BYTES: ${{ steps.upload_release.outputs.archive-bytes }}
@@ -1002,7 +1003,33 @@ jobs:
           server_dir="$RUNNER_TEMP/release-checkpoint/server"
           install -d -m 700 "$server_dir"
           attestation_complete=false
-          trap 'if [ "$attestation_complete" != true ]; then rm -rf "$server_dir"; fi' EXIT
+          record_checkpoint_fetch_exit() {
+            local rc="$?"
+            trap - EXIT
+            python3 - "$server_dir/fetch-status.json" "$rc" \
+              "$attestation_complete" <<'PY' || true
+          import json
+          from pathlib import Path
+          import sys
+
+          output, exit_code, attested = sys.argv[1:]
+          Path(output).write_text(
+              json.dumps(
+                  {
+                      "schemaVersion": 1,
+                      "exitCode": int(exit_code),
+                      "backendHealthyAttested": attested == "true",
+                  },
+                  indent=2,
+                  sort_keys=True,
+              )
+              + "\n",
+              encoding="utf-8",
+          )
+          PY
+            exit "$rc"
+          }
+          trap record_checkpoint_fetch_exit EXIT
 
           remote_home="$(
             timeout 60s "${ssh_command[@]}" "${ssh_options[@]}" "$ssh_target" \
@@ -1163,6 +1190,11 @@ jobs:
           # Keep the digest in the immutable artifact. GitHub can suppress a
           # cross-job output when its secret scanner finds a coincidental match.
           echo "Server checkpoint/evidence attestation SHA-256: $attestation_sha256"
+          # Continue the runner-side lifecycle from the attested server state.
+          # This prevents a synthetic transport_verified -> www_verified jump.
+          install -m 600 \
+            "$server_dir/backend-healthy.json" \
+            "$RUNNER_TEMP/release-checkpoint/candidate.json"
           attestation_complete=true
 
       - name: Verify Tencent public release provenance

@@ -364,7 +364,10 @@ bash 03_Scripts/deploy_fullstack_server.sh
 | `jato-msrp-dryrun.timer` | 每日 `03:30` | 低并发 nightly dry-run |
 | `jato-msrp-ingest.timer` | 每周六 `05:30` | 低并发正式 ingest |
 
-部署脚本每次都会把这些 unit / timer 同步到 `/etc/systemd/system`，并重启 timer 以应用新的时间表。
+传统单槽部署会把这些 unit / timer 同步到 `/etc/systemd/system`，并重启 timer
+以应用新的时间表。蓝绿发布只刷新 unit 定义：切换前原子记录每个 timer 的
+enabled/active 状态，结束或回滚时逐项恢复并验真；原本 disabled 或 inactive
+的 timer 不会被部署流程意外启动。
 
 ## 7. 安装 nginx
 
@@ -718,3 +721,257 @@ echo '/swapfile none swap sw 0 0' | sudo tee -a /etc/fstab
 # 方案 2：限制 Node.js 内存
 NODE_OPTIONS="--max-old-space-size=1024" npm run build
 ```
+
+## 13. 腾讯云 8000/8001 蓝绿发布
+
+生产发布不再先覆盖 `/opt/JATO_Analysis_System-main`。主流程由
+`03_Scripts/deploy/tencent_bluegreen_release.sh` 管理：
+
+1. 把已校验的不可变 artifact 安装到
+   `/opt/jato/releases/<commit>/<archive-sha256>/`，并创建独立 `.venv`。
+2. 从 8000/8001 中选择非 active 端口作为 candidate。candidate 使用 2 个
+   Uvicorn worker，但关闭全部预热，cgroup 为 `MemoryHigh=3G`、
+   `MemoryMax=4G`。
+3. candidate 必须先通过直连 `/healthz`、精确 commit `/readyz`、JATO
+   月更 HTTP 423 门禁、cgroup 和无 `jato_monthly_worker.py` 子进程检查。
+4. 首版蓝绿禁止 Alembic revision 变化。检测到 `current != heads` 时在
+   Nginx 切换前失败，数据库变更必须另走 expand/contract 发布。
+5. 部署 marker 先让 Nginx 阻断月更路径，再持有 JATO
+   `maintenance-coordination.lock`、worker、active bundle、upload/digest
+   等最终锁；已有任务只能自然完成，发布脚本不会取消、重试或改写任务状态。
+6. `/etc/jato-fullstack/nginx/active-release.conf` 是唯一切换对象，同时绑定
+   backend port 和 frontend root。candidate 配置先执行 `nginx -t`，reload
+   后再经 Nginx 校验 `/readyz` 与 `build-meta.json`。`DEPLOY_SERVER_NAME`
+   可以包含空格分隔的多个域名；控制器会先校验每个 hostname，再以各自的
+   TLS SNI/Host 逐个验真，绝不会把整串域名交给一次 `curl`。
+7. 任一步失败都会恢复旧 active include、旧 active-slot 和
+   `/opt/jato/active`，验证旧槽仍存活，并记录 `rollback_completed`。
+8. 新槽完全就绪后才停止旧槽，再把新槽提升到
+   `MemoryHigh=6G`、`MemoryMax=8G`；这样双槽窗口的服务 cgroup 上限为
+   8G + 4G，不会同时出现两个 8G 槽。
+9. 宿主机上的 MSRP 等定时任务统一访问
+   `http://127.0.0.1:18000/v1`。该端口只监听 loopback，并由同一个
+   `active-release.conf` 代理到当前 active 槽；禁止把消费者固定到 8000
+   或 8001。post-activation 会原子迁移既有 `msrp.env` 中的
+   `JATO_API_BASE`，但不会改变 timer 的启用或运行状态。
+10. 月更 mutation fence 位于持久路径
+    `/var/lib/jato-release/deployment-maintenance`。主机重启不会让一个未完成
+    的发布静默丢失门禁；只有控制器完成恢复或确认切换后才能移除 marker。
+11. Candidate 构建前要求 `MemAvailable >= 5 GiB`，并再次确认宿主机总内存
+    至少 14 GiB、active unit 的实际 `MemoryHigh=6G/MemoryMax=8G` 未漂移，
+    且 active 实际内存加 Candidate 4 GiB 上限仍为操作系统保留 2 GiB。
+    随后 venv、pip、Playwright 与前端安装全部在同步的
+    `jato-bluegreen-candidate-build.scope` 中执行；该 scope 固定为
+    `MemoryHigh=3G`、`MemoryMax=4G`、`TasksMax=512` 和 30 分钟上限。
+    子进程会在执行重依赖安装前验证自己的 UID、cgroup membership 和实际
+    systemd 属性，不满足即失败。最终 runtime seal 完成后、启动 Candidate
+    前会重复宿主机内存检查。
+12. Candidate 构建前磁盘必须保留
+    `max(15 GiB, filesystem 8%)`；runtime seal 后还必须保留
+    `max(10 GiB, filesystem 5%)`。空间不足时只允许回收
+    `/opt/jato/releases/<commit>/<archive-sha256>` 中具有匹配 identity、
+    已达到 settled checkpoint 且未被 active、两个 slot、Nginx、运行进程或
+    未完成 checkpoint 引用的旧版本。正常保留最新 3 个未引用版本并只清理
+    14 天以上版本；低空间时也绝不清理 24 小时内版本。删除前会原子移入
+    可恢复 quarantine 并重新扫描引用，任何歧义都在 Candidate 启动前失败。
+    上传 archive、checkpoint、journal 和共享 JATO 数据不属于自动清理范围。
+13. 上一版本的 `hermes/deploy_release.json` 固定保存在
+    `/var/lib/jato-release/previous-metadata/<candidate-commit>/<archive>.json`。
+    该目录与严格 checkpoint namespace 分离；同一 artifact 重试只接受完全
+    相同的 metadata，避免后续 SHA 被旁路 JSON 阻断或引用错误回滚版本。
+
+运行时位置：
+
+```text
+/opt/jato/releases/<commit>/<archive-sha256>  immutable release
+/opt/jato/slots/8000/current                 slot symlink
+/opt/jato/slots/8001/current                 slot symlink
+/opt/jato/active                             scheduler code symlink
+/var/lib/jato-release/active-slot            JATO worker owner
+/var/lib/jato-release/deployment-maintenance durable mutation fence
+/var/lib/jato-release/scheduler-state.tsv    durable timer state snapshot
+/var/lib/jato-release/previous-metadata/...  candidate-bound rollback metadata
+/etc/jato-fullstack/nginx/active-release.conf API + frontend atomic route
+127.0.0.1:18000                              stable active-slot API for host jobs
+```
+
+故障演练由测试环境设置 `BLUEGREEN_FAULT`，支持：
+
+- `candidate_start`
+- `candidate_ready`
+- `nginx_test`
+- `nginx_reload`
+- `post_switch_readiness`
+
+生产 workflow 不设置该变量。发生失败时不要手工重试 JATO 任务；先读取
+release checkpoint、quiescence evidence、两个 slot 状态和 Nginx active
+include，确认旧槽已恢复。
+
+## 14. Feature Candidate canary（不切公网）
+
+PR 合并前的腾讯云验证使用
+`03_Scripts/deploy/tencent_feature_candidate_canary.sh`，它不是 production
+release 的缩小版，也不能切换流量。调用方必须先用与 production package
+相同的排除规则生成不可变 feature archive，上传后提供真实 feature branch、
+40 位 commit、archive 字节数和 SHA-256。脚本拒绝 `main`，不会为了复用现有
+门禁而把 feature SHA 伪装成 production main。
+
+安全边界如下：
+
+1. 只使用 `/opt/jato-canary` 和 `/var/lib/jato-canary`。checkpoint、evidence
+   与最终 receipt 都与 `/var/lib/jato-release` 分离。
+2. 外层 SSH/TAT/OrcaTerm 进程只校验并固化不可变输入，然后无等待地启动
+   `jato-feature-canary-supervisor-<run-key>.service`。外层返回 0 只表示
+   systemd 已接受 durable supervisor，不能当作 canary 通过。supervisor
+   是唯一的锁 owner，持有 deploy 账号真实 home 下的 canonical
+   `production-deploy.lock`，从 production before snapshot 一直持有到
+   controller、build、runtime、cleanup 和 after comparison 完成。
+   supervisor 自身固定 `256M/512M`；业务 controller 运行在另一个
+   `256M/512M` transient service 中，通过完整 unit identity、supervisor
+   MainPID 的 `/proc/<pid>/fd/9` 目标、该 fd 的 `fdinfo/9` 中绑定同一 inode
+   的唯一 FLOCK write 记录，以及第二个 nonblocking flock，证明锁
+   始终由 supervisor 持有，而不是由第三方抢占，也不由 controller 自行继承
+   或重新取得 fd 9。controller 被
+   TERM/SIGKILL 时，`KillMode=control-group` 会终止其完整进程树；只有该
+   unit 已非 active/activating/deactivating 且 cgroup 无进程后，supervisor
+   才会在同一锁窗口进入 recovery-only。网页终端断线或 TAT 15 分钟上限
+   因此不会留下失去锁约束的孤儿 build。supervisor 异常退出会由 systemd
+   重启，重启后先重新取得 canonical lock，再按 checkpoint 只做恢复，绝不
+   重跑业务 canary。supervisor 在请求 systemd 创建 controller 前先持久化
+   唯一 `controller_unit_started/in_progress` marker；一旦该边界成立，
+   即使 controller 尚未写入自己的 marker 或 staged archive 已清理，后续
+   也只能恢复。controller 的 EXIT trap 只能写 draft evidence/checkpoint，
+   无权写 terminal receipt。只有 supervisor 在 controller cgroup 已静默、
+   当前代 fd 9 已持锁、子 unit/端口已清理，并重新采集和比较 production
+   AFTER 后启动的 reconcile 子进程可以原子写 receipt。receipt 固定携带
+   `terminalWriter=supervisor_reconcile` 与 writer `InvocationID`；成功结果
+   还要求 candidate evidence 中的 supervisor generation（来自只读环境和
+   root-owned start permit）与 writer `InvocationID` 完全相同；candidate
+   service 自身另有独立的 systemd `InvocationID`，必须与 start permit
+   记录的 candidate generation 相同。因此 supervisor 发生跨代重启时旧
+   candidate 只能收敛为 failed，不能借新一代快照放行。任意伪造 `HOME`、
+   `DEPLOY_STATE_DIR`、lock path 或任一 generation 都会拒绝。
+3. source archive 最大 256 MiB、最多 50,000 个成员且展开不超过 2 GiB；
+   controller、guard、lock helper 与 readiness verifier 必须和 archive 内
+   文件逐个同 SHA。输入会先复制为 root-owned 只读文件。build 使用独立
+   transient service，固定 `MemoryHigh=3G`、`MemoryMax=4G`、
+   `MemorySwapMax=0`、`TasksMax=512`；deploy 用户 home、JATO 数据和
+   `/etc/jato-fullstack` 在 build namespace 内不可见，唯一可写位置是本次
+   runtime。controller、build 和 runtime 都使用
+   `StopPropagatedFrom + After` 绑定 durable supervisor：supervisor
+   退出时三个子 unit 只收到 stop，不会因 supervisor 的
+   `Restart=on-failure` 被连带重新执行。每个子 unit 还携带首次 supervisor
+   的 32 位 `InvocationID`；controller 和 build 通过 systemd manager 确认
+   当前 supervisor 仍是同一代。DynamicUser runtime 不依赖主机 D-Bus：
+   它先停在只读 wrapper，不执行 Uvicorn；controller 验证 candidate unit
+   的独立 `InvocationID`、实际 MainPID argv、资源限制、环境、
+   `After + StopPropagatedFrom` 和 live supervisor 后，才以同目录原子
+   rename 发布 root-owned `0444` start permit。permit 同时绑定 supervisor
+   generation、candidate generation 与 unit 名，runtime 用 systemd 自动
+   注入的 `$INVOCATION_ID` 验证 permit 后才 exec。这样同时封住了
+   supervisor 崩溃时的 restart 传播和 StartTransientUnit 竞态；代码与门禁
+   显式禁止重新加入
+   `BindsTo`/`PartOf`，且 controller/build/runtime 都显式固定
+   `Restart=no`。
+   runtime 另用 transient service，只监听 `127.0.0.1:18001`，
+   运行 2 个 Uvicorn worker，
+   并设置 `DynamicUser=yes` 与 `ProtectSystem=strict`。验证读取 candidate
+   cgroup，要求实际存活的 `spawn_main` worker 恰好为 2 个，而不只检查命令行
+   声明。
+4. runtime 中的 production 数据只读，数据库与 Redis 均关闭；
+   `APP_JATO_MONTHLY_ENABLED=false` 和
+   `APP_JATO_MONTHLY_EXECUTION_MODE=disabled` 是显式设置。验证必须看到月更
+   endpoint 返回结构化 HTTP 423，且 candidate cgroup 中没有
+   `jato_monthly_worker.py`。Grouped time series、Dashboard overview、
+   metadata 与 advanced analysis 四类启动预热也全部显式关闭，避免 canary
+   扫描大数据、写入缓存或击穿 4G 上限。
+5. canary 不调用 Nginx installer、`nginx reload`、production unit/env/drop-in
+   installer、scheduler reconcile、release GC 或 production checkpoint。
+6. 启动前和清理后会比较公网 `/healthz`、`build-meta.json` SHA、`nginx -T`
+   hash、active unit PID/命令/6G/8G/2 workers、monthly worker、scheduler
+   状态，以及 active-slot、`/opt/jato/active` 和 production unit/env/drop-in
+   的存在状态与指纹。旧部署中这些路径为 absent 也属于合法且必须保持的状态。
+   现有公网 `/readyz` 可能为 404，所以旧服务 baseline 只使用
+   `/healthz + build-meta`；candidate 自身仍必须通过精确 feature SHA
+   `/readyz`。
+7. 无论成功、build 失败、runtime 失败、TERM、SIGKILL 或 controller 总预算
+   到期，都只会按派生 unit 名及精确 FragmentPath、完整 ExecStart argv、
+   Environment、supervisor dependency 和 cgroup 身份停止子 unit。controller
+   的 EXIT trap 先尝试正常收口并写 draft checkpoint；无论 controller 如何
+   结束，仍存活且持锁的
+   supervisor 都先证明 controller cgroup 完全静默，再在一个全新 reconcile
+   进程中核验，不依赖 controller 的内存 flags。若 supervisor 自身被异常
+   终止，`Restart=on-failure` 的新进程读取 checkpoint：已经进入 controller
+   的任务只允许 recovery-only，且该恢复合同不要求已经按设计删除的 staged
+   archive 再次存在，禁止重新 build/runtime。恢复会确认 18001 已释放，再
+   在当前锁与当前 supervisor generation 下重新生成 after snapshot；跨代
+   candidate、生产指纹变化、矛盾/重复 marker 或显式 stop 请求都只能生成
+   failed receipt。runtime 与 staged archive 先清；
+   `/opt/jato-canary` 及其 `runtime/control/sources` 父层固定为
+   `root:root 0755`，所有入口都会复验无 symlink、owner/group 和 mode，
+   防止 deploy 用户通过 rename 整体替换 root-owned 控制树或 staged source；
+   只有按 run 派生的 runtime 叶目录按需交给 deploy 用户。
+   极小的 root-owned 只读 control bundle 不由仍受 `Restart=on-failure`
+   管理的 supervisor 自删，避免删除自身 ExecStart 后发生不可恢复重启。它会
+   保留到 supervisor 已 inactive/collected，再由外部流程在验证 terminal
+   receipt、端口和全部子 unit 后清理。持久 run ID 不可复用。`passed` 还必须存在唯一
+   `controller_completed/completed` marker；`expected_failure_verified`
+   必须存在唯一 `fault_observed/completed` marker；所有 terminal receipt
+   都必须以幂等且唯一的 `supervisor_reconciled/completed` 为 checkpoint
+   末态。任一 production 指纹、unit 身份、清理、writer generation 或
+   evidence 不完整都会失败并保留 control 供检查。
+
+服务器上的调用形式：
+
+```bash
+archive="$HOME/.cache/jato-canary/archives/<feature-sha>/<archive-sha256>.tar.gz"
+
+DEPLOY_STATE_DIR="$HOME/.local/state/jato-production-release" \
+CANARY_REPOSITORY="tristan419/JATO_Analysis_System" \
+CANARY_BRANCH="codex/tencent-bluegreen-release" \
+CANARY_COMMIT_SHA="<真实 40 位 feature SHA>" \
+CANARY_SOURCE_ARCHIVE="$archive" \
+CANARY_SOURCE_BYTES="<stat 得到的字节数>" \
+CANARY_SOURCE_SHA256="<sha256sum 得到的摘要>" \
+CANARY_RUN_ID="<唯一 canary id>" \
+bash 03_Scripts/deploy/tencent_feature_candidate_canary.sh launch
+```
+
+命令快速返回后，必须继续轮询 supervisor unit 与 receipt；只有 receipt
+终态才能判定结果：
+
+```text
+/run/systemd/transient/jato-feature-canary-supervisor-<run-key>.service
+/run/systemd/transient/jato-feature-canary-controller-<run-key>.service
+/var/lib/jato-canary/checkpoints/<run-key>.json
+/var/lib/jato-canary/evidence/<run-key>.json
+/var/lib/jato-canary/receipts/<run-key>.json
+```
+
+正常成功要求：
+
+- supervisor、controller、build、runtime 四个 transient unit 均已停止/collect；
+- `127.0.0.1:18001` 无监听；
+- runtime 与 staged source 两个临时路径均不存在；root-owned control
+  evidence 仍存在且不可写，待 supervisor collect 后再外部清理；
+- receipt 为 `outcome=passed`，`terminalWriter=supervisor_reconcile`，
+  candidate evidence/start permit 中的 supervisor generation 与 writer
+  `InvocationID` 相同，permit 的 candidate generation 与 candidate
+  systemd `InvocationID` 相同，checkpoint 末态为
+  `supervisor_reconciled/completed`；
+- embedded before/after 除采集时间外完全相同。
+
+受控失败演练增加 `CANARY_FAULT=after_candidate_start` 并使用另一个从未用过
+的 run ID。controller 会产生内部故障退出码；只有 cleanup 和 production
+before/after comparison 全部通过后，checkpoint/receipt 才收敛为
+`expected_failure_verified`。外层 launch 命令的退出码仍只代表 systemd
+是否接受 supervisor，不能替代 receipt。公网旧服务必须始终健康。这个演练
+不会批准、发布或重试任何 JATO 月更数据任务。
+
+不要用 `systemctl stop` 模拟 supervisor 故障：systemd 的
+`Restart=on-failure` 不会把显式 stop 当成失败重启。耐久性预检或故障注入
+必须对 supervisor 的 MainPID 使用 `systemctl kill --kill-whom=main -s KILL`
+（并使用专门、从未复用的 preflight/canary run ID），随后以 terminal receipt
+和全部子 unit 已 collect 为准。显式 stop 仅用于受控运维终止；它会依赖
+`TimeoutStopSec` 内的 signal trap 尝试收口，并且即使 candidate marker
+已经齐全也只能写 failed receipt，不能作为重启能力或 canary 通过证明。

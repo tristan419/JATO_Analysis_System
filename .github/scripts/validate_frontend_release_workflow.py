@@ -17,6 +17,15 @@ PREWARM_WORKFLOW_PATH = REPO_ROOT / ".github/workflows/intl-edge-prewarm.yml"
 CI_WORKFLOW_PATH = REPO_ROOT / ".github/workflows/ci.yml"
 REMOTE_RELEASE_PATH = REPO_ROOT / "03_Scripts/deploy/fullstack_remote_release.sh"
 SERVER_RELEASE_PATH = REPO_ROOT / "03_Scripts/ops/deploy_fullstack_server.sh"
+BLUEGREEN_RELEASE_PATH = (
+    REPO_ROOT / "03_Scripts/deploy/tencent_bluegreen_release.sh"
+)
+BLUEGREEN_BOOT_RECONCILE_PATH = (
+    REPO_ROOT / "03_Scripts/deploy/jato_bluegreen_boot_reconcile.py"
+)
+RELEASE_STORAGE_GUARD_PATH = (
+    REPO_ROOT / "03_Scripts/deploy/jato_release_storage_guard.py"
+)
 MAIN_CONDITION = "github.ref == 'refs/heads/main'"
 PREWARM_CONDITION = " ".join(
     (
@@ -551,6 +560,26 @@ def assert_tencent_resumable_upload_contract(workflow: Mapping[str, Any]) -> Non
         raise AssertionError("deployment secrets must not be exposed in remote command argv")
     if '"umask 077; exec bash -s" < "$control_payload"' not in deploy:
         raise AssertionError("deployment must send a mode-0600 control payload over SSH stdin")
+    remote_timeout = re.search(
+        r'timeout\s+([0-9]+)s\s+"\$\{ssh_command\[@\]\}"',
+        deploy,
+    )
+    controller_text = BLUEGREEN_RELEASE_PATH.read_text(encoding="utf-8")
+    controller_timeout = re.search(
+        r'BLUEGREEN_CONTROLLER_TIMEOUT="\$\{BLUEGREEN_CONTROLLER_TIMEOUT:-([0-9]+)\}"',
+        controller_text,
+    )
+    if remote_timeout is None or controller_timeout is None:
+        raise AssertionError(
+            "Tencent SSH/controller timeout budgets must be explicit and numeric"
+        )
+    remote_timeout_seconds = int(remote_timeout.group(1))
+    controller_timeout_seconds = int(controller_timeout.group(1))
+    if remote_timeout_seconds < controller_timeout_seconds + 600:
+        raise AssertionError(
+            "Tencent SSH timeout must exceed the persistent controller budget "
+            "by at least 600 seconds"
+        )
 
 
 def assert_deterministic_backend_package(workflow: Mapping[str, Any]) -> None:
@@ -645,12 +674,17 @@ def assert_release_checkpoint_contract(workflow: Mapping[str, Any]) -> None:
         "backend-healthy.json",
         "backend-healthy.evidence.json",
         "attestation_complete=false",
-        'rm -rf "$server_dir"',
+        "record_checkpoint_fetch_exit",
+        'trap record_checkpoint_fetch_exit EXIT',
+        '"$server_dir/fetch-status.json"',
+        '"backendHealthyAttested"',
         'checkpoint.get("phase") != "backend_healthy"',
         'checkpoint.get("status") != "completed"',
         "server checkpoint evidence binding mismatch",
         'evidence.get("identity") != expected_identity',
         'echo "Server checkpoint/evidence attestation SHA-256: $attestation_sha256"',
+        '"$server_dir/backend-healthy.json"',
+        '"$RUNNER_TEMP/release-checkpoint/candidate.json"',
     )
     missing_attestation = [
         token for token in required_attestation_tokens if token not in server_attestation_run
@@ -658,6 +692,16 @@ def assert_release_checkpoint_contract(workflow: Mapping[str, Any]) -> None:
     if missing_attestation:
         raise AssertionError(
             f"server checkpoint attestation is incomplete: {missing_attestation}"
+        )
+    if server_attestation.get("if") != (
+        "${{ always() && steps.upload_release.outcome == 'success' }}"
+    ):
+        raise AssertionError(
+            "server checkpoint evidence must be fetched even when deployment fails",
+        )
+    if 'rm -rf "$server_dir"' in server_attestation_run:
+        raise AssertionError(
+            "failed server attestation must retain raw checkpoint evidence",
         )
     if 'echo "attestation-sha256=$attestation_sha256"' in server_attestation_run:
         raise AssertionError(
@@ -746,10 +790,15 @@ def assert_release_checkpoint_contract(workflow: Mapping[str, Any]) -> None:
     if verified_with.get("retention-days") != "30":
         raise AssertionError("verified receipt must be retained for thirty days")
 
-
 def assert_server_consumes_only_prebuilt_dist() -> None:
     remote_release = REMOTE_RELEASE_PATH.read_text(encoding="utf-8")
     server_release = SERVER_RELEASE_PATH.read_text(encoding="utf-8")
+    bluegreen_release_path = (
+        REPO_ROOT / "03_Scripts/deploy/tencent_bluegreen_release.sh"
+    )
+    if not bluegreen_release_path.is_file():
+        raise AssertionError("Tencent blue/green release controller is missing")
+    bluegreen_release = bluegreen_release_path.read_text(encoding="utf-8")
     for path, script in (
         (REMOTE_RELEASE_PATH, remote_release),
         (SERVER_RELEASE_PATH, server_release),
@@ -770,6 +819,50 @@ def assert_server_consumes_only_prebuilt_dist() -> None:
         raise AssertionError("server recovery must reuse the privileged evidence verifier")
     if "--materialize-dir \"$PREBUILT_FRONTEND_DIR\"" not in remote_release:
         raise AssertionError("remote release must materialize only the verified artifact")
+    handoff = (
+        'bash "$RELEASE_WORKTREE/03_Scripts/deploy/'
+        'tencent_bluegreen_release.sh"'
+    )
+    if handoff not in remote_release:
+        raise AssertionError("production remote release must use Tencent blue/green")
+    if 'rm -rf "$REPO_DIR/$release_path"' in remote_release:
+        raise AssertionError(
+            "production remote release must not retain legacy live-tree mutation",
+        )
+    for forbidden in (
+        "merge_previous_frontend_assets",
+        'cp -p "$source" "$target"',
+    ):
+        if forbidden in bluegreen_release:
+            raise AssertionError(
+                "Tencent blue/green must not mutate the verified frontend "
+                f"artifact with old-slot assets: {forbidden!r}",
+            )
+    handoff_exit = 'exit "$BLUEGREEN_RC"'
+    if handoff_exit not in remote_release[remote_release.index(handoff) :]:
+        raise AssertionError("Tencent blue/green handoff must terminate the outer verifier")
+    if remote_release[remote_release.index(handoff_exit) + len(handoff_exit) :].strip():
+        raise AssertionError(
+            "production remote release must not retain a legacy deployment tail",
+        )
+    for token in (
+        '"$python_bin" -B "$helper" hold',
+        "--active-main-pid",
+        "--expected-project-root",
+        "--active-bundle-lock",
+        "verify_candidate",
+        "restore_previous_route",
+        "rollback_completed",
+        "BLUEGREEN_CANDIDATE_MEMORY_HIGH:-3G",
+        "BLUEGREEN_CANDIDATE_MEMORY_MAX:-4G",
+        "BLUEGREEN_ACTIVE_MEMORY_HIGH:-6G",
+        "BLUEGREEN_ACTIVE_MEMORY_MAX:-8G",
+        "Blue/green v1 forbids Alembic changes",
+    ):
+        if token not in bluegreen_release:
+            raise AssertionError(
+                f"Tencent blue/green release contract is missing {token!r}",
+            )
     if "install_prebuilt_frontend" not in server_release:
         raise AssertionError("server release must atomically install the prebuilt dist")
     if 'mv "$PREBUILT_FRONTEND_DIR" "$target_dir"' not in server_release:
@@ -780,6 +873,212 @@ def assert_server_consumes_only_prebuilt_dist() -> None:
         raise AssertionError("database migration must retain the main branch gate")
     if 'PRODUCTION_RELEASE_WORKFLOW" != "true"' not in server_release:
         raise AssertionError("database migration must require the production release workflow")
+
+
+def assert_bluegreen_storage_guard_text_contract(
+    remote_release: str,
+    bluegreen_release: str,
+    storage_guard: str,
+    boot_reconcile: str,
+) -> None:
+    helper_path = "03_Scripts/deploy/jato_release_storage_guard.py"
+    if helper_path not in remote_release:
+        raise AssertionError(
+            "production release archive must include the release storage guard",
+        )
+
+    required_controller_tokens = (
+        helper_path,
+        "BLUEGREEN_MIN_TOTAL_MEMORY_BYTES=$((14 * 1024 * 1024 * 1024))",
+        "BLUEGREEN_MIN_AVAILABLE_MEMORY_BYTES=$((5 * 1024 * 1024 * 1024))",
+        "BLUEGREEN_CANDIDATE_MAX_MEMORY_BYTES=$((4 * 1024 * 1024 * 1024))",
+        "BLUEGREEN_OS_MEMORY_RESERVE_BYTES=$((2 * 1024 * 1024 * 1024))",
+        "BLUEGREEN_ACTIVE_MEMORY_HIGH_BYTES=$((6 * 1024 * 1024 * 1024))",
+        "BLUEGREEN_ACTIVE_MEMORY_MAX_BYTES=$((8 * 1024 * 1024 * 1024))",
+        "BLUEGREEN_PREPARE_DISK_RESERVE_BYTES=$((15 * 1024 * 1024 * 1024))",
+        "BLUEGREEN_PREPARE_DISK_RESERVE_PERCENT=8",
+        "BLUEGREEN_RUNTIME_DISK_RESERVE_BYTES=$((10 * 1024 * 1024 * 1024))",
+        "BLUEGREEN_RUNTIME_DISK_RESERVE_PERCENT=5",
+        "BLUEGREEN_RELEASE_KEEP_UNREFERENCED=3",
+        "BLUEGREEN_RELEASE_NORMAL_GC_AGE_SECONDS=$((14 * 24 * 60 * 60))",
+        "BLUEGREEN_RELEASE_EMERGENCY_GC_AGE_SECONDS=$((24 * 60 * 60))",
+        "guard_release_storage",
+        "--expected-active-memory-high-bytes",
+        "--expected-active-memory-max-bytes",
+        "assert_runtime_storage_reserve",
+        "materialize_release_source",
+        "run_candidate_build_scope",
+        "build_candidate_runtime_locked",
+        "--scope",
+        '--property="MemoryHigh=$BLUEGREEN_CANDIDATE_MEMORY_HIGH"',
+        '--property="MemoryMax=$BLUEGREEN_CANDIDATE_MEMORY_MAX"',
+        '--property="TasksMax=512"',
+        "install_slot_runtime",
+    )
+    missing_controller = [
+        token for token in required_controller_tokens if token not in bluegreen_release
+    ]
+    if missing_controller:
+        raise AssertionError(
+            "Tencent blue/green storage contract is incomplete: "
+            f"{missing_controller}",
+        )
+    build_start = bluegreen_release.index("run_candidate_build_scope() {")
+    build_end = bluegreen_release.index("\n}\n", build_start)
+    constrained_build = bluegreen_release[build_start:build_end]
+    if "--wait" in constrained_build:
+        raise AssertionError(
+            "systemd-run scope is already synchronous and must not use --wait",
+        )
+    locked_build_start = bluegreen_release.index(
+        "build_candidate_runtime_locked() {",
+    )
+    locked_build_end = bluegreen_release.index("\n}\n", locked_build_start)
+    locked_build = bluegreen_release[locked_build_start:locked_build_end]
+    try:
+        scope_proof = locked_build.index("\n  assert_candidate_build_scope\n")
+        lock_proof = locked_build.index(
+            "\n  assert_inherited_production_lock\n",
+        )
+        runtime_prepare = locked_build.index("\n  prepare_candidate_runtime\n")
+        inner_prepare = locked_build.index("\n    run_inner_prepare\n")
+        final_runtime_seal = locked_build.index("\n    finalize_runtime_seal\n")
+    except ValueError as error:
+        raise AssertionError(
+            "candidate build scope proof and sealed build sequence are incomplete",
+        ) from error
+    if not (
+        scope_proof
+        < lock_proof
+        < runtime_prepare
+        < inner_prepare
+        < final_runtime_seal
+    ):
+        raise AssertionError(
+            "candidate build must prove its cgroup and inherited lock before "
+            "building and sealing the runtime",
+        )
+
+    prepare = bluegreen_release[bluegreen_release.index("prepare_and_switch()") :]
+    try:
+        environment = prepare.index("\n  require_environment\n")
+        inherited_lock = prepare.index(
+            "\n  assert_inherited_production_lock\n",
+        )
+        state_root = prepare.index("\n  ensure_bluegreen_state_root\n")
+        runtime_roots = prepare.index("\n  ensure_bluegreen_runtime_roots\n")
+        preflight = prepare.index("\n  guard_release_storage\n")
+        preflight_memory = prepare.index(
+            "\n  assert_host_memory_budget\n",
+            preflight,
+        )
+        materialize = prepare.index("\n  materialize_release_source\n")
+        build_scope = prepare.index("\n  run_candidate_build_scope\n")
+        final_seal = prepare.index("\n  verify_final_runtime_seal\n")
+        database_gate = prepare.index(
+            "\n  assert_no_database_migration_delta\n",
+            final_seal,
+        )
+        post_seal = prepare.index("\n  assert_runtime_storage_reserve\n")
+        runtime_memory = prepare.index(
+            "\n  assert_host_memory_budget\n",
+            post_seal,
+        )
+        install = prepare.index("\n  install_slot_runtime\n")
+    except ValueError as error:
+        raise AssertionError(
+            "release storage and memory preflight calls are incomplete",
+        ) from error
+    if not (
+        environment
+        < inherited_lock
+        < state_root
+        < runtime_roots
+        < preflight
+        < preflight_memory
+        < materialize
+        < build_scope
+        < final_seal
+        < database_gate
+        < post_seal
+        < runtime_memory
+        < install
+    ):
+        raise AssertionError(
+            "the inherited lock and 0755 roots must precede storage enforcement; "
+            "the 5 GiB memory checks and constrained build scope must bracket "
+            "materialization, follow the final seal, and precede candidate runtime "
+            "installation",
+        )
+
+    forbidden_boot_tokens = (
+        "jato_release_storage_guard",
+        "guard_release_storage",
+        "release_gc",
+        "shutil.rmtree",
+        "rm -rf",
+    )
+    retained_boot_tokens = [
+        token for token in forbidden_boot_tokens if token in boot_reconcile
+    ]
+    if retained_boot_tokens:
+        raise AssertionError(
+            "boot reconciliation must remain non-GC and non-destructive: "
+            f"{retained_boot_tokens}",
+        )
+
+    required_guard_tokens = (
+        ".jato-release-identity",
+        "cross_release_is_settled",
+        "DANGEROUS_RETRY_CLASSES",
+        "expected_repository",
+        "read_active_frontend_root",
+        "/proc/self/mountinfo",
+        "os.replace",
+        "os.fsync",
+        ".gc-",
+    )
+    missing_guard = [
+        token for token in required_guard_tokens if token not in storage_guard
+    ]
+    if missing_guard:
+        raise AssertionError(
+            "release storage guard is missing fail-closed safety primitives: "
+            f"{missing_guard}",
+        )
+
+    forbidden_guard_tokens = (
+        "rm -rf",
+        "shutil.rmtree(releases_root)",
+        "shutil.rmtree(args.releases_root)",
+        "shutil.rmtree(jato_root)",
+        'glob("*")',
+        'rglob("*")',
+    )
+    retained_guard_tokens = [
+        token for token in forbidden_guard_tokens if token in storage_guard
+    ]
+    if retained_guard_tokens:
+        raise AssertionError(
+            "release storage guard retains a broad deletion primitive: "
+            f"{retained_guard_tokens}",
+        )
+
+
+def assert_bluegreen_storage_guard_contract() -> None:
+    for path in (
+        BLUEGREEN_RELEASE_PATH,
+        BLUEGREEN_BOOT_RECONCILE_PATH,
+        RELEASE_STORAGE_GUARD_PATH,
+    ):
+        if not path.is_file():
+            raise AssertionError(f"required blue/green safety helper is missing: {path}")
+    assert_bluegreen_storage_guard_text_contract(
+        REMOTE_RELEASE_PATH.read_text(encoding="utf-8"),
+        BLUEGREEN_RELEASE_PATH.read_text(encoding="utf-8"),
+        RELEASE_STORAGE_GUARD_PATH.read_text(encoding="utf-8"),
+        BLUEGREEN_BOOT_RECONCILE_PATH.read_text(encoding="utf-8"),
+    )
 
 
 def assert_prewarm_contract(production_name: str) -> None:
@@ -853,6 +1152,7 @@ def assert_backend_readiness_ci_contract(
     bounded_pytest_command = pytest_match.group(0)
     required_tokens = (
         "tests/integration/test_api_contracts.py",
+        "tests/unit/test_jato_monthly_update_enabled_gate.py",
         "tests/unit/test_readiness_service.py",
         '|| status=$?',
     )
@@ -892,10 +1192,24 @@ def assert_required_ci_contract() -> None:
         "test_verify_intl_runtime_contract.py",
         "bash -n",
         "fullstack_remote_release.sh",
+        "tencent_feature_candidate_canary.sh",
+        "tencent_bluegreen_release.sh",
+        "production_mutation_lock.sh",
+        "enable_jato_fullstack_https.sh",
+        "install_jato_fullstack_nginx.sh",
         "deploy_fullstack_server.sh",
         "backup_production_data.sh",
+        "sync_data_to_cloud.sh",
+        "sync_msrp_db_to_cloud.sh",
         "test_release_checkpoint.py",
         "test_release_evidence.py",
+        "test_bluegreen_systemd_nginx_contract.py",
+        "test_jato_bluegreen_boot_reconcile.py",
+        "test_jato_quiescence_gate.py",
+        "test_jato_release_storage_guard.py",
+        "test_tencent_feature_candidate_canary.py",
+        "test_tencent_bluegreen_release.py",
+        "test_release_source_seal.py",
         "test_release_shell_hardening.py",
         "test_deploy_workflow.py",
         "npx vitest run",
@@ -938,6 +1252,7 @@ def main() -> None:
     assert_deterministic_backend_package(production)
     assert_release_checkpoint_contract(production)
     assert_server_consumes_only_prebuilt_dist()
+    assert_bluegreen_storage_guard_contract()
     assert_prewarm_contract(production_name)
     assert_required_ci_contract()
     print(

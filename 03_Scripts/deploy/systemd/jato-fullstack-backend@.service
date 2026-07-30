@@ -1,29 +1,38 @@
 [Unit]
 Description=JATO Fullstack FastAPI backend on port %i
-After=network.target
+After=network-online.target
+Wants=network-online.target
+StartLimitIntervalSec=60
+StartLimitBurst=3
 
 [Service]
 Type=simple
-WorkingDirectory=/opt/JATO_Analysis_System-main/06_AppPlatform/backend
+WorkingDirectory=/opt/jato/slots/%i/current/06_AppPlatform/backend
 
 # Recommended: run as a non-root user.
 # User=deploy
 # Group=deploy
 
-# Safer default for a shared cloud box; override in backend.env if needed.
+# Common secrets and durable data paths belong in backend.env. Release identity,
+# slot-local paths, worker count, and candidate safety controls belong in the
+# required per-slot file so one slot cannot accidentally inherit the other.
 Environment=APP_BACKEND_WORKERS=2
 EnvironmentFile=-/etc/jato-fullstack/backend.env
+EnvironmentFile=/etc/jato-fullstack/slots/%i.env
 Environment=PYTHONUNBUFFERED=1
-Environment=APP_PROJECT_ROOT=/opt/JATO_Analysis_System-main
-Environment=PYTHONPATH=/opt/JATO_Analysis_System-main/06_AppPlatform/backend
+Environment=PYTHONDONTWRITEBYTECODE=1
 
-ExecStart=/opt/JATO_Analysis_System-main/.venv/bin/python -m uvicorn app.main:app --host 127.0.0.1 --port %i --workers ${APP_BACKEND_WORKERS}
+ExecStart=/opt/jato/slots/%i/current/.venv/bin/python -m uvicorn app.main:app --host 127.0.0.1 --port %i --workers ${APP_BACKEND_WORKERS}
 
 Restart=always
 RestartSec=3
 TimeoutStopSec=20
-KillMode=mixed
+KillMode=control-group
 LimitNOFILE=65535
+MemoryAccounting=yes
+TasksAccounting=yes
+CPUAccounting=yes
+OOMPolicy=stop
 
 [Install]
 WantedBy=multi-user.target

@@ -70,9 +70,23 @@ jobs:
         run: |
           bash -n \
             03_Scripts/deploy/fullstack_remote_release.sh \
+            03_Scripts/deploy/tencent_feature_candidate_canary.sh \
+            03_Scripts/deploy/tencent_bluegreen_release.sh \
+            03_Scripts/deploy/lib/production_mutation_lock.sh \
+            03_Scripts/deploy/nginx/enable_jato_fullstack_https.sh \
+            03_Scripts/deploy/nginx/install_jato_fullstack_nginx.sh \
             03_Scripts/ops/deploy_fullstack_server.sh \
-            03_Scripts/ops/backup_production_data.sh
+            03_Scripts/ops/backup_production_data.sh \
+            03_Scripts/ops/sync_data_to_cloud.sh \
+            03_Scripts/ops/sync_msrp_db_to_cloud.sh
           python -m pytest -q \
+            03_Scripts/tests/test_bluegreen_systemd_nginx_contract.py \
+            03_Scripts/tests/test_jato_bluegreen_boot_reconcile.py \
+            03_Scripts/tests/test_jato_quiescence_gate.py \
+            03_Scripts/tests/test_jato_release_storage_guard.py \
+            03_Scripts/tests/test_tencent_feature_candidate_canary.py \
+            03_Scripts/tests/test_tencent_bluegreen_release.py \
+            03_Scripts/tests/test_release_source_seal.py \
             03_Scripts/tests/test_release_checkpoint.py \
             03_Scripts/tests/test_release_evidence.py \
             03_Scripts/tests/test_release_shell_hardening.py \
@@ -163,6 +177,7 @@ jobs:
           status=0
           timeout 180s python -m pytest \
             tests/integration/test_api_contracts.py \
+            tests/unit/test_jato_monthly_update_enabled_gate.py \
             tests/unit/test_readiness_service.py \
             -q 2>&1 | tee "$pytest_log" || status=$?
           if [ "$status" -eq 124 ] && grep -Eq '^[0-9]+ passed(, [0-9]+ warnings?)? in ' "$pytest_log"; then
