@@ -236,6 +236,7 @@ def _run_archive_member_validator(path: Path) -> subprocess.CompletedProcess[str
 def _root_tar_info() -> tarfile.TarInfo:
     root = tarfile.TarInfo(".")
     root.type = tarfile.DIRTYPE
+    root.mode = 0o755
     return root
 
 
@@ -244,12 +245,26 @@ def test_archive_member_validator_accepts_single_gnu_tar_root_directory(
 ) -> None:
     archive_path = tmp_path / "valid.tar.gz"
     payload = tarfile.TarInfo("./payload.txt")
+    payload.mode = 0o644
     _write_archive(archive_path, [_root_tar_info(), payload])
 
     result = _run_archive_member_validator(archive_path)
 
     assert result.returncode == 0, result.stderr
     assert "passed fail-closed validation" in result.stdout
+
+
+def test_archive_member_validator_accepts_private_business_asset_mode(
+    tmp_path: Path,
+) -> None:
+    archive_path = tmp_path / "private-valid.tar.gz"
+    payload = tarfile.TarInfo("./01_RAW_DATA/private.xlsx")
+    payload.mode = 0o600
+    _write_archive(archive_path, [_root_tar_info(), payload])
+
+    result = _run_archive_member_validator(archive_path)
+
+    assert result.returncode == 0, result.stderr
 
 
 def test_archive_member_validator_rejects_traversal_link_and_duplicate(
@@ -267,6 +282,30 @@ def test_archive_member_validator_rejects_traversal_link_and_duplicate(
     }
     invalid_members["link"][1].type = tarfile.SYMTYPE
     invalid_members["link"][1].linkname = "/etc/passwd"
+    group_writable = tarfile.TarInfo("./group-writable.txt")
+    group_writable.mode = 0o664
+    invalid_members["group_writable"] = [_root_tar_info(), group_writable]
+    special_mode = tarfile.TarInfo("./setuid")
+    special_mode.mode = 0o4755
+    invalid_members["special_mode"] = [_root_tar_info(), special_mode]
+    private_directory = tarfile.TarInfo("./private")
+    private_directory.type = tarfile.DIRTYPE
+    private_directory.mode = 0o700
+    invalid_members["private_directory"] = [_root_tar_info(), private_directory]
+    public_file_with_private_mode = tarfile.TarInfo("./public.py")
+    public_file_with_private_mode.mode = 0o600
+    invalid_members["public_file_with_private_mode"] = [
+        _root_tar_info(),
+        public_file_with_private_mode,
+    ]
+    private_file_with_public_mode = tarfile.TarInfo(
+        "./01_RAW_DATA/private.xlsx"
+    )
+    private_file_with_public_mode.mode = 0o644
+    invalid_members["private_file_with_public_mode"] = [
+        _root_tar_info(),
+        private_file_with_public_mode,
+    ]
 
     for name, members in invalid_members.items():
         archive_path = tmp_path / f"{name}.tar.gz"
@@ -287,6 +326,8 @@ def test_bluegreen_controller_alone_publishes_status_and_target_health() -> None
     assert "merge_previous_frontend_assets" not in controller
     assert 'cp -p "$source" "$target"' not in controller
     build = _shell_function(BLUEGREEN_SCRIPT, "build_candidate_runtime_locked")
+    source_verify = build.index("\n    verify_materialized_release_source\n")
+    database_gate = build.index("\n    assert_no_database_migration_delta\n")
     status_write = build.index("\n    write_candidate_deploy_status\n")
     runtime_seal = build.index("\n    finalize_runtime_seal\n")
     switch_checkpoint = switch.index(
@@ -299,11 +340,193 @@ def test_bluegreen_controller_alone_publishes_status_and_target_health() -> None
     healthy_checkpoint = activate.index(
         "\n  checkpoint_write backend_healthy completed automatic",
     )
-    assert status_write < runtime_seal
+    assert source_verify < database_gate < status_write < runtime_seal
     assert switch_checkpoint < activation_call
     assert healthy_checkpoint > activate.index("verify_active_cgroup")
     assert "restore_previous_route" in controller
     assert "checkpoint_write rollback_completed completed automatic" in controller
+
+
+def test_server_cleans_only_toolkit_egg_info_around_editable_install() -> None:
+    script = SERVER_SCRIPT.read_text(encoding="utf-8")
+    install = _shell_function(
+        SERVER_SCRIPT,
+        "install_scraping_toolkit_editable",
+    )
+
+    assert "trap cleanup_toolkit_on_exit EXIT" in install
+    assert install.count("cleanup_scraping_toolkit_egg_info") == 2
+    exit_cleanup = _shell_function(SERVER_SCRIPT, "cleanup_toolkit_on_exit")
+    assert "cleanup_scraping_toolkit_egg_info" in exit_cleanup
+    editable_install = install.index('python -m pip install -e "$TOOLKIT_DIR"')
+    assert install.index("cleanup_scraping_toolkit_egg_info") < editable_install
+    assert install.index(
+        "cleanup_scraping_toolkit_egg_info",
+        editable_install,
+    ) > editable_install
+    assert "pip wheel" not in install
+
+
+def test_archive_permissions_survive_both_remote_extractions() -> None:
+    outer = REMOTE_SCRIPT.read_text(encoding="utf-8")
+    controller = BLUEGREEN_SCRIPT.read_text(encoding="utf-8")
+
+    assert "tar --same-permissions --no-overwrite-dir" in outer
+    assert '-xzf "$RELEASE_ARCHIVE" -C "$RELEASE_WORKTREE"' in outer
+    assert (
+        ") | sudo -n tar --same-permissions --no-overwrite-dir"
+        in controller
+    )
+
+
+def test_gnu_tar_normalizes_and_restores_release_modes_twice(
+    tmp_path: Path,
+) -> None:
+    version = subprocess.run(
+        ["tar", "--version"],
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    if version.returncode != 0 or "GNU tar" not in version.stdout:
+        pytest.skip("production GNU tar semantics are verified on Ubuntu CI")
+
+    source = tmp_path / "source"
+    nested = source / "06_AppPlatform/frontend"
+    backend = source / "06_AppPlatform/backend"
+    private_dir = source / "01_RAW_DATA"
+    nested.mkdir(parents=True)
+    backend.mkdir()
+    private_dir.mkdir()
+    normal = nested / "normal.txt"
+    executable = nested / "executable.sh"
+    misplaced_dataset = backend / "misplaced.parquet"
+    private_workbook = private_dir / "private.xlsx"
+    normal.write_text("normal\n", encoding="utf-8")
+    executable.write_text("#!/bin/sh\n", encoding="utf-8")
+    misplaced_dataset.write_text("must-not-ship\n", encoding="utf-8")
+    private_workbook.write_text("private\n", encoding="utf-8")
+    source.chmod(0o700)
+    (source / "06_AppPlatform").chmod(0o700)
+    nested.chmod(0o700)
+    private_dir.chmod(0o700)
+    normal.chmod(0o600)
+    executable.chmod(0o700)
+    private_workbook.chmod(0o600)
+
+    archive = tmp_path / "release.tar"
+    common = [
+        "tar",
+        "--sort=name",
+        "--format=gnu",
+        "--owner=0",
+        "--group=0",
+        "--numeric-owner",
+        "--mtime=@0",
+        "--no-acls",
+        "--no-xattrs",
+        "--no-selinux",
+    ]
+    create = subprocess.run(
+        [
+            *common,
+            "--mode=u=rwX,go=rX",
+            "-cf",
+            str(archive),
+            "--exclude=01_RAW_DATA",
+            "--exclude=06_AppPlatform/backend/*.parquet",
+            "-C",
+            str(source),
+            ".",
+        ],
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert create.returncode == 0, create.stderr
+    append_private = subprocess.run(
+        [
+            *common,
+            "--mode=u=rwX,go=X",
+            "-rf",
+            str(archive),
+            "-C",
+            str(source),
+            "01_RAW_DATA/private.xlsx",
+        ],
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert append_private.returncode == 0, append_private.stderr
+
+    first = tmp_path / "first"
+    second = tmp_path / "second"
+    first.mkdir(mode=0o700)
+    second.mkdir(mode=0o711)
+    extract = subprocess.run(
+        [
+            "bash",
+            "-c",
+            (
+                "set -Eeuo pipefail; umask 077; "
+                'tar --same-permissions --no-overwrite-dir '
+                '-xf "$1" -C "$2"; '
+                '(cd "$2" && tar cf - .) '
+                '| tar --same-permissions --no-overwrite-dir '
+                '-xf - -C "$3"'
+            ),
+            "_",
+            str(archive),
+            str(first),
+            str(second),
+        ],
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert extract.returncode == 0, extract.stderr
+
+    assert first.stat().st_mode & 0o777 == 0o700
+    assert second.stat().st_mode & 0o777 == 0o711
+    for root in (first, second):
+        assert (root / "06_AppPlatform").stat().st_mode & 0o777 == 0o755
+        assert (
+            root / "06_AppPlatform/frontend"
+        ).stat().st_mode & 0o777 == 0o755
+        assert (
+            root / "06_AppPlatform/frontend/normal.txt"
+        ).stat().st_mode & 0o777 == 0o644
+        assert (
+            root / "06_AppPlatform/frontend/executable.sh"
+        ).stat().st_mode & 0o777 == 0o755
+        assert not (
+            root / "06_AppPlatform/backend/misplaced.parquet"
+        ).exists()
+        assert (root / "01_RAW_DATA").stat().st_mode & 0o777 == 0o700
+        assert (
+            root / "01_RAW_DATA/private.xlsx"
+        ).stat().st_mode & 0o777 == 0o600
+
+
+def test_persistent_release_retry_safely_cleans_egg_info_before_source_seal() -> None:
+    outer = REMOTE_SCRIPT.read_text(encoding="utf-8")
+    controller = BLUEGREEN_SCRIPT.read_text(encoding="utf-8")
+    materialize = _shell_function(BLUEGREEN_SCRIPT, "materialize_release_source")
+
+    assert "03_Scripts/deploy/cleanup_toolkit_egg_info.py" in outer
+    cleanup = materialize.index(
+        'python3 -B "$TOOLKIT_EGG_INFO_HELPER"',
+    )
+    source_seal = materialize.index(
+        'sudo -n test -L "$RELEASE_SOURCE_SEAL_FILE"',
+        cleanup,
+    )
+    verify = materialize.index(
+        'python3 -B "$SOURCE_SEAL_HELPER" verify',
+        source_seal,
+    )
+    assert cleanup < source_seal < verify
 
 
 def test_server_checkpoint_boundaries_are_fail_closed_and_resume_safe() -> None:
@@ -588,7 +811,7 @@ def test_read_only_gate_failure_preserves_resumable_checkpoint(
     assert ("checkpoint-write" in result.stdout) is checkpoint_written
 
 
-def test_frontend_public_permissions_are_normalized_under_private_umask(
+def test_frontend_public_permissions_only_mutate_excluded_dist(
     tmp_path: Path,
 ) -> None:
     repo_dir = tmp_path / "repo"
@@ -598,10 +821,16 @@ def test_frontend_public_permissions_are_normalized_under_private_umask(
     asset_dir.mkdir(parents=True)
     (dist_dir / "index.html").write_text("ok", encoding="utf-8")
     (asset_dir / "app.js").write_text("ok", encoding="utf-8")
-    for directory in (repo_dir, repo_dir / "06_AppPlatform", frontend_dir, dist_dir, asset_dir):
+    for directory in (repo_dir, repo_dir / "06_AppPlatform", frontend_dir):
+        directory.chmod(0o755)
+    for directory in (dist_dir, asset_dir):
         directory.chmod(0o700)
     for file_path in (dist_dir / "index.html", asset_dir / "app.js"):
         file_path.chmod(0o600)
+    parent_modes_before = {
+        directory: directory.stat().st_mode & 0o777
+        for directory in (repo_dir, repo_dir / "06_AppPlatform", frontend_dir)
+    }
 
     result = subprocess.run(
         [
@@ -623,18 +852,57 @@ def test_frontend_public_permissions_are_normalized_under_private_umask(
 
     assert result.returncode == 0, result.stderr + result.stdout
     for directory in (repo_dir, repo_dir / "06_AppPlatform", frontend_dir):
-        assert directory.stat().st_mode & 0o777 == 0o711
+        assert directory.stat().st_mode & 0o777 == parent_modes_before[directory]
     for directory in (dist_dir, asset_dir):
         assert directory.stat().st_mode & 0o777 == 0o755
     for file_path in (dist_dir / "index.html", asset_dir / "app.js"):
         assert file_path.stat().st_mode & 0o777 == 0o644
 
     install = _shell_function(SERVER_SCRIPT, "install_prebuilt_frontend")
+    normalize = _shell_function(
+        SERVER_SCRIPT,
+        "normalize_frontend_public_permissions",
+    )
+    assert 'chmod a+x "$parent_dir"' not in normalize
     normalize_staging = install.index(
         'normalize_frontend_public_permissions "$PREBUILT_FRONTEND_DIR"'
     )
     move_live_dist = install.index('mv "$target_dir" "$backup_dir"')
     assert normalize_staging < move_live_dist
+
+
+def test_frontend_public_permissions_reject_private_sealed_parent(
+    tmp_path: Path,
+) -> None:
+    repo_dir = tmp_path / "repo"
+    frontend_dir = repo_dir / "06_AppPlatform/frontend"
+    dist_dir = frontend_dir / "dist"
+    dist_dir.mkdir(parents=True)
+    repo_dir.chmod(0o700)
+    (repo_dir / "06_AppPlatform").chmod(0o755)
+    frontend_dir.chmod(0o755)
+
+    result = subprocess.run(
+        [
+            "bash",
+            "-c",
+            "set -Eeuo pipefail\n"
+            + _shell_function(SERVER_SCRIPT, "normalize_frontend_public_permissions")
+            + '\nnormalize_frontend_public_permissions "$FRONTEND_DIR/dist"\n',
+        ],
+        env={
+            **os.environ,
+            "REPO_DIR": str(repo_dir),
+            "FRONTEND_DIR": str(frontend_dir),
+        },
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert result.returncode != 0
+    assert repo_dir.stat().st_mode & 0o777 == 0o700
+    assert "must already be a real safe traversable directory" in result.stdout
 
 
 def test_frontend_public_permissions_reject_symlinks(tmp_path: Path) -> None:

@@ -474,14 +474,19 @@ jobs:
 
           source_date_epoch="$(tr -d '[:space:]' < "$RUNNER_TEMP/release-source-date-epoch")"
           [[ "$source_date_epoch" =~ ^[0-9]+$ ]]
-          tar_normalize=(
+          tar_common=(
             --sort=name
             --format=gnu
             --owner=0
             --group=0
             --numeric-owner
             --mtime="@$source_date_epoch"
+            --no-acls
+            --no-xattrs
+            --no-selinux
           )
+          tar_normalize=("${tar_common[@]}" --mode='u=rwX,go=rX')
+          tar_private_normalize=("${tar_common[@]}" --mode='u=rwX,go=X')
           tar "${tar_normalize[@]}" -cf "$RUNNER_TEMP/JATO_deploy.tar" \
             --exclude='.git' \
             --exclude='node_modules' \
@@ -492,22 +497,23 @@ jobs:
             --exclude='*.pyc' \
             --exclude='01_RAW_DATA' \
             --exclude='04_Processed_data' \
+            --exclude='06_AppPlatform/backend/*.parquet' \
             --exclude='*.ipynb' \
             --exclude='03_Scripts/diagnostics/artifacts' \
             --exclude='03_Scripts/probe_results' \
             --exclude='data_wangler' \
             --exclude='Markdown_Readme' \
             -C "$GITHUB_WORKSPACE" .
-          tar "${tar_normalize[@]}" -rf "$RUNNER_TEMP/JATO_deploy.tar" \
+          tar "${tar_private_normalize[@]}" -rf "$RUNNER_TEMP/JATO_deploy.tar" \
             -C "$GITHUB_WORKSPACE" "$required_workbook"
-          tar "${tar_normalize[@]}" -rf "$RUNNER_TEMP/JATO_deploy.tar" \
+          tar "${tar_private_normalize[@]}" -rf "$RUNNER_TEMP/JATO_deploy.tar" \
             -C "$GITHUB_WORKSPACE" "$msrp_pack"
           mapfile -d '' -t msrp_local_paths < "$msrp_local_paths_file"
           for evidence_path in "${msrp_local_paths[@]}"; do
             case "$evidence_path" in
               "$msrp_pack"/*) ;;
               *)
-                tar "${tar_normalize[@]}" -rf "$RUNNER_TEMP/JATO_deploy.tar" \
+                tar "${tar_private_normalize[@]}" -rf "$RUNNER_TEMP/JATO_deploy.tar" \
                   -C "$GITHUB_WORKSPACE" "$evidence_path"
                 ;;
             esac

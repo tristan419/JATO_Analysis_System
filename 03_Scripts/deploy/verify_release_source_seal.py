@@ -40,6 +40,7 @@ RUNTIME_SCOPES = (
     "06_AppPlatform/frontend/dist",
 )
 SOURCE_CRITICAL_FILES = (
+    "03_Scripts/deploy/cleanup_toolkit_egg_info.py",
     "03_Scripts/deploy/jato_bluegreen_boot_reconcile.py",
     "03_Scripts/deploy/tencent_bluegreen_release.sh",
     "03_Scripts/deploy/jato_quiescence_gate.py",

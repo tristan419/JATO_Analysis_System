@@ -199,6 +199,7 @@ if ! tar tzf "$RELEASE_ARCHIVE" >/dev/null 2>&1; then
 fi
 python3 - "$RELEASE_ARCHIVE" <<'PY_VALIDATE_RELEASE_ARCHIVE'
 import pathlib
+import stat
 import sys
 import tarfile
 
@@ -210,9 +211,13 @@ with tarfile.open(sys.argv[1], mode="r:gz") as archive:
     root_directory_seen = False
     for member in members:
         if member.name in {".", "./"}:
-            if not member.isdir() or root_directory_seen:
+            if (
+                not member.isdir()
+                or root_directory_seen
+                or stat.S_IMODE(member.mode) != 0o755
+            ):
                 raise SystemExit(
-                    "[ERROR] Release archive root member must be one directory"
+                    "[ERROR] Release archive root member must be one mode-0755 directory"
                 )
             root_directory_seen = True
             continue
@@ -227,11 +232,27 @@ with tarfile.open(sys.argv[1], mode="r:gz") as archive:
             raise SystemExit(f"[ERROR] Unsupported release archive member: {member.name}")
         if not (member.isfile() or member.isdir()):
             raise SystemExit(f"[ERROR] Unsupported release archive entry type: {member.name}")
+        mode = stat.S_IMODE(member.mode)
+        private_member = (
+            normalized == "01_RAW_DATA"
+            or normalized.startswith("01_RAW_DATA/")
+            or normalized == "03_Scripts/diagnostics/artifacts"
+            or normalized.startswith("03_Scripts/diagnostics/artifacts/")
+        )
+        if private_member:
+            allowed_modes = {0o600, 0o711} if member.isfile() else {0o711}
+        else:
+            allowed_modes = {0o644, 0o755} if member.isfile() else {0o755}
+        if mode not in allowed_modes:
+            raise SystemExit(
+                f"[ERROR] Unsafe release archive mode {mode:04o}: {member.name}"
+            )
 print("[INFO] Release archive members passed fail-closed validation")
 PY_VALIDATE_RELEASE_ARCHIVE
 
 echo "[INFO] Extracting verified production release archive: $RELEASE_ARCHIVE"
-tar xzf "$RELEASE_ARCHIVE" -C "$RELEASE_WORKTREE"
+tar --same-permissions --no-overwrite-dir \
+  -xzf "$RELEASE_ARCHIVE" -C "$RELEASE_WORKTREE"
 
 required_release_files=(
   hermes/deploy_release.json
@@ -239,6 +260,7 @@ required_release_files=(
   hermes/frontend_release/frontend-dist.tar.gz
   01_RAW_DATA/VOC_Nordic_SUV_Users_100.xlsx
   03_Scripts/deploy/frontend_release_artifact.py
+  03_Scripts/deploy/cleanup_toolkit_egg_info.py
   03_Scripts/deploy/release_checkpoint.py
   03_Scripts/deploy/release_evidence.py
   03_Scripts/deploy/prepare_backend_release.py
