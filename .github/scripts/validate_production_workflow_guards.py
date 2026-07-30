@@ -16,6 +16,9 @@ MAIN_REF = "refs/heads/main"
 MAIN_REF_CONDITION = f"github.ref == '{MAIN_REF}'"
 PRODUCTION_ENVIRONMENT = "production"
 PRODUCTION_RELEASE_WORKFLOW = ".github/workflows/production-release.yml"
+CHECKPOINT_RECOVERY_WORKFLOW = (
+    ".github/workflows/production-checkpoint-recovery.yml"
+)
 RELEASE_COORDINATION_WORKFLOW = (
     ".github/workflows/release-coordination-guard.yml"
 )
@@ -31,6 +34,7 @@ PRODUCTION_COORDINATION_JOB = "release_coordination_guard"
 
 PRODUCTION_JOBS = {
     PRODUCTION_RELEASE_WORKFLOW: ("deploy_tencent",),
+    CHECKPOINT_RECOVERY_WORKFLOW: ("recover_checkpoint",),
     ".github/workflows/deploy-aws-ecs.yml": ("deploy",),
     ".github/workflows/deploy-ec2-auto-update.yml": ("deploy",),
     ".github/workflows/hermes-devsync.yml": ("devsync",),
@@ -208,6 +212,366 @@ def assert_all_static_production_jobs_are_registered() -> None:
 def assert_production_release_main_guards() -> None:
     for job_name in PRODUCTION_RELEASE_MAIN_ONLY_JOBS:
         assert_main_only_job(PRODUCTION_RELEASE_WORKFLOW, job_name)
+
+
+def assert_checkpoint_recovery_contract() -> None:
+    workflow = load_workflow(CHECKPOINT_RECOVERY_WORKFLOW)
+    if workflow.get("name") != "production-checkpoint-recovery":
+        raise AssertionError("checkpoint recovery workflow name changed")
+    workflow_jobs = workflow.get("jobs")
+    expected_jobs = {
+        "recovery_coordination_guard",
+        "recover_checkpoint",
+    }
+    if not isinstance(workflow_jobs, Mapping) or set(workflow_jobs) != expected_jobs:
+        raise AssertionError(
+            "checkpoint recovery must contain exactly its guard and recovery jobs"
+        )
+    triggers = workflow.get("on")
+    if not isinstance(triggers, Mapping) or set(triggers) != {"workflow_dispatch"}:
+        raise AssertionError(
+            "checkpoint recovery must only support an explicit workflow_dispatch"
+        )
+    dispatch = triggers.get("workflow_dispatch")
+    if not isinstance(dispatch, Mapping):
+        raise AssertionError("checkpoint recovery dispatch inputs are missing")
+    inputs = dispatch.get("inputs")
+    if not isinstance(inputs, Mapping) or set(inputs) != {"mode", "confirmation"}:
+        raise AssertionError(
+            "checkpoint recovery only accepts mode and confirmation inputs"
+        )
+    mode = inputs.get("mode")
+    if not isinstance(mode, Mapping) or mode.get("default") != "dry-run":
+        raise AssertionError("checkpoint recovery must default to dry-run")
+    if mode.get("type") != "choice" or mode.get("options") != [
+        "dry-run",
+        "apply",
+    ]:
+        raise AssertionError("checkpoint recovery mode choices changed")
+    if mode.get("required") != "true":
+        raise AssertionError("checkpoint recovery mode must be required")
+    confirmation = inputs.get("confirmation")
+    if not isinstance(confirmation, Mapping) or {
+        "required": confirmation.get("required"),
+        "default": confirmation.get("default"),
+        "type": confirmation.get("type"),
+    } != {
+        "required": "false",
+        "default": "",
+        "type": "string",
+    }:
+        raise AssertionError(
+            "checkpoint recovery confirmation must be an optional empty string"
+        )
+
+    concurrency = workflow.get("concurrency")
+    if not isinstance(concurrency, Mapping) or concurrency != {
+        "group": "production-release-main",
+        "cancel-in-progress": "false",
+    }:
+        raise AssertionError(
+            "checkpoint recovery must serialize with the main production release"
+        )
+    permissions = workflow.get("permissions")
+    if not isinstance(permissions, Mapping) or permissions != {
+        "actions": "read",
+        "contents": "read",
+        "issues": "read",
+        "pull-requests": "read",
+    }:
+        raise AssertionError("checkpoint recovery permissions are not least-privilege")
+
+    guard = assert_main_only_job(
+        CHECKPOINT_RECOVERY_WORKFLOW,
+        "recovery_coordination_guard",
+    )
+    if get_environment_name(guard):
+        raise AssertionError("checkpoint recovery preflight must not use production")
+    guard_steps = get_steps(
+        guard,
+        CHECKPOINT_RECOVERY_WORKFLOW,
+        "recovery_coordination_guard",
+    )
+    expected_guard_steps = [
+        "Checkout recovery source",
+        "Validate recovery dispatch intent",
+        "Validate unpublished release coordination",
+        "Freeze recovery coordination plan",
+    ]
+    if [str(step.get("name") or "") for step in guard_steps] != expected_guard_steps:
+        raise AssertionError(
+            "checkpoint recovery guard steps or ordering changed"
+        )
+    if "secrets." in str(guard_steps):
+        raise AssertionError(
+            "checkpoint recovery guard must not consume production secrets"
+        )
+    guard_checkout = guard_steps[0]
+    checkout_with = guard_checkout.get("with")
+    if (
+        guard_checkout.get("uses") != "actions/checkout@v5"
+        or not isinstance(checkout_with, Mapping)
+        or checkout_with.get("ref") != "${{ github.sha }}"
+        or checkout_with.get("persist-credentials") != "false"
+    ):
+        raise AssertionError(
+            "checkpoint recovery guard must checkout the exact non-credentialed SHA"
+        )
+    guard_intent = str(guard_steps[1].get("run") or "")
+    for required in (
+        "case \"$RECOVERY_MODE\" in",
+        "dry-run)",
+        "apply)",
+        "ABORT 2026-07-30-ce5 PRE-SWITCH",
+    ):
+        if required not in guard_intent:
+            raise AssertionError(
+                f"checkpoint recovery guard intent lost {required!r}"
+            )
+    guard_coordination = str(guard_steps[2].get("run") or "")
+    for required in (
+        RELEASE_COORDINATION_SCRIPT,
+        "production",
+        '--main-sha "$GITHUB_SHA"',
+        '--plan-output "$RUNNER_TEMP/recovery-coordination-plan.json"',
+    ):
+        if required not in guard_coordination:
+            raise AssertionError(
+                f"checkpoint recovery guard coordination lost {required!r}"
+            )
+    freeze = guard_steps[3]
+    freeze_with = freeze.get("with")
+    expected_frozen_artifact = {
+        "name": (
+            "checkpoint-recovery-plan-${{ github.sha }}-"
+            "${{ github.run_attempt }}"
+        ),
+        "path": "${{ runner.temp }}/recovery-coordination-plan.json",
+        "if-no-files-found": "error",
+        "compression-level": "0",
+        "overwrite": "false",
+        "retention-days": "7",
+    }
+    if (
+        freeze.get("uses") != "actions/upload-artifact@v4"
+        or not isinstance(freeze_with, Mapping)
+        or dict(freeze_with) != expected_frozen_artifact
+    ):
+        raise AssertionError(
+            "checkpoint recovery frozen coordination artifact contract changed"
+        )
+
+    recovery = assert_main_only_job(
+        CHECKPOINT_RECOVERY_WORKFLOW,
+        "recover_checkpoint",
+    )
+    if get_environment_name(recovery) != PRODUCTION_ENVIRONMENT:
+        raise AssertionError("checkpoint recovery apply job needs production approval")
+    if recovery.get("needs") != "recovery_coordination_guard":
+        raise AssertionError("checkpoint recovery must wait for its frozen plan")
+
+    steps = get_steps(
+        recovery,
+        CHECKPOINT_RECOVERY_WORKFLOW,
+        "recover_checkpoint",
+    )
+    step_names = [str(step.get("name") or "") for step in steps]
+    expected_steps = [
+        "Checkout recovery source",
+        "Download frozen recovery coordination plan",
+        "Revalidate frozen coordination plan after approval",
+        "Revalidate recovery dispatch intent after approval",
+        "Build immutable recovery control bundle",
+        "Validate Tencent recovery credentials",
+        "Reconfirm current main before recovery transport",
+        "Run reviewed checkpoint recovery on Tencent",
+        "Upload checkpoint recovery result",
+    ]
+    if step_names != expected_steps:
+        raise AssertionError(
+            "checkpoint recovery steps or ordering changed"
+        )
+    if "secrets." in str(steps[:4]):
+        raise AssertionError(
+            "checkpoint recovery must validate approved intent before reading secrets"
+        )
+    recovery_checkout = steps[0]
+    recovery_checkout_with = recovery_checkout.get("with")
+    if (
+        recovery_checkout.get("uses") != "actions/checkout@v5"
+        or not isinstance(recovery_checkout_with, Mapping)
+        or recovery_checkout_with.get("ref") != "${{ github.sha }}"
+        or recovery_checkout_with.get("persist-credentials") != "false"
+    ):
+        raise AssertionError(
+            "checkpoint recovery must checkout the exact non-credentialed SHA"
+        )
+    download = steps[1]
+    download_with = download.get("with")
+    if (
+        download.get("uses") != "actions/download-artifact@v5"
+        or not isinstance(download_with, Mapping)
+        or dict(download_with)
+        != {
+            "name": expected_frozen_artifact["name"],
+            "path": "${{ runner.temp }}/recovery-coordination-plan",
+        }
+    ):
+        raise AssertionError(
+            "checkpoint recovery must download its exact same-run frozen plan"
+        )
+    approved_plan_check = str(steps[2].get("run") or "")
+    final_main_check = str(steps[6].get("run") or "")
+    for command, label in (
+        (approved_plan_check, "post-approval"),
+        (final_main_check, "pre-transport"),
+    ):
+        for required in (
+            RELEASE_COORDINATION_SCRIPT,
+            "verify-plan",
+            '--main-sha "$GITHUB_SHA"',
+            (
+                "--plan "
+                '"$RUNNER_TEMP/recovery-coordination-plan/'
+                'recovery-coordination-plan.json"'
+            ),
+        ):
+            if required not in command:
+                raise AssertionError(
+                    f"checkpoint recovery {label} plan check lost {required!r}"
+                )
+    approved_intent = str(steps[3].get("run") or "")
+    for required in (
+        "case \"$RECOVERY_MODE\" in",
+        "dry-run)",
+        "apply)",
+        "ABORT 2026-07-30-ce5 PRE-SWITCH",
+    ):
+        if required not in approved_intent:
+            raise AssertionError(
+                f"checkpoint recovery approved intent lost {required!r}"
+            )
+    result_upload = steps[8]
+    result_with = result_upload.get("with")
+    if (
+        result_upload.get("if") != "${{ always() }}"
+        or result_upload.get("uses") != "actions/upload-artifact@v4"
+        or not isinstance(result_with, Mapping)
+        or dict(result_with)
+        != {
+            "name": (
+                "checkpoint-recovery-result-${{ github.sha }}-"
+                "${{ github.run_attempt }}"
+            ),
+            "path": "${{ runner.temp }}/checkpoint-recovery-result.json",
+            "if-no-files-found": "warn",
+            "compression-level": "0",
+            "overwrite": "false",
+            "retention-days": "30",
+        }
+    ):
+        raise AssertionError(
+            "checkpoint recovery result artifact contract changed"
+        )
+
+    workflow_text = (
+        REPO_ROOT / CHECKPOINT_RECOVERY_WORKFLOW
+    ).read_text(encoding="utf-8")
+    for required in (
+        "ABORT 2026-07-30-ce5 PRE-SWITCH",
+        "2026-07-30-ce5-pre-switch-db-evidence.json",
+        "pre_switch_checkpoint_recovery.py",
+        "tencent_pre_switch_checkpoint_recovery.sh",
+        "production_mutation_lock.sh",
+        "recovery-control-manifest.json",
+        "StrictHostKeyChecking=yes",
+        "SSH_KNOWN_HOSTS",
+        "checkpoint-recovery-result",
+    ):
+        if required not in workflow_text:
+            raise AssertionError(
+                f"checkpoint recovery lost required contract token {required!r}"
+            )
+    for forbidden in (
+        "fullstack_remote_release.sh",
+        "tencent_bluegreen_release.sh",
+    ):
+        if forbidden in workflow_text:
+            raise AssertionError(
+                f"checkpoint recovery contains forbidden mutation {forbidden!r}"
+            )
+
+    controller = (
+        REPO_ROOT
+        / "03_Scripts/deploy/tencent_pre_switch_checkpoint_recovery.sh"
+    ).read_text(encoding="utf-8")
+    helper = (
+        REPO_ROOT
+        / "03_Scripts/deploy/pre_switch_checkpoint_recovery.py"
+    ).read_text(encoding="utf-8")
+    lock_library = (
+        REPO_ROOT
+        / "03_Scripts/deploy/lib/production_mutation_lock.sh"
+    ).read_text(encoding="utf-8")
+    for required in (
+        "jato_acquire_production_mutation_lock",
+        "RECOVERY_APPLY_CONFIRMATION",
+        "--lock-holder-pid",
+        "--expected-plan-sha256",
+    ):
+        if required not in controller:
+            raise AssertionError(
+                f"checkpoint recovery controller lost {required!r}"
+            )
+    recovery_sources = "\n".join(
+        (workflow_text, controller, helper, lock_library)
+    )
+    systemctl_verbs = set(
+        re.findall(
+            r"(?m)^[ \t]*systemctl\s+([a-z-]+)",
+            recovery_sources,
+        )
+    )
+    systemctl_verbs.update(
+        re.findall(
+            r"""["']systemctl["']\s*,\s*["']([a-z-]+)["']""",
+            recovery_sources,
+        )
+    )
+    if systemctl_verbs != {"show"}:
+        raise AssertionError(
+            "checkpoint recovery may only use systemctl show; "
+            f"found {sorted(systemctl_verbs)}"
+        )
+    alembic_verbs = set(
+        re.findall(r"-m\s+alembic\s+([a-z-]+)", recovery_sources)
+    )
+    if alembic_verbs != {"current", "heads"}:
+        raise AssertionError(
+            "checkpoint recovery may only use alembic current/heads; "
+            f"found {sorted(alembic_verbs)}"
+        )
+    for pattern, label in (
+        (
+            r"\bsystemctl(?:\s+|[\"']\s*,\s*[\"'])"
+            r"(?:start|stop|restart|reload|enable|disable|mask|unmask|"
+            r"daemon-reload|kill|reset-failed)\b",
+            "systemd mutation",
+        ),
+        (
+            r"\balembic(?:\s+|[\"']\s*,\s*[\"'])"
+            r"(?:upgrade|downgrade|stamp|revision|merge|edit)\b",
+            "Alembic mutation",
+        ),
+        (
+            r"\bnginx(?:\s+|[\"']\s*,\s*[\"'])(?:-s|reload|restart)\b",
+            "Nginx mutation",
+        ),
+    ):
+        if re.search(pattern, recovery_sources):
+            raise AssertionError(
+                f"checkpoint recovery contains forbidden {label}"
+            )
 
 
 def assert_pull_request_release_coordination_guard() -> None:
@@ -1130,6 +1494,7 @@ def main() -> None:
 
     assert_all_static_production_jobs_are_registered()
     assert_production_release_main_guards()
+    assert_checkpoint_recovery_contract()
 
     for relative_path in MANUAL_DEPLOY_WORKFLOWS:
         for job_name in PRODUCTION_JOBS[relative_path]:

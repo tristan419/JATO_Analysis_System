@@ -11,6 +11,7 @@ from __future__ import annotations
 import argparse
 from dataclasses import asdict, dataclass
 import datetime as dt
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -35,6 +36,7 @@ PHASES = (
     "switched",
     "rollback_started",
     "rollback_completed",
+    "pre_switch_aborted",
     "backend_healthy",
     "www_verified",
     "intl_deploy_started",
@@ -56,6 +58,7 @@ ALLOWED_PHASE_TRANSITIONS = {
     "switched": frozenset({"backend_healthy", "rollback_started"}),
     "rollback_started": frozenset({"rollback_completed"}),
     "rollback_completed": frozenset(),
+    "pre_switch_aborted": frozenset(),
     "backend_healthy": frozenset({"www_verified"}),
     "www_verified": frozenset({"intl_deploy_started"}),
     "intl_deploy_started": frozenset({"intl_verified"}),
@@ -113,6 +116,11 @@ CHECKPOINT_FIELDS = {
 }
 OPTIONAL_CHECKPOINT_FIELDS = {"message"}
 MAX_RELEASE_METADATA_BYTES = 64 * 1024
+PRE_SWITCH_ABORT_PHASE = "pre_switch_aborted"
+PRE_SWITCH_RECOVERY_BINDING_PATTERN = re.compile(
+    r"(?:^|[; ])recovery_path=(\S+) "
+    r"recovery_sha256=([0-9a-f]{64})(?:$|[; ])"
+)
 
 
 class CheckpointError(ValueError):
@@ -280,6 +288,12 @@ def _validate_terminal_contract(
                 "rollback_completed phase requires status=completed and "
                 "retryClass=automatic"
             )
+    elif phase == PRE_SWITCH_ABORT_PHASE:
+        if status != "completed" or retry_class != "automatic":
+            raise CheckpointError(
+                "pre_switch_aborted phase requires status=completed and "
+                "retryClass=automatic"
+            )
     elif phase == "complete":
         if status != "completed" or retry_class != "complete":
             raise CheckpointError(
@@ -417,6 +431,21 @@ def _ensure_private_real_directory(
         os.chown(path, owner_uid, owner_gid)
         os.chmod(path, 0o700)
     return path
+
+
+def ensure_private_state_directory(
+    path: Path,
+    *,
+    owner_uid: int | None = None,
+    owner_gid: int | None = None,
+) -> Path:
+    """Create a private state directory without following symlink components."""
+
+    return _ensure_private_real_directory(
+        path,
+        owner_uid=owner_uid,
+        owner_gid=owner_gid,
+    )
 
 
 def _read_small_regular_file(path: Path, *, label: str) -> bytes:
@@ -600,9 +629,17 @@ def preserve_previous_release_metadata(
     }
 
 
-def atomic_write_json(path: Path, payload: Mapping[str, Any]) -> None:
+def atomic_write_json(
+    path: Path,
+    payload: Mapping[str, Any],
+    *,
+    owner_uid: int | None = None,
+    owner_gid: int | None = None,
+) -> None:
     """Atomically replace *path* with a private, durable JSON document."""
 
+    if (owner_uid is None) != (owner_gid is None):
+        raise CheckpointError("owner UID and GID must be provided together")
     path.parent.mkdir(parents=True, exist_ok=True)
     _reject_symlink(path, "checkpoint")
     file_descriptor, temporary_name = tempfile.mkstemp(
@@ -612,6 +649,8 @@ def atomic_write_json(path: Path, payload: Mapping[str, Any]) -> None:
     )
     temporary_path = Path(temporary_name)
     try:
+        if owner_uid is not None and owner_gid is not None:
+            os.fchown(file_descriptor, owner_uid, owner_gid)
         os.fchmod(file_descriptor, 0o600)
         with os.fdopen(file_descriptor, "w", encoding="utf-8") as handle:
             json.dump(payload, handle, indent=2, sort_keys=True)
@@ -699,6 +738,10 @@ def write_checkpoint(
     phase = _require_choice(phase, PHASES, "phase")
     status = _require_choice(status, STATUSES, "status")
     retry_class = _require_choice(retry_class, RETRY_CLASSES, "retryClass")
+    if phase == PRE_SWITCH_ABORT_PHASE:
+        raise CheckpointError(
+            "pre_switch_aborted may only be written by the audited recovery helper"
+        )
     _validate_terminal_contract(
         phase=phase,
         status=status,
@@ -711,7 +754,11 @@ def write_checkpoint(
         _assert_same_identity(existing, identity)
         existing_phase = existing["phase"]
         existing_status = existing["status"]
-        if existing_phase in {"rollback_completed", "complete"}:
+        if existing_phase in {
+            "rollback_completed",
+            PRE_SWITCH_ABORT_PHASE,
+            "complete",
+        }:
             raise CheckpointError(
                 f"{existing_phase} checkpoint is immutable",
             )
@@ -771,6 +818,345 @@ def write_checkpoint(
     return checkpoint
 
 
+def _require_recovery_receipt(
+    *,
+    receipt_path: Path,
+    receipt_sha256: str,
+    receipt_root: Path,
+    identity: ReleaseIdentity,
+    owner_uid: int | None = None,
+    owner_gid: int | None = None,
+) -> tuple[Path, str, Mapping[str, Any]]:
+    """Validate the immutable receipt bound to a pre-switch abort."""
+
+    receipt_sha256 = _require_hash(
+        receipt_sha256,
+        SHA256_PATTERN,
+        "recovery receipt SHA256",
+        64,
+    )
+    receipt_path = _absolute_without_resolution(receipt_path)
+    receipt_root = _absolute_without_resolution(receipt_root)
+    _require_real_directory(receipt_root, "recovery receipt root")
+    _reject_symlink(receipt_path, "recovery receipt")
+    try:
+        resolved_receipt = receipt_path.resolve(strict=True)
+        resolved_root = receipt_root.resolve(strict=True)
+    except OSError as exc:
+        raise CheckpointError("recovery receipt cannot be resolved safely") from exc
+    try:
+        relative = resolved_receipt.relative_to(resolved_root)
+    except ValueError as exc:
+        raise CheckpointError(
+            "recovery receipt must remain below the recovery receipt root"
+        ) from exc
+    if len(relative.parts) != 2 or not relative.name.endswith(".json"):
+        raise CheckpointError(
+            "recovery receipt must use <incident>/<plan-digest>.json layout"
+        )
+    metadata = receipt_path.stat()
+    if stat.S_IMODE(metadata.st_mode) & 0o077:
+        raise CheckpointError("recovery receipt must be private")
+    if (
+        owner_uid is not None
+        and owner_gid is not None
+        and (metadata.st_uid, metadata.st_gid) != (owner_uid, owner_gid)
+    ):
+        raise CheckpointError("recovery receipt owner differs from checkpoint owner")
+    raw = _read_small_regular_file(receipt_path, label="recovery receipt")
+    actual_sha256 = hashlib.sha256(raw).hexdigest()
+    if actual_sha256 != receipt_sha256:
+        raise CheckpointError("recovery receipt SHA256 mismatch")
+    try:
+        payload = json.loads(raw.decode("utf-8"))
+    except (UnicodeError, json.JSONDecodeError) as exc:
+        raise CheckpointError("recovery receipt must contain valid JSON") from exc
+    implementation = payload.get("implementation") if isinstance(payload, dict) else None
+    incident = payload.get("incidentId") if isinstance(payload, dict) else None
+    if (
+        not isinstance(payload, dict)
+        or payload.get("schemaVersion") != 1
+        or payload.get("kind") != "pre_switch_abort"
+        or payload.get("decision") != "pre_switch_abort_verified"
+        or payload.get("identity") != identity.to_dict()
+        or not isinstance(incident, str)
+        or not re.fullmatch(r"[a-z0-9][a-z0-9.-]{0,127}", incident)
+        or relative.parts[0] != incident
+        or not isinstance(implementation, dict)
+        or set(implementation) != {"commit", "planSha256"}
+        or not GIT_SHA_PATTERN.fullmatch(str(implementation.get("commit") or ""))
+        or not SHA256_PATTERN.fullmatch(
+            str(implementation.get("planSha256") or "")
+        )
+        or relative.stem != implementation.get("planSha256")
+    ):
+        raise CheckpointError("recovery receipt decision contract is invalid")
+    return receipt_path, receipt_sha256, payload
+
+
+def _validate_recovery_receipt_safety_facts(
+    receipt: Mapping[str, Any],
+) -> None:
+    database = receipt.get("database")
+    candidate = receipt.get("candidate")
+    backup = receipt.get("backup")
+    production = receipt.get("production")
+    if not all(
+        isinstance(value, dict)
+        for value in (database, candidate, backup, production)
+    ):
+        raise CheckpointError("recovery receipt safety proof objects are invalid")
+    revision_fields = (
+        "currentRevisions",
+        "oldHeadRevisions",
+        "newHeadRevisions",
+        "backupRevisions",
+    )
+    revision_sets = [database.get(field) for field in revision_fields]
+    if (
+        database.get("enabled") is not True
+        or database.get("mode") != "read_only"
+        or database.get("transactionReadOnly") != "on"
+        or database.get("equal") is not True
+        or any(
+            not isinstance(revisions, list) or not revisions
+            for revisions in revision_sets
+        )
+        or any(revisions != revision_sets[0] for revisions in revision_sets[1:])
+    ):
+        raise CheckpointError("recovery receipt database proof is invalid")
+    if any(
+        candidate.get(field) is not False
+        for field in (
+            "unitActive",
+            "unitEnabled",
+            "listener",
+            "slotLinkExists",
+            "targetReleaseActive",
+            "nginxReferencesTarget",
+        )
+    ):
+        raise CheckpointError("recovery receipt Candidate proof is invalid")
+    if (
+        backup.get("databaseEnabled") is not True
+        or backup.get("status") != "completed"
+        or not SHA256_PATTERN.fullmatch(
+            str(backup.get("manifestSha256") or "")
+        )
+        or not SHA256_PATTERN.fullmatch(str(backup.get("dumpSha256") or ""))
+    ):
+        raise CheckpointError("recovery receipt backup proof is invalid")
+
+
+def _validate_pre_switch_abort_source(
+    *,
+    checkpoint_path: Path,
+    journal_path: Path,
+    checkpoint: Mapping[str, Any],
+    identity: ReleaseIdentity,
+    receipt: Mapping[str, Any],
+    binding: str,
+) -> tuple[dict[str, Any], bool]:
+    """Validate source checkpoint/journal and detect a journal-ahead retry."""
+
+    source = receipt.get("sourceCheckpoint")
+    journal_receipt = receipt.get("journal")
+    legacy_evidence = receipt.get("legacyEvidence")
+    if not all(
+        isinstance(value, dict)
+        for value in (
+            source,
+            journal_receipt,
+            legacy_evidence,
+        )
+    ):
+        raise CheckpointError("recovery receipt proof objects are invalid")
+    _validate_recovery_receipt_safety_facts(receipt)
+
+    checkpoint_raw = _read_small_regular_file(
+        checkpoint_path,
+        label="source checkpoint",
+    )
+    if (
+        source.get("path") != str(checkpoint_path)
+        or source.get("sha256") != hashlib.sha256(checkpoint_raw).hexdigest()
+        or source.get("sequence") != checkpoint["sequence"]
+        or source.get("phase") != "migrated"
+        or source.get("status") != "completed"
+        or source.get("retryClass") != "automatic"
+    ):
+        raise CheckpointError("recovery receipt source checkpoint proof is invalid")
+
+    evidence_bindings = re.findall(
+        r"(?:^|[; ])evidence_path=(\S+) "
+        r"evidence_sha256=([0-9a-f]{64})(?:$|[; ])",
+        str(checkpoint.get("message") or ""),
+    )
+    if (
+        len(evidence_bindings) != 1
+        or legacy_evidence.get("path") != evidence_bindings[0][0]
+        or legacy_evidence.get("sha256") != evidence_bindings[0][1]
+        or legacy_evidence.get("migrationStatus") != "not_required"
+    ):
+        raise CheckpointError("recovery receipt legacy evidence proof is invalid")
+
+    journal_raw = _read_small_regular_file(journal_path, label="checkpoint journal")
+    lines = journal_raw.splitlines(keepends=True)
+    try:
+        events = [json.loads(line) for line in lines]
+    except (UnicodeError, json.JSONDecodeError) as exc:
+        raise CheckpointError("checkpoint journal is not valid JSONL") from exc
+    if not events:
+        raise CheckpointError("checkpoint journal is empty")
+    for index, event in enumerate(events, start=1):
+        if (
+            not isinstance(event, dict)
+            or event.get("event") != "checkpoint_transition"
+            or event.get("sequence") != index
+            or event.get("identity") != identity.to_dict()
+        ):
+            raise CheckpointError("checkpoint journal sequence/identity is invalid")
+
+    appended_checkpoint: dict[str, Any] | None = None
+    journal_prefix = journal_raw
+    if (
+        events[-1].get("phase") == PRE_SWITCH_ABORT_PHASE
+        and events[-1].get("sequence") == checkpoint["sequence"] + 1
+    ):
+        appended_checkpoint = dict(events[-1])
+        appended_checkpoint.pop("event", None)
+        journal_prefix = b"".join(lines[:-1])
+        if (
+            appended_checkpoint.get("status") != "completed"
+            or appended_checkpoint.get("retryClass") != "automatic"
+            or PRE_SWITCH_RECOVERY_BINDING_PATTERN.findall(
+                str(appended_checkpoint.get("message") or "")
+            )
+            != PRE_SWITCH_RECOVERY_BINDING_PATTERN.findall(binding)
+        ):
+            raise CheckpointError(
+                "journal-ahead pre-switch abort does not bind this receipt"
+            )
+        events = events[:-1]
+    if len(events) != checkpoint["sequence"]:
+        raise CheckpointError("checkpoint journal has unexpected trailing events")
+    journal_tail = dict(events[-1])
+    journal_tail.pop("event", None)
+    if journal_tail != checkpoint:
+        raise CheckpointError("checkpoint journal tail differs from checkpoint")
+    if (
+        journal_receipt.get("path") != str(journal_path)
+        or journal_receipt.get("sha256")
+        != hashlib.sha256(journal_prefix).hexdigest()
+        or journal_receipt.get("lastSequence") != checkpoint["sequence"]
+        or journal_receipt.get("switchPhaseSeen") is not False
+    ):
+        raise CheckpointError("recovery receipt journal proof is invalid")
+    if appended_checkpoint is not None:
+        return validate_checkpoint(appended_checkpoint), True
+    return {}, False
+
+
+def seal_pre_switch_abort(
+    *,
+    checkpoint_path: Path,
+    journal_path: Path,
+    identity: ReleaseIdentity,
+    receipt_path: Path,
+    receipt_sha256: str,
+    receipt_root: Path,
+    now: str | None = None,
+    owner_uid: int | None = None,
+    owner_gid: int | None = None,
+) -> dict[str, Any]:
+    """Seal one fully verified pre-switch release as aborted.
+
+    The recovery helper owns all live-system and database proofs.  This state
+    transition only accepts its immutable receipt and deliberately bypasses the
+    normal transition graph; regular ``write`` calls can never enter this
+    terminal phase.
+    """
+
+    if checkpoint_path.resolve() == journal_path.resolve():
+        raise CheckpointError("checkpoint and journal paths must be different")
+    if (owner_uid is None) != (owner_gid is None):
+        raise CheckpointError("checkpoint owner UID and GID must be provided together")
+    for value, label in ((owner_uid, "owner UID"), (owner_gid, "owner GID")):
+        if value is not None and (
+            isinstance(value, bool) or not isinstance(value, int) or value < 0
+        ):
+            raise CheckpointError(f"{label} must be a non-negative integer")
+
+    receipt_path, receipt_sha256, receipt = _require_recovery_receipt(
+        receipt_path=receipt_path,
+        receipt_sha256=receipt_sha256,
+        receipt_root=receipt_root,
+        identity=identity,
+        owner_uid=owner_uid,
+        owner_gid=owner_gid,
+    )
+    existing = load_checkpoint(checkpoint_path)
+    _assert_same_identity(existing, identity)
+    binding = f"recovery_path={receipt_path} recovery_sha256={receipt_sha256}"
+
+    if existing["phase"] == PRE_SWITCH_ABORT_PHASE:
+        bindings = PRE_SWITCH_RECOVERY_BINDING_PATTERN.findall(
+            str(existing.get("message") or "")
+        )
+        if bindings != [(str(receipt_path), receipt_sha256)]:
+            raise CheckpointError(
+                "pre_switch_aborted checkpoint binds a different recovery receipt"
+            )
+        return existing
+    if (
+        existing["phase"] != "migrated"
+        or existing["status"] != "completed"
+        or existing["retryClass"] != "automatic"
+    ):
+        raise CheckpointError(
+            "pre-switch abort requires migrated/completed/automatic checkpoint"
+        )
+
+    checkpoint: dict[str, Any] = {
+        "schemaVersion": SCHEMA_VERSION,
+        "sequence": existing["sequence"] + 1,
+        "identity": identity.to_dict(),
+        "phase": PRE_SWITCH_ABORT_PHASE,
+        "status": "completed",
+        "retryClass": "automatic",
+        "updatedAt": _require_timestamp(now) if now else _utc_now(),
+        "message": _require_message(
+            "release abandoned before Candidate start or traffic switch; "
+            f"{binding}"
+        ),
+    }
+    checkpoint = validate_checkpoint(checkpoint)
+    journal_ahead, journal_already_appended = _validate_pre_switch_abort_source(
+        checkpoint_path=checkpoint_path,
+        journal_path=journal_path,
+        checkpoint=existing,
+        identity=identity,
+        receipt=receipt,
+        binding=binding,
+    )
+    if journal_already_appended:
+        checkpoint = journal_ahead
+    else:
+        append_journal(journal_path, checkpoint)
+    atomic_write_json(
+        checkpoint_path,
+        checkpoint,
+        owner_uid=owner_uid,
+        owner_gid=owner_gid,
+    )
+    if owner_uid is not None and owner_gid is not None:
+        os.chown(journal_path, owner_uid, owner_gid)
+        os.chmod(journal_path, 0o600)
+        _fsync_directory(checkpoint_path.parent)
+        _fsync_directory(journal_path.parent)
+    return checkpoint
+
+
 def assert_resumable(
     *,
     checkpoint_path: Path,
@@ -793,6 +1179,14 @@ def assert_resumable(
     if phase == "rollback_completed":
         return {
             "decision": "already-rolled-back",
+            "phase": phase,
+            "status": status,
+            "retryClass": retry_class,
+            "sequence": checkpoint["sequence"],
+        }
+    if phase == PRE_SWITCH_ABORT_PHASE:
+        return {
+            "decision": "already-pre-switch-aborted",
             "phase": phase,
             "status": status,
             "retryClass": retry_class,
@@ -851,12 +1245,156 @@ def cross_release_is_settled(checkpoint: Mapping[str, Any]) -> bool:
         return True
     if phase == "rollback_completed":
         return checkpoint["status"] == "completed"
+    if phase == PRE_SWITCH_ABORT_PHASE:
+        # This terminal is settled only after its receipt/journal binding is
+        # validated by ``assert_cross_release_safe`` with namespace context.
+        return False
     if phase == "rollback_started":
         return False
     return (
         PHASE_INDEX[phase] >= PHASE_INDEX["backend_healthy"]
         and checkpoint["status"] == "completed"
     )
+
+
+def _validate_pre_switch_abort_settlement(
+    *,
+    checkpoint_path: Path,
+    checkpoint: Mapping[str, Any],
+    checkpoints_root: Path,
+) -> None:
+    identity = ReleaseIdentity.from_mapping(checkpoint["identity"])
+    bindings = PRE_SWITCH_RECOVERY_BINDING_PATTERN.findall(
+        str(checkpoint.get("message") or "")
+    )
+    if len(bindings) != 1:
+        raise CheckpointError(
+            "pre_switch_aborted checkpoint has no unique recovery receipt binding"
+        )
+    checkpoint_metadata = checkpoint_path.stat()
+    receipt_root = checkpoints_root.parent / "recoveries"
+    receipt_path, _, receipt = _require_recovery_receipt(
+        receipt_path=Path(bindings[0][0]),
+        receipt_sha256=bindings[0][1],
+        receipt_root=receipt_root,
+        identity=identity,
+        owner_uid=checkpoint_metadata.st_uid,
+        owner_gid=checkpoint_metadata.st_gid,
+    )
+    _validate_recovery_receipt_safety_facts(receipt)
+
+    journal_path = (
+        checkpoints_root.parent
+        / "journals"
+        / identity.commit
+        / f"{identity.archiveSha256}.jsonl"
+    )
+    journal_raw = _read_small_regular_file(
+        journal_path,
+        label="pre-switch abort journal",
+    )
+    lines = journal_raw.splitlines(keepends=True)
+    try:
+        events = [json.loads(line) for line in lines]
+    except (UnicodeError, json.JSONDecodeError) as exc:
+        raise CheckpointError(
+            "pre-switch abort journal is not valid JSONL"
+        ) from exc
+    if len(events) != checkpoint["sequence"] or len(events) < 2:
+        raise CheckpointError("pre-switch abort journal length is invalid")
+    validated: list[dict[str, Any]] = []
+    for sequence, event in enumerate(events, start=1):
+        if (
+            not isinstance(event, dict)
+            or event.get("event") != "checkpoint_transition"
+            or event.get("sequence") != sequence
+            or event.get("identity") != identity.to_dict()
+        ):
+            raise CheckpointError(
+                "pre-switch abort journal sequence/identity is invalid"
+            )
+        payload = dict(event)
+        payload.pop("event", None)
+        validated.append(validate_checkpoint(payload))
+    if validated[-1] != checkpoint:
+        raise CheckpointError(
+            "pre-switch abort journal tail differs from checkpoint"
+        )
+    source_checkpoint = validated[-2]
+    source = receipt.get("sourceCheckpoint")
+    journal = receipt.get("journal")
+    legacy = receipt.get("legacyEvidence")
+    if not all(
+        isinstance(value, dict)
+        for value in (source, journal, legacy)
+    ):
+        raise CheckpointError("pre-switch abort receipt chain is invalid")
+    source_raw = (
+        json.dumps(source_checkpoint, indent=2, sort_keys=True).encode("utf-8")
+        + b"\n"
+    )
+    if (
+        source_checkpoint.get("phase") != "migrated"
+        or source_checkpoint.get("status") != "completed"
+        or source_checkpoint.get("retryClass") != "automatic"
+        or source.get("path") != str(checkpoint_path)
+        or source.get("sha256") != hashlib.sha256(source_raw).hexdigest()
+        or source.get("sequence") != source_checkpoint["sequence"]
+        or source.get("phase") != source_checkpoint["phase"]
+        or source.get("status") != source_checkpoint["status"]
+        or source.get("retryClass") != source_checkpoint["retryClass"]
+    ):
+        raise CheckpointError("pre-switch abort source checkpoint proof is invalid")
+    journal_prefix = b"".join(lines[:-1])
+    if (
+        journal.get("path") != str(journal_path)
+        or journal.get("sha256") != hashlib.sha256(journal_prefix).hexdigest()
+        or journal.get("lastSequence") != source_checkpoint["sequence"]
+        or journal.get("switchPhaseSeen") is not False
+    ):
+        raise CheckpointError("pre-switch abort journal proof is invalid")
+
+    evidence_bindings = re.findall(
+        r"(?:^|[; ])evidence_path=(\S+) "
+        r"evidence_sha256=([0-9a-f]{64})(?:$|[; ])",
+        str(source_checkpoint.get("message") or ""),
+    )
+    if (
+        len(evidence_bindings) != 1
+        or legacy.get("path") != evidence_bindings[0][0]
+        or legacy.get("sha256") != evidence_bindings[0][1]
+        or legacy.get("migrationStatus") != "not_required"
+    ):
+        raise CheckpointError("pre-switch abort legacy evidence proof is invalid")
+    evidence_path = Path(evidence_bindings[0][0])
+    evidence_raw = _read_small_regular_file(
+        evidence_path,
+        label="pre-switch abort legacy evidence",
+    )
+    if hashlib.sha256(evidence_raw).hexdigest() != evidence_bindings[0][1]:
+        raise CheckpointError("pre-switch abort legacy evidence changed")
+    if not receipt_path.is_file():  # pragma: no cover - validated above.
+        raise CheckpointError("pre-switch abort recovery receipt disappeared")
+
+
+def validate_pre_switch_abort_settlement(
+    *,
+    checkpoint_path: Path,
+    checkpoints_root: Path,
+) -> dict[str, Any]:
+    """Validate one terminal abort against its private receipt and journal."""
+
+    checkpoint = load_checkpoint(checkpoint_path)
+    if checkpoint["phase"] != PRE_SWITCH_ABORT_PHASE:
+        raise CheckpointError(
+            "checkpoint is not a pre_switch_aborted terminal"
+        )
+    _validate_pre_switch_abort_settlement(
+        checkpoint_path=_absolute_without_resolution(checkpoint_path),
+        checkpoint=checkpoint,
+        checkpoints_root=_absolute_without_resolution(checkpoints_root),
+    )
+    return checkpoint
 
 
 def assert_cross_release_safe(
@@ -950,6 +1488,13 @@ def assert_cross_release_safe(
             retry_class = payload["retryClass"]
             phase = payload["phase"]
             status = payload["status"]
+            if phase == PRE_SWITCH_ABORT_PHASE:
+                _validate_pre_switch_abort_settlement(
+                    checkpoint_path=entry,
+                    checkpoint=payload,
+                    checkpoints_root=checkpoints_root,
+                )
+                continue
             if retry_class in DANGEROUS_RETRY_CLASSES:
                 raise CheckpointError(
                     "another release requires operator recovery before a new "

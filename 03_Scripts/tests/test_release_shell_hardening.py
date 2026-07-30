@@ -15,6 +15,13 @@ REMOTE_SCRIPT = REPO_ROOT / "03_Scripts/deploy/fullstack_remote_release.sh"
 BLUEGREEN_SCRIPT = REPO_ROOT / "03_Scripts/deploy/tencent_bluegreen_release.sh"
 SERVER_SCRIPT = REPO_ROOT / "03_Scripts/ops/deploy_fullstack_server.sh"
 BACKUP_SCRIPT = REPO_ROOT / "03_Scripts/ops/backup_production_data.sh"
+RECOVERY_CONTROLLER = (
+    REPO_ROOT
+    / "03_Scripts/deploy/tencent_pre_switch_checkpoint_recovery.sh"
+)
+RECOVERY_HELPER = (
+    REPO_ROOT / "03_Scripts/deploy/pre_switch_checkpoint_recovery.py"
+)
 
 
 def _shell_function(script_path: Path, name: str) -> str:
@@ -795,3 +802,56 @@ def test_required_database_backup_rejects_empty_dump(tmp_path: Path) -> None:
     )
     assert result.returncode != 0
     assert "postgres backup is empty" in result.stdout
+
+
+def test_checkpoint_recovery_is_lock_bound_and_read_only_except_settlement() -> None:
+    controller = RECOVERY_CONTROLLER.read_text(encoding="utf-8")
+    helper = RECOVERY_HELPER.read_text(encoding="utf-8")
+    source_lock = controller.index('source "$LOCK_LIBRARY"')
+    acquire_lock = controller.index("jato_acquire_production_mutation_lock")
+    validate_fd = controller.index('"${DEPLOY_LOCK_FD:-}" != "9"')
+    privileged_helper = controller.index("sudo -n env")
+
+    assert source_lock < acquire_lock < validate_fd < privileged_helper
+    assert (
+        'RECOVERY_APPLY_CONFIRMATION="ABORT 2026-07-30-ce5 PRE-SWITCH"'
+        in controller
+    )
+    assert (
+        '[[ "$RECOVERY_MODE" == "dry-run" && -n "$RECOVERY_CONFIRMATION" ]]'
+        in controller
+    )
+    for forbidden in (
+        "systemctl start",
+        "systemctl restart",
+        "systemctl enable",
+        "systemctl disable",
+        "systemctl reload",
+        "nginx -s",
+        "nginx -t",
+        "alembic upgrade",
+        "alembic downgrade",
+        "tencent_bluegreen_release.sh",
+        "fullstack_remote_release.sh",
+    ):
+        assert forbidden not in controller
+        assert forbidden not in helper
+
+
+def test_aborted_release_cannot_be_replayed_by_outer_or_inner_deployer() -> None:
+    outer = REMOTE_SCRIPT.read_text(encoding="utf-8")
+    inner = SERVER_SCRIPT.read_text(encoding="utf-8")
+    decision = 'CHECKPOINT_DECISION" == "already-pre-switch-aborted"'
+    inner_decision = 'resume_decision" == "already-pre-switch-aborted"'
+
+    assert decision in outer
+    assert outer.index(decision) < outer.index(
+        'bash "$RELEASE_WORKTREE/03_Scripts/deploy/tencent_bluegreen_release.sh"',
+    )
+    assert "create a new reviewed release instead of replaying it" in outer
+    assert "pre_switch_aborted) echo 12" in inner
+    assert inner_decision in inner
+    assert inner.index(inner_decision) < inner.index(
+        "verify_release_evidence",
+        inner.index("initialize_release_checkpoint()"),
+    )
