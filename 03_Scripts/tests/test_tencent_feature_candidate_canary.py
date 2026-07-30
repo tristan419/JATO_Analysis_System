@@ -773,6 +773,16 @@ def test_pre_supervisor_launch_failure_removes_exact_run_namespace(
             }
             validate_static_contract() { :; }
             verify_canary_parent_roots() { :; }
+            cleanup_canary_state_run() {
+              local path=""
+              for path in \
+                "$CHECKPOINT_FILE" "$RECEIPT_FILE" "$EVIDENCE_FILE" \
+                "$BEFORE_SNAPSHOT" "$AFTER_SNAPSHOT" \
+                "$SUPERVISOR_GENERATION_SOURCE_FILE" \
+                "$CANDIDATE_START_PERMIT_SOURCE_FILE"; do
+                command rm -f -- "$path"
+              done
+            }
             start_canary_supervisor() {
               [[ "$failure_step" != "start_canary_supervisor" ]]
             }
@@ -827,6 +837,17 @@ def test_pre_supervisor_launch_failure_removes_exact_run_namespace(
         check=False,
     )
     assert result.returncode == 0, result.stderr + result.stdout
+
+
+def test_controller_delegates_launch_state_cleanup_to_canonical_guard() -> None:
+    script = CONTROLLER.read_text(encoding="utf-8")
+    cleanup = _shell_function(script, "cleanup_canary_state_run")
+    assert '"$CANARY_GUARD" cleanup-launch-state' in cleanup
+    assert '--state-root "$CANARY_STATE_ROOT"' in cleanup
+    assert '--run-key "$RUN_KEY"' in cleanup
+    guard = GUARD_PATH.read_text(encoding="utf-8")
+    assert 'arguments.state_root != Path("/var/lib/jato-canary")' in guard
+    assert "canary launch state cleanup root is not reviewed" in guard
 
 
 def test_ambiguous_supervisor_launch_retains_control_bundle(
