@@ -28,6 +28,9 @@ def _fixture(
     *,
     phase: str = "migrated",
     migration_status: str = "completed",
+    database_enabled: bool = True,
+    database_required: bool = True,
+    pre_revision: str = "20260707_0042",
 ) -> dict[str, object]:
     identity = checkpoint.ReleaseIdentity.create(
         repository="example/JATO_Analysis_System",
@@ -52,12 +55,28 @@ def _fixture(
     manifest_payload = {
         "createdAt": "2026-07-22T04:00:00+00:00",
         "database": {
-            "enabled": True,
-            "required": True,
-            "status": "completed",
-            "dumpPath": str(dump),
-            "dumpBytes": dump.stat().st_size,
-            "dumpSha256": hashlib.sha256(dump.read_bytes()).hexdigest(),
+            "enabled": database_enabled,
+            "required": database_required,
+            "status": (
+                "completed"
+                if database_enabled or database_required
+                else "skipped"
+            ),
+            "dumpPath": (
+                str(dump)
+                if database_enabled or database_required
+                else None
+            ),
+            "dumpBytes": (
+                dump.stat().st_size
+                if database_enabled or database_required
+                else 0
+            ),
+            "dumpSha256": (
+                hashlib.sha256(dump.read_bytes()).hexdigest()
+                if database_enabled or database_required
+                else None
+            ),
         },
     }
     _private_write(
@@ -83,7 +102,7 @@ def _fixture(
         },
         "migration": {
             "status": migration_status,
-            "preRevision": "20260707_0042" if migration_status != "not_required" else None,
+            "preRevision": pre_revision if migration_status != "not_required" else None,
             "targetRevision": "20260709_0043 (head)" if migration_status != "not_required" else None,
             "resultRevision": (
                 "20260709_0043 (head)" if migration_status == "completed" else None
@@ -139,6 +158,53 @@ def test_private_evidence_chain_verifies_without_exposing_paths(tmp_path: Path) 
     assert not any("/" in value for value in result.values())
     assert fixture["manifest"].stat().st_mode & 0o777 == 0o600
     assert fixture["dump"].stat().st_mode & 0o777 == 0o600
+
+
+def test_enabled_database_accepts_completed_read_only_verification(
+    tmp_path: Path,
+) -> None:
+    fixture = _fixture(
+        tmp_path,
+        database_required=False,
+        pre_revision="20260709_0043 (head)",
+    )
+
+    result = _verify(fixture)
+
+    assert result["databaseBackup"] == "completed"
+    assert result["migrationStatus"] == "completed"
+
+
+def test_disabled_database_accepts_not_required_migration_evidence(
+    tmp_path: Path,
+) -> None:
+    fixture = _fixture(
+        tmp_path,
+        migration_status="not_required",
+        database_enabled=False,
+        database_required=False,
+    )
+
+    result = _verify(fixture)
+
+    assert result["databaseBackup"] == "skipped"
+    assert result["migrationStatus"] == "not_required"
+
+
+def test_enabled_database_rejects_not_required_migration_evidence(
+    tmp_path: Path,
+) -> None:
+    fixture = _fixture(
+        tmp_path,
+        migration_status="not_required",
+        database_required=False,
+    )
+
+    with pytest.raises(
+        evidence.EvidenceVerificationError,
+        match="migration_invalid",
+    ):
+        _verify(fixture)
 
 
 def test_production_verifier_requires_root_owned_backup_chain(tmp_path: Path) -> None:

@@ -926,7 +926,7 @@ def test_deploy_prepares_frozen_release_identity_before_backend_restart() -> Non
     assert inner_prepare < finalize
     run_inner = _shell_function(controller, "run_inner_prepare")
     assert "BLUEGREEN_PREPARE_ONLY=true" in run_inner
-    assert "RUN_DATABASE_MIGRATIONS=false" in run_inner
+    assert "RUN_DATABASE_MIGRATIONS=verify_only" in run_inner
     assert 'RELEASE_CHECKPOINT_COMMIT="$DEPLOY_COMMIT_SHA"' in run_inner
     assert 'PREBUILT_FRONTEND_DIR="$PREBUILT_FRONTEND_DIR"' in run_inner
 

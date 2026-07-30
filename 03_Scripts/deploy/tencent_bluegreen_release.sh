@@ -932,7 +932,7 @@ run_inner_prepare() {
   SKIP_GIT_SYNC=true \
   DEPLOY_PRUNE_UNTRACKED=false \
   BLUEGREEN_PREPARE_ONLY=true \
-  RUN_DATABASE_MIGRATIONS=false \
+  RUN_DATABASE_MIGRATIONS=verify_only \
   RUN_GROUPED_TIME_SERIES_PREWARM=false \
   PRODUCTION_RELEASE_WORKFLOW=true \
   PREBUILT_FRONTEND_DIR="$PREBUILT_FRONTEND_DIR" \
@@ -1135,7 +1135,7 @@ assert_no_database_migration_delta() {
   fi
   current="$(
     sudo -n bash -c \
-      'set -Eeuo pipefail; set -a; . "$1"; set +a; export PYTHONPATH="$2"; cd "$2"; "$3" -m alembic current' \
+      'set -Eeuo pipefail; set -a; . "$1"; set +a; export PYTHONPATH="$2"; export PGOPTIONS="${PGOPTIONS:+$PGOPTIONS }-c default_transaction_read_only=on"; cd "$2"; "$3" -m alembic current' \
       _ "$BACKEND_ENV_FILE" "$RELEASE_DIR/06_AppPlatform/backend" "$RELEASE_DIR/.venv/bin/python"
   )"
   heads="$(

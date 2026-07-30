@@ -95,6 +95,11 @@ LAST_BACKUP_MANIFEST_SHA256=""
 MIGRATION_PRE_REVISION=""
 MIGRATION_TARGET_REVISION=""
 MIGRATION_RESULT_REVISION=""
+DATABASE_ENABLED="false"
+DATABASE_BACKUP_REQUIRED="false"
+DATABASE_MIGRATION_REQUIRED="false"
+DATABASE_MIGRATION_VERIFY_ONLY="false"
+DATABASE_READ_ONLY_GATE_FAILED="false"
 RELEASE_EVIDENCE_SHA256=""
 
 checkpoint_enabled() {
@@ -295,7 +300,7 @@ verify_live_migration_revision_if_available() {
   fi
   evidence_status="$(python3 -c 'import json,sys; print((json.load(open(sys.argv[1], encoding="utf-8")).get("migration") or {}).get("status") or "")' "$RELEASE_EVIDENCE_FILE")"
   if [[ "$evidence_status" == "not_required" ]]; then
-    if [[ "${DATABASE_MIGRATION_REQUIRED:-false}" == "true" ]]; then
+    if [[ "${DATABASE_ENABLED:-false}" == "true" ]]; then
       echo "[ERROR] Live database is enabled but release evidence says migration was not required"
       return 1
     fi
@@ -305,26 +310,15 @@ verify_live_migration_revision_if_available() {
     echo "[ERROR] Migrated checkpoint lacks completed migration evidence"
     return 1
   fi
-  if [[ "${DATABASE_MIGRATION_REQUIRED:-false}" != "true" ]]; then
+  if [[ "${DATABASE_ENABLED:-false}" != "true" ]]; then
     echo "[WARN] Database is not safely readable; relying on bound migration evidence"
     return 0
   fi
   evidence_result="$(python3 -c 'import json,sys; print((json.load(open(sys.argv[1], encoding="utf-8")).get("migration") or {}).get("resultRevision") or "")' "$RELEASE_EVIDENCE_FILE")"
-  live_result="$(run_privileged_bash 'set -Eeuo pipefail; set -a; . "$1"; set +a; export PYTHONPATH="$2"; . "$3/bin/activate"; cd "$2"; python -m alembic current' \
-    "$BACKEND_ENV_FILE" "$BACKEND_DIR" "$VENV_DIR")"
-  python3 - "$evidence_result" "$live_result" <<'PY'
-import re
-import sys
-
-pattern = re.compile(r"(?m)^([0-9]{8}_[0-9]{4})\b")
-expected = set(pattern.findall(sys.argv[1]))
-live = set(pattern.findall(sys.argv[2]))
-if not expected or expected != live:
-    raise SystemExit(
-        "[ERROR] Live Alembic revision does not match bound migration evidence: "
-        f"expected={sorted(expected)} live={sorted(live)}"
-    )
-PY
+  live_result="$(read_database_current_revision)"
+  assert_alembic_revision_sets_equal \
+    "$evidence_result" "evidence" "$live_result" "live" \
+    "Live Alembic revision does not match bound migration evidence"
 }
 
 initialize_release_checkpoint() {
@@ -583,6 +577,10 @@ record_failure_checkpoint() {
   if ! checkpoint_enabled || [[ "$CHECKPOINT_WRITING_FAILURE" == "true" ]]; then
     return 0
   fi
+  if [[ "${DATABASE_READ_ONLY_GATE_FAILED:-false}" == "true" ]]; then
+    echo "[INFO] Preserving the resumable backup checkpoint because the database gate was read-only"
+    return 0
+  fi
   CHECKPOINT_WRITING_FAILURE="true"
   case "$phase" in
     migration_started) retry_class="manual_db_recovery" ;;
@@ -604,6 +602,152 @@ is_truthy() {
     1|true|yes|on) return 0 ;;
     *) return 1 ;;
   esac
+}
+
+resolve_database_migration_policy() {
+  local database_state="disabled"
+  local requested_mode=""
+
+  requested_mode="$(
+    printf '%s' "$RUN_DATABASE_MIGRATIONS" | tr '[:upper:]' '[:lower:]'
+  )"
+
+  DATABASE_ENABLED="false"
+  DATABASE_BACKUP_REQUIRED="false"
+  DATABASE_MIGRATION_REQUIRED="false"
+  DATABASE_MIGRATION_VERIFY_ONLY="false"
+
+  case "$requested_mode" in
+    auto|true|run|verify_only|false|skip) ;;
+    *)
+      fail_deploy \
+        "Unsupported database migration policy: $RUN_DATABASE_MIGRATIONS" \
+        "$LINENO"
+      ;;
+  esac
+
+  if [[ -f "$BACKEND_ENV_FILE" ]]; then
+    if ! database_state="$(run_privileged_bash 'set -Eeuo pipefail; set -a; . "$1"; set +a; enabled="$(printf "%s" "${APP_DATABASE_ENABLED:-false}" | tr "[:upper:]" "[:lower:]")"; case "$enabled" in 1|true|yes|on) [[ -n "${APP_DATABASE_URL:-${DATABASE_URL:-}}" ]] || exit 2; echo enabled ;; *) echo disabled ;; esac' "$BACKEND_ENV_FILE" 2>/dev/null)"; then
+      fail_deploy "Cannot resolve database migration policy from backend env" "$LINENO"
+    fi
+  elif checkpoint_enabled; then
+    fail_deploy \
+      "Cannot resolve database migration policy because backend env is missing" \
+      "$LINENO"
+  fi
+
+  if [[ "$database_state" == "enabled" ]]; then
+    DATABASE_ENABLED="true"
+  fi
+
+  case "$requested_mode" in
+    auto)
+      if [[ "$DATABASE_ENABLED" == "true" ]]; then
+        RUN_DATABASE_MIGRATIONS="run"
+        DATABASE_BACKUP_REQUIRED="true"
+        DATABASE_MIGRATION_REQUIRED="true"
+      else
+        RUN_DATABASE_MIGRATIONS="skip"
+      fi
+      ;;
+    true|run)
+      if [[ "$DATABASE_ENABLED" != "true" ]]; then
+        fail_deploy \
+          "Database migrations were requested but the database is not enabled" \
+          "$LINENO"
+      fi
+      RUN_DATABASE_MIGRATIONS="run"
+      DATABASE_BACKUP_REQUIRED="true"
+      DATABASE_MIGRATION_REQUIRED="true"
+      ;;
+    verify_only)
+      if [[ "$BLUEGREEN_PREPARE_ONLY" != "true" ]] \
+        || [[ "$DEPLOY_BRANCH" != "main" ]] \
+        || [[ "$PRODUCTION_RELEASE_WORKFLOW" != "true" ]]; then
+        fail_deploy \
+          "Read-only database verification is restricted to blue/green main production preparation" \
+          "$LINENO"
+      fi
+      if [[ "$DATABASE_ENABLED" == "true" ]]; then
+        RUN_DATABASE_MIGRATIONS="verify_only"
+        DATABASE_BACKUP_REQUIRED="true"
+        DATABASE_MIGRATION_VERIFY_ONLY="true"
+      else
+        RUN_DATABASE_MIGRATIONS="skip"
+      fi
+      ;;
+    false|skip)
+      if [[ "$DATABASE_ENABLED" == "true" ]]; then
+        fail_deploy \
+          "Cannot skip migration evidence while the database is enabled; use verify_only for blue/green preparation" \
+          "$LINENO"
+      fi
+      RUN_DATABASE_MIGRATIONS="skip"
+      ;;
+  esac
+
+  if [[ "$DATABASE_MIGRATION_REQUIRED" == "true" ]] \
+    && {
+      [[ "$DEPLOY_BRANCH" != "main" ]] \
+        || [[ "$PRODUCTION_RELEASE_WORKFLOW" != "true" ]];
+    }; then
+    fail_deploy "Database migrations require the main production release workflow" "$LINENO"
+  fi
+}
+
+read_database_current_revision() {
+  run_privileged_bash \
+    'set -Eeuo pipefail; set -a; . "$1"; set +a; export PYTHONPATH="$2"; export PGOPTIONS="${PGOPTIONS:+$PGOPTIONS }-c default_transaction_read_only=on"; . "$3/bin/activate"; cd "$2"; python -m alembic current' \
+    "$BACKEND_ENV_FILE" "$BACKEND_DIR" "$VENV_DIR"
+}
+
+read_candidate_migration_heads() {
+  run_privileged_bash \
+    'set -Eeuo pipefail; export PYTHONPATH="$1"; . "$2/bin/activate"; cd "$1"; python -m alembic heads' \
+    "$BACKEND_DIR" "$VENV_DIR"
+}
+
+assert_alembic_revision_sets_equal() {
+  local left_output="$1"
+  local left_label="$2"
+  local right_output="$3"
+  local right_label="$4"
+  local message="$5"
+
+  python3 - "$left_output" "$left_label" "$right_output" "$right_label" "$message" <<'PY'
+import re
+import sys
+
+left_output, left_label, right_output, right_label, message = sys.argv[1:]
+pattern = re.compile(r"(?m)^([0-9]{8}_[0-9]{4})\b")
+left = set(pattern.findall(left_output))
+right = set(pattern.findall(right_output))
+if not left or left != right:
+    raise SystemExit(
+        f"[ERROR] {message}: "
+        f"{left_label}={sorted(left)} {right_label}={sorted(right)}"
+    )
+PY
+}
+
+verify_database_schema_without_migration() {
+  echo "[INFO] Verify database schema without running migrations"
+  CURRENT_STEP="Verify database migration compatibility"
+  log_section "$CURRENT_STEP"
+  DATABASE_READ_ONLY_GATE_FAILED="true"
+  MIGRATION_PRE_REVISION="$(read_database_current_revision)"
+  MIGRATION_TARGET_REVISION="$(read_candidate_migration_heads)"
+  if ! assert_alembic_revision_sets_equal \
+    "$MIGRATION_PRE_REVISION" "current" \
+    "$MIGRATION_TARGET_REVISION" "heads" \
+    "Blue/green release forbids database migrations and current does not match heads"; then
+    fail_deploy \
+      "Read-only database compatibility verification failed; no migration was executed" \
+      "$LINENO"
+  fi
+  MIGRATION_RESULT_REVISION="$MIGRATION_PRE_REVISION"
+  DATABASE_READ_ONLY_GATE_FAILED="false"
+  echo "[INFO] Database current revision already matches candidate Alembic heads"
 }
 
 should_run_grouped_time_series_prewarm() {
@@ -1499,28 +1643,7 @@ fi
 echo "[INFO] Resolve database migration policy"
 CURRENT_STEP="Resolve database migration policy"
 log_section "$CURRENT_STEP"
-if [[ "$RUN_DATABASE_MIGRATIONS" == "auto" ]]; then
-  if [[ -f "$BACKEND_ENV_FILE" ]]; then
-    if db_state="$(run_privileged_bash 'set -a; . "$1"; set +a; enabled="$(printf "%s" "${APP_DATABASE_ENABLED:-false}" | tr "[:upper:]" "[:lower:]")"; case "$enabled" in 1|true|yes|on) [[ -n "${APP_DATABASE_URL:-${DATABASE_URL:-}}" ]] || exit 2; echo run ;; *) echo skip ;; esac' "$BACKEND_ENV_FILE" 2>/dev/null)"; then
-      RUN_DATABASE_MIGRATIONS="$db_state"
-    else
-      fail_deploy "Cannot resolve database migration policy from backend env" "$LINENO"
-    fi
-  else
-    if checkpoint_enabled; then
-      fail_deploy "Cannot resolve database migration policy because backend env is missing" "$LINENO"
-    fi
-    RUN_DATABASE_MIGRATIONS="skip"
-  fi
-fi
-
-DATABASE_MIGRATION_REQUIRED="false"
-if [[ "$RUN_DATABASE_MIGRATIONS" == "true" || "$RUN_DATABASE_MIGRATIONS" == "run" ]]; then
-  DATABASE_MIGRATION_REQUIRED="true"
-  if [[ "$DEPLOY_BRANCH" != "main" || "$PRODUCTION_RELEASE_WORKFLOW" != "true" ]]; then
-    fail_deploy "Database migrations require the main production release workflow" "$LINENO"
-  fi
-fi
+resolve_database_migration_policy
 
 verify_live_migration_revision_if_available
 
@@ -1531,8 +1654,11 @@ else
   CURRENT_STEP="Run pre-deploy backup"
   log_section "$CURRENT_STEP"
   write_release_checkpoint backup_verified in_progress automatic "pre-deploy backup started"
-  run_pre_deploy_backup "$DATABASE_MIGRATION_REQUIRED"
+  run_pre_deploy_backup "$DATABASE_BACKUP_REQUIRED"
   write_release_evidence "not_started"
+  if [[ "$DATABASE_MIGRATION_VERIFY_ONLY" == "true" ]]; then
+    verify_database_schema_without_migration
+  fi
   write_release_checkpoint backup_verified completed automatic \
     "pre-deploy backup verified; evidence=$RELEASE_EVIDENCE_FILE sha256=$RELEASE_EVIDENCE_SHA256"
   verify_release_evidence
@@ -1544,37 +1670,35 @@ elif [[ "$DATABASE_MIGRATION_REQUIRED" == "true" ]]; then
   echo "[INFO] Run database migrations when configured"
   CURRENT_STEP="Run database migrations"
   log_section "$CURRENT_STEP"
-  MIGRATION_PRE_REVISION="$(run_privileged_bash 'set -Eeuo pipefail; set -a; . "$1"; set +a; export PYTHONPATH="$2"; . "$3/bin/activate"; cd "$2"; python -m alembic current' \
-    "$BACKEND_ENV_FILE" "$BACKEND_DIR" "$VENV_DIR")"
-  MIGRATION_TARGET_REVISION="$(run_privileged_bash 'set -Eeuo pipefail; export PYTHONPATH="$1"; . "$2/bin/activate"; cd "$1"; python -m alembic heads' \
-    "$BACKEND_DIR" "$VENV_DIR")"
+  MIGRATION_PRE_REVISION="$(read_database_current_revision)"
+  MIGRATION_TARGET_REVISION="$(read_candidate_migration_heads)"
   write_release_evidence "in_progress"
   write_release_checkpoint migration_started in_progress manual_db_recovery \
     "database migration started; evidence=$RELEASE_EVIDENCE_FILE sha256=$RELEASE_EVIDENCE_SHA256; interruption requires manual database inspection"
   verify_release_evidence
   run_privileged_bash 'set -Eeuo pipefail; set -a; . "$1"; set +a; export PYTHONPATH="$2"; . "$3/bin/activate"; cd "$2"; python -m alembic upgrade head' \
     "$BACKEND_ENV_FILE" "$BACKEND_DIR" "$VENV_DIR"
-  MIGRATION_RESULT_REVISION="$(run_privileged_bash 'set -Eeuo pipefail; set -a; . "$1"; set +a; export PYTHONPATH="$2"; . "$3/bin/activate"; cd "$2"; python -m alembic current' \
-    "$BACKEND_ENV_FILE" "$BACKEND_DIR" "$VENV_DIR")"
-  python3 - "$MIGRATION_TARGET_REVISION" "$MIGRATION_RESULT_REVISION" <<'PY'
-import re
-import sys
-
-pattern = re.compile(r"(?m)^([0-9]{8}_[0-9]{4})\b")
-target = set(pattern.findall(sys.argv[1]))
-result = set(pattern.findall(sys.argv[2]))
-if not target or target != result:
-    raise SystemExit(
-        "[ERROR] Database revision after migration does not match Alembic heads: "
-        f"target={sorted(target)} result={sorted(result)}"
-    )
-PY
+  MIGRATION_RESULT_REVISION="$(read_database_current_revision)"
+  assert_alembic_revision_sets_equal \
+    "$MIGRATION_TARGET_REVISION" "target" \
+    "$MIGRATION_RESULT_REVISION" "result" \
+    "Database revision after migration does not match Alembic heads"
   write_release_evidence "completed"
   write_release_checkpoint migrated completed automatic \
     "database migration completed; evidence=$RELEASE_EVIDENCE_FILE sha256=$RELEASE_EVIDENCE_SHA256"
   verify_release_evidence
+elif [[ "$DATABASE_MIGRATION_VERIFY_ONLY" == "true" ]]; then
+  if [[ -z "$MIGRATION_PRE_REVISION" ]] \
+    || [[ -z "$MIGRATION_TARGET_REVISION" ]] \
+    || [[ -z "$MIGRATION_RESULT_REVISION" ]]; then
+    verify_database_schema_without_migration
+  fi
+  write_release_evidence "completed"
+  write_release_checkpoint migrated completed automatic \
+    "database schema already matches candidate heads; no migration executed; evidence=$RELEASE_EVIDENCE_FILE sha256=$RELEASE_EVIDENCE_SHA256"
+  verify_release_evidence
 else
-  echo "[INFO] Database migrations skipped (database not configured)"
+  echo "[INFO] Database migration evidence is not required because the database is disabled"
   write_release_evidence "not_required"
   write_release_checkpoint migrated completed automatic \
     "database migration not required; evidence=$RELEASE_EVIDENCE_FILE sha256=$RELEASE_EVIDENCE_SHA256"
