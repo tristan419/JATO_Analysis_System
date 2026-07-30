@@ -286,6 +286,22 @@ class ReleaseCheckpointTests(unittest.TestCase):
                 retry_class="rollback_required",
             )
 
+    def test_backup_in_progress_retry_is_idempotent(self) -> None:
+        self.write("prepared")
+        first_attempt = self.write(
+            "backup_verified",
+            status="in_progress",
+            retry_class="automatic",
+        )
+        repeated_attempt = self.write(
+            "backup_verified",
+            status="in_progress",
+            retry_class="automatic",
+        )
+
+        self.assertEqual(repeated_attempt, first_attempt)
+        self.assertEqual(len(self.journal_path.read_text().splitlines()), 2)
+
     def test_complete_requires_verified_parity_chain_predecessor(self) -> None:
         self.write("backend_healthy")
         with self.assertRaisesRegex(

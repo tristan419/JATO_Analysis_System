@@ -552,9 +552,38 @@ def assert_database_migration_is_behind_main_release_gate() -> None:
         raise AssertionError("blue/green controller no longer invokes the guarded server deploy")
     if "PRODUCTION_RELEASE_WORKFLOW=true" not in bluegreen_release:
         raise AssertionError("blue/green controller must identify the production release workflow")
-    if "RUN_DATABASE_MIGRATIONS=false" not in bluegreen_release:
+    inner_start = bluegreen_release.index("run_inner_prepare() {")
+    inner_end = bluegreen_release.index("\n}\n", inner_start)
+    inner_prepare = bluegreen_release[inner_start:inner_end]
+    if "RUN_DATABASE_MIGRATIONS=verify_only" not in inner_prepare:
         raise AssertionError(
-            "blue/green v1 must keep schema mutation outside the slot switch",
+            "blue/green prepare must use read-only database verification",
+        )
+    if "RUN_DATABASE_MIGRATIONS=false" in inner_prepare:
+        raise AssertionError(
+            "blue/green prepare must not confuse disabled DB with no-migration mode",
+        )
+    for function_name in (
+        "run_post_activation",
+        "run_post_commit_global_reconciliation",
+    ):
+        function_start = bluegreen_release.index(f"{function_name}() {{")
+        function_end = bluegreen_release.index("\n}\n", function_start)
+        function_body = bluegreen_release[function_start:function_end]
+        if "RUN_DATABASE_MIGRATIONS=false" not in function_body:
+            raise AssertionError(
+                f"{function_name} must retain its non-preparation no-migration mode",
+            )
+    verify_start = server_deploy.index(
+        'elif [[ "$DATABASE_MIGRATION_VERIFY_ONLY" == "true" ]]',
+    )
+    verify_end = server_deploy.index("\nelse\n", verify_start)
+    verify_only = server_deploy[verify_start:verify_end]
+    if "python -m alembic upgrade head" in verify_only:
+        raise AssertionError("read-only database verification must not run migrations")
+    if 'write_release_evidence "completed"' not in verify_only:
+        raise AssertionError(
+            "read-only database verification must write completed evidence",
         )
     if "python -m alembic upgrade head" not in server_deploy:
         raise AssertionError("expected Alembic production migration command was not found")

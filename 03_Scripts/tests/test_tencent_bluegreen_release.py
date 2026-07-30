@@ -1140,7 +1140,17 @@ def test_bluegreen_v1_forbids_schema_delta_and_disables_prewarm() -> None:
     script = CONTROLLER.read_text(encoding="utf-8")
     assert "Blue/green v1 forbids Alembic changes" in script
     assert "current != heads" in script
-    assert "RUN_DATABASE_MIGRATIONS=false" in script
+    run_inner = _shell_function(script, "run_inner_prepare")
+    assert "RUN_DATABASE_MIGRATIONS=verify_only" in run_inner
+    assert "RUN_DATABASE_MIGRATIONS=false" not in run_inner
+    assert "RUN_DATABASE_MIGRATIONS=false" in _shell_function(
+        script,
+        "run_post_activation",
+    )
+    assert "RUN_DATABASE_MIGRATIONS=false" in _shell_function(
+        script,
+        "run_post_commit_global_reconciliation",
+    )
     assert "RUN_GROUPED_TIME_SERIES_PREWARM=false" in script
     assert "APP_GROUPED_TIME_SERIES_PREWARM_ENABLED=false" in (
         REPO_ROOT

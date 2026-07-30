@@ -873,6 +873,17 @@ def assert_server_consumes_only_prebuilt_dist() -> None:
         raise AssertionError("database migration must retain the main branch gate")
     if 'PRODUCTION_RELEASE_WORKFLOW" != "true"' not in server_release:
         raise AssertionError("database migration must require the production release workflow")
+    inner_start = bluegreen_release.index("run_inner_prepare() {")
+    inner_end = bluegreen_release.index("\n}\n", inner_start)
+    inner_prepare = bluegreen_release[inner_start:inner_end]
+    if "RUN_DATABASE_MIGRATIONS=verify_only" not in inner_prepare:
+        raise AssertionError(
+            "blue/green candidate preparation must use read-only DB verification",
+        )
+    if "default_transaction_read_only=on" not in server_release:
+        raise AssertionError(
+            "Alembic current must be protected by a database-level read-only setting",
+        )
 
 
 def assert_bluegreen_storage_guard_text_contract(

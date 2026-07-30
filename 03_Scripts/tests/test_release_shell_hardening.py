@@ -7,6 +7,8 @@ from pathlib import Path
 import subprocess
 import tarfile
 
+import pytest
+
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 REMOTE_SCRIPT = REPO_ROOT / "03_Scripts/deploy/fullstack_remote_release.sh"
@@ -313,11 +315,270 @@ def test_server_checkpoint_boundaries_are_fail_closed_and_resume_safe() -> None:
     assert "CHECKPOINT_ALREADY_COMPLETE" in script
     assert "direct server deploy is a no-op" in script
     assert "backend_healthy completed" not in script
+    assert "DATABASE_READ_ONLY_GATE_FAILED" in script
+    assert (
+        "Preserving the resumable backup checkpoint because the database gate was read-only"
+        in script
+    )
     health = script.index('echo "[INFO] Verify backend health"')
     schedulers = script.index(
         'echo "[INFO] Reconcile scraper schedulers after backend health"'
     )
     assert health < schedulers
+
+
+def _run_database_policy(
+    tmp_path: Path,
+    *,
+    mode: str,
+    enabled: bool,
+    prepare_only: bool = True,
+    deploy_branch: str = "main",
+    production_workflow: bool = True,
+) -> subprocess.CompletedProcess[str]:
+    backend_env = tmp_path / "backend.env"
+    backend_env.write_text(
+        "\n".join(
+            (
+                f"APP_DATABASE_ENABLED={'true' if enabled else 'false'}",
+                "APP_DATABASE_URL=postgresql://example.invalid/jato",
+                "",
+            )
+        ),
+        encoding="utf-8",
+    )
+    policy = _shell_function(SERVER_SCRIPT, "resolve_database_migration_policy")
+    script = "\n".join(
+        (
+            "set -Eeuo pipefail",
+            'checkpoint_enabled() { return 0; }',
+            'fail_deploy() { printf "%s\\n" "$1" >&2; exit 1; }',
+            (
+                "run_privileged_bash() { "
+                'local command="$1"; shift; bash -c "$command" _ "$@"; }'
+            ),
+            policy,
+            'BACKEND_ENV_FILE="$TEST_BACKEND_ENV_FILE"',
+            'RUN_DATABASE_MIGRATIONS="$TEST_DATABASE_MODE"',
+            'BLUEGREEN_PREPARE_ONLY="$TEST_PREPARE_ONLY"',
+            'DEPLOY_BRANCH="$TEST_DEPLOY_BRANCH"',
+            'PRODUCTION_RELEASE_WORKFLOW="$TEST_PRODUCTION_WORKFLOW"',
+            "resolve_database_migration_policy",
+            (
+                "printf '%s|%s|%s|%s|%s\\n' "
+                '"$DATABASE_ENABLED" "$DATABASE_BACKUP_REQUIRED" '
+                '"$DATABASE_MIGRATION_REQUIRED" '
+                '"$DATABASE_MIGRATION_VERIFY_ONLY" "$RUN_DATABASE_MIGRATIONS"'
+            ),
+        )
+    )
+    return subprocess.run(
+        ["bash", "-c", script],
+        check=False,
+        capture_output=True,
+        text=True,
+        env={
+            **os.environ,
+            "TEST_BACKEND_ENV_FILE": str(backend_env),
+            "TEST_DATABASE_MODE": mode,
+            "TEST_PREPARE_ONLY": "true" if prepare_only else "false",
+            "TEST_DEPLOY_BRANCH": deploy_branch,
+            "TEST_PRODUCTION_WORKFLOW": (
+                "true" if production_workflow else "false"
+            ),
+        },
+    )
+
+
+@pytest.mark.parametrize(
+    ("mode", "enabled", "expected"),
+    (
+        ("auto", True, "true|true|true|false|run"),
+        ("auto", False, "false|false|false|false|skip"),
+        ("verify_only", True, "true|true|false|true|verify_only"),
+        ("verify_only", False, "false|false|false|false|skip"),
+    ),
+)
+def test_database_policy_separates_enabled_state_from_action(
+    tmp_path: Path,
+    mode: str,
+    enabled: bool,
+    expected: str,
+) -> None:
+    result = _run_database_policy(
+        tmp_path,
+        mode=mode,
+        enabled=enabled,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip() == expected
+
+
+def test_database_policy_rejects_skip_for_enabled_database(tmp_path: Path) -> None:
+    result = _run_database_policy(tmp_path, mode="false", enabled=True)
+
+    assert result.returncode != 0
+    assert "Cannot skip migration evidence while the database is enabled" in result.stderr
+
+
+def test_database_policy_rejects_unknown_mode(tmp_path: Path) -> None:
+    result = _run_database_policy(tmp_path, mode="surprise", enabled=False)
+
+    assert result.returncode != 0
+    assert "Unsupported database migration policy: surprise" in result.stderr
+
+
+@pytest.mark.parametrize(
+    "overrides",
+    (
+        {"prepare_only": False},
+        {"deploy_branch": "codex/feature"},
+        {"production_workflow": False},
+    ),
+)
+def test_verify_only_policy_is_restricted_to_bluegreen_main_production_prepare(
+    tmp_path: Path,
+    overrides: dict[str, object],
+) -> None:
+    result = _run_database_policy(
+        tmp_path,
+        mode="verify_only",
+        enabled=True,
+        **overrides,
+    )
+
+    assert result.returncode != 0
+    assert "restricted to blue/green main production preparation" in result.stderr
+
+
+@pytest.mark.parametrize(
+    ("current", "heads", "matches"),
+    (
+        ("20260715_0046 (head)", "20260715_0046 (head)", True),
+        (
+            "20260715_0046\n20260716_0047",
+            "20260716_0047\n20260715_0046",
+            True,
+        ),
+        ("20260715_0046", "20260716_0047 (head)", False),
+        ("", "20260716_0047 (head)", False),
+    ),
+)
+def test_alembic_revision_comparison_is_nonempty_and_exact(
+    current: str,
+    heads: str,
+    matches: bool,
+) -> None:
+    comparison = _shell_function(
+        SERVER_SCRIPT,
+        "assert_alembic_revision_sets_equal",
+    )
+    script = "\n".join(
+        (
+            "set -Eeuo pipefail",
+            comparison,
+            (
+                "assert_alembic_revision_sets_equal "
+                '"$TEST_CURRENT" current "$TEST_HEADS" heads '
+                '"database schema mismatch"'
+            ),
+        )
+    )
+    result = subprocess.run(
+        ["bash", "-c", script],
+        check=False,
+        capture_output=True,
+        text=True,
+        env={
+            **os.environ,
+            "TEST_CURRENT": current,
+            "TEST_HEADS": heads,
+        },
+    )
+
+    assert (result.returncode == 0) is matches
+    if not matches:
+        assert "database schema mismatch" in result.stderr
+
+
+def test_verify_only_gate_is_read_only_and_runs_before_backup_completion() -> None:
+    script = SERVER_SCRIPT.read_text(encoding="utf-8")
+    verifier = _shell_function(
+        SERVER_SCRIPT,
+        "verify_database_schema_without_migration",
+    )
+    assert "read_database_current_revision" in verifier
+    assert "read_candidate_migration_heads" in verifier
+    assert "assert_alembic_revision_sets_equal" in verifier
+    assert "alembic upgrade" not in verifier
+    assert "default_transaction_read_only=on" in script
+    assert verifier.index('DATABASE_READ_ONLY_GATE_FAILED="true"') < verifier.index(
+        "read_database_current_revision",
+    )
+
+    backup_start = script.index(
+        'write_release_checkpoint backup_verified in_progress automatic',
+    )
+    evidence_start = script.index(
+        'write_release_evidence "not_started"',
+        backup_start,
+    )
+    read_only_gate = script.index(
+        "verify_database_schema_without_migration",
+        evidence_start,
+    )
+    backup_complete = script.index(
+        "write_release_checkpoint backup_verified completed automatic",
+        read_only_gate,
+    )
+    assert backup_start < evidence_start < read_only_gate < backup_complete
+
+    verify_start = script.index(
+        'elif [[ "$DATABASE_MIGRATION_VERIFY_ONLY" == "true" ]]',
+    )
+    verify_branch = script[verify_start:script.index("\nelse\n", verify_start)]
+    assert 'write_release_evidence "completed"' in verify_branch
+    assert "write_release_checkpoint migrated completed automatic" in verify_branch
+    assert "alembic upgrade" not in verify_branch
+
+
+@pytest.mark.parametrize(
+    ("read_only_failed", "checkpoint_written"),
+    ((True, False), (False, True)),
+)
+def test_read_only_gate_failure_preserves_resumable_checkpoint(
+    read_only_failed: bool,
+    checkpoint_written: bool,
+) -> None:
+    record_failure = _shell_function(SERVER_SCRIPT, "record_failure_checkpoint")
+    script = "\n".join(
+        (
+            "set -Eeuo pipefail",
+            'checkpoint_enabled() { return 0; }',
+            'write_release_checkpoint() { printf "checkpoint-write\\n"; }',
+            record_failure,
+            "CHECKPOINT_WRITING_FAILURE=false",
+            (
+                "DATABASE_READ_ONLY_GATE_FAILED="
+                f"{'true' if read_only_failed else 'false'}"
+            ),
+            "CURRENT_CHECKPOINT_PHASE=backup_verified",
+            'record_failure_checkpoint "read-only current command failed"',
+        )
+    )
+    result = subprocess.run(
+        ["bash", "-c", script],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert ("Preserving the resumable backup checkpoint" in result.stdout) is (
+        read_only_failed
+    )
+    assert ("checkpoint-write" in result.stdout) is checkpoint_written
 
 
 def test_frontend_public_permissions_are_normalized_under_private_umask(
