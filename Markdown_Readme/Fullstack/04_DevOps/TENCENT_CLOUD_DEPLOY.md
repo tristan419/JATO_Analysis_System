@@ -845,10 +845,12 @@ release 的缩小版，也不能切换流量。调用方必须先用与 producti
    当前代 fd 9 已持锁、子 unit/端口已清理，并重新采集和比较 production
    AFTER 后启动的 reconcile 子进程可以原子写 receipt。receipt 固定携带
    `terminalWriter=supervisor_reconcile` 与 writer `InvocationID`；成功结果
-   还要求 candidate evidence 的 `InvocationID` 与 writer 完全相同，因此
-   supervisor 发生跨代重启时旧 candidate 只能收敛为 failed，不能借新一代
-   快照放行。任意伪造 `HOME`、`DEPLOY_STATE_DIR`、lock path 或 writer
-   generation 都会拒绝。
+   还要求 candidate evidence 中的 supervisor generation（来自只读环境和
+   root-owned start permit）与 writer `InvocationID` 完全相同；candidate
+   service 自身另有独立的 systemd `InvocationID`，必须与 start permit
+   记录的 candidate generation 相同。因此 supervisor 发生跨代重启时旧
+   candidate 只能收敛为 failed，不能借新一代快照放行。任意伪造 `HOME`、
+   `DEPLOY_STATE_DIR`、lock path 或任一 generation 都会拒绝。
 3. source archive 最大 256 MiB、最多 50,000 个成员且展开不超过 2 GiB；
    controller、guard、lock helper 与 readiness verifier 必须和 archive 内
    文件逐个同 SHA。输入会先复制为 root-owned 只读文件。build 使用独立
@@ -859,9 +861,16 @@ release 的缩小版，也不能切换流量。调用方必须先用与 producti
    `StopPropagatedFrom + After` 绑定 durable supervisor：supervisor
    退出时三个子 unit 只收到 stop，不会因 supervisor 的
    `Restart=on-failure` 被连带重新执行。每个子 unit 还携带首次 supervisor
-   的 32 位 `InvocationID`；进入 snapshot、解包/安装或 Uvicorn 前必须确认
-   当前 supervisor 仍是同一代。这样同时封住了 supervisor 崩溃时的 restart
-   传播和 StartTransientUnit 竞态；代码与门禁显式禁止重新加入
+   的 32 位 `InvocationID`；controller 和 build 通过 systemd manager 确认
+   当前 supervisor 仍是同一代。DynamicUser runtime 不依赖主机 D-Bus：
+   它先停在只读 wrapper，不执行 Uvicorn；controller 验证 candidate unit
+   的独立 `InvocationID`、实际 MainPID argv、资源限制、环境、
+   `After + StopPropagatedFrom` 和 live supervisor 后，才以同目录原子
+   rename 发布 root-owned `0444` start permit。permit 同时绑定 supervisor
+   generation、candidate generation 与 unit 名，runtime 用 systemd 自动
+   注入的 `$INVOCATION_ID` 验证 permit 后才 exec。这样同时封住了
+   supervisor 崩溃时的 restart 传播和 StartTransientUnit 竞态；代码与门禁
+   显式禁止重新加入
    `BindsTo`/`PartOf`，且 controller/build/runtime 都显式固定
    `Restart=no`。
    runtime 另用 transient service，只监听 `127.0.0.1:18001`，
@@ -946,7 +955,9 @@ bash 03_Scripts/deploy/tencent_feature_candidate_canary.sh launch
 - runtime 与 staged source 两个临时路径均不存在；root-owned control
   evidence 仍存在且不可写，待 supervisor collect 后再外部清理；
 - receipt 为 `outcome=passed`，`terminalWriter=supervisor_reconcile`，
-  candidate 与 writer `InvocationID` 相同，checkpoint 末态为
+  candidate evidence/start permit 中的 supervisor generation 与 writer
+  `InvocationID` 相同，permit 的 candidate generation 与 candidate
+  systemd `InvocationID` 相同，checkpoint 末态为
   `supervisor_reconciled/completed`；
 - embedded before/after 除采集时间外完全相同。
 

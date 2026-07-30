@@ -619,36 +619,46 @@ def verify_candidate_evidence(
         raise CanaryGuardError(
             "candidate evidence lacks its exact stop-only supervisor contract",
         )
-    environment = str(systemd.get("Environment") or "")
-    required_environment = (
-        "APP_DATABASE_ENABLED=false",
-        "APP_REDIS_ENABLED=false",
-        "APP_JATO_MONTHLY_ENABLED=false",
-        "APP_JATO_MONTHLY_EXECUTION_MODE=disabled",
-        "APP_GROUPED_TIME_SERIES_PREWARM_ENABLED=false",
-        "APP_DASHBOARD_OVERVIEW_PREWARM_ENABLED=false",
-        "APP_METADATA_PREWARM_ENABLED=false",
-        "APP_ADVANCED_ANALYSIS_WARMUP_ENABLED=false",
-        "HERMES_RUN_ENABLED=false",
-    )
-    missing = [value for value in required_environment if value not in environment]
+    environment_raw = systemd.get("Environment")
+    if not isinstance(environment_raw, str):
+        raise CanaryGuardError("candidate evidence Environment is malformed")
+    try:
+        environment_tokens = shlex.split(environment_raw)
+    except ValueError as exc:
+        raise CanaryGuardError(
+            "candidate evidence Environment is malformed",
+        ) from exc
+    environment: dict[str, str] = {}
+    for token in environment_tokens:
+        key, separator, value = token.partition("=")
+        if not separator or not key or key in environment:
+            raise CanaryGuardError(
+                "candidate evidence Environment is malformed or ambiguous",
+            )
+        environment[key] = value
+    required_environment = {
+        "APP_DATABASE_ENABLED": "false",
+        "APP_REDIS_ENABLED": "false",
+        "APP_JATO_MONTHLY_ENABLED": "false",
+        "APP_JATO_MONTHLY_EXECUTION_MODE": "disabled",
+        "APP_GROUPED_TIME_SERIES_PREWARM_ENABLED": "false",
+        "APP_DASHBOARD_OVERVIEW_PREWARM_ENABLED": "false",
+        "APP_METADATA_PREWARM_ENABLED": "false",
+        "APP_ADVANCED_ANALYSIS_WARMUP_ENABLED": "false",
+        "HERMES_RUN_ENABLED": "false",
+    }
+    missing = [
+        f"{key}={expected}"
+        for key, expected in required_environment.items()
+        if environment.get(key) != expected
+    ]
     if missing:
         raise CanaryGuardError(
             "candidate evidence omitted disabled subsystem flags: "
             + ", ".join(missing),
         )
-    try:
-        environment_tokens = shlex.split(environment)
-    except ValueError as exc:
-        raise CanaryGuardError(
-            "candidate evidence Environment is malformed",
-        ) from exc
-    supervisor_generation = next(
-        (
-            token.partition("=")[2]
-            for token in environment_tokens
-            if token.startswith("CANARY_SUPERVISOR_INVOCATION_ID=")
-        ),
+    supervisor_generation = environment.get(
+        "CANARY_SUPERVISOR_INVOCATION_ID",
         "",
     )
     if (
@@ -657,6 +667,35 @@ def verify_candidate_evidence(
     ):
         raise CanaryGuardError(
             "candidate evidence lacks the original supervisor generation",
+        )
+    candidate_generation = payload.get("candidateInvocationId")
+    systemd_candidate_generation = systemd.get("InvocationID")
+    if (
+        not isinstance(candidate_generation, str)
+        or not isinstance(systemd_candidate_generation, str)
+        or re.fullmatch(r"[0-9a-f]{32}", candidate_generation) is None
+        or candidate_generation == "0" * 32
+        or systemd_candidate_generation.lower() != candidate_generation
+    ):
+        raise CanaryGuardError(
+            "candidate evidence lacks its exact transient generation",
+        )
+    start_permit = payload.get("startPermit")
+    expected_candidate_unit = (
+        "jato-feature-canary-"
+        f"{identity['commit'][:12]}-{identity['runId']}.service"
+    )
+    if (
+        not isinstance(start_permit, dict)
+        or start_permit
+        != {
+            "supervisorInvocationId": supervisor_generation,
+            "candidateInvocationId": candidate_generation,
+            "unit": expected_candidate_unit,
+        }
+    ):
+        raise CanaryGuardError(
+            "candidate evidence lacks the exact root-owned start permit",
         )
     return supervisor_generation
 

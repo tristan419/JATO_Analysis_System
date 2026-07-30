@@ -133,6 +133,15 @@ def _candidate_evidence() -> dict[str, object]:
         },
         "monthlyStatus": 423,
         "liveBackendWorkerCount": 2,
+        "candidateInvocationId": "d" * 32,
+        "startPermit": {
+            "supervisorInvocationId": "c" * 32,
+            "candidateInvocationId": "d" * 32,
+            "unit": (
+                "jato-feature-canary-"
+                "aaaaaaaaaaaa-canary-1.service"
+            ),
+        },
         "systemd": {
             "ActiveState": "active",
             "UnitFileState": "transient",
@@ -145,6 +154,7 @@ def _candidate_evidence() -> dict[str, object]:
             "MemoryMax": str(4 * 1024 * 1024 * 1024),
             "MemorySwapMax": "0",
             "TasksMax": "512",
+            "InvocationID": "d" * 32,
             "ExecStart": "python -m uvicorn app.main:app --workers 2",
             "StopPropagatedFrom": (
                 "jato-feature-canary-supervisor-"
@@ -342,6 +352,53 @@ def test_feature_canary_holds_lock_and_cleans_only_its_namespace() -> None:
     )
     assert "rm -rf" not in retained_control_body
     assert "sudo -n rm" not in retained_control_body
+
+
+def test_candidate_start_permit_is_atomic_and_precedes_application_exec() -> None:
+    script = CONTROLLER.read_text(encoding="utf-8")
+    authorize = _shell_function(script, "authorize_candidate_runtime")
+    for token in (
+        'systemctl show "$SERVICE_UNIT"',
+        'Path("/proc") / main_pid',
+        '.read_bytes().split(b"\\0")',
+        "pre-permit candidate wrapper already changed or escaped",
+        "StopPropagatedFrom",
+        "assert_supervisor_generation",
+        'persist_candidate_start_permit "$candidate_invocation_id"',
+    ):
+        assert token in authorize
+
+    publisher = _shell_function(script, "persist_candidate_start_permit")
+    assert "/dev/stdin" not in publisher
+    assert publisher.count("assert_supervisor_generation") == 3
+    first_live = publisher.index("assert_supervisor_generation")
+    install = publisher.index("install -m 0444 -o root -g root")
+    second_live = publisher.index(
+        "assert_supervisor_generation",
+        first_live + 1,
+    )
+    publish = publisher.index("mv -T")
+    verify = publisher.index(
+        'assert_candidate_start_permit "$candidate_invocation_id"',
+    )
+    third_live = publisher.index(
+        "assert_supervisor_generation",
+        second_live + 1,
+    )
+    assert first_live < install < second_live < publish < verify < third_live
+
+    runtime = _shell_function(script, "run_candidate_runtime")
+    assert "systemctl" not in runtime
+    assert "read_live_supervisor_invocation_id" not in runtime
+    assert "assert_supervisor_generation" not in runtime
+    assert runtime.index("\n  expected_argv=(\n") < runtime.index(
+        "wait_for_candidate_start_permit",
+    ) < runtime.index('exec "${expected_argv[@]}"')
+
+    reconcile = _shell_function(script, "reconcile_canary_controller")
+    assert reconcile.index("cleanup_candidate_start_permit_temp") < (
+        reconcile.index('if [[ -f "$RECEIPT_FILE"')
+    )
 
 
 def test_supervisor_launcher_returns_without_waiting_on_systemd(
@@ -1280,14 +1337,21 @@ def test_runtime_wrapper_checks_generation_before_exact_exec(
               RUNTIME_ROOT="/opt/jato-canary/runtime/test"
               printf 'initialize\\n' >>"$calls"
             }
-            assert_supervisor_generation() {
-              printf 'generation\\n' >>"$calls"
-            }
             verify_canary_parent_roots() {
               printf 'parents\\n' >>"$calls"
             }
             validate_feature_identity() {
               printf 'identity\\n' >>"$calls"
+            }
+            assert_staged_supervisor_generation() {
+              printf 'marker\\n' >>"$calls"
+            }
+            wait_for_candidate_start_permit() {
+              printf 'permit\\n' >>"$calls"
+            }
+            assert_supervisor_generation() {
+              printf 'forbidden-live-generation\\n' >>"$calls"
+              return 99
             }
             exec() {
               printf 'exec:%s\\n' "$*" >>"$calls"
@@ -1310,11 +1374,113 @@ def test_runtime_wrapper_checks_generation_before_exact_exec(
     )
     assert (result.returncode == 0) is expected_ok, result.stderr
     events = calls.read_text(encoding="utf-8").splitlines()
-    assert events[:4] == ["initialize", "generation", "parents", "identity"]
+    assert events[:4] == [
+        "initialize",
+        "parents",
+        "identity",
+        "marker",
+    ]
+    assert "forbidden-live-generation" not in events
     if expected_ok:
+        assert events[4] == "permit"
         assert len([event for event in events if event.startswith("exec:")]) == 1
     else:
+        assert "permit" not in events
         assert not any(event.startswith("exec:") for event in events)
+
+
+@pytest.mark.parametrize(
+    ("scenario", "expected_ok"),
+    (
+        ("exact", True),
+        ("missing", False),
+        ("missing-invocation", False),
+        ("malformed", False),
+        ("wrong-supervisor", False),
+        ("wrong-candidate", False),
+        ("wrong-unit", False),
+        ("wrong-owner", False),
+        ("wrong-mode", False),
+        ("symlink", False),
+    ),
+)
+def test_dynamic_runtime_requires_exact_root_owned_start_permit(
+    tmp_path: Path,
+    scenario: str,
+    expected_ok: bool,
+) -> None:
+    control = tmp_path / "control"
+    control.mkdir()
+    marker = control / "supervisor-invocation-id"
+    marker.write_text("a" * 32 + "\n", encoding="utf-8")
+    permit = control / "candidate-start-permit"
+    permit_payload = (
+        f"supervisor={'a' * 32}\n"
+        f"candidate={'b' * 32}\n"
+        "unit=jato-feature-canary-test.service\n"
+    )
+    if scenario == "malformed":
+        permit_payload = "not-a-permit\n"
+    elif scenario == "wrong-supervisor":
+        permit_payload = permit_payload.replace("a" * 32, "c" * 32)
+    elif scenario == "wrong-candidate":
+        permit_payload = permit_payload.replace("b" * 32, "c" * 32)
+    elif scenario == "wrong-unit":
+        permit_payload = permit_payload.replace(
+            "jato-feature-canary-test.service",
+            "jato-feature-canary-other.service",
+        )
+    if scenario not in {"missing", "symlink"}:
+        permit.write_text(permit_payload, encoding="utf-8")
+    elif scenario == "symlink":
+        target = control / "permit-target"
+        target.write_text(permit_payload, encoding="utf-8")
+        permit.symlink_to(target)
+
+    harness = tmp_path / "permit-harness.sh"
+    harness.write_text(
+        textwrap.dedent(
+            """\
+            #!/usr/bin/env bash
+            set -Eeuo pipefail
+            source "$1"
+            control="$2"
+            scenario="$3"
+            CANARY_MODE="runtime"
+            CANARY_RUNTIME_START_PERMIT_TIMEOUT_SECONDS=1
+            CONTROL_ROOT="$control"
+            SUPERVISOR_GENERATION_FILE="$control/supervisor-invocation-id"
+            CANDIDATE_START_PERMIT_FILE="$control/candidate-start-permit"
+            SERVICE_UNIT="jato-feature-canary-test.service"
+            CANARY_SUPERVISOR_INVOCATION_ID="aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+            INVOCATION_ID="bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+            [[ "$scenario" == "missing-invocation" ]] && INVOCATION_ID=""
+            stat() {
+              local path="${@: -1}"
+              if [[ "$path" == "$CANDIDATE_START_PERMIT_FILE" ]] \
+                && [[ "$scenario" == "wrong-owner" ]]; then
+                printf '1000:1000:444\\n'
+              elif [[ "$path" == "$CANDIDATE_START_PERMIT_FILE" ]] \
+                && [[ "$scenario" == "wrong-mode" ]]; then
+                printf '0:0:600\\n'
+              else
+                printf '0:0:444\\n'
+              fi
+            }
+            wait_for_candidate_start_permit
+            printf 'authorized\\n'
+            """
+        ),
+        encoding="utf-8",
+    )
+    result = subprocess.run(
+        ["bash", str(harness), str(CONTROLLER), str(control), scenario],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert (result.returncode == 0) is expected_ok, result.stderr
+    assert ("authorized" in result.stdout) is expected_ok
 
 
 def test_success_path_persists_controller_completed_marker(
@@ -1335,6 +1501,7 @@ def test_success_path_persists_controller_completed_marker(
             validate_static_contract() { printf 'validate\\n' >>"$calls"; }
             initialize_paths() { printf 'initialize\\n' >>"$calls"; }
             assert_supervisor_generation() { printf 'generation\\n' >>"$calls"; }
+            assert_staged_supervisor_generation() { printf 'marker\\n' >>"$calls"; }
             assert_supervisor_scope() { printf 'scope\\n' >>"$calls"; }
             assert_controller_scope() { printf 'controller-scope\\n' >>"$calls"; }
             assert_supervisor_production_lock() { printf 'lock\\n' >>"$calls"; }
@@ -1349,6 +1516,7 @@ def test_success_path_persists_controller_completed_marker(
             python3() { printf 'python:%s\\n' "$*" >>"$calls"; }
             run_build_scope() { printf 'build\\n' >>"$calls"; }
             start_candidate_service() { printf 'runtime\\n' >>"$calls"; }
+            authorize_candidate_runtime() { printf 'permit\\n' >>"$calls"; }
             verify_candidate_service() { printf 'candidate\\n' >>"$calls"; }
             run_canary_controller
             """
@@ -1368,6 +1536,11 @@ def test_success_path_persists_controller_completed_marker(
     assert events.index("record:controller_completed:completed") > events.index(
         "candidate",
     )
+    assert events.index("runtime") < events.index("permit") < events.index(
+        "candidate",
+    )
+    assert events.count("generation") == 3
+    assert events.index("marker") < events.index("build")
 
 
 @pytest.mark.parametrize(
@@ -1410,6 +1583,9 @@ def test_signal_reconcile_is_durable_without_process_memory(
               printf 'generation\\n' >>"$calls"
             }
             acquire_canary_production_lock() { printf 'lock\\n' >>"$calls"; }
+            cleanup_candidate_start_permit_temp() {
+              printf 'cleanup-permit-temp\\n' >>"$calls"
+            }
             cleanup_candidate() { printf 'cleanup-children\\n' >>"$calls"; }
             wait_for_candidate_port_release() { printf 'port-free\\n' >>"$calls"; }
             resolve_active_unit() {
@@ -1518,6 +1694,9 @@ def test_reconcile_alone_derives_and_writes_terminal_outcome(
               printf 'generation\\n' >>"$calls"
             }
             acquire_canary_production_lock() { printf 'lock\\n' >>"$calls"; }
+            cleanup_candidate_start_permit_temp() {
+              printf 'cleanup-permit-temp\\n' >>"$calls"
+            }
             cleanup_candidate() {
               printf 'cleanup\\n' >>"$calls"
               [[ "$scenario" != "cleanup-failed" ]]
@@ -1623,6 +1802,9 @@ def test_reconcile_accepts_existing_verified_receipt_without_rewrite(
               printf 'generation\\n' >>"$calls"
             }
             acquire_canary_production_lock() { printf 'lock\\n' >>"$calls"; }
+            cleanup_candidate_start_permit_temp() {
+              printf 'cleanup-permit-temp\\n' >>"$calls"
+            }
             verify_existing_receipt() { printf 'verify-receipt\\n' >>"$calls"; }
             cleanup_candidate() { printf 'cleanup\\n' >>"$calls"; }
             wait_for_candidate_port_release() {
@@ -1651,10 +1833,11 @@ def test_reconcile_accepts_existing_verified_receipt_without_rewrite(
     )
     assert result.returncode == 0, result.stderr
     assert calls.read_text(encoding="utf-8").splitlines() == [
-        "validate",
-        "generation",
-        "lock",
-        "verify-receipt",
+            "validate",
+            "generation",
+            "lock",
+            "cleanup-permit-temp",
+            "verify-receipt",
         "cleanup",
         "port-free",
         "control-safe",
@@ -2227,6 +2410,19 @@ def test_candidate_evidence_rejects_worker_or_prewarm_drift() -> None:
     evidence = _candidate_evidence()
     systemd = evidence["systemd"]
     assert isinstance(systemd, dict)
+    systemd["Environment"] = (
+        str(systemd["Environment"])
+        + " APP_JATO_MONTHLY_ENABLED=false"
+    )
+    with pytest.raises(
+        guard.CanaryGuardError,
+        match="malformed or ambiguous",
+    ):
+        guard.verify_candidate_evidence(evidence, identity)
+
+    evidence = _candidate_evidence()
+    systemd = evidence["systemd"]
+    assert isinstance(systemd, dict)
     systemd["Restart"] = "on-failure"
     with pytest.raises(
         guard.CanaryGuardError,
@@ -2266,6 +2462,39 @@ def test_candidate_evidence_rejects_worker_or_prewarm_drift() -> None:
         match="original supervisor generation",
     ):
         guard.verify_candidate_evidence(evidence, identity)
+
+    evidence = _candidate_evidence()
+    systemd = evidence["systemd"]
+    assert isinstance(systemd, dict)
+    systemd["InvocationID"] = 123
+    with pytest.raises(
+        guard.CanaryGuardError,
+        match="exact transient generation",
+    ):
+        guard.verify_candidate_evidence(evidence, identity)
+
+    evidence = _candidate_evidence()
+    evidence["candidateInvocationId"] = "e" * 32
+    with pytest.raises(
+        guard.CanaryGuardError,
+        match="exact transient generation",
+    ):
+        guard.verify_candidate_evidence(evidence, identity)
+
+    for key, replacement in (
+        ("supervisorInvocationId", "e" * 32),
+        ("candidateInvocationId", "e" * 32),
+        ("unit", "jato-feature-canary-other.service"),
+    ):
+        evidence = _candidate_evidence()
+        permit = evidence["startPermit"]
+        assert isinstance(permit, dict)
+        permit[key] = replacement
+        with pytest.raises(
+            guard.CanaryGuardError,
+            match="root-owned start permit",
+        ):
+            guard.verify_candidate_evidence(evidence, identity)
 
 
 def test_success_receipt_requires_and_records_complete_evidence(

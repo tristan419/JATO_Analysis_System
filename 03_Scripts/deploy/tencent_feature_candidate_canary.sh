@@ -32,6 +32,7 @@ CANARY_SUPERVISOR_TASKS_MAX=64
 CANARY_CONTROLLER_MEMORY_HIGH=256M
 CANARY_CONTROLLER_MEMORY_MAX=512M
 CANARY_CONTROLLER_TASKS_MAX=64
+CANARY_RUNTIME_START_PERMIT_TIMEOUT_SECONDS=30
 CANARY_SUPERVISOR_INVOCATION_ID="${CANARY_SUPERVISOR_INVOCATION_ID:-}"
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -62,6 +63,12 @@ SERVICE_UNIT=""
 SERVICE_RUNTIME_DIRECTORY=""
 CONTROL_ROOT=""
 CONTROL_SCRIPT=""
+SUPERVISOR_GENERATION_FILE=""
+SUPERVISOR_GENERATION_TEMP_FILE=""
+SUPERVISOR_GENERATION_SOURCE_FILE=""
+CANDIDATE_START_PERMIT_FILE=""
+CANDIDATE_START_PERMIT_TEMP_FILE=""
+CANDIDATE_START_PERMIT_SOURCE_FILE=""
 STAGED_SOURCE_ARCHIVE=""
 
 CANARY_RUNTIME_CREATED=false
@@ -184,8 +191,8 @@ validate_static_contract() {
   local account_home=""
   local canonical_deploy_state=""
   for command_name in \
-    awk curl flock getent python3 readlink realpath sha256sum stat systemctl \
-    systemd-run tar timeout; do
+    awk curl flock getent install mktemp mv python3 readlink realpath rm \
+    sha256sum stat systemctl systemd-run tar timeout; do
     require_command "$command_name"
   done
   if [[ "$CANARY_ROOT" != "/opt/jato-canary" ]] \
@@ -354,12 +361,21 @@ initialize_paths() {
   SERVICE_RUNTIME_DIRECTORY="jato-feature-canary-$RUN_KEY"
   CONTROL_ROOT="$CANARY_ROOT/control/$RUN_KEY"
   CONTROL_SCRIPT="$CONTROL_ROOT/03_Scripts/deploy/tencent_feature_candidate_canary.sh"
+  SUPERVISOR_GENERATION_FILE="$CONTROL_ROOT/supervisor-invocation-id"
+  SUPERVISOR_GENERATION_TEMP_FILE="$CONTROL_ROOT/.supervisor-invocation-id.tmp"
+  SUPERVISOR_GENERATION_SOURCE_FILE="$CANARY_STATE_ROOT/.${RUN_KEY}.supervisor-invocation-id.source"
+  CANDIDATE_START_PERMIT_FILE="$CONTROL_ROOT/candidate-start-permit"
+  CANDIDATE_START_PERMIT_TEMP_FILE="$CONTROL_ROOT/.candidate-start-permit.tmp"
+  CANDIDATE_START_PERMIT_SOURCE_FILE="$CANARY_STATE_ROOT/.${RUN_KEY}.candidate-start-permit.source"
   STAGED_SOURCE_ARCHIVE="$CANARY_ROOT/sources/$RUN_KEY.tar.gz"
   export \
     RUN_KEY RUNTIME_ROOT CHECKPOINT_FILE RECEIPT_FILE EVIDENCE_FILE \
     BEFORE_SNAPSHOT AFTER_SNAPSHOT SUPERVISOR_UNIT CONTROLLER_UNIT \
     BUILD_UNIT SERVICE_UNIT \
     SERVICE_RUNTIME_DIRECTORY CONTROL_ROOT CONTROL_SCRIPT \
+    SUPERVISOR_GENERATION_FILE SUPERVISOR_GENERATION_TEMP_FILE \
+    SUPERVISOR_GENERATION_SOURCE_FILE CANDIDATE_START_PERMIT_FILE \
+    CANDIDATE_START_PERMIT_TEMP_FILE CANDIDATE_START_PERMIT_SOURCE_FILE \
     STAGED_SOURCE_ARCHIVE
 }
 
@@ -435,7 +451,9 @@ ensure_canary_roots() {
     "$RECEIPT_FILE" \
     "$EVIDENCE_FILE" \
     "$BEFORE_SNAPSHOT" \
-    "$AFTER_SNAPSHOT"; do
+    "$AFTER_SNAPSHOT" \
+    "$SUPERVISOR_GENERATION_SOURCE_FILE" \
+    "$CANDIDATE_START_PERMIT_SOURCE_FILE"; do
     if sudo -n test -e "$path" || sudo -n test -L "$path"; then
       fail "canary run id already has durable state and cannot be reused: $path"
       return 1
@@ -700,6 +718,289 @@ capture_supervisor_invocation_id() {
     read_live_supervisor_invocation_id
   )"
   export CANARY_SUPERVISOR_INVOCATION_ID
+  persist_supervisor_generation_marker
+}
+
+persist_supervisor_generation_marker() {
+  local actual_sha=""
+  local expected_sha=""
+  local marker_source=""
+  local current_invocation_id=""
+  if [[ "$CANARY_MODE" != "supervisor" ]]; then
+    fail "only the durable supervisor may persist its invocation generation"
+    return 1
+  fi
+  case "$SUPERVISOR_GENERATION_FILE" in
+    "$CONTROL_ROOT/supervisor-invocation-id") ;;
+    *)
+      fail "supervisor generation marker path is not canonical"
+      return 1
+      ;;
+  esac
+  case "$SUPERVISOR_GENERATION_TEMP_FILE" in
+    "$CONTROL_ROOT/.supervisor-invocation-id.tmp") ;;
+    *)
+      fail "supervisor generation temporary path is not canonical"
+      return 1
+      ;;
+  esac
+  case "$SUPERVISOR_GENERATION_SOURCE_FILE" in
+    "$CANARY_STATE_ROOT/.${RUN_KEY}.supervisor-invocation-id.source") ;;
+    *)
+      fail "supervisor generation source path is not canonical"
+      return 1
+      ;;
+  esac
+  if [[ ! "$CANARY_SUPERVISOR_INVOCATION_ID" =~ ^[0-9a-f]{32}$ ]] \
+    || [[ "$CANARY_SUPERVISOR_INVOCATION_ID" == \
+      "00000000000000000000000000000000" ]]; then
+    fail "supervisor generation marker value is invalid"
+    return 1
+  fi
+  if sudo -n test -e "$SUPERVISOR_GENERATION_TEMP_FILE" \
+    || sudo -n test -L "$SUPERVISOR_GENERATION_TEMP_FILE"; then
+    if [[ ! -f "$SUPERVISOR_GENERATION_TEMP_FILE" ]] \
+      || [[ -L "$SUPERVISOR_GENERATION_TEMP_FILE" ]] \
+      || [[ "$(stat -c '%u:%g:%a' "$SUPERVISOR_GENERATION_TEMP_FILE")" != \
+        "0:0:444" ]]; then
+      fail "supervisor generation temporary file is unsafe"
+      return 1
+    fi
+    sudo -n rm -f -- "$SUPERVISOR_GENERATION_TEMP_FILE"
+  fi
+  marker_source="$SUPERVISOR_GENERATION_SOURCE_FILE"
+  if [[ -e "$marker_source" || -L "$marker_source" ]]; then
+    if [[ ! -f "$marker_source" || -L "$marker_source" ]] \
+      || [[ "$(stat -c '%u:%g' "$marker_source")" != \
+        "$(id -u):$(id -g)" ]] \
+      || [[ "$(stat -c '%a' "$marker_source")" != "400" \
+        && "$(stat -c '%a' "$marker_source")" != "600" ]]; then
+      fail "supervisor generation source file is unsafe"
+      return 1
+    fi
+    rm -f -- "$marker_source"
+  fi
+  (
+    umask 077
+    set -o noclobber
+    printf '%s\n' "$CANARY_SUPERVISOR_INVOCATION_ID" >"$marker_source"
+  )
+  chmod 0400 "$marker_source"
+  expected_sha="$(sha256sum "$marker_source" | awk '{print $1}')"
+  sudo -n install -m 0444 -o root -g root \
+    "$marker_source" "$SUPERVISOR_GENERATION_TEMP_FILE"
+  rm -f "$marker_source"
+  if [[ ! -f "$SUPERVISOR_GENERATION_TEMP_FILE" ]] \
+    || [[ -L "$SUPERVISOR_GENERATION_TEMP_FILE" ]] \
+    || [[ "$(stat -c '%u:%g:%a' "$SUPERVISOR_GENERATION_TEMP_FILE")" != \
+      "0:0:444" ]]; then
+    fail "staged supervisor generation marker is mutable or unsafe"
+    return 1
+  fi
+  actual_sha="$(
+    sha256sum "$SUPERVISOR_GENERATION_TEMP_FILE" \
+      | awk '{print $1}'
+  )"
+  if [[ "$actual_sha" != "$expected_sha" ]]; then
+    fail "staged supervisor generation marker content changed"
+    return 1
+  fi
+  current_invocation_id="$(read_live_supervisor_invocation_id)"
+  if [[ "$current_invocation_id" != "$CANARY_SUPERVISOR_INVOCATION_ID" ]]; then
+    fail "supervisor generation changed before marker publication"
+    return 1
+  fi
+  sudo -n mv -T \
+    "$SUPERVISOR_GENERATION_TEMP_FILE" "$SUPERVISOR_GENERATION_FILE"
+  assert_staged_supervisor_generation
+  current_invocation_id="$(read_live_supervisor_invocation_id)"
+  if [[ "$current_invocation_id" != "$CANARY_SUPERVISOR_INVOCATION_ID" ]]; then
+    fail "supervisor generation changed after marker publication"
+    return 1
+  fi
+}
+
+assert_staged_supervisor_generation() {
+  local actual_sha=""
+  local expected_sha=""
+  case "$SUPERVISOR_GENERATION_FILE" in
+    "$CONTROL_ROOT/supervisor-invocation-id") ;;
+    *)
+      fail "supervisor generation marker path is not canonical"
+      return 1
+      ;;
+  esac
+  if [[ ! "$CANARY_SUPERVISOR_INVOCATION_ID" =~ ^[0-9a-f]{32}$ ]] \
+    || [[ "$CANARY_SUPERVISOR_INVOCATION_ID" == \
+      "00000000000000000000000000000000" ]]; then
+    fail "child unit lacks its original supervisor generation fence"
+    return 1
+  fi
+  if [[ ! -f "$SUPERVISOR_GENERATION_FILE" ]] \
+    || [[ -L "$SUPERVISOR_GENERATION_FILE" ]] \
+    || [[ "$(stat -c '%u:%g:%a' "$SUPERVISOR_GENERATION_FILE")" != \
+      "0:0:444" ]]; then
+    fail "supervisor generation marker is missing, mutable, or unsafe"
+    return 1
+  fi
+  expected_sha="$(
+    printf '%s\n' "$CANARY_SUPERVISOR_INVOCATION_ID" \
+      | sha256sum \
+      | awk '{print $1}'
+  )"
+  actual_sha="$(
+    sha256sum "$SUPERVISOR_GENERATION_FILE" \
+      | awk '{print $1}'
+  )"
+  if [[ "$actual_sha" != "$expected_sha" ]]; then
+    fail "child unit generation differs from the root-owned supervisor marker"
+    return 1
+  fi
+}
+
+assert_candidate_start_permit() {
+  local candidate_invocation_id="${1:-}"
+  local actual_sha=""
+  local expected_sha=""
+  case "$CANDIDATE_START_PERMIT_FILE" in
+    "$CONTROL_ROOT/candidate-start-permit") ;;
+    *)
+      fail "candidate start permit path is not canonical"
+      return 1
+      ;;
+  esac
+  if [[ ! "$candidate_invocation_id" =~ ^[0-9a-f]{32}$ ]] \
+    || [[ "$candidate_invocation_id" == \
+      "00000000000000000000000000000000" ]]; then
+    fail "candidate start permit lacks a valid candidate generation"
+    return 1
+  fi
+  if [[ ! -f "$CANDIDATE_START_PERMIT_FILE" ]] \
+    || [[ -L "$CANDIDATE_START_PERMIT_FILE" ]] \
+    || [[ "$(stat -c '%u:%g:%a' "$CANDIDATE_START_PERMIT_FILE")" != \
+      "0:0:444" ]]; then
+    fail "candidate start permit is missing, mutable, or unsafe"
+    return 1
+  fi
+  expected_sha="$(
+    printf 'supervisor=%s\ncandidate=%s\nunit=%s\n' \
+      "$CANARY_SUPERVISOR_INVOCATION_ID" \
+      "$candidate_invocation_id" \
+      "$SERVICE_UNIT" \
+      | sha256sum \
+      | awk '{print $1}'
+  )"
+  actual_sha="$(
+    sha256sum "$CANDIDATE_START_PERMIT_FILE" \
+      | awk '{print $1}'
+  )"
+  if [[ "$actual_sha" != "$expected_sha" ]]; then
+    fail "candidate start permit identity differs from this transient generation"
+    return 1
+  fi
+}
+
+persist_candidate_start_permit() {
+  local candidate_invocation_id="${1:-}"
+  local permit_source=""
+  local staged_sha=""
+  local expected_sha=""
+  if [[ "$CANARY_MODE" != "controller" ]]; then
+    fail "only the isolated controller may authorize candidate runtime"
+    return 1
+  fi
+  if sudo -n test -e "$CANDIDATE_START_PERMIT_FILE" \
+    || sudo -n test -L "$CANDIDATE_START_PERMIT_FILE" \
+    || sudo -n test -e "$CANDIDATE_START_PERMIT_TEMP_FILE" \
+    || sudo -n test -L "$CANDIDATE_START_PERMIT_TEMP_FILE"; then
+    fail "candidate start permit already exists"
+    return 1
+  fi
+  if [[ ! "$candidate_invocation_id" =~ ^[0-9a-f]{32}$ ]] \
+    || [[ "$candidate_invocation_id" == \
+      "00000000000000000000000000000000" ]]; then
+    fail "candidate runtime generation is invalid"
+    return 1
+  fi
+  case "$CANDIDATE_START_PERMIT_TEMP_FILE" in
+    "$CONTROL_ROOT/.candidate-start-permit.tmp") ;;
+    *)
+      fail "candidate start permit temporary path is not canonical"
+      return 1
+      ;;
+  esac
+  case "$CANDIDATE_START_PERMIT_SOURCE_FILE" in
+    "$CANARY_STATE_ROOT/.${RUN_KEY}.candidate-start-permit.source") ;;
+    *)
+      fail "candidate start permit source path is not canonical"
+      return 1
+      ;;
+  esac
+  assert_supervisor_generation
+  permit_source="$CANDIDATE_START_PERMIT_SOURCE_FILE"
+  if [[ -e "$permit_source" || -L "$permit_source" ]]; then
+    fail "candidate start permit source already exists"
+    return 1
+  fi
+  (
+    umask 077
+    set -o noclobber
+    printf 'supervisor=%s\ncandidate=%s\nunit=%s\n' \
+      "$CANARY_SUPERVISOR_INVOCATION_ID" \
+      "$candidate_invocation_id" \
+      "$SERVICE_UNIT" >"$permit_source"
+  )
+  chmod 0400 "$permit_source"
+  expected_sha="$(sha256sum "$permit_source" | awk '{print $1}')"
+  sudo -n install -m 0444 -o root -g root \
+    "$permit_source" "$CANDIDATE_START_PERMIT_TEMP_FILE"
+  rm -f "$permit_source"
+  if [[ ! -f "$CANDIDATE_START_PERMIT_TEMP_FILE" ]] \
+    || [[ -L "$CANDIDATE_START_PERMIT_TEMP_FILE" ]] \
+    || [[ "$(stat -c '%u:%g:%a' "$CANDIDATE_START_PERMIT_TEMP_FILE")" != \
+      "0:0:444" ]]; then
+    fail "staged candidate start permit is mutable or unsafe"
+    return 1
+  fi
+  staged_sha="$(
+    sha256sum "$CANDIDATE_START_PERMIT_TEMP_FILE" \
+      | awk '{print $1}'
+  )"
+  if [[ "$staged_sha" != "$expected_sha" ]]; then
+    fail "staged candidate start permit content changed"
+    return 1
+  fi
+  assert_supervisor_generation
+  sudo -n mv -T \
+    "$CANDIDATE_START_PERMIT_TEMP_FILE" "$CANDIDATE_START_PERMIT_FILE"
+  assert_candidate_start_permit "$candidate_invocation_id"
+  assert_supervisor_generation
+}
+
+wait_for_candidate_start_permit() {
+  local candidate_invocation_id="${INVOCATION_ID:-}"
+  local deadline=$((SECONDS + CANARY_RUNTIME_START_PERMIT_TIMEOUT_SECONDS))
+  if [[ "$CANARY_MODE" != "runtime" ]]; then
+    fail "candidate start permit may only be consumed by runtime"
+    return 1
+  fi
+  if [[ ! "$candidate_invocation_id" =~ ^[0-9a-f]{32}$ ]] \
+    || [[ "$candidate_invocation_id" == \
+      "00000000000000000000000000000000" ]]; then
+    fail "runtime lacks its systemd candidate generation"
+    return 1
+  fi
+  while (( SECONDS < deadline )); do
+    assert_staged_supervisor_generation
+    if [[ -e "$CANDIDATE_START_PERMIT_FILE" ]] \
+      || [[ -L "$CANDIDATE_START_PERMIT_FILE" ]]; then
+      assert_candidate_start_permit "$candidate_invocation_id"
+      assert_staged_supervisor_generation
+      return 0
+    fi
+    sleep 1
+  done
+  fail "candidate runtime start permit timed out"
 }
 
 assert_supervisor_generation() {
@@ -1420,6 +1721,204 @@ start_candidate_service() {
       --host 127.0.0.1 --port "$CANARY_PORT" --workers 2
 }
 
+authorize_candidate_runtime() {
+  local bash_bin=""
+  local candidate_invocation_id=""
+  local expected_high=$((3 * 1024 * 1024 * 1024))
+  local expected_max=$((4 * 1024 * 1024 * 1024))
+  local properties=""
+  if [[ "$CANARY_MODE" != "controller" ]]; then
+    fail "only the isolated controller may inspect and authorize runtime"
+    return 1
+  fi
+  bash_bin="$(command -v bash)"
+  properties="$(
+    systemctl show "$SERVICE_UNIT" \
+      -p LoadState -p ActiveState -p UnitFileState -p FragmentPath \
+      -p MainPID -p InvocationID -p ExecStart -p Environment \
+      -p DynamicUser -p ProtectSystem -p ProtectHome -p NoNewPrivileges \
+      -p Restart -p MemoryHigh -p MemoryMax -p MemorySwapMax -p TasksMax \
+      -p ControlGroup -p ReadOnlyPaths \
+      -p BindsTo -p PartOf -p After -p StopPropagatedFrom
+  )"
+  candidate_invocation_id="$(
+    python3 -B - \
+      "$properties" "$SERVICE_UNIT" "$SUPERVISOR_UNIT" \
+      "$bash_bin" "$CONTROL_SCRIPT" "$RUNTIME_ROOT" \
+      "$CANARY_COMMIT_SHA" "$CANARY_RUN_ID" \
+      "$CANARY_SUPERVISOR_INVOCATION_ID" \
+      "$CANARY_SOURCE_SHA256" "$CANARY_SOURCE_BYTES" \
+      "$CANARY_PORT" "$LEGACY_ROOT" \
+      "$expected_high" "$expected_max" "$CANARY_TASKS_MAX" <<'PY'
+from pathlib import Path
+import re
+import shlex
+import sys
+
+(
+    raw,
+    service_unit,
+    supervisor_unit,
+    bash_bin,
+    control_script,
+    runtime_root,
+    commit,
+    run_id,
+    supervisor_invocation_id,
+    source_sha256,
+    source_bytes,
+    port,
+    legacy_root,
+    expected_high,
+    expected_max,
+    expected_tasks,
+) = sys.argv[1:]
+properties = {}
+for line in raw.splitlines():
+    key, separator, value = line.partition("=")
+    if separator:
+        properties[key] = value
+
+required = {
+    "LoadState": "loaded",
+    "ActiveState": "active",
+    "UnitFileState": "transient",
+    "FragmentPath": f"/run/systemd/transient/{service_unit}",
+    "DynamicUser": "yes",
+    "ProtectSystem": "strict",
+    "ProtectHome": "yes",
+    "NoNewPrivileges": "yes",
+    "Restart": "no",
+    "MemoryHigh": expected_high,
+    "MemoryMax": expected_max,
+    "MemorySwapMax": "0",
+    "TasksMax": expected_tasks,
+    "ControlGroup": f"/system.slice/{service_unit}",
+}
+for key, expected in required.items():
+    if properties.get(key) != expected:
+        raise SystemExit(
+            f"[ERROR] pre-permit candidate property {key} is not exact"
+        )
+
+invocation_id = properties.get("InvocationID", "").lower()
+main_pid = properties.get("MainPID", "")
+if (
+    re.fullmatch(r"[0-9a-f]{32}", invocation_id) is None
+    or invocation_id == "0" * 32
+    or not main_pid.isdigit()
+    or main_pid == "0"
+):
+    raise SystemExit("[ERROR] pre-permit candidate generation is not live")
+members = (
+    Path("/sys/fs/cgroup/system.slice")
+    / service_unit
+    / "cgroup.procs"
+).read_text(encoding="utf-8").splitlines()
+if main_pid not in members:
+    raise SystemExit("[ERROR] pre-permit candidate MainPID escaped its cgroup")
+
+def command_argv() -> list[str]:
+    value = properties.get("ExecStart", "")
+    if value.count("argv[]=") != 1:
+        raise SystemExit("[ERROR] pre-permit candidate ExecStart is ambiguous")
+    argv_raw = value.split("argv[]=", 1)[1].split(" ; ", 1)[0]
+    try:
+        return shlex.split(argv_raw)
+    except ValueError as exc:
+        raise SystemExit(
+            "[ERROR] pre-permit candidate ExecStart is malformed"
+        ) from exc
+
+expected_argv = [
+    bash_bin,
+    control_script,
+    "runtime",
+    f"{runtime_root}/.venv/bin/python",
+    "-m",
+    "uvicorn",
+    "app.main:app",
+    "--host",
+    "127.0.0.1",
+    "--port",
+    port,
+    "--workers",
+    "2",
+]
+if command_argv() != expected_argv:
+    raise SystemExit("[ERROR] pre-permit candidate ExecStart is not exact")
+try:
+    actual_argv = [
+        token.decode("utf-8")
+        for token in (
+            Path("/proc") / main_pid / "cmdline"
+        ).read_bytes().split(b"\0")
+        if token
+    ]
+except (OSError, UnicodeDecodeError) as exc:
+    raise SystemExit(
+        "[ERROR] pre-permit candidate MainPID argv is unreadable"
+    ) from exc
+if actual_argv != expected_argv:
+    raise SystemExit(
+        "[ERROR] pre-permit candidate wrapper already changed or escaped"
+    )
+
+try:
+    environment_tokens = shlex.split(properties.get("Environment", ""))
+except ValueError as exc:
+    raise SystemExit(
+        "[ERROR] pre-permit candidate Environment is malformed"
+    ) from exc
+environment = {}
+for token in environment_tokens:
+    key, separator, value = token.partition("=")
+    if not separator or not key or key in environment:
+        raise SystemExit(
+            "[ERROR] pre-permit candidate Environment is ambiguous"
+        )
+    environment[key] = value
+expected_environment = {
+    "CANARY_MODE": "runtime",
+    "CANARY_COMMIT_SHA": commit,
+    "CANARY_RUN_ID": run_id,
+    "CANARY_SUPERVISOR_INVOCATION_ID": supervisor_invocation_id,
+    "CANARY_SOURCE_SHA256": source_sha256,
+    "CANARY_SOURCE_BYTES": source_bytes,
+    "CANARY_PORT": port,
+}
+for key, expected in expected_environment.items():
+    if environment.get(key) != expected:
+        raise SystemExit(
+            f"[ERROR] pre-permit candidate Environment changed {key}"
+        )
+
+if (
+    set(properties.get("StopPropagatedFrom", "").split())
+    != {supervisor_unit}
+    or supervisor_unit not in properties.get("After", "").split()
+    or properties.get("BindsTo", "").split()
+    or properties.get("PartOf", "").split()
+):
+    raise SystemExit(
+        "[ERROR] pre-permit candidate supervisor relationship is not exact"
+    )
+read_only_paths = properties.get("ReadOnlyPaths", "")
+for suffix in ("01_RAW_DATA", "04_Processed_data"):
+    if f"{legacy_root}/{suffix}" not in read_only_paths:
+        raise SystemExit(
+            "[ERROR] pre-permit candidate data paths are not read-only"
+        )
+print(invocation_id)
+PY
+  )"
+  # The runtime wrapper is still waiting and has not executed application code.
+  # Revalidate the live supervisor only after the exact transient generation
+  # and its stop propagation contract are visible to systemd.
+  assert_supervisor_generation
+  persist_candidate_start_permit "$candidate_invocation_id"
+}
+
 verify_candidate_service() {
   local health=""
   local monthly_body=""
@@ -1475,18 +1974,21 @@ PY
     -p ProtectHome -p NoNewPrivileges \
     -p Restart \
     -p MemoryHigh -p MemoryMax -p MemorySwapMax -p TasksMax \
-    -p ExecStart -p Environment \
+    -p InvocationID -p ExecStart -p Environment \
     -p ReadOnlyPaths -p MainPID -p ControlGroup \
     -p BindsTo -p PartOf -p After -p StopPropagatedFrom)"
   python3 -B - \
     "$EVIDENCE_FILE" "$properties" "$health" "$monthly_body" \
     "$monthly_status" "$expected_high" "$expected_max" \
     "$CANARY_COMMIT_SHA" "$CANARY_PORT" "$LEGACY_ROOT" "$SUPERVISOR_UNIT" \
-    "$readyz_evidence" <<'PY'
+    "$readyz_evidence" "$CANDIDATE_START_PERMIT_FILE" "$SERVICE_UNIT" \
+    "$CANARY_SUPERVISOR_INVOCATION_ID" <<'PY'
 import json
 import os
 from pathlib import Path
 import re
+import shlex
+import stat
 import sys
 import tempfile
 
@@ -1503,6 +2005,9 @@ import tempfile
     legacy_root,
     supervisor_unit,
     readyz_raw,
+    permit_name,
+    service_unit,
+    supervisor_invocation_id,
 ) = sys.argv[1:]
 properties = {}
 for line in properties_raw.splitlines():
@@ -1528,6 +2033,12 @@ for key, expected in required.items():
             f"[ERROR] candidate property {key} mismatch: "
             f"{properties.get(key)!r} != {expected!r}"
         )
+candidate_invocation_id = properties.get("InvocationID", "").lower()
+if (
+    re.fullmatch(r"[0-9a-f]{32}", candidate_invocation_id) is None
+    or candidate_invocation_id == "0" * 32
+):
+    raise SystemExit("[ERROR] candidate InvocationID is invalid")
 health_payload = json.loads(health_raw)
 if not isinstance(health_payload, dict) or health_payload.get("status") != "ok":
     raise SystemExit("[ERROR] candidate healthz is not status=ok")
@@ -1548,7 +2059,16 @@ if (
     raise SystemExit("[ERROR] candidate readyz evidence lacks the exact feature SHA")
 if "--workers 2" not in properties.get("ExecStart", ""):
     raise SystemExit("[ERROR] candidate ExecStart does not use exactly two workers")
-environment = properties.get("Environment", "")
+try:
+    environment_tokens = shlex.split(properties.get("Environment", ""))
+except ValueError as exc:
+    raise SystemExit("[ERROR] candidate Environment is malformed") from exc
+environment = {}
+for token in environment_tokens:
+    key, separator, value = token.partition("=")
+    if not separator or not key or key in environment:
+        raise SystemExit("[ERROR] candidate Environment is ambiguous")
+    environment[key] = value
 for value in (
     "APP_DATABASE_ENABLED=false",
     "APP_REDIS_ENABLED=false",
@@ -1560,8 +2080,15 @@ for value in (
     "APP_ADVANCED_ANALYSIS_WARMUP_ENABLED=false",
     "HERMES_RUN_ENABLED=false",
 ):
-    if value not in environment:
+    key, expected = value.split("=", 1)
+    if environment.get(key) != expected:
         raise SystemExit(f"[ERROR] candidate environment omitted {value}")
+if environment.get(
+    "CANARY_SUPERVISOR_INVOCATION_ID"
+) != supervisor_invocation_id:
+    raise SystemExit(
+        "[ERROR] candidate environment changed supervisor generation"
+    )
 if (
     f"{legacy_root}/01_RAW_DATA" not in properties.get("ReadOnlyPaths", "")
     or f"{legacy_root}/04_Processed_data" not in properties.get("ReadOnlyPaths", "")
@@ -1617,6 +2144,30 @@ if len(worker_pids) != 2:
         "[ERROR] candidate must have exactly two live Uvicorn workers; "
         f"found {len(worker_pids)}"
     )
+permit = Path(permit_name)
+permit_metadata = os.lstat(permit)
+if (
+    not stat.S_ISREG(permit_metadata.st_mode)
+    or stat.S_ISLNK(permit_metadata.st_mode)
+    or permit_metadata.st_uid != 0
+    or permit_metadata.st_gid != 0
+    or stat.S_IMODE(permit_metadata.st_mode) != 0o444
+):
+    raise SystemExit("[ERROR] candidate start permit is mutable or unsafe")
+permit_lines = permit.read_text(encoding="utf-8").splitlines()
+permit_values = {}
+for line in permit_lines:
+    key, separator, value = line.partition("=")
+    if not separator or not key or key in permit_values:
+        raise SystemExit("[ERROR] candidate start permit is malformed")
+    permit_values[key] = value
+expected_permit = {
+    "supervisor": supervisor_invocation_id,
+    "candidate": candidate_invocation_id,
+    "unit": service_unit,
+}
+if permit_values != expected_permit or len(permit_lines) != 3:
+    raise SystemExit("[ERROR] candidate start permit identity is not exact")
 payload = {
     "status": "verified",
     "featureCommit": commit,
@@ -1627,6 +2178,12 @@ payload = {
     "monthlyResponse": json.loads(Path(monthly_name).read_text(encoding="utf-8")),
     "liveBackendWorkerCount": len(worker_pids),
     "liveBackendWorkerPids": sorted(worker_pids),
+    "candidateInvocationId": candidate_invocation_id,
+    "startPermit": {
+        "supervisorInvocationId": permit_values["supervisor"],
+        "candidateInvocationId": permit_values["candidate"],
+        "unit": permit_values["unit"],
+    },
     "systemd": properties,
 }
 output = Path(output_name)
@@ -1767,7 +2324,7 @@ PY
           current_load_state="$property_value"
           ;;
         InvocationID)
-          current_invocation_id="${property_value,,}"
+          current_invocation_id="$property_value"
           ;;
       esac
     done <<<"$current_properties"
@@ -1844,6 +2401,55 @@ cleanup_candidate() {
   return "$cleanup_rc"
 }
 
+cleanup_candidate_start_permit_temp() {
+  case "$CANDIDATE_START_PERMIT_SOURCE_FILE" in
+    "$CANARY_STATE_ROOT/.${RUN_KEY}.candidate-start-permit.source") ;;
+    *)
+      fail "candidate start permit source path is not canonical"
+      return 1
+      ;;
+  esac
+  if [[ -e "$CANDIDATE_START_PERMIT_SOURCE_FILE" ]] \
+    || [[ -L "$CANDIDATE_START_PERMIT_SOURCE_FILE" ]]; then
+    if [[ ! -f "$CANDIDATE_START_PERMIT_SOURCE_FILE" ]] \
+      || [[ -L "$CANDIDATE_START_PERMIT_SOURCE_FILE" ]] \
+      || [[ "$(stat -c '%u:%g' "$CANDIDATE_START_PERMIT_SOURCE_FILE")" != \
+        "$(id -u):$(id -g)" ]] \
+      || [[ "$(stat -c '%a' "$CANDIDATE_START_PERMIT_SOURCE_FILE")" != \
+        "400" \
+        && "$(stat -c '%a' "$CANDIDATE_START_PERMIT_SOURCE_FILE")" != \
+        "600" ]]; then
+      fail "candidate start permit source file is unsafe"
+      return 1
+    fi
+    rm -f -- "$CANDIDATE_START_PERMIT_SOURCE_FILE"
+  fi
+  case "$CANDIDATE_START_PERMIT_TEMP_FILE" in
+    "$CONTROL_ROOT/.candidate-start-permit.tmp") ;;
+    *)
+      fail "candidate start permit temporary path is not canonical"
+      return 1
+      ;;
+  esac
+  if ! sudo -n test -e "$CANDIDATE_START_PERMIT_TEMP_FILE" \
+    && ! sudo -n test -L "$CANDIDATE_START_PERMIT_TEMP_FILE"; then
+    return 0
+  fi
+  if [[ ! -f "$CANDIDATE_START_PERMIT_TEMP_FILE" ]] \
+    || [[ -L "$CANDIDATE_START_PERMIT_TEMP_FILE" ]] \
+    || [[ "$(stat -c '%u:%g:%a' "$CANDIDATE_START_PERMIT_TEMP_FILE")" != \
+      "0:0:444" ]]; then
+    fail "candidate start permit temporary file is unsafe"
+    return 1
+  fi
+  sudo -n rm -f -- "$CANDIDATE_START_PERMIT_TEMP_FILE"
+  if sudo -n test -e "$CANDIDATE_START_PERMIT_TEMP_FILE" \
+    || sudo -n test -L "$CANDIDATE_START_PERMIT_TEMP_FILE"; then
+    fail "candidate start permit temporary file was not removed"
+    return 1
+  fi
+}
+
 verify_retained_control_bundle() {
   case "$CONTROL_ROOT" in
     /opt/jato-canary/control/*)
@@ -1854,13 +2460,18 @@ verify_retained_control_bundle() {
       ;;
   esac
   verify_canary_parent_roots
-  python3 -B - "$CONTROL_ROOT" <<'PY'
+  assert_staged_supervisor_generation
+  python3 -B - "$CONTROL_ROOT" "$EVIDENCE_FILE" "$SERVICE_UNIT" <<'PY'
 from pathlib import Path
+import json
 import os
+import re
 import stat
 import sys
 
 root = Path(sys.argv[1])
+evidence_path = Path(sys.argv[2])
+service_unit = sys.argv[3]
 directories = (
     root,
     root / "03_Scripts",
@@ -1872,10 +2483,17 @@ files = {
     root / "03_Scripts/deploy/jato_feature_canary_guard.py": 0o444,
     root / "03_Scripts/deploy/lib/production_mutation_lock.sh": 0o444,
     root / "03_Scripts/deploy/verify_backend_readiness.py": 0o444,
+    root / "supervisor-invocation-id": 0o444,
+}
+optional_files = {
+    root / "candidate-start-permit": 0o444,
 }
 expected_members = set(directories[1:]) | set(files)
 observed_members = set(root.rglob("*"))
-if observed_members != expected_members:
+if (
+    observed_members != expected_members
+    and observed_members != expected_members | set(optional_files)
+):
     raise SystemExit("[ERROR] retained canary control bundle has unexpected members")
 for path in directories:
     metadata = os.lstat(path)
@@ -1883,6 +2501,7 @@ for path in directories:
         not stat.S_ISDIR(metadata.st_mode)
         or stat.S_ISLNK(metadata.st_mode)
         or metadata.st_uid != 0
+        or metadata.st_gid != 0
         or stat.S_IMODE(metadata.st_mode) & 0o022
     ):
         raise SystemExit(
@@ -1894,11 +2513,63 @@ for path, expected_mode in files.items():
         not stat.S_ISREG(metadata.st_mode)
         or stat.S_ISLNK(metadata.st_mode)
         or metadata.st_uid != 0
+        or metadata.st_gid != 0
         or stat.S_IMODE(metadata.st_mode) != expected_mode
     ):
         raise SystemExit(
             f"[ERROR] retained canary control file is mutable/unsafe: {path}"
         )
+for path, expected_mode in optional_files.items():
+    if not os.path.lexists(path):
+        continue
+    metadata = os.lstat(path)
+    if (
+        not stat.S_ISREG(metadata.st_mode)
+        or stat.S_ISLNK(metadata.st_mode)
+        or metadata.st_uid != 0
+        or metadata.st_gid != 0
+        or stat.S_IMODE(metadata.st_mode) != expected_mode
+    ):
+        raise SystemExit(
+            f"[ERROR] retained optional canary control file is unsafe: {path}"
+        )
+permit = root / "candidate-start-permit"
+if os.path.lexists(permit):
+    permit_lines = permit.read_text(encoding="utf-8").splitlines()
+    permit_values = {}
+    for line in permit_lines:
+        key, separator, value = line.partition("=")
+        if not separator or not key or key in permit_values:
+            raise SystemExit("[ERROR] retained candidate start permit is malformed")
+        permit_values[key] = value
+    if (
+        len(permit_lines) != 3
+        or set(permit_values) != {"supervisor", "candidate", "unit"}
+        or re.fullmatch(r"[0-9a-f]{32}", permit_values["supervisor"]) is None
+        or permit_values["supervisor"] == "0" * 32
+        or re.fullmatch(r"[0-9a-f]{32}", permit_values["candidate"]) is None
+        or permit_values["candidate"] == "0" * 32
+        or permit_values["unit"] != service_unit
+    ):
+        raise SystemExit(
+            "[ERROR] retained candidate start permit identity is invalid"
+        )
+    if evidence_path.exists():
+        evidence = json.loads(evidence_path.read_text(encoding="utf-8"))
+        if (
+            evidence.get("candidateInvocationId") != permit_values["candidate"]
+            or evidence.get("startPermit")
+            != {
+                "supervisorInvocationId": permit_values["supervisor"],
+                "candidateInvocationId": permit_values["candidate"],
+                "unit": permit_values["unit"],
+            }
+        ):
+            raise SystemExit(
+                "[ERROR] retained candidate start permit differs from evidence"
+            )
+elif evidence_path.exists():
+    raise SystemExit("[ERROR] candidate evidence exists without its start permit")
 PY
   if [[ "$?" -ne 0 ]]; then
     return 1
@@ -2267,6 +2938,7 @@ run_canary_supervisor() {
 run_canary_controller() {
   initialize_paths
   assert_supervisor_generation
+  assert_staged_supervisor_generation
   validate_static_contract
   assert_supervisor_scope
   assert_controller_scope
@@ -2294,8 +2966,11 @@ run_canary_controller() {
   record_checkpoint runtime_built completed \
     "candidate dependencies built inside transient 3G/4G/0-swap sandbox"
 
+  assert_supervisor_generation
   start_candidate_service
+  authorize_candidate_runtime
   verify_candidate_service
+  assert_supervisor_generation
   if [[ "$CANARY_FAULT" == "after_candidate_start" ]]; then
     CANARY_EXPECTED_FAILURE_OBSERVED=true
     CANARY_ERROR="expected fault injection: after_candidate_start"
@@ -2311,9 +2986,13 @@ run_candidate_runtime() {
   local actual_argv=("$@")
   local expected_argv=()
   initialize_paths
-  assert_supervisor_generation
   verify_canary_parent_roots
   validate_feature_identity
+  # DynamicUser services cannot query the systemd manager on every supported
+  # host. The permit binds this systemd candidate InvocationID to the
+  # root-owned supervisor generation; successful receipts separately require
+  # that supervisor generation to equal the reconciliation writer generation.
+  assert_staged_supervisor_generation
   expected_argv=(
     "$RUNTIME_ROOT/.venv/bin/python"
     -m uvicorn app.main:app
@@ -2331,6 +3010,7 @@ run_candidate_runtime() {
       return 1
     fi
   done
+  wait_for_candidate_start_permit
   exec "${expected_argv[@]}"
 }
 
@@ -2338,7 +3018,8 @@ validate_reconcile_contract() {
   local account_home=""
   local canonical_deploy_state=""
   for command_name in \
-    curl flock getent python3 readlink realpath sha256sum stat systemctl timeout; do
+    curl flock getent mktemp mv python3 readlink realpath rm sha256sum stat \
+    systemctl timeout; do
     require_command "$command_name"
   done
   if [[ "$CANARY_ROOT" != "/opt/jato-canary" ]] \
@@ -2442,6 +3123,7 @@ reconcile_canary_controller() {
   # validates the still-open inherited fd 9; after a supervisor restart it
   # validates the freshly reacquired canonical lock before touching evidence.
   acquire_canary_production_lock
+  cleanup_candidate_start_permit_temp
 
   if [[ -f "$RECEIPT_FILE" && ! -L "$RECEIPT_FILE" ]]; then
     verify_existing_receipt

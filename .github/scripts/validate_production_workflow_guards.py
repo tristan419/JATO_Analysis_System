@@ -577,18 +577,16 @@ def assert_feature_canary_cannot_route_or_mutate_production() -> None:
     guard = guard_path.read_text(encoding="utf-8")
 
     def shell_function(name: str) -> str:
-        marker = f"{name}() {{"
-        if marker not in controller:
+        match = re.search(
+            rf"(?ms)^{re.escape(name)}\(\) \{{\n"
+            rf"(.*?)(?=^[a-zA-Z_][a-zA-Z0-9_]*\(\) \{{|\Z)",
+            controller,
+        )
+        if match is None:
             raise AssertionError(
                 f"feature canary function {name!r} is missing",
             )
-        body = controller.split(marker, 1)[1]
-        terminator = body.find("\n}\n")
-        if terminator < 0:
-            raise AssertionError(
-                f"feature canary function {name!r} is malformed",
-            )
-        return body[:terminator]
+        return match.group(0)
 
     required = (
         'CANARY_MODE="${1:-launch}"',
@@ -644,8 +642,14 @@ def assert_feature_canary_cannot_route_or_mutate_production() -> None:
         "quiesce_canary_controller_unit",
         "assert_controller_scope",
         "assert_supervisor_generation",
+        "assert_staged_supervisor_generation",
         "assert_reconcile_supervisor_generation",
         "capture_supervisor_invocation_id",
+        "authorize_candidate_runtime",
+        "wait_for_candidate_start_permit",
+        "persist_candidate_start_permit",
+        "candidateInvocationId",
+        "startPermit",
         "assert_supervisor_production_lock",
         "StopPropagatedFrom",
         "verify_retained_control_bundle",
@@ -841,11 +845,79 @@ def assert_feature_canary_cannot_route_or_mutate_production() -> None:
             "isolated controller must prove the supervisor lock and snapshot "
             "production before its build",
         )
+    candidate_order = (
+        "run_build_scope",
+        "start_candidate_service",
+        "authorize_candidate_runtime",
+        "verify_candidate_service",
+        "record_checkpoint controller_completed completed",
+    )
+    candidate_positions = [run_body.index(token) for token in candidate_order]
+    if (
+        candidate_positions != sorted(candidate_positions)
+        or run_body.count("assert_supervisor_generation") < 3
+    ):
+        raise AssertionError(
+            "isolated controller must fence the exact waiting candidate "
+            "before authorization and after verification",
+        )
+
+    authorize_body = shell_function("authorize_candidate_runtime")
+    for token in (
+        'systemctl show "$SERVICE_UNIT"',
+        'Path("/proc")',
+        "/ main_pid",
+        '.read_bytes().split(b"\\0")',
+        "pre-permit candidate wrapper already changed or escaped",
+        "StopPropagatedFrom",
+        "BindsTo",
+        "PartOf",
+        "assert_supervisor_generation",
+        'persist_candidate_start_permit "$candidate_invocation_id"',
+    ):
+        if token not in authorize_body:
+            raise AssertionError(
+                "candidate pre-permit authorization lost an exact identity "
+                f"check: {token}",
+            )
+
+    permit_body = shell_function("persist_candidate_start_permit")
+    install_position = permit_body.index('install -m 0444 -o root -g root')
+    publish_position = permit_body.index('mv -T')
+    verify_position = permit_body.index(
+        'assert_candidate_start_permit "$candidate_invocation_id"',
+    )
+    live_positions = [
+        match.start()
+        for match in re.finditer(
+            r"assert_supervisor_generation",
+            permit_body,
+        )
+    ]
+    if (
+        len(live_positions) < 3
+        or not (
+            live_positions[0]
+            < install_position
+            < live_positions[1]
+            < publish_position
+            < verify_position
+            < live_positions[2]
+        )
+        or "/dev/stdin" in permit_body
+    ):
+        raise AssertionError(
+            "candidate start permit must use a regular source, repeated live "
+            "generation checks and same-directory atomic publication",
+        )
+
     candidate_runtime_body = shell_function("run_candidate_runtime")
     runtime_order = (
-        "assert_supervisor_generation",
         "verify_canary_parent_roots",
         "validate_feature_identity",
+        "assert_staged_supervisor_generation",
+        "\n  expected_argv=(\n",
+        "wait_for_candidate_start_permit",
         'exec "${expected_argv[@]}"',
     )
     runtime_positions = [
@@ -853,9 +925,19 @@ def assert_feature_canary_cannot_route_or_mutate_production() -> None:
     ]
     if runtime_positions != sorted(runtime_positions):
         raise AssertionError(
-            "candidate runtime must prove its original supervisor generation "
-            "and immutable parent chain before executing Uvicorn",
+            "candidate runtime must verify immutable identity, exact argv and "
+            "its root-owned start permit before executing Uvicorn",
         )
+    for forbidden_runtime_token in (
+        "assert_supervisor_generation",
+        "read_live_supervisor_invocation_id",
+        "systemctl",
+    ):
+        if forbidden_runtime_token in candidate_runtime_body:
+            raise AssertionError(
+                "DynamicUser candidate runtime regained a host D-Bus "
+                f"dependency: {forbidden_runtime_token}",
+            )
     if "assert_supervisor_generation" not in main_body.split(
         "build)", 1
     )[1].split(";;", 1)[0]:
