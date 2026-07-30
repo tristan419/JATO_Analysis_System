@@ -1291,6 +1291,7 @@ def assert_required_ci_contract() -> None:
         "python -m pip install",
         '"PyYAML==6.0.2"',
         '"pytest<9"',
+        '"pydantic==2.11.7"',
         '"setuptools==81.0.0"',
         '"wheel==0.46.3"',
         "npm ci",
