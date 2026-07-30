@@ -820,17 +820,51 @@ release 的缩小版，也不能切换流量。调用方必须先用与 producti
 
 1. 只使用 `/opt/jato-canary` 和 `/var/lib/jato-canary`。checkpoint、evidence
    与最终 receipt 都与 `/var/lib/jato-release` 分离。
-2. 与 production 唯一共享的可变资源是 deploy 账号真实 home 下的 canonical
-   `production-deploy.lock`；canary 在 staging/build/runtime/cleanup 及
-   before/after 比较的整个周期持锁，因此不会与真正发布并发。任意伪造
-   `HOME`、`DEPLOY_STATE_DIR` 或 lock path 都会拒绝。
+2. 外层 SSH/TAT/OrcaTerm 进程只校验并固化不可变输入，然后无等待地启动
+   `jato-feature-canary-supervisor-<run-key>.service`。外层返回 0 只表示
+   systemd 已接受 durable supervisor，不能当作 canary 通过。supervisor
+   是唯一的锁 owner，持有 deploy 账号真实 home 下的 canonical
+   `production-deploy.lock`，从 production before snapshot 一直持有到
+   controller、build、runtime、cleanup 和 after comparison 完成。
+   supervisor 自身固定 `256M/512M`；业务 controller 运行在另一个
+   `256M/512M` transient service 中，通过完整 unit identity、supervisor
+   MainPID 的 `/proc/<pid>/fd/9` 目标、该 fd 的 `fdinfo/9` 中绑定同一 inode
+   的唯一 FLOCK write 记录，以及第二个 nonblocking flock，证明锁
+   始终由 supervisor 持有，而不是由第三方抢占，也不由 controller 自行继承
+   或重新取得 fd 9。controller 被
+   TERM/SIGKILL 时，`KillMode=control-group` 会终止其完整进程树；只有该
+   unit 已非 active/activating/deactivating 且 cgroup 无进程后，supervisor
+   才会在同一锁窗口进入 recovery-only。网页终端断线或 TAT 15 分钟上限
+   因此不会留下失去锁约束的孤儿 build。supervisor 异常退出会由 systemd
+   重启，重启后先重新取得 canonical lock，再按 checkpoint 只做恢复，绝不
+   重跑业务 canary。supervisor 在请求 systemd 创建 controller 前先持久化
+   唯一 `controller_unit_started/in_progress` marker；一旦该边界成立，
+   即使 controller 尚未写入自己的 marker 或 staged archive 已清理，后续
+   也只能恢复。controller 的 EXIT trap 只能写 draft evidence/checkpoint，
+   无权写 terminal receipt。只有 supervisor 在 controller cgroup 已静默、
+   当前代 fd 9 已持锁、子 unit/端口已清理，并重新采集和比较 production
+   AFTER 后启动的 reconcile 子进程可以原子写 receipt。receipt 固定携带
+   `terminalWriter=supervisor_reconcile` 与 writer `InvocationID`；成功结果
+   还要求 candidate evidence 的 `InvocationID` 与 writer 完全相同，因此
+   supervisor 发生跨代重启时旧 candidate 只能收敛为 failed，不能借新一代
+   快照放行。任意伪造 `HOME`、`DEPLOY_STATE_DIR`、lock path 或 writer
+   generation 都会拒绝。
 3. source archive 最大 256 MiB、最多 50,000 个成员且展开不超过 2 GiB；
    controller、guard、lock helper 与 readiness verifier 必须和 archive 内
    文件逐个同 SHA。输入会先复制为 root-owned 只读文件。build 使用独立
    transient service，固定 `MemoryHigh=3G`、`MemoryMax=4G`、
    `MemorySwapMax=0`、`TasksMax=512`；deploy 用户 home、JATO 数据和
    `/etc/jato-fullstack` 在 build namespace 内不可见，唯一可写位置是本次
-   runtime。runtime 另用 transient service，只监听 `127.0.0.1:18001`，
+   runtime。controller、build 和 runtime 都使用
+   `StopPropagatedFrom + After` 绑定 durable supervisor：supervisor
+   退出时三个子 unit 只收到 stop，不会因 supervisor 的
+   `Restart=on-failure` 被连带重新执行。每个子 unit 还携带首次 supervisor
+   的 32 位 `InvocationID`；进入 snapshot、解包/安装或 Uvicorn 前必须确认
+   当前 supervisor 仍是同一代。这样同时封住了 supervisor 崩溃时的 restart
+   传播和 StartTransientUnit 竞态；代码与门禁显式禁止重新加入
+   `BindsTo`/`PartOf`，且 controller/build/runtime 都显式固定
+   `Restart=no`。
+   runtime 另用 transient service，只监听 `127.0.0.1:18001`，
    运行 2 个 Uvicorn worker，
    并设置 `DynamicUser=yes` 与 `ProtectSystem=strict`。验证读取 candidate
    cgroup，要求实际存活的 `spawn_main` worker 恰好为 2 个，而不只检查命令行
@@ -851,13 +885,32 @@ release 的缩小版，也不能切换流量。调用方必须先用与 producti
    现有公网 `/readyz` 可能为 404，所以旧服务 baseline 只使用
    `/healthz + build-meta`；candidate 自身仍必须通过精确 feature SHA
    `/readyz`。
-7. 无论成功、build 失败、runtime 失败或信号中断，只有先验证两个 transient
-   unit 的 FragmentPath、ExecStart、Environment 与 cgroup 身份并确认停止，
-   才会删除临时 runtime、control copy 与 staged archive；结构化 receipt
-   则保留。持久 run ID 不可复用。`passed` 或
-   `expected_failure_verified` receipt 必须再次验证完整 before/after、
-   candidate evidence 与 terminal checkpoint；任一 production 指纹变化或
-   evidence 缺失都会失败。
+7. 无论成功、build 失败、runtime 失败、TERM、SIGKILL 或 controller 总预算
+   到期，都只会按派生 unit 名及精确 FragmentPath、完整 ExecStart argv、
+   Environment、supervisor dependency 和 cgroup 身份停止子 unit。controller
+   的 EXIT trap 先尝试正常收口并写 draft checkpoint；无论 controller 如何
+   结束，仍存活且持锁的
+   supervisor 都先证明 controller cgroup 完全静默，再在一个全新 reconcile
+   进程中核验，不依赖 controller 的内存 flags。若 supervisor 自身被异常
+   终止，`Restart=on-failure` 的新进程读取 checkpoint：已经进入 controller
+   的任务只允许 recovery-only，且该恢复合同不要求已经按设计删除的 staged
+   archive 再次存在，禁止重新 build/runtime。恢复会确认 18001 已释放，再
+   在当前锁与当前 supervisor generation 下重新生成 after snapshot；跨代
+   candidate、生产指纹变化、矛盾/重复 marker 或显式 stop 请求都只能生成
+   failed receipt。runtime 与 staged archive 先清；
+   `/opt/jato-canary` 及其 `runtime/control/sources` 父层固定为
+   `root:root 0755`，所有入口都会复验无 symlink、owner/group 和 mode，
+   防止 deploy 用户通过 rename 整体替换 root-owned 控制树或 staged source；
+   只有按 run 派生的 runtime 叶目录按需交给 deploy 用户。
+   极小的 root-owned 只读 control bundle 不由仍受 `Restart=on-failure`
+   管理的 supervisor 自删，避免删除自身 ExecStart 后发生不可恢复重启。它会
+   保留到 supervisor 已 inactive/collected，再由外部流程在验证 terminal
+   receipt、端口和全部子 unit 后清理。持久 run ID 不可复用。`passed` 还必须存在唯一
+   `controller_completed/completed` marker；`expected_failure_verified`
+   必须存在唯一 `fault_observed/completed` marker；所有 terminal receipt
+   都必须以幂等且唯一的 `supervisor_reconciled/completed` 为 checkpoint
+   末态。任一 production 指纹、unit 身份、清理、writer generation 或
+   evidence 不完整都会失败并保留 control 供检查。
 
 服务器上的调用形式：
 
@@ -872,19 +925,42 @@ CANARY_SOURCE_ARCHIVE="$archive" \
 CANARY_SOURCE_BYTES="<stat 得到的字节数>" \
 CANARY_SOURCE_SHA256="<sha256sum 得到的摘要>" \
 CANARY_RUN_ID="<唯一 canary id>" \
-bash 03_Scripts/deploy/tencent_feature_candidate_canary.sh
+bash 03_Scripts/deploy/tencent_feature_candidate_canary.sh launch
 ```
 
-成功或失败后查看：
+命令快速返回后，必须继续轮询 supervisor unit 与 receipt；只有 receipt
+终态才能判定结果：
 
 ```text
+/run/systemd/transient/jato-feature-canary-supervisor-<run-key>.service
+/run/systemd/transient/jato-feature-canary-controller-<run-key>.service
 /var/lib/jato-canary/checkpoints/<run-key>.json
 /var/lib/jato-canary/evidence/<run-key>.json
 /var/lib/jato-canary/receipts/<run-key>.json
 ```
 
-受控失败演练增加 `CANARY_FAULT=after_candidate_start`。脚本会先产生内部
-故障退出码，只有 cleanup 和 production before/after comparison 全部通过后，
-才把 checkpoint/receipt 收敛为 `expected_failure_verified` 并向调用方返回
-成功；任何清理或旧服务一致性失败仍返回非零。公网旧服务必须始终健康。这个
-演练不会批准、发布或重试任何 JATO 月更数据任务。
+正常成功要求：
+
+- supervisor、controller、build、runtime 四个 transient unit 均已停止/collect；
+- `127.0.0.1:18001` 无监听；
+- runtime 与 staged source 两个临时路径均不存在；root-owned control
+  evidence 仍存在且不可写，待 supervisor collect 后再外部清理；
+- receipt 为 `outcome=passed`，`terminalWriter=supervisor_reconcile`，
+  candidate 与 writer `InvocationID` 相同，checkpoint 末态为
+  `supervisor_reconciled/completed`；
+- embedded before/after 除采集时间外完全相同。
+
+受控失败演练增加 `CANARY_FAULT=after_candidate_start` 并使用另一个从未用过
+的 run ID。controller 会产生内部故障退出码；只有 cleanup 和 production
+before/after comparison 全部通过后，checkpoint/receipt 才收敛为
+`expected_failure_verified`。外层 launch 命令的退出码仍只代表 systemd
+是否接受 supervisor，不能替代 receipt。公网旧服务必须始终健康。这个演练
+不会批准、发布或重试任何 JATO 月更数据任务。
+
+不要用 `systemctl stop` 模拟 supervisor 故障：systemd 的
+`Restart=on-failure` 不会把显式 stop 当成失败重启。耐久性预检或故障注入
+必须对 supervisor 的 MainPID 使用 `systemctl kill --kill-whom=main -s KILL`
+（并使用专门、从未复用的 preflight/canary run ID），随后以 terminal receipt
+和全部子 unit 已 collect 为准。显式 stop 仅用于受控运维终止；它会依赖
+`TimeoutStopSec` 内的 signal trap 尝试收口，并且即使 candidate marker
+已经齐全也只能写 failed receipt，不能作为重启能力或 canary 通过证明。

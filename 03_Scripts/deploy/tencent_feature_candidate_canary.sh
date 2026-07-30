@@ -8,7 +8,7 @@ set -Eeuo pipefail
 # active-slot marker, or reloads Nginx.  Build and runtime are separate
 # transient systemd units on a loopback-only non-production port.
 
-CANARY_MODE="${1:-run}"
+CANARY_MODE="${1:-launch}"
 CANARY_ROOT="${CANARY_ROOT:-/opt/jato-canary}"
 CANARY_STATE_ROOT="${CANARY_STATE_ROOT:-/var/lib/jato-canary}"
 CANARY_PORT="${CANARY_PORT:-18001}"
@@ -20,8 +20,19 @@ CANARY_RUNTIME_TIMEOUT="${CANARY_RUNTIME_TIMEOUT:-300}"
 CANARY_PUBLIC_ORIGIN="${CANARY_PUBLIC_ORIGIN:-https://www.ojeur.cloud}"
 CANARY_FAULT="${CANARY_FAULT:-}"
 LEGACY_ROOT="${LEGACY_ROOT:-/opt/JATO_Analysis_System-main}"
+CANARY_INITIAL_LOCK_PATH="${CANARY_INITIAL_LOCK_PATH-${JATO_PRODUCTION_DEPLOY_LOCK_PATH-}}"
 CANARY_MAX_SOURCE_BYTES=$((256 * 1024 * 1024))
 CANARY_PORT_RELEASE_TIMEOUT_SECONDS=75
+CANARY_CONTROLLER_RECOVERY_TIMEOUT_SECONDS=900
+CANARY_SUPERVISOR_STOP_TIMEOUT_SECONDS=1200
+CANARY_SUPERVISOR_RESTART_SECONDS=5
+CANARY_SUPERVISOR_MEMORY_HIGH=256M
+CANARY_SUPERVISOR_MEMORY_MAX=512M
+CANARY_SUPERVISOR_TASKS_MAX=64
+CANARY_CONTROLLER_MEMORY_HIGH=256M
+CANARY_CONTROLLER_MEMORY_MAX=512M
+CANARY_CONTROLLER_TASKS_MAX=64
+CANARY_SUPERVISOR_INVOCATION_ID="${CANARY_SUPERVISOR_INVOCATION_ID:-}"
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 CANARY_GUARD="$SCRIPT_DIR/jato_feature_canary_guard.py"
@@ -44,6 +55,8 @@ EVIDENCE_FILE=""
 BEFORE_SNAPSHOT=""
 AFTER_SNAPSHOT=""
 ACTIVE_UNIT=""
+SUPERVISOR_UNIT=""
+CONTROLLER_UNIT=""
 BUILD_UNIT=""
 SERVICE_UNIT=""
 SERVICE_RUNTIME_DIRECTORY=""
@@ -51,13 +64,10 @@ CONTROL_ROOT=""
 CONTROL_SCRIPT=""
 STAGED_SOURCE_ARCHIVE=""
 
-CANARY_SERVICE_STARTED=false
-CANARY_SERVICE_START_ATTEMPTED=false
-CANARY_BUILD_START_ATTEMPTED=false
 CANARY_RUNTIME_CREATED=false
 CANARY_FINALIZING=false
 CANARY_EXPECTED_FAILURE_OBSERVED=false
-CANARY_RESULT="failed"
+CANARY_SUPERVISOR_STOP_REQUESTED=false
 CANARY_ERROR=""
 
 fail() {
@@ -90,6 +100,52 @@ record_checkpoint() {
     --phase "$phase" \
     --status "$status" \
     --message "$message"
+}
+
+verify_checkpoint_marker() {
+  local phase="$1"
+  local status="${2:-completed}"
+  python3 -B "$CANARY_GUARD" verify-marker \
+    --checkpoint "$CHECKPOINT_FILE" \
+    --repository "$CANARY_REPOSITORY" \
+    --branch "$CANARY_BRANCH" \
+    --commit "$CANARY_COMMIT_SHA" \
+    --archive-sha256 "$CANARY_SOURCE_SHA256" \
+    --archive-bytes "$CANARY_SOURCE_BYTES" \
+    --run-id "$CANARY_RUN_ID" \
+    --port "$CANARY_PORT" \
+    --phase "$phase" \
+    --status "$status"
+}
+
+ensure_checkpoint_marker() {
+  local phase="$1"
+  local status="${2:-completed}"
+  local message="$3"
+  python3 -B "$CANARY_GUARD" ensure-marker \
+    --checkpoint "$CHECKPOINT_FILE" \
+    --repository "$CANARY_REPOSITORY" \
+    --branch "$CANARY_BRANCH" \
+    --commit "$CANARY_COMMIT_SHA" \
+    --archive-sha256 "$CANARY_SOURCE_SHA256" \
+    --archive-bytes "$CANARY_SOURCE_BYTES" \
+    --run-id "$CANARY_RUN_ID" \
+    --port "$CANARY_PORT" \
+    --phase "$phase" \
+    --status "$status" \
+    --message "$message"
+}
+
+verify_existing_receipt() {
+  python3 -B "$CANARY_GUARD" verify-receipt \
+    --path "$RECEIPT_FILE" \
+    --repository "$CANARY_REPOSITORY" \
+    --branch "$CANARY_BRANCH" \
+    --commit "$CANARY_COMMIT_SHA" \
+    --archive-sha256 "$CANARY_SOURCE_SHA256" \
+    --archive-bytes "$CANARY_SOURCE_BYTES" \
+    --run-id "$CANARY_RUN_ID" \
+    --port "$CANARY_PORT"
 }
 
 validate_feature_identity() {
@@ -128,7 +184,8 @@ validate_static_contract() {
   local account_home=""
   local canonical_deploy_state=""
   for command_name in \
-    awk curl flock getent python3 sha256sum stat systemctl systemd-run tar timeout; do
+    awk curl flock getent python3 readlink realpath sha256sum stat systemctl \
+    systemd-run tar timeout; do
     require_command "$command_name"
   done
   if [[ "$CANARY_ROOT" != "/opt/jato-canary" ]] \
@@ -140,7 +197,9 @@ validate_static_contract() {
     fail "canary root, port, and 3G/4G/512 resource contract are immutable"
     return 1
   fi
-  if [[ "$CANARY_MODE" == "run" ]]; then
+  if [[ "$CANARY_MODE" == "launch" \
+    || "$CANARY_MODE" == "supervisor" \
+    || "$CANARY_MODE" == "controller" ]]; then
     account_home="$(
       getent passwd "$(id -u)" | awk -F: 'NR == 1 {print $6}'
     )"
@@ -160,6 +219,12 @@ validate_static_contract() {
       fail "canary production lock override is not canonical"
       return 1
     fi
+    if [[ -n "$CANARY_INITIAL_LOCK_PATH" ]] \
+      && [[ "$CANARY_INITIAL_LOCK_PATH" != \
+        "$canonical_deploy_state/production-deploy.lock" ]]; then
+      fail "canary initial production lock identity is not canonical"
+      return 1
+    fi
   fi
   case "$CANARY_FAULT" in
     ""|after_candidate_start) ;;
@@ -169,6 +234,9 @@ validate_static_contract() {
       ;;
   esac
   validate_feature_identity
+  if [[ "$CANARY_MODE" != "launch" ]]; then
+    verify_canary_parent_roots
+  fi
   for control_file in \
     "$SCRIPT_DIR/tencent_feature_candidate_canary.sh" \
     "$CANARY_GUARD" \
@@ -260,6 +328,13 @@ for relative in relative_paths:
 PY
 }
 
+pin_canary_production_lock_path() {
+  local canonical_lock_path="${DEPLOY_STATE_DIR%/}/production-deploy.lock"
+  CANARY_INITIAL_LOCK_PATH="$canonical_lock_path"
+  JATO_PRODUCTION_DEPLOY_LOCK_PATH="$canonical_lock_path"
+  export CANARY_INITIAL_LOCK_PATH JATO_PRODUCTION_DEPLOY_LOCK_PATH
+}
+
 initialize_paths() {
   RUN_KEY="${CANARY_COMMIT_SHA:0:12}-${CANARY_RUN_ID}"
   if [[ ! "$RUN_KEY" =~ ^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$ ]]; then
@@ -272,6 +347,8 @@ initialize_paths() {
   EVIDENCE_FILE="$CANARY_STATE_ROOT/evidence/$RUN_KEY.json"
   BEFORE_SNAPSHOT="$CANARY_STATE_ROOT/snapshots/$RUN_KEY.before.json"
   AFTER_SNAPSHOT="$CANARY_STATE_ROOT/snapshots/$RUN_KEY.after.json"
+  SUPERVISOR_UNIT="jato-feature-canary-supervisor-$RUN_KEY.service"
+  CONTROLLER_UNIT="jato-feature-canary-controller-$RUN_KEY.service"
   BUILD_UNIT="jato-feature-canary-build-$RUN_KEY.service"
   SERVICE_UNIT="jato-feature-canary-$RUN_KEY.service"
   SERVICE_RUNTIME_DIRECTORY="jato-feature-canary-$RUN_KEY"
@@ -280,9 +357,37 @@ initialize_paths() {
   STAGED_SOURCE_ARCHIVE="$CANARY_ROOT/sources/$RUN_KEY.tar.gz"
   export \
     RUN_KEY RUNTIME_ROOT CHECKPOINT_FILE RECEIPT_FILE EVIDENCE_FILE \
-    BEFORE_SNAPSHOT AFTER_SNAPSHOT BUILD_UNIT SERVICE_UNIT \
+    BEFORE_SNAPSHOT AFTER_SNAPSHOT SUPERVISOR_UNIT CONTROLLER_UNIT \
+    BUILD_UNIT SERVICE_UNIT \
     SERVICE_RUNTIME_DIRECTORY CONTROL_ROOT CONTROL_SCRIPT \
     STAGED_SOURCE_ARCHIVE
+}
+
+verify_canary_parent_roots() {
+  python3 -B - \
+    "$CANARY_ROOT" \
+    "$CANARY_ROOT/runtime" \
+    "$CANARY_ROOT/control" \
+    "$CANARY_ROOT/sources" <<'PY'
+from pathlib import Path
+import os
+import stat
+import sys
+
+for raw in sys.argv[1:]:
+    path = Path(raw)
+    metadata = os.lstat(path)
+    if (
+        not stat.S_ISDIR(metadata.st_mode)
+        or stat.S_ISLNK(metadata.st_mode)
+        or metadata.st_uid != 0
+        or metadata.st_gid != 0
+        or stat.S_IMODE(metadata.st_mode) != 0o755
+    ):
+        raise SystemExit(
+            f"[ERROR] canary immutable parent is mutable/unsafe: {path}"
+        )
+PY
 }
 
 ensure_canary_roots() {
@@ -300,8 +405,9 @@ ensure_canary_roots() {
       fail "canary-owned path is unsafe: $path"
       return 1
     fi
-    sudo -n install -d -m 0755 -o "$(id -u)" -g "$(id -g)" "$path"
+    sudo -n install -d -m 0755 -o root -g root "$path"
   done
+  verify_canary_parent_roots
   for path in \
     "$CANARY_STATE_ROOT" \
     "$CANARY_STATE_ROOT/checkpoints" \
@@ -368,6 +474,542 @@ stage_canary_inputs() {
   export CANARY_SOURCE_ARCHIVE
 }
 
+build_canary_control_environment() {
+  local mode="$1"
+  CANARY_CONTROL_ENVIRONMENT=(
+    "PATH=$PATH"
+    "HOME=$HOME"
+    "DEPLOY_STATE_DIR=$DEPLOY_STATE_DIR"
+    "JATO_PRODUCTION_DEPLOY_LOCK_PATH=$CANARY_INITIAL_LOCK_PATH"
+    "CANARY_INITIAL_LOCK_PATH=$CANARY_INITIAL_LOCK_PATH"
+    "CANARY_MODE=$mode"
+    "CANARY_ROOT=$CANARY_ROOT"
+    "CANARY_STATE_ROOT=$CANARY_STATE_ROOT"
+    "CANARY_PORT=$CANARY_PORT"
+    "CANARY_MEMORY_HIGH=$CANARY_MEMORY_HIGH"
+    "CANARY_MEMORY_MAX=$CANARY_MEMORY_MAX"
+    "CANARY_TASKS_MAX=$CANARY_TASKS_MAX"
+    "CANARY_BUILD_TIMEOUT=$CANARY_BUILD_TIMEOUT"
+    "CANARY_RUNTIME_TIMEOUT=$CANARY_RUNTIME_TIMEOUT"
+    "CANARY_PUBLIC_ORIGIN=$CANARY_PUBLIC_ORIGIN"
+    "CANARY_FAULT=$CANARY_FAULT"
+    "LEGACY_ROOT=$LEGACY_ROOT"
+    "CANARY_COMMIT_SHA=$CANARY_COMMIT_SHA"
+    "CANARY_BRANCH=$CANARY_BRANCH"
+    "CANARY_REPOSITORY=$CANARY_REPOSITORY"
+    "CANARY_SOURCE_ARCHIVE=$STAGED_SOURCE_ARCHIVE"
+    "CANARY_SOURCE_SHA256=$CANARY_SOURCE_SHA256"
+    "CANARY_SOURCE_BYTES=$CANARY_SOURCE_BYTES"
+    "CANARY_RUN_ID=$CANARY_RUN_ID"
+    "RUN_KEY=$RUN_KEY"
+    "SUPERVISOR_UNIT=$SUPERVISOR_UNIT"
+    "CONTROLLER_UNIT=$CONTROLLER_UNIT"
+    "RUNTIME_ROOT=$RUNTIME_ROOT"
+    "CHECKPOINT_FILE=$CHECKPOINT_FILE"
+    "RECEIPT_FILE=$RECEIPT_FILE"
+    "EVIDENCE_FILE=$EVIDENCE_FILE"
+    "BEFORE_SNAPSHOT=$BEFORE_SNAPSHOT"
+    "AFTER_SNAPSHOT=$AFTER_SNAPSHOT"
+    "BUILD_UNIT=$BUILD_UNIT"
+    "SERVICE_UNIT=$SERVICE_UNIT"
+    "SERVICE_RUNTIME_DIRECTORY=$SERVICE_RUNTIME_DIRECTORY"
+    "CONTROL_ROOT=$CONTROL_ROOT"
+    "CONTROL_SCRIPT=$CONTROL_SCRIPT"
+    "STAGED_SOURCE_ARCHIVE=$STAGED_SOURCE_ARCHIVE"
+  )
+  if [[ "$mode" != "supervisor" ]]; then
+    CANARY_CONTROL_ENVIRONMENT+=(
+      "CANARY_SUPERVISOR_INVOCATION_ID=$CANARY_SUPERVISOR_INVOCATION_ID"
+    )
+  fi
+}
+
+assert_supervisor_scope() {
+  local bash_bin=""
+  local expected_active_states=""
+  local properties=""
+  bash_bin="$(command -v bash)"
+  case "$CANARY_MODE" in
+    supervisor|controller)
+      expected_active_states=active
+      ;;
+    reconcile)
+      expected_active_states=active,deactivating
+      ;;
+    *)
+      fail "supervisor scope may only be asserted by supervisor, controller, or reconcile"
+      return 1
+      ;;
+  esac
+  build_canary_control_environment supervisor
+  properties="$(
+    systemctl show "$SUPERVISOR_UNIT" \
+      -p LoadState -p ActiveState -p UnitFileState -p FragmentPath \
+      -p ExecStart -p Environment -p ControlGroup -p MainPID -p Restart \
+      -p MemoryHigh -p MemoryMax -p MemorySwapMax -p TasksMax -p KillMode
+  )"
+  python3 -B - \
+    "$properties" "$SUPERVISOR_UNIT" "$bash_bin" "$CONTROL_SCRIPT" \
+    "$CANARY_MODE" "$expected_active_states" "$$" \
+    "${CANARY_CONTROL_ENVIRONMENT[@]}" <<'PY'
+from pathlib import Path
+import shlex
+import sys
+
+(
+    raw,
+    unit,
+    bash_bin,
+    control_script,
+    mode,
+    expected_active_states_raw,
+    pid,
+) = sys.argv[1:8]
+expected_active_states = set(expected_active_states_raw.split(","))
+expected_environment_tokens = sys.argv[8:]
+properties = {}
+for line in raw.splitlines():
+    key, separator, value = line.partition("=")
+    if separator:
+        properties[key] = value
+expected_fragment = f"/run/systemd/transient/{unit}"
+expected_group = f"/system.slice/{unit}"
+required = {
+    "LoadState": "loaded",
+    "UnitFileState": "transient",
+    "FragmentPath": expected_fragment,
+    "ControlGroup": expected_group,
+    "MemoryHigh": str(256 * 1024 * 1024),
+    "MemoryMax": str(512 * 1024 * 1024),
+    "MemorySwapMax": "0",
+    "TasksMax": "64",
+    "KillMode": "control-group",
+    "Restart": "on-failure",
+}
+if properties.get("ActiveState") not in expected_active_states:
+    raise SystemExit(
+        "[ERROR] canary supervisor property ActiveState is not exact"
+    )
+for key, expected in required.items():
+    if properties.get(key) != expected:
+        raise SystemExit(
+            f"[ERROR] canary supervisor property {key} is not exact"
+        )
+
+
+def command_argv(property_name: str) -> list[str]:
+    raw_value = properties.get(property_name, "")
+    if raw_value.count("argv[]=") != 1:
+        raise SystemExit(
+            f"[ERROR] canary supervisor {property_name} argv is ambiguous"
+        )
+    argv_raw = raw_value.split("argv[]=", 1)[1].split(" ; ", 1)[0]
+    try:
+        return shlex.split(argv_raw)
+    except ValueError as exc:
+        raise SystemExit(
+            f"[ERROR] canary supervisor {property_name} argv is malformed"
+        ) from exc
+
+
+if command_argv("ExecStart") != [bash_bin, control_script, "supervisor"]:
+    raise SystemExit("[ERROR] canary supervisor ExecStart argv is not exact")
+
+try:
+    environment_tokens = shlex.split(properties.get("Environment", ""))
+except ValueError as exc:
+    raise SystemExit("[ERROR] canary supervisor Environment is malformed") from exc
+environment = {}
+for token in environment_tokens:
+    key, separator, value = token.partition("=")
+    if not separator or not key or key in environment:
+        raise SystemExit(
+            "[ERROR] canary supervisor Environment has malformed or duplicate keys"
+        )
+    environment[key] = value
+expected_environment = {}
+for token in expected_environment_tokens:
+    key, separator, expected = token.partition("=")
+    if not separator or not key or key in expected_environment:
+        raise SystemExit(
+            "[ERROR] canary supervisor expected Environment is malformed"
+        )
+    expected_environment[key] = expected
+if environment != expected_environment:
+    changed = sorted(
+        key
+        for key in set(environment) | set(expected_environment)
+        if environment.get(key) != expected_environment.get(key)
+    )
+    if changed:
+        raise SystemExit(
+            "[ERROR] canary supervisor Environment is not exact: "
+            + ", ".join(changed)
+        )
+main_pid = properties.get("MainPID", "")
+if not main_pid.isdigit() or main_pid == "0":
+    raise SystemExit("[ERROR] canary supervisor MainPID is not live")
+members = (
+    Path("/sys/fs/cgroup") / expected_group.lstrip("/") / "cgroup.procs"
+).read_text(encoding="utf-8").splitlines()
+if main_pid not in members:
+    raise SystemExit("[ERROR] canary supervisor MainPID escaped its exact cgroup")
+if mode != "controller" and pid not in members:
+    raise SystemExit("[ERROR] canary supervisor process escaped its exact cgroup")
+PY
+}
+
+read_live_supervisor_invocation_id() {
+  local allowed_active_states="${1:-active}"
+  local properties=""
+  properties="$(
+    systemctl show "$SUPERVISOR_UNIT" \
+      -p LoadState -p ActiveState -p MainPID -p InvocationID
+  )"
+  python3 -B - "$properties" "$allowed_active_states" <<'PY'
+import re
+import sys
+
+properties = {}
+for line in sys.argv[1].splitlines():
+    key, separator, value = line.partition("=")
+    if separator:
+        properties[key] = value
+invocation_id = properties.get("InvocationID", "")
+main_pid = properties.get("MainPID", "")
+allowed_active_states = set(sys.argv[2].split(","))
+if (
+    properties.get("LoadState") != "loaded"
+    or properties.get("ActiveState") not in allowed_active_states
+    or not main_pid.isdigit()
+    or main_pid == "0"
+    or re.fullmatch(r"[0-9A-Fa-f]{32}", invocation_id) is None
+    or invocation_id == "0" * 32
+):
+    raise SystemExit("[ERROR] durable supervisor generation is not live and exact")
+print(invocation_id.lower())
+PY
+}
+
+capture_supervisor_invocation_id() {
+  if [[ "$CANARY_MODE" != "supervisor" ]]; then
+    fail "only the durable supervisor may capture its invocation generation"
+    return 1
+  fi
+  CANARY_SUPERVISOR_INVOCATION_ID="$(
+    read_live_supervisor_invocation_id
+  )"
+  export CANARY_SUPERVISOR_INVOCATION_ID
+}
+
+assert_supervisor_generation() {
+  local current_invocation_id=""
+  if [[ ! "$CANARY_SUPERVISOR_INVOCATION_ID" =~ ^[0-9a-f]{32}$ ]] \
+    || [[ "$CANARY_SUPERVISOR_INVOCATION_ID" == \
+      "00000000000000000000000000000000" ]]; then
+    fail "child unit lacks its original supervisor generation fence"
+    return 1
+  fi
+  current_invocation_id="$(read_live_supervisor_invocation_id)"
+  if [[ "$current_invocation_id" != "$CANARY_SUPERVISOR_INVOCATION_ID" ]]; then
+    fail "child unit belongs to a stale supervisor generation"
+    return 1
+  fi
+}
+
+assert_reconcile_supervisor_generation() {
+  local current_invocation_id=""
+  if [[ "$CANARY_MODE" != "reconcile" ]]; then
+    fail "deactivating supervisor generations are only valid during reconciliation"
+    return 1
+  fi
+  if [[ ! "$CANARY_SUPERVISOR_INVOCATION_ID" =~ ^[0-9a-f]{32}$ ]] \
+    || [[ "$CANARY_SUPERVISOR_INVOCATION_ID" == \
+      "00000000000000000000000000000000" ]]; then
+    fail "reconcile lacks its original supervisor generation fence"
+    return 1
+  fi
+  current_invocation_id="$(
+    read_live_supervisor_invocation_id active,deactivating
+  )"
+  if [[ "$current_invocation_id" != "$CANARY_SUPERVISOR_INVOCATION_ID" ]]; then
+    fail "reconcile belongs to a stale supervisor generation"
+    return 1
+  fi
+}
+
+assert_controller_scope() {
+  local bash_bin=""
+  local controller_timeout=0
+  local properties=""
+  bash_bin="$(command -v bash)"
+  controller_timeout=$((CANARY_BUILD_TIMEOUT + CANARY_RUNTIME_TIMEOUT + 300))
+  build_canary_control_environment controller
+  properties="$(
+    systemctl show "$CONTROLLER_UNIT" \
+      -p LoadState -p ActiveState -p UnitFileState -p FragmentPath \
+      -p ExecStart -p Environment -p ControlGroup -p MainPID -p Restart \
+      -p MemoryHigh -p MemoryMax -p MemorySwapMax -p TasksMax -p KillMode \
+      -p SendSIGKILL \
+      -p BindsTo -p PartOf -p After -p StopPropagatedFrom \
+      -p RuntimeMaxUSec -p TimeoutStopUSec
+  )"
+  python3 -B - \
+    "$properties" "$CONTROLLER_UNIT" "$SUPERVISOR_UNIT" \
+    "$bash_bin" "$CONTROL_SCRIPT" "$$" \
+    "$controller_timeout" "$CANARY_CONTROLLER_RECOVERY_TIMEOUT_SECONDS" \
+    "${CANARY_CONTROL_ENVIRONMENT[@]}" <<'PY'
+from decimal import Decimal
+from pathlib import Path
+import re
+import shlex
+import sys
+
+(
+    raw,
+    unit,
+    supervisor_unit,
+    bash_bin,
+    control_script,
+    pid,
+    runtime_seconds,
+    stop_seconds,
+) = sys.argv[1:9]
+expected_environment_tokens = sys.argv[9:]
+properties = {}
+for line in raw.splitlines():
+    key, separator, value = line.partition("=")
+    if separator:
+        properties[key] = value
+expected_group = f"/system.slice/{unit}"
+required = {
+    "LoadState": "loaded",
+    "ActiveState": "active",
+    "UnitFileState": "transient",
+    "FragmentPath": f"/run/systemd/transient/{unit}",
+    "ControlGroup": expected_group,
+    "MainPID": pid,
+    "Restart": "no",
+    "MemoryHigh": str(256 * 1024 * 1024),
+    "MemoryMax": str(512 * 1024 * 1024),
+    "MemorySwapMax": "0",
+    "TasksMax": "64",
+    "KillMode": "control-group",
+    "SendSIGKILL": "yes",
+}
+for key, expected in required.items():
+    if properties.get(key) != expected:
+        raise SystemExit(
+            f"[ERROR] canary controller property {key} is not exact"
+        )
+
+
+def parse_systemd_usec(value: str) -> int:
+    if value.isdigit():
+        return int(value)
+    unit_usec = {
+        "us": Decimal(1),
+        "µs": Decimal(1),
+        "ms": Decimal(1_000),
+        "s": Decimal(1_000_000),
+        "min": Decimal(60_000_000),
+        "h": Decimal(3_600_000_000),
+        "d": Decimal(86_400_000_000),
+        "w": Decimal(604_800_000_000),
+    }
+    total = Decimal(0)
+    position = 0
+    for match in re.finditer(
+        r"\s*([0-9]+(?:\.[0-9]+)?)\s*(us|µs|ms|s|min|h|d|w)",
+        value,
+    ):
+        if match.start() != position:
+            raise ValueError(value)
+        total += Decimal(match.group(1)) * unit_usec[match.group(2)]
+        position = match.end()
+    if position != len(value) or position == 0 or total != total.to_integral_value():
+        raise ValueError(value)
+    return int(total)
+
+
+for property_name, seconds in (
+    ("RuntimeMaxUSec", runtime_seconds),
+    ("TimeoutStopUSec", stop_seconds),
+):
+    try:
+        actual_usec = parse_systemd_usec(properties.get(property_name, ""))
+    except ValueError as exc:
+        raise SystemExit(
+            f"[ERROR] canary controller property {property_name} is malformed"
+        ) from exc
+    if actual_usec != int(seconds) * 1_000_000:
+        raise SystemExit(
+            f"[ERROR] canary controller property {property_name} is not exact"
+        )
+if supervisor_unit not in properties.get("After", "").split():
+    raise SystemExit(
+        "[ERROR] canary controller omitted exact supervisor ordering"
+    )
+if set(properties.get("StopPropagatedFrom", "").split()) != {supervisor_unit}:
+    raise SystemExit(
+        "[ERROR] canary controller omitted exact stop-only supervisor propagation"
+    )
+if properties.get("BindsTo", "").split() or properties.get("PartOf", "").split():
+    raise SystemExit(
+        "[ERROR] canary controller gained a restart-propagating supervisor dependency"
+    )
+
+
+def command_argv() -> list[str]:
+    raw_value = properties.get("ExecStart", "")
+    if raw_value.count("argv[]=") != 1:
+        raise SystemExit("[ERROR] canary controller ExecStart argv is ambiguous")
+    argv_raw = raw_value.split("argv[]=", 1)[1].split(" ; ", 1)[0]
+    try:
+        return shlex.split(argv_raw)
+    except ValueError as exc:
+        raise SystemExit(
+            "[ERROR] canary controller ExecStart argv is malformed"
+        ) from exc
+
+
+if command_argv() != [bash_bin, control_script, "controller"]:
+    raise SystemExit("[ERROR] canary controller ExecStart argv is not exact")
+try:
+    environment_tokens = shlex.split(properties.get("Environment", ""))
+except ValueError as exc:
+    raise SystemExit("[ERROR] canary controller Environment is malformed") from exc
+environment = {}
+for token in environment_tokens:
+    key, separator, value = token.partition("=")
+    if not separator or not key or key in environment:
+        raise SystemExit(
+            "[ERROR] canary controller Environment has malformed or duplicate keys"
+        )
+    environment[key] = value
+expected_environment = {}
+for token in expected_environment_tokens:
+    key, separator, expected = token.partition("=")
+    if not separator or not key or key in expected_environment:
+        raise SystemExit(
+            "[ERROR] canary controller expected Environment is malformed"
+        )
+    expected_environment[key] = expected
+if environment != expected_environment:
+    changed = sorted(
+        key
+        for key in set(environment) | set(expected_environment)
+        if environment.get(key) != expected_environment.get(key)
+    )
+    raise SystemExit(
+        "[ERROR] canary controller Environment is not exact: "
+        + ", ".join(changed)
+    )
+members = (
+    Path("/sys/fs/cgroup") / expected_group.lstrip("/") / "cgroup.procs"
+).read_text(encoding="utf-8").splitlines()
+if pid not in members:
+    raise SystemExit("[ERROR] canary controller escaped its exact cgroup")
+PY
+}
+
+assert_supervisor_production_lock() {
+  local expected_lock_path="${DEPLOY_STATE_DIR%/}/production-deploy.lock"
+  local flock_rc=0
+  local holder_pid=""
+  local holder_target=""
+  local expected_target=""
+  if [[ "$CANARY_INITIAL_LOCK_PATH" != "$expected_lock_path" ]] \
+    || [[ "$JATO_PRODUCTION_DEPLOY_LOCK_PATH" != "$expected_lock_path" ]] \
+    || [[ ! -f "$expected_lock_path" ]] \
+    || [[ -L "$expected_lock_path" ]]; then
+    fail "controller production lock identity is not canonical and safe"
+    return 1
+  fi
+  holder_pid="$(
+    systemctl show "$SUPERVISOR_UNIT" -p MainPID --value
+  )"
+  if [[ ! "$holder_pid" =~ ^[1-9][0-9]*$ ]] \
+    || [[ ! -e "/proc/$holder_pid/fd/9" ]]; then
+    fail "controller cannot observe the live supervisor lock fd"
+    return 1
+  fi
+  holder_target="$(readlink "/proc/$holder_pid/fd/9")" || return 1
+  expected_target="$(realpath -m "$expected_lock_path")" || return 1
+  if [[ "$holder_target" != "$expected_target" ]]; then
+    fail "supervisor fd 9 references a different production lock"
+    return 1
+  fi
+  python3 -B - "$holder_pid" "$expected_lock_path" <<'PY'
+from pathlib import Path
+import os
+import stat
+import sys
+
+holder_pid, expected_name = sys.argv[1:]
+expected = Path(expected_name)
+expected_stat = os.stat(expected, follow_symlinks=False)
+fd_path = Path(f"/proc/{holder_pid}/fd/9")
+fd_stat = os.stat(fd_path)
+if (
+    not stat.S_ISREG(expected_stat.st_mode)
+    or expected_stat.st_dev != fd_stat.st_dev
+    or expected_stat.st_ino != fd_stat.st_ino
+):
+    raise SystemExit("[ERROR] supervisor fd 9 inode differs from canonical lock")
+lock_lines = [
+    line.split()
+    for line in Path(f"/proc/{holder_pid}/fdinfo/9")
+    .read_text(encoding="utf-8")
+    .splitlines()
+    if line.startswith("lock:")
+]
+matching = []
+for fields in lock_lines:
+    if len(fields) != 9:
+        continue
+    device_parts = fields[6].rsplit(":", 2)
+    if len(device_parts) != 3:
+        continue
+    try:
+        int(fields[5])
+        major = int(device_parts[0], 16)
+        minor = int(device_parts[1], 16)
+        inode = int(device_parts[2])
+    except ValueError:
+        continue
+    if (
+        fields[2:5] == ["FLOCK", "ADVISORY", "WRITE"]
+        and major == os.major(expected_stat.st_dev)
+        and minor == os.minor(expected_stat.st_dev)
+        and inode == expected_stat.st_ino
+        and fields[7:] == ["0", "EOF"]
+    ):
+        matching.append(fields)
+if len(matching) != 1:
+    raise SystemExit(
+        "[ERROR] supervisor fd 9 lacks one exact owned FLOCK write record"
+    )
+PY
+  exec 8>"$expected_lock_path"
+  if flock -n 8; then
+    flock_rc=0
+  else
+    flock_rc=$?
+  fi
+  if [[ "$flock_rc" -eq 0 ]]; then
+    flock -u 8 || true
+    exec 8>&-
+    fail "supervisor fd 9 does not hold the production mutation flock"
+    return 1
+  fi
+  exec 8>&-
+  if [[ "$flock_rc" -ne 1 ]]; then
+    fail "controller could not verify the supervisor production flock"
+    return 1
+  fi
+}
+
 resolve_active_unit() {
   local active_units=()
   local unit=""
@@ -405,10 +1047,15 @@ assert_build_scope() {
   local actual_protect_home=""
   local actual_protect_system=""
   local actual_no_new_privileges=""
+  local actual_restart=""
   local actual_unit_file_state=""
   local actual_fragment=""
   local actual_inaccessible_paths=""
   local actual_write_paths=""
+  local actual_after=""
+  local actual_binds_to=""
+  local actual_part_of=""
+  local actual_stop_propagated_from=""
   local group=""
   actual_high="$(systemctl show "$BUILD_UNIT" -p MemoryHigh --value)"
   actual_max="$(systemctl show "$BUILD_UNIT" -p MemoryMax --value)"
@@ -419,6 +1066,7 @@ assert_build_scope() {
   actual_no_new_privileges="$(
     systemctl show "$BUILD_UNIT" -p NoNewPrivileges --value
   )"
+  actual_restart="$(systemctl show "$BUILD_UNIT" -p Restart --value)"
   actual_unit_file_state="$(
     systemctl show "$BUILD_UNIT" -p UnitFileState --value
   )"
@@ -427,6 +1075,12 @@ assert_build_scope() {
     systemctl show "$BUILD_UNIT" -p InaccessiblePaths --value
   )"
   actual_write_paths="$(systemctl show "$BUILD_UNIT" -p ReadWritePaths --value)"
+  actual_binds_to="$(systemctl show "$BUILD_UNIT" -p BindsTo --value)"
+  actual_part_of="$(systemctl show "$BUILD_UNIT" -p PartOf --value)"
+  actual_after="$(systemctl show "$BUILD_UNIT" -p After --value)"
+  actual_stop_propagated_from="$(
+    systemctl show "$BUILD_UNIT" -p StopPropagatedFrom --value
+  )"
   group="$(systemctl show "$BUILD_UNIT" -p ControlGroup --value)"
   if [[ "$actual_high" != "$expected_high" ]] \
     || [[ "$actual_max" != "$expected_max" ]] \
@@ -435,12 +1089,17 @@ assert_build_scope() {
     || [[ "$actual_protect_home" != "yes" ]] \
     || [[ "$actual_protect_system" != "strict" ]] \
     || [[ "$actual_no_new_privileges" != "yes" ]] \
+    || [[ "$actual_restart" != "no" ]] \
     || [[ "$actual_unit_file_state" != "transient" ]] \
     || [[ "$actual_fragment" != "/run/systemd/transient/$BUILD_UNIT" ]] \
     || [[ "$actual_write_paths" != *"$RUNTIME_ROOT"* ]] \
     || [[ "$actual_inaccessible_paths" != *"$LEGACY_ROOT/01_RAW_DATA"* ]] \
     || [[ "$actual_inaccessible_paths" != *"$LEGACY_ROOT/04_Processed_data"* ]] \
     || [[ "$actual_inaccessible_paths" != *"/etc/jato-fullstack"* ]] \
+    || [[ -n "$actual_binds_to" ]] \
+    || [[ -n "$actual_part_of" ]] \
+    || [[ " $actual_after " != *" $SUPERVISOR_UNIT "* ]] \
+    || [[ "$actual_stop_propagated_from" != "$SUPERVISOR_UNIT" ]] \
     || [[ -z "$group" || "$group" == "/" ]]; then
     fail "candidate build service lacks its reviewed sandbox/cgroup contract"
     return 1
@@ -598,7 +1257,6 @@ run_build_scope() {
     fail "derived candidate build service name is already in use"
     return 1
   fi
-  CANARY_BUILD_START_ATTEMPTED=true
   sudo -n systemd-run \
     --quiet \
     --wait \
@@ -609,7 +1267,10 @@ run_build_scope() {
     --uid="$(id -u)" \
     --gid="$(id -g)" \
     --working-directory="$CANARY_ROOT" \
+    --property="StopPropagatedFrom=$SUPERVISOR_UNIT" \
+    --property="After=$SUPERVISOR_UNIT" \
     --property="RuntimeMaxSec=${CANARY_BUILD_TIMEOUT}s" \
+    --property="Restart=no" \
     --property="ProtectSystem=strict" \
     --property="ProtectHome=yes" \
     --property="PrivateTmp=yes" \
@@ -661,6 +1322,8 @@ run_build_scope() {
     --setenv="EVIDENCE_FILE=$EVIDENCE_FILE" \
     --setenv="BEFORE_SNAPSHOT=$BEFORE_SNAPSHOT" \
     --setenv="AFTER_SNAPSHOT=$AFTER_SNAPSHOT" \
+    --setenv="SUPERVISOR_UNIT=$SUPERVISOR_UNIT" \
+    --setenv="CANARY_SUPERVISOR_INVOCATION_ID=$CANARY_SUPERVISOR_INVOCATION_ID" \
     --setenv="BUILD_UNIT=$BUILD_UNIT" \
     --setenv="SERVICE_UNIT=$SERVICE_UNIT" \
     --setenv="SERVICE_RUNTIME_DIRECTORY=$SERVICE_RUNTIME_DIRECTORY" \
@@ -671,8 +1334,10 @@ run_build_scope() {
 
 start_candidate_service() {
   local backend="$RUNTIME_ROOT/06_AppPlatform/backend"
+  local bash_bin=""
   local load_state=""
   local runtime_home="/run/$SERVICE_RUNTIME_DIRECTORY"
+  bash_bin="$(command -v bash)"
   load_state="$(
     systemctl show "$SERVICE_UNIT" -p LoadState --value 2>/dev/null || true
   )"
@@ -681,14 +1346,16 @@ start_candidate_service() {
     fail "derived candidate transient service name is already in use"
     return 1
   fi
-  CANARY_SERVICE_START_ATTEMPTED=true
   sudo -n systemd-run \
     --quiet \
     --collect \
     --unit="$SERVICE_UNIT" \
     --service-type=exec \
     --working-directory="$backend" \
+    --property="StopPropagatedFrom=$SUPERVISOR_UNIT" \
+    --property="After=$SUPERVISOR_UNIT" \
     --property="RuntimeMaxSec=${CANARY_RUNTIME_TIMEOUT}s" \
+    --property="Restart=no" \
     --property="DynamicUser=yes" \
     --property="ProtectSystem=strict" \
     --property="ProtectHome=yes" \
@@ -718,6 +1385,7 @@ start_candidate_service() {
     --setenv="PYTHONPATH=$backend" \
     --setenv="PYTHONDONTWRITEBYTECODE=1" \
     --setenv="PYTHONUNBUFFERED=1" \
+    --setenv="CANARY_MODE=runtime" \
     --setenv="APP_PROJECT_ROOT=$RUNTIME_ROOT" \
     --setenv="APP_RELEASE_SHA=$CANARY_COMMIT_SHA" \
     --setenv="APP_RELEASE_SLOT=$CANARY_PORT" \
@@ -736,9 +1404,20 @@ start_candidate_service() {
     --setenv="JATO_PARTITIONED_PATH=$LEGACY_ROOT/04_Processed_data/partitioned_dataset_v1" \
     --setenv="APP_CRUD_DATA_PATH=$LEGACY_ROOT/04_Processed_data/app_entities.json" \
     --setenv="APP_ENGINEERING_IMPORT_ROOT=$LEGACY_ROOT/01_RAW_DATA" \
+    --setenv="CANARY_ROOT=$CANARY_ROOT" \
+    --setenv="CANARY_STATE_ROOT=$CANARY_STATE_ROOT" \
+    --setenv="CANARY_BRANCH=$CANARY_BRANCH" \
+    --setenv="CANARY_COMMIT_SHA=$CANARY_COMMIT_SHA" \
+    --setenv="CANARY_PORT=$CANARY_PORT" \
+    --setenv="CANARY_REPOSITORY=$CANARY_REPOSITORY" \
+    --setenv="CANARY_SOURCE_SHA256=$CANARY_SOURCE_SHA256" \
+    --setenv="CANARY_SOURCE_BYTES=$CANARY_SOURCE_BYTES" \
+    --setenv="CANARY_RUN_ID=$CANARY_RUN_ID" \
+    --setenv="CANARY_SUPERVISOR_INVOCATION_ID=$CANARY_SUPERVISOR_INVOCATION_ID" \
+    --setenv="LEGACY_ROOT=$LEGACY_ROOT" \
+    "$bash_bin" "$CONTROL_SCRIPT" runtime \
     "$RUNTIME_ROOT/.venv/bin/python" -m uvicorn app.main:app \
       --host 127.0.0.1 --port "$CANARY_PORT" --workers 2
-  CANARY_SERVICE_STARTED=true
 }
 
 verify_candidate_service() {
@@ -794,13 +1473,15 @@ PY
   properties="$(systemctl show "$SERVICE_UNIT" \
     -p ActiveState -p UnitFileState -p DynamicUser -p ProtectSystem \
     -p ProtectHome -p NoNewPrivileges \
+    -p Restart \
     -p MemoryHigh -p MemoryMax -p MemorySwapMax -p TasksMax \
     -p ExecStart -p Environment \
-    -p ReadOnlyPaths -p MainPID -p ControlGroup)"
+    -p ReadOnlyPaths -p MainPID -p ControlGroup \
+    -p BindsTo -p PartOf -p After -p StopPropagatedFrom)"
   python3 -B - \
     "$EVIDENCE_FILE" "$properties" "$health" "$monthly_body" \
     "$monthly_status" "$expected_high" "$expected_max" \
-    "$CANARY_COMMIT_SHA" "$CANARY_PORT" "$LEGACY_ROOT" \
+    "$CANARY_COMMIT_SHA" "$CANARY_PORT" "$LEGACY_ROOT" "$SUPERVISOR_UNIT" \
     "$readyz_evidence" <<'PY'
 import json
 import os
@@ -820,6 +1501,7 @@ import tempfile
     commit,
     port,
     legacy_root,
+    supervisor_unit,
     readyz_raw,
 ) = sys.argv[1:]
 properties = {}
@@ -834,6 +1516,7 @@ required = {
     "ProtectSystem": "strict",
     "ProtectHome": "yes",
     "NoNewPrivileges": "yes",
+    "Restart": "no",
     "MemoryHigh": expected_high,
     "MemoryMax": expected_max,
     "MemorySwapMax": "0",
@@ -884,6 +1567,16 @@ if (
     or f"{legacy_root}/04_Processed_data" not in properties.get("ReadOnlyPaths", "")
 ):
     raise SystemExit("[ERROR] candidate data paths are not read-only")
+if supervisor_unit not in properties.get("After", "").split():
+    raise SystemExit("[ERROR] candidate omits durable supervisor ordering")
+if set(properties.get("StopPropagatedFrom", "").split()) != {supervisor_unit}:
+    raise SystemExit(
+        "[ERROR] candidate omits exact stop-only supervisor propagation"
+    )
+if properties.get("BindsTo", "").split() or properties.get("PartOf", "").split():
+    raise SystemExit(
+        "[ERROR] candidate gained a restart-propagating supervisor dependency"
+    )
 group = properties.get("ControlGroup", "")
 if not group or ".." in Path(group).parts:
     raise SystemExit("[ERROR] candidate cgroup is unsafe")
@@ -955,36 +1648,42 @@ PY
 
 stop_verified_transient_unit() {
   local unit="$1"
-  local expected_exec="$2"
-  local expected_argument="$3"
-  local expected_environment="$4"
-  local load_state=""
+  local expected_environment="$2"
+  shift 2
+  local expected_argv=("$@")
+  local current_load_state=""
+  local current_properties=""
+  local current_invocation_id=""
   local properties=""
-  local active_state=""
-  if ! load_state="$(
-    systemctl show "$unit" -p LoadState --value 2>/dev/null
-  )"; then
-    echo "[ERROR] cannot inspect transient canary unit: $unit" >&2
-    return 1
-  fi
-  if [[ "$load_state" == "not-found" ]]; then
-    return 0
-  fi
-  if [[ -z "$load_state" ]]; then
-    echo "[ERROR] transient canary unit returned an empty LoadState: $unit" >&2
-    return 1
-  fi
+  local verified_invocation_id=""
   properties="$(
     systemctl show "$unit" \
-      -p ActiveState -p UnitFileState -p FragmentPath -p ExecStart \
-      -p Environment -p ControlGroup 2>/dev/null || true
+      -p LoadState -p ActiveState -p UnitFileState -p FragmentPath -p ExecStart \
+      -p Environment -p ControlGroup -p BindsTo -p PartOf -p After \
+      -p StopPropagatedFrom \
+      -p InvocationID \
+      2>/dev/null || true
   )"
-  if ! python3 -B - \
-    "$properties" "$unit" "$expected_exec" "$expected_argument" \
-    "$expected_environment" <<'PY'
+  if [[ "$properties" == *$'LoadState=not-found\n'* ]] \
+    || [[ "$properties" == "LoadState=not-found" ]]; then
+    return 0
+  fi
+  if ! verified_invocation_id="$(
+    python3 -B - \
+    "$properties" "$unit" "$expected_environment" "$SUPERVISOR_UNIT" \
+    "${#expected_argv[@]}" "${expected_argv[@]}" <<'PY'
+import re
+import shlex
 import sys
 
-raw, unit, expected_exec, expected_argument, expected_environment = sys.argv[1:]
+(
+    raw,
+    unit,
+    expected_environment,
+    supervisor_unit,
+) = sys.argv[1:5]
+argv_count = int(sys.argv[5])
+expected_argv = sys.argv[6 : 6 + argv_count]
 properties = {}
 for line in raw.splitlines():
     key, separator, value = line.partition("=")
@@ -993,57 +1692,120 @@ for line in raw.splitlines():
 expected_fragment = f"/run/systemd/transient/{unit}"
 active_state = properties.get("ActiveState", "")
 control_group = properties.get("ControlGroup", "")
+exec_start = properties.get("ExecStart", "")
+invocation_id = properties.get("InvocationID", "")
+if exec_start.count("argv[]=") != 1:
+    raise SystemExit("[ERROR] refusing to stop a unit with ambiguous ExecStart")
+argv_raw = exec_start.split("argv[]=", 1)[1].split(" ; ", 1)[0]
+try:
+    actual_argv = shlex.split(argv_raw)
+    environment_tokens = shlex.split(properties.get("Environment", ""))
+except ValueError as exc:
+    raise SystemExit(
+        "[ERROR] refusing to stop a unit with malformed argv/environment"
+    ) from exc
+environment = {}
+for token in environment_tokens:
+    key, separator, value = token.partition("=")
+    if not separator or not key or key in environment:
+        raise SystemExit(
+            "[ERROR] refusing to stop a unit with duplicate/malformed environment"
+        )
+    environment[key] = value
+expected_key, separator, expected_value = expected_environment.partition("=")
 if (
-    properties.get("UnitFileState") != "transient"
+    properties.get("LoadState") != "loaded"
+    or properties.get("UnitFileState") != "transient"
     or properties.get("FragmentPath") != expected_fragment
-    or expected_exec not in properties.get("ExecStart", "")
-    or expected_argument not in properties.get("ExecStart", "")
-    or expected_environment not in properties.get("Environment", "")
+    or re.fullmatch(r"[0-9A-Fa-f]{32}", invocation_id) is None
+    or invocation_id == "0" * 32
+    or actual_argv != expected_argv
+    or not separator
+    or environment.get(expected_key) != expected_value
+    or properties.get("BindsTo", "").split()
+    or properties.get("PartOf", "").split()
+    or supervisor_unit not in properties.get("After", "").split()
+    or set(properties.get("StopPropagatedFrom", "").split()) != {supervisor_unit}
     or (
         active_state in {"active", "activating", "deactivating"}
         and control_group != f"/system.slice/{unit}"
     )
 ):
     raise SystemExit("[ERROR] refusing to stop a unit without exact canary identity")
+print(invocation_id.lower())
 PY
-  then
+  )"; then
+    current_load_state="$(
+      systemctl show "$unit" -p LoadState --value 2>/dev/null || true
+    )"
+    if [[ "$current_load_state" == "not-found" ]]; then
+      return 0
+    fi
     return 1
   fi
-  sudo -n systemctl stop "$unit" >/dev/null 2>&1 || return 1
-  sudo -n systemctl reset-failed "$unit" >/dev/null 2>&1 || true
-  for _attempt in $(seq 1 20); do
-    active_state="$(
-      systemctl show "$unit" -p ActiveState --value 2>/dev/null || true
+  if ! sudo -n systemctl stop "$unit" >/dev/null 2>&1; then
+    current_load_state="$(
+      systemctl show "$unit" -p LoadState --value 2>/dev/null || true
     )"
-    if [[ "$active_state" != "active" ]] \
-      && [[ "$active_state" != "activating" ]] \
-      && [[ "$active_state" != "deactivating" ]]; then
+    if [[ "$current_load_state" == "not-found" ]]; then
       return 0
+    fi
+    return 1
+  fi
+  sudo -n systemctl reset-failed "$unit" >/dev/null 2>&1 || true
+  for _attempt in $(seq 1 30); do
+    current_properties="$(
+      systemctl show "$unit" \
+        -p LoadState -p ActiveState -p InvocationID \
+        2>/dev/null || true
+    )"
+    current_load_state=""
+    current_invocation_id=""
+    while IFS="=" read -r property_name property_value; do
+      case "$property_name" in
+        LoadState)
+          current_load_state="$property_value"
+          ;;
+        InvocationID)
+          current_invocation_id="${property_value,,}"
+          ;;
+      esac
+    done <<<"$current_properties"
+    if [[ "$current_load_state" == "not-found" ]]; then
+      return 0
+    fi
+    if [[ "$current_load_state" != "loaded" ]] \
+      || [[ "$current_invocation_id" != "$verified_invocation_id" ]]; then
+      echo \
+        "[ERROR] transient canary unit identity changed while waiting for collect: $unit" \
+        >&2
+      return 1
     fi
     sleep 1
   done
-  echo "[ERROR] transient canary unit remained active: $unit" >&2
+  echo "[ERROR] transient canary unit was not collected: $unit" >&2
   return 1
 }
 
 cleanup_candidate() {
+  local bash_bin=""
   local cleanup_rc=0
-  if [[ "$CANARY_SERVICE_START_ATTEMPTED" == "true" ]]; then
-    stop_verified_transient_unit \
-      "$SERVICE_UNIT" \
-      "$RUNTIME_ROOT/.venv/bin/python" \
-      "--port $CANARY_PORT" \
-      "APP_RELEASE_SHA=$CANARY_COMMIT_SHA" \
-      || cleanup_rc=1
-  fi
-  if [[ "$CANARY_BUILD_START_ATTEMPTED" == "true" ]]; then
-    stop_verified_transient_unit \
-      "$BUILD_UNIT" \
-      "$CONTROL_SCRIPT" \
-      "build" \
-      "RUN_KEY=$RUN_KEY" \
-      || cleanup_rc=1
-  fi
+  bash_bin="$(command -v bash)"
+  # Durable reconciliation cannot trust in-memory "attempted" flags.  Derived
+  # child names plus exact transient-unit identity are the sole stop authority.
+  stop_verified_transient_unit \
+    "$SERVICE_UNIT" \
+    "APP_RELEASE_SHA=$CANARY_COMMIT_SHA" \
+    "$bash_bin" "$CONTROL_SCRIPT" runtime \
+    "$RUNTIME_ROOT/.venv/bin/python" \
+    -m uvicorn app.main:app \
+    --host 127.0.0.1 --port "$CANARY_PORT" --workers 2 \
+    || cleanup_rc=1
+  stop_verified_transient_unit \
+    "$BUILD_UNIT" \
+    "RUN_KEY=$RUN_KEY" \
+    "$bash_bin" "$CONTROL_SCRIPT" build \
+    || cleanup_rc=1
   if [[ "$cleanup_rc" -eq 0 ]]; then
     case "$RUNTIME_ROOT" in
       /opt/jato-canary/runtime/*)
@@ -1055,18 +1817,6 @@ cleanup_candidate() {
         ;;
       *)
         echo "[ERROR] refusing to clean runtime outside canary root" >&2
-        cleanup_rc=1
-        ;;
-    esac
-    case "$CONTROL_ROOT" in
-      /opt/jato-canary/control/*)
-        if sudo -n test -e "$CONTROL_ROOT" \
-          || sudo -n test -L "$CONTROL_ROOT"; then
-          sudo -n rm -rf --one-file-system "$CONTROL_ROOT" || cleanup_rc=1
-        fi
-        ;;
-      *)
-        echo "[ERROR] refusing to clean control path outside canary root" >&2
         cleanup_rc=1
         ;;
     esac
@@ -1084,8 +1834,7 @@ cleanup_candidate() {
     esac
   fi
   if [[ "$cleanup_rc" -eq 0 ]]; then
-    for ephemeral in \
-      "$RUNTIME_ROOT" "$CONTROL_ROOT" "$STAGED_SOURCE_ARCHIVE"; do
+    for ephemeral in "$RUNTIME_ROOT" "$STAGED_SOURCE_ARCHIVE"; do
       if sudo -n test -e "$ephemeral" || sudo -n test -L "$ephemeral"; then
         echo "[ERROR] canary ephemeral path remained after cleanup: $ephemeral" >&2
         cleanup_rc=1
@@ -1093,6 +1842,69 @@ cleanup_candidate() {
     done
   fi
   return "$cleanup_rc"
+}
+
+verify_retained_control_bundle() {
+  case "$CONTROL_ROOT" in
+    /opt/jato-canary/control/*)
+      ;;
+    *)
+      echo "[ERROR] refusing a retained control path outside canary root" >&2
+      return 1
+      ;;
+  esac
+  verify_canary_parent_roots
+  python3 -B - "$CONTROL_ROOT" <<'PY'
+from pathlib import Path
+import os
+import stat
+import sys
+
+root = Path(sys.argv[1])
+directories = (
+    root,
+    root / "03_Scripts",
+    root / "03_Scripts/deploy",
+    root / "03_Scripts/deploy/lib",
+)
+files = {
+    root / "03_Scripts/deploy/tencent_feature_candidate_canary.sh": 0o555,
+    root / "03_Scripts/deploy/jato_feature_canary_guard.py": 0o444,
+    root / "03_Scripts/deploy/lib/production_mutation_lock.sh": 0o444,
+    root / "03_Scripts/deploy/verify_backend_readiness.py": 0o444,
+}
+expected_members = set(directories[1:]) | set(files)
+observed_members = set(root.rglob("*"))
+if observed_members != expected_members:
+    raise SystemExit("[ERROR] retained canary control bundle has unexpected members")
+for path in directories:
+    metadata = os.lstat(path)
+    if (
+        not stat.S_ISDIR(metadata.st_mode)
+        or stat.S_ISLNK(metadata.st_mode)
+        or metadata.st_uid != 0
+        or stat.S_IMODE(metadata.st_mode) & 0o022
+    ):
+        raise SystemExit(
+            f"[ERROR] retained canary control directory is mutable/unsafe: {path}"
+        )
+for path, expected_mode in files.items():
+    metadata = os.lstat(path)
+    if (
+        not stat.S_ISREG(metadata.st_mode)
+        or stat.S_ISLNK(metadata.st_mode)
+        or metadata.st_uid != 0
+        or stat.S_IMODE(metadata.st_mode) != expected_mode
+    ):
+        raise SystemExit(
+            f"[ERROR] retained canary control file is mutable/unsafe: {path}"
+        )
+PY
+  if [[ "$?" -ne 0 ]]; then
+    return 1
+  fi
+  echo \
+    "[INFO] Root-owned control evidence retained until the supervisor is collected: $CONTROL_ROOT"
 }
 
 wait_for_candidate_port_release() {
@@ -1119,7 +1931,6 @@ finalize_canary() {
   local cleanup_rc=0
   local port_release_rc=0
   local checkpoint_rc=0
-  local identity=()
   if [[ "$CANARY_FINALIZING" == "true" ]]; then
     return "$original_rc"
   fi
@@ -1129,7 +1940,17 @@ finalize_canary() {
   if [[ "$CANARY_FAULT" == "after_candidate_start" ]] \
     && [[ "$CANARY_EXPECTED_FAILURE_OBSERVED" == "true" ]] \
     && [[ "$original_rc" -eq 97 ]]; then
-    final_rc=0
+    if verify_checkpoint_marker fault_observed; then
+      final_rc=0
+    else
+      CANARY_ERROR="${CANARY_ERROR:+$CANARY_ERROR; }durable fault marker missing"
+      final_rc=1
+    fi
+  elif [[ "$original_rc" -eq 0 ]]; then
+    if ! verify_checkpoint_marker controller_completed; then
+      CANARY_ERROR="${CANARY_ERROR:+$CANARY_ERROR; }durable controller completion marker missing"
+      final_rc=1
+    fi
   fi
 
   cleanup_candidate
@@ -1175,66 +1996,33 @@ finalize_canary() {
         record_checkpoint expected_failure_verified completed \
           "injected candidate failure cleaned up; old production remained exact"
         checkpoint_rc=$?
-        CANARY_RESULT="expected_failure_verified"
       else
         record_checkpoint cleanup_verified completed \
           "transient service/runtime removed; production snapshot unchanged"
         checkpoint_rc=$?
-        CANARY_RESULT="passed"
       fi
       if [[ "$checkpoint_rc" -ne 0 ]]; then
         CANARY_ERROR="${CANARY_ERROR:+$CANARY_ERROR; }terminal checkpoint failed"
-        CANARY_RESULT="failed"
         final_rc=1
       fi
     else
       record_checkpoint cleanup_verified failed \
         "${CANARY_ERROR:-canary failed}; old production comparison rc=$comparison_rc"
       checkpoint_rc=$?
-      CANARY_RESULT="failed"
       if [[ "$checkpoint_rc" -ne 0 ]]; then
         CANARY_ERROR="${CANARY_ERROR:+$CANARY_ERROR; }failure checkpoint failed"
         final_rc=1
       fi
     fi
-    identity=(
-      --repository "$CANARY_REPOSITORY"
-      --branch "$CANARY_BRANCH"
-      --commit "$CANARY_COMMIT_SHA"
-      --archive-sha256 "$CANARY_SOURCE_SHA256"
-      --archive-bytes "$CANARY_SOURCE_BYTES"
-      --run-id "$CANARY_RUN_ID"
-      --port "$CANARY_PORT"
-    )
-    python3 -B "$CANARY_GUARD" finalize \
-      --path "$RECEIPT_FILE" \
-      "${identity[@]}" \
-      --outcome "$CANARY_RESULT" \
-      --fault "$CANARY_FAULT" \
-      --error "$CANARY_ERROR" \
-      --before "$BEFORE_SNAPSHOT" \
-      --after "$AFTER_SNAPSHOT" \
-      --candidate "$EVIDENCE_FILE" \
-      --checkpoint "$CHECKPOINT_FILE"
-    if [[ "$?" -ne 0 ]]; then
-      final_rc=1
-    fi
   else
     final_rc=1
   fi
-  echo "[INFO] Feature canary receipt retained at $RECEIPT_FILE"
+  echo \
+    "[INFO] Controller evidence finalized; durable supervisor reconciliation owns the terminal receipt"
   exit "$final_rc"
 }
 
-run_canary() {
-  validate_static_contract
-  initialize_paths
-  ensure_canary_roots
-  record_checkpoint initialized in_progress \
-    "feature canary initialized in its independent state namespace"
-
-  # The canonical lock is held before staging/build/baseline and remains held
-  # until final cleanup and the exact after snapshot complete.
+acquire_canary_production_lock() {
   export JATO_BLUEGREEN_SWITCH_UNIT=jato-bluegreen-production.service
   # shellcheck source=03_Scripts/deploy/lib/production_mutation_lock.sh
   source "$MUTATION_LOCK_HELPER"
@@ -1244,8 +2032,253 @@ run_canary() {
     fail "canary did not acquire the existing production mutation lock"
     return 1
   fi
+}
 
+assert_supervisor_unit_available() {
+  local active_state=""
+  local load_state=""
+  load_state="$(
+    systemctl show "$SUPERVISOR_UNIT" -p LoadState --value 2>/dev/null || true
+  )"
+  active_state="$(
+    systemctl show "$SUPERVISOR_UNIT" -p ActiveState --value 2>/dev/null || true
+  )"
+  if [[ "$load_state" != "not-found" ]] \
+    || [[ -n "$active_state" && "$active_state" != "inactive" ]]; then
+    fail "derived durable canary supervisor name is already in use"
+    return 1
+  fi
+}
+
+start_canary_supervisor() {
+  local bash_bin=""
+  local environment_args=()
+  local environment_entry=""
+  bash_bin="$(command -v bash)"
+  assert_supervisor_unit_available
+  build_canary_control_environment supervisor
+  for environment_entry in "${CANARY_CONTROL_ENVIRONMENT[@]}"; do
+    environment_args+=("--setenv=$environment_entry")
+  done
+  sudo -n systemd-run \
+    --quiet \
+    --collect \
+    --unit="$SUPERVISOR_UNIT" \
+    --service-type=exec \
+    --uid="$(id -u)" \
+    --gid="$(id -g)" \
+    --working-directory="$CONTROL_ROOT" \
+    --property="TimeoutStopSec=${CANARY_SUPERVISOR_STOP_TIMEOUT_SECONDS}s" \
+    --property="KillMode=control-group" \
+    --property="Restart=on-failure" \
+    --property="RestartSec=${CANARY_SUPERVISOR_RESTART_SECONDS}s" \
+    --property="StartLimitIntervalSec=0" \
+    --property="MemoryHigh=$CANARY_SUPERVISOR_MEMORY_HIGH" \
+    --property="MemoryMax=$CANARY_SUPERVISOR_MEMORY_MAX" \
+    --property="MemorySwapMax=0" \
+    --property="TasksMax=$CANARY_SUPERVISOR_TASKS_MAX" \
+    "${environment_args[@]}" \
+    "$bash_bin" "$CONTROL_SCRIPT" supervisor
+}
+
+assert_controller_unit_available() {
+  local active_state=""
+  local load_state=""
+  load_state="$(
+    systemctl show "$CONTROLLER_UNIT" -p LoadState --value 2>/dev/null || true
+  )"
+  active_state="$(
+    systemctl show "$CONTROLLER_UNIT" -p ActiveState --value 2>/dev/null || true
+  )"
+  if [[ "$load_state" != "not-found" ]] \
+    || [[ -n "$active_state" && "$active_state" != "inactive" ]]; then
+    fail "derived durable canary controller name is already in use"
+    return 1
+  fi
+}
+
+run_canary_controller_unit() {
+  local bash_bin=""
+  local controller_timeout=0
+  local environment_args=()
+  local environment_entry=""
+  bash_bin="$(command -v bash)"
+  controller_timeout=$((CANARY_BUILD_TIMEOUT + CANARY_RUNTIME_TIMEOUT + 300))
+  assert_controller_unit_available
+  build_canary_control_environment controller
+  for environment_entry in "${CANARY_CONTROL_ENVIRONMENT[@]}"; do
+    environment_args+=("--setenv=$environment_entry")
+  done
+  sudo -n systemd-run \
+    --quiet \
+    --wait \
+    --pipe \
+    --collect \
+    --unit="$CONTROLLER_UNIT" \
+    --service-type=exec \
+    --uid="$(id -u)" \
+    --gid="$(id -g)" \
+    --working-directory="$CONTROL_ROOT" \
+    --property="StopPropagatedFrom=$SUPERVISOR_UNIT" \
+    --property="After=$SUPERVISOR_UNIT" \
+    --property="RuntimeMaxSec=${controller_timeout}s" \
+    --property="TimeoutStopSec=${CANARY_CONTROLLER_RECOVERY_TIMEOUT_SECONDS}s" \
+    --property="KillMode=control-group" \
+    --property="SendSIGKILL=yes" \
+    --property="Restart=no" \
+    --property="MemoryHigh=$CANARY_CONTROLLER_MEMORY_HIGH" \
+    --property="MemoryMax=$CANARY_CONTROLLER_MEMORY_MAX" \
+    --property="MemorySwapMax=0" \
+    --property="TasksMax=$CANARY_CONTROLLER_TASKS_MAX" \
+    "${environment_args[@]}" \
+    "$bash_bin" "$CONTROL_SCRIPT" controller
+}
+
+quiesce_canary_controller_unit() {
+  local active_state=""
+  local bash_bin=""
+  local control_group=""
+  local load_state=""
+  local members_path=""
+  bash_bin="$(command -v bash)"
+  stop_verified_transient_unit \
+    "$CONTROLLER_UNIT" \
+    "RUN_KEY=$RUN_KEY" \
+    "$bash_bin" "$CONTROL_SCRIPT" controller \
+    || return 1
+  for _attempt in $(seq 1 30); do
+    load_state="$(
+      systemctl show "$CONTROLLER_UNIT" -p LoadState --value 2>/dev/null || true
+    )"
+    if [[ "$load_state" == "not-found" ]]; then
+      return 0
+    fi
+    active_state="$(
+      systemctl show "$CONTROLLER_UNIT" -p ActiveState --value 2>/dev/null || true
+    )"
+    control_group="$(
+      systemctl show "$CONTROLLER_UNIT" -p ControlGroup --value 2>/dev/null || true
+    )"
+    members_path="/sys/fs/cgroup/${control_group#/}/cgroup.procs"
+    if [[ "$active_state" != "active" ]] \
+      && [[ "$active_state" != "activating" ]] \
+      && [[ "$active_state" != "deactivating" ]] \
+      && {
+        [[ -z "$control_group" ]] \
+          || [[ ! -e "$members_path" ]] \
+          || [[ ! -s "$members_path" ]];
+      }; then
+      sudo -n systemctl reset-failed "$CONTROLLER_UNIT" >/dev/null 2>&1 || true
+      return 0
+    fi
+    sleep 1
+  done
+  fail "durable canary controller cgroup did not become quiescent"
+}
+
+launch_canary() {
+  validate_static_contract
+  pin_canary_production_lock_path
+  initialize_paths
+  ensure_canary_roots
   stage_canary_inputs
+  record_checkpoint initialized in_progress \
+    "feature canary inputs staged; durable supervisor launch requested"
+  if ! start_canary_supervisor; then
+    record_checkpoint supervisor_launch_failed failed \
+      "systemd rejected or could not start the durable canary supervisor" \
+      || true
+    echo \
+      "[ERROR] Durable supervisor launch failed; staged control bundle retained for inspection" \
+      >&2
+    return 1
+  fi
+  echo "[INFO] Durable feature canary supervisor started: $SUPERVISOR_UNIT"
+  echo "[INFO] Poll durable receipt: $RECEIPT_FILE"
+}
+
+checkpoint_marker_present() {
+  verify_checkpoint_marker "$1" "${2:-completed}" >/dev/null 2>&1
+}
+
+run_canary_supervisor() {
+  local controller_rc=0
+  local reconcile_rc=0
+  initialize_paths
+  if [[ -f "$RECEIPT_FILE" ]] \
+    || checkpoint_marker_present controller_unit_started in_progress; then
+    # A restarted supervisor must be able to recover after normal cleanup has
+    # already removed the staged source archive.  Recovery validates the
+    # root-owned control plane and durable identity instead of reopening input.
+    validate_reconcile_contract
+  else
+    validate_static_contract
+    assert_supervisor_scope
+  fi
+  verify_checkpoint_marker initialized in_progress
+
+  # The supervisor is the sole durable owner of fd 9.  The business controller
+  # runs in its own transient systemd cgroup, so systemd can prove that the
+  # complete controller process tree is dead before reconciliation begins.
+  acquire_canary_production_lock
+  capture_supervisor_invocation_id
+  if ! checkpoint_marker_present supervisor_started in_progress; then
+    record_checkpoint supervisor_started in_progress \
+      "durable supervisor acquired the canonical production mutation lock"
+  fi
+
+  if [[ ! -f "$RECEIPT_FILE" ]] \
+    && ! checkpoint_marker_present controller_unit_started in_progress; then
+    record_checkpoint controller_unit_started in_progress \
+      "isolated controller unit launch committed; later attempts are recovery-only"
+    set +e
+    run_canary_controller_unit
+    controller_rc=$?
+    set -e
+  else
+    controller_rc=125
+    echo \
+      "[WARN] Durable supervisor restart detected; business canary will not be rerun" \
+      >&2
+  fi
+  export CANARY_CONTROLLER_RC="$controller_rc"
+  export CANARY_SUPERVISOR_STOP_REQUESTED
+
+  if ! quiesce_canary_controller_unit; then
+    echo \
+      "[ERROR] Durable canary controller tree is not quiescent; refusing concurrent reconciliation" \
+      >&2
+    return 1
+  fi
+
+  set +e
+  bash "$CONTROL_SCRIPT" reconcile
+  reconcile_rc=$?
+  set -e
+  if [[ "$reconcile_rc" -ne 0 ]]; then
+    echo \
+      "[ERROR] Durable canary reconciliation is incomplete; systemd will retry the supervisor" \
+      >&2
+    return 1
+  fi
+  return 0
+}
+
+run_canary_controller() {
+  initialize_paths
+  assert_supervisor_generation
+  validate_static_contract
+  assert_supervisor_scope
+  assert_controller_scope
+  assert_supervisor_production_lock
+  verify_checkpoint_marker initialized in_progress
+  verify_checkpoint_marker supervisor_started in_progress
+  record_checkpoint controller_started in_progress \
+    "isolated controller verified the supervisor's durable production lock"
+
+  # The controller is a separate transient cgroup and never owns or reacquires
+  # fd 9.  The exact supervisor identity, its live fd 9 target, and a failed
+  # nonblocking second flock prove the production fence before any snapshot.
   resolve_active_unit
   capture_snapshot "$BEFORE_SNAPSHOT"
   python3 -B "$CANARY_GUARD" verify-baseline \
@@ -1266,25 +2299,292 @@ run_canary() {
   if [[ "$CANARY_FAULT" == "after_candidate_start" ]]; then
     CANARY_EXPECTED_FAILURE_OBSERVED=true
     CANARY_ERROR="expected fault injection: after_candidate_start"
+    record_checkpoint fault_observed completed \
+      "expected after_candidate_start fault reached its durable boundary"
     return 97
   fi
-  CANARY_RESULT="passed"
+  record_checkpoint controller_completed completed \
+    "candidate verification completed under the durable controller"
+}
+
+run_candidate_runtime() {
+  local actual_argv=("$@")
+  local expected_argv=()
+  initialize_paths
+  assert_supervisor_generation
+  verify_canary_parent_roots
+  validate_feature_identity
+  expected_argv=(
+    "$RUNTIME_ROOT/.venv/bin/python"
+    -m uvicorn app.main:app
+    --host 127.0.0.1
+    --port "$CANARY_PORT"
+    --workers 2
+  )
+  if [[ "$#" -ne "${#expected_argv[@]}" ]]; then
+    fail "candidate runtime wrapper received an unexpected argv length"
+    return 1
+  fi
+  for index in "${!expected_argv[@]}"; do
+    if [[ "${actual_argv[$index]}" != "${expected_argv[$index]}" ]]; then
+      fail "candidate runtime wrapper received unexpected argv"
+      return 1
+    fi
+  done
+  exec "${expected_argv[@]}"
+}
+
+validate_reconcile_contract() {
+  local account_home=""
+  local canonical_deploy_state=""
+  for command_name in \
+    curl flock getent python3 readlink realpath sha256sum stat systemctl timeout; do
+    require_command "$command_name"
+  done
+  if [[ "$CANARY_ROOT" != "/opt/jato-canary" ]] \
+    || [[ "$CANARY_STATE_ROOT" != "/var/lib/jato-canary" ]] \
+    || [[ "$CANARY_PORT" != "18001" ]] \
+    || [[ "$CANARY_MEMORY_HIGH" != "3G" ]] \
+    || [[ "$CANARY_MEMORY_MAX" != "4G" ]] \
+    || [[ "$CANARY_TASKS_MAX" != "512" ]]; then
+    fail "reconcile canary root, port, and resource identity are not exact"
+    return 1
+  fi
+  validate_feature_identity
+  verify_canary_parent_roots
+  account_home="$(
+    getent passwd "$(id -u)" | awk -F: 'NR == 1 {print $6}'
+  )"
+  canonical_deploy_state="${account_home%/}/.local/state/jato-production-release"
+  if [[ -z "$account_home" || "$account_home" != /* ]] \
+    || [[ "${HOME:-}" != "$account_home" ]] \
+    || [[ "${DEPLOY_STATE_DIR:-}" != "$canonical_deploy_state" ]]; then
+    fail "reconcile requires the canonical deploy account and state directory"
+    return 1
+  fi
+  if [[ -n "${JATO_PRODUCTION_DEPLOY_LOCK_PATH:-}" ]] \
+    && [[ "$JATO_PRODUCTION_DEPLOY_LOCK_PATH" != \
+      "$canonical_deploy_state/production-deploy.lock" ]]; then
+    fail "reconcile production lock override is not canonical"
+    return 1
+  fi
+  if [[ "$CANARY_INITIAL_LOCK_PATH" != \
+    "$canonical_deploy_state/production-deploy.lock" ]]; then
+    fail "reconcile initial production lock identity is not canonical"
+    return 1
+  fi
+  if [[ "$SCRIPT_DIR/tencent_feature_candidate_canary.sh" != \
+    "$CONTROL_SCRIPT" ]]; then
+    fail "reconcile is not executing from the exact staged control bundle"
+    return 1
+  fi
+  for control_file in \
+    "$CONTROL_SCRIPT" "$CANARY_GUARD" "$MUTATION_LOCK_HELPER" \
+    "$READINESS_VERIFIER"; do
+    if [[ ! -f "$control_file" || -L "$control_file" ]] \
+      || [[ "$(stat -c '%u' "$control_file")" != "0" ]]; then
+      fail "reconcile control-plane file is missing, mutable, or unsafe"
+      return 1
+    fi
+  done
+  assert_supervisor_scope
+}
+
+write_terminal_receipt() {
+  local outcome="$1"
+  local error="$2"
+  local identity=(
+    --repository "$CANARY_REPOSITORY"
+    --branch "$CANARY_BRANCH"
+    --commit "$CANARY_COMMIT_SHA"
+    --archive-sha256 "$CANARY_SOURCE_SHA256"
+    --archive-bytes "$CANARY_SOURCE_BYTES"
+    --run-id "$CANARY_RUN_ID"
+    --port "$CANARY_PORT"
+  )
+  if [[ "$CANARY_MODE" != "reconcile" ]]; then
+    fail "only supervisor reconciliation may write a terminal canary receipt"
+    return 1
+  fi
+  if [[ ! "$CANARY_SUPERVISOR_INVOCATION_ID" =~ ^[0-9a-f]{32}$ ]] \
+    || [[ "$CANARY_SUPERVISOR_INVOCATION_ID" == \
+      "00000000000000000000000000000000" ]]; then
+    fail "terminal receipt writer lacks its supervisor generation"
+    return 1
+  fi
+  python3 -B "$CANARY_GUARD" finalize \
+    --path "$RECEIPT_FILE" \
+    "${identity[@]}" \
+    --outcome "$outcome" \
+    --fault "$CANARY_FAULT" \
+    --error "$error" \
+    --before "$BEFORE_SNAPSHOT" \
+    --after "$AFTER_SNAPSHOT" \
+    --candidate "$EVIDENCE_FILE" \
+    --checkpoint "$CHECKPOINT_FILE" \
+    --terminal-writer supervisor_reconcile \
+    --writer-invocation-id "$CANARY_SUPERVISOR_INVOCATION_ID"
+}
+
+reconcile_canary_controller() {
+  local cleanup_rc=0
+  local comparison_rc=0
+  local controller_completed=false
+  local controller_cleanup_completed=false
+  local fault_observed=false
+  local fault_cleanup_completed=false
+  local outcome="failed"
+  local receipt_error=""
+  initialize_paths
+  validate_reconcile_contract
+  assert_reconcile_supervisor_generation
+  # Reconcile is always a supervisor descendant. On the first attempt it
+  # validates the still-open inherited fd 9; after a supervisor restart it
+  # validates the freshly reacquired canonical lock before touching evidence.
+  acquire_canary_production_lock
+
+  if [[ -f "$RECEIPT_FILE" && ! -L "$RECEIPT_FILE" ]]; then
+    verify_existing_receipt
+    cleanup_candidate
+    wait_for_candidate_port_release
+    verify_retained_control_bundle
+    return 0
+  elif [[ -e "$RECEIPT_FILE" || -L "$RECEIPT_FILE" ]]; then
+    fail "reconcile receipt path is unsafe"
+    return 1
+  fi
+
+  cleanup_candidate || cleanup_rc=1
+  if [[ "$cleanup_rc" -eq 0 ]]; then
+    wait_for_candidate_port_release || cleanup_rc=1
+  fi
+  if [[ "$cleanup_rc" -ne 0 ]]; then
+    echo \
+      "[ERROR] Reconcile cleanup or candidate port release is incomplete; refusing a terminal receipt" \
+      >&2
+    return 1
+  fi
+
+  resolve_active_unit || comparison_rc=1
+  if [[ "$comparison_rc" -eq 0 ]]; then
+    capture_snapshot "$AFTER_SNAPSHOT" || comparison_rc=1
+  fi
+  if [[ "$comparison_rc" -eq 0 ]]; then
+    python3 -B "$CANARY_GUARD" verify-baseline \
+      --snapshot "$AFTER_SNAPSHOT" || comparison_rc=1
+  fi
+  if [[ "$comparison_rc" -eq 0 && -f "$BEFORE_SNAPSHOT" ]]; then
+    python3 -B "$CANARY_GUARD" compare \
+      --before "$BEFORE_SNAPSHOT" \
+      --after "$AFTER_SNAPSHOT" || comparison_rc=1
+  elif [[ "$comparison_rc" -eq 0 ]]; then
+    comparison_rc=1
+  fi
+  if [[ "$comparison_rc" -ne 0 ]]; then
+    receipt_error="${CANARY_ERROR:+$CANARY_ERROR; }exact production before/after comparison unavailable or changed"
+  fi
+
+  if ! verify_retained_control_bundle; then
+    echo \
+      "[ERROR] Retained root-owned control evidence is unsafe; refusing a terminal receipt" \
+      >&2
+    return 1
+  fi
+
+  if checkpoint_marker_present controller_completed completed; then
+    controller_completed=true
+  fi
+  if checkpoint_marker_present cleanup_verified completed; then
+    controller_cleanup_completed=true
+  fi
+  if checkpoint_marker_present fault_observed completed; then
+    fault_observed=true
+  fi
+  if checkpoint_marker_present expected_failure_verified completed; then
+    fault_cleanup_completed=true
+  fi
+
+  if [[ "$comparison_rc" -eq 0 ]] \
+    && [[ "${CANARY_SUPERVISOR_STOP_REQUESTED:-false}" != "true" ]] \
+    && [[ "$CANARY_FAULT" == "" ]] \
+    && [[ "$controller_completed" == "true" ]] \
+    && [[ "$controller_cleanup_completed" == "true" ]] \
+    && [[ "$fault_observed" == "false" ]] \
+    && [[ "$fault_cleanup_completed" == "false" ]]; then
+    outcome="passed"
+    receipt_error=""
+  elif [[ "$comparison_rc" -eq 0 ]] \
+    && [[ "${CANARY_SUPERVISOR_STOP_REQUESTED:-false}" != "true" ]] \
+    && [[ "$CANARY_FAULT" == "after_candidate_start" ]] \
+    && [[ "$controller_completed" == "false" ]] \
+    && [[ "$controller_cleanup_completed" == "false" ]] \
+    && [[ "$fault_observed" == "true" ]] \
+    && [[ "$fault_cleanup_completed" == "true" ]]; then
+    outcome="expected_failure_verified"
+    receipt_error="expected fault injection: after_candidate_start"
+  else
+    outcome="failed"
+    if [[ "${CANARY_SUPERVISOR_STOP_REQUESTED:-false}" == "true" ]]; then
+      receipt_error="${receipt_error:+$receipt_error; }durable supervisor stop was requested"
+    elif [[ "$comparison_rc" -eq 0 ]]; then
+      receipt_error="${receipt_error:+$receipt_error; }durable controller outcome markers are missing, duplicate, or contradictory"
+    fi
+    receipt_error="${receipt_error:+$receipt_error; }controller rc=${CANARY_CONTROLLER_RC:-unknown}"
+  fi
+
+  ensure_checkpoint_marker supervisor_reconciled completed \
+    "supervisor held the production lock, quiesced all child units, and freshly reconciled outcome=$outcome"
+
+  if ! write_terminal_receipt "$outcome" "$receipt_error"; then
+    if [[ "$outcome" == "failed" ]]; then
+      return 1
+    fi
+    receipt_error="supervisor rejected incomplete ${outcome} evidence, including candidate/writer generation binding"
+    if ! write_terminal_receipt failed "$receipt_error"; then
+      return 1
+    fi
+  fi
+  verify_existing_receipt
 }
 
 main() {
   case "$CANARY_MODE" in
-    run)
+    launch)
+      launch_canary
+      ;;
+    supervisor)
+      trap \
+        'CANARY_SUPERVISOR_STOP_REQUESTED=true; CANARY_ERROR="supervisor signal HUP"' \
+        HUP
+      trap \
+        'CANARY_SUPERVISOR_STOP_REQUESTED=true; CANARY_ERROR="supervisor signal INT"' \
+        INT
+      trap \
+        'CANARY_SUPERVISOR_STOP_REQUESTED=true; CANARY_ERROR="supervisor signal TERM"' \
+        TERM
+      run_canary_supervisor
+      ;;
+    controller)
       trap finalize_canary EXIT
       trap 'CANARY_ERROR="${CANARY_ERROR:-unexpected command failure}"' ERR
       trap 'CANARY_ERROR="signal HUP"; exit 129' HUP
       trap 'CANARY_ERROR="signal INT"; exit 130' INT
       trap 'CANARY_ERROR="signal TERM"; exit 143' TERM
-      run_canary
+      run_canary_controller
       ;;
     build)
-      validate_static_contract
       initialize_paths
+      assert_supervisor_generation
+      validate_static_contract
       build_candidate_runtime
+      ;;
+    runtime)
+      shift
+      run_candidate_runtime "$@"
+      ;;
+    reconcile)
+      trap - EXIT ERR HUP INT TERM
+      reconcile_canary_controller
       ;;
     *)
       fail "unknown feature candidate canary mode: $CANARY_MODE"

@@ -553,7 +553,7 @@ def compare_snapshots(before: dict[str, Any], after: dict[str, Any]) -> None:
 def verify_candidate_evidence(
     payload: dict[str, Any],
     identity: dict[str, Any],
-) -> None:
+) -> str:
     if (
         payload.get("status") != "verified"
         or payload.get("featureCommit") != identity["commit"]
@@ -591,6 +591,7 @@ def verify_candidate_evidence(
         "ProtectSystem": "strict",
         "ProtectHome": "yes",
         "NoNewPrivileges": "yes",
+        "Restart": "no",
         "MemoryHigh": str(3 * 1024 * 1024 * 1024),
         "MemoryMax": str(4 * 1024 * 1024 * 1024),
         "MemorySwapMax": "0",
@@ -603,6 +604,21 @@ def verify_candidate_evidence(
             )
     if "--workers 2" not in str(systemd.get("ExecStart") or ""):
         raise CanaryGuardError("candidate evidence lacks exactly two workers")
+    expected_supervisor = (
+        "jato-feature-canary-supervisor-"
+        f"{identity['commit'][:12]}-{identity['runId']}.service"
+    )
+    if (
+        set(str(systemd.get("StopPropagatedFrom") or "").split())
+        != {expected_supervisor}
+        or expected_supervisor
+        not in str(systemd.get("After") or "").split()
+        or str(systemd.get("BindsTo") or "").split()
+        or str(systemd.get("PartOf") or "").split()
+    ):
+        raise CanaryGuardError(
+            "candidate evidence lacks its exact stop-only supervisor contract",
+        )
     environment = str(systemd.get("Environment") or "")
     required_environment = (
         "APP_DATABASE_ENABLED=false",
@@ -621,6 +637,28 @@ def verify_candidate_evidence(
             "candidate evidence omitted disabled subsystem flags: "
             + ", ".join(missing),
         )
+    try:
+        environment_tokens = shlex.split(environment)
+    except ValueError as exc:
+        raise CanaryGuardError(
+            "candidate evidence Environment is malformed",
+        ) from exc
+    supervisor_generation = next(
+        (
+            token.partition("=")[2]
+            for token in environment_tokens
+            if token.startswith("CANARY_SUPERVISOR_INVOCATION_ID=")
+        ),
+        "",
+    )
+    if (
+        re.fullmatch(r"[0-9a-f]{32}", supervisor_generation) is None
+        or supervisor_generation == "0" * 32
+    ):
+        raise CanaryGuardError(
+            "candidate evidence lacks the original supervisor generation",
+        )
+    return supervisor_generation
 
 
 def record_checkpoint(
@@ -656,6 +694,209 @@ def record_checkpoint(
     _atomic_json(path, payload)
 
 
+def verify_checkpoint_marker(
+    checkpoint: dict[str, Any],
+    identity: dict[str, Any],
+    *,
+    phase: str,
+    status: str,
+) -> None:
+    if checkpoint.get("schemaVersion") != 1:
+        raise CanaryGuardError("canary checkpoint schema is invalid")
+    if checkpoint.get("identity") != identity:
+        raise CanaryGuardError("checkpoint marker identity differs from canary")
+    events = checkpoint.get("events")
+    if not isinstance(events, list):
+        raise CanaryGuardError("checkpoint marker events are malformed")
+    matches = [
+        event
+        for event in events
+        if isinstance(event, dict)
+        and event.get("phase") == phase
+        and event.get("status") == status
+        and isinstance(event.get("at"), str)
+        and isinstance(event.get("message"), str)
+        and bool(event["message"])
+    ]
+    if len(matches) != 1:
+        raise CanaryGuardError(
+            f"checkpoint requires exactly one durable {phase}/{status} marker",
+        )
+
+
+def ensure_checkpoint_marker(
+    *,
+    path: Path,
+    identity: dict[str, Any],
+    phase: str,
+    status: str,
+    message: str,
+) -> None:
+    checkpoint = _load_json(path)
+    if checkpoint.get("schemaVersion") != 1:
+        raise CanaryGuardError("canary checkpoint schema is invalid")
+    if checkpoint.get("identity") != identity:
+        raise CanaryGuardError("checkpoint marker identity differs from canary")
+    events = checkpoint.get("events")
+    if not isinstance(events, list):
+        raise CanaryGuardError("checkpoint marker events are malformed")
+    matches = [
+        event
+        for event in events
+        if isinstance(event, dict)
+        and event.get("phase") == phase
+        and event.get("status") == status
+    ]
+    if len(matches) > 1:
+        raise CanaryGuardError(
+            f"checkpoint has duplicate durable {phase}/{status} markers",
+        )
+    if len(matches) == 1:
+        verify_checkpoint_marker(
+            checkpoint,
+            identity,
+            phase=phase,
+            status=status,
+        )
+        return
+    record_checkpoint(
+        path=path,
+        identity=identity,
+        phase=phase,
+        status=status,
+        message=message,
+    )
+
+
+def verify_receipt_payload(
+    payload: dict[str, Any],
+    identity: dict[str, Any],
+) -> None:
+    if payload.get("schemaVersion") != 1:
+        raise CanaryGuardError("canary receipt schema is invalid")
+    if payload.get("identity") != identity:
+        raise CanaryGuardError("canary receipt identity differs from expected")
+    outcome = payload.get("outcome")
+    if outcome not in {"passed", "failed", "expected_failure_verified"}:
+        raise CanaryGuardError("canary receipt outcome is invalid")
+    if payload.get("terminalWriter") != "supervisor_reconcile":
+        raise CanaryGuardError(
+            "canary receipt was not written by supervisor reconciliation",
+        )
+    writer_invocation_id = payload.get("writerInvocationId")
+    if (
+        not isinstance(writer_invocation_id, str)
+        or re.fullmatch(r"[0-9a-f]{32}", writer_invocation_id) is None
+        or writer_invocation_id == "0" * 32
+    ):
+        raise CanaryGuardError(
+            "canary receipt lacks a valid supervisor writer generation",
+        )
+    checkpoint = payload.get("checkpoint")
+    if not isinstance(checkpoint, dict):
+        raise CanaryGuardError("canary receipt checkpoint is missing")
+    if checkpoint.get("identity") != identity:
+        raise CanaryGuardError("receipt checkpoint identity differs from canary")
+    verify_checkpoint_marker(
+        checkpoint,
+        identity,
+        phase="supervisor_reconciled",
+        status="completed",
+    )
+    if (
+        checkpoint.get("phase") != "supervisor_reconciled"
+        or checkpoint.get("status") != "completed"
+    ):
+        raise CanaryGuardError(
+            "terminal canary receipt lacks final supervisor reconciliation",
+        )
+    if outcome == "failed":
+        if not isinstance(payload.get("error"), str) or not payload["error"]:
+            raise CanaryGuardError("failed canary receipt lacks its failure reason")
+        return
+
+    before = payload.get("productionBefore")
+    after = payload.get("productionAfter")
+    candidate = payload.get("candidate")
+    if (
+        not isinstance(before, dict)
+        or not isinstance(after, dict)
+        or not isinstance(candidate, dict)
+    ):
+        raise CanaryGuardError(
+            "successful canary receipt requires complete embedded evidence",
+        )
+    verify_baseline(before)
+    verify_baseline(after)
+    compare_snapshots(before, after)
+    candidate_invocation_id = verify_candidate_evidence(candidate, identity)
+    if candidate_invocation_id != writer_invocation_id:
+        raise CanaryGuardError(
+            "candidate evidence and terminal receipt use different supervisor generations",
+        )
+    controller_terminal_phase = (
+        "expected_failure_verified"
+        if outcome == "expected_failure_verified"
+        else "cleanup_verified"
+    )
+    marker_phase = (
+        "fault_observed"
+        if outcome == "expected_failure_verified"
+        else "controller_completed"
+    )
+    verify_checkpoint_marker(
+        checkpoint,
+        identity,
+        phase=marker_phase,
+        status="completed",
+    )
+    verify_checkpoint_marker(
+        checkpoint,
+        identity,
+        phase=controller_terminal_phase,
+        status="completed",
+    )
+    events = checkpoint.get("events")
+    assert isinstance(events, list)
+    ordered_phases = (
+        marker_phase,
+        controller_terminal_phase,
+        "supervisor_reconciled",
+    )
+    marker_indexes = [
+        next(
+            index
+            for index, event in enumerate(events)
+            if isinstance(event, dict)
+            and event.get("phase") == phase
+            and event.get("status") == "completed"
+        )
+        for phase in ordered_phases
+    ]
+    if marker_indexes != sorted(marker_indexes) or len(set(marker_indexes)) != 3:
+        raise CanaryGuardError(
+            "durable controller, cleanup and supervisor markers are out of order",
+        )
+    fault = payload.get("faultInjection")
+    error = payload.get("error")
+    if outcome == "passed" and (fault is not None or error is not None):
+        raise CanaryGuardError(
+            "passed canary receipt cannot contain a fault or error",
+        )
+    if outcome == "expected_failure_verified" and (
+        fault != "after_candidate_start"
+        or not isinstance(error, str)
+        or "expected fault injection" not in error
+    ):
+        raise CanaryGuardError(
+            "expected-failure receipt lacks the reviewed fault evidence",
+        )
+
+
+def verify_receipt(path: Path, identity: dict[str, Any]) -> None:
+    verify_receipt_payload(_load_json(path), identity)
+
+
 def finalize_receipt(
     *,
     path: Path,
@@ -667,6 +908,8 @@ def finalize_receipt(
     after_path: Path,
     candidate_path: Path | None,
     checkpoint_path: Path,
+    terminal_writer: str,
+    writer_invocation_id: str,
 ) -> None:
     if path.exists() or path.is_symlink():
         raise CanaryGuardError(f"canary receipt already exists: {path}")
@@ -688,17 +931,29 @@ def finalize_receipt(
         verify_baseline(after)
         compare_snapshots(before, after)
         verify_candidate_evidence(candidate, identity)
-        expected_phase = (
+        controller_terminal_phase = (
             "expected_failure_verified"
             if outcome == "expected_failure_verified"
             else "cleanup_verified"
         )
+        verify_checkpoint_marker(
+            checkpoint,
+            identity,
+            phase=controller_terminal_phase,
+            status="completed",
+        )
+        verify_checkpoint_marker(
+            checkpoint,
+            identity,
+            phase="supervisor_reconciled",
+            status="completed",
+        )
         if (
-            checkpoint.get("phase") != expected_phase
+            checkpoint.get("phase") != "supervisor_reconciled"
             or checkpoint.get("status") != "completed"
         ):
             raise CanaryGuardError(
-                "successful canary receipt lacks its terminal checkpoint",
+                "successful canary receipt lacks supervisor reconciliation",
             )
         if outcome == "passed" and (fault or error):
             raise CanaryGuardError(
@@ -718,11 +973,14 @@ def finalize_receipt(
         "faultInjection": fault or None,
         "error": error or None,
         "finishedAt": dt.datetime.now(dt.UTC).isoformat(),
+        "terminalWriter": terminal_writer,
+        "writerInvocationId": writer_invocation_id,
         "productionBefore": before,
         "productionAfter": after,
         "candidate": candidate,
         "checkpoint": checkpoint,
     }
+    verify_receipt_payload(payload, identity)
     _atomic_json(path, payload)
 
 
@@ -784,6 +1042,23 @@ def _build_parser() -> argparse.ArgumentParser:
     record.add_argument("--status", required=True)
     record.add_argument("--message", required=True)
 
+    marker = commands.add_parser("verify-marker")
+    marker.add_argument("--checkpoint", type=Path, required=True)
+    _add_identity_arguments(marker)
+    marker.add_argument("--phase", required=True)
+    marker.add_argument("--status", required=True)
+
+    ensure_marker = commands.add_parser("ensure-marker")
+    ensure_marker.add_argument("--checkpoint", type=Path, required=True)
+    _add_identity_arguments(ensure_marker)
+    ensure_marker.add_argument("--phase", required=True)
+    ensure_marker.add_argument("--status", required=True)
+    ensure_marker.add_argument("--message", required=True)
+
+    receipt = commands.add_parser("verify-receipt")
+    receipt.add_argument("--path", type=Path, required=True)
+    _add_identity_arguments(receipt)
+
     finalize = commands.add_parser("finalize")
     finalize.add_argument("--path", type=Path, required=True)
     _add_identity_arguments(finalize)
@@ -798,6 +1073,12 @@ def _build_parser() -> argparse.ArgumentParser:
     finalize.add_argument("--after", type=Path, required=True)
     finalize.add_argument("--candidate", type=Path)
     finalize.add_argument("--checkpoint", type=Path, required=True)
+    finalize.add_argument(
+        "--terminal-writer",
+        choices=("supervisor_reconcile",),
+        required=True,
+    )
+    finalize.add_argument("--writer-invocation-id", required=True)
     return parser
 
 
@@ -828,6 +1109,24 @@ def main() -> int:
                 status=arguments.status,
                 message=arguments.message,
             )
+        elif arguments.command == "verify-marker":
+            identity = _identity(arguments)
+            verify_checkpoint_marker(
+                _load_json(arguments.checkpoint),
+                identity,
+                phase=arguments.phase,
+                status=arguments.status,
+            )
+        elif arguments.command == "verify-receipt":
+            verify_receipt(arguments.path, _identity(arguments))
+        elif arguments.command == "ensure-marker":
+            ensure_checkpoint_marker(
+                path=arguments.checkpoint,
+                identity=_identity(arguments),
+                phase=arguments.phase,
+                status=arguments.status,
+                message=arguments.message,
+            )
         else:
             finalize_receipt(
                 path=arguments.path,
@@ -839,6 +1138,8 @@ def main() -> int:
                 after_path=arguments.after,
                 candidate_path=arguments.candidate,
                 checkpoint_path=arguments.checkpoint,
+                terminal_writer=arguments.terminal_writer,
+                writer_invocation_id=arguments.writer_invocation_id,
             )
     except CanaryGuardError as exc:
         print(

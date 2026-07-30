@@ -5,6 +5,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from pathlib import Path
+import re
 from typing import Any
 
 import yaml
@@ -574,7 +575,23 @@ def assert_feature_canary_cannot_route_or_mutate_production() -> None:
         raise AssertionError("Tencent feature canary controller/guard is missing")
     controller = controller_path.read_text(encoding="utf-8")
     guard = guard_path.read_text(encoding="utf-8")
+
+    def shell_function(name: str) -> str:
+        marker = f"{name}() {{"
+        if marker not in controller:
+            raise AssertionError(
+                f"feature canary function {name!r} is missing",
+            )
+        body = controller.split(marker, 1)[1]
+        terminator = body.find("\n}\n")
+        if terminator < 0:
+            raise AssertionError(
+                f"feature canary function {name!r} is malformed",
+            )
+        return body[:terminator]
+
     required = (
+        'CANARY_MODE="${1:-launch}"',
         'CANARY_ROOT="${CANARY_ROOT:-/opt/jato-canary}"',
         'CANARY_STATE_ROOT="${CANARY_STATE_ROOT:-/var/lib/jato-canary}"',
         'CANARY_PORT="${CANARY_PORT:-18001}"',
@@ -585,11 +602,18 @@ def assert_feature_canary_cannot_route_or_mutate_production() -> None:
         "canary requires the canonical production deploy state directory",
         'RUN_KEY="${CANARY_COMMIT_SHA:0:12}-${CANARY_RUN_ID}"',
         'RUNTIME_ROOT="$CANARY_ROOT/runtime/$RUN_KEY"',
+        'SUPERVISOR_UNIT="jato-feature-canary-supervisor-$RUN_KEY.service"',
+        'CONTROLLER_UNIT="jato-feature-canary-controller-$RUN_KEY.service"',
         'SERVICE_UNIT="jato-feature-canary-$RUN_KEY.service"',
         "canary run id already has durable state and cannot be reused",
-        "--wait",
-        "--pipe",
         '--service-type=exec',
+        '--property="Restart=on-failure"',
+        '--property="StartLimitIntervalSec=0"',
+        '--property="MemoryHigh=$CANARY_SUPERVISOR_MEMORY_HIGH"',
+        '--property="MemoryMax=$CANARY_SUPERVISOR_MEMORY_MAX"',
+        '--property="MemoryHigh=$CANARY_CONTROLLER_MEMORY_HIGH"',
+        '--property="MemoryMax=$CANARY_CONTROLLER_MEMORY_MAX"',
+        '--property="SendSIGKILL=yes"',
         '--property="DynamicUser=yes"',
         '--property="ProtectSystem=strict"',
         '--property="ProtectHome=yes"',
@@ -604,8 +628,29 @@ def assert_feature_canary_cannot_route_or_mutate_production() -> None:
         '--setenv="APP_ADVANCED_ANALYSIS_WARMUP_ENABLED=false"',
         'sudo -n systemctl stop "$unit"',
         "refusing to stop a unit without exact canary identity",
+        "InvocationID",
         "len(worker_pids) != 2",
-        "Feature canary receipt retained",
+        "only supervisor reconciliation may write a terminal canary receipt",
+        "--terminal-writer supervisor_reconcile",
+        "--writer-invocation-id",
+        "ensure_checkpoint_marker",
+        "controller_completed",
+        "controller_unit_started",
+        "fault_observed",
+        "supervisor_started",
+        "verify_existing_receipt",
+        "run_canary_supervisor",
+        "run_canary_controller_unit",
+        "quiesce_canary_controller_unit",
+        "assert_controller_scope",
+        "assert_supervisor_generation",
+        "assert_reconcile_supervisor_generation",
+        "capture_supervisor_invocation_id",
+        "assert_supervisor_production_lock",
+        "StopPropagatedFrom",
+        "verify_retained_control_bundle",
+        "verify_canary_parent_roots",
+        "reconcile_canary_controller",
     )
     missing = [token for token in required if token not in controller]
     if missing:
@@ -633,20 +678,304 @@ def assert_feature_canary_cannot_route_or_mutate_production() -> None:
         raise AssertionError(
             "feature canary build must use a filesystem-sandboxed service, not a scope",
         )
-    run_body = controller.split("run_canary() {", 1)[1]
-    if run_body.index("jato_acquire_production_mutation_lock") > run_body.index(
-        'capture_snapshot "$BEFORE_SNAPSHOT"',
-    ) or run_body.index('capture_snapshot "$BEFORE_SNAPSHOT"') > run_body.index(
+
+    launcher_body = shell_function("start_canary_supervisor")
+    for forbidden_launcher_token in ("--wait", "--pipe", "--scope"):
+        if forbidden_launcher_token in launcher_body:
+            raise AssertionError(
+                "durable feature canary launcher must return after systemd "
+                f"acceptance; found {forbidden_launcher_token}",
+            )
+    if '"$bash_bin" "$CONTROL_SCRIPT" supervisor' not in launcher_body:
+        raise AssertionError(
+            "durable feature canary launcher does not start the exact supervisor",
+        )
+    launch_body = shell_function("launch_canary")
+    if launch_body.count("start_canary_supervisor") != 1:
+        raise AssertionError(
+            "feature canary launch path must invoke the detached supervisor exactly once",
+        )
+    for forbidden_launch_token in (
+        "--wait",
+        "--pipe",
+        "acquire_canary_production_lock",
+        "run_canary_controller",
         "run_build_scope",
+        "start_candidate_service",
+    ):
+        if forbidden_launch_token in launch_body:
+            raise AssertionError(
+                "feature canary launch path became synchronous or entered business work: "
+                f"{forbidden_launch_token}",
+            )
+    main_body = shell_function("main")
+    for dispatch_token in (
+        "launch)\n      launch_canary",
+        "supervisor)",
+        "run_canary_supervisor",
+        "controller)",
+        "run_canary_controller",
+        "runtime)",
+        'run_candidate_runtime "$@"',
+        "reconcile)",
+        "reconcile_canary_controller",
+    ):
+        if dispatch_token not in main_body:
+            raise AssertionError(
+                "feature canary main dispatch lost its durable mode routing: "
+                f"{dispatch_token}",
+            )
+
+    build_body = shell_function("run_build_scope")
+    if "--wait" not in build_body or "--pipe" not in build_body:
+        raise AssertionError(
+            "isolated build unit must remain synchronously supervised by the controller",
+        )
+    runtime_body = shell_function("start_candidate_service")
+    for child_body, child_name in (
+        (build_body, "build"),
+        (runtime_body, "runtime"),
+    ):
+        if '--property="Restart=no"' not in child_body:
+            raise AssertionError(
+                f"feature canary {child_name} must explicitly disable restart",
+            )
+        for relationship in ("StopPropagatedFrom", "After"):
+            token = f'--property="{relationship}=$SUPERVISOR_UNIT"'
+            if token not in child_body:
+                raise AssertionError(
+                    f"feature canary {child_name} omitted {relationship} "
+                    "stop-only supervisor contract",
+                )
+        for forbidden_relationship in ("BindsTo", "PartOf"):
+            token = f'--property="{forbidden_relationship}=$SUPERVISOR_UNIT"'
+            if token in child_body:
+                raise AssertionError(
+                    f"feature canary {child_name} gained restart-propagating "
+                    f"{forbidden_relationship}",
+                )
+    for child_body, expected_mode, forbidden_mode in (
+        (build_body, "build", "runtime"),
+        (runtime_body, "runtime", "build"),
+    ):
+        expected_token = f'--setenv="CANARY_MODE={expected_mode}"'
+        forbidden_token = f'--setenv="CANARY_MODE={forbidden_mode}"'
+        if child_body.count(expected_token) != 1 or forbidden_token in child_body:
+            raise AssertionError(
+                "feature canary child unit has ambiguous execution mode: "
+                f"{expected_mode}",
+            )
+
+    controller_unit_body = shell_function("run_canary_controller_unit")
+    for token in (
+        "--wait",
+        "--pipe",
+        "--collect",
+        '--property="RuntimeMaxSec=${controller_timeout}s"',
+        '--property="TimeoutStopSec=${CANARY_CONTROLLER_RECOVERY_TIMEOUT_SECONDS}s"',
+        '--property="KillMode=control-group"',
+        '--property="SendSIGKILL=yes"',
+        '--property="Restart=no"',
+        '"$bash_bin" "$CONTROL_SCRIPT" controller',
+    ):
+        if token not in controller_unit_body:
+            raise AssertionError(
+                "durable controller unit lost its bounded systemd contract: "
+                f"{token}",
+            )
+    for relationship in ("StopPropagatedFrom", "After"):
+        token = f'--property="{relationship}=$SUPERVISOR_UNIT"'
+        if token not in controller_unit_body:
+            raise AssertionError(
+                "durable controller unit omitted exact stop-only supervisor contract: "
+                f"{relationship}",
+            )
+    for forbidden_relationship in ("BindsTo", "PartOf"):
+        token = f'--property="{forbidden_relationship}=$SUPERVISOR_UNIT"'
+        if token in controller_unit_body:
+            raise AssertionError(
+                "durable controller unit gained restart-propagating dependency: "
+                f"{forbidden_relationship}",
+            )
+
+    supervisor_body = shell_function("run_canary_supervisor")
+    supervisor_order = (
+        "acquire_canary_production_lock",
+        "capture_supervisor_invocation_id",
+        "record_checkpoint controller_unit_started in_progress",
+        "run_canary_controller_unit",
+        "quiesce_canary_controller_unit",
+        'bash "$CONTROL_SCRIPT" reconcile',
+    )
+    supervisor_positions = [
+        supervisor_body.index(token) for token in supervisor_order
+    ]
+    if supervisor_positions != sorted(supervisor_positions):
+        raise AssertionError(
+            "durable supervisor no longer holds the lock across controller and reconcile",
+        )
+    for token in (
+        "business canary will not be rerun",
+        "refusing concurrent reconciliation",
+    ):
+        if token not in supervisor_body:
+            raise AssertionError(
+                f"durable supervisor lost its recovery-only/quiescence contract: {token}",
+            )
+
+    run_body = shell_function("run_canary_controller")
+    controller_order = (
+        "assert_supervisor_generation",
+        "assert_supervisor_scope",
+        "assert_controller_scope",
+        "assert_supervisor_production_lock",
+        'capture_snapshot "$BEFORE_SNAPSHOT"',
+        "run_build_scope",
+    )
+    controller_positions = [run_body.index(token) for token in controller_order]
+    if (
+        controller_positions != sorted(controller_positions)
+        or "acquire_canary_production_lock" in run_body
     ):
         raise AssertionError(
-            "feature canary must lock and snapshot production before its build",
+            "isolated controller must prove the supervisor lock and snapshot "
+            "production before its build",
         )
+    candidate_runtime_body = shell_function("run_candidate_runtime")
+    runtime_order = (
+        "assert_supervisor_generation",
+        "verify_canary_parent_roots",
+        "validate_feature_identity",
+        'exec "${expected_argv[@]}"',
+    )
+    runtime_positions = [
+        candidate_runtime_body.index(token) for token in runtime_order
+    ]
+    if runtime_positions != sorted(runtime_positions):
+        raise AssertionError(
+            "candidate runtime must prove its original supervisor generation "
+            "and immutable parent chain before executing Uvicorn",
+        )
+    if "assert_supervisor_generation" not in main_body.split(
+        "build)", 1
+    )[1].split(";;", 1)[0]:
+        raise AssertionError(
+            "candidate build must prove its original supervisor generation "
+            "before archive extraction or dependency installation",
+        )
+
+    cleanup_body = shell_function("cleanup_candidate")
+    if (
+        "CANARY_SERVICE_START_ATTEMPTED" in cleanup_body
+        or "CANARY_BUILD_START_ATTEMPTED" in cleanup_body
+        or "verify_retained_control_bundle" in cleanup_body
+    ):
+        raise AssertionError(
+            "durable cleanup must discover exact child units and retain its "
+            "control bundle until after the receipt",
+        )
+    stop_positions = [
+        match.start()
+        for match in re.finditer(
+            r"stop_verified_transient_unit",
+            cleanup_body,
+        )
+    ]
+    first_remove = cleanup_body.find("sudo -n rm")
+    if (
+        len(stop_positions) != 2
+        or first_remove < 0
+        or any(position > first_remove for position in stop_positions)
+    ):
+        raise AssertionError(
+            "candidate cleanup must stop both exact child units before deleting runtime/source",
+        )
+    stop_body = shell_function("stop_verified_transient_unit")
+    for token in (
+        "-p InvocationID",
+        "-p StopPropagatedFrom",
+        "LoadState=not-found",
+        "transient canary unit identity changed while waiting for collect",
+        "transient canary unit was not collected",
+    ):
+        if token not in stop_body:
+            raise AssertionError(
+                "transient child cleanup lost its GC/name-reuse identity guard: "
+                f"{token}",
+            )
+    if "ExecMainStartTimestampMonotonic" in stop_body:
+        raise AssertionError(
+            "transient child cleanup must use systemd InvocationID, not a "
+            "potentially colliding start timestamp, for name-reuse detection",
+        )
+    reconcile_body = shell_function("reconcile_canary_controller")
+    ordered_reconcile_tokens = (
+        "assert_reconcile_supervisor_generation",
+        "acquire_canary_production_lock",
+        "cleanup_candidate",
+        "wait_for_candidate_port_release",
+        'capture_snapshot "$AFTER_SNAPSHOT"',
+        "verify_retained_control_bundle",
+        "ensure_checkpoint_marker supervisor_reconciled completed",
+        "write_terminal_receipt",
+        "verify_existing_receipt",
+    )
+    positions = [
+        reconcile_body.rindex(token)
+        for token in ordered_reconcile_tokens
+    ]
+    if positions != sorted(positions):
+        raise AssertionError(
+            "durable canary recovery no longer locks, cleans, proves production, "
+            "verifies retained immutable control, then writes and verifies its "
+            "terminal receipt in that order",
+        )
+    finalizer_body = shell_function("finalize_canary")
+    terminal_writer_body = shell_function("write_terminal_receipt")
+    if (
+        '"$CANARY_GUARD" finalize' in finalizer_body
+        or "write_terminal_receipt" in finalizer_body
+        or controller.count('"$CANARY_GUARD" finalize') != 1
+        or '"$CANARY_GUARD" finalize' not in terminal_writer_body
+        or '[[ "$CANARY_MODE" != "reconcile" ]]' not in terminal_writer_body
+        or "--terminal-writer supervisor_reconcile" not in terminal_writer_body
+        or "--writer-invocation-id" not in terminal_writer_body
+    ):
+        raise AssertionError(
+            "terminal canary receipts must be written exactly once and only by "
+            "supervisor reconciliation",
+        )
+    retained_control_body = shell_function("verify_retained_control_bundle")
+    if (
+        "sudo -n rm" in retained_control_body
+        or "rm -rf" in retained_control_body
+        or "verify_canary_parent_roots" not in retained_control_body
+    ):
+        raise AssertionError(
+            "restartable supervisor must retain its control bundle and verify "
+            "the immutable parent chain",
+        )
+    ensure_roots_body = shell_function("ensure_canary_roots")
+    if (
+        'install -d -m 0755 -o root -g root "$path"' not in ensure_roots_body
+        or "verify_canary_parent_roots" not in ensure_roots_body
+    ):
+        raise AssertionError(
+            "canary executable/source parent roots must be root-owned and "
+            "verified before detached launch",
+        )
+
     for forbidden_override in (
         'RUNTIME_ROOT="${RUNTIME_ROOT:-',
         'CHECKPOINT_FILE="${CHECKPOINT_FILE:-',
         'RECEIPT_FILE="${RECEIPT_FILE:-',
+        'SUPERVISOR_UNIT="${SUPERVISOR_UNIT:-',
+        'CONTROLLER_UNIT="${CONTROLLER_UNIT:-',
+        'BUILD_UNIT="${BUILD_UNIT:-',
         'SERVICE_UNIT="${SERVICE_UNIT:-',
+        'CONTROL_ROOT="${CONTROL_ROOT:-',
+        'CONTROL_SCRIPT="${CONTROL_SCRIPT:-',
+        'STAGED_SOURCE_ARCHIVE="${STAGED_SOURCE_ARCHIVE:-',
     ):
         if forbidden_override in controller:
             raise AssertionError(
@@ -663,6 +992,14 @@ def assert_feature_canary_cannot_route_or_mutate_production() -> None:
         "candidatePortFree",
         "candidatePortReferenced",
         "compare_snapshots",
+        "verify_checkpoint_marker",
+        "verify_receipt_payload",
+        "verify-marker",
+        "ensure-marker",
+        "verify-receipt",
+        "terminalWriter",
+        "writerInvocationId",
+        "different supervisor generations",
     ):
         if required_guard_token not in guard:
             raise AssertionError(
