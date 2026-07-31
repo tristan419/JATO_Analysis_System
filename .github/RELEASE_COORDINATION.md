@@ -92,6 +92,60 @@ current main base. If branch protection was bypassed and an anchor entered
 early, production remains blocked while the group is partial; merging all
 declared members allows recovery without a permanent historical deadlock.
 
+## Parallel development example: BOM Admin and AstrBot
+
+BOM Admin and AstrBot may be developed at the same time, but they must not
+share a checkout, branch, or PR. Start both from the same current remote
+`main`, using one session, worktree, `codex/*` branch, and PR per business
+line:
+
+| Work | Session and worktree | Branch | Example PR |
+| --- | --- | --- | --- |
+| BOM Admin | BOM session in `JATO_Analysis_System_bom_admin` | `codex/bom-colour-rule-library` | `#201` |
+| AstrBot | AstrBot session in `JATO_Analysis_System_astrbot` | `codex/astrbot-countrycopilot` | `#202` |
+
+Each PR owns only its business-line changes and tests. Neither feature branch
+is a production source.
+
+If the features can be released independently:
+
+1. validate, merge, and release `#201` from `main`;
+2. synchronize `#202` with the latest `main` that contains `#201`;
+3. verify that the resulting diff and regression tests preserve BOM Admin as
+   well as AstrBot;
+4. rerun all required CI and canary checks for the new `#202` head SHA;
+5. merge `#202`, then release the resulting `main`.
+
+If the features must reach production together, create a release-group issue
+whose members are `#201` and `#202`, and choose `#202` as the anchor. Add the
+identical immutable contract and maintainer-controlled `release-group` label
+to both PRs. Merge `#201` first; the partial group deliberately holds
+production. Synchronize the anchor with that new `main`, verify that its final
+tree contains both features, rerun CI and a combined BOM Admin plus AstrBot
+canary for that exact head SHA, and merge the anchor last. Only then may the
+resulting `main` trigger the coordinated production release.
+
+Shared files such as `App.tsx`, `api/client.ts`, or `main.py` require an
+explicit owner before either session edits the overlapping file or hunk. The
+non-owner should keep its integration minimal, wait for the owner PR to merge,
+then synchronize the latest `main`, resolve any remaining integration change,
+and retest both features. Do not copy an older complete shared file into the
+second PR.
+
+Every change to a proposed final SHA—including synchronization, conflict
+resolution, amended commits, or a new merge commit—invalidates earlier CI and
+canary evidence. Required checks and canaries must run again against the exact
+new SHA; evidence from a predecessor SHA is not transferable.
+
+Production remains `main`-only. The production release must build or retrieve
+one SHA-bound immutable artifact and deploy that same verified artifact to
+both `www` and `intl`; a feature, hotfix, or integration branch must never
+overwrite production directly.
+
+In short: parallel development is independent, while production convergence
+is explicit and SHA-bound.（并行开发各走各的 PR，生产发布只认最终合并后的同一个
+`main` SHA。）
+
 ## PR status behavior
 
 `release-coordination` runs only trusted code checked out from

@@ -10,6 +10,8 @@ import shutil
 import signal
 import socket
 import subprocess
+import sys
+import tempfile
 import textwrap
 import time
 from types import ModuleType
@@ -27,6 +29,8 @@ GUARD_PATH = (
 ACTIVE_UNIT = "jato-fullstack-backend@8000.service"
 ACTIVE_HIGH = str(6 * 1024 * 1024 * 1024)
 ACTIVE_MAX = str(8 * 1024 * 1024 * 1024)
+EVIDENCE_DEPLOY_UID = 1000
+EVIDENCE_DEPLOY_GID = 1001
 
 
 def _shell_function(script: str, name: str) -> str:
@@ -223,7 +227,11 @@ def _candidate_evidence() -> dict[str, object]:
     }
     roots = {
         "reference": {"mode": "0700", "uid": 0, "gid": 0},
-        "candidate": {"mode": "0711", "uid": 1000, "gid": 1000},
+        "candidate": {
+            "mode": "0711",
+            "uid": EVIDENCE_DEPLOY_UID,
+            "gid": EVIDENCE_DEPLOY_GID,
+        },
     }
 
     def materialized(
@@ -301,13 +309,13 @@ def _candidate_evidence() -> dict[str, object]:
                 "candidate": {
                     "files": materialized(
                         private_files,
-                        uid=1000,
-                        gid=1000,
+                        uid=EVIDENCE_DEPLOY_UID,
+                        gid=EVIDENCE_DEPLOY_GID,
                     ),
                     "directories": materialized(
                         private_directories,
-                        uid=1000,
-                        gid=1000,
+                        uid=EVIDENCE_DEPLOY_UID,
+                        gid=EVIDENCE_DEPLOY_GID,
                     ),
                 },
             },
@@ -360,6 +368,8 @@ def _candidate_evidence() -> dict[str, object]:
                     "APP_METADATA_PREWARM_ENABLED=false",
                     "APP_ADVANCED_ANALYSIS_WARMUP_ENABLED=false",
                     "HERMES_RUN_ENABLED=false",
+                    f"CANARY_DEPLOY_UID={EVIDENCE_DEPLOY_UID}",
+                    f"CANARY_DEPLOY_GID={EVIDENCE_DEPLOY_GID}",
                     "CANARY_SUPERVISOR_INVOCATION_ID="
                     "cccccccccccccccccccccccccccccccc",
                 ),
@@ -692,9 +702,15 @@ def test_launch_pins_the_canonical_lock_identity_before_supervisor_start(
             set -Eeuo pipefail
             unset JATO_PRODUCTION_DEPLOY_LOCK_PATH
             unset CANARY_INITIAL_LOCK_PATH
-            source "$1"
+            source "$1" launch
             calls="$2"
             DEPLOY_STATE_DIR="$HOME/.local/state/jato-production-release"
+            id() {
+              case "$1" in
+                -u|-g) printf '1000\n' ;;
+                *) return 2 ;;
+              esac
+            }
             validate_static_contract() { :; }
             initialize_paths() { :; }
             ensure_canary_roots() { :; }
@@ -724,6 +740,517 @@ def test_launch_pins_the_canonical_lock_identity_before_supervisor_start(
 
 
 @pytest.mark.parametrize(
+    ("scenario", "expected_ok"),
+    (
+        ("empty", True),
+        ("matching", True),
+        ("uid-conflict", False),
+        ("gid-conflict", False),
+        ("root", False),
+    ),
+)
+def test_launch_pins_only_the_actual_non_root_deploy_identity(
+    tmp_path: Path,
+    scenario: str,
+    expected_ok: bool,
+) -> None:
+    harness = tmp_path / "deploy-identity-pin-harness.sh"
+    harness.write_text(
+        textwrap.dedent(
+            """\
+            #!/usr/bin/env bash
+            set -Eeuo pipefail
+            scenario="$2"
+            stub_uid="1000"
+            stub_gid="1000"
+            case "$scenario" in
+              matching)
+                CANARY_DEPLOY_UID="1000"
+                CANARY_DEPLOY_GID="1000"
+                ;;
+              uid-conflict)
+                CANARY_DEPLOY_UID="1001"
+                CANARY_DEPLOY_GID="1000"
+                ;;
+              gid-conflict)
+                CANARY_DEPLOY_UID="1000"
+                CANARY_DEPLOY_GID="1001"
+                ;;
+              root)
+                stub_uid="0"
+                stub_gid="0"
+                ;;
+            esac
+            source "$1" launch
+            id() {
+              case "$1" in
+                -u) printf '%s\n' "$stub_uid" ;;
+                -g) printf '%s\n' "$stub_gid" ;;
+                *) return 2 ;;
+              esac
+            }
+            pin_canary_deploy_identity
+            printf '%s:%s\n' "$CANARY_DEPLOY_UID" "$CANARY_DEPLOY_GID"
+            """
+        ),
+        encoding="utf-8",
+    )
+    result = subprocess.run(
+        ["bash", str(harness), str(CONTROLLER), scenario],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert (result.returncode == 0) is expected_ok, result.stderr
+    if expected_ok:
+        assert result.stdout.strip() == "1000:1000"
+
+
+@pytest.mark.parametrize(
+    ("mode", "scenario", "expected_ok"),
+    (
+        ("launch", "exact", True),
+        ("supervisor", "exact", True),
+        ("controller", "exact", True),
+        ("build", "exact", True),
+        ("reconcile", "exact", True),
+        ("controller", "uid-drift", False),
+        ("build", "gid-drift", False),
+        ("reconcile", "root", False),
+    ),
+)
+def test_control_modes_reject_identity_drift(
+    tmp_path: Path,
+    mode: str,
+    scenario: str,
+    expected_ok: bool,
+) -> None:
+    harness = tmp_path / "control-identity-harness.sh"
+    harness.write_text(
+        textwrap.dedent(
+            """\
+            #!/usr/bin/env bash
+            set -Eeuo pipefail
+            mode="$2"
+            scenario="$3"
+            source "$1" "$mode"
+            CANARY_DEPLOY_UID="1000"
+            CANARY_DEPLOY_GID="1000"
+            stub_uid="1000"
+            stub_gid="1000"
+            case "$scenario" in
+              uid-drift) stub_uid="1001" ;;
+              gid-drift) stub_gid="1001" ;;
+              root)
+                stub_uid="0"
+                stub_gid="0"
+                ;;
+            esac
+            id() {
+              case "$1" in
+                -u) printf '%s\n' "$stub_uid" ;;
+                -g) printf '%s\n' "$stub_gid" ;;
+                *) return 2 ;;
+              esac
+            }
+            validate_canary_deploy_identity
+            """
+        ),
+        encoding="utf-8",
+    )
+    result = subprocess.run(
+        ["bash", str(harness), str(CONTROLLER), mode, scenario],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert (result.returncode == 0) is expected_ok, result.stderr
+
+
+@pytest.mark.parametrize(
+    ("scenario", "expected_ok"),
+    (
+        ("distinct", True),
+        ("equal-uid", False),
+        ("equal-gid", False),
+        ("missing-uid", False),
+        ("missing-gid", False),
+        ("malformed-uid", False),
+        ("malformed-gid", False),
+        ("root", False),
+    ),
+)
+def test_dynamic_runtime_identity_must_be_distinct_and_well_formed(
+    tmp_path: Path,
+    scenario: str,
+    expected_ok: bool,
+) -> None:
+    harness = tmp_path / "runtime-identity-harness.sh"
+    harness.write_text(
+        textwrap.dedent(
+            """\
+            #!/usr/bin/env bash
+            set -Eeuo pipefail
+            scenario="$2"
+            source "$1" runtime
+            CANARY_DEPLOY_UID="1000"
+            CANARY_DEPLOY_GID="1000"
+            stub_uid="2000"
+            stub_gid="3000"
+            case "$scenario" in
+              equal-uid) stub_uid="1000" ;;
+              equal-gid) stub_gid="1000" ;;
+              missing-uid) CANARY_DEPLOY_UID="" ;;
+              missing-gid) CANARY_DEPLOY_GID="" ;;
+              malformed-uid) CANARY_DEPLOY_UID="uid-1000" ;;
+              malformed-gid) CANARY_DEPLOY_GID="gid-1000" ;;
+              root)
+                stub_uid="0"
+                stub_gid="0"
+                ;;
+            esac
+            id() {
+              case "$1" in
+                -u) printf '%s\n' "$stub_uid" ;;
+                -g) printf '%s\n' "$stub_gid" ;;
+                *) return 2 ;;
+              esac
+            }
+            validate_canary_deploy_identity
+            """
+        ),
+        encoding="utf-8",
+    )
+    result = subprocess.run(
+        ["bash", str(harness), str(CONTROLLER), scenario],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert (result.returncode == 0) is expected_ok, result.stderr
+
+
+@pytest.mark.parametrize(
+    ("wrong_pinned_gid", "expected_ok"),
+    ((False, True), (True, False)),
+)
+def test_canary_source_parent_uses_the_pinned_deploy_gid(
+    tmp_path: Path,
+    wrong_pinned_gid: bool,
+    expected_ok: bool,
+) -> None:
+    current_uid = os.getuid()
+    current_gid = os.getgid()
+    patched = tmp_path / "candidate-canary.sh"
+    source = CONTROLLER.read_text(encoding="utf-8")
+    replacements = {
+        "Path(sys.argv[1]): (0, 0, 0o755),": (
+            f"Path(sys.argv[1]): ({current_uid}, {current_gid}, 0o755),"
+        ),
+        "Path(sys.argv[2]): (0, 0, 0o755),": (
+            f"Path(sys.argv[2]): ({current_uid}, {current_gid}, 0o755),"
+        ),
+        "Path(sys.argv[3]): (0, 0, 0o755),": (
+            f"Path(sys.argv[3]): ({current_uid}, {current_gid}, 0o755),"
+        ),
+        "Path(sys.argv[4]): (0, deploy_gid, 0o750),": (
+            f"Path(sys.argv[4]): ({current_uid}, deploy_gid, 0o750),"
+        ),
+    }
+    for original, replacement in replacements.items():
+        assert source.count(original) == 1
+        source = source.replace(original, replacement)
+    patched.write_text(source, encoding="utf-8")
+
+    root = tmp_path / "canary"
+    for path, mode in (
+        (root, 0o755),
+        (root / "runtime", 0o755),
+        (root / "control", 0o755),
+        (root / "sources", 0o750),
+    ):
+        path.mkdir(exist_ok=True)
+        path.chmod(mode)
+    deploy_gid = current_gid + 1 if wrong_pinned_gid else current_gid
+    harness = tmp_path / "parent-owner-harness.sh"
+    harness.write_text(
+        textwrap.dedent(
+            """\
+            #!/usr/bin/env bash
+            set -Eeuo pipefail
+            source "$1" supervisor
+            CANARY_ROOT="$2"
+            CANARY_DEPLOY_GID="$3"
+            verify_canary_parent_roots
+            """
+        ),
+        encoding="utf-8",
+    )
+    result = subprocess.run(
+        [
+            "bash",
+            str(harness),
+            str(patched),
+            str(root),
+            str(deploy_gid),
+        ],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert (result.returncode == 0) is expected_ok, result.stderr
+
+
+def test_dynamic_runtime_can_lstat_root_owned_canary_parents() -> None:
+    if not sys.platform.startswith("linux"):
+        pytest.skip("requires Linux setpriv permission semantics")
+
+    sudo = shutil.which("sudo")
+    setpriv = shutil.which("setpriv")
+    if sudo is None or setpriv is None:
+        pytest.skip("requires sudo and setpriv")
+
+    sudo_probe = subprocess.run(
+        [sudo, "-n", "true"],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if sudo_probe.returncode != 0:
+        pytest.skip("requires non-interactive sudo")
+
+    deploy_gid = 61001
+    runtime_uid = 61002
+    runtime_gid = 61003
+    identity_probe = subprocess.run(
+        [
+            sudo,
+            "-n",
+            setpriv,
+            f"--reuid={runtime_uid}",
+            f"--regid={runtime_gid}",
+            "--clear-groups",
+            "id",
+            "-u",
+        ],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if (
+        identity_probe.returncode != 0
+        or identity_probe.stdout.strip() != str(runtime_uid)
+    ):
+        pytest.skip("setpriv cannot create the isolated runtime identity")
+
+    permission_root = Path(
+        tempfile.mkdtemp(prefix="jato-canary-parent-permissions-", dir="/tmp")
+    )
+    assert permission_root.parent == Path("/tmp")
+    assert permission_root.name.startswith(
+        "jato-canary-parent-permissions-"
+    )
+    canary_root = permission_root / "canary"
+    controller_copy = permission_root / "candidate-canary.sh"
+    harness = permission_root / "verify-parents.sh"
+    shutil.copyfile(CONTROLLER, controller_copy)
+    harness.write_text(
+        textwrap.dedent(
+            """\
+            #!/usr/bin/env bash
+            set -Eeuo pipefail
+            source "$1" runtime
+            CANARY_ROOT="$2"
+            CANARY_DEPLOY_GID="$3"
+            verify_canary_parent_roots
+            python3 -B - "$CANARY_ROOT/sources" <<'PY'
+            import os
+            import stat
+            import sys
+
+            metadata = os.lstat(sys.argv[1])
+            print(
+                "lstat-ok:"
+                f"{os.getuid()}:{os.getgid()}:"
+                f"{metadata.st_uid}:{metadata.st_gid}:"
+                f"{stat.S_IMODE(metadata.st_mode):04o}"
+            )
+            PY
+            """
+        ),
+        encoding="utf-8",
+    )
+
+    try:
+        for path in (
+            canary_root,
+            canary_root / "runtime",
+            canary_root / "control",
+            canary_root / "sources",
+        ):
+            path.mkdir(exist_ok=True)
+
+        setup = subprocess.run(
+            [
+                sudo,
+                "-n",
+                "chown",
+                "0:0",
+                str(permission_root),
+                str(controller_copy),
+                str(harness),
+                str(canary_root),
+                str(canary_root / "runtime"),
+                str(canary_root / "control"),
+            ],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        assert setup.returncode == 0, setup.stderr
+        setup = subprocess.run(
+            [
+                sudo,
+                "-n",
+                "chown",
+                f"0:{deploy_gid}",
+                str(canary_root / "sources"),
+            ],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        assert setup.returncode == 0, setup.stderr
+        setup = subprocess.run(
+            [
+                sudo,
+                "-n",
+                "chmod",
+                "0755",
+                str(permission_root),
+                str(controller_copy),
+                str(harness),
+                str(canary_root),
+                str(canary_root / "runtime"),
+                str(canary_root / "control"),
+            ],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        assert setup.returncode == 0, setup.stderr
+        setup = subprocess.run(
+            [
+                sudo,
+                "-n",
+                "chmod",
+                "0750",
+                str(canary_root / "sources"),
+            ],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        assert setup.returncode == 0, setup.stderr
+
+        result = subprocess.run(
+            [
+                sudo,
+                "-n",
+                setpriv,
+                f"--reuid={runtime_uid}",
+                f"--regid={runtime_gid}",
+                "--clear-groups",
+                "bash",
+                str(harness),
+                str(controller_copy),
+                str(canary_root),
+                str(deploy_gid),
+            ],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        assert result.returncode == 0, result.stderr
+        assert result.stdout.strip() == (
+            f"lstat-ok:{runtime_uid}:{runtime_gid}:0:{deploy_gid}:0750"
+        )
+    finally:
+        cleanup = subprocess.run(
+            [
+                sudo,
+                "-n",
+                "rm",
+                "-rf",
+                "--one-file-system",
+                "--",
+                str(permission_root),
+            ],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        assert cleanup.returncode == 0, cleanup.stderr
+        assert not permission_root.exists()
+
+
+def test_each_transient_scope_propagates_pinned_identity_exactly_once() -> None:
+    script = CONTROLLER.read_text(encoding="utf-8")
+    control_environment = _shell_function(
+        script,
+        "build_canary_control_environment",
+    )
+    for name in ("UID", "GID"):
+        assignment = (
+            f'"CANARY_DEPLOY_{name}=$CANARY_DEPLOY_{name}"'
+        )
+        assert control_environment.count(assignment) == 1
+
+    for function_name in (
+        "start_canary_supervisor",
+        "run_canary_controller_unit",
+    ):
+        scope = _shell_function(script, function_name)
+        assert scope.count("build_canary_control_environment") == 1
+        assert scope.count('--uid="$CANARY_DEPLOY_UID"') == 1
+        assert scope.count('--gid="$CANARY_DEPLOY_GID"') == 1
+
+    build = _shell_function(script, "run_build_scope")
+    assert build.count('--uid="$CANARY_DEPLOY_UID"') == 1
+    assert build.count('--gid="$CANARY_DEPLOY_GID"') == 1
+    assert (
+        build.count(
+            '--setenv="CANARY_DEPLOY_UID=$CANARY_DEPLOY_UID"',
+        )
+        == 1
+    )
+    assert (
+        build.count(
+            '--setenv="CANARY_DEPLOY_GID=$CANARY_DEPLOY_GID"',
+        )
+        == 1
+    )
+
+    runtime = _shell_function(script, "start_candidate_service")
+    assert runtime.count('--property="DynamicUser=yes"') == 1
+    assert '--uid="$CANARY_DEPLOY_UID"' not in runtime
+    assert '--gid="$CANARY_DEPLOY_GID"' not in runtime
+    assert "SupplementaryGroups" not in runtime
+    assert (
+        runtime.count(
+            '--setenv="CANARY_DEPLOY_UID=$CANARY_DEPLOY_UID"',
+        )
+        == 1
+    )
+    assert (
+        runtime.count(
+            '--setenv="CANARY_DEPLOY_GID=$CANARY_DEPLOY_GID"',
+        )
+        == 1
+    )
+
+
+@pytest.mark.parametrize(
     "failure_step",
     (
         "ensure_canary_roots",
@@ -742,7 +1269,7 @@ def test_pre_supervisor_launch_failure_removes_exact_run_namespace(
             """\
             #!/usr/bin/env bash
             set -Eeuo pipefail
-            source "$1"
+            source "$1" launch
             root="$2"
             failure_step="$3"
             CANARY_ROOT="$root/canary"
@@ -750,6 +1277,12 @@ def test_pre_supervisor_launch_failure_removes_exact_run_namespace(
             CANARY_COMMIT_SHA="aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
             CANARY_RUN_ID="rollback"
             DEPLOY_STATE_DIR="$root/deploy-state"
+            id() {
+              case "$1" in
+                -u|-g) printf '1000\n' ;;
+                *) return 2 ;;
+              esac
+            }
             mkdir -p \
               "$CANARY_ROOT/runtime" "$CANARY_ROOT/control" \
               "$CANARY_ROOT/sources" \
@@ -1686,9 +2219,18 @@ def test_runtime_wrapper_checks_generation_before_exact_exec(
             """\
             #!/usr/bin/env bash
             set -Eeuo pipefail
-            source "$1"
+            source "$1" runtime
             calls="$2"
             scenario="$3"
+            CANARY_DEPLOY_UID="1000"
+            CANARY_DEPLOY_GID="1000"
+            id() {
+              case "$1" in
+                -u) printf '2000\n' ;;
+                -g) printf '3000\n' ;;
+                *) return 2 ;;
+              esac
+            }
             initialize_paths() {
               RUNTIME_ROOT="/opt/jato-canary/runtime/test"
               printf 'initialize\\n' >>"$calls"
@@ -2865,6 +3407,57 @@ def test_candidate_evidence_rejects_worker_or_prewarm_drift() -> None:
 
 
 @pytest.mark.parametrize(
+    ("scenario", "message"),
+    (
+        ("missing-uid", "lacks positive pinned deploy identities"),
+        ("missing-gid", "lacks positive pinned deploy identities"),
+        ("tampered-uid", "differs from trusted materialization"),
+        ("tampered-gid", "differs from trusted materialization"),
+        ("duplicate-uid", "malformed or ambiguous"),
+        ("duplicate-gid", "malformed or ambiguous"),
+    ),
+)
+def test_terminal_candidate_evidence_binds_one_exact_deploy_identity(
+    scenario: str,
+    message: str,
+) -> None:
+    guard = _guard()
+    identity = {
+        "commit": "a" * 40,
+        "archiveSha256": "b" * 64,
+        "archiveBytes": 123,
+        "port": 18001,
+        "runId": "canary-1",
+    }
+    evidence = _candidate_evidence()
+    systemd = evidence["systemd"]
+    assert isinstance(systemd, dict)
+    tokens = str(systemd["Environment"]).split()
+    uid_token = f"CANARY_DEPLOY_UID={EVIDENCE_DEPLOY_UID}"
+    gid_token = f"CANARY_DEPLOY_GID={EVIDENCE_DEPLOY_GID}"
+    if scenario == "missing-uid":
+        tokens.remove(uid_token)
+    elif scenario == "missing-gid":
+        tokens.remove(gid_token)
+    elif scenario == "tampered-uid":
+        tokens[tokens.index(uid_token)] = (
+            f"CANARY_DEPLOY_UID={EVIDENCE_DEPLOY_UID + 2}"
+        )
+    elif scenario == "tampered-gid":
+        tokens[tokens.index(gid_token)] = (
+            f"CANARY_DEPLOY_GID={EVIDENCE_DEPLOY_GID + 2}"
+        )
+    elif scenario == "duplicate-uid":
+        tokens.append(uid_token)
+    elif scenario == "duplicate-gid":
+        tokens.append(gid_token)
+    systemd["Environment"] = " ".join(tokens)
+
+    with pytest.raises(guard.CanaryGuardError, match=message):
+        guard.verify_candidate_evidence(evidence, identity)
+
+
+@pytest.mark.parametrize(
     "scenario",
     (
         "root-mode",
@@ -2912,7 +3505,7 @@ def test_candidate_evidence_rejects_archive_or_root_integrity_drift(
     elif scenario == "root-owner-mismatch":
         candidate = roots["candidate"]
         assert isinstance(candidate, dict)
-        candidate["gid"] = 1001
+        candidate["gid"] = EVIDENCE_DEPLOY_GID + 1
 
     with pytest.raises(
         guard.CanaryGuardError,

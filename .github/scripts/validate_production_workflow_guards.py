@@ -997,6 +997,10 @@ def assert_feature_canary_cannot_route_or_mutate_production() -> None:
         'CANARY_MEMORY_HIGH="${CANARY_MEMORY_HIGH:-3G}"',
         'CANARY_MEMORY_MAX="${CANARY_MEMORY_MAX:-4G}"',
         'CANARY_TASKS_MAX="${CANARY_TASKS_MAX:-512}"',
+        'CANARY_DEPLOY_UID="${CANARY_DEPLOY_UID:-}"',
+        'CANARY_DEPLOY_GID="${CANARY_DEPLOY_GID:-}"',
+        "pin_canary_deploy_identity",
+        "validate_canary_deploy_identity",
         "jato_acquire_production_mutation_lock",
         "canary requires the canonical production deploy state directory",
         'RUN_KEY="${CANARY_COMMIT_SHA:0:12}-${CANARY_RUN_ID}"',
@@ -1065,8 +1069,8 @@ def assert_feature_canary_cannot_route_or_mutate_production() -> None:
         "tar --same-permissions --no-overwrite-dir",
         '--property="UMask=0022"',
         'sudo -n install -d -m 0700 -o root -g root "$REFERENCE_ROOT"',
-        'install -d -m 0711 -o "$(id -u)" -g "$(id -g)" "$RUNTIME_ROOT"',
-        'install -m 0440 -o root -g "$(id -g)"',
+        '-o "$CANARY_DEPLOY_UID" -g "$CANARY_DEPLOY_GID" "$RUNTIME_ROOT"',
+        'install -m 0440 -o root -g "$CANARY_DEPLOY_GID"',
         "prepare_trusted_materialization",
         "verify_trusted_candidate_integrity",
         "REFERENCE_INTEGRITY_ANCHOR_FILE",
@@ -1121,6 +1125,61 @@ def assert_feature_canary_cannot_route_or_mutate_production() -> None:
                 f"{validator_token}",
             )
 
+    pin_identity_body = shell_function("pin_canary_deploy_identity")
+    for token in (
+        '[[ "$CANARY_MODE" != "launch" ]]',
+        'current_uid="$(id -u)"',
+        'current_gid="$(id -g)"',
+        '[[ ! "$current_uid" =~ ^[1-9][0-9]*$ ]]',
+        '[[ -n "$CANARY_DEPLOY_UID" && "$CANARY_DEPLOY_UID" != "$current_uid" ]]',
+        'CANARY_DEPLOY_UID="$current_uid"',
+        'CANARY_DEPLOY_GID="$current_gid"',
+        "export CANARY_DEPLOY_UID CANARY_DEPLOY_GID",
+    ):
+        if token not in pin_identity_body:
+            raise AssertionError(
+                "feature canary launch lost its one-time non-root deploy "
+                f"identity pin: {token}",
+            )
+    validate_identity_body = shell_function("validate_canary_deploy_identity")
+    for token in (
+        '[[ ! "$CANARY_DEPLOY_UID" =~ ^[1-9][0-9]*$ ]]',
+        'current_uid="$(id -u)"',
+        'current_gid="$(id -g)"',
+        "runtime)",
+        '[[ "$current_uid" == "$CANARY_DEPLOY_UID" ]]',
+        '[[ "$current_gid" == "$CANARY_DEPLOY_GID" ]]',
+        "launch|supervisor|controller|build|reconcile)",
+        '[[ "$current_uid" != "$CANARY_DEPLOY_UID" ]]',
+        '[[ "$current_gid" != "$CANARY_DEPLOY_GID" ]]',
+    ):
+        if token not in validate_identity_body:
+            raise AssertionError(
+                "feature canary deploy identity validation lost its "
+                f"control/DynamicUser split: {token}",
+            )
+    identity_oracle_bodies = pin_identity_body + validate_identity_body
+    for token in ("$(id -u)", "$(id -g)"):
+        if (
+            controller.count(token) != identity_oracle_bodies.count(token)
+            or identity_oracle_bodies.count(token) != 2
+        ):
+            raise AssertionError(
+                "feature canary may consult process-local uid/gid only while "
+                f"pinning or validating the deploy identity: {token}",
+            )
+    for contract_name in (
+        "validate_static_contract",
+        "validate_reconcile_contract",
+    ):
+        if (
+            "validate_canary_deploy_identity"
+            not in shell_function(contract_name)
+        ):
+            raise AssertionError(
+                f"{contract_name} lost its pinned deploy identity gate",
+            )
+
     launcher_body = shell_function("start_canary_supervisor")
     for forbidden_launcher_token in ("--wait", "--pipe", "--scope"):
         if forbidden_launcher_token in launcher_body:
@@ -1138,6 +1197,8 @@ def assert_feature_canary_cannot_route_or_mutate_production() -> None:
             "feature canary launch path must invoke the detached supervisor exactly once",
         )
     launch_order = (
+        "pin_canary_deploy_identity",
+        "validate_static_contract",
         "verify_fresh_launch_namespace",
         "ensure_canary_roots",
         "stage_canary_inputs",
@@ -1289,6 +1350,64 @@ def assert_feature_canary_cannot_route_or_mutate_production() -> None:
                 f"{forbidden_relationship}",
             )
 
+    control_environment_body = shell_function("build_canary_control_environment")
+    for token in (
+        '"CANARY_DEPLOY_UID=$CANARY_DEPLOY_UID"',
+        '"CANARY_DEPLOY_GID=$CANARY_DEPLOY_GID"',
+    ):
+        if control_environment_body.count(token) != 1:
+            raise AssertionError(
+                "durable canary control environment must carry one exact "
+                f"pinned identity value: {token}",
+            )
+    for unit_body, mode in (
+        (launcher_body, "supervisor"),
+        (controller_unit_body, "controller"),
+    ):
+        for token in (
+            f"build_canary_control_environment {mode}",
+            '--uid="$CANARY_DEPLOY_UID"',
+            '--gid="$CANARY_DEPLOY_GID"',
+            '"${environment_args[@]}"',
+        ):
+            if token not in unit_body:
+                raise AssertionError(
+                    f"durable {mode} unit lost pinned deploy identity "
+                    f"propagation: {token}",
+                )
+    for child_body, child_name in (
+        (build_body, "build"),
+        (runtime_body, "runtime"),
+    ):
+        for token in (
+            '--setenv="CANARY_DEPLOY_UID=$CANARY_DEPLOY_UID"',
+            '--setenv="CANARY_DEPLOY_GID=$CANARY_DEPLOY_GID"',
+        ):
+            if child_body.count(token) != 1:
+                raise AssertionError(
+                    f"feature canary {child_name} unit must propagate one "
+                    f"exact pinned identity value: {token}",
+                )
+    for token in (
+        '--uid="$CANARY_DEPLOY_UID"',
+        '--gid="$CANARY_DEPLOY_GID"',
+    ):
+        if token not in build_body:
+            raise AssertionError(
+                "feature canary build unit lost its pinned deploy execution "
+                f"identity: {token}",
+            )
+    if (
+        runtime_body.count('--property="DynamicUser=yes"') != 1
+        or "--uid=" in runtime_body
+        or "--gid=" in runtime_body
+        or "SupplementaryGroups" in runtime_body
+    ):
+        raise AssertionError(
+            "candidate runtime must remain a DynamicUser without a fixed uid, "
+            "gid, or supplementary deploy group",
+        )
+
     supervisor_body = shell_function("run_canary_supervisor")
     supervisor_order = (
         "acquire_canary_production_lock",
@@ -1354,9 +1473,17 @@ def assert_feature_canary_cannot_route_or_mutate_production() -> None:
             "them after build and runtime, and fence the exact waiting candidate",
         )
     candidate_service_body = shell_function("verify_candidate_service")
-    if "record_checkpoint candidate_verified completed" not in candidate_service_body:
+    if (
+        "record_checkpoint candidate_verified completed"
+        not in candidate_service_body
+        or 'environment.get("CANARY_DEPLOY_UID") != deploy_uid'
+        not in candidate_service_body
+        or 'environment.get("CANARY_DEPLOY_GID") != deploy_gid'
+        not in candidate_service_body
+    ):
         raise AssertionError(
-            "candidate verification must persist its terminal validation marker",
+            "candidate verification must bind the pinned deploy identity and "
+            "persist its terminal validation marker",
         )
     for token in (
         "def verify_ordered_checkpoint_markers(",
@@ -1407,9 +1534,18 @@ def assert_feature_canary_cannot_route_or_mutate_production() -> None:
             )
     for token in (
         "def _verify_candidate_build_evidence_v3(",
+        ") -> tuple[int, int]:",
         'build.get("schemaVersion") != 3',
         'archive.get("schemaVersion") != 2',
         'reference_root != {"uid": 0, "gid": 0, "mode": "0700"}',
+        'candidate_root["gid"] <= 0',
+        'return candidate_root["uid"], candidate_root["gid"]',
+        "deploy_uid, deploy_gid = _verify_candidate_build_evidence_v3(",
+        'runtime_deploy_uid = environment.get("CANARY_DEPLOY_UID")',
+        'runtime_deploy_gid = environment.get("CANARY_DEPLOY_GID")',
+        're.fullmatch(r"[1-9][0-9]*", runtime_deploy_uid)',
+        "int(runtime_deploy_uid) != deploy_uid",
+        "int(runtime_deploy_gid) != deploy_gid",
         "candidate evidence has an invalid root-owned reference anchor",
     ):
         if token not in guard:
@@ -1428,6 +1564,8 @@ def assert_feature_canary_cannot_route_or_mutate_production() -> None:
         "StopPropagatedFrom",
         "BindsTo",
         "PartOf",
+        '"CANARY_DEPLOY_UID": deploy_uid',
+        '"CANARY_DEPLOY_GID": deploy_gid',
         "assert_supervisor_generation",
         'persist_candidate_start_permit "$candidate_invocation_id"',
     ):
@@ -1469,6 +1607,7 @@ def assert_feature_canary_cannot_route_or_mutate_production() -> None:
 
     candidate_runtime_body = shell_function("run_candidate_runtime")
     runtime_order = (
+        "validate_canary_deploy_identity",
         "verify_canary_parent_roots",
         "validate_feature_identity",
         "assert_staged_supervisor_generation",
@@ -1569,8 +1708,8 @@ def assert_feature_canary_cannot_route_or_mutate_production() -> None:
         'sudo -n python3 -B "$CANARY_GUARD" cleanup-launch-state',
         '--state-root "$CANARY_STATE_ROOT"',
         '--run-key "$RUN_KEY"',
-        '--expected-uid "$(id -u)"',
-        '--expected-gid "$(id -g)"',
+        '--expected-uid "$CANARY_DEPLOY_UID"',
+        '--expected-gid "$CANARY_DEPLOY_GID"',
     ):
         if token not in state_cleanup:
             raise AssertionError(

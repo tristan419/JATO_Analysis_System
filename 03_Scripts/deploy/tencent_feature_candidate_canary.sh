@@ -34,6 +34,8 @@ CANARY_CONTROLLER_MEMORY_MAX=512M
 CANARY_CONTROLLER_TASKS_MAX=64
 CANARY_RUNTIME_START_PERMIT_TIMEOUT_SECONDS=30
 CANARY_SUPERVISOR_INVOCATION_ID="${CANARY_SUPERVISOR_INVOCATION_ID:-}"
+CANARY_DEPLOY_UID="${CANARY_DEPLOY_UID:-}"
+CANARY_DEPLOY_GID="${CANARY_DEPLOY_GID:-}"
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 CANARY_GUARD="$SCRIPT_DIR/jato_feature_canary_guard.py"
@@ -221,16 +223,78 @@ if not re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", repository):
 PY
 }
 
+pin_canary_deploy_identity() {
+  local current_gid=""
+  local current_uid=""
+  if [[ "$CANARY_MODE" != "launch" ]]; then
+    fail "only launch may pin the canary deploy identity"
+    return 1
+  fi
+  current_uid="$(id -u)"
+  current_gid="$(id -g)"
+  if [[ ! "$current_uid" =~ ^[1-9][0-9]*$ ]] \
+    || [[ ! "$current_gid" =~ ^[1-9][0-9]*$ ]]; then
+    fail "canary launch requires a non-root deploy uid and gid"
+    return 1
+  fi
+  if [[ -n "$CANARY_DEPLOY_UID" && "$CANARY_DEPLOY_UID" != "$current_uid" ]] \
+    || [[ -n "$CANARY_DEPLOY_GID" && "$CANARY_DEPLOY_GID" != "$current_gid" ]]; then
+    fail "preconfigured canary deploy identity differs from the launch account"
+    return 1
+  fi
+  CANARY_DEPLOY_UID="$current_uid"
+  CANARY_DEPLOY_GID="$current_gid"
+  export CANARY_DEPLOY_UID CANARY_DEPLOY_GID
+}
+
+validate_canary_deploy_identity() {
+  local current_gid=""
+  local current_uid=""
+  if [[ ! "$CANARY_DEPLOY_UID" =~ ^[1-9][0-9]*$ ]] \
+    || [[ ! "$CANARY_DEPLOY_GID" =~ ^[1-9][0-9]*$ ]]; then
+    fail "canary deploy uid and gid must be pinned non-root identities"
+    return 1
+  fi
+  current_uid="$(id -u)"
+  current_gid="$(id -g)"
+  if [[ ! "$current_uid" =~ ^[1-9][0-9]*$ ]] \
+    || [[ ! "$current_gid" =~ ^[1-9][0-9]*$ ]]; then
+    fail "canary execution identity must remain non-root"
+    return 1
+  fi
+  case "$CANARY_MODE" in
+    runtime)
+      if [[ "$current_uid" == "$CANARY_DEPLOY_UID" ]] \
+        || [[ "$current_gid" == "$CANARY_DEPLOY_GID" ]]; then
+        fail "candidate runtime must use a DynamicUser identity distinct from deploy"
+        return 1
+      fi
+      ;;
+    launch|supervisor|controller|build|reconcile)
+      if [[ "$current_uid" != "$CANARY_DEPLOY_UID" ]] \
+        || [[ "$current_gid" != "$CANARY_DEPLOY_GID" ]]; then
+        fail "canary control mode differs from its pinned deploy identity"
+        return 1
+      fi
+      ;;
+    *)
+      fail "canary deploy identity cannot be validated for mode: $CANARY_MODE"
+      return 1
+      ;;
+  esac
+}
+
 validate_static_contract() {
   local actual_bytes=""
   local actual_sha=""
   local account_home=""
   local canonical_deploy_state=""
   for command_name in \
-    awk curl flock getent install mktemp mv python3 readlink realpath rm \
+    awk curl flock getent id install mktemp mv python3 readlink realpath rm \
     sha256sum stat systemctl systemd-run tar timeout; do
     require_command "$command_name"
   done
+  validate_canary_deploy_identity
   if [[ "$CANARY_ROOT" != "/opt/jato-canary" ]] \
     || [[ "$CANARY_STATE_ROOT" != "/var/lib/jato-canary" ]] \
     || [[ "$CANARY_PORT" != "18001" ]] \
@@ -244,7 +308,7 @@ validate_static_contract() {
     || "$CANARY_MODE" == "supervisor" \
     || "$CANARY_MODE" == "controller" ]]; then
     account_home="$(
-      getent passwd "$(id -u)" | awk -F: 'NR == 1 {print $6}'
+      getent passwd "$CANARY_DEPLOY_UID" | awk -F: 'NR == 1 {print $6}'
     )"
     if [[ -z "$account_home" || "$account_home" != /* ]] \
       || [[ "${HOME:-}" != "$account_home" ]]; then
@@ -312,7 +376,7 @@ validate_static_contract() {
   fi
   if [[ "$CANARY_SOURCE_ARCHIVE" == "$STAGED_SOURCE_ARCHIVE" ]] \
     && [[ "$(stat -c '%u:%g:%a' "$CANARY_SOURCE_ARCHIVE")" != \
-      "0:$(id -g):440" ]]; then
+      "0:${CANARY_DEPLOY_GID}:440" ]]; then
     fail "staged canary archive lost its root:deploy-gid 0440 privacy mode"
     return 1
   fi
@@ -382,7 +446,7 @@ verify_canary_parent_roots() {
     "$CANARY_ROOT/runtime" \
     "$CANARY_ROOT/control" \
     "$CANARY_ROOT/sources" \
-    "$(id -g)" <<'PY'
+    "$CANARY_DEPLOY_GID" <<'PY'
 from pathlib import Path
 import os
 import stat
@@ -412,7 +476,7 @@ PY
 
 verify_canary_state_roots() {
   python3 -B - \
-    "$CANARY_STATE_ROOT" "$(id -u)" "$(id -g)" <<'PY'
+    "$CANARY_STATE_ROOT" "$CANARY_DEPLOY_UID" "$CANARY_DEPLOY_GID" <<'PY'
 from pathlib import Path
 import os
 import stat
@@ -452,8 +516,8 @@ cleanup_canary_state_run() {
   sudo -n python3 -B "$CANARY_GUARD" cleanup-launch-state \
     --state-root "$CANARY_STATE_ROOT" \
     --run-key "$RUN_KEY" \
-    --expected-uid "$(id -u)" \
-    --expected-gid "$(id -g)"
+    --expected-uid "$CANARY_DEPLOY_UID" \
+    --expected-gid "$CANARY_DEPLOY_GID"
 }
 
 ensure_canary_roots() {
@@ -481,7 +545,7 @@ ensure_canary_roots() {
     fail "canary-owned source path is unsafe: $path"
     return 1
   fi
-  sudo -n install -d -m 0750 -o root -g "$(id -g)" "$path"
+  sudo -n install -d -m 0750 -o root -g "$CANARY_DEPLOY_GID" "$path"
   verify_canary_parent_roots
   for path in \
     "$CANARY_STATE_ROOT" \
@@ -497,7 +561,8 @@ ensure_canary_roots() {
       fail "canary-owned path is unsafe: $path"
       return 1
     fi
-    sudo -n install -d -m 0750 -o "$(id -u)" -g "$(id -g)" "$path"
+    sudo -n install -d -m 0750 \
+      -o "$CANARY_DEPLOY_UID" -g "$CANARY_DEPLOY_GID" "$path"
   done
   verify_canary_state_roots
   for path in \
@@ -526,7 +591,8 @@ stage_canary_inputs() {
   local staged_bytes=""
   local staged_sha=""
   sudo -n install -d -m 0700 -o root -g root "$REFERENCE_ROOT"
-  sudo -n install -d -m 0711 -o "$(id -u)" -g "$(id -g)" "$RUNTIME_ROOT"
+  sudo -n install -d -m 0711 \
+    -o "$CANARY_DEPLOY_UID" -g "$CANARY_DEPLOY_GID" "$RUNTIME_ROOT"
   sudo -n install -d -m 0555 -o root -g root \
     "$CONTROL_ROOT/03_Scripts/deploy/lib"
   sudo -n install -m 0555 -o root -g root \
@@ -550,10 +616,10 @@ stage_canary_inputs() {
   sudo -n install -m 0444 -o root -g root \
     "$SOURCE_SEAL_HELPER" \
     "$CONTROL_ROOT/03_Scripts/deploy/verify_release_source_seal.py"
-  sudo -n install -m 0440 -o root -g "$(id -g)" \
+  sudo -n install -m 0440 -o root -g "$CANARY_DEPLOY_GID" \
     "$CANARY_SOURCE_ARCHIVE" "$STAGED_SOURCE_ARCHIVE"
   if [[ "$(stat -c '%u:%g:%a' "$STAGED_SOURCE_ARCHIVE")" != \
-    "0:$(id -g):440" ]]; then
+    "0:${CANARY_DEPLOY_GID}:440" ]]; then
     fail "staged canary archive privacy mode is not root:deploy-gid 0440"
     return 1
   fi
@@ -577,6 +643,8 @@ build_canary_control_environment() {
     "JATO_PRODUCTION_DEPLOY_LOCK_PATH=$CANARY_INITIAL_LOCK_PATH"
     "CANARY_INITIAL_LOCK_PATH=$CANARY_INITIAL_LOCK_PATH"
     "CANARY_MODE=$mode"
+    "CANARY_DEPLOY_UID=$CANARY_DEPLOY_UID"
+    "CANARY_DEPLOY_GID=$CANARY_DEPLOY_GID"
     "CANARY_ROOT=$CANARY_ROOT"
     "CANARY_STATE_ROOT=$CANARY_STATE_ROOT"
     "CANARY_PORT=$CANARY_PORT"
@@ -849,7 +917,7 @@ persist_supervisor_generation_marker() {
   if [[ -e "$marker_source" || -L "$marker_source" ]]; then
     if [[ ! -f "$marker_source" || -L "$marker_source" ]] \
       || [[ "$(stat -c '%u:%g' "$marker_source")" != \
-        "$(id -u):$(id -g)" ]] \
+        "${CANARY_DEPLOY_UID}:${CANARY_DEPLOY_GID}" ]] \
       || [[ "$(stat -c '%a' "$marker_source")" != "400" \
         && "$(stat -c '%a' "$marker_source")" != "600" ]]; then
       fail "supervisor generation source file is unsafe"
@@ -1509,7 +1577,7 @@ prepare_trusted_materialization() {
   validate_canary_archive "$validation_receipt"
   sudo -n python3 -B - \
     "$validation_receipt" "$REFERENCE_ROOT" "$RUNTIME_ROOT" \
-    "$(id -u)" "$(id -g)" <<'PY'
+    "$CANARY_DEPLOY_UID" "$CANARY_DEPLOY_GID" <<'PY'
 import json
 import os
 from pathlib import Path
@@ -1585,7 +1653,7 @@ PY
     "$REFERENCE_ROOT/.jato-source-seal.json" \
     "$REFERENCE_ROOT" "$RUNTIME_ROOT" \
     "$CANARY_SOURCE_SHA256" "$CANARY_SOURCE_BYTES" \
-    "$(id -u)" "$(id -g)" >"$anchor_temp" <<'PY'
+    "$CANARY_DEPLOY_UID" "$CANARY_DEPLOY_GID" >"$anchor_temp" <<'PY'
 from pathlib import Path
 import hashlib
 import json
@@ -1738,7 +1806,7 @@ verify_trusted_candidate_integrity() {
     "$REFERENCE_INTEGRITY_ANCHOR_FILE" \
     "$REFERENCE_ROOT/.jato-source-seal.json" \
     "$SOURCE_SEAL_FILE" "$REFERENCE_ROOT" "$RUNTIME_ROOT" \
-    "$(id -u)" "$(id -g)" >"$evidence_temp" <<'PY'
+    "$CANARY_DEPLOY_UID" "$CANARY_DEPLOY_GID" >"$evidence_temp" <<'PY'
 from pathlib import Path, PurePosixPath
 import hashlib
 import json
@@ -2084,8 +2152,8 @@ run_build_scope() {
     --collect \
     --unit="$BUILD_UNIT" \
     --service-type=exec \
-    --uid="$(id -u)" \
-    --gid="$(id -g)" \
+    --uid="$CANARY_DEPLOY_UID" \
+    --gid="$CANARY_DEPLOY_GID" \
     --working-directory="$CANARY_ROOT" \
     --property="StopPropagatedFrom=$SUPERVISOR_UNIT" \
     --property="After=$SUPERVISOR_UNIT" \
@@ -2118,6 +2186,8 @@ run_build_scope() {
     --setenv="XDG_CACHE_HOME=/tmp/cache" \
     --setenv="PATH=$PATH" \
     --setenv="CANARY_MODE=build" \
+    --setenv="CANARY_DEPLOY_UID=$CANARY_DEPLOY_UID" \
+    --setenv="CANARY_DEPLOY_GID=$CANARY_DEPLOY_GID" \
     --setenv="CANARY_ROOT=$CANARY_ROOT" \
     --setenv="CANARY_STATE_ROOT=$CANARY_STATE_ROOT" \
     --setenv="CANARY_PORT=$CANARY_PORT" \
@@ -2209,6 +2279,8 @@ start_candidate_service() {
     --setenv="PYTHONDONTWRITEBYTECODE=1" \
     --setenv="PYTHONUNBUFFERED=1" \
     --setenv="CANARY_MODE=runtime" \
+    --setenv="CANARY_DEPLOY_UID=$CANARY_DEPLOY_UID" \
+    --setenv="CANARY_DEPLOY_GID=$CANARY_DEPLOY_GID" \
     --setenv="APP_PROJECT_ROOT=$RUNTIME_ROOT" \
     --setenv="APP_RELEASE_SHA=$CANARY_COMMIT_SHA" \
     --setenv="APP_RELEASE_SLOT=$CANARY_PORT" \
@@ -2271,7 +2343,8 @@ authorize_candidate_runtime() {
       "$CANARY_SUPERVISOR_INVOCATION_ID" \
       "$CANARY_SOURCE_SHA256" "$CANARY_SOURCE_BYTES" \
       "$CANARY_PORT" "$LEGACY_ROOT" \
-      "$expected_high" "$expected_max" "$CANARY_TASKS_MAX" <<'PY'
+      "$expected_high" "$expected_max" "$CANARY_TASKS_MAX" \
+      "$CANARY_DEPLOY_UID" "$CANARY_DEPLOY_GID" <<'PY'
 from pathlib import Path
 import re
 import shlex
@@ -2294,6 +2367,8 @@ import sys
     expected_high,
     expected_max,
     expected_tasks,
+    deploy_uid,
+    deploy_gid,
 ) = sys.argv[1:]
 properties = {}
 for line in raw.splitlines():
@@ -2409,6 +2484,8 @@ expected_environment = {
     "CANARY_SOURCE_SHA256": source_sha256,
     "CANARY_SOURCE_BYTES": source_bytes,
     "CANARY_PORT": port,
+    "CANARY_DEPLOY_UID": deploy_uid,
+    "CANARY_DEPLOY_GID": deploy_gid,
 }
 for key, expected in expected_environment.items():
     if environment.get(key) != expected:
@@ -2505,7 +2582,8 @@ PY
     "$monthly_status" "$expected_high" "$expected_max" \
     "$CANARY_COMMIT_SHA" "$CANARY_PORT" "$LEGACY_ROOT" "$SUPERVISOR_UNIT" \
     "$readyz_evidence" "$CANDIDATE_START_PERMIT_FILE" "$SERVICE_UNIT" \
-    "$CANARY_SUPERVISOR_INVOCATION_ID" <<'PY'
+    "$CANARY_SUPERVISOR_INVOCATION_ID" \
+    "$CANARY_DEPLOY_UID" "$CANARY_DEPLOY_GID" <<'PY'
 import json
 import os
 from pathlib import Path
@@ -2531,6 +2609,8 @@ import tempfile
     permit_name,
     service_unit,
     supervisor_invocation_id,
+    deploy_uid,
+    deploy_gid,
 ) = sys.argv[1:]
 properties = {}
 for line in properties_raw.splitlines():
@@ -2613,6 +2693,11 @@ if environment.get(
     raise SystemExit(
         "[ERROR] candidate environment changed supervisor generation"
     )
+if (
+    environment.get("CANARY_DEPLOY_UID") != deploy_uid
+    or environment.get("CANARY_DEPLOY_GID") != deploy_gid
+):
+    raise SystemExit("[ERROR] candidate environment changed deploy identity")
 if (
     f"{legacy_root}/01_RAW_DATA" not in properties.get("ReadOnlyPaths", "")
     or f"{legacy_root}/04_Processed_data" not in properties.get("ReadOnlyPaths", "")
@@ -2940,7 +3025,7 @@ cleanup_candidate_start_permit_temp() {
     if [[ ! -f "$CANDIDATE_START_PERMIT_SOURCE_FILE" ]] \
       || [[ -L "$CANDIDATE_START_PERMIT_SOURCE_FILE" ]] \
       || [[ "$(stat -c '%u:%g' "$CANDIDATE_START_PERMIT_SOURCE_FILE")" != \
-        "$(id -u):$(id -g)" ]] \
+        "${CANARY_DEPLOY_UID}:${CANARY_DEPLOY_GID}" ]] \
       || [[ "$(stat -c '%a' "$CANDIDATE_START_PERMIT_SOURCE_FILE")" != \
         "400" \
         && "$(stat -c '%a' "$CANDIDATE_START_PERMIT_SOURCE_FILE")" != \
@@ -3286,8 +3371,8 @@ start_canary_supervisor() {
     --collect \
     --unit="$SUPERVISOR_UNIT" \
     --service-type=exec \
-    --uid="$(id -u)" \
-    --gid="$(id -g)" \
+    --uid="$CANARY_DEPLOY_UID" \
+    --gid="$CANARY_DEPLOY_GID" \
     --working-directory="$CONTROL_ROOT" \
     --property="TimeoutStopSec=${CANARY_SUPERVISOR_STOP_TIMEOUT_SECONDS}s" \
     --property="KillMode=control-group" \
@@ -3337,8 +3422,8 @@ run_canary_controller_unit() {
     --collect \
     --unit="$CONTROLLER_UNIT" \
     --service-type=exec \
-    --uid="$(id -u)" \
-    --gid="$(id -g)" \
+    --uid="$CANARY_DEPLOY_UID" \
+    --gid="$CANARY_DEPLOY_GID" \
     --working-directory="$CONTROL_ROOT" \
     --property="StopPropagatedFrom=$SUPERVISOR_UNIT" \
     --property="After=$SUPERVISOR_UNIT" \
@@ -3476,6 +3561,7 @@ verify_supervisor_unit_absent() {
 }
 
 launch_canary() {
+  pin_canary_deploy_identity
   validate_static_contract
   pin_canary_production_lock_path
   initialize_paths
@@ -3645,6 +3731,7 @@ run_candidate_runtime() {
   local actual_argv=("$@")
   local expected_argv=()
   initialize_paths
+  validate_canary_deploy_identity
   verify_canary_parent_roots
   validate_feature_identity
   # DynamicUser services cannot query the systemd manager on every supported
@@ -3677,10 +3764,11 @@ validate_reconcile_contract() {
   local account_home=""
   local canonical_deploy_state=""
   for command_name in \
-    curl flock getent mktemp mv python3 readlink realpath rm sha256sum stat \
+    curl flock getent id mktemp mv python3 readlink realpath rm sha256sum stat \
     systemctl timeout; do
     require_command "$command_name"
   done
+  validate_canary_deploy_identity
   if [[ "$CANARY_ROOT" != "/opt/jato-canary" ]] \
     || [[ "$CANARY_STATE_ROOT" != "/var/lib/jato-canary" ]] \
     || [[ "$CANARY_PORT" != "18001" ]] \
@@ -3693,7 +3781,7 @@ validate_reconcile_contract() {
   validate_feature_identity
   verify_canary_parent_roots
   account_home="$(
-    getent passwd "$(id -u)" | awk -F: 'NR == 1 {print $6}'
+    getent passwd "$CANARY_DEPLOY_UID" | awk -F: 'NR == 1 {print $6}'
   )"
   canonical_deploy_state="${account_home%/}/.local/state/jato-production-release"
   if [[ -z "$account_home" || "$account_home" != /* ]] \

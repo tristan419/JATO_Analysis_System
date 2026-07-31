@@ -560,7 +560,7 @@ def _sha256_json_receipt(payload: dict[str, Any]) -> str:
 def _verify_candidate_build_evidence_v3(
     build: object,
     identity: dict[str, Any],
-) -> None:
+) -> tuple[int, int]:
     if not isinstance(build, dict) or build.get("schemaVersion") != 3:
         raise CanaryGuardError(
             "candidate evidence lacks schema-v3 trusted build evidence",
@@ -757,7 +757,7 @@ def _verify_candidate_build_evidence_v3(
         or candidate_root["uid"] <= 0
         or isinstance(candidate_root.get("gid"), bool)
         or not isinstance(candidate_root.get("gid"), int)
-        or candidate_root["gid"] < 0
+        or candidate_root["gid"] <= 0
         or candidate_root.get("mode") != "0711"
     ):
         raise CanaryGuardError(
@@ -865,6 +865,7 @@ def _verify_candidate_build_evidence_v3(
             raise CanaryGuardError(
                 "candidate private materialization path set is incomplete",
             )
+    return candidate_root["uid"], candidate_root["gid"]
 
 
 def verify_candidate_evidence(
@@ -884,7 +885,10 @@ def verify_candidate_evidence(
             "successful canary receipt has invalid candidate evidence",
         )
     build_evidence = payload.get("buildEvidence")
-    _verify_candidate_build_evidence_v3(build_evidence, identity)
+    deploy_uid, deploy_gid = _verify_candidate_build_evidence_v3(
+        build_evidence,
+        identity,
+    )
     health = payload.get("healthz")
     if not isinstance(health, dict) or health.get("status") != "ok":
         raise CanaryGuardError("candidate evidence lacks healthz status=ok")
@@ -958,6 +962,25 @@ def verify_candidate_evidence(
                 "candidate evidence Environment is malformed or ambiguous",
             )
         environment[key] = value
+    runtime_deploy_uid = environment.get("CANARY_DEPLOY_UID")
+    runtime_deploy_gid = environment.get("CANARY_DEPLOY_GID")
+    if (
+        not isinstance(runtime_deploy_uid, str)
+        or re.fullmatch(r"[1-9][0-9]*", runtime_deploy_uid) is None
+        or not isinstance(runtime_deploy_gid, str)
+        or re.fullmatch(r"[1-9][0-9]*", runtime_deploy_gid) is None
+    ):
+        raise CanaryGuardError(
+            "candidate evidence lacks positive pinned deploy identities",
+        )
+    if (
+        int(runtime_deploy_uid) != deploy_uid
+        or int(runtime_deploy_gid) != deploy_gid
+    ):
+        raise CanaryGuardError(
+            "candidate runtime deploy identity differs from trusted "
+            "materialization",
+        )
     required_environment = {
         "APP_DATABASE_ENABLED": "false",
         "APP_REDIS_ENABLED": "false",
