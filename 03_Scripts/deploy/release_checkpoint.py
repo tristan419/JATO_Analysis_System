@@ -96,8 +96,12 @@ REPOSITORY_PATTERN = re.compile(
 GIT_SHA_PATTERN = re.compile(r"^[0-9a-f]{40}$")
 SHA256_PATTERN = re.compile(r"^[0-9a-f]{64}$")
 REVISION_PATTERN = re.compile(r"(?m)^([0-9]{8}_[0-9]{4})\b")
-RECOVERY_RECEIPT_SCHEMA_VERSIONS = frozenset({1, 2})
-RECOVERY_MIGRATION_STATUS_BY_SCHEMA = {1: "not_required", 2: "completed"}
+RECOVERY_RECEIPT_SCHEMA_VERSIONS = frozenset({1, 2, 3})
+RECOVERY_MIGRATION_STATUS_BY_SCHEMA = {
+    1: "not_required",
+    2: "completed",
+    3: "completed",
+}
 IDENTITY_FIELDS = {
     "repository",
     "commit",
@@ -120,6 +124,94 @@ CHECKPOINT_FIELDS = {
 OPTIONAL_CHECKPOINT_FIELDS = {"message"}
 MAX_RELEASE_METADATA_BYTES = 64 * 1024
 PRE_SWITCH_ABORT_PHASE = "pre_switch_aborted"
+RESIDUE_INCIDENT_ID = "2026-08-03-29df-pre-switch-candidate-residue"
+RESIDUE_TARGET_COMMIT = "29df5e6e667351f09305783932b34e5438d6a9d5"
+RESIDUE_DEVICE = 64770
+RESIDUE_OWNER_UID = 0
+RESIDUE_OWNER_GID = 0
+RESIDUE_RETAINED_OWNER_UID = 1000
+RESIDUE_RETAINED_OWNER_GID = 1001
+RESIDUE_PREVIOUS_METADATA_ROOT = Path("/var/lib/jato-release/previous-metadata")
+RESIDUE_CANONICAL_NGINX = Path(
+    "/etc/nginx/sites-available/jato_fullstack.conf"
+)
+RESIDUE_CANONICAL_NGINX_IDENTITY = {
+    "kind": "file",
+    "device": RESIDUE_DEVICE,
+    "inode": 789351,
+    "uid": RESIDUE_OWNER_UID,
+    "gid": RESIDUE_OWNER_GID,
+    "mode": "0644",
+    "nlink": 1,
+    "bytes": 3795,
+    "mtimeNs": 1783042607281907362,
+    "sha256": "964c351bbed725a36da517c06ce7ef82ff9d11046e8329f02a118f638a32aec4",
+    "target": None,
+    "targetSha256": None,
+}
+RESIDUE_QUARANTINE_ROOT = Path(
+    "/var/lib/jato-release/recovery-quarantine"
+) / RESIDUE_INCIDENT_ID
+RESIDUE_MAINTENANCE_MARKER = Path("/var/lib/jato-release/deployment-maintenance")
+RESIDUE_REQUIRED_ABSENT_PATHS = frozenset(
+    {
+        Path("/etc/jato-fullstack/nginx/active-release.conf"),
+        Path("/opt/jato/active"),
+        Path(
+            "/run/systemd/system.control/"
+            "jato-fullstack-backend@8001.service.d"
+        ),
+        Path("/var/cache/jato-candidate-8001"),
+        Path("/var/cache/private/jato-candidate-8001"),
+        Path(
+            "/var/lib/jato-release/backend-template.pre-"
+            f"{RESIDUE_TARGET_COMMIT}.service"
+        ),
+        Path(
+            "/var/lib/jato-release/backend-template.pre-"
+            f"{RESIDUE_TARGET_COMMIT}.service.state"
+        ),
+        Path(f"/var/lib/jato-release/nginx-preimage-{RESIDUE_TARGET_COMMIT}"),
+        Path("/var/lib/jato-release/scheduler-state.tsv"),
+    }
+)
+RESIDUE_ROOT_ATTESTED_ABSENT_PATHS = frozenset(
+    {Path("/var/cache/private/jato-candidate-8001")}
+)
+RESIDUE_SOURCE_PATHS = {
+    "maintenance_marker": RESIDUE_MAINTENANCE_MARKER,
+    "candidate_slot_link": Path("/opt/jato/slots/8001/current"),
+    "candidate_slot_env": Path("/etc/jato-fullstack/slots/8001.env"),
+    "candidate_explicit_unit": Path(
+        "/etc/systemd/system/jato-fullstack-backend@8001.service"
+    ),
+    "candidate_sandbox_dropin": Path(
+        "/etc/systemd/system/jato-fullstack-backend@8001.service.d/"
+        "10-candidate-sandbox.conf"
+    ),
+    "candidate_cpu_quota_dropin": Path(
+        "/etc/systemd/system.control/jato-fullstack-backend@8001.service.d/"
+        "50-CPUQuota.conf"
+    ),
+    "candidate_memory_high_dropin": Path(
+        "/etc/systemd/system.control/jato-fullstack-backend@8001.service.d/"
+        "50-MemoryHigh.conf"
+    ),
+    "candidate_memory_max_dropin": Path(
+        "/etc/systemd/system.control/jato-fullstack-backend@8001.service.d/"
+        "50-MemoryMax.conf"
+    ),
+}
+RESIDUE_QUARANTINE_NAMES = {
+    "maintenance_marker": "legacy-maintenance-marker",
+    "candidate_slot_link": "candidate-slot-link",
+    "candidate_slot_env": "candidate-slot-env",
+    "candidate_explicit_unit": "candidate-explicit-unit",
+    "candidate_sandbox_dropin": "candidate-sandbox-dropin",
+    "candidate_cpu_quota_dropin": "candidate-cpu-quota-dropin",
+    "candidate_memory_high_dropin": "candidate-memory-high-dropin",
+    "candidate_memory_max_dropin": "candidate-memory-max-dropin",
+}
 PRE_SWITCH_RECOVERY_BINDING_PATTERN = re.compile(
     r"(?:^|[; ])recovery_path=(\S+) "
     r"recovery_sha256=([0-9a-f]{64})(?:$|[; ])"
@@ -897,6 +989,11 @@ def _require_recovery_receipt(
         or relative.stem != implementation.get("planSha256")
     ):
         raise CheckpointError("recovery receipt decision contract is invalid")
+    if receipt_schema == 3:
+        _validate_schema_v3_receipt_contract(
+            payload,
+            receipt_root=receipt_root,
+        )
     return receipt_path, receipt_sha256, payload
 
 
@@ -909,6 +1006,320 @@ def _recovery_migration_status(receipt: Mapping[str, Any]) -> str:
     ):
         raise CheckpointError("recovery receipt schemaVersion is invalid")
     return RECOVERY_MIGRATION_STATUS_BY_SCHEMA[schema_version]
+
+
+def _validate_schema_v3_receipt_contract(
+    receipt: Mapping[str, Any],
+    *,
+    receipt_root: Path,
+) -> None:
+    if set(receipt) != {
+        "schemaVersion",
+        "kind",
+        "decision",
+        "incidentId",
+        "identity",
+        "implementation",
+        "sourceCheckpoint",
+        "legacyEvidence",
+        "journal",
+        "backup",
+        "database",
+        "production",
+        "candidate",
+        "lock",
+        "createdAt",
+        "authorization",
+        "residue",
+        "finalizationReceipt",
+    }:
+        raise CheckpointError("schema v3 recovery receipt fields are invalid")
+    authorization = receipt.get("authorization")
+    residue = receipt.get("residue")
+    finalization = receipt.get("finalizationReceipt")
+    implementation = receipt.get("implementation")
+    production = receipt.get("production")
+    if not all(
+        isinstance(value, dict)
+        for value in (authorization, residue, finalization, implementation, production)
+    ):
+        raise CheckpointError("schema v3 recovery proof objects are invalid")
+    expected_authorization_fields = {
+        "schemaVersion",
+        "kind",
+        "repository",
+        "workflowPath",
+        "runId",
+        "runAttempt",
+        "mainSha",
+        "planSha256",
+        "resultSha256",
+        "incidentId",
+        "inventoryDigest",
+        "decision",
+        "authorizationSha256",
+    }
+    if (
+        set(authorization) != expected_authorization_fields
+        or authorization.get("schemaVersion") != 1
+        or authorization.get("kind")
+        != "checkpoint_recovery_dry_run_authorization"
+        or authorization.get("workflowPath")
+        != ".github/workflows/production-checkpoint-recovery.yml"
+        or authorization.get("decision")
+        != "candidate-residue-dry-run-eligible"
+        or receipt.get("incidentId") != RESIDUE_INCIDENT_ID
+        or receipt.get("identity", {}).get("commit") != RESIDUE_TARGET_COMMIT
+        or authorization.get("incidentId") != receipt.get("incidentId")
+        or authorization.get("repository")
+        != receipt.get("identity", {}).get("repository")
+        or authorization.get("mainSha") != implementation.get("commit")
+        or authorization.get("planSha256") != implementation.get("planSha256")
+        or any(
+            isinstance(authorization.get(field), bool)
+            or not isinstance(authorization.get(field), int)
+            or authorization.get(field, 0) <= 0
+            for field in ("runId", "runAttempt")
+        )
+        or any(
+            not SHA256_PATTERN.fullmatch(str(authorization.get(field) or ""))
+            for field in (
+                "resultSha256",
+                "planSha256",
+                "inventoryDigest",
+                "authorizationSha256",
+            )
+        )
+    ):
+        raise CheckpointError("schema v3 dry-run authorization proof is invalid")
+    authorization_document = dict(authorization)
+    authorization_sha256 = authorization_document.pop("authorizationSha256")
+    authorization_raw = (
+        json.dumps(
+            authorization_document,
+            indent=2,
+            sort_keys=True,
+            ensure_ascii=False,
+        ).encode("utf-8")
+        + b"\n"
+    )
+    if hashlib.sha256(authorization_raw).hexdigest() != authorization_sha256:
+        raise CheckpointError("schema v3 dry-run authorization digest is invalid")
+    if set(residue) != {
+        "profile",
+        "inventoryDigest",
+        "quarantineRoot",
+        "manifestPath",
+        "manifestSha256",
+        "items",
+        "retainedEvidence",
+        "requiredAbsentPaths",
+        "recoveryFencePresentAtSeal",
+    }:
+        raise CheckpointError("schema v3 residue proof fields are invalid")
+    quarantine_root = _absolute_without_resolution(
+        Path(str(residue.get("quarantineRoot") or ""))
+    )
+    manifest_path = _absolute_without_resolution(
+        Path(str(residue.get("manifestPath") or ""))
+    )
+    items = residue.get("items")
+    retained_evidence = residue.get("retainedEvidence")
+    required_absent = residue.get("requiredAbsentPaths")
+    if (
+        residue.get("profile") != "materialized_never_started"
+        or residue.get("inventoryDigest") != authorization.get("inventoryDigest")
+        or quarantine_root
+        != RESIDUE_QUARANTINE_ROOT
+        or manifest_path != quarantine_root / "quarantine-contract.json"
+        or not SHA256_PATTERN.fullmatch(str(residue.get("manifestSha256") or ""))
+        or residue.get("recoveryFencePresentAtSeal") is not True
+        or not isinstance(items, list)
+        or len(items) != 8
+        or not isinstance(retained_evidence, list)
+        or len(retained_evidence) != 2
+        or not isinstance(required_absent, list)
+        or len(required_absent) != len(RESIDUE_REQUIRED_ABSENT_PATHS)
+        or {
+            _absolute_without_resolution(Path(str(path)))
+            for path in required_absent
+        }
+        != RESIDUE_REQUIRED_ABSENT_PATHS
+    ):
+        raise CheckpointError("schema v3 residue proof is invalid")
+    item_ids: set[str] = set()
+    for item in items:
+        if not isinstance(item, dict) or set(item) != {
+            "id",
+            "sourcePath",
+            "quarantinePath",
+            "identity",
+        }:
+            raise CheckpointError("schema v3 residue item proof is invalid")
+        item_id = item.get("id")
+        identity = item.get("identity")
+        source = _absolute_without_resolution(Path(str(item.get("sourcePath") or "")))
+        destination = _absolute_without_resolution(
+            Path(str(item.get("quarantinePath") or ""))
+        )
+        expected_kind = "symlink" if item_id == "candidate_slot_link" else "file"
+        if (
+            not isinstance(item_id, str)
+            or not item_id
+            or item_id in item_ids
+            or not isinstance(identity, dict)
+            or RESIDUE_SOURCE_PATHS.get(item_id) != source
+            or destination
+            != quarantine_root / str(RESIDUE_QUARANTINE_NAMES.get(item_id) or "")
+            or set(identity)
+            != {
+                "kind",
+                "device",
+                "inode",
+                "uid",
+                "gid",
+                "mode",
+                "nlink",
+                "bytes",
+                "mtimeNs",
+                "sha256",
+                "target",
+                "targetSha256",
+            }
+            or identity.get("kind") != expected_kind
+            or identity.get("device") != RESIDUE_DEVICE
+            or identity.get("uid") != RESIDUE_OWNER_UID
+            or identity.get("gid") != RESIDUE_OWNER_GID
+            or identity.get("nlink") != 1
+            or isinstance(identity.get("inode"), bool)
+            or not isinstance(identity.get("inode"), int)
+            or identity.get("inode", 0) <= 0
+            or isinstance(identity.get("bytes"), bool)
+            or not isinstance(identity.get("bytes"), int)
+            or identity.get("bytes", 0) <= 0
+            or isinstance(identity.get("mtimeNs"), bool)
+            or not isinstance(identity.get("mtimeNs"), int)
+            or identity.get("mtimeNs", 0) <= 0
+            or not re.fullmatch(r"0[0-7]{3}", str(identity.get("mode") or ""))
+        ):
+            raise CheckpointError("schema v3 residue item identity is invalid")
+        if expected_kind == "file":
+            if (
+                not SHA256_PATTERN.fullmatch(str(identity.get("sha256") or ""))
+                or identity.get("target") is not None
+                or identity.get("targetSha256") is not None
+            ):
+                raise CheckpointError("schema v3 regular residue identity is invalid")
+        elif (
+            identity.get("sha256") is not None
+            or identity.get("target")
+            != str(
+                Path("/opt/jato/releases")
+                / RESIDUE_TARGET_COMMIT
+                / str(receipt["identity"]["archiveSha256"])
+            )
+            or not SHA256_PATTERN.fullmatch(
+                str(identity.get("targetSha256") or "")
+            )
+        ):
+            raise CheckpointError("schema v3 Candidate slot identity is invalid")
+        item_ids.add(item_id)
+    if item_ids != set(RESIDUE_SOURCE_PATHS):
+        raise CheckpointError("schema v3 residue item set is invalid")
+    retained_by_id: dict[str, Mapping[str, Any]] = {}
+    for retained in retained_evidence:
+        if (
+            not isinstance(retained, dict)
+            or set(retained) != {"id", "path", "identity"}
+            or not isinstance(retained.get("id"), str)
+            or retained["id"] in retained_by_id
+        ):
+            raise CheckpointError("schema v3 retained evidence proof is invalid")
+        retained_by_id[retained["id"]] = retained
+    expected_retained_path = (
+        RESIDUE_PREVIOUS_METADATA_ROOT
+        / RESIDUE_TARGET_COMMIT
+        / f"{receipt['identity']['archiveSha256']}.json"
+    )
+    retained = retained_by_id.get("previous_metadata")
+    retained_identity = (
+        retained.get("identity") if isinstance(retained, dict) else None
+    )
+    if (
+        set(retained_by_id) != {"previous_metadata", "canonical_nginx_config"}
+        or not isinstance(retained, dict)
+        or retained.get("id") != "previous_metadata"
+        or _absolute_without_resolution(Path(str(retained.get("path") or "")))
+        != expected_retained_path
+        or not isinstance(retained_identity, dict)
+        or set(retained_identity)
+        != {
+            "kind",
+            "device",
+            "inode",
+            "uid",
+            "gid",
+            "mode",
+            "nlink",
+            "bytes",
+            "mtimeNs",
+            "sha256",
+            "target",
+            "targetSha256",
+        }
+        or retained_identity.get("kind") != "file"
+        or retained_identity.get("device") != RESIDUE_DEVICE
+        or retained_identity.get("uid") != RESIDUE_RETAINED_OWNER_UID
+        or retained_identity.get("gid") != RESIDUE_RETAINED_OWNER_GID
+        or retained_identity.get("mode") != "0600"
+        or retained_identity.get("nlink") != 1
+        or any(
+            isinstance(retained_identity.get(field), bool)
+            or not isinstance(retained_identity.get(field), int)
+            or retained_identity.get(field, 0) <= 0
+            for field in ("inode", "bytes", "mtimeNs")
+        )
+        or not SHA256_PATTERN.fullmatch(
+            str(retained_identity.get("sha256") or "")
+        )
+        or retained_identity.get("target") is not None
+        or retained_identity.get("targetSha256") is not None
+    ):
+        raise CheckpointError("schema v3 retained evidence proof is invalid")
+    canonical = retained_by_id["canonical_nginx_config"]
+    if (
+        _absolute_without_resolution(Path(str(canonical.get("path") or "")))
+        != RESIDUE_CANONICAL_NGINX
+        or canonical.get("identity") != RESIDUE_CANONICAL_NGINX_IDENTITY
+    ):
+        raise CheckpointError("schema v3 canonical Nginx proof is invalid")
+    if set(finalization) != {"path", "sha256"}:
+        raise CheckpointError("schema v3 finalization binding is invalid")
+    finalization_path = _absolute_without_resolution(
+        Path(str(finalization.get("path") or ""))
+    )
+    expected_plan_sha256 = str(
+        receipt.get("implementation", {}).get("planSha256") or ""
+    )
+    expected_finalization_path = (
+        _absolute_without_resolution(receipt_root)
+        / RESIDUE_INCIDENT_ID
+        / f"{expected_plan_sha256}.finalization.json"
+    )
+    if (
+        finalization_path != expected_finalization_path
+        or not SHA256_PATTERN.fullmatch(str(finalization.get("sha256") or ""))
+    ):
+        raise CheckpointError("schema v3 finalization receipt path is invalid")
+    runtime = production.get("runtime")
+    if (
+        not isinstance(runtime, dict)
+        or runtime.get("maintenanceMarkerPresent") is not True
+        or runtime.get("nginxCanonicalConfig") != str(RESIDUE_CANONICAL_NGINX)
+        or runtime.get("nginxCanonicalConfigIdentity")
+        != RESIDUE_CANONICAL_NGINX_IDENTITY
+    ):
+        raise CheckpointError("schema v3 operation receipt did not retain its fence")
 
 
 def _recovery_revision_set(raw: object) -> list[str]:
@@ -1002,8 +1413,12 @@ def _validate_recovery_legacy_evidence(
             for field in ("preRevision", "targetRevision", "resultRevision")
         )
     ):
+        if receipt["schemaVersion"] == 2:
+            raise CheckpointError(
+                "schema v2 recovery evidence revisions differ from receipt"
+            )
         raise CheckpointError(
-            "schema v2 recovery evidence revisions differ from receipt"
+            "schema v3 recovery evidence revisions differ from receipt"
         )
 
 
@@ -1059,6 +1474,366 @@ def _validate_recovery_receipt_safety_facts(
         or not SHA256_PATTERN.fullmatch(str(backup.get("dumpSha256") or ""))
     ):
         raise CheckpointError("recovery receipt backup proof is invalid")
+
+
+def _path_lexists(path: Path) -> bool:
+    return path.exists() or path.is_symlink()
+
+
+def _require_path_absent(
+    path: Path,
+    *,
+    label: str,
+    allow_permission_denied: bool = False,
+) -> None:
+    try:
+        path.lstat()
+    except FileNotFoundError:
+        return
+    except PermissionError as exc:
+        if allow_permission_denied:
+            return
+        raise CheckpointError(f"{label} cannot be inspected: {path}") from exc
+    except OSError as exc:
+        raise CheckpointError(f"{label} cannot be inspected: {path}") from exc
+    raise CheckpointError(f"{label} must remain absent: {path}")
+
+
+def _live_identity(path: Path, *, label: str) -> Mapping[str, Any]:
+    try:
+        before = path.lstat()
+    except OSError as exc:
+        raise CheckpointError(f"{label} cannot be inspected: {path}") from exc
+    if stat.S_ISLNK(before.st_mode):
+        target = os.readlink(path)
+        after = path.lstat()
+        if (
+            after.st_dev,
+            after.st_ino,
+            after.st_size,
+            after.st_mtime_ns,
+        ) != (
+            before.st_dev,
+            before.st_ino,
+            before.st_size,
+            before.st_mtime_ns,
+        ):
+            raise CheckpointError(f"{label} changed while reading: {path}")
+        return {
+            "kind": "symlink",
+            "device": after.st_dev,
+            "inode": after.st_ino,
+            "uid": after.st_uid,
+            "gid": after.st_gid,
+            "mode": f"0{stat.S_IMODE(after.st_mode):03o}",
+            "nlink": after.st_nlink,
+            "bytes": after.st_size,
+            "mtimeNs": after.st_mtime_ns,
+            "sha256": None,
+            "target": target,
+            "targetSha256": hashlib.sha256(target.encode("utf-8")).hexdigest(),
+        }
+    if not stat.S_ISREG(before.st_mode):
+        raise CheckpointError(f"{label} has an unsupported type: {path}")
+    raw = _read_small_regular_file(path, label=label)
+    after = path.lstat()
+    if (
+        after.st_dev,
+        after.st_ino,
+        after.st_size,
+        after.st_mtime_ns,
+    ) != (
+        before.st_dev,
+        before.st_ino,
+        before.st_size,
+        before.st_mtime_ns,
+    ):
+        raise CheckpointError(f"{label} changed while reading: {path}")
+    return {
+        "kind": "file",
+        "device": after.st_dev,
+        "inode": after.st_ino,
+        "uid": after.st_uid,
+        "gid": after.st_gid,
+        "mode": f"0{stat.S_IMODE(after.st_mode):03o}",
+        "nlink": after.st_nlink,
+        "bytes": after.st_size,
+        "mtimeNs": after.st_mtime_ns,
+        "sha256": hashlib.sha256(raw).hexdigest(),
+        "target": None,
+        "targetSha256": None,
+    }
+
+
+def _validate_schema_v3_finalization(
+    *,
+    operation_receipt: Mapping[str, Any],
+    receipt_root: Path,
+    owner_uid: int,
+    owner_gid: int,
+    enforce_incident_runtime: bool,
+) -> None:
+    """Validate the immutable settlement chain and its lifecycle invariants.
+
+    ``enforce_incident_runtime`` is true only while recovery apply seals the
+    incident.  Those checks prove that mutable Candidate/runtime paths have
+    reached the reviewed incident-time state.  A later release may legitimately
+    reuse those paths, so cross-release validation passes false while continuing
+    to verify the immutable receipts, the absent recovery marker, permanent
+    audit evidence and (when running as root) the private quarantine inodes.
+    """
+
+    if not isinstance(enforce_incident_runtime, bool):
+        raise CheckpointError("schema v3 recovery lifecycle mode is invalid")
+
+    binding = operation_receipt["finalizationReceipt"]
+    finalization_path = _absolute_without_resolution(Path(binding["path"]))
+    _reject_symlink(finalization_path, "recovery finalization receipt")
+    try:
+        relative = finalization_path.resolve(strict=True).relative_to(
+            receipt_root.resolve(strict=True)
+        )
+    except (OSError, ValueError) as exc:
+        raise CheckpointError(
+            "recovery finalization receipt escaped its receipt root"
+        ) from exc
+    if len(relative.parts) != 2:
+        raise CheckpointError("recovery finalization receipt layout is invalid")
+    metadata = finalization_path.stat()
+    if (
+        (metadata.st_uid, metadata.st_gid) != (owner_uid, owner_gid)
+        or stat.S_IMODE(metadata.st_mode) & 0o077
+    ):
+        raise CheckpointError("recovery finalization receipt owner/mode is invalid")
+    raw = _read_small_regular_file(
+        finalization_path,
+        label="recovery finalization receipt",
+    )
+    if hashlib.sha256(raw).hexdigest() != binding["sha256"]:
+        raise CheckpointError("recovery finalization receipt SHA256 mismatch")
+    try:
+        finalization = json.loads(raw.decode("utf-8"))
+    except (UnicodeError, json.JSONDecodeError) as exc:
+        raise CheckpointError("recovery finalization receipt is invalid JSON") from exc
+    if (
+        not isinstance(finalization, dict)
+        or set(finalization)
+        != {
+            "schemaVersion",
+            "kind",
+            "decision",
+            "incidentId",
+            "identity",
+            "implementation",
+            "quarantineManifest",
+            "fence",
+            "createdAt",
+        }
+        or finalization.get("schemaVersion") != 1
+        or finalization.get("kind") != "pre_switch_abort_fence_finalization"
+        or finalization.get("decision") != "fence_finalization_authorized"
+        or finalization.get("incidentId") != operation_receipt.get("incidentId")
+        or finalization.get("identity") != operation_receipt.get("identity")
+        or finalization.get("implementation")
+        != operation_receipt.get("implementation")
+    ):
+        raise CheckpointError("recovery finalization receipt contract is invalid")
+    residue = operation_receipt["residue"]
+    manifest = finalization.get("quarantineManifest")
+    if manifest != {
+        "path": residue["manifestPath"],
+        "sha256": residue["manifestSha256"],
+    }:
+        raise CheckpointError("recovery finalization manifest binding is invalid")
+    manifest_path = Path(manifest["path"])
+    quarantine_root = Path(residue["quarantineRoot"])
+    expected_fence_content = (
+        f"release={RESIDUE_TARGET_COMMIT} status=recovery_in_progress "
+        f"incident={RESIDUE_INCIDENT_ID}\n"
+    )
+    expected_fence = {
+        "content": expected_fence_content,
+        "sha256": hashlib.sha256(expected_fence_content.encode("utf-8")).hexdigest(),
+        "livePath": str(RESIDUE_MAINTENANCE_MARKER),
+        "finalPath": str(quarantine_root / "recovery-fence-final"),
+    }
+    fence = finalization.get("fence")
+    if not isinstance(fence, dict) or set(fence) != {
+        "livePath",
+        "finalPath",
+        "identity",
+    }:
+        raise CheckpointError("recovery finalization fence proof is invalid")
+    live_path = _absolute_without_resolution(Path(str(fence.get("livePath") or "")))
+    final_path = _absolute_without_resolution(Path(str(fence.get("finalPath") or "")))
+    fence_identity = fence.get("identity")
+    if (
+        live_path != RESIDUE_MAINTENANCE_MARKER
+        or final_path != quarantine_root / "recovery-fence-final"
+        or _path_lexists(live_path)
+        or not isinstance(fence_identity, dict)
+        or set(fence_identity)
+        != {
+            "kind",
+            "device",
+            "inode",
+            "uid",
+            "gid",
+            "mode",
+            "nlink",
+            "bytes",
+            "mtimeNs",
+            "sha256",
+            "target",
+            "targetSha256",
+        }
+        or fence_identity.get("kind") != "file"
+        or fence_identity.get("device") != RESIDUE_DEVICE
+        or (fence_identity.get("uid"), fence_identity.get("gid"))
+        != (RESIDUE_OWNER_UID, RESIDUE_OWNER_GID)
+        or fence_identity.get("mode") != "0644"
+        or fence_identity.get("nlink") != 1
+        or fence_identity.get("bytes") != len(expected_fence_content.encode("utf-8"))
+        or any(
+            isinstance(fence_identity.get(field), bool)
+            or not isinstance(fence_identity.get(field), int)
+            or fence_identity.get(field, 0) <= 0
+            for field in ("inode", "mtimeNs")
+        )
+        or fence_identity.get("sha256") != expected_fence["sha256"]
+        or fence_identity.get("target") is not None
+        or fence_identity.get("targetSha256") is not None
+    ):
+        raise CheckpointError("recovery fence finalization is not settled")
+
+    # Recovery apply runs this module as root and proves every inode inside the
+    # private 0700 quarantine.  A later root audit repeats that permanent proof.
+    # Normal releases run the cross-release gate as the unprivileged SSH account
+    # and intentionally cannot traverse the directory; their fail-closed proof
+    # is the checkpoint-bound pair of 0600 receipts, the absent recovery marker,
+    # and permanent metadata below.  Successor-owned runtime paths are checked
+    # by the successor checkpoint rather than frozen to the incident snapshot.
+    # A root attacker able to alter both production and the private quarantine
+    # remains outside this deployment-integrity threat model.
+    if os.geteuid() == 0:
+        try:
+            quarantine_metadata = quarantine_root.lstat()
+            manifest_metadata = manifest_path.lstat()
+        except OSError as exc:
+            raise CheckpointError(
+                "recovery quarantine root/manifest cannot be inspected"
+            ) from exc
+        if (
+            not stat.S_ISDIR(quarantine_metadata.st_mode)
+            or stat.S_ISLNK(quarantine_metadata.st_mode)
+            or quarantine_metadata.st_dev != RESIDUE_DEVICE
+            or (quarantine_metadata.st_uid, quarantine_metadata.st_gid)
+            != (RESIDUE_OWNER_UID, RESIDUE_OWNER_GID)
+            or stat.S_IMODE(quarantine_metadata.st_mode) != 0o700
+            or not stat.S_ISREG(manifest_metadata.st_mode)
+            or stat.S_ISLNK(manifest_metadata.st_mode)
+            or manifest_metadata.st_dev != RESIDUE_DEVICE
+            or (manifest_metadata.st_uid, manifest_metadata.st_gid)
+            != (RESIDUE_OWNER_UID, RESIDUE_OWNER_GID)
+            or stat.S_IMODE(manifest_metadata.st_mode) != 0o600
+            or manifest_metadata.st_nlink != 1
+        ):
+            raise CheckpointError(
+                "recovery quarantine root/manifest identity is invalid"
+            )
+        manifest_raw = _read_small_regular_file(
+            manifest_path,
+            label="recovery quarantine manifest",
+        )
+        if hashlib.sha256(manifest_raw).hexdigest() != manifest["sha256"]:
+            raise CheckpointError("recovery quarantine manifest changed")
+        try:
+            manifest_payload = json.loads(manifest_raw.decode("utf-8"))
+        except (UnicodeError, json.JSONDecodeError) as exc:
+            raise CheckpointError(
+                "recovery quarantine manifest is invalid JSON"
+            ) from exc
+        expected_manifest_items = [
+            {
+                "id": item["id"],
+                "path": item["sourcePath"],
+                "quarantineName": Path(item["quarantinePath"]).name,
+                **item["identity"],
+            }
+            for item in residue["items"]
+        ]
+        expected_retained_evidence = [
+            {
+                "id": item["id"],
+                "path": item["path"],
+                **item["identity"],
+            }
+            for item in residue["retainedEvidence"]
+        ]
+        if manifest_payload != {
+            "schemaVersion": 1,
+            "kind": "candidate_residue_quarantine_contract",
+            "incidentId": operation_receipt["incidentId"],
+            "identity": operation_receipt["identity"],
+            "implementation": operation_receipt["implementation"],
+            "authorization": operation_receipt["authorization"],
+            "quarantineRoot": str(quarantine_root),
+            "items": expected_manifest_items,
+            "retainedEvidence": expected_retained_evidence,
+            "requiredAbsentPaths": residue["requiredAbsentPaths"],
+            "fence": expected_fence,
+        }:
+            raise CheckpointError("recovery quarantine manifest contract changed")
+        if not _path_lexists(final_path):
+            raise CheckpointError("final recovery fence is absent")
+        final_fence_identity = _live_identity(
+            final_path,
+            label="final recovery fence",
+        )
+        if final_fence_identity != fence_identity:
+            raise CheckpointError("recovery fence identity is invalid")
+        for item in residue["items"]:
+            destination = Path(item["quarantinePath"])
+            if (
+                not _path_lexists(destination)
+                or _live_identity(
+                    destination,
+                    label="quarantined Candidate residue",
+                )
+                != item["identity"]
+            ):
+                raise CheckpointError("Candidate residue quarantine is not settled")
+
+    if enforce_incident_runtime:
+        for item in residue["items"]:
+            source = Path(item["sourcePath"])
+            _require_path_absent(
+                source,
+                label="Candidate residue quarantine is not settled",
+            )
+        for raw_path in residue["requiredAbsentPaths"]:
+            required_absent = Path(raw_path)
+            _require_path_absent(
+                required_absent,
+                label="required recovery-absence invariant",
+                allow_permission_denied=(
+                    os.geteuid() != 0
+                    and required_absent in RESIDUE_ROOT_ATTESTED_ABSENT_PATHS
+                ),
+            )
+    for item in residue["retainedEvidence"]:
+        if (
+            not enforce_incident_runtime
+            and item.get("id") != "previous_metadata"
+        ):
+            continue
+        path = Path(item["path"])
+        if (
+            not _path_lexists(path)
+            or _live_identity(path, label="retained recovery evidence")
+            != item["identity"]
+        ):
+            raise CheckpointError("retained recovery evidence changed")
 
 
 def _validate_pre_switch_abort_source(
@@ -1372,6 +2147,7 @@ def _validate_pre_switch_abort_settlement(
     checkpoint_path: Path,
     checkpoint: Mapping[str, Any],
     checkpoints_root: Path,
+    enforce_incident_runtime: bool,
 ) -> None:
     identity = ReleaseIdentity.from_mapping(checkpoint["identity"])
     bindings = PRE_SWITCH_RECOVERY_BINDING_PATTERN.findall(
@@ -1392,6 +2168,14 @@ def _validate_pre_switch_abort_settlement(
         owner_gid=checkpoint_metadata.st_gid,
     )
     _validate_recovery_receipt_safety_facts(receipt)
+    if receipt.get("schemaVersion") == 3:
+        _validate_schema_v3_finalization(
+            operation_receipt=receipt,
+            receipt_root=receipt_root,
+            owner_uid=checkpoint_metadata.st_uid,
+            owner_gid=checkpoint_metadata.st_gid,
+            enforce_incident_runtime=enforce_incident_runtime,
+        )
 
     journal_path = (
         checkpoints_root.parent
@@ -1493,6 +2277,7 @@ def validate_pre_switch_abort_settlement(
         checkpoint_path=_absolute_without_resolution(checkpoint_path),
         checkpoint=checkpoint,
         checkpoints_root=_absolute_without_resolution(checkpoints_root),
+        enforce_incident_runtime=True,
     )
     return checkpoint
 
@@ -1593,6 +2378,7 @@ def assert_cross_release_safe(
                     checkpoint_path=entry,
                     checkpoint=payload,
                     checkpoints_root=checkpoints_root,
+                    enforce_incident_runtime=False,
                 )
                 continue
             if retry_class in DANGEROUS_RETRY_CLASSES:

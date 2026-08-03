@@ -1335,9 +1335,19 @@ def test_checkpoint_recovery_is_lock_bound_and_read_only_except_settlement() -> 
 
     assert source_lock < acquire_lock < validate_fd < privileged_helper
     assert (
-        'RECOVERY_APPLY_CONFIRMATION="ABORT 2026-07-30-86ce PRE-SWITCH"'
+        'RECOVERY_86CE_APPLY_CONFIRMATION="ABORT 2026-07-30-86ce PRE-SWITCH"'
         in controller
     )
+    assert (
+        'RECOVERY_29DF_APPLY_CONFIRMATION="QUARANTINE '
+        '29df5e6e667351f09305783932b34e5438d6a9d5 RESIDUE AND ABORT PRE-SWITCH"'
+        in controller
+    )
+    assert "schema_version == 2" in controller
+    assert "schema_version == 3" in controller
+    assert 'relative = "reviewed-dry-run-authorization.json"' in controller
+    assert "--dry-run-authorization" in controller
+    assert "--dry-run-authorization-sha256" in controller
     assert (
         '[[ "$RECOVERY_MODE" == "dry-run" && -n "$RECOVERY_CONFIRMATION" ]]'
         in controller

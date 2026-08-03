@@ -11,6 +11,10 @@ on:
       - "!hermes/dev_events/**"
       - "01_RAW_DATA/VOC_Nordic_SUV_Users_100.xlsx"
       - ".nvmrc"
+      - ".github/scripts/production_release_hold.py"
+      - ".github/recovery-plans/2026-08-03-29df-pre-switch-candidate-residue.json"
+      - ".github/recovery-plans/2026-08-03-29df-pre-switch-candidate-residue-production-hold.v1.json"
+      - ".github/recovery-plans/2026-08-03-29df-pre-switch-candidate-residue-production-hold-retirement.v1.json"
       - ".github/workflows/production-release.yml"
   workflow_dispatch:
 
@@ -33,6 +37,8 @@ jobs:
     if: ${{ github.ref == 'refs/heads/main' }}
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    outputs:
+      release-action: ${{ steps.production_hold.outputs.release-action }}
 
     steps:
       - name: Checkout release coordination guard
@@ -50,6 +56,13 @@ jobs:
           --main-sha "$GITHUB_SHA"
           --plan-output "$RUNNER_TEMP/release-coordination-plan.json"
 
+      - name: Resolve reviewed production release hold
+        id: production_hold
+        run: >-
+          python3 .github/scripts/production_release_hold.py
+          resolve
+          --github-output "$GITHUB_OUTPUT"
+
       - name: Freeze release coordination plan
         uses: actions/upload-artifact@v4
         with:
@@ -61,7 +74,9 @@ jobs:
           retention-days: 7
 
   build_frontend:
-    if: ${{ github.ref == 'refs/heads/main' }}
+    if: >-
+      ${{ github.ref == 'refs/heads/main' &&
+      needs.release_coordination_guard.outputs.release-action == 'deploy' }}
     needs: release_coordination_guard
     runs-on: ubuntu-latest
     timeout-minutes: 30
@@ -193,8 +208,10 @@ jobs:
           test -n "$BUILD_TIMESTAMP"
 
   deploy_tencent:
-    if: ${{ github.ref == 'refs/heads/main' }}
-    needs: build_frontend
+    if: >-
+      ${{ github.ref == 'refs/heads/main' &&
+      needs.release_coordination_guard.outputs.release-action == 'deploy' }}
+    needs: [release_coordination_guard, build_frontend]
     environment: production
     runs-on: ubuntu-latest
     timeout-minutes: 240
@@ -1560,8 +1577,10 @@ jobs:
           retention-days: 7
 
   audit_frontend_parity:
-    if: ${{ github.ref == 'refs/heads/main' }}
-    needs: [build_frontend, deploy_tencent]
+    if: >-
+      ${{ github.ref == 'refs/heads/main' &&
+      needs.release_coordination_guard.outputs.release-action == 'deploy' }}
+    needs: [release_coordination_guard, build_frontend, deploy_tencent]
     runs-on: ubuntu-latest
     timeout-minutes: 10
 

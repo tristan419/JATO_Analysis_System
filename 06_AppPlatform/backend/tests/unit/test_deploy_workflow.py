@@ -17,6 +17,11 @@ READINESS_HELPER = REPO_ROOT / "03_Scripts/deploy/verify_backend_readiness.py"
 CHECKPOINT_RECOVERY_WORKFLOW = (
     REPO_ROOT / ".github/workflows/production-checkpoint-recovery.yml"
 )
+PRODUCTION_RELEASE_WORKFLOW = REPO_ROOT / ".github/workflows/production-release.yml"
+INTL_EDGE_PREWARM_WORKFLOW = REPO_ROOT / ".github/workflows/intl-edge-prewarm.yml"
+WORKFLOW_GUARD_VALIDATOR = (
+    REPO_ROOT / ".github/scripts/validate_production_workflow_guards.py"
+)
 
 
 def test_production_release_excludes_local_tooling_and_temp_artifacts() -> None:
@@ -29,6 +34,79 @@ def test_production_release_excludes_local_tooling_and_temp_artifacts() -> None:
     assert "--exclude='*.pyc'" in workflow
 
 
+def test_recovery_hold_stops_release_and_prewarm_before_mutation() -> None:
+    workflow = yaml.load(
+        PRODUCTION_RELEASE_WORKFLOW.read_text(encoding="utf-8"),
+        Loader=yaml.BaseLoader,
+    )
+    assert isinstance(workflow, dict)
+    push_paths = set(workflow["on"]["push"]["paths"])
+    assert {
+        ".github/scripts/production_release_hold.py",
+        (
+            ".github/recovery-plans/"
+            "2026-08-03-29df-pre-switch-candidate-residue.json"
+        ),
+        (
+            ".github/recovery-plans/"
+            "2026-08-03-29df-pre-switch-candidate-residue-"
+            "production-hold.v1.json"
+        ),
+        (
+            ".github/recovery-plans/"
+            "2026-08-03-29df-pre-switch-candidate-residue-"
+            "production-hold-retirement.v1.json"
+        ),
+    }.issubset(push_paths)
+    jobs = workflow["jobs"]
+    guard = jobs["release_coordination_guard"]
+    assert "environment" not in guard
+    assert guard["outputs"] == {
+        "release-action": "${{ steps.production_hold.outputs.release-action }}",
+    }
+    assert [step["name"] for step in guard["steps"]] == [
+        "Checkout release coordination guard",
+        "Validate unpublished release coordination",
+        "Resolve reviewed production release hold",
+        "Freeze release coordination plan",
+    ]
+    resolver = guard["steps"][2]
+    assert resolver["id"] == "production_hold"
+    assert "production_release_hold.py" in resolver["run"]
+    assert "--github-output \"$GITHUB_OUTPUT\"" in resolver["run"]
+
+    deploy_condition = (
+        "${{ github.ref == 'refs/heads/main' && "
+        "needs.release_coordination_guard.outputs.release-action == 'deploy' }}"
+    )
+    assert jobs["build_frontend"]["if"] == deploy_condition
+    assert jobs["build_frontend"]["needs"] == "release_coordination_guard"
+    assert jobs["deploy_tencent"]["if"] == deploy_condition
+    assert jobs["deploy_tencent"]["needs"] == [
+        "release_coordination_guard",
+        "build_frontend",
+    ]
+    assert jobs["deploy_tencent"]["environment"] == "production"
+    assert jobs["audit_frontend_parity"]["if"] == deploy_condition
+    assert jobs["audit_frontend_parity"]["needs"] == [
+        "release_coordination_guard",
+        "build_frontend",
+        "deploy_tencent",
+    ]
+
+    prewarm = yaml.load(
+        INTL_EDGE_PREWARM_WORKFLOW.read_text(encoding="utf-8"),
+        Loader=yaml.BaseLoader,
+    )
+    prewarm_steps = prewarm["jobs"]["prewarm"]["steps"]
+    assert prewarm_steps[1]["name"] == "Resolve completed production release action"
+    assert prewarm_steps[1]["id"] == "production_hold"
+    prewarm_condition = (
+        "${{ steps.production_hold.outputs.release-action == 'deploy' }}"
+    )
+    assert all(step["if"] == prewarm_condition for step in prewarm_steps[2:])
+
+
 def test_checkpoint_recovery_workflow_is_exactly_gated_and_read_only() -> None:
     workflow_text = CHECKPOINT_RECOVERY_WORKFLOW.read_text(encoding="utf-8")
     workflow = yaml.load(workflow_text, Loader=yaml.BaseLoader)
@@ -36,7 +114,14 @@ def test_checkpoint_recovery_workflow_is_exactly_gated_and_read_only() -> None:
     assert workflow["name"] == "production-checkpoint-recovery"
     assert set(workflow["on"]) == {"workflow_dispatch"}
     inputs = workflow["on"]["workflow_dispatch"]["inputs"]
-    assert set(inputs) == {"mode", "confirmation"}
+    assert set(inputs) == {
+        "mode",
+        "confirmation",
+        "reviewed_dry_run_run_id",
+        "reviewed_dry_run_result_sha256",
+        "reviewed_main_sha",
+        "reviewed_plan_sha256",
+    }
     assert inputs["mode"]["required"] == "true"
     assert inputs["mode"]["default"] == "dry-run"
     assert inputs["mode"]["type"] == "choice"
@@ -50,6 +135,16 @@ def test_checkpoint_recovery_workflow_is_exactly_gated_and_read_only() -> None:
         "default": "",
         "type": "string",
     }
+    for name in set(inputs) - {"mode", "confirmation"}:
+        assert {
+            "required": inputs[name]["required"],
+            "default": inputs[name]["default"],
+            "type": inputs[name]["type"],
+        } == {
+            "required": "false",
+            "default": "",
+            "type": "string",
+        }
     assert workflow["concurrency"] == {
         "group": "production-release-main",
         "cancel-in-progress": "false",
@@ -72,11 +167,20 @@ def test_checkpoint_recovery_workflow_is_exactly_gated_and_read_only() -> None:
     assert [step["name"] for step in guard_steps] == [
         "Checkout recovery source",
         "Validate recovery dispatch intent",
+        "Fetch reviewed dry-run metadata",
+        "Resolve reviewed dry-run artifact",
+        "Download reviewed dry-run result",
+        "Verify and freeze reviewed dry-run authorization",
+        "Validate active recovery-only production hold",
         "Validate unpublished release coordination",
         "Freeze recovery coordination plan",
+        "Freeze reviewed dry-run evidence",
     ]
     assert "secrets." not in str(guard_steps)
-    frozen_artifact = guard_steps[3]
+    assert "reviewed_recovery_authorization.py freeze" in guard_steps[5]["run"]
+    assert "production_release_hold.py" in guard_steps[6]["run"]
+    assert "require-active" in guard_steps[6]["run"]
+    frozen_artifact = guard_steps[8]
     assert frozen_artifact["uses"] == "actions/upload-artifact@v4"
     assert frozen_artifact["with"] == {
         "name": (
@@ -93,44 +197,55 @@ def test_checkpoint_recovery_workflow_is_exactly_gated_and_read_only() -> None:
     recovery_steps = recovery["steps"]
     assert [step["name"] for step in recovery_steps] == [
         "Checkout recovery source",
+        "Revalidate active recovery-only production hold after approval",
         "Download frozen recovery coordination plan",
         "Revalidate frozen coordination plan after approval",
         "Revalidate recovery dispatch intent after approval",
+        "Download frozen reviewed dry-run evidence",
+        "Revalidate frozen reviewed dry-run evidence",
         "Build immutable recovery control bundle",
         "Validate Tencent recovery credentials",
         "Reconfirm current main before recovery transport",
         "Run reviewed checkpoint recovery on Tencent",
         "Upload checkpoint recovery result",
     ]
-    assert "secrets." not in str(recovery_steps[:4])
-    assert recovery_steps[1]["with"] == {
+    assert "secrets." not in str(recovery_steps[:8])
+    assert "production_release_hold.py" in recovery_steps[1]["run"]
+    assert "require-active" in recovery_steps[1]["run"]
+    assert recovery_steps[2]["with"] == {
         "name": (
             "checkpoint-recovery-plan-${{ github.sha }}-"
             "${{ github.run_attempt }}"
         ),
         "path": "${{ runner.temp }}/recovery-coordination-plan",
     }
-    assert "verify-plan" in recovery_steps[2]["run"]
-    assert "ABORT 2026-07-30-86ce PRE-SWITCH" in recovery_steps[3]["run"]
-    assert "recovery-control-manifest.json" in recovery_steps[4]["run"]
+    assert "verify-plan" in recovery_steps[3]["run"]
     assert (
-        'plan=".github/recovery-plans/'
-        '2026-07-30-86ce-pre-switch-db-evidence.json"'
+        "QUARANTINE 29df5e6e667351f09305783932b34e5438d6a9d5 "
+        "RESIDUE AND ABORT PRE-SWITCH"
         in recovery_steps[4]["run"]
     )
-    assert "SSH_KNOWN_HOSTS" in str(recovery_steps[5]["env"])
-    assert "verify-plan" in recovery_steps[6]["run"]
-    assert "StrictHostKeyChecking=yes" in recovery_steps[7]["run"]
-    result_artifact = recovery_steps[8]
+    assert "reviewed_recovery_authorization.py verify" in recovery_steps[6]["run"]
+    assert "recovery-control-manifest.json" in recovery_steps[7]["run"]
+    assert (
+        'plan=".github/recovery-plans/'
+        '2026-08-03-29df-pre-switch-candidate-residue.json"'
+        in recovery_steps[7]["run"]
+    )
+    assert "SSH_KNOWN_HOSTS" in str(recovery_steps[8]["env"])
+    assert "verify-plan" in recovery_steps[9]["run"]
+    assert "StrictHostKeyChecking=yes" in recovery_steps[10]["run"]
+    assert "ABORT 2026-07-30-86ce PRE-SWITCH" not in workflow_text
+    result_artifact = recovery_steps[11]
     assert result_artifact["if"] == "${{ always() }}"
     assert result_artifact["uses"] == "actions/upload-artifact@v4"
     assert result_artifact["with"] == {
         "name": (
             "checkpoint-recovery-result-${{ github.sha }}-"
-            "${{ github.run_attempt }}"
+            "${{ github.run_id }}-${{ github.run_attempt }}"
         ),
         "path": "${{ runner.temp }}/checkpoint-recovery-result.json",
-        "if-no-files-found": "warn",
+        "if-no-files-found": "error",
         "compression-level": "0",
         "overwrite": "false",
         "retention-days": "30",
@@ -162,7 +277,7 @@ def test_checkpoint_recovery_workflow_is_exactly_gated_and_read_only() -> None:
             recovery_sources,
         )
     )
-    assert systemctl_verbs == {"show"}
+    assert systemctl_verbs == {"show", "daemon-reload"}
     assert set(
         re.findall(r"-m\s+alembic\s+([a-z-]+)", recovery_sources)
     ) == {"current", "heads"}
@@ -181,6 +296,23 @@ def test_checkpoint_recovery_workflow_is_exactly_gated_and_read_only() -> None:
         "tencent_bluegreen_release.sh",
     ):
         assert forbidden not in recovery_sources
+
+
+def test_production_workflow_loader_rejects_duplicate_yaml_keys() -> None:
+    spec = importlib.util.spec_from_file_location(
+        "production_workflow_guard_test_module",
+        WORKFLOW_GUARD_VALIDATOR,
+    )
+    assert spec is not None
+    assert spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+
+    with pytest.raises(AssertionError, match="duplicate YAML key: path"):
+        yaml.load(
+            "with:\n  path: first\n  path: second\n",
+            Loader=module.UniqueKeyLoader,
+        )
 
 
 def test_tencent_bluegreen_release_links_durable_runtime_artifacts() -> None:
@@ -506,7 +638,10 @@ def test_www_and_intl_switch_the_shared_artifact_in_one_protected_job() -> None:
     assert workflow.index("Deploy verified release on Tencent") < workflow.index(
         "Deploy downloaded dist to Cloudflare Pages",
     )
-    assert "needs: [build_frontend, deploy_tencent]" in workflow
+    assert (
+        "needs: [release_coordination_guard, build_frontend, deploy_tencent]"
+        in workflow
+    )
 
 
 def test_tencent_uploads_verified_archive_before_deploy_step() -> None:

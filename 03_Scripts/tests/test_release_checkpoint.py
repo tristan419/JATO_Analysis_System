@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import contextlib
+import hashlib
 import io
 import json
 import os
@@ -760,6 +761,80 @@ class ReleaseCheckpointTests(unittest.TestCase):
         self.assertTrue(result["currentCheckpointPresent"])
         self.assertEqual(resume["decision"], "resumable")
 
+    def test_two_successor_gates_use_historical_recovery_lifecycle(self) -> None:
+        checkpoints_root = self.root / "checkpoints"
+        recovered_identity = self.namespaced_identity(
+            commit=checkpoint.RESIDUE_TARGET_COMMIT,
+            archive_sha256="4" * 64,
+            run_id=222222,
+        )
+        recovered_path = (
+            checkpoints_root
+            / recovered_identity.commit
+            / f"{recovered_identity.archiveSha256}.json"
+        )
+        recovered_payload = checkpoint.validate_checkpoint(
+            {
+                "schemaVersion": checkpoint.SCHEMA_VERSION,
+                "sequence": 7,
+                "identity": recovered_identity.to_dict(),
+                "phase": checkpoint.PRE_SWITCH_ABORT_PHASE,
+                "status": "completed",
+                "retryClass": "automatic",
+                "updatedAt": "2026-08-03T00:00:00.000Z",
+                "message": "settled by immutable recovery receipts",
+            }
+        )
+        checkpoint.atomic_write_json(recovered_path, recovered_payload)
+
+        first_identity = self.namespaced_identity(
+            commit="d" * 40,
+            archive_sha256="e" * 64,
+            run_id=333333,
+        )
+        first_path = self.write_namespaced(
+            checkpoints_root,
+            first_identity,
+            "backend_healthy",
+        )
+        with mock.patch.object(
+            checkpoint,
+            "_validate_pre_switch_abort_settlement",
+        ) as validate_recovery:
+            first = checkpoint.assert_cross_release_safe(
+                checkpoints_root=checkpoints_root,
+                current_checkpoint=first_path,
+                expected_identity=first_identity,
+            )
+        self.assertEqual(first["decision"], "cross-release-safe")
+        self.assertFalse(
+            validate_recovery.call_args.kwargs["enforce_incident_runtime"]
+        )
+
+        second_identity = self.namespaced_identity(
+            commit="f" * 40,
+            archive_sha256="1" * 64,
+            run_id=444444,
+        )
+        second_path = self.write_namespaced(
+            checkpoints_root,
+            second_identity,
+            "prepared",
+        )
+        with mock.patch.object(
+            checkpoint,
+            "_validate_pre_switch_abort_settlement",
+        ) as validate_recovery:
+            second = checkpoint.assert_cross_release_safe(
+                checkpoints_root=checkpoints_root,
+                current_checkpoint=second_path,
+                expected_identity=second_identity,
+            )
+        self.assertEqual(second["decision"], "cross-release-safe")
+        self.assertFalse(
+            validate_recovery.call_args.kwargs["enforce_incident_runtime"]
+        )
+
     def test_second_sha_gate_ignores_previous_metadata_outside_checkpoint_namespace(
         self,
     ) -> None:
@@ -983,6 +1058,220 @@ class ReleaseCheckpointTests(unittest.TestCase):
                 current_checkpoint=current_path,
                 expected_identity=self.identity,
             )
+
+    def test_schema_v3_receipt_contract_binds_authorization_and_retained_evidence(
+        self,
+    ) -> None:
+        receipt_root = self.root / "recoveries"
+        plan_sha = "1" * 64
+        archive_sha = "2" * 64
+        identity = {
+            **self.identity.to_dict(),
+            "commit": checkpoint.RESIDUE_TARGET_COMMIT,
+            "archiveSha256": archive_sha,
+        }
+        implementation = {
+            "commit": "3" * 40,
+            "planSha256": plan_sha,
+        }
+        authorization = {
+            "schemaVersion": 1,
+            "kind": "checkpoint_recovery_dry_run_authorization",
+            "repository": identity["repository"],
+            "workflowPath": ".github/workflows/production-checkpoint-recovery.yml",
+            "runId": 123,
+            "runAttempt": 1,
+            "mainSha": implementation["commit"],
+            "planSha256": plan_sha,
+            "resultSha256": "4" * 64,
+            "incidentId": checkpoint.RESIDUE_INCIDENT_ID,
+            "inventoryDigest": "5" * 64,
+            "decision": "candidate-residue-dry-run-eligible",
+        }
+        authorization_raw = (
+            json.dumps(
+                authorization,
+                indent=2,
+                sort_keys=True,
+                ensure_ascii=False,
+            ).encode("utf-8")
+            + b"\n"
+        )
+        bound_authorization = {
+            **authorization,
+            "authorizationSha256": hashlib.sha256(authorization_raw).hexdigest(),
+        }
+        residue_items = []
+        for index, (item_id, source) in enumerate(
+            checkpoint.RESIDUE_SOURCE_PATHS.items(),
+            start=1,
+        ):
+            is_link = item_id == "candidate_slot_link"
+            residue_items.append(
+                {
+                    "id": item_id,
+                    "sourcePath": str(source),
+                    "quarantinePath": str(
+                        checkpoint.RESIDUE_QUARANTINE_ROOT
+                        / checkpoint.RESIDUE_QUARANTINE_NAMES[item_id]
+                    ),
+                    "identity": {
+                        "kind": "symlink" if is_link else "file",
+                        "device": checkpoint.RESIDUE_DEVICE,
+                        "inode": index,
+                        "uid": checkpoint.RESIDUE_OWNER_UID,
+                        "gid": checkpoint.RESIDUE_OWNER_GID,
+                        "mode": "0777" if is_link else "0644",
+                        "nlink": 1,
+                        "bytes": index,
+                        "mtimeNs": index,
+                        "sha256": None if is_link else "6" * 64,
+                        "target": (
+                            str(
+                                Path("/opt/jato/releases")
+                                / checkpoint.RESIDUE_TARGET_COMMIT
+                                / archive_sha
+                            )
+                            if is_link
+                            else None
+                        ),
+                        "targetSha256": "7" * 64 if is_link else None,
+                    },
+                }
+            )
+        retained_path = (
+            checkpoint.RESIDUE_PREVIOUS_METADATA_ROOT
+            / checkpoint.RESIDUE_TARGET_COMMIT
+            / f"{archive_sha}.json"
+        )
+        receipt = {
+            "schemaVersion": 3,
+            "kind": "pre_switch_abort",
+            "decision": "pre_switch_abort_verified",
+            "incidentId": checkpoint.RESIDUE_INCIDENT_ID,
+            "identity": identity,
+            "implementation": implementation,
+            "sourceCheckpoint": {},
+            "legacyEvidence": {},
+            "journal": {},
+            "backup": {},
+            "database": {},
+            "production": {
+                "runtime": {
+                    "maintenanceMarkerPresent": True,
+                    "nginxCanonicalConfig": str(
+                        checkpoint.RESIDUE_CANONICAL_NGINX
+                    ),
+                    "nginxCanonicalConfigIdentity": (
+                        dict(checkpoint.RESIDUE_CANONICAL_NGINX_IDENTITY)
+                    ),
+                }
+            },
+            "candidate": {},
+            "lock": {},
+            "createdAt": "2026-08-03T00:00:00.000Z",
+            "authorization": bound_authorization,
+            "residue": {
+                "profile": "materialized_never_started",
+                "inventoryDigest": authorization["inventoryDigest"],
+                "quarantineRoot": str(checkpoint.RESIDUE_QUARANTINE_ROOT),
+                "manifestPath": str(
+                    checkpoint.RESIDUE_QUARANTINE_ROOT / "quarantine-contract.json"
+                ),
+                "manifestSha256": "8" * 64,
+                "items": residue_items,
+                "retainedEvidence": [
+                    {
+                        "id": "previous_metadata",
+                        "path": str(retained_path),
+                        "identity": {
+                            "kind": "file",
+                            "device": checkpoint.RESIDUE_DEVICE,
+                            "inode": 99,
+                            "uid": checkpoint.RESIDUE_RETAINED_OWNER_UID,
+                            "gid": checkpoint.RESIDUE_RETAINED_OWNER_GID,
+                            "mode": "0600",
+                            "nlink": 1,
+                            "bytes": 10,
+                            "mtimeNs": 11,
+                            "sha256": "9" * 64,
+                            "target": None,
+                            "targetSha256": None,
+                        },
+                    },
+                    {
+                        "id": "canonical_nginx_config",
+                        "path": str(checkpoint.RESIDUE_CANONICAL_NGINX),
+                        "identity": dict(
+                            checkpoint.RESIDUE_CANONICAL_NGINX_IDENTITY
+                        ),
+                    },
+                ],
+                "requiredAbsentPaths": sorted(
+                    str(path) for path in checkpoint.RESIDUE_REQUIRED_ABSENT_PATHS
+                ),
+                "recoveryFencePresentAtSeal": True,
+            },
+            "finalizationReceipt": {
+                "path": str(
+                    receipt_root
+                    / checkpoint.RESIDUE_INCIDENT_ID
+                    / f"{plan_sha}.finalization.json"
+                ),
+                "sha256": "a" * 64,
+            },
+        }
+
+        checkpoint._validate_schema_v3_receipt_contract(
+            receipt,
+            receipt_root=receipt_root,
+        )
+
+        receipt["residue"]["retainedEvidence"][1]["identity"]["inode"] += 1
+        with self.assertRaisesRegex(checkpoint.CheckpointError, "canonical Nginx"):
+            checkpoint._validate_schema_v3_receipt_contract(
+                receipt,
+                receipt_root=receipt_root,
+            )
+        receipt["residue"]["retainedEvidence"][1]["identity"]["inode"] -= 1
+
+        removed_absence = receipt["residue"]["requiredAbsentPaths"].pop()
+        with self.assertRaisesRegex(checkpoint.CheckpointError, "residue proof"):
+            checkpoint._validate_schema_v3_receipt_contract(
+                receipt,
+                receipt_root=receipt_root,
+            )
+        receipt["residue"]["requiredAbsentPaths"].append(removed_absence)
+
+        receipt["authorization"]["runId"] = 456
+        with self.assertRaisesRegex(
+            checkpoint.CheckpointError,
+            "authorization digest",
+        ):
+            checkpoint._validate_schema_v3_receipt_contract(
+                receipt,
+                receipt_root=receipt_root,
+            )
+
+    def test_unprivileged_absence_allows_only_root_attested_private_path(
+        self,
+    ) -> None:
+        hidden = Path("/var/cache/private/jato-candidate-8001")
+        with mock.patch.object(Path, "lstat", side_effect=PermissionError):
+            checkpoint._require_path_absent(
+                hidden,
+                label="private cache",
+                allow_permission_denied=True,
+            )
+            with self.assertRaisesRegex(
+                checkpoint.CheckpointError,
+                "cannot be inspected",
+            ):
+                checkpoint._require_path_absent(
+                    hidden,
+                    label="private cache",
+                    allow_permission_denied=False,
+                )
 
 
 if __name__ == "__main__":

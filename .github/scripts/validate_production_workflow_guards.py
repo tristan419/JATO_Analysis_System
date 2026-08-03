@@ -4,8 +4,10 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
+import importlib.util
 from pathlib import Path
 import re
+import sys
 from typing import Any
 
 import yaml
@@ -31,6 +33,26 @@ PINNED_CHECKOUT_V5 = (
     "actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09"
 )
 PRODUCTION_COORDINATION_JOB = "release_coordination_guard"
+PRODUCTION_RELEASE_HOLD_SCRIPT = (
+    ".github/scripts/production_release_hold.py"
+)
+PRODUCTION_RELEASE_HOLD_PATH = (
+    ".github/recovery-plans/"
+    "2026-08-03-29df-pre-switch-candidate-residue-production-hold.v1.json"
+)
+PRODUCTION_RELEASE_HOLD_RETIREMENT_PATH = (
+    ".github/recovery-plans/"
+    "2026-08-03-29df-pre-switch-candidate-residue-"
+    "production-hold-retirement.v1.json"
+)
+PRODUCTION_RELEASE_RECOVERY_PLAN = (
+    ".github/recovery-plans/"
+    "2026-08-03-29df-pre-switch-candidate-residue.json"
+)
+PRODUCTION_RELEASE_DEPLOY_CONDITION = (
+    MAIN_REF_CONDITION
+    + " && needs.release_coordination_guard.outputs.release-action == 'deploy'"
+)
 
 PRODUCTION_JOBS = {
     PRODUCTION_RELEASE_WORKFLOW: ("deploy_tencent",),
@@ -46,7 +68,10 @@ MANUAL_DEPLOY_WORKFLOWS = {
 }
 PRODUCTION_RELEASE_MAIN_ONLY_JOBS = (
     PRODUCTION_COORDINATION_JOB,
+)
+PRODUCTION_RELEASE_HOLD_GATED_JOBS = (
     "build_frontend",
+    "deploy_tencent",
     "audit_frontend_parity",
 )
 
@@ -64,9 +89,36 @@ COUNTRY_NEWS_DATABASE_SECRET = (
 )
 
 
+class UniqueKeyLoader(yaml.BaseLoader):
+    """Keep BaseLoader string semantics while rejecting duplicate YAML keys."""
+
+
+def _construct_unique_mapping(
+    loader: UniqueKeyLoader,
+    node: yaml.MappingNode,
+    deep: bool = False,
+) -> dict[Any, Any]:
+    mapping: dict[Any, Any] = {}
+    for key_node, value_node in node.value:
+        key = loader.construct_object(key_node, deep=deep)
+        if key in mapping:
+            raise AssertionError(f"duplicate YAML key: {key}")
+        mapping[key] = loader.construct_object(value_node, deep=deep)
+    return mapping
+
+
+UniqueKeyLoader.add_constructor(
+    yaml.resolver.BaseResolver.DEFAULT_MAPPING_TAG,
+    _construct_unique_mapping,
+)
+
+
 def load_workflow(relative_path: str) -> Mapping[str, Any]:
     workflow_path = REPO_ROOT / relative_path
-    payload = yaml.load(workflow_path.read_text(encoding="utf-8"), Loader=yaml.BaseLoader)
+    payload = yaml.load(
+        workflow_path.read_text(encoding="utf-8"),
+        Loader=UniqueKeyLoader,
+    )
     if not isinstance(payload, Mapping):
         raise AssertionError(f"{relative_path}: workflow root must be a mapping")
     return payload
@@ -128,7 +180,17 @@ def assert_main_only_job(relative_path: str, job_name: str) -> Mapping[str, Any]
 
 
 def assert_main_only_production_job(relative_path: str, job_name: str) -> None:
-    job = assert_main_only_job(relative_path, job_name)
+    if relative_path == PRODUCTION_RELEASE_WORKFLOW:
+        workflow = load_workflow(relative_path)
+        job = get_job(workflow, relative_path, job_name)
+        condition = unwrap_expression(job.get("if"))
+        if condition != PRODUCTION_RELEASE_DEPLOY_CONDITION:
+            raise AssertionError(
+                f"{relative_path}:{job_name} must use the exact main-and-hold "
+                f"gate; found {condition!r}"
+            )
+    else:
+        job = assert_main_only_job(relative_path, job_name)
 
     environment = get_environment_name(job)
     if environment != PRODUCTION_ENVIRONMENT:
@@ -212,6 +274,15 @@ def assert_all_static_production_jobs_are_registered() -> None:
 def assert_production_release_main_guards() -> None:
     for job_name in PRODUCTION_RELEASE_MAIN_ONLY_JOBS:
         assert_main_only_job(PRODUCTION_RELEASE_WORKFLOW, job_name)
+    workflow = load_workflow(PRODUCTION_RELEASE_WORKFLOW)
+    for job_name in PRODUCTION_RELEASE_HOLD_GATED_JOBS:
+        job = get_job(workflow, PRODUCTION_RELEASE_WORKFLOW, job_name)
+        condition = unwrap_expression(job.get("if"))
+        if condition != PRODUCTION_RELEASE_DEPLOY_CONDITION:
+            raise AssertionError(
+                f"{PRODUCTION_RELEASE_WORKFLOW}:{job_name} must use the exact "
+                f"main-and-hold gate; found {condition!r}"
+            )
 
 
 def assert_checkpoint_recovery_contract() -> None:
@@ -236,9 +307,17 @@ def assert_checkpoint_recovery_contract() -> None:
     if not isinstance(dispatch, Mapping):
         raise AssertionError("checkpoint recovery dispatch inputs are missing")
     inputs = dispatch.get("inputs")
-    if not isinstance(inputs, Mapping) or set(inputs) != {"mode", "confirmation"}:
+    expected_inputs = {
+        "mode",
+        "confirmation",
+        "reviewed_dry_run_run_id",
+        "reviewed_dry_run_result_sha256",
+        "reviewed_main_sha",
+        "reviewed_plan_sha256",
+    }
+    if not isinstance(inputs, Mapping) or set(inputs) != expected_inputs:
         raise AssertionError(
-            "checkpoint recovery only accepts mode and confirmation inputs"
+            "checkpoint recovery dispatch input contract changed"
         )
     mode = inputs.get("mode")
     if not isinstance(mode, Mapping) or mode.get("default") != "dry-run":
@@ -263,6 +342,20 @@ def assert_checkpoint_recovery_contract() -> None:
         raise AssertionError(
             "checkpoint recovery confirmation must be an optional empty string"
         )
+    for name in sorted(expected_inputs - {"mode", "confirmation"}):
+        reviewed_input = inputs.get(name)
+        if not isinstance(reviewed_input, Mapping) or {
+            "required": reviewed_input.get("required"),
+            "default": reviewed_input.get("default"),
+            "type": reviewed_input.get("type"),
+        } != {
+            "required": "false",
+            "default": "",
+            "type": "string",
+        }:
+            raise AssertionError(
+                f"checkpoint recovery {name} must be an optional empty string"
+            )
 
     concurrency = workflow.get("concurrency")
     if not isinstance(concurrency, Mapping) or concurrency != {
@@ -295,8 +388,14 @@ def assert_checkpoint_recovery_contract() -> None:
     expected_guard_steps = [
         "Checkout recovery source",
         "Validate recovery dispatch intent",
+        "Fetch reviewed dry-run metadata",
+        "Resolve reviewed dry-run artifact",
+        "Download reviewed dry-run result",
+        "Verify and freeze reviewed dry-run authorization",
+        "Validate active recovery-only production hold",
         "Validate unpublished release coordination",
         "Freeze recovery coordination plan",
+        "Freeze reviewed dry-run evidence",
     ]
     if [str(step.get("name") or "") for step in guard_steps] != expected_guard_steps:
         raise AssertionError(
@@ -322,13 +421,102 @@ def assert_checkpoint_recovery_contract() -> None:
         "case \"$RECOVERY_MODE\" in",
         "dry-run)",
         "apply)",
-        "ABORT 2026-07-30-86ce PRE-SWITCH",
+        (
+            "QUARANTINE 29df5e6e667351f09305783932b34e5438d6a9d5 "
+            "RESIDUE AND ABORT PRE-SWITCH"
+        ),
+        "REVIEWED_DRY_RUN_RUN_ID",
+        "REVIEWED_DRY_RUN_RESULT_SHA256",
+        "REVIEWED_MAIN_SHA",
+        "REVIEWED_PLAN_SHA256",
+        "test \"$REVIEWED_MAIN_SHA\" = \"$GITHUB_SHA\"",
+        "2026-08-03-29df-pre-switch-candidate-residue.json",
     ):
         if required not in guard_intent:
             raise AssertionError(
                 f"checkpoint recovery guard intent lost {required!r}"
             )
-    guard_coordination = str(guard_steps[2].get("run") or "")
+    apply_only_steps = guard_steps[2:6] + [guard_steps[9]]
+    if any(step.get("if") != "${{ inputs.mode == 'apply' }}" for step in apply_only_steps):
+        raise AssertionError(
+            "reviewed dry-run fetch, validation, and freeze must be apply-only"
+        )
+    fetch_review = guard_steps[2]
+    fetch_environment = fetch_review.get("env")
+    fetch_command = str(fetch_review.get("run") or "")
+    if (
+        not isinstance(fetch_environment, Mapping)
+        or fetch_environment.get("GH_TOKEN") != "${{ github.token }}"
+        or "actions/runs/$REVIEWED_DRY_RUN_RUN_ID" not in fetch_command
+        or "actions/runs/$REVIEWED_DRY_RUN_RUN_ID/artifacts?per_page=100"
+        not in fetch_command
+    ):
+        raise AssertionError(
+            "checkpoint recovery must fetch the exact reviewed run and artifacts"
+        )
+    resolve_review = guard_steps[3]
+    if resolve_review.get("id") != "reviewed_dry_run":
+        raise AssertionError("reviewed dry-run artifact resolver ID changed")
+    resolve_command = str(resolve_review.get("run") or "")
+    for required in (
+        ".github/workflows/production-checkpoint-recovery.yml",
+        'run.get("event") != "workflow_dispatch"',
+        'run.get("head_branch") != "main"',
+        'run.get("head_sha") != main_sha',
+        'run.get("conclusion") != "success"',
+        "checkpoint-recovery-result-{main_sha}-{run_id}-{run_attempt}",
+        "artifact-id=",
+        "run-attempt=",
+        're.fullmatch(r"sha256:[0-9a-f]{64}", digest)',
+    ):
+        if required not in resolve_command:
+            raise AssertionError(
+                f"reviewed dry-run artifact resolver lost {required!r}"
+            )
+    reviewed_download = guard_steps[4]
+    reviewed_download_with = reviewed_download.get("with")
+    if (
+        reviewed_download.get("uses") != "actions/download-artifact@v5"
+        or not isinstance(reviewed_download_with, Mapping)
+        or reviewed_download_with.get("artifact-ids")
+        != "${{ steps.reviewed_dry_run.outputs.artifact-id }}"
+        or reviewed_download_with.get("github-token") != "${{ github.token }}"
+        or reviewed_download_with.get("repository")
+        != "${{ github.repository }}"
+        or reviewed_download_with.get("run-id")
+        != "${{ inputs.reviewed_dry_run_run_id }}"
+    ):
+        raise AssertionError(
+            "checkpoint recovery must download the reviewed artifact by immutable ID"
+        )
+    review_validation = str(guard_steps[5].get("run") or "")
+    for required in (
+        "reviewed_recovery_authorization.py freeze",
+        "checkpoint-recovery-result.json",
+        "--expected-result-sha256",
+        "--expected-main-sha",
+        "--expected-plan-sha256",
+        "--repository",
+        "--run-id",
+        "--run-attempt",
+        "--output-dir",
+    ):
+        if required not in review_validation:
+            raise AssertionError(
+                f"reviewed dry-run result validation lost {required!r}"
+            )
+
+    hold_validation = str(guard_steps[6].get("run") or "")
+    for required in (
+        PRODUCTION_RELEASE_HOLD_SCRIPT,
+        "require-active",
+    ):
+        if required not in hold_validation:
+            raise AssertionError(
+                f"checkpoint recovery preflight hold check lost {required!r}"
+            )
+
+    guard_coordination = str(guard_steps[7].get("run") or "")
     for required in (
         RELEASE_COORDINATION_SCRIPT,
         "production",
@@ -339,7 +527,7 @@ def assert_checkpoint_recovery_contract() -> None:
             raise AssertionError(
                 f"checkpoint recovery guard coordination lost {required!r}"
             )
-    freeze = guard_steps[3]
+    freeze = guard_steps[8]
     freeze_with = freeze.get("with")
     expected_frozen_artifact = {
         "name": (
@@ -360,6 +548,27 @@ def assert_checkpoint_recovery_contract() -> None:
         raise AssertionError(
             "checkpoint recovery frozen coordination artifact contract changed"
         )
+    evidence_freeze = guard_steps[9]
+    evidence_freeze_with = evidence_freeze.get("with")
+    if (
+        evidence_freeze.get("uses") != "actions/upload-artifact@v4"
+        or not isinstance(evidence_freeze_with, Mapping)
+        or dict(evidence_freeze_with)
+        != {
+            "name": (
+                "checkpoint-recovery-reviewed-dry-run-${{ github.sha }}-"
+                "${{ github.run_id }}-${{ github.run_attempt }}"
+            ),
+            "path": "${{ runner.temp }}/reviewed-dry-run-frozen",
+            "if-no-files-found": "error",
+            "compression-level": "0",
+            "overwrite": "false",
+            "retention-days": "30",
+        }
+    ):
+        raise AssertionError(
+            "checkpoint recovery reviewed dry-run evidence artifact changed"
+        )
 
     recovery = assert_main_only_job(
         CHECKPOINT_RECOVERY_WORKFLOW,
@@ -378,9 +587,12 @@ def assert_checkpoint_recovery_contract() -> None:
     step_names = [str(step.get("name") or "") for step in steps]
     expected_steps = [
         "Checkout recovery source",
+        "Revalidate active recovery-only production hold after approval",
         "Download frozen recovery coordination plan",
         "Revalidate frozen coordination plan after approval",
         "Revalidate recovery dispatch intent after approval",
+        "Download frozen reviewed dry-run evidence",
+        "Revalidate frozen reviewed dry-run evidence",
         "Build immutable recovery control bundle",
         "Validate Tencent recovery credentials",
         "Reconfirm current main before recovery transport",
@@ -391,7 +603,7 @@ def assert_checkpoint_recovery_contract() -> None:
         raise AssertionError(
             "checkpoint recovery steps or ordering changed"
         )
-    if "secrets." in str(steps[:4]):
+    if "secrets." in str(steps[:8]):
         raise AssertionError(
             "checkpoint recovery must validate approved intent before reading secrets"
         )
@@ -406,7 +618,17 @@ def assert_checkpoint_recovery_contract() -> None:
         raise AssertionError(
             "checkpoint recovery must checkout the exact non-credentialed SHA"
         )
-    download = steps[1]
+    post_approval_hold = str(steps[1].get("run") or "")
+    for required in (
+        PRODUCTION_RELEASE_HOLD_SCRIPT,
+        "require-active",
+    ):
+        if required not in post_approval_hold:
+            raise AssertionError(
+                f"checkpoint recovery post-approval hold check lost {required!r}"
+            )
+
+    download = steps[2]
     download_with = download.get("with")
     if (
         download.get("uses") != "actions/download-artifact@v5"
@@ -420,8 +642,8 @@ def assert_checkpoint_recovery_contract() -> None:
         raise AssertionError(
             "checkpoint recovery must download its exact same-run frozen plan"
         )
-    approved_plan_check = str(steps[2].get("run") or "")
-    final_main_check = str(steps[6].get("run") or "")
+    approved_plan_check = str(steps[3].get("run") or "")
+    final_main_check = str(steps[9].get("run") or "")
     for command, label in (
         (approved_plan_check, "post-approval"),
         (final_main_check, "pre-transport"),
@@ -440,18 +662,72 @@ def assert_checkpoint_recovery_contract() -> None:
                 raise AssertionError(
                     f"checkpoint recovery {label} plan check lost {required!r}"
                 )
-    approved_intent = str(steps[3].get("run") or "")
+    approved_intent = str(steps[4].get("run") or "")
     for required in (
         "case \"$RECOVERY_MODE\" in",
         "dry-run)",
         "apply)",
-        "ABORT 2026-07-30-86ce PRE-SWITCH",
+        (
+            "QUARANTINE 29df5e6e667351f09305783932b34e5438d6a9d5 "
+            "RESIDUE AND ABORT PRE-SWITCH"
+        ),
+        "REVIEWED_DRY_RUN_RUN_ID",
+        "REVIEWED_DRY_RUN_RESULT_SHA256",
+        "REVIEWED_MAIN_SHA",
+        "REVIEWED_PLAN_SHA256",
     ):
         if required not in approved_intent:
             raise AssertionError(
                 f"checkpoint recovery approved intent lost {required!r}"
             )
-    result_upload = steps[8]
+    frozen_review_download = steps[5]
+    frozen_review_download_with = frozen_review_download.get("with")
+    if (
+        frozen_review_download.get("if") != "${{ inputs.mode == 'apply' }}"
+        or frozen_review_download.get("uses") != "actions/download-artifact@v5"
+        or not isinstance(frozen_review_download_with, Mapping)
+        or dict(frozen_review_download_with)
+        != {
+            "name": (
+                "checkpoint-recovery-reviewed-dry-run-${{ github.sha }}-"
+                "${{ github.run_id }}-${{ github.run_attempt }}"
+            ),
+            "path": "${{ runner.temp }}/reviewed-dry-run-frozen",
+        }
+    ):
+        raise AssertionError(
+            "checkpoint recovery must download its same-run frozen dry-run proof"
+        )
+    frozen_review_validation = steps[6]
+    if frozen_review_validation.get("if") != "${{ inputs.mode == 'apply' }}":
+        raise AssertionError("frozen dry-run revalidation must be apply-only")
+    frozen_review_command = str(frozen_review_validation.get("run") or "")
+    for required in (
+        "reviewed_recovery_authorization.py verify",
+        "checkpoint-recovery-result.json",
+        "reviewed-dry-run-authorization.json",
+        "--expected-result-sha256",
+        "--expected-main-sha",
+        "--expected-plan-sha256",
+        "--repository",
+        "--run-id",
+    ):
+        if required not in frozen_review_command:
+            raise AssertionError(
+                f"post-approval dry-run revalidation lost {required!r}"
+            )
+    bundle_command = str(steps[7].get("run") or "")
+    for required in (
+        "2026-08-03-29df-pre-switch-candidate-residue.json",
+        "reviewed-dry-run-authorization.json",
+        "recovery-control-manifest.json",
+        '"files": files',
+    ):
+        if required not in bundle_command:
+            raise AssertionError(
+                f"recovery control bundle lost {required!r}"
+            )
+    result_upload = steps[11]
     result_with = result_upload.get("with")
     if (
         result_upload.get("if") != "${{ always() }}"
@@ -461,10 +737,10 @@ def assert_checkpoint_recovery_contract() -> None:
         != {
             "name": (
                 "checkpoint-recovery-result-${{ github.sha }}-"
-                "${{ github.run_attempt }}"
+                "${{ github.run_id }}-${{ github.run_attempt }}"
             ),
             "path": "${{ runner.temp }}/checkpoint-recovery-result.json",
-            "if-no-files-found": "warn",
+            "if-no-files-found": "error",
             "compression-level": "0",
             "overwrite": "false",
             "retention-days": "30",
@@ -478,9 +754,21 @@ def assert_checkpoint_recovery_contract() -> None:
         REPO_ROOT / CHECKPOINT_RECOVERY_WORKFLOW
     ).read_text(encoding="utf-8")
     for required in (
-        "ABORT 2026-07-30-86ce PRE-SWITCH",
-        "2026-07-30-86ce-pre-switch-db-evidence.json",
+        (
+            "QUARANTINE 29df5e6e667351f09305783932b34e5438d6a9d5 "
+            "RESIDUE AND ABORT PRE-SWITCH"
+        ),
+        "2026-08-03-29df-pre-switch-candidate-residue.json",
+        "reviewed_dry_run_run_id",
+        "reviewed_dry_run_result_sha256",
+        "reviewed_main_sha",
+        "reviewed_plan_sha256",
+        "checkpoint-recovery-reviewed-dry-run-",
+        PRODUCTION_RELEASE_HOLD_SCRIPT,
+        "require-active",
+        "artifact-ids:",
         "pre_switch_checkpoint_recovery.py",
+        "reviewed_recovery_authorization.py",
         "tencent_pre_switch_checkpoint_recovery.sh",
         "production_mutation_lock.sh",
         "recovery-control-manifest.json",
@@ -495,13 +783,24 @@ def assert_checkpoint_recovery_contract() -> None:
     for forbidden in (
         "ABORT 2026-07-30-ce5 PRE-SWITCH",
         "2026-07-30-ce5-pre-switch-db-evidence.json",
+        "2026-07-30-86ce-pre-switch-db-evidence.json",
         "fullstack_remote_release.sh",
         "tencent_bluegreen_release.sh",
+        "needs.recovery_coordination_guard.outputs",
     ):
         if forbidden in workflow_text:
             raise AssertionError(
                 f"checkpoint recovery contains forbidden mutation {forbidden!r}"
             )
+    if workflow_jobs["recovery_coordination_guard"].get("outputs") is not None:
+        raise AssertionError(
+            "checkpoint recovery must not export mutable cross-job outputs"
+        )
+    legacy_controller_phrase = "ABORT 2026-07-30-86ce PRE-SWITCH"
+    if legacy_controller_phrase in workflow_text:
+        raise AssertionError(
+            "workflow must pass the reviewed phrase without a legacy controller shim"
+        )
 
     controller = (
         REPO_ROOT
@@ -517,7 +816,17 @@ def assert_checkpoint_recovery_contract() -> None:
     ).read_text(encoding="utf-8")
     for required in (
         "jato_acquire_production_mutation_lock",
-        "RECOVERY_APPLY_CONFIRMATION",
+        'RECOVERY_86CE_APPLY_CONFIRMATION="ABORT 2026-07-30-86ce PRE-SWITCH"',
+        (
+            'RECOVERY_29DF_APPLY_CONFIRMATION="QUARANTINE '
+            "29df5e6e667351f09305783932b34e5438d6a9d5 RESIDUE AND ABORT "
+            'PRE-SWITCH"'
+        ),
+        'schema_version == 2',
+        'schema_version == 3',
+        'reviewed-dry-run-authorization.json',
+        '--dry-run-authorization',
+        '--dry-run-authorization-sha256',
         "--lock-holder-pid",
         "--expected-plan-sha256",
     ):
@@ -540,10 +849,14 @@ def assert_checkpoint_recovery_contract() -> None:
             recovery_sources,
         )
     )
-    if systemctl_verbs != {"show"}:
+    if systemctl_verbs != {"show", "daemon-reload"}:
         raise AssertionError(
-            "checkpoint recovery may only use systemctl show; "
+            "checkpoint recovery may only inspect units and reload after quarantine; "
             f"found {sorted(systemctl_verbs)}"
+        )
+    if helper.count('["systemctl", "daemon-reload"]') != 1:
+        raise AssertionError(
+            "checkpoint recovery must issue exactly one bounded daemon-reload"
         )
     alembic_verbs = set(
         re.findall(r"-m\s+alembic\s+([a-z-]+)", recovery_sources)
@@ -557,7 +870,7 @@ def assert_checkpoint_recovery_contract() -> None:
         (
             r"\bsystemctl(?:\s+|[\"']\s*,\s*[\"'])"
             r"(?:start|stop|restart|reload|enable|disable|mask|unmask|"
-            r"daemon-reload|kill|reset-failed)\b",
+            r"kill|reset-failed)\b",
             "systemd mutation",
         ),
         (
@@ -703,8 +1016,74 @@ def assert_pull_request_release_coordination_guard() -> None:
             )
 
 
+def assert_reviewed_production_release_hold() -> None:
+    helper_path = REPO_ROOT / PRODUCTION_RELEASE_HOLD_SCRIPT
+    if not helper_path.is_file() or helper_path.is_symlink():
+        raise AssertionError("production release hold helper must be a regular file")
+    spec = importlib.util.spec_from_file_location(
+        "production_release_hold_static_validator",
+        helper_path,
+    )
+    if spec is None or spec.loader is None:
+        raise AssertionError("cannot load production release hold helper")
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module
+    spec.loader.exec_module(module)
+    if module.HOLD_PATH.as_posix() != PRODUCTION_RELEASE_HOLD_PATH:
+        raise AssertionError("production release hold path changed")
+    if (
+        module.RETIREMENT_PATH.as_posix()
+        != PRODUCTION_RELEASE_HOLD_RETIREMENT_PATH
+    ):
+        raise AssertionError("production release hold retirement path changed")
+    if module.RECOVERY_PLAN_PATH.as_posix() != PRODUCTION_RELEASE_RECOVERY_PLAN:
+        raise AssertionError("production release recovery plan path changed")
+    if module.RECOVERY_PLAN_SHA256 != (
+        "ae4d3d5eb76695e29c2eeb947b7783c42960a266c27abaa3f7b6a2faa51fd0f2"
+    ):
+        raise AssertionError("production release recovery plan SHA-256 changed")
+    if module.HOLD_SHA256 != (
+        "b4841970c047ff8fe14db7e97d9d81326e67ac116da67f9f1236160edd11a71b"
+    ):
+        raise AssertionError("production release active hold SHA-256 changed")
+    retirement = module.EXPECTED_RETIREMENT_DOCUMENT
+    if (
+        retirement.get("incidentId")
+        != "2026-08-03-29df-pre-switch-candidate-residue"
+        or retirement.get("status") != "retired"
+        or retirement.get("recoveryPlan", {}).get("path")
+        != PRODUCTION_RELEASE_RECOVERY_PLAN
+        or retirement.get("retiredHold", {}).get("path")
+        != PRODUCTION_RELEASE_HOLD_PATH
+        or retirement.get("retiredHold", {}).get("sha256")
+        != module.HOLD_SHA256
+    ):
+        raise AssertionError("production release hold retirement contract changed")
+    try:
+        action = module.resolve_release_action(REPO_ROOT)
+    except Exception as exc:
+        raise AssertionError(
+            f"reviewed production release hold is invalid: {exc}"
+        ) from exc
+    if action not in {"hold", "deploy"}:
+        raise AssertionError(f"invalid production release hold action: {action!r}")
+
+
 def assert_production_release_coordination_guard() -> None:
     workflow = load_workflow(PRODUCTION_RELEASE_WORKFLOW)
+    triggers = workflow.get("on")
+    push = triggers.get("push") if isinstance(triggers, Mapping) else None
+    paths = push.get("paths") if isinstance(push, Mapping) else None
+    required_hold_paths = {
+        PRODUCTION_RELEASE_HOLD_SCRIPT,
+        PRODUCTION_RELEASE_HOLD_PATH,
+        PRODUCTION_RELEASE_HOLD_RETIREMENT_PATH,
+        PRODUCTION_RELEASE_RECOVERY_PLAN,
+    }
+    if not isinstance(paths, list) or not required_hold_paths.issubset(set(paths)):
+        raise AssertionError(
+            "production push trigger must include the hold helper, document, and plan"
+        )
     permissions = workflow.get("permissions")
     if not isinstance(permissions, Mapping):
         raise AssertionError("production permissions must be a mapping")
@@ -733,6 +1112,13 @@ def assert_production_release_coordination_guard() -> None:
         raise AssertionError("production coordination preflight cannot have dependencies")
     if preflight.get("environment") is not None:
         raise AssertionError("production coordination preflight cannot enter an environment")
+    outputs = preflight.get("outputs")
+    if not isinstance(outputs, Mapping) or outputs != {
+        "release-action": "${{ steps.production_hold.outputs.release-action }}",
+    }:
+        raise AssertionError(
+            "production coordination must expose only the exact hold/deploy action"
+        )
     preflight_steps = get_steps(
         preflight,
         PRODUCTION_RELEASE_WORKFLOW,
@@ -741,6 +1127,7 @@ def assert_production_release_coordination_guard() -> None:
     if [step.get("name") for step in preflight_steps] != [
         "Checkout release coordination guard",
         "Validate unpublished release coordination",
+        "Resolve reviewed production release hold",
         "Freeze release coordination plan",
     ]:
         raise AssertionError("production coordination preflight steps changed")
@@ -768,7 +1155,23 @@ def assert_production_release_coordination_guard() -> None:
             )
     if "secrets." in str(preflight):
         raise AssertionError("coordination preflight must not consume production secrets")
-    freeze = preflight_steps[2]
+    hold_step = preflight_steps[2]
+    if hold_step.get("id") != "production_hold":
+        raise AssertionError("production hold resolver step ID changed")
+    hold_command = str(hold_step.get("run") or "")
+    for required in (
+        PRODUCTION_RELEASE_HOLD_SCRIPT,
+        "resolve",
+        '--github-output "$GITHUB_OUTPUT"',
+    ):
+        if required not in hold_command:
+            raise AssertionError(
+                f"production hold resolver is missing {required!r}"
+            )
+    if "secrets." in str(hold_step):
+        raise AssertionError("production hold resolver must not consume secrets")
+
+    freeze = preflight_steps[3]
     if freeze.get("uses") != "actions/upload-artifact@v4":
         raise AssertionError("coordination plan must use upload-artifact@v4")
     freeze_with = freeze.get("with")
@@ -791,8 +1194,16 @@ def assert_production_release_coordination_guard() -> None:
     build = get_job(workflow, PRODUCTION_RELEASE_WORKFLOW, "build_frontend")
     if build.get("needs") != PRODUCTION_COORDINATION_JOB:
         raise AssertionError("frontend build must wait for release coordination")
+    if unwrap_expression(build.get("if")) != PRODUCTION_RELEASE_DEPLOY_CONDITION:
+        raise AssertionError("frontend build must use the exact hold/deploy output")
 
     deploy = get_job(workflow, PRODUCTION_RELEASE_WORKFLOW, "deploy_tencent")
+    if deploy.get("needs") != [PRODUCTION_COORDINATION_JOB, "build_frontend"]:
+        raise AssertionError(
+            "Tencent deploy must directly retain the hold guard dependency"
+        )
+    if unwrap_expression(deploy.get("if")) != PRODUCTION_RELEASE_DEPLOY_CONDITION:
+        raise AssertionError("Tencent deploy must use the exact hold/deploy output")
     deploy_steps = get_steps(deploy, PRODUCTION_RELEASE_WORKFLOW, "deploy_tencent")
     expected_first_steps = [
         "Checkout release source",
@@ -845,6 +1256,22 @@ def assert_production_release_coordination_guard() -> None:
     )
     if "verify-plan" not in mutation_command:
         raise AssertionError("pre-mutation stale-main check must consume the frozen plan")
+
+    audit = get_job(
+        workflow,
+        PRODUCTION_RELEASE_WORKFLOW,
+        "audit_frontend_parity",
+    )
+    if audit.get("needs") != [
+        PRODUCTION_COORDINATION_JOB,
+        "build_frontend",
+        "deploy_tencent",
+    ]:
+        raise AssertionError(
+            "frontend parity audit must directly retain the hold guard dependency"
+        )
+    if unwrap_expression(audit.get("if")) != PRODUCTION_RELEASE_DEPLOY_CONDITION:
+        raise AssertionError("frontend parity audit must use the exact hold/deploy output")
 
 
 def assert_country_news_production_write_is_main_only() -> None:
@@ -1858,6 +2285,7 @@ def assert_feature_canary_cannot_route_or_mutate_production() -> None:
 def main() -> None:
     assert_all_deploy_workflows_are_registered()
     assert_pull_request_release_coordination_guard()
+    assert_reviewed_production_release_hold()
     assert_production_release_coordination_guard()
 
     for relative_path, job_names in PRODUCTION_JOBS.items():

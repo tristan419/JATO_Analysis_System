@@ -7,7 +7,6 @@ from pathlib import Path
 
 import pytest
 
-
 REPO_ROOT = Path(__file__).resolve().parents[2]
 OUTER = REPO_ROOT / "03_Scripts/deploy/fullstack_remote_release.sh"
 CONTROLLER = REPO_ROOT / "03_Scripts/deploy/tencent_bluegreen_release.sh"
@@ -437,14 +436,16 @@ def test_install_runtime_mid_failure_is_armed_before_candidate_disable(
 ) -> None:
     script = CONTROLLER.read_text(encoding="utf-8")
     install = _shell_function(script, "install_slot_runtime")
+    captured = install.index("prepare_candidate_runtime_preimage")
     armed = install.index("PRE_SUPERVISOR_CANDIDATE_ARMED=true")
+    first_write = install.index("candidate_durable_install_file")
     disable = install.index(
         'systemctl disable "${SERVICE_PREFIX}${CANDIDATE_SLOT}"',
     )
     set_property = install.index(
         'systemctl set-property "${SERVICE_PREFIX}${CANDIDATE_SLOT}"',
     )
-    assert armed < disable < set_property
+    assert captured < armed < first_write < disable < set_property
 
     result = _run_controller_harness(
         tmp_path,
@@ -452,9 +453,10 @@ def test_install_runtime_mid_failure_is_armed_before_candidate_disable(
 CANDIDATE_SLOT=8001
 SYSTEMD_TEMPLATE={SLOT_UNIT}
 SLOT_ENV_TEMPLATE={REPO_ROOT / "03_Scripts/deploy/systemd/jato-fullstack-backend-slot.env.example"}
+prepare_candidate_runtime_preimage() {{ return 0; }}
 cleanup_pre_switch_candidate() {{ printf 'mid-install-cleanup\\n'; }}
-durable_install_file() {{ return 0; }}
-atomic_symlink() {{ return 0; }}
+candidate_durable_install_file() {{ return 0; }}
+candidate_atomic_symlink() {{ return 0; }}
 unit_property_equals() {{ return 0; }}
 sudo() {{
   [[ "${{1:-}}" == -n ]] && shift
@@ -470,6 +472,212 @@ install_slot_runtime
 
     assert result.returncode == 1
     assert "mid-install-cleanup" in result.stdout
+
+
+@pytest.mark.parametrize(
+    "failure",
+    ("unit", "env", "sandbox", "slot_link", "set_property"),
+)
+def test_each_candidate_install_failure_restores_captured_preimage(
+    tmp_path: Path,
+    failure: str,
+) -> None:
+    result = _run_controller_harness(
+        tmp_path,
+        f"""
+CANDIDATE_SLOT=8001
+SYSTEMD_TEMPLATE={SLOT_UNIT}
+SLOT_ENV_TEMPLATE={REPO_ROOT / "03_Scripts/deploy/systemd/jato-fullstack-backend-slot.env.example"}
+prepare_candidate_runtime_preimage() {{ printf 'preimage-captured\\n'; }}
+cleanup_pre_switch_candidate() {{ printf 'preimage-restored\\n'; }}
+candidate_durable_install_file() {{
+  case "{failure}:$2" in
+    unit:/etc/systemd/system/jato-fullstack-backend@8001.service) return 1 ;;
+    env:*/8001.env) return 1 ;;
+    sandbox:*/10-candidate-sandbox.conf) return 1 ;;
+  esac
+  return 0
+}}
+candidate_atomic_symlink() {{
+  [[ "{failure}" != slot_link ]]
+}}
+unit_property_equals() {{ return 0; }}
+sudo() {{
+  shift
+  if [[ "{failure}" == set_property && "$*" == "systemctl set-property jato-fullstack-backend@8001 MemoryHigh=3G MemoryMax=4G CPUQuota=100%" ]]; then
+    return 1
+  fi
+  return 0
+}}
+trap prepare_exit_handler EXIT
+install_slot_runtime
+""",
+    )
+
+    assert result.returncode != 0
+    assert "preimage-captured" in result.stdout
+    assert "preimage-restored" in result.stdout
+    assert result.stdout.index("preimage-captured") < result.stdout.index(
+        "preimage-restored"
+    )
+
+
+def test_candidate_preimage_scope_excludes_active_and_previous_metadata() -> None:
+    script = CONTROLLER.read_text(encoding="utf-8")
+    command = _shell_function(script, "candidate_runtime_preimage_command")
+    restore = _shell_function(script, "restore_candidate_runtime_preimage")
+
+    for required in (
+        "--slot-link",
+        "--slot-link-stage",
+        "--slot-env",
+        "--slot-env-stage",
+        "--explicit-unit",
+        "--explicit-unit-stage",
+        "--instance-dropins",
+        "--persistent-control-dropins",
+        "--runtime-control-dropins",
+        "--candidate-cache-link",
+        "--candidate-cache-private",
+    ):
+        assert required in command
+    assert "ACTIVE_RELEASE_LINK" not in command
+    assert "ACTIVE_SLOT_FILE" not in command
+    assert "PREVIOUS_RELEASE_METADATA_PATH" not in command
+    assert "disable --now" in restore
+    assert restore.index("candidate_runtime_is_quiescent") < restore.index(
+        "candidate_runtime_preimage_command restore"
+    )
+    assert restore.index("candidate_runtime_preimage_command restore") < restore.index(
+        "systemctl daemon-reload"
+    )
+    assert restore.index("systemctl daemon-reload") < restore.rindex(
+        "candidate_runtime_is_quiescent"
+    )
+
+
+def test_candidate_install_uses_only_deterministic_transaction_writers() -> None:
+    script = CONTROLLER.read_text(encoding="utf-8")
+    install = _shell_function(script, "install_slot_runtime")
+
+    assert install.count("candidate_durable_install_file") == 3
+    assert install.count("candidate_atomic_symlink") == 1
+    assert "durable_install_file" not in install.replace(
+        "candidate_durable_install_file",
+        "",
+    )
+    assert "atomic_symlink" not in install.replace("candidate_atomic_symlink", "")
+    for suffix in (
+        ".service.jato-candidate-installing",
+        ".env.jato-candidate-installing",
+        ".10-candidate-sandbox.conf.jato-candidate-installing",
+        ".current.jato-candidate-installing",
+    ):
+        assert suffix in install
+
+
+def test_candidate_transaction_file_writer_rejects_stale_stage(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "source"
+    target = tmp_path / "target"
+    stage = tmp_path / ".target.jato-candidate-installing"
+    source.write_text("new\n", encoding="utf-8")
+    target.write_text("old\n", encoding="utf-8")
+    stage.write_text("stale\n", encoding="utf-8")
+    result = _run_controller_harness(
+        tmp_path,
+        f"""
+sudo() {{
+  [[ "${{1:-}}" == -n ]] && shift
+  "$@"
+}}
+candidate_durable_install_file {source} {target} 0644 {stage}
+""",
+    )
+
+    assert result.returncode != 0
+    assert target.read_text(encoding="utf-8") == "old\n"
+    assert stage.read_text(encoding="utf-8") == "stale\n"
+
+
+def test_candidate_quiescence_fails_closed_when_listener_probe_errors(
+    tmp_path: Path,
+) -> None:
+    result = _run_controller_harness(
+        tmp_path,
+        """
+CANDIDATE_SLOT=8001
+systemctl() {
+  case "$*" in
+    *LoadState*) printf 'loaded\n' ;;
+    *ActiveState*) printf 'inactive\n' ;;
+    *UnitFileState*) printf 'disabled\n' ;;
+    *MainPID*) printf '0\n' ;;
+  esac
+}
+ss() { return 42; }
+sudo() { return 1; }
+candidate_runtime_is_quiescent
+""",
+    )
+
+    assert result.returncode != 0
+    assert "cannot prove the Candidate listener state" in result.stderr
+
+
+@pytest.mark.parametrize(
+    ("load_state", "unit_file_state"),
+    (("loaded", "disabled"), ("not-found", ""), ("not-found", "not-found")),
+)
+def test_candidate_quiescence_accepts_real_safe_systemd_state_pairs(
+    tmp_path: Path,
+    load_state: str,
+    unit_file_state: str,
+) -> None:
+    result = _run_controller_harness(
+        tmp_path,
+        f"""
+CANDIDATE_SLOT=8001
+systemctl() {{
+  case "$*" in
+    *LoadState*) printf '{load_state}\n' ;;
+    *ActiveState*) printf 'inactive\n' ;;
+    *UnitFileState*) printf '{unit_file_state}\n' ;;
+    *MainPID*) printf '0\n' ;;
+  esac
+}}
+ss() {{ return 0; }}
+sudo() {{ return 1; }}
+candidate_runtime_is_quiescent
+""",
+    )
+
+    assert result.returncode == 0, result.stderr
+
+
+def test_candidate_quiescence_rejects_loaded_unit_without_disabled_state(
+    tmp_path: Path,
+) -> None:
+    result = _run_controller_harness(
+        tmp_path,
+        """
+CANDIDATE_SLOT=8001
+systemctl() {
+  case "$*" in
+    *LoadState*) printf 'loaded\n' ;;
+    *ActiveState*) printf 'inactive\n' ;;
+    *UnitFileState*) printf '\n' ;;
+    *MainPID*) printf '0\n' ;;
+  esac
+}
+ss() { return 0; }
+sudo() { return 1; }
+candidate_runtime_is_quiescent
+""",
+    )
+
+    assert result.returncode != 0
 
 
 def test_switch_prerequisites_fail_before_route_mutation_when_old_is_unproven(
@@ -677,14 +885,17 @@ restore_nginx_preimage() {{ printf 'unsafe-preimage-restore\\n'; }}
 mark_maintenance_required() {{ printf 'marker-retained\\n'; }}
 candidate_cleanup_is_complete() {{ [[ "$CANDIDATE_CLEAN" == true ]]; }}
 unit_property_equals() {{ return 0; }}
-remove_candidate_explicit_unit() {{ printf 'candidate-unit-removed\\n'; }}
+restore_candidate_runtime_preimage() {{
+  CANDIDATE_CLEAN=true
+  printf 'candidate-preimage-restored\\n'
+  printf 'candidate-stopped\\n' >> "$TRACE_FILE"
+}}
 resume_schedulers() {{ printf 'schedulers-restored\\n'; }}
 sudo() {{
   [[ "${{1:-}}" == -n ]] && shift
   printf 'sudo:%s\\n' "$*"
   if [[ "$*" == "systemctl disable --now jato-fullstack-backend@8001" ]]; then
-    CANDIDATE_CLEAN=true
-    printf 'candidate-stopped\\n' >> "$TRACE_FILE"
+    printf 'unexpected-direct-stop\\n' >> "$TRACE_FILE"
   fi
 }}
 set +e
@@ -703,7 +914,7 @@ cat "$TRACE_FILE"
     assert "unsafe-preimage-restore" not in result.stdout
     trace = (tmp_path / "supervisor-cleanup.trace").read_text(encoding="utf-8")
     assert trace.index("old-public") < trace.index("candidate-stopped")
-    assert "candidate-unit-removed" in result.stdout
+    assert "candidate-preimage-restored" in result.stdout
     assert "schedulers-restored" in result.stdout
     assert "rc=1" in result.stdout
 
@@ -752,7 +963,10 @@ verify_public_release_exact() {{ printf 'public:%s\\n' "$1"; }}
 atomic_text() {{ printf 'active-slot:%s\\n' "$2"; }}
 atomic_symlink() {{ printf 'active-link:%s\\n' "$1"; }}
 verify_durable_route_ownership() {{ printf 'durable-route:%s:%s\\n' "$1" "$3"; }}
-remove_candidate_explicit_unit() {{ printf 'candidate-unit-removed\\n'; }}
+restore_candidate_runtime_preimage() {{
+  CANDIDATE_STOPPED_BEFORE_CHECKPOINT=true
+  printf 'candidate-preimage-restored\\n'
+}}
 restore_backend_template_preimage() {{ return 0; }}
 remove_backend_template_preimage() {{ return 0; }}
 unit_property_equals() {{ return 0; }}
@@ -934,6 +1148,7 @@ verify_durable_route_ownership() { printf 'durable-candidate-route\\n'; }
 run_post_commit_global_reconciliation() { printf 'global-reconciled\\n'; }
 remove_backend_template_preimage() { printf 'template-preimage-removed\\n'; }
 remove_nginx_preimage() { printf 'preimage-removed\\n'; }
+discard_candidate_runtime_preimage() { printf 'candidate-preimage-discarded\\n'; }
 clear_maintenance_marker() { printf 'marker-cleared\\n'; }
 verify_active_monthly_gate_released() { printf 'monthly-open:%s\\n' "$1"; }
 sudo() {
@@ -956,6 +1171,7 @@ printf 'old-disabled=%s\\n' "$OLD_DISABLED"
         "owner:8001",
         "durable-candidate-route",
         "global-reconciled",
+        "candidate-preimage-discarded",
         "preimage-removed",
         "marker-cleared",
         "monthly-open:8001",
@@ -989,7 +1205,7 @@ atomic_symlink() {{ printf 'link:%s\\n' "$1"; }}
 verify_durable_route_ownership() {{ printf 'durable-old-route\\n'; }}
 restore_backend_template_preimage() {{ return 0; }}
 remove_backend_template_preimage() {{ return 0; }}
-remove_candidate_explicit_unit() {{ return 0; }}
+restore_candidate_runtime_preimage() {{ printf 'candidate-preimage-restored\\n'; }}
 unit_property_equals() {{ return 0; }}
 clear_maintenance_marker() {{ printf 'marker-cleared\\n'; }}
 verify_active_monthly_gate_released() {{ printf 'monthly-open:%s\\n' "$1"; }}
