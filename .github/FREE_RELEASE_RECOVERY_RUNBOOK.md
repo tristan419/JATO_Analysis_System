@@ -168,11 +168,27 @@ application artifact over an unresolved migration.
 
 ## Reviewed pre-switch checkpoint recovery
 
-A legacy release may have reached `migrated/completed/automatic` with an
-invalid `database enabled + migration not_required` evidence signature even
-though it never started a Candidate or changed traffic. Do not edit or delete
-that checkpoint, do not rewrite its original evidence, and do not rerun the
-failed workflow.
+A release at `migrated/completed/automatic` is eligible for this procedure only
+when an incident-specific validator proves the exact checkpoint and journal
+never started the Candidate service or listener and never reached
+`switch_started` or a traffic switch. The validator must also
+prove one exact, versioned database-evidence profile. This is not a generic way
+to abandon every checkpoint at `migrated`.
+
+Incident history and the single active recovery target are:
+
+| Incident | Evidence profile | State |
+| --- | --- | --- |
+| `2026-07-30-ce5-pre-switch-db-evidence` | schema v1; exact legacy `not_required` plus three null revision fields | Historical; not the current workflow target. Its plan remains an immutable audit asset. |
+| `2026-07-30-86ce-pre-switch-db-evidence` | schema v2; exact `completed` plus equal pre/target/result revision sets | Active. Run `30573174866` failed on sealed-source mutation before Candidate start; run `30777734420` was then correctly blocked by the unresolved checkpoint. |
+
+For the active 86ce incident, the database comparison was read-only and all
+three recorded revisions were `20260715_0046`; no migration ran. The failure
+occurred later when editable-install metadata and a frontend parent-directory
+mode change violated the sealed-source identity. The deployment hardening that
+prevents those mutations does not retroactively settle this old checkpoint.
+Do not edit or delete the checkpoint, journal, legacy evidence, archive, backup
+manifest, or dump. Do not rerun either failed workflow.
 
 Use `.github/workflows/production-checkpoint-recovery.yml` only when a reviewed,
 versioned incident plan exists on `main`. The workflow shares the normal
@@ -202,22 +218,25 @@ Run the recovery in this exact order:
 
 1. Dispatch `production-checkpoint-recovery` from the current `main` with
    `mode=dry-run` and an empty confirmation, then approve its `production`
-   environment gate.
+   environment gate. The workflow version must be fixed to
+   `.github/recovery-plans/2026-07-30-86ce-pre-switch-db-evidence.json`; it must
+   not accept an arbitrary plan path.
 2. Download the `checkpoint-recovery-result` artifact and require
    `decision=dry-run-eligible` and `trafficChanged=false`. Review the bound
    checkpoint, journal, receipt destination, database revisions, runtime
    identity, and public identity in that result.
 3. Dispatch the same workflow from the same reviewed `main` with `mode=apply`
-   and the exact confirmation `ABORT 2026-07-30-ce5 PRE-SWITCH`, then approve
+   and the exact confirmation `ABORT 2026-07-30-86ce PRE-SWITCH`, then approve
    the environment gate. Require `decision=pre-switch-aborted` (or the fully
    revalidated idempotent result `already-pre-switch-aborted`) and
    `trafficChanged=false`.
 4. Start a fresh production release from the current immutable `main` artifact
    and verify final public parity.
 
-Never rerun the old failed production workflow. If any digest, revision,
-runtime, or public identity differs, stop and review the new state instead of
-weakening the incident plan.
+If `main` advances between dry-run and apply, discard that dry-run and repeat it
+from the new reviewed SHA. Never rerun workflows `30573174866` or `30777734420`.
+If any digest, revision, runtime, or public identity differs, stop and review
+the new state instead of weakening or regenerating the incident plan to fit it.
 
 ## Public platform ambiguity
 
@@ -276,3 +295,6 @@ Before production rollout, test without publishing JATO data:
   `pre_switch_aborted` terminal, then prove an idempotent replay changes nothing;
 - reject checkpoint recovery when any reviewed digest, database revision,
   runtime identity, or public identity differs.
+- accept schema v2 only when migration evidence is `completed` and each of its
+  pre/target/result revision sets exactly equals current, old heads, new heads,
+  and backup; reject any v1/v2 profile swap or partial revision mismatch.

@@ -1,0 +1,95 @@
+{
+  "archive": {
+    "bytes": 22495500,
+    "path": "/home/ubuntu/.cache/jato-releases/archives/86ce149ea9db84a6125cdb3a99d38ba794ce7edf/8e95818d8e8702d8de422131502fcf54b77b97ad08f17a8ca937358d69d672fb.tar.gz",
+    "releaseIdentity": "commit=86ce149ea9db84a6125cdb3a99d38ba794ce7edf archive=8e95818d8e8702d8de422131502fcf54b77b97ad08f17a8ca937358d69d672fb",
+    "releaseRoot": "/opt/jato/releases/86ce149ea9db84a6125cdb3a99d38ba794ce7edf/8e95818d8e8702d8de422131502fcf54b77b97ad08f17a8ca937358d69d672fb",
+    "sha256": "8e95818d8e8702d8de422131502fcf54b77b97ad08f17a8ca937358d69d672fb"
+  },
+  "backup": {
+    "dumpBytes": 521532,
+    "dumpPath": "/opt/backups/jato/pg/jato-20260731-030828.dump",
+    "dumpSha256": "1845312b259bc62ed8275155d767ba14aa3c01f3d47b8640dd83b4bd366a66ef",
+    "manifestBytes": 1707,
+    "manifestPath": "/opt/backups/jato/manifests/backup-20260731-030828.json",
+    "manifestSha256": "42587d69d468bf79262aa22d9173a27933adefd402ffaf792852dfe73b00f341",
+    "root": "/opt/backups/jato"
+  },
+  "checkpoint": {
+    "bytes": 1346,
+    "evidenceBytes": 955,
+    "evidencePath": "/home/ubuntu/.local/state/jato-production-release/checkpoints/86ce149ea9db84a6125cdb3a99d38ba794ce7edf/8e95818d8e8702d8de422131502fcf54b77b97ad08f17a8ca937358d69d672fb.evidence.json",
+    "evidenceSha256": "4805110c6f4be1cf8175b556c1ff6eb309cda27ad3b8c676dd903af92b4a268d",
+    "identity": {
+      "archiveBytes": 22495500,
+      "archiveSha256": "8e95818d8e8702d8de422131502fcf54b77b97ad08f17a8ca937358d69d672fb",
+      "commit": "86ce149ea9db84a6125cdb3a99d38ba794ce7edf",
+      "frontendChecksum": "6e241a6d3926bbf1caff917358ea539ec09c46a1457214e6fce68c149da7ec7f",
+      "frontendIdentity": "gha://tristan419/JATO_Analysis_System/actions/runs/30573174866/attempts/1/artifacts/frontend-dist-86ce149ea9db84a6125cdb3a99d38ba794ce7edf",
+      "repository": "tristan419/JATO_Analysis_System",
+      "runAttempt": 1,
+      "runId": 30573174866
+    },
+    "journalBytes": 5516,
+    "journalLines": 6,
+    "journalPath": "/home/ubuntu/.local/state/jato-production-release/journals/86ce149ea9db84a6125cdb3a99d38ba794ce7edf/8e95818d8e8702d8de422131502fcf54b77b97ad08f17a8ca937358d69d672fb.jsonl",
+    "journalSha256": "b86bd3400099350e00cc1975dae3d119eb5a4296c53568d915a6467879b4578b",
+    "path": "/home/ubuntu/.local/state/jato-production-release/checkpoints/86ce149ea9db84a6125cdb3a99d38ba794ce7edf/8e95818d8e8702d8de422131502fcf54b77b97ad08f17a8ca937358d69d672fb.json",
+    "sequence": 6,
+    "sha256": "528abbeeaab1aea242407dede492a5f4b1df4cf01c8e820eb45dddee662f65ee"
+  },
+  "expected": {
+    "activeCommit": "cd4557cb932374a0fefb6c80a5fac9fb75a67d62",
+    "activeBuildMetaBytes": 1577,
+    "activeBuildMetaSha256": "3c1112aa4c2c6cdc6134f88618633fd13d840f4ec3a6d4a71dc164e6b96ee880",
+    "activeBackendActiveEnterTimestampMonotonic": 4319722344444,
+    "activeBackendControlGroup": "/system.slice/system-jato\\x2dfullstack\\x2dbackend.slice/jato-fullstack-backend@8000.service",
+    "activeBackendExecMainStartTimestampMonotonic": 4319722344190,
+    "activeBackendInvocationId": "dcb34e48aee34aac8326c3bb0e8e3aee",
+    "activeBackendNRestarts": 0,
+    "activeFrontendRoot": "/opt/JATO_Analysis_System-main/06_AppPlatform/frontend/dist",
+    "activeReleaseRoot": "/opt/JATO_Analysis_System-main",
+    "activeSlot": "8000",
+    "activeSlotFileBytes": 5,
+    "activeSlotFileSha256": "06516f7a6e849dd3bbe5e3cd905cbaf7dab8f059572d2586adde4eb88ceabdd3",
+    "candidateSlot": "8001",
+    "memoryHighBytes": 6442450944,
+    "memoryMaxBytes": 8589934592,
+    "revisions": [
+      "20260715_0046"
+    ],
+    "workers": 2
+  },
+  "incidentId": "2026-07-30-86ce-pre-switch-db-evidence",
+  "repository": "tristan419/JATO_Analysis_System",
+  "runtime": {
+    "activeReleaseLink": "/opt/jato/active",
+    "activeSlotFile": "/var/lib/jato-release/active-slot",
+    "backendEnv": "/etc/jato-fullstack/backend.env",
+    "backendServicePrefix": "jato-fullstack-backend@",
+    "bluegreenStateRoot": "/var/lib/jato-release",
+    "candidateSlotLink": "/opt/jato/slots/8001/current",
+    "deploymentMarker": "/var/lib/jato-release/deployment-maintenance",
+    "monthlyWorkerUnit": "jato-monthly-worker.service",
+    "nginxConfig": "/etc/nginx/sites-enabled/jato_fullstack.conf",
+    "nginxConfigBytes": 7303,
+    "nginxConfigSha256": "6f5e26e9e293d8024af90ed8446a1f8f1c5072567c38f050f86ec38524e2880d",
+    "nginxMode": "legacy_pre_candidate",
+    "schedulerState": "/var/lib/jato-release/scheduler-state.tsv",
+    "serverNames": [
+      "ojeur.cloud",
+      "www.ojeur.cloud"
+    ],
+    "slotEnv": "/etc/jato-fullstack/slots/8000.env",
+    "switchUnit": "jato-bluegreen-production.service",
+    "venv": "/opt/JATO_Analysis_System-main/.venv"
+  },
+  "schemaVersion": 2,
+  "sourceProofs": {
+    "03_Scripts/deploy/release_checkpoint.py": "a3b8059835bded1cfef4df91466b3951850fd93e5802e6cdb70ed957a603524b",
+    "03_Scripts/deploy/release_evidence.py": "3fd766da85378924a0f9244002ddcc0b15cb77ab61678b6632276b6df89eb508",
+    "03_Scripts/deploy/tencent_bluegreen_release.sh": "13dcae489a16821cab350e090b9b388f98b302061041d35da937bb5775cb1cdb",
+    "03_Scripts/deploy_fullstack_server.sh": "8e1c278cfce91c7a07feaa1b548923e94146d3ef592e7c4ffe3f3bc43a18bc68",
+    "03_Scripts/ops/deploy_fullstack_server.sh": "9d47583b4d821c94d569078c1a78ea088bedbdc23162d113b4ffffcc932fed81"
+  }
+}

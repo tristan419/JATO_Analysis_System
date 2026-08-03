@@ -12,7 +12,7 @@ on:
           - dry-run
           - apply
       confirmation:
-        description: Apply only — type ABORT 2026-07-30-ce5 PRE-SWITCH
+        description: Apply only — type ABORT 2026-07-30-86ce PRE-SWITCH
         required: false
         default: ""
         type: string
@@ -52,7 +52,7 @@ jobs:
               ;;
             apply)
               test "$RECOVERY_CONFIRMATION" = \
-                "ABORT 2026-07-30-ce5 PRE-SWITCH"
+                "ABORT 2026-07-30-86ce PRE-SWITCH"
               ;;
             *)
               echo "::error::Unsupported checkpoint recovery mode"
@@ -121,7 +121,7 @@ jobs:
               ;;
             apply)
               test "$RECOVERY_CONFIRMATION" = \
-                "ABORT 2026-07-30-ce5 PRE-SWITCH"
+                "ABORT 2026-07-30-86ce PRE-SWITCH"
               ;;
             *)
               exit 1
@@ -132,7 +132,7 @@ jobs:
         id: bundle
         run: |
           set -euo pipefail
-          plan=".github/recovery-plans/2026-07-30-ce5-pre-switch-db-evidence.json"
+          plan=".github/recovery-plans/2026-07-30-86ce-pre-switch-db-evidence.json"
           bundle_root="$RUNNER_TEMP/checkpoint-recovery-control"
           archive="$RUNNER_TEMP/checkpoint-recovery-control.tar.gz"
           rm -rf "$bundle_root" "$archive"

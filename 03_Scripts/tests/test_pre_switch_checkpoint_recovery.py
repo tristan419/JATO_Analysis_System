@@ -123,7 +123,12 @@ def _valid_observation(plan: dict[str, object]) -> dict[str, object]:
     }
 
 
-def _build_fixture(tmp_path: Path) -> dict[str, object]:
+def _build_fixture(
+    tmp_path: Path,
+    *,
+    plan_schema_version: int = 1,
+    evidence_migration: dict[str, object] | None = None,
+) -> dict[str, object]:
     state_root = tmp_path / "home/.local/state/jato-production-release"
     checkpoints_root = state_root / "checkpoints"
     journals_root = state_root / "journals"
@@ -194,6 +199,22 @@ def _build_fixture(tmp_path: Path) -> dict[str, object]:
     checkpoint_path = checkpoints_root / old_commit / f"{archive_sha}.json"
     journal_path = journals_root / old_commit / f"{archive_sha}.jsonl"
     evidence_path = checkpoint_path.with_name(f"{archive_sha}.evidence.json")
+    if evidence_migration is None:
+        if plan_schema_version == 1:
+            evidence_migration = {
+                "status": "not_required",
+                "preRevision": None,
+                "targetRevision": None,
+                "resultRevision": None,
+            }
+        else:
+            revision_output = f"{REVISION} (head)"
+            evidence_migration = {
+                "status": "completed",
+                "preRevision": revision_output,
+                "targetRevision": revision_output,
+                "resultRevision": revision_output,
+            }
     evidence = {
         "identity": identity.to_dict(),
         "backup": {
@@ -201,12 +222,7 @@ def _build_fixture(tmp_path: Path) -> dict[str, object]:
             "manifestBytes": manifest_path.stat().st_size,
             "manifestSha256": _sha256(manifest_path),
         },
-        "migration": {
-            "status": "not_required",
-            "preRevision": None,
-            "targetRevision": None,
-            "resultRevision": None,
-        },
+        "migration": evidence_migration,
     }
     _write_private(
         evidence_path,
@@ -256,7 +272,7 @@ def _build_fixture(tmp_path: Path) -> dict[str, object]:
     bundle_root = tmp_path / "bundle"
     (bundle_root / "06_AppPlatform/backend").mkdir(parents=True)
     plan = {
-        "schemaVersion": 1,
+        "schemaVersion": plan_schema_version,
         "incidentId": "test-pre-switch-db-evidence",
         "repository": identity.repository,
         "checkpoint": {
@@ -451,10 +467,15 @@ def test_apply_preserves_legacy_evidence_and_seals_distinct_terminal(
     assert len(fixture["journal_path"].read_text().splitlines()) == 7
 
 
+@pytest.mark.parametrize("plan_schema_version", [1, 2])
 def test_terminal_receipt_is_required_by_cross_release_gate(
     tmp_path: Path,
+    plan_schema_version: int,
 ) -> None:
-    fixture = _build_fixture(tmp_path)
+    fixture = _build_fixture(
+        tmp_path,
+        plan_schema_version=plan_schema_version,
+    )
     result = _recover(fixture, "apply")
     identity = fixture["identity"]
     assert isinstance(identity, checkpoint.ReleaseIdentity)
@@ -565,6 +586,154 @@ def test_legacy_evidence_signature_is_exact(tmp_path: Path) -> None:
 
     with pytest.raises(recovery.RecoveryError, match="legacy_evidence_invalid"):
         _recover(fixture, "dry-run")
+
+
+def test_schema_v2_completed_evidence_dry_run_and_apply_are_exact(
+    tmp_path: Path,
+) -> None:
+    fixture = _build_fixture(tmp_path, plan_schema_version=2)
+    checkpoint_before = fixture["checkpoint_path"].read_bytes()
+    journal_before = fixture["journal_path"].read_bytes()
+    evidence_before = fixture["evidence_path"].read_bytes()
+
+    dry_run = _recover(fixture, "dry-run")
+
+    assert dry_run["decision"] == "dry-run-eligible"
+    assert fixture["checkpoint_path"].read_bytes() == checkpoint_before
+    assert fixture["journal_path"].read_bytes() == journal_before
+    assert fixture["evidence_path"].read_bytes() == evidence_before
+    assert not (fixture["state_root"] / "recoveries").exists()
+
+    applied = _recover(fixture, "apply")
+    receipt = json.loads(Path(applied["receiptPath"]).read_text(encoding="utf-8"))
+    assert applied["decision"] == "pre-switch-aborted"
+    assert receipt["schemaVersion"] == 2
+    assert receipt["legacyEvidence"]["migrationStatus"] == "completed"
+    checkpoint.validate_pre_switch_abort_settlement(
+        checkpoint_path=fixture["checkpoint_path"],
+        checkpoints_root=fixture["state_root"] / "checkpoints",
+    )
+    replay = _recover(fixture, "apply")
+    assert replay["decision"] == "already-pre-switch-aborted"
+    assert len(fixture["journal_path"].read_text().splitlines()) == 7
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("status", "not_required"),
+        ("preRevision", "20260715_0045 (head)"),
+        ("targetRevision", ""),
+        ("resultRevision", None),
+    ],
+)
+def test_schema_v2_rejects_profile_or_revision_mismatch(
+    tmp_path: Path,
+    field: str,
+    value: object,
+) -> None:
+    revision_output = f"{REVISION} (head)"
+    migration: dict[str, object] = {
+        "status": "completed",
+        "preRevision": revision_output,
+        "targetRevision": revision_output,
+        "resultRevision": revision_output,
+    }
+    migration[field] = value
+    fixture = _build_fixture(
+        tmp_path,
+        plan_schema_version=2,
+        evidence_migration=migration,
+    )
+
+    with pytest.raises(recovery.RecoveryError, match="legacy_evidence_invalid"):
+        _recover(fixture, "dry-run")
+
+
+@pytest.mark.parametrize(
+    ("plan_schema_version", "migration_status"),
+    [(1, "completed"), (2, "not_required")],
+)
+def test_settlement_rejects_receipt_profile_swap(
+    tmp_path: Path,
+    plan_schema_version: int,
+    migration_status: str,
+) -> None:
+    fixture = _build_fixture(
+        tmp_path,
+        plan_schema_version=plan_schema_version,
+    )
+    applied = _recover(fixture, "apply")
+    receipt = json.loads(
+        Path(applied["receiptPath"]).read_text(encoding="utf-8")
+    )
+    receipt["legacyEvidence"]["migrationStatus"] = migration_status
+
+    with pytest.raises(
+        checkpoint.CheckpointError,
+        match="legacy evidence proof is invalid",
+    ):
+        checkpoint._validate_recovery_legacy_evidence(
+            receipt=receipt,
+            evidence_bindings=[
+                (str(fixture["evidence_path"]), _sha256(fixture["evidence_path"]))
+            ],
+        )
+
+
+def test_schema_v2_settlement_rejects_receipt_revision_mismatch(
+    tmp_path: Path,
+) -> None:
+    fixture = _build_fixture(tmp_path, plan_schema_version=2)
+    applied = _recover(fixture, "apply")
+    receipt = json.loads(
+        Path(applied["receiptPath"]).read_text(encoding="utf-8")
+    )
+    receipt["database"]["currentRevisions"] = ["20260715_0045"]
+
+    with pytest.raises(
+        checkpoint.CheckpointError,
+        match="schema v2 recovery evidence revisions differ from receipt",
+    ):
+        checkpoint._validate_recovery_legacy_evidence(
+            receipt=receipt,
+            evidence_bindings=[
+                (str(fixture["evidence_path"]), _sha256(fixture["evidence_path"]))
+            ],
+        )
+
+
+@pytest.mark.parametrize("schema_version", [True, 0, 3])
+def test_receipt_schema_version_is_explicit_and_not_boolean(
+    schema_version: object,
+) -> None:
+    with pytest.raises(
+        checkpoint.CheckpointError,
+        match="recovery receipt schemaVersion is invalid",
+    ):
+        checkpoint._recovery_migration_status(
+            {"schemaVersion": schema_version}
+        )
+
+
+@pytest.mark.parametrize("schema_version", [True, 0, 3])
+def test_plan_schema_version_is_explicit_and_not_boolean(
+    tmp_path: Path,
+    schema_version: object,
+) -> None:
+    fixture = _build_fixture(tmp_path)
+    plan = fixture["plan"]
+    assert isinstance(plan, dict)
+    plan["schemaVersion"] = schema_version
+    path = fixture["plan_path"]
+    assert isinstance(path, Path)
+    path.write_text(
+        json.dumps(plan, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(recovery.RecoveryError, match="unsupported schemaVersion"):
+        recovery.load_recovery_plan(path, _sha256(path))
 
 
 def test_generic_checkpoint_write_cannot_forge_abort(tmp_path: Path) -> None:
@@ -832,7 +1001,7 @@ def test_public_build_probe_verifies_raw_byte_identity() -> None:
         )
 
 
-def test_versioned_incident_plan_is_valid_and_exact() -> None:
+def test_ce5_versioned_incident_plan_remains_valid_and_exact() -> None:
     path = (
         REPO_ROOT
         / ".github/recovery-plans/"
@@ -840,11 +1009,52 @@ def test_versioned_incident_plan_is_valid_and_exact() -> None:
     )
     plan, digest = recovery.load_recovery_plan(path, _sha256(path))
 
-    assert digest == _sha256(path)
+    assert digest == (
+        "ee8157e6f55f31890579b2bffa3106cfde4ff35d683c17476e6a47e364e81322"
+    )
+    assert plan["schemaVersion"] == 1
     assert plan["incidentId"] == "2026-07-30-ce5-pre-switch-db-evidence"
     assert plan["checkpoint"]["sequence"] == 6
     assert plan["checkpoint"]["sha256"] == (
         "b6ab32cc272bc6cdb94533c7bb66f2a8a003baeb4befe518038bcacb4251fb18"
+    )
+    assert plan["expected"]["revisions"] == [REVISION]
+    assert plan["runtime"]["nginxMode"] == "legacy_pre_candidate"
+
+
+def test_86ce_versioned_incident_plan_is_valid_and_exact() -> None:
+    path = (
+        REPO_ROOT
+        / ".github/recovery-plans/"
+        "2026-07-30-86ce-pre-switch-db-evidence.json"
+    )
+    plan, digest = recovery.load_recovery_plan(path, _sha256(path))
+
+    assert digest == (
+        "6ba2251e187bfbf027ce4629d050f61a0212fbad6441ca7bbc787e49b2a2e797"
+    )
+    assert plan["schemaVersion"] == 2
+    assert plan["incidentId"] == "2026-07-30-86ce-pre-switch-db-evidence"
+    assert plan["checkpoint"]["identity"]["commit"] == (
+        "86ce149ea9db84a6125cdb3a99d38ba794ce7edf"
+    )
+    assert plan["checkpoint"]["sha256"] == (
+        "528abbeeaab1aea242407dede492a5f4b1df4cf01c8e820eb45dddee662f65ee"
+    )
+    assert plan["checkpoint"]["evidenceSha256"] == (
+        "4805110c6f4be1cf8175b556c1ff6eb309cda27ad3b8c676dd903af92b4a268d"
+    )
+    assert plan["checkpoint"]["journalSha256"] == (
+        "b86bd3400099350e00cc1975dae3d119eb5a4296c53568d915a6467879b4578b"
+    )
+    assert plan["archive"]["sha256"] == (
+        "8e95818d8e8702d8de422131502fcf54b77b97ad08f17a8ca937358d69d672fb"
+    )
+    assert plan["backup"]["manifestSha256"] == (
+        "42587d69d468bf79262aa22d9173a27933adefd402ffaf792852dfe73b00f341"
+    )
+    assert plan["backup"]["dumpSha256"] == (
+        "1845312b259bc62ed8275155d767ba14aa3c01f3d47b8640dd83b4bd366a66ef"
     )
     assert plan["expected"]["revisions"] == [REVISION]
     assert plan["runtime"]["nginxMode"] == "legacy_pre_candidate"
