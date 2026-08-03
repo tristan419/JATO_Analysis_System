@@ -39,16 +39,25 @@ SITE_CANDIDATE="$WORK_DIR/jato_fullstack.conf"
 ACTIVE_CANDIDATE="$WORK_DIR/active-release.conf"
 TARGET_SNAPSHOT="$WORK_DIR/target.original"
 ACTIVE_SNAPSHOT="$WORK_DIR/active.original"
+ENABLED_SNAPSHOT="$WORK_DIR/enabled.original"
 DEFAULT_SNAPSHOT="$WORK_DIR/default.original"
 TARGET_EXISTED=false
+TARGET_MUTATION_STARTED=false
 ACTIVE_EXISTED=false
+ACTIVE_MUTATION_STARTED=false
 ENABLED_EXISTED=false
+ENABLED_WAS_SYMLINK=false
+ENABLED_WAS_REGULAR=false
 ENABLED_TARGET=""
+ENABLED_REGULAR_SHA256=""
+ENABLED_MUTATION_STARTED=false
+ENABLED_EXTERNAL_DRIFT=false
+ENABLED_ADOPTION_OWNER="$WORK_DIR/enabled-adoption-owner.json"
 DEFAULT_EXISTED=false
 DEFAULT_WAS_SYMLINK=false
 DEFAULT_TARGET=""
+DEFAULT_MUTATION_STARTED=false
 CERTBOT_MIGRATION=false
-MUTATION_STARTED=false
 COMPLETED=false
 PREIMAGE_STAGING_DIR=""
 
@@ -62,6 +71,648 @@ is_truthy() {
 fail() {
   echo "[ERROR] $*" >&2
   return 1
+}
+
+inspect_regular_enabled_adoption() {
+  local mode="$1"
+  local adoption_owner_path="${2:-}"
+  python3 -B - \
+    "$mode" "$ENABLED_CONF" "$TARGET_CONF" \
+    "$ENABLED_SNAPSHOT" "$TARGET_SNAPSHOT" \
+    "$ENABLED_REGULAR_SHA256" "$adoption_owner_path" <<'PY'
+from __future__ import annotations
+
+import ctypes
+import hashlib
+import json
+import os
+import platform
+import secrets
+import stat
+import sys
+
+MAX_ADOPTION_BYTES = 4 * 1024 * 1024
+
+(
+    mode,
+    enabled_path,
+    canonical_path,
+    enabled_snapshot_path,
+    canonical_snapshot_path,
+    expected_sha256,
+    adoption_owner_path,
+) = sys.argv[1:]
+
+
+def read_regular(path: str) -> tuple[bytes, int]:
+    flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
+    try:
+        descriptor = os.open(path, flags)
+    except OSError as exc:
+        raise SystemExit(
+            f"[ERROR] nginx adoption input is unreadable or unsafe: "
+            f"path={path} reason={exc}"
+        ) from exc
+    try:
+        metadata = os.fstat(descriptor)
+        if not stat.S_ISREG(metadata.st_mode):
+            raise SystemExit(
+                f"[ERROR] nginx adoption input is not a regular file: path={path}"
+            )
+        if metadata.st_size > MAX_ADOPTION_BYTES:
+            raise SystemExit(
+                f"[ERROR] nginx adoption input exceeds {MAX_ADOPTION_BYTES} bytes: "
+                f"path={path} bytes={metadata.st_size}"
+            )
+        chunks: list[bytes] = []
+        total = 0
+        while True:
+            chunk = os.read(descriptor, 1024 * 1024)
+            if not chunk:
+                break
+            total += len(chunk)
+            if total > MAX_ADOPTION_BYTES:
+                raise SystemExit(
+                    f"[ERROR] nginx adoption input grew beyond "
+                    f"{MAX_ADOPTION_BYTES} bytes while reading: path={path}"
+                )
+            chunks.append(chunk)
+        return b"".join(chunks), stat.S_IMODE(metadata.st_mode)
+    finally:
+        os.close(descriptor)
+
+
+def digest(payload: bytes) -> str:
+    return hashlib.sha256(payload).hexdigest()
+
+
+def fsync_directory(directory: str) -> None:
+    descriptor = os.open(
+        directory,
+        os.O_RDONLY | getattr(os, "O_DIRECTORY", 0),
+    )
+    try:
+        os.fsync(descriptor)
+    finally:
+        os.close(descriptor)
+
+
+def exchange_paths(left: str, right: str) -> None:
+    libc = ctypes.CDLL(None, use_errno=True)
+    encoded_left = os.fsencode(left)
+    encoded_right = os.fsencode(right)
+    if sys.platform.startswith("linux"):
+        renameat2 = getattr(libc, "renameat2", None)
+        if renameat2 is None:
+            raise OSError("libc renameat2 is unavailable")
+        renameat2.argtypes = [
+            ctypes.c_int,
+            ctypes.c_char_p,
+            ctypes.c_int,
+            ctypes.c_char_p,
+            ctypes.c_uint,
+        ]
+        renameat2.restype = ctypes.c_int
+        result = renameat2(-100, encoded_left, -100, encoded_right, 2)
+    elif sys.platform == "darwin":
+        renamex_np = getattr(libc, "renamex_np", None)
+        if renamex_np is None:
+            raise OSError("libc renamex_np is unavailable")
+        renamex_np.argtypes = [ctypes.c_char_p, ctypes.c_char_p, ctypes.c_uint]
+        renamex_np.restype = ctypes.c_int
+        result = renamex_np(encoded_left, encoded_right, 2)
+    else:
+        raise OSError(
+            f"atomic path exchange is unsupported on {platform.system()}"
+        )
+    if result != 0:
+        error_number = ctypes.get_errno()
+        raise OSError(
+            error_number,
+            os.strerror(error_number),
+            f"{left} <-> {right}",
+        )
+
+
+def path_identity(path: str) -> tuple[int, int] | None:
+    try:
+        metadata = os.lstat(path)
+    except FileNotFoundError:
+        return None
+    return metadata.st_dev, metadata.st_ino
+
+
+class AdoptionRefused(Exception):
+    pass
+
+
+def exchange_adopt() -> None:
+    if not adoption_owner_path:
+        raise SystemExit("[ERROR] nginx adoption owner path is missing")
+    enabled_snapshot, enabled_snapshot_mode = read_regular(
+        enabled_snapshot_path
+    )
+    if digest(enabled_snapshot) != expected_sha256:
+        raise SystemExit(
+            "[ERROR] nginx adoption snapshot no longer matches its bound digest"
+        )
+
+    enabled_directory = os.path.dirname(enabled_path)
+    temporary_path = ""
+    symlink_identity: tuple[int, int] | None = None
+    exchanged = False
+    committed = False
+
+    def is_owned_symlink(path: str) -> bool:
+        if symlink_identity is None:
+            return False
+        try:
+            metadata = os.lstat(path)
+            return (
+                stat.S_ISLNK(metadata.st_mode)
+                and (metadata.st_dev, metadata.st_ino) == symlink_identity
+                and os.readlink(path) == canonical_path
+            )
+        except (FileNotFoundError, OSError):
+            return False
+
+    def remove_owner_marker() -> None:
+        try:
+            os.unlink(adoption_owner_path)
+        except FileNotFoundError:
+            return
+        fsync_directory(os.path.dirname(adoption_owner_path))
+
+    def restore_failed_exchange() -> bool:
+        if not temporary_path or not os.path.lexists(temporary_path):
+            print(
+                "[ERROR] nginx adoption rollback quarantine is missing; "
+                "refusing further mutation",
+                file=sys.stderr,
+            )
+            return False
+        if not is_owned_symlink(enabled_path):
+            print(
+                "[ERROR] enabled nginx path changed after atomic exchange; "
+                f"preserved displaced object at {temporary_path}",
+                file=sys.stderr,
+            )
+            return False
+        exchange_paths(temporary_path, enabled_path)
+        if is_owned_symlink(temporary_path):
+            os.unlink(temporary_path)
+            fsync_directory(enabled_directory)
+            remove_owner_marker()
+            return True
+
+        # A writer raced the identity check. Put its object back instead of
+        # taking ownership of a path this installer no longer controls.
+        exchange_paths(temporary_path, enabled_path)
+        fsync_directory(enabled_directory)
+        print(
+            "[ERROR] enabled nginx path raced atomic rollback; external path "
+            f"was restored and displaced object remains at {temporary_path}",
+            file=sys.stderr,
+        )
+        return False
+
+    try:
+        for _attempt in range(32):
+            candidate = os.path.join(
+                enabled_directory,
+                f".{os.path.basename(enabled_path)}.adopt."
+                f"{os.getpid()}.{secrets.token_hex(12)}",
+            )
+            try:
+                os.symlink(canonical_path, candidate)
+            except FileExistsError:
+                continue
+            temporary_path = candidate
+            break
+        if not temporary_path:
+            raise OSError("could not allocate a private nginx adoption path")
+
+        symlink_identity = path_identity(temporary_path)
+        if symlink_identity is None:
+            raise OSError("nginx adoption symlink disappeared before exchange")
+        owner_payload = json.dumps(
+            {
+                "version": 1,
+                "device": symlink_identity[0],
+                "inode": symlink_identity[1],
+                "target": canonical_path,
+            },
+            sort_keys=True,
+        ).encode("utf-8")
+        owner_descriptor = os.open(
+            adoption_owner_path,
+            os.O_WRONLY | os.O_CREAT | os.O_EXCL,
+            0o600,
+        )
+        try:
+            offset = 0
+            while offset < len(owner_payload):
+                offset += os.write(owner_descriptor, owner_payload[offset:])
+            os.fsync(owner_descriptor)
+        finally:
+            os.close(owner_descriptor)
+        fsync_directory(os.path.dirname(adoption_owner_path))
+
+        exchange_paths(temporary_path, enabled_path)
+        exchanged = True
+        fsync_directory(enabled_directory)
+        try:
+            displaced, displaced_mode = read_regular(temporary_path)
+        except SystemExit as exc:
+            print(str(exc), file=sys.stderr)
+            raise AdoptionRefused(
+                "atomic exchange displaced an unsafe enabled nginx path"
+            ) from exc
+        if (
+            displaced != enabled_snapshot
+            or digest(displaced) != expected_sha256
+            or displaced_mode != enabled_snapshot_mode
+        ):
+            print(
+                "[ERROR] enabled nginx adoption file changed at atomic "
+                "exchange; refusing to overwrite it",
+                file=sys.stderr,
+            )
+            print(
+                f"[ERROR] enabled_exchange_sha256={digest(displaced)}",
+                file=sys.stderr,
+            )
+            print(
+                f"[ERROR] enabled_snapshot_sha256={digest(enabled_snapshot)}",
+                file=sys.stderr,
+            )
+            print(
+                f"[ERROR] enabled_exchange_mode={displaced_mode:04o} "
+                f"enabled_snapshot_mode={enabled_snapshot_mode:04o}",
+                file=sys.stderr,
+            )
+            print("[ERROR] difference_content=redacted", file=sys.stderr)
+            raise AdoptionRefused("enabled nginx adoption input drifted")
+
+        os.unlink(temporary_path)
+        fsync_directory(enabled_directory)
+        committed = True
+        print(expected_sha256)
+    except AdoptionRefused as exc:
+        if exchanged and restore_failed_exchange():
+            raise SystemExit(75) from exc
+        raise SystemExit(76) from exc
+    except BaseException as exc:
+        if exchanged and not committed:
+            restored = restore_failed_exchange()
+            raise SystemExit(76 if not restored else 75) from exc
+        if temporary_path and is_owned_symlink(temporary_path):
+            os.unlink(temporary_path)
+            fsync_directory(enabled_directory)
+        remove_owner_marker()
+        raise
+
+
+def exchange_restore() -> None:
+    if not adoption_owner_path:
+        raise SystemExit("[ERROR] nginx adoption owner path is missing")
+    snapshot, snapshot_mode = read_regular(enabled_snapshot_path)
+    if digest(snapshot) != expected_sha256:
+        raise SystemExit(
+            "[ERROR] nginx rollback snapshot no longer matches its bound digest"
+        )
+
+    owner_flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
+    owner_descriptor = os.open(adoption_owner_path, owner_flags)
+    try:
+        owner_metadata = os.fstat(owner_descriptor)
+        if not stat.S_ISREG(owner_metadata.st_mode) or owner_metadata.st_size > 4096:
+            raise SystemExit("[ERROR] nginx adoption ownership proof is unsafe")
+        owner = json.loads(os.read(owner_descriptor, 4097).decode("utf-8"))
+    finally:
+        os.close(owner_descriptor)
+    if owner.get("version") != 1 or owner.get("target") != canonical_path:
+        raise SystemExit("[ERROR] nginx adoption ownership proof is invalid")
+
+    enabled_directory = os.path.dirname(enabled_path)
+    temporary_path = ""
+    restore_identity: tuple[int, int] | None = None
+    exchanged = False
+    committed = False
+
+    def is_restore_file(path: str) -> bool:
+        if restore_identity is None:
+            return False
+        try:
+            metadata = os.lstat(path)
+        except FileNotFoundError:
+            return False
+        return (
+            stat.S_ISREG(metadata.st_mode)
+            and (metadata.st_dev, metadata.st_ino) == restore_identity
+        )
+
+    def is_owned_symlink(path: str) -> bool:
+        try:
+            metadata = os.lstat(path)
+            return (
+                stat.S_ISLNK(metadata.st_mode)
+                and metadata.st_dev == owner.get("device")
+                and metadata.st_ino == owner.get("inode")
+                and os.readlink(path) == canonical_path
+            )
+        except (FileNotFoundError, OSError):
+            return False
+
+    def remove_owner_marker() -> None:
+        try:
+            os.unlink(adoption_owner_path)
+        except FileNotFoundError:
+            return
+        fsync_directory(os.path.dirname(adoption_owner_path))
+
+    def remove_restore_file() -> None:
+        if temporary_path and is_restore_file(temporary_path):
+            os.unlink(temporary_path)
+            fsync_directory(enabled_directory)
+
+    def put_displaced_path_back() -> bool:
+        if not temporary_path or not os.path.lexists(temporary_path):
+            print(
+                "[ERROR] nginx rollback displaced-path quarantine is missing",
+                file=sys.stderr,
+            )
+            return False
+        if not is_restore_file(enabled_path):
+            print(
+                "[ERROR] enabled nginx path changed during atomic rollback; "
+                f"preserved displaced object at {temporary_path}",
+                file=sys.stderr,
+            )
+            return False
+        exchange_paths(temporary_path, enabled_path)
+        if is_restore_file(temporary_path):
+            remove_restore_file()
+            remove_owner_marker()
+            return True
+
+        # A writer raced the ownership check. Exchange once more so its path
+        # remains authoritative; preserve the displaced object for recovery.
+        exchange_paths(temporary_path, enabled_path)
+        fsync_directory(enabled_directory)
+        print(
+            "[ERROR] enabled nginx path raced atomic rollback; external path "
+            f"was restored and displaced object remains at {temporary_path}",
+            file=sys.stderr,
+        )
+        return False
+
+    try:
+        for _attempt in range(32):
+            candidate = os.path.join(
+                enabled_directory,
+                f".{os.path.basename(enabled_path)}.restore."
+                f"{os.getpid()}.{secrets.token_hex(12)}",
+            )
+            try:
+                restore_descriptor = os.open(
+                    candidate,
+                    os.O_WRONLY | os.O_CREAT | os.O_EXCL,
+                    snapshot_mode,
+                )
+            except FileExistsError:
+                continue
+            temporary_path = candidate
+            try:
+                offset = 0
+                while offset < len(snapshot):
+                    offset += os.write(restore_descriptor, snapshot[offset:])
+                os.fchmod(restore_descriptor, snapshot_mode)
+                os.fsync(restore_descriptor)
+            finally:
+                os.close(restore_descriptor)
+            break
+        if not temporary_path:
+            raise OSError("could not allocate a private nginx rollback path")
+
+        restore_identity = path_identity(temporary_path)
+        if restore_identity is None:
+            raise OSError("nginx rollback file disappeared before exchange")
+        exchange_paths(temporary_path, enabled_path)
+        exchanged = True
+        fsync_directory(enabled_directory)
+        if not is_owned_symlink(temporary_path):
+            print(
+                "[ERROR] enabled nginx path is no longer the symlink owned "
+                "by this installer; refusing rollback overwrite",
+                file=sys.stderr,
+            )
+            if put_displaced_path_back():
+                raise SystemExit(75)
+            raise SystemExit(76)
+
+        os.unlink(temporary_path)
+        fsync_directory(enabled_directory)
+        remove_owner_marker()
+        committed = True
+        print(expected_sha256)
+    except SystemExit:
+        raise
+    except BaseException as exc:
+        if exchanged and not committed:
+            restored = put_displaced_path_back()
+            raise SystemExit(76 if not restored else 75) from exc
+        remove_restore_file()
+        raise
+
+
+if mode == "exchange-adopt":
+    exchange_adopt()
+    raise SystemExit(0)
+if mode == "exchange-restore":
+    exchange_restore()
+    raise SystemExit(0)
+
+
+def report_mismatch(enabled: bytes, canonical: bytes) -> None:
+    print(
+        "[ERROR] Enabled nginx site differs from canonical target; "
+        "refusing automatic symlink adoption",
+        file=sys.stderr,
+    )
+    print(f"[ERROR] enabled_path={enabled_path}", file=sys.stderr)
+    print(f"[ERROR] canonical_path={canonical_path}", file=sys.stderr)
+    print(f"[ERROR] enabled_sha256={digest(enabled)}", file=sys.stderr)
+    print(f"[ERROR] canonical_sha256={digest(canonical)}", file=sys.stderr)
+    print(
+        f"[ERROR] enabled_bytes={len(enabled)} canonical_bytes={len(canonical)}",
+        file=sys.stderr,
+    )
+    common = min(len(canonical), len(enabled))
+    first_byte = next(
+        (index for index in range(common) if canonical[index] != enabled[index]),
+        common,
+    )
+    first_line = canonical[:first_byte].count(b"\n") + 1
+    canonical_line_count = canonical.count(b"\n") + 1
+    enabled_line_count = enabled.count(b"\n") + 1
+    print(
+        f"[ERROR] first_difference_byte={first_byte} "
+        f"first_difference_line={first_line}",
+        file=sys.stderr,
+    )
+    print(
+        f"[ERROR] canonical_lines={canonical_line_count} "
+        f"enabled_lines={enabled_line_count}",
+        file=sys.stderr,
+    )
+    print(
+        "[ERROR] difference_content=redacted; compare the reported paths "
+        "offline using the bound SHA-256 values",
+        file=sys.stderr,
+    )
+
+
+enabled, enabled_mode = read_regular(enabled_path)
+
+if mode == "validate":
+    canonical, _canonical_mode = read_regular(canonical_path)
+    if enabled != canonical:
+        report_mismatch(enabled, canonical)
+        raise SystemExit(1)
+    print(digest(enabled))
+    raise SystemExit(0)
+
+if len(expected_sha256) != 64:
+    raise SystemExit("[ERROR] nginx adoption validation digest is missing or invalid")
+
+enabled_snapshot, enabled_snapshot_mode = read_regular(enabled_snapshot_path)
+if mode == "revalidate-enabled":
+    if (
+        digest(enabled) != expected_sha256
+        or enabled != enabled_snapshot
+        or enabled_mode != enabled_snapshot_mode
+    ):
+        print(
+            "[ERROR] enabled nginx adoption file changed immediately before "
+            "symlink replacement; refusing to overwrite it",
+            file=sys.stderr,
+        )
+        print(f"[ERROR] enabled_current_sha256={digest(enabled)}", file=sys.stderr)
+        print(
+            f"[ERROR] enabled_snapshot_sha256={digest(enabled_snapshot)}",
+            file=sys.stderr,
+        )
+        print(
+            f"[ERROR] enabled_mode={enabled_mode:04o} "
+            f"enabled_snapshot_mode={enabled_snapshot_mode:04o}",
+            file=sys.stderr,
+        )
+        print(f"[ERROR] expected_sha256={expected_sha256}", file=sys.stderr)
+        raise SystemExit(1)
+    print(expected_sha256)
+    raise SystemExit(0)
+
+if mode != "revalidate":
+    raise SystemExit(f"[ERROR] unsupported nginx adoption inspection mode: {mode}")
+
+canonical, canonical_mode = read_regular(canonical_path)
+canonical_snapshot, canonical_snapshot_mode = read_regular(canonical_snapshot_path)
+payloads = {
+    "enabled_current": enabled,
+    "canonical_current": canonical,
+    "enabled_snapshot": enabled_snapshot,
+    "canonical_snapshot": canonical_snapshot,
+}
+digests = {name: digest(payload) for name, payload in payloads.items()}
+if any(value != expected_sha256 for value in digests.values()) \
+        or len(set(payloads.values())) != 1 \
+        or enabled_mode != enabled_snapshot_mode \
+        or canonical_mode != canonical_snapshot_mode:
+    print(
+        "[ERROR] nginx adoption inputs changed after validation; "
+        "refusing mutation",
+        file=sys.stderr,
+    )
+    for name, value in digests.items():
+        print(f"[ERROR] {name}_sha256={value}", file=sys.stderr)
+    print(
+        f"[ERROR] enabled_mode={enabled_mode:04o} "
+        f"enabled_snapshot_mode={enabled_snapshot_mode:04o}",
+        file=sys.stderr,
+    )
+    print(
+        f"[ERROR] canonical_mode={canonical_mode:04o} "
+        f"canonical_snapshot_mode={canonical_snapshot_mode:04o}",
+        file=sys.stderr,
+    )
+    print(f"[ERROR] expected_sha256={expected_sha256}", file=sys.stderr)
+    raise SystemExit(1)
+print(expected_sha256)
+PY
+}
+
+verify_regular_enabled_preimage_unchanged() {
+  local verified_sha256=""
+  if [[ "$ENABLED_WAS_REGULAR" != "true" ]]; then
+    return 0
+  fi
+  verified_sha256="$(inspect_regular_enabled_adoption revalidate)" || return 1
+  if [[ "$verified_sha256" != "$ENABLED_REGULAR_SHA256" ]]; then
+    fail "nginx adoption revalidation returned an unexpected digest"
+    return 1
+  fi
+  echo "[INFO] Revalidated identical regular enabled/canonical nginx files: sha256=$verified_sha256"
+}
+
+adopt_enabled_site() {
+  local adopted_sha256=""
+  local adoption_rc=0
+  if [[ "$ENABLED_WAS_REGULAR" != "true" ]]; then
+    atomic_symlink \
+      "$TARGET_CONF" "$ENABLED_CONF" ENABLED_MUTATION_STARTED
+    return 0
+  fi
+
+  # The owner marker binds rollback to the exact symlink inode prepared by the
+  # atomic exchange. Setting the flag first is safe: rollback will never touch
+  # an enabled path that does not match this ownership proof.
+  ENABLED_MUTATION_STARTED=true
+  if adopted_sha256="$(
+    inspect_regular_enabled_adoption exchange-adopt "$ENABLED_ADOPTION_OWNER"
+  )"; then
+    if [[ "$adopted_sha256" != "$ENABLED_REGULAR_SHA256" ]]; then
+      fail "atomic nginx adoption returned an unexpected digest"
+      return 1
+    fi
+    echo "[INFO] Atomically adopted identical regular enabled-site: sha256=$adopted_sha256"
+    return 0
+  else
+    adoption_rc=$?
+  fi
+  ENABLED_EXTERNAL_DRIFT=true
+  if [[ "$adoption_rc" -eq 75 ]]; then
+    ENABLED_MUTATION_STARTED=false
+  fi
+  return "$adoption_rc"
+}
+
+restore_owned_regular_enabled_adoption() {
+  local restored_sha256=""
+  local restore_rc=0
+  if restored_sha256="$(
+    inspect_regular_enabled_adoption exchange-restore "$ENABLED_ADOPTION_OWNER"
+  )"; then
+    if [[ "$restored_sha256" != "$ENABLED_REGULAR_SHA256" ]]; then
+      fail "atomic nginx adoption rollback returned an unexpected digest"
+      return 1
+    fi
+    return 0
+  else
+    restore_rc=$?
+  fi
+  ENABLED_EXTERNAL_DRIFT=true
+  return "$restore_rc"
 }
 
 if [[ ! -f "$PRODUCTION_MUTATION_LOCK_LIB" \
@@ -103,7 +754,16 @@ validate_inputs() {
     fail "Active release include must be a regular file: $ACTIVE_RELEASE_CONF"
   fi
   if [[ -e "$ENABLED_CONF" && ! -L "$ENABLED_CONF" ]]; then
-    fail "Enabled JATO site must be a symlink: $ENABLED_CONF"
+    if [[ ! -f "$ENABLED_CONF" ]]; then
+      fail "Enabled JATO site must be a regular file or symlink: $ENABLED_CONF"
+    fi
+    if [[ ! -f "$TARGET_CONF" ]]; then
+      fail "Regular enabled JATO site requires a canonical target file: $TARGET_CONF"
+    fi
+    ENABLED_REGULAR_SHA256="$(inspect_regular_enabled_adoption validate)" \
+      || return 1
+    ENABLED_WAS_REGULAR=true
+    echo "[INFO] Approved one-time regular enabled-site adoption: sha256=$ENABLED_REGULAR_SHA256"
   fi
   if [[ -e "$DEFAULT_ENABLED_CONF" \
     && ! -f "$DEFAULT_ENABLED_CONF" \
@@ -362,7 +1022,15 @@ snapshot_existing_state() {
   fi
   if [[ -L "$ENABLED_CONF" ]]; then
     ENABLED_EXISTED=true
+    ENABLED_WAS_SYMLINK=true
     ENABLED_TARGET="$(readlink "$ENABLED_CONF")"
+  elif [[ -f "$ENABLED_CONF" ]]; then
+    ENABLED_EXISTED=true
+    ENABLED_WAS_REGULAR=true
+    cp -p "$ENABLED_CONF" "$ENABLED_SNAPSHOT"
+  elif [[ -e "$ENABLED_CONF" ]]; then
+    fail "Enabled JATO site changed to an unsupported file type"
+    return 1
   fi
   if [[ -L "$DEFAULT_ENABLED_CONF" ]]; then
     DEFAULT_EXISTED=true
@@ -374,27 +1042,74 @@ snapshot_existing_state() {
   fi
 }
 
-atomic_install() {
+atomic_install_with_mode() {
   local source_path="$1"
   local target_path="$2"
+  local install_mode="$3"
+  local mutation_flag="${4:-}"
   local target_dir=""
   local target_name=""
   local temp_path=""
 
+  if [[ ! "$install_mode" =~ ^0?[0-7]{3}$ ]]; then
+    fail "atomic install mode is invalid: $install_mode"
+    return 1
+  fi
   target_dir="$(dirname "$target_path")"
   target_name="$(basename "$target_path")"
   mkdir -p "$target_dir"
   temp_path="$(mktemp "$target_dir/.${target_name}.XXXXXX")"
-  install -m 0644 "$source_path" "$temp_path"
-  fsync_regular_file "$temp_path"
-  python3 -B - "$temp_path" "$target_path" <<'PY'
+  if ! install -m "$install_mode" "$source_path" "$temp_path"; then
+    rm -f "$temp_path"
+    return 1
+  fi
+  if ! fsync_regular_file "$temp_path"; then
+    rm -f "$temp_path"
+    return 1
+  fi
+  if ! python3 -B - "$temp_path" "$target_path" <<'PY'
 import os
 import sys
 
 os.replace(sys.argv[1], sys.argv[2])
 PY
+  then
+    rm -f "$temp_path"
+    return 1
+  fi
+  if [[ -n "$mutation_flag" ]]; then
+    printf -v "$mutation_flag" '%s' true
+  fi
   fsync_regular_file "$target_path"
   fsync_directory "$target_dir"
+}
+
+atomic_install() {
+  atomic_install_with_mode "$1" "$2" 0644 "${3:-}"
+}
+
+atomic_restore_file() {
+  local source_path="$1"
+  local target_path="$2"
+  local source_mode=""
+  source_mode="$(python3 -B - "$source_path" <<'PY'
+import os
+import stat
+import sys
+
+path = sys.argv[1]
+flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
+descriptor = os.open(path, flags)
+try:
+    metadata = os.fstat(descriptor)
+    if not stat.S_ISREG(metadata.st_mode):
+        raise SystemExit(f"[ERROR] rollback source is not a regular file: {path}")
+    print(f"{stat.S_IMODE(metadata.st_mode):04o}")
+finally:
+    os.close(descriptor)
+PY
+)" || return 1
+  atomic_install_with_mode "$source_path" "$target_path" "$source_mode"
 }
 
 fsync_regular_file() {
@@ -436,6 +1151,7 @@ PY
 atomic_symlink() {
   local source_path="$1"
   local target_path="$2"
+  local mutation_flag="${3:-}"
   local target_dir=""
   local target_name=""
   local temp_path=""
@@ -452,15 +1168,22 @@ import sys
 
 os.replace(sys.argv[1], sys.argv[2])
 PY
+  if [[ -n "$mutation_flag" ]]; then
+    printf -v "$mutation_flag" '%s' true
+  fi
   fsync_directory "$target_dir"
 }
 
 durable_remove() {
   local target_path="$1"
+  local mutation_flag="${2:-}"
   local target_dir=""
   target_dir="$(dirname "$target_path")"
   if [[ -e "$target_path" || -L "$target_path" ]]; then
     rm -f "$target_path"
+    if [[ -n "$mutation_flag" ]]; then
+      printf -v "$mutation_flag" '%s' true
+    fi
     fsync_directory "$target_dir"
   fi
 }
@@ -498,6 +1221,11 @@ persist_durable_preimage() {
     cp -p "$ACTIVE_SNAPSHOT" "$staging_dir/active-release.conf"
     fsync_regular_file "$staging_dir/active-release.conf"
   fi
+  if [[ "$ENABLED_EXISTED" == "true" \
+    && "$ENABLED_WAS_SYMLINK" != "true" ]]; then
+    cp -p "$ENABLED_SNAPSHOT" "$staging_dir/enabled.conf"
+    fsync_regular_file "$staging_dir/enabled.conf"
+  fi
   if [[ "$DEFAULT_EXISTED" == "true" && "$DEFAULT_WAS_SYMLINK" != "true" ]]; then
     cp -p "$DEFAULT_SNAPSHOT" "$staging_dir/default.conf"
     fsync_regular_file "$staging_dir/default.conf"
@@ -506,12 +1234,14 @@ persist_durable_preimage() {
     "$staging_dir/manifest.json" \
     "$TARGET_CONF" "$TARGET_EXISTED" \
     "$ACTIVE_RELEASE_CONF" "$ACTIVE_EXISTED" \
-    "$ENABLED_CONF" "$ENABLED_EXISTED" "$ENABLED_TARGET" \
+    "$ENABLED_CONF" "$ENABLED_EXISTED" "$ENABLED_WAS_SYMLINK" \
+    "$ENABLED_TARGET" \
     "$DEFAULT_ENABLED_CONF" "$DEFAULT_EXISTED" "$DEFAULT_WAS_SYMLINK" \
     "$DEFAULT_TARGET" <<'PY'
 import json
 import os
 from pathlib import Path
+import stat
 import sys
 
 (
@@ -522,6 +1252,7 @@ import sys
     active_existed,
     enabled_path,
     enabled_existed,
+    enabled_was_symlink,
     enabled_target,
     default_path,
     default_existed,
@@ -545,8 +1276,9 @@ payload = {
     "enabled": {
         "path": enabled_path,
         "existed": enabled_existed == "true",
-        "kind": "symlink",
+        "kind": "symlink" if enabled_was_symlink == "true" else "file",
         "target": enabled_target,
+        "backup": "enabled.conf",
     },
     "default": {
         "path": default_path,
@@ -557,15 +1289,27 @@ payload = {
     },
 }
 path = Path(manifest_path)
-def file_mode(path_text: str, existed: bool) -> int:
+def snapshot_mode(backup_name: str, existed: bool) -> int:
     if not existed:
         return 0o644
-    return Path(path_text).stat().st_mode & 0o777
+    backup = path.parent / backup_name
+    metadata = backup.lstat()
+    if backup.is_symlink() or not stat.S_ISREG(metadata.st_mode):
+        raise SystemExit(
+            f"[ERROR] durable nginx preimage snapshot is unsafe: {backup}"
+        )
+    return metadata.st_mode & 0o777
 
-payload["target"]["mode"] = file_mode(target_path, target_existed == "true")
-payload["active"]["mode"] = file_mode(active_path, active_existed == "true")
+payload["target"]["mode"] = snapshot_mode(
+    "target.conf", target_existed == "true"
+)
+payload["active"]["mode"] = snapshot_mode(
+    "active-release.conf", active_existed == "true"
+)
+if enabled_existed == "true" and enabled_was_symlink != "true":
+    payload["enabled"]["mode"] = snapshot_mode("enabled.conf", True)
 if default_existed == "true" and default_was_symlink != "true":
-    payload["default"]["mode"] = file_mode(default_path, True)
+    payload["default"]["mode"] = snapshot_mode("default.conf", True)
 with path.open("x", encoding="utf-8") as handle:
     json.dump(payload, handle, ensure_ascii=False, sort_keys=True)
     handle.write("\n")
@@ -709,43 +1453,165 @@ for name, expected_path in expected_paths.items():
 PY
 }
 
+verify_original_state() {
+  python3 -B - \
+    "$ENABLED_EXTERNAL_DRIFT" "$ENABLED_CONF" \
+    "$TARGET_CONF" "$TARGET_EXISTED" "false" "" "$TARGET_SNAPSHOT" \
+    "$TARGET_MUTATION_STARTED" \
+    "$ACTIVE_RELEASE_CONF" "$ACTIVE_EXISTED" "false" "" "$ACTIVE_SNAPSHOT" \
+    "$ACTIVE_MUTATION_STARTED" \
+    "$ENABLED_CONF" "$ENABLED_EXISTED" "$ENABLED_WAS_SYMLINK" \
+    "$ENABLED_TARGET" "$ENABLED_SNAPSHOT" "$ENABLED_MUTATION_STARTED" \
+    "$DEFAULT_ENABLED_CONF" "$DEFAULT_EXISTED" "$DEFAULT_WAS_SYMLINK" \
+    "$DEFAULT_TARGET" "$DEFAULT_SNAPSHOT" "$DEFAULT_MUTATION_STARTED" <<'PY'
+from __future__ import annotations
+
+import os
+import stat
+import sys
+
+
+def read_regular(path: str) -> tuple[bytes, int]:
+    flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
+    descriptor = os.open(path, flags)
+    try:
+        metadata = os.fstat(descriptor)
+        if not stat.S_ISREG(metadata.st_mode):
+            raise SystemExit(
+                f"[ERROR] restored nginx path is not regular: {path}"
+            )
+        chunks: list[bytes] = []
+        while True:
+            chunk = os.read(descriptor, 1024 * 1024)
+            if not chunk:
+                break
+            chunks.append(chunk)
+        return b"".join(chunks), stat.S_IMODE(metadata.st_mode)
+    finally:
+        os.close(descriptor)
+
+
+external_enabled_drift = sys.argv[1] == "true"
+enabled_path = sys.argv[2]
+arguments = sys.argv[3:]
+if len(arguments) != 24:
+    raise SystemExit("[ERROR] rollback verifier received an invalid contract")
+for index in range(0, len(arguments), 6):
+    path, existed, was_symlink, link_target, snapshot, mutated = (
+        arguments[index:index + 6]
+    )
+    if mutated != "true":
+        continue
+    if external_enabled_drift and path == enabled_path:
+        continue
+    present = os.path.lexists(path)
+    if existed != "true":
+        if present:
+            raise SystemExit(
+                f"[ERROR] rollback left an unexpected nginx path: {path}"
+            )
+        continue
+    if not present:
+        raise SystemExit(f"[ERROR] rollback did not restore nginx path: {path}")
+    metadata = os.lstat(path)
+    if was_symlink == "true":
+        if not stat.S_ISLNK(metadata.st_mode) or os.readlink(path) != link_target:
+            raise SystemExit(
+                f"[ERROR] rollback did not restore exact nginx symlink: {path}"
+            )
+        continue
+    if stat.S_ISLNK(metadata.st_mode) or not stat.S_ISREG(metadata.st_mode):
+        raise SystemExit(
+            f"[ERROR] rollback did not restore regular nginx file: {path}"
+        )
+    current_payload, current_mode = read_regular(path)
+    snapshot_payload, snapshot_mode = read_regular(snapshot)
+    if current_payload != snapshot_payload or current_mode != snapshot_mode:
+        raise SystemExit(
+            f"[ERROR] rollback did not restore exact nginx bytes/mode: {path}"
+        )
+PY
+}
+
 restore_original_state() {
+  local restore_rc=0
   set +e
-  if [[ "$TARGET_EXISTED" == "true" ]]; then
-    atomic_install "$TARGET_SNAPSHOT" "$TARGET_CONF"
-  else
-    durable_remove "$TARGET_CONF"
-  fi
-  if [[ "$ACTIVE_EXISTED" == "true" ]]; then
-    atomic_install "$ACTIVE_SNAPSHOT" "$ACTIVE_RELEASE_CONF"
-  else
-    durable_remove "$ACTIVE_RELEASE_CONF"
-  fi
-  if [[ "$ENABLED_EXISTED" == "true" ]]; then
-    atomic_symlink "$ENABLED_TARGET" "$ENABLED_CONF"
-  else
-    durable_remove "$ENABLED_CONF"
-  fi
-  if [[ "$DEFAULT_EXISTED" == "true" ]]; then
-    if [[ "$DEFAULT_WAS_SYMLINK" == "true" ]]; then
-      atomic_symlink "$DEFAULT_TARGET" "$DEFAULT_ENABLED_CONF"
+  if [[ "$TARGET_MUTATION_STARTED" == "true" ]]; then
+    if [[ "$TARGET_EXISTED" == "true" ]]; then
+      atomic_restore_file "$TARGET_SNAPSHOT" "$TARGET_CONF" || restore_rc=1
     else
-      atomic_install "$DEFAULT_SNAPSHOT" "$DEFAULT_ENABLED_CONF"
+      durable_remove "$TARGET_CONF" || restore_rc=1
     fi
-  else
-    durable_remove "$DEFAULT_ENABLED_CONF"
+  fi
+  if [[ "$ACTIVE_MUTATION_STARTED" == "true" ]]; then
+    if [[ "$ACTIVE_EXISTED" == "true" ]]; then
+      atomic_restore_file "$ACTIVE_SNAPSHOT" "$ACTIVE_RELEASE_CONF" || restore_rc=1
+    else
+      durable_remove "$ACTIVE_RELEASE_CONF" || restore_rc=1
+    fi
+  fi
+  if [[ "$ENABLED_MUTATION_STARTED" == "true" ]]; then
+    if [[ "$ENABLED_WAS_REGULAR" == "true" ]]; then
+      restore_owned_regular_enabled_adoption || restore_rc=1
+    else
+      if [[ "$ENABLED_EXISTED" == "true" ]]; then
+        if [[ "$ENABLED_WAS_SYMLINK" == "true" ]]; then
+          atomic_symlink "$ENABLED_TARGET" "$ENABLED_CONF" || restore_rc=1
+        else
+          atomic_restore_file "$ENABLED_SNAPSHOT" "$ENABLED_CONF" || restore_rc=1
+        fi
+      else
+        durable_remove "$ENABLED_CONF" || restore_rc=1
+      fi
+    fi
+  fi
+  if [[ "$DEFAULT_MUTATION_STARTED" == "true" ]]; then
+    if [[ "$DEFAULT_EXISTED" == "true" ]]; then
+      if [[ "$DEFAULT_WAS_SYMLINK" == "true" ]]; then
+        atomic_symlink "$DEFAULT_TARGET" "$DEFAULT_ENABLED_CONF" || restore_rc=1
+      else
+        atomic_restore_file "$DEFAULT_SNAPSHOT" "$DEFAULT_ENABLED_CONF" \
+          || restore_rc=1
+      fi
+    else
+      durable_remove "$DEFAULT_ENABLED_CONF" || restore_rc=1
+    fi
+  fi
+  if [[ "$restore_rc" -eq 0 ]]; then
+    verify_original_state || restore_rc=1
   fi
   set -e
+  if [[ "$restore_rc" -ne 0 ]]; then
+    fail "nginx rollback could not restore the exact original bytes, modes, and path types"
+    return 1
+  fi
+  if [[ "$ENABLED_EXTERNAL_DRIFT" == "true" ]]; then
+    fail "enabled nginx file changed outside this installer and was intentionally not overwritten during rollback"
+    return 1
+  fi
 }
 
 on_exit() {
   local rc=$?
-  if [[ "$rc" -ne 0 && "$MUTATION_STARTED" == "true" && "$COMPLETED" != "true" ]]; then
+  local owned_mutation=false
+  if [[ "$TARGET_MUTATION_STARTED" == "true" \
+    || "$ACTIVE_MUTATION_STARTED" == "true" \
+    || "$ENABLED_MUTATION_STARTED" == "true" \
+    || "$DEFAULT_MUTATION_STARTED" == "true" ]]; then
+    owned_mutation=true
+  fi
+  if [[ "$rc" -ne 0 \
+    && "$owned_mutation" == "true" \
+    && "$COMPLETED" != "true" ]]; then
     echo "[WARN] Restoring the previous nginx configuration" >&2
-    restore_original_state
-    "$NGINX_BIN" -t >/dev/null 2>&1 || true
-    if "$SYSTEMCTL_BIN" is-active --quiet nginx >/dev/null 2>&1; then
-      "$SYSTEMCTL_BIN" reload nginx >/dev/null 2>&1 || true
+    if restore_original_state; then
+      "$NGINX_BIN" -t >/dev/null 2>&1 || true
+      if "$SYSTEMCTL_BIN" is-active --quiet nginx >/dev/null 2>&1; then
+        "$SYSTEMCTL_BIN" reload nginx >/dev/null 2>&1 || true
+      fi
+    else
+      echo "[ERROR] Automatic nginx rollback failed closed; use the durable preimage before any retry: ${NGINX_PREIMAGE_DIR:-not-configured}" >&2
+      rc=90
     fi
   fi
   if [[ -n "$PREIMAGE_STAGING_DIR" ]]; then
@@ -798,19 +1664,27 @@ else
 fi
 
 snapshot_existing_state
+verify_regular_enabled_preimage_unchanged
 persist_durable_preimage
 if [[ "$TARGET_EXISTED" == "true" ]]; then
   backup_name="$(basename "$TARGET_CONF").pre-bluegreen-$(date -u +%Y%m%dT%H%M%SZ).$$.bak"
   cp -p "$TARGET_CONF" "$BACKUP_DIR/$backup_name"
   echo "[INFO] Preserved nginx backup: $BACKUP_DIR/$backup_name"
 fi
+if [[ "$ENABLED_EXISTED" == "true" \
+  && "$ENABLED_WAS_SYMLINK" != "true" ]]; then
+  enabled_backup_name="$(basename "$ENABLED_CONF").pre-bluegreen-enabled-$(date -u +%Y%m%dT%H%M%SZ).$$.bak"
+  cp -p "$ENABLED_SNAPSHOT" "$BACKUP_DIR/$enabled_backup_name"
+  echo "[INFO] Preserved enabled-site backup: $BACKUP_DIR/$enabled_backup_name"
+fi
 
-MUTATION_STARTED=true
-atomic_install "$ACTIVE_CANDIDATE" "$ACTIVE_RELEASE_CONF"
-atomic_install "$SITE_CANDIDATE" "$TARGET_CONF"
-atomic_symlink "$TARGET_CONF" "$ENABLED_CONF"
+verify_regular_enabled_preimage_unchanged
+atomic_install \
+  "$ACTIVE_CANDIDATE" "$ACTIVE_RELEASE_CONF" ACTIVE_MUTATION_STARTED
+atomic_install "$SITE_CANDIDATE" "$TARGET_CONF" TARGET_MUTATION_STARTED
+adopt_enabled_site
 if [[ "$CERTBOT_MIGRATION" != "true" ]]; then
-  durable_remove "$DEFAULT_ENABLED_CONF"
+  durable_remove "$DEFAULT_ENABLED_CONF" DEFAULT_MUTATION_STARTED
 fi
 
 echo "[INFO] Validate nginx before reload"
