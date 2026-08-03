@@ -1380,6 +1380,9 @@ def test_runtime_seal_retry_and_switch_order_is_fail_closed() -> None:
     build_scope = _shell_function(script, "run_candidate_build_scope")
     prepare = _shell_function(script, "prepare_and_switch")
 
+    assert prepare_runtime.index("umask 0022") < prepare_runtime.index(
+        'sudo -n test -e "$RELEASE_RUNTIME_SEAL_FILE"',
+    )
     assert prepare_runtime.index("verify_final_runtime_seal") < prepare_runtime.index(
         "RUNTIME_ALREADY_SEALED=true",
     )
@@ -1394,7 +1397,9 @@ def test_runtime_seal_retry_and_switch_order_is_fail_closed() -> None:
     assert switch.index("verify_switch_prerequisites") < switch.index(
         'durable_install_file "$NGINX_ACTIVE_RELEASE_CONF" "$SWITCH_BACKUP"',
     )
-    assert build.index("assert_candidate_build_scope") < build.index(
+    assert build.index("umask 0022") < build.index(
+        "require_environment",
+    ) < build.index("assert_candidate_build_scope") < build.index(
         "assert_inherited_production_lock",
     ) < build.index("prepare_candidate_runtime")
     assert build.index("write_candidate_deploy_status") < build.index(
@@ -1414,6 +1419,35 @@ def test_runtime_seal_retry_and_switch_order_is_fail_closed() -> None:
         "install_slot_runtime",
     )
     assert "write_candidate_deploy_status" not in switch
+
+
+def test_candidate_build_resets_restrictive_ssh_umask_before_writes(
+    tmp_path: Path,
+) -> None:
+    probe = tmp_path / "build-output"
+    result = _run_controller_harness(
+        tmp_path,
+        f"""
+umask 077
+require_environment() {{ :; }}
+assert_candidate_build_scope() {{ :; }}
+assert_inherited_production_lock() {{ :; }}
+prepare_candidate_runtime() {{
+  mkdir -p "{probe}"
+  : > "{probe / 'artifact'}"
+  RUNTIME_ALREADY_SEALED=true
+}}
+assert_no_database_migration_delta() {{ :; }}
+verify_final_runtime_seal() {{ :; }}
+CURRENT_ACTIVE_SLOT=8000
+CANDIDATE_SLOT=8001
+build_candidate_runtime_locked
+""",
+    )
+
+    assert result.returncode == 0, result.stderr + result.stdout
+    assert probe.stat().st_mode & 0o777 == 0o755
+    assert (probe / "artifact").stat().st_mode & 0o777 == 0o644
 
 
 def test_runtime_roots_are_0755_under_umask_077(tmp_path: Path) -> None:

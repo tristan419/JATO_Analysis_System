@@ -34,11 +34,16 @@ CANARY_CONTROLLER_MEMORY_MAX=512M
 CANARY_CONTROLLER_TASKS_MAX=64
 CANARY_RUNTIME_START_PERMIT_TIMEOUT_SECONDS=30
 CANARY_SUPERVISOR_INVOCATION_ID="${CANARY_SUPERVISOR_INVOCATION_ID:-}"
+CANARY_DEPLOY_UID="${CANARY_DEPLOY_UID:-}"
+CANARY_DEPLOY_GID="${CANARY_DEPLOY_GID:-}"
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 CANARY_GUARD="$SCRIPT_DIR/jato_feature_canary_guard.py"
 MUTATION_LOCK_HELPER="$SCRIPT_DIR/lib/production_mutation_lock.sh"
 READINESS_VERIFIER="$SCRIPT_DIR/verify_backend_readiness.py"
+ARCHIVE_VALIDATOR="$SCRIPT_DIR/validate_release_archive.py"
+TOOLKIT_EGG_INFO_CLEANER="$SCRIPT_DIR/cleanup_toolkit_egg_info.py"
+SOURCE_SEAL_HELPER="$SCRIPT_DIR/verify_release_source_seal.py"
 
 CANARY_COMMIT_SHA="${CANARY_COMMIT_SHA:-}"
 CANARY_BRANCH="${CANARY_BRANCH:-}"
@@ -49,6 +54,7 @@ CANARY_SOURCE_BYTES="${CANARY_SOURCE_BYTES:-}"
 CANARY_RUN_ID="${CANARY_RUN_ID:-}"
 
 RUN_KEY=""
+REFERENCE_ROOT=""
 RUNTIME_ROOT=""
 CHECKPOINT_FILE=""
 RECEIPT_FILE=""
@@ -70,6 +76,11 @@ CANDIDATE_START_PERMIT_FILE=""
 CANDIDATE_START_PERMIT_TEMP_FILE=""
 CANDIDATE_START_PERMIT_SOURCE_FILE=""
 STAGED_SOURCE_ARCHIVE=""
+ARCHIVE_VALIDATION_FILE=""
+BUILD_INTEGRITY_EVIDENCE_FILE=""
+SOURCE_SEAL_FILE=""
+CONTROL_ARCHIVE_VALIDATION_FILE=""
+REFERENCE_INTEGRITY_ANCHOR_FILE=""
 
 CANARY_RUNTIME_CREATED=false
 CANARY_FINALIZING=false
@@ -86,6 +97,33 @@ fail() {
 require_command() {
   command -v "$1" >/dev/null 2>&1 \
     || fail "required command is unavailable: $1"
+}
+
+validate_canary_archive() {
+  local output="${1:-}"
+  local arguments=(
+    --archive "$CANARY_SOURCE_ARCHIVE"
+    --expected-sha256 "$CANARY_SOURCE_SHA256"
+    --expected-bytes "$CANARY_SOURCE_BYTES"
+    --trusted-control
+      "03_Scripts/deploy/tencent_feature_candidate_canary.sh=$SCRIPT_DIR/tencent_feature_candidate_canary.sh"
+    --trusted-control
+      "03_Scripts/deploy/jato_feature_canary_guard.py=$CANARY_GUARD"
+    --trusted-control
+      "03_Scripts/deploy/lib/production_mutation_lock.sh=$MUTATION_LOCK_HELPER"
+    --trusted-control
+      "03_Scripts/deploy/verify_backend_readiness.py=$READINESS_VERIFIER"
+    --trusted-control
+      "03_Scripts/deploy/validate_release_archive.py=$ARCHIVE_VALIDATOR"
+    --trusted-control
+      "03_Scripts/deploy/cleanup_toolkit_egg_info.py=$TOOLKIT_EGG_INFO_CLEANER"
+    --trusted-control
+      "03_Scripts/deploy/verify_release_source_seal.py=$SOURCE_SEAL_HELPER"
+  )
+  if [[ -n "$output" ]]; then
+    arguments+=(--output "$output")
+  fi
+  timeout 120 python3 -B "$ARCHIVE_VALIDATOR" "${arguments[@]}" >/dev/null
 }
 
 record_checkpoint() {
@@ -185,16 +223,78 @@ if not re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", repository):
 PY
 }
 
+pin_canary_deploy_identity() {
+  local current_gid=""
+  local current_uid=""
+  if [[ "$CANARY_MODE" != "launch" ]]; then
+    fail "only launch may pin the canary deploy identity"
+    return 1
+  fi
+  current_uid="$(id -u)"
+  current_gid="$(id -g)"
+  if [[ ! "$current_uid" =~ ^[1-9][0-9]*$ ]] \
+    || [[ ! "$current_gid" =~ ^[1-9][0-9]*$ ]]; then
+    fail "canary launch requires a non-root deploy uid and gid"
+    return 1
+  fi
+  if [[ -n "$CANARY_DEPLOY_UID" && "$CANARY_DEPLOY_UID" != "$current_uid" ]] \
+    || [[ -n "$CANARY_DEPLOY_GID" && "$CANARY_DEPLOY_GID" != "$current_gid" ]]; then
+    fail "preconfigured canary deploy identity differs from the launch account"
+    return 1
+  fi
+  CANARY_DEPLOY_UID="$current_uid"
+  CANARY_DEPLOY_GID="$current_gid"
+  export CANARY_DEPLOY_UID CANARY_DEPLOY_GID
+}
+
+validate_canary_deploy_identity() {
+  local current_gid=""
+  local current_uid=""
+  if [[ ! "$CANARY_DEPLOY_UID" =~ ^[1-9][0-9]*$ ]] \
+    || [[ ! "$CANARY_DEPLOY_GID" =~ ^[1-9][0-9]*$ ]]; then
+    fail "canary deploy uid and gid must be pinned non-root identities"
+    return 1
+  fi
+  current_uid="$(id -u)"
+  current_gid="$(id -g)"
+  if [[ ! "$current_uid" =~ ^[1-9][0-9]*$ ]] \
+    || [[ ! "$current_gid" =~ ^[1-9][0-9]*$ ]]; then
+    fail "canary execution identity must remain non-root"
+    return 1
+  fi
+  case "$CANARY_MODE" in
+    runtime)
+      if [[ "$current_uid" == "$CANARY_DEPLOY_UID" ]] \
+        || [[ "$current_gid" == "$CANARY_DEPLOY_GID" ]]; then
+        fail "candidate runtime must use a DynamicUser identity distinct from deploy"
+        return 1
+      fi
+      ;;
+    launch|supervisor|controller|build|reconcile)
+      if [[ "$current_uid" != "$CANARY_DEPLOY_UID" ]] \
+        || [[ "$current_gid" != "$CANARY_DEPLOY_GID" ]]; then
+        fail "canary control mode differs from its pinned deploy identity"
+        return 1
+      fi
+      ;;
+    *)
+      fail "canary deploy identity cannot be validated for mode: $CANARY_MODE"
+      return 1
+      ;;
+  esac
+}
+
 validate_static_contract() {
   local actual_bytes=""
   local actual_sha=""
   local account_home=""
   local canonical_deploy_state=""
   for command_name in \
-    awk curl flock getent install mktemp mv python3 readlink realpath rm \
+    awk curl flock getent id install mktemp mv python3 readlink realpath rm \
     sha256sum stat systemctl systemd-run tar timeout; do
     require_command "$command_name"
   done
+  validate_canary_deploy_identity
   if [[ "$CANARY_ROOT" != "/opt/jato-canary" ]] \
     || [[ "$CANARY_STATE_ROOT" != "/var/lib/jato-canary" ]] \
     || [[ "$CANARY_PORT" != "18001" ]] \
@@ -208,7 +308,7 @@ validate_static_contract() {
     || "$CANARY_MODE" == "supervisor" \
     || "$CANARY_MODE" == "controller" ]]; then
     account_home="$(
-      getent passwd "$(id -u)" | awk -F: 'NR == 1 {print $6}'
+      getent passwd "$CANARY_DEPLOY_UID" | awk -F: 'NR == 1 {print $6}'
     )"
     if [[ -z "$account_home" || "$account_home" != /* ]] \
       || [[ "${HOME:-}" != "$account_home" ]]; then
@@ -248,7 +348,10 @@ validate_static_contract() {
     "$SCRIPT_DIR/tencent_feature_candidate_canary.sh" \
     "$CANARY_GUARD" \
     "$MUTATION_LOCK_HELPER" \
-    "$READINESS_VERIFIER"; do
+    "$READINESS_VERIFIER" \
+    "$ARCHIVE_VALIDATOR" \
+    "$TOOLKIT_EGG_INFO_CLEANER" \
+    "$SOURCE_SEAL_HELPER"; do
     if [[ ! -f "$control_file" || -L "$control_file" ]]; then
       fail "canary control-plane file is missing or unsafe: $control_file"
       return 1
@@ -271,68 +374,18 @@ validate_static_contract() {
     fail "canary source archive exceeds the 256 MiB safety limit"
     return 1
   fi
+  if [[ "$CANARY_SOURCE_ARCHIVE" == "$STAGED_SOURCE_ARCHIVE" ]] \
+    && [[ "$(stat -c '%u:%g:%a' "$CANARY_SOURCE_ARCHIVE")" != \
+      "0:${CANARY_DEPLOY_GID}:440" ]]; then
+    fail "staged canary archive lost its root:deploy-gid 0440 privacy mode"
+    return 1
+  fi
   if [[ ! "$CANARY_BUILD_TIMEOUT" =~ ^[1-9][0-9]*$ ]] \
     || [[ ! "$CANARY_RUNTIME_TIMEOUT" =~ ^[1-9][0-9]*$ ]]; then
     fail "canary build/runtime timeout must be a positive integer"
     return 1
   fi
-  timeout 120 python3 -B - "$CANARY_SOURCE_ARCHIVE" "$SCRIPT_DIR" <<'PY'
-from pathlib import Path, PurePosixPath
-import hashlib
-import sys
-import tarfile
-
-archive_path = Path(sys.argv[1])
-script_dir = Path(sys.argv[2])
-relative_paths = (
-    "03_Scripts/deploy/tencent_feature_candidate_canary.sh",
-    "03_Scripts/deploy/jato_feature_canary_guard.py",
-    "03_Scripts/deploy/lib/production_mutation_lock.sh",
-    "03_Scripts/deploy/verify_backend_readiness.py",
-)
-max_members = 50_000
-max_expanded_bytes = 2 * 1024 * 1024 * 1024
-max_member_bytes = 512 * 1024 * 1024
-with tarfile.open(archive_path, mode="r:gz") as archive:
-    indexed = {}
-    member_count = 0
-    expanded_bytes = 0
-    for member in archive:
-        member_count += 1
-        if member_count > max_members:
-            raise SystemExit("[ERROR] feature archive contains too many members")
-        if member.size < 0 or member.size > max_member_bytes:
-            raise SystemExit("[ERROR] feature archive member size is unsafe")
-        expanded_bytes += member.size
-        if expanded_bytes > max_expanded_bytes:
-            raise SystemExit("[ERROR] feature archive expands beyond 2 GiB")
-        normalized = PurePosixPath(*(
-            part for part in PurePosixPath(member.name).parts if part != "."
-        )).as_posix()
-        if normalized in relative_paths:
-            if normalized in indexed or not member.isfile():
-                raise SystemExit(
-                    f"[ERROR] archive control-plane member is duplicate/unsafe: "
-                    f"{normalized}"
-                )
-            source = archive.extractfile(member)
-            if source is None:
-                raise SystemExit(
-                    f"[ERROR] archive control-plane member is unreadable: {normalized}"
-                )
-            with source:
-                indexed[normalized] = hashlib.sha256(source.read()).hexdigest()
-for relative in relative_paths:
-    local = script_dir.parent.parent / relative
-    if relative not in indexed or not local.is_file() or local.is_symlink():
-        raise SystemExit(
-            f"[ERROR] control-plane provenance is incomplete: {relative}"
-        )
-    if hashlib.sha256(local.read_bytes()).hexdigest() != indexed[relative]:
-        raise SystemExit(
-            f"[ERROR] control-plane file differs from immutable archive: {relative}"
-        )
-PY
+  validate_canary_archive
 }
 
 pin_canary_production_lock_path() {
@@ -349,6 +402,7 @@ initialize_paths() {
     return 1
   fi
   RUNTIME_ROOT="$CANARY_ROOT/runtime/$RUN_KEY"
+  REFERENCE_ROOT="$CANARY_ROOT/runtime/$RUN_KEY.reference"
   CHECKPOINT_FILE="$CANARY_STATE_ROOT/checkpoints/$RUN_KEY.json"
   RECEIPT_FILE="$CANARY_STATE_ROOT/receipts/$RUN_KEY.json"
   EVIDENCE_FILE="$CANARY_STATE_ROOT/evidence/$RUN_KEY.json"
@@ -368,15 +422,22 @@ initialize_paths() {
   CANDIDATE_START_PERMIT_TEMP_FILE="$CONTROL_ROOT/.candidate-start-permit.tmp"
   CANDIDATE_START_PERMIT_SOURCE_FILE="$CANARY_STATE_ROOT/.${RUN_KEY}.candidate-start-permit.source"
   STAGED_SOURCE_ARCHIVE="$CANARY_ROOT/sources/$RUN_KEY.tar.gz"
+  ARCHIVE_VALIDATION_FILE="$RUNTIME_ROOT/.jato-canary-archive-validation.json"
+  BUILD_INTEGRITY_EVIDENCE_FILE="$RUNTIME_ROOT/.venv/jato-canary-build-integrity.json"
+  SOURCE_SEAL_FILE="$RUNTIME_ROOT/.jato-source-seal.json"
+  CONTROL_ARCHIVE_VALIDATION_FILE="$CONTROL_ROOT/archive-validation.json"
+  REFERENCE_INTEGRITY_ANCHOR_FILE="$CONTROL_ROOT/reference-integrity.json"
   export \
-    RUN_KEY RUNTIME_ROOT CHECKPOINT_FILE RECEIPT_FILE EVIDENCE_FILE \
+    RUN_KEY REFERENCE_ROOT RUNTIME_ROOT CHECKPOINT_FILE RECEIPT_FILE EVIDENCE_FILE \
     BEFORE_SNAPSHOT AFTER_SNAPSHOT SUPERVISOR_UNIT CONTROLLER_UNIT \
     BUILD_UNIT SERVICE_UNIT \
     SERVICE_RUNTIME_DIRECTORY CONTROL_ROOT CONTROL_SCRIPT \
     SUPERVISOR_GENERATION_FILE SUPERVISOR_GENERATION_TEMP_FILE \
     SUPERVISOR_GENERATION_SOURCE_FILE CANDIDATE_START_PERMIT_FILE \
     CANDIDATE_START_PERMIT_TEMP_FILE CANDIDATE_START_PERMIT_SOURCE_FILE \
-    STAGED_SOURCE_ARCHIVE
+    STAGED_SOURCE_ARCHIVE ARCHIVE_VALIDATION_FILE \
+    BUILD_INTEGRITY_EVIDENCE_FILE SOURCE_SEAL_FILE \
+    CONTROL_ARCHIVE_VALIDATION_FILE REFERENCE_INTEGRITY_ANCHOR_FILE
 }
 
 verify_canary_parent_roots() {
@@ -384,21 +445,28 @@ verify_canary_parent_roots() {
     "$CANARY_ROOT" \
     "$CANARY_ROOT/runtime" \
     "$CANARY_ROOT/control" \
-    "$CANARY_ROOT/sources" <<'PY'
+    "$CANARY_ROOT/sources" \
+    "$CANARY_DEPLOY_GID" <<'PY'
 from pathlib import Path
 import os
 import stat
 import sys
 
-for raw in sys.argv[1:]:
-    path = Path(raw)
+deploy_gid = int(sys.argv[5])
+expected = {
+    Path(sys.argv[1]): (0, 0, 0o755),
+    Path(sys.argv[2]): (0, 0, 0o755),
+    Path(sys.argv[3]): (0, 0, 0o755),
+    Path(sys.argv[4]): (0, deploy_gid, 0o750),
+}
+for path, (uid, gid, mode) in expected.items():
     metadata = os.lstat(path)
     if (
         not stat.S_ISDIR(metadata.st_mode)
         or stat.S_ISLNK(metadata.st_mode)
-        or metadata.st_uid != 0
-        or metadata.st_gid != 0
-        or stat.S_IMODE(metadata.st_mode) != 0o755
+        or metadata.st_uid != uid
+        or metadata.st_gid != gid
+        or stat.S_IMODE(metadata.st_mode) != mode
     ):
         raise SystemExit(
             f"[ERROR] canary immutable parent is mutable/unsafe: {path}"
@@ -406,13 +474,58 @@ for raw in sys.argv[1:]:
 PY
 }
 
+verify_canary_state_roots() {
+  python3 -B - \
+    "$CANARY_STATE_ROOT" "$CANARY_DEPLOY_UID" "$CANARY_DEPLOY_GID" <<'PY'
+from pathlib import Path
+import os
+import stat
+import sys
+
+state_root = Path(sys.argv[1])
+deploy_uid = int(sys.argv[2])
+deploy_gid = int(sys.argv[3])
+if state_root != Path("/var/lib/jato-canary"):
+    raise SystemExit("[ERROR] canary state root is not canonical")
+expected = {
+    Path("/var/lib"): (0, 0, None),
+    state_root: (deploy_uid, deploy_gid, 0o750),
+    state_root / "checkpoints": (deploy_uid, deploy_gid, 0o750),
+    state_root / "receipts": (deploy_uid, deploy_gid, 0o750),
+    state_root / "evidence": (deploy_uid, deploy_gid, 0o750),
+    state_root / "snapshots": (deploy_uid, deploy_gid, 0o750),
+}
+for path, (uid, gid, exact_mode) in expected.items():
+    metadata = os.lstat(path)
+    mode = stat.S_IMODE(metadata.st_mode)
+    if (
+        not stat.S_ISDIR(metadata.st_mode)
+        or stat.S_ISLNK(metadata.st_mode)
+        or metadata.st_uid != uid
+        or metadata.st_gid != gid
+        or (exact_mode is None and mode & 0o022)
+        or (exact_mode is not None and mode != exact_mode)
+    ):
+        raise SystemExit(
+            f"[ERROR] canary state parent is mutable/unsafe: {path}"
+        )
+PY
+}
+
+cleanup_canary_state_run() {
+  sudo -n python3 -B "$CANARY_GUARD" cleanup-launch-state \
+    --state-root "$CANARY_STATE_ROOT" \
+    --run-key "$RUN_KEY" \
+    --expected-uid "$CANARY_DEPLOY_UID" \
+    --expected-gid "$CANARY_DEPLOY_GID"
+}
+
 ensure_canary_roots() {
   local path=""
   for path in \
     "$CANARY_ROOT" \
     "$CANARY_ROOT/runtime" \
-    "$CANARY_ROOT/control" \
-    "$CANARY_ROOT/sources"; do
+    "$CANARY_ROOT/control"; do
     if sudo -n test -L "$path" \
       || {
         sudo -n test -e "$path" \
@@ -423,6 +536,16 @@ ensure_canary_roots() {
     fi
     sudo -n install -d -m 0755 -o root -g root "$path"
   done
+  path="$CANARY_ROOT/sources"
+  if sudo -n test -L "$path" \
+    || {
+      sudo -n test -e "$path" \
+        && ! sudo -n test -d "$path";
+    }; then
+    fail "canary-owned source path is unsafe: $path"
+    return 1
+  fi
+  sudo -n install -d -m 0750 -o root -g "$CANARY_DEPLOY_GID" "$path"
   verify_canary_parent_roots
   for path in \
     "$CANARY_STATE_ROOT" \
@@ -438,9 +561,12 @@ ensure_canary_roots() {
       fail "canary-owned path is unsafe: $path"
       return 1
     fi
-    sudo -n install -d -m 0750 -o "$(id -u)" -g "$(id -g)" "$path"
+    sudo -n install -d -m 0750 \
+      -o "$CANARY_DEPLOY_UID" -g "$CANARY_DEPLOY_GID" "$path"
   done
-  for path in "$RUNTIME_ROOT" "$CONTROL_ROOT" "$STAGED_SOURCE_ARCHIVE"; do
+  verify_canary_state_roots
+  for path in \
+    "$REFERENCE_ROOT" "$RUNTIME_ROOT" "$CONTROL_ROOT" "$STAGED_SOURCE_ARCHIVE"; do
     if sudo -n test -e "$path" || sudo -n test -L "$path"; then
       fail "canary ephemeral path already exists and requires inspection: $path"
       return 1
@@ -464,7 +590,9 @@ ensure_canary_roots() {
 stage_canary_inputs() {
   local staged_bytes=""
   local staged_sha=""
-  sudo -n install -d -m 0755 -o "$(id -u)" -g "$(id -g)" "$RUNTIME_ROOT"
+  sudo -n install -d -m 0700 -o root -g root "$REFERENCE_ROOT"
+  sudo -n install -d -m 0711 \
+    -o "$CANARY_DEPLOY_UID" -g "$CANARY_DEPLOY_GID" "$RUNTIME_ROOT"
   sudo -n install -d -m 0555 -o root -g root \
     "$CONTROL_ROOT/03_Scripts/deploy/lib"
   sudo -n install -m 0555 -o root -g root \
@@ -480,7 +608,21 @@ stage_canary_inputs() {
     "$READINESS_VERIFIER" \
     "$CONTROL_ROOT/03_Scripts/deploy/verify_backend_readiness.py"
   sudo -n install -m 0444 -o root -g root \
+    "$ARCHIVE_VALIDATOR" \
+    "$CONTROL_ROOT/03_Scripts/deploy/validate_release_archive.py"
+  sudo -n install -m 0444 -o root -g root \
+    "$TOOLKIT_EGG_INFO_CLEANER" \
+    "$CONTROL_ROOT/03_Scripts/deploy/cleanup_toolkit_egg_info.py"
+  sudo -n install -m 0444 -o root -g root \
+    "$SOURCE_SEAL_HELPER" \
+    "$CONTROL_ROOT/03_Scripts/deploy/verify_release_source_seal.py"
+  sudo -n install -m 0440 -o root -g "$CANARY_DEPLOY_GID" \
     "$CANARY_SOURCE_ARCHIVE" "$STAGED_SOURCE_ARCHIVE"
+  if [[ "$(stat -c '%u:%g:%a' "$STAGED_SOURCE_ARCHIVE")" != \
+    "0:${CANARY_DEPLOY_GID}:440" ]]; then
+    fail "staged canary archive privacy mode is not root:deploy-gid 0440"
+    return 1
+  fi
   staged_bytes="$(stat -c '%s' "$STAGED_SOURCE_ARCHIVE")"
   staged_sha="$(sha256sum "$STAGED_SOURCE_ARCHIVE" | awk '{print $1}')"
   if [[ "$staged_bytes" != "$CANARY_SOURCE_BYTES" ]] \
@@ -501,6 +643,8 @@ build_canary_control_environment() {
     "JATO_PRODUCTION_DEPLOY_LOCK_PATH=$CANARY_INITIAL_LOCK_PATH"
     "CANARY_INITIAL_LOCK_PATH=$CANARY_INITIAL_LOCK_PATH"
     "CANARY_MODE=$mode"
+    "CANARY_DEPLOY_UID=$CANARY_DEPLOY_UID"
+    "CANARY_DEPLOY_GID=$CANARY_DEPLOY_GID"
     "CANARY_ROOT=$CANARY_ROOT"
     "CANARY_STATE_ROOT=$CANARY_STATE_ROOT"
     "CANARY_PORT=$CANARY_PORT"
@@ -522,6 +666,7 @@ build_canary_control_environment() {
     "RUN_KEY=$RUN_KEY"
     "SUPERVISOR_UNIT=$SUPERVISOR_UNIT"
     "CONTROLLER_UNIT=$CONTROLLER_UNIT"
+    "REFERENCE_ROOT=$REFERENCE_ROOT"
     "RUNTIME_ROOT=$RUNTIME_ROOT"
     "CHECKPOINT_FILE=$CHECKPOINT_FILE"
     "RECEIPT_FILE=$RECEIPT_FILE"
@@ -772,7 +917,7 @@ persist_supervisor_generation_marker() {
   if [[ -e "$marker_source" || -L "$marker_source" ]]; then
     if [[ ! -f "$marker_source" || -L "$marker_source" ]] \
       || [[ "$(stat -c '%u:%g' "$marker_source")" != \
-        "$(id -u):$(id -g)" ]] \
+        "${CANARY_DEPLOY_UID}:${CANARY_DEPLOY_GID}" ]] \
       || [[ "$(stat -c '%a' "$marker_source")" != "400" \
         && "$(stat -c '%a' "$marker_source")" != "600" ]]; then
       fail "supervisor generation source file is unsafe"
@@ -1349,6 +1494,7 @@ assert_build_scope() {
   local actual_protect_system=""
   local actual_no_new_privileges=""
   local actual_restart=""
+  local actual_umask=""
   local actual_unit_file_state=""
   local actual_fragment=""
   local actual_inaccessible_paths=""
@@ -1368,6 +1514,7 @@ assert_build_scope() {
     systemctl show "$BUILD_UNIT" -p NoNewPrivileges --value
   )"
   actual_restart="$(systemctl show "$BUILD_UNIT" -p Restart --value)"
+  actual_umask="$(systemctl show "$BUILD_UNIT" -p UMask --value)"
   actual_unit_file_state="$(
     systemctl show "$BUILD_UNIT" -p UnitFileState --value
   )"
@@ -1391,9 +1538,12 @@ assert_build_scope() {
     || [[ "$actual_protect_system" != "strict" ]] \
     || [[ "$actual_no_new_privileges" != "yes" ]] \
     || [[ "$actual_restart" != "no" ]] \
+    || [[ "$actual_umask" != "0022" ]] \
     || [[ "$actual_unit_file_state" != "transient" ]] \
     || [[ "$actual_fragment" != "/run/systemd/transient/$BUILD_UNIT" ]] \
-    || [[ "$actual_write_paths" != *"$RUNTIME_ROOT"* ]] \
+    || [[ "$actual_write_paths" == *"$REFERENCE_ROOT"* ]] \
+    || [[ "$actual_write_paths" != "$RUNTIME_ROOT" ]] \
+    || [[ "$actual_inaccessible_paths" != *"$REFERENCE_ROOT"* ]] \
     || [[ "$actual_inaccessible_paths" != *"$LEGACY_ROOT/01_RAW_DATA"* ]] \
     || [[ "$actual_inaccessible_paths" != *"$LEGACY_ROOT/04_Processed_data"* ]] \
     || [[ "$actual_inaccessible_paths" != *"/etc/jato-fullstack"* ]] \
@@ -1416,80 +1566,165 @@ if pid not in members.read_text(encoding="utf-8").splitlines():
 PY
 }
 
-safe_extract_source_archive() {
-  python3 -B - "$CANARY_SOURCE_ARCHIVE" "$RUNTIME_ROOT" <<'PY'
-from pathlib import Path, PurePosixPath
+prepare_trusted_materialization() {
+  local anchor_temp=""
+  local validation_receipt=""
+  trap \
+    'rm -f -- "${anchor_temp:-}" "${validation_receipt:-}"' \
+    RETURN
+  validation_receipt="$(mktemp)"
+  anchor_temp="$(mktemp)"
+  validate_canary_archive "$validation_receipt"
+  sudo -n python3 -B - \
+    "$validation_receipt" "$REFERENCE_ROOT" "$RUNTIME_ROOT" \
+    "$CANARY_DEPLOY_UID" "$CANARY_DEPLOY_GID" <<'PY'
+import json
 import os
+from pathlib import Path
 import shutil
 import stat
 import sys
-import tarfile
 
-archive_path = Path(sys.argv[1])
-destination = Path(sys.argv[2])
-if (
-    destination.is_symlink()
-    or not destination.is_dir()
-    or any(destination.iterdir())
+receipt = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
+reference = Path(sys.argv[2])
+candidate = Path(sys.argv[3])
+deploy_uid = int(sys.argv[4])
+deploy_gid = int(sys.argv[5])
+for path, expected_uid, expected_gid, expected_mode in (
+    (reference, 0, 0, 0o700),
+    (candidate, deploy_uid, deploy_gid, 0o711),
 ):
-    raise SystemExit("[ERROR] candidate runtime destination is not an empty directory")
-max_members = 50_000
-max_expanded_bytes = 2 * 1024 * 1024 * 1024
-max_member_bytes = 512 * 1024 * 1024
-member_count = 0
-expanded_bytes = 0
-with tarfile.open(archive_path, mode="r:gz") as archive:
-    for member in archive:
-        member_count += 1
-        if member_count > max_members:
-            raise SystemExit("[ERROR] feature source archive contains too many members")
-        if member.size < 0 or member.size > max_member_bytes:
-            raise SystemExit("[ERROR] feature source archive member size is unsafe")
-        expanded_bytes += member.size
-        if expanded_bytes > max_expanded_bytes:
-            raise SystemExit("[ERROR] feature source archive expands beyond 2 GiB")
-if shutil.disk_usage(destination).free < expanded_bytes + 512 * 1024 * 1024:
-    raise SystemExit("[ERROR] insufficient disk headroom for candidate extraction")
-seen: set[str] = set()
-with tarfile.open(archive_path, mode="r:gz") as archive:
-    extracted = 0
-    for member in archive:
-        extracted += 1
-        pure = PurePosixPath(member.name)
-        parts = tuple(part for part in pure.parts if part != ".")
-        if pure.is_absolute() or ".." in parts or not parts:
-            if member.isdir() and member.name in {".", "./"}:
-                continue
-            raise SystemExit(f"[ERROR] unsafe feature source path: {member.name!r}")
-        normalized = PurePosixPath(*parts).as_posix()
-        if normalized in seen:
-            raise SystemExit(f"[ERROR] duplicate feature source path: {normalized!r}")
-        seen.add(normalized)
-        target = destination.joinpath(*parts)
-        if member.isdir():
-            target.mkdir(parents=True, exist_ok=True)
-            target.chmod(0o755)
-            continue
-        if not member.isfile():
-            raise SystemExit(
-                f"[ERROR] feature source archive contains a link/device: {member.name!r}"
-            )
-        target.parent.mkdir(parents=True, exist_ok=True)
-        source = archive.extractfile(member)
-        if source is None:
-            raise SystemExit(f"[ERROR] cannot read feature source member: {member.name!r}")
-        with source, target.open("wb") as output:
-            shutil.copyfileobj(source, output)
-        mode = 0o755 if member.mode & stat.S_IXUSR else 0o644
-        target.chmod(mode)
-if extracted == 0:
-    raise SystemExit("[ERROR] feature source archive is empty")
-descriptor = os.open(destination, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))
-try:
-    os.fsync(descriptor)
-finally:
-    os.close(descriptor)
+    metadata = os.lstat(path)
+    if (
+        not stat.S_ISDIR(metadata.st_mode)
+        or stat.S_ISLNK(metadata.st_mode)
+        or metadata.st_uid != expected_uid
+        or metadata.st_gid != expected_gid
+        or stat.S_IMODE(metadata.st_mode) != expected_mode
+        or any(path.iterdir())
+    ):
+        raise SystemExit(
+            f"[ERROR] canary materialization root is not pristine mode "
+            f"{expected_mode:04o}: {path}"
+        )
+expanded = receipt.get("expandedBytes")
+if isinstance(expanded, bool) or not isinstance(expanded, int) or expanded <= 0:
+    raise SystemExit("[ERROR] archive validation receipt lacks expanded bytes")
+required = expanded * 2 + 2 * 1024 * 1024 * 1024
+if shutil.disk_usage(reference).free < required:
+    raise SystemExit(
+        "[ERROR] insufficient disk headroom for pristine, candidate and venv"
+    )
 PY
+  sudo -n tar --same-owner --same-permissions --no-overwrite-dir \
+    -xzf "$CANARY_SOURCE_ARCHIVE" -C "$REFERENCE_ROOT"
+  tar --same-permissions --no-overwrite-dir \
+    -xzf "$CANARY_SOURCE_ARCHIVE" -C "$RUNTIME_ROOT"
+  for reserved_path in \
+    "$REFERENCE_ROOT/.jato-canary-archive-validation.json" \
+    "$RUNTIME_ROOT/.jato-canary-archive-validation.json"; do
+    if sudo -n test -e "$reserved_path" \
+      || sudo -n test -L "$reserved_path"; then
+      fail "archive attempted to supply reserved canary validation evidence"
+      return 1
+    fi
+  done
+  sudo -n install -m 0444 -o root -g root "$validation_receipt" \
+    "$CONTROL_ARCHIVE_VALIDATION_FILE"
+  sudo -n install -m 0644 -o root -g root "$validation_receipt" \
+    "$REFERENCE_ROOT/.jato-canary-archive-validation.json"
+  install -m 0644 "$validation_receipt" "$ARCHIVE_VALIDATION_FILE"
+  sudo -n python3 -B "$SOURCE_SEAL_HELPER" build \
+    --profile source \
+    --root "$REFERENCE_ROOT" \
+    --output "$REFERENCE_ROOT/.jato-source-seal.json"
+  sudo -n python3 -B "$SOURCE_SEAL_HELPER" verify \
+    --profile source \
+    --root "$REFERENCE_ROOT" \
+    --manifest "$REFERENCE_ROOT/.jato-source-seal.json"
+  sudo -n install -m 0644 -o root -g root \
+    "$REFERENCE_ROOT/.jato-source-seal.json" "$SOURCE_SEAL_FILE"
+  sudo -n python3 -B "$SOURCE_SEAL_HELPER" verify \
+    --profile source \
+    --root "$RUNTIME_ROOT" \
+    --manifest "$SOURCE_SEAL_FILE"
+  sudo -n python3 -B - \
+    "$CONTROL_ARCHIVE_VALIDATION_FILE" \
+    "$REFERENCE_ROOT/.jato-source-seal.json" \
+    "$REFERENCE_ROOT" "$RUNTIME_ROOT" \
+    "$CANARY_SOURCE_SHA256" "$CANARY_SOURCE_BYTES" \
+    "$CANARY_DEPLOY_UID" "$CANARY_DEPLOY_GID" >"$anchor_temp" <<'PY'
+from pathlib import Path
+import hashlib
+import json
+import os
+import stat
+import sys
+
+(
+    receipt_path,
+    seal_path,
+    reference,
+    candidate,
+    archive_sha256,
+    archive_bytes,
+    deploy_uid,
+    deploy_gid,
+) = sys.argv[1:]
+expected = (
+    (Path(reference), 0, 0, 0o700),
+    (Path(candidate), int(deploy_uid), int(deploy_gid), 0o711),
+)
+roots = {}
+for path, expected_uid, expected_gid, expected_mode in expected:
+    metadata = os.lstat(path)
+    if (
+        not stat.S_ISDIR(metadata.st_mode)
+        or stat.S_ISLNK(metadata.st_mode)
+        or metadata.st_uid != expected_uid
+        or metadata.st_gid != expected_gid
+        or stat.S_IMODE(metadata.st_mode) != expected_mode
+    ):
+        raise SystemExit(
+            f"[ERROR] canary root identity changed during materialization: {path}"
+        )
+    roots["reference" if path == Path(reference) else "candidate"] = {
+        "uid": metadata.st_uid,
+        "gid": metadata.st_gid,
+        "mode": f"{stat.S_IMODE(metadata.st_mode):04o}",
+    }
+receipt = json.loads(Path(receipt_path).read_text(encoding="utf-8"))
+if (
+    receipt.get("archiveSha256") != archive_sha256
+    or receipt.get("archiveBytes") != int(archive_bytes)
+):
+    raise SystemExit("[ERROR] trusted archive receipt identity changed")
+payload = {
+    "schemaVersion": 1,
+    "archiveSha256": archive_sha256,
+    "archiveBytes": int(archive_bytes),
+    "archiveValidationSha256": hashlib.sha256(
+        Path(receipt_path).read_bytes()
+    ).hexdigest(),
+    "sourceSealSha256": hashlib.sha256(
+        Path(seal_path).read_bytes()
+    ).hexdigest(),
+    "roots": roots,
+}
+print(json.dumps(payload, indent=2, sort_keys=True))
+PY
+  sudo -n install -m 0444 -o root -g root "$anchor_temp" \
+    "$REFERENCE_INTEGRITY_ANCHOR_FILE"
+  for trusted_file in \
+    "$CONTROL_ARCHIVE_VALIDATION_FILE" \
+    "$REFERENCE_INTEGRITY_ANCHOR_FILE"; do
+    if [[ "$(stat -c '%u:%g:%a' "$trusted_file")" != "0:0:444" ]]; then
+      fail "trusted canary materialization evidence lost root ownership"
+      return 1
+    fi
+  done
+  rm -f -- "$anchor_temp" "$validation_receipt"
+  trap - RETURN
   CANARY_RUNTIME_CREATED=true
 }
 
@@ -1521,7 +1756,7 @@ PY
 
 build_candidate_runtime() {
   assert_build_scope
-  safe_extract_source_archive
+  umask 0022
   verify_packaged_feature_identity
 
   python3 -m venv --copies "$RUNTIME_ROOT/.venv"
@@ -1532,10 +1767,14 @@ build_candidate_runtime() {
     -r "$RUNTIME_ROOT/06_AppPlatform/backend/requirements.txt" \
     -i "${PIP_INDEX_URL:-https://pypi.tuna.tsinghua.edu.cn/simple}" \
     --trusted-host "${PIP_TRUSTED_HOST:-pypi.tuna.tsinghua.edu.cn}"
+  "$RUNTIME_ROOT/.venv/bin/python" -B "$TOOLKIT_EGG_INFO_CLEANER" \
+    --toolkit-root "$RUNTIME_ROOT/07_ScrapingToolkit"
   "$RUNTIME_ROOT/.venv/bin/pip" install \
     -e "$RUNTIME_ROOT/07_ScrapingToolkit" \
     -i "${PIP_INDEX_URL:-https://pypi.tuna.tsinghua.edu.cn/simple}" \
     --trusted-host "${PIP_TRUSTED_HOST:-pypi.tuna.tsinghua.edu.cn}"
+  "$RUNTIME_ROOT/.venv/bin/python" -B "$TOOLKIT_EGG_INFO_CLEANER" \
+    --toolkit-root "$RUNTIME_ROOT/07_ScrapingToolkit"
 
   "$RUNTIME_ROOT/.venv/bin/python" -B \
     "$RUNTIME_ROOT/03_Scripts/deploy/prepare_backend_release.py" \
@@ -1543,7 +1782,355 @@ build_candidate_runtime() {
     --path "$RUNTIME_ROOT/hermes/deploy_release.json" \
     --commit "$CANARY_COMMIT_SHA" \
     --service "jato-feature-candidate-canary"
-  chmod -R a-w "$RUNTIME_ROOT"
+  python3 -B "$SOURCE_SEAL_HELPER" verify \
+    --profile source \
+    --root "$RUNTIME_ROOT" \
+    --manifest "$SOURCE_SEAL_FILE"
+}
+
+verify_trusted_candidate_integrity() {
+  local evidence_output="${1:-}"
+  local evidence_temp=""
+  trap 'rm -f -- "${evidence_temp:-}"' RETURN
+  evidence_temp="$(mktemp)"
+  sudo -n python3 -B "$SOURCE_SEAL_HELPER" verify \
+    --profile source \
+    --root "$REFERENCE_ROOT" \
+    --manifest "$REFERENCE_ROOT/.jato-source-seal.json"
+  sudo -n python3 -B "$SOURCE_SEAL_HELPER" verify \
+    --profile source \
+    --root "$RUNTIME_ROOT" \
+    --manifest "$SOURCE_SEAL_FILE"
+  sudo -n python3 -B - \
+    "$CONTROL_ARCHIVE_VALIDATION_FILE" \
+    "$REFERENCE_INTEGRITY_ANCHOR_FILE" \
+    "$REFERENCE_ROOT/.jato-source-seal.json" \
+    "$SOURCE_SEAL_FILE" "$REFERENCE_ROOT" "$RUNTIME_ROOT" \
+    "$CANARY_DEPLOY_UID" "$CANARY_DEPLOY_GID" >"$evidence_temp" <<'PY'
+from pathlib import Path, PurePosixPath
+import hashlib
+import json
+import os
+import stat
+import sys
+
+(
+    receipt_name,
+    anchor_name,
+    reference_seal_name,
+    candidate_seal_name,
+    reference_name,
+    candidate_name,
+    deploy_uid,
+    deploy_gid,
+) = sys.argv[1:]
+receipt_path = Path(receipt_name)
+anchor_path = Path(anchor_name)
+reference_seal = Path(reference_seal_name)
+candidate_seal = Path(candidate_seal_name)
+reference = Path(reference_name)
+candidate = Path(candidate_name)
+deploy_identity = (int(deploy_uid), int(deploy_gid))
+
+
+def sha256_file(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        while chunk := handle.read(1024 * 1024):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+for trusted_path in (receipt_path, anchor_path):
+    metadata = os.lstat(trusted_path)
+    if (
+        not stat.S_ISREG(metadata.st_mode)
+        or stat.S_ISLNK(metadata.st_mode)
+        or metadata.st_uid != 0
+        or metadata.st_gid != 0
+        or stat.S_IMODE(metadata.st_mode) != 0o444
+    ):
+        raise SystemExit(
+            f"[ERROR] root-owned canary integrity anchor is unsafe: {trusted_path}"
+        )
+receipt = json.loads(receipt_path.read_text(encoding="utf-8"))
+anchor = json.loads(anchor_path.read_text(encoding="utf-8"))
+reference_seal_digest = sha256_file(reference_seal)
+candidate_seal_digest = sha256_file(candidate_seal)
+if (
+    receipt.get("schemaVersion") != 2
+    or receipt.get("status") != "validated"
+    or anchor.get("schemaVersion") != 1
+    or anchor.get("archiveSha256") != receipt.get("archiveSha256")
+    or anchor.get("archiveBytes") != receipt.get("archiveBytes")
+    or anchor.get("archiveValidationSha256") != sha256_file(receipt_path)
+    or anchor.get("sourceSealSha256") != reference_seal_digest
+    or candidate_seal_digest != reference_seal_digest
+):
+    raise SystemExit("[ERROR] canary archive/source integrity anchor changed")
+
+expected_roots = {
+    "reference": (reference, 0, 0, 0o700),
+    "candidate": (
+        candidate,
+        deploy_identity[0],
+        deploy_identity[1],
+        0o711,
+    ),
+}
+if not isinstance(anchor.get("roots"), dict):
+    raise SystemExit("[ERROR] canary integrity anchor lacks root identities")
+for label, (root, uid, gid, mode) in expected_roots.items():
+    metadata = os.lstat(root)
+    actual = {
+        "uid": metadata.st_uid,
+        "gid": metadata.st_gid,
+        "mode": f"{stat.S_IMODE(metadata.st_mode):04o}",
+    }
+    if (
+        not stat.S_ISDIR(metadata.st_mode)
+        or stat.S_ISLNK(metadata.st_mode)
+        or actual != {"uid": uid, "gid": gid, "mode": f"{mode:04o}"}
+        or anchor["roots"].get(label) != actual
+    ):
+        raise SystemExit(f"[ERROR] {label} root identity changed")
+
+private_entries = receipt.get("privateEntries")
+files = private_entries.get("files") if isinstance(private_entries, dict) else None
+directories = (
+    private_entries.get("directories")
+    if isinstance(private_entries, dict)
+    else None
+)
+if not isinstance(files, list) or not files or not isinstance(directories, list):
+    raise SystemExit("[ERROR] archive receipt lacks complete private entries")
+expected_files = {}
+for item in files:
+    if (
+        not isinstance(item, dict)
+        or set(item) != {"path", "mode", "sha256", "bytes"}
+        or not isinstance(item.get("path"), str)
+        or item.get("mode") not in {"0600", "0711"}
+        or not isinstance(item.get("bytes"), int)
+        or isinstance(item.get("bytes"), bool)
+        or item.get("bytes", -1) < 0
+        or not isinstance(item.get("sha256"), str)
+        or len(item.get("sha256", "")) != 64
+    ):
+        raise SystemExit("[ERROR] private file receipt entry is malformed")
+    if item["path"] in expected_files:
+        raise SystemExit("[ERROR] duplicate private file receipt entry")
+    expected_files[item["path"]] = item
+expected_directories = {}
+for item in directories:
+    if (
+        not isinstance(item, dict)
+        or set(item) != {"path", "mode"}
+        or not isinstance(item.get("path"), str)
+        or item.get("mode") != "0711"
+    ):
+        raise SystemExit("[ERROR] private directory receipt entry is malformed")
+    if item["path"] in expected_directories:
+        raise SystemExit("[ERROR] duplicate private directory receipt entry")
+    expected_directories[item["path"]] = item
+required_private_files = {
+    "01_RAW_DATA/VOC_Nordic_SUV_Users_100.xlsx",
+    (
+        "03_Scripts/diagnostics/artifacts/msrp_backfill/"
+        "sweden_swiss_top30_suv/official_evidence_leads.json"
+    ),
+    (
+        "03_Scripts/diagnostics/artifacts/msrp_backfill/"
+        "sweden_swiss_top30_suv/"
+        "top30_suv_price_movement_candidates.json"
+    ),
+}
+if not required_private_files.issubset(expected_files):
+    raise SystemExit("[ERROR] required private evidence is absent from receipt")
+
+
+def observed_private_paths(root: Path) -> tuple[set[str], set[str]]:
+    observed_files: set[str] = set()
+    observed_directories: set[str] = set()
+    for prefix in (
+        PurePosixPath("01_RAW_DATA"),
+        PurePosixPath("03_Scripts/diagnostics/artifacts"),
+    ):
+        start = root.joinpath(*prefix.parts)
+        for current, directory_names, file_names in os.walk(
+            start,
+            topdown=True,
+            followlinks=False,
+        ):
+            current_path = Path(current)
+            relative_dir = current_path.relative_to(root).as_posix()
+            metadata = os.lstat(current_path)
+            if stat.S_ISLNK(metadata.st_mode):
+                raise SystemExit(
+                    f"[ERROR] private directory became a symlink: {current_path}"
+                )
+            observed_directories.add(relative_dir)
+            for name in tuple(directory_names) + tuple(file_names):
+                child = current_path / name
+                if child.is_symlink():
+                    raise SystemExit(
+                        f"[ERROR] private materialization contains symlink: {child}"
+                    )
+            for name in file_names:
+                observed_files.add((current_path / name).relative_to(root).as_posix())
+    return observed_files, observed_directories
+
+
+private_materialization = {}
+for label, (root, expected_uid, expected_gid, _root_mode) in expected_roots.items():
+    actual_files, actual_directories = observed_private_paths(root)
+    if actual_files != set(expected_files) or actual_directories != set(
+        expected_directories
+    ):
+        raise SystemExit(
+            f"[ERROR] {label} private path set differs from archive receipt"
+        )
+    observed_files = []
+    for relative, expected in sorted(expected_files.items()):
+        path = root / relative
+        metadata = os.lstat(path)
+        actual = {
+            "path": relative,
+            "mode": f"{stat.S_IMODE(metadata.st_mode):04o}",
+            "sha256": sha256_file(path),
+            "bytes": metadata.st_size,
+            "uid": metadata.st_uid,
+            "gid": metadata.st_gid,
+        }
+        if (
+            not stat.S_ISREG(metadata.st_mode)
+            or stat.S_ISLNK(metadata.st_mode)
+            or metadata.st_uid != expected_uid
+            or metadata.st_gid != expected_gid
+            or actual["mode"] != expected["mode"]
+            or actual["sha256"] != expected["sha256"]
+            or actual["bytes"] != expected["bytes"]
+        ):
+            raise SystemExit(
+                f"[ERROR] {label} private file changed: {relative}"
+            )
+        observed_files.append(actual)
+    observed_directories = []
+    for relative, expected in sorted(expected_directories.items()):
+        path = root / relative
+        metadata = os.lstat(path)
+        actual = {
+            "path": relative,
+            "mode": f"{stat.S_IMODE(metadata.st_mode):04o}",
+            "uid": metadata.st_uid,
+            "gid": metadata.st_gid,
+        }
+        if (
+            not stat.S_ISDIR(metadata.st_mode)
+            or stat.S_ISLNK(metadata.st_mode)
+            or metadata.st_uid != expected_uid
+            or metadata.st_gid != expected_gid
+            or actual["mode"] != expected["mode"]
+        ):
+            raise SystemExit(
+                f"[ERROR] {label} private directory changed: {relative}"
+            )
+        observed_directories.append(actual)
+    toolkit = root / "07_ScrapingToolkit"
+    if any(toolkit.glob("*.egg-info")):
+        raise SystemExit("[ERROR] toolkit egg-info exists during integrity check")
+    private_materialization[label] = {
+        "files": observed_files,
+        "directories": observed_directories,
+    }
+
+payload = {
+    "schemaVersion": 3,
+    "archiveValidation": receipt,
+    "referenceAnchor": anchor,
+    "materialization": {
+        "referenceRootMode": "0700",
+        "candidateRootMode": "0711",
+        "extractFlags": ["--same-permissions", "--no-overwrite-dir"],
+        "copyMethod": "independent-sealed-archive-extraction",
+        "roots": anchor["roots"],
+    },
+    "sourceSeal": {
+        "profile": "source",
+        "sha256": reference_seal_digest,
+        "verifiedAfterBuild": True,
+    },
+    "toolkitEggInfo": {
+        "cleanBeforeEditableInstall": True,
+        "cleanAfterEditableInstall": True,
+    },
+    "privateMaterialization": private_materialization,
+}
+print(json.dumps(payload, indent=2, sort_keys=True))
+PY
+  if [[ -n "$evidence_output" ]]; then
+    install -m 0600 "$evidence_temp" "$evidence_output"
+  fi
+  rm -f -- "$evidence_temp"
+  trap - RETURN
+}
+
+persist_candidate_integrity_evidence() {
+  python3 -B - \
+    "$EVIDENCE_FILE" "$BUILD_INTEGRITY_EVIDENCE_FILE" "$CANARY_GUARD" \
+    "$CANARY_COMMIT_SHA" "$CANARY_SOURCE_SHA256" "$CANARY_SOURCE_BYTES" \
+    "$CANARY_PORT" "$CANARY_RUN_ID" <<'PY'
+from pathlib import Path
+import importlib.util
+import json
+import os
+import sys
+import tempfile
+
+(
+    output_name,
+    build_name,
+    guard_name,
+    commit,
+    archive_sha256,
+    archive_bytes,
+    port,
+    run_id,
+) = sys.argv[1:]
+output = Path(output_name)
+candidate = json.loads(output.read_text(encoding="utf-8"))
+build = json.loads(Path(build_name).read_text(encoding="utf-8"))
+candidate["evidenceSchemaVersion"] = 2
+candidate["buildEvidence"] = build
+candidate["sourceSealRuntimeVerification"] = {
+    "beforeRuntime": True,
+    "afterRuntime": True,
+}
+spec = importlib.util.spec_from_file_location("canary_guard", guard_name)
+if spec is None or spec.loader is None:
+    raise SystemExit("[ERROR] candidate evidence guard cannot be loaded")
+guard = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(guard)
+guard.verify_candidate_evidence(
+    candidate,
+    {
+        "commit": commit,
+        "archiveSha256": archive_sha256,
+        "archiveBytes": int(archive_bytes),
+        "port": int(port),
+        "runId": run_id,
+    },
+)
+descriptor, temporary_name = tempfile.mkstemp(
+    prefix=f".{output.name}.", suffix=".tmp", dir=output.parent
+)
+with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
+    json.dump(candidate, handle, indent=2, sort_keys=True)
+    handle.write("\n")
+    handle.flush()
+    os.fsync(handle.fileno())
+os.replace(temporary_name, output)
+PY
 }
 
 run_build_scope() {
@@ -1565,13 +2152,14 @@ run_build_scope() {
     --collect \
     --unit="$BUILD_UNIT" \
     --service-type=exec \
-    --uid="$(id -u)" \
-    --gid="$(id -g)" \
+    --uid="$CANARY_DEPLOY_UID" \
+    --gid="$CANARY_DEPLOY_GID" \
     --working-directory="$CANARY_ROOT" \
     --property="StopPropagatedFrom=$SUPERVISOR_UNIT" \
     --property="After=$SUPERVISOR_UNIT" \
     --property="RuntimeMaxSec=${CANARY_BUILD_TIMEOUT}s" \
     --property="Restart=no" \
+    --property="UMask=0022" \
     --property="ProtectSystem=strict" \
     --property="ProtectHome=yes" \
     --property="PrivateTmp=yes" \
@@ -1587,7 +2175,7 @@ run_build_scope() {
     --property="LockPersonality=yes" \
     --property="RestrictRealtime=yes" \
     --property="RestrictSUIDSGID=yes" \
-    --property="InaccessiblePaths=$LEGACY_ROOT/01_RAW_DATA $LEGACY_ROOT/04_Processed_data /etc/jato-fullstack" \
+    --property="InaccessiblePaths=$REFERENCE_ROOT $LEGACY_ROOT/01_RAW_DATA $LEGACY_ROOT/04_Processed_data /etc/jato-fullstack" \
     --property="ReadWritePaths=$RUNTIME_ROOT" \
     --property="MemoryHigh=$CANARY_MEMORY_HIGH" \
     --property="MemoryMax=$CANARY_MEMORY_MAX" \
@@ -1598,6 +2186,8 @@ run_build_scope() {
     --setenv="XDG_CACHE_HOME=/tmp/cache" \
     --setenv="PATH=$PATH" \
     --setenv="CANARY_MODE=build" \
+    --setenv="CANARY_DEPLOY_UID=$CANARY_DEPLOY_UID" \
+    --setenv="CANARY_DEPLOY_GID=$CANARY_DEPLOY_GID" \
     --setenv="CANARY_ROOT=$CANARY_ROOT" \
     --setenv="CANARY_STATE_ROOT=$CANARY_STATE_ROOT" \
     --setenv="CANARY_PORT=$CANARY_PORT" \
@@ -1617,6 +2207,7 @@ run_build_scope() {
     --setenv="CANARY_SOURCE_BYTES=$CANARY_SOURCE_BYTES" \
     --setenv="CANARY_RUN_ID=$CANARY_RUN_ID" \
     --setenv="RUN_KEY=$RUN_KEY" \
+    --setenv="REFERENCE_ROOT=$REFERENCE_ROOT" \
     --setenv="RUNTIME_ROOT=$RUNTIME_ROOT" \
     --setenv="CHECKPOINT_FILE=$CHECKPOINT_FILE" \
     --setenv="RECEIPT_FILE=$RECEIPT_FILE" \
@@ -1657,6 +2248,7 @@ start_candidate_service() {
     --property="After=$SUPERVISOR_UNIT" \
     --property="RuntimeMaxSec=${CANARY_RUNTIME_TIMEOUT}s" \
     --property="Restart=no" \
+    --property="UMask=0022" \
     --property="DynamicUser=yes" \
     --property="ProtectSystem=strict" \
     --property="ProtectHome=yes" \
@@ -1687,6 +2279,8 @@ start_candidate_service() {
     --setenv="PYTHONDONTWRITEBYTECODE=1" \
     --setenv="PYTHONUNBUFFERED=1" \
     --setenv="CANARY_MODE=runtime" \
+    --setenv="CANARY_DEPLOY_UID=$CANARY_DEPLOY_UID" \
+    --setenv="CANARY_DEPLOY_GID=$CANARY_DEPLOY_GID" \
     --setenv="APP_PROJECT_ROOT=$RUNTIME_ROOT" \
     --setenv="APP_RELEASE_SHA=$CANARY_COMMIT_SHA" \
     --setenv="APP_RELEASE_SLOT=$CANARY_PORT" \
@@ -1737,7 +2331,7 @@ authorize_candidate_runtime() {
       -p LoadState -p ActiveState -p UnitFileState -p FragmentPath \
       -p MainPID -p InvocationID -p ExecStart -p Environment \
       -p DynamicUser -p ProtectSystem -p ProtectHome -p NoNewPrivileges \
-      -p Restart -p MemoryHigh -p MemoryMax -p MemorySwapMax -p TasksMax \
+      -p Restart -p UMask -p MemoryHigh -p MemoryMax -p MemorySwapMax -p TasksMax \
       -p ControlGroup -p ReadOnlyPaths \
       -p BindsTo -p PartOf -p After -p StopPropagatedFrom
   )"
@@ -1749,7 +2343,8 @@ authorize_candidate_runtime() {
       "$CANARY_SUPERVISOR_INVOCATION_ID" \
       "$CANARY_SOURCE_SHA256" "$CANARY_SOURCE_BYTES" \
       "$CANARY_PORT" "$LEGACY_ROOT" \
-      "$expected_high" "$expected_max" "$CANARY_TASKS_MAX" <<'PY'
+      "$expected_high" "$expected_max" "$CANARY_TASKS_MAX" \
+      "$CANARY_DEPLOY_UID" "$CANARY_DEPLOY_GID" <<'PY'
 from pathlib import Path
 import re
 import shlex
@@ -1772,6 +2367,8 @@ import sys
     expected_high,
     expected_max,
     expected_tasks,
+    deploy_uid,
+    deploy_gid,
 ) = sys.argv[1:]
 properties = {}
 for line in raw.splitlines():
@@ -1789,6 +2386,7 @@ required = {
     "ProtectHome": "yes",
     "NoNewPrivileges": "yes",
     "Restart": "no",
+    "UMask": "0022",
     "MemoryHigh": expected_high,
     "MemoryMax": expected_max,
     "MemorySwapMax": "0",
@@ -1886,6 +2484,8 @@ expected_environment = {
     "CANARY_SOURCE_SHA256": source_sha256,
     "CANARY_SOURCE_BYTES": source_bytes,
     "CANARY_PORT": port,
+    "CANARY_DEPLOY_UID": deploy_uid,
+    "CANARY_DEPLOY_GID": deploy_gid,
 }
 for key, expected in expected_environment.items():
     if environment.get(key) != expected:
@@ -1972,7 +2572,7 @@ PY
   properties="$(systemctl show "$SERVICE_UNIT" \
     -p ActiveState -p UnitFileState -p DynamicUser -p ProtectSystem \
     -p ProtectHome -p NoNewPrivileges \
-    -p Restart \
+    -p Restart -p UMask \
     -p MemoryHigh -p MemoryMax -p MemorySwapMax -p TasksMax \
     -p InvocationID -p ExecStart -p Environment \
     -p ReadOnlyPaths -p MainPID -p ControlGroup \
@@ -1982,7 +2582,8 @@ PY
     "$monthly_status" "$expected_high" "$expected_max" \
     "$CANARY_COMMIT_SHA" "$CANARY_PORT" "$LEGACY_ROOT" "$SUPERVISOR_UNIT" \
     "$readyz_evidence" "$CANDIDATE_START_PERMIT_FILE" "$SERVICE_UNIT" \
-    "$CANARY_SUPERVISOR_INVOCATION_ID" <<'PY'
+    "$CANARY_SUPERVISOR_INVOCATION_ID" \
+    "$CANARY_DEPLOY_UID" "$CANARY_DEPLOY_GID" <<'PY'
 import json
 import os
 from pathlib import Path
@@ -2008,6 +2609,8 @@ import tempfile
     permit_name,
     service_unit,
     supervisor_invocation_id,
+    deploy_uid,
+    deploy_gid,
 ) = sys.argv[1:]
 properties = {}
 for line in properties_raw.splitlines():
@@ -2022,6 +2625,7 @@ required = {
     "ProtectHome": "yes",
     "NoNewPrivileges": "yes",
     "Restart": "no",
+    "UMask": "0022",
     "MemoryHigh": expected_high,
     "MemoryMax": expected_max,
     "MemorySwapMax": "0",
@@ -2089,6 +2693,11 @@ if environment.get(
     raise SystemExit(
         "[ERROR] candidate environment changed supervisor generation"
     )
+if (
+    environment.get("CANARY_DEPLOY_UID") != deploy_uid
+    or environment.get("CANARY_DEPLOY_GID") != deploy_gid
+):
+    raise SystemExit("[ERROR] candidate environment changed deploy identity")
 if (
     f"{legacy_root}/01_RAW_DATA" not in properties.get("ReadOnlyPaths", "")
     or f"{legacy_root}/04_Processed_data" not in properties.get("ReadOnlyPaths", "")
@@ -2364,19 +2973,20 @@ cleanup_candidate() {
     "$bash_bin" "$CONTROL_SCRIPT" build \
     || cleanup_rc=1
   if [[ "$cleanup_rc" -eq 0 ]]; then
-    case "$RUNTIME_ROOT" in
-      /opt/jato-canary/runtime/*)
-        if sudo -n test -e "$RUNTIME_ROOT" \
-          || sudo -n test -L "$RUNTIME_ROOT"; then
-          sudo -n chmod -R u+w "$RUNTIME_ROOT" >/dev/null 2>&1 || true
-          sudo -n rm -rf --one-file-system "$RUNTIME_ROOT" || cleanup_rc=1
-        fi
-        ;;
-      *)
-        echo "[ERROR] refusing to clean runtime outside canary root" >&2
-        cleanup_rc=1
-        ;;
-    esac
+    for canary_tree in "$REFERENCE_ROOT" "$RUNTIME_ROOT"; do
+      case "$canary_tree" in
+        /opt/jato-canary/runtime/*)
+          if sudo -n test -e "$canary_tree" \
+            || sudo -n test -L "$canary_tree"; then
+            sudo -n rm -rf --one-file-system "$canary_tree" || cleanup_rc=1
+          fi
+          ;;
+        *)
+          echo "[ERROR] refusing to clean runtime outside canary root" >&2
+          cleanup_rc=1
+          ;;
+      esac
+    done
     case "$STAGED_SOURCE_ARCHIVE" in
       /opt/jato-canary/sources/*.tar.gz)
         if sudo -n test -e "$STAGED_SOURCE_ARCHIVE" \
@@ -2391,7 +3001,8 @@ cleanup_candidate() {
     esac
   fi
   if [[ "$cleanup_rc" -eq 0 ]]; then
-    for ephemeral in "$RUNTIME_ROOT" "$STAGED_SOURCE_ARCHIVE"; do
+    for ephemeral in \
+      "$REFERENCE_ROOT" "$RUNTIME_ROOT" "$STAGED_SOURCE_ARCHIVE"; do
       if sudo -n test -e "$ephemeral" || sudo -n test -L "$ephemeral"; then
         echo "[ERROR] canary ephemeral path remained after cleanup: $ephemeral" >&2
         cleanup_rc=1
@@ -2414,7 +3025,7 @@ cleanup_candidate_start_permit_temp() {
     if [[ ! -f "$CANDIDATE_START_PERMIT_SOURCE_FILE" ]] \
       || [[ -L "$CANDIDATE_START_PERMIT_SOURCE_FILE" ]] \
       || [[ "$(stat -c '%u:%g' "$CANDIDATE_START_PERMIT_SOURCE_FILE")" != \
-        "$(id -u):$(id -g)" ]] \
+        "${CANARY_DEPLOY_UID}:${CANARY_DEPLOY_GID}" ]] \
       || [[ "$(stat -c '%a' "$CANDIDATE_START_PERMIT_SOURCE_FILE")" != \
         "400" \
         && "$(stat -c '%a' "$CANDIDATE_START_PERMIT_SOURCE_FILE")" != \
@@ -2451,6 +3062,7 @@ cleanup_candidate_start_permit_temp() {
 }
 
 verify_retained_control_bundle() {
+  local source_anchor_required=false
   case "$CONTROL_ROOT" in
     /opt/jato-canary/control/*)
       ;;
@@ -2461,7 +3073,12 @@ verify_retained_control_bundle() {
   esac
   verify_canary_parent_roots
   assert_staged_supervisor_generation
-  python3 -B - "$CONTROL_ROOT" "$EVIDENCE_FILE" "$SERVICE_UNIT" <<'PY'
+  if verify_checkpoint_marker source_anchored completed >/dev/null 2>&1; then
+    source_anchor_required=true
+  fi
+  python3 -B - \
+    "$CONTROL_ROOT" "$EVIDENCE_FILE" "$SERVICE_UNIT" \
+    "$source_anchor_required" <<'PY'
 from pathlib import Path
 import json
 import os
@@ -2472,6 +3089,7 @@ import sys
 root = Path(sys.argv[1])
 evidence_path = Path(sys.argv[2])
 service_unit = sys.argv[3]
+source_anchor_required = sys.argv[4] == "true"
 directories = (
     root,
     root / "03_Scripts",
@@ -2483,12 +3101,29 @@ files = {
     root / "03_Scripts/deploy/jato_feature_canary_guard.py": 0o444,
     root / "03_Scripts/deploy/lib/production_mutation_lock.sh": 0o444,
     root / "03_Scripts/deploy/verify_backend_readiness.py": 0o444,
+    root / "03_Scripts/deploy/validate_release_archive.py": 0o444,
+    root / "03_Scripts/deploy/cleanup_toolkit_egg_info.py": 0o444,
+    root / "03_Scripts/deploy/verify_release_source_seal.py": 0o444,
     root / "supervisor-invocation-id": 0o444,
+}
+anchor_files = {
+    root / "archive-validation.json": 0o444,
+    root / "reference-integrity.json": 0o444,
 }
 optional_files = {
     root / "candidate-start-permit": 0o444,
 }
-expected_members = set(directories[1:]) | set(files)
+present_anchor_files = {
+    path for path in anchor_files if os.path.lexists(path)
+}
+if present_anchor_files and present_anchor_files != set(anchor_files):
+    raise SystemExit("[ERROR] retained canary integrity anchor is incomplete")
+if source_anchor_required and present_anchor_files != set(anchor_files):
+    raise SystemExit("[ERROR] retained canary integrity anchor is missing")
+retained_files = files | (
+    anchor_files if present_anchor_files == set(anchor_files) else {}
+)
+expected_members = set(directories[1:]) | set(retained_files)
 observed_members = set(root.rglob("*"))
 if (
     observed_members != expected_members
@@ -2507,7 +3142,7 @@ for path in directories:
         raise SystemExit(
             f"[ERROR] retained canary control directory is mutable/unsafe: {path}"
         )
-for path, expected_mode in files.items():
+for path, expected_mode in retained_files.items():
     metadata = os.lstat(path)
     if (
         not stat.S_ISREG(metadata.st_mode)
@@ -2736,8 +3371,8 @@ start_canary_supervisor() {
     --collect \
     --unit="$SUPERVISOR_UNIT" \
     --service-type=exec \
-    --uid="$(id -u)" \
-    --gid="$(id -g)" \
+    --uid="$CANARY_DEPLOY_UID" \
+    --gid="$CANARY_DEPLOY_GID" \
     --working-directory="$CONTROL_ROOT" \
     --property="TimeoutStopSec=${CANARY_SUPERVISOR_STOP_TIMEOUT_SECONDS}s" \
     --property="KillMode=control-group" \
@@ -2787,8 +3422,8 @@ run_canary_controller_unit() {
     --collect \
     --unit="$CONTROLLER_UNIT" \
     --service-type=exec \
-    --uid="$(id -u)" \
-    --gid="$(id -g)" \
+    --uid="$CANARY_DEPLOY_UID" \
+    --gid="$CANARY_DEPLOY_GID" \
     --working-directory="$CONTROL_ROOT" \
     --property="StopPropagatedFrom=$SUPERVISOR_UNIT" \
     --property="After=$SUPERVISOR_UNIT" \
@@ -2847,20 +3482,121 @@ quiesce_canary_controller_unit() {
   fail "durable canary controller cgroup did not become quiescent"
 }
 
+cleanup_pre_supervisor_launch() {
+  local cleanup_rc=0
+  local path=""
+  if ! verify_canary_parent_roots; then
+    echo \
+      "[ERROR] refusing pre-supervisor cleanup through unsafe canary parents" \
+      >&2
+    return 1
+  fi
+  for path in "$REFERENCE_ROOT" "$RUNTIME_ROOT" "$CONTROL_ROOT"; do
+    case "$path" in
+      "$CANARY_ROOT/runtime/"*|"$CANARY_ROOT/control/"*)
+        if sudo -n test -e "$path" || sudo -n test -L "$path"; then
+          sudo -n rm -rf --one-file-system -- "$path" || cleanup_rc=1
+        fi
+        ;;
+      *)
+        echo \
+          "[ERROR] refusing pre-supervisor cleanup outside canary namespace: $path" \
+          >&2
+        cleanup_rc=1
+        ;;
+    esac
+  done
+  case "$STAGED_SOURCE_ARCHIVE" in
+    "$CANARY_ROOT/sources/"*.tar.gz)
+      if sudo -n test -e "$STAGED_SOURCE_ARCHIVE" \
+        || sudo -n test -L "$STAGED_SOURCE_ARCHIVE"; then
+        sudo -n rm -f -- "$STAGED_SOURCE_ARCHIVE" || cleanup_rc=1
+      fi
+      ;;
+    *)
+      echo "[ERROR] refusing unsafe staged archive cleanup" >&2
+      cleanup_rc=1
+      ;;
+  esac
+  cleanup_canary_state_run || cleanup_rc=1
+  for path in \
+    "$REFERENCE_ROOT" "$RUNTIME_ROOT" "$CONTROL_ROOT" \
+    "$STAGED_SOURCE_ARCHIVE"; do
+    if sudo -n test -e "$path" || sudo -n test -L "$path"; then
+      echo \
+        "[ERROR] pre-supervisor canary residue remained after cleanup: $path" \
+        >&2
+      cleanup_rc=1
+    fi
+  done
+  return "$cleanup_rc"
+}
+
+verify_fresh_launch_namespace() {
+  local path=""
+  for path in \
+    "$REFERENCE_ROOT" "$RUNTIME_ROOT" "$CONTROL_ROOT" \
+    "$STAGED_SOURCE_ARCHIVE" "$CHECKPOINT_FILE" "$RECEIPT_FILE" \
+    "$EVIDENCE_FILE" "$BEFORE_SNAPSHOT" "$AFTER_SNAPSHOT" \
+    "$SUPERVISOR_GENERATION_SOURCE_FILE" \
+    "$CANDIDATE_START_PERMIT_SOURCE_FILE"; do
+    if sudo -n test -e "$path" || sudo -n test -L "$path"; then
+      fail "canary run namespace already exists and requires inspection: $path"
+      return 1
+    fi
+  done
+}
+
+verify_supervisor_unit_absent() {
+  local load_state=""
+  load_state="$(
+    systemctl show "$SUPERVISOR_UNIT" -p LoadState --value 2>/dev/null || true
+  )"
+  if [[ "$load_state" != "not-found" ]]; then
+    echo \
+      "[ERROR] supervisor launch returned failure but unit state is not safely absent: ${load_state:-unknown}" \
+      >&2
+    return 1
+  fi
+}
+
 launch_canary() {
+  pin_canary_deploy_identity
   validate_static_contract
   pin_canary_production_lock_path
   initialize_paths
-  ensure_canary_roots
-  stage_canary_inputs
-  record_checkpoint initialized in_progress \
-    "feature canary inputs staged; durable supervisor launch requested"
+  verify_fresh_launch_namespace
+  if ! ensure_canary_roots; then
+    cleanup_pre_supervisor_launch || true
+    return 1
+  fi
+  if ! stage_canary_inputs; then
+    cleanup_pre_supervisor_launch || true
+    return 1
+  fi
+  if ! record_checkpoint initialized in_progress \
+    "feature canary inputs staged; durable supervisor launch requested"; then
+    cleanup_pre_supervisor_launch || true
+    return 1
+  fi
   if ! start_canary_supervisor; then
     record_checkpoint supervisor_launch_failed failed \
       "systemd rejected or could not start the durable canary supervisor" \
       || true
+    if ! verify_supervisor_unit_absent; then
+      echo \
+        "[ERROR] Ambiguous supervisor launch retained its control bundle for safe reconciliation" \
+        >&2
+      return 1
+    fi
+    if ! cleanup_pre_supervisor_launch; then
+      echo \
+        "[ERROR] Durable supervisor launch failed and rollback left residue" \
+        >&2
+      return 1
+    fi
     echo \
-      "[ERROR] Durable supervisor launch failed; staged control bundle retained for inspection" \
+      "[ERROR] Durable supervisor launch failed; staged inputs were rolled back" \
       >&2
     return 1
   fi
@@ -2958,11 +3694,18 @@ run_canary_controller() {
   record_checkpoint baseline_verified completed \
     "public health/build SHA and active 6G/8G/2-worker baseline verified"
 
+  # Trusted control code materializes both trees and seals an inaccessible,
+  # root-owned reference before any feature/dependency code is allowed to run.
+  prepare_trusted_materialization
+  record_checkpoint source_anchored completed \
+    "root-owned reference, archive receipt and source seal were anchored"
+
   # Feature and dependency code runs only inside the isolated transient build
-  # service. The parent retains the production lock and durable evidence.
+  # service. The parent retains the production lock and trusted evidence.
   run_build_scope
+  verify_trusted_candidate_integrity
   record_checkpoint source_verified completed \
-    "staged archive identity and control-plane provenance verified"
+    "archive modes, pristine/candidate source seals and clean egg-info verified"
   record_checkpoint runtime_built completed \
     "candidate dependencies built inside transient 3G/4G/0-swap sandbox"
 
@@ -2970,6 +3713,8 @@ run_canary_controller() {
   start_candidate_service
   authorize_candidate_runtime
   verify_candidate_service
+  verify_trusted_candidate_integrity "$BUILD_INTEGRITY_EVIDENCE_FILE"
+  persist_candidate_integrity_evidence
   assert_supervisor_generation
   if [[ "$CANARY_FAULT" == "after_candidate_start" ]]; then
     CANARY_EXPECTED_FAILURE_OBSERVED=true
@@ -2986,6 +3731,7 @@ run_candidate_runtime() {
   local actual_argv=("$@")
   local expected_argv=()
   initialize_paths
+  validate_canary_deploy_identity
   verify_canary_parent_roots
   validate_feature_identity
   # DynamicUser services cannot query the systemd manager on every supported
@@ -3018,10 +3764,11 @@ validate_reconcile_contract() {
   local account_home=""
   local canonical_deploy_state=""
   for command_name in \
-    curl flock getent mktemp mv python3 readlink realpath rm sha256sum stat \
+    curl flock getent id mktemp mv python3 readlink realpath rm sha256sum stat \
     systemctl timeout; do
     require_command "$command_name"
   done
+  validate_canary_deploy_identity
   if [[ "$CANARY_ROOT" != "/opt/jato-canary" ]] \
     || [[ "$CANARY_STATE_ROOT" != "/var/lib/jato-canary" ]] \
     || [[ "$CANARY_PORT" != "18001" ]] \
@@ -3034,7 +3781,7 @@ validate_reconcile_contract() {
   validate_feature_identity
   verify_canary_parent_roots
   account_home="$(
-    getent passwd "$(id -u)" | awk -F: 'NR == 1 {print $6}'
+    getent passwd "$CANARY_DEPLOY_UID" | awk -F: 'NR == 1 {print $6}'
   )"
   canonical_deploy_state="${account_home%/}/.local/state/jato-production-release"
   if [[ -z "$account_home" || "$account_home" != /* ]] \
@@ -3061,7 +3808,8 @@ validate_reconcile_contract() {
   fi
   for control_file in \
     "$CONTROL_SCRIPT" "$CANARY_GUARD" "$MUTATION_LOCK_HELPER" \
-    "$READINESS_VERIFIER"; do
+    "$READINESS_VERIFIER" "$ARCHIVE_VALIDATOR" \
+    "$TOOLKIT_EGG_INFO_CLEANER" "$SOURCE_SEAL_HELPER"; do
     if [[ ! -f "$control_file" || -L "$control_file" ]] \
       || [[ "$(stat -c '%u' "$control_file")" != "0" ]]; then
       fail "reconcile control-plane file is missing, mutable, or unsafe"

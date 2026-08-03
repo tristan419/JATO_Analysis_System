@@ -366,6 +366,23 @@ def test_tencent_release_requires_host_pin_and_hides_secrets_from_remote_argv() 
     assert '"umask 077; exec bash -s" < "$control_payload"' in workflow
 
 
+def test_remote_release_preserves_normalized_archive_permissions() -> None:
+    outer = (
+        REPO_ROOT / "03_Scripts/deploy/fullstack_remote_release.sh"
+    ).read_text(encoding="utf-8")
+    controller = (
+        REPO_ROOT / "03_Scripts/deploy/tencent_bluegreen_release.sh"
+    ).read_text(encoding="utf-8")
+
+    assert "tar --same-permissions --no-overwrite-dir" in outer
+    assert '-xzf "$SEALED_RELEASE_ARCHIVE" -C "$RELEASE_WORKTREE"' in outer
+    assert (
+        ") | sudo -n tar --same-permissions --no-overwrite-dir"
+        in controller
+    )
+    assert "03_Scripts/deploy/cleanup_toolkit_egg_info.py" in outer
+
+
 def test_backend_release_is_deterministic_and_closes_msrp_evidence_references() -> None:
     workflow = (REPO_ROOT / ".github/workflows/production-release.yml").read_text(
         encoding="utf-8",
@@ -378,6 +395,15 @@ def test_backend_release_is_deterministic_and_closes_msrp_evidence_references() 
     assert "--owner=0" in workflow
     assert "--group=0" in workflow
     assert '--mtime="@$source_date_epoch"' in workflow
+    assert "--mode='u=rwX,go=rX'" in workflow
+    assert "--mode='u=rwX,go=X'" in workflow
+    assert 'tar "${tar_private_normalize[@]}" --no-recursion' in workflow
+    assert '"${private_dirs[@]}"' in workflow
+    assert '"${private_files[@]}"' in workflow
+    assert "--exclude='06_AppPlatform/backend/*.parquet'" in workflow
+    assert "--no-acls" in workflow
+    assert "--no-xattrs" in workflow
+    assert "--no-selinux" in workflow
     assert 'gzip -n -f "$RUNNER_TEMP/JATO_deploy.tar"' in workflow
     assert 'value.get("localPath")' in workflow
     assert "missing MSRP localPath evidence" in workflow
@@ -1076,8 +1102,28 @@ def test_deploy_prepares_frozen_release_identity_before_backend_restart() -> Non
     assert materialize < build_scope < frozen_seal < candidate
     build = _shell_function(controller, "build_candidate_runtime_locked")
     inner_prepare = build.index("\n    run_inner_prepare\n")
-    finalize = build.index("\n    finalize_runtime_seal\n", inner_prepare)
-    assert inner_prepare < finalize
+    source_verify = build.index(
+        "\n    verify_materialized_release_source\n",
+        inner_prepare,
+    )
+    database_gate = build.index(
+        "\n    assert_no_database_migration_delta\n",
+        source_verify,
+    )
+    status_write = build.index(
+        "\n    write_candidate_deploy_status\n",
+        database_gate,
+    )
+    finalize = build.index("\n    finalize_runtime_seal\n", status_write)
+    final_verify = build.index("\n  verify_final_runtime_seal", finalize)
+    assert (
+        inner_prepare
+        < source_verify
+        < database_gate
+        < status_write
+        < finalize
+        < final_verify
+    )
     run_inner = _shell_function(controller, "run_inner_prepare")
     assert "BLUEGREEN_PREPARE_ONLY=true" in run_inner
     assert "RUN_DATABASE_MIGRATIONS=verify_only" in run_inner

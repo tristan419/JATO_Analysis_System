@@ -208,6 +208,7 @@ BACKEND_TEMPLATE_PREIMAGE_STATE="${BACKEND_TEMPLATE_PREIMAGE}.state"
 SLOT_ENV_TEMPLATE="$RELEASE_WORKTREE/03_Scripts/deploy/systemd/jato-fullstack-backend-slot.env.example"
 NGINX_INSTALLER="$RELEASE_WORKTREE/03_Scripts/deploy/nginx/install_jato_fullstack_nginx.sh"
 SOURCE_SEAL_HELPER="$RELEASE_WORKTREE/03_Scripts/deploy/verify_release_source_seal.py"
+TOOLKIT_EGG_INFO_HELPER="$RELEASE_WORKTREE/03_Scripts/deploy/cleanup_toolkit_egg_info.py"
 BOOT_RECONCILE_HELPER="$RELEASE_WORKTREE/03_Scripts/deploy/jato_bluegreen_boot_reconcile.py"
 BOOT_RECONCILE_HELPER_TARGET="/usr/local/libexec/jato-bluegreen-boot-reconcile.py"
 BOOT_RECONCILE_UNIT_TEMPLATE="$RELEASE_WORKTREE/03_Scripts/deploy/systemd/jato-bluegreen-boot-reconcile.service"
@@ -552,11 +553,12 @@ materialize_release_source() {
     checkpoint_write source_install_started in_progress automatic \
       "immutable blue/green release materialization started"
     sudo -n mkdir -p "$release_parent"
-    sudo -n install -d -m 0755 "$RELEASE_DIR"
+    sudo -n install -d -m 0711 "$RELEASE_DIR"
     (
       cd "$RELEASE_WORKTREE"
       tar cf - .
-    ) | sudo -n tar xf - -C "$RELEASE_DIR"
+    ) | sudo -n tar --same-permissions --no-overwrite-dir \
+      -xf - -C "$RELEASE_DIR"
     sudo -n chown -R "$(id -u):$(id -g)" "$RELEASE_DIR"
     link_release_runtime_path "01_RAW_DATA" "$SHARED_ROOT/01_RAW_DATA"
     link_release_runtime_path "04_Processed_data" "$SHARED_ROOT/04_Processed_data"
@@ -582,7 +584,9 @@ materialize_release_source() {
     checkpoint_write source_installed completed automatic \
       "immutable release source and durable runtime links installed"
   else
-    if sudo -n test -L "$RELEASE_SOURCE_SEAL_FILE" \
+    if ! python3 -B "$TOOLKIT_EGG_INFO_HELPER" \
+      --toolkit-root "$RELEASE_DIR/07_ScrapingToolkit" \
+      || sudo -n test -L "$RELEASE_SOURCE_SEAL_FILE" \
       || ! sudo -n test -f "$RELEASE_SOURCE_SEAL_FILE" \
       || ! sudo -n cmp -s "$expected_seal" "$RELEASE_SOURCE_SEAL_FILE" \
       || ! python3 -B "$SOURCE_SEAL_HELPER" verify \
@@ -663,6 +667,7 @@ finalize_runtime_seal() {
 }
 
 prepare_candidate_runtime() {
+  umask 0022
   if sudo -n test -e "$RELEASE_RUNTIME_SEAL_FILE" \
     || sudo -n test -L "$RELEASE_RUNTIME_SEAL_FILE"; then
     verify_final_runtime_seal || return 1
@@ -1006,6 +1011,7 @@ PY
 }
 
 build_candidate_runtime_locked() {
+  umask 0022
   require_environment
   assert_candidate_build_scope
   assert_inherited_production_lock

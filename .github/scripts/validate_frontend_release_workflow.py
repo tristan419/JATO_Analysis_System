@@ -16,6 +16,9 @@ PRODUCTION_WORKFLOW_PATH = REPO_ROOT / ".github/workflows/production-release.yml
 PREWARM_WORKFLOW_PATH = REPO_ROOT / ".github/workflows/intl-edge-prewarm.yml"
 CI_WORKFLOW_PATH = REPO_ROOT / ".github/workflows/ci.yml"
 REMOTE_RELEASE_PATH = REPO_ROOT / "03_Scripts/deploy/fullstack_remote_release.sh"
+ARCHIVE_VALIDATOR_PATH = (
+    REPO_ROOT / "03_Scripts/deploy/validate_release_archive.py"
+)
 SERVER_RELEASE_PATH = REPO_ROOT / "03_Scripts/ops/deploy_fullstack_server.sh"
 BLUEGREEN_RELEASE_PATH = (
     REPO_ROOT / "03_Scripts/deploy/tencent_bluegreen_release.sh"
@@ -601,6 +604,12 @@ def assert_deterministic_backend_package(workflow: Mapping[str, Any]) -> None:
         "--group=0",
         "--numeric-owner",
         '--mtime="@$source_date_epoch"',
+        "--mode='u=rwX,go=rX'",
+        "--mode='u=rwX,go=X'",
+        "--exclude='06_AppPlatform/backend/*.parquet'",
+        "--no-acls",
+        "--no-xattrs",
+        "--no-selinux",
         'gzip -n -f "$RUNNER_TEMP/JATO_deploy.tar"',
         'value.get("localPath")',
         "missing MSRP localPath evidence",
@@ -617,6 +626,87 @@ def assert_deterministic_backend_package(workflow: Mapping[str, Any]) -> None:
     found = [token for token in forbidden if token in package]
     if found:
         raise AssertionError(f"backend package retains rerun-varying input: {found}")
+    normalized_package = " ".join(package.replace("\\\n", " ").split())
+    private_contract_tokens = (
+        'private_dirs_file="$RUNNER_TEMP/release-private-dirs.bin"',
+        'private_files_file="$RUNNER_TEMP/release-private-files.bin"',
+        'PRIVATE_DIRS_FILE="$private_dirs_file"',
+        'PRIVATE_FILES_FILE="$private_files_file"',
+        'Path(os.environ["PRIVATE_DIRS_FILE"]).write_bytes(',
+        'Path(os.environ["PRIVATE_FILES_FILE"]).write_bytes(',
+        'str(path).encode("utf-8") + b"\\0"',
+        "cursor = relative.parent",
+        'while cursor != PurePosixPath("."):',
+        "if cursor == prefix or prefix in cursor.parents:",
+        "directories.add(cursor)",
+        "if cursor == prefix:",
+        "cursor = cursor.parent",
+        'mapfile -d \'\' -t private_dirs < "$private_dirs_file"',
+        'mapfile -d \'\' -t private_files < "$private_files_file"',
+        'tar "${tar_private_normalize[@]}" --no-recursion -rf '
+        '"$RUNNER_TEMP/JATO_deploy.tar" -C "$GITHUB_WORKSPACE" '
+        '"${private_dirs[@]}"',
+        'tar "${tar_private_normalize[@]}" -rf '
+        '"$RUNNER_TEMP/JATO_deploy.tar" -C "$GITHUB_WORKSPACE" '
+        '"${private_files[@]}"',
+    )
+    missing_private_contract = [
+        token
+        for token in private_contract_tokens
+        if token not in normalized_package
+    ]
+    if missing_private_contract:
+        raise AssertionError(
+            "private release asset manifest is incomplete: "
+            f"{missing_private_contract}",
+        )
+    parent_chain_order = (
+        "cursor = relative.parent",
+        'while cursor != PurePosixPath("."):',
+        "if cursor == prefix or prefix in cursor.parents:",
+        "directories.add(cursor)",
+        "if cursor == prefix:",
+        "break",
+        "cursor = cursor.parent",
+        'Path(os.environ["PRIVATE_DIRS_FILE"]).write_bytes(',
+    )
+    parent_chain_positions = [
+        normalized_package.index(token)
+        for token in parent_chain_order
+    ]
+    if parent_chain_positions != sorted(parent_chain_positions):
+        raise AssertionError(
+            "private release files must enumerate every reviewed-prefix "
+            "parent before publishing the directory manifest",
+        )
+    private_order = (
+        'private_dirs_file="$RUNNER_TEMP/release-private-dirs.bin"',
+        'Path(os.environ["PRIVATE_DIRS_FILE"]).write_bytes(',
+        'Path(os.environ["PRIVATE_FILES_FILE"]).write_bytes(',
+        'mapfile -d \'\' -t private_dirs < "$private_dirs_file"',
+        'mapfile -d \'\' -t private_files < "$private_files_file"',
+        'tar "${tar_private_normalize[@]}" --no-recursion -rf '
+        '"$RUNNER_TEMP/JATO_deploy.tar"',
+        'tar "${tar_private_normalize[@]}" -rf '
+        '"$RUNNER_TEMP/JATO_deploy.tar"',
+        'gzip -n -f "$RUNNER_TEMP/JATO_deploy.tar"',
+    )
+    private_positions = [
+        normalized_package.index(token)
+        for token in private_order
+    ]
+    if private_positions != sorted(private_positions):
+        raise AssertionError(
+            "private NUL manifests, explicit parent directories and files "
+            "must be appended before deterministic compression",
+        )
+    if normalized_package.count(
+        'str(path).encode("utf-8") + b"\\0"',
+    ) < 2:
+        raise AssertionError(
+            "private directory and file manifests must both remain "
+            "NUL-delimited",
+        )
 
 
 def assert_release_checkpoint_contract(workflow: Mapping[str, Any]) -> None:
@@ -792,6 +882,8 @@ def assert_release_checkpoint_contract(workflow: Mapping[str, Any]) -> None:
 
 def assert_server_consumes_only_prebuilt_dist() -> None:
     remote_release = REMOTE_RELEASE_PATH.read_text(encoding="utf-8")
+    archive_validator = ARCHIVE_VALIDATOR_PATH.read_text(encoding="utf-8")
+    production_workflow = PRODUCTION_WORKFLOW_PATH.read_text(encoding="utf-8")
     server_release = SERVER_RELEASE_PATH.read_text(encoding="utf-8")
     bluegreen_release_path = (
         REPO_ROOT / "03_Scripts/deploy/tencent_bluegreen_release.sh"
@@ -811,12 +903,182 @@ def assert_server_consumes_only_prebuilt_dist() -> None:
             raise AssertionError(f"remote release retains forbidden fallback: {forbidden}")
     if 'python3 "$FRONTEND_RELEASE_HELPER" verify' not in remote_release:
         raise AssertionError("remote release must invoke the shared artifact verifier")
+    if (
+        "tar --same-permissions --no-overwrite-dir" not in remote_release
+        or '-xzf "$SEALED_RELEASE_ARCHIVE" -C "$RELEASE_WORKTREE"'
+        not in remote_release
+    ):
+        raise AssertionError(
+            "remote release must restore normalized archive permissions while "
+            "preserving the private extraction root",
+        )
+    for mode_guard in (
+        "stat.S_IMODE(member.mode)",
+        "unsafe release archive mode",
+        "PRIVATE_PREFIXES",
+        "trusted control provenance differs from immutable archive",
+        "SCHEMA_VERSION = 2",
+        "entry_types",
+        "release archive member lacks an explicit directory",
+        '"privateEntries"',
+        "private_file_entries",
+        "private_directory_entries",
+    ):
+        if mode_guard not in archive_validator:
+            raise AssertionError(
+                "same-permissions extraction requires schema-v2 archive "
+                "mode, explicit-parent and private-entry checks",
+            )
+    sealed_archive_tokens = (
+        'SEALED_TRUST_ROOT="/var/lib/jato-sealed-inputs"',
+        'SEALED_ARCHIVE_ROOT="$SEALED_TRUST_ROOT/inputs"',
+        'SEALED_RELEASE_ARCHIVE="$SEALED_ARCHIVE_DIR/release.tar.gz"',
+        'SEALED_ARCHIVE_VALIDATOR="$SEALED_ARCHIVE_DIR/validate_release_archive.py"',
+        'ARCHIVE_VALIDATION_RECEIPT_ROOT="$SEALED_TRUST_ROOT/receipts"',
+        '${DEPLOY_RUN_ID}-${DEPLOY_RUN_ATTEMPT}.json',
+        "seal_release_archive_input() {",
+        "verify_sealed_release_bundle() {",
+        "verify_archive_validation_receipt() {",
+        "select_bluegreen_release_headroom_target() {",
+        'sudo -n install -d -m 0750 -o root -g "$DEPLOY_GID"',
+        'sudo -n install -m 0440 -o root -g "$DEPLOY_GID"',
+        'sudo -n install -m 0550 -o root -g "$DEPLOY_GID"',
+        '"0:${DEPLOY_GID}:750"',
+        '"0:${DEPLOY_GID}:440"',
+        'sudo -n python3 -B "$SEALED_ARCHIVE_VALIDATOR"',
+        '--archive "$SEALED_RELEASE_ARCHIVE"',
+        '--output "$ARCHIVE_VALIDATION_RECEIPT"',
+        '--validation-run-id "$DEPLOY_RUN_ID"',
+        '--validation-run-attempt "$DEPLOY_RUN_ATTEMPT"',
+        '--sealed-root "$SEALED_TRUST_ROOT"',
+        '--sealed-helper "$SEALED_ARCHIVE_VALIDATOR"',
+        '--headroom-target "$RELEASE_WORKTREE" 1',
+        '--headroom-target "$BLUEGREEN_HEADROOM_TARGET" 1',
+        'sudo -n chmod 0444 "$ARCHIVE_VALIDATION_RECEIPT"',
+    )
+    missing_sealed_archive = [
+        token for token in sealed_archive_tokens if token not in remote_release
+    ]
+    if missing_sealed_archive:
+        raise AssertionError(
+            "production release lost sealed archive, receipt or /tmp-/opt "
+            f"headroom controls: {missing_sealed_archive}",
+        )
+    execution_start = remote_release.index(
+        'verify_release_archive_identity "$RELEASE_ARCHIVE"',
+    )
+    seal_archive = remote_release.index(
+        "\nseal_release_archive_input\n",
+        execution_start,
+    )
+    validator_materialized = remote_release.index(
+        'base64 --decode >"$TRUSTED_ARCHIVE_VALIDATOR_TEMP"',
+        seal_archive,
+    )
+    helper_installed = remote_release.index(
+        "sudo -n install -m 0550 -o root",
+        validator_materialized,
+    )
+    bundle_verified = remote_release.index(
+        "\nverify_sealed_release_bundle\n",
+        helper_installed,
+    )
+    headroom_root = remote_release.index(
+        "\nselect_bluegreen_release_headroom_target\n",
+        bundle_verified,
+    )
+    single_validation = remote_release.index(
+        'if ! sudo -n python3 -B "$SEALED_ARCHIVE_VALIDATOR"',
+        headroom_root,
+    )
+    receipt_check = remote_release.index(
+        "\nverify_archive_validation_receipt\n",
+        single_validation,
+    )
+    extraction = remote_release.index(
+        'tar --same-permissions --no-overwrite-dir',
+        receipt_check,
+    )
+    post_extraction_receipt_check = remote_release.index(
+        "\nverify_archive_validation_receipt\n",
+        extraction,
+    )
+    if not (
+        execution_start
+        < seal_archive
+        < validator_materialized
+        < helper_installed
+        < bundle_verified
+        < headroom_root
+        < single_validation
+        < receipt_check
+        < extraction
+        < post_extraction_receipt_check
+    ):
+        raise AssertionError(
+            "production must root-seal the archive/helper, create /opt safely, "
+            "write one /tmp-/opt receipt, and reverify it around extraction",
+        )
+    if (
+        remote_release.count(
+            'sudo -n python3 -B "$SEALED_ARCHIVE_VALIDATOR"',
+        )
+        != 1
+        or remote_release.count('--output "$ARCHIVE_VALIDATION_RECEIPT"') != 1
+        or remote_release.count("--headroom-target") != 2
+    ):
+        raise AssertionError(
+            "production archive validation must use one root-owned helper run "
+            "and one immutable attempt receipt",
+        )
+    for shared_validator_token in (
+        'RELEASE_ARCHIVE_VALIDATOR_B64',
+        'RELEASE_ARCHIVE_VALIDATOR_SHA256',
+        'base64 --decode >"$TRUSTED_ARCHIVE_VALIDATOR_TEMP"',
+        '"03_Scripts/deploy/validate_release_archive.py=$SEALED_ARCHIVE_VALIDATOR"',
+        'sudo -n python3 -B "$SEALED_ARCHIVE_VALIDATOR"',
+    ):
+        if shared_validator_token not in remote_release:
+            raise AssertionError(
+                "production outer release lost its pre-extraction trusted "
+                f"archive validator: {shared_validator_token}",
+            )
+    for payload_token in (
+        'archive_validator="03_Scripts/deploy/validate_release_archive.py"',
+        'archive_validator_sha256="$(sha256sum "$archive_validator"',
+        'archive_validator_b64="$(base64 -w 0 "$archive_validator")"',
+        'write_remote_export RELEASE_ARCHIVE_VALIDATOR_B64',
+        'write_remote_export RELEASE_ARCHIVE_VALIDATOR_SHA256',
+    ):
+        if payload_token not in production_workflow:
+            raise AssertionError(
+                "production workflow lost its private validator control payload: "
+                f"{payload_token}",
+            )
+    if "03_Scripts/deploy/cleanup_toolkit_egg_info.py" not in remote_release:
+        raise AssertionError(
+            "remote release must carry the fail-closed toolkit metadata cleaner",
+        )
     if '03_Scripts/deploy/release_evidence.py' not in remote_release:
         raise AssertionError("remote release must require the shared evidence verifier")
     if 'sudo -n "${verifier[@]}"' not in remote_release:
         raise AssertionError("remote release evidence must be verified with private-file access")
     if 'sudo -n python3 -B "$RELEASE_EVIDENCE_HELPER" verify' not in server_release:
         raise AssertionError("server recovery must reuse the privileged evidence verifier")
+    for toolkit_guard in (
+        "03_Scripts/deploy/cleanup_toolkit_egg_info.py",
+        "cleanup_scraping_toolkit_egg_info",
+        'python -m pip install -e "$TOOLKIT_DIR"',
+    ):
+        if toolkit_guard not in server_release:
+            raise AssertionError(
+                "server release must preserve editable toolkit behavior while "
+                "cleaning generated source metadata",
+            )
+    if "python -m pip wheel" in server_release:
+        raise AssertionError(
+            "server release must not build the currently incomplete toolkit wheel",
+        )
     if "--materialize-dir \"$PREBUILT_FRONTEND_DIR\"" not in remote_release:
         raise AssertionError("remote release must materialize only the verified artifact")
     handoff = (
@@ -918,6 +1180,8 @@ def assert_bluegreen_storage_guard_text_contract(
         "--expected-active-memory-max-bytes",
         "assert_runtime_storage_reserve",
         "materialize_release_source",
+        "TOOLKIT_EGG_INFO_HELPER",
+        ") | sudo -n tar --same-permissions --no-overwrite-dir",
         "run_candidate_build_scope",
         "build_candidate_runtime_locked",
         "--scope",
@@ -933,6 +1197,30 @@ def assert_bluegreen_storage_guard_text_contract(
         raise AssertionError(
             "Tencent blue/green storage contract is incomplete: "
             f"{missing_controller}",
+        )
+    materialize_start = bluegreen_release.index("materialize_release_source() {")
+    materialize_end = bluegreen_release.index("\n}\n", materialize_start)
+    materialize_source = bluegreen_release[materialize_start:materialize_end]
+    try:
+        cleanup_metadata = materialize_source.index(
+            'python3 -B "$TOOLKIT_EGG_INFO_HELPER"',
+        )
+        stored_source_seal = materialize_source.index(
+            'sudo -n test -L "$RELEASE_SOURCE_SEAL_FILE"',
+            cleanup_metadata,
+        )
+        verify_stored_source = materialize_source.index(
+            'python3 -B "$SOURCE_SEAL_HELPER" verify',
+            stored_source_seal,
+        )
+    except ValueError as error:
+        raise AssertionError(
+            "persistent release retry must safely clean editable metadata "
+            "before source-seal verification",
+        ) from error
+    if not cleanup_metadata < stored_source_seal < verify_stored_source:
+        raise AssertionError(
+            "toolkit metadata cleanup must precede persistent source-seal reuse",
         )
     build_start = bluegreen_release.index("run_candidate_build_scope() {")
     build_end = bluegreen_release.index("\n}\n", build_start)
@@ -953,7 +1241,19 @@ def assert_bluegreen_storage_guard_text_contract(
         )
         runtime_prepare = locked_build.index("\n  prepare_candidate_runtime\n")
         inner_prepare = locked_build.index("\n    run_inner_prepare\n")
+        source_verify = locked_build.index(
+            "\n    verify_materialized_release_source\n",
+        )
+        database_gate = locked_build.index(
+            "\n    assert_no_database_migration_delta\n",
+        )
+        status_write = locked_build.index(
+            "\n    write_candidate_deploy_status\n",
+        )
         final_runtime_seal = locked_build.index("\n    finalize_runtime_seal\n")
+        final_runtime_verify = locked_build.index(
+            "\n  verify_final_runtime_seal",
+        )
     except ValueError as error:
         raise AssertionError(
             "candidate build scope proof and sealed build sequence are incomplete",
@@ -963,11 +1263,16 @@ def assert_bluegreen_storage_guard_text_contract(
         < lock_proof
         < runtime_prepare
         < inner_prepare
+        < source_verify
+        < database_gate
+        < status_write
         < final_runtime_seal
+        < final_runtime_verify
     ):
         raise AssertionError(
             "candidate build must prove its cgroup and inherited lock before "
-            "building and sealing the runtime",
+            "building, verifying the source and database, writing status, "
+            "and sealing the runtime",
         )
 
     prepare = bluegreen_release[bluegreen_release.index("prepare_and_switch()") :]
@@ -1197,7 +1502,12 @@ def assert_required_ci_contract() -> None:
 
     commands = combined_run(contract_job, "frontend-release-contract")
     required_tokens = (
-        'python -m pip install "PyYAML==6.0.2" "pytest<9"',
+        "python -m pip install",
+        '"PyYAML==6.0.2"',
+        '"pytest<9"',
+        '"pydantic==2.11.7"',
+        '"setuptools==81.0.0"',
+        '"wheel==0.46.3"',
         "npm ci",
         "test_frontend_release_artifact.py",
         "test_verify_intl_runtime_contract.py",
@@ -1221,6 +1531,8 @@ def assert_required_ci_contract() -> None:
         "test_jato_release_storage_guard.py",
         "test_tencent_feature_candidate_canary.py",
         "test_tencent_bluegreen_release.py",
+        "test_validate_release_archive.py",
+        "test_cleanup_toolkit_egg_info.py",
         "test_release_source_seal.py",
         "test_pre_switch_checkpoint_recovery.py",
         "test_release_shell_hardening.py",

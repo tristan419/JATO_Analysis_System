@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import importlib.util
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -9,6 +10,8 @@ import shutil
 import signal
 import socket
 import subprocess
+import sys
+import tempfile
 import textwrap
 import time
 from types import ModuleType
@@ -26,6 +29,8 @@ GUARD_PATH = (
 ACTIVE_UNIT = "jato-fullstack-backend@8000.service"
 ACTIVE_HIGH = str(6 * 1024 * 1024 * 1024)
 ACTIVE_MAX = str(8 * 1024 * 1024 * 1024)
+EVIDENCE_DEPLOY_UID = 1000
+EVIDENCE_DEPLOY_GID = 1001
 
 
 def _shell_function(script: str, name: str) -> str:
@@ -119,7 +124,133 @@ def _snapshot() -> dict[str, object]:
 
 
 def _candidate_evidence() -> dict[str, object]:
+    private_files = [
+        {
+            "path": "01_RAW_DATA/VOC_Nordic_SUV_Users_100.xlsx",
+            "mode": "0600",
+            "sha256": "9" * 64,
+            "bytes": 111,
+        },
+        {
+            "path": (
+                "03_Scripts/diagnostics/artifacts/msrp_backfill/"
+                "sweden_swiss_top30_suv/official_evidence_leads.json"
+            ),
+            "mode": "0600",
+            "sha256": "8" * 64,
+            "bytes": 222,
+        },
+        {
+            "path": (
+                "03_Scripts/diagnostics/artifacts/msrp_backfill/"
+                "sweden_swiss_top30_suv/"
+                "top30_suv_price_movement_candidates.json"
+            ),
+            "mode": "0600",
+            "sha256": "5" * 64,
+            "bytes": 333,
+        },
+    ]
+    private_directories = [
+        {"path": "01_RAW_DATA", "mode": "0711"},
+        {
+            "path": "03_Scripts/diagnostics/artifacts",
+            "mode": "0711",
+        },
+        {
+            "path": (
+                "03_Scripts/diagnostics/artifacts/msrp_backfill"
+            ),
+            "mode": "0711",
+        },
+        {
+            "path": (
+                "03_Scripts/diagnostics/artifacts/msrp_backfill/"
+                "sweden_swiss_top30_suv"
+            ),
+            "mode": "0711",
+        },
+    ]
+    controls = {
+        relative: "7" * 64
+        for relative in (
+            "03_Scripts/deploy/tencent_feature_candidate_canary.sh",
+            "03_Scripts/deploy/jato_feature_canary_guard.py",
+            "03_Scripts/deploy/lib/production_mutation_lock.sh",
+            "03_Scripts/deploy/verify_backend_readiness.py",
+            "03_Scripts/deploy/validate_release_archive.py",
+            "03_Scripts/deploy/cleanup_toolkit_egg_info.py",
+            "03_Scripts/deploy/verify_release_source_seal.py",
+        )
+    }
+    archive_validation = {
+        "schemaVersion": 2,
+        "status": "validated",
+        "archiveSha256": "b" * 64,
+        "archiveBytes": 123,
+        "memberCount": 321,
+        "expandedBytes": 456_789,
+        "rootMode": "0755",
+        "modePolicy": {
+            "publicFiles": ["0644", "0755"],
+            "publicDirectories": ["0755"],
+            "privatePrefixes": [
+                "01_RAW_DATA",
+                "03_Scripts/diagnostics/artifacts",
+            ],
+            "privateFiles": ["0600", "0711"],
+            "privateDirectories": ["0711"],
+        },
+        "memberClasses": {
+            "publicFiles": 300,
+            "publicDirectories": 14,
+            "privateFiles": len(private_files),
+            "privateDirectories": len(private_directories),
+        },
+        "privateModeEvidence": {
+            "requiredWorkbook": {
+                "path": "01_RAW_DATA/VOC_Nordic_SUV_Users_100.xlsx",
+                "type": "file",
+                "mode": "0600",
+            },
+            "diagnosticsArtifacts": {
+                "prefix": "03_Scripts/diagnostics/artifacts/",
+                "fileModes": ["0600"],
+                "directoryModes": ["0711"],
+            },
+        },
+        "privateEntries": {
+            "files": private_files,
+            "directories": private_directories,
+        },
+        "trustedControls": controls,
+    }
+    roots = {
+        "reference": {"mode": "0700", "uid": 0, "gid": 0},
+        "candidate": {
+            "mode": "0711",
+            "uid": EVIDENCE_DEPLOY_UID,
+            "gid": EVIDENCE_DEPLOY_GID,
+        },
+    }
+
+    def materialized(
+        items: list[dict[str, object]],
+        *,
+        uid: int,
+        gid: int,
+    ) -> list[dict[str, object]]:
+        return [
+            {**json.loads(json.dumps(item)), "uid": uid, "gid": gid}
+            for item in items
+        ]
+
+    archive_receipt_bytes = (
+        json.dumps(archive_validation, indent=2, sort_keys=True) + "\n"
+    ).encode("utf-8")
+    source_seal_sha256 = "6" * 64
     return {
+        "evidenceSchemaVersion": 2,
         "status": "verified",
         "featureCommit": "a" * 40,
         "port": 18001,
@@ -134,6 +265,65 @@ def _candidate_evidence() -> dict[str, object]:
         "monthlyStatus": 423,
         "liveBackendWorkerCount": 2,
         "candidateInvocationId": "d" * 32,
+        "buildEvidence": {
+            "schemaVersion": 3,
+            "archiveValidation": archive_validation,
+            "referenceAnchor": {
+                "schemaVersion": 1,
+                "archiveSha256": "b" * 64,
+                "archiveBytes": 123,
+                "archiveValidationSha256": hashlib.sha256(
+                    archive_receipt_bytes
+                ).hexdigest(),
+                "sourceSealSha256": source_seal_sha256,
+                "roots": roots,
+            },
+            "materialization": {
+                "referenceRootMode": "0700",
+                "candidateRootMode": "0711",
+                "extractFlags": [
+                    "--same-permissions",
+                    "--no-overwrite-dir",
+                ],
+                "copyMethod": "independent-sealed-archive-extraction",
+                "roots": roots,
+            },
+            "sourceSeal": {
+                "profile": "source",
+                "sha256": source_seal_sha256,
+                "verifiedAfterBuild": True,
+            },
+            "toolkitEggInfo": {
+                "cleanBeforeEditableInstall": True,
+                "cleanAfterEditableInstall": True,
+            },
+            "privateMaterialization": {
+                "reference": {
+                    "files": materialized(private_files, uid=0, gid=0),
+                    "directories": materialized(
+                        private_directories,
+                        uid=0,
+                        gid=0,
+                    ),
+                },
+                "candidate": {
+                    "files": materialized(
+                        private_files,
+                        uid=EVIDENCE_DEPLOY_UID,
+                        gid=EVIDENCE_DEPLOY_GID,
+                    ),
+                    "directories": materialized(
+                        private_directories,
+                        uid=EVIDENCE_DEPLOY_UID,
+                        gid=EVIDENCE_DEPLOY_GID,
+                    ),
+                },
+            },
+        },
+        "sourceSealRuntimeVerification": {
+            "beforeRuntime": True,
+            "afterRuntime": True,
+        },
         "startPermit": {
             "supervisorInvocationId": "c" * 32,
             "candidateInvocationId": "d" * 32,
@@ -150,6 +340,7 @@ def _candidate_evidence() -> dict[str, object]:
             "ProtectHome": "yes",
             "NoNewPrivileges": "yes",
             "Restart": "no",
+            "UMask": "0022",
             "MemoryHigh": str(3 * 1024 * 1024 * 1024),
             "MemoryMax": str(4 * 1024 * 1024 * 1024),
             "MemorySwapMax": "0",
@@ -177,6 +368,8 @@ def _candidate_evidence() -> dict[str, object]:
                     "APP_METADATA_PREWARM_ENABLED=false",
                     "APP_ADVANCED_ANALYSIS_WARMUP_ENABLED=false",
                     "HERMES_RUN_ENABLED=false",
+                    f"CANARY_DEPLOY_UID={EVIDENCE_DEPLOY_UID}",
+                    f"CANARY_DEPLOY_GID={EVIDENCE_DEPLOY_GID}",
                     "CANARY_SUPERVISOR_INVOCATION_ID="
                     "cccccccccccccccccccccccccccccccc",
                 ),
@@ -202,7 +395,11 @@ def test_feature_canary_uses_only_transient_non_routing_units() -> None:
         '--property="ProtectSystem=strict"',
         '--property="ProtectHome=yes"',
         '--property="MemorySwapMax=0"',
-        '--property="InaccessiblePaths=$LEGACY_ROOT/01_RAW_DATA $LEGACY_ROOT/04_Processed_data /etc/jato-fullstack"',
+        (
+            '--property="InaccessiblePaths=$REFERENCE_ROOT '
+            "$LEGACY_ROOT/01_RAW_DATA $LEGACY_ROOT/04_Processed_data "
+            '/etc/jato-fullstack"'
+        ),
         '--property="APP_REDIS_ENABLED=false"',
     ):
         if required == '--property="APP_REDIS_ENABLED=false"':
@@ -263,10 +460,38 @@ def test_feature_canary_uses_only_transient_non_routing_units() -> None:
         assert token not in script
 
 
+def test_build_and_runtime_integrity_bind_roots_and_source_seal() -> None:
+    script = CONTROLLER.read_text(encoding="utf-8")
+    build = _shell_function(script, "build_candidate_runtime")
+    materialize = _shell_function(script, "prepare_trusted_materialization")
+    verify = _shell_function(script, "verify_trusted_candidate_integrity")
+    controller = _shell_function(script, "run_canary_controller")
+
+    assert 'python3 -B "$SOURCE_SEAL_HELPER" verify' in build
+    assert "trusted-controller-evidence" not in build
+    assert 'sudo -n install -m 0444 -o root -g root "$anchor_temp"' in materialize
+    assert '"archiveValidationSha256"' in materialize
+    assert '"sourceSealSha256"' in materialize
+    assert "reference_seal_digest" in verify
+    assert "candidate_seal_digest" in verify
+    assert 'expected_roots = {' in verify
+    assert '"reference": (reference, 0, 0, 0o700)' in verify
+    assert '"candidate": (' in verify
+    assert 'anchor["roots"].get(label) != actual' in verify
+    assert '"schemaVersion": 3' in verify
+    assert '"copyMethod": "independent-sealed-archive-extraction"' in verify
+    assert controller.count("verify_trusted_candidate_integrity") == 2
+    assert (
+        'verify_trusted_candidate_integrity "$BUILD_INTEGRITY_EVIDENCE_FILE"'
+        in controller
+    )
+
+
 def test_feature_canary_holds_lock_and_cleans_only_its_namespace() -> None:
     script = CONTROLLER.read_text(encoding="utf-8")
 
     assert 'RUN_KEY="${CANARY_COMMIT_SHA:0:12}-${CANARY_RUN_ID}"' in script
+    assert 'REFERENCE_ROOT="$CANARY_ROOT/runtime/$RUN_KEY.reference"' in script
     assert 'RUNTIME_ROOT="$CANARY_ROOT/runtime/$RUN_KEY"' in script
     assert (
         'SUPERVISOR_UNIT="jato-feature-canary-supervisor-$RUN_KEY.service"'
@@ -290,7 +515,7 @@ def test_feature_canary_holds_lock_and_cleans_only_its_namespace() -> None:
     assert "CANARY_BUILD_START_ATTEMPTED" not in script
     assert "refusing to stop a unit without exact canary identity" in script
     assert 'sudo -n systemctl stop "$unit"' in script
-    assert "sudo -n rm -rf --one-file-system \"$RUNTIME_ROOT\"" in script
+    assert 'sudo -n rm -rf --one-file-system "$canary_tree"' in script
     assert "sudo -n systemctl stop \"$ACTIVE_UNIT\"" not in script
     assert "sudo -n systemctl restart \"$ACTIVE_UNIT\"" not in script
     assert "sudo -n systemctl enable" not in script
@@ -477,9 +702,15 @@ def test_launch_pins_the_canonical_lock_identity_before_supervisor_start(
             set -Eeuo pipefail
             unset JATO_PRODUCTION_DEPLOY_LOCK_PATH
             unset CANARY_INITIAL_LOCK_PATH
-            source "$1"
+            source "$1" launch
             calls="$2"
             DEPLOY_STATE_DIR="$HOME/.local/state/jato-production-release"
+            id() {
+              case "$1" in
+                -u|-g) printf '1000\n' ;;
+                *) return 2 ;;
+              esac
+            }
             validate_static_contract() { :; }
             initialize_paths() { :; }
             ensure_canary_roots() { :; }
@@ -506,6 +737,664 @@ def test_launch_pins_the_canonical_lock_identity_before_supervisor_start(
         f"initial={canonical}",
         f"runtime={canonical}",
     ]
+
+
+@pytest.mark.parametrize(
+    ("scenario", "expected_ok"),
+    (
+        ("empty", True),
+        ("matching", True),
+        ("uid-conflict", False),
+        ("gid-conflict", False),
+        ("root", False),
+    ),
+)
+def test_launch_pins_only_the_actual_non_root_deploy_identity(
+    tmp_path: Path,
+    scenario: str,
+    expected_ok: bool,
+) -> None:
+    harness = tmp_path / "deploy-identity-pin-harness.sh"
+    harness.write_text(
+        textwrap.dedent(
+            """\
+            #!/usr/bin/env bash
+            set -Eeuo pipefail
+            scenario="$2"
+            stub_uid="1000"
+            stub_gid="1000"
+            case "$scenario" in
+              matching)
+                CANARY_DEPLOY_UID="1000"
+                CANARY_DEPLOY_GID="1000"
+                ;;
+              uid-conflict)
+                CANARY_DEPLOY_UID="1001"
+                CANARY_DEPLOY_GID="1000"
+                ;;
+              gid-conflict)
+                CANARY_DEPLOY_UID="1000"
+                CANARY_DEPLOY_GID="1001"
+                ;;
+              root)
+                stub_uid="0"
+                stub_gid="0"
+                ;;
+            esac
+            source "$1" launch
+            id() {
+              case "$1" in
+                -u) printf '%s\n' "$stub_uid" ;;
+                -g) printf '%s\n' "$stub_gid" ;;
+                *) return 2 ;;
+              esac
+            }
+            pin_canary_deploy_identity
+            printf '%s:%s\n' "$CANARY_DEPLOY_UID" "$CANARY_DEPLOY_GID"
+            """
+        ),
+        encoding="utf-8",
+    )
+    result = subprocess.run(
+        ["bash", str(harness), str(CONTROLLER), scenario],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert (result.returncode == 0) is expected_ok, result.stderr
+    if expected_ok:
+        assert result.stdout.strip() == "1000:1000"
+
+
+@pytest.mark.parametrize(
+    ("mode", "scenario", "expected_ok"),
+    (
+        ("launch", "exact", True),
+        ("supervisor", "exact", True),
+        ("controller", "exact", True),
+        ("build", "exact", True),
+        ("reconcile", "exact", True),
+        ("controller", "uid-drift", False),
+        ("build", "gid-drift", False),
+        ("reconcile", "root", False),
+    ),
+)
+def test_control_modes_reject_identity_drift(
+    tmp_path: Path,
+    mode: str,
+    scenario: str,
+    expected_ok: bool,
+) -> None:
+    harness = tmp_path / "control-identity-harness.sh"
+    harness.write_text(
+        textwrap.dedent(
+            """\
+            #!/usr/bin/env bash
+            set -Eeuo pipefail
+            mode="$2"
+            scenario="$3"
+            source "$1" "$mode"
+            CANARY_DEPLOY_UID="1000"
+            CANARY_DEPLOY_GID="1000"
+            stub_uid="1000"
+            stub_gid="1000"
+            case "$scenario" in
+              uid-drift) stub_uid="1001" ;;
+              gid-drift) stub_gid="1001" ;;
+              root)
+                stub_uid="0"
+                stub_gid="0"
+                ;;
+            esac
+            id() {
+              case "$1" in
+                -u) printf '%s\n' "$stub_uid" ;;
+                -g) printf '%s\n' "$stub_gid" ;;
+                *) return 2 ;;
+              esac
+            }
+            validate_canary_deploy_identity
+            """
+        ),
+        encoding="utf-8",
+    )
+    result = subprocess.run(
+        ["bash", str(harness), str(CONTROLLER), mode, scenario],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert (result.returncode == 0) is expected_ok, result.stderr
+
+
+@pytest.mark.parametrize(
+    ("scenario", "expected_ok"),
+    (
+        ("distinct", True),
+        ("equal-uid", False),
+        ("equal-gid", False),
+        ("missing-uid", False),
+        ("missing-gid", False),
+        ("malformed-uid", False),
+        ("malformed-gid", False),
+        ("root", False),
+    ),
+)
+def test_dynamic_runtime_identity_must_be_distinct_and_well_formed(
+    tmp_path: Path,
+    scenario: str,
+    expected_ok: bool,
+) -> None:
+    harness = tmp_path / "runtime-identity-harness.sh"
+    harness.write_text(
+        textwrap.dedent(
+            """\
+            #!/usr/bin/env bash
+            set -Eeuo pipefail
+            scenario="$2"
+            source "$1" runtime
+            CANARY_DEPLOY_UID="1000"
+            CANARY_DEPLOY_GID="1000"
+            stub_uid="2000"
+            stub_gid="3000"
+            case "$scenario" in
+              equal-uid) stub_uid="1000" ;;
+              equal-gid) stub_gid="1000" ;;
+              missing-uid) CANARY_DEPLOY_UID="" ;;
+              missing-gid) CANARY_DEPLOY_GID="" ;;
+              malformed-uid) CANARY_DEPLOY_UID="uid-1000" ;;
+              malformed-gid) CANARY_DEPLOY_GID="gid-1000" ;;
+              root)
+                stub_uid="0"
+                stub_gid="0"
+                ;;
+            esac
+            id() {
+              case "$1" in
+                -u) printf '%s\n' "$stub_uid" ;;
+                -g) printf '%s\n' "$stub_gid" ;;
+                *) return 2 ;;
+              esac
+            }
+            validate_canary_deploy_identity
+            """
+        ),
+        encoding="utf-8",
+    )
+    result = subprocess.run(
+        ["bash", str(harness), str(CONTROLLER), scenario],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert (result.returncode == 0) is expected_ok, result.stderr
+
+
+@pytest.mark.parametrize(
+    ("wrong_pinned_gid", "expected_ok"),
+    ((False, True), (True, False)),
+)
+def test_canary_source_parent_uses_the_pinned_deploy_gid(
+    tmp_path: Path,
+    wrong_pinned_gid: bool,
+    expected_ok: bool,
+) -> None:
+    current_uid = os.getuid()
+    current_gid = os.getgid()
+    patched = tmp_path / "candidate-canary.sh"
+    source = CONTROLLER.read_text(encoding="utf-8")
+    replacements = {
+        "Path(sys.argv[1]): (0, 0, 0o755),": (
+            f"Path(sys.argv[1]): ({current_uid}, {current_gid}, 0o755),"
+        ),
+        "Path(sys.argv[2]): (0, 0, 0o755),": (
+            f"Path(sys.argv[2]): ({current_uid}, {current_gid}, 0o755),"
+        ),
+        "Path(sys.argv[3]): (0, 0, 0o755),": (
+            f"Path(sys.argv[3]): ({current_uid}, {current_gid}, 0o755),"
+        ),
+        "Path(sys.argv[4]): (0, deploy_gid, 0o750),": (
+            f"Path(sys.argv[4]): ({current_uid}, deploy_gid, 0o750),"
+        ),
+    }
+    for original, replacement in replacements.items():
+        assert source.count(original) == 1
+        source = source.replace(original, replacement)
+    patched.write_text(source, encoding="utf-8")
+
+    root = tmp_path / "canary"
+    for path, mode in (
+        (root, 0o755),
+        (root / "runtime", 0o755),
+        (root / "control", 0o755),
+        (root / "sources", 0o750),
+    ):
+        path.mkdir(exist_ok=True)
+        path.chmod(mode)
+    deploy_gid = current_gid + 1 if wrong_pinned_gid else current_gid
+    harness = tmp_path / "parent-owner-harness.sh"
+    harness.write_text(
+        textwrap.dedent(
+            """\
+            #!/usr/bin/env bash
+            set -Eeuo pipefail
+            source "$1" supervisor
+            CANARY_ROOT="$2"
+            CANARY_DEPLOY_GID="$3"
+            verify_canary_parent_roots
+            """
+        ),
+        encoding="utf-8",
+    )
+    result = subprocess.run(
+        [
+            "bash",
+            str(harness),
+            str(patched),
+            str(root),
+            str(deploy_gid),
+        ],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert (result.returncode == 0) is expected_ok, result.stderr
+
+
+def test_dynamic_runtime_can_lstat_root_owned_canary_parents() -> None:
+    if not sys.platform.startswith("linux"):
+        pytest.skip("requires Linux setpriv permission semantics")
+
+    sudo = shutil.which("sudo")
+    setpriv = shutil.which("setpriv")
+    if sudo is None or setpriv is None:
+        pytest.skip("requires sudo and setpriv")
+
+    sudo_probe = subprocess.run(
+        [sudo, "-n", "true"],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if sudo_probe.returncode != 0:
+        pytest.skip("requires non-interactive sudo")
+
+    deploy_gid = 61001
+    runtime_uid = 61002
+    runtime_gid = 61003
+    identity_probe = subprocess.run(
+        [
+            sudo,
+            "-n",
+            setpriv,
+            f"--reuid={runtime_uid}",
+            f"--regid={runtime_gid}",
+            "--clear-groups",
+            "id",
+            "-u",
+        ],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if (
+        identity_probe.returncode != 0
+        or identity_probe.stdout.strip() != str(runtime_uid)
+    ):
+        pytest.skip("setpriv cannot create the isolated runtime identity")
+
+    permission_root = Path(
+        tempfile.mkdtemp(prefix="jato-canary-parent-permissions-", dir="/tmp")
+    )
+    assert permission_root.parent == Path("/tmp")
+    assert permission_root.name.startswith(
+        "jato-canary-parent-permissions-"
+    )
+    canary_root = permission_root / "canary"
+    controller_copy = permission_root / "candidate-canary.sh"
+    harness = permission_root / "verify-parents.sh"
+    shutil.copyfile(CONTROLLER, controller_copy)
+    harness.write_text(
+        textwrap.dedent(
+            """\
+            #!/usr/bin/env bash
+            set -Eeuo pipefail
+            source "$1" runtime
+            CANARY_ROOT="$2"
+            CANARY_DEPLOY_GID="$3"
+            verify_canary_parent_roots
+            python3 -B - "$CANARY_ROOT/sources" <<'PY'
+            import os
+            import stat
+            import sys
+
+            metadata = os.lstat(sys.argv[1])
+            print(
+                "lstat-ok:"
+                f"{os.getuid()}:{os.getgid()}:"
+                f"{metadata.st_uid}:{metadata.st_gid}:"
+                f"{stat.S_IMODE(metadata.st_mode):04o}"
+            )
+            PY
+            """
+        ),
+        encoding="utf-8",
+    )
+
+    try:
+        for path in (
+            canary_root,
+            canary_root / "runtime",
+            canary_root / "control",
+            canary_root / "sources",
+        ):
+            path.mkdir(exist_ok=True)
+
+        setup = subprocess.run(
+            [
+                sudo,
+                "-n",
+                "chown",
+                "0:0",
+                str(permission_root),
+                str(controller_copy),
+                str(harness),
+                str(canary_root),
+                str(canary_root / "runtime"),
+                str(canary_root / "control"),
+            ],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        assert setup.returncode == 0, setup.stderr
+        setup = subprocess.run(
+            [
+                sudo,
+                "-n",
+                "chown",
+                f"0:{deploy_gid}",
+                str(canary_root / "sources"),
+            ],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        assert setup.returncode == 0, setup.stderr
+        setup = subprocess.run(
+            [
+                sudo,
+                "-n",
+                "chmod",
+                "0755",
+                str(permission_root),
+                str(controller_copy),
+                str(harness),
+                str(canary_root),
+                str(canary_root / "runtime"),
+                str(canary_root / "control"),
+            ],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        assert setup.returncode == 0, setup.stderr
+        setup = subprocess.run(
+            [
+                sudo,
+                "-n",
+                "chmod",
+                "0750",
+                str(canary_root / "sources"),
+            ],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        assert setup.returncode == 0, setup.stderr
+
+        result = subprocess.run(
+            [
+                sudo,
+                "-n",
+                setpriv,
+                f"--reuid={runtime_uid}",
+                f"--regid={runtime_gid}",
+                "--clear-groups",
+                "bash",
+                str(harness),
+                str(controller_copy),
+                str(canary_root),
+                str(deploy_gid),
+            ],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        assert result.returncode == 0, result.stderr
+        assert result.stdout.strip() == (
+            f"lstat-ok:{runtime_uid}:{runtime_gid}:0:{deploy_gid}:0750"
+        )
+    finally:
+        cleanup = subprocess.run(
+            [
+                sudo,
+                "-n",
+                "rm",
+                "-rf",
+                "--one-file-system",
+                "--",
+                str(permission_root),
+            ],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        assert cleanup.returncode == 0, cleanup.stderr
+        assert not permission_root.exists()
+
+
+def test_each_transient_scope_propagates_pinned_identity_exactly_once() -> None:
+    script = CONTROLLER.read_text(encoding="utf-8")
+    control_environment = _shell_function(
+        script,
+        "build_canary_control_environment",
+    )
+    for name in ("UID", "GID"):
+        assignment = (
+            f'"CANARY_DEPLOY_{name}=$CANARY_DEPLOY_{name}"'
+        )
+        assert control_environment.count(assignment) == 1
+
+    for function_name in (
+        "start_canary_supervisor",
+        "run_canary_controller_unit",
+    ):
+        scope = _shell_function(script, function_name)
+        assert scope.count("build_canary_control_environment") == 1
+        assert scope.count('--uid="$CANARY_DEPLOY_UID"') == 1
+        assert scope.count('--gid="$CANARY_DEPLOY_GID"') == 1
+
+    build = _shell_function(script, "run_build_scope")
+    assert build.count('--uid="$CANARY_DEPLOY_UID"') == 1
+    assert build.count('--gid="$CANARY_DEPLOY_GID"') == 1
+    assert (
+        build.count(
+            '--setenv="CANARY_DEPLOY_UID=$CANARY_DEPLOY_UID"',
+        )
+        == 1
+    )
+    assert (
+        build.count(
+            '--setenv="CANARY_DEPLOY_GID=$CANARY_DEPLOY_GID"',
+        )
+        == 1
+    )
+
+    runtime = _shell_function(script, "start_candidate_service")
+    assert runtime.count('--property="DynamicUser=yes"') == 1
+    assert '--uid="$CANARY_DEPLOY_UID"' not in runtime
+    assert '--gid="$CANARY_DEPLOY_GID"' not in runtime
+    assert "SupplementaryGroups" not in runtime
+    assert (
+        runtime.count(
+            '--setenv="CANARY_DEPLOY_UID=$CANARY_DEPLOY_UID"',
+        )
+        == 1
+    )
+    assert (
+        runtime.count(
+            '--setenv="CANARY_DEPLOY_GID=$CANARY_DEPLOY_GID"',
+        )
+        == 1
+    )
+
+
+@pytest.mark.parametrize(
+    "failure_step",
+    (
+        "ensure_canary_roots",
+        "stage_canary_inputs",
+        "record_checkpoint",
+        "start_canary_supervisor",
+    ),
+)
+def test_pre_supervisor_launch_failure_removes_exact_run_namespace(
+    tmp_path: Path,
+    failure_step: str,
+) -> None:
+    harness = tmp_path / "launch-rollback-harness.sh"
+    harness.write_text(
+        textwrap.dedent(
+            """\
+            #!/usr/bin/env bash
+            set -Eeuo pipefail
+            source "$1" launch
+            root="$2"
+            failure_step="$3"
+            CANARY_ROOT="$root/canary"
+            CANARY_STATE_ROOT="$root/state"
+            CANARY_COMMIT_SHA="aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+            CANARY_RUN_ID="rollback"
+            DEPLOY_STATE_DIR="$root/deploy-state"
+            id() {
+              case "$1" in
+                -u|-g) printf '1000\n' ;;
+                *) return 2 ;;
+              esac
+            }
+            mkdir -p \
+              "$CANARY_ROOT/runtime" "$CANARY_ROOT/control" \
+              "$CANARY_ROOT/sources" \
+              "$CANARY_STATE_ROOT/checkpoints" \
+              "$CANARY_STATE_ROOT/receipts" \
+              "$CANARY_STATE_ROOT/evidence" \
+              "$CANARY_STATE_ROOT/snapshots"
+            sudo() {
+              [[ "${1:-}" == "-n" ]] && shift
+              if [[ "${1:-}" == "rm" ]]; then
+                shift
+                filtered=()
+                for argument in "$@"; do
+                  [[ "$argument" == "--one-file-system" ]] && continue
+                  filtered+=("$argument")
+                done
+                command rm "${filtered[@]}"
+                return
+              fi
+              "$@"
+            }
+            validate_static_contract() { :; }
+            verify_canary_parent_roots() { :; }
+            cleanup_canary_state_run() {
+              local path=""
+              for path in \
+                "$CHECKPOINT_FILE" "$RECEIPT_FILE" "$EVIDENCE_FILE" \
+                "$BEFORE_SNAPSHOT" "$AFTER_SNAPSHOT" \
+                "$SUPERVISOR_GENERATION_SOURCE_FILE" \
+                "$CANDIDATE_START_PERMIT_SOURCE_FILE"; do
+                command rm -f -- "$path"
+              done
+            }
+            start_canary_supervisor() {
+              [[ "$failure_step" != "start_canary_supervisor" ]]
+            }
+            systemctl() {
+              printf 'not-found\\n'
+            }
+            create_run_residue() {
+              mkdir -p "$REFERENCE_ROOT" "$RUNTIME_ROOT" "$CONTROL_ROOT"
+              printf 'sealed\\n' >"$STAGED_SOURCE_ARCHIVE"
+            }
+            ensure_canary_roots() {
+              if [[ "$failure_step" == "ensure_canary_roots" ]]; then
+                create_run_residue
+                return 1
+              fi
+            }
+            stage_canary_inputs() {
+              create_run_residue
+              [[ "$failure_step" != "stage_canary_inputs" ]]
+            }
+            record_checkpoint() {
+              printf 'checkpoint\\n' >"$CHECKPOINT_FILE"
+              [[ "$failure_step" != "record_checkpoint" ]]
+            }
+            set +e
+            launch_canary
+            launch_rc=$?
+            set -e
+            [[ "$launch_rc" -eq 1 ]]
+            for path in \
+              "$REFERENCE_ROOT" "$RUNTIME_ROOT" "$CONTROL_ROOT" \
+              "$STAGED_SOURCE_ARCHIVE" "$CHECKPOINT_FILE" "$RECEIPT_FILE" \
+              "$EVIDENCE_FILE" "$BEFORE_SNAPSHOT" "$AFTER_SNAPSHOT" \
+              "$SUPERVISOR_GENERATION_SOURCE_FILE" \
+              "$CANDIDATE_START_PERMIT_SOURCE_FILE"; do
+              [[ ! -e "$path" && ! -L "$path" ]]
+            done
+            """
+        ),
+        encoding="utf-8",
+    )
+    result = subprocess.run(
+        [
+            "bash",
+            str(harness),
+            str(CONTROLLER),
+            str(tmp_path),
+            failure_step,
+        ],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert result.returncode == 0, result.stderr + result.stdout
+
+
+def test_controller_delegates_launch_state_cleanup_to_canonical_guard() -> None:
+    script = CONTROLLER.read_text(encoding="utf-8")
+    cleanup = _shell_function(script, "cleanup_canary_state_run")
+    assert '"$CANARY_GUARD" cleanup-launch-state' in cleanup
+    assert '--state-root "$CANARY_STATE_ROOT"' in cleanup
+    assert '--run-key "$RUN_KEY"' in cleanup
+    guard = GUARD_PATH.read_text(encoding="utf-8")
+    assert 'arguments.state_root != Path("/var/lib/jato-canary")' in guard
+    assert "canary launch state cleanup root is not reviewed" in guard
+
+
+def test_ambiguous_supervisor_launch_retains_control_bundle(
+    tmp_path: Path,
+) -> None:
+    script = CONTROLLER.read_text(encoding="utf-8")
+    launch = _shell_function(script, "launch_canary")
+    assert launch.index("verify_supervisor_unit_absent") < launch.index(
+        "cleanup_pre_supervisor_launch",
+        launch.index("start_canary_supervisor"),
+    )
+    verifier = _shell_function(script, "verify_supervisor_unit_absent")
+    assert '[[ "$load_state" != "not-found" ]]' in verifier
+    assert "unit state is not safely absent" in verifier
 
 
 def test_controller_runs_in_bounded_transient_systemd_unit(
@@ -1330,9 +2219,18 @@ def test_runtime_wrapper_checks_generation_before_exact_exec(
             """\
             #!/usr/bin/env bash
             set -Eeuo pipefail
-            source "$1"
+            source "$1" runtime
             calls="$2"
             scenario="$3"
+            CANARY_DEPLOY_UID="1000"
+            CANARY_DEPLOY_GID="1000"
+            id() {
+              case "$1" in
+                -u) printf '2000\n' ;;
+                -g) printf '3000\n' ;;
+                *) return 2 ;;
+              esac
+            }
             initialize_paths() {
               RUNTIME_ROOT="/opt/jato-canary/runtime/test"
               printf 'initialize\\n' >>"$calls"
@@ -1514,10 +2412,19 @@ def test_success_path_persists_controller_completed_marker(
             resolve_active_unit() { printf 'active\\n' >>"$calls"; }
             capture_snapshot() { printf 'snapshot:%s\\n' "$1" >>"$calls"; }
             python3() { printf 'python:%s\\n' "$*" >>"$calls"; }
+            prepare_trusted_materialization() {
+              printf 'materialize\\n' >>"$calls"
+            }
             run_build_scope() { printf 'build\\n' >>"$calls"; }
+            verify_trusted_candidate_integrity() {
+              printf 'integrity:%s\\n' "${1:-verify-only}" >>"$calls"
+            }
             start_candidate_service() { printf 'runtime\\n' >>"$calls"; }
             authorize_candidate_runtime() { printf 'permit\\n' >>"$calls"; }
             verify_candidate_service() { printf 'candidate\\n' >>"$calls"; }
+            persist_candidate_integrity_evidence() {
+              printf 'persist-evidence\\n' >>"$calls"
+            }
             run_canary_controller
             """
         ),
@@ -2381,6 +3288,8 @@ def test_candidate_evidence_rejects_worker_or_prewarm_drift() -> None:
     guard = _guard()
     identity = {
         "commit": "a" * 40,
+        "archiveSha256": "b" * 64,
+        "archiveBytes": 123,
         "port": 18001,
         "runId": "canary-1",
     }
@@ -2497,6 +3406,114 @@ def test_candidate_evidence_rejects_worker_or_prewarm_drift() -> None:
             guard.verify_candidate_evidence(evidence, identity)
 
 
+@pytest.mark.parametrize(
+    ("scenario", "message"),
+    (
+        ("missing-uid", "lacks positive pinned deploy identities"),
+        ("missing-gid", "lacks positive pinned deploy identities"),
+        ("tampered-uid", "differs from trusted materialization"),
+        ("tampered-gid", "differs from trusted materialization"),
+        ("duplicate-uid", "malformed or ambiguous"),
+        ("duplicate-gid", "malformed or ambiguous"),
+    ),
+)
+def test_terminal_candidate_evidence_binds_one_exact_deploy_identity(
+    scenario: str,
+    message: str,
+) -> None:
+    guard = _guard()
+    identity = {
+        "commit": "a" * 40,
+        "archiveSha256": "b" * 64,
+        "archiveBytes": 123,
+        "port": 18001,
+        "runId": "canary-1",
+    }
+    evidence = _candidate_evidence()
+    systemd = evidence["systemd"]
+    assert isinstance(systemd, dict)
+    tokens = str(systemd["Environment"]).split()
+    uid_token = f"CANARY_DEPLOY_UID={EVIDENCE_DEPLOY_UID}"
+    gid_token = f"CANARY_DEPLOY_GID={EVIDENCE_DEPLOY_GID}"
+    if scenario == "missing-uid":
+        tokens.remove(uid_token)
+    elif scenario == "missing-gid":
+        tokens.remove(gid_token)
+    elif scenario == "tampered-uid":
+        tokens[tokens.index(uid_token)] = (
+            f"CANARY_DEPLOY_UID={EVIDENCE_DEPLOY_UID + 2}"
+        )
+    elif scenario == "tampered-gid":
+        tokens[tokens.index(gid_token)] = (
+            f"CANARY_DEPLOY_GID={EVIDENCE_DEPLOY_GID + 2}"
+        )
+    elif scenario == "duplicate-uid":
+        tokens.append(uid_token)
+    elif scenario == "duplicate-gid":
+        tokens.append(gid_token)
+    systemd["Environment"] = " ".join(tokens)
+
+    with pytest.raises(guard.CanaryGuardError, match=message):
+        guard.verify_candidate_evidence(evidence, identity)
+
+
+@pytest.mark.parametrize(
+    "scenario",
+    (
+        "root-mode",
+        "mode-policy",
+        "member-count",
+        "expanded-bytes",
+        "root-owner",
+        "root-owner-mismatch",
+    ),
+)
+def test_candidate_evidence_rejects_archive_or_root_integrity_drift(
+    scenario: str,
+) -> None:
+    guard = _guard()
+    identity = {
+        "commit": "a" * 40,
+        "archiveSha256": "b" * 64,
+        "archiveBytes": 123,
+        "port": 18001,
+        "runId": "canary-1",
+    }
+    evidence = _candidate_evidence()
+    build = evidence["buildEvidence"]
+    assert isinstance(build, dict)
+    archive = build["archiveValidation"]
+    materialization = build["materialization"]
+    assert isinstance(archive, dict)
+    assert isinstance(materialization, dict)
+    roots = materialization["roots"]
+    assert isinstance(roots, dict)
+    if scenario == "root-mode":
+        archive["rootMode"] = "0700"
+    elif scenario == "mode-policy":
+        mode_policy = archive["modePolicy"]
+        assert isinstance(mode_policy, dict)
+        mode_policy["publicFiles"] = ["0644"]
+    elif scenario == "member-count":
+        archive["memberCount"] = True
+    elif scenario == "expanded-bytes":
+        archive["expandedBytes"] = 0
+    elif scenario == "root-owner":
+        reference = roots["reference"]
+        assert isinstance(reference, dict)
+        reference["uid"] = -1
+    elif scenario == "root-owner-mismatch":
+        candidate = roots["candidate"]
+        assert isinstance(candidate, dict)
+        candidate["gid"] = EVIDENCE_DEPLOY_GID + 1
+
+    with pytest.raises(
+        guard.CanaryGuardError,
+        match="archive-validation|root ownership|private file",
+    ):
+        guard.verify_candidate_evidence(evidence, identity)
+
+
 def test_success_receipt_requires_and_records_complete_evidence(
     tmp_path: Path,
 ) -> None:
@@ -2524,6 +3541,18 @@ def test_success_receipt_requires_and_records_complete_evidence(
         json.dumps(_candidate_evidence()),
         encoding="utf-8",
     )
+    for phase, message in (
+        ("source_anchored", "trusted source reference anchored"),
+        ("source_verified", "candidate source verified after build"),
+        ("candidate_verified", "candidate runtime verified"),
+    ):
+        guard.record_checkpoint(
+            path=checkpoint_path,
+            identity=identity,
+            phase=phase,
+            status="completed",
+            message=message,
+        )
     guard.record_checkpoint(
         path=checkpoint_path,
         identity=identity,
@@ -2569,6 +3598,92 @@ def test_success_receipt_requires_and_records_complete_evidence(
     assert receipt["candidate"]["liveBackendWorkerCount"] == 2
 
 
+@pytest.mark.parametrize("unsafe_level", ("state_root", "checkpoints"))
+def test_launch_state_cleanup_rejects_linked_parent_without_external_delete(
+    tmp_path: Path,
+    unsafe_level: str,
+) -> None:
+    guard = _guard()
+    anchor = tmp_path / "var/lib"
+    anchor.mkdir(parents=True)
+    anchor.chmod(0o755)
+    state_root = anchor / "jato-canary"
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    outside.chmod(0o750)
+    run_key = "aaaaaaaaaaaa-run"
+
+    if unsafe_level == "state_root":
+        (outside / "checkpoints").mkdir(mode=0o750)
+        sentinel = outside / "checkpoints" / f"{run_key}.json"
+        sentinel.write_text("must remain", encoding="utf-8")
+        state_root.symlink_to(outside, target_is_directory=True)
+    else:
+        state_root.mkdir(mode=0o750)
+        for directory in ("receipts", "evidence", "snapshots"):
+            (state_root / directory).mkdir(mode=0o750)
+        sentinel = outside / f"{run_key}.json"
+        sentinel.write_text("must remain", encoding="utf-8")
+        (state_root / "checkpoints").symlink_to(
+            outside,
+            target_is_directory=True,
+        )
+
+    with pytest.raises(
+        guard.CanaryGuardError,
+        match="unavailable or linked canary state directory",
+    ):
+        guard.cleanup_launch_state(
+            state_root=state_root,
+            run_key=run_key,
+            expected_uid=os.getuid(),
+            expected_gid=os.getgid(),
+            anchor=anchor,
+            expected_anchor_uid=os.getuid(),
+            expected_anchor_gid=os.getgid(),
+        )
+
+    assert sentinel.read_text(encoding="utf-8") == "must remain"
+
+
+def test_launch_state_cleanup_unlinks_only_exact_run_files(tmp_path: Path) -> None:
+    guard = _guard()
+    anchor = tmp_path / "var/lib"
+    anchor.mkdir(parents=True)
+    anchor.chmod(0o755)
+    state_root = anchor / "jato-canary"
+    state_root.mkdir(mode=0o750)
+    for directory in ("checkpoints", "receipts", "evidence", "snapshots"):
+        (state_root / directory).mkdir(mode=0o750)
+    run_key = "aaaaaaaaaaaa-run"
+    exact_files = (
+        state_root / "checkpoints" / f"{run_key}.json",
+        state_root / "receipts" / f"{run_key}.json",
+        state_root / "evidence" / f"{run_key}.json",
+        state_root / "snapshots" / f"{run_key}.before.json",
+        state_root / "snapshots" / f"{run_key}.after.json",
+        state_root / f".{run_key}.supervisor-invocation-id.source",
+        state_root / f".{run_key}.candidate-start-permit.source",
+    )
+    for path in exact_files:
+        path.write_text("run state", encoding="utf-8")
+    unrelated = state_root / "checkpoints/unrelated.json"
+    unrelated.write_text("keep", encoding="utf-8")
+
+    guard.cleanup_launch_state(
+        state_root=state_root,
+        run_key=run_key,
+        expected_uid=os.getuid(),
+        expected_gid=os.getgid(),
+        anchor=anchor,
+        expected_anchor_uid=os.getuid(),
+        expected_anchor_gid=os.getgid(),
+    )
+
+    assert all(not path.exists() and not path.is_symlink() for path in exact_files)
+    assert unrelated.read_text(encoding="utf-8") == "keep"
+
+
 @pytest.mark.parametrize(
     ("scenario", "message"),
     (
@@ -2577,6 +3692,8 @@ def test_success_receipt_requires_and_records_complete_evidence(
         ("generation-mismatch", "different supervisor generations"),
         ("missing-terminal-marker", "exactly one durable"),
         ("reordered-terminal-marker", "out of order"),
+        ("missing-source-marker", "exactly one durable"),
+        ("reordered-source-marker", "out of order"),
     ),
 )
 def test_receipt_rejects_forged_or_unreconciled_terminal_writer(
@@ -2602,6 +3719,24 @@ def test_receipt_rejects_forged_or_unreconciled_terminal_writer(
         "phase": "supervisor_reconciled",
         "status": "completed",
         "events": [
+            {
+                "at": "2026-07-23T23:57:00+00:00",
+                "phase": "source_anchored",
+                "status": "completed",
+                "message": "trusted source reference anchored",
+            },
+            {
+                "at": "2026-07-23T23:58:00+00:00",
+                "phase": "source_verified",
+                "status": "completed",
+                "message": "candidate source verified after build",
+            },
+            {
+                "at": "2026-07-23T23:59:00+00:00",
+                "phase": "candidate_verified",
+                "status": "completed",
+                "message": "candidate runtime verified",
+            },
             {
                 "at": "2026-07-24T00:00:00+00:00",
                 "phase": "controller_completed",
@@ -2646,10 +3781,20 @@ def test_receipt_rejects_forged_or_unreconciled_terminal_writer(
         checkpoint["events"] = checkpoint["events"][:-1]
     elif scenario == "reordered-terminal-marker":
         checkpoint["events"] = [
-            checkpoint["events"][2],
-            checkpoint["events"][0],
-            checkpoint["events"][1],
+            checkpoint["events"][-1],
+            *checkpoint["events"][:-1],
         ]
+    elif scenario == "missing-source-marker":
+        checkpoint["events"] = [
+            event
+            for event in checkpoint["events"]
+            if event["phase"] != "source_verified"
+        ]
+    elif scenario == "reordered-source-marker":
+        checkpoint["events"][0], checkpoint["events"][1] = (
+            checkpoint["events"][1],
+            checkpoint["events"][0],
+        )
 
     with pytest.raises(guard.CanaryGuardError, match=message):
         guard.verify_receipt_payload(payload, identity)
@@ -3124,6 +4269,7 @@ def test_cleanup_stops_verified_units_without_in_memory_attempt_flags(
             root="$2"
             scenario="$3"
             RUN_KEY="aaaaaaaaaaaa-canary-1"
+            REFERENCE_ROOT="/opt/jato-canary/runtime/$RUN_KEY.reference"
             RUNTIME_ROOT="/opt/jato-canary/runtime/$RUN_KEY"
             CONTROL_ROOT="/opt/jato-canary/control/$RUN_KEY"
             STAGED_SOURCE_ARCHIVE="/opt/jato-canary/sources/$RUN_KEY.tar.gz"
@@ -3139,6 +4285,7 @@ def test_cleanup_stops_verified_units_without_in_memory_attempt_flags(
 
             marker_for_path() {
               case "$1" in
+                "$REFERENCE_ROOT") printf 'reference' ;;
                 "$RUNTIME_ROOT") printf 'runtime' ;;
                 "$CONTROL_ROOT") printf 'control' ;;
                 "$STAGED_SOURCE_ARCHIVE") printf 'source' ;;
@@ -3289,6 +4436,7 @@ def test_cleanup_stops_verified_units_without_in_memory_attempt_flags(
         assert result.returncode == 0, result.stderr
         assert f"stop:jato-feature-canary-{('a' * 12)}-canary-1.service" in calls
         assert f"stop:jato-feature-canary-build-{('a' * 12)}-canary-1.service" in calls
+        assert "remove:reference\n" in calls
         assert "remove:runtime\n" in calls
         assert "remove:source\n" in calls
         assert "remove:control\n" not in calls
@@ -3299,9 +4447,12 @@ def test_cleanup_stops_verified_units_without_in_memory_attempt_flags(
         build_stop = events.index(
             f"stop:jato-feature-canary-build-{('a' * 12)}-canary-1.service",
         )
+        reference_remove = events.index("remove:reference")
         runtime_remove = events.index("remove:runtime")
         source_remove = events.index("remove:source")
         assert runtime_stop < runtime_remove
+        assert runtime_stop < reference_remove
         assert runtime_stop < source_remove
         assert build_stop < runtime_remove
+        assert build_stop < reference_remove
         assert build_stop < source_remove

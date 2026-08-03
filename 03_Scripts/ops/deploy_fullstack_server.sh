@@ -59,6 +59,7 @@ PREBUILT_FRONTEND_DIR="${PREBUILT_FRONTEND_DIR:-}"
 BACKEND_REQUIREMENTS="$BACKEND_DIR/requirements.txt"
 VENV_DIR="$REPO_DIR/.venv"
 TOOLKIT_DIR="$REPO_DIR/07_ScrapingToolkit"
+TOOLKIT_EGG_INFO_HELPER="$REPO_DIR/03_Scripts/deploy/cleanup_toolkit_egg_info.py"
 DEPLOY_RELEASE_FILE="$REPO_DIR/hermes/deploy_release.json"
 PREVIOUS_DEPLOY_RELEASE_FILE="${PREVIOUS_DEPLOY_RELEASE_FILE:-}"
 DEPLOY_FAILURE_FILE="${DEPLOY_FAILURE_FILE:-$REPO_DIR/hermes/deploy_failure_context.txt}"
@@ -914,6 +915,38 @@ require_command curl
 require_command python3
 require_command sha256sum
 
+cleanup_scraping_toolkit_egg_info() {
+  if [[ ! -f "$TOOLKIT_EGG_INFO_HELPER" ]] \
+    || [[ -L "$TOOLKIT_EGG_INFO_HELPER" ]]; then
+    fail_deploy "Toolkit egg-info cleanup helper is missing or unsafe"
+  fi
+  python3 -B "$TOOLKIT_EGG_INFO_HELPER" --toolkit-root "$TOOLKIT_DIR"
+}
+
+cleanup_toolkit_on_exit() {
+  local original_status="$?"
+  trap - EXIT
+  if ! cleanup_scraping_toolkit_egg_info; then
+    exit 1
+  fi
+  exit "$original_status"
+}
+
+install_scraping_toolkit_editable() {
+  trap cleanup_toolkit_on_exit EXIT
+
+  if [[ ! -d "$TOOLKIT_DIR" ]] || [[ -L "$TOOLKIT_DIR" ]]; then
+    fail_deploy "Scraping toolkit source must be a real directory: $TOOLKIT_DIR"
+  fi
+
+  cleanup_scraping_toolkit_egg_info
+  python -m pip install -e "$TOOLKIT_DIR" \
+    -i "$PIP_INDEX_URL" \
+    --trusted-host "$PIP_TRUSTED_HOST"
+  cleanup_scraping_toolkit_egg_info
+  trap - EXIT
+}
+
 CURRENT_STEP="Validate persistent release checkpoint"
 initialize_release_checkpoint
 if [[ "$CHECKPOINT_ALREADY_COMPLETE" == "true" ]]; then
@@ -1193,11 +1226,22 @@ normalize_frontend_public_permissions() {
     return 1
   fi
   for parent_dir in "$REPO_DIR" "$REPO_DIR/06_AppPlatform" "$FRONTEND_DIR"; do
-    if [[ ! -d "$parent_dir" ]]; then
-      echo "[ERROR] Frontend parent directory is missing: $parent_dir"
+    if ! python3 -B - "$parent_dir" <<'PY'
+from pathlib import Path
+import stat
+import sys
+
+path = Path(sys.argv[1])
+metadata = path.lstat()
+if path.is_symlink() or not stat.S_ISDIR(metadata.st_mode):
+    raise SystemExit(1)
+if stat.S_IMODE(metadata.st_mode) not in {0o711, 0o755}:
+    raise SystemExit(1)
+PY
+    then
+      echo "[ERROR] Sealed frontend parent must already be a real safe traversable directory: $parent_dir"
       return 1
     fi
-    chmod a+x "$parent_dir"
   done
   find "$dist_dir" -type d -exec chmod 755 {} +
   find "$dist_dir" -type f -exec chmod 644 {} +
@@ -1623,11 +1667,7 @@ pip install -r "$BACKEND_REQUIREMENTS" \
 echo "[INFO] Install scraping toolkit"
 CURRENT_STEP="Install scraping toolkit"
 log_section "$CURRENT_STEP"
-if [[ ! -d "$TOOLKIT_DIR" ]]; then
-  fail_deploy "Scraping toolkit directory not found: $TOOLKIT_DIR" "$LINENO"
-fi
-python -m pip install -e "$TOOLKIT_DIR" \
-  -i "$PIP_INDEX_URL" --trusted-host "$PIP_TRUSTED_HOST"
+install_scraping_toolkit_editable
 
 echo "[INFO] Install Playwright browsers (headless chromium)"
 CURRENT_STEP="Install Playwright browsers"

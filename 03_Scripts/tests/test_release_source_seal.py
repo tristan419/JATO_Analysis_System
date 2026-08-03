@@ -11,8 +11,10 @@ import pytest
 REPO_ROOT = Path(__file__).resolve().parents[2]
 HELPER = REPO_ROOT / "03_Scripts/deploy/verify_release_source_seal.py"
 CRITICAL_FILES = (
+    "03_Scripts/deploy/cleanup_toolkit_egg_info.py",
     "03_Scripts/deploy/jato_bluegreen_boot_reconcile.py",
     "03_Scripts/deploy/tencent_bluegreen_release.sh",
+    "03_Scripts/deploy/validate_release_archive.py",
     "03_Scripts/deploy/jato_quiescence_gate.py",
     "03_Scripts/deploy/release_checkpoint.py",
     "03_Scripts/deploy/systemd/jato-bluegreen-boot-reconcile.service",
@@ -187,6 +189,61 @@ def test_source_seal_rejects_persistent_source_tampering(
 
     assert result.returncode != 0
     assert "does not match the verified archive seal" in result.stderr
+
+
+def test_source_seal_rejects_generated_egg_info(
+    sealed_tree: tuple[Path, Path],
+) -> None:
+    root, manifest = sealed_tree
+    egg_info = root / "07_ScrapingToolkit/jato_scraping_toolkit.egg-info"
+    egg_info.mkdir(parents=True)
+    (egg_info / "PKG-INFO").write_text(
+        "Metadata-Version: 2.4\nName: jato-scraping-toolkit\n",
+        encoding="utf-8",
+    )
+
+    result = _verify(root, manifest)
+
+    assert result.returncode != 0
+    assert "does not match the verified archive seal" in result.stderr
+
+
+def test_source_seal_rejects_directory_mode_and_type_changes(
+    sealed_tree: tuple[Path, Path],
+    tmp_path: Path,
+) -> None:
+    root, manifest = sealed_tree
+    directory = root / "06_AppPlatform/frontend"
+    original_mode = directory.stat().st_mode & 0o777
+    directory.chmod(0o700 if original_mode != 0o700 else 0o755)
+    assert _verify(root, manifest).returncode != 0
+
+    directory.rmdir()
+    replacement = tmp_path / "frontend"
+    replacement.mkdir()
+    directory.symlink_to(replacement, target_is_directory=True)
+    result = _verify(root, manifest)
+
+    assert result.returncode != 0
+    assert "does not match the verified archive seal" in result.stderr
+
+
+def test_source_seal_intentionally_ignores_mtime_only_changes(
+    sealed_tree: tuple[Path, Path],
+) -> None:
+    root, manifest = sealed_tree
+    ordinary = root / "06_AppPlatform/backend/app/main.py"
+    directory = ordinary.parent
+    for path in (ordinary, directory):
+        metadata = path.stat()
+        os.utime(
+            path,
+            ns=(metadata.st_atime_ns, metadata.st_mtime_ns + 1_000_000_000),
+        )
+
+    result = _verify(root, manifest)
+
+    assert result.returncode == 0, result.stderr
 
 
 def test_source_seal_allows_only_declared_mutable_runtime_paths(

@@ -19,6 +19,8 @@ for required_name in \
   DEPLOY_ARCHIVE_PATH \
   DEPLOY_ARCHIVE_BYTES \
   DEPLOY_ARCHIVE_SHA256 \
+  RELEASE_ARCHIVE_VALIDATOR_B64 \
+  RELEASE_ARCHIVE_VALIDATOR_SHA256 \
   DEPLOY_BRANCH \
   DEPLOY_RUN_ID \
   DEPLOY_RUN_ATTEMPT \
@@ -48,6 +50,10 @@ if [[ ! "$DEPLOY_ARCHIVE_SHA256" =~ ^[0-9a-f]{64}$ ]]; then
   echo "[ERROR] DEPLOY_ARCHIVE_SHA256 must be a lowercase SHA-256"
   exit 1
 fi
+if [[ ! "$RELEASE_ARCHIVE_VALIDATOR_SHA256" =~ ^[0-9a-f]{64}$ ]]; then
+  echo "[ERROR] RELEASE_ARCHIVE_VALIDATOR_SHA256 must be a lowercase SHA-256"
+  exit 1
+fi
 if [[ ! "$DEPLOY_ARCHIVE_BYTES" =~ ^[1-9][0-9]*$ ]]; then
   echo "[ERROR] DEPLOY_ARCHIVE_BYTES must be a positive integer"
   exit 1
@@ -73,7 +79,7 @@ if [[ "$DEPLOY_ARCHIVE_PATH" == *".."* ]]; then
   exit 1
 fi
 
-for required_command in flock realpath sha256sum stat tar python3 systemd-run; do
+for required_command in base64 flock realpath sha256sum stat tar python3 systemd-run; do
   if ! command -v "$required_command" >/dev/null 2>&1; then
     echo "[ERROR] Missing required deployment command: $required_command"
     exit 1
@@ -145,14 +151,28 @@ DEPLOY_LOCK_FD=9
 
 CHECKPOINT_FILE="$DEPLOY_STATE_DIR/checkpoints/$DEPLOY_COMMIT_SHA/${DEPLOY_ARCHIVE_SHA256}.json"
 CHECKPOINT_JOURNAL="$DEPLOY_STATE_DIR/journals/$DEPLOY_COMMIT_SHA/${DEPLOY_ARCHIVE_SHA256}.jsonl"
-RELEASE_WORKTREE="$(mktemp -d "/tmp/JATO_deploy_work_${DEPLOY_COMMIT_SHA}.XXXXXX")"
+RELEASE_WORKTREE=""
+TRUSTED_ARCHIVE_VALIDATOR_TEMP=""
+SEALED_TRUST_ROOT="/var/lib/jato-sealed-inputs"
+SEALED_ARCHIVE_ROOT="$SEALED_TRUST_ROOT/inputs"
+SEALED_ARCHIVE_DIR="$SEALED_ARCHIVE_ROOT/$DEPLOY_COMMIT_SHA/$DEPLOY_ARCHIVE_SHA256/${DEPLOY_RUN_ID}-${DEPLOY_RUN_ATTEMPT}"
+SEALED_RELEASE_ARCHIVE="$SEALED_ARCHIVE_DIR/release.tar.gz"
+SEALED_ARCHIVE_VALIDATOR="$SEALED_ARCHIVE_DIR/validate_release_archive.py"
+ARCHIVE_VALIDATION_RECEIPT_ROOT="$SEALED_TRUST_ROOT/receipts"
+ARCHIVE_VALIDATION_RECEIPT="$ARCHIVE_VALIDATION_RECEIPT_ROOT/$DEPLOY_COMMIT_SHA/$DEPLOY_ARCHIVE_SHA256/${DEPLOY_RUN_ID}-${DEPLOY_RUN_ATTEMPT}.json"
+PRODUCTION_EXTRACTION_RESERVE_BYTES=$((15 * 1024 * 1024 * 1024))
+BLUEGREEN_HEADROOM_TARGET=""
 PREBUILT_FRONTEND_DIR="$REPO_DIR/.release-staging/frontend_${DEPLOY_COMMIT_SHA}_${DEPLOY_ARCHIVE_SHA256}.staged"
 RELEASE_REPLACEMENT_PATHS="03_Scripts 06_AppPlatform 07_ScrapingToolkit hermes"
+DEPLOY_GID="$(id -g)"
 
 remove_transient_release_paths() {
   local transient_path=""
 
-  for transient_path in "$RELEASE_WORKTREE" "$PREBUILT_FRONTEND_DIR"; do
+  for transient_path in \
+    "$RELEASE_WORKTREE" \
+    "$TRUSTED_ARCHIVE_VALIDATOR_TEMP" \
+    "$PREBUILT_FRONTEND_DIR"; do
     if [[ -z "$transient_path" || ! -e "$transient_path" ]]; then
       continue
     fi
@@ -160,6 +180,21 @@ remove_transient_release_paths() {
       echo "[WARN] Failed to remove transient deployment path: $transient_path" >&2
     fi
   done
+  case "$SEALED_ARCHIVE_DIR" in
+    /var/lib/jato-sealed-inputs/inputs/*/*/*)
+      if sudo -n test -e "$SEALED_ARCHIVE_DIR" \
+        || sudo -n test -L "$SEALED_ARCHIVE_DIR"; then
+        if ! sudo -n rm -rf --one-file-system "$SEALED_ARCHIVE_DIR"; then
+          echo \
+            "[WARN] Failed to remove sealed release input: $SEALED_ARCHIVE_DIR" \
+            >&2
+        fi
+      fi
+      ;;
+    *)
+      echo "[WARN] Refusing unexpected sealed archive cleanup path" >&2
+      ;;
+  esac
   return 0
 }
 
@@ -169,6 +204,11 @@ cleanup_release_staging() {
   # workflow checkpoint owns cleanup after www/intl parity reaches complete.
 }
 trap cleanup_release_staging EXIT
+
+RELEASE_WORKTREE="$(mktemp -d "/tmp/JATO_deploy_work_${DEPLOY_COMMIT_SHA}.XXXXXX")"
+TRUSTED_ARCHIVE_VALIDATOR_TEMP="$(
+  mktemp "$DEPLOY_STATE_DIR/.archive-validator-${DEPLOY_COMMIT_SHA}.XXXXXX.py"
+)"
 
 verify_release_archive_identity() {
   local archive_path="$1"
@@ -193,45 +233,534 @@ verify_release_archive_identity() {
 
 verify_release_archive_identity "$RELEASE_ARCHIVE"
 
-if ! tar tzf "$RELEASE_ARCHIVE" >/dev/null 2>&1; then
-  echo "[ERROR] Uploaded production release archive is incomplete or invalid"
+ensure_sealed_trust_roots() {
+  sudo -n python3 -B - \
+    "$SEALED_TRUST_ROOT" "$SEALED_ARCHIVE_ROOT" \
+    "$SEALED_ARCHIVE_ROOT/$DEPLOY_COMMIT_SHA" \
+    "$SEALED_ARCHIVE_ROOT/$DEPLOY_COMMIT_SHA/$DEPLOY_ARCHIVE_SHA256" \
+    "$ARCHIVE_VALIDATION_RECEIPT_ROOT" \
+    "$ARCHIVE_VALIDATION_RECEIPT_ROOT/$DEPLOY_COMMIT_SHA" \
+    "$ARCHIVE_VALIDATION_RECEIPT_ROOT/$DEPLOY_COMMIT_SHA/$DEPLOY_ARCHIVE_SHA256" \
+    <<'PY'
+from pathlib import Path
+import os
+import stat
+import sys
+
+anchor = Path("/var/lib")
+paths = [Path(value) for value in sys.argv[1:]]
+if paths[0] != Path("/var/lib/jato-sealed-inputs"):
+    raise SystemExit("[ERROR] sealed release trust root is not reviewed")
+for path in (anchor, *paths):
+    if path != anchor:
+        try:
+            path.relative_to(anchor)
+        except ValueError as exc:
+            raise SystemExit(
+                f"[ERROR] sealed release directory escaped /var/lib: {path}"
+            ) from exc
+        try:
+            os.mkdir(path, 0o755)
+        except FileExistsError:
+            pass
+        else:
+            os.chown(path, 0, 0)
+            os.chmod(path, 0o755)
+    metadata = os.lstat(path)
+    mode = stat.S_IMODE(metadata.st_mode)
+    if (
+        not stat.S_ISDIR(metadata.st_mode)
+        or stat.S_ISLNK(metadata.st_mode)
+        or metadata.st_uid != 0
+        or mode & 0o022
+    ):
+        raise SystemExit(
+            f"[ERROR] sealed release directory is mutable or unsafe: {path}"
+        )
+PY
+}
+
+select_bluegreen_release_headroom_target() {
+  if [[ "$BLUEGREEN_RELEASES_ROOT" != "/opt/jato/releases" ]]; then
+    echo "[ERROR] Blue/green release root is not the reviewed /opt path" >&2
+    return 1
+  fi
+  BLUEGREEN_HEADROOM_TARGET="$(
+    python3 -B - "$BLUEGREEN_RELEASES_ROOT" "$(id -u)" <<'PY'
+from pathlib import Path
+import os
+import stat
+import sys
+
+target = Path(sys.argv[1])
+deploy_uid = int(sys.argv[2])
+if target != Path("/opt/jato/releases"):
+    raise SystemExit("[ERROR] blue/green release headroom target is unreviewed")
+deepest = None
+for path in (Path("/opt"), Path("/opt/jato"), target):
+    try:
+        metadata = os.lstat(path)
+    except FileNotFoundError:
+        break
+    mode = stat.S_IMODE(metadata.st_mode)
+    if (
+        not stat.S_ISDIR(metadata.st_mode)
+        or stat.S_ISLNK(metadata.st_mode)
+        or metadata.st_uid not in {0, deploy_uid}
+        or mode & 0o022
+    ):
+        raise SystemExit(
+            f"[ERROR] blue/green headroom ancestor is mutable or unsafe: {path}"
+        )
+    if path == Path("/opt") and metadata.st_uid != 0:
+        raise SystemExit("[ERROR] /opt is not root-owned")
+    deepest = path
+if deepest is None:
+    raise SystemExit("[ERROR] no safe blue/green headroom ancestor exists")
+print(deepest)
+PY
+  )" || return 1
+  if [[ "$BLUEGREEN_HEADROOM_TARGET" != "/opt" \
+    && "$BLUEGREEN_HEADROOM_TARGET" != "/opt/jato" \
+    && "$BLUEGREEN_HEADROOM_TARGET" != "/opt/jato/releases" ]]; then
+    echo "[ERROR] Blue/green headroom ancestor selection is invalid" >&2
+    return 1
+  fi
+  export BLUEGREEN_HEADROOM_TARGET
+}
+
+seal_release_archive_input() {
+  ensure_sealed_trust_roots
+  if sudo -n test -e "$SEALED_ARCHIVE_DIR" \
+    || sudo -n test -L "$SEALED_ARCHIVE_DIR"; then
+    echo "[ERROR] Sealed archive run directory already exists" >&2
+    return 1
+  fi
+  sudo -n install -d -m 0750 -o root -g "$DEPLOY_GID" \
+    "$SEALED_ARCHIVE_DIR"
+  sudo -n install -m 0440 -o root -g "$DEPLOY_GID" \
+    "$RELEASE_ARCHIVE" "$SEALED_RELEASE_ARCHIVE"
+  if [[ "$(stat -c '%u:%g:%a' "$SEALED_ARCHIVE_DIR")" != \
+    "0:${DEPLOY_GID}:750" ]] \
+    || [[ "$(stat -c '%u:%g:%a' "$SEALED_RELEASE_ARCHIVE")" != \
+      "0:${DEPLOY_GID}:440" ]]; then
+    echo "[ERROR] Sealed archive input lost its root-owned identity" >&2
+    return 1
+  fi
+  verify_release_archive_identity "$SEALED_RELEASE_ARCHIVE"
+}
+
+verify_sealed_release_bundle() {
+  sudo -n python3 -B - \
+    "$SEALED_TRUST_ROOT" "$SEALED_ARCHIVE_DIR" \
+    "$SEALED_RELEASE_ARCHIVE" "$SEALED_ARCHIVE_VALIDATOR" \
+    "$DEPLOY_ARCHIVE_SHA256" "$DEPLOY_ARCHIVE_BYTES" \
+    "$RELEASE_ARCHIVE_VALIDATOR_SHA256" "$DEPLOY_GID" \
+    "$DEPLOY_COMMIT_SHA" "$DEPLOY_RUN_ID" "$DEPLOY_RUN_ATTEMPT" <<'PY'
+from pathlib import Path
+import hashlib
+import os
+import stat
+import sys
+
+(
+    trust_root_name,
+    run_dir_name,
+    archive_name,
+    helper_name,
+    archive_sha256,
+    archive_bytes,
+    helper_sha256,
+    deploy_gid,
+    commit,
+    run_id,
+    run_attempt,
+) = sys.argv[1:]
+trust_root = Path(trust_root_name)
+run_dir = Path(run_dir_name)
+archive = Path(archive_name)
+helper = Path(helper_name)
+expected_run_dir = (
+    trust_root
+    / "inputs"
+    / commit
+    / archive_sha256
+    / f"{run_id}-{run_attempt}"
+)
+if (
+    trust_root != Path("/var/lib/jato-sealed-inputs")
+    or run_dir != expected_run_dir
+    or archive.parent != run_dir
+    or helper.parent != run_dir
+):
+    raise SystemExit("[ERROR] sealed release bundle path is not canonical")
+
+chain = []
+cursor = run_dir
+while True:
+    chain.append(cursor)
+    if cursor == Path("/var/lib"):
+        break
+    if cursor.parent == cursor:
+        raise SystemExit("[ERROR] sealed release bundle escaped /var/lib")
+    cursor = cursor.parent
+for path in reversed(chain):
+    metadata = os.lstat(path)
+    mode = stat.S_IMODE(metadata.st_mode)
+    if (
+        not stat.S_ISDIR(metadata.st_mode)
+        or stat.S_ISLNK(metadata.st_mode)
+        or metadata.st_uid != 0
+        or mode & 0o022
+    ):
+        raise SystemExit(
+            f"[ERROR] sealed release directory is mutable or unsafe: {path}"
+        )
+run_metadata = os.lstat(run_dir)
+if (
+    run_metadata.st_gid != int(deploy_gid)
+    or stat.S_IMODE(run_metadata.st_mode) != 0o750
+):
+    raise SystemExit("[ERROR] sealed release run directory identity changed")
+
+
+def sha256_file(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        while chunk := handle.read(1024 * 1024):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+expected = (
+    (archive, 0o440, archive_sha256, int(archive_bytes)),
+    (helper, 0o550, helper_sha256, None),
+)
+for path, expected_mode, expected_sha, expected_bytes in expected:
+    metadata = os.lstat(path)
+    if (
+        not stat.S_ISREG(metadata.st_mode)
+        or stat.S_ISLNK(metadata.st_mode)
+        or metadata.st_uid != 0
+        or metadata.st_gid != int(deploy_gid)
+        or stat.S_IMODE(metadata.st_mode) != expected_mode
+        or (expected_bytes is not None and metadata.st_size != expected_bytes)
+        or sha256_file(path) != expected_sha
+    ):
+        raise SystemExit(
+            f"[ERROR] sealed release file identity changed: {path}"
+        )
+PY
+}
+
+verify_archive_validation_receipt() {
+  sudo -n python3 -B - \
+    "$ARCHIVE_VALIDATION_RECEIPT" "$SEALED_TRUST_ROOT" \
+    "$SEALED_ARCHIVE_DIR" "$SEALED_RELEASE_ARCHIVE" \
+    "$SEALED_ARCHIVE_VALIDATOR" "$RELEASE_WORKTREE" \
+    "$BLUEGREEN_HEADROOM_TARGET" "$DEPLOY_COMMIT_SHA" \
+    "$DEPLOY_ARCHIVE_SHA256" "$DEPLOY_ARCHIVE_BYTES" \
+    "$RELEASE_ARCHIVE_VALIDATOR_SHA256" "$DEPLOY_RUN_ID" \
+    "$DEPLOY_RUN_ATTEMPT" "$DEPLOY_GID" \
+    "$PRODUCTION_EXTRACTION_RESERVE_BYTES" <<'PY'
+from pathlib import Path
+import hashlib
+import json
+import os
+import stat
+import sys
+
+(
+    receipt_name,
+    trust_root_name,
+    run_dir_name,
+    archive_name,
+    helper_name,
+    worktree_name,
+    release_headroom_name,
+    commit,
+    archive_sha256,
+    archive_bytes,
+    helper_sha256,
+    run_id,
+    run_attempt,
+    deploy_gid,
+    reserve_bytes,
+) = sys.argv[1:]
+receipt_path = Path(receipt_name)
+trust_root = Path(trust_root_name)
+run_dir = Path(run_dir_name)
+archive_path = Path(archive_name)
+helper_path = Path(helper_name)
+expected_targets = {
+    str(Path(worktree_name)),
+    str(Path(release_headroom_name)),
+}
+expected_receipt = (
+    trust_root
+    / "receipts"
+    / commit
+    / archive_sha256
+    / f"{run_id}-{run_attempt}.json"
+)
+expected_run_dir = (
+    trust_root
+    / "inputs"
+    / commit
+    / archive_sha256
+    / f"{run_id}-{run_attempt}"
+)
+if receipt_path != expected_receipt or run_dir != expected_run_dir:
+    raise SystemExit("[ERROR] archive validation attempt path is not canonical")
+metadata = os.lstat(receipt_path)
+if (
+    not stat.S_ISREG(metadata.st_mode)
+    or stat.S_ISLNK(metadata.st_mode)
+    or metadata.st_uid != 0
+    or metadata.st_gid != 0
+    or stat.S_IMODE(metadata.st_mode) != 0o444
+):
+    raise SystemExit("[ERROR] archive validation receipt is mutable or unsafe")
+
+cursor = receipt_path.parent
+while True:
+    parent_metadata = os.lstat(cursor)
+    if (
+        not stat.S_ISDIR(parent_metadata.st_mode)
+        or stat.S_ISLNK(parent_metadata.st_mode)
+        or parent_metadata.st_uid != 0
+        or stat.S_IMODE(parent_metadata.st_mode) & 0o022
+    ):
+        raise SystemExit(
+            f"[ERROR] archive receipt parent is mutable or unsafe: {cursor}"
+        )
+    if cursor == Path("/var/lib"):
+        break
+    if cursor.parent == cursor:
+        raise SystemExit("[ERROR] archive receipt escaped /var/lib")
+    cursor = cursor.parent
+
+payload = json.loads(receipt_path.read_text(encoding="utf-8"))
+if (
+    payload.get("schemaVersion") != 2
+    or payload.get("status") != "validated"
+    or payload.get("archiveSha256") != archive_sha256
+    or payload.get("archiveBytes") != int(archive_bytes)
+    or payload.get("validationAttempt")
+    != {"runId": run_id, "runAttempt": int(run_attempt)}
+):
+    raise SystemExit("[ERROR] archive validation receipt identity is invalid")
+trusted_controls = payload.get("trustedControls")
+expected_control = "03_Scripts/deploy/validate_release_archive.py"
+if (
+    not isinstance(trusted_controls, dict)
+    or trusted_controls != {expected_control: helper_sha256}
+):
+    raise SystemExit("[ERROR] archive receipt lacks exact helper provenance")
+
+
+def sha256_file(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        while chunk := handle.read(1024 * 1024):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+sealed = payload.get("sealedInput")
+if (
+    not isinstance(sealed, dict)
+    or sealed.get("root") != str(trust_root)
+    or sealed.get("anchor") != "/var/lib"
+):
+    raise SystemExit("[ERROR] archive receipt lacks its root seal")
+expected_file_evidence = {
+    "archive": (
+        archive_path,
+        "0440",
+        archive_sha256,
+        int(archive_bytes),
+    ),
+    "helper": (
+        helper_path,
+        "0550",
+        helper_sha256,
+        None,
+    ),
+}
+for label, (path, mode, digest, expected_bytes) in expected_file_evidence.items():
+    evidence = sealed.get(label)
+    current = os.lstat(path)
+    if (
+        not isinstance(evidence, dict)
+        or evidence.get("path") != str(path)
+        or evidence.get("device") != current.st_dev
+        or evidence.get("inode") != current.st_ino
+        or evidence.get("uid") != 0
+        or evidence.get("gid") != int(deploy_gid)
+        or evidence.get("mode") != mode
+        or evidence.get("sha256") != digest
+        or evidence.get("bytes") != current.st_size
+        or (expected_bytes is not None and current.st_size != expected_bytes)
+        or not stat.S_ISREG(current.st_mode)
+        or stat.S_ISLNK(current.st_mode)
+        or current.st_uid != 0
+        or current.st_gid != int(deploy_gid)
+        or f"{stat.S_IMODE(current.st_mode):04o}" != mode
+        or sha256_file(path) != digest
+    ):
+        raise SystemExit(
+            f"[ERROR] root-sealed {label} differs from its receipt"
+        )
+directories = sealed.get("directories")
+if not isinstance(directories, list) or not directories:
+    raise SystemExit("[ERROR] archive receipt lacks sealed parent identities")
+observed_directory_paths = []
+for evidence in directories:
+    if not isinstance(evidence, dict) or not isinstance(evidence.get("path"), str):
+        raise SystemExit("[ERROR] sealed directory receipt is malformed")
+    path = Path(evidence["path"])
+    current = os.lstat(path)
+    actual = {
+        "path": str(path),
+        "device": current.st_dev,
+        "inode": current.st_ino,
+        "uid": current.st_uid,
+        "gid": current.st_gid,
+        "mode": f"{stat.S_IMODE(current.st_mode):04o}",
+    }
+    if (
+        evidence != actual
+        or not stat.S_ISDIR(current.st_mode)
+        or stat.S_ISLNK(current.st_mode)
+        or current.st_uid != 0
+        or stat.S_IMODE(current.st_mode) & 0o022
+    ):
+        raise SystemExit(
+            f"[ERROR] sealed parent identity changed after validation: {path}"
+        )
+    observed_directory_paths.append(path)
+if (
+    observed_directory_paths[0] != Path("/var/lib")
+    or trust_root not in observed_directory_paths
+    or observed_directory_paths[-1] != run_dir
+):
+    raise SystemExit("[ERROR] sealed parent chain is incomplete")
+
+expanded = payload.get("expandedBytes")
+checks = payload.get("headroomChecks")
+if (
+    isinstance(expanded, bool)
+    or not isinstance(expanded, int)
+    or expanded <= 0
+    or not isinstance(checks, list)
+    or not checks
+):
+    raise SystemExit("[ERROR] archive receipt lacks headroom checks")
+observed_targets = set()
+observed_devices = set()
+for check in checks:
+    targets = check.get("targets") if isinstance(check, dict) else None
+    if not isinstance(targets, list) or not targets:
+        raise SystemExit("[ERROR] archive headroom receipt is malformed")
+    device = check.get("device")
+    copies = check.get("materializationCopies")
+    available = check.get("availableBytes")
+    required = check.get("requiredBytes")
+    reserve = check.get("reserveBytes")
+    if (
+        isinstance(device, bool)
+        or not isinstance(device, int)
+        or device in observed_devices
+        or copies != len(targets)
+        or reserve != int(reserve_bytes)
+        or required != expanded * copies + reserve
+        or isinstance(available, bool)
+        or not isinstance(available, int)
+        or available < required
+        or check.get("target") != sorted(targets)[0]
+    ):
+        raise SystemExit("[ERROR] archive headroom receipt is inconsistent")
+    for target_name in targets:
+        target = Path(target_name)
+        target_metadata = os.lstat(target)
+        if (
+            target_name not in expected_targets
+            or not stat.S_ISDIR(target_metadata.st_mode)
+            or stat.S_ISLNK(target_metadata.st_mode)
+            or target_metadata.st_dev != device
+        ):
+            raise SystemExit("[ERROR] archive headroom target changed")
+        observed_targets.add(target_name)
+    observed_devices.add(device)
+if observed_targets != expected_targets:
+    raise SystemExit("[ERROR] archive headroom targets are incomplete")
+PY
+}
+
+seal_release_archive_input
+
+if ! printf '%s' "$RELEASE_ARCHIVE_VALIDATOR_B64" \
+  | base64 --decode >"$TRUSTED_ARCHIVE_VALIDATOR_TEMP"; then
+  echo "[ERROR] Trusted release archive validator payload is malformed"
   exit 1
 fi
-python3 - "$RELEASE_ARCHIVE" <<'PY_VALIDATE_RELEASE_ARCHIVE'
-import pathlib
-import sys
-import tarfile
+chmod 500 "$TRUSTED_ARCHIVE_VALIDATOR_TEMP"
+if [[ "$(sha256sum "$TRUSTED_ARCHIVE_VALIDATOR_TEMP" | awk '{print $1}')" != \
+  "$RELEASE_ARCHIVE_VALIDATOR_SHA256" ]]; then
+  echo "[ERROR] Trusted release archive validator SHA-256 mismatch"
+  exit 1
+fi
+sudo -n install -m 0550 -o root -g "$DEPLOY_GID" \
+  "$TRUSTED_ARCHIVE_VALIDATOR_TEMP" "$SEALED_ARCHIVE_VALIDATOR"
+if ! rm -f -- "$TRUSTED_ARCHIVE_VALIDATOR_TEMP"; then
+  echo "[ERROR] Could not remove transient release archive validator" >&2
+  exit 1
+fi
+TRUSTED_ARCHIVE_VALIDATOR_TEMP=""
+verify_sealed_release_bundle
+select_bluegreen_release_headroom_target
+if sudo -n test -e "$ARCHIVE_VALIDATION_RECEIPT" \
+  || sudo -n test -L "$ARCHIVE_VALIDATION_RECEIPT"; then
+  echo "[ERROR] Archive validation receipt already exists for this attempt" >&2
+  exit 1
+fi
 
-with tarfile.open(sys.argv[1], mode="r:gz") as archive:
-    members = archive.getmembers()
-    if not members:
-        raise SystemExit("[ERROR] Production release archive is empty")
-    seen: set[str] = set()
-    root_directory_seen = False
-    for member in members:
-        if member.name in {".", "./"}:
-            if not member.isdir() or root_directory_seen:
-                raise SystemExit(
-                    "[ERROR] Release archive root member must be one directory"
-                )
-            root_directory_seen = True
-            continue
-        name = pathlib.PurePosixPath(member.name)
-        normalized = name.as_posix()
-        if name.is_absolute() or ".." in name.parts or not name.parts:
-            raise SystemExit(f"[ERROR] Unsafe release archive path: {member.name}")
-        if normalized in seen:
-            raise SystemExit(f"[ERROR] Duplicate release archive path: {member.name}")
-        seen.add(normalized)
-        if member.issym() or member.islnk() or member.isdev():
-            raise SystemExit(f"[ERROR] Unsupported release archive member: {member.name}")
-        if not (member.isfile() or member.isdir()):
-            raise SystemExit(f"[ERROR] Unsupported release archive entry type: {member.name}")
-print("[INFO] Release archive members passed fail-closed validation")
-PY_VALIDATE_RELEASE_ARCHIVE
+# A single root-executed copy validates the immutable archive, binds its own
+# provenance, and atomically writes one attempt-scoped receipt containing both
+# extraction targets.  There is no second pass that can overwrite evidence.
+if ! sudo -n python3 -B "$SEALED_ARCHIVE_VALIDATOR" \
+  --archive "$SEALED_RELEASE_ARCHIVE" \
+  --expected-sha256 "$DEPLOY_ARCHIVE_SHA256" \
+  --expected-bytes "$DEPLOY_ARCHIVE_BYTES" \
+  --trusted-control \
+    "03_Scripts/deploy/validate_release_archive.py=$SEALED_ARCHIVE_VALIDATOR" \
+  --output "$ARCHIVE_VALIDATION_RECEIPT" \
+  --validation-run-id "$DEPLOY_RUN_ID" \
+  --validation-run-attempt "$DEPLOY_RUN_ATTEMPT" \
+  --sealed-root "$SEALED_TRUST_ROOT" \
+  --sealed-helper "$SEALED_ARCHIVE_VALIDATOR" \
+  --expected-helper-sha256 "$RELEASE_ARCHIVE_VALIDATOR_SHA256" \
+  --expected-sealed-group "$DEPLOY_GID" \
+  --headroom-target "$RELEASE_WORKTREE" 1 \
+    "$PRODUCTION_EXTRACTION_RESERVE_BYTES" \
+  --headroom-target "$BLUEGREEN_HEADROOM_TARGET" 1 \
+    "$PRODUCTION_EXTRACTION_RESERVE_BYTES" \
+  >/dev/null; then
+  echo "[ERROR] Production release archive validation failed" >&2
+  exit 1
+fi
+sudo -n chmod 0444 "$ARCHIVE_VALIDATION_RECEIPT"
+verify_sealed_release_bundle
+verify_archive_validation_receipt
 
-echo "[INFO] Extracting verified production release archive: $RELEASE_ARCHIVE"
-tar xzf "$RELEASE_ARCHIVE" -C "$RELEASE_WORKTREE"
+echo "[INFO] Extracting sealed production release archive"
+verify_sealed_release_bundle
+verify_archive_validation_receipt
+tar --same-permissions --no-overwrite-dir \
+  -xzf "$SEALED_RELEASE_ARCHIVE" -C "$RELEASE_WORKTREE"
+verify_sealed_release_bundle
+verify_archive_validation_receipt
 
 required_release_files=(
   hermes/deploy_release.json
@@ -239,6 +768,7 @@ required_release_files=(
   hermes/frontend_release/frontend-dist.tar.gz
   01_RAW_DATA/VOC_Nordic_SUV_Users_100.xlsx
   03_Scripts/deploy/frontend_release_artifact.py
+  03_Scripts/deploy/cleanup_toolkit_egg_info.py
   03_Scripts/deploy/release_checkpoint.py
   03_Scripts/deploy/release_evidence.py
   03_Scripts/deploy/prepare_backend_release.py
@@ -246,6 +776,7 @@ required_release_files=(
   03_Scripts/deploy/jato_quiescence_gate.py
   03_Scripts/deploy/jato_release_storage_guard.py
   03_Scripts/deploy/tencent_bluegreen_release.sh
+  03_Scripts/deploy/validate_release_archive.py
   03_Scripts/deploy/verify_release_source_seal.py
   03_Scripts/deploy/lib/production_mutation_lock.sh
   03_Scripts/deploy/lib/release_paths.sh
