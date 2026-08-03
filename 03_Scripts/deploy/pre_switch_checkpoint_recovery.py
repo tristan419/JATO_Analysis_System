@@ -38,8 +38,9 @@ from release_checkpoint import (
 )
 
 
-PLAN_SCHEMA_VERSION = 1
-RECEIPT_SCHEMA_VERSION = 1
+SUPPORTED_PLAN_SCHEMA_VERSIONS = frozenset({1, 2})
+RECEIPT_SCHEMA_VERSION_BY_PLAN = {1: 1, 2: 2}
+MIGRATION_STATUS_BY_PLAN = {1: "not_required", 2: "completed"}
 MAX_JSON_BYTES = 1024 * 1024
 TRUSTED_SYSTEM_UID = 0
 SHA256_PATTERN = re.compile(r"^[0-9a-f]{64}$")
@@ -163,6 +164,25 @@ class RecoveryError(ValueError):
 
 def _fail(category: str, detail: str) -> None:
     raise RecoveryError(category, detail)
+
+
+def _plan_schema_version(plan: Mapping[str, Any]) -> int:
+    version = plan.get("schemaVersion")
+    if (
+        isinstance(version, bool)
+        or not isinstance(version, int)
+        or version not in SUPPORTED_PLAN_SCHEMA_VERSIONS
+    ):
+        _fail("plan_invalid", "unsupported schemaVersion")
+    return version
+
+
+def _migration_status_for_plan(plan: Mapping[str, Any]) -> str:
+    return MIGRATION_STATUS_BY_PLAN[_plan_schema_version(plan)]
+
+
+def _receipt_schema_version_for_plan(plan: Mapping[str, Any]) -> int:
+    return RECEIPT_SCHEMA_VERSION_BY_PLAN[_plan_schema_version(plan)]
 
 
 def _require_mapping(
@@ -377,8 +397,7 @@ def load_recovery_plan(
     if actual_sha256 != expected_sha256:
         _fail("plan_digest_mismatch", "recovery plan SHA-256 changed")
     plan = _require_mapping(payload, PLAN_FIELDS, "plan_invalid")
-    if plan.get("schemaVersion") != PLAN_SCHEMA_VERSION:
-        _fail("plan_invalid", "unsupported schemaVersion")
+    _plan_schema_version(plan)
     incident = _require_string(plan.get("incidentId"), "plan_invalid")
     if not SAFE_INCIDENT_PATTERN.fullmatch(incident):
         _fail("plan_invalid", "incidentId is unsafe")
@@ -577,6 +596,44 @@ def _read_checkpoint_state(
     return checkpoint, raw, metadata
 
 
+def _validate_evidence_migration(
+    plan: Mapping[str, Any],
+    evidence_migration: Mapping[str, Any],
+) -> None:
+    version = _plan_schema_version(plan)
+    if version == 1:
+        if evidence_migration != {
+            "status": "not_required",
+            "preRevision": None,
+            "targetRevision": None,
+            "resultRevision": None,
+        }:
+            _fail(
+                "legacy_evidence_invalid",
+                "expected the exact enabled-DB not_required legacy signature",
+            )
+        return
+
+    if evidence_migration.get("status") != "completed":
+        _fail(
+            "legacy_evidence_invalid",
+            "schema v2 requires completed migration evidence",
+        )
+    expected_revisions = sorted(plan["expected"]["revisions"])
+    for field in ("preRevision", "targetRevision", "resultRevision"):
+        value = evidence_migration.get(field)
+        if not isinstance(value, str) or not value:
+            _fail(
+                "legacy_evidence_invalid",
+                f"schema v2 {field} must be non-empty revision output",
+            )
+        if _revision_set(value, "legacy_evidence_invalid") != expected_revisions:
+            _fail(
+                "legacy_evidence_invalid",
+                f"schema v2 {field} differs from reviewed revisions",
+            )
+
+
 def _validate_legacy_checkpoint_chain(
     plan: Mapping[str, Any],
 ) -> tuple[ReleaseIdentity, os.stat_result]:
@@ -723,16 +780,7 @@ def _validate_legacy_checkpoint_chain(
         "manifestSha256": plan["backup"]["manifestSha256"],
     }:
         _fail("legacy_evidence_invalid", "backup binding differs from plan")
-    if evidence_migration != {
-        "status": "not_required",
-        "preRevision": None,
-        "targetRevision": None,
-        "resultRevision": None,
-    }:
-        _fail(
-            "legacy_evidence_invalid",
-            "expected the exact enabled-DB not_required legacy signature",
-        )
+    _validate_evidence_migration(plan, evidence_migration)
     return identity, checkpoint_metadata
 
 
@@ -1735,7 +1783,7 @@ def _build_receipt(
 ) -> Mapping[str, Any]:
     checkpoint, checkpoint_raw, _ = _read_checkpoint_state(plan)
     return {
-        "schemaVersion": RECEIPT_SCHEMA_VERSION,
+        "schemaVersion": _receipt_schema_version_for_plan(plan),
         "kind": "pre_switch_abort",
         "decision": "pre_switch_abort_verified",
         "incidentId": plan["incidentId"],
@@ -1755,7 +1803,7 @@ def _build_receipt(
         "legacyEvidence": {
             "path": plan["checkpoint"]["evidencePath"],
             "sha256": plan["checkpoint"]["evidenceSha256"],
-            "migrationStatus": "not_required",
+            "migrationStatus": _migration_status_for_plan(plan),
         },
         "journal": {
             "path": plan["checkpoint"]["journalPath"],
@@ -1876,10 +1924,16 @@ def _load_bound_terminal_receipt(
     if hashlib.sha256(raw).hexdigest() != expected_digest:
         _fail("recovery_receipt_invalid", "terminal receipt digest changed")
     implementation = payload.get("implementation")
+    legacy_evidence = payload.get("legacyEvidence")
     if (
-        payload.get("decision") != "pre_switch_abort_verified"
+        payload.get("schemaVersion")
+        != _receipt_schema_version_for_plan(plan)
+        or payload.get("decision") != "pre_switch_abort_verified"
         or payload.get("identity") != plan["checkpoint"]["identity"]
         or payload.get("incidentId") != plan["incidentId"]
+        or not isinstance(legacy_evidence, dict)
+        or legacy_evidence.get("migrationStatus")
+        != _migration_status_for_plan(plan)
         or not isinstance(implementation, dict)
         or set(implementation) != {"commit", "planSha256"}
         or implementation.get("planSha256") != plan_sha256

@@ -111,8 +111,13 @@ def test_checkpoint_recovery_workflow_is_exactly_gated_and_read_only() -> None:
         "path": "${{ runner.temp }}/recovery-coordination-plan",
     }
     assert "verify-plan" in recovery_steps[2]["run"]
-    assert "ABORT 2026-07-30-ce5 PRE-SWITCH" in recovery_steps[3]["run"]
+    assert "ABORT 2026-07-30-86ce PRE-SWITCH" in recovery_steps[3]["run"]
     assert "recovery-control-manifest.json" in recovery_steps[4]["run"]
+    assert (
+        'plan=".github/recovery-plans/'
+        '2026-07-30-86ce-pre-switch-db-evidence.json"'
+        in recovery_steps[4]["run"]
+    )
     assert "SSH_KNOWN_HOSTS" in str(recovery_steps[5]["env"])
     assert "verify-plan" in recovery_steps[6]["run"]
     assert "StrictHostKeyChecking=yes" in recovery_steps[7]["run"]

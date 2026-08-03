@@ -95,6 +95,9 @@ REPOSITORY_PATTERN = re.compile(
 )
 GIT_SHA_PATTERN = re.compile(r"^[0-9a-f]{40}$")
 SHA256_PATTERN = re.compile(r"^[0-9a-f]{64}$")
+REVISION_PATTERN = re.compile(r"(?m)^([0-9]{8}_[0-9]{4})\b")
+RECOVERY_RECEIPT_SCHEMA_VERSIONS = frozenset({1, 2})
+RECOVERY_MIGRATION_STATUS_BY_SCHEMA = {1: "not_required", 2: "completed"}
 IDENTITY_FIELDS = {
     "repository",
     "commit",
@@ -873,9 +876,12 @@ def _require_recovery_receipt(
         raise CheckpointError("recovery receipt must contain valid JSON") from exc
     implementation = payload.get("implementation") if isinstance(payload, dict) else None
     incident = payload.get("incidentId") if isinstance(payload, dict) else None
+    receipt_schema = payload.get("schemaVersion") if isinstance(payload, dict) else None
     if (
         not isinstance(payload, dict)
-        or payload.get("schemaVersion") != 1
+        or isinstance(receipt_schema, bool)
+        or not isinstance(receipt_schema, int)
+        or receipt_schema not in RECOVERY_RECEIPT_SCHEMA_VERSIONS
         or payload.get("kind") != "pre_switch_abort"
         or payload.get("decision") != "pre_switch_abort_verified"
         or payload.get("identity") != identity.to_dict()
@@ -892,6 +898,113 @@ def _require_recovery_receipt(
     ):
         raise CheckpointError("recovery receipt decision contract is invalid")
     return receipt_path, receipt_sha256, payload
+
+
+def _recovery_migration_status(receipt: Mapping[str, Any]) -> str:
+    schema_version = receipt.get("schemaVersion")
+    if (
+        isinstance(schema_version, bool)
+        or not isinstance(schema_version, int)
+        or schema_version not in RECOVERY_RECEIPT_SCHEMA_VERSIONS
+    ):
+        raise CheckpointError("recovery receipt schemaVersion is invalid")
+    return RECOVERY_MIGRATION_STATUS_BY_SCHEMA[schema_version]
+
+
+def _recovery_revision_set(raw: object) -> list[str]:
+    if not isinstance(raw, str) or not raw:
+        raise CheckpointError("recovery evidence revision output is invalid")
+    revisions = sorted(set(REVISION_PATTERN.findall(raw)))
+    if not revisions:
+        raise CheckpointError("recovery evidence revision output is empty")
+    return revisions
+
+
+def _validate_recovery_legacy_evidence(
+    *,
+    receipt: Mapping[str, Any],
+    evidence_bindings: Sequence[tuple[str, str]],
+) -> None:
+    legacy = receipt.get("legacyEvidence")
+    database = receipt.get("database")
+    if not isinstance(legacy, dict) or not isinstance(database, dict):
+        raise CheckpointError("recovery receipt legacy evidence proof is invalid")
+    expected_status = _recovery_migration_status(receipt)
+    if (
+        len(evidence_bindings) != 1
+        or legacy.get("path") != evidence_bindings[0][0]
+        or legacy.get("sha256") != evidence_bindings[0][1]
+        or legacy.get("migrationStatus") != expected_status
+    ):
+        raise CheckpointError("recovery receipt legacy evidence proof is invalid")
+
+    evidence_path = Path(evidence_bindings[0][0])
+    evidence_raw = _read_small_regular_file(
+        evidence_path,
+        label="pre-switch abort legacy evidence",
+    )
+    if hashlib.sha256(evidence_raw).hexdigest() != evidence_bindings[0][1]:
+        raise CheckpointError("pre-switch abort legacy evidence changed")
+    try:
+        evidence = json.loads(evidence_raw.decode("utf-8"))
+    except (UnicodeError, json.JSONDecodeError) as exc:
+        raise CheckpointError(
+            "pre-switch abort legacy evidence is not valid JSON"
+        ) from exc
+    if not isinstance(evidence, dict) or set(evidence) != {
+        "identity",
+        "backup",
+        "migration",
+    }:
+        raise CheckpointError("recovery evidence object is invalid")
+    evidence_backup = evidence.get("backup")
+    receipt_backup = receipt.get("backup")
+    if (
+        evidence.get("identity") != receipt.get("identity")
+        or not isinstance(evidence_backup, dict)
+        or not isinstance(receipt_backup, dict)
+        or evidence_backup.get("manifestPath")
+        != receipt_backup.get("manifestPath")
+        or evidence_backup.get("manifestSha256")
+        != receipt_backup.get("manifestSha256")
+        or isinstance(evidence_backup.get("manifestBytes"), bool)
+        or not isinstance(evidence_backup.get("manifestBytes"), int)
+        or evidence_backup.get("manifestBytes", 0) <= 0
+    ):
+        raise CheckpointError("recovery evidence backup/identity proof is invalid")
+    migration = evidence.get("migration")
+    if not isinstance(migration, dict) or set(migration) != {
+        "status",
+        "preRevision",
+        "targetRevision",
+        "resultRevision",
+    }:
+        raise CheckpointError("recovery evidence migration proof is invalid")
+    if receipt["schemaVersion"] == 1:
+        if migration != {
+            "status": "not_required",
+            "preRevision": None,
+            "targetRevision": None,
+            "resultRevision": None,
+        }:
+            raise CheckpointError(
+                "schema v1 recovery evidence migration proof is invalid"
+            )
+        return
+
+    expected_revisions = database.get("currentRevisions")
+    if (
+        migration.get("status") != "completed"
+        or not isinstance(expected_revisions, list)
+        or not expected_revisions
+        or any(
+            _recovery_revision_set(migration.get(field)) != expected_revisions
+            for field in ("preRevision", "targetRevision", "resultRevision")
+        )
+    ):
+        raise CheckpointError(
+            "schema v2 recovery evidence revisions differ from receipt"
+        )
 
 
 def _validate_recovery_receipt_safety_facts(
@@ -992,13 +1105,10 @@ def _validate_pre_switch_abort_source(
         r"evidence_sha256=([0-9a-f]{64})(?:$|[; ])",
         str(checkpoint.get("message") or ""),
     )
-    if (
-        len(evidence_bindings) != 1
-        or legacy_evidence.get("path") != evidence_bindings[0][0]
-        or legacy_evidence.get("sha256") != evidence_bindings[0][1]
-        or legacy_evidence.get("migrationStatus") != "not_required"
-    ):
-        raise CheckpointError("recovery receipt legacy evidence proof is invalid")
+    _validate_recovery_legacy_evidence(
+        receipt=receipt,
+        evidence_bindings=evidence_bindings,
+    )
 
     journal_raw = _read_small_regular_file(journal_path, label="checkpoint journal")
     lines = journal_raw.splitlines(keepends=True)
@@ -1359,20 +1469,10 @@ def _validate_pre_switch_abort_settlement(
         r"evidence_sha256=([0-9a-f]{64})(?:$|[; ])",
         str(source_checkpoint.get("message") or ""),
     )
-    if (
-        len(evidence_bindings) != 1
-        or legacy.get("path") != evidence_bindings[0][0]
-        or legacy.get("sha256") != evidence_bindings[0][1]
-        or legacy.get("migrationStatus") != "not_required"
-    ):
-        raise CheckpointError("pre-switch abort legacy evidence proof is invalid")
-    evidence_path = Path(evidence_bindings[0][0])
-    evidence_raw = _read_small_regular_file(
-        evidence_path,
-        label="pre-switch abort legacy evidence",
+    _validate_recovery_legacy_evidence(
+        receipt=receipt,
+        evidence_bindings=evidence_bindings,
     )
-    if hashlib.sha256(evidence_raw).hexdigest() != evidence_bindings[0][1]:
-        raise CheckpointError("pre-switch abort legacy evidence changed")
     if not receipt_path.is_file():  # pragma: no cover - validated above.
         raise CheckpointError("pre-switch abort recovery receipt disappeared")
 

@@ -322,7 +322,7 @@ def assert_checkpoint_recovery_contract() -> None:
         "case \"$RECOVERY_MODE\" in",
         "dry-run)",
         "apply)",
-        "ABORT 2026-07-30-ce5 PRE-SWITCH",
+        "ABORT 2026-07-30-86ce PRE-SWITCH",
     ):
         if required not in guard_intent:
             raise AssertionError(
@@ -445,7 +445,7 @@ def assert_checkpoint_recovery_contract() -> None:
         "case \"$RECOVERY_MODE\" in",
         "dry-run)",
         "apply)",
-        "ABORT 2026-07-30-ce5 PRE-SWITCH",
+        "ABORT 2026-07-30-86ce PRE-SWITCH",
     ):
         if required not in approved_intent:
             raise AssertionError(
@@ -478,8 +478,8 @@ def assert_checkpoint_recovery_contract() -> None:
         REPO_ROOT / CHECKPOINT_RECOVERY_WORKFLOW
     ).read_text(encoding="utf-8")
     for required in (
-        "ABORT 2026-07-30-ce5 PRE-SWITCH",
-        "2026-07-30-ce5-pre-switch-db-evidence.json",
+        "ABORT 2026-07-30-86ce PRE-SWITCH",
+        "2026-07-30-86ce-pre-switch-db-evidence.json",
         "pre_switch_checkpoint_recovery.py",
         "tencent_pre_switch_checkpoint_recovery.sh",
         "production_mutation_lock.sh",
@@ -493,6 +493,8 @@ def assert_checkpoint_recovery_contract() -> None:
                 f"checkpoint recovery lost required contract token {required!r}"
             )
     for forbidden in (
+        "ABORT 2026-07-30-ce5 PRE-SWITCH",
+        "2026-07-30-ce5-pre-switch-db-evidence.json",
         "fullstack_remote_release.sh",
         "tencent_bluegreen_release.sh",
     ):

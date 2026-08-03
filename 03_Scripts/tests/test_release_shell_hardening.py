@@ -1335,7 +1335,7 @@ def test_checkpoint_recovery_is_lock_bound_and_read_only_except_settlement() -> 
 
     assert source_lock < acquire_lock < validate_fd < privileged_helper
     assert (
-        'RECOVERY_APPLY_CONFIRMATION="ABORT 2026-07-30-ce5 PRE-SWITCH"'
+        'RECOVERY_APPLY_CONFIRMATION="ABORT 2026-07-30-86ce PRE-SWITCH"'
         in controller
     )
     assert (
