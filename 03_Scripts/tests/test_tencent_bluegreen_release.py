@@ -2659,6 +2659,55 @@ def test_candidate_data_contract_resolves_runtime_paths(
         assert "different runtime paths for JATO_PARQUET_PATH" in result.stderr
 
 
+@pytest.mark.skipif(
+    os.name != "posix" or not Path("/proc/self/environ").exists(),
+    reason="requires Linux procfs",
+)
+@pytest.mark.parametrize("different_path", (False, True))
+def test_candidate_data_contract_resolves_legacy_defaults(
+    tmp_path: Path,
+    different_path: bool,
+) -> None:
+    legacy_root = tmp_path / "legacy"
+    candidate_root = tmp_path / "candidate"
+    legacy_data = legacy_root / "04_Processed_data"
+    legacy_data.mkdir(parents=True)
+    candidate_root.mkdir()
+    (candidate_root / "04_Processed_data").symlink_to(
+        legacy_data,
+        target_is_directory=True,
+    )
+    common = {
+        **os.environ,
+        "APP_DATABASE_ENABLED": "true",
+        "APP_DATABASE_URL": "postgresql://runtime",
+        "APP_PROJECT_ROOT": str(legacy_root),
+    }
+    candidate = {
+        **common,
+        "APP_PROJECT_ROOT": str(candidate_root),
+        "MSRP_GOVERNANCE_EVIDENCE_ROOT": str(
+            candidate_root
+            / "04_Processed_data"
+            / "ops"
+            / "msrp_source_evidence"
+        ),
+    }
+    if different_path:
+        candidate["MSRP_GOVERNANCE_EVIDENCE_ROOT"] = str(
+            tmp_path / "different-evidence"
+        )
+
+    result = _run_candidate_data_contract(candidate, common)
+
+    assert (result.returncode != 0) is different_path, result.stderr
+    if different_path:
+        assert (
+            "different runtime paths for MSRP_GOVERNANCE_EVIDENCE_ROOT"
+            in result.stderr
+        )
+
+
 @pytest.mark.parametrize("active_slot", ("8000", "8001"))
 def test_active_cgroup_verification_uses_explicit_active_slot(
     tmp_path: Path,
