@@ -40,6 +40,8 @@ SANDBOX_STAGE_NAME = ".10-candidate-sandbox.conf.jato-candidate-installing"
 BOOT_ID_PATTERN = re.compile(
     r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
 )
+PROCFS_BOOT_ID_FILE = Path("/proc/sys/kernel/random/boot_id")
+MAX_BOOT_ID_BYTES = 128
 ROLE_ARGUMENTS = (
     ("slot_link", "slot-link"),
     ("slot_link_stage", "slot-link-stage"),
@@ -518,15 +520,63 @@ def _boot_id(arguments: argparse.Namespace) -> str:
     path = _normalized_absolute(str(arguments.boot_id_file), "boot ID file")
     _assert_real_parent_chain(path, "boot ID file")
     metadata = path.lstat()
+    procfs_virtual_file = (
+        path == PROCFS_BOOT_ID_FILE
+        and metadata.st_size == 0
+        and metadata.st_uid == 0
+        and metadata.st_gid == 0
+        and not stat.S_IMODE(metadata.st_mode) & 0o022
+    )
     if (
         not stat.S_ISREG(metadata.st_mode)
         or stat.S_ISLNK(metadata.st_mode)
         or metadata.st_nlink != 1
-        or metadata.st_size <= 0
-        or metadata.st_size > 128
+        or (metadata.st_size <= 0 and not procfs_virtual_file)
+        or metadata.st_size > MAX_BOOT_ID_BYTES
     ):
         _fail("boot ID file must be a small regular file")
-    value = path.read_text(encoding="ascii").strip()
+    descriptor = os.open(
+        path,
+        os.O_RDONLY | os.O_CLOEXEC | os.O_NOFOLLOW,
+    )
+    try:
+        opened = os.fstat(descriptor)
+        if (
+            metadata.st_dev,
+            metadata.st_ino,
+            metadata.st_mode,
+            metadata.st_nlink,
+        ) != (
+            opened.st_dev,
+            opened.st_ino,
+            opened.st_mode,
+            opened.st_nlink,
+        ):
+            _fail("boot ID file changed while opening")
+        raw = bytearray()
+        while len(raw) <= MAX_BOOT_ID_BYTES:
+            chunk = os.read(descriptor, MAX_BOOT_ID_BYTES + 1 - len(raw))
+            if not chunk:
+                break
+            raw.extend(chunk)
+        if not raw or len(raw) > MAX_BOOT_ID_BYTES:
+            _fail("boot ID file must contain at most 128 bytes")
+        closed = os.fstat(descriptor)
+        if (
+            opened.st_dev,
+            opened.st_ino,
+            opened.st_mode,
+            opened.st_nlink,
+        ) != (
+            closed.st_dev,
+            closed.st_ino,
+            closed.st_mode,
+            closed.st_nlink,
+        ):
+            _fail("boot ID file changed while reading")
+    finally:
+        os.close(descriptor)
+    value = bytes(raw).decode("ascii").strip()
     if not BOOT_ID_PATTERN.fullmatch(value):
         _fail("boot ID file does not contain one canonical boot ID")
     return value

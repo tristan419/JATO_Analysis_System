@@ -7,7 +7,9 @@ import os
 import shutil
 import stat
 import subprocess
+import sys
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -212,6 +214,28 @@ def _module_restore_context(module, layout: dict[str, Path]):
     module._require_current_slot_owner(preimage, identity)
     manifest = module._load_preimage(preimage, identity, roles)
     return preimage, manifest, roles, boot_id
+
+
+@pytest.mark.skipif(sys.platform != "linux", reason="requires Linux procfs")
+def test_boot_id_accepts_linux_procfs_virtual_file() -> None:
+    module = _load_helper_module()
+    path = Path("/proc/sys/kernel/random/boot_id")
+    metadata = path.lstat()
+
+    assert stat.S_ISREG(metadata.st_mode)
+    assert metadata.st_size == 0
+    value = module._boot_id(SimpleNamespace(boot_id_file=path))
+
+    assert module.BOOT_ID_PATTERN.fullmatch(value)
+
+
+def test_boot_id_rejects_empty_non_procfs_regular_file(tmp_path: Path) -> None:
+    module = _load_helper_module()
+    path = tmp_path / "boot_id"
+    path.touch()
+
+    with pytest.raises(module.PreimageError, match="small regular file"):
+        module._boot_id(SimpleNamespace(boot_id_file=path))
 
 
 def test_capture_restore_covers_present_absent_file_symlink_and_trees(
