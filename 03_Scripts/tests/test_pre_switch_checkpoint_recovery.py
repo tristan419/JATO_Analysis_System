@@ -1421,6 +1421,8 @@ def test_schema_v3_allows_only_reviewed_cached_sources_before_daemon_reload() ->
 
     unit["FragmentPath"] = "/etc/systemd/system/jato-fullstack-backend@.service"
     unit["DropInPaths"] = ""
+    unit["MemoryHigh"] = "infinity"
+    unit["MemoryMax"] = "infinity"
     detached = recovery._candidate_never_started_proof(
         plan,
         unit,
@@ -1428,6 +1430,77 @@ def test_schema_v3_allows_only_reviewed_cached_sources_before_daemon_reload() ->
         listener=False,
     )
     assert detached["ownedSourceReferences"] == []
+    assert detached["memoryHighBytes"] is None
+    assert detached["memoryMaxBytes"] is None
+    finalized = recovery._candidate_never_started_proof(
+        plan,
+        unit,
+        stage="finalized",
+        listener=False,
+    )
+    assert finalized["ownedSourceReferences"] == []
+    assert finalized["memoryHighBytes"] is None
+    assert finalized["memoryMaxBytes"] is None
+
+    with pytest.raises(
+        recovery.RecoveryError,
+        match="Candidate memory limit proof is malformed",
+    ) as error:
+        recovery._candidate_never_started_proof(
+            plan,
+            unit,
+            stage="initial",
+            listener=False,
+        )
+    assert error.value.stage == "candidate_memory_limits"
+    assert error.value.field_diffs == (
+        {
+            "field": "MemoryHigh",
+            "expected": "decimal bytes",
+            "actual": "infinity",
+        },
+    )
+
+    with pytest.raises(
+        recovery.RecoveryError,
+        match="Candidate memory limit proof is malformed",
+    ) as partial_error:
+        recovery._candidate_never_started_proof(
+            plan,
+            unit,
+            stage="partial",
+            listener=False,
+        )
+    assert partial_error.value.field_diffs == (
+        {
+            "field": "MemoryHigh",
+            "expected": "decimal bytes",
+            "actual": "infinity",
+        },
+    )
+
+    unit["MemoryHigh"] = str(3 * 1024**3)
+    unit["MemoryMax"] = "unbounded"
+    with pytest.raises(
+        recovery.RecoveryError,
+        match="Candidate memory limit proof is malformed",
+    ) as memory_max_error:
+        recovery._candidate_never_started_proof(
+            plan,
+            unit,
+            stage="quarantined_fenced",
+            listener=False,
+        )
+    assert memory_max_error.value.field_diffs == (
+        {
+            "field": "MemoryMax",
+            "expected": "decimal bytes or infinity",
+            "actual": "unbounded",
+        },
+    )
+
+    unit["MemoryHigh"] = "infinity"
+    unit["MemoryMax"] = "infinity"
 
     unit["DropInPaths"] = "/tmp/unreviewed.conf"
     with pytest.raises(recovery.RecoveryError, match="unknown unit sources"):
@@ -1437,6 +1510,109 @@ def test_schema_v3_allows_only_reviewed_cached_sources_before_daemon_reload() ->
             stage="quarantined_fenced",
             listener=False,
         )
+
+
+@pytest.mark.parametrize("stage", ["initial", "quarantined_fenced"])
+def test_schema_v3_dry_run_accepts_only_start_or_resumable_state(stage: str) -> None:
+    recovery._validate_schema_v3_dry_run_stage(stage)
+
+
+@pytest.mark.parametrize(
+    "stage",
+    ["quarantine_root_created", "partial", "finalized"],
+)
+def test_schema_v3_dry_run_rejects_ambiguous_or_terminal_state(stage: str) -> None:
+    with pytest.raises(recovery.RecoveryError, match="dry_run_not_eligible"):
+        recovery._validate_schema_v3_dry_run_stage(stage)
+
+
+def test_schema_v3_dry_run_resumes_fully_quarantined_state_without_writes(
+    tmp_path: Path,
+) -> None:
+    checkpoint_path = (
+        tmp_path / "state/checkpoints/incident/checkpoint.json"
+    )
+    checkpoint_path.parent.mkdir(parents=True)
+    checkpoint_raw = b'{"phase":"migrated"}\n'
+    checkpoint_path.write_bytes(checkpoint_raw)
+    checkpoint_state = {"phase": "migrated"}
+    checkpoint_metadata = checkpoint_path.stat()
+    plan = {
+        "schemaVersion": 3,
+        "incidentId": "incident",
+        "checkpoint": {
+            "path": str(checkpoint_path),
+            "sha256": hashlib.sha256(checkpoint_raw).hexdigest(),
+            "identity": {"commit": "d" * 40},
+        },
+    }
+    observation = {
+        "active": {"frontendCommit": ACTIVE_COMMIT},
+        "database": {"currentRevisions": [REVISION]},
+        "residue": {
+            "stage": "quarantined_fenced",
+            "inventoryDigest": "e" * 64,
+        },
+    }
+
+    with (
+        mock.patch.object(
+            recovery,
+            "load_recovery_plan",
+            return_value=(plan, "c" * 64),
+        ),
+        mock.patch.object(recovery, "assert_production_lock", return_value={}),
+        mock.patch.object(
+            recovery,
+            "_validate_legacy_checkpoint_chain",
+            return_value=({"commit": "d" * 40}, checkpoint_metadata),
+        ),
+        mock.patch.object(
+            recovery,
+            "load_checkpoint",
+            return_value=checkpoint_state,
+        ),
+        mock.patch.object(recovery, "_validate_backup_chain"),
+        mock.patch.object(recovery, "_validate_legacy_archive_and_source"),
+        mock.patch.object(
+            recovery,
+            "assert_cross_release_safe",
+            return_value={"decision": "cross-release-safe"},
+        ),
+        mock.patch.object(
+            recovery,
+            "collect_observation",
+            return_value=observation,
+        ),
+        mock.patch.object(recovery, "validate_observation"),
+        mock.patch.object(
+            recovery,
+            "_read_checkpoint_state",
+            return_value=(
+                checkpoint_state,
+                checkpoint_raw,
+                checkpoint_metadata,
+            ),
+        ),
+        mock.patch.object(recovery, "_quarantine_candidate_residue") as mutate,
+    ):
+        result = recovery.recover(
+            plan_path=tmp_path / "plan.json",
+            expected_plan_sha256="c" * 64,
+            bundle_root=tmp_path / "bundle",
+            implementation_commit=IMPLEMENTATION_COMMIT,
+            lock_path=tmp_path / "state/production-deploy.lock",
+            lock_holder_pid=1,
+            mode="dry-run",
+        )
+
+    assert result["decision"] == "candidate-residue-dry-run-eligible"
+    assert result["candidateResiduePresent"] is True
+    assert result["trafficChanged"] is False
+    assert result["databaseChanged"] is False
+    assert result["checkpointChanged"] is False
+    assert result["mutationPerformed"] is False
+    mutate.assert_not_called()
 
 
 def test_systemd_properties_requires_the_observed_unit_id() -> None:
