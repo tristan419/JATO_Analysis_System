@@ -34,6 +34,25 @@ def _write_private(path: Path, raw: bytes) -> None:
     os.chmod(path, 0o600)
 
 
+def _main_arguments(tmp_path: Path, *, mode: str = "dry-run") -> list[str]:
+    return [
+        "--plan",
+        str(tmp_path / "plan.json"),
+        "--expected-plan-sha256",
+        "c" * 64,
+        "--bundle-root",
+        str(tmp_path / "bundle"),
+        "--implementation-commit",
+        IMPLEMENTATION_COMMIT,
+        "--lock-path",
+        str(tmp_path / "production-deploy.lock"),
+        "--lock-holder-pid",
+        "1",
+        "--mode",
+        mode,
+    ]
+
+
 def _build_fence_publish_fixture(tmp_path: Path) -> dict[str, object]:
     root = tmp_path / "quarantine"
     root.mkdir(mode=0o700)
@@ -1268,6 +1287,7 @@ def test_schema_v3_allows_only_reviewed_cached_sources_before_daemon_reload() ->
     plan, _ = recovery.load_recovery_plan(path, _sha256(path))
     expected = plan["residue"]["candidateUnit"]
     unit = {
+        "Id": expected["name"],
         "LoadState": expected["loadState"],
         "ActiveState": expected["activeState"],
         "SubState": expected["subState"],
@@ -1290,6 +1310,97 @@ def test_schema_v3_allows_only_reviewed_cached_sources_before_daemon_reload() ->
         "MemoryHigh": str(expected["memoryHighBytes"]),
         "MemoryMax": str(expected["memoryMaxBytes"]),
     }
+
+    initial = recovery._candidate_never_started_proof(
+        plan,
+        unit,
+        stage="initial",
+        listener=False,
+    )
+    assert initial["name"] == expected["name"]
+    root_created = recovery._candidate_never_started_proof(
+        plan,
+        unit,
+        stage="quarantine_root_created",
+        listener=False,
+    )
+    assert root_created["name"] == expected["name"]
+
+    unit["Id"] = "jato-fullstack-backend@wrong.service"
+    with pytest.raises(
+        recovery.RecoveryError,
+        match="initial Candidate proof differs from plan",
+    ) as error:
+        recovery._candidate_never_started_proof(
+            plan,
+            unit,
+            stage="initial",
+            listener=False,
+        )
+    assert error.value.stage == "initial_candidate_proof"
+    assert error.value.field_diffs == (
+        {
+            "field": "name",
+            "expected": expected["name"],
+            "actual": "jato-fullstack-backend@wrong.service",
+        },
+    )
+    assert error.value.passed[-1] == "candidate_never_started"
+    assert error.value.not_reached == (
+        "monthly_worker_disabled",
+        "switch_unit_quiescent",
+    )
+    failure = recovery.build_failure_result(
+        error.value,
+        mode="dry-run",
+        implementation_commit=IMPLEMENTATION_COMMIT,
+        plan_sha256="c" * 64,
+    )
+    assert all(
+        failure[field] is False
+        for field in recovery.DIAGNOSTIC_CHANGE_FIELDS
+    )
+    unit["Id"] = expected["name"]
+
+    unit["ActiveState"] = "active"
+    with pytest.raises(recovery.RecoveryError, match="lifetime evidence") as error:
+        recovery._candidate_never_started_proof(
+            plan,
+            unit,
+            stage="initial",
+            listener=False,
+        )
+    assert error.value.passed == (
+        "active_backend_2_workers_6g_8g",
+        "nginx_unchanged",
+        "public_health_unchanged",
+        "database_read_only",
+    )
+    assert error.value.not_reached == (
+        "monthly_worker_disabled",
+        "switch_unit_quiescent",
+    )
+    failure = recovery.build_failure_result(
+        error.value,
+        mode="dry-run",
+        implementation_commit=IMPLEMENTATION_COMMIT,
+        plan_sha256="c" * 64,
+    )
+    assert all(
+        failure[field] is False
+        for field in recovery.DIAGNOSTIC_CHANGE_FIELDS
+    )
+
+    with pytest.raises(recovery.RecoveryError, match="lifetime evidence") as error:
+        recovery._candidate_never_started_proof(
+            plan,
+            unit,
+            stage="quarantined_fenced",
+            listener=False,
+        )
+    assert error.value.passed == ()
+    assert error.value.not_reached == ()
+    unit["ActiveState"] = expected["activeState"]
 
     cached = recovery._candidate_never_started_proof(
         plan,
@@ -1326,6 +1437,238 @@ def test_schema_v3_allows_only_reviewed_cached_sources_before_daemon_reload() ->
             stage="quarantined_fenced",
             listener=False,
         )
+
+
+def test_systemd_properties_requires_the_observed_unit_id() -> None:
+    properties = {
+        "Id": "jato-fullstack-backend@8001.service",
+        "LoadState": "loaded",
+        "ActiveState": "inactive",
+        "SubState": "dead",
+        "UnitFileState": "disabled",
+        "MemoryHigh": str(3 * 1024**3),
+        "MemoryMax": str(4 * 1024**3),
+        "MainPID": "0",
+        "InvocationID": "",
+        "NRestarts": "0",
+        "ExecMainStartTimestampMonotonic": "0",
+        "ActiveEnterTimestampMonotonic": "0",
+        "ControlGroup": "",
+        "Result": "success",
+        "InactiveEnterTimestampMonotonic": "0",
+        "FragmentPath": "/etc/systemd/system/test.service",
+        "DropInPaths": "",
+    }
+    output = "\n".join(f"{key}={value}" for key, value in properties.items())
+    with mock.patch.object(recovery, "_run_text", return_value=output) as run:
+        observed = recovery._systemd_properties(
+            "jato-fullstack-backend@8001.service"
+        )
+    assert observed == properties
+    assert "--property=Id" in run.call_args.args[0]
+
+    without_id = "\n".join(
+        f"{key}={value}" for key, value in properties.items() if key != "Id"
+    )
+    with (
+        mock.patch.object(recovery, "_run_text", return_value=without_id),
+        pytest.raises(recovery.RecoveryError, match="incomplete properties"),
+    ):
+        recovery._systemd_properties("jato-fullstack-backend@8001.service")
+
+
+def test_main_emits_structured_failure_json_and_keeps_nonzero_exit(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    error = recovery.RecoveryError(
+        "candidate_runtime_invalid",
+        "Candidate proof differs from the reviewed plan",
+        stage="initial_candidate_proof",
+        field_diffs=(
+            {
+                "field": "name",
+                "expected": "jato-fullstack-backend@8001.service",
+                "actual": None,
+            },
+        ),
+        passed=("active_backend_2_workers_6g_8g",),
+        not_reached=("monthly_worker_disabled",),
+    )
+    with mock.patch.object(recovery, "recover", side_effect=error):
+        assert recovery.main(_main_arguments(tmp_path)) == 2
+
+    captured = capsys.readouterr()
+    result = json.loads(captured.out)
+    assert result["decision"] == "dry-run-rejected"
+    assert result["stage"] == "initial_candidate_proof"
+    assert result["fieldDiffs"][0]["field"] == "name"
+    assert result["passed"] == ["active_backend_2_workers_6g_8g"]
+    assert result["notReached"] == ["monthly_worker_disabled"]
+    assert all(
+        result[field] is None for field in recovery.DIAGNOSTIC_CHANGE_FIELDS
+    )
+    assert "candidate_runtime_invalid" in captured.err
+
+
+def test_main_redacts_unexpected_exception_detail(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    with mock.patch.object(
+        recovery,
+        "recover",
+        side_effect=OSError("secret-token-must-not-leak"),
+    ):
+        assert recovery.main(_main_arguments(tmp_path)) == 2
+
+    captured = capsys.readouterr()
+    result = json.loads(captured.out)
+    assert result["category"] == "invalid_input"
+    assert result["detail"] == "OSError"
+    assert "secret-token-must-not-leak" not in captured.out
+    assert "secret-token-must-not-leak" not in captured.err
+
+
+def test_main_preserves_success_result_contract(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    expected = {
+        "decision": "candidate-residue-dry-run-eligible",
+        "implementationCommit": IMPLEMENTATION_COMMIT,
+        "mode": "dry-run",
+        "planSha256": "c" * 64,
+        "trafficChanged": False,
+    }
+    with mock.patch.object(recovery, "recover", return_value=expected):
+        assert recovery.main(_main_arguments(tmp_path)) == 0
+
+    captured = capsys.readouterr()
+    assert json.loads(captured.out) == expected
+    assert captured.err == ""
+
+
+def test_apply_failure_reports_unknown_change_status() -> None:
+    result = recovery.build_failure_result(
+        recovery.RecoveryError("checkpoint_changed", "checkpoint changed"),
+        mode="apply",
+        implementation_commit=IMPLEMENTATION_COMMIT,
+        plan_sha256="c" * 64,
+    )
+    assert all(
+        result[field] is None for field in recovery.DIAGNOSTIC_CHANGE_FIELDS
+    )
+
+
+def test_failure_result_redacts_common_secret_shapes() -> None:
+    result = recovery.build_failure_result(
+        recovery.RecoveryError(
+            "probe_failed",
+            "password=do-not-print dsn:postgresql://user:pass@host/db",
+            field_diffs=(
+                {
+                    "field": "connection",
+                    "expected": "token=do-not-print",
+                    "actual": "postgresql://user:pass@host/db",
+                },
+            ),
+        ),
+        mode="dry-run",
+        implementation_commit=IMPLEMENTATION_COMMIT,
+        plan_sha256="c" * 64,
+    )
+    serialized = json.dumps(result, sort_keys=True)
+    assert "do-not-print" not in serialized
+    assert "user:pass" not in serialized
+    assert serialized.count("<redacted>") == 4
+
+
+@pytest.mark.parametrize("live_fence", [False, True])
+def test_terminal_apply_reports_whether_it_finalized_the_fence(
+    tmp_path: Path,
+    live_fence: bool,
+) -> None:
+    checkpoint_path = (
+        tmp_path / "state/checkpoints/incident/checkpoint.json"
+    )
+    plan = {
+        "schemaVersion": 3,
+        "incidentId": "incident",
+        "checkpoint": {"path": str(checkpoint_path), "identity": {}},
+        "runtime": {"deploymentMarker": str(tmp_path / "live-fence")},
+    }
+    authorization = {"decision": "candidate-residue-dry-run-eligible"}
+    authorization_sha256 = "9" * 64
+    receipt = {
+        "authorization": {
+            **authorization,
+            "authorizationSha256": authorization_sha256,
+        },
+        "createdAt": "2026-08-04T00:00:00.000Z",
+    }
+    observation = {"active": {"frontendCommit": ACTIVE_COMMIT}}
+
+    with (
+        mock.patch.object(
+            recovery,
+            "load_recovery_plan",
+            return_value=(plan, "c" * 64),
+        ),
+        mock.patch.object(
+            recovery,
+            "_load_dry_run_authorization",
+            return_value=(authorization, authorization_sha256),
+        ),
+        mock.patch.object(recovery, "assert_production_lock", return_value={}),
+        mock.patch.object(
+            recovery,
+            "_validate_legacy_checkpoint_chain",
+            return_value=({}, mock.Mock()),
+        ),
+        mock.patch.object(
+            recovery,
+            "load_checkpoint",
+            return_value={"phase": checkpoint.PRE_SWITCH_ABORT_PHASE},
+        ),
+        mock.patch.object(recovery, "_validate_backup_chain"),
+        mock.patch.object(recovery, "_validate_legacy_archive_and_source"),
+        mock.patch.object(
+            recovery,
+            "_load_bound_terminal_receipt",
+            return_value=receipt,
+        ),
+        mock.patch.object(
+            recovery,
+            "_load_finalization_receipt",
+            return_value={"fence": {}},
+        ),
+        mock.patch.object(recovery, "_path_lexists", return_value=live_fence),
+        mock.patch.object(recovery, "_finalize_recovery_fence") as finalize,
+        mock.patch.object(recovery, "validate_pre_switch_abort_settlement"),
+        mock.patch.object(
+            recovery,
+            "collect_observation",
+            return_value=observation,
+        ),
+        mock.patch.object(recovery, "validate_observation"),
+    ):
+        result = recovery.recover(
+            plan_path=tmp_path / "plan.json",
+            expected_plan_sha256="c" * 64,
+            bundle_root=tmp_path / "bundle",
+            implementation_commit=IMPLEMENTATION_COMMIT,
+            lock_path=tmp_path / "state/production-deploy.lock",
+            lock_holder_pid=1,
+            mode="apply",
+            dry_run_authorization_path=tmp_path / "authorization.json",
+            dry_run_authorization_sha256=authorization_sha256,
+        )
+
+    assert result["decision"] == "already-pre-switch-aborted"
+    assert result["checkpointChanged"] is False
+    assert result["mutationPerformed"] is live_fence
+    assert finalize.call_count == int(live_fence)
 
 
 def test_schema_v3_apply_authorization_is_loaded_only_from_bound_bundle(

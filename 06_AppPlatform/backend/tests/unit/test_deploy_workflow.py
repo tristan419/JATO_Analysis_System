@@ -210,6 +210,7 @@ def test_checkpoint_recovery_workflow_is_exactly_gated_and_read_only() -> None:
         "Validate Tencent recovery credentials",
         "Reconfirm current main before recovery transport",
         "Run reviewed checkpoint recovery on Tencent",
+        "Prepare structured checkpoint recovery result and summary",
         "Upload checkpoint recovery result",
     ]
     assert "secrets." not in str(recovery_steps[:8])
@@ -239,7 +240,36 @@ def test_checkpoint_recovery_workflow_is_exactly_gated_and_read_only() -> None:
     assert "verify-plan" in recovery_steps[9]["run"]
     assert "StrictHostKeyChecking=yes" in recovery_steps[10]["run"]
     assert "ABORT 2026-07-30-86ce PRE-SWITCH" not in workflow_text
-    result_artifact = recovery_steps[11]
+    assert recovery_steps[10]["id"] == "recovery"
+    assert "if" not in recovery_steps[10]
+    assert "continue-on-error" not in recovery_steps[10]
+    result_presentation = recovery_steps[11]
+    assert result_presentation["if"] == "${{ always() }}"
+    assert "secrets." not in str(result_presentation)
+    assert result_presentation["env"] == {
+        "RECOVERY_MAIN_SHA": "${{ github.sha }}",
+        "RECOVERY_MODE": "${{ inputs.mode }}",
+        "RECOVERY_RESULT": (
+            "${{ runner.temp }}/checkpoint-recovery-result.json"
+        ),
+        "RECOVERY_STEP_OUTCOME": "${{ steps.recovery.outcome }}",
+    }
+    assert "GITHUB_STEP_SUMMARY" in result_presentation["run"]
+    assert (
+        ".github/scripts/present_checkpoint_recovery_result.py"
+        in result_presentation["run"]
+    )
+    for option in (
+        "--result",
+        "--summary",
+        "--plan",
+        "--step-outcome",
+        "--mode",
+        "--main-sha",
+        "--plan-sha256",
+    ):
+        assert option in result_presentation["run"]
+    result_artifact = recovery_steps[12]
     assert result_artifact["if"] == "${{ always() }}"
     assert result_artifact["uses"] == "actions/upload-artifact@v4"
     assert result_artifact["with"] == {

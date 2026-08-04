@@ -1638,6 +1638,7 @@ def assert_required_ci_contract() -> None:
         "test_cleanup_toolkit_egg_info.py",
         "test_release_source_seal.py",
         "test_pre_switch_checkpoint_recovery.py",
+        "test_present_checkpoint_recovery_result.py",
         "test_release_shell_hardening.py",
         "test_deploy_workflow.py",
         "npx vitest run",

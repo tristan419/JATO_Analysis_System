@@ -1501,7 +1501,8 @@ def test_scheduler_restore_behavior_does_not_start_a_previously_inactive_timer(
     )
 
     result = subprocess.run(
-        ["bash", "-c", harness],
+        ["bash", "-s"],
+        input=harness,
         text=True,
         capture_output=True,
         check=False,
