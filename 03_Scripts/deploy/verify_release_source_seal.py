@@ -41,7 +41,9 @@ RUNTIME_SCOPES = (
 )
 SOURCE_CRITICAL_FILES = (
     "03_Scripts/deploy/cleanup_toolkit_egg_info.py",
+    "03_Scripts/deploy/fixed_active_preimage.py",
     "03_Scripts/deploy/jato_bluegreen_boot_reconcile.py",
+    "03_Scripts/deploy/nginx/jato_candidate_preview.conf.example",
     "03_Scripts/deploy/tencent_bluegreen_release.sh",
     "03_Scripts/deploy/validate_release_archive.py",
     "03_Scripts/deploy/jato_quiescence_gate.py",

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import subprocess
@@ -54,6 +55,9 @@ def _controller_environment(tmp_path: Path) -> dict[str, str]:
         "DEPLOY_REPOSITORY": "example/repository",
         "DEPLOY_RUN_ID": "42",
         "DEPLOY_RUN_ATTEMPT": "1",
+        "DEPLOY_APPROVAL_RUN_ID": "84",
+        "DEPLOY_APPROVAL_RUN_ATTEMPT": "2",
+        "DEPLOY_CANDIDATE_ATTESTATION_SHA256": "e" * 64,
         "DEPLOY_BRANCH": "main",
         "FRONTEND_ARTIFACT_IDENTITY": "frontend-artifact",
         "FRONTEND_ARTIFACT_CHECKSUM": "d" * 64,
@@ -136,6 +140,41 @@ def test_outer_unconditionally_hands_off_without_legacy_live_tree_mutation() -> 
     assert "03_Scripts/deploy/jato_quiescence_gate.py" in outer
     assert "03_Scripts/deploy/tencent_bluegreen_release.sh" in outer
     assert "jato-fullstack-backend-slot.env.example" in outer
+
+
+def test_outer_routes_candidate_cleanup_by_exact_checkpoint_phase() -> None:
+    outer = OUTER.read_text(encoding="utf-8")
+    start = outer.index(
+        'if [[ "$CHECKPOINT_DECISION" == "candidate-cleanup-required" ]]',
+    )
+    end = outer.index(
+        'if [[ "$CHECKPOINT_DECISION" == "reconcile-required" ]]',
+        start,
+    )
+    gate = outer[start:end]
+
+    assert "rollback_completed:discard-candidate" in gate
+    assert "active_updated:release-candidate" in gate
+    assert "explicit Candidate discard is required" in gate
+    assert "explicit Candidate release is required" in gate
+    assert "exit 1" in gate
+    assert "bluegreen_reconciliation_pending" not in gate
+
+
+def test_outer_allows_fixed_active_reconciliation_only_through_approval() -> None:
+    outer = OUTER.read_text(encoding="utf-8")
+    start = outer.index('if [[ "$CHECKPOINT_DECISION" == "reconcile-required" ]]')
+    end = outer.index(
+        'if [[ "$CHECKPOINT_DECISION" == "already-candidate-prepare-aborted" ]]',
+        start,
+    )
+    gate = outer[start:end]
+
+    assert "approve-candidate-to-active:restore-previous-active" in gate
+    assert "approve-candidate-to-active:finalize-active-update" in gate
+    assert "approve-candidate-to-active:resume-rollback" in gate
+    assert "before any other mode" in gate
+    assert "exit 1" in gate
 
 
 def test_previous_metadata_sidecar_uses_release_identity_outside_checkpoints() -> None:
@@ -369,11 +408,13 @@ def test_candidate_is_verified_before_quiescence_and_nginx_switch() -> None:
     prepare = script[script.index("prepare_and_switch()"):]
     candidate = prepare.index("\n  verify_candidate\n")
     supervisor = prepare.index("\n  run_switch_supervisor\n", candidate)
-    persistent = _shell_function(script, "run_switch_supervisor")
+    persistent = _shell_function(script, "run_quiescence_supervisor")
 
     assert candidate < supervisor
     assert '"$python_bin" -B "$helper" hold' in persistent
-    assert '-- "$bash_bin" "$controller" switch-locked' in persistent
+    assert '-- "$bash_bin" "$controller" "$locked_mode"' in persistent
+    assert "active-update-locked" in persistent
+    assert "restore-previous-active-locked" in persistent
     assert '--working-directory="$RELEASE_DIR"' in persistent
     for required in (
         "/healthz",
@@ -384,6 +425,1195 @@ def test_candidate_is_verified_before_quiescence_and_nginx_switch() -> None:
         "jato_monthly_worker.py",
     ):
         assert required in script
+
+
+def test_prepare_candidate_stops_at_manual_review_without_public_mutation() -> None:
+    script = CONTROLLER.read_text(encoding="utf-8")
+    prepare = _shell_function(script, "prepare_candidate")
+    preview = _shell_function(script, "start_candidate_preview")
+    preview_stop = _shell_function(script, "stop_candidate_preview")
+    preview_verify = _shell_function(script, "verify_candidate_preview_unit")
+    preview_render = _shell_function(script, "render_candidate_preview_config")
+    preview_http = _shell_function(script, "verify_candidate_preview_http")
+
+    ordered = (
+        "materialize_release_source",
+        "run_candidate_build_scope",
+        "verify_final_runtime_seal",
+        "assert_no_database_migration_delta",
+        "assert_runtime_storage_reserve",
+        "install_slot_runtime",
+        "verify_candidate",
+        "verify_candidate_data_access_contract",
+        "start_candidate_preview",
+        "verify_candidate_preview",
+        "checkpoint_write candidate_ready completed inspect_then_resume",
+        "PRE_SUPERVISOR_CANDIDATE_ARMED=false",
+    )
+    offsets = []
+    cursor = 0
+    for token in ordered:
+        cursor = prepare.index(token, cursor)
+        offsets.append(cursor)
+        cursor += len(token)
+    assert offsets == sorted(offsets)
+    binding = prepare.index('binding="$(evidence_binding)"')
+    checkpoint = prepare.index(
+        "checkpoint_write candidate_ready completed inspect_then_resume",
+    )
+    assert binding < checkpoint
+    assert "; $binding" in prepare[checkpoint:]
+    for forbidden in (
+        "prepare_stable_nginx_boot_infrastructure",
+        "arm_pre_switch_static_boot_safety",
+        "run_switch_supervisor",
+        "pause_schedulers",
+        "mark_maintenance_required",
+        "clear_maintenance_marker",
+        "systemctl reload nginx",
+        "ACTIVE_RELEASE_LINK",
+    ):
+        assert forbidden not in prepare
+    assert "--collect" in preview
+    assert "--service-type=exec" in preview
+    assert "MemoryHigh=$BLUEGREEN_CANDIDATE_PREVIEW_MEMORY_HIGH" in preview
+    assert "MemoryMax=$BLUEGREEN_CANDIDATE_PREVIEW_MEMORY_MAX" in preview
+    assert "MemorySwapMax=0" in preview
+    assert "CPUQuota=25%" in preview
+    assert "TasksMax=$BLUEGREEN_CANDIDATE_PREVIEW_TASKS_MAX" in preview
+    assert 'BindsTo=${SERVICE_PREFIX}${CANDIDATE_SLOT}.service' in preview
+    assert '"${SERVICE_PREFIX}${CANDIDATE_SLOT}.service"' in preview_verify
+    assert '"${SERVICE_PREFIX}${CANDIDATE_SLOT}.service"' in preview_stop
+    assert 'JATO_CANDIDATE_PREVIEW_ID=$identity' in preview
+    assert "--wait" not in preview
+    assert '"$DEPLOY_ARCHIVE_SHA256"' in preview_render
+    assert '"archiveSha256": archive_sha256' in preview_render
+    assert '"$DEPLOY_ARCHIVE_SHA256"' in preview_http
+    assert '"archiveSha256": sys.argv[4]' in preview_http
+
+
+def test_prepare_candidate_success_reuses_pipeline_and_does_not_switch(
+    tmp_path: Path,
+) -> None:
+    trace = tmp_path / "prepare-candidate.trace"
+    result = _run_controller_harness(
+        tmp_path,
+        f"""
+TRACE={trace}
+PHASE=prepared
+record() {{ printf '%s\\n' "$1" >> "$TRACE"; }}
+require_environment() {{ record require; }}
+assert_inherited_production_lock() {{ record lock; }}
+ensure_bluegreen_state_root() {{ record state-root; }}
+ensure_bluegreen_runtime_roots() {{ record runtime-roots; }}
+assert_no_active_switch_unit() {{ record no-switch; }}
+read_checkpoint_phase_status() {{
+  CHECKPOINT_PHASE="$PHASE"
+  CHECKPOINT_STATUS=completed
+}}
+resolve_active_slot() {{ CURRENT_ACTIVE_SLOT=8000; CANDIDATE_SLOT=8001; }}
+resolve_current_frontend_root() {{ record current-frontend; }}
+prepare_shared_runtime() {{ record shared; }}
+ensure_current_slot_restartable() {{ record restartable; }}
+preserve_previous_release_metadata() {{ record metadata; }}
+guard_release_storage() {{ record storage; }}
+assert_host_memory_budget() {{ record memory; }}
+materialize_release_source() {{ record materialize; }}
+run_candidate_build_scope() {{ record build; PHASE=migrated; }}
+verify_final_runtime_seal() {{ record seal; }}
+assert_no_database_migration_delta() {{ record database; }}
+assert_runtime_storage_reserve() {{ record runtime-storage; }}
+install_slot_runtime() {{ record install; PRE_SUPERVISOR_CANDIDATE_ARMED=true; }}
+verify_candidate() {{ record candidate; }}
+verify_candidate_data_access_contract() {{ record data-access; }}
+start_candidate_preview() {{ record preview-start; }}
+verify_candidate_preview() {{ record preview-verify; }}
+evidence_binding() {{
+  printf 'evidence_path=/state/candidate.evidence.json evidence_sha256={'d' * 64}'
+}}
+checkpoint_write() {{
+  record "checkpoint:$1:$2:$3:$4"
+  PHASE="$1"
+}}
+candidate_ready_state_is_legal() {{ record ready-legal; }}
+prepare_stable_nginx_boot_infrastructure() {{ record unexpected-public-nginx; }}
+arm_pre_switch_static_boot_safety() {{ record unexpected-boot-arm; }}
+run_switch_supervisor() {{ record unexpected-switch; }}
+pause_schedulers() {{ record unexpected-scheduler-pause; }}
+mark_maintenance_required() {{ record unexpected-marker; }}
+prepare_candidate
+printf 'armed=%s\\n' "$PRE_SUPERVISOR_CANDIDATE_ARMED"
+""",
+    )
+    events = trace.read_text(encoding="utf-8").splitlines()
+
+    assert result.returncode == 0, result.stderr + result.stdout
+    expected_binding = (
+        "evidence_path=/state/candidate.evidence.json "
+        f"evidence_sha256={'d' * 64}"
+    )
+    checkpoint_event = next(
+        event
+        for event in events
+        if event.startswith(
+            "checkpoint:candidate_ready:completed:inspect_then_resume:",
+        )
+    )
+    assert expected_binding in checkpoint_event
+    assert "armed=false" in result.stdout
+    assert not any(event.startswith("unexpected-") for event in events)
+    assert events.index("preview-start") < events.index("preview-verify")
+    assert events.index("preview-verify") < events.index(
+        checkpoint_event,
+    )
+
+
+def test_fixed_active_approval_keeps_slot_and_candidate_roles_stable() -> None:
+    script = CONTROLLER.read_text(encoding="utf-8")
+    approve = _shell_function(script, "approve_candidate_to_active")
+    install = _shell_function(script, "install_release_on_fixed_active")
+    rollback = _shell_function(script, "rollback_fixed_active_update")
+
+    assert "resolve_active_slot" in approve
+    assert "resolve_existing_candidate_slot" not in approve
+    assert "atomic_text" not in approve
+    assert "atomic_text" not in install
+    assert '"$CURRENT_ACTIVE_SLOT"' in install
+    assert install.index("systemctl restart") < install.index(
+        "verify_slot_release_exact"
+    ) < install.index("systemctl reload nginx")
+    assert "verify_fixed_active_candidate_retained" in install
+    assert "stop_candidate_preview" not in rollback
+    assert "restore_candidate_runtime_preimage" not in rollback
+    assert rollback.index("verify_public_release_exact") < rollback.index(
+        "verify_fixed_active_candidate_retained"
+    ) < rollback.index("checkpoint_write rollback_completed")
+    assert "approve-candidate-to-active)" in script
+
+
+def test_content_addressed_previous_proof_binds_both_verified_seals(
+    tmp_path: Path,
+) -> None:
+    archive = "7" * 64
+    previous = tmp_path / f"bluegreen/releases/{OLD_SHA}/{archive}"
+    previous.mkdir(parents=True)
+    source_seal = previous / ".jato-source-seal.json"
+    source_seal.write_text('{"source":"sealed"}\n', encoding="utf-8")
+    source_digest = hashlib.sha256(source_seal.read_bytes()).hexdigest()
+    runtime_seal = previous / ".jato-runtime-seal.json"
+    runtime_seal.write_text(
+        json.dumps(
+            {
+                "releaseIdentity": {
+                    "commit": OLD_SHA,
+                    "archiveSha256": archive,
+                    "frontendIdentity": "frontend-old",
+                    "frontendChecksum": "8" * 64,
+                },
+                "sourceSealSha256": source_digest,
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    verifier = tmp_path / "seal-verifier.py"
+    verifier.write_text("raise SystemExit(0)\n", encoding="utf-8")
+    result = _run_controller_harness(
+        tmp_path,
+        f"""
+sudo() {{
+  if [[ "${{1:-}}" == "-n" ]]; then shift; fi
+  "$@"
+}}
+PREVIOUS_RELEASE_ROOT={previous}
+PREVIOUS_RELEASE_SHA={OLD_SHA}
+SOURCE_SEAL_HELPER={verifier}
+fixed_active_previous_release_proof
+""",
+    )
+
+    assert result.returncode == 0, result.stderr + result.stdout
+    assert result.stdout.strip() == (
+        f"content-addressed:{OLD_SHA}:{archive}:{source_digest}:"
+        f"{hashlib.sha256(runtime_seal.read_bytes()).hexdigest()}"
+    )
+
+    source_seal.write_text('{"source":"drifted"}\n', encoding="utf-8")
+    drifted = _run_controller_harness(
+        tmp_path,
+        f"""
+sudo() {{
+  if [[ "${{1:-}}" == "-n" ]]; then shift; fi
+  "$@"
+}}
+PREVIOUS_RELEASE_ROOT={previous}
+PREVIOUS_RELEASE_SHA={OLD_SHA}
+SOURCE_SEAL_HELPER={verifier}
+fixed_active_previous_release_proof
+""",
+    )
+
+    assert drifted.returncode != 0
+    assert "previous runtime seal identity is invalid" in drifted.stderr
+
+
+def test_fixed_active_approval_success_updates_active_without_candidate_cleanup(
+    tmp_path: Path,
+) -> None:
+    trace = tmp_path / "fixed-active.trace"
+    result = _run_controller_harness(
+        tmp_path,
+        f"""
+TRACE={trace}
+PHASE=candidate_ready
+record() {{ printf '%s\n' "$1" >> "$TRACE"; }}
+require_environment() {{ record require; }}
+assert_inherited_production_lock() {{ record lock; }}
+ensure_bluegreen_state_root() {{ record state-root; }}
+ensure_bluegreen_runtime_roots() {{ record runtime-roots; }}
+assert_no_active_switch_unit() {{ record no-switch; }}
+verify_quiescence_hold_context() {{ record quiescence-held; }}
+resolve_active_slot() {{ CURRENT_ACTIVE_SLOT=8000; CANDIDATE_SLOT=8001; }}
+capture_fixed_active_slot_anchor() {{ FIXED_ACTIVE_SLOT_DIGEST={'f' * 64}; }}
+read_checkpoint_phase_status() {{
+  CHECKPOINT_PHASE="$PHASE"
+  CHECKPOINT_STATUS=completed
+}}
+candidate_ready_state_is_legal_under_hold() {{ record candidate-revalidated; }}
+verify_durable_route_ownership() {{ record previous-active-proven; }}
+verify_fixed_active_unit_compatibility() {{ record unit-compatible; }}
+prepare_fixed_active_targets() {{
+  ACTIVE_UPDATE_TARGET_ENV=/tmp/fixed-active-env
+  ACTIVE_UPDATE_TARGET_NGINX=/tmp/fixed-active-nginx
+  record targets
+}}
+fixed_active_preimage_command() {{ record "preimage:$1"; }}
+fixed_active_previous_release_proof() {{ record legacy-proof; }}
+verify_fixed_active_previous_release_source() {{ record source-revalidated; }}
+evidence_binding() {{
+  printf 'evidence_path=/state/active.evidence.json evidence_sha256={'c' * 64}'
+}}
+checkpoint_write() {{ record "checkpoint:$1:$2:$3:$4"; PHASE="$1"; }}
+pause_schedulers() {{ record pause; }}
+install_release_on_fixed_active() {{ record active-install; }}
+resume_schedulers() {{ record resume; }}
+mark_fixed_active_legacy_bootstrap_complete() {{ record legacy-consumed; }}
+fixed_active_update_is_verified_under_hold() {{ record active-verified; }}
+fixed_active_update_is_committed_under_hold() {{ record candidate-retained; }}
+remove_fixed_active_target_temporaries() {{ record temp-clean; }}
+stop_candidate_preview() {{ record unexpected-preview-stop; }}
+restore_candidate_runtime_preimage() {{ record unexpected-candidate-restore; }}
+active_update_locked
+printf 'active=%s candidate=%s phase=%s armed=%s\n' \
+  "$CURRENT_ACTIVE_SLOT" "$CANDIDATE_SLOT" "$PHASE" \
+  "$ACTIVE_UPDATE_HANDLER_ARMED"
+""",
+    )
+    events = trace.read_text(encoding="utf-8").splitlines()
+
+    assert result.returncode == 0, result.stderr + result.stdout
+    assert "active=8000 candidate=8001 phase=active_updated armed=false" in result.stdout
+    assert "preimage:capture" in events
+    expected_approval = (
+        "candidate_run=42/1 approval_run=84/2 "
+        f"candidate_attestation_sha256={'e' * 64}"
+    )
+    expected_evidence = (
+        "evidence_path=/state/active.evidence.json "
+        f"evidence_sha256={'c' * 64}"
+    )
+    started = next(
+        event
+        for event in events
+        if event.startswith(
+            "checkpoint:active_update_started:in_progress:rollback_required:",
+        )
+    )
+    updated = next(
+        event
+        for event in events
+        if event.startswith(
+            "checkpoint:active_updated:completed:inspect_then_resume:",
+        )
+    )
+    verified = next(
+        event
+        for event in events
+        if event.startswith(
+            "checkpoint:active_update_verified:completed:inspect_then_resume:",
+        )
+    )
+    for event in (started, verified, updated):
+        assert expected_approval in event
+        assert expected_evidence in event
+    assert events.index("pause") < events.index("active-install")
+    assert events.index("active-install") < events.index("legacy-consumed")
+    assert events.index("legacy-consumed") < events.index("active-verified")
+    assert events.index("active-verified") < events.index(verified)
+    assert events.index(verified) < events.index("resume")
+    assert events.index("resume") < events.index("candidate-retained")
+    assert "unexpected-preview-stop" not in events
+    assert "unexpected-candidate-restore" not in events
+
+
+@pytest.mark.parametrize("phase", ["active_update_started", "rollback_started"])
+def test_interrupted_fixed_active_update_resumes_exact_restore(
+    tmp_path: Path,
+    phase: str,
+) -> None:
+    trace = tmp_path / f"{phase}.trace"
+    result = _run_controller_harness(
+        tmp_path,
+        f"""
+TRACE={trace}
+PHASE={phase}
+record() {{ printf '%s\n' "$1" >> "$TRACE"; }}
+require_environment() {{ record require; }}
+verify_quiescence_hold_context() {{ record hold; }}
+resolve_active_slot() {{ CURRENT_ACTIVE_SLOT=8000; CANDIDATE_SLOT=8001; }}
+capture_fixed_active_slot_anchor() {{ FIXED_ACTIVE_SLOT_DIGEST={'f' * 64}; }}
+read_checkpoint_phase_status() {{
+  CHECKPOINT_PHASE="$PHASE"
+  CHECKPOINT_STATUS=in_progress
+}}
+prepare_fixed_active_targets() {{ record targets; }}
+load_fixed_active_previous_identity() {{ record previous; }}
+rollback_fixed_active_update() {{
+  record "rollback:$1:$2"
+  PHASE=rollback_completed
+}}
+active_update_locked
+""",
+    )
+    events = trace.read_text(encoding="utf-8").splitlines()
+
+    assert result.returncode != 0
+    assert f"rollback::{phase}" in events
+    assert "interrupted fixed Active update was restored exactly" in result.stderr
+
+
+def test_verified_fixed_active_update_can_finish_scheduler_commit(
+    tmp_path: Path,
+) -> None:
+    trace = tmp_path / "active-update-verified.trace"
+    result = _run_controller_harness(
+        tmp_path,
+        f"""
+TRACE={trace}
+PHASE=active_update_verified
+record() {{ printf '%s\n' "$1" >> "$TRACE"; }}
+require_environment() {{ record require; }}
+verify_quiescence_hold_context() {{ record hold; }}
+resolve_active_slot() {{ CURRENT_ACTIVE_SLOT=8000; CANDIDATE_SLOT=8001; }}
+capture_fixed_active_slot_anchor() {{ FIXED_ACTIVE_SLOT_DIGEST={'f' * 64}; }}
+read_checkpoint_phase_status() {{
+  CHECKPOINT_PHASE="$PHASE"
+  CHECKPOINT_STATUS=completed
+}}
+prepare_fixed_active_targets() {{ record targets; }}
+load_fixed_active_previous_identity() {{ record previous; }}
+fixed_active_update_is_committed_under_hold() {{ record committed; }}
+evidence_binding() {{
+  printf 'evidence_path=/state/active.evidence.json evidence_sha256={'c' * 64}'
+}}
+checkpoint_write() {{ record "checkpoint:$1:$2:$3"; PHASE="$1"; }}
+remove_fixed_active_target_temporaries() {{ record temp-clean; }}
+active_update_locked
+printf 'phase=%s armed=%s\n' "$PHASE" "$ACTIVE_UPDATE_HANDLER_ARMED"
+""",
+    )
+    events = trace.read_text(encoding="utf-8").splitlines()
+
+    assert result.returncode == 0, result.stderr + result.stdout
+    assert "committed" in events
+    assert "checkpoint:active_updated:completed:inspect_then_resume" in events
+    assert "phase=active_updated armed=false" in result.stdout
+
+
+def test_prepare_failure_cleanup_seals_checkpoint_as_aborted(tmp_path: Path) -> None:
+    trace = tmp_path / "prepare-abort.trace"
+    checkpoint = tmp_path / "checkpoint.json"
+    checkpoint.write_text("{}\n", encoding="utf-8")
+    result = _run_controller_harness(
+        tmp_path,
+        f"""
+TRACE={trace}
+PHASE=migrated
+CHECKPOINT_FILE={checkpoint}
+record() {{ printf '%s\n' "$1" >> "$TRACE"; }}
+read_checkpoint_phase_status() {{
+  CHECKPOINT_PHASE="$PHASE"
+  CHECKPOINT_STATUS=completed
+}}
+checkpoint_write() {{ record "checkpoint:$1:$2:$3"; PHASE="$1"; }}
+settle_candidate_checkpoint_after_cleanup
+printf 'phase=%s\n' "$PHASE"
+""",
+    )
+
+    assert result.returncode == 0, result.stderr + result.stdout
+    assert (
+        "checkpoint:candidate_prepare_aborted:completed:automatic"
+        in trace.read_text(encoding="utf-8")
+    )
+    assert "phase=candidate_prepare_aborted" in result.stdout
+
+
+def test_fixed_active_approval_failure_restores_active_and_retains_candidate(
+    tmp_path: Path,
+) -> None:
+    trace = tmp_path / "fixed-active-failure.trace"
+    result = _run_controller_harness(
+        tmp_path,
+        f"""
+TRACE={trace}
+PHASE=candidate_ready
+record() {{ printf '%s\n' "$1" >> "$TRACE"; }}
+require_environment() {{ :; }}
+assert_inherited_production_lock() {{ :; }}
+ensure_bluegreen_state_root() {{ :; }}
+ensure_bluegreen_runtime_roots() {{ :; }}
+assert_no_active_switch_unit() {{ :; }}
+verify_quiescence_hold_context() {{ :; }}
+resolve_active_slot() {{ CURRENT_ACTIVE_SLOT=8000; CANDIDATE_SLOT=8001; }}
+capture_fixed_active_slot_anchor() {{ FIXED_ACTIVE_SLOT_DIGEST={'f' * 64}; }}
+read_checkpoint_phase_status() {{
+  CHECKPOINT_PHASE="$PHASE"
+  CHECKPOINT_STATUS=completed
+}}
+candidate_ready_state_is_legal_under_hold() {{ :; }}
+verify_durable_route_ownership() {{ :; }}
+verify_fixed_active_unit_compatibility() {{ :; }}
+prepare_fixed_active_targets() {{
+  ACTIVE_UPDATE_TARGET_ENV=/tmp/fixed-active-env
+  ACTIVE_UPDATE_TARGET_NGINX=/tmp/fixed-active-nginx
+}}
+fixed_active_preimage_command() {{ record "preimage:$1"; }}
+fixed_active_previous_release_proof() {{ :; }}
+verify_fixed_active_previous_release_source() {{ :; }}
+evidence_binding() {{ printf 'evidence_path=/e evidence_sha256={'c' * 64}'; }}
+checkpoint_write() {{ record "checkpoint:$1"; PHASE="$1"; }}
+pause_schedulers() {{ record pause; }}
+install_release_on_fixed_active() {{ record active-install-failed; return 1; }}
+rollback_fixed_active_update() {{
+  record rollback
+  record candidate-retained
+  PHASE=rollback_completed
+}}
+remove_fixed_active_target_temporaries() {{ record temp-clean; }}
+trap fixed_active_update_exit_handler EXIT
+active_update_locked
+""",
+    )
+    events = trace.read_text(encoding="utf-8").splitlines()
+
+    assert result.returncode != 0
+    assert "active-install-failed" in events
+    assert "rollback" in events
+    assert "candidate-retained" in events
+    assert events.index("active-install-failed") < events.index("rollback")
+
+
+def test_evidence_binding_fails_closed_when_evidence_is_missing(
+    tmp_path: Path,
+) -> None:
+    result = _run_controller_harness(
+        tmp_path,
+        """
+set +e
+binding="$(evidence_binding)"
+rc=$?
+set -e
+printf 'rc=%s binding=%s\n' "$rc" "$binding"
+""",
+    )
+
+    assert result.returncode == 0, result.stderr + result.stdout
+    assert "rc=1 binding=" in result.stdout
+    assert "release evidence is unavailable" in result.stderr
+
+
+def test_restore_previous_active_is_gated_and_keeps_candidate() -> None:
+    script = CONTROLLER.read_text(encoding="utf-8")
+    restore = _shell_function(script, "restore_previous_active")
+    locked = _shell_function(script, "restore_previous_active_locked")
+    rollback = _shell_function(script, "rollback_fixed_active_update")
+    exit_handler = _shell_function(
+        script,
+        "restore_previous_active_exit_handler",
+    )
+
+    hold = locked.index("verify_quiescence_hold_context")
+    exact = locked.index("fixed_active_update_is_committed_under_hold")
+    pause = locked.index("pause_schedulers", exact)
+    checkpoint = locked.index(
+        "checkpoint_write rollback_started in_progress rollback_required",
+        pause,
+    )
+    rollback_call = locked.index("rollback_fixed_active_update", checkpoint)
+    assert hold < exact < pause < checkpoint < rollback_call
+    assert '"$CHECKPOINT_PHASE" != "active_updated"' in restore
+    assert '"$CHECKPOINT_STATUS" != "completed"' in restore
+    assert "fixed_active_approval_binding" in restore
+    assert "evidence_binding" in locked
+    assert "run_quiescence_supervisor restore-previous-active-locked" in restore
+    assert "stop_candidate_preview" not in restore
+    assert "restore_candidate_runtime_preimage" not in restore
+    assert 'verify_active_cgroup "$CURRENT_ACTIVE_SLOT"' in rollback
+    assert "fixed_active_preimage_command restore" in rollback
+    assert (
+        'verify_slot_release_exact "$CURRENT_ACTIVE_SLOT" '
+        '"$PREVIOUS_RELEASE_SHA"'
+    ) in rollback
+    assert 'verify_public_release_exact "$PREVIOUS_RELEASE_SHA"' in rollback
+    assert '"$PREVIOUS_RELEASE_ROOT/06_AppPlatform/frontend/dist"' in rollback
+    assert "verify_fixed_active_candidate_retained" in rollback
+    assert "previous_fixed_active_restore_is_committed" in rollback
+    assert "previous_fixed_active_restore_is_committed" in exit_handler
+    assert "restore-previous-active)" in script
+
+
+def test_restore_previous_active_success_is_bound_and_ordered(
+    tmp_path: Path,
+) -> None:
+    trace = tmp_path / "restore-previous-active.trace"
+    result = _run_controller_harness(
+        tmp_path,
+        f"""
+TRACE={trace}
+PHASE=active_updated
+record() {{ printf '%s\n' "$1" >> "$TRACE"; }}
+require_environment() {{ record require; }}
+assert_inherited_production_lock() {{ record lock; }}
+ensure_bluegreen_state_root() {{ record state-root; }}
+ensure_bluegreen_runtime_roots() {{ record runtime-roots; }}
+assert_no_active_switch_unit() {{ record no-switch; }}
+verify_quiescence_hold_context() {{ record quiescence-held; }}
+resolve_active_slot() {{ CURRENT_ACTIVE_SLOT=8000; CANDIDATE_SLOT=8001; }}
+capture_fixed_active_slot_anchor() {{ record active-slot-anchor; }}
+read_checkpoint_phase_status() {{
+  CHECKPOINT_PHASE="$PHASE"
+  CHECKPOINT_STATUS=completed
+}}
+prepare_fixed_active_targets() {{ record targets; }}
+load_fixed_active_previous_identity() {{
+  record previous-identity
+  PREVIOUS_RELEASE_SHA={'9' * 40}
+  PREVIOUS_RELEASE_ROOT=/old
+}}
+fixed_active_update_is_committed_under_hold() {{ record active-and-candidate-exact; }}
+evidence_binding() {{
+  printf 'evidence_path=/state/restore.evidence.json evidence_sha256={'8' * 64}'
+}}
+pause_schedulers() {{ record pause; }}
+checkpoint_write() {{ record "checkpoint:$1:$2:$3:$4"; PHASE="$1"; }}
+rollback_fixed_active_update() {{
+  record "restore:$1:$2"
+  PHASE=rollback_completed
+}}
+remove_fixed_active_target_temporaries() {{ record temp-clean; }}
+restore_previous_active_locked
+printf 'phase=%s armed=%s\n' "$PHASE" "$PREVIOUS_ACTIVE_RESTORE_ARMED"
+""",
+    )
+    events = trace.read_text(encoding="utf-8").splitlines()
+
+    assert result.returncode == 0, result.stderr + result.stdout
+    assert "phase=rollback_completed armed=false" in result.stdout
+    exact = events.index("active-and-candidate-exact")
+    pause = events.index("pause")
+    checkpoint_index = next(
+        index
+        for index, event in enumerate(events)
+        if event.startswith("checkpoint:rollback_started:in_progress:")
+    )
+    restore_index = next(
+        index for index, event in enumerate(events) if event.startswith("restore:")
+    )
+    assert exact < pause < checkpoint_index < restore_index
+    checkpoint_event = events[checkpoint_index]
+    assert "candidate_run=42/1 approval_run=84/2" in checkpoint_event
+    assert f"candidate_attestation_sha256={'e' * 64}" in checkpoint_event
+    assert "evidence_path=/state/restore.evidence.json" in checkpoint_event
+    assert f"evidence_sha256={'8' * 64}" in checkpoint_event
+    assert events[restore_index] == (
+        f"restore:evidence_path=/state/restore.evidence.json "
+        f"evidence_sha256={'8' * 64}:active_updated"
+    )
+
+
+def test_restore_previous_active_failure_retains_maintenance_fence(
+    tmp_path: Path,
+) -> None:
+    result = _run_controller_harness(
+        tmp_path,
+        f"""
+require_environment() {{ :; }}
+assert_inherited_production_lock() {{ :; }}
+ensure_bluegreen_state_root() {{ :; }}
+ensure_bluegreen_runtime_roots() {{ :; }}
+assert_no_active_switch_unit() {{ :; }}
+verify_quiescence_hold_context() {{ :; }}
+resolve_active_slot() {{ CURRENT_ACTIVE_SLOT=8000; CANDIDATE_SLOT=8001; }}
+capture_fixed_active_slot_anchor() {{ :; }}
+read_checkpoint_phase_status() {{
+  CHECKPOINT_PHASE=active_updated
+  CHECKPOINT_STATUS=completed
+}}
+prepare_fixed_active_targets() {{ :; }}
+load_fixed_active_previous_identity() {{
+  PREVIOUS_RELEASE_SHA={'9' * 40}
+  PREVIOUS_RELEASE_ROOT=/old
+}}
+fixed_active_update_is_committed_under_hold() {{ printf 'candidate-retained\n'; }}
+evidence_binding() {{ printf 'evidence_path=/e evidence_sha256={'8' * 64}'; }}
+retain_fixed_active_maintenance_fence() {{ printf 'hold-retained\n'; }}
+pause_schedulers() {{ printf 'schedulers-paused\n'; }}
+checkpoint_write() {{ :; }}
+rollback_fixed_active_update() {{ printf 'restore-failed\n'; return 1; }}
+remove_fixed_active_target_temporaries() {{ printf 'temporaries-removed\n'; }}
+trap restore_previous_active_exit_handler EXIT
+restore_previous_active_locked
+""",
+    )
+
+    assert result.returncode == 81
+    assert "candidate-retained" in result.stdout
+    assert "restore-failed" in result.stdout
+    assert "hold-retained" in result.stdout
+    assert "temporaries-removed" in result.stdout
+
+
+@pytest.mark.parametrize("committed", (True, False))
+def test_restore_exit_handler_reconciles_rollback_completed_crash_window(
+    tmp_path: Path,
+    committed: bool,
+) -> None:
+    exact_result = "return 0" if committed else "return 1"
+    result = _run_controller_harness(
+        tmp_path,
+        f"""
+PREVIOUS_ACTIVE_RESTORE_ARMED=true
+read_checkpoint_phase_status() {{
+  CHECKPOINT_PHASE=rollback_completed
+  CHECKPOINT_STATUS=completed
+}}
+previous_fixed_active_restore_is_committed() {{
+  printf 'settled-state-revalidated\n'
+  {exact_result}
+}}
+mark_maintenance_required() {{ printf 'maintenance-fenced\n'; }}
+remove_fixed_active_target_temporaries() {{ printf 'temporaries-removed\n'; }}
+trap restore_previous_active_exit_handler EXIT
+false
+""",
+    )
+
+    assert "settled-state-revalidated" in result.stdout
+    assert "temporaries-removed" in result.stdout
+    if committed:
+        assert result.returncode == 1
+        assert "maintenance-fenced" not in result.stdout
+    else:
+        assert result.returncode == 81
+        assert "maintenance-fenced" in result.stdout
+
+
+def test_restore_previous_active_rejects_wrong_phase_before_fencing(
+    tmp_path: Path,
+) -> None:
+    result = _run_controller_harness(
+        tmp_path,
+        """
+require_environment() { :; }
+assert_inherited_production_lock() { :; }
+ensure_bluegreen_state_root() { :; }
+ensure_bluegreen_runtime_roots() { :; }
+assert_no_active_switch_unit() { :; }
+resolve_active_slot() { CURRENT_ACTIVE_SLOT=8000; CANDIDATE_SLOT=8001; }
+capture_fixed_active_slot_anchor() { :; }
+read_checkpoint_phase_status() {
+  CHECKPOINT_PHASE=candidate_ready
+  CHECKPOINT_STATUS=completed
+}
+mark_maintenance_required() { printf 'unexpected-marker\n'; }
+pause_schedulers() { printf 'unexpected-pause\n'; }
+restore_previous_active
+""",
+    )
+
+    assert result.returncode != 0
+    assert "requires active_updated/completed" in result.stderr
+    assert "unexpected-marker" not in result.stdout
+    assert "unexpected-pause" not in result.stdout
+
+
+@pytest.mark.parametrize("active_slot", ("8000", "8001"))
+def test_fixed_active_slot_anchor_is_byte_stable(
+    tmp_path: Path,
+    active_slot: str,
+) -> None:
+    active_slot_file = tmp_path / "active-slot"
+    active_slot_file.write_text(f"{active_slot}\n", encoding="utf-8")
+    result = _run_controller_harness(
+        tmp_path,
+        f"""
+sudo() {{
+  if [[ "${{1:-}}" == "-n" ]]; then shift; fi
+  "$@"
+}}
+ACTIVE_SLOT_FILE={active_slot_file}
+CURRENT_ACTIVE_SLOT={active_slot}
+capture_fixed_active_slot_anchor
+verify_fixed_active_slot_anchor
+printf 'other\n' > "$ACTIVE_SLOT_FILE"
+set +e
+verify_fixed_active_slot_anchor
+rc=$?
+set -e
+printf 'drift-rc=%s\n' "$rc"
+""",
+    )
+
+    assert result.returncode == 0, result.stderr + result.stdout
+    assert "drift-rc=1" in result.stdout
+    assert "active-slot owner changed" in result.stderr
+
+
+def test_active_updated_exit_window_revalidates_instead_of_rolling_back(
+    tmp_path: Path,
+) -> None:
+    result = _run_controller_harness(
+        tmp_path,
+        """
+ACTIVE_UPDATE_HANDLER_ARMED=true
+read_checkpoint_phase_status() {
+  CHECKPOINT_PHASE=active_updated
+  CHECKPOINT_STATUS=completed
+}
+fixed_active_update_is_committed() { printf 'committed-revalidated\n'; }
+rollback_fixed_active_update() { printf 'unexpected-rollback\n'; return 1; }
+remove_fixed_active_target_temporaries() { printf 'temporaries-removed\n'; }
+trap fixed_active_update_exit_handler EXIT
+false
+""",
+    )
+
+    assert result.returncode == 1
+    assert "committed-revalidated" in result.stdout
+    assert "temporaries-removed" in result.stdout
+    assert "unexpected-rollback" not in result.stdout
+
+
+def test_discard_candidate_mutates_only_candidate_runtime() -> None:
+    script = CONTROLLER.read_text(encoding="utf-8")
+    discard = _shell_function(script, "discard_candidate")
+    active_gate = _shell_function(
+        script,
+        "previous_active_is_exact_for_candidate_discard",
+    )
+
+    assert "previous_active_is_exact_for_candidate_discard" in discard
+    assert "stop_candidate_preview" in discard
+    assert "restore_candidate_runtime_preimage" in discard
+    assert "candidate_release_is_complete" in discard
+    assert "checkpoint_write candidate_discarded completed automatic" in discard
+    assert "rollback_completed" in discard
+    assert "fixed_active_preimage_command restore" not in discard
+    assert 'verify_active_cgroup "$CURRENT_ACTIVE_SLOT"' in active_gate
+    assert "verify_slot_release_exact" in active_gate
+    assert "verify_public_release_exact" in active_gate
+    assert "verify_durable_route_ownership" in active_gate
+    assert "verify_active_monthly_gate_released" in active_gate
+    for forbidden in (
+        "pause_schedulers",
+        "resume_schedulers",
+        "mark_maintenance_required",
+        "clear_maintenance_marker",
+        "systemctl restart",
+        "systemctl reload nginx",
+        "atomic_symlink",
+        "atomic_text",
+        "durable_install_file",
+        "discard_candidate_runtime_preimage",
+    ):
+        assert forbidden not in discard
+    assert "discard-candidate)" in script
+
+
+def test_discard_candidate_is_ordered_and_binds_evidence(tmp_path: Path) -> None:
+    trace = tmp_path / "discard-candidate.trace"
+    result = _run_controller_harness(
+        tmp_path,
+        f"""
+TRACE={trace}
+PHASE=candidate_ready
+CANDIDATE_CLEAN=false
+record() {{ printf '%s\n' "$1" >> "$TRACE"; }}
+require_environment() {{ record require; }}
+assert_inherited_production_lock() {{ record lock; }}
+ensure_bluegreen_state_root() {{ record state-root; }}
+ensure_bluegreen_runtime_roots() {{ record runtime-roots; }}
+assert_no_active_switch_unit() {{ record no-switch; }}
+resolve_active_slot() {{ CURRENT_ACTIVE_SLOT=8000; CANDIDATE_SLOT=8001; }}
+read_checkpoint_phase_status() {{
+  CHECKPOINT_PHASE="$PHASE"
+  CHECKPOINT_STATUS=completed
+}}
+evidence_binding() {{
+  printf 'evidence_path=/state/discard.evidence.json evidence_sha256={'b' * 64}'
+}}
+previous_active_is_exact_for_candidate_discard() {{ record active-exact; }}
+stop_candidate_preview() {{ record preview-stopped; }}
+candidate_cleanup_is_complete() {{
+  record candidate-clean-check
+  [[ "$CANDIDATE_CLEAN" == true ]]
+}}
+restore_candidate_runtime_preimage() {{
+  record candidate-restored
+  CANDIDATE_CLEAN=true
+}}
+candidate_release_is_complete() {{
+  record candidate-release-exact
+  [[ "$CANDIDATE_CLEAN" == true ]]
+}}
+checkpoint_write() {{
+  record "checkpoint:$1:$2:$3:$4"
+  PHASE="$1"
+}}
+discard_candidate
+printf 'phase=%s\n' "$PHASE"
+""",
+    )
+    events = trace.read_text(encoding="utf-8").splitlines()
+
+    assert result.returncode == 0, result.stderr + result.stdout
+    assert "phase=candidate_discarded" in result.stdout
+    active_checks = [
+        index for index, event in enumerate(events) if event == "active-exact"
+    ]
+    checkpoint_index = next(
+        index
+        for index, event in enumerate(events)
+        if event.startswith("checkpoint:candidate_discarded:completed:automatic:")
+    )
+    assert len(active_checks) == 2
+    assert active_checks[0] < events.index("preview-stopped")
+    assert events.index("preview-stopped") < events.index("candidate-restored")
+    assert events.index("candidate-restored") < events.index(
+        "candidate-release-exact",
+    )
+    assert events.index("candidate-release-exact") < active_checks[1]
+    assert active_checks[1] < checkpoint_index
+    expected_binding = (
+        "evidence_path=/state/discard.evidence.json "
+        f"evidence_sha256={'b' * 64}"
+    )
+    assert expected_binding in events[checkpoint_index]
+
+
+def test_discard_candidate_can_resume_after_interrupted_cleanup(
+    tmp_path: Path,
+) -> None:
+    trace = tmp_path / "discard-resume.trace"
+    result = _run_controller_harness(
+        tmp_path,
+        f"""
+TRACE={trace}
+PHASE=candidate_ready
+CANDIDATE_CLEAN=false
+RESTORE_CALLS=0
+record() {{ printf '%s\n' "$1" >> "$TRACE"; }}
+require_environment() {{ :; }}
+assert_inherited_production_lock() {{ :; }}
+ensure_bluegreen_state_root() {{ :; }}
+ensure_bluegreen_runtime_roots() {{ :; }}
+assert_no_active_switch_unit() {{ :; }}
+resolve_active_slot() {{ CURRENT_ACTIVE_SLOT=8000; CANDIDATE_SLOT=8001; }}
+read_checkpoint_phase_status() {{
+  CHECKPOINT_PHASE="$PHASE"
+  CHECKPOINT_STATUS=completed
+}}
+evidence_binding() {{ printf 'evidence_path=/e evidence_sha256={'a' * 64}'; }}
+previous_active_is_exact_for_candidate_discard() {{ record active-exact; }}
+stop_candidate_preview() {{ record preview-stopped; }}
+candidate_cleanup_is_complete() {{ [[ "$CANDIDATE_CLEAN" == true ]]; }}
+restore_candidate_runtime_preimage() {{
+  RESTORE_CALLS=$((RESTORE_CALLS + 1))
+  record "restore-$RESTORE_CALLS"
+  if [[ "$RESTORE_CALLS" -eq 1 ]]; then return 1; fi
+  CANDIDATE_CLEAN=true
+}}
+candidate_release_is_complete() {{ [[ "$CANDIDATE_CLEAN" == true ]]; }}
+checkpoint_write() {{ record "checkpoint:$1"; PHASE="$1"; }}
+set +e
+discard_candidate
+first_rc=$?
+set -e
+discard_candidate
+printf 'first=%s phase=%s\n' "$first_rc" "$PHASE"
+""",
+    )
+    events = trace.read_text(encoding="utf-8").splitlines()
+
+    assert result.returncode == 0, result.stderr + result.stdout
+    assert "first=1 phase=candidate_discarded" in result.stdout
+    assert events.count("preview-stopped") == 2
+    assert "restore-1" in events
+    assert "restore-2" in events
+    assert events.count("checkpoint:candidate_discarded") == 1
+
+
+def test_candidate_discarded_rerun_is_read_only(tmp_path: Path) -> None:
+    result = _run_controller_harness(
+        tmp_path,
+        """
+require_environment() { :; }
+assert_inherited_production_lock() { :; }
+ensure_bluegreen_state_root() { :; }
+ensure_bluegreen_runtime_roots() { :; }
+assert_no_active_switch_unit() { :; }
+resolve_active_slot() { CURRENT_ACTIVE_SLOT=8001; CANDIDATE_SLOT=8000; }
+read_checkpoint_phase_status() {
+  CHECKPOINT_PHASE=candidate_discarded
+  CHECKPOINT_STATUS=completed
+}
+previous_active_is_exact_for_candidate_discard() { printf 'active-read-only\n'; }
+candidate_release_is_complete() { printf 'candidate-read-only\n'; }
+stop_candidate_preview() { printf 'unexpected-preview-stop\n'; }
+restore_candidate_runtime_preimage() { printf 'unexpected-candidate-restore\n'; }
+checkpoint_write() { printf 'unexpected-checkpoint-write\n'; }
+discard_candidate
+""",
+    )
+
+    assert result.returncode == 0, result.stderr + result.stdout
+    assert "active-read-only" in result.stdout
+    assert "candidate-read-only" in result.stdout
+    assert "unexpected-preview-stop" not in result.stdout
+    assert "unexpected-candidate-restore" not in result.stdout
+    assert "unexpected-checkpoint-write" not in result.stdout
+
+
+def test_release_candidate_mutates_only_candidate_runtime() -> None:
+    script = CONTROLLER.read_text(encoding="utf-8")
+    release = _shell_function(script, "release_candidate")
+
+    assert "fixed_active_runtime_is_exact" in release
+    assert "stop_candidate_preview" in release
+    assert "restore_candidate_runtime_preimage" in release
+    assert "candidate_release_is_complete" in release
+    assert "checkpoint_write candidate_released completed automatic" in release
+    for forbidden in (
+        "pause_schedulers",
+        "resume_schedulers",
+        "mark_maintenance_required",
+        "clear_maintenance_marker",
+        "systemctl restart",
+        "systemctl reload nginx",
+        "atomic_symlink",
+        "atomic_text",
+        "durable_install_file",
+        "discard_candidate_runtime_preimage",
+    ):
+        assert forbidden not in release
+    assert "release-candidate)" in script
+
+
+def test_release_candidate_is_ordered_and_checkpointed_after_exact_cleanup(
+    tmp_path: Path,
+) -> None:
+    trace = tmp_path / "release-candidate.trace"
+    result = _run_controller_harness(
+        tmp_path,
+        f"""
+TRACE={trace}
+PHASE=active_updated
+record() {{ printf '%s\n' "$1" >> "$TRACE"; }}
+require_environment() {{ record require; }}
+assert_inherited_production_lock() {{ record lock; }}
+ensure_bluegreen_state_root() {{ record state-root; }}
+ensure_bluegreen_runtime_roots() {{ record runtime-roots; }}
+assert_no_active_switch_unit() {{ record no-switch; }}
+resolve_active_slot() {{ CURRENT_ACTIVE_SLOT=8000; CANDIDATE_SLOT=8001; }}
+capture_fixed_active_slot_anchor() {{ FIXED_ACTIVE_SLOT_DIGEST={'f' * 64}; }}
+read_checkpoint_phase_status() {{
+  CHECKPOINT_PHASE="$PHASE"
+  CHECKPOINT_STATUS=completed
+}}
+prepare_fixed_active_targets() {{
+  ACTIVE_UPDATE_TARGET_ENV=/tmp/release-candidate-env
+  ACTIVE_UPDATE_TARGET_NGINX=/tmp/release-candidate-nginx
+  record targets
+}}
+load_fixed_active_previous_identity() {{ record old-active-preimage; }}
+fixed_active_runtime_is_exact() {{ record active-exact; }}
+stop_candidate_preview() {{ record preview-stopped; }}
+restore_candidate_runtime_preimage() {{ record candidate-restored; }}
+candidate_release_is_complete() {{ record candidate-quiescent; }}
+checkpoint_write() {{ record "checkpoint:$1:$2:$3"; PHASE="$1"; }}
+remove_fixed_active_target_temporaries() {{ record temp-clean; }}
+release_candidate
+printf 'phase=%s active=%s candidate=%s\n' \
+  "$PHASE" "$CURRENT_ACTIVE_SLOT" "$CANDIDATE_SLOT"
+""",
+    )
+    events = trace.read_text(encoding="utf-8").splitlines()
+
+    assert result.returncode == 0, result.stderr + result.stdout
+    assert "phase=candidate_released active=8000 candidate=8001" in result.stdout
+    assert events.count("active-exact") == 2
+    assert events.index("preview-stopped") < events.index("candidate-restored")
+    assert events.index("candidate-restored") < events.index("candidate-quiescent")
+    assert events.index("candidate-quiescent") < events.index(
+        "checkpoint:candidate_released:completed:automatic"
+    )
+
+
+def test_release_candidate_retry_after_checkpoint_is_read_only(
+    tmp_path: Path,
+) -> None:
+    result = _run_controller_harness(
+        tmp_path,
+        f"""
+require_environment() {{ :; }}
+assert_inherited_production_lock() {{ :; }}
+ensure_bluegreen_state_root() {{ :; }}
+ensure_bluegreen_runtime_roots() {{ :; }}
+assert_no_active_switch_unit() {{ :; }}
+resolve_active_slot() {{ CURRENT_ACTIVE_SLOT=8001; CANDIDATE_SLOT=8000; }}
+capture_fixed_active_slot_anchor() {{ FIXED_ACTIVE_SLOT_DIGEST={'f' * 64}; }}
+read_checkpoint_phase_status() {{
+  CHECKPOINT_PHASE=candidate_released
+  CHECKPOINT_STATUS=completed
+}}
+prepare_fixed_active_targets() {{
+  ACTIVE_UPDATE_TARGET_ENV=/tmp/released-env
+  ACTIVE_UPDATE_TARGET_NGINX=/tmp/released-nginx
+}}
+load_fixed_active_previous_identity() {{ :; }}
+fixed_active_runtime_is_exact() {{ printf 'active-read-only-verified\n'; }}
+candidate_release_is_complete() {{ printf 'candidate-read-only-verified\n'; }}
+stop_candidate_preview() {{ printf 'unexpected-preview-mutation\n'; }}
+restore_candidate_runtime_preimage() {{ printf 'unexpected-candidate-mutation\n'; }}
+checkpoint_write() {{ printf 'unexpected-checkpoint-write\n'; }}
+remove_fixed_active_target_temporaries() {{ :; }}
+release_candidate
+""",
+    )
+
+    assert result.returncode == 0, result.stderr + result.stdout
+    assert "active-read-only-verified" in result.stdout
+    assert "candidate-read-only-verified" in result.stdout
+    assert "unexpected-preview-mutation" not in result.stdout
+    assert "unexpected-candidate-mutation" not in result.stdout
+    assert "unexpected-checkpoint-write" not in result.stdout
+
+
+def test_release_candidate_failure_never_writes_success_or_touches_active(
+    tmp_path: Path,
+) -> None:
+    result = _run_controller_harness(
+        tmp_path,
+        f"""
+require_environment() {{ :; }}
+assert_inherited_production_lock() {{ :; }}
+ensure_bluegreen_state_root() {{ :; }}
+ensure_bluegreen_runtime_roots() {{ :; }}
+assert_no_active_switch_unit() {{ :; }}
+resolve_active_slot() {{ CURRENT_ACTIVE_SLOT=8000; CANDIDATE_SLOT=8001; }}
+capture_fixed_active_slot_anchor() {{ FIXED_ACTIVE_SLOT_DIGEST={'f' * 64}; }}
+read_checkpoint_phase_status() {{
+  CHECKPOINT_PHASE=active_updated
+  CHECKPOINT_STATUS=completed
+}}
+prepare_fixed_active_targets() {{
+  ACTIVE_UPDATE_TARGET_ENV=/tmp/release-failure-env
+  ACTIVE_UPDATE_TARGET_NGINX=/tmp/release-failure-nginx
+}}
+load_fixed_active_previous_identity() {{ :; }}
+fixed_active_runtime_is_exact() {{ :; }}
+stop_candidate_preview() {{ printf 'preview-stopped\n'; }}
+restore_candidate_runtime_preimage() {{ printf 'candidate-restore-failed\n'; return 1; }}
+checkpoint_write() {{ printf 'unexpected-success-checkpoint\n'; }}
+pause_schedulers() {{ printf 'unexpected-scheduler-mutation\n'; }}
+mark_maintenance_required() {{ printf 'unexpected-active-marker\n'; }}
+set +e
+release_candidate
+rc=$?
+set -e
+printf 'rc=%s\n' "$rc"
+""",
+    )
+
+    assert result.returncode == 0, result.stderr + result.stdout
+    assert "rc=1" in result.stdout
+    assert "preview-stopped" in result.stdout
+    assert "candidate-restore-failed" in result.stdout
+    assert "unexpected-success-checkpoint" not in result.stdout
+    assert "unexpected-scheduler-mutation" not in result.stdout
+    assert "unexpected-active-marker" not in result.stdout
+
+
+@pytest.mark.parametrize(
+    ("checkpoint_legal", "cleanup_expected"),
+    ((True, True), (False, True)),
+)
+def test_prepare_exit_always_discards_a_nonzero_local_prepare(
+    tmp_path: Path,
+    checkpoint_legal: bool,
+    cleanup_expected: bool,
+) -> None:
+    legal_result = "return 0" if checkpoint_legal else "return 1"
+    result = _run_controller_harness(
+        tmp_path,
+        f"""
+BLUEGREEN_MODE=prepare-candidate
+PRE_SUPERVISOR_CANDIDATE_ARMED=true
+read_checkpoint_phase_status() {{
+  CHECKPOINT_PHASE=candidate_ready
+  CHECKPOINT_STATUS=completed
+}}
+candidate_ready_state_is_legal() {{ {legal_result}; }}
+cleanup_pre_switch_candidate() {{ printf 'candidate-cleaned\\n'; }}
+trap prepare_exit_handler EXIT
+false
+""",
+    )
+
+    assert result.returncode == 1
+    assert ("candidate-cleaned" in result.stdout) is cleanup_expected
+    assert "Preserved exact candidate_ready state" not in result.stderr
+
+
+@pytest.mark.parametrize(
+    ("listeners", "accepted"),
+    (
+        ("LISTEN 0 128 127.0.0.1:18002 0.0.0.0:*", True),
+        ("", False),
+        ("LISTEN 0 128 0.0.0.0:18002 0.0.0.0:*", False),
+        ("LISTEN 0 128 [::]:18002 [::]:*", False),
+        (
+            "LISTEN 0 128 127.0.0.1:18002 0.0.0.0:*\n"
+            + "LISTEN 0 128 [::1]:18002 [::]:*",
+            False,
+        ),
+    ),
+)
+def test_candidate_preview_listener_accepts_exact_ipv4_loopback_only(
+    tmp_path: Path,
+    listeners: str,
+    accepted: bool,
+) -> None:
+    result = _run_controller_harness(
+        tmp_path,
+        f"""
+ss() {{ printf '%b\\n' {listeners!r}; }}
+candidate_preview_listener_is_loopback_only
+""",
+    )
+
+    assert (result.returncode == 0) is accepted, result.stderr + result.stdout
 
 
 @pytest.mark.parametrize("failure", ("readiness", "monthly", "cgroup"))
@@ -477,7 +1707,7 @@ install_slot_runtime
 
 @pytest.mark.parametrize(
     "failure",
-    ("unit", "env", "sandbox", "slot_link", "set_property"),
+    ("unit", "env", "sandbox_remove", "slot_link", "set_property"),
 )
 def test_each_candidate_install_failure_restores_captured_preimage(
     tmp_path: Path,
@@ -495,10 +1725,10 @@ candidate_durable_install_file() {{
   case "{failure}:$2" in
     unit:/etc/systemd/system/jato-fullstack-backend@8001.service) return 1 ;;
     env:*/8001.env) return 1 ;;
-    sandbox:*/10-candidate-sandbox.conf) return 1 ;;
   esac
   return 0
 }}
+durable_remove_path() {{ [[ "{failure}" != sandbox_remove ]]; }}
 candidate_atomic_symlink() {{
   [[ "{failure}" != slot_link ]]
 }}
@@ -562,7 +1792,7 @@ def test_candidate_install_uses_only_deterministic_transaction_writers() -> None
     script = CONTROLLER.read_text(encoding="utf-8")
     install = _shell_function(script, "install_slot_runtime")
 
-    assert install.count("candidate_durable_install_file") == 3
+    assert install.count("candidate_durable_install_file") == 2
     assert install.count("candidate_atomic_symlink") == 1
     assert "durable_install_file" not in install.replace(
         "candidate_durable_install_file",
@@ -572,7 +1802,6 @@ def test_candidate_install_uses_only_deterministic_transaction_writers() -> None
     for suffix in (
         ".service.jato-candidate-installing",
         ".env.jato-candidate-installing",
-        ".10-candidate-sandbox.conf.jato-candidate-installing",
         ".current.jato-candidate-installing",
     ):
         assert suffix in install
@@ -884,6 +2113,7 @@ verify_public_release_exact() {{
   printf 'old-public\\n' >> "$TRACE_FILE"
 }}
 restore_nginx_preimage() {{ printf 'unsafe-preimage-restore\\n'; }}
+stop_candidate_preview() {{ return 0; }}
 mark_maintenance_required() {{ printf 'marker-retained\\n'; }}
 candidate_cleanup_is_complete() {{ [[ "$CANDIDATE_CLEAN" == true ]]; }}
 unit_property_equals() {{ return 0; }}
@@ -1316,19 +2546,18 @@ def test_memory_and_monthly_worker_contract_is_fail_closed() -> None:
     assert "APP_JATO_MONTHLY_DEPLOYMENT_MARKER" in script
     assert "APP_JATO_MONTHLY_ENABLED=true" in script
     assert "APP_JATO_MONTHLY_EXECUTION_MODE=subprocess" in script
-    assert "ProtectSystem=strict" in install
-    assert "DynamicUser=yes" in install
-    assert "PrivateTmp=true" in install
-    assert "PrivateDevices=true" in install
-    assert "NoNewPrivileges=true" in install
-    assert "CapabilityBoundingSet=" in install
-    assert "AmbientCapabilities=" in install
-    assert "RestrictNamespaces=true" in install
-    assert "APP_REDIS_ENABLED=false" in install
-    assert "default_transaction_read_only=on" in install
-    assert "/var/cache/jato-candidate-$CANDIDATE_SLOT" in install
-    assert "/var/cache/jato/candidate-" not in install
-    assert 'printf \'ReadOnlyPaths=%s %s\\n\' "$SHARED_ROOT" "$BLUEGREEN_STATE_ROOT"' in install
+    assert "ProtectSystem=strict" not in install
+    assert "DynamicUser=yes" not in install
+    assert "APP_REDIS_ENABLED=false" not in install
+    assert "default_transaction_read_only=on" not in install
+    assert "ReadOnlyPaths=" not in install
+    assert 'durable_remove_path "$sandbox_dropin"' in install
+    data_access = _shell_function(script, "verify_candidate_data_access_contract")
+    assert "APP_DATABASE_URL" in data_access
+    assert "APP_REDIS_URL" in data_access
+    assert "Candidate and Active differ for data connection key" in data_access
+    assert "HERMES_RUN_ENABLED" in data_access
+    assert "PREWARM_ENABLED" in data_access
     assert 'local service_target="/etc/systemd/system/${SERVICE_PREFIX}${CANDIDATE_SLOT}.service"' in install
     assert 'service_target="/etc/systemd/system/jato-fullstack-backend@.service"' not in install
     disable_candidate = install.index(
@@ -1352,6 +2581,84 @@ def test_memory_and_monthly_worker_contract_is_fail_closed() -> None:
     assert "KillMode=control-group" in unit
     assert "if (-f /var/lib/jato-release/deployment-maintenance)" in nginx
     assert "location ^~ /v1/msrp/monthly-update" in nginx
+
+
+@pytest.mark.parametrize("active_slot", ("8000", "8001"))
+def test_active_cgroup_verification_uses_explicit_active_slot(
+    tmp_path: Path,
+    active_slot: str,
+) -> None:
+    slot_env = tmp_path / "slot-env" / f"{active_slot}.env"
+    slot_env.parent.mkdir(parents=True)
+    slot_env.write_text("APP_BACKEND_WORKERS=2\n", encoding="utf-8")
+    result = _run_controller_harness(
+        tmp_path,
+        f"""
+EXPECTED_SLOT={active_slot}
+systemctl() {{
+  [[ "${{1:-}}" == show ]]
+  [[ "${{2:-}}" == "${{SERVICE_PREFIX}}${{EXPECTED_SLOT}}" ]]
+  case "${{4:-}}" in
+    MemoryHigh) printf '%s\n' "$((6 * 1024 * 1024 * 1024))" ;;
+    MemoryMax) printf '%s\n' "$((8 * 1024 * 1024 * 1024))" ;;
+    *) return 91 ;;
+  esac
+}}
+sudo() {{
+  [[ "${{1:-}}" == -n ]] && shift
+  "$@"
+}}
+verify_backend_cgroup_processes_only() {{
+  printf 'process-slot=%s\n' "$1"
+  [[ "$1" == "$EXPECTED_SLOT" ]]
+}}
+verify_active_cgroup "$EXPECTED_SLOT"
+""",
+    )
+
+    assert result.returncode == 0, result.stderr + result.stdout
+    assert f"process-slot={active_slot}" in result.stdout
+
+
+def test_active_cgroup_verification_rejects_implicit_candidate_slot(
+    tmp_path: Path,
+) -> None:
+    result = _run_controller_harness(
+        tmp_path,
+        """
+CANDIDATE_SLOT=8001
+systemctl() { printf 'unexpected-systemctl\n'; return 0; }
+sudo() { printf 'unexpected-sudo\n'; return 0; }
+verify_backend_cgroup_processes_only() {
+  printf 'unexpected-process-check\n'
+  return 0
+}
+set +e
+verify_active_cgroup
+rc=$?
+set -e
+printf 'rc=%s\n' "$rc"
+""",
+    )
+
+    assert result.returncode == 0, result.stderr + result.stdout
+    assert "rc=1" in result.stdout
+    assert "unexpected-systemctl" not in result.stdout
+    assert "unexpected-sudo" not in result.stdout
+    assert "unexpected-process-check" not in result.stdout
+
+
+def test_active_cgroup_call_sites_use_the_runtime_owning_slot() -> None:
+    script = CONTROLLER.read_text(encoding="utf-8")
+    fixed_exact = _shell_function(script, "fixed_active_runtime_is_exact_base")
+    fixed_install = _shell_function(script, "install_release_on_fixed_active")
+    legacy_activation = _shell_function(script, "complete_candidate_activation")
+    legacy_reconcile = _shell_function(script, "reconcile_existing_switch")
+
+    assert 'verify_active_cgroup "$CURRENT_ACTIVE_SLOT"' in fixed_exact
+    assert 'verify_active_cgroup "$CURRENT_ACTIVE_SLOT"' in fixed_install
+    assert 'verify_active_cgroup "$CANDIDATE_SLOT"' in legacy_activation
+    assert 'verify_active_cgroup "$CANDIDATE_SLOT"' in legacy_reconcile
 
 
 def test_bluegreen_v1_forbids_schema_delta_and_disables_prewarm() -> None:
@@ -2014,6 +3321,7 @@ verify_public_release_exact() {{
   test -f "$NGINX_ACTIVE_RELEASE_CONF"
   grep -Fxq 'stable-old-route' "$NGINX_ACTIVE_RELEASE_CONF"
 }}
+stop_candidate_preview() {{ return 0; }}
 restore_old_static_boot_owner() {{ printf 'old-owner-restored\\n' >> "$TRACE"; }}
 candidate_cleanup_is_complete() {{ return 0; }}
 mark_maintenance_required() {{ printf 'unexpected-maintenance\\n' >> "$TRACE"; }}

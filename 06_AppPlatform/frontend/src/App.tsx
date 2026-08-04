@@ -6,6 +6,7 @@ import { RequireRole } from "./components/RequireRole";
 import { DashboardRouteSkeleton } from "./components/DashboardRouteSkeleton";
 import { LoadingSurface } from "./components/LoadingSurface";
 import { SmartRouteGate } from "./components/SmartRouteGate";
+import { CandidateEnvironmentBanner } from "./components/CandidateEnvironmentBanner";
 import { getOAuthRedirectTarget } from "./utils/oauthRedirect";
 
 /** Consume OAuth token params before any provider mounts, avoiding aborted fetches. */
@@ -335,6 +336,7 @@ const ROUTER_TRANSITION_PROPS = {
 export default function App() {
   return (
     <>
+      <CandidateEnvironmentBanner />
       <SmartRouteGate />
       <RouterProvider router={router} {...ROUTER_TRANSITION_PROPS} />
       <AppVersionNotice />

@@ -48,6 +48,70 @@ body {
   -webkit-font-smoothing: antialiased;
 }
 
+html[data-release-role="candidate"] {
+  --candidate-banner-height: 38px;
+}
+
+html[data-release-role="candidate"] body {
+  padding-top: var(--candidate-banner-height);
+}
+
+html[data-release-role="candidate"] .top-bar {
+  top: var(--candidate-banner-height);
+}
+
+.candidate-environment-banner {
+  position: fixed;
+  inset: 0 0 auto;
+  z-index: 10020;
+  min-height: 38px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 14px;
+  padding: 8px 16px;
+  border-bottom: 1px solid #8a5a00;
+  background: #ffd56a;
+  color: #2b1b00;
+  box-shadow: 0 3px 12px rgba(31, 20, 0, 0.2);
+  font-size: 12px;
+  letter-spacing: 0.04em;
+}
+
+.candidate-environment-banner strong {
+  font-size: 12px;
+  letter-spacing: 0.12em;
+}
+
+.candidate-environment-banner code {
+  padding: 2px 6px;
+  border: 1px solid rgba(43, 27, 0, 0.32);
+  background: rgba(255, 255, 255, 0.38);
+  color: inherit;
+  font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+  font-size: 11px;
+}
+
+.candidate-environment-banner--unverified {
+  border-bottom-color: #710d0d;
+  background: #b42318;
+  color: #ffffff;
+  box-shadow: 0 3px 12px rgba(77, 5, 5, 0.32);
+}
+
+@media (max-width: 720px) {
+  html[data-release-role="candidate"] {
+    --candidate-banner-height: 54px;
+  }
+
+  .candidate-environment-banner {
+    min-height: 54px;
+    flex-wrap: wrap;
+    gap: 4px 10px;
+    padding: 7px 12px;
+  }
+}
+
 a { color: inherit; }
 
 button, input, select, textarea {

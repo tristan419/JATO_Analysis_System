@@ -14,8 +14,14 @@ import yaml
 REPO_ROOT = Path(__file__).resolve().parents[2]
 PRODUCTION_WORKFLOW_PATH = REPO_ROOT / ".github/workflows/production-release.yml"
 PREWARM_WORKFLOW_PATH = REPO_ROOT / ".github/workflows/intl-edge-prewarm.yml"
+INTL_SYNC_WORKFLOW_PATH = (
+    REPO_ROOT / ".github/workflows/sync-www-active-to-intl.yml"
+)
 CI_WORKFLOW_PATH = REPO_ROOT / ".github/workflows/ci.yml"
 REMOTE_RELEASE_PATH = REPO_ROOT / "03_Scripts/deploy/fullstack_remote_release.sh"
+CANDIDATE_CONTROL_PATH = (
+    REPO_ROOT / "03_Scripts/deploy/github_candidate_control.sh"
+)
 ARCHIVE_VALIDATOR_PATH = (
     REPO_ROOT / "03_Scripts/deploy/validate_release_archive.py"
 )
@@ -33,6 +39,29 @@ MAIN_CONDITION = "github.ref == 'refs/heads/main'"
 RELEASE_DEPLOY_CONDITION = (
     MAIN_CONDITION
     + " && needs.release_coordination_guard.outputs.release-action == 'deploy'"
+)
+PREPARE_RELEASE_CONDITION = (
+    RELEASE_DEPLOY_CONDITION
+    + " && (github.event_name != 'workflow_dispatch' || "
+    + "inputs.release_mode == 'prepare-candidate')"
+)
+APPROVE_RELEASE_CONDITION = (
+    MAIN_CONDITION
+    + " && github.event_name == 'workflow_dispatch'"
+    + " && inputs.release_mode == 'approve-candidate-to-active'"
+    + " && needs.release_coordination_guard.outputs.release-action == 'deploy'"
+)
+CLEANUP_RELEASE_CONDITION = (
+    MAIN_CONDITION
+    + " && github.event_name == 'workflow_dispatch'"
+    + " && (inputs.release_mode == 'discard-candidate' || "
+    + "inputs.release_mode == 'release-candidate')"
+    + " && needs.release_coordination_guard.outputs.release-action == 'deploy'"
+)
+LEGACY_INTL_CONDITION = (
+    RELEASE_DEPLOY_CONDITION
+    + " && github.event_name == 'workflow_dispatch'"
+    + " && inputs.release_mode == 'prepare-and-switch'"
 )
 PRODUCTION_HOLD_SCRIPT = ".github/scripts/production_release_hold.py"
 PRODUCTION_HOLD_PATH = (
@@ -61,6 +90,11 @@ PREWARM_DEPLOY_CONDITION = (
 BUILD_JOB = "build_frontend"
 COORDINATION_JOB = "release_coordination_guard"
 DEPLOY_JOBS = ("deploy_tencent",)
+PRODUCTION_ENVIRONMENT_JOBS = (
+    "deploy_tencent",
+    "approve_candidate_to_active",
+    "cleanup_candidate",
+)
 REQUIRED_BUILD_OUTPUTS = {
     "artifact_name",
     "artifact_identity",
@@ -219,12 +253,76 @@ def assert_main_only_production_workflow(workflow: Mapping[str, Any]) -> None:
         raise AssertionError("production push trigger must be main-only")
     if set(triggers) != {"push", "workflow_dispatch"}:
         raise AssertionError("production release may only use push and workflow_dispatch")
+    dispatch = mapping(
+        triggers.get("workflow_dispatch"),
+        "production workflow workflow_dispatch",
+    )
+    dispatch_inputs = mapping(
+        dispatch.get("inputs"),
+        "production workflow workflow_dispatch.inputs",
+    )
+    release_mode = mapping(
+        dispatch_inputs.get("release_mode"),
+        "production workflow release_mode input",
+    )
+    if (
+        release_mode.get("required") != "true"
+        or release_mode.get("type") != "choice"
+        or release_mode.get("default") != "prepare-candidate"
+        or sequence(release_mode.get("options"), "release_mode.options")
+        != [
+            "prepare-candidate",
+            "approve-candidate-to-active",
+            "discard-candidate",
+            "release-candidate",
+        ]
+    ):
+        raise AssertionError("production release_mode input contract changed")
+    expected_approval_inputs = {
+        "candidate_prepare_run_id",
+        "candidate_prepare_run_attempt",
+        "candidate_commit_sha",
+        "candidate_archive_sha256",
+        "candidate_attestation_sha256",
+    }
+    if not expected_approval_inputs.issubset(dispatch_inputs):
+        raise AssertionError("production Candidate approval identity inputs changed")
+    confirmation = mapping(
+        dispatch_inputs.get("confirm_www_activation"),
+        "production workflow Candidate approval confirmation input",
+    )
+    if (
+        confirmation.get("required") != "true"
+        or confirmation.get("type") != "boolean"
+        or confirmation.get("default") != "false"
+    ):
+        raise AssertionError("production Candidate approval confirmation changed")
+    cleanup_confirmation = mapping(
+        dispatch_inputs.get("confirm_candidate_cleanup"),
+        "production workflow Candidate cleanup confirmation input",
+    )
+    if (
+        cleanup_confirmation.get("required") != "true"
+        or cleanup_confirmation.get("type") != "boolean"
+        or cleanup_confirmation.get("default") != "false"
+    ):
+        raise AssertionError("production Candidate cleanup confirmation changed")
+
+    workflow_env = mapping(workflow.get("env"), "production workflow env")
+    expected_mode = (
+        "${{ github.event_name == 'workflow_dispatch' && inputs.release_mode "
+        "|| 'prepare-candidate' }}"
+    )
+    if workflow_env.get("RELEASE_MODE") != expected_mode:
+        raise AssertionError("production RELEASE_MODE dispatch binding changed")
 
     jobs = mapping(workflow.get("jobs"), "production workflow jobs")
     expected_jobs = {
         COORDINATION_JOB,
         BUILD_JOB,
         "deploy_tencent",
+        "approve_candidate_to_active",
+        "cleanup_candidate",
         "audit_frontend_parity",
     }
     if set(jobs) != expected_jobs:
@@ -233,14 +331,20 @@ def assert_main_only_production_workflow(workflow: Mapping[str, Any]) -> None:
         )
     for name in expected_jobs:
         condition = unwrap_expression(job(workflow, name).get("if"))
-        expected_condition = (
-            MAIN_CONDITION if name == COORDINATION_JOB else RELEASE_DEPLOY_CONDITION
-        )
+        expected_conditions = {
+            COORDINATION_JOB: MAIN_CONDITION,
+            BUILD_JOB: PREPARE_RELEASE_CONDITION,
+            "deploy_tencent": PREPARE_RELEASE_CONDITION,
+            "approve_candidate_to_active": APPROVE_RELEASE_CONDITION,
+            "cleanup_candidate": CLEANUP_RELEASE_CONDITION,
+            "audit_frontend_parity": LEGACY_INTL_CONDITION,
+        }
+        expected_condition = expected_conditions[name]
         if condition != expected_condition:
             raise AssertionError(
                 f"{name} must use the exact main-and-release-action condition"
             )
-    for name in DEPLOY_JOBS:
+    for name in PRODUCTION_ENVIRONMENT_JOBS:
         deploy_job = job(workflow, name)
         if deploy_job.get("environment") != "production":
             raise AssertionError(f"{name} must use the production environment")
@@ -285,6 +389,8 @@ def assert_production_hold_gate_contract(workflow: Mapping[str, Any]) -> None:
     expected_needs = {
         BUILD_JOB: COORDINATION_JOB,
         "deploy_tencent": [COORDINATION_JOB, BUILD_JOB],
+        "approve_candidate_to_active": COORDINATION_JOB,
+        "cleanup_candidate": COORDINATION_JOB,
         "audit_frontend_parity": [
             COORDINATION_JOB,
             BUILD_JOB,
@@ -295,7 +401,15 @@ def assert_production_hold_gate_contract(workflow: Mapping[str, Any]) -> None:
         downstream = job(workflow, name)
         if downstream.get("needs") != needs:
             raise AssertionError(f"{name} lost its direct production hold dependency")
-        if unwrap_expression(downstream.get("if")) != RELEASE_DEPLOY_CONDITION:
+        expected_conditions = {
+            BUILD_JOB: PREPARE_RELEASE_CONDITION,
+            "deploy_tencent": PREPARE_RELEASE_CONDITION,
+            "approve_candidate_to_active": APPROVE_RELEASE_CONDITION,
+            "cleanup_candidate": CLEANUP_RELEASE_CONDITION,
+            "audit_frontend_parity": LEGACY_INTL_CONDITION,
+        }
+        expected_condition = expected_conditions[name]
+        if unwrap_expression(downstream.get("if")) != expected_condition:
             raise AssertionError(f"{name} lost the exact hold/deploy output gate")
 
 
@@ -343,6 +457,8 @@ def assert_single_build_and_strict_outputs(workflow: Mapping[str, Any]) -> None:
         raise AssertionError("missing artifact files must fail closed")
     if upload_with.get("overwrite") != "false":
         raise AssertionError("immutable artifact overwrite must be disabled")
+    if upload_with.get("retention-days") != "30":
+        raise AssertionError("frontend artifact must cover the manual review window")
 
     create_step = step_by_name(build_steps, "Create immutable frontend release")
     create_command = str(create_step.get("run") or "")
@@ -418,6 +534,10 @@ def assert_deploy_jobs_share_one_artifact(workflow: Mapping[str, Any]) -> None:
     cloudflare_node_step = step_by_name(tencent_steps, "Setup fixed Cloudflare Node")
     if cloudflare_node_step.get("uses") != "actions/setup-node@v4":
         raise AssertionError("Cloudflare deployment must use actions/setup-node@v4")
+    if unwrap_expression(cloudflare_node_step.get("if")) != (
+        "env.RELEASE_MODE == 'prepare-and-switch'"
+    ):
+        raise AssertionError("Candidate preparation must skip Cloudflare setup")
     cloudflare_node_with = mapping(
         cloudflare_node_step.get("with"),
         "Cloudflare setup-node with",
@@ -466,6 +586,10 @@ def assert_deploy_jobs_share_one_artifact(workflow: Mapping[str, Any]) -> None:
         tencent_steps,
         "Validate Cloudflare deploy configuration",
     )
+    if unwrap_expression(preflight_step.get("if")) != (
+        "env.RELEASE_MODE == 'prepare-and-switch'"
+    ):
+        raise AssertionError("Candidate preparation must skip Cloudflare credentials")
     if preflight_step.get("working-directory") != CLOUDFLARE_PROJECT_DIRECTORY:
         raise AssertionError(
             "Cloudflare preflight must run from the materialized Pages project"
@@ -825,7 +949,7 @@ def assert_release_checkpoint_contract(workflow: Mapping[str, Any]) -> None:
         "if-no-files-found": "error",
         "compression-level": "0",
         "overwrite": "false",
-        "retention-days": "7",
+        "retention-days": "30",
     }
     for key, expected in expected_candidate_artifact.items():
         if candidate_with.get(key) != expected:
@@ -847,7 +971,17 @@ def assert_release_checkpoint_contract(workflow: Mapping[str, Any]) -> None:
         'trap record_checkpoint_fetch_exit EXIT',
         '"$server_dir/fetch-status.json"',
         '"backendHealthyAttested"',
-        'checkpoint.get("phase") != "backend_healthy"',
+        '"candidate_ready"',
+        '"backend_healthy"',
+        '"inspect_then_resume"',
+        '"$RELEASE_MODE"',
+        'http://127.0.0.1:18002/candidate-preview.json',
+        'preview.get("archiveSha256") != archive_sha256',
+        '"candidateSlot") not in {8000, 8001}',
+        '"approvalHandoff"',
+        '"remoteArchivePath"',
+        '"frontendGithubArtifactId"',
+        '"frontendGithubArtifactDigest"',
         'checkpoint.get("status") != "completed"',
         "server checkpoint evidence binding mismatch",
         'evidence.get("identity") != expected_identity',
@@ -885,11 +1019,339 @@ def assert_release_checkpoint_contract(workflow: Mapping[str, Any]) -> None:
             "server attestation SHA-256 must stay inside the immutable candidate artifact"
         )
     cloudflare = step_by_name(tencent_steps, "Deploy downloaded dist to Cloudflare Pages")
-    if cloudflare.get("if") != "${{ steps.intl_current.outputs.current != 'true' }}":
+    cloudflare_condition = unwrap_expression(cloudflare.get("if"))
+    if cloudflare_condition != (
+        "env.RELEASE_MODE == 'prepare-and-switch' && "
+        "steps.intl_current.outputs.current != 'true'"
+    ):
         raise AssertionError("an already-current intl release must skip redeployment")
     cloudflare_run = str(cloudflare.get("run") or "")
     if "for deploy_attempt in 1 2 3" not in cloudflare_run:
         raise AssertionError("an outdated intl release must have three bounded deploy attempts")
+
+    full_release_steps = (
+        "Verify Tencent public release provenance",
+        "Verify www runtime API contract",
+        "Record www-verified candidate checkpoint",
+        "Check whether intl already serves the immutable release",
+        "Record intl deployment ambiguity boundary",
+        "Verify intl public release provenance",
+        "Verify intl API routing contract",
+        "Record intl-verified candidate checkpoint",
+    )
+    for step_name in full_release_steps:
+        release_step = step_by_name(tencent_steps, step_name)
+        if unwrap_expression(release_step.get("if")) != (
+            "env.RELEASE_MODE == 'prepare-and-switch'"
+        ):
+            raise AssertionError(
+                f"{step_name} must be skipped for Candidate-only review"
+            )
+
+    approval = job(workflow, "approve_candidate_to_active")
+    approval_steps = steps(approval, "approve_candidate_to_active")
+    approval_names = [str(step.get("name") or "") for step in approval_steps]
+    required_approval_order = (
+        "Validate exact Candidate approval request",
+        "Download exact Candidate handoff artifact",
+        "Download exact reviewed frontend artifact",
+        "Verify immutable Candidate handoff",
+        "Validate Tencent approval credentials",
+        "Revalidate frozen coordination plan immediately before Active mutation",
+        "Approve exact Candidate on Tencent",
+        "Record failed approval restore boundary",
+        "Verify www serves the exact approved Candidate",
+        "Restore previous Active after failed www audit",
+        "Keep failed www audit red after automatic restore",
+        "Fetch and attest Active update checkpoint",
+        "Seal www approval receipt",
+        "Retain immutable www approval receipt",
+    )
+    approval_indexes = [approval_names.index(name) for name in required_approval_order]
+    if approval_indexes != sorted(approval_indexes):
+        raise AssertionError("Candidate approval steps are out of order")
+    approval_text = str(approval)
+    approval_commands = combined_run(approval, "approve_candidate_to_active")
+    required_approval_tokens = (
+        'test "$CONFIRM_WWW_ACTIVATION" = "true"',
+        'test "$CANDIDATE_COMMIT_SHA" = "$GITHUB_SHA"',
+        '"status": "completed"',
+        '"conclusion": "success"',
+        '"head_branch": "main"',
+        "verify_candidate_handoff.py",
+        "github_candidate_control.sh approve-candidate-to-active",
+        'remote_evidence="$CANDIDATE_SERVER_EVIDENCE_PATH"',
+        'binding.group(1) != expected_evidence_path',
+        "automatic restore previous successful Active",
+        "no success receipt is emitted",
+        "github_candidate_control.sh restore-previous-active",
+        'checkpoint.get("phase") != "active_updated"',
+        'remote_journal_dir=".local/state/jato-production-release/journals/',
+        '"$server_dir/active-updated.journal.jsonl"',
+        'started, updated = events[-2:]',
+        'started.get("phase") != "active_update_started"',
+        'updated.get("phase") != "active_updated"',
+        "canonical Active update journal tail/checkpoint mismatch",
+        '--phase www_verified',
+        'intl unchanged',
+    )
+    missing_approval = [
+        token for token in required_approval_tokens if token not in approval_commands
+    ]
+    if missing_approval:
+        raise AssertionError(
+            f"Candidate approval contract is incomplete: {missing_approval}"
+        )
+    if (
+        'release-candidate/journal.jsonl"' in approval_commands
+        or 'release-candidate/journal.jsonl\'' in approval_commands
+    ):
+        raise AssertionError(
+            "www receipt must not reuse the stale prepare-run journal"
+        )
+    failed_boundary = step_by_name(
+        approval_steps,
+        "Record failed approval restore boundary",
+    )
+    if unwrap_expression(failed_boundary.get("if")) != (
+        "failure() && steps.approve_active.outcome == 'failure'"
+    ):
+        raise AssertionError("failed Candidate approval must retain a red restore boundary")
+    approve_step = step_by_name(approval_steps, "Approve exact Candidate on Tencent")
+    if approve_step.get("id") != "approve_active" or approve_step.get(
+        "continue-on-error"
+    ) not in (None, False, "false"):
+        raise AssertionError("Candidate approval failure must never be masked as success")
+    approve_env = mapping(approve_step.get("env"), "Candidate approval environment")
+    if approve_env.get("CANDIDATE_VERIFIED_ENV") != (
+        "${{ runner.temp }}/candidate-approval/verified.env"
+    ):
+        raise AssertionError("Candidate approval must consume the verified handoff env")
+    mutation_recheck = step_by_name(
+        approval_steps,
+        "Revalidate frozen coordination plan immediately before Active mutation",
+    )
+    if approval_names.index(mutation_recheck["name"]) + 1 != approval_names.index(
+        "Approve exact Candidate on Tencent"
+    ):
+        raise AssertionError("frozen plan must be rechecked immediately before Active mutation")
+    mutation_command = str(mutation_recheck.get("run") or "")
+    for required in (
+        "release_coordination_guard.py",
+        "verify-plan",
+        '--main-sha "$GITHUB_SHA"',
+        '"$RUNNER_TEMP/release-coordination-plan/release-coordination-plan.json"',
+    ):
+        if required not in mutation_command:
+            raise AssertionError(
+                f"pre-Active-mutation coordination check is missing {required}"
+            )
+    www_verify = step_by_name(
+        approval_steps,
+        "Verify www serves the exact approved Candidate",
+    )
+    if (
+        www_verify.get("id") != "verify_www"
+        or www_verify.get("continue-on-error") != "true"
+    ):
+        raise AssertionError(
+            "www audit must expose its failure only to the automatic restore hook"
+        )
+    restore = step_by_name(
+        approval_steps,
+        "Restore previous Active after failed www audit",
+    )
+    if (
+        restore.get("id") != "restore_previous_active"
+        or unwrap_expression(restore.get("if"))
+        != "steps.verify_www.outcome == 'failure'"
+    ):
+        raise AssertionError("failed www audit must automatically restore previous Active")
+    fetch_active = step_by_name(
+        approval_steps,
+        "Fetch and attest Active update checkpoint",
+    )
+    if unwrap_expression(fetch_active.get("if")) != (
+        "steps.verify_www.outcome == 'success'"
+    ):
+        raise AssertionError("Active update receipt must be fetched only after www audit")
+    for forbidden in (
+        "Package backend release",
+        "Upload release to Tencent",
+        "npm run build",
+        "wrangler@",
+        "pages deploy",
+    ):
+        if forbidden in approval_text:
+            raise AssertionError(
+                f"Candidate approval must not rebuild, reupload or publish intl: {forbidden}"
+            )
+    for download_name, expected_name in (
+        (
+            "Download exact Candidate handoff artifact",
+            "release-candidate-${{ inputs.candidate_commit_sha }}-"
+            "${{ inputs.candidate_prepare_run_attempt }}",
+        ),
+        (
+            "Download exact reviewed frontend artifact",
+            "frontend-dist-${{ inputs.candidate_commit_sha }}",
+        ),
+    ):
+        download = step_by_name(approval_steps, download_name)
+        download_with = mapping(download.get("with"), f"{download_name} with")
+        if (
+            download_with.get("name") != expected_name
+            or download_with.get("run-id")
+            != "${{ inputs.candidate_prepare_run_id }}"
+            or download_with.get("github-token") != "${{ github.token }}"
+        ):
+            raise AssertionError(f"{download_name} lost exact prior-run binding")
+    receipt = step_by_name(
+        approval_steps,
+        "Retain immutable www approval receipt",
+    )
+    receipt_with = mapping(receipt.get("with"), "www approval receipt with")
+    if (
+        receipt_with.get("overwrite") != "false"
+        or receipt_with.get("retention-days") != "30"
+    ):
+        raise AssertionError("www approval receipt must be immutable for thirty days")
+
+    cleanup = job(workflow, "cleanup_candidate")
+    cleanup_steps = steps(cleanup, "cleanup_candidate")
+    cleanup_names = [str(step.get("name") or "") for step in cleanup_steps]
+    required_cleanup_order = (
+        "Validate exact Candidate cleanup request",
+        "Resolve Candidate cleanup handoff source",
+        "Validate Tencent cleanup credentials",
+        "Download exact Candidate cleanup handoff",
+        "Download exact Candidate cleanup frontend",
+        "Verify immutable Candidate cleanup handoff",
+        "Capture canonical Candidate cleanup handoff",
+        "Verify canonical Candidate cleanup handoff",
+        "Capture unchanged Active identity before cleanup",
+        "Clean exact Candidate on Tencent",
+        "Fetch canonical Candidate cleanup receipt",
+        "Verify Active identity and health remained unchanged",
+        "Retain immutable Candidate cleanup receipt",
+    )
+    cleanup_indexes = [cleanup_names.index(name) for name in required_cleanup_order]
+    if cleanup_indexes != sorted(cleanup_indexes):
+        raise AssertionError("Candidate cleanup steps are out of order")
+    cleanup_commands = combined_run(cleanup, "cleanup_candidate")
+    required_cleanup_tokens = (
+        'test "$CONFIRM_CANDIDATE_CLEANUP" = "true"',
+        "Cleaning an exact reviewed prior-main Candidate",
+        '"status": "completed"',
+        'mode == "discard-candidate"',
+        '{"success", "failure"}',
+        'else {"success"}',
+        'run.get("conclusion") not in allowed_conclusions',
+        '"head_branch": "main"',
+        'source = "canonical-server"',
+        "capture-canonical-cleanup",
+        "--canonical-server-bundle",
+        "--cleanup-mode \"$RELEASE_MODE\"",
+        "reviewed-candidate.json",
+        "verify_candidate_handoff.py",
+        'github_candidate_control.sh "$RELEASE_MODE"',
+        '{"candidate_ready", "rollback_completed"}',
+        '"release-candidate": ({"active_updated"}, "candidate_released")',
+        'previous.get("phase") not in predecessors',
+        "Candidate cleanup journal identity/sequence mismatch",
+        "Candidate cleanup journal tail/checkpoint mismatch",
+        'before_source = before.get("source")',
+        'before_source != after_source',
+        "Active identity and health remained unchanged",
+        "intl was not modified",
+    )
+    missing_cleanup = [
+        token for token in required_cleanup_tokens if token not in cleanup_commands
+    ]
+    if 'test "$CANDIDATE_COMMIT_SHA" = "$GITHUB_SHA"' in cleanup_commands:
+        raise AssertionError(
+            "Candidate cleanup must remain possible after main advances",
+        )
+    if missing_cleanup:
+        raise AssertionError(
+            f"Candidate cleanup contract is incomplete: {missing_cleanup}"
+        )
+    if "Require exact intl artifact before releasing Candidate" in cleanup_names:
+        raise AssertionError("intl synchronization must not block Candidate cleanup")
+    for forbidden in (
+        "npm run build",
+        "Package backend release",
+        "Upload complete release archive",
+        "pages deploy",
+    ):
+        if forbidden in str(cleanup):
+            raise AssertionError(
+                f"Candidate cleanup must not build, upload, or publish intl: {forbidden}"
+            )
+    for download_name, expected_name in (
+        (
+            "Download exact Candidate cleanup handoff",
+            "release-candidate-${{ inputs.candidate_commit_sha }}-"
+            "${{ inputs.candidate_prepare_run_attempt }}",
+        ),
+        (
+            "Download exact Candidate cleanup frontend",
+            "frontend-dist-${{ inputs.candidate_commit_sha }}",
+        ),
+    ):
+        download = step_by_name(cleanup_steps, download_name)
+        download_with = mapping(download.get("with"), f"{download_name} with")
+        if (
+            download_with.get("name") != expected_name
+            or download_with.get("run-id")
+            != "${{ inputs.candidate_prepare_run_id }}"
+            or download_with.get("github-token") != "${{ github.token }}"
+        ):
+            raise AssertionError(f"{download_name} lost exact prior-run binding")
+        if download.get("if") != (
+            "${{ steps.cleanup_handoff.outputs.source == 'github-artifact' }}"
+        ):
+            raise AssertionError(
+                f"{download_name} must only consume a live GitHub handoff"
+            )
+    normal_verify = step_by_name(
+        cleanup_steps,
+        "Verify immutable Candidate cleanup handoff",
+    )
+    canonical_capture = step_by_name(
+        cleanup_steps,
+        "Capture canonical Candidate cleanup handoff",
+    )
+    canonical_verify = step_by_name(
+        cleanup_steps,
+        "Verify canonical Candidate cleanup handoff",
+    )
+    if normal_verify.get("if") != (
+        "${{ steps.cleanup_handoff.outputs.source == 'github-artifact' }}"
+    ):
+        raise AssertionError("normal Candidate cleanup must retain the artifact path")
+    for canonical_step in (canonical_capture, canonical_verify):
+        if canonical_step.get("if") != (
+            "${{ steps.cleanup_handoff.outputs.source == 'canonical-server' }}"
+        ):
+            raise AssertionError(
+                "canonical Candidate cleanup must require the server handoff source"
+            )
+    cleanup_receipt = step_by_name(
+        cleanup_steps,
+        "Retain immutable Candidate cleanup receipt",
+    )
+    cleanup_receipt_with = mapping(
+        cleanup_receipt.get("with"),
+        "Candidate cleanup receipt with",
+    )
+    if (
+        cleanup_receipt_with.get("overwrite") != "false"
+        or cleanup_receipt_with.get("retention-days") != "30"
+    ):
+        raise AssertionError(
+            "Candidate cleanup receipt must be immutable for thirty days"
+        )
 
     audit = job(workflow, "audit_frontend_parity")
     audit_steps = steps(audit, "audit_frontend_parity")
@@ -961,6 +1423,7 @@ def assert_release_checkpoint_contract(workflow: Mapping[str, Any]) -> None:
 
 def assert_server_consumes_only_prebuilt_dist() -> None:
     remote_release = REMOTE_RELEASE_PATH.read_text(encoding="utf-8")
+    candidate_control = CANDIDATE_CONTROL_PATH.read_text(encoding="utf-8")
     archive_validator = ARCHIVE_VALIDATOR_PATH.read_text(encoding="utf-8")
     production_workflow = PRODUCTION_WORKFLOW_PATH.read_text(encoding="utf-8")
     server_release = SERVER_RELEASE_PATH.read_text(encoding="utf-8")
@@ -977,6 +1440,92 @@ def assert_server_consumes_only_prebuilt_dist() -> None:
         for forbidden in FORBIDDEN_BUILD_COMMANDS:
             if forbidden in script:
                 raise AssertionError(f"{path} contains forbidden build command {forbidden!r}")
+    for required in (
+        "approve-candidate-to-active|discard-candidate|release-candidate|"
+        "restore-previous-active",
+        "capture-canonical-cleanup",
+        'source "$CANDIDATE_VERIFIED_ENV"',
+        'write_remote_export DEPLOY_APPROVAL_RUN_ID "$GITHUB_RUN_ID"',
+        "DEPLOY_CANDIDATE_ATTESTATION_SHA256",
+        "CANDIDATE_SERVER_CHECKPOINT_PATH",
+        "CANDIDATE_SERVER_CHECKPOINT_SHA256",
+        "CANDIDATE_SERVER_EVIDENCE_PATH",
+        "CANDIDATE_SERVER_EVIDENCE_SHA256",
+        "DEPLOY_CANDIDATE_SERVER_CHECKPOINT_PATH",
+        "DEPLOY_CANDIDATE_SERVER_CHECKPOINT_SHA256",
+        "DEPLOY_CANDIDATE_SERVER_EVIDENCE_PATH",
+        "DEPLOY_CANDIDATE_SERVER_EVIDENCE_SHA256",
+        'write_remote_export DEPLOY_CANDIDATE_HANDOFF_SOURCE',
+        'write_remote_export DEPLOY_CANDIDATE_SLOT',
+        'write_remote_export DEPLOY_CANDIDATE_PREVIEW_PORT',
+        "fcntl.flock(lock_descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)",
+        '"http://127.0.0.1:18002/candidate-preview.json"',
+        "hash_regular(",
+        "Candidate checkpoint journal",
+        "reconstructed_attestation_sha256 != requested_attestation",
+        '"source": "reconstructed-from-canonical-journal"',
+        'cat "$outer_release" >> "$control_payload"',
+    ):
+        if required not in candidate_control:
+            raise AssertionError(
+                f"Candidate SSH control lost exact cached-artifact binding: {required}"
+            )
+    for forbidden in FORBIDDEN_BUILD_COMMANDS + ("rsync", "pages deploy"):
+        if forbidden in candidate_control:
+            raise AssertionError(
+                f"Candidate control must not build, upload or publish intl: {forbidden}"
+            )
+    attested_server_state_tokens = (
+        "verify_attested_candidate_paths_and_evidence",
+        "verify_attested_candidate_checkpoint_for_mode",
+        'DEPLOY_CANDIDATE_SERVER_CHECKPOINT_PATH" != "$CHECKPOINT_FILE',
+        'DEPLOY_CANDIDATE_SERVER_EVIDENCE_PATH" != "$CHECKPOINT_EVIDENCE_FILE',
+        'actual_evidence_sha256" != "$DEPLOY_CANDIDATE_SERVER_EVIDENCE_SHA256',
+        "approve-candidate-to-active:candidate_ready) "
+        "require_original_checkpoint=true",
+        "discard-candidate:candidate_ready) require_original_checkpoint=true",
+        'actual_checkpoint_sha256" != "$DEPLOY_CANDIDATE_SERVER_CHECKPOINT_SHA256',
+    )
+    missing_attested_server_state = [
+        token for token in attested_server_state_tokens if token not in remote_release
+    ]
+    if missing_attested_server_state:
+        raise AssertionError(
+            "Candidate mutation lost exact attested server state binding: "
+            f"{missing_attested_server_state}"
+        )
+    lock_index = remote_release.index("flock -w 300 9")
+    checkpoint_path_index = remote_release.index('CHECKPOINT_FILE="$DEPLOY_STATE_DIR')
+    evidence_binding_index = remote_release.index(
+        "verify_attested_candidate_paths_and_evidence\n",
+        checkpoint_path_index,
+    )
+    checkpoint_state_index = remote_release.index(
+        'CHECKPOINT_STATE="$(python3 "$CHECKPOINT_HELPER" show',
+        evidence_binding_index,
+    )
+    checkpoint_binding_index = remote_release.index(
+        "verify_attested_candidate_checkpoint_for_mode\n",
+        checkpoint_state_index,
+    )
+    bluegreen_handoff_index = remote_release.index(
+        'bash "$RELEASE_WORKTREE/03_Scripts/deploy/tencent_bluegreen_release.sh"',
+        checkpoint_binding_index,
+    )
+    if not (
+        lock_index
+        < checkpoint_path_index
+        < evidence_binding_index
+        < checkpoint_state_index
+        < checkpoint_binding_index
+        < bluegreen_handoff_index
+    ):
+        raise AssertionError(
+            "Candidate server evidence/checkpoint binding must run under the "
+            "production lock before mutation"
+        )
+
+
     for forbidden in ("fallback to sparse", "github_sparse_checkout", "sparse Git fetch"):
         if forbidden in remote_release:
             raise AssertionError(f"remote release retains forbidden fallback: {forbidden}")
@@ -1138,6 +1687,15 @@ def assert_server_consumes_only_prebuilt_dist() -> None:
         raise AssertionError(
             "remote release must carry the fail-closed toolkit metadata cleaner",
         )
+    for fixed_active_file in (
+        "03_Scripts/deploy/fixed_active_preimage.py",
+        "03_Scripts/deploy/nginx/jato_candidate_preview.conf.example",
+    ):
+        if fixed_active_file not in remote_release:
+            raise AssertionError(
+                "remote release must require the fixed-Active approval asset: "
+                f"{fixed_active_file}",
+            )
     if '03_Scripts/deploy/release_evidence.py' not in remote_release:
         raise AssertionError("remote release must require the shared evidence verifier")
     if 'sudo -n "${verifier[@]}"' not in remote_release:
@@ -1166,6 +1724,33 @@ def assert_server_consumes_only_prebuilt_dist() -> None:
     )
     if handoff not in remote_release:
         raise AssertionError("production remote release must use Tencent blue/green")
+    for candidate_mode_token in (
+        'write_remote_export DEPLOY_BLUEGREEN_MODE "$RELEASE_MODE"',
+        'http://127.0.0.1:18002/candidate-preview.json',
+        "approve-candidate-to-active",
+        "verify_candidate_handoff.py",
+    ):
+        if candidate_mode_token not in production_workflow:
+            raise AssertionError(
+                "production workflow lost Candidate review mode: "
+                f"{candidate_mode_token!r}",
+            )
+    for candidate_mode_token in (
+        'DEPLOY_BLUEGREEN_MODE="${DEPLOY_BLUEGREEN_MODE:-prepare-candidate}"',
+        (
+            "prepare-candidate|approve-candidate-to-active|"
+            "discard-candidate|release-candidate|restore-previous-active"
+        ),
+        'if [[ "$DEPLOY_BLUEGREEN_MODE" != "prepare-candidate" ]]; then',
+        "DEPLOY_CANDIDATE_ATTESTATION_SHA256",
+        'DEPLOY_CANDIDATE_HANDOFF_SOURCE:-}" == "canonical-server"',
+        '"$DEPLOY_BLUEGREEN_MODE"',
+    ):
+        if candidate_mode_token not in remote_release:
+            raise AssertionError(
+                "production outer release lost Candidate mode validation: "
+                f"{candidate_mode_token!r}",
+            )
     if 'rm -rf "$REPO_DIR/$release_path"' in remote_release:
         raise AssertionError(
             "production remote release must not retain legacy live-tree mutation",
@@ -1225,6 +1810,120 @@ def assert_server_consumes_only_prebuilt_dist() -> None:
         raise AssertionError(
             "Alembic current must be protected by a database-level read-only setting",
         )
+
+
+def assert_independent_current_active_intl_sync() -> None:
+    workflow = load_workflow(INTL_SYNC_WORKFLOW_PATH)
+    if workflow.get("name") != "sync-www-active-to-intl":
+        raise AssertionError("independent intl sync workflow name changed")
+    triggers = mapping(workflow.get("on"), "intl sync on")
+    if set(triggers) != {"workflow_dispatch"}:
+        raise AssertionError("intl sync must remain explicit workflow_dispatch only")
+    dispatch = mapping(triggers.get("workflow_dispatch"), "intl sync dispatch")
+    inputs = mapping(dispatch.get("inputs"), "intl sync inputs")
+    if set(inputs) != {"confirm_sync_current_www_active"}:
+        raise AssertionError("intl sync must not accept an arbitrary release SHA")
+    confirmation = mapping(
+        inputs.get("confirm_sync_current_www_active"),
+        "intl sync confirmation",
+    )
+    if {
+        "required": confirmation.get("required"),
+        "default": confirmation.get("default"),
+        "type": confirmation.get("type"),
+    } != {"required": "true", "default": "false", "type": "boolean"}:
+        raise AssertionError("intl sync confirmation contract changed")
+    if workflow.get("permissions") != {"contents": "read"}:
+        raise AssertionError("intl sync permissions are not least privilege")
+    if workflow.get("concurrency") != {
+        "group": "production-release-main",
+        "cancel-in-progress": "false",
+    }:
+        raise AssertionError("intl sync must serialize with production release")
+    jobs = mapping(workflow.get("jobs"), "intl sync jobs")
+    if set(jobs) != {"sync_intl"}:
+        raise AssertionError("intl sync must contain one independent job")
+    sync_job = job(workflow, "sync_intl")
+    if unwrap_expression(sync_job.get("if")) != MAIN_CONDITION:
+        raise AssertionError("intl sync must use the exact main-only guard")
+    if sync_job.get("environment") != "production" or "needs" in sync_job:
+        raise AssertionError("intl sync must be production and Candidate-independent")
+    sync_steps = steps(sync_job, "sync_intl")
+    names = [str(step.get("name") or "") for step in sync_steps]
+    required_order = (
+        "Validate explicit current Active sync request",
+        "Prove current www Active and download its embedded frontend artifact",
+        "Verify and materialize the original Active frontend artifact",
+        "Verify current public www exactly matches the Active artifact",
+        "Check whether intl already serves the exact Active artifact",
+        "Reconfirm current main and unchanged www Active before intl mutation",
+        "Deploy original Active dist to Cloudflare Pages",
+        "Audit exact intl provenance and API contract",
+        "Create immutable intl sync receipt",
+        "Retain immutable intl sync receipt",
+    )
+    indexes = [names.index(name) for name in required_order]
+    if indexes != sorted(indexes):
+        raise AssertionError("intl sync verification/deployment order changed")
+    commands = combined_run(sync_job, "sync_intl")
+    required_tokens = (
+        'test "$CONFIRM_SYNC_CURRENT_WWW_ACTIVE" = "true"',
+        'test "$current_main" = "$GITHUB_SHA"',
+        "export_active_frontend_release.py",
+        "verify_release_source_seal.py",
+        "active-proof-before.json",
+        'sudo -n cat -- %q',
+        "active-proof-after-download.json",
+        "verify-download",
+        "--materialize-functions-dir",
+        "pages functions build functions",
+        "--profile www",
+        "current=true",
+        "current=false",
+        "active-proof-before-deploy.json",
+        "pages deploy",
+        '--commit-hash "$ACTIVE_COMMIT_SHA"',
+        '"jatoDataChanged": False',
+    )
+    missing = [
+        token
+        for token in required_tokens
+        if token not in commands and token not in str(sync_job)
+    ]
+    if missing:
+        raise AssertionError(f"intl sync contract is incomplete: {missing}")
+    for forbidden in FORBIDDEN_BUILD_COMMANDS + (
+        "release-candidate-",
+        "candidate_prepare_run_id",
+        "github_candidate_control.sh",
+        "01_RAW_DATA",
+        "04_Processed_data",
+        "jato-monthly-worker",
+    ):
+        if forbidden in commands:
+            raise AssertionError(f"intl sync contains forbidden behavior: {forbidden}")
+    helper = (
+        REPO_ROOT / "03_Scripts/deploy/export_active_frontend_release.py"
+    ).read_text(encoding="utf-8")
+    for required in (
+        "legacy/non-content-addressed",
+        'getattr(os, "O_NOFOLLOW", None)',
+        "_stat_identity(before) != _stat_identity(after)",
+        "return root, commit, archive_sha256",
+        "Active runtime seal verification failed",
+    ):
+        if required not in helper:
+            raise AssertionError(
+                f"current Active export helper lost {required!r}"
+            )
+    receipt = step_by_name(sync_steps, "Retain immutable intl sync receipt")
+    receipt_with = mapping(receipt.get("with"), "intl sync receipt with")
+    if (
+        receipt.get("uses") != "actions/upload-artifact@v4"
+        or receipt_with.get("overwrite") != "false"
+        or receipt_with.get("retention-days") != "30"
+    ):
+        raise AssertionError("intl sync receipt must be immutable for thirty days")
 
 
 def assert_bluegreen_storage_guard_text_contract(
@@ -1683,6 +2382,7 @@ def main() -> None:
     assert_deterministic_backend_package(production)
     assert_release_checkpoint_contract(production)
     assert_server_consumes_only_prebuilt_dist()
+    assert_independent_current_active_intl_sync()
     assert_bluegreen_storage_guard_contract()
     assert_prewarm_contract(production_name)
     assert_required_ci_contract()

@@ -1,0 +1,546 @@
+name: sync-www-active-to-intl
+
+on:
+  workflow_dispatch:
+    inputs:
+      confirm_sync_current_www_active:
+        description: Sync the exact frontend artifact embedded in current www Active to intl
+        required: true
+        default: false
+        type: boolean
+
+permissions:
+  contents: read
+
+concurrency:
+  group: production-release-main
+  cancel-in-progress: false
+
+env:
+  FRONTEND_NODE_VERSION: "20.19.0"
+  WRANGLER_VERSION: "4.86.0"
+
+jobs:
+  sync_intl:
+    if: ${{ github.ref == 'refs/heads/main' }}
+    environment: production
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+
+    steps:
+      - name: Checkout exact main control source
+        uses: actions/checkout@v5
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+
+      - name: Validate explicit current Active sync request
+        env:
+          CONFIRM_SYNC_CURRENT_WWW_ACTIVE: ${{ inputs.confirm_sync_current_www_active }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          test "$CONFIRM_SYNC_CURRENT_WWW_ACTIVE" = "true" || {
+            echo "::error::confirm_sync_current_www_active must be explicitly checked"
+            exit 1
+          }
+          test "$GITHUB_REF" = "refs/heads/main"
+          current_main="$(gh api "repos/$GITHUB_REPOSITORY/branches/main" --jq .commit.sha)"
+          test "$current_main" = "$GITHUB_SHA" || {
+            echo "::error::Workflow control source is no longer current main"
+            exit 1
+          }
+
+      - name: Setup fixed Cloudflare Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.FRONTEND_NODE_VERSION }}
+
+      - name: Validate Tencent and Cloudflare credentials
+        id: auth
+        env:
+          SSH_HOST: ${{ secrets.SSH_HOST }}
+          SSH_USER: ${{ secrets.SSH_USER }}
+          SSH_PORT: ${{ secrets.SSH_PORT }}
+          SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
+          SSH_PASSWORD: ${{ secrets.SSH_PASSWORD }}
+          SSH_KNOWN_HOSTS: ${{ secrets.SSH_KNOWN_HOSTS }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          CLOUDFLARE_PAGES_PROJECT_NAME: ${{ vars.CLOUDFLARE_PAGES_PROJECT_NAME || secrets.CLOUDFLARE_PAGES_PROJECT_NAME }}
+        run: |
+          set -euo pipefail
+          : "${SSH_HOST:?Missing SSH_HOST}"
+          : "${SSH_USER:?Missing SSH_USER}"
+          : "${SSH_KNOWN_HOSTS:?Missing production secret SSH_KNOWN_HOSTS}"
+          : "${CLOUDFLARE_API_TOKEN:?Missing CLOUDFLARE_API_TOKEN}"
+          : "${CLOUDFLARE_ACCOUNT_ID:?Missing CLOUDFLARE_ACCOUNT_ID}"
+          : "${CLOUDFLARE_PAGES_PROJECT_NAME:?Missing CLOUDFLARE_PAGES_PROJECT_NAME}"
+          SSH_PORT="${SSH_PORT:-22}"
+          echo "::add-mask::$SSH_HOST"
+          echo "::add-mask::$SSH_USER"
+          install -d -m 700 ~/.ssh
+          printf '%s\n' "$SSH_KNOWN_HOSTS" > ~/.ssh/known_hosts
+          chmod 600 ~/.ssh/known_hosts
+          known_host="$SSH_HOST"
+          if [ "$SSH_PORT" != "22" ]; then
+            known_host="[$SSH_HOST]:$SSH_PORT"
+          fi
+          ssh-keygen -F "$known_host" -f ~/.ssh/known_hosts >/dev/null || {
+            echo "::error::SSH_KNOWN_HOSTS does not pin the Tencent host and port"
+            exit 1
+          }
+          if [ -n "${SSH_PRIVATE_KEY:-}" ]; then
+            printf '%s\n' "$SSH_PRIVATE_KEY" > ~/.ssh/github_actions_tencent_key
+            chmod 600 ~/.ssh/github_actions_tencent_key
+            echo "mode=key" >> "$GITHUB_OUTPUT"
+          elif [ -n "${SSH_PASSWORD:-}" ]; then
+            echo "::add-mask::$SSH_PASSWORD"
+            command -v sshpass >/dev/null || {
+              sudo apt-get update -y
+              sudo apt-get install -y sshpass
+            }
+            echo "mode=password" >> "$GITHUB_OUTPUT"
+          else
+            echo "::error::Provide either SSH_PRIVATE_KEY or SSH_PASSWORD"
+            exit 1
+          fi
+
+      - name: Prove current www Active and download its embedded frontend artifact
+        env:
+          AUTH_MODE: ${{ steps.auth.outputs.mode }}
+          SSH_HOST: ${{ secrets.SSH_HOST }}
+          SSH_USER: ${{ secrets.SSH_USER }}
+          SSH_PORT: ${{ secrets.SSH_PORT }}
+          SSH_PASSWORD: ${{ secrets.SSH_PASSWORD }}
+        run: |
+          set -euo pipefail
+          umask 077
+          SSH_PORT="${SSH_PORT:-22}"
+          ssh_options=(
+            -T -p "$SSH_PORT"
+            -o StrictHostKeyChecking=yes
+            -o UserKnownHostsFile="$HOME/.ssh/known_hosts"
+            -o ConnectTimeout=20
+            -o ConnectionAttempts=2
+            -o ServerAliveInterval=10
+            -o ServerAliveCountMax=6
+          )
+          if [ "$AUTH_MODE" = "key" ]; then
+            ssh_command=(ssh -o BatchMode=yes -i ~/.ssh/github_actions_tencent_key)
+          else
+            export SSHPASS="$SSH_PASSWORD"
+            ssh_command=(
+              sshpass -e ssh
+              -o PreferredAuthentications=password
+              -o PubkeyAuthentication=no
+            )
+          fi
+          ssh_target="$SSH_USER@$SSH_HOST"
+          export_helper="03_Scripts/deploy/export_active_frontend_release.py"
+          seal_helper="03_Scripts/deploy/verify_release_source_seal.py"
+          for helper in "$export_helper" "$seal_helper"; do
+            test -f "$helper" && test ! -L "$helper"
+          done
+          export_helper_sha256="$(sha256sum "$export_helper" | awk '{print $1}')"
+          seal_helper_sha256="$(sha256sum "$seal_helper" | awk '{print $1}')"
+          export_helper_b64="$(base64 -w 0 "$export_helper")"
+          seal_helper_b64="$(base64 -w 0 "$seal_helper")"
+
+          remote_inspect() {
+            local output="$1"
+            local control
+            control="$(mktemp "$RUNNER_TEMP/active-frontend-inspect.XXXXXX")"
+            chmod 600 "$control"
+            printf 'export ACTIVE_EXPORT_HELPER_B64=%q\n' "$export_helper_b64" >> "$control"
+            printf 'export ACTIVE_EXPORT_HELPER_SHA256=%q\n' "$export_helper_sha256" >> "$control"
+            printf 'export SOURCE_SEAL_HELPER_B64=%q\n' "$seal_helper_b64" >> "$control"
+            printf 'export SOURCE_SEAL_HELPER_SHA256=%q\n' "$seal_helper_sha256" >> "$control"
+            cat >> "$control" <<'REMOTE'
+          set -euo pipefail
+          umask 077
+          helper_dir="$(mktemp -d "$HOME/.cache/jato-active-frontend-export.XXXXXX")"
+          trap 'rm -rf -- "$helper_dir"' EXIT
+          printf '%s' "$ACTIVE_EXPORT_HELPER_B64" | base64 --decode > "$helper_dir/export.py"
+          printf '%s' "$SOURCE_SEAL_HELPER_B64" | base64 --decode > "$helper_dir/source-seal.py"
+          test "$(sha256sum "$helper_dir/export.py" | awk '{print $1}')" = "$ACTIVE_EXPORT_HELPER_SHA256"
+          test "$(sha256sum "$helper_dir/source-seal.py" | awk '{print $1}')" = "$SOURCE_SEAL_HELPER_SHA256"
+          chmod 0500 "$helper_dir/export.py" "$helper_dir/source-seal.py"
+          sudo -n python3 -B "$helper_dir/export.py" inspect \
+            --source-seal-helper "$helper_dir/source-seal.py"
+          REMOTE
+            timeout 360s "${ssh_command[@]}" "${ssh_options[@]}" \
+              "$ssh_target" "umask 077; exec bash -s" < "$control" > "$output"
+            rm -f "$control"
+          }
+
+          sync_dir="$RUNNER_TEMP/www-active-intl-sync"
+          release_dir="$sync_dir/frontend-release"
+          install -d -m 700 "$release_dir"
+          remote_inspect "$sync_dir/active-proof-before.json"
+          python3 03_Scripts/deploy/export_active_frontend_release.py proof-env \
+            --proof "$sync_dir/active-proof-before.json" \
+            --env-output "$sync_dir/active.env"
+          source "$sync_dir/active.env"
+          for name in frontend-release.json frontend-dist.tar.gz; do
+            remote_path="$ACTIVE_ROOT/hermes/frontend_release/$name"
+            printf -v remote_command 'sudo -n cat -- %q' "$remote_path"
+            timeout 1800s "${ssh_command[@]}" "${ssh_options[@]}" \
+              "$ssh_target" "$remote_command" > "$release_dir/$name"
+          done
+          remote_inspect "$sync_dir/active-proof-after-download.json"
+          cmp -s \
+            "$sync_dir/active-proof-before.json" \
+            "$sync_dir/active-proof-after-download.json" || {
+            echo "::error::www Active changed while its embedded artifact was read"
+            exit 1
+          }
+          python3 03_Scripts/deploy/export_active_frontend_release.py verify-download \
+            --proof "$sync_dir/active-proof-before.json" \
+            --release-dir "$release_dir" \
+            --env-output "$sync_dir/verified.env"
+
+      - name: Verify and materialize the original Active frontend artifact
+        run: |
+          set -euo pipefail
+          sync_dir="$RUNNER_TEMP/www-active-intl-sync"
+          source "$sync_dir/verified.env"
+          test "$NODE_VERSION" = "v$FRONTEND_NODE_VERSION"
+          install -d -m 700 "$RUNNER_TEMP/cloudflare-pages-project"
+          python3 03_Scripts/deploy/frontend_release_artifact.py verify \
+            --release-dir "$sync_dir/frontend-release" \
+            --expected-github-sha "$ACTIVE_COMMIT_SHA" \
+            --expected-artifact-name "$ARTIFACT_NAME" \
+            --expected-artifact-identity "$ARTIFACT_IDENTITY" \
+            --expected-artifact-checksum "$ARTIFACT_CHECKSUM" \
+            --expected-build-id "$FRONTEND_BUILD_ID" \
+            --expected-node-version "$NODE_VERSION" \
+            --expected-run-id "$BUILD_RUN_ID" \
+            --expected-run-attempt "$BUILD_RUN_ATTEMPT" \
+            --github-artifact-id "$GITHUB_ARTIFACT_ID" \
+            --github-artifact-digest "$GITHUB_ARTIFACT_DIGEST" \
+            --materialize-dir "$RUNNER_TEMP/frontend-dist" \
+            --materialize-functions-dir "$RUNNER_TEMP/cloudflare-pages-project/functions"
+
+      - name: Validate original Pages Functions before production mutation
+        working-directory: ${{ runner.temp }}/cloudflare-pages-project
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          CLOUDFLARE_PAGES_PROJECT_NAME: ${{ vars.CLOUDFLARE_PAGES_PROJECT_NAME || secrets.CLOUDFLARE_PAGES_PROJECT_NAME }}
+        run: |
+          set -euo pipefail
+          worker_bundle="$RUNNER_TEMP/cloudflare-pages-worker.js"
+          routes_manifest="$RUNNER_TEMP/cloudflare-pages-routes.json"
+          npx --yes "wrangler@$WRANGLER_VERSION" pages functions build functions \
+            --project-directory . \
+            --outfile "$worker_bundle" \
+            --output-routes-path "$routes_manifest"
+          test -s "$worker_bundle"
+          test -s "$routes_manifest"
+          python3 - "$routes_manifest" <<'PY'
+          import json
+          import sys
+          from pathlib import Path
+
+          routes = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
+          required = {"/healthz", "/oauth-relay/*", "/v1/*"}
+          missing = sorted(required - set(routes.get("include", [])))
+          if missing:
+              raise SystemExit(f"Missing Cloudflare Pages Function routes: {missing}")
+          PY
+
+      - name: Verify current public www exactly matches the Active artifact
+        env:
+          PUBLIC_ORIGINS: ${{ vars.DEPLOY_PUBLIC_BUILD_META_URLS || 'https://www.ojeur.cloud https://ojeur.cloud' }}
+        run: |
+          set -euo pipefail
+          sync_dir="$RUNNER_TEMP/www-active-intl-sync"
+          source "$sync_dir/verified.env"
+          origin_args=()
+          for origin in $PUBLIC_ORIGINS; do
+            origin_args+=(--origin "$origin")
+          done
+          python3 03_Scripts/deploy/frontend_release_artifact.py audit-public \
+            --release-dir "$sync_dir/frontend-release" \
+            --expected-github-sha "$ACTIVE_COMMIT_SHA" \
+            --expected-artifact-name "$ARTIFACT_NAME" \
+            --expected-artifact-identity "$ARTIFACT_IDENTITY" \
+            --expected-artifact-checksum "$ARTIFACT_CHECKSUM" \
+            --expected-build-id "$FRONTEND_BUILD_ID" \
+            --expected-node-version "$NODE_VERSION" \
+            --expected-run-id "$BUILD_RUN_ID" \
+            --expected-run-attempt "$BUILD_RUN_ATTEMPT" \
+            --github-artifact-id "$GITHUB_ARTIFACT_ID" \
+            --github-artifact-digest "$GITHUB_ARTIFACT_DIGEST" \
+            --attempts 3 \
+            --delay-seconds 5 \
+            "${origin_args[@]}"
+          for origin in $PUBLIC_ORIGINS; do
+            python3 03_Scripts/deploy/verify_intl_runtime_contract.py \
+              --profile www \
+              --origin "$origin" \
+              --attempts 3 \
+              --delay-seconds 5 \
+              --timeout-seconds 20
+          done
+
+      - name: Check whether intl already serves the exact Active artifact
+        id: intl_current
+        env:
+          JATO_INTL_ORIGIN: ${{ vars.JATO_INTL_ORIGIN || 'https://intl.ojeur.cloud' }}
+        run: |
+          set -euo pipefail
+          sync_dir="$RUNNER_TEMP/www-active-intl-sync"
+          source "$sync_dir/verified.env"
+          if python3 03_Scripts/deploy/frontend_release_artifact.py audit-public \
+            --release-dir "$sync_dir/frontend-release" \
+            --expected-github-sha "$ACTIVE_COMMIT_SHA" \
+            --expected-artifact-name "$ARTIFACT_NAME" \
+            --expected-artifact-identity "$ARTIFACT_IDENTITY" \
+            --expected-artifact-checksum "$ARTIFACT_CHECKSUM" \
+            --expected-build-id "$FRONTEND_BUILD_ID" \
+            --expected-node-version "$NODE_VERSION" \
+            --expected-run-id "$BUILD_RUN_ID" \
+            --expected-run-attempt "$BUILD_RUN_ATTEMPT" \
+            --github-artifact-id "$GITHUB_ARTIFACT_ID" \
+            --github-artifact-digest "$GITHUB_ARTIFACT_DIGEST" \
+            --origin "$JATO_INTL_ORIGIN" \
+            --attempts 1 \
+            --delay-seconds 0; then
+            echo "current=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          provenance="$sync_dir/intl-current-provenance.json"
+          status="$(curl --silent --show-error --location \
+            --connect-timeout 10 --max-time 30 \
+            --output "$provenance" --write-out '%{http_code}' \
+            "$JATO_INTL_ORIGIN/release-provenance.json?release_probe=$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT")"
+          test "$status" = "200" || {
+            echo "::error::Intl provenance is ambiguous (HTTP $status); refusing mutation"
+            exit 1
+          }
+          current_sha="$(python3 - "$provenance" <<'PY'
+          import json
+          import re
+          import sys
+          from pathlib import Path
+
+          payload = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
+          source = payload.get("source")
+          sha = source.get("githubSha") if isinstance(source, dict) else None
+          if not isinstance(sha, str) or re.fullmatch(r"[0-9a-f]{40}", sha) is None:
+              raise SystemExit("intl provenance has an invalid githubSha")
+          print(sha)
+          PY
+          )"
+          if [ "$current_sha" = "$ACTIVE_COMMIT_SHA" ]; then
+            echo "::error::Intl serves the Active SHA with conflicting artifact provenance"
+            exit 1
+          fi
+          echo "current=false" >> "$GITHUB_OUTPUT"
+
+      - name: Reconfirm current main and unchanged www Active before intl mutation
+        env:
+          AUTH_MODE: ${{ steps.auth.outputs.mode }}
+          SSH_HOST: ${{ secrets.SSH_HOST }}
+          SSH_USER: ${{ secrets.SSH_USER }}
+          SSH_PORT: ${{ secrets.SSH_PORT }}
+          SSH_PASSWORD: ${{ secrets.SSH_PASSWORD }}
+          GH_TOKEN: ${{ github.token }}
+          PUBLIC_ORIGINS: ${{ vars.DEPLOY_PUBLIC_BUILD_META_URLS || 'https://www.ojeur.cloud https://ojeur.cloud' }}
+        run: |
+          set -euo pipefail
+          current_main="$(gh api "repos/$GITHUB_REPOSITORY/branches/main" --jq .commit.sha)"
+          test "$current_main" = "$GITHUB_SHA" || {
+            echo "::error::Workflow control source is no longer current main"
+            exit 1
+          }
+          sync_dir="$RUNNER_TEMP/www-active-intl-sync"
+          source "$sync_dir/verified.env"
+          SSH_PORT="${SSH_PORT:-22}"
+          ssh_options=(
+            -T -p "$SSH_PORT"
+            -o StrictHostKeyChecking=yes
+            -o UserKnownHostsFile="$HOME/.ssh/known_hosts"
+            -o ConnectTimeout=20
+            -o ConnectionAttempts=2
+            -o ServerAliveInterval=10
+            -o ServerAliveCountMax=6
+          )
+          if [ "$AUTH_MODE" = "key" ]; then
+            ssh_command=(ssh -o BatchMode=yes -i ~/.ssh/github_actions_tencent_key)
+          else
+            export SSHPASS="$SSH_PASSWORD"
+            ssh_command=(
+              sshpass -e ssh
+              -o PreferredAuthentications=password
+              -o PubkeyAuthentication=no
+            )
+          fi
+          export_helper="03_Scripts/deploy/export_active_frontend_release.py"
+          seal_helper="03_Scripts/deploy/verify_release_source_seal.py"
+          control="$(mktemp "$RUNNER_TEMP/active-frontend-reconfirm.XXXXXX")"
+          chmod 600 "$control"
+          printf 'export ACTIVE_EXPORT_HELPER_B64=%q\n' "$(base64 -w 0 "$export_helper")" >> "$control"
+          printf 'export ACTIVE_EXPORT_HELPER_SHA256=%q\n' "$(sha256sum "$export_helper" | awk '{print $1}')" >> "$control"
+          printf 'export SOURCE_SEAL_HELPER_B64=%q\n' "$(base64 -w 0 "$seal_helper")" >> "$control"
+          printf 'export SOURCE_SEAL_HELPER_SHA256=%q\n' "$(sha256sum "$seal_helper" | awk '{print $1}')" >> "$control"
+          cat >> "$control" <<'REMOTE'
+          set -euo pipefail
+          umask 077
+          helper_dir="$(mktemp -d "$HOME/.cache/jato-active-frontend-export.XXXXXX")"
+          trap 'rm -rf -- "$helper_dir"' EXIT
+          printf '%s' "$ACTIVE_EXPORT_HELPER_B64" | base64 --decode > "$helper_dir/export.py"
+          printf '%s' "$SOURCE_SEAL_HELPER_B64" | base64 --decode > "$helper_dir/source-seal.py"
+          test "$(sha256sum "$helper_dir/export.py" | awk '{print $1}')" = "$ACTIVE_EXPORT_HELPER_SHA256"
+          test "$(sha256sum "$helper_dir/source-seal.py" | awk '{print $1}')" = "$SOURCE_SEAL_HELPER_SHA256"
+          chmod 0500 "$helper_dir/export.py" "$helper_dir/source-seal.py"
+          sudo -n python3 -B "$helper_dir/export.py" inspect \
+            --source-seal-helper "$helper_dir/source-seal.py"
+          REMOTE
+          timeout 360s "${ssh_command[@]}" "${ssh_options[@]}" \
+            "$SSH_USER@$SSH_HOST" "umask 077; exec bash -s" \
+            < "$control" > "$sync_dir/active-proof-before-deploy.json"
+          rm -f "$control"
+          cmp -s \
+            "$sync_dir/active-proof-before.json" \
+            "$sync_dir/active-proof-before-deploy.json" || {
+            echo "::error::www Active changed before intl mutation"
+            exit 1
+          }
+          origin_args=()
+          for origin in $PUBLIC_ORIGINS; do
+            origin_args+=(--origin "$origin")
+          done
+          python3 03_Scripts/deploy/frontend_release_artifact.py audit-public \
+            --release-dir "$sync_dir/frontend-release" \
+            --expected-github-sha "$ACTIVE_COMMIT_SHA" \
+            --expected-artifact-name "$ARTIFACT_NAME" \
+            --expected-artifact-identity "$ARTIFACT_IDENTITY" \
+            --expected-artifact-checksum "$ARTIFACT_CHECKSUM" \
+            --expected-build-id "$FRONTEND_BUILD_ID" \
+            --expected-node-version "$NODE_VERSION" \
+            --expected-run-id "$BUILD_RUN_ID" \
+            --expected-run-attempt "$BUILD_RUN_ATTEMPT" \
+            --github-artifact-id "$GITHUB_ARTIFACT_ID" \
+            --github-artifact-digest "$GITHUB_ARTIFACT_DIGEST" \
+            --attempts 1 \
+            --delay-seconds 0 \
+            "${origin_args[@]}"
+
+      - name: Deploy original Active dist to Cloudflare Pages
+        if: ${{ steps.intl_current.outputs.current != 'true' }}
+        working-directory: ${{ runner.temp }}/cloudflare-pages-project
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          CLOUDFLARE_PAGES_PROJECT_NAME: ${{ vars.CLOUDFLARE_PAGES_PROJECT_NAME || secrets.CLOUDFLARE_PAGES_PROJECT_NAME }}
+        run: |
+          set -euo pipefail
+          source "$RUNNER_TEMP/www-active-intl-sync/verified.env"
+          for deploy_attempt in 1 2 3; do
+            if npx --yes "wrangler@$WRANGLER_VERSION" pages deploy "$RUNNER_TEMP/frontend-dist" \
+              --project-name "$CLOUDFLARE_PAGES_PROJECT_NAME" \
+              --branch main \
+              --commit-hash "$ACTIVE_COMMIT_SHA" \
+              --commit-message "$ACTIVE_COMMIT_SHA" \
+              --commit-dirty=true; then
+              break
+            fi
+            if [ "$deploy_attempt" -eq 3 ]; then
+              echo "::error::Cloudflare deployment failed after three bounded attempts"
+              exit 1
+            fi
+            sleep $((deploy_attempt * 10))
+          done
+
+      - name: Audit exact intl provenance and API contract
+        env:
+          JATO_INTL_ORIGIN: ${{ vars.JATO_INTL_ORIGIN || 'https://intl.ojeur.cloud' }}
+        run: |
+          set -euo pipefail
+          sync_dir="$RUNNER_TEMP/www-active-intl-sync"
+          source "$sync_dir/verified.env"
+          python3 03_Scripts/deploy/frontend_release_artifact.py audit-public \
+            --release-dir "$sync_dir/frontend-release" \
+            --expected-github-sha "$ACTIVE_COMMIT_SHA" \
+            --expected-artifact-name "$ARTIFACT_NAME" \
+            --expected-artifact-identity "$ARTIFACT_IDENTITY" \
+            --expected-artifact-checksum "$ARTIFACT_CHECKSUM" \
+            --expected-build-id "$FRONTEND_BUILD_ID" \
+            --expected-node-version "$NODE_VERSION" \
+            --expected-run-id "$BUILD_RUN_ID" \
+            --expected-run-attempt "$BUILD_RUN_ATTEMPT" \
+            --github-artifact-id "$GITHUB_ARTIFACT_ID" \
+            --github-artifact-digest "$GITHUB_ARTIFACT_DIGEST" \
+            --origin "$JATO_INTL_ORIGIN" \
+            --attempts 24 \
+            --delay-seconds 10
+          python3 03_Scripts/deploy/verify_intl_runtime_contract.py \
+            --origin "$JATO_INTL_ORIGIN" \
+            --attempts 24 \
+            --delay-seconds 10 \
+            --timeout-seconds 20
+
+      - name: Create immutable intl sync receipt
+        env:
+          INTL_ALREADY_CURRENT: ${{ steps.intl_current.outputs.current }}
+        run: |
+          set -euo pipefail
+          sync_dir="$RUNNER_TEMP/www-active-intl-sync"
+          source "$sync_dir/verified.env"
+          receipt_dir="$sync_dir/receipt"
+          install -d -m 700 "$receipt_dir"
+          install -m 600 "$sync_dir/active-proof-before.json" "$receipt_dir/active-proof.json"
+          install -m 600 \
+            "$sync_dir/frontend-release/frontend-release.json" \
+            "$receipt_dir/frontend-release.json"
+          python3 - "$receipt_dir/result.json" \
+            "$ACTIVE_COMMIT_SHA" "$ACTIVE_ARCHIVE_SHA256" \
+            "$ARTIFACT_IDENTITY" "$ARTIFACT_CHECKSUM" \
+            "$INTL_ALREADY_CURRENT" "$GITHUB_RUN_ID" "$GITHUB_RUN_ATTEMPT" <<'PY'
+          import json
+          from pathlib import Path
+          import sys
+
+          output, commit, archive, identity, checksum, current, run_id, attempt = sys.argv[1:]
+          payload = {
+              "schemaVersion": 1,
+              "decision": "already-current" if current == "true" else "deployed",
+              "wwwActive": {
+                  "commitSha": commit,
+                  "archiveSha256": archive,
+                  "frontendIdentity": identity,
+                  "frontendChecksum": checksum,
+              },
+              "intl": {"verifiedExact": True},
+              "controlRun": {"id": int(run_id), "attempt": int(attempt)},
+              "candidateChanged": False,
+              "jatoDataChanged": False,
+          }
+          Path(output).write_text(
+              json.dumps(payload, indent=2, sort_keys=True) + "\n",
+              encoding="utf-8",
+          )
+          PY
+          chmod 600 "$receipt_dir/result.json"
+          {
+            echo "## Current www Active synced to intl"
+            echo
+            echo "- Active commit: \`$ACTIVE_COMMIT_SHA\`"
+            echo "- Active archive: \`$ACTIVE_ARCHIVE_SHA256\`"
+            echo "- Intl action: \`$([ "$INTL_ALREADY_CURRENT" = "true" ] && echo already-current || echo deployed)\`"
+            echo "- Candidate changed: \`false\`"
+            echo "- JATO data changed: \`false\`"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Retain immutable intl sync receipt
+        uses: actions/upload-artifact@v4
+        with:
+          name: www-active-intl-sync-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/www-active-intl-sync/receipt
+          if-no-files-found: error
+          compression-level: 0
+          overwrite: false
+          retention-days: 30

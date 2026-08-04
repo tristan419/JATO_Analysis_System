@@ -336,6 +336,97 @@ class ReleaseCheckpointTests(unittest.TestCase):
         self.assertEqual(repeated_attempt, first_attempt)
         self.assertEqual(len(self.journal_path.read_text().splitlines()), 2)
 
+    def test_journal_ahead_transition_is_adopted_without_duplicate_sequence(
+        self,
+    ) -> None:
+        self.write("packaged")
+        real_atomic_write = checkpoint.atomic_write_json
+
+        def fail_checkpoint_replace(
+            path: Path,
+            payload: dict[str, object],
+            **kwargs: object,
+        ) -> None:
+            if path == self.checkpoint_path:
+                raise OSError("simulated crash after journal fsync")
+            real_atomic_write(path, payload, **kwargs)
+
+        with mock.patch.object(
+            checkpoint,
+            "atomic_write_json",
+            side_effect=fail_checkpoint_replace,
+        ):
+            with self.assertRaisesRegex(OSError, "after journal fsync"):
+                checkpoint.write_checkpoint(
+                    checkpoint_path=self.checkpoint_path,
+                    journal_path=self.journal_path,
+                    identity=self.identity,
+                    phase="transport_verified",
+                    status="completed",
+                    retry_class="automatic",
+                    message="transport exact",
+                    now="2026-07-22T01:02:04.000Z",
+                )
+
+        self.assertEqual(
+            checkpoint.load_checkpoint(self.checkpoint_path)["phase"],
+            "packaged",
+        )
+        self.assertEqual(len(self.journal_path.read_text().splitlines()), 2)
+
+        recovered = checkpoint.write_checkpoint(
+            checkpoint_path=self.checkpoint_path,
+            journal_path=self.journal_path,
+            identity=self.identity,
+            phase="transport_verified",
+            status="completed",
+            retry_class="automatic",
+            message="transport exact",
+            now="2026-07-22T01:02:05.000Z",
+        )
+
+        self.assertEqual(recovered["sequence"], 2)
+        self.assertEqual(recovered["updatedAt"], "2026-07-22T01:02:04.000Z")
+        self.assertEqual(checkpoint.load_checkpoint(self.checkpoint_path), recovered)
+        self.assertEqual(len(self.journal_path.read_text().splitlines()), 2)
+
+    def test_journal_ahead_transition_rejects_a_different_retry_request(self) -> None:
+        self.write("packaged")
+        with mock.patch.object(
+            checkpoint,
+            "atomic_write_json",
+            side_effect=OSError("simulated crash after journal fsync"),
+        ):
+            with self.assertRaisesRegex(OSError, "after journal fsync"):
+                checkpoint.write_checkpoint(
+                    checkpoint_path=self.checkpoint_path,
+                    journal_path=self.journal_path,
+                    identity=self.identity,
+                    phase="transport_verified",
+                    status="completed",
+                    retry_class="automatic",
+                    message="original transition",
+                )
+
+        with self.assertRaisesRegex(
+            checkpoint.CheckpointError,
+            "pending transition differs",
+        ):
+            checkpoint.write_checkpoint(
+                checkpoint_path=self.checkpoint_path,
+                journal_path=self.journal_path,
+                identity=self.identity,
+                phase="transport_verified",
+                status="completed",
+                retry_class="automatic",
+                message="different transition",
+            )
+        self.assertEqual(len(self.journal_path.read_text().splitlines()), 2)
+        self.assertEqual(
+            checkpoint.load_checkpoint(self.checkpoint_path)["phase"],
+            "packaged",
+        )
+
     def test_complete_requires_verified_parity_chain_predecessor(self) -> None:
         self.write("backend_healthy")
         with self.assertRaisesRegex(
@@ -404,13 +495,411 @@ class ReleaseCheckpointTests(unittest.TestCase):
         self.assertEqual(result["decision"], "resumable")
         self.assertEqual(result["phase"], "migrated")
 
+    def test_cleaned_local_prepare_failure_has_a_settled_terminal(self) -> None:
+        self.write(
+            "migrated",
+            status="completed",
+            retry_class="inspect_then_resume",
+        )
+
+        aborted = self.write("candidate_prepare_aborted")
+        decision = checkpoint.assert_resumable(
+            checkpoint_path=self.checkpoint_path,
+            expected_identity=self.identity,
+        )
+
+        self.assertEqual(aborted["phase"], "candidate_prepare_aborted")
+        self.assertEqual(aborted["status"], "completed")
+        self.assertEqual(aborted["retryClass"], "automatic")
+        self.assertTrue(checkpoint.cross_release_is_settled(aborted))
+        self.assertEqual(
+            decision,
+            {
+                "decision": "already-candidate-prepare-aborted",
+                "action": "none",
+                "phase": "candidate_prepare_aborted",
+                "status": "completed",
+                "retryClass": "automatic",
+                "sequence": aborted["sequence"],
+            },
+        )
+        with self.assertRaisesRegex(checkpoint.CheckpointError, "immutable"):
+            self.write("candidate_ready", retry_class="inspect_then_resume")
+
+    def test_candidate_ready_is_required_before_switch_and_requires_approval(
+        self,
+    ) -> None:
+        self.write(
+            "migrated",
+            status="completed",
+            retry_class="inspect_then_resume",
+        )
+
+        with self.assertRaisesRegex(
+            checkpoint.CheckpointError,
+            "illegal checkpoint phase transition",
+        ):
+            self.write(
+                "switch_started",
+                status="in_progress",
+                retry_class="rollback_required",
+            )
+
+        ready = self.write(
+            "candidate_ready",
+            status="completed",
+            retry_class="inspect_then_resume",
+        )
+        decision = checkpoint.assert_resumable(
+            checkpoint_path=self.checkpoint_path,
+            expected_identity=self.identity,
+        )
+
+        self.assertEqual(ready["phase"], "candidate_ready")
+        self.assertEqual(decision["decision"], "approval-required")
+        self.assertEqual(decision["phase"], "candidate_ready")
+
+        switching = self.write(
+            "switch_started",
+            status="in_progress",
+            retry_class="rollback_required",
+        )
+        self.assertEqual(switching["phase"], "switch_started")
+
+    def test_candidate_discarded_is_settled_and_immutable(self) -> None:
+        self.write(
+            "migrated",
+            status="completed",
+            retry_class="inspect_then_resume",
+        )
+        self.write(
+            "candidate_ready",
+            status="completed",
+            retry_class="inspect_then_resume",
+        )
+        discarded = self.write("candidate_discarded")
+
+        decision = checkpoint.assert_resumable(
+            checkpoint_path=self.checkpoint_path,
+            expected_identity=self.identity,
+        )
+
+        self.assertEqual(decision["decision"], "already-candidate-discarded")
+        self.assertTrue(checkpoint.cross_release_is_settled(discarded))
+        with self.assertRaisesRegex(checkpoint.CheckpointError, "immutable"):
+            self.write(
+                "switch_started",
+                status="in_progress",
+                retry_class="rollback_required",
+            )
+
+    def test_fixed_active_update_requires_cleanup_before_next_release(self) -> None:
+        self.write(
+            "migrated",
+            status="completed",
+            retry_class="inspect_then_resume",
+        )
+        self.write(
+            "candidate_ready",
+            status="completed",
+            retry_class="inspect_then_resume",
+        )
+        started = self.write(
+            "active_update_started",
+            status="in_progress",
+            retry_class="rollback_required",
+        )
+        started_decision = checkpoint.assert_resumable(
+            checkpoint_path=self.checkpoint_path,
+            expected_identity=self.identity,
+        )
+
+        self.assertEqual(started_decision["decision"], "reconcile-required")
+        self.assertEqual(
+            started_decision["action"],
+            "restore-previous-active",
+        )
+        self.assertFalse(checkpoint.cross_release_is_settled(started))
+
+        verified = self.write(
+            "active_update_verified",
+            status="completed",
+            retry_class="inspect_then_resume",
+        )
+        verified_decision = checkpoint.assert_resumable(
+            checkpoint_path=self.checkpoint_path,
+            expected_identity=self.identity,
+        )
+        self.assertEqual(verified_decision["decision"], "reconcile-required")
+        self.assertEqual(
+            verified_decision["action"],
+            "finalize-active-update",
+        )
+        self.assertFalse(checkpoint.cross_release_is_settled(verified))
+
+        updated = self.write(
+            "active_updated",
+            status="completed",
+            retry_class="inspect_then_resume",
+        )
+        updated_decision = checkpoint.assert_resumable(
+            checkpoint_path=self.checkpoint_path,
+            expected_identity=self.identity,
+        )
+
+        self.assertEqual(
+            updated_decision["decision"],
+            "candidate-cleanup-required",
+        )
+        self.assertFalse(checkpoint.cross_release_is_settled(updated))
+
+        released = self.write("candidate_released")
+        released_decision = checkpoint.assert_resumable(
+            checkpoint_path=self.checkpoint_path,
+            expected_identity=self.identity,
+        )
+
+        self.assertEqual(
+            released_decision["decision"],
+            "already-candidate-released",
+        )
+        self.assertTrue(checkpoint.cross_release_is_settled(released))
+        with self.assertRaisesRegex(checkpoint.CheckpointError, "immutable"):
+            self.write(
+                "www_verified",
+                status="completed",
+                retry_class="automatic",
+            )
+
+    def test_fixed_active_update_can_continue_to_runner_www_verification(self) -> None:
+        self.write(
+            "migrated",
+            status="completed",
+            retry_class="inspect_then_resume",
+        )
+        self.write(
+            "candidate_ready",
+            status="completed",
+            retry_class="inspect_then_resume",
+        )
+        self.write(
+            "active_update_started",
+            status="in_progress",
+            retry_class="rollback_required",
+        )
+        self.write(
+            "active_update_verified",
+            status="completed",
+            retry_class="inspect_then_resume",
+        )
+        self.write(
+            "active_updated",
+            status="completed",
+            retry_class="inspect_then_resume",
+        )
+
+        verified = self.write(
+            "www_verified",
+            status="completed",
+            retry_class="automatic",
+        )
+
+        self.assertEqual(verified["phase"], "www_verified")
+
+    def test_failed_fixed_active_update_uses_existing_rollback_terminal(self) -> None:
+        self.write(
+            "migrated",
+            status="completed",
+            retry_class="inspect_then_resume",
+        )
+        self.write(
+            "candidate_ready",
+            status="completed",
+            retry_class="inspect_then_resume",
+        )
+        self.write(
+            "active_update_started",
+            status="in_progress",
+            retry_class="rollback_required",
+        )
+        self.write(
+            "rollback_started",
+            status="in_progress",
+            retry_class="rollback_required",
+        )
+
+        rolled_back = self.write("rollback_completed")
+
+        self.assertFalse(checkpoint.cross_release_is_settled(rolled_back))
+        self.assertEqual(
+            checkpoint.assert_resumable(
+                checkpoint_path=self.checkpoint_path,
+                expected_identity=self.identity,
+            )["decision"],
+            "candidate-cleanup-required",
+        )
+
+    def test_rolled_back_candidate_can_be_discarded_after_cleanup(self) -> None:
+        self.write(
+            "migrated",
+            status="completed",
+            retry_class="inspect_then_resume",
+        )
+        self.write(
+            "candidate_ready",
+            status="completed",
+            retry_class="inspect_then_resume",
+        )
+        self.write(
+            "active_update_started",
+            status="in_progress",
+            retry_class="rollback_required",
+        )
+        self.write(
+            "active_update_verified",
+            status="completed",
+            retry_class="inspect_then_resume",
+        )
+        self.write(
+            "rollback_started",
+            status="in_progress",
+            retry_class="rollback_required",
+        )
+        rolled_back = self.write("rollback_completed")
+
+        discarded = self.write("candidate_discarded")
+        decision = checkpoint.assert_resumable(
+            checkpoint_path=self.checkpoint_path,
+            expected_identity=self.identity,
+        )
+
+        self.assertEqual(discarded["sequence"], rolled_back["sequence"] + 1)
+        self.assertEqual(discarded["phase"], "candidate_discarded")
+        self.assertEqual(discarded["status"], "completed")
+        self.assertEqual(discarded["retryClass"], "automatic")
+        self.assertEqual(decision["decision"], "already-candidate-discarded")
+        self.assertTrue(checkpoint.cross_release_is_settled(discarded))
+        events = [
+            json.loads(line)
+            for line in self.journal_path.read_text(encoding="utf-8").splitlines()
+        ]
+        self.assertEqual(
+            [event["phase"] for event in events[-2:]],
+            ["rollback_completed", "candidate_discarded"],
+        )
+
+    def test_rejected_public_verification_restores_updated_active(self) -> None:
+        self.write(
+            "migrated",
+            status="completed",
+            retry_class="inspect_then_resume",
+        )
+        self.write(
+            "candidate_ready",
+            status="completed",
+            retry_class="inspect_then_resume",
+        )
+        self.write(
+            "active_update_started",
+            status="in_progress",
+            retry_class="rollback_required",
+        )
+        self.write(
+            "active_update_verified",
+            status="completed",
+            retry_class="inspect_then_resume",
+        )
+        self.write(
+            "active_updated",
+            status="completed",
+            retry_class="inspect_then_resume",
+        )
+        self.write(
+            "rollback_started",
+            status="in_progress",
+            retry_class="rollback_required",
+        )
+
+        restored = self.write("rollback_completed")
+
+        self.assertFalse(checkpoint.cross_release_is_settled(restored))
+        self.assertEqual(
+            checkpoint.assert_resumable(
+                checkpoint_path=self.checkpoint_path,
+                expected_identity=self.identity,
+            )["decision"],
+            "candidate-cleanup-required",
+        )
+
+    def test_candidate_checkpoint_contracts_fail_closed(self) -> None:
+        invalid_outcomes = (
+            ("candidate_prepare_aborted", "failed", "automatic"),
+            ("candidate_prepare_aborted", "completed", "inspect_then_resume"),
+            ("candidate_ready", "in_progress", "inspect_then_resume"),
+            ("candidate_ready", "completed", "automatic"),
+            ("candidate_discarded", "failed", "automatic"),
+            ("candidate_discarded", "completed", "inspect_then_resume"),
+            ("active_update_started", "completed", "rollback_required"),
+            ("active_update_started", "in_progress", "automatic"),
+            ("active_update_verified", "in_progress", "inspect_then_resume"),
+            ("active_update_verified", "completed", "automatic"),
+            ("active_updated", "in_progress", "inspect_then_resume"),
+            ("active_updated", "completed", "automatic"),
+            ("candidate_released", "failed", "automatic"),
+            ("candidate_released", "completed", "inspect_then_resume"),
+        )
+        for phase, status, retry_class in invalid_outcomes:
+            with self.subTest(
+                phase=phase,
+                status=status,
+                retry_class=retry_class,
+            ), tempfile.TemporaryDirectory() as temp_dir:
+                root = Path(temp_dir)
+                with self.assertRaisesRegex(
+                    checkpoint.CheckpointError,
+                    f"{phase} phase requires",
+                ):
+                    checkpoint.write_checkpoint(
+                        checkpoint_path=root / "checkpoint.json",
+                        journal_path=root / "journal.jsonl",
+                        identity=self.identity,
+                        phase=phase,
+                        status=status,
+                        retry_class=retry_class,
+                        now="2026-07-22T01:02:03.000Z",
+                    )
+                self.assertFalse((root / "checkpoint.json").exists())
+                self.assertFalse((root / "journal.jsonl").exists())
+
     def test_interrupted_switch_requires_route_reconciliation(self) -> None:
         scenarios = (
-            ("switch_started", "in_progress", "rollback_required"),
-            ("switched", "completed", "automatic"),
-            ("rollback_started", "in_progress", "rollback_required"),
+            (
+                "active_update_started",
+                "in_progress",
+                "rollback_required",
+                "restore-previous-active",
+            ),
+            (
+                "active_update_verified",
+                "completed",
+                "inspect_then_resume",
+                "finalize-active-update",
+            ),
+            (
+                "switch_started",
+                "in_progress",
+                "rollback_required",
+                "reconcile-public-route",
+            ),
+            ("switched", "completed", "automatic", "reconcile-public-route"),
+            (
+                "rollback_started",
+                "in_progress",
+                "rollback_required",
+                "resume-rollback",
+            ),
         )
-        for phase, status, retry_class in scenarios:
+        for phase, status, retry_class, action in scenarios:
             with self.subTest(phase=phase), tempfile.TemporaryDirectory() as temp_dir:
                 root = Path(temp_dir)
                 checkpoint.write_checkpoint(
@@ -432,6 +921,7 @@ class ReleaseCheckpointTests(unittest.TestCase):
                 self.assertEqual(result["phase"], phase)
                 self.assertEqual(result["status"], status)
                 self.assertEqual(result["retryClass"], retry_class)
+                self.assertEqual(result["action"], action)
 
     def test_complete_returns_already_complete_and_is_immutable(self) -> None:
         self.write("complete", retry_class="complete")
@@ -459,7 +949,8 @@ class ReleaseCheckpointTests(unittest.TestCase):
             expected_identity=self.identity,
         )
 
-        self.assertEqual(result["decision"], "already-rolled-back")
+        self.assertEqual(result["decision"], "candidate-cleanup-required")
+        self.assertEqual(result["action"], "discard-candidate")
         self.assertEqual(result["phase"], "rollback_completed")
         self.assertEqual(result["status"], "completed")
         self.assertEqual(result["retryClass"], "automatic")
@@ -652,6 +1143,102 @@ class ReleaseCheckpointTests(unittest.TestCase):
                 current_checkpoint=current_path,
                 expected_identity=self.identity,
             )
+
+    def test_cross_release_gate_blocks_candidate_awaiting_approval(self) -> None:
+        checkpoints_root = self.root / "checkpoints"
+        current_path = (
+            checkpoints_root
+            / self.identity.commit
+            / f"{self.identity.archiveSha256}.json"
+        )
+        current_path.parent.mkdir(parents=True)
+        waiting_identity = self.namespaced_identity(
+            commit="d" * 40,
+            archive_sha256="e" * 64,
+            run_id=234567,
+        )
+        self.write_namespaced(
+            checkpoints_root,
+            waiting_identity,
+            "candidate_ready",
+            retry_class="inspect_then_resume",
+        )
+
+        with self.assertRaisesRegex(
+            checkpoint.CheckpointError,
+            "resume that exact release",
+        ):
+            checkpoint.assert_cross_release_safe(
+                checkpoints_root=checkpoints_root,
+                current_checkpoint=current_path,
+                expected_identity=self.identity,
+            )
+
+    def test_cross_release_gate_allows_discarded_candidate(self) -> None:
+        checkpoints_root = self.root / "checkpoints"
+        discarded_identity = self.namespaced_identity(
+            commit="d" * 40,
+            archive_sha256="e" * 64,
+            run_id=234567,
+        )
+        self.write_namespaced(
+            checkpoints_root,
+            discarded_identity,
+            "candidate_discarded",
+        )
+        current_path = self.write_namespaced(
+            checkpoints_root,
+            self.identity,
+            "prepared",
+        )
+
+        result = checkpoint.assert_cross_release_safe(
+            checkpoints_root=checkpoints_root,
+            current_checkpoint=current_path,
+            expected_identity=self.identity,
+        )
+
+        self.assertEqual(result["decision"], "cross-release-safe")
+
+    def test_cross_release_gate_allows_cleaned_prepare_abort(self) -> None:
+        checkpoints_root = self.root / "checkpoints"
+        aborted_identity = self.namespaced_identity(
+            commit="d" * 40,
+            archive_sha256="e" * 64,
+            run_id=234567,
+        )
+        aborted_path = self.write_namespaced(
+            checkpoints_root,
+            aborted_identity,
+            "migrated",
+            retry_class="inspect_then_resume",
+        )
+        checkpoint.write_checkpoint(
+            checkpoint_path=aborted_path,
+            journal_path=(
+                checkpoints_root.parent
+                / "journals"
+                / aborted_identity.commit
+                / f"{aborted_identity.archiveSha256}.jsonl"
+            ),
+            identity=aborted_identity,
+            phase="candidate_prepare_aborted",
+            status="completed",
+            retry_class="automatic",
+        )
+        current_path = self.write_namespaced(
+            checkpoints_root,
+            self.identity,
+            "prepared",
+        )
+
+        result = checkpoint.assert_cross_release_safe(
+            checkpoints_root=checkpoints_root,
+            current_checkpoint=current_path,
+            expected_identity=self.identity,
+        )
+
+        self.assertEqual(result["decision"], "cross-release-safe")
 
     def test_cross_release_gate_fails_closed_on_untrusted_namespace(self) -> None:
         scenarios = ("malformed", "identity_mismatch", "symlink")
@@ -969,7 +1556,7 @@ class ReleaseCheckpointTests(unittest.TestCase):
                 owner_uid=uid,
             )
 
-    def test_cross_release_gate_treats_completed_rollback_as_settled(self) -> None:
+    def test_cross_release_gate_blocks_rollback_until_candidate_discard(self) -> None:
         checkpoints_root = self.root / "checkpoints"
         rolled_back_identity = self.namespaced_identity(
             commit="d" * 40,
@@ -987,11 +1574,15 @@ class ReleaseCheckpointTests(unittest.TestCase):
             "prepared",
         )
 
-        result = checkpoint.assert_cross_release_safe(
-            checkpoints_root=checkpoints_root,
-            current_checkpoint=current_path,
-            expected_identity=self.identity,
-        )
+        with self.assertRaisesRegex(
+            checkpoint.CheckpointError,
+            "resume that exact release",
+        ):
+            checkpoint.assert_cross_release_safe(
+                checkpoints_root=checkpoints_root,
+                current_checkpoint=current_path,
+                expected_identity=self.identity,
+            )
         rolled_back = checkpoint.assert_resumable(
             checkpoint_path=(
                 checkpoints_root
@@ -1001,8 +1592,8 @@ class ReleaseCheckpointTests(unittest.TestCase):
             expected_identity=rolled_back_identity,
         )
 
-        self.assertEqual(result["decision"], "cross-release-safe")
-        self.assertEqual(rolled_back["decision"], "already-rolled-back")
+        self.assertEqual(rolled_back["decision"], "candidate-cleanup-required")
+        self.assertEqual(rolled_back["action"], "discard-candidate")
 
     def test_cross_release_gate_blocks_rollback_still_in_progress(self) -> None:
         checkpoints_root = self.root / "checkpoints"
