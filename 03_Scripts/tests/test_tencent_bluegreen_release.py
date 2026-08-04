@@ -29,14 +29,12 @@ def _shell_function(script: str, name: str) -> str:
 
 
 def _candidate_data_contract_validator() -> str:
-    function = _shell_function(
-        CONTROLLER.read_text(encoding="utf-8"),
-        "verify_candidate_data_access_contract",
-    )
+    script = CONTROLLER.read_text(encoding="utf-8")
+    function_start = script.index("verify_candidate_data_access_contract() {")
     marker = "<<'PY'\n"
-    start = function.index(marker) + len(marker)
-    end = function.index("\nPY\n", start)
-    return function[start:end]
+    start = script.index(marker, function_start) + len(marker)
+    end = script.index("\nPY\n  then", start)
+    return script[start:end]
 
 
 def _run_candidate_data_contract(
