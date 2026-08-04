@@ -600,6 +600,7 @@ def assert_checkpoint_recovery_contract() -> None:
         "Validate Tencent recovery credentials",
         "Reconfirm current main before recovery transport",
         "Run reviewed checkpoint recovery on Tencent",
+        "Prepare structured checkpoint recovery result and summary",
         "Upload checkpoint recovery result",
     ]
     if step_names != expected_steps:
@@ -730,7 +731,50 @@ def assert_checkpoint_recovery_contract() -> None:
             raise AssertionError(
                 f"recovery control bundle lost {required!r}"
             )
-    result_upload = steps[11]
+    recovery_execution = steps[10]
+    if (
+        recovery_execution.get("id") != "recovery"
+        or "if" in recovery_execution
+        or "continue-on-error" in recovery_execution
+    ):
+        raise AssertionError(
+            "checkpoint recovery execution must remain a fail-closed named step"
+        )
+    result_presentation = steps[11]
+    presentation_command = str(result_presentation.get("run") or "")
+    presentation_env = result_presentation.get("env")
+    expected_presentation_env = {
+        "RECOVERY_MAIN_SHA": "${{ github.sha }}",
+        "RECOVERY_MODE": "${{ inputs.mode }}",
+        "RECOVERY_RESULT": (
+            "${{ runner.temp }}/checkpoint-recovery-result.json"
+        ),
+        "RECOVERY_STEP_OUTCOME": "${{ steps.recovery.outcome }}",
+    }
+    if (
+        result_presentation.get("if") != "${{ always() }}"
+        or not isinstance(presentation_env, Mapping)
+        or dict(presentation_env) != expected_presentation_env
+        or "secrets." in str(result_presentation)
+        or "present_checkpoint_recovery_result.py" not in presentation_command
+        or "GITHUB_STEP_SUMMARY" not in presentation_command
+        or any(
+            option not in presentation_command
+            for option in (
+                "--result",
+                "--summary",
+                "--plan",
+                "--step-outcome",
+                "--mode",
+                "--main-sha",
+                "--plan-sha256",
+            )
+        )
+    ):
+        raise AssertionError(
+            "checkpoint recovery result presentation contract changed"
+        )
+    result_upload = steps[12]
     result_with = result_upload.get("with")
     if (
         result_upload.get("if") != "${{ always() }}"
@@ -774,10 +818,13 @@ def assert_checkpoint_recovery_contract() -> None:
         "reviewed_recovery_authorization.py",
         "tencent_pre_switch_checkpoint_recovery.sh",
         "production_mutation_lock.sh",
+        "present_checkpoint_recovery_result.py",
         "recovery-control-manifest.json",
         "StrictHostKeyChecking=yes",
         "SSH_KNOWN_HOSTS",
         "checkpoint-recovery-result",
+        "GITHUB_STEP_SUMMARY",
+        "steps.recovery.outcome",
     ):
         if required not in workflow_text:
             raise AssertionError(
@@ -1453,7 +1500,11 @@ def assert_feature_canary_cannot_route_or_mutate_production() -> None:
         '--property="ProtectSystem=strict"',
         '--property="ProtectHome=yes"',
         '--property="MemorySwapMax=0"',
-        '--property="InaccessiblePaths=$REFERENCE_ROOT $LEGACY_ROOT/01_RAW_DATA $LEGACY_ROOT/04_Processed_data /etc/jato-fullstack"',
+        (
+            '--property="InaccessiblePaths=$REFERENCE_ROOT '
+            '$LEGACY_ROOT/01_RAW_DATA $LEGACY_ROOT/04_Processed_data '
+            '/etc/jato-fullstack"'
+        ),
         '--property="ReadWritePaths=$RUNTIME_ROOT"',
         '--setenv="APP_REDIS_ENABLED=false"',
         '--setenv="APP_JATO_MONTHLY_ENABLED=false"',

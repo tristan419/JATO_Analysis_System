@@ -103,6 +103,7 @@ jobs:
             03_Scripts/tests/test_cleanup_toolkit_egg_info.py \
             03_Scripts/tests/test_release_source_seal.py \
             03_Scripts/tests/test_pre_switch_checkpoint_recovery.py \
+            03_Scripts/tests/test_present_checkpoint_recovery_result.py \
             03_Scripts/tests/test_release_checkpoint.py \
             03_Scripts/tests/test_release_evidence.py \
             03_Scripts/tests/test_release_shell_hardening.py \

@@ -48,6 +48,13 @@ SHA256_PATTERN = re.compile(r"^[0-9a-f]{64}$")
 GIT_SHA_PATTERN = re.compile(r"^[0-9a-f]{40}$")
 REVISION_PATTERN = re.compile(r"(?m)^([0-9]{8}_[0-9]{4})\b")
 SAFE_INCIDENT_PATTERN = re.compile(r"^[a-z0-9][a-z0-9.-]{0,127}$")
+SENSITIVE_ASSIGNMENT_PATTERN = re.compile(
+    r"(?i)\b(password|passwd|secret|token|authorization|private[_-]?key|"
+    r"ssh_password|database_url|dsn)\b(\s*[:=]\s*)([^\s,;]+)"
+)
+URL_CREDENTIAL_PATTERN = re.compile(
+    r"(?i)\b([a-z][a-z0-9+.-]*://)([^/\s@]+)@"
+)
 SWITCH_OR_LATER_PHASES = frozenset(
     {
         "switch_started",
@@ -278,19 +285,129 @@ RESIDUE_REQUIRED_ABSENT_PATHS = {
         f"/var/lib/jato-release/backend-template.pre-{RESIDUE_TARGET_COMMIT}.service.state"
     ),
 }
+DIAGNOSTIC_CHANGE_FIELDS = (
+    "trafficChanged",
+    "databaseChanged",
+    "jatoDataChanged",
+    "checkpointChanged",
+    "mutationPerformed",
+)
 
 
 class RecoveryError(ValueError):
     """A recovery precondition or evidence contract failed."""
 
-    def __init__(self, category: str, detail: str) -> None:
+    def __init__(
+        self,
+        category: str,
+        detail: str,
+        *,
+        stage: str = "recovery_precondition",
+        field_diffs: Sequence[Mapping[str, Any]] = (),
+        passed: Sequence[str] = (),
+        not_reached: Sequence[str] = (),
+        change_status: Mapping[str, bool | None] | None = None,
+    ) -> None:
         super().__init__(f"{category}: {detail}")
         self.category = category
         self.detail = detail
+        self.stage = stage
+        self.field_diffs = tuple(dict(item) for item in field_diffs)
+        self.passed = tuple(passed)
+        self.not_reached = tuple(not_reached)
+        self.change_status = dict(change_status or {})
 
 
 def _fail(category: str, detail: str) -> None:
     raise RecoveryError(category, detail)
+
+
+def _diagnostic_text(value: object, *, maximum: int = 512) -> str:
+    text = " ".join(str(value).splitlines()).strip()
+    text = "".join(character for character in text if character.isprintable())
+    text = SENSITIVE_ASSIGNMENT_PATTERN.sub(r"\1\2<redacted>", text)
+    text = URL_CREDENTIAL_PATTERN.sub(r"\1<redacted>@", text)
+    return text[:maximum] or "unavailable"
+
+
+def _diagnostic_value(value: object) -> object:
+    if value is None or isinstance(value, (bool, int)):
+        return value
+    if isinstance(value, str):
+        return _diagnostic_text(value)
+    if isinstance(value, list) and len(value) <= 32:
+        return [_diagnostic_value(item) for item in value]
+    return "<redacted>"
+
+
+def _field_differences(
+    expected: Mapping[str, Any],
+    actual: Mapping[str, Any],
+) -> list[dict[str, object]]:
+    differences: list[dict[str, object]] = []
+    for field in sorted(set(expected) | set(actual)):
+        if expected.get(field) != actual.get(field) or (
+            field not in expected or field not in actual
+        ):
+            differences.append(
+                {
+                    "field": field,
+                    "expected": _diagnostic_value(expected.get(field)),
+                    "actual": _diagnostic_value(actual.get(field)),
+                }
+            )
+    return differences
+
+
+def build_failure_result(
+    error: RecoveryError,
+    *,
+    mode: str,
+    implementation_commit: str,
+    plan_sha256: str,
+) -> Mapping[str, Any]:
+    """Build a bounded failure envelope without changing the success contract."""
+
+    change_status: dict[str, bool | None] = {
+        field: None for field in DIAGNOSTIC_CHANGE_FIELDS
+    }
+    for field, value in error.change_status.items():
+        if field in change_status and (value is None or isinstance(value, bool)):
+            change_status[field] = value
+    return {
+        "schemaVersion": 1,
+        "kind": "checkpoint_recovery_failure",
+        "decision": (
+            "dry-run-rejected" if mode == "dry-run" else "apply-failed"
+        ),
+        "mode": mode,
+        "stage": _diagnostic_text(error.stage, maximum=128),
+        "category": _diagnostic_text(error.category, maximum=128),
+        "detail": _diagnostic_text(error.detail),
+        "fieldDiffs": [
+            {
+                "field": _diagnostic_text(item.get("field"), maximum=128),
+                "expected": _diagnostic_value(item.get("expected")),
+                "actual": _diagnostic_value(item.get("actual")),
+            }
+            for item in error.field_diffs
+        ],
+        "passed": [
+            _diagnostic_text(item, maximum=128) for item in error.passed
+        ],
+        "notReached": [
+            _diagnostic_text(item, maximum=128) for item in error.not_reached
+        ],
+        "implementationCommit": (
+            implementation_commit
+            if GIT_SHA_PATTERN.fullmatch(implementation_commit)
+            else None
+        ),
+        "planSha256": (
+            plan_sha256 if SHA256_PATTERN.fullmatch(plan_sha256) else None
+        ),
+        **change_status,
+    }
 
 
 def _plan_schema_version(plan: Mapping[str, Any]) -> int:
@@ -1268,6 +1385,7 @@ def _systemd_properties(unit: str) -> dict[str, str]:
             "systemctl",
             "show",
             unit,
+            "--property=Id",
             "--property=LoadState",
             "--property=ActiveState",
             "--property=SubState",
@@ -1294,6 +1412,7 @@ def _systemd_properties(unit: str) -> dict[str, str]:
         if separator:
             values[name] = value
     required = {
+        "Id",
         "LoadState",
         "ActiveState",
         "SubState",
@@ -2037,6 +2156,7 @@ def _candidate_never_started_proof(
 ) -> Mapping[str, Any]:
     try:
         proof = {
+            "name": unit["Id"],
             "loadState": unit["LoadState"],
             "activeState": unit["ActiveState"],
             "subState": unit["SubState"],
@@ -2078,13 +2198,63 @@ def _candidate_never_started_proof(
         and listener is False
     )
     if not never_started:
-        _fail("candidate_started", "Candidate has runtime or lifetime evidence")
+        initial_stage = stage in {"initial", "quarantine_root_created"}
+        unchanged = (
+            {field: False for field in DIAGNOSTIC_CHANGE_FIELDS}
+            if stage == "initial"
+            else None
+        )
+        raise RecoveryError(
+            "candidate_started",
+            "Candidate has runtime or lifetime evidence",
+            stage="candidate_never_started",
+            field_diffs=_field_differences(
+                {**plan["residue"]["candidateUnit"], "listener": False},
+                proof,
+            ),
+            passed=(
+                (
+                    "active_backend_2_workers_6g_8g",
+                    "nginx_unchanged",
+                    "public_health_unchanged",
+                    "database_read_only",
+                )
+                if initial_stage
+                else ()
+            ),
+            not_reached=(
+                ("monthly_worker_disabled", "switch_unit_quiescent")
+                if initial_stage
+                else ()
+            ),
+            change_status=unchanged,
+        )
     expected = plan["residue"]["candidateUnit"]
-    if stage in {"initial", "quarantine_root_created"} and proof != {
-        **expected,
-        "listener": False,
-    }:
-        _fail("candidate_runtime_invalid", "initial Candidate proof differs from plan")
+    expected_proof = {**expected, "listener": False}
+    if stage in {"initial", "quarantine_root_created"} and proof != expected_proof:
+        unchanged = (
+            {field: False for field in DIAGNOSTIC_CHANGE_FIELDS}
+            if stage == "initial"
+            else None
+        )
+        raise RecoveryError(
+            "candidate_runtime_invalid",
+            "initial Candidate proof differs from plan",
+            stage="initial_candidate_proof",
+            field_diffs=_field_differences(expected_proof, proof),
+            passed=(
+                "active_backend_2_workers_6g_8g",
+                "nginx_unchanged",
+                "public_health_unchanged",
+                "database_read_only",
+                "candidate_never_started",
+            ),
+            not_reached=(
+                "monthly_worker_disabled",
+                "switch_unit_quiescent",
+            ),
+            change_status=unchanged,
+        )
     owned_paths = {str(path) for path in RESIDUE_PATHS.values()}
     referenced_paths = {proof["fragmentPath"], *proof["dropInPaths"]} - {""}
     allowed_template_path = "/etc/systemd/system/jato-fullstack-backend@.service"
@@ -3515,6 +3685,7 @@ def recover(
     identity, checkpoint_metadata = _validate_legacy_checkpoint_chain(plan)
     checkpoint = load_checkpoint(checkpoint_path)
     if checkpoint["phase"] == PRE_SWITCH_ABORT_PHASE:
+        fence_finalized_now = False
         _validate_backup_chain(plan)
         _validate_legacy_archive_and_source(plan)
         receipt = _load_bound_terminal_receipt(
@@ -3546,6 +3717,7 @@ def recover(
                         "terminal checkpoint still has its recovery fence",
                     )
                 _finalize_recovery_fence(plan, finalization)
+                fence_finalized_now = True
         validate_pre_switch_abort_settlement(
             checkpoint_path=checkpoint_path,
             checkpoints_root=state_root / "checkpoints",
@@ -3565,7 +3737,7 @@ def recover(
             "trafficChanged": False,
             "databaseChanged": False,
             "checkpointChanged": False,
-            "mutationPerformed": False,
+            "mutationPerformed": fence_finalized_now,
             "mode": mode,
         }
 
@@ -3865,11 +4037,40 @@ def main(argv: Sequence[str] | None = None) -> int:
         )
     except RecoveryError as exc:
         print(
+            json.dumps(
+                build_failure_result(
+                    exc,
+                    mode=arguments.mode,
+                    implementation_commit=arguments.implementation_commit,
+                    plan_sha256=arguments.expected_plan_sha256,
+                ),
+                indent=2,
+                sort_keys=True,
+            )
+        )
+        print(
             f"pre-switch recovery error: {exc.category}: {exc.detail}",
             file=sys.stderr,
         )
         return 2
     except (OSError, ValueError, TypeError) as exc:
+        error = RecoveryError(
+            "invalid_input",
+            type(exc).__name__,
+            stage="input_validation",
+        )
+        print(
+            json.dumps(
+                build_failure_result(
+                    error,
+                    mode=arguments.mode,
+                    implementation_commit=arguments.implementation_commit,
+                    plan_sha256=arguments.expected_plan_sha256,
+                ),
+                indent=2,
+                sort_keys=True,
+            )
+        )
         print(
             f"pre-switch recovery error: invalid_input: {type(exc).__name__}",
             file=sys.stderr,

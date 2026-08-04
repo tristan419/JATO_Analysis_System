@@ -133,6 +133,43 @@ def test_freeze_rejects_review_result_drift(
         )
 
 
+def test_failure_diagnostic_cannot_be_frozen_as_apply_authorization(
+    tmp_path: Path,
+) -> None:
+    result_path = tmp_path / "checkpoint-recovery-result.json"
+    _write_result(
+        result_path,
+        {
+            "schemaVersion": 1,
+            "kind": "checkpoint_recovery_failure",
+            "decision": "dry-run-rejected",
+            "mode": "dry-run",
+            "stage": "initial_candidate_proof",
+            "category": "candidate_runtime_invalid",
+            "detail": "Candidate proof differs from the reviewed plan.",
+            "fieldDiffs": [],
+            "passed": [],
+            "notReached": ["monthly_worker_disabled"],
+            "implementationCommit": MAIN_SHA,
+            "planSha256": _sha256(PLAN_PATH),
+            "trafficChanged": False,
+            "databaseChanged": False,
+            "jatoDataChanged": False,
+            "checkpointChanged": False,
+            "mutationPerformed": False,
+        },
+    )
+
+    with pytest.raises(reviewed.AuthorizationError, match="result contract"):
+        reviewed.validate_reviewed_dry_run(
+            result_path=result_path,
+            plan_path=PLAN_PATH,
+            expected_result_sha256=_sha256(result_path),
+            expected_main_sha=MAIN_SHA,
+            expected_plan_sha256=_sha256(PLAN_PATH),
+        )
+
+
 def test_revalidate_rejects_authorization_tamper(tmp_path: Path) -> None:
     result_path = tmp_path / "checkpoint-recovery-result.json"
     _write_result(result_path, _valid_result())
