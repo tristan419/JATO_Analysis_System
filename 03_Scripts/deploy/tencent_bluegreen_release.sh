@@ -36,6 +36,9 @@ BLUEGREEN_CANDIDATE_MAX_MEMORY_BYTES=$((4 * 1024 * 1024 * 1024))
 BLUEGREEN_OS_MEMORY_RESERVE_BYTES=$((2 * 1024 * 1024 * 1024))
 BLUEGREEN_ACTIVE_MEMORY_HIGH_BYTES=$((6 * 1024 * 1024 * 1024))
 BLUEGREEN_ACTIVE_MEMORY_MAX_BYTES=$((8 * 1024 * 1024 * 1024))
+BLUEGREEN_CANDIDATE_MEMORY_HIGH_BYTES=$((3 * 1024 * 1024 * 1024))
+BLUEGREEN_CANDIDATE_MEMORY_MAX_BYTES=$((4 * 1024 * 1024 * 1024))
+BLUEGREEN_CANDIDATE_PREIMAGE_CACHE_MAX_BYTES=$((256 * 1024 * 1024))
 BLUEGREEN_PREPARE_DISK_RESERVE_BYTES=$((15 * 1024 * 1024 * 1024))
 BLUEGREEN_PREPARE_DISK_RESERVE_PERCENT=8
 BLUEGREEN_RUNTIME_DISK_RESERVE_BYTES=$((10 * 1024 * 1024 * 1024))
@@ -111,11 +114,18 @@ require_environment() {
     || [[ "$RELEASES_ROOT" != "/opt/jato/releases" ]] \
     || [[ "$SLOTS_ROOT" != "/opt/jato/slots" ]] \
     || [[ "$ACTIVE_RELEASE_LINK" != "/opt/jato/active" ]] \
-    || [[ "$BLUEGREEN_STATE_ROOT" != "/var/lib/jato-release" ]]; then
-    fail "production blue/green storage roots must use the reviewed /opt/jato layout"
+    || [[ "$BLUEGREEN_STATE_ROOT" != "/var/lib/jato-release" ]] \
+    || [[ "$CANDIDATE_PREIMAGE_ROOT" != "/var/lib/jato-release-preimages" ]] \
+    || [[ "$SLOT_ENV_ROOT" != "/etc/jato-fullstack/slots" ]] \
+    || [[ "$BLUEGREEN_CANDIDATE_MEMORY_HIGH" != "3G" ]] \
+    || [[ "$BLUEGREEN_CANDIDATE_MEMORY_MAX" != "4G" ]] \
+    || [[ "$BLUEGREEN_ACTIVE_MEMORY_HIGH" != "6G" ]] \
+    || [[ "$BLUEGREEN_ACTIVE_MEMORY_MAX" != "8G" ]]; then
+    fail "production blue/green paths and resource limits must use the reviewed canonical values"
   fi
   if [[ -n "${BLUEGREEN_CHECKPOINT_HELPER_OVERRIDE:-}" ]] \
-    || [[ -n "${BLUEGREEN_STORAGE_GUARD_OVERRIDE:-}" ]]; then
+    || [[ -n "${BLUEGREEN_STORAGE_GUARD_OVERRIDE:-}" ]] \
+    || [[ -n "${BLUEGREEN_CANDIDATE_PREIMAGE_HELPER_OVERRIDE:-}" ]]; then
     fail "production blue/green release does not accept helper overrides"
   fi
 }
@@ -199,6 +209,9 @@ RELEASE_SOURCE_SEAL_FILE="$RELEASE_DIR/.jato-source-seal.json"
 RELEASE_RUNTIME_SEAL_FILE="$RELEASE_DIR/.jato-runtime-seal.json"
 CHECKPOINT_HELPER="${BLUEGREEN_CHECKPOINT_HELPER_OVERRIDE:-$RELEASE_WORKTREE/03_Scripts/deploy/release_checkpoint.py}"
 RELEASE_STORAGE_GUARD="${BLUEGREEN_STORAGE_GUARD_OVERRIDE:-$RELEASE_WORKTREE/03_Scripts/deploy/jato_release_storage_guard.py}"
+CANDIDATE_PREIMAGE_HELPER="${BLUEGREEN_CANDIDATE_PREIMAGE_HELPER_OVERRIDE:-$RELEASE_DIR/03_Scripts/deploy/candidate_runtime_preimage.py}"
+CANDIDATE_PREIMAGE_ROOT="${CANDIDATE_PREIMAGE_ROOT:-/var/lib/jato-release-preimages}"
+CANDIDATE_PREIMAGE_DIR="$CANDIDATE_PREIMAGE_ROOT/candidate-preimages/$DEPLOY_COMMIT_SHA/$DEPLOY_ARCHIVE_SHA256"
 READINESS_HELPER="$RELEASE_WORKTREE/03_Scripts/deploy/verify_backend_readiness.py"
 QUIESCENCE_HELPER="$RELEASE_WORKTREE/03_Scripts/deploy/jato_quiescence_gate.py"
 SYSTEMD_TEMPLATE="$RELEASE_WORKTREE/03_Scripts/deploy/systemd/jato-fullstack-backend@.service"
@@ -1164,14 +1177,327 @@ if not current or current != heads:
 PY
 }
 
+ensure_candidate_preimage_root() {
+  if sudo -n test -L "$CANDIDATE_PREIMAGE_ROOT" \
+    || {
+      sudo -n test -e "$CANDIDATE_PREIMAGE_ROOT" \
+        && ! sudo -n test -d "$CANDIDATE_PREIMAGE_ROOT";
+    }; then
+    fail "Candidate preimage root must be a real directory"
+    return 1
+  fi
+  if ! sudo -n test -e "$CANDIDATE_PREIMAGE_ROOT"; then
+    sudo -n install -d -m 0700 -o root -g root "$CANDIDATE_PREIMAGE_ROOT" \
+      || return 1
+  fi
+  sudo -n python3 -B - "$CANDIDATE_PREIMAGE_ROOT" <<'PY'
+from pathlib import Path
+import stat
+import sys
+
+path = Path(sys.argv[1])
+metadata = path.lstat()
+if (
+    path.is_symlink()
+    or not stat.S_ISDIR(metadata.st_mode)
+    or metadata.st_uid != 0
+    or metadata.st_gid != 0
+    or stat.S_IMODE(metadata.st_mode) & 0o077
+):
+    raise SystemExit("[ERROR] Candidate preimage root must remain root:root and 0700")
+PY
+}
+
+candidate_runtime_preimage_command() {
+  local command="$1"
+  shift
+  if [[ ! -f "$CANDIDATE_PREIMAGE_HELPER" ]] \
+    || [[ -L "$CANDIDATE_PREIMAGE_HELPER" ]]; then
+    fail "Candidate runtime preimage helper is missing or unsafe"
+    return 1
+  fi
+  sudo -n python3 -B "$CANDIDATE_PREIMAGE_HELPER" "$command" \
+    --preimage "$CANDIDATE_PREIMAGE_DIR" \
+    --commit "$DEPLOY_COMMIT_SHA" \
+    --archive-sha256 "$DEPLOY_ARCHIVE_SHA256" \
+    --candidate-slot "$CANDIDATE_SLOT" \
+    --slot-link "$SLOTS_ROOT/$CANDIDATE_SLOT/current" \
+    --slot-link-stage "$SLOTS_ROOT/$CANDIDATE_SLOT/.current.jato-candidate-installing" \
+    --slot-env "$SLOT_ENV_ROOT/$CANDIDATE_SLOT.env" \
+    --slot-env-stage "$SLOT_ENV_ROOT/.$CANDIDATE_SLOT.env.jato-candidate-installing" \
+    --explicit-unit "/etc/systemd/system/${SERVICE_PREFIX}${CANDIDATE_SLOT}.service" \
+    --explicit-unit-stage "/etc/systemd/system/.${SERVICE_PREFIX}${CANDIDATE_SLOT}.service.jato-candidate-installing" \
+    --instance-dropins "/etc/systemd/system/${SERVICE_PREFIX}${CANDIDATE_SLOT}.service.d" \
+    --persistent-control-dropins "/etc/systemd/system.control/${SERVICE_PREFIX}${CANDIDATE_SLOT}.service.d" \
+    --runtime-control-dropins "/run/systemd/system.control/${SERVICE_PREFIX}${CANDIDATE_SLOT}.service.d" \
+    --candidate-cache-link "/var/cache/jato-candidate-$CANDIDATE_SLOT" \
+    --candidate-cache-private "/var/cache/private/jato-candidate-$CANDIDATE_SLOT" \
+    "$@"
+}
+
+candidate_runtime_is_quiescent() {
+  local active_state=""
+  local load_state=""
+  local main_pid=""
+  local listeners=""
+  local unit="${SERVICE_PREFIX}${CANDIDATE_SLOT}"
+  local unit_file_state=""
+  local unit_state_is_safe=false
+  load_state="$(systemctl show "$unit" -p LoadState --value 2>/dev/null || true)"
+  active_state="$(systemctl show "$unit" -p ActiveState --value 2>/dev/null || true)"
+  unit_file_state="$(systemctl show "$unit" -p UnitFileState --value 2>/dev/null || true)"
+  main_pid="$(systemctl show "$unit" -p MainPID --value 2>/dev/null || true)"
+  if ! listeners="$(ss -H -ltn "sport = :$CANDIDATE_SLOT" 2>/dev/null)"; then
+    fail "cannot prove the Candidate listener state"
+    return 1
+  fi
+  if [[ "$load_state" == "loaded" ]] \
+    && [[ "$unit_file_state" == "disabled" ]]; then
+    unit_state_is_safe=true
+  elif [[ "$load_state" == "not-found" ]] \
+    && {
+      [[ -z "$unit_file_state" ]] \
+        || [[ "$unit_file_state" == "not-found" ]];
+    }; then
+    unit_state_is_safe=true
+  fi
+  if [[ "$active_state" != "inactive" ]] \
+    || [[ "$main_pid" != "0" ]] \
+    || [[ "$unit_state_is_safe" != "true" ]] \
+    || [[ -e "/etc/systemd/system/multi-user.target.wants/$unit" ]] \
+    || [[ -L "/etc/systemd/system/multi-user.target.wants/$unit" ]] \
+    || [[ -n "$listeners" ]]; then
+    fail "Candidate runtime is not inactive, disabled/not-found, PID 0, and listener-free"
+    return 1
+  fi
+}
+
+prepare_candidate_runtime_preimage() {
+  local env_source="$1"
+  local sandbox_source="$2"
+  ensure_candidate_preimage_root || return 1
+  if sudo -n test -e "$CANDIDATE_PREIMAGE_DIR" \
+    || sudo -n test -L "$CANDIDATE_PREIMAGE_DIR"; then
+    restore_candidate_runtime_preimage || return 1
+  else
+    candidate_runtime_is_quiescent || return 1
+  fi
+  candidate_runtime_preimage_command capture \
+    --post-slot-link-target "$RELEASE_DIR" \
+    --post-env-source "$env_source" \
+    --post-unit-source "$SYSTEMD_TEMPLATE" \
+    --post-sandbox-source "$sandbox_source" \
+    --post-memory-high-bytes "$BLUEGREEN_CANDIDATE_MEMORY_HIGH_BYTES" \
+    --post-memory-max-bytes "$BLUEGREEN_CANDIDATE_MEMORY_MAX_BYTES" \
+    --post-cpu-quota-percent 100 \
+    --post-active-memory-high-bytes "$BLUEGREEN_ACTIVE_MEMORY_HIGH_BYTES" \
+    --post-active-memory-max-bytes "$BLUEGREEN_ACTIVE_MEMORY_MAX_BYTES" \
+    --post-active-cpu-quota-percent 200 \
+    --candidate-cache-max-bytes "$BLUEGREEN_CANDIDATE_PREIMAGE_CACHE_MAX_BYTES" \
+    || return 1
+  candidate_runtime_preimage_command verify-live
+}
+
+restore_candidate_runtime_preimage() {
+  if ! sudo -n test -d "$CANDIDATE_PREIMAGE_DIR" \
+    || sudo -n test -L "$CANDIDATE_PREIMAGE_DIR"; then
+    fail "Candidate runtime preimage is unavailable for exact cleanup"
+    return 1
+  fi
+  sudo -n systemctl disable --now \
+    "${SERVICE_PREFIX}${CANDIDATE_SLOT}" >/dev/null 2>&1 || true
+  sudo -n systemctl reset-failed \
+    "${SERVICE_PREFIX}${CANDIDATE_SLOT}" >/dev/null 2>&1 || true
+  candidate_runtime_is_quiescent || return 1
+  candidate_runtime_preimage_command restore || return 1
+  sudo -n systemctl daemon-reload || return 1
+  candidate_runtime_is_quiescent || return 1
+  candidate_runtime_preimage_command verify-live
+}
+
+discard_candidate_runtime_preimage() {
+  candidate_runtime_preimage_command discard
+}
+
+candidate_durable_install_file() {
+  local source="$1"
+  local target="$2"
+  local mode="$3"
+  local stage="$4"
+  local create_target_parent="${5:-false}"
+  sudo -n python3 -B - \
+    "$source" "$target" "$mode" "$stage" "$create_target_parent" <<'PY'
+import os
+from pathlib import Path
+import shutil
+import stat
+import sys
+
+source = Path(sys.argv[1])
+target = Path(sys.argv[2])
+mode = int(sys.argv[3], 8)
+stage = Path(sys.argv[4])
+create_target_parent = sys.argv[5] == "true"
+
+source_metadata = source.lstat()
+if (
+    not stat.S_ISREG(source_metadata.st_mode)
+    or source.is_symlink()
+    or source_metadata.st_nlink != 1
+):
+    raise SystemExit("[ERROR] Candidate source must be one regular file")
+for parent, may_create in (
+    (stage.parent, False),
+    (target.parent, create_target_parent),
+):
+    try:
+        parent_metadata = parent.lstat()
+    except FileNotFoundError:
+        if not may_create:
+            raise SystemExit(f"[ERROR] Candidate target parent is absent: {parent}")
+        parent.mkdir(mode=0o755)
+        parent_metadata = parent.lstat()
+    if stat.S_ISLNK(parent_metadata.st_mode) or not stat.S_ISDIR(
+        parent_metadata.st_mode
+    ):
+        raise SystemExit(f"[ERROR] Candidate target parent is unsafe: {parent}")
+if stage.exists() or stage.is_symlink():
+    raise SystemExit(f"[ERROR] Candidate staging already exists: {stage}")
+
+flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL
+flags |= getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0)
+descriptor = os.open(stage, flags, 0o600)
+try:
+    source_flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0)
+    source_flags |= getattr(os, "O_NOFOLLOW", 0)
+    source_descriptor = os.open(source, source_flags)
+    try:
+        with os.fdopen(source_descriptor, "rb") as reader, os.fdopen(
+            descriptor,
+            "wb",
+        ) as writer:
+            source_descriptor = -1
+            descriptor = -1
+            shutil.copyfileobj(reader, writer)
+            writer.flush()
+            os.fchmod(writer.fileno(), mode)
+            os.fsync(writer.fileno())
+    finally:
+        if source_descriptor >= 0:
+            os.close(source_descriptor)
+    after = source.lstat()
+    if (
+        source_metadata.st_dev,
+        source_metadata.st_ino,
+        source_metadata.st_size,
+        source_metadata.st_mtime_ns,
+    ) != (
+        after.st_dev,
+        after.st_ino,
+        after.st_size,
+        after.st_mtime_ns,
+    ):
+        raise SystemExit("[ERROR] Candidate source changed during installation")
+    os.replace(stage, target)
+    for parent in {stage.parent, target.parent}:
+        directory_flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0)
+        directory_flags |= getattr(os, "O_DIRECTORY", 0)
+        directory_descriptor = os.open(parent, directory_flags)
+        try:
+            os.fsync(directory_descriptor)
+        finally:
+            os.close(directory_descriptor)
+finally:
+    if descriptor >= 0:
+        os.close(descriptor)
+    try:
+        stage_metadata = stage.lstat()
+    except FileNotFoundError:
+        pass
+    else:
+        if (
+            not stat.S_ISREG(stage_metadata.st_mode)
+            or stage_metadata.st_uid != os.geteuid()
+            or stage_metadata.st_nlink != 1
+        ):
+            raise SystemExit("[ERROR] Candidate staging changed during cleanup")
+        stage.unlink()
+        directory_flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0)
+        directory_flags |= getattr(os, "O_DIRECTORY", 0)
+        directory_descriptor = os.open(stage.parent, directory_flags)
+        try:
+            os.fsync(directory_descriptor)
+        finally:
+            os.close(directory_descriptor)
+PY
+}
+
+candidate_atomic_symlink() {
+  local target="$1"
+  local link_path="$2"
+  local stage="$3"
+  sudo -n python3 -B - "$target" "$link_path" "$stage" <<'PY'
+import os
+from pathlib import Path
+import stat
+import sys
+
+target = sys.argv[1]
+link = Path(sys.argv[2])
+stage = Path(sys.argv[3])
+parent_metadata = link.parent.lstat()
+if stat.S_ISLNK(parent_metadata.st_mode) or not stat.S_ISDIR(
+    parent_metadata.st_mode
+):
+    raise SystemExit("[ERROR] Candidate slot parent is unsafe")
+if stage.parent != link.parent:
+    raise SystemExit("[ERROR] Candidate symlink staging must be same-directory")
+if stage.exists() or stage.is_symlink():
+    raise SystemExit(f"[ERROR] Candidate symlink staging already exists: {stage}")
+os.symlink(target, stage)
+directory_flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0)
+directory_flags |= getattr(os, "O_DIRECTORY", 0)
+try:
+    directory_descriptor = os.open(link.parent, directory_flags)
+    try:
+        os.fsync(directory_descriptor)
+    finally:
+        os.close(directory_descriptor)
+    os.replace(stage, link)
+    directory_descriptor = os.open(link.parent, directory_flags)
+    try:
+        os.fsync(directory_descriptor)
+    finally:
+        os.close(directory_descriptor)
+finally:
+    try:
+        stage_metadata = stage.lstat()
+    except FileNotFoundError:
+        pass
+    else:
+        if not stat.S_ISLNK(stage_metadata.st_mode) or stage_metadata.st_uid != os.geteuid():
+            raise SystemExit("[ERROR] Candidate symlink staging changed during cleanup")
+        stage.unlink()
+        directory_descriptor = os.open(link.parent, directory_flags)
+        try:
+            os.fsync(directory_descriptor)
+        finally:
+            os.close(directory_descriptor)
+PY
+}
+
 install_slot_runtime() {
   local service_target="/etc/systemd/system/${SERVICE_PREFIX}${CANDIDATE_SLOT}.service"
+  local service_stage="/etc/systemd/system/.${SERVICE_PREFIX}${CANDIDATE_SLOT}.service.jato-candidate-installing"
   local env_target="$SLOT_ENV_ROOT/$CANDIDATE_SLOT.env"
+  local env_stage="$SLOT_ENV_ROOT/.$CANDIDATE_SLOT.env.jato-candidate-installing"
   local sandbox_cache="/var/cache/jato-candidate-$CANDIDATE_SLOT"
   local sandbox_dropin="/etc/systemd/system/${SERVICE_PREFIX}${CANDIDATE_SLOT}.service.d/10-candidate-sandbox.conf"
+  local sandbox_stage="/etc/systemd/system/${SERVICE_PREFIX}${CANDIDATE_SLOT}.service.d/.10-candidate-sandbox.conf.jato-candidate-installing"
+  local slot_link="$SLOTS_ROOT/$CANDIDATE_SLOT/current"
+  local slot_link_stage="$SLOTS_ROOT/$CANDIDATE_SLOT/.current.jato-candidate-installing"
   local sandbox_temp=""
   local env_temp=""
-  durable_install_file "$SYSTEMD_TEMPLATE" "$service_target" 0644
   env_temp="$(mktemp)"
   sed \
     -e "s|__SLOT__|$CANDIDATE_SLOT|g" \
@@ -1184,11 +1510,6 @@ install_slot_runtime() {
     printf 'APP_JATO_MONTHLY_DEPLOYMENT_MARKER=%s\n' "$DEPLOYMENT_MARKER"
     printf 'APP_JATO_MONTHLY_EXECUTION_MODE=subprocess\n'
   } >> "$env_temp"
-  if ! durable_install_file "$env_temp" "$env_target" 0600; then
-    rm -f "$env_temp"
-    return 1
-  fi
-  rm -f "$env_temp"
   sandbox_temp="$(mktemp)"
   {
     echo "[Service]"
@@ -1216,14 +1537,30 @@ install_slot_runtime() {
     printf 'ReadOnlyPaths=%s %s\n' "$SHARED_ROOT" "$BLUEGREEN_STATE_ROOT"
     printf 'ReadWritePaths=%s\n' "$sandbox_cache"
   } > "$sandbox_temp"
-  if ! durable_install_file "$sandbox_temp" "$sandbox_dropin" 0644; then
+  if ! prepare_candidate_runtime_preimage "$env_temp" "$sandbox_temp"; then
+    rm -f "$env_temp" "$sandbox_temp"
+    return 1
+  fi
+  PRE_SUPERVISOR_CANDIDATE_ARMED=true
+  if ! candidate_durable_install_file \
+    "$SYSTEMD_TEMPLATE" "$service_target" 0644 "$service_stage"; then
+    rm -f "$env_temp" "$sandbox_temp"
+    return 1
+  fi
+  if ! candidate_durable_install_file \
+    "$env_temp" "$env_target" 0600 "$env_stage"; then
+    rm -f "$env_temp" "$sandbox_temp"
+    return 1
+  fi
+  rm -f "$env_temp"
+  if ! candidate_durable_install_file \
+    "$sandbox_temp" "$sandbox_dropin" 0644 "$sandbox_stage" true; then
     rm -f "$sandbox_temp"
     return 1
   fi
   rm -f "$sandbox_temp"
-  PRE_SUPERVISOR_CANDIDATE_ARMED=true
   sudo -n systemctl stop "${SERVICE_PREFIX}${CANDIDATE_SLOT}" >/dev/null 2>&1 || true
-  atomic_symlink "$RELEASE_DIR" "$SLOTS_ROOT/$CANDIDATE_SLOT/current"
+  candidate_atomic_symlink "$RELEASE_DIR" "$slot_link" "$slot_link_stage"
   sudo -n systemctl daemon-reload
   sudo -n systemctl disable "${SERVICE_PREFIX}${CANDIDATE_SLOT}" >/dev/null
   unit_property_equals \
@@ -2581,13 +2918,7 @@ restore_previous_route() {
     mark_maintenance_required || true
     return 1
   fi
-  if ! sudo -n systemctl disable --now \
-    "${SERVICE_PREFIX}${CANDIDATE_SLOT}" >/dev/null 2>&1 \
-    || ! unit_property_equals \
-      "${SERVICE_PREFIX}${CANDIDATE_SLOT}" UnitFileState disabled \
-    || ! unit_property_equals \
-      "${SERVICE_PREFIX}${CANDIDATE_SLOT}" ActiveState inactive \
-    || ! remove_candidate_explicit_unit \
+  if ! restore_candidate_runtime_preimage \
     || ! remove_backend_template_preimage; then
     mark_maintenance_required || true
     return 1
@@ -2624,41 +2955,13 @@ remove_nginx_preimage() {
   fi
 }
 
-remove_candidate_explicit_unit() {
-  local explicit_candidate="/etc/systemd/system/${SERVICE_PREFIX}${CANDIDATE_SLOT}.service"
-  durable_remove_path "$explicit_candidate" || return 1
-  sudo -n systemctl daemon-reload
-}
-
 candidate_cleanup_is_complete() {
-  local active_state=""
-  local explicit_candidate="/etc/systemd/system/${SERVICE_PREFIX}${CANDIDATE_SLOT}.service"
-  local load_state=""
-  local unit_file_state=""
-  if sudo -n test -e "$explicit_candidate" \
-    || sudo -n test -L "$explicit_candidate"; then
+  if ! sudo -n test -d "$CANDIDATE_PREIMAGE_DIR" \
+    || sudo -n test -L "$CANDIDATE_PREIMAGE_DIR"; then
     return 1
   fi
-  load_state="$(
-    systemctl show \
-      "${SERVICE_PREFIX}${CANDIDATE_SLOT}" -p LoadState --value 2>/dev/null \
-      || true
-  )"
-  active_state="$(
-    systemctl show \
-      "${SERVICE_PREFIX}${CANDIDATE_SLOT}" -p ActiveState --value 2>/dev/null \
-      || true
-  )"
-  unit_file_state="$(
-    systemctl show \
-      "${SERVICE_PREFIX}${CANDIDATE_SLOT}" -p UnitFileState --value 2>/dev/null \
-      || true
-  )"
-  [[ "$active_state" == "inactive" ]] \
-    && {
-      [[ "$load_state" == "not-found" ]] \
-        || [[ "$unit_file_state" == "disabled" ]]
-    }
+  candidate_runtime_is_quiescent \
+    && candidate_runtime_preimage_command verify-live
 }
 
 cleanup_pre_switch_candidate() {
@@ -2677,15 +2980,7 @@ cleanup_pre_switch_candidate() {
       return 1
     fi
     if ! candidate_cleanup_is_complete \
-      && {
-        ! sudo -n systemctl disable --now \
-          "${SERVICE_PREFIX}${CANDIDATE_SLOT}" >/dev/null 2>&1 \
-          || ! unit_property_equals \
-            "${SERVICE_PREFIX}${CANDIDATE_SLOT}" UnitFileState disabled \
-          || ! unit_property_equals \
-            "${SERVICE_PREFIX}${CANDIDATE_SLOT}" ActiveState inactive \
-          || ! remove_candidate_explicit_unit
-      }; then
+      && ! restore_candidate_runtime_preimage; then
       mark_maintenance_required || true
       return 1
     fi
@@ -2712,15 +3007,7 @@ cleanup_pre_switch_candidate() {
     return 1
   fi
   if ! candidate_cleanup_is_complete \
-    && {
-      ! sudo -n systemctl disable --now \
-        "${SERVICE_PREFIX}${CANDIDATE_SLOT}" >/dev/null 2>&1 \
-        || ! unit_property_equals \
-          "${SERVICE_PREFIX}${CANDIDATE_SLOT}" UnitFileState disabled \
-        || ! unit_property_equals \
-          "${SERVICE_PREFIX}${CANDIDATE_SLOT}" ActiveState inactive \
-        || ! remove_candidate_explicit_unit
-    }; then
+    && ! restore_candidate_runtime_preimage; then
     mark_maintenance_required || true
     return 1
   fi
@@ -2922,6 +3209,8 @@ complete_candidate_activation() {
     || return 1
   SWITCH_COMPLETED=true
   SWITCH_RECONCILED=true
+  discard_candidate_runtime_preimage \
+    || return "$EXIT_COMMAND_FAILED_MARKER_RETAINED"
   if ! run_post_commit_global_reconciliation; then
     mark_maintenance_required || true
     return "$EXIT_COMMAND_FAILED_MARKER_RETAINED"
@@ -2968,6 +3257,7 @@ reconcile_existing_switch() {
       && unit_property_equals \
         "${SERVICE_PREFIX}${CURRENT_ACTIVE_SLOT}" ActiveState inactive \
       && run_post_commit_global_reconciliation \
+      && discard_candidate_runtime_preimage \
       && remove_backend_template_preimage \
       && remove_nginx_preimage; then
       SWITCH_COMPLETED=true
@@ -3002,11 +3292,7 @@ reconcile_existing_switch() {
         "$PREVIOUS_RELEASE_ROOT/06_AppPlatform/frontend/dist" \
       && sudo -n systemctl disable --now \
         "${SERVICE_PREFIX}${CANDIDATE_SLOT}" >/dev/null 2>&1 \
-      && unit_property_equals \
-        "${SERVICE_PREFIX}${CANDIDATE_SLOT}" UnitFileState disabled \
-      && unit_property_equals \
-        "${SERVICE_PREFIX}${CANDIDATE_SLOT}" ActiveState inactive \
-      && remove_candidate_explicit_unit \
+      && restore_candidate_runtime_preimage \
       && remove_backend_template_preimage; then
       SWITCH_RECONCILED=true
       RELEASE_ROLLED_BACK=true
@@ -3151,6 +3437,7 @@ run_switch_supervisor() {
     --setenv="BLUEGREEN_CANDIDATE_MEMORY_MAX=$BLUEGREEN_CANDIDATE_MEMORY_MAX" \
     --setenv="BLUEGREEN_ACTIVE_MEMORY_HIGH=$BLUEGREEN_ACTIVE_MEMORY_HIGH" \
     --setenv="BLUEGREEN_ACTIVE_MEMORY_MAX=$BLUEGREEN_ACTIVE_MEMORY_MAX" \
+    --setenv="CANDIDATE_PREIMAGE_ROOT=$CANDIDATE_PREIMAGE_ROOT" \
     --setenv="BLUEGREEN_DRAIN_SECONDS=$BLUEGREEN_DRAIN_SECONDS" \
     --setenv="BLUEGREEN_CONTROLLER_TIMEOUT=$BLUEGREEN_CONTROLLER_TIMEOUT" \
     --setenv="BLUEGREEN_FAULT=$BLUEGREEN_FAULT" \

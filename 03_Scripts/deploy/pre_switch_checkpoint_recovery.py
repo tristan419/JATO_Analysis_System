@@ -12,6 +12,7 @@ then seals the checkpoint as ``pre_switch_aborted``.
 from __future__ import annotations
 
 import argparse
+import ctypes
 import datetime as dt
 import fcntl
 import hashlib
@@ -38,9 +39,9 @@ from release_checkpoint import (
 )
 
 
-SUPPORTED_PLAN_SCHEMA_VERSIONS = frozenset({1, 2})
-RECEIPT_SCHEMA_VERSION_BY_PLAN = {1: 1, 2: 2}
-MIGRATION_STATUS_BY_PLAN = {1: "not_required", 2: "completed"}
+SUPPORTED_PLAN_SCHEMA_VERSIONS = frozenset({1, 2, 3})
+RECEIPT_SCHEMA_VERSION_BY_PLAN = {1: 1, 2: 2, 3: 3}
+MIGRATION_STATUS_BY_PLAN = {1: "not_required", 2: "completed", 3: "completed"}
 MAX_JSON_BYTES = 1024 * 1024
 TRUSTED_SYSTEM_UID = 0
 SHA256_PATTERN = re.compile(r"^[0-9a-f]{64}$")
@@ -63,7 +64,7 @@ SWITCH_OR_LATER_PHASES = frozenset(
     }
 )
 
-PLAN_FIELDS = {
+LEGACY_PLAN_FIELDS = {
     "schemaVersion",
     "incidentId",
     "repository",
@@ -74,6 +75,7 @@ PLAN_FIELDS = {
     "runtime",
     "sourceProofs",
 }
+RESIDUE_PLAN_FIELDS = LEGACY_PLAN_FIELDS | {"residue"}
 CHECKPOINT_PLAN_FIELDS = {
     "path",
     "bytes",
@@ -143,6 +145,7 @@ RUNTIME_PLAN_FIELDS = {
     "switchUnit",
     "serverNames",
 }
+RESIDUE_RUNTIME_PLAN_FIELDS = RUNTIME_PLAN_FIELDS | {"nginxCanonicalConfig"}
 EVIDENCE_FIELDS = {"identity", "backup", "migration"}
 EVIDENCE_BACKUP_FIELDS = {"manifestPath", "manifestBytes", "manifestSha256"}
 EVIDENCE_MIGRATION_FIELDS = {
@@ -150,6 +153,130 @@ EVIDENCE_MIGRATION_FIELDS = {
     "preRevision",
     "targetRevision",
     "resultRevision",
+}
+RESIDUE_FIELDS = {
+    "profile",
+    "quarantineRoot",
+    "quarantineDevice",
+    "quarantineOwnerUid",
+    "quarantineOwnerGid",
+    "quarantineMode",
+    "manifestName",
+    "finalFenceName",
+    "fenceContent",
+    "candidateUnit",
+    "items",
+    "retainedEvidence",
+    "requiredAbsentPaths",
+}
+RESIDUE_ITEM_FIELDS = {
+    "id",
+    "path",
+    "quarantineName",
+    "kind",
+    "device",
+    "inode",
+    "uid",
+    "gid",
+    "mode",
+    "nlink",
+    "bytes",
+    "mtimeNs",
+    "sha256",
+    "target",
+    "targetSha256",
+}
+RETAINED_EVIDENCE_FIELDS = RESIDUE_ITEM_FIELDS - {"quarantineName"}
+CANDIDATE_UNIT_FIELDS = {
+    "name",
+    "loadState",
+    "activeState",
+    "subState",
+    "unitFileState",
+    "mainPid",
+    "result",
+    "nRestarts",
+    "execMainStartTimestampMonotonic",
+    "activeEnterTimestampMonotonic",
+    "inactiveEnterTimestampMonotonic",
+    "invocationId",
+    "fragmentPath",
+    "dropInPaths",
+    "memoryHighBytes",
+    "memoryMaxBytes",
+}
+DRY_RUN_AUTHORIZATION_FIELDS = {
+    "schemaVersion",
+    "kind",
+    "repository",
+    "workflowPath",
+    "runId",
+    "runAttempt",
+    "mainSha",
+    "planSha256",
+    "resultSha256",
+    "incidentId",
+    "inventoryDigest",
+    "decision",
+}
+RENAME_NOREPLACE = 1
+RENAME_EXCHANGE = 2
+RECOVERY_FENCE_TEMP_SUFFIX = ".publish-tmp"
+RESIDUE_INCIDENT_ID = "2026-08-03-29df-pre-switch-candidate-residue"
+RESIDUE_TARGET_COMMIT = "29df5e6e667351f09305783932b34e5438d6a9d5"
+RESIDUE_QUARANTINE_DEVICE = 64770
+RESIDUE_QUARANTINE_ROOT = (
+    Path("/var/lib/jato-release/recovery-quarantine") / RESIDUE_INCIDENT_ID
+)
+RESIDUE_PREVIOUS_METADATA_ROOT = Path("/var/lib/jato-release/previous-metadata")
+RESIDUE_PATHS = {
+    "maintenance_marker": Path("/var/lib/jato-release/deployment-maintenance"),
+    "candidate_slot_link": Path("/opt/jato/slots/8001/current"),
+    "candidate_slot_env": Path("/etc/jato-fullstack/slots/8001.env"),
+    "candidate_explicit_unit": Path(
+        "/etc/systemd/system/jato-fullstack-backend@8001.service"
+    ),
+    "candidate_sandbox_dropin": Path(
+        "/etc/systemd/system/jato-fullstack-backend@8001.service.d/"
+        "10-candidate-sandbox.conf"
+    ),
+    "candidate_cpu_quota_dropin": Path(
+        "/etc/systemd/system.control/jato-fullstack-backend@8001.service.d/"
+        "50-CPUQuota.conf"
+    ),
+    "candidate_memory_high_dropin": Path(
+        "/etc/systemd/system.control/jato-fullstack-backend@8001.service.d/"
+        "50-MemoryHigh.conf"
+    ),
+    "candidate_memory_max_dropin": Path(
+        "/etc/systemd/system.control/jato-fullstack-backend@8001.service.d/"
+        "50-MemoryMax.conf"
+    ),
+}
+RESIDUE_QUARANTINE_NAMES = {
+    "maintenance_marker": "legacy-maintenance-marker",
+    "candidate_slot_link": "candidate-slot-link",
+    "candidate_slot_env": "candidate-slot-env",
+    "candidate_explicit_unit": "candidate-explicit-unit",
+    "candidate_sandbox_dropin": "candidate-sandbox-dropin",
+    "candidate_cpu_quota_dropin": "candidate-cpu-quota-dropin",
+    "candidate_memory_high_dropin": "candidate-memory-high-dropin",
+    "candidate_memory_max_dropin": "candidate-memory-max-dropin",
+}
+RESIDUE_REQUIRED_ABSENT_PATHS = {
+    Path("/etc/jato-fullstack/nginx/active-release.conf"),
+    Path("/var/lib/jato-release/scheduler-state.tsv"),
+    Path("/var/cache/jato-candidate-8001"),
+    Path("/var/cache/private/jato-candidate-8001"),
+    Path("/run/systemd/system.control/jato-fullstack-backend@8001.service.d"),
+    Path("/opt/jato/active"),
+    Path(f"/var/lib/jato-release/nginx-preimage-{RESIDUE_TARGET_COMMIT}"),
+    Path(
+        f"/var/lib/jato-release/backend-template.pre-{RESIDUE_TARGET_COMMIT}.service"
+    ),
+    Path(
+        f"/var/lib/jato-release/backend-template.pre-{RESIDUE_TARGET_COMMIT}.service.state"
+    ),
 }
 
 
@@ -387,6 +514,203 @@ def _json_sha256(payload: Mapping[str, Any]) -> tuple[bytes, str]:
     return raw, hashlib.sha256(raw).hexdigest()
 
 
+def _require_mode(value: object, category: str) -> int:
+    value = _require_string(value, category)
+    if not re.fullmatch(r"0[0-7]{3}", value):
+        _fail(category, "expected a four-digit octal mode")
+    return int(value, 8)
+
+
+def _validate_residue_identity(
+    value: object,
+    *,
+    fields: set[str],
+    category: str,
+) -> Mapping[str, Any]:
+    identity = _require_mapping(value, fields, category)
+    kind = identity.get("kind")
+    if kind not in {"file", "symlink"}:
+        _fail(category, "residue kind must be file or symlink")
+    _require_absolute_path(identity.get("path"), category)
+    for field in ("device", "inode", "nlink", "bytes", "mtimeNs"):
+        _require_positive_int(identity.get(field), category)
+    for field in ("uid", "gid"):
+        _require_non_negative_int(identity.get(field), category)
+    _require_mode(identity.get("mode"), category)
+    if identity.get("nlink") != 1:
+        _fail(category, "residue identity must have exactly one hard link")
+    if kind == "file":
+        _require_sha256(identity.get("sha256"), category)
+        if identity.get("target") is not None or identity.get("targetSha256") is not None:
+            _fail(category, "regular residue cannot carry a symlink target")
+    else:
+        target = _require_absolute_path(identity.get("target"), category)
+        if not target.is_relative_to(Path("/opt/jato/releases")):
+            _fail(category, "residue symlink target is outside the release root")
+        _require_sha256(identity.get("targetSha256"), category)
+        if identity.get("sha256") is not None:
+            _fail(category, "symlink residue cannot carry a file SHA-256")
+    return identity
+
+
+def _validate_residue_plan(plan: Mapping[str, Any]) -> None:
+    residue = _require_mapping(plan.get("residue"), RESIDUE_FIELDS, "plan_invalid")
+    if (
+        plan.get("incidentId") != RESIDUE_INCIDENT_ID
+        or plan.get("checkpoint", {}).get("identity", {}).get("commit")
+        != RESIDUE_TARGET_COMMIT
+        or residue.get("profile") != "materialized_never_started"
+    ):
+        _fail("plan_invalid", "schema v3 is restricted to the reviewed 29df incident")
+    quarantine_root = _require_absolute_path(
+        residue.get("quarantineRoot"),
+        "plan_invalid",
+    )
+    if quarantine_root != RESIDUE_QUARANTINE_ROOT:
+        _fail("plan_invalid", "schema v3 quarantine root changed")
+    if (
+        residue.get("quarantineDevice") != RESIDUE_QUARANTINE_DEVICE
+        or residue.get("quarantineOwnerUid") != TRUSTED_SYSTEM_UID
+        or residue.get("quarantineOwnerGid") != TRUSTED_SYSTEM_UID
+        or _require_mode(residue.get("quarantineMode"), "plan_invalid") != 0o700
+        or residue.get("manifestName") != "quarantine-contract.json"
+        or residue.get("finalFenceName") != "recovery-fence-final"
+    ):
+        _fail("plan_invalid", "schema v3 quarantine contract changed")
+    fence_content = _require_string(residue.get("fenceContent"), "plan_invalid")
+    if fence_content != (
+        f"release={RESIDUE_TARGET_COMMIT} "
+        f"status=recovery_in_progress incident={RESIDUE_INCIDENT_ID}"
+    ):
+        _fail("plan_invalid", "schema v3 recovery fence content changed")
+
+    candidate_unit = _require_mapping(
+        residue.get("candidateUnit"),
+        CANDIDATE_UNIT_FIELDS,
+        "plan_invalid",
+    )
+    if candidate_unit != {
+        "name": "jato-fullstack-backend@8001.service",
+        "loadState": "loaded",
+        "activeState": "inactive",
+        "subState": "dead",
+        "unitFileState": "disabled",
+        "mainPid": 0,
+        "result": "success",
+        "nRestarts": 0,
+        "execMainStartTimestampMonotonic": 0,
+        "activeEnterTimestampMonotonic": 0,
+        "inactiveEnterTimestampMonotonic": 0,
+        "invocationId": "",
+        "fragmentPath": str(RESIDUE_PATHS["candidate_explicit_unit"]),
+        "dropInPaths": [
+            str(RESIDUE_PATHS["candidate_sandbox_dropin"]),
+            str(RESIDUE_PATHS["candidate_cpu_quota_dropin"]),
+            str(RESIDUE_PATHS["candidate_memory_high_dropin"]),
+            str(RESIDUE_PATHS["candidate_memory_max_dropin"]),
+        ],
+        "memoryHighBytes": 3 * 1024**3,
+        "memoryMaxBytes": 4 * 1024**3,
+    }:
+        _fail("plan_invalid", "schema v3 Candidate unit proof changed")
+
+    items = residue.get("items")
+    if not isinstance(items, list) or len(items) != len(RESIDUE_PATHS):
+        _fail("plan_invalid", "schema v3 residue item set is incomplete")
+    seen: set[str] = set()
+    for raw_item in items:
+        item = _validate_residue_identity(
+            raw_item,
+            fields=RESIDUE_ITEM_FIELDS,
+            category="plan_invalid",
+        )
+        item_id = _require_string(item.get("id"), "plan_invalid")
+        quarantine_name = _require_string(
+            item.get("quarantineName"),
+            "plan_invalid",
+        )
+        if (
+            item_id in seen
+            or RESIDUE_PATHS.get(item_id) != Path(item["path"])
+            or RESIDUE_QUARANTINE_NAMES.get(item_id) != quarantine_name
+            or Path(quarantine_name).name != quarantine_name
+            or item.get("device") != residue["quarantineDevice"]
+            or item.get("uid") != TRUSTED_SYSTEM_UID
+            or item.get("gid") != TRUSTED_SYSTEM_UID
+        ):
+            _fail("plan_invalid", "schema v3 residue path/name whitelist changed")
+        if item_id == "candidate_slot_link":
+            if (
+                item.get("kind") != "symlink"
+                or Path(str(item.get("target") or ""))
+                != Path(plan["archive"]["releaseRoot"])
+            ):
+                _fail("plan_invalid", "schema v3 Candidate slot target changed")
+        elif item.get("kind") != "file":
+            _fail("plan_invalid", "schema v3 regular residue type changed")
+        seen.add(item_id)
+    if seen != set(RESIDUE_PATHS):
+        _fail("plan_invalid", "schema v3 residue IDs changed")
+
+    retained = residue.get("retainedEvidence")
+    if not isinstance(retained, list) or len(retained) != 2:
+        _fail("plan_invalid", "schema v3 retained evidence set changed")
+    retained_by_id: dict[str, Mapping[str, Any]] = {}
+    for value in retained:
+        retained_item = _validate_residue_identity(
+            value,
+            fields=RETAINED_EVIDENCE_FIELDS,
+            category="plan_invalid",
+        )
+        retained_id = _require_string(retained_item.get("id"), "plan_invalid")
+        if retained_id in retained_by_id:
+            _fail("plan_invalid", "schema v3 retained evidence IDs changed")
+        retained_by_id[retained_id] = retained_item
+    expected_previous_metadata = (
+        RESIDUE_PREVIOUS_METADATA_ROOT
+        / RESIDUE_TARGET_COMMIT
+        / f"{plan['checkpoint']['identity']['archiveSha256']}.json"
+    )
+    previous_metadata = retained_by_id.get("previous_metadata")
+    canonical_nginx = retained_by_id.get("canonical_nginx_config")
+    if (
+        set(retained_by_id) != {"previous_metadata", "canonical_nginx_config"}
+        or previous_metadata is None
+        or Path(previous_metadata["path"]) != expected_previous_metadata
+        or previous_metadata.get("kind") != "file"
+        or canonical_nginx is None
+        or canonical_nginx
+        != {
+            "bytes": 3795,
+            "device": RESIDUE_QUARANTINE_DEVICE,
+            "gid": TRUSTED_SYSTEM_UID,
+            "id": "canonical_nginx_config",
+            "inode": 789351,
+            "kind": "file",
+            "mode": "0644",
+            "mtimeNs": 1783042607281907362,
+            "nlink": 1,
+            "path": "/etc/nginx/sites-available/jato_fullstack.conf",
+            "sha256": (
+                "964c351bbed725a36da517c06ce7ef82ff9d11046e8329f02a118f638a32aec4"
+            ),
+            "target": None,
+            "targetSha256": None,
+            "uid": TRUSTED_SYSTEM_UID,
+        }
+    ):
+        _fail("plan_invalid", "schema v3 retained evidence proof changed")
+
+    absent_paths = residue.get("requiredAbsentPaths")
+    if (
+        not isinstance(absent_paths, list)
+        or {Path(_require_absolute_path(path, "plan_invalid")) for path in absent_paths}
+        != RESIDUE_REQUIRED_ABSENT_PATHS
+        or len(absent_paths) != len(RESIDUE_REQUIRED_ABSENT_PATHS)
+    ):
+        _fail("plan_invalid", "schema v3 required-absence set changed")
+
+
 def load_recovery_plan(
     path: Path,
     expected_sha256: str,
@@ -396,8 +720,12 @@ def load_recovery_plan(
     actual_sha256 = hashlib.sha256(raw).hexdigest()
     if actual_sha256 != expected_sha256:
         _fail("plan_digest_mismatch", "recovery plan SHA-256 changed")
-    plan = _require_mapping(payload, PLAN_FIELDS, "plan_invalid")
-    _plan_schema_version(plan)
+    version = _plan_schema_version(payload)
+    plan = _require_mapping(
+        payload,
+        RESIDUE_PLAN_FIELDS if version == 3 else LEGACY_PLAN_FIELDS,
+        "plan_invalid",
+    )
     incident = _require_string(plan.get("incidentId"), "plan_invalid")
     if not SAFE_INCIDENT_PATTERN.fullmatch(incident):
         _fail("plan_invalid", "incidentId is unsafe")
@@ -428,7 +756,7 @@ def load_recovery_plan(
     )
     runtime = _require_mapping(
         plan.get("runtime"),
-        RUNTIME_PLAN_FIELDS,
+        RESIDUE_RUNTIME_PLAN_FIELDS if version == 3 else RUNTIME_PLAN_FIELDS,
         "plan_invalid",
     )
     source_proofs = plan.get("sourceProofs")
@@ -513,6 +841,15 @@ def load_recovery_plan(
         "venv",
     ):
         _require_absolute_path(runtime.get(field), "plan_invalid")
+    if version == 3:
+        canonical_nginx = _require_absolute_path(
+            runtime.get("nginxCanonicalConfig"),
+            "plan_invalid",
+        )
+        if canonical_nginx != Path(
+            "/etc/nginx/sites-available/jato_fullstack.conf"
+        ):
+            _fail("plan_invalid", "schema v3 canonical Nginx path changed")
 
     active_slot = _require_string(expected.get("activeSlot"), "plan_invalid")
     candidate_slot = _require_string(expected.get("candidateSlot"), "plan_invalid")
@@ -574,6 +911,8 @@ def load_recovery_plan(
         )
     ):
         _fail("plan_invalid", "serverNames are invalid")
+    if version == 3:
+        _validate_residue_plan(plan)
     return plan, actual_sha256
 
 
@@ -927,6 +1266,7 @@ def _systemd_properties(unit: str) -> dict[str, str]:
             unit,
             "--property=LoadState",
             "--property=ActiveState",
+            "--property=SubState",
             "--property=UnitFileState",
             "--property=MemoryHigh",
             "--property=MemoryMax",
@@ -936,6 +1276,10 @@ def _systemd_properties(unit: str) -> dict[str, str]:
             "--property=ExecMainStartTimestampMonotonic",
             "--property=ActiveEnterTimestampMonotonic",
             "--property=ControlGroup",
+            "--property=Result",
+            "--property=InactiveEnterTimestampMonotonic",
+            "--property=FragmentPath",
+            "--property=DropInPaths",
             "--no-pager",
         ],
         category="systemd_probe_failed",
@@ -948,6 +1292,7 @@ def _systemd_properties(unit: str) -> dict[str, str]:
     required = {
         "LoadState",
         "ActiveState",
+        "SubState",
         "UnitFileState",
         "MemoryHigh",
         "MemoryMax",
@@ -957,10 +1302,391 @@ def _systemd_properties(unit: str) -> dict[str, str]:
         "ExecMainStartTimestampMonotonic",
         "ActiveEnterTimestampMonotonic",
         "ControlGroup",
+        "Result",
+        "InactiveEnterTimestampMonotonic",
+        "FragmentPath",
+        "DropInPaths",
     }
     if set(values) != required:
         _fail("systemd_probe_failed", f"incomplete properties for {unit}")
     return values
+
+
+def _path_lexists(path: Path) -> bool:
+    return path.exists() or path.is_symlink()
+
+
+def _stable_path_identity(path: Path, category: str) -> Mapping[str, Any]:
+    try:
+        before = path.lstat()
+    except OSError as exc:
+        raise RecoveryError(category, f"cannot stat {path}") from exc
+    kind = "symlink" if stat.S_ISLNK(before.st_mode) else "file"
+    if kind == "file":
+        if not stat.S_ISREG(before.st_mode):
+            _fail(category, f"unsupported residue type: {path}")
+        raw, after = _read_regular_bytes(path, category, maximum_bytes=MAX_JSON_BYTES)
+        identity: dict[str, Any] = {
+            "kind": kind,
+            "device": after.st_dev,
+            "inode": after.st_ino,
+            "uid": after.st_uid,
+            "gid": after.st_gid,
+            "mode": f"0{stat.S_IMODE(after.st_mode):03o}",
+            "nlink": after.st_nlink,
+            "bytes": after.st_size,
+            "mtimeNs": after.st_mtime_ns,
+            "sha256": hashlib.sha256(raw).hexdigest(),
+            "target": None,
+            "targetSha256": None,
+        }
+    else:
+        target = os.readlink(path)
+        after = path.lstat()
+        if (
+            after.st_dev,
+            after.st_ino,
+            after.st_size,
+            after.st_mtime_ns,
+        ) != (
+            before.st_dev,
+            before.st_ino,
+            before.st_size,
+            before.st_mtime_ns,
+        ):
+            _fail(category, f"symlink changed while reading: {path}")
+        identity = {
+            "kind": kind,
+            "device": after.st_dev,
+            "inode": after.st_ino,
+            "uid": after.st_uid,
+            "gid": after.st_gid,
+            "mode": f"0{stat.S_IMODE(after.st_mode):03o}",
+            "nlink": after.st_nlink,
+            "bytes": after.st_size,
+            "mtimeNs": after.st_mtime_ns,
+            "sha256": None,
+            "target": target,
+            "targetSha256": hashlib.sha256(target.encode("utf-8")).hexdigest(),
+        }
+    return identity
+
+
+def _expected_identity(item: Mapping[str, Any]) -> Mapping[str, Any]:
+    return {field: item[field] for field in RESIDUE_ITEM_FIELDS if field not in {
+        "id",
+        "path",
+        "quarantineName",
+    }}
+
+
+def _verify_residue_identity(
+    path: Path,
+    item: Mapping[str, Any],
+    category: str = "residue_identity_mismatch",
+) -> Mapping[str, Any]:
+    if not _path_lexists(path):
+        _fail(category, f"reviewed residue disappeared: {path}")
+    actual = _stable_path_identity(path, category)
+    if actual != _expected_identity(item):
+        _fail(category, f"reviewed residue identity changed: {path}")
+    return actual
+
+
+def _verify_fence_identity(path: Path, plan: Mapping[str, Any]) -> Mapping[str, Any]:
+    if not _path_lexists(path):
+        _fail("recovery_fence_invalid", f"recovery fence is absent: {path}")
+    identity = _stable_path_identity(path, "recovery_fence_invalid")
+    expected_raw = (plan["residue"]["fenceContent"] + "\n").encode("utf-8")
+    if (
+        identity.get("kind") != "file"
+        or identity.get("uid") != plan["residue"]["quarantineOwnerUid"]
+        or identity.get("gid") != plan["residue"]["quarantineOwnerGid"]
+        or identity.get("mode") != "0644"
+        or identity.get("nlink") != 1
+        or identity.get("bytes") != len(expected_raw)
+        or identity.get("sha256") != hashlib.sha256(expected_raw).hexdigest()
+    ):
+        _fail("recovery_fence_invalid", f"recovery fence identity changed: {path}")
+    return identity
+
+
+def _recovery_fence_temp_path(path: Path) -> Path:
+    return path.with_name(f".{path.name}{RECOVERY_FENCE_TEMP_SUFFIX}")
+
+
+def _verify_replayable_fence_temp(
+    path: Path,
+    plan: Mapping[str, Any],
+) -> None:
+    """Accept only a crash fragment created by this exact fence publisher."""
+
+    expected_raw = (plan["residue"]["fenceContent"] + "\n").encode("utf-8")
+    before = _reject_symlink(path, "recovery_fence_invalid")
+    if (
+        not stat.S_ISREG(before.st_mode)
+        or before.st_dev != plan["residue"]["quarantineDevice"]
+        or before.st_uid != plan["residue"]["quarantineOwnerUid"]
+        or before.st_gid != plan["residue"]["quarantineOwnerGid"]
+        or stat.S_IMODE(before.st_mode) not in {0o600, 0o644}
+        or before.st_nlink != 1
+        or before.st_size > len(expected_raw)
+    ):
+        _fail(
+            "recovery_fence_invalid",
+            f"recovery fence temp identity is unsafe: {path}",
+        )
+    flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0)
+    flags |= getattr(os, "O_NOFOLLOW", 0)
+    try:
+        descriptor = os.open(path, flags)
+    except OSError as exc:
+        raise RecoveryError(
+            "recovery_fence_invalid",
+            f"cannot open recovery fence temp: {path}",
+        ) from exc
+    try:
+        opened = os.fstat(descriptor)
+        raw = b""
+        while len(raw) <= len(expected_raw):
+            chunk = os.read(descriptor, len(expected_raw) + 1 - len(raw))
+            if not chunk:
+                break
+            raw += chunk
+        after = os.fstat(descriptor)
+    finally:
+        os.close(descriptor)
+    if (
+        (opened.st_dev, opened.st_ino) != (before.st_dev, before.st_ino)
+        or (
+            after.st_dev,
+            after.st_ino,
+            after.st_size,
+            after.st_mtime_ns,
+        )
+        != (
+            before.st_dev,
+            before.st_ino,
+            before.st_size,
+            before.st_mtime_ns,
+        )
+        or len(raw) != before.st_size
+        or not expected_raw.startswith(raw)
+    ):
+        _fail(
+            "recovery_fence_invalid",
+            f"recovery fence temp is foreign or changed: {path}",
+        )
+
+
+def _residue_items(plan: Mapping[str, Any]) -> Mapping[str, Mapping[str, Any]]:
+    return {item["id"]: item for item in plan["residue"]["items"]}
+
+
+def _retained_evidence_items(
+    plan: Mapping[str, Any],
+) -> Mapping[str, Mapping[str, Any]]:
+    return {item["id"]: item for item in plan["residue"]["retainedEvidence"]}
+
+
+def _verify_quarantine_root(path: Path, plan: Mapping[str, Any]) -> None:
+    metadata = _reject_symlink(path, "quarantine_invalid")
+    residue = plan["residue"]
+    if (
+        not stat.S_ISDIR(metadata.st_mode)
+        or metadata.st_dev != residue["quarantineDevice"]
+        or metadata.st_uid != residue["quarantineOwnerUid"]
+        or metadata.st_gid != residue["quarantineOwnerGid"]
+        or stat.S_IMODE(metadata.st_mode) != _require_mode(
+            residue["quarantineMode"],
+            "quarantine_invalid",
+        )
+    ):
+        _fail("quarantine_invalid", "quarantine root identity is unsafe")
+
+
+def _residue_inventory_digest(plan: Mapping[str, Any]) -> str:
+    payload = {
+        "incidentId": plan["incidentId"],
+        "identity": plan["checkpoint"]["identity"],
+        "profile": plan["residue"]["profile"],
+        "candidateUnit": plan["residue"]["candidateUnit"],
+        "items": plan["residue"]["items"],
+        "retainedEvidence": plan["residue"]["retainedEvidence"],
+        "requiredAbsentPaths": plan["residue"]["requiredAbsentPaths"],
+    }
+    return _json_sha256(payload)[1]
+
+
+def _verify_retained_and_absent_paths(plan: Mapping[str, Any]) -> None:
+    for retained in plan["residue"]["retainedEvidence"]:
+        _verify_residue_identity(
+            Path(retained["path"]),
+            retained,
+            "retained_evidence_changed",
+        )
+    for raw_path in plan["residue"]["requiredAbsentPaths"]:
+        path = Path(raw_path)
+        if _path_lexists(path):
+            _fail("unexpected_runtime_residue", f"path must remain absent: {path}")
+
+
+def _collect_residue_state(
+    plan: Mapping[str, Any],
+    plan_sha256: str,
+) -> Mapping[str, Any]:
+    _verify_retained_and_absent_paths(plan)
+    residue = plan["residue"]
+    quarantine_root = Path(residue["quarantineRoot"])
+    manifest_path = quarantine_root / residue["manifestName"]
+    final_fence_path = quarantine_root / residue["finalFenceName"]
+    marker_item = _residue_items(plan)["maintenance_marker"]
+    marker_path = Path(marker_item["path"])
+    marker_destination = quarantine_root / marker_item["quarantineName"]
+    fence_temp_path = _recovery_fence_temp_path(marker_destination)
+
+    if not _path_lexists(quarantine_root):
+        for item in residue["items"]:
+            _verify_residue_identity(Path(item["path"]), item)
+        return {
+            "stage": "initial",
+            "inventoryDigest": _residue_inventory_digest(plan),
+            "quarantineRoot": str(quarantine_root),
+            "manifestPath": str(manifest_path),
+            "manifestSha256": None,
+            "maintenanceMarkerPresent": True,
+            "candidateSlotLinkExists": True,
+            "finalFencePath": str(final_fence_path),
+            "finalFenceIdentity": None,
+        }
+
+    _verify_quarantine_root(quarantine_root, plan)
+    manifest_sha256: str | None = None
+    if _path_lexists(manifest_path):
+        manifest_raw, manifest_metadata = _read_regular_bytes(
+            manifest_path,
+            "quarantine_manifest_invalid",
+        )
+        if (
+            manifest_metadata.st_uid != residue["quarantineOwnerUid"]
+            or manifest_metadata.st_gid != residue["quarantineOwnerGid"]
+            or stat.S_IMODE(manifest_metadata.st_mode) != 0o600
+        ):
+            _fail("quarantine_manifest_invalid", "quarantine manifest is not private")
+        manifest_sha256 = hashlib.sha256(manifest_raw).hexdigest()
+        allowed_entries = {
+            residue["manifestName"],
+            residue["finalFenceName"],
+            fence_temp_path.name,
+            *(item["quarantineName"] for item in residue["items"]),
+        }
+        unexpected_entries = {
+            entry.name for entry in quarantine_root.iterdir()
+        } - allowed_entries
+        if unexpected_entries:
+            _fail(
+                "quarantine_state_invalid",
+                "quarantine contains unreviewed entries",
+            )
+        if _path_lexists(fence_temp_path):
+            if _path_lexists(marker_destination) or _path_lexists(final_fence_path):
+                _fail(
+                    "quarantine_state_invalid",
+                    "recovery fence temp conflicts with a published fence",
+                )
+            _verify_replayable_fence_temp(fence_temp_path, plan)
+    else:
+        entries = [entry.name for entry in quarantine_root.iterdir()]
+        if entries:
+            _fail(
+                "quarantine_manifest_invalid",
+                "quarantine contains entries without its immutable manifest",
+            )
+        return {
+            "stage": "quarantine_root_created",
+            "inventoryDigest": _residue_inventory_digest(plan),
+            "quarantineRoot": str(quarantine_root),
+            "manifestPath": str(manifest_path),
+            "manifestSha256": None,
+            "maintenanceMarkerPresent": True,
+            "candidateSlotLinkExists": True,
+            "finalFencePath": str(final_fence_path),
+            "finalFenceIdentity": None,
+        }
+
+    item_states: dict[str, str] = {}
+    for item_id, item in _residue_items(plan).items():
+        source = Path(item["path"])
+        destination = quarantine_root / item["quarantineName"]
+        source_exists = _path_lexists(source)
+        destination_exists = _path_lexists(destination)
+        if item_id == "maintenance_marker":
+            if source_exists and not destination_exists and not _path_lexists(
+                final_fence_path
+            ):
+                _verify_residue_identity(source, item)
+                item_states[item_id] = "fence_not_staged"
+            elif source_exists and destination_exists:
+                source_identity = _stable_path_identity(
+                    source,
+                    "recovery_fence_invalid",
+                )
+                if source_identity == _expected_identity(item):
+                    _verify_fence_identity(destination, plan)
+                    item_states[item_id] = "exchange_pending"
+                else:
+                    _verify_fence_identity(source, plan)
+                    _verify_residue_identity(destination, item)
+                    item_states[item_id] = "quarantined_fenced"
+            elif not source_exists and destination_exists and _path_lexists(final_fence_path):
+                _verify_residue_identity(destination, item)
+                item_states[item_id] = "finalized"
+            else:
+                _fail("quarantine_state_invalid", "maintenance marker state is ambiguous")
+            continue
+        if source_exists == destination_exists:
+            _fail(
+                "quarantine_state_invalid",
+                f"residue must exist at exactly one location: {item_id}",
+            )
+        if source_exists:
+            _verify_residue_identity(source, item)
+            item_states[item_id] = "pending"
+        else:
+            _verify_residue_identity(destination, item)
+            item_states[item_id] = "quarantined"
+
+    marker_state = item_states["maintenance_marker"]
+    non_marker_states = {
+        state for item_id, state in item_states.items() if item_id != "maintenance_marker"
+    }
+    final_fence_identity = None
+    if marker_state == "finalized":
+        final_fence_identity = _verify_fence_identity(final_fence_path, plan)
+        stage = "finalized" if non_marker_states == {"quarantined"} else "partial"
+    elif marker_state == "quarantined_fenced" and non_marker_states == {"quarantined"}:
+        if _path_lexists(final_fence_path):
+            _fail("quarantine_state_invalid", "final fence exists before finalization")
+        stage = "quarantined_fenced"
+    else:
+        if _path_lexists(final_fence_path):
+            _fail("quarantine_state_invalid", "unexpected final fence exists")
+        stage = "partial"
+    return {
+        "stage": stage,
+        "inventoryDigest": _residue_inventory_digest(plan),
+        "quarantineRoot": str(quarantine_root),
+        "manifestPath": str(manifest_path),
+        "manifestSha256": manifest_sha256,
+        "maintenanceMarkerPresent": _path_lexists(marker_path),
+        "candidateSlotLinkExists": _path_lexists(
+            RESIDUE_PATHS["candidate_slot_link"]
+        ),
+        "itemStates": item_states,
+        "finalFencePath": str(final_fence_path),
+        "finalFenceIdentity": final_fence_identity,
+        "planSha256": plan_sha256,
+    }
 
 
 def _read_virtual_file(path: Path, category: str) -> bytes:
@@ -1298,9 +2024,112 @@ def _collect_database_proof(
     }
 
 
+def _candidate_never_started_proof(
+    plan: Mapping[str, Any],
+    unit: Mapping[str, str],
+    *,
+    stage: str,
+    listener: bool,
+) -> Mapping[str, Any]:
+    try:
+        proof = {
+            "loadState": unit["LoadState"],
+            "activeState": unit["ActiveState"],
+            "subState": unit["SubState"],
+            "unitFileState": unit["UnitFileState"],
+            "mainPid": int(unit["MainPID"]),
+            "result": unit["Result"],
+            "nRestarts": int(unit["NRestarts"]),
+            "execMainStartTimestampMonotonic": int(
+                unit["ExecMainStartTimestampMonotonic"]
+            ),
+            "activeEnterTimestampMonotonic": int(
+                unit["ActiveEnterTimestampMonotonic"]
+            ),
+            "inactiveEnterTimestampMonotonic": int(
+                unit["InactiveEnterTimestampMonotonic"]
+            ),
+            "invocationId": unit["InvocationID"],
+            "fragmentPath": unit["FragmentPath"],
+            "dropInPaths": unit["DropInPaths"].split(),
+            "memoryHighBytes": int(unit["MemoryHigh"]),
+            "memoryMaxBytes": int(unit["MemoryMax"]),
+            "listener": listener,
+        }
+    except (KeyError, ValueError) as exc:
+        raise RecoveryError(
+            "candidate_runtime_invalid",
+            "Candidate lifetime proof is malformed",
+        ) from exc
+    never_started = (
+        proof["activeState"] == "inactive"
+        and proof["subState"] == "dead"
+        and proof["unitFileState"] in {"", "disabled"}
+        and proof["mainPid"] == 0
+        and proof["nRestarts"] == 0
+        and proof["execMainStartTimestampMonotonic"] == 0
+        and proof["activeEnterTimestampMonotonic"] == 0
+        and proof["inactiveEnterTimestampMonotonic"] == 0
+        and proof["invocationId"] == ""
+        and listener is False
+    )
+    if not never_started:
+        _fail("candidate_started", "Candidate has runtime or lifetime evidence")
+    expected = plan["residue"]["candidateUnit"]
+    if stage in {"initial", "quarantine_root_created"} and proof != {
+        **expected,
+        "listener": False,
+    }:
+        _fail("candidate_runtime_invalid", "initial Candidate proof differs from plan")
+    owned_paths = {str(path) for path in RESIDUE_PATHS.values()}
+    referenced_paths = {proof["fragmentPath"], *proof["dropInPaths"]} - {""}
+    allowed_template_path = "/etc/systemd/system/jato-fullstack-backend@.service"
+    if referenced_paths - owned_paths - {allowed_template_path}:
+        _fail(
+            "candidate_runtime_invalid",
+            "Candidate has unknown unit sources",
+        )
+    owned_references = sorted(referenced_paths & owned_paths)
+    if stage == "finalized" and owned_references:
+        _fail(
+            "candidate_runtime_invalid",
+            "systemd still references finalized Candidate residue",
+        )
+    proof["ownedSourceReferences"] = owned_references
+    return proof
+
+
+def _verify_candidate_detached_after_reload(
+    plan: Mapping[str, Any],
+) -> Mapping[str, Any]:
+    candidate_slot = str(plan["expected"]["candidateSlot"])
+    candidate_unit = _systemd_properties(
+        f"{plan['runtime']['backendServicePrefix']}{candidate_slot}"
+    )
+    listener = bool(
+        _run_text(
+            ["ss", "-H", "-ltn", f"sport = :{candidate_slot}"],
+            category="candidate_probe_failed",
+        )
+    )
+    proof = _candidate_never_started_proof(
+        plan,
+        candidate_unit,
+        stage="quarantined_fenced",
+        listener=listener,
+    )
+    if proof["ownedSourceReferences"]:
+        _fail(
+            "candidate_daemon_reload_failed",
+            "systemd retained quarantined Candidate sources after daemon-reload",
+        )
+    return proof
+
+
 def collect_observation(
     plan: Mapping[str, Any],
     bundle_root: Path,
+    plan_sha256: str = "",
 ) -> Mapping[str, Any]:
     expected = plan["expected"]
     runtime = plan["runtime"]
@@ -1333,9 +2162,15 @@ def collect_observation(
         or active_slot_link.resolve(strict=True) != active_root
     ):
         _fail("production_state_changed", "active slot link differs from active root")
+    plan_version = _plan_schema_version(plan)
+    residue_state = (
+        _collect_residue_state(plan, plan_sha256) if plan_version == 3 else None
+    )
     candidate_slot_link = Path(runtime["candidateSlotLink"])
     candidate_slot_link_exists = (
-        candidate_slot_link.exists() or candidate_slot_link.is_symlink()
+        residue_state["candidateSlotLinkExists"]
+        if residue_state is not None
+        else candidate_slot_link.exists() or candidate_slot_link.is_symlink()
     )
     active_release_link = Path(runtime["activeReleaseLink"])
     active_link_target = ""
@@ -1373,6 +2208,18 @@ def collect_observation(
     if identity_commit := plan["checkpoint"]["identity"]["commit"]:
         if identity_commit in nginx or str(old_release_root) in nginx:
             _fail("nginx_route_invalid", "failed release appears in active Nginx route")
+    canonical_nginx_identity: Mapping[str, Any] | None = None
+    if plan_version == 3:
+        canonical_nginx = _retained_evidence_items(plan)[
+            "canonical_nginx_config"
+        ]
+        if Path(runtime["nginxCanonicalConfig"]) != Path(canonical_nginx["path"]):
+            _fail("nginx_route_invalid", "canonical Nginx path differs from plan")
+        canonical_nginx_identity = _verify_residue_identity(
+            Path(runtime["nginxCanonicalConfig"]),
+            canonical_nginx,
+            "retained_evidence_changed",
+        )
 
     active_unit = _systemd_properties(
         f"{runtime['backendServicePrefix']}{active_slot}"
@@ -1512,8 +2359,8 @@ def collect_observation(
     scheduler_exists = Path(runtime["schedulerState"]).exists() or Path(
         runtime["schedulerState"]
     ).is_symlink()
-    if marker_exists or scheduler_exists:
-        _fail("production_state_changed", "deployment marker/scheduler state exists")
+    if scheduler_exists or (plan_version != 3 and marker_exists):
+        _fail("production_state_changed", "deployment marker/scheduler state is invalid")
     if (
         active_unit["LoadState"] != "loaded"
         or active_unit["ActiveState"] != "active"
@@ -1521,7 +2368,16 @@ def collect_observation(
         or active_unit["MemoryMax"] != str(expected["memoryMaxBytes"])
     ):
         _fail("active_runtime_invalid", "active backend runtime changed")
-    if (
+    candidate_lifetime = None
+    if plan_version == 3:
+        assert residue_state is not None
+        candidate_lifetime = _candidate_never_started_proof(
+            plan,
+            candidate_unit,
+            stage=str(residue_state["stage"]),
+            listener=candidate_listener,
+        )
+    elif (
         candidate_unit["LoadState"] != "loaded"
         or candidate_unit["ActiveState"] != "inactive"
         or candidate_unit["UnitFileState"] != "disabled"
@@ -1568,9 +2424,10 @@ def collect_observation(
             "unitActive": False,
             "unitEnabled": False,
             "listener": False,
-            "slotLinkExists": False,
+            "slotLinkExists": candidate_slot_link_exists,
             "targetReleaseActive": False,
             "nginxReferencesTarget": False,
+            **({"lifetime": candidate_lifetime} if candidate_lifetime else {}),
         },
         "database": database_proof,
         "runtime": {
@@ -1578,13 +2435,22 @@ def collect_observation(
             "nginxConfigSha256": runtime["nginxConfigSha256"],
             "nginxFrontendRoot": expected["activeFrontendRoot"],
             "nginxMode": runtime["nginxMode"],
+            **(
+                {
+                    "nginxCanonicalConfig": runtime["nginxCanonicalConfig"],
+                    "nginxCanonicalConfigIdentity": canonical_nginx_identity,
+                }
+                if canonical_nginx_identity is not None
+                else {}
+            ),
             "monthlyWorkerActive": False,
             "monthlyWorkerEnabled": False,
             "switchUnitLoadState": switch_unit["LoadState"],
             "switchUnitActiveState": switch_unit["ActiveState"],
-            "maintenanceMarkerPresent": False,
+            "maintenanceMarkerPresent": marker_exists,
             "schedulerSnapshotPresent": False,
         },
+        **({"residue": residue_state} if residue_state is not None else {}),
     }
     validate_observation(plan, observation)
     return observation
@@ -1600,11 +2466,15 @@ def validate_observation(
     candidate = observation.get("candidate")
     database = observation.get("database")
     runtime = observation.get("runtime")
+    plan_version = _plan_schema_version(plan)
+    residue = observation.get("residue")
     if not all(
         isinstance(value, dict)
         for value in (active, public, candidate, database, runtime)
     ):
         _fail("observation_invalid", "runtime proof objects are missing")
+    if plan_version == 3 and not isinstance(residue, dict):
+        _fail("observation_invalid", "schema v3 residue proof is missing")
     backend_processes = active.get("backendProcesses")
     if (
         active.get("frontendCommit") != expected["activeCommit"]
@@ -1658,18 +2528,40 @@ def validate_observation(
                     "public_identity_invalid",
                     "public host does not bind active frontend SHA",
                 )
+    candidate_false_fields = [
+        "unitActive",
+        "unitEnabled",
+        "listener",
+        "targetReleaseActive",
+        "nginxReferencesTarget",
+    ]
+    if plan_version != 3:
+        candidate_false_fields.append("slotLinkExists")
     if any(
         candidate.get(field) is not False
-        for field in (
-            "unitActive",
-            "unitEnabled",
-            "listener",
-            "slotLinkExists",
-            "targetReleaseActive",
-            "nginxReferencesTarget",
-        )
+        for field in candidate_false_fields
     ):
         _fail("candidate_present", "Candidate proof is not fully inactive")
+    if plan_version == 3:
+        assert isinstance(residue, dict)
+        stage = residue.get("stage")
+        if (
+            stage
+            not in {
+                "initial",
+                "quarantine_root_created",
+                "partial",
+                "quarantined_fenced",
+                "finalized",
+            }
+            or residue.get("inventoryDigest") != _residue_inventory_digest(plan)
+            or candidate.get("slotLinkExists")
+            is not residue.get("candidateSlotLinkExists")
+            or runtime.get("maintenanceMarkerPresent")
+            is not residue.get("maintenanceMarkerPresent")
+            or not isinstance(candidate.get("lifetime"), dict)
+        ):
+            _fail("residue_observation_invalid", "schema v3 residue proof changed")
     expected_revisions = sorted(expected["revisions"])
     if (
         database.get("enabled") is not True
@@ -1698,10 +2590,27 @@ def validate_observation(
         or runtime.get("monthlyWorkerEnabled") is not False
         or runtime.get("switchUnitLoadState") != "not-found"
         or runtime.get("switchUnitActiveState") != "inactive"
-        or runtime.get("maintenanceMarkerPresent") is not False
+        or (
+            plan_version != 3
+            and runtime.get("maintenanceMarkerPresent") is not False
+        )
         or runtime.get("schedulerSnapshotPresent") is not False
     ):
         _fail("production_state_changed", "runtime invariant proof changed")
+    if plan_version == 3:
+        canonical_nginx = _retained_evidence_items(plan)[
+            "canonical_nginx_config"
+        ]
+        if (
+            runtime.get("nginxCanonicalConfig")
+            != plan["runtime"]["nginxCanonicalConfig"]
+            or runtime.get("nginxCanonicalConfigIdentity")
+            != _expected_identity(canonical_nginx)
+        ):
+            _fail(
+                "production_state_changed",
+                "canonical Nginx invariant proof changed",
+            )
 
 
 def _parent_pid(pid: int) -> int:
@@ -1765,6 +2674,502 @@ def assert_production_lock(
     }
 
 
+def _load_dry_run_authorization(
+    *,
+    path: Path,
+    expected_sha256: str,
+    bundle_root: Path,
+    plan: Mapping[str, Any],
+    plan_sha256: str,
+    implementation_commit: str,
+) -> tuple[Mapping[str, Any], str]:
+    expected_sha256 = _require_sha256(
+        expected_sha256,
+        "dry_run_authorization_invalid",
+    )
+    absolute = Path(os.path.abspath(path))
+    root = Path(os.path.abspath(bundle_root))
+    try:
+        absolute.resolve(strict=True).relative_to(root.resolve(strict=True))
+    except (OSError, ValueError) as exc:
+        raise RecoveryError(
+            "dry_run_authorization_invalid",
+            "authorization must remain inside the immutable control bundle",
+        ) from exc
+    payload, raw, _ = _read_json(
+        absolute,
+        "dry_run_authorization_invalid",
+    )
+    actual_sha256 = hashlib.sha256(raw).hexdigest()
+    if actual_sha256 != expected_sha256:
+        _fail("dry_run_authorization_invalid", "authorization SHA-256 changed")
+    authorization = _require_mapping(
+        payload,
+        DRY_RUN_AUTHORIZATION_FIELDS,
+        "dry_run_authorization_invalid",
+    )
+    if (
+        authorization.get("schemaVersion") != 1
+        or authorization.get("kind") != "checkpoint_recovery_dry_run_authorization"
+        or authorization.get("repository") != plan["repository"]
+        or authorization.get("workflowPath")
+        != ".github/workflows/production-checkpoint-recovery.yml"
+        or authorization.get("mainSha") != implementation_commit
+        or authorization.get("planSha256") != plan_sha256
+        or authorization.get("incidentId") != plan["incidentId"]
+        or authorization.get("inventoryDigest") != _residue_inventory_digest(plan)
+        or authorization.get("decision")
+        != "candidate-residue-dry-run-eligible"
+    ):
+        _fail("dry_run_authorization_invalid", "authorization identity changed")
+    for field in ("runId", "runAttempt"):
+        _require_positive_int(authorization.get(field), "dry_run_authorization_invalid")
+    _require_sha256(
+        authorization.get("resultSha256"),
+        "dry_run_authorization_invalid",
+    )
+    return authorization, actual_sha256
+
+
+def _bundled_dry_run_authorization(
+    *,
+    bundle_root: Path,
+    plan_sha256: str,
+    implementation_commit: str,
+) -> tuple[Path, str]:
+    manifest, _, _ = _read_json(
+        bundle_root / "recovery-control-manifest.json",
+        "dry_run_authorization_invalid",
+    )
+    files = manifest.get("files")
+    relative = "reviewed-dry-run-authorization.json"
+    if (
+        manifest.get("schemaVersion") != 1
+        or manifest.get("commit") != implementation_commit
+        or manifest.get("planSha256") != plan_sha256
+        or not isinstance(files, dict)
+        or set(path for path in files if path == relative) != {relative}
+        or not SHA256_PATTERN.fullmatch(str(files.get(relative) or ""))
+    ):
+        _fail(
+            "dry_run_authorization_invalid",
+            "immutable control manifest does not bind the authorization",
+        )
+    return bundle_root / relative, str(files[relative])
+
+
+def _quarantine_contract_payload(
+    *,
+    plan: Mapping[str, Any],
+    plan_sha256: str,
+    implementation_commit: str,
+    authorization: Mapping[str, Any],
+    authorization_sha256: str,
+) -> Mapping[str, Any]:
+    residue = plan["residue"]
+    return {
+        "schemaVersion": 1,
+        "kind": "candidate_residue_quarantine_contract",
+        "incidentId": plan["incidentId"],
+        "identity": plan["checkpoint"]["identity"],
+        "implementation": {
+            "commit": implementation_commit,
+            "planSha256": plan_sha256,
+        },
+        "authorization": {
+            **authorization,
+            "authorizationSha256": authorization_sha256,
+        },
+        "quarantineRoot": residue["quarantineRoot"],
+        "items": residue["items"],
+        "retainedEvidence": residue["retainedEvidence"],
+        "requiredAbsentPaths": residue["requiredAbsentPaths"],
+        "fence": {
+            "content": residue["fenceContent"] + "\n",
+            "sha256": hashlib.sha256(
+                (residue["fenceContent"] + "\n").encode("utf-8")
+            ).hexdigest(),
+            "livePath": str(RESIDUE_PATHS["maintenance_marker"]),
+            "finalPath": str(
+                Path(residue["quarantineRoot"]) / residue["finalFenceName"]
+            ),
+        },
+    }
+
+
+def _write_immutable_json(
+    path: Path,
+    payload: Mapping[str, Any],
+    *,
+    owner_uid: int,
+    owner_gid: int,
+    category: str,
+    ignore_created_at: bool = False,
+) -> tuple[str, bool]:
+    raw, digest = _json_sha256(payload)
+    if _path_lexists(path):
+        existing, metadata = _read_regular_bytes(path, category)
+        if (
+            (metadata.st_uid, metadata.st_gid) != (owner_uid, owner_gid)
+            or stat.S_IMODE(metadata.st_mode) != 0o600
+        ):
+            _fail(category, "existing immutable document owner/mode changed")
+        try:
+            existing_payload = json.loads(existing.decode("utf-8"))
+        except (UnicodeError, json.JSONDecodeError) as exc:
+            raise RecoveryError(category, "existing document is invalid JSON") from exc
+        expected_compare = dict(payload)
+        existing_compare = (
+            dict(existing_payload) if isinstance(existing_payload, dict) else {}
+        )
+        if ignore_created_at:
+            expected_compare.pop("createdAt", None)
+            existing_compare.pop("createdAt", None)
+        if existing_compare != expected_compare:
+            _fail(category, "existing immutable document has different facts")
+        return hashlib.sha256(existing).hexdigest(), True
+    atomic_write_json(
+        path,
+        payload,
+        owner_uid=owner_uid,
+        owner_gid=owner_gid,
+    )
+    return digest, False
+
+
+def _ensure_quarantine_contract(
+    *,
+    plan: Mapping[str, Any],
+    plan_sha256: str,
+    implementation_commit: str,
+    authorization: Mapping[str, Any],
+    authorization_sha256: str,
+) -> tuple[Path, str]:
+    residue = plan["residue"]
+    root = Path(residue["quarantineRoot"])
+    if _path_lexists(root):
+        _verify_quarantine_root(root, plan)
+    else:
+        ensure_private_state_directory(
+            root,
+            owner_uid=residue["quarantineOwnerUid"],
+            owner_gid=residue["quarantineOwnerGid"],
+        )
+    _verify_quarantine_root(root, plan)
+    manifest_path = root / residue["manifestName"]
+    payload = _quarantine_contract_payload(
+        plan=plan,
+        plan_sha256=plan_sha256,
+        implementation_commit=implementation_commit,
+        authorization=authorization,
+        authorization_sha256=authorization_sha256,
+    )
+    manifest_sha256, _ = _write_immutable_json(
+        manifest_path,
+        payload,
+        owner_uid=residue["quarantineOwnerUid"],
+        owner_gid=residue["quarantineOwnerGid"],
+        category="quarantine_manifest_invalid",
+    )
+    return manifest_path, manifest_sha256
+
+
+def _trusted_directory_fd(path: Path, category: str) -> int:
+    if path.resolve(strict=True) != path:
+        _fail(category, f"directory traverses a symlink: {path}")
+    metadata = path.lstat()
+    if not stat.S_ISDIR(metadata.st_mode) or stat.S_ISLNK(metadata.st_mode):
+        _fail(category, f"directory is unsafe: {path}")
+    flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_CLOEXEC", 0)
+    flags |= getattr(os, "O_NOFOLLOW", 0)
+    descriptor = os.open(path, flags)
+    opened = os.fstat(descriptor)
+    if (opened.st_dev, opened.st_ino) != (metadata.st_dev, metadata.st_ino):
+        os.close(descriptor)
+        _fail(category, f"directory changed while opening: {path}")
+    return descriptor
+
+
+def _renameat2(source: Path, destination: Path, flags: int) -> None:
+    source_parent_fd = _trusted_directory_fd(source.parent, "quarantine_rename_failed")
+    destination_parent_fd = _trusted_directory_fd(
+        destination.parent,
+        "quarantine_rename_failed",
+    )
+    try:
+        libc = ctypes.CDLL(None, use_errno=True)
+        rename = getattr(libc, "renameat2", None)
+        if rename is None:
+            _fail("quarantine_rename_failed", "renameat2 is unavailable")
+        rename.argtypes = [
+            ctypes.c_int,
+            ctypes.c_char_p,
+            ctypes.c_int,
+            ctypes.c_char_p,
+            ctypes.c_uint,
+        ]
+        rename.restype = ctypes.c_int
+        result = rename(
+            source_parent_fd,
+            os.fsencode(source.name),
+            destination_parent_fd,
+            os.fsencode(destination.name),
+            flags,
+        )
+        if result != 0:
+            error = ctypes.get_errno()
+            raise RecoveryError(
+                "quarantine_rename_failed",
+                f"renameat2 failed with errno {error}",
+            )
+        os.fsync(source_parent_fd)
+        if destination_parent_fd != source_parent_fd:
+            os.fsync(destination_parent_fd)
+    finally:
+        os.close(source_parent_fd)
+        os.close(destination_parent_fd)
+
+
+def _verify_fence_publish_preconditions(
+    *,
+    path: Path,
+    plan: Mapping[str, Any],
+    manifest_path: Path,
+    manifest_sha256: str,
+) -> None:
+    residue = plan["residue"]
+    root = Path(residue["quarantineRoot"])
+    marker = _residue_items(plan)["maintenance_marker"]
+    expected_path = root / marker["quarantineName"]
+    expected_manifest_path = root / residue["manifestName"]
+    if path != expected_path or manifest_path != expected_manifest_path:
+        _fail("recovery_fence_invalid", "recovery fence publish path changed")
+    _verify_quarantine_root(root, plan)
+    manifest_raw, manifest_metadata = _read_regular_bytes(
+        manifest_path,
+        "quarantine_manifest_invalid",
+    )
+    if (
+        manifest_metadata.st_uid != residue["quarantineOwnerUid"]
+        or manifest_metadata.st_gid != residue["quarantineOwnerGid"]
+        or stat.S_IMODE(manifest_metadata.st_mode) != 0o600
+        or manifest_metadata.st_nlink != 1
+        or hashlib.sha256(manifest_raw).hexdigest() != manifest_sha256
+    ):
+        _fail(
+            "quarantine_manifest_invalid",
+            "recovery fence publish manifest binding changed",
+        )
+    _verify_residue_identity(
+        Path(marker["path"]),
+        marker,
+        "recovery_fence_invalid",
+    )
+    final_fence_path = root / residue["finalFenceName"]
+    if _path_lexists(path) or _path_lexists(final_fence_path):
+        _fail(
+            "recovery_fence_invalid",
+            "legacy marker was exchanged before fence publication",
+        )
+
+
+def _create_recovery_fence(
+    path: Path,
+    plan: Mapping[str, Any],
+    *,
+    manifest_path: Path,
+    manifest_sha256: str,
+) -> None:
+    temp_path = _recovery_fence_temp_path(path)
+    if _path_lexists(path):
+        if _path_lexists(temp_path):
+            _fail(
+                "recovery_fence_invalid",
+                "published recovery fence has an unexpected temp sibling",
+            )
+        _verify_fence_identity(path, plan)
+        return
+    _verify_fence_publish_preconditions(
+        path=path,
+        plan=plan,
+        manifest_path=manifest_path,
+        manifest_sha256=manifest_sha256,
+    )
+    parent_fd = _trusted_directory_fd(path.parent, "recovery_fence_invalid")
+    flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_CLOEXEC", 0)
+    flags |= getattr(os, "O_NOFOLLOW", 0)
+    raw = (plan["residue"]["fenceContent"] + "\n").encode("utf-8")
+    descriptor = -1
+    try:
+        if _path_lexists(temp_path):
+            _verify_replayable_fence_temp(temp_path, plan)
+            os.unlink(temp_path.name, dir_fd=parent_fd)
+            os.fsync(parent_fd)
+        descriptor = os.open(temp_path.name, flags, 0o600, dir_fd=parent_fd)
+        os.fchown(
+            descriptor,
+            plan["residue"]["quarantineOwnerUid"],
+            plan["residue"]["quarantineOwnerGid"],
+        )
+        os.fchmod(descriptor, 0o644)
+        offset = 0
+        while offset < len(raw):
+            written = os.write(descriptor, raw[offset:])
+            if written <= 0:
+                raise OSError("recovery fence write made no progress")
+            offset += written
+        os.fsync(descriptor)
+    finally:
+        if descriptor >= 0:
+            os.close(descriptor)
+        os.close(parent_fd)
+    _verify_replayable_fence_temp(temp_path, plan)
+    _verify_fence_publish_preconditions(
+        path=path,
+        plan=plan,
+        manifest_path=manifest_path,
+        manifest_sha256=manifest_sha256,
+    )
+    _renameat2(temp_path, path, RENAME_NOREPLACE)
+    _verify_fence_identity(path, plan)
+
+
+def _quarantine_candidate_residue(
+    *,
+    plan: Mapping[str, Any],
+    plan_sha256: str,
+    implementation_commit: str,
+    authorization: Mapping[str, Any],
+    authorization_sha256: str,
+) -> Mapping[str, Any]:
+    manifest_path, manifest_sha256 = _ensure_quarantine_contract(
+        plan=plan,
+        plan_sha256=plan_sha256,
+        implementation_commit=implementation_commit,
+        authorization=authorization,
+        authorization_sha256=authorization_sha256,
+    )
+    root = Path(plan["residue"]["quarantineRoot"])
+    items = _residue_items(plan)
+    marker = items["maintenance_marker"]
+    marker_source = Path(marker["path"])
+    marker_destination = root / marker["quarantineName"]
+    if not _path_lexists(marker_destination):
+        _verify_residue_identity(marker_source, marker)
+        _create_recovery_fence(
+            marker_destination,
+            plan,
+            manifest_path=manifest_path,
+            manifest_sha256=manifest_sha256,
+        )
+    source_identity = _stable_path_identity(marker_source, "recovery_fence_invalid")
+    if source_identity == _expected_identity(marker):
+        _verify_fence_identity(marker_destination, plan)
+        _renameat2(marker_source, marker_destination, RENAME_EXCHANGE)
+    _verify_fence_identity(marker_source, plan)
+    _verify_residue_identity(marker_destination, marker)
+
+    for item_id, item in items.items():
+        if item_id == "maintenance_marker":
+            continue
+        source = Path(item["path"])
+        destination = root / item["quarantineName"]
+        if _path_lexists(source):
+            if _path_lexists(destination):
+                _fail(
+                    "quarantine_state_invalid",
+                    f"both live and quarantine paths exist: {item_id}",
+                )
+            _verify_residue_identity(source, item)
+            _renameat2(source, destination, RENAME_NOREPLACE)
+        _verify_residue_identity(destination, item)
+
+    _run_text(
+        ["systemctl", "daemon-reload"],
+        category="candidate_daemon_reload_failed",
+    )
+    _verify_candidate_detached_after_reload(plan)
+    state = _collect_residue_state(plan, plan_sha256)
+    if (
+        state.get("stage") != "quarantined_fenced"
+        or state.get("manifestSha256") != manifest_sha256
+        or state.get("manifestPath") != str(manifest_path)
+    ):
+        _fail("quarantine_incomplete", "Candidate residue quarantine is incomplete")
+    return state
+
+
+def _finalization_receipt_path(
+    plan: Mapping[str, Any],
+    plan_sha256: str,
+) -> Path:
+    receipt_root, operation_path = _receipt_path(plan, plan_sha256)
+    return receipt_root / operation_path.parent.name / f"{plan_sha256}.finalization.json"
+
+
+def _build_finalization_receipt(
+    *,
+    plan: Mapping[str, Any],
+    plan_sha256: str,
+    implementation_commit: str,
+    quarantine_state: Mapping[str, Any],
+) -> Mapping[str, Any]:
+    fence_path = Path(plan["runtime"]["deploymentMarker"])
+    fence_identity = _verify_fence_identity(fence_path, plan)
+    return {
+        "schemaVersion": 1,
+        "kind": "pre_switch_abort_fence_finalization",
+        "decision": "fence_finalization_authorized",
+        "incidentId": plan["incidentId"],
+        "identity": plan["checkpoint"]["identity"],
+        "implementation": {
+            "commit": implementation_commit,
+            "planSha256": plan_sha256,
+        },
+        "quarantineManifest": {
+            "path": quarantine_state["manifestPath"],
+            "sha256": quarantine_state["manifestSha256"],
+        },
+        "fence": {
+            "livePath": str(fence_path),
+            "finalPath": quarantine_state["finalFencePath"],
+            "identity": fence_identity,
+        },
+        "createdAt": dt.datetime.now(dt.timezone.utc)
+        .isoformat(timespec="milliseconds")
+        .replace("+00:00", "Z"),
+    }
+
+
+def _finalize_recovery_fence(
+    plan: Mapping[str, Any],
+    finalization_receipt: Mapping[str, Any],
+) -> Mapping[str, Any]:
+    fence = finalization_receipt.get("fence")
+    if not isinstance(fence, dict):
+        _fail("finalization_receipt_invalid", "finalization fence proof is missing")
+    live_path = Path(str(fence.get("livePath") or ""))
+    final_path = Path(str(fence.get("finalPath") or ""))
+    expected_live = Path(plan["runtime"]["deploymentMarker"])
+    expected_final = (
+        Path(plan["residue"]["quarantineRoot"])
+        / plan["residue"]["finalFenceName"]
+    )
+    if live_path != expected_live or final_path != expected_final:
+        _fail("finalization_receipt_invalid", "finalization paths changed")
+    if _path_lexists(live_path):
+        if _path_lexists(final_path):
+            _fail("finalization_state_invalid", "both live and final fences exist")
+        actual = _verify_fence_identity(live_path, plan)
+        if actual != fence.get("identity"):
+            _fail("finalization_state_invalid", "live recovery fence identity changed")
+        _renameat2(live_path, final_path, RENAME_NOREPLACE)
+    final_identity = _verify_fence_identity(final_path, plan)
+    if final_identity != fence.get("identity") or _path_lexists(live_path):
+        _fail("finalization_state_invalid", "recovery fence finalization is incomplete")
+    return final_identity
+
+
 def _receipt_path(plan: Mapping[str, Any], plan_sha256: str) -> tuple[Path, Path]:
     checkpoint_path = Path(plan["checkpoint"]["path"])
     state_root = checkpoint_path.parents[2]
@@ -1780,9 +3185,14 @@ def _build_receipt(
     implementation_commit: str,
     observation: Mapping[str, Any],
     lock: Mapping[str, Any],
+    authorization: Mapping[str, Any] | None = None,
+    authorization_sha256: str | None = None,
+    quarantine_state: Mapping[str, Any] | None = None,
+    finalization_path: Path | None = None,
+    finalization_sha256: str | None = None,
 ) -> Mapping[str, Any]:
     checkpoint, checkpoint_raw, _ = _read_checkpoint_state(plan)
-    return {
+    receipt: dict[str, Any] = {
         "schemaVersion": _receipt_schema_version_for_plan(plan),
         "kind": "pre_switch_abort",
         "decision": "pre_switch_abort_verified",
@@ -1831,6 +3241,51 @@ def _build_receipt(
         .isoformat(timespec="milliseconds")
         .replace("+00:00", "Z"),
     }
+    if _plan_schema_version(plan) == 3:
+        if (
+            authorization is None
+            or authorization_sha256 is None
+            or quarantine_state is None
+            or finalization_path is None
+            or finalization_sha256 is None
+        ):
+            _fail("recovery_receipt_invalid", "schema v3 receipt proof is incomplete")
+        root = Path(plan["residue"]["quarantineRoot"])
+        receipt["authorization"] = {
+            **authorization,
+            "authorizationSha256": authorization_sha256,
+        }
+        receipt["residue"] = {
+            "profile": plan["residue"]["profile"],
+            "inventoryDigest": quarantine_state["inventoryDigest"],
+            "quarantineRoot": str(root),
+            "manifestPath": quarantine_state["manifestPath"],
+            "manifestSha256": quarantine_state["manifestSha256"],
+            "items": [
+                {
+                    "id": item["id"],
+                    "sourcePath": item["path"],
+                    "quarantinePath": str(root / item["quarantineName"]),
+                    "identity": _expected_identity(item),
+                }
+                for item in plan["residue"]["items"]
+            ],
+            "retainedEvidence": [
+                {
+                    "id": item["id"],
+                    "path": item["path"],
+                    "identity": _expected_identity(item),
+                }
+                for item in plan["residue"]["retainedEvidence"]
+            ],
+            "requiredAbsentPaths": plan["residue"]["requiredAbsentPaths"],
+            "recoveryFencePresentAtSeal": True,
+        }
+        receipt["finalizationReceipt"] = {
+            "path": str(finalization_path),
+            "sha256": finalization_sha256,
+        }
+    return receipt
 
 
 def _write_receipt(
@@ -1945,6 +3400,50 @@ def _load_bound_terminal_receipt(
     return payload
 
 
+def _load_finalization_receipt(
+    plan: Mapping[str, Any],
+    plan_sha256: str,
+    operation_receipt: Mapping[str, Any],
+) -> Mapping[str, Any]:
+    binding = operation_receipt.get("finalizationReceipt")
+    if not isinstance(binding, dict) or set(binding) != {"path", "sha256"}:
+        _fail("finalization_receipt_invalid", "finalization binding is missing")
+    expected_path = _finalization_receipt_path(plan, plan_sha256)
+    path = Path(str(binding.get("path") or ""))
+    digest = _require_sha256(
+        binding.get("sha256"),
+        "finalization_receipt_invalid",
+    )
+    if path != expected_path:
+        _fail("finalization_receipt_invalid", "finalization receipt path changed")
+    payload, raw, _ = _read_json(path, "finalization_receipt_invalid")
+    implementation = payload.get("implementation")
+    if (
+        hashlib.sha256(raw).hexdigest() != digest
+        or payload.get("schemaVersion") != 1
+        or payload.get("kind") != "pre_switch_abort_fence_finalization"
+        or payload.get("decision") != "fence_finalization_authorized"
+        or payload.get("incidentId") != plan["incidentId"]
+        or payload.get("identity") != plan["checkpoint"]["identity"]
+        or not isinstance(implementation, dict)
+        or implementation.get("planSha256") != plan_sha256
+        or not GIT_SHA_PATTERN.fullmatch(str(implementation.get("commit") or ""))
+    ):
+        _fail("finalization_receipt_invalid", "finalization receipt identity changed")
+    return payload
+
+
+def _production_invariant_snapshot(observation: Mapping[str, Any]) -> Mapping[str, Any]:
+    runtime = dict(observation["runtime"])
+    runtime.pop("maintenanceMarkerPresent", None)
+    return {
+        "active": observation["active"],
+        "public": observation["public"],
+        "database": observation["database"],
+        "runtime": runtime,
+    }
+
+
 def recover(
     *,
     plan_path: Path,
@@ -1954,6 +3453,8 @@ def recover(
     lock_path: Path,
     lock_holder_pid: int,
     mode: str,
+    dry_run_authorization_path: Path | None = None,
+    dry_run_authorization_sha256: str | None = None,
 ) -> Mapping[str, Any]:
     if mode not in {"dry-run", "apply"}:
         _fail("mode_invalid", "mode must be dry-run or apply")
@@ -1965,6 +3466,40 @@ def recover(
         plan_path,
         expected_plan_sha256,
     )
+    plan_version = _plan_schema_version(plan)
+    authorization: Mapping[str, Any] | None = None
+    authorization_sha256: str | None = None
+    if plan_version == 3 and mode == "apply":
+        if dry_run_authorization_path is None or dry_run_authorization_sha256 is None:
+            if (
+                dry_run_authorization_path is not None
+                or dry_run_authorization_sha256 is not None
+            ):
+                _fail(
+                    "dry_run_authorization_invalid",
+                    "authorization path and SHA-256 must be supplied together",
+                )
+            (
+                dry_run_authorization_path,
+                dry_run_authorization_sha256,
+            ) = _bundled_dry_run_authorization(
+                bundle_root=bundle_root,
+                plan_sha256=plan_sha256,
+                implementation_commit=implementation_commit,
+            )
+        authorization, authorization_sha256 = _load_dry_run_authorization(
+            path=dry_run_authorization_path,
+            expected_sha256=dry_run_authorization_sha256,
+            bundle_root=bundle_root,
+            plan=plan,
+            plan_sha256=plan_sha256,
+            implementation_commit=implementation_commit,
+        )
+    elif dry_run_authorization_path is not None or dry_run_authorization_sha256 is not None:
+        _fail(
+            "dry_run_authorization_invalid",
+            "reviewed dry-run authorization is accepted only by schema v3 apply",
+        )
     checkpoint_path = Path(plan["checkpoint"]["path"])
     state_root = checkpoint_path.parents[2]
     expected_lock_path = state_root / "production-deploy.lock"
@@ -1978,16 +3513,40 @@ def recover(
     if checkpoint["phase"] == PRE_SWITCH_ABORT_PHASE:
         _validate_backup_chain(plan)
         _validate_legacy_archive_and_source(plan)
-        validate_pre_switch_abort_settlement(
-            checkpoint_path=checkpoint_path,
-            checkpoints_root=state_root / "checkpoints",
-        )
         receipt = _load_bound_terminal_receipt(
             plan,
             plan_sha256,
             checkpoint,
         )
-        observation = collect_observation(plan, bundle_root)
+        if plan_version == 3:
+            receipt_authorization = receipt.get("authorization")
+            if (
+                mode == "apply"
+                and (
+                    not isinstance(receipt_authorization, dict)
+                    or authorization is None
+                    or authorization_sha256 is None
+                    or receipt_authorization
+                    != {**authorization, "authorizationSha256": authorization_sha256}
+                )
+            ):
+                _fail(
+                    "dry_run_authorization_invalid",
+                    "terminal recovery binds a different dry-run authorization",
+                )
+            finalization = _load_finalization_receipt(plan, plan_sha256, receipt)
+            if _path_lexists(Path(plan["runtime"]["deploymentMarker"])):
+                if mode != "apply":
+                    _fail(
+                        "fence_finalization_required",
+                        "terminal checkpoint still has its recovery fence",
+                    )
+                _finalize_recovery_fence(plan, finalization)
+        validate_pre_switch_abort_settlement(
+            checkpoint_path=checkpoint_path,
+            checkpoints_root=state_root / "checkpoints",
+        )
+        observation = collect_observation(plan, bundle_root, plan_sha256)
         validate_observation(plan, observation)
         return {
             "decision": "already-pre-switch-aborted",
@@ -1998,7 +3557,11 @@ def recover(
             "receiptCreatedAt": receipt.get("createdAt"),
             "activeCommit": observation["active"]["frontendCommit"],
             "candidatePresent": False,
+            "candidateStarted": False,
             "trafficChanged": False,
+            "databaseChanged": False,
+            "checkpointChanged": False,
+            "mutationPerformed": False,
             "mode": mode,
         }
 
@@ -2009,7 +3572,7 @@ def recover(
         current_checkpoint=checkpoint_path,
         expected_identity=identity,
     )
-    observation = collect_observation(plan, bundle_root)
+    observation = collect_observation(plan, bundle_root, plan_sha256)
     validate_observation(plan, observation)
     checkpoint_after, raw_after, metadata_after = _read_checkpoint_state(plan)
     if (
@@ -2039,16 +3602,61 @@ def recover(
         "databaseRevisions": observation["database"]["currentRevisions"],
         "activeCommit": observation["active"]["frontendCommit"],
         "candidatePresent": False,
+        "candidateStarted": False,
         "trafficChanged": False,
+        "databaseChanged": False,
+        "checkpointChanged": False,
+        "mutationPerformed": False,
         "mode": mode,
         "otherReleaseGate": cross_release_state["decision"],
     }
+    if plan_version == 3:
+        residue_state = observation["residue"]
+        result.update(
+            {
+                "targetIdentity": plan["checkpoint"]["identity"],
+                "inventoryDigest": residue_state["inventoryDigest"],
+                "candidateResiduePresent": residue_state["stage"] != "finalized",
+            }
+        )
     if mode == "dry-run":
-        result["decision"] = "dry-run-eligible"
+        if plan_version == 3:
+            if observation["residue"]["stage"] != "initial":
+                _fail(
+                    "dry_run_not_eligible",
+                    "schema v3 dry-run requires the exact untouched residue preimage",
+                )
+            result["decision"] = "candidate-residue-dry-run-eligible"
+        else:
+            result["decision"] = "dry-run-eligible"
         return result
-    final_observation = collect_observation(plan, bundle_root)
+    if plan_version == 3:
+        assert authorization is not None
+        assert authorization_sha256 is not None
+        quarantine_state = _quarantine_candidate_residue(
+            plan=plan,
+            plan_sha256=plan_sha256,
+            implementation_commit=implementation_commit,
+            authorization=authorization,
+            authorization_sha256=authorization_sha256,
+        )
+    else:
+        quarantine_state = None
+    final_observation = collect_observation(plan, bundle_root, plan_sha256)
     validate_observation(plan, final_observation)
-    if final_observation != observation:
+    if (
+        plan_version == 3
+        and final_observation["candidate"]["lifetime"]["ownedSourceReferences"]
+    ):
+        _fail(
+            "candidate_daemon_reload_failed",
+            "Candidate sources were not detached before recovery settlement",
+        )
+    if (
+        plan_version == 3
+        and _production_invariant_snapshot(final_observation)
+        != _production_invariant_snapshot(observation)
+    ) or (plan_version != 3 and final_observation != observation):
         _fail(
             "production_changed_during_settlement",
             "runtime or database state changed before recovery settlement",
@@ -2076,12 +3684,42 @@ def recover(
         _fail("checkpoint_changed", "checkpoint changed before receipt write")
 
     receipt_root, receipt_path = _receipt_path(plan, plan_sha256)
+    finalization_path: Path | None = None
+    finalization_sha256: str | None = None
+    finalization_reused = False
+    if plan_version == 3:
+        assert quarantine_state is not None
+        finalization_path = _finalization_receipt_path(plan, plan_sha256)
+        ensure_private_state_directory(
+            finalization_path.parent,
+            owner_uid=checkpoint_metadata.st_uid,
+            owner_gid=checkpoint_metadata.st_gid,
+        )
+        finalization_payload = _build_finalization_receipt(
+            plan=plan,
+            plan_sha256=plan_sha256,
+            implementation_commit=implementation_commit,
+            quarantine_state=quarantine_state,
+        )
+        finalization_sha256, finalization_reused = _write_immutable_json(
+            finalization_path,
+            finalization_payload,
+            owner_uid=checkpoint_metadata.st_uid,
+            owner_gid=checkpoint_metadata.st_gid,
+            category="finalization_receipt_invalid",
+            ignore_created_at=True,
+        )
     receipt = _build_receipt(
         plan=plan,
         plan_sha256=plan_sha256,
         implementation_commit=implementation_commit,
         observation=final_observation,
         lock=lock,
+        authorization=authorization,
+        authorization_sha256=authorization_sha256,
+        quarantine_state=quarantine_state,
+        finalization_path=finalization_path,
+        finalization_sha256=finalization_sha256,
     )
     receipt_sha256, reused = _write_receipt(
         receipt_path,
@@ -2089,7 +3727,7 @@ def recover(
         owner_uid=checkpoint_metadata.st_uid,
         owner_gid=checkpoint_metadata.st_gid,
     )
-    seal_observation = collect_observation(plan, bundle_root)
+    seal_observation = collect_observation(plan, bundle_root, plan_sha256)
     validate_observation(plan, seal_observation)
     if seal_observation != final_observation:
         _fail(
@@ -2127,14 +3765,48 @@ def recover(
         owner_uid=checkpoint_metadata.st_uid,
         owner_gid=checkpoint_metadata.st_gid,
     )
+    if plan_version == 3:
+        finalization = _load_finalization_receipt(plan, plan_sha256, receipt)
+        _finalize_recovery_fence(plan, finalization)
+        finalized_observation = collect_observation(plan, bundle_root, plan_sha256)
+        validate_observation(plan, finalized_observation)
+        if (
+            finalized_observation["residue"]["stage"] != "finalized"
+            or _production_invariant_snapshot(finalized_observation)
+            != _production_invariant_snapshot(observation)
+        ):
+            _fail(
+                "fence_finalization_incomplete",
+                "finalized recovery changed production invariants",
+            )
+        validate_pre_switch_abort_settlement(
+            checkpoint_path=checkpoint_path,
+            checkpoints_root=state_root / "checkpoints",
+        )
     result.update(
         {
-            "decision": "pre-switch-aborted",
+            "decision": (
+                "pre-switch-residue-quarantined-and-aborted"
+                if plan_version == 3
+                else "pre-switch-aborted"
+            ),
             "checkpointPhase": settled["phase"],
             "checkpointSequence": settled["sequence"],
             "receiptPath": str(receipt_path),
             "receiptSha256": receipt_sha256,
             "receiptReused": reused,
+            "checkpointChanged": True,
+            "mutationPerformed": True,
+            **(
+                {
+                    "finalizationReceiptPath": str(finalization_path),
+                    "finalizationReceiptSha256": finalization_sha256,
+                    "finalizationReceiptReused": finalization_reused,
+                    "candidateResiduePresent": False,
+                }
+                if plan_version == 3
+                else {}
+            ),
         }
     )
     return result
@@ -2155,6 +3827,19 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--lock-path", required=True, type=Path)
     parser.add_argument("--lock-holder-pid", required=True, type=_positive_int)
     parser.add_argument("--mode", choices=("dry-run", "apply"), required=True)
+    parser.add_argument(
+        "--dry-run-authorization",
+        type=Path,
+        default=(
+            Path(os.environ["RECOVERY_DRY_RUN_AUTHORIZATION_PATH"])
+            if os.environ.get("RECOVERY_DRY_RUN_AUTHORIZATION_PATH")
+            else None
+        ),
+    )
+    parser.add_argument(
+        "--dry-run-authorization-sha256",
+        default=os.environ.get("RECOVERY_DRY_RUN_AUTHORIZATION_SHA256"),
+    )
     return parser
 
 
@@ -2169,6 +3854,10 @@ def main(argv: Sequence[str] | None = None) -> int:
             lock_path=arguments.lock_path,
             lock_holder_pid=arguments.lock_holder_pid,
             mode=arguments.mode,
+            dry_run_authorization_path=arguments.dry_run_authorization,
+            dry_run_authorization_sha256=(
+                arguments.dry_run_authorization_sha256
+            ),
         )
     except RecoveryError as exc:
         print(

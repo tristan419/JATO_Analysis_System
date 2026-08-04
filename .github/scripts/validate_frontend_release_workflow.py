@@ -30,12 +30,33 @@ RELEASE_STORAGE_GUARD_PATH = (
     REPO_ROOT / "03_Scripts/deploy/jato_release_storage_guard.py"
 )
 MAIN_CONDITION = "github.ref == 'refs/heads/main'"
+RELEASE_DEPLOY_CONDITION = (
+    MAIN_CONDITION
+    + " && needs.release_coordination_guard.outputs.release-action == 'deploy'"
+)
+PRODUCTION_HOLD_SCRIPT = ".github/scripts/production_release_hold.py"
+PRODUCTION_HOLD_PATH = (
+    ".github/recovery-plans/"
+    "2026-08-03-29df-pre-switch-candidate-residue-production-hold.v1.json"
+)
+PRODUCTION_HOLD_RETIREMENT_PATH = (
+    ".github/recovery-plans/"
+    "2026-08-03-29df-pre-switch-candidate-residue-"
+    "production-hold-retirement.v1.json"
+)
+PRODUCTION_HOLD_PLAN_PATH = (
+    ".github/recovery-plans/"
+    "2026-08-03-29df-pre-switch-candidate-residue.json"
+)
 PREWARM_CONDITION = " ".join(
     (
         "github.event.workflow_run.conclusion == 'success' &&",
         "github.event.workflow_run.head_branch == 'main' &&",
         "github.event.workflow_run.head_repository.full_name == github.repository",
     )
+)
+PREWARM_DEPLOY_CONDITION = (
+    "steps.production_hold.outputs.release-action == 'deploy'"
 )
 BUILD_JOB = "build_frontend"
 COORDINATION_JOB = "release_coordination_guard"
@@ -212,12 +233,70 @@ def assert_main_only_production_workflow(workflow: Mapping[str, Any]) -> None:
         )
     for name in expected_jobs:
         condition = unwrap_expression(job(workflow, name).get("if"))
-        if condition != MAIN_CONDITION:
-            raise AssertionError(f"{name} must use the exact main-only condition")
+        expected_condition = (
+            MAIN_CONDITION if name == COORDINATION_JOB else RELEASE_DEPLOY_CONDITION
+        )
+        if condition != expected_condition:
+            raise AssertionError(
+                f"{name} must use the exact main-and-release-action condition"
+            )
     for name in DEPLOY_JOBS:
         deploy_job = job(workflow, name)
         if deploy_job.get("environment") != "production":
             raise AssertionError(f"{name} must use the production environment")
+
+
+def assert_production_hold_gate_contract(workflow: Mapping[str, Any]) -> None:
+    triggers = mapping(workflow.get("on"), "production workflow on")
+    push = mapping(triggers.get("push"), "production workflow push")
+    push_paths = set(sequence(push.get("paths"), "production workflow push.paths"))
+    required_paths = {
+        PRODUCTION_HOLD_SCRIPT,
+        PRODUCTION_HOLD_PATH,
+        PRODUCTION_HOLD_RETIREMENT_PATH,
+        PRODUCTION_HOLD_PLAN_PATH,
+    }
+    if not required_paths.issubset(push_paths):
+        raise AssertionError(
+            "production push paths must trigger on hold helper, document, and plan"
+        )
+
+    guard = job(workflow, COORDINATION_JOB)
+    guard_outputs = mapping(guard.get("outputs"), "release coordination outputs")
+    if dict(guard_outputs) != {
+        "release-action": "${{ steps.production_hold.outputs.release-action }}",
+    }:
+        raise AssertionError("release coordination output must be exact hold or deploy")
+    guard_steps = steps(guard, COORDINATION_JOB)
+    hold_step = step_by_name(guard_steps, "Resolve reviewed production release hold")
+    if hold_step.get("id") != "production_hold":
+        raise AssertionError("production hold resolver step ID changed")
+    hold_command = str(hold_step.get("run") or "")
+    for required in (
+        PRODUCTION_HOLD_SCRIPT,
+        "resolve",
+        '--github-output "$GITHUB_OUTPUT"',
+    ):
+        if required not in hold_command:
+            raise AssertionError(f"production hold resolver is missing {required!r}")
+    if "secrets." in str(guard):
+        raise AssertionError("production release hold guard must not consume secrets")
+
+    expected_needs = {
+        BUILD_JOB: COORDINATION_JOB,
+        "deploy_tencent": [COORDINATION_JOB, BUILD_JOB],
+        "audit_frontend_parity": [
+            COORDINATION_JOB,
+            BUILD_JOB,
+            "deploy_tencent",
+        ],
+    }
+    for name, needs in expected_needs.items():
+        downstream = job(workflow, name)
+        if downstream.get("needs") != needs:
+            raise AssertionError(f"{name} lost its direct production hold dependency")
+        if unwrap_expression(downstream.get("if")) != RELEASE_DEPLOY_CONDITION:
+            raise AssertionError(f"{name} lost the exact hold/deploy output gate")
 
 
 def assert_single_build_and_strict_outputs(workflow: Mapping[str, Any]) -> None:
@@ -276,7 +355,7 @@ def assert_single_build_and_strict_outputs(workflow: Mapping[str, Any]) -> None:
 def assert_deploy_jobs_share_one_artifact(workflow: Mapping[str, Any]) -> None:
     for name in DEPLOY_JOBS:
         deploy_job = job(workflow, name)
-        expected_needs: Any = BUILD_JOB
+        expected_needs: Any = [COORDINATION_JOB, BUILD_JOB]
         if deploy_job.get("needs") != expected_needs:
             raise AssertionError(
                 f"{name} needs mismatch: expected {expected_needs!r}, "
@@ -458,7 +537,7 @@ def assert_deploy_jobs_share_one_artifact(workflow: Mapping[str, Any]) -> None:
         raise AssertionError("www runtime APIs must pass before www_verified is recorded")
 
     audit_needs = job(workflow, "audit_frontend_parity").get("needs")
-    if audit_needs != [BUILD_JOB, "deploy_tencent"]:
+    if audit_needs != [COORDINATION_JOB, BUILD_JOB, "deploy_tencent"]:
         raise AssertionError("parity audit must wait for the single production deployment job")
 
 
@@ -1415,6 +1494,30 @@ def assert_prewarm_contract(production_name: str) -> None:
         raise AssertionError("prewarm must require completed success from main repository")
     prewarm_steps = steps(prewarm_job, "prewarm")
     names = [str(step.get("name") or "") for step in prewarm_steps]
+    if names[:2] != [
+        "Checkout completed production release",
+        "Resolve completed production release action",
+    ]:
+        raise AssertionError(
+            "prewarm must resolve the exact completed SHA's release action first"
+        )
+    hold_step = prewarm_steps[1]
+    if hold_step.get("id") != "production_hold":
+        raise AssertionError("prewarm hold resolver step ID changed")
+    hold_command = str(hold_step.get("run") or "")
+    for required in (
+        PRODUCTION_HOLD_SCRIPT,
+        "resolve",
+        '--github-output "$GITHUB_OUTPUT"',
+    ):
+        if required not in hold_command:
+            raise AssertionError(f"prewarm hold resolver is missing {required!r}")
+    for step in prewarm_steps[2:]:
+        if unwrap_expression(step.get("if")) != PREWARM_DEPLOY_CONDITION:
+            raise AssertionError(
+                "every prewarm artifact/provenance/cache step must use the exact "
+                "release-action gate"
+            )
     verify_name = "Verify completed immutable release and intl provenance"
     if names.index(verify_name) > names.index("Prewarm intl edge cache"):
         raise AssertionError("prewarm must verify release provenance before warming")
@@ -1553,6 +1656,7 @@ def assert_required_ci_contract() -> None:
     for required in (
         "validate_production_workflow_guards.py",
         "test_release_coordination_guard.py",
+        "test_production_release_hold.py",
     ):
         if required not in production_guard_commands:
             raise AssertionError(
@@ -1571,6 +1675,7 @@ def main() -> None:
     if production_name != "production-release":
         raise AssertionError("production workflow name must be production-release")
     assert_main_only_production_workflow(production)
+    assert_production_hold_gate_contract(production)
     assert_single_build_and_strict_outputs(production)
     assert_deploy_jobs_share_one_artifact(production)
     assert_tencent_resumable_upload_contract(production)

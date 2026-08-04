@@ -29,7 +29,15 @@ jobs:
         with:
           ref: ${{ github.event.workflow_run.head_sha }}
 
+      - name: Resolve completed production release action
+        id: production_hold
+        run: >-
+          python3 .github/scripts/production_release_hold.py
+          resolve
+          --github-output "$GITHUB_OUTPUT"
+
       - name: Resolve the completed run artifact identity
+        if: ${{ steps.production_hold.outputs.release-action == 'deploy' }}
         id: artifact
         env:
           GH_TOKEN: ${{ github.token }}
@@ -61,6 +69,7 @@ jobs:
           echo "identity=$artifact_identity" >> "$GITHUB_OUTPUT"
 
       - name: Download completed production artifact by id
+        if: ${{ steps.production_hold.outputs.release-action == 'deploy' }}
         uses: actions/download-artifact@v5
         with:
           artifact-ids: ${{ steps.artifact.outputs.id }}
@@ -70,6 +79,7 @@ jobs:
           run-id: ${{ github.event.workflow_run.id }}
 
       - name: Read immutable manifest contract
+        if: ${{ steps.production_hold.outputs.release-action == 'deploy' }}
         id: manifest
         run: |
           set -euo pipefail
@@ -101,6 +111,7 @@ jobs:
           PY
 
       - name: Verify completed immutable release and intl provenance
+        if: ${{ steps.production_hold.outputs.release-action == 'deploy' }}
         env:
           RELEASE_RUN_ID: ${{ github.event.workflow_run.id }}
           RELEASE_RUN_ATTEMPT: ${{ github.event.workflow_run.run_attempt }}
@@ -132,11 +143,13 @@ jobs:
             --delay-seconds 10
 
       - name: Setup release Node version
+        if: ${{ steps.production_hold.outputs.release-action == 'deploy' }}
         uses: actions/setup-node@v4
         with:
           node-version: ${{ steps.manifest.outputs.node-version }}
 
       - name: Prewarm intl edge cache
+        if: ${{ steps.production_hold.outputs.release-action == 'deploy' }}
         working-directory: 06_AppPlatform/frontend
         env:
           JATO_PREWARM_ORIGIN: ${{ vars.JATO_INTL_ORIGIN || 'https://intl.ojeur.cloud' }}

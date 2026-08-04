@@ -26,7 +26,11 @@ jobs:
         run: python .github/scripts/validate_production_workflow_guards.py
 
       - name: Test release coordination fail-closed behavior
-        run: python -m unittest 03_Scripts/tests/test_release_coordination_guard.py -v
+        run: >-
+          python -m unittest
+          03_Scripts/tests/test_release_coordination_guard.py
+          03_Scripts/tests/test_production_release_hold.py
+          -v
 
   frontend-release-contract:
     runs-on: ubuntu-latest
@@ -93,6 +97,8 @@ jobs:
             03_Scripts/tests/test_jato_release_storage_guard.py \
             03_Scripts/tests/test_tencent_feature_candidate_canary.py \
             03_Scripts/tests/test_tencent_bluegreen_release.py \
+            03_Scripts/tests/test_candidate_runtime_preimage.py \
+            03_Scripts/tests/test_reviewed_recovery_authorization.py \
             03_Scripts/tests/test_validate_release_archive.py \
             03_Scripts/tests/test_cleanup_toolkit_egg_info.py \
             03_Scripts/tests/test_release_source_seal.py \
