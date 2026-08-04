@@ -80,7 +80,8 @@ def _run_controller_harness(
     if env_overrides:
         environment.update(env_overrides)
     return subprocess.run(
-        ["bash", "-c", f"{_controller_prelude()}\n{body}\n"],
+        ["bash", "-s"],
+        input=f"{_controller_prelude()}\n{body}\n",
         env=environment,
         text=True,
         capture_output=True,
@@ -504,7 +505,8 @@ candidate_atomic_symlink() {{
 unit_property_equals() {{ return 0; }}
 sudo() {{
   shift
-  if [[ "{failure}" == set_property && "$*" == "systemctl set-property jato-fullstack-backend@8001 MemoryHigh=3G MemoryMax=4G CPUQuota=100%" ]]; then
+  if [[ "{failure}" == set_property ]] &&
+    [[ "$*" == "systemctl set-property jato-fullstack-backend@8001 MemoryHigh=3G MemoryMax=4G CPUQuota=100%" ]]; then
     return 1
   fi
   return 0
