@@ -1,0 +1,36 @@
+{
+  "candidatePreimageHelperSha256": "10439eb372e5f29e3eb2bfa2081d87be87f62b7e3b94d599b92910314be945a9",
+  "checkpointSha256": "bf21e1379fa66ff4710160af1d5f2235172b19af7501a65719b1e6a64f142652",
+  "evidenceSha256": "43e91dbdeb109d2eae8f5ecd31a837b48ee422c5dd91c6d78997174809be8501",
+  "expectedActiveCommit": "cd4557cb932374a0fefb6c80a5fac9fb75a67d62",
+  "expectedDatabaseRevision": "20260715_0046",
+  "identity": {
+    "archiveBytes": 22604547,
+    "archiveSha256": "a911f016a5866c8d93023a9db6e3884b898ab74dddf8dd9dc47e06049e41b215",
+    "commit": "73980b57176301e1fb2f59663f42c292d9eb9e7e",
+    "frontendChecksum": "30601acd7f51c737d0c612b3ea9840e6d26d1bb136098d8afea3ba24a8e1d6a7",
+    "frontendIdentity": "gha://tristan419/JATO_Analysis_System/actions/runs/30915744371/attempts/1/artifacts/frontend-dist-73980b57176301e1fb2f59663f42c292d9eb9e7e",
+    "repository": "tristan419/JATO_Analysis_System",
+    "runAttempt": 1,
+    "runId": 30915744371
+  },
+  "incidentId": "2026-08-04-73980-candidate-data-path-contract",
+  "kind": "failed_candidate_preimage_settlement",
+  "paths": {
+    "activeSlotFile": "/var/lib/jato-release/active-slot",
+    "backendEnvFile": "/etc/jato-fullstack/backend.env",
+    "candidatePreimageRoot": "/var/lib/jato-release-preimages",
+    "candidatePreviewStateRoot": "/var/lib/jato-release/candidate-preview/73980b57176301e1fb2f59663f42c292d9eb9e7e/a911f016a5866c8d93023a9db6e3884b898ab74dddf8dd9dc47e06049e41b215",
+    "checkpoint": "/home/ubuntu/.local/state/jato-production-release/checkpoints/73980b57176301e1fb2f59663f42c292d9eb9e7e/a911f016a5866c8d93023a9db6e3884b898ab74dddf8dd9dc47e06049e41b215.json",
+    "deploymentMarker": "/var/lib/jato-release/deployment-maintenance",
+    "evidence": "/home/ubuntu/.local/state/jato-production-release/checkpoints/73980b57176301e1fb2f59663f42c292d9eb9e7e/a911f016a5866c8d93023a9db6e3884b898ab74dddf8dd9dc47e06049e41b215.evidence.json",
+    "journal": "/home/ubuntu/.local/state/jato-production-release/journals/73980b57176301e1fb2f59663f42c292d9eb9e7e/a911f016a5866c8d93023a9db6e3884b898ab74dddf8dd9dc47e06049e41b215.jsonl",
+    "productionLock": "/home/ubuntu/.local/state/jato-production-release/production-deploy.lock",
+    "releaseRoot": "/opt/jato/releases/73980b57176301e1fb2f59663f42c292d9eb9e7e/a911f016a5866c8d93023a9db6e3884b898ab74dddf8dd9dc47e06049e41b215",
+    "schedulerStateFile": "/var/lib/jato-release/scheduler-state.tsv",
+    "slotEnvRoot": "/etc/jato-fullstack/slots",
+    "slotsRoot": "/opt/jato/slots",
+    "stateRoot": "/var/lib/jato-release"
+  },
+  "schemaVersion": 1
+}

@@ -1,0 +1,201 @@
+name: settle-failed-candidate-preimage
+
+on:
+  workflow_dispatch:
+    inputs:
+      confirm_settlement:
+        description: I confirm the exact failed pre-switch Candidate may be restored and settled
+        required: true
+        type: boolean
+        default: false
+
+permissions:
+  actions: read
+  contents: read
+
+concurrency:
+  group: production-release-main
+  cancel-in-progress: false
+
+jobs:
+  settle:
+    if: ${{ github.ref == 'refs/heads/main' }}
+    environment: production
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      SETTLEMENT_PLAN: .github/recovery-plans/2026-08-04-73980-candidate-preimage.json
+
+    steps:
+      - name: Checkout settlement control plane
+        uses: actions/checkout@v5
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+
+      - name: Validate exact failed Candidate request
+        env:
+          CONFIRM_SETTLEMENT: ${{ inputs.confirm_settlement }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          test "$CONFIRM_SETTLEMENT" = "true"
+          test "$GITHUB_REF" = "refs/heads/main"
+          python3 -m py_compile \
+            .github/scripts/settle_failed_candidate_preimage.py \
+            .github/scripts/settle_unstarted_candidate.py \
+            03_Scripts/deploy/candidate_runtime_preimage.py \
+            03_Scripts/deploy/release_checkpoint.py
+          gh api "repos/$GITHUB_REPOSITORY/actions/runs/30915744371" \
+            > "$RUNNER_TEMP/failed-prepare-run.json"
+          python3 - "$SETTLEMENT_PLAN" "$RUNNER_TEMP/failed-prepare-run.json" <<'PY'
+          import json
+          from pathlib import Path
+          import sys
+
+          plan = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
+          run = json.loads(Path(sys.argv[2]).read_text(encoding="utf-8"))
+          expected_identity = {
+              "repository": "tristan419/JATO_Analysis_System",
+              "commit": "73980b57176301e1fb2f59663f42c292d9eb9e7e",
+              "archiveSha256": (
+                  "a911f016a5866c8d93023a9db6e3884b898ab74dddf8dd9dc47e06049e41b215"
+              ),
+              "runId": 30915744371,
+              "runAttempt": 1,
+          }
+          for key, value in expected_identity.items():
+              if plan["identity"].get(key) != value:
+                  raise SystemExit(f"settlement plan identity mismatch for {key}")
+          expected_run = {
+              "head_branch": "main",
+              "head_sha": expected_identity["commit"],
+              "status": "completed",
+              "conclusion": "failure",
+              "run_attempt": 1,
+              "path": ".github/workflows/production-release.yml",
+          }
+          for key, value in expected_run.items():
+              actual = str(run.get(key) or "").split("@", 1)[0]
+              if actual != str(value):
+                  raise SystemExit(f"failed prepare run mismatch for {key}")
+          PY
+
+      - name: Download exact failed Candidate evidence
+        uses: actions/download-artifact@v5
+        with:
+          name: release-candidate-73980b57176301e1fb2f59663f42c292d9eb9e7e-1
+          path: ${{ runner.temp }}/failed-candidate
+          repository: ${{ github.repository }}
+          github-token: ${{ github.token }}
+          run-id: 30915744371
+
+      - name: Verify failure evidence against reviewed plan
+        run: |
+          set -euo pipefail
+          python3 - "$SETTLEMENT_PLAN" "$RUNNER_TEMP/failed-candidate" <<'PY'
+          import hashlib
+          import json
+          from pathlib import Path
+          import sys
+
+          plan = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
+          root = Path(sys.argv[2])
+          checkpoint = root / "server/backend-healthy.json"
+          evidence = root / "server/backend-healthy.evidence.json"
+          for path, field in (
+              (checkpoint, "checkpointSha256"),
+              (evidence, "evidenceSha256"),
+          ):
+              if hashlib.sha256(path.read_bytes()).hexdigest() != plan[field]:
+                  raise SystemExit(f"failed Candidate {field} mismatch")
+          payload = json.loads(checkpoint.read_text(encoding="utf-8"))
+          if (
+              payload.get("phase") != "migrated"
+              or payload.get("status") != "completed"
+              or payload.get("retryClass") != "automatic"
+              or payload.get("identity") != plan["identity"]
+          ):
+              raise SystemExit("failed Candidate checkpoint contract mismatch")
+          if (root / "server/candidate-preview.json").read_bytes() != b"":
+              raise SystemExit("failed Candidate unexpectedly produced preview metadata")
+          PY
+
+      - name: Validate Tencent settlement credentials
+        id: auth
+        env:
+          SSH_HOST: ${{ secrets.SSH_HOST }}
+          SSH_USER: ${{ secrets.SSH_USER }}
+          SSH_PORT: ${{ secrets.SSH_PORT }}
+          SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
+          SSH_PASSWORD: ${{ secrets.SSH_PASSWORD }}
+          SSH_KNOWN_HOSTS: ${{ secrets.SSH_KNOWN_HOSTS }}
+        run: |
+          set -euo pipefail
+          : "${SSH_HOST:?Missing SSH_HOST}"
+          : "${SSH_USER:?Missing SSH_USER}"
+          : "${SSH_KNOWN_HOSTS:?Missing SSH_KNOWN_HOSTS}"
+          SSH_PORT="${SSH_PORT:-22}"
+          install -d -m 700 "$HOME/.ssh"
+          printf '%s\n' "$SSH_KNOWN_HOSTS" > "$HOME/.ssh/known_hosts"
+          chmod 600 "$HOME/.ssh/known_hosts"
+          known_host="$SSH_HOST"
+          if [ "$SSH_PORT" != "22" ]; then
+            known_host="[$SSH_HOST]:$SSH_PORT"
+          fi
+          ssh-keygen -F "$known_host" -f "$HOME/.ssh/known_hosts" >/dev/null
+          if [ -n "${SSH_PRIVATE_KEY:-}" ]; then
+            echo "mode=key" >> "$GITHUB_OUTPUT"
+          elif [ -n "${SSH_PASSWORD:-}" ]; then
+            echo "mode=password" >> "$GITHUB_OUTPUT"
+          else
+            echo "::error::Provide either SSH_PRIVATE_KEY or SSH_PASSWORD"
+            exit 1
+          fi
+
+      - name: Capture Active identity before settlement
+        run: |
+          set -euo pipefail
+          evidence="$RUNNER_TEMP/settlement-evidence"
+          install -d -m 700 "$evidence"
+          curl --fail --silent --show-error --location \
+            --connect-timeout 10 --max-time 30 \
+            https://www.ojeur.cloud/healthz > "$evidence/before-healthz.json"
+          curl --fail --silent --show-error --location \
+            --connect-timeout 10 --max-time 30 \
+            https://www.ojeur.cloud/release-provenance.json \
+            > "$evidence/before-provenance.json"
+
+      - name: Restore and settle exact failed Candidate on Tencent
+        env:
+          AUTH_MODE: ${{ steps.auth.outputs.mode }}
+          SETTLEMENT_OUTPUT: ${{ runner.temp }}/settlement-evidence/result.json
+          SSH_HOST: ${{ secrets.SSH_HOST }}
+          SSH_USER: ${{ secrets.SSH_USER }}
+          SSH_PORT: ${{ secrets.SSH_PORT }}
+          SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
+          SSH_PASSWORD: ${{ secrets.SSH_PASSWORD }}
+        run: bash .github/scripts/github_settle_failed_candidate_preimage.sh
+
+      - name: Verify Active remained unchanged
+        run: |
+          set -euo pipefail
+          evidence="$RUNNER_TEMP/settlement-evidence"
+          curl --fail --silent --show-error --location \
+            --connect-timeout 10 --max-time 30 \
+            https://www.ojeur.cloud/healthz > "$evidence/after-healthz.json"
+          curl --fail --silent --show-error --location \
+            --connect-timeout 10 --max-time 30 \
+            https://www.ojeur.cloud/release-provenance.json \
+            > "$evidence/after-provenance.json"
+          cmp "$evidence/before-healthz.json" "$evidence/after-healthz.json"
+          cmp "$evidence/before-provenance.json" "$evidence/after-provenance.json"
+
+      - name: Upload immutable settlement receipt
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: failed-candidate-settlement-${{ github.sha }}-${{ github.run_id }}
+          path: ${{ runner.temp }}/settlement-evidence
+          if-no-files-found: error
+          retention-days: 30

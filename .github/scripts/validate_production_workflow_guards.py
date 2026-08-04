@@ -25,6 +25,9 @@ CHECKPOINT_RECOVERY_WORKFLOW = (
 UNSTARTED_CANDIDATE_SETTLEMENT_WORKFLOW = (
     ".github/workflows/settle-unstarted-candidate.yml"
 )
+FAILED_CANDIDATE_SETTLEMENT_WORKFLOW = (
+    ".github/workflows/settle-failed-candidate-preimage.yml"
+)
 RELEASE_COORDINATION_WORKFLOW = (
     ".github/workflows/release-coordination-guard.yml"
 )
@@ -89,6 +92,7 @@ PRODUCTION_JOBS = {
     ),
     CHECKPOINT_RECOVERY_WORKFLOW: ("recover_checkpoint",),
     UNSTARTED_CANDIDATE_SETTLEMENT_WORKFLOW: ("settle",),
+    FAILED_CANDIDATE_SETTLEMENT_WORKFLOW: ("settle",),
     INTL_SYNC_WORKFLOW: ("sync_intl",),
     ".github/workflows/deploy-aws-ecs.yml": ("deploy",),
     ".github/workflows/deploy-ec2-auto-update.yml": ("deploy",),

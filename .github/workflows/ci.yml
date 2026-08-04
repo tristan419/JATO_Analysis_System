@@ -79,6 +79,7 @@ jobs:
       - name: Test release recovery and shell hardening
         run: |
           bash -n \
+            .github/scripts/github_settle_failed_candidate_preimage.sh \
             03_Scripts/deploy/fullstack_remote_release.sh \
             03_Scripts/deploy/github_candidate_control.sh \
             03_Scripts/deploy/tencent_pre_switch_checkpoint_recovery.sh \
@@ -92,6 +93,7 @@ jobs:
             03_Scripts/ops/sync_data_to_cloud.sh \
             03_Scripts/ops/sync_msrp_db_to_cloud.sh
           python -m pytest -q \
+            .github/tests/test_settle_failed_candidate_preimage.py \
             .github/tests/test_settle_unstarted_candidate.py \
             03_Scripts/tests/test_bluegreen_systemd_nginx_contract.py \
             03_Scripts/tests/test_jato_bluegreen_boot_reconcile.py \
