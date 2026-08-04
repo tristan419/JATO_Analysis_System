@@ -2154,6 +2154,36 @@ def _candidate_never_started_proof(
     stage: str,
     listener: bool,
 ) -> Mapping[str, Any]:
+    def parse_memory_limit(field: str) -> int | None:
+        value = unit[field]
+        infinity_stages = {"quarantined_fenced", "finalized"}
+        if value == "infinity" and stage in infinity_stages:
+            return None
+        try:
+            return int(value)
+        except ValueError as exc:
+            raise RecoveryError(
+                "candidate_runtime_invalid",
+                "Candidate memory limit proof is malformed",
+                stage="candidate_memory_limits",
+                field_diffs=(
+                    {
+                        "field": field,
+                        "expected": (
+                            "decimal bytes or infinity"
+                            if stage in infinity_stages
+                            else "decimal bytes"
+                        ),
+                        "actual": value,
+                    },
+                ),
+                change_status=(
+                    {field: False for field in DIAGNOSTIC_CHANGE_FIELDS}
+                    if stage == "initial"
+                    else None
+                ),
+            ) from exc
+
     try:
         proof = {
             "name": unit["Id"],
@@ -2176,10 +2206,12 @@ def _candidate_never_started_proof(
             "invocationId": unit["InvocationID"],
             "fragmentPath": unit["FragmentPath"],
             "dropInPaths": unit["DropInPaths"].split(),
-            "memoryHighBytes": int(unit["MemoryHigh"]),
-            "memoryMaxBytes": int(unit["MemoryMax"]),
+            "memoryHighBytes": parse_memory_limit("MemoryHigh"),
+            "memoryMaxBytes": parse_memory_limit("MemoryMax"),
             "listener": listener,
         }
+    except RecoveryError:
+        raise
     except (KeyError, ValueError) as exc:
         raise RecoveryError(
             "candidate_runtime_invalid",
@@ -2271,6 +2303,15 @@ def _candidate_never_started_proof(
         )
     proof["ownedSourceReferences"] = owned_references
     return proof
+
+
+def _validate_schema_v3_dry_run_stage(stage: str) -> None:
+    if stage not in {"initial", "quarantined_fenced"}:
+        _fail(
+            "dry_run_not_eligible",
+            "schema v3 dry-run requires the exact untouched or fully "
+            "quarantined recovery state",
+        )
 
 
 def _verify_candidate_detached_after_reload(
@@ -3797,11 +3838,7 @@ def recover(
         )
     if mode == "dry-run":
         if plan_version == 3:
-            if observation["residue"]["stage"] != "initial":
-                _fail(
-                    "dry_run_not_eligible",
-                    "schema v3 dry-run requires the exact untouched residue preimage",
-                )
+            _validate_schema_v3_dry_run_stage(observation["residue"]["stage"])
             result["decision"] = "candidate-residue-dry-run-eligible"
         else:
             result["decision"] = "dry-run-eligible"
