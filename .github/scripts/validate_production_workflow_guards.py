@@ -510,6 +510,9 @@ def assert_checkpoint_recovery_contract() -> None:
     for required in (
         PRODUCTION_RELEASE_HOLD_SCRIPT,
         "require-active",
+        "PYTHONPATH=03_Scripts/deploy",
+        "from pre_switch_checkpoint_recovery import load_recovery_plan",
+        "hashlib.sha256(plan.read_bytes()).hexdigest()",
     ):
         if required not in hold_validation:
             raise AssertionError(
@@ -1039,11 +1042,11 @@ def assert_reviewed_production_release_hold() -> None:
     if module.RECOVERY_PLAN_PATH.as_posix() != PRODUCTION_RELEASE_RECOVERY_PLAN:
         raise AssertionError("production release recovery plan path changed")
     if module.RECOVERY_PLAN_SHA256 != (
-        "ae4d3d5eb76695e29c2eeb947b7783c42960a266c27abaa3f7b6a2faa51fd0f2"
+        "61045c5b1f39516f910ab89cf80fdd97796920e7e3bdb479f52e741b73f2f144"
     ):
         raise AssertionError("production release recovery plan SHA-256 changed")
     if module.HOLD_SHA256 != (
-        "b4841970c047ff8fe14db7e97d9d81326e67ac116da67f9f1236160edd11a71b"
+        "92bae4fc1febed5b15aba2c5fab7fb941dcb52d091e3a285f4af3d442f9a6371"
     ):
         raise AssertionError("production release active hold SHA-256 changed")
     retirement = module.EXPECTED_RETIREMENT_DOCUMENT

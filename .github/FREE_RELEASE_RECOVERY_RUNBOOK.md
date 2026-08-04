@@ -204,7 +204,7 @@ The reviewed 29df recovery PR carries the versioned hold document
 `.github/recovery-plans/2026-08-03-29df-pre-switch-candidate-residue-production-hold.v1.json`.
 It is bound to incident `2026-08-03-29df-pre-switch-candidate-residue`, the fixed
 plan path, and plan SHA-256
-`ae4d3d5eb76695e29c2eeb947b7783c42960a266c27abaa3f7b6a2faa51fd0f2`.
+`61045c5b1f39516f910ab89cf80fdd97796920e7e3bdb479f52e741b73f2f144`.
 Its presence is not recovery or deployment authorization.
 
 On a main push, `production-release` still runs the no-environment coordination

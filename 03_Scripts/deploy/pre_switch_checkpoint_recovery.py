@@ -759,6 +759,10 @@ def load_recovery_plan(
         RESIDUE_RUNTIME_PLAN_FIELDS if version == 3 else RUNTIME_PLAN_FIELDS,
         "plan_invalid",
     )
+    for field in ("sha256", "journalSha256", "evidenceSha256"):
+        _require_sha256(checkpoint_plan.get(field), "plan_invalid")
+    for field in ("manifestSha256", "dumpSha256"):
+        _require_sha256(backup_plan.get(field), "plan_invalid")
     source_proofs = plan.get("sourceProofs")
     if not isinstance(source_proofs, dict) or not source_proofs:
         _fail("plan_invalid", "sourceProofs must be a non-empty object")

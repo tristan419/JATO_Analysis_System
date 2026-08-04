@@ -17,7 +17,7 @@
   },
   "recoveryPlan": {
     "path": ".github/recovery-plans/2026-08-03-29df-pre-switch-candidate-residue.json",
-    "sha256": "ae4d3d5eb76695e29c2eeb947b7783c42960a266c27abaa3f7b6a2faa51fd0f2"
+    "sha256": "61045c5b1f39516f910ab89cf80fdd97796920e7e3bdb479f52e741b73f2f144"
   },
   "schemaVersion": 1,
   "status": "active"
