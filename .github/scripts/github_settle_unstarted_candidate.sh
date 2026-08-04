@@ -66,7 +66,7 @@ trap 'rm -f "$payload"' EXIT
 write_export() {
   local name="$1"
   local value="$2"
-  printf 'export %s=%q\n' "$name" "$value" >> "$payload"
+  printf '%s=%q\n' "$name" "$value" >> "$payload"
 }
 
 write_export SETTLEMENT_HELPER_B64 "$(base64 -w 0 "$helper")"
