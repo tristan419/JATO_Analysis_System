@@ -9,6 +9,12 @@ The transport is free of new service charges, but it still consumes the
 bandwidth, disk, and GitHub Actions quota already attached to the existing
 systems.
 
+The operator-facing fixed Candidate / fixed Active lifecycle, command vocabulary,
+and current preview limitations are documented separately in
+[`CANDIDATE_MANUAL_RELEASE_RUNBOOK.md`](CANDIDATE_MANUAL_RELEASE_RUNBOOK.md).
+The legacy 29df hold remains an incident-only recovery concern; it is not part
+of the normal Candidate approval path described there.
+
 ## Safety boundary
 
 The transport and archive preflight may retry automatically. A database

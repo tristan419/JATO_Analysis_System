@@ -32,6 +32,13 @@ PHASES = (
     "backup_verified",
     "migration_started",
     "migrated",
+    "candidate_prepare_aborted",
+    "candidate_ready",
+    "candidate_discarded",
+    "active_update_started",
+    "active_update_verified",
+    "active_updated",
+    "candidate_released",
     "switch_started",
     "switched",
     "rollback_started",
@@ -53,11 +60,26 @@ ALLOWED_PHASE_TRANSITIONS = {
     "source_installed": frozenset({"backup_verified"}),
     "backup_verified": frozenset({"migration_started", "migrated"}),
     "migration_started": frozenset({"migrated"}),
-    "migrated": frozenset({"switch_started"}),
+    "migrated": frozenset({"candidate_prepare_aborted", "candidate_ready"}),
+    "candidate_prepare_aborted": frozenset(),
+    "candidate_ready": frozenset(
+        {"candidate_discarded", "active_update_started", "switch_started"}
+    ),
+    "candidate_discarded": frozenset(),
+    "active_update_started": frozenset(
+        {"active_update_verified", "rollback_started"}
+    ),
+    "active_update_verified": frozenset(
+        {"active_updated", "rollback_started"}
+    ),
+    "active_updated": frozenset(
+        {"candidate_released", "www_verified", "rollback_started"}
+    ),
+    "candidate_released": frozenset(),
     "switch_started": frozenset({"switched", "rollback_started"}),
     "switched": frozenset({"backend_healthy", "rollback_started"}),
     "rollback_started": frozenset({"rollback_completed"}),
-    "rollback_completed": frozenset(),
+    "rollback_completed": frozenset({"candidate_discarded"}),
     "pre_switch_aborted": frozenset(),
     "backend_healthy": frozenset({"www_verified"}),
     "www_verified": frozenset({"intl_deploy_started"}),
@@ -72,10 +94,27 @@ ALLOWED_SAME_PHASE_STATUS_TRANSITIONS = {
     "completed": frozenset(),
 }
 REQUIRED_PREDECESSOR_STATUSES = {
+    ("migrated", "candidate_ready"): frozenset({"completed"}),
+    ("migrated", "candidate_prepare_aborted"): frozenset({"completed"}),
+    ("candidate_ready", "candidate_discarded"): frozenset({"completed"}),
+    ("candidate_ready", "active_update_started"): frozenset({"completed"}),
+    ("candidate_ready", "switch_started"): frozenset({"completed"}),
+    ("active_update_started", "active_update_verified"): frozenset(
+        {"in_progress"}
+    ),
+    ("active_update_started", "rollback_started"): frozenset(
+        {"in_progress", "failed"}
+    ),
+    ("active_update_verified", "active_updated"): frozenset({"completed"}),
+    ("active_update_verified", "rollback_started"): frozenset({"completed"}),
+    ("active_updated", "candidate_released"): frozenset({"completed"}),
+    ("active_updated", "www_verified"): frozenset({"completed"}),
+    ("active_updated", "rollback_started"): frozenset({"completed"}),
     ("switched", "backend_healthy"): frozenset({"completed"}),
     ("rollback_started", "rollback_completed"): frozenset(
         {"in_progress", "failed"}
     ),
+    ("rollback_completed", "candidate_discarded"): frozenset({"completed"}),
     ("parity_verified", "complete"): frozenset({"completed"}),
 }
 STATUSES = ("in_progress", "completed", "failed")
@@ -138,6 +177,7 @@ CHECKPOINT_FIELDS = {
 }
 OPTIONAL_CHECKPOINT_FIELDS = {"message"}
 MAX_RELEASE_METADATA_BYTES = 64 * 1024
+MAX_CHECKPOINT_JOURNAL_BYTES = 16 * 1024 * 1024
 PRE_SWITCH_ABORT_PHASE = "pre_switch_aborted"
 RESIDUE_INCIDENT_ID = "2026-08-03-29df-pre-switch-candidate-residue"
 RESIDUE_TARGET_COMMIT = "29df5e6e667351f09305783932b34e5438d6a9d5"
@@ -392,7 +432,49 @@ def _validate_terminal_contract(
     status: str,
     retry_class: str,
 ) -> None:
-    if phase == "rollback_completed":
+    if phase == "candidate_prepare_aborted":
+        if status != "completed" or retry_class != "automatic":
+            raise CheckpointError(
+                "candidate_prepare_aborted phase requires status=completed and "
+                "retryClass=automatic"
+            )
+    elif phase == "candidate_ready":
+        if status != "completed" or retry_class != "inspect_then_resume":
+            raise CheckpointError(
+                "candidate_ready phase requires status=completed and "
+                "retryClass=inspect_then_resume"
+            )
+    elif phase == "candidate_discarded":
+        if status != "completed" or retry_class != "automatic":
+            raise CheckpointError(
+                "candidate_discarded phase requires status=completed and "
+                "retryClass=automatic"
+            )
+    elif phase == "active_update_started":
+        if status != "in_progress" or retry_class != "rollback_required":
+            raise CheckpointError(
+                "active_update_started phase requires status=in_progress and "
+                "retryClass=rollback_required"
+            )
+    elif phase == "active_update_verified":
+        if status != "completed" or retry_class != "inspect_then_resume":
+            raise CheckpointError(
+                "active_update_verified phase requires status=completed and "
+                "retryClass=inspect_then_resume"
+            )
+    elif phase == "active_updated":
+        if status != "completed" or retry_class != "inspect_then_resume":
+            raise CheckpointError(
+                "active_updated phase requires status=completed and "
+                "retryClass=inspect_then_resume"
+            )
+    elif phase == "candidate_released":
+        if status != "completed" or retry_class != "automatic":
+            raise CheckpointError(
+                "candidate_released phase requires status=completed and "
+                "retryClass=automatic"
+            )
+    elif phase == "rollback_completed":
         if status != "completed" or retry_class != "automatic":
             raise CheckpointError(
                 "rollback_completed phase requires status=completed and "
@@ -815,6 +897,90 @@ def append_journal(path: Path, checkpoint: Mapping[str, Any]) -> None:
     _fsync_directory(path.parent)
 
 
+def _load_checkpoint_journal(
+    path: Path,
+    *,
+    identity: ReleaseIdentity,
+) -> list[dict[str, Any]]:
+    """Load one canonical journal without accepting partial or duplicate events."""
+
+    if not path.exists() and not path.is_symlink():
+        return []
+    _reject_symlink(path, "journal")
+    before = path.lstat()
+    if (
+        not stat.S_ISREG(before.st_mode)
+        or before.st_size <= 0
+        or before.st_size > MAX_CHECKPOINT_JOURNAL_BYTES
+    ):
+        raise CheckpointError("checkpoint journal has an invalid file type or size")
+    flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0)
+    flags |= getattr(os, "O_NOFOLLOW", 0)
+    descriptor = os.open(path, flags)
+    try:
+        opened = os.fstat(descriptor)
+        if (opened.st_dev, opened.st_ino) != (before.st_dev, before.st_ino):
+            raise CheckpointError("checkpoint journal changed while being opened")
+        chunks: list[bytes] = []
+        remaining = MAX_CHECKPOINT_JOURNAL_BYTES + 1
+        while remaining:
+            chunk = os.read(descriptor, min(1024 * 1024, remaining))
+            if not chunk:
+                break
+            chunks.append(chunk)
+            remaining -= len(chunk)
+        after = os.fstat(descriptor)
+    finally:
+        os.close(descriptor)
+    raw = b"".join(chunks)
+    if len(raw) > MAX_CHECKPOINT_JOURNAL_BYTES:
+        raise CheckpointError("checkpoint journal exceeds its size limit")
+    if (
+        (after.st_dev, after.st_ino, after.st_size, after.st_mtime_ns)
+        != (before.st_dev, before.st_ino, before.st_size, before.st_mtime_ns)
+        or len(raw) != before.st_size
+    ):
+        raise CheckpointError("checkpoint journal changed while being read")
+    if not raw.endswith(b"\n"):
+        raise CheckpointError("checkpoint journal ends in a partial event")
+    try:
+        raw_events = [json.loads(line) for line in raw.splitlines()]
+    except (UnicodeError, json.JSONDecodeError) as exc:
+        raise CheckpointError("checkpoint journal is not valid JSONL") from exc
+    events: list[dict[str, Any]] = []
+    for expected_sequence, raw_event in enumerate(raw_events, start=1):
+        if not isinstance(raw_event, dict):
+            raise CheckpointError("checkpoint journal event must be an object")
+        event = dict(raw_event)
+        if event.pop("event", None) != "checkpoint_transition":
+            raise CheckpointError("checkpoint journal event kind is invalid")
+        validated = validate_checkpoint(event)
+        if validated["sequence"] != expected_sequence:
+            raise CheckpointError("checkpoint journal sequence is not contiguous")
+        _assert_same_identity(validated, identity)
+        events.append(validated)
+    return events
+
+
+def _pending_transition_matches(
+    pending: Mapping[str, Any],
+    *,
+    identity: ReleaseIdentity,
+    phase: str,
+    status: str,
+    retry_class: str,
+    message: str | None,
+) -> bool:
+    expected_message = _require_message(message) if message is not None else None
+    return (
+        pending.get("identity") == identity.to_dict()
+        and pending.get("phase") == phase
+        and pending.get("status") == status
+        and pending.get("retryClass") == retry_class
+        and pending.get("message") == expected_message
+    )
+
+
 def _assert_same_identity(
     existing: Mapping[str, Any],
     expected: ReleaseIdentity,
@@ -858,17 +1024,47 @@ def write_checkpoint(
         retry_class=retry_class,
     )
 
+    existing: dict[str, Any] | None = None
+    pending: dict[str, Any] | None = None
     sequence = 1
     if checkpoint_path.exists() or checkpoint_path.is_symlink():
         existing = load_checkpoint(checkpoint_path)
         _assert_same_identity(existing, identity)
+    journal_events = _load_checkpoint_journal(journal_path, identity=identity)
+    if existing is None:
+        if len(journal_events) > 1:
+            raise CheckpointError(
+                "checkpoint journal is more than one transition ahead of an absent checkpoint"
+            )
+        if journal_events:
+            pending = journal_events[0]
+    else:
+        existing_sequence = existing["sequence"]
+        if len(journal_events) not in {existing_sequence, existing_sequence + 1}:
+            raise CheckpointError(
+                "checkpoint journal is not aligned with the authoritative checkpoint"
+            )
+        journal_checkpoint = journal_events[existing_sequence - 1]
+        if journal_checkpoint != existing:
+            raise CheckpointError("checkpoint journal tail differs from checkpoint")
+        if len(journal_events) == existing_sequence + 1:
+            pending = journal_events[-1]
+
+    if existing is not None:
         existing_phase = existing["phase"]
         existing_status = existing["status"]
+        rollback_candidate_cleanup = (
+            existing_phase == "rollback_completed"
+            and phase == "candidate_discarded"
+        )
         if existing_phase in {
+            "candidate_prepare_aborted",
+            "candidate_discarded",
+            "candidate_released",
             "rollback_completed",
             PRE_SWITCH_ABORT_PHASE,
             "complete",
-        }:
+        } and not rollback_candidate_cleanup:
             raise CheckpointError(
                 f"{existing_phase} checkpoint is immutable",
             )
@@ -876,6 +1072,10 @@ def write_checkpoint(
             if retry_class != existing["retryClass"]:
                 raise CheckpointError(
                     "an idempotent checkpoint write cannot change retryClass"
+                )
+            if pending is not None:
+                raise CheckpointError(
+                    "checkpoint journal has a pending transition that must be reconciled"
                 )
             return existing
         if phase == existing_phase:
@@ -907,6 +1107,21 @@ def write_checkpoint(
                 )
         sequence = existing["sequence"] + 1
 
+    if pending is not None:
+        if pending["sequence"] != sequence or not _pending_transition_matches(
+            pending,
+            identity=identity,
+            phase=phase,
+            status=status,
+            retry_class=retry_class,
+            message=message,
+        ):
+            raise CheckpointError(
+                "checkpoint journal pending transition differs from the requested write"
+            )
+        atomic_write_json(checkpoint_path, pending)
+        return pending
+
     checkpoint: dict[str, Any] = {
         "schemaVersion": SCHEMA_VERSION,
         "sequence": sequence,
@@ -921,8 +1136,8 @@ def write_checkpoint(
     checkpoint = validate_checkpoint(checkpoint)
 
     # The journal is written first.  If power is lost between these two fsyncs,
-    # it contains a safe superset of attempted transitions and the checkpoint
-    # remains the authoritative state.
+    # the next exact write adopts the single validated journal-ahead event into
+    # the authoritative checkpoint instead of appending a duplicate sequence.
     append_journal(journal_path, checkpoint)
     atomic_write_json(checkpoint_path, checkpoint)
     return checkpoint
@@ -2121,7 +2336,49 @@ def assert_resumable(
         }
     if phase == "rollback_completed":
         return {
-            "decision": "already-rolled-back",
+            "decision": "candidate-cleanup-required",
+            "action": "discard-candidate",
+            "phase": phase,
+            "status": status,
+            "retryClass": retry_class,
+            "sequence": checkpoint["sequence"],
+        }
+    if phase == "candidate_prepare_aborted":
+        return {
+            "decision": "already-candidate-prepare-aborted",
+            "action": "none",
+            "phase": phase,
+            "status": status,
+            "retryClass": retry_class,
+            "sequence": checkpoint["sequence"],
+        }
+    if phase == "candidate_ready":
+        return {
+            "decision": "approval-required",
+            "phase": phase,
+            "status": status,
+            "retryClass": retry_class,
+            "sequence": checkpoint["sequence"],
+        }
+    if phase == "candidate_discarded":
+        return {
+            "decision": "already-candidate-discarded",
+            "phase": phase,
+            "status": status,
+            "retryClass": retry_class,
+            "sequence": checkpoint["sequence"],
+        }
+    if phase == "active_updated":
+        return {
+            "decision": "candidate-cleanup-required",
+            "phase": phase,
+            "status": status,
+            "retryClass": retry_class,
+            "sequence": checkpoint["sequence"],
+        }
+    if phase == "candidate_released":
+        return {
+            "decision": "already-candidate-released",
             "phase": phase,
             "status": status,
             "retryClass": retry_class,
@@ -2135,9 +2392,17 @@ def assert_resumable(
             "retryClass": retry_class,
             "sequence": checkpoint["sequence"],
         }
-    if phase in {"switch_started", "switched", "rollback_started"}:
+    reconcile_actions = {
+        "active_update_started": "restore-previous-active",
+        "active_update_verified": "finalize-active-update",
+        "switch_started": "reconcile-public-route",
+        "switched": "reconcile-public-route",
+        "rollback_started": "resume-rollback",
+    }
+    if phase in reconcile_actions:
         return {
             "decision": "reconcile-required",
+            "action": reconcile_actions[phase],
             "phase": phase,
             "status": status,
             "retryClass": retry_class,
@@ -2187,6 +2452,14 @@ def cross_release_is_settled(checkpoint: Mapping[str, Any]) -> bool:
     if phase == "complete":
         return True
     if phase == "rollback_completed":
+        # A fixed-Active rollback deliberately retains the tested Candidate.
+        # Only the following candidate_discarded transition proves cleanup.
+        return False
+    if phase == "candidate_prepare_aborted":
+        return checkpoint["status"] == "completed"
+    if phase == "candidate_discarded":
+        return checkpoint["status"] == "completed"
+    if phase == "candidate_released":
         return checkpoint["status"] == "completed"
     if phase == PRE_SWITCH_ABORT_PHASE:
         # This terminal is settled only after its receipt/journal binding is

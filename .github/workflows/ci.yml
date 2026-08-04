@@ -80,6 +80,7 @@ jobs:
         run: |
           bash -n \
             03_Scripts/deploy/fullstack_remote_release.sh \
+            03_Scripts/deploy/github_candidate_control.sh \
             03_Scripts/deploy/tencent_pre_switch_checkpoint_recovery.sh \
             03_Scripts/deploy/tencent_feature_candidate_canary.sh \
             03_Scripts/deploy/tencent_bluegreen_release.sh \
@@ -98,6 +99,8 @@ jobs:
             03_Scripts/tests/test_tencent_feature_candidate_canary.py \
             03_Scripts/tests/test_tencent_bluegreen_release.py \
             03_Scripts/tests/test_candidate_runtime_preimage.py \
+            03_Scripts/tests/test_export_active_frontend_release.py \
+            03_Scripts/tests/test_fixed_active_preimage.py \
             03_Scripts/tests/test_reviewed_recovery_authorization.py \
             03_Scripts/tests/test_validate_release_archive.py \
             03_Scripts/tests/test_cleanup_toolkit_egg_info.py \
@@ -107,6 +110,7 @@ jobs:
             03_Scripts/tests/test_release_checkpoint.py \
             03_Scripts/tests/test_release_evidence.py \
             03_Scripts/tests/test_release_shell_hardening.py \
+            03_Scripts/tests/test_verify_candidate_handoff.py \
             06_AppPlatform/backend/tests/unit/test_deploy_workflow.py
 
       - name: Test intl Pages Function contracts

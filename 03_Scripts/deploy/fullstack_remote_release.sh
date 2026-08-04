@@ -42,6 +42,46 @@ if [ "$DEPLOY_BRANCH" != "main" ]; then
   exit 1
 fi
 
+DEPLOY_BLUEGREEN_MODE="${DEPLOY_BLUEGREEN_MODE:-prepare-candidate}"
+case "$DEPLOY_BLUEGREEN_MODE" in
+  prepare-candidate|approve-candidate-to-active|discard-candidate|release-candidate|restore-previous-active) ;;
+  *)
+    echo "[ERROR] DEPLOY_BLUEGREEN_MODE must prepare, approve, or clean one exact Candidate"
+    exit 1
+    ;;
+esac
+
+if [[ "$DEPLOY_BLUEGREEN_MODE" != "prepare-candidate" ]]; then
+  for approval_name in \
+    DEPLOY_APPROVAL_RUN_ID \
+    DEPLOY_APPROVAL_RUN_ATTEMPT \
+    DEPLOY_CANDIDATE_ATTESTATION_SHA256 \
+    DEPLOY_CANDIDATE_SERVER_CHECKPOINT_PATH \
+    DEPLOY_CANDIDATE_SERVER_CHECKPOINT_SHA256 \
+    DEPLOY_CANDIDATE_SERVER_EVIDENCE_PATH \
+    DEPLOY_CANDIDATE_SERVER_EVIDENCE_SHA256
+  do
+    if [ -z "${!approval_name:-}" ]; then
+      echo "[ERROR] $approval_name is required for Candidate approval"
+      exit 1
+    fi
+  done
+  if [[ ! "$DEPLOY_APPROVAL_RUN_ID" =~ ^[1-9][0-9]*$ ]] \
+    || [[ ! "$DEPLOY_APPROVAL_RUN_ATTEMPT" =~ ^[1-9][0-9]*$ ]]; then
+    echo "[ERROR] Candidate approval run identity must use positive integers"
+    exit 1
+  fi
+  if [[ ! "$DEPLOY_CANDIDATE_ATTESTATION_SHA256" =~ ^[0-9a-f]{64}$ ]]; then
+    echo "[ERROR] Candidate approval attestation SHA-256 is invalid"
+    exit 1
+  fi
+  if [[ ! "$DEPLOY_CANDIDATE_SERVER_CHECKPOINT_SHA256" =~ ^[0-9a-f]{64}$ ]] \
+    || [[ ! "$DEPLOY_CANDIDATE_SERVER_EVIDENCE_SHA256" =~ ^[0-9a-f]{64}$ ]]; then
+    echo "[ERROR] Candidate server handoff SHA-256 is invalid"
+    exit 1
+  fi
+fi
+
 if [[ ! "$DEPLOY_COMMIT_SHA" =~ ^[0-9a-f]{40}$ ]]; then
   echo "[ERROR] DEPLOY_COMMIT_SHA must be a full lowercase git SHA"
   exit 1
@@ -151,6 +191,53 @@ DEPLOY_LOCK_FD=9
 
 CHECKPOINT_FILE="$DEPLOY_STATE_DIR/checkpoints/$DEPLOY_COMMIT_SHA/${DEPLOY_ARCHIVE_SHA256}.json"
 CHECKPOINT_JOURNAL="$DEPLOY_STATE_DIR/journals/$DEPLOY_COMMIT_SHA/${DEPLOY_ARCHIVE_SHA256}.jsonl"
+CHECKPOINT_EVIDENCE_FILE="${CHECKPOINT_FILE%.json}.evidence.json"
+
+verify_attested_candidate_paths_and_evidence() {
+  local actual_evidence_sha256=""
+
+  if [[ "$DEPLOY_BLUEGREEN_MODE" == "prepare-candidate" ]]; then
+    return 0
+  fi
+  if [[ "$DEPLOY_CANDIDATE_SERVER_CHECKPOINT_PATH" != "$CHECKPOINT_FILE" ]] \
+    || [[ "$DEPLOY_CANDIDATE_SERVER_EVIDENCE_PATH" != "$CHECKPOINT_EVIDENCE_FILE" ]]; then
+    echo "[ERROR] Attested Candidate server paths do not match the locked release state"
+    return 1
+  fi
+  if [[ -L "$CHECKPOINT_FILE" || ! -f "$CHECKPOINT_FILE" ]] \
+    || [[ -L "$CHECKPOINT_EVIDENCE_FILE" || ! -f "$CHECKPOINT_EVIDENCE_FILE" ]]; then
+    echo "[ERROR] Attested Candidate server files are missing or unsafe"
+    return 1
+  fi
+  actual_evidence_sha256="$(sha256sum "$CHECKPOINT_EVIDENCE_FILE" | awk '{print $1}')"
+  if [[ "$actual_evidence_sha256" != "$DEPLOY_CANDIDATE_SERVER_EVIDENCE_SHA256" ]]; then
+    echo "[ERROR] Candidate server evidence changed after the reviewed handoff"
+    return 1
+  fi
+}
+
+verify_attested_candidate_checkpoint_for_mode() {
+  local actual_checkpoint_sha256=""
+  local require_original_checkpoint=false
+
+  case "$DEPLOY_BLUEGREEN_MODE:$CHECKPOINT_PHASE" in
+    approve-candidate-to-active:candidate_ready) require_original_checkpoint=true ;;
+    discard-candidate:candidate_ready) require_original_checkpoint=true ;;
+  esac
+  if [[ "${DEPLOY_CANDIDATE_HANDOFF_SOURCE:-}" == "canonical-server" ]]; then
+    require_original_checkpoint=true
+  fi
+  if [[ "$require_original_checkpoint" != "true" ]]; then
+    return 0
+  fi
+  actual_checkpoint_sha256="$(sha256sum "$CHECKPOINT_FILE" | awk '{print $1}')"
+  if [[ "$actual_checkpoint_sha256" != "$DEPLOY_CANDIDATE_SERVER_CHECKPOINT_SHA256" ]]; then
+    echo "[ERROR] Candidate server checkpoint changed after the reviewed handoff"
+    return 1
+  fi
+}
+
+verify_attested_candidate_paths_and_evidence
 RELEASE_WORKTREE=""
 TRUSTED_ARCHIVE_VALIDATOR_TEMP=""
 SEALED_TRUST_ROOT="/var/lib/jato-sealed-inputs"
@@ -769,6 +856,7 @@ required_release_files=(
   01_RAW_DATA/VOC_Nordic_SUV_Users_100.xlsx
   03_Scripts/deploy/frontend_release_artifact.py
   03_Scripts/deploy/cleanup_toolkit_egg_info.py
+  03_Scripts/deploy/fixed_active_preimage.py
   03_Scripts/deploy/release_checkpoint.py
   03_Scripts/deploy/release_evidence.py
   03_Scripts/deploy/prepare_backend_release.py
@@ -785,6 +873,7 @@ required_release_files=(
   03_Scripts/ops/backup_production_data.sh
   03_Scripts/deploy/nginx/enable_jato_fullstack_https.sh
   03_Scripts/deploy/nginx/install_jato_fullstack_nginx.sh
+  03_Scripts/deploy/nginx/jato_candidate_preview.conf.example
   03_Scripts/deploy/systemd/jato-country-news.env.example
   03_Scripts/deploy/systemd/jato-msrp.env.example
   03_Scripts/deploy/systemd/jato-voc.env.example
@@ -911,15 +1000,18 @@ checkpoint_identity_args=(
 CHECKPOINT_PHASE=""
 CHECKPOINT_STATUS=""
 CHECKPOINT_DECISION="new"
+CHECKPOINT_ACTION="none"
 if [[ -e "$CHECKPOINT_FILE" ]]; then
   RESUME_JSON="$(python3 "$CHECKPOINT_HELPER" assert-resumable \
     --checkpoint "$CHECKPOINT_FILE" "${checkpoint_identity_args[@]}")"
   CHECKPOINT_DECISION="$(python3 -c 'import json,sys; print(json.load(sys.stdin)["decision"])' <<< "$RESUME_JSON")"
+  CHECKPOINT_ACTION="$(python3 -c 'import json,sys; print(json.load(sys.stdin).get("action", "none"))' <<< "$RESUME_JSON")"
   CHECKPOINT_STATE="$(python3 "$CHECKPOINT_HELPER" show --checkpoint "$CHECKPOINT_FILE")"
   read -r CHECKPOINT_PHASE CHECKPOINT_STATUS < <(
     python3 -c 'import json,sys; p=json.load(sys.stdin); print(p["phase"], p["status"])' <<< "$CHECKPOINT_STATE"
   )
 fi
+verify_attested_candidate_checkpoint_for_mode
 
 CROSS_RELEASE_STATE="$(python3 "$CHECKPOINT_HELPER" assert-cross-release-safe \
   --checkpoints-root "$DEPLOY_STATE_DIR/checkpoints" \
@@ -1070,13 +1162,44 @@ if [[ "$CHECKPOINT_DECISION" == "already-complete" ]]; then
     exit 1
   fi
 fi
-if [[ "$CHECKPOINT_DECISION" == "already-rolled-back" ]]; then
-  if bluegreen_reconciliation_pending; then
-    echo "[WARN] Rolled-back release still has durable blue/green state to reconcile"
-  else
-    echo "[ERROR] This exact release was already rolled back; create a new reviewed release instead of replaying it"
-    exit 1
-  fi
+if [[ "$CHECKPOINT_DECISION" == "candidate-cleanup-required" ]]; then
+  case "$CHECKPOINT_PHASE:$DEPLOY_BLUEGREEN_MODE" in
+    rollback_completed:discard-candidate)
+      echo "[INFO] Rolled-back fixed Active is retained; continuing only to discard its isolated Candidate"
+      ;;
+    active_updated:release-candidate)
+      echo "[INFO] Fixed Active is committed; continuing only to release its isolated Candidate"
+      ;;
+    rollback_completed:*)
+      echo "[ERROR] This exact release restored the previous Active; explicit Candidate discard is required"
+      exit 1
+      ;;
+    active_updated:*)
+      echo "[ERROR] This exact release updated fixed Active; explicit Candidate release is required"
+      exit 1
+      ;;
+    *)
+      echo "[ERROR] Unsupported Candidate cleanup checkpoint phase: $CHECKPOINT_PHASE"
+      exit 1
+      ;;
+  esac
+fi
+if [[ "$CHECKPOINT_DECISION" == "reconcile-required" ]]; then
+  case "$DEPLOY_BLUEGREEN_MODE:$CHECKPOINT_ACTION" in
+    approve-candidate-to-active:restore-previous-active|\
+    approve-candidate-to-active:finalize-active-update|\
+    approve-candidate-to-active:resume-rollback)
+      echo "[WARN] Resuming exact fixed Active reconciliation: action=$CHECKPOINT_ACTION phase=$CHECKPOINT_PHASE"
+      ;;
+    *)
+      echo "[ERROR] Interrupted release requires an exact supported reconciliation action before any other mode: ${CHECKPOINT_ACTION:-missing}"
+      exit 1
+      ;;
+  esac
+fi
+if [[ "$CHECKPOINT_DECISION" == "already-candidate-prepare-aborted" ]]; then
+  echo "[ERROR] This exact Candidate preparation was cleaned and sealed as aborted; create a new reviewed release"
+  exit 1
 fi
 if [[ "$CHECKPOINT_DECISION" == "already-pre-switch-aborted" ]]; then
   echo "[ERROR] This exact release was abandoned before Candidate start; create a new reviewed release instead of replaying it"
@@ -1121,9 +1244,19 @@ export \
   DEPLOY_ARCHIVE_BYTES DEPLOY_RUN_ID DEPLOY_RUN_ATTEMPT DEPLOY_BRANCH \
   FRONTEND_ARTIFACT_IDENTITY FRONTEND_ARTIFACT_CHECKSUM \
   DEPLOY_SERVER_NAME="${DEPLOY_SERVER_NAME:-_}"
+if [[ "$DEPLOY_BLUEGREEN_MODE" != "prepare-candidate" ]]; then
+  export \
+    DEPLOY_APPROVAL_RUN_ID \
+    DEPLOY_APPROVAL_RUN_ATTEMPT \
+    DEPLOY_CANDIDATE_ATTESTATION_SHA256 \
+    DEPLOY_CANDIDATE_SERVER_CHECKPOINT_PATH \
+    DEPLOY_CANDIDATE_SERVER_CHECKPOINT_SHA256 \
+    DEPLOY_CANDIDATE_SERVER_EVIDENCE_PATH \
+    DEPLOY_CANDIDATE_SERVER_EVIDENCE_SHA256
+fi
 set +e
 bash "$RELEASE_WORKTREE/03_Scripts/deploy/tencent_bluegreen_release.sh" \
-  prepare-and-switch
+  "$DEPLOY_BLUEGREEN_MODE"
 BLUEGREEN_RC=$?
 set -e
 exit "$BLUEGREEN_RC"

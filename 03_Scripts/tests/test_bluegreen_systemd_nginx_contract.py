@@ -30,6 +30,10 @@ NGINX_TEMPLATE = (
     REPO_ROOT
     / "03_Scripts/deploy/nginx/jato_fullstack.conf.example"
 )
+CANDIDATE_PREVIEW_TEMPLATE = (
+    REPO_ROOT
+    / "03_Scripts/deploy/nginx/jato_candidate_preview.conf.example"
+)
 NGINX_INSTALLER = (
     REPO_ROOT
     / "03_Scripts/deploy/nginx/install_jato_fullstack_nginx.sh"
@@ -271,6 +275,27 @@ def test_nginx_template_binds_backend_and_frontend_through_one_include() -> None
     assert "/run/jato/deployment-maintenance" not in template
     assert "__BACKEND_PORT__" not in template
     assert "__FRONTEND_ROOT__" not in template
+
+
+def test_candidate_preview_template_is_loopback_only_and_has_no_active_fallback(
+) -> None:
+    preview = CANDIDATE_PREVIEW_TEMPLATE.read_text(encoding="utf-8")
+    active = NGINX_TEMPLATE.read_text(encoding="utf-8")
+
+    assert "listen 127.0.0.1:__CANDIDATE_PREVIEW_PORT__;" in preview
+    assert "listen 0.0.0.0" not in preview
+    assert "listen [::]" not in preview
+    assert 'root "__CANDIDATE_FRONTEND_ROOT__";' in preview
+    assert "location = /candidate-preview.json" in preview
+    assert "default_type application/json;" in preview
+    assert 'add_header Cache-Control "no-store" always;' in preview
+    assert "__CANDIDATE_PREVIEW_JSON__" in preview
+    assert "proxy_pass http://127.0.0.1:__CANDIDATE_SLOT__" in preview
+    assert "active-release.conf" not in preview
+    assert "$jato_frontend_root" not in preview
+    assert "jato_fullstack_api" not in preview
+    assert "candidate-preview.json" not in active
+    assert '"role":"candidate"' not in active
 
 
 def test_installer_creates_atomic_release_include_and_reloads_nginx(
@@ -915,7 +940,6 @@ def test_concurrent_installer_is_blocked_by_production_deploy_lock(
     env, nginx_etc, jato_etc, _ = _fake_runtime(tmp_path)
     fake_bin = Path(env["PATH"].split(os.pathsep, maxsplit=1)[0])
     (fake_bin / "flock").unlink()
-    lock_path = env["JATO_PRODUCTION_DEPLOY_LOCK_PATH"]
     ready = tmp_path / "holder.ready"
     holder = subprocess.Popen(
         [

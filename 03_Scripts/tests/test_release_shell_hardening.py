@@ -84,6 +84,133 @@ def test_remote_release_validates_content_address_before_bluegreen_handoff() -> 
         assert legacy_token not in script
 
 
+def test_remote_release_binds_reviewed_server_state_before_candidate_control() -> None:
+    script = REMOTE_SCRIPT.read_text(encoding="utf-8")
+    control = (
+        REPO_ROOT / "03_Scripts/deploy/github_candidate_control.sh"
+    ).read_text(encoding="utf-8")
+    for name in (
+        "CANDIDATE_SERVER_CHECKPOINT_PATH",
+        "CANDIDATE_SERVER_CHECKPOINT_SHA256",
+        "CANDIDATE_SERVER_EVIDENCE_PATH",
+        "CANDIDATE_SERVER_EVIDENCE_SHA256",
+    ):
+        assert name in control
+        assert f"DEPLOY_{name}" in control
+        assert f"DEPLOY_{name}" in script
+    evidence_check = _shell_function(
+        REMOTE_SCRIPT,
+        "verify_attested_candidate_paths_and_evidence",
+    )
+    checkpoint_check = _shell_function(
+        REMOTE_SCRIPT,
+        "verify_attested_candidate_checkpoint_for_mode",
+    )
+    assert 'DEPLOY_CANDIDATE_SERVER_CHECKPOINT_PATH" != "$CHECKPOINT_FILE' in evidence_check
+    assert 'DEPLOY_CANDIDATE_SERVER_EVIDENCE_PATH" != "$CHECKPOINT_EVIDENCE_FILE' in evidence_check
+    assert "Candidate server evidence changed after the reviewed handoff" in evidence_check
+    assert (
+        "approve-candidate-to-active:candidate_ready) "
+        "require_original_checkpoint=true"
+    ) in checkpoint_check
+    assert "approve-candidate-to-active:*)" not in checkpoint_check
+    assert "discard-candidate:candidate_ready) require_original_checkpoint=true" in checkpoint_check
+    assert (
+        'DEPLOY_CANDIDATE_HANDOFF_SOURCE:-}" == "canonical-server"'
+        in checkpoint_check
+    )
+    assert "release-candidate" not in checkpoint_check
+    assert "restore-previous-active" not in checkpoint_check
+    lock_index = script.index("flock -w 300 9")
+    evidence_index = script.index("verify_attested_candidate_paths_and_evidence\n")
+    state_index = script.index('CHECKPOINT_STATE="$(python3 "$CHECKPOINT_HELPER" show')
+    checkpoint_index = script.index(
+        "verify_attested_candidate_checkpoint_for_mode\n",
+        state_index,
+    )
+    handoff_index = script.index(
+        'bash "$RELEASE_WORKTREE/03_Scripts/deploy/tencent_bluegreen_release.sh"',
+    )
+    assert lock_index < evidence_index < state_index < checkpoint_index < handoff_index
+
+
+def test_canonical_cleanup_reconstructs_original_reviewed_attestation() -> None:
+    control = (
+        REPO_ROOT / "03_Scripts/deploy/github_candidate_control.sh"
+    ).read_text(encoding="utf-8")
+    verifier = (
+        REPO_ROOT / "03_Scripts/deploy/verify_candidate_handoff.py"
+    ).read_text(encoding="utf-8")
+
+    assert "Candidate checkpoint journal" in control
+    assert "candidate_ready_events" in control
+    assert "reconstructed_attestation_sha256" in control
+    assert "reconstructed_attestation_sha256 != requested_attestation" in control
+    assert '"source": "reconstructed-from-canonical-journal"' in control
+    assert '"CANDIDATE_ATTESTATION_SHA256": args.attestation_sha256' in verifier
+
+
+@pytest.mark.parametrize(
+    ("phase", "expected_returncode"),
+    [("candidate_ready", 1), ("active_updated", 0)],
+)
+def test_approval_only_hash_binds_original_candidate_ready_checkpoint(
+    tmp_path: Path,
+    phase: str,
+    expected_returncode: int,
+) -> None:
+    checkpoint = tmp_path / "candidate.json"
+    checkpoint.write_text("reviewed state changed\n", encoding="utf-8")
+    function = _shell_function(
+        REMOTE_SCRIPT,
+        "verify_attested_candidate_checkpoint_for_mode",
+    )
+    environment = {
+        **os.environ,
+        "CHECKPOINT_FILE": str(checkpoint),
+        "CHECKPOINT_PHASE": phase,
+        "DEPLOY_BLUEGREEN_MODE": "approve-candidate-to-active",
+        "DEPLOY_CANDIDATE_SERVER_CHECKPOINT_SHA256": "0" * 64,
+    }
+    result = subprocess.run(
+        ["bash", "-c", function + "\nverify_attested_candidate_checkpoint_for_mode"],
+        env=environment,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == expected_returncode
+
+
+def test_canonical_cleanup_always_rechecks_captured_checkpoint_hash(
+    tmp_path: Path,
+) -> None:
+    checkpoint = tmp_path / "candidate.json"
+    checkpoint.write_text("canonical state changed\n", encoding="utf-8")
+    function = _shell_function(
+        REMOTE_SCRIPT,
+        "verify_attested_candidate_checkpoint_for_mode",
+    )
+    environment = {
+        **os.environ,
+        "CHECKPOINT_FILE": str(checkpoint),
+        "CHECKPOINT_PHASE": "active_updated",
+        "DEPLOY_BLUEGREEN_MODE": "release-candidate",
+        "DEPLOY_CANDIDATE_HANDOFF_SOURCE": "canonical-server",
+        "DEPLOY_CANDIDATE_SERVER_CHECKPOINT_SHA256": "0" * 64,
+    }
+    result = subprocess.run(
+        ["bash", "-c", function + "\nverify_attested_candidate_checkpoint_for_mode"],
+        env=environment,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 1
+    assert "changed after the reviewed handoff" in result.stdout
+
+
 def test_remote_release_cleanup_is_best_effort_for_every_handoff_result() -> None:
     script = REMOTE_SCRIPT.read_text(encoding="utf-8")
     cleanup = _shell_function(REMOTE_SCRIPT, "remove_transient_release_paths")

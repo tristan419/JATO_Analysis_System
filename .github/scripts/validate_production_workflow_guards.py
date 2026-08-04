@@ -18,6 +18,7 @@ MAIN_REF = "refs/heads/main"
 MAIN_REF_CONDITION = f"github.ref == '{MAIN_REF}'"
 PRODUCTION_ENVIRONMENT = "production"
 PRODUCTION_RELEASE_WORKFLOW = ".github/workflows/production-release.yml"
+INTL_SYNC_WORKFLOW = ".github/workflows/sync-www-active-to-intl.yml"
 CHECKPOINT_RECOVERY_WORKFLOW = (
     ".github/workflows/production-checkpoint-recovery.yml"
 )
@@ -53,10 +54,38 @@ PRODUCTION_RELEASE_DEPLOY_CONDITION = (
     MAIN_REF_CONDITION
     + " && needs.release_coordination_guard.outputs.release-action == 'deploy'"
 )
+PRODUCTION_PREPARE_CONDITION = (
+    PRODUCTION_RELEASE_DEPLOY_CONDITION
+    + " && (github.event_name != 'workflow_dispatch' || "
+    + "inputs.release_mode == 'prepare-candidate')"
+)
+PRODUCTION_APPROVAL_CONDITION = (
+    MAIN_REF_CONDITION
+    + " && github.event_name == 'workflow_dispatch'"
+    + " && inputs.release_mode == 'approve-candidate-to-active'"
+    + " && needs.release_coordination_guard.outputs.release-action == 'deploy'"
+)
+PRODUCTION_CLEANUP_CONDITION = (
+    MAIN_REF_CONDITION
+    + " && github.event_name == 'workflow_dispatch'"
+    + " && (inputs.release_mode == 'discard-candidate' || "
+    + "inputs.release_mode == 'release-candidate')"
+    + " && needs.release_coordination_guard.outputs.release-action == 'deploy'"
+)
+PRODUCTION_LEGACY_INTL_CONDITION = (
+    PRODUCTION_RELEASE_DEPLOY_CONDITION
+    + " && github.event_name == 'workflow_dispatch'"
+    + " && inputs.release_mode == 'prepare-and-switch'"
+)
 
 PRODUCTION_JOBS = {
-    PRODUCTION_RELEASE_WORKFLOW: ("deploy_tencent",),
+    PRODUCTION_RELEASE_WORKFLOW: (
+        "deploy_tencent",
+        "approve_candidate_to_active",
+        "cleanup_candidate",
+    ),
     CHECKPOINT_RECOVERY_WORKFLOW: ("recover_checkpoint",),
+    INTL_SYNC_WORKFLOW: ("sync_intl",),
     ".github/workflows/deploy-aws-ecs.yml": ("deploy",),
     ".github/workflows/deploy-ec2-auto-update.yml": ("deploy",),
     ".github/workflows/hermes-devsync.yml": ("devsync",),
@@ -72,6 +101,8 @@ PRODUCTION_RELEASE_MAIN_ONLY_JOBS = (
 PRODUCTION_RELEASE_HOLD_GATED_JOBS = (
     "build_frontend",
     "deploy_tencent",
+    "approve_candidate_to_active",
+    "cleanup_candidate",
     "audit_frontend_parity",
 )
 
@@ -184,7 +215,13 @@ def assert_main_only_production_job(relative_path: str, job_name: str) -> None:
         workflow = load_workflow(relative_path)
         job = get_job(workflow, relative_path, job_name)
         condition = unwrap_expression(job.get("if"))
-        if condition != PRODUCTION_RELEASE_DEPLOY_CONDITION:
+        expected_conditions = {
+            "deploy_tencent": PRODUCTION_PREPARE_CONDITION,
+            "approve_candidate_to_active": PRODUCTION_APPROVAL_CONDITION,
+            "cleanup_candidate": PRODUCTION_CLEANUP_CONDITION,
+        }
+        expected_condition = expected_conditions[job_name]
+        if condition != expected_condition:
             raise AssertionError(
                 f"{relative_path}:{job_name} must use the exact main-and-hold "
                 f"gate; found {condition!r}"
@@ -278,7 +315,15 @@ def assert_production_release_main_guards() -> None:
     for job_name in PRODUCTION_RELEASE_HOLD_GATED_JOBS:
         job = get_job(workflow, PRODUCTION_RELEASE_WORKFLOW, job_name)
         condition = unwrap_expression(job.get("if"))
-        if condition != PRODUCTION_RELEASE_DEPLOY_CONDITION:
+        expected_conditions = {
+            "build_frontend": PRODUCTION_PREPARE_CONDITION,
+            "deploy_tencent": PRODUCTION_PREPARE_CONDITION,
+            "approve_candidate_to_active": PRODUCTION_APPROVAL_CONDITION,
+            "cleanup_candidate": PRODUCTION_CLEANUP_CONDITION,
+            "audit_frontend_parity": PRODUCTION_LEGACY_INTL_CONDITION,
+        }
+        expected_condition = expected_conditions[job_name]
+        if condition != expected_condition:
             raise AssertionError(
                 f"{PRODUCTION_RELEASE_WORKFLOW}:{job_name} must use the exact "
                 f"main-and-hold gate; found {condition!r}"
@@ -1134,6 +1179,57 @@ def assert_production_release_coordination_guard() -> None:
         raise AssertionError(
             "production push trigger must include the hold helper, document, and plan"
         )
+    dispatch = triggers.get("workflow_dispatch") if isinstance(triggers, Mapping) else None
+    dispatch_inputs = dispatch.get("inputs") if isinstance(dispatch, Mapping) else None
+    release_mode = (
+        dispatch_inputs.get("release_mode")
+        if isinstance(dispatch_inputs, Mapping)
+        else None
+    )
+    if not isinstance(release_mode, Mapping) or release_mode != {
+        "description": (
+            "Prepare, approve, discard, or release one exact reviewed Candidate"
+        ),
+        "required": "true",
+        "type": "choice",
+        "default": "prepare-candidate",
+        "options": [
+            "prepare-candidate",
+            "approve-candidate-to-active",
+            "discard-candidate",
+            "release-candidate",
+        ],
+    }:
+        raise AssertionError("production Candidate release_mode input changed")
+    expected_approval_inputs = {
+        "candidate_prepare_run_id",
+        "candidate_prepare_run_attempt",
+        "candidate_commit_sha",
+        "candidate_archive_sha256",
+        "candidate_attestation_sha256",
+        "confirm_www_activation",
+        "confirm_candidate_cleanup",
+    }
+    if not isinstance(dispatch_inputs, Mapping) or not expected_approval_inputs.issubset(
+        dispatch_inputs
+    ):
+        raise AssertionError("production Candidate approval inputs changed")
+    confirmation = dispatch_inputs.get("confirm_www_activation")
+    if not isinstance(confirmation, Mapping) or confirmation != {
+        "description": "I confirm this exact Candidate may replace www Active",
+        "required": "true",
+        "type": "boolean",
+        "default": "false",
+    }:
+        raise AssertionError("production Candidate approval confirmation changed")
+    cleanup_confirmation = dispatch_inputs.get("confirm_candidate_cleanup")
+    if not isinstance(cleanup_confirmation, Mapping) or cleanup_confirmation != {
+        "description": "I confirm the exact reviewed Candidate may be cleaned up",
+        "required": "true",
+        "type": "boolean",
+        "default": "false",
+    }:
+        raise AssertionError("production Candidate cleanup confirmation changed")
     permissions = workflow.get("permissions")
     if not isinstance(permissions, Mapping):
         raise AssertionError("production permissions must be a mapping")
@@ -1244,16 +1340,16 @@ def assert_production_release_coordination_guard() -> None:
     build = get_job(workflow, PRODUCTION_RELEASE_WORKFLOW, "build_frontend")
     if build.get("needs") != PRODUCTION_COORDINATION_JOB:
         raise AssertionError("frontend build must wait for release coordination")
-    if unwrap_expression(build.get("if")) != PRODUCTION_RELEASE_DEPLOY_CONDITION:
-        raise AssertionError("frontend build must use the exact hold/deploy output")
+    if unwrap_expression(build.get("if")) != PRODUCTION_PREPARE_CONDITION:
+        raise AssertionError("frontend build must require Candidate preparation mode")
 
     deploy = get_job(workflow, PRODUCTION_RELEASE_WORKFLOW, "deploy_tencent")
     if deploy.get("needs") != [PRODUCTION_COORDINATION_JOB, "build_frontend"]:
         raise AssertionError(
             "Tencent deploy must directly retain the hold guard dependency"
         )
-    if unwrap_expression(deploy.get("if")) != PRODUCTION_RELEASE_DEPLOY_CONDITION:
-        raise AssertionError("Tencent deploy must use the exact hold/deploy output")
+    if unwrap_expression(deploy.get("if")) != PRODUCTION_PREPARE_CONDITION:
+        raise AssertionError("Tencent deploy must require Candidate preparation mode")
     deploy_steps = get_steps(deploy, PRODUCTION_RELEASE_WORKFLOW, "deploy_tencent")
     expected_first_steps = [
         "Checkout release source",
@@ -1307,6 +1403,164 @@ def assert_production_release_coordination_guard() -> None:
     if "verify-plan" not in mutation_command:
         raise AssertionError("pre-mutation stale-main check must consume the frozen plan")
 
+    approval = get_job(
+        workflow,
+        PRODUCTION_RELEASE_WORKFLOW,
+        "approve_candidate_to_active",
+    )
+    if approval.get("needs") != PRODUCTION_COORDINATION_JOB:
+        raise AssertionError("Candidate approval must retain the hold guard dependency")
+    if unwrap_expression(approval.get("if")) != PRODUCTION_APPROVAL_CONDITION:
+        raise AssertionError("Candidate approval must use the exact manual approval gate")
+    approval_steps = get_steps(
+        approval,
+        PRODUCTION_RELEASE_WORKFLOW,
+        "approve_candidate_to_active",
+    )
+    approval_names = [str(step.get("name") or "") for step in approval_steps]
+    required_approval_steps = [
+        "Validate exact Candidate approval request",
+        "Verify immutable Candidate handoff",
+        "Validate Tencent approval credentials",
+        "Revalidate frozen coordination plan immediately before Active mutation",
+        "Approve exact Candidate on Tencent",
+        "Record failed approval restore boundary",
+        "Verify www serves the exact approved Candidate",
+        "Restore previous Active after failed www audit",
+        "Keep failed www audit red after automatic restore",
+        "Fetch and attest Active update checkpoint",
+        "Seal www approval receipt",
+    ]
+    positions = [approval_names.index(name) for name in required_approval_steps]
+    if positions != sorted(positions):
+        raise AssertionError("Candidate approval guard steps are out of order")
+    approval_text = str(approval)
+    for required in (
+        "approve-candidate-to-active",
+        "candidate_attestation_sha256",
+        "verify_candidate_handoff.py",
+        "CANDIDATE_VERIFIED_ENV",
+        "github_candidate_control.sh approve-candidate-to-active",
+        "CANDIDATE_SERVER_EVIDENCE_PATH",
+        "binding.group(1) != expected_evidence_path",
+        "automatic restore previous successful Active",
+        "no success receipt is emitted",
+        "restore-previous-active",
+        "steps.verify_www.outcome == 'failure'",
+        "active_updated",
+        "active-updated.journal.jsonl",
+        "canonical Active update journal tail/checkpoint mismatch",
+        "intl unchanged",
+    ):
+        if required not in approval_text:
+            raise AssertionError(
+                f"Candidate approval lost fail-closed binding {required!r}"
+            )
+    for forbidden in ("prepare-and-switch", "pages deploy", "npm run build"):
+        if forbidden in approval_text:
+            raise AssertionError(
+                f"Candidate approval must not rebuild or publish intl: {forbidden!r}"
+            )
+    if "release-candidate/journal.jsonl" in approval_text:
+        raise AssertionError("www receipt must use the canonical server journal")
+    approve_step = next(
+        step
+        for step in approval_steps
+        if step.get("name") == "Approve exact Candidate on Tencent"
+    )
+    if approve_step.get("id") != "approve_active" or approve_step.get(
+        "continue-on-error"
+    ) not in (None, False, "false"):
+        raise AssertionError("Candidate approval failure must not be masked")
+    mutation_step_name = (
+        "Revalidate frozen coordination plan immediately before Active mutation"
+    )
+    if approval_names.index(mutation_step_name) + 1 != approval_names.index(
+        "Approve exact Candidate on Tencent"
+    ):
+        raise AssertionError("frozen plan must be rechecked immediately before Active mutation")
+    mutation_step = approval_steps[approval_names.index(mutation_step_name)]
+    mutation_command = str(mutation_step.get("run") or "")
+    for required in (
+        RELEASE_COORDINATION_SCRIPT,
+        "verify-plan",
+        '--main-sha "$GITHUB_SHA"',
+        '"$RUNNER_TEMP/release-coordination-plan/release-coordination-plan.json"',
+    ):
+        if required not in mutation_command:
+            raise AssertionError(
+                f"pre-Active-mutation coordination check is missing {required}"
+            )
+
+    cleanup = get_job(
+        workflow,
+        PRODUCTION_RELEASE_WORKFLOW,
+        "cleanup_candidate",
+    )
+    if cleanup.get("needs") != PRODUCTION_COORDINATION_JOB:
+        raise AssertionError("Candidate cleanup must retain the hold guard dependency")
+    if unwrap_expression(cleanup.get("if")) != PRODUCTION_CLEANUP_CONDITION:
+        raise AssertionError("Candidate cleanup must use the exact manual cleanup gate")
+    cleanup_steps = get_steps(
+        cleanup,
+        PRODUCTION_RELEASE_WORKFLOW,
+        "cleanup_candidate",
+    )
+    cleanup_names = [str(step.get("name") or "") for step in cleanup_steps]
+    required_cleanup_steps = [
+        "Validate exact Candidate cleanup request",
+        "Resolve Candidate cleanup handoff source",
+        "Validate Tencent cleanup credentials",
+        "Verify immutable Candidate cleanup handoff",
+        "Capture canonical Candidate cleanup handoff",
+        "Verify canonical Candidate cleanup handoff",
+        "Capture unchanged Active identity before cleanup",
+        "Clean exact Candidate on Tencent",
+        "Fetch canonical Candidate cleanup receipt",
+        "Verify Active identity and health remained unchanged",
+        "Retain immutable Candidate cleanup receipt",
+    ]
+    cleanup_positions = [cleanup_names.index(name) for name in required_cleanup_steps]
+    if cleanup_positions != sorted(cleanup_positions):
+        raise AssertionError("Candidate cleanup guard steps are out of order")
+    cleanup_text = str(cleanup)
+    for required in (
+        "confirm_candidate_cleanup",
+        "canonical-server",
+        "capture-canonical-cleanup",
+        "CANDIDATE_CANONICAL_BUNDLE_OUTPUT",
+        "reviewed-candidate.json",
+        "verify_candidate_handoff.py",
+        "release-candidate",
+        "discard-candidate",
+        'mode == "discard-candidate"',
+        '{"success", "failure"}',
+        'else {"success"}',
+        'run.get("conclusion") not in allowed_conclusions',
+        "Candidate cleanup journal identity/sequence mismatch",
+        "Candidate cleanup journal tail/checkpoint mismatch",
+        "Active identity and health remained unchanged",
+        "overwrite': 'false'",
+        "retention-days': '30'",
+    ):
+        if required not in cleanup_text:
+            raise AssertionError(
+                f"Candidate cleanup lost fail-closed binding {required!r}"
+            )
+    if "Require exact intl artifact before releasing Candidate" in cleanup_names:
+        raise AssertionError("intl synchronization must not block Candidate cleanup")
+    for forbidden in (
+        "prepare-and-switch",
+        "pages deploy",
+        "npm run build",
+        "Package backend release",
+        "Upload complete release archive",
+    ):
+        if forbidden in cleanup_text:
+            raise AssertionError(
+                f"Candidate cleanup must not build or publish intl: {forbidden!r}"
+            )
+
     audit = get_job(
         workflow,
         PRODUCTION_RELEASE_WORKFLOW,
@@ -1320,8 +1574,10 @@ def assert_production_release_coordination_guard() -> None:
         raise AssertionError(
             "frontend parity audit must directly retain the hold guard dependency"
         )
-    if unwrap_expression(audit.get("if")) != PRODUCTION_RELEASE_DEPLOY_CONDITION:
-        raise AssertionError("frontend parity audit must use the exact hold/deploy output")
+    if unwrap_expression(audit.get("if")) != PRODUCTION_LEGACY_INTL_CONDITION:
+        raise AssertionError(
+            "frontend parity audit must require the full-release mode"
+        )
 
 
 def assert_country_news_production_write_is_main_only() -> None:

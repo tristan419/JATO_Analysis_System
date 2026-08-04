@@ -27,6 +27,10 @@ BLUEGREEN_QUIESCENCE_TIMEOUT="${BLUEGREEN_QUIESCENCE_TIMEOUT:-1800}"
 BLUEGREEN_DRAIN_SECONDS="${BLUEGREEN_DRAIN_SECONDS:-30}"
 BLUEGREEN_CANDIDATE_MEMORY_HIGH="${BLUEGREEN_CANDIDATE_MEMORY_HIGH:-3G}"
 BLUEGREEN_CANDIDATE_MEMORY_MAX="${BLUEGREEN_CANDIDATE_MEMORY_MAX:-4G}"
+BLUEGREEN_CANDIDATE_PREVIEW_PORT=18002
+BLUEGREEN_CANDIDATE_PREVIEW_MEMORY_HIGH=128M
+BLUEGREEN_CANDIDATE_PREVIEW_MEMORY_MAX=256M
+BLUEGREEN_CANDIDATE_PREVIEW_TASKS_MAX=64
 BLUEGREEN_CANDIDATE_BUILD_TIMEOUT="${BLUEGREEN_CANDIDATE_BUILD_TIMEOUT:-1800}"
 BLUEGREEN_ACTIVE_MEMORY_HIGH="${BLUEGREEN_ACTIVE_MEMORY_HIGH:-6G}"
 BLUEGREEN_ACTIVE_MEMORY_MAX="${BLUEGREEN_ACTIVE_MEMORY_MAX:-8G}"
@@ -38,6 +42,8 @@ BLUEGREEN_ACTIVE_MEMORY_HIGH_BYTES=$((6 * 1024 * 1024 * 1024))
 BLUEGREEN_ACTIVE_MEMORY_MAX_BYTES=$((8 * 1024 * 1024 * 1024))
 BLUEGREEN_CANDIDATE_MEMORY_HIGH_BYTES=$((3 * 1024 * 1024 * 1024))
 BLUEGREEN_CANDIDATE_MEMORY_MAX_BYTES=$((4 * 1024 * 1024 * 1024))
+BLUEGREEN_CANDIDATE_PREVIEW_MEMORY_HIGH_BYTES=$((128 * 1024 * 1024))
+BLUEGREEN_CANDIDATE_PREVIEW_MEMORY_MAX_BYTES=$((256 * 1024 * 1024))
 BLUEGREEN_CANDIDATE_PREIMAGE_CACHE_MAX_BYTES=$((256 * 1024 * 1024))
 BLUEGREEN_PREPARE_DISK_RESERVE_BYTES=$((15 * 1024 * 1024 * 1024))
 BLUEGREEN_PREPARE_DISK_RESERVE_PERCENT=8
@@ -212,6 +218,8 @@ RELEASE_STORAGE_GUARD="${BLUEGREEN_STORAGE_GUARD_OVERRIDE:-$RELEASE_WORKTREE/03_
 CANDIDATE_PREIMAGE_HELPER="${BLUEGREEN_CANDIDATE_PREIMAGE_HELPER_OVERRIDE:-$RELEASE_DIR/03_Scripts/deploy/candidate_runtime_preimage.py}"
 CANDIDATE_PREIMAGE_ROOT="${CANDIDATE_PREIMAGE_ROOT:-/var/lib/jato-release-preimages}"
 CANDIDATE_PREIMAGE_DIR="$CANDIDATE_PREIMAGE_ROOT/candidate-preimages/$DEPLOY_COMMIT_SHA/$DEPLOY_ARCHIVE_SHA256"
+FIXED_ACTIVE_PREIMAGE_HELPER="$RELEASE_DIR/03_Scripts/deploy/fixed_active_preimage.py"
+FIXED_ACTIVE_LEGACY_BOOTSTRAP_RECEIPT="$BLUEGREEN_STATE_ROOT/fixed-active-legacy-bootstrap.completed"
 READINESS_HELPER="$RELEASE_WORKTREE/03_Scripts/deploy/verify_backend_readiness.py"
 QUIESCENCE_HELPER="$RELEASE_WORKTREE/03_Scripts/deploy/jato_quiescence_gate.py"
 SYSTEMD_TEMPLATE="$RELEASE_WORKTREE/03_Scripts/deploy/systemd/jato-fullstack-backend@.service"
@@ -220,6 +228,9 @@ BACKEND_TEMPLATE_PREIMAGE="$BLUEGREEN_STATE_ROOT/backend-template.pre-${DEPLOY_C
 BACKEND_TEMPLATE_PREIMAGE_STATE="${BACKEND_TEMPLATE_PREIMAGE}.state"
 SLOT_ENV_TEMPLATE="$RELEASE_WORKTREE/03_Scripts/deploy/systemd/jato-fullstack-backend-slot.env.example"
 NGINX_INSTALLER="$RELEASE_WORKTREE/03_Scripts/deploy/nginx/install_jato_fullstack_nginx.sh"
+CANDIDATE_PREVIEW_TEMPLATE="$RELEASE_DIR/03_Scripts/deploy/nginx/jato_candidate_preview.conf.example"
+CANDIDATE_PREVIEW_STATE_DIR="$BLUEGREEN_STATE_ROOT/candidate-preview/$DEPLOY_COMMIT_SHA/$DEPLOY_ARCHIVE_SHA256"
+CANDIDATE_PREVIEW_CONFIG="$CANDIDATE_PREVIEW_STATE_DIR/nginx.conf"
 SOURCE_SEAL_HELPER="$RELEASE_WORKTREE/03_Scripts/deploy/verify_release_source_seal.py"
 TOOLKIT_EGG_INFO_HELPER="$RELEASE_WORKTREE/03_Scripts/deploy/cleanup_toolkit_egg_info.py"
 BOOT_RECONCILE_HELPER="$RELEASE_WORKTREE/03_Scripts/deploy/jato_bluegreen_boot_reconcile.py"
@@ -248,6 +259,11 @@ SWITCH_HANDLER_ACTIVE=false
 RELEASE_ROLLED_BACK=false
 PRE_SUPERVISOR_CANDIDATE_ARMED=false
 RUNTIME_ALREADY_SEALED=false
+ACTIVE_UPDATE_HANDLER_ARMED=false
+ACTIVE_UPDATE_TARGET_ENV=""
+ACTIVE_UPDATE_TARGET_NGINX=""
+FIXED_ACTIVE_SLOT_DIGEST=""
+PREVIOUS_ACTIVE_RESTORE_ARMED=false
 
 checkpoint_write() {
   local phase="$1"
@@ -268,10 +284,15 @@ evidence_binding() {
   local digest=""
   if [[ ! -f "$EVIDENCE_FILE" || -L "$EVIDENCE_FILE" ]]; then
     fail "release evidence is unavailable before the switch"
+    return 1
   fi
-  digest="$(sha256sum "$EVIDENCE_FILE" | awk '{print $1}')"
+  if ! digest="$(sha256sum "$EVIDENCE_FILE" | awk '{print $1}')"; then
+    fail "release evidence digest cannot be calculated"
+    return 1
+  fi
   if [[ ! "$digest" =~ ^[0-9a-f]{64}$ ]]; then
     fail "release evidence digest is invalid"
+    return 1
   fi
   printf 'evidence_path=%s evidence_sha256=%s' "$EVIDENCE_FILE" "$digest"
 }
@@ -1491,9 +1512,7 @@ install_slot_runtime() {
   local service_stage="/etc/systemd/system/.${SERVICE_PREFIX}${CANDIDATE_SLOT}.service.jato-candidate-installing"
   local env_target="$SLOT_ENV_ROOT/$CANDIDATE_SLOT.env"
   local env_stage="$SLOT_ENV_ROOT/.$CANDIDATE_SLOT.env.jato-candidate-installing"
-  local sandbox_cache="/var/cache/jato-candidate-$CANDIDATE_SLOT"
   local sandbox_dropin="/etc/systemd/system/${SERVICE_PREFIX}${CANDIDATE_SLOT}.service.d/10-candidate-sandbox.conf"
-  local sandbox_stage="/etc/systemd/system/${SERVICE_PREFIX}${CANDIDATE_SLOT}.service.d/.10-candidate-sandbox.conf.jato-candidate-installing"
   local slot_link="$SLOTS_ROOT/$CANDIDATE_SLOT/current"
   local slot_link_stage="$SLOTS_ROOT/$CANDIDATE_SLOT/.current.jato-candidate-installing"
   local sandbox_temp=""
@@ -1513,29 +1532,7 @@ install_slot_runtime() {
   sandbox_temp="$(mktemp)"
   {
     echo "[Service]"
-    echo "DynamicUser=yes"
-    echo "ProtectSystem=strict"
-    echo "ProtectHome=true"
-    echo "PrivateTmp=true"
-    echo "PrivateDevices=true"
-    echo "NoNewPrivileges=true"
-    echo "CapabilityBoundingSet="
-    echo "AmbientCapabilities="
-    echo "RestrictNamespaces=true"
-    echo "ProtectKernelTunables=true"
-    echo "ProtectKernelModules=true"
-    echo "ProtectKernelLogs=true"
-    echo "ProtectControlGroups=true"
-    echo "LockPersonality=true"
-    echo "RestrictRealtime=true"
-    echo "RestrictSUIDSGID=true"
-    printf 'CacheDirectory=jato-candidate-%s\n' "$CANDIDATE_SLOT"
-    printf 'Environment=HOME=%s\n' "$sandbox_cache"
-    printf 'Environment=XDG_CACHE_HOME=%s\n' "$sandbox_cache"
-    echo 'Environment="PGOPTIONS=-c default_transaction_read_only=on"'
-    echo "Environment=APP_REDIS_ENABLED=false"
-    printf 'ReadOnlyPaths=%s %s\n' "$SHARED_ROOT" "$BLUEGREEN_STATE_ROOT"
-    printf 'ReadWritePaths=%s\n' "$sandbox_cache"
+    echo "# Deliberately empty: Candidate uses the same data access as Active."
   } > "$sandbox_temp"
   if ! prepare_candidate_runtime_preimage "$env_temp" "$sandbox_temp"; then
     rm -f "$env_temp" "$sandbox_temp"
@@ -1553,11 +1550,7 @@ install_slot_runtime() {
     return 1
   fi
   rm -f "$env_temp"
-  if ! candidate_durable_install_file \
-    "$sandbox_temp" "$sandbox_dropin" 0644 "$sandbox_stage" true; then
-    rm -f "$sandbox_temp"
-    return 1
-  fi
+  durable_remove_path "$sandbox_dropin" || return 1
   rm -f "$sandbox_temp"
   sudo -n systemctl stop "${SERVICE_PREFIX}${CANDIDATE_SLOT}" >/dev/null 2>&1 || true
   candidate_atomic_symlink "$RELEASE_DIR" "$slot_link" "$slot_link_stage"
@@ -1857,116 +1850,86 @@ commit_backend_unit_template() {
   verify_candidate_reboot_gate
 }
 
-verify_candidate_sandbox() {
-  local dropin="/etc/systemd/system/${SERVICE_PREFIX}${CANDIDATE_SLOT}.service.d/10-candidate-sandbox.conf"
-  local ambient_capabilities=""
-  local capability_bounding_set=""
-  local dynamic_user=""
-  local environment=""
-  local main_pid=""
-  local no_new_privileges=""
-  local private_devices=""
-  local private_tmp=""
-  local protect_system=""
-  local read_only_paths=""
-  local read_write_paths=""
-  local restrict_namespaces=""
-  if sudo -n test -L "$dropin" || ! sudo -n test -f "$dropin"; then
-    fail "candidate sandbox drop-in is missing or unsafe"
+verify_candidate_data_access_contract() {
+  local dropin="/etc/systemd/system/$SERVICE_PREFIX$CANDIDATE_SLOT.service.d/10-candidate-sandbox.conf"
+  local active_main_pid=""
+  local active_property=""
+  local active_unit="$SERVICE_PREFIX$CURRENT_ACTIVE_SLOT"
+  local candidate_main_pid=""
+  local candidate_property=""
+  local candidate_unit="$SERVICE_PREFIX$CANDIDATE_SLOT"
+  local property=""
+  if sudo -n test -e "$dropin" || sudo -n test -L "$dropin"; then
+    fail "Candidate retained a data-access override drop-in"
     return 1
   fi
-  protect_system="$(
-    systemctl show "${SERVICE_PREFIX}${CANDIDATE_SLOT}" -p ProtectSystem --value
-  )"
-  dynamic_user="$(
-    systemctl show "${SERVICE_PREFIX}${CANDIDATE_SLOT}" -p DynamicUser --value
-  )"
-  private_tmp="$(
-    systemctl show "${SERVICE_PREFIX}${CANDIDATE_SLOT}" -p PrivateTmp --value
-  )"
-  private_devices="$(
-    systemctl show "${SERVICE_PREFIX}${CANDIDATE_SLOT}" -p PrivateDevices --value
-  )"
-  no_new_privileges="$(
-    systemctl show "${SERVICE_PREFIX}${CANDIDATE_SLOT}" -p NoNewPrivileges --value
-  )"
-  capability_bounding_set="$(
-    systemctl show "${SERVICE_PREFIX}${CANDIDATE_SLOT}" -p CapabilityBoundingSet --value
-  )"
-  ambient_capabilities="$(
-    systemctl show "${SERVICE_PREFIX}${CANDIDATE_SLOT}" -p AmbientCapabilities --value
-  )"
-  restrict_namespaces="$(
-    systemctl show "${SERVICE_PREFIX}${CANDIDATE_SLOT}" -p RestrictNamespaces --value
-  )"
-  environment="$(
-    systemctl show "${SERVICE_PREFIX}${CANDIDATE_SLOT}" -p Environment --value
-  )"
-  read_only_paths="$(
-    systemctl show "${SERVICE_PREFIX}${CANDIDATE_SLOT}" -p ReadOnlyPaths --value
-  )"
-  read_write_paths="$(
-    systemctl show "${SERVICE_PREFIX}${CANDIDATE_SLOT}" -p ReadWritePaths --value
-  )"
-  main_pid="$(
-    systemctl show "${SERVICE_PREFIX}${CANDIDATE_SLOT}" -p MainPID --value
-  )"
-  if [[ "$dynamic_user" != "yes" ]] \
-    || [[ "$protect_system" != "strict" ]] \
-    || [[ "$private_tmp" != "yes" ]] \
-    || [[ "$private_devices" != "yes" ]] \
-    || [[ "$no_new_privileges" != "yes" ]] \
-    || [[ -n "$capability_bounding_set" ]] \
-    || [[ -n "$ambient_capabilities" ]] \
-    || [[ "$restrict_namespaces" != "yes" ]] \
-    || [[ "$environment" != *"PGOPTIONS=-c default_transaction_read_only=on"* ]] \
-    || [[ "$environment" != *"APP_REDIS_ENABLED=false"* ]] \
-    || [[ "$read_only_paths" != *"$SHARED_ROOT"* ]] \
-    || [[ "$read_only_paths" != *"$BLUEGREEN_STATE_ROOT"* ]] \
-    || [[ "$read_write_paths" != *"/var/cache/jato-candidate-$CANDIDATE_SLOT"* ]]; then
-    fail "candidate systemd sandbox does not match the read-only data/state contract"
-    return 1
-  fi
-  if [[ ! "$main_pid" =~ ^[1-9][0-9]*$ ]] \
+  for property in \
+    DynamicUser ProtectSystem ProtectHome PrivateTmp PrivateDevices \
+    NoNewPrivileges RestrictNamespaces ReadOnlyPaths ReadWritePaths; do
+    candidate_property="$(
+      systemctl show "$candidate_unit" -p "$property" --value
+    )" || return 1
+    active_property="$(
+      systemctl show "$active_unit" -p "$property" --value
+    )" || return 1
+    if [[ "$candidate_property" != "$active_property" ]]; then
+      fail "Candidate $property differs from Active data-access isolation"
+      return 1
+    fi
+  done
+  candidate_main_pid="$(
+    systemctl show "$candidate_unit" -p MainPID --value
+  )" || return 1
+  active_main_pid="$(
+    systemctl show "$active_unit" -p MainPID --value
+  )" || return 1
+  if [[ ! "$candidate_main_pid" =~ ^[1-9][0-9]*$ ]] \
+    || [[ ! "$active_main_pid" =~ ^[1-9][0-9]*$ ]] \
     || ! sudo -n python3 -B - \
-      "$main_pid" "/var/cache/jato-candidate-$CANDIDATE_SLOT" <<'PY'
-import os
+      "$candidate_main_pid" "$active_main_pid" <<'PY'
 from pathlib import Path
 import sys
 
-status: dict[str, str] = {}
-for line in (Path("/proc") / sys.argv[1] / "status").read_text(
-    encoding="utf-8"
-).splitlines():
-    key, separator, value = line.partition(":")
-    if separator:
-        status[key] = value.strip()
-uids = status.get("Uid", "").split()
-if len(uids) != 4 or any(uid == "0" for uid in uids):
-    raise SystemExit("[ERROR] candidate backend did not run as a non-root dynamic user")
-if int(status.get("CapEff", "-1"), 16) != 0:
-    raise SystemExit("[ERROR] candidate backend retained effective Linux capabilities")
-if int(status.get("CapBnd", "-1"), 16) != 0:
-    raise SystemExit("[ERROR] candidate backend capability bounding set is not empty")
-if status.get("NoNewPrivs") != "1":
-    raise SystemExit("[ERROR] candidate backend lacks no-new-privileges enforcement")
-environment = (
-    Path("/proc") / sys.argv[1] / "environ"
-).read_bytes().split(b"\0")
-if b"PGOPTIONS=-c default_transaction_read_only=on" not in environment:
-    raise SystemExit("[ERROR] candidate backend lacks PostgreSQL read-only PGOPTIONS")
-if b"APP_REDIS_ENABLED=false" not in environment:
-    raise SystemExit("[ERROR] candidate backend did not disable shared Redis writes")
-gids = status.get("Gid", "").split()
-if len(gids) != 4 or any(gid == "0" for gid in gids):
-    raise SystemExit("[ERROR] candidate backend did not run with a non-root group")
-cache = Path(sys.argv[2])
-probe = cache / ".jato-candidate-write-probe"
-os.setgroups([])
-os.setgid(int(gids[1]))
-os.setuid(int(uids[1]))
-probe.write_text("candidate-cache-write-ok\n", encoding="utf-8")
-probe.unlink()
+
+def process_environment(pid: str) -> dict[str, bytes]:
+    result: dict[str, bytes] = {}
+    for token in (Path("/proc") / pid / "environ").read_bytes().split(b"\0"):
+        key, separator, value = token.partition(b"=")
+        if separator:
+            result[key.decode("ascii", "strict")] = value
+    return result
+
+
+candidate = process_environment(sys.argv[1])
+active = process_environment(sys.argv[2])
+shared_keys = (
+    "APP_DATABASE_ENABLED",
+    "APP_DATABASE_URL",
+    "APP_REDIS_ENABLED",
+    "APP_REDIS_URL",
+    "PGOPTIONS",
+    "JATO_PARQUET_PATH",
+    "JATO_PARTITIONED_PATH",
+    "APP_CRUD_DATA_PATH",
+    "APP_ENGINEERING_IMPORT_ROOT",
+    "MSRP_GOVERNANCE_EVIDENCE_ROOT",
+    "APP_LOCAL_WIKI_DB_PATH",
+)
+for key in shared_keys:
+    if candidate.get(key) != active.get(key):
+        raise SystemExit(
+            f"[ERROR] Candidate and Active differ for data connection key {key}"
+        )
+singleton_expectations = {
+    "APP_GROUPED_TIME_SERIES_PREWARM_ENABLED": b"false",
+    "APP_DASHBOARD_OVERVIEW_PREWARM_ENABLED": b"false",
+    "APP_METADATA_PREWARM_ENABLED": b"false",
+    "APP_ADVANCED_ANALYSIS_WARMUP_ENABLED": b"false",
+    "HERMES_RUN_ENABLED": b"false",
+}
+for key, expected in singleton_expectations.items():
+    if candidate.get(key, b"false").lower() != expected:
+        raise SystemExit(f"[ERROR] Candidate singleton task gate is open: {key}")
 PY
   then
     return 1
@@ -2120,29 +2083,39 @@ verify_candidate_cgroup() {
   if [[ "$BLUEGREEN_CANDIDATE_MEMORY_MAX" == "4G" && "$actual_max" != "$expected_max" ]]; then
     fail "candidate MemoryMax is not 4G: $actual_max"
   fi
-  verify_candidate_cgroup_processes_only
+  verify_backend_cgroup_processes_only "$CANDIDATE_SLOT"
 }
 
 verify_active_cgroup() {
+  local active_slot="${1:-}"
   local expected_high=$((6 * 1024 * 1024 * 1024))
   local expected_max=$((8 * 1024 * 1024 * 1024))
   local actual_high=""
   local actual_max=""
-  actual_high="$(systemctl show "${SERVICE_PREFIX}${CANDIDATE_SLOT}" -p MemoryHigh --value)"
-  actual_max="$(systemctl show "${SERVICE_PREFIX}${CANDIDATE_SLOT}" -p MemoryMax --value)"
+  if [[ "$active_slot" != "8000" && "$active_slot" != "8001" ]]; then
+    fail "active cgroup verification requires an explicit 8000 or 8001 slot"
+    return 1
+  fi
+  actual_high="$(systemctl show "${SERVICE_PREFIX}${active_slot}" -p MemoryHigh --value)"
+  actual_max="$(systemctl show "${SERVICE_PREFIX}${active_slot}" -p MemoryMax --value)"
   if [[ "$BLUEGREEN_ACTIVE_MEMORY_HIGH" == "6G" && "$actual_high" != "$expected_high" ]]; then
     fail "active MemoryHigh is not 6G: $actual_high"
   fi
   if [[ "$BLUEGREEN_ACTIVE_MEMORY_MAX" == "8G" && "$actual_max" != "$expected_max" ]]; then
     fail "active MemoryMax is not 8G: $actual_max"
   fi
-  sudo -n grep -Fxq "APP_BACKEND_WORKERS=2" "$SLOT_ENV_ROOT/$CANDIDATE_SLOT.env" \
+  sudo -n grep -Fxq "APP_BACKEND_WORKERS=2" "$SLOT_ENV_ROOT/$active_slot.env" \
     || fail "active slot must retain exactly two configured Uvicorn workers"
-  verify_candidate_cgroup_processes_only
+  verify_backend_cgroup_processes_only "$active_slot"
 }
 
-verify_candidate_cgroup_processes_only() {
-  python3 - "${SERVICE_PREFIX}${CANDIDATE_SLOT}" <<'PY'
+verify_backend_cgroup_processes_only() {
+  local slot="${1:-}"
+  if [[ "$slot" != "8000" && "$slot" != "8001" ]]; then
+    fail "backend cgroup process verification requires an explicit 8000 or 8001 slot"
+    return 1
+  fi
+  python3 - "${SERVICE_PREFIX}${slot}" <<'PY'
 import pathlib
 import subprocess
 import sys
@@ -2282,6 +2255,57 @@ PY
   rm -f "$body"
 }
 
+verify_active_monthly_gate_held() {
+  local active_slot="$1"
+  local body=""
+  local status=""
+  body="$(mktemp)"
+  if ! status="$(
+    curl --noproxy '*' --silent --show-error --output "$body" \
+      --write-out '%{http_code}' --max-time 10 \
+      "http://127.0.0.1:${active_slot}/v1/msrp/monthly-update-jobs"
+  )"; then
+    rm -f "$body"
+    return 1
+  fi
+  if ! python3 -B - "$body" "$status" "$active_slot" <<'PY'
+import json
+from pathlib import Path
+import sys
+
+try:
+    payload = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
+except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+    raise SystemExit(f"[ERROR] held monthly gate returned invalid JSON: {exc}")
+detail = payload.get("detail") if isinstance(payload, dict) else None
+if (
+    sys.argv[2] != "423"
+    or not isinstance(detail, dict)
+    or detail.get("code") != "JATO_MONTHLY_DISABLED"
+    or detail.get("enabled") is not False
+    or detail.get("releaseSlot") != sys.argv[3]
+    or detail.get("reason") != "deployment_in_progress"
+    or detail.get("activeSlot") is not None
+):
+    raise SystemExit("[ERROR] Active monthly gate is not held by deployment")
+PY
+  then
+    rm -f "$body"
+    return 1
+  fi
+  rm -f "$body"
+}
+
+verify_quiescence_hold_context() {
+  if [[ "${JATO_QUIESCENCE_LOCK_HELD:-}" != "1" ]] \
+    || [[ "${JATO_DEPLOYMENT_MARKER:-}" != "$DEPLOYMENT_MARKER" ]] \
+    || [[ ! -f "$DEPLOYMENT_MARKER" ]] \
+    || [[ -L "$DEPLOYMENT_MARKER" ]]; then
+    fail "fixed Active mutation requires the persistent JATO quiescence hold"
+    return 1
+  fi
+}
+
 verify_candidate() {
   verify_final_runtime_seal || return 1
   unit_property_equals \
@@ -2309,6 +2333,1735 @@ verify_candidate() {
   unit_property_equals \
     "${SERVICE_PREFIX}${CANDIDATE_SLOT}" UnitFileState disabled || return 1
   verify_final_runtime_seal || return 1
+}
+
+candidate_preview_unit_name() {
+  printf 'jato-candidate-preview-%s-%s.service\n' \
+    "${DEPLOY_COMMIT_SHA:0:12}" "${DEPLOY_ARCHIVE_SHA256:0:12}"
+}
+
+candidate_preview_runtime_directory() {
+  printf 'jato-candidate-preview-%s-%s\n' \
+    "${DEPLOY_COMMIT_SHA:0:12}" "${DEPLOY_ARCHIVE_SHA256:0:12}"
+}
+
+candidate_preview_runtime_root() {
+  printf '/run/%s\n' "$(candidate_preview_runtime_directory)"
+}
+
+candidate_preview_identity() {
+  printf '%s:%s:%s:%s\n' \
+    "$DEPLOY_COMMIT_SHA" \
+    "$DEPLOY_ARCHIVE_SHA256" \
+    "$CANDIDATE_SLOT" \
+    "$BLUEGREEN_CANDIDATE_PREVIEW_PORT"
+}
+
+candidate_preview_nginx_bin() {
+  printf '/usr/sbin/nginx\n'
+}
+
+ensure_candidate_preview_state_dir() {
+  local component=""
+  local current="$BLUEGREEN_STATE_ROOT"
+  for component in \
+    candidate-preview \
+    "$DEPLOY_COMMIT_SHA" \
+    "$DEPLOY_ARCHIVE_SHA256"; do
+    current="$current/$component"
+    if sudo -n test -L "$current" \
+      || {
+        sudo -n test -e "$current" \
+          && ! sudo -n test -d "$current";
+      }; then
+      fail "Candidate preview state path is unsafe: $current"
+      return 1
+    fi
+    sudo -n install -d -m 0755 -o "$(id -u)" -g "$(id -g)" "$current" \
+      || return 1
+  done
+}
+
+render_candidate_preview_config() {
+  local output="$1"
+  local frontend_root="$RELEASE_DIR/06_AppPlatform/frontend/dist"
+  local runtime_root=""
+  runtime_root="$(candidate_preview_runtime_root)" || return 1
+  python3 -B - \
+    "$CANDIDATE_PREVIEW_TEMPLATE" \
+    "$output" \
+    "$frontend_root" \
+    "$runtime_root" \
+    "$DEPLOY_COMMIT_SHA" \
+    "$DEPLOY_ARCHIVE_SHA256" \
+    "$CANDIDATE_SLOT" \
+    "$BLUEGREEN_CANDIDATE_PREVIEW_PORT" <<'PY'
+import json
+import os
+from pathlib import Path
+import re
+import stat
+import sys
+
+(
+    template_name,
+    output_name,
+    frontend_root,
+    runtime_root,
+    commit,
+    archive_sha256,
+    slot_raw,
+    port_raw,
+) = sys.argv[1:]
+template = Path(template_name)
+output = Path(output_name)
+try:
+    template_metadata = template.lstat()
+except FileNotFoundError as exc:
+    raise SystemExit("[ERROR] Candidate preview Nginx template is missing") from exc
+if template.is_symlink() or not stat.S_ISREG(template_metadata.st_mode):
+    raise SystemExit("[ERROR] Candidate preview Nginx template is unsafe")
+if re.fullmatch(r"[0-9a-f]{40}", commit) is None:
+    raise SystemExit("[ERROR] Candidate preview commit SHA is malformed")
+if re.fullmatch(r"[0-9a-f]{64}", archive_sha256) is None:
+    raise SystemExit("[ERROR] Candidate preview archive SHA-256 is malformed")
+if slot_raw not in {"8000", "8001"}:
+    raise SystemExit("[ERROR] Candidate preview slot is malformed")
+if port_raw != "18002":
+    raise SystemExit("[ERROR] Candidate preview port must remain 18002")
+expected_frontend = re.fullmatch(
+    r"/opt/jato/releases/[0-9a-f]{40}/[0-9a-f]{64}"
+    r"/06_AppPlatform/frontend/dist",
+    frontend_root,
+)
+if expected_frontend is None or not (Path(frontend_root) / "index.html").is_file():
+    raise SystemExit("[ERROR] Candidate preview frontend root is invalid")
+if re.fullmatch(
+    r"/run/jato-candidate-preview-[0-9a-f]{12}-[0-9a-f]{12}",
+    runtime_root,
+) is None:
+    raise SystemExit("[ERROR] Candidate preview runtime root is invalid")
+if output.is_symlink():
+    raise SystemExit("[ERROR] Candidate preview render target must not be a symlink")
+payload = json.dumps(
+    {
+        "role": "candidate",
+        "commitSha": commit,
+        "archiveSha256": archive_sha256,
+        "candidateSlot": int(slot_raw),
+        "previewPort": int(port_raw),
+    },
+    separators=(",", ":"),
+    sort_keys=True,
+)
+replacements = {
+    "__CANDIDATE_PREVIEW_RUNTIME_ROOT__": runtime_root,
+    "__CANDIDATE_PREVIEW_PORT__": port_raw,
+    "__CANDIDATE_FRONTEND_ROOT__": frontend_root,
+    "__CANDIDATE_PREVIEW_JSON__": payload,
+    "__CANDIDATE_SLOT__": slot_raw,
+}
+rendered = template.read_text(encoding="utf-8")
+placeholders = set(re.findall(r"__[A-Z0-9_]+__", rendered))
+if placeholders != set(replacements):
+    raise SystemExit("[ERROR] Candidate preview template placeholders are invalid")
+for placeholder, value in replacements.items():
+    if not value or placeholder not in rendered:
+        raise SystemExit("[ERROR] Candidate preview template replacement is empty")
+    rendered = rendered.replace(placeholder, value)
+if re.search(r"__[A-Z0-9_]+__", rendered):
+    raise SystemExit("[ERROR] Candidate preview template retained a placeholder")
+flags = os.O_WRONLY | os.O_CREAT | os.O_TRUNC
+if hasattr(os, "O_NOFOLLOW"):
+    flags |= os.O_NOFOLLOW
+descriptor = os.open(output, flags, 0o600)
+with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
+    handle.write(rendered)
+    handle.flush()
+    os.fsync(handle.fileno())
+PY
+}
+
+candidate_preview_port_is_unused() {
+  local listeners=""
+  if ! listeners="$(
+    ss -H -ltn "sport = :$BLUEGREEN_CANDIDATE_PREVIEW_PORT" 2>/dev/null
+  )"; then
+    fail "cannot inspect the Candidate preview listener"
+    return 1
+  fi
+  if [[ -n "$listeners" ]]; then
+    fail "Candidate preview port is already in use"
+    return 1
+  fi
+}
+
+candidate_preview_listener_is_loopback_only() {
+  local listeners=""
+  if ! listeners="$(
+    ss -H -ltn "sport = :$BLUEGREEN_CANDIDATE_PREVIEW_PORT" 2>/dev/null
+  )"; then
+    fail "cannot inspect the Candidate preview listener"
+    return 1
+  fi
+  python3 -B - "$listeners" "$BLUEGREEN_CANDIDATE_PREVIEW_PORT" <<'PY'
+import sys
+
+lines = [line.split() for line in sys.argv[1].splitlines() if line.strip()]
+expected = f"127.0.0.1:{sys.argv[2]}"
+if len(lines) != 1 or len(lines[0]) < 4 or lines[0][3] != expected:
+    raise SystemExit(
+        "[ERROR] Candidate preview must own exactly one IPv4 loopback listener"
+    )
+PY
+}
+
+verify_candidate_preview_unit() {
+  local expected_argv=()
+  local identity=""
+  local nginx_bin=""
+  local properties=""
+  local runtime_root=""
+  local unit=""
+  identity="$(candidate_preview_identity)" || return 1
+  nginx_bin="$(candidate_preview_nginx_bin)" || return 1
+  runtime_root="$(candidate_preview_runtime_root)" || return 1
+  unit="$(candidate_preview_unit_name)" || return 1
+  expected_argv=(
+    "$nginx_bin"
+    -c "$CANDIDATE_PREVIEW_CONFIG"
+    -p "$runtime_root/"
+    -g "daemon off;"
+  )
+  properties="$(
+    systemctl show "$unit" \
+      -p LoadState -p ActiveState -p UnitFileState -p FragmentPath \
+      -p MainPID -p InvocationID -p ExecStart -p Environment \
+      -p DynamicUser -p ProtectSystem -p ProtectHome -p NoNewPrivileges \
+      -p Restart -p MemoryHigh -p MemoryMax -p MemorySwapMax -p TasksMax \
+      -p ControlGroup -p ReadOnlyPaths -p ReadWritePaths -p BindsTo -p After
+  )" || return 1
+  python3 -B - \
+    "$properties" \
+    "$unit" \
+    "$identity" \
+    "$RELEASE_DIR" \
+    "$CANDIDATE_PREVIEW_CONFIG" \
+    "$runtime_root" \
+    "$BLUEGREEN_CANDIDATE_PREVIEW_MEMORY_HIGH_BYTES" \
+    "$BLUEGREEN_CANDIDATE_PREVIEW_MEMORY_MAX_BYTES" \
+    "$BLUEGREEN_CANDIDATE_PREVIEW_TASKS_MAX" \
+    "${SERVICE_PREFIX}${CANDIDATE_SLOT}.service" \
+    "${#expected_argv[@]}" \
+    "${expected_argv[@]}" <<'PY'
+import re
+import shlex
+import sys
+
+(
+    raw,
+    unit,
+    identity,
+    release_dir,
+    config,
+    runtime_root,
+    memory_high,
+    memory_max,
+    tasks_max,
+    candidate_unit,
+) = sys.argv[1:11]
+argv_count = int(sys.argv[11])
+expected_argv = sys.argv[12 : 12 + argv_count]
+properties = {}
+for line in raw.splitlines():
+    key, separator, value = line.partition("=")
+    if separator:
+        properties[key] = value
+exec_start = properties.get("ExecStart", "")
+if exec_start.count("argv[]=") != 1:
+    raise SystemExit("[ERROR] Candidate preview ExecStart is ambiguous")
+try:
+    actual_argv = shlex.split(
+        exec_start.split("argv[]=", 1)[1].split(" ; ", 1)[0]
+    )
+    environment_tokens = shlex.split(properties.get("Environment", ""))
+except ValueError as exc:
+    raise SystemExit("[ERROR] Candidate preview unit metadata is malformed") from exc
+environment = {}
+for token in environment_tokens:
+    key, separator, value = token.partition("=")
+    if not separator or not key or key in environment:
+        raise SystemExit("[ERROR] Candidate preview environment is malformed")
+    environment[key] = value
+required = {
+    "LoadState": "loaded",
+    "ActiveState": "active",
+    "UnitFileState": "transient",
+    "FragmentPath": f"/run/systemd/transient/{unit}",
+    "DynamicUser": "yes",
+    "ProtectSystem": "strict",
+    "ProtectHome": "yes",
+    "NoNewPrivileges": "yes",
+    "Restart": "no",
+    "MemoryHigh": memory_high,
+    "MemoryMax": memory_max,
+    "MemorySwapMax": "0",
+    "TasksMax": tasks_max,
+    "ControlGroup": f"/system.slice/{unit}",
+}
+for key, expected in required.items():
+    if properties.get(key) != expected:
+        raise SystemExit(f"[ERROR] Candidate preview property {key} is not exact")
+if (
+    actual_argv != expected_argv
+    or environment.get("JATO_CANDIDATE_PREVIEW_ID") != identity
+    or candidate_unit not in properties.get("BindsTo", "").split()
+    or candidate_unit not in properties.get("After", "").split()
+    or release_dir not in properties.get("ReadOnlyPaths", "")
+    or config not in properties.get("ReadOnlyPaths", "")
+    or runtime_root not in properties.get("ReadWritePaths", "")
+    or re.fullmatch(r"[1-9][0-9]*", properties.get("MainPID", "")) is None
+    or re.fullmatch(r"[0-9A-Fa-f]{32}", properties.get("InvocationID", "")) is None
+    or properties.get("InvocationID", "").lower() == "0" * 32
+):
+    raise SystemExit("[ERROR] Candidate preview transient identity is not exact")
+PY
+}
+
+verify_candidate_preview_http() {
+  local base="http://127.0.0.1:$BLUEGREEN_CANDIDATE_PREVIEW_PORT"
+  local build_payload=""
+  local headers=""
+  local preview_payload=""
+  local ready_payload=""
+  build_payload="$(mktemp)"
+  headers="$(mktemp)"
+  preview_payload="$(mktemp)"
+  ready_payload="$(mktemp)"
+  if ! curl --noproxy '*' --fail --silent --show-error --max-time 20 \
+    --dump-header "$headers" \
+    --output "$preview_payload" \
+    "$base/candidate-preview.json" \
+    || ! python3 -B - \
+      "$preview_payload" \
+      "$headers" \
+      "$DEPLOY_COMMIT_SHA" \
+      "$DEPLOY_ARCHIVE_SHA256" \
+      "$CANDIDATE_SLOT" \
+      "$BLUEGREEN_CANDIDATE_PREVIEW_PORT" <<'PY'
+import json
+from pathlib import Path
+import sys
+
+payload = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
+headers = Path(sys.argv[2]).read_text(encoding="iso-8859-1").lower().splitlines()
+expected = {
+    "role": "candidate",
+    "commitSha": sys.argv[3],
+    "archiveSha256": sys.argv[4],
+    "candidateSlot": int(sys.argv[5]),
+    "previewPort": int(sys.argv[6]),
+}
+if payload != expected:
+    raise SystemExit("[ERROR] Candidate preview metadata is not exact")
+if not any(line.startswith("content-type: application/json") for line in headers):
+    raise SystemExit("[ERROR] Candidate preview metadata lacks JSON content type")
+if not any(
+    line.startswith("cache-control:") and "no-store" in line for line in headers
+):
+    raise SystemExit("[ERROR] Candidate preview metadata is cacheable")
+PY
+  then
+    rm -f "$build_payload" "$headers" "$preview_payload" "$ready_payload"
+    return 1
+  fi
+  if ! curl --noproxy '*' --fail --silent --show-error --max-time 20 \
+    "$base/readyz" > "$ready_payload" \
+    || ! curl --noproxy '*' --fail --silent --show-error --max-time 20 \
+      "$base/build-meta.json" > "$build_payload" \
+    || ! verify_nginx_payloads \
+      "$ready_payload" "$build_payload" "candidate-preview"; then
+    rm -f "$build_payload" "$headers" "$preview_payload" "$ready_payload"
+    return 1
+  fi
+  rm -f "$build_payload" "$headers" "$preview_payload" "$ready_payload"
+}
+
+verify_candidate_preview() {
+  verify_candidate_preview_unit \
+    && candidate_preview_listener_is_loopback_only \
+    && verify_candidate_preview_http
+}
+
+start_candidate_preview() {
+  local config_temp=""
+  local identity=""
+  local load_state=""
+  local nginx_bin=""
+  local runtime_directory=""
+  local runtime_root=""
+  local unit=""
+  unit="$(candidate_preview_unit_name)" || return 1
+  runtime_directory="$(candidate_preview_runtime_directory)" || return 1
+  runtime_root="$(candidate_preview_runtime_root)" || return 1
+  identity="$(candidate_preview_identity)" || return 1
+  nginx_bin="$(candidate_preview_nginx_bin)" || return 1
+  if [[ ! -x "$nginx_bin" ]] \
+    || [[ "$(realpath "$(command -v nginx)")" != "$nginx_bin" ]]; then
+    fail "Candidate preview requires the canonical /usr/sbin/nginx executable"
+    return 1
+  fi
+  load_state="$(
+    systemctl show "$unit" -p LoadState --value 2>/dev/null || true
+  )"
+  if [[ "$load_state" != "not-found" ]] \
+    || systemctl is-active --quiet "$unit"; then
+    fail "Candidate preview transient unit name is already in use"
+    return 1
+  fi
+  candidate_preview_port_is_unused || return 1
+  ensure_candidate_preview_state_dir || return 1
+  config_temp="$(mktemp)"
+  if ! render_candidate_preview_config "$config_temp" \
+    || ! durable_install_file "$config_temp" "$CANDIDATE_PREVIEW_CONFIG" 0644; then
+    rm -f "$config_temp"
+    return 1
+  fi
+  rm -f "$config_temp"
+  sudo -n systemd-run \
+    --quiet \
+    --collect \
+    --unit="$unit" \
+    --service-type=exec \
+    --working-directory="$RELEASE_DIR" \
+    --property="BindsTo=${SERVICE_PREFIX}${CANDIDATE_SLOT}.service" \
+    --property="After=${SERVICE_PREFIX}${CANDIDATE_SLOT}.service" \
+    --property="Restart=no" \
+    --property="DynamicUser=yes" \
+    --property="ProtectSystem=strict" \
+    --property="ProtectHome=yes" \
+    --property="PrivateTmp=yes" \
+    --property="PrivateDevices=yes" \
+    --property="NoNewPrivileges=yes" \
+    --property="CapabilityBoundingSet=" \
+    --property="AmbientCapabilities=" \
+    --property="RestrictNamespaces=yes" \
+    --property="ProtectKernelTunables=yes" \
+    --property="ProtectKernelModules=yes" \
+    --property="ProtectKernelLogs=yes" \
+    --property="ProtectControlGroups=yes" \
+    --property="LockPersonality=yes" \
+    --property="RestrictRealtime=yes" \
+    --property="RestrictSUIDSGID=yes" \
+    --property="MemoryHigh=$BLUEGREEN_CANDIDATE_PREVIEW_MEMORY_HIGH" \
+    --property="MemoryMax=$BLUEGREEN_CANDIDATE_PREVIEW_MEMORY_MAX" \
+    --property="MemorySwapMax=0" \
+    --property="CPUQuota=25%" \
+    --property="TasksMax=$BLUEGREEN_CANDIDATE_PREVIEW_TASKS_MAX" \
+    --property="RuntimeDirectory=$runtime_directory" \
+    --property="ReadOnlyPaths=$RELEASE_DIR $CANDIDATE_PREVIEW_CONFIG" \
+    --property="ReadWritePaths=$runtime_root" \
+    --setenv="JATO_CANDIDATE_PREVIEW_ID=$identity" \
+    "$nginx_bin" \
+      -c "$CANDIDATE_PREVIEW_CONFIG" \
+      -p "$runtime_root/" \
+      -g "daemon off;" \
+    || return 1
+  for _attempt in $(seq 1 20); do
+    if verify_candidate_preview; then
+      return 0
+    fi
+    sleep 1
+  done
+  fail "Candidate preview did not become healthy on 127.0.0.1:18002"
+}
+
+stop_candidate_preview() {
+  local current_load_state=""
+  local identity=""
+  local nginx_bin=""
+  local properties=""
+  local runtime_root=""
+  local unit=""
+  identity="$(candidate_preview_identity)" || return 1
+  nginx_bin="$(candidate_preview_nginx_bin)" || return 1
+  runtime_root="$(candidate_preview_runtime_root)" || return 1
+  unit="$(candidate_preview_unit_name)" || return 1
+  properties="$(
+    systemctl show "$unit" \
+      -p LoadState -p UnitFileState -p FragmentPath -p ExecStart \
+      -p Environment -p BindsTo -p After 2>/dev/null || true
+  )"
+  if [[ "$properties" == *$'LoadState=not-found\n'* ]] \
+    || [[ "$properties" == "LoadState=not-found" ]]; then
+    candidate_preview_port_is_unused || return 1
+    durable_remove_tree "$CANDIDATE_PREVIEW_STATE_DIR"
+    return
+  fi
+  python3 -B - \
+    "$properties" \
+    "$unit" \
+    "$identity" \
+    "${SERVICE_PREFIX}${CANDIDATE_SLOT}.service" \
+    "$nginx_bin" \
+    "$CANDIDATE_PREVIEW_CONFIG" \
+    "$runtime_root/" <<'PY'
+import shlex
+import sys
+
+raw, unit, identity, candidate_unit, nginx, config, runtime_root = sys.argv[1:]
+properties = {}
+for line in raw.splitlines():
+    key, separator, value = line.partition("=")
+    if separator:
+        properties[key] = value
+exec_start = properties.get("ExecStart", "")
+if exec_start.count("argv[]=") != 1:
+    raise SystemExit("[ERROR] refusing to stop an ambiguous preview unit")
+try:
+    actual_argv = shlex.split(
+        exec_start.split("argv[]=", 1)[1].split(" ; ", 1)[0]
+    )
+    environment_tokens = shlex.split(properties.get("Environment", ""))
+except ValueError as exc:
+    raise SystemExit("[ERROR] refusing to stop a malformed preview unit") from exc
+environment = {}
+for token in environment_tokens:
+    key, separator, value = token.partition("=")
+    if not separator or not key or key in environment:
+        raise SystemExit("[ERROR] refusing to stop a malformed preview unit")
+    environment[key] = value
+expected_argv = [nginx, "-c", config, "-p", runtime_root, "-g", "daemon off;"]
+if (
+    properties.get("LoadState") != "loaded"
+    or properties.get("UnitFileState") != "transient"
+    or properties.get("FragmentPath") != f"/run/systemd/transient/{unit}"
+    or actual_argv != expected_argv
+    or environment.get("JATO_CANDIDATE_PREVIEW_ID") != identity
+    or candidate_unit not in properties.get("BindsTo", "").split()
+    or candidate_unit not in properties.get("After", "").split()
+):
+    raise SystemExit("[ERROR] refusing to stop a preview without exact identity")
+PY
+  sudo -n systemctl stop "$unit" >/dev/null || return 1
+  sudo -n systemctl reset-failed "$unit" >/dev/null 2>&1 || true
+  for _attempt in $(seq 1 30); do
+    current_load_state="$(
+      systemctl show "$unit" -p LoadState --value 2>/dev/null || true
+    )"
+    if [[ "$current_load_state" == "not-found" ]]; then
+      candidate_preview_port_is_unused || return 1
+      durable_remove_tree "$CANDIDATE_PREVIEW_STATE_DIR"
+      return
+    fi
+    sleep 1
+  done
+  fail "Candidate preview transient unit was not collected"
+}
+
+candidate_ready_runtime_is_exact() {
+  if [[ "$CHECKPOINT_PHASE" != "candidate_ready" ]] \
+    || [[ "$CHECKPOINT_STATUS" != "completed" ]]; then
+    return 1
+  fi
+  if [[ "$CANDIDATE_SLOT" != "8000" && "$CANDIDATE_SLOT" != "8001" ]] \
+    && ! resolve_existing_candidate_slot; then
+    return 1
+  fi
+  if [[ "$CURRENT_ACTIVE_SLOT" != "8000" && "$CURRENT_ACTIVE_SLOT" != "8001" ]]; then
+    if [[ "$CANDIDATE_SLOT" == "8000" ]]; then
+      CURRENT_ACTIVE_SLOT=8001
+    else
+      CURRENT_ACTIVE_SLOT=8000
+    fi
+  fi
+  resolve_previous_release_identity \
+    && verify_slot_release_exact "$CURRENT_ACTIVE_SLOT" "$PREVIOUS_RELEASE_SHA" \
+    && verify_public_release_exact "$PREVIOUS_RELEASE_SHA" \
+    && unit_property_equals \
+      "${SERVICE_PREFIX}${CURRENT_ACTIVE_SLOT}" UnitFileState enabled \
+    && unit_property_equals \
+      "${SERVICE_PREFIX}${CURRENT_ACTIVE_SLOT}" ActiveState active \
+    && verify_slot_release_exact "$CANDIDATE_SLOT" "$DEPLOY_COMMIT_SHA" \
+    && unit_property_equals \
+      "${SERVICE_PREFIX}${CANDIDATE_SLOT}" UnitFileState disabled \
+    && unit_property_equals \
+      "${SERVICE_PREFIX}${CANDIDATE_SLOT}" ActiveState active \
+    && verify_candidate_cgroup \
+    && verify_candidate_monthly_gate \
+    && verify_candidate_data_access_contract \
+    && verify_final_runtime_seal \
+    && verify_candidate_preview
+}
+
+candidate_ready_state_is_legal() {
+  [[ ! -e "$DEPLOYMENT_MARKER" && ! -L "$DEPLOYMENT_MARKER" ]] \
+    && [[ ! -e "$SCHEDULER_STATE_FILE" && ! -L "$SCHEDULER_STATE_FILE" ]] \
+    && candidate_ready_runtime_is_exact \
+    && verify_active_monthly_gate_released "$CURRENT_ACTIVE_SLOT"
+}
+
+candidate_ready_state_is_legal_under_hold() {
+  verify_quiescence_hold_context \
+    && [[ ! -e "$SCHEDULER_STATE_FILE" && ! -L "$SCHEDULER_STATE_FILE" ]] \
+    && candidate_ready_runtime_is_exact \
+    && verify_active_monthly_gate_held "$CURRENT_ACTIVE_SLOT"
+}
+
+validate_fixed_active_approval_identity() {
+  if [[ ! "${DEPLOY_APPROVAL_RUN_ID:-}" =~ ^[1-9][0-9]*$ ]] \
+    || [[ ! "${DEPLOY_APPROVAL_RUN_ATTEMPT:-}" =~ ^[1-9][0-9]*$ ]] \
+    || [[ ! "${DEPLOY_CANDIDATE_ATTESTATION_SHA256:-}" =~ ^[0-9a-f]{64}$ ]]; then
+    fail "fixed Active approval run identity and Candidate attestation are required"
+    return 1
+  fi
+}
+
+fixed_active_approval_binding() {
+  validate_fixed_active_approval_identity || return 1
+  printf 'candidate_run=%s/%s approval_run=%s/%s candidate_attestation_sha256=%s' \
+    "$DEPLOY_RUN_ID" \
+    "$DEPLOY_RUN_ATTEMPT" \
+    "$DEPLOY_APPROVAL_RUN_ID" \
+    "$DEPLOY_APPROVAL_RUN_ATTEMPT" \
+    "$DEPLOY_CANDIDATE_ATTESTATION_SHA256"
+}
+
+capture_fixed_active_slot_anchor() {
+  if sudo -n test -L "$ACTIVE_SLOT_FILE" \
+    || ! sudo -n test -f "$ACTIVE_SLOT_FILE" \
+    || [[ "$(sudo -n cat "$ACTIVE_SLOT_FILE")" != "$CURRENT_ACTIVE_SLOT" ]]; then
+    fail "fixed Active approval cannot prove the active-slot anchor"
+    return 1
+  fi
+  FIXED_ACTIVE_SLOT_DIGEST="$(sudo -n sha256sum "$ACTIVE_SLOT_FILE" | awk '{print $1}')" \
+    || return 1
+  if [[ ! "$FIXED_ACTIVE_SLOT_DIGEST" =~ ^[0-9a-f]{64}$ ]]; then
+    fail "fixed Active active-slot anchor digest is malformed"
+    return 1
+  fi
+}
+
+verify_fixed_active_slot_anchor() {
+  local actual_digest=""
+  if [[ -z "$FIXED_ACTIVE_SLOT_DIGEST" ]]; then
+    fail "fixed Active active-slot preimage was not captured"
+    return 1
+  fi
+  if sudo -n test -L "$ACTIVE_SLOT_FILE" \
+    || ! sudo -n test -f "$ACTIVE_SLOT_FILE" \
+    || [[ "$(sudo -n cat "$ACTIVE_SLOT_FILE")" != "$CURRENT_ACTIVE_SLOT" ]]; then
+    fail "fixed Active active-slot owner changed"
+    return 1
+  fi
+  actual_digest="$(sudo -n sha256sum "$ACTIVE_SLOT_FILE" | awk '{print $1}')" \
+    || return 1
+  if [[ "$actual_digest" != "$FIXED_ACTIVE_SLOT_DIGEST" ]]; then
+    fail "fixed Active active-slot contents changed"
+    return 1
+  fi
+}
+
+render_fixed_active_env() {
+  local output="$1"
+  if [[ ! -f "$SLOT_ENV_TEMPLATE" || -L "$SLOT_ENV_TEMPLATE" ]]; then
+    fail "fixed Active slot env template is missing or unsafe"
+    return 1
+  fi
+  sed \
+    -e "s|__SLOT__|$CURRENT_ACTIVE_SLOT|g" \
+    -e "s|__RELEASE_SHA__|$DEPLOY_COMMIT_SHA|g" \
+    "$SLOT_ENV_TEMPLATE" > "$output"
+  {
+    printf '\nAPP_JATO_MONTHLY_ENABLED=true\n'
+    printf 'APP_JATO_MONTHLY_UPDATE_JOB_ROOT=%s\n' "$JATO_JOB_ROOT"
+    printf 'APP_JATO_MONTHLY_ACTIVE_SLOT_FILE=%s\n' "$ACTIVE_SLOT_FILE"
+    printf 'APP_JATO_MONTHLY_DEPLOYMENT_MARKER=%s\n' "$DEPLOYMENT_MARKER"
+    printf 'APP_JATO_MONTHLY_EXECUTION_MODE=subprocess\n'
+  } >> "$output"
+  chmod 0600 "$output"
+}
+
+verify_fixed_active_unit_compatibility() {
+  local active_unit="${SERVICE_PREFIX}${CURRENT_ACTIVE_SLOT}"
+  local fragment=""
+  local sandbox_dropin="/etc/systemd/system/${active_unit}.service.d/10-candidate-sandbox.conf"
+  fragment="$(systemctl show "$active_unit" -p FragmentPath --value)" \
+    || return 1
+  case "$fragment" in
+    "$SHARED_BACKEND_TEMPLATE"|"/etc/systemd/system/${active_unit}.service") ;;
+    *)
+      fail "fixed Active unit fragment is outside the reviewed template paths: $fragment"
+      return 1
+      ;;
+  esac
+  if sudo -n test -L "$fragment" \
+    || ! sudo -n test -f "$fragment" \
+    || ! sudo -n cmp -s "$SYSTEMD_TEMPLATE" "$fragment"; then
+    fail "fixed Active approval refuses an untested systemd template change"
+    return 1
+  fi
+  if sudo -n test -e "$sandbox_dropin" \
+    || sudo -n test -L "$sandbox_dropin"; then
+    fail "fixed Active slot unexpectedly retains a Candidate sandbox"
+    return 1
+  fi
+}
+
+fixed_active_preimage_path() {
+  printf '%s/active-update-preimages/%s/%s\n' \
+    "$BLUEGREEN_STATE_ROOT" "$DEPLOY_COMMIT_SHA" "$DEPLOY_ARCHIVE_SHA256"
+}
+
+fixed_active_previous_release_proof() {
+  local archive=""
+  local frontend_checksum=""
+  local frontend_identity=""
+  local frontend_identity_b64=""
+  local relative=""
+  local receipt_state=""
+  local runtime_digest=""
+  local runtime_seal=""
+  local source_digest=""
+  local source_seal=""
+  local values=""
+  if [[ "$PREVIOUS_RELEASE_ROOT" == "$RELEASES_ROOT/"* ]]; then
+    relative="${PREVIOUS_RELEASE_ROOT#"$RELEASES_ROOT/"}"
+    archive="${relative#*/}"
+    if [[ "${relative%%/*}" != "$PREVIOUS_RELEASE_SHA" ]] \
+      || [[ ! "$archive" =~ ^[0-9a-f]{64}$ ]] \
+      || [[ "$archive" == */* ]]; then
+      fail "fixed Active previous content-addressed release identity is invalid"
+      return 1
+    fi
+    source_seal="$PREVIOUS_RELEASE_ROOT/.jato-source-seal.json"
+    runtime_seal="$PREVIOUS_RELEASE_ROOT/.jato-runtime-seal.json"
+    values="$({
+      sudo -n python3 -B - \
+        "$source_seal" "$runtime_seal" \
+        "$PREVIOUS_RELEASE_SHA" "$archive" <<'PY'
+import base64
+import hashlib
+import json
+import os
+from pathlib import Path
+import re
+import stat
+import sys
+
+source = Path(sys.argv[1])
+runtime = Path(sys.argv[2])
+digests = []
+for path in (source, runtime):
+    metadata = path.lstat()
+    if (
+        path.is_symlink()
+        or not stat.S_ISREG(metadata.st_mode)
+        or metadata.st_uid != os.geteuid()
+        or stat.S_IMODE(metadata.st_mode) & 0o022
+        or metadata.st_nlink != 1
+        or metadata.st_size <= 0
+        or metadata.st_size > 64 * 1024 * 1024
+    ):
+        raise SystemExit("[ERROR] previous release seal is unsafe")
+    digests.append(hashlib.sha256(path.read_bytes()).hexdigest())
+payload = json.loads(runtime.read_text(encoding="utf-8"))
+identity = payload.get("releaseIdentity")
+if not isinstance(identity, dict):
+    raise SystemExit("[ERROR] previous runtime seal identity is missing")
+frontend_identity = str(identity.get("frontendIdentity") or "")
+frontend_checksum = str(identity.get("frontendChecksum") or "")
+if (
+    identity.get("commit") != sys.argv[3]
+    or identity.get("archiveSha256") != sys.argv[4]
+    or not frontend_identity
+    or len(frontend_identity) > 2048
+    or re.fullmatch(r"[0-9a-f]{64}", frontend_checksum) is None
+    or payload.get("sourceSealSha256") != digests[0]
+):
+    raise SystemExit("[ERROR] previous runtime seal identity is invalid")
+print(digests[0])
+print(digests[1])
+print(base64.urlsafe_b64encode(frontend_identity.encode()).decode())
+print(frontend_checksum)
+PY
+    })" || return 1
+    source_digest="$(printf '%s\n' "$values" | sed -n '1p')"
+    runtime_digest="$(printf '%s\n' "$values" | sed -n '2p')"
+    frontend_identity_b64="$(printf '%s\n' "$values" | sed -n '3p')"
+    frontend_checksum="$(printf '%s\n' "$values" | sed -n '4p')"
+    frontend_identity="$(
+      python3 -B -c \
+        'import base64,sys; print(base64.urlsafe_b64decode(sys.argv[1]).decode())' \
+        "$frontend_identity_b64"
+    )" || return 1
+    sudo -n python3 -B "$SOURCE_SEAL_HELPER" verify \
+      --root "$PREVIOUS_RELEASE_ROOT" \
+      --manifest "$source_seal" || return 1
+    sudo -n python3 -B "$SOURCE_SEAL_HELPER" verify \
+      --profile runtime \
+      --root "$PREVIOUS_RELEASE_ROOT" \
+      --manifest "$runtime_seal" \
+      --commit "$PREVIOUS_RELEASE_SHA" \
+      --archive-sha256 "$archive" \
+      --frontend-identity "$frontend_identity" \
+      --frontend-checksum "$frontend_checksum" || return 1
+    printf 'content-addressed:%s:%s:%s:%s\n' \
+      "$PREVIOUS_RELEASE_SHA" "$archive" "$source_digest" "$runtime_digest"
+    return 0
+  fi
+  if [[ "$PREVIOUS_RELEASE_ROOT" != "$LEGACY_ROOT" ]]; then
+    fail "fixed Active previous release is outside immutable or bootstrap roots"
+    return 1
+  fi
+  receipt_state="$(fixed_active_legacy_bootstrap_receipt_state)" || return 1
+  case "$receipt_state" in
+    absent|current) ;;
+    consumed-other)
+      fail "legacy fixed Active bootstrap was already consumed by another immutable release"
+      return 1
+      ;;
+    *)
+      fail "legacy fixed Active bootstrap receipt state is invalid"
+      return 1
+      ;;
+  esac
+  printf 'legacy-private-fingerprint:%s\n' "$PREVIOUS_RELEASE_SHA"
+}
+
+fixed_active_legacy_bootstrap_receipt_payload() {
+  printf 'previous=%s target=%s archive=%s\n' \
+    "$PREVIOUS_RELEASE_SHA" "$DEPLOY_COMMIT_SHA" "$DEPLOY_ARCHIVE_SHA256"
+}
+
+fixed_active_legacy_bootstrap_receipt_state() {
+  local actual=""
+  local expected=""
+  expected="$(fixed_active_legacy_bootstrap_receipt_payload)" || return 1
+  if ! sudo -n test -e "$FIXED_ACTIVE_LEGACY_BOOTSTRAP_RECEIPT" \
+    && ! sudo -n test -L "$FIXED_ACTIVE_LEGACY_BOOTSTRAP_RECEIPT"; then
+    printf 'absent\n'
+    return 0
+  fi
+  if sudo -n test -L "$FIXED_ACTIVE_LEGACY_BOOTSTRAP_RECEIPT" \
+    || ! sudo -n test -f "$FIXED_ACTIVE_LEGACY_BOOTSTRAP_RECEIPT" \
+    || [[ "$(sudo -n stat -c '%a:%h' "$FIXED_ACTIVE_LEGACY_BOOTSTRAP_RECEIPT")" != "600:1" ]]; then
+    fail "legacy fixed Active bootstrap receipt is unsafe"
+    return 1
+  fi
+  actual="$(sudo -n cat "$FIXED_ACTIVE_LEGACY_BOOTSTRAP_RECEIPT")" \
+    || return 1
+  if [[ "$actual" == "$expected" ]]; then
+    printf 'current\n'
+  else
+    printf 'consumed-other\n'
+  fi
+}
+
+mark_fixed_active_legacy_bootstrap_complete() {
+  local state=""
+  local temporary=""
+  if [[ "$PREVIOUS_RELEASE_ROOT" != "$LEGACY_ROOT" ]]; then
+    return 0
+  fi
+  state="$(fixed_active_legacy_bootstrap_receipt_state)" || return 1
+  if [[ "$state" == "current" ]]; then
+    return 0
+  fi
+  if [[ "$state" != "absent" ]]; then
+    fail "legacy fixed Active bootstrap was already consumed"
+    return 1
+  fi
+  temporary="$(mktemp)" || return 1
+  fixed_active_legacy_bootstrap_receipt_payload > "$temporary"
+  if ! durable_install_file \
+    "$temporary" "$FIXED_ACTIVE_LEGACY_BOOTSTRAP_RECEIPT" 0600; then
+    rm -f "$temporary"
+    return 1
+  fi
+  rm -f "$temporary"
+  [[ "$(fixed_active_legacy_bootstrap_receipt_state)" == "current" ]]
+}
+
+clear_fixed_active_legacy_bootstrap_after_restore() {
+  local state=""
+  if [[ "$PREVIOUS_RELEASE_ROOT" != "$LEGACY_ROOT" ]]; then
+    return 0
+  fi
+  state="$(fixed_active_legacy_bootstrap_receipt_state)" || return 1
+  case "$state" in
+    absent) return 0 ;;
+    current)
+      durable_remove_path "$FIXED_ACTIVE_LEGACY_BOOTSTRAP_RECEIPT"
+      ;;
+    *)
+      fail "refusing to remove another release's legacy bootstrap receipt"
+      return 1
+      ;;
+  esac
+}
+
+verify_fixed_active_previous_release_source() {
+  fixed_active_preimage_command verify >/dev/null
+}
+
+fixed_active_preimage_command() {
+  local command="$1"
+  local preimage_helper="$FIXED_ACTIVE_PREIMAGE_HELPER"
+  local previous_proof=""
+  if [[ ! -f "$preimage_helper" || -L "$preimage_helper" ]]; then
+    fail "fixed Active preimage helper is missing or unsafe"
+    return 1
+  fi
+  if [[ -z "$ACTIVE_UPDATE_TARGET_ENV" ]] \
+    || [[ -z "$ACTIVE_UPDATE_TARGET_NGINX" ]] \
+    || [[ -z "$PREVIOUS_RELEASE_ROOT" ]] \
+    || [[ -z "$PREVIOUS_RELEASE_SHA" ]]; then
+    fail "fixed Active preimage inputs are incomplete"
+    return 1
+  fi
+  previous_proof="$(fixed_active_previous_release_proof)" || return 1
+  sudo -n python3 -B "$preimage_helper" "$command" \
+    --state-root "$BLUEGREEN_STATE_ROOT" \
+    --slots-root "$SLOTS_ROOT" \
+    --slot-env-root "$SLOT_ENV_ROOT" \
+    --slot-link "$SLOTS_ROOT/$CURRENT_ACTIVE_SLOT/current" \
+    --slot-env "$SLOT_ENV_ROOT/$CURRENT_ACTIVE_SLOT.env" \
+    --active-release-link "$ACTIVE_RELEASE_LINK" \
+    --nginx-conf "$NGINX_ACTIVE_RELEASE_CONF" \
+    --previous-release-root "$PREVIOUS_RELEASE_ROOT" \
+    --legacy-root "$LEGACY_ROOT" \
+    --target-release-root "$RELEASE_DIR" \
+    --target-env "$ACTIVE_UPDATE_TARGET_ENV" \
+    --target-nginx "$ACTIVE_UPDATE_TARGET_NGINX" \
+    --commit "$DEPLOY_COMMIT_SHA" \
+    --archive-sha256 "$DEPLOY_ARCHIVE_SHA256" \
+    --active-slot "$CURRENT_ACTIVE_SLOT" \
+    --previous-release-sha "$PREVIOUS_RELEASE_SHA" \
+    --previous-release-proof "$previous_proof"
+}
+
+load_fixed_active_previous_identity() {
+  local manifest=""
+  local values=""
+  manifest="$(fixed_active_preimage_path)/manifest.json"
+  values="$({
+    sudo -n python3 -B - \
+      "$manifest" \
+      "$DEPLOY_COMMIT_SHA" \
+      "$DEPLOY_ARCHIVE_SHA256" \
+      "$CURRENT_ACTIVE_SLOT" \
+      "$RELEASES_ROOT" \
+      "$LEGACY_ROOT" <<'PY'
+import json
+from pathlib import Path
+import re
+import stat
+import sys
+
+manifest_path = Path(sys.argv[1])
+metadata = manifest_path.lstat()
+if (
+    manifest_path.is_symlink()
+    or not stat.S_ISREG(metadata.st_mode)
+    or metadata.st_uid != 0
+    or stat.S_IMODE(metadata.st_mode) & 0o077
+    or metadata.st_size <= 0
+    or metadata.st_size > 64 * 1024
+):
+    raise SystemExit("[ERROR] fixed Active preimage manifest is unsafe")
+payload = json.loads(manifest_path.read_text(encoding="utf-8"))
+identity = payload.get("identity")
+expected = {
+    "commit": sys.argv[2],
+    "archiveSha256": sys.argv[3],
+    "activeSlot": sys.argv[4],
+}
+if not isinstance(identity, dict) or any(
+    identity.get(key) != value for key, value in expected.items()
+):
+    raise SystemExit("[ERROR] fixed Active preimage identity changed")
+previous_sha = str(identity.get("previousReleaseSha") or "")
+previous_root = str(payload.get("paths", {}).get("previousReleaseRoot") or "")
+if re.fullmatch(r"[0-9a-f]{40}", previous_sha) is None:
+    raise SystemExit("[ERROR] previous release SHA is malformed")
+release_pattern = re.compile(
+    re.escape(sys.argv[5]) + r"/[0-9a-f]{40}/[0-9a-f]{64}"
+)
+if previous_root != sys.argv[6] and release_pattern.fullmatch(previous_root) is None:
+    raise SystemExit("[ERROR] previous release root is outside reviewed paths")
+print(previous_sha)
+print(previous_root)
+PY
+  })" || return 1
+  PREVIOUS_RELEASE_SHA="$(printf '%s\n' "$values" | sed -n '1p')"
+  PREVIOUS_RELEASE_ROOT="$(printf '%s\n' "$values" | sed -n '2p')"
+  if [[ -z "$PREVIOUS_RELEASE_SHA" || -z "$PREVIOUS_RELEASE_ROOT" ]]; then
+    fail "fixed Active previous release identity is unavailable"
+    return 1
+  fi
+}
+
+prepare_fixed_active_targets() {
+  ACTIVE_UPDATE_TARGET_ENV="$(mktemp)" || return 1
+  ACTIVE_UPDATE_TARGET_NGINX="$(mktemp)" || return 1
+  render_fixed_active_env "$ACTIVE_UPDATE_TARGET_ENV" || return 1
+  render_active_release \
+    "$ACTIVE_UPDATE_TARGET_NGINX" \
+    "$CURRENT_ACTIVE_SLOT" \
+    "$RELEASE_DIR/06_AppPlatform/frontend/dist" || return 1
+  chmod 0644 "$ACTIVE_UPDATE_TARGET_NGINX"
+}
+
+remove_fixed_active_target_temporaries() {
+  if [[ -n "$ACTIVE_UPDATE_TARGET_ENV" ]]; then
+    rm -f "$ACTIVE_UPDATE_TARGET_ENV"
+    ACTIVE_UPDATE_TARGET_ENV=""
+  fi
+  if [[ -n "$ACTIVE_UPDATE_TARGET_NGINX" ]]; then
+    rm -f "$ACTIVE_UPDATE_TARGET_NGINX"
+    ACTIVE_UPDATE_TARGET_NGINX=""
+  fi
+}
+
+verify_fixed_active_candidate_retained() {
+  verify_slot_release_exact "$CANDIDATE_SLOT" "$DEPLOY_COMMIT_SHA" \
+    && unit_property_equals \
+      "${SERVICE_PREFIX}${CANDIDATE_SLOT}" UnitFileState disabled \
+    && unit_property_equals \
+      "${SERVICE_PREFIX}${CANDIDATE_SLOT}" ActiveState active \
+    && verify_candidate_cgroup \
+    && verify_candidate_monthly_gate \
+    && verify_candidate_data_access_contract \
+    && verify_final_runtime_seal \
+    && verify_candidate_preview
+}
+
+fixed_active_runtime_is_exact_base() {
+  verify_fixed_active_slot_anchor \
+    && verify_fixed_active_previous_release_source \
+    && verify_active_cgroup "$CURRENT_ACTIVE_SLOT" \
+    && verify_durable_route_ownership \
+      "$CURRENT_ACTIVE_SLOT" \
+      "$RELEASE_DIR" \
+      "$DEPLOY_COMMIT_SHA" \
+      "$RELEASE_DIR/06_AppPlatform/frontend/dist"
+}
+
+fixed_active_runtime_is_exact() {
+  [[ ! -e "$DEPLOYMENT_MARKER" && ! -L "$DEPLOYMENT_MARKER" ]] \
+    && [[ ! -e "$SCHEDULER_STATE_FILE" && ! -L "$SCHEDULER_STATE_FILE" ]] \
+    && fixed_active_runtime_is_exact_base \
+    && verify_active_monthly_gate_released "$CURRENT_ACTIVE_SLOT"
+}
+
+fixed_active_runtime_is_exact_under_hold() {
+  verify_quiescence_hold_context \
+    && [[ ! -e "$SCHEDULER_STATE_FILE" && ! -L "$SCHEDULER_STATE_FILE" ]] \
+    && fixed_active_runtime_is_exact_base \
+    && verify_active_monthly_gate_held "$CURRENT_ACTIVE_SLOT"
+}
+
+fixed_active_runtime_is_verified_under_hold() {
+  verify_quiescence_hold_context \
+    && [[ -f "$SCHEDULER_STATE_FILE" && ! -L "$SCHEDULER_STATE_FILE" ]] \
+    && fixed_active_runtime_is_exact_base \
+    && verify_active_monthly_gate_held "$CURRENT_ACTIVE_SLOT"
+}
+
+fixed_active_update_is_committed() {
+  fixed_active_runtime_is_exact \
+    && verify_fixed_active_candidate_retained
+}
+
+fixed_active_update_is_committed_under_hold() {
+  fixed_active_runtime_is_exact_under_hold \
+    && verify_fixed_active_candidate_retained
+}
+
+fixed_active_update_is_verified_under_hold() {
+  fixed_active_runtime_is_verified_under_hold \
+    && verify_fixed_active_candidate_retained
+}
+
+previous_fixed_active_runtime_is_exact_base() {
+  verify_fixed_active_slot_anchor \
+    && verify_fixed_active_previous_release_source \
+    && unit_property_equals \
+      "${SERVICE_PREFIX}${CURRENT_ACTIVE_SLOT}" UnitFileState enabled \
+    && unit_property_equals \
+      "${SERVICE_PREFIX}${CURRENT_ACTIVE_SLOT}" ActiveState active \
+    && verify_active_cgroup "$CURRENT_ACTIVE_SLOT" \
+    && verify_slot_release_exact "$CURRENT_ACTIVE_SLOT" "$PREVIOUS_RELEASE_SHA" \
+    && verify_public_release_exact "$PREVIOUS_RELEASE_SHA" \
+    && verify_durable_route_ownership \
+      "$CURRENT_ACTIVE_SLOT" \
+      "$PREVIOUS_RELEASE_ROOT" \
+      "$PREVIOUS_RELEASE_SHA" \
+      "$PREVIOUS_RELEASE_ROOT/06_AppPlatform/frontend/dist"
+}
+
+previous_fixed_active_runtime_is_committed() {
+  [[ ! -e "$DEPLOYMENT_MARKER" && ! -L "$DEPLOYMENT_MARKER" ]] \
+    && [[ ! -e "$SCHEDULER_STATE_FILE" && ! -L "$SCHEDULER_STATE_FILE" ]] \
+    && previous_fixed_active_runtime_is_exact_base \
+    && verify_active_monthly_gate_released "$CURRENT_ACTIVE_SLOT"
+}
+
+previous_fixed_active_runtime_is_exact_under_hold() {
+  verify_quiescence_hold_context \
+    && [[ ! -e "$SCHEDULER_STATE_FILE" && ! -L "$SCHEDULER_STATE_FILE" ]] \
+    && previous_fixed_active_runtime_is_exact_base \
+    && verify_active_monthly_gate_held "$CURRENT_ACTIVE_SLOT"
+}
+
+previous_fixed_active_restore_is_committed() {
+  previous_fixed_active_runtime_is_committed \
+    && verify_fixed_active_candidate_retained
+}
+
+previous_fixed_active_restore_is_committed_under_hold() {
+  previous_fixed_active_runtime_is_exact_under_hold \
+    && verify_fixed_active_candidate_retained
+}
+
+retain_fixed_active_maintenance_fence() {
+  if verify_quiescence_hold_context; then
+    return 0
+  fi
+  mark_maintenance_required
+}
+
+install_release_on_fixed_active() {
+  local active_env="$SLOT_ENV_ROOT/$CURRENT_ACTIVE_SLOT.env"
+  local active_env_stage="$SLOT_ENV_ROOT/.$CURRENT_ACTIVE_SLOT.env.jato-active-updating"
+  if ! candidate_durable_install_file \
+    "$ACTIVE_UPDATE_TARGET_ENV" \
+    "$active_env" 0600 "$active_env_stage"; then
+    return 1
+  fi
+  atomic_symlink "$RELEASE_DIR" "$SLOTS_ROOT/$CURRENT_ACTIVE_SLOT/current" \
+    || return 1
+  sudo -n systemctl daemon-reload || return 1
+  sudo -n systemctl set-property "${SERVICE_PREFIX}${CURRENT_ACTIVE_SLOT}" \
+    "MemoryHigh=$BLUEGREEN_ACTIVE_MEMORY_HIGH" \
+    "MemoryMax=$BLUEGREEN_ACTIVE_MEMORY_MAX" \
+    "CPUQuota=200%" || return 1
+  sudo -n systemctl restart "${SERVICE_PREFIX}${CURRENT_ACTIVE_SLOT}" \
+    || return 1
+  verify_active_cgroup "$CURRENT_ACTIVE_SLOT" || return 1
+  verify_slot_release_exact "$CURRENT_ACTIVE_SLOT" "$DEPLOY_COMMIT_SHA" \
+    || return 1
+  durable_install_file \
+    "$ACTIVE_UPDATE_TARGET_NGINX" \
+    "$NGINX_ACTIVE_RELEASE_CONF" 0644 || return 1
+  sudo -n nginx -t || return 1
+  sudo -n systemctl reload nginx || return 1
+  verify_public_release_exact "$DEPLOY_COMMIT_SHA" || return 1
+  atomic_symlink "$RELEASE_DIR" "$ACTIVE_RELEASE_LINK" || return 1
+  verify_durable_route_ownership \
+    "$CURRENT_ACTIVE_SLOT" \
+    "$RELEASE_DIR" \
+    "$DEPLOY_COMMIT_SHA" \
+    "$RELEASE_DIR/06_AppPlatform/frontend/dist" || return 1
+  verify_fixed_active_slot_anchor \
+    && verify_fixed_active_candidate_retained
+}
+
+rollback_fixed_active_update() {
+  local binding="${1:-}"
+  local checkpoint_before=""
+  local source_phase="${2:-}"
+  local under_hold=false
+  if ! read_checkpoint_phase_status; then
+    retain_fixed_active_maintenance_fence || true
+    return 1
+  fi
+  checkpoint_before="$CHECKPOINT_PHASE"
+  if [[ -z "$source_phase" ]]; then
+    source_phase="$checkpoint_before"
+  fi
+  if [[ -z "$binding" ]]; then
+    binding="$(evidence_binding 2>/dev/null || true)"
+  fi
+  case "$CHECKPOINT_PHASE" in
+    rollback_completed)
+      return 0
+      ;;
+    active_update_started|active_update_verified)
+      checkpoint_write rollback_started in_progress rollback_required \
+        "fixed Active update failed; exact Active preimage restoration started; "\
+"${binding:-evidence_unavailable}" \
+        || return 1
+      ;;
+    rollback_started) ;;
+    *)
+      fail "fixed Active rollback refuses checkpoint phase $CHECKPOINT_PHASE"
+      return 1
+      ;;
+  esac
+  if [[ "${JATO_QUIESCENCE_LOCK_HELD:-}" == "1" ]]; then
+    verify_quiescence_hold_context || return 1
+    under_hold=true
+  else
+    mark_maintenance_required || return 1
+  fi
+  if [[ -z "$PREVIOUS_RELEASE_ROOT" || -z "$PREVIOUS_RELEASE_SHA" ]]; then
+    load_fixed_active_previous_identity || return 1
+  fi
+  fixed_active_preimage_command restore || return 1
+  clear_fixed_active_legacy_bootstrap_after_restore || return 1
+  sudo -n systemctl daemon-reload || return 1
+  sudo -n systemctl set-property "${SERVICE_PREFIX}${CURRENT_ACTIVE_SLOT}" \
+    "MemoryHigh=$BLUEGREEN_ACTIVE_MEMORY_HIGH" \
+    "MemoryMax=$BLUEGREEN_ACTIVE_MEMORY_MAX" \
+    "CPUQuota=200%" || return 1
+  sudo -n systemctl restart "${SERVICE_PREFIX}${CURRENT_ACTIVE_SLOT}" \
+    || return 1
+  verify_active_cgroup "$CURRENT_ACTIVE_SLOT" || return 1
+  sudo -n nginx -t || return 1
+  sudo -n systemctl reload nginx || return 1
+  verify_slot_release_exact "$CURRENT_ACTIVE_SLOT" "$PREVIOUS_RELEASE_SHA" \
+    || return 1
+  verify_public_release_exact "$PREVIOUS_RELEASE_SHA" || return 1
+  verify_fixed_active_slot_anchor || return 1
+  verify_durable_route_ownership \
+    "$CURRENT_ACTIVE_SLOT" \
+    "$PREVIOUS_RELEASE_ROOT" \
+    "$PREVIOUS_RELEASE_SHA" \
+    "$PREVIOUS_RELEASE_ROOT/06_AppPlatform/frontend/dist" || return 1
+  verify_fixed_active_candidate_retained || return 1
+  if [[ -e "$SCHEDULER_STATE_FILE" || -L "$SCHEDULER_STATE_FILE" ]]; then
+    resume_schedulers || return 1
+  fi
+  if [[ "$under_hold" == "true" ]]; then
+    previous_fixed_active_restore_is_committed_under_hold || return 1
+  else
+    clear_maintenance_marker || return 1
+    previous_fixed_active_restore_is_committed || return 1
+  fi
+  checkpoint_write rollback_completed completed automatic \
+    "exact previous fixed Active restored; tested Candidate remains isolated; "\
+"source_phase=$source_phase; ${binding:-evidence_unavailable}" \
+    || return 1
+  RELEASE_ROLLED_BACK=true
+}
+
+fixed_active_update_exit_handler() {
+  local rc="$?"
+  trap - EXIT TERM INT HUP
+  if [[ "$ACTIVE_UPDATE_HANDLER_ARMED" == "true" ]]; then
+    ACTIVE_UPDATE_HANDLER_ARMED=false
+    if read_checkpoint_phase_status \
+      && [[ "$CHECKPOINT_PHASE" == "active_updated" ]]; then
+      if [[ "${JATO_QUIESCENCE_LOCK_HELD:-}" == "1" ]]; then
+        fixed_active_update_is_committed_under_hold || {
+          retain_fixed_active_maintenance_fence || true
+          rc="$EXIT_COMMAND_FAILED_MARKER_RETAINED"
+        }
+      elif ! fixed_active_update_is_committed; then
+        retain_fixed_active_maintenance_fence || true
+        rc="$EXIT_COMMAND_FAILED_MARKER_RETAINED"
+      fi
+    elif ! rollback_fixed_active_update; then
+      retain_fixed_active_maintenance_fence || true
+      rc="$EXIT_COMMAND_FAILED_MARKER_RETAINED"
+    elif [[ "$rc" -eq 0 ]]; then
+      rc=1
+    fi
+  fi
+  remove_fixed_active_target_temporaries
+  exit "$rc"
+}
+
+active_update_locked() {
+  local approval_binding=""
+  local current_evidence_binding=""
+  local release_evidence_binding=""
+  require_environment
+  approval_binding="$(fixed_active_approval_binding)" || return 1
+  verify_quiescence_hold_context
+  resolve_active_slot
+  capture_fixed_active_slot_anchor
+  if ! read_checkpoint_phase_status; then
+    return 1
+  fi
+  case "$CHECKPOINT_PHASE:$CHECKPOINT_STATUS" in
+    active_update_started:in_progress|rollback_started:in_progress)
+      prepare_fixed_active_targets || return 1
+      load_fixed_active_previous_identity || return 1
+      ACTIVE_UPDATE_HANDLER_ARMED=true
+      if ! rollback_fixed_active_update "" "$CHECKPOINT_PHASE"; then
+        return 1
+      fi
+      ACTIVE_UPDATE_HANDLER_ARMED=false
+      fail "interrupted fixed Active update was restored exactly; Candidate still requires explicit discard"
+      return 1
+      ;;
+    active_update_verified:completed)
+      prepare_fixed_active_targets || return 1
+      load_fixed_active_previous_identity || return 1
+      ACTIVE_UPDATE_HANDLER_ARMED=true
+      if [[ -e "$SCHEDULER_STATE_FILE" || -L "$SCHEDULER_STATE_FILE" ]]; then
+        fixed_active_update_is_verified_under_hold \
+          || fail "verified fixed Active state changed before scheduler restoration" \
+          || return 1
+        resume_schedulers || return 1
+      fi
+      fixed_active_update_is_committed_under_hold \
+        || fail "fixed Active did not remain exact after scheduler restoration" \
+        || return 1
+      release_evidence_binding="$(evidence_binding)" || return 1
+      checkpoint_write active_updated completed inspect_then_resume \
+        "fixed Active now runs the exact manually tested artifact without changing "\
+"active-slot or public upstream; Candidate remains available for explicit cleanup; "\
+"$approval_binding; $release_evidence_binding"
+      ACTIVE_UPDATE_HANDLER_ARMED=false
+      remove_fixed_active_target_temporaries
+      printf \
+        '[INFO] Interrupted fixed Active finalization completed: sha=%s active=%s candidate=%s\n' \
+        "$DEPLOY_COMMIT_SHA" "$CURRENT_ACTIVE_SLOT" "$CANDIDATE_SLOT"
+      return 0
+      ;;
+    candidate_ready:completed) ;;
+    *)
+      fail "locked fixed Active update cannot reconcile $CHECKPOINT_PHASE/$CHECKPOINT_STATUS"
+      return 1
+      ;;
+  esac
+  candidate_ready_state_is_legal_under_hold \
+    || fail "Candidate failed exact revalidation before fixed Active approval" \
+    || return 1
+  verify_durable_route_ownership \
+    "$CURRENT_ACTIVE_SLOT" \
+    "$PREVIOUS_RELEASE_ROOT" \
+    "$PREVIOUS_RELEASE_SHA" \
+    "$PREVIOUS_RELEASE_ROOT/06_AppPlatform/frontend/dist" \
+    || fail "previous successful Active is not an exact rollback source" \
+    || return 1
+  verify_fixed_active_unit_compatibility
+  prepare_fixed_active_targets
+  fixed_active_preimage_command capture >/dev/null
+  verify_fixed_active_previous_release_source
+  release_evidence_binding="$(evidence_binding)" || return 1
+  checkpoint_write active_update_started in_progress rollback_required \
+    "approved Candidate artifact is being installed on the same fixed Active slot; "\
+"active_slot=$CURRENT_ACTIVE_SLOT candidate_slot=$CANDIDATE_SLOT; "\
+"$approval_binding; $release_evidence_binding"
+  ACTIVE_UPDATE_HANDLER_ARMED=true
+  pause_schedulers
+  install_release_on_fixed_active
+  mark_fixed_active_legacy_bootstrap_complete
+  fixed_active_update_is_verified_under_hold
+  current_evidence_binding="$(evidence_binding)" || return 1
+  if [[ "$current_evidence_binding" != "$release_evidence_binding" ]]; then
+    fail "release evidence changed during the fixed Active update"
+    return 1
+  fi
+  checkpoint_write active_update_verified completed inspect_then_resume \
+    "fixed Active and public route run the exact tested artifact while singleton "\
+"schedulers remain paused under maintenance hold; $approval_binding; "\
+"$release_evidence_binding"
+  resume_schedulers
+  fixed_active_update_is_committed_under_hold
+  checkpoint_write active_updated completed inspect_then_resume \
+    "fixed Active now runs the exact manually tested artifact without changing "\
+"active-slot or public upstream; Candidate remains available for explicit cleanup; "\
+"$approval_binding; $release_evidence_binding"
+  ACTIVE_UPDATE_HANDLER_ARMED=false
+  remove_fixed_active_target_temporaries
+  printf \
+    '[INFO] Fixed Active updated under quiescence: sha=%s active=%s candidate=%s\n' \
+    "$DEPLOY_COMMIT_SHA" "$CURRENT_ACTIVE_SLOT" "$CANDIDATE_SLOT"
+}
+
+approve_candidate_to_active() {
+  local supervisor_rc=0
+  require_environment
+  fixed_active_approval_binding >/dev/null || return 1
+  assert_inherited_production_lock
+  ensure_bluegreen_state_root
+  ensure_bluegreen_runtime_roots
+  assert_no_active_switch_unit
+  resolve_active_slot
+  capture_fixed_active_slot_anchor
+  if ! read_checkpoint_phase_status; then
+    return 1
+  fi
+  if [[ "$CHECKPOINT_PHASE" == "active_updated" ]] \
+    && [[ "$CHECKPOINT_STATUS" == "completed" ]]; then
+    prepare_fixed_active_targets || return 1
+    load_fixed_active_previous_identity || return 1
+    fixed_active_update_is_committed \
+      || fail "fixed Active committed state failed exact revalidation" \
+      || return 1
+    remove_fixed_active_target_temporaries
+    return 0
+  fi
+  case "$CHECKPOINT_PHASE:$CHECKPOINT_STATUS" in
+    candidate_ready:completed)
+      candidate_ready_state_is_legal \
+        || fail "Candidate failed exact revalidation before quiescence" \
+        || return 1
+      ;;
+    active_update_started:in_progress|\
+    active_update_verified:completed|\
+    rollback_started:in_progress)
+      echo "[WARN] Reconciling interrupted fixed Active phase: $CHECKPOINT_PHASE"
+      ;;
+    *)
+      fail "checkpoint phase $CHECKPOINT_PHASE cannot approve or reconcile a fixed Active update"
+      return 1
+      ;;
+  esac
+  set +e
+  run_quiescence_supervisor active-update-locked
+  supervisor_rc=$?
+  set -e
+  resolve_active_slot
+  capture_fixed_active_slot_anchor
+  if read_checkpoint_phase_status \
+    && [[ "$CHECKPOINT_PHASE" == "active_updated" ]] \
+    && [[ "$CHECKPOINT_STATUS" == "completed" ]]; then
+    prepare_fixed_active_targets || return 1
+    load_fixed_active_previous_identity || return 1
+    if fixed_active_update_is_committed; then
+      remove_fixed_active_target_temporaries
+      printf \
+        '[INFO] Fixed Active update settled after quiescence: sha=%s active=%s candidate=%s\n' \
+        "$DEPLOY_COMMIT_SHA" "$CURRENT_ACTIVE_SLOT" "$CANDIDATE_SLOT"
+      return 0
+    fi
+  fi
+  if [[ "$CHECKPOINT_PHASE" == "rollback_completed" ]] \
+    && [[ "$CHECKPOINT_STATUS" == "completed" ]]; then
+    fail "fixed Active update failed and exact previous Active was restored; Candidate remains for explicit discard"
+  fi
+  if [[ "$supervisor_rc" -eq 0 ]]; then
+    supervisor_rc=1
+  fi
+  return "$supervisor_rc"
+}
+
+restore_previous_active_exit_handler() {
+  local rc="$?"
+  trap - EXIT TERM INT HUP
+  if [[ "$PREVIOUS_ACTIVE_RESTORE_ARMED" == "true" ]]; then
+    if [[ "${JATO_QUIESCENCE_LOCK_HELD:-}" == "1" ]] \
+      && read_checkpoint_phase_status \
+      && [[ "$CHECKPOINT_PHASE" == "rollback_completed" ]] \
+      && [[ "$CHECKPOINT_STATUS" == "completed" ]] \
+      && previous_fixed_active_restore_is_committed_under_hold; then
+      PREVIOUS_ACTIVE_RESTORE_ARMED=false
+    elif read_checkpoint_phase_status \
+      && [[ "$CHECKPOINT_PHASE" == "rollback_completed" ]] \
+      && [[ "$CHECKPOINT_STATUS" == "completed" ]] \
+      && previous_fixed_active_restore_is_committed; then
+      PREVIOUS_ACTIVE_RESTORE_ARMED=false
+    else
+      retain_fixed_active_maintenance_fence || true
+      rc="$EXIT_COMMAND_FAILED_MARKER_RETAINED"
+    fi
+  fi
+  remove_fixed_active_target_temporaries
+  exit "$rc"
+}
+
+restore_previous_active_locked() {
+  local approval_binding=""
+  local release_evidence_binding=""
+  require_environment
+  approval_binding="$(fixed_active_approval_binding)" || return 1
+  verify_quiescence_hold_context
+  resolve_active_slot
+  capture_fixed_active_slot_anchor
+  if ! read_checkpoint_phase_status; then
+    return 1
+  fi
+  if [[ "$CHECKPOINT_PHASE" != "active_updated" ]] \
+    || [[ "$CHECKPOINT_STATUS" != "completed" ]]; then
+    fail "previous Active restore requires active_updated/completed"
+    return 1
+  fi
+  prepare_fixed_active_targets || return 1
+  load_fixed_active_previous_identity || return 1
+  fixed_active_update_is_committed_under_hold \
+    || fail "updated Active, exact preimage, or retained Candidate changed" \
+    || return 1
+  release_evidence_binding="$(evidence_binding)" || return 1
+  PREVIOUS_ACTIVE_RESTORE_ARMED=true
+  pause_schedulers
+  checkpoint_write rollback_started in_progress rollback_required \
+    "post-update public audit rejected the fixed Active artifact; "\
+"exact previous Active restoration started; $approval_binding; "\
+"$release_evidence_binding"
+  rollback_fixed_active_update "$release_evidence_binding" active_updated
+  PREVIOUS_ACTIVE_RESTORE_ARMED=false
+  remove_fixed_active_target_temporaries
+  printf \
+    '[INFO] Previous fixed Active restored under quiescence: sha=%s active=%s; Candidate retained on %s\n' \
+    "$PREVIOUS_RELEASE_SHA" "$CURRENT_ACTIVE_SLOT" "$CANDIDATE_SLOT"
+}
+
+restore_previous_active() {
+  local supervisor_rc=0
+  require_environment
+  fixed_active_approval_binding >/dev/null || return 1
+  assert_inherited_production_lock
+  ensure_bluegreen_state_root
+  ensure_bluegreen_runtime_roots
+  assert_no_active_switch_unit
+  resolve_active_slot
+  capture_fixed_active_slot_anchor
+  if ! read_checkpoint_phase_status; then
+    return 1
+  fi
+  if [[ "$CHECKPOINT_PHASE" != "active_updated" ]] \
+    || [[ "$CHECKPOINT_STATUS" != "completed" ]]; then
+    fail "previous Active restore requires active_updated/completed"
+    return 1
+  fi
+  prepare_fixed_active_targets || return 1
+  load_fixed_active_previous_identity || return 1
+  fixed_active_update_is_committed \
+    || fail "updated Active, exact preimage, or retained Candidate changed" \
+    || return 1
+  remove_fixed_active_target_temporaries
+  set +e
+  run_quiescence_supervisor restore-previous-active-locked
+  supervisor_rc=$?
+  set -e
+  resolve_active_slot
+  capture_fixed_active_slot_anchor
+  if read_checkpoint_phase_status \
+    && [[ "$CHECKPOINT_PHASE" == "rollback_completed" ]] \
+    && [[ "$CHECKPOINT_STATUS" == "completed" ]]; then
+    prepare_fixed_active_targets || return 1
+    load_fixed_active_previous_identity || return 1
+    if previous_fixed_active_restore_is_committed; then
+      remove_fixed_active_target_temporaries
+      printf \
+        '[INFO] Previous fixed Active restore settled: sha=%s active=%s candidate=%s\n' \
+        "$PREVIOUS_RELEASE_SHA" "$CURRENT_ACTIVE_SLOT" "$CANDIDATE_SLOT"
+      return 0
+    fi
+  fi
+  if [[ "$supervisor_rc" -eq 0 ]]; then
+    supervisor_rc=1
+  fi
+  return "$supervisor_rc"
+}
+
+candidate_preview_is_released() {
+  local active_state=""
+  local load_state=""
+  local unit=""
+  unit="$(candidate_preview_unit_name)" || return 1
+  load_state="$(
+    systemctl show "$unit" -p LoadState --value 2>/dev/null || true
+  )"
+  active_state="$(
+    systemctl show "$unit" -p ActiveState --value 2>/dev/null || true
+  )"
+  if [[ "$load_state" != "not-found" ]] \
+    || [[ "$active_state" == "active" || "$active_state" == "activating" ]] \
+    || [[ -e "$CANDIDATE_PREVIEW_STATE_DIR" ]] \
+    || [[ -L "$CANDIDATE_PREVIEW_STATE_DIR" ]]; then
+    fail "Candidate preview is not fully released"
+    return 1
+  fi
+  candidate_preview_port_is_unused
+}
+
+candidate_release_is_complete() {
+  candidate_cleanup_is_complete \
+    && candidate_preview_is_released
+}
+
+previous_active_is_exact_for_candidate_discard() {
+  resolve_previous_release_identity \
+    && [[ ! -e "$DEPLOYMENT_MARKER" && ! -L "$DEPLOYMENT_MARKER" ]] \
+    && [[ ! -e "$SCHEDULER_STATE_FILE" && ! -L "$SCHEDULER_STATE_FILE" ]] \
+    && verify_slot_release_exact "$CURRENT_ACTIVE_SLOT" "$PREVIOUS_RELEASE_SHA" \
+    && verify_public_release_exact "$PREVIOUS_RELEASE_SHA" \
+    && unit_property_equals \
+      "${SERVICE_PREFIX}${CURRENT_ACTIVE_SLOT}" UnitFileState enabled \
+    && unit_property_equals \
+      "${SERVICE_PREFIX}${CURRENT_ACTIVE_SLOT}" ActiveState active \
+    && verify_active_cgroup "$CURRENT_ACTIVE_SLOT" \
+    && verify_durable_route_ownership \
+      "$CURRENT_ACTIVE_SLOT" \
+      "$PREVIOUS_RELEASE_ROOT" \
+      "$PREVIOUS_RELEASE_SHA" \
+      "$PREVIOUS_RELEASE_ROOT/06_AppPlatform/frontend/dist" \
+    && verify_active_monthly_gate_released "$CURRENT_ACTIVE_SLOT"
+}
+
+fixed_active_preimage_exists() {
+  local manifest=""
+  manifest="$(fixed_active_preimage_path)/manifest.json"
+  sudo -n test -f "$manifest" \
+    && ! sudo -n test -L "$manifest"
+}
+
+verify_discarded_active_is_exact() {
+  if fixed_active_preimage_exists; then
+    prepare_fixed_active_targets || return 1
+    load_fixed_active_previous_identity || return 1
+    previous_fixed_active_runtime_is_committed
+  else
+    previous_active_is_exact_for_candidate_discard
+  fi
+}
+
+discard_candidate_exit_handler() {
+  local rc="$?"
+  trap - EXIT TERM INT HUP
+  remove_fixed_active_target_temporaries
+  exit "$rc"
+}
+
+discard_candidate() {
+  local binding=""
+  require_environment
+  assert_inherited_production_lock
+  ensure_bluegreen_state_root
+  ensure_bluegreen_runtime_roots
+  assert_no_active_switch_unit
+  resolve_active_slot
+  if ! read_checkpoint_phase_status; then
+    return 1
+  fi
+  case "$CHECKPOINT_PHASE" in
+    candidate_ready)
+      if [[ "$CHECKPOINT_STATUS" != "completed" ]]; then
+        fail "Candidate discard requires candidate_ready/completed"
+        return 1
+      fi
+      binding="$(evidence_binding)" || return 1
+      previous_active_is_exact_for_candidate_discard \
+        || fail "previous successful Active is not exact before Candidate discard" \
+        || return 1
+      stop_candidate_preview || return 1
+      if ! candidate_cleanup_is_complete; then
+        restore_candidate_runtime_preimage || return 1
+      fi
+      candidate_release_is_complete \
+        || fail "Candidate discard did not reach exact quiescent state" \
+        || return 1
+      previous_active_is_exact_for_candidate_discard \
+        || fail "previous successful Active changed during Candidate discard" \
+        || return 1
+      checkpoint_write candidate_discarded completed automatic \
+        "manually rejected Candidate preview and runtime were exactly removed; "\
+"active_slot=$CURRENT_ACTIVE_SLOT candidate_slot=$CANDIDATE_SLOT; $binding"
+      ;;
+    rollback_completed)
+      if [[ "$CHECKPOINT_STATUS" != "completed" ]]; then
+        fail "Candidate discard requires rollback_completed/completed"
+        return 1
+      fi
+      binding="$(evidence_binding)" || return 1
+      prepare_fixed_active_targets || return 1
+      load_fixed_active_previous_identity || return 1
+      previous_fixed_active_restore_is_committed \
+        || fail "restored previous Active or retained Candidate changed" \
+        || return 1
+      stop_candidate_preview || return 1
+      if ! candidate_cleanup_is_complete; then
+        restore_candidate_runtime_preimage || return 1
+      fi
+      candidate_release_is_complete \
+        || fail "restored Candidate cleanup did not reach exact quiescence" \
+        || return 1
+      previous_fixed_active_runtime_is_committed \
+        || fail "previous Active changed while discarding retained Candidate" \
+        || return 1
+      checkpoint_write candidate_discarded completed automatic \
+        "Candidate retained after exact fixed Active restoration was explicitly removed; "\
+"active_slot=$CURRENT_ACTIVE_SLOT candidate_slot=$CANDIDATE_SLOT; $binding"
+      ;;
+    candidate_discarded)
+      if [[ "$CHECKPOINT_STATUS" != "completed" ]]; then
+        fail "Candidate discarded checkpoint is not completed"
+        return 1
+      fi
+      verify_discarded_active_is_exact \
+        || fail "discarded Candidate checkpoint no longer has the exact previous Active" \
+        || return 1
+      candidate_release_is_complete \
+        || fail "discarded Candidate checkpoint no longer has an exact quiescent Candidate" \
+        || return 1
+      ;;
+    *)
+      fail "checkpoint phase $CHECKPOINT_PHASE cannot discard Candidate"
+      return 1
+      ;;
+  esac
+  remove_fixed_active_target_temporaries
+  printf \
+    '[INFO] Candidate discarded: sha=%s active=%s candidate=%s; public Active was unchanged\n' \
+    "$DEPLOY_COMMIT_SHA" "$CURRENT_ACTIVE_SLOT" "$CANDIDATE_SLOT"
+}
+
+release_candidate_exit_handler() {
+  local rc="$?"
+  trap - EXIT TERM INT HUP
+  remove_fixed_active_target_temporaries
+  exit "$rc"
+}
+
+release_candidate() {
+  local release_binding=""
+  require_environment
+  release_binding="$(fixed_active_approval_binding)" || return 1
+  assert_inherited_production_lock
+  ensure_bluegreen_state_root
+  ensure_bluegreen_runtime_roots
+  assert_no_active_switch_unit
+  resolve_active_slot
+  capture_fixed_active_slot_anchor
+  if ! read_checkpoint_phase_status; then
+    return 1
+  fi
+  case "$CHECKPOINT_PHASE" in
+    active_updated)
+      prepare_fixed_active_targets || return 1
+      load_fixed_active_previous_identity || return 1
+      fixed_active_runtime_is_exact \
+        || fail "fixed Active changed before Candidate release" \
+        || return 1
+      stop_candidate_preview || return 1
+      restore_candidate_runtime_preimage || return 1
+      candidate_release_is_complete \
+        || fail "Candidate release did not reach exact quiescent state" \
+        || return 1
+      fixed_active_runtime_is_exact \
+        || fail "fixed Active changed during Candidate release" \
+        || return 1
+      checkpoint_write candidate_released completed automatic \
+        "Candidate preview and runtime were exactly released without changing fixed Active; "\
+"active_slot=$CURRENT_ACTIVE_SLOT candidate_slot=$CANDIDATE_SLOT $release_binding"
+      ;;
+    candidate_released)
+      prepare_fixed_active_targets || return 1
+      load_fixed_active_previous_identity || return 1
+      fixed_active_runtime_is_exact \
+        || fail "released Candidate checkpoint no longer has an exact fixed Active" \
+        || return 1
+      candidate_release_is_complete \
+        || fail "released Candidate checkpoint no longer has an exact quiescent Candidate slot" \
+        || return 1
+      ;;
+    *)
+      fail "checkpoint phase $CHECKPOINT_PHASE cannot release Candidate"
+      return 1
+      ;;
+  esac
+  remove_fixed_active_target_temporaries
+  printf \
+    '[INFO] Candidate released: sha=%s active=%s candidate=%s; fixed Active and rollback artifacts were retained\n' \
+    "$DEPLOY_COMMIT_SHA" "$CURRENT_ACTIVE_SLOT" "$CANDIDATE_SLOT"
 }
 
 verify_switch_prerequisites() {
@@ -2964,33 +4717,73 @@ candidate_cleanup_is_complete() {
     && candidate_runtime_preimage_command verify-live
 }
 
+mark_pre_switch_cleanup_required() {
+  if [[ "$BLUEGREEN_MODE" == "prepare-candidate" ]]; then
+    echo \
+      "[ERROR] Candidate cleanup needs inspection; no production maintenance marker was written" \
+      >&2
+    return 0
+  fi
+  mark_maintenance_required
+}
+
+settle_candidate_checkpoint_after_cleanup() {
+  if [[ ! -e "$CHECKPOINT_FILE" && ! -L "$CHECKPOINT_FILE" ]]; then
+    return 0
+  fi
+  read_checkpoint_phase_status || return 1
+  case "$CHECKPOINT_PHASE:$CHECKPOINT_STATUS" in
+    migrated:completed)
+      checkpoint_write candidate_prepare_aborted completed automatic \
+        "Candidate preparation failed, and its runtime and preview were exactly removed before readiness"
+      ;;
+    candidate_ready:completed)
+      checkpoint_write candidate_discarded completed automatic \
+        "invalid or interrupted Candidate was exactly removed before any public route switch"
+      ;;
+    candidate_prepare_aborted:completed|candidate_discarded:completed) ;;
+    *)
+      fail "Candidate cleanup cannot settle checkpoint $CHECKPOINT_PHASE/$CHECKPOINT_STATUS"
+      return 1
+      ;;
+  esac
+  read_checkpoint_phase_status \
+    && [[ "$CHECKPOINT_STATUS" == "completed" ]] \
+    && { [[ "$CHECKPOINT_PHASE" == "candidate_prepare_aborted" ]] \
+      || [[ "$CHECKPOINT_PHASE" == "candidate_discarded" ]]; }
+}
+
 cleanup_pre_switch_candidate() {
+  if ! stop_candidate_preview; then
+    mark_pre_switch_cleanup_required || true
+    return 1
+  fi
   if ! resolve_previous_release_identity \
     || ! verify_slot_release_exact "$CURRENT_ACTIVE_SLOT" "$PREVIOUS_RELEASE_SHA"; then
-    mark_maintenance_required || true
+    mark_pre_switch_cleanup_required || true
     return 1
   fi
   if [[ "$BLUEGREEN_MODE" == "switch-locked" ]]; then
     if ! verify_public_release_exact "$PREVIOUS_RELEASE_SHA"; then
-      mark_maintenance_required || true
+      mark_pre_switch_cleanup_required || true
       return 1
     fi
     if ! restore_old_static_boot_owner; then
-      mark_maintenance_required || true
+      mark_pre_switch_cleanup_required || true
       return 1
     fi
     if ! candidate_cleanup_is_complete \
       && ! restore_candidate_runtime_preimage; then
-      mark_maintenance_required || true
+      mark_pre_switch_cleanup_required || true
       return 1
     fi
     if ! candidate_cleanup_is_complete; then
-      mark_maintenance_required || true
+      mark_pre_switch_cleanup_required || true
       return 1
     fi
     if [[ -e "$SCHEDULER_STATE_FILE" || -L "$SCHEDULER_STATE_FILE" ]] \
       && ! resume_schedulers; then
-      mark_maintenance_required || true
+      mark_pre_switch_cleanup_required || true
       return 1
     fi
     mark_maintenance_required || true
@@ -2999,32 +4792,36 @@ cleanup_pre_switch_candidate() {
   fi
   if ! restore_nginx_preimage \
     || ! verify_public_release_exact "$PREVIOUS_RELEASE_SHA"; then
-    mark_maintenance_required || true
+    mark_pre_switch_cleanup_required || true
     return 1
   fi
   if ! restore_old_static_boot_owner; then
-    mark_maintenance_required || true
+    mark_pre_switch_cleanup_required || true
     return 1
   fi
   if ! candidate_cleanup_is_complete \
     && ! restore_candidate_runtime_preimage; then
-    mark_maintenance_required || true
+    mark_pre_switch_cleanup_required || true
     return 1
   fi
   if ! candidate_cleanup_is_complete; then
-    mark_maintenance_required || true
+    mark_pre_switch_cleanup_required || true
     return 1
   fi
   if [[ -e "$SCHEDULER_STATE_FILE" || -L "$SCHEDULER_STATE_FILE" ]]; then
     resume_schedulers || {
-      mark_maintenance_required || true
+      mark_pre_switch_cleanup_required || true
       return 1
     }
   fi
   remove_nginx_preimage || {
-    mark_maintenance_required || true
+    mark_pre_switch_cleanup_required || true
     return 1
   }
+  if ! settle_candidate_checkpoint_after_cleanup; then
+    mark_pre_switch_cleanup_required || true
+    return 1
+  fi
 }
 
 prepare_exit_handler() {
@@ -3042,8 +4839,14 @@ prepare_exit_handler() {
 reconcile_pre_switch_state() {
   if ! resolve_existing_candidate_slot \
     || ! resolve_previous_release_identity; then
-    mark_maintenance_required || true
+    mark_pre_switch_cleanup_required || true
     return 1
+  fi
+  if read_checkpoint_phase_status \
+    && candidate_ready_state_is_legal; then
+    SWITCH_RECONCILED=true
+    echo "[INFO] Preserved exact candidate_ready state during reconciliation" >&2
+    return 0
   fi
   if verify_slot_release_exact "$CANDIDATE_SLOT" "$DEPLOY_COMMIT_SHA" \
     && verify_public_release_exact "$DEPLOY_COMMIT_SHA"; then
@@ -3054,16 +4857,17 @@ reconcile_pre_switch_state() {
   if verify_slot_release_exact "$CURRENT_ACTIVE_SLOT" "$PREVIOUS_RELEASE_SHA" \
     && verify_public_release_exact "$PREVIOUS_RELEASE_SHA"; then
     if ! cleanup_pre_switch_candidate; then
-      mark_maintenance_required || true
+      mark_pre_switch_cleanup_required || true
       return 1
     fi
-    if [[ "$BLUEGREEN_MODE" != "switch-locked" ]]; then
+    if [[ "$BLUEGREEN_MODE" != "switch-locked" ]] \
+      && [[ "$BLUEGREEN_MODE" != "prepare-candidate" ]]; then
       clear_maintenance_marker || return 1
     fi
     SWITCH_RECONCILED=true
     return 0
   fi
-  mark_maintenance_required || true
+  mark_pre_switch_cleanup_required || true
   if verify_slot_release_exact "$CANDIDATE_SLOT" "$DEPLOY_COMMIT_SHA"; then
     keep_candidate_route_healthy || true
   fi
@@ -3193,7 +4997,7 @@ complete_candidate_activation() {
     "MemoryHigh=$BLUEGREEN_ACTIVE_MEMORY_HIGH" \
     "MemoryMax=$BLUEGREEN_ACTIVE_MEMORY_MAX" \
     "CPUQuota=200%" || return 1
-  verify_active_cgroup || return 1
+  verify_active_cgroup "$CANDIDATE_SLOT" || return 1
   resume_schedulers || return 1
   verify_durable_route_ownership \
     "$CANDIDATE_SLOT" \
@@ -3244,7 +5048,7 @@ reconcile_existing_switch() {
         "MemoryHigh=$BLUEGREEN_ACTIVE_MEMORY_HIGH" \
         "MemoryMax=$BLUEGREEN_ACTIVE_MEMORY_MAX" \
         "CPUQuota=200%" \
-      && verify_active_cgroup \
+      && verify_active_cgroup "$CANDIDATE_SLOT" \
       && verify_durable_route_ownership \
         "$CANDIDATE_SLOT" \
         "$RELEASE_DIR" \
@@ -3371,17 +5175,26 @@ assert_no_active_switch_unit() {
   fi
 }
 
-run_switch_supervisor() {
+run_quiescence_supervisor() {
   local active_bundle_lock=""
   local active_main_pid=""
   local active_project_root=""
   local bash_bin=""
   local controller="$RELEASE_DIR/03_Scripts/deploy/tencent_bluegreen_release.sh"
   local helper="$RELEASE_DIR/03_Scripts/deploy/jato_quiescence_gate.py"
+  local locked_mode="${1:-}"
   local minimum_timeout=0
   local python_bin=""
-  local quiescence_evidence="$BLUEGREEN_STATE_ROOT/quiescence-${DEPLOY_COMMIT_SHA}.json"
+  local quiescence_evidence=""
   local unit=""
+  case "$locked_mode" in
+    switch-locked|active-update-locked|restore-previous-active-locked) ;;
+    *)
+      fail "unsupported quiescence child mode: ${locked_mode:-missing}"
+      return 1
+      ;;
+  esac
+  quiescence_evidence="$BLUEGREEN_STATE_ROOT/quiescence-${DEPLOY_COMMIT_SHA}-${locked_mode}.json"
   if ! [[ "$BLUEGREEN_CONTROLLER_TIMEOUT" =~ ^[1-9][0-9]*$ ]] \
     || ! [[ "$BLUEGREEN_QUIESCENCE_TIMEOUT" =~ ^[1-9][0-9]*$ ]] \
     || ! [[ "$BLUEGREEN_DRAIN_SECONDS" =~ ^[0-9]+$ ]]; then
@@ -3419,7 +5232,7 @@ run_switch_supervisor() {
     --property="RuntimeMaxSec=${BLUEGREEN_CONTROLLER_TIMEOUT}s" \
     --property="TimeoutStopSec=120s" \
     --property="KillMode=control-group" \
-    --setenv="BLUEGREEN_MODE=switch-locked" \
+    --setenv="BLUEGREEN_MODE=$locked_mode" \
     --setenv="BLUEGREEN_ROOT=$BLUEGREEN_ROOT" \
     --setenv="RELEASES_ROOT=$RELEASES_ROOT" \
     --setenv="SLOTS_ROOT=$SLOTS_ROOT" \
@@ -3447,6 +5260,9 @@ run_switch_supervisor() {
     --setenv="DEPLOY_REPOSITORY=$DEPLOY_REPOSITORY" \
     --setenv="DEPLOY_RUN_ID=$DEPLOY_RUN_ID" \
     --setenv="DEPLOY_RUN_ATTEMPT=$DEPLOY_RUN_ATTEMPT" \
+    --setenv="DEPLOY_APPROVAL_RUN_ID=${DEPLOY_APPROVAL_RUN_ID:-}" \
+    --setenv="DEPLOY_APPROVAL_RUN_ATTEMPT=${DEPLOY_APPROVAL_RUN_ATTEMPT:-}" \
+    --setenv="DEPLOY_CANDIDATE_ATTESTATION_SHA256=${DEPLOY_CANDIDATE_ATTESTATION_SHA256:-}" \
     --setenv="DEPLOY_BRANCH=$DEPLOY_BRANCH" \
     --setenv="DEPLOY_SERVER_NAME=${DEPLOY_SERVER_NAME:-_}" \
     --setenv="FRONTEND_ARTIFACT_IDENTITY=$FRONTEND_ARTIFACT_IDENTITY" \
@@ -3467,7 +5283,11 @@ run_switch_supervisor() {
       --marker "$DEPLOYMENT_MARKER" \
       --timeout "$BLUEGREEN_QUIESCENCE_TIMEOUT" \
       --evidence "$quiescence_evidence" \
-      -- "$bash_bin" "$controller" switch-locked
+      -- "$bash_bin" "$controller" "$locked_mode"
+}
+
+run_switch_supervisor() {
+  run_quiescence_supervisor switch-locked
 }
 
 switch_locked() {
@@ -3512,7 +5332,99 @@ switch_locked() {
   complete_candidate_activation "$binding"
 }
 
+prepare_candidate() {
+  local binding=""
+  require_environment
+  assert_inherited_production_lock
+  ensure_bluegreen_state_root
+  ensure_bluegreen_runtime_roots
+  assert_no_active_switch_unit
+  if [[ -e "$SCHEDULER_STATE_FILE" || -L "$SCHEDULER_STATE_FILE" ]]; then
+    fail "Candidate preparation refuses an existing scheduler state snapshot"
+    return 1
+  fi
+  if [[ -e "$DEPLOYMENT_MARKER" || -L "$DEPLOYMENT_MARKER" ]]; then
+    fail "Candidate preparation refuses an existing deployment maintenance marker"
+    return 1
+  fi
+  if ! read_checkpoint_phase_status; then
+    return 1
+  fi
+  case "$CHECKPOINT_PHASE" in
+    candidate_ready)
+      if ! resolve_existing_candidate_slot; then
+        fail "candidate_ready checkpoint no longer has one exact Candidate slot"
+        return 1
+      fi
+      PRE_SUPERVISOR_CANDIDATE_ARMED=true
+      if candidate_ready_state_is_legal; then
+        PRE_SUPERVISOR_CANDIDATE_ARMED=false
+        printf \
+          '[INFO] Candidate remains ready: sha=%s slot=%s preview=http://127.0.0.1:%s\n' \
+          "$DEPLOY_COMMIT_SHA" \
+          "$CANDIDATE_SLOT" \
+          "$BLUEGREEN_CANDIDATE_PREVIEW_PORT"
+        return 0
+      fi
+      fail "candidate_ready checkpoint failed exact live-state revalidation"
+      return 1
+      ;;
+    candidate_prepare_aborted|candidate_discarded|switch_started|switched|rollback_started|rollback_completed)
+      fail "checkpoint phase $CHECKPOINT_PHASE cannot prepare a new Candidate"
+      return 1
+      ;;
+    backend_healthy|www_verified|intl_deploy_started|intl_verified|parity_verified)
+      fail "checkpoint phase $CHECKPOINT_PHASE cannot prepare a new Candidate"
+      return 1
+      ;;
+    complete|pre_switch_aborted)
+      fail "checkpoint phase $CHECKPOINT_PHASE cannot prepare a new Candidate"
+      return 1
+      ;;
+  esac
+  resolve_active_slot
+  resolve_current_frontend_root
+  prepare_shared_runtime
+  ensure_current_slot_restartable
+  preserve_previous_release_metadata
+  guard_release_storage
+  assert_host_memory_budget
+  materialize_release_source
+  run_candidate_build_scope
+  verify_final_runtime_seal
+  assert_no_database_migration_delta
+  assert_runtime_storage_reserve
+  assert_host_memory_budget
+  install_slot_runtime
+  verify_candidate
+  verify_candidate_data_access_contract
+  start_candidate_preview
+  verify_candidate_preview
+  if ! read_checkpoint_phase_status \
+    || [[ "$CHECKPOINT_PHASE" != "migrated" ]] \
+    || [[ "$CHECKPOINT_STATUS" != "completed" ]]; then
+    fail "Candidate runtime verification did not finish from migrated/completed"
+    return 1
+  fi
+  binding="$(evidence_binding)" || return 1
+  checkpoint_write candidate_ready completed inspect_then_resume \
+    "exact Candidate and loopback preview are ready for manual inspection; "\
+"slot=$CANDIDATE_SLOT port=$BLUEGREEN_CANDIDATE_PREVIEW_PORT; $binding"
+  read_checkpoint_phase_status
+  if [[ "$BLUEGREEN_FAULT" == "candidate_ready" ]]; then
+    fail "fault injection: candidate_ready"
+  fi
+  candidate_ready_state_is_legal
+  PRE_SUPERVISOR_CANDIDATE_ARMED=false
+  printf \
+    '[INFO] Candidate ready: sha=%s slot=%s preview=http://127.0.0.1:%s\n' \
+    "$DEPLOY_COMMIT_SHA" \
+    "$CANDIDATE_SLOT" \
+    "$BLUEGREEN_CANDIDATE_PREVIEW_PORT"
+}
+
 prepare_and_switch() {
+  local binding=""
   local orphaned_scheduler_snapshot=false
   local supervisor_rc=0
   require_environment
@@ -3532,6 +5444,20 @@ prepare_and_switch() {
     return 1
   fi
   case "$CHECKPOINT_PHASE" in
+    candidate_ready)
+      if ! resolve_existing_candidate_slot; then
+        fail "candidate_ready checkpoint no longer has one exact Candidate slot"
+        return 1
+      fi
+      PRE_SUPERVISOR_CANDIDATE_ARMED=true
+      if candidate_ready_state_is_legal; then
+        PRE_SUPERVISOR_CANDIDATE_ARMED=false
+        fail "candidate_ready requires a separately approved switch mode"
+        return 1
+      fi
+      fail "candidate_ready checkpoint failed exact live-state revalidation"
+      return 1
+      ;;
     switch_started|switched|rollback_started|backend_healthy|www_verified|intl_deploy_started|intl_verified|parity_verified|complete)
       if ! reconcile_existing_switch; then
         return 1
@@ -3575,7 +5501,10 @@ prepare_and_switch() {
   install_slot_runtime
   prepare_stable_nginx_boot_infrastructure
   verify_candidate
-  verify_candidate_sandbox
+  verify_candidate_data_access_contract
+  binding="$(evidence_binding)" || return 1
+  checkpoint_write candidate_ready completed inspect_then_resume \
+    "exact Candidate backend passed automatic verification before the production switch; $binding"
   if [[ "$BLUEGREEN_FAULT" == "candidate_ready" ]]; then
     fail "fault injection: candidate_ready"
   fi
@@ -3639,6 +5568,60 @@ prepare_and_switch() {
 }
 
 case "$BLUEGREEN_MODE" in
+  restore-previous-active)
+    trap 'exit 129' HUP
+    trap 'exit 130' INT
+    trap 'exit 143' TERM
+    restore_previous_active
+    trap - HUP INT TERM
+    ;;
+  restore-previous-active-locked)
+    trap restore_previous_active_exit_handler EXIT
+    trap 'exit 129' HUP
+    trap 'exit 130' INT
+    trap 'exit 143' TERM
+    restore_previous_active_locked
+    trap - EXIT HUP INT TERM
+    ;;
+  discard-candidate)
+    trap discard_candidate_exit_handler EXIT
+    trap 'exit 129' HUP
+    trap 'exit 130' INT
+    trap 'exit 143' TERM
+    discard_candidate
+    trap - EXIT HUP INT TERM
+    ;;
+  release-candidate)
+    trap release_candidate_exit_handler EXIT
+    trap 'exit 129' HUP
+    trap 'exit 130' INT
+    trap 'exit 143' TERM
+    release_candidate
+    trap - EXIT HUP INT TERM
+    ;;
+  approve-candidate-to-active)
+    trap 'exit 129' HUP
+    trap 'exit 130' INT
+    trap 'exit 143' TERM
+    approve_candidate_to_active
+    trap - HUP INT TERM
+    ;;
+  active-update-locked)
+    trap fixed_active_update_exit_handler EXIT
+    trap 'exit 129' HUP
+    trap 'exit 130' INT
+    trap 'exit 143' TERM
+    active_update_locked
+    trap - EXIT HUP INT TERM
+    ;;
+  prepare-candidate)
+    trap prepare_exit_handler EXIT
+    trap 'exit 129' HUP
+    trap 'exit 130' INT
+    trap 'exit 143' TERM
+    prepare_candidate
+    trap - EXIT HUP INT TERM
+    ;;
   prepare-and-switch)
     trap prepare_exit_handler EXIT
     trap 'exit 129' HUP

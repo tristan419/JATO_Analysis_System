@@ -18,6 +18,7 @@ CHECKPOINT_RECOVERY_WORKFLOW = (
     REPO_ROOT / ".github/workflows/production-checkpoint-recovery.yml"
 )
 PRODUCTION_RELEASE_WORKFLOW = REPO_ROOT / ".github/workflows/production-release.yml"
+INTL_SYNC_WORKFLOW = REPO_ROOT / ".github/workflows/sync-www-active-to-intl.yml"
 INTL_EDGE_PREWARM_WORKFLOW = REPO_ROOT / ".github/workflows/intl-edge-prewarm.yml"
 WORKFLOW_GUARD_VALIDATOR = (
     REPO_ROOT / ".github/scripts/validate_production_workflow_guards.py"
@@ -40,6 +41,41 @@ def test_recovery_hold_stops_release_and_prewarm_before_mutation() -> None:
         Loader=yaml.BaseLoader,
     )
     assert isinstance(workflow, dict)
+    release_mode = workflow["on"]["workflow_dispatch"]["inputs"]["release_mode"]
+    assert release_mode == {
+        "description": (
+            "Prepare, approve, discard, or release one exact reviewed Candidate"
+        ),
+        "required": "true",
+        "type": "choice",
+        "default": "prepare-candidate",
+        "options": [
+            "prepare-candidate",
+            "approve-candidate-to-active",
+            "discard-candidate",
+            "release-candidate",
+        ],
+    }
+    assert workflow["on"]["workflow_dispatch"]["inputs"][
+        "confirm_www_activation"
+    ] == {
+        "description": "I confirm this exact Candidate may replace www Active",
+        "required": "true",
+        "type": "boolean",
+        "default": "false",
+    }
+    assert workflow["on"]["workflow_dispatch"]["inputs"][
+        "confirm_candidate_cleanup"
+    ] == {
+        "description": "I confirm the exact reviewed Candidate may be cleaned up",
+        "required": "true",
+        "type": "boolean",
+        "default": "false",
+    }
+    assert workflow["env"]["RELEASE_MODE"] == (
+        "${{ github.event_name == 'workflow_dispatch' && inputs.release_mode "
+        "|| 'prepare-candidate' }}"
+    )
     push_paths = set(workflow["on"]["push"]["paths"])
     assert {
         ".github/scripts/production_release_hold.py",
@@ -75,19 +111,46 @@ def test_recovery_hold_stops_release_and_prewarm_before_mutation() -> None:
     assert "production_release_hold.py" in resolver["run"]
     assert "--github-output \"$GITHUB_OUTPUT\"" in resolver["run"]
 
-    deploy_condition = (
+    prepare_condition = (
         "${{ github.ref == 'refs/heads/main' && "
-        "needs.release_coordination_guard.outputs.release-action == 'deploy' }}"
+        "needs.release_coordination_guard.outputs.release-action == 'deploy' && "
+        "(github.event_name != 'workflow_dispatch' || "
+        "inputs.release_mode == 'prepare-candidate') }}"
     )
-    assert jobs["build_frontend"]["if"] == deploy_condition
+    assert jobs["build_frontend"]["if"] == prepare_condition
     assert jobs["build_frontend"]["needs"] == "release_coordination_guard"
-    assert jobs["deploy_tencent"]["if"] == deploy_condition
+    assert jobs["deploy_tencent"]["if"] == prepare_condition
     assert jobs["deploy_tencent"]["needs"] == [
         "release_coordination_guard",
         "build_frontend",
     ]
     assert jobs["deploy_tencent"]["environment"] == "production"
-    assert jobs["audit_frontend_parity"]["if"] == deploy_condition
+    approval_condition = (
+        "${{ github.ref == 'refs/heads/main' && "
+        "github.event_name == 'workflow_dispatch' && "
+        "inputs.release_mode == 'approve-candidate-to-active' && "
+        "needs.release_coordination_guard.outputs.release-action == 'deploy' }}"
+    )
+    assert jobs["approve_candidate_to_active"]["if"] == approval_condition
+    assert jobs["approve_candidate_to_active"]["needs"] == "release_coordination_guard"
+    assert jobs["approve_candidate_to_active"]["environment"] == "production"
+    cleanup_condition = (
+        "${{ github.ref == 'refs/heads/main' && "
+        "github.event_name == 'workflow_dispatch' && "
+        "(inputs.release_mode == 'discard-candidate' || "
+        "inputs.release_mode == 'release-candidate') && "
+        "needs.release_coordination_guard.outputs.release-action == 'deploy' }}"
+    )
+    assert jobs["cleanup_candidate"]["if"] == cleanup_condition
+    assert jobs["cleanup_candidate"]["needs"] == "release_coordination_guard"
+    assert jobs["cleanup_candidate"]["environment"] == "production"
+    full_release_condition = (
+        "${{ github.ref == 'refs/heads/main' && "
+        "needs.release_coordination_guard.outputs.release-action == 'deploy' && "
+        "github.event_name == 'workflow_dispatch' && "
+        "inputs.release_mode == 'prepare-and-switch' }}"
+    )
+    assert jobs["audit_frontend_parity"]["if"] == full_release_condition
     assert jobs["audit_frontend_parity"]["needs"] == [
         "release_coordination_guard",
         "build_frontend",
@@ -551,6 +614,14 @@ def test_remote_release_preserves_normalized_archive_permissions() -> None:
         in controller
     )
     assert "03_Scripts/deploy/cleanup_toolkit_egg_info.py" in outer
+    assert "03_Scripts/deploy/fixed_active_preimage.py" in outer
+    assert "03_Scripts/deploy/nginx/jato_candidate_preview.conf.example" in outer
+    assert (
+        "prepare-candidate|approve-candidate-to-active|"
+        "discard-candidate|release-candidate|restore-previous-active"
+    ) in outer
+    assert 'if [[ "$DEPLOY_BLUEGREEN_MODE" != "prepare-candidate" ]]; then' in outer
+    assert "DEPLOY_CANDIDATE_ATTESTATION_SHA256" in outer
 
 
 def test_backend_release_is_deterministic_and_closes_msrp_evidence_references() -> None:
@@ -611,6 +682,27 @@ def test_release_checkpoints_cover_transport_ambiguity_and_final_parity() -> Non
     assert "--profile www" in workflow
 
 
+def test_manual_review_artifacts_share_thirty_day_retention() -> None:
+    workflow = yaml.load(
+        PRODUCTION_RELEASE_WORKFLOW.read_text(encoding="utf-8"),
+        Loader=yaml.BaseLoader,
+    )
+    build_steps = workflow["jobs"]["build_frontend"]["steps"]
+    deploy_steps = workflow["jobs"]["deploy_tencent"]["steps"]
+    frontend_upload = next(
+        step
+        for step in build_steps
+        if step.get("name") == "Upload the only frontend artifact"
+    )
+    handoff_upload = next(
+        step
+        for step in deploy_steps
+        if step.get("name") == "Retain candidate release checkpoint"
+    )
+    assert frontend_upload["with"]["retention-days"] == "30"
+    assert handoff_upload["with"]["retention-days"] == "30"
+
+
 def test_server_checkpoint_and_evidence_are_bound_into_final_receipt() -> None:
     workflow = (REPO_ROOT / ".github/workflows/production-release.yml").read_text(
         encoding="utf-8",
@@ -629,7 +721,13 @@ def test_server_checkpoint_and_evidence_are_bound_into_final_receipt() -> None:
         "if: ${{ always() && steps.upload_release.outcome == 'success' }}"
         in workflow
     )
-    assert 'checkpoint.get("phase") != "backend_healthy"' in workflow
+    assert '"candidate_ready"' in workflow
+    assert '"backend_healthy"' in workflow
+    assert '"inspect_then_resume"' in workflow
+    assert 'expected_phase = (' in workflow
+    assert 'checkpoint.get("phase") != expected_phase' in workflow
+    assert "http://127.0.0.1:18002/candidate-preview.json" in workflow
+    assert 'preview.get("archiveSha256") != archive_sha256' in workflow
     assert 'checkpoint.get("status") != "completed"' in workflow
     assert "server checkpoint evidence binding mismatch" in workflow
     assert 'evidence.get("identity") != expected_identity' in workflow
@@ -659,22 +757,184 @@ def test_server_checkpoint_and_evidence_are_bound_into_final_receipt() -> None:
     ) < workflow.index("Verify Tencent public release provenance")
 
 
-def test_www_and_intl_switch_the_shared_artifact_in_one_protected_job() -> None:
+def test_candidate_approval_reuses_artifact_for_www_and_leaves_intl_unchanged() -> None:
     workflow = (REPO_ROOT / ".github/workflows/production-release.yml").read_text(
         encoding="utf-8",
     )
 
-    assert "\n  deploy_intl:" not in workflow
-    assert workflow.index("Validate Cloudflare deploy configuration") < workflow.index(
-        "Upload complete release archive without fallback",
-    )
-    assert workflow.index("Deploy verified release on Tencent") < workflow.index(
-        "Deploy downloaded dist to Cloudflare Pages",
+    start = workflow.index("\n  approve_candidate_to_active:")
+    end = workflow.index("\n  audit_frontend_parity:", start)
+    approval = workflow[start:end]
+    assert "approve-candidate-to-active" in approval
+    assert "Download exact Candidate handoff artifact" in approval
+    assert "Download exact reviewed frontend artifact" in approval
+    assert "verify_candidate_handoff.py" in approval
+    assert "CANDIDATE_VERIFIED_ENV" in approval
+    assert "CANDIDATE_SERVER_EVIDENCE_PATH" in approval
+    assert (
+        "Revalidate frozen coordination plan immediately before Active mutation"
+        in approval
     )
     assert (
-        "needs: [release_coordination_guard, build_frontend, deploy_tencent]"
-        in workflow
+        approval.index(
+            "Revalidate frozen coordination plan immediately before Active mutation"
+        )
+        < approval.index("Approve exact Candidate on Tencent")
     )
+    assert "github_candidate_control.sh approve-candidate-to-active" in approval
+    assert "automatic restore previous successful Active" in approval
+    assert "no success receipt is emitted" in approval
+    assert "github_candidate_control.sh restore-previous-active" in approval
+    assert "steps.verify_www.outcome == 'failure'" in approval
+    assert "Keep failed www audit red after automatic restore" in approval
+    assert approval.index("Verify www serves the exact approved Candidate") < approval.index(
+        "Fetch and attest Active update checkpoint"
+    )
+    assert "active-updated.journal.jsonl" in approval
+    assert 'started, updated = events[-2:]' in approval
+    assert 'started.get("phase") != "active_update_started"' in approval
+    assert 'updated.get("phase") != "active_updated"' in approval
+    assert 'binding.group(1) != expected_evidence_path' in approval
+    assert 'remote_evidence="$CANDIDATE_SERVER_EVIDENCE_PATH"' in approval
+    assert "canonical Active update journal tail/checkpoint mismatch" in approval
+    assert "release-candidate/journal.jsonl" not in approval
+    assert "--phase www_verified" in approval
+    assert "intl unchanged" in approval
+    assert "Package backend release" not in approval
+    assert "Upload complete release archive" not in approval
+    assert "pages deploy" not in approval
+    assert "npm run build" not in approval
+
+
+def test_candidate_cleanup_is_exact_control_only_and_preserves_active() -> None:
+    workflow = PRODUCTION_RELEASE_WORKFLOW.read_text(encoding="utf-8")
+    start = workflow.index("\n  cleanup_candidate:")
+    end = workflow.index("\n  audit_frontend_parity:", start)
+    cleanup = workflow[start:end]
+
+    assert "confirm_candidate_cleanup must be explicitly checked" in cleanup
+    assert 'test "$CANDIDATE_COMMIT_SHA" = "$GITHUB_SHA"' not in cleanup
+    assert "Cleaning an exact reviewed prior-main Candidate" in cleanup
+    assert "Download exact Candidate cleanup handoff" in cleanup
+    assert "Download exact Candidate cleanup frontend" in cleanup
+    assert "verify_candidate_handoff.py" in cleanup
+    assert "Resolve Candidate cleanup handoff source" in cleanup
+    assert "Capture canonical Candidate cleanup handoff" in cleanup
+    assert "Verify canonical Candidate cleanup handoff" in cleanup
+    assert "source = \"canonical-server\"" in cleanup
+    assert "capture-canonical-cleanup" in cleanup
+    assert "--canonical-server-bundle" in cleanup
+    assert "--reviewed-checkpoint-output" in cleanup
+    assert "reviewed-candidate.json" in cleanup
+    assert (
+        "steps.cleanup_handoff.outputs.source == 'github-artifact'" in cleanup
+    )
+    assert (
+        "steps.cleanup_handoff.outputs.source == 'canonical-server'" in cleanup
+    )
+    credentials_index = cleanup.index("Validate Tencent cleanup credentials")
+    control_index = cleanup.index("Clean exact Candidate on Tencent")
+    assert credentials_index < control_index
+    assert "Require exact intl artifact before releasing Candidate" not in cleanup
+    assert "frontend_release_artifact.py audit-public" not in cleanup
+    assert 'mode == "discard-candidate"' in cleanup
+    assert '{"success", "failure"}' in cleanup
+    assert 'else {"success"}' in cleanup
+    assert 'run.get("conclusion") not in allowed_conclusions' in cleanup
+    assert '"cancelled"' not in cleanup
+    assert 'github_candidate_control.sh "$RELEASE_MODE"' in cleanup
+    assert '{"candidate_ready", "rollback_completed"}' in cleanup
+    assert '"release-candidate": ({"active_updated"}, "candidate_released")' in cleanup
+    assert 'previous.get("phase") not in predecessors' in cleanup
+    assert "Candidate cleanup journal identity/sequence mismatch" in cleanup
+    assert "Candidate cleanup journal tail/checkpoint mismatch" in cleanup
+    assert 'before_source = before.get("source")' in cleanup
+    assert 'before_source != after_source' in cleanup
+    assert "Active identity and health remained unchanged" in cleanup
+    assert "overwrite: false" in cleanup
+    assert "retention-days: 30" in cleanup
+    assert "Package backend release" not in cleanup
+    assert "Upload complete release archive" not in cleanup
+    assert "pages deploy" not in cleanup
+    assert "npm run build" not in cleanup
+
+
+def test_candidate_control_shell_is_control_only_and_syntax_valid() -> None:
+    helper = REPO_ROOT / "03_Scripts/deploy/github_candidate_control.sh"
+    script = helper.read_text(encoding="utf-8")
+    assert (
+        "approve-candidate-to-active|discard-candidate|release-candidate|"
+        "restore-previous-active"
+    ) in script
+    assert "capture-canonical-cleanup" in script
+    assert "production-deploy.lock" in script
+    assert "fcntl.flock(lock_descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)" in script
+    assert '"http://127.0.0.1:18002/candidate-preview.json"' in script
+    assert "hash_regular(" in script
+    assert "archive_raw" not in script
+    assert 'source "$CANDIDATE_VERIFIED_ENV"' in script
+    assert 'write_remote_export DEPLOY_APPROVAL_RUN_ID "$GITHUB_RUN_ID"' in script
+    assert "DEPLOY_CANDIDATE_ATTESTATION_SHA256" in script
+    for name in (
+        "CANDIDATE_SERVER_CHECKPOINT_PATH",
+        "CANDIDATE_SERVER_CHECKPOINT_SHA256",
+        "CANDIDATE_SERVER_EVIDENCE_PATH",
+        "CANDIDATE_SERVER_EVIDENCE_SHA256",
+    ):
+        assert name in script
+        assert f"DEPLOY_{name}" in script
+    assert "rsync" not in script
+    assert "pages deploy" not in script
+    result = subprocess.run(
+        ["bash", "-n", str(helper)],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 0, result.stderr
+
+
+def test_current_www_active_intl_sync_is_independent_and_no_build() -> None:
+    workflow = yaml.load(
+        INTL_SYNC_WORKFLOW.read_text(encoding="utf-8"),
+        Loader=yaml.BaseLoader,
+    )
+    assert isinstance(workflow, dict)
+    assert set(workflow["on"]) == {"workflow_dispatch"}
+    assert set(workflow["on"]["workflow_dispatch"]["inputs"]) == {
+        "confirm_sync_current_www_active"
+    }
+    assert workflow["concurrency"] == {
+        "group": "production-release-main",
+        "cancel-in-progress": "false",
+    }
+    sync = workflow["jobs"]["sync_intl"]
+    assert sync["if"] == "${{ github.ref == 'refs/heads/main' }}"
+    assert sync["environment"] == "production"
+    assert "needs" not in sync
+    commands = "\n".join(str(step.get("run") or "") for step in sync["steps"])
+    for token in (
+        "confirm_sync_current_www_active must be explicitly checked",
+        "export_active_frontend_release.py",
+        "verify_release_source_seal.py",
+        "verify-download",
+        "frontend_release_artifact.py audit-public",
+        "pages deploy",
+        '--commit-hash "$ACTIVE_COMMIT_SHA"',
+        "verify_intl_runtime_contract.py",
+        '"jatoDataChanged": False',
+    ):
+        assert token in commands
+    for forbidden in (
+        "npm ci",
+        "npm install",
+        "npm run build",
+        "vite build",
+        "github_candidate_control.sh",
+        "01_RAW_DATA",
+        "04_Processed_data",
+    ):
+        assert forbidden not in commands
 
 
 def test_tencent_uploads_verified_archive_before_deploy_step() -> None:

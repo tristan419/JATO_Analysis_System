@@ -80,6 +80,15 @@ successful `production-release` run on `main`. It resolves and downloads that
 run's artifact, validates the intl public provenance, and only then starts the
 cache prewarm script. It is not a deployment entry point.
 
+The manual `sync-www-active-to-intl` workflow is the independent intl release
+entry point. It accepts only an explicit confirmation on current `main`; it
+does not accept a release SHA. Under the production release lock it proves the
+current content-addressed www Active root and runtime seal, downloads only that
+root's embedded `hermes/frontend_release` manifest and payload, verifies public
+www against them, and idempotently deploys the same bytes to Cloudflare. A
+legacy/non-content-addressed Active is rejected rather than rebuilt. This flow
+does not depend on Candidate state and does not modify backend or JATO data.
+
 ## Validation and governance
 
 Before any build or production environment, the release coordination preflight
