@@ -180,6 +180,9 @@ def test_checkpoint_recovery_workflow_is_exactly_gated_and_read_only() -> None:
     assert "reviewed_recovery_authorization.py freeze" in guard_steps[5]["run"]
     assert "production_release_hold.py" in guard_steps[6]["run"]
     assert "require-active" in guard_steps[6]["run"]
+    assert "PYTHONPATH=03_Scripts/deploy" in guard_steps[6]["run"]
+    assert "load_recovery_plan" in guard_steps[6]["run"]
+    assert "hashlib.sha256(plan.read_bytes()).hexdigest()" in guard_steps[6]["run"]
     frozen_artifact = guard_steps[8]
     assert frozen_artifact["uses"] == "actions/upload-artifact@v4"
     assert frozen_artifact["with"] == {

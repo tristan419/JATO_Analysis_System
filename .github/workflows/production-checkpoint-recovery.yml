@@ -225,9 +225,24 @@ jobs:
             --output-dir "$RUNNER_TEMP/reviewed-dry-run-frozen"
 
       - name: Validate active recovery-only production hold
-        run: >-
-          python3 .github/scripts/production_release_hold.py
-          require-active
+        run: |
+          set -euo pipefail
+          python3 .github/scripts/production_release_hold.py require-active
+          PYTHONPATH=03_Scripts/deploy python3 - <<'PY'
+          import hashlib
+          from pathlib import Path
+
+          from pre_switch_checkpoint_recovery import load_recovery_plan
+
+          plan = Path(
+              ".github/recovery-plans/"
+              "2026-08-03-29df-pre-switch-candidate-residue.json"
+          )
+          load_recovery_plan(
+              plan,
+              hashlib.sha256(plan.read_bytes()).hexdigest(),
+          )
+          PY
 
       - name: Validate unpublished release coordination
         env:

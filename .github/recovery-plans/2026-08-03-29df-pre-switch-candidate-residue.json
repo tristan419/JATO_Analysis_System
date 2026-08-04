@@ -33,7 +33,7 @@
     "journalBytes": 5516,
     "journalLines": 6,
     "journalPath": "/home/ubuntu/.local/state/jato-production-release/journals/29df5e6e667351f09305783932b34e5438d6a9d5/88e10be4ee8cbe11c6b510b13292b44c709a7059fe75cc30de4cb27aaf3bafd2.jsonl",
-    "journalSha256": "d226cd44d41e318cf4c8d437b40e12145df707506d6132dfb5a3637dcf84685",
+    "journalSha256": "d226cd44d41e318cf4c8d437b40e12145df707506d6132dfb5a3637dcf84685e",
     "path": "/home/ubuntu/.local/state/jato-production-release/checkpoints/29df5e6e667351f09305783932b34e5438d6a9d5/88e10be4ee8cbe11c6b510b13292b44c709a7059fe75cc30de4cb27aaf3bafd2.json",
     "sequence": 6,
     "sha256": "21137d89a177ab0892ab3bf1f00abf0cc6ca4fababefaf8c5a9db79e62c89ffd"

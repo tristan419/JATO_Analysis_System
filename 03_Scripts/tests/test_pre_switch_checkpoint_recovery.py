@@ -809,6 +809,41 @@ def test_plan_schema_version_is_explicit_and_not_boolean(
         recovery.load_recovery_plan(path, _sha256(path))
 
 
+@pytest.mark.parametrize(
+    ("section", "field"),
+    [
+        ("checkpoint", "sha256"),
+        ("checkpoint", "journalSha256"),
+        ("checkpoint", "evidenceSha256"),
+        ("backup", "manifestSha256"),
+        ("backup", "dumpSha256"),
+    ],
+)
+def test_plan_loader_rejects_malformed_frozen_sha256_before_live_state(
+    tmp_path: Path,
+    section: str,
+    field: str,
+) -> None:
+    fixture = _build_fixture(tmp_path)
+    plan = fixture["plan"]
+    path = fixture["plan_path"]
+    assert isinstance(plan, dict)
+    assert isinstance(path, Path)
+    plan_section = plan[section]
+    assert isinstance(plan_section, dict)
+    plan_section[field] = "f" * 63
+    path.write_text(
+        json.dumps(plan, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(
+        recovery.RecoveryError,
+        match="plan_invalid: expected a lowercase SHA-256",
+    ):
+        recovery.load_recovery_plan(path, _sha256(path))
+
+
 def test_generic_checkpoint_write_cannot_forge_abort(tmp_path: Path) -> None:
     fixture = _build_fixture(tmp_path)
     with pytest.raises(
@@ -1142,7 +1177,7 @@ def test_29df_schema_v3_plan_is_exact_and_does_not_change_historical_plans() -> 
     plan, digest = recovery.load_recovery_plan(path, _sha256(path))
 
     assert digest == (
-        "ae4d3d5eb76695e29c2eeb947b7783c42960a266c27abaa3f7b6a2faa51fd0f2"
+        "61045c5b1f39516f910ab89cf80fdd97796920e7e3bdb479f52e741b73f2f144"
     )
     assert plan["schemaVersion"] == 3
     assert plan["incidentId"] == recovery.RESIDUE_INCIDENT_ID
@@ -1150,6 +1185,9 @@ def test_29df_schema_v3_plan_is_exact_and_does_not_change_historical_plans() -> 
     assert plan["checkpoint"]["sequence"] == 6
     assert plan["checkpoint"]["sha256"] == (
         "21137d89a177ab0892ab3bf1f00abf0cc6ca4fababefaf8c5a9db79e62c89ffd"
+    )
+    assert plan["checkpoint"]["journalSha256"] == (
+        "d226cd44d41e318cf4c8d437b40e12145df707506d6132dfb5a3637dcf84685e"
     )
     assert {item["id"] for item in plan["residue"]["items"]} == set(
         recovery.RESIDUE_PATHS
