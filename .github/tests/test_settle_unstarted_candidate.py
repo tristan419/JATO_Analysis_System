@@ -247,3 +247,5 @@ def test_workflow_is_main_only_serialized_and_never_deploys_active() -> None:
     assert "systemctl restart" not in wrapper
     assert "StrictHostKeyChecking=yes" in wrapper
     assert "sudo -n env PYTHONPATH" in wrapper
+    assert "printf 'export %s=%q\\n'" not in wrapper
+    assert "printf '%s=%q\\n'" in wrapper
