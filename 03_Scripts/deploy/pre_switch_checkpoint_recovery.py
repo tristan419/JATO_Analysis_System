@@ -226,6 +226,27 @@ DRY_RUN_AUTHORIZATION_FIELDS = {
     "inventoryDigest",
     "decision",
 }
+QUARANTINE_CONTRACT_FIELDS = {
+    "schemaVersion",
+    "kind",
+    "incidentId",
+    "identity",
+    "implementation",
+    "authorization",
+    "quarantineRoot",
+    "items",
+    "retainedEvidence",
+    "requiredAbsentPaths",
+    "fence",
+}
+QUARANTINE_IMPLEMENTATION_FIELDS = {"commit", "planSha256"}
+QUARANTINE_AUTHORIZATION_FIELDS = DRY_RUN_AUTHORIZATION_FIELDS | {
+    "authorizationSha256"
+}
+QUARANTINE_STABLE_FIELDS = QUARANTINE_CONTRACT_FIELDS - {
+    "implementation",
+    "authorization",
+}
 RENAME_NOREPLACE = 1
 RENAME_EXCHANGE = 2
 RECOVERY_FENCE_TEMP_SUFFIX = ".publish-tmp"
@@ -2918,10 +2939,28 @@ def _load_dry_run_authorization(
     actual_sha256 = hashlib.sha256(raw).hexdigest()
     if actual_sha256 != expected_sha256:
         _fail("dry_run_authorization_invalid", "authorization SHA-256 changed")
+    authorization = _validate_dry_run_authorization_payload(
+        payload=payload,
+        plan=plan,
+        plan_sha256=plan_sha256,
+        implementation_commit=implementation_commit,
+        category="dry_run_authorization_invalid",
+    )
+    return authorization, actual_sha256
+
+
+def _validate_dry_run_authorization_payload(
+    *,
+    payload: object,
+    plan: Mapping[str, Any],
+    plan_sha256: str,
+    implementation_commit: str,
+    category: str,
+) -> Mapping[str, Any]:
     authorization = _require_mapping(
         payload,
         DRY_RUN_AUTHORIZATION_FIELDS,
-        "dry_run_authorization_invalid",
+        category,
     )
     if (
         authorization.get("schemaVersion") != 1
@@ -2936,14 +2975,14 @@ def _load_dry_run_authorization(
         or authorization.get("decision")
         != "candidate-residue-dry-run-eligible"
     ):
-        _fail("dry_run_authorization_invalid", "authorization identity changed")
+        _fail(category, "authorization identity changed")
     for field in ("runId", "runAttempt"):
-        _require_positive_int(authorization.get(field), "dry_run_authorization_invalid")
+        _require_positive_int(authorization.get(field), category)
     _require_sha256(
         authorization.get("resultSha256"),
-        "dry_run_authorization_invalid",
+        category,
     )
-    return authorization, actual_sha256
+    return authorization
 
 
 def _bundled_dry_run_authorization(
@@ -3023,16 +3062,12 @@ def _write_immutable_json(
 ) -> tuple[str, bool]:
     raw, digest = _json_sha256(payload)
     if _path_lexists(path):
-        existing, metadata = _read_regular_bytes(path, category)
-        if (
-            (metadata.st_uid, metadata.st_gid) != (owner_uid, owner_gid)
-            or stat.S_IMODE(metadata.st_mode) != 0o600
-        ):
-            _fail(category, "existing immutable document owner/mode changed")
-        try:
-            existing_payload = json.loads(existing.decode("utf-8"))
-        except (UnicodeError, json.JSONDecodeError) as exc:
-            raise RecoveryError(category, "existing document is invalid JSON") from exc
+        existing_payload, existing = _read_private_immutable_json(
+            path,
+            owner_uid=owner_uid,
+            owner_gid=owner_gid,
+            category=category,
+        )
         expected_compare = dict(payload)
         existing_compare = (
             dict(existing_payload) if isinstance(existing_payload, dict) else {}
@@ -3052,6 +3087,82 @@ def _write_immutable_json(
     return digest, False
 
 
+def _read_private_immutable_json(
+    path: Path,
+    *,
+    owner_uid: int,
+    owner_gid: int,
+    category: str,
+) -> tuple[object, bytes]:
+    raw, metadata = _read_regular_bytes(path, category)
+    if (
+        (metadata.st_uid, metadata.st_gid) != (owner_uid, owner_gid)
+        or stat.S_IMODE(metadata.st_mode) != 0o600
+    ):
+        _fail(category, "existing immutable document owner/mode changed")
+    try:
+        payload = json.loads(raw.decode("utf-8"))
+    except (UnicodeError, json.JSONDecodeError) as exc:
+        raise RecoveryError(category, "existing document is invalid JSON") from exc
+    return payload, raw
+
+
+def _validate_quarantine_contract_rebind(
+    *,
+    existing_payload: object,
+    expected_payload: Mapping[str, Any],
+    plan: Mapping[str, Any],
+    plan_sha256: str,
+) -> None:
+    category = "quarantine_manifest_invalid"
+    existing = _require_mapping(
+        existing_payload,
+        QUARANTINE_CONTRACT_FIELDS,
+        category,
+    )
+    if any(
+        existing.get(field) != expected_payload.get(field)
+        for field in QUARANTINE_STABLE_FIELDS
+    ):
+        _fail(category, "existing immutable document has different recovery facts")
+
+    implementation = _require_mapping(
+        existing.get("implementation"),
+        QUARANTINE_IMPLEMENTATION_FIELDS,
+        category,
+    )
+    implementation_commit = _require_git_sha(
+        implementation.get("commit"),
+        category,
+    )
+    if _require_sha256(implementation.get("planSha256"), category) != plan_sha256:
+        _fail(category, "existing quarantine contract binds a different plan")
+
+    embedded_authorization = _require_mapping(
+        existing.get("authorization"),
+        QUARANTINE_AUTHORIZATION_FIELDS,
+        category,
+    )
+    authorization_sha256 = _require_sha256(
+        embedded_authorization.get("authorizationSha256"),
+        category,
+    )
+    authorization = {
+        key: value
+        for key, value in embedded_authorization.items()
+        if key != "authorizationSha256"
+    }
+    _validate_dry_run_authorization_payload(
+        payload=authorization,
+        plan=plan,
+        plan_sha256=plan_sha256,
+        implementation_commit=implementation_commit,
+        category=category,
+    )
+    if _json_sha256(authorization)[1] != authorization_sha256:
+        _fail(category, "existing quarantine authorization SHA-256 changed")
+
+
 def _ensure_quarantine_contract(
     *,
     plan: Mapping[str, Any],
@@ -3059,8 +3170,25 @@ def _ensure_quarantine_contract(
     implementation_commit: str,
     authorization: Mapping[str, Any],
     authorization_sha256: str,
+    allow_execution_rebind: bool = False,
 ) -> tuple[Path, str]:
     residue = plan["residue"]
+    _validate_dry_run_authorization_payload(
+        payload=authorization,
+        plan=plan,
+        plan_sha256=plan_sha256,
+        implementation_commit=implementation_commit,
+        category="quarantine_manifest_invalid",
+    )
+    authorization_sha256 = _require_sha256(
+        authorization_sha256,
+        "quarantine_manifest_invalid",
+    )
+    if _json_sha256(authorization)[1] != authorization_sha256:
+        _fail(
+            "quarantine_manifest_invalid",
+            "current quarantine authorization SHA-256 changed",
+        )
     root = Path(residue["quarantineRoot"])
     if _path_lexists(root):
         _verify_quarantine_root(root, plan)
@@ -3079,6 +3207,26 @@ def _ensure_quarantine_contract(
         authorization=authorization,
         authorization_sha256=authorization_sha256,
     )
+    if _path_lexists(manifest_path):
+        existing_payload, existing_raw = _read_private_immutable_json(
+            manifest_path,
+            owner_uid=residue["quarantineOwnerUid"],
+            owner_gid=residue["quarantineOwnerGid"],
+            category="quarantine_manifest_invalid",
+        )
+        if existing_payload != payload:
+            if not allow_execution_rebind:
+                _fail(
+                    "quarantine_manifest_invalid",
+                    "existing immutable document has different facts",
+                )
+            _validate_quarantine_contract_rebind(
+                existing_payload=existing_payload,
+                expected_payload=payload,
+                plan=plan,
+                plan_sha256=plan_sha256,
+            )
+        return manifest_path, hashlib.sha256(existing_raw).hexdigest()
     manifest_sha256, _ = _write_immutable_json(
         manifest_path,
         payload,
@@ -3257,12 +3405,14 @@ def _quarantine_candidate_residue(
     authorization: Mapping[str, Any],
     authorization_sha256: str,
 ) -> Mapping[str, Any]:
+    prior_state = _collect_residue_state(plan, plan_sha256)
     manifest_path, manifest_sha256 = _ensure_quarantine_contract(
         plan=plan,
         plan_sha256=plan_sha256,
         implementation_commit=implementation_commit,
         authorization=authorization,
         authorization_sha256=authorization_sha256,
+        allow_execution_rebind=prior_state["stage"] == "quarantined_fenced",
     )
     root = Path(plan["residue"]["quarantineRoot"])
     items = _residue_items(plan)

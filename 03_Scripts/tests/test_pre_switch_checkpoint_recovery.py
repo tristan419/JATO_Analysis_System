@@ -67,6 +67,8 @@ def _build_fence_publish_fixture(tmp_path: Path) -> dict[str, object]:
     uid = os.getuid()
     gid = os.getgid()
     plan = {
+        "schemaVersion": 3,
+        "repository": "example/JATO_Analysis_System",
         "incidentId": "incident",
         "checkpoint": {
             "identity": {
@@ -114,6 +116,32 @@ def _build_fence_publish_fixture(tmp_path: Path) -> dict[str, object]:
         "manifestSha256": _sha256(manifest),
         "candidateSlot": tmp_path / "candidate-current",
     }
+
+
+def _authorization_for_plan(
+    plan: dict[str, object],
+    *,
+    implementation_commit: str,
+    run_id: int,
+) -> dict[str, object]:
+    return {
+        "schemaVersion": 1,
+        "kind": "checkpoint_recovery_dry_run_authorization",
+        "repository": plan["repository"],
+        "workflowPath": ".github/workflows/production-checkpoint-recovery.yml",
+        "runId": run_id,
+        "runAttempt": 1,
+        "mainSha": implementation_commit,
+        "planSha256": "c" * 64,
+        "resultSha256": "a" * 64,
+        "incidentId": plan["incidentId"],
+        "inventoryDigest": recovery._residue_inventory_digest(plan),
+        "decision": "candidate-residue-dry-run-eligible",
+    }
+
+
+def _authorization_sha256(authorization: dict[str, object]) -> str:
+    return recovery._json_sha256(authorization)[1]
 
 
 def _rename_no_replace_for_test(
@@ -2168,6 +2196,156 @@ def test_recovery_fence_temp_requires_exact_manifest_and_legacy_marker(
     assert temp.read_bytes() == temp_before
 
 
+@pytest.mark.parametrize(
+    "changed_fact",
+    ["incident", "plan_sha", "checkpoint_identity", "items", "fence"],
+)
+def test_quarantine_manifest_rebind_rejects_changed_recovery_fact(
+    tmp_path: Path,
+    changed_fact: str,
+) -> None:
+    fixture = _build_fence_publish_fixture(tmp_path)
+    plan = fixture["plan"]
+    assert isinstance(plan, dict)
+    previous_commit = "b" * 40
+    current_commit = "e" * 40
+    previous_authorization = _authorization_for_plan(
+        plan,
+        implementation_commit=previous_commit,
+        run_id=10,
+    )
+    current_authorization = _authorization_for_plan(
+        plan,
+        implementation_commit=current_commit,
+        run_id=11,
+    )
+    existing = recovery._quarantine_contract_payload(
+        plan=plan,
+        plan_sha256="c" * 64,
+        implementation_commit=previous_commit,
+        authorization=previous_authorization,
+        authorization_sha256=_authorization_sha256(previous_authorization),
+    )
+    expected = recovery._quarantine_contract_payload(
+        plan=plan,
+        plan_sha256="c" * 64,
+        implementation_commit=current_commit,
+        authorization=current_authorization,
+        authorization_sha256=_authorization_sha256(current_authorization),
+    )
+    changed = copy.deepcopy(existing)
+    if changed_fact == "incident":
+        changed["incidentId"] = "different-incident"
+    elif changed_fact == "plan_sha":
+        changed["implementation"]["planSha256"] = "d" * 64
+    elif changed_fact == "checkpoint_identity":
+        changed["identity"]["commit"] = "f" * 40
+    elif changed_fact == "items":
+        changed["items"][0]["quarantineName"] = "different-item"
+    else:
+        changed["fence"]["content"] = "different fence\n"
+
+    with pytest.raises(recovery.RecoveryError) as error:
+        recovery._validate_quarantine_contract_rebind(
+            existing_payload=changed,
+            expected_payload=expected,
+            plan=plan,
+            plan_sha256="c" * 64,
+        )
+
+    assert error.value.category == "quarantine_manifest_invalid"
+
+
+def test_quarantine_manifest_rebind_rejects_invalid_previous_authorization(
+    tmp_path: Path,
+) -> None:
+    fixture = _build_fence_publish_fixture(tmp_path)
+    plan = fixture["plan"]
+    assert isinstance(plan, dict)
+    previous_commit = "b" * 40
+    current_commit = "e" * 40
+    previous_authorization = _authorization_for_plan(
+        plan,
+        implementation_commit=previous_commit,
+        run_id=10,
+    )
+    current_authorization = _authorization_for_plan(
+        plan,
+        implementation_commit=current_commit,
+        run_id=11,
+    )
+    existing = recovery._quarantine_contract_payload(
+        plan=plan,
+        plan_sha256="c" * 64,
+        implementation_commit=previous_commit,
+        authorization=previous_authorization,
+        authorization_sha256=_authorization_sha256(previous_authorization),
+    )
+    expected = recovery._quarantine_contract_payload(
+        plan=plan,
+        plan_sha256="c" * 64,
+        implementation_commit=current_commit,
+        authorization=current_authorization,
+        authorization_sha256=_authorization_sha256(current_authorization),
+    )
+    changed = copy.deepcopy(existing)
+    changed["authorization"]["mainSha"] = "d" * 40
+
+    with pytest.raises(
+        recovery.RecoveryError,
+        match="authorization identity changed",
+    ):
+        recovery._validate_quarantine_contract_rebind(
+            existing_payload=changed,
+            expected_payload=expected,
+            plan=plan,
+            plan_sha256="c" * 64,
+        )
+
+
+def test_quarantine_manifest_rebind_requires_resumable_state(tmp_path: Path) -> None:
+    fixture = _build_fence_publish_fixture(tmp_path)
+    plan = fixture["plan"]
+    manifest = fixture["manifest"]
+    assert isinstance(plan, dict)
+    assert isinstance(manifest, Path)
+    manifest.unlink()
+    previous_commit = "b" * 40
+    current_commit = "e" * 40
+    previous_authorization = _authorization_for_plan(
+        plan,
+        implementation_commit=previous_commit,
+        run_id=10,
+    )
+    current_authorization = _authorization_for_plan(
+        plan,
+        implementation_commit=current_commit,
+        run_id=11,
+    )
+    recovery._ensure_quarantine_contract(
+        plan=plan,
+        plan_sha256="c" * 64,
+        implementation_commit=previous_commit,
+        authorization=previous_authorization,
+        authorization_sha256=_authorization_sha256(previous_authorization),
+    )
+    manifest_before = manifest.read_bytes()
+
+    with pytest.raises(
+        recovery.RecoveryError,
+        match="existing immutable document has different facts",
+    ):
+        recovery._ensure_quarantine_contract(
+            plan=plan,
+            plan_sha256="c" * 64,
+            implementation_commit=current_commit,
+            authorization=current_authorization,
+            authorization_sha256=_authorization_sha256(current_authorization),
+        )
+
+    assert manifest.read_bytes() == manifest_before
+
+
 def test_schema_v3_quarantines_exact_inodes_and_finalizes_fence_last(
     tmp_path: Path,
 ) -> None:
@@ -2305,7 +2483,7 @@ def test_schema_v3_quarantines_exact_inodes_and_finalizes_fence_last(
             plan_sha256="c" * 64,
             implementation_commit="b" * 40,
             authorization=authorization,
-            authorization_sha256="9" * 64,
+            authorization_sha256=_authorization_sha256(authorization),
         )
         assert state["stage"] == "quarantined_fenced"
         assert marker.read_text(encoding="utf-8") == (
@@ -2318,11 +2496,29 @@ def test_schema_v3_quarantines_exact_inodes_and_finalizes_fence_last(
                 assert not Path(item["path"]).exists()
                 assert not Path(item["path"]).is_symlink()
 
+        manifest_path = Path(state["manifestPath"])
+        manifest_before = manifest_path.read_bytes()
+        replay_authorization = _authorization_for_plan(
+            plan,
+            implementation_commit="a" * 40,
+            run_id=11,
+        )
+        replayed_state = recovery._quarantine_candidate_residue(
+            plan=plan,
+            plan_sha256="c" * 64,
+            implementation_commit="a" * 40,
+            authorization=replay_authorization,
+            authorization_sha256=_authorization_sha256(replay_authorization),
+        )
+        assert replayed_state["stage"] == "quarantined_fenced"
+        assert replayed_state["manifestSha256"] == state["manifestSha256"]
+        assert manifest_path.read_bytes() == manifest_before
+
         finalization = recovery._build_finalization_receipt(
             plan=plan,
             plan_sha256="c" * 64,
-            implementation_commit="b" * 40,
-            quarantine_state=state,
+            implementation_commit="a" * 40,
+            quarantine_state=replayed_state,
         )
         fence_inode = marker.stat().st_ino
         recovery._finalize_recovery_fence(plan, finalization)
@@ -2345,10 +2541,13 @@ def test_schema_v3_quarantines_exact_inodes_and_finalizes_fence_last(
             "identity": plan["checkpoint"]["identity"],
             "implementation": finalization["implementation"],
             "authorization": {
-                **authorization,
-                "authorizationSha256": "9" * 64,
+                **replay_authorization,
+                "authorizationSha256": _authorization_sha256(
+                    replay_authorization
+                ),
             },
             "residue": {
+                "inventoryDigest": replay_authorization["inventoryDigest"],
                 "quarantineRoot": str(quarantine_root),
                 "manifestPath": state["manifestPath"],
                 "manifestSha256": state["manifestSha256"],
