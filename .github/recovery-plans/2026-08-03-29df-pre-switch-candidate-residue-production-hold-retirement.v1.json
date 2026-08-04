@@ -1,0 +1,23 @@
+{
+  "authorization": "Adding this exact record in the same explicitly reviewed final production release pull request that removes the active hold authorizes production deployment only after checkpoint recovery, Nginx reconciliation, and no-traffic Candidate canary evidence are complete.",
+  "effect": {
+    "checkpointRecoveryAction": "reject-retired",
+    "productionReleaseAction": "deploy"
+  },
+  "incidentId": "2026-08-03-29df-pre-switch-candidate-residue",
+  "kind": "jato-production-release-hold-retirement",
+  "lifecycle": {
+    "requiredChange": "Delete the active hold and add this exact retirement record in one explicitly reviewed final production release pull request.",
+    "retention": "Retain this retirement record on main as the durable authorization for subsequent production releases."
+  },
+  "recoveryPlan": {
+    "path": ".github/recovery-plans/2026-08-03-29df-pre-switch-candidate-residue.json",
+    "sha256": "61045c5b1f39516f910ab89cf80fdd97796920e7e3bdb479f52e741b73f2f144"
+  },
+  "retiredHold": {
+    "path": ".github/recovery-plans/2026-08-03-29df-pre-switch-candidate-residue-production-hold.v1.json",
+    "sha256": "92bae4fc1febed5b15aba2c5fab7fb941dcb52d091e3a285f4af3d442f9a6371"
+  },
+  "schemaVersion": 1,
+  "status": "retired"
+}
