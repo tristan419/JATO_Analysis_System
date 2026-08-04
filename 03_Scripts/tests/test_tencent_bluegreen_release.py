@@ -28,6 +28,38 @@ def _shell_function(script: str, name: str) -> str:
     return script[start:end]
 
 
+def _candidate_data_contract_validator() -> str:
+    function = _shell_function(
+        CONTROLLER.read_text(encoding="utf-8"),
+        "verify_candidate_data_access_contract",
+    )
+    marker = "<<'PY'\n"
+    start = function.index(marker) + len(marker)
+    end = function.index("\nPY\n", start)
+    return function[start:end]
+
+
+def _run_candidate_data_contract(
+    candidate_environment: dict[str, str],
+    active_environment: dict[str, str],
+) -> subprocess.CompletedProcess[str]:
+    active = subprocess.Popen(["sleep", "30"], env=active_environment)
+    candidate = subprocess.Popen(["sleep", "30"], env=candidate_environment)
+    try:
+        return subprocess.run(
+            ["python3", "-", str(candidate.pid), str(active.pid)],
+            input=_candidate_data_contract_validator(),
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+    finally:
+        candidate.terminate()
+        active.terminate()
+        candidate.wait(timeout=5)
+        active.wait(timeout=5)
+
+
 def _controller_prelude() -> str:
     script = CONTROLLER.read_text(encoding="utf-8")
     return script[: script.index('\ncase "$BLUEGREEN_MODE" in')]
@@ -2581,6 +2613,52 @@ def test_memory_and_monthly_worker_contract_is_fail_closed() -> None:
     assert "KillMode=control-group" in unit
     assert "if (-f /var/lib/jato-release/deployment-maintenance)" in nginx
     assert "location ^~ /v1/msrp/monthly-update" in nginx
+
+
+@pytest.mark.skipif(
+    os.name != "posix" or not Path("/proc/self/environ").exists(),
+    reason="requires Linux procfs",
+)
+@pytest.mark.parametrize("different_path", (False, True))
+def test_candidate_data_contract_resolves_runtime_paths(
+    tmp_path: Path,
+    different_path: bool,
+) -> None:
+    legacy_data = tmp_path / "legacy-data"
+    shared_data = tmp_path / "shared-data"
+    legacy_data.mkdir()
+    shared_data.symlink_to(legacy_data, target_is_directory=True)
+    path_keys = {
+        "JATO_PARQUET_PATH",
+        "JATO_PARTITIONED_PATH",
+        "APP_CRUD_DATA_PATH",
+        "APP_ENGINEERING_IMPORT_ROOT",
+        "MSRP_GOVERNANCE_EVIDENCE_ROOT",
+        "APP_LOCAL_WIKI_DB_PATH",
+    }
+    common = {
+        **os.environ,
+        "APP_DATABASE_ENABLED": "true",
+        "APP_DATABASE_URL": "postgresql://runtime",
+        "APP_REDIS_ENABLED": "true",
+        "APP_REDIS_URL": "redis://runtime",
+        "PGOPTIONS": "-c statement_timeout=30s",
+        **{key: str(legacy_data) for key in path_keys},
+    }
+    candidate = {
+        **common,
+        **{key: str(shared_data) for key in path_keys},
+    }
+    if different_path:
+        different_data = tmp_path / "different-data"
+        different_data.mkdir()
+        candidate["JATO_PARQUET_PATH"] = str(different_data)
+
+    result = _run_candidate_data_contract(candidate, common)
+
+    assert (result.returncode != 0) is different_path, result.stderr
+    if different_path:
+        assert "different runtime paths for JATO_PARQUET_PATH" in result.stderr
 
 
 @pytest.mark.parametrize("active_slot", ("8000", "8001"))

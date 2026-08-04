@@ -1887,6 +1887,7 @@ verify_candidate_data_access_contract() {
     || [[ ! "$active_main_pid" =~ ^[1-9][0-9]*$ ]] \
     || ! sudo -n python3 -B - \
       "$candidate_main_pid" "$active_main_pid" <<'PY'
+import os
 from pathlib import Path
 import sys
 
@@ -1900,14 +1901,37 @@ def process_environment(pid: str) -> dict[str, bytes]:
     return result
 
 
+def same_runtime_path(candidate_value: bytes | None, active_value: bytes | None) -> bool:
+    if candidate_value == active_value:
+        return candidate_value is not None
+    if candidate_value is None or active_value is None:
+        return False
+    candidate_path = Path(os.fsdecode(candidate_value))
+    active_path = Path(os.fsdecode(active_value))
+    if not candidate_path.is_absolute() or not active_path.is_absolute():
+        return False
+    candidate_exists = candidate_path.exists()
+    active_exists = active_path.exists()
+    if candidate_exists != active_exists:
+        return False
+    if candidate_exists:
+        try:
+            return os.path.samefile(candidate_path, active_path)
+        except OSError:
+            return False
+    return candidate_path.resolve(strict=False) == active_path.resolve(strict=False)
+
+
 candidate = process_environment(sys.argv[1])
 active = process_environment(sys.argv[2])
-shared_keys = (
+exact_keys = (
     "APP_DATABASE_ENABLED",
     "APP_DATABASE_URL",
     "APP_REDIS_ENABLED",
     "APP_REDIS_URL",
     "PGOPTIONS",
+)
+path_keys = (
     "JATO_PARQUET_PATH",
     "JATO_PARTITIONED_PATH",
     "APP_CRUD_DATA_PATH",
@@ -1915,10 +1939,15 @@ shared_keys = (
     "MSRP_GOVERNANCE_EVIDENCE_ROOT",
     "APP_LOCAL_WIKI_DB_PATH",
 )
-for key in shared_keys:
+for key in exact_keys:
     if candidate.get(key) != active.get(key):
         raise SystemExit(
             f"[ERROR] Candidate and Active differ for data connection key {key}"
+        )
+for key in path_keys:
+    if not same_runtime_path(candidate.get(key), active.get(key)):
+        raise SystemExit(
+            f"[ERROR] Candidate and Active resolve to different runtime paths for {key}"
         )
 singleton_expectations = {
     "APP_GROUPED_TIME_SERIES_PREWARM_ENABLED": b"false",
@@ -4755,11 +4784,13 @@ settle_candidate_checkpoint_after_cleanup() {
 
 cleanup_pre_switch_candidate() {
   if ! stop_candidate_preview; then
+    fail "Candidate cleanup failed while stopping the preview"
     mark_pre_switch_cleanup_required || true
     return 1
   fi
   if ! resolve_previous_release_identity \
     || ! verify_slot_release_exact "$CURRENT_ACTIVE_SLOT" "$PREVIOUS_RELEASE_SHA"; then
+    fail "Candidate cleanup could not prove the previous Active slot"
     mark_pre_switch_cleanup_required || true
     return 1
   fi
@@ -4792,19 +4823,23 @@ cleanup_pre_switch_candidate() {
   fi
   if ! restore_nginx_preimage \
     || ! verify_public_release_exact "$PREVIOUS_RELEASE_SHA"; then
+    fail "Candidate cleanup could not restore and verify the previous public route"
     mark_pre_switch_cleanup_required || true
     return 1
   fi
   if ! restore_old_static_boot_owner; then
+    fail "Candidate cleanup could not restore the previous boot owner"
     mark_pre_switch_cleanup_required || true
     return 1
   fi
   if ! candidate_cleanup_is_complete \
     && ! restore_candidate_runtime_preimage; then
+    fail "Candidate cleanup could not restore the captured runtime preimage"
     mark_pre_switch_cleanup_required || true
     return 1
   fi
   if ! candidate_cleanup_is_complete; then
+    fail "Candidate cleanup runtime differs from the captured preimage"
     mark_pre_switch_cleanup_required || true
     return 1
   fi
@@ -4815,10 +4850,12 @@ cleanup_pre_switch_candidate() {
     }
   fi
   remove_nginx_preimage || {
+    fail "Candidate cleanup could not remove the settled Nginx preimage"
     mark_pre_switch_cleanup_required || true
     return 1
   }
   if ! settle_candidate_checkpoint_after_cleanup; then
+    fail "Candidate cleanup could not settle the release checkpoint"
     mark_pre_switch_cleanup_required || true
     return 1
   fi
