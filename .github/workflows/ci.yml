@@ -92,6 +92,7 @@ jobs:
             03_Scripts/ops/sync_data_to_cloud.sh \
             03_Scripts/ops/sync_msrp_db_to_cloud.sh
           python -m pytest -q \
+            .github/tests/test_settle_unstarted_candidate.py \
             03_Scripts/tests/test_bluegreen_systemd_nginx_contract.py \
             03_Scripts/tests/test_jato_bluegreen_boot_reconcile.py \
             03_Scripts/tests/test_jato_quiescence_gate.py \

@@ -22,6 +22,9 @@ INTL_SYNC_WORKFLOW = ".github/workflows/sync-www-active-to-intl.yml"
 CHECKPOINT_RECOVERY_WORKFLOW = (
     ".github/workflows/production-checkpoint-recovery.yml"
 )
+UNSTARTED_CANDIDATE_SETTLEMENT_WORKFLOW = (
+    ".github/workflows/settle-unstarted-candidate.yml"
+)
 RELEASE_COORDINATION_WORKFLOW = (
     ".github/workflows/release-coordination-guard.yml"
 )
@@ -85,6 +88,7 @@ PRODUCTION_JOBS = {
         "cleanup_candidate",
     ),
     CHECKPOINT_RECOVERY_WORKFLOW: ("recover_checkpoint",),
+    UNSTARTED_CANDIDATE_SETTLEMENT_WORKFLOW: ("settle",),
     INTL_SYNC_WORKFLOW: ("sync_intl",),
     ".github/workflows/deploy-aws-ecs.yml": ("deploy",),
     ".github/workflows/deploy-ec2-auto-update.yml": ("deploy",),
@@ -2592,6 +2596,73 @@ def assert_feature_canary_cannot_route_or_mutate_production() -> None:
             )
 
 
+def assert_unstarted_candidate_settlement_contract() -> None:
+    workflow = load_workflow(UNSTARTED_CANDIDATE_SETTLEMENT_WORKFLOW)
+    triggers = workflow.get("on")
+    if not isinstance(triggers, Mapping) or set(triggers) != {"workflow_dispatch"}:
+        raise AssertionError("unstarted Candidate settlement must be manual-only")
+    dispatch = triggers.get("workflow_dispatch")
+    inputs = dispatch.get("inputs") if isinstance(dispatch, Mapping) else None
+    if not isinstance(inputs, Mapping) or set(inputs) != {"confirm_settlement"}:
+        raise AssertionError("unstarted Candidate settlement input contract changed")
+    confirmation = inputs["confirm_settlement"]
+    if not isinstance(confirmation, Mapping) or dict(confirmation) != {
+        "description": "I confirm the exact reviewed unstarted Candidate may be settled",
+        "required": "true",
+        "type": "boolean",
+        "default": "false",
+    }:
+        raise AssertionError("unstarted Candidate settlement confirmation changed")
+    concurrency = workflow.get("concurrency")
+    if not isinstance(concurrency, Mapping) or dict(concurrency) != {
+        "group": "production-release-main",
+        "cancel-in-progress": "false",
+    }:
+        raise AssertionError("unstarted Candidate settlement must serialize with releases")
+    permissions = workflow.get("permissions")
+    if not isinstance(permissions, Mapping) or dict(permissions) != {
+        "actions": "read",
+        "contents": "read",
+    }:
+        raise AssertionError("unstarted Candidate settlement permissions changed")
+    job = assert_main_only_job(
+        UNSTARTED_CANDIDATE_SETTLEMENT_WORKFLOW,
+        "settle",
+    )
+    if get_environment_name(job) != PRODUCTION_ENVIRONMENT:
+        raise AssertionError("unstarted Candidate settlement needs production approval")
+    workflow_text = (
+        REPO_ROOT / UNSTARTED_CANDIDATE_SETTLEMENT_WORKFLOW
+    ).read_text(encoding="utf-8")
+    controller_text = (
+        REPO_ROOT / ".github/scripts/github_settle_unstarted_candidate.sh"
+    ).read_text(encoding="utf-8")
+    settlement_sources = workflow_text + "\n" + controller_text
+    for required in (
+        "2026-08-04-aa1d-unstarted-candidate.json",
+        "30905118347",
+        "release-candidate-aa1d424b284497497973dd2e57dc6059b3d1ab8b-1",
+        "github_settle_unstarted_candidate.sh",
+        "StrictHostKeyChecking=yes",
+    ):
+        if required not in settlement_sources:
+            raise AssertionError(
+                "unstarted Candidate settlement lost exact incident binding "
+                f"{required!r}"
+            )
+    for forbidden in (
+        "approve-candidate-to-active",
+        "switch_started",
+        "nginx -s",
+        "systemctl restart",
+    ):
+        if forbidden in settlement_sources:
+            raise AssertionError(
+                "unstarted Candidate settlement gained forbidden deployment behavior "
+                f"{forbidden!r}"
+            )
+
+
 def main() -> None:
     assert_all_deploy_workflows_are_registered()
     assert_pull_request_release_coordination_guard()
@@ -2605,6 +2676,7 @@ def main() -> None:
     assert_all_static_production_jobs_are_registered()
     assert_production_release_main_guards()
     assert_checkpoint_recovery_contract()
+    assert_unstarted_candidate_settlement_contract()
 
     for relative_path in MANUAL_DEPLOY_WORKFLOWS:
         for job_name in PRODUCTION_JOBS[relative_path]:
