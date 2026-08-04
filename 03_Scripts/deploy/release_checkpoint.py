@@ -95,6 +95,21 @@ REPOSITORY_PATTERN = re.compile(
 )
 GIT_SHA_PATTERN = re.compile(r"^[0-9a-f]{40}$")
 SHA256_PATTERN = re.compile(r"^[0-9a-f]{64}$")
+SCHEMA_V3_AUTHORIZATION_FIELDS = {
+    "schemaVersion",
+    "kind",
+    "repository",
+    "workflowPath",
+    "runId",
+    "runAttempt",
+    "mainSha",
+    "planSha256",
+    "resultSha256",
+    "incidentId",
+    "inventoryDigest",
+    "decision",
+    "authorizationSha256",
+}
 REVISION_PATTERN = re.compile(r"(?m)^([0-9]{8}_[0-9]{4})\b")
 RECOVERY_RECEIPT_SCHEMA_VERSIONS = frozenset({1, 2, 3})
 RECOVERY_MIGRATION_STATUS_BY_SCHEMA = {
@@ -1008,6 +1023,71 @@ def _recovery_migration_status(receipt: Mapping[str, Any]) -> str:
     return RECOVERY_MIGRATION_STATUS_BY_SCHEMA[schema_version]
 
 
+def _validate_schema_v3_authorization_proof(
+    authorization: object,
+    *,
+    incident_id: object,
+    identity: object,
+    implementation: object,
+    inventory_digest: object,
+    label: str,
+) -> None:
+    if (
+        not isinstance(authorization, dict)
+        or set(authorization) != SCHEMA_V3_AUTHORIZATION_FIELDS
+        or not isinstance(identity, dict)
+        or not isinstance(implementation, dict)
+        or set(implementation) != {"commit", "planSha256"}
+        or not GIT_SHA_PATTERN.fullmatch(
+            str(implementation.get("commit") or "")
+        )
+        or not SHA256_PATTERN.fullmatch(
+            str(implementation.get("planSha256") or "")
+        )
+        or authorization.get("schemaVersion") != 1
+        or authorization.get("kind")
+        != "checkpoint_recovery_dry_run_authorization"
+        or authorization.get("workflowPath")
+        != ".github/workflows/production-checkpoint-recovery.yml"
+        or authorization.get("decision")
+        != "candidate-residue-dry-run-eligible"
+        or authorization.get("incidentId") != incident_id
+        or authorization.get("repository") != identity.get("repository")
+        or authorization.get("mainSha") != implementation.get("commit")
+        or authorization.get("planSha256") != implementation.get("planSha256")
+        or authorization.get("inventoryDigest") != inventory_digest
+        or any(
+            isinstance(authorization.get(field), bool)
+            or not isinstance(authorization.get(field), int)
+            or authorization.get(field, 0) <= 0
+            for field in ("runId", "runAttempt")
+        )
+        or any(
+            not SHA256_PATTERN.fullmatch(str(authorization.get(field) or ""))
+            for field in (
+                "resultSha256",
+                "planSha256",
+                "inventoryDigest",
+                "authorizationSha256",
+            )
+        )
+    ):
+        raise CheckpointError(f"{label} proof is invalid")
+    authorization_document = dict(authorization)
+    authorization_sha256 = authorization_document.pop("authorizationSha256")
+    authorization_raw = (
+        json.dumps(
+            authorization_document,
+            indent=2,
+            sort_keys=True,
+            ensure_ascii=False,
+        ).encode("utf-8")
+        + b"\n"
+    )
+    if hashlib.sha256(authorization_raw).hexdigest() != authorization_sha256:
+        raise CheckpointError(f"{label} digest is invalid")
+
+
 def _validate_schema_v3_receipt_contract(
     receipt: Mapping[str, Any],
     *,
@@ -1044,67 +1124,19 @@ def _validate_schema_v3_receipt_contract(
         for value in (authorization, residue, finalization, implementation, production)
     ):
         raise CheckpointError("schema v3 recovery proof objects are invalid")
-    expected_authorization_fields = {
-        "schemaVersion",
-        "kind",
-        "repository",
-        "workflowPath",
-        "runId",
-        "runAttempt",
-        "mainSha",
-        "planSha256",
-        "resultSha256",
-        "incidentId",
-        "inventoryDigest",
-        "decision",
-        "authorizationSha256",
-    }
     if (
-        set(authorization) != expected_authorization_fields
-        or authorization.get("schemaVersion") != 1
-        or authorization.get("kind")
-        != "checkpoint_recovery_dry_run_authorization"
-        or authorization.get("workflowPath")
-        != ".github/workflows/production-checkpoint-recovery.yml"
-        or authorization.get("decision")
-        != "candidate-residue-dry-run-eligible"
-        or receipt.get("incidentId") != RESIDUE_INCIDENT_ID
+        receipt.get("incidentId") != RESIDUE_INCIDENT_ID
         or receipt.get("identity", {}).get("commit") != RESIDUE_TARGET_COMMIT
-        or authorization.get("incidentId") != receipt.get("incidentId")
-        or authorization.get("repository")
-        != receipt.get("identity", {}).get("repository")
-        or authorization.get("mainSha") != implementation.get("commit")
-        or authorization.get("planSha256") != implementation.get("planSha256")
-        or any(
-            isinstance(authorization.get(field), bool)
-            or not isinstance(authorization.get(field), int)
-            or authorization.get(field, 0) <= 0
-            for field in ("runId", "runAttempt")
-        )
-        or any(
-            not SHA256_PATTERN.fullmatch(str(authorization.get(field) or ""))
-            for field in (
-                "resultSha256",
-                "planSha256",
-                "inventoryDigest",
-                "authorizationSha256",
-            )
-        )
     ):
         raise CheckpointError("schema v3 dry-run authorization proof is invalid")
-    authorization_document = dict(authorization)
-    authorization_sha256 = authorization_document.pop("authorizationSha256")
-    authorization_raw = (
-        json.dumps(
-            authorization_document,
-            indent=2,
-            sort_keys=True,
-            ensure_ascii=False,
-        ).encode("utf-8")
-        + b"\n"
+    _validate_schema_v3_authorization_proof(
+        authorization,
+        incident_id=receipt.get("incidentId"),
+        identity=receipt.get("identity"),
+        implementation=implementation,
+        inventory_digest=residue.get("inventoryDigest"),
+        label="schema v3 dry-run authorization",
     )
-    if hashlib.sha256(authorization_raw).hexdigest() != authorization_sha256:
-        raise CheckpointError("schema v3 dry-run authorization digest is invalid")
     if set(residue) != {
         "profile",
         "inventoryDigest",
@@ -1770,20 +1802,46 @@ def _validate_schema_v3_finalization(
             }
             for item in residue["retainedEvidence"]
         ]
-        if manifest_payload != {
+        expected_manifest_stable = {
             "schemaVersion": 1,
             "kind": "candidate_residue_quarantine_contract",
             "incidentId": operation_receipt["incidentId"],
             "identity": operation_receipt["identity"],
-            "implementation": operation_receipt["implementation"],
-            "authorization": operation_receipt["authorization"],
             "quarantineRoot": str(quarantine_root),
             "items": expected_manifest_items,
             "retainedEvidence": expected_retained_evidence,
             "requiredAbsentPaths": residue["requiredAbsentPaths"],
             "fence": expected_fence,
+        }
+        if not isinstance(manifest_payload, dict) or set(manifest_payload) != {
+            *expected_manifest_stable,
+            "implementation",
+            "authorization",
         }:
             raise CheckpointError("recovery quarantine manifest contract changed")
+        manifest_stable = {
+            key: value
+            for key, value in manifest_payload.items()
+            if key not in {"implementation", "authorization"}
+        }
+        manifest_implementation = manifest_payload["implementation"]
+        operation_implementation = operation_receipt["implementation"]
+        if (
+            manifest_stable != expected_manifest_stable
+            or not isinstance(manifest_implementation, dict)
+            or not isinstance(operation_implementation, dict)
+            or manifest_implementation.get("planSha256")
+            != operation_implementation.get("planSha256")
+        ):
+            raise CheckpointError("recovery quarantine manifest contract changed")
+        _validate_schema_v3_authorization_proof(
+            manifest_payload["authorization"],
+            incident_id=manifest_payload["incidentId"],
+            identity=manifest_payload["identity"],
+            implementation=manifest_implementation,
+            inventory_digest=residue.get("inventoryDigest"),
+            label="recovery quarantine manifest authorization",
+        )
         if not _path_lexists(final_path):
             raise CheckpointError("final recovery fence is absent")
         final_fence_identity = _live_identity(
