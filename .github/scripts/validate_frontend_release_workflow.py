@@ -553,7 +553,7 @@ def assert_deploy_jobs_share_one_artifact(workflow: Mapping[str, Any]) -> None:
             "the shared artifact must be verified and materialized before Cloudflare preflight"
         )
     if cloudflare_preflight > tencent_names.index(
-        "Upload complete release archive without fallback"
+        "Upload complete release archive with incremental rsync"
     ):
         raise AssertionError("Cloudflare configuration must fail before any production mutation")
     if tencent_names.index("Verify frontend artifact before Tencent deployment") > tencent_names.index(
@@ -683,7 +683,7 @@ def assert_tencent_resumable_upload_contract(workflow: Mapping[str, Any]) -> Non
     upload_steps = [
         step
         for step in steps(tencent, "deploy_tencent")
-        if step.get("name") == "Upload complete release archive without fallback"
+        if step.get("name") == "Upload complete release archive with incremental rsync"
     ]
     if len(upload_steps) != 1:
         raise AssertionError("Tencent must have exactly one fail-closed archive upload step")
@@ -699,7 +699,12 @@ def assert_tencent_resumable_upload_contract(workflow: Mapping[str, Any]) -> Non
         "require_rsync_3",
         "Remote rsync >= 3.0 is required",
         "--partial",
-        "--append-verify",
+        "gzip -n --rsyncable",
+        "sudo -n realpath /opt/jato/active",
+        "NO_BASIS",
+        "refusing full upload",
+        "--checksum",
+        "--stats",
         "--protect-args",
         "--rsync-path=",
         "flock -w 870",
@@ -721,6 +726,7 @@ def assert_tencent_resumable_upload_contract(workflow: Mapping[str, Any]) -> Non
         "ln '$remote_temp' '$remote_archive'",
         'echo "archive-bytes=$archive_bytes"',
         'echo "archive-sha256=$archive_sha256"',
+        'echo "literal-bytes=$literal_bytes"',
     )
     missing = [token for token in required_tokens if token not in upload]
     if missing:
@@ -735,6 +741,7 @@ def assert_tencent_resumable_upload_contract(workflow: Mapping[str, Any]) -> Non
         "fallback to sparse",
         "split -b 8M",
         "--compress",
+        "--append-verify",
         " -z",
     )
     forbidden = [token for token in forbidden_tokens if token in upload]
@@ -813,7 +820,7 @@ def assert_deterministic_backend_package(workflow: Mapping[str, Any]) -> None:
         "--no-acls",
         "--no-xattrs",
         "--no-selinux",
-        'gzip -n -f "$RUNNER_TEMP/JATO_deploy.tar"',
+        'gzip -n --rsyncable -f "$RUNNER_TEMP/JATO_deploy.tar"',
         'value.get("localPath")',
         "missing MSRP localPath evidence",
         'tar tzf "$RUNNER_TEMP/JATO_deploy.tar.gz" "$evidence_path"',
@@ -892,7 +899,7 @@ def assert_deterministic_backend_package(workflow: Mapping[str, Any]) -> None:
         '"$RUNNER_TEMP/JATO_deploy.tar"',
         'tar "${tar_private_normalize[@]}" -rf '
         '"$RUNNER_TEMP/JATO_deploy.tar"',
-        'gzip -n -f "$RUNNER_TEMP/JATO_deploy.tar"',
+        'gzip -n --rsyncable -f "$RUNNER_TEMP/JATO_deploy.tar"',
     )
     private_positions = [
         normalized_package.index(token)
