@@ -132,6 +132,16 @@ www 的固定 Active 更新成功后，下面两个动作互相独立，执行�
 `failure` 的已完成 run。`release-candidate` 和 Active 批准仍只接受 `success`，
 `cancelled` 等不确定终态一律拒绝。
 
+`discard-failed-candidate` 只用于精确的失败 `prepare-candidate` run 已到达
+`migrated` 但自动清理失败的残留。运行时必须提供该 run 的 ID、attempt、
+commit、archive SHA-256 和明确的 cleanup 确认，Candidate attestation 留空；
+它强制使用未过期的原始 GitHub artifacts，不允许 canonical fallback。该动作
+只停止并清理绑定的 Candidate/preview 槽位，并写入
+`candidate_prepare_aborted`；不修改 Active、数据库、JATO 数据或 intl。当前
+`c354a2d3...` 残留必须先通过该路径清理，才能重新部署
+`572e82b27b2455c965ece780aebfb542dd194e96` Candidate；这是一次精确清理，
+不是 recovery 系统。
+
 GitHub handoff 或 frontend artifact 已缺失/过期时，**只允许 Candidate 清理走
 canonical server fallback，不允许据此批准 Active**。cleanup workflow 会自动
 切换证明来源：当前 `main` 控制脚本在腾讯云 production lock 下只读采集请求

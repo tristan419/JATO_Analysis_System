@@ -60,9 +60,7 @@ def test_remote_release_validates_content_address_before_bluegreen_handoff() -> 
     )
     cross_release_gate = script.index("assert-cross-release-safe")
     prepared_write = script.index("--phase prepared", cross_release_gate)
-    handoff = script.index(
-        'bash "$RELEASE_WORKTREE/03_Scripts/deploy/tencent_bluegreen_release.sh"',
-    )
+    handoff = script.index('bash "$BLUEGREEN_CONTROLLER" "$DEPLOY_BLUEGREEN_MODE"')
     handoff_exit = script.index('exit "$BLUEGREEN_RC"', handoff)
     assert (
         lock_acquired
@@ -129,9 +127,57 @@ def test_remote_release_binds_reviewed_server_state_before_candidate_control() -
         state_index,
     )
     handoff_index = script.index(
-        'bash "$RELEASE_WORKTREE/03_Scripts/deploy/tencent_bluegreen_release.sh"',
+        'bash "$BLUEGREEN_CONTROLLER" "$DEPLOY_BLUEGREEN_MODE"',
     )
     assert lock_index < evidence_index < state_index < checkpoint_index < handoff_index
+
+
+def test_failed_candidate_cleanup_uses_reviewed_journal_and_current_controller() -> None:
+    script = REMOTE_SCRIPT.read_text(encoding="utf-8")
+    control = (
+        REPO_ROOT / "03_Scripts/deploy/github_candidate_control.sh"
+    ).read_text(encoding="utf-8")
+    journal_gate = _shell_function(
+        REMOTE_SCRIPT,
+        "verify_failed_candidate_checkpoint_journal",
+    )
+
+    assert "\nimport re\n" in journal_gate
+    for required in (
+        "reviewed failed Candidate checkpoint SHA-256 mismatch",
+        "failed Candidate journal sequence/identity mismatch",
+        "failed Candidate journal tail/checkpoint mismatch",
+        "failed Candidate did not prove a no-op database migration",
+        "live failed Candidate evidence differs from reviewed artifact",
+        "aborted Candidate is not the exact reviewed transition",
+        "os.O_NOFOLLOW",
+        "after.st_mtime_ns != metadata.st_mtime_ns",
+    ):
+        assert required in journal_gate
+    assert "discard-failed-candidate:migrated) require_original_checkpoint=true" in script
+    assert "DISCARD_FAILED_CANDIDATE_CONTROLLER_SHA256" in script
+    assert "Failed Candidate control-plane SHA-256 mismatch" in script
+    assert 'BLUEGREEN_CONTROLLER="$TRUSTED_FAILED_CANDIDATE_CONTROLLER_TEMP"' in script
+    assert 'bash "$BLUEGREEN_CONTROLLER" "$DEPLOY_BLUEGREEN_MODE"' in script
+    assert "failed_candidate_controller_sha256" in control
+    assert "write_remote_assignment DISCARD_FAILED_CANDIDATE_CONTROLLER_B64" in control
+    assert "write_remote_export DISCARD_FAILED_CANDIDATE_CONTROLLER_B64" not in control
+    assert "CANDIDATE_SERVER_REVIEWED_CHECKPOINT_B64" in control
+    assert control.index("failed_candidate_controller_sha256") < control.index(
+        'cat "$outer_release" >> "$control_payload"',
+    )
+
+
+def test_preview_stop_uses_systemd_execstart_not_mutable_nginx_process_title() -> None:
+    script = BLUEGREEN_SCRIPT.read_text(encoding="utf-8")
+    preview_stop = _shell_function(BLUEGREEN_SCRIPT, "stop_candidate_preview")
+
+    assert 'marker = " ; ignore_errors="' in preview_stop
+    assert 'shlex.split(serialized.split(marker, 1)[0])' in preview_stop
+    assert "/proc/" not in preview_stop
+    assert 'allowed_argv.append(expected_argv + ["-g", "daemon off;"])' in preview_stop
+    assert 'legacy_preview_argv == "true"' in preview_stop
+    assert 'BLUEGREEN_MODE" == "discard-failed-candidate"' in script
 
 
 def test_canonical_cleanup_reconstructs_original_reviewed_attestation() -> None:
@@ -1504,7 +1550,7 @@ def test_aborted_release_cannot_be_replayed_by_outer_or_inner_deployer() -> None
 
     assert decision in outer
     assert outer.index(decision) < outer.index(
-        'bash "$RELEASE_WORKTREE/03_Scripts/deploy/tencent_bluegreen_release.sh"',
+        'bash "$BLUEGREEN_CONTROLLER" "$DEPLOY_BLUEGREEN_MODE"',
     )
     assert "create a new reviewed release instead of replaying it" in outer
     assert "pre_switch_aborted) echo 12" in inner

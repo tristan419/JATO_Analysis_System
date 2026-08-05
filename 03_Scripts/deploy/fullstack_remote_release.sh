@@ -44,7 +44,7 @@ fi
 
 DEPLOY_BLUEGREEN_MODE="${DEPLOY_BLUEGREEN_MODE:-prepare-candidate}"
 case "$DEPLOY_BLUEGREEN_MODE" in
-  prepare-candidate|approve-candidate-to-active|discard-candidate|release-candidate|restore-previous-active) ;;
+  prepare-candidate|approve-candidate-to-active|discard-candidate|discard-failed-candidate|release-candidate|restore-previous-active) ;;
   *)
     echo "[ERROR] DEPLOY_BLUEGREEN_MODE must prepare, approve, or clean one exact Candidate"
     exit 1
@@ -55,7 +55,6 @@ if [[ "$DEPLOY_BLUEGREEN_MODE" != "prepare-candidate" ]]; then
   for approval_name in \
     DEPLOY_APPROVAL_RUN_ID \
     DEPLOY_APPROVAL_RUN_ATTEMPT \
-    DEPLOY_CANDIDATE_ATTESTATION_SHA256 \
     DEPLOY_CANDIDATE_SERVER_CHECKPOINT_PATH \
     DEPLOY_CANDIDATE_SERVER_CHECKPOINT_SHA256 \
     DEPLOY_CANDIDATE_SERVER_EVIDENCE_PATH \
@@ -66,13 +65,29 @@ if [[ "$DEPLOY_BLUEGREEN_MODE" != "prepare-candidate" ]]; then
       exit 1
     fi
   done
+  if [[ "$DEPLOY_BLUEGREEN_MODE" == "discard-failed-candidate" ]]; then
+    for failed_candidate_name in \
+      DEPLOY_CANDIDATE_REVIEWED_CHECKPOINT_B64 \
+      DISCARD_FAILED_CANDIDATE_CONTROLLER_B64 \
+      DISCARD_FAILED_CANDIDATE_CONTROLLER_SHA256
+    do
+      if [[ -z "${!failed_candidate_name:-}" ]]; then
+        echo "[ERROR] $failed_candidate_name is required for failed Candidate discard"
+        exit 1
+      fi
+    done
+    if [[ ! "$DISCARD_FAILED_CANDIDATE_CONTROLLER_SHA256" =~ ^[0-9a-f]{64}$ ]]; then
+      echo "[ERROR] Failed Candidate control-plane SHA-256 is invalid"
+      exit 1
+    fi
+  elif [[ -z "${DEPLOY_CANDIDATE_ATTESTATION_SHA256:-}" ]] \
+    || [[ ! "$DEPLOY_CANDIDATE_ATTESTATION_SHA256" =~ ^[0-9a-f]{64}$ ]]; then
+    echo "[ERROR] Candidate approval attestation SHA-256 is invalid"
+    exit 1
+  fi
   if [[ ! "$DEPLOY_APPROVAL_RUN_ID" =~ ^[1-9][0-9]*$ ]] \
     || [[ ! "$DEPLOY_APPROVAL_RUN_ATTEMPT" =~ ^[1-9][0-9]*$ ]]; then
     echo "[ERROR] Candidate approval run identity must use positive integers"
-    exit 1
-  fi
-  if [[ ! "$DEPLOY_CANDIDATE_ATTESTATION_SHA256" =~ ^[0-9a-f]{64}$ ]]; then
-    echo "[ERROR] Candidate approval attestation SHA-256 is invalid"
     exit 1
   fi
   if [[ ! "$DEPLOY_CANDIDATE_SERVER_CHECKPOINT_SHA256" =~ ^[0-9a-f]{64}$ ]] \
@@ -223,6 +238,7 @@ verify_attested_candidate_checkpoint_for_mode() {
   case "$DEPLOY_BLUEGREEN_MODE:$CHECKPOINT_PHASE" in
     approve-candidate-to-active:candidate_ready) require_original_checkpoint=true ;;
     discard-candidate:candidate_ready) require_original_checkpoint=true ;;
+    discard-failed-candidate:migrated) require_original_checkpoint=true ;;
   esac
   if [[ "${DEPLOY_CANDIDATE_HANDOFF_SOURCE:-}" == "canonical-server" ]]; then
     require_original_checkpoint=true
@@ -237,9 +253,161 @@ verify_attested_candidate_checkpoint_for_mode() {
   fi
 }
 
+verify_failed_candidate_checkpoint_journal() {
+  if [[ "$DEPLOY_BLUEGREEN_MODE" != "discard-failed-candidate" ]]; then
+    return 0
+  fi
+  python3 -B - \
+    "$CHECKPOINT_FILE" \
+    "$CHECKPOINT_EVIDENCE_FILE" \
+    "$CHECKPOINT_JOURNAL" \
+    "$DEPLOY_CANDIDATE_REVIEWED_CHECKPOINT_B64" \
+    "$DEPLOY_CANDIDATE_SERVER_CHECKPOINT_SHA256" <<'PY'
+import base64
+import binascii
+import hashlib
+import json
+import os
+from pathlib import Path
+import re
+import stat
+import sys
+
+
+def read_regular(path: Path, label: str, maximum: int) -> bytes:
+    flags = os.O_RDONLY
+    if hasattr(os, "O_NOFOLLOW"):
+        flags |= os.O_NOFOLLOW
+    try:
+        descriptor = os.open(path, flags)
+    except OSError as exc:
+        raise SystemExit(f"[ERROR] {label} is unavailable: {exc}") from exc
+    try:
+        metadata = os.fstat(descriptor)
+        if (
+            not stat.S_ISREG(metadata.st_mode)
+            or metadata.st_nlink != 1
+            or metadata.st_size <= 0
+            or metadata.st_size > maximum
+        ):
+            raise SystemExit(f"[ERROR] {label} is unsafe")
+        with os.fdopen(descriptor, "rb", closefd=False) as handle:
+            raw = handle.read(maximum + 1)
+        after = os.fstat(descriptor)
+        if (
+            len(raw) != metadata.st_size
+            or after.st_size != metadata.st_size
+            or after.st_mtime_ns != metadata.st_mtime_ns
+            or after.st_ino != metadata.st_ino
+            or after.st_dev != metadata.st_dev
+        ):
+            raise SystemExit(f"[ERROR] {label} changed while read")
+        return raw
+    finally:
+        os.close(descriptor)
+
+
+checkpoint_path, evidence_path, journal_path = map(Path, sys.argv[1:4])
+try:
+    reviewed_raw = base64.b64decode(sys.argv[4], validate=True)
+except (ValueError, binascii.Error) as exc:
+    raise SystemExit("[ERROR] reviewed failed Candidate checkpoint is invalid base64") from exc
+if hashlib.sha256(reviewed_raw).hexdigest() != sys.argv[5]:
+    raise SystemExit("[ERROR] reviewed failed Candidate checkpoint SHA-256 mismatch")
+try:
+    reviewed = json.loads(reviewed_raw.decode("utf-8"))
+    checkpoint = json.loads(
+        read_regular(checkpoint_path, "failed Candidate checkpoint", 1_048_576)
+        .decode("utf-8")
+    )
+    evidence_raw = read_regular(
+        evidence_path,
+        "failed Candidate evidence",
+        1_048_576,
+    )
+    evidence = json.loads(evidence_raw.decode("utf-8"))
+    events = [
+        json.loads(line)
+        for line in read_regular(
+            journal_path,
+            "failed Candidate checkpoint journal",
+            8 * 1_048_576,
+        ).decode("utf-8").splitlines()
+        if line
+    ]
+except (UnicodeError, json.JSONDecodeError) as exc:
+    raise SystemExit("[ERROR] failed Candidate checkpoint proof is invalid JSON") from exc
+identity = reviewed.get("identity") if isinstance(reviewed, dict) else None
+if not isinstance(identity, dict) or evidence.get("identity") != identity:
+    raise SystemExit("[ERROR] failed Candidate reviewed identity/evidence mismatch")
+binding = re.search(
+    r"(?:^|[; ])evidence_path=(\S+) "
+    r"evidence_sha256=([0-9a-f]{64})(?:$|[; ])",
+    str(reviewed.get("message", "")),
+)
+if (
+    binding is None
+    or binding.group(1) != str(evidence_path)
+    or hashlib.sha256(evidence_raw).hexdigest() != binding.group(2)
+):
+    raise SystemExit("[ERROR] live failed Candidate evidence differs from reviewed artifact")
+if (
+    reviewed.get("phase") != "migrated"
+    or reviewed.get("status") != "completed"
+    or reviewed.get("retryClass") != "automatic"
+):
+    raise SystemExit("[ERROR] reviewed failed Candidate is not migrated/completed/automatic")
+migration = evidence.get("migration")
+if not isinstance(migration, dict) or migration.get("status") != "completed":
+    raise SystemExit("[ERROR] failed Candidate migration evidence is incomplete")
+revisions = [
+    migration.get("preRevision"),
+    migration.get("targetRevision"),
+    migration.get("resultRevision"),
+]
+if not all(isinstance(value, str) and value for value in revisions) \
+    or len(set(revisions)) != 1:
+    raise SystemExit("[ERROR] failed Candidate did not prove a no-op database migration")
+if not isinstance(checkpoint, dict) or checkpoint.get("identity") != identity:
+    raise SystemExit("[ERROR] live failed Candidate checkpoint identity mismatch")
+if not events:
+    raise SystemExit("[ERROR] failed Candidate checkpoint journal is empty")
+for sequence, event in enumerate(events, start=1):
+    if (
+        not isinstance(event, dict)
+        or event.get("event") != "checkpoint_transition"
+        or event.get("sequence") != sequence
+        or event.get("identity") != identity
+    ):
+        raise SystemExit("[ERROR] failed Candidate journal sequence/identity mismatch")
+tail = dict(events[-1])
+tail.pop("event", None)
+if tail != checkpoint:
+    raise SystemExit("[ERROR] failed Candidate journal tail/checkpoint mismatch")
+state = (
+    checkpoint.get("phase"),
+    checkpoint.get("status"),
+    checkpoint.get("retryClass"),
+)
+if state == ("migrated", "completed", "automatic"):
+    if checkpoint != reviewed:
+        raise SystemExit("[ERROR] live migrated checkpoint differs from reviewed artifact")
+elif state == ("candidate_prepare_aborted", "completed", "automatic"):
+    if len(events) < 2:
+        raise SystemExit("[ERROR] aborted Candidate journal lacks migrated predecessor")
+    predecessor = dict(events[-2])
+    predecessor.pop("event", None)
+    if predecessor != reviewed or checkpoint.get("sequence") != reviewed.get("sequence", 0) + 1:
+        raise SystemExit("[ERROR] aborted Candidate is not the exact reviewed transition")
+else:
+    raise SystemExit("[ERROR] live failed Candidate checkpoint is not eligible for discard")
+PY
+}
+
 verify_attested_candidate_paths_and_evidence
 RELEASE_WORKTREE=""
 TRUSTED_ARCHIVE_VALIDATOR_TEMP=""
+TRUSTED_FAILED_CANDIDATE_CONTROLLER_TEMP=""
 SEALED_TRUST_ROOT="/var/lib/jato-sealed-inputs"
 SEALED_ARCHIVE_ROOT="$SEALED_TRUST_ROOT/inputs"
 SEALED_ARCHIVE_DIR="$SEALED_ARCHIVE_ROOT/$DEPLOY_COMMIT_SHA/$DEPLOY_ARCHIVE_SHA256/${DEPLOY_RUN_ID}-${DEPLOY_RUN_ATTEMPT}"
@@ -259,6 +427,7 @@ remove_transient_release_paths() {
   for transient_path in \
     "$RELEASE_WORKTREE" \
     "$TRUSTED_ARCHIVE_VALIDATOR_TEMP" \
+    "${TRUSTED_FAILED_CANDIDATE_CONTROLLER_TEMP:-}" \
     "$PREBUILT_FRONTEND_DIR"; do
     if [[ -z "$transient_path" || ! -e "$transient_path" ]]; then
       continue
@@ -1012,6 +1181,7 @@ if [[ -e "$CHECKPOINT_FILE" ]]; then
   )
 fi
 verify_attested_candidate_checkpoint_for_mode
+verify_failed_candidate_checkpoint_journal
 
 CROSS_RELEASE_STATE="$(python3 "$CHECKPOINT_HELPER" assert-cross-release-safe \
   --checkpoints-root "$DEPLOY_STATE_DIR/checkpoints" \
@@ -1198,8 +1368,12 @@ if [[ "$CHECKPOINT_DECISION" == "reconcile-required" ]]; then
   esac
 fi
 if [[ "$CHECKPOINT_DECISION" == "already-candidate-prepare-aborted" ]]; then
-  echo "[ERROR] This exact Candidate preparation was cleaned and sealed as aborted; create a new reviewed release"
-  exit 1
+  if [[ "$DEPLOY_BLUEGREEN_MODE" == "discard-failed-candidate" ]]; then
+    echo "[INFO] Revalidating the exact already-aborted failed Candidate without replaying cleanup"
+  else
+    echo "[ERROR] This exact Candidate preparation was cleaned and sealed as aborted; create a new reviewed release"
+    exit 1
+  fi
 fi
 if [[ "$CHECKPOINT_DECISION" == "already-pre-switch-aborted" ]]; then
   echo "[ERROR] This exact release was abandoned before Candidate start; create a new reviewed release instead of replaying it"
@@ -1230,6 +1404,27 @@ fi
 
 echo "[INFO] Release archive and materialized frontend passed all pre-mutation checks"
 
+BLUEGREEN_CONTROLLER="$RELEASE_WORKTREE/03_Scripts/deploy/tencent_bluegreen_release.sh"
+if [[ "$DEPLOY_BLUEGREEN_MODE" == "discard-failed-candidate" ]]; then
+  TRUSTED_FAILED_CANDIDATE_CONTROLLER_TEMP="$(
+    mktemp "$DEPLOY_STATE_DIR/.failed-candidate-controller-${DEPLOY_COMMIT_SHA}.XXXXXX.sh"
+  )"
+  if ! printf '%s' "$DISCARD_FAILED_CANDIDATE_CONTROLLER_B64" \
+    | base64 --decode >"$TRUSTED_FAILED_CANDIDATE_CONTROLLER_TEMP"; then
+    echo "[ERROR] Failed Candidate control-plane payload is malformed"
+    exit 1
+  fi
+  chmod 500 "$TRUSTED_FAILED_CANDIDATE_CONTROLLER_TEMP"
+  if [[ "$(
+    sha256sum "$TRUSTED_FAILED_CANDIDATE_CONTROLLER_TEMP" | awk '{print $1}'
+  )" != "$DISCARD_FAILED_CANDIDATE_CONTROLLER_SHA256" ]]; then
+    echo "[ERROR] Failed Candidate control-plane SHA-256 mismatch"
+    exit 1
+  fi
+  BLUEGREEN_CONTROLLER="$TRUSTED_FAILED_CANDIDATE_CONTROLLER_TEMP"
+  unset DISCARD_FAILED_CANDIDATE_CONTROLLER_B64
+fi
+
 # Production releases use the independent 8000/8001 Tencent blue/green
 # controller.  It owns all source materialization, candidate verification,
 # JATO quiescence, Nginx switching, rollback, and final slot promotion.  This
@@ -1248,15 +1443,16 @@ if [[ "$DEPLOY_BLUEGREEN_MODE" != "prepare-candidate" ]]; then
   export \
     DEPLOY_APPROVAL_RUN_ID \
     DEPLOY_APPROVAL_RUN_ATTEMPT \
-    DEPLOY_CANDIDATE_ATTESTATION_SHA256 \
     DEPLOY_CANDIDATE_SERVER_CHECKPOINT_PATH \
     DEPLOY_CANDIDATE_SERVER_CHECKPOINT_SHA256 \
     DEPLOY_CANDIDATE_SERVER_EVIDENCE_PATH \
     DEPLOY_CANDIDATE_SERVER_EVIDENCE_SHA256
+  if [[ "$DEPLOY_BLUEGREEN_MODE" != "discard-failed-candidate" ]]; then
+    export DEPLOY_CANDIDATE_ATTESTATION_SHA256
+  fi
 fi
 set +e
-bash "$RELEASE_WORKTREE/03_Scripts/deploy/tencent_bluegreen_release.sh" \
-  "$DEPLOY_BLUEGREEN_MODE"
+bash "$BLUEGREEN_CONTROLLER" "$DEPLOY_BLUEGREEN_MODE"
 BLUEGREEN_RC=$?
 set -e
 exit "$BLUEGREEN_RC"

@@ -27,13 +27,14 @@ on:
           - prepare-candidate
           - approve-candidate-to-active
           - discard-candidate
+          - discard-failed-candidate
           - release-candidate
       candidate_prepare_run_id:
-        description: Exact successful prepare-candidate workflow run id (approval only)
+        description: Exact reviewed prepare-candidate workflow run id
         required: false
         type: string
       candidate_prepare_run_attempt:
-        description: Exact successful prepare-candidate run attempt (approval only)
+        description: Exact reviewed prepare-candidate run attempt
         required: false
         type: string
       candidate_commit_sha:
@@ -45,7 +46,7 @@ on:
         required: false
         type: string
       candidate_attestation_sha256:
-        description: Exact reviewed server attestation SHA-256 (approval only)
+        description: Exact successful Candidate attestation SHA-256; blank for failed discard
         required: false
         type: string
       confirm_www_activation:
@@ -2343,6 +2344,7 @@ jobs:
       ${{ github.ref == 'refs/heads/main' &&
       github.event_name == 'workflow_dispatch' &&
       (inputs.release_mode == 'discard-candidate' ||
+      inputs.release_mode == 'discard-failed-candidate' ||
       inputs.release_mode == 'release-candidate') &&
       needs.release_coordination_guard.outputs.release-action == 'deploy' }}
     needs: release_coordination_guard
@@ -2391,7 +2393,14 @@ jobs:
           [[ "$CANDIDATE_RUN_ATTEMPT" =~ ^[1-9][0-9]*$ ]]
           [[ "$CANDIDATE_COMMIT_SHA" =~ ^[0-9a-f]{40}$ ]]
           [[ "$CANDIDATE_ARCHIVE_SHA256" =~ ^[0-9a-f]{64}$ ]]
-          [[ "$CANDIDATE_ATTESTATION_SHA256" =~ ^[0-9a-f]{64}$ ]]
+          if [ "$RELEASE_MODE" = "discard-failed-candidate" ]; then
+            test -z "$CANDIDATE_ATTESTATION_SHA256" || {
+              echo "::error::failed Candidate discard must not claim a successful attestation"
+              exit 1
+            }
+          else
+            [[ "$CANDIDATE_ATTESTATION_SHA256" =~ ^[0-9a-f]{64}$ ]]
+          fi
           if [ "$CANDIDATE_COMMIT_SHA" != "$GITHUB_SHA" ]; then
             echo "::notice::Cleaning an exact reviewed prior-main Candidate; current main remains control-plane source"
           fi
@@ -2424,11 +2433,11 @@ jobs:
               if run.get(key) != value
           }
           mode = sys.argv[4]
-          allowed_conclusions = (
-              {"success", "failure"}
-              if mode == "discard-candidate"
-              else {"success"}
-          )
+          allowed_conclusions = {
+              "discard-candidate": {"success", "failure"},
+              "discard-failed-candidate": {"failure"},
+              "release-candidate": {"success"},
+          }.get(mode, set())
           if run.get("conclusion") not in allowed_conclusions:
               mismatches["conclusion"] = {
                   "expected": sorted(allowed_conclusions),
@@ -2462,12 +2471,12 @@ jobs:
           python3 - \
             "$RUNNER_TEMP/candidate-cleanup/prepare-artifacts.json" \
             "$GITHUB_OUTPUT" "$CANDIDATE_COMMIT_SHA" \
-            "$CANDIDATE_RUN_ATTEMPT" <<'PY'
+            "$CANDIDATE_RUN_ATTEMPT" "$RELEASE_MODE" <<'PY'
           import json
           from pathlib import Path
           import sys
 
-          artifacts_name, output_name, commit, run_attempt = sys.argv[1:]
+          artifacts_name, output_name, commit, run_attempt, mode = sys.argv[1:]
           pages = json.loads(Path(artifacts_name).read_text(encoding="utf-8"))
           if isinstance(pages, dict):
               pages = [pages]
@@ -2495,10 +2504,15 @@ jobs:
                   + ", ".join(sorted(duplicates))
               )
           source = "github-artifact"
-          if any(
+          unavailable = any(
               len(matches) != 1 or matches[0].get("expired") is not False
               for matches in selected.values()
-          ):
+          )
+          if unavailable and mode == "discard-failed-candidate":
+              raise SystemExit(
+                  "failed Candidate discard requires exact non-expired GitHub artifacts"
+              )
+          if unavailable:
               source = "canonical-server"
           with Path(output_name).open("a", encoding="utf-8") as output:
               output.write(f"source={source}\n")
@@ -2571,18 +2585,43 @@ jobs:
         run: |
           set -euo pipefail
           request_dir="$RUNNER_TEMP/candidate-cleanup"
-          python3 03_Scripts/deploy/verify_candidate_handoff.py \
-            --checkpoint "$request_dir/release-candidate/candidate.json" \
-            --attestation "$request_dir/release-candidate/server/attestation.json" \
-            --artifacts "$request_dir/prepare-artifacts.json" \
-            --env-output "$request_dir/verified.env" \
-            --reviewed-checkpoint-output "$request_dir/reviewed-candidate.json" \
-            --repository "$GITHUB_REPOSITORY" \
-            --commit "$CANDIDATE_COMMIT_SHA" \
-            --archive-sha256 "$CANDIDATE_ARCHIVE_SHA256" \
-            --run-id "$CANDIDATE_RUN_ID" \
-            --run-attempt "$CANDIDATE_RUN_ATTEMPT" \
-            --attestation-sha256 "$CANDIDATE_ATTESTATION_SHA256"
+          if [ "$RELEASE_MODE" = "discard-failed-candidate" ]; then
+            python3 03_Scripts/deploy/verify_candidate_handoff.py \
+              --failed-transport-checkpoint \
+                "$request_dir/release-candidate/candidate.json" \
+              --failed-transport-journal \
+                "$request_dir/release-candidate/journal.jsonl" \
+              --failed-server-checkpoint \
+                "$request_dir/release-candidate/server/backend-healthy.json" \
+              --failed-server-evidence \
+                "$request_dir/release-candidate/server/backend-healthy.evidence.json" \
+              --failed-fetch-status \
+                "$request_dir/release-candidate/server/fetch-status.json" \
+              --failed-preview \
+                "$request_dir/release-candidate/server/candidate-preview.json" \
+              --failed-frontend-release-dir "$request_dir/frontend-release" \
+              --artifacts "$request_dir/prepare-artifacts.json" \
+              --env-output "$request_dir/verified.env" \
+              --reviewed-checkpoint-output "$request_dir/reviewed-candidate.json" \
+              --repository "$GITHUB_REPOSITORY" \
+              --commit "$CANDIDATE_COMMIT_SHA" \
+              --archive-sha256 "$CANDIDATE_ARCHIVE_SHA256" \
+              --run-id "$CANDIDATE_RUN_ID" \
+              --run-attempt "$CANDIDATE_RUN_ATTEMPT"
+          else
+            python3 03_Scripts/deploy/verify_candidate_handoff.py \
+              --checkpoint "$request_dir/release-candidate/candidate.json" \
+              --attestation "$request_dir/release-candidate/server/attestation.json" \
+              --artifacts "$request_dir/prepare-artifacts.json" \
+              --env-output "$request_dir/verified.env" \
+              --reviewed-checkpoint-output "$request_dir/reviewed-candidate.json" \
+              --repository "$GITHUB_REPOSITORY" \
+              --commit "$CANDIDATE_COMMIT_SHA" \
+              --archive-sha256 "$CANDIDATE_ARCHIVE_SHA256" \
+              --run-id "$CANDIDATE_RUN_ID" \
+              --run-attempt "$CANDIDATE_RUN_ATTEMPT" \
+              --attestation-sha256 "$CANDIDATE_ATTESTATION_SHA256"
+          fi
           source "$request_dir/verified.env"
           python3 03_Scripts/deploy/frontend_release_artifact.py verify \
             --release-dir "$request_dir/frontend-release" \
@@ -2598,7 +2637,9 @@ jobs:
             --github-artifact-digest "$CANDIDATE_GITHUB_ARTIFACT_DIGEST"
 
       - name: Capture canonical Candidate cleanup handoff
-        if: ${{ steps.cleanup_handoff.outputs.source == 'canonical-server' }}
+        if: >-
+          ${{ steps.cleanup_handoff.outputs.source == 'canonical-server' &&
+          inputs.release_mode != 'discard-failed-candidate' }}
         env:
           AUTH_MODE: ${{ steps.cleanup_auth.outputs.mode }}
           CANDIDATE_CANONICAL_BUNDLE_OUTPUT: ${{ runner.temp }}/candidate-cleanup/canonical-server.json
@@ -2619,7 +2660,9 @@ jobs:
             capture-canonical-cleanup
 
       - name: Verify canonical Candidate cleanup handoff
-        if: ${{ steps.cleanup_handoff.outputs.source == 'canonical-server' }}
+        if: >-
+          ${{ steps.cleanup_handoff.outputs.source == 'canonical-server' &&
+          inputs.release_mode != 'discard-failed-candidate' }}
         env:
           CANDIDATE_RUN_ID: ${{ inputs.candidate_prepare_run_id }}
           CANDIDATE_RUN_ATTEMPT: ${{ inputs.candidate_prepare_run_attempt }}
@@ -2750,8 +2793,10 @@ jobs:
             "$server_dir/terminal.json" \
             "$server_dir/terminal.evidence.json" \
             "$server_dir/terminal.journal.jsonl" "$RELEASE_MODE" <<'PY'
+          import hashlib
           import json
           from pathlib import Path
+          import re
           import stat
           import sys
 
@@ -2770,11 +2815,14 @@ jobs:
                   raise SystemExit(f"{label} is invalid JSON") from exc
               if not isinstance(payload, dict):
                   raise SystemExit(f"{label} root must be an object")
-              return payload
+              return payload, raw
 
-          reviewed = read_regular_json(reviewed_name, "reviewed Candidate checkpoint")
-          checkpoint = read_regular_json(checkpoint_name, "terminal checkpoint")
-          evidence = read_regular_json(evidence_name, "terminal evidence")
+          reviewed, _ = read_regular_json(
+              reviewed_name,
+              "reviewed Candidate checkpoint",
+          )
+          checkpoint, _ = read_regular_json(checkpoint_name, "terminal checkpoint")
+          evidence, evidence_raw = read_regular_json(evidence_name, "terminal evidence")
           identity = reviewed.get("identity")
           if checkpoint.get("identity") != identity or evidence.get("identity") != identity:
               raise SystemExit("Candidate cleanup changed the reviewed identity")
@@ -2782,6 +2830,10 @@ jobs:
               "discard-candidate": (
                   {"candidate_ready", "rollback_completed"},
                   "candidate_discarded",
+              ),
+              "discard-failed-candidate": (
+                  {"migrated"},
+                  "candidate_prepare_aborted",
               ),
               "release-candidate": ({"active_updated"}, "candidate_released"),
           }
@@ -2821,6 +2873,28 @@ jobs:
               or final.get("phase") != terminal
           ):
               raise SystemExit("Candidate cleanup journal terminal transition mismatch")
+          if mode == "discard-failed-candidate":
+              reviewed_predecessor = dict(previous)
+              reviewed_predecessor.pop("event", None)
+              if (
+                  reviewed_predecessor != reviewed
+                  or final.get("sequence") != reviewed.get("sequence", 0) + 1
+              ):
+                  raise SystemExit(
+                      "failed Candidate cleanup predecessor differs from reviewed checkpoint"
+                  )
+              binding = re.search(
+                  r"(?:^|[; ])evidence_path=(\S+) "
+                  r"evidence_sha256=([0-9a-f]{64})(?:$|[; ])",
+                  str(reviewed.get("message", "")),
+              )
+              if (
+                  binding is None
+                  or hashlib.sha256(evidence_raw).hexdigest() != binding.group(2)
+              ):
+                  raise SystemExit(
+                      "failed Candidate cleanup evidence differs from reviewed checkpoint"
+                  )
           journal_tail = dict(final)
           journal_tail.pop("event", None)
           if journal_tail != checkpoint:

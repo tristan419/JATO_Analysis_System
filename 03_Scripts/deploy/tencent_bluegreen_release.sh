@@ -510,6 +510,14 @@ resolve_active_slot() {
   fi
 }
 
+require_existing_active_slot_anchor() {
+  if sudo -n test -L "$ACTIVE_SLOT_FILE" \
+    || ! sudo -n test -f "$ACTIVE_SLOT_FILE"; then
+    fail "failed Candidate discard requires an existing regular active-slot anchor"
+    return 1
+  fi
+}
+
 resolve_current_frontend_root() {
   local slot_link="$SLOTS_ROOT/$CURRENT_ACTIVE_SLOT/current"
   if sudo -n test -L "$slot_link"; then
@@ -780,15 +788,17 @@ PY
 checkpoint_phase_status() {
   python3 -B "$CHECKPOINT_HELPER" show --checkpoint "$CHECKPOINT_FILE" \
     | python3 -c \
-      'import json,sys; payload=json.load(sys.stdin); print(payload["phase"], payload["status"])'
+      'import json,sys; payload=json.load(sys.stdin); print(payload["phase"], payload["status"], payload["retryClass"])'
 }
 
 read_checkpoint_phase_status() {
   local state=""
   state="$(checkpoint_phase_status)" || return 1
-  if ! read -r CHECKPOINT_PHASE CHECKPOINT_STATUS <<< "$state" \
-    || [[ -z "$CHECKPOINT_PHASE" || -z "$CHECKPOINT_STATUS" ]]; then
-    fail "release checkpoint phase/status is unavailable"
+  if ! read -r CHECKPOINT_PHASE CHECKPOINT_STATUS CHECKPOINT_RETRY_CLASS \
+    <<< "$state" \
+    || [[ -z "$CHECKPOINT_PHASE" || -z "$CHECKPOINT_STATUS" \
+      || -z "$CHECKPOINT_RETRY_CLASS" ]]; then
+    fail "release checkpoint phase/status/retry class is unavailable"
     return 1
   fi
 }
@@ -2842,6 +2852,7 @@ start_candidate_preview() {
 stop_candidate_preview() {
   local current_load_state=""
   local identity=""
+  local legacy_preview_argv=false
   local nginx_bin=""
   local properties=""
   local runtime_root=""
@@ -2850,17 +2861,22 @@ stop_candidate_preview() {
   nginx_bin="$(candidate_preview_nginx_bin)" || return 1
   runtime_root="$(candidate_preview_runtime_root)" || return 1
   unit="$(candidate_preview_unit_name)" || return 1
+  current_load_state="$(
+    systemctl show "$unit" -p LoadState --value 2>/dev/null || true
+  )"
+  if [[ "$current_load_state" == "not-found" ]]; then
+    candidate_preview_port_is_unused || return 1
+    durable_remove_tree "$CANDIDATE_PREVIEW_STATE_DIR"
+    return
+  fi
+  if [[ "$BLUEGREEN_MODE" == "discard-failed-candidate" ]]; then
+    legacy_preview_argv=true
+  fi
   properties="$(
     systemctl show "$unit" \
       -p LoadState -p UnitFileState -p FragmentPath -p ExecStart \
       -p Environment -p BindsTo -p After 2>/dev/null || true
   )"
-  if [[ "$properties" == *$'LoadState=not-found\n'* ]] \
-    || [[ "$properties" == "LoadState=not-found" ]]; then
-    candidate_preview_port_is_unused || return 1
-    durable_remove_tree "$CANDIDATE_PREVIEW_STATE_DIR"
-    return
-  fi
   python3 -B - \
     "$properties" \
     "$unit" \
@@ -2868,11 +2884,21 @@ stop_candidate_preview() {
     "${SERVICE_PREFIX}${CANDIDATE_SLOT}.service" \
     "$nginx_bin" \
     "$CANDIDATE_PREVIEW_CONFIG" \
-    "$runtime_root/" <<'PY'
+    "$runtime_root/" \
+    "$legacy_preview_argv" <<'PY'
 import shlex
 import sys
 
-raw, unit, identity, candidate_unit, nginx, config, runtime_root = sys.argv[1:]
+(
+    raw,
+    unit,
+    identity,
+    candidate_unit,
+    nginx,
+    config,
+    runtime_root,
+    legacy_preview_argv,
+) = sys.argv[1:]
 properties = {}
 for line in raw.splitlines():
     key, separator, value = line.partition("=")
@@ -2882,10 +2908,15 @@ exec_start = properties.get("ExecStart", "")
 if exec_start.count("argv[]=") != 1:
     raise SystemExit("[ERROR] refusing to stop an ambiguous preview unit")
 try:
-    actual_argv = shlex.split(
-        exec_start.split("argv[]=", 1)[1].split(" ; ", 1)[0]
-    )
     environment_tokens = shlex.split(properties.get("Environment", ""))
+except ValueError as exc:
+    raise SystemExit("[ERROR] refusing to stop a malformed preview unit") from exc
+marker = " ; ignore_errors="
+serialized = exec_start.split("argv[]=", 1)[1]
+if marker not in serialized:
+    raise SystemExit("[ERROR] refusing to stop a malformed preview unit")
+try:
+    actual_argv = shlex.split(serialized.split(marker, 1)[0])
 except ValueError as exc:
     raise SystemExit("[ERROR] refusing to stop a malformed preview unit") from exc
 environment = {}
@@ -2895,6 +2926,9 @@ for token in environment_tokens:
         raise SystemExit("[ERROR] refusing to stop a malformed preview unit")
     environment[key] = value
 expected_argv = [nginx, "-c", config, "-p", runtime_root]
+allowed_argv = [expected_argv]
+if legacy_preview_argv == "true":
+    allowed_argv.append(expected_argv + ["-g", "daemon off;"])
 required = {
     "LoadState": "loaded",
     "UnitFileState": "transient",
@@ -2905,7 +2939,7 @@ for key, expected in required.items():
         raise SystemExit(
             f"[ERROR] refusing to stop a preview with unexpected {key}"
         )
-if actual_argv != expected_argv:
+if actual_argv not in allowed_argv:
     raise SystemExit("[ERROR] refusing to stop a preview with unexpected ExecStart")
 if environment.get("JATO_CANDIDATE_PREVIEW_ID") != identity:
     raise SystemExit("[ERROR] refusing to stop a preview with unexpected identity")
@@ -3992,6 +4026,90 @@ discard_candidate_exit_handler() {
   exit "$rc"
 }
 
+discard_failed_candidate() {
+  local binding=""
+  local expected_active_slot=""
+  local expected_candidate_slot=""
+  require_environment
+  assert_inherited_production_lock
+  require_existing_active_slot_anchor
+  ensure_bluegreen_state_root
+  ensure_bluegreen_runtime_roots
+  assert_no_active_switch_unit
+  if [[ -e "$DEPLOYMENT_MARKER" || -L "$DEPLOYMENT_MARKER" ]] \
+    || [[ -e "$SCHEDULER_STATE_FILE" || -L "$SCHEDULER_STATE_FILE" ]] \
+    || [[ -e "$NGINX_PREIMAGE_DIR" || -L "$NGINX_PREIMAGE_DIR" ]]; then
+    fail "failed Candidate discard refuses Active, scheduler, or Nginx reconciliation state"
+    return 1
+  fi
+  resolve_active_slot
+  expected_active_slot="$CURRENT_ACTIVE_SLOT"
+  expected_candidate_slot="$CANDIDATE_SLOT"
+  if ! read_checkpoint_phase_status; then
+    return 1
+  fi
+  case "$CHECKPOINT_PHASE:$CHECKPOINT_STATUS:$CHECKPOINT_RETRY_CLASS" in
+    migrated:completed:automatic)
+      if resolve_existing_candidate_slot 2>/dev/null; then
+        if [[ "$CURRENT_ACTIVE_SLOT" != "$expected_active_slot" \
+          || "$CANDIDATE_SLOT" != "$expected_candidate_slot" ]]; then
+          fail "failed Candidate slot identity differs from the durable Active anchor"
+          return 1
+        fi
+      else
+        CURRENT_ACTIVE_SLOT="$expected_active_slot"
+        CANDIDATE_SLOT="$expected_candidate_slot"
+        if ! candidate_cleanup_is_complete; then
+          fail "failed Candidate is neither exact live runtime nor exact restored preimage"
+          return 1
+        fi
+      fi
+      binding="$(evidence_binding)" || return 1
+      previous_active_is_exact_for_candidate_discard \
+        || fail "previous successful Active is not exact before failed Candidate discard" \
+        || return 1
+      if ! candidate_preview_is_released; then
+        stop_candidate_preview || return 1
+      fi
+      if ! candidate_cleanup_is_complete; then
+        restore_candidate_runtime_preimage || return 1
+      fi
+      candidate_release_is_complete \
+        || fail "failed Candidate cleanup did not reach exact quiescent state" \
+        || return 1
+      previous_active_is_exact_for_candidate_discard \
+        || fail "previous successful Active changed during failed Candidate discard" \
+        || return 1
+      settle_candidate_checkpoint_after_cleanup || return 1
+      ;;
+    candidate_prepare_aborted:completed:automatic)
+      previous_active_is_exact_for_candidate_discard \
+        || fail "aborted Candidate checkpoint no longer has the exact previous Active" \
+        || return 1
+      candidate_release_is_complete \
+        || fail "aborted Candidate checkpoint no longer has exact quiescent runtime" \
+        || return 1
+      ;;
+    *)
+      fail \
+        "checkpoint $CHECKPOINT_PHASE/$CHECKPOINT_STATUS/$CHECKPOINT_RETRY_CLASS cannot discard a failed Candidate"
+      return 1
+      ;;
+  esac
+  if ! read_checkpoint_phase_status; then
+    return 1
+  fi
+  if [[ "$CHECKPOINT_PHASE:$CHECKPOINT_STATUS:$CHECKPOINT_RETRY_CLASS" \
+    != "candidate_prepare_aborted:completed:automatic" ]]; then
+    fail "failed Candidate discard did not reach candidate_prepare_aborted/completed/automatic"
+    return 1
+  fi
+  printf \
+    '[INFO] Failed Candidate discarded: sha=%s active=%s candidate=%s; public Active was unchanged; %s\n' \
+    "$DEPLOY_COMMIT_SHA" "$CURRENT_ACTIVE_SLOT" "$CANDIDATE_SLOT" \
+    "${binding:-already-settled}"
+}
+
 discard_candidate() {
   local binding=""
   require_environment
@@ -4789,7 +4907,8 @@ candidate_cleanup_is_complete() {
 }
 
 mark_pre_switch_cleanup_required() {
-  if [[ "$BLUEGREEN_MODE" == "prepare-candidate" ]]; then
+  if [[ "$BLUEGREEN_MODE" == "prepare-candidate" \
+    || "$BLUEGREEN_MODE" == "discard-failed-candidate" ]]; then
     echo \
       "[ERROR] Candidate cleanup needs inspection; no production maintenance marker was written" \
       >&2
@@ -5668,6 +5787,14 @@ case "$BLUEGREEN_MODE" in
     trap 'exit 130' INT
     trap 'exit 143' TERM
     discard_candidate
+    trap - EXIT HUP INT TERM
+    ;;
+  discard-failed-candidate)
+    trap discard_candidate_exit_handler EXIT
+    trap 'exit 129' HUP
+    trap 'exit 130' INT
+    trap 'exit 143' TERM
+    discard_failed_candidate
     trap - EXIT HUP INT TERM
     ;;
   release-candidate)

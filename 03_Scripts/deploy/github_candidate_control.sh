@@ -3,7 +3,7 @@ set -Eeuo pipefail
 
 CONTROL_MODE="${1:-}"
 case "$CONTROL_MODE" in
-  approve-candidate-to-active|discard-candidate|release-candidate|restore-previous-active) ;;
+  approve-candidate-to-active|discard-candidate|discard-failed-candidate|release-candidate|restore-previous-active) ;;
   capture-canonical-cleanup) ;;
   *)
     echo "[ERROR] Unsupported Candidate control mode: $CONTROL_MODE" >&2
@@ -66,7 +66,6 @@ if [[ "$CONTROL_MODE" != "capture-canonical-cleanup" ]]; then
   for candidate_name in \
     CANDIDATE_ARCHIVE_BYTES \
     CANDIDATE_ARCHIVE_SHA256 \
-    CANDIDATE_ATTESTATION_SHA256 \
     CANDIDATE_COMMIT_SHA \
     CANDIDATE_FRONTEND_ARTIFACT_CHECKSUM \
     CANDIDATE_FRONTEND_ARTIFACT_IDENTITY \
@@ -76,7 +75,6 @@ if [[ "$CONTROL_MODE" != "capture-canonical-cleanup" ]]; then
     CANDIDATE_GITHUB_ARTIFACT_DIGEST \
     CANDIDATE_GITHUB_ARTIFACT_ID \
     CANDIDATE_HANDOFF_SOURCE \
-    CANDIDATE_PREVIEW_PORT \
     CANDIDATE_RELEASE_ID \
     CANDIDATE_REMOTE_ARCHIVE_PATH \
     CANDIDATE_RUN_ATTEMPT \
@@ -84,14 +82,27 @@ if [[ "$CONTROL_MODE" != "capture-canonical-cleanup" ]]; then
     CANDIDATE_SERVER_CHECKPOINT_PATH \
     CANDIDATE_SERVER_CHECKPOINT_SHA256 \
     CANDIDATE_SERVER_EVIDENCE_PATH \
-    CANDIDATE_SERVER_EVIDENCE_SHA256 \
-    CANDIDATE_SLOT
+    CANDIDATE_SERVER_EVIDENCE_SHA256
   do
     if [[ -z "${!candidate_name:-}" ]]; then
       echo "[ERROR] $candidate_name is missing from the verified Candidate handoff" >&2
       exit 1
     fi
   done
+  if [[ "$CONTROL_MODE" == "discard-failed-candidate" ]]; then
+    : "${CANDIDATE_SERVER_REVIEWED_CHECKPOINT_B64:?Reviewed failed Candidate checkpoint is required}"
+  else
+    for reviewed_candidate_name in \
+      CANDIDATE_ATTESTATION_SHA256 \
+      CANDIDATE_PREVIEW_PORT \
+      CANDIDATE_SLOT
+    do
+      if [[ -z "${!reviewed_candidate_name:-}" ]]; then
+        echo "[ERROR] $reviewed_candidate_name is missing from the verified Candidate handoff" >&2
+        exit 1
+      fi
+    done
+  fi
 fi
 
 [[ "$AUTH_MODE" == "key" || "$AUTH_MODE" == "password" ]]
@@ -99,14 +110,19 @@ fi
 [[ "$GITHUB_RUN_ATTEMPT" =~ ^[1-9][0-9]*$ ]]
 if [[ "$CONTROL_MODE" != "capture-canonical-cleanup" ]]; then
   [[ "$CANDIDATE_HANDOFF_SOURCE" == "github-artifact" \
-    || "$CANDIDATE_HANDOFF_SOURCE" == "canonical-server" ]]
+    || "$CANDIDATE_HANDOFF_SOURCE" == "canonical-server" \
+    || "$CANDIDATE_HANDOFF_SOURCE" == "failed-github-artifact" ]]
   [[ "$CANDIDATE_COMMIT_SHA" =~ ^[0-9a-f]{40}$ ]]
   [[ "$CANDIDATE_ARCHIVE_SHA256" =~ ^[0-9a-f]{64}$ ]]
-  [[ "$CANDIDATE_ATTESTATION_SHA256" =~ ^[0-9a-f]{64}$ ]]
   [[ "$CANDIDATE_SERVER_CHECKPOINT_SHA256" =~ ^[0-9a-f]{64}$ ]]
   [[ "$CANDIDATE_SERVER_EVIDENCE_SHA256" =~ ^[0-9a-f]{64}$ ]]
-  [[ "$CANDIDATE_SLOT" == "8000" || "$CANDIDATE_SLOT" == "8001" ]]
-  [[ "$CANDIDATE_PREVIEW_PORT" == "18002" ]]
+  if [[ "$CONTROL_MODE" == "discard-failed-candidate" ]]; then
+    [[ "$CANDIDATE_HANDOFF_SOURCE" == "failed-github-artifact" ]]
+  else
+    [[ "$CANDIDATE_ATTESTATION_SHA256" =~ ^[0-9a-f]{64}$ ]]
+    [[ "$CANDIDATE_SLOT" == "8000" || "$CANDIDATE_SLOT" == "8001" ]]
+    [[ "$CANDIDATE_PREVIEW_PORT" == "18002" ]]
+  fi
 fi
 
 SSH_PORT="${SSH_PORT:-22}"
@@ -666,7 +682,12 @@ fi
 
 archive_validator="03_Scripts/deploy/validate_release_archive.py"
 outer_release="03_Scripts/deploy/fullstack_remote_release.sh"
-for local_control_file in "$archive_validator" "$outer_release"; do
+failed_candidate_controller="03_Scripts/deploy/tencent_bluegreen_release.sh"
+local_control_files=("$archive_validator" "$outer_release")
+if [[ "$CONTROL_MODE" == "discard-failed-candidate" ]]; then
+  local_control_files+=("$failed_candidate_controller")
+fi
+for local_control_file in "${local_control_files[@]}"; do
   if [[ -L "$local_control_file" ]] || [[ ! -f "$local_control_file" ]]; then
     echo "[ERROR] Candidate control source is missing or unsafe: $local_control_file" >&2
     exit 1
@@ -674,6 +695,14 @@ for local_control_file in "$archive_validator" "$outer_release"; do
 done
 archive_validator_sha256="$(sha256sum "$archive_validator" | awk '{print $1}')"
 archive_validator_b64="$(base64 -w 0 "$archive_validator")"
+failed_candidate_controller_sha256=""
+failed_candidate_controller_b64=""
+if [[ "$CONTROL_MODE" == "discard-failed-candidate" ]]; then
+  failed_candidate_controller_sha256="$(
+    sha256sum "$failed_candidate_controller" | awk '{print $1}'
+  )"
+  failed_candidate_controller_b64="$(base64 -w 0 "$failed_candidate_controller")"
+fi
 control_payload="$(mktemp "${RUNNER_TEMP:-/tmp}/candidate-control.XXXXXX")"
 umask 077
 chmod 600 "$control_payload"
@@ -683,6 +712,12 @@ write_remote_export() {
   local name="$1"
   local value="$2"
   printf 'export %s=%q\n' "$name" "$value" >> "$control_payload"
+}
+
+write_remote_assignment() {
+  local name="$1"
+  local value="$2"
+  printf '%s=%q\n' "$name" "$value" >> "$control_payload"
 }
 
 write_remote_export DEPLOY_SERVER_NAME "$DEPLOY_SERVER_NAME"
@@ -697,11 +732,23 @@ write_remote_export DEPLOY_RUN_ID "$CANDIDATE_RUN_ID"
 write_remote_export DEPLOY_RUN_ATTEMPT "$CANDIDATE_RUN_ATTEMPT"
 write_remote_export DEPLOY_APPROVAL_RUN_ID "$GITHUB_RUN_ID"
 write_remote_export DEPLOY_APPROVAL_RUN_ATTEMPT "$GITHUB_RUN_ATTEMPT"
-write_remote_export DEPLOY_CANDIDATE_ATTESTATION_SHA256 \
-  "$CANDIDATE_ATTESTATION_SHA256"
 write_remote_export DEPLOY_CANDIDATE_HANDOFF_SOURCE "$CANDIDATE_HANDOFF_SOURCE"
-write_remote_export DEPLOY_CANDIDATE_SLOT "$CANDIDATE_SLOT"
-write_remote_export DEPLOY_CANDIDATE_PREVIEW_PORT "$CANDIDATE_PREVIEW_PORT"
+if [[ "$CONTROL_MODE" == "discard-failed-candidate" ]]; then
+  write_remote_export DEPLOY_CANDIDATE_REVIEWED_CHECKPOINT_B64 \
+    "$CANDIDATE_SERVER_REVIEWED_CHECKPOINT_B64"
+  # Keep the large controller payload out of the environment inherited by
+  # external commands. Bash receives it over stdin, verifies it, materializes
+  # one transient file, and unsets it before handing off to the controller.
+  write_remote_assignment DISCARD_FAILED_CANDIDATE_CONTROLLER_B64 \
+    "$failed_candidate_controller_b64"
+  write_remote_export DISCARD_FAILED_CANDIDATE_CONTROLLER_SHA256 \
+    "$failed_candidate_controller_sha256"
+else
+  write_remote_export DEPLOY_CANDIDATE_ATTESTATION_SHA256 \
+    "$CANDIDATE_ATTESTATION_SHA256"
+  write_remote_export DEPLOY_CANDIDATE_SLOT "$CANDIDATE_SLOT"
+  write_remote_export DEPLOY_CANDIDATE_PREVIEW_PORT "$CANDIDATE_PREVIEW_PORT"
+fi
 write_remote_export DEPLOY_CANDIDATE_SERVER_CHECKPOINT_PATH \
   "$CANDIDATE_SERVER_CHECKPOINT_PATH"
 write_remote_export DEPLOY_CANDIDATE_SERVER_CHECKPOINT_SHA256 \
