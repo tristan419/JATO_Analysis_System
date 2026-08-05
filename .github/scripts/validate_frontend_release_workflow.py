@@ -55,6 +55,7 @@ CLEANUP_RELEASE_CONDITION = (
     MAIN_CONDITION
     + " && github.event_name == 'workflow_dispatch'"
     + " && (inputs.release_mode == 'discard-candidate' || "
+    + "inputs.release_mode == 'discard-failed-candidate' || "
     + "inputs.release_mode == 'release-candidate')"
     + " && needs.release_coordination_guard.outputs.release-action == 'deploy'"
 )
@@ -274,6 +275,7 @@ def assert_main_only_production_workflow(workflow: Mapping[str, Any]) -> None:
             "prepare-candidate",
             "approve-candidate-to-active",
             "discard-candidate",
+            "discard-failed-candidate",
             "release-candidate",
         ]
     ):
@@ -1272,9 +1274,10 @@ def assert_release_checkpoint_contract(workflow: Mapping[str, Any]) -> None:
         'test "$CONFIRM_CANDIDATE_CLEANUP" = "true"',
         "Cleaning an exact reviewed prior-main Candidate",
         '"status": "completed"',
-        'mode == "discard-candidate"',
+        '"discard-candidate": {"success", "failure"}',
+        '"discard-failed-candidate": {"failure"}',
         '{"success", "failure"}',
-        'else {"success"}',
+        '"release-candidate": {"success"}',
         'run.get("conclusion") not in allowed_conclusions',
         '"head_branch": "main"',
         'source = "canonical-server"',
@@ -1283,8 +1286,14 @@ def assert_release_checkpoint_contract(workflow: Mapping[str, Any]) -> None:
         "--cleanup-mode \"$RELEASE_MODE\"",
         "reviewed-candidate.json",
         "verify_candidate_handoff.py",
+        "--failed-server-checkpoint",
+        "failed Candidate discard requires exact non-expired GitHub artifacts",
         'github_candidate_control.sh "$RELEASE_MODE"',
         '{"candidate_ready", "rollback_completed"}',
+        '"discard-failed-candidate": (',
+        '"candidate_prepare_aborted"',
+        "failed Candidate cleanup predecessor differs from reviewed checkpoint",
+        "failed Candidate cleanup evidence differs from reviewed checkpoint",
         '"release-candidate": ({"active_updated"}, "candidate_released")',
         'previous.get("phase") not in predecessors',
         "Candidate cleanup journal identity/sequence mismatch",
@@ -1361,7 +1370,8 @@ def assert_release_checkpoint_contract(workflow: Mapping[str, Any]) -> None:
         raise AssertionError("normal Candidate cleanup must retain the artifact path")
     for canonical_step in (canonical_capture, canonical_verify):
         if canonical_step.get("if") != (
-            "${{ steps.cleanup_handoff.outputs.source == 'canonical-server' }}"
+            "${{ steps.cleanup_handoff.outputs.source == 'canonical-server' && "
+            "inputs.release_mode != 'discard-failed-candidate' }}"
         ):
             raise AssertionError(
                 "canonical Candidate cleanup must require the server handoff source"
@@ -1470,8 +1480,8 @@ def assert_server_consumes_only_prebuilt_dist() -> None:
             if forbidden in script:
                 raise AssertionError(f"{path} contains forbidden build command {forbidden!r}")
     for required in (
-        "approve-candidate-to-active|discard-candidate|release-candidate|"
-        "restore-previous-active",
+        "approve-candidate-to-active|discard-candidate|"
+        "discard-failed-candidate|release-candidate|restore-previous-active",
         "capture-canonical-cleanup",
         'source "$CANDIDATE_VERIFIED_ENV"',
         'write_remote_export DEPLOY_APPROVAL_RUN_ID "$GITHUB_RUN_ID"',
@@ -1485,6 +1495,9 @@ def assert_server_consumes_only_prebuilt_dist() -> None:
         "DEPLOY_CANDIDATE_SERVER_EVIDENCE_PATH",
         "DEPLOY_CANDIDATE_SERVER_EVIDENCE_SHA256",
         'write_remote_export DEPLOY_CANDIDATE_HANDOFF_SOURCE',
+        "CANDIDATE_SERVER_REVIEWED_CHECKPOINT_B64",
+        "write_remote_assignment DISCARD_FAILED_CANDIDATE_CONTROLLER_B64",
+        "failed_candidate_controller_sha256",
         'write_remote_export DEPLOY_CANDIDATE_SLOT',
         'write_remote_export DEPLOY_CANDIDATE_PREVIEW_PORT',
         "fcntl.flock(lock_descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)",
@@ -1504,6 +1517,10 @@ def assert_server_consumes_only_prebuilt_dist() -> None:
             raise AssertionError(
                 f"Candidate control must not build, upload or publish intl: {forbidden}"
             )
+    if "write_remote_export DISCARD_FAILED_CANDIDATE_CONTROLLER_B64" in candidate_control:
+        raise AssertionError(
+            "Large failed-Candidate controller payload must not enter child environments"
+        )
     attested_server_state_tokens = (
         "verify_attested_candidate_paths_and_evidence",
         "verify_attested_candidate_checkpoint_for_mode",
@@ -1513,6 +1530,10 @@ def assert_server_consumes_only_prebuilt_dist() -> None:
         "approve-candidate-to-active:candidate_ready) "
         "require_original_checkpoint=true",
         "discard-candidate:candidate_ready) require_original_checkpoint=true",
+        "discard-failed-candidate:migrated) require_original_checkpoint=true",
+        "verify_failed_candidate_checkpoint_journal",
+        "DEPLOY_CANDIDATE_REVIEWED_CHECKPOINT_B64",
+        "DISCARD_FAILED_CANDIDATE_CONTROLLER_SHA256",
         'actual_checkpoint_sha256" != "$DEPLOY_CANDIDATE_SERVER_CHECKPOINT_SHA256',
     )
     missing_attested_server_state = [
@@ -1538,7 +1559,7 @@ def assert_server_consumes_only_prebuilt_dist() -> None:
         checkpoint_state_index,
     )
     bluegreen_handoff_index = remote_release.index(
-        'bash "$RELEASE_WORKTREE/03_Scripts/deploy/tencent_bluegreen_release.sh"',
+        'bash "$BLUEGREEN_CONTROLLER" "$DEPLOY_BLUEGREEN_MODE"',
         checkpoint_binding_index,
     )
     if not (
@@ -1747,10 +1768,7 @@ def assert_server_consumes_only_prebuilt_dist() -> None:
         )
     if "--materialize-dir \"$PREBUILT_FRONTEND_DIR\"" not in remote_release:
         raise AssertionError("remote release must materialize only the verified artifact")
-    handoff = (
-        'bash "$RELEASE_WORKTREE/03_Scripts/deploy/'
-        'tencent_bluegreen_release.sh"'
-    )
+    handoff = 'bash "$BLUEGREEN_CONTROLLER" "$DEPLOY_BLUEGREEN_MODE"'
     if handoff not in remote_release:
         raise AssertionError("production remote release must use Tencent blue/green")
     for candidate_mode_token in (
@@ -1779,7 +1797,8 @@ def assert_server_consumes_only_prebuilt_dist() -> None:
         'DEPLOY_BLUEGREEN_MODE="${DEPLOY_BLUEGREEN_MODE:-prepare-candidate}"',
         (
             "prepare-candidate|approve-candidate-to-active|"
-            "discard-candidate|release-candidate|restore-previous-active"
+            "discard-candidate|discard-failed-candidate|release-candidate|"
+            "restore-previous-active"
         ),
         'if [[ "$DEPLOY_BLUEGREEN_MODE" != "prepare-candidate" ]]; then',
         "DEPLOY_CANDIDATE_ATTESTATION_SHA256",

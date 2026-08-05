@@ -233,9 +233,7 @@ def _candidate_previous_metadata_path(
 
 def test_outer_unconditionally_hands_off_without_legacy_live_tree_mutation() -> None:
     outer = OUTER.read_text(encoding="utf-8")
-    handoff = outer.index(
-        'bash "$RELEASE_WORKTREE/03_Scripts/deploy/tencent_bluegreen_release.sh"',
-    )
+    handoff = outer.index('bash "$BLUEGREEN_CONTROLLER" "$DEPLOY_BLUEGREEN_MODE"')
     handoff_exit = outer.index('exit "$BLUEGREEN_RC"', handoff)
 
     assert handoff < handoff_exit
@@ -244,6 +242,11 @@ def test_outer_unconditionally_hands_off_without_legacy_live_tree_mutation() -> 
     assert outer.rstrip().endswith('exit "$BLUEGREEN_RC"')
     assert "03_Scripts/deploy/jato_quiescence_gate.py" in outer
     assert "03_Scripts/deploy/tencent_bluegreen_release.sh" in outer
+    assert (
+        'BLUEGREEN_CONTROLLER="$RELEASE_WORKTREE/03_Scripts/deploy/'
+        'tencent_bluegreen_release.sh"'
+    ) in outer
+    assert "DISCARD_FAILED_CANDIDATE_CONTROLLER_SHA256" in outer
     assert "jato-fullstack-backend-slot.env.example" in outer
 
 
@@ -597,7 +600,8 @@ def test_prepare_candidate_stops_at_manual_review_without_public_mutation() -> N
     assert "daemon off;" in preview_template
     assert 'daemon off;' not in preview
     assert 'daemon off;' not in preview_verify
-    assert 'daemon off;' not in preview_stop
+    assert 'allowed_argv.append(expected_argv + ["-g", "daemon off;"])' in preview_stop
+    assert 'legacy_preview_argv == "true"' in preview_stop
     assert "--wait" not in preview
     assert '"$DEPLOY_ARCHIVE_SHA256"' in preview_render
     assert '"archiveSha256": archive_sha256' in preview_render
@@ -1352,6 +1356,274 @@ def test_discard_candidate_mutates_only_candidate_runtime() -> None:
     ):
         assert forbidden not in discard
     assert "discard-candidate)" in script
+
+
+def test_discard_failed_candidate_is_candidate_only_and_explicit() -> None:
+    script = CONTROLLER.read_text(encoding="utf-8")
+    discard = _shell_function(script, "discard_failed_candidate")
+
+    assert "migrated:completed:automatic" in discard
+    assert "candidate_prepare_aborted:completed:automatic" in discard
+    assert "previous_active_is_exact_for_candidate_discard" in discard
+    assert "stop_candidate_preview" in discard
+    assert "restore_candidate_runtime_preimage" in discard
+    assert "candidate_release_is_complete" in discard
+    assert "settle_candidate_checkpoint_after_cleanup" in discard
+    assert discard.index("require_existing_active_slot_anchor") < discard.index(
+        "ensure_bluegreen_state_root",
+    )
+    assert discard.index("require_existing_active_slot_anchor") < discard.index(
+        "resolve_active_slot",
+    )
+    for forbidden in (
+        "restore_nginx_preimage",
+        "restore_old_static_boot_owner",
+        "pause_schedulers",
+        "resume_schedulers",
+        "mark_maintenance_required",
+        "clear_maintenance_marker",
+        "systemctl restart",
+        "systemctl reload nginx",
+        "atomic_symlink",
+        "atomic_text",
+        "assert_no_database_migration_delta",
+    ):
+        assert forbidden not in discard
+    assert "discard-failed-candidate)" in script
+
+
+def test_discard_failed_candidate_rejects_missing_active_slot_without_mutation(
+    tmp_path: Path,
+) -> None:
+    trace = tmp_path / "missing-active-slot.trace"
+    result = _run_controller_harness(
+        tmp_path,
+        f"""
+TRACE={trace}
+sudo() {{
+  if [[ "$1" == -n ]]; then shift; fi
+  "$@"
+}}
+ensure_bluegreen_state_root() {{ printf 'unexpected-state-write\n' >> "$TRACE"; }}
+stop_candidate_preview() {{ printf 'unexpected-preview-stop\n' >> "$TRACE"; }}
+restore_candidate_runtime_preimage() {{ printf 'unexpected-restore\n' >> "$TRACE"; }}
+require_existing_active_slot_anchor
+""",
+    )
+
+    assert result.returncode != 0
+    assert "requires an existing regular active-slot anchor" in result.stderr
+    assert not trace.exists()
+
+
+def test_discard_failed_candidate_orders_active_checks_and_settlement(
+    tmp_path: Path,
+) -> None:
+    trace = tmp_path / "discard-failed.trace"
+    result = _run_controller_harness(
+        tmp_path,
+        f"""
+TRACE={trace}
+PHASE=migrated
+PREVIEW_RELEASED=false
+CANDIDATE_CLEAN=false
+record() {{ printf '%s\n' "$1" >> "$TRACE"; }}
+require_environment() {{ record require; }}
+assert_inherited_production_lock() {{ record lock; }}
+require_existing_active_slot_anchor() {{ record active-slot-anchor; }}
+ensure_bluegreen_state_root() {{ record state-root; }}
+ensure_bluegreen_runtime_roots() {{ record runtime-roots; }}
+assert_no_active_switch_unit() {{ record no-switch; }}
+resolve_active_slot() {{ CURRENT_ACTIVE_SLOT=8000; CANDIDATE_SLOT=8001; }}
+resolve_existing_candidate_slot() {{ CURRENT_ACTIVE_SLOT=8000; CANDIDATE_SLOT=8001; }}
+read_checkpoint_phase_status() {{
+  CHECKPOINT_PHASE="$PHASE"
+  CHECKPOINT_STATUS=completed
+  CHECKPOINT_RETRY_CLASS=automatic
+}}
+evidence_binding() {{
+  printf 'evidence_path=/state/failed.evidence.json evidence_sha256={'f' * 64}'
+}}
+previous_active_is_exact_for_candidate_discard() {{ record active-exact; }}
+candidate_preview_is_released() {{ [[ "$PREVIEW_RELEASED" == true ]]; }}
+stop_candidate_preview() {{ record preview-stopped; PREVIEW_RELEASED=true; }}
+candidate_cleanup_is_complete() {{ [[ "$CANDIDATE_CLEAN" == true ]]; }}
+restore_candidate_runtime_preimage() {{
+  record candidate-restored
+  CANDIDATE_CLEAN=true
+}}
+candidate_release_is_complete() {{
+  record candidate-release-exact
+  [[ "$PREVIEW_RELEASED" == true && "$CANDIDATE_CLEAN" == true ]]
+}}
+settle_candidate_checkpoint_after_cleanup() {{
+  record checkpoint:candidate_prepare_aborted:completed:automatic
+  PHASE=candidate_prepare_aborted
+}}
+discard_failed_candidate
+printf 'phase=%s\n' "$PHASE"
+""",
+        env_overrides={"NGINX_PREIMAGE_DIR": str(tmp_path / "nginx-preimage")},
+    )
+    events = trace.read_text(encoding="utf-8").splitlines()
+
+    assert result.returncode == 0, result.stderr + result.stdout
+    assert "phase=candidate_prepare_aborted" in result.stdout
+    active_checks = [
+        index for index, event in enumerate(events) if event == "active-exact"
+    ]
+    assert len(active_checks) == 2
+    assert active_checks[0] < events.index("preview-stopped")
+    assert events.index("preview-stopped") < events.index("candidate-restored")
+    assert events.index("candidate-restored") < events.index(
+        "candidate-release-exact",
+    )
+    assert events.index("candidate-release-exact") < active_checks[1]
+    assert active_checks[1] < events.index(
+        "checkpoint:candidate_prepare_aborted:completed:automatic",
+    )
+
+
+def test_discard_failed_candidate_active_precheck_failure_is_zero_mutation(
+    tmp_path: Path,
+) -> None:
+    trace = tmp_path / "discard-failed-rejected.trace"
+    result = _run_controller_harness(
+        tmp_path,
+        f"""
+TRACE={trace}
+record() {{ printf '%s\n' "$1" >> "$TRACE"; }}
+require_environment() {{ :; }}
+assert_inherited_production_lock() {{ :; }}
+require_existing_active_slot_anchor() {{ :; }}
+ensure_bluegreen_state_root() {{ :; }}
+ensure_bluegreen_runtime_roots() {{ :; }}
+assert_no_active_switch_unit() {{ :; }}
+resolve_active_slot() {{ CURRENT_ACTIVE_SLOT=8000; CANDIDATE_SLOT=8001; }}
+resolve_existing_candidate_slot() {{ CURRENT_ACTIVE_SLOT=8000; CANDIDATE_SLOT=8001; }}
+read_checkpoint_phase_status() {{
+  CHECKPOINT_PHASE=migrated
+  CHECKPOINT_STATUS=completed
+  CHECKPOINT_RETRY_CLASS=automatic
+}}
+evidence_binding() {{ printf 'evidence'; }}
+previous_active_is_exact_for_candidate_discard() {{ return 1; }}
+candidate_preview_is_released() {{ record unexpected-preview-check; }}
+stop_candidate_preview() {{ record unexpected-preview-stop; }}
+restore_candidate_runtime_preimage() {{ record unexpected-restore; }}
+settle_candidate_checkpoint_after_cleanup() {{ record unexpected-settle; }}
+discard_failed_candidate
+""",
+        env_overrides={"NGINX_PREIMAGE_DIR": str(tmp_path / "nginx-preimage")},
+    )
+
+    assert result.returncode != 0
+    assert not trace.exists() or trace.read_text(encoding="utf-8") == ""
+
+
+def test_discard_failed_candidate_aborted_retry_is_read_only(tmp_path: Path) -> None:
+    trace = tmp_path / "discard-failed-idempotent.trace"
+    result = _run_controller_harness(
+        tmp_path,
+        f"""
+TRACE={trace}
+record() {{ printf '%s\n' "$1" >> "$TRACE"; }}
+require_environment() {{ :; }}
+assert_inherited_production_lock() {{ :; }}
+require_existing_active_slot_anchor() {{ :; }}
+ensure_bluegreen_state_root() {{ :; }}
+ensure_bluegreen_runtime_roots() {{ :; }}
+assert_no_active_switch_unit() {{ :; }}
+resolve_active_slot() {{ CURRENT_ACTIVE_SLOT=8000; CANDIDATE_SLOT=8001; }}
+read_checkpoint_phase_status() {{
+  CHECKPOINT_PHASE=candidate_prepare_aborted
+  CHECKPOINT_STATUS=completed
+  CHECKPOINT_RETRY_CLASS=automatic
+}}
+previous_active_is_exact_for_candidate_discard() {{ record active-exact; }}
+candidate_release_is_complete() {{ record candidate-release-exact; }}
+stop_candidate_preview() {{ record unexpected-preview-stop; }}
+restore_candidate_runtime_preimage() {{ record unexpected-restore; }}
+settle_candidate_checkpoint_after_cleanup() {{ record unexpected-settle; }}
+discard_failed_candidate
+""",
+        env_overrides={"NGINX_PREIMAGE_DIR": str(tmp_path / "nginx-preimage")},
+    )
+    events = trace.read_text(encoding="utf-8").splitlines()
+
+    assert result.returncode == 0, result.stderr + result.stdout
+    assert events == ["active-exact", "candidate-release-exact"]
+
+
+@pytest.mark.parametrize(
+    ("mode", "expected_success"),
+    [("discard-failed-candidate", True), ("discard-candidate", False)],
+)
+def test_legacy_preview_argv_is_only_accepted_for_failed_discard(
+    tmp_path: Path,
+    mode: str,
+    expected_success: bool,
+) -> None:
+    trace = tmp_path / f"legacy-preview-{mode}.trace"
+    preview_config = tmp_path / "state/candidate-preview/nginx.conf"
+    legacy_exec_start = (
+        "ExecStart={ path=/usr/sbin/nginx ; argv[]=/usr/sbin/nginx "
+        f"-c {preview_config} -p /run/jato-preview/ -g 'daemon off;' "
+        "; ignore_errors=no ; }"
+    )
+    result = _run_controller_harness(
+        tmp_path,
+        f"""
+TRACE={trace}
+BLUEGREEN_MODE={mode}
+CURRENT_ACTIVE_SLOT=8000
+CANDIDATE_SLOT=8001
+candidate_preview_identity() {{ printf 'candidate-id'; }}
+candidate_preview_nginx_bin() {{ printf '/usr/sbin/nginx'; }}
+candidate_preview_runtime_root() {{ printf '/run/jato-preview'; }}
+candidate_preview_unit_name() {{ printf 'jato-candidate-preview.service'; }}
+candidate_preview_port_is_unused() {{ return 0; }}
+durable_remove_tree() {{ printf 'state-removed\n' >> "$TRACE"; }}
+systemctl() {{
+  if [[ "$1" == show && "$*" == *"--value"* ]]; then
+    if [[ -f "$TRACE.collected" ]]; then
+      printf 'not-found\n'
+    else
+      printf 'loaded\n'
+    fi
+    return 0
+  fi
+  if [[ "$1" == show ]]; then
+    cat <<'EOF'
+LoadState=loaded
+UnitFileState=transient
+FragmentPath=/run/systemd/transient/jato-candidate-preview.service
+{legacy_exec_start}
+Environment=JATO_CANDIDATE_PREVIEW_ID=candidate-id
+BindsTo=jato-fullstack-backend@8001.service
+After=jato-fullstack-backend@8001.service
+MainPID=12345
+EOF
+    return 0
+  fi
+  if [[ "$1" == stop ]]; then
+    printf 'stopped\n' >> "$TRACE"
+    : > "$TRACE.collected"
+  fi
+}}
+sudo() {{
+  if [[ "$1" == -n ]]; then shift; fi
+  "$@"
+}}
+CANDIDATE_PREVIEW_CONFIG={preview_config}
+CANDIDATE_PREVIEW_STATE_DIR={tmp_path / 'state/candidate-preview'}
+stop_candidate_preview
+""",
+    )
+
+    assert (result.returncode == 0) is expected_success, result.stderr + result.stdout
+    events = trace.read_text(encoding="utf-8").splitlines() if trace.exists() else []
+    assert ("stopped" in events) is expected_success
 
 
 def test_discard_candidate_is_ordered_and_binds_evidence(tmp_path: Path) -> None:

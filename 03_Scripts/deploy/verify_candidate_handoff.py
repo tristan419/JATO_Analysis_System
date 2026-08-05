@@ -77,6 +77,37 @@ def _load_artifacts(path: Path) -> list[dict[str, Any]]:
     return artifacts
 
 
+def _read_regular_jsonl(
+    path: Path,
+    label: str,
+    *,
+    maximum_bytes: int = 1_048_576,
+) -> list[dict[str, Any]]:
+    metadata = path.lstat()
+    if path.is_symlink() or not stat.S_ISREG(metadata.st_mode):
+        raise ValueError(f"{label} must be a regular non-symlink file")
+    raw = path.read_bytes()
+    if not raw or len(raw) > maximum_bytes:
+        raise ValueError(f"{label} has an invalid size")
+    records: list[dict[str, Any]] = []
+    for line_number, line in enumerate(raw.decode("utf-8").splitlines(), start=1):
+        if not line:
+            raise ValueError(f"{label} contains an empty line")
+        record = json.loads(line)
+        if not isinstance(record, dict):
+            raise ValueError(f"{label} line {line_number} must be an object")
+        records.append(record)
+    return records
+
+
+def _require_empty_regular_file(path: Path, label: str) -> None:
+    metadata = path.lstat()
+    if path.is_symlink() or not stat.S_ISREG(metadata.st_mode):
+        raise ValueError(f"{label} must be a regular non-symlink file")
+    if metadata.st_size != 0:
+        raise ValueError(f"{label} must be empty")
+
+
 def _write_private_file(path: Path, raw: bytes, label: str) -> None:
     if path.is_symlink():
         raise ValueError(f"{label} path is unsafe")
@@ -342,6 +373,287 @@ def verify(args: argparse.Namespace) -> None:
     _write_verified_environment(args, values, checkpoint_raw)
 
 
+def verify_failed_handoff(args: argparse.Namespace) -> None:
+    transport, _transport_raw = _read_regular_json(
+        args.failed_transport_checkpoint,
+        "failed Candidate transport checkpoint",
+    )
+    transport_journal = _read_regular_jsonl(
+        args.failed_transport_journal,
+        "failed Candidate transport journal",
+    )
+    expected_transport_event = dict(transport)
+    expected_transport_event["event"] = "checkpoint_transition"
+    if len(transport_journal) != 1 or transport_journal[0] != expected_transport_event:
+        raise ValueError(
+            "failed Candidate transport journal does not exactly bind its checkpoint"
+        )
+
+    transport_identity = transport.get("identity")
+    if not isinstance(transport_identity, dict):
+        raise ValueError("failed Candidate transport identity is missing")
+    archive_bytes = transport_identity.get("archiveBytes")
+    if (
+        isinstance(archive_bytes, bool)
+        or not isinstance(archive_bytes, int)
+        or archive_bytes <= 0
+    ):
+        raise ValueError("failed Candidate archive byte count is invalid")
+    frontend_identity = transport_identity.get("frontendIdentity")
+    frontend_checksum = transport_identity.get("frontendChecksum")
+    expected_frontend_identity = (
+        f"gha://{args.repository}/actions/runs/{args.run_id}/attempts/"
+        f"{args.run_attempt}/artifacts/frontend-dist-{args.commit}"
+    )
+    if frontend_identity != expected_frontend_identity:
+        raise ValueError("failed Candidate frontend identity is invalid")
+    if not isinstance(frontend_checksum, str) or not SHA256_PATTERN.fullmatch(
+        frontend_checksum
+    ):
+        raise ValueError("failed Candidate frontend checksum is invalid")
+    expected_identity = {
+        "repository": args.repository,
+        "commit": args.commit,
+        "archiveSha256": args.archive_sha256,
+        "archiveBytes": archive_bytes,
+        "runId": args.run_id,
+        "runAttempt": args.run_attempt,
+        "frontendIdentity": frontend_identity,
+        "frontendChecksum": frontend_checksum,
+    }
+    if transport_identity != expected_identity:
+        raise ValueError("failed Candidate transport identity mismatch")
+    if (
+        transport.get("schemaVersion") != 1
+        or transport.get("sequence") != 1
+        or transport.get("phase") != "transport_verified"
+        or transport.get("status") != "completed"
+        or transport.get("retryClass") != "inspect_then_resume"
+    ):
+        raise ValueError("failed Candidate transport checkpoint is ineligible")
+
+    server_checkpoint, server_checkpoint_raw = _read_regular_json(
+        args.failed_server_checkpoint,
+        "failed Candidate server checkpoint",
+    )
+    if server_checkpoint.get("identity") != expected_identity:
+        raise ValueError("failed Candidate server checkpoint identity mismatch")
+    server_sequence = server_checkpoint.get("sequence")
+    if (
+        server_checkpoint.get("schemaVersion") != 1
+        or isinstance(server_sequence, bool)
+        or not isinstance(server_sequence, int)
+        or server_sequence <= 1
+        or server_checkpoint.get("phase") != "migrated"
+        or server_checkpoint.get("status") != "completed"
+        or server_checkpoint.get("retryClass") != "automatic"
+    ):
+        raise ValueError(
+            "failed Candidate server checkpoint is not migrated/completed/automatic"
+        )
+
+    evidence, evidence_raw = _read_regular_json(
+        args.failed_server_evidence,
+        "failed Candidate server evidence",
+    )
+    evidence_sha256 = hashlib.sha256(evidence_raw).hexdigest()
+    message = server_checkpoint.get("message")
+    binding = re.search(
+        r"(?:^|[; ])evidence_path=(\S+) "
+        r"evidence_sha256=([0-9a-f]{64})(?:$|[; ])",
+        message if isinstance(message, str) else "",
+    )
+    if binding is None or binding.group(2) != evidence_sha256:
+        raise ValueError("failed Candidate server checkpoint evidence binding mismatch")
+    checkpoint_suffix = (
+        "/.local/state/jato-production-release/checkpoints/"
+        f"{args.commit}/{args.archive_sha256}.json"
+    )
+    evidence_path = _private_server_path(
+        binding.group(1),
+        checkpoint_suffix.removesuffix(".json") + ".evidence.json",
+        "failed Candidate server evidence path",
+    )
+    checkpoint_path = evidence_path.removesuffix(".evidence.json") + ".json"
+    if evidence.get("identity") != expected_identity:
+        raise ValueError("failed Candidate checkpoint/evidence identity mismatch")
+
+    backup = evidence.get("backup")
+    if not isinstance(backup, dict):
+        raise ValueError("failed Candidate server evidence backup is missing")
+    backup_path = backup.get("manifestPath")
+    backup_bytes = backup.get("manifestBytes")
+    backup_sha256 = backup.get("manifestSha256")
+    if (
+        not isinstance(backup_path, str)
+        or isinstance(backup_bytes, bool)
+        or not isinstance(backup_bytes, int)
+        or backup_bytes <= 0
+        or not isinstance(backup_sha256, str)
+        or not SHA256_PATTERN.fullmatch(backup_sha256)
+    ):
+        raise ValueError("failed Candidate backup manifest identity is incomplete")
+    _private_server_path(
+        backup_path,
+        ".json",
+        "failed Candidate backup manifest path",
+    )
+
+    migration = evidence.get("migration")
+    if not isinstance(migration, dict) or migration.get("status") != "completed":
+        raise ValueError("failed Candidate migration evidence is not completed")
+    revisions = [
+        migration.get("preRevision"),
+        migration.get("targetRevision"),
+        migration.get("resultRevision"),
+    ]
+    if (
+        any(not isinstance(revision, str) or not revision for revision in revisions)
+        or len(set(revisions)) != 1
+    ):
+        raise ValueError("failed Candidate migration was not a no-op")
+
+    fetch_status, _fetch_status_raw = _read_regular_json(
+        args.failed_fetch_status,
+        "failed Candidate fetch status",
+    )
+    fetch_exit_code = fetch_status.get("exitCode")
+    if (
+        set(fetch_status) != {"schemaVersion", "exitCode", "backendHealthyAttested"}
+        or fetch_status.get("schemaVersion") != 1
+        or isinstance(fetch_exit_code, bool)
+        or not isinstance(fetch_exit_code, int)
+        or not 1 <= fetch_exit_code <= 255
+        or fetch_status.get("backendHealthyAttested") is not False
+    ):
+        raise ValueError("failed Candidate fetch status is not an unattested failure")
+    _require_empty_regular_file(
+        args.failed_preview,
+        "failed Candidate preview metadata",
+    )
+
+    frontend_dir_metadata = args.failed_frontend_release_dir.lstat()
+    if (
+        args.failed_frontend_release_dir.is_symlink()
+        or not stat.S_ISDIR(frontend_dir_metadata.st_mode)
+    ):
+        raise ValueError("failed Candidate frontend release directory is unsafe")
+    manifest, _manifest_raw = _read_regular_json(
+        args.failed_frontend_release_dir / "frontend-release.json",
+        "failed Candidate frontend manifest",
+    )
+    release = manifest.get("release")
+    source = manifest.get("source")
+    artifact = manifest.get("artifact")
+    frontend = manifest.get("frontend")
+    if not all(isinstance(value, dict) for value in (release, source, artifact, frontend)):
+        raise ValueError("failed Candidate frontend manifest is incomplete")
+    assert isinstance(release, dict)
+    assert isinstance(source, dict)
+    assert isinstance(artifact, dict)
+    assert isinstance(frontend, dict)
+    if (
+        manifest.get("schemaVersion") != 2
+        or release.get("releaseId") != f"{args.run_id}-{args.run_attempt}"
+        or release.get("environment") != "production"
+        or release.get("repository") != args.repository
+        or release.get("workflow") != "production-release"
+        or release.get("workflowRunId") != str(args.run_id)
+        or release.get("workflowRunAttempt") != str(args.run_attempt)
+        or source.get("githubSha") != args.commit
+        or source.get("deployCommit") != args.commit
+    ):
+        raise ValueError("failed Candidate frontend manifest release identity mismatch")
+    artifact_name = f"frontend-dist-{args.commit}"
+    payload_name = artifact.get("payload")
+    payload_bytes = artifact.get("payloadBytes")
+    if (
+        artifact.get("name") != artifact_name
+        or artifact.get("id") != frontend_identity
+        or artifact.get("checksumAlgorithm") != "sha256"
+        or artifact.get("checksum") != frontend_checksum
+        or payload_name != "frontend-dist.tar.gz"
+        or isinstance(payload_bytes, bool)
+        or not isinstance(payload_bytes, int)
+        or payload_bytes <= 0
+    ):
+        raise ValueError("failed Candidate frontend artifact identity mismatch")
+    payload_path = args.failed_frontend_release_dir / payload_name
+    payload_metadata = payload_path.lstat()
+    if payload_path.is_symlink() or not stat.S_ISREG(payload_metadata.st_mode):
+        raise ValueError("failed Candidate frontend payload must be a regular file")
+    if (
+        payload_metadata.st_size != payload_bytes
+        or hashlib.sha256(payload_path.read_bytes()).hexdigest() != frontend_checksum
+    ):
+        raise ValueError("failed Candidate frontend payload identity mismatch")
+    frontend_build_id = frontend.get("buildId")
+    node_version = frontend.get("nodeVersion")
+    if (
+        not isinstance(frontend_build_id, str)
+        or not SHA256_PATTERN.fullmatch(frontend_build_id)
+        or not isinstance(node_version, str)
+        or re.fullmatch(r"v[0-9]+\.[0-9]+\.[0-9]+", node_version) is None
+    ):
+        raise ValueError("failed Candidate frontend build identity is invalid")
+
+    artifacts = _load_artifacts(args.artifacts)
+    candidate_artifact_name = (
+        f"release-candidate-{args.commit}-{args.run_attempt}"
+    )
+    selected = {
+        name: [item for item in artifacts if item.get("name") == name]
+        for name in {candidate_artifact_name, artifact_name}
+    }
+    for name, matches in selected.items():
+        if len(matches) != 1 or matches[0].get("expired") is not False:
+            raise ValueError(f"exact non-expired artifact is unavailable: {name}")
+    frontend_artifact = selected[artifact_name][0]
+    github_artifact_id = frontend_artifact.get("id")
+    github_artifact_digest = frontend_artifact.get("digest")
+    if (
+        isinstance(github_artifact_id, bool)
+        or not isinstance(github_artifact_id, int)
+        or github_artifact_id <= 0
+        or not isinstance(github_artifact_digest, str)
+        or re.fullmatch(r"sha256:[0-9a-f]{64}", github_artifact_digest) is None
+    ):
+        raise ValueError("failed Candidate frontend GitHub artifact identity is invalid")
+
+    values = {
+        "CANDIDATE_HANDOFF_SOURCE": "failed-github-artifact",
+        "CANDIDATE_REPOSITORY": args.repository,
+        "CANDIDATE_COMMIT_SHA": args.commit,
+        "CANDIDATE_ARCHIVE_SHA256": args.archive_sha256,
+        "CANDIDATE_ARCHIVE_BYTES": str(archive_bytes),
+        "CANDIDATE_RUN_ID": str(args.run_id),
+        "CANDIDATE_RUN_ATTEMPT": str(args.run_attempt),
+        "CANDIDATE_RELEASE_ID": f"{args.run_id}-{args.run_attempt}",
+        "CANDIDATE_REMOTE_ARCHIVE_PATH": (
+            f".cache/jato-releases/archives/{args.commit}/"
+            f"{args.archive_sha256}.tar.gz"
+        ),
+        "CANDIDATE_FRONTEND_ARTIFACT_NAME": artifact_name,
+        "CANDIDATE_FRONTEND_ARTIFACT_IDENTITY": frontend_identity,
+        "CANDIDATE_FRONTEND_ARTIFACT_CHECKSUM": frontend_checksum,
+        "CANDIDATE_GITHUB_ARTIFACT_ID": str(github_artifact_id),
+        "CANDIDATE_GITHUB_ARTIFACT_DIGEST": github_artifact_digest,
+        "CANDIDATE_FRONTEND_BUILD_ID": frontend_build_id,
+        "CANDIDATE_FRONTEND_NODE_VERSION": node_version,
+        "CANDIDATE_SERVER_CHECKPOINT_PATH": checkpoint_path,
+        "CANDIDATE_SERVER_CHECKPOINT_SHA256": hashlib.sha256(
+            server_checkpoint_raw
+        ).hexdigest(),
+        "CANDIDATE_SERVER_EVIDENCE_PATH": evidence_path,
+        "CANDIDATE_SERVER_EVIDENCE_SHA256": evidence_sha256,
+        "CANDIDATE_SERVER_REVIEWED_CHECKPOINT_B64": base64.b64encode(
+            server_checkpoint_raw
+        ).decode("ascii"),
+        "CANDIDATE_FAILED_FETCH_EXIT_CODE": str(fetch_exit_code),
+    }
+    _write_verified_environment(args, values, server_checkpoint_raw)
+
+
 def verify_canonical_cleanup(args: argparse.Namespace) -> None:
     bundle, bundle_raw = _read_regular_json(
         args.canonical_server_bundle,
@@ -557,6 +869,13 @@ def parser() -> argparse.ArgumentParser:
     result.add_argument("--attestation", type=Path)
     result.add_argument("--artifacts", type=Path)
     result.add_argument("--canonical-server-bundle", type=Path)
+    result.add_argument("--failed-transport-checkpoint", type=Path)
+    result.add_argument("--failed-transport-journal", type=Path)
+    result.add_argument("--failed-server-checkpoint", type=Path)
+    result.add_argument("--failed-server-evidence", type=Path)
+    result.add_argument("--failed-fetch-status", type=Path)
+    result.add_argument("--failed-preview", type=Path)
+    result.add_argument("--failed-frontend-release-dir", type=Path)
     result.add_argument("--cleanup-mode", choices=tuple(CANONICAL_CLEANUP_STATES))
     result.add_argument("--env-output", type=Path, required=True)
     result.add_argument("--reviewed-checkpoint-output", type=Path)
@@ -565,7 +884,7 @@ def parser() -> argparse.ArgumentParser:
     result.add_argument("--archive-sha256", required=True)
     result.add_argument("--run-id", type=int, required=True)
     result.add_argument("--run-attempt", type=int, required=True)
-    result.add_argument("--attestation-sha256", required=True)
+    result.add_argument("--attestation-sha256")
     return result
 
 
@@ -575,12 +894,46 @@ def main() -> int:
         raise SystemExit("Candidate commit SHA is invalid")
     if SHA256_PATTERN.fullmatch(args.archive_sha256) is None:
         raise SystemExit("Candidate archive SHA-256 is invalid")
-    if SHA256_PATTERN.fullmatch(args.attestation_sha256) is None:
-        raise SystemExit("Candidate attestation SHA-256 is invalid")
     if args.run_id <= 0 or args.run_attempt <= 0:
         raise SystemExit("Candidate run identity must use positive integers")
+    failed_inputs = (
+        args.failed_transport_checkpoint,
+        args.failed_transport_journal,
+        args.failed_server_checkpoint,
+        args.failed_server_evidence,
+        args.failed_fetch_status,
+        args.failed_preview,
+        args.failed_frontend_release_dir,
+    )
+    failed_mode = any(path is not None for path in failed_inputs)
     try:
-        if args.canonical_server_bundle is not None:
+        if failed_mode:
+            if any(path is None for path in failed_inputs) or args.artifacts is None:
+                raise ValueError("failed Candidate handoff inputs are incomplete")
+            if any(
+                value is not None
+                for value in (
+                    args.checkpoint,
+                    args.attestation,
+                    args.canonical_server_bundle,
+                    args.cleanup_mode,
+                    args.attestation_sha256,
+                )
+            ):
+                raise ValueError(
+                    "failed Candidate handoff cannot mix attestation or canonical inputs"
+                )
+            if args.reviewed_checkpoint_output is None:
+                raise ValueError(
+                    "failed Candidate handoff requires a reviewed checkpoint output"
+                )
+            verify_failed_handoff(args)
+        elif args.canonical_server_bundle is not None:
+            if (
+                args.attestation_sha256 is None
+                or SHA256_PATTERN.fullmatch(args.attestation_sha256) is None
+            ):
+                raise ValueError("Candidate attestation SHA-256 is invalid")
             if args.cleanup_mode is None:
                 raise ValueError("canonical Candidate cleanup mode is required")
             if any(
@@ -596,6 +949,11 @@ def main() -> int:
                 )
             verify_canonical_cleanup(args)
         else:
+            if (
+                args.attestation_sha256 is None
+                or SHA256_PATTERN.fullmatch(args.attestation_sha256) is None
+            ):
+                raise ValueError("Candidate attestation SHA-256 is invalid")
             if args.cleanup_mode is not None:
                 raise ValueError(
                     "cleanup mode is only valid with a canonical server bundle"

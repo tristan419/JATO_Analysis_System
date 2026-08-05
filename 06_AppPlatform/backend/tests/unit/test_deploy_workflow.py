@@ -50,10 +50,11 @@ def test_recovery_hold_stops_release_and_prewarm_before_mutation() -> None:
         "type": "choice",
         "default": "prepare-candidate",
         "options": [
-            "prepare-candidate",
-            "approve-candidate-to-active",
-            "discard-candidate",
-            "release-candidate",
+                "prepare-candidate",
+                "approve-candidate-to-active",
+                "discard-candidate",
+                "discard-failed-candidate",
+                "release-candidate",
         ],
     }
     assert workflow["on"]["workflow_dispatch"]["inputs"][
@@ -146,6 +147,7 @@ def test_recovery_hold_stops_release_and_prewarm_before_mutation() -> None:
         "${{ github.ref == 'refs/heads/main' && "
         "github.event_name == 'workflow_dispatch' && "
         "(inputs.release_mode == 'discard-candidate' || "
+        "inputs.release_mode == 'discard-failed-candidate' || "
         "inputs.release_mode == 'release-candidate') && "
         "needs.release_coordination_guard.outputs.release-action == 'deploy' }}"
     )
@@ -642,7 +644,8 @@ def test_remote_release_preserves_normalized_archive_permissions() -> None:
     assert "03_Scripts/deploy/nginx/jato_candidate_preview.conf.example" in outer
     assert (
         "prepare-candidate|approve-candidate-to-active|"
-        "discard-candidate|release-candidate|restore-previous-active"
+        "discard-candidate|discard-failed-candidate|release-candidate|"
+        "restore-previous-active"
     ) in outer
     assert 'if [[ "$DEPLOY_BLUEGREEN_MODE" != "prepare-candidate" ]]; then' in outer
     assert "DEPLOY_CANDIDATE_ATTESTATION_SHA256" in outer
@@ -787,7 +790,7 @@ def test_candidate_approval_reuses_artifact_for_www_and_leaves_intl_unchanged() 
     )
 
     start = workflow.index("\n  approve_candidate_to_active:")
-    end = workflow.index("\n  audit_frontend_parity:", start)
+    end = workflow.index("\n  cleanup_candidate:", start)
     approval = workflow[start:end]
     assert "approve-candidate-to-active" in approval
     assert "Download exact Candidate handoff artifact" in approval
@@ -865,9 +868,23 @@ def test_candidate_cleanup_is_exact_control_only_and_preserves_active() -> None:
     assert credentials_index < control_index
     assert "Require exact intl artifact before releasing Candidate" not in cleanup
     assert "frontend_release_artifact.py audit-public" not in cleanup
-    assert 'mode == "discard-candidate"' in cleanup
+    assert '"discard-candidate": {"success", "failure"}' in cleanup
+    assert '"discard-failed-candidate": {"failure"}' in cleanup
+    assert 'if [ "$RELEASE_MODE" = "discard-failed-candidate" ]; then' in cleanup
+    assert 'test -z "$CANDIDATE_ATTESTATION_SHA256"' in cleanup
+    assert "failed Candidate discard requires exact non-expired GitHub artifacts" in cleanup
+    assert "--failed-server-checkpoint" in cleanup
+    assert "candidate_prepare_aborted" in cleanup
+    assert (
+        "failed Candidate cleanup predecessor differs from reviewed checkpoint"
+        in cleanup
+    )
+    assert (
+        "failed Candidate cleanup evidence differs from reviewed checkpoint"
+        in cleanup
+    )
     assert '{"success", "failure"}' in cleanup
-    assert 'else {"success"}' in cleanup
+    assert '"release-candidate": {"success"}' in cleanup
     assert 'run.get("conclusion") not in allowed_conclusions' in cleanup
     assert '"cancelled"' not in cleanup
     assert 'github_candidate_control.sh "$RELEASE_MODE"' in cleanup
@@ -891,8 +908,8 @@ def test_candidate_control_shell_is_control_only_and_syntax_valid() -> None:
     helper = REPO_ROOT / "03_Scripts/deploy/github_candidate_control.sh"
     script = helper.read_text(encoding="utf-8")
     assert (
-        "approve-candidate-to-active|discard-candidate|release-candidate|"
-        "restore-previous-active"
+        "approve-candidate-to-active|discard-candidate|"
+        "discard-failed-candidate|release-candidate|restore-previous-active"
     ) in script
     assert "capture-canonical-cleanup" in script
     assert "production-deploy.lock" in script
@@ -1515,9 +1532,7 @@ def test_deploy_gates_completed_and_new_releases_on_liveness_and_readiness() -> 
     assert '--url "http://127.0.0.1:${backend_port}/readyz"' in outer
     assert 'ACTIVE_SLOT_FILE="${ACTIVE_SLOT_FILE:-$BLUEGREEN_STATE_ROOT/active-slot}"' in outer
     assert "/opt/jato/active" in outer
-    handoff = outer.index(
-        'bash "$RELEASE_WORKTREE/03_Scripts/deploy/tencent_bluegreen_release.sh"',
-    )
+    handoff = outer.index('bash "$BLUEGREEN_CONTROLLER" "$DEPLOY_BLUEGREEN_MODE"')
     assert outer.rstrip().endswith('exit "$BLUEGREEN_RC"')
     assert handoff < outer.index('exit "$BLUEGREEN_RC"', handoff)
     candidate = controller.index("verify_candidate()")

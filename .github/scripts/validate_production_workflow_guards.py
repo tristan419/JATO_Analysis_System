@@ -72,6 +72,7 @@ PRODUCTION_CLEANUP_CONDITION = (
     MAIN_REF_CONDITION
     + " && github.event_name == 'workflow_dispatch'"
     + " && (inputs.release_mode == 'discard-candidate' || "
+    + "inputs.release_mode == 'discard-failed-candidate' || "
     + "inputs.release_mode == 'release-candidate')"
     + " && needs.release_coordination_guard.outputs.release-action == 'deploy'"
 )
@@ -1201,6 +1202,7 @@ def assert_production_release_coordination_guard() -> None:
             "prepare-candidate",
             "approve-candidate-to-active",
             "discard-candidate",
+            "discard-failed-candidate",
             "release-candidate",
         ],
     }:
@@ -1527,6 +1529,19 @@ def assert_production_release_coordination_guard() -> None:
     cleanup_positions = [cleanup_names.index(name) for name in required_cleanup_steps]
     if cleanup_positions != sorted(cleanup_positions):
         raise AssertionError("Candidate cleanup guard steps are out of order")
+    canonical_cleanup_condition = (
+        "${{ steps.cleanup_handoff.outputs.source == 'canonical-server' && "
+        "inputs.release_mode != 'discard-failed-candidate' }}"
+    )
+    for canonical_name in (
+        "Capture canonical Candidate cleanup handoff",
+        "Verify canonical Candidate cleanup handoff",
+    ):
+        canonical_step = cleanup_steps[cleanup_names.index(canonical_name)]
+        if canonical_step.get("if") != canonical_cleanup_condition:
+            raise AssertionError(
+                "failed Candidate cleanup must never use the ready canonical fallback"
+            )
     cleanup_text = str(cleanup)
     for required in (
         "confirm_candidate_cleanup",
@@ -1537,10 +1552,15 @@ def assert_production_release_coordination_guard() -> None:
         "verify_candidate_handoff.py",
         "release-candidate",
         "discard-candidate",
-        'mode == "discard-candidate"',
+        "discard-failed-candidate",
+        '"discard-candidate": {"success", "failure"}',
+        '"discard-failed-candidate": {"failure"}',
         '{"success", "failure"}',
-        'else {"success"}',
+        '"release-candidate": {"success"}',
         'run.get("conclusion") not in allowed_conclusions',
+        "--failed-server-checkpoint",
+        "failed Candidate discard requires exact non-expired GitHub artifacts",
+        "candidate_prepare_aborted",
         "Candidate cleanup journal identity/sequence mismatch",
         "Candidate cleanup journal tail/checkpoint mismatch",
         "Active identity and health remained unchanged",
@@ -1649,7 +1669,7 @@ def assert_database_migration_is_behind_main_release_gate() -> None:
         raise AssertionError("production release no longer invokes Tencent remote release")
     if "export DEPLOY_BRANCH=main" not in production_workflow:
         raise AssertionError("production release must pin Tencent DEPLOY_BRANCH=main")
-    if 'bash "$RELEASE_WORKTREE/03_Scripts/deploy/tencent_bluegreen_release.sh"' not in remote_release:
+    if 'bash "$BLUEGREEN_CONTROLLER" "$DEPLOY_BLUEGREEN_MODE"' not in remote_release:
         raise AssertionError("remote release no longer invokes the blue/green controller")
     if 'bash "$INNER_DEPLOY"' not in bluegreen_release:
         raise AssertionError("blue/green controller no longer invokes the guarded server deploy")
