@@ -34,6 +34,18 @@ main 不可变版本 -> 无公网 Candidate -> 人工页面验收
 - Candidate 与 Active 使用同一套服务器数据连接做页面验收。任何写入型页面
   测试都有可能改变真实数据，必须由用户有意执行；它不是无副作用沙箱。
 
+日常批准与失败回退只涉及下面三个核心指针状态：
+
+```text
+初始：Active -> A，Candidate -> B
+批准：Active -> B，Candidate -> B（保留到用户明确清理）
+失败：Active -> A，Candidate -> B（A 按原 env/Nginx preimage 重启并核验）
+```
+
+批准和失败回退都不重新构建、上传、组装或复制 release。它们只切换固定 Active
+的内容寻址指针，并恢复或生成与该指针绑定的运行配置。旧物理槽位互换入口
+`prepare-and-switch` / `switch-locked` 已停用，不能绕过固定角色流程。
+
 ## 用户可以直接发送给 Codex 的口令
 
 每条口令都只授权其字面动作，不自动授权下一步。
@@ -95,6 +107,10 @@ Nginx 路由和后台任务归属。发现现场与口令不一致时应停止�
 这里的自动恢复只是 Active 更新命令的失败保护，不是 Candidate 验收流程中的
 额外步骤。Candidate 未获批准时 Active 根本不会改变；Active 更新及公网核验成功
 后也不会再自动执行恢复。
+
+事故级 recovery 只用于处理已经存在的异常 checkpoint、未知中断或现场漂移，
+不是日常发布步骤，也不能替代上述 A 指针回退。正常 Candidate 失败或 Active
+更新失败不得创建 recovery plan、反复 dry-run，或要求用户额外执行 recovery。
 
 实现时必须保证“人工验收的 artifact”就是 Active 使用的 artifact，不得在
 批准后重新构建、重新上传或复制另一份同 SHA 包。固定 Active 重启可能带来
