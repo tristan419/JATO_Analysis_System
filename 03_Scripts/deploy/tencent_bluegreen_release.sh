@@ -53,7 +53,7 @@ BLUEGREEN_RELEASE_KEEP_UNREFERENCED=3
 BLUEGREEN_RELEASE_NORMAL_GC_AGE_SECONDS=$((14 * 24 * 60 * 60))
 BLUEGREEN_RELEASE_EMERGENCY_GC_AGE_SECONDS=$((24 * 60 * 60))
 BLUEGREEN_FAULT="${BLUEGREEN_FAULT:-}"
-BLUEGREEN_MODE="${1:-prepare-and-switch}"
+BLUEGREEN_MODE="${1:-}"
 SERVICE_PREFIX="jato-fullstack-backend@"
 SCHEDULER_STATE_FILE="${SCHEDULER_STATE_FILE:-$BLUEGREEN_STATE_ROOT/scheduler-state.tsv}"
 EXIT_COMMAND_FAILED_MARKER_RETAINED=81
@@ -844,6 +844,21 @@ verify_slot_release_exact() {
       --url "http://127.0.0.1:${slot}/readyz" \
       --expected-commit "$expected_sha" \
       --timeout-seconds 20 >/dev/null
+}
+
+wait_for_slot_release_exact() {
+  local slot="$1"
+  local expected_sha="$2"
+  local attempt=0
+  for attempt in $(seq 1 20); do
+    if verify_slot_release_exact "$slot" "$expected_sha"; then
+      return 0
+    fi
+    if [[ "$attempt" -lt 20 ]]; then
+      sleep 3
+    fi
+  done
+  fail "slot $slot did not become ready with exact release $expected_sha"
 }
 
 mark_maintenance_required() {
@@ -2369,20 +2384,7 @@ verify_candidate() {
     fail "fault injection: candidate_start"
   fi
   sudo -n systemctl start "${SERVICE_PREFIX}${CANDIDATE_SLOT}"
-  for attempt in $(seq 1 20); do
-    if curl --noproxy '*' -fsS --max-time 10 \
-      "http://127.0.0.1:${CANDIDATE_SLOT}/healthz" >/dev/null \
-      && python3 -B "$READINESS_HELPER" \
-        --url "http://127.0.0.1:${CANDIDATE_SLOT}/readyz" \
-        --expected-commit "$DEPLOY_COMMIT_SHA" \
-        --timeout-seconds 10 >/dev/null; then
-      break
-    fi
-    if [[ "$attempt" -eq 20 ]]; then
-      fail "candidate did not pass liveness and exact release readiness"
-    fi
-    sleep 3
-  done
+  wait_for_slot_release_exact "$CANDIDATE_SLOT" "$DEPLOY_COMMIT_SHA"
   verify_candidate_monthly_gate || return 1
   verify_candidate_cgroup || return 1
   unit_property_equals \
@@ -2586,7 +2588,6 @@ verify_candidate_preview_unit() {
     "$nginx_bin"
     -c "$CANDIDATE_PREVIEW_CONFIG"
     -p "$runtime_root/"
-    -g "daemon off;"
   )
   properties="$(
     systemctl show "$unit" \
@@ -2667,19 +2668,28 @@ required = {
 for key, expected in required.items():
     if properties.get(key) != expected:
         raise SystemExit(f"[ERROR] Candidate preview property {key} is not exact")
+if actual_argv != expected_argv:
+    raise SystemExit("[ERROR] Candidate preview ExecStart argv is not exact")
+if environment.get("JATO_CANDIDATE_PREVIEW_ID") != identity:
+    raise SystemExit("[ERROR] Candidate preview environment identity is not exact")
+if candidate_unit not in properties.get("BindsTo", "").split():
+    raise SystemExit("[ERROR] Candidate preview BindsTo identity is not exact")
+if candidate_unit not in properties.get("After", "").split():
+    raise SystemExit("[ERROR] Candidate preview After identity is not exact")
+if release_dir not in properties.get("ReadOnlyPaths", ""):
+    raise SystemExit("[ERROR] Candidate preview release path is not read-only")
+if config not in properties.get("ReadOnlyPaths", ""):
+    raise SystemExit("[ERROR] Candidate preview config path is not read-only")
+if runtime_root not in properties.get("ReadWritePaths", ""):
+    raise SystemExit("[ERROR] Candidate preview runtime path is not writable")
+if re.fullmatch(r"[1-9][0-9]*", properties.get("MainPID", "")) is None:
+    raise SystemExit("[ERROR] Candidate preview MainPID is not live")
+invocation_id = properties.get("InvocationID", "")
 if (
-    actual_argv != expected_argv
-    or environment.get("JATO_CANDIDATE_PREVIEW_ID") != identity
-    or candidate_unit not in properties.get("BindsTo", "").split()
-    or candidate_unit not in properties.get("After", "").split()
-    or release_dir not in properties.get("ReadOnlyPaths", "")
-    or config not in properties.get("ReadOnlyPaths", "")
-    or runtime_root not in properties.get("ReadWritePaths", "")
-    or re.fullmatch(r"[1-9][0-9]*", properties.get("MainPID", "")) is None
-    or re.fullmatch(r"[0-9A-Fa-f]{32}", properties.get("InvocationID", "")) is None
-    or properties.get("InvocationID", "").lower() == "0" * 32
+    re.fullmatch(r"[0-9A-Fa-f]{32}", invocation_id) is None
+    or invocation_id.lower() == "0" * 32
 ):
-    raise SystemExit("[ERROR] Candidate preview transient identity is not exact")
+    raise SystemExit("[ERROR] Candidate preview InvocationID is not live")
 PY
 }
 
@@ -2819,9 +2829,7 @@ start_candidate_preview() {
     --setenv="JATO_CANDIDATE_PREVIEW_ID=$identity" \
     "$nginx_bin" \
       -c "$CANDIDATE_PREVIEW_CONFIG" \
-      -p "$runtime_root/" \
-      -g "daemon off;" \
-    || return 1
+      -p "$runtime_root/" || return 1
   for _attempt in $(seq 1 20); do
     if verify_candidate_preview; then
       return 0
@@ -2886,17 +2894,25 @@ for token in environment_tokens:
     if not separator or not key or key in environment:
         raise SystemExit("[ERROR] refusing to stop a malformed preview unit")
     environment[key] = value
-expected_argv = [nginx, "-c", config, "-p", runtime_root, "-g", "daemon off;"]
-if (
-    properties.get("LoadState") != "loaded"
-    or properties.get("UnitFileState") != "transient"
-    or properties.get("FragmentPath") != f"/run/systemd/transient/{unit}"
-    or actual_argv != expected_argv
-    or environment.get("JATO_CANDIDATE_PREVIEW_ID") != identity
-    or candidate_unit not in properties.get("BindsTo", "").split()
-    or candidate_unit not in properties.get("After", "").split()
-):
-    raise SystemExit("[ERROR] refusing to stop a preview without exact identity")
+expected_argv = [nginx, "-c", config, "-p", runtime_root]
+required = {
+    "LoadState": "loaded",
+    "UnitFileState": "transient",
+    "FragmentPath": f"/run/systemd/transient/{unit}",
+}
+for key, expected in required.items():
+    if properties.get(key) != expected:
+        raise SystemExit(
+            f"[ERROR] refusing to stop a preview with unexpected {key}"
+        )
+if actual_argv != expected_argv:
+    raise SystemExit("[ERROR] refusing to stop a preview with unexpected ExecStart")
+if environment.get("JATO_CANDIDATE_PREVIEW_ID") != identity:
+    raise SystemExit("[ERROR] refusing to stop a preview with unexpected identity")
+if candidate_unit not in properties.get("BindsTo", "").split():
+    raise SystemExit("[ERROR] refusing to stop a preview with unexpected BindsTo")
+if candidate_unit not in properties.get("After", "").split():
+    raise SystemExit("[ERROR] refusing to stop a preview with unexpected After")
 PY
   sudo -n systemctl stop "$unit" >/dev/null || return 1
   sudo -n systemctl reset-failed "$unit" >/dev/null 2>&1 || true
@@ -3505,7 +3521,7 @@ install_release_on_fixed_active() {
   sudo -n systemctl restart "${SERVICE_PREFIX}${CURRENT_ACTIVE_SLOT}" \
     || return 1
   verify_active_cgroup "$CURRENT_ACTIVE_SLOT" || return 1
-  verify_slot_release_exact "$CURRENT_ACTIVE_SLOT" "$DEPLOY_COMMIT_SHA" \
+  wait_for_slot_release_exact "$CURRENT_ACTIVE_SLOT" "$DEPLOY_COMMIT_SHA" \
     || return 1
   durable_install_file \
     "$ACTIVE_UPDATE_TARGET_NGINX" \
@@ -3574,10 +3590,10 @@ rollback_fixed_active_update() {
   sudo -n systemctl restart "${SERVICE_PREFIX}${CURRENT_ACTIVE_SLOT}" \
     || return 1
   verify_active_cgroup "$CURRENT_ACTIVE_SLOT" || return 1
+  wait_for_slot_release_exact "$CURRENT_ACTIVE_SLOT" "$PREVIOUS_RELEASE_SHA" \
+    || return 1
   sudo -n nginx -t || return 1
   sudo -n systemctl reload nginx || return 1
-  verify_slot_release_exact "$CURRENT_ACTIVE_SLOT" "$PREVIOUS_RELEASE_SHA" \
-    || return 1
   verify_public_release_exact "$PREVIOUS_RELEASE_SHA" || return 1
   verify_fixed_active_slot_anchor || return 1
   verify_durable_route_ownership \
@@ -5685,28 +5701,8 @@ case "$BLUEGREEN_MODE" in
     prepare_candidate
     trap - EXIT HUP INT TERM
     ;;
-  prepare-and-switch)
-    trap prepare_exit_handler EXIT
-    trap 'exit 129' HUP
-    trap 'exit 130' INT
-    trap 'exit 143' TERM
-    prepare_and_switch
-    trap - EXIT HUP INT TERM
-    ;;
-  switch-locked)
-    # Values are exported explicitly by the quiescence supervisor command.
-    require_environment
-    if [[ "$CURRENT_ACTIVE_SLOT" != "8000" && "$CURRENT_ACTIVE_SLOT" != "8001" ]] \
-      || [[ "$CANDIDATE_SLOT" != "8000" && "$CANDIDATE_SLOT" != "8001" ]] \
-      || [[ "$CURRENT_ACTIVE_SLOT" == "$CANDIDATE_SLOT" ]]; then
-      fail "locked switch slot identity is invalid"
-    fi
-    trap switch_exit_handler EXIT
-    trap 'switch_signal_handler 1' HUP
-    trap 'switch_signal_handler 2' INT
-    trap 'switch_signal_handler 15' TERM
-    switch_locked
-    trap - EXIT HUP INT TERM
+  prepare-and-switch|switch-locked)
+    fail "legacy physical slot switching is retired; use prepare-candidate and approve-candidate-to-active"
     ;;
   build-candidate-runtime)
     build_candidate_runtime_locked

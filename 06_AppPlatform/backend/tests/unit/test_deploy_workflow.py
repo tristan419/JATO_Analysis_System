@@ -815,8 +815,12 @@ def test_candidate_approval_reuses_artifact_for_www_and_leaves_intl_unchanged() 
         "Fetch and attest Active update checkpoint"
     )
     assert "active-updated.journal.jsonl" in approval
-    assert 'started, updated = events[-2:]' in approval
+    assert 'if len(events) < 3:' in approval
+    assert 'started, verified, updated = events[-3:]' in approval
     assert 'started.get("phase") != "active_update_started"' in approval
+    assert 'verified.get("phase") != "active_update_verified"' in approval
+    assert 'verified.get("status") != "completed"' in approval
+    assert 'verified.get("retryClass") != "inspect_then_resume"' in approval
     assert 'updated.get("phase") != "active_updated"' in approval
     assert 'binding.group(1) != expected_evidence_path' in approval
     assert 'remote_evidence="$CANDIDATE_SERVER_EVIDENCE_PATH"' in approval
@@ -1517,8 +1521,12 @@ def test_deploy_gates_completed_and_new_releases_on_liveness_and_readiness() -> 
     assert outer.rstrip().endswith('exit "$BLUEGREEN_RC"')
     assert handoff < outer.index('exit "$BLUEGREEN_RC"', handoff)
     candidate = controller.index("verify_candidate()")
-    assert "http://127.0.0.1:${CANDIDATE_SLOT}/healthz" in controller[candidate:]
-    assert 'expected-commit "$DEPLOY_COMMIT_SHA"' in controller[candidate:]
+    candidate_body = controller[candidate:]
+    readiness = controller.index("verify_slot_release_exact()")
+    readiness_body = controller[readiness:candidate]
+    assert 'wait_for_slot_release_exact "$CANDIDATE_SLOT"' in candidate_body
+    assert "http://127.0.0.1:${slot}/healthz" in readiness_body
+    assert 'expected-commit "$expected_sha"' in readiness_body
     switch = _shell_function(controller, "switch_locked")
     activation = _shell_function(controller, "complete_candidate_activation")
     nginx_verify = switch.index(

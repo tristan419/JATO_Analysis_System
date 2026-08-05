@@ -147,6 +147,81 @@ def _expected_previous_metadata_path(tmp_path: Path) -> Path:
     )
 
 
+@pytest.mark.parametrize("mode", ["prepare-and-switch", "switch-locked"])
+def test_legacy_physical_slot_switch_modes_are_retired(
+    tmp_path: Path,
+    mode: str,
+) -> None:
+    result = subprocess.run(
+        ["bash", str(CONTROLLER), mode],
+        env=_controller_environment(tmp_path),
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert result.returncode != 0
+    assert "legacy physical slot switching is retired" in result.stderr
+
+
+def test_controller_without_mode_fails_closed(tmp_path: Path) -> None:
+    result = subprocess.run(
+        ["bash", str(CONTROLLER)],
+        env=_controller_environment(tmp_path),
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert result.returncode != 0
+    assert "unknown Tencent blue/green mode" in result.stderr
+
+
+def test_slot_readiness_retry_succeeds_on_third_attempt(tmp_path: Path) -> None:
+    result = _run_controller_harness(
+        tmp_path,
+        """
+ATTEMPTS=0
+SLEEPS=0
+verify_slot_release_exact() {
+  ATTEMPTS=$((ATTEMPTS + 1))
+  [[ "$ATTEMPTS" -ge 3 ]]
+}
+sleep() { SLEEPS=$((SLEEPS + 1)); }
+wait_for_slot_release_exact 8000 "$DEPLOY_COMMIT_SHA"
+printf 'attempts=%s sleeps=%s\n' "$ATTEMPTS" "$SLEEPS"
+""",
+    )
+
+    assert result.returncode == 0, result.stderr + result.stdout
+    assert "attempts=3 sleeps=2" in result.stdout
+
+
+def test_slot_readiness_retry_is_bounded_and_reports_identity(
+    tmp_path: Path,
+) -> None:
+    result = _run_controller_harness(
+        tmp_path,
+        """
+ATTEMPTS=0
+SLEEPS=0
+verify_slot_release_exact() { ATTEMPTS=$((ATTEMPTS + 1)); return 1; }
+sleep() { SLEEPS=$((SLEEPS + 1)); }
+set +e
+wait_for_slot_release_exact 8000 "$DEPLOY_COMMIT_SHA"
+rc=$?
+set -e
+printf 'rc=%s attempts=%s sleeps=%s\n' "$rc" "$ATTEMPTS" "$SLEEPS"
+""",
+    )
+
+    assert result.returncode == 0, result.stderr + result.stdout
+    assert "rc=1 attempts=20 sleeps=19" in result.stdout
+    assert f"slot 8000 did not become ready with exact release {TARGET_SHA}" in (
+        result.stderr
+    )
+
+
 def _candidate_previous_metadata_path(
     tmp_path: Path,
     *,
@@ -459,6 +534,10 @@ def test_candidate_is_verified_before_quiescence_and_nginx_switch() -> None:
 
 def test_prepare_candidate_stops_at_manual_review_without_public_mutation() -> None:
     script = CONTROLLER.read_text(encoding="utf-8")
+    preview_template = (
+        REPO_ROOT
+        / "03_Scripts/deploy/nginx/jato_candidate_preview.conf.example"
+    ).read_text(encoding="utf-8")
     prepare = _shell_function(script, "prepare_candidate")
     preview = _shell_function(script, "start_candidate_preview")
     preview_stop = _shell_function(script, "stop_candidate_preview")
@@ -515,6 +594,10 @@ def test_prepare_candidate_stops_at_manual_review_without_public_mutation() -> N
     assert '"${SERVICE_PREFIX}${CANDIDATE_SLOT}.service"' in preview_verify
     assert '"${SERVICE_PREFIX}${CANDIDATE_SLOT}.service"' in preview_stop
     assert 'JATO_CANDIDATE_PREVIEW_ID=$identity' in preview
+    assert "daemon off;" in preview_template
+    assert 'daemon off;' not in preview
+    assert 'daemon off;' not in preview_verify
+    assert 'daemon off;' not in preview_stop
     assert "--wait" not in preview
     assert '"$DEPLOY_ARCHIVE_SHA256"' in preview_render
     assert '"archiveSha256": archive_sha256' in preview_render
@@ -610,7 +693,7 @@ def test_fixed_active_approval_keeps_slot_and_candidate_roles_stable() -> None:
     assert "atomic_text" not in install
     assert '"$CURRENT_ACTIVE_SLOT"' in install
     assert install.index("systemctl restart") < install.index(
-        "verify_slot_release_exact"
+        "wait_for_slot_release_exact"
     ) < install.index("systemctl reload nginx")
     assert "verify_fixed_active_candidate_retained" in install
     assert "stop_candidate_preview" not in rollback
@@ -992,7 +1075,7 @@ def test_restore_previous_active_is_gated_and_keeps_candidate() -> None:
     assert 'verify_active_cgroup "$CURRENT_ACTIVE_SLOT"' in rollback
     assert "fixed_active_preimage_command restore" in rollback
     assert (
-        'verify_slot_release_exact "$CURRENT_ACTIVE_SLOT" '
+        'wait_for_slot_release_exact "$CURRENT_ACTIVE_SLOT" '
         '"$PREVIOUS_RELEASE_SHA"'
     ) in rollback
     assert 'verify_public_release_exact "$PREVIOUS_RELEASE_SHA"' in rollback
@@ -2024,10 +2107,9 @@ def test_switch_is_atomic_and_rolls_back_before_old_slot_can_be_lost() -> None:
     assert nginx_replace < nginx_test < nginx_reload < nginx_verify < switched < complete
     assert disable_old < stop_old < promote_memory < handoff < healthy
     assert direct_old < public_old < rollback_complete
-    assert "trap switch_exit_handler EXIT" in script
-    assert "trap 'switch_signal_handler 1' HUP" in script
-    assert "trap 'switch_signal_handler 2' INT" in script
-    assert "trap 'switch_signal_handler 15' TERM" in script
+    assert "trap switch_exit_handler EXIT" not in script
+    assert "prepare-and-switch|switch-locked)" in script
+    assert "legacy physical slot switching is retired" in script
     assert "EXIT_COMMAND_FAILED_MARKER_RETAINED=81" in script
     assert "restore_previous_route" in script
     assert "rollback_started" in script

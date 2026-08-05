@@ -2257,7 +2257,7 @@ jobs:
               ]
           except (UnicodeError, json.JSONDecodeError) as exc:
               raise SystemExit("canonical Active update journal is invalid JSONL") from exc
-          if len(events) < 2:
+          if len(events) < 3:
               raise SystemExit("canonical Active update journal is incomplete")
           for sequence, event in enumerate(events, start=1):
               if (
@@ -2269,17 +2269,21 @@ jobs:
                   raise SystemExit(
                       "canonical Active update journal sequence/identity mismatch"
                   )
-          started, updated = events[-2:]
+          started, verified, updated = events[-3:]
           if (
               started.get("phase") != "active_update_started"
               or started.get("status") != "in_progress"
               or started.get("retryClass") != "rollback_required"
+              or verified.get("phase") != "active_update_verified"
+              or verified.get("status") != "completed"
+              or verified.get("retryClass") != "inspect_then_resume"
               or updated.get("phase") != "active_updated"
               or updated.get("status") != "completed"
               or updated.get("retryClass") != "inspect_then_resume"
           ):
               raise SystemExit(
-                  "canonical journal does not end in Active update started/completed"
+                  "canonical journal does not end in Active update "
+                  "started/verified/completed"
               )
           journal_tail = dict(updated)
           journal_tail.pop("event", None)

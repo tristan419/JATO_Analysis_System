@@ -1113,8 +1113,12 @@ def assert_release_checkpoint_contract(workflow: Mapping[str, Any]) -> None:
         'checkpoint.get("phase") != "active_updated"',
         'remote_journal_dir=".local/state/jato-production-release/journals/',
         '"$server_dir/active-updated.journal.jsonl"',
-        'started, updated = events[-2:]',
+        'if len(events) < 3:',
+        'started, verified, updated = events[-3:]',
         'started.get("phase") != "active_update_started"',
+        'verified.get("phase") != "active_update_verified"',
+        'verified.get("status") != "completed"',
+        'verified.get("retryClass") != "inspect_then_resume"',
         'updated.get("phase") != "active_updated"',
         "canonical Active update journal tail/checkpoint mismatch",
         '--phase www_verified',
@@ -1759,6 +1763,17 @@ def assert_server_consumes_only_prebuilt_dist() -> None:
             raise AssertionError(
                 "production workflow lost Candidate review mode: "
                 f"{candidate_mode_token!r}",
+            )
+    for fixed_role_controller_token in (
+        'BLUEGREEN_MODE="${1:-}"',
+        'prepare-and-switch|switch-locked)',
+        'legacy physical slot switching is retired',
+        'wait_for_slot_release_exact()',
+    ):
+        if fixed_role_controller_token not in bluegreen_release:
+            raise AssertionError(
+                "Tencent fixed-role controller lost its fail-closed mode contract: "
+                f"{fixed_role_controller_token!r}",
             )
     for candidate_mode_token in (
         'DEPLOY_BLUEGREEN_MODE="${DEPLOY_BLUEGREEN_MODE:-prepare-candidate}"',

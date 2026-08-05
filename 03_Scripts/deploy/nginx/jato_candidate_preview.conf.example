@@ -1,5 +1,6 @@
 # Independent Candidate preview. This configuration is consumed only by a
 # transient Nginx unit and must never be included by the public Nginx service.
+daemon off;
 worker_processes 1;
 pid __CANDIDATE_PREVIEW_RUNTIME_ROOT__/nginx.pid;
 error_log stderr notice;

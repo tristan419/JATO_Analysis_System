@@ -282,6 +282,7 @@ def test_candidate_preview_template_is_loopback_only_and_has_no_active_fallback(
     preview = CANDIDATE_PREVIEW_TEMPLATE.read_text(encoding="utf-8")
     active = NGINX_TEMPLATE.read_text(encoding="utf-8")
 
+    assert "daemon off;" in preview
     assert "listen 127.0.0.1:__CANDIDATE_PREVIEW_PORT__;" in preview
     assert "listen 0.0.0.0" not in preview
     assert "listen [::]" not in preview
