@@ -72,6 +72,14 @@ def test_recovery_hold_stops_release_and_prewarm_before_mutation() -> None:
         "type": "boolean",
         "default": "false",
     }
+    assert workflow["on"]["workflow_dispatch"]["inputs"][
+        "bootstrap_full_upload"
+    ] == {
+        "description": "Explicitly allow one full archive upload when no verified rsync basis exists",
+        "required": "true",
+        "type": "boolean",
+        "default": "false",
+    }
     assert workflow["env"]["RELEASE_MODE"] == (
         "${{ github.event_name == 'workflow_dispatch' && inputs.release_mode "
         "|| 'prepare-candidate' }}"
@@ -534,7 +542,7 @@ def test_intl_edge_prewarm_verifies_completed_release_provenance_first() -> None
     assert "JATO_PREWARM_FAIL_ON_ERROR" in workflow
 
 
-def test_tencent_release_upload_uses_verified_active_delta_basis() -> None:
+def test_tencent_release_upload_requires_verified_basis_or_explicit_bootstrap() -> None:
     workflow = (REPO_ROOT / ".github/workflows/production-release.yml").read_text(
         encoding="utf-8",
     )
@@ -550,11 +558,20 @@ def test_tencent_release_upload_uses_verified_active_delta_basis() -> None:
     assert "--append-verify" not in workflow
     assert "gzip -n --rsyncable" in workflow
     assert "sudo -n realpath /opt/jato/active" in workflow
+    assert "bootstrap_full_upload:" in workflow
+    assert "ALLOW_FULL_UPLOAD_BOOTSTRAP" in workflow
+    assert 'GITHUB_EVENT_NAME" != "workflow_dispatch' in workflow
+    assert 'RELEASE_MODE" != "prepare-candidate' in workflow
+    assert "basis_kind='retained'" in workflow
+    assert "basis_kind='bootstrap'" in workflow
+    assert "Explicit full-upload bootstrap authorized" in workflow
     assert "NO_BASIS" in workflow
     assert "refusing full upload" in workflow
     assert "--checksum" in workflow
     assert "--stats" in workflow
     assert 'echo "literal-bytes=$literal_bytes"' in workflow
+    assert 'echo "bootstrap-used=$bootstrap_used"' in workflow
+    assert "Bootstrap transfer did not report the exact full archive byte count" in workflow
     assert "flock -w 870" in workflow
     assert "df -Pk" in workflow
     assert "cat >> '$remote_temp'" not in workflow

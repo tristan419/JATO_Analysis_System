@@ -307,6 +307,16 @@ def assert_main_only_production_workflow(workflow: Mapping[str, Any]) -> None:
         or cleanup_confirmation.get("default") != "false"
     ):
         raise AssertionError("production Candidate cleanup confirmation changed")
+    bootstrap_confirmation = mapping(
+        dispatch_inputs.get("bootstrap_full_upload"),
+        "production workflow full-upload bootstrap input",
+    )
+    if (
+        bootstrap_confirmation.get("required") != "true"
+        or bootstrap_confirmation.get("type") != "boolean"
+        or bootstrap_confirmation.get("default") != "false"
+    ):
+        raise AssertionError("production full-upload bootstrap confirmation changed")
 
     workflow_env = mapping(workflow.get("env"), "production workflow env")
     expected_mode = (
@@ -701,6 +711,12 @@ def assert_tencent_resumable_upload_contract(workflow: Mapping[str, Any]) -> Non
         "--partial",
         "gzip -n --rsyncable",
         "sudo -n realpath /opt/jato/active",
+        "ALLOW_FULL_UPLOAD_BOOTSTRAP",
+        'GITHUB_EVENT_NAME" != "workflow_dispatch',
+        'RELEASE_MODE" != "prepare-candidate',
+        "basis_kind='retained'",
+        "basis_kind='bootstrap'",
+        "Explicit full-upload bootstrap authorized",
         "NO_BASIS",
         "refusing full upload",
         "--checksum",
@@ -727,6 +743,8 @@ def assert_tencent_resumable_upload_contract(workflow: Mapping[str, Any]) -> Non
         'echo "archive-bytes=$archive_bytes"',
         'echo "archive-sha256=$archive_sha256"',
         'echo "literal-bytes=$literal_bytes"',
+        'echo "bootstrap-used=$bootstrap_used"',
+        "Bootstrap transfer did not report the exact full archive byte count",
     )
     missing = [token for token in required_tokens if token not in upload]
     if missing:
