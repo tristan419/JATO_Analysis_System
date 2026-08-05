@@ -319,11 +319,11 @@ def test_remote_release_seals_archive_before_validation_and_extraction() -> None
     assert script.count('--output "$ARCHIVE_VALIDATION_RECEIPT"') == 1
     assert script.count("--headroom-target") == 2
     assert (
-        '--validation-run-id "$DEPLOY_RUN_ID"'
+        '--validation-run-id "$ARCHIVE_VALIDATION_RUN_ID"'
         in script
     )
     assert (
-        '--validation-run-attempt "$DEPLOY_RUN_ATTEMPT"'
+        '--validation-run-attempt "$ARCHIVE_VALIDATION_RUN_ATTEMPT"'
         in script
     )
     assert (
@@ -359,19 +359,162 @@ def test_remote_release_seals_archive_before_validation_and_extraction() -> None
     assert "--headroom-materialization-copies" not in script
 
 
+@pytest.mark.parametrize(
+    ("mode", "expected_identity"),
+    (
+        ("prepare-candidate", "30976848352-1"),
+        (
+            "discard-failed-candidate",
+            "30987869329-1-discard-failed-candidate",
+        ),
+        (
+            "approve-candidate-to-active",
+            "30987869329-1-approve-candidate-to-active",
+        ),
+        ("discard-candidate", "30987869329-1-discard-candidate"),
+        ("release-candidate", "30987869329-1-release-candidate"),
+        (
+            "restore-previous-active",
+            "30987869329-1-restore-previous-active",
+        ),
+    ),
+)
+def test_archive_validation_attempt_uses_current_control_operation(
+    mode: str,
+    expected_identity: str,
+) -> None:
+    script = REMOTE_SCRIPT.read_text(encoding="utf-8")
+    selector = _shell_function(
+        REMOTE_SCRIPT,
+        "select_archive_validation_attempt_identity",
+    )
+    environment = {
+        **os.environ,
+        "DEPLOY_BLUEGREEN_MODE": mode,
+        "DEPLOY_RUN_ID": "30976848352",
+        "DEPLOY_RUN_ATTEMPT": "1",
+    }
+    environment.pop("DEPLOY_APPROVAL_RUN_ID", None)
+    environment.pop("DEPLOY_APPROVAL_RUN_ATTEMPT", None)
+    if mode != "prepare-candidate":
+        environment.update(
+            {
+                "DEPLOY_APPROVAL_RUN_ID": "30987869329",
+                "DEPLOY_APPROVAL_RUN_ATTEMPT": "1",
+            }
+        )
+    result = subprocess.run(
+        [
+            "bash",
+            "-c",
+            "set -Eeuo pipefail\n"
+            + selector
+            + "\nselect_archive_validation_attempt_identity\n"
+            + "printf '%s\\n' \"$ARCHIVE_VALIDATION_ATTEMPT_KEY\"\n",
+        ],
+        env=environment,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 0, result.stderr + result.stdout
+    assert result.stdout.strip() == expected_identity
+    assert "$ARCHIVE_VALIDATION_ATTEMPT_KEY.json" in script
+    assert '--expected-run-id "$DEPLOY_RUN_ID"' in script
+    assert '--expected-run-attempt "$DEPLOY_RUN_ATTEMPT"' in script
+    assert '--run-id "$DEPLOY_RUN_ID"' in script
+    assert '--run-attempt "$DEPLOY_RUN_ATTEMPT"' in script
+    assert 'rm -f "$ARCHIVE_VALIDATION_RECEIPT"' not in script
+    assert 'rm -rf "$ARCHIVE_VALIDATION_RECEIPT"' not in script
+    collision_check = script.index(
+        'if sudo -n test -e "$ARCHIVE_VALIDATION_RECEIPT"',
+    )
+    validator_call = script.index(
+        'if ! sudo -n python3 -B "$SEALED_ARCHIVE_VALIDATOR"',
+        collision_check,
+    )
+    assert collision_check < validator_call
+    collision_guard = script[collision_check:validator_call]
+    assert '|| sudo -n test -L "$ARCHIVE_VALIDATION_RECEIPT"' in (
+        collision_guard
+    )
+    assert "Archive validation receipt already exists for this attempt" in (
+        collision_guard
+    )
+    assert "exit 1" in collision_guard
+
+
+def test_approve_and_restore_use_distinct_receipt_keys_in_one_run() -> None:
+    selector = _shell_function(
+        REMOTE_SCRIPT,
+        "select_archive_validation_attempt_identity",
+    )
+    keys = set()
+    for mode in ("approve-candidate-to-active", "restore-previous-active"):
+        result = subprocess.run(
+            [
+                "bash",
+                "-c",
+                "set -Eeuo pipefail\n"
+                + selector
+                + "\nselect_archive_validation_attempt_identity\n"
+                + "printf '%s\\n' \"$ARCHIVE_VALIDATION_ATTEMPT_KEY\"\n",
+            ],
+            env={
+                **os.environ,
+                "DEPLOY_BLUEGREEN_MODE": mode,
+                "DEPLOY_RUN_ID": "30976848352",
+                "DEPLOY_RUN_ATTEMPT": "1",
+                "DEPLOY_APPROVAL_RUN_ID": "30987869329",
+                "DEPLOY_APPROVAL_RUN_ATTEMPT": "1",
+            },
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+        assert result.returncode == 0, result.stderr + result.stdout
+        keys.add(result.stdout.strip())
+
+    assert keys == {
+        "30987869329-1-approve-candidate-to-active",
+        "30987869329-1-restore-previous-active",
+    }
+
+
 def test_remote_release_sealed_bundle_requires_exact_attempt_depth() -> None:
+    script = REMOTE_SCRIPT.read_text(encoding="utf-8")
     verifier = _shell_function(REMOTE_SCRIPT, "verify_sealed_release_bundle")
+    receipt_verifier_start = script.index(
+        "verify_archive_validation_receipt() {",
+    )
+    receipt_verifier_end = script.index(
+        "\nseal_release_archive_input\n",
+        receipt_verifier_start,
+    )
+    receipt_verifier = script[receipt_verifier_start:receipt_verifier_end]
 
     for token in (
-        '"$DEPLOY_COMMIT_SHA" "$DEPLOY_RUN_ID" "$DEPLOY_RUN_ATTEMPT"',
+        '"$DEPLOY_COMMIT_SHA" "$ARCHIVE_VALIDATION_RUN_ID"',
+        '"$ARCHIVE_VALIDATION_RUN_ATTEMPT"',
+        '"$ARCHIVE_VALIDATION_ATTEMPT_KEY" "$DEPLOY_BLUEGREEN_MODE"',
         "expected_run_dir = (",
         '/ "inputs"',
         "/ commit",
         "/ archive_sha256",
-        '/ f"{run_id}-{run_attempt}"',
+        "/ expected_attempt_key",
+        "attempt_key != expected_attempt_key",
         "run_dir != expected_run_dir",
     ):
         assert token in verifier
+    for token in (
+        '"$ARCHIVE_VALIDATION_ATTEMPT_KEY" "$DEPLOY_BLUEGREEN_MODE"',
+        'expected_attempt_key = f"{run_id}-{run_attempt}"',
+        'expected_attempt_key = f"{expected_attempt_key}-{release_mode}"',
+        'f"{expected_attempt_key}.json"',
+        "attempt_key != expected_attempt_key",
+    ):
+        assert token in receipt_verifier
     assert "run_dir.parent.parent.parent !=" not in verifier
 
 

@@ -408,13 +408,29 @@ verify_attested_candidate_paths_and_evidence
 RELEASE_WORKTREE=""
 TRUSTED_ARCHIVE_VALIDATOR_TEMP=""
 TRUSTED_FAILED_CANDIDATE_CONTROLLER_TEMP=""
+
+# Candidate provenance stays bound to DEPLOY_RUN_*. Archive validation belongs
+# to this operation; mode separates approval from its same-run auto-restore.
+select_archive_validation_attempt_identity() {
+  ARCHIVE_VALIDATION_RUN_ID="$DEPLOY_RUN_ID"
+  ARCHIVE_VALIDATION_RUN_ATTEMPT="$DEPLOY_RUN_ATTEMPT"
+  ARCHIVE_VALIDATION_ATTEMPT_KEY="${DEPLOY_RUN_ID}-${DEPLOY_RUN_ATTEMPT}"
+  if [[ "$DEPLOY_BLUEGREEN_MODE" != "prepare-candidate" ]]; then
+    ARCHIVE_VALIDATION_RUN_ID="$DEPLOY_APPROVAL_RUN_ID"
+    ARCHIVE_VALIDATION_RUN_ATTEMPT="$DEPLOY_APPROVAL_RUN_ATTEMPT"
+    ARCHIVE_VALIDATION_ATTEMPT_KEY="${DEPLOY_APPROVAL_RUN_ID}-${DEPLOY_APPROVAL_RUN_ATTEMPT}-${DEPLOY_BLUEGREEN_MODE}"
+  fi
+}
+
+select_archive_validation_attempt_identity
 SEALED_TRUST_ROOT="/var/lib/jato-sealed-inputs"
 SEALED_ARCHIVE_ROOT="$SEALED_TRUST_ROOT/inputs"
-SEALED_ARCHIVE_DIR="$SEALED_ARCHIVE_ROOT/$DEPLOY_COMMIT_SHA/$DEPLOY_ARCHIVE_SHA256/${DEPLOY_RUN_ID}-${DEPLOY_RUN_ATTEMPT}"
+SEALED_ARCHIVE_DIR="$SEALED_ARCHIVE_ROOT/$DEPLOY_COMMIT_SHA/$DEPLOY_ARCHIVE_SHA256/$ARCHIVE_VALIDATION_ATTEMPT_KEY"
 SEALED_RELEASE_ARCHIVE="$SEALED_ARCHIVE_DIR/release.tar.gz"
 SEALED_ARCHIVE_VALIDATOR="$SEALED_ARCHIVE_DIR/validate_release_archive.py"
 ARCHIVE_VALIDATION_RECEIPT_ROOT="$SEALED_TRUST_ROOT/receipts"
-ARCHIVE_VALIDATION_RECEIPT="$ARCHIVE_VALIDATION_RECEIPT_ROOT/$DEPLOY_COMMIT_SHA/$DEPLOY_ARCHIVE_SHA256/${DEPLOY_RUN_ID}-${DEPLOY_RUN_ATTEMPT}.json"
+ARCHIVE_VALIDATION_RECEIPT_DIR="$ARCHIVE_VALIDATION_RECEIPT_ROOT/$DEPLOY_COMMIT_SHA/$DEPLOY_ARCHIVE_SHA256"
+ARCHIVE_VALIDATION_RECEIPT="$ARCHIVE_VALIDATION_RECEIPT_DIR/$ARCHIVE_VALIDATION_ATTEMPT_KEY.json"
 PRODUCTION_EXTRACTION_RESERVE_BYTES=$((15 * 1024 * 1024 * 1024))
 BLUEGREEN_HEADROOM_TARGET=""
 PREBUILT_FRONTEND_DIR="$REPO_DIR/.release-staging/frontend_${DEPLOY_COMMIT_SHA}_${DEPLOY_ARCHIVE_SHA256}.staged"
@@ -612,7 +628,9 @@ verify_sealed_release_bundle() {
     "$SEALED_RELEASE_ARCHIVE" "$SEALED_ARCHIVE_VALIDATOR" \
     "$DEPLOY_ARCHIVE_SHA256" "$DEPLOY_ARCHIVE_BYTES" \
     "$RELEASE_ARCHIVE_VALIDATOR_SHA256" "$DEPLOY_GID" \
-    "$DEPLOY_COMMIT_SHA" "$DEPLOY_RUN_ID" "$DEPLOY_RUN_ATTEMPT" <<'PY'
+    "$DEPLOY_COMMIT_SHA" "$ARCHIVE_VALIDATION_RUN_ID" \
+    "$ARCHIVE_VALIDATION_RUN_ATTEMPT" \
+    "$ARCHIVE_VALIDATION_ATTEMPT_KEY" "$DEPLOY_BLUEGREEN_MODE" <<'PY'
 from pathlib import Path
 import hashlib
 import os
@@ -631,20 +649,26 @@ import sys
     commit,
     run_id,
     run_attempt,
+    attempt_key,
+    release_mode,
 ) = sys.argv[1:]
 trust_root = Path(trust_root_name)
 run_dir = Path(run_dir_name)
 archive = Path(archive_name)
 helper = Path(helper_name)
+expected_attempt_key = f"{run_id}-{run_attempt}"
+if release_mode != "prepare-candidate":
+    expected_attempt_key = f"{expected_attempt_key}-{release_mode}"
 expected_run_dir = (
     trust_root
     / "inputs"
     / commit
     / archive_sha256
-    / f"{run_id}-{run_attempt}"
+    / expected_attempt_key
 )
 if (
     trust_root != Path("/var/lib/jato-sealed-inputs")
+    or attempt_key != expected_attempt_key
     or run_dir != expected_run_dir
     or archive.parent != run_dir
     or helper.parent != run_dir
@@ -716,8 +740,11 @@ verify_archive_validation_receipt() {
     "$SEALED_ARCHIVE_VALIDATOR" "$RELEASE_WORKTREE" \
     "$BLUEGREEN_HEADROOM_TARGET" "$DEPLOY_COMMIT_SHA" \
     "$DEPLOY_ARCHIVE_SHA256" "$DEPLOY_ARCHIVE_BYTES" \
-    "$RELEASE_ARCHIVE_VALIDATOR_SHA256" "$DEPLOY_RUN_ID" \
-    "$DEPLOY_RUN_ATTEMPT" "$DEPLOY_GID" \
+    "$RELEASE_ARCHIVE_VALIDATOR_SHA256" \
+    "$ARCHIVE_VALIDATION_RUN_ID" \
+    "$ARCHIVE_VALIDATION_RUN_ATTEMPT" \
+    "$ARCHIVE_VALIDATION_ATTEMPT_KEY" "$DEPLOY_BLUEGREEN_MODE" \
+    "$DEPLOY_GID" \
     "$PRODUCTION_EXTRACTION_RESERVE_BYTES" <<'PY'
 from pathlib import Path
 import hashlib
@@ -740,6 +767,8 @@ import sys
     helper_sha256,
     run_id,
     run_attempt,
+    attempt_key,
+    release_mode,
     deploy_gid,
     reserve_bytes,
 ) = sys.argv[1:]
@@ -752,21 +781,28 @@ expected_targets = {
     str(Path(worktree_name)),
     str(Path(release_headroom_name)),
 }
+expected_attempt_key = f"{run_id}-{run_attempt}"
+if release_mode != "prepare-candidate":
+    expected_attempt_key = f"{expected_attempt_key}-{release_mode}"
 expected_receipt = (
     trust_root
     / "receipts"
     / commit
     / archive_sha256
-    / f"{run_id}-{run_attempt}.json"
+    / f"{expected_attempt_key}.json"
 )
 expected_run_dir = (
     trust_root
     / "inputs"
     / commit
     / archive_sha256
-    / f"{run_id}-{run_attempt}"
+    / expected_attempt_key
 )
-if receipt_path != expected_receipt or run_dir != expected_run_dir:
+if (
+    attempt_key != expected_attempt_key
+    or receipt_path != expected_receipt
+    or run_dir != expected_run_dir
+):
     raise SystemExit("[ERROR] archive validation attempt path is not canonical")
 metadata = os.lstat(receipt_path)
 if (
@@ -992,8 +1028,8 @@ if ! sudo -n python3 -B "$SEALED_ARCHIVE_VALIDATOR" \
   --trusted-control \
     "03_Scripts/deploy/validate_release_archive.py=$SEALED_ARCHIVE_VALIDATOR" \
   --output "$ARCHIVE_VALIDATION_RECEIPT" \
-  --validation-run-id "$DEPLOY_RUN_ID" \
-  --validation-run-attempt "$DEPLOY_RUN_ATTEMPT" \
+  --validation-run-id "$ARCHIVE_VALIDATION_RUN_ID" \
+  --validation-run-attempt "$ARCHIVE_VALIDATION_RUN_ATTEMPT" \
   --sealed-root "$SEALED_TRUST_ROOT" \
   --sealed-helper "$SEALED_ARCHIVE_VALIDATOR" \
   --expected-helper-sha256 "$RELEASE_ARCHIVE_VALIDATOR_SHA256" \
