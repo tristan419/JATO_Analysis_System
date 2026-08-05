@@ -534,12 +534,12 @@ def test_intl_edge_prewarm_verifies_completed_release_provenance_first() -> None
     assert "JATO_PREWARM_FAIL_ON_ERROR" in workflow
 
 
-def test_tencent_release_upload_resumes_and_never_falls_back() -> None:
+def test_tencent_release_upload_uses_verified_active_delta_basis() -> None:
     workflow = (REPO_ROOT / ".github/workflows/production-release.yml").read_text(
         encoding="utf-8",
     )
 
-    assert "Upload complete release archive without fallback" in workflow
+    assert "Upload complete release archive with incremental rsync" in workflow
     assert "fallback to sparse" not in workflow
     assert "timeout-minutes: 240" in workflow
     assert "cancel-in-progress: false" in workflow
@@ -547,7 +547,14 @@ def test_tencent_release_upload_resumes_and_never_falls_back() -> None:
     assert 'remote_temp="${remote_archive}.partial"' in workflow
     assert 'remote_lock="${remote_archive}.lock"' in workflow
     assert "--partial" in workflow
-    assert "--append-verify" in workflow
+    assert "--append-verify" not in workflow
+    assert "gzip -n --rsyncable" in workflow
+    assert "sudo -n realpath /opt/jato/active" in workflow
+    assert "NO_BASIS" in workflow
+    assert "refusing full upload" in workflow
+    assert "--checksum" in workflow
+    assert "--stats" in workflow
+    assert 'echo "literal-bytes=$literal_bytes"' in workflow
     assert "flock -w 870" in workflow
     assert "df -Pk" in workflow
     assert "cat >> '$remote_temp'" not in workflow
@@ -645,7 +652,7 @@ def test_backend_release_is_deterministic_and_closes_msrp_evidence_references() 
     assert "--no-acls" in workflow
     assert "--no-xattrs" in workflow
     assert "--no-selinux" in workflow
-    assert 'gzip -n -f "$RUNNER_TEMP/JATO_deploy.tar"' in workflow
+    assert 'gzip -n --rsyncable -f "$RUNNER_TEMP/JATO_deploy.tar"' in workflow
     assert 'value.get("localPath")' in workflow
     assert "missing MSRP localPath evidence" in workflow
     assert 'tar tzf "$RUNNER_TEMP/JATO_deploy.tar.gz" "$evidence_path"' in workflow
@@ -943,7 +950,7 @@ def test_tencent_uploads_verified_archive_before_deploy_step() -> None:
     )
 
     verify_index = workflow.index("Verify frontend artifact before Tencent deployment")
-    upload_index = workflow.index("Upload complete release archive without fallback")
+    upload_index = workflow.index("Upload complete release archive with incremental rsync")
     deploy_index = workflow.index("Deploy verified release on Tencent")
     assert verify_index < upload_index < deploy_index
     assert "frontend-release.json" in workflow
