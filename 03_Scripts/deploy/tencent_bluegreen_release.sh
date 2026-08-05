@@ -1901,6 +1901,29 @@ def process_environment(pid: str) -> dict[str, bytes]:
     return result
 
 
+def effective_path(environment: dict[str, bytes], key: str) -> bytes | None:
+    value = environment.get(key)
+    if value is not None:
+        return value
+    project_root = environment.get("APP_PROJECT_ROOT")
+    if project_root is None:
+        return None
+    defaults = {
+        "JATO_PARQUET_PATH": "04_Processed_data/jato_full_archive.parquet",
+        "JATO_PARTITIONED_PATH": "04_Processed_data/partitioned_dataset_v1",
+        "APP_CRUD_DATA_PATH": "04_Processed_data/app_entities.json",
+        "APP_ENGINEERING_IMPORT_ROOT": "01_RAW_DATA",
+        "MSRP_GOVERNANCE_EVIDENCE_ROOT": (
+            "04_Processed_data/ops/msrp_source_evidence"
+        ),
+        "APP_LOCAL_WIKI_DB_PATH": "04_Processed_data/chroma_db",
+    }
+    root = Path(os.fsdecode(project_root))
+    if not root.is_absolute():
+        return None
+    return os.fsencode(root / defaults[key])
+
+
 def same_runtime_path(candidate_value: bytes | None, active_value: bytes | None) -> bool:
     if candidate_value == active_value:
         return candidate_value is not None
@@ -1945,7 +1968,10 @@ for key in exact_keys:
             f"[ERROR] Candidate and Active differ for data connection key {key}"
         )
 for key in path_keys:
-    if not same_runtime_path(candidate.get(key), active.get(key)):
+    if not same_runtime_path(
+        effective_path(candidate, key),
+        effective_path(active, key),
+    ):
         raise SystemExit(
             f"[ERROR] Candidate and Active resolve to different runtime paths for {key}"
         )
