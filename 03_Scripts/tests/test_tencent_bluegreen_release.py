@@ -2670,9 +2670,15 @@ def test_candidate_data_contract_resolves_legacy_defaults(
 ) -> None:
     legacy_root = tmp_path / "legacy"
     candidate_root = tmp_path / "candidate"
+    legacy_raw_data = legacy_root / "01_RAW_DATA"
     legacy_data = legacy_root / "04_Processed_data"
+    legacy_raw_data.mkdir(parents=True)
     legacy_data.mkdir(parents=True)
     candidate_root.mkdir()
+    (candidate_root / "01_RAW_DATA").symlink_to(
+        legacy_raw_data,
+        target_is_directory=True,
+    )
     (candidate_root / "04_Processed_data").symlink_to(
         legacy_data,
         target_is_directory=True,
