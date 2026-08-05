@@ -58,6 +58,11 @@ on:
         required: true
         type: boolean
         default: false
+      bootstrap_full_upload:
+        description: Explicitly allow one full archive upload when no verified rsync basis exists
+        required: true
+        type: boolean
+        default: false
 
 permissions:
   actions: read
@@ -684,6 +689,7 @@ jobs:
         id: upload_release
         env:
           AUTH_MODE: ${{ steps.auth.outputs.mode }}
+          ALLOW_FULL_UPLOAD_BOOTSTRAP: ${{ github.event_name == 'workflow_dispatch' && inputs.bootstrap_full_upload }}
           SSH_HOST: ${{ secrets.SSH_HOST }}
           SSH_USER: ${{ secrets.SSH_USER }}
           SSH_PORT: ${{ secrets.SSH_PORT }}
@@ -700,6 +706,15 @@ jobs:
           remote_temp="${remote_archive}.partial"
           remote_checksum="${remote_archive}.sha256"
           remote_lock="${remote_archive}.lock"
+          case "$ALLOW_FULL_UPLOAD_BOOTSTRAP" in
+            true|false) ;;
+            *) echo "::error::Invalid bootstrap authorization"; exit 1 ;;
+          esac
+          if [ "$ALLOW_FULL_UPLOAD_BOOTSTRAP" = "true" ] \
+            && { [ "$GITHUB_EVENT_NAME" != "workflow_dispatch" ] || [ "$RELEASE_MODE" != "prepare-candidate" ]; }; then
+            echo "::error::Full-upload bootstrap is allowed only for an explicit prepare-candidate dispatch"
+            exit 1
+          fi
 
           ssh_options=(
             -T -p "$SSH_PORT"
@@ -813,7 +828,7 @@ jobs:
                  fi; \
                  exit 0; \
                fi; \
-               saved_sha=''; \
+               saved_sha=''; basis_kind='resume'; \
                if [ -f '$remote_checksum' ]; then saved_sha=\$(cat '$remote_checksum'); fi; \
                if [ -e '$remote_temp' ]; then \
                  if [ ! -f '$remote_temp' ] || [ -L '$remote_temp' ]; then \
@@ -837,10 +852,34 @@ jobs:
                    || [ \"\$active_release\" != \"/opt/jato/releases/\$basis_commit/\$basis_sha\" ] \
                    || [ ! -f \"\$basis_archive\" ] || [ -L \"\$basis_archive\" ] \
                    || [ \"\$(sha256sum \"\$basis_archive\" | awk '{print \$1}')\" != \"\$basis_sha\" ]; then \
+                   basis_archive=''; \
+                 fi; \
+                 if [ -n \"\$basis_archive\" ] && gzip -t \"\$basis_archive\"; then \
+                   basis_kind='active'; \
+                 else \
+                   basis_archive=''; \
+                   for candidate_archive in \$(find '.cache/jato-releases/archives' \
+                     -mindepth 2 -maxdepth 2 -type f -name '*.tar.gz' -printf '%T@|%p\n' \
+                     | sort -rn | cut -d'|' -f2-); do \
+                     candidate_name=\${candidate_archive##*/}; candidate_sha=\${candidate_name%.tar.gz}; \
+                     candidate_parent=\${candidate_archive%/*}; candidate_commit=\${candidate_parent##*/}; \
+                     case \"\$candidate_commit\$candidate_sha\" in *[!0-9a-f]*) continue;; esac; \
+                     if [ \"\${#candidate_commit}\" -eq 40 ] && [ \"\${#candidate_sha}\" -eq 64 ] \
+                       && [ \"\$candidate_archive\" = \".cache/jato-releases/archives/\$candidate_commit/\$candidate_sha.tar.gz\" ] \
+                       && [ ! -L \"\$candidate_archive\" ] \
+                       && [ \"\$(sha256sum \"\$candidate_archive\" | awk '{print \$1}')\" = \"\$candidate_sha\" ] \
+                       && gzip -t \"\$candidate_archive\"; then \
+                       basis_archive=\$candidate_archive; basis_kind='retained'; break; \
+                     fi; \
+                   done; \
+                 fi; \
+                 if [ -n \"\$basis_archive\" ]; then \
+                   gzip -dc \"\$basis_archive\" | gzip -n --rsyncable > '$remote_temp'; \
+                 elif [ '$ALLOW_FULL_UPLOAD_BOOTSTRAP' = 'true' ]; then \
+                   : > '$remote_temp'; basis_kind='bootstrap'; \
+                 else \
                    printf 'NO_BASIS|%s' \"\$active_release\"; exit 0; \
                  fi; \
-                 gzip -t \"\$basis_archive\"; \
-                 gzip -dc \"\$basis_archive\" | gzip -n --rsyncable > '$remote_temp'; \
                  partial_size=\$(wc -c < '$remote_temp' | tr -d '[:space:]'); \
                fi; \
                printf '%s\n' '$archive_sha256' > '$remote_checksum'; \
@@ -856,7 +895,7 @@ jobs:
                if [ \"\$available_bytes\" -lt \"\$required_bytes\" ]; then \
                  printf 'NO_SPACE|%s|%s' \"\$available_bytes\" \"\$required_bytes\"; exit 0; \
                fi; \
-               printf 'READY|%s|%s' \"\$partial_size\" \"\$available_bytes\""
+               printf 'READY|%s|%s|%s' \"\$partial_size\" \"\$available_bytes\" \"\$basis_kind\""
           }
 
           partial_reset_used=0
@@ -879,6 +918,8 @@ jobs:
           printf -v rsync_rsh '%q ' "${ssh_command[@]}" "${ssh_options[@]}"
           rsync_rsh="${rsync_rsh% }"
           upload_complete=0
+          bootstrap_used=false
+          transfer_basis='existing-target'
           for transfer_cycle in 1 2; do
             remote_state="$(inspect_remote_state)"
             state_kind="${remote_state%%|*}"
@@ -917,6 +958,11 @@ jobs:
             if [ "$state_kind" != "READY" ]; then
               echo "::error::Unexpected remote upload state: $remote_state"
               exit 1
+            fi
+            IFS='|' read -r _ _ _ transfer_basis <<< "$remote_state"
+            if [ "$transfer_basis" = "bootstrap" ]; then
+              bootstrap_used=true
+              echo "::notice::Explicit full-upload bootstrap authorized for this prepare-candidate run"
             fi
 
             upload_succeeded=0
@@ -1003,15 +1049,22 @@ jobs:
             literal_bytes="$(awk -F: '/^Literal data:/ {print $2}' "$rsync_stats" | tr -cd '0-9')"
             [[ "$literal_bytes" =~ ^[0-9]+$ ]]
           fi
+          if [ "$bootstrap_used" = "true" ] && [ "$literal_bytes" -ne "$archive_bytes" ]; then
+            echo "::error::Bootstrap transfer did not report the exact full archive byte count"
+            exit 1
+          fi
           echo "remote-archive=$remote_archive" >> "$GITHUB_OUTPUT"
           echo "archive-bytes=$archive_bytes" >> "$GITHUB_OUTPUT"
           echo "archive-sha256=$archive_sha256" >> "$GITHUB_OUTPUT"
           echo "literal-bytes=$literal_bytes" >> "$GITHUB_OUTPUT"
+          echo "bootstrap-used=$bootstrap_used" >> "$GITHUB_OUTPUT"
           {
             echo "### Tencent release transport"
             echo "- Remote path: \`$remote_archive\`"
             echo "- Bytes: \`$archive_bytes\`"
             echo "- Rsync literal delta bytes: \`$literal_bytes\`"
+            echo "- Transfer basis: \`$transfer_basis\`"
+            echo "- Explicit bootstrap used: \`$bootstrap_used\`"
             echo "- SHA-256: \`$archive_sha256\`"
             echo "- Rsync: local \`$local_rsync_version\`, remote \`$remote_rsync_version\`"
           } >> "$GITHUB_STEP_SUMMARY"
