@@ -918,7 +918,16 @@ def test_candidate_control_shell_is_control_only_and_syntax_valid() -> None:
     assert "hash_regular(" in script
     assert "archive_raw" not in script
     assert 'source "$CANDIDATE_VERIFIED_ENV"' in script
+    assert 'write_remote_export DEPLOY_RUN_ID "$CANDIDATE_RUN_ID"' in script
+    assert (
+        'write_remote_export DEPLOY_RUN_ATTEMPT "$CANDIDATE_RUN_ATTEMPT"'
+        in script
+    )
     assert 'write_remote_export DEPLOY_APPROVAL_RUN_ID "$GITHUB_RUN_ID"' in script
+    assert (
+        'write_remote_export DEPLOY_APPROVAL_RUN_ATTEMPT "$GITHUB_RUN_ATTEMPT"'
+        in script
+    )
     assert "DEPLOY_CANDIDATE_ATTESTATION_SHA256" in script
     for name in (
         "CANDIDATE_SERVER_CHECKPOINT_PATH",
