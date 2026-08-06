@@ -4403,7 +4403,17 @@ verify_durable_route_ownership() {
     fail "durable active-slot owner does not match slot $slot"
     return 1
   fi
-  if ! sudo -n test -L "$ACTIVE_RELEASE_LINK" \
+  if [[ "$verification_profile" == "candidate-discard" ]] \
+    && [[ "$release_root" == "$LEGACY_ROOT" ]]; then
+    if sudo -n test -e "$ACTIVE_RELEASE_LINK" \
+      || sudo -n test -L "$ACTIVE_RELEASE_LINK"; then
+      if ! sudo -n test -L "$ACTIVE_RELEASE_LINK" \
+        || [[ "$(sudo -n realpath "$ACTIVE_RELEASE_LINK")" != "$release_root" ]]; then
+        fail "durable active release link does not match $release_root"
+        return 1
+      fi
+    fi
+  elif ! sudo -n test -L "$ACTIVE_RELEASE_LINK" \
     || [[ "$(sudo -n realpath "$ACTIVE_RELEASE_LINK")" != "$release_root" ]]; then
     fail "durable active release link does not match $release_root"
     return 1
