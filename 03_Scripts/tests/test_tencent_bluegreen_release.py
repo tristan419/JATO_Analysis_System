@@ -147,6 +147,67 @@ def _expected_previous_metadata_path(tmp_path: Path) -> Path:
     )
 
 
+def _legacy_bridge_fixture(tmp_path: Path) -> dict[str, Path | str]:
+    legacy_root = tmp_path / "legacy-active"
+    backend_root = legacy_root / "06_AppPlatform/backend"
+    frontend_root = legacy_root / "06_AppPlatform/frontend/dist"
+    metadata = legacy_root / "hermes/deploy_release.json"
+    unit = tmp_path / "systemd/jato-fullstack-backend@.service"
+    memory_dropin = tmp_path / "systemd/20-memory-guard.conf"
+    slot_env = tmp_path / "slots/8000.env"
+    nginx_site = tmp_path / "nginx/sites-enabled/jato_fullstack.conf"
+    active_slot = tmp_path / "state/active-slot"
+    slot_link = tmp_path / "bluegreen/slots/8000/current"
+    for directory in (
+        backend_root,
+        frontend_root,
+        metadata.parent,
+        unit.parent,
+        slot_env.parent,
+        nginx_site.parent,
+        active_slot.parent,
+        slot_link.parent,
+    ):
+        directory.mkdir(parents=True, exist_ok=True)
+    payloads = {
+        unit: b"legacy-unit\n",
+        memory_dropin: b"legacy-memory-dropin\n",
+        slot_env: b"legacy-slot-env\n",
+        nginx_site: b"legacy-nginx-site\n",
+        metadata: b"legacy-release-metadata\n",
+        frontend_root / "build-meta.json": b"legacy-build-meta\n",
+        frontend_root / "release-provenance.json": b"legacy-provenance\n",
+    }
+    for path, payload in payloads.items():
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(payload)
+    active_slot.write_text("8000\n", encoding="utf-8")
+    slot_link.symlink_to(legacy_root)
+    return {
+        "legacy_root": legacy_root,
+        "backend_root": backend_root,
+        "unit": unit,
+        "memory_dropin": memory_dropin,
+        "slot_env": slot_env,
+        "nginx_site": nginx_site,
+        "metadata": metadata,
+        "build_meta": frontend_root / "build-meta.json",
+        "provenance": frontend_root / "release-provenance.json",
+        "active_slot": active_slot,
+        "unit_sha": hashlib.sha256(payloads[unit]).hexdigest(),
+        "memory_sha": hashlib.sha256(payloads[memory_dropin]).hexdigest(),
+        "slot_env_sha": hashlib.sha256(payloads[slot_env]).hexdigest(),
+        "nginx_sha": hashlib.sha256(payloads[nginx_site]).hexdigest(),
+        "metadata_sha": hashlib.sha256(payloads[metadata]).hexdigest(),
+        "build_meta_sha": hashlib.sha256(
+            payloads[frontend_root / "build-meta.json"],
+        ).hexdigest(),
+        "provenance_sha": hashlib.sha256(
+            payloads[frontend_root / "release-provenance.json"],
+        ).hexdigest(),
+    }
+
+
 @pytest.mark.parametrize("mode", ["prepare-and-switch", "switch-locked"])
 def test_legacy_physical_slot_switch_modes_are_retired(
     tmp_path: Path,
@@ -220,6 +281,171 @@ printf 'rc=%s attempts=%s sleeps=%s\n' "$rc" "$ATTEMPTS" "$SLEEPS"
     assert f"slot 8000 did not become ready with exact release {TARGET_SHA}" in (
         result.stderr
     )
+
+
+def test_exact_legacy_active_bridge_passes_and_reports_later_file_drift(
+    tmp_path: Path,
+) -> None:
+    fixture = _legacy_bridge_fixture(tmp_path)
+    nginx_site = fixture["nginx_site"]
+    result = _run_controller_harness(
+        tmp_path,
+        f"""
+LEGACY_ACTIVE_BRIDGE_COMMIT_SHA={OLD_SHA}
+LEGACY_ACTIVE_BRIDGE_SLOT=8000
+LEGACY_ACTIVE_BRIDGE_ROOT={fixture['legacy_root']}
+LEGACY_ACTIVE_BRIDGE_UNIT_FILE={fixture['unit']}
+LEGACY_ACTIVE_BRIDGE_UNIT_SHA256={fixture['unit_sha']}
+LEGACY_ACTIVE_BRIDGE_MEMORY_DROPIN={fixture['memory_dropin']}
+LEGACY_ACTIVE_BRIDGE_MEMORY_DROPIN_SHA256={fixture['memory_sha']}
+LEGACY_ACTIVE_BRIDGE_SLOT_ENV={fixture['slot_env']}
+LEGACY_ACTIVE_BRIDGE_SLOT_ENV_SHA256={fixture['slot_env_sha']}
+LEGACY_ACTIVE_BRIDGE_NGINX_SITE={nginx_site}
+LEGACY_ACTIVE_BRIDGE_NGINX_SITE_SHA256={fixture['nginx_sha']}
+LEGACY_ACTIVE_BRIDGE_RELEASE_METADATA_SHA256={fixture['metadata_sha']}
+LEGACY_ACTIVE_BRIDGE_BUILD_META_SHA256={fixture['build_meta_sha']}
+LEGACY_ACTIVE_BRIDGE_PROVENANCE_SHA256={fixture['provenance_sha']}
+LEGACY_ROOT={fixture['legacy_root']}
+ACTIVE_SLOT_FILE={fixture['active_slot']}
+ACTIVE_RELEASE_LINK={tmp_path / 'bluegreen/active'}
+NGINX_ACTIVE_RELEASE_CONF={tmp_path / 'nginx/active-release.conf'}
+FIXED_ACTIVE_LEGACY_BOOTSTRAP_RECEIPT={tmp_path / 'state/bootstrap.completed'}
+SLOTS_ROOT={tmp_path / 'bluegreen/slots'}
+CURRENT_ACTIVE_SLOT=8000
+PREVIOUS_RELEASE_ROOT={fixture['legacy_root']}
+PREVIOUS_RELEASE_SHA={OLD_SHA}
+sudo() {{
+  if [[ "$1" == -n ]]; then shift; fi
+  if [[ "$1" == readlink && "$*" == *"/proc/"* ]]; then
+    printf '%s\n' "$LEGACY_ROOT/06_AppPlatform/backend"
+    return
+  fi
+  "$@"
+}}
+systemctl() {{
+  if [[ "$*" == *"-p MainPID --value"* ]]; then
+    printf '%s\n' "$$"
+    return
+  fi
+  cat <<'EOF'
+FragmentPath={fixture['unit']}
+UnitFileState=enabled
+ActiveState=active
+SubState=running
+MainPID=4242
+WorkingDirectory={fixture['backend_root']}
+Environment=APP_BACKEND_WORKERS=2 APP_PROJECT_ROOT={fixture['legacy_root']} PYTHONPATH={fixture['backend_root']}
+EnvironmentFiles=/etc/jato-fullstack/backend.env (ignore_errors=yes)
+EOF
+  printf \
+    'ExecStart={{ path=%s ; argv[]=%s%s%s%s ; ignore_errors=no ; }}\n' \
+    "$LEGACY_ROOT/.venv/bin/python" \
+    "$LEGACY_ROOT/.venv/bin/python" \
+    ' -m uvicorn app.main:app' \
+    ' --host 127.0.0.1 --port 8000' \
+    ' --workers ${{APP_BACKEND_WORKERS}}'
+}}
+curl() {{ return 0; }}
+verify_legacy_public_release_exact() {{ return 0; }}
+legacy_active_bridge_check_readyz_absent() {{ return 0; }}
+verify_active_cgroup() {{ return 0; }}
+verify_active_monthly_gate_released() {{ return 0; }}
+cd "$LEGACY_ROOT/06_AppPlatform/backend"
+legacy_active_bridge_check_identity
+printf 'drift\n' >> "$LEGACY_ACTIVE_BRIDGE_NGINX_SITE"
+set +e
+legacy_active_bridge_check_identity
+drift_rc=$?
+set -e
+printf 'drift-rc=%s\n' "$drift_rc"
+""",
+    )
+
+    assert result.returncode == 0, result.stderr + result.stdout
+    assert "Exact legacy Active bridge verified" in result.stdout
+    assert "drift-rc=1" in result.stdout
+    assert "field=nginx.enabledSite" in result.stderr
+    assert "no Candidate mutation is authorized" in result.stderr
+
+
+def test_modern_previous_active_remains_strict_readyz_and_durable_route(
+    tmp_path: Path,
+) -> None:
+    trace = tmp_path / "modern-active.trace"
+    result = _run_controller_harness(
+        tmp_path,
+        f"""
+TRACE={trace}
+CURRENT_ACTIVE_SLOT=8000
+PREVIOUS_RELEASE_ROOT=/opt/jato/releases/{OLD_SHA}/{'9' * 64}
+PREVIOUS_RELEASE_SHA={OLD_SHA}
+record() {{ printf '%s\n' "$1" >> "$TRACE"; }}
+legacy_active_bridge_check_identity() {{ record unexpected-legacy; }}
+verify_slot_release_exact() {{ record readyz; }}
+verify_public_release_exact() {{ record public-readyz; }}
+unit_property_equals() {{ record "unit:$2=$3"; }}
+verify_active_cgroup() {{ record active-cgroup; }}
+verify_durable_route_ownership() {{ record durable-route; }}
+verify_active_monthly_gate_released() {{ record monthly-open; }}
+verify_previous_active_runtime_exact
+""",
+    )
+
+    assert result.returncode == 0, result.stderr + result.stdout
+    assert trace.read_text(encoding="utf-8").splitlines() == [
+        "readyz",
+        "public-readyz",
+        "unit:UnitFileState=enabled",
+        "unit:ActiveState=active",
+        "active-cgroup",
+        "durable-route",
+        "monthly-open",
+    ]
+
+
+def test_legacy_candidate_approval_rejects_before_runtime_mutation(
+    tmp_path: Path,
+) -> None:
+    trace = tmp_path / "legacy-approval.trace"
+    result = _run_controller_harness(
+        tmp_path,
+        f"""
+TRACE={trace}
+record() {{ printf '%s\n' "$1" >> "$TRACE"; }}
+require_environment() {{ record require; }}
+fixed_active_approval_binding() {{ record approval-binding; }}
+assert_inherited_production_lock() {{ record lock; }}
+require_existing_active_slot_anchor() {{ record active-slot-anchor; }}
+assert_no_active_switch_unit() {{ record no-switch; }}
+resolve_active_slot() {{ CURRENT_ACTIVE_SLOT=8000; CANDIDATE_SLOT=8001; }}
+resolve_previous_release_identity() {{
+  PREVIOUS_RELEASE_ROOT="$LEGACY_ROOT"
+  PREVIOUS_RELEASE_SHA="$LEGACY_ACTIVE_BRIDGE_COMMIT_SHA"
+}}
+legacy_active_bridge_check_identity() {{ record legacy-preflight; }}
+ensure_bluegreen_state_root() {{ record unexpected-state-write; }}
+ensure_bluegreen_runtime_roots() {{ record unexpected-runtime-write; }}
+capture_fixed_active_slot_anchor() {{ record unexpected-anchor-capture; }}
+read_checkpoint_phase_status() {{ record unexpected-checkpoint-read; }}
+set +e
+approve_candidate_to_active
+approval_rc=$?
+set -e
+printf 'approval-rc=%s\n' "$approval_rc"
+""",
+    )
+
+    assert result.returncode == 0, result.stderr + result.stdout
+    assert "approval-rc=1" in result.stdout
+    assert "legacy_active_bootstrap_required" in result.stderr
+    assert trace.read_text(encoding="utf-8").splitlines() == [
+        "require",
+        "approval-binding",
+        "lock",
+        "active-slot-anchor",
+        "no-switch",
+        "legacy-preflight",
+    ]
 
 
 def _candidate_previous_metadata_path(
@@ -569,6 +795,16 @@ def test_prepare_candidate_stops_at_manual_review_without_public_mutation() -> N
         offsets.append(cursor)
         cursor += len(token)
     assert offsets == sorted(offsets)
+    active_identity = prepare.index("resolve_previous_release_identity")
+    active_preflight = prepare.index(
+        "verify_previous_active_runtime_exact",
+        active_identity,
+    )
+    state_root_write = prepare.index("ensure_bluegreen_state_root")
+    runtime_root_write = prepare.index("ensure_bluegreen_runtime_roots")
+    first_candidate_mutation = prepare.index("prepare_shared_runtime")
+    assert active_identity < active_preflight < state_root_write
+    assert active_preflight < runtime_root_write < first_candidate_mutation
     binding = prepare.index('binding="$(evidence_binding)"')
     checkpoint = prepare.index(
         "checkpoint_write candidate_ready completed inspect_then_resume",
@@ -621,6 +857,7 @@ PHASE=prepared
 record() {{ printf '%s\\n' "$1" >> "$TRACE"; }}
 require_environment() {{ record require; }}
 assert_inherited_production_lock() {{ record lock; }}
+require_existing_active_slot_anchor() {{ record active-slot-anchor; }}
 ensure_bluegreen_state_root() {{ record state-root; }}
 ensure_bluegreen_runtime_roots() {{ record runtime-roots; }}
 assert_no_active_switch_unit() {{ record no-switch; }}
@@ -630,6 +867,8 @@ read_checkpoint_phase_status() {{
 }}
 resolve_active_slot() {{ CURRENT_ACTIVE_SLOT=8000; CANDIDATE_SLOT=8001; }}
 resolve_current_frontend_root() {{ record current-frontend; }}
+resolve_previous_release_identity() {{ record previous-active-identity; }}
+verify_previous_active_runtime_exact() {{ record previous-active-preflight; }}
 prepare_shared_runtime() {{ record shared; }}
 ensure_current_slot_restartable() {{ record restartable; }}
 preserve_previous_release_metadata() {{ record metadata; }}
@@ -679,6 +918,9 @@ printf 'armed=%s\\n' "$PRE_SUPERVISOR_CANDIDATE_ARMED"
     assert expected_binding in checkpoint_event
     assert "armed=false" in result.stdout
     assert not any(event.startswith("unexpected-") for event in events)
+    assert events.index("previous-active-identity") < events.index(
+        "previous-active-preflight",
+    ) < events.index("shared")
     assert events.index("preview-start") < events.index("preview-verify")
     assert events.index("preview-verify") < events.index(
         checkpoint_event,
@@ -1329,6 +1571,10 @@ def test_discard_candidate_mutates_only_candidate_runtime() -> None:
         script,
         "previous_active_is_exact_for_candidate_discard",
     )
+    previous_active = _shell_function(
+        script,
+        "verify_previous_active_runtime_exact",
+    )
 
     assert "previous_active_is_exact_for_candidate_discard" in discard
     assert "stop_candidate_preview" in discard
@@ -1337,10 +1583,12 @@ def test_discard_candidate_mutates_only_candidate_runtime() -> None:
     assert "checkpoint_write candidate_discarded completed automatic" in discard
     assert "rollback_completed" in discard
     assert "fixed_active_preimage_command restore" not in discard
-    assert 'verify_active_cgroup "$CURRENT_ACTIVE_SLOT"' in active_gate
-    assert "verify_durable_route_ownership" in active_gate
-    assert "candidate-discard" in active_gate
-    assert "verify_active_monthly_gate_released" in active_gate
+    assert "verify_previous_active_runtime_exact" in active_gate
+    assert "legacy_active_bridge_check_identity" in previous_active
+    assert "verify_slot_release_exact" in previous_active
+    assert "verify_public_release_exact" in previous_active
+    assert "verify_durable_route_ownership" in previous_active
+    assert "verify_active_monthly_gate_released" in previous_active
     for forbidden in (
         "pause_schedulers",
         "resume_schedulers",
@@ -1446,20 +1694,21 @@ def test_candidate_discard_keeps_readyz_for_nonlegacy_active() -> None:
     assert "verify_public_release_exact" in route
 
 
-def test_candidate_ready_and_cleanup_reuse_legacy_active_identity() -> None:
+def test_candidate_ready_and_cleanup_reuse_complete_active_identity() -> None:
     script = CONTROLLER.read_text(encoding="utf-8")
-    previous_active = _shell_function(
+    complete_active = _shell_function(
         script,
-        "verify_previous_active_release_exact",
+        "verify_previous_active_runtime_exact",
     )
     candidate_ready = _shell_function(script, "candidate_ready_runtime_is_exact")
     cleanup = _shell_function(script, "cleanup_pre_switch_candidate")
 
-    assert '[[ "$PREVIOUS_RELEASE_ROOT" == "$LEGACY_ROOT" ]]' in previous_active
-    assert "verify_legacy_active_release_exact" in previous_active
-    assert "verify_slot_release_exact" in previous_active
-    assert "verify_previous_active_release_exact" in candidate_ready
-    assert "verify_previous_active_release_exact" in cleanup
+    assert '[[ "$PREVIOUS_RELEASE_ROOT" == "$LEGACY_ROOT" ]]' in complete_active
+    assert "legacy_active_bridge_check_identity" in complete_active
+    assert "verify_slot_release_exact" in complete_active
+    assert "verify_public_release_exact" in complete_active
+    assert "verify_previous_active_runtime_exact" in candidate_ready
+    assert "verify_previous_active_runtime_exact" in cleanup
     assert (
         'verify_slot_release_exact "$CURRENT_ACTIVE_SLOT" '
         '"$PREVIOUS_RELEASE_SHA"'
@@ -1520,11 +1769,10 @@ def test_discard_failed_candidate_is_candidate_only_and_explicit() -> None:
     assert "candidate_release_is_complete" in discard
     assert "settle_candidate_checkpoint_after_cleanup" in discard
     assert discard.index("require_existing_active_slot_anchor") < discard.index(
-        "ensure_bluegreen_state_root",
-    )
-    assert discard.index("require_existing_active_slot_anchor") < discard.index(
         "resolve_active_slot",
     )
+    assert "ensure_bluegreen_state_root" not in discard
+    assert "ensure_bluegreen_runtime_roots" not in discard
     for forbidden in (
         "restore_nginx_preimage",
         "restore_old_static_boot_owner",
@@ -1787,6 +2035,7 @@ CANDIDATE_CLEAN=false
 record() {{ printf '%s\n' "$1" >> "$TRACE"; }}
 require_environment() {{ record require; }}
 assert_inherited_production_lock() {{ record lock; }}
+require_existing_active_slot_anchor() {{ record active-slot-anchor; }}
 ensure_bluegreen_state_root() {{ record state-root; }}
 ensure_bluegreen_runtime_roots() {{ record runtime-roots; }}
 assert_no_active_switch_unit() {{ record no-switch; }}
@@ -1861,6 +2110,7 @@ RESTORE_CALLS=0
 record() {{ printf '%s\n' "$1" >> "$TRACE"; }}
 require_environment() {{ :; }}
 assert_inherited_production_lock() {{ :; }}
+require_existing_active_slot_anchor() {{ :; }}
 ensure_bluegreen_state_root() {{ :; }}
 ensure_bluegreen_runtime_roots() {{ :; }}
 assert_no_active_switch_unit() {{ :; }}
@@ -1905,6 +2155,7 @@ def test_candidate_discarded_rerun_is_read_only(tmp_path: Path) -> None:
         """
 require_environment() { :; }
 assert_inherited_production_lock() { :; }
+require_existing_active_slot_anchor() { :; }
 ensure_bluegreen_state_root() { :; }
 ensure_bluegreen_runtime_roots() { :; }
 assert_no_active_switch_unit() { :; }
@@ -2645,6 +2896,10 @@ verify_slot_release_exact() {{ printf 'old-direct\\n'; }}
 verify_public_release_exact() {{
   printf 'old-public\\n'
   printf 'old-public\\n' >> "$TRACE_FILE"
+}}
+verify_previous_active_runtime_exact() {{
+  verify_slot_release_exact "$CURRENT_ACTIVE_SLOT" "$PREVIOUS_RELEASE_SHA" \
+    && verify_public_release_exact "$PREVIOUS_RELEASE_SHA"
 }}
 restore_nginx_preimage() {{ printf 'unsafe-preimage-restore\\n'; }}
 stop_candidate_preview() {{ return 0; }}
@@ -3955,6 +4210,10 @@ verify_slot_release_exact() {{ return 0; }}
 verify_public_release_exact() {{
   test -f "$NGINX_ACTIVE_RELEASE_CONF"
   grep -Fxq 'stable-old-route' "$NGINX_ACTIVE_RELEASE_CONF"
+}}
+verify_previous_active_runtime_exact() {{
+  verify_slot_release_exact "$CURRENT_ACTIVE_SLOT" "$PREVIOUS_RELEASE_SHA" \
+    && verify_public_release_exact "$PREVIOUS_RELEASE_SHA"
 }}
 stop_candidate_preview() {{ return 0; }}
 restore_old_static_boot_owner() {{ printf 'old-owner-restored\\n' >> "$TRACE"; }}

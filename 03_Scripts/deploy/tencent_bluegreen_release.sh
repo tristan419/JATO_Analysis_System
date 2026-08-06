@@ -55,6 +55,25 @@ BLUEGREEN_RELEASE_EMERGENCY_GC_AGE_SECONDS=$((24 * 60 * 60))
 BLUEGREEN_FAULT="${BLUEGREEN_FAULT:-}"
 BLUEGREEN_MODE="${1:-}"
 SERVICE_PREFIX="jato-fullstack-backend@"
+# One production release predates the immutable slot readiness contract.  The
+# bridge is deliberately bound to the byte-for-byte server baseline collected
+# on 2026-08-05.  It is only used to prove that this exact legacy Active stayed
+# unchanged while a Candidate is prepared or discarded; it never authorizes an
+# Active update or weakens readiness for an immutable release.
+LEGACY_ACTIVE_BRIDGE_COMMIT_SHA="cd4557cb932374a0fefb6c80a5fac9fb75a67d62"
+LEGACY_ACTIVE_BRIDGE_SLOT="8000"
+LEGACY_ACTIVE_BRIDGE_ROOT="/opt/JATO_Analysis_System-main"
+LEGACY_ACTIVE_BRIDGE_UNIT_FILE="/etc/systemd/system/jato-fullstack-backend@.service"
+LEGACY_ACTIVE_BRIDGE_UNIT_SHA256="5318e4c5e55e9e8b586adf5f2bcb72581fb41514fca3f4c153ba7f7ba265618d"
+LEGACY_ACTIVE_BRIDGE_MEMORY_DROPIN="/etc/systemd/system/jato-fullstack-backend@8000.service.d/20-memory-guard.conf"
+LEGACY_ACTIVE_BRIDGE_MEMORY_DROPIN_SHA256="626b15c662a830df52d138895243cb5b3346834aefeb613fd7429ba2bf50a256"
+LEGACY_ACTIVE_BRIDGE_SLOT_ENV="/etc/jato-fullstack/slots/8000.env"
+LEGACY_ACTIVE_BRIDGE_SLOT_ENV_SHA256="6572ed1f04eedae85705eb386ce6229b325debe6389c14c1334a6684077391b8"
+LEGACY_ACTIVE_BRIDGE_NGINX_SITE="/etc/nginx/sites-enabled/jato_fullstack.conf"
+LEGACY_ACTIVE_BRIDGE_NGINX_SITE_SHA256="6f5e26e9e293d8024af90ed8446a1f8f1c5072567c38f050f86ec38524e2880d"
+LEGACY_ACTIVE_BRIDGE_RELEASE_METADATA_SHA256="43a908bd071dcd9e9761d44435e6744580abd7729c14a4ea6f19071656b2714f"
+LEGACY_ACTIVE_BRIDGE_BUILD_META_SHA256="3c1112aa4c2c6cdc6134f88618633fd13d840f4ec3a6d4a71dc164e6b96ee880"
+LEGACY_ACTIVE_BRIDGE_PROVENANCE_SHA256="15ef7a2a571cbc9a4e1855e45d44a891f0cb609f0c5a5509cfd5d66e27b1f1ca"
 SCHEDULER_STATE_FILE="${SCHEDULER_STATE_FILE:-$BLUEGREEN_STATE_ROOT/scheduler-state.tsv}"
 EXIT_COMMAND_FAILED_MARKER_RETAINED=81
 SCHEDULER_TIMERS=(
@@ -923,6 +942,474 @@ wait_for_slot_release_exact() {
     fi
   done
   fail "slot $slot did not become ready with exact release $expected_sha"
+}
+
+legacy_active_bridge_check_file_digest() {
+  local field="$1"
+  local path="$2"
+  local expected="$3"
+  local actual=""
+  if sudo -n test -L "$path" || ! sudo -n test -f "$path"; then
+    printf \
+      '[ERROR] legacy Active bridge mismatch: field=%s expected=regular-file actual=missing-or-unsafe path=%s\n' \
+      "$field" "$path" >&2
+    return 1
+  fi
+  actual="$(sudo -n sha256sum -- "$path" | awk '{print $1}')" || return 1
+  if [[ "$actual" != "$expected" ]]; then
+    printf \
+      '[ERROR] legacy Active bridge mismatch: field=%s expected=%s actual=%s path=%s\n' \
+      "$field" "$expected" "${actual:-unavailable}" "$path" >&2
+    return 1
+  fi
+}
+
+legacy_active_bridge_check_unit() {
+  local expected_unit="${SERVICE_PREFIX}${LEGACY_ACTIVE_BRIDGE_SLOT}"
+  local properties=""
+  properties="$(
+    systemctl show "$expected_unit" \
+      -p FragmentPath -p UnitFileState -p ActiveState -p SubState \
+      -p MainPID -p ExecStart -p WorkingDirectory -p Environment \
+      -p EnvironmentFiles 2>/dev/null
+  )" || return 1
+  python3 -B - \
+    "$properties" \
+    "$LEGACY_ACTIVE_BRIDGE_UNIT_FILE" \
+    "$LEGACY_ROOT" \
+    "$LEGACY_ACTIVE_BRIDGE_SLOT" <<'PY'
+import json
+import re
+import shlex
+import sys
+
+raw, expected_fragment, legacy_root, slot = sys.argv[1:]
+properties = {}
+for line in raw.splitlines():
+    key, separator, value = line.partition("=")
+    if separator:
+        properties[key] = value
+
+expected = {
+    "FragmentPath": expected_fragment,
+    "UnitFileState": "enabled",
+    "ActiveState": "active",
+    "SubState": "running",
+    "WorkingDirectory": f"{legacy_root}/06_AppPlatform/backend",
+}
+mismatches = []
+for field, value in expected.items():
+    if properties.get(field) != value:
+        mismatches.append(
+            {
+                "field": f"systemd.{field}",
+                "expected": value,
+                "actual": properties.get(field),
+            }
+        )
+
+try:
+    environment_tokens = shlex.split(properties.get("Environment", ""))
+except ValueError:
+    environment_tokens = []
+environment = {}
+for token in environment_tokens:
+    key, separator, value = token.partition("=")
+    if separator:
+        environment[key] = value
+expected_environment = {
+    "APP_BACKEND_WORKERS": "2",
+    "APP_PROJECT_ROOT": legacy_root,
+    "PYTHONPATH": f"{legacy_root}/06_AppPlatform/backend",
+}
+for field, value in expected_environment.items():
+    if environment.get(field) != value:
+        mismatches.append(
+            {
+                "field": f"systemd.Environment.{field}",
+                "expected": value,
+                "actual": environment.get(field),
+            }
+        )
+
+exec_start = properties.get("ExecStart", "")
+required_exec_tokens = (
+    f"path={legacy_root}/.venv/bin/python",
+    f"argv[]={legacy_root}/.venv/bin/python -m uvicorn app.main:app",
+    f"--host 127.0.0.1 --port {slot}",
+    "--workers ${APP_BACKEND_WORKERS}",
+)
+for token in required_exec_tokens:
+    if token not in exec_start:
+        mismatches.append(
+            {
+                "field": "systemd.ExecStart",
+                "expected": token,
+                "actual": "redacted-argv-mismatch",
+            }
+        )
+
+if re.fullmatch(r"[1-9][0-9]*", properties.get("MainPID", "")) is None:
+    mismatches.append(
+        {
+            "field": "systemd.MainPID",
+            "expected": "live-positive-pid",
+            "actual": properties.get("MainPID"),
+        }
+    )
+if properties.get("EnvironmentFiles") != (
+    "/etc/jato-fullstack/backend.env (ignore_errors=yes)"
+):
+    mismatches.append(
+        {
+            "field": "systemd.EnvironmentFiles",
+            "expected": "/etc/jato-fullstack/backend.env (ignore_errors=yes)",
+            "actual": properties.get("EnvironmentFiles"),
+        }
+    )
+
+if mismatches:
+    print(
+        json.dumps(
+            {
+                "decision": "legacy-active-bridge-rejected",
+                "category": "legacy-active-systemd-drift",
+                "fieldDiffs": mismatches,
+                "mutationPerformed": False,
+            },
+            sort_keys=True,
+        ),
+        file=sys.stderr,
+    )
+    raise SystemExit(1)
+PY
+}
+
+legacy_active_bridge_check_readyz_absent() {
+  local body=""
+  local status=""
+  body="$(mktemp)" || return 1
+  if ! status="$(
+    curl --noproxy '*' --silent --show-error --output "$body" \
+      --write-out '%{http_code}' --max-time 10 \
+      "http://127.0.0.1:${LEGACY_ACTIVE_BRIDGE_SLOT}/readyz"
+  )"; then
+    rm -f "$body"
+    fail "legacy Active /readyz probe failed instead of returning exact HTTP 404"
+    return 1
+  fi
+  if ! python3 -B - "$body" "$status" <<'PY'
+import json
+from pathlib import Path
+import sys
+
+path = Path(sys.argv[1])
+status = sys.argv[2]
+try:
+    payload = json.loads(path.read_text(encoding="utf-8"))
+except (OSError, UnicodeError, json.JSONDecodeError):
+    payload = None
+if status != "404" or payload != {"detail": "Not Found"}:
+    print(
+        json.dumps(
+            {
+                "decision": "legacy-active-bridge-rejected",
+                "category": "legacy-readyz-contract-drift",
+                "fieldDiffs": [
+                    {
+                        "field": "direct.readyz",
+                        "expected": {
+                            "status": 404,
+                            "body": {"detail": "Not Found"},
+                        },
+                        "actual": {
+                            "status": status,
+                            "body": payload,
+                        },
+                    }
+                ],
+                "mutationPerformed": False,
+            },
+            sort_keys=True,
+        ),
+        file=sys.stderr,
+    )
+    raise SystemExit(1)
+PY
+  then
+    rm -f "$body"
+    return 1
+  fi
+  rm -f "$body"
+}
+
+verify_legacy_public_release_exact() {
+  local build_payload=""
+  local health_payload=""
+  local normalized_names=""
+  local provenance_payload=""
+  local server_name=""
+  local server_names=()
+  health_payload="$(mktemp)" || return 1
+  build_payload="$(mktemp)" || {
+    rm -f "$health_payload"
+    return 1
+  }
+  provenance_payload="$(mktemp)" || {
+    rm -f "$health_payload" "$build_payload"
+    return 1
+  }
+  if ! normalized_names="$(normalized_deploy_server_names "${DEPLOY_SERVER_NAME:-}")"; then
+    rm -f "$health_payload" "$build_payload" "$provenance_payload"
+    return 1
+  fi
+  mapfile -t server_names <<< "$normalized_names"
+  for server_name in "${server_names[@]}"; do
+    if [[ "$server_name" == "_" ]]; then
+      if ! curl --noproxy '*' --fail --silent --show-error --max-time 20 \
+        -H 'Host: localhost' http://127.0.0.1/healthz > "$health_payload" \
+        || ! curl --noproxy '*' --fail --silent --show-error --max-time 20 \
+          -H 'Host: localhost' http://127.0.0.1/build-meta.json \
+          > "$build_payload" \
+        || ! curl --noproxy '*' --fail --silent --show-error --max-time 20 \
+          -H 'Host: localhost' http://127.0.0.1/release-provenance.json \
+          > "$provenance_payload"; then
+        rm -f "$health_payload" "$build_payload" "$provenance_payload"
+        return 1
+      fi
+    else
+      if ! curl --noproxy '*' --fail --silent --show-error --location \
+        --proto '=https' --proto-redir '=https' --max-time 20 \
+        --resolve "${server_name}:443:127.0.0.1" \
+        "https://${server_name}/healthz" > "$health_payload" \
+        || ! curl --noproxy '*' --fail --silent --show-error --location \
+          --proto '=https' --proto-redir '=https' --max-time 20 \
+          --resolve "${server_name}:443:127.0.0.1" \
+          "https://${server_name}/build-meta.json" > "$build_payload" \
+        || ! curl --noproxy '*' --fail --silent --show-error --location \
+          --proto '=https' --proto-redir '=https' --max-time 20 \
+          --resolve "${server_name}:443:127.0.0.1" \
+          "https://${server_name}/release-provenance.json" \
+          > "$provenance_payload"; then
+        rm -f "$health_payload" "$build_payload" "$provenance_payload"
+        return 1
+      fi
+    fi
+    if ! python3 -B - \
+      "$health_payload" \
+      "$build_payload" \
+      "$provenance_payload" \
+      "$LEGACY_ACTIVE_BRIDGE_COMMIT_SHA" \
+      "$server_name" <<'PY'
+import json
+from pathlib import Path
+import sys
+
+health = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
+build = json.loads(Path(sys.argv[2]).read_text(encoding="utf-8"))
+provenance = json.loads(Path(sys.argv[3]).read_text(encoding="utf-8"))
+expected_sha = sys.argv[4]
+server_name = sys.argv[5]
+build_commits = {
+    str(build.get(name) or "")
+    for name in ("deployCommit", "githubSha", "commitSha", "sha")
+}
+source = provenance.get("source")
+if health != {"status": "ok"}:
+    raise SystemExit(
+        f"[ERROR] legacy public /healthz changed for {server_name}"
+    )
+if expected_sha not in build_commits:
+    raise SystemExit(
+        f"[ERROR] legacy public build-meta does not bind {expected_sha} "
+        f"for {server_name}"
+    )
+if not isinstance(source, dict) or any(
+    source.get(field) != expected_sha
+    for field in ("appCommit", "deployCommit", "githubSha")
+):
+    raise SystemExit(
+        f"[ERROR] legacy public provenance does not bind {expected_sha} "
+        f"for {server_name}"
+    )
+PY
+    then
+      rm -f "$health_payload" "$build_payload" "$provenance_payload"
+      return 1
+    fi
+  done
+  rm -f "$health_payload" "$build_payload" "$provenance_payload"
+}
+
+legacy_active_bridge_check_identity() {
+  local failure=0
+  local main_pid=""
+  local process_cwd=""
+  local slot_link="$SLOTS_ROOT/$LEGACY_ACTIVE_BRIDGE_SLOT/current"
+  if [[ "$CURRENT_ACTIVE_SLOT" != "$LEGACY_ACTIVE_BRIDGE_SLOT" ]]; then
+    printf \
+      '[ERROR] legacy Active bridge mismatch: field=activeSlot expected=%s actual=%s\n' \
+      "$LEGACY_ACTIVE_BRIDGE_SLOT" "${CURRENT_ACTIVE_SLOT:-unset}" >&2
+    failure=1
+  fi
+  if [[ "$PREVIOUS_RELEASE_ROOT" != "$LEGACY_ROOT" ]]; then
+    printf \
+      '[ERROR] legacy Active bridge mismatch: field=releaseRoot expected=%s actual=%s\n' \
+      "$LEGACY_ROOT" "${PREVIOUS_RELEASE_ROOT:-unset}" >&2
+    failure=1
+  fi
+  if [[ "$LEGACY_ROOT" != "$LEGACY_ACTIVE_BRIDGE_ROOT" ]]; then
+    printf \
+      '[ERROR] legacy Active bridge mismatch: field=canonicalLegacyRoot expected=%s actual=%s\n' \
+      "$LEGACY_ACTIVE_BRIDGE_ROOT" "$LEGACY_ROOT" >&2
+    failure=1
+  fi
+  if [[ "$PREVIOUS_RELEASE_SHA" != "$LEGACY_ACTIVE_BRIDGE_COMMIT_SHA" ]]; then
+    printf \
+      '[ERROR] legacy Active bridge mismatch: field=commitSha expected=%s actual=%s\n' \
+      "$LEGACY_ACTIVE_BRIDGE_COMMIT_SHA" "${PREVIOUS_RELEASE_SHA:-unset}" >&2
+    failure=1
+  fi
+  if sudo -n test -L "$ACTIVE_SLOT_FILE" \
+    || ! sudo -n test -f "$ACTIVE_SLOT_FILE" \
+    || [[ "$(sudo -n cat "$ACTIVE_SLOT_FILE" 2>/dev/null || true)" \
+      != "$LEGACY_ACTIVE_BRIDGE_SLOT" ]]; then
+    printf \
+      '[ERROR] legacy Active bridge mismatch: field=activeSlotAnchor expected=regular-8000 actual=drifted\n' \
+      >&2
+    failure=1
+  fi
+  if ! sudo -n test -L "$slot_link" \
+    || [[ "$(sudo -n realpath "$slot_link" 2>/dev/null || true)" != "$LEGACY_ROOT" ]]; then
+    printf \
+      '[ERROR] legacy Active bridge mismatch: field=slotLink expected=%s actual=drifted\n' \
+      "$LEGACY_ROOT" >&2
+    failure=1
+  fi
+  if sudo -n test -e "$ACTIVE_RELEASE_LINK" \
+    || sudo -n test -L "$ACTIVE_RELEASE_LINK"; then
+    printf \
+      '[ERROR] legacy Active bridge mismatch: field=activeReleaseLink expected=absent actual=present\n' \
+      >&2
+    failure=1
+  fi
+  if sudo -n test -e "$NGINX_ACTIVE_RELEASE_CONF" \
+    || sudo -n test -L "$NGINX_ACTIVE_RELEASE_CONF"; then
+    printf \
+      '[ERROR] legacy Active bridge mismatch: field=activeReleaseConf expected=absent actual=present\n' \
+      >&2
+    failure=1
+  fi
+  if sudo -n test -e "$FIXED_ACTIVE_LEGACY_BOOTSTRAP_RECEIPT" \
+    || sudo -n test -L "$FIXED_ACTIVE_LEGACY_BOOTSTRAP_RECEIPT"; then
+    printf \
+      '[ERROR] legacy Active bridge mismatch: field=bootstrapReceipt expected=absent actual=present\n' \
+      >&2
+    failure=1
+  fi
+  if ! legacy_active_bridge_check_file_digest \
+    systemd.unit \
+    "$LEGACY_ACTIVE_BRIDGE_UNIT_FILE" \
+    "$LEGACY_ACTIVE_BRIDGE_UNIT_SHA256"; then
+    failure=1
+  fi
+  if ! legacy_active_bridge_check_file_digest \
+    systemd.memoryDropIn \
+    "$LEGACY_ACTIVE_BRIDGE_MEMORY_DROPIN" \
+    "$LEGACY_ACTIVE_BRIDGE_MEMORY_DROPIN_SHA256"; then
+    failure=1
+  fi
+  if ! legacy_active_bridge_check_file_digest \
+    active.slotEnv \
+    "$LEGACY_ACTIVE_BRIDGE_SLOT_ENV" \
+    "$LEGACY_ACTIVE_BRIDGE_SLOT_ENV_SHA256"; then
+    failure=1
+  fi
+  if ! legacy_active_bridge_check_file_digest \
+    nginx.enabledSite \
+    "$LEGACY_ACTIVE_BRIDGE_NGINX_SITE" \
+    "$LEGACY_ACTIVE_BRIDGE_NGINX_SITE_SHA256"; then
+    failure=1
+  fi
+  if ! legacy_active_bridge_check_file_digest \
+    release.metadata \
+    "$LEGACY_ROOT/hermes/deploy_release.json" \
+    "$LEGACY_ACTIVE_BRIDGE_RELEASE_METADATA_SHA256"; then
+    failure=1
+  fi
+  if ! legacy_active_bridge_check_file_digest \
+    frontend.buildMeta \
+    "$LEGACY_ROOT/06_AppPlatform/frontend/dist/build-meta.json" \
+    "$LEGACY_ACTIVE_BRIDGE_BUILD_META_SHA256"; then
+    failure=1
+  fi
+  if ! legacy_active_bridge_check_file_digest \
+    frontend.provenance \
+    "$LEGACY_ROOT/06_AppPlatform/frontend/dist/release-provenance.json" \
+    "$LEGACY_ACTIVE_BRIDGE_PROVENANCE_SHA256"; then
+    failure=1
+  fi
+  if ! legacy_active_bridge_check_unit; then
+    failure=1
+  fi
+  main_pid="$(
+    systemctl show \
+      "${SERVICE_PREFIX}${LEGACY_ACTIVE_BRIDGE_SLOT}" \
+      -p MainPID --value 2>/dev/null || true
+  )"
+  if [[ "$main_pid" =~ ^[1-9][0-9]*$ ]]; then
+    process_cwd="$(sudo -n readlink -f "/proc/$main_pid/cwd" 2>/dev/null || true)"
+  fi
+  if [[ "$process_cwd" != "$LEGACY_ROOT/06_AppPlatform/backend" ]]; then
+    printf \
+      '[ERROR] legacy Active bridge mismatch: field=process.cwd expected=%s actual=%s\n' \
+      "$LEGACY_ROOT/06_AppPlatform/backend" "${process_cwd:-unavailable}" >&2
+    failure=1
+  fi
+  if ! curl --noproxy '*' -fsS --max-time 10 \
+    "http://127.0.0.1:${LEGACY_ACTIVE_BRIDGE_SLOT}/healthz" >/dev/null; then
+    fail "legacy Active direct /healthz is not healthy"
+    failure=1
+  fi
+  if ! legacy_active_bridge_check_readyz_absent; then
+    failure=1
+  fi
+  if ! verify_legacy_public_release_exact; then
+    failure=1
+  fi
+  if ! verify_active_cgroup "$LEGACY_ACTIVE_BRIDGE_SLOT"; then
+    failure=1
+  fi
+  if ! verify_active_monthly_gate_released "$LEGACY_ACTIVE_BRIDGE_SLOT"; then
+    failure=1
+  fi
+  if [[ "$failure" -ne 0 ]]; then
+    fail "legacy Active bridge preflight rejected; no Candidate mutation is authorized"
+    return 1
+  fi
+  printf \
+    '[INFO] Exact legacy Active bridge verified: sha=%s slot=%s mutationPerformed=false\n' \
+    "$LEGACY_ACTIVE_BRIDGE_COMMIT_SHA" "$LEGACY_ACTIVE_BRIDGE_SLOT"
+}
+
+verify_previous_active_runtime_exact() {
+  if [[ "$PREVIOUS_RELEASE_ROOT" == "$LEGACY_ROOT" ]]; then
+    legacy_active_bridge_check_identity
+    return
+  fi
+  verify_slot_release_exact "$CURRENT_ACTIVE_SLOT" "$PREVIOUS_RELEASE_SHA" \
+    && verify_public_release_exact "$PREVIOUS_RELEASE_SHA" \
+    && unit_property_equals \
+      "${SERVICE_PREFIX}${CURRENT_ACTIVE_SLOT}" UnitFileState enabled \
+    && unit_property_equals \
+      "${SERVICE_PREFIX}${CURRENT_ACTIVE_SLOT}" ActiveState active \
+    && verify_active_cgroup "$CURRENT_ACTIVE_SLOT" \
+    && verify_durable_route_ownership \
+      "$CURRENT_ACTIVE_SLOT" \
+      "$PREVIOUS_RELEASE_ROOT" \
+      "$PREVIOUS_RELEASE_SHA" \
+      "$PREVIOUS_RELEASE_ROOT/06_AppPlatform/frontend/dist" \
+    && verify_active_monthly_gate_released "$CURRENT_ACTIVE_SLOT"
 }
 
 mark_maintenance_required() {
@@ -3035,12 +3522,7 @@ candidate_ready_runtime_is_exact() {
     fi
   fi
   resolve_previous_release_identity \
-    && verify_previous_active_release_exact \
-    && verify_public_release_exact "$PREVIOUS_RELEASE_SHA" \
-    && unit_property_equals \
-      "${SERVICE_PREFIX}${CURRENT_ACTIVE_SLOT}" UnitFileState enabled \
-    && unit_property_equals \
-      "${SERVICE_PREFIX}${CURRENT_ACTIVE_SLOT}" ActiveState active \
+    && verify_previous_active_runtime_exact \
     && verify_slot_release_exact "$CANDIDATE_SLOT" "$DEPLOY_COMMIT_SHA" \
     && unit_property_equals \
       "${SERVICE_PREFIX}${CANDIDATE_SLOT}" UnitFileState disabled \
@@ -3839,10 +4321,21 @@ approve_candidate_to_active() {
   require_environment
   fixed_active_approval_binding >/dev/null || return 1
   assert_inherited_production_lock
-  ensure_bluegreen_state_root
-  ensure_bluegreen_runtime_roots
+  require_existing_active_slot_anchor
   assert_no_active_switch_unit
   resolve_active_slot
+  resolve_previous_release_identity \
+    || fail "previous release metadata is unavailable before fixed Active approval" \
+    || return 1
+  if [[ "$PREVIOUS_RELEASE_ROOT" == "$LEGACY_ROOT" ]]; then
+    legacy_active_bridge_check_identity || return 1
+    fail \
+      "legacy_active_bootstrap_required: Candidate remains test-only until the "\
+"legacy Active systemd and Nginx preimage migration is reviewed"
+    return 1
+  fi
+  ensure_bluegreen_state_root
+  ensure_bluegreen_runtime_roots
   capture_fixed_active_slot_anchor
   if ! read_checkpoint_phase_status; then
     return 1
@@ -4041,18 +4534,7 @@ previous_active_is_exact_for_candidate_discard() {
   resolve_previous_release_identity \
     && [[ ! -e "$DEPLOYMENT_MARKER" && ! -L "$DEPLOYMENT_MARKER" ]] \
     && [[ ! -e "$SCHEDULER_STATE_FILE" && ! -L "$SCHEDULER_STATE_FILE" ]] \
-    && unit_property_equals \
-      "${SERVICE_PREFIX}${CURRENT_ACTIVE_SLOT}" UnitFileState enabled \
-    && unit_property_equals \
-      "${SERVICE_PREFIX}${CURRENT_ACTIVE_SLOT}" ActiveState active \
-    && verify_active_cgroup "$CURRENT_ACTIVE_SLOT" \
-    && verify_durable_route_ownership \
-      "$CURRENT_ACTIVE_SLOT" \
-      "$PREVIOUS_RELEASE_ROOT" \
-      "$PREVIOUS_RELEASE_SHA" \
-      "$PREVIOUS_RELEASE_ROOT/06_AppPlatform/frontend/dist" \
-      candidate-discard \
-    && verify_active_monthly_gate_released "$CURRENT_ACTIVE_SLOT"
+    && verify_previous_active_runtime_exact
 }
 
 fixed_active_preimage_exists() {
@@ -4086,8 +4568,6 @@ discard_failed_candidate() {
   require_environment
   assert_inherited_production_lock
   require_existing_active_slot_anchor
-  ensure_bluegreen_state_root
-  ensure_bluegreen_runtime_roots
   assert_no_active_switch_unit
   if [[ -e "$DEPLOYMENT_MARKER" || -L "$DEPLOYMENT_MARKER" ]] \
     || [[ -e "$SCHEDULER_STATE_FILE" || -L "$SCHEDULER_STATE_FILE" ]] \
@@ -4167,8 +4647,7 @@ discard_candidate() {
   local binding=""
   require_environment
   assert_inherited_production_lock
-  ensure_bluegreen_state_root
-  ensure_bluegreen_runtime_roots
+  require_existing_active_slot_anchor
   assert_no_active_switch_unit
   resolve_active_slot
   if ! read_checkpoint_phase_status; then
@@ -5031,7 +5510,7 @@ cleanup_pre_switch_candidate() {
     return 1
   fi
   if ! resolve_previous_release_identity \
-    || ! verify_previous_active_release_exact; then
+    || ! verify_previous_active_runtime_exact; then
     fail "Candidate cleanup could not prove the previous Active slot"
     mark_pre_switch_cleanup_required || true
     return 1
@@ -5615,8 +6094,7 @@ prepare_candidate() {
   local binding=""
   require_environment
   assert_inherited_production_lock
-  ensure_bluegreen_state_root
-  ensure_bluegreen_runtime_roots
+  require_existing_active_slot_anchor
   assert_no_active_switch_unit
   if [[ -e "$SCHEDULER_STATE_FILE" || -L "$SCHEDULER_STATE_FILE" ]]; then
     fail "Candidate preparation refuses an existing scheduler state snapshot"
@@ -5626,6 +6104,16 @@ prepare_candidate() {
     fail "Candidate preparation refuses an existing deployment maintenance marker"
     return 1
   fi
+  resolve_active_slot
+  resolve_current_frontend_root
+  resolve_previous_release_identity \
+    || fail "previous Active identity is unavailable before Candidate preparation" \
+    || return 1
+  verify_previous_active_runtime_exact \
+    || fail "previous Active failed the complete pre-mutation Candidate preflight" \
+    || return 1
+  ensure_bluegreen_state_root
+  ensure_bluegreen_runtime_roots
   if ! read_checkpoint_phase_status; then
     return 1
   fi
@@ -5661,8 +6149,6 @@ prepare_candidate() {
       return 1
       ;;
   esac
-  resolve_active_slot
-  resolve_current_frontend_root
   prepare_shared_runtime
   ensure_current_slot_restartable
   preserve_previous_release_metadata

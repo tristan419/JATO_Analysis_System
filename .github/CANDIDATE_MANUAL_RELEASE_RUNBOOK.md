@@ -247,11 +247,37 @@ Candidate 与 Active 使用相同的服务器数据库、Redis 和业务数据�
 
 ### 一次性历史事故边界
 
-旧 `29df5e6e...` 发布仍可能受 recovery-only production hold 保护。它不是
-Candidate 正常发布流程的一部分，也不应继续扩展成日常 dry-run/apply 平台。
-若 hold 仍存在，新 Candidate 会在任何服务器变更前明确拒绝，并指向
-[`FREE_RELEASE_RECOVERY_RUNBOOK.md`](./FREE_RELEASE_RECOVERY_RUNBOOK.md) 的事故
-记录；严禁重试旧 production run、手删 checkpoint/残留或绕过 hold。
+旧 `29df5e6e...` 已完成 `pre_switch_aborted` 隔离并解除 hold，不再是当前
+Candidate 流程的阻塞，也不得再次运行 recovery。当前一次性历史边界是线上
+Active 仍为 `cd4557cb...`：它早于 `/readyz`、immutable Active link 和稳定
+Nginx include 契约。
+
+在首次 Active bootstrap 完成前，控制器只允许用 2026-08-05 采集的精确现场
+指纹证明该 legacy Active 未变化。证明同时绑定 commit、8000、slot anchor、
+systemd unit、6G/8G、slot env、旧 Nginx site、release metadata、前端 metadata、
+direct health、public build/provenance 和月更 gate；不是通用的“`/readyz=404`
+也算成功”。任一字节或运行状态漂移都会一次列出并在 Candidate mutation 前拒绝。
+
+这个受限 bridge 只用于：
+
+- 清理当前 `c354a2d3...` 失败 Candidate；
+- 准备、复验或废弃新的 Candidate；
+- 保证整个过程 public Active 不变。
+
+它不授权把 Candidate 更新到 legacy Active。此时点击批准必须在 maintenance
+marker、scheduler、systemd 或 Nginx 发生变化前返回
+`legacy_active_bootstrap_required`。因此第一阶段的 Candidate 明确是“服务器页面
+测试可用、暂不可批准上线”；首次 systemd/Nginx bootstrap 与 legacy rollback
+preimage 必须作为后续独立、完整的迁移审查，不能伪装成另一个 `/readyz` 小修。
+
+当前事故收口只执行一次：
+
+```text
+精确清理 c354
+→ 从最新 main 部署 Candidate
+→ 通过 SSH 隧道访问 18002 人工测试
+→ 不满意则废弃 Candidate；满意则保留 Candidate，等待 Active bootstrap
+```
 
 ## Release Control 的后续边界
 
