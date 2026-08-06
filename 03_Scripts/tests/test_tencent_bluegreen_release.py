@@ -1446,6 +1446,42 @@ def test_candidate_discard_keeps_readyz_for_nonlegacy_active() -> None:
     assert "verify_public_release_exact" in route
 
 
+def test_candidate_discard_allows_absent_active_link_only_for_legacy(
+    tmp_path: Path,
+) -> None:
+    legacy = tmp_path / "legacy"
+    frontend = legacy / "06_AppPlatform/frontend/dist"
+    active_slot = tmp_path / "state/active-slot"
+    nginx_conf = tmp_path / "nginx/active-release.conf"
+    frontend.mkdir(parents=True)
+    active_slot.parent.mkdir(parents=True)
+    nginx_conf.parent.mkdir(parents=True)
+    active_slot.write_text("8000\n", encoding="utf-8")
+    result = _run_controller_harness(
+        tmp_path,
+        f"""
+CURRENT_ACTIVE_SLOT=8000
+sudo() {{
+  if [[ "${{1:-}}" == "-n" ]]; then shift; fi
+  "$@"
+}}
+verify_legacy_active_release_exact() {{ printf 'legacy-exact\n'; }}
+render_active_release() {{ printf 'route\n' > "$1"; }}
+printf 'route\n' > {nginx_conf}
+verify_durable_route_ownership 8000 {legacy} {OLD_SHA} {frontend} candidate-discard
+set +e
+verify_durable_route_ownership 8000 {legacy} {OLD_SHA} {frontend} strict-readyz
+strict_rc=$?
+set -e
+printf 'strict-rc=%s\n' "$strict_rc"
+""",
+    )
+
+    assert result.returncode == 0, result.stderr + result.stdout
+    assert "legacy-exact" in result.stdout
+    assert "strict-rc=1" in result.stdout
+
+
 def test_discard_failed_candidate_is_candidate_only_and_explicit() -> None:
     script = CONTROLLER.read_text(encoding="utf-8")
     discard = _shell_function(script, "discard_failed_candidate")
