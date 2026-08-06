@@ -875,6 +875,60 @@ verify_slot_release_exact() {
       --timeout-seconds 20 >/dev/null
 }
 
+verify_legacy_active_release_exact() {
+  local slot="$1"
+  local expected_sha="$2"
+  local release_root="$3"
+  local frontend_root="$4"
+  local metadata_commit=""
+  local build_metadata="$frontend_root/build-meta.json"
+  if [[ "$slot" != "$CURRENT_ACTIVE_SLOT" ]] \
+    || [[ "$release_root" != "$LEGACY_ROOT" ]]; then
+    fail "legacy Active compatibility is limited to the current fixed Active root"
+    return 1
+  fi
+  metadata_commit="$(
+    read_release_commit "$release_root/hermes/deploy_release.json"
+  )" || return 1
+  if [[ "$metadata_commit" != "$expected_sha" ]]; then
+    fail "legacy Active release metadata does not bind $expected_sha"
+    return 1
+  fi
+  if sudo -n test -L "$build_metadata" \
+    || ! sudo -n test -f "$build_metadata" \
+    || ! curl --noproxy '*' -fsS --max-time 20 \
+      "http://127.0.0.1:${slot}/healthz" >/dev/null \
+    || ! python3 -B - "$build_metadata" "$expected_sha" <<'PY'
+import json
+from pathlib import Path
+import sys
+
+payload = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
+commits = {
+    str(payload.get(name) or "")
+    for name in ("deployCommit", "githubSha", "commitSha", "sha")
+}
+if sys.argv[2] not in commits:
+    raise SystemExit("legacy Active frontend build metadata does not bind expected SHA")
+PY
+  then
+    fail "legacy Active health or frontend identity is not exact"
+    return 1
+  fi
+}
+
+verify_previous_active_release_exact() {
+  if [[ "$PREVIOUS_RELEASE_ROOT" == "$LEGACY_ROOT" ]]; then
+    verify_legacy_active_release_exact \
+      "$CURRENT_ACTIVE_SLOT" \
+      "$PREVIOUS_RELEASE_SHA" \
+      "$PREVIOUS_RELEASE_ROOT" \
+      "$PREVIOUS_RELEASE_ROOT/06_AppPlatform/frontend/dist"
+  else
+    verify_slot_release_exact "$CURRENT_ACTIVE_SLOT" "$PREVIOUS_RELEASE_SHA"
+  fi
+}
+
 wait_for_slot_release_exact() {
   local slot="$1"
   local expected_sha="$2"
@@ -4832,6 +4886,7 @@ verify_durable_route_ownership() {
   local release_root="$2"
   local expected_sha="$3"
   local frontend_root="$4"
+  local verification_profile="${5:-strict-readyz}"
   local expected_conf=""
   if sudo -n test -L "$ACTIVE_SLOT_FILE" \
     || ! sudo -n test -f "$ACTIVE_SLOT_FILE" \
@@ -4839,7 +4894,17 @@ verify_durable_route_ownership() {
     fail "durable active-slot owner does not match slot $slot"
     return 1
   fi
-  if ! sudo -n test -L "$ACTIVE_RELEASE_LINK" \
+  if [[ "$verification_profile" == "candidate-discard" ]] \
+    && [[ "$release_root" == "$LEGACY_ROOT" ]]; then
+    if sudo -n test -e "$ACTIVE_RELEASE_LINK" \
+      || sudo -n test -L "$ACTIVE_RELEASE_LINK"; then
+      if ! sudo -n test -L "$ACTIVE_RELEASE_LINK" \
+        || [[ "$(sudo -n realpath "$ACTIVE_RELEASE_LINK")" != "$release_root" ]]; then
+        fail "durable active release link does not match $release_root"
+        return 1
+      fi
+    fi
+  elif ! sudo -n test -L "$ACTIVE_RELEASE_LINK" \
     || [[ "$(sudo -n realpath "$ACTIVE_RELEASE_LINK")" != "$release_root" ]]; then
     fail "durable active release link does not match $release_root"
     return 1
@@ -4857,8 +4922,25 @@ verify_durable_route_ownership() {
     return 1
   fi
   rm -f "$expected_conf"
-  verify_slot_release_exact "$slot" "$expected_sha" \
-    && verify_public_release_exact "$expected_sha"
+  case "$verification_profile" in
+    strict-readyz)
+      verify_slot_release_exact "$slot" "$expected_sha" \
+        && verify_public_release_exact "$expected_sha"
+      ;;
+    candidate-discard)
+      if [[ "$release_root" == "$LEGACY_ROOT" ]]; then
+        verify_legacy_active_release_exact \
+          "$slot" "$expected_sha" "$release_root" "$frontend_root"
+      else
+        verify_slot_release_exact "$slot" "$expected_sha" \
+          && verify_public_release_exact "$expected_sha"
+      fi
+      ;;
+    *)
+      fail "unknown durable route verification profile: $verification_profile"
+      return 1
+      ;;
+  esac
 }
 
 is_known_scheduler_timer() {
@@ -5428,7 +5510,7 @@ cleanup_pre_switch_candidate() {
     return 1
   fi
   if ! resolve_previous_release_identity \
-    || ! verify_slot_release_exact "$CURRENT_ACTIVE_SLOT" "$PREVIOUS_RELEASE_SHA"; then
+    || ! verify_previous_active_runtime_exact; then
     fail "Candidate cleanup could not prove the previous Active slot"
     mark_pre_switch_cleanup_required || true
     return 1

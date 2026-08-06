@@ -1605,6 +1605,158 @@ def test_discard_candidate_mutates_only_candidate_runtime() -> None:
     assert "discard-candidate)" in script
 
 
+def test_legacy_active_identity_uses_health_and_both_release_metadata(
+    tmp_path: Path,
+) -> None:
+    legacy = tmp_path / "legacy"
+    frontend = legacy / "06_AppPlatform/frontend/dist"
+    deploy_metadata = legacy / "hermes/deploy_release.json"
+    frontend.mkdir(parents=True)
+    deploy_metadata.parent.mkdir(parents=True)
+    deploy_metadata.write_text(
+        json.dumps({"actualCommitSha": OLD_SHA}),
+        encoding="utf-8",
+    )
+    (frontend / "build-meta.json").write_text(
+        json.dumps({"deployCommit": OLD_SHA, "githubSha": OLD_SHA}),
+        encoding="utf-8",
+    )
+    result = _run_controller_harness(
+        tmp_path,
+        f"""
+CURRENT_ACTIVE_SLOT=8000
+sudo() {{
+  if [[ "${{1:-}}" == "-n" ]]; then shift; fi
+  "$@"
+}}
+curl() {{ printf '{{"status":"ok"}}'; }}
+verify_legacy_active_release_exact 8000 {OLD_SHA} {legacy} {frontend}
+""",
+    )
+
+    assert result.returncode == 0, result.stderr + result.stdout
+
+
+@pytest.mark.parametrize(
+    ("slot", "release_root", "build_sha"),
+    [
+        ("8001", "legacy", OLD_SHA),
+        ("8000", "other", OLD_SHA),
+        ("8000", "legacy", TARGET_SHA),
+    ],
+)
+def test_legacy_active_identity_rejects_wrong_slot_root_or_frontend(
+    tmp_path: Path,
+    slot: str,
+    release_root: str,
+    build_sha: str,
+) -> None:
+    legacy = tmp_path / "legacy"
+    selected_root = legacy if release_root == "legacy" else tmp_path / "other"
+    frontend = selected_root / "06_AppPlatform/frontend/dist"
+    deploy_metadata = selected_root / "hermes/deploy_release.json"
+    frontend.mkdir(parents=True)
+    deploy_metadata.parent.mkdir(parents=True)
+    deploy_metadata.write_text(
+        json.dumps({"actualCommitSha": OLD_SHA}),
+        encoding="utf-8",
+    )
+    (frontend / "build-meta.json").write_text(
+        json.dumps({"deployCommit": build_sha}),
+        encoding="utf-8",
+    )
+    result = _run_controller_harness(
+        tmp_path,
+        f"""
+CURRENT_ACTIVE_SLOT=8000
+sudo() {{
+  if [[ "${{1:-}}" == "-n" ]]; then shift; fi
+  "$@"
+}}
+curl() {{ printf '{{"status":"ok"}}'; }}
+verify_legacy_active_release_exact {slot} {OLD_SHA} {selected_root} {frontend}
+""",
+    )
+
+    assert result.returncode != 0
+
+
+def test_candidate_discard_keeps_readyz_for_nonlegacy_active() -> None:
+    route = _shell_function(
+        CONTROLLER.read_text(encoding="utf-8"),
+        "verify_durable_route_ownership",
+    )
+
+    assert 'local verification_profile="${5:-strict-readyz}"' in route
+    assert '[[ "$release_root" == "$LEGACY_ROOT" ]]' in route
+    assert "verify_legacy_active_release_exact" in route
+    assert "verify_slot_release_exact" in route
+    assert "verify_public_release_exact" in route
+
+
+def test_candidate_ready_and_cleanup_reuse_complete_active_identity() -> None:
+    script = CONTROLLER.read_text(encoding="utf-8")
+    complete_active = _shell_function(
+        script,
+        "verify_previous_active_runtime_exact",
+    )
+    candidate_ready = _shell_function(script, "candidate_ready_runtime_is_exact")
+    cleanup = _shell_function(script, "cleanup_pre_switch_candidate")
+
+    assert '[[ "$PREVIOUS_RELEASE_ROOT" == "$LEGACY_ROOT" ]]' in complete_active
+    assert "legacy_active_bridge_check_identity" in complete_active
+    assert "verify_slot_release_exact" in complete_active
+    assert "verify_public_release_exact" in complete_active
+    assert "verify_previous_active_runtime_exact" in candidate_ready
+    assert "verify_previous_active_runtime_exact" in cleanup
+    assert (
+        'verify_slot_release_exact "$CURRENT_ACTIVE_SLOT" '
+        '"$PREVIOUS_RELEASE_SHA"'
+        not in candidate_ready
+    )
+    assert (
+        'verify_slot_release_exact "$CURRENT_ACTIVE_SLOT" '
+        '"$PREVIOUS_RELEASE_SHA"'
+        not in cleanup
+    )
+
+
+def test_candidate_discard_allows_absent_active_link_only_for_legacy(
+    tmp_path: Path,
+) -> None:
+    legacy = tmp_path / "legacy"
+    frontend = legacy / "06_AppPlatform/frontend/dist"
+    active_slot = tmp_path / "state/active-slot"
+    nginx_conf = tmp_path / "nginx/active-release.conf"
+    frontend.mkdir(parents=True)
+    active_slot.parent.mkdir(parents=True)
+    nginx_conf.parent.mkdir(parents=True)
+    active_slot.write_text("8000\n", encoding="utf-8")
+    result = _run_controller_harness(
+        tmp_path,
+        f"""
+CURRENT_ACTIVE_SLOT=8000
+sudo() {{
+  if [[ "${{1:-}}" == "-n" ]]; then shift; fi
+  "$@"
+}}
+verify_legacy_active_release_exact() {{ printf 'legacy-exact\n'; }}
+render_active_release() {{ printf 'route\n' > "$1"; }}
+printf 'route\n' > {nginx_conf}
+verify_durable_route_ownership 8000 {legacy} {OLD_SHA} {frontend} candidate-discard
+set +e
+verify_durable_route_ownership 8000 {legacy} {OLD_SHA} {frontend} strict-readyz
+strict_rc=$?
+set -e
+printf 'strict-rc=%s\n' "$strict_rc"
+""",
+    )
+
+    assert result.returncode == 0, result.stderr + result.stdout
+    assert "legacy-exact" in result.stdout
+    assert "strict-rc=1" in result.stdout
+
+
 def test_discard_failed_candidate_is_candidate_only_and_explicit() -> None:
     script = CONTROLLER.read_text(encoding="utf-8")
     discard = _shell_function(script, "discard_failed_candidate")
@@ -2744,6 +2896,10 @@ verify_slot_release_exact() {{ printf 'old-direct\\n'; }}
 verify_public_release_exact() {{
   printf 'old-public\\n'
   printf 'old-public\\n' >> "$TRACE_FILE"
+}}
+verify_previous_active_runtime_exact() {{
+  verify_slot_release_exact "$CURRENT_ACTIVE_SLOT" "$PREVIOUS_RELEASE_SHA" \
+    && verify_public_release_exact "$PREVIOUS_RELEASE_SHA"
 }}
 restore_nginx_preimage() {{ printf 'unsafe-preimage-restore\\n'; }}
 stop_candidate_preview() {{ return 0; }}
@@ -4054,6 +4210,10 @@ verify_slot_release_exact() {{ return 0; }}
 verify_public_release_exact() {{
   test -f "$NGINX_ACTIVE_RELEASE_CONF"
   grep -Fxq 'stable-old-route' "$NGINX_ACTIVE_RELEASE_CONF"
+}}
+verify_previous_active_runtime_exact() {{
+  verify_slot_release_exact "$CURRENT_ACTIVE_SLOT" "$PREVIOUS_RELEASE_SHA" \
+    && verify_public_release_exact "$PREVIOUS_RELEASE_SHA"
 }}
 stop_candidate_preview() {{ return 0; }}
 restore_old_static_boot_owner() {{ printf 'old-owner-restored\\n' >> "$TRACE"; }}
