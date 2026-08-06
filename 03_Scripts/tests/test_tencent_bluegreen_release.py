@@ -1338,9 +1338,8 @@ def test_discard_candidate_mutates_only_candidate_runtime() -> None:
     assert "rollback_completed" in discard
     assert "fixed_active_preimage_command restore" not in discard
     assert 'verify_active_cgroup "$CURRENT_ACTIVE_SLOT"' in active_gate
-    assert "verify_slot_release_exact" in active_gate
-    assert "verify_public_release_exact" in active_gate
     assert "verify_durable_route_ownership" in active_gate
+    assert "candidate-discard" in active_gate
     assert "verify_active_monthly_gate_released" in active_gate
     for forbidden in (
         "pause_schedulers",
@@ -1356,6 +1355,95 @@ def test_discard_candidate_mutates_only_candidate_runtime() -> None:
     ):
         assert forbidden not in discard
     assert "discard-candidate)" in script
+
+
+def test_legacy_active_identity_uses_health_and_both_release_metadata(
+    tmp_path: Path,
+) -> None:
+    legacy = tmp_path / "legacy"
+    frontend = legacy / "06_AppPlatform/frontend/dist"
+    deploy_metadata = legacy / "hermes/deploy_release.json"
+    frontend.mkdir(parents=True)
+    deploy_metadata.parent.mkdir(parents=True)
+    deploy_metadata.write_text(
+        json.dumps({"actualCommitSha": OLD_SHA}),
+        encoding="utf-8",
+    )
+    (frontend / "build-meta.json").write_text(
+        json.dumps({"deployCommit": OLD_SHA, "githubSha": OLD_SHA}),
+        encoding="utf-8",
+    )
+    result = _run_controller_harness(
+        tmp_path,
+        f"""
+CURRENT_ACTIVE_SLOT=8000
+sudo() {{
+  if [[ "${{1:-}}" == "-n" ]]; then shift; fi
+  "$@"
+}}
+curl() {{ printf '{{"status":"ok"}}'; }}
+verify_legacy_active_release_exact 8000 {OLD_SHA} {legacy} {frontend}
+""",
+    )
+
+    assert result.returncode == 0, result.stderr + result.stdout
+
+
+@pytest.mark.parametrize(
+    ("slot", "release_root", "build_sha"),
+    [
+        ("8001", "legacy", OLD_SHA),
+        ("8000", "other", OLD_SHA),
+        ("8000", "legacy", TARGET_SHA),
+    ],
+)
+def test_legacy_active_identity_rejects_wrong_slot_root_or_frontend(
+    tmp_path: Path,
+    slot: str,
+    release_root: str,
+    build_sha: str,
+) -> None:
+    legacy = tmp_path / "legacy"
+    selected_root = legacy if release_root == "legacy" else tmp_path / "other"
+    frontend = selected_root / "06_AppPlatform/frontend/dist"
+    deploy_metadata = selected_root / "hermes/deploy_release.json"
+    frontend.mkdir(parents=True)
+    deploy_metadata.parent.mkdir(parents=True)
+    deploy_metadata.write_text(
+        json.dumps({"actualCommitSha": OLD_SHA}),
+        encoding="utf-8",
+    )
+    (frontend / "build-meta.json").write_text(
+        json.dumps({"deployCommit": build_sha}),
+        encoding="utf-8",
+    )
+    result = _run_controller_harness(
+        tmp_path,
+        f"""
+CURRENT_ACTIVE_SLOT=8000
+sudo() {{
+  if [[ "${{1:-}}" == "-n" ]]; then shift; fi
+  "$@"
+}}
+curl() {{ printf '{{"status":"ok"}}'; }}
+verify_legacy_active_release_exact {slot} {OLD_SHA} {selected_root} {frontend}
+""",
+    )
+
+    assert result.returncode != 0
+
+
+def test_candidate_discard_keeps_readyz_for_nonlegacy_active() -> None:
+    route = _shell_function(
+        CONTROLLER.read_text(encoding="utf-8"),
+        "verify_durable_route_ownership",
+    )
+
+    assert 'local verification_profile="${5:-strict-readyz}"' in route
+    assert '[[ "$release_root" == "$LEGACY_ROOT" ]]' in route
+    assert "verify_legacy_active_release_exact" in route
+    assert "verify_slot_release_exact" in route
+    assert "verify_public_release_exact" in route
 
 
 def test_discard_failed_candidate_is_candidate_only_and_explicit() -> None:
