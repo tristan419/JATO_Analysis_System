@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import hashlib
+import json
 import os
 from pathlib import Path
 import shutil
@@ -341,6 +343,351 @@ def test_installer_creates_atomic_release_include_and_reloads_nginx(
     assert "systemctl restart nginx" not in commands
 
 
+def test_installer_adopts_identical_regular_enabled_site(
+    tmp_path: Path,
+) -> None:
+    env, nginx_etc, _, _ = _fake_runtime(tmp_path)
+    target = nginx_etc / "sites-available/jato_fullstack.conf"
+    enabled = nginx_etc / "sites-enabled/jato_fullstack.conf"
+    original = _certbot_site()
+    original_sha256 = hashlib.sha256(original.encode()).hexdigest()
+    target.write_text(original, encoding="utf-8")
+    enabled.write_text(original, encoding="utf-8")
+
+    result = _run_installer(env)
+
+    assert result.returncode == 0, result.stderr + result.stdout
+    assert enabled.is_symlink()
+    assert enabled.readlink() == target
+    assert f"Approved one-time regular enabled-site adoption: sha256={original_sha256}" in result.stdout
+    assert f"Revalidated identical regular enabled/canonical nginx files: sha256={original_sha256}" in result.stdout
+    assert "include /etc/jato-fullstack/nginx/active-release.conf;" in target.read_text(
+        encoding="utf-8"
+    )
+    assert target.stat().st_mode & 0o777 == 0o644
+
+
+def test_installer_candidate_modes_are_deterministic_under_restrictive_umask(
+    tmp_path: Path,
+) -> None:
+    env, nginx_etc, jato_etc, _ = _fake_runtime(tmp_path)
+    target = nginx_etc / "sites-available/jato_fullstack.conf"
+    enabled = nginx_etc / "sites-enabled/jato_fullstack.conf"
+    target.write_text(_certbot_site(), encoding="utf-8")
+    enabled.write_text(_certbot_site(), encoding="utf-8")
+
+    result = subprocess.run(
+        [
+            "bash",
+            "-c",
+            'umask 077; exec bash "$1"',
+            "jato-nginx-umask-test",
+            str(NGINX_INSTALLER),
+        ],
+        cwd=REPO_ROOT,
+        env=env,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stderr + result.stdout
+    assert target.stat().st_mode & 0o777 == 0o644
+    active = jato_etc / "nginx/active-release.conf"
+    assert active.stat().st_mode & 0o777 == 0o644
+
+
+def test_installer_rejects_oversized_regular_enabled_adoption_inputs(
+    tmp_path: Path,
+) -> None:
+    env, nginx_etc, jato_etc, command_log = _fake_runtime(tmp_path)
+    target = nginx_etc / "sites-available/jato_fullstack.conf"
+    enabled = nginx_etc / "sites-enabled/jato_fullstack.conf"
+    oversized = b"x" * (4 * 1024 * 1024 + 1)
+    target.write_bytes(oversized)
+    enabled.write_bytes(oversized)
+
+    result = _run_installer(env)
+
+    assert result.returncode != 0
+    assert "exceeds 4194304 bytes" in result.stderr
+    assert not (jato_etc / "nginx/active-release.conf").exists()
+    assert "nginx -t" not in command_log.read_text(encoding="utf-8")
+
+
+def test_installer_rejects_mismatched_regular_enabled_site_with_redacted_report(
+    tmp_path: Path,
+) -> None:
+    env, nginx_etc, jato_etc, command_log = _fake_runtime(tmp_path)
+    target = nginx_etc / "sites-available/jato_fullstack.conf"
+    enabled = nginx_etc / "sites-enabled/jato_fullstack.conf"
+    canonical = _certbot_site()
+    divergent = canonical.replace(
+        "server_name www.ojeur.cloud ojeur.cloud;",
+        "server_name unexpected.example; # Authorization: secret-sentinel",
+        1,
+    )
+    target.write_text(canonical, encoding="utf-8")
+    target.chmod(0o640)
+    enabled.write_text(divergent, encoding="utf-8")
+    enabled.chmod(0o600)
+    preimage = tmp_path / "preimages/mismatch"
+    env["NGINX_PREIMAGE_DIR"] = str(preimage)
+
+    result = _run_installer(env)
+
+    assert result.returncode != 0
+    assert "Enabled nginx site differs from canonical target" in result.stderr
+    assert f"enabled_path={enabled}" in result.stderr
+    assert f"canonical_path={target}" in result.stderr
+    assert (
+        f"enabled_sha256={hashlib.sha256(divergent.encode()).hexdigest()}"
+        in result.stderr
+    )
+    assert (
+        f"canonical_sha256={hashlib.sha256(canonical.encode()).hexdigest()}"
+        in result.stderr
+    )
+    assert "difference_content=redacted" in result.stderr
+    assert "first_difference_byte=" in result.stderr
+    assert "first_difference_line=" in result.stderr
+    assert "unexpected.example" not in result.stderr
+    assert "secret-sentinel" not in result.stderr
+    assert "canonical_block_sha256" not in result.stderr
+    assert "difflib" not in NGINX_INSTALLER.read_text(encoding="utf-8")
+    assert target.is_file() and not target.is_symlink()
+    assert target.read_text(encoding="utf-8") == canonical
+    assert target.stat().st_mode & 0o777 == 0o640
+    assert enabled.is_file() and not enabled.is_symlink()
+    assert enabled.read_text(encoding="utf-8") == divergent
+    assert enabled.stat().st_mode & 0o777 == 0o600
+    assert not (jato_etc / "nginx/active-release.conf").exists()
+    assert not preimage.exists()
+    commands = command_log.read_text(encoding="utf-8")
+    assert "nginx -t" not in commands
+    assert "systemctl reload nginx" not in commands
+
+
+def test_installer_restores_regular_enabled_site_after_nginx_failure(
+    tmp_path: Path,
+) -> None:
+    env, nginx_etc, jato_etc, _ = _fake_runtime(
+        tmp_path,
+        fail_nginx_test=True,
+    )
+    target = nginx_etc / "sites-available/jato_fullstack.conf"
+    enabled = nginx_etc / "sites-enabled/jato_fullstack.conf"
+    active = jato_etc / "nginx/active-release.conf"
+    active.parent.mkdir(parents=True)
+    original = _certbot_site()
+    original_active = "upstream old { server 127.0.0.1:8000; }\n"
+    target.write_text(original, encoding="utf-8")
+    target.chmod(0o640)
+    enabled.write_text(original, encoding="utf-8")
+    enabled.chmod(0o600)
+    active.write_text(original_active, encoding="utf-8")
+    active.chmod(0o640)
+
+    result = _run_installer(env)
+
+    assert result.returncode != 0
+    assert target.is_file() and not target.is_symlink()
+    assert target.read_text(encoding="utf-8") == original
+    assert target.stat().st_mode & 0o777 == 0o640
+    assert enabled.is_file() and not enabled.is_symlink()
+    assert enabled.read_text(encoding="utf-8") == original
+    assert enabled.stat().st_mode & 0o777 == 0o600
+    assert active.read_text(encoding="utf-8") == original_active
+    assert active.stat().st_mode & 0o777 == 0o640
+
+
+def test_installer_rejects_mode_drift_after_regular_enabled_snapshot(
+    tmp_path: Path,
+) -> None:
+    env, nginx_etc, jato_etc, command_log = _fake_runtime(tmp_path)
+    target = nginx_etc / "sites-available/jato_fullstack.conf"
+    enabled = nginx_etc / "sites-enabled/jato_fullstack.conf"
+    original = _certbot_site()
+    target.write_text(original, encoding="utf-8")
+    target.chmod(0o640)
+    enabled.write_text(original, encoding="utf-8")
+    enabled.chmod(0o600)
+    fake_bin = Path(env["PATH"].split(os.pathsep, maxsplit=1)[0])
+    env["REAL_CP"] = shutil.which("cp") or "/bin/cp"
+    env["ENABLED_PATH"] = str(enabled)
+    _write_executable(
+        fake_bin / "cp",
+        "#!/usr/bin/env bash\n"
+        '"$REAL_CP" "$@" || exit $?\n'
+        'for argument in "$@"; do\n'
+        '  if [[ "$argument" == "$ENABLED_PATH" ]]; then\n'
+        '    chmod 0640 "$ENABLED_PATH"\n'
+        "  fi\n"
+        "done\n",
+    )
+
+    result = _run_installer(env)
+
+    assert result.returncode != 0
+    assert "nginx adoption inputs changed after validation" in result.stderr
+    assert "enabled_mode=0640 enabled_snapshot_mode=0600" in result.stderr
+    assert target.read_text(encoding="utf-8") == original
+    assert target.stat().st_mode & 0o777 == 0o640
+    assert enabled.read_text(encoding="utf-8") == original
+    assert enabled.stat().st_mode & 0o777 == 0o640
+    assert not (jato_etc / "nginx/active-release.conf").exists()
+    assert "nginx -t" not in command_log.read_text(encoding="utf-8")
+
+
+def test_installer_does_not_overwrite_enabled_drift_before_symlink(
+    tmp_path: Path,
+) -> None:
+    env, nginx_etc, jato_etc, command_log = _fake_runtime(tmp_path)
+    target = nginx_etc / "sites-available/jato_fullstack.conf"
+    enabled = nginx_etc / "sites-enabled/jato_fullstack.conf"
+    active = jato_etc / "nginx/active-release.conf"
+    active.parent.mkdir(parents=True)
+    original = _certbot_site()
+    original_active = "upstream old { server 127.0.0.1:8000; }\n"
+    external_enabled = "server { # external-certbot-drift }\n"
+    target.write_text(original, encoding="utf-8")
+    target.chmod(0o640)
+    enabled.write_text(original, encoding="utf-8")
+    enabled.chmod(0o600)
+    active.write_text(original_active, encoding="utf-8")
+    active.chmod(0o640)
+    preimage = tmp_path / "preimages/final-drift"
+    env["NGINX_PREIMAGE_DIR"] = str(preimage)
+    fake_bin = Path(env["PATH"].split(os.pathsep, maxsplit=1)[0])
+    env["REAL_INSTALL"] = shutil.which("install") or "/usr/bin/install"
+    env["ENABLED_PATH"] = str(enabled)
+    env["EXTERNAL_ENABLED"] = external_enabled
+    _write_executable(
+        fake_bin / "install",
+        "#!/usr/bin/env bash\n"
+        '"$REAL_INSTALL" "$@" || exit $?\n'
+        'destination="${@: -1}"\n'
+        'if [[ "$destination" == *"sites-available/.jato_fullstack.conf."* ]]; then\n'
+        '  printf "%s" "$EXTERNAL_ENABLED" > "$ENABLED_PATH"\n'
+        '  chmod 0600 "$ENABLED_PATH"\n'
+        "fi\n",
+    )
+
+    result = _run_installer(env)
+
+    assert result.returncode == 90
+    assert "changed at atomic exchange" in result.stderr
+    assert "intentionally not overwritten during rollback" in result.stderr
+    assert enabled.is_file() and not enabled.is_symlink()
+    assert enabled.read_text(encoding="utf-8") == external_enabled
+    assert target.read_text(encoding="utf-8") == original
+    assert target.stat().st_mode & 0o777 == 0o640
+    assert active.read_text(encoding="utf-8") == original_active
+    assert active.stat().st_mode & 0o777 == 0o640
+    assert (preimage / "enabled.conf").read_text(encoding="utf-8") == original
+    assert "nginx -t" not in command_log.read_text(encoding="utf-8")
+
+
+def test_installer_preserves_external_changes_to_paths_not_yet_mutated(
+    tmp_path: Path,
+) -> None:
+    env, nginx_etc, _, command_log = _fake_runtime(tmp_path)
+    target = nginx_etc / "sites-available/jato_fullstack.conf"
+    enabled = nginx_etc / "sites-enabled/jato_fullstack.conf"
+    default = nginx_etc / "sites-enabled/default"
+    original = _certbot_site()
+    external_target = "server { # externally-updated-canonical }\n"
+    external_default = "server { # externally-updated-default }\n"
+    target.write_text(original, encoding="utf-8")
+    enabled.write_text(original, encoding="utf-8")
+    default.write_text("server { # original-default }\n", encoding="utf-8")
+    fake_bin = Path(env["PATH"].split(os.pathsep, maxsplit=1)[0])
+    env["REAL_INSTALL"] = shutil.which("install") or "/usr/bin/install"
+    env["TARGET_PATH"] = str(target)
+    env["DEFAULT_PATH"] = str(default)
+    env["EXTERNAL_TARGET"] = external_target
+    env["EXTERNAL_DEFAULT"] = external_default
+    _write_executable(
+        fake_bin / "install",
+        "#!/usr/bin/env bash\n"
+        '"$REAL_INSTALL" "$@" || exit $?\n'
+        'destination="${@: -1}"\n'
+        'if [[ "$destination" == *"nginx/.active-release.conf."* ]]; then\n'
+        '  printf "%s" "$EXTERNAL_TARGET" > "$TARGET_PATH"\n'
+        '  printf "%s" "$EXTERNAL_DEFAULT" > "$DEFAULT_PATH"\n'
+        "  exit 42\n"
+        "fi\n",
+    )
+
+    result = _run_installer(env)
+
+    assert result.returncode != 0
+    assert target.read_text(encoding="utf-8") == external_target
+    assert default.read_text(encoding="utf-8") == external_default
+    assert enabled.read_text(encoding="utf-8") == original
+    assert not enabled.is_symlink()
+    assert "nginx -t" not in command_log.read_text(encoding="utf-8")
+
+
+def test_installer_reports_failed_regular_enabled_rollback(
+    tmp_path: Path,
+) -> None:
+    env, nginx_etc, _, _ = _fake_runtime(tmp_path, fail_nginx_test=True)
+    target = nginx_etc / "sites-available/jato_fullstack.conf"
+    enabled = nginx_etc / "sites-enabled/jato_fullstack.conf"
+    original = _certbot_site()
+    target.write_text(original, encoding="utf-8")
+    enabled.write_text(original, encoding="utf-8")
+    fake_bin = Path(env["PATH"].split(os.pathsep, maxsplit=1)[0])
+    env["REAL_PYTHON"] = sys.executable
+    _write_executable(
+        fake_bin / "python3",
+        "#!/usr/bin/env bash\n"
+        'if [[ " $* " == *" exchange-restore "* ]]; then exit 42; fi\n'
+        'exec "$REAL_PYTHON" "$@"\n',
+    )
+
+    result = _run_installer(env)
+
+    assert result.returncode == 90
+    assert "rollback could not restore the exact original" in result.stderr
+    assert "Automatic nginx rollback failed closed" in result.stderr
+
+
+def test_installer_does_not_overwrite_enabled_drift_during_atomic_rollback(
+    tmp_path: Path,
+) -> None:
+    env, nginx_etc, _, _ = _fake_runtime(tmp_path, fail_nginx_test=True)
+    target = nginx_etc / "sites-available/jato_fullstack.conf"
+    enabled = nginx_etc / "sites-enabled/jato_fullstack.conf"
+    original = _certbot_site()
+    external_enabled = "server { # external-during-rollback }\n"
+    target.write_text(original, encoding="utf-8")
+    enabled.write_text(original, encoding="utf-8")
+    fake_bin = Path(env["PATH"].split(os.pathsep, maxsplit=1)[0])
+    env["REAL_PYTHON"] = sys.executable
+    env["ENABLED_PATH"] = str(enabled)
+    env["EXTERNAL_ENABLED"] = external_enabled
+    _write_executable(
+        fake_bin / "python3",
+        "#!/usr/bin/env bash\n"
+        'if [[ " $* " == *" exchange-restore "* ]]; then\n'
+        '  rm -f "$ENABLED_PATH"\n'
+        '  printf "%s" "$EXTERNAL_ENABLED" > "$ENABLED_PATH"\n'
+        "fi\n"
+        'exec "$REAL_PYTHON" "$@"\n',
+    )
+
+    result = _run_installer(env)
+
+    assert result.returncode == 90
+    assert "refusing rollback overwrite" in result.stderr
+    assert "Automatic nginx rollback failed closed" in result.stderr
+    assert enabled.is_file() and not enabled.is_symlink()
+    assert enabled.read_text(encoding="utf-8") == external_enabled
+    assert target.read_text(encoding="utf-8") == original
+
+
 def test_certbot_migration_preserves_tls_and_is_idempotent(
     tmp_path: Path,
 ) -> None:
@@ -355,6 +702,7 @@ def test_certbot_migration_preserves_tls_and_is_idempotent(
 
     assert first.returncode == 0, first.stderr + first.stdout
     assert second.returncode == 0, second.stderr + second.stdout
+    assert "regular enabled-site adoption" not in first.stdout + second.stdout
     migrated = target.read_text(encoding="utf-8")
     assert migrated.count(
         "include /etc/jato-fullstack/nginx/active-release.conf;"
@@ -898,6 +1246,57 @@ def test_installer_persists_and_restores_exact_durable_preimage(
     assert enabled.is_symlink() and enabled.readlink() == target
     assert default_enabled.is_symlink()
     assert default_enabled.readlink() == default_available
+
+
+def test_durable_preimage_restores_regular_enabled_site(
+    tmp_path: Path,
+) -> None:
+    env, nginx_etc, jato_etc, _ = _fake_runtime(tmp_path)
+    target = nginx_etc / "sites-available/jato_fullstack.conf"
+    enabled = nginx_etc / "sites-enabled/jato_fullstack.conf"
+    active = jato_etc / "nginx/active-release.conf"
+    active.parent.mkdir(parents=True)
+    original = _certbot_site()
+    original_active = "upstream old { server 127.0.0.1:8000; }\n"
+    target.write_text(original, encoding="utf-8")
+    target.chmod(0o640)
+    enabled.write_text(original, encoding="utf-8")
+    enabled.chmod(0o600)
+    active.write_text(original_active, encoding="utf-8")
+    active.chmod(0o640)
+    preimage = tmp_path / "preimages/regular-enabled"
+    env["NGINX_PREIMAGE_DIR"] = str(preimage)
+
+    installed = _run_installer(env)
+
+    assert installed.returncode == 0, installed.stderr + installed.stdout
+    manifest = json.loads((preimage / "manifest.json").read_text(encoding="utf-8"))
+    assert manifest["enabled"]["kind"] == "file"
+    assert manifest["enabled"]["backup"] == "enabled.conf"
+    assert manifest["enabled"]["mode"] == 0o600
+    assert (preimage / "enabled.conf").read_text(encoding="utf-8") == original
+
+    target.write_text("newer target\n", encoding="utf-8")
+    active.write_text("newer active\n", encoding="utf-8")
+    enabled.unlink()
+    enabled.write_text("newer enabled\n", encoding="utf-8")
+    restored = subprocess.run(
+        ["bash", str(NGINX_INSTALLER), "restore-preimage"],
+        cwd=REPO_ROOT,
+        env=env,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert restored.returncode == 0, restored.stderr + restored.stdout
+    assert target.read_text(encoding="utf-8") == original
+    assert target.stat().st_mode & 0o777 == 0o640
+    assert active.read_text(encoding="utf-8") == original_active
+    assert active.stat().st_mode & 0o777 == 0o640
+    assert enabled.is_file() and not enabled.is_symlink()
+    assert enabled.read_text(encoding="utf-8") == original
+    assert enabled.stat().st_mode & 0o777 == 0o600
 
 
 @pytest.mark.skipif(

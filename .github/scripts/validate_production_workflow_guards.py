@@ -1716,6 +1716,80 @@ def assert_database_migration_is_behind_main_release_gate() -> None:
         raise AssertionError("database migration must require the production release workflow")
 
 
+def assert_nginx_regular_enabled_adoption_is_fail_closed() -> None:
+    installer = (
+        REPO_ROOT
+        / "03_Scripts/deploy/nginx/install_jato_fullstack_nginx.sh"
+    ).read_text(encoding="utf-8")
+    required = (
+        "inspect_regular_enabled_adoption",
+        'getattr(os, "O_NOFOLLOW", 0)',
+        "Enabled nginx site differs from canonical target",
+        "enabled_sha256=",
+        "canonical_sha256=",
+        "difference_content=redacted",
+        "MAX_ADOPTION_BYTES = 4 * 1024 * 1024",
+        "nginx adoption inputs changed after validation",
+        "enabled nginx adoption file changed at atomic ",
+        "def exchange_paths(left: str, right: str)",
+        'if mode == "exchange-adopt"',
+        'if mode == "exchange-restore"',
+        'ENABLED_ADOPTION_OWNER="$WORK_DIR/enabled-adoption-owner.json"',
+        "restore_owned_regular_enabled_adoption",
+        'ENABLED_SNAPSHOT="$WORK_DIR/enabled.original"',
+        '"kind": "symlink" if enabled_was_symlink == "true" else "file"',
+        'atomic_restore_file "$ENABLED_SNAPSHOT" "$ENABLED_CONF"',
+        "verify_original_state",
+        "TARGET_MUTATION_STARTED=false",
+        "ACTIVE_MUTATION_STARTED=false",
+        "DEFAULT_MUTATION_STARTED=false",
+        'if [[ "$TARGET_MUTATION_STARTED" == "true" ]]',
+        'if [[ "$DEFAULT_MUTATION_STARTED" == "true" ]]',
+    )
+    missing = [token for token in required if token not in installer]
+    if missing:
+        raise AssertionError(
+            f"regular enabled-site adoption contract is incomplete: {missing}",
+        )
+
+    validation = installer.rindex("\nvalidate_inputs\n")
+    snapshot = installer.rindex("\nsnapshot_existing_state\n")
+    persist = installer.rindex("\npersist_durable_preimage\n")
+    active_install = installer.rindex(
+        '\natomic_install \\\n  "$ACTIVE_CANDIDATE" "$ACTIVE_RELEASE_CONF" ACTIVE_MUTATION_STARTED\n',
+    )
+    target_install = installer.rindex(
+        '\natomic_install "$SITE_CANDIDATE" "$TARGET_CONF" TARGET_MUTATION_STARTED\n',
+    )
+    atomic_adoption = installer.rindex("\nadopt_enabled_site\n")
+    revalidations = [
+        match.start()
+        for match in re.finditer(
+            r"\nverify_regular_enabled_preimage_unchanged\n",
+            installer,
+        )
+        if snapshot < match.start() < active_install
+    ]
+    if len(revalidations) != 2:
+        raise AssertionError(
+            "regular enabled-site adoption must be revalidated before and "
+            "after durable preimage persistence",
+        )
+    if not (
+        validation
+        < snapshot
+        < revalidations[0]
+        < persist
+        < revalidations[1]
+        < active_install
+        < target_install
+        < atomic_adoption
+    ):
+        raise AssertionError(
+            "regular enabled-site adoption validation/preimage/mutation order changed",
+        )
+
+
 def assert_feature_canary_cannot_route_or_mutate_production() -> None:
     controller_path = (
         REPO_ROOT / "03_Scripts/deploy/tencent_feature_candidate_canary.sh"
@@ -2704,6 +2778,7 @@ def main() -> None:
 
     assert_country_news_production_write_is_main_only()
     assert_database_migration_is_behind_main_release_gate()
+    assert_nginx_regular_enabled_adoption_is_fail_closed()
     assert_feature_canary_cannot_route_or_mutate_production()
     print(
         "Validated release coordination and main-only production gates for "
