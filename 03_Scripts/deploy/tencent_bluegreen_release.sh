@@ -898,6 +898,18 @@ PY
   fi
 }
 
+verify_previous_active_release_exact() {
+  if [[ "$PREVIOUS_RELEASE_ROOT" == "$LEGACY_ROOT" ]]; then
+    verify_legacy_active_release_exact \
+      "$CURRENT_ACTIVE_SLOT" \
+      "$PREVIOUS_RELEASE_SHA" \
+      "$PREVIOUS_RELEASE_ROOT" \
+      "$PREVIOUS_RELEASE_ROOT/06_AppPlatform/frontend/dist"
+  else
+    verify_slot_release_exact "$CURRENT_ACTIVE_SLOT" "$PREVIOUS_RELEASE_SHA"
+  fi
+}
+
 wait_for_slot_release_exact() {
   local slot="$1"
   local expected_sha="$2"
@@ -3023,7 +3035,7 @@ candidate_ready_runtime_is_exact() {
     fi
   fi
   resolve_previous_release_identity \
-    && verify_slot_release_exact "$CURRENT_ACTIVE_SLOT" "$PREVIOUS_RELEASE_SHA" \
+    && verify_previous_active_release_exact \
     && verify_public_release_exact "$PREVIOUS_RELEASE_SHA" \
     && unit_property_equals \
       "${SERVICE_PREFIX}${CURRENT_ACTIVE_SLOT}" UnitFileState enabled \
@@ -5019,7 +5031,7 @@ cleanup_pre_switch_candidate() {
     return 1
   fi
   if ! resolve_previous_release_identity \
-    || ! verify_slot_release_exact "$CURRENT_ACTIVE_SLOT" "$PREVIOUS_RELEASE_SHA"; then
+    || ! verify_previous_active_release_exact; then
     fail "Candidate cleanup could not prove the previous Active slot"
     mark_pre_switch_cleanup_required || true
     return 1

@@ -1446,6 +1446,32 @@ def test_candidate_discard_keeps_readyz_for_nonlegacy_active() -> None:
     assert "verify_public_release_exact" in route
 
 
+def test_candidate_ready_and_cleanup_reuse_legacy_active_identity() -> None:
+    script = CONTROLLER.read_text(encoding="utf-8")
+    previous_active = _shell_function(
+        script,
+        "verify_previous_active_release_exact",
+    )
+    candidate_ready = _shell_function(script, "candidate_ready_runtime_is_exact")
+    cleanup = _shell_function(script, "cleanup_pre_switch_candidate")
+
+    assert '[[ "$PREVIOUS_RELEASE_ROOT" == "$LEGACY_ROOT" ]]' in previous_active
+    assert "verify_legacy_active_release_exact" in previous_active
+    assert "verify_slot_release_exact" in previous_active
+    assert "verify_previous_active_release_exact" in candidate_ready
+    assert "verify_previous_active_release_exact" in cleanup
+    assert (
+        'verify_slot_release_exact "$CURRENT_ACTIVE_SLOT" '
+        '"$PREVIOUS_RELEASE_SHA"'
+        not in candidate_ready
+    )
+    assert (
+        'verify_slot_release_exact "$CURRENT_ACTIVE_SLOT" '
+        '"$PREVIOUS_RELEASE_SHA"'
+        not in cleanup
+    )
+
+
 def test_candidate_discard_allows_absent_active_link_only_for_legacy(
     tmp_path: Path,
 ) -> None:
