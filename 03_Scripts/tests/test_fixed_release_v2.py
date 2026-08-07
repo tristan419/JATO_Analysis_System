@@ -29,8 +29,12 @@ ACTIVE = STORE.ReleaseIdentity("a" * 40, "1" * 64)
 CANDIDATE = STORE.ReleaseIdentity("b" * 40, "2" * 64)
 OLDER = STORE.ReleaseIdentity("c" * 40, "3" * 64)
 NEWEST = STORE.ReleaseIdentity("f" * 40, "7" * 64)
-LEGACY_COMMIT = CANDIDATE.commit_sha
-LEGACY_BUILD = "6" * 64
+LEGACY_COMMIT = "d" * 40
+LEGACY_BUILD = "e" * 64
+LEGACY_UNIT = "[Unit]\nDescription=Legacy Active\n"
+LEGACY_ENV = "LEGACY_ACTIVE=true\n"
+LEGACY_WORKDIR = "/opt/JATO_Analysis_System-main/06_AppPlatform/backend"
+LEGACY_EXEC_START = "/opt/JATO_Analysis_System-main/.venv/bin/python -m uvicorn app.main:app"
 
 
 class FakeSystem:
@@ -97,6 +101,37 @@ class FakeSystem:
         self.restart_attempts: dict[str, int] = {}
         self.fail_restart_attempts: dict[str, set[int]] = {}
         self.nginx_active_config = "/etc/jato-fullstack/nginx/active-release.conf"
+        self.active_instance_unit: Path | None = None
+        self.active_template_unit: Path | None = None
+        self.active_v2_environment_files = ""
+        self.active_legacy_environment_files = ""
+
+    def reload_active_unit(self) -> None:
+        assert self.active_instance_unit is not None
+        assert self.active_template_unit is not None
+        active = self.units[MODULE.ACTIVE_UNIT]
+        if self.active_instance_unit.exists():
+            active.update(
+                {
+                    "FragmentPath": str(self.active_instance_unit),
+                    "WorkingDirectory": "/opt/jato/slots/8000/current/06_AppPlatform/backend",
+                    "EnvironmentFiles": self.active_v2_environment_files,
+                    "ExecStart": (
+                        "/opt/jato/slots/8000/current/.venv/bin/python -m uvicorn "
+                        "app.main:app --host 127.0.0.1 --port 8000 --workers "
+                        "${APP_BACKEND_WORKERS}"
+                    ),
+                }
+            )
+            return
+        active.update(
+            {
+                "FragmentPath": str(self.active_template_unit),
+                "WorkingDirectory": LEGACY_WORKDIR,
+                "ExecStart": LEGACY_EXEC_START,
+                "EnvironmentFiles": self.active_legacy_environment_files,
+            }
+        )
 
     def __call__(self, arguments: tuple[str, ...], timeout: int) -> MODULE.CommandResult:
         self.commands.append(arguments)
@@ -129,6 +164,7 @@ class FakeSystem:
             self.units[unit]["SubState"] = "dead"
             return MODULE.CommandResult(0, "", "")
         if arguments[:2] == ("systemctl", "daemon-reload"):
+            self.reload_active_unit()
             return MODULE.CommandResult(0, "", "")
         if arguments == ("nginx", "-T"):
             return MODULE.CommandResult(
@@ -464,13 +500,16 @@ def controller(
     jato_lock_holder: MODULE.JatoLockHolder = jato_release_locks,
 ) -> MODULE.FixedReleaseController:
     system.nginx_active_config = str(cfg.active_release_config)
-    system.units[MODULE.ACTIVE_UNIT]["EnvironmentFiles"] = (
+    system.active_instance_unit = cfg.active_backend_unit
+    system.active_template_unit = cfg.active_backend_unit.with_name(
+        "jato-fullstack-backend@.service"
+    )
+    system.active_v2_environment_files = (
         f"{cfg.backend_env} (ignore_errors=yes) "
         f"{cfg.slot_env_root / '8000.env'} (ignore_errors=no)"
     )
-    system.units[MODULE.ACTIVE_UNIT]["FragmentPath"] = str(
-        cfg.active_backend_unit
-    )
+    system.active_legacy_environment_files = f"{cfg.backend_env} (ignore_errors=yes)"
+    system.reload_active_unit()
     system.units[MODULE.CANDIDATE_UNIT]["EnvironmentFiles"] = (
         f"{cfg.backend_env} (ignore_errors=yes) "
         f"{cfg.slot_env_root / '8001.env'} (ignore_errors=no) "
@@ -513,6 +552,17 @@ def install_active(cfg: MODULE.ControllerConfig, identity: STORE.ReleaseIdentity
 def install_legacy_active(cfg: MODULE.ControllerConfig) -> None:
     current = cfg.layout.pointer_path(MODULE.ACTIVE_SLOT, "current")
     current.symlink_to(cfg.legacy_active_root)
+    cfg.active_compat_link.unlink()
+    cfg.active_backend_unit.unlink()
+    legacy_template = cfg.active_backend_unit.with_name(
+        "jato-fullstack-backend@.service"
+    )
+    legacy_template.write_text(LEGACY_UNIT, encoding="utf-8")
+    legacy_template.chmod(0o644)
+    legacy_env = cfg.slot_env_root / f"{MODULE.ACTIVE_SLOT}.env"
+    legacy_env.parent.mkdir(parents=True, exist_ok=True)
+    legacy_env.write_text(LEGACY_ENV, encoding="utf-8")
+    legacy_env.chmod(0o600)
 
 
 def install_candidate(
@@ -1252,6 +1302,73 @@ def test_update_retry_converges_pointer_changed_before_active_restart(tmp_path: 
     assert f"APP_RELEASE_SHA={CANDIDATE.commit_sha}" in active_env
 
 
+def test_update_retry_restores_previous_when_current_target_degrades(tmp_path: Path) -> None:
+    cfg = config(tmp_path)
+    create_release(cfg.layout, ACTIVE)
+    candidate_digest = create_release(cfg.layout, CANDIDATE)
+    STORE.atomic_symlink(cfg.layout, MODULE.ACTIVE_SLOT, "current", CANDIDATE)
+    STORE.atomic_symlink(cfg.layout, MODULE.ACTIVE_SLOT, "previous", ACTIVE)
+    system = FakeSystem()
+    ctrl = controller(cfg, system, fail_public_for=CANDIDATE)
+    ctrl._write_slot_env(MODULE.ACTIVE_SLOT, CANDIDATE, active=True)
+    install_candidate(ctrl, CANDIDATE, system)
+
+    with pytest.raises(MODULE.V2Error) as caught:
+        ctrl.update_active(CANDIDATE, manifest_sha256=candidate_digest)
+
+    assert caught.value.code == "public_not_ready"
+    assert STORE.read_pointer_pair(cfg.layout, MODULE.ACTIVE_SLOT) == STORE.PointerPair(
+        ACTIVE,
+        CANDIDATE,
+    )
+    active_env = (cfg.slot_env_root / "8000.env").read_text(encoding="utf-8")
+    assert f"APP_RELEASE_SHA={ACTIVE.commit_sha}" in active_env
+    mutation = latest_report(cfg)["mutation"]
+    assert mutation["stateRestored"] is True
+    assert mutation["pointerChanged"] is True
+    assert mutation["serviceChanged"] is True
+    assert mutation["trafficChanged"] is True
+
+
+def test_update_retry_jato_rejection_before_restart_leaves_state_unchanged(
+    tmp_path: Path,
+) -> None:
+    cfg = config(tmp_path)
+    create_release(cfg.layout, ACTIVE)
+    candidate_digest = create_release(cfg.layout, CANDIDATE)
+    STORE.atomic_symlink(cfg.layout, MODULE.ACTIVE_SLOT, "current", CANDIDATE)
+    STORE.atomic_symlink(cfg.layout, MODULE.ACTIVE_SLOT, "previous", ACTIVE)
+    system = FakeSystem()
+    ctrl = controller(cfg, system, fail_public_for=CANDIDATE)
+    ctrl._write_slot_env(MODULE.ACTIVE_SLOT, CANDIDATE, active=True)
+    install_candidate(ctrl, CANDIDATE, system)
+    calls = 0
+
+    def fail_second_inspection(path: Path) -> dict[str, object]:
+        nonlocal calls
+        del path
+        calls += 1
+        if calls == 2:
+            raise MODULE.V2Error("jato_became_busy", "injected busy state")
+        return {"busy": False}
+
+    ctrl.jato_inspector = fail_second_inspection
+    original_env = (cfg.slot_env_root / "8000.env").read_bytes()
+    original_pair = STORE.read_pointer_pair(cfg.layout, MODULE.ACTIVE_SLOT)
+
+    with pytest.raises(MODULE.V2Error) as caught:
+        ctrl.update_active(CANDIDATE, manifest_sha256=candidate_digest)
+
+    assert caught.value.code == "jato_became_busy"
+    assert STORE.read_pointer_pair(cfg.layout, MODULE.ACTIVE_SLOT) == original_pair
+    assert (cfg.slot_env_root / "8000.env").read_bytes() == original_env
+    assert system.restart_attempts.get(MODULE.ACTIVE_UNIT, 0) == 0
+    mutation = latest_report(cfg)["mutation"]
+    assert mutation["pointerChangeAttempted"] is False
+    assert mutation["serviceChangeAttempted"] is False
+    assert mutation["stateRestored"] is False
+
+
 def test_update_rejects_busy_jato_release_lock_before_mutation(tmp_path: Path) -> None:
     cfg = config(tmp_path)
     install_active(cfg, ACTIVE)
@@ -1361,6 +1478,26 @@ def test_update_rejects_public_routing_drift_before_active_mutation(tmp_path: Pa
 
     assert caught.value.code == "active_routing_contract_invalid"
     assert STORE.read_pointer(cfg.layout, MODULE.ACTIVE_SLOT, "current") == ACTIVE
+    assert latest_report(cfg)["mutation"]["pointerChangeAttempted"] is False
+
+
+def test_rollback_rejects_first_transition_b_b_without_distinct_previous(
+    tmp_path: Path,
+) -> None:
+    cfg = config(tmp_path)
+    digest = create_release(cfg.layout, CANDIDATE)
+    STORE.atomic_symlink(cfg.layout, MODULE.ACTIVE_SLOT, "current", CANDIDATE)
+    STORE.atomic_symlink(cfg.layout, MODULE.ACTIVE_SLOT, "previous", CANDIDATE)
+    system = FakeSystem()
+    ctrl = controller(cfg, system)
+    ctrl._write_slot_env(MODULE.ACTIVE_SLOT, CANDIDATE, active=True)
+
+    with pytest.raises(MODULE.V2Error) as caught:
+        ctrl.rollback_active(CANDIDATE, manifest_sha256=digest)
+
+    assert caught.value.code == "rollback_unavailable"
+    assert STORE.read_pointer(cfg.layout, MODULE.ACTIVE_SLOT, "current") == CANDIDATE
+    assert STORE.read_pointer(cfg.layout, MODULE.ACTIVE_SLOT, "previous") == CANDIDATE
     assert latest_report(cfg)["mutation"]["pointerChangeAttempted"] is False
 
 
@@ -1824,9 +1961,7 @@ def test_prepare_accepts_exact_legacy_active_without_modifying_it(tmp_path: Path
     assert not active_mutations.intersection(system.commands)
 
 
-def test_update_rejects_legacy_until_one_time_baseline_registration(
-    tmp_path: Path,
-) -> None:
+def test_first_update_adopts_reviewed_candidate_as_b_b(tmp_path: Path) -> None:
     cfg = config(tmp_path)
     install_legacy_active(cfg)
     digest = create_release(cfg.layout, CANDIDATE)
@@ -1834,13 +1969,219 @@ def test_update_rejects_legacy_until_one_time_baseline_registration(
     ctrl = controller(cfg, system)
     install_candidate(ctrl, CANDIDATE, system)
 
+    report = ctrl.update_active(CANDIDATE, manifest_sha256=digest)
+
+    assert report["decision"] == "completed"
+    assert "legacy_active_adopted_as_b_b" in report["passed"]
+    active_link = cfg.layout.pointer_path(MODULE.ACTIVE_SLOT, "current")
+    assert STORE.read_pointer(cfg.layout, MODULE.ACTIVE_SLOT, "current") == CANDIDATE
+    assert STORE.read_pointer(cfg.layout, MODULE.ACTIVE_SLOT, "previous") == CANDIDATE
+    assert STORE.read_pointer(cfg.layout, MODULE.CANDIDATE_SLOT, "current") == CANDIDATE
+    assert active_link.resolve(strict=True) == cfg.layout.release_path(CANDIDATE)
+    assert cfg.active_backend_unit.read_bytes() == (
+        DEPLOY / "systemd/jato-fullstack-backend@.service"
+    ).read_bytes()
+    assert cfg.active_backend_unit.with_name(
+        "jato-fullstack-backend@.service"
+    ).read_text(encoding="utf-8") == LEGACY_UNIT
+    assert cfg.active_compat_link.resolve(strict=True) == cfg.layout.release_path(
+        CANDIDATE
+    )
+    assert system.units[MODULE.ACTIVE_UNIT]["FragmentPath"] == str(
+        cfg.active_backend_unit
+    )
+    assert system.units[MODULE.ACTIVE_UNIT]["WorkingDirectory"] == (
+        "/opt/jato/slots/8000/current/06_AppPlatform/backend"
+    )
+    active_env = (cfg.slot_env_root / "8000.env").read_text(encoding="utf-8")
+    assert "APP_RELEASE_ROLE=active" in active_env
+    assert f"APP_RELEASE_SHA={CANDIDATE.commit_sha}" in active_env
+    assert "APP_JATO_MONTHLY_ENABLED=true" in active_env
+    restart_count = system.restart_attempts[MODULE.ACTIVE_UNIT]
+    retry = ctrl.update_active(CANDIDATE, manifest_sha256=digest)
+    assert "active_target_already_current" in retry["passed"]
+    assert STORE.read_pointer(cfg.layout, MODULE.ACTIVE_SLOT, "previous") == CANDIDATE
+    assert system.restart_attempts[MODULE.ACTIVE_UNIT] == restart_count
+
+
+def test_first_update_failure_restores_exact_legacy_active(tmp_path: Path) -> None:
+    cfg = config(tmp_path)
+    install_legacy_active(cfg)
+    digest = create_release(cfg.layout, CANDIDATE)
+    system = FakeSystem()
+    ctrl = controller(cfg, system, fail_public_for=CANDIDATE)
+    install_candidate(ctrl, CANDIDATE, system)
+    active_link = cfg.layout.pointer_path(MODULE.ACTIVE_SLOT, "current")
+    raw_target = os.readlink(active_link)
+
     with pytest.raises(MODULE.V2Error) as caught:
         ctrl.update_active(CANDIDATE, manifest_sha256=digest)
 
-    assert caught.value.code == "v2_bootstrap_required"
-    active_link = cfg.layout.pointer_path(MODULE.ACTIVE_SLOT, "current")
+    assert caught.value.code == "public_not_ready"
+    assert os.readlink(active_link) == raw_target
     assert active_link.resolve(strict=True) == cfg.legacy_active_root
     assert STORE.read_pointer(cfg.layout, MODULE.ACTIVE_SLOT, "previous") is None
+    assert not cfg.active_backend_unit.exists()
+    assert cfg.active_backend_unit.with_name(
+        "jato-fullstack-backend@.service"
+    ).read_text(encoding="utf-8") == LEGACY_UNIT
+    assert (cfg.slot_env_root / "8000.env").read_text(encoding="utf-8") == LEGACY_ENV
+    assert not cfg.active_compat_link.exists()
+    assert system.units[MODULE.ACTIVE_UNIT]["FragmentPath"] == str(
+        cfg.active_backend_unit.with_name("jato-fullstack-backend@.service")
+    )
+    assert system.units[MODULE.ACTIVE_UNIT]["WorkingDirectory"] == LEGACY_WORKDIR
+    assert system.units[MODULE.ACTIVE_UNIT]["ExecStart"] == LEGACY_EXEC_START
+    report = latest_report(cfg)
+    mutation = report["mutation"]
+    assert mutation["stateRestored"] is True
+    assert mutation["pointerChanged"] is True
+    assert mutation["serviceChanged"] is True
+    assert mutation["trafficChanged"] is True
+    assert "legacy_active_restored" in report["passed"]
+
+
+def test_first_update_restart_failure_restores_legacy_then_retry_succeeds(
+    tmp_path: Path,
+) -> None:
+    cfg = config(tmp_path)
+    install_legacy_active(cfg)
+    digest = create_release(cfg.layout, CANDIDATE)
+    system = FakeSystem()
+    system.fail_restart_attempts[MODULE.ACTIVE_UNIT] = {1}
+    ctrl = controller(cfg, system)
+    install_candidate(ctrl, CANDIDATE, system)
+    raw_target = os.readlink(cfg.layout.pointer_path(MODULE.ACTIVE_SLOT, "current"))
+
+    with pytest.raises(MODULE.V2Error) as caught:
+        ctrl.update_active(CANDIDATE, manifest_sha256=digest)
+
+    assert caught.value.code == "command_failed"
+    assert os.readlink(cfg.layout.pointer_path(MODULE.ACTIVE_SLOT, "current")) == raw_target
+    assert STORE.read_pointer(cfg.layout, MODULE.ACTIVE_SLOT, "previous") is None
+    assert not cfg.active_backend_unit.exists()
+    assert not cfg.active_compat_link.exists()
+    failed_mutation = latest_report(cfg)["mutation"]
+    assert failed_mutation["pointerChanged"] is True
+    assert failed_mutation["serviceChanged"] is True
+    assert failed_mutation["trafficChanged"] is True
+    system.fail_restart_attempts[MODULE.ACTIVE_UNIT].clear()
+
+    report = ctrl.update_active(CANDIDATE, manifest_sha256=digest)
+
+    assert report["decision"] == "completed"
+    assert STORE.read_pointer_pair(cfg.layout, MODULE.ACTIVE_SLOT) == STORE.PointerPair(
+        CANDIDATE,
+        CANDIDATE,
+    )
+
+
+def test_first_update_reports_trigger_and_legacy_restore_failure(tmp_path: Path) -> None:
+    cfg = config(tmp_path)
+    install_legacy_active(cfg)
+    digest = create_release(cfg.layout, CANDIDATE)
+    system = FakeSystem()
+    system.fail_restart_attempts[MODULE.ACTIVE_UNIT] = {1, 2}
+    ctrl = controller(cfg, system)
+    install_candidate(ctrl, CANDIDATE, system)
+
+    with pytest.raises(MODULE.V2Error) as caught:
+        ctrl.update_active(CANDIDATE, manifest_sha256=digest)
+
+    assert caught.value.code == "active_restore_failed"
+    details = latest_report(cfg)["failed"]["details"]
+    assert details["trigger"]["code"] == "command_failed"
+    assert details["restore"]["code"] == "command_failed"
+
+
+def test_first_update_rejects_stale_explicit_unit_before_mutation(tmp_path: Path) -> None:
+    cfg = config(tmp_path)
+    install_legacy_active(cfg)
+    digest = create_release(cfg.layout, CANDIDATE)
+    system = FakeSystem()
+    ctrl = controller(cfg, system)
+    install_candidate(ctrl, CANDIDATE, system)
+    cfg.active_backend_unit.write_text("stale explicit\n", encoding="utf-8")
+    cfg.active_backend_unit.chmod(0o644)
+    raw_target = os.readlink(cfg.layout.pointer_path(MODULE.ACTIVE_SLOT, "current"))
+
+    with pytest.raises(MODULE.V2Error) as caught:
+        ctrl.update_active(CANDIDATE, manifest_sha256=digest)
+
+    assert caught.value.code == "legacy_active_unit_mismatch"
+    assert cfg.active_backend_unit.read_text(encoding="utf-8") == "stale explicit\n"
+    assert os.readlink(cfg.layout.pointer_path(MODULE.ACTIVE_SLOT, "current")) == raw_target
+    assert system.restart_attempts.get(MODULE.ACTIVE_UNIT, 0) == 0
+    assert latest_report(cfg)["mutation"]["pointerChangeAttempted"] is False
+
+
+def test_first_update_compat_creation_failure_is_restored(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    cfg = config(tmp_path)
+    install_legacy_active(cfg)
+    digest = create_release(cfg.layout, CANDIDATE)
+    system = FakeSystem()
+    ctrl = controller(cfg, system)
+    install_candidate(ctrl, CANDIDATE, system)
+    original = Path.symlink_to
+
+    def fail_compat(path: Path, target: str | os.PathLike[str], *args, **kwargs) -> None:
+        if path == cfg.active_compat_link:
+            raise OSError("injected compat failure")
+        original(path, target, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "symlink_to", fail_compat)
+    with pytest.raises(MODULE.V2Error) as caught:
+        ctrl.update_active(CANDIDATE, manifest_sha256=digest)
+
+    assert caught.value.code == "unexpected_error"
+    assert not cfg.active_backend_unit.exists()
+    assert not cfg.active_compat_link.exists()
+    assert cfg.layout.pointer_path(MODULE.ACTIVE_SLOT, "current").resolve() == (
+        cfg.legacy_active_root
+    )
+    mutation = latest_report(cfg)["mutation"]
+    assert mutation["stateRestored"] is True
+    assert mutation["pointerChanged"] is False
+    assert mutation["serviceChanged"] is True
+    assert mutation["trafficChanged"] is False
+
+
+@pytest.mark.parametrize(
+    ("unsafe_state", "expected_code"),
+    [
+        ("previous", "legacy_active_previous_present"),
+        ("unit", "legacy_active_unit_mismatch"),
+    ],
+)
+def test_first_update_rejects_unsafe_legacy_preimage_before_mutation(
+    tmp_path: Path,
+    unsafe_state: str,
+    expected_code: str,
+) -> None:
+    cfg = config(tmp_path)
+    install_legacy_active(cfg)
+    digest = create_release(cfg.layout, CANDIDATE)
+    system = FakeSystem()
+    ctrl = controller(cfg, system)
+    install_candidate(ctrl, CANDIDATE, system)
+    if unsafe_state == "previous":
+        STORE.atomic_symlink(cfg.layout, MODULE.ACTIVE_SLOT, "previous", CANDIDATE)
+    else:
+        system.units[MODULE.ACTIVE_UNIT]["FragmentPath"] = "/etc/other.service"
+    active_link = cfg.layout.pointer_path(MODULE.ACTIVE_SLOT, "current")
+    raw_target = os.readlink(active_link)
+
+    with pytest.raises(MODULE.V2Error) as caught:
+        ctrl.update_active(CANDIDATE, manifest_sha256=digest)
+
+    assert caught.value.code == expected_code
+    assert os.readlink(active_link) == raw_target
+    assert not cfg.active_backend_unit.exists()
+    assert (cfg.slot_env_root / "8000.env").read_text(encoding="utf-8") == LEGACY_ENV
+    assert system.restart_attempts.get(MODULE.ACTIVE_UNIT, 0) == 0
     assert latest_report(cfg)["mutation"]["pointerChangeAttempted"] is False
 
 

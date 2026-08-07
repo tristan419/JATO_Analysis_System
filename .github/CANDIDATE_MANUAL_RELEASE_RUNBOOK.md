@@ -101,15 +101,17 @@ Candidate 可以读取真实生产环境的数据，以发现本地数据无法�
 - 生产调用面只允许 `fixed-v2`；`legacy-v1` 直接入口必须拒绝。旧源码在阶段 B 删除前
   只能作为不可达历史代码保留。
 
-legacy Active 第一次进入 V2 时，不能直接用新代码覆盖并留下空 previous，也不能把不具备
-Candidate 只读合同的旧代码假装成 Candidate。应先由用户单独授权一次性 bootstrap：证明
-服务器保存的旧 archive、commit 和 frontend evidence 唯一且与现网一致，把只增加最终 V2
-控制文件的同业务版本 wrapper 校验为普通 V2 release，并直接登记为
-`active.current == active.previous == A`。证据缺失或不唯一就停止。该 bootstrap 是首次安装
-步骤，不进入日常四操作；完成后才准备新 main 的 Candidate B，并在人工批准后得到 B/A。
-旧 `cd4557…` 源码没有 V2 `/readyz`，因此不能仅靠文件复制登记；必须先以服务器只读
-inventory 确认真实 endpoint 与 venv，再由一次性 helper 加入审查过的只读 readiness
-compatibility shim。该 shim 不进入日常 controller，A0 完成后随 helper 一并删除。
+legacy Active 第一次进入 V2 采用用户明确选择的最简 `B/B`：先按普通流程准备并人工测试
+Candidate B；只有用户再次明确批准 `update-active` 后，现有控制器才把固定 8000 切到同一
+构件，并登记 `active.current == active.previous == B`。不建立 A/A helper、第五种操作、
+checkpoint 或 recovery 系统，也不把没有 Candidate 只读合同的旧代码假装成 Candidate。
+
+首次切换会先证明 legacy current 精确指向旧根目录、previous 为空、8000 unit/env 可读取、
+固定 Nginx 仍只指向 8000，并记录旧 unit/env、systemd 身份和公网 build identity。普通可捕获
+失败会恢复这些运行 preimage 并重新验证 legacy 公网；成功后旧 legacy 不再是自动回退点。
+因此第一次成功后的 B/B 没有 distinct rollback，直到下一次 C 更新形成 C/B 后，才可使用
+普通 `rollback-active` 回到 B。主机断电、内核崩溃或 SIGKILL 造成的多文件中间态不由日常
+控制器自动恢复，必须先人工盘点；这项取舍用于避免重新建设事故恢复平台。
 
 ### 4.1 准备 Candidate
 
@@ -159,6 +161,10 @@ prepare；不为这种情况建立 recovery/checkpoint 状态机。
 安装、重启或验证过程中若失败，同一操作会恢复更新前的 Active 指针和运行配置，重启
 旧版本并验证公网。Candidate 未获授权时，Active 根本不会发生变化。
 
+第一次 legacy→B/B 会在同一 `update-active` 中安装固定 8000 unit 与 compatibility link；
+这不是独立 bootstrap，也不会自动发生。该次成功后页面或命令若请求 rollback，控制器会
+明确返回 `rollback_unavailable`，不会把 B/B 的无操作伪装成已回退。
+
 `update-active` 成功后 Candidate 仍可保留供短期核对；需要释放测试环境时，再单独运行
 `discard-candidate`。
 
@@ -169,11 +175,12 @@ prepare；不为这种情况建立 recovery/checkpoint 状态机。
 SHA-256，分别填入三个 target 输入，勾选 `confirm_control_operation`；不得留空或只凭
 “最近版本”猜测。
 
-以 `B/A` 回退到 A 为例，系统使用内核原子交换一次进入 `A/B`，不会出现 `A/A`、
-`B/B` 或任一版本失去指针保护的中间态。控制器捕获到的重启/验证失败会再次原子交换
-回 `B/A` 并验证 B；若进程被强制终止，磁盘状态也只会是 `B/A` 或 `A/B`，下一次对同一
-A 的显式重试只会验证或继续启动 A，不会自动切回 B。只有用户再次明确提交 B 的完整
-三元组时，才允许从 `A/B` 反向交换为 `B/A`。若目标不再受 current/previous 保护，
+首次 B/B 没有 distinct previous，因此不能主动回退。下一次 C 更新形成 `C/B` 后，
+以 `C/B` 回退到 B 为例，系统使用内核原子交换一次进入 `B/C`，不会出现任一版本失去
+指针保护的中间态。控制器捕获到的重启/验证失败会再次原子交换
+回 `C/B` 并验证 C；若进程被强制终止，磁盘状态也只会是 `C/B` 或 `B/C`，下一次对同一
+B 的显式重试只会验证或继续启动 B，不会自动切回 C。只有用户再次明确提交 C 的完整
+三元组时，才允许从 `B/C` 反向交换为 `C/B`。若目标不再受 current/previous 保护，
 操作必须拒绝，不能根据 Git 历史临时生成替代版本。
 
 ## 5. Candidate 页面访问方式

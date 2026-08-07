@@ -1730,6 +1730,101 @@ class FixedReleaseController:
         self._verify_active_compat_link()
         self._verify_public(identity, manifest)
 
+    def _adopt_legacy_active(
+        self, baseline: ActiveBaseline, target: ReleaseIdentity,
+        target_manifest: ReleaseManifest, mutation: dict[str, bool], passed: list[str],
+    ) -> None:
+        if baseline.previous_anchor is not None:
+            raise V2Error("legacy_active_previous_present", "legacy previous must be empty")
+        legacy_env = self._read_slot_env(ACTIVE_SLOT)
+        active_unit = self.config.active_backend_unit
+        active_unit_before = self._read_optional_managed_text(active_unit, mode=0o644)
+        fragment = Path(self._systemctl("show", ACTIVE_UNIT, "-p", "FragmentPath", "--value"))
+        legacy_template = active_unit.with_name("jato-fullstack-backend@.service")
+        if (
+            fragment not in (active_unit, legacy_template)
+            or (fragment == active_unit) != (active_unit_before is not None)
+            or self._read_optional_managed_text(fragment, mode=0o644) is None
+        ):
+            raise V2Error("legacy_active_unit_mismatch", "legacy unit is not safely replaceable")
+        self._verify_unit(ACTIVE_UNIT, high=ACTIVE_MEMORY_HIGH, maximum=ACTIVE_MEMORY_MAX)
+        health_url = f"{self.config.public_origin}/healthz"
+        metadata_url = f"{self.config.public_origin}/build-meta.json"
+        legacy_health = self.http_reader(health_url, 20)
+        legacy_identity = self.http_reader(metadata_url, 20)
+        identity_fields = (legacy_identity[1].get("deployCommit"), legacy_identity[1].get("frontendBuildId"))
+        if (
+            legacy_health[0] != 200 or legacy_health[1].get("status") != "ok"
+            or legacy_identity[0] != 200 or not all(identity_fields)
+        ):
+            raise V2Error("legacy_public_not_ready", "legacy public identity is unavailable")
+        compat_before = self._read_optional_link(self.config.active_compat_link)
+        current = self.config.layout.pointer_path(ACTIVE_SLOT, "current")
+        compat_target = os.path.relpath(current, self.config.active_compat_link.parent)
+        if compat_before not in (None, compat_target):
+            raise V2Error("active_compat_link_invalid", "legacy compatibility link differs")
+        target_unit = self.config.candidate_backend_unit_contract.read_text(encoding="utf-8")
+        self._verify_active_baseline_unchanged(baseline)
+        passed.extend(("active_restore_point_verified", "active_baseline_verified"))
+        try:
+            mutation["serviceChangeAttempted"] = True
+            if compat_before is None:
+                self.config.active_compat_link.symlink_to(compat_target)
+            _atomic_write(active_unit, target_unit, 0o644)
+            self._systemctl("daemon-reload")
+            self._write_slot_env(ACTIVE_SLOT, target, active=True)
+            mutation["pointerChangeAttempted"] = mutation["trafficChangeAttempted"] = True
+            atomic_symlink(self.config.layout, ACTIVE_SLOT, "previous", target)
+            atomic_symlink(self.config.layout, ACTIVE_SLOT, "current", target)
+            mutation["pointerChanged"] = mutation["trafficChanged"] = True
+            self.jato_inspector(self.config.jato_job_root)
+            passed.append("jato_idle_at_restart")
+            self._restart_active(target, target_manifest, write_env=False)
+            mutation["serviceChanged"] = True
+        except Exception as trigger:
+            try:
+                temporary = current.parent / f".current.{uuid.uuid4().hex}.legacy"
+                try:
+                    os.symlink(baseline.current_anchor[4], temporary)
+                    os.replace(temporary, current)
+                finally:
+                    temporary.unlink(missing_ok=True)
+                clear_pointer(self.config.layout, ACTIVE_SLOT, "previous")
+                _atomic_write(self.config.slot_env_root / f"{ACTIVE_SLOT}.env", legacy_env, 0o600)
+                self._restore_managed_text(active_unit, active_unit_before, mode=0o644)
+                if compat_before is None:
+                    actual_compat = self._read_optional_link(self.config.active_compat_link)
+                    if actual_compat not in (None, compat_target):
+                        raise V2Error(
+                            "active_compat_link_invalid",
+                            "new Active compatibility link changed before restore",
+                        )
+                    if actual_compat is not None:
+                        self.config.active_compat_link.unlink()
+                self._systemctl("daemon-reload")
+                self._set_limits(ACTIVE_UNIT, high=ACTIVE_MEMORY_HIGH, maximum=ACTIVE_MEMORY_MAX)
+                self._systemctl("restart", ACTIVE_UNIT, timeout=120)
+                mutation["serviceChanged"] = True
+                self._verify_unit(ACTIVE_UNIT, high=ACTIVE_MEMORY_HIGH, maximum=ACTIVE_MEMORY_MAX)
+                restored_health = self.http_reader(health_url, 20)
+                if (
+                    Path(self._systemctl("show", ACTIVE_UNIT, "-p", "FragmentPath", "--value"))
+                    != fragment
+                    or restored_health[0] != 200
+                    or restored_health[1].get("status") != "ok"
+                    or self.http_reader(metadata_url, 20) != legacy_identity
+                ):
+                    raise V2Error("legacy_active_restore_mismatch", "legacy Active changed")
+            except Exception as restore_error:
+                raise V2Error(
+                    "active_restore_failed",
+                    "first Active adoption failed and legacy Active was not restored",
+                    details={"trigger": _failure_dict(trigger), "restore": _failure_dict(restore_error)},
+                ) from trigger
+            mutation["stateRestored"] = True
+            passed.append("legacy_active_restored")
+            raise trigger
+        passed.extend(("legacy_active_adopted_as_b_b", "active_updated_and_public_verified"))
     def _switch_active(
         self,
         active: PointerPair,
@@ -1761,6 +1856,7 @@ class FixedReleaseController:
 
         fallback = active.current
         fallback_manifest = current_manifest
+        restore_pair = active
         if already_target:
             fallback = active.previous
             fallback_manifest = (
@@ -1768,9 +1864,10 @@ class FixedReleaseController:
                 if fallback is not None and fallback != target
                 else None
             )
+            restore_pair = PointerPair(fallback, target)
         try:
             if active.current != target:
-                mutation["pointerChangeAttempted"] = True
+                mutation["pointerChangeAttempted"] = mutation["trafficChangeAttempted"] = True
                 if rollback:
                     atomic_exchange_pointers(self.config.layout, ACTIVE_SLOT, active)
                 else:
@@ -1781,18 +1878,18 @@ class FixedReleaseController:
                         active.current,
                     )
                     atomic_symlink(self.config.layout, ACTIVE_SLOT, "current", target)
-                mutation["pointerChanged"] = True
+                mutation["pointerChanged"] = mutation["trafficChanged"] = True
             self.jato_inspector(self.config.jato_job_root)
             passed.append("jato_idle_at_restart")
             mutation["serviceChangeAttempted"] = True
             mutation["trafficChangeAttempted"] = True
             self._restart_active(target, target_manifest)
-            mutation["serviceChanged"] = True
-            mutation["trafficChanged"] = True
+            mutation["serviceChanged"] = mutation["trafficChanged"] = True
             passed.append(success_label)
         except Exception as trigger:
+            if already_target and not mutation["serviceChangeAttempted"]:
+                raise
             restore_errors: list[dict[str, Any]] = []
-
             def attempt(step: str, operation: Callable[[], None]) -> bool:
                 try:
                     operation()
@@ -1800,108 +1897,51 @@ class FixedReleaseController:
                     restore_errors.append({"step": step, **_failure_dict(exc)})
                     return False
                 return True
-
-            if rollback:
-                if fallback is None or fallback_manifest is None or fallback == target:
-                    restore_errors.append(
-                        {
-                            "step": "restore_active_target",
-                            "code": "active_previous_unavailable",
-                            "message": "no distinct previous Active is available",
-                        }
-                    )
-                else:
-                    def restore_rollback_pair() -> None:
-                        actual = read_pointer_pair(self.config.layout, ACTIVE_SLOT)
-                        forward = PointerPair(target, fallback)
-                        restored = PointerPair(fallback, target)
-                        if actual == forward:
-                            atomic_exchange_pointers(
-                                self.config.layout,
-                                ACTIVE_SLOT,
-                                actual,
-                            )
-                        elif actual != restored:
-                            raise V2Error(
-                                "active_pointer_pair_unexpected",
-                                "Active pointers are neither rollback nor restored state",
-                            )
-
-                    pointers_restored = attempt(
-                        "restore_active_pointers",
-                        restore_rollback_pair,
-                    )
-                    env_restored = True
-                    if mutation["serviceChangeAttempted"]:
-                        env_restored = attempt(
-                            "restore_active_environment",
-                            lambda: _atomic_write(
-                                self.config.slot_env_root / f"{ACTIVE_SLOT}.env",
-                                previous_env,
-                                0o600,
-                            ),
-                        )
-                    if (
-                        pointers_restored
-                        and env_restored
-                        and mutation["serviceChangeAttempted"]
-                    ):
-                        attempt(
-                            "restart_previous_active",
-                            lambda: self._restart_active(
-                                fallback,
-                                fallback_manifest,
-                                write_env=False,
-                            ),
-                        )
-            elif already_target:
-                if fallback is None or fallback_manifest is None or fallback == target:
-                    restore_errors.append(
-                        {
-                            "step": "restore_active_target",
-                            "code": "active_previous_unavailable",
-                            "message": "no distinct previous Active is available",
-                        }
-                    )
-                else:
-                    pointers_restored = attempt(
-                        "restore_active_pointers",
-                        lambda: self._restore_pair(
+            if fallback is None or fallback_manifest is None or fallback == target:
+                restore_errors.append(
+                    {
+                        "step": "restore_active_target",
+                        "code": "active_previous_unavailable",
+                        "message": "no distinct previous Active is available",
+                    }
+                )
+            else:
+                def restore_pointers() -> None:
+                    if not (rollback or already_target):
+                        self._restore_pair(
                             ACTIVE_SLOT,
-                            fallback,
-                            target if rollback else fallback,
+                            restore_pair.current,
+                            restore_pair.previous,
+                        )
+                        return
+                    actual = read_pointer_pair(self.config.layout, ACTIVE_SLOT)
+                    if actual == restore_pair:
+                        return
+                    if actual != PointerPair(target, fallback):
+                        raise V2Error(
+                            "active_pointer_pair_unexpected",
+                            "Active pointers are neither switched nor restored",
+                        )
+                    mutation["pointerChangeAttempted"] = mutation["trafficChangeAttempted"] = True
+                    atomic_exchange_pointers(self.config.layout, ACTIVE_SLOT, actual)
+                    mutation["pointerChanged"] = mutation["trafficChanged"] = True
+
+                pointers_restored = attempt("restore_active_pointers", restore_pointers)
+                env_restored = True
+                if mutation["serviceChangeAttempted"] and not already_target:
+                    env_restored = attempt(
+                        "restore_active_environment",
+                        lambda: _atomic_write(
+                            self.config.slot_env_root / f"{ACTIVE_SLOT}.env",
+                            previous_env,
+                            0o600,
                         ),
                     )
-                    if pointers_restored:
-                        attempt(
-                            "restart_previous_active",
-                            lambda: self._restart_active(fallback, fallback_manifest),
-                        )
-            else:
-                pointers_restored = attempt(
-                    "restore_active_pointers",
-                    lambda: self._restore_pair(
-                        ACTIVE_SLOT,
-                        active.current,
-                        active.previous,
-                    ),
-                )
-                env_restored = attempt(
-                    "restore_active_environment",
-                    lambda: _atomic_write(
-                        self.config.slot_env_root / f"{ACTIVE_SLOT}.env",
-                        previous_env,
-                        0o600,
-                    ),
-                )
-                if pointers_restored and env_restored:
+                if pointers_restored and env_restored and mutation["serviceChangeAttempted"]:
+                    mutation["serviceChanged"] = mutation["trafficChanged"] = True
                     attempt(
                         "restart_previous_active",
-                        lambda: self._restart_active(
-                            active.current,
-                            current_manifest,
-                            write_env=False,
-                        ),
+                        lambda: self._restart_active(fallback, fallback_manifest, write_env=already_target),
                     )
             if restore_errors:
                 raise V2Error(
@@ -1924,11 +1964,6 @@ class FixedReleaseController:
     ) -> dict[str, Any]:
         def body(mutation: dict[str, bool], passed: list[str]) -> ReleaseIdentity:
             baseline = self._active_baseline()
-            if baseline.legacy:
-                raise V2Error(
-                    "v2_bootstrap_required",
-                    "legacy Active must be registered as a V2 baseline before update-active",
-                )
             candidate = read_pointer(self.config.layout, CANDIDATE_SLOT, "current")
             if candidate != expected:
                 raise V2Error(
@@ -1946,17 +1981,23 @@ class FixedReleaseController:
             self._verify_active_monthly_owner()
             passed.append("fixed_active_owner_verified")
             self._verify_preview_contracts()
-            active = read_pointer_pair(self.config.layout, ACTIVE_SLOT)
-            if active.current is None:
-                raise V2Error("active_baseline_missing", "active.current is not initialized")
-            active_manifest = self._verify_self_manifest(active.current)
-            passed.append("active_restore_point_verified")
-            self._verify_active_compat_link()
-            self._verify_active_runtime_contract()
-            if active.current != candidate:
-                self._verify_backend(ACTIVE_SLOT, active.current, active=True)
-                self._verify_public(active.current, active_manifest)
-            passed.append("active_baseline_verified")
+            active: PointerPair | None = None
+            active_manifest: ReleaseManifest | None = None
+            if not baseline.legacy:
+                active = read_pointer_pair(self.config.layout, ACTIVE_SLOT)
+                if active.current is None:
+                    raise V2Error(
+                        "active_baseline_missing",
+                        "active.current is not initialized",
+                    )
+                active_manifest = self._verify_self_manifest(active.current)
+                passed.append("active_restore_point_verified")
+                self._verify_active_compat_link()
+                self._verify_active_runtime_contract()
+                if active.current != candidate:
+                    self._verify_backend(ACTIVE_SLOT, active.current, active=True)
+                    self._verify_public(active.current, active_manifest)
+                passed.append("active_baseline_verified")
             self._candidate_database_isolation_gate(candidate)
             passed.append("candidate_database_isolation_revalidated")
             self._verify_backend(CANDIDATE_SLOT, candidate, active=False)
@@ -1971,17 +2012,27 @@ class FixedReleaseController:
                 passed.append("jato_idle_before_update")
                 self._database_gate(baseline.identity, candidate)
                 passed.append("database_revision_compatible")
-                self._switch_active(
-                    active,
-                    candidate,
-                    active_manifest,
-                    candidate_manifest,
-                    mutation,
-                    passed,
-                    success_label="active_updated_and_public_verified",
-                    restore_label="previous_active_restored",
-                    rollback=False,
-                )
+                if baseline.legacy:
+                    self._adopt_legacy_active(
+                        baseline,
+                        candidate,
+                        candidate_manifest,
+                        mutation,
+                        passed,
+                    )
+                else:
+                    assert active is not None and active_manifest is not None
+                    self._switch_active(
+                        active,
+                        candidate,
+                        active_manifest,
+                        candidate_manifest,
+                        mutation,
+                        passed,
+                        success_label="active_updated_and_public_verified",
+                        restore_label="previous_active_restored",
+                        rollback=False,
+                    )
             self._best_effort_archive_cache_gc(mutation, passed)
             return candidate
 
@@ -2003,7 +2054,11 @@ class FixedReleaseController:
         def body(mutation: dict[str, bool], passed: list[str]) -> None:
             nonlocal target
             active = read_pointer_pair(self.config.layout, ACTIVE_SLOT)
-            if active.current is None:
+            if (
+                active.current is None
+                or active.previous is None
+                or active.current == active.previous
+            ):
                 raise V2Error("rollback_unavailable", "active.previous is not available")
             if active.current != expected and active.previous != expected:
                 raise V2Error(

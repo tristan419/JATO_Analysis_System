@@ -6,20 +6,20 @@ goal_control:
     将复杂蓝绿/事故恢复体系收敛为固定 Active/Candidate 的四操作发布 V2，
     完成代码、CI、腾讯云无流量验收，再由用户授权把同一已测试构件更新到正式
     www Active。intl 继续使用既有的 Active 到 intl 独立同步流程，不在 V2 中新增编排。
-  current_phase: draft_open_first_transition_decision
-  current_step: resolve_first_transition_then_implement_selected_path
-  waiting_on: user_first_transition_rollback_policy
+  current_phase: draft_open_b_b_ready_for_ci
+  current_step: push_draft_and_wait_for_ci
+  waiting_on: none
   pause_reason: none
   next_action: >-
-    保持 PR #214 为 Draft。独立审查证明 350 行 A0 helper 仍缺少真实 unit 接管、目录权限、
-    runtime identity、durable path、强杀中间态与公网恢复等必要边界；继续补丁会重新形成专项
-    recovery 系统，因此该未跟踪 helper/test 与 helper-only shell 改动已删除，绝不上传或执行。
-    通用的 manifest build-metadata 绑定和 V2 source-critical closure 保留并单独回归。首次迁移
-    现只剩一个需用户选择的明确取舍：保留 legacy rollback 时使用执行后删除的一次性 A/A
-    迁移；或让已测 Candidate 首次形成 B/B，接受直到下一次 C/B 前没有 distinct rollback。
-    两者都不改变日常四操作、不会自动切 Active/intl。通用修复已通过 146 项聚焦、1,223 项
-    全脚本、103 项后端测试及 Draft head 6bb41ab0 的全部 13 项 GitHub checks；服务器仍只读，
-    Candidate DB role/env 未配置；合并、Candidate 启动和任何 Active 变更仍需单独授权。
+    保持 PR #214 为 Draft。用户已明确选择首次 legacy→已测 Candidate 的 B/B 语义；实现只在
+    现有 update-active 增加该分支，并把既有 update/rollback 的三套重复失败恢复收敛为一套。
+    真实服务器的共享 systemd template、缺失 explicit @8000 unit 和缺失 compat link 已进入测试
+    模型；stale explicit、重启/公网/compat 失败均先拒绝或恢复。运行时三个模块为 4,198 行，
+    未提高冻结上限，未新增 action、workflow、checkpoint 或 recovery。70 项聚焦测试、
+    1,233 项完整脚本回归、CI 边界测试、style/compile 已通过；独立终审确认无 P0/P1。
+    下一步只推送已有 Draft PR #214 并等待 CI，不进行服务器操作。
+    服务器仍只读且 Candidate DB role/env 未配置；合并、Candidate 启动和任何 Active 变更仍需
+    单独授权，Candidate 不能自动更新 Active 或 intl。
   release_authorization_contract:
     source_path: main_to_candidate_to_explicit_user_approval_to_active
     main_may_advance_without_active: true
@@ -47,7 +47,7 @@ goal_control:
     store_manifest_primitives_complete: true
     store_manifest_unit_tests_passed: 8
     manifest_cli_unit_tests_passed: 2
-    local_v2_tests_passed: 146_focused_after_a0_removal
+    local_v2_tests_passed: 70_fixed_release_controller_current_delta
     controller_store_admission_tests_passed: 102
     release_seal_tests_passed: 21
     monthly_role_tests_passed: 18
@@ -57,7 +57,7 @@ goal_control:
     candidate_database_role_configured_on_server: false_confirmed_missing
     four_operation_methods_present: true
     steady_state_four_operations_complete: true_local
-    legacy_first_update_active_complete: false_pending_user_transition_policy
+    legacy_first_update_active_complete: true_local_b_b
     legacy_server_archive_unique_and_verified: true_exact_offline_reconstruction
     legacy_archive_exact_bytes: 22269916
     legacy_archive_exact_sha256: 6af46992b1da87b6cb38d2cbc3a4bf9240f1dc82746f457c22bc69e74d78cc5e
@@ -71,8 +71,9 @@ goal_control:
     manifest_build_metadata_verification_complete: true_local
     v2_source_critical_closure_complete: true_local_13_files
     sourceable_runtime_builder_complete: false_removed_helper_only_change
-    local_ready_blockers_open: 2_first_transition_decision_and_full_regression
-    server_acceptance_blockers_open: 2_first_transition_and_candidate_database_role
+    local_ready_blockers_open: 0
+    independent_review_passed: true_no_p0_p1
+    server_acceptance_blockers_open: 2_candidate_database_role_and_no_traffic_acceptance
     update_active_retry_idempotent: true_local
     rollback_active_retry_idempotent: true_local
     rollback_sigkill_reference_safe: true_local_and_linux_ci_target_ext4_unprobed
@@ -108,16 +109,16 @@ goal_control:
     candidate_indirect_intl_prewarm_decoupled: false_out_of_scope
     intl_workflow_files_modified: false
     candidate_external_side_effect_sandbox: false_documented_operator_limit
-    runtime_python_lines: 4125_of_4200_hard_cap
+    runtime_python_lines: 4198_of_4200_hard_cap
     workflow_unit_tests_passed: 115
-    deployment_tests_passed: 1223
+    deployment_tests_passed: 1233
     deployment_tests_skipped: 15
     backend_tests_passed: 103
     frontend_tests_passed: 370
     frontend_build_and_router_checks_passed: true
-    full_local_ci_after_final_runtime_code: true_for_current_non_frontend_diff
-    post_ci_changes_documentation_only: true_after_6bb41ab0
-    ci_validation_complete: true_pr_6bb41ab0_all_13_contexts_green
+    full_local_ci_after_final_runtime_code: true_current_b_b_delta
+    post_ci_changes_documentation_only: false_current_b_b_runtime_unpushed
+    ci_validation_complete: false_current_head_11989e14_green_b_b_delta_unpushed
     pull_request_opened: true
     pull_request_number: 214
     pull_request_url: https://github.com/tristan419/JATO_Analysis_System/pull/214
@@ -142,7 +143,7 @@ goal_control:
     - observed_server_state_contradicts_documented_baseline
     - change_would_touch_jato_data_or_database_content
     - change_would_cross_this_pr_scope
-  updated_at: "2026-08-07T17:50:00+08:00"
+  updated_at: "2026-08-07T21:08:00+08:00"
 ---
 
 # Fixed Active / Candidate Release V2
@@ -384,8 +385,8 @@ hotfix”为理由扩展：
 - 服务器并发协调只有一个既有 production flock；不新增 hold、fence、checkpoint、
   journal 或 incident 状态机。
 - V2 runtime 最多三个 Python 模块和一个薄 Bash 入口；3,500 行触发停止扩展并审查，
-  4,000 行为硬上限。测试和文档不计入该预算。该上限已在安全原语完成、四操作尚未
-  实现时一次性冻结，后续不得按功能逐步抬高。
+  4,200 行为硬上限。测试和文档不计入该预算。初始 4,000 上限只在 Step 3B 为原子
+  rollback 一次性调整至 4,200，当前再次冻结，后续不得按功能逐步抬高。
 - 一个统一的结构化 operation report schema；失败必须包含 passed、failed、
   notReached、before/after 和 mutation flags。
 - Candidate/Active 使用固定 systemd unit 与固定 Nginx 配置；每个 release 不创建
@@ -436,38 +437,27 @@ mark-and-sweep 计划；只要 release store 出现未知条目就拒绝清理�
 
 迁移分两阶段，不把删除旧系统混入首次可用版本：
 
-### 阶段 A0：一次性登记 legacy Active 基线
+### 阶段 A：V2 Candidate 无流量验收与首次 B/B 更新
 
-1. 完成本地实现、范围审计、独立 PR 与 CI。
-2. 服务器只读预检必须确认 legacy Active anchor 精确为
-   `/opt/jato/slots/8000/current -> /opt/JATO_Analysis_System-main`，并盘点 8001 的
-   `FragmentPath`、`DropInPaths`、`EnvironmentFiles` 与数据库只读账号；未知配置直接
-   报告，不自动改写或建立 recovery 状态。
-3. 只读证明服务器 cache 中当前 legacy commit/archive/frontend evidence 唯一且与现网
-   完全一致。GitHub 的旧 frontend artifact 已过期，缺失或不唯一就停止，不能猜测重建。
-4. 由用户单独授权一次性 bootstrap，把旧 archive 与最终 main 的 V2 控制文件确定性组合
-   为同业务版本 wrapper；不启动旧代码作为 Candidate。校验 provenance、seal、manifest、
-   数据库 revision、JATO 锁和固定 8000 路由后，直接登记
-   `active.current == active.previous == A`。该 helper 完成后删除，不进入日常 controller，
-   也不是第五个日常操作。
-5. 任一步失败都恢复并证明原 legacy Active；旧 checkpoint/journal/evidence 保持原位且
-   不参与 V2 准入或 GC。
-
-### 阶段 A：V2 Candidate 替换、无流量验收与首次更新
-
-1. legacy Active 已登记为 A/A 后，再从当前 main 运行普通 `prepare-candidate` 得到 B；
-   该操作只安装/使用固定 8001/18002，前后证明 A 不变。
-2. 用户通过 18002 人工测试真实服务器页面。不满意就 `discard-candidate` 或合并新代码
-   后再次 `prepare-candidate`；Active 可以长期停在 A。
-3. 只有用户对 B 的精确三元组单独授权，才运行普通 `update-active`，得到 B/A；同一操作
+1. 完成本地实现、范围审计、独立 PR 与 CI。服务器只读预检确认 legacy Active anchor 精确为
+   `/opt/jato/slots/8000/current -> /opt/JATO_Analysis_System-main`、公网固定指向 8000，并盘点
+   8001 的 unit/drop-in/env 与独立数据库只读账号；未知配置直接报告，不建立 recovery。
+2. 经用户单独授权补齐 Candidate SELECT-only 数据库 env/role 后，从最终 main 运行普通
+   `prepare-candidate` 得到 B。该操作只安装/使用固定 8001/18002，前后证明 legacy Active
+   anchor 与 www 身份不变。
+3. 用户通过 18002 人工测试真实服务器页面。不满意就 `discard-candidate` 或合并新代码
+   后再次 `prepare-candidate`；Active 可以长期停在 legacy。
+4. 只有用户对 B 的精确三元组单独授权，才运行普通 `update-active`。首次成功直接得到 B/B；
+   同一操作
    安装/核验固定 8000 合同与兼容别名 `/opt/jato/active`，让未修改的
    `sync-www-active-to-intl` 之后仍从 current Active 导出。
-4. update 失败恢复 A/A；成功后 www 已完成，不等待 intl。旧 checkpoint/journal/evidence
-   保持原位且不参与 V2 准入或 GC。
+5. 可捕获的 update 失败恢复 legacy unit/env/current/compat 与公网身份；成功后 www 已完成，
+   不等待 intl。B/B 在下一次 C/B 前没有 distinct rollback。旧 checkpoint/journal/evidence
+   保持原位且不参与 V2 准入或 GC；断电/SIGKILL 中间态只人工盘点，不建设自动 recovery。
 
 ### 阶段 B：删除 V1 深层实现
 
-只有阶段 A0 与 A 的基线登记、prepare/discard/update/rollback 全部在服务器通过后，
+只有阶段 A 的 prepare/discard/首次 update，以及后续 distinct previous rollback 全部在服务器通过后，
 才另开清理 PR：
 
 - 本阶段 A 已从生产调用面删除 recovery/settlement 事故 workflow；阶段 B 再删除其
@@ -486,9 +476,10 @@ mark-and-sweep 计划；只要 release store 出现未知条目就拒绝清理�
 | Candidate worker 意外启用 | prepare 失败并清理 | 否 |
 | 人工页面不满意 | discard 后 8001 停止 | 否 |
 | update 前存在 JATO 写任务 | 拒绝重启 | 否 |
-| Active 新版本启动失败 | 自动恢复 active.previous | 短暂重启后回旧版 |
-| 公网健康失败 | 自动恢复 active.previous | 回旧版 |
-| rollback 成功 | 8000 指向 previous，公网健康 | 是，显式回退 |
+| 首次 B/B update 启动或公网验证失败 | 恢复 legacy preimage 并验证公网 | 短暂重启后回 legacy |
+| 普通 C/B update 启动或公网验证失败 | 自动恢复更新前 Active | 短暂重启后回旧版 |
+| B/B 请求 rollback | 返回 rollback_unavailable，零修改 | 否 |
+| distinct previous rollback 成功 | 原子交换 current/previous，公网健康 | 是，显式回退 |
 | GC 执行 | 四指针引用的 release 均保留 | 否 |
 | archive cache lock 正忙或路径不安全 | 保留对应 cache 并输出诊断；不删除 lock | 否 |
 
@@ -1278,6 +1269,37 @@ incident recovery/fence/hold 状态机。
   readonly drop-in 缺失。后两项由正常 prepare 收敛；SELECT-only Candidate 数据库 role/env
   是 prepare 前仍需单独授权配置的真实前置条件。
 
+### 2026-08-07 / Step 3H：用户确认 B/B，首次迁移收敛进现有 update-active
+
+- 用户明确选择最简 B/B：首次已测 Candidate B 获得单独批准后，Active current/previous
+  同时登记 B；成功后不自动回到 legacy，直到下一次 C/B 才出现 distinct rollback。
+- 最初实现一度让 runtime 达到 4,335 行，并重复实现 systemd/public 恢复。按复杂度停止条件
+  立即停止扩大；最终只保留现有 `update_active()` 的 legacy 分支，并将 `_switch_active()`
+  原有三套重复恢复路径合并为一套。三个 runtime 模块现为 4,198 行，未抬高冻结上限。
+- 服务器真实 `FragmentPath` 是共享
+  `/etc/systemd/system/jato-fullstack-backend@.service`，不是显式实例 unit。实现现在允许可信
+  shared/explicit 两种 preimage，但只写新的显式 `@8000.service`；失败时若原来使用 shared，
+  删除新显式 override 并 daemon-reload 回原 FragmentPath。shared + stale explicit 组合在任何
+  指针、unit、env、compat 或 restart mutation 前拒绝。
+- 测试桩不再伪装真实条件：legacy fixture 使用 shared template、显式 8000 unit 缺失、旧
+  WorkingDirectory/ExecStart/EnvironmentFiles；daemon-reload 会按文件存在性切换有效属性。
+  现覆盖 B/B 成功与幂等重试、公网失败恢复、Active restart 失败恢复后重试成功、compat
+  创建失败幂等恢复、stale explicit/unknown FragmentPath/previous 非空零写入拒绝，以及 B/B
+  rollback 明确不可用。独立审查另发现两项 already-target 边界：退化时曾把目标 env 留给
+  fallback；JATO 二次检查在服务变更前失败时曾多余交换指针。现分别由
+  `_restart_active(..., write_env=True)` 生成 fallback env，以及在零 service mutation 时原样
+  拒绝，并加入回归；mutation 现准确标记实际发生过的 pointer/service/traffic 变化，恢复后
+  同时标记 `stateRestored=true`；legacy 自身恢复失败也会同时报告 trigger/restore。当前单文件聚焦结果
+  为 `70 passed`；完整 `03_Scripts/tests` 为 `1233 passed, 15 skipped`；额外 GitHub/backend
+  CI 边界为 `40 passed, 2 skipped`；workflow
+  validator、Bash syntax、style 与 Python compile 均通过。
+- 捕获到的普通失败会恢复 legacy current 原始 symlink、previous、8000 env、显式 unit 的
+  原存在状态、compat link、6G/8G 运行与公网 build identity。按用户选择，断电、内核崩溃或
+  SIGKILL 的跨文件中间态仍不建设 checkpoint/recovery 自动恢复；遇到时先人工只读盘点。
+- 本 Step 仅有本地 Draft diff；未推送新 head、未操作服务器、未创建 Candidate、未更新
+  Active、未同步 intl，也未触碰数据库或 JATO 数据。完整本地回归已完成，独立终审确认无 P0/P1；
+  shared-template 接管、B/B 语义、失败恢复和 mutation 报告均通过复核。
+
 ## 11. 决策日志
 
 | 日期 | 决策 | 原因 |
@@ -1309,3 +1331,5 @@ incident recovery/fence/hold 状态机。
 | 2026-08-07 | A0 复用 sourceable runtime builder | 线上旧 venv 外指系统 Python；复用现有受限 builder，禁止复制依赖安装能力 |
 | 2026-08-07 | Step 3F A0 helper 结论被独立审查否决 | local mock 未覆盖真实 unit、权限、runtime、durable path、恢复和强杀状态；未提交即删除 |
 | 2026-08-07 | 首次 rollback 与最简 B/B adoption 交由用户明确选择 | 两者安全属性不同，不能由实现者静默降低首次回退能力 |
+| 2026-08-07 | 用户选择首次 legacy→B/B | 不建立 A/A helper/recovery；接受下一次 C/B 前没有 distinct rollback |
+| 2026-08-07 | shared template 迁移只写显式 @8000 override | 与腾讯云真实 FragmentPath 一致；失败可删除 override 回到原模板 |
