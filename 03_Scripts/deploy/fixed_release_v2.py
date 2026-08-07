@@ -44,6 +44,7 @@ from release_v2_store import (  # noqa: E402
     ReleaseLayout,
     ReleaseManifest,
     ReleaseStoreError,
+    atomic_exchange_pointers,
     atomic_symlink,
     clear_pointer,
     collect_archive_cache,
@@ -1752,14 +1753,16 @@ class FixedReleaseController:
         try:
             if active.current != target:
                 mutation["pointerChangeAttempted"] = True
-                if not rollback:
+                if rollback:
+                    atomic_exchange_pointers(self.config.layout, ACTIVE_SLOT, active)
+                else:
                     atomic_symlink(
                         self.config.layout,
                         ACTIVE_SLOT,
                         "previous",
                         active.current,
                     )
-                atomic_symlink(self.config.layout, ACTIVE_SLOT, "current", target)
+                    atomic_symlink(self.config.layout, ACTIVE_SLOT, "current", target)
                 mutation["pointerChanged"] = True
             self.jato_inspector(self.config.jato_job_root)
             passed.append("jato_idle_at_restart")
@@ -1768,15 +1771,6 @@ class FixedReleaseController:
             self._restart_active(target, target_manifest)
             mutation["serviceChanged"] = True
             mutation["trafficChanged"] = True
-            if rollback and active.previous != target:
-                mutation["pointerChangeAttempted"] = True
-                atomic_symlink(
-                    self.config.layout,
-                    ACTIVE_SLOT,
-                    "previous",
-                    target,
-                )
-                mutation["pointerChanged"] = True
             passed.append(success_label)
         except Exception as trigger:
             restore_errors: list[dict[str, Any]] = []
@@ -1789,7 +1783,60 @@ class FixedReleaseController:
                     return False
                 return True
 
-            if already_target:
+            if rollback:
+                if fallback is None or fallback_manifest is None or fallback == target:
+                    restore_errors.append(
+                        {
+                            "step": "restore_active_target",
+                            "code": "active_previous_unavailable",
+                            "message": "no distinct previous Active is available",
+                        }
+                    )
+                else:
+                    def restore_rollback_pair() -> None:
+                        actual = read_pointer_pair(self.config.layout, ACTIVE_SLOT)
+                        forward = PointerPair(target, fallback)
+                        restored = PointerPair(fallback, target)
+                        if actual == forward:
+                            atomic_exchange_pointers(
+                                self.config.layout,
+                                ACTIVE_SLOT,
+                                actual,
+                            )
+                        elif actual != restored:
+                            raise V2Error(
+                                "active_pointer_pair_unexpected",
+                                "Active pointers are neither rollback nor restored state",
+                            )
+
+                    pointers_restored = attempt(
+                        "restore_active_pointers",
+                        restore_rollback_pair,
+                    )
+                    env_restored = True
+                    if mutation["serviceChangeAttempted"]:
+                        env_restored = attempt(
+                            "restore_active_environment",
+                            lambda: _atomic_write(
+                                self.config.slot_env_root / f"{ACTIVE_SLOT}.env",
+                                previous_env,
+                                0o600,
+                            ),
+                        )
+                    if (
+                        pointers_restored
+                        and env_restored
+                        and mutation["serviceChangeAttempted"]
+                    ):
+                        attempt(
+                            "restart_previous_active",
+                            lambda: self._restart_active(
+                                fallback,
+                                fallback_manifest,
+                                write_env=False,
+                            ),
+                        )
+            elif already_target:
                 if fallback is None or fallback_manifest is None or fallback == target:
                     restore_errors.append(
                         {

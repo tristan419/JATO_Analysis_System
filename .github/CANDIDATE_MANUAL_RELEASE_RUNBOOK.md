@@ -169,10 +169,12 @@ prepare；不为这种情况建立 recovery/checkpoint 状态机。
 SHA-256，分别填入三个 target 输入，勾选 `confirm_control_operation`；不得留空或只凭
 “最近版本”猜测。
 
-以 `B/A` 回退到 A 为例，只原子更新 current，直接从 `B/A` 进入 `A/A`，不会产生
-`B/B` 或交换式回退窗口。控制器捕获到的重启/验证失败会恢复并证明 `B/A`；若进程被
-强制终止，下一次对同一 A 的显式重试会重新启动并验证 A。若目标不再受
-current/previous 保护，操作必须拒绝，不能根据 Git 历史临时生成替代版本。
+以 `B/A` 回退到 A 为例，系统使用内核原子交换一次进入 `A/B`，不会出现 `A/A`、
+`B/B` 或任一版本失去指针保护的中间态。控制器捕获到的重启/验证失败会再次原子交换
+回 `B/A` 并验证 B；若进程被强制终止，磁盘状态也只会是 `B/A` 或 `A/B`，下一次对同一
+A 的显式重试只会验证或继续启动 A，不会自动切回 B。只有用户再次明确提交 B 的完整
+三元组时，才允许从 `A/B` 反向交换为 `B/A`。若目标不再受 current/previous 保护，
+操作必须拒绝，不能根据 Git 历史临时生成替代版本。
 
 ## 5. Candidate 页面访问方式
 
@@ -245,9 +247,9 @@ archive cache 只识别 `<cache>/<40-hex>/<64-hex>.tar.gz` 以及对应 `.partia
 成功后均 best-effort 清理未保护的 archive/partial/sha 文件，清理失败不反向改变已成功
 的指针或服务操作。
 
-`update-active` 对同一目标重试时不得轮换 previous；`rollback-active` 成功后 current 与
-previous 都指向回退目标。这样即使响应或报告丢失，重试也只收敛当前状态，不会破坏
-回滚点或重新上线坏版本。
+`update-active` 对同一目标重试时不得轮换 previous；`rollback-active` 成功后保留
+`current=回退目标`、`previous=回退前版本`。同一目标重试只收敛当前状态，不会 toggle；
+反向切换必须再次提供 previous 的完整三元组并获得用户授权。
 
 ## 8. 操作前后应看到的证据
 

@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import ctypes
 from dataclasses import dataclass
 import fcntl
 import hashlib
@@ -40,6 +41,7 @@ POINTER_KINDS = ("current", "previous")
 ARCHIVE_CACHE_NAME_PATTERN = re.compile(
     r"^(?P<digest>[0-9a-f]{64})\.tar\.gz(?P<sidecar>\.partial|\.sha256|\.lock)?$"
 )
+RENAME_EXCHANGE = 2
 
 Slot = Literal["8000", "8001"]
 PointerKind = Literal["current", "previous"]
@@ -801,6 +803,82 @@ def atomic_symlink(
                 os.unlink(temporary_name)
             except FileNotFoundError:
                 pass
+
+
+def _exchange_paths(source: Path, destination: Path) -> None:
+    libc = ctypes.CDLL(None, use_errno=True)
+    renameat2 = getattr(libc, "renameat2", None)
+    if renameat2 is not None:
+        renameat2.argtypes = [
+            ctypes.c_int,
+            ctypes.c_char_p,
+            ctypes.c_int,
+            ctypes.c_char_p,
+            ctypes.c_uint,
+        ]
+        renameat2.restype = ctypes.c_int
+        result = renameat2(
+            -100,
+            os.fsencode(source),
+            -100,
+            os.fsencode(destination),
+            RENAME_EXCHANGE,
+        )
+    else:
+        renamex = getattr(libc, "renamex_np", None)
+        if renamex is None:
+            raise ReleaseStoreError(
+                "pointer_exchange_unsupported",
+                "atomic pointer exchange is unavailable",
+            )
+        renamex.argtypes = [ctypes.c_char_p, ctypes.c_char_p, ctypes.c_uint]
+        renamex.restype = ctypes.c_int
+        result = renamex(
+            os.fsencode(source),
+            os.fsencode(destination),
+            RENAME_EXCHANGE,
+        )
+    if result != 0:
+        error = ctypes.get_errno()
+        raise ReleaseStoreError(
+            "pointer_exchange_failed",
+            f"atomic pointer exchange failed with errno {error}",
+        )
+
+
+def atomic_exchange_pointers(
+    layout: ReleaseLayout,
+    slot: Slot,
+    expected: PointerPair,
+) -> None:
+    """Atomically swap one slot's distinct current and previous pointers."""
+
+    if expected.current is None or expected.previous is None:
+        raise ReleaseStoreError(
+            "pointer_exchange_unavailable",
+            "both current and previous pointers are required",
+        )
+    if expected.current == expected.previous:
+        raise ReleaseStoreError(
+            "pointer_exchange_ambiguous",
+            "current and previous pointers must be distinct",
+        )
+    actual = read_pointer_pair(layout, slot)
+    if actual != expected:
+        raise ReleaseStoreError(
+            "pointer_pair_changed",
+            "release pointer pair changed before atomic exchange",
+        )
+    current = layout.pointer_path(slot, "current")
+    previous = layout.pointer_path(slot, "previous")
+    _exchange_paths(current, previous)
+    _fsync_directory(current.parent)
+    exchanged = read_pointer_pair(layout, slot)
+    if exchanged != PointerPair(expected.previous, expected.current):
+        raise ReleaseStoreError(
+            "pointer_exchange_unverified",
+            "release pointer pair did not atomically exchange",
+        )
 
 
 def clear_pointer(

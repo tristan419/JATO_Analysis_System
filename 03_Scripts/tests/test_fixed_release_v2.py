@@ -1360,7 +1360,7 @@ def test_update_rejects_public_routing_drift_before_active_mutation(tmp_path: Pa
     assert latest_report(cfg)["mutation"]["pointerChangeAttempted"] is False
 
 
-def test_rollback_moves_to_previous_without_creating_a_toggle(
+def test_rollback_atomically_exchanges_current_and_previous(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -1373,20 +1373,19 @@ def test_rollback_moves_to_previous_without_creating_a_toggle(
     ctrl = controller(cfg, system)
     ctrl._write_slot_env(MODULE.ACTIVE_SLOT, CANDIDATE, active=True)
     observed_pairs: list[tuple[STORE.ReleaseIdentity | None, STORE.ReleaseIdentity | None]] = []
-    original_atomic_symlink = MODULE.atomic_symlink
+    original_exchange = MODULE.atomic_exchange_pointers
 
-    def record_atomic_symlink(
+    def record_exchange(
         layout: STORE.ReleaseLayout,
         slot: STORE.Slot,
-        kind: STORE.PointerKind,
-        identity: STORE.ReleaseIdentity,
+        expected: STORE.PointerPair,
     ) -> None:
-        original_atomic_symlink(layout, slot, kind, identity)
+        original_exchange(layout, slot, expected)
         if slot == MODULE.ACTIVE_SLOT:
             pair = STORE.read_pointer_pair(layout, MODULE.ACTIVE_SLOT)
             observed_pairs.append((pair.current, pair.previous))
 
-    monkeypatch.setattr(MODULE, "atomic_symlink", record_atomic_symlink)
+    monkeypatch.setattr(MODULE, "atomic_exchange_pointers", record_exchange)
 
     report = ctrl.rollback_active(ACTIVE, manifest_sha256=active_digest)
 
@@ -1397,13 +1396,14 @@ def test_rollback_moves_to_previous_without_creating_a_toggle(
         "manifestSha256": active_digest,
     }
     assert STORE.read_pointer(cfg.layout, MODULE.ACTIVE_SLOT, "current") == ACTIVE
-    assert STORE.read_pointer(cfg.layout, MODULE.ACTIVE_SLOT, "previous") == ACTIVE
-    assert observed_pairs == [(ACTIVE, ACTIVE)]
+    assert STORE.read_pointer(cfg.layout, MODULE.ACTIVE_SLOT, "previous") == CANDIDATE
+    assert observed_pairs == [(ACTIVE, CANDIDATE)]
+    assert (ACTIVE, ACTIVE) not in observed_pairs
     assert (CANDIDATE, CANDIDATE) not in observed_pairs
     assert "archive_cache_files_removed:0" in report["passed"]
 
 
-def test_rollback_retry_is_idempotent_and_never_reactivates_bad_release(
+def test_rollback_same_target_retry_is_idempotent_and_does_not_toggle(
     tmp_path: Path,
 ) -> None:
     cfg = config(tmp_path)
@@ -1422,8 +1422,59 @@ def test_rollback_retry_is_idempotent_and_never_reactivates_bad_release(
     assert retry["decision"] == "completed"
     assert "active_target_already_current" in retry["passed"]
     assert STORE.read_pointer(cfg.layout, MODULE.ACTIVE_SLOT, "current") == ACTIVE
-    assert STORE.read_pointer(cfg.layout, MODULE.ACTIVE_SLOT, "previous") == ACTIVE
+    assert STORE.read_pointer(cfg.layout, MODULE.ACTIVE_SLOT, "previous") == CANDIDATE
     assert system.restart_attempts.get(MODULE.ACTIVE_UNIT, 0) == restart_count
+
+
+def test_rollback_reverse_direction_requires_explicit_target(tmp_path: Path) -> None:
+    cfg = config(tmp_path)
+    active_digest = create_release(cfg.layout, ACTIVE)
+    candidate_digest = create_release(cfg.layout, CANDIDATE)
+    STORE.atomic_symlink(cfg.layout, MODULE.ACTIVE_SLOT, "current", CANDIDATE)
+    STORE.atomic_symlink(cfg.layout, MODULE.ACTIVE_SLOT, "previous", ACTIVE)
+    system = FakeSystem()
+    ctrl = controller(cfg, system)
+    ctrl._write_slot_env(MODULE.ACTIVE_SLOT, CANDIDATE, active=True)
+
+    ctrl.rollback_active(ACTIVE, manifest_sha256=active_digest)
+    report = ctrl.rollback_active(CANDIDATE, manifest_sha256=candidate_digest)
+
+    assert report["decision"] == "completed"
+    assert STORE.read_pointer_pair(cfg.layout, MODULE.ACTIVE_SLOT) == STORE.PointerPair(
+        CANDIDATE,
+        ACTIVE,
+    )
+
+
+def test_rollback_rejects_unsupported_exchange_without_service_change(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    cfg = config(tmp_path)
+    active_digest = create_release(cfg.layout, ACTIVE)
+    create_release(cfg.layout, CANDIDATE)
+    original = STORE.PointerPair(CANDIDATE, ACTIVE)
+    STORE.atomic_symlink(cfg.layout, MODULE.ACTIVE_SLOT, "current", CANDIDATE)
+    STORE.atomic_symlink(cfg.layout, MODULE.ACTIVE_SLOT, "previous", ACTIVE)
+    system = FakeSystem()
+    ctrl = controller(cfg, system)
+    ctrl._write_slot_env(MODULE.ACTIVE_SLOT, CANDIDATE, active=True)
+
+    def unsupported(*args, **kwargs) -> None:
+        del args, kwargs
+        raise STORE.ReleaseStoreError(
+            "pointer_exchange_unsupported",
+            "injected unsupported exchange",
+        )
+
+    monkeypatch.setattr(MODULE, "atomic_exchange_pointers", unsupported)
+    with pytest.raises(MODULE.V2Error) as caught:
+        ctrl.rollback_active(ACTIVE, manifest_sha256=active_digest)
+
+    assert caught.value.code == "pointer_exchange_unsupported"
+    assert STORE.read_pointer_pair(cfg.layout, MODULE.ACTIVE_SLOT) == original
+    assert system.restart_attempts.get(MODULE.ACTIVE_UNIT, 0) == 0
+    assert latest_report(cfg)["mutation"]["serviceChangeAttempted"] is False
 
 
 def test_rollback_retry_converges_pointer_changed_before_restart(tmp_path: Path) -> None:
@@ -1441,7 +1492,7 @@ def test_rollback_retry_converges_pointer_changed_before_restart(tmp_path: Path)
     assert report["decision"] == "completed"
     assert "active_target_reconcile_required" in report["passed"]
     assert STORE.read_pointer(cfg.layout, MODULE.ACTIVE_SLOT, "current") == ACTIVE
-    assert STORE.read_pointer(cfg.layout, MODULE.ACTIVE_SLOT, "previous") == ACTIVE
+    assert STORE.read_pointer(cfg.layout, MODULE.ACTIVE_SLOT, "previous") == CANDIDATE
     active_env = (cfg.slot_env_root / "8000.env").read_text(encoding="utf-8")
     assert f"APP_RELEASE_SHA={ACTIVE.commit_sha}" in active_env
 
@@ -1480,20 +1531,19 @@ def test_rollback_failure_restores_original_active_pair(
     ctrl = controller(cfg, system, fail_public_for=ACTIVE)
     ctrl._write_slot_env(MODULE.ACTIVE_SLOT, CANDIDATE, active=True)
     observed_pairs: list[tuple[STORE.ReleaseIdentity | None, STORE.ReleaseIdentity | None]] = []
-    original_atomic_symlink = MODULE.atomic_symlink
+    original_exchange = MODULE.atomic_exchange_pointers
 
-    def record_atomic_symlink(
+    def record_exchange(
         layout: STORE.ReleaseLayout,
         slot: STORE.Slot,
-        kind: STORE.PointerKind,
-        identity: STORE.ReleaseIdentity,
+        expected: STORE.PointerPair,
     ) -> None:
-        original_atomic_symlink(layout, slot, kind, identity)
+        original_exchange(layout, slot, expected)
         if slot == MODULE.ACTIVE_SLOT:
             pair = STORE.read_pointer_pair(layout, MODULE.ACTIVE_SLOT)
             observed_pairs.append((pair.current, pair.previous))
 
-    monkeypatch.setattr(MODULE, "atomic_symlink", record_atomic_symlink)
+    monkeypatch.setattr(MODULE, "atomic_exchange_pointers", record_exchange)
 
     with pytest.raises(MODULE.V2Error) as caught:
         ctrl.rollback_active(ACTIVE, manifest_sha256=active_digest)
@@ -1501,8 +1551,9 @@ def test_rollback_failure_restores_original_active_pair(
     assert caught.value.code == "public_not_ready"
     assert STORE.read_pointer(cfg.layout, MODULE.ACTIVE_SLOT, "current") == CANDIDATE
     assert STORE.read_pointer(cfg.layout, MODULE.ACTIVE_SLOT, "previous") == ACTIVE
-    assert observed_pairs[0] == (ACTIVE, ACTIVE)
+    assert observed_pairs[0] == (ACTIVE, CANDIDATE)
     assert observed_pairs[-1] == (CANDIDATE, ACTIVE)
+    assert (ACTIVE, ACTIVE) not in observed_pairs
     assert (CANDIDATE, CANDIDATE) not in observed_pairs
     assert latest_report(cfg)["mutation"]["stateRestored"] is True
 

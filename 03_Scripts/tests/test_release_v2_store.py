@@ -170,6 +170,91 @@ def test_atomic_pointer_uses_single_slots_namespace(tmp_path: Path) -> None:
     )
 
 
+def test_atomic_exchange_swaps_distinct_pointer_pair(tmp_path: Path) -> None:
+    layout = make_layout(tmp_path)
+    make_release(layout, ACTIVE)
+    make_release(layout, PREVIOUS)
+    before = MODULE.PointerPair(ACTIVE, PREVIOUS)
+    MODULE.atomic_symlink(layout, "8000", "current", ACTIVE)
+    MODULE.atomic_symlink(layout, "8000", "previous", PREVIOUS)
+
+    MODULE.atomic_exchange_pointers(layout, "8000", before)
+
+    assert MODULE.read_pointer_pair(layout, "8000") == MODULE.PointerPair(
+        PREVIOUS,
+        ACTIVE,
+    )
+
+
+@pytest.mark.parametrize("previous", (None, ACTIVE))
+def test_atomic_exchange_requires_two_distinct_pointers(
+    tmp_path: Path,
+    previous: MODULE.ReleaseIdentity | None,
+) -> None:
+    layout = make_layout(tmp_path)
+    make_release(layout, ACTIVE)
+    MODULE.atomic_symlink(layout, "8000", "current", ACTIVE)
+    if previous is not None:
+        MODULE.atomic_symlink(layout, "8000", "previous", previous)
+    before = MODULE.read_pointer_pair(layout, "8000")
+
+    with pytest.raises(MODULE.ReleaseStoreError) as caught:
+        MODULE.atomic_exchange_pointers(layout, "8000", before)
+
+    assert caught.value.code in {
+        "pointer_exchange_unavailable",
+        "pointer_exchange_ambiguous",
+    }
+    assert MODULE.read_pointer_pair(layout, "8000") == before
+
+
+def test_atomic_exchange_failure_leaves_pair_unchanged(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    layout = make_layout(tmp_path)
+    make_release(layout, ACTIVE)
+    make_release(layout, PREVIOUS)
+    before = MODULE.PointerPair(ACTIVE, PREVIOUS)
+    MODULE.atomic_symlink(layout, "8000", "current", ACTIVE)
+    MODULE.atomic_symlink(layout, "8000", "previous", PREVIOUS)
+
+    def unavailable(source: Path, destination: Path) -> None:
+        del source, destination
+        raise MODULE.ReleaseStoreError(
+            "pointer_exchange_unsupported",
+            "injected unsupported exchange",
+        )
+
+    monkeypatch.setattr(MODULE, "_exchange_paths", unavailable)
+    with pytest.raises(MODULE.ReleaseStoreError) as caught:
+        MODULE.atomic_exchange_pointers(layout, "8000", before)
+
+    assert caught.value.code == "pointer_exchange_unsupported"
+    assert MODULE.read_pointer_pair(layout, "8000") == before
+
+
+def test_atomic_exchange_rejects_stale_expected_pair(tmp_path: Path) -> None:
+    layout = make_layout(tmp_path)
+    make_release(layout, ACTIVE)
+    make_release(layout, PREVIOUS)
+    MODULE.atomic_symlink(layout, "8000", "current", ACTIVE)
+    MODULE.atomic_symlink(layout, "8000", "previous", PREVIOUS)
+
+    with pytest.raises(MODULE.ReleaseStoreError) as caught:
+        MODULE.atomic_exchange_pointers(
+            layout,
+            "8000",
+            MODULE.PointerPair(PREVIOUS, ACTIVE),
+        )
+
+    assert caught.value.code == "pointer_pair_changed"
+    assert MODULE.read_pointer_pair(layout, "8000") == MODULE.PointerPair(
+        ACTIVE,
+        PREVIOUS,
+    )
+
+
 def test_pointer_operations_refuse_regular_and_out_of_store_paths(
     tmp_path: Path,
 ) -> None:

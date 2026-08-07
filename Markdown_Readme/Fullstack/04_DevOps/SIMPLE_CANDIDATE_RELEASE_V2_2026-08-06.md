@@ -6,14 +6,14 @@ goal_control:
     将复杂蓝绿/事故恢复体系收敛为固定 Active/Candidate 的四操作发布 V2，
     完成代码、CI、腾讯云无流量验收，再由用户授权把同一已测试构件更新到正式
     www Active。intl 继续使用既有的 Active 到 intl 独立同步流程，不在 V2 中新增编排。
-  current_phase: draft_open_pending_a0_inventory_and_rollback_sigkill_fix
-  current_step: draft_pr_214_open_blocked_from_ready
-  waiting_on: a0_server_inventory_and_rollback_sigkill_reference_design
+  current_phase: draft_open_pending_a0_inventory_and_atomic_exchange_ci
+  current_step: rollback_atomic_exchange_local_verification
+  waiting_on: a0_server_inventory_and_atomic_exchange_ci
   pause_reason: none
   next_action: >-
-    保持 PR #214 为 Draft。下一步先取得腾讯云只读 inventory，再据事实决定一次性 A0
-    helper；同时在现有四指针边界内解决 rollback 被 SIGKILL 时旧 Active 引用丢失的问题。
-    未解决前不得 Ready、合并或部署。intl 所有既有 workflow 保持本分支基线不变。
+    保持 PR #214 为 Draft。完成 rollback 原子交换的完整本地/CI 验证；再取得腾讯云只读
+    inventory，据事实决定一次性 A0 helper，并验证目标文件系统支持原子交换。A0 未完成前
+    不得 Ready、合并或部署。intl 所有既有 workflow 保持本分支基线不变。
   release_authorization_contract:
     source_path: main_to_candidate_to_explicit_user_approval_to_active
     main_may_advance_without_active: true
@@ -39,8 +39,8 @@ goal_control:
     store_manifest_primitives_complete: true
     store_manifest_unit_tests_passed: 8
     manifest_cli_unit_tests_passed: 2
-    local_v2_tests_passed: 93_focused_current
-    controller_store_admission_tests_passed: 93
+    local_v2_tests_passed: 100_focused_current
+    controller_store_admission_tests_passed: 100
     release_seal_tests_passed: 21
     monthly_role_tests_passed: 18
     admission_primitives_complete: true_local
@@ -51,11 +51,11 @@ goal_control:
     steady_state_four_operations_complete: true_local
     legacy_first_update_active_complete: false_pending_one_time_direct_baseline_registration
     legacy_server_archive_unique_and_verified: false_pending_read_only_server_inventory
-    local_ready_blockers_open: 2_a0_and_rollback_sigkill_reference
+    local_ready_blockers_open: 2_a0_and_atomic_exchange_ci
     server_acceptance_blockers_open: 2_a0_and_candidate_database_role
     update_active_retry_idempotent: true_local
     rollback_active_retry_idempotent: true_local
-    rollback_sigkill_reference_safe: false_pending_four_pointer_solution
+    rollback_sigkill_reference_safe: true_local_pending_ci_and_server_capability
     failed_prepare_release_cleanup_complete: true_local
     legacy_store_coexistence_gc_complete: true_local
     nonblocking_jato_release_lock_complete: true_local
@@ -87,16 +87,16 @@ goal_control:
     candidate_indirect_intl_prewarm_decoupled: false_out_of_scope
     intl_workflow_files_modified: false
     candidate_external_side_effect_sandbox: false_documented_operator_limit
-    runtime_python_lines: 4000_hard_cap_frozen
+    runtime_python_lines: 4125_of_4200_hard_cap
     workflow_unit_tests_passed: 115
-    deployment_tests_passed: 959
-    deployment_tests_skipped: 17
+    deployment_tests_passed: 1221
+    deployment_tests_skipped: 15
     backend_tests_passed: 52
     frontend_tests_passed: 370
     frontend_build_and_router_checks_passed: true
-    full_local_ci_after_final_runtime_code: true
-    post_ci_changes_documentation_only: true
-    ci_validation_complete: true_local
+    full_local_ci_after_final_runtime_code: true_relevant_deployment_suite
+    post_ci_changes_documentation_only: false_pending_linux_ci
+    ci_validation_complete: true_local_pending_pr_ci
     pull_request_opened: true
     pull_request_number: 214
     pull_request_url: https://github.com/tristan419/JATO_Analysis_System/pull/214
@@ -121,7 +121,7 @@ goal_control:
     - observed_server_state_contradicts_documented_baseline
     - change_would_touch_jato_data_or_database_content
     - change_would_cross_this_pr_scope
-  updated_at: "2026-08-07T13:28:38+08:00"
+  updated_at: "2026-08-07T13:48:17+08:00"
 ---
 
 # Fixed Active / Candidate Release V2
@@ -219,11 +219,11 @@ Candidate 指针，暂缓 release GC；这样不会把 store 外的现网 Active
 1. 获取唯一部署锁。
 2. 必须接收用户从只读预检确认的 commit/archive/manifest 三元组；目标只能等于仍受
    `active.current` 或 `active.previous` 保护的 release，不能隐式猜测 previous。
-3. 以 `B/A` 回退到 A 时，只原子更新 current，直接得到 `A/A`；不先改 previous，
-   因此不存在中间 `B/B` 或交换式回退窗口。
+3. 以 `B/A` 回退到 A 时，使用内核原子交换一次得到 `A/B`；因此不存在 `A/A`、
+   `B/B` 或任一版本失去四指针保护的中间态。服务器不支持原子交换时变更前拒绝。
 4. 以 Active 专属环境重启 8000，验证内部健康、目标 SHA、6G/8G cgroup 和公网健康。
-5. 控制器捕获到的失败恢复并证明 `B/A`；若进程被强制终止，下一次对同一 A 的显式
-   重试重新启动并验证 A，不会把 B 再上线。
+5. 控制器捕获到的失败再次原子交换回 `B/A` 并验证 B；若进程被强制终止，持久状态只会
+   是 `B/A` 或 `A/B`。同一 A 的显式重试不会 toggle；反向切换 B 必须重新明确授权。
 6. 回退失败时保持结构化失败报告，不删除任一受保护 release。
 
 ## 3. 服务器目录与指针
@@ -1102,6 +1102,24 @@ incident recovery/fence/hold 状态机。
 - PR 保持 Draft。A0 服务器只读 inventory 和 rollback 极端 SIGKILL 引用窗口仍是 Ready
   blocker；未执行合并、部署、服务器 mutation、Active 切换或 intl 同步。
 
+### 2026-08-07 / Step 3B：rollback 强杀窗口改为四指针内的原子交换
+
+- 终审确认旧 `B/A -> A/A` 顺序会在 current 已写而 8000 尚未重启时短暂丢失 B 的四指针
+  引用。Step 2Y/2Z 的 A/A 日常回退语义由本 Step 取代；A0 首次基线仍可使用 A/A。
+- 修复只扩展现有 release-store 指针原语和 `_switch_active()`：rollback 使用 Linux
+  `renameat2(RENAME_EXCHANGE)` 一次把 `B/A` 变为 `A/B`；macOS 本地验证使用等价
+  `renamex_np(RENAME_SWAP)`。内核不支持时在任何指针改变前拒绝，不做顺序降级。
+- 回退失败时同样原子交换回 `B/A`，再恢复旧环境并验证 B。SIGKILL 前后持久指针对只可能
+  是 `B/A` 或 `A/B`，两个版本始终受 Active current/previous 保护。
+- 同一 A 的重试只验证或收敛 A，不自动 toggle。只有用户再次明确提交 B 的完整
+  commit/archive/manifest 三元组，才允许 `A/B -> B/A`。
+- 新增 store 与 controller 状态测试后，聚焦回归为 `100 passed`；完整脚本套件为
+  `1221 passed, 15 skipped`，workflow/backend 相关回归为 `40 passed, 2 skipped` 与
+  `18 passed`。三个 V2 runtime 模块由 4,000 行增至 4,125 行，全部增量用于可移植原子
+  交换、失败恢复与验证；硬上限一次性调整为 4,200 并重新冻结，不借此加入其他能力。
+  尚需 Linux PR CI 和腾讯云目标文件系统能力验证；没有新增 workflow、checkpoint、
+  recovery 或 intl 改动。
+
 ## 11. 决策日志
 
 | 日期 | 决策 | 原因 |
@@ -1122,6 +1140,7 @@ incident recovery/fence/hold 状态机。
 | 2026-08-06 | www 批准只更新 Active | intl 沿用既有独立 Active→intl 同步，不在 V2 自动编排 |
 | 2026-08-06 | intl 同步失败不回退 www | intl 故障不连坐已经成功的国内 Active |
 | 2026-08-07 | update 同 target 不轮换 previous | 报告丢失或中断后的重试不能破坏回滚点 |
-| 2026-08-07 | rollback 使用 `B/A -> A/A` 单向语义 | 重试只能收敛 A，不能把坏版本 B 再切回来 |
+| 2026-08-07 | `B/A -> A/A` 日常 rollback 语义由 Step 3B 取代 | 终审发现强杀窗口会让 B 暂时失去四指针引用 |
+| 2026-08-07 | rollback 使用内核原子交换 `B/A -> A/B` | 两个版本全程受保护；同目标重试不 toggle，反向切换需再次授权 |
 | 2026-08-07 | legacy 直接登记同业务版本基线后再准备新 Candidate | 旧代码无 Candidate 安全合同；首次真实升级前仍建立 A/A 回滚基线 |
 | 2026-08-07 | V2 JATO admission 只用非阻塞应用锁 | 不等待、不写 marker、不建设部署维护平台 |
