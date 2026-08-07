@@ -99,31 +99,40 @@ share a checkout, branch, or PR. Start both from the same current remote
 `main`, using one session, worktree, `codex/*` branch, and PR per business
 line:
 
-| Work | Session and worktree | Branch | Example PR |
+| Work | Session and worktree | Branch pattern | PR |
 | --- | --- | --- | --- |
-| BOM Admin | BOM session in `JATO_Analysis_System_bom_admin` | `codex/bom-colour-rule-library` | `#201` |
-| AstrBot | AstrBot session in `JATO_Analysis_System_astrbot` | `codex/astrbot-countrycopilot` | `#202` |
+| BOM Admin | New BOM worktree created from the current remote `main` for this task | `codex/bom-admin-<scope>` | One BOM-scoped PR |
+| AstrBot | New AstrBot worktree created from the current remote `main` for this task | `codex/astrbot-<scope>` | One AstrBot-scoped PR |
 
 Each PR owns only its business-line changes and tests. Neither feature branch
 is a production source.
 
+The table describes per-task branch patterns, not permanent business-line
+checkouts. Historical BOM checkouts and branches such as
+`JATO_Analysis_System_bom_admin`, `codex/bom-colour-rule-library`, and
+`codex/bom-admin-followup` are audit sources only and must not be reused as a
+new development base. If a reviewed change remains there, replay only that
+specific commit or hunk onto a new branch from the current remote `main`;
+never merge the historical branch as a whole.
+
 If the features can be released independently:
 
-1. validate, merge, and release `#201` from `main`;
-2. synchronize `#202` with the latest `main` that contains `#201`;
+1. validate, merge, and release the BOM PR from `main`;
+2. synchronize the AstrBot PR with the latest `main` that contains the BOM
+   PR;
 3. verify that the resulting diff and regression tests preserve BOM Admin as
    well as AstrBot;
-4. rerun all required CI and canary checks for the new `#202` head SHA;
-5. merge `#202`, then release the resulting `main`.
+4. rerun all required CI and canary checks for the new AstrBot head SHA;
+5. merge the AstrBot PR, then release the resulting `main`.
 
 If the features must reach production together, create a release-group issue
-whose members are `#201` and `#202`, and choose `#202` as the anchor. Add the
-identical immutable contract and maintainer-controlled `release-group` label
-to both PRs. Merge `#201` first; the partial group deliberately holds
-production. Synchronize the anchor with that new `main`, verify that its final
-tree contains both features, rerun CI and a combined BOM Admin plus AstrBot
-canary for that exact head SHA, and merge the anchor last. Only then may the
-resulting `main` trigger the coordinated production release.
+whose members are the BOM and AstrBot PRs, and choose one explicit anchor. Add
+the identical immutable contract and maintainer-controlled `release-group`
+label to both PRs. Merge the non-anchor first; the partial group deliberately
+holds production. Synchronize the anchor with that new `main`, verify that
+its final tree contains both features, rerun CI and a combined BOM Admin plus
+AstrBot canary for that exact head SHA, and merge the anchor last. Only then
+may the resulting `main` trigger the coordinated production release.
 
 Shared files such as `App.tsx`, `api/client.ts`, or `main.py` require an
 explicit owner before either session edits the overlapping file or hunk. The
