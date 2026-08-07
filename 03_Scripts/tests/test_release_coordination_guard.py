@@ -28,6 +28,8 @@ strict_json_mapping = guard_module._strict_json_mapping
 REPOSITORY = "tristan419/JATO_Analysis_System"
 MAIN_SHA = "f" * 40
 BASELINE_SHA = "e" * 40
+TARGET_ARCHIVE_SHA256 = "a" * 64
+TARGET_MANIFEST_SHA256 = "b" * 64
 
 
 def pull_request(
@@ -139,6 +141,7 @@ class FakeGitHub:
         self.ancestor_pairs: set[tuple[str, str]] = {
             (baseline_sha, main_sha),
         }
+        self.range_calls: list[tuple[str, str]] = []
         self.statuses: list[tuple[str, str, str]] = []
         self.current_statuses: dict[str, tuple[str, str]] = {}
         self.contracts: dict[
@@ -230,8 +233,7 @@ class FakeGitHub:
     ) -> list[Mapping[str, Any]]:
         if baseline_sha != self.baseline_sha:
             raise GuardError("unexpected production baseline")
-        if target_sha != self.main_sha:
-            raise GuardError("unexpected production target")
+        self.range_calls.append((baseline_sha, target_sha))
         return [
             pull
             for pull in self.pulls.values()
@@ -252,7 +254,7 @@ class FakeGitHub:
     def get_main_sha(self) -> str:
         return self.main_sha
 
-    def get_last_successful_production_sha(self) -> str:
+    def get_current_production_sha(self) -> str:
         return self.baseline_sha
 
     def list_open_main_pull_requests(self) -> list[Mapping[str, Any]]:
@@ -703,117 +705,81 @@ class PullRequestGuardTests(unittest.TestCase):
 
 
 class GitHubRestClientTests(unittest.TestCase):
-    def test_verified_baseline_requires_successful_audit_job(self) -> None:
-        older_sha = "1" * 40
-        newer_sha = "2" * 40
-
+    @staticmethod
+    def _public_client(responses: Mapping[str, Any]) -> GitHubRestClient:
         class StubClient(GitHubRestClient):
-            def _request(
-                self,
-                path: str,
-                query: Mapping[str, str] | None = None,
-                **_: Any,
-            ) -> Any:
-                if path.endswith("production-release.yml/runs"):
-                    return {
-                        "workflow_runs": [
-                            {
-                                "id": 20,
-                                "conclusion": "success",
-                                "head_branch": "main",
-                                "head_sha": newer_sha,
-                                "head_repository": {"full_name": REPOSITORY},
-                            },
-                            {
-                                "id": 19,
-                                "conclusion": "success",
-                                "head_branch": "main",
-                                "head_sha": older_sha,
-                                "head_repository": {"full_name": REPOSITORY},
-                            },
-                        ]
-                    }
-                if path.endswith("/actions/runs/20/jobs"):
-                    return {
-                        "jobs": [
-                            {
-                                "name": "audit_frontend_parity",
-                                "conclusion": "failure",
-                            }
-                        ]
-                    }
-                if path.endswith("/actions/runs/19/jobs"):
-                    return {
-                        "jobs": [
-                            {
-                                "name": "audit_frontend_parity",
-                                "conclusion": "success",
-                                "steps": [
-                                    {
-                                        "name": (
-                                            "Seal verified production release "
-                                            "checkpoint"
-                                        ),
-                                        "conclusion": "success",
-                                    },
-                                    {
-                                        "name": (
-                                            "Retain verified production release "
-                                            "receipt"
-                                        ),
-                                        "conclusion": "success",
-                                    },
-                                ],
-                            }
-                        ]
-                    }
-                raise AssertionError(f"unexpected API path {path}")
+            def _public_request(self, path: str) -> Any:
+                if path not in responses:
+                    raise AssertionError(f"unexpected public path {path}")
+                response = responses[path]
+                if isinstance(response, Exception):
+                    raise response
+                return response
 
-        client = StubClient(REPOSITORY, "token")
-        self.assertEqual(client.get_last_successful_production_sha(), older_sha)
+            def _request(self, *_: Any, **__: Any) -> Any:
+                raise AssertionError("production baseline must not read Actions history")
 
-    def test_verified_baseline_rejects_audit_without_receipt_steps(self) -> None:
-        class StubClient(GitHubRestClient):
-            def _request(
-                self,
-                path: str,
-                query: Mapping[str, str] | None = None,
-                **_: Any,
-            ) -> Any:
-                if path.endswith("production-release.yml/runs"):
-                    return {
-                        "workflow_runs": [
-                            {
-                                "id": 20,
-                                "conclusion": "success",
-                                "head_branch": "main",
-                                "head_sha": "2" * 40,
-                                "head_repository": {"full_name": REPOSITORY},
-                            }
-                        ]
-                    }
-                if path.endswith("/actions/runs/20/jobs"):
-                    return {
-                        "jobs": [
-                            {
-                                "name": "audit_frontend_parity",
-                                "conclusion": "success",
-                                "steps": [
-                                    {
-                                        "name": (
-                                            "Seal verified production release "
-                                            "checkpoint"
-                                        ),
-                                        "conclusion": "success",
-                                    }
-                                ],
-                            }
-                        ]
-                    }
-                raise AssertionError(f"unexpected API path {path}")
+        return StubClient(REPOSITORY, "token")
 
-        with self.assertRaisesRegex(GuardError, "no verified successful"):
-            StubClient(REPOSITORY, "token").get_last_successful_production_sha()
+    def test_current_production_sha_uses_live_deploy_commit(self) -> None:
+        deploy_sha = "1" * 40
+        client = self._public_client(
+            {
+                "/healthz": {"status": "ok"},
+                "/build-meta.json": {
+                    "deployCommit": deploy_sha,
+                    "githubSha": deploy_sha,
+                    "commit": "2" * 40,
+                    "commitMode": "application",
+                },
+            }
+        )
+        self.assertEqual(client.get_current_production_sha(), deploy_sha)
+
+    def test_current_production_sha_accepts_legacy_commit_only(self) -> None:
+        legacy_sha = "3" * 40
+        client = self._public_client(
+            {
+                "/healthz": {"status": "ok"},
+                "/build-meta.json": {"commit": legacy_sha},
+            }
+        )
+        self.assertEqual(client.get_current_production_sha(), legacy_sha)
+
+    def test_current_production_sha_rejects_identity_conflict(self) -> None:
+        client = self._public_client(
+            {
+                "/healthz": {"status": "ok"},
+                "/build-meta.json": {
+                    "deployCommit": "4" * 40,
+                    "githubSha": "5" * 40,
+                },
+            }
+        )
+        with self.assertRaisesRegex(GuardError, "deployCommit/githubSha mismatch"):
+            client.get_current_production_sha()
+
+    def test_current_production_sha_rejects_unhealthy_or_ambiguous_legacy(self) -> None:
+        unhealthy = self._public_client(
+            {
+                "/healthz": {"status": "failed"},
+                "/build-meta.json": {"deployCommit": "6" * 40},
+            }
+        )
+        with self.assertRaisesRegex(GuardError, "status=ok"):
+            unhealthy.get_current_production_sha()
+
+        ambiguous = self._public_client(
+            {
+                "/healthz": {"status": "ok"},
+                "/build-meta.json": {
+                    "commit": "7" * 40,
+                    "commitMode": "application",
+                },
+            }
+        )
+        with self.assertRaisesRegex(GuardError, "no unambiguous deploy SHA"):
+            ambiguous.get_current_production_sha()
 
     def test_associated_pr_pagination_excludes_old_merge_contracts(self) -> None:
         commit_sha = "3" * 40
@@ -937,7 +903,12 @@ class ProductionGuardTests(unittest.TestCase):
         result, _ = ReleaseCoordinationGuard(
             api,
             REPOSITORY,
-        ).validate_production(MAIN_SHA, run_id="100", run_attempt="1")
+        ).validate_production(
+            MAIN_SHA,
+            operation="prepare-candidate",
+            run_id="100",
+            run_attempt="1",
+        )
         self.assertIn("0 completed groups", result)
 
     def test_174_partial_merge_blocks_even_after_unrelated_176_merge(self) -> None:
@@ -952,6 +923,7 @@ class ProductionGuardTests(unittest.TestCase):
         ):
             ReleaseCoordinationGuard(api, REPOSITORY).validate_production(
                 MAIN_SHA,
+                operation="prepare-candidate",
                 run_id="100",
                 run_attempt="1",
             )
@@ -976,6 +948,7 @@ class ProductionGuardTests(unittest.TestCase):
         ):
             ReleaseCoordinationGuard(api, REPOSITORY).validate_production(
                 MAIN_SHA,
+                operation="prepare-candidate",
                 run_id="100",
                 run_attempt="1",
             )
@@ -999,6 +972,7 @@ class ProductionGuardTests(unittest.TestCase):
         with self.assertRaisesRegex(GuardError, "cannot change another"):
             ReleaseCoordinationGuard(api, REPOSITORY).validate_production(
                 MAIN_SHA,
+                operation="prepare-candidate",
                 run_id="100",
                 run_attempt="1",
             )
@@ -1037,6 +1011,7 @@ class ProductionGuardTests(unittest.TestCase):
         ):
             ReleaseCoordinationGuard(api, REPOSITORY).validate_production(
                 MAIN_SHA,
+                operation="prepare-candidate",
                 run_id="100",
                 run_attempt="1",
             )
@@ -1061,6 +1036,7 @@ class ProductionGuardTests(unittest.TestCase):
         with self.assertRaisesRegex(GuardError, "immutable manifests disagree"):
             ReleaseCoordinationGuard(api, REPOSITORY).validate_production(
                 MAIN_SHA,
+                operation="prepare-candidate",
                 run_id="100",
                 run_attempt="1",
             )
@@ -1074,9 +1050,17 @@ class ProductionGuardTests(unittest.TestCase):
         result, plan = ReleaseCoordinationGuard(
             api,
             REPOSITORY,
-        ).validate_production(MAIN_SHA, run_id="100", run_attempt="1")
+        ).validate_production(
+            MAIN_SHA,
+            operation="prepare-candidate",
+            run_id="100",
+            run_attempt="1",
+        )
         self.assertIn("1 completed groups", result)
         self.assertIn("1 dependency contracts", result)
+        self.assertEqual(plan["schema"], 3)
+        self.assertEqual(plan["operation"], "prepare-candidate")
+        self.assertEqual(plan["workflowSha"], MAIN_SHA)
         self.assertEqual(plan["targetSha"], MAIN_SHA)
         self.assertEqual(plan["baselineSha"], BASELINE_SHA)
         self.assertEqual(plan["releaseGroups"][0]["issue"], 200)
@@ -1089,7 +1073,12 @@ class ProductionGuardTests(unittest.TestCase):
         result, _ = ReleaseCoordinationGuard(
             api,
             REPOSITORY,
-        ).validate_production(MAIN_SHA, run_id="100", run_attempt="1")
+        ).validate_production(
+            MAIN_SHA,
+            operation="prepare-candidate",
+            run_id="100",
+            run_attempt="1",
+        )
         self.assertIn("1 completed groups", result)
 
     def test_stale_queued_or_rerun_sha_fails_before_release(self) -> None:
@@ -1097,10 +1086,149 @@ class ProductionGuardTests(unittest.TestCase):
         api = FakeGitHub(main_sha=MAIN_SHA)
         with self.assertRaisesRegex(
             GuardError,
-            r"stale production run: target a{12} is not current main f{12}",
+            r"stale production run: workflow a{12} is not current main f{12}",
         ):
             ReleaseCoordinationGuard(api, REPOSITORY).validate_production(
                 stale_sha,
+                operation="prepare-candidate",
+                run_id="100",
+                run_attempt="1",
+            )
+
+    def test_update_active_can_target_an_older_main_ancestor(self) -> None:
+        target_sha = "d" * 40
+        api = FakeGitHub()
+        api.mark_ancestor(BASELINE_SHA, target_sha)
+        api.mark_ancestor(target_sha, MAIN_SHA)
+
+        result, plan = ReleaseCoordinationGuard(
+            api,
+            REPOSITORY,
+        ).validate_production(
+            MAIN_SHA,
+            operation="update-active",
+            target_sha=target_sha,
+            target_archive_sha256=TARGET_ARCHIVE_SHA256,
+            target_manifest_sha256=TARGET_MANIFEST_SHA256,
+            run_id="100",
+            run_attempt="1",
+        )
+
+        self.assertIn("update-active", result)
+        self.assertEqual(plan["operation"], "update-active")
+        self.assertEqual(plan["workflowSha"], MAIN_SHA)
+        self.assertEqual(plan["baselineSha"], BASELINE_SHA)
+        self.assertEqual(plan["targetSha"], target_sha)
+        self.assertEqual(plan["targetArchiveSha256"], TARGET_ARCHIVE_SHA256)
+        self.assertEqual(plan["targetManifestSha256"], TARGET_MANIFEST_SHA256)
+        self.assertEqual(api.range_calls, [(BASELINE_SHA, target_sha)])
+
+    def test_update_active_rejects_non_ancestor_or_regressed_target(self) -> None:
+        target_sha = "d" * 40
+        api = FakeGitHub()
+        with self.assertRaisesRegex(GuardError, "not an ancestor of workflow main"):
+            ReleaseCoordinationGuard(api, REPOSITORY).validate_production(
+                MAIN_SHA,
+                operation="update-active",
+                target_sha=target_sha,
+                target_archive_sha256=TARGET_ARCHIVE_SHA256,
+                target_manifest_sha256=TARGET_MANIFEST_SHA256,
+                run_id="100",
+                run_attempt="1",
+            )
+
+        api.mark_ancestor(target_sha, MAIN_SHA)
+        with self.assertRaisesRegex(GuardError, "current www Active.*not an ancestor"):
+            ReleaseCoordinationGuard(api, REPOSITORY).validate_production(
+                MAIN_SHA,
+                operation="update-active",
+                target_sha=target_sha,
+                target_archive_sha256=TARGET_ARCHIVE_SHA256,
+                target_manifest_sha256=TARGET_MANIFEST_SHA256,
+                run_id="100",
+                run_attempt="1",
+            )
+
+    def test_non_publishing_controls_do_not_scan_later_main(self) -> None:
+        discard_api = FakeGitHub()
+        _, discard_plan = ReleaseCoordinationGuard(
+            discard_api,
+            REPOSITORY,
+        ).validate_production(
+            MAIN_SHA,
+            operation="discard-candidate",
+            run_id="100",
+            run_attempt="1",
+        )
+        self.assertEqual(discard_plan["targetSha"], BASELINE_SHA)
+        self.assertEqual(discard_plan["unpublishedPullRequests"], [])
+        self.assertEqual(discard_api.range_calls, [])
+
+        rollback_sha = "d" * 40
+        rollback_api = FakeGitHub()
+        rollback_api.mark_ancestor(rollback_sha, BASELINE_SHA)
+        rollback_api.mark_ancestor(rollback_sha, MAIN_SHA)
+        _, rollback_plan = ReleaseCoordinationGuard(
+            rollback_api,
+            REPOSITORY,
+        ).validate_production(
+            MAIN_SHA,
+            operation="rollback-active",
+            target_sha=rollback_sha,
+            target_archive_sha256=TARGET_ARCHIVE_SHA256,
+            target_manifest_sha256=TARGET_MANIFEST_SHA256,
+            run_id="100",
+            run_attempt="1",
+        )
+        self.assertEqual(rollback_plan["targetSha"], rollback_sha)
+        self.assertEqual(
+            rollback_plan["targetArchiveSha256"],
+            TARGET_ARCHIVE_SHA256,
+        )
+        self.assertEqual(
+            rollback_plan["targetManifestSha256"],
+            TARGET_MANIFEST_SHA256,
+        )
+        self.assertEqual(rollback_plan["unpublishedPullRequests"], [])
+        self.assertEqual(rollback_api.range_calls, [])
+
+    def test_rollback_rejects_forward_or_partial_identity(self) -> None:
+        rollback_sha = "d" * 40
+        api = FakeGitHub()
+        api.mark_ancestor(rollback_sha, MAIN_SHA)
+        with self.assertRaisesRegex(GuardError, "not an ancestor of current www"):
+            ReleaseCoordinationGuard(api, REPOSITORY).validate_production(
+                MAIN_SHA,
+                operation="rollback-active",
+                target_sha=rollback_sha,
+                target_archive_sha256=TARGET_ARCHIVE_SHA256,
+                target_manifest_sha256=TARGET_MANIFEST_SHA256,
+                run_id="100",
+                run_attempt="1",
+            )
+        with self.assertRaisesRegex(GuardError, "target archive SHA-256"):
+            ReleaseCoordinationGuard(api, REPOSITORY).validate_production(
+                MAIN_SHA,
+                operation="rollback-active",
+                target_sha=rollback_sha,
+                run_id="100",
+                run_attempt="1",
+            )
+
+    def test_release_target_input_is_bound_to_its_operation(self) -> None:
+        guard = ReleaseCoordinationGuard(FakeGitHub(), REPOSITORY)
+        with self.assertRaisesRegex(GuardError, "cannot specify a target identity"):
+            guard.validate_production(
+                MAIN_SHA,
+                operation="prepare-candidate",
+                target_sha="d" * 40,
+                run_id="100",
+                run_attempt="1",
+            )
+        with self.assertRaisesRegex(GuardError, "invalid update-active target SHA"):
+            guard.validate_production(
+                MAIN_SHA,
+                operation="update-active",
                 run_id="100",
                 run_attempt="1",
             )
@@ -1120,6 +1248,7 @@ class ProductionGuardTests(unittest.TestCase):
         with self.assertRaisesRegex(GuardError, "dependency PR #174 is still open"):
             ReleaseCoordinationGuard(api, REPOSITORY).validate_production(
                 MAIN_SHA,
+                operation="prepare-candidate",
                 run_id="100",
                 run_attempt="1",
             )
@@ -1143,6 +1272,7 @@ class ProductionGuardTests(unittest.TestCase):
             REPOSITORY,
         ).validate_production(
             MAIN_SHA,
+            operation="prepare-candidate",
             run_id="100",
             run_attempt="1",
         )
@@ -1163,6 +1293,7 @@ class ProductionGuardTests(unittest.TestCase):
                 REPOSITORY,
             ).validate_production(
                 MAIN_SHA,
+                operation="prepare-candidate",
                 run_id="100",
                 run_attempt="1",
             )
@@ -1175,12 +1306,14 @@ class ProductionGuardTests(unittest.TestCase):
         guard = ReleaseCoordinationGuard(api, REPOSITORY)
         _, plan = guard.validate_production(
             MAIN_SHA,
+            operation="prepare-candidate",
             run_id="100",
             run_attempt="2",
         )
         result = guard.verify_frozen_plan(
             plan,
             main_sha=MAIN_SHA,
+            operation="prepare-candidate",
             run_id="100",
             run_attempt="2",
         )
@@ -1191,6 +1324,7 @@ class ProductionGuardTests(unittest.TestCase):
         result = guard.verify_frozen_plan(
             plan,
             main_sha=MAIN_SHA,
+            operation="prepare-candidate",
             run_id="100",
             run_attempt="2",
         )
@@ -1202,6 +1336,7 @@ class ProductionGuardTests(unittest.TestCase):
             guard.verify_frozen_plan(
                 changed,
                 main_sha=MAIN_SHA,
+                operation="prepare-candidate",
                 run_id="100",
                 run_attempt="2",
             )
@@ -1211,6 +1346,7 @@ class ProductionGuardTests(unittest.TestCase):
         guard = ReleaseCoordinationGuard(api, REPOSITORY)
         _, plan = guard.validate_production(
             MAIN_SHA,
+            operation="prepare-candidate",
             run_id="100",
             run_attempt="1",
         )
@@ -1219,6 +1355,107 @@ class ProductionGuardTests(unittest.TestCase):
             guard.verify_frozen_plan(
                 plan,
                 main_sha=MAIN_SHA,
+                operation="prepare-candidate",
+                run_id="100",
+                run_attempt="1",
+            )
+
+    def test_frozen_update_plan_binds_operation_and_older_target(self) -> None:
+        target_sha = "d" * 40
+        api = FakeGitHub()
+        api.mark_ancestor(BASELINE_SHA, target_sha)
+        api.mark_ancestor(target_sha, MAIN_SHA)
+        guard = ReleaseCoordinationGuard(api, REPOSITORY)
+        _, plan = guard.validate_production(
+            MAIN_SHA,
+            operation="update-active",
+            target_sha=target_sha,
+            target_archive_sha256=TARGET_ARCHIVE_SHA256,
+            target_manifest_sha256=TARGET_MANIFEST_SHA256,
+            run_id="100",
+            run_attempt="1",
+        )
+        result = guard.verify_frozen_plan(
+            plan,
+            main_sha=MAIN_SHA,
+            operation="update-active",
+            target_sha=target_sha,
+            target_archive_sha256=TARGET_ARCHIVE_SHA256,
+            target_manifest_sha256=TARGET_MANIFEST_SHA256,
+            run_id="100",
+            run_attempt="1",
+        )
+        self.assertIn(target_sha[:12], result)
+
+        with self.assertRaisesRegex(GuardError, "operation does not match"):
+            guard.verify_frozen_plan(
+                plan,
+                main_sha=MAIN_SHA,
+                operation="prepare-candidate",
+                run_id="100",
+                run_attempt="1",
+            )
+        with self.assertRaisesRegex(GuardError, "target SHA does not match"):
+            guard.verify_frozen_plan(
+                plan,
+                main_sha=MAIN_SHA,
+                operation="update-active",
+                target_sha="c" * 40,
+                target_archive_sha256=TARGET_ARCHIVE_SHA256,
+                target_manifest_sha256=TARGET_MANIFEST_SHA256,
+                run_id="100",
+                run_attempt="1",
+            )
+        with self.assertRaisesRegex(GuardError, "target archive SHA-256"):
+            guard.verify_frozen_plan(
+                plan,
+                main_sha=MAIN_SHA,
+                operation="update-active",
+                target_sha=target_sha,
+                target_archive_sha256="c" * 64,
+                target_manifest_sha256=TARGET_MANIFEST_SHA256,
+                run_id="100",
+                run_attempt="1",
+            )
+
+    def test_frozen_rollback_plan_binds_the_reviewed_target_triple(self) -> None:
+        target_sha = "d" * 40
+        api = FakeGitHub()
+        api.mark_ancestor(target_sha, BASELINE_SHA)
+        api.mark_ancestor(target_sha, MAIN_SHA)
+        guard = ReleaseCoordinationGuard(api, REPOSITORY)
+        _, plan = guard.validate_production(
+            MAIN_SHA,
+            operation="rollback-active",
+            target_sha=target_sha,
+            target_archive_sha256=TARGET_ARCHIVE_SHA256,
+            target_manifest_sha256=TARGET_MANIFEST_SHA256,
+            run_id="100",
+            run_attempt="1",
+        )
+        result = guard.verify_frozen_plan(
+            plan,
+            main_sha=MAIN_SHA,
+            operation="rollback-active",
+            target_sha=target_sha,
+            target_archive_sha256=TARGET_ARCHIVE_SHA256,
+            target_manifest_sha256=TARGET_MANIFEST_SHA256,
+            run_id="100",
+            run_attempt="1",
+        )
+        self.assertIn(target_sha[:12], result)
+        self.assertEqual(api.range_calls, [])
+
+        changed = dict(plan)
+        changed["targetManifestSha256"] = "c" * 64
+        with self.assertRaisesRegex(GuardError, "target manifest SHA-256"):
+            guard.verify_frozen_plan(
+                changed,
+                main_sha=MAIN_SHA,
+                operation="rollback-active",
+                target_sha=target_sha,
+                target_archive_sha256=TARGET_ARCHIVE_SHA256,
+                target_manifest_sha256=TARGET_MANIFEST_SHA256,
                 run_id="100",
                 run_attempt="1",
             )

@@ -4,10 +4,8 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
-import importlib.util
 from pathlib import Path
 import re
-import sys
 from typing import Any
 
 import yaml
@@ -19,12 +17,6 @@ MAIN_REF_CONDITION = f"github.ref == '{MAIN_REF}'"
 PRODUCTION_ENVIRONMENT = "production"
 PRODUCTION_RELEASE_WORKFLOW = ".github/workflows/production-release.yml"
 INTL_SYNC_WORKFLOW = ".github/workflows/sync-www-active-to-intl.yml"
-CHECKPOINT_RECOVERY_WORKFLOW = (
-    ".github/workflows/production-checkpoint-recovery.yml"
-)
-UNSTARTED_CANDIDATE_SETTLEMENT_WORKFLOW = (
-    ".github/workflows/settle-unstarted-candidate.yml"
-)
 RELEASE_COORDINATION_WORKFLOW = (
     ".github/workflows/release-coordination-guard.yml"
 )
@@ -37,59 +29,31 @@ PINNED_CHECKOUT_V5 = (
     "actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09"
 )
 PRODUCTION_COORDINATION_JOB = "release_coordination_guard"
-PRODUCTION_RELEASE_HOLD_SCRIPT = (
-    ".github/scripts/production_release_hold.py"
-)
-PRODUCTION_RELEASE_HOLD_PATH = (
-    ".github/recovery-plans/"
-    "2026-08-03-29df-pre-switch-candidate-residue-production-hold.v1.json"
-)
-PRODUCTION_RELEASE_HOLD_RETIREMENT_PATH = (
-    ".github/recovery-plans/"
-    "2026-08-03-29df-pre-switch-candidate-residue-"
-    "production-hold-retirement.v1.json"
-)
-PRODUCTION_RELEASE_RECOVERY_PLAN = (
-    ".github/recovery-plans/"
-    "2026-08-03-29df-pre-switch-candidate-residue.json"
-)
 PRODUCTION_RELEASE_DEPLOY_CONDITION = (
     MAIN_REF_CONDITION
-    + " && needs.release_coordination_guard.outputs.release-action == 'deploy'"
 )
 PRODUCTION_PREPARE_CONDITION = (
     PRODUCTION_RELEASE_DEPLOY_CONDITION
-    + " && (github.event_name != 'workflow_dispatch' || "
-    + "inputs.release_mode == 'prepare-candidate')"
+    + " && inputs.release_mode == 'prepare-candidate'"
 )
-PRODUCTION_APPROVAL_CONDITION = (
+PRODUCTION_CONTROL_CONDITION = (
     MAIN_REF_CONDITION
-    + " && github.event_name == 'workflow_dispatch'"
-    + " && inputs.release_mode == 'approve-candidate-to-active'"
-    + " && needs.release_coordination_guard.outputs.release-action == 'deploy'"
+    + " && inputs.release_mode != 'prepare-candidate'"
 )
-PRODUCTION_CLEANUP_CONDITION = (
-    MAIN_REF_CONDITION
-    + " && github.event_name == 'workflow_dispatch'"
-    + " && (inputs.release_mode == 'discard-candidate' || "
-    + "inputs.release_mode == 'discard-failed-candidate' || "
-    + "inputs.release_mode == 'release-candidate')"
-    + " && needs.release_coordination_guard.outputs.release-action == 'deploy'"
-)
-PRODUCTION_LEGACY_INTL_CONDITION = (
-    PRODUCTION_RELEASE_DEPLOY_CONDITION
-    + " && github.event_name == 'workflow_dispatch'"
-    + " && inputs.release_mode == 'prepare-and-switch'"
+FORBIDDEN_CONTROL_BUILD_TOKENS = (
+    "npm ci",
+    "npm install",
+    "npm run build",
+    "Package backend release",
+    "Upload complete release archive",
+    "rsync ",
 )
 
 PRODUCTION_JOBS = {
     PRODUCTION_RELEASE_WORKFLOW: (
         "deploy_tencent",
-        "approve_candidate_to_active",
-        "cleanup_candidate",
+        "control_fixed_release_v2",
     ),
-    CHECKPOINT_RECOVERY_WORKFLOW: ("recover_checkpoint",),
-    UNSTARTED_CANDIDATE_SETTLEMENT_WORKFLOW: ("settle",),
     INTL_SYNC_WORKFLOW: ("sync_intl",),
     ".github/workflows/deploy-aws-ecs.yml": ("deploy",),
     ".github/workflows/deploy-ec2-auto-update.yml": ("deploy",),
@@ -103,12 +67,10 @@ MANUAL_DEPLOY_WORKFLOWS = {
 PRODUCTION_RELEASE_MAIN_ONLY_JOBS = (
     PRODUCTION_COORDINATION_JOB,
 )
-PRODUCTION_RELEASE_HOLD_GATED_JOBS = (
+PRODUCTION_RELEASE_MODE_GATED_JOBS = (
     "build_frontend",
     "deploy_tencent",
-    "approve_candidate_to_active",
-    "cleanup_candidate",
-    "audit_frontend_parity",
+    "control_fixed_release_v2",
 )
 
 COUNTRY_NEWS_WORKFLOW = ".github/workflows/country-news-sync.yml"
@@ -222,13 +184,12 @@ def assert_main_only_production_job(relative_path: str, job_name: str) -> None:
         condition = unwrap_expression(job.get("if"))
         expected_conditions = {
             "deploy_tencent": PRODUCTION_PREPARE_CONDITION,
-            "approve_candidate_to_active": PRODUCTION_APPROVAL_CONDITION,
-            "cleanup_candidate": PRODUCTION_CLEANUP_CONDITION,
+            "control_fixed_release_v2": PRODUCTION_CONTROL_CONDITION,
         }
         expected_condition = expected_conditions[job_name]
         if condition != expected_condition:
             raise AssertionError(
-                f"{relative_path}:{job_name} must use the exact main-and-hold "
+                f"{relative_path}:{job_name} must use the exact main-and-mode "
                 f"gate; found {condition!r}"
             )
     else:
@@ -306,6 +267,8 @@ def assert_all_static_production_jobs_are_registered() -> None:
                 continue
             if get_environment_name(job) != PRODUCTION_ENVIRONMENT:
                 continue
+            if unwrap_expression(job.get("if")) == "false":
+                continue
             if (relative_path, str(job_name)) not in registered_jobs:
                 raise AssertionError(
                     f"{relative_path}:{job_name} uses the production environment "
@@ -317,678 +280,20 @@ def assert_production_release_main_guards() -> None:
     for job_name in PRODUCTION_RELEASE_MAIN_ONLY_JOBS:
         assert_main_only_job(PRODUCTION_RELEASE_WORKFLOW, job_name)
     workflow = load_workflow(PRODUCTION_RELEASE_WORKFLOW)
-    for job_name in PRODUCTION_RELEASE_HOLD_GATED_JOBS:
+    for job_name in PRODUCTION_RELEASE_MODE_GATED_JOBS:
         job = get_job(workflow, PRODUCTION_RELEASE_WORKFLOW, job_name)
         condition = unwrap_expression(job.get("if"))
         expected_conditions = {
             "build_frontend": PRODUCTION_PREPARE_CONDITION,
             "deploy_tencent": PRODUCTION_PREPARE_CONDITION,
-            "approve_candidate_to_active": PRODUCTION_APPROVAL_CONDITION,
-            "cleanup_candidate": PRODUCTION_CLEANUP_CONDITION,
-            "audit_frontend_parity": PRODUCTION_LEGACY_INTL_CONDITION,
+            "control_fixed_release_v2": PRODUCTION_CONTROL_CONDITION,
         }
         expected_condition = expected_conditions[job_name]
         if condition != expected_condition:
             raise AssertionError(
                 f"{PRODUCTION_RELEASE_WORKFLOW}:{job_name} must use the exact "
-                f"main-and-hold gate; found {condition!r}"
+                f"main-and-mode gate; found {condition!r}"
             )
-
-
-def assert_checkpoint_recovery_contract() -> None:
-    workflow = load_workflow(CHECKPOINT_RECOVERY_WORKFLOW)
-    if workflow.get("name") != "production-checkpoint-recovery":
-        raise AssertionError("checkpoint recovery workflow name changed")
-    workflow_jobs = workflow.get("jobs")
-    expected_jobs = {
-        "recovery_coordination_guard",
-        "recover_checkpoint",
-    }
-    if not isinstance(workflow_jobs, Mapping) or set(workflow_jobs) != expected_jobs:
-        raise AssertionError(
-            "checkpoint recovery must contain exactly its guard and recovery jobs"
-        )
-    triggers = workflow.get("on")
-    if not isinstance(triggers, Mapping) or set(triggers) != {"workflow_dispatch"}:
-        raise AssertionError(
-            "checkpoint recovery must only support an explicit workflow_dispatch"
-        )
-    dispatch = triggers.get("workflow_dispatch")
-    if not isinstance(dispatch, Mapping):
-        raise AssertionError("checkpoint recovery dispatch inputs are missing")
-    inputs = dispatch.get("inputs")
-    expected_inputs = {
-        "mode",
-        "confirmation",
-        "reviewed_dry_run_run_id",
-        "reviewed_dry_run_result_sha256",
-        "reviewed_main_sha",
-        "reviewed_plan_sha256",
-    }
-    if not isinstance(inputs, Mapping) or set(inputs) != expected_inputs:
-        raise AssertionError(
-            "checkpoint recovery dispatch input contract changed"
-        )
-    mode = inputs.get("mode")
-    if not isinstance(mode, Mapping) or mode.get("default") != "dry-run":
-        raise AssertionError("checkpoint recovery must default to dry-run")
-    if mode.get("type") != "choice" or mode.get("options") != [
-        "dry-run",
-        "apply",
-    ]:
-        raise AssertionError("checkpoint recovery mode choices changed")
-    if mode.get("required") != "true":
-        raise AssertionError("checkpoint recovery mode must be required")
-    confirmation = inputs.get("confirmation")
-    if not isinstance(confirmation, Mapping) or {
-        "required": confirmation.get("required"),
-        "default": confirmation.get("default"),
-        "type": confirmation.get("type"),
-    } != {
-        "required": "false",
-        "default": "",
-        "type": "string",
-    }:
-        raise AssertionError(
-            "checkpoint recovery confirmation must be an optional empty string"
-        )
-    for name in sorted(expected_inputs - {"mode", "confirmation"}):
-        reviewed_input = inputs.get(name)
-        if not isinstance(reviewed_input, Mapping) or {
-            "required": reviewed_input.get("required"),
-            "default": reviewed_input.get("default"),
-            "type": reviewed_input.get("type"),
-        } != {
-            "required": "false",
-            "default": "",
-            "type": "string",
-        }:
-            raise AssertionError(
-                f"checkpoint recovery {name} must be an optional empty string"
-            )
-
-    concurrency = workflow.get("concurrency")
-    if not isinstance(concurrency, Mapping) or concurrency != {
-        "group": "production-release-main",
-        "cancel-in-progress": "false",
-    }:
-        raise AssertionError(
-            "checkpoint recovery must serialize with the main production release"
-        )
-    permissions = workflow.get("permissions")
-    if not isinstance(permissions, Mapping) or permissions != {
-        "actions": "read",
-        "contents": "read",
-        "issues": "read",
-        "pull-requests": "read",
-    }:
-        raise AssertionError("checkpoint recovery permissions are not least-privilege")
-
-    guard = assert_main_only_job(
-        CHECKPOINT_RECOVERY_WORKFLOW,
-        "recovery_coordination_guard",
-    )
-    if get_environment_name(guard):
-        raise AssertionError("checkpoint recovery preflight must not use production")
-    guard_steps = get_steps(
-        guard,
-        CHECKPOINT_RECOVERY_WORKFLOW,
-        "recovery_coordination_guard",
-    )
-    expected_guard_steps = [
-        "Checkout recovery source",
-        "Validate recovery dispatch intent",
-        "Fetch reviewed dry-run metadata",
-        "Resolve reviewed dry-run artifact",
-        "Download reviewed dry-run result",
-        "Verify and freeze reviewed dry-run authorization",
-        "Validate active recovery-only production hold",
-        "Validate unpublished release coordination",
-        "Freeze recovery coordination plan",
-        "Freeze reviewed dry-run evidence",
-    ]
-    if [str(step.get("name") or "") for step in guard_steps] != expected_guard_steps:
-        raise AssertionError(
-            "checkpoint recovery guard steps or ordering changed"
-        )
-    if "secrets." in str(guard_steps):
-        raise AssertionError(
-            "checkpoint recovery guard must not consume production secrets"
-        )
-    guard_checkout = guard_steps[0]
-    checkout_with = guard_checkout.get("with")
-    if (
-        guard_checkout.get("uses") != "actions/checkout@v5"
-        or not isinstance(checkout_with, Mapping)
-        or checkout_with.get("ref") != "${{ github.sha }}"
-        or checkout_with.get("persist-credentials") != "false"
-    ):
-        raise AssertionError(
-            "checkpoint recovery guard must checkout the exact non-credentialed SHA"
-        )
-    guard_intent = str(guard_steps[1].get("run") or "")
-    for required in (
-        "case \"$RECOVERY_MODE\" in",
-        "dry-run)",
-        "apply)",
-        (
-            "QUARANTINE 29df5e6e667351f09305783932b34e5438d6a9d5 "
-            "RESIDUE AND ABORT PRE-SWITCH"
-        ),
-        "REVIEWED_DRY_RUN_RUN_ID",
-        "REVIEWED_DRY_RUN_RESULT_SHA256",
-        "REVIEWED_MAIN_SHA",
-        "REVIEWED_PLAN_SHA256",
-        "test \"$REVIEWED_MAIN_SHA\" = \"$GITHUB_SHA\"",
-        "2026-08-03-29df-pre-switch-candidate-residue.json",
-    ):
-        if required not in guard_intent:
-            raise AssertionError(
-                f"checkpoint recovery guard intent lost {required!r}"
-            )
-    apply_only_steps = guard_steps[2:6] + [guard_steps[9]]
-    if any(step.get("if") != "${{ inputs.mode == 'apply' }}" for step in apply_only_steps):
-        raise AssertionError(
-            "reviewed dry-run fetch, validation, and freeze must be apply-only"
-        )
-    fetch_review = guard_steps[2]
-    fetch_environment = fetch_review.get("env")
-    fetch_command = str(fetch_review.get("run") or "")
-    if (
-        not isinstance(fetch_environment, Mapping)
-        or fetch_environment.get("GH_TOKEN") != "${{ github.token }}"
-        or "actions/runs/$REVIEWED_DRY_RUN_RUN_ID" not in fetch_command
-        or "actions/runs/$REVIEWED_DRY_RUN_RUN_ID/artifacts?per_page=100"
-        not in fetch_command
-    ):
-        raise AssertionError(
-            "checkpoint recovery must fetch the exact reviewed run and artifacts"
-        )
-    resolve_review = guard_steps[3]
-    if resolve_review.get("id") != "reviewed_dry_run":
-        raise AssertionError("reviewed dry-run artifact resolver ID changed")
-    resolve_command = str(resolve_review.get("run") or "")
-    for required in (
-        ".github/workflows/production-checkpoint-recovery.yml",
-        'run.get("event") != "workflow_dispatch"',
-        'run.get("head_branch") != "main"',
-        'run.get("head_sha") != main_sha',
-        'run.get("conclusion") != "success"',
-        "checkpoint-recovery-result-{main_sha}-{run_id}-{run_attempt}",
-        "artifact-id=",
-        "run-attempt=",
-        're.fullmatch(r"sha256:[0-9a-f]{64}", digest)',
-    ):
-        if required not in resolve_command:
-            raise AssertionError(
-                f"reviewed dry-run artifact resolver lost {required!r}"
-            )
-    reviewed_download = guard_steps[4]
-    reviewed_download_with = reviewed_download.get("with")
-    if (
-        reviewed_download.get("uses") != "actions/download-artifact@v5"
-        or not isinstance(reviewed_download_with, Mapping)
-        or reviewed_download_with.get("artifact-ids")
-        != "${{ steps.reviewed_dry_run.outputs.artifact-id }}"
-        or reviewed_download_with.get("github-token") != "${{ github.token }}"
-        or reviewed_download_with.get("repository")
-        != "${{ github.repository }}"
-        or reviewed_download_with.get("run-id")
-        != "${{ inputs.reviewed_dry_run_run_id }}"
-    ):
-        raise AssertionError(
-            "checkpoint recovery must download the reviewed artifact by immutable ID"
-        )
-    review_validation = str(guard_steps[5].get("run") or "")
-    for required in (
-        "reviewed_recovery_authorization.py freeze",
-        "checkpoint-recovery-result.json",
-        "--expected-result-sha256",
-        "--expected-main-sha",
-        "--expected-plan-sha256",
-        "--repository",
-        "--run-id",
-        "--run-attempt",
-        "--output-dir",
-    ):
-        if required not in review_validation:
-            raise AssertionError(
-                f"reviewed dry-run result validation lost {required!r}"
-            )
-
-    hold_validation = str(guard_steps[6].get("run") or "")
-    for required in (
-        PRODUCTION_RELEASE_HOLD_SCRIPT,
-        "require-active",
-        "PYTHONPATH=03_Scripts/deploy",
-        "from pre_switch_checkpoint_recovery import load_recovery_plan",
-        "hashlib.sha256(plan.read_bytes()).hexdigest()",
-    ):
-        if required not in hold_validation:
-            raise AssertionError(
-                f"checkpoint recovery preflight hold check lost {required!r}"
-            )
-
-    guard_coordination = str(guard_steps[7].get("run") or "")
-    for required in (
-        RELEASE_COORDINATION_SCRIPT,
-        "production",
-        '--main-sha "$GITHUB_SHA"',
-        '--plan-output "$RUNNER_TEMP/recovery-coordination-plan.json"',
-    ):
-        if required not in guard_coordination:
-            raise AssertionError(
-                f"checkpoint recovery guard coordination lost {required!r}"
-            )
-    freeze = guard_steps[8]
-    freeze_with = freeze.get("with")
-    expected_frozen_artifact = {
-        "name": (
-            "checkpoint-recovery-plan-${{ github.sha }}-"
-            "${{ github.run_attempt }}"
-        ),
-        "path": "${{ runner.temp }}/recovery-coordination-plan.json",
-        "if-no-files-found": "error",
-        "compression-level": "0",
-        "overwrite": "false",
-        "retention-days": "7",
-    }
-    if (
-        freeze.get("uses") != "actions/upload-artifact@v4"
-        or not isinstance(freeze_with, Mapping)
-        or dict(freeze_with) != expected_frozen_artifact
-    ):
-        raise AssertionError(
-            "checkpoint recovery frozen coordination artifact contract changed"
-        )
-    evidence_freeze = guard_steps[9]
-    evidence_freeze_with = evidence_freeze.get("with")
-    if (
-        evidence_freeze.get("uses") != "actions/upload-artifact@v4"
-        or not isinstance(evidence_freeze_with, Mapping)
-        or dict(evidence_freeze_with)
-        != {
-            "name": (
-                "checkpoint-recovery-reviewed-dry-run-${{ github.sha }}-"
-                "${{ github.run_id }}-${{ github.run_attempt }}"
-            ),
-            "path": "${{ runner.temp }}/reviewed-dry-run-frozen",
-            "if-no-files-found": "error",
-            "compression-level": "0",
-            "overwrite": "false",
-            "retention-days": "30",
-        }
-    ):
-        raise AssertionError(
-            "checkpoint recovery reviewed dry-run evidence artifact changed"
-        )
-
-    recovery = assert_main_only_job(
-        CHECKPOINT_RECOVERY_WORKFLOW,
-        "recover_checkpoint",
-    )
-    if get_environment_name(recovery) != PRODUCTION_ENVIRONMENT:
-        raise AssertionError("checkpoint recovery apply job needs production approval")
-    if recovery.get("needs") != "recovery_coordination_guard":
-        raise AssertionError("checkpoint recovery must wait for its frozen plan")
-
-    steps = get_steps(
-        recovery,
-        CHECKPOINT_RECOVERY_WORKFLOW,
-        "recover_checkpoint",
-    )
-    step_names = [str(step.get("name") or "") for step in steps]
-    expected_steps = [
-        "Checkout recovery source",
-        "Revalidate active recovery-only production hold after approval",
-        "Download frozen recovery coordination plan",
-        "Revalidate frozen coordination plan after approval",
-        "Revalidate recovery dispatch intent after approval",
-        "Download frozen reviewed dry-run evidence",
-        "Revalidate frozen reviewed dry-run evidence",
-        "Build immutable recovery control bundle",
-        "Validate Tencent recovery credentials",
-        "Reconfirm current main before recovery transport",
-        "Run reviewed checkpoint recovery on Tencent",
-        "Prepare structured checkpoint recovery result and summary",
-        "Upload checkpoint recovery result",
-    ]
-    if step_names != expected_steps:
-        raise AssertionError(
-            "checkpoint recovery steps or ordering changed"
-        )
-    if "secrets." in str(steps[:8]):
-        raise AssertionError(
-            "checkpoint recovery must validate approved intent before reading secrets"
-        )
-    recovery_checkout = steps[0]
-    recovery_checkout_with = recovery_checkout.get("with")
-    if (
-        recovery_checkout.get("uses") != "actions/checkout@v5"
-        or not isinstance(recovery_checkout_with, Mapping)
-        or recovery_checkout_with.get("ref") != "${{ github.sha }}"
-        or recovery_checkout_with.get("persist-credentials") != "false"
-    ):
-        raise AssertionError(
-            "checkpoint recovery must checkout the exact non-credentialed SHA"
-        )
-    post_approval_hold = str(steps[1].get("run") or "")
-    for required in (
-        PRODUCTION_RELEASE_HOLD_SCRIPT,
-        "require-active",
-    ):
-        if required not in post_approval_hold:
-            raise AssertionError(
-                f"checkpoint recovery post-approval hold check lost {required!r}"
-            )
-
-    download = steps[2]
-    download_with = download.get("with")
-    if (
-        download.get("uses") != "actions/download-artifact@v5"
-        or not isinstance(download_with, Mapping)
-        or dict(download_with)
-        != {
-            "name": expected_frozen_artifact["name"],
-            "path": "${{ runner.temp }}/recovery-coordination-plan",
-        }
-    ):
-        raise AssertionError(
-            "checkpoint recovery must download its exact same-run frozen plan"
-        )
-    approved_plan_check = str(steps[3].get("run") or "")
-    final_main_check = str(steps[9].get("run") or "")
-    for command, label in (
-        (approved_plan_check, "post-approval"),
-        (final_main_check, "pre-transport"),
-    ):
-        for required in (
-            RELEASE_COORDINATION_SCRIPT,
-            "verify-plan",
-            '--main-sha "$GITHUB_SHA"',
-            (
-                "--plan "
-                '"$RUNNER_TEMP/recovery-coordination-plan/'
-                'recovery-coordination-plan.json"'
-            ),
-        ):
-            if required not in command:
-                raise AssertionError(
-                    f"checkpoint recovery {label} plan check lost {required!r}"
-                )
-    approved_intent = str(steps[4].get("run") or "")
-    for required in (
-        "case \"$RECOVERY_MODE\" in",
-        "dry-run)",
-        "apply)",
-        (
-            "QUARANTINE 29df5e6e667351f09305783932b34e5438d6a9d5 "
-            "RESIDUE AND ABORT PRE-SWITCH"
-        ),
-        "REVIEWED_DRY_RUN_RUN_ID",
-        "REVIEWED_DRY_RUN_RESULT_SHA256",
-        "REVIEWED_MAIN_SHA",
-        "REVIEWED_PLAN_SHA256",
-    ):
-        if required not in approved_intent:
-            raise AssertionError(
-                f"checkpoint recovery approved intent lost {required!r}"
-            )
-    frozen_review_download = steps[5]
-    frozen_review_download_with = frozen_review_download.get("with")
-    if (
-        frozen_review_download.get("if") != "${{ inputs.mode == 'apply' }}"
-        or frozen_review_download.get("uses") != "actions/download-artifact@v5"
-        or not isinstance(frozen_review_download_with, Mapping)
-        or dict(frozen_review_download_with)
-        != {
-            "name": (
-                "checkpoint-recovery-reviewed-dry-run-${{ github.sha }}-"
-                "${{ github.run_id }}-${{ github.run_attempt }}"
-            ),
-            "path": "${{ runner.temp }}/reviewed-dry-run-frozen",
-        }
-    ):
-        raise AssertionError(
-            "checkpoint recovery must download its same-run frozen dry-run proof"
-        )
-    frozen_review_validation = steps[6]
-    if frozen_review_validation.get("if") != "${{ inputs.mode == 'apply' }}":
-        raise AssertionError("frozen dry-run revalidation must be apply-only")
-    frozen_review_command = str(frozen_review_validation.get("run") or "")
-    for required in (
-        "reviewed_recovery_authorization.py verify",
-        "checkpoint-recovery-result.json",
-        "reviewed-dry-run-authorization.json",
-        "--expected-result-sha256",
-        "--expected-main-sha",
-        "--expected-plan-sha256",
-        "--repository",
-        "--run-id",
-    ):
-        if required not in frozen_review_command:
-            raise AssertionError(
-                f"post-approval dry-run revalidation lost {required!r}"
-            )
-    bundle_command = str(steps[7].get("run") or "")
-    for required in (
-        "2026-08-03-29df-pre-switch-candidate-residue.json",
-        "reviewed-dry-run-authorization.json",
-        "recovery-control-manifest.json",
-        '"files": files',
-    ):
-        if required not in bundle_command:
-            raise AssertionError(
-                f"recovery control bundle lost {required!r}"
-            )
-    recovery_execution = steps[10]
-    if (
-        recovery_execution.get("id") != "recovery"
-        or "if" in recovery_execution
-        or "continue-on-error" in recovery_execution
-    ):
-        raise AssertionError(
-            "checkpoint recovery execution must remain a fail-closed named step"
-        )
-    result_presentation = steps[11]
-    presentation_command = str(result_presentation.get("run") or "")
-    presentation_env = result_presentation.get("env")
-    expected_presentation_env = {
-        "RECOVERY_MAIN_SHA": "${{ github.sha }}",
-        "RECOVERY_MODE": "${{ inputs.mode }}",
-        "RECOVERY_RESULT": (
-            "${{ runner.temp }}/checkpoint-recovery-result.json"
-        ),
-        "RECOVERY_STEP_OUTCOME": "${{ steps.recovery.outcome }}",
-    }
-    if (
-        result_presentation.get("if") != "${{ always() }}"
-        or not isinstance(presentation_env, Mapping)
-        or dict(presentation_env) != expected_presentation_env
-        or "secrets." in str(result_presentation)
-        or "present_checkpoint_recovery_result.py" not in presentation_command
-        or "GITHUB_STEP_SUMMARY" not in presentation_command
-        or any(
-            option not in presentation_command
-            for option in (
-                "--result",
-                "--summary",
-                "--plan",
-                "--step-outcome",
-                "--mode",
-                "--main-sha",
-                "--plan-sha256",
-            )
-        )
-    ):
-        raise AssertionError(
-            "checkpoint recovery result presentation contract changed"
-        )
-    result_upload = steps[12]
-    result_with = result_upload.get("with")
-    if (
-        result_upload.get("if") != "${{ always() }}"
-        or result_upload.get("uses") != "actions/upload-artifact@v4"
-        or not isinstance(result_with, Mapping)
-        or dict(result_with)
-        != {
-            "name": (
-                "checkpoint-recovery-result-${{ github.sha }}-"
-                "${{ github.run_id }}-${{ github.run_attempt }}"
-            ),
-            "path": "${{ runner.temp }}/checkpoint-recovery-result.json",
-            "if-no-files-found": "error",
-            "compression-level": "0",
-            "overwrite": "false",
-            "retention-days": "30",
-        }
-    ):
-        raise AssertionError(
-            "checkpoint recovery result artifact contract changed"
-        )
-
-    workflow_text = (
-        REPO_ROOT / CHECKPOINT_RECOVERY_WORKFLOW
-    ).read_text(encoding="utf-8")
-    for required in (
-        (
-            "QUARANTINE 29df5e6e667351f09305783932b34e5438d6a9d5 "
-            "RESIDUE AND ABORT PRE-SWITCH"
-        ),
-        "2026-08-03-29df-pre-switch-candidate-residue.json",
-        "reviewed_dry_run_run_id",
-        "reviewed_dry_run_result_sha256",
-        "reviewed_main_sha",
-        "reviewed_plan_sha256",
-        "checkpoint-recovery-reviewed-dry-run-",
-        PRODUCTION_RELEASE_HOLD_SCRIPT,
-        "require-active",
-        "artifact-ids:",
-        "pre_switch_checkpoint_recovery.py",
-        "reviewed_recovery_authorization.py",
-        "tencent_pre_switch_checkpoint_recovery.sh",
-        "production_mutation_lock.sh",
-        "present_checkpoint_recovery_result.py",
-        "recovery-control-manifest.json",
-        "StrictHostKeyChecking=yes",
-        "SSH_KNOWN_HOSTS",
-        "checkpoint-recovery-result",
-        "GITHUB_STEP_SUMMARY",
-        "steps.recovery.outcome",
-    ):
-        if required not in workflow_text:
-            raise AssertionError(
-                f"checkpoint recovery lost required contract token {required!r}"
-            )
-    for forbidden in (
-        "ABORT 2026-07-30-ce5 PRE-SWITCH",
-        "2026-07-30-ce5-pre-switch-db-evidence.json",
-        "2026-07-30-86ce-pre-switch-db-evidence.json",
-        "fullstack_remote_release.sh",
-        "tencent_bluegreen_release.sh",
-        "needs.recovery_coordination_guard.outputs",
-    ):
-        if forbidden in workflow_text:
-            raise AssertionError(
-                f"checkpoint recovery contains forbidden mutation {forbidden!r}"
-            )
-    if workflow_jobs["recovery_coordination_guard"].get("outputs") is not None:
-        raise AssertionError(
-            "checkpoint recovery must not export mutable cross-job outputs"
-        )
-    legacy_controller_phrase = "ABORT 2026-07-30-86ce PRE-SWITCH"
-    if legacy_controller_phrase in workflow_text:
-        raise AssertionError(
-            "workflow must pass the reviewed phrase without a legacy controller shim"
-        )
-
-    controller = (
-        REPO_ROOT
-        / "03_Scripts/deploy/tencent_pre_switch_checkpoint_recovery.sh"
-    ).read_text(encoding="utf-8")
-    helper = (
-        REPO_ROOT
-        / "03_Scripts/deploy/pre_switch_checkpoint_recovery.py"
-    ).read_text(encoding="utf-8")
-    lock_library = (
-        REPO_ROOT
-        / "03_Scripts/deploy/lib/production_mutation_lock.sh"
-    ).read_text(encoding="utf-8")
-    for required in (
-        "jato_acquire_production_mutation_lock",
-        'RECOVERY_86CE_APPLY_CONFIRMATION="ABORT 2026-07-30-86ce PRE-SWITCH"',
-        (
-            'RECOVERY_29DF_APPLY_CONFIRMATION="QUARANTINE '
-            "29df5e6e667351f09305783932b34e5438d6a9d5 RESIDUE AND ABORT "
-            'PRE-SWITCH"'
-        ),
-        'schema_version == 2',
-        'schema_version == 3',
-        'reviewed-dry-run-authorization.json',
-        '--dry-run-authorization',
-        '--dry-run-authorization-sha256',
-        "--lock-holder-pid",
-        "--expected-plan-sha256",
-    ):
-        if required not in controller:
-            raise AssertionError(
-                f"checkpoint recovery controller lost {required!r}"
-            )
-    recovery_sources = "\n".join(
-        (workflow_text, controller, helper, lock_library)
-    )
-    systemctl_verbs = set(
-        re.findall(
-            r"(?m)^[ \t]*systemctl\s+([a-z-]+)",
-            recovery_sources,
-        )
-    )
-    systemctl_verbs.update(
-        re.findall(
-            r"""["']systemctl["']\s*,\s*["']([a-z-]+)["']""",
-            recovery_sources,
-        )
-    )
-    if systemctl_verbs != {"show", "daemon-reload"}:
-        raise AssertionError(
-            "checkpoint recovery may only inspect units and reload after quarantine; "
-            f"found {sorted(systemctl_verbs)}"
-        )
-    if helper.count('["systemctl", "daemon-reload"]') != 1:
-        raise AssertionError(
-            "checkpoint recovery must issue exactly one bounded daemon-reload"
-        )
-    alembic_verbs = set(
-        re.findall(r"-m\s+alembic\s+([a-z-]+)", recovery_sources)
-    )
-    if alembic_verbs != {"current", "heads"}:
-        raise AssertionError(
-            "checkpoint recovery may only use alembic current/heads; "
-            f"found {sorted(alembic_verbs)}"
-        )
-    for pattern, label in (
-        (
-            r"\bsystemctl(?:\s+|[\"']\s*,\s*[\"'])"
-            r"(?:start|stop|restart|reload|enable|disable|mask|unmask|"
-            r"kill|reset-failed)\b",
-            "systemd mutation",
-        ),
-        (
-            r"\balembic(?:\s+|[\"']\s*,\s*[\"'])"
-            r"(?:upgrade|downgrade|stamp|revision|merge|edit)\b",
-            "Alembic mutation",
-        ),
-        (
-            r"\bnginx(?:\s+|[\"']\s*,\s*[\"'])(?:-s|reload|restart)\b",
-            "Nginx mutation",
-        ),
-    ):
-        if re.search(pattern, recovery_sources):
-            raise AssertionError(
-                f"checkpoint recovery contains forbidden {label}"
-            )
-
-
 def assert_pull_request_release_coordination_guard() -> None:
     workflow = load_workflow(RELEASE_COORDINATION_WORKFLOW)
     if workflow.get("name") != "release-coordination":
@@ -1116,493 +421,387 @@ def assert_pull_request_release_coordination_guard() -> None:
             )
 
 
-def assert_reviewed_production_release_hold() -> None:
-    helper_path = REPO_ROOT / PRODUCTION_RELEASE_HOLD_SCRIPT
-    if not helper_path.is_file() or helper_path.is_symlink():
-        raise AssertionError("production release hold helper must be a regular file")
-    spec = importlib.util.spec_from_file_location(
-        "production_release_hold_static_validator",
-        helper_path,
-    )
-    if spec is None or spec.loader is None:
-        raise AssertionError("cannot load production release hold helper")
-    module = importlib.util.module_from_spec(spec)
-    sys.modules[spec.name] = module
-    spec.loader.exec_module(module)
-    if module.HOLD_PATH.as_posix() != PRODUCTION_RELEASE_HOLD_PATH:
-        raise AssertionError("production release hold path changed")
-    if (
-        module.RETIREMENT_PATH.as_posix()
-        != PRODUCTION_RELEASE_HOLD_RETIREMENT_PATH
-    ):
-        raise AssertionError("production release hold retirement path changed")
-    if module.RECOVERY_PLAN_PATH.as_posix() != PRODUCTION_RELEASE_RECOVERY_PLAN:
-        raise AssertionError("production release recovery plan path changed")
-    if module.RECOVERY_PLAN_SHA256 != (
-        "61045c5b1f39516f910ab89cf80fdd97796920e7e3bdb479f52e741b73f2f144"
-    ):
-        raise AssertionError("production release recovery plan SHA-256 changed")
-    if module.HOLD_SHA256 != (
-        "92bae4fc1febed5b15aba2c5fab7fb941dcb52d091e3a285f4af3d442f9a6371"
-    ):
-        raise AssertionError("production release active hold SHA-256 changed")
-    retirement = module.EXPECTED_RETIREMENT_DOCUMENT
-    if (
-        retirement.get("incidentId")
-        != "2026-08-03-29df-pre-switch-candidate-residue"
-        or retirement.get("status") != "retired"
-        or retirement.get("recoveryPlan", {}).get("path")
-        != PRODUCTION_RELEASE_RECOVERY_PLAN
-        or retirement.get("retiredHold", {}).get("path")
-        != PRODUCTION_RELEASE_HOLD_PATH
-        or retirement.get("retiredHold", {}).get("sha256")
-        != module.HOLD_SHA256
-    ):
-        raise AssertionError("production release hold retirement contract changed")
-    try:
-        action = module.resolve_release_action(REPO_ROOT)
-    except Exception as exc:
-        raise AssertionError(
-            f"reviewed production release hold is invalid: {exc}"
-        ) from exc
-    if action not in {"hold", "deploy"}:
-        raise AssertionError(f"invalid production release hold action: {action!r}")
+def assert_fixed_release_v2_workflow_contract() -> None:
+    """Validate the small fixed Active/Candidate V2 production surface."""
 
-
-def assert_production_release_coordination_guard() -> None:
     workflow = load_workflow(PRODUCTION_RELEASE_WORKFLOW)
     triggers = workflow.get("on")
-    push = triggers.get("push") if isinstance(triggers, Mapping) else None
-    paths = push.get("paths") if isinstance(push, Mapping) else None
-    required_hold_paths = {
-        PRODUCTION_RELEASE_HOLD_SCRIPT,
-        PRODUCTION_RELEASE_HOLD_PATH,
-        PRODUCTION_RELEASE_HOLD_RETIREMENT_PATH,
-        PRODUCTION_RELEASE_RECOVERY_PLAN,
-    }
-    if not isinstance(paths, list) or not required_hold_paths.issubset(set(paths)):
+    if not isinstance(triggers, Mapping) or set(triggers) != {"workflow_dispatch"}:
         raise AssertionError(
-            "production push trigger must include the hold helper, document, and plan"
+            "fixed V2 production release must only support workflow_dispatch"
         )
-    dispatch = triggers.get("workflow_dispatch") if isinstance(triggers, Mapping) else None
-    dispatch_inputs = dispatch.get("inputs") if isinstance(dispatch, Mapping) else None
-    release_mode = (
-        dispatch_inputs.get("release_mode")
-        if isinstance(dispatch_inputs, Mapping)
-        else None
-    )
-    if not isinstance(release_mode, Mapping) or release_mode != {
-        "description": (
-            "Prepare, approve, discard, or release one exact reviewed Candidate"
-        ),
+    dispatch = triggers.get("workflow_dispatch")
+    inputs = dispatch.get("inputs") if isinstance(dispatch, Mapping) else None
+    expected_inputs = {
+        "release_mode",
+        "target_commit_sha",
+        "target_archive_sha256",
+        "target_manifest_sha256",
+        "confirm_control_operation",
+        "bootstrap_full_upload",
+    }
+    if not isinstance(inputs, Mapping) or set(inputs) != expected_inputs:
+        raise AssertionError("fixed V2 dispatch input set changed")
+    release_mode = inputs.get("release_mode")
+    if not isinstance(release_mode, Mapping) or {
+        "required": release_mode.get("required"),
+        "type": release_mode.get("type"),
+        "default": release_mode.get("default"),
+        "options": release_mode.get("options"),
+    } != {
         "required": "true",
         "type": "choice",
         "default": "prepare-candidate",
         "options": [
             "prepare-candidate",
-            "approve-candidate-to-active",
             "discard-candidate",
-            "discard-failed-candidate",
-            "release-candidate",
+            "update-active",
+            "rollback-active",
         ],
     }:
-        raise AssertionError("production Candidate release_mode input changed")
-    expected_approval_inputs = {
-        "candidate_prepare_run_id",
-        "candidate_prepare_run_attempt",
-        "candidate_commit_sha",
-        "candidate_archive_sha256",
-        "candidate_attestation_sha256",
-        "confirm_www_activation",
-        "confirm_candidate_cleanup",
-    }
-    if not isinstance(dispatch_inputs, Mapping) or not expected_approval_inputs.issubset(
-        dispatch_inputs
+        raise AssertionError("fixed V2 release_mode choices changed")
+    for input_name in (
+        "target_commit_sha",
+        "target_archive_sha256",
+        "target_manifest_sha256",
     ):
-        raise AssertionError("production Candidate approval inputs changed")
-    confirmation = dispatch_inputs.get("confirm_www_activation")
-    if not isinstance(confirmation, Mapping) or confirmation != {
-        "description": "I confirm this exact Candidate may replace www Active",
-        "required": "true",
-        "type": "boolean",
-        "default": "false",
-    }:
-        raise AssertionError("production Candidate approval confirmation changed")
-    cleanup_confirmation = dispatch_inputs.get("confirm_candidate_cleanup")
-    if not isinstance(cleanup_confirmation, Mapping) or cleanup_confirmation != {
-        "description": "I confirm the exact reviewed Candidate may be cleaned up",
-        "required": "true",
-        "type": "boolean",
-        "default": "false",
-    }:
-        raise AssertionError("production Candidate cleanup confirmation changed")
+        value = inputs.get(input_name)
+        if not isinstance(value, Mapping) or {
+            "required": value.get("required"),
+            "type": value.get("type"),
+        } != {"required": "false", "type": "string"}:
+            raise AssertionError(f"fixed V2 {input_name} contract changed")
+    for input_name in ("confirm_control_operation", "bootstrap_full_upload"):
+        value = inputs.get(input_name)
+        if not isinstance(value, Mapping) or {
+            "required": value.get("required"),
+            "type": value.get("type"),
+            "default": value.get("default"),
+        } != {"required": "true", "type": "boolean", "default": "false"}:
+            raise AssertionError(f"fixed V2 {input_name} contract changed")
+
+    if workflow.get("env", {}).get("RELEASE_MODE") != "${{ inputs.release_mode }}":
+        raise AssertionError("fixed V2 RELEASE_MODE must come from the dispatch choice")
     permissions = workflow.get("permissions")
-    if not isinstance(permissions, Mapping):
-        raise AssertionError("production permissions must be a mapping")
-    for permission, expected in {
+    if not isinstance(permissions, Mapping) or dict(permissions) != {
         "actions": "read",
         "contents": "read",
         "issues": "read",
         "pull-requests": "read",
-    }.items():
-        if permissions.get(permission) != expected:
-            raise AssertionError(
-                f"production permission {permission} must be {expected}"
-            )
+    }:
+        raise AssertionError("fixed V2 production permissions changed")
+    concurrency = workflow.get("concurrency")
+    if not isinstance(concurrency, Mapping) or dict(concurrency) != {
+        "group": "production-release-main",
+        "cancel-in-progress": "false",
+    }:
+        raise AssertionError("fixed V2 production lock contract changed")
 
     jobs = workflow.get("jobs")
-    if not isinstance(jobs, Mapping):
-        raise AssertionError("production jobs must be a mapping")
+    expected_jobs = {
+        PRODUCTION_COORDINATION_JOB,
+        "build_frontend",
+        "deploy_tencent",
+        "control_fixed_release_v2",
+    }
+    if not isinstance(jobs, Mapping) or set(jobs) != expected_jobs:
+        raise AssertionError("fixed V2 production job surface changed")
     if next(iter(jobs), None) != PRODUCTION_COORDINATION_JOB:
-        raise AssertionError("release coordination must be the first production job")
-    preflight = get_job(
-        workflow,
+        raise AssertionError("release coordination must remain the first job")
+
+    guard = get_job(workflow, PRODUCTION_RELEASE_WORKFLOW, PRODUCTION_COORDINATION_JOB)
+    if guard.get("needs") is not None or guard.get("environment") is not None:
+        raise AssertionError("release coordination must run before production access")
+    if unwrap_expression(guard.get("if")) != MAIN_REF_CONDITION:
+        raise AssertionError("release coordination must be main-only")
+    guard_steps = get_steps(
+        guard,
         PRODUCTION_RELEASE_WORKFLOW,
         PRODUCTION_COORDINATION_JOB,
     )
-    if preflight.get("needs") is not None:
-        raise AssertionError("production coordination preflight cannot have dependencies")
-    if preflight.get("environment") is not None:
-        raise AssertionError("production coordination preflight cannot enter an environment")
-    outputs = preflight.get("outputs")
-    if not isinstance(outputs, Mapping) or outputs != {
-        "release-action": "${{ steps.production_hold.outputs.release-action }}",
-    }:
-        raise AssertionError(
-            "production coordination must expose only the exact hold/deploy action"
-        )
-    preflight_steps = get_steps(
-        preflight,
-        PRODUCTION_RELEASE_WORKFLOW,
-        PRODUCTION_COORDINATION_JOB,
-    )
-    if [step.get("name") for step in preflight_steps] != [
+    if [step.get("name") for step in guard_steps] != [
         "Checkout release coordination guard",
         "Validate unpublished release coordination",
-        "Resolve reviewed production release hold",
         "Freeze release coordination plan",
     ]:
-        raise AssertionError("production coordination preflight steps changed")
-    checkout_with = preflight_steps[0].get("with")
-    if not isinstance(checkout_with, Mapping):
-        raise AssertionError("production coordination checkout is missing configuration")
-    if checkout_with.get("ref") != "${{ github.sha }}":
-        raise AssertionError(
-            "production coordination must checkout the exact target main SHA"
-        )
-    if checkout_with.get("persist-credentials") != "false":
-        raise AssertionError(
-            "production coordination checkout must not persist credentials"
-        )
-    preflight_command = str(preflight_steps[1].get("run") or "")
-    for required in (
+        raise AssertionError("fixed V2 release coordination steps changed")
+    checkout_options = guard_steps[0].get("with")
+    if not isinstance(checkout_options, Mapping) or {
+        "ref": checkout_options.get("ref"),
+        "persist-credentials": checkout_options.get("persist-credentials"),
+    } != {"ref": "${{ github.sha }}", "persist-credentials": "false"}:
+        raise AssertionError("release coordination must checkout the exact main SHA")
+    guard_command = str(guard_steps[1].get("run") or "")
+    for token in (
         RELEASE_COORDINATION_SCRIPT,
         "production",
         '--main-sha "$GITHUB_SHA"',
+        '--operation "$RELEASE_MODE"',
+        '--target-sha "$TARGET_COMMIT_SHA"',
+        '--target-archive-sha256 "$TARGET_ARCHIVE_SHA256"',
+        '--target-manifest-sha256 "$TARGET_MANIFEST_SHA256"',
         '--plan-output "$RUNNER_TEMP/release-coordination-plan.json"',
     ):
-        if required not in preflight_command:
+        if token not in guard_command:
+            raise AssertionError(f"release coordination lost {token!r}")
+    guard_env = guard_steps[1].get("env")
+    expected_target_env = {
+        "TARGET_COMMIT_SHA": "${{ inputs.target_commit_sha }}",
+        "TARGET_ARCHIVE_SHA256": "${{ inputs.target_archive_sha256 }}",
+        "TARGET_MANIFEST_SHA256": "${{ inputs.target_manifest_sha256 }}",
+    }
+    if not isinstance(guard_env, Mapping):
+        raise AssertionError("release coordination target env is missing")
+    for env_name, expected in expected_target_env.items():
+        if guard_env.get(env_name) != expected:
             raise AssertionError(
-                f"production coordination preflight is missing {required}"
+                f"release coordination {env_name} input binding changed"
             )
-    if "secrets." in str(preflight):
-        raise AssertionError("coordination preflight must not consume production secrets")
-    hold_step = preflight_steps[2]
-    if hold_step.get("id") != "production_hold":
-        raise AssertionError("production hold resolver step ID changed")
-    hold_command = str(hold_step.get("run") or "")
-    for required in (
-        PRODUCTION_RELEASE_HOLD_SCRIPT,
-        "resolve",
-        '--github-output "$GITHUB_OUTPUT"',
+    if "secrets." in str(guard):
+        raise AssertionError("release coordination cannot consume production secrets")
+    freeze_options = guard_steps[2].get("with")
+    if guard_steps[2].get("uses") != "actions/upload-artifact@v4" or not isinstance(
+        freeze_options,
+        Mapping,
     ):
-        if required not in hold_command:
-            raise AssertionError(
-                f"production hold resolver is missing {required!r}"
-            )
-    if "secrets." in str(hold_step):
-        raise AssertionError("production hold resolver must not consume secrets")
-
-    freeze = preflight_steps[3]
-    if freeze.get("uses") != "actions/upload-artifact@v4":
-        raise AssertionError("coordination plan must use upload-artifact@v4")
-    freeze_with = freeze.get("with")
-    if not isinstance(freeze_with, Mapping):
-        raise AssertionError("coordination plan upload configuration is missing")
-    expected_artifact = {
+        raise AssertionError("release coordination plan must be immutable artifact v4")
+    for key, expected in {
         "name": "release-coordination-plan-${{ github.sha }}-${{ github.run_attempt }}",
         "path": "${{ runner.temp }}/release-coordination-plan.json",
         "if-no-files-found": "error",
         "compression-level": "0",
         "overwrite": "false",
         "retention-days": "7",
-    }
-    for key, expected in expected_artifact.items():
-        if freeze_with.get(key) != expected:
-            raise AssertionError(
-                f"coordination plan artifact {key} must be {expected!r}"
-            )
+    }.items():
+        if freeze_options.get(key) != expected:
+            raise AssertionError(f"coordination artifact {key} changed")
 
     build = get_job(workflow, PRODUCTION_RELEASE_WORKFLOW, "build_frontend")
+    deploy = get_job(workflow, PRODUCTION_RELEASE_WORKFLOW, "deploy_tencent")
+    control = get_job(
+        workflow,
+        PRODUCTION_RELEASE_WORKFLOW,
+        "control_fixed_release_v2",
+    )
     if build.get("needs") != PRODUCTION_COORDINATION_JOB:
         raise AssertionError("frontend build must wait for release coordination")
     if unwrap_expression(build.get("if")) != PRODUCTION_PREPARE_CONDITION:
-        raise AssertionError("frontend build must require Candidate preparation mode")
-
-    deploy = get_job(workflow, PRODUCTION_RELEASE_WORKFLOW, "deploy_tencent")
+        raise AssertionError("frontend build must be prepare-candidate only")
     if deploy.get("needs") != [PRODUCTION_COORDINATION_JOB, "build_frontend"]:
-        raise AssertionError(
-            "Tencent deploy must directly retain the hold guard dependency"
-        )
+        raise AssertionError("Candidate preparation must use the one frontend build")
     if unwrap_expression(deploy.get("if")) != PRODUCTION_PREPARE_CONDITION:
-        raise AssertionError("Tencent deploy must require Candidate preparation mode")
-    deploy_steps = get_steps(deploy, PRODUCTION_RELEASE_WORKFLOW, "deploy_tencent")
-    expected_first_steps = [
+        raise AssertionError("Tencent Candidate preparation gate changed")
+    if get_environment_name(deploy) != PRODUCTION_ENVIRONMENT:
+        raise AssertionError("Tencent Candidate preparation must use production")
+    if control.get("needs") != PRODUCTION_COORDINATION_JOB:
+        raise AssertionError("fixed V2 control must wait for release coordination")
+    if unwrap_expression(control.get("if")) != PRODUCTION_CONTROL_CONDITION:
+        raise AssertionError("fixed V2 control main/mode gate changed")
+    if get_environment_name(control) != PRODUCTION_ENVIRONMENT:
+        raise AssertionError("fixed V2 control must use production")
+    expected_opening_steps = [
         "Checkout release source",
         "Download frozen release coordination plan",
         "Revalidate frozen coordination plan after approval",
     ]
-    if [step.get("name") for step in deploy_steps[:3]] != expected_first_steps:
-        raise AssertionError(
-            "production approval must be followed immediately by frozen-plan validation"
-        )
-    if "secrets." in str(deploy_steps[:3]):
-        raise AssertionError(
-            "frozen-plan validation must run before production secrets are consumed"
-        )
-    download_with = deploy_steps[1].get("with")
-    if not isinstance(download_with, Mapping):
-        raise AssertionError("coordination plan download configuration is missing")
-    if download_with.get("name") != expected_artifact["name"]:
-        raise AssertionError("deploy must download the exact same-run coordination plan")
-    verify_command = str(deploy_steps[2].get("run") or "")
-    for required in (
-        RELEASE_COORDINATION_SCRIPT,
-        "verify-plan",
-        '--main-sha "$GITHUB_SHA"',
-        "--plan "
-        '"$RUNNER_TEMP/release-coordination-plan/release-coordination-plan.json"',
-    ):
-        if required not in verify_command:
-            raise AssertionError(
-                f"post-approval plan verification is missing {required}"
-            )
-    step_names = [str(step.get("name") or "") for step in deploy_steps]
-    if step_names.index("Revalidate frozen coordination plan after approval") > step_names.index(
-        "Validate Tencent deploy credentials"
-    ):
-        raise AssertionError("coordination plan must pass before deployment credentials")
-    mutation_recheck = "Reconfirm current main before first production mutation"
-    if mutation_recheck not in step_names:
-        raise AssertionError("production must recheck current main before the first mutation")
-    if not (
-        step_names.index("Record transport-verified candidate checkpoint")
-        < step_names.index(mutation_recheck)
-        < step_names.index("Deploy verified release on Tencent")
-    ):
-        raise AssertionError(
-            "final stale-main check must run after transport and before deployment"
-        )
-    mutation_command = str(
-        deploy_steps[step_names.index(mutation_recheck)].get("run") or ""
-    )
-    if "verify-plan" not in mutation_command:
-        raise AssertionError("pre-mutation stale-main check must consume the frozen plan")
-
-    approval = get_job(
-        workflow,
+    deploy_steps = get_steps(deploy, PRODUCTION_RELEASE_WORKFLOW, "deploy_tencent")
+    if [step.get("name") for step in deploy_steps[:3]] != expected_opening_steps:
+        raise AssertionError("Candidate preparation must revalidate before secrets")
+    control_steps = get_steps(
+        control,
         PRODUCTION_RELEASE_WORKFLOW,
-        "approve_candidate_to_active",
+        "control_fixed_release_v2",
     )
-    if approval.get("needs") != PRODUCTION_COORDINATION_JOB:
-        raise AssertionError("Candidate approval must retain the hold guard dependency")
-    if unwrap_expression(approval.get("if")) != PRODUCTION_APPROVAL_CONDITION:
-        raise AssertionError("Candidate approval must use the exact manual approval gate")
-    approval_steps = get_steps(
-        approval,
-        PRODUCTION_RELEASE_WORKFLOW,
-        "approve_candidate_to_active",
-    )
-    approval_names = [str(step.get("name") or "") for step in approval_steps]
-    required_approval_steps = [
-        "Validate exact Candidate approval request",
-        "Verify immutable Candidate handoff",
-        "Validate Tencent approval credentials",
-        "Revalidate frozen coordination plan immediately before Active mutation",
-        "Approve exact Candidate on Tencent",
-        "Record failed approval restore boundary",
-        "Verify www serves the exact approved Candidate",
-        "Restore previous Active after failed www audit",
-        "Keep failed www audit red after automatic restore",
-        "Fetch and attest Active update checkpoint",
-        "Seal www approval receipt",
-    ]
-    positions = [approval_names.index(name) for name in required_approval_steps]
-    if positions != sorted(positions):
-        raise AssertionError("Candidate approval guard steps are out of order")
-    approval_text = str(approval)
-    for required in (
-        "approve-candidate-to-active",
-        "candidate_attestation_sha256",
-        "verify_candidate_handoff.py",
-        "CANDIDATE_VERIFIED_ENV",
-        "github_candidate_control.sh approve-candidate-to-active",
-        "CANDIDATE_SERVER_EVIDENCE_PATH",
-        "binding.group(1) != expected_evidence_path",
-        "automatic restore previous successful Active",
-        "no success receipt is emitted",
-        "restore-previous-active",
-        "steps.verify_www.outcome == 'failure'",
-        "active_updated",
-        "active-updated.journal.jsonl",
-        "canonical Active update journal tail/checkpoint mismatch",
-        "intl unchanged",
-    ):
-        if required not in approval_text:
-            raise AssertionError(
-                f"Candidate approval lost fail-closed binding {required!r}"
-            )
-    for forbidden in ("prepare-and-switch", "pages deploy", "npm run build"):
-        if forbidden in approval_text:
-            raise AssertionError(
-                f"Candidate approval must not rebuild or publish intl: {forbidden!r}"
-            )
-    if "release-candidate/journal.jsonl" in approval_text:
-        raise AssertionError("www receipt must use the canonical server journal")
-    approve_step = next(
-        step
-        for step in approval_steps
-        if step.get("name") == "Approve exact Candidate on Tencent"
-    )
-    if approve_step.get("id") != "approve_active" or approve_step.get(
-        "continue-on-error"
-    ) not in (None, False, "false"):
-        raise AssertionError("Candidate approval failure must not be masked")
-    mutation_step_name = (
-        "Revalidate frozen coordination plan immediately before Active mutation"
-    )
-    if approval_names.index(mutation_step_name) + 1 != approval_names.index(
-        "Approve exact Candidate on Tencent"
-    ):
-        raise AssertionError("frozen plan must be rechecked immediately before Active mutation")
-    mutation_step = approval_steps[approval_names.index(mutation_step_name)]
-    mutation_command = str(mutation_step.get("run") or "")
-    for required in (
-        RELEASE_COORDINATION_SCRIPT,
-        "verify-plan",
-        '--main-sha "$GITHUB_SHA"',
-        '"$RUNNER_TEMP/release-coordination-plan/release-coordination-plan.json"',
-    ):
-        if required not in mutation_command:
-            raise AssertionError(
-                f"pre-Active-mutation coordination check is missing {required}"
-            )
-
-    cleanup = get_job(
-        workflow,
-        PRODUCTION_RELEASE_WORKFLOW,
-        "cleanup_candidate",
-    )
-    if cleanup.get("needs") != PRODUCTION_COORDINATION_JOB:
-        raise AssertionError("Candidate cleanup must retain the hold guard dependency")
-    if unwrap_expression(cleanup.get("if")) != PRODUCTION_CLEANUP_CONDITION:
-        raise AssertionError("Candidate cleanup must use the exact manual cleanup gate")
-    cleanup_steps = get_steps(
-        cleanup,
-        PRODUCTION_RELEASE_WORKFLOW,
-        "cleanup_candidate",
-    )
-    cleanup_names = [str(step.get("name") or "") for step in cleanup_steps]
-    required_cleanup_steps = [
-        "Validate exact Candidate cleanup request",
-        "Resolve Candidate cleanup handoff source",
-        "Validate Tencent cleanup credentials",
-        "Verify immutable Candidate cleanup handoff",
-        "Capture canonical Candidate cleanup handoff",
-        "Verify canonical Candidate cleanup handoff",
-        "Capture unchanged Active identity before cleanup",
-        "Clean exact Candidate on Tencent",
-        "Fetch canonical Candidate cleanup receipt",
-        "Verify Active identity and health remained unchanged",
-        "Retain immutable Candidate cleanup receipt",
-    ]
-    cleanup_positions = [cleanup_names.index(name) for name in required_cleanup_steps]
-    if cleanup_positions != sorted(cleanup_positions):
-        raise AssertionError("Candidate cleanup guard steps are out of order")
-    canonical_cleanup_condition = (
-        "${{ steps.cleanup_handoff.outputs.source == 'canonical-server' && "
-        "inputs.release_mode != 'discard-failed-candidate' }}"
-    )
-    for canonical_name in (
-        "Capture canonical Candidate cleanup handoff",
-        "Verify canonical Candidate cleanup handoff",
-    ):
-        canonical_step = cleanup_steps[cleanup_names.index(canonical_name)]
-        if canonical_step.get("if") != canonical_cleanup_condition:
-            raise AssertionError(
-                "failed Candidate cleanup must never use the ready canonical fallback"
-            )
-    cleanup_text = str(cleanup)
-    for required in (
-        "confirm_candidate_cleanup",
-        "canonical-server",
-        "capture-canonical-cleanup",
-        "CANDIDATE_CANONICAL_BUNDLE_OUTPUT",
-        "reviewed-candidate.json",
-        "verify_candidate_handoff.py",
-        "release-candidate",
-        "discard-candidate",
-        "discard-failed-candidate",
-        '"discard-candidate": {"success", "failure"}',
-        '"discard-failed-candidate": {"failure"}',
-        '{"success", "failure"}',
-        '"release-candidate": {"success"}',
-        'run.get("conclusion") not in allowed_conclusions',
-        "--failed-server-checkpoint",
-        "failed Candidate discard requires exact non-expired GitHub artifacts",
-        "candidate_prepare_aborted",
-        "Candidate cleanup journal identity/sequence mismatch",
-        "Candidate cleanup journal tail/checkpoint mismatch",
-        "Active identity and health remained unchanged",
-        "overwrite': 'false'",
-        "retention-days': '30'",
-    ):
-        if required not in cleanup_text:
-            raise AssertionError(
-                f"Candidate cleanup lost fail-closed binding {required!r}"
-            )
-    if "Require exact intl artifact before releasing Candidate" in cleanup_names:
-        raise AssertionError("intl synchronization must not block Candidate cleanup")
-    for forbidden in (
-        "prepare-and-switch",
-        "pages deploy",
-        "npm run build",
-        "Package backend release",
-        "Upload complete release archive",
-    ):
-        if forbidden in cleanup_text:
-            raise AssertionError(
-                f"Candidate cleanup must not build or publish intl: {forbidden!r}"
-            )
-
-    audit = get_job(
-        workflow,
-        PRODUCTION_RELEASE_WORKFLOW,
-        "audit_frontend_parity",
-    )
-    if audit.get("needs") != [
-        PRODUCTION_COORDINATION_JOB,
-        "build_frontend",
-        "deploy_tencent",
+    if [step.get("name") for step in control_steps[:3]] != [
+        "Checkout V2 control source",
+        *expected_opening_steps[1:],
     ]:
-        raise AssertionError(
-            "frontend parity audit must directly retain the hold guard dependency"
-        )
-    if unwrap_expression(audit.get("if")) != PRODUCTION_LEGACY_INTL_CONDITION:
-        raise AssertionError(
-            "frontend parity audit must require the full-release mode"
-        )
+        raise AssertionError("fixed V2 control must revalidate before secrets")
+    for label, guarded_steps in (
+        ("prepare", deploy_steps),
+        ("control", control_steps),
+    ):
+        checkout = guarded_steps[0].get("with")
+        if not isinstance(checkout, Mapping) or {
+            "ref": checkout.get("ref"),
+            "persist-credentials": checkout.get("persist-credentials"),
+        } != {"ref": "${{ github.sha }}", "persist-credentials": "false"}:
+            raise AssertionError(f"{label} must checkout the exact approved SHA")
+        verify = str(guarded_steps[2].get("run") or "")
+        for token in (
+            RELEASE_COORDINATION_SCRIPT,
+            "verify-plan",
+            '--main-sha "$GITHUB_SHA"',
+            '--operation "$RELEASE_MODE"',
+            '--target-sha "$TARGET_COMMIT_SHA"',
+            '--target-archive-sha256 "$TARGET_ARCHIVE_SHA256"',
+            '--target-manifest-sha256 "$TARGET_MANIFEST_SHA256"',
+        ):
+            if token not in verify:
+                raise AssertionError(f"{label} lost frozen plan {token!r}")
+        verify_env = guarded_steps[2].get("env")
+        if not isinstance(verify_env, Mapping):
+            raise AssertionError(f"{label} target env is missing")
+        for env_name, expected in expected_target_env.items():
+            if verify_env.get(env_name) != expected:
+                raise AssertionError(f"{label} {env_name} input binding changed")
+        if "secrets." in str(guarded_steps[:3]):
+            raise AssertionError(f"{label} consumes secrets before frozen-plan check")
 
+    prepare_names = [str(step.get("name") or "") for step in deploy_steps]
+    required_prepare_steps = [
+        "Package backend release with verified frontend artifact",
+        "Upload complete release archive with incremental rsync",
+        "Generate canonical V2 release manifest",
+        "Reconfirm current main before first production mutation",
+        "Deploy verified release to fixed Candidate on Tencent",
+        "Retain V2 operation diagnostics",
+    ]
+    positions = [prepare_names.index(name) for name in required_prepare_steps]
+    if positions != sorted(positions):
+        raise AssertionError("fixed V2 Candidate preparation steps are out of order")
+    reconfirm_step = deploy_steps[prepare_names.index(required_prepare_steps[3])]
+    reconfirm_command = str(reconfirm_step.get("run") or "")
+    for token in (
+        RELEASE_COORDINATION_SCRIPT,
+        "verify-plan",
+        '--main-sha "$GITHUB_SHA"',
+        '--operation "$RELEASE_MODE"',
+        '--target-sha "$TARGET_COMMIT_SHA"',
+        '--target-archive-sha256 "$TARGET_ARCHIVE_SHA256"',
+        '--target-manifest-sha256 "$TARGET_MANIFEST_SHA256"',
+    ):
+        if token not in reconfirm_command:
+            raise AssertionError(f"prepare reconfirm lost {token!r}")
+    reconfirm_env = reconfirm_step.get("env")
+    if not isinstance(reconfirm_env, Mapping):
+        raise AssertionError("prepare reconfirm target env is missing")
+    for env_name, expected in expected_target_env.items():
+        if reconfirm_env.get(env_name) != expected:
+            raise AssertionError(f"prepare reconfirm {env_name} binding changed")
+    manifest_step = deploy_steps[prepare_names.index(required_prepare_steps[2])]
+    manifest_command = str(manifest_step.get("run") or "")
+    for token in (
+        "ReleaseIdentity",
+        "ReleaseManifest",
+        "canonical_manifest_bytes",
+        "manifest_sha256",
+        "release-v2-manifest.json",
+        "manifest-sha256",
+        "manifest-b64",
+        "Candidate release identity",
+        "Commit SHA",
+        "Archive SHA-256",
+        "Manifest SHA-256",
+    ):
+        if token not in manifest_command:
+            raise AssertionError(f"canonical V2 manifest lost {token!r}")
+    prepare_step = deploy_steps[prepare_names.index(required_prepare_steps[4])]
+    prepare_command = str(prepare_step.get("run") or "")
+    for token in (
+        "write_remote_export DEPLOY_BRANCH main",
+        "write_remote_export DEPLOY_RELEASE_SYSTEM fixed-v2",
+        "RELEASE_V2_MANIFEST_B64",
+        "RELEASE_V2_MANIFEST_SHA256",
+        "03_Scripts/deploy/fullstack_remote_release.sh",
+        "V2_OPERATION_REPORT_PATH=",
+    ):
+        if token not in prepare_command:
+            raise AssertionError(f"fixed V2 Candidate handoff lost {token!r}")
+    for forbidden in (
+        "DEEPSEEK_API_KEY",
+        "HERMES_SYNC_TOKEN",
+        "GOOGLE_CLIENT_ID",
+        "GOOGLE_CLIENT_SECRET",
+        "GOOGLE_OAUTH_PROXY_URL",
+        "GOOGLE_OAUTH_RELAY_URL",
+        "GOOGLE_OAUTH_RELAY_TOKEN",
+        "MIHOMO_SUB_URL",
+        "MIHOMO_DB_PATH",
+        "DEPLOY_CERTBOT_EMAIL",
+    ):
+        if forbidden in str(deploy):
+            raise AssertionError(
+                f"fixed V2 prepare forwards an unused app setting: {forbidden!r}"
+            )
+    diagnostics = deploy_steps[prepare_names.index(required_prepare_steps[5])]
+    if unwrap_expression(diagnostics.get("if")) != "always()":
+        raise AssertionError("V2 prepare diagnostics must be retained on failure")
+    if positions[-1] != len(deploy_steps) - 1:
+        raise AssertionError("V2 prepare diagnostics must be the final step")
+
+    control_names = [str(step.get("name") or "") for step in control_steps]
+    intent = control_steps[control_names.index("Validate fixed V2 operation intent")]
+    intent_command = str(intent.get("run") or "")
+    for token in (
+        '"$CONFIRM_CONTROL_OPERATION" = "true"',
+        "update-active|rollback-active)",
+        "discard-candidate)",
+        '"$TARGET_COMMIT_SHA" =~ ^[0-9a-f]{40}$',
+        '"$TARGET_ARCHIVE_SHA256" =~ ^[0-9a-f]{64}$',
+        '"$TARGET_MANIFEST_SHA256" =~ ^[0-9a-f]{64}$',
+    ):
+        if token not in intent_command:
+            raise AssertionError(f"fixed V2 control intent lost {token!r}")
+    control_run = control_steps[
+        control_names.index("Run fixed V2 control operation on Tencent")
+    ]
+    control_command = str(control_run.get("run") or "")
+    for token in (
+        "03_Scripts/deploy/fixed_release_v2_remote.sh",
+        "control_bundle_files=(",
+        "03_Scripts/deploy/fixed_release_v2.py",
+        "03_Scripts/deploy/fixed_release_v2_remote.sh",
+        "03_Scripts/deploy/release_v2_store.py",
+        "03_Scripts/deploy/release_v2_admission.py",
+        "03_Scripts/deploy/jato_quiescence_gate.py",
+        "03_Scripts/deploy/validate_release_archive.py",
+        "03_Scripts/deploy/nginx/jato_active_release_v2.conf",
+        "03_Scripts/deploy/nginx/jato_candidate_preview_v2.conf",
+        "03_Scripts/deploy/systemd/jato-candidate-preview.service",
+        "03_Scripts/deploy/systemd/jato-fullstack-backend@.service",
+        "20-candidate-readonly.conf",
+        "--sort=name",
+        "gzip -n -f",
+        "V2_CONTROL_BUNDLE_SHA256",
+        "V2_CONTROL_BUNDLE_B64",
+        "V2_CONTROL_BUNDLE_MEMBERS_B64",
+        "mktemp -d /run/jato-v2-control.XXXXXX",
+        'sha256sum "$v2_control_archive"',
+        'tar -tzf "$v2_control_archive"',
+        'cmp -s "$v2_expected_members" "$v2_actual_members"',
+        "tar --same-permissions --no-overwrite-dir",
+        'export V2_CONTROL_ROOT="$v2_control_root"',
+        'export V2_CONTROLLER_PATH="${v2_control_root}/03_Scripts/deploy/'
+        'fixed_release_v2.py"',
+        'v2_remote_entry="${v2_control_root}/03_Scripts/deploy/'
+        'fixed_release_v2_remote.sh"',
+        'bash "$v2_remote_entry" "$@"',
+        "trap v2_control_cleanup EXIT",
+        "Fixed V2 control identity",
+        "Current main SHA",
+        "Control bundle SHA-256",
+        'ssh_home="$HOME"',
+        'archive_cache_root="$ssh_home/.cache/jato-releases/archives"',
+        'production_lock="$ssh_home/.local/state/jato-production-release/'
+        'production-deploy.lock"',
+        'PRODUCTION_LOCK_PATH="$production_lock"',
+        'V2_ARCHIVE_CACHE_ROOT="$archive_cache_root"',
+        'bash -s %q',
+        "V2_OPERATION_REPORT_PATH=",
+    ):
+        if token not in control_command:
+            raise AssertionError(f"fixed V2 control handoff lost {token!r}")
+    for forbidden in FORBIDDEN_CONTROL_BUILD_TOKENS:
+        if forbidden in str(control):
+            raise AssertionError(f"fixed V2 control must not rebuild: {forbidden!r}")
+    if "cat 03_Scripts/deploy/fixed_release_v2_remote.sh" in control_command:
+        raise AssertionError("fixed V2 remote entry must come from the hashed bundle")
+    control_diagnostics = control_steps[
+        control_names.index("Retain fixed V2 control diagnostics")
+    ]
+    if unwrap_expression(control_diagnostics.get("if")) != "always()":
+        raise AssertionError("V2 control diagnostics must be retained on failure")
 
 def assert_country_news_production_write_is_main_only() -> None:
     workflow = load_workflow(COUNTRY_NEWS_WORKFLOW)
@@ -1651,69 +850,144 @@ def assert_country_news_production_write_is_main_only() -> None:
             )
 
 
-def assert_database_migration_is_behind_main_release_gate() -> None:
-    production_workflow = (
-        REPO_ROOT / PRODUCTION_RELEASE_WORKFLOW
-    ).read_text(encoding="utf-8")
+def assert_fixed_release_v2_database_gate_is_read_only() -> None:
+    workflow = (REPO_ROOT / PRODUCTION_RELEASE_WORKFLOW).read_text(encoding="utf-8")
     remote_release = (
         REPO_ROOT / "03_Scripts/deploy/fullstack_remote_release.sh"
     ).read_text(encoding="utf-8")
-    bluegreen_release = (
-        REPO_ROOT / "03_Scripts/deploy/tencent_bluegreen_release.sh"
+    controller = (
+        REPO_ROOT / "03_Scripts/deploy/fixed_release_v2.py"
     ).read_text(encoding="utf-8")
-    server_deploy = (
-        REPO_ROOT / "03_Scripts/ops/deploy_fullstack_server.sh"
+    admission = (
+        REPO_ROOT / "03_Scripts/deploy/release_v2_admission.py"
     ).read_text(encoding="utf-8")
 
-    if "03_Scripts/deploy/fullstack_remote_release.sh" not in production_workflow:
-        raise AssertionError("production release no longer invokes Tencent remote release")
-    if "export DEPLOY_BRANCH=main" not in production_workflow:
-        raise AssertionError("production release must pin Tencent DEPLOY_BRANCH=main")
-    if 'bash "$BLUEGREEN_CONTROLLER" "$DEPLOY_BLUEGREEN_MODE"' not in remote_release:
-        raise AssertionError("remote release no longer invokes the blue/green controller")
-    if 'bash "$INNER_DEPLOY"' not in bluegreen_release:
-        raise AssertionError("blue/green controller no longer invokes the guarded server deploy")
-    if "PRODUCTION_RELEASE_WORKFLOW=true" not in bluegreen_release:
-        raise AssertionError("blue/green controller must identify the production release workflow")
-    inner_start = bluegreen_release.index("run_inner_prepare() {")
-    inner_end = bluegreen_release.index("\n}\n", inner_start)
-    inner_prepare = bluegreen_release[inner_start:inner_end]
-    if "RUN_DATABASE_MIGRATIONS=verify_only" not in inner_prepare:
-        raise AssertionError(
-            "blue/green prepare must use read-only database verification",
-        )
-    if "RUN_DATABASE_MIGRATIONS=false" in inner_prepare:
-        raise AssertionError(
-            "blue/green prepare must not confuse disabled DB with no-migration mode",
-        )
-    for function_name in (
-        "run_post_activation",
-        "run_post_commit_global_reconciliation",
+    for token in (
+        "03_Scripts/deploy/fullstack_remote_release.sh",
+        "write_remote_export DEPLOY_BRANCH main",
+        "write_remote_export DEPLOY_RELEASE_SYSTEM fixed-v2",
     ):
-        function_start = bluegreen_release.index(f"{function_name}() {{")
-        function_end = bluegreen_release.index("\n}\n", function_start)
-        function_body = bluegreen_release[function_start:function_end]
-        if "RUN_DATABASE_MIGRATIONS=false" not in function_body:
-            raise AssertionError(
-                f"{function_name} must retain its non-preparation no-migration mode",
-            )
-    verify_start = server_deploy.index(
-        'elif [[ "$DATABASE_MIGRATION_VERIFY_ONLY" == "true" ]]',
+        if token not in workflow:
+            raise AssertionError(f"fixed V2 workflow lost {token!r}")
+    for token in (
+        'DEPLOY_RELEASE_SYSTEM="${DEPLOY_RELEASE_SYSTEM:-fixed-v2}"',
+        'if [[ "$DEPLOY_RELEASE_SYSTEM" != "fixed-v2" ]]; then',
+        "Direct legacy-v1 release entry is disabled",
+    ):
+        if token not in remote_release:
+            raise AssertionError(f"direct legacy-v1 disablement lost {token!r}")
+    fixed_function_start = remote_release.index("prepare_fixed_v2_release() {")
+    fixed_branch = remote_release.index(
+        'if [[ "$DEPLOY_RELEASE_SYSTEM" == "fixed-v2" ]]; then',
+        fixed_function_start,
     )
-    verify_end = server_deploy.index("\nelse\n", verify_start)
-    verify_only = server_deploy[verify_start:verify_end]
-    if "python -m alembic upgrade head" in verify_only:
-        raise AssertionError("read-only database verification must not run migrations")
-    if 'write_release_evidence "completed"' not in verify_only:
+    legacy_seal = remote_release.index("\nseal_release_archive_input\n")
+    legacy_checkpoint = remote_release.index("checkpoint_identity_args=(")
+    if not fixed_function_start < fixed_branch < legacy_seal < legacy_checkpoint:
         raise AssertionError(
-            "read-only database verification must write completed evidence",
+            "fixed V2 must exit before legacy sealed inputs and checkpoints"
         )
-    if "python -m alembic upgrade head" not in server_deploy:
-        raise AssertionError("expected Alembic production migration command was not found")
-    if 'DEPLOY_BRANCH" != "main"' not in server_deploy:
-        raise AssertionError("database migration must retain the main branch gate")
-    if 'PRODUCTION_RELEASE_WORKFLOW" != "true"' not in server_deploy:
-        raise AssertionError("database migration must require the production release workflow")
+    fixed_handoff = remote_release[fixed_function_start:fixed_branch]
+    for token in (
+        "install_trusted_archive_validator",
+        "validate_release_archive.py=$TRUSTED_ARCHIVE_VALIDATOR_TEMP",
+        "--headroom-target \"$RELEASE_WORKTREE\" 1",
+        "tar --same-permissions --no-overwrite-dir",
+        "validate_required_release_content",
+        "materialize_verified_frontend",
+        "RELEASE_V2_MANIFEST_B64",
+        "RELEASE_V2_MANIFEST_SHA256",
+        "fixed_release_v2_remote.sh",
+        'PRODUCTION_LOCK_PATH="$DEPLOY_LOCK_PATH"',
+        'V2_ARCHIVE_CACHE_ROOT="$ARCHIVE_ROOT_REAL"',
+        "bash \"$v2_remote_entry\" prepare-candidate",
+    ):
+        if token not in fixed_handoff:
+            raise AssertionError(f"fixed V2 remote handoff lost {token!r}")
+    for forbidden in (
+        "release_checkpoint.py",
+        "release_evidence.py",
+        "tencent_bluegreen_release.sh",
+        "jato_release_storage_guard.py",
+        "MSRP_EVIDENCE_ROOT",
+        "PRODUCTION_EXTRACTION_RESERVE_BYTES",
+        "SEALED_ARCHIVE",
+        "exec 9>&-",
+    ):
+        if forbidden in fixed_handoff:
+            raise AssertionError(
+                f"fixed V2 handoff retained a legacy dependency: {forbidden!r}"
+            )
+    fixed_remote = (
+        REPO_ROOT / "03_Scripts/deploy/fixed_release_v2_remote.sh"
+    ).read_text(encoding="utf-8")
+    for token in (
+        '[[ "$V2_ARCHIVE_CACHE_ROOT" == /* ]]',
+        "require_archive_cache_root",
+        '--archive-cache-root "$V2_ARCHIVE_CACHE_ROOT"',
+    ):
+        if token not in fixed_remote:
+            raise AssertionError(
+                f"fixed V2 archive-cache handoff lost {token!r}"
+            )
+    if fixed_remote.count('--archive-cache-root "$V2_ARCHIVE_CACHE_ROOT"') != 3:
+        raise AssertionError(
+            "all four fixed V2 operations must receive the archive cache root"
+        )
+    required_content_start = remote_release.index(
+        'if [[ "$DEPLOY_RELEASE_SYSTEM" == "fixed-v2" ]]; then',
+        remote_release.index("validate_required_release_content() {"),
+    )
+    required_content_end = remote_release.index(
+        "\n  else\n",
+        required_content_start,
+    )
+    fixed_required_content = remote_release[
+        required_content_start:required_content_end
+    ]
+    for forbidden in (
+        "release_checkpoint.py",
+        "release_evidence.py",
+        "tencent_bluegreen_release.sh",
+        "jato_release_storage_guard.py",
+        "VOC_Nordic_SUV_Users_100.xlsx",
+        "msrp_backfill",
+    ):
+        if forbidden in fixed_required_content:
+            raise AssertionError(
+                f"fixed V2 required-file list retained {forbidden!r}"
+            )
+
+    for token in (
+        '"-m", "alembic", "current"',
+        '"-m", "alembic", "heads"',
+        '"PGOPTIONS": "-c default_transaction_read_only=on"',
+        '"readOnly": True',
+    ):
+        if token not in admission:
+            raise AssertionError(f"fixed V2 database admission lost {token!r}")
+    for forbidden in (
+        "alembic upgrade",
+        "alembic downgrade",
+        '"upgrade"',
+        '"downgrade"',
+    ):
+        if forbidden in admission:
+            raise AssertionError(
+                f"fixed V2 database admission gained mutation {forbidden!r}"
+            )
+
+    update_start = controller.index("    def update_active(")
+    rollback_start = controller.index("    def rollback_active(")
+    update_body = controller[update_start:rollback_start]
+    switch_position = update_body.index("self._switch_active(")
+    if update_body.index("self._database_gate(") >= switch_position:
+        raise AssertionError("database compatibility must pass before Active update")
+    rollback_body = controller[rollback_start:]
+    if rollback_body.index("self._database_gate(") >= rollback_body.index(
+        "self._switch_active("
+    ):
+        raise AssertionError("database compatibility must pass before rollback")
 
 
 def assert_feature_canary_cannot_route_or_mutate_production() -> None:
@@ -2616,78 +1890,10 @@ def assert_feature_canary_cannot_route_or_mutate_production() -> None:
             )
 
 
-def assert_unstarted_candidate_settlement_contract() -> None:
-    workflow = load_workflow(UNSTARTED_CANDIDATE_SETTLEMENT_WORKFLOW)
-    triggers = workflow.get("on")
-    if not isinstance(triggers, Mapping) or set(triggers) != {"workflow_dispatch"}:
-        raise AssertionError("unstarted Candidate settlement must be manual-only")
-    dispatch = triggers.get("workflow_dispatch")
-    inputs = dispatch.get("inputs") if isinstance(dispatch, Mapping) else None
-    if not isinstance(inputs, Mapping) or set(inputs) != {"confirm_settlement"}:
-        raise AssertionError("unstarted Candidate settlement input contract changed")
-    confirmation = inputs["confirm_settlement"]
-    if not isinstance(confirmation, Mapping) or dict(confirmation) != {
-        "description": "I confirm the exact reviewed unstarted Candidate may be settled",
-        "required": "true",
-        "type": "boolean",
-        "default": "false",
-    }:
-        raise AssertionError("unstarted Candidate settlement confirmation changed")
-    concurrency = workflow.get("concurrency")
-    if not isinstance(concurrency, Mapping) or dict(concurrency) != {
-        "group": "production-release-main",
-        "cancel-in-progress": "false",
-    }:
-        raise AssertionError("unstarted Candidate settlement must serialize with releases")
-    permissions = workflow.get("permissions")
-    if not isinstance(permissions, Mapping) or dict(permissions) != {
-        "actions": "read",
-        "contents": "read",
-    }:
-        raise AssertionError("unstarted Candidate settlement permissions changed")
-    job = assert_main_only_job(
-        UNSTARTED_CANDIDATE_SETTLEMENT_WORKFLOW,
-        "settle",
-    )
-    if get_environment_name(job) != PRODUCTION_ENVIRONMENT:
-        raise AssertionError("unstarted Candidate settlement needs production approval")
-    workflow_text = (
-        REPO_ROOT / UNSTARTED_CANDIDATE_SETTLEMENT_WORKFLOW
-    ).read_text(encoding="utf-8")
-    controller_text = (
-        REPO_ROOT / ".github/scripts/github_settle_unstarted_candidate.sh"
-    ).read_text(encoding="utf-8")
-    settlement_sources = workflow_text + "\n" + controller_text
-    for required in (
-        "2026-08-04-aa1d-unstarted-candidate.json",
-        "30905118347",
-        "release-candidate-aa1d424b284497497973dd2e57dc6059b3d1ab8b-1",
-        "github_settle_unstarted_candidate.sh",
-        "StrictHostKeyChecking=yes",
-    ):
-        if required not in settlement_sources:
-            raise AssertionError(
-                "unstarted Candidate settlement lost exact incident binding "
-                f"{required!r}"
-            )
-    for forbidden in (
-        "approve-candidate-to-active",
-        "switch_started",
-        "nginx -s",
-        "systemctl restart",
-    ):
-        if forbidden in settlement_sources:
-            raise AssertionError(
-                "unstarted Candidate settlement gained forbidden deployment behavior "
-                f"{forbidden!r}"
-            )
-
-
 def main() -> None:
     assert_all_deploy_workflows_are_registered()
     assert_pull_request_release_coordination_guard()
-    assert_reviewed_production_release_hold()
-    assert_production_release_coordination_guard()
+    assert_fixed_release_v2_workflow_contract()
 
     for relative_path, job_names in PRODUCTION_JOBS.items():
         for job_name in job_names:
@@ -2695,18 +1901,16 @@ def main() -> None:
 
     assert_all_static_production_jobs_are_registered()
     assert_production_release_main_guards()
-    assert_checkpoint_recovery_contract()
-    assert_unstarted_candidate_settlement_contract()
 
     for relative_path in MANUAL_DEPLOY_WORKFLOWS:
         for job_name in PRODUCTION_JOBS[relative_path]:
             assert_manual_deploy_is_skipped_for_non_main(relative_path, job_name)
 
     assert_country_news_production_write_is_main_only()
-    assert_database_migration_is_behind_main_release_gate()
+    assert_fixed_release_v2_database_gate_is_read_only()
     assert_feature_canary_cannot_route_or_mutate_production()
     print(
-        "Validated release coordination and main-only production gates for "
+        "Validated fixed Active/Candidate V2 and main-only production gates for "
         f"{sum(len(job_names) for job_names in PRODUCTION_JOBS.values())} "
         "production jobs and "
         f"{len(MANUAL_DEPLOY_WORKFLOWS)} manual deploy workflows."

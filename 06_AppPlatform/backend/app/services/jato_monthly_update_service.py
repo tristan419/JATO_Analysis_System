@@ -80,9 +80,11 @@ BASELINE_INSTALL_JOURNAL_FILENAME = "baseline_install_journal.json"
 MAINTENANCE_COORDINATION_LOCK_FILENAME = "maintenance-coordination.lock"
 JATO_MONTHLY_ENABLED_ENV = "APP_JATO_MONTHLY_ENABLED"
 RELEASE_SLOT_ENV = "APP_RELEASE_SLOT"
+RELEASE_ROLE_ENV = "APP_RELEASE_ROLE"
 JATO_MONTHLY_ACTIVE_SLOT_FILE_ENV = "APP_JATO_MONTHLY_ACTIVE_SLOT_FILE"
 JATO_MONTHLY_DEPLOYMENT_MARKER_ENV = "APP_JATO_MONTHLY_DEPLOYMENT_MARKER"
 JATO_MONTHLY_RELEASE_SLOTS = frozenset({"8000", "8001"})
+JATO_MONTHLY_RELEASE_ROLES = frozenset({"active", "candidate"})
 JATO_MONTHLY_TRUE_VALUES = frozenset({"1", "true", "yes", "on"})
 JATO_MONTHLY_FALSE_VALUES = frozenset({"0", "false", "no", "off"})
 UPLOAD_ASSEMBLY_BUFFER_BYTES = 1024 * 1024
@@ -183,6 +185,59 @@ def jato_monthly_availability() -> dict[str, Any]:
         )
 
     release_slot = os.getenv(RELEASE_SLOT_ENV, "").strip()
+    release_role = os.getenv(RELEASE_ROLE_ENV, "").strip().lower()
+    if release_role:
+        if release_role not in JATO_MONTHLY_RELEASE_ROLES:
+            return _jato_monthly_availability_result(
+                enabled=False,
+                reason="release_role_invalid",
+                release_slot=release_slot or None,
+                active_slot=None,
+            )
+        if release_role == "candidate":
+            return _jato_monthly_availability_result(
+                enabled=False,
+                reason="fixed_candidate_role",
+                release_slot=release_slot or None,
+                active_slot="8000",
+            )
+        if release_slot != "8000":
+            return _jato_monthly_availability_result(
+                enabled=False,
+                reason="fixed_active_slot_mismatch",
+                release_slot=release_slot or None,
+                active_slot="8000",
+            )
+        marker_value = os.getenv(JATO_MONTHLY_DEPLOYMENT_MARKER_ENV, "").strip()
+        if not marker_value:
+            return _jato_monthly_availability_result(
+                enabled=False,
+                reason="deployment_marker_not_configured",
+                release_slot=release_slot,
+                active_slot="8000",
+            )
+        try:
+            Path(marker_value).lstat()
+        except FileNotFoundError:
+            return _jato_monthly_availability_result(
+                enabled=True,
+                reason="fixed_active_role",
+                release_slot=release_slot,
+                active_slot="8000",
+            )
+        except OSError:
+            return _jato_monthly_availability_result(
+                enabled=False,
+                reason="deployment_marker_unavailable",
+                release_slot=release_slot,
+                active_slot="8000",
+            )
+        return _jato_monthly_availability_result(
+            enabled=False,
+            reason="deployment_in_progress",
+            release_slot=release_slot,
+            active_slot="8000",
+        )
     if not release_slot:
         return _jato_monthly_availability_result(
             enabled=True,

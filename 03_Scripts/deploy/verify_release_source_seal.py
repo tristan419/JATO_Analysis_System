@@ -161,7 +161,10 @@ def _walk(
                 )
 
 
-def _runtime_interpreter(root: Path) -> dict[str, Any]:
+def _runtime_interpreter(
+    root: Path,
+    recorded_runtime_root: Path | None = None,
+) -> dict[str, Any]:
     interpreter = root / ".venv/bin/python"
     metadata = interpreter.lstat()
     if not (stat.S_ISREG(metadata.st_mode) or stat.S_ISLNK(metadata.st_mode)):
@@ -170,10 +173,24 @@ def _runtime_interpreter(root: Path) -> dict[str, Any]:
     resolved_metadata = resolved.stat()
     if not stat.S_ISREG(resolved_metadata.st_mode):
         raise SealError("runtime Python interpreter must resolve to a regular file")
+    resolved_path = str(resolved)
+    if recorded_runtime_root is not None:
+        if (
+            not recorded_runtime_root.is_absolute()
+            or ".." in recorded_runtime_root.parts
+        ):
+            raise SealError("recorded runtime root must be one normalized absolute path")
+        try:
+            relative_interpreter = resolved.relative_to(root.resolve(strict=True))
+        except ValueError as exc:
+            raise SealError(
+                "relocatable runtime seal requires an interpreter inside the release root"
+            ) from exc
+        resolved_path = str(recorded_runtime_root / relative_interpreter)
     return {
         "path": ".venv/bin/python",
         "entryType": "symlink" if interpreter.is_symlink() else "file",
-        "resolvedPath": str(resolved),
+        "resolvedPath": resolved_path,
         "resolvedMode": stat.S_IMODE(resolved_metadata.st_mode),
         "resolvedBytes": resolved_metadata.st_size,
         "resolvedSha256": _hash_regular_file(resolved),
@@ -209,6 +226,7 @@ def build_manifest(
     root: Path,
     profile: str = "source",
     release_identity: dict[str, str] | None = None,
+    recorded_runtime_root: Path | None = None,
 ) -> dict[str, Any]:
     try:
         root_metadata = root.lstat()
@@ -280,7 +298,10 @@ def build_manifest(
         manifest["releaseIdentity"] = _validated_runtime_identity(
             release_identity
         )
-        manifest["runtimeInterpreter"] = _runtime_interpreter(root)
+        manifest["runtimeInterpreter"] = _runtime_interpreter(
+            root,
+            recorded_runtime_root,
+        )
         source_seal = root / ".jato-source-seal.json"
         source_metadata = source_seal.lstat()
         if source_seal.is_symlink() or not stat.S_ISREG(source_metadata.st_mode):
@@ -300,6 +321,8 @@ def build_manifest(
                 )
     elif release_identity is not None:
         raise SealError("source seal must not contain a runtime release identity")
+    elif recorded_runtime_root is not None:
+        raise SealError("source seal must not define a recorded runtime root")
     return manifest
 
 
@@ -408,6 +431,7 @@ def main() -> int:
         command.add_argument("--archive-sha256", default="")
         command.add_argument("--frontend-identity", default="")
         command.add_argument("--frontend-checksum", default="")
+        command.add_argument("--recorded-runtime-root", type=Path)
     arguments = parser.parse_args()
     release_identity = None
     if arguments.profile == "runtime":
@@ -426,6 +450,7 @@ def main() -> int:
                     arguments.root,
                     arguments.profile,
                     release_identity,
+                    arguments.recorded_runtime_root,
                 ),
             )
             return 0
@@ -438,6 +463,7 @@ def main() -> int:
             arguments.root,
             arguments.profile,
             release_identity,
+            arguments.recorded_runtime_root,
         )
         if actual != expected:
             expected_entries = {

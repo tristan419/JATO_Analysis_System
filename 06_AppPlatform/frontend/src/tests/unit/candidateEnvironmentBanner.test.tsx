@@ -132,7 +132,7 @@ describe("parseCandidatePreviewMetadata", () => {
     })).toBeNull();
     expect(parseCandidatePreviewMetadata({
       ...validMetadata(),
-      candidateSlot: 9000,
+      candidateSlot: 8000,
     })).toBeNull();
     expect(parseCandidatePreviewMetadata({
       ...validMetadata(),
