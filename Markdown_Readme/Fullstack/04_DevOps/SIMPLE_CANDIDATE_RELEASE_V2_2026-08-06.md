@@ -6,15 +6,16 @@ goal_control:
     将复杂蓝绿/事故恢复体系收敛为固定 Active/Candidate 的四操作发布 V2，
     完成代码、CI、腾讯云无流量验收，再由用户授权把同一已测试构件更新到正式
     www Active。intl 继续使用既有的 Active 到 intl 独立同步流程，不在 V2 中新增编排。
-  current_phase: draft_open_pending_tencent_a0_inventory
-  current_step: tencent_read_only_inventory
-  waiting_on: tencent_access_and_a0_server_inventory
+  current_phase: draft_open_a0_contract_decision
+  current_step: record_tencent_inventory_and_choose_a0_bridge
+  waiting_on: explicit_a0_legacy_adoption_contract_decision
   pause_reason: none
   next_action: >-
-    保持 PR #214 为 Draft。恢复腾讯云 Chrome 终端或 SSH 只读连接，取得旧 Active archive、
-    runtime、systemd/Nginx、指针和数据库 revision inventory，并在目标 slots 文件系统验证
-    原子交换能力；据事实决定一次性 A0 helper。A0 未完成前不得 Ready、合并或部署。
-    intl 所有既有 workflow 保持本分支基线不变。
+    保持 PR #214 为 Draft。腾讯云只读 inventory 已确认旧 archive 与 Git commit object 均
+    缺失，当前契约的 fail-closed 停止条件已命中。不得伪造原 archive，也不得先改指针。
+    下一步由用户明确决定：恢复/重建并精确匹配原 archive，或授权一次性 adoption helper
+    以新的 archive SHA 采纳当前已验证 live Active；之后再做目标 ext4 上的临时原子交换
+    能力探针。A0 未完成前不得 Ready、合并或部署；intl 既有 workflow 保持不变。
   release_authorization_contract:
     source_path: main_to_candidate_to_explicit_user_approval_to_active
     main_may_advance_without_active: true
@@ -36,7 +37,9 @@ goal_control:
     design_recorded: true
     historical_inventory_evidence_recorded_below: true
     inventory_command_present_in_v2_runtime: false
-    server_inventory_complete: partial_sufficient_for_candidate_design
+    server_inventory_complete: true_read_only_2026_08_07
+    server_inventory_mutation_performed: false
+    server_target_filesystem: ext4_linux_6_8
     store_manifest_primitives_complete: true
     store_manifest_unit_tests_passed: 8
     manifest_cli_unit_tests_passed: 2
@@ -47,16 +50,16 @@ goal_control:
     admission_primitives_complete: true_local
     database_revision_primitives_complete: true
     candidate_database_privilege_probe_complete: true_local
-    candidate_database_role_configured_on_server: false
+    candidate_database_role_configured_on_server: false_confirmed_missing
     four_operation_methods_present: true
     steady_state_four_operations_complete: true_local
     legacy_first_update_active_complete: false_pending_one_time_direct_baseline_registration
-    legacy_server_archive_unique_and_verified: false_pending_read_only_server_inventory
+    legacy_server_archive_unique_and_verified: false_confirmed_missing
     local_ready_blockers_open: 1_a0
     server_acceptance_blockers_open: 2_a0_and_candidate_database_role
     update_active_retry_idempotent: true_local
     rollback_active_retry_idempotent: true_local
-    rollback_sigkill_reference_safe: true_local_and_linux_ci_pending_server_capability
+    rollback_sigkill_reference_safe: true_local_and_linux_ci_target_ext4_unprobed
     rollback_atomic_exchange_linux_ci_passed: true
     failed_prepare_release_cleanup_complete: true_local
     legacy_store_coexistence_gc_complete: true_local
@@ -98,7 +101,7 @@ goal_control:
     frontend_build_and_router_checks_passed: true
     full_local_ci_after_final_runtime_code: true_relevant_deployment_suite
     post_ci_changes_documentation_only: true_after_d74fd7b8
-    ci_validation_complete: true_pr_d74fd7b8
+    ci_validation_complete: true_pr_e531ae0c_all_13_contexts_green
     pull_request_opened: true
     pull_request_number: 214
     pull_request_url: https://github.com/tristan419/JATO_Analysis_System/pull/214
@@ -123,7 +126,7 @@ goal_control:
     - observed_server_state_contradicts_documented_baseline
     - change_would_touch_jato_data_or_database_content
     - change_would_cross_this_pr_scope
-  updated_at: "2026-08-07T13:58:53+08:00"
+  updated_at: "2026-08-07T15:00:58+08:00"
 ---
 
 # Fixed Active / Candidate Release V2
@@ -1136,6 +1139,43 @@ incident recovery/fence/hold 状态机。
 - 当前唯一 Ready blocker 是 A0：先取得服务器只读 inventory，再决定一次性登记实现和
   Candidate 无流量验收。PR 继续保持 Draft。
 
+### 2026-08-07 / Step 3D：腾讯云 A0 只读 inventory 完成
+
+- 通过已登录 OrcaTerm 只执行只读命令；未写服务器文件、未重启服务、未修改 Nginx、
+  指针、数据库或 JATO 数据，也未触发 Candidate、Active 或 intl 操作。
+- 主机为 Linux `6.8.0-106-generic`，`/opt` 位于 ext4；内存约 15 GiB、当时可用约
+  9.1 GiB，磁盘约 178 GiB、可用约 123 GiB。目标文件系统具备 Linux 原子交换的必要
+  平台条件，但尚未创建临时 symlink 做 `renameat2(RENAME_EXCHANGE)` 实机能力探针。
+- `/opt/jato/slots/8000/current` 是 root 所有的 symlink，精确指向
+  `/opt/JATO_Analysis_System-main`；`8000/previous`、`8001/current`、`8001/previous`
+  与 `/opt/jato/active` 均不存在。现有 6 组旧 release 目录未被 V2 指针引用。
+- Active 仅监听 `127.0.0.1:8000`，`/healthz` 为 200；`/readyz` 为旧版本预期的 404。
+  `jato-fullstack-backend@8000.service` 为 active/running、2 workers、
+  `MemoryHigh=6G`、`MemoryMax=8G`。8001 与 18002 均未监听，月更 worker 为
+  inactive/disabled。两个历史 transient canary unit 为 failed 残留，但没有运行进程。
+- Nginx 固定 upstream 为 `127.0.0.1:8000`，本机携带 www Host 的 TLS `/healthz`
+  返回 200，满足 V2 固定 Active 端口的前置条件。V2 未对 Nginx 做任何改写。
+- 前端 `build-meta.json` 是线上发布身份的权威证据：commit/app/deploy/GitHub SHA 均为
+  `cd4557cb932374a0fefb6c80a5fac9fb75a67d62`，原 archive 为
+  `6af46992b1da87b6cb38d2cbc3a4bf9240f1dc82746f457c22bc69e74d78cc5e`、
+  22,269,916 bytes，并保留 frontend artifact/checksum/build ID。服务器工作树 Git HEAD
+  为旧 `c84d7af…`，且没有 `cd4557…` commit object，因此 Git 不能替代发布 metadata。
+- build metadata 记录的精确 cache 路径已经 MISSING；在 `/opt` 与 `/tmp` 也没有同尺寸
+  archive。当前 live tree 曾被部署脚本合并 runtime、保留 mutable paths 并重写发布状态，
+  不能重新打包后声称是缺失的原 archive。
+- 数据库只读核验为 `current=head=20260715_0046`。Active legacy 进程没有 V2 role env，
+  与尚未 bootstrap 的状态一致；现网 venv 为 Python 3.12.3，`pip freeze` 排序摘要为
+  `a93d5dd1e0161e9c4978b348e04cbb9dc4ad2d3ba71f5ee71163ba4c9b2e39a`。
+- `/etc/jato-fullstack/candidate-database.env`、`slots/8001.env` 与 Candidate readonly drop-in
+  均不存在；`slots/8000.env` 已存在且为 root:root 0600。Candidate 数据库角色与 drop-in
+  必须由后续已审查的 V2 prepare 前置步骤创建/验证，不能在 A0 inventory 中暗改。
+- Draft PR #214 head `e531ae0c…` 的 13 个检查全部成功，base main 仍为 `37a9905c…`，
+  PR 为 Draft、mergeable/clean，且没有 review thread。CI 通过不替代 A0 决策与服务器验收。
+- 当前 A0 契约第 3 步的 fail-closed 条件已真实命中。下一步不能继续假定旧 archive 存在；
+  必须在“精确恢复原 archive”与“显式授权用新 SHA 采纳当前 stable live Active”之间做一次
+  契约选择。后一方案只能是可删除的一次性 helper，旧 SHA 仅作为 provenance，不得冒充
+  新 wrapper 的 archive identity；四个日常操作和 intl 流程均保持不变。
+
 ## 11. 决策日志
 
 | 日期 | 决策 | 原因 |
@@ -1160,3 +1200,4 @@ incident recovery/fence/hold 状态机。
 | 2026-08-07 | rollback 使用内核原子交换 `B/A -> A/B` | 两个版本全程受保护；同目标重试不 toggle，反向切换需再次授权 |
 | 2026-08-07 | legacy 直接登记同业务版本基线后再准备新 Candidate | 旧代码无 Candidate 安全合同；首次真实升级前仍建立 A/A 回滚基线 |
 | 2026-08-07 | V2 JATO admission 只用非阻塞应用锁 | 不等待、不写 marker、不建设部署维护平台 |
+| 2026-08-07 | 原 archive 缺失时不从 live tree 冒充重建 | live tree 已含部署后 mutable/runtime 变化；A0 必须显式选择新 identity 或精确恢复原件 |
