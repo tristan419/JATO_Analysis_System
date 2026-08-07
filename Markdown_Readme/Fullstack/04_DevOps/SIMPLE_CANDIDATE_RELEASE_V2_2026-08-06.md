@@ -6,9 +6,9 @@ goal_control:
     将复杂蓝绿/事故恢复体系收敛为固定 Active/Candidate 的四操作发布 V2，
     完成代码、CI、腾讯云无流量验收，再由用户授权把同一已测试构件更新到正式
     www Active。intl 继续使用既有的 Active 到 intl 独立同步流程，不在 V2 中新增编排。
-  current_phase: draft_open_b_b_ready_for_ci
-  current_step: push_draft_and_wait_for_ci
-  waiting_on: none
+  current_phase: draft_green_waiting_for_merge_authorization
+  current_step: await_user_authorization_to_ready_and_merge
+  waiting_on: user_authorization
   pause_reason: none
   next_action: >-
     保持 PR #214 为 Draft。用户已明确选择首次 legacy→已测 Candidate 的 B/B 语义；实现只在
@@ -17,7 +17,8 @@ goal_control:
     模型；stale explicit、重启/公网/compat 失败均先拒绝或恢复。运行时三个模块为 4,198 行，
     未提高冻结上限，未新增 action、workflow、checkpoint 或 recovery。70 项聚焦测试、
     1,233 项完整脚本回归、CI 边界测试、style/compile 已通过；独立终审确认无 P0/P1。
-    下一步只推送已有 Draft PR #214 并等待 CI，不进行服务器操作。
+    代码 head e290d715 已推送到 Draft PR #214，13/13 项 GitHub 检查通过。本次仅再推送
+    该 CI 证据文档；最终 head 保持 Draft，等待用户单独授权转 Ready 并合并，不进行服务器操作。
     服务器仍只读且 Candidate DB role/env 未配置；合并、Candidate 启动和任何 Active 变更仍需
     单独授权，Candidate 不能自动更新 Active 或 intl。
   release_authorization_contract:
@@ -117,8 +118,8 @@ goal_control:
     frontend_tests_passed: 370
     frontend_build_and_router_checks_passed: true
     full_local_ci_after_final_runtime_code: true_current_b_b_delta
-    post_ci_changes_documentation_only: false_current_b_b_runtime_unpushed
-    ci_validation_complete: false_current_head_11989e14_green_b_b_delta_unpushed
+    post_ci_changes_documentation_only: true_ci_evidence_followup
+    ci_validation_complete: true_code_head_e290d715_13_of_13_green
     pull_request_opened: true
     pull_request_number: 214
     pull_request_url: https://github.com/tristan419/JATO_Analysis_System/pull/214
@@ -143,7 +144,7 @@ goal_control:
     - observed_server_state_contradicts_documented_baseline
     - change_would_touch_jato_data_or_database_content
     - change_would_cross_this_pr_scope
-  updated_at: "2026-08-07T21:08:00+08:00"
+  updated_at: "2026-08-07T21:20:00+08:00"
 ---
 
 # Fixed Active / Candidate Release V2
@@ -1299,6 +1300,15 @@ incident recovery/fence/hold 状态机。
 - 本 Step 仅有本地 Draft diff；未推送新 head、未操作服务器、未创建 Candidate、未更新
   Active、未同步 intl，也未触碰数据库或 JATO 数据。完整本地回归已完成，独立终审确认无 P0/P1；
   shared-template 接管、B/B 语义、失败恢复和 mutation 报告均通过复核。
+
+### 2026-08-07 / Step 3I：B/B 实现推送 Draft 并通过 CI
+
+- 四个已审查文件以 `e290d715` 提交并推送到 Draft PR #214；提交钩子自动生成的
+  Hermes event 不属于本 PR 范围，已在推送前丢弃，未混入第五个文件。
+- 该 code head 的 GitHub CI 终态为 13/13 通过：两个触发面的 backend、frontend、smoke、
+  frontend release contract 和 production guard 全绿，release coordination 与 Cloudflare Pages 亦通过。
+- PR 仍为 Draft；没有合并、production workflow、腾讯云写入、Candidate 启动、Active 更新、
+  intl 同步、数据库或 JATO 数据变更。
 
 ## 11. 决策日志
 
