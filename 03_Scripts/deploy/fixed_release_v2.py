@@ -632,6 +632,24 @@ class FixedReleaseController:
         for path in required:
             if path.is_symlink() or not path.exists():
                 raise V2Error("release_runtime_incomplete", f"required release path is missing: {path}")
+        build_metadata = release / "hermes/deploy_release.json"
+        try:
+            _, build_metadata_sha256 = hash_regular_file(build_metadata)
+        except ReleaseStoreError as exc:
+            raise V2Error(
+                "release_build_metadata_invalid",
+                "release build metadata is missing or unsafe",
+                details={"storeCode": exc.code},
+            ) from exc
+        if build_metadata_sha256 != manifest.build_metadata_sha256:
+            raise V2Error(
+                "release_build_metadata_mismatch",
+                "release build metadata differs from the manifest",
+                details={
+                    "expected": manifest.build_metadata_sha256,
+                    "actual": build_metadata_sha256,
+                },
+            )
         self._verify_release_seals(
             release,
             manifest,

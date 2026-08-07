@@ -6,16 +6,20 @@ goal_control:
     将复杂蓝绿/事故恢复体系收敛为固定 Active/Candidate 的四操作发布 V2，
     完成代码、CI、腾讯云无流量验收，再由用户授权把同一已测试构件更新到正式
     www Active。intl 继续使用既有的 Active 到 intl 独立同步流程，不在 V2 中新增编排。
-  current_phase: draft_open_a0_contract_decision
-  current_step: record_tencent_inventory_and_choose_a0_bridge
-  waiting_on: explicit_a0_legacy_adoption_contract_decision
+  current_phase: draft_open_first_transition_decision
+  current_step: push_general_integrity_fixes_then_resolve_first_transition
+  waiting_on: user_first_transition_rollback_policy
   pause_reason: none
   next_action: >-
-    保持 PR #214 为 Draft。腾讯云只读 inventory 已确认旧 archive 与 Git commit object 均
-    缺失，当前契约的 fail-closed 停止条件已命中。不得伪造原 archive，也不得先改指针。
-    下一步由用户明确决定：恢复/重建并精确匹配原 archive，或授权一次性 adoption helper
-    以新的 archive SHA 采纳当前已验证 live Active；之后再做目标 ext4 上的临时原子交换
-    能力探针。A0 未完成前不得 Ready、合并或部署；intl 既有 workflow 保持不变。
+    保持 PR #214 为 Draft。独立审查证明 350 行 A0 helper 仍缺少真实 unit 接管、目录权限、
+    runtime identity、durable path、强杀中间态与公网恢复等必要边界；继续补丁会重新形成专项
+    recovery 系统，因此该未跟踪 helper/test 与 helper-only shell 改动已删除，绝不上传或执行。
+    通用的 manifest build-metadata 绑定和 V2 source-critical closure 保留并单独回归。首次迁移
+    现只剩一个需用户选择的明确取舍：保留 legacy rollback 时使用执行后删除的一次性 A/A
+    迁移；或让已测 Candidate 首次形成 B/B，接受直到下一次 C/B 前没有 distinct rollback。
+    两者都不改变日常四操作、不会自动切 Active/intl。通用修复已通过 146 项聚焦、1,223 项
+    全脚本与 103 项后端测试；服务器仍只读，Candidate DB role/env 未配置；合并、Candidate
+    启动和任何 Active 变更仍需单独授权。
   release_authorization_contract:
     source_path: main_to_candidate_to_explicit_user_approval_to_active
     main_may_advance_without_active: true
@@ -43,8 +47,8 @@ goal_control:
     store_manifest_primitives_complete: true
     store_manifest_unit_tests_passed: 8
     manifest_cli_unit_tests_passed: 2
-    local_v2_tests_passed: 100_focused_current
-    controller_store_admission_tests_passed: 100
+    local_v2_tests_passed: 146_focused_after_a0_removal
+    controller_store_admission_tests_passed: 102
     release_seal_tests_passed: 21
     monthly_role_tests_passed: 18
     admission_primitives_complete: true_local
@@ -53,10 +57,22 @@ goal_control:
     candidate_database_role_configured_on_server: false_confirmed_missing
     four_operation_methods_present: true
     steady_state_four_operations_complete: true_local
-    legacy_first_update_active_complete: false_pending_one_time_direct_baseline_registration
-    legacy_server_archive_unique_and_verified: false_confirmed_missing
-    local_ready_blockers_open: 1_a0
-    server_acceptance_blockers_open: 2_a0_and_candidate_database_role
+    legacy_first_update_active_complete: false_pending_user_transition_policy
+    legacy_server_archive_unique_and_verified: true_exact_offline_reconstruction
+    legacy_archive_exact_bytes: 22269916
+    legacy_archive_exact_sha256: 6af46992b1da87b6cb38d2cbc3a4bf9240f1dc82746f457c22bc69e74d78cc5e
+    legacy_manifest_sha256: 9f62cda70530ec38560c9fa25846eee8ea767f7bcbd67f6bac49f3eb198fd947
+    a0_archive_recovery_complete: true
+    a0_helper_complete: false_rejected_and_removed_before_push
+    a0_helper_tests_passed: 0_removed_with_rejected_helper
+    a0_exact_frontend_materialization_verified: true_local
+    a0_exact_tar_data_filter_entries_verified: 2637
+    a0_server_execution_authorized: false
+    manifest_build_metadata_verification_complete: true_local
+    v2_source_critical_closure_complete: true_local_13_files
+    sourceable_runtime_builder_complete: false_removed_helper_only_change
+    local_ready_blockers_open: 2_first_transition_decision_and_full_regression
+    server_acceptance_blockers_open: 2_first_transition_and_candidate_database_role
     update_active_retry_idempotent: true_local
     rollback_active_retry_idempotent: true_local
     rollback_sigkill_reference_safe: true_local_and_linux_ci_target_ext4_unprobed
@@ -94,14 +110,14 @@ goal_control:
     candidate_external_side_effect_sandbox: false_documented_operator_limit
     runtime_python_lines: 4125_of_4200_hard_cap
     workflow_unit_tests_passed: 115
-    deployment_tests_passed: 1221
+    deployment_tests_passed: 1223
     deployment_tests_skipped: 15
-    backend_tests_passed: 52
+    backend_tests_passed: 103
     frontend_tests_passed: 370
     frontend_build_and_router_checks_passed: true
-    full_local_ci_after_final_runtime_code: true_relevant_deployment_suite
-    post_ci_changes_documentation_only: true_after_d74fd7b8
-    ci_validation_complete: true_pr_e531ae0c_all_13_contexts_green
+    full_local_ci_after_final_runtime_code: true_for_current_non_frontend_diff
+    post_ci_changes_documentation_only: false_pending_general_integrity_fixes
+    ci_validation_complete: false_pending_next_push
     pull_request_opened: true
     pull_request_number: 214
     pull_request_url: https://github.com/tristan419/JATO_Analysis_System/pull/214
@@ -126,7 +142,7 @@ goal_control:
     - observed_server_state_contradicts_documented_baseline
     - change_would_touch_jato_data_or_database_content
     - change_would_cross_this_pr_scope
-  updated_at: "2026-08-07T15:00:58+08:00"
+  updated_at: "2026-08-07T17:45:00+08:00"
 ---
 
 # Fixed Active / Candidate Release V2
@@ -1176,6 +1192,89 @@ incident recovery/fence/hold 状态机。
   契约选择。后一方案只能是可删除的一次性 helper，旧 SHA 仅作为 provenance，不得冒充
   新 wrapper 的 archive identity；四个日常操作和 intl 流程均保持不变。
 
+### 2026-08-07 / Step 3E：旧 cd455/6af archive 逐字节恢复，A0 不再放宽 identity
+
+- GitHub run `29998824639`、attempt 1 与 head `cd4557cb…` 的日志和 verified receipt 仍可读；
+  原 frontend artifact 与 Candidate receipt 已到期并返回 410，完整 backend archive 当时从未
+  上传为 Actions artifact，只曾传到现已缺失的服务器 cache。标准 rerun 会改变 attempt 与
+  build timestamp，不能作为原构件。
+- 在纯 `/private/tmp` 隔离目录使用 clean `git archive cd4557cb…`、Node `20.19.0`、npm
+  `10.8.2`、原 `buildTimestamp=2026-07-23T10:20:12.168Z`、43 条 MSRP evidence、GNU tar
+  `1.35`、GNU gzip `1.12` 与 `SOURCE_DATE_EPOCH=1784802012` 重建。frontend build ID
+  `6c1eaac6…` 与 payload SHA `5afc9475…` 先独立命中；完整 archive 随后同时命中：
+  `22,269,916` bytes、SHA-256
+  `6af46992b1da87b6cb38d2cbc3a4bf9240f1dc82746f457c22bc69e74d78cc5e`，共 2,637 个成员。
+- 包内 `hermes/deploy_release.json` SHA 为
+  `7596dbc6b9f98d80a0885b78567371caec6b4d8da95c13b16abb9c69a4d42a6c`；由原 commit、
+  archive、frontend identity/checksum/build ID 无猜测生成的 canonical V2 manifest 为
+  652 bytes，SHA
+  `9f62cda70530ec38560c9fa25846eee8ea767f7bcbd67f6bac49f3eb198fd947`。
+- 因此 A0 不再允许“新 SHA 采纳 live tree”，也不再需要 300+ 行 live snapshot helper。
+  但旧 archive 仍不能伪装为普通 Candidate：旧私有文件 mode 与当前 normal validator 合同
+  不同，且缺少 V2 controls、seals、物化 frontend/dist、venv 与 `/readyz`。最短路径仍是
+  可删除的一次性 helper，验证 exact identity 后在 staging 注入最终 V2 控制闭包，直接登记
+  `active.current == active.previous == A`，不启动 8001/18002，不新增第五个日常 action 或
+  workflow；成功后删除 helper。
+- 只读终审同时发现 manifest 的通用完整性缺口：`buildMetadataSha256` 已生成和解析，但
+  `_verify_manifest()` 未重新哈希实际 `hermes/deploy_release.json`，而 source seal 有意排除
+  该文件。修复直接加入现有函数，缺失与篡改均在任何 Active mutation 前拒绝；新增测试后
+  controller/store/admission 聚焦套件为 `102 passed`。这属于现有 manifest 根因修复，不是
+  A0 专项平台。
+- 本 Step 仅修改本地 Draft PR 文件和 `/private/tmp` 验证产物；没有上传原 archive、没有
+  操作腾讯云、没有改指针、服务、Nginx、数据库、JATO 数据、Active、Candidate 或 intl。
+
+### 2026-08-07 / Step 3F：A0 helper 收敛完成，未进入服务器执行
+
+- 已重新接管用户打开的 OrcaTerm，并让终端实际返回 `CODEX_READONLY_OK`。随后只读确认线上
+  legacy `.venv/bin/python -> python3 -> /usr/bin/python3.12`；直接复制旧 venv 会违反 V2
+  relocatable runtime seal，因此该方案被服务器事实否决。终端检查没有写文件、重启服务或
+  修改 Active/Candidate/intl/JATO；后续长输出截图通道超时，不把未取回的输出作为证据。
+- source seal 的 `SOURCE_CRITICAL_FILES` 仍是 V1 checkpoint/boot-reconcile/旧蓝绿控制面，
+  是 A0 被迫携带十个废弃文件的根因。现已直接把现有 policy 和测试收敛为 13 个 V2 文件：
+  production trusted-control 11 项，加 source-seal helper 与 frontend materializer；没有复制
+  V1 控制面。独立审查确认 fixed-v2 路径没有遗漏依赖。
+- 合规的 `build_candidate_runtime()` 原本封在 `fixed_release_v2_remote.sh` 内。现只增加
+  sourced 时跳过 dispatch 的内部复用边界；直接执行仍只有 prepare/discard/update/rollback
+  四操作。A0 通过独立 `bash -c` 调用同一 3G/4G、`venv --copies`、pip/toolkit builder，
+  没有复制一套 runtime 构建逻辑，也没有第五个 action/workflow。
+- 一次性 `one_time_register_legacy_active_v2.py` 最终为 350 行，并把 exact A0 commit、archive
+  SHA/bytes 与 manifest SHA 写死为 fail-closed 常量。旧 archive 的 0644 历史私有文件会被
+  normal validator 正确拒绝，因此 A0 不伪装成普通 release：只在 exact SHA 命中后使用
+  Python `tarfile` data filter 解包。2,637 个真实成员已离线通过 filter。
+- helper 复用现有 frontend evidence 校验、runtime builder、source/runtime seal、store promote、
+  database/JATO admission 和 Active restart verification；只登记 `A/A`，不启动 8001/18002。
+  restart 失败会恢复 legacy current raw target、原 8000 env 与 compat link并重新验证 health。
+  sudo 执行场景会在 runtime build 前把 staging root 交给 `SUDO_UID/SUDO_GID`，构建后再收回。
+- 新 helper 测试覆盖：非 exact A0 零写入拒绝、坏 archive 零写入拒绝、成功 A/A、Active restart
+  失败恢复、sourceable builder 无 dispatch、sudo builder staging 权限交接。source seal/workflow/
+  controller/store/admission/helper 组合回归为 `153 passed`，style check 通过；完整脚本、backend、
+  frontend 回归与下一次 Draft PR CI 尚未运行。
+- 本 Step 仍没有上传 exact archive、没有在腾讯云运行 A0、没有创建 Candidate、没有改 Active、
+  没有同步 intl，也没有修改数据库或 JATO 数据。PR #214 继续保持 Draft。
+
+### 2026-08-07 / Step 3G：独立审查否决 A0 helper，回到产品取舍
+
+- Step 3F 只证明 mocked/local happy path，并未证明 helper 可在真实服务器安全执行。独立逐项
+  审查确认至少存在七个发布阻断：未绑定当前公网 legacy identity、staging 根目录最终仍可能
+  为 `0700`、未安装真实 8000 V2 unit、重新安装 `>=` 依赖不等于现网 runtime、未证明
+  `/opt/jato/shared` 与 legacy durable path 一致、失败恢复未覆盖 unit/limits/public identity，
+  以及强杀后 `L/A`、`A/A` 中间态不能由原 helper 重试收敛。
+- 继续给该 helper 增加 preimage、checkpoint 和恢复分支会重新建立刚刚删除的事故恢复系统。
+  因此 helper 与其测试在尚未 stage、commit 或 push 前已删除；为 source helper 增加的 shell
+  sourcing 边界和测试也一并删除。没有上传或运行这些代码，服务器仍只读。
+- 两项通用根因修复不依赖 A0，继续保留：manifest 现在重新哈希实际
+  `hermes/deploy_release.json`；source critical policy 从废弃 V1 文件改为真实 V2 控制闭包。
+- 删除 helper 后重新执行当前差异的完整回归：V2/controller/store/admission/workflow/source-seal
+  聚焦测试 `146 passed`；`03_Scripts/tests` 为 `1223 passed, 15 skipped`；部署相关后端测试
+  为 `103 passed, 1 skipped`；style、Bash syntax 与 Python compile 均通过。
+- 首次迁移不能靠技术细节掩盖产品取舍。若必须从第一次正式更新起保留 legacy rollback，
+  就只能使用执行后删除的一次性 A/A 迁移并完整承担其迁移验证；若优先最简单的长期代码，
+  则可让已测 Candidate 首次形成 `B/B`，但必须明确披露：直到下一次 `C/B` 前没有 distinct
+  rollback，且不可自动回到 legacy。用户尚未选择，controller 不会擅自实现后者。
+- 服务器截图已确认 `8000.env` 存在，但 `candidate-database.env`、`8001.env` 和 Candidate
+  readonly drop-in 缺失。后两项由正常 prepare 收敛；SELECT-only Candidate 数据库 role/env
+  是 prepare 前仍需单独授权配置的真实前置条件。
+
 ## 11. 决策日志
 
 | 日期 | 决策 | 原因 |
@@ -1201,3 +1300,9 @@ incident recovery/fence/hold 状态机。
 | 2026-08-07 | legacy 直接登记同业务版本基线后再准备新 Candidate | 旧代码无 Candidate 安全合同；首次真实升级前仍建立 A/A 回滚基线 |
 | 2026-08-07 | V2 JATO admission 只用非阻塞应用锁 | 不等待、不写 marker、不建设部署维护平台 |
 | 2026-08-07 | 原 archive 缺失时不从 live tree 冒充重建 | live tree 已含部署后 mutable/runtime 变化；A0 必须显式选择新 identity 或精确恢复原件 |
+| 2026-08-07 | 原 archive 精确恢复后保持旧 commit/archive identity | 大小与 SHA 已逐字节命中；不再授权新 SHA adoption，也不从 live tree 推断 |
+| 2026-08-07 | A0 使用可删除 helper，日常仍只有四操作 | exact archive 解决证据，但 legacy→A/A 仍没有安全编排入口；不污染 controller/workflow |
+| 2026-08-07 | source seal critical policy 从 V1 收敛为 V2 | 修现有 policy 根因，不把废弃事故控制面复制进 A0 与未来 release |
+| 2026-08-07 | A0 复用 sourceable runtime builder | 线上旧 venv 外指系统 Python；复用现有受限 builder，禁止复制依赖安装能力 |
+| 2026-08-07 | Step 3F A0 helper 结论被独立审查否决 | local mock 未覆盖真实 unit、权限、runtime、durable path、恢复和强杀状态；未提交即删除 |
+| 2026-08-07 | 首次 rollback 与最简 B/B adoption 交由用户明确选择 | 两者安全属性不同，不能由实现者静默降低首次回退能力 |

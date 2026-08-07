@@ -12,18 +12,20 @@ import pytest
 REPO_ROOT = Path(__file__).resolve().parents[2]
 HELPER = REPO_ROOT / "03_Scripts/deploy/verify_release_source_seal.py"
 CRITICAL_FILES = (
-    "03_Scripts/deploy/cleanup_toolkit_egg_info.py",
-    "03_Scripts/deploy/fixed_active_preimage.py",
-    "03_Scripts/deploy/jato_bluegreen_boot_reconcile.py",
-    "03_Scripts/deploy/nginx/jato_candidate_preview.conf.example",
-    "03_Scripts/deploy/tencent_bluegreen_release.sh",
-    "03_Scripts/deploy/validate_release_archive.py",
+    "03_Scripts/deploy/fixed_release_v2.py",
+    "03_Scripts/deploy/fixed_release_v2_remote.sh",
+    "03_Scripts/deploy/frontend_release_artifact.py",
     "03_Scripts/deploy/jato_quiescence_gate.py",
-    "03_Scripts/deploy/release_checkpoint.py",
-    "03_Scripts/deploy/systemd/jato-bluegreen-boot-reconcile.service",
-    "03_Scripts/deploy/systemd/nginx-jato-bluegreen-boot-reconcile.conf",
+    "03_Scripts/deploy/release_v2_admission.py",
+    "03_Scripts/deploy/release_v2_store.py",
+    "03_Scripts/deploy/validate_release_archive.py",
     "03_Scripts/deploy/verify_release_source_seal.py",
-    "03_Scripts/ops/deploy_fullstack_server.sh",
+    "03_Scripts/deploy/nginx/jato_active_release_v2.conf",
+    "03_Scripts/deploy/nginx/jato_candidate_preview_v2.conf",
+    "03_Scripts/deploy/systemd/jato-candidate-preview.service",
+    "03_Scripts/deploy/systemd/jato-fullstack-backend@.service",
+    "03_Scripts/deploy/systemd/jato-fullstack-backend@8001.service.d/"
+    "20-candidate-readonly.conf",
 )
 RUNTIME_COMMIT = "a" * 40
 RUNTIME_ARCHIVE = "b" * 64

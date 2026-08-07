@@ -208,6 +208,10 @@ def create_release(
             "20-candidate-readonly.conf"
         ).read_bytes()
     )
+    build_metadata = release / "hermes/deploy_release.json"
+    build_metadata.parent.mkdir(parents=True)
+    build_metadata.write_text("{}\n", encoding="utf-8")
+    _, build_metadata_sha256 = STORE.hash_regular_file(build_metadata)
     manifest = STORE.ReleaseManifest(
         repository="tristan419/JATO_Analysis_System",
         identity=identity,
@@ -215,7 +219,7 @@ def create_release(
         frontend_artifact_identity="frontend-identity",
         frontend_artifact_checksum="4" * 64,
         frontend_build_id="6" * 64,
-        build_metadata_sha256="5" * 64,
+        build_metadata_sha256=build_metadata_sha256,
     )
     payload = STORE.canonical_manifest_bytes(manifest)
     (release / "release-v2-manifest.json").write_bytes(payload)
@@ -1735,6 +1739,37 @@ def test_update_rejects_manifest_digest_change_before_active_mutation(tmp_path: 
         ctrl.update_active(CANDIDATE, manifest_sha256="f" * 64)
 
     assert caught.value.code == "manifest_sha256_mismatch"
+    assert STORE.read_pointer(cfg.layout, MODULE.ACTIVE_SLOT, "current") == ACTIVE
+
+
+@pytest.mark.parametrize(
+    ("mutation", "expected_code"),
+    [
+        ("missing", "release_build_metadata_invalid"),
+        ("tampered", "release_build_metadata_mismatch"),
+    ],
+)
+def test_update_rejects_invalid_build_metadata_before_active_mutation(
+    tmp_path: Path,
+    mutation: str,
+    expected_code: str,
+) -> None:
+    cfg = config(tmp_path)
+    install_active(cfg, ACTIVE)
+    candidate_digest = create_release(cfg.layout, CANDIDATE)
+    build_metadata = cfg.layout.release_path(CANDIDATE) / "hermes/deploy_release.json"
+    if mutation == "missing":
+        build_metadata.unlink()
+    else:
+        build_metadata.write_text('{"tampered": true}\n', encoding="utf-8")
+    system = FakeSystem()
+    ctrl = controller(cfg, system)
+    install_candidate(ctrl, CANDIDATE, system)
+
+    with pytest.raises(MODULE.V2Error) as caught:
+        ctrl.update_active(CANDIDATE, manifest_sha256=candidate_digest)
+
+    assert caught.value.code == expected_code
     assert STORE.read_pointer(cfg.layout, MODULE.ACTIVE_SLOT, "current") == ACTIVE
 
 
