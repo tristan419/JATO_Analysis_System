@@ -230,6 +230,10 @@ def main():
         module._verify_old_helper(plan)
 
 
+@pytest.mark.skipif(
+    not WORKFLOW.exists(),
+    reason="incident-only Candidate settlement workflow has been retired",
+)
 def test_workflow_is_main_only_serialized_and_never_deploys_active() -> None:
     workflow = WORKFLOW.read_text(encoding="utf-8")
     wrapper = WRAPPER.read_text(encoding="utf-8")

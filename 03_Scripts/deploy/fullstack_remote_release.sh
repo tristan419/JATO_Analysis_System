@@ -43,6 +43,16 @@ if [ "$DEPLOY_BRANCH" != "main" ]; then
 fi
 
 DEPLOY_BLUEGREEN_MODE="${DEPLOY_BLUEGREEN_MODE:-prepare-candidate}"
+DEPLOY_RELEASE_SYSTEM="${DEPLOY_RELEASE_SYSTEM:-fixed-v2}"
+if [[ "$DEPLOY_RELEASE_SYSTEM" != "fixed-v2" ]]; then
+  echo "[ERROR] Direct legacy-v1 release entry is disabled; use fixed-v2"
+  exit 1
+fi
+if [[ "$DEPLOY_RELEASE_SYSTEM" == "fixed-v2" \
+  && "$DEPLOY_BLUEGREEN_MODE" != "prepare-candidate" ]]; then
+  echo "[ERROR] The archive entry only hands fixed-v2 prepare-candidate"
+  exit 1
+fi
 case "$DEPLOY_BLUEGREEN_MODE" in
   prepare-candidate|approve-candidate-to-active|discard-candidate|discard-failed-candidate|release-candidate|restore-previous-active) ;;
   *)
@@ -186,23 +196,34 @@ for part in path.parts[1:]:
             f"[ERROR] DEPLOY_STATE_DIR ancestor is unsafe: {cursor}"
         )
 PY
-mkdir -p "$DEPLOY_STATE_DIR/checkpoints/$DEPLOY_COMMIT_SHA" "$DEPLOY_STATE_DIR/journals/$DEPLOY_COMMIT_SHA"
-chmod 700 "$DEPLOY_STATE_DIR" "$DEPLOY_STATE_DIR/checkpoints" "$DEPLOY_STATE_DIR/journals" \
-  "$DEPLOY_STATE_DIR/checkpoints/$DEPLOY_COMMIT_SHA" "$DEPLOY_STATE_DIR/journals/$DEPLOY_COMMIT_SHA"
+mkdir -p "$DEPLOY_STATE_DIR"
+chmod 700 "$DEPLOY_STATE_DIR"
+if [[ "$DEPLOY_RELEASE_SYSTEM" == "legacy-v1" ]]; then
+  mkdir -p \
+    "$DEPLOY_STATE_DIR/checkpoints/$DEPLOY_COMMIT_SHA" \
+    "$DEPLOY_STATE_DIR/journals/$DEPLOY_COMMIT_SHA"
+  chmod 700 \
+    "$DEPLOY_STATE_DIR/checkpoints" \
+    "$DEPLOY_STATE_DIR/journals" \
+    "$DEPLOY_STATE_DIR/checkpoints/$DEPLOY_COMMIT_SHA" \
+    "$DEPLOY_STATE_DIR/journals/$DEPLOY_COMMIT_SHA"
+fi
 DEPLOY_LOCK_PATH="$DEPLOY_STATE_DIR/production-deploy.lock"
 if [[ -L "$DEPLOY_LOCK_PATH" ]] \
   || [[ -e "$DEPLOY_LOCK_PATH" && ! -f "$DEPLOY_LOCK_PATH" ]]; then
   echo "[ERROR] Production deploy lock must be a regular non-symlink file"
   exit 1
 fi
-exec 9>"$DEPLOY_LOCK_PATH"
-if ! flock -w 300 9; then
-  echo "[ERROR] Another production deployment holds the global server-side lock"
-  exit 1
+if [[ "$DEPLOY_RELEASE_SYSTEM" == "legacy-v1" ]]; then
+  exec 9>"$DEPLOY_LOCK_PATH"
+  if ! flock -w 300 9; then
+    echo "[ERROR] Another production deployment holds the global server-side lock"
+    exit 1
+  fi
+  DEPLOY_LOCK_HELD=1
+  DEPLOY_LOCK_HOLDER_PID="$$"
+  DEPLOY_LOCK_FD=9
 fi
-DEPLOY_LOCK_HELD=1
-DEPLOY_LOCK_HOLDER_PID="$$"
-DEPLOY_LOCK_FD=9
 
 CHECKPOINT_FILE="$DEPLOY_STATE_DIR/checkpoints/$DEPLOY_COMMIT_SHA/${DEPLOY_ARCHIVE_SHA256}.json"
 CHECKPOINT_JOURNAL="$DEPLOY_STATE_DIR/journals/$DEPLOY_COMMIT_SHA/${DEPLOY_ARCHIVE_SHA256}.jsonl"
@@ -422,17 +443,28 @@ select_archive_validation_attempt_identity() {
   fi
 }
 
-select_archive_validation_attempt_identity
-SEALED_TRUST_ROOT="/var/lib/jato-sealed-inputs"
-SEALED_ARCHIVE_ROOT="$SEALED_TRUST_ROOT/inputs"
-SEALED_ARCHIVE_DIR="$SEALED_ARCHIVE_ROOT/$DEPLOY_COMMIT_SHA/$DEPLOY_ARCHIVE_SHA256/$ARCHIVE_VALIDATION_ATTEMPT_KEY"
-SEALED_RELEASE_ARCHIVE="$SEALED_ARCHIVE_DIR/release.tar.gz"
-SEALED_ARCHIVE_VALIDATOR="$SEALED_ARCHIVE_DIR/validate_release_archive.py"
-ARCHIVE_VALIDATION_RECEIPT_ROOT="$SEALED_TRUST_ROOT/receipts"
-ARCHIVE_VALIDATION_RECEIPT_DIR="$ARCHIVE_VALIDATION_RECEIPT_ROOT/$DEPLOY_COMMIT_SHA/$DEPLOY_ARCHIVE_SHA256"
-ARCHIVE_VALIDATION_RECEIPT="$ARCHIVE_VALIDATION_RECEIPT_DIR/$ARCHIVE_VALIDATION_ATTEMPT_KEY.json"
-PRODUCTION_EXTRACTION_RESERVE_BYTES=$((15 * 1024 * 1024 * 1024))
+SEALED_TRUST_ROOT=""
+SEALED_ARCHIVE_ROOT=""
+SEALED_ARCHIVE_DIR=""
+SEALED_RELEASE_ARCHIVE=""
+SEALED_ARCHIVE_VALIDATOR=""
+ARCHIVE_VALIDATION_RECEIPT_ROOT=""
+ARCHIVE_VALIDATION_RECEIPT_DIR=""
+ARCHIVE_VALIDATION_RECEIPT=""
+PRODUCTION_EXTRACTION_RESERVE_BYTES=0
 BLUEGREEN_HEADROOM_TARGET=""
+if [[ "$DEPLOY_RELEASE_SYSTEM" == "legacy-v1" ]]; then
+  select_archive_validation_attempt_identity
+  SEALED_TRUST_ROOT="/var/lib/jato-sealed-inputs"
+  SEALED_ARCHIVE_ROOT="$SEALED_TRUST_ROOT/inputs"
+  SEALED_ARCHIVE_DIR="$SEALED_ARCHIVE_ROOT/$DEPLOY_COMMIT_SHA/$DEPLOY_ARCHIVE_SHA256/$ARCHIVE_VALIDATION_ATTEMPT_KEY"
+  SEALED_RELEASE_ARCHIVE="$SEALED_ARCHIVE_DIR/release.tar.gz"
+  SEALED_ARCHIVE_VALIDATOR="$SEALED_ARCHIVE_DIR/validate_release_archive.py"
+  ARCHIVE_VALIDATION_RECEIPT_ROOT="$SEALED_TRUST_ROOT/receipts"
+  ARCHIVE_VALIDATION_RECEIPT_DIR="$ARCHIVE_VALIDATION_RECEIPT_ROOT/$DEPLOY_COMMIT_SHA/$DEPLOY_ARCHIVE_SHA256"
+  ARCHIVE_VALIDATION_RECEIPT="$ARCHIVE_VALIDATION_RECEIPT_DIR/$ARCHIVE_VALIDATION_ATTEMPT_KEY.json"
+  PRODUCTION_EXTRACTION_RESERVE_BYTES=$((15 * 1024 * 1024 * 1024))
+fi
 PREBUILT_FRONTEND_DIR="$REPO_DIR/.release-staging/frontend_${DEPLOY_COMMIT_SHA}_${DEPLOY_ARCHIVE_SHA256}.staged"
 RELEASE_REPLACEMENT_PATHS="03_Scripts 06_AppPlatform 07_ScrapingToolkit hermes"
 DEPLOY_GID="$(id -g)"
@@ -448,36 +480,101 @@ remove_transient_release_paths() {
     if [[ -z "$transient_path" || ! -e "$transient_path" ]]; then
       continue
     fi
+    if [[ "${DEPLOY_RELEASE_SYSTEM:-legacy-v1}" == "fixed-v2" \
+      && "$transient_path" == /opt/jato/staging/* ]]; then
+      if ! sudo -n rm -rf --one-file-system "$transient_path"; then
+        echo "[WARN] Failed to remove V2 staging path: $transient_path" >&2
+      fi
+      continue
+    fi
     if ! rm -rf -- "$transient_path"; then
       echo "[WARN] Failed to remove transient deployment path: $transient_path" >&2
     fi
   done
-  case "$SEALED_ARCHIVE_DIR" in
-    /var/lib/jato-sealed-inputs/inputs/*/*/*)
-      if sudo -n test -e "$SEALED_ARCHIVE_DIR" \
-        || sudo -n test -L "$SEALED_ARCHIVE_DIR"; then
-        if ! sudo -n rm -rf --one-file-system "$SEALED_ARCHIVE_DIR"; then
-          echo \
-            "[WARN] Failed to remove sealed release input: $SEALED_ARCHIVE_DIR" \
-            >&2
+  if [[ "${DEPLOY_RELEASE_SYSTEM:-legacy-v1}" == "legacy-v1" ]]; then
+    case "$SEALED_ARCHIVE_DIR" in
+      /var/lib/jato-sealed-inputs/inputs/*/*/*)
+        if sudo -n test -e "$SEALED_ARCHIVE_DIR" \
+          || sudo -n test -L "$SEALED_ARCHIVE_DIR"; then
+          if ! sudo -n rm -rf --one-file-system "$SEALED_ARCHIVE_DIR"; then
+            echo \
+              "[WARN] Failed to remove sealed release input: $SEALED_ARCHIVE_DIR" \
+              >&2
+          fi
         fi
-      fi
-      ;;
-    *)
-      echo "[WARN] Refusing unexpected sealed archive cleanup path" >&2
-      ;;
-  esac
+        ;;
+      *)
+        echo "[WARN] Refusing unexpected sealed archive cleanup path" >&2
+        ;;
+    esac
+  fi
   return 0
 }
 
 cleanup_release_staging() {
   remove_transient_release_paths
-  # The verified content-addressed archive is intentionally retained.  A later
-  # workflow checkpoint owns cleanup after www/intl parity reaches complete.
+  # The verified content-addressed archive is retained for resumable transport.
+  # Pointer-aware archive-cache GC is intentionally outside this entrypoint.
 }
 trap cleanup_release_staging EXIT
 
-RELEASE_WORKTREE="$(mktemp -d "/tmp/JATO_deploy_work_${DEPLOY_COMMIT_SHA}.XXXXXX")"
+prune_stale_v2_staging() {
+  local stale_name=""
+  local stale_path=""
+  local pruned_count=0
+
+  while IFS= read -r -d '' stale_path; do
+    stale_name="${stale_path##*/}"
+    if [[ ! "$stale_name" =~ \
+      ^prepare-[0-9a-f]{40}-[0-9a-f]{64}\.[A-Za-z0-9]{6}$ ]]; then
+      continue
+    fi
+    [[ "$stale_path" == "/opt/jato/staging/$stale_name" ]] || continue
+    if sudo -n test -L "$stale_path" \
+      || ! sudo -n test -d "$stale_path"; then
+      continue
+    fi
+    sudo -n rm -rf --one-file-system -- "$stale_path"
+    pruned_count=$((pruned_count + 1))
+  done < <(
+    sudo -n find /opt/jato/staging \
+      -xdev \
+      -mindepth 1 \
+      -maxdepth 1 \
+      -type d \
+      -mmin +1440 \
+      -print0
+  )
+  echo "[INFO] Removed $pruned_count stale fixed-v2 staging directorie(s)"
+}
+
+if [[ "$DEPLOY_RELEASE_SYSTEM" == "fixed-v2" ]]; then
+  if sudo -n test -L /opt/jato/staging \
+    || { sudo -n test -e /opt/jato/staging \
+      && ! sudo -n test -d /opt/jato/staging; }; then
+    echo "[ERROR] V2 staging root is unsafe"
+    exit 1
+  fi
+  if ! sudo -n test -d /opt/jato/staging; then
+    sudo -n install -d -o root -g root -m 0755 /opt/jato/staging
+  fi
+  [[ -d /opt/jato/staging && ! -L /opt/jato/staging ]] \
+    || { echo "[ERROR] V2 staging root is unavailable"; exit 1; }
+  [[ "$(sudo -n stat -c '%u:%g:%a' /opt/jato/staging)" == "0:0:755" ]] \
+    || { echo "[ERROR] V2 staging root ownership or mode is unsafe"; exit 1; }
+  prune_stale_v2_staging
+  [[ -d "$BLUEGREEN_RELEASES_ROOT" && ! -L "$BLUEGREEN_RELEASES_ROOT" ]] \
+    || { echo "[ERROR] V2 immutable release root is unavailable"; exit 1; }
+  RELEASE_WORKTREE="$(
+    sudo -n mktemp -d \
+      "/opt/jato/staging/prepare-${DEPLOY_COMMIT_SHA}-${DEPLOY_ARCHIVE_SHA256}.XXXXXX"
+  )"
+  sudo -n chown "$(id -u):$(id -g)" "$RELEASE_WORKTREE"
+  sudo -n chmod 0700 "$RELEASE_WORKTREE"
+  PREBUILT_FRONTEND_DIR="$RELEASE_WORKTREE/.frontend-dist.staged"
+else
+  RELEASE_WORKTREE="$(mktemp -d "/tmp/JATO_deploy_work_${DEPLOY_COMMIT_SHA}.XXXXXX")"
+fi
 TRUSTED_ARCHIVE_VALIDATOR_TEMP="$(
   mktemp "$DEPLOY_STATE_DIR/.archive-validator-${DEPLOY_COMMIT_SHA}.XXXXXX.py"
 )"
@@ -504,6 +601,227 @@ verify_release_archive_identity() {
 }
 
 verify_release_archive_identity "$RELEASE_ARCHIVE"
+
+install_trusted_archive_validator() {
+  if ! printf '%s' "$RELEASE_ARCHIVE_VALIDATOR_B64" \
+    | base64 --decode >"$TRUSTED_ARCHIVE_VALIDATOR_TEMP"; then
+    echo "[ERROR] Trusted release archive validator payload is malformed"
+    return 1
+  fi
+  chmod 0500 "$TRUSTED_ARCHIVE_VALIDATOR_TEMP"
+  if [[ "$(sha256sum "$TRUSTED_ARCHIVE_VALIDATOR_TEMP" | awk '{print $1}')" != \
+    "$RELEASE_ARCHIVE_VALIDATOR_SHA256" ]]; then
+    echo "[ERROR] Trusted release archive validator SHA-256 mismatch"
+    return 1
+  fi
+}
+
+validate_required_release_content() {
+  local release_file=""
+  local release_directory=""
+  local -a required_release_files=()
+  local -a required_release_directories=()
+
+  if [[ "$DEPLOY_RELEASE_SYSTEM" == "fixed-v2" ]]; then
+    required_release_files=(
+      hermes/deploy_release.json
+      hermes/frontend_release/frontend-release.json
+      hermes/frontend_release/frontend-dist.tar.gz
+      03_Scripts/deploy/frontend_release_artifact.py
+      03_Scripts/deploy/fixed_release_v2.py
+      03_Scripts/deploy/fixed_release_v2_remote.sh
+      03_Scripts/deploy/jato_quiescence_gate.py
+      03_Scripts/deploy/release_v2_admission.py
+      03_Scripts/deploy/release_v2_store.py
+      03_Scripts/deploy/validate_release_archive.py
+      03_Scripts/deploy/verify_release_source_seal.py
+      03_Scripts/deploy/nginx/jato_active_release_v2.conf
+      03_Scripts/deploy/nginx/jato_candidate_preview_v2.conf
+      03_Scripts/deploy/systemd/jato-fullstack-backend@.service
+      03_Scripts/deploy/systemd/jato-fullstack-backend@8001.service.d/20-candidate-readonly.conf
+      03_Scripts/deploy/systemd/jato-candidate-preview.service
+      06_AppPlatform/backend/requirements.txt
+      06_AppPlatform/backend/alembic.ini
+      06_AppPlatform/backend/alembic/env.py
+      06_AppPlatform/backend/app/main.py
+      07_ScrapingToolkit/pyproject.toml
+    )
+    required_release_directories=(
+      06_AppPlatform/backend/app
+      06_AppPlatform/frontend
+      07_ScrapingToolkit/jato_scraper
+      hermes/frontend_release
+    )
+  else
+    required_release_files=(
+      hermes/deploy_release.json
+      hermes/frontend_release/frontend-release.json
+      hermes/frontend_release/frontend-dist.tar.gz
+      01_RAW_DATA/VOC_Nordic_SUV_Users_100.xlsx
+      03_Scripts/deploy/frontend_release_artifact.py
+      03_Scripts/deploy/cleanup_toolkit_egg_info.py
+      03_Scripts/deploy/fixed_active_preimage.py
+      03_Scripts/deploy/release_checkpoint.py
+      03_Scripts/deploy/release_evidence.py
+      03_Scripts/deploy/prepare_backend_release.py
+      03_Scripts/deploy/verify_backend_readiness.py
+      03_Scripts/deploy/jato_quiescence_gate.py
+      03_Scripts/deploy/jato_release_storage_guard.py
+      03_Scripts/deploy/tencent_bluegreen_release.sh
+      03_Scripts/deploy/validate_release_archive.py
+      03_Scripts/deploy/verify_release_source_seal.py
+      03_Scripts/deploy/lib/production_mutation_lock.sh
+      03_Scripts/deploy/lib/release_paths.sh
+      03_Scripts/deploy_fullstack_server.sh
+      03_Scripts/ops/deploy_fullstack_server.sh
+      03_Scripts/ops/backup_production_data.sh
+      03_Scripts/deploy/nginx/enable_jato_fullstack_https.sh
+      03_Scripts/deploy/nginx/install_jato_fullstack_nginx.sh
+      03_Scripts/deploy/nginx/jato_candidate_preview.conf.example
+      03_Scripts/deploy/systemd/jato-country-news.env.example
+      03_Scripts/deploy/systemd/jato-msrp.env.example
+      03_Scripts/deploy/systemd/jato-voc.env.example
+      03_Scripts/deploy/systemd/jato-fullstack-backend-slot.env.example
+      03_Scripts/deploy/systemd/jato-fullstack-backend@.service
+      03_Scripts/deploy/systemd/jato-country-news-sync.service
+      03_Scripts/deploy/systemd/jato-country-news-sync.timer
+      03_Scripts/deploy/systemd/jato-country-news-sync-b.service
+      03_Scripts/deploy/systemd/jato-country-news-sync-b.timer
+      03_Scripts/deploy/systemd/jato-msrp-sync@.service
+      03_Scripts/deploy/systemd/jato-msrp-dryrun.timer
+      03_Scripts/deploy/systemd/jato-msrp-ingest.timer
+      03_Scripts/deploy/systemd/jato-voc-forum-sync.service
+      03_Scripts/deploy/systemd/jato-voc-forum-sync.timer
+      03_Scripts/deploy/systemd/hermes-source-quality.service
+      03_Scripts/deploy/systemd/hermes-source-quality.timer
+      06_AppPlatform/backend/requirements.txt
+      06_AppPlatform/backend/alembic.ini
+      06_AppPlatform/backend/alembic/env.py
+      06_AppPlatform/backend/app/main.py
+      07_ScrapingToolkit/pyproject.toml
+      03_Scripts/diagnostics/artifacts/msrp_backfill/sweden_swiss_top30_suv/top30_suv_price_movement_candidates.json
+      03_Scripts/diagnostics/artifacts/msrp_backfill/sweden_swiss_top30_suv/official_evidence_leads.json
+    )
+    required_release_directories=(
+      03_Scripts/deploy/systemd
+      06_AppPlatform/backend/app
+      06_AppPlatform/frontend
+      07_ScrapingToolkit/jato_scraper
+      hermes/frontend_release
+    )
+  fi
+
+  for release_file in "${required_release_files[@]}"; do
+    if [[ ! -f "$RELEASE_WORKTREE/$release_file" ]]; then
+      echo "[ERROR] Production release archive is missing required file: $release_file"
+      return 1
+    fi
+  done
+  for release_directory in "${required_release_directories[@]}"; do
+    if [[ ! -d "$RELEASE_WORKTREE/$release_directory" ]]; then
+      echo "[ERROR] Production release archive is missing required directory: $release_directory"
+      return 1
+    fi
+  done
+}
+
+materialize_verified_frontend() {
+  local archive_commit=""
+  local frontend_file=""
+  local staging_device=""
+  local production_device=""
+
+  archive_commit="$(python3 -c 'import json, sys; from pathlib import Path; payload = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8")); print(payload.get("expectedCommitSha") or payload.get("commitSha") or "")' "$RELEASE_WORKTREE/hermes/deploy_release.json")"
+  if [[ "$archive_commit" != "$DEPLOY_COMMIT_SHA" ]]; then
+    echo "[ERROR] Uploaded release commit mismatch: archive=${archive_commit:-missing} expected=$DEPLOY_COMMIT_SHA"
+    return 1
+  fi
+
+  FRONTEND_RELEASE_DIR="$RELEASE_WORKTREE/hermes/frontend_release"
+  FRONTEND_RELEASE_HELPER="$RELEASE_WORKTREE/03_Scripts/deploy/frontend_release_artifact.py"
+  rm -rf "$PREBUILT_FRONTEND_DIR"
+  mkdir -p "$(dirname "$PREBUILT_FRONTEND_DIR")"
+  python3 "$FRONTEND_RELEASE_HELPER" verify \
+    --release-dir "$FRONTEND_RELEASE_DIR" \
+    --expected-github-sha "$DEPLOY_COMMIT_SHA" \
+    --expected-artifact-name "$FRONTEND_ARTIFACT_NAME" \
+    --expected-artifact-identity "$FRONTEND_ARTIFACT_IDENTITY" \
+    --expected-artifact-checksum "$FRONTEND_ARTIFACT_CHECKSUM" \
+    --expected-build-id "$FRONTEND_BUILD_ID" \
+    --expected-node-version "$FRONTEND_NODE_VERSION" \
+    --expected-run-id "$DEPLOY_RUN_ID" \
+    --expected-run-attempt "$DEPLOY_RUN_ATTEMPT" \
+    --github-artifact-id "$FRONTEND_GITHUB_ARTIFACT_ID" \
+    --github-artifact-digest "$FRONTEND_GITHUB_ARTIFACT_DIGEST" \
+    --materialize-dir "$PREBUILT_FRONTEND_DIR"
+  for frontend_file in index.html build-meta.json release-provenance.json; do
+    if [[ ! -f "$PREBUILT_FRONTEND_DIR/$frontend_file" ]]; then
+      echo "[ERROR] Verified frontend staging is missing required file: $frontend_file"
+      return 1
+    fi
+  done
+
+  staging_device="$(stat -c '%d' "$PREBUILT_FRONTEND_DIR")"
+  if [[ "$DEPLOY_RELEASE_SYSTEM" == "fixed-v2" ]]; then
+    production_device="$(stat -c '%d' "$BLUEGREEN_RELEASES_ROOT")"
+  else
+    production_device="$(stat -c '%d' "$REPO_DIR")"
+  fi
+  if [[ "$staging_device" != "$production_device" ]]; then
+    echo "[ERROR] Frontend staging and production directories must share a filesystem for atomic install"
+    return 1
+  fi
+}
+
+prepare_fixed_v2_release() {
+  local v2_extraction_reserve_bytes=$((2 * 1024 * 1024 * 1024))
+  local required_v2_name=""
+  local v2_remote_entry=""
+
+  install_trusted_archive_validator
+  python3 -B "$TRUSTED_ARCHIVE_VALIDATOR_TEMP" \
+    --archive "$RELEASE_ARCHIVE" \
+    --expected-sha256 "$DEPLOY_ARCHIVE_SHA256" \
+    --expected-bytes "$DEPLOY_ARCHIVE_BYTES" \
+    --trusted-control \
+      "03_Scripts/deploy/validate_release_archive.py=$TRUSTED_ARCHIVE_VALIDATOR_TEMP" \
+    --headroom-target "$RELEASE_WORKTREE" 1 "$v2_extraction_reserve_bytes" \
+    >/dev/null
+  echo "[INFO] Extracting validated fixed-v2 release archive"
+  tar --same-permissions --no-overwrite-dir \
+    -xzf "$RELEASE_ARCHIVE" -C "$RELEASE_WORKTREE"
+  validate_required_release_content
+  materialize_verified_frontend
+
+  for required_v2_name in \
+    RELEASE_V2_MANIFEST_B64 \
+    RELEASE_V2_MANIFEST_SHA256
+  do
+    if [[ -z "${!required_v2_name:-}" ]]; then
+      echo "[ERROR] $required_v2_name is required for fixed-v2 prepare"
+      return 1
+    fi
+  done
+  v2_remote_entry="$RELEASE_WORKTREE/03_Scripts/deploy/fixed_release_v2_remote.sh"
+  chmod 0755 "$v2_remote_entry"
+  sudo -n env \
+    PRODUCTION_LOCK_PATH="$DEPLOY_LOCK_PATH" \
+    V2_ARCHIVE_CACHE_ROOT="$ARCHIVE_ROOT_REAL" \
+    DEPLOY_COMMIT_SHA="$DEPLOY_COMMIT_SHA" \
+    DEPLOY_ARCHIVE_SHA256="$DEPLOY_ARCHIVE_SHA256" \
+    FRONTEND_ARTIFACT_IDENTITY="$FRONTEND_ARTIFACT_IDENTITY" \
+    FRONTEND_ARTIFACT_CHECKSUM="$FRONTEND_ARTIFACT_CHECKSUM" \
+    RELEASE_V2_MANIFEST_B64="$RELEASE_V2_MANIFEST_B64" \
+    RELEASE_V2_MANIFEST_SHA256="$RELEASE_V2_MANIFEST_SHA256" \
+    RELEASE_WORKTREE="$RELEASE_WORKTREE" \
+    PREBUILT_FRONTEND_DIR="$PREBUILT_FRONTEND_DIR" \
+    bash "$v2_remote_entry" prepare-candidate
+}
+
+if [[ "$DEPLOY_RELEASE_SYSTEM" == "fixed-v2" ]]; then
+  prepare_fixed_v2_release
+  exit $?
+fi
 
 ensure_sealed_trust_roots() {
   sudo -n python3 -B - \
@@ -992,17 +1310,7 @@ PY
 
 seal_release_archive_input
 
-if ! printf '%s' "$RELEASE_ARCHIVE_VALIDATOR_B64" \
-  | base64 --decode >"$TRUSTED_ARCHIVE_VALIDATOR_TEMP"; then
-  echo "[ERROR] Trusted release archive validator payload is malformed"
-  exit 1
-fi
-chmod 500 "$TRUSTED_ARCHIVE_VALIDATOR_TEMP"
-if [[ "$(sha256sum "$TRUSTED_ARCHIVE_VALIDATOR_TEMP" | awk '{print $1}')" != \
-  "$RELEASE_ARCHIVE_VALIDATOR_SHA256" ]]; then
-  echo "[ERROR] Trusted release archive validator SHA-256 mismatch"
-  exit 1
-fi
+install_trusted_archive_validator
 sudo -n install -m 0550 -o root -g "$DEPLOY_GID" \
   "$TRUSTED_ARCHIVE_VALIDATOR_TEMP" "$SEALED_ARCHIVE_VALIDATOR"
 if ! rm -f -- "$TRUSTED_ARCHIVE_VALIDATOR_TEMP"; then
@@ -1054,75 +1362,7 @@ tar --same-permissions --no-overwrite-dir \
 verify_sealed_release_bundle
 verify_archive_validation_receipt
 
-required_release_files=(
-  hermes/deploy_release.json
-  hermes/frontend_release/frontend-release.json
-  hermes/frontend_release/frontend-dist.tar.gz
-  01_RAW_DATA/VOC_Nordic_SUV_Users_100.xlsx
-  03_Scripts/deploy/frontend_release_artifact.py
-  03_Scripts/deploy/cleanup_toolkit_egg_info.py
-  03_Scripts/deploy/fixed_active_preimage.py
-  03_Scripts/deploy/release_checkpoint.py
-  03_Scripts/deploy/release_evidence.py
-  03_Scripts/deploy/prepare_backend_release.py
-  03_Scripts/deploy/verify_backend_readiness.py
-  03_Scripts/deploy/jato_quiescence_gate.py
-  03_Scripts/deploy/jato_release_storage_guard.py
-  03_Scripts/deploy/tencent_bluegreen_release.sh
-  03_Scripts/deploy/validate_release_archive.py
-  03_Scripts/deploy/verify_release_source_seal.py
-  03_Scripts/deploy/lib/production_mutation_lock.sh
-  03_Scripts/deploy/lib/release_paths.sh
-  03_Scripts/deploy_fullstack_server.sh
-  03_Scripts/ops/deploy_fullstack_server.sh
-  03_Scripts/ops/backup_production_data.sh
-  03_Scripts/deploy/nginx/enable_jato_fullstack_https.sh
-  03_Scripts/deploy/nginx/install_jato_fullstack_nginx.sh
-  03_Scripts/deploy/nginx/jato_candidate_preview.conf.example
-  03_Scripts/deploy/systemd/jato-country-news.env.example
-  03_Scripts/deploy/systemd/jato-msrp.env.example
-  03_Scripts/deploy/systemd/jato-voc.env.example
-  03_Scripts/deploy/systemd/jato-fullstack-backend-slot.env.example
-  03_Scripts/deploy/systemd/jato-fullstack-backend@.service
-  03_Scripts/deploy/systemd/jato-country-news-sync.service
-  03_Scripts/deploy/systemd/jato-country-news-sync.timer
-  03_Scripts/deploy/systemd/jato-country-news-sync-b.service
-  03_Scripts/deploy/systemd/jato-country-news-sync-b.timer
-  03_Scripts/deploy/systemd/jato-msrp-sync@.service
-  03_Scripts/deploy/systemd/jato-msrp-dryrun.timer
-  03_Scripts/deploy/systemd/jato-msrp-ingest.timer
-  03_Scripts/deploy/systemd/jato-voc-forum-sync.service
-  03_Scripts/deploy/systemd/jato-voc-forum-sync.timer
-  03_Scripts/deploy/systemd/hermes-source-quality.service
-  03_Scripts/deploy/systemd/hermes-source-quality.timer
-  06_AppPlatform/backend/requirements.txt
-  06_AppPlatform/backend/alembic.ini
-  06_AppPlatform/backend/alembic/env.py
-  06_AppPlatform/backend/app/main.py
-  07_ScrapingToolkit/pyproject.toml
-  03_Scripts/diagnostics/artifacts/msrp_backfill/sweden_swiss_top30_suv/top30_suv_price_movement_candidates.json
-  03_Scripts/diagnostics/artifacts/msrp_backfill/sweden_swiss_top30_suv/official_evidence_leads.json
-)
-for release_file in "${required_release_files[@]}"; do
-  if [[ ! -f "$RELEASE_WORKTREE/$release_file" ]]; then
-    echo "[ERROR] Production release archive is missing required file: $release_file"
-    exit 1
-  fi
-done
-
-required_release_directories=(
-  03_Scripts/deploy/systemd
-  06_AppPlatform/backend/app
-  06_AppPlatform/frontend
-  07_ScrapingToolkit/jato_scraper
-  hermes/frontend_release
-)
-for release_directory in "${required_release_directories[@]}"; do
-  if [[ ! -d "$RELEASE_WORKTREE/$release_directory" ]]; then
-    echo "[ERROR] Production release archive is missing required directory: $release_directory"
-    exit 1
-  fi
-done
+validate_required_release_content
 
 RELEASE_PATHS_LIB="$RELEASE_WORKTREE/03_Scripts/deploy/lib/release_paths.sh"
 # shellcheck disable=SC1090
@@ -1152,45 +1392,10 @@ assert_path_outside_release_roots \
   $RELEASE_REPLACEMENT_PATHS
 echo "[INFO] Durable MSRP evidence root is outside release replacement paths: $MSRP_EVIDENCE_ROOT"
 
-ARCHIVE_COMMIT="$(python3 -c 'import json, sys; from pathlib import Path; payload = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8")); print(payload.get("expectedCommitSha") or payload.get("commitSha") or "")' "$RELEASE_WORKTREE/hermes/deploy_release.json")"
-if [[ "$ARCHIVE_COMMIT" != "$DEPLOY_COMMIT_SHA" ]]; then
-  echo "[ERROR] Uploaded release commit mismatch: archive=${ARCHIVE_COMMIT:-missing} expected=$DEPLOY_COMMIT_SHA"
-  exit 1
-fi
-
-FRONTEND_RELEASE_DIR="$RELEASE_WORKTREE/hermes/frontend_release"
-FRONTEND_RELEASE_HELPER="$RELEASE_WORKTREE/03_Scripts/deploy/frontend_release_artifact.py"
 CHECKPOINT_HELPER="$RELEASE_WORKTREE/03_Scripts/deploy/release_checkpoint.py"
 EVIDENCE_HELPER="$RELEASE_WORKTREE/03_Scripts/deploy/release_evidence.py"
 BACKEND_READINESS_HELPER="$RELEASE_WORKTREE/03_Scripts/deploy/verify_backend_readiness.py"
-rm -rf "$PREBUILT_FRONTEND_DIR"
-mkdir -p "$(dirname "$PREBUILT_FRONTEND_DIR")"
-python3 "$FRONTEND_RELEASE_HELPER" verify \
-  --release-dir "$FRONTEND_RELEASE_DIR" \
-  --expected-github-sha "$DEPLOY_COMMIT_SHA" \
-  --expected-artifact-name "$FRONTEND_ARTIFACT_NAME" \
-  --expected-artifact-identity "$FRONTEND_ARTIFACT_IDENTITY" \
-  --expected-artifact-checksum "$FRONTEND_ARTIFACT_CHECKSUM" \
-  --expected-build-id "$FRONTEND_BUILD_ID" \
-  --expected-node-version "$FRONTEND_NODE_VERSION" \
-  --expected-run-id "$DEPLOY_RUN_ID" \
-  --expected-run-attempt "$DEPLOY_RUN_ATTEMPT" \
-  --github-artifact-id "$FRONTEND_GITHUB_ARTIFACT_ID" \
-  --github-artifact-digest "$FRONTEND_GITHUB_ARTIFACT_DIGEST" \
-  --materialize-dir "$PREBUILT_FRONTEND_DIR"
-for frontend_file in index.html build-meta.json release-provenance.json; do
-  if [[ ! -f "$PREBUILT_FRONTEND_DIR/$frontend_file" ]]; then
-    echo "[ERROR] Verified frontend staging is missing required file: $frontend_file"
-    exit 1
-  fi
-done
-
-staging_device="$(stat -c '%d' "$PREBUILT_FRONTEND_DIR")"
-production_device="$(stat -c '%d' "$REPO_DIR")"
-if [[ "$staging_device" != "$production_device" ]]; then
-  echo "[ERROR] Frontend staging and production directories must share a filesystem for atomic install"
-  exit 1
-fi
+materialize_verified_frontend
 
 checkpoint_identity_args=(
   --repository "$DEPLOY_REPOSITORY"

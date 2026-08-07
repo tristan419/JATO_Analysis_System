@@ -36,14 +36,24 @@ MAIN_BRANCH = "main"
 RELEASE_GROUP_LABEL = "release-group"
 STATUS_CONTEXT = "release-coordination-guard"
 TRUSTED_ISSUE_ASSOCIATIONS = {"OWNER", "MEMBER", "COLLABORATOR"}
-PLAN_SCHEMA = 1
+PLAN_SCHEMA = 3
 CONTRACT_SCHEMA = 1
 MAX_GITHUB_NUMBER = 9_223_372_036_854_775_807
 CONTRACT_PATH_TEMPLATE = (
     ".github/release-coordination/contracts/pr-{pull_request}.json"
 )
 SHA_PATTERN = re.compile(r"^[0-9a-f]{40}$")
+SHA256_PATTERN = re.compile(r"^[0-9a-f]{64}$")
 REPOSITORY_PATTERN = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
+PUBLIC_ORIGIN_PATTERN = re.compile(
+    r"^https://[A-Za-z0-9.-]+(?::[1-9][0-9]{0,4})?$"
+)
+RELEASE_OPERATIONS = {
+    "prepare-candidate",
+    "discard-candidate",
+    "update-active",
+    "rollback-active",
+}
 TRAILER_PATTERN = re.compile(
     r"^\s*(Release-Group|Depends-On):\s*(.*?)\s*$",
     re.IGNORECASE,
@@ -96,7 +106,7 @@ class GitHubGateway(Protocol):
 
     def get_main_sha(self) -> str: ...
 
-    def get_last_successful_production_sha(self) -> str: ...
+    def get_current_production_sha(self) -> str: ...
 
     def list_pull_requests_between(
         self,
@@ -325,6 +335,42 @@ def _sha(value: Any, context: str) -> str:
     return candidate
 
 
+def _sha256(value: Any, context: str) -> str:
+    candidate = str(value or "").lower()
+    if not SHA256_PATTERN.fullmatch(candidate):
+        raise GuardError(f"GitHub API returned invalid {context}")
+    return candidate
+
+
+def _release_operation(value: Any) -> str:
+    operation = str(value or "")
+    if operation not in RELEASE_OPERATIONS:
+        raise GuardError("production release operation is unsupported")
+    return operation
+
+
+def _target_identity_inputs(
+    operation: str,
+    target_sha: str,
+    target_archive_sha256: str,
+    target_manifest_sha256: str,
+) -> tuple[str, str, str]:
+    raw_identity = (
+        str(target_sha or ""),
+        str(target_archive_sha256 or ""),
+        str(target_manifest_sha256 or ""),
+    )
+    if operation in {"update-active", "rollback-active"}:
+        return (
+            _sha(raw_identity[0], f"{operation} target SHA"),
+            _sha256(raw_identity[1], f"{operation} target archive SHA-256"),
+            _sha256(raw_identity[2], f"{operation} target manifest SHA-256"),
+        )
+    if any(raw_identity):
+        raise GuardError(f"{operation} cannot specify a target identity")
+    return "", "", ""
+
+
 def _number_list(value: Any, context: str) -> tuple[int, ...]:
     if not isinstance(value, list):
         raise GuardError(f"{context} must be a list")
@@ -422,14 +468,18 @@ class GitHubRestClient:
         token: str,
         *,
         api_url: str = "https://api.github.com",
+        public_origin: str = "https://www.ojeur.cloud",
     ) -> None:
         if not REPOSITORY_PATTERN.fullmatch(repository):
             raise GuardError("GITHUB_REPOSITORY must use owner/repository form")
         if not token:
             raise GuardError("GITHUB_TOKEN is required")
+        if not PUBLIC_ORIGIN_PATTERN.fullmatch(public_origin):
+            raise GuardError("JATO_PUBLIC_ORIGIN must be one HTTPS origin")
         self.repository = repository
         self.token = token
         self.api_url = api_url.rstrip("/")
+        self.public_origin = public_origin
         self._issues: dict[int, Mapping[str, Any]] = {}
         self._pull_requests: dict[int, Mapping[str, Any]] = {}
         self._ancestor_results: dict[tuple[str, str], bool] = {}
@@ -474,6 +524,40 @@ class GitHubRestClient:
         except (URLError, TimeoutError, json.JSONDecodeError) as exc:
             raise GuardError(f"GitHub API unavailable for {path}: {exc}") from exc
         return payload
+
+    def _public_request(self, path: str) -> Any:
+        separator = "&" if "?" in path else "?"
+        url = (
+            f"{self.public_origin}{path}{separator}"
+            f"release_coordination_nonce={os.urandom(8).hex()}"
+        )
+        request = Request(
+            url,
+            method="GET",
+            headers={
+                "Accept": "application/json",
+                "Cache-Control": "no-cache",
+                "Pragma": "no-cache",
+                "User-Agent": "jato-release-coordination-guard",
+            },
+        )
+        try:
+            with urlopen(request, timeout=20) as response:
+                status = int(getattr(response, "status", 0))
+                body = response.read(256 * 1024 + 1)
+        except HTTPError as exc:
+            raise GuardError(
+                f"www Active endpoint returned HTTP {exc.code}: {path}"
+            ) from exc
+        except (URLError, TimeoutError, OSError) as exc:
+            raise GuardError(f"www Active endpoint is unavailable: {path}") from exc
+        if status != 200 or len(body) > 256 * 1024:
+            raise GuardError(f"www Active endpoint response is invalid: {path}")
+        try:
+            text = body.decode("utf-8")
+        except UnicodeError as exc:
+            raise GuardError(f"www Active endpoint is not UTF-8: {path}") from exc
+        return _strict_json_mapping(text, f"www Active endpoint {path}")
 
     def _paginate(
         self,
@@ -533,118 +617,52 @@ class GitHubRestClient:
         commit = _mapping(payload.get("commit"), f"{MAIN_BRANCH} branch commit")
         return _sha(commit.get("sha"), f"{MAIN_BRANCH} branch SHA")
 
-    def get_last_successful_production_sha(self) -> str:
-        path = (
-            f"/repos/{self.repository}/actions/workflows/"
-            "production-release.yml/runs"
+    def get_current_production_sha(self) -> str:
+        health = _mapping(
+            self._public_request("/healthz"),
+            "www Active health response",
         )
-        for page in range(1, 101):
-            payload = _mapping(
-                self._request(
-                    path,
-                    {
-                        "branch": MAIN_BRANCH,
-                        "status": "success",
-                        "per_page": "100",
-                        "page": str(page),
-                    },
-                ),
-                "production workflow runs",
-            )
-            runs = payload.get("workflow_runs")
-            if not isinstance(runs, list):
-                raise GuardError(
-                    "GitHub API returned invalid production workflow runs"
-                )
-            for run in runs:
-                if not isinstance(run, Mapping):
-                    raise GuardError(
-                        "GitHub API returned invalid production workflow run"
-                    )
-                head_repository = run.get("head_repository")
-                if not isinstance(head_repository, Mapping):
-                    continue
-                if (
-                    str(run.get("conclusion") or "") == "success"
-                    and str(run.get("head_branch") or "") == MAIN_BRANCH
-                    and str(head_repository.get("full_name") or "")
-                    == self.repository
-                ):
-                    run_id = _number(
-                        run.get("id"),
-                        "production workflow run id",
-                    )
-                    if not self._production_run_has_verified_audit(run_id):
-                        continue
-                    return _sha(
-                        run.get("head_sha"),
-                        "last successful production SHA",
-                    )
-            if len(runs) < 100:
-                break
-        else:
-            raise GuardError(
-                "GitHub production workflow runs pagination exceeded the safe limit"
-            )
-        raise GuardError("no verified successful production-release baseline was found")
+        if health.get("status") != "ok":
+            raise GuardError("www Active health check did not report status=ok")
 
-    def _production_run_has_verified_audit(self, run_id: int) -> bool:
-        path = f"/repos/{self.repository}/actions/runs/{run_id}/jobs"
-        for page in range(1, 101):
-            payload = _mapping(
-                self._request(
-                    path,
-                    {
-                        "filter": "latest",
-                        "per_page": "100",
-                        "page": str(page),
-                    },
-                ),
-                f"production workflow run {run_id} jobs",
-            )
-            jobs = payload.get("jobs")
-            if not isinstance(jobs, list):
-                raise GuardError(
-                    "GitHub API returned invalid production workflow run jobs"
-                )
-            for job in jobs:
-                job_payload = _mapping(job, "production workflow job")
-                if (
-                    str(job_payload.get("name") or "") == "audit_frontend_parity"
-                    and str(job_payload.get("conclusion") or "") == "success"
-                ):
-                    steps = job_payload.get("steps")
-                    if not isinstance(steps, list):
-                        raise GuardError(
-                            "GitHub API returned invalid verified audit job steps"
-                        )
-                    step_results: dict[str, str] = {}
-                    for step in steps:
-                        step_payload = _mapping(
-                            step,
-                            "verified production audit step",
-                        )
-                        name = str(step_payload.get("name") or "")
-                        if name in step_results:
-                            raise GuardError(
-                                f"verified production audit has duplicate step {name!r}"
-                            )
-                        step_results[name] = str(
-                            step_payload.get("conclusion") or ""
-                        )
-                    required_steps = {
-                        "Seal verified production release checkpoint",
-                        "Retain verified production release receipt",
-                    }
-                    return all(
-                        step_results.get(name) == "success"
-                        for name in required_steps
-                    )
-            if len(jobs) < 100:
-                return False
-        raise GuardError(
-            "GitHub production workflow jobs pagination exceeded the safe limit"
+        metadata = _mapping(
+            self._public_request("/build-meta.json"),
+            "www Active build metadata",
         )
+        deploy_value = metadata.get("deployCommit")
+        github_value = metadata.get("githubSha")
+        commit_value = metadata.get("commit")
+        commit_mode = metadata.get("commitMode")
+
+        if deploy_value is not None:
+            deploy_sha = _sha(deploy_value, "www Active deployCommit")
+            if github_value is not None:
+                github_sha = _sha(github_value, "www Active githubSha")
+                if github_sha != deploy_sha:
+                    raise GuardError(
+                        "www Active build metadata deployCommit/githubSha mismatch"
+                    )
+            if commit_mode == "deploy" and commit_value is not None:
+                commit_sha = _sha(commit_value, "www Active commit")
+                if commit_sha != deploy_sha:
+                    raise GuardError(
+                        "www Active build metadata deploy-mode commit mismatch"
+                    )
+            return deploy_sha
+
+        if github_value is not None:
+            github_sha = _sha(github_value, "legacy www Active githubSha")
+            if commit_mode == "deploy" and commit_value is not None:
+                commit_sha = _sha(commit_value, "legacy www Active commit")
+                if commit_sha != github_sha:
+                    raise GuardError(
+                        "legacy www Active build metadata commit/githubSha mismatch"
+                    )
+            return github_sha
+
+        if commit_value is not None and commit_mode in {None, "", "deploy"}:
+            return _sha(commit_value, "legacy www Active commit")
+        raise GuardError("www Active build metadata has no unambiguous deploy SHA")
 
     def list_pull_requests_between(
         self,
@@ -1434,25 +1452,64 @@ class ReleaseCoordinationGuard:
         self,
         main_sha: str,
         *,
+        operation: str,
+        target_sha: str = "",
+        target_archive_sha256: str = "",
+        target_manifest_sha256: str = "",
         run_id: str,
         run_attempt: str,
     ) -> dict[str, Any]:
-        current_main = _sha(main_sha, "main SHA")
+        workflow_sha = _sha(main_sha, "main SHA")
+        release_operation = _release_operation(operation)
         if not re.fullmatch(r"[1-9][0-9]*", run_id):
             raise GuardError("production run id must be a positive integer")
         if not re.fullmatch(r"[1-9][0-9]*", run_attempt):
             raise GuardError("production run attempt must be a positive integer")
         remote_main = self.api.get_main_sha()
-        if current_main != remote_main:
+        if workflow_sha != remote_main:
             raise GuardError(
-                f"stale production run: target {current_main[:12]} is not current "
+                f"stale production run: workflow {workflow_sha[:12]} is not current "
                 f"main {remote_main[:12]}"
             )
-        baseline_sha = self.api.get_last_successful_production_sha()
-        range_pull_requests = self.api.list_pull_requests_between(
-            baseline_sha,
-            current_main,
+        baseline_sha = self.api.get_current_production_sha()
+        requested_target, requested_archive, requested_manifest = (
+            _target_identity_inputs(
+                release_operation,
+                target_sha,
+                target_archive_sha256,
+                target_manifest_sha256,
+            )
         )
+        if release_operation == "prepare-candidate":
+            release_target = workflow_sha
+        elif release_operation in {"update-active", "rollback-active"}:
+            release_target = requested_target
+        else:
+            release_target = baseline_sha
+        if not self.api.is_ancestor(release_target, workflow_sha):
+            raise GuardError(
+                f"release target {release_target[:12]} is not an ancestor of "
+                f"workflow main {workflow_sha[:12]}"
+            )
+        if release_operation == "rollback-active":
+            if not self.api.is_ancestor(release_target, baseline_sha):
+                raise GuardError(
+                    f"rollback target {release_target[:12]} is not an ancestor of "
+                    f"current www Active {baseline_sha[:12]}"
+                )
+            range_pull_requests: list[Mapping[str, Any]] = []
+        elif release_operation == "discard-candidate":
+            range_pull_requests = []
+        else:
+            if not self.api.is_ancestor(baseline_sha, release_target):
+                raise GuardError(
+                    f"current www Active {baseline_sha[:12]} is not an ancestor of "
+                    f"release target {release_target[:12]}"
+                )
+            range_pull_requests = self.api.list_pull_requests_between(
+                baseline_sha,
+                release_target,
+            )
         range_records: dict[
             int,
             tuple[Mapping[str, Any], str, ImmutableReleaseContract | None],
@@ -1461,7 +1518,7 @@ class ReleaseCoordinationGuard:
             number = self._pr_number(pull_request)
             merge_sha = self._assert_merged_ancestor(
                 pull_request,
-                current_main,
+                release_target,
             )
             contract = self._contract_for(pull_request, merge_sha)
             owns_contract = self._validate_contract_file_ownership(pull_request)
@@ -1504,11 +1561,11 @@ class ReleaseCoordinationGuard:
                 }
             )
         group_plans = self._validate_immutable_release_groups(
-            current_main,
+            release_target,
             range_records,
         )
         dependency_plans = self._validate_immutable_range_dependencies(
-            current_main,
+            release_target,
             range_records,
         )
         return {
@@ -1516,8 +1573,12 @@ class ReleaseCoordinationGuard:
             "repository": self.repository,
             "runId": run_id,
             "runAttempt": run_attempt,
+            "operation": release_operation,
+            "workflowSha": workflow_sha,
             "baselineSha": baseline_sha,
-            "targetSha": current_main,
+            "targetSha": release_target,
+            "targetArchiveSha256": requested_archive,
+            "targetManifestSha256": requested_manifest,
             "unpublishedPullRequests": range_plan,
             "releaseGroups": group_plans,
             "mergedDependencyContracts": dependency_plans,
@@ -1527,18 +1588,27 @@ class ReleaseCoordinationGuard:
         self,
         main_sha: str,
         *,
+        operation: str,
+        target_sha: str = "",
+        target_archive_sha256: str = "",
+        target_manifest_sha256: str = "",
         run_id: str,
         run_attempt: str,
     ) -> tuple[str, dict[str, Any]]:
         plan = self.build_production_plan(
             main_sha,
+            operation=operation,
+            target_sha=target_sha,
+            target_archive_sha256=target_archive_sha256,
+            target_manifest_sha256=target_manifest_sha256,
             run_id=run_id,
             run_attempt=run_attempt,
         )
         groups_checked = len(plan["releaseGroups"])
         dependencies_checked = len(plan["mergedDependencyContracts"])
         return (
-            f"production release coordination is valid at {main_sha[:12]}: "
+            f"production release coordination is valid for {plan['operation']} "
+            f"at {plan['targetSha'][:12]}: "
             f"{len(plan['unpublishedPullRequests'])} unpublished PRs, "
             f"{groups_checked} completed groups, "
             f"{dependencies_checked} dependency contracts",
@@ -1550,6 +1620,10 @@ class ReleaseCoordinationGuard:
         plan: Mapping[str, Any],
         *,
         main_sha: str,
+        operation: str,
+        target_sha: str = "",
+        target_archive_sha256: str = "",
+        target_manifest_sha256: str = "",
         run_id: str,
         run_attempt: str,
     ) -> str:
@@ -1558,8 +1632,12 @@ class ReleaseCoordinationGuard:
             "repository",
             "runId",
             "runAttempt",
+            "operation",
+            "workflowSha",
             "baselineSha",
             "targetSha",
+            "targetArchiveSha256",
+            "targetManifestSha256",
             "unpublishedPullRequests",
             "releaseGroups",
             "mergedDependencyContracts",
@@ -1577,14 +1655,45 @@ class ReleaseCoordinationGuard:
             raise GuardError("frozen coordination plan run id does not match")
         if str(plan.get("runAttempt") or "") != run_attempt:
             raise GuardError("frozen coordination plan run attempt does not match")
-        target_sha = _sha(plan.get("targetSha"), "frozen plan target SHA")
-        expected_sha = _sha(main_sha, "main SHA")
-        if target_sha != expected_sha:
-            raise GuardError("frozen coordination plan target SHA does not match")
+        release_operation = _release_operation(operation)
+        if plan.get("operation") != release_operation:
+            raise GuardError("frozen coordination plan operation does not match")
+        frozen_workflow_sha = _sha(
+            plan.get("workflowSha"),
+            "frozen plan workflow SHA",
+        )
+        expected_workflow_sha = _sha(main_sha, "main SHA")
+        if frozen_workflow_sha != expected_workflow_sha:
+            raise GuardError("frozen coordination plan workflow SHA does not match")
+        frozen_target_sha = _sha(plan.get("targetSha"), "frozen plan target SHA")
         baseline_sha = _sha(
             plan.get("baselineSha"),
             "frozen plan baseline SHA",
         )
+        requested_target, requested_archive, requested_manifest = (
+            _target_identity_inputs(
+                release_operation,
+                target_sha,
+                target_archive_sha256,
+                target_manifest_sha256,
+            )
+        )
+        if release_operation == "prepare-candidate":
+            expected_target_sha = expected_workflow_sha
+        elif release_operation in {"update-active", "rollback-active"}:
+            expected_target_sha = requested_target
+        else:
+            expected_target_sha = baseline_sha
+        if frozen_target_sha != expected_target_sha:
+            raise GuardError("frozen coordination plan target SHA does not match")
+        if plan.get("targetArchiveSha256") != requested_archive:
+            raise GuardError(
+                "frozen coordination plan target archive SHA-256 does not match"
+            )
+        if plan.get("targetManifestSha256") != requested_manifest:
+            raise GuardError(
+                "frozen coordination plan target manifest SHA-256 does not match"
+            )
         for key in (
             "unpublishedPullRequests",
             "releaseGroups",
@@ -1593,16 +1702,23 @@ class ReleaseCoordinationGuard:
             if not isinstance(plan.get(key), list):
                 raise GuardError(f"frozen coordination plan {key} must be a list")
         remote_main = self.api.get_main_sha()
-        if expected_sha != remote_main:
+        if expected_workflow_sha != remote_main:
             raise GuardError(
-                f"stale production run after approval: target "
-                f"{expected_sha[:12]} is not current main {remote_main[:12]}"
+                f"stale production run after approval: workflow "
+                f"{expected_workflow_sha[:12]} is not current main {remote_main[:12]}"
             )
-        if not self.api.is_ancestor(baseline_sha, target_sha):
+        if not self.api.is_ancestor(frozen_target_sha, frozen_workflow_sha):
+            raise GuardError("frozen coordination target is not a workflow ancestor")
+        if release_operation == "rollback-active":
+            if not self.api.is_ancestor(frozen_target_sha, baseline_sha):
+                raise GuardError(
+                    "frozen coordination rollback target is not a baseline ancestor"
+                )
+        elif not self.api.is_ancestor(baseline_sha, frozen_target_sha):
             raise GuardError("frozen coordination plan baseline is not a target ancestor")
         return (
             f"frozen release coordination plan is valid for run "
-            f"{run_id}/{run_attempt} at {target_sha[:12]}"
+            f"{run_id}/{run_attempt} at {frozen_target_sha[:12]}"
         )
 
 
@@ -1621,6 +1737,14 @@ def _parser() -> argparse.ArgumentParser:
     subparsers.add_parser("sweep")
     production = subparsers.add_parser("production")
     production.add_argument("--main-sha", required=True)
+    production.add_argument(
+        "--operation",
+        required=True,
+        choices=sorted(RELEASE_OPERATIONS),
+    )
+    production.add_argument("--target-sha", default="")
+    production.add_argument("--target-archive-sha256", default="")
+    production.add_argument("--target-manifest-sha256", default="")
     production.add_argument("--run-id", default=os.environ.get("GITHUB_RUN_ID", ""))
     production.add_argument(
         "--run-attempt",
@@ -1629,6 +1753,14 @@ def _parser() -> argparse.ArgumentParser:
     production.add_argument("--plan-output", required=True)
     verify_plan = subparsers.add_parser("verify-plan")
     verify_plan.add_argument("--main-sha", required=True)
+    verify_plan.add_argument(
+        "--operation",
+        required=True,
+        choices=sorted(RELEASE_OPERATIONS),
+    )
+    verify_plan.add_argument("--target-sha", default="")
+    verify_plan.add_argument("--target-archive-sha256", default="")
+    verify_plan.add_argument("--target-manifest-sha256", default="")
     verify_plan.add_argument("--run-id", default=os.environ.get("GITHUB_RUN_ID", ""))
     verify_plan.add_argument(
         "--run-attempt",
@@ -1663,6 +1795,10 @@ def main(argv: list[str] | None = None) -> int:
             repository=args.repository,
             token=os.environ.get("GITHUB_TOKEN", ""),
             api_url=os.environ.get("GITHUB_API_URL", "https://api.github.com"),
+            public_origin=os.environ.get(
+                "JATO_PUBLIC_ORIGIN",
+                "https://www.ojeur.cloud",
+            ),
         )
         guard = ReleaseCoordinationGuard(client, args.repository)
         if args.mode == "pull-request":
@@ -1674,6 +1810,10 @@ def main(argv: list[str] | None = None) -> int:
         elif args.mode == "production":
             result, plan = guard.validate_production(
                 args.main_sha,
+                operation=args.operation,
+                target_sha=args.target_sha,
+                target_archive_sha256=args.target_archive_sha256,
+                target_manifest_sha256=args.target_manifest_sha256,
                 run_id=args.run_id,
                 run_attempt=args.run_attempt,
             )
@@ -1682,6 +1822,10 @@ def main(argv: list[str] | None = None) -> int:
             result = guard.verify_frozen_plan(
                 _load_expected_plan(args.plan),
                 main_sha=args.main_sha,
+                operation=args.operation,
+                target_sha=args.target_sha,
+                target_archive_sha256=args.target_archive_sha256,
+                target_manifest_sha256=args.target_manifest_sha256,
                 run_id=args.run_id,
                 run_attempt=args.run_attempt,
             )

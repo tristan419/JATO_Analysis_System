@@ -1,0 +1,30 @@
+[Unit]
+Description=JATO fixed Candidate preview on loopback port 18002
+After=jato-fullstack-backend@8001.service
+BindsTo=jato-fullstack-backend@8001.service
+
+[Service]
+Type=simple
+User=www-data
+Group=www-data
+ExecStartPre=/usr/sbin/nginx -t -q -c /etc/jato-fullstack/candidate-preview-v2.conf
+ExecStart=/usr/sbin/nginx -c /etc/jato-fullstack/candidate-preview-v2.conf
+Restart=on-failure
+RestartSec=2
+RuntimeDirectory=jato-candidate-preview
+RuntimeDirectoryMode=0750
+CacheDirectory=jato-candidate-preview
+CacheDirectoryMode=0750
+MemoryAccounting=yes
+MemoryHigh=256M
+MemoryMax=512M
+CPUQuota=50%
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadOnlyPaths=/opt/jato/releases /opt/jato/slots
+ReadWritePaths=/run/jato-candidate-preview /var/cache/jato-candidate-preview
+
+[Install]
+WantedBy=multi-user.target

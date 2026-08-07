@@ -317,7 +317,7 @@ def test_remote_release_seals_archive_before_validation_and_extraction() -> None
     ) == 1
     assert '--archive "$SEALED_RELEASE_ARCHIVE"' in script
     assert script.count('--output "$ARCHIVE_VALIDATION_RECEIPT"') == 1
-    assert script.count("--headroom-target") == 2
+    assert script.count("--headroom-target") == 3
     assert (
         '--validation-run-id "$ARCHIVE_VALIDATION_RUN_ID"'
         in script
