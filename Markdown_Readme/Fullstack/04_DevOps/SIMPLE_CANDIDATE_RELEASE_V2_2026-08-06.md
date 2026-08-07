@@ -7,7 +7,7 @@ goal_control:
     完成代码、CI、腾讯云无流量验收，再由用户授权把同一已测试构件更新到正式
     www Active。intl 继续使用既有的 Active 到 intl 独立同步流程，不在 V2 中新增编排。
   current_phase: draft_open_first_transition_decision
-  current_step: push_general_integrity_fixes_then_resolve_first_transition
+  current_step: resolve_first_transition_then_implement_selected_path
   waiting_on: user_first_transition_rollback_policy
   pause_reason: none
   next_action: >-
@@ -18,8 +18,8 @@ goal_control:
     现只剩一个需用户选择的明确取舍：保留 legacy rollback 时使用执行后删除的一次性 A/A
     迁移；或让已测 Candidate 首次形成 B/B，接受直到下一次 C/B 前没有 distinct rollback。
     两者都不改变日常四操作、不会自动切 Active/intl。通用修复已通过 146 项聚焦、1,223 项
-    全脚本与 103 项后端测试；服务器仍只读，Candidate DB role/env 未配置；合并、Candidate
-    启动和任何 Active 变更仍需单独授权。
+    全脚本、103 项后端测试及 Draft head 6bb41ab0 的全部 13 项 GitHub checks；服务器仍只读，
+    Candidate DB role/env 未配置；合并、Candidate 启动和任何 Active 变更仍需单独授权。
   release_authorization_contract:
     source_path: main_to_candidate_to_explicit_user_approval_to_active
     main_may_advance_without_active: true
@@ -116,8 +116,8 @@ goal_control:
     frontend_tests_passed: 370
     frontend_build_and_router_checks_passed: true
     full_local_ci_after_final_runtime_code: true_for_current_non_frontend_diff
-    post_ci_changes_documentation_only: false_pending_general_integrity_fixes
-    ci_validation_complete: false_pending_next_push
+    post_ci_changes_documentation_only: true_after_6bb41ab0
+    ci_validation_complete: true_pr_6bb41ab0_all_13_contexts_green
     pull_request_opened: true
     pull_request_number: 214
     pull_request_url: https://github.com/tristan419/JATO_Analysis_System/pull/214
@@ -142,7 +142,7 @@ goal_control:
     - observed_server_state_contradicts_documented_baseline
     - change_would_touch_jato_data_or_database_content
     - change_would_cross_this_pr_scope
-  updated_at: "2026-08-07T17:45:00+08:00"
+  updated_at: "2026-08-07T17:50:00+08:00"
 ---
 
 # Fixed Active / Candidate Release V2
@@ -1267,6 +1267,9 @@ incident recovery/fence/hold 状态机。
 - 删除 helper 后重新执行当前差异的完整回归：V2/controller/store/admission/workflow/source-seal
   聚焦测试 `146 passed`；`03_Scripts/tests` 为 `1223 passed, 15 skipped`；部署相关后端测试
   为 `103 passed, 1 skipped`；style、Bash syntax 与 Python compile 均通过。
+- 通用修复以 `6bb41ab0` 推送至 Draft PR #214；两个 CI 触发面的 backend/frontend/smoke/
+  frontend-release-contract、production guard、release coordination 与 Cloudflare Pages 共 13 项
+  checks 全部通过。该 push 没有触发 production release 或腾讯云操作。
 - 首次迁移不能靠技术细节掩盖产品取舍。若必须从第一次正式更新起保留 legacy rollback，
   就只能使用执行后删除的一次性 A/A 迁移并完整承担其迁移验证；若优先最简单的长期代码，
   则可让已测 Candidate 首次形成 `B/B`，但必须明确披露：直到下一次 `C/B` 前没有 distinct
