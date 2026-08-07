@@ -6,14 +6,14 @@ goal_control:
     将复杂蓝绿/事故恢复体系收敛为固定 Active/Candidate 的四操作发布 V2，
     完成代码、CI、腾讯云无流量验收，再由用户授权把同一已测试构件更新到正式
     www Active。intl 继续使用既有的 Active 到 intl 独立同步流程，不在 V2 中新增编排。
-  current_phase: local_v2_green_pending_draft_and_a0_inventory
-  current_step: final_scope_audit_then_draft_pr
+  current_phase: draft_open_pending_a0_inventory_and_rollback_sigkill_fix
+  current_step: draft_pr_214_open_blocked_from_ready
   waiting_on: a0_server_inventory_and_rollback_sigkill_reference_design
   pause_reason: none
   next_action: >-
-    创建独立 Draft PR；PR 保持 Draft，直到腾讯云只读 inventory 证明旧 archive/runtime
-    后再加入并审查一次性 A0 helper，同时在现有四指针边界内解决 rollback 被 SIGKILL
-    时旧 Active 引用丢失的问题。intl 所有既有 workflow 保持本分支基线不变。
+    保持 PR #214 为 Draft。下一步先取得腾讯云只读 inventory，再据事实决定一次性 A0
+    helper；同时在现有四指针边界内解决 rollback 被 SIGKILL 时旧 Active 引用丢失的问题。
+    未解决前不得 Ready、合并或部署。intl 所有既有 workflow 保持本分支基线不变。
   release_authorization_contract:
     source_path: main_to_candidate_to_explicit_user_approval_to_active
     main_may_advance_without_active: true
@@ -97,7 +97,10 @@ goal_control:
     full_local_ci_after_final_runtime_code: true
     post_ci_changes_documentation_only: true
     ci_validation_complete: true_local
-    pull_request_opened: false
+    pull_request_opened: true
+    pull_request_number: 214
+    pull_request_url: https://github.com/tristan419/JATO_Analysis_System/pull/214
+    pull_request_is_draft: true
     candidate_runtime_contract_verified_on_server: false
     candidate_no_worker_runtime_verified_on_server: false
     candidate_preview_verified_on_server: false
@@ -118,7 +121,7 @@ goal_control:
     - observed_server_state_contradicts_documented_baseline
     - change_would_touch_jato_data_or_database_content
     - change_would_cross_this_pr_scope
-  updated_at: "2026-08-07T13:23:13+08:00"
+  updated_at: "2026-08-07T13:28:38+08:00"
 ---
 
 # Fixed Active / Candidate Release V2
@@ -1088,6 +1091,16 @@ incident recovery/fence/hold 状态机。
   只能在既有四指针模型内解决或由用户明确接受，不能为此重建 checkpoint/recovery 平台。
 - www/intl 权限再次锁定：`update-active` 成功即 www 成功；intl 只由用户之后另行运行既有
   Active→intl 同步，失败只影响 intl，绝不回滚 www。
+
+### 2026-08-07 / Step 3A：独立 Draft PR 已建立
+
+- 34 个已审查文件以 commit `9c172109bf357016b4a466cac30b91b4b7c42f9f` 推送到
+  `codex/simple-candidate-release-v2`，并建立 Draft PR
+  [#214](https://github.com/tristan419/JATO_Analysis_System/pull/214)。
+- PR 明确记录：www Candidate/Active 是 V2 唯一发布范围；两份 intl workflow 零 diff，
+  intl 仍由用户之后另行启动既有 Active→intl 同步，失败不回滚 www。
+- PR 保持 Draft。A0 服务器只读 inventory 和 rollback 极端 SIGKILL 引用窗口仍是 Ready
+  blocker；未执行合并、部署、服务器 mutation、Active 切换或 intl 同步。
 
 ## 11. 决策日志
 
