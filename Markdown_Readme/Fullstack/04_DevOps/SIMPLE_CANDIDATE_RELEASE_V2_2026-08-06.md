@@ -6,14 +6,15 @@ goal_control:
     将复杂蓝绿/事故恢复体系收敛为固定 Active/Candidate 的四操作发布 V2，
     完成代码、CI、腾讯云无流量验收，再由用户授权把同一已测试构件更新到正式
     www Active。intl 继续使用既有的 Active 到 intl 独立同步流程，不在 V2 中新增编排。
-  current_phase: draft_open_pending_a0_inventory_and_atomic_exchange_ci
-  current_step: rollback_atomic_exchange_local_verification
-  waiting_on: a0_server_inventory_and_atomic_exchange_ci
+  current_phase: draft_open_pending_tencent_a0_inventory
+  current_step: tencent_read_only_inventory
+  waiting_on: tencent_access_and_a0_server_inventory
   pause_reason: none
   next_action: >-
-    保持 PR #214 为 Draft。完成 rollback 原子交换的完整本地/CI 验证；再取得腾讯云只读
-    inventory，据事实决定一次性 A0 helper，并验证目标文件系统支持原子交换。A0 未完成前
-    不得 Ready、合并或部署。intl 所有既有 workflow 保持本分支基线不变。
+    保持 PR #214 为 Draft。恢复腾讯云 Chrome 终端或 SSH 只读连接，取得旧 Active archive、
+    runtime、systemd/Nginx、指针和数据库 revision inventory，并在目标 slots 文件系统验证
+    原子交换能力；据事实决定一次性 A0 helper。A0 未完成前不得 Ready、合并或部署。
+    intl 所有既有 workflow 保持本分支基线不变。
   release_authorization_contract:
     source_path: main_to_candidate_to_explicit_user_approval_to_active
     main_may_advance_without_active: true
@@ -51,11 +52,12 @@ goal_control:
     steady_state_four_operations_complete: true_local
     legacy_first_update_active_complete: false_pending_one_time_direct_baseline_registration
     legacy_server_archive_unique_and_verified: false_pending_read_only_server_inventory
-    local_ready_blockers_open: 2_a0_and_atomic_exchange_ci
+    local_ready_blockers_open: 1_a0
     server_acceptance_blockers_open: 2_a0_and_candidate_database_role
     update_active_retry_idempotent: true_local
     rollback_active_retry_idempotent: true_local
-    rollback_sigkill_reference_safe: true_local_pending_ci_and_server_capability
+    rollback_sigkill_reference_safe: true_local_and_linux_ci_pending_server_capability
+    rollback_atomic_exchange_linux_ci_passed: true
     failed_prepare_release_cleanup_complete: true_local
     legacy_store_coexistence_gc_complete: true_local
     nonblocking_jato_release_lock_complete: true_local
@@ -95,8 +97,8 @@ goal_control:
     frontend_tests_passed: 370
     frontend_build_and_router_checks_passed: true
     full_local_ci_after_final_runtime_code: true_relevant_deployment_suite
-    post_ci_changes_documentation_only: false_pending_linux_ci
-    ci_validation_complete: true_local_pending_pr_ci
+    post_ci_changes_documentation_only: true_after_d74fd7b8
+    ci_validation_complete: true_pr_d74fd7b8
     pull_request_opened: true
     pull_request_number: 214
     pull_request_url: https://github.com/tristan419/JATO_Analysis_System/pull/214
@@ -121,7 +123,7 @@ goal_control:
     - observed_server_state_contradicts_documented_baseline
     - change_would_touch_jato_data_or_database_content
     - change_would_cross_this_pr_scope
-  updated_at: "2026-08-07T13:48:17+08:00"
+  updated_at: "2026-08-07T13:58:53+08:00"
 ---
 
 # Fixed Active / Candidate Release V2
@@ -1119,6 +1121,20 @@ incident recovery/fence/hold 状态机。
   交换、失败恢复与验证；硬上限一次性调整为 4,200 并重新冻结，不借此加入其他能力。
   尚需 Linux PR CI 和腾讯云目标文件系统能力验证；没有新增 workflow、checkpoint、
   recovery 或 intl 改动。
+
+### 2026-08-07 / Step 3C：rollback Linux CI 通过，阻塞收敛到 A0
+
+- commit `d74fd7b8ec39f003b89dbf9a36c6283f3cf80b71` 已推送到 Draft PR #214；两轮 CI 中
+  frontend/backend/smoke、发布合同、生产门禁、release coordination 和 Cloudflare PR
+  preview 全部通过。Cloudflare 结果只是 PR preview，不是 intl 生产同步。
+- Linux runner 上的 store 测试实际执行 `renameat2(RENAME_EXCHANGE)` 并通过，因此原先
+  rollback SIGKILL 引用窗口不再是本地/CI blocker。腾讯云目标 slots 文件系统仍须验收，
+  不允许用 GitHub runner 结果替代服务器事实。
+- 只读 SSH `150.158.141.14:22` 再次在 10 秒连接超时；Chrome 控制扩展当前没有可用实例，
+  所以没有运行任何腾讯云命令。未创建 A0 helper，也未操作服务器、数据库、JATO 数据、
+  Active 或 intl。
+- 当前唯一 Ready blocker 是 A0：先取得服务器只读 inventory，再决定一次性登记实现和
+  Candidate 无流量验收。PR 继续保持 Draft。
 
 ## 11. 决策日志
 
