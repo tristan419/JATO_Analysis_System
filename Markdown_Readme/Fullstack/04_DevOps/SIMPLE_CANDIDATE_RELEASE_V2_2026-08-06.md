@@ -6,14 +6,14 @@ goal_control:
     将复杂蓝绿/事故恢复体系收敛为固定 Active/Candidate 的四操作发布 V2，
     完成代码、CI、腾讯云无流量验收，再由用户授权把同一已测试构件更新到正式
     www Active。intl 继续使用既有的 Active 到 intl 独立同步流程，不在 V2 中新增编排。
-  current_phase: candidate_fixed_public_link_draft_pr_ci
-  current_step: await_draft_pr_ci_and_review
-  waiting_on: github_ci
+  current_phase: candidate_fixed_public_link_draft_green
+  current_step: await_user_authorization_to_ready_and_merge
+  waiting_on: user_authorization
   pause_reason: none
   next_action: >-
-    固定 Candidate 国内入口的 4 文件变更已由 commit 991a44f8 推送至独立 Draft PR #217，
-    本地验证和独立复核均无阻塞；当前等待 GitHub CI。此 PR 不改 controller、workflow、前后端、
-    Active 或 intl。合并、DNS/证书/认证安装和服务器 reload 均继续需要后续明确授权。
+    固定 Candidate 国内入口的独立 Draft PR #217 已通过 13/13 GitHub checks，本地验证和独立
+    复核也均无阻塞。当前等待用户另行授权将 PR 转 Ready 并合并；未经授权不合并，不配置
+    DNS/证书/Basic Auth，不 reload Nginx，也不更新 Active 或 intl。
   release_authorization_contract:
     source_path: main_to_candidate_to_explicit_user_approval_to_active
     main_may_advance_without_active: true
@@ -129,6 +129,7 @@ goal_control:
     candidate_public_gateway_style_check: passed
     candidate_public_gateway_goal_yaml_check: passed
     candidate_public_gateway_independent_review: passed_no_p0_p1
+    candidate_public_gateway_github_checks: 13_of_13_green
     candidate_dns_configured: false
     candidate_tls_configured: false
     candidate_basic_auth_configured: false
@@ -158,7 +159,7 @@ goal_control:
     - observed_server_state_contradicts_documented_baseline
     - change_would_touch_jato_data_or_database_content
     - change_would_cross_this_pr_scope
-  updated_at: "2026-08-08T21:02:53+08:00"
+  updated_at: "2026-08-08T21:07:34+08:00"
 ---
 
 # Fixed Active / Candidate Release V2
@@ -1385,7 +1386,8 @@ incident recovery/fence/hold 状态机。
   Auth、渲染最终模板并通过 `nginx -t` 后原子启用。不得让缺失证书的模板进入 enabled。
 - 4 个已审查文件由 commit `991a44f8` 推送至独立
   [Draft PR #217](https://github.com/tristan419/JATO_Analysis_System/pull/217)。PR 不包含服务器、
-  DNS 或生产写入；当前等待 GitHub CI，未经用户另行授权不转 Ready、不合并、不安装网关。
+  DNS 或生产写入；13/13 GitHub checks 已通过。未经用户另行授权不转 Ready、不合并、
+  不安装网关。
 
 ## 11. 决策日志
 
