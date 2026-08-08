@@ -7,7 +7,7 @@ from contextlib import contextmanager
 from pathlib import Path
 import stat
 import sys
-from typing import Iterator
+from typing import Callable, Iterator
 
 import pytest
 
@@ -498,6 +498,8 @@ def controller(
     candidate_monthly_enabled: bool = False,
     database_inspector: MODULE.DatabaseInspector = database_ok,
     jato_lock_holder: MODULE.JatoLockHolder = jato_release_locks,
+    http_reader: MODULE.HttpReader | None = None,
+    sleeper: Callable[[float], None] = lambda _seconds: None,
 ) -> MODULE.FixedReleaseController:
     system.nginx_active_config = str(cfg.active_release_config)
     system.active_instance_unit = cfg.active_backend_unit
@@ -505,14 +507,14 @@ def controller(
         "jato-fullstack-backend@.service"
     )
     system.active_v2_environment_files = (
-        f"{cfg.backend_env} (ignore_errors=yes) "
+        f"{cfg.backend_env} (ignore_errors=yes)\n"
         f"{cfg.slot_env_root / '8000.env'} (ignore_errors=no)"
     )
     system.active_legacy_environment_files = f"{cfg.backend_env} (ignore_errors=yes)"
     system.reload_active_unit()
     system.units[MODULE.CANDIDATE_UNIT]["EnvironmentFiles"] = (
-        f"{cfg.backend_env} (ignore_errors=yes) "
-        f"{cfg.slot_env_root / '8001.env'} (ignore_errors=no) "
+        f"{cfg.backend_env} (ignore_errors=yes)\n"
+        f"{cfg.slot_env_root / '8001.env'} (ignore_errors=no)\n"
         f"{cfg.candidate_database_env} (ignore_errors=no)"
     )
     system.units[MODULE.CANDIDATE_UNIT]["DropInPaths"] = str(
@@ -524,7 +526,8 @@ def controller(
     return MODULE.FixedReleaseController(
         cfg,
         runner=system,
-        http_reader=make_http_reader(
+        http_reader=http_reader
+        or make_http_reader(
             cfg.layout,
             fail_candidate=fail_candidate,
             fail_candidate_for=fail_candidate_for,
@@ -536,6 +539,7 @@ def controller(
         candidate_database_inspector=candidate_database_ok,
         jato_inspector=jato_idle,
         jato_lock_holder=jato_lock_holder,
+        sleeper=sleeper,
     )
 
 
@@ -630,6 +634,134 @@ def test_prepare_candidate_starts_only_candidate_and_preview(tmp_path: Path) -> 
         command[:3] == ("systemctl", "set-property", MODULE.CANDIDATE_UNIT)
         for command in system.commands
     )
+    assert "\n" in system.units[MODULE.CANDIDATE_UNIT]["EnvironmentFiles"]
+
+
+def test_prepare_waits_for_transient_candidate_and_preview_startup(
+    tmp_path: Path,
+) -> None:
+    cfg = config(tmp_path)
+    install_active(cfg, ACTIVE)
+    digest = create_release(cfg.layout, CANDIDATE)
+    system = FakeSystem()
+    base_reader = make_http_reader(cfg.layout)
+    attempts = {"backend": 0, "preview": 0}
+    sleeps: list[float] = []
+
+    def delayed_reader(url: str, timeout: int) -> tuple[int, dict[str, object]]:
+        if ":8001/readyz" in url:
+            attempts["backend"] += 1
+            if attempts["backend"] == 1:
+                raise MODULE.V2Error("http_unavailable", "starting")
+            if attempts["backend"] == 2:
+                return 503, {"status": "starting"}
+        if url.endswith("candidate-preview.json"):
+            attempts["preview"] += 1
+            if attempts["preview"] == 1:
+                raise MODULE.V2Error(
+                    "http_json_invalid",
+                    "starting",
+                    details={"status": 502},
+                )
+        return base_reader(url, timeout)
+
+    ctrl = controller(
+        cfg,
+        system,
+        http_reader=delayed_reader,
+        sleeper=sleeps.append,
+    )
+
+    report = ctrl.prepare_candidate(CANDIDATE, manifest_sha256=digest)
+
+    assert report["decision"] == "completed"
+    assert attempts == {"backend": 3, "preview": 2}
+    assert sleeps == [MODULE.STARTUP_HTTP_INTERVAL_SECONDS] * 3
+    assert system.restart_attempts[MODULE.CANDIDATE_UNIT] == 1
+    assert system.restart_attempts[MODULE.PREVIEW_UNIT] == 1
+    assert report["mutation"]["trafficChanged"] is False
+
+
+def test_prepare_exhausts_transient_startup_and_restores_candidate(
+    tmp_path: Path,
+) -> None:
+    cfg = config(tmp_path)
+    install_active(cfg, ACTIVE)
+    digest = create_release(cfg.layout, CANDIDATE)
+    system = FakeSystem()
+    base_reader = make_http_reader(cfg.layout)
+    calls = 0
+    sleeps: list[float] = []
+
+    def unavailable_reader(url: str, timeout: int) -> tuple[int, dict[str, object]]:
+        nonlocal calls
+        if ":8001/readyz" in url:
+            calls += 1
+            if calls == 1:
+                return 503, {"status": "starting"}
+            raise MODULE.V2Error("http_unavailable", "still starting")
+        return base_reader(url, timeout)
+
+    ctrl = controller(
+        cfg,
+        system,
+        http_reader=unavailable_reader,
+        sleeper=sleeps.append,
+    )
+
+    with pytest.raises(MODULE.V2Error) as caught:
+        ctrl.prepare_candidate(CANDIDATE, manifest_sha256=digest)
+
+    assert caught.value.code == "http_unavailable"
+    assert calls == MODULE.STARTUP_HTTP_ATTEMPTS
+    assert len(sleeps) == MODULE.STARTUP_HTTP_ATTEMPTS - 1
+    assert STORE.read_pointer(cfg.layout, MODULE.CANDIDATE_SLOT, "current") is None
+    assert system.units[MODULE.CANDIDATE_UNIT]["ActiveState"] == "inactive"
+    report = latest_report(cfg)
+    assert report["failed"]["code"] == "http_unavailable"
+    assert report["mutation"]["stateRestored"] is True
+    assert report["mutation"]["trafficChanged"] is False
+
+
+@pytest.mark.parametrize(
+    ("failure", "expected_code"),
+    (("invalid_200", "http_json_invalid"), ("unit_stopped", "unit_not_active")),
+)
+def test_prepare_does_not_wait_on_deterministic_or_stopped_runtime(
+    tmp_path: Path,
+    failure: str,
+    expected_code: str,
+) -> None:
+    cfg = config(tmp_path)
+    install_active(cfg, ACTIVE)
+    digest = create_release(cfg.layout, CANDIDATE)
+    system = FakeSystem()
+    base_reader = make_http_reader(cfg.layout)
+    calls = 0
+
+    def failed_reader(url: str, timeout: int) -> tuple[int, dict[str, object]]:
+        nonlocal calls
+        if ":8001/readyz" not in url:
+            return base_reader(url, timeout)
+        calls += 1
+        if failure == "unit_stopped":
+            system.units[MODULE.CANDIDATE_UNIT]["ActiveState"] = "failed"
+            raise MODULE.V2Error("http_unavailable", "stopped")
+        raise MODULE.V2Error(
+            "http_json_invalid",
+            "malformed success response",
+            details={"status": 200},
+        )
+
+    ctrl = controller(cfg, system, http_reader=failed_reader)
+
+    with pytest.raises(MODULE.V2Error) as caught:
+        ctrl.prepare_candidate(CANDIDATE, manifest_sha256=digest)
+
+    assert caught.value.code == expected_code
+    assert calls == 1
+    assert STORE.read_pointer(cfg.layout, MODULE.CANDIDATE_SLOT, "current") is None
+    assert latest_report(cfg)["mutation"]["stateRestored"] is True
 
 
 def test_prepare_promotes_presealed_release_without_rewriting_runtime_seal(
@@ -679,7 +811,16 @@ def test_prepare_failure_restores_empty_candidate_and_keeps_active(tmp_path: Pat
     install_active(cfg, ACTIVE)
     digest = create_release(cfg.layout, CANDIDATE)
     system = FakeSystem()
-    ctrl = controller(cfg, system, fail_candidate=True)
+    base_reader = make_http_reader(cfg.layout, fail_candidate=True)
+    readiness_calls = 0
+
+    def counted_reader(url: str, timeout: int) -> tuple[int, dict[str, object]]:
+        nonlocal readiness_calls
+        if ":8001/readyz" in url:
+            readiness_calls += 1
+        return base_reader(url, timeout)
+
+    ctrl = controller(cfg, system, http_reader=counted_reader)
 
     with pytest.raises(MODULE.V2Error) as caught:
         ctrl.prepare_candidate(CANDIDATE, manifest_sha256=digest)
@@ -697,6 +838,7 @@ def test_prepare_failure_restores_empty_candidate_and_keeps_active(tmp_path: Pat
     assert "candidate_preview_verified" in report["notReached"]
     assert report["mutation"]["trafficChanged"] is False
     assert report["mutation"]["stateRestored"] is True
+    assert readiness_calls == 1
 
 
 def test_prepare_failure_removes_only_fresh_unreferenced_release(tmp_path: Path) -> None:
@@ -725,6 +867,44 @@ def test_prepare_failure_removes_only_fresh_unreferenced_release(tmp_path: Path)
     assert not cfg.layout.release_path(CANDIDATE).exists()
     assert cfg.layout.release_path(ACTIVE).is_dir()
     assert "failed_release_removed" in latest_report(cfg)["passed"]
+
+
+def test_legacy_prepare_failure_preserves_root_error_and_defers_cleanup(
+    tmp_path: Path,
+) -> None:
+    cfg = config(tmp_path)
+    install_legacy_active(cfg)
+    staging_layout = STORE.ReleaseLayout(
+        tmp_path / "staging-source",
+        tmp_path / "unused-slots",
+    )
+    staging_layout.release_root.mkdir()
+    digest = create_release(staging_layout, CANDIDATE)
+    staging = tmp_path / "staging/candidate"
+    staging.parent.mkdir()
+    os.replace(staging_layout.release_path(CANDIDATE), staging)
+    system = FakeSystem()
+    ctrl = controller(cfg, system, fail_candidate=True)
+    active_link = cfg.layout.pointer_path(MODULE.ACTIVE_SLOT, "current")
+    active_target = os.readlink(active_link)
+
+    with pytest.raises(MODULE.V2Error) as caught:
+        ctrl.prepare_candidate(
+            CANDIDATE,
+            manifest_sha256=digest,
+            staging_root=staging,
+        )
+
+    assert caught.value.code == "runtime_sha_mismatch"
+    assert os.readlink(active_link) == active_target
+    assert active_link.resolve(strict=True) == cfg.legacy_active_root
+    assert cfg.layout.release_path(CANDIDATE).is_dir()
+    assert STORE.read_pointer(cfg.layout, MODULE.CANDIDATE_SLOT, "current") is None
+    report = latest_report(cfg)
+    assert report["failed"]["code"] == "runtime_sha_mismatch"
+    assert "failed_release_cleanup_deferred_for_legacy_active" in report["passed"]
+    assert report["mutation"]["stateRestored"] is True
+    assert report["mutation"]["trafficChanged"] is False
 
 
 def test_successive_candidate_prepares_keep_only_two_candidate_versions(
@@ -999,6 +1179,25 @@ def test_prepare_restores_candidate_when_extra_environment_file_is_loaded(
     assert latest_report(cfg)["mutation"]["stateRestored"] is True
 
 
+def test_prepare_rejects_reordered_systemd_environment_files(tmp_path: Path) -> None:
+    cfg = config(tmp_path)
+    install_active(cfg, ACTIVE)
+    digest = create_release(cfg.layout, CANDIDATE)
+    system = FakeSystem()
+    ctrl = controller(cfg, system)
+    entries = system.units[MODULE.CANDIDATE_UNIT]["EnvironmentFiles"].splitlines()
+    system.units[MODULE.CANDIDATE_UNIT]["EnvironmentFiles"] = "\n".join(
+        (entries[0], entries[2], entries[1])
+    )
+
+    with pytest.raises(MODULE.V2Error) as caught:
+        ctrl.prepare_candidate(CANDIDATE, manifest_sha256=digest)
+
+    assert caught.value.code == "candidate_runtime_isolation_mismatch"
+    assert STORE.read_pointer(cfg.layout, MODULE.CANDIDATE_SLOT, "current") is None
+    assert latest_report(cfg)["mutation"]["stateRestored"] is True
+
+
 def test_prepare_restores_candidate_when_monthly_runtime_is_not_disabled(
     tmp_path: Path,
 ) -> None:
@@ -1258,6 +1457,7 @@ def test_update_active_uses_reviewed_candidate_and_keeps_candidate(tmp_path: Pat
     assert f"APP_JATO_MONTHLY_ACTIVE_SLOT_FILE={cfg.active_slot_file}" in active_env
     assert f"APP_JATO_MONTHLY_DEPLOYMENT_MARKER={cfg.deployment_marker}" in active_env
     assert "archive_cache_files_removed:0" in report["passed"]
+    assert "\n" in system.units[MODULE.ACTIVE_UNIT]["EnvironmentFiles"]
 
 
 def test_update_same_target_retry_preserves_previous_and_does_not_restart(

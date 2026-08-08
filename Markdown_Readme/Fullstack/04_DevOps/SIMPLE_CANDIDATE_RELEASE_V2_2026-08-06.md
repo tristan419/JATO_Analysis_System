@@ -11,16 +11,15 @@ goal_control:
   waiting_on: user_authorization
   pause_reason: none
   next_action: >-
-    保持 PR #214 为 Draft。用户已明确选择首次 legacy→已测 Candidate 的 B/B 语义；实现只在
-    现有 update-active 增加该分支，并把既有 update/rollback 的三套重复失败恢复收敛为一套。
-    真实服务器的共享 systemd template、缺失 explicit @8000 unit 和缺失 compat link 已进入测试
-    模型；stale explicit、重启/公网/compat 失败均先拒绝或恢复。运行时三个模块为 4,198 行，
-    未提高冻结上限，未新增 action、workflow、checkpoint 或 recovery。70 项聚焦测试、
-    1,233 项完整脚本回归、CI 边界测试、style/compile 已通过；独立终审确认无 P0/P1。
-    代码 head e290d715 已推送到 Draft PR #214，13/13 项 GitHub 检查通过。本次仅再推送
-    该 CI 证据文档；最终 head 保持 Draft，等待用户单独授权转 Ready 并合并，不进行服务器操作。
-    服务器仍只读且 Candidate DB role/env 未配置；合并、Candidate 启动和任何 Active 变更仍需
-    单独授权，Candidate 不能自动更新 Active 或 intl。
+    PR #214 已合并为 main@30f3e2e4。固定 Active Nginx 契约已在腾讯云迁移并验证，公网仍固定
+    8000，Active SHA/PID、2 workers、6G/8G 和页面行为均未变化。首次 prepare-candidate run
+    31253025482 安全失败并完整恢复 Candidate；Active 未变。一次性只读审计确认三个通用根因：
+    systemd 255 把 EnvironmentFiles 输出为多行、Type=simple restart 后缺少有界就绪等待、legacy
+    Active 下失败 release 清理会遮蔽原始错误。当前仅在现有 controller 修复这三项并补现有测试；
+    不改 workflow/store，不新增 action、checkpoint 或 recovery。76 项聚焦测试和 811 项 CI
+    同款发布测试已通过；code head 36c2d9f9 已推送至独立 Draft PR #216，13/13 GitHub checks
+    全绿。本次只再推送 CI 证据文档；PR 继续保持 Draft。未经用户另行授权不转 Ready/合并、
+    不重新部署 Candidate，且绝不更新 Active 或 intl。
   release_authorization_contract:
     source_path: main_to_candidate_to_explicit_user_approval_to_active
     main_may_advance_without_active: true
@@ -35,9 +34,9 @@ goal_control:
     intl_failure_preserves_www_active: true
   progress:
     worktree_ready: true
-    worktree: /Users/litristan/.codex/worktrees/simple-candidate-release-v2/JATO_Analysis_System
-    branch: codex/simple-candidate-release-v2
-    base_main_sha: 37a9905cebd0ccaf5147314f6cedb639f95a25ca
+    worktree: /Users/litristan/.codex/worktrees/fixed-v2-systemd-readiness/JATO_Analysis_System
+    branch: codex/fixed-v2-systemd-readiness
+    base_main_sha: 30f3e2e4bb77d5de43abb6e26ec9c5571704ef2c
     remote_main_matches_base: true
     design_recorded: true
     historical_inventory_evidence_recorded_below: true
@@ -48,14 +47,15 @@ goal_control:
     store_manifest_primitives_complete: true
     store_manifest_unit_tests_passed: 8
     manifest_cli_unit_tests_passed: 2
-    local_v2_tests_passed: 70_fixed_release_controller_current_delta
+    local_v2_tests_passed: 76_fixed_release_controller_current_delta
+    current_fixed_release_ci_equivalent_tests: 811_passed_15_skipped
     controller_store_admission_tests_passed: 102
     release_seal_tests_passed: 21
     monthly_role_tests_passed: 18
     admission_primitives_complete: true_local
     database_revision_primitives_complete: true
     candidate_database_privilege_probe_complete: true_local
-    candidate_database_role_configured_on_server: false_confirmed_missing
+    candidate_database_role_configured_on_server: true_readonly_role_and_env_verified
     four_operation_methods_present: true
     steady_state_four_operations_complete: true_local
     legacy_first_update_active_complete: true_local_b_b
@@ -74,7 +74,7 @@ goal_control:
     sourceable_runtime_builder_complete: false_removed_helper_only_change
     local_ready_blockers_open: 0
     independent_review_passed: true_no_p0_p1
-    server_acceptance_blockers_open: 2_candidate_database_role_and_no_traffic_acceptance
+    server_acceptance_blockers_open: 1_candidate_redeploy_after_root_fix
     update_active_retry_idempotent: true_local
     rollback_active_retry_idempotent: true_local
     rollback_sigkill_reference_safe: true_local_and_linux_ci_target_ext4_unprobed
@@ -110,21 +110,26 @@ goal_control:
     candidate_indirect_intl_prewarm_decoupled: false_out_of_scope
     intl_workflow_files_modified: false
     candidate_external_side_effect_sandbox: false_documented_operator_limit
-    runtime_python_lines: 4198_of_4200_hard_cap
+    runtime_python_lines: 4256_after_58_line_net_root_fix_no_new_module_or_action
     workflow_unit_tests_passed: 115
     deployment_tests_passed: 1233
     deployment_tests_skipped: 15
     backend_tests_passed: 103
     frontend_tests_passed: 370
     frontend_build_and_router_checks_passed: true
-    full_local_ci_after_final_runtime_code: true_current_b_b_delta
-    post_ci_changes_documentation_only: true_ci_evidence_followup
-    ci_validation_complete: true_code_head_e290d715_13_of_13_green
+    full_local_ci_after_final_runtime_code: true_fixed_release_ci_equivalent
+    post_ci_changes_documentation_only: true_pr_status_followup
+    ci_validation_complete: true_code_head_36c2d9f9_13_of_13_green
+    previous_pull_request_214_merged: true_main_30f3e2e4
+    current_fix_commit: 36c2d9f96eecf1524a69e7fd81ae18d0234025a7
+    current_fix_github_checks: 13_of_13_green
     pull_request_opened: true
-    pull_request_number: 214
-    pull_request_url: https://github.com/tristan419/JATO_Analysis_System/pull/214
+    pull_request_number: 216
+    pull_request_url: https://github.com/tristan419/JATO_Analysis_System/pull/216
     pull_request_is_draft: true
-    candidate_runtime_contract_verified_on_server: false
+    fixed_active_nginx_contract_migrated_on_server: true_behavior_preserved
+    first_candidate_attempt_run: 31253025482_failed_safe
+    candidate_runtime_contract_verified_on_server: false_multiline_format_false_negative
     candidate_no_worker_runtime_verified_on_server: false
     candidate_preview_verified_on_server: false
     production_changed: false
@@ -385,9 +390,11 @@ hotfix”为理由扩展：
   不能成为后续操作的输入或门禁。
 - 服务器并发协调只有一个既有 production flock；不新增 hold、fence、checkpoint、
   journal 或 incident 状态机。
-- V2 runtime 最多三个 Python 模块和一个薄 Bash 入口；3,500 行触发停止扩展并审查，
-  4,200 行为硬上限。测试和文档不计入该预算。初始 4,000 上限只在 Step 3B 为原子
-  rollback 一次性调整至 4,200，当前再次冻结，后续不得按功能逐步抬高。
+- V2 runtime 最多三个 Python 模块和一个薄 Bash 入口；3,500 行触发停止扩展并审查。
+  4,200 行不再作为可被格式化或拆文件规避的字面硬上限，而是强制独立审查线。测试和文档
+  不计入该预算。超过审查线后仍严禁增加 action、workflow、checkpoint、recovery、新模块或
+  事故常量；只允许有真实服务器证据、净增不超过 60 行的现有职责根因修复，且后续永久能力
+  必须先删除等量重复/废弃逻辑。该规则取代 Step 3B 的临时数字冻结，不再逐次抬高数字上限。
 - 一个统一的结构化 operation report schema；失败必须包含 passed、failed、
   notReached、before/after 和 mutation flags。
 - Candidate/Active 使用固定 systemd unit 与固定 Nginx 配置；每个 release 不创建
@@ -1310,6 +1317,47 @@ incident recovery/fence/hold 状态机。
 - PR 仍为 Draft；没有合并、production workflow、腾讯云写入、Candidate 启动、Active 更新、
   intl 同步、数据库或 JATO 数据变更。
 
+### 2026-08-08 / Step 3J：固定 Active 契约迁移完成，首次 Candidate 安全失败后按根因收口
+
+- PR #214 已合并为 `main@30f3e2e4`。经用户单独授权，在腾讯云生产锁内将 enabled Nginx
+  配置迁移为 canonical fixed-Active 契约；`nginx -t`、本机 8000/18000 与公网 www/apex
+  health 均为 200。公网仍只指向 `127.0.0.1:8000`，Active 仍为 PID 3481565、SHA
+  `cd4557cb…`、2 workers、6G/8G；Candidate/intl/JATO 数据均未改变。迁移 preimage 位于
+  `/var/lib/jato-release/nginx-preimages/fixed-active-v2-20260808T103130Z-1121064`。
+- 随后经用户另行授权，只部署 Candidate。GitHub run
+  [31253025482](https://github.com/tristan419/JATO_Analysis_System/actions/runs/31253025482)
+  已完成构件上传、manifest 与 main SHA 复核；服务器在 Candidate runtime isolation 校验处
+  拒绝。8001 曾按 3G/4G 启动，但在约 121ms 后恢复为空；8001/18002 均无监听，Candidate
+  current/previous、slot env 与 preview identity 均已清空。Active 的 PID、SHA、资源和公网
+  健康保持不变，未更新 Active 或 intl。该次失败留下一个约 1.2GB 的未引用有效 release；
+  服务器仍有约 122GB 可用空间，当前不做未经授权的手工删除，待 Active 进入 V2 后由既有 GC
+  回收。
+- 完整只读审计确认不是数据库或页面代码问题，而是三个现有控制器根因：Ubuntu systemd 255
+  对 `EnvironmentFiles` 使用换行列表而测试桩误用单行；`Type=simple` restart 后立即探测，未给
+  实际约 6.2–6.5 秒的应用启动时间；legacy Active 指向受支持的外部旧目录时，失败清理仍调用
+  只接受 V2 store 指针的 `remove_if_unreferenced()`，从而用 cleanup 错误遮蔽原始错误。
+- 修复严格留在 `fixed_release_v2.py`：仅对 `EnvironmentFiles` 做保序空白规范化，Candidate 与
+  Active 共用；HTTP 启动验证只用于刚重启的 backend/preview，最多 10 次、每次 2 秒、间隔
+  1 秒，单服务最坏约 29 秒，每轮还会确认对应 systemd unit 仍 active。只重试连接失败、明确
+  502/503/504，及携带这些状态的非 JSON 错误页；200 坏 JSON、SHA、配置、权限等确定性错误
+  立即失败，最终始终报告最后一次结果。公网 health 与静态 frontend 不另开等待预算。legacy
+  Active 下只延后本次新 release 清理并重新抛原始错误。没有修改 store/workflow，没有新增
+  action、事故常量、checkpoint、recovery 或服务器身份。
+- 测试桩已改成真实 systemd 多行输出，并覆盖多行接受、额外/重排拒绝、瞬态 backend/preview
+  成功、混合 503/断连耗尽后报告最后错误、unit 停止和 200 坏 JSON 立即失败、Candidate 完整
+  恢复、错误 SHA 单次立即拒绝，以及 legacy Active + fresh staging 失败仍保留根错误。当前
+  聚焦套件 `76 passed`；最终 production CI 同款发布套件为 `811 passed, 15 skipped`，Python
+  compile 与 diff check 通过。三个文件已由 commit `36c2d9f9` 推送至独立
+  [Draft PR #216](https://github.com/tristan419/JATO_Analysis_System/pull/216)，base 仍为
+  `main@30f3e2e4`。该 code head 的 13/13 GitHub checks 已全部通过：两套 backend、frontend、
+  smoke、frontend release contract 与 production guard，以及 release coordination 和
+  Cloudflare Pages 均为 success。本次只再推送 CI 证据文档；PR 继续保持 Draft。
+- 三个 runtime 模块由 4,198 行增至 4,256 行，净增 58 行均属于上述通用根因修复。没有通过
+  新模块搬移或格式压缩规避行数。原 4,200 字面硬上限已暴露会诱导这种规避，现改为强制独立
+  审查线：超过后只允许有服务器证据、净增不超过 60 行的现有职责根因修复，并继续禁止新增
+  action/workflow/module/recovery；后续永久能力必须先删除等量重复/废弃代码。当前未重新部署
+  Candidate，后续仍需用户合并授权和用户 Candidate 部署授权两道独立步骤。
+
 ## 11. 决策日志
 
 | 日期 | 决策 | 原因 |
@@ -1343,3 +1391,7 @@ incident recovery/fence/hold 状态机。
 | 2026-08-07 | 首次 rollback 与最简 B/B adoption 交由用户明确选择 | 两者安全属性不同，不能由实现者静默降低首次回退能力 |
 | 2026-08-07 | 用户选择首次 legacy→B/B | 不建立 A/A helper/recovery；接受下一次 C/B 前没有 distinct rollback |
 | 2026-08-07 | shared template 迁移只写显式 @8000 override | 与腾讯云真实 FragmentPath 一致；失败可删除 override 回到原模板 |
+| 2026-08-08 | 固定 Active Nginx 迁移只改契约、不改路由 | 8000、TLS、缓存、API timeout 和页面行为均保持，先满足 Candidate 前置条件 |
+| 2026-08-08 | systemd 多值属性按保序语义比较 | 兼容 systemd 255 的换行输出，同时继续拒绝缺失、额外或重排项 |
+| 2026-08-08 | restart 后只增加有界就绪等待 | 修复真实服务器启动竞态；确定性身份/配置错误仍立即拒绝，不新增恢复系统 |
+| 2026-08-08 | 4,200 从字面硬上限改为强制审查线 | 避免为过线而格式压缩/拆文件；结构边界与单次 60 行根因修复预算更能阻止平台膨胀 |
