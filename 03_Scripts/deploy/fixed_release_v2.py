@@ -17,6 +17,7 @@ import stat
 import subprocess
 import sys
 import tempfile
+import time
 from typing import Any, Iterator, Literal
 import urllib.error
 import urllib.request
@@ -125,6 +126,10 @@ PREVIEW_MEMORY_MAX = 512 * 1024**2
 EXIT_ACTIVE_RESTORE_UNPROVEN = 81
 SHA40 = re.compile(r"^[0-9a-f]{40}$")
 SHA256 = re.compile(r"^[0-9a-f]{64}$")
+STARTUP_HTTP_ATTEMPTS = 10
+STARTUP_HTTP_INTERVAL_SECONDS = 1.0
+STARTUP_HTTP_REQUEST_TIMEOUT_SECONDS = 2
+STARTUP_HTTP_RETRY_STATUSES = frozenset({502, 503, 504})
 
 
 class V2Error(RuntimeError):
@@ -240,7 +245,11 @@ def read_http_json(url: str, timeout_seconds: int) -> tuple[int, dict[str, Any]]
     try:
         payload = json.loads(body.decode("utf-8"))
     except (UnicodeError, json.JSONDecodeError) as exc:
-        raise V2Error("http_json_invalid", f"endpoint did not return JSON: {url}") from exc
+        raise V2Error(
+            "http_json_invalid",
+            f"endpoint did not return JSON: {url}",
+            details={"status": status},
+        ) from exc
     if not isinstance(payload, dict):
         raise V2Error("http_json_invalid", f"endpoint did not return an object: {url}")
     return status, payload
@@ -319,6 +328,10 @@ def _failure_dict(error: Exception) -> dict[str, Any]:
     return result
 
 
+def _normalize_systemd_list_property(value: str) -> str:
+    return " ".join(value.split())
+
+
 class FixedReleaseController:
     def __init__(
         self,
@@ -332,6 +345,7 @@ class FixedReleaseController:
         ),
         jato_inspector: JatoInspector = inspect_jato_idle,
         jato_lock_holder: JatoLockHolder = hold_jato_release_locks,
+        sleeper: Callable[[float], None] = time.sleep,
     ) -> None:
         self.config = config
         self.runner = runner
@@ -340,6 +354,7 @@ class FixedReleaseController:
         self.candidate_database_inspector = candidate_database_inspector
         self.jato_inspector = jato_inspector
         self.jato_lock_holder = jato_lock_holder
+        self.sleeper = sleeper
 
     def _command(self, *arguments: str, timeout: int = 90) -> str:
         result = self.runner(tuple(arguments), timeout)
@@ -349,6 +364,33 @@ class FixedReleaseController:
 
     def _systemctl(self, *arguments: str, timeout: int = 90) -> str:
         return self._command("systemctl", *arguments, timeout=timeout)
+
+    def _read_startup_http_json(
+        self,
+        url: str,
+        unit: str,
+    ) -> tuple[int, dict[str, Any]]:
+        last: V2Error | tuple[int, dict[str, Any]]
+        for attempt in range(STARTUP_HTTP_ATTEMPTS):
+            try:
+                last = self.http_reader(url, STARTUP_HTTP_REQUEST_TIMEOUT_SECONDS)
+            except V2Error as exc:
+                if exc.code != "http_unavailable" and not (
+                    exc.code == "http_json_invalid"
+                    and exc.details.get("status") in STARTUP_HTTP_RETRY_STATUSES
+                ):
+                    raise
+                last = exc
+            else:
+                if last[0] not in STARTUP_HTTP_RETRY_STATUSES:
+                    return last
+            if self._systemctl("show", unit, "-p", "ActiveState", "--value") != "active":
+                raise V2Error("unit_not_active", f"unit stopped during startup: {unit}")
+            if attempt + 1 < STARTUP_HTTP_ATTEMPTS:
+                self.sleeper(STARTUP_HTTP_INTERVAL_SECONDS)
+        if isinstance(last, V2Error):
+            raise last
+        return last
 
     def _stop_unit(self, unit: str) -> None:
         load_state = self._systemctl("show", unit, "-p", "LoadState", "--value")
@@ -1000,7 +1042,11 @@ class FixedReleaseController:
             "PrivateTmp": "yes",
         }
         for name, expected in expected_values.items():
-            if properties[name] != expected:
+            actual = properties[name]
+            if name == "EnvironmentFiles":
+                actual = _normalize_systemd_list_property(actual)
+                expected = _normalize_systemd_list_property(expected)
+            if actual != expected:
                 raise V2Error(
                     "candidate_runtime_isolation_mismatch",
                     f"Candidate systemd isolation differs: {name}",
@@ -1050,7 +1096,10 @@ class FixedReleaseController:
                     "Active monthly-update ownership inputs are incomplete",
                 )
             self._verify_active_monthly_owner()
-        status, payload = self.http_reader(f"http://127.0.0.1:{slot}/readyz", 20)
+        status, payload = self._read_startup_http_json(
+            f"http://127.0.0.1:{slot}/readyz",
+            unit,
+        )
         release = payload.get("release") if isinstance(payload.get("release"), dict) else {}
         if status != 200 or payload.get("status") != "ready":
             raise V2Error("backend_not_ready", f"backend readiness failed on {slot}")
@@ -1282,7 +1331,11 @@ class FixedReleaseController:
             "WorkingDirectory": "/opt/jato/slots/8000/current/06_AppPlatform/backend",
         }
         for name, value in expected.items():
-            if properties[name] != value:
+            actual = properties[name]
+            if name == "EnvironmentFiles":
+                actual = _normalize_systemd_list_property(actual)
+                value = _normalize_systemd_list_property(value)
+            if actual != value:
                 raise V2Error(
                     "active_runtime_contract_mismatch",
                     f"Active systemd contract differs: {name}",
@@ -1384,9 +1437,9 @@ class FixedReleaseController:
             high=PREVIEW_MEMORY_HIGH,
             maximum=PREVIEW_MEMORY_MAX,
         )
-        status, payload = self.http_reader(
+        status, payload = self._read_startup_http_json(
             "http://127.0.0.1:18002/candidate-preview.json",
-            10,
+            PREVIEW_UNIT,
         )
         if (
             status != 200
@@ -1644,20 +1697,25 @@ class FixedReleaseController:
                 )
             except Exception as trigger:
                 if created:
-                    try:
-                        removed = remove_if_unreferenced(self.config.layout, identity)
-                    except ReleaseStoreError as cleanup_error:
-                        raise V2Error(
-                            "candidate_release_cleanup_failed",
-                            "Candidate failed and its new unreferenced release could not be cleaned",
-                            details={
-                                "trigger": _failure_dict(trigger),
-                                "cleanup": _failure_dict(cleanup_error),
-                            },
-                        ) from trigger
-                    if removed:
-                        mutation["stateRestored"] = True
-                        passed.append("failed_release_removed")
+                    if active.legacy:
+                        passed.append(
+                            "failed_release_cleanup_deferred_for_legacy_active"
+                        )
+                    else:
+                        try:
+                            removed = remove_if_unreferenced(self.config.layout, identity)
+                        except ReleaseStoreError as cleanup_error:
+                            raise V2Error(
+                                "candidate_release_cleanup_failed",
+                                "Candidate failed and its new unreferenced release could not be cleaned",
+                                details={
+                                    "trigger": _failure_dict(trigger),
+                                    "cleanup": _failure_dict(cleanup_error),
+                                },
+                            ) from trigger
+                        if removed:
+                            mutation["stateRestored"] = True
+                            passed.append("failed_release_removed")
                 raise
             return identity
 
@@ -1806,7 +1864,7 @@ class FixedReleaseController:
                 self._systemctl("restart", ACTIVE_UNIT, timeout=120)
                 mutation["serviceChanged"] = True
                 self._verify_unit(ACTIVE_UNIT, high=ACTIVE_MEMORY_HIGH, maximum=ACTIVE_MEMORY_MAX)
-                restored_health = self.http_reader(health_url, 20)
+                restored_health = self._read_startup_http_json(health_url, ACTIVE_UNIT)
                 if (
                     Path(self._systemctl("show", ACTIVE_UNIT, "-p", "FragmentPath", "--value"))
                     != fragment
