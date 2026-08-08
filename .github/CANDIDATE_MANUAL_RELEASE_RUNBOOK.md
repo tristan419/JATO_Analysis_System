@@ -14,6 +14,7 @@ main 上的不可变 release
           | 用户手动启动 prepare-candidate
           v
 Candidate：8001 + 127.0.0.1:18002 人工预览
+          + candidate.ojeur.cloud 固定国内测试地址
           |
           +-- 不满意：discard-candidate，www Active 不变
           |
@@ -29,7 +30,8 @@ www Active -- 用户另行启动 sync-www-active-to-intl --> intl
 
 - Active 固定为端口 `8000`，始终承接 www 正式公网流量。
 - Candidate 固定为端口 `8001`，只用于腾讯云真实环境的人工页面测试。
-- Candidate 预览固定监听 `127.0.0.1:18002`，不直接暴露公网。
+- Candidate 预览固定监听 `127.0.0.1:18002`；独立的受认证 HTTPS 网关可以把
+  `candidate.ojeur.cloud` 转发到该 loopback 入口，但不得开放 18002 本身。
 - Active 与 Candidate 的角色和端口不互换；Nginx 正式公网上游始终是 `8000`。
 - 合并代码到 `main` 不会自动部署。只有用户从 `main` 手动 dispatch
   `prepare-candidate`，才会构建并部署 Candidate。
@@ -59,8 +61,8 @@ www Active -- 用户另行启动 sync-www-active-to-intl --> intl
 | 角色 | 服务 | 资源限制 | 网络入口 | 后台任务 |
 | --- | --- | --- | --- | --- |
 | Active | `jato-fullstack-backend@8000.service` | `MemoryHigh=6G`、`MemoryMax=8G` | www 公网固定代理到 8000 | 仅 Active 可以运行月更 worker、scheduler 等单实例任务 |
-| Candidate | `jato-fullstack-backend@8001.service` | `MemoryHigh=3G`、`MemoryMax=4G` | 只经本机 SSH 隧道访问 18002 | 必须全部禁用 |
-| Candidate Preview | `jato-candidate-preview.service` | 独立受限 | 只监听 `127.0.0.1:18002` | 不执行后台任务 |
+| Candidate | `jato-fullstack-backend@8001.service` | `MemoryHigh=3G`、`MemoryMax=4G` | 经固定 Candidate HTTPS 网关或本机 SSH 隧道访问 18002 | 必须全部禁用 |
+| Candidate Preview | `jato-candidate-preview.service` | 独立受限 | 只监听 `127.0.0.1:18002`；公网网关只反代此端口 | 不执行后台任务 |
 
 运行槽始终只有固定的 8000/8001。`prepare-candidate` 可以使用一个无监听、无指针、
 完成后即销毁的 3G/4G transient dependency-build scope；它只是资源受限的依赖构建
@@ -95,6 +97,15 @@ Candidate 可以读取真实生产环境的数据，以发现本地数据无法�
   commit/frontend identity 必须完全不变。
 - 旧 `jato-bluegreen-boot-reconcile` 不得再在开机时改写正式路由。
 - Candidate 必须已有 root-owned 0600 的独立 PostgreSQL SELECT-only env。
+- `candidate.ojeur.cloud` 使用 DNSPod A 记录直达上海腾讯云；必须使用独立 TLS 证书和
+  独立 Nginx vhost，并在所有页面/API 前启用 Basic Auth。密码文件不得进入仓库，建议
+  使用 `root:www-data`、`0640` 的 `/etc/nginx/jato-candidate.htpasswd`。
+- Candidate 公网 vhost 只能反代 `127.0.0.1:18002`，不得包含 8000、Active include、
+  www/intl 域名或任何 Active fallback。Candidate 不存在时应返回 5xx。
+- 一次性安装必须分两阶段，不能直接启用引用尚不存在证书的 HTTPS 模板：先建立 DNS，
+  为 Candidate 准备临时 HTTP-only server block，让现有 Certbot Nginx authenticator 签发
+  独立证书；再生成 Basic Auth、渲染最终模板、执行 `nginx -t`，通过后才原子替换临时
+  配置并 reload。任一步失败都保留现有 www vhost，不重启 8000/8001。
 - 四个 slot/release/shared 目录、固定 active-slot=8000 和单一生产锁路径必须可信。
 - Candidate/Preview systemd 与 Nginx 合同视为基础设施合同；普通代码发布不自动覆盖
   线上漂移。合同需要升级时先单独审查和安装，不在 Candidate 启动中猜测覆盖。
@@ -185,8 +196,22 @@ B 的显式重试只会验证或继续启动 B，不会自动切回 C。只有�
 
 ## 5. Candidate 页面访问方式
 
-`https://www.ojeur.cloud` 永远是 Active，不能用它判断 Candidate。Candidate 准备成功
-后，在本机终端建立 SSH 隧道：
+`https://www.ojeur.cloud` 永远是 Active，不能用它判断 Candidate。固定测试地址是：
+
+```text
+https://candidate.ojeur.cloud
+```
+
+浏览器先通过独立的 Basic Auth，再在 Candidate 页面使用 JATO 账号密码登录。www 的
+localStorage 登录态不会跨域带入 Candidate；第一版不改变 Active OAuth 配置，因此不要
+用 Candidate 测试 Google/飞书 OAuth 回调。
+
+该 URL 本身不绑定某个 commit。每次从更新后的 `main` 成功运行 `prepare-candidate`，
+控制器会更新 8001 的 Candidate 指针和 18002 的预览身份；刷新同一个 URL 就会看到最新
+Candidate。这个动作不会更新 8000、www 或 intl。Candidate 被废弃或启动失败时，固定 URL
+必须返回 5xx，绝不能回退显示 Active。
+
+固定网关不可用时，SSH 隧道仍作为运维备用入口。在本机终端运行：
 
 ```bash
 ssh -N -p "${SSH_PORT:-22}" \
@@ -208,9 +233,8 @@ http://127.0.0.1:18002
 - 月更和其他写入口明确拒绝，而不是悄悄执行；
 - www Active 在整个测试期间仍为原 SHA 且健康。
 
-本机 18002 与 www 是不同 origin，www 的 localStorage 登录态不会自动带过来，应在
-Candidate 页面重新登录。没有一个健康且身份一致的 Candidate 时，18002 必须拒绝，
-不能回退显示 Active。
+本机 18002、Candidate 域名与 www 都是不同 origin，应分别登录。没有一个健康且身份
+一致的 Candidate 时，18002 和固定公网地址都必须拒绝，不能回退显示 Active。
 
 ## 6. intl 是后续独立动作
 

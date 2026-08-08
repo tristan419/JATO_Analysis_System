@@ -6,20 +6,14 @@ goal_control:
     将复杂蓝绿/事故恢复体系收敛为固定 Active/Candidate 的四操作发布 V2，
     完成代码、CI、腾讯云无流量验收，再由用户授权把同一已测试构件更新到正式
     www Active。intl 继续使用既有的 Active 到 intl 独立同步流程，不在 V2 中新增编排。
-  current_phase: draft_green_waiting_for_merge_authorization
-  current_step: await_user_authorization_to_ready_and_merge
-  waiting_on: user_authorization
+  current_phase: candidate_fixed_public_link_draft_pr_creation
+  current_step: commit_push_and_open_independent_draft_pr
+  waiting_on: none
   pause_reason: none
   next_action: >-
-    PR #214 已合并为 main@30f3e2e4。固定 Active Nginx 契约已在腾讯云迁移并验证，公网仍固定
-    8000，Active SHA/PID、2 workers、6G/8G 和页面行为均未变化。首次 prepare-candidate run
-    31253025482 安全失败并完整恢复 Candidate；Active 未变。一次性只读审计确认三个通用根因：
-    systemd 255 把 EnvironmentFiles 输出为多行、Type=simple restart 后缺少有界就绪等待、legacy
-    Active 下失败 release 清理会遮蔽原始错误。当前仅在现有 controller 修复这三项并补现有测试；
-    不改 workflow/store，不新增 action、checkpoint 或 recovery。76 项聚焦测试和 811 项 CI
-    同款发布测试已通过；code head 36c2d9f9 已推送至独立 Draft PR #216，13/13 GitHub checks
-    全绿。本次只再推送 CI 证据文档；PR 继续保持 Draft。未经用户另行授权不转 Ready/合并、
-    不重新部署 Candidate，且绝不更新 Active 或 intl。
+    固定 Candidate 国内入口的 Nginx 模板、既有合同测试和两份部署文档已完成并通过本地验证，
+    独立复核无 P0/P1。当前只提交这 4 个文件并创建独立 Draft PR；不改 controller、workflow、
+    前后端、Active 或 intl。合并、DNS/证书/认证安装和服务器 reload 均继续需要后续明确授权。
   release_authorization_contract:
     source_path: main_to_candidate_to_explicit_user_approval_to_active
     main_may_advance_without_active: true
@@ -34,9 +28,9 @@ goal_control:
     intl_failure_preserves_www_active: true
   progress:
     worktree_ready: true
-    worktree: /Users/litristan/.codex/worktrees/fixed-v2-systemd-readiness/JATO_Analysis_System
-    branch: codex/fixed-v2-systemd-readiness
-    base_main_sha: 30f3e2e4bb77d5de43abb6e26ec9c5571704ef2c
+    worktree: /Users/litristan/.codex/worktrees/candidate-domestic-preview-link/JATO_Analysis_System
+    branch: codex/candidate-domestic-preview-link
+    base_main_sha: b21695163df510e4dd8e91b4701446d917f7d8b8
     remote_main_matches_base: true
     design_recorded: true
     historical_inventory_evidence_recorded_below: true
@@ -123,15 +117,29 @@ goal_control:
     previous_pull_request_214_merged: true_main_30f3e2e4
     current_fix_commit: 36c2d9f96eecf1524a69e7fd81ae18d0234025a7
     current_fix_github_checks: 13_of_13_green
-    pull_request_opened: true
-    pull_request_number: 216
-    pull_request_url: https://github.com/tristan419/JATO_Analysis_System/pull/216
-    pull_request_is_draft: true
+    pull_request_opened: false
+    pull_request_number: none
+    pull_request_url: none
+    pull_request_is_draft: false
+    candidate_fixed_public_link_required: true
+    candidate_public_gateway_design: dnspod_to_shanghai_nginx_basic_auth_to_127_0_0_1_18002
+    candidate_public_gateway_implemented: true_local
+    candidate_public_gateway_contract_tests: 22_passed_2_skipped
+    candidate_public_gateway_style_check: passed
+    candidate_public_gateway_goal_yaml_check: passed
+    candidate_public_gateway_independent_review: passed_no_p0_p1
+    candidate_dns_configured: false
+    candidate_tls_configured: false
+    candidate_basic_auth_configured: false
+    candidate_current_sha_verified: b21695163df510e4dd8e91b4701446d917f7d8b8
+    candidate_public_link_may_fallback_to_active: false
+    active_changed_by_this_step: false
+    intl_changed_by_this_step: false
     fixed_active_nginx_contract_migrated_on_server: true_behavior_preserved
     first_candidate_attempt_run: 31253025482_failed_safe
-    candidate_runtime_contract_verified_on_server: false_multiline_format_false_negative
-    candidate_no_worker_runtime_verified_on_server: false
-    candidate_preview_verified_on_server: false
+    candidate_runtime_contract_verified_on_server: true_read_only_2026_08_08_main_b2169516
+    candidate_no_worker_runtime_verified_on_server: true_read_only_2026_08_08
+    candidate_preview_verified_on_server: true_read_only_2026_08_08_18002_loopback
     production_changed: false
   may_continue_without_new_authorization:
     - local_read_only_audit
@@ -149,18 +157,18 @@ goal_control:
     - observed_server_state_contradicts_documented_baseline
     - change_would_touch_jato_data_or_database_content
     - change_would_cross_this_pr_scope
-  updated_at: "2026-08-07T21:20:00+08:00"
+  updated_at: "2026-08-08T21:00:10+08:00"
 ---
 
 # Fixed Active / Candidate Release V2
 
 > 状态：实施中
 > 开始日期：2026-08-06
-> worktree：`/Users/litristan/.codex/worktrees/simple-candidate-release-v2/JATO_Analysis_System`
-> branch：`codex/simple-candidate-release-v2`
-> 基线：`main@37a9905cebd0ccaf5147314f6cedb639f95a25ca`
-> PR scope：部署文档、脚本、workflow、测试，以及 Candidate 必需的月更角色门禁和环境提示；
-> 不包含 JATO 数据、数据库内容或其他业务功能改动
+> worktree：`/Users/litristan/.codex/worktrees/candidate-domestic-preview-link/JATO_Analysis_System`
+> branch：`codex/candidate-domestic-preview-link`
+> 基线：`main@b21695163df510e4dd8e91b4701446d917f7d8b8`
+> 当前 PR scope：Candidate 固定公网网关模板、既有合同测试和部署文档；不改 controller、
+> workflow、前后端、Active、intl、数据库内容或 JATO 数据
 
 ## 0. Goal Control 使用规则
 
@@ -1358,6 +1366,23 @@ incident recovery/fence/hold 状态机。
   action/workflow/module/recovery；后续永久能力必须先删除等量重复/废弃代码。当前未重新部署
   Candidate，后续仍需用户合并授权和用户 Candidate 部署授权两道独立步骤。
 
+### 2026-08-08 / Step 3K：固定 Candidate 国内测试地址
+
+- 已只读确认最新 `main@b2169516` 运行于固定 Candidate 8001，预览服务只监听
+  `127.0.0.1:18002` 且健康；`candidate.ojeur.cloud` 尚无 DNS，现有 www 证书也不包含该域名。
+- 固定地址采用最小独立网关：DNSPod A 记录直达上海腾讯云，独立 TLS vhost 先执行 Basic
+  Auth，再且只反代 18002。网关不加入 Active 的 `DEPLOY_SERVER_NAME`，不包含 8000、Active
+  include、www/intl 域名或 fallback；Candidate 不存在时返回 5xx，不能显示 Active。
+- 同一个 `candidate.ojeur.cloud` 不绑定具体 commit。每次新的 main 经人工 dispatch 成功
+  `prepare-candidate` 后，只更新固定 8001 的 Candidate 指针和 18002 identity；用户刷新固定
+  地址即可测试最新构件。未获独立授权时绝不运行 `update-active` 或 intl 同步。
+- 当前独立分支只新增 Candidate 公网 Nginx 模板，并修改现有 Nginx 合同测试和本手册/操作
+  手册；没有修改 controller、workflow、前端、后端、数据库或 JATO 数据，也没有写服务器、
+  DNS、证书或认证文件。完成本地验证后只创建 Draft PR，后续安装仍需单独授权。
+- 服务器现有证书只覆盖 ojeur.cloud/www。安装时必须先建立 DNS 和临时 HTTP-only
+  Candidate vhost，使用现有 Certbot Nginx authenticator 签发独立证书；随后再创建 Basic
+  Auth、渲染最终模板并通过 `nginx -t` 后原子启用。不得让缺失证书的模板进入 enabled。
+
 ## 11. 决策日志
 
 | 日期 | 决策 | 原因 |
@@ -1395,3 +1420,5 @@ incident recovery/fence/hold 状态机。
 | 2026-08-08 | systemd 多值属性按保序语义比较 | 兼容 systemd 255 的换行输出，同时继续拒绝缺失、额外或重排项 |
 | 2026-08-08 | restart 后只增加有界就绪等待 | 修复真实服务器启动竞态；确定性身份/配置错误仍立即拒绝，不新增恢复系统 |
 | 2026-08-08 | 4,200 从字面硬上限改为强制审查线 | 避免为过线而格式压缩/拆文件；结构边界与单次 60 行根因修复预算更能阻止平台膨胀 |
+| 2026-08-08 | Candidate 使用固定上海 HTTPS 地址 | 每次 prepare 只替换固定 8001/18002 内容；地址不变，Active/intl 不随 Candidate 变化 |
+| 2026-08-08 | Candidate 公网网关独立于 Active vhost | Basic Auth 覆盖全部路径，且任何失败都不能回退显示 8000 Active |
