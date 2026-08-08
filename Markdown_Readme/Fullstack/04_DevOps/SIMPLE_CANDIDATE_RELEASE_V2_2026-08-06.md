@@ -6,14 +6,14 @@ goal_control:
     将复杂蓝绿/事故恢复体系收敛为固定 Active/Candidate 的四操作发布 V2，
     完成代码、CI、腾讯云无流量验收，再由用户授权把同一已测试构件更新到正式
     www Active。intl 继续使用既有的 Active 到 intl 独立同步流程，不在 V2 中新增编排。
-  current_phase: candidate_fixed_public_link_draft_pr_creation
-  current_step: commit_push_and_open_independent_draft_pr
-  waiting_on: none
+  current_phase: candidate_fixed_public_link_draft_pr_ci
+  current_step: await_draft_pr_ci_and_review
+  waiting_on: github_ci
   pause_reason: none
   next_action: >-
-    固定 Candidate 国内入口的 Nginx 模板、既有合同测试和两份部署文档已完成并通过本地验证，
-    独立复核无 P0/P1。当前只提交这 4 个文件并创建独立 Draft PR；不改 controller、workflow、
-    前后端、Active 或 intl。合并、DNS/证书/认证安装和服务器 reload 均继续需要后续明确授权。
+    固定 Candidate 国内入口的 4 文件变更已由 commit 991a44f8 推送至独立 Draft PR #217，
+    本地验证和独立复核均无阻塞；当前等待 GitHub CI。此 PR 不改 controller、workflow、前后端、
+    Active 或 intl。合并、DNS/证书/认证安装和服务器 reload 均继续需要后续明确授权。
   release_authorization_contract:
     source_path: main_to_candidate_to_explicit_user_approval_to_active
     main_may_advance_without_active: true
@@ -117,10 +117,11 @@ goal_control:
     previous_pull_request_214_merged: true_main_30f3e2e4
     current_fix_commit: 36c2d9f96eecf1524a69e7fd81ae18d0234025a7
     current_fix_github_checks: 13_of_13_green
-    pull_request_opened: false
-    pull_request_number: none
-    pull_request_url: none
-    pull_request_is_draft: false
+    pull_request_opened: true
+    pull_request_number: 217
+    pull_request_url: https://github.com/tristan419/JATO_Analysis_System/pull/217
+    pull_request_is_draft: true
+    candidate_public_gateway_commit: 991a44f8499a1210317aafb5da1f3183b7ee0769
     candidate_fixed_public_link_required: true
     candidate_public_gateway_design: dnspod_to_shanghai_nginx_basic_auth_to_127_0_0_1_18002
     candidate_public_gateway_implemented: true_local
@@ -157,7 +158,7 @@ goal_control:
     - observed_server_state_contradicts_documented_baseline
     - change_would_touch_jato_data_or_database_content
     - change_would_cross_this_pr_scope
-  updated_at: "2026-08-08T21:00:10+08:00"
+  updated_at: "2026-08-08T21:02:53+08:00"
 ---
 
 # Fixed Active / Candidate Release V2
@@ -1382,6 +1383,9 @@ incident recovery/fence/hold 状态机。
 - 服务器现有证书只覆盖 ojeur.cloud/www。安装时必须先建立 DNS 和临时 HTTP-only
   Candidate vhost，使用现有 Certbot Nginx authenticator 签发独立证书；随后再创建 Basic
   Auth、渲染最终模板并通过 `nginx -t` 后原子启用。不得让缺失证书的模板进入 enabled。
+- 4 个已审查文件由 commit `991a44f8` 推送至独立
+  [Draft PR #217](https://github.com/tristan419/JATO_Analysis_System/pull/217)。PR 不包含服务器、
+  DNS 或生产写入；当前等待 GitHub CI，未经用户另行授权不转 Ready、不合并、不安装网关。
 
 ## 11. 决策日志
 
