@@ -6,9 +6,9 @@ goal_control:
     将复杂蓝绿/事故恢复体系收敛为固定 Active/Candidate 的四操作发布 V2，
     完成代码、CI、腾讯云无流量验收，再由用户授权把同一已测试构件更新到正式
     www Active。intl 继续使用既有的 Active 到 intl 独立同步流程，不在 V2 中新增编排。
-  current_phase: independent_draft_pr_ci_running
-  current_step: await_github_ci_terminal_state
-  waiting_on: github_ci
+  current_phase: draft_green_waiting_for_merge_authorization
+  current_step: await_user_authorization_to_ready_and_merge
+  waiting_on: user_authorization
   pause_reason: none
   next_action: >-
     PR #214 已合并为 main@30f3e2e4。固定 Active Nginx 契约已在腾讯云迁移并验证，公网仍固定
@@ -17,8 +17,9 @@ goal_control:
     systemd 255 把 EnvironmentFiles 输出为多行、Type=simple restart 后缺少有界就绪等待、legacy
     Active 下失败 release 清理会遮蔽原始错误。当前仅在现有 controller 修复这三项并补现有测试；
     不改 workflow/store，不新增 action、checkpoint 或 recovery。76 项聚焦测试和 811 项 CI
-    同款发布测试已通过；commit 36c2d9f9 已推送至独立 Draft PR #216，GitHub CI 正在运行。
-    未经用户另行授权不转 Ready/合并、不重新部署 Candidate，且绝不更新 Active 或 intl。
+    同款发布测试已通过；code head 36c2d9f9 已推送至独立 Draft PR #216，13/13 GitHub checks
+    全绿。本次只再推送 CI 证据文档；PR 继续保持 Draft。未经用户另行授权不转 Ready/合并、
+    不重新部署 Candidate，且绝不更新 Active 或 intl。
   release_authorization_contract:
     source_path: main_to_candidate_to_explicit_user_approval_to_active
     main_may_advance_without_active: true
@@ -118,9 +119,10 @@ goal_control:
     frontend_build_and_router_checks_passed: true
     full_local_ci_after_final_runtime_code: true_fixed_release_ci_equivalent
     post_ci_changes_documentation_only: true_pr_status_followup
-    ci_validation_complete: false_current_fix_not_pushed
+    ci_validation_complete: true_code_head_36c2d9f9_13_of_13_green
     previous_pull_request_214_merged: true_main_30f3e2e4
     current_fix_commit: 36c2d9f96eecf1524a69e7fd81ae18d0234025a7
+    current_fix_github_checks: 13_of_13_green
     pull_request_opened: true
     pull_request_number: 216
     pull_request_url: https://github.com/tristan419/JATO_Analysis_System/pull/216
@@ -1347,12 +1349,14 @@ incident recovery/fence/hold 状态机。
   聚焦套件 `76 passed`；最终 production CI 同款发布套件为 `811 passed, 15 skipped`，Python
   compile 与 diff check 通过。三个文件已由 commit `36c2d9f9` 推送至独立
   [Draft PR #216](https://github.com/tristan419/JATO_Analysis_System/pull/216)，base 仍为
-  `main@30f3e2e4`，GitHub CI 正在运行。
+  `main@30f3e2e4`。该 code head 的 13/13 GitHub checks 已全部通过：两套 backend、frontend、
+  smoke、frontend release contract 与 production guard，以及 release coordination 和
+  Cloudflare Pages 均为 success。本次只再推送 CI 证据文档；PR 继续保持 Draft。
 - 三个 runtime 模块由 4,198 行增至 4,256 行，净增 58 行均属于上述通用根因修复。没有通过
   新模块搬移或格式压缩规避行数。原 4,200 字面硬上限已暴露会诱导这种规避，现改为强制独立
   审查线：超过后只允许有服务器证据、净增不超过 60 行的现有职责根因修复，并继续禁止新增
   action/workflow/module/recovery；后续永久能力必须先删除等量重复/废弃代码。当前未重新部署
-  Candidate，后续仍需 Draft PR CI 终态、用户合并授权和用户 Candidate 部署授权三道独立步骤。
+  Candidate，后续仍需用户合并授权和用户 Candidate 部署授权两道独立步骤。
 
 ## 11. 决策日志
 
