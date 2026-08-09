@@ -8,14 +8,13 @@ goal_control:
     身份直接进入页面；完成代码、CI、腾讯云无流量验收后，再由用户授权把同一已测试构件
     更新到正式 www Active。Candidate 测试数据永不进入 Active；intl 继续使用既有的
     Active 到 intl 独立同步流程，不在 V2 中新增编排。
-  current_phase: candidate_writable_database_sandbox_ci_fix
-  current_step: commit_push_frontend_test_env_isolation
+  current_phase: candidate_writable_database_sandbox_ci
+  current_step: monitor_draft_pr_checks
   waiting_on: none
   pause_reason: none
   next_action: >-
-    只 stage Candidate auth bootstrap 单测和本 Goal，提交并推送 #219，然后重新监控 GitHub
-    checks。未经另行授权不转 Ready、不合并、不部署、不配置服务器，也不执行 Candidate
-    prepare、Active 更新或 intl 同步。
+    只监控 Candidate Draft PR #219 最新 head 的 GitHub checks 并记录结果。未经另行授权不转
+    Ready、不合并、不部署、不配置服务器，也不执行 Candidate prepare、Active 更新或 intl 同步。
   release_authorization_contract:
     source_path: main_to_candidate_to_explicit_user_approval_to_active
     main_may_advance_without_active: true
@@ -114,11 +113,13 @@ goal_control:
     frontend_tests_passed: 373
     frontend_build_and_router_checks_passed: true
     full_local_ci_after_final_runtime_code: true_scripts_and_frontend
-    post_ci_changes_documentation_only: false_test_only_ci_environment_isolation
-    ci_validation_complete: false_local_fix_green_pending_push
+    post_ci_changes_documentation_only: true_ci_status_update_only
+    ci_validation_complete: false_github_checks_running
     candidate_sandbox_initial_ci_failure: fullstack_frontend_vite_auth_token_test_environment_leak
     candidate_sandbox_ci_fix_scope: one_test_file_plus_goal_no_production_code
     candidate_sandbox_ci_fix_local_validation: 373_tests_types_build_router_passed_with_github_env
+    candidate_sandbox_ci_fix_commit: c1a87b47eea0d94d1dc3bbc01b9efb17d39a6c73
+    candidate_sandbox_ci_fix_pushed: true
     previous_pull_request_214_merged: true_main_30f3e2e4
     current_fix_commit: 36c2d9f96eecf1524a69e7fd81ae18d0234025a7
     current_fix_github_checks: 13_of_13_green
@@ -735,8 +736,8 @@ mark-and-sweep 计划；只要 release store 出现未知条目就拒绝清理�
 - 使用 GitHub 相同的 `VITE_API_BASE=/v1`、`VITE_AUTH_TOKEN=ci-token`、
   `VITE_USER_ROLE=admin`、`VITE_USER_NAME=github-actions` 完整执行 `npm run check:frontend`：
   70 个测试文件、373 项测试、TypeScript、production build 与 router regression 全部通过。
-- 下一步仅提交并推送此测试修复与 Goal 状态，再观察 #219 新 head 的 checks；仍不转 Ready、
-  不合并、不部署、不配置服务器。
+- 测试修复与 Goal 已提交为 `c1a87b47eea0d94d1dc3bbc01b9efb17d39a6c73` 并推送 #219；
+  下一步只观察最新 head 的 checks，仍不转 Ready、不合并、不部署、不配置服务器。
 
 ### 2026-08-06 / Step 0：目标与开发边界
 
