@@ -6,13 +6,15 @@ from __future__ import annotations
 import argparse
 from collections.abc import Callable, Mapping, Sequence
 from contextlib import AbstractContextManager, contextmanager
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 import datetime as dt
 import fcntl
 import json
 import os
 from pathlib import Path
 import re
+import secrets
+import signal
 import stat
 import subprocess
 import sys
@@ -21,6 +23,7 @@ import time
 from typing import Any, Iterator, Literal
 import urllib.error
 import urllib.request
+from urllib.parse import quote, unquote, urlsplit, urlunsplit
 import uuid
 
 
@@ -33,6 +36,9 @@ from release_v2_admission import (  # noqa: E402
     CandidateDatabaseIsolationConfig,
     CommandResult,
     DatabaseRevisionConfig,
+    SAFE_COMMAND_ENV,
+    _database_identity as admission_database_identity,
+    _read_backend_environment as read_backend_environment,
     inspect_candidate_database_isolation,
     inspect_database_compatibility,
     inspect_jato_idle,
@@ -67,9 +73,9 @@ ACTION_CHECKS: dict[Action, tuple[str, ...]] = {
         "active_baseline_verified",
         "fixed_active_routing_verified",
         "release_manifest_verified",
-        "candidate_database_isolation_verified",
         "candidate_previous_state_verified",
-        "database_revision_compatible",
+        "candidate_sandbox_provisioned",
+        "candidate_database_isolation_verified",
         "preview_contract_verified",
         "candidate_backend_verified",
         "candidate_monthly_disabled_verified",
@@ -130,6 +136,9 @@ STARTUP_HTTP_ATTEMPTS = 10
 STARTUP_HTTP_INTERVAL_SECONDS = 1.0
 STARTUP_HTTP_REQUEST_TIMEOUT_SECONDS = 2
 STARTUP_HTTP_RETRY_STATUSES = frozenset({502, 503, 504})
+CANDIDATE_SANDBOX_NAME = re.compile(
+    r"^jato_candidate_\d{8}t\d{6}z_[0-9a-f]{16}$"
+)
 
 
 class V2Error(RuntimeError):
@@ -209,12 +218,23 @@ class ActiveBaseline:
     legacy: bool
 
 
+@dataclass(frozen=True)
+class CandidateSandbox:
+    database_name: str
+    snapshot_at: str
+    environment: str = field(repr=False)
+
+
 CommandRunner = Callable[[tuple[str, ...], int], CommandResult]
 HttpReader = Callable[[str, int], tuple[int, dict[str, Any]]]
 DatabaseInspector = Callable[[DatabaseRevisionConfig], dict[str, Any]]
 CandidateDatabaseInspector = Callable[
     [CandidateDatabaseIsolationConfig],
     dict[str, Any],
+]
+CandidateSandboxProvisioner = Callable[[ControllerConfig, Path], CandidateSandbox]
+CandidateSandboxDropper = Callable[
+    [ControllerConfig, str | None, frozenset[str]], tuple[str, ...]
 ]
 JatoInspector = Callable[[Path], dict[str, Any]]
 JatoLockHolder = Callable[[Path, Path], AbstractContextManager[dict[str, Any]]]
@@ -332,6 +352,315 @@ def _normalize_systemd_list_property(value: str) -> str:
     return " ".join(value.split())
 
 
+def _database_url_for(url: str, database: str) -> str:
+    if not CANDIDATE_SANDBOX_NAME.fullmatch(database):
+        raise V2Error("candidate_database_marker_invalid", "sandbox marker is unsafe")
+    admission_database_identity(url)
+    return urlunsplit(urlsplit(url)._replace(path=f"/{quote(database, safe='')}"))
+
+
+def _libpq_environment(url: str) -> dict[str, str]:
+    role, host, port, database = admission_database_identity(url)
+    parsed = urlsplit(url)
+    environment = dict(SAFE_COMMAND_ENV)
+    environment.update(
+        PGHOST=host,
+        PGPORT=str(port),
+        PGUSER=role,
+        PGDATABASE=database,
+    )
+    if parsed.password is not None:
+        environment["PGPASSWORD"] = unquote(parsed.password)
+    return environment
+
+
+def _render_candidate_database_environment(
+    bootstrap: Mapping[str, str], database_name: str, snapshot_at: str
+) -> str:
+    url = _database_url_for(bootstrap.get("APP_DATABASE_URL", ""), database_name)
+    values = (
+        ("APP_DATABASE_ENABLED", "true"), ("APP_DATABASE_URL", url),
+        ("DATABASE_URL", url), ("APP_CANDIDATE_SANDBOX_DATABASE", database_name),
+        ("APP_CANDIDATE_SNAPSHOT_AT", snapshot_at), ("APP_AUTH_ENABLED", "false"),
+        ("APP_AUTH_TOKEN", ""), ("APP_TOKEN_ROLE_MAP", ""),
+        ("APP_JWT_SECRET", secrets.token_hex(32)), ("APP_RUNTIME_READ_ONLY", "false"),
+    )
+    return "".join(f"{key}={value}\n" for key, value in values)
+
+
+def _sandbox_marker(candidate: Mapping[str, str], active: Mapping[str, str]) -> str | None:
+    marker = candidate.get("APP_CANDIDATE_SANDBOX_DATABASE", "")
+    if not marker:
+        return None
+    if not CANDIDATE_SANDBOX_NAME.fullmatch(marker):
+        raise V2Error("candidate_database_marker_invalid", "sandbox marker is unsafe")
+    candidate_identity = admission_database_identity(candidate.get("APP_DATABASE_URL", ""))
+    active_identity = admission_database_identity(active.get("APP_DATABASE_URL", ""))
+    if (marker != candidate_identity[3] or marker == active_identity[3]
+            or candidate_identity[1:3] != active_identity[1:3]):
+        raise V2Error(
+            "candidate_database_marker_mismatch",
+            "sandbox marker does not identify a safe isolated database",
+        )
+    return marker
+
+
+def _candidate_database_state(
+    config: ControllerConfig,
+) -> tuple[dict[str, str], dict[str, str], str | None, str]:
+    active = read_backend_environment(
+        config.backend_env, expected_uid=config.expected_owner_uid
+    )
+    candidate = read_backend_environment(
+        config.candidate_database_env, expected_uid=config.expected_owner_uid,
+        expected_mode=0o600,
+    )
+    active_identity = admission_database_identity(active.get("APP_DATABASE_URL", ""))
+    candidate_identity = admission_database_identity(candidate.get("APP_DATABASE_URL", ""))
+    if candidate_identity[0] == active_identity[0]:
+        raise V2Error(
+            "candidate_database_role_not_isolated",
+            "Candidate must not use the Active database role",
+        )
+    if candidate_identity[1:3] != active_identity[1:3]:
+        raise V2Error(
+            "candidate_database_cluster_mismatch",
+            "Candidate must use the local Active database cluster",
+        )
+    return active, candidate, _sandbox_marker(candidate, active), active_identity[3]
+
+
+def _preview_sandbox_metadata(payload: str | None) -> tuple[str | None, str | None]:
+    if payload is None:
+        return None, None
+    try:
+        values = json.loads(payload)
+    except (TypeError, json.JSONDecodeError) as exc:
+        raise V2Error("preview_identity_invalid", "preview identity is invalid") from exc
+    if not isinstance(values, dict):
+        raise V2Error("preview_identity_invalid", "preview identity is invalid")
+    database, snapshot = values.get("databaseName"), values.get("databaseSnapshotAt")
+    if database is not None and (not isinstance(database, str)
+                                 or not CANDIDATE_SANDBOX_NAME.fullmatch(database)):
+        raise V2Error("candidate_database_marker_invalid", "preview marker is unsafe")
+    if snapshot is not None and not isinstance(snapshot, str):
+        raise V2Error("preview_identity_invalid", "preview snapshot time is invalid")
+    return database, snapshot
+
+
+def _run_database_command(
+    arguments: tuple[str, ...], *, label: str, cwd: Path | None = None,
+    environment: Mapping[str, str] | None = None, timeout: int = 900,
+    user: str | None = None, group: str | None = None,
+    input_text: str | None = None,
+) -> str:
+    try:
+        completed = subprocess.run(
+            arguments, cwd=cwd, env=dict(environment or SAFE_COMMAND_ENV),
+            input=input_text, capture_output=True, text=True, timeout=timeout, check=False,
+            user=user, group=group, extra_groups=() if user else None,
+        )
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        raise V2Error("candidate_sandbox_command_failed", f"{label} failed") from exc
+    if completed.returncode:
+        raise V2Error("candidate_sandbox_command_failed", f"{label} failed")
+    return completed.stdout.strip()
+
+
+def _postgres_command(
+    port: int, executable: str, *arguments: str, label: str,
+    input_text: str | None = None,
+) -> str:
+    return _run_database_command(
+        ("runuser", "-u", "postgres", "--", executable, "--host",
+         "/var/run/postgresql", "--port", str(port), *arguments),
+        label=label, input_text=input_text,
+    )
+
+
+def _run_database_pipeline(
+    dump_environment: Mapping[str, str], restore_environment: Mapping[str, str]
+) -> None:
+    processes: list[subprocess.Popen[bytes]] = []
+    try:
+        dump = subprocess.Popen(
+            ("pg_dump", "--dbname", dump_environment["PGDATABASE"],
+             "--format=custom", "--no-owner", "--no-privileges"),
+            env=dict(dump_environment), stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL, start_new_session=True,
+        )
+        processes.append(dump)
+        assert dump.stdout is not None
+        restore = subprocess.Popen(
+            ("pg_restore", "--dbname", restore_environment["PGDATABASE"],
+             "--exit-on-error", "--no-owner", "--no-privileges", "--single-transaction"),
+            env=dict(restore_environment), stdin=dump.stdout,
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+            start_new_session=True, user="nobody", group="nogroup", extra_groups=(),
+        )
+        processes.append(restore)
+        dump.stdout.close()
+        restore.wait(timeout=900)
+        dump.wait(timeout=30)
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        raise V2Error("candidate_sandbox_command_failed", "snapshot restore failed") from exc
+    finally:
+        for process in reversed(processes):
+            if process.poll() is None:
+                try:
+                    os.killpg(process.pid, signal.SIGKILL)
+                except ProcessLookupError:
+                    pass
+                process.wait()
+    if any(process.returncode for process in processes):
+        raise V2Error("candidate_sandbox_command_failed", "snapshot restore failed")
+
+
+def drop_candidate_sandbox(
+    config: ControllerConfig, database_name: str | None,
+    protected_database_names: frozenset[str],
+) -> tuple[str, ...]:
+    active = read_backend_environment(
+        config.backend_env, expected_uid=config.expected_owner_uid
+    )
+    _, host, port, active_database = admission_database_identity(
+        active.get("APP_DATABASE_URL", "")
+    )
+    if host not in {"127.0.0.1", "localhost", "::1"}:
+        raise V2Error("candidate_database_drop_refused", "database cluster is not local")
+    if database_name is not None and not CANDIDATE_SANDBOX_NAME.fullmatch(database_name):
+        raise V2Error("candidate_database_drop_refused", "sandbox marker is unsafe")
+    output = _postgres_command(
+        port, "psql", "--dbname", "postgres", "--tuples-only", "--no-align",
+        "--file", "-", label="sandbox discovery",
+        input_text="SELECT datname FROM pg_database;\n",
+    )
+    discovered = {name for name in output.splitlines()
+                  if CANDIDATE_SANDBOX_NAME.fullmatch(name)}
+    requested = discovered if database_name is None else discovered & {database_name}
+    removed: list[str] = []
+    for target in sorted(requested - protected_database_names - {active_database}):
+        try:
+            _postgres_command(port, "dropdb", "--force", target, label="sandbox drop")
+        except Exception as exc:
+            raise V2Error(
+                "candidate_sandbox_drop_failed", "sandbox cleanup was incomplete",
+                details={"removed": removed},
+            ) from exc
+        removed.append(target)
+    return tuple(removed)
+
+
+_CANDIDATE_ROLE_PREFLIGHT = r'''SELECT (r.rolcanlogin AND NOT (
+r.rolsuper OR r.rolcreatedb OR r.rolcreaterole OR r.rolreplication OR r.rolbypassrls)
+AND NOT EXISTS (SELECT 1 FROM pg_auth_members WHERE member=r.oid)
+AND NOT has_database_privilege(r.rolname, :'active_database', 'CONNECT')
+AND EXISTS (SELECT 1 FROM pg_database WHERE datname=:'active_database')) AS safe
+FROM pg_roles r WHERE r.rolname=:'role' \gset
+\if :safe
+\else
+\quit 42
+\endif'''
+_CANDIDATE_FINALIZE = r'''ALTER DATABASE :"database" OWNER TO postgres;
+REVOKE ALL ON DATABASE :"database" FROM :"role";
+REVOKE CREATE ON DATABASE :"database" FROM PUBLIC;
+GRANT CONNECT ON DATABASE :"database" TO :"role";
+SELECT format('ALTER SCHEMA %1$I OWNER TO postgres; REVOKE CREATE ON SCHEMA %1$I FROM PUBLIC; '
+'REVOKE CREATE ON SCHEMA %1$I FROM %2$I; GRANT USAGE ON SCHEMA %1$I TO %2$I', nspname, :'role')
+FROM pg_namespace WHERE nspname NOT LIKE 'pg_%' AND nspname<>'information_schema' \gexec
+SELECT format('ALTER %s %I.%I OWNER TO postgres', CASE c.relkind WHEN 'v' THEN 'VIEW'
+WHEN 'm' THEN 'MATERIALIZED VIEW' WHEN 'S' THEN 'SEQUENCE' WHEN 'f' THEN 'FOREIGN TABLE'
+ELSE 'TABLE' END, n.nspname, c.relname) FROM pg_class c
+JOIN pg_namespace n ON n.oid=c.relnamespace WHERE n.nspname NOT LIKE 'pg_%'
+AND n.nspname<>'information_schema' AND c.relkind IN ('r','p','v','m','f','S') \gexec
+SELECT format('GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA %I TO %I',
+nspname, :'role') FROM pg_namespace WHERE nspname NOT LIKE 'pg_%'
+AND nspname<>'information_schema' \gexec
+SELECT format('GRANT USAGE, SELECT, UPDATE ON ALL SEQUENCES IN SCHEMA %I TO %I',
+nspname, :'role') FROM pg_namespace WHERE nspname NOT LIKE 'pg_%'
+AND nspname<>'information_schema' \gexec'''
+
+
+def provision_candidate_sandbox(
+    config: ControllerConfig, candidate_root: Path
+) -> CandidateSandbox:
+    active = read_backend_environment(config.backend_env, expected_uid=config.expected_owner_uid)
+    bootstrap = read_backend_environment(
+        config.candidate_database_env, expected_uid=config.expected_owner_uid,
+        expected_mode=0o600,
+    )
+    active_url, bootstrap_url = active.get("APP_DATABASE_URL", ""), bootstrap.get("APP_DATABASE_URL", "")
+    active_identity = admission_database_identity(active_url)
+    candidate_identity = admission_database_identity(bootstrap_url)
+    if (candidate_identity[0] == active_identity[0]
+            or candidate_identity[1:3] != active_identity[1:3]
+            or active_identity[1] not in {"127.0.0.1", "localhost", "::1"}):
+        raise V2Error(
+            "candidate_database_bootstrap_invalid",
+            "Candidate bootstrap is not isolated on the local Active cluster",
+        )
+    candidate_role, port = candidate_identity[0], active_identity[2]
+    active_database = active_identity[3]
+    now = dt.datetime.now(dt.timezone.utc)
+    snapshot_at = now.isoformat(timespec="seconds").replace("+00:00", "Z")
+    database_name = f"jato_candidate_{now:%Y%m%dt%H%M%Sz}_{uuid.uuid4().hex[:16]}"
+    candidate_url = _database_url_for(bootstrap_url, database_name)
+    variables = ("--set", "ON_ERROR_STOP=1", "--set", f"role={candidate_role}")
+    created = False
+    try:
+        _postgres_command(
+            port, "psql", "--dbname", "postgres", *variables, "--set",
+            f"active_database={active_database}", "--file", "-",
+            label="Candidate role preflight", input_text=_CANDIDATE_ROLE_PREFLIGHT,
+        )
+        _postgres_command(
+            port, "createdb", "--template", "template0", "--owner", candidate_role,
+            database_name,
+            label="Candidate sandbox create",
+        )
+        created = True
+        dump_env = _libpq_environment(active_url)
+        restore_env = _libpq_environment(candidate_url)
+        restore_env["PGOPTIONS"] = "-c default_transaction_read_only=off"
+        _run_database_pipeline(dump_env, restore_env)
+        migration_env = dict(SAFE_COMMAND_ENV)
+        migration_env.update(APP_DATABASE_ENABLED="true", APP_DATABASE_URL=candidate_url,
+                             DATABASE_URL=candidate_url,
+                             PGOPTIONS="-c default_transaction_read_only=off")
+        _run_database_command(
+            (str(candidate_root / ".venv/bin/python"), "-m", "alembic", "upgrade", "head"),
+            cwd=candidate_root / "06_AppPlatform/backend", environment=migration_env,
+            label="Candidate sandbox migration", user="nobody", group="nogroup",
+        )
+        _postgres_command(
+            port, "psql", "--dbname", database_name, *variables, "--set",
+            f"database={database_name}", "--file", "-",
+            label="Candidate sandbox grants", input_text=_CANDIDATE_FINALIZE,
+        )
+    except Exception as trigger:
+        if not created:
+            raise
+        try:
+            drop_candidate_sandbox(config, database_name, frozenset({active_database}))
+        except Exception as cleanup_error:
+            raise V2Error(
+                "candidate_sandbox_cleanup_failed",
+                "sandbox preparation failed and its database was retained",
+                details={"databaseMutationPerformed": True,
+                         "trigger": _failure_dict(trigger),
+                         "cleanup": _failure_dict(cleanup_error)},
+            ) from trigger
+        raise V2Error(
+            "candidate_sandbox_provision_failed",
+            "sandbox preparation failed and was removed",
+            details={"databaseMutationPerformed": True, "trigger": _failure_dict(trigger)},
+        ) from trigger
+    return CandidateSandbox(
+        database_name, snapshot_at,
+        _render_candidate_database_environment(bootstrap, database_name, snapshot_at),
+    )
+
+
 class FixedReleaseController:
     def __init__(
         self,
@@ -343,6 +672,8 @@ class FixedReleaseController:
         candidate_database_inspector: CandidateDatabaseInspector = (
             inspect_candidate_database_isolation
         ),
+        sandbox_provisioner: CandidateSandboxProvisioner = provision_candidate_sandbox,
+        sandbox_dropper: CandidateSandboxDropper = drop_candidate_sandbox,
         jato_inspector: JatoInspector = inspect_jato_idle,
         jato_lock_holder: JatoLockHolder = hold_jato_release_locks,
         sleeper: Callable[[float], None] = time.sleep,
@@ -352,9 +683,25 @@ class FixedReleaseController:
         self.http_reader = http_reader
         self.database_inspector = database_inspector
         self.candidate_database_inspector = candidate_database_inspector
+        self.sandbox_provisioner = sandbox_provisioner
+        self.sandbox_dropper = sandbox_dropper
         self.jato_inspector = jato_inspector
         self.jato_lock_holder = jato_lock_holder
         self.sleeper = sleeper
+
+    def _drop_sandboxes(
+        self,
+        database: str | None,
+        protected: frozenset[str],
+        mutation: dict[str, bool],
+    ) -> tuple[str, ...]:
+        try:
+            removed = self.sandbox_dropper(self.config, database, protected)
+        except V2Error as exc:
+            mutation["databaseChanged"] |= bool(exc.details.get("removed"))
+            raise
+        mutation["databaseChanged"] |= bool(removed)
+        return removed
 
     def _command(self, *arguments: str, timeout: int = 90) -> str:
         result = self.runner(tuple(arguments), timeout)
@@ -856,7 +1203,7 @@ class FixedReleaseController:
             "APP_BACKEND_WORKERS": "2",
             "APP_JATO_MONTHLY_ENABLED": enabled,
             "APP_JATO_MONTHLY_EXECUTION_MODE": execution_mode,
-            "APP_RUNTIME_READ_ONLY": "false" if active else "true",
+            "APP_RUNTIME_READ_ONLY": "false",
             "APP_JATO_MONTHLY_UPDATE_JOB_ROOT": str(self.config.jato_job_root),
             "JATO_PARQUET_PATH": (
                 "/opt/jato/shared/04_Processed_data/jato_full_archive.parquet"
@@ -1007,10 +1354,7 @@ class FixedReleaseController:
             )
         }
         required_fragments = {
-            "Environment": (
-                "APP_RUNTIME_READ_ONLY=true",
-                "default_transaction_read_only=on",
-            ),
+            "Environment": ("APP_RUNTIME_READ_ONLY=false",),
             "EnvironmentFiles": (str(self.config.candidate_database_env),),
             "ReadOnlyPaths": (
                 "/opt/jato/shared",
@@ -1080,7 +1424,7 @@ class FixedReleaseController:
             raise V2Error("runtime_role_mismatch", "slot env does not bind its fixed role")
         if f"APP_JATO_MONTHLY_ENABLED={expected_enabled}\n" not in env:
             raise V2Error("monthly_gate_mismatch", "slot monthly-update role is incorrect")
-        if f"APP_RUNTIME_READ_ONLY={'false' if active else 'true'}\n" not in env:
+        if "APP_RUNTIME_READ_ONLY=false\n" not in env:
             raise V2Error(
                 "runtime_read_only_mismatch",
                 "slot read-only role is incorrect",
@@ -1392,17 +1736,31 @@ class FixedReleaseController:
         self._verify_preview_contracts()
         return bool(missing)
 
-    def _write_preview_identity(self, identity: ReleaseIdentity) -> None:
+    def _write_preview_identity(
+        self,
+        identity: ReleaseIdentity,
+        database_snapshot_at: str | None = None,
+        database_name: str | None = None,
+    ) -> None:
         self._verify_preview_contracts()
+        if (database_snapshot_at is None) != (database_name is None):
+            raise V2Error(
+                "preview_identity_invalid",
+                "Candidate preview database identity is incomplete",
+            )
+        values = {
+            "schemaVersion": 2,
+            "role": "candidate",
+            "commitSha": identity.commit_sha,
+            "archiveSha256": identity.archive_sha256,
+            "candidateSlot": 8001,
+            "previewPort": 18002,
+        }
+        if database_snapshot_at is not None:
+            values["databaseSnapshotAt"] = database_snapshot_at
+            values["databaseName"] = database_name
         metadata = json.dumps(
-            {
-                "schemaVersion": 2,
-                "role": "candidate",
-                "commitSha": identity.commit_sha,
-                "archiveSha256": identity.archive_sha256,
-                "candidateSlot": 8001,
-                "previewPort": 18002,
-            },
+            values,
             separators=(",", ":"),
             sort_keys=True,
         )
@@ -1431,6 +1789,8 @@ class FixedReleaseController:
         self,
         identity: ReleaseIdentity,
         manifest: ReleaseManifest,
+        expected_snapshot_at: str | None = None,
+        expected_database_name: str | None = None,
     ) -> None:
         self._verify_unit(
             PREVIEW_UNIT,
@@ -1447,6 +1807,14 @@ class FixedReleaseController:
             or payload.get("archiveSha256") != identity.archive_sha256
             or payload.get("candidateSlot") != 8001
             or payload.get("previewPort") != 18002
+            or (
+                expected_snapshot_at is not None
+                and payload.get("databaseSnapshotAt") != expected_snapshot_at
+            )
+            or (
+                expected_database_name is not None
+                and payload.get("databaseName") != expected_database_name
+            )
         ):
             raise V2Error(
                 "preview_identity_mismatch",
@@ -1457,6 +1825,8 @@ class FixedReleaseController:
                         "archiveSha256": identity.archive_sha256,
                         "candidateSlot": 8001,
                         "previewPort": 18002,
+                        "databaseSnapshotAt": expected_snapshot_at,
+                        "databaseName": expected_database_name,
                     },
                     "actual": payload,
                 },
@@ -1479,6 +1849,7 @@ class FixedReleaseController:
         self,
         old: PointerPair,
         old_env: str | None,
+        old_database_env: str,
         old_preview_identity: str | None,
         old_manifest: ReleaseManifest | None,
         *,
@@ -1489,6 +1860,9 @@ class FixedReleaseController:
         passed: list[str],
     ) -> None:
         restore_errors: list[dict[str, Any]] = []
+        old_preview_database, old_preview_snapshot = _preview_sandbox_metadata(
+            old_preview_identity
+        )
 
         def attempt(step: str, operation: Callable[[], None]) -> bool:
             try:
@@ -1516,6 +1890,14 @@ class FixedReleaseController:
                     mode=0o600,
                 ),
             )
+            database_env_restored = attempt(
+                "restore_candidate_database_environment",
+                lambda: _atomic_write(
+                    self.config.candidate_database_env,
+                    old_database_env,
+                    0o600,
+                ),
+            )
             preview_identity_restored = attempt(
                 "restore_preview_identity",
                 lambda: self._restore_managed_text(
@@ -1524,7 +1906,7 @@ class FixedReleaseController:
                     mode=0o644,
                 ),
             )
-            if old.current is not None and candidate_was_active:
+            if old.current is not None and candidate_was_active and database_env_restored:
                 restarted = attempt(
                     "restart_previous_candidate",
                     lambda: self._systemctl("restart", CANDIDATE_UNIT, timeout=120),
@@ -1552,7 +1934,12 @@ class FixedReleaseController:
                     assert old_manifest is not None
                     attempt(
                         "verify_previous_preview",
-                        lambda: self._verify_preview(old.current, old_manifest),
+                        lambda: self._verify_preview(
+                            old.current,
+                            old_manifest,
+                            old_preview_snapshot,
+                            old_preview_database,
+                        ),
                     )
         if restore_errors:
             raise V2Error(
@@ -1565,7 +1952,6 @@ class FixedReleaseController:
             ) from trigger
         mutation["stateRestored"] = True
         passed.append("previous_candidate_restored")
-        raise trigger
 
     def prepare_candidate(
         self,
@@ -1592,8 +1978,6 @@ class FixedReleaseController:
                     passed.append("release_materialized" if created else "release_reused")
                 manifest = self._verify_manifest(identity, manifest_sha256)
                 passed.append("release_manifest_verified")
-                self._candidate_database_isolation_gate(identity)
-                passed.append("candidate_database_isolation_verified")
                 old = read_pointer_pair(self.config.layout, CANDIDATE_SLOT)
                 old_manifest: ReleaseManifest | None = None
                 if old.current is not None:
@@ -1603,9 +1987,24 @@ class FixedReleaseController:
                     self.config.slot_env_root / f"{CANDIDATE_SLOT}.env",
                     mode=0o600,
                 )
+                old_database_env = self._read_optional_managed_text(
+                    self.config.candidate_database_env,
+                    mode=0o600,
+                )
+                if old_database_env is None:
+                    raise V2Error(
+                        "database_env_unreadable",
+                        "Candidate database bootstrap env is unavailable",
+                    )
+                _, candidate_database_values, old_sandbox, active_database = (
+                    _candidate_database_state(self.config)
+                )
                 old_preview_identity = self._read_optional_managed_text(
                     self.config.preview_runtime_root / "candidate-preview.json",
                     mode=0o644,
+                )
+                old_preview_database, old_preview_snapshot = (
+                    _preview_sandbox_metadata(old_preview_identity)
                 )
                 candidate_was_active = (
                     self._systemctl("show", CANDIDATE_UNIT, "-p", "ActiveState", "--value")
@@ -1629,6 +2028,17 @@ class FixedReleaseController:
                         "candidate_runtime_inconsistent",
                         "Preview is active without a restorable Candidate backend",
                     )
+                old_snapshot = candidate_database_values.get(
+                    "APP_CANDIDATE_SNAPSHOT_AT"
+                )
+                if old_preview_identity is not None and (
+                    old_preview_database != old_sandbox
+                    or old_preview_snapshot != old_snapshot
+                ):
+                    raise V2Error(
+                        "candidate_runtime_inconsistent",
+                        "Preview and Candidate database identities differ",
+                    )
                 if old.current is not None:
                     if not candidate_was_active or old_env is None:
                         raise V2Error(
@@ -1636,18 +2046,47 @@ class FixedReleaseController:
                             "Candidate pointer is not backed by a running verified backend; discard it first",
                         )
                     self._verify_backend(CANDIDATE_SLOT, old.current, active=False)
+                    if old_sandbox is not None:
+                        self._candidate_database_isolation_gate(old.current)
                 if preview_was_active:
                     assert old.current is not None and old_manifest is not None
-                    self._verify_preview(old.current, old_manifest)
+                    self._verify_preview(
+                        old.current,
+                        old_manifest,
+                        old_preview_snapshot,
+                        old_preview_database,
+                    )
                 passed.append("candidate_previous_state_verified")
-                self._database_gate(active.identity, identity)
-                passed.append("database_revision_compatible")
+                protected = frozenset(
+                    value
+                    for value in (active_database, old_sandbox, old_preview_database)
+                    if value is not None
+                )
+                orphaned = self._drop_sandboxes(None, protected, mutation)
+                passed.append(f"orphaned_candidate_sandboxes_removed:{len(orphaned)}")
                 mutation["serviceChangeAttempted"] = True
                 if self._ensure_preview_contracts():
                     mutation["serviceChanged"] = True
                     passed.append("preview_contract_installed")
                 passed.append("preview_contract_verified")
+                candidate_root = validate_release_directory(self.config.layout, identity)
                 try:
+                    sandbox = self.sandbox_provisioner(self.config, candidate_root)
+                except V2Error as exc:
+                    mutation["databaseChanged"] |= bool(
+                        exc.details.get("databaseMutationPerformed")
+                    )
+                    raise
+                mutation["databaseChanged"] = True
+                passed.append("candidate_sandbox_provisioned")
+                try:
+                    _atomic_write(
+                        self.config.candidate_database_env,
+                        sandbox.environment,
+                        0o600,
+                    )
+                    self._candidate_database_isolation_gate(identity)
+                    passed.append("candidate_database_isolation_verified")
                     mutation["pointerChangeAttempted"] = True
                     if old.current is not None and old.current != identity:
                         atomic_symlink(
@@ -1665,16 +2104,36 @@ class FixedReleaseController:
                     passed.append("candidate_backend_verified")
                     self._verify_candidate_monthly_disabled()
                     passed.append("candidate_monthly_disabled_verified")
-                    self._write_preview_identity(identity)
+                    self._write_preview_identity(
+                        identity,
+                        sandbox.snapshot_at,
+                        sandbox.database_name,
+                    )
                     self._systemctl("restart", PREVIEW_UNIT)
-                    self._verify_preview(identity, manifest)
+                    self._verify_preview(
+                        identity,
+                        manifest,
+                        sandbox.snapshot_at,
+                        sandbox.database_name,
+                    )
                     passed.append("candidate_preview_verified")
                     self._verify_active_baseline_unchanged(active)
                     passed.append("active_unchanged")
+                    if old_sandbox is not None:
+                        removed_sandboxes = self._drop_sandboxes(
+                            old_sandbox,
+                            frozenset({active_database, sandbox.database_name}),
+                            mutation,
+                        )
+                        passed.append(
+                            "previous_candidate_sandbox_removed:"
+                            f"{len(removed_sandboxes)}"
+                        )
                 except Exception as exc:
                     self._restore_candidate_after_failure(
                         old,
                         old_env,
+                        old_database_env,
                         old_preview_identity,
                         old_manifest,
                         candidate_was_active=candidate_was_active,
@@ -1683,6 +2142,22 @@ class FixedReleaseController:
                         mutation=mutation,
                         passed=passed,
                     )
+                    try:
+                        self._drop_sandboxes(
+                            sandbox.database_name,
+                            frozenset({active_database}),
+                            mutation,
+                        )
+                    except Exception as cleanup_error:
+                        raise V2Error(
+                            "candidate_sandbox_cleanup_failed",
+                            "failed Candidate was restored but its sandbox was retained",
+                            details={
+                                "trigger": _failure_dict(exc),
+                                "cleanup": _failure_dict(cleanup_error),
+                            },
+                        ) from exc
+                    raise
                 try:
                     removed = collect_garbage(self.config.layout)
                 except ReleaseStoreError as exc:
@@ -1732,9 +2207,22 @@ class FixedReleaseController:
             passed.append("active_baseline_verified")
             self._verify_active_routing_contract()
             passed.append("fixed_active_routing_verified")
+            _, _, _, active_database = _candidate_database_state(self.config)
+            _preview_sandbox_metadata(
+                self._read_optional_managed_text(
+                    self.config.preview_runtime_root / "candidate-preview.json",
+                    mode=0o644,
+                )
+            )
             self._stop_unit(PREVIEW_UNIT)
             self._stop_unit(CANDIDATE_UNIT)
             mutation["serviceChanged"] = True
+            removed_sandboxes = self._drop_sandboxes(
+                None,
+                frozenset({active_database}),
+                mutation,
+            )
+            passed.append(f"candidate_sandboxes_removed:{len(removed_sandboxes)}")
             self._clear_preview_identity()
             cleared = clear_pointer(self.config.layout, CANDIDATE_SLOT, "current")
             cleared |= clear_pointer(self.config.layout, CANDIDATE_SLOT, "previous")
@@ -2058,10 +2546,23 @@ class FixedReleaseController:
                 passed.append("active_baseline_verified")
             self._candidate_database_isolation_gate(candidate)
             passed.append("candidate_database_isolation_revalidated")
+            _, candidate_database_values, candidate_database, _ = (
+                _candidate_database_state(self.config)
+            )
+            if candidate_database is None:
+                raise V2Error(
+                    "candidate_database_marker_invalid",
+                    "reviewed Candidate has no sandbox marker",
+                )
             self._verify_backend(CANDIDATE_SLOT, candidate, active=False)
             self._verify_candidate_monthly_disabled()
             passed.append("candidate_monthly_disabled_revalidated")
-            self._verify_preview(candidate, candidate_manifest)
+            self._verify_preview(
+                candidate,
+                candidate_manifest,
+                candidate_database_values.get("APP_CANDIDATE_SNAPSHOT_AT"),
+                candidate_database,
+            )
             passed.append("candidate_revalidated")
             active_bundle_lock = self._active_bundle_lock(baseline)
             with self.jato_lock_holder(self.config.jato_job_root, active_bundle_lock):

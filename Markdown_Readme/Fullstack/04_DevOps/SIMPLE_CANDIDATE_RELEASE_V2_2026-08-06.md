@@ -4,16 +4,17 @@ goal_control:
   status: active
   objective: >-
     将复杂蓝绿/事故恢复体系收敛为固定 Active/Candidate 的四操作发布 V2，
-    完成代码、CI、腾讯云无流量验收，再由用户授权把同一已测试构件更新到正式
-    www Active。intl 继续使用既有的 Active 到 intl 独立同步流程，不在 V2 中新增编排。
-  current_phase: candidate_fixed_public_link_draft_green
-  current_step: await_user_authorization_to_ready_and_merge
-  waiting_on: user_authorization
+    Candidate 每次 prepare 使用生产一致性快照生成独立可写数据库沙箱并以应用内 admin
+    身份直接进入页面；完成代码、CI、腾讯云无流量验收后，再由用户授权把同一已测试构件
+    更新到正式 www Active。Candidate 测试数据永不进入 Active；intl 继续使用既有的
+    Active 到 intl 独立同步流程，不在 V2 中新增编排。
+  current_phase: candidate_writable_database_sandbox_draft_pr
+  current_step: commit_push_and_open_draft_pr
+  waiting_on: none
   pause_reason: none
   next_action: >-
-    固定 Candidate 国内入口的独立 Draft PR #217 已通过 13/13 GitHub checks，本地验证和独立
-    复核也均无阻塞。当前等待用户另行授权将 PR 转 Ready 并合并；未经授权不合并，不配置
-    DNS/证书/Basic Auth，不 reload Nginx，也不更新 Active 或 intl。
+    只 stage 本 Goal 列出的 12 个 Candidate 业务线文件，提交、推送并创建 Draft PR；记录 PR
+    head 与 CI 状态。未经另行授权不转 Ready、不合并、不部署、不配置服务器。
   release_authorization_contract:
     source_path: main_to_candidate_to_explicit_user_approval_to_active
     main_may_advance_without_active: true
@@ -28,9 +29,9 @@ goal_control:
     intl_failure_preserves_www_active: true
   progress:
     worktree_ready: true
-    worktree: /Users/litristan/.codex/worktrees/candidate-domestic-preview-link/JATO_Analysis_System
-    branch: codex/candidate-domestic-preview-link
-    base_main_sha: b21695163df510e4dd8e91b4701446d917f7d8b8
+    worktree: /Users/litristan/.codex/worktrees/candidate-writable-sandbox-fifo/JATO_Analysis_System
+    branch: codex/candidate-writable-sandbox-fifo
+    base_main_sha: 619466e81528045f59ea64ad9bcdf69c60a219f8
     remote_main_matches_base: true
     design_recorded: true
     historical_inventory_evidence_recorded_below: true
@@ -41,7 +42,7 @@ goal_control:
     store_manifest_primitives_complete: true
     store_manifest_unit_tests_passed: 8
     manifest_cli_unit_tests_passed: 2
-    local_v2_tests_passed: 76_fixed_release_controller_current_delta
+    local_v2_tests_passed: 129_candidate_controller_and_admission
     current_fixed_release_ci_equivalent_tests: 811_passed_15_skipped
     controller_store_admission_tests_passed: 102
     release_seal_tests_passed: 21
@@ -67,8 +68,8 @@ goal_control:
     v2_source_critical_closure_complete: true_local_13_files
     sourceable_runtime_builder_complete: false_removed_helper_only_change
     local_ready_blockers_open: 0
-    independent_review_passed: true_no_p0_p1
-    server_acceptance_blockers_open: 1_candidate_redeploy_after_root_fix
+    independent_review_passed: true_final_no_p0_p1_or_actionable_p2
+    server_acceptance_blockers_open: 3_role_acl_dropin_then_candidate_prepare
     update_active_retry_idempotent: true_local
     rollback_active_retry_idempotent: true_local
     rollback_sigkill_reference_safe: true_local_and_linux_ci_target_ext4_unprobed
@@ -104,16 +105,16 @@ goal_control:
     candidate_indirect_intl_prewarm_decoupled: false_out_of_scope
     intl_workflow_files_modified: false
     candidate_external_side_effect_sandbox: false_documented_operator_limit
-    runtime_python_lines: 4256_after_58_line_net_root_fix_no_new_module_or_action
+    runtime_python_lines: 4882_after_final_p2_closure
     workflow_unit_tests_passed: 115
-    deployment_tests_passed: 1233
+    deployment_tests_passed: 1279
     deployment_tests_skipped: 15
     backend_tests_passed: 103
-    frontend_tests_passed: 370
+    frontend_tests_passed: 373
     frontend_build_and_router_checks_passed: true
-    full_local_ci_after_final_runtime_code: true_fixed_release_ci_equivalent
-    post_ci_changes_documentation_only: true_pr_status_followup
-    ci_validation_complete: true_code_head_36c2d9f9_13_of_13_green
+    full_local_ci_after_final_runtime_code: true_scripts_and_frontend
+    post_ci_changes_documentation_only: false_current_candidate_pr_not_committed
+    ci_validation_complete: false_draft_pr_not_opened
     previous_pull_request_214_merged: true_main_30f3e2e4
     current_fix_commit: 36c2d9f96eecf1524a69e7fd81ae18d0234025a7
     current_fix_github_checks: 13_of_13_green
@@ -142,6 +143,43 @@ goal_control:
     candidate_runtime_contract_verified_on_server: true_read_only_2026_08_08_main_b2169516
     candidate_no_worker_runtime_verified_on_server: true_read_only_2026_08_08
     candidate_preview_verified_on_server: true_read_only_2026_08_08_18002_loopback
+    candidate_writable_sandbox_design_recorded: true
+    candidate_writable_sandbox_implementation: true_local_verified
+    candidate_writable_sandbox_fifo_capacity: 1
+    candidate_writable_sandbox_transition_max_databases: 2
+    candidate_application_no_login_admin: true_local_uncommitted
+    candidate_sandbox_may_write_active_database: false
+    candidate_sandbox_may_update_active_or_intl: false
+    bom_colour_library_followup_in_this_pr: false_out_of_scope
+    candidate_sandbox_pull_request_opened: false_pending_commit_and_draft_pr
+    candidate_sandbox_runtime_modules_added: 0
+    candidate_sandbox_actions_or_workflows_added: 0
+    candidate_sandbox_controller_net_lines: 501
+    candidate_sandbox_admission_net_lines: 125
+    candidate_sandbox_tests_passed: 129
+    candidate_sandbox_all_script_tests: 1279_passed_15_skipped
+    candidate_sandbox_frontend_tests: 373_passed
+    candidate_sandbox_frontend_build_and_router: passed
+    candidate_sandbox_independent_review: passed_final_no_p0_p1_or_actionable_p2
+    candidate_sandbox_p1_snapshot_permissions: fixed_streamed_dump_restore_real_postgres_passed
+    candidate_sandbox_p1_superuser_release_execution: fixed_candidate_role_and_nobody_no_postgres_release_code
+    candidate_sandbox_p2_cluster_binding: fixed_explicit_database_host_port_and_socket
+    candidate_sandbox_p2_forced_interrupt_orphan: fixed_strict_marker_reference_gc_tests_passed
+    candidate_sandbox_p2_preview_identity_drift: fixed_fail_closed_before_database_mutation
+    candidate_sandbox_p2_banner_database_identity: fixed_required_and_displayed
+    candidate_sandbox_p2_discovery_sql_argv: fixed_stdin_file_dash
+    candidate_sandbox_real_postgres_integration: passed_snapshot_restore_migrate_finalize_admission_head
+    candidate_sandbox_real_server_integration: false_requires_separate_authorization
+    candidate_server_role_acl_reconciliation: false_requires_separate_authorization
+    candidate_server_dropin_reconciliation: false_requires_separate_authorization
+    bom_colour_goal_pull_request: 218_draft_goal_only_waiting_for_215_owner
+    existing_v2_goal_assessment: partially_achieved
+    existing_v2_core_code_complete: true
+    existing_v2_fixed_candidate_link_complete: true
+    existing_v2_server_prepare_verified: true_previous_readonly_candidate
+    existing_v2_server_update_active_verified: false
+    existing_v2_server_distinct_rollback_verified: false
+    existing_v2_writable_business_test_ready: false_local_rereview_and_server_config_pending
     production_changed: false
   may_continue_without_new_authorization:
     - local_read_only_audit
@@ -150,6 +188,7 @@ goal_control:
     - local_and_ci_test_preparation
   explicit_authorization_required:
     - server_bootstrap_or_cleanup
+    - candidate_sandbox_database_provision_or_rotation
     - prepare_candidate_on_tencent
     - update_or_rollback_active
     - merge_pull_request
@@ -157,20 +196,20 @@ goal_control:
     - github_production_secret_migration
   stop_conditions:
     - observed_server_state_contradicts_documented_baseline
-    - change_would_touch_jato_data_or_database_content
+    - change_would_touch_active_or_intl_database_content
     - change_would_cross_this_pr_scope
-  updated_at: "2026-08-08T21:07:34+08:00"
+  updated_at: "2026-08-09T22:49:43+08:00"
 ---
 
 # Fixed Active / Candidate Release V2
 
 > 状态：实施中
 > 开始日期：2026-08-06
-> worktree：`/Users/litristan/.codex/worktrees/candidate-domestic-preview-link/JATO_Analysis_System`
-> branch：`codex/candidate-domestic-preview-link`
-> 基线：`main@b21695163df510e4dd8e91b4701446d917f7d8b8`
-> 当前 PR scope：Candidate 固定公网网关模板、既有合同测试和部署文档；不改 controller、
-> workflow、前后端、Active、intl、数据库内容或 JATO 数据
+> worktree：`/Users/litristan/.codex/worktrees/candidate-writable-sandbox-fifo/JATO_Analysis_System`
+> branch：`codex/candidate-writable-sandbox-fifo`
+> 基线：`main@619466e81528045f59ea64ad9bcdf69c60a219f8`
+> 当前 PR scope：Candidate 可写数据库沙箱、FIFO 换新、Candidate-only 应用免登录 admin、
+> 既有发布准入与测试；不改 BOM 颜色业务、Active、intl、生产数据库内容或 JATO 数据
 
 ## 0. Goal Control 使用规则
 
@@ -186,6 +225,32 @@ goal_control:
    必要工作遗留时才能同步为 Goal complete。
 7. 失败不会自动变成新 hotfix；先把完整事实、影响范围和唯一下一步写入本文件，再
    决定是否修改代码。
+
+## 0.1 旧 Goal 达成审计（2026-08-09）
+
+结论：`partially_achieved`，不能标记 `complete`。
+
+已达成：
+
+- 固定角色和固定端口：Active=8000，Candidate=8001/18002，不交换角色。
+- `prepare-candidate`、`discard-candidate`、`update-active`、`rollback-active` 四操作及不可变
+  release/manifest/指针合同已进入 main，并通过本地与 CI 测试。
+- Candidate 固定上海 HTTPS 入口与外层门禁已经建立；Candidate 失败不会自动切 Active，
+  也不会触发 intl。
+- 上一次服务器 Candidate 证明了 3G/4G、后台单实例任务禁用、Active 公网保持原版本。
+
+尚未达成：
+
+- Candidate 仍通过 SELECT-only 角色读取 Active 数据库，不能测试 BOM 拖拽、规则填充、
+  FOB 重算等真实写入交互。
+- `update-active` 尚未在当前 V2 服务器链路完成一次用户批准后的正式切换验收。
+- 尚未形成 distinct `active.previous`，因此真实服务器 `rollback-active` 也未完成端到端验收。
+- 当前 Candidate 运行的代码不等于最新 main；这是“main 可持续前进、Active/Candidate 需人工
+  部署”的预期状态，但意味着旧 Goal 的最终验收矩阵尚未闭环。
+
+本 PR 不推倒已经完成的 V2；只把 Candidate 数据边界从“生产库只读”改为“生产快照的
+独立可写沙箱”，并补齐 Candidate 应用免登录。完成后仍需另行授权一次腾讯云
+`prepare-candidate`，再由用户人工页面验收；未授权时不会运行 `update-active`。
 
 ## 1. 目标
 
@@ -211,7 +276,10 @@ prepare-candidate -> 固定 Candidate（8001 / 国内人工预览）
 - Candidate 永远用于腾讯云真实环境中的人工页面测试，固定使用端口 8001。
 - Candidate 不与 Active 交换角色，也不直接接管公网。
 - Candidate 测试通过后，Active 直接引用 Candidate 已验证的同一个不可变 release；不重新构建、不重新上传、不重新组装。
-- Candidate 与 Active 可以连接相同的服务器数据库和业务数据，但 Candidate 必须禁用月更 worker、scheduler 等单实例后台任务。
+- Candidate 每次 prepare 从 Active 数据库取得一致性快照，恢复为独立可写沙箱；运行期间
+  不连接、也没有权限连接 Active 数据库。Candidate 测试写入只保留在该沙箱中。
+- Candidate 必须禁用月更 worker、scheduler 等单实例后台任务；应用认证只在 Candidate
+  runtime 禁用，使固定测试入口直接进入 admin UI，Active 认证合同不变。
 
 ## 2. 用户可见的四个操作
 
@@ -222,20 +290,27 @@ prepare-candidate -> 固定 Candidate（8001 / 国内人工预览）
 3. 增量上传完整不可变 release 的变化块到临时路径。
 4. 校验 archive 大小、SHA-256 和 manifest。
 5. 解包到 staging，完成校验后原子改名为 content-addressed release 目录。
-6. 记录 `candidate.previous`，原子更新 `candidate.current`。
-7. 重启固定 Candidate 服务 8001。
-8. 验证 `/healthz`、运行 SHA、3G/4G cgroup、Candidate 单实例任务禁用，以及固定预览入口 18002。
-9. 失败时恢复原 Candidate 指针；若原来没有 Candidate，则停止 8001。Active 与公网不动。
-10. 若旧 Candidate 的 pointer/env/runtime/preview 身份本来就不一致，在任何指针改写或
+6. 使用 `pg_dump` 从 Active 取得一致性快照，恢复到新建的 Candidate 专用数据库；验证
+   schema revision、Candidate 写权限及 Active 数据库拒绝连接后，才生成新的 Candidate env。
+7. 记录 `candidate.previous`，原子更新 release 指针和数据库 env，再重启固定 Candidate 8001。
+8. 验证 `/healthz`、运行 SHA、数据库身份、3G/4G cgroup、Candidate 单实例任务禁用，以及
+   固定预览入口 18002。
+9. 全部验证成功后删除旧 Candidate 数据库；稳态只保留一个，切换窗口最多两个。
+10. 失败时删除本次新数据库并恢复旧 Candidate 指针/env；若原来没有 Candidate，则停止
+    8001。Active、生产数据库与公网不动。
+11. 若旧 Candidate 的 pointer/env/runtime/preview 身份本来就不一致，在任何指针改写或
     服务重启前拒绝；用户运行既有 discard 后再 prepare，不引入恢复状态机。
 
 ### 2.2 `discard-candidate`
 
 1. 获取唯一部署锁。
 2. 停止固定 Candidate 服务。
-3. 清除 Candidate 当前/上一版本指针和预览缓存。
-4. 仅删除不再被任何受保护指针引用的 release/staging。
-5. Active、Nginx 公网路由、数据库和 JATO 数据不动。
+3. 先按受限 `jato_candidate_*` marker 删除 Candidate 专用数据库；删除失败时保留
+   pointer/env/preview 身份以便同一操作安全重试，不把失败伪装成已清理。
+4. 数据库删除成功后清除 Candidate 当前/上一版本指针和预览缓存；root-owned 0600 数据库
+   env 保留原专用角色凭据，但仍指向已删除的沙箱，因此 8001 在下一次 prepare 前 fail-closed。
+5. 仅删除不再被任何受保护指针引用的 release/staging。
+6. Active、Nginx 公网路由、Active 数据库和 JATO 数据不动。
 
 过渡期例外：legacy Active 尚未登记为 V2 release 时，discard 只停止 Candidate 并清除
 Candidate 指针，暂缓 release GC；这样不会把 store 外的现网 Active 误判为未引用版本。
@@ -303,35 +378,41 @@ V1/V2 并存期间，V2 必须复用服务器 inventory 解析出的现有生产
   worker 进程，不在控制器内建立 `/proc` 监管状态机。
 - Active 专属 env 单独写 `APP_JATO_MONTHLY_ENABLED=true`，不能复制 Candidate env。
 - Active 固定 6G/8G；更新前后均验证健康与预期运行 SHA。
-- 数据库只读比较 current/heads；不一致时报告 `migration-required` 并拒绝启动 Candidate。
+- Candidate prepare 先从 Active 只读快照，在新沙箱中运行目标 release 的 migration，并验证
+  沙箱 `current=heads`；Active 数据库本身不执行 migration。
+- `update-active` 与 `rollback-active` 继续只读比较正式数据库 `current/heads`；不一致时报告
+  `migration-required` 并拒绝更新 Active。
 - Nginx 正式公网始终指向固定 Active 端口 8000。
 - Active 重启前检查是否有正在执行的 JATO 发布/写入任务。
 
 单独返回 HTTP 200 不足以证明版本正确；健康检查必须同时证明运行 release SHA。
 
-### 4.1 Candidate 使用真实生产数据的只读边界
+### 4.1 Candidate 使用生产快照的可写沙箱边界
 
-Candidate 的价值是让新代码面对服务器上的真实数据量、真实 PostgreSQL schema、索引
-和查询计划；因此它可以读取与 Active 相同的生产数据，但不能成为第二个生产 writer：
+Candidate 的价值是让新代码面对服务器上的真实数据量、真实 PostgreSQL schema、索引、
+查询计划和写入交互，同时绝不把测试写入生产。每次 `prepare-candidate` 都从 Active 创建
+新的独立可写数据库沙箱，而不是让 Candidate 连接生产数据库：
 
-- 8001 必须加载独立 `/etc/jato-fullstack/candidate-database.env`；文件 root-owned 0600，
-  数据库账号只能 CONNECT/USAGE/SELECT，且不得与 Active 数据库账号相同。
-- prepare 使用 Candidate 自身受校验的 Python/psycopg 连接执行只读权限探针：必须证明
-  transaction/default transaction 均为 read-only，角色不是 superuser/createdb/
-  createrole/replication/bypassrls，不继承 `pg_read_all_data` 以外的角色，无 database
-  CREATE、schema CREATE、表写权限或 sequence USAGE/UPDATE。任一项不满足就不启动
-  8001；数据库默认 TEMP 只产生会话临时对象，不被误判为生产持久写入。
-- systemd 强制 `PGOPTIONS=default_transaction_read_only=on`，并设置 120 秒 statement
-  timeout、5 秒 lock timeout；专用只读账号是主防线，PGOPTIONS 是附加防线。
-- 8001 固定 drop-in 使用 `ProtectSystem=strict`、无 Linux capabilities、PrivateTmp，
-  `/opt/jato/shared` 及 legacy raw/processed 目录显式 `ReadOnlyPaths`；仅 Candidate cache
-  可写。
-- Candidate 继续禁用月更 worker、scheduler、Hermes 和所有预热后台任务。PostgreSQL
-  写入及依赖本地生产数据目录的月更/发布/清理操作必须 fail closed；页面人工测试以
-  查询、筛选、分析、路由、权限和性能为主。该合同不声称全局拦截 Airflow 等外部系统
-  的管理副作用，因此 Candidate 上不得测试此类写按钮。
-- 确需验证写流程时，使用从生产快照创建且隔离的临时数据库与数据目录；不得把真实
-  生产写权限临时授予 Candidate。
+- 使用 PostgreSQL `pg_dump`/`pg_restore` 获取事务一致性快照；不使用会长时间阻塞连接或
+  依赖空闲数据库的 `CREATE DATABASE ... TEMPLATE`。
+- 新数据库使用不可复用的操作标识命名；恢复、revision、权限和应用健康全部通过后，才
+  原子替换 root-owned 0600 的 `/etc/jato-fullstack/candidate-database.env`。
+- Candidate 应用角色只在新沙箱拥有普通业务写权限，并保持 NOSUPERUSER/NOCREATEDB/
+  NOCREATEROLE/NOREPLICATION/NOBYPASSRLS。角色必须对 Active 数据库无 CONNECT；不能仅依赖
+  `PUBLIC CONNECT` 的默认状态，prepare 必须显式验证拒绝连接。
+- Candidate env 使用独立强随机 JWT secret，应用级 `APP_AUTH_ENABLED=false`，使固定测试
+  入口无需第二次应用登录并直接获得 admin UI。该设置只能存在于 8001 runtime，不能固化
+  进 Active artifact 或 Active env；固定 HTTPS 网关仍保留独立访问控制。
+- systemd 继续使用 `ProtectSystem=strict`、无 Linux capabilities、PrivateTmp；
+  `/opt/jato/shared` 及 legacy raw/processed 目录保持只读，仅 Candidate cache 和 Candidate
+  数据库可写。
+- Candidate 继续禁用月更 worker、scheduler、Hermes 和所有预热后台任务；对数据库以外的
+  邮件、外部 webhook、对象存储和管理操作不做虚假的“万能沙箱”承诺，未隔离的外部副作用
+  仍不得在 Candidate 触发。
+- FIFO 容量为 1：稳态只保留当前 Candidate 数据库；换新期间允许旧/新两个数据库并存。
+  新 Candidate 完整验证成功才删除旧数据库；任一步失败就删除新数据库并保留旧 Candidate。
+- `update-active` 只让 Active 使用已经测试的同一不可变 release，永不复制 Candidate env、
+  Candidate JWT secret 或 Candidate 测试数据。`rollback-active` 同样不读取 Candidate 数据库。
 
 Active 可以长期落后 `main`。`main` 的新提交只会生成新的 Candidate；只有用户人工
 验收的精确 commit/archive/manifest 三元组才能进入 `update-active`，不会自动追最新
@@ -405,6 +486,18 @@ hotfix”为理由扩展：
   不计入该预算。超过审查线后仍严禁增加 action、workflow、checkpoint、recovery、新模块或
   事故常量；只允许有真实服务器证据、净增不超过 60 行的现有职责根因修复，且后续永久能力
   必须先删除等量重复/废弃逻辑。该规则取代 Step 3B 的临时数字冻结，不再逐次抬高数字上限。
+- 2026-08-09 已触发 4,200 行独立审查：结论是不新增 runtime module、action、workflow 或
+  recovery；只允许在现有 `prepare/discard/admission` 中原位替换旧 SELECT-only Candidate
+  路径，并同步删除旧只读 probe/断言。若实现出现第二套凭据存储、第五个操作或事故状态，
+  必须立即停止。最终净行数和删除的旧路径须在本节记录，不能用拆文件规避审查。
+- P1/P2 根因修复后的三个 runtime 模块为 4,882 行：controller 净增 501 行，admission
+  净增 125 行，总净增 626 行；旧 same-database/SELECT-only probe 与 prepare gate 已原位
+  删除，不是并排保留第二套路径。该数字超过旧 `+60` bug-fix 预算，因此不能描述成“小修复”；
+  它是用户明确批准的 Candidate 数据边界替换，经写前复杂度审查后以“零新 action、零新
+  workflow、零新 runtime module、零 recovery 状态”收口。相较初稿增加的 156 行用于消除
+  root 临时 dump、postgres 执行目标代码、默认集群命令和不可收敛 orphan 四个真实问题，
+  已触发最终独立复审；除测试与诊断修正外不再扩大 runtime。4,882 是当前冻结事实，后续若
+  还需增加发布控制能力，必须先删除旧 V1/重复代码或重新取得范围决策。
 - 一个统一的结构化 operation report schema；失败必须包含 passed、failed、
   notReached、before/after 和 mutation flags。
 - Candidate/Active 使用固定 systemd unit 与固定 Nginx 配置；每个 release 不创建
@@ -460,9 +553,9 @@ mark-and-sweep 计划；只要 release store 出现未知条目就拒绝清理�
 1. 完成本地实现、范围审计、独立 PR 与 CI。服务器只读预检确认 legacy Active anchor 精确为
    `/opt/jato/slots/8000/current -> /opt/JATO_Analysis_System-main`、公网固定指向 8000，并盘点
    8001 的 unit/drop-in/env 与独立数据库只读账号；未知配置直接报告，不建立 recovery。
-2. 经用户单独授权补齐 Candidate SELECT-only 数据库 env/role 后，从最终 main 运行普通
-   `prepare-candidate` 得到 B。该操作只安装/使用固定 8001/18002，前后证明 legacy Active
-   anchor 与 www 身份不变。
+2. 经用户单独授权配置 Candidate 沙箱管理员/应用角色后，从最终 main 运行普通
+   `prepare-candidate` 得到 B。prepare 从 Active 一致性快照恢复独立可写沙箱，只安装/使用
+   固定 8001/18002，前后证明 legacy Active、生产数据库与 www 身份不变。
 3. 用户通过 18002 人工测试真实服务器页面。不满意就 `discard-candidate` 或合并新代码
    后再次 `prepare-candidate`；Active 可以长期停在 legacy。
 4. 只有用户对 B 的精确三元组单独授权，才运行普通 `update-active`。首次成功直接得到 B/B；
@@ -489,6 +582,11 @@ mark-and-sweep 计划；只要 release store 出现未知条目就拒绝清理�
 |---|---|---|
 | archive SHA 错误 | prepare 在解包/启动前拒绝 | 否 |
 | DB revision 不一致 | 返回 migration-required | 否 |
+| Active 快照或新沙箱恢复失败 | 删除新沙箱，保留旧 Candidate | 否 |
+| Candidate 仍能连接 Active 数据库 | prepare 在启动前拒绝 | 否 |
+| Candidate 沙箱写权限不足 | prepare 在启动前拒绝 | 否 |
+| Candidate env 缺少独立 JWT / 免应用登录配置 | prepare 在启动前拒绝 | 否 |
+| 新 Candidate 完整验证成功 | 删除旧沙箱，稳态只保留当前沙箱 | 否 |
 | Candidate 启动失败 | 恢复旧 Candidate 或停止 8001 | 否 |
 | Candidate 健康但 SHA 不符 | prepare 失败并清理 | 否 |
 | Candidate worker 意外启用 | prepare 失败并清理 | 否 |
@@ -507,6 +605,102 @@ mark-and-sweep 计划；只要 release store 出现未知条目就拒绝清理�
 本 V2 的固定角色目标冲突。本计划接受短重启窗口，不再伪装成零停机蓝绿。
 
 ## 10. 实施日志
+
+### 2026-08-09 / Step 3L：Candidate 可写数据库沙箱初稿被独立审查拒绝
+
+- 用户确认新的测试边界：Candidate 不再直连 Active 数据库，而是在每次 prepare 时使用
+  最新生产一致性快照生成独立可写沙箱；测试写入允许发生，但只能留在沙箱中。
+- 生命周期采用 FIFO 容量 1：稳态一个 Candidate 数据库，切换时最多旧/新两个；新版本
+  完整验证后删除旧库，失败时删除新库并继续保留旧 Candidate。没有新增第五个发布操作、
+  checkpoint、recovery fence 或数据库控制平台。
+- Candidate 固定链接在应用层不再要求登录，8001 专属 runtime 使用
+  `APP_AUTH_ENABLED=false` 并返回 admin；Active 的认证设置和账号数据保持不变。网关访问
+  控制仍保留，因为 Candidate 暴露的是生产快照。
+- 已从远端 `main@619466e8` 创建干净 worktree
+  `/Users/litristan/.codex/worktrees/candidate-writable-sandbox-fifo/JATO_Analysis_System` 和分支
+  `codex/candidate-writable-sandbox-fifo`。实现严格留在既有 admission/controller、固定 8001
+  systemd 合同和 Candidate 前端认证路径内；没有新增 runtime module、发布操作、workflow、
+  checkpoint 或 recovery。
+- `prepare-candidate` 现通过磁盘 staging 执行 `pg_dump --format=custom`、新建安全前缀数据库、
+  `pg_restore --single-transaction`、目标 release Alembic upgrade 与直接最小权限授权；URL、
+  密码和 JWT 不进入 argv、报告或对象 repr。新 env 通过 root-owned 0600 原子替换，Candidate
+  健康、SHA、权限、后台任务和 preview 快照身份全部通过后才删除旧沙箱。
+- admission 现证明同 PostgreSQL 集群但不同 database/role、角色无 superuser/createdb/
+  createrole/replication/bypassrls 或继承 membership、沙箱 DML/sequence 权限完整、database/schema
+  CREATE 被拒绝，并从 Candidate 连接内证明它对 Active database 没有 CONNECT。
+- Candidate 前端用统一 origin helper 识别固定域名/18002；初始化时清除残留 Active token，
+  以 `candidate/admin` 调用 `/auth/me`，忽略 Candidate URL 中的 OAuth token。页面顶部同时显示
+  commit、artifact 和生产数据库快照时间；Active origin 的 token、延迟 refresh 与登录行为不变。
+- 失败矩阵覆盖 dump/provision 后的 Candidate 恢复、FIFO、旧库删除失败回退、恢复失败保留新库、
+  discard 删除失败可重试、恶意 marker 拒绝、update-active 不复制 Candidate env，以及 Candidate
+  角色/权限每一项 fail-closed。controller + admission 聚焦测试 `123 passed`；全部
+  `03_Scripts/tests` 为 `1273 passed, 15 skipped`；前端 `70` 个文件、`373` 项测试、类型检查、
+  production build 和 router regression 全部通过；两个 production workflow validator 通过。
+- 首次服务器 prepare 前仍有两个需单独授权的配置动作，不能由 PR 自动暗改：其一，把现有
+  SELECT-only Candidate 角色从 `pg_read_all_data` 等 membership 收紧为无继承角色，并使它对
+  Active database 的真实 CONNECT 检查失败；其二，在 Candidate 停止时原子替换线上历史
+  `20-candidate-readonly.conf` 为新的 sandbox 合同并 `daemon-reload`。随后第三道独立授权才是
+  真正运行 `prepare-candidate` 创建首个可写快照沙箱。
+- 当前尚未 stage、commit、push 或创建本 Candidate PR。没有部署、创建数据库、修改
+  PostgreSQL ACL、替换 systemd drop-in、重启服务或触碰 Active/intl/JATO 数据。先前完整
+  前端套件在另一审查进程同时占满 CPU 时出现 31 个无关超时；并发结束后以相同命令重跑
+  全部 `373/373` 通过，确认不是产品回归。
+- 独立静态审查结论为“无 P0、两个 P1、两个 P2”，因此上述测试通过不等于可部署，Draft PR
+  也不能创建：
+  - P1：root 创建的 `mktemp` 目录默认 0700，root `pg_dump` 写出的文件无法由
+    `runuser -u postgres -- pg_restore` 遍历/读取，真实 prepare 会稳定失败；现有 mock 只检查
+    命令文本，没有覆盖 Unix 权限。
+  - P1：目标 release 的 Alembic Python 当前通过 `runuser -u postgres` 执行；这让未经上线的
+    Candidate 代码获得数据库超级用户能力，可绕过后置的 `activeConnectDenied` admission，
+    与“Candidate 永不写 Active”核心目标矛盾。
+  - P2：`createdb/pg_restore/Alembic/psql/dropdb` 尚未显式绑定已经验证的 host/port，多集群或
+    非默认端口环境可能误操作默认 Unix socket 集群。
+  - P2：外层 timeout/SIGKILL 只终止 Bash 时，trap 不能作为必然清理保证；新数据库可能成为
+    orphan，且当前 mutation/report 无法准确证明 FIFO 稳态。
+- 唯一允许的下一步是在既有 provision/prepare 内修正这四点并补真实权限/命令边界测试；不得
+  借机新增 action、workflow、checkpoint、recovery 或第二套数据库控制面。修复后必须重新
+  独立审查，无 P0/P1 才能把本 Step 改回“本地实现完成”。
+- BOM Colour Library 的 code→规范名称/swatch 自动补全与 BOM/选品统一渲染已登记为后续
+  独立 [Draft PR #218](https://github.com/tristan419/JATO_Analysis_System/pull/218)。该 PR 当前仅含
+  Goal/审计；因 `#215` 正在拥有 `create_material_sku`、BOM 测试和 `OrderGeniusPage.tsx` 的共享
+  修改，颜色业务实现须等 `#215` 合并并从届时最新 main 重建，不能跨 PR 覆盖。
+
+### 2026-08-09 / Step 3M：P1/P2 根因修复与真实 PostgreSQL 本地验收
+
+- 初稿的 root 0700 dump 文件已删除，快照改为 `pg_dump` 到 `pg_restore` 的直接流式传输；
+  restore 和目标 release Alembic 都使用 Candidate 数据库角色，Alembic 进程使用受限 OS
+  用户 `nobody`。本机 peer `postgres` 只执行固定的角色预检、建库、权限收口、发现和删库，
+  不执行任何目标 release Python。
+- 所有 PostgreSQL 管理命令都绑定由 Active/Candidate URL 验证出的端口与固定本机 socket；
+  dump/restore 使用拆分的 `PGHOST/PGPORT/PGUSER/PGPASSWORD/PGDATABASE` 环境，命令行只出现
+  非敏感数据库名。`createdb` 明确使用 `template0` 和随机安全 marker 目标库。
+- `prepare` 和 `discard` 复用现有四操作及 production flock，通过严格
+  `jato_candidate_*` marker 发现数据库，并保护 Active、Candidate env 与 preview 正在引用的
+  数据库。下一次 prepare 会删除未引用 orphan；discard 停止 Candidate 后删除安全命名空间内
+  的沙箱。实际删除集合进入 mutation/report，强杀后不依赖 trap、checkpoint 或 recovery
+  状态机才能收敛。
+- Preview 身份现在同时绑定 release SHA、artifact、`databaseName` 和 snapshot UTC；新 Candidate
+  失败时先恢复并验证旧 Candidate，只有恢复成功才删新库。旧库清理失败则整次 prepare 回退，
+  不把两个沙箱当成成功稳态。
+- 真实本地 PostgreSQL 16 临时集群验收先后暴露并修复三个 mock 没抓到的问题：
+  1. `PGDATABASE` 不能塞完整 URL，且 `pg_restore` 必须明确指定目标数据库；
+  2. `psql --command` 不展开 `--set` 变量，固定 SQL 必须通过 stdin/`--file -` 执行；
+  3. psycopg 参数化查询会把 `LIKE 'pg_%'` 的 `%` 解释成非法占位符，已改成等价的 schema
+     前缀判断。
+- 修复后的同一临时集群真实完成：Candidate 角色预检、Active 全库 snapshot、single-transaction
+  restore、Candidate Alembic、对象权限收口、14 项 writable/isolation admission 证明；最终
+  `alembic current` 与 `heads` 都为 `20260715_0046 (head)`。该验证只使用本机临时数据库并在
+  结束后删除，没有访问或修改腾讯云、Active、intl、JATO 数据或线上 PostgreSQL ACL。
+- controller + admission 聚焦测试现为 `129 passed`，显式覆盖 createdb 碰撞不误删、pipeline
+  timeout/进程消失竞态、未引用 orphan 收敛及 Active/env/preview 引用保护、partial cleanup
+  失败后的 `removed` 与 `databaseChanged=true`。全部 `03_Scripts/tests` 为
+  `1279 passed, 15 skipped`；前端 70 个文件、373 项测试、类型检查、production build、router
+  regression 及两个 production workflow validator 全部通过。
+- 最终独立复审确认初稿的两个 P1、两个 P2及后续发现的三个 P2 均已关闭，当前无 P0/P1，
+  也没有剩余可行动项：inactive Preview metadata 漂移会在任何数据库 mutation 前拒绝；前端
+  严格验证并显示沙箱 marker；discovery SQL 与其他固定 SQL 一样通过 stdin/`--file -`。
+- 本地实现至此可以提交 Candidate Draft PR；仍不进行服务器配置、数据库 provision、Candidate
+  prepare、Active 更新或 intl 同步。
 
 ### 2026-08-06 / Step 0：目标与开发边界
 
@@ -1428,3 +1622,7 @@ incident recovery/fence/hold 状态机。
 | 2026-08-08 | 4,200 从字面硬上限改为强制审查线 | 避免为过线而格式压缩/拆文件；结构边界与单次 60 行根因修复预算更能阻止平台膨胀 |
 | 2026-08-08 | Candidate 使用固定上海 HTTPS 地址 | 每次 prepare 只替换固定 8001/18002 内容；地址不变，Active/intl 不随 Candidate 变化 |
 | 2026-08-08 | Candidate 公网网关独立于 Active vhost | Basic Auth 覆盖全部路径，且任何失败都不能回退显示 8000 Active |
+| 2026-08-09 | Candidate 使用生产快照的独立可写数据库 | 能验证真实写入交互，同时测试数据不进入 Active 数据库 |
+| 2026-08-09 | Candidate 数据库 FIFO 容量 1 | 稳态占用最小；新版本失败时仍保留上一个可测试 Candidate |
+| 2026-08-09 | Candidate 应用免登录 admin，网关访问控制保留 | 省去重复应用账号；生产快照仍不能向公网匿名暴露 |
+| 2026-08-09 | Active 更新不复制 Candidate 数据 | 上线只复用已测 immutable release，Candidate 测试写入永不提升 |

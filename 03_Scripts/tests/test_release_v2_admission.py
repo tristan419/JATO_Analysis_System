@@ -5,6 +5,7 @@ import json
 import os
 from pathlib import Path
 import sys
+from urllib.parse import unquote, urlsplit
 
 import pytest
 
@@ -112,15 +113,29 @@ def candidate_database_config(
     *,
     active_url: str,
     candidate_url: str,
+    candidate_overrides: dict[str, str] | None = None,
 ) -> MODULE.CandidateDatabaseIsolationConfig:
     active = tmp_path / "backend.env"
     candidate = tmp_path / "candidate-database.env"
     active.write_text(
-        f"APP_DATABASE_ENABLED=true\nAPP_DATABASE_URL={active_url}\n",
+        "APP_DATABASE_ENABLED=true\n"
+        f"APP_DATABASE_URL={active_url}\n"
+        f"APP_JWT_SECRET={'a' * 64}\n",
         encoding="utf-8",
     )
+    sandbox_database = unquote(urlsplit(candidate_url).path.lstrip("/"))
+    candidate_values = {
+        "APP_DATABASE_ENABLED": "true",
+        "APP_DATABASE_URL": candidate_url,
+        "APP_CANDIDATE_SANDBOX_DATABASE": sandbox_database,
+        "APP_CANDIDATE_SNAPSHOT_AT": "2026-08-09T08:09:10.123456Z",
+        "APP_AUTH_ENABLED": "false",
+        "APP_RUNTIME_READ_ONLY": "false",
+        "APP_JWT_SECRET": "c" * 64,
+    }
+    candidate_values.update(candidate_overrides or {})
     candidate.write_text(
-        f"APP_DATABASE_ENABLED=true\nAPP_DATABASE_URL={candidate_url}\n",
+        "".join(f"{key}={value}\n" for key, value in candidate_values.items()),
         encoding="utf-8",
     )
     active.chmod(0o600)
@@ -139,68 +154,89 @@ def candidate_database_config(
     )
 
 
-def readonly_privilege_runner(arguments, cwd, environment):
+def writable_sandbox_runner(arguments, cwd, environment):
     assert arguments[1:] == ("-c", MODULE.CANDIDATE_DATABASE_PRIVILEGE_PROBE)
     assert cwd == Path(arguments[0]).parent
     assert environment["APP_DATABASE_URL"].startswith("postgresql://")
-    assert "default_transaction_read_only=on" in environment["PGOPTIONS"]
+    assert "default_transaction_read_only" not in environment["PGOPTIONS"]
+    assert environment["ACTIVE_DATABASE_NAME"] == "jato"
+    assert environment["CANDIDATE_DATABASE_NAME"].startswith("jato_candidate_")
+    assert environment["CANDIDATE_DATABASE_ROLE"] == "jato_candidate_writer"
     proof = {
         key: True for key in MODULE.CANDIDATE_DATABASE_PRIVILEGE_KEYS
     }
     return MODULE.CommandResult(0, json.dumps(proof), "")
 
 
-def test_candidate_database_uses_same_target_with_distinct_role(tmp_path: Path) -> None:
+def test_candidate_database_uses_writable_sandbox_on_same_cluster(tmp_path: Path) -> None:
     config = candidate_database_config(
         tmp_path,
         active_url="postgresql+asyncpg://jato_active:secret@db.example:5432/jato",
         candidate_url=(
-            "postgresql+asyncpg://jato_candidate_readonly:other@db.example:5432/jato"
+            "postgresql+asyncpg://jato_candidate_writer:other@db.example:5432/"
+            "jato_candidate_20260809_abcd1234"
         ),
     )
 
     assert MODULE.inspect_candidate_database_isolation(
         config,
-        runner=readonly_privilege_runner,
+        runner=writable_sandbox_runner,
     ) == {
         "status": "isolated",
-        "sameDatabase": True,
+        "sameCluster": True,
+        "distinctDatabase": True,
         "distinctRole": True,
+        "writable": True,
+        "activeConnectDenied": True,
         "privilegeProof": True,
         "candidateEnvMode": "0600",
+        "snapshotAt": "2026-08-09T08:09:10.123456Z",
     }
 
 
-def test_candidate_database_rejects_writer_privilege(tmp_path: Path) -> None:
+@pytest.mark.parametrize(
+    "failed_key",
+    MODULE.CANDIDATE_DATABASE_PRIVILEGE_KEYS,
+)
+def test_candidate_database_rejects_incomplete_sandbox_privileges(
+    tmp_path: Path,
+    failed_key: str,
+) -> None:
     config = candidate_database_config(
         tmp_path,
         active_url="postgresql://active:one@db.example/jato",
-        candidate_url="postgresql://readonly:two@db.example/jato",
+        candidate_url=(
+            "postgresql://jato_candidate_writer:two@db.example/"
+            "jato_candidate_20260809_abcd1234"
+        ),
     )
 
-    def writer_runner(arguments, cwd, environment):
+    def incomplete_runner(arguments, cwd, environment):
         del arguments, cwd, environment
         proof = {
             key: True for key in MODULE.CANDIDATE_DATABASE_PRIVILEGE_KEYS
         }
-        proof["noTableWrites"] = False
+        proof[failed_key] = False
         return MODULE.CommandResult(0, json.dumps(proof), "")
 
     with pytest.raises(MODULE.AdmissionError) as caught:
         MODULE.inspect_candidate_database_isolation(
             config,
-            runner=writer_runner,
+            runner=incomplete_runner,
         )
 
-    assert caught.value.code == "candidate_database_privileges_not_read_only"
-    assert "noTableWrites" in str(caught.value)
+    assert caught.value.code == "candidate_database_privileges_unsafe"
+    assert failed_key in str(caught.value)
 
 
 def test_candidate_database_rejects_active_role_reuse(tmp_path: Path) -> None:
     config = candidate_database_config(
         tmp_path,
         active_url="postgresql://shared:one@db.example/jato",
-        candidate_url="postgresql://shared:two@db.example/jato",
+        candidate_url=(
+            "postgresql://shared:two@db.example/"
+            "jato_candidate_20260809_abcd1234"
+        ),
     )
 
     with pytest.raises(MODULE.AdmissionError) as caught:
@@ -211,24 +247,72 @@ def test_candidate_database_rejects_active_role_reuse(tmp_path: Path) -> None:
     assert "two" not in str(caught.value)
 
 
-def test_candidate_database_rejects_different_target(tmp_path: Path) -> None:
+def test_candidate_database_rejects_active_database_reuse(tmp_path: Path) -> None:
     config = candidate_database_config(
         tmp_path,
         active_url="postgresql://active:one@db.example/jato",
-        candidate_url="postgresql://readonly:two@db.example/staging",
+        candidate_url="postgresql://candidate:two@db.example/jato",
     )
 
     with pytest.raises(MODULE.AdmissionError) as caught:
         MODULE.inspect_candidate_database_isolation(config)
 
-    assert caught.value.code == "candidate_database_target_mismatch"
+    assert caught.value.code == "candidate_database_not_isolated"
+
+
+def test_candidate_database_rejects_different_cluster(tmp_path: Path) -> None:
+    config = candidate_database_config(
+        tmp_path,
+        active_url="postgresql://active:one@db.example/jato",
+        candidate_url=(
+            "postgresql://candidate:two@other.example/"
+            "jato_candidate_20260809_abcd1234"
+        ),
+    )
+
+    with pytest.raises(MODULE.AdmissionError) as caught:
+        MODULE.inspect_candidate_database_isolation(config)
+
+    assert caught.value.code == "candidate_database_cluster_mismatch"
+
+
+@pytest.mark.parametrize(
+    ("marker", "expected_code"),
+    [
+        ("production", "candidate_database_marker_invalid"),
+        ("JATO_CANDIDATE_UPPER", "candidate_database_marker_invalid"),
+        ("jato_candidate_other", "candidate_database_marker_mismatch"),
+    ],
+)
+def test_candidate_database_requires_safe_matching_marker(
+    tmp_path: Path,
+    marker: str,
+    expected_code: str,
+) -> None:
+    config = candidate_database_config(
+        tmp_path,
+        active_url="postgresql://active:one@db.example/jato",
+        candidate_url=(
+            "postgresql://candidate:two@db.example/"
+            "jato_candidate_20260809_abcd1234"
+        ),
+        candidate_overrides={"APP_CANDIDATE_SANDBOX_DATABASE": marker},
+    )
+
+    with pytest.raises(MODULE.AdmissionError) as caught:
+        MODULE.inspect_candidate_database_isolation(config)
+
+    assert caught.value.code == expected_code
 
 
 def test_candidate_database_requires_exact_private_mode(tmp_path: Path) -> None:
     config = candidate_database_config(
         tmp_path,
         active_url="postgresql://active:one@db.example/jato",
-        candidate_url="postgresql://readonly:two@db.example/jato",
+        candidate_url=(
+            "postgresql://candidate:two@db.example/"
+            "jato_candidate_20260809_abcd1234"
+        ),
     )
     config.candidate_env.chmod(0o640)
 
@@ -236,6 +320,112 @@ def test_candidate_database_requires_exact_private_mode(tmp_path: Path) -> None:
         MODULE.inspect_candidate_database_isolation(config)
 
     assert caught.value.code == "database_env_unsafe"
+
+
+@pytest.mark.parametrize(
+    ("overrides", "expected_code"),
+    [
+        ({"APP_AUTH_ENABLED": "true"}, "candidate_auth_enabled"),
+        ({"APP_RUNTIME_READ_ONLY": "true"}, "candidate_runtime_read_only"),
+        ({"APP_AUTH_ENABLED": "sometimes"}, "candidate_env_invalid"),
+    ],
+)
+def test_candidate_database_requires_writable_no_login_runtime(
+    tmp_path: Path,
+    overrides: dict[str, str],
+    expected_code: str,
+) -> None:
+    config = candidate_database_config(
+        tmp_path,
+        active_url="postgresql://active:one@db.example/jato",
+        candidate_url=(
+            "postgresql://candidate:two@db.example/"
+            "jato_candidate_20260809_abcd1234"
+        ),
+        candidate_overrides=overrides,
+    )
+
+    with pytest.raises(MODULE.AdmissionError) as caught:
+        MODULE.inspect_candidate_database_isolation(config)
+
+    assert caught.value.code == expected_code
+
+
+@pytest.mark.parametrize(
+    "snapshot_at",
+    ["", "2026-08-09T08:09:10+00:00", "2026-02-30T08:09:10Z"],
+)
+def test_candidate_database_requires_strict_utc_snapshot_time(
+    tmp_path: Path,
+    snapshot_at: str,
+) -> None:
+    config = candidate_database_config(
+        tmp_path,
+        active_url="postgresql://active:one@db.example/jato",
+        candidate_url=(
+            "postgresql://candidate:two@db.example/"
+            "jato_candidate_20260809_abcd1234"
+        ),
+        candidate_overrides={"APP_CANDIDATE_SNAPSHOT_AT": snapshot_at},
+    )
+
+    with pytest.raises(MODULE.AdmissionError) as caught:
+        MODULE.inspect_candidate_database_isolation(config)
+
+    assert caught.value.code == "candidate_snapshot_at_invalid"
+
+
+@pytest.mark.parametrize(
+    ("secret", "expected_code"),
+    [
+        ("tiny-value", "candidate_jwt_secret_invalid"),
+        ("a" * 64, "candidate_jwt_secret_not_isolated"),
+    ],
+)
+def test_candidate_database_requires_independent_jwt_secret(
+    tmp_path: Path,
+    secret: str,
+    expected_code: str,
+) -> None:
+    config = candidate_database_config(
+        tmp_path,
+        active_url="postgresql://active:one@db.example/jato",
+        candidate_url=(
+            "postgresql://candidate:two@db.example/"
+            "jato_candidate_20260809_abcd1234"
+        ),
+        candidate_overrides={"APP_JWT_SECRET": secret},
+    )
+
+    with pytest.raises(MODULE.AdmissionError) as caught:
+        MODULE.inspect_candidate_database_isolation(config)
+
+    assert caught.value.code == expected_code
+    assert secret not in str(caught.value)
+
+
+def test_candidate_database_probe_failure_does_not_expose_url(tmp_path: Path) -> None:
+    secret = "candidate-database-password"
+    config = candidate_database_config(
+        tmp_path,
+        active_url="postgresql://active:one@db.example/jato",
+        candidate_url=(
+            f"postgresql://candidate:{secret}@db.example/"
+            "jato_candidate_20260809_abcd1234"
+        ),
+    )
+
+    def failed_runner(arguments, cwd, environment):
+        assert secret not in " ".join(arguments)
+        del cwd, environment
+        return MODULE.CommandResult(1, "", "connection failed")
+
+    with pytest.raises(MODULE.AdmissionError) as caught:
+        MODULE.inspect_candidate_database_isolation(config, runner=failed_runner)
+
+    assert caught.value.code == "candidate_database_privilege_probe_failed"
+    assert secret not in str(caught.value)
+    assert secret not in repr(config)
 
 
 def test_database_revision_match_is_compatible(tmp_path: Path) -> None:

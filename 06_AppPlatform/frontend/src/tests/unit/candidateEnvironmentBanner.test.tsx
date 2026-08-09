@@ -4,13 +4,15 @@ import { act, cleanup, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   CandidateEnvironmentBanner,
-  isCandidatePreviewOrigin,
   parseCandidatePreviewMetadata,
 } from "../../components/CandidateEnvironmentBanner";
 import type { CandidatePreviewMetadata } from "../../components/CandidateEnvironmentBanner";
+import { isCandidatePreviewOrigin } from "../../utils/candidateRuntime";
 
 const commitSha = "a".repeat(40);
 const archiveSha256 = "b".repeat(64);
+const databaseName = "jato_candidate_20260809t083000z_0123456789abcdef";
+const databaseSnapshotAt = "2026-08-09T08:30:00Z";
 
 function useOrigin(hostname: string, port: string): void {
   vi.stubGlobal("location", { hostname, port });
@@ -21,6 +23,8 @@ function validMetadata(): CandidatePreviewMetadata {
     role: "candidate",
     commitSha,
     archiveSha256,
+    databaseName,
+    databaseSnapshotAt,
     candidateSlot: 8001,
     previewPort: 18002,
   };
@@ -48,6 +52,8 @@ describe("CandidateEnvironmentBanner", () => {
     expect(screen.getByText("不是正式 www")).toBeTruthy();
     expect(screen.getByText(commitSha.slice(0, 12))).toBeTruthy();
     expect(screen.getByText(archiveSha256.slice(0, 12))).toBeTruthy();
+    expect(screen.getByText(/数据库快照/)).toBeTruthy();
+    expect(screen.getByText(databaseName.slice(-8))).toBeTruthy();
     expect(screen.getByText("物理诊断 slot 8001（角色固定，不互换）")).toBeTruthy();
     expect(document.documentElement.dataset.releaseRole).toBe("candidate");
   });
@@ -137,6 +143,18 @@ describe("parseCandidatePreviewMetadata", () => {
     expect(parseCandidatePreviewMetadata({
       ...validMetadata(),
       previewPort: 18001,
+    })).toBeNull();
+    expect(parseCandidatePreviewMetadata({
+      ...validMetadata(),
+      databaseSnapshotAt: "not-a-timestamp",
+    })).toBeNull();
+    expect(parseCandidatePreviewMetadata({
+      ...validMetadata(),
+      databaseName: "production",
+    })).toBeNull();
+    expect(parseCandidatePreviewMetadata({
+      ...validMetadata(),
+      databaseName: undefined,
     })).toBeNull();
   });
 });
