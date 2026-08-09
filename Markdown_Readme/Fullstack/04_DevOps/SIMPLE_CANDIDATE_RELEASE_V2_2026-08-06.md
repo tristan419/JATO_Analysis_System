@@ -8,13 +8,14 @@ goal_control:
     身份直接进入页面；完成代码、CI、腾讯云无流量验收后，再由用户授权把同一已测试构件
     更新到正式 www Active。Candidate 测试数据永不进入 Active；intl 继续使用既有的
     Active 到 intl 独立同步流程，不在 V2 中新增编排。
-  current_phase: candidate_writable_database_sandbox_ci
-  current_step: monitor_draft_pr_checks
-  waiting_on: none
+  current_phase: candidate_writable_database_sandbox_draft_review
+  current_step: await_explicit_ready_merge_or_server_authorization
+  waiting_on: explicit_user_authorization
   pause_reason: none
   next_action: >-
-    只监控 Candidate Draft PR #219 最新 head 的 GitHub checks 并记录结果。未经另行授权不转
-    Ready、不合并、不部署、不配置服务器，也不执行 Candidate prepare、Active 更新或 intl 同步。
+    保持 Candidate PR #219 为 Draft。只有获得后续明确授权，才可转 Ready 或合并；服务器角色与
+    ACL 对齐、8001 drop-in 替换和首次可写 Candidate prepare 仍分别需要单独授权。禁止自动更新
+    Active 或同步 intl。
   release_authorization_contract:
     source_path: main_to_candidate_to_explicit_user_approval_to_active
     main_may_advance_without_active: true
@@ -113,13 +114,16 @@ goal_control:
     frontend_tests_passed: 373
     frontend_build_and_router_checks_passed: true
     full_local_ci_after_final_runtime_code: true_scripts_and_frontend
-    post_ci_changes_documentation_only: true_ci_status_update_only
-    ci_validation_complete: false_github_checks_running
+    post_ci_changes_documentation_only: true_final_ci_result_record_only
+    ci_validation_complete: true_github_checks_green_on_b80bcb93
     candidate_sandbox_initial_ci_failure: fullstack_frontend_vite_auth_token_test_environment_leak
     candidate_sandbox_ci_fix_scope: one_test_file_plus_goal_no_production_code
     candidate_sandbox_ci_fix_local_validation: 373_tests_types_build_router_passed_with_github_env
     candidate_sandbox_ci_fix_commit: c1a87b47eea0d94d1dc3bbc01b9efb17d39a6c73
     candidate_sandbox_ci_fix_pushed: true
+    candidate_sandbox_ci_verified_head: b80bcb932c4e4d7eaa941169e5b06a6c10f219b6
+    candidate_sandbox_github_checks: all_required_and_cloudflare_green
+    candidate_sandbox_draft_ready_for_human_review: true
     previous_pull_request_214_merged: true_main_30f3e2e4
     current_fix_commit: 36c2d9f96eecf1524a69e7fd81ae18d0234025a7
     current_fix_github_checks: 13_of_13_green
@@ -738,6 +742,17 @@ mark-and-sweep 计划；只要 release store 出现未知条目就拒绝清理�
   70 个测试文件、373 项测试、TypeScript、production build 与 router regression 全部通过。
 - 测试修复与 Goal 已提交为 `c1a87b47eea0d94d1dc3bbc01b9efb17d39a6c73` 并推送 #219；
   下一步只观察最新 head 的 checks，仍不转 Ready、不合并、不部署、不配置服务器。
+
+### 2026-08-09 / Step 3P：#219 Draft CI 终态
+
+- #219 的 `b80bcb932c4e4d7eaa941169e5b06a6c10f219b6` 已完成两套
+  `fullstack-frontend`，均为 success；此前依赖 CI 环境的 Candidate auth bootstrap 断言已稳定
+  通过。
+- 同一 SHA 的 `fullstack-backend`、`smoke`、`frontend-release-contract`、
+  `production-deployment-guard`、`release-coordination-evaluator` 及外部 Cloudflare Pages Preview
+  均为 success，没有剩余失败或运行中 check。
+- PR 继续保持 Draft。CI 全绿只代表本地/Runner 验证完成，不授权转 Ready、合并、腾讯云合同
+  迁移、Candidate prepare、Active 更新或 intl 同步。
 
 ### 2026-08-06 / Step 0：目标与开发边界
 
