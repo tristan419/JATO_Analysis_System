@@ -8,13 +8,14 @@ goal_control:
     身份直接进入页面；完成代码、CI、腾讯云无流量验收后，再由用户授权把同一已测试构件
     更新到正式 www Active。Candidate 测试数据永不进入 Active；intl 继续使用既有的
     Active 到 intl 独立同步流程，不在 V2 中新增编排。
-  current_phase: candidate_writable_database_sandbox_ci
-  current_step: monitor_draft_pr_checks
+  current_phase: candidate_writable_database_sandbox_ci_fix
+  current_step: commit_push_frontend_test_env_isolation
   waiting_on: none
   pause_reason: none
   next_action: >-
-    只监控 Candidate Draft PR #219 的 GitHub checks 并记录结果。未经另行授权不转 Ready、
-    不合并、不部署、不配置服务器，也不执行 Candidate prepare、Active 更新或 intl 同步。
+    只 stage Candidate auth bootstrap 单测和本 Goal，提交并推送 #219，然后重新监控 GitHub
+    checks。未经另行授权不转 Ready、不合并、不部署、不配置服务器，也不执行 Candidate
+    prepare、Active 更新或 intl 同步。
   release_authorization_contract:
     source_path: main_to_candidate_to_explicit_user_approval_to_active
     main_may_advance_without_active: true
@@ -113,8 +114,11 @@ goal_control:
     frontend_tests_passed: 373
     frontend_build_and_router_checks_passed: true
     full_local_ci_after_final_runtime_code: true_scripts_and_frontend
-    post_ci_changes_documentation_only: true_draft_pr_metadata_only
-    ci_validation_complete: false_github_checks_pending
+    post_ci_changes_documentation_only: false_test_only_ci_environment_isolation
+    ci_validation_complete: false_local_fix_green_pending_push
+    candidate_sandbox_initial_ci_failure: fullstack_frontend_vite_auth_token_test_environment_leak
+    candidate_sandbox_ci_fix_scope: one_test_file_plus_goal_no_production_code
+    candidate_sandbox_ci_fix_local_validation: 373_tests_types_build_router_passed_with_github_env
     previous_pull_request_214_merged: true_main_30f3e2e4
     current_fix_commit: 36c2d9f96eecf1524a69e7fd81ae18d0234025a7
     current_fix_github_checks: 13_of_13_green
@@ -717,6 +721,22 @@ mark-and-sweep 计划；只要 release store 出现未知条目就拒绝清理�
   `prepare-candidate`，也没有修改 Active、intl、生产数据库或 JATO 数据。
 - 下一步只记录 GitHub checks。转 Ready、合并、服务器一次性合同迁移及首次可写 Candidate
   prepare 均需后续分别授权。
+
+### 2026-08-09 / Step 3O：GitHub frontend 单测环境隔离修复
+
+- #219 初次 GitHub `fullstack-frontend` 失败于
+  `candidateAuthBootstrap.test.tsx` 的 Active 无令牌用例：workflow 固定注入
+  `VITE_AUTH_TOKEN=ci-token`，而 Active 既有开发令牌逻辑会把角色设为 `admin`；测试却依赖
+  本机未设置该变量并期待已存储的 `editor`。Candidate bootstrap、类型检查及其他测试没有在
+  该日志中失败。
+- 根因属于新增单测的环境泄漏，不是 Candidate 或 Active 生产代码错误。按已批准范围只在该
+  单测中显式将无令牌场景的 `VITE_AUTH_TOKEN` 设为空，并在 `afterEach` 恢复所有 stubbed env；
+  没有修改 `AuthContext`、Candidate runtime、后端、workflow 或部署脚本。
+- 使用 GitHub 相同的 `VITE_API_BASE=/v1`、`VITE_AUTH_TOKEN=ci-token`、
+  `VITE_USER_ROLE=admin`、`VITE_USER_NAME=github-actions` 完整执行 `npm run check:frontend`：
+  70 个测试文件、373 项测试、TypeScript、production build 与 router regression 全部通过。
+- 下一步仅提交并推送此测试修复与 Goal 状态，再观察 #219 新 head 的 checks；仍不转 Ready、
+  不合并、不部署、不配置服务器。
 
 ### 2026-08-06 / Step 0：目标与开发边界
 

@@ -35,6 +35,7 @@ afterEach(() => {
   cleanup();
   localStorage.clear();
   vi.clearAllMocks();
+  vi.unstubAllEnvs();
   vi.unstubAllGlobals();
 });
 
@@ -68,6 +69,7 @@ describe("Candidate auth bootstrap", () => {
   });
 
   it("preserves Active stored identity and does not refresh without a token", () => {
+    vi.stubEnv("VITE_AUTH_TOKEN", "");
     useOrigin("www.ojeur.cloud", "");
     localStorage.setItem("jato_user_name", "active-user");
     localStorage.setItem("jato_user_role", "editor");
