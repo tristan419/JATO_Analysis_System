@@ -8,13 +8,13 @@ goal_control:
     身份直接进入页面；完成代码、CI、腾讯云无流量验收后，再由用户授权把同一已测试构件
     更新到正式 www Active。Candidate 测试数据永不进入 Active；intl 继续使用既有的
     Active 到 intl 独立同步流程，不在 V2 中新增编排。
-  current_phase: candidate_writable_database_sandbox_draft_pr
-  current_step: commit_push_and_open_draft_pr
+  current_phase: candidate_writable_database_sandbox_ci
+  current_step: monitor_draft_pr_checks
   waiting_on: none
   pause_reason: none
   next_action: >-
-    只 stage 本 Goal 列出的 12 个 Candidate 业务线文件，提交、推送并创建 Draft PR；记录 PR
-    head 与 CI 状态。未经另行授权不转 Ready、不合并、不部署、不配置服务器。
+    只监控 Candidate Draft PR #219 的 GitHub checks 并记录结果。未经另行授权不转 Ready、
+    不合并、不部署、不配置服务器，也不执行 Candidate prepare、Active 更新或 intl 同步。
   release_authorization_contract:
     source_path: main_to_candidate_to_explicit_user_approval_to_active
     main_may_advance_without_active: true
@@ -113,8 +113,8 @@ goal_control:
     frontend_tests_passed: 373
     frontend_build_and_router_checks_passed: true
     full_local_ci_after_final_runtime_code: true_scripts_and_frontend
-    post_ci_changes_documentation_only: false_current_candidate_pr_not_committed
-    ci_validation_complete: false_draft_pr_not_opened
+    post_ci_changes_documentation_only: true_draft_pr_metadata_only
+    ci_validation_complete: false_github_checks_pending
     previous_pull_request_214_merged: true_main_30f3e2e4
     current_fix_commit: 36c2d9f96eecf1524a69e7fd81ae18d0234025a7
     current_fix_github_checks: 13_of_13_green
@@ -147,11 +147,14 @@ goal_control:
     candidate_writable_sandbox_implementation: true_local_verified
     candidate_writable_sandbox_fifo_capacity: 1
     candidate_writable_sandbox_transition_max_databases: 2
-    candidate_application_no_login_admin: true_local_uncommitted
+    candidate_application_no_login_admin: true_local_committed
     candidate_sandbox_may_write_active_database: false
     candidate_sandbox_may_update_active_or_intl: false
     bom_colour_library_followup_in_this_pr: false_out_of_scope
-    candidate_sandbox_pull_request_opened: false_pending_commit_and_draft_pr
+    candidate_sandbox_pull_request_opened: true_draft
+    candidate_sandbox_pull_request_number: 219
+    candidate_sandbox_pull_request_url: https://github.com/tristan419/JATO_Analysis_System/pull/219
+    candidate_sandbox_initial_commit: 0949dcdb39a2d12f88e678f0daa0b0563d33048a
     candidate_sandbox_runtime_modules_added: 0
     candidate_sandbox_actions_or_workflows_added: 0
     candidate_sandbox_controller_net_lines: 501
@@ -701,6 +704,19 @@ mark-and-sweep 计划；只要 release store 出现未知条目就拒绝清理�
   严格验证并显示沙箱 marker；discovery SQL 与其他固定 SQL 一样通过 stdin/`--file -`。
 - 本地实现至此可以提交 Candidate Draft PR；仍不进行服务器配置、数据库 provision、Candidate
   prepare、Active 更新或 intl 同步。
+
+### 2026-08-09 / Step 3N：Candidate 可写沙箱 Draft PR
+
+- 已从干净基线 `main@619466e81528045f59ea64ad9bcdf69c60a219f8` 精确提交 12 个本业务线
+  文件，初始 commit 为 `0949dcdb39a2d12f88e678f0daa0b0563d33048a`；未包含混合观察区、
+  Hermes 开发事件或其他业务线文件。
+- 已创建 [Draft PR #219](https://github.com/tristan419/JATO_Analysis_System/pull/219)，base 为
+  `main`，head 为 `codex/candidate-writable-sandbox-fifo`。PR 保持 Draft，仅进入 GitHub checks；
+  不因创建 PR 自动部署生产。
+- 本步骤没有配置腾讯云 Candidate 角色/ACL，没有替换 8001 drop-in，没有运行
+  `prepare-candidate`，也没有修改 Active、intl、生产数据库或 JATO 数据。
+- 下一步只记录 GitHub checks。转 Ready、合并、服务器一次性合同迁移及首次可写 Candidate
+  prepare 均需后续分别授权。
 
 ### 2026-08-06 / Step 0：目标与开发边界
 
