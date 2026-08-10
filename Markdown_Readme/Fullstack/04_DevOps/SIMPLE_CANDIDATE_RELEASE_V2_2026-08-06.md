@@ -9,13 +9,12 @@ goal_control:
     更新到正式 www Active。Candidate 测试数据永不进入 Active；intl 继续使用既有的
     Active 到 intl 独立同步流程，不在 V2 中新增编排。
   current_phase: tencent_candidate_writable_sandbox_initialization
-  current_step: tencent_readonly_preflight_waiting_mfa
-  waiting_on: tencent_console_mfa_for_readonly_preflight
+  current_step: recheck_main_then_dispatch_prepare_candidate
+  waiting_on: none
   pause_reason: none
   next_action: >-
-    #221 已合并且 main CI 成功。腾讯云只读预检当前等待 MFA；预检通过后，继续用户已经授权
-    的 Candidate role/ACL/env/drop-in 初始化与当前 main prepare。禁止自动更新 Active、同步
-    intl 或修改业务数据。
+    Candidate role/ACL/env/drop-in 初始化已成功。先只读复核当前 main 与待部署构件，再执行
+    用户已经授权的 prepare-candidate。禁止自动更新 Active、同步 intl 或修改生产业务数据。
   release_authorization_contract:
     source_path: main_to_candidate_to_explicit_user_approval_to_active
     main_may_advance_without_active: true
@@ -51,7 +50,7 @@ goal_control:
     admission_primitives_complete: true_local
     database_revision_primitives_complete: true
     candidate_database_privilege_probe_complete: true_local
-    candidate_database_role_configured_on_server: false_legacy_readonly_role_requires_reconciliation
+    candidate_database_role_configured_on_server: true_safe_scram_zero_memberships_active_connect_denied
     four_operation_methods_present: true
     steady_state_four_operations_complete: true_local
     legacy_first_update_active_complete: true_local_b_b
@@ -70,7 +69,7 @@ goal_control:
     sourceable_runtime_builder_complete: false_removed_helper_only_change
     local_ready_blockers_open: 0
     independent_review_passed: true_hotfix_no_p0_p1_p2
-    server_acceptance_blockers_open: 4_runtime_secret_isolation_role_acl_dropin_prepare
+    server_acceptance_blockers_open: 1_prepare_candidate_not_yet_executed
     update_active_retry_idempotent: true_local
     rollback_active_retry_idempotent: true_local
     rollback_sigkill_reference_safe: true_local_and_linux_ci_target_ext4_unprobed
@@ -186,15 +185,15 @@ goal_control:
     candidate_sandbox_p2_banner_database_identity: fixed_required_and_displayed
     candidate_sandbox_p2_discovery_sql_argv: fixed_stdin_file_dash
     candidate_sandbox_real_postgres_integration: passed_snapshot_restore_migrate_finalize_admission_head
-    candidate_sandbox_real_server_integration: false_authorized_current_request_not_executed
-    candidate_server_role_acl_reconciliation: false_authorized_current_request_not_executed
-    candidate_server_dropin_reconciliation: false_authorized_current_request_not_executed
+    candidate_sandbox_real_server_integration: partial_bootstrap_success_prepare_pending
+    candidate_server_role_acl_reconciliation: true_success_2026_08_10t05_41_15z
+    candidate_server_dropin_reconciliation: true_exact_221_dynamicuser_dropin_installed
     candidate_sandbox_initialization_authorized: true_user_current_request_2026_08_10
     prepare_candidate_authorized: true_user_current_request_after_safe_initialization
     candidate_runtime_secret_isolation_blocker: confirmed_root_and_active_backend_env_on_main_b128f5e5
     candidate_runtime_secret_isolation_hotfix_worktree: /Users/litristan/.codex/worktrees/candidate-runtime-secret-isolation/JATO_Analysis_System
     candidate_runtime_secret_isolation_hotfix_branch: codex/candidate-runtime-secret-isolation
-    candidate_runtime_secret_isolation_server_mutation: false
+    candidate_runtime_secret_isolation_server_mutation: true_candidate_only_bootstrap
     candidate_runtime_secret_isolation_environment_files_reset: true_local
     candidate_runtime_secret_isolation_dynamic_user: true_local
     candidate_runtime_secret_isolation_effective_uid_gate: true_local
@@ -205,11 +204,27 @@ goal_control:
     candidate_runtime_secret_isolation_pull_request: 221_merged_main_c238cefb
     candidate_runtime_secret_isolation_ci_runs: 31353394363_and_31353396310_success
     candidate_runtime_secret_isolation_main_ci: 31356389854_success
-    tencent_readonly_preflight_status: waiting_for_mfa
-    candidate_server_role_acl_initialized: false
-    candidate_server_env_initialized: false
-    candidate_server_dropin_initialized: false
+    tencent_readonly_preflight_status: success_then_candidate_bootstrap_success
+    candidate_server_bootstrap_completed_at: "2026-08-10T05:41:15Z"
+    candidate_server_bootstrap_preimage: /var/lib/jato-release/candidate-init-preimage-20260810T054115Z
+    candidate_server_failed_preflight_preimage: /var/lib/jato-release/candidate-init-preimage-20260810T053915Z
+    candidate_server_first_attempt: read_only_sql_syntax_rejection_before_config_or_database_mutation
+    candidate_server_role_acl_initialized: true
+    candidate_server_env_initialized: true_root_root_0600
+    candidate_server_dropin_initialized: true_exact_221_dynamicuser_contract
     prepare_candidate_executed_on_current_main: false
+    candidate_and_preview_stopped_after_bootstrap: true
+    candidate_ports_8001_and_18002_listening: false
+    candidate_public_gateway_status: 401_basic_auth_gate
+    active_main_pid_after_bootstrap: 3481565
+    active_current_after_bootstrap: /opt/JATO_Analysis_System-main
+    active_local_and_public_health_after_bootstrap: 200
+    active_env_nginx_pointer_changed: false
+    candidate_database_role: jato_candidate
+    candidate_database_role_security: scram_zero_memberships
+    candidate_active_connect_denied_actual_proof: true_permission_denied
+    legacy_candidate_role_locked: true_nologin_pg_read_all_data_revoked
+    active_database_role_connection_check: true_jato_app_fresh_connection_succeeds
     active_changed_by_current_operation: false
     intl_changed_by_current_operation: false
     business_data_changed_by_current_operation: false
@@ -223,8 +238,8 @@ goal_control:
     existing_v2_server_prepare_verified: true_previous_readonly_candidate
     existing_v2_server_update_active_verified: false
     existing_v2_server_distinct_rollback_verified: false
-    existing_v2_writable_business_test_ready: false_runtime_hotfix_and_server_init_pending
-    production_changed: false
+    existing_v2_writable_business_test_ready: false_prepare_candidate_pending
+    production_changed: candidate_infrastructure_only_no_active_intl_or_business_data
   may_continue_without_new_authorization:
     - local_read_only_audit
     - documentation_updates
@@ -242,7 +257,7 @@ goal_control:
     - observed_server_state_contradicts_documented_baseline
     - change_would_touch_active_or_intl_database_content
     - change_would_cross_this_pr_scope
-  updated_at: "2026-08-10T13:00:04+08:00"
+  updated_at: "2026-08-10T13:42:35+08:00"
 ---
 
 # Fixed Active / Candidate Release V2
@@ -806,22 +821,31 @@ mark-and-sweep 计划；只要 release store 出现未知条目就拒绝清理�
   checks；全绿后才转 Ready 和合并。服务器角色/ACL、8001 drop-in、首次可写 Candidate
   prepare、Active 更新及 intl 同步仍未获本步骤授权，继续保持不变。
 
-### 2026-08-10 / Step 3R：#221 合并并进入腾讯云首次可写 Candidate 预检
+### 2026-08-10 / Step 3R：#221 合并并完成腾讯云 Candidate 初始化
 
 - Candidate runtime secret isolation PR
   [#221](https://github.com/tristan419/JATO_Analysis_System/pull/221) 已合并为
   `main@c238cefbf9adb6a4861e42491c3d22145ee93bfe`；对应 main CI
   [31356389854](https://github.com/tristan419/JATO_Analysis_System/actions/runs/31356389854)
   已完成且结论为 `success`。
-- 当前阶段是腾讯云只读预检，正在等待控制台 MFA 会话；尚未创建或修改 Candidate 专用
-  PostgreSQL role/ACL，尚未写入 Candidate env，尚未替换 8001 drop-in，也尚未执行当前 main 的
-  `prepare-candidate`。
-- 用户已授权预检通过后执行上述 Candidate 初始化和 `prepare-candidate`。该授权不包含
-  `update-active`、Active 流量切换或 intl 同步；截至本记录，Active、intl 和生产业务数据均未
-  被本步骤修改。
+- 第一次初始化尝试在只读 SQL 语法校验处拒绝，发生在 Candidate 配置和数据库状态 mutation
+  之前；Candidate 与 Preview 始终停止。该次只保留诊断 preimage
+  `/var/lib/jato-release/candidate-init-preimage-20260810T053915Z`，随后改用 stdin 查询重跑。
+- 服务器 bootstrap 于 `2026-08-10T05:41:15Z` 成功；成功 preimage 保留于
+  `/var/lib/jato-release/candidate-init-preimage-20260810T054115Z`。线上已安装 #221 精确
+  DynamicUser drop-in 和 root:root 0600 bootstrap env；`jato_candidate` 为安全 SCRAM、零
+  memberships 角色，并以实际 `permission denied` 证明不能 CONNECT Active。旧角色已
+  `NOLOGIN` 且撤销 `pg_read_all_data`，新的 `jato_app` 连接复核成功。
+- 初始化后 Candidate 与 Preview 仍停止，8001/18002 均无监听，固定公网 Candidate 入口返回
+  Basic Auth `401`。Active 保持 MainPID `3481565`、current
+  `/opt/JATO_Analysis_System-main`，本机与公网 health 均为 `200`；Active env、Nginx、pointer、
+  intl 和生产业务数据均未改变。
+- 当前只剩先复核最新 main，再 dispatch 已授权的 `prepare-candidate`；该操作尚未执行，授权也
+  不包含 `update-active`、Active 流量切换或 intl 同步。
 - 同一 main SHA 的 Hermes devsync run
   [31356389867](https://github.com/tristan419/JATO_Analysis_System/actions/runs/31356389867)
-  当前为 `waiting`；它不属于 Candidate 初始化/prepare 链路，也不阻塞腾讯云只读预检。
+  当前为 `waiting`；它不属于 Candidate 初始化/prepare 链路，也不阻塞下一步 main 复核或
+  `prepare-candidate`。
 
 ### 2026-08-06 / Step 0：目标与开发边界
 
