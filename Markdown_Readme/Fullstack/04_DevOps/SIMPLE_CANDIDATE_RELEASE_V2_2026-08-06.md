@@ -10,16 +10,15 @@ goal_control:
     把同一已测试构件更新到正式 www Active。Candidate 测试数据永不进入 Active；
     intl 继续使用既有的 Active 到 intl 独立同步流程，不在 V2 中新增编排。
   current_phase: candidate_application_login
-  current_step: require_verified_candidate_login_before_removing_basic_auth
-  waiting_on: local_validation_draft_pr_and_explicit_pre_merge_discard_authorization
+  current_step: draft_pull_request_ci_and_pre_merge_discard_gate
+  waiting_on: pull_request_226_required_ci_then_explicit_discard_candidate_authorization
   pause_reason: none
   next_action: >-
-    删除 Candidate 前端自动 candidate/admin 旁路，将 Candidate runtime 改为
-    APP_AUTH_ENABLED=true、APP_AUTH_REQUIRED=true，并从公网 Nginx 模板移除浏览器
-    Basic Auth。先在干净 PR 中验证现有 JATO 登录、Candidate 独立 JWT 与沙箱账号；PR
-    合并前需单独授权用当前 main 废弃旧免登录 Candidate，避免新 admission 在替换前拒绝旧
-    runtime。合并并自动 prepare 成功后，才原子更新服务器 Candidate vhost。禁止在新
-    Candidate 应用认证生效前移除线上 Basic Auth；禁止自动更新 Active 或同步 intl。
+    Candidate 严格应用登录已提交到 Draft PR #226，独立复审与本地验证均通过。先等待
+    #226 最新 HEAD 的 required CI；仍不得直接 Ready 或合并。CI 全绿后，需用户单独授权用
+    当前 main 执行 discard-candidate，验证旧免登录 Candidate、沙箱和指针已清除且 8000/www
+    不变。之后才可另行授权合并 #226，让 main CI 自动 prepare 新 Candidate；loopback 严格
+    登录验收通过后，才原子移除线上 Basic Auth。禁止自动更新 Active 或同步 intl。
   release_authorization_contract:
     source_path: main_to_candidate_to_explicit_user_approval_to_active
     main_may_advance_without_active: true
@@ -136,12 +135,12 @@ goal_control:
     bom_admin_pull_request_215_merged: true_main_40ae3211
     candidate_sandbox_draft_ready_for_human_review: true
     previous_pull_request_214_merged: true_main_30f3e2e4
-    current_fix_commit: 20f082f4dbb64a4e56b4b67f1a93590b445603ec
-    current_fix_github_checks: all_required_green_on_pull_request_224_head_6994eade
-    pull_request_opened: false
-    pull_request_number: null
-    pull_request_url: null
-    pull_request_is_draft: false
+    current_fix_commit: 9b56ad74abdd703d2fb22de757b7b650a623ac8a
+    current_fix_github_checks: pending_on_pull_request_226
+    pull_request_opened: true
+    pull_request_number: 226
+    pull_request_url: https://github.com/tristan419/JATO_Analysis_System/pull/226
+    pull_request_is_draft: true
     previous_pull_request_224_merged: true_main_f29cf509
     previous_pull_request_217_merged: true_main_619466e8
     candidate_public_gateway_commit: 991a44f8499a1210317aafb5da1f3183b7ee0769
@@ -290,7 +289,7 @@ goal_control:
     - observed_server_state_contradicts_documented_baseline
     - change_would_touch_active_or_intl_database_content
     - change_would_cross_this_pr_scope
-  updated_at: "2026-08-10T22:48:00+08:00"
+  updated_at: "2026-08-10T22:53:00+08:00"
 ---
 
 # Fixed Active / Candidate Release V2
@@ -300,6 +299,7 @@ goal_control:
 > worktree：`/Users/litristan/.codex/worktrees/candidate-app-login/JATO_Analysis_System`
 > branch：`codex/candidate-app-login`
 > 基线：`main@f29cf5096b528e2c0350047f2bc462cc8bfc8696`
+> 当前 Draft PR：[#226](https://github.com/tristan419/JATO_Analysis_System/pull/226)
 > 当前 PR scope：Candidate 复用现有 JATO 用户名/密码登录，后端严格拒绝未认证业务请求，
 > 禁止 Candidate 接收 Active OAuth callback，并在安全迁移完成后移除 Candidate vhost 的
 > 浏览器 Basic Auth；不改 Active、intl、生产数据库业务数据或 JATO 数据。
@@ -812,6 +812,10 @@ mark-and-sweep 计划；只要 release store 出现未知条目就拒绝清理�
 - 本地证据：Candidate deploy/admission 聚焦测试 `163 passed, 2 skipped`；完整 scripts
   `1299 passed, 15 skipped`；required backend 合同 `73 passed`；完整 frontend
   `73 files / 397 tests`、TypeScript、production build 与 router regression 全部通过。
+- 实现已提交为 `9b56ad74abdd703d2fb22de757b7b650a623ac8a` 并创建
+  [Draft PR #226](https://github.com/tristan419/JATO_Analysis_System/pull/226)。#226 明确禁止直接
+  合并；当前只等待 required CI，随后仍须用户单独授权 pre-merge `discard-candidate`。
+  重叠的 docs-only Draft #225 已由本 PR 吸收证据，应保持未合并。
 
 ### 2026-08-10 / Step 3R：首个可写 Candidate 成功，进入自动 prepare/新鲜度阶段
 
