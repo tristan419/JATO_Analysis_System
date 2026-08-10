@@ -59,6 +59,7 @@ const OrderGeniusCbuPage = lazy(() => import("./pages/OrderGeniusCbuPage").then(
 const OrderGeniusVehicleAllocationPage = lazy(() => import("./pages/OrderGeniusVehicleAllocationPage").then(m => ({ default: m.OrderGeniusVehicleAllocationPage })));
 const AccessControlPage = lazy(() => import("./pages/AccessControlPage").then(m => ({ default: m.AccessControlPage })));
 const ProfilePage = lazy(() => import("./pages/ProfilePage").then(m => ({ default: m.ProfilePage })));
+const AstrBotPage = lazy(() => import("./pages/AstrBotPage").then(m => ({ default: m.AstrBotPage })));
 const RouteDiagnosticsPage = lazy(() => import("./pages/RouteDiagnosticsPage").then(m => ({ default: m.RouteDiagnosticsPage })));
 const SharedFilterScopeProvider = lazy(() =>
   import("./contexts/SharedFilterScopeContext").then(m => ({ default: m.SharedFilterScopeProvider })),
@@ -298,6 +299,7 @@ const router = createBrowserRouter([
     { path: "route-diagnostics", element: withPageLoader(<RouteDiagnosticsPage />) },
     { path: "product/coc-match", element: withPageLoader(<CocMatchPage />) },
     { path: "copilot", element: withPageLoader(<CountryChatPageHost />) },
+    { path: "astrbot/*", element: withPageLoader(<AstrBotPage />) },
     { path: "engineering-config", element: withPageLoader(<EngineeringConfigPage />) },
     { path: "market-scan", element: <RedirectPreserveSearch to="/market/overview" /> },
     { path: "msrp", element: <RedirectPreserveSearch to="/product/current-msrp" /> },

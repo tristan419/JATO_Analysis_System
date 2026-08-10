@@ -201,6 +201,58 @@ API_PREFIX = "/v1"
 APP_NAME = "JATO Fullstack API"
 APP_VERSION = "0.1.0"
 
+# AstrBot reuses the CountryCopilot provider path by default. Keep the runtime
+# and judge configuration centralized so agent services share one contract.
+ASTRBOT_PROVIDER_SOURCE_ID = os.getenv(
+    "APP_ASTRBOT_PROVIDER_SOURCE_ID",
+    "country_copilot_env",
+).strip()
+ASTRBOT_PROVIDER_ID = os.getenv("APP_ASTRBOT_PROVIDER_ID", "deepseek").strip()
+ASTRBOT_PROVIDER_KEY_ENV = os.getenv(
+    "APP_ASTRBOT_PROVIDER_KEY_ENV",
+    "DEEPSEEK_API_KEY",
+).strip() or "DEEPSEEK_API_KEY"
+ASTRBOT_PROVIDER_MODEL = os.getenv(
+    "APP_ASTRBOT_PROVIDER_MODEL",
+    os.getenv("APP_DEEPSEEK_CHAT_MODEL", "deepseek-chat"),
+).strip() or "deepseek-chat"
+ASTRBOT_PROVIDER_API_BASE = os.getenv(
+    "APP_ASTRBOT_PROVIDER_API_BASE",
+    "https://api.deepseek.com",
+).strip().rstrip("/") or "https://api.deepseek.com"
+ASTRBOT_JUDGE_PROVIDER_ID = os.getenv(
+    "APP_ASTRBOT_JUDGE_PROVIDER_ID",
+    "openai",
+).strip() or "openai"
+ASTRBOT_JUDGE_KEY_ENV = os.getenv(
+    "APP_ASTRBOT_JUDGE_KEY_ENV",
+    "OPENAI_API_KEY",
+).strip() or "OPENAI_API_KEY"
+ASTRBOT_JUDGE_MODEL = os.getenv(
+    "APP_ASTRBOT_JUDGE_MODEL",
+    os.getenv("OPENAI_MODEL", "gpt-5.5"),
+).strip() or "gpt-5.5"
+ASTRBOT_JUDGE_API_BASE = os.getenv(
+    "APP_ASTRBOT_JUDGE_API_BASE",
+    "https://api.openai.com/v1",
+).strip().rstrip("/") or "https://api.openai.com/v1"
+ASTRBOT_RUNTIME_URL = os.getenv(
+    "APP_ASTRBOT_RUNTIME_URL",
+    "http://127.0.0.1:6185/",
+).strip() or "http://127.0.0.1:6185/"
+ASTRBOT_MCP_SERVER_NAME = os.getenv(
+    "APP_ASTRBOT_MCP_SERVER_NAME",
+    "jato_mcp",
+).strip() or "jato_mcp"
+ASTRBOT_MCP_URL = os.getenv(
+    "APP_ASTRBOT_MCP_URL",
+    "http://127.0.0.1:8185/mcp",
+).strip() or "http://127.0.0.1:8185/mcp"
+ASTRBOT_MCP_TRANSPORT = os.getenv(
+    "APP_ASTRBOT_MCP_TRANSPORT",
+    "streamable_http",
+).strip() or "streamable_http"
+
 MAX_RAW_ROWS = int(os.getenv("APP_MAX_RAW_ROWS", "5000"))
 MAX_GROUP_METRICS = int(os.getenv("APP_MAX_GROUP_METRICS", "6"))
 DEFAULT_GROUP_BY = os.getenv("APP_DEFAULT_GROUP_BY", "国家")
