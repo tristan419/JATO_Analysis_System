@@ -236,6 +236,47 @@ class CountryNewsRefreshRequest(BaseModel):
     enrich_with_gemini: bool | None = None
 
 
+class EngineeringConfigCompareFactFilters(BaseModel):
+    deltaFilter: Literal[
+        "ALL",
+        "DIFFERENCE",
+        "ADDED",
+        "REMOVED",
+        "VALUE_CHANGED",
+        "OPTIONAL_CHANGED",
+        "INFERRED",
+        "MISSING_SOURCE",
+        "MERGED_SOURCE",
+        "UNKNOWN",
+        "COMMON",
+    ] = "ALL"
+    category: str | None = Field(default=None, max_length=200)
+    search: str | None = Field(default=None, max_length=300)
+    targetTrimId: str | None = None
+    includeBusinessSummary: bool = True
+    forceRefresh: bool = False
+
+
+class EngineeringConfigCompareFactSource(BaseModel):
+    kind: Literal["local_workbook_digest"]
+    fileName: str = Field(min_length=1, max_length=255)
+    groupId: str = Field(min_length=1, max_length=500)
+
+
+class EngineeringConfigCompareFactRequest(BaseModel):
+    trimIds: list[str] = Field(min_length=2, max_length=4)
+    baseTrimId: str
+    versionScope: Literal["published", "latest"] = "published"
+    factSource: EngineeringConfigCompareFactSource | None = None
+    filters: EngineeringConfigCompareFactFilters = Field(
+        default_factory=EngineeringConfigCompareFactFilters
+    )
+
+
+class EngineeringConfigBusinessSummaryComposeRequest(EngineeringConfigCompareFactRequest):
+    pass
+
+
 class CrudItem(BaseModel):
     id: str
     code: str
@@ -290,7 +331,6 @@ class ConfigImportRunRequest(BaseModel):
 
 class ConfigFeatureValueUpdate(BaseModel):
     raw_value: str | None = None
-    updated_by: str | None = None
     expected_version: int = 1
     comment: str | None = None
 
@@ -299,18 +339,45 @@ class ConfigFeatureValueCreate(BaseModel):
     trim_id: str
     feature_id: str
     raw_value: str
-    updated_by: str | None = None
 
 
-class VehicleTrimUpdate(BaseModel):
+class SourceDigestDraftTrimIdentityOverride(BaseModel):
+    trim_id: str
     brand: str | None = None
     model_name: str | None = None
     trim_name: str | None = None
+    full_trim_name: str | None = None
+    market: str | None = None
+    country: str | None = None
+    model_year: str | None = None
     energy_type: str | None = None
     drivetrain: str | None = None
     engine: str | None = None
-    model_year: str | None = None
-    status: str | None = None
+    material_no: str | None = None
+    sales_version: str | None = None
+
+
+class SourceDigestDraftCreate(BaseModel):
+    trim_ids: list[str] = Field(default_factory=list)
+    trim_identity_overrides: list[SourceDigestDraftTrimIdentityOverride] = Field(default_factory=list)
+    notes: str | None = None
+
+
+class VehicleTrimUpdate(BaseModel):
+    brand: str | None = Field(default=None, max_length=200)
+    model_name: str | None = Field(default=None, max_length=200)
+    trim_name: str | None = Field(default=None, max_length=300)
+    full_trim_name: str | None = Field(default=None, max_length=500)
+    market: str | None = Field(default=None, max_length=200)
+    energy_type: str | None = Field(default=None, max_length=200)
+    drivetrain: str | None = Field(default=None, max_length=200)
+    engine: str | None = Field(default=None, max_length=300)
+    model_year: str | None = Field(default=None, max_length=100)
+    vehicle_code: str | None = Field(default=None, max_length=200)
+    material_no: str | None = Field(default=None, max_length=200)
+    identity_key: str | None = Field(default=None, max_length=500)
+    status: Literal["active", "draft", "trashed"] | None = None
+    comment: str = Field(min_length=3, max_length=500)
 
 
 class MsrpSourceCreate(BaseModel):

@@ -2,7 +2,7 @@ import React, { useState, useEffect, useCallback, useRef, useMemo } from "react"
 import { api } from "../api/client";
 import type { VehicleTrimItem, TrimDetail, AvailabilityState } from "../types/engineeringConfig";
 
-const AVAIL_CLASS: Record<AvailabilityState, string> = { STANDARD: "cell-standard", OPTIONAL: "cell-optional", NOT_AVAILABLE: "cell-na", NOT_APPLICABLE: "cell-na", VALUE: "cell-value", UNKNOWN: "cell-unknown" };
+const AVAIL_CLASS: Record<AvailabilityState, string> = { STANDARD: "cell-standard", OPTIONAL: "cell-optional", NOT_AVAILABLE: "cell-na", NOT_APPLICABLE: "cell-na", VALUE: "cell-value", UNKNOWN: "cell-unknown", CANCELLED_OR_REMOVED: "cell-na" };
 
 interface EditingCell { trimId: string; featureCode: string; valueId: string | null; rawValue: string; version: number; }
 interface CellData { valueId: string | null; rawValue: string; availability: AvailabilityState; version: number; }
@@ -68,10 +68,14 @@ export function ConfigMatrixEditor() {
     try {
       let result: { valueId: string; availability: string };
       if (valueId) {
-        result = await api.updateEngineeringConfigFeatureValue(valueId, { raw_value: rawValue, expected_version: version, updated_by: localStorage.getItem("jato_user_name") || "editor" }) as unknown as { valueId: string; availability: string };
+        result = await api.updateEngineeringConfigFeatureValue(valueId, {
+          raw_value: rawValue,
+          expected_version: version,
+          comment: "Engineering Config matrix edit",
+        }) as unknown as { valueId: string; availability: string };
       } else {
         const row = rows.find((r) => r.featureCode === featureCode);
-        result = await api.createEngineeringConfigFeatureValue({ trim_id: trimId, feature_id: row?.featureId || "", raw_value: rawValue, updated_by: localStorage.getItem("jato_user_name") || "editor" }) as unknown as { valueId: string; availability: string };
+        result = await api.createEngineeringConfigFeatureValue({ trim_id: trimId, feature_id: row?.featureId || "", raw_value: rawValue }) as unknown as { valueId: string; availability: string };
       }
       setRows((p) => p.map((r) => { if (r.featureCode !== featureCode) return r; const c = r.cells[trimId]; if (!c) return r; return { ...r, cells: { ...r.cells, [trimId]: { ...c, valueId: result.valueId || c.valueId, rawValue: rawValue, availability: result.availability as AvailabilityState, version: version + 1 } } }; }));
       setFlash(key); setTimeout(() => setFlash(null), 1200); setEditing(null);
@@ -118,7 +122,7 @@ export function ConfigMatrixEditor() {
                     const cell = r.cells[t.trimId]; const key = `${t.trimId}:${r.featureCode}`; const isEdit = editing?.trimId === t.trimId && editing?.featureCode === r.featureCode;
                     if (isEdit) return <td key={t.trimId} className="matrix-cell editing"><input ref={inpRef} className="input input-sm edit-input" value={editing?.rawValue || ""} onChange={(e) => setEditing((p) => p ? { ...p, rawValue: e.target.value } : null)} onKeyDown={(e) => { if (e.key === "Enter") saveEdit(); if (e.key === "Escape") setEditing(null); }} autoFocus /><button className="btn btn-sm btn-primary" onClick={saveEdit} disabled={saving === key}>{saving === key ? "..." : "✓"}</button></td>;
                     return <td key={t.trimId} className={`matrix-cell ${AVAIL_CLASS[cell?.availability || "UNKNOWN"]} ${flash === key ? "cell-flash-saved" : ""}`} onClick={() => startEdit(t.trimId, r.featureCode)} title={cell?.rawValue || "点击编辑"}>
-                      {cell?.availability === "STANDARD" && "● 标配"}{cell?.availability === "OPTIONAL" && "○ 选装"}{cell?.availability === "NOT_AVAILABLE" && "-"}{cell?.availability === "NOT_APPLICABLE" && "N/A"}{cell?.availability === "UNKNOWN" && "?"}{cell?.availability === "VALUE" && cell.rawValue}
+                      {cell?.availability === "STANDARD" && "● 标配"}{cell?.availability === "OPTIONAL" && "○ 选装"}{cell?.availability === "NOT_AVAILABLE" && "-"}{cell?.availability === "NOT_APPLICABLE" && "N/A"}{cell?.availability === "UNKNOWN" && "?"}{cell?.availability === "VALUE" && cell.rawValue}{cell?.availability === "CANCELLED_OR_REMOVED" && "已停售/移除"}
                     </td>;
                   })}
                 </tr>)}

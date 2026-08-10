@@ -3,7 +3,7 @@ from typing import Callable
 
 from fastapi import Depends, Header, HTTPException
 
-from app.core.config import AUTH_ENABLED, TOKEN_ROLE_MAP
+from app.core.config import AUTH_ENABLED, TOKEN_ACTOR_MAP, TOKEN_ROLE_MAP
 from app.services.auth_service import session_store
 
 
@@ -46,7 +46,7 @@ def _token_user(
             raise HTTPException(status_code=403, detail="Invalid role")
         return UserContext(
             role=role,
-            name=str(x_user_name).strip() or "anonymous",
+            name=TOKEN_ACTOR_MAP.get(x_auth_token) or f"static-{role}",
         )
 
     return None
@@ -67,7 +67,14 @@ def get_current_user(
             name=str(x_user_name).strip() or "anonymous",
         )
 
-    return _token_user(x_auth_token, x_user_name) or _anonymous_viewer(x_user_name)
+    token_user = _token_user(x_auth_token, x_user_name)
+    if token_user is not None:
+        return token_user
+    raise HTTPException(
+        status_code=401,
+        detail="Authentication required",
+        headers={"WWW-Authenticate": "Bearer"},
+    )
 
 
 def require_min_role(min_role: str) -> Callable:

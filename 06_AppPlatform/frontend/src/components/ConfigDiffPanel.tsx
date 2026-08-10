@@ -25,7 +25,6 @@ export function ConfigDiffPanel() {
     try {
       await api.updateEngineeringConfigFeatureValue(entry.entityId, {
         raw_value: entry.oldValue, expected_version: 1,
-        updated_by: localStorage.getItem("jato_user_name") || "editor",
         comment: `Rollback from audit ${entry.auditId}`,
       });
       await loadLogs();

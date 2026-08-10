@@ -97,6 +97,20 @@ import type {
   VersionComparisonDeckResponse,
 } from "../types";
 import type {
+  EngineeringConfigBusinessSummaryComposeRequest,
+  EngineeringConfigBusinessSummaryComposeResponse,
+  EngineeringConfigBusinessSummaryReadiness,
+  EngineeringConfigCompareExportRequest,
+  EngineeringConfigCompetitorRecommendationResponse,
+  EngineeringConfigDigestDraftResult,
+  EngineeringConfigDigestTrimIdentityOverride,
+  EngineeringConfigOcrReadiness,
+  EngineeringConfigSourceContext,
+  EngineeringConfigSourceDigest,
+  EngineeringConfigSourceSnapshot,
+  EngineeringConfigSourceSnapshotList,
+} from "../types/engineeringConfig";
+import type {
   ConfigProject,
   DataManagementAirflowActionResponse,
   DataManagementAirflowStatus,
@@ -4446,6 +4460,61 @@ export const api = {
     );
   },
 
+  initiateEngineeringConfigFeatureCatalogUpload: (fileName: string, totalSize: number, chunkSize?: number) => {
+    const sp = new URLSearchParams();
+    sp.set("file_name", fileName);
+    sp.set("total_size", String(totalSize));
+    if (chunkSize) sp.set("chunk_size", String(chunkSize));
+    return request<{ uploadId: string; totalChunks: number; chunkSize?: number; uploadKind?: "feature_catalog" }>(
+      `/engineering-config/feature-catalog/upload/initiate?${sp.toString()}`,
+      { method: "POST" },
+    );
+  },
+
+  uploadEngineeringConfigFeatureCatalogChunk: (uploadId: string, partNumber: number, chunk: Blob) =>
+    request<{ uploadId: string; partNumber: number; receivedBytes: number }>(
+      `/engineering-config/feature-catalog/upload/${uploadId}/parts/${partNumber}`,
+      { method: "PUT", body: chunk, headers: { "Content-Type": "application/octet-stream" } },
+    ),
+
+  completeEngineeringConfigFeatureCatalogUpload: (uploadId: string) =>
+    request<{
+      uploadId: string;
+      fileName: string;
+      status: string;
+      summary: {
+        totalFeatures: number;
+        createdFeatureCount: number;
+        updatedFeatureCount: number;
+        unchangedFeatureCount: number;
+        warningCount: number;
+        warnings?: string[];
+        categories?: string[];
+      };
+      audit?: {
+        uploadId: string;
+        fileName: string;
+        status: string;
+        importedBy?: string;
+        importedRole?: string;
+        importedAtUtc?: string;
+        artifactRef?: string;
+        persistedIn?: string;
+        summary?: {
+          totalFeatures: number;
+          createdFeatureCount: number;
+          updatedFeatureCount: number;
+          unchangedFeatureCount: number;
+          warningCount: number;
+          warnings?: string[];
+          categories?: string[];
+        };
+      };
+    }>(
+      `/engineering-config/feature-catalog/upload/${uploadId}/complete`,
+      { method: "POST" },
+    ),
+
   initiateEngineeringConfigUpload: (fileName: string, totalSize: number, chunkSize?: number) => {
     const sp = new URLSearchParams();
     sp.set("file_name", fileName);
@@ -4490,22 +4559,193 @@ export const api = {
   confirmEngineeringConfigUpload: (uploadId: string) =>
     request<Record<string, unknown>>(`/engineering-config/matrix/upload/${uploadId}/confirm`, { method: "POST" }),
 
+  initiateEngineeringConfigSourceUpload: (fileName: string, totalSize: number, chunkSize?: number, mimeType?: string) => {
+    const sp = new URLSearchParams();
+    sp.set("file_name", fileName);
+    sp.set("total_size", String(totalSize));
+    if (chunkSize) sp.set("chunk_size", String(chunkSize));
+    if (mimeType) sp.set("mime_type", mimeType);
+    return request<{ uploadId: string; totalChunks: number; chunkSize?: number; sourceType?: string }>(
+      `/engineering-config/source/upload/initiate?${sp.toString()}`,
+      { method: "POST" },
+    );
+  },
+
+  uploadEngineeringConfigSourceChunk: (uploadId: string, partNumber: number, chunk: Blob) =>
+    request<{ uploadId: string; partNumber: number; receivedBytes: number }>(
+      `/engineering-config/source/upload/${uploadId}/parts/${partNumber}`,
+      { method: "PUT", body: chunk, headers: { "Content-Type": "application/octet-stream" } },
+    ),
+
+  completeEngineeringConfigSourceUpload: (uploadId: string, relatedContext?: EngineeringConfigSourceContext) =>
+    request<EngineeringConfigSourceSnapshot & { parseMode: string; message: string }>(
+      `/engineering-config/source/upload/${uploadId}/complete`,
+      {
+        method: "POST",
+        body: relatedContext ? JSON.stringify({ relatedContext }) : undefined,
+      },
+    ),
+
+  getEngineeringConfigOcrReadiness: () =>
+    request<EngineeringConfigOcrReadiness>("/engineering-config/ocr/readiness"),
+
+  getEngineeringConfigBusinessSummaryReadiness: () =>
+    request<EngineeringConfigBusinessSummaryReadiness>("/engineering-config/business-summary/readiness"),
+
+  listEngineeringConfigSourceSnapshots: (
+    options?: number | {
+      brand?: string | null;
+      country?: string | null;
+      includeTrash?: boolean;
+      limit?: number;
+      modelYear?: string | null;
+      powertrain?: string | null;
+      q?: string | null;
+      segment?: string | null;
+      trashOnly?: boolean;
+    },
+  ) => {
+    const sp = new URLSearchParams();
+    if (typeof options === "number") sp.set("limit", String(options));
+    else if (options) {
+      appendSearchParam(sp, "brand", options.brand);
+      appendSearchParam(sp, "country", options.country);
+      appendSearchParam(sp, "modelYear", options.modelYear);
+      appendSearchParam(sp, "powertrain", options.powertrain);
+      appendSearchParam(sp, "segment", options.segment);
+      appendSearchParam(sp, "q", options.q);
+      if (options.includeTrash) sp.set("includeTrash", "true");
+      if (options.trashOnly) sp.set("trashOnly", "true");
+      if (options.limit) sp.set("limit", String(options.limit));
+    }
+    const q = sp.toString();
+    return request<EngineeringConfigSourceSnapshotList>(`/engineering-config/source/snapshots${q ? `?${q}` : ""}`);
+  },
+
+  getEngineeringConfigSourceSnapshot: (sourceId: string) =>
+    request<EngineeringConfigSourceSnapshot>(`/engineering-config/source/snapshots/${sourceId}`),
+
+  trashEngineeringConfigSourceSnapshot: (sourceId: string, country?: string | null) => {
+    const sp = new URLSearchParams();
+    appendSearchParam(sp, "country", country);
+    const q = sp.toString();
+    return request<EngineeringConfigSourceSnapshot & { message: string }>(
+      `/engineering-config/source/snapshots/${encodeURIComponent(sourceId)}${q ? `?${q}` : ""}`,
+      { method: "DELETE" },
+    );
+  },
+
+  restoreEngineeringConfigSourceSnapshot: (sourceId: string, country?: string | null) => {
+    const sp = new URLSearchParams();
+    appendSearchParam(sp, "country", country);
+    const q = sp.toString();
+    return request<EngineeringConfigSourceSnapshot & { message: string }>(
+      `/engineering-config/source/snapshots/${encodeURIComponent(sourceId)}/restore${q ? `?${q}` : ""}`,
+      { method: "POST" },
+    );
+  },
+
+  clearEngineeringConfigSourceTrash: (country: string) =>
+    request<{ cleared: number; country: string; message: string }>(
+      `/engineering-config/source/trash?country=${encodeURIComponent(country)}`,
+      { method: "DELETE" },
+    ),
+
+  createEngineeringConfigDraftFromSourceDigest: (
+    sourceId: string,
+    groupId: string,
+    options?: { trimIds?: string[]; trimIdentityOverrides?: EngineeringConfigDigestTrimIdentityOverride[] },
+  ) => {
+    const trimIdentityOverrides = (options?.trimIdentityOverrides ?? [])
+      .filter((item) => item.trimId.trim())
+      .map((item) => ({
+        trim_id: item.trimId.trim(),
+        brand: item.brand || undefined,
+        model_name: item.modelName || undefined,
+        trim_name: item.trimName || undefined,
+        full_trim_name: item.fullTrimName || undefined,
+        market: item.market || undefined,
+        country: item.country || undefined,
+        model_year: item.modelYear || undefined,
+        energy_type: item.energyType || undefined,
+        drivetrain: item.drivetrain || undefined,
+        engine: item.engine || undefined,
+        material_no: item.materialNo || undefined,
+        sales_version: item.salesVersion || undefined,
+      }));
+    const body = {
+      ...(options?.trimIds?.length ? { trim_ids: options.trimIds } : {}),
+      ...(trimIdentityOverrides.length ? { trim_identity_overrides: trimIdentityOverrides } : {}),
+    };
+    return request<EngineeringConfigDigestDraftResult>(
+      `/engineering-config/source/snapshots/${encodeURIComponent(sourceId)}/digest-groups/${encodeURIComponent(groupId)}/draft`,
+      { method: "POST", body: Object.keys(body).length ? JSON.stringify(body) : undefined },
+    );
+  },
+
+  getEngineeringConfigLocalWorkbookDigest: (fileName?: string) => {
+    const sp = new URLSearchParams();
+    appendSearchParam(sp, "file_name", fileName);
+    const q = sp.toString();
+    return request<EngineeringConfigSourceDigest>(`/engineering-config/source/local-workbook-digest${q ? `?${q}` : ""}`);
+  },
+
   publishEngineeringConfigVersion: (versionId: string) =>
     request<Record<string, unknown>>(`/engineering-config/versions/${versionId}/publish`, { method: "POST" }),
 
-  createEngineeringConfigFeatureValue: (payload: { trim_id: string; feature_id: string; raw_value: string; updated_by?: string }) =>
+  createEngineeringConfigFeatureValue: (payload: { trim_id: string; feature_id: string; raw_value: string }) =>
     request<Record<string, unknown>>("/engineering-config/values", { method: "POST", body: JSON.stringify(payload) }),
 
   deleteEngineeringConfigFeatureValue: (valueId: string) =>
     request<Record<string, unknown>>(`/engineering-config/values/${valueId}`, { method: "DELETE" }),
 
-  updateEngineeringConfigTrim: (trimId: string, payload: { brand?: string; model_name?: string; trim_name?: string; energy_type?: string; drivetrain?: string; engine?: string; model_year?: string; status?: string }) =>
+  updateEngineeringConfigTrim: (trimId: string, payload: {
+    brand?: string;
+    model_name?: string;
+    trim_name?: string;
+    full_trim_name?: string;
+    market?: string;
+    energy_type?: string;
+    drivetrain?: string;
+    engine?: string;
+    model_year?: string;
+    vehicle_code?: string;
+    material_no?: string;
+    identity_key?: string;
+    status?: "active" | "draft" | "trashed";
+    comment: string;
+  }) =>
     request<Record<string, unknown>>(`/engineering-config/trims/${trimId}`, { method: "PATCH", body: JSON.stringify(payload) }),
 
-  listEngineeringConfigTrims: (params?: { brand?: string; model_name?: string; status?: string; limit?: number }) => {
+  clearEngineeringConfigTrimTrash: (market: string) =>
+    request<{ cleared: number; market: string; message: string }>(
+      `/engineering-config/trims/trash?market=${encodeURIComponent(market)}`,
+      { method: "DELETE" },
+    ),
+
+  listEngineeringConfigTrims: (params?: {
+    brand?: string;
+    model_name?: string;
+    trim_name?: string;
+    market?: string;
+    model_year?: string;
+    energy_type?: string;
+    source?: string;
+    has_material_no?: boolean;
+    q?: string;
+    status?: string;
+    limit?: number;
+  }) => {
     const sp = new URLSearchParams();
     if (params?.brand) sp.set("brand", params.brand);
     if (params?.model_name) sp.set("model_name", params.model_name);
+    if (params?.trim_name) sp.set("trim_name", params.trim_name);
+    if (params?.market) sp.set("market", params.market);
+    if (params?.model_year) sp.set("model_year", params.model_year);
+    if (params?.energy_type) sp.set("energy_type", params.energy_type);
+    if (params?.source) sp.set("source", params.source);
+    if (params?.has_material_no !== undefined) sp.set("has_material_no", String(params.has_material_no));
+    if (params?.q) sp.set("q", params.q);
     if (params?.status) sp.set("status", params.status);
     if (params?.limit) sp.set("limit", String(params.limit ?? 200));
     const q = sp.toString();
@@ -4517,18 +4757,65 @@ export const api = {
   getEngineeringConfigTrimDetail: (trimId: string) =>
     request<Record<string, unknown>>(`/engineering-config/trims/${trimId}`),
 
-  compareEngineeringConfigTrims: (trimIds: string[], differencesOnly?: boolean) => {
+  listEngineeringConfigCompetitorRecommendations: (params: {
+    country?: string;
+    market?: string;
+    model_name?: string;
+    model?: string;
+    powertrain?: string;
+    segment?: string;
+    limit?: number;
+  }) => {
+    const sp = new URLSearchParams();
+    if (params.country) sp.set("country", params.country);
+    if (params.market) sp.set("market", params.market);
+    if (params.model_name) sp.set("model_name", params.model_name);
+    if (params.model) sp.set("model", params.model);
+    if (params.powertrain) sp.set("powertrain", params.powertrain);
+    if (params.segment) sp.set("segment", params.segment);
+    if (params.limit) sp.set("limit", String(params.limit));
+    const q = sp.toString();
+    return request<EngineeringConfigCompetitorRecommendationResponse>(
+      `/engineering-config/recommendations/competitors${q ? `?${q}` : ""}`,
+    );
+  },
+
+  compareEngineeringConfigTrims: (
+    trimIds: string[],
+    differencesOnly?: boolean,
+    versionScope: "published" | "latest" = "published",
+  ) => {
     const sp = new URLSearchParams();
     sp.set("trim_ids", trimIds.join(","));
     if (differencesOnly) sp.set("differences_only", "true");
+    if (versionScope === "latest") sp.set("version_scope", "latest");
     return request<Record<string, unknown>>(
       `/engineering-config/compare?${sp.toString()}`
     );
   },
 
+  composeEngineeringConfigBusinessSummary: (payload: EngineeringConfigBusinessSummaryComposeRequest) =>
+    request<EngineeringConfigBusinessSummaryComposeResponse>(
+      "/engineering-config/business-summary/compose",
+      { method: "POST", body: JSON.stringify(payload) },
+    ),
+
+  exportEngineeringConfigCompareXlsx: (payload: EngineeringConfigCompareExportRequest) =>
+    requestBlob("/engineering-config/compare/export/xlsx", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    }),
+
+  exportEngineeringConfigComparePdf: (payload: EngineeringConfigCompareExportRequest) =>
+    requestBlob("/engineering-config/compare/export/pdf", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    }),
+
   updateEngineeringConfigFeatureValue: (valueId: string, payload: {
     raw_value?: string;
-    updated_by?: string;
     expected_version: number;
     comment?: string;
   }) =>

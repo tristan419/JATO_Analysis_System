@@ -1,642 +1,480 @@
 #!/usr/bin/env python3
-"""Official configuration/spec source sync readiness report.
+"""Sync an official engineering configuration source into the warehouse.
 
-This is intentionally network-free. It proves that official spec/configuration
-sources are mapped through the unified ScrapeJob contract and have a declared
-Engineering Config warehouse landing path before live fetchers are enabled.
+The script makes the source-table path repeatable:
+
+1. register an official source snapshot in ``ops.import_batches``;
+2. build the workbook digest with the same extractor used by the API;
+3. create draft trims/features/values for selected digest compare groups.
+
+It intentionally reuses the existing engineering-config API helpers and
+repository layer instead of introducing a parallel import model.
 """
 
 from __future__ import annotations
 
 import argparse
-from collections import Counter, defaultdict
-from datetime import UTC, datetime
+from datetime import datetime, timezone
 import json
 from pathlib import Path
 import sys
-import tempfile
-import time
 from typing import Any, Sequence
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
-TOOLKIT_ROOT = REPO_ROOT / "07_ScrapingToolkit"
+BACKEND_ROOT = REPO_ROOT / "06_AppPlatform" / "backend"
+if str(BACKEND_ROOT) not in sys.path:
+    sys.path.insert(0, str(BACKEND_ROOT))
 HERMES_SCRIPT_DIR = REPO_ROOT / "03_Scripts" / "hermes"
-for path in (TOOLKIT_ROOT, HERMES_SCRIPT_DIR):
-    if str(path) not in sys.path:
-        sys.path.insert(0, str(path))
+if str(HERMES_SCRIPT_DIR) not in sys.path:
+    sys.path.insert(0, str(HERMES_SCRIPT_DIR))
 
-from jato_scraper.core import (  # noqa: E402
-    ScrapeJob,
-    load_domain_scrape_jobs_from_batch,
-    run_fixture_pipeline_for_job,
-)
+from app.api.routes import engineering_config as config_api  # noqa: E402
+from app.core.security import UserContext  # noqa: E402
+from app.db.models import ImportBatch  # noqa: E402
+from app.db.session import get_session_factory  # noqa: E402
 
 try:
-    from pipeline_status_writer import write_pipeline_status
-except ImportError:  # pragma: no cover - optional for unit tests.
+    from pipeline_status_writer import write_pipeline_status  # noqa: E402
+except ImportError:  # pragma: no cover - optional for isolated unit imports.
     write_pipeline_status = None  # type: ignore[assignment]
 
 
 SCHEMA_VERSION = "engineering_config_source_sync_v1"
 PIPELINE_ID = "engineering_config_source_sync"
-DEFAULT_SPEC_BATCH = "07_ScrapingToolkit/spec_sources/batch_a.yaml"
-DEFAULT_REQUIRED_COUNTRIES = ("se", "fi", "no", "dk")
-WAREHOUSE_CONTRACT = {
-    "domain": "engineering_config",
-    "importBatchDomain": "engineering_config",
-    "schemaRef": "SpecFeatureObservation",
-    "landingAdapter": "spec_feature_observation_to_engineering_config_landing_v1",
-    "tables": [
-        "ops.import_batches",
-        "engineering_config.vehicle_trims",
-        "engineering_config.trim_feature_values",
-        "engineering_config.config_versions",
-    ],
-    "apiRoutes": [
-        "POST /engineering-config/matrix/upload/{upload_id}/parse",
-        "POST /engineering-config/matrix/upload/{upload_id}/confirm",
-        "POST /engineering-config/matrix/upload/{upload_id}/import",
-    ],
-}
+DEFAULT_SOURCE_FILE = (
+    REPO_ROOT
+    / "02_Config_MetaData"
+    / config_api.DEFAULT_LOCAL_CONFIG_WORKBOOK
+)
 
 
-def _utc_now_iso() -> str:
-    return datetime.now(UTC).isoformat().replace("+00:00", "Z")
+def _utc_now() -> datetime:
+    return datetime.now(timezone.utc)
 
 
-def _resolve_path(repo_root: Path, value: str | Path) -> Path:
-    path = Path(value).expanduser()
-    return path if path.is_absolute() else repo_root / path
+def _utc_iso(value: datetime) -> str:
+    return value.isoformat().replace("+00:00", "Z")
 
 
-def _display_path(path: Path) -> str:
-    try:
-        return str(path.resolve().relative_to(REPO_ROOT.resolve()))
-    except ValueError:
-        return str(path)
+def _source_payload(batch: object, *, status: str) -> dict[str, Any]:
+    return {
+        "sourceId": str(getattr(batch, "import_batch_id", "")),
+        "uploadStatus": status,
+        "sourceFileName": getattr(batch, "source_file_name", None),
+        "sourceFilePath": getattr(batch, "source_file_path", None),
+        "sourceFileHash": getattr(batch, "source_file_hash", None),
+        "domain": getattr(batch, "domain", None),
+    }
 
 
-def _safe_token(value: str | None, fallback: str) -> str:
-    text = str(value or "").strip().lower()
-    if not text:
-        return fallback
-    safe = "".join(ch if ch.isalnum() else "-" for ch in text)
-    return "-".join(part for part in safe.split("-") if part) or fallback
+def _digest_groups(digest: dict[str, Any]) -> list[dict[str, Any]]:
+    groups = digest.get("compareGroups")
+    if not isinstance(groups, list):
+        return []
+    return [item for item in groups if isinstance(item, dict)]
 
 
-def _history_suffix(report: dict[str, Any]) -> str:
-    generated = str(report.get("generatedAtUtc") or _utc_now_iso())
-    stamp = (
-        generated.replace(":", "")
-        .replace("-", "")
-        .replace("+", "z")
-        .replace(".", "-")
-    )
-    return _safe_token(stamp, "unknown-time")
+def _is_importable_group(group: dict[str, Any]) -> bool:
+    trims = group.get("trims")
+    rows = group.get("rows")
+    return isinstance(trims, list) and len(trims) >= 2 and isinstance(rows, list) and bool(rows)
 
 
-def _csv_arg(value: str | Sequence[str]) -> tuple[str, ...]:
-    parts = value.split(",") if isinstance(value, str) else value
-    normalized: list[str] = []
-    seen: set[str] = set()
+def _compact_name(parts: Sequence[str]) -> str:
+    result: list[str] = []
     for part in parts:
-        token = str(part).strip().lower()
-        if not token or token in seen:
-            continue
-        seen.add(token)
-        normalized.append(token)
-    return tuple(normalized)
+        cleaned = part.strip()
+        if cleaned and cleaned not in result:
+            result.append(cleaned)
+    return " / ".join(result)
 
 
-def _job_country(job: ScrapeJob) -> str:
-    return str(job.metadata.get("countryCode") or "").strip().lower()
+def _trim_full_name(trim: dict[str, Any], group: dict[str, Any]) -> str:
+    full_name = str(trim.get("fullTrimName") or "").strip()
+    if full_name:
+        return full_name
+    model_name = str(
+        trim.get("modelName")
+        or group.get("modelName")
+        or "Unknown model"
+    ).strip()
+    trim_name = str(
+        trim.get("trimName")
+        or trim.get("fullTrimName")
+        or "Unnamed trim"
+    ).strip()
+    return _compact_name([model_name, trim_name]) or trim_name or model_name
 
 
-def _job_brand(job: ScrapeJob) -> str:
-    return str(job.metadata.get("brand") or "").strip().upper()
-
-
-def _job_model(job: ScrapeJob) -> str:
-    return str(job.metadata.get("model") or job.metadata.get("official_model") or "").strip()
-
-
-def _summarize_job(job: ScrapeJob) -> dict[str, Any]:
-    metadata = job.metadata
+def _group_summary(group: dict[str, Any], *, index: int) -> dict[str, Any]:
+    trims = group.get("trims") if isinstance(group.get("trims"), list) else []
+    rows = group.get("rows") if isinstance(group.get("rows"), list) else []
     return {
-        "jobId": job.job_id,
-        "country": _job_country(job),
-        "brand": _job_brand(job),
-        "model": _job_model(job),
-        "sourceCode": metadata.get("sourceCode"),
-        "sourceName": metadata.get("sourceName"),
-        "sourceKind": metadata.get("sourceKind"),
-        "topics": metadata.get("topics") or [],
-        "url": job.url,
-        "fetcher": job.fetcher,
-        "extractor": job.extractor,
-        "schemaRef": job.schema_ref,
-        "freshnessHours": job.freshness.max_age_hours,
-        "priority": job.priority,
-        "allowDomains": job.allow_domains,
+        "index": index,
+        "groupId": group.get("groupId"),
+        "modelName": group.get("modelName"),
+        "trimCount": len(trims),
+        "featureCount": len(rows),
+        "importable": _is_importable_group(group),
     }
 
 
-def _landing_identity_key(*, country: str, brand: str, model: str, trim: str) -> str:
-    raw = "::".join([country, brand, model, trim])
-    return _safe_token(raw, "unknown-trim")
-
-
-def _feature_availability(kind: object) -> str:
-    value = str(kind or "").strip().lower()
-    if value in {"standard", "included", "serial"}:
-        return "standard"
-    if value in {"optional", "option", "available"}:
-        return "optional"
-    if value in {"unavailable", "not_available", "not available"}:
-        return "unavailable"
-    return "unknown"
-
-
-def build_engineering_config_landing_payload(
-    normalized_observations: Sequence[dict[str, Any]],
+def _select_groups(
+    digest: dict[str, Any],
     *,
-    import_batch_code: str,
-    source_file_path: str,
-) -> dict[str, Any]:
-    """Map SpecFeatureObservation payloads into engineering_config landing rows."""
-    vehicle_trims: list[dict[str, Any]] = []
-    trim_feature_values: list[dict[str, Any]] = []
-    for index, observation in enumerate(normalized_observations, start=1):
-        payload = observation.get("payload")
-        if not isinstance(payload, dict):
-            continue
-        brand = str(payload.get("brand") or "UNKNOWN").strip().upper()
-        model = str(payload.get("model") or "UNKNOWN").strip()
-        country = str(
-            payload.get("normalizedCountryCode")
-            or payload.get("countryCode")
-            or ""
-        ).strip().upper()
-        trim_name = str(
-            payload.get("trimName")
-            or payload.get("trim")
-            or payload.get("fullTrimName")
-            or f"{model} official spec"
-        ).strip()
-        full_trim_name = str(
-            payload.get("fullTrimName")
-            or " ".join(part for part in [brand, model, trim_name] if part)
-        ).strip()
-        identity_key = _landing_identity_key(
-            country=country,
-            brand=brand,
-            model=model,
-            trim=trim_name,
-        )
-        source_record_key = str(observation.get("recordKey") or "").strip()
-        vehicle_trims.append({
-            "landingTrimKey": identity_key,
-            "identityKey": identity_key,
-            "market": country or None,
-            "brand": brand,
-            "modelName": model,
-            "trimName": trim_name,
-            "fullTrimName": full_trim_name,
-            "status": "active",
-            "sourceRecordKey": source_record_key,
-            "sourceUrl": observation.get("sourceUrl") or payload.get("sourceUrl"),
-        })
+    group_id: str | None,
+    group_index: int | None,
+    all_groups: bool,
+    limit_groups: int,
+) -> list[tuple[int, dict[str, Any]]]:
+    groups = _digest_groups(digest)
+    if group_id:
+        selected = [
+            (index, group)
+            for index, group in enumerate(groups)
+            if str(group.get("groupId") or "") == group_id
+        ]
+        if not selected:
+            raise ValueError(f"Digest group not found: {group_id}")
+        return selected
 
-        feature_items = payload.get("featureItems")
-        if not isinstance(feature_items, list):
-            continue
-        for feature_index, item in enumerate(feature_items, start=1):
-            if not isinstance(item, dict):
-                continue
-            feature_key = str(
-                item.get("featureKey")
-                or item.get("featureCode")
-                or item.get("label")
-                or ""
-            ).strip()
-            if not feature_key:
-                continue
-            raw_value = str(
-                item.get("rawValue")
-                or item.get("value")
-                or item.get("label")
-                or item.get("kind")
-                or "present"
-            ).strip()
-            trim_feature_values.append({
-                "landingTrimKey": identity_key,
-                "featureCode": feature_key,
-                "rawValue": raw_value,
-                "normalizedValue": (
-                    str(item["normalizedValue"]).strip()
-                    if item.get("normalizedValue") is not None
-                    else None
-                ),
-                "availability": _feature_availability(item.get("kind")),
-                "unit": item.get("unit"),
-                "sourceRow": index,
-                "sourceColumn": str(item.get("label") or feature_key),
-                "sourceRecordKey": source_record_key,
-            })
+    if group_index is not None:
+        if group_index < 0 or group_index >= len(groups):
+            raise ValueError(f"Digest group index out of range: {group_index}")
+        return [(group_index, groups[group_index])]
 
-    return {
-        "schemaVersion": "engineering_config_landing_v1",
-        "adapter": WAREHOUSE_CONTRACT["landingAdapter"],
-        "importBatch": {
-            "domain": WAREHOUSE_CONTRACT["importBatchDomain"],
-            "sourceFileName": import_batch_code,
-            "sourceFilePath": source_file_path,
-            "importStatus": "ready",
-            "rowCount": len(vehicle_trims) + len(trim_feature_values),
-            "errorCount": 0,
-        },
-        "vehicleTrims": vehicle_trims,
-        "trimFeatureValues": trim_feature_values,
-        "summary": {
-            "vehicleTrimRows": len(vehicle_trims),
-            "trimFeatureValueRows": len(trim_feature_values),
-            "sourceObservationCount": len(normalized_observations),
-        },
-    }
-
-
-def _select_stage_jobs(
-    jobs: Sequence[ScrapeJob],
-    *,
-    sample_per_country: int,
-) -> list[ScrapeJob]:
-    by_country: dict[str, list[ScrapeJob]] = defaultdict(list)
-    for job in sorted(jobs, key=lambda item: item.job_id):
-        by_country[_job_country(job)].append(job)
-
-    selected: list[ScrapeJob] = []
-    for country in sorted(by_country):
-        selected.extend(by_country[country][: max(1, int(sample_per_country))])
-    return selected
-
-
-def _run_stage_smoke(
-    jobs: Sequence[ScrapeJob],
-    *,
-    artifact_root: Path,
-    sample_per_country: int,
-) -> tuple[list[dict[str, Any]], list[dict[str, str]]]:
-    results: list[dict[str, Any]] = []
-    errors: list[dict[str, str]] = []
-    for job in _select_stage_jobs(jobs, sample_per_country=sample_per_country):
-        try:
-            output = run_fixture_pipeline_for_job(job, artifact_root=artifact_root)
-        except Exception as exc:  # noqa: BLE001 - readiness must keep scanning.
-            errors.append(
-                {
-                    "jobId": job.job_id,
-                    "errorClass": type(exc).__name__,
-                    "error": str(exc),
-                }
-            )
-            continue
-        sink = output["sinkResult"]
-        normalized = output["normalizedObservations"][0]
-        results.append(
-            {
-                "jobId": job.job_id,
-                "country": _job_country(job),
-                "schemaRef": job.schema_ref,
-                "recordKey": normalized.record_key,
-                "payload": normalized.payload,
-                "quality": normalized.quality,
-                "sourceUrl": normalized.source_url,
-                "sink": sink.model_dump(mode="json"),
-            }
-        )
-    return results, errors
-
-
-def _build_summary(
-    jobs: Sequence[ScrapeJob],
-    *,
-    required_countries: Sequence[str],
-) -> dict[str, Any]:
-    countries = sorted({country for job in jobs if (country := _job_country(job))})
-    missing = [
-        country for country in required_countries
-        if country not in set(countries)
+    importable = [
+        (index, group)
+        for index, group in enumerate(groups)
+        if _is_importable_group(group)
     ]
-    return {
-        "sourceCount": len(jobs),
-        "countryCount": len(countries),
-        "countries": countries,
-        "missingRequiredCountries": missing,
-        "brands": sorted({brand for job in jobs if (brand := _job_brand(job))}),
-        "models": sorted({model for job in jobs if (model := _job_model(job))}),
-        "jobsByFetcher": dict(sorted(Counter(job.fetcher for job in jobs).items())),
-        "jobsByExtractor": dict(sorted(Counter(job.extractor for job in jobs).items())),
-        "schemaRefs": dict(sorted(Counter(job.schema_ref for job in jobs).items())),
-        "sourceKinds": dict(
-            sorted(
-                Counter(
-                    str(job.metadata.get("sourceKind") or "unknown")
-                    for job in jobs
-                ).items()
-            )
-        ),
-    }
+    if all_groups:
+        return importable[:max(1, limit_groups)]
+    return importable[:1]
 
 
-def build_source_sync_report(
-    *,
-    repo_root: str | Path | None = None,
-    spec_batch: str | Path = DEFAULT_SPEC_BATCH,
-    required_countries: Sequence[str] = DEFAULT_REQUIRED_COUNTRIES,
-    artifact_root: str | Path | None = None,
-    sample_per_country: int = 1,
-    run_stage_smoke: bool = True,
-) -> dict[str, Any]:
-    started = time.time()
-    root = Path(repo_root).expanduser().resolve() if repo_root else REPO_ROOT
-    resolved_spec_batch = _resolve_path(root, spec_batch)
-    normalized_required = _csv_arg(required_countries)
-    mapping_errors: list[dict[str, str]] = []
-    stage_results: list[dict[str, Any]] = []
-    stage_errors: list[dict[str, str]] = []
-    stage_artifact_root: str | None = None
+def _normalised_context(args: argparse.Namespace) -> dict[str, Any]:
+    return config_api._normalise_related_context({  # noqa: SLF001
+        "relatedContext": {
+            "brand": args.brand,
+            "model": args.model,
+            "market": args.market,
+            "country": args.country,
+            "modelYear": args.model_year,
+            "contextType": args.context_type,
+        }
+    })
 
+
+def _import_result_int(import_item: dict[str, Any], key: str) -> int:
+    result = import_item.get("result")
+    if not isinstance(result, dict):
+        return 0
     try:
-        jobs = load_domain_scrape_jobs_from_batch(resolved_spec_batch, kind="spec")
-    except Exception as exc:  # noqa: BLE001 - report the exact mapping blocker.
-        jobs = []
-        mapping_errors.append(
-            {
-                "path": str(resolved_spec_batch),
-                "errorClass": type(exc).__name__,
-                "error": str(exc),
-            }
-        )
-
-    if run_stage_smoke and jobs:
-        stage_root = (
-            _resolve_path(root, artifact_root)
-            if artifact_root is not None
-            else Path(tempfile.mkdtemp(prefix="jato_config_source_sync_"))
-        )
-        stage_artifact_root = str(stage_root)
-        stage_results, stage_errors = _run_stage_smoke(
-            jobs,
-            artifact_root=stage_root,
-            sample_per_country=max(1, int(sample_per_country)),
-        )
-
-    summary = _build_summary(jobs, required_countries=normalized_required)
-    warnings: list[str] = []
-    for country in summary["missingRequiredCountries"]:
-        warnings.append(f"missing_spec_source_country:{country}")
-    if not jobs:
-        warnings.append("no_spec_sources_loaded")
-    if mapping_errors:
-        warnings.append(f"mapping_errors_present:{len(mapping_errors)}")
-    if stage_errors:
-        warnings.append(f"stage_errors_present:{len(stage_errors)}")
-    warehouse_landing = build_engineering_config_landing_payload(
-        [
-            {
-                "recordKey": result.get("recordKey"),
-                "payload": result.get("payload"),
-                "sourceUrl": result.get("sourceUrl"),
-            }
-            for result in stage_results
-        ],
-        import_batch_code=str(resolved_spec_batch.name),
-        source_file_path=str(resolved_spec_batch),
-    )
-    landing_summary = warehouse_landing["summary"]
-    if stage_results and int(landing_summary.get("vehicleTrimRows") or 0) == 0:
-        warnings.append("warehouse_landing_empty")
-
-    status = "passed"
-    if not jobs or mapping_errors or stage_errors:
-        status = "failed"
-    elif warnings:
-        status = "degraded"
-
-    return {
-        "schemaVersion": SCHEMA_VERSION,
-        "status": status,
-        "generatedAtUtc": _utc_now_iso(),
-        "elapsedSeconds": round(time.time() - started, 2),
-        "inputs": {
-            "specBatch": str(resolved_spec_batch),
-            "requiredCountries": list(normalized_required),
-            "runStageSmoke": run_stage_smoke,
-            "samplePerCountry": max(1, int(sample_per_country)),
-        },
-        "summary": {
-            **summary,
-            "stageSampledCount": len(stage_results),
-            "stageErrorCount": len(stage_errors),
-            "mappingErrorCount": len(mapping_errors),
-            "warehouseLandingTrimRows": landing_summary["vehicleTrimRows"],
-            "warehouseLandingFeatureRows": landing_summary["trimFeatureValueRows"],
-            "warningCount": len(warnings),
-        },
-        "warehouseContract": WAREHOUSE_CONTRACT,
-        "warehouseLanding": warehouse_landing,
-        "sources": [_summarize_job(job) for job in jobs],
-        "stageSmoke": {
-            "status": "not_run"
-            if not run_stage_smoke
-            else "ok"
-            if stage_results and not stage_errors
-            else "failed",
-            "artifactRoot": stage_artifact_root,
-            "results": stage_results,
-            "errors": stage_errors,
-        },
-        "mappingErrors": mapping_errors,
-        "warnings": warnings,
-    }
+        return int(result.get(key) or 0)
+    except (TypeError, ValueError):
+        return 0
 
 
-def _markdown_cell(value: Any) -> str:
-    text = str(value if value is not None else "-").replace("\n", " ")
-    return text.replace("|", "\\|")
-
-
-def _render_markdown(report: dict[str, Any]) -> str:
-    summary = report.get("summary") if isinstance(report.get("summary"), dict) else {}
-    warehouse = (
-        report.get("warehouseContract")
-        if isinstance(report.get("warehouseContract"), dict)
-        else {}
-    )
-    lines = [
-        "# Engineering Config Source Sync",
-        "",
-        f"**Generated:** {report.get('generatedAtUtc', '-')}",
-        f"**Status:** {report.get('status', '-')}",
-        "",
-        "## Summary",
-        "",
-        "| Metric | Value |",
-        "|---|---:|",
-        f"| Sources | {summary.get('sourceCount', 0)} |",
-        f"| Countries | {summary.get('countryCount', 0)} |",
-        f"| Stage sampled | {summary.get('stageSampledCount', 0)} |",
-        f"| Mapping errors | {summary.get('mappingErrorCount', 0)} |",
-        f"| Warnings | {summary.get('warningCount', 0)} |",
-        "",
-        "## Warehouse Contract",
-        "",
-        f"- Domain: {_markdown_cell(warehouse.get('domain'))}",
-        f"- Schema ref: {_markdown_cell(warehouse.get('schemaRef'))}",
-        f"- Landing adapter: {_markdown_cell(warehouse.get('landingAdapter'))}",
-        f"- Tables: {_markdown_cell(', '.join(warehouse.get('tables') or []))}",
-        "",
-        "## Sources",
-        "",
-        "| Country | Brand | Model | Source | Schema |",
-        "|---|---|---|---|---|",
-    ]
-    for source in report.get("sources") or []:
-        if not isinstance(source, dict):
-            continue
-        lines.append(
-            "| "
-            + " | ".join(
-                [
-                    _markdown_cell(source.get("country")),
-                    _markdown_cell(source.get("brand")),
-                    _markdown_cell(source.get("model")),
-                    _markdown_cell(source.get("sourceCode")),
-                    _markdown_cell(source.get("schemaRef")),
-                ]
-            )
-            + " |"
-        )
-    warnings = [str(item) for item in report.get("warnings") or [] if str(item).strip()]
-    if warnings:
-        lines.extend(["", "## Warnings", ""])
-        lines.extend(f"- {_markdown_cell(warning)}" for warning in warnings)
-    return "\n".join(lines) + "\n"
-
-
-def write_outputs(report: dict[str, Any], out_dir: str | Path) -> dict[str, str]:
-    output_root = Path(out_dir).expanduser().resolve()
-    output_root.mkdir(parents=True, exist_ok=True)
-    latest_json = output_root / "engineering_config_source_sync.json"
-    latest_md = output_root / "engineering_config_source_sync.md"
-    suffix = _history_suffix(report)
-    hist_json = output_root / f"engineering_config_source_sync_{suffix}.json"
-    hist_md = output_root / f"engineering_config_source_sync_{suffix}.md"
-    json_text = json.dumps(report, ensure_ascii=False, indent=2) + "\n"
-    md_text = _render_markdown(report)
-    latest_json.write_text(json_text, encoding="utf-8")
-    latest_md.write_text(md_text, encoding="utf-8")
-    hist_json.write_text(json_text, encoding="utf-8")
-    hist_md.write_text(md_text, encoding="utf-8")
-    return {
-        "latestJson": _display_path(latest_json),
-        "latestMarkdown": _display_path(latest_md),
-        "historicalJson": _display_path(hist_json),
-        "historicalMarkdown": _display_path(hist_md),
-    }
-
-
-def write_status_record(
+def _pipeline_status_payload(
     report: dict[str, Any],
     *,
-    started_at: str,
-    artifact_refs: Sequence[str],
+    started_at: datetime,
+    finished_at: datetime,
+    exit_code: int,
 ) -> dict[str, Any] | None:
     if write_pipeline_status is None:
         return None
-    status = str(report.get("status") or "failed")
-    pipeline_status = (
-        "success" if status == "passed" else "degraded" if status == "degraded" else "failed"
+
+    report_status = str(report.get("status") or "failed")
+    source = report.get("source") if isinstance(report.get("source"), dict) else {}
+    selected_groups = [
+        item for item in report.get("selectedGroups") or []
+        if isinstance(item, dict)
+    ]
+    imports = [
+        item for item in report.get("imports") or []
+        if isinstance(item, dict)
+    ]
+    draft_created_count = sum(1 for item in imports if item.get("status") == "draft_created")
+    skipped_existing_count = sum(1 for item in imports if item.get("status") == "skipped_existing_trims")
+    trim_count = sum(_import_result_int(item, "trimCount") for item in imports)
+    value_record_count = sum(_import_result_int(item, "valueRecordCount") for item in imports)
+    records_processed = value_record_count or trim_count or len(imports) or len(selected_groups)
+    pipeline_status = "success" if report_status in {"passed", "dry_run"} else "failed"
+    failed_count = 0 if pipeline_status == "success" else 1
+    message = (
+        f"Engineering config source sync {report_status}; "
+        f"groups={len(selected_groups)}, drafts={draft_created_count}, values={value_record_count}."
     )
-    summary = report.get("summary") if isinstance(report.get("summary"), dict) else {}
+    source_file_path = str(source.get("sourceFilePath") or "")
+    artifact_refs = [source_file_path] if source_file_path else []
+
     return write_pipeline_status(
         pipeline_id=PIPELINE_ID,
         status=pipeline_status,
-        started_at=started_at,
-        finished_at=_utc_now_iso(),
-        exit_code=0 if status in {"passed", "degraded"} else 1,
-        records_processed=int(summary.get("sourceCount") or 0),
-        failed_count=int(summary.get("mappingErrorCount") or 0)
-        + int(summary.get("stageErrorCount") or 0),
-        warning_count=int(summary.get("warningCount") or 0),
-        artifact_refs=list(artifact_refs),
-        source=PIPELINE_ID,
-        message=(
-            f"Engineering config source sync={status}; "
-            f"sources={summary.get('sourceCount', 0)}, "
-            f"countries={summary.get('countryCount', 0)}, "
-            f"warnings={summary.get('warningCount', 0)}."
-        ),
+        started_at=_utc_iso(started_at),
+        finished_at=_utc_iso(finished_at),
+        exit_code=exit_code,
+        duration_seconds=int(max(0, (finished_at - started_at).total_seconds())),
+        records_processed=records_processed,
+        failed_count=failed_count,
+        warning_count=skipped_existing_count,
+        artifact_refs=artifact_refs,
+        source="03_Scripts/engineering_config_source_sync.py",
+        message=message,
         extra={
-            "sourceSyncStatus": status,
-            "sourceCount": summary.get("sourceCount", 0),
-            "countryCount": summary.get("countryCount", 0),
-            "countries": summary.get("countries") or [],
-            "schemaRefs": summary.get("schemaRefs") or {},
-            "warehouseContract": report.get("warehouseContract") or {},
+            "schemaVersion": SCHEMA_VERSION,
+            "reportStatus": report_status,
+            "sourceFileName": source.get("sourceFileName"),
+            "sourceFilePath": source.get("sourceFilePath"),
+            "sourceFileHash": source.get("sourceFileHash"),
+            "sourceUploadStatus": source.get("uploadStatus"),
+            "selectedGroupCount": len(selected_groups),
+            "importCount": len(imports),
+            "draftCreatedCount": draft_created_count,
+            "skippedExistingTrimCount": skipped_existing_count,
+            "trimCount": trim_count,
+            "valueRecordCount": value_record_count,
+            "dryRun": report_status == "dry_run",
+            "error": report.get("error"),
         },
         repo_root=REPO_ROOT,
     )
 
 
+def _register_source_snapshot(
+    session: object,
+    *,
+    source_path: Path,
+    related_context: dict[str, Any],
+    user: UserContext,
+) -> tuple[object, str]:
+    safe_name = config_api._safe_upload_file_name(source_path.name)  # noqa: SLF001
+    if config_api._file_extension(safe_name) not in config_api.SOURCE_UPLOAD_EXTENSIONS:  # noqa: SLF001
+        raise ValueError(f"Unsupported source file type: {safe_name}")
+    config_api._validate_source_file_content(source_path, safe_name)  # noqa: SLF001
+    source_file_hash = config_api._sha256_for_path(source_path)  # noqa: SLF001
+    existing_batch = config_api.repo.get_import_batch_by_hash(
+        session,
+        config_api.SOURCE_IMPORT_DOMAIN,
+        source_file_hash,
+    )
+    if existing_batch is not None:
+        link = config_api._create_source_context_link(  # noqa: SLF001
+            session,
+            existing_batch,
+            related_context=related_context,
+            user=user,
+        )
+        if link is not None:
+            session.flush()
+            session.commit()
+        return existing_batch, "duplicate"
+
+    now = _utc_now()
+    batch = ImportBatch(
+        domain=config_api.SOURCE_IMPORT_DOMAIN,
+        source_file_name=safe_name,
+        source_file_path=str(source_path),
+        source_file_hash=source_file_hash,
+        import_status="stored",
+        row_count=0,
+        error_count=0,
+        triggered_by=user.name,
+        started_at_utc=now,
+        finished_at_utc=now,
+    )
+    config_api.repo.add_import_batch(session, batch)
+    session.flush()
+    link = config_api._create_source_context_link(  # noqa: SLF001
+        session,
+        batch,
+        related_context=related_context,
+        user=user,
+    )
+    if link is not None:
+        session.flush()
+    session.commit()
+    return batch, "registered"
+
+
+def _all_group_trims_exist(session: object, group: dict[str, Any]) -> bool:
+    trims = group.get("trims")
+    if not isinstance(trims, list) or not trims:
+        return False
+    for trim in trims:
+        if not isinstance(trim, dict):
+            return False
+        full_name = _trim_full_name(trim, group)
+        if config_api.repo.get_vehicle_trim_by_full_name(session, full_name) is None:
+            return False
+    return True
+
+
+def run_sync(
+    *,
+    session: object,
+    source_file: str | Path,
+    group_id: str | None = None,
+    group_index: int | None = None,
+    all_groups: bool = False,
+    limit_groups: int = 1,
+    related_context: dict[str, Any] | None = None,
+    user_name: str = "engineering-config-source-sync",
+    dry_run: bool = False,
+    force_draft: bool = False,
+) -> dict[str, Any]:
+    source_path = Path(source_file).expanduser().resolve()
+    if not source_path.exists():
+        raise FileNotFoundError(f"Source file not found: {source_path}")
+
+    digest = config_api.build_source_digest(source_path, source_path.name)
+    if not digest or digest.get("status") == "failed":
+        raise ValueError("Source digest is not ready")
+    selected_groups = _select_groups(
+        digest,
+        group_id=group_id,
+        group_index=group_index,
+        all_groups=all_groups,
+        limit_groups=limit_groups,
+    )
+    selected_summary = [
+        _group_summary(group, index=index)
+        for index, group in selected_groups
+    ]
+    for item in selected_summary:
+        if not item["importable"]:
+            raise ValueError(f"Digest group is not importable: {item['groupId']}")
+
+    if dry_run:
+        return {
+            "schemaVersion": SCHEMA_VERSION,
+            "status": "dry_run",
+            "source": {
+                "sourceFileName": source_path.name,
+                "sourceFilePath": str(source_path),
+            },
+            "digestSummary": digest.get("summary", {}),
+            "selectedGroups": selected_summary,
+            "imports": [],
+        }
+
+    user = UserContext(role="admin", name=user_name)
+    source_batch, source_status = _register_source_snapshot(
+        session,
+        source_path=source_path,
+        related_context=related_context or {},
+        user=user,
+    )
+
+    imports: list[dict[str, Any]] = []
+    for index, group in selected_groups:
+        group_id_value = str(group.get("groupId") or "")
+        if (
+            source_status == "duplicate"
+            and not force_draft
+            and _all_group_trims_exist(session, group)
+        ):
+            imports.append({
+                **_group_summary(group, index=index),
+                "status": "skipped_existing_trims",
+            })
+            continue
+
+        result = config_api.create_draft_from_source_digest_group(
+            source_batch.import_batch_id,
+            group_id_value,
+            None,
+            session,
+            user,
+        )
+        imports.append({
+            **_group_summary(group, index=index),
+            "status": "draft_created",
+            "result": result,
+        })
+
+    return {
+        "schemaVersion": SCHEMA_VERSION,
+        "status": "passed",
+        "source": _source_payload(source_batch, status=source_status),
+        "digestSummary": digest.get("summary", {}),
+        "selectedGroups": selected_summary,
+        "imports": imports,
+    }
+
+
 def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Build an official configuration/spec source sync readiness report.",
+        description="Register an official config source and import digest groups.",
     )
-    parser.add_argument("--repo-root", default=str(REPO_ROOT))
-    parser.add_argument("--spec-batch", default=DEFAULT_SPEC_BATCH)
-    parser.add_argument(
-        "--required-countries",
-        default=",".join(DEFAULT_REQUIRED_COUNTRIES),
-    )
-    parser.add_argument("--artifact-root", default=None)
-    parser.add_argument("--sample-per-country", type=int, default=1)
-    parser.add_argument("--no-stage-smoke", action="store_true")
-    parser.add_argument("--out-dir", default=None)
-    parser.add_argument("--write-status", action="store_true")
-    parser.add_argument("--strict", action="store_true")
+    parser.add_argument("--source-file", default=str(DEFAULT_SOURCE_FILE))
+    parser.add_argument("--group-id", default=None)
+    parser.add_argument("--group-index", type=int, default=None)
+    parser.add_argument("--all-groups", action="store_true")
+    parser.add_argument("--limit-groups", type=int, default=1)
+    parser.add_argument("--brand", default="Omoda/Jaecoo")
+    parser.add_argument("--model", default="EU config resource table")
+    parser.add_argument("--market", default="EU")
+    parser.add_argument("--country", default="EU")
+    parser.add_argument("--model-year", default=None)
+    parser.add_argument("--context-type", default="source_snapshot")
+    parser.add_argument("--user-name", default="engineering-config-source-sync")
+    parser.add_argument("--force-draft", action="store_true")
+    parser.add_argument("--dry-run", action="store_true")
     return parser.parse_args(argv)
 
 
 def main(argv: Sequence[str] | None = None) -> int:
     args = parse_args(argv)
-    started_at = _utc_now_iso()
-    report = build_source_sync_report(
-        repo_root=args.repo_root,
-        spec_batch=args.spec_batch,
-        required_countries=_csv_arg(args.required_countries),
-        artifact_root=args.artifact_root,
-        sample_per_country=max(1, int(args.sample_per_country)),
-        run_stage_smoke=not bool(args.no_stage_smoke),
-    )
-    artifact_refs: dict[str, str] = {}
-    if args.out_dir:
-        artifact_refs = write_outputs(report, args.out_dir)
-        report["artifacts"] = artifact_refs
-    if args.write_status:
-        status_record = write_status_record(
-            report,
-            started_at=started_at,
-            artifact_refs=list(artifact_refs.values()),
+    started_at = _utc_now()
+    session = get_session_factory()()
+    try:
+        report = run_sync(
+            session=session,
+            source_file=args.source_file,
+            group_id=args.group_id,
+            group_index=args.group_index,
+            all_groups=args.all_groups,
+            limit_groups=max(1, args.limit_groups),
+            related_context=_normalised_context(args),
+            user_name=args.user_name,
+            dry_run=args.dry_run,
+            force_draft=args.force_draft,
         )
-        if status_record is not None:
-            report["pipelineStatus"] = status_record
-    print(json.dumps(report, ensure_ascii=False, indent=2))
-    if report["status"] == "failed":
+    except Exception as exc:
+        session.rollback()
+        failed_report = {
+            "schemaVersion": SCHEMA_VERSION,
+            "status": "failed",
+            "error": str(exc),
+            "source": {
+                "sourceFileName": Path(args.source_file).name,
+                "sourceFilePath": str(Path(args.source_file).expanduser()),
+            },
+            "selectedGroups": [],
+            "imports": [],
+        }
+        _pipeline_status_payload(
+            failed_report,
+            started_at=started_at,
+            finished_at=_utc_now(),
+            exit_code=1,
+        )
+        print(json.dumps(failed_report, ensure_ascii=False, indent=2), file=sys.stderr)
         return 1
-    if args.strict and report["status"] != "passed":
-        return 1
+    finally:
+        session.close()
+
+    _pipeline_status_payload(
+        report,
+        started_at=started_at,
+        finished_at=_utc_now(),
+        exit_code=0,
+    )
+    print(json.dumps(report, ensure_ascii=False, indent=2, default=str))
     return 0
 
 

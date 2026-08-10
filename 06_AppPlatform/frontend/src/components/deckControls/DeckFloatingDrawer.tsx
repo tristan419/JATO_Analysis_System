@@ -1,4 +1,4 @@
-import type { ReactNode } from "react";
+import { useEffect, useRef, type ReactNode } from "react";
 
 interface DeckFloatingDrawerProps {
   open: boolean;
@@ -17,6 +17,7 @@ interface DeckFloatingDrawerProps {
   bodyClassName?: string;
   footerClassName?: string;
   showTrigger?: boolean;
+  bodyScrollResetKey?: string | number | boolean | null;
   children: ReactNode;
   footer?: ReactNode;
 }
@@ -38,15 +39,21 @@ export function DeckFloatingDrawer({
   bodyClassName,
   footerClassName,
   showTrigger = true,
+  bodyScrollResetKey,
   children,
   footer,
 }: DeckFloatingDrawerProps) {
+  const bodyRef = useRef<HTMLDivElement | null>(null);
   const drawerClassName = ["deck-floating-drawer", className, open ? "is-open" : ""].filter(Boolean).join(" ");
   const toggleClassName = ["market-scan-export-toggle", "deck-floating-toggle", triggerClassName].filter(Boolean).join(" ");
   const asideClassName = ["deck-floating-panel", panelClassName].filter(Boolean).join(" ");
   const headClassName = ["deck-floating-panel-head", headerClassName].filter(Boolean).join(" ");
   const panelBodyClassName = ["deck-floating-panel-body", bodyClassName].filter(Boolean).join(" ");
   const panelFooterClassName = ["market-scan-toolbar-meta", "deck-floating-panel-meta", footerClassName].filter(Boolean).join(" ");
+
+  useEffect(() => {
+    if (open && bodyRef.current) bodyRef.current.scrollTop = 0;
+  }, [bodyScrollResetKey, open]);
 
   return (
     <section className={drawerClassName}>
@@ -77,7 +84,7 @@ export function DeckFloatingDrawer({
             </button>
           </header>
 
-          <div className={panelBodyClassName}>{children}</div>
+          <div className={panelBodyClassName} ref={bodyRef}>{children}</div>
 
           {footer ? (
             <footer className={panelFooterClassName}>

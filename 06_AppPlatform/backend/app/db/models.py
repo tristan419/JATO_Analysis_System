@@ -1559,6 +1559,14 @@ class VehicleTrim(Base):
         Index("ix_vehicle_trims_model", "model_name"),
         Index("ix_vehicle_trims_status", "status"),
         Index("ix_vehicle_trims_identity_key", "identity_key"),
+        Index(
+            "uq_vehicle_trims_source_full_name",
+            "source_upload_id",
+            "full_trim_name",
+            unique=True,
+            postgresql_where=text("source_upload_id IS NOT NULL"),
+            sqlite_where=text("source_upload_id IS NOT NULL"),
+        ),
         {"schema": "engineering_config"},
     )
 
@@ -1695,6 +1703,19 @@ class ConfigVersion(Base):
         Index("ix_config_versions_identity_key", "identity_key"),
         Index("ix_config_versions_status", "status"),
         Index("ix_config_versions_trim_created", "trim_id", "created_at_utc"),
+        Index(
+            "uq_config_versions_trim_version_no",
+            "trim_id",
+            "version_no",
+            unique=True,
+        ),
+        Index(
+            "uq_config_versions_single_published_identity",
+            "identity_key",
+            unique=True,
+            postgresql_where=text("status = 'published'"),
+            sqlite_where=text("status = 'published'"),
+        ),
         {"schema": "engineering_config"},
     )
     version_id: Mapped[UUID] = mapped_column(PGUUID(as_uuid=True), primary_key=True, default=uuid4)
@@ -1716,6 +1737,77 @@ class ConfigVersion(Base):
     published_by: Mapped[str | None] = mapped_column(Text, nullable=True)
     published_at_utc: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     notes: Mapped[str | None] = mapped_column(Text, nullable=True)
+    snapshot_values: Mapped[list[dict] | None] = mapped_column(JSONB, nullable=True)
+    snapshot_feature_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+
+
+class EngineeringConfigSourceContextLink(Base):
+    __tablename__ = "engineering_config_source_context_links"
+    __table_args__ = (
+        Index("ix_eng_config_source_context_source", "source_id"),
+        Index("ix_eng_config_source_context_batch", "batch_id"),
+        Index("ix_eng_config_source_context_brand_model", "brand", "model_name"),
+        Index("ix_eng_config_source_context_market_year", "market", "model_year"),
+        Index("ix_eng_config_source_context_market_segment", "market", "segment"),
+        Index("ix_eng_config_source_context_status", "status"),
+        {"schema": "engineering_config"},
+    )
+
+    id: Mapped[UUID] = mapped_column(PGUUID(as_uuid=True), primary_key=True, default=uuid4)
+    source_id: Mapped[UUID] = mapped_column(
+        PGUUID(as_uuid=True),
+        ForeignKey("ops.import_batches.import_batch_id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    batch_id: Mapped[UUID] = mapped_column(
+        PGUUID(as_uuid=True),
+        ForeignKey("ops.import_batches.import_batch_id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    brand: Mapped[str | None] = mapped_column(Text, nullable=True)
+    model_name: Mapped[str | None] = mapped_column(Text, nullable=True)
+    model_year: Mapped[str | None] = mapped_column(Text, nullable=True)
+    market: Mapped[str | None] = mapped_column(Text, nullable=True)
+    country: Mapped[str | None] = mapped_column(Text, nullable=True)
+    powertrain: Mapped[str | None] = mapped_column(Text, nullable=True)
+    segment: Mapped[str | None] = mapped_column(Text, nullable=True)
+    trim_ids: Mapped[list[str]] = mapped_column(
+        JSONB,
+        nullable=False,
+        default=list,
+        server_default=text("'[]'::jsonb"),
+    )
+    sales_version_ids: Mapped[list[str]] = mapped_column(
+        JSONB,
+        nullable=False,
+        default=list,
+        server_default=text("'[]'::jsonb"),
+    )
+    context_type: Mapped[str] = mapped_column(
+        Text,
+        nullable=False,
+        default="compare",
+        server_default=text("'compare'"),
+    )
+    scenario: Mapped[str | None] = mapped_column(Text, nullable=True)
+    identity_anchor: Mapped[str | None] = mapped_column(Text, nullable=True)
+    source_role: Mapped[str | None] = mapped_column(Text, nullable=True)
+    document_type: Mapped[str | None] = mapped_column(Text, nullable=True)
+    source_url: Mapped[str | None] = mapped_column(Text, nullable=True)
+    effective_from: Mapped[date | None] = mapped_column(Date, nullable=True)
+    effective_to: Mapped[date | None] = mapped_column(Date, nullable=True)
+    status: Mapped[str] = mapped_column(
+        Text,
+        nullable=False,
+        default="active",
+        server_default=text("'active'"),
+    )
+    created_by: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at_utc: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+    )
 
 
 # ── Auth ──
