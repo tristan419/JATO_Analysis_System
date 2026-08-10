@@ -204,6 +204,8 @@ jobs:
           status=0
           timeout 180s python -m pytest \
             tests/integration/test_api_contracts.py \
+            tests/unit/test_alembic_revision_chain.py \
+            tests/unit/test_db_session.py \
             tests/unit/test_jato_monthly_update_enabled_gate.py \
             tests/unit/test_readiness_service.py \
             -q 2>&1 | tee "$pytest_log" || status=$?
