@@ -1300,3 +1300,116 @@ def test_partial_dashboard_aggregates_expected_countries_and_failures(tmp_path, 
     assert current["missingCountries"] == []
     assert current["failureBreakdown"] == {"http_timeout": 2}
     assert current["strategyRecommendations"] == {"retry_or_reduce_concurrency": 2}
+
+
+def test_normalized_country_exposes_structured_source_failure_feedback():
+    country = {
+        "countryCode": "no",
+        "total": 4,
+        "pass": 0,
+        "empty": 4,
+        "fail": 0,
+        "errors": 0,
+        "passPct": 0.0,
+        "status": "failure",
+        "failureBreakdown": {
+            "http_error": 1,
+            "json_ld_empty": 2,
+            "no_observation_extracted": 1,
+        },
+        "strategyRecommendations": {
+            "diagnose_with_msrp_page_analyzer": 1,
+            "retry": 1,
+            "try_css_or_attr_json": 2,
+        },
+        "sources": [
+            {
+                "sourceCode": "mercedes_eqb_no",
+                "status": "empty",
+                "failureReason": "json_ld_empty",
+                "recommendedStrategy": "try_css_or_attr_json",
+                "sourceUrl": "https://www.mercedes-benz.no/cars/eqb",
+                "finalUrl": (
+                    "https://www.mercedes-benz.no/cars/"
+                    "eqb-ikke-tilgjengelig"
+                ),
+            },
+            {
+                "sourceCode": "toyota_yaris_cross_no",
+                "status": "empty",
+                "failureReason": "json_ld_empty",
+                "recommendedStrategy": "try_css_or_attr_json",
+                "sourceUrl": "https://www.toyota.no/nybil/yaris-cross",
+                "finalUrl": "https://www.toyota.no/",
+            },
+            {
+                "sourceCode": "tesla_model_y_no",
+                "status": "error",
+                "failureReason": "http_error",
+                "recommendedStrategy": "retry",
+                "sourceUrl": "https://www.tesla.com/no_NO/modely",
+                "httpStatus": 403,
+            },
+            {
+                "sourceCode": "volvo_xc60_no",
+                "status": "empty",
+                "failureReason": "no_observation_extracted",
+                "recommendedStrategy": "diagnose_with_msrp_page_analyzer",
+                "sourceUrl": "https://www.volvocars.com/no/cars/xc60/",
+            },
+        ],
+    }
+
+    normalized = progress._normalize_country_from_v3(country)
+    sources = {
+        source["sourceCode"]: source for source in normalized["sources"]
+    }
+
+    assert normalized["failureBreakdown"] == {
+        "forbidden_403": 1,
+        "homepage_redirect": 1,
+        "no_observation_extracted": 1,
+        "official_model_unavailable": 1,
+    }
+    assert normalized["topFailureReason"] == "official_model_unavailable"
+    assert sources["mercedes_eqb_no"]["issueClass"] == "source_lifecycle"
+    assert sources["toyota_yaris_cross_no"]["failureReason"] == (
+        "homepage_redirect"
+    )
+    assert sources["tesla_model_y_no"]["issueClass"] == "access_control"
+    assert sources["volvo_xc60_no"]["issueClass"] == "extractor_strategy"
+
+
+def test_sampled_issue_does_not_inflate_unmatched_aggregate_failure_bucket():
+    normalized = progress._normalize_country_from_v3(
+        {
+            "countryCode": "se",
+            "total": 2,
+            "pass": 0,
+            "empty": 2,
+            "fail": 0,
+            "errors": 0,
+            "passPct": 0.0,
+            "status": "failure",
+            "failureBreakdown": {"http_timeout": 2},
+            "strategyRecommendations": {"retry": 2},
+            "sources": [
+                {
+                    "sourceCode": "tesla_model_y_se",
+                    "status": "error",
+                    "failureReason": "http_error",
+                    "recommendedStrategy": "retry",
+                    "sourceUrl": "https://www.tesla.com/sv_se/modely",
+                    "httpStatus": 403,
+                }
+            ],
+        }
+    )
+
+    assert normalized["failureBreakdown"] == {"http_timeout": 2}
+    assert sum(normalized["failureBreakdown"].values()) == 2
+    assert normalized["strategyRecommendations"] == {
+        "manual_review_or_proxy_required": 1,
+        "retry": 1,
+    }
+    assert sum(normalized["strategyRecommendations"].values()) == 2

@@ -31,6 +31,10 @@ from app.services.hermes_ops_runner_service import (
     get_command_help,
     list_run_commands,
 )
+from app.services.msrp_source_issue_classifier import (
+    effective_msrp_country_issue_maps,
+    enrich_msrp_source_issue,
+)
 
 router = APIRouter(prefix="/hermes", tags=["hermes"])
 
@@ -229,6 +233,27 @@ def _source_host(source: dict[str, Any]) -> str:
     return host
 
 
+def _source_rows_from_report(report: dict[str, Any]) -> list[dict[str, Any]]:
+    rows = report.get("results")
+    if isinstance(rows, list) and rows:
+        return [row for row in rows if isinstance(row, dict)]
+
+    output: list[dict[str, Any]] = []
+    for country in report.get("countriesDetail") or []:
+        if not isinstance(country, dict):
+            continue
+        country_code = str(country.get("countryCode") or "").lower()
+        for source in country.get("sources") or []:
+            if isinstance(source, dict):
+                output.append(
+                    {
+                        **source,
+                        "country": source.get("country") or country_code,
+                    }
+                )
+    return output
+
+
 def _normalize_host_groups(hosts: dict[str, dict[str, Any]], limit: int = 10) -> list[dict[str, Any]]:
     normalized: list[dict[str, Any]] = []
     for host, data in hosts.items():
@@ -414,11 +439,18 @@ def _source_repair_backlog_from_current(
     historical_good = last_known_good or {}
     for country in current.get("countries") or []:
         country_code = str(country.get("countryCode") or "").lower()
-        for source in country.get("sources") or []:
-            reason = source.get("failureReason")
+        for raw_source in country.get("sources") or []:
+            if not isinstance(raw_source, dict):
+                continue
+            if (
+                not raw_source.get("failureReason")
+                and str(raw_source.get("httpStatus") or "") != "403"
+            ):
+                continue
+            source = enrich_msrp_source_issue(raw_source)
+            reason = str(source.get("failureReason") or "")
             if not reason:
                 continue
-            reason = str(reason)
             source_code = str(source.get("sourceCode") or source.get("code") or "")
             recommended = str(source.get("recommendedStrategy") or "diagnose_with_msrp_page_analyzer")
             key = _source_key(country_code, source)
@@ -435,6 +467,12 @@ def _source_repair_backlog_from_current(
                 "sources": [],
                 "transientSources": [],
                 "hosts": {},
+                "issueClasses": {},
+                "recommendedActions": {},
+                "blockingDispositions": {},
+                "sourceLifecycleStatuses": {},
+                "likelyCauses": {},
+                "sourceIssues": [],
                 "status": "new",
             })
             group["count"] += 1
@@ -455,10 +493,36 @@ def _source_repair_backlog_from_current(
             else:
                 group["sourceRepairIssueCount"] += 1
             group["recommendedStrategies"][recommended] = group["recommendedStrategies"].get(recommended, 0) + 1
+            for source_key, bucket_key in (
+                ("issueClass", "issueClasses"),
+                ("recommendedAction", "recommendedActions"),
+                ("blockingDisposition", "blockingDispositions"),
+                ("sourceLifecycleStatus", "sourceLifecycleStatuses"),
+                ("likelyCause", "likelyCauses"),
+            ):
+                value = str(source.get(source_key) or "")
+                if value:
+                    bucket = group[bucket_key]
+                    bucket[value] = bucket.get(value, 0) + 1
             if country_code:
                 group["affectedCountries"].add(country_code)
             if source_code:
                 group["sources"].append(source_code)
+            group["sourceIssues"].append({
+                "countryCode": country_code,
+                "sourceCode": source_code,
+                "failureReason": reason,
+                "originalFailureReason": source.get("originalFailureReason"),
+                "issueClass": source.get("issueClass"),
+                "sourceLifecycleStatus": source.get("sourceLifecycleStatus"),
+                "blockingDisposition": source.get("blockingDisposition"),
+                "likelyCause": source.get("likelyCause"),
+                "recommendedAction": source.get("recommendedAction"),
+                "recommendedStrategy": recommended,
+                "httpStatus": source.get("httpStatus"),
+                "sourceUrl": source.get("sourceUrl"),
+                "finalUrl": source.get("finalUrl"),
+            })
             host = _source_host(source)
             url = _source_url(source)
             if host:
@@ -480,22 +544,57 @@ def _source_repair_backlog_from_current(
         recommended_strategy = max(strategies, key=strategies.get) if strategies else "diagnose_with_msrp_page_analyzer"
         transient_count = int(group["transientRegressionCount"])
         source_repair_count = int(group["sourceRepairIssueCount"])
+        issue_classes = group["issueClasses"]
+        recommended_actions = group["recommendedActions"]
+        blocking_dispositions = group["blockingDispositions"]
+        lifecycle_statuses = group["sourceLifecycleStatuses"]
+        likely_causes = group["likelyCauses"]
         normalized_groups.append({
             "failureReason": group["failureReason"],
             "count": group["count"],
             "transientRegressionCount": transient_count,
             "sourceRepairIssueCount": source_repair_count,
             **_priority_fields(group),
+            "issueClass": (
+                max(issue_classes, key=issue_classes.get)
+                if issue_classes
+                else "unknown"
+            ),
+            "issueClasses": issue_classes,
             "recommendedAction": (
                 "recheck_before_source_repair"
                 if transient_count and not source_repair_count
-                else "repair_source_definition"
+                else (
+                    max(recommended_actions, key=recommended_actions.get)
+                    if recommended_actions
+                    else "repair_source_definition"
+                )
             ),
+            "recommendedActions": recommended_actions,
             "recommendedStrategy": recommended_strategy,
             "recommendedStrategies": strategies,
+            "blockingDisposition": (
+                max(blocking_dispositions, key=blocking_dispositions.get)
+                if blocking_dispositions
+                else None
+            ),
+            "blockingDispositions": blocking_dispositions,
+            "sourceLifecycleStatus": (
+                max(lifecycle_statuses, key=lifecycle_statuses.get)
+                if lifecycle_statuses
+                else None
+            ),
+            "sourceLifecycleStatuses": lifecycle_statuses,
+            "likelyCause": (
+                max(likely_causes, key=likely_causes.get)
+                if likely_causes
+                else None
+            ),
+            "likelyCauses": likely_causes,
             "affectedCountries": sorted(group["affectedCountries"]),
             "affectedCountryCount": len(group["affectedCountries"]),
             "sampleSources": group["sources"][:20],
+            "sampleIssues": group["sourceIssues"][:8],
             "sampleTransientRegressions": group["transientSources"][:8],
             "topSourceHosts": _normalize_host_groups(group["hosts"]),
             "status": group["status"],
@@ -522,16 +621,36 @@ def _source_repair_backlog_from_current(
 
 
 def _source_repair_backlog_from_report(report: dict[str, Any]) -> dict[str, Any]:
+    source_rows = _source_rows_from_report(report)
+    sources_by_country: dict[str, list[dict[str, Any]]] = {}
+    for source in source_rows:
+        country_code = str(
+            source.get("country") or source.get("countryCode") or ""
+        ).lower()
+        sources_by_country.setdefault(country_code, []).append(source)
+
     current = {
         "runId": report.get("runId"),
         "partial": False,
-        "countries": [
-            {
-                "countryCode": str(country.get("countryCode") or "").lower(),
-                "sources": country.get("sources") or [],
-            }
-            for country in report.get("countriesDetail") or []
-        ],
+        "countries": (
+            [
+                {
+                    "countryCode": country_code,
+                    "sources": sources,
+                }
+                for country_code, sources in sources_by_country.items()
+            ]
+            if source_rows
+            else [
+                {
+                    "countryCode": str(
+                        country.get("countryCode") or ""
+                    ).lower(),
+                    "sources": country.get("sources") or [],
+                }
+                for country in report.get("countriesDetail") or []
+            ]
+        ),
     }
     backlog = _source_repair_backlog_from_current(
         current,
@@ -719,12 +838,26 @@ def _msrp_progress_from_report(report: dict[str, Any]) -> dict[str, Any]:
     countries: list[dict[str, Any]] = []
     top_blocking: list[dict[str, Any]] = []
     failure_reasons: dict[str, int] = {}
+    sources_by_country: dict[str, list[dict[str, Any]]] = {}
+    for source in _source_rows_from_report(report):
+        country_code = str(
+            source.get("country") or source.get("countryCode") or ""
+        ).lower()
+        sources_by_country.setdefault(country_code, []).append(source)
 
     for country in countries_detail:
         code = str(country.get("countryCode") or "?").lower()
         country_pct = float(country.get("passPct") or 0.0)
-        failure_breakdown = country.get("failureBreakdown") or {}
-        strategy_recs = country.get("strategyRecommendations") or {}
+        failure_breakdown, strategy_recs = effective_msrp_country_issue_maps(
+            {
+                **country,
+                "sources": (
+                    sources_by_country.get(code)
+                    or country.get("sources")
+                    or []
+                ),
+            }
+        )
         top_reason = max(failure_breakdown, key=failure_breakdown.get) if failure_breakdown else None
 
         entry = _msrp_progress_country_entry({
