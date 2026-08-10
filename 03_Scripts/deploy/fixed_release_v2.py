@@ -1238,6 +1238,9 @@ class FixedReleaseController:
                     ),
                 }
             )
+        else:
+            # Candidate must not share Active's Redis DB/cache namespace.
+            lines["APP_REDIS_ENABLED"] = "false"
         return "".join(f"{key}={value}\n" for key, value in lines.items())
 
     def _write_slot_env(self, slot: str, identity: ReleaseIdentity, *, active: bool) -> None:
@@ -1351,6 +1354,10 @@ class FixedReleaseController:
                 "FragmentPath",
                 "WorkingDirectory",
                 "ExecStart",
+                "User",
+                "Group",
+                "DynamicUser",
+                "MainPID",
             )
         }
         required_fragments = {
@@ -1374,7 +1381,6 @@ class FixedReleaseController:
         expected_values = {
             "EnvironmentFiles": " ".join(
                 (
-                    f"{self.config.backend_env} (ignore_errors=yes)",
                     f"{self.config.slot_env_root / f'{CANDIDATE_SLOT}.env'} "
                     "(ignore_errors=no)",
                     f"{self.config.candidate_database_env} (ignore_errors=no)",
@@ -1384,6 +1390,9 @@ class FixedReleaseController:
             "ProtectSystem": "strict",
             "NoNewPrivileges": "yes",
             "PrivateTmp": "yes",
+            "User": "jato-candidate",
+            "Group": "jato-candidate",
+            "DynamicUser": "yes",
         }
         for name, expected in expected_values.items():
             actual = properties[name]
@@ -1402,6 +1411,20 @@ class FixedReleaseController:
                     "candidate_runtime_isolation_mismatch",
                     f"Candidate systemd isolation differs: {name}",
                 )
+        main_pid = properties["MainPID"]
+        if not main_pid.isdigit() or int(main_pid) <= 0:
+            raise V2Error(
+                "candidate_runtime_isolation_mismatch",
+                "Candidate MainPID is unavailable",
+                details={"actual": main_pid},
+            )
+        runtime_uid = self._command("ps", "-o", "uid=", "-p", main_pid, timeout=20)
+        if not runtime_uid.isdigit() or int(runtime_uid) == 0:
+            raise V2Error(
+                "candidate_runtime_isolation_mismatch",
+                "Candidate runtime UID is not an effective non-root identity",
+                details={"actual": runtime_uid},
+            )
 
     def _verify_backend(self, slot: str, identity: ReleaseIdentity, *, active: bool) -> None:
         unit = ACTIVE_UNIT if active else CANDIDATE_UNIT
@@ -1428,6 +1451,11 @@ class FixedReleaseController:
             raise V2Error(
                 "runtime_read_only_mismatch",
                 "slot read-only role is incorrect",
+            )
+        if not active and "APP_REDIS_ENABLED=false\n" not in env:
+            raise V2Error(
+                "candidate_runtime_isolation_mismatch",
+                "Candidate Redis sharing is not disabled",
             )
         if active:
             expected_lines = (

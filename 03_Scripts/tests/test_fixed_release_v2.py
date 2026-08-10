@@ -80,6 +80,10 @@ class FakeSystem:
                 "WorkingDirectory": (
                     "/opt/jato/slots/8001/current/06_AppPlatform/backend"
                 ),
+                "User": "jato-candidate",
+                "Group": "jato-candidate",
+                "DynamicUser": "yes",
+                "MainPID": "4242",
                 "ExecStart": (
                     "/opt/jato/slots/8001/current/.venv/bin/python -m uvicorn "
                     "app.main:app --host 127.0.0.1 --port 8001 --workers "
@@ -102,6 +106,7 @@ class FakeSystem:
         self.active_template_unit: Path | None = None
         self.active_v2_environment_files = ""
         self.active_legacy_environment_files = ""
+        self.process_uids = {"4242": "61111"}
 
     def reload_active_unit(self) -> None:
         assert self.active_instance_unit is not None
@@ -163,6 +168,11 @@ class FakeSystem:
         if arguments[:2] == ("systemctl", "daemon-reload"):
             self.reload_active_unit()
             return MODULE.CommandResult(0, "", "")
+        if arguments[:4] == ("ps", "-o", "uid=", "-p"):
+            uid = self.process_uids.get(arguments[4])
+            if uid is None:
+                return MODULE.CommandResult(1, "", "process unavailable")
+            return MODULE.CommandResult(0, f"{uid}\n", "")
         if arguments == ("nginx", "-T"):
             return MODULE.CommandResult(
                 0,
@@ -586,7 +596,6 @@ def controller(
     system.active_legacy_environment_files = f"{cfg.backend_env} (ignore_errors=yes)"
     system.reload_active_unit()
     system.units[MODULE.CANDIDATE_UNIT]["EnvironmentFiles"] = (
-        f"{cfg.backend_env} (ignore_errors=yes)\n"
         f"{cfg.slot_env_root / '8001.env'} (ignore_errors=no)\n"
         f"{cfg.candidate_database_env} (ignore_errors=no)"
     )
@@ -717,6 +726,7 @@ def test_prepare_candidate_starts_only_candidate_and_preview(tmp_path: Path) -> 
     assert "APP_RELEASE_ROLE=candidate" in candidate_env
     assert f"APP_RELEASE_ARCHIVE_SHA256={CANDIDATE.archive_sha256}" in candidate_env
     assert "APP_RUNTIME_READ_ONLY=false" in candidate_env
+    assert "APP_REDIS_ENABLED=false" in candidate_env
     assert (
         "JATO_PARQUET_PATH=/opt/jato/shared/04_Processed_data/jato_full_archive.parquet"
         in candidate_env
@@ -1737,7 +1747,7 @@ def test_prepare_rejects_reordered_systemd_environment_files(tmp_path: Path) -> 
     ctrl = controller(cfg, system)
     entries = system.units[MODULE.CANDIDATE_UNIT]["EnvironmentFiles"].splitlines()
     system.units[MODULE.CANDIDATE_UNIT]["EnvironmentFiles"] = "\n".join(
-        (entries[0], entries[2], entries[1])
+        (entries[1], entries[0])
     )
 
     with pytest.raises(MODULE.V2Error) as caught:
@@ -3127,10 +3137,80 @@ def test_candidate_systemd_contract_allows_only_database_sandbox_writes() -> Non
         "20-candidate-readonly.conf"
     ).read_text(encoding="utf-8")
 
+    assert "EnvironmentFile=\n" in payload
+    assert "EnvironmentFile=-/etc/jato-fullstack/backend.env" not in payload
+    assert "EnvironmentFile=/etc/jato-fullstack/slots/8001.env" in payload
     assert "EnvironmentFile=/etc/jato-fullstack/candidate-database.env" in payload
+    assert "User=jato-candidate" in payload
+    assert "Group=jato-candidate" in payload
+    assert "DynamicUser=true" in payload
     assert "Environment=APP_RUNTIME_READ_ONLY=false" in payload
     assert "default_transaction_read_only=on" not in payload
     assert "ProtectSystem=strict" in payload
     assert "NoNewPrivileges=true" in payload
     assert "ReadOnlyPaths=/opt/jato/shared" in payload
     assert "ReadWritePaths=/var/cache/jato-candidate" in payload
+
+
+@pytest.mark.parametrize(
+    ("property_name", "unsafe_value"),
+    (
+        ("EnvironmentFiles", "/etc/jato-fullstack/backend.env (ignore_errors=yes)"),
+        ("User", "root"),
+        ("Group", "root"),
+        ("DynamicUser", "no"),
+    ),
+)
+def test_candidate_runtime_rejects_active_secrets_or_root_identity(
+    tmp_path: Path,
+    property_name: str,
+    unsafe_value: str,
+) -> None:
+    cfg = config(tmp_path)
+    system = FakeSystem()
+    ctrl = controller(cfg, system)
+    system.units[MODULE.CANDIDATE_UNIT][property_name] = unsafe_value
+
+    with pytest.raises(MODULE.V2Error) as caught:
+        ctrl._verify_candidate_runtime_isolation()
+
+    assert caught.value.code == "candidate_runtime_isolation_mismatch"
+    assert caught.value.details["actual"] == unsafe_value
+    assert not any(
+        command[1] in {"set-property", "restart", "stop"}
+        for command in system.commands
+    )
+
+
+def test_candidate_runtime_rejects_effective_root_process(tmp_path: Path) -> None:
+    cfg = config(tmp_path)
+    system = FakeSystem()
+    ctrl = controller(cfg, system)
+    system.process_uids["4242"] = "0"
+
+    with pytest.raises(MODULE.V2Error) as caught:
+        ctrl._verify_candidate_runtime_isolation()
+
+    assert caught.value.code == "candidate_runtime_isolation_mismatch"
+    assert caught.value.details["actual"] == "0"
+
+
+def test_candidate_runtime_rejects_shared_redis_default(tmp_path: Path) -> None:
+    cfg = config(tmp_path)
+    system = FakeSystem()
+    ctrl = controller(cfg, system)
+    ctrl._write_slot_env(MODULE.CANDIDATE_SLOT, CANDIDATE, active=False)
+    candidate_env = cfg.slot_env_root / "8001.env"
+    candidate_env.write_text(
+        candidate_env.read_text(encoding="utf-8").replace(
+            "APP_REDIS_ENABLED=false\n",
+            "",
+        ),
+        encoding="utf-8",
+    )
+    system.units[MODULE.CANDIDATE_UNIT]["ActiveState"] = "active"
+
+    with pytest.raises(MODULE.V2Error) as caught:
+        ctrl._verify_backend(MODULE.CANDIDATE_SLOT, CANDIDATE, active=False)
+
+    assert caught.value.code == "candidate_runtime_isolation_mismatch"
