@@ -10,6 +10,7 @@ import type { CandidatePreviewMetadata } from "../../components/CandidateEnviron
 import { isCandidatePreviewOrigin } from "../../utils/candidateRuntime";
 
 const commitSha = "a".repeat(40);
+const newerMainSha = "c".repeat(40);
 const archiveSha256 = "b".repeat(64);
 const databaseName = "jato_candidate_20260809t083000z_0123456789abcdef";
 const databaseSnapshotAt = "2026-08-09T08:30:00Z";
@@ -30,47 +31,161 @@ function validMetadata(): CandidatePreviewMetadata {
   };
 }
 
+function jsonResponse(payload: unknown): Response {
+  return new Response(JSON.stringify(payload), {
+    status: 200,
+    headers: { "content-type": "application/json" },
+  });
+}
+
 afterEach(() => {
   cleanup();
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
+  vi.useRealTimers();
   delete document.documentElement.dataset.releaseRole;
 });
 
 describe("CandidateEnvironmentBanner", () => {
-  it("shows a release-bound warning only for a valid Candidate endpoint", async () => {
+  it("shows that a release-bound Candidate matches current main", async () => {
     useOrigin("127.0.0.1", "18002");
-    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(JSON.stringify(validMetadata()), {
-      status: 200,
-      headers: { "content-type": "application/json" },
-    })));
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(jsonResponse(validMetadata()))
+      .mockResolvedValueOnce(jsonResponse({ sha: commitSha }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(<CandidateEnvironmentBanner />);
+    await act(async () => Promise.resolve());
+    await act(async () => Promise.resolve());
+
+    expect(screen.getByText("Candidate · 当前 main · 可测试")).toBeTruthy();
+    expect(screen.getByText("不是正式 www")).toBeTruthy();
+    expect(screen.getByText(commitSha.slice(0, 12))).toBeTruthy();
+    expect(screen.getByText(archiveSha256.slice(0, 12))).toBeTruthy();
+    expect(screen.getByText(/Active DB 快照开始于/)).toBeTruthy();
+    expect(screen.getByText(databaseName.slice(-8))).toBeTruthy();
+    expect(screen.getByText("物理诊断 slot 8001（角色固定，不互换）")).toBeTruthy();
+    expect(document.documentElement.dataset.releaseRole).toBe("candidate");
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      2,
+      "https://api.github.com/repos/tristan419/JATO_Analysis_System/commits/main",
+      expect.objectContaining({ cache: "no-store", credentials: "omit" }),
+    );
+  });
+
+  it("blocks acceptance and shows both SHAs when Candidate is behind main", async () => {
+    useOrigin("candidate.ojeur.cloud", "");
+    vi.stubGlobal("fetch", vi.fn()
+      .mockResolvedValueOnce(jsonResponse(validMetadata()))
+      .mockResolvedValueOnce(jsonResponse({ sha: newerMainSha })));
+
+    render(<CandidateEnvironmentBanner />);
+    await act(async () => Promise.resolve());
+    await act(async () => Promise.resolve());
+
+    expect(screen.getByText("Candidate 落后 main · 禁止据此验收")).toBeTruthy();
+    expect(screen.getByText(commitSha.slice(0, 12))).toBeTruthy();
+    expect(screen.getByText(newerMainSha.slice(0, 12))).toBeTruthy();
+    expect(screen.getByRole("alert").getAttribute("aria-live")).toBe("assertive");
+  });
+
+  it("blocks acceptance while the latest main check is pending", async () => {
+    useOrigin("candidate.ojeur.cloud", "");
+    vi.stubGlobal("fetch", vi.fn()
+      .mockResolvedValueOnce(jsonResponse(validMetadata()))
+      .mockReturnValueOnce(new Promise<Response>(() => undefined)));
 
     render(<CandidateEnvironmentBanner />);
     await act(async () => Promise.resolve());
 
-    expect(screen.getByText("Candidate 测试实例 · 待人工验收")).toBeTruthy();
-    expect(screen.getByText("不是正式 www")).toBeTruthy();
-    expect(screen.getByText(commitSha.slice(0, 12))).toBeTruthy();
-    expect(screen.getByText(archiveSha256.slice(0, 12))).toBeTruthy();
-    expect(screen.getByText(/数据库快照/)).toBeTruthy();
-    expect(screen.getByText(databaseName.slice(-8))).toBeTruthy();
-    expect(screen.getByText("物理诊断 slot 8001（角色固定，不互换）")).toBeTruthy();
-    expect(document.documentElement.dataset.releaseRole).toBe("candidate");
+    expect(screen.getByText("Candidate 身份已验证 · 正在确认最新 main")).toBeTruthy();
+    expect(screen.getByRole("alert").getAttribute("aria-live")).toBe("assertive");
+    expect(screen.getByRole("alert").classList.contains("candidate-environment-banner--unverified")).toBe(true);
+    expect(screen.queryByText("Candidate · 当前 main · 可测试")).toBeNull();
+  });
+
+  it("rechecks main when a long-open Candidate tab regains focus or becomes visible", async () => {
+    useOrigin("candidate.ojeur.cloud", "");
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(jsonResponse(validMetadata()))
+      .mockResolvedValueOnce(jsonResponse({ sha: commitSha }))
+      .mockResolvedValueOnce(jsonResponse({ sha: newerMainSha }))
+      .mockResolvedValueOnce(jsonResponse({ sha: commitSha }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(<CandidateEnvironmentBanner />);
+    await act(async () => Promise.resolve());
+    await act(async () => Promise.resolve());
+    expect(screen.getByText("Candidate · 当前 main · 可测试")).toBeTruthy();
+
+    await act(async () => window.dispatchEvent(new Event("focus")));
+    await act(async () => Promise.resolve());
+    expect(screen.getByText("Candidate 落后 main · 禁止据此验收")).toBeTruthy();
+
+    vi.spyOn(document, "visibilityState", "get").mockReturnValue("visible");
+    await act(async () => document.dispatchEvent(new Event("visibilitychange")));
+    await act(async () => Promise.resolve());
+    expect(screen.getByText("Candidate · 当前 main · 可测试")).toBeTruthy();
+    expect(fetchMock).toHaveBeenCalledTimes(4);
+  });
+
+  it("keeps verified identity but does not claim freshness when GitHub is unavailable", async () => {
+    useOrigin("candidate.ojeur.cloud", "");
+    vi.stubGlobal("fetch", vi.fn()
+      .mockResolvedValueOnce(jsonResponse(validMetadata()))
+      .mockRejectedValueOnce(new Error("GitHub unavailable")));
+
+    render(<CandidateEnvironmentBanner />);
+    await act(async () => Promise.resolve());
+    await act(async () => Promise.resolve());
+
+    expect(screen.getByText("Candidate 身份已验证，但无法确认最新 main")).toBeTruthy();
+    expect(screen.queryByText("Candidate · 当前 main · 可测试")).toBeNull();
+    expect(screen.getByRole("alert").getAttribute("aria-live")).toBe("assertive");
+    expect(screen.getByRole("alert").classList.contains("candidate-environment-banner--unverified")).toBe(true);
+  });
+
+  it("times out the GitHub freshness request", async () => {
+    vi.useFakeTimers();
+    useOrigin("candidate.ojeur.cloud", "");
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(jsonResponse(validMetadata()))
+      .mockImplementationOnce(
+        (_input: RequestInfo | URL, init?: RequestInit) => new Promise<Response>((_resolve, reject) => {
+          init?.signal?.addEventListener(
+            "abort",
+            () => reject(new DOMException("Aborted", "AbortError")),
+            { once: true },
+          );
+        }),
+      );
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(<CandidateEnvironmentBanner />);
+    await act(async () => Promise.resolve());
+    await act(async () => vi.advanceTimersByTimeAsync(5_000));
+
+    expect(screen.getByText("Candidate 身份已验证，但无法确认最新 main")).toBeTruthy();
+    expect(screen.getByRole("alert").getAttribute("aria-live")).toBe("assertive");
+    expect(fetchMock.mock.calls[1]?.[1]?.signal.aborted).toBe(true);
   });
 
   it("stays absent when Active serves the SPA fallback instead of Candidate JSON", async () => {
     useOrigin("www.ojeur.cloud", "");
-    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response("<!doctype html>", {
+    const fetchMock = vi.fn().mockResolvedValue(new Response("<!doctype html>", {
       status: 200,
       headers: { "content-type": "text/html" },
-    })));
+    }));
+    vi.stubGlobal("fetch", fetchMock);
 
     render(<CandidateEnvironmentBanner />);
     await act(async () => Promise.resolve());
 
-    expect(screen.queryByText("Candidate 测试实例 · 待人工验收")).toBeNull();
+    expect(screen.queryByText("Candidate · 当前 main · 可测试")).toBeNull();
     expect(screen.queryByText("Candidate 身份不可验证，禁止据此验收")).toBeNull();
     expect(document.documentElement.dataset.releaseRole).toBeUndefined();
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(fetchMock).toHaveBeenCalledWith("/candidate-preview.json", expect.any(Object));
   });
 
   it("blocks Candidate acceptance while identity metadata is loading", () => {

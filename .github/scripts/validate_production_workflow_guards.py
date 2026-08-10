@@ -15,6 +15,7 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 MAIN_REF = "refs/heads/main"
 MAIN_REF_CONDITION = f"github.ref == '{MAIN_REF}'"
 PRODUCTION_ENVIRONMENT = "production"
+CANDIDATE_ENVIRONMENT = "candidate-preview"
 PRODUCTION_RELEASE_WORKFLOW = ".github/workflows/production-release.yml"
 INTL_SYNC_WORKFLOW = ".github/workflows/sync-www-active-to-intl.yml"
 RELEASE_COORDINATION_WORKFLOW = (
@@ -29,15 +30,34 @@ PINNED_CHECKOUT_V5 = (
     "actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09"
 )
 PRODUCTION_COORDINATION_JOB = "release_coordination_guard"
-PRODUCTION_RELEASE_DEPLOY_CONDITION = (
-    MAIN_REF_CONDITION
+AUTO_CI_SOURCE_CONDITION = (
+    "github.event_name == 'workflow_run' && "
+    + MAIN_REF_CONDITION
+    + " && github.event.workflow_run.conclusion == 'success' && "
+    "github.event.workflow_run.event == 'push' && "
+    "github.event.workflow_run.name == 'ci' && "
+    "github.event.workflow_run.path == '.github/workflows/ci.yml' && "
+    "github.event.workflow_run.head_branch == 'main' && "
+    "github.event.workflow_run.head_repository.full_name == github.repository && "
+    "github.event.workflow_run.head_sha == github.sha"
+)
+PRODUCTION_COORDINATION_CONDITION = (
+    "(github.event_name == 'workflow_dispatch' && "
+    + MAIN_REF_CONDITION
+    + ") || ("
+    + AUTO_CI_SOURCE_CONDITION
+    + ")"
 )
 PRODUCTION_PREPARE_CONDITION = (
-    PRODUCTION_RELEASE_DEPLOY_CONDITION
-    + " && inputs.release_mode == 'prepare-candidate'"
+    "(github.event_name == 'workflow_dispatch' && "
+    + MAIN_REF_CONDITION
+    + " && inputs.release_mode == 'prepare-candidate') || ("
+    + AUTO_CI_SOURCE_CONDITION
+    + ")"
 )
 PRODUCTION_CONTROL_CONDITION = (
-    MAIN_REF_CONDITION
+    "github.event_name == 'workflow_dispatch' && "
+    + MAIN_REF_CONDITION
     + " && inputs.release_mode != 'prepare-candidate'"
 )
 FORBIDDEN_CONTROL_BUILD_TOKENS = (
@@ -64,9 +84,6 @@ MANUAL_DEPLOY_WORKFLOWS = {
     ".github/workflows/deploy-aws-ecs.yml",
     ".github/workflows/deploy-ec2-auto-update.yml",
 }
-PRODUCTION_RELEASE_MAIN_ONLY_JOBS = (
-    PRODUCTION_COORDINATION_JOB,
-)
 PRODUCTION_RELEASE_MODE_GATED_JOBS = (
     "build_frontend",
     "deploy_tencent",
@@ -195,10 +212,17 @@ def assert_main_only_production_job(relative_path: str, job_name: str) -> None:
     else:
         job = assert_main_only_job(relative_path, job_name)
 
+    expected_environment = (
+        CANDIDATE_ENVIRONMENT
+        if relative_path == PRODUCTION_RELEASE_WORKFLOW
+        and job_name == "deploy_tencent"
+        else PRODUCTION_ENVIRONMENT
+    )
     environment = get_environment_name(job)
-    if environment != PRODUCTION_ENVIRONMENT:
+    if environment != expected_environment:
         raise AssertionError(
-            f"{relative_path}:{job_name} must use the production environment; "
+            f"{relative_path}:{job_name} must use the {expected_environment} "
+            "environment; "
             f"found {environment!r}"
         )
 
@@ -277,9 +301,14 @@ def assert_all_static_production_jobs_are_registered() -> None:
 
 
 def assert_production_release_main_guards() -> None:
-    for job_name in PRODUCTION_RELEASE_MAIN_ONLY_JOBS:
-        assert_main_only_job(PRODUCTION_RELEASE_WORKFLOW, job_name)
     workflow = load_workflow(PRODUCTION_RELEASE_WORKFLOW)
+    coordination = get_job(
+        workflow,
+        PRODUCTION_RELEASE_WORKFLOW,
+        PRODUCTION_COORDINATION_JOB,
+    )
+    if unwrap_expression(coordination.get("if")) != PRODUCTION_COORDINATION_CONDITION:
+        raise AssertionError("production release coordination trigger gate changed")
     for job_name in PRODUCTION_RELEASE_MODE_GATED_JOBS:
         job = get_job(workflow, PRODUCTION_RELEASE_WORKFLOW, job_name)
         condition = unwrap_expression(job.get("if"))
@@ -426,11 +455,23 @@ def assert_fixed_release_v2_workflow_contract() -> None:
 
     workflow = load_workflow(PRODUCTION_RELEASE_WORKFLOW)
     triggers = workflow.get("on")
-    if not isinstance(triggers, Mapping) or set(triggers) != {"workflow_dispatch"}:
-        raise AssertionError(
-            "fixed V2 production release must only support workflow_dispatch"
-        )
+    if not isinstance(triggers, Mapping) or set(triggers) != {
+        "workflow_dispatch",
+        "workflow_run",
+    }:
+        raise AssertionError("fixed V2 production release trigger surface changed")
     dispatch = triggers.get("workflow_dispatch")
+    workflow_run = triggers.get("workflow_run")
+    if not isinstance(workflow_run, Mapping) or {
+        "workflows": workflow_run.get("workflows"),
+        "types": workflow_run.get("types"),
+        "branches": workflow_run.get("branches"),
+    } != {
+        "workflows": ["ci"],
+        "types": ["completed"],
+        "branches": ["main"],
+    }:
+        raise AssertionError("fixed V2 automatic Candidate CI trigger changed")
     inputs = dispatch.get("inputs") if isinstance(dispatch, Mapping) else None
     expected_inputs = {
         "release_mode",
@@ -480,8 +521,11 @@ def assert_fixed_release_v2_workflow_contract() -> None:
         } != {"required": "true", "type": "boolean", "default": "false"}:
             raise AssertionError(f"fixed V2 {input_name} contract changed")
 
-    if workflow.get("env", {}).get("RELEASE_MODE") != "${{ inputs.release_mode }}":
-        raise AssertionError("fixed V2 RELEASE_MODE must come from the dispatch choice")
+    if workflow.get("env", {}).get("RELEASE_MODE") != (
+        "${{ github.event_name == 'workflow_run' && 'prepare-candidate' || "
+        "inputs.release_mode }}"
+    ):
+        raise AssertionError("fixed V2 RELEASE_MODE trigger binding changed")
     permissions = workflow.get("permissions")
     if not isinstance(permissions, Mapping) or dict(permissions) != {
         "actions": "read",
@@ -512,8 +556,8 @@ def assert_fixed_release_v2_workflow_contract() -> None:
     guard = get_job(workflow, PRODUCTION_RELEASE_WORKFLOW, PRODUCTION_COORDINATION_JOB)
     if guard.get("needs") is not None or guard.get("environment") is not None:
         raise AssertionError("release coordination must run before production access")
-    if unwrap_expression(guard.get("if")) != MAIN_REF_CONDITION:
-        raise AssertionError("release coordination must be main-only")
+    if unwrap_expression(guard.get("if")) != PRODUCTION_COORDINATION_CONDITION:
+        raise AssertionError("release coordination automatic/manual gate changed")
     guard_steps = get_steps(
         guard,
         PRODUCTION_RELEASE_WORKFLOW,
@@ -521,6 +565,7 @@ def assert_fixed_release_v2_workflow_contract() -> None:
     )
     if [step.get("name") for step in guard_steps] != [
         "Checkout release coordination guard",
+        "Revalidate automatic CI source",
         "Validate unpublished release coordination",
         "Freeze release coordination plan",
     ]:
@@ -531,7 +576,39 @@ def assert_fixed_release_v2_workflow_contract() -> None:
         "persist-credentials": checkout_options.get("persist-credentials"),
     } != {"ref": "${{ github.sha }}", "persist-credentials": "false"}:
         raise AssertionError("release coordination must checkout the exact main SHA")
-    guard_command = str(guard_steps[1].get("run") or "")
+    auto_source = guard_steps[1]
+    if unwrap_expression(auto_source.get("if")) != (
+        "github.event_name == 'workflow_run'"
+    ):
+        raise AssertionError("automatic CI source validation must be workflow_run-only")
+    auto_source_env = auto_source.get("env")
+    if not isinstance(auto_source_env, Mapping) or dict(auto_source_env) != {
+        "GH_TOKEN": "${{ github.token }}",
+        "SOURCE_CI_RUN_ID": "${{ github.event.workflow_run.id }}",
+        "SOURCE_CI_RUN_ATTEMPT": "${{ github.event.workflow_run.run_attempt }}",
+        "SOURCE_CI_HEAD_SHA": "${{ github.event.workflow_run.head_sha }}",
+    }:
+        raise AssertionError("automatic CI source identity binding changed")
+    auto_source_command = str(auto_source.get("run") or "")
+    for token in (
+        'test "$SOURCE_CI_HEAD_SHA" = "$GITHUB_SHA"',
+        'repos/$GITHUB_REPOSITORY/branches/main',
+        'repos/$GITHUB_REPOSITORY/actions/runs/$SOURCE_CI_RUN_ID',
+        '.run_attempt == $run_attempt',
+        '.path == ".github/workflows/ci.yml"',
+        '.event == "push"',
+        '.conclusion == "success"',
+        '.head_repository.full_name == $repository',
+    ):
+        if token not in auto_source_command:
+            raise AssertionError(f"automatic CI source validation lost {token!r}")
+    for forbidden in ("intl", "sync-www-active-to-intl", "wrangler"):
+        if forbidden in auto_source_command:
+            raise AssertionError(
+                f"automatic Candidate source validation reaches {forbidden!r}"
+            )
+
+    guard_command = str(guard_steps[2].get("run") or "")
     for token in (
         RELEASE_COORDINATION_SCRIPT,
         "production",
@@ -544,7 +621,7 @@ def assert_fixed_release_v2_workflow_contract() -> None:
     ):
         if token not in guard_command:
             raise AssertionError(f"release coordination lost {token!r}")
-    guard_env = guard_steps[1].get("env")
+    guard_env = guard_steps[2].get("env")
     expected_target_env = {
         "TARGET_COMMIT_SHA": "${{ inputs.target_commit_sha }}",
         "TARGET_ARCHIVE_SHA256": "${{ inputs.target_archive_sha256 }}",
@@ -559,8 +636,8 @@ def assert_fixed_release_v2_workflow_contract() -> None:
             )
     if "secrets." in str(guard):
         raise AssertionError("release coordination cannot consume production secrets")
-    freeze_options = guard_steps[2].get("with")
-    if guard_steps[2].get("uses") != "actions/upload-artifact@v4" or not isinstance(
+    freeze_options = guard_steps[3].get("with")
+    if guard_steps[3].get("uses") != "actions/upload-artifact@v4" or not isinstance(
         freeze_options,
         Mapping,
     ):
@@ -591,8 +668,8 @@ def assert_fixed_release_v2_workflow_contract() -> None:
         raise AssertionError("Candidate preparation must use the one frontend build")
     if unwrap_expression(deploy.get("if")) != PRODUCTION_PREPARE_CONDITION:
         raise AssertionError("Tencent Candidate preparation gate changed")
-    if get_environment_name(deploy) != PRODUCTION_ENVIRONMENT:
-        raise AssertionError("Tencent Candidate preparation must use production")
+    if get_environment_name(deploy) != CANDIDATE_ENVIRONMENT:
+        raise AssertionError("Tencent Candidate preparation must use candidate-preview")
     if control.get("needs") != PRODUCTION_COORDINATION_JOB:
         raise AssertionError("fixed V2 control must wait for release coordination")
     if unwrap_expression(control.get("if")) != PRODUCTION_CONTROL_CONDITION:
@@ -651,20 +728,38 @@ def assert_fixed_release_v2_workflow_contract() -> None:
     prepare_names = [str(step.get("name") or "") for step in deploy_steps]
     required_prepare_steps = [
         "Package backend release with verified frontend artifact",
+        "Reconfirm current main before first server mutation",
         "Upload complete release archive with incremental rsync",
         "Generate canonical V2 release manifest",
-        "Reconfirm current main before first production mutation",
+        "Revalidate frozen plan before Candidate mutation",
         "Deploy verified release to fixed Candidate on Tencent",
         "Retain V2 operation diagnostics",
     ]
     positions = [prepare_names.index(name) for name in required_prepare_steps]
     if positions != sorted(positions):
         raise AssertionError("fixed V2 Candidate preparation steps are out of order")
-    reconfirm_step = deploy_steps[prepare_names.index(required_prepare_steps[3])]
+    current_main_step = deploy_steps[
+        prepare_names.index("Reconfirm current main before first server mutation")
+    ]
+    current_main_command = str(current_main_step.get("run") or "")
+    if current_main_step.get("env") != {"GH_TOKEN": "${{ github.token }}"}:
+        raise AssertionError("current main recheck GitHub token binding changed")
+    for token in (
+        'gh api "repos/$GITHUB_REPOSITORY/branches/main"',
+        'current_main="$(',
+        'if [ "$current_main" != "$GITHUB_SHA" ]',
+    ):
+        if token not in current_main_command:
+            raise AssertionError(f"current main recheck lost {token!r}")
+    reconfirm_step = deploy_steps[
+        prepare_names.index("Revalidate frozen plan before Candidate mutation")
+    ]
     reconfirm_command = str(reconfirm_step.get("run") or "")
     for token in (
         RELEASE_COORDINATION_SCRIPT,
         "verify-plan",
+        'gh api "repos/$GITHUB_REPOSITORY/branches/main"',
+        'if [ "$current_main" != "$GITHUB_SHA" ]',
         '--main-sha "$GITHUB_SHA"',
         '--operation "$RELEASE_MODE"',
         '--target-sha "$TARGET_COMMIT_SHA"',
@@ -676,10 +771,17 @@ def assert_fixed_release_v2_workflow_contract() -> None:
     reconfirm_env = reconfirm_step.get("env")
     if not isinstance(reconfirm_env, Mapping):
         raise AssertionError("prepare reconfirm target env is missing")
+    for token_name in ("GH_TOKEN", "GITHUB_TOKEN"):
+        if reconfirm_env.get(token_name) != "${{ github.token }}":
+            raise AssertionError(
+                f"prepare reconfirm {token_name} binding changed"
+            )
     for env_name, expected in expected_target_env.items():
         if reconfirm_env.get(env_name) != expected:
             raise AssertionError(f"prepare reconfirm {env_name} binding changed")
-    manifest_step = deploy_steps[prepare_names.index(required_prepare_steps[2])]
+    manifest_step = deploy_steps[
+        prepare_names.index("Generate canonical V2 release manifest")
+    ]
     manifest_command = str(manifest_step.get("run") or "")
     for token in (
         "ReleaseIdentity",
@@ -696,7 +798,9 @@ def assert_fixed_release_v2_workflow_contract() -> None:
     ):
         if token not in manifest_command:
             raise AssertionError(f"canonical V2 manifest lost {token!r}")
-    prepare_step = deploy_steps[prepare_names.index(required_prepare_steps[4])]
+    prepare_step = deploy_steps[
+        prepare_names.index("Deploy verified release to fixed Candidate on Tencent")
+    ]
     prepare_command = str(prepare_step.get("run") or "")
     for token in (
         "write_remote_export DEPLOY_BRANCH main",
@@ -724,7 +828,26 @@ def assert_fixed_release_v2_workflow_contract() -> None:
             raise AssertionError(
                 f"fixed V2 prepare forwards an unused app setting: {forbidden!r}"
             )
-    diagnostics = deploy_steps[prepare_names.index(required_prepare_steps[5])]
+    deploy_step = deploy_steps[
+        prepare_names.index("Deploy verified release to fixed Candidate on Tencent")
+    ]
+    deploy_env = deploy_step.get("env")
+    if not isinstance(deploy_env, Mapping) or deploy_env.get(
+        "CANDIDATE_REPLACE_POLICY"
+    ) != (
+        "${{ github.event_name == 'workflow_run' && "
+        "'reuse-verified-same-release' || 'replace' }}"
+    ):
+        raise AssertionError("Candidate replace policy trigger binding changed")
+    deploy_command = str(deploy_step.get("run") or "")
+    if (
+        "write_remote_export CANDIDATE_REPLACE_POLICY" not in deploy_command
+        or '"$CANDIDATE_REPLACE_POLICY"' not in deploy_command
+    ):
+        raise AssertionError("Candidate replace policy handoff is missing")
+    diagnostics = deploy_steps[
+        prepare_names.index("Retain V2 operation diagnostics")
+    ]
     if unwrap_expression(diagnostics.get("if")) != "always()":
         raise AssertionError("V2 prepare diagnostics must be retained on failure")
     if positions[-1] != len(deploy_steps) - 1:
@@ -900,6 +1023,7 @@ def assert_fixed_release_v2_database_gate_is_read_only() -> None:
         "fixed_release_v2_remote.sh",
         'PRODUCTION_LOCK_PATH="$DEPLOY_LOCK_PATH"',
         'V2_ARCHIVE_CACHE_ROOT="$ARCHIVE_ROOT_REAL"',
+        'CANDIDATE_REPLACE_POLICY="${CANDIDATE_REPLACE_POLICY:-replace}"',
         "bash \"$v2_remote_entry\" prepare-candidate",
     ):
         if token not in fixed_handoff:
@@ -925,6 +1049,8 @@ def assert_fixed_release_v2_database_gate_is_read_only() -> None:
         '[[ "$V2_ARCHIVE_CACHE_ROOT" == /* ]]',
         "require_archive_cache_root",
         '--archive-cache-root "$V2_ARCHIVE_CACHE_ROOT"',
+        '--replace-policy "$CANDIDATE_REPLACE_POLICY"',
+        "reuse-verified-same-release",
     ):
         if token not in fixed_remote:
             raise AssertionError(
@@ -1910,7 +2036,7 @@ def main() -> None:
     assert_fixed_release_v2_database_gate_is_read_only()
     assert_feature_canary_cannot_route_or_mutate_production()
     print(
-        "Validated fixed Active/Candidate V2 and main-only production gates for "
+        "Validated automatic Candidate and explicit Active V2 gates for "
         f"{sum(len(job_names) for job_names in PRODUCTION_JOBS.values())} "
         "production jobs and "
         f"{len(MANUAL_DEPLOY_WORKFLOWS)} manual deploy workflows."

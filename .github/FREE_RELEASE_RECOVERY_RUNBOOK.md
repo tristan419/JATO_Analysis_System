@@ -26,8 +26,10 @@ checkpoint merely to make a workflow green.
 
 Production remains subject to all existing governance:
 
-- only a merge to `main` or an approved manual `main` dispatch may release;
-- the GitHub `production` environment remains the approval boundary;
+- only exact current-`main` CI may auto-prepare Candidate; Active controls
+  remain explicit manual `main` dispatches;
+- Candidate prepare uses `candidate-preview`; Active controls use the GitHub
+  `production` environment approval boundary;
 - Tencent/www and Cloudflare/intl consume the same immutable frontend artifact;
 - releases are serialized and a newer push does not cancel an active release;
 - rollback selects a previously verified artifact and never deploys a feature
@@ -207,38 +209,14 @@ size, mtime, and SHA-256. `/etc/jato-fullstack/nginx/active-release.conf` and
 both public and private Candidate cache paths must remain absent. Do not rerun
 the failed production release.
 
-### Recovery-only production release hold
+### Retired recovery-only release hold
 
-The reviewed 29df recovery PR carries the versioned hold document
-`.github/recovery-plans/2026-08-03-29df-pre-switch-candidate-residue-production-hold.v1.json`.
-It is bound to incident `2026-08-03-29df-pre-switch-candidate-residue`, the fixed
-plan path, and plan SHA-256
-`61045c5b1f39516f910ab89cf80fdd97796920e7e3bdb479f52e741b73f2f144`.
-Its presence is not recovery or deployment authorization.
-
-On a main push, `production-release` still runs the no-environment coordination
-guard and freezes its coordination plan. The same guard resolves exactly one
-`release-action`: `hold` when only the reviewed active document exists, or
-`deploy` when the active document is absent and only the exact reviewed
-retirement record exists. `hold` skips frontend build, Tencent/Cloudflare
-deployment, parity audit, and the artifact/provenance/cache work in
-`intl-edge-prewarm`; it therefore releases `production-release-main` without
-entering the `production` environment. Missing both documents, finding both
-documents, or finding a malformed, non-canonical, linked, oversized, stale, or
-plan-digest-mismatched document fails the guard and never falls back to deploy.
-
-The checkpoint-recovery workflow requires the exact active hold once before its
-production-environment job and again immediately after approval. Dry-run and
-apply never remove the hold. It may remain through Nginx reconciliation and the
-no-traffic Candidate canary. The retirement path is fixed as
-`.github/recovery-plans/2026-08-03-29df-pre-switch-candidate-residue-production-hold-retirement.v1.json`,
-but that file must not exist while the hold is active. Only an explicitly
-reviewed final production-release PR may delete the hold and add the exact
-canonical retirement record in the same change, after checkpoint recovery and
-reconciliation evidence are complete. Deleting the hold alone fails closed.
-Both paths are production triggers, so merging the paired retirement change to
-`main` starts the fresh release that resumes normal deployment behavior. Keep
-the retirement record on `main` afterward as durable release authorization.
+The 29df hold, retirement record, and `release-action: hold|deploy` resolution
+were incident-specific controls. They are historical evidence only: the fixed
+V2 release workflow does not read them, does not resolve a release action from
+them, and does not use them to start or suppress Candidate preparation. Current
+Candidate and Active operations use only the four fixed V2 actions documented
+in `CANDIDATE_MANUAL_RELEASE_RUNBOOK.md`.
 
 Use `.github/workflows/production-checkpoint-recovery.yml` only when a reviewed,
 versioned incident plan exists on `main`. The workflow shares the normal

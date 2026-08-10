@@ -67,6 +67,7 @@ from release_v2_store import (  # noqa: E402
 
 
 Action = Literal["prepare-candidate", "discard-candidate", "update-active", "rollback-active"]
+CandidateReplacePolicy = Literal["replace", "reuse-verified-same-release"]
 ACTION_CHECKS: dict[Action, tuple[str, ...]] = {
     "prepare-candidate": (
         "production_lock_acquired",
@@ -1987,6 +1988,7 @@ class FixedReleaseController:
         *,
         manifest_sha256: str,
         staging_root: Path | None = None,
+        replace_policy: CandidateReplacePolicy = "replace",
     ) -> dict[str, Any]:
         def body(mutation: dict[str, bool], passed: list[str]) -> ReleaseIdentity:
             active = self._active_baseline()
@@ -1995,7 +1997,12 @@ class FixedReleaseController:
             passed.append("fixed_active_routing_verified")
             created = False
             try:
-                if staging_root is not None:
+                old = read_pointer_pair(self.config.layout, CANDIDATE_SLOT)
+                reuse_existing = (
+                    replace_policy == "reuse-verified-same-release"
+                    and old.current == identity
+                )
+                if staging_root is not None and not reuse_existing:
                     created = promote_staged_release(
                         self.config.layout,
                         identity,
@@ -2006,7 +2013,6 @@ class FixedReleaseController:
                     passed.append("release_materialized" if created else "release_reused")
                 manifest = self._verify_manifest(identity, manifest_sha256)
                 passed.append("release_manifest_verified")
-                old = read_pointer_pair(self.config.layout, CANDIDATE_SLOT)
                 old_manifest: ReleaseManifest | None = None
                 if old.current is not None:
                     old_manifest = self._verify_self_manifest(old.current)
@@ -2085,6 +2091,24 @@ class FixedReleaseController:
                         old_preview_database,
                     )
                 passed.append("candidate_previous_state_verified")
+                if reuse_existing:
+                    if (
+                        not preview_was_active
+                        or old_sandbox is None
+                        or old_snapshot is None
+                    ):
+                        raise V2Error(
+                            "candidate_runtime_inconsistent",
+                            "matching Candidate lacks a complete preview sandbox",
+                        )
+                    self._verify_preview_contracts()
+                    passed.append("preview_contract_verified")
+                    self._verify_candidate_monthly_disabled()
+                    passed.append("candidate_monthly_disabled_verified")
+                    self._verify_active_baseline_unchanged(active)
+                    passed.append("active_unchanged")
+                    passed.append("candidate_reused_without_refresh")
+                    return identity
                 protected = frozenset(
                     value
                     for value in (active_database, old_sandbox, old_preview_database)
@@ -2735,6 +2759,11 @@ def _parser() -> argparse.ArgumentParser:
     prepare.add_argument("--archive-sha256", required=True)
     prepare.add_argument("--manifest-sha256", required=True)
     prepare.add_argument("--staging-root", type=Path)
+    prepare.add_argument(
+        "--replace-policy",
+        choices=("replace", "reuse-verified-same-release"),
+        default="replace",
+    )
     commands.add_parser("discard-candidate")
     update = commands.add_parser("update-active")
     update.add_argument("--commit", required=True)
@@ -2792,6 +2821,7 @@ def main(arguments: Sequence[str] | None = None) -> int:
                 target_identity,
                 manifest_sha256=parsed.manifest_sha256,
                 staging_root=parsed.staging_root,
+                replace_policy=parsed.replace_policy,
             )
         elif parsed.action == "discard-candidate":
             report = controller.discard_candidate()

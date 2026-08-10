@@ -28,6 +28,7 @@ ADMISSION = sys.modules["release_v2_admission"]
 
 ACTIVE = STORE.ReleaseIdentity("a" * 40, "1" * 64)
 CANDIDATE = STORE.ReleaseIdentity("b" * 40, "2" * 64)
+SAME_COMMIT_OTHER_RELEASE = STORE.ReleaseIdentity("b" * 40, "8" * 64)
 OLDER = STORE.ReleaseIdentity("c" * 40, "3" * 64)
 NEWEST = STORE.ReleaseIdentity("f" * 40, "7" * 64)
 LEGACY_COMMIT = "d" * 40
@@ -1025,6 +1026,82 @@ def test_successive_prepares_replace_fifo_sandbox_and_publish_snapshot_time(
     assert preview["databaseName"] == candidate_values["APP_CANDIDATE_SANDBOX_DATABASE"]
     assert sandboxes.dropped == [first_database]
     assert STORE.read_pointer(cfg.layout, MODULE.ACTIVE_SLOT, "current") == ACTIVE
+
+
+def test_automatic_prepare_reuses_exact_verified_candidate_without_refresh(
+    tmp_path: Path,
+) -> None:
+    cfg = config(tmp_path)
+    install_active(cfg, ACTIVE)
+    digest = create_release(cfg.layout, CANDIDATE)
+    system = FakeSystem()
+    sandboxes = FakeSandboxManager()
+    ctrl = controller(cfg, system, sandbox_manager=sandboxes)
+    ctrl.prepare_candidate(CANDIDATE, manifest_sha256=digest)
+    database_env_before = cfg.candidate_database_env.read_bytes()
+    preview_before = (
+        cfg.preview_runtime_root / "candidate-preview.json"
+    ).read_bytes()
+    restart_attempts_before = dict(system.restart_attempts)
+
+    report = ctrl.prepare_candidate(
+        CANDIDATE,
+        manifest_sha256=digest,
+        replace_policy="reuse-verified-same-release",
+    )
+
+    assert report["decision"] == "completed"
+    assert "candidate_reused_without_refresh" in report["passed"]
+    assert all(changed is False for changed in report["mutation"].values())
+    assert sandboxes.provisioned == [sandboxes.provisioned[0]]
+    assert sandboxes.dropped == []
+    assert cfg.candidate_database_env.read_bytes() == database_env_before
+    assert (
+        cfg.preview_runtime_root / "candidate-preview.json"
+    ).read_bytes() == preview_before
+    assert system.restart_attempts == restart_attempts_before
+
+
+def test_automatic_prepare_does_not_reuse_different_release_or_manifest(
+    tmp_path: Path,
+) -> None:
+    cfg = config(tmp_path)
+    install_active(cfg, ACTIVE)
+    candidate_digest = create_release(cfg.layout, CANDIDATE)
+    sandboxes = FakeSandboxManager()
+    ctrl = controller(cfg, FakeSystem(), sandbox_manager=sandboxes)
+    ctrl.prepare_candidate(CANDIDATE, manifest_sha256=candidate_digest)
+    other_digest = create_release(cfg.layout, SAME_COMMIT_OTHER_RELEASE)
+
+    ctrl.prepare_candidate(
+        SAME_COMMIT_OTHER_RELEASE,
+        manifest_sha256=other_digest,
+        replace_policy="reuse-verified-same-release",
+    )
+
+    assert len(sandboxes.provisioned) == 2
+    assert sandboxes.dropped == [sandboxes.provisioned[0]]
+    with pytest.raises(MODULE.V2Error):
+        ctrl.prepare_candidate(
+            SAME_COMMIT_OTHER_RELEASE,
+            manifest_sha256="9" * 64,
+            replace_policy="reuse-verified-same-release",
+        )
+    assert len(sandboxes.provisioned) == 2
+
+
+def test_manual_prepare_refreshes_an_exact_existing_candidate(tmp_path: Path) -> None:
+    cfg = config(tmp_path)
+    install_active(cfg, ACTIVE)
+    digest = create_release(cfg.layout, CANDIDATE)
+    sandboxes = FakeSandboxManager()
+    ctrl = controller(cfg, FakeSystem(), sandbox_manager=sandboxes)
+    ctrl.prepare_candidate(CANDIDATE, manifest_sha256=digest)
+
+    ctrl.prepare_candidate(CANDIDATE, manifest_sha256=digest)
+
+    assert len(sandboxes.provisioned) == 2
+    assert sandboxes.dropped == [sandboxes.provisioned[0]]
 
 
 def test_prepare_reclaims_only_unreferenced_strict_marker_orphans(
@@ -2637,13 +2714,15 @@ def test_prepare_cli_binds_candidate_unit_contract_to_promoted_release(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     captured: list[MODULE.ControllerConfig] = []
+    prepare_kwargs: list[dict[str, object]] = []
 
     class CapturingController:
         def __init__(self, controller_config: MODULE.ControllerConfig) -> None:
             captured.append(controller_config)
 
         def prepare_candidate(self, *args, **kwargs) -> dict[str, object]:
-            del args, kwargs
+            del args
+            prepare_kwargs.append(kwargs)
             return {"reportPath": str(tmp_path / "report.json")}
 
     monkeypatch.setattr(MODULE, "FixedReleaseController", CapturingController)
@@ -2667,6 +2746,8 @@ def test_prepare_cli_binds_candidate_unit_contract_to_promoted_release(
             CANDIDATE.archive_sha256,
             "--manifest-sha256",
             "7" * 64,
+            "--replace-policy",
+            "reuse-verified-same-release",
             "--staging-root",
             str(tmp_path / "staging"),
         ]
@@ -2678,6 +2759,7 @@ def test_prepare_cli_binds_candidate_unit_contract_to_promoted_release(
         expected_root / "03_Scripts/deploy/systemd/jato-fullstack-backend@.service"
     )
     assert captured[0].archive_cache_root == tmp_path / "archive-cache"
+    assert prepare_kwargs[0]["replace_policy"] == "reuse-verified-same-release"
 
 
 def test_update_rejects_manifest_digest_change_before_active_mutation(tmp_path: Path) -> None:

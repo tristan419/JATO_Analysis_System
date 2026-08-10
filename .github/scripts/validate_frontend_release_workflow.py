@@ -17,7 +17,6 @@ CI_WORKFLOW_PATH = REPO_ROOT / ".github/workflows/ci.yml"
 INTL_SYNC_WORKFLOW_PATH = (
     REPO_ROOT / ".github/workflows/sync-www-active-to-intl.yml"
 )
-PREWARM_WORKFLOW_PATH = REPO_ROOT / ".github/workflows/intl-edge-prewarm.yml"
 FIXED_RELEASE_V2_REMOTE_PATH = (
     REPO_ROOT / "03_Scripts/deploy/fixed_release_v2_remote.sh"
 )
@@ -26,25 +25,38 @@ RELEASE_V2_ADMISSION_PATH = (
     REPO_ROOT / "03_Scripts/deploy/release_v2_admission.py"
 )
 MAIN_CONDITION = "github.ref == 'refs/heads/main'"
+AUTO_CI_SOURCE_CONDITION = (
+    "github.event_name == 'workflow_run' && "
+    + MAIN_CONDITION
+    + " && github.event.workflow_run.conclusion == 'success' && "
+    "github.event.workflow_run.event == 'push' && "
+    "github.event.workflow_run.name == 'ci' && "
+    "github.event.workflow_run.path == '.github/workflows/ci.yml' && "
+    "github.event.workflow_run.head_branch == 'main' && "
+    "github.event.workflow_run.head_repository.full_name == github.repository && "
+    "github.event.workflow_run.head_sha == github.sha"
+)
+COORDINATION_CONDITION = (
+    "(github.event_name == 'workflow_dispatch' && "
+    + MAIN_CONDITION
+    + ") || ("
+    + AUTO_CI_SOURCE_CONDITION
+    + ")"
+)
 PREPARE_RELEASE_CONDITION = (
-    MAIN_CONDITION
-    + " && inputs.release_mode == 'prepare-candidate'"
+    "(github.event_name == 'workflow_dispatch' && "
+    + MAIN_CONDITION
+    + " && inputs.release_mode == 'prepare-candidate') || ("
+    + AUTO_CI_SOURCE_CONDITION
+    + ")"
 )
 CONTROL_RELEASE_CONDITION = (
-    MAIN_CONDITION
+    "github.event_name == 'workflow_dispatch' && "
+    + MAIN_CONDITION
     + " && inputs.release_mode != 'prepare-candidate'"
-)
-PREWARM_CONDITION = (
-    "github.event.workflow_run.conclusion == 'success' && "
-    "github.event.workflow_run.head_branch == 'main' && "
-    "github.event.workflow_run.head_repository.full_name == github.repository"
 )
 BUILD_JOB = "build_frontend"
 COORDINATION_JOB = "release_coordination_guard"
-PRODUCTION_ENVIRONMENT_JOBS = (
-    "deploy_tencent",
-    "control_fixed_release_v2",
-)
 REQUIRED_BUILD_OUTPUTS = {
     "artifact_name",
     "artifact_identity",
@@ -127,6 +139,36 @@ def combined_run(job_payload: Mapping[str, Any], context: str) -> str:
     return "\n".join(str(step.get("run") or "") for step in steps(job_payload, context))
 
 
+def assert_does_not_follow_mixed_production_release(
+    workflow: Mapping[str, Any],
+    context: str,
+) -> None:
+    """Reject followers that cannot distinguish Candidate prepare from control."""
+
+    triggers = workflow.get("on")
+    if not isinstance(triggers, Mapping):
+        return
+    workflow_run = triggers.get("workflow_run")
+    if not isinstance(workflow_run, Mapping):
+        return
+    followed_workflows = workflow_run.get("workflows")
+    if not isinstance(followed_workflows, list):
+        return
+    if "production-release" in followed_workflows:
+        raise AssertionError(
+            f"{context} follows mixed-mode production-release and would also run "
+            "after Candidate prepare"
+        )
+
+
+def assert_candidate_prepare_has_no_followup_workflow() -> None:
+    for workflow_path in sorted((REPO_ROOT / ".github/workflows").glob("*.yml")):
+        assert_does_not_follow_mixed_production_release(
+            load_workflow(workflow_path),
+            str(workflow_path.relative_to(REPO_ROOT)),
+        )
+
+
 def assert_continue_on_error_disabled(
     payload: Mapping[str, Any],
     context: str,
@@ -194,16 +236,24 @@ def assert_pull_request_merge_result_checkout(ci: Mapping[str, Any]) -> None:
 
 
 def assert_fixed_v2_production_workflow(workflow: Mapping[str, Any]) -> None:
-    """Validate the explicit Fixed V2 prepare/control workflow boundary."""
+    """Validate automatic Candidate prepare and explicit control boundaries."""
     triggers = mapping(workflow.get("on"), "production workflow on")
-    if set(triggers) != {"workflow_dispatch"}:
-        raise AssertionError(
-            "production release must be explicit workflow_dispatch only"
-        )
+    if set(triggers) != {"workflow_dispatch", "workflow_run"}:
+        raise AssertionError("production release trigger surface changed")
     dispatch = mapping(
         triggers.get("workflow_dispatch"),
         "production workflow workflow_dispatch",
     )
+    workflow_run = mapping(
+        triggers.get("workflow_run"),
+        "production workflow workflow_run",
+    )
+    if sequence(workflow_run.get("workflows"), "workflow_run.workflows") != ["ci"]:
+        raise AssertionError("automatic Candidate prepare must follow ci")
+    if sequence(workflow_run.get("types"), "workflow_run.types") != ["completed"]:
+        raise AssertionError("automatic Candidate prepare must wait for completed ci")
+    if sequence(workflow_run.get("branches"), "workflow_run.branches") != ["main"]:
+        raise AssertionError("automatic Candidate prepare must be main-only")
     dispatch_inputs = mapping(
         dispatch.get("inputs"),
         "production workflow workflow_dispatch.inputs",
@@ -261,8 +311,11 @@ def assert_fixed_v2_production_workflow(workflow: Mapping[str, Any]) -> None:
             raise AssertionError(f"production {input_name} input contract changed")
 
     workflow_env = mapping(workflow.get("env"), "production workflow env")
-    if workflow_env.get("RELEASE_MODE") != "${{ inputs.release_mode }}":
-        raise AssertionError("production RELEASE_MODE dispatch binding changed")
+    if workflow_env.get("RELEASE_MODE") != (
+        "${{ github.event_name == 'workflow_run' && 'prepare-candidate' || "
+        "inputs.release_mode }}"
+    ):
+        raise AssertionError("production RELEASE_MODE trigger binding changed")
     if workflow.get("concurrency") != {
         "group": "production-release-main",
         "cancel-in-progress": "false",
@@ -280,7 +333,7 @@ def assert_fixed_v2_production_workflow(workflow: Mapping[str, Any]) -> None:
         raise AssertionError("production Fixed V2 job set changed")
 
     expected_conditions = {
-        COORDINATION_JOB: MAIN_CONDITION,
+        COORDINATION_JOB: COORDINATION_CONDITION,
         BUILD_JOB: PREPARE_RELEASE_CONDITION,
         "deploy_tencent": PREPARE_RELEASE_CONDITION,
         "control_fixed_release_v2": CONTROL_RELEASE_CONDITION,
@@ -297,9 +350,10 @@ def assert_fixed_v2_production_workflow(workflow: Mapping[str, Any]) -> None:
         raise AssertionError("deploy_tencent lost its guard/build dependency")
     if job(workflow, "control_fixed_release_v2").get("needs") != COORDINATION_JOB:
         raise AssertionError("Fixed V2 control lost its coordination dependency")
-    for name in PRODUCTION_ENVIRONMENT_JOBS:
-        if job(workflow, name).get("environment") != "production":
-            raise AssertionError(f"{name} must retain the production environment")
+    if job(workflow, "deploy_tencent").get("environment") != "candidate-preview":
+        raise AssertionError("Candidate prepare must use candidate-preview")
+    if job(workflow, "control_fixed_release_v2").get("environment") != "production":
+        raise AssertionError("control must retain the production environment")
 
     guard = job(workflow, COORDINATION_JOB)
     if "environment" in guard or "needs" in guard or "secrets." in str(guard):
@@ -309,6 +363,7 @@ def assert_fixed_v2_production_workflow(workflow: Mapping[str, Any]) -> None:
     guard_steps = steps(guard, COORDINATION_JOB)
     if [step.get("name") for step in guard_steps] != [
         "Checkout release coordination guard",
+        "Revalidate automatic CI source",
         "Validate unpublished release coordination",
         "Freeze release coordination plan",
     ]:
@@ -321,7 +376,41 @@ def assert_fixed_v2_production_workflow(workflow: Mapping[str, Any]) -> None:
         or guard_checkout_with.get("persist-credentials") != "false"
     ):
         raise AssertionError("release coordination checkout must pin the dispatch SHA")
-    guard_validate = guard_steps[1]
+    auto_source = guard_steps[1]
+    if unwrap_expression(auto_source.get("if")) != (
+        "github.event_name == 'workflow_run'"
+    ):
+        raise AssertionError("automatic CI source revalidation must be workflow_run-only")
+    auto_source_env = mapping(auto_source.get("env"), "automatic CI source env")
+    if auto_source_env != {
+        "GH_TOKEN": "${{ github.token }}",
+        "SOURCE_CI_RUN_ID": "${{ github.event.workflow_run.id }}",
+        "SOURCE_CI_RUN_ATTEMPT": "${{ github.event.workflow_run.run_attempt }}",
+        "SOURCE_CI_HEAD_SHA": "${{ github.event.workflow_run.head_sha }}",
+    }:
+        raise AssertionError("automatic CI source identity binding changed")
+    auto_source_run = str(auto_source.get("run") or "")
+    for required in (
+        'test "$SOURCE_CI_HEAD_SHA" = "$GITHUB_SHA"',
+        'repos/$GITHUB_REPOSITORY/branches/main',
+        'repos/$GITHUB_REPOSITORY/actions/runs/$SOURCE_CI_RUN_ID',
+        '.run_attempt == $run_attempt',
+        '.path == ".github/workflows/ci.yml"',
+        '.event == "push"',
+        '.conclusion == "success"',
+        '.head_repository.full_name == $repository',
+    ):
+        if required not in auto_source_run:
+            raise AssertionError(
+                f"automatic CI source revalidation is missing {required!r}"
+            )
+    for forbidden in ("intl", "sync-www-active-to-intl", "wrangler"):
+        if forbidden in auto_source_run:
+            raise AssertionError(
+                f"automatic Candidate source validation reaches {forbidden!r}"
+            )
+
+    guard_validate = guard_steps[2]
     guard_validate_env = mapping(
         guard_validate.get("env"),
         "release coordination validation env",
@@ -410,9 +499,10 @@ def assert_fixed_v2_prepare_and_control_contract(
         "Verify frontend artifact before Tencent deployment",
         "Validate Tencent deploy credentials",
         "Package backend release with verified frontend artifact",
+        "Reconfirm current main before first server mutation",
         "Upload complete release archive with incremental rsync",
         "Generate canonical V2 release manifest",
-        "Reconfirm current main before first production mutation",
+        "Revalidate frozen plan before Candidate mutation",
         "Deploy verified release to fixed Candidate on Tencent",
         "Retain V2 operation diagnostics",
     )
@@ -421,9 +511,25 @@ def assert_fixed_v2_prepare_and_control_contract(
         raise AssertionError(f"Fixed V2 prepare is missing steps: {missing_steps}")
     if tuple(names) != required_order:
         raise AssertionError("Fixed V2 prepare step surface or order changed")
+    current_main = step_by_name(
+        deploy_steps,
+        "Reconfirm current main before first server mutation",
+    )
+    if mapping(current_main.get("env"), "current main recheck env").get(
+        "GH_TOKEN"
+    ) != "${{ github.token }}":
+        raise AssertionError("current main recheck must use the GitHub token")
+    current_main_command = str(current_main.get("run") or "")
+    for token in (
+        'gh api "repos/$GITHUB_REPOSITORY/branches/main"',
+        'current_main="$(',
+        'if [ "$current_main" != "$GITHUB_SHA" ]',
+    ):
+        if token not in current_main_command:
+            raise AssertionError(f"current main recheck is missing {token!r}")
     reconfirm = step_by_name(
         deploy_steps,
-        "Reconfirm current main before first production mutation",
+        "Revalidate frozen plan before Candidate mutation",
     )
     reconfirm_env = mapping(reconfirm.get("env"), "prepare reconfirm env")
     expected_target_env = {
@@ -431,6 +537,11 @@ def assert_fixed_v2_prepare_and_control_contract(
         "TARGET_ARCHIVE_SHA256": "${{ inputs.target_archive_sha256 }}",
         "TARGET_MANIFEST_SHA256": "${{ inputs.target_manifest_sha256 }}",
     }
+    for token_name in ("GH_TOKEN", "GITHUB_TOKEN"):
+        if reconfirm_env.get(token_name) != "${{ github.token }}":
+            raise AssertionError(
+                f"prepare reconfirm GitHub token binding changed: {token_name}"
+            )
     for env_name, expected in expected_target_env.items():
         if reconfirm_env.get(env_name) != expected:
             raise AssertionError(
@@ -440,6 +551,8 @@ def assert_fixed_v2_prepare_and_control_contract(
     for token in (
         "release_coordination_guard.py",
         "verify-plan",
+        'gh api "repos/$GITHUB_REPOSITORY/branches/main"',
+        'if [ "$current_main" != "$GITHUB_SHA" ]',
         '--main-sha "$GITHUB_SHA"',
         '--operation "$RELEASE_MODE"',
         '--target-sha "$TARGET_COMMIT_SHA"',
@@ -448,6 +561,23 @@ def assert_fixed_v2_prepare_and_control_contract(
     ):
         if token not in reconfirm_command:
             raise AssertionError(f"prepare reconfirm is missing {token!r}")
+
+    deploy_release = step_by_name(
+        deploy_steps,
+        "Deploy verified release to fixed Candidate on Tencent",
+    )
+    deploy_env = mapping(deploy_release.get("env"), "Candidate deploy env")
+    if deploy_env.get("CANDIDATE_REPLACE_POLICY") != (
+        "${{ github.event_name == 'workflow_run' && "
+        "'reuse-verified-same-release' || 'replace' }}"
+    ):
+        raise AssertionError("Candidate replace policy trigger binding changed")
+    deploy_command = str(deploy_release.get("run") or "")
+    if (
+        "write_remote_export CANDIDATE_REPLACE_POLICY" not in deploy_command
+        or '"$CANDIDATE_REPLACE_POLICY"' not in deploy_command
+    ):
+        raise AssertionError("Candidate replace policy handoff is missing")
 
     downloads = [
         step
@@ -677,10 +807,16 @@ def assert_fixed_v2_prepare_and_control_contract(
         raise AssertionError(
             "Fixed V2 prepare must preserve the SSH user's archive cache root"
         )
+    if 'CANDIDATE_REPLACE_POLICY="${CANDIDATE_REPLACE_POLICY:-replace}"' not in (
+        remote_release
+    ):
+        raise AssertionError("Candidate replace policy must cross the sudo boundary")
     for token in (
         '[[ "$V2_ARCHIVE_CACHE_ROOT" == /* ]]',
         "require_archive_cache_root",
         '--archive-cache-root "$V2_ARCHIVE_CACHE_ROOT"',
+        '--replace-policy "$CANDIDATE_REPLACE_POLICY"',
+        "reuse-verified-same-release",
     ):
         if token not in fixed_remote:
             raise AssertionError(
@@ -868,41 +1004,6 @@ def assert_independent_current_active_intl_sync() -> None:
         or receipt_with.get("retention-days") != "30"
     ):
         raise AssertionError("intl sync receipt must be immutable for thirty days")
-
-
-def assert_prewarm_contract(production_name: str) -> None:
-    """Preserve the unchanged, independently triggered intl prewarm contract."""
-
-    prewarm = load_workflow(PREWARM_WORKFLOW_PATH)
-    triggers = mapping(prewarm.get("on"), "prewarm on")
-    if set(triggers) != {"workflow_run"}:
-        raise AssertionError("prewarm must only be triggered by workflow_run")
-    workflow_run = mapping(triggers.get("workflow_run"), "prewarm workflow_run")
-    if sequence(workflow_run.get("workflows"), "prewarm workflows") != [
-        production_name
-    ]:
-        raise AssertionError("prewarm workflow_run name must match production workflow")
-    if sequence(workflow_run.get("types"), "prewarm types") != ["completed"]:
-        raise AssertionError("prewarm must wait for completed production release")
-    if sequence(workflow_run.get("branches"), "prewarm branches") != ["main"]:
-        raise AssertionError("prewarm workflow_run must be main-only")
-
-    prewarm_job = job(prewarm, "prewarm")
-    if unwrap_expression(prewarm_job.get("if")) != PREWARM_CONDITION:
-        raise AssertionError("prewarm must require completed success from main repository")
-    prewarm_steps = steps(prewarm_job, "prewarm")
-    names = [str(step.get("name") or "") for step in prewarm_steps]
-    verify_name = "Verify completed immutable release and intl provenance"
-    if names.index(verify_name) > names.index("Prewarm intl edge cache"):
-        raise AssertionError("prewarm must verify release provenance before warming")
-    commands = combined_run(prewarm_job, "prewarm")
-    for forbidden in ("wrangler", "pages deploy", "scp ", "ssh "):
-        if forbidden in commands:
-            raise AssertionError(f"prewarm contains a deployment path: {forbidden!r}")
-    if "actions/download-artifact@v5" not in str(prewarm_job):
-        raise AssertionError("prewarm must consume the completed immutable artifact")
-    if "frontend_release_artifact.py audit-public" not in commands:
-        raise AssertionError("prewarm must verify public provenance")
 
 
 def assert_deterministic_backend_package(workflow: Mapping[str, Any]) -> None:
@@ -1391,12 +1492,12 @@ def main() -> None:
     assert_fixed_v2_prepare_and_control_contract(production)
     assert_deterministic_backend_package(production)
     assert_independent_current_active_intl_sync()
-    assert_prewarm_contract("production-release")
+    assert_candidate_prepare_has_no_followup_workflow()
     assert_required_ci_contract()
     print(
-        "Validated explicit Fixed V2 release actions, one immutable prepare "
-        "artifact, incremental transport, canonical manifest, separate control "
-        "job, and fail-closed CI coverage."
+        "Validated automatic Fixed V2 Candidate prepare, explicit control "
+        "actions, one immutable artifact, incremental transport, canonical "
+        "manifest, and fail-closed CI coverage."
     )
 
 

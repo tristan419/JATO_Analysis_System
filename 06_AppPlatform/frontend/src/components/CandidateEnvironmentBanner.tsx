@@ -3,6 +3,8 @@ import type { ReactElement } from "react";
 import { isCandidatePreviewOrigin } from "../utils/candidateRuntime";
 
 const CANDIDATE_METADATA_URL = "/candidate-preview.json";
+const LATEST_MAIN_URL = "https://api.github.com/repos/tristan419/JATO_Analysis_System/commits/main";
+const LATEST_MAIN_TIMEOUT_MS = 5_000;
 const FULL_SHA_PATTERN = /^[0-9a-f]{40}$/;
 const ARCHIVE_SHA256_PATTERN = /^[0-9a-f]{64}$/;
 const UTC_TIMESTAMP_PATTERN = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,6})?Z$/;
@@ -20,7 +22,15 @@ export interface CandidatePreviewMetadata {
 
 type CandidateBannerState =
   | { status: "loading" }
-  | { status: "verified"; metadata: CandidatePreviewMetadata }
+  | {
+    status: "verified";
+    metadata: CandidatePreviewMetadata;
+    freshness:
+      | { status: "checking" }
+      | { status: "current"; mainSha: string }
+      | { status: "stale"; mainSha: string }
+      | { status: "unknown" };
+  }
   | { status: "unverified" }
   | { status: "inactive" };
 
@@ -70,6 +80,38 @@ async function loadCandidatePreviewMetadata(signal: AbortSignal): Promise<Candid
   }
 }
 
+async function loadLatestMainSha(parentSignal: AbortSignal): Promise<string | null> {
+  const controller = new AbortController();
+  const abort = () => controller.abort();
+  if (parentSignal.aborted) {
+    abort();
+  } else {
+    parentSignal.addEventListener("abort", abort, { once: true });
+  }
+  const timeout = window.setTimeout(abort, LATEST_MAIN_TIMEOUT_MS);
+
+  try {
+    const response = await fetch(LATEST_MAIN_URL, {
+      cache: "no-store",
+      credentials: "omit",
+      headers: { Accept: "application/vnd.github+json" },
+      signal: controller.signal,
+    });
+    if (!response.ok || !response.headers.get("content-type")?.includes("application/json")) {
+      return null;
+    }
+    const payload = await response.json() as { sha?: unknown };
+    return typeof payload.sha === "string" && FULL_SHA_PATTERN.test(payload.sha)
+      ? payload.sha
+      : null;
+  } catch {
+    return null;
+  } finally {
+    window.clearTimeout(timeout);
+    parentSignal.removeEventListener("abort", abort);
+  }
+}
+
 export function CandidateEnvironmentBanner(): ReactElement | null {
   const candidateOrigin = isCandidatePreviewOrigin(globalThis.location);
   const [state, setState] = useState<CandidateBannerState>({ status: "loading" });
@@ -79,13 +121,47 @@ export function CandidateEnvironmentBanner(): ReactElement | null {
     void loadCandidatePreviewMetadata(controller.signal).then((nextMetadata) => {
       if (controller.signal.aborted) return;
       if (nextMetadata) {
-        setState({ status: "verified", metadata: nextMetadata });
+        setState({ status: "verified", metadata: nextMetadata, freshness: { status: "checking" } });
       } else {
         setState({ status: candidateOrigin ? "unverified" : "inactive" });
       }
     });
     return () => controller.abort();
   }, [candidateOrigin]);
+
+  const verifiedMetadata = state.status === "verified" ? state.metadata : null;
+  useEffect(() => {
+    if (!verifiedMetadata) return undefined;
+    let refreshController: AbortController | null = null;
+
+    const refreshLatestMain = async (): Promise<void> => {
+      refreshController?.abort();
+      const controller = new AbortController();
+      refreshController = controller;
+      setState({ status: "verified", metadata: verifiedMetadata, freshness: { status: "checking" } });
+      const mainSha = await loadLatestMainSha(controller.signal);
+      if (controller.signal.aborted) return;
+      if (!mainSha) {
+        setState({ status: "verified", metadata: verifiedMetadata, freshness: { status: "unknown" } });
+      } else if (mainSha === verifiedMetadata.commitSha) {
+        setState({ status: "verified", metadata: verifiedMetadata, freshness: { status: "current", mainSha } });
+      } else {
+        setState({ status: "verified", metadata: verifiedMetadata, freshness: { status: "stale", mainSha } });
+      }
+    };
+    const refreshWhenVisible = (): void => {
+      if (document.visibilityState === "visible") void refreshLatestMain();
+    };
+
+    void refreshLatestMain();
+    window.addEventListener("focus", refreshLatestMain);
+    document.addEventListener("visibilitychange", refreshWhenVisible);
+    return () => {
+      refreshController?.abort();
+      window.removeEventListener("focus", refreshLatestMain);
+      document.removeEventListener("visibilitychange", refreshWhenVisible);
+    };
+  }, [verifiedMetadata]);
 
   const guardCandidateIdentity = candidateOrigin || state.status === "verified";
   useLayoutEffect(() => {
@@ -114,19 +190,36 @@ export function CandidateEnvironmentBanner(): ReactElement | null {
   }
 
   if (state.status !== "verified") return null;
-  const { metadata } = state;
+  const { freshness, metadata } = state;
+  const blocksAcceptance = freshness.status !== "current";
+  const headline = freshness.status === "current"
+    ? "Candidate · 当前 main · 可测试"
+    : freshness.status === "stale"
+      ? "Candidate 落后 main · 禁止据此验收"
+      : freshness.status === "unknown"
+        ? "Candidate 身份已验证，但无法确认最新 main"
+        : "Candidate 身份已验证 · 正在确认最新 main";
 
   return (
-    <aside className="candidate-environment-banner" role="status" aria-live="polite">
-      <strong>Candidate 测试实例 · 待人工验收</strong>
+    <aside
+      className={`candidate-environment-banner${blocksAcceptance ? " candidate-environment-banner--unverified" : ""}`}
+      role={blocksAcceptance ? "alert" : "status"}
+      aria-live={blocksAcceptance ? "assertive" : "polite"}
+    >
+      <strong>{headline}</strong>
       <span>不是正式 www</span>
       <span>
-        commit <code title={metadata.commitSha}>{metadata.commitSha.slice(0, 12)}</code>
+        Candidate commit <code title={metadata.commitSha}>{metadata.commitSha.slice(0, 12)}</code>
       </span>
+      {freshness.status === "stale" && (
+        <span>
+          main commit <code title={freshness.mainSha}>{freshness.mainSha.slice(0, 12)}</code>
+        </span>
+      )}
       <span>
         artifact <code title={metadata.archiveSha256}>{metadata.archiveSha256.slice(0, 12)}</code>
       </span>
-      <span>数据库快照 {new Date(metadata.databaseSnapshotAt).toLocaleString()}</span>
+      <span>Active DB 快照开始于 {new Date(metadata.databaseSnapshotAt).toLocaleString()}</span>
       <span>
         数据库沙箱 <code title={metadata.databaseName}>{metadata.databaseName.slice(-8)}</code>
       </span>
