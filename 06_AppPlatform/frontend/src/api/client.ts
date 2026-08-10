@@ -148,8 +148,13 @@ import type {
 } from "../types/hermes";
 import type {
   BaselineVersion,
+  ColourHexRuleApplyResult,
+  ColourHexRuleLookup,
+  ColourHexRulePreview,
   ColourHexRule,
+  ColourHexRuleSummary,
   ColourSurchargeRule,
+  ColourTierUpdateResult,
   SpecialColourSurchargeRule,
   CountryMaterialFinanceHistoryItem,
   CountryMaterialFinanceImportPreview,
@@ -443,8 +448,10 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
     if (!response.ok) {
       const message = await readErrorMessage(response);
       const error = new Error(`${response.status} ${message}`) as Error & {
+        status: number;
         reviewIssue?: JatoMonthlyUpdateReviewIssue;
       };
+      error.status = response.status;
       const reviewIssue = parseJatoMonthlyUpdateReviewIssue(
         path,
         response.status,
@@ -5169,7 +5176,21 @@ export const api = {
     ),
 
   getOrderGeniusColourHexRules: () =>
-    request<{ items: ColourHexRule[] }>("/order-genius/colour-hex-rules"),
+    request<{ items: ColourHexRule[]; summary: ColourHexRuleSummary }>("/order-genius/colour-hex-rules"),
+
+  previewOrderGeniusColourHexRuleFills: () =>
+    request<ColourHexRulePreview>("/order-genius/colour-hex-rules/preview"),
+
+  applyOrderGeniusColourHexRuleFills: (previewFingerprint: string, materialCodes: string[]) =>
+    request<ColourHexRuleApplyResult>("/order-genius/colour-hex-rules/apply", {
+      method: "POST",
+      body: JSON.stringify({ previewFingerprint, materialCodes }),
+    }),
+
+  lookupOrderGeniusColourHexRule: (brand: string, colourCode: string) => {
+    const qs = new URLSearchParams({ brand, colourCode });
+    return request<ColourHexRuleLookup>(`/order-genius/colour-hex-rules/lookup?${qs.toString()}`);
+  },
 
   setOrderGeniusColourHexRuleStandard: (body: { brand: string; colourCode: string; colourName: string; colourHex: string }) =>
     request<{ brand: string; colourCode: string; colourName: string; normalizedColourName: string; colourHex: string; updated: number; materialCodes: string[] }>(
@@ -5479,7 +5500,10 @@ export const api = {
     ),
 
   updateColourTier: (materialCode: string, colourTier: string) =>
-    request<any>(`/order-genius/material-skus/${encodeURIComponent(materialCode)}/colour-tier`, { method: "PATCH", body: JSON.stringify({ colourTier }) }),
+    request<ColourTierUpdateResult>(
+      `/order-genius/material-skus/${encodeURIComponent(materialCode)}/colour-tier`,
+      { method: "PATCH", body: JSON.stringify({ colourTier }) },
+    ),
 
   deleteMaterialSku: (materialCode: string) =>
     request<any>(`/order-genius/material-skus/${encodeURIComponent(materialCode)}`, { method: "DELETE" }),

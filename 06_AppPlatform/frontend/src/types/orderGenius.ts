@@ -23,6 +23,8 @@ export interface MaterialSkuMatrixRow {
   version: string;
   colour: string;
   colourCode: string;
+  colourTier?: string | null;
+  colourHex?: string | null;
   interiorColorName?: string | null;
   interiorColourCode?: string | null;
   interiorPackage?: string | null;
@@ -117,16 +119,116 @@ export interface ColourHexOption {
   skuCount: number;
 }
 
-export interface ColourHexRule {
-  brand: string;
-  colourCode: string;
+export interface ColourNameOption {
   colourName: string;
   normalizedColourName: string;
   skuCount: number;
+}
+
+export type ColourHexRuleStatus =
+  | "fillable"
+  | "missing"
+  | "name_conflict"
+  | "swatch_conflict"
+  | "complete";
+
+export interface ColourHexRule {
+  brand: string;
+  colourCode: string;
+  colourName: string | null;
+  normalizedColourName: string | null;
+  standardColourName: string | null;
+  skuCount: number;
+  fillableSkuCount: number;
+  placeholderNameSkuCount: number;
+  missingSwatchSkuCount: number;
   sampleMaterialCodes: string[];
-  status: "standard" | "conflict" | "missing";
+  status: ColourHexRuleStatus;
   standardColourHex: string | null;
+  nameOptions: ColourNameOption[];
   hexOptions: ColourHexOption[];
+  hasNameConflict: boolean;
+  hasSwatchConflict: boolean;
+}
+
+export interface ColourHexRuleSummary {
+  totalRules: number;
+  fillable: number;
+  missing: number;
+  nameConflict: number;
+  swatchConflict: number;
+  complete: number;
+  fillableSkus: number;
+}
+
+export interface ColourHexRulePreviewItem {
+  materialCode: string;
+  brand: string;
+  colourCode: string;
+  oldColourName: string | null;
+  newColourName: string;
+  oldColourHex: string | null;
+  newColourHex: string;
+}
+
+export interface ColourHexRulePreview {
+  items: ColourHexRulePreviewItem[];
+  total: number;
+  ruleCount: number;
+  fingerprint: string;
+}
+
+export interface ColourHexRuleApplyResult {
+  updated: number;
+  unchanged: number;
+  conflicts: number;
+  missingRules: number;
+  materialCodes: string[];
+  items: ColourHexRulePreviewItem[];
+  fingerprint: string;
+}
+
+export interface ColourHexRuleLookup {
+  brand: string;
+  colourCode: string;
+  status: ColourHexRuleStatus | "none";
+  colourName: string | null;
+  colourHex: string | null;
+  source: "brand_code_rule" | "none";
+  hasNameConflict: boolean;
+  hasSwatchConflict: boolean;
+}
+
+export type ColourTierRepriceDetailStatus = "updated" | "unchanged" | "skipped";
+export type ColourTierRepriceSkipReason = "manual_fob" | "missing_single_base" | null;
+
+export interface ColourTierRepriceDetail {
+  countryCode: string;
+  oldFinalFobEur: number | null;
+  newFinalFobEur: number | null;
+  colourSurchargeEur: number | null;
+  status: ColourTierRepriceDetailStatus;
+  reason: ColourTierRepriceSkipReason;
+}
+
+export interface ColourTierRepriceReport {
+  materialCode: string;
+  brand: string;
+  colourCode: string;
+  colourTier: string;
+  surchargeEur: number;
+  rows: number;
+  updated: number;
+  unchanged: number;
+  skippedManual: number;
+  skippedNoBase: number;
+  details: ColourTierRepriceDetail[];
+}
+
+export interface ColourTierUpdateResult {
+  materialCode: string;
+  colourTier: string;
+  reprice: ColourTierRepriceReport;
 }
 
 export interface CountryMaterialFinanceRow {

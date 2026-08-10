@@ -6,6 +6,8 @@ No commits or rollbacks — transaction control lives in the service/route layer
 
 from __future__ import annotations
 
+import hashlib
+import json
 import re
 from collections import Counter
 from copy import deepcopy
@@ -124,17 +126,25 @@ def normalize_colour_hex_value(colour_hex: str | None) -> str | None:
     raise ValueError("colourHex must be #RRGGBB or #RRGGBB|#RRGGBB")
 
 
-def _colour_rule_group_key(
+def _colour_rule_key(
     brand: str | None,
     colour_code: str | None,
-    colour_name: str | None,
-) -> tuple[str, str, str] | None:
+) -> tuple[str, str] | None:
     normalized_brand = normalize_brand(str(brand or "")).strip()
     normalized_code = str(colour_code or "").strip().upper()
-    normalized_name = normalize_colour_rule_name(colour_name)
-    if not normalized_brand or not normalized_code or not normalized_name:
+    if not normalized_brand or not normalized_code:
         return None
-    return normalized_brand, normalized_code, normalized_name
+    return normalized_brand, normalized_code
+
+
+def is_placeholder_colour_name(
+    colour_name: str | None,
+    colour_code: str | None,
+) -> bool:
+    """Return whether a colour name is blank or merely repeats its code."""
+    normalized_name = normalize_colour_rule_name(colour_name)
+    normalized_code = normalize_colour_rule_name(colour_code)
+    return not normalized_name or normalized_name == normalized_code
 
 
 # ── MaterialBaselineVersion ────────────────────────────────────────────
@@ -1267,34 +1277,46 @@ def list_all_material_skus_for_admin(
 
 
 def build_colour_hex_rules_from_skus(skus: list[object]) -> list[dict]:
-    """Group SKU swatches by brand + colour code + normalized colour name."""
-    groups: dict[tuple[str, str, str], dict] = {}
+    """Derive reusable colour rules from active SKUs by normalized brand + code."""
+    groups: dict[tuple[str, str], dict] = {}
     for sku in skus:
         colour_name = str(getattr(sku, "exterior_color_name", "") or "").strip()
-        key = _colour_rule_group_key(
+        key = _colour_rule_key(
             getattr(sku, "brand", None),
             getattr(sku, "exterior_color_code", None),
-            colour_name,
         )
         if key is None:
             continue
-        brand, colour_code, normalized_colour_name = key
+        brand, colour_code = key
         group = groups.setdefault(
             key,
             {
                 "brand": brand,
                 "colourCode": colour_code,
-                "colourName": colour_name,
-                "normalizedColourName": normalized_colour_name,
                 "skuCount": 0,
                 "sampleMaterialCodes": [],
+                "placeholderNameSkuCount": 0,
+                "missingSwatchSkuCount": 0,
+                "_skus": [],
+                "_nameCounts": {},
                 "_hexCounts": Counter(),
             },
         )
         group["skuCount"] += 1
+        group["_skus"].append(sku)
         material_code = str(getattr(sku, "material_code", "") or "").strip()
         if material_code and len(group["sampleMaterialCodes"]) < 5:
             group["sampleMaterialCodes"].append(material_code)
+        if is_placeholder_colour_name(colour_name, colour_code):
+            group["placeholderNameSkuCount"] += 1
+        else:
+            normalized_name = normalize_colour_rule_name(colour_name)
+            option = group["_nameCounts"].setdefault(
+                normalized_name,
+                {"skuCount": 0, "displayCounts": Counter()},
+            )
+            option["skuCount"] += 1
+            option["displayCounts"][colour_name] += 1
         try:
             colour_hex = normalize_colour_hex_value(
                 getattr(sku, "colour_hex", None)
@@ -1303,10 +1325,28 @@ def build_colour_hex_rules_from_skus(skus: list[object]) -> list[dict]:
             colour_hex = None
         if colour_hex:
             group["_hexCounts"][colour_hex] += 1
+        else:
+            group["missingSwatchSkuCount"] += 1
 
     rules: list[dict] = []
     for group in groups.values():
+        source_skus = group.pop("_skus")
+        name_counts = group.pop("_nameCounts")
         hex_counts: Counter = group.pop("_hexCounts")
+        name_options = []
+        for normalized_name, option in name_counts.items():
+            display_name = sorted(
+                option["displayCounts"].items(),
+                key=lambda item: (-item[1], item[0].casefold(), item[0]),
+            )[0][0]
+            name_options.append({
+                "colourName": display_name,
+                "normalizedColourName": normalized_name,
+                "skuCount": option["skuCount"],
+            })
+        name_options.sort(
+            key=lambda item: (-item["skuCount"], item["normalizedColourName"])
+        )
         hex_options = [
             {"colourHex": colour_hex, "skuCount": count}
             for colour_hex, count in sorted(
@@ -1314,31 +1354,75 @@ def build_colour_hex_rules_from_skus(skus: list[object]) -> list[dict]:
                 key=lambda item: (-item[1], item[0]),
             )
         ]
-        if not hex_options:
+        has_name_conflict = len(name_options) > 1
+        has_swatch_conflict = len(hex_options) > 1
+        standard_colour_name = name_options[0]["colourName"] if len(name_options) == 1 else None
+        normalized_colour_name = (
+            name_options[0]["normalizedColourName"] if len(name_options) == 1 else None
+        )
+        standard_colour_hex = hex_options[0]["colourHex"] if len(hex_options) == 1 else None
+
+        changes: list[dict] = []
+        if standard_colour_name and standard_colour_hex:
+            for sku in source_skus:
+                old_name = str(
+                    getattr(sku, "exterior_color_name", "") or ""
+                ).strip()
+                if is_placeholder_colour_name(old_name, group["colourCode"]):
+                    new_name = standard_colour_name
+                else:
+                    new_name = old_name
+                try:
+                    old_hex = normalize_colour_hex_value(
+                        getattr(sku, "colour_hex", None)
+                    )
+                except ValueError:
+                    old_hex = None
+                if new_name != old_name or old_hex != standard_colour_hex:
+                    changes.append({
+                        "materialCode": str(
+                            getattr(sku, "material_code", "") or ""
+                        ).strip(),
+                        "brand": group["brand"],
+                        "colourCode": group["colourCode"],
+                        "oldColourName": old_name or None,
+                        "newColourName": new_name,
+                        "oldColourHex": old_hex,
+                        "newColourHex": standard_colour_hex,
+                    })
+        if has_name_conflict:
+            status = "name_conflict"
+        elif has_swatch_conflict:
+            status = "swatch_conflict"
+        elif not standard_colour_name or not standard_colour_hex:
             status = "missing"
-            standard_colour_hex = None
-        elif len(hex_options) == 1:
-            status = "standard"
-            standard_colour_hex = hex_options[0]["colourHex"]
+        elif changes:
+            status = "fillable"
         else:
-            status = "conflict"
-            standard_colour_hex = None
+            status = "complete"
         rules.append(
             {
                 **group,
+                "colourName": standard_colour_name,
+                "normalizedColourName": normalized_colour_name,
                 "status": status,
+                "standardColourName": standard_colour_name,
                 "standardColourHex": standard_colour_hex,
+                "nameOptions": name_options,
                 "hexOptions": hex_options,
+                "hasNameConflict": has_name_conflict,
+                "hasSwatchConflict": has_swatch_conflict,
+                "fillableSkuCount": len(changes),
+                "previewChanges": changes,
             }
         )
-    status_rank = {"conflict": 0, "missing": 1, "standard": 2}
+    status_rank = dict(name_conflict=0, swatch_conflict=1, missing=2, fillable=3, complete=4)
     return sorted(
         rules,
         key=lambda item: (
             status_rank.get(item["status"], 9),
             item["brand"],
             item["colourCode"],
-            item["normalizedColourName"],
         ),
     )
 
@@ -1371,36 +1455,175 @@ def list_colour_hex_rules(session: Session) -> list[dict]:
     return build_colour_hex_rules_from_skus(skus)
 
 
-def find_reusable_colour_hex(
+def summarize_colour_hex_rules(rules: list[dict]) -> dict[str, int]:
+    counts = Counter(rule["status"] for rule in rules)
+    return {
+        "totalRules": len(rules),
+        "fillable": counts["fillable"],
+        "missing": counts["missing"],
+        "nameConflict": sum(1 for rule in rules if rule["hasNameConflict"]),
+        "swatchConflict": sum(1 for rule in rules if rule["hasSwatchConflict"]),
+        "complete": counts["complete"],
+        "fillableSkus": sum(
+            int(rule["fillableSkuCount"])
+            for rule in rules
+            if rule["status"] == "fillable"
+        ),
+    }
+
+
+def preview_colour_rule_fills(session: Session) -> dict:
+    """Return deterministic name/swatch updates, excluding missing/conflict rules."""
+    rules = list_colour_hex_rules(session)
+    items = [
+        change
+        for rule in rules
+        if rule["status"] == "fillable"
+        for change in rule["previewChanges"]
+    ]
+    items.sort(key=lambda item: item["materialCode"])
+    return {
+        "items": items,
+        "total": len(items),
+        "ruleCount": sum(1 for rule in rules if rule["status"] == "fillable"),
+        "fingerprint": _colour_fill_fingerprint(items),
+    }
+
+
+def _colour_fill_fingerprint(items: list[dict]) -> str:
+    payload = json.dumps(items, ensure_ascii=False, separators=(",", ":"), sort_keys=True)
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+
+def lookup_colour_rule(
     session: Session,
     brand: str,
     colour_code: str,
-    colour_name: str,
-) -> str | None:
-    """Return a reusable colour hex only when the rule has no conflict."""
-    key = _colour_rule_group_key(brand, colour_code, colour_name)
+) -> dict:
+    """Resolve one derived brand+code rule without mutating any SKU."""
+    key = _colour_rule_key(brand, colour_code)
     if key is None:
-        return None
-    normalized_brand, normalized_code, normalized_colour_name = key
-    candidates = _list_colour_rule_candidate_skus(
-        session,
-        normalized_brand,
-        normalized_code,
-    )
-    matching = [
-        row
-        for row in candidates
-        if _colour_rule_group_key(
-            row.brand,
-            row.exterior_color_code,
-            row.exterior_color_name,
+        raise ValueError("brand and colourCode are required")
+    normalized_brand, normalized_code = key
+    rules = build_colour_hex_rules_from_skus(
+        _list_colour_rule_candidate_skus(
+            session,
+            normalized_brand,
+            normalized_code,
         )
-        == (normalized_brand, normalized_code, normalized_colour_name)
+    )
+    if not rules:
+        return {
+            "brand": normalized_brand,
+            "colourCode": normalized_code,
+            "status": "missing",
+            "colourName": None,
+            "colourHex": None,
+            "source": "none",
+            "hasNameConflict": False,
+            "hasSwatchConflict": False,
+        }
+    rule = rules[0]
+    reusable = rule["status"] in {"fillable", "complete"}
+    return {
+        "brand": normalized_brand,
+        "colourCode": normalized_code,
+        "status": rule["status"],
+        "colourName": rule["standardColourName"] if reusable else None,
+        "colourHex": rule["standardColourHex"] if reusable else None,
+        "source": "brand_code_rule" if reusable else "none",
+        "hasNameConflict": rule["hasNameConflict"],
+        "hasSwatchConflict": rule["hasSwatchConflict"],
+    }
+
+
+def resolve_colour_attributes(
+    session: Session,
+    brand: str,
+    colour_code: str,
+    *,
+    colour_name: str | None = None,
+    colour_hex: str | None = None,
+    colour_hex_supplied: bool = False,
+) -> dict:
+    """Fill missing/placeholder attributes from one unambiguous brand+code rule."""
+    explicit_name = str(colour_name or "").strip()
+    explicit_hex = normalize_colour_hex_value(colour_hex)
+    rule = lookup_colour_rule(session, brand, colour_code)
+    reusable = rule["source"] == "brand_code_rule"
+    resolved_name = explicit_name
+    if is_placeholder_colour_name(explicit_name, colour_code) and reusable:
+        resolved_name = rule["colourName"]
+    resolved_hex = (
+        explicit_hex
+        if colour_hex_supplied
+        else (explicit_hex or (rule["colourHex"] if reusable else None))
+    )
+    return {
+        **rule,
+        "colourName": resolved_name or None,
+        "colourHex": resolved_hex,
+    }
+
+
+def apply_colour_rule_fills(
+    session: Session,
+    material_codes: list[str],
+    preview_fingerprint: str,
+) -> dict:
+    """Apply only currently deterministic preview changes in the caller transaction."""
+    skus = list(
+        session.execute(
+            select(MaterialSkuMaster)
+            .where(MaterialSkuMaster.is_active == True)
+            .with_for_update()
+        ).scalars().all()
+    )
+    rules = build_colour_hex_rules_from_skus(skus)
+    preview_items = [
+        change
+        for rule in rules
+        if rule["status"] == "fillable"
+        for change in rule["previewChanges"]
     ]
-    rules = build_colour_hex_rules_from_skus(matching)
-    if len(rules) != 1 or rules[0]["status"] != "standard":
-        return None
-    return rules[0]["standardColourHex"]
+    requested = {
+        str(code or "").strip().upper()
+        for code in material_codes
+        if str(code or "").strip()
+    }
+    current = {item["materialCode"].upper() for item in preview_items}
+    current_fingerprint = _colour_fill_fingerprint(sorted(
+        preview_items, key=lambda item: item["materialCode"]
+    ))
+    if requested != current or preview_fingerprint != current_fingerprint:
+        raise ValueError(
+            "Colour rule preview is stale; refresh preview before applying"
+        )
+    candidates = {sku.material_code: sku for sku in skus}
+    now = datetime.now(timezone.utc)
+    applied: list[dict] = []
+    for item in preview_items:
+        sku = candidates.get(item["materialCode"])
+        if sku is None:
+            continue
+        sku.exterior_color_name = item["newColourName"]
+        sku.colour_hex = item["newColourHex"]
+        sku.updated_at_utc = now
+        applied.append(item)
+    applied.sort(key=lambda item: item["materialCode"])
+    return {
+        "updated": len(applied),
+        "unchanged": 0,
+        "conflicts": sum(
+            1
+            for rule in rules
+            if rule["status"] in {"name_conflict", "swatch_conflict"}
+        ),
+        "missingRules": sum(1 for rule in rules if rule["status"] == "missing"),
+        "materialCodes": [item["materialCode"] for item in applied],
+        "items": applied,
+        "fingerprint": current_fingerprint,
+    }
 
 
 def set_standard_colour_hex_for_rule(
@@ -1410,42 +1633,36 @@ def set_standard_colour_hex_for_rule(
     colour_name: str,
     colour_hex: str,
 ) -> dict:
-    """Resolve a swatch conflict by applying one standard to the rule key."""
+    """Resolve a brand+code conflict by applying one chosen name and swatch."""
     standard_colour_hex = normalize_colour_hex_value(colour_hex)
     if standard_colour_hex is None:
         raise ValueError("colourHex is required")
-    key = _colour_rule_group_key(brand, colour_code, colour_name)
+    key = _colour_rule_key(brand, colour_code)
     if key is None:
-        raise ValueError("brand, colourCode and colourName are required")
-    normalized_brand, normalized_code, normalized_colour_name = key
+        raise ValueError("brand and colourCode are required")
+    standard_colour_name = str(colour_name or "").strip()
+    if is_placeholder_colour_name(standard_colour_name, colour_code):
+        raise ValueError("A non-placeholder colourName is required")
+    normalized_brand, normalized_code = key
     candidates = _list_colour_rule_candidate_skus(
         session,
         normalized_brand,
         normalized_code,
     )
-    matching = [
-        row
-        for row in candidates
-        if _colour_rule_group_key(
-            row.brand,
-            row.exterior_color_code,
-            row.exterior_color_name,
-        )
-        == (normalized_brand, normalized_code, normalized_colour_name)
-    ]
-    if not matching:
+    if not candidates:
         raise ValueError("No matching material SKUs for colour rule")
     updated_codes: list[str] = []
     now = datetime.now(timezone.utc)
-    for sku in matching:
+    for sku in candidates:
+        sku.exterior_color_name = standard_colour_name
         sku.colour_hex = standard_colour_hex
         sku.updated_at_utc = now
         updated_codes.append(sku.material_code)
     return {
         "brand": normalized_brand,
         "colourCode": normalized_code,
-        "colourName": str(colour_name or "").strip(),
-        "normalizedColourName": normalized_colour_name,
+        "colourName": standard_colour_name,
+        "normalizedColourName": normalize_colour_rule_name(standard_colour_name),
         "colourHex": standard_colour_hex,
         "updated": len(updated_codes),
         "materialCodes": updated_codes,
@@ -1807,7 +2024,10 @@ def update_sku_colour_tier(
 ) -> bool:
     stmt = (
         update(MaterialSkuMaster)
-        .where(MaterialSkuMaster.material_code == material_code)
+        .where(
+            MaterialSkuMaster.material_code == material_code,
+            MaterialSkuMaster.is_active == True,
+        )
         .values(colour_tier=colour_tier)
     )
     result = session.execute(stmt)
@@ -2281,7 +2501,7 @@ def reprice_sku_colour_surcharge_fobs(
     material_code: str,
     *,
     changed_by: str | None = None,
-) -> dict[str, int | str]:
+) -> dict[str, object]:
     """Recalculate non-manual FOB rows after a SKU colour tier changes."""
     sku = get_sku_by_material_code(session, material_code)
     if sku is None:
@@ -2292,6 +2512,7 @@ def reprice_sku_colour_surcharge_fobs(
             "unchanged": 0,
             "skippedManual": 0,
             "skippedNoBase": 0,
+            "details": [],
         }
 
     colour_tier = clean_text(sku.colour_tier or "single").lower()
@@ -2314,11 +2535,25 @@ def reprice_sku_colour_surcharge_fobs(
     unchanged = 0
     skipped_manual = 0
     skipped_no_base = 0
+    details: list[dict] = []
     now = datetime.now(timezone.utc)
 
     for row in rows:
+        old_final = float(row.final_fob_eur)
         if row.fob_source_mode in COLOUR_SURCHARGE_MANUAL_SOURCE_MODES:
             skipped_manual += 1
+            details.append({
+                "countryCode": row.country_code,
+                "oldFinalFobEur": old_final,
+                "newFinalFobEur": old_final,
+                "colourSurchargeEur": (
+                    float(row.colour_surcharge_eur)
+                    if row.colour_surcharge_eur is not None
+                    else None
+                ),
+                "status": "skipped",
+                "reason": "manual_fob",
+            })
             continue
 
         if colour_tier == "single":
@@ -2331,11 +2566,22 @@ def reprice_sku_colour_surcharge_fobs(
             )
             if base_fob is None:
                 skipped_no_base += 1
+                details.append({
+                    "countryCode": row.country_code,
+                    "oldFinalFobEur": old_final,
+                    "newFinalFobEur": old_final,
+                    "colourSurchargeEur": (
+                        float(row.colour_surcharge_eur)
+                        if row.colour_surcharge_eur is not None
+                        else None
+                    ),
+                    "status": "skipped",
+                    "reason": "missing_single_base",
+                })
                 continue
             new_surcharge = surcharge if surcharge > 0 else None
 
         new_final = round(base_fob + (new_surcharge or 0.0), 2)
-        old_final = float(row.final_fob_eur)
         final_changed = round(old_final, 2) != new_final
         meta_changed = (
             row.base_fob_eur != base_fob
@@ -2343,6 +2589,14 @@ def reprice_sku_colour_surcharge_fobs(
         )
         if not final_changed and not meta_changed:
             unchanged += 1
+            details.append({
+                "countryCode": row.country_code,
+                "oldFinalFobEur": old_final,
+                "newFinalFobEur": new_final,
+                "colourSurchargeEur": new_surcharge,
+                "status": "unchanged",
+                "reason": None,
+            })
             continue
 
         if final_changed:
@@ -2365,14 +2619,27 @@ def reprice_sku_colour_surcharge_fobs(
         row.final_fob_eur = new_final
         row.updated_at_utc = now
         updated += 1
+        details.append({
+            "countryCode": row.country_code,
+            "oldFinalFobEur": old_final,
+            "newFinalFobEur": new_final,
+            "colourSurchargeEur": new_surcharge,
+            "status": "updated",
+            "reason": None,
+        })
 
     return {
         "materialCode": sku.material_code,
+        "brand": normalize_brand(sku.brand),
+        "colourCode": clean_text(sku.exterior_color_code).upper(),
+        "colourTier": colour_tier,
+        "surchargeEur": surcharge,
         "rows": len(rows),
         "updated": updated,
         "unchanged": unchanged,
         "skippedManual": skipped_manual,
         "skippedNoBase": skipped_no_base,
+        "details": details,
     }
 
 

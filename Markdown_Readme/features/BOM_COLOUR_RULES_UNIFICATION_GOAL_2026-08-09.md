@@ -2,11 +2,15 @@
 
 > Goal ID: `bom-colour-rules-unified`
 >
-> 状态：`PLANNED_READY_FOR_CLEAN_IMPLEMENTATION_PR`
+> 状态：`DRAFT_PR_CI_GREEN`
 >
-> 当前契约基线：`main@2dea140f328c1d7077ca0792979b47bcca4dca8e`
+> 实现基线：`main@d40981e87435d58c63c7c4e6c54b07038a83901f`
 >
-> 规划 PR：`#218`（Goal-only；不承载业务实现）
+> 设计契约 PR：`#218`（已合并；Goal-only）
+>
+> 实现分支：`codex/bom-colour-rules-implementation`
+>
+> 实现 PR：`#220`（Draft；未部署 Candidate）
 >
 > 独立范围：只处理颜色名称、swatch、颜色规则报告、Add/Edit Colour 和选品页取色一致性。
 
@@ -14,8 +18,9 @@
 
 - BOM Admin 行编辑 PR `#215` 已合并到 `main@40ae32112927b3e138a88e42cd43ccc611f4ba0f`。
 - Candidate 可写 FIFO 沙箱代码 PR `#219` 已合并到 `main@2dea140f328c1d7077ca0792979b47bcca4dca8e`。
+- 本 Goal 设计契约 PR `#218` 已合并到 `main@d40981e87435d58c63c7c4e6c54b07038a83901f`。
 - `#219` 只完成代码合并；Candidate PostgreSQL role/ACL、8001 drop-in 和首次 `prepare-candidate` 仍需分别授权，尚未在服务器执行。
-- 颜色业务实现必须从包含 `#215+#219+#218` 的届时最新远端 `main` 新建 worktree、branch 和独立 Draft PR。
+- 颜色业务实现已从包含 `#215+#219+#218` 的最新远端 `main@d40981e8` 新建独立 worktree/branch；尚未部署 Candidate。
 
 ## 1. 现有 Goal 达成审计
 
@@ -144,12 +149,13 @@ OMODA + W3 + water blue
    - `name_conflict`：同一品牌+代码存在多个非占位名称；
    - `swatch_conflict`：存在多个有效 swatch；
    - `complete`：所有目标行已具备一致名称与 swatch。
-4. Preview 返回将更新的 material code、旧/新名称、旧/新 swatch；只包含确定项。
-5. Apply 只更新 preview 中确定项，冲突项必须拒绝自动写入。
-6. 创建 SKU 时，若品牌+代码规则唯一，则后端补齐缺失名称和 swatch；不能只依赖前端。
-7. 编辑颜色代码时，保存提交的名称和 swatch，并保留现有物料号重生成逻辑。
-8. Matrix 的 active 与 historical 行都返回 `colourCode`、`colourTier`、`colourHex`。
-9. 所有写操作保持单事务，返回实际更新/跳过/冲突数量和 material codes。
+4. Preview 返回将更新的 material code、旧/新名称、旧/新 swatch；只包含确定项，并返回对完整有序变更集计算的无状态 fingerprint。
+5. Apply 只更新 preview 中确定项，必须回传并匹配 fingerprint；即使 material code 集合不变，只要旧/新值已经变化也以 409 要求重新预览。该 fingerprint 不落库、不引入新状态机。
+6. 冲突项必须拒绝自动写入。
+7. 创建 SKU 时，若品牌+代码规则唯一，则后端补齐缺失名称和 swatch；不能只依赖前端。
+8. 编辑颜色代码时，保存提交的名称和 swatch，并保留现有物料号重生成逻辑；若改成未知或冲突代码，前后端都必须要求人工填写非占位名称，禁止重新写入 `name == code`。
+9. Matrix 的 active 与 historical 行都返回 `colourCode`、`colourTier`、`colourHex`。
+10. 所有写操作保持单事务，返回实际更新/跳过/冲突数量和 material codes。
 
 ### 5.2 前端：交互与布局反馈
 
@@ -228,6 +234,7 @@ X4：Single → Dual
 - 唯一名称/唯一 swatch 可填；
 - 名称冲突与 swatch 冲突分别阻断；
 - Preview 与 Apply material code 集合一致；
+- Preview fingerprint 覆盖 material code 及全部旧/新名称、swatch；同集合但任一值变化时 Apply 返回 409 且零写入；
 - Create/Edit 共用解析并真实保存 name+hex；
 - Matrix active/historical 都携带 colour fields；
 - tier 重算继续保护 manual/no-base。
@@ -280,7 +287,15 @@ Candidate 验收必须在独立可写沙箱上完成：填充、创建、编辑�
 - 前端：现有 page、API types/client、grid、一个共享 swatch helper 及单测；
 - 文档：本 Goal 随进度更新。
 
-预计 9–11 个代码/测试文件，净改动约 350–650 行，不含测试夹具。若实现开始引入新数据表、第二套规则 service 或专项迁移，则视为范围失控，必须停止。
+原预计 9–11 个代码/测试文件，runtime 净改动约 350–650 行，不含测试。实际实现经规模门禁复核后为：
+
+- 9 个 runtime 文件，净增 773 行（后端 350、前端 423）；
+- 4 个测试文件，净增 603 行；
+- 1 个本 Goal 文档持续回写。
+
+实际 runtime 比原估算多 123 行，来源是已确认验收所需的五类 UI、Preview/Apply 无状态 fingerprint、Add/Edit lookup、Matrix 共享 swatch、逐国 tier 报告，以及未知/冲突 Edit 的双端占位数据阻断。复核确认没有新数据表、迁移、第二套规则 service、状态机或控制面，因此停止新增能力后保留当前实现，不为压行数牺牲明确验收项。
+
+若后续实现开始引入新数据表、第二套规则 service 或专项迁移，则仍视为范围失控，必须停止。
 
 > 当前方案正在从修复 bug 演变为专项系统，已停止扩大修改。建议退回最小根因修复。
 
@@ -296,12 +311,15 @@ Candidate 验收必须在独立可写沙箱上完成：填充、创建、编辑�
 - [x] #215 同步最新 main、通过并合并（`main@40ae3211`）。
 - [x] #219 在 post-#215 main 上通过组合测试并合并（`main@2dea140f`）；服务器配置仍未执行。
 - [x] #218 保持 Goal-only，并按 `main@2dea140f` 回写依赖与实施边界。
-- [ ] 合并 #218 设计契约；不触发部署。
-- [ ] 从包含 #215+#219+#218 的最新 main 重建颜色实现 worktree/branch/PR。
-- [ ] 后端规则、Preview/Apply、Create/Edit 与 Matrix 实现。
-- [ ] 前端报告、自动带出和共享 renderer 实现。
-- [ ] focused tests、TypeScript no-emit、Vite build 与 backend tests 通过。
-- [ ] 创建独立 Draft PR；不从 feature branch 生产部署。
+- [x] 合并 #218 设计契约；未触发部署（`main@d40981e8`）。
+- [x] 从包含 #215+#219+#218 的最新 main 建立颜色实现 worktree/branch。
+- [x] 后端规则、Preview/Apply、Create/Edit 与 Matrix 实现。
+- [x] 前端报告、自动带出、共享 renderer 与 tier Review 实现。
+- [x] 颜色 Edit/Preview 定向后端回归 4/4；前端 focused 13/13、全量 unit 386/386、TypeScript、Vite build、router regression 通过。
+- [x] 后端完整 unit 为 1438 passed / 1 skipped / 14 failed；14 项均可在实现基线复现，与本颜色 diff 无关。
+- [x] `test_ordering_bom_admin.py` 为 36 passed / 5 baseline failed；5 项是 main 已有 country columns / template FOB sync 契约缺口，不在本 PR 顺手重建。
+- [x] 创建颜色实现独立 Draft PR `#220`；不从 feature branch 生产部署。
+- [x] #220 最终实现 head 的 GitHub CI 13/13 通过；PR 继续保持 Draft。
 - [ ] Candidate 可写沙箱人工验收。
 - [ ] 用户明确批准后才进入 Active 发布流程。
 
