@@ -8,14 +8,14 @@ goal_control:
     身份直接进入页面；完成代码、CI、腾讯云无流量验收后，再由用户授权把同一已测试构件
     更新到正式 www Active。Candidate 测试数据永不进入 Active；intl 继续使用既有的
     Active 到 intl 独立同步流程，不在 V2 中新增编排。
-  current_phase: candidate_alembic_driver_fix_review
-  current_step: waiting_for_explicit_pr223_ready_and_merge_authorization
-  waiting_on: explicit_pr223_ready_and_merge_authorization
+  current_phase: candidate_alembic_driver_fix_merged
+  current_step: waiting_for_main_54b_required_ci_then_authorized_prepare_retry
+  waiting_on: main_54b32de9_required_ci
   pause_reason: none
   next_action: >-
-    #223 的最小 Alembic psycopg v3 驱动修复已通过本地验证与 required CI，等待用户明确授权
-    转 Ready 并合并。合并后仍需重新执行 prepare-candidate 才能判断 Candidate 是否 ready；
-    禁止自动更新 Active、同步 intl 或修改生产业务数据。
+    #223 已合并为 main@54b32de9。等待该 main SHA 的 required CI 全绿后，执行已经授权的
+    prepare-candidate retry；只有重跑成功才能判断 Candidate ready。禁止自动更新 Active、
+    同步 intl 或修改生产业务数据。
   release_authorization_contract:
     source_path: main_to_candidate_to_explicit_user_approval_to_active
     main_may_advance_without_active: true
@@ -33,7 +33,8 @@ goal_control:
     worktree: /Users/litristan/.codex/worktrees/candidate-first-writable-prepare-evidence/JATO_Analysis_System
     branch: codex/candidate-first-writable-prepare-evidence
     base_main_sha: c238cefbf9adb6a4861e42491c3d22145ee93bfe
-    remote_main_matches_base: true
+    remote_main_matches_base: false_after_pr223_merge
+    current_main_sha: 54b32de9681c34c358cb07dbdd3b6690e8098736
     design_recorded: true
     historical_inventory_evidence_recorded_below: true
     inventory_command_present_in_v2_runtime: false
@@ -70,7 +71,7 @@ goal_control:
     sourceable_runtime_builder_complete: false_removed_helper_only_change
     local_ready_blockers_open: 0_driver_fix_pr223_green
     independent_review_passed: true_hotfix_no_p0_p1_p2
-    server_acceptance_blockers_open: 1_merge_driver_fix_then_prepare_retry
+    server_acceptance_blockers_open: 1_main_54b_ci_then_prepare_retry
     update_active_retry_idempotent: true_local
     rollback_active_retry_idempotent: true_local
     rollback_sigkill_reference_safe: true_local_and_linux_ci_target_ext4_unprobed
@@ -222,9 +223,12 @@ goal_control:
     candidate_prepare_temporary_sandbox_deleted: true
     candidate_prepare_driver_fix_pull_request: https://github.com/tristan419/JATO_Analysis_System/pull/223
     candidate_prepare_driver_fix_head: 6cf5f6a2d16713c5a4bda3e5ed90a6b541580310
-    candidate_prepare_driver_fix_pr_state: draft_clean_mergeable
+    candidate_prepare_driver_fix_pr_state: merged_main_54b32de9
     candidate_prepare_driver_fix_local_validation: 64_tests_and_workflow_validators_passed
     candidate_prepare_driver_fix_required_ci: all_green
+    candidate_prepare_driver_fix_merged: true
+    candidate_prepare_driver_fix_merge_sha: 54b32de9681c34c358cb07dbdd3b6690e8098736
+    candidate_prepare_driver_fix_main_ci: running_31362410375
     candidate_prepare_retry_executed: false
     candidate_ready: false
     candidate_and_preview_stopped_after_bootstrap: true
@@ -253,7 +257,7 @@ goal_control:
     existing_v2_server_prepare_verified: true_previous_readonly_candidate
     existing_v2_server_update_active_verified: false
     existing_v2_server_distinct_rollback_verified: false
-    existing_v2_writable_business_test_ready: false_pr223_merge_and_prepare_retry_pending
+    existing_v2_writable_business_test_ready: false_main_54b_ci_and_prepare_retry_pending
     production_changed: candidate_infrastructure_only_no_active_intl_or_business_data
   may_continue_without_new_authorization:
     - local_read_only_audit
@@ -272,7 +276,7 @@ goal_control:
     - observed_server_state_contradicts_documented_baseline
     - change_would_touch_active_or_intl_database_content
     - change_would_cross_this_pr_scope
-  updated_at: "2026-08-10T14:23:30+08:00"
+  updated_at: "2026-08-10T14:34:34+08:00"
 ---
 
 # Fixed Active / Candidate Release V2
@@ -890,6 +894,18 @@ mark-and-sweep 计划；只要 release store 出现未知条目就拒绝清理�
 - 本步骤没有修改 Active、intl 或 JATO 数据，也没有运行 `update-active` 或 intl 同步。下一步
   必须先获得用户对 #223 转 Ready 并合并的明确授权；合并后再以新的 main 重跑
   `prepare-candidate`。
+- #222 继续保持 docs-only Draft，不转 Ready、不合并。
+
+### 2026-08-10 / Step 3U：#223 已合并，等待 main CI 后重跑 prepare
+
+- [PR #223](https://github.com/tristan419/JATO_Analysis_System/pull/223) 已转 Ready 并合并，merge
+  SHA 为 `54b32de9681c34c358cb07dbdd3b6690e8098736`；远端当前 main 与该 SHA 一致。
+- main CI run
+  [31362410375](https://github.com/tristan419/JATO_Analysis_System/actions/runs/31362410375)
+  当前仍在运行。只有该 main SHA 的 required CI 全绿后，才执行已经授权的
+  `prepare-candidate` retry。
+- 合并本身没有重跑 prepare。Candidate 仍未 ready；Active、intl 与 JATO 数据均未改变，也
+  没有执行 `update-active` 或 intl 同步。
 - #222 继续保持 docs-only Draft，不转 Ready、不合并。
 
 ### 2026-08-06 / Step 0：目标与开发边界
