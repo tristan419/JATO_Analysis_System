@@ -8,14 +8,14 @@ goal_control:
     身份直接进入页面；完成代码、CI、腾讯云无流量验收后，再由用户授权把同一已测试构件
     更新到正式 www Active。Candidate 测试数据永不进入 Active；intl 继续使用既有的
     Active 到 intl 独立同步流程，不在 V2 中新增编排。
-  current_phase: candidate_alembic_driver_fix_merged
-  current_step: waiting_for_main_54b_required_ci_then_authorized_prepare_retry
-  waiting_on: main_54b32de9_required_ci
+  current_phase: candidate_prepare_retry_in_progress
+  current_step: monitoring_prepare_retry_31362670385
+  waiting_on: prepare_retry_31362670385_terminal_outcome
   pause_reason: none
   next_action: >-
-    #223 已合并为 main@54b32de9。等待该 main SHA 的 required CI 全绿后，执行已经授权的
-    prepare-candidate retry；只有重跑成功才能判断 Candidate ready。禁止自动更新 Active、
-    同步 intl 或修改生产业务数据。
+    main@54b32de9 required CI 已成功，已经授权的 prepare-candidate retry run 31362670385
+    正在执行。等待终态及完整 Candidate 验证；只有重跑成功才能判断 Candidate ready。禁止
+    自动更新 Active、同步 intl 或修改生产业务数据。
   release_authorization_contract:
     source_path: main_to_candidate_to_explicit_user_approval_to_active
     main_may_advance_without_active: true
@@ -71,7 +71,7 @@ goal_control:
     sourceable_runtime_builder_complete: false_removed_helper_only_change
     local_ready_blockers_open: 0_driver_fix_pr223_green
     independent_review_passed: true_hotfix_no_p0_p1_p2
-    server_acceptance_blockers_open: 1_main_54b_ci_then_prepare_retry
+    server_acceptance_blockers_open: 1_prepare_retry_31362670385_in_progress
     update_active_retry_idempotent: true_local
     rollback_active_retry_idempotent: true_local
     rollback_sigkill_reference_safe: true_local_and_linux_ci_target_ext4_unprobed
@@ -228,8 +228,10 @@ goal_control:
     candidate_prepare_driver_fix_required_ci: all_green
     candidate_prepare_driver_fix_merged: true
     candidate_prepare_driver_fix_merge_sha: 54b32de9681c34c358cb07dbdd3b6690e8098736
-    candidate_prepare_driver_fix_main_ci: running_31362410375
-    candidate_prepare_retry_executed: false
+    candidate_prepare_driver_fix_main_ci: success_31362410375
+    candidate_prepare_retry_executed: true_in_progress
+    candidate_prepare_retry_run: 31362670385_in_progress_main_54b32de9
+    candidate_prepare_retry_stage: release_coordination_guard
     candidate_ready: false
     candidate_and_preview_stopped_after_bootstrap: true
     candidate_ports_8001_and_18002_listening: false
@@ -257,7 +259,7 @@ goal_control:
     existing_v2_server_prepare_verified: true_previous_readonly_candidate
     existing_v2_server_update_active_verified: false
     existing_v2_server_distinct_rollback_verified: false
-    existing_v2_writable_business_test_ready: false_main_54b_ci_and_prepare_retry_pending
+    existing_v2_writable_business_test_ready: false_prepare_retry_31362670385_in_progress
     production_changed: candidate_infrastructure_only_no_active_intl_or_business_data
   may_continue_without_new_authorization:
     - local_read_only_audit
@@ -276,7 +278,7 @@ goal_control:
     - observed_server_state_contradicts_documented_baseline
     - change_would_touch_active_or_intl_database_content
     - change_would_cross_this_pr_scope
-  updated_at: "2026-08-10T14:34:34+08:00"
+  updated_at: "2026-08-10T14:38:29+08:00"
 ---
 
 # Fixed Active / Candidate Release V2
@@ -907,6 +909,20 @@ mark-and-sweep 计划；只要 release store 出现未知条目就拒绝清理�
 - 合并本身没有重跑 prepare。Candidate 仍未 ready；Active、intl 与 JATO 数据均未改变，也
   没有执行 `update-active` 或 intl 同步。
 - #222 继续保持 docs-only Draft，不转 Ready、不合并。
+
+### 2026-08-10 / Step 3V：main CI 成功并启动 prepare retry
+
+- `main@54b32de9681c34c358cb07dbdd3b6690e8098736` 的 CI run
+  [31362410375](https://github.com/tristan419/JATO_Analysis_System/actions/runs/31362410375)
+  已完成且结论为 `success`。
+- 经既有授权，production-release run
+  [31362670385](https://github.com/tristan419/JATO_Analysis_System/actions/runs/31362670385)
+  已在同一 main SHA 上 dispatch；当前为 `in_progress`，阶段为
+  `release_coordination_guard`。
+- 运行进入终态并完成 Candidate SHA、沙箱、权限、后台任务与页面健康验证前，Candidate 仍为
+  `ready=false`。当前未执行 `update-active` 或 intl 同步，Active、intl 与 JATO 数据边界保持
+  不变。
+- #222 继续保持 docs-only Draft，不转 Ready、不合并；run 最终结果将在终态后另行回写。
 
 ### 2026-08-06 / Step 0：目标与开发边界
 
