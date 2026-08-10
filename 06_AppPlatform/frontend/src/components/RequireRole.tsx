@@ -1,11 +1,12 @@
 import { Navigate } from "react-router-dom";
 import { useAuth } from "../contexts/AuthContext";
 import type { ReactNode } from "react";
+import { isCandidatePreviewOrigin } from "../utils/candidateRuntime";
 import { isKnownAppRoute, isRouteAllowedForRole } from "../utils/pageNavigation";
 import { LoadingSurface } from "./LoadingSurface";
 
 export function RequireRole({ children }: { children: ReactNode }) {
-  const { user, profileLoaded } = useAuth();
+  const { user, token, profileLoaded } = useAuth();
 
   if (!profileLoaded) {
     return (
@@ -17,6 +18,16 @@ export function RequireRole({ children }: { children: ReactNode }) {
           kicker="Auth"
         />
       </div>
+    );
+  }
+
+  if (isCandidatePreviewOrigin(window.location) && !token) {
+    const redirect = `${window.location.pathname}${window.location.search}`;
+    return (
+      <Navigate
+        to={`/login?redirect=${encodeURIComponent(redirect)}`}
+        replace
+      />
     );
   }
 

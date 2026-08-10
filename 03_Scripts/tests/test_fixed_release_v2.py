@@ -1019,7 +1019,10 @@ def test_successive_prepares_replace_fifo_sandbox_and_publish_snapshot_time(
         )
     )
     assert candidate_values["APP_CANDIDATE_SANDBOX_DATABASE"] == sandboxes.provisioned[1]
-    assert candidate_values["APP_AUTH_ENABLED"] == "false"
+    assert candidate_values["APP_AUTH_ENABLED"] == "true"
+    assert candidate_values["APP_AUTH_REQUIRED"] == "true"
+    assert candidate_values["APP_AUTH_TOKEN"] == ""
+    assert candidate_values["APP_TOKEN_ROLE_MAP"] == ""
     assert candidate_values["APP_RUNTIME_READ_ONLY"] == "false"
     assert len(candidate_values["APP_JWT_SECRET"]) == 64
     assert preview["databaseSnapshotAt"] == candidate_values["APP_CANDIDATE_SNAPSHOT_AT"]

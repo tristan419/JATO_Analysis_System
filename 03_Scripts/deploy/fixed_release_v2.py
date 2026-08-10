@@ -382,7 +382,8 @@ def _render_candidate_database_environment(
     values = (
         ("APP_DATABASE_ENABLED", "true"), ("APP_DATABASE_URL", url),
         ("DATABASE_URL", url), ("APP_CANDIDATE_SANDBOX_DATABASE", database_name),
-        ("APP_CANDIDATE_SNAPSHOT_AT", snapshot_at), ("APP_AUTH_ENABLED", "false"),
+        ("APP_CANDIDATE_SNAPSHOT_AT", snapshot_at), ("APP_AUTH_ENABLED", "true"),
+        ("APP_AUTH_REQUIRED", "true"),
         ("APP_AUTH_TOKEN", ""), ("APP_TOKEN_ROLE_MAP", ""),
         ("APP_JWT_SECRET", secrets.token_hex(32)), ("APP_RUNTIME_READ_ONLY", "false"),
     )

@@ -208,6 +208,7 @@ jobs:
             tests/unit/test_db_session.py \
             tests/unit/test_jato_monthly_update_enabled_gate.py \
             tests/unit/test_readiness_service.py \
+            tests/unit/test_security.py \
             -q 2>&1 | tee "$pytest_log" || status=$?
           if [ "$status" -eq 124 ] && grep -Eq '^[0-9]+ passed(, [0-9]+ warnings?)? in ' "$pytest_log"; then
             echo "::warning::pytest reported success but did not exit cleanly; cleaning up residual Python child processes."

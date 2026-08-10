@@ -388,6 +388,7 @@ VERSION_COMPARISON_PERSISTENT_CACHE_DIR = Path(
 ).resolve()
 
 AUTH_ENABLED = _parse_bool_env("APP_AUTH_ENABLED", False)
+AUTH_REQUIRED = _parse_bool_env("APP_AUTH_REQUIRED", False)
 AUTH_TOKEN = os.getenv("APP_AUTH_TOKEN", "change-me")
 
 # Token → role mapping: "token1:admin,token2:editor,token3:viewer"

@@ -4,30 +4,30 @@ goal_control:
   status: active
   objective: >-
     将复杂蓝绿/事故恢复体系收敛为固定 Active/Candidate 的四操作发布 V2，
-    Candidate 每次 prepare 使用生产一致性快照生成独立可写数据库沙箱并以应用内 admin
-    身份直接进入页面；新 main 的 CI 成功后自动复用现有 prepare 路径生成新 Candidate，
+    Candidate 每次 prepare 使用生产一致性快照生成独立可写数据库沙箱并复用现有 JATO
+    应用登录；新 main 的 CI 成功后自动复用现有 prepare 路径生成新 Candidate，
     页面显示候选代码、当前 main 和数据快照时间。完成腾讯云人工验收后，再由用户授权
     把同一已测试构件更新到正式 www Active。Candidate 测试数据永不进入 Active；
     intl 继续使用既有的 Active 到 intl 独立同步流程，不在 V2 中新增编排。
-  current_phase: auto_prepare_candidate_freshness
-  current_step: draft_pull_request_ci_green
-  waiting_on: explicit_ready_and_merge_authorization_for_pull_request_224
+  current_phase: candidate_application_login
+  current_step: require_verified_candidate_login_before_removing_basic_auth
+  waiting_on: local_validation_draft_pr_and_explicit_pre_merge_discard_authorization
   pause_reason: none
   next_action: >-
-    只复用现有 production-release prepare-candidate 实现“main CI 成功后准备最新
-    Candidate”，并在现有 Candidate banner 增加当前 main 新鲜度判定；删除会在
-    Candidate prepare 后误审 intl 的过时 intl-edge-prewarm 自动 workflow，不改独立
-    sync-www-active-to-intl。candidate-preview GitHub environment 与固定 SSH host key 已配置，
-    本地代码、独立审查和测试已经完成，Draft PR #224 的 required CI 已全部通过。
-    下一步必须等待用户单独授权 Ready/合并；合并后监听 main CI 与首次真实自动 prepare。
-    禁止自动更新 Active 或同步 intl。
+    删除 Candidate 前端自动 candidate/admin 旁路，将 Candidate runtime 改为
+    APP_AUTH_ENABLED=true、APP_AUTH_REQUIRED=true，并从公网 Nginx 模板移除浏览器
+    Basic Auth。先在干净 PR 中验证现有 JATO 登录、Candidate 独立 JWT 与沙箱账号；PR
+    合并前需单独授权用当前 main 废弃旧免登录 Candidate，避免新 admission 在替换前拒绝旧
+    runtime。合并并自动 prepare 成功后，才原子更新服务器 Candidate vhost。禁止在新
+    Candidate 应用认证生效前移除线上 Basic Auth；禁止自动更新 Active 或同步 intl。
   release_authorization_contract:
     source_path: main_to_candidate_to_explicit_user_approval_to_active
     main_may_advance_without_active: true
     candidate_may_be_replaced_repeatedly: true
-    successful_main_ci_may_prepare_candidate_automatically: implemented_local_not_merged
+    successful_main_ci_may_prepare_candidate_automatically: true_verified_run_31372523132
     candidate_may_update_active_automatically: false
     candidate_may_update_intl: false
+    candidate_requires_application_login: true
     active_requires_explicit_user_approval: true
     active_uses_exact_tested_artifact: true
     active_update_triggers_intl_automatically: false
@@ -36,9 +36,9 @@ goal_control:
     intl_failure_preserves_www_active: true
   progress:
     worktree_ready: true
-    worktree: /Users/litristan/.codex/worktrees/auto-prepare-candidate-freshness/JATO_Analysis_System
-    branch: codex/auto-prepare-candidate-freshness
-    base_main_sha: 54b32de9681c34c358cb07dbdd3b6690e8098736
+    worktree: /Users/litristan/.codex/worktrees/candidate-app-login/JATO_Analysis_System
+    branch: codex/candidate-app-login
+    base_main_sha: f29cf5096b528e2c0350047f2bc462cc8bfc8696
     remote_main_matches_base: true
     design_recorded: true
     historical_inventory_evidence_recorded_below: true
@@ -49,8 +49,8 @@ goal_control:
     store_manifest_primitives_complete: true
     store_manifest_unit_tests_passed: 8
     manifest_cli_unit_tests_passed: 2
-    local_v2_tests_passed: 135_candidate_controller_and_admission
-    current_fixed_release_ci_equivalent_tests: 1296_passed_15_skipped_current_branch
+    local_v2_tests_passed: 163_candidate_auth_deploy_focused_2_skipped
+    current_fixed_release_ci_equivalent_tests: 1299_passed_15_skipped_current_branch
     controller_store_admission_tests_passed: 102
     release_seal_tests_passed: 21
     monthly_role_tests_passed: 18
@@ -74,9 +74,9 @@ goal_control:
     manifest_build_metadata_verification_complete: true_local
     v2_source_critical_closure_complete: true_local_13_files
     sourceable_runtime_builder_complete: false_removed_helper_only_change
-    local_ready_blockers_open: 0
-    independent_review_passed: true_hotfix_no_p0_p1_p2
-    server_acceptance_blockers_open: 0_first_writable_prepare_verified
+    local_ready_blockers_open: 0_after_strict_auth_fix
+    independent_review_passed: true_strict_auth_final_no_p0_p1_or_blocking_p2
+    server_acceptance_blockers_open: 1_old_auth_disabled_candidate_requires_pre_merge_discard
     update_active_retry_idempotent: true_local
     rollback_active_retry_idempotent: true_local
     rollback_sigkill_reference_safe: true_local_and_linux_ci_target_ext4_unprobed
@@ -114,14 +114,15 @@ goal_control:
     candidate_external_side_effect_sandbox: false_documented_operator_limit
     runtime_python_lines: 4882_after_final_p2_closure
     workflow_unit_tests_passed: 232_passed_1_skipped_current_auto_chain
-    deployment_tests_passed: 1296
+    deployment_tests_passed: 1299
     deployment_tests_skipped: 15
-    backend_tests_passed: 103
-    frontend_tests_passed: 391_current_auto_prepare_branch
+    backend_tests_passed: 73_required_ci_contract_including_9_security
+    backend_full_unit_result: 1448_passed_1_skipped_14_preexisting_baseline_failures
+    frontend_tests_passed: 397_full_and_9_candidate_auth_focused
     frontend_build_and_router_checks_passed: true
     full_local_ci_after_final_runtime_code: true_scripts_and_frontend
     post_ci_changes_documentation_only: false_current_branch_includes_runtime_workflow_and_banner
-    ci_validation_complete: true_pull_request_224_head_6994eade
+    ci_validation_complete: false_current_candidate_login_pr_not_opened
     candidate_sandbox_initial_ci_failure: fullstack_frontend_vite_auth_token_test_environment_leak
     candidate_sandbox_ci_fix_scope: one_test_file_plus_goal_no_production_code
     candidate_sandbox_ci_fix_local_validation: 373_tests_types_build_router_passed_with_github_env
@@ -137,14 +138,15 @@ goal_control:
     previous_pull_request_214_merged: true_main_30f3e2e4
     current_fix_commit: 20f082f4dbb64a4e56b4b67f1a93590b445603ec
     current_fix_github_checks: all_required_green_on_pull_request_224_head_6994eade
-    pull_request_opened: true
-    pull_request_number: 224
-    pull_request_url: https://github.com/tristan419/JATO_Analysis_System/pull/224
-    pull_request_is_draft: true
+    pull_request_opened: false
+    pull_request_number: null
+    pull_request_url: null
+    pull_request_is_draft: false
+    previous_pull_request_224_merged: true_main_f29cf509
     previous_pull_request_217_merged: true_main_619466e8
     candidate_public_gateway_commit: 991a44f8499a1210317aafb5da1f3183b7ee0769
     candidate_fixed_public_link_required: true
-    candidate_public_gateway_design: dnspod_to_shanghai_nginx_basic_auth_to_127_0_0_1_18002
+    candidate_public_gateway_design: dnspod_to_shanghai_nginx_tls_to_127_0_0_1_18002_then_jato_login
     candidate_public_gateway_implemented: true_local
     candidate_public_gateway_contract_tests: 22_passed_2_skipped
     candidate_public_gateway_style_check: passed
@@ -153,8 +155,8 @@ goal_control:
     candidate_public_gateway_github_checks: 13_of_13_green
     candidate_dns_configured: true
     candidate_tls_configured: true
-    candidate_basic_auth_configured: true
-    candidate_current_sha_verified: b21695163df510e4dd8e91b4701446d917f7d8b8
+    candidate_basic_auth_configured: true_on_server_pending_safe_removal_after_application_auth_deploy
+    candidate_current_sha_verified: f29cf5096b528e2c0350047f2bc462cc8bfc8696
     candidate_public_link_may_fallback_to_active: false
     active_changed_by_this_step: false
     intl_changed_by_this_step: false
@@ -167,7 +169,14 @@ goal_control:
     candidate_writable_sandbox_implementation: true_local_verified
     candidate_writable_sandbox_fifo_capacity: 1
     candidate_writable_sandbox_transition_max_databases: 2
-    candidate_application_no_login_admin: true_local_committed
+    candidate_application_no_login_admin: false_replaced_by_existing_jato_login_local
+    candidate_application_login_required: true_local
+    candidate_application_strict_backend_auth_required: true_local
+    candidate_application_static_tokens_disabled: true_local
+    candidate_application_oauth_available: false_username_password_only
+    candidate_application_login_uses_sandbox_users: true_local
+    candidate_application_login_uses_independent_jwt: true_local
+    candidate_application_login_server_enabled: false_pending_pr_merge_auto_prepare_and_vhost_reconciliation
     candidate_sandbox_may_write_active_database: false
     candidate_sandbox_may_update_active_or_intl: false
     bom_colour_library_followup_in_this_pr: false_out_of_scope
@@ -232,14 +241,14 @@ goal_control:
     automatic_prepare_manual_refresh_preserved: true
     automatic_prepare_independent_review: passed_after_p1_closure_no_open_p0_p1
     automatic_prepare_local_validation: 232_focused_and_1296_all_scripts_15_skipped_two_validators_bash_n_pycompile
-    automatic_prepare_pull_request: 224_draft
+    automatic_prepare_pull_request: 224_merged_main_f29cf509
     automatic_prepare_implementation_commit: 20f082f4dbb64a4e56b4b67f1a93590b445603ec
     automatic_prepare_pull_request_checks: all_required_green_on_6994eade_before_final_goal_evidence_commit
     candidate_preview_permission_boundary: logical_code_pr_environment_not_restricted_ssh_principal
     candidate_preview_banner_refresh: mount_focus_and_visible_no_polling
     candidate_preview_environment_configured: true_main_only_no_reviewer_no_wait
     candidate_preview_ssh_known_hosts_configured: true_verified_metadata_for_150_158_141_14
-    candidate_preview_environment_deployment_triggered: false
+    candidate_preview_environment_deployment_triggered: true_success_deployment_5829166016
     obsolete_intl_edge_prewarm_failure_run: 31363402536
     obsolete_intl_edge_prewarm_removal: true_local_file_removed_sync_unchanged
     existing_sync_www_active_to_intl_changed: false
@@ -249,11 +258,21 @@ goal_control:
     existing_v2_goal_assessment: partially_achieved_candidate_ready_active_cutover_unverified
     existing_v2_core_code_complete: true
     existing_v2_fixed_candidate_link_complete: true
-    existing_v2_server_prepare_verified: true_writable_candidate_run_31362670385
+    existing_v2_server_prepare_verified: true_automatic_run_31372523132
     existing_v2_server_update_active_verified: false
     existing_v2_server_distinct_rollback_verified: false
-    existing_v2_writable_business_test_ready: true_candidate_main_54b32de9
+    existing_v2_writable_business_test_ready: true_candidate_main_f29cf509
     production_changed: candidate_only_active_and_intl_unchanged
+    automatic_prepare_merge_sha: f29cf5096b528e2c0350047f2bc462cc8bfc8696
+    automatic_prepare_main_ci_run: 31372326579_success
+    automatic_prepare_workflow_run: 31372523132_workflow_run_success
+    automatic_prepare_candidate_deployment: 5829166016_success
+    automatic_prepare_diagnostics_artifact: 9056998956
+    automatic_prepare_previous_sandbox_removed: 1
+    automatic_prepare_orphan_sandboxes_removed: 0
+    automatic_prepare_traffic_changed: false
+    automatic_prepare_jato_data_changed: false
+    automatic_prepare_intl_sync_runs: 0
   may_continue_without_new_authorization:
     - local_read_only_audit
     - documentation_updates
@@ -271,20 +290,19 @@ goal_control:
     - observed_server_state_contradicts_documented_baseline
     - change_would_touch_active_or_intl_database_content
     - change_would_cross_this_pr_scope
-  updated_at: "2026-08-10T16:38:30+08:00"
+  updated_at: "2026-08-10T22:48:00+08:00"
 ---
 
 # Fixed Active / Candidate Release V2
 
 > 状态：实施中
 > 开始日期：2026-08-06
-> worktree：`/Users/litristan/.codex/worktrees/auto-prepare-candidate-freshness/JATO_Analysis_System`
-> branch：`codex/auto-prepare-candidate-freshness`
-> 基线：`main@54b32de9681c34c358cb07dbdd3b6690e8098736`
-> 当前 PR scope：只把已有 `prepare-candidate` 接到成功的 main CI 后，并让已有
-> Candidate banner 判断当前 Candidate 是否等于最新 main；仅在既有 controller 的
-> `prepare-candidate` 增加自动同构件幂等复用策略，不增加第五操作，也不改 Active、intl、
-> 数据库业务数据、BOM 业务或 JATO 数据
+> worktree：`/Users/litristan/.codex/worktrees/candidate-app-login/JATO_Analysis_System`
+> branch：`codex/candidate-app-login`
+> 基线：`main@f29cf5096b528e2c0350047f2bc462cc8bfc8696`
+> 当前 PR scope：Candidate 复用现有 JATO 用户名/密码登录，后端严格拒绝未认证业务请求，
+> 禁止 Candidate 接收 Active OAuth callback，并在安全迁移完成后移除 Candidate vhost 的
+> 浏览器 Basic Auth；不改 Active、intl、生产数据库业务数据或 JATO 数据。
 
 ## 0. Goal Control 使用规则
 
@@ -318,24 +336,24 @@ goal_control:
   禁用月更 worker、独立可写沙箱和 Active CONNECT 拒绝均已经腾讯云验收。
 - 该 prepare 仅更新 Candidate；Active、intl 和 JATO 数据均未变。Candidate 可在固定
   `candidate.ojeur.cloud` 中进行可写业务测试，写入不进入 Active。
+- [PR #224](https://github.com/tristan419/JATO_Analysis_System/pull/224) 已合并为
+  `main@f29cf5096b528e2c0350047f2bc462cc8bfc8696`；同 SHA 的 main CI
+  `31372326579` 成功后，`production-release` `31372523132` 已通过 `workflow_run`
+  自动完成 Candidate-only prepare。部署 `5829166016` 成功，FIFO 删除旧沙箱 `1`、
+  orphan 为 `0`，Active、正式流量、intl 与 JATO 数据均未改变。
 
 尚未达成：
 
-- `main` 目前只自动触发 CI，尚不会自动生成 Candidate；此次成功 prepare 仍是在用户
-  授权后人工 dispatch。
-- Candidate banner 已验证自身 commit/artifact/沙箱/快照身份，但尚未与 GitHub
-  当前 `main` 比较；因此 main 后续前进时，旧 Candidate 不会主动显示“已过期”。
-- 专用 `candidate-preview` GitHub environment 已创建，仅允许 main，无 reviewer/wait；
-  `SSH_KNOWN_HOSTS` 已从本机信任的 `150.158.141.14` known_hosts 写入并验证元数据。
-  但这次配置没有触发部署，main CI 后真实自动 prepare 仍待代码合并后验收。
-- 现有过时 `intl-edge-prewarm` 在成功 Candidate prepare 后误对 intl 执行自动预热/审计，
-  [run 31363402536](https://github.com/tristan419/JATO_Analysis_System/actions/runs/31363402536) 因此失败。
-  本 PR 将删除该过时自动 workflow；既有独立 `sync-www-active-to-intl` 保持不变。
+- 当前线上 Candidate 仍是旧的“应用认证关闭 + Nginx Basic Auth”实例。严格 JATO
+  应用登录已在本分支实现并通过本地验证，但尚未完成“先 discard 旧 Candidate、合并、
+  自动 prepare 新 Candidate、loopback 验证、再移除 Basic Auth”的服务器迁移。
+- 用户尚未在严格应用登录的新 Candidate 上完成页面和业务人工验收。
 - `update-active` 尚未在当前 V2 服务器链路完成一次用户批准后的正式切换验收。
 - 尚未形成 distinct `active.previous`，因此真实服务器 `rollback-active` 也未完成端到端验收。
 
-当前 Goal 的 Candidate 可写沙箱目标已达成，但自动 prepare、main 新鲜度 banner、
-`update-active` 和 distinct rollback 仍未全部闭环，所以整体仍为 `partially_achieved`。
+当前 Goal 的 Candidate 可写沙箱、自动 prepare 和 main 新鲜度 banner 已达成；严格应用
+登录的服务器迁移、人工业务验收、`update-active` 和 distinct rollback 仍未全部闭环，
+所以整体仍为 `partially_achieved`。
 
 ## 1. 目标
 
@@ -363,8 +381,8 @@ prepare-candidate -> 固定 Candidate（8001 / 国内人工预览）
 - Candidate 测试通过后，Active 直接引用 Candidate 已验证的同一个不可变 release；不重新构建、不重新上传、不重新组装。
 - Candidate 每次 prepare 从 Active 数据库取得一致性快照，恢复为独立可写沙箱；运行期间
   不连接、也没有权限连接 Active 数据库。Candidate 测试写入只保留在该沙箱中。
-- Candidate 必须禁用月更 worker、scheduler 等单实例后台任务；应用认证只在 Candidate
-  runtime 禁用，使固定测试入口直接进入 admin UI，Active 认证合同不变。
+- Candidate 必须禁用月更 worker、scheduler 等单实例后台任务；Candidate 复用沙箱快照
+  中的 JATO 用户账号，通过独立 JWT 严格认证。未登录业务 API 返回 401；Active 认证合同不变。
 
 ## 2. 用户可见的四个操作
 
@@ -493,9 +511,10 @@ Candidate 的价值是让新代码面对服务器上的真实数据量、真实 
 - Candidate 应用角色只在新沙箱拥有普通业务写权限，并保持 NOSUPERUSER/NOCREATEDB/
   NOCREATEROLE/NOREPLICATION/NOBYPASSRLS。角色必须对 Active 数据库无 CONNECT；不能仅依赖
   `PUBLIC CONNECT` 的默认状态，prepare 必须显式验证拒绝连接。
-- Candidate env 使用独立强随机 JWT secret，应用级 `APP_AUTH_ENABLED=false`，使固定测试
-  入口无需第二次应用登录并直接获得 admin UI。该设置只能存在于 8001 runtime，不能固化
-  进 Active artifact 或 Active env；固定 HTTPS 网关仍保留独立访问控制。
+- Candidate env 使用独立强随机 JWT secret，并设置 `APP_AUTH_ENABLED=true`、
+  `APP_AUTH_REQUIRED=true`；静态 `APP_AUTH_TOKEN`/`APP_TOKEN_ROLE_MAP` 必须显式为空。登录页和
+  `/auth/login` 复用现有应用逻辑，账号、密码哈希和角色来自本次 Active 数据库快照；
+  Candidate 不创建固定测试账号，也不接受 Active JWT。固定 HTTPS 网关不再叠加 Basic Auth。
 - systemd 继续使用 `ProtectSystem=strict`、无 Linux capabilities、PrivateTmp；
   `/opt/jato/shared` 及 legacy raw/processed 目录保持只读，仅 Candidate cache 和 Candidate
   数据库可写。
@@ -584,8 +603,9 @@ PR 合并 main -> main CI success -> 确认该 SHA 仍是当前 main
 
 ### 4.4 Candidate 正常仍不等于 Active 必然成功
 
-Candidate 使用快照沙箱、3G/4G，且免应用登录、禁用单实例任务；Active 使用实时生产库、
-6G/8G、正式认证、后台任务和真实流量。同一构件能消除重建差异，不能消除这些运行差异。
+Candidate 使用快照沙箱、3G/4G、快照账号和独立 JWT，且禁用单实例任务；Active 使用实时
+生产库、生产登录会话、6G/8G、后台任务和真实流量。同一构件能消除重建差异，不能消除这些
+运行差异。
 Candidate 可在沙箱执行 migration，但 update 不修改生产库；生产库 `current != heads` 时必须在改指针前
 返回 `migration-required`。
 
@@ -694,8 +714,11 @@ mark-and-sweep 计划；只要 release store 出现未知条目就拒绝清理�
   `orphaned_candidate_sandboxes_removed=0`。
 - Active 继续承担 www 公网，保持 6G/8G 合同；本次未改 Active、intl、生产业务数据
   或 JATO 数据。Candidate 只在新沙箱中写入，测试结果不会被 `update-active` 复制。
-- GitHub `candidate-preview` environment 已设置为 main-only，无 reviewer/wait；固定主机指纹
-  已写入。但自动 launcher 尚未合并，所以该 environment 目前没有发起任何部署。
+- #224 合并后的 `main@f29cf509…` 已由 CI `31372326579` 触发自动 Candidate-only
+  `production-release` `31372523132`；`candidate-preview` deployment `5829166016`
+  成功。报告验证 Candidate 3G/4G、preview 256M/512M、月更禁用、旧沙箱删除 `1`、
+  orphan `0`，并明确 `trafficChanged=false`、`jatoDataChanged=false`。本 SHA 没有 intl
+  同步；过时的 `intl-edge-prewarm` 已删除。
 
 ## 8. 迁移策略
 
@@ -743,7 +766,7 @@ mark-and-sweep 计划；只要 release store 出现未知条目就拒绝清理�
 | Active 快照或新沙箱恢复失败 | 删除新沙箱，保留旧 Candidate | 否 |
 | Candidate 仍能连接 Active 数据库 | prepare 在启动前拒绝 | 否 |
 | Candidate 沙箱写权限不足 | prepare 在启动前拒绝 | 否 |
-| Candidate env 缺少独立 JWT / 免应用登录配置 | prepare 在启动前拒绝 | 否 |
+| Candidate env 缺少独立 JWT / 严格应用登录未开启 | prepare 在启动前拒绝 | 否 |
 | 新 Candidate 完整验证成功 | 删除旧沙箱，稳态只保留当前沙箱 | 否 |
 | Candidate 启动失败 | 恢复旧 Candidate 或停止 8001 | 否 |
 | Candidate 健康但 SHA 不符 | prepare 失败并清理 | 否 |
@@ -763,6 +786,32 @@ mark-and-sweep 计划；只要 release store 出现未知条目就拒绝清理�
 本 V2 的固定角色目标冲突。本计划接受短重启窗口，不再伪装成零停机蓝绿。
 
 ## 10. 实施日志
+
+### 2026-08-10 / Step 3T：Candidate 复用现有 JATO 登录，撤销 Basic Auth 与自动 admin
+
+- 用户实际使用固定入口时，浏览器原生 Basic Auth 弹窗在内置浏览器中无法可靠输入；旧方案
+  同时叠加“前端自动 admin”和“应用认证关闭”，形成重复且不可控的认证路径。
+- 根因修复只复用现有认证链：Candidate 未登录时进入 `/login`；`/auth/login` 从本次沙箱
+  快照的 `users` 表校验密码哈希并签发 Candidate 独立 JWT；失效 Candidate token 会立即清除
+  并返回登录页。`APP_AUTH_REQUIRED=true` 还会在后端统一拒绝未认证业务 API，不能只依赖
+  前端跳转；Active 的匿名 viewer 和延迟 profile refresh 行为不改。
+- `prepare-candidate` 生成 `APP_AUTH_ENABLED=true`、`APP_AUTH_REQUIRED=true`，并清空静态
+  token；admission 反向拒绝认证关闭、未强制登录或仍启用静态 token 的 Candidate；
+  Nginx 公网模板删除 `auth_basic`，仍只反代 18002、清空 `Authorization` 且无 Active fallback。
+- 当前旧 Candidate 仍是 `APP_AUTH_ENABLED=false`，而新 prepare 会先按新 admission 验证旧
+  runtime，因此不能直接合并等待自动替换。安全顺序是：PR 全绿后先单独授权用当前 main
+  执行 `discard-candidate`，证明 8000/www 不变；再合并并让自动 prepare 创建严格认证的新
+  Candidate；先在 loopback 验证无/坏 token 401、沙箱 admin 登录和独立 JWT，再 `nginx -t`
+  后原子替换 Candidate vhost。不得先拆 Basic Auth，以免旧免登录 Candidate 暴露 admin。
+- 本步骤不创建用户、不修改 Active、intl 或生产数据库；Candidate 登录后的业务写入仍只进入
+  FIFO 沙箱。Candidate 不继承生产 OAuth 配置，登录页在 Candidate origin 隐藏 Google/飞书，
+  本阶段只验收用户名/密码登录。
+- 独立前后端复审终态为 P0=0、P1=0、无阻断型 P2。真实 `OAuthGate` 会在任何 provider
+  执行前拒绝 Candidate URL 中的 Active OAuth token，并清除 token/user/role 参数且不写
+  localStorage；`/login` 直达路径由 `AuthContext` 使用同一清理规则兜底。
+- 本地证据：Candidate deploy/admission 聚焦测试 `163 passed, 2 skipped`；完整 scripts
+  `1299 passed, 15 skipped`；required backend 合同 `73 passed`；完整 frontend
+  `73 files / 397 tests`、TypeScript、production build 与 router regression 全部通过。
 
 ### 2026-08-10 / Step 3R：首个可写 Candidate 成功，进入自动 prepare/新鲜度阶段
 
@@ -790,9 +839,9 @@ mark-and-sweep 计划；只要 release store 出现未知条目就拒绝清理�
 - 生命周期采用 FIFO 容量 1：稳态一个 Candidate 数据库，切换时最多旧/新两个；新版本
   完整验证后删除旧库，失败时删除新库并继续保留旧 Candidate。没有新增第五个发布操作、
   checkpoint、recovery fence 或数据库控制平台。
-- Candidate 固定链接在应用层不再要求登录，8001 专属 runtime 使用
-  `APP_AUTH_ENABLED=false` 并返回 admin；Active 的认证设置和账号数据保持不变。网关访问
-  控制仍保留，因为 Candidate 暴露的是生产快照。
+- 本阶段当时采用“应用免登录 + 网关 Basic Auth”；该选择已被 2026-08-10 Step 3T 取代。
+  当前合同改为 `APP_AUTH_ENABLED=true`、快照用户登录和 Candidate 独立 JWT，不再使用
+  浏览器 Basic Auth。
 - 已从远端 `main@619466e8` 创建干净 worktree
   `/Users/litristan/.codex/worktrees/candidate-writable-sandbox-fifo/JATO_Analysis_System` 和分支
   `codex/candidate-writable-sandbox-fifo`。实现严格留在既有 admission/controller、固定 8001
@@ -1852,10 +1901,10 @@ incident recovery/fence/hold 状态机。
 | 2026-08-08 | restart 后只增加有界就绪等待 | 修复真实服务器启动竞态；确定性身份/配置错误仍立即拒绝，不新增恢复系统 |
 | 2026-08-08 | 4,200 从字面硬上限改为强制审查线 | 避免为过线而格式压缩/拆文件；结构边界与单次 60 行根因修复预算更能阻止平台膨胀 |
 | 2026-08-08 | Candidate 使用固定上海 HTTPS 地址 | 每次 prepare 只替换固定 8001/18002 内容；地址不变，Active/intl 不随 Candidate 变化 |
-| 2026-08-08 | Candidate 公网网关独立于 Active vhost | Basic Auth 覆盖全部路径，且任何失败都不能回退显示 8000 Active |
+| 2026-08-08 | Candidate 公网网关独立于 Active vhost | 独立 TLS vhost 只反代 18002，且任何失败都不能回退显示 8000 Active |
 | 2026-08-09 | Candidate 使用生产快照的独立可写数据库 | 能验证真实写入交互，同时测试数据不进入 Active 数据库 |
 | 2026-08-09 | Candidate 数据库 FIFO 容量 1 | 稳态占用最小；新版本失败时仍保留上一个可测试 Candidate |
-| 2026-08-09 | Candidate 应用免登录 admin，网关访问控制保留 | 省去重复应用账号；生产快照仍不能向公网匿名暴露 |
+| 2026-08-10 | Candidate 复用现有 JATO 登录，移除 Basic Auth | 快照用户与独立 JWT 提供应用权限；取消不可用的浏览器原生弹窗和自动 admin 旁路 |
 | 2026-08-09 | Active 更新不复制 Candidate 数据 | 上线只复用已测 immutable release，Candidate 测试写入永不提升 |
 | 2026-08-10 | main CI 成功后可自动 prepare Candidate | 只自动常规准备；Active update/rollback 仍需用户精确授权 |
 | 2026-08-10 | Candidate banner 必须区分 current/stale/unknown main | main 可继续前进；不允许旧 Candidate 冒充最新已验收页面 |

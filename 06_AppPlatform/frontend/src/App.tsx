@@ -7,15 +7,20 @@ import { DashboardRouteSkeleton } from "./components/DashboardRouteSkeleton";
 import { LoadingSurface } from "./components/LoadingSurface";
 import { SmartRouteGate } from "./components/SmartRouteGate";
 import { CandidateEnvironmentBanner } from "./components/CandidateEnvironmentBanner";
+import { isCandidatePreviewOrigin } from "./utils/candidateRuntime";
 import { getOAuthRedirectTarget } from "./utils/oauthRedirect";
 
 /** Consume OAuth token params before any provider mounts, avoiding aborted fetches. */
-function OAuthGate({ children }: { children: ReactNode }) {
+export function OAuthGate({ children }: { children: ReactNode }) {
   // This runs during render, BEFORE any child effects (SharedFilterScope etc.)
   // so we can redirect before those effects fire and get aborted.
   const params = new URLSearchParams(window.location.search);
   const urlToken = params.get("token");
   if (urlToken) {
+    if (isCandidatePreviewOrigin(window.location)) {
+      window.location.replace(getOAuthRedirectTarget(window.location, false));
+      return null;
+    }
     const urlUser = params.get("username") || "anonymous";
     const urlRole = params.get("role") || "viewer";
     const isNewUser = params.get("isNewUser") === "true";
