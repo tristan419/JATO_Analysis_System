@@ -2,13 +2,15 @@
 
 > Goal ID: `bom-colour-rules-unified`
 >
-> 状态：`IMPLEMENTED_LOCAL_VALIDATION_COMPLETE`
+> 状态：`DRAFT_PR_CI_RUNNING`
 >
 > 实现基线：`main@d40981e87435d58c63c7c4e6c54b07038a83901f`
 >
 > 设计契约 PR：`#218`（已合并；Goal-only）
 >
 > 实现分支：`codex/bom-colour-rules-implementation`
+>
+> 实现 PR：`#220`（Draft；未部署 Candidate）
 >
 > 独立范围：只处理颜色名称、swatch、颜色规则报告、Add/Edit Colour 和选品页取色一致性。
 
@@ -316,7 +318,7 @@ Candidate 验收必须在独立可写沙箱上完成：填充、创建、编辑�
 - [x] 颜色 Edit/Preview 定向后端回归 4/4；前端 focused 13/13、全量 unit 386/386、TypeScript、Vite build、router regression 通过。
 - [x] 后端完整 unit 为 1438 passed / 1 skipped / 14 failed；14 项均可在实现基线复现，与本颜色 diff 无关。
 - [x] `test_ordering_bom_admin.py` 为 36 passed / 5 baseline failed；5 项是 main 已有 country columns / template FOB sync 契约缺口，不在本 PR 顺手重建。
-- [ ] 创建颜色实现独立 Draft PR；不从 feature branch 生产部署。
+- [x] 创建颜色实现独立 Draft PR `#220`；不从 feature branch 生产部署。
 - [ ] Candidate 可写沙箱人工验收。
 - [ ] 用户明确批准后才进入 Active 发布流程。
 
