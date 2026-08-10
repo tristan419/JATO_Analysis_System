@@ -9,8 +9,8 @@ goal_control:
     更新到正式 www Active。Candidate 测试数据永不进入 Active；intl 继续使用既有的
     Active 到 intl 独立同步流程，不在 V2 中新增编排。
   current_phase: candidate_runtime_secret_isolation_hotfix
-  current_step: wait_hotfix_required_checks
-  waiting_on: github_required_checks_then_merge_authorization
+  current_step: await_hotfix_merge_authorization
+  waiting_on: explicit_user_merge_authorization_for_pull_request_221
   pause_reason: none
   next_action: >-
     修复首次服务器初始化前发现的 Candidate root/backend.env 凭据暴露：8001 使用动态
@@ -131,7 +131,7 @@ goal_control:
     candidate_sandbox_draft_ready_for_human_review: true
     previous_pull_request_214_merged: true_main_30f3e2e4
     current_fix_commit: 979c080bce5b10f6695f6f6ee1c3d9fb4273d689
-    current_fix_github_checks: pending_on_pull_request_221
+    current_fix_github_checks: all_required_green_on_pull_request_221_head_4b88d543
     pull_request_opened: true
     pull_request_number: 221
     pull_request_url: https://github.com/tristan419/JATO_Analysis_System/pull/221
@@ -203,7 +203,8 @@ goal_control:
     candidate_runtime_secret_isolation_tests: 135_focused_and_1285_all_scripts
     candidate_runtime_secret_isolation_workflow_validators: 2_passed
     candidate_runtime_secret_isolation_independent_review: passed_no_p0_p1_p2
-    candidate_runtime_secret_isolation_pull_request: 221_draft
+    candidate_runtime_secret_isolation_pull_request: 221_draft_checks_green
+    candidate_runtime_secret_isolation_ci_runs: 31353394363_and_31353396310_success
     candidate_sandbox_merge_sha: 2dea140f328c1d7077ca0792979b47bcca4dca8e
     bom_colour_implementation_merge_sha: b128f5e5d1066e883f26649cad0441d362aa1e04
     bom_colour_goal_pull_request: 218_merged_main_d40981e8
@@ -232,7 +233,7 @@ goal_control:
     - observed_server_state_contradicts_documented_baseline
     - change_would_touch_active_or_intl_database_content
     - change_would_cross_this_pr_scope
-  updated_at: "2026-08-10T11:42:00+08:00"
+  updated_at: "2026-08-10T11:50:00+08:00"
 ---
 
 # Fixed Active / Candidate Release V2
