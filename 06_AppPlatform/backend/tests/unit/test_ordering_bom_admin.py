@@ -4,7 +4,9 @@ from types import SimpleNamespace
 from uuid import uuid4
 
 import pytest
+from fastapi import HTTPException
 
+from app.api.routes import order_genius as order_genius_routes
 from app.db.models import (
     BrandColourSurchargeRule,
     CountryPaymentTermMaster,
@@ -89,10 +91,134 @@ class _QueryFakeSession(_FakeSession):
         self.flushed = True
 
 
+class _CreateMaterialSession(_FakeSession):
+    def __init__(self) -> None:
+        super().__init__()
+        self.flushed = False
+        self.committed = False
+        self.rolled_back = False
+
+    def flush(self) -> None:
+        self.flushed = True
+
+    def commit(self) -> None:
+        self.committed = True
+
+    def rollback(self) -> None:
+        self.rolled_back = True
+
+
 def test_normalize_jaecoo_brand_variants() -> None:
     assert normalize_brand("JEACOO") == "JAECOO"
     assert normalize_brand("jecoo") == "JAECOO"
     assert normalize_brand_text("JEACOO JAECOO7") == "JAECOO JAECOO7"
+
+
+def test_create_material_sku_canonicalizes_jaecoo_and_creates_manual_baseline(
+    monkeypatch,
+) -> None:
+    session = _CreateMaterialSession()
+    baseline_id = uuid4()
+    reusable_colour_args: dict[str, str] = {}
+    baseline_publishers: list[str] = []
+
+    monkeypatch.setattr(
+        order_genius_routes.repo,
+        "get_sku_by_material_code_any_status",
+        lambda *_: None,
+    )
+    monkeypatch.setattr(order_genius_routes.repo, "get_latest_baseline", lambda *_: None)
+
+    def create_baseline_version(*, published_by: str, **_kwargs: object) -> SimpleNamespace:
+        baseline_publishers.append(published_by)
+        return SimpleNamespace(baseline_version_id=baseline_id)
+
+    def find_reusable_colour_hex(
+        _session: object,
+        *,
+        brand: str,
+        colour_code: str,
+        colour_name: str,
+    ) -> str:
+        reusable_colour_args.update(
+            brand=brand,
+            colour_code=colour_code,
+            colour_name=colour_name,
+        )
+        return "#FFFFFF"
+
+    monkeypatch.setattr(
+        order_genius_routes.repo,
+        "create_baseline_version",
+        create_baseline_version,
+    )
+    monkeypatch.setattr(
+        order_genius_routes.repo,
+        "find_reusable_colour_hex",
+        find_reusable_colour_hex,
+    )
+    monkeypatch.setattr(
+        order_genius_routes.repo,
+        "copy_country_material_finance_template",
+        lambda *_args, **_kwargs: 0,
+    )
+
+    result = order_genius_routes.create_material_sku(
+        {
+            "materialCode": "T7000Z5BWMY0026",
+            "brand": "JEACOO",
+            "modelName": "JEACOO5 HEV",
+            "version": "Exclusive-FWD",
+            "colour": "Khaki white",
+            "colourCode": "bw",
+        },
+        session=session,
+        user=SimpleNamespace(name="admin@example.com"),
+    )
+
+    created_sku = session.added[0]
+    assert created_sku.brand == "JAECOO"
+    assert created_sku.model_name == "JAECOO5 HEV"
+    assert created_sku.baseline_version_id == baseline_id
+    assert created_sku.colour_hex == "#FFFFFF"
+    assert reusable_colour_args == {
+        "brand": "JAECOO",
+        "colour_code": "BW",
+        "colour_name": "Khaki white",
+    }
+    assert baseline_publishers == ["admin@example.com"]
+    assert session.flushed is True
+    assert session.committed is True
+    assert session.rolled_back is False
+    assert result["materialCode"] == "T7000Z5BWMY0026"
+
+
+def test_create_material_sku_rejects_duplicate_material_code(monkeypatch) -> None:
+    session = _CreateMaterialSession()
+    monkeypatch.setattr(
+        order_genius_routes.repo,
+        "get_sku_by_material_code_any_status",
+        lambda *_: SimpleNamespace(material_code="T7000Z5BWMY0026"),
+    )
+
+    with pytest.raises(HTTPException) as exc_info:
+        order_genius_routes.create_material_sku(
+            {
+                "materialCode": "T7000Z5BWMY0026",
+                "brand": "JAECOO",
+                "modelName": "JAECOO5 HEV",
+                "version": "Exclusive-FWD",
+                "colour": "Khaki white",
+                "colourCode": "BW",
+            },
+            session=session,
+            user=SimpleNamespace(name="admin@example.com"),
+        )
+
+    assert exc_info.value.status_code == 409
+    assert exc_info.value.detail == "Material code already exists: T7000Z5BWMY0026"
+    assert session.added == []
+    assert session.committed is False
 
 
 def test_infer_colour_tier_handles_dual_swatch_and_special_finish() -> None:

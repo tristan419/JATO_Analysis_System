@@ -1366,9 +1366,9 @@ def create_material_sku(
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     colour_hex = explicit_colour_hex or repo.find_reusable_colour_hex(
         session,
-        brand=str(body["brand"]),
-        colour_code=str(body["colourCode"]),
-        colour_name=str(body["colour"]),
+        brand=brand,
+        colour_code=colour_code,
+        colour_name=colour,
     )
 
     sku = MaterialSkuMaster(

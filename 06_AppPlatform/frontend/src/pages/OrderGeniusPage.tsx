@@ -18,6 +18,7 @@ import { useAuth } from "../contexts/AuthContext";
 import { useAccountCountryOptions } from "../hooks/useAccountCountryOptions";
 import { useResolvedCountry } from "../hooks/useResolvedCountry";
 import { formatCountryCodeTooltip } from "../utils/jatoCountries";
+import { buildBomEditScopeKey } from "../utils/orderGeniusBomAdmin";
 import { resolveCommonParentMaterialRemark } from "../utils/orderGeniusRemarks";
 import { getCachedPageValue, setCachedPageValue } from "../utils/pageCache";
 import type { CellValueChangedEvent } from "ag-grid-community";
@@ -6400,8 +6401,8 @@ function BomAdminPanel({
                           );
                           const sourceWarnings = sourceInfo.warnings || [];
                           // Helper: render a tier cell with colour chips and drop zone
-                          const editing = editingBoms.has(bomTemplate);
-                          const draftKey = `${mk}|${vk}|${bomTemplate}`;
+                          const draftKey = buildBomEditScopeKey(mk, vk, bomTemplate);
+                          const editing = editingBoms.has(draftKey);
                           const currentBomTemplateRemark = getBomTemplateRemark(allSkus);
                           const productSaveMessage = productSaveMessages[draftKey];
                           const isSavingProduct = savingProductKey === draftKey;
@@ -6509,7 +6510,7 @@ function BomAdminPanel({
                                 ...getBomStickyCellStyle("bom", "white", 1),
                               }}>
                                 <div className="bom-admin-material-main-line">
-                                  {editingBoms.has(bomTemplate) ? (
+                                  {editing ? (
                                     <input className="bom-admin-inline-input" type="text" defaultValue={bomTemplate}
                                       placeholder="BOM / Material Code"
                                       onBlur={async (e) => {
@@ -6535,7 +6536,7 @@ function BomAdminPanel({
                               </td>
                               <td className="bom-admin-interior-cell" style={getBomStickyCellStyle("interior", "white", 1)}>
                                 <div className="bom-admin-interior-main-line">
-                                  {editingBoms.has(bomTemplate) ? (
+                                  {editing ? (
                                     <input className="bom-admin-inline-input" type="text" defaultValue={intName + (edTag ? ` · ${edTag}` : '')}
                                       placeholder="Interior"
                                       onBlur={async (e) => {
@@ -6595,9 +6596,9 @@ function BomAdminPanel({
                                       onClick={() => setPendingDeletes(new Set([bomTemplate]))}>Delete</button>
                                   )}
                                   <button className="btn btn-sm btn-ghost bom-admin-row-action-button"
-                                    style={{ color: editingBoms.has(bomTemplate) ? '#16a34a' : '#64748b' }}
-                                    onClick={() => toggleEditBom(bomTemplate)}>
-                                    {editingBoms.has(bomTemplate) ? 'Done' : 'Edit'}
+                                    style={{ color: editing ? '#16a34a' : '#64748b' }}
+                                    onClick={() => toggleEditBom(draftKey)}>
+                                    {editing ? 'Done' : 'Edit'}
                                   </button>
                                 </div>
                               </td>

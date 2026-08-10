@@ -8,14 +8,14 @@ goal_control:
     身份直接进入页面；完成代码、CI、腾讯云无流量验收后，再由用户授权把同一已测试构件
     更新到正式 www Active。Candidate 测试数据永不进入 Active；intl 继续使用既有的
     Active 到 intl 独立同步流程，不在 V2 中新增编排。
-  current_phase: candidate_writable_database_sandbox_draft_review
-  current_step: await_explicit_ready_merge_or_server_authorization
-  waiting_on: explicit_user_authorization
+  current_phase: candidate_writable_database_sandbox_post_215_ci
+  current_step: push_synced_head_and_wait_required_checks
+  waiting_on: github_required_checks
   pause_reason: none
   next_action: >-
-    保持 Candidate PR #219 为 Draft。只有获得后续明确授权，才可转 Ready 或合并；服务器角色与
-    ACL 对齐、8001 drop-in 替换和首次可写 Candidate prepare 仍分别需要单独授权。禁止自动更新
-    Active 或同步 intl。
+    将已合入 #215 的最新 main 同步进 Candidate PR #219，确认组合 CI 全绿后按用户本轮授权
+    转 Ready 并合并。服务器角色与 ACL 对齐、8001 drop-in 替换和首次可写 Candidate prepare
+    仍分别需要单独授权。禁止自动更新 Active 或同步 intl。
   release_authorization_contract:
     source_path: main_to_candidate_to_explicit_user_approval_to_active
     main_may_advance_without_active: true
@@ -32,7 +32,7 @@ goal_control:
     worktree_ready: true
     worktree: /Users/litristan/.codex/worktrees/candidate-writable-sandbox-fifo/JATO_Analysis_System
     branch: codex/candidate-writable-sandbox-fifo
-    base_main_sha: 619466e81528045f59ea64ad9bcdf69c60a219f8
+    base_main_sha: 40ae32112927b3e138a88e42cd43ccc611f4ba0f
     remote_main_matches_base: true
     design_recorded: true
     historical_inventory_evidence_recorded_below: true
@@ -111,7 +111,7 @@ goal_control:
     deployment_tests_passed: 1279
     deployment_tests_skipped: 15
     backend_tests_passed: 103
-    frontend_tests_passed: 373
+    frontend_tests_passed: 375
     frontend_build_and_router_checks_passed: true
     full_local_ci_after_final_runtime_code: true_scripts_and_frontend
     post_ci_changes_documentation_only: true_final_ci_result_record_only
@@ -122,7 +122,11 @@ goal_control:
     candidate_sandbox_ci_fix_commit: c1a87b47eea0d94d1dc3bbc01b9efb17d39a6c73
     candidate_sandbox_ci_fix_pushed: true
     candidate_sandbox_ci_verified_head: b80bcb932c4e4d7eaa941169e5b06a6c10f219b6
-    candidate_sandbox_github_checks: all_required_and_cloudflare_green
+    candidate_sandbox_github_checks: all_required_and_cloudflare_green_before_post_215_sync
+    candidate_sandbox_merge_authorized: true_user_2026_08_10
+    candidate_sandbox_post_215_sync_complete: true_local
+    candidate_sandbox_post_215_synced_tree_tests: 1279_passed_15_skipped_and_375_frontend
+    bom_admin_pull_request_215_merged: true_main_40ae3211
     candidate_sandbox_draft_ready_for_human_review: true
     previous_pull_request_214_merged: true_main_30f3e2e4
     current_fix_commit: 36c2d9f96eecf1524a69e7fd81ae18d0234025a7
@@ -170,7 +174,7 @@ goal_control:
     candidate_sandbox_admission_net_lines: 125
     candidate_sandbox_tests_passed: 129
     candidate_sandbox_all_script_tests: 1279_passed_15_skipped
-    candidate_sandbox_frontend_tests: 373_passed
+    candidate_sandbox_frontend_tests: 375_passed_post_215_main_sync
     candidate_sandbox_frontend_build_and_router: passed
     candidate_sandbox_independent_review: passed_final_no_p0_p1_or_actionable_p2
     candidate_sandbox_p1_snapshot_permissions: fixed_streamed_dump_restore_real_postgres_passed
@@ -210,7 +214,7 @@ goal_control:
     - observed_server_state_contradicts_documented_baseline
     - change_would_touch_active_or_intl_database_content
     - change_would_cross_this_pr_scope
-  updated_at: "2026-08-09T22:49:43+08:00"
+  updated_at: "2026-08-10T09:09:00+08:00"
 ---
 
 # Fixed Active / Candidate Release V2
@@ -219,7 +223,7 @@ goal_control:
 > 开始日期：2026-08-06
 > worktree：`/Users/litristan/.codex/worktrees/candidate-writable-sandbox-fifo/JATO_Analysis_System`
 > branch：`codex/candidate-writable-sandbox-fifo`
-> 基线：`main@619466e81528045f59ea64ad9bcdf69c60a219f8`
+> 基线：`main@40ae32112927b3e138a88e42cd43ccc611f4ba0f`（已包含 #215）
 > 当前 PR scope：Candidate 可写数据库沙箱、FIFO 换新、Candidate-only 应用免登录 admin、
 > 既有发布准入与测试；不改 BOM 颜色业务、Active、intl、生产数据库内容或 JATO 数据
 
@@ -753,6 +757,20 @@ mark-and-sweep 计划；只要 release store 出现未知条目就拒绝清理�
   均为 success，没有剩余失败或运行中 check。
 - PR 继续保持 Draft。CI 全绿只代表本地/Runner 验证完成，不授权转 Ready、合并、腾讯云合同
   迁移、Candidate prepare、Active 更新或 intl 同步。
+
+### 2026-08-10 / Step 3Q：同步已合并 #215 并复验组合树
+
+- BOM Admin PR #215 已在新 head 的 required checks 全绿后合并为
+  `main@40ae32112927b3e138a88e42cd43ccc611f4ba0f`。合并只更新 GitHub main，没有启动
+  production release、Candidate、Active、intl、数据库或 JATO 操作。
+- #219 与 #215 的修改文件交集为零。#219 已同步 #215 的最终代码树且无冲突；相对该 main
+  仍精确保留原 12 个 Candidate 沙箱文件，没有把 BOM 文件或其他业务线带入 #219 差异。
+- 同步后的本地组合验证为：全部 `03_Scripts/tests` 共 `1279 passed, 15 skipped`；前端
+  `71` 个测试文件、`375` 项测试、TypeScript、production build 与 router regression 全部
+  通过；两个 production workflow validator 通过，`git diff --check` 通过。
+- 用户已明确授权按 `#215 -> #219` 顺序继续。下一步只推送 #219 同步 head 并等待 required
+  checks；全绿后才转 Ready 和合并。服务器角色/ACL、8001 drop-in、首次可写 Candidate
+  prepare、Active 更新及 intl 同步仍未获本步骤授权，继续保持不变。
 
 ### 2026-08-06 / Step 0：目标与开发边界
 
