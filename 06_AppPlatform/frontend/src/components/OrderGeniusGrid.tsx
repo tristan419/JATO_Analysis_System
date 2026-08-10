@@ -21,6 +21,8 @@ import {
 } from "ag-grid-community";
 import { AgGridReact } from "ag-grid-react";
 
+import { parseOrderGeniusColourSwatch } from "../utils/orderGeniusColourSwatch";
+
 ModuleRegistry.registerModules([AllCommunityModule]);
 
 const MONTH_NAMES = [
@@ -37,6 +39,9 @@ export interface OrderGeniusGridRow {
   modelName: string;
   version: string;
   colour: string;
+  colourCode?: string | null;
+  colourTier?: string | null;
+  colourHex?: string | null;
   interiorColorName?: string | null;
   fobEur: number | null;
   lifecycleStatus: string;
@@ -218,31 +223,28 @@ export function buildOrderGeniusColumnDefs(
     { headerName: "Version", field: "version", pinned: "left", width: 130, editable: false },
     {
       headerName: "Colour", field: "colour", pinned: "left", width: 130, editable: false,
-      cellRenderer: (p: any) => {
-        const name = p.value || "";
+      cellRenderer: (p: ICellRendererParams<OrderGeniusGridRow, string>) => {
+        const name = String(p.value ?? "");
         if (!name) return null;
-        const hasAnd = /[&／]/.test(name);
-        const parts = name.split(/[&／]/).map((s: string) => s.trim());
-        const colourHex = (n: string): string => {
-          const map: Record<string, string> = {
-            'carbon crystal black':'#1a1a1a','black':'#1a1a1a','khaki white':'#f0ece0','white':'#f5f5f0',
-            'moonlight silver':'#d4d0c8','silver':'#c0c0c0','aviation silver':'#c8c0b8',
-            'olive gray':'#8a8a7a','gray':'#808080','matte gray':'#5a5a5a','fjord grey':'#6e7a7a',
-            'blood red':'#8b0000','aurora green':'#2ecc71','aquatic green':'#1abc9c','alpine green':'#27ae60',
-            'mist green':'#82b74b','misty green':'#7daa4a','model green':'#3a7d44','glacier blue':'#5b8db8',
-            'phantom gray':'#4a4a4a','tech gray':'#607d8b',
-          };
-          const n2 = n.toLowerCase();
-          if (map[n2]) return map[n2];
-          for (const [k, v] of Object.entries(map)) { if (n2.includes(k)) return v; }
-          return '#94a3b8';
-        };
-        const c1 = colourHex(parts[0] || "");
-        const c2 = parts.length > 1 ? colourHex(parts[1]) : null;
-        const bg = c2 ? `linear-gradient(135deg, ${c1} 50%, ${c2} 50%)` : c1;
+        const swatch = parseOrderGeniusColourSwatch(p.data?.colourHex);
+        const code = String(p.data?.colourCode ?? "").trim();
+        const title = swatch.isMissing
+          ? `${name}${code ? ` (${code})` : ""} · Missing swatch`
+          : `${name}${code ? ` (${code})` : ""}`;
         return (
-          <span style={{ display: "flex", alignItems: "center", gap: 5 }}>
-            <span style={{ display: "inline-block", width: 14, height: 14, borderRadius: 3, flexShrink: 0, border: "1px solid #d1d5db", background: bg }} />
+          <span style={{ display: "flex", alignItems: "center", gap: 5 }} title={title}>
+            <span
+              aria-label={swatch.isMissing ? "Missing swatch" : `${name} swatch`}
+              style={{
+                display: "inline-block",
+                width: 14,
+                height: 14,
+                borderRadius: 3,
+                flexShrink: 0,
+                border: swatch.isMissing ? "1px dashed #94a3b8" : "1px solid #d1d5db",
+                background: swatch.background,
+              }}
+            />
             <span style={{ fontSize: 11, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{name}</span>
           </span>
         );

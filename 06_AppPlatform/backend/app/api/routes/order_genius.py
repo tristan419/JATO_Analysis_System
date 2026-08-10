@@ -390,7 +390,55 @@ def list_colour_hex_rules(
     _=Depends(require_min_role("viewer")),
 ) -> dict:
     """Return derived colour swatch rules and conflicts from material SKUs."""
-    return {"items": repo.list_colour_hex_rules(session)}
+    items = repo.list_colour_hex_rules(session)
+    return {"items": items, "summary": repo.summarize_colour_hex_rules(items)}
+
+
+@router.get("/colour-hex-rules/preview")
+def preview_colour_rule_fills(
+    session: Session = Depends(get_db_session),
+    _=Depends(require_min_role("editor")),
+) -> dict:
+    """Preview deterministic brand+code name/swatch fills without writing."""
+    return repo.preview_colour_rule_fills(session)
+
+
+@router.post("/colour-hex-rules/apply")
+def apply_colour_rule_fills(
+    body: dict,
+    session: Session = Depends(get_db_session),
+    _=Depends(require_min_role("editor")),
+) -> dict:
+    material_codes = body.get("materialCodes")
+    preview_fingerprint = clean_text(body.get("previewFingerprint"))
+    if not isinstance(material_codes, list):
+        raise HTTPException(status_code=400, detail="materialCodes must be a list")
+    if not preview_fingerprint:
+        raise HTTPException(status_code=400, detail="previewFingerprint is required")
+    try:
+        result = repo.apply_colour_rule_fills(
+            session,
+            material_codes,
+            preview_fingerprint,
+        )
+    except ValueError as exc:
+        session.rollback()
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    session.commit()
+    return result
+
+
+@router.get("/colour-hex-rules/lookup")
+def lookup_colour_rule(
+    brand: str = Query(...),
+    colour_code: str = Query(..., alias="colourCode"),
+    session: Session = Depends(get_db_session),
+    _=Depends(require_min_role("editor")),
+) -> dict:
+    try:
+        return repo.lookup_colour_rule(session, brand, colour_code)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 @router.patch("/colour-hex-rules/standard")
@@ -399,7 +447,7 @@ def set_colour_hex_rule_standard(
     session: Session = Depends(get_db_session),
     _=Depends(require_min_role("editor")),
 ) -> dict:
-    """Apply one standard swatch to a brand/code/name colour rule."""
+    """Apply one chosen name and swatch to a brand+code colour rule."""
     try:
         result = repo.set_standard_colour_hex_for_rule(
             session,
@@ -665,19 +713,51 @@ def patch_colour_code(
             "colourCodeConfirmed": False,
         }
 
+    code_changed = new_code != old_colour_code
+    colour_name_supplied = "colourName" in body or "colour_name" in body
+    colour_hex_supplied = "colourHex" in body or "colour_hex" in body
+    requested_name = (
+        body.get("colourName", body.get("colour_name"))
+        if colour_name_supplied
+        else (None if code_changed else sku.exterior_color_name)
+    )
+    requested_hex = (
+        body.get("colourHex", body.get("colour_hex"))
+        if colour_hex_supplied
+        else (None if code_changed else sku.colour_hex)
+    )
+    try:
+        resolved_colour = repo.resolve_colour_attributes(
+            session,
+            sku.brand,
+            new_code,
+            colour_name=requested_name,
+            colour_hex=requested_hex,
+            colour_hex_supplied=colour_hex_supplied,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    resolved_name = clean_text(resolved_colour["colourName"])
+    if code_changed and repo.is_placeholder_colour_name(resolved_name, new_code):
+        raise HTTPException(
+            status_code=400,
+            detail="Unknown or conflicting colour code requires a non-placeholder colourName",
+        )
     sku.exterior_color_code = new_code
+    sku.exterior_color_name = resolved_name or new_code
+    sku.colour_hex = resolved_colour["colourHex"]
     sku.colour_code_confirmed = True
     target_material_code = old_material_code
     try:
         bom_template = clean_text(sku.bom_template).upper()
-        if bom_template and "**" in bom_template:
+        if code_changed and bom_template and "**" in bom_template:
             mapping = repo.update_bom_template_material_codes(
                 session,
                 [old_material_code],
                 bom_template,
             )
             target_material_code = mapping.get(old_material_code, old_material_code)
-        elif old_colour_code and old_colour_code in old_material_code:
+        elif code_changed and old_colour_code and old_colour_code in old_material_code:
             target_material_code = old_material_code.replace(old_colour_code, new_code, 1)
             repo.update_sku_material_code(session, old_material_code, target_material_code)
     except LookupError as exc:
@@ -690,6 +770,8 @@ def patch_colour_code(
     return {
         "materialCode": target_material_code,
         "colourCode": new_code,
+        "colourName": sku.exterior_color_name,
+        "colourHex": sku.colour_hex,
         "colourCodeConfirmed": True,
     }
 
@@ -1328,6 +1410,20 @@ def create_material_sku(
     if not isinstance(fob_updates, list):
         raise HTTPException(status_code=400, detail="fobs must be a list")
 
+    try:
+        resolved_colour = repo.resolve_colour_attributes(
+            session,
+            brand,
+            colour_code,
+            colour_name=colour,
+            colour_hex=body.get("colourHex"),
+            colour_hex_supplied="colourHex" in body,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    colour = clean_text(resolved_colour["colourName"])
+    colour_hex = resolved_colour["colourHex"]
+
     missing = [
         label
         for label, value in (
@@ -1359,17 +1455,6 @@ def create_material_sku(
             published_by=user.name,
         )
         session.flush()
-
-    try:
-        explicit_colour_hex = repo.normalize_colour_hex_value(body.get("colourHex"))
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
-    colour_hex = explicit_colour_hex or repo.find_reusable_colour_hex(
-        session,
-        brand=brand,
-        colour_code=colour_code,
-        colour_name=colour,
-    )
 
     sku = MaterialSkuMaster(
         material_sku_id=uuid4(),
@@ -1436,6 +1521,8 @@ def create_material_sku(
     return {
         "materialCode": sku.material_code,
         "id": str(sku.material_sku_id),
+        "colourName": sku.exterior_color_name,
+        "colourHex": sku.colour_hex,
         "copiedFinanceRows": copied_finance_rows,
         "fobsCreated": fobs_created,
     }

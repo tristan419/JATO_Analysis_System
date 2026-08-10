@@ -69,16 +69,10 @@ def _derive_colour_tier(exterior_color_type: str) -> str:
 
 
 def _effective_colour_tier(sku: object) -> str:
-    return merge_colour_tiers(
-        getattr(sku, "colour_tier", None),
-        infer_colour_tier(
-            getattr(sku, "exterior_color_name", None),
-            getattr(sku, "exterior_color_type", None),
-            getattr(sku, "edition_tag", None),
-            getattr(sku, "exterior_color_code", None),
-            getattr(sku, "colour_hex", None),
-        ),
-    )
+    explicit = str(getattr(sku, "colour_tier", "") or "").strip().lower()
+    if explicit in {"single", "dual", "special"}:
+        return explicit
+    return _derive_colour_tier(getattr(sku, "exterior_color_type", None) or "single")
 
 
 def _interior_by_template(skus: list[MaterialSkuMaster]) -> dict[str, str]:
@@ -699,6 +693,7 @@ def _build_matrix_for_country(
             "colourCode": sku.exterior_color_code,
             "colourType": sku.exterior_color_type,
             "colourTier": _effective_colour_tier(sku),
+            "colourHex": sku.colour_hex,
             "interiorColorName": _effective_interior_name(sku, matrix_interior_by_template),
             "interiorColourCode": sku.interior_colour_code,
             "interiorPackage": sku.interior_package,
@@ -762,6 +757,7 @@ def _build_matrix_for_country(
                 "colourCode": hist_sku.exterior_color_code,
                 "colourType": hist_sku.exterior_color_type,
                 "colourTier": _effective_colour_tier(hist_sku),
+                "colourHex": hist_sku.colour_hex,
                 "interiorColorName": _effective_interior_name(hist_sku, matrix_interior_by_template),
                 "interiorColourCode": hist_sku.interior_colour_code,
                 "interiorPackage": hist_sku.interior_package,

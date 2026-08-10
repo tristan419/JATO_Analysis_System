@@ -18,7 +18,17 @@ import { useAuth } from "../contexts/AuthContext";
 import { useAccountCountryOptions } from "../hooks/useAccountCountryOptions";
 import { useResolvedCountry } from "../hooks/useResolvedCountry";
 import { formatCountryCodeTooltip } from "../utils/jatoCountries";
-import { buildBomEditScopeKey } from "../utils/orderGeniusBomAdmin";
+import {
+  buildBomEditScopeKey,
+  resolveBomAdminColourTier,
+  type BomAdminColourTier,
+} from "../utils/orderGeniusBomAdmin";
+import {
+  buildOrderGeniusColourSwatch,
+  MISSING_COLOUR_SWATCH_HEX,
+  normalizeColourHex,
+  parseOrderGeniusColourSwatch,
+} from "../utils/orderGeniusColourSwatch";
 import { resolveCommonParentMaterialRemark } from "../utils/orderGeniusRemarks";
 import { getCachedPageValue, setCachedPageValue } from "../utils/pageCache";
 import type { CellValueChangedEvent } from "ag-grid-community";
@@ -32,8 +42,14 @@ import { DeckFloatingDrawer, FlipToolCard } from "../components/deckControls";
 import { MaterialFinanceMatrix, MaterialFinanceWorkbench } from "../components/finance";
 import { BomEditPanel, type BomEditCountryOption } from "../components/orderGenius";
 import type {
+  ColourHexRuleApplyResult,
+  ColourHexRuleLookup,
+  ColourHexRulePreview,
+  ColourHexRuleStatus,
   ColourHexRule,
+  ColourHexRuleSummary,
   ColourSurchargeRule,
+  ColourTierRepriceReport,
   CountryMaterialFinanceRow,
   CountryMaterialFinanceUpdate,
   CountryPaymentTerm,
@@ -73,7 +89,6 @@ const DEFAULT_COLOUR_SURCHARGES: Record<string, number> = {
 };
 const BOM_ADMIN_FIXED_COLUMN_COUNT = 9;
 const BOM_ADMIN_COUNTRY_COLUMN_WIDTH = 75;
-type BomAdminColourTier = "single" | "dual" | "special";
 type BomAdminSkuColourFields = {
   colour?: string | null;
   colourCode?: string | null;
@@ -81,11 +96,6 @@ type BomAdminSkuColourFields = {
   colourTier?: string | null;
   colourHex?: string | null;
   editionTag?: string | null;
-};
-const BOM_ADMIN_COLOUR_TIER_RANK: Record<BomAdminColourTier, number> = {
-  single: 0,
-  dual: 1,
-  special: 2,
 };
 const BOM_ADMIN_STICKY_COLUMN_WIDTHS = {
   bom: 150,
@@ -142,17 +152,6 @@ function colourSurchargeKey(brand: string, colourType: string): string {
   return `${brand.trim().toUpperCase()}|${colourType.trim().toLowerCase()}`;
 }
 
-function normalizeBomAdminColourTier(value: unknown): BomAdminColourTier {
-  const normalized = String(value || "").trim().toLowerCase().replace("_", "-");
-  if (normalized === "dual" || normalized === "two-tone" || normalized === "dual-tone" || normalized === "dual tone") {
-    return "dual";
-  }
-  if (normalized === "special" || normalized === "matte" || normalized === "black edition" || normalized === "pearl" || normalized === "metallic") {
-    return "special";
-  }
-  return "single";
-}
-
 function normalizeBomLifecycleStatus(value: unknown): BomLifecycleStatus {
   const raw = String(value ?? "").trim().toLowerCase();
   if (raw === "phase_out" || raw === "phase out" || raw === "phased_out") return "phase_out";
@@ -170,47 +169,8 @@ function formatBomLifecycleTooltip(value: unknown): string {
   return BOM_LIFECYCLE_OPTIONS.find((option) => option.value === status)?.description ?? "";
 }
 
-function mergeBomAdminColourTier(...tiers: unknown[]): BomAdminColourTier {
-  return tiers.reduce<BomAdminColourTier>((best, tier) => {
-    const normalized = normalizeBomAdminColourTier(tier);
-    return BOM_ADMIN_COLOUR_TIER_RANK[normalized] > BOM_ADMIN_COLOUR_TIER_RANK[best]
-      ? normalized
-      : best;
-  }, "single");
-}
-
 function inferBomAdminColourTier(sku: BomAdminSkuColourFields): BomAdminColourTier {
-  const colourName = String(sku.colour || "").trim().toLowerCase();
-  const colourType = String(sku.colourType || "").trim().toLowerCase().replace("_", "-");
-  const colourCode = String(sku.colourCode || "").trim().toLowerCase();
-  const editionTag = String(sku.editionTag || "").trim().toLowerCase();
-  const colourHex = String(sku.colourHex || "").trim();
-  const combined = [colourName, colourType, colourCode, editionTag].filter(Boolean).join(" ");
-  const inferred = (
-    editionTag
-    || combined.includes("black edition")
-    || combined.includes("matte")
-    || combined.includes("pearl")
-    || combined.includes("metallic")
-    || combined.includes("special finish")
-    || ["special", "matte", "pearl", "metallic"].includes(colourType)
-  )
-    ? "special"
-    : (
-      colourHex.includes("|")
-      || ["dual", "two-tone", "dual-tone", "dual tone", "bi-color", "bi-colour"].includes(colourType)
-      || /[/&／+＋]/.test(combined)
-      || combined.includes("双色")
-      || combined.includes("dual")
-      || combined.includes("two tone")
-      || combined.includes("two-tone")
-      || combined.includes("contrast roof")
-      || combined.includes("black roof")
-      || /bi.?colou?r/.test(combined)
-    )
-      ? "dual"
-      : "single";
-  return mergeBomAdminColourTier(sku.colourTier, inferred);
+  return resolveBomAdminColourTier(sku);
 }
 
 function formatSurchargeDraft(value: number): string {
@@ -225,6 +185,12 @@ function formatOrderGeniusFileSize(bytes: number): string {
 
 function getErrorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
+}
+
+function getErrorStatus(error: unknown): number | null {
+  if (!error || typeof error !== "object" || !("status" in error)) return null;
+  const status = Number((error as { status?: unknown }).status);
+  return Number.isInteger(status) ? status : null;
 }
 
 function cleanText(value: string): string | null {
@@ -930,6 +896,9 @@ export function OrderGeniusPage() {
         modelName: r.modelName,
         version: r.version,
         colour: r.colour,
+        colourCode: r.colourCode,
+        colourTier: r.colourTier,
+        colourHex: r.colourHex,
         interiorColorName: r.interiorColorName,
         fobEur: r.fobEur ?? null,
         lifecycleStatus: r.lifecycleStatus,
@@ -1442,6 +1411,9 @@ export function OrderGeniusPage() {
         modelName: row.modelName,
         version: row.version,
         colour: row.colour,
+        colourCode: row.colourCode,
+        colourTier: row.colourTier,
+        colourHex: row.colourHex,
         interiorColorName: row.interiorColorName,
         fobEur: row.fobEur ?? null,
         lifecycleStatus: row.lifecycleStatus,
@@ -3055,12 +3027,14 @@ type BomColourCodeEditor = {
   modelName: string;
   version: string;
   currentColourName: string;
+  currentColourHex: string | null;
   nextColourName: string;
   currentColourCode: string;
   nextColourCode: string;
   nextColourHex: string;
   nextColourHex2: string;
   isDualSwatch: boolean;
+  colourNameTouched: boolean;
   colourHexTouched: boolean;
 };
 
@@ -3080,8 +3054,92 @@ type BomAddColourEditor = {
   colourName: string;
   colourHex: string;
   colourHex2: string;
+  isDualSwatch: boolean;
+  colourNameTouched: boolean;
   colourHexTouched: boolean;
 };
+
+type BomColourTierReview = {
+  previousTier: BomAdminColourTier;
+  nextTier: BomAdminColourTier;
+  report: ColourTierRepriceReport;
+};
+
+const EMPTY_COLOUR_HEX_RULE_SUMMARY: ColourHexRuleSummary = {
+  totalRules: 0,
+  fillable: 0,
+  missing: 0,
+  nameConflict: 0,
+  swatchConflict: 0,
+  complete: 0,
+  fillableSkus: 0,
+};
+
+const COLOUR_RULE_STATUS_META: ReadonlyArray<{
+  status: ColourHexRuleStatus;
+  label: string;
+  summaryKey: keyof Pick<
+    ColourHexRuleSummary,
+    "fillable" | "missing" | "nameConflict" | "swatchConflict" | "complete"
+  >;
+  colour: string;
+}> = [
+  { status: "fillable", label: "Can fill", summaryKey: "fillable", colour: "#0f766e" },
+  { status: "missing", label: "Missing rule", summaryKey: "missing", colour: "#64748b" },
+  { status: "name_conflict", label: "Name conflict", summaryKey: "nameConflict", colour: "#b45309" },
+  { status: "swatch_conflict", label: "Swatch conflict", summaryKey: "swatchConflict", colour: "#dc2626" },
+  { status: "complete", label: "Complete", summaryKey: "complete", colour: "#15803d" },
+];
+
+function normalizeColourPickerValue(value: string, fallback = MISSING_COLOUR_SWATCH_HEX): string {
+  return normalizeColourHex(value) ?? fallback;
+}
+
+function isColourPickerValue(value: string): boolean {
+  return normalizeColourHex(value) !== null;
+}
+
+function splitColourHexValue(value: unknown): {
+  hex1: string;
+  hex2: string;
+  isDual: boolean;
+  hasStoredHex: boolean;
+} {
+  const swatch = parseOrderGeniusColourSwatch(value);
+  const [hex1, hex2] = swatch.colours;
+  return {
+    hex1,
+    hex2: hex2 ?? hex1,
+    isDual: swatch.isDual,
+    hasStoredHex: !swatch.isMissing,
+  };
+}
+
+function buildSwatchPayload(hex1: string, hex2: string, isDual: boolean): string {
+  return buildOrderGeniusColourSwatch(hex1, hex2, isDual) ?? "";
+}
+
+function getColourRuleStandardChoices(rule: ColourHexRule): Array<{ colourName: string; colourHex: string }> {
+  const names = rule.nameOptions.map((option) => option.colourName);
+  const fallbackName = rule.standardColourName ?? rule.colourName;
+  if (names.length === 0 && fallbackName) names.push(fallbackName);
+  const hexes = rule.hexOptions.map((option) => option.colourHex);
+  if (hexes.length === 0 && rule.standardColourHex) hexes.push(rule.standardColourHex);
+  return names.flatMap((colourName) => hexes.map((colourHex) => ({ colourName, colourHex })));
+}
+
+function formatColourRuleLookupNote(lookup: ColourHexRuleLookup, manuallyChanged: boolean): string {
+  if (lookup.hasNameConflict || lookup.hasSwatchConflict) {
+    const fields = [lookup.hasNameConflict ? "name" : "", lookup.hasSwatchConflict ? "swatch" : ""]
+      .filter(Boolean)
+      .join(" + ");
+    return `Brand + Code ${fields} conflict: not auto-filled. Enter values manually.`;
+  }
+  if (lookup.source === "brand_code_rule") {
+    return `Brand + Code rule: ${lookup.colourName ?? "no name"} · ${lookup.colourHex ?? "no swatch"}${manuallyChanged ? " · Manual values will create a rule difference." : " · Auto-filled."}`;
+  }
+  return "No reusable Brand + Code rule. Enter a colour name; swatch is optional.";
+}
 
 interface BomFinanceQuickCard {
   countryCode: string;
@@ -3258,21 +3316,37 @@ function BomAdminPanel({
   const [colourSurchargeStatus, setColourSurchargeStatus] = useState("");
   const [savingColourSurcharges, setSavingColourSurcharges] = useState(false);
   const [colourHexRules, setColourHexRules] = useState<ColourHexRule[]>([]);
+  const [colourHexRuleSummary, setColourHexRuleSummary] = useState<ColourHexRuleSummary>(EMPTY_COLOUR_HEX_RULE_SUMMARY);
   const [colourHexRuleStatus, setColourHexRuleStatus] = useState("");
+  const [loadingColourHexRules, setLoadingColourHexRules] = useState(false);
   const [savingColourHexRuleKey, setSavingColourHexRuleKey] = useState<string | null>(null);
+  const [colourRuleDetailsStatus, setColourRuleDetailsStatus] = useState<ColourHexRuleStatus | null>(null);
+  const [showColourRulePreview, setShowColourRulePreview] = useState(false);
+  const [colourRulePreview, setColourRulePreview] = useState<ColourHexRulePreview | null>(null);
+  const [colourRuleApplyResult, setColourRuleApplyResult] = useState<ColourHexRuleApplyResult | null>(null);
+  const [colourRuleActionError, setColourRuleActionError] = useState("");
+  const [loadingColourRulePreview, setLoadingColourRulePreview] = useState(false);
+  const [applyingColourRulePreview, setApplyingColourRulePreview] = useState(false);
   const [colourSwatchEditor, setColourSwatchEditor] = useState<BomColourSwatchEditor | null>(null);
   const [savingColourSwatchEditor, setSavingColourSwatchEditor] = useState(false);
   const [colourCodeEditor, setColourCodeEditor] = useState<BomColourCodeEditor | null>(null);
+  const [colourCodeRuleLookup, setColourCodeRuleLookup] = useState<ColourHexRuleLookup | null>(null);
+  const [loadingColourCodeRuleLookup, setLoadingColourCodeRuleLookup] = useState(false);
   const [colourCodeEditorError, setColourCodeEditorError] = useState("");
   const [savingColourCodeEditor, setSavingColourCodeEditor] = useState(false);
   const [addColourEditor, setAddColourEditor] = useState<BomAddColourEditor | null>(null);
+  const [addColourRuleLookup, setAddColourRuleLookup] = useState<ColourHexRuleLookup | null>(null);
+  const [loadingAddColourRuleLookup, setLoadingAddColourRuleLookup] = useState(false);
   const [addColourEditorError, setAddColourEditorError] = useState("");
   const [savingAddColourEditor, setSavingAddColourEditor] = useState(false);
+  const [colourTierReview, setColourTierReview] = useState<BomColourTierReview | null>(null);
   const searchInputRef = useRef<HTMLInputElement>(null);
   const materialCodeInputRef = useRef<HTMLInputElement>(null);
   const colourCodeEditorInputRef = useRef<HTMLInputElement>(null);
+  const colourCodeLookupRequestRef = useRef(0);
   const addColourEditorCodeRef = useRef<HTMLInputElement>(null);
   const addColourEditorNameRef = useRef<HTMLInputElement>(null);
+  const addColourLookupRequestRef = useRef(0);
   const copyDraftInputRefs = useRef<Record<string, HTMLInputElement | null>>({});
   const bomGroupRefs = useRef<Record<string, HTMLDivElement | null>>({});
   const expandedBomGroupKeyRef = useRef<string | null>(null);
@@ -3293,34 +3367,6 @@ function BomAdminPanel({
   const pendingLoadKeyRef = useRef<string | null>(null);
   const loadTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);  // debounce loads
   const activeFobCountriesRef = useRef<string[]>([]);
-
-
-  // Color name → hex mapping for paint swatches
-  const colourToHex = (name: string): string[] => {
-    const n = name.toLowerCase();
-    const map: Record<string, string> = {
-      'carbon crystal black': '#1a1a1a', 'black': '#1a1a1a', 'new carbon black': '#1c1c1c',
-      'khaki white': '#f0ece0', 'new khaki white': '#f5f0e8', 'white': '#f5f5f0',
-      'moonlight silver': '#d4d0c8', 'silver': '#c0c0c0', 'aviation silver': '#c8c0b8',
-      'olive gray': '#8a8a7a', 'gray': '#808080', 'fjord grey': '#6e7a7a', 'matte gray': '#5a5a5a', 'matte gray（black edition）': '#3a3a3a',
-      'blood red': '#8b0000', 'red': '#cc0000',
-      'aurora green': '#2ecc71', 'aquatic green': '#1abc9c', 'alpine green': '#27ae60',
-      'mist green': '#82b74b', 'misty green': '#7daa4a', 'model green': '#3a7d44',
-      'glacier blue': '#5b8db8', 'blue': '#1a5276',
-    };
-    // Check exact match first, then partial
-    if (map[n]) return [map[n]];
-    for (const [k, v] of Object.entries(map)) {
-      if (n.includes(k)) return [v];
-    }
-    return ['#94a3b8']; // default gray
-  };
-
-  // Get swatch colors for a color name (handles dual colors with &)
-  const getSwatchColors = (name: string): string[] => {
-    const parts = name.split(/[&／]/);
-    return parts.flatMap(p => colourToHex(p.trim()));
-  };
 
   // NL always first, then alphabetical
   const sortedCountries = useMemo(() => {
@@ -3396,10 +3442,16 @@ function BomAdminPanel({
     return result.errors[0] ?? "";
   }, [newMaterial]);
 
-  const colourHexConflicts = useMemo(
-    () => colourHexRules.filter((rule) => rule.status === "conflict"),
-    [colourHexRules],
-  );
+  const selectedColourRuleDetails = useMemo(() => {
+    if (!colourRuleDetailsStatus) return [];
+    if (colourRuleDetailsStatus === "name_conflict") {
+      return colourHexRules.filter((rule) => rule.hasNameConflict);
+    }
+    if (colourRuleDetailsStatus === "swatch_conflict") {
+      return colourHexRules.filter((rule) => rule.hasSwatchConflict);
+    }
+    return colourHexRules.filter((rule) => rule.status === colourRuleDetailsStatus);
+  }, [colourHexRules, colourRuleDetailsStatus]);
 
   const getColourSurchargeAmount = (brand: string, colourType: string): number => {
     const key = colourSurchargeKey(brand, colourType);
@@ -3485,11 +3537,15 @@ function BomAdminPanel({
 
   const loadColourHexRules = useCallback(async () => {
     try {
+      setLoadingColourHexRules(true);
       const res = await api.getOrderGeniusColourHexRules();
       setColourHexRules(res.items || []);
+      setColourHexRuleSummary(res.summary || EMPTY_COLOUR_HEX_RULE_SUMMARY);
       setColourHexRuleStatus("");
     } catch (e) {
       setColourHexRuleStatus(getErrorMessage(e));
+    } finally {
+      setLoadingColourHexRules(false);
     }
   }, []);
 
@@ -3691,6 +3747,92 @@ function BomAdminPanel({
   useEffect(() => { load(initialBomLoadSearchRef.current || undefined); }, [load]);
   useEffect(() => { void loadColourSurcharges(); }, [loadColourSurcharges]);
   useEffect(() => { void loadColourHexRules(); }, [loadColourHexRules]);
+
+  useEffect(() => {
+    const brand = String(colourCodeEditor?.brand || "").trim();
+    const colourCode = String(colourCodeEditor?.nextColourCode || "").trim().toUpperCase();
+    const requestId = ++colourCodeLookupRequestRef.current;
+    if (!brand || !/^[A-Z0-9]{1,4}$/.test(colourCode)) {
+      setColourCodeRuleLookup(null);
+      setLoadingColourCodeRuleLookup(false);
+      return undefined;
+    }
+    setLoadingColourCodeRuleLookup(true);
+    const timer = window.setTimeout(() => {
+      void api.lookupOrderGeniusColourHexRule(brand, colourCode).then((lookup) => {
+        if (colourCodeLookupRequestRef.current !== requestId) return;
+        setColourCodeRuleLookup(lookup);
+        setColourCodeEditor((current) => {
+          if (!current || current.nextColourCode.trim().toUpperCase() !== colourCode) return current;
+          if (lookup.source !== "brand_code_rule" || lookup.hasNameConflict || lookup.hasSwatchConflict) {
+            return current;
+          }
+          const swatch = splitColourHexValue(lookup.colourHex);
+          return {
+            ...current,
+            nextColourName: current.colourNameTouched
+              ? current.nextColourName
+              : lookup.colourName ?? current.nextColourName,
+            nextColourHex: current.colourHexTouched ? current.nextColourHex : swatch.hex1,
+            nextColourHex2: current.colourHexTouched ? current.nextColourHex2 : swatch.hex2,
+            isDualSwatch: current.colourHexTouched ? current.isDualSwatch : swatch.isDual,
+          };
+        });
+      }).catch((error: unknown) => {
+        if (colourCodeLookupRequestRef.current !== requestId) return;
+        setColourCodeRuleLookup(null);
+        setColourCodeEditorError(getErrorMessage(error));
+      }).finally(() => {
+        if (colourCodeLookupRequestRef.current === requestId) {
+          setLoadingColourCodeRuleLookup(false);
+        }
+      });
+    }, 180);
+    return () => window.clearTimeout(timer);
+  }, [colourCodeEditor?.brand, colourCodeEditor?.nextColourCode]);
+
+  useEffect(() => {
+    const brand = String(addColourEditor?.brand || "").trim();
+    const colourCode = String(addColourEditor?.colourCode || "").trim().toUpperCase();
+    const requestId = ++addColourLookupRequestRef.current;
+    if (!brand || !/^[A-Z0-9]{1,4}$/.test(colourCode)) {
+      setAddColourRuleLookup(null);
+      setLoadingAddColourRuleLookup(false);
+      return undefined;
+    }
+    setLoadingAddColourRuleLookup(true);
+    const timer = window.setTimeout(() => {
+      void api.lookupOrderGeniusColourHexRule(brand, colourCode).then((lookup) => {
+        if (addColourLookupRequestRef.current !== requestId) return;
+        setAddColourRuleLookup(lookup);
+        setAddColourEditor((current) => {
+          if (!current || current.colourCode.trim().toUpperCase() !== colourCode) return current;
+          if (lookup.source !== "brand_code_rule" || lookup.hasNameConflict || lookup.hasSwatchConflict) {
+            return current;
+          }
+          const swatch = splitColourHexValue(lookup.colourHex);
+          return {
+            ...current,
+            colourName: current.colourNameTouched
+              ? current.colourName
+              : lookup.colourName ?? current.colourName,
+            colourHex: current.colourHexTouched ? current.colourHex : swatch.hex1,
+            colourHex2: current.colourHexTouched ? current.colourHex2 : swatch.hex2,
+            isDualSwatch: current.colourHexTouched ? current.isDualSwatch : swatch.isDual,
+          };
+        });
+      }).catch((error: unknown) => {
+        if (addColourLookupRequestRef.current !== requestId) return;
+        setAddColourRuleLookup(null);
+        setAddColourEditorError(getErrorMessage(error));
+      }).finally(() => {
+        if (addColourLookupRequestRef.current === requestId) {
+          setLoadingAddColourRuleLookup(false);
+        }
+      });
+    }, 180);
+    return () => window.clearTimeout(timer);
+  }, [addColourEditor?.brand, addColourEditor?.colourCode]);
 
   const replaceFinanceRow = (
     rows: CountryMaterialFinanceRow[],
@@ -4609,15 +4751,19 @@ function BomAdminPanel({
     }
   };
 
-  const handleSetColourHexStandard = async (rule: ColourHexRule, colourHex: string) => {
-    const key = `${rule.brand}|${rule.colourCode}|${rule.normalizedColourName}|${colourHex}`;
+  const handleSetColourHexStandard = async (
+    rule: ColourHexRule,
+    colourName: string,
+    colourHex: string,
+  ) => {
+    const key = `${rule.brand}|${rule.colourCode}|${colourName}|${colourHex}`;
     try {
       setSavingColourHexRuleKey(key);
       setColourHexRuleStatus("");
       const result = await api.setOrderGeniusColourHexRuleStandard({
         brand: rule.brand,
         colourCode: rule.colourCode,
-        colourName: rule.colourName,
+        colourName,
         colourHex,
       });
       await loadColourHexRules();
@@ -4630,35 +4776,44 @@ function BomAdminPanel({
     }
   };
 
-  const DEFAULT_COLOUR_SWATCH_HEX = "#94A3B8";
-
-  const normalizeColourPickerValue = (value: string, fallback = DEFAULT_COLOUR_SWATCH_HEX): string => {
-    const text = String(value || "").trim().toUpperCase();
-    return /^#[0-9A-F]{6}$/.test(text) ? text : fallback;
+  const handlePreviewColourRuleFills = async () => {
+    setShowColourRulePreview(true);
+    setLoadingColourRulePreview(true);
+    setColourRulePreview(null);
+    setColourRuleApplyResult(null);
+    setColourRuleActionError("");
+    try {
+      setColourRulePreview(await api.previewOrderGeniusColourHexRuleFills());
+    } catch (error) {
+      setColourRuleActionError(getErrorMessage(error));
+    } finally {
+      setLoadingColourRulePreview(false);
+    }
   };
 
-  const isColourPickerValue = (value: string): boolean => /^#[0-9A-Fa-f]{6}$/.test(String(value || "").trim());
-
-  const splitColourHexValue = (value: unknown): { hex1: string; hex2: string; isDual: boolean; hasStoredHex: boolean } => {
-    const parts = String(value || "")
-      .split("|")
-      .map((part) => part.trim().toUpperCase())
-      .filter(Boolean);
-    const hex1 = parts[0] && isColourPickerValue(parts[0]) ? parts[0] : DEFAULT_COLOUR_SWATCH_HEX;
-    const hex2 = parts[1] && isColourPickerValue(parts[1]) ? parts[1] : hex1;
-    return {
-      hex1,
-      hex2,
-      isDual: parts.length >= 2,
-      hasStoredHex: parts.some((part) => isColourPickerValue(part)),
-    };
-  };
-
-  const buildSwatchPayload = (hex1: string, hex2: string, isDual: boolean): string => {
-    const first = String(hex1 || "").trim().toUpperCase();
-    const second = String(hex2 || "").trim().toUpperCase();
-    if (!first) return "";
-    return isDual ? `${first}|${second || first}` : first;
+  const handleApplyColourRuleFills = async () => {
+    if (!colourRulePreview) return;
+    setApplyingColourRulePreview(true);
+    setColourRuleActionError("");
+    try {
+      const result = await api.applyOrderGeniusColourHexRuleFills(
+        colourRulePreview.fingerprint,
+        colourRulePreview.items.map((item) => item.materialCode),
+      );
+      setColourRuleApplyResult(result);
+      await Promise.all([loadColourHexRules(), load()]);
+      setColourHexRuleStatus(
+        `Filled ${result.updated} SKUs; ${result.unchanged} unchanged, ${result.conflicts} conflicts, ${result.missingRules} missing rules.`,
+      );
+    } catch (error) {
+      setColourRuleActionError(
+        getErrorStatus(error) === 409
+          ? `Data changed after preview. Refresh the preview before applying. ${getErrorMessage(error)}`
+          : getErrorMessage(error),
+      );
+    } finally {
+      setApplyingColourRulePreview(false);
+    }
   };
 
   const handleSaveColourSwatchEditor = async () => {
@@ -4691,6 +4846,9 @@ function BomAdminPanel({
     const currentColourName = String(sku.colour || "").trim();
     const currentSwatch = splitColourHexValue(sku.colourHex);
     const isDualSwatch = currentSwatch.isDual || getEffectiveColourTier(sku) === "dual";
+    colourCodeLookupRequestRef.current += 1;
+    setColourCodeRuleLookup(null);
+    setLoadingColourCodeRuleLookup(false);
     setColourCodeEditorError("");
     setColourCodeEditor({
       materialCode: String(sku.materialCode || ""),
@@ -4698,12 +4856,14 @@ function BomAdminPanel({
       modelName: String(sku.modelName || ""),
       version: String(sku.version || ""),
       currentColourName,
+      currentColourHex: currentSwatch.hasStoredHex ? String(sku.colourHex) : null,
       nextColourName: currentColourName,
       currentColourCode,
       nextColourCode: currentColourCode,
       nextColourHex: currentSwatch.hex1,
       nextColourHex2: currentSwatch.hex2,
       isDualSwatch,
+      colourNameTouched: false,
       colourHexTouched: false,
     });
   };
@@ -4717,8 +4877,19 @@ function BomAdminPanel({
       return;
     }
     const nextName = colourCodeEditor.nextColourName.trim();
-    const nameChanged = nextName && nextName !== colourCodeEditor.currentColourName;
-    const hexChanged = colourCodeEditor.colourHexTouched;
+    const codeChanged = nextCode !== colourCodeEditor.currentColourCode;
+    const nameChanged = nextName !== colourCodeEditor.currentColourName;
+    if (codeChanged && loadingColourCodeRuleLookup) {
+      setColourCodeEditorError("Wait for the Brand + Code rule check to finish.");
+      return;
+    }
+    const canAutoFillChangedCode = colourCodeRuleLookup?.source === "brand_code_rule"
+      && !colourCodeRuleLookup.hasNameConflict
+      && !colourCodeRuleLookup.hasSwatchConflict;
+    if (codeChanged && !canAutoFillChangedCode && !nextName) {
+      setColourCodeEditorError("This code cannot be auto-filled: enter a colour name before saving it.");
+      return;
+    }
     const nextColourHexPayload = buildSwatchPayload(
       colourCodeEditor.nextColourHex,
       colourCodeEditor.nextColourHex2,
@@ -4729,7 +4900,10 @@ function BomAdminPanel({
       setColourCodeEditorError("Swatch must use #RRGGBB.");
       return;
     }
-    if (nextCode === colourCodeEditor.currentColourCode && !nameChanged && !hexChanged) {
+    const currentColourHex = String(colourCodeEditor.currentColourHex || "").trim().toUpperCase() || null;
+    const nextColourHex = nextColourHexPayload || null;
+    const hexChanged = nextColourHex !== currentColourHex;
+    if (!codeChanged && !nameChanged && !hexChanged) {
       setColourCodeEditor(null);
       return;
     }
@@ -4738,8 +4912,8 @@ function BomAdminPanel({
     try {
       const result = await api.updateColourCode(colourCodeEditor.materialCode, {
         colourCode: nextCode,
-        colourName: nextName || undefined,
-        colourHex: colourCodeEditor.colourHexTouched ? nextColourHexPayload : undefined,
+        colourName: colourCodeEditor.colourNameTouched ? nextName : undefined,
+        colourHex: colourCodeEditor.colourHexTouched ? nextColourHex : undefined,
       });
       setBomAdminError("");
       setBomAdminNotice(`Updated ${result.oldMaterialCode || colourCodeEditor.materialCode} to ${result.materialCode}.`);
@@ -4764,6 +4938,9 @@ function BomAdminPanel({
     const fobSourceCountries = Object.values((fobSourceSku?.fobByCountry as Record<string, BomDraftFobEntry>) || {})
       .filter((fob) => getDraftBaseFob(fob) != null)
       .length;
+    addColourLookupRequestRef.current += 1;
+    setAddColourRuleLookup(null);
+    setLoadingAddColourRuleLookup(false);
     setAddColourEditorError("");
     setAddColourEditor({
       bomTemplate: String(bomTemplate || "").trim().toUpperCase(),
@@ -4779,8 +4956,10 @@ function BomAdminPanel({
       fobSourceCountries,
       colourCode: "",
       colourName: "",
-      colourHex: DEFAULT_COLOUR_SWATCH_HEX,
-      colourHex2: DEFAULT_COLOUR_SWATCH_HEX,
+      colourHex: MISSING_COLOUR_SWATCH_HEX,
+      colourHex2: MISSING_COLOUR_SWATCH_HEX,
+      isDualSwatch: tierName === "dual",
+      colourNameTouched: false,
       colourHexTouched: false,
     });
   };
@@ -4794,12 +4973,28 @@ function BomAdminPanel({
       setAddColourEditorError("Colour code must be 1-4 letters or numbers.");
       return;
     }
+    if (loadingAddColourRuleLookup) {
+      setAddColourEditorError("Wait for the Brand + Code rule check to finish.");
+      return;
+    }
+    if (
+      (
+        addColourRuleLookup?.source !== "brand_code_rule"
+        || addColourRuleLookup.hasNameConflict
+        || addColourRuleLookup.hasSwatchConflict
+      )
+      && !colourName
+    ) {
+      setAddColourEditorError("This code cannot be auto-filled: enter a colour name before creating it.");
+      addColourEditorNameRef.current?.focus();
+      return;
+    }
     if (!addColourEditor.bomTemplate.includes("**")) {
       setAddColourEditorError("This BOM template needs ** before adding another colour.");
       return;
     }
     const newColourHexPayload = addColourEditor.colourHexTouched
-      ? buildSwatchPayload(addColourEditor.colourHex, addColourEditor.colourHex2, addColourEditor.tierName === "dual")
+      ? buildSwatchPayload(addColourEditor.colourHex, addColourEditor.colourHex2, addColourEditor.isDualSwatch)
       : "";
     const newColourHexParts = newColourHexPayload ? newColourHexPayload.split("|") : [];
     if (newColourHexParts.some((part) => !isColourPickerValue(part))) {
@@ -4829,7 +5024,7 @@ function BomAdminPanel({
         brand: addColourEditor.brand,
         modelName: addColourEditor.modelName,
         version: addColourEditor.version,
-        colour: colourName || colourCode,
+        colour: addColourEditor.colourNameTouched ? colourName || undefined : undefined,
         colourCode,
         colourHex: addColourEditor.colourHexTouched ? newColourHexPayload : undefined,
         colourType: addColourEditor.tierName === "single" ? "single" : addColourEditor.tierName,
@@ -5129,15 +5324,8 @@ function BomAdminPanel({
   // Shared colour chip renderer used by BOM rows
   const renderColourChip = (s: any, isHist: boolean, editing: boolean) => {
     const effectiveTier = getEffectiveColourTier(s);
-    const customHexRaw = s.colourHex || '';
-    const customHexParts = customHexRaw ? customHexRaw.split('|') : [];
-    const hasCustomDual = customHexParts.length >= 2;
-    const computed = getSwatchColors(s.colour || '');
-    const isDual = computed.length >= 2 || hasCustomDual || effectiveTier === "dual";
-    // For display: custom overrides computed
-    const hex1 = customHexParts[0] || computed[0] || '#94a3b8';
-    const hex2 = customHexParts[1] || (hasCustomDual ? undefined : computed[1]);
-    const displayHex = (!isDual || hasCustomDual) ? hex1 : undefined;
+    const swatch = parseOrderGeniusColourSwatch(s.colourHex);
+    const [hex1, hex2] = swatch.colours;
     const isDragging = dragSku === s.materialCode;
     const brand = String(s.brand || "").trim();
     const colourCode = String(s.colourCode || "").trim().toUpperCase();
@@ -5158,7 +5346,7 @@ function BomAdminPanel({
           setDragSku(s.materialCode);
         } : undefined}
         onDragEnd={editing ? () => { setDragSku(null); setDragOverTier(null); dragMaterialCode.current = null; } : undefined}
-        title={`${s.colour}${s.colourCode ? ` (${s.colourCode})` : ''}${isDual ? ' · 双色' : ''} · Tier: ${effectiveTier} — Drag to reclassify, click swatch to edit colour rule`}
+        title={`${s.colour}${s.colourCode ? ` (${s.colourCode})` : ''}${swatch.isDual ? ' · dual swatch' : ''}${swatch.isMissing ? ' · missing swatch' : ''} · Tier: ${effectiveTier} — Drag to reclassify, click swatch to edit colour rule`}
         style={{
           display: "inline-flex",
           alignItems: "center",
@@ -5183,7 +5371,8 @@ function BomAdminPanel({
             }
             const rect = event.currentTarget.getBoundingClientRect();
             const editorWidth = 238;
-            const editorHeight = isDual ? 142 : 104;
+            const editAsDual = swatch.isDual || effectiveTier === "dual";
+            const editorHeight = editAsDual ? 142 : 104;
             const viewportWidth = typeof window === "undefined" ? editorWidth : window.innerWidth;
             const viewportHeight = typeof window === "undefined" ? editorHeight : window.innerHeight;
             setColourHexRuleStatus("");
@@ -5192,7 +5381,7 @@ function BomAdminPanel({
               brand,
               colourCode,
               colourName,
-              isDual,
+              isDual: editAsDual,
               hex1: normalizeColourPickerValue(hex1),
               hex2: normalizeColourPickerValue(hex2 || hex1, normalizeColourPickerValue(hex1)),
               anchorLeft: Math.max(8, Math.min(rect.left, viewportWidth - editorWidth - 8)),
@@ -5205,10 +5394,8 @@ function BomAdminPanel({
             padding: 0,
             borderRadius: 3,
             flexShrink: 0,
-            border: customHexRaw ? '2px solid #3b82f6' : '1px solid #d1d5db',
-            background: isDual
-              ? `linear-gradient(135deg, ${hex1} 50%, ${hex2 || hex1} 50%)`
-              : displayHex || hex1,
+            border: swatch.isMissing ? '1px dashed #94a3b8' : '2px solid #3b82f6',
+            background: swatch.background,
             opacity: isHist ? 0.5 : 1,
             cursor: "pointer",
           }}
@@ -5254,12 +5441,7 @@ function BomAdminPanel({
 
   const renderDraftColourChip = (sku: BomCopyDraftSku) => {
     const effectiveTier = inferBomAdminColourTier(sku);
-    const customHexRaw = sku.colourHex || "";
-    const customHexParts = customHexRaw ? customHexRaw.split("|") : [];
-    const computed = getSwatchColors(sku.colour || "");
-    const first = customHexParts[0] || computed[0] || "#94a3b8";
-    const second = customHexParts[1] || computed[1];
-    const isDual = Boolean(second);
+    const swatch = parseOrderGeniusColourSwatch(sku.colourHex);
     return (
       <span
         key={`${sku.sourceMaterialCode}-${sku.colourCode}`}
@@ -5273,10 +5455,8 @@ function BomAdminPanel({
             height: 16,
             borderRadius: 3,
             flexShrink: 0,
-            border: customHexRaw ? "2px solid #3b82f6" : "1px solid #d1d5db",
-            background: isDual
-              ? `linear-gradient(135deg, ${first} 50%, ${second || first} 50%)`
-              : first,
+            border: swatch.isMissing ? "1px dashed #94a3b8" : "2px solid #3b82f6",
+            background: swatch.background,
           }}
         />
         <span
@@ -5739,68 +5919,23 @@ function BomAdminPanel({
                 <div className="bom-admin-tool-tile" style={{ minHeight: 124 }}>
                   <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 7 }}>
                     <span style={{ fontSize: 11, fontWeight: 800, color: "#334155" }}>Colour Swatch Rules</span>
-                    <button className="btn btn-sm btn-ghost" type="button" onClick={() => void loadColourHexRules()}>
-                      Refresh
+                    <button className="btn btn-sm btn-ghost" type="button" disabled={loadingColourHexRules} onClick={() => void loadColourHexRules()}>
+                      {loadingColourHexRules ? "Refreshing..." : "Refresh"}
                     </button>
                   </div>
                   <div style={{ fontSize: 10, color: "#64748b", marginBottom: 7 }}>
-                    {colourHexConflicts.length > 0
-                      ? `${colourHexConflicts.length} conflicts need a standard swatch`
-                      : `${colourHexRules.length} collected rules · no conflicts`}
+                    {colourHexRuleSummary.totalRules} rules · {colourHexRuleSummary.fillableSkus} SKU fields can be filled
                   </div>
-                  <div style={{ display: "grid", gap: 6, maxHeight: 104, overflowY: "auto", paddingRight: 2 }}>
-                    {colourHexConflicts.length === 0 ? (
-                      <div style={{ fontSize: 11, color: "#0f766e", padding: "8px 0" }}>Colour rules clean.</div>
-                    ) : (
-                      colourHexConflicts.slice(0, 4).map((rule) => (
-                        <div
-                          key={`${rule.brand}|${rule.colourCode}|${rule.normalizedColourName}`}
-                          style={{ padding: 6, background: "#fff", border: "1px solid #e2e8f0", borderRadius: 4 }}
-                        >
-                          <div style={{ display: "flex", justifyContent: "space-between", gap: 6, alignItems: "center" }}>
-                            <span style={{ fontSize: 10, fontWeight: 800, color: "#334155", overflow: "hidden", textOverflow: "ellipsis" }}>
-                              {rule.brand} · {rule.colourCode} · {rule.colourName}
-                            </span>
-                            <span style={{ fontSize: 9, color: "#94a3b8", whiteSpace: "nowrap" }}>{rule.skuCount} SKUs</span>
-                          </div>
-                          <div style={{ display: "flex", gap: 5, flexWrap: "wrap", marginTop: 5 }}>
-                            {rule.hexOptions.map((option) => {
-                              const optionKey = `${rule.brand}|${rule.colourCode}|${rule.normalizedColourName}|${option.colourHex}`;
-                              return (
-                                <button
-                                  key={option.colourHex}
-                                  className="btn btn-sm btn-ghost"
-                                  type="button"
-                                  disabled={savingColourHexRuleKey === optionKey}
-                                  title={`Set ${option.colourHex} as standard for ${rule.brand} ${rule.colourCode} ${rule.colourName}`}
-                                  onClick={() => void handleSetColourHexStandard(rule, option.colourHex)}
-                                  style={{ display: "inline-flex", alignItems: "center", gap: 4, padding: "2px 6px", fontSize: 10 }}
-                                >
-                                  <span
-                                    style={{
-                                      width: 14,
-                                      height: 14,
-                                      borderRadius: 3,
-                                      border: "1px solid #cbd5e1",
-                                      background: option.colourHex.includes("|")
-                                        ? `linear-gradient(135deg, ${option.colourHex.split("|")[0]} 50%, ${option.colourHex.split("|")[1]} 50%)`
-                                        : option.colourHex,
-                                    }}
-                                  />
-                                  {option.colourHex} · {option.skuCount}
-                                </button>
-                              );
-                            })}
-                          </div>
-                        </div>
-                      ))
-                    )}
-                    {colourHexConflicts.length > 4 ? (
-                      <div style={{ fontSize: 10, color: "#b45309" }}>
-                        {colourHexConflicts.length - 4} more conflicts. Resolve visible ones, then refresh.
-                      </div>
-                    ) : null}
+                  <div style={{ display: "grid", gridTemplateColumns: "repeat(5, minmax(0, 1fr))", gap: 4 }}>
+                    {COLOUR_RULE_STATUS_META.map((meta) => (
+                      <button key={meta.status} type="button" className="btn btn-sm btn-ghost" onClick={() => setColourRuleDetailsStatus(meta.status)} style={{ padding: 4, display: "grid", gap: 2, color: meta.colour }}>
+                        <strong>{colourHexRuleSummary[meta.summaryKey]}</strong><span style={{ fontSize: 8 }}>{meta.label}</span>
+                      </button>
+                    ))}
                   </div>
+                  <button className="btn btn-sm btn-primary" type="button" disabled={loadingColourRulePreview || colourHexRuleSummary.fillableSkus === 0} onClick={() => void handlePreviewColourRuleFills()} style={{ marginTop: 7, width: "100%" }}>
+                    {loadingColourRulePreview ? "Building preview..." : `Preview ${colourHexRuleSummary.fillableSkus} deterministic fills`}
+                  </button>
                   {colourHexRuleStatus ? (
                     <div style={{ marginTop: 7, fontSize: 11, color: colourHexRuleStatus.startsWith("Set") ? "#0f766e" : "#b45309" }}>
                       {colourHexRuleStatus}
@@ -5822,6 +5957,69 @@ function BomAdminPanel({
           }
         />
       </div>
+      {colourRuleDetailsStatus ? (
+        <div className="bom-finance-modal-backdrop" onClick={() => setColourRuleDetailsStatus(null)}>
+          <div className="bom-colour-code-edit-modal-shell" onClick={(event) => event.stopPropagation()}>
+            <section className="bom-colour-code-edit-card" role="dialog" aria-modal="true" aria-label="Colour rule details">
+              <div className="bom-colour-code-edit-head"><div><span className="bom-finance-eyebrow">COLOUR RULES</span><h4>{COLOUR_RULE_STATUS_META.find((meta) => meta.status === colourRuleDetailsStatus)?.label}</h4><p>{selectedColourRuleDetails.length} brand + code groups</p></div></div>
+              <div style={{ display: "grid", gap: 8, maxHeight: "52vh", overflowY: "auto" }}>
+                {selectedColourRuleDetails.length === 0 ? <p>No rules in this category.</p> : selectedColourRuleDetails.map((rule) => (
+                  <div key={`${rule.brand}|${rule.colourCode}`} style={{ border: "1px solid #e2e8f0", padding: 8 }}>
+                    <strong>{rule.brand} · {rule.colourCode}</strong>
+                    <div style={{ fontSize: 11, color: "#64748b" }}>{rule.standardColourName ?? rule.colourName ?? "No standard name"} · {rule.standardColourHex ?? "No standard swatch"} · {rule.skuCount} SKUs</div>
+                    <div style={{ fontSize: 10, color: "#64748b" }}>{rule.fillableSkuCount} fillable · {rule.placeholderNameSkuCount} placeholder names · {rule.missingSwatchSkuCount} missing swatches</div>
+                    {(rule.hasNameConflict || rule.hasSwatchConflict) ? (
+                      <div style={{ display: "flex", gap: 5, flexWrap: "wrap", marginTop: 6 }}>
+                        {getColourRuleStandardChoices(rule).map((choice) => {
+                          const key = `${rule.brand}|${rule.colourCode}|${choice.colourName}|${choice.colourHex}`;
+                          return <button key={key} type="button" className="btn btn-sm btn-ghost" disabled={savingColourHexRuleKey === key} onClick={() => void handleSetColourHexStandard(rule, choice.colourName, choice.colourHex)}>{choice.colourName} · {choice.colourHex}</button>;
+                        })}
+                      </div>
+                    ) : null}
+                    {rule.sampleMaterialCodes.length > 0 ? <div style={{ fontSize: 9, color: "#94a3b8", marginTop: 4 }}>{rule.sampleMaterialCodes.join(" · ")}</div> : null}
+                  </div>
+                ))}
+              </div>
+              <div className="bom-finance-action-bar"><button type="button" className="btn btn-sm btn-ghost" onClick={() => setColourRuleDetailsStatus(null)}>Close</button></div>
+            </section>
+          </div>
+        </div>
+      ) : null}
+      {showColourRulePreview ? (
+        <div className="bom-finance-modal-backdrop" onClick={() => { if (!applyingColourRulePreview) setShowColourRulePreview(false); }}>
+          <div className="bom-colour-code-edit-modal-shell" onClick={(event) => event.stopPropagation()}>
+            <section className="bom-colour-code-edit-card" role="dialog" aria-modal="true" aria-label="Colour rule fill preview">
+              <div className="bom-colour-code-edit-head"><div><span className="bom-finance-eyebrow">COLOUR RULES · PREVIEW</span><h4>{colourRuleApplyResult ? "Fill result" : "Confirm deterministic fills"}</h4><p>{colourRulePreview ? `${colourRulePreview.total} SKUs from ${colourRulePreview.ruleCount} rules` : "Checking current rules..."}</p></div></div>
+              {loadingColourRulePreview ? <p>Building preview...</p> : null}
+              {colourRuleActionError ? <div className="bom-colour-code-edit-error">{colourRuleActionError}</div> : null}
+              {colourRuleApplyResult ? <div style={{ color: "#0f766e", fontWeight: 700 }}>{colourRuleApplyResult.updated} updated · {colourRuleApplyResult.unchanged} unchanged · {colourRuleApplyResult.conflicts} conflicts · {colourRuleApplyResult.missingRules} missing rules</div> : null}
+              {colourRulePreview ? (
+                <div style={{ maxHeight: "48vh", overflowY: "auto", border: "1px solid #e2e8f0" }}>
+                  {colourRulePreview.items.map((item) => <div key={item.materialCode} style={{ padding: 7, borderBottom: "1px solid #e2e8f0", fontSize: 11 }}><strong>{item.materialCode}</strong> · {item.oldColourName || "(blank)"} → {item.newColourName}<br />{item.oldColourHex || "(blank)"} → {item.newColourHex}</div>)}
+                </div>
+              ) : null}
+              <div className="bom-finance-action-bar">
+                {!colourRuleApplyResult && colourRulePreview?.items.length ? <button type="button" className="btn btn-sm btn-primary" disabled={applyingColourRulePreview} onClick={() => void handleApplyColourRuleFills()}>{applyingColourRulePreview ? "Filling..." : `Fill ${colourRulePreview.items.length} deterministic items`}</button> : null}
+                <button type="button" className="btn btn-sm btn-ghost" disabled={applyingColourRulePreview} onClick={() => setShowColourRulePreview(false)}>Close</button>
+              </div>
+            </section>
+          </div>
+        </div>
+      ) : null}
+      {colourTierReview ? (
+        <div className="bom-finance-modal-backdrop" onClick={() => setColourTierReview(null)}>
+          <div className="bom-colour-code-edit-modal-shell" onClick={(event) => event.stopPropagation()}>
+            <section className="bom-colour-code-edit-card" role="dialog" aria-modal="true" aria-label="Colour tier price review">
+              <div className="bom-colour-code-edit-head"><div><span className="bom-finance-eyebrow">COLOUR TIER · PRICE REVIEW</span><h4>{colourTierReview.report.colourCode || colourTierReview.report.materialCode}: {colourTierReview.previousTier} → {colourTierReview.nextTier}</h4><p>{colourTierReview.report.brand} / {colourTierReview.nextTier} / +{colourTierReview.report.surchargeEur.toLocaleString()} EUR</p></div></div>
+              <div style={{ fontSize: 11, fontWeight: 700 }}>{colourTierReview.report.rows} countries scanned · {colourTierReview.report.updated} updated · {colourTierReview.report.skippedManual} manual FOB skipped · {colourTierReview.report.skippedNoBase} missing Single base</div>
+              <div style={{ maxHeight: "48vh", overflowY: "auto", border: "1px solid #e2e8f0" }}>
+                {colourTierReview.report.details.map((detail) => <div key={detail.countryCode} style={{ padding: 7, borderBottom: "1px solid #e2e8f0", fontSize: 11 }}><strong>{detail.countryCode}</strong> · {detail.oldFinalFobEur?.toLocaleString() ?? "-"} → {detail.newFinalFobEur?.toLocaleString() ?? "-"} · surcharge {detail.colourSurchargeEur?.toLocaleString() ?? "-"}{detail.reason ? ` · ${detail.reason}` : ""}</div>)}
+              </div>
+              <div className="bom-finance-action-bar"><button type="button" className="btn btn-sm btn-primary" onClick={() => setColourTierReview(null)}>Done</button></div>
+            </section>
+          </div>
+        </div>
+      ) : null}
       {financeDrawerScope ? (
         <div className="bom-finance-modal-backdrop" onClick={closeFinanceDrawer}>
           <div className="bom-finance-modal-shell" onClick={(event) => event.stopPropagation()}>
@@ -5997,7 +6195,14 @@ function BomAdminPanel({
                     maxLength={4}
                     onChange={(event) => {
                       const nextCode = event.target.value.replace(/[^a-zA-Z0-9]/g, "").slice(0, 4).toUpperCase();
-                      setColourCodeEditor((prev) => prev ? { ...prev, nextColourCode: nextCode } : prev);
+                      colourCodeLookupRequestRef.current += 1;
+                      setColourCodeRuleLookup(null);
+                      setColourCodeEditor((prev) => {
+                        if (!prev) return prev;
+                        const sameCode = nextCode === prev.currentColourCode;
+                        const currentSwatch = splitColourHexValue(prev.currentColourHex);
+                        return { ...prev, nextColourCode: nextCode, nextColourName: sameCode ? prev.currentColourName : "", nextColourHex: sameCode ? currentSwatch.hex1 : MISSING_COLOUR_SWATCH_HEX, nextColourHex2: sameCode ? currentSwatch.hex2 : MISSING_COLOUR_SWATCH_HEX, isDualSwatch: sameCode && currentSwatch.isDual, colourNameTouched: false, colourHexTouched: false };
+                      });
                       setColourCodeEditorError("");
                     }}
                   />
@@ -6009,12 +6214,13 @@ function BomAdminPanel({
                     value={colourCodeEditor.nextColourName}
                     placeholder="Optional"
                     onChange={(event) => {
-                      setColourCodeEditor((prev) => prev ? { ...prev, nextColourName: event.target.value } : prev);
+                      setColourCodeEditor((prev) => prev ? { ...prev, nextColourName: event.target.value, colourNameTouched: true } : prev);
                       setColourCodeEditorError("");
                     }}
                   />
                 </label>
               </div>
+              {loadingColourCodeRuleLookup ? <div className="bom-add-colour-edit-note">Checking Brand + Code rule...</div> : colourCodeRuleLookup ? <div className="bom-add-colour-edit-note">{formatColourRuleLookupNote(colourCodeRuleLookup, colourCodeEditor.colourNameTouched || colourCodeEditor.colourHexTouched)}</div> : null}
               <div className="bom-colour-swatch-option">
                 <span>Swatch</span>
                 <div className={`bom-colour-swatch-controls${colourCodeEditor.isDualSwatch ? " is-dual" : ""}`}>
@@ -6133,7 +6339,9 @@ function BomAdminPanel({
                     placeholder="KY"
                     onChange={(event) => {
                       const colourCode = event.target.value.replace(/[^a-zA-Z0-9]/g, "").slice(0, 4).toUpperCase();
-                      setAddColourEditor((prev) => prev ? { ...prev, colourCode } : prev);
+                      addColourLookupRequestRef.current += 1;
+                      setAddColourRuleLookup(null);
+                      setAddColourEditor((prev) => prev ? { ...prev, colourCode, colourName: "", colourHex: MISSING_COLOUR_SWATCH_HEX, colourHex2: MISSING_COLOUR_SWATCH_HEX, isDualSwatch: prev.tierName === "dual", colourNameTouched: false, colourHexTouched: false } : prev);
                       setAddColourEditorError("");
                     }}
                   />
@@ -6144,17 +6352,18 @@ function BomAdminPanel({
                     ref={addColourEditorNameRef}
                     type="text"
                     value={addColourEditor.colourName}
-                    placeholder="Uses code if blank"
+                    placeholder="Required when code is new"
                     onChange={(event) => {
-                      setAddColourEditor((prev) => prev ? { ...prev, colourName: event.target.value } : prev);
+                      setAddColourEditor((prev) => prev ? { ...prev, colourName: event.target.value, colourNameTouched: true } : prev);
                       setAddColourEditorError("");
                     }}
                   />
                 </label>
               </div>
+              {loadingAddColourRuleLookup ? <div className="bom-add-colour-edit-note">Checking Brand + Code rule...</div> : addColourRuleLookup ? <div className="bom-add-colour-edit-note">{formatColourRuleLookupNote(addColourRuleLookup, addColourEditor.colourNameTouched || addColourEditor.colourHexTouched)}</div> : null}
               <div className="bom-colour-swatch-option">
                 <span>Swatch optional</span>
-                <div className={`bom-colour-swatch-controls${addColourEditor.tierName === "dual" ? " is-dual" : ""}`}>
+                <div className={`bom-colour-swatch-controls${addColourEditor.isDualSwatch ? " is-dual" : ""}`}>
                   <input
                     type="color"
                     value={normalizeColourPickerValue(addColourEditor.colourHex)}
@@ -6168,7 +6377,7 @@ function BomAdminPanel({
                       setAddColourEditor((prev) => prev ? { ...prev, colourHex, colourHexTouched: true } : prev);
                     }}
                   />
-                  {addColourEditor.tierName === "dual" ? (
+                  {addColourEditor.isDualSwatch ? (
                     <>
                       <input
                         type="color"
@@ -6192,6 +6401,7 @@ function BomAdminPanel({
                   >
                     Clear
                   </button>
+                  {!addColourEditor.isDualSwatch ? <button type="button" className="btn btn-sm btn-ghost" onClick={() => setAddColourEditor((prev) => prev ? { ...prev, isDualSwatch: true, colourHex2: normalizeColourPickerValue(prev.colourHex), colourHexTouched: true } : prev)}>Dual swatch</button> : null}
                 </div>
               </div>
               <div className="bom-add-colour-edit-note">
@@ -6449,9 +6659,11 @@ function BomAdminPanel({
 	                                dragMaterialCode.current = null;
 	                                if (mc && tierName && !tierSkus.some((s: any) => s.materialCode === mc)) {
 	                                  const materialKey = bomMaterialKey(mc);
+	                                  const previousTier = getEffectiveColourTier(allSkus.find((sku: any) => sku.materialCode === mc) || {});
 	                                  setOptimisticColourTiers((prev) => ({ ...prev, [materialKey]: tierName }));
 	                                  try {
-	                                    await api.updateColourTier(mc, tierName);
+	                                    const result = await api.updateColourTier(mc, tierName);
+	                                    setColourTierReview({ previousTier, nextTier: tierName, report: result.reprice });
 	                                    setBomAdminError("");
 	                                    scheduleLoad(1200);
 	                                  } catch (e) {

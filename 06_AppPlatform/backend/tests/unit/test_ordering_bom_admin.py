@@ -119,7 +119,7 @@ def test_create_material_sku_canonicalizes_jaecoo_and_creates_manual_baseline(
 ) -> None:
     session = _CreateMaterialSession()
     baseline_id = uuid4()
-    reusable_colour_args: dict[str, str] = {}
+    reusable_colour_args: dict[str, object] = {}
     baseline_publishers: list[str] = []
 
     monkeypatch.setattr(
@@ -133,19 +133,23 @@ def test_create_material_sku_canonicalizes_jaecoo_and_creates_manual_baseline(
         baseline_publishers.append(published_by)
         return SimpleNamespace(baseline_version_id=baseline_id)
 
-    def find_reusable_colour_hex(
+    def resolve_colour_attributes(
         _session: object,
-        *,
         brand: str,
         colour_code: str,
+        *,
         colour_name: str,
-    ) -> str:
+        colour_hex: str | None,
+        colour_hex_supplied: bool,
+    ) -> dict:
         reusable_colour_args.update(
             brand=brand,
             colour_code=colour_code,
             colour_name=colour_name,
+            colour_hex=colour_hex,
+            colour_hex_supplied=colour_hex_supplied,
         )
-        return "#FFFFFF"
+        return {"colourName": colour_name, "colourHex": "#FFFFFF"}
 
     monkeypatch.setattr(
         order_genius_routes.repo,
@@ -154,8 +158,8 @@ def test_create_material_sku_canonicalizes_jaecoo_and_creates_manual_baseline(
     )
     monkeypatch.setattr(
         order_genius_routes.repo,
-        "find_reusable_colour_hex",
-        find_reusable_colour_hex,
+        "resolve_colour_attributes",
+        resolve_colour_attributes,
     )
     monkeypatch.setattr(
         order_genius_routes.repo,
@@ -185,6 +189,8 @@ def test_create_material_sku_canonicalizes_jaecoo_and_creates_manual_baseline(
         "brand": "JAECOO",
         "colour_code": "BW",
         "colour_name": "Khaki white",
+        "colour_hex": None,
+        "colour_hex_supplied": False,
     }
     assert baseline_publishers == ["admin@example.com"]
     assert session.flushed is True
@@ -221,11 +227,85 @@ def test_create_material_sku_rejects_duplicate_material_code(monkeypatch) -> Non
     assert session.committed is False
 
 
+@pytest.mark.parametrize("scenario", ["known", "unknown", "conflict"])
+def test_create_material_sku_resolves_known_unknown_and_conflict_rules(
+    monkeypatch,
+    scenario: str,
+) -> None:
+    def rule_row(code: str, name: str, colour_hex: str) -> SimpleNamespace:
+        return SimpleNamespace(
+            material_code=f"RULE-{name}",
+            brand="OMODA",
+            exterior_color_code=code,
+            exterior_color_name=name,
+            colour_hex=colour_hex,
+        )
+
+    rows = {
+        "known": [rule_row("W3", "water blue", "#B6D3FB")],
+        "unknown": [],
+        "conflict": [
+            rule_row("ZF", "Red black", "#19191A|#8B0000"),
+            rule_row("ZF", "Ruby black", "#1A1A1A|#8B0000"),
+        ],
+    }[scenario]
+    code, supplied_name = {
+        "known": ("W3", "W3"),
+        "unknown": ("XY", "Ocean blue"),
+        "conflict": ("ZF", "ZF"),
+    }[scenario]
+    body = {
+        "materialCode": f"NEW-{scenario}",
+        "brand": "OMODA",
+        "modelName": "OMODA5",
+        "version": "Premium",
+        "colour": supplied_name,
+        "colourCode": code,
+    }
+    if scenario == "unknown":
+        body["colourHex"] = "#123456"
+    session = _CreateMaterialSession()
+    session.execute_values = rows
+    monkeypatch.setattr(order_genius_routes.repo, "get_sku_by_material_code_any_status", lambda *_: None)
+    monkeypatch.setattr(
+        order_genius_routes.repo,
+        "get_latest_baseline",
+        lambda *_: SimpleNamespace(baseline_version_id=uuid4()),
+    )
+    monkeypatch.setattr(order_genius_routes.repo, "copy_country_material_finance_template", lambda *_a, **_k: 0)
+
+    result = order_genius_routes.create_material_sku(
+        body,
+        session=session,
+        user=SimpleNamespace(name="admin"),
+    )
+    created = session.added[0]
+
+    expected = {
+        "known": ("water blue", "#B6D3FB"),
+        "unknown": ("Ocean blue", "#123456"),
+        "conflict": ("ZF", None),
+    }[scenario]
+    assert (created.exterior_color_name, created.colour_hex) == expected
+    assert (result["colourName"], result["colourHex"]) == expected
+
+
 def test_infer_colour_tier_handles_dual_swatch_and_special_finish() -> None:
     assert infer_colour_tier("Carbon black / khaki white") == "dual"
     assert infer_colour_tier("Carbon black + grey roof") == "dual"
     assert infer_colour_tier("Aviation silver", colour_hex="#C8C0B8|#111111") == "dual"
     assert infer_colour_tier("Matte black (Black Edition)") == "special"
+
+
+def test_effective_colour_tier_legacy_fallback_ignores_fillable_name_and_swatch() -> None:
+    sku = SimpleNamespace(
+        colour_tier=None,
+        exterior_color_type="single",
+        exterior_color_name="Matte black",
+        colour_hex="#111111|#FFFFFF",
+    )
+
+    assert order_genius_service._effective_colour_tier(sku) == "single"
 
 
 def test_fob_based_tier_ignores_cleared_zero_fob() -> None:
@@ -279,6 +359,12 @@ def _legacy_jaecoo_sku() -> SimpleNamespace:
 
 def test_build_matrix_normalizes_legacy_jaecoo_and_model_powertrain(monkeypatch) -> None:
     sku = _legacy_jaecoo_sku()
+    sku.colour_hex = "#F0ECE0"
+    historical = _legacy_jaecoo_sku()
+    historical.material_code = "T7000Z5ZEMY0025"
+    historical.exterior_color_code = "ZE"
+    historical.colour_tier = "dual"
+    historical.colour_hex = "#1A1A1A|#F0ECE0"
     fob = SimpleNamespace(final_fob_eur=15300)
 
     monkeypatch.setattr(
@@ -298,18 +384,28 @@ def test_build_matrix_normalizes_legacy_jaecoo_and_model_powertrain(monkeypatch)
         order_genius_service.repo,
         "list_fobs_for_country_material_codes",
         lambda _session, _country_code, material_codes, _payment_term_code=None: {
-            sku.material_code: fob,
-        } if sku.material_code in material_codes else {},
+            code: fob for code in material_codes
+        },
     )
     monkeypatch.setattr(
         order_genius_service.repo,
         "list_quantities_for_country_year",
-        lambda *_args, **_kwargs: [],
+        lambda *_args, **_kwargs: [SimpleNamespace(
+            material_code=historical.material_code,
+            order_month=1,
+            quantity=2,
+            row_version=1,
+        )],
     )
     monkeypatch.setattr(
         order_genius_service.repo,
         "list_historical_skus_with_quantity",
-        lambda *_args, **_kwargs: [],
+        lambda *_args, **_kwargs: [historical.material_code],
+    )
+    monkeypatch.setattr(
+        order_genius_service.repo,
+        "get_skus_by_material_codes_any_status",
+        lambda *_args, **_kwargs: {historical.material_code: historical},
     )
 
     result = order_genius_service.build_matrix(
@@ -321,12 +417,21 @@ def test_build_matrix_normalizes_legacy_jaecoo_and_model_powertrain(monkeypatch)
         powertrain="HEV",
     )
 
-    assert result["totalRows"] == 1
-    row = result["rows"][0]
+    assert result["totalRows"] == 2
+    rows = {row["materialCode"]: row for row in result["rows"]}
+    row = rows[sku.material_code]
     assert row["brand"] == "JAECOO"
     assert row["modelName"] == "JAECOO5 HEV"
     assert row["powertrain"] == "HEV"
     assert row["fobEur"] == 15300
+    assert row["colourCode"] == "BW"
+    assert row["colourTier"] == "single"
+    assert row["colourHex"] == "#F0ECE0"
+    historical_row = rows[historical.material_code]
+    assert historical_row["lifecycleStatus"] == "historical"
+    assert historical_row["colourCode"] == "ZE"
+    assert historical_row["colourTier"] == "dual"
+    assert historical_row["colourHex"] == "#1A1A1A|#F0ECE0"
 
 
 def test_build_matrix_backfills_interior_and_preserves_paint_tier(monkeypatch) -> None:
@@ -336,6 +441,7 @@ def test_build_matrix_backfills_interior_and_preserves_paint_tier(monkeypatch) -
     blank.exterior_color_code = "CP"
     blank.exterior_color_type = "single"
     blank.colour_tier = "single"
+    blank.colour_hex = "#19191A|#8B0000"
     blank.interior_color_name = None
 
     donor = _legacy_jaecoo_sku()
@@ -379,7 +485,8 @@ def test_build_matrix_backfills_interior_and_preserves_paint_tier(monkeypatch) -
     by_code = {row["materialCode"]: row for row in result["rows"]}
 
     assert by_code["T7000Z5CPMY0026"]["interiorColorName"] == "Black-Black"
-    assert by_code["T7000Z5CPMY0026"]["colourTier"] == "special"
+    assert by_code["T7000Z5CPMY0026"]["colourTier"] == "single"
+    assert by_code["T7000Z5CPMY0026"]["colourHex"] == "#19191A|#8B0000"
 
 
 def test_build_matrix_excludes_cleared_zero_fob(monkeypatch) -> None:
@@ -621,46 +728,92 @@ def test_upsert_colour_surcharge_rejects_unknown_type() -> None:
         repo.upsert_colour_surcharge(_FakeSession(), "OMODA", "single", 0)
 
 
-def test_colour_hex_rules_group_by_brand_code_and_normalized_name() -> None:
+def test_colour_rules_group_by_normalized_brand_code_and_fill_placeholder() -> None:
     skus = [
         SimpleNamespace(
             material_code="A",
             brand="JEACOO",
-            exterior_color_code="bw",
-            exterior_color_name="Khaki   White",
-            colour_hex="#f0ece0",
+            exterior_color_code="w3",
+            exterior_color_name="water blue",
+            colour_hex="#b6d3fb",
         ),
         SimpleNamespace(
             material_code="B",
             brand="JAECOO",
-            exterior_color_code="BW",
-            exterior_color_name="khaki white",
-            colour_hex="#F0ECE0",
+            exterior_color_code="W3",
+            exterior_color_name="W3",
+            colour_hex=None,
+        ),
+    ]
+
+    rule = repo.build_colour_hex_rules_from_skus(skus)[0]
+    assert rule["brand"] == "JAECOO"
+    assert rule["colourCode"] == "W3"
+    assert rule["status"] == "fillable"
+    assert rule["standardColourName"] == "water blue"
+    assert rule["standardColourHex"] == "#B6D3FB"
+    assert rule["placeholderNameSkuCount"] == 1
+    assert rule["previewChanges"] == [
+        {
+            "materialCode": "B",
+            "brand": "JAECOO",
+            "colourCode": "W3",
+            "oldColourName": "W3",
+            "newColourName": "water blue",
+            "oldColourHex": None,
+            "newColourHex": "#B6D3FB",
+        }
+    ]
+
+
+def test_colour_rules_report_name_and_swatch_conflicts_independently() -> None:
+    skus = [
+        SimpleNamespace(
+            material_code="A",
+            brand="OMODA",
+            exterior_color_code="ZF",
+            exterior_color_name="Red black",
+            colour_hex="#19191A|#8B0000",
         ),
         SimpleNamespace(
-            material_code="C",
-            brand="JAECOO",
-            exterior_color_code="BW",
-            exterior_color_name="Khaki White",
-            colour_hex="#FFFFFF",
+            material_code="B",
+            brand="OMODA",
+            exterior_color_code="ZF",
+            exterior_color_name="Ruby black",
+            colour_hex="#1A1A1A|#8B0000",
         ),
     ]
 
-    rules = repo.build_colour_hex_rules_from_skus(skus)
+    rule = repo.build_colour_hex_rules_from_skus(skus)[0]
+    summary = repo.summarize_colour_hex_rules([rule])
 
-    assert len(rules) == 1
-    rule = rules[0]
-    assert rule["brand"] == "JAECOO"
-    assert rule["colourCode"] == "BW"
-    assert rule["normalizedColourName"] == "khaki white"
-    assert rule["status"] == "conflict"
-    assert rule["hexOptions"] == [
-        {"colourHex": "#F0ECE0", "skuCount": 2},
-        {"colourHex": "#FFFFFF", "skuCount": 1},
-    ]
+    assert rule["status"] == "name_conflict"
+    assert rule["hasNameConflict"] is True
+    assert rule["hasSwatchConflict"] is True
+    assert summary["nameConflict"] == 1
+    assert summary["swatchConflict"] == 1
+    assert rule["previewChanges"] == []
 
 
-def test_find_reusable_colour_hex_requires_no_conflict() -> None:
+def test_colour_rules_report_unknown_placeholder_as_missing() -> None:
+    rule = repo.build_colour_hex_rules_from_skus([
+        SimpleNamespace(
+            material_code="A",
+            brand="OMODA",
+            exterior_color_code="XY",
+            exterior_color_name="XY",
+            colour_hex=None,
+        )
+    ])[0]
+
+    assert rule["status"] == "missing"
+    assert rule["standardColourName"] is None
+    assert rule["standardColourHex"] is None
+    assert rule["placeholderNameSkuCount"] == 1
+    assert rule["missingSwatchSkuCount"] == 1
+
+
+def test_resolve_colour_attributes_reuses_only_unambiguous_rule() -> None:
     standard = _FakeSession([
         SimpleNamespace(
             material_code="A",
@@ -668,40 +821,51 @@ def test_find_reusable_colour_hex_requires_no_conflict() -> None:
             exterior_color_code="BW",
             exterior_color_name="Khaki White",
             colour_hex="#F0ECE0",
-        )
+        ),
     ])
-    conflict = _FakeSession([
+
+    result = repo.resolve_colour_attributes(
+        standard, "JEACOO", "bw", colour_name="BW",
+    )
+
+    assert result["colourName"] == "Khaki White"
+    assert result["colourHex"] == "#F0ECE0"
+    assert result["source"] == "brand_code_rule"
+
+
+def test_resolve_colour_attributes_preserves_explicit_hex_clear() -> None:
+    session = _FakeSession([
         SimpleNamespace(
             material_code="A",
-            brand="JAECOO",
-            exterior_color_code="BW",
-            exterior_color_name="Khaki White",
-            colour_hex="#F0ECE0",
-        ),
-        SimpleNamespace(
-            material_code="B",
-            brand="JAECOO",
-            exterior_color_code="BW",
-            exterior_color_name="Khaki White",
-            colour_hex="#FFFFFF",
+            brand="OMODA",
+            exterior_color_code="W3",
+            exterior_color_name="water blue",
+            colour_hex="#B6D3FB",
         ),
     ])
 
-    assert repo.find_reusable_colour_hex(
-        standard, "JAECOO", "BW", "khaki white",
-    ) == "#F0ECE0"
-    assert repo.find_reusable_colour_hex(
-        conflict, "JAECOO", "BW", "khaki white",
-    ) is None
+    result = repo.resolve_colour_attributes(
+        session,
+        "OMODA",
+        "W3",
+        colour_name="water blue",
+        colour_hex=None,
+        colour_hex_supplied=True,
+    )
+
+    assert result["colourHex"] is None
 
 
-def test_set_standard_colour_hex_for_rule_updates_matching_skus_only() -> None:
+def test_set_standard_colour_hex_for_rule_resolves_whole_brand_code() -> None:
     matching = SimpleNamespace(
         material_code="A",
         brand="JAECOO",
         exterior_color_code="BW",
         exterior_color_name="Khaki White",
         colour_hex="#F0ECE0",
+        colour_tier="single",
+        is_published=True,
+        final_fob_eur=14000,
         updated_at_utc=None,
     )
     same_code_other_name = SimpleNamespace(
@@ -710,6 +874,9 @@ def test_set_standard_colour_hex_for_rule_updates_matching_skus_only() -> None:
         exterior_color_code="BW",
         exterior_color_name="Carbon Black",
         colour_hex="#000000",
+        colour_tier="dual",
+        is_published=False,
+        final_fob_eur=14300,
         updated_at_utc=None,
     )
     fake_session = _FakeSession([matching, same_code_other_name])
@@ -718,11 +885,318 @@ def test_set_standard_colour_hex_for_rule_updates_matching_skus_only() -> None:
         fake_session, "JAECOO", "BW", "khaki white", "#ffffff",
     )
 
-    assert result["updated"] == 1
-    assert result["materialCodes"] == ["A"]
+    assert result["updated"] == 2
+    assert result["materialCodes"] == ["A", "B"]
     assert matching.colour_hex == "#FFFFFF"
     assert matching.updated_at_utc is not None
-    assert same_code_other_name.colour_hex == "#000000"
+    assert same_code_other_name.exterior_color_name == "khaki white"
+    assert same_code_other_name.colour_hex == "#FFFFFF"
+    assert (matching.colour_tier, matching.is_published, matching.final_fob_eur) == (
+        "single", True, 14000,
+    )
+    assert (
+        same_code_other_name.colour_tier,
+        same_code_other_name.is_published,
+        same_code_other_name.final_fob_eur,
+    ) == ("dual", False, 14300)
+    assert fake_session.added == []
+
+
+def test_preview_and_apply_colour_rule_fills_use_same_material_codes() -> None:
+    donor = SimpleNamespace(
+        material_code="A",
+        brand="OMODA",
+        exterior_color_code="W3",
+        exterior_color_name="water blue",
+        colour_hex="#B6D3FB",
+        colour_tier="single",
+        is_published=True,
+        final_fob_eur=14000,
+        updated_at_utc=None,
+    )
+    target = SimpleNamespace(
+        material_code="B",
+        brand="OMODA",
+        exterior_color_code="W3",
+        exterior_color_name="W3",
+        colour_hex=None,
+        colour_tier="dual",
+        is_published=False,
+        final_fob_eur=14200,
+        updated_at_utc=None,
+    )
+    session = _FakeSession([donor, target])
+
+    preview = repo.preview_colour_rule_fills(session)
+    result = repo.apply_colour_rule_fills(
+        session,
+        [item["materialCode"] for item in preview["items"]],
+        preview["fingerprint"],
+    )
+
+    assert result["materialCodes"] == ["B"]
+    assert target.exterior_color_name == "water blue"
+    assert target.colour_hex == "#B6D3FB"
+    assert (target.colour_tier, target.is_published, target.final_fob_eur) == (
+        "dual", False, 14200,
+    )
+    assert (donor.colour_tier, donor.is_published, donor.final_fob_eur) == (
+        "single", True, 14000,
+    )
+    assert session.added == []
+
+
+def test_preview_and_apply_exclude_inactive_skus() -> None:
+    def sku(code: str, name: str, colour_hex: str | None, is_active: bool):
+        return SimpleNamespace(
+            material_code=code,
+            brand="OMODA",
+            exterior_color_code="W3",
+            exterior_color_name=name,
+            colour_hex=colour_hex,
+            is_active=is_active,
+            updated_at_utc=None,
+        )
+
+    donor = sku("A", "water blue", "#B6D3FB", True)
+    target = sku("B", "W3", None, True)
+    inactive = sku("C", "W3", None, False)
+
+    class ActiveOnlySession(_FakeSession):
+        def execute(self, stmt: object) -> _ExecuteResult:
+            assert "material_sku_master.is_active = true" in str(stmt).lower()
+            return _ExecuteResult([row for row in self.execute_values if row.is_active])
+
+    session = ActiveOnlySession([donor, target, inactive])
+    preview = repo.preview_colour_rule_fills(session)
+    assert [item["materialCode"] for item in preview["items"]] == ["B"]
+
+    repo.apply_colour_rule_fills(session, ["B"], preview["fingerprint"])
+
+    assert target.exterior_color_name == "water blue"
+    assert inactive.exterior_color_name == "W3"
+    assert inactive.colour_hex is None
+
+
+@pytest.mark.parametrize("stale_kind", ["source_changed", "missing_code", "extra_code"])
+def test_apply_colour_rule_fills_rejects_stale_preview_without_writes(
+    stale_kind: str,
+) -> None:
+    donor = SimpleNamespace(
+        material_code="A",
+        brand="OMODA",
+        exterior_color_code="W3",
+        exterior_color_name="water blue",
+        colour_hex="#B6D3FB",
+        updated_at_utc=None,
+    )
+    target = SimpleNamespace(
+        material_code="B",
+        brand="OMODA",
+        exterior_color_code="W3",
+        exterior_color_name="W3",
+        colour_hex=None,
+        updated_at_utc=None,
+    )
+    session = _FakeSession([donor, target])
+    preview = repo.preview_colour_rule_fills(session)
+    material_codes = [item["materialCode"] for item in preview["items"]]
+    if stale_kind == "source_changed":
+        donor.colour_hex = "#FFFFFF"
+    elif stale_kind == "missing_code":
+        material_codes = []
+    else:
+        material_codes.append("EXTRA")
+
+    with pytest.raises(ValueError, match="preview is stale"):
+        repo.apply_colour_rule_fills(
+            session,
+            material_codes,
+            preview["fingerprint"],
+        )
+
+    assert target.exterior_color_name == "W3"
+    assert target.colour_hex is None
+    assert target.updated_at_utc is None
+    assert session.added == []
+
+
+def test_apply_colour_rule_route_maps_stale_preview_to_conflict(monkeypatch) -> None:
+    session = _CreateMaterialSession()
+    monkeypatch.setattr(
+        order_genius_routes.repo,
+        "apply_colour_rule_fills",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(ValueError("stale")),
+    )
+
+    with pytest.raises(HTTPException) as exc_info:
+        order_genius_routes.apply_colour_rule_fills(
+            {"materialCodes": ["A"], "previewFingerprint": "old"},
+            session=session,
+        )
+
+    assert exc_info.value.status_code == 409
+    assert session.rolled_back is True
+    assert session.committed is False
+
+
+def test_patch_colour_code_saves_name_and_hex_without_rekey(monkeypatch) -> None:
+    session = _CreateMaterialSession()
+    sku = SimpleNamespace(
+        material_code="T7000NHX4MY0002",
+        brand="OMODA",
+        exterior_color_code="X4",
+        exterior_color_name="X4",
+        colour_hex="#94A3B8",
+        colour_code_confirmed=True,
+        bom_template="T7000NH**MY0002",
+    )
+    monkeypatch.setattr(order_genius_routes.repo, "get_sku_by_material_code", lambda *_: sku)
+    monkeypatch.setattr(
+        order_genius_routes.repo,
+        "update_bom_template_material_codes",
+        lambda *_args, **_kwargs: pytest.fail("name/swatch edit must not rekey"),
+    )
+
+    result = order_genius_routes.patch_colour_code(
+        sku.material_code,
+        {
+            "colourCode": "X4",
+            "colourName": "Carbon crystal black / aviation silver",
+            "colourHex": "#1A1A1A|#C8C0B8",
+        },
+        session=session,
+    )
+
+    assert result["materialCode"] == sku.material_code
+    assert result["colourName"] == "Carbon crystal black / aviation silver"
+    assert result["colourHex"] == "#1A1A1A|#C8C0B8"
+    cleared = order_genius_routes.patch_colour_code(
+        sku.material_code,
+        {"colourCode": "X4", "colourName": result["colourName"], "colourHex": None},
+        session=session,
+    )
+    assert cleared["colourHex"] is None
+    assert sku.colour_hex is None
+    assert session.committed is True
+
+
+def test_patch_colour_code_changed_code_rekeys_and_saves_name_hex(monkeypatch) -> None:
+    session = _CreateMaterialSession()
+    sku = SimpleNamespace(
+        material_code="T7000NHX4MY0002",
+        brand="OMODA",
+        exterior_color_code="X4",
+        exterior_color_name="Old dual",
+        colour_hex="#111111|#CCCCCC",
+        colour_code_confirmed=True,
+        bom_template="T7000NH**MY0002",
+    )
+    calls: list[tuple[list[str], str]] = []
+    monkeypatch.setattr(order_genius_routes.repo, "get_sku_by_material_code", lambda *_: sku)
+
+    def rekey(_session, material_codes: list[str], template: str) -> dict[str, str]:
+        calls.append((material_codes, template))
+        return {sku.material_code: "T7000NHZUMY0002"}
+
+    monkeypatch.setattr(order_genius_routes.repo, "update_bom_template_material_codes", rekey)
+
+    result = order_genius_routes.patch_colour_code(
+        sku.material_code,
+        {
+            "colourCode": "ZU",
+            "colourName": "Carbon black / aquatic green",
+            "colourHex": "#1A1A1A|#1ABC9C",
+        },
+        session=session,
+    )
+
+    assert calls == [(["T7000NHX4MY0002"], "T7000NH**MY0002")]
+    assert result["materialCode"] == "T7000NHZUMY0002"
+    assert result["colourName"] == "Carbon black / aquatic green"
+    assert result["colourHex"] == "#1A1A1A|#1ABC9C"
+
+
+def test_patch_colour_code_rejects_unknown_code_without_name(monkeypatch) -> None:
+    session = _CreateMaterialSession()
+    sku = SimpleNamespace(
+        material_code="T7000NHX4MY0002",
+        brand="OMODA",
+        exterior_color_code="X4",
+        exterior_color_name="Old dual",
+        colour_hex="#111111|#CCCCCC",
+        colour_code_confirmed=True,
+        bom_template="T7000NH**MY0002",
+    )
+    monkeypatch.setattr(order_genius_routes.repo, "get_sku_by_material_code", lambda *_: sku)
+
+    with pytest.raises(HTTPException) as exc_info:
+        order_genius_routes.patch_colour_code(
+            sku.material_code,
+            {"colourCode": "ZZ"},
+            session=session,
+        )
+
+    assert exc_info.value.status_code == 400
+    assert "requires a non-placeholder colourName" in str(exc_info.value.detail)
+    assert sku.exterior_color_code == "X4"
+    assert sku.exterior_color_name == "Old dual"
+    assert sku.colour_hex == "#111111|#CCCCCC"
+    assert session.committed is False
+
+
+def test_colour_tier_reprice_reports_each_country_without_overwriting_manual(
+    monkeypatch,
+) -> None:
+    baseline_id = uuid4()
+    sku = SimpleNamespace(
+        material_code="T7000NHX4MY0002",
+        brand="OMODA",
+        exterior_color_code="X4",
+        colour_tier="dual",
+    )
+
+    def fob(country: str, final: float, source: str, base=None, surcharge=None):
+        return CountrySkuFobResolved(
+            country_sku_fob_id=uuid4(),
+            baseline_version_id=baseline_id,
+            country_code=country,
+            material_code=sku.material_code,
+            payment_term_code="LC90",
+            uploaded_fob_eur=final,
+            base_fob_eur=base,
+            colour_surcharge_eur=surcharge,
+            final_fob_eur=final,
+            fob_source_mode=source,
+            is_active=True,
+        )
+
+    manual = fob("NL", 1300, "manual_edit")
+    no_base = fob("FI", 1100, "uploaded_base_plus_colour")
+    updated = fob("AT", 1000, "uploaded_base_plus_colour", 1000, None)
+    unchanged = fob("CZ", 1200, "uploaded_base_plus_colour", 1000, 200)
+    session = _FakeSession([manual, no_base, updated, unchanged])
+    monkeypatch.setattr(repo, "get_sku_by_material_code", lambda *_: sku)
+    monkeypatch.setattr(repo, "get_colour_surcharge_amount_for_sku", lambda *_: 200.0)
+    monkeypatch.setattr(
+        repo,
+        "_find_colour_surcharge_base_fob",
+        lambda _session, _sku, country: None if country == "FI" else 1000.0,
+    )
+
+    result = repo.reprice_sku_colour_surcharge_fobs(session, sku.material_code)
+    details = {item["countryCode"]: item for item in result["details"]}
+
+    assert result["updated"] == 1
+    assert result["unchanged"] == 1
+    assert result["skippedManual"] == 1
+    assert result["skippedNoBase"] == 1
+    assert details["NL"]["reason"] == "manual_fob"
+    assert details["FI"]["reason"] == "missing_single_base"
+    assert details["AT"]["newFinalFobEur"] == 1200
+    assert details["AT"]["colourSurchargeEur"] == 200
+    assert details["CZ"]["status"] == "unchanged"
+    assert manual.final_fob_eur == 1300
 
 
 def test_copy_country_fobs_creates_target_country_rows(monkeypatch) -> None:
