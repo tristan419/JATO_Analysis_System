@@ -10,16 +10,17 @@ goal_control:
     把同一已测试构件更新到正式 www Active。Candidate 测试数据永不进入 Active；
     intl 继续使用既有的 Active 到 intl 独立同步流程，不在 V2 中新增编排。
   current_phase: auto_prepare_candidate_freshness
-  current_step: local_implementation_review_and_tests_complete
-  waiting_on: draft_pull_request_ci_merge_authorization_and_first_real_auto_prepare
+  current_step: draft_pull_request_open_ci_in_progress
+  waiting_on: pull_request_224_required_ci_then_explicit_merge_authorization
   pause_reason: none
   next_action: >-
     只复用现有 production-release prepare-candidate 实现“main CI 成功后准备最新
     Candidate”，并在现有 Candidate banner 增加当前 main 新鲜度判定；删除会在
     Candidate prepare 后误审 intl 的过时 intl-edge-prewarm 自动 workflow，不改独立
     sync-www-active-to-intl。candidate-preview GitHub environment 与固定 SSH host key 已配置，
-    本地代码、独立审查和测试已经完成；下一步只创建 Draft PR 并等待 CI。合并仍需用户单独授权，
-    合并后首次真实自动 prepare 才能验收。禁止自动更新 Active 或同步 intl。
+    本地代码、独立审查和测试已经完成，Draft PR #224 已创建。下一步只监听 required CI；
+    Ready/合并仍需用户单独授权，合并后首次真实自动 prepare 才能验收。禁止自动更新
+    Active 或同步 intl。
   release_authorization_contract:
     source_path: main_to_candidate_to_explicit_user_approval_to_active
     main_may_advance_without_active: true
@@ -134,12 +135,12 @@ goal_control:
     bom_admin_pull_request_215_merged: true_main_40ae3211
     candidate_sandbox_draft_ready_for_human_review: true
     previous_pull_request_214_merged: true_main_30f3e2e4
-    current_fix_commit: pending_local_commit_auto_prepare_candidate_freshness
-    current_fix_github_checks: not_run_local_validation_complete
-    pull_request_opened: false_current_auto_prepare_branch
-    pull_request_number: none_current_auto_prepare_branch
-    pull_request_url: none_current_auto_prepare_branch
-    pull_request_is_draft: planned
+    current_fix_commit: 20f082f4dbb64a4e56b4b67f1a93590b445603ec
+    current_fix_github_checks: pending_pull_request_224
+    pull_request_opened: true
+    pull_request_number: 224
+    pull_request_url: https://github.com/tristan419/JATO_Analysis_System/pull/224
+    pull_request_is_draft: true
     previous_pull_request_217_merged: true_main_619466e8
     candidate_public_gateway_commit: 991a44f8499a1210317aafb5da1f3183b7ee0769
     candidate_fixed_public_link_required: true
@@ -231,6 +232,8 @@ goal_control:
     automatic_prepare_manual_refresh_preserved: true
     automatic_prepare_independent_review: passed_after_p1_closure_no_open_p0_p1
     automatic_prepare_local_validation: 232_focused_and_1296_all_scripts_15_skipped_two_validators_bash_n_pycompile
+    automatic_prepare_pull_request: 224_draft
+    automatic_prepare_implementation_commit: 20f082f4dbb64a4e56b4b67f1a93590b445603ec
     candidate_preview_permission_boundary: logical_code_pr_environment_not_restricted_ssh_principal
     candidate_preview_banner_refresh: mount_focus_and_visible_no_polling
     candidate_preview_environment_configured: true_main_only_no_reviewer_no_wait
@@ -267,7 +270,7 @@ goal_control:
     - observed_server_state_contradicts_documented_baseline
     - change_would_touch_active_or_intl_database_content
     - change_would_cross_this_pr_scope
-  updated_at: "2026-08-10T16:00:00+08:00"
+  updated_at: "2026-08-10T16:33:24+08:00"
 ---
 
 # Fixed Active / Candidate Release V2
