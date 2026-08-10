@@ -8,14 +8,14 @@ goal_control:
     身份直接进入页面；完成代码、CI、腾讯云无流量验收后，再由用户授权把同一已测试构件
     更新到正式 www Active。Candidate 测试数据永不进入 Active；intl 继续使用既有的
     Active 到 intl 独立同步流程，不在 V2 中新增编排。
-  current_phase: candidate_prepare_failure_root_cause
-  current_step: blocked_on_minimal_alembic_driver_fix
-  waiting_on: minimal_alembic_driver_fix_pr_ci_and_merge_authorization
-  pause_reason: candidate_prepare_failed_alembic_sync_driver_mismatch
+  current_phase: candidate_alembic_driver_fix_review
+  current_step: waiting_for_explicit_pr223_ready_and_merge_authorization
+  waiting_on: explicit_pr223_ready_and_merge_authorization
+  pause_reason: none
   next_action: >-
-    只在现有 Alembic env 中修正 asyncpg 到已安装 psycopg v3 的同步驱动选择，补回归并通过
-    CI；合并仍需独立授权，之后才能重新执行 prepare-candidate。禁止自动更新 Active、同步
-    intl 或修改生产业务数据。
+    #223 的最小 Alembic psycopg v3 驱动修复已通过本地验证与 required CI，等待用户明确授权
+    转 Ready 并合并。合并后仍需重新执行 prepare-candidate 才能判断 Candidate 是否 ready；
+    禁止自动更新 Active、同步 intl 或修改生产业务数据。
   release_authorization_contract:
     source_path: main_to_candidate_to_explicit_user_approval_to_active
     main_may_advance_without_active: true
@@ -68,9 +68,9 @@ goal_control:
     manifest_build_metadata_verification_complete: true_local
     v2_source_critical_closure_complete: true_local_13_files
     sourceable_runtime_builder_complete: false_removed_helper_only_change
-    local_ready_blockers_open: 1_alembic_env_sync_driver_selection
+    local_ready_blockers_open: 0_driver_fix_pr223_green
     independent_review_passed: true_hotfix_no_p0_p1_p2
-    server_acceptance_blockers_open: 1_minimal_driver_fix_then_prepare_retry
+    server_acceptance_blockers_open: 1_merge_driver_fix_then_prepare_retry
     update_active_retry_idempotent: true_local
     rollback_active_retry_idempotent: true_local
     rollback_sigkill_reference_safe: true_local_and_linux_ci_target_ext4_unprobed
@@ -220,6 +220,12 @@ goal_control:
     candidate_prepare_release_venv_psycopg2_present: false
     candidate_prepare_release_venv_psycopg_v3_present: true
     candidate_prepare_temporary_sandbox_deleted: true
+    candidate_prepare_driver_fix_pull_request: https://github.com/tristan419/JATO_Analysis_System/pull/223
+    candidate_prepare_driver_fix_head: 6cf5f6a2d16713c5a4bda3e5ed90a6b541580310
+    candidate_prepare_driver_fix_pr_state: draft_clean_mergeable
+    candidate_prepare_driver_fix_local_validation: 64_tests_and_workflow_validators_passed
+    candidate_prepare_driver_fix_required_ci: all_green
+    candidate_prepare_retry_executed: false
     candidate_ready: false
     candidate_and_preview_stopped_after_bootstrap: true
     candidate_ports_8001_and_18002_listening: false
@@ -247,7 +253,7 @@ goal_control:
     existing_v2_server_prepare_verified: true_previous_readonly_candidate
     existing_v2_server_update_active_verified: false
     existing_v2_server_distinct_rollback_verified: false
-    existing_v2_writable_business_test_ready: false_minimal_driver_fix_and_prepare_retry_pending
+    existing_v2_writable_business_test_ready: false_pr223_merge_and_prepare_retry_pending
     production_changed: candidate_infrastructure_only_no_active_intl_or_business_data
   may_continue_without_new_authorization:
     - local_read_only_audit
@@ -266,7 +272,7 @@ goal_control:
     - observed_server_state_contradicts_documented_baseline
     - change_would_touch_active_or_intl_database_content
     - change_would_cross_this_pr_scope
-  updated_at: "2026-08-10T14:08:57+08:00"
+  updated_at: "2026-08-10T14:23:30+08:00"
 ---
 
 # Fixed Active / Candidate Release V2
@@ -871,6 +877,20 @@ mark-and-sweep 计划；只要 release store 出现未知条目就拒绝清理�
   并补最小回归与 CI。不得为本次失败新增 workflow、恢复系统、状态机或事故专属分支逻辑。
   修复 PR 的合并仍需独立授权；合并后才能重新运行 `prepare-candidate`。
 - 本 Draft PR #222 仍只记录 Goal 证据，不承载上述生产代码修复，也不会转 Ready 或合并。
+
+### 2026-08-10 / Step 3T：最小 Alembic 驱动修复已通过验证，等待合并授权
+
+- 最小修复已进入 [Draft PR #223](https://github.com/tristan419/JATO_Analysis_System/pull/223)，
+  head 为 `6cf5f6a2d16713c5a4bda3e5ed90a6b541580310`；当前 mergeState 为 `CLEAN` 且
+  `MERGEABLE`，但仍为 Draft、尚未合并。
+- 本地验证为 `64 tests` 加 production workflow validators，均通过；#223 的 required CI
+  已全部终态 `SUCCESS`，没有待运行或失败的 required check。
+- CI 和可合并状态只证明最小驱动修复可进入 main，不代表 Candidate 已可用。自 run
+  31359449296 安全失败后尚未重跑 `prepare-candidate`，因此 `candidate_ready=false`。
+- 本步骤没有修改 Active、intl 或 JATO 数据，也没有运行 `update-active` 或 intl 同步。下一步
+  必须先获得用户对 #223 转 Ready 并合并的明确授权；合并后再以新的 main 重跑
+  `prepare-candidate`。
+- #222 继续保持 docs-only Draft，不转 Ready、不合并。
 
 ### 2026-08-06 / Step 0：目标与开发边界
 
