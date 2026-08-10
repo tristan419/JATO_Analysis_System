@@ -12,6 +12,7 @@ if str(BACKEND_ROOT) not in sys.path:
 
 from app.core.config import DATABASE_URL  # noqa: E402
 from app.db.base import Base  # noqa: E402
+from app.db.session import _sync_database_url  # noqa: E402
 import app.db.models  # noqa: F401,E402
 import app.db.msrp_materialization_models  # noqa: F401,E402
 import app.db.msrp_source_governance_models  # noqa: F401,E402
@@ -25,8 +26,8 @@ _raw_url = (
     DATABASE_URL
     or "postgresql+psycopg://postgres:postgres@localhost:5432/jato_app"
 )
-# Alembic runs synchronously – swap async drivers for sync equivalents.
-_sync_url = _raw_url.replace("+asyncpg", "+psycopg2").replace("+aiopg", "+psycopg2")
+# Alembic runs synchronously, using the sync driver installed by requirements.txt.
+_sync_url = _sync_database_url(_raw_url)
 config.set_main_option("sqlalchemy.url", _sync_url)
 
 target_metadata = Base.metadata

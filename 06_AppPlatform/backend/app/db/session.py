@@ -9,17 +9,25 @@ from sqlalchemy.orm import Session, sessionmaker
 from app.core.config import DATABASE_ECHO, DATABASE_ENABLED, DATABASE_URL
 
 
+def _sync_database_url(database_url: str) -> str:
+    for prefix in (
+        "postgres://",
+        "postgresql://",
+        "postgresql+asyncpg://",
+        "postgresql+aiopg://",
+        "postgresql+psycopg2://",
+    ):
+        if database_url.startswith(prefix):
+            return f"postgresql+psycopg://{database_url.removeprefix(prefix)}"
+    return database_url
+
+
 @lru_cache(maxsize=1)
 def get_engine() -> Engine:
     if not DATABASE_ENABLED or not DATABASE_URL:
         raise RuntimeError("Database is not configured")
-    # Swap async-only drivers for sync equivalents so that
-    # create_engine (synchronous) works correctly.
-    sync_url = (
-        DATABASE_URL
-        .replace("+asyncpg", "+psycopg2")
-        .replace("+aiopg", "+psycopg2")
-    )
+    # Normalize PostgreSQL URLs to the synchronous driver installed at runtime.
+    sync_url = _sync_database_url(DATABASE_URL)
     return create_engine(
         sync_url,
         echo=DATABASE_ECHO,

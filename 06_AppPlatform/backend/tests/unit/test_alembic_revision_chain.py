@@ -197,3 +197,11 @@ def test_alembic_metadata_registers_governance_and_materialization_models() -> N
     assert "msrp.governance_gate_decisions" in Base.metadata.tables
     assert "msrp.materialization_approvals" in Base.metadata.tables
     assert "msrp.materialization_executions" in Base.metadata.tables
+
+
+def test_alembic_env_uses_the_application_sync_database_url_normalizer() -> None:
+    env_text = ALEMBIC_ENV.read_text(encoding="utf-8")
+
+    assert "from app.db.session import _sync_database_url" in env_text
+    assert "_sync_url = _sync_database_url(_raw_url)" in env_text
+    assert "psycopg2" not in env_text
