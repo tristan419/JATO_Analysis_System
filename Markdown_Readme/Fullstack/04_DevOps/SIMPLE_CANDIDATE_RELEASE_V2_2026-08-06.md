@@ -8,13 +8,14 @@ goal_control:
     身份直接进入页面；完成代码、CI、腾讯云无流量验收后，再由用户授权把同一已测试构件
     更新到正式 www Active。Candidate 测试数据永不进入 Active；intl 继续使用既有的
     Active 到 intl 独立同步流程，不在 V2 中新增编排。
-  current_phase: tencent_candidate_writable_sandbox_initialization
-  current_step: recheck_main_then_dispatch_prepare_candidate
-  waiting_on: none
-  pause_reason: none
+  current_phase: candidate_prepare_failure_root_cause
+  current_step: blocked_on_minimal_alembic_driver_fix
+  waiting_on: minimal_alembic_driver_fix_pr_ci_and_merge_authorization
+  pause_reason: candidate_prepare_failed_alembic_sync_driver_mismatch
   next_action: >-
-    Candidate role/ACL/env/drop-in 初始化已成功。先只读复核当前 main 与待部署构件，再执行
-    用户已经授权的 prepare-candidate。禁止自动更新 Active、同步 intl 或修改生产业务数据。
+    只在现有 Alembic env 中修正 asyncpg 到已安装 psycopg v3 的同步驱动选择，补回归并通过
+    CI；合并仍需独立授权，之后才能重新执行 prepare-candidate。禁止自动更新 Active、同步
+    intl 或修改生产业务数据。
   release_authorization_contract:
     source_path: main_to_candidate_to_explicit_user_approval_to_active
     main_may_advance_without_active: true
@@ -67,9 +68,9 @@ goal_control:
     manifest_build_metadata_verification_complete: true_local
     v2_source_critical_closure_complete: true_local_13_files
     sourceable_runtime_builder_complete: false_removed_helper_only_change
-    local_ready_blockers_open: 0
+    local_ready_blockers_open: 1_alembic_env_sync_driver_selection
     independent_review_passed: true_hotfix_no_p0_p1_p2
-    server_acceptance_blockers_open: 1_prepare_candidate_not_yet_executed
+    server_acceptance_blockers_open: 1_minimal_driver_fix_then_prepare_retry
     update_active_retry_idempotent: true_local
     rollback_active_retry_idempotent: true_local
     rollback_sigkill_reference_safe: true_local_and_linux_ci_target_ext4_unprobed
@@ -185,7 +186,7 @@ goal_control:
     candidate_sandbox_p2_banner_database_identity: fixed_required_and_displayed
     candidate_sandbox_p2_discovery_sql_argv: fixed_stdin_file_dash
     candidate_sandbox_real_postgres_integration: passed_snapshot_restore_migrate_finalize_admission_head
-    candidate_sandbox_real_server_integration: partial_bootstrap_success_prepare_pending
+    candidate_sandbox_real_server_integration: failed_safe_at_alembic_driver_then_sandbox_removed
     candidate_server_role_acl_reconciliation: true_success_2026_08_10t05_41_15z
     candidate_server_dropin_reconciliation: true_exact_221_dynamicuser_dropin_installed
     candidate_sandbox_initialization_authorized: true_user_current_request_2026_08_10
@@ -212,7 +213,14 @@ goal_control:
     candidate_server_role_acl_initialized: true
     candidate_server_env_initialized: true_root_root_0600
     candidate_server_dropin_initialized: true_exact_221_dynamicuser_contract
-    prepare_candidate_executed_on_current_main: false
+    prepare_candidate_executed_on_current_main: true_failed_safe_run_31359449296
+    candidate_prepare_run: 31359449296_failure_main_c238cefb
+    candidate_prepare_failure_stage: alembic_migration
+    candidate_prepare_failure_root_cause: asyncpg_forced_to_psycopg2_but_release_venv_has_psycopg_v3_only
+    candidate_prepare_release_venv_psycopg2_present: false
+    candidate_prepare_release_venv_psycopg_v3_present: true
+    candidate_prepare_temporary_sandbox_deleted: true
+    candidate_ready: false
     candidate_and_preview_stopped_after_bootstrap: true
     candidate_ports_8001_and_18002_listening: false
     candidate_public_gateway_status: 401_basic_auth_gate
@@ -228,6 +236,7 @@ goal_control:
     active_changed_by_current_operation: false
     intl_changed_by_current_operation: false
     business_data_changed_by_current_operation: false
+    jato_data_changed_by_current_operation: false
     hermes_run_31356389867: waiting_unrelated_to_candidate_chain
     candidate_sandbox_merge_sha: 2dea140f328c1d7077ca0792979b47bcca4dca8e
     bom_colour_implementation_merge_sha: b128f5e5d1066e883f26649cad0441d362aa1e04
@@ -238,7 +247,7 @@ goal_control:
     existing_v2_server_prepare_verified: true_previous_readonly_candidate
     existing_v2_server_update_active_verified: false
     existing_v2_server_distinct_rollback_verified: false
-    existing_v2_writable_business_test_ready: false_prepare_candidate_pending
+    existing_v2_writable_business_test_ready: false_minimal_driver_fix_and_prepare_retry_pending
     production_changed: candidate_infrastructure_only_no_active_intl_or_business_data
   may_continue_without_new_authorization:
     - local_read_only_audit
@@ -257,7 +266,7 @@ goal_control:
     - observed_server_state_contradicts_documented_baseline
     - change_would_touch_active_or_intl_database_content
     - change_would_cross_this_pr_scope
-  updated_at: "2026-08-10T13:42:35+08:00"
+  updated_at: "2026-08-10T14:08:57+08:00"
 ---
 
 # Fixed Active / Candidate Release V2
@@ -846,6 +855,22 @@ mark-and-sweep 计划；只要 release store 出现未知条目就拒绝清理�
   [31356389867](https://github.com/tristan419/JATO_Analysis_System/actions/runs/31356389867)
   当前为 `waiting`；它不属于 Candidate 初始化/prepare 链路，也不阻塞下一步 main 复核或
   `prepare-candidate`。
+
+### 2026-08-10 / Step 3S：首次可写 Candidate prepare 安全失败
+
+- `main@c238cefbf9adb6a4861e42491c3d22145ee93bfe` 的 production-release run
+  [31359449296](https://github.com/tristan419/JATO_Analysis_System/actions/runs/31359449296)
+  在 Candidate 沙箱 Alembic migration 阶段失败，workflow 终态为 `failure`；因此 Candidate
+  不能标记为 ready。
+- 失败后本次临时 sandbox 已删除。Active、intl 与 JATO 数据均未改变；本次没有执行
+  `update-active`，也没有同步 intl。
+- 根因已定位到现有 Alembic env 的同步驱动映射：它把 Active URL 中的 `asyncpg` 强制改写为
+  `psycopg2`，但目标 release venv 没有 `psycopg2`，已有的是 psycopg v3。这是确定性的驱动
+  选择错误，不是数据库内容、Candidate ACL、快照恢复或资源不足问题。
+- 当前唯一允许的代码修复是：在现有 Alembic env 职责内选择 release 已安装的 psycopg v3，
+  并补最小回归与 CI。不得为本次失败新增 workflow、恢复系统、状态机或事故专属分支逻辑。
+  修复 PR 的合并仍需独立授权；合并后才能重新运行 `prepare-candidate`。
+- 本 Draft PR #222 仍只记录 Goal 证据，不承载上述生产代码修复，也不会转 Ready 或合并。
 
 ### 2026-08-06 / Step 0：目标与开发边界
 
