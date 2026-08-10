@@ -1,61 +1,32 @@
 name: production-release
 
 on:
-  push:
-    branches: ["main"]
-    paths:
-      - "06_AppPlatform/**"
-      - "07_ScrapingToolkit/**"
-      - "03_Scripts/**"
-      - "hermes/**"
-      - "!hermes/dev_events/**"
-      - "01_RAW_DATA/VOC_Nordic_SUV_Users_100.xlsx"
-      - ".nvmrc"
-      - ".github/scripts/production_release_hold.py"
-      - ".github/recovery-plans/2026-08-03-29df-pre-switch-candidate-residue.json"
-      - ".github/recovery-plans/2026-08-03-29df-pre-switch-candidate-residue-production-hold.v1.json"
-      - ".github/recovery-plans/2026-08-03-29df-pre-switch-candidate-residue-production-hold-retirement.v1.json"
-      - ".github/workflows/production-release.yml"
   workflow_dispatch:
     inputs:
       release_mode:
-        description: Prepare, approve, discard, or release one exact reviewed Candidate
+        description: Fixed Active/Candidate V2 operation
         required: true
         type: choice
         default: prepare-candidate
         options:
           - prepare-candidate
-          - approve-candidate-to-active
           - discard-candidate
-          - discard-failed-candidate
-          - release-candidate
-      candidate_prepare_run_id:
-        description: Exact reviewed prepare-candidate workflow run id
+          - update-active
+          - rollback-active
+      target_commit_sha:
+        description: Reviewed release commit SHA (update-active or rollback-active)
         required: false
         type: string
-      candidate_prepare_run_attempt:
-        description: Exact reviewed prepare-candidate run attempt
+      target_archive_sha256:
+        description: Reviewed release archive SHA-256 (update-active or rollback-active)
         required: false
         type: string
-      candidate_commit_sha:
-        description: Exact reviewed 40-character Candidate main SHA (approval only)
+      target_manifest_sha256:
+        description: Reviewed release manifest SHA-256 (update-active or rollback-active)
         required: false
         type: string
-      candidate_archive_sha256:
-        description: Exact reviewed Candidate archive SHA-256 (approval only)
-        required: false
-        type: string
-      candidate_attestation_sha256:
-        description: Exact successful Candidate attestation SHA-256; blank for failed discard
-        required: false
-        type: string
-      confirm_www_activation:
-        description: I confirm this exact Candidate may replace www Active
-        required: true
-        type: boolean
-        default: false
-      confirm_candidate_cleanup:
-        description: I confirm the exact reviewed Candidate may be cleaned up
+      confirm_control_operation:
+        description: Confirm the selected server control operation
         required: true
         type: boolean
         default: false
@@ -77,17 +48,13 @@ concurrency:
 
 env:
   FRONTEND_NODE_VERSION: "20.19.0"
-  WRANGLER_VERSION: "4.86.0"
-  RELEASE_MODE: ${{ github.event_name == 'workflow_dispatch' && inputs.release_mode || 'prepare-candidate' }}
+  RELEASE_MODE: ${{ inputs.release_mode }}
 
 jobs:
   release_coordination_guard:
     if: ${{ github.ref == 'refs/heads/main' }}
     runs-on: ubuntu-latest
     timeout-minutes: 10
-    outputs:
-      release-action: ${{ steps.production_hold.outputs.release-action }}
-
     steps:
       - name: Checkout release coordination guard
         uses: actions/checkout@v5
@@ -98,18 +65,18 @@ jobs:
       - name: Validate unpublished release coordination
         env:
           GITHUB_TOKEN: ${{ github.token }}
+          TARGET_COMMIT_SHA: ${{ inputs.target_commit_sha }}
+          TARGET_ARCHIVE_SHA256: ${{ inputs.target_archive_sha256 }}
+          TARGET_MANIFEST_SHA256: ${{ inputs.target_manifest_sha256 }}
         run: >-
           python3 .github/scripts/release_coordination_guard.py
           production
           --main-sha "$GITHUB_SHA"
+          --operation "$RELEASE_MODE"
+          --target-sha "$TARGET_COMMIT_SHA"
+          --target-archive-sha256 "$TARGET_ARCHIVE_SHA256"
+          --target-manifest-sha256 "$TARGET_MANIFEST_SHA256"
           --plan-output "$RUNNER_TEMP/release-coordination-plan.json"
-
-      - name: Resolve reviewed production release hold
-        id: production_hold
-        run: >-
-          python3 .github/scripts/production_release_hold.py
-          resolve
-          --github-output "$GITHUB_OUTPUT"
 
       - name: Freeze release coordination plan
         uses: actions/upload-artifact@v4
@@ -124,9 +91,7 @@ jobs:
   build_frontend:
     if: >-
       ${{ github.ref == 'refs/heads/main' &&
-      needs.release_coordination_guard.outputs.release-action == 'deploy' &&
-      (github.event_name != 'workflow_dispatch' ||
-      inputs.release_mode == 'prepare-candidate') }}
+      inputs.release_mode == 'prepare-candidate' }}
     needs: release_coordination_guard
     runs-on: ubuntu-latest
     timeout-minutes: 30
@@ -260,9 +225,7 @@ jobs:
   deploy_tencent:
     if: >-
       ${{ github.ref == 'refs/heads/main' &&
-      needs.release_coordination_guard.outputs.release-action == 'deploy' &&
-      (github.event_name != 'workflow_dispatch' ||
-      inputs.release_mode == 'prepare-candidate') }}
+      inputs.release_mode == 'prepare-candidate' }}
     needs: [release_coordination_guard, build_frontend]
     environment: production
     runs-on: ubuntu-latest
@@ -284,17 +247,18 @@ jobs:
       - name: Revalidate frozen coordination plan after approval
         env:
           GITHUB_TOKEN: ${{ github.token }}
+          TARGET_COMMIT_SHA: ${{ inputs.target_commit_sha }}
+          TARGET_ARCHIVE_SHA256: ${{ inputs.target_archive_sha256 }}
+          TARGET_MANIFEST_SHA256: ${{ inputs.target_manifest_sha256 }}
         run: >-
           python3 .github/scripts/release_coordination_guard.py
           verify-plan
           --main-sha "$GITHUB_SHA"
+          --operation "$RELEASE_MODE"
+          --target-sha "$TARGET_COMMIT_SHA"
+          --target-archive-sha256 "$TARGET_ARCHIVE_SHA256"
+          --target-manifest-sha256 "$TARGET_MANIFEST_SHA256"
           --plan "$RUNNER_TEMP/release-coordination-plan/release-coordination-plan.json"
-
-      - name: Setup fixed Cloudflare Node
-        if: ${{ env.RELEASE_MODE == 'prepare-and-switch' }}
-        uses: actions/setup-node@v4
-        with:
-          node-version: ${{ env.FRONTEND_NODE_VERSION }}
 
       - name: Download immutable frontend artifact by id
         uses: actions/download-artifact@v5
@@ -363,40 +327,6 @@ jobs:
             echo "::error::Provide either SSH_PRIVATE_KEY or SSH_PASSWORD"
             exit 1
           fi
-
-      - name: Validate Cloudflare deploy configuration
-        if: ${{ env.RELEASE_MODE == 'prepare-and-switch' }}
-        working-directory: ${{ runner.temp }}/cloudflare-pages-project
-        env:
-          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-          CLOUDFLARE_PAGES_PROJECT_NAME: ${{ vars.CLOUDFLARE_PAGES_PROJECT_NAME || secrets.CLOUDFLARE_PAGES_PROJECT_NAME }}
-        run: |
-          set -euo pipefail
-          : "${CLOUDFLARE_API_TOKEN:?Missing CLOUDFLARE_API_TOKEN}"
-          : "${CLOUDFLARE_ACCOUNT_ID:?Missing CLOUDFLARE_ACCOUNT_ID}"
-          : "${CLOUDFLARE_PAGES_PROJECT_NAME:?Missing CLOUDFLARE_PAGES_PROJECT_NAME}"
-          worker_bundle="$RUNNER_TEMP/cloudflare-pages-worker.js"
-          routes_manifest="$RUNNER_TEMP/cloudflare-pages-routes.json"
-          npx --yes "wrangler@$WRANGLER_VERSION" pages functions build functions \
-            --project-directory . \
-            --outfile "$worker_bundle" \
-            --output-routes-path "$routes_manifest"
-          test -s "$worker_bundle"
-          test -s "$routes_manifest"
-          python3 - "$routes_manifest" <<'PY'
-          import json
-          import sys
-          from pathlib import Path
-
-          routes = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
-          included = set(routes.get("include", []))
-          required = {"/healthz", "/oauth-relay/*", "/v1/*"}
-          missing = sorted(required - included)
-          if missing:
-              raise SystemExit(f"Missing Cloudflare Pages Function routes: {missing}")
-          print(f"Validated Cloudflare Pages Function routes: {sorted(required)}")
-          PY
 
       - name: Package backend release with verified frontend artifact
         env:
@@ -844,13 +774,15 @@ jobs:
                  if [ -n \"\$saved_sha\" ] && [ \"\$saved_sha\" != '$archive_sha256' ]; then \
                    printf 'PARTIAL_BAD|missing|%s' \"\$saved_sha\"; exit 0; \
                  fi; \
-                 active_release=\$(sudo -n realpath /opt/jato/active); \
+                 active_release=\$(sudo -n realpath /opt/jato/slots/8000/current 2>/dev/null || true); \
                  basis_sha=\${active_release##*/}; \
                  basis_parent=\${active_release%/*}; \
                  basis_commit=\${basis_parent##*/}; \
                  basis_archive='.cache/jato-releases/archives/'\$basis_commit'/'\$basis_sha'.tar.gz'; \
                  if [ \"\${#basis_commit}\" -ne 40 ] || [ \"\${#basis_sha}\" -ne 64 ] \
                    || [ \"\$active_release\" != \"/opt/jato/releases/\$basis_commit/\$basis_sha\" ] \
+                   || [ ! -f \"\$active_release/release-v2-manifest.json\" ] \
+                   || [ -L \"\$active_release/release-v2-manifest.json\" ] \
                    || [ ! -f \"\$basis_archive\" ] || [ -L \"\$basis_archive\" ] \
                    || [ \"\$(sha256sum \"\$basis_archive\" | awk '{print \$1}')\" != \"\$basis_sha\" ]; then \
                    basis_archive=''; \
@@ -1070,43 +1002,84 @@ jobs:
             echo "- Rsync: local \`$local_rsync_version\`, remote \`$remote_rsync_version\`"
           } >> "$GITHUB_STEP_SUMMARY"
 
-      - name: Record transport-verified candidate checkpoint
+      - name: Generate canonical V2 release manifest
+        id: v2_manifest
         env:
           ARCHIVE_BYTES: ${{ steps.upload_release.outputs.archive-bytes }}
           ARCHIVE_SHA256: ${{ steps.upload_release.outputs.archive-sha256 }}
-          BUILD_RUN_ATTEMPT: ${{ needs.build_frontend.outputs.workflow_run_attempt }}
           FRONTEND_IDENTITY: ${{ needs.build_frontend.outputs.artifact_identity }}
           FRONTEND_CHECKSUM: ${{ needs.build_frontend.outputs.artifact_checksum }}
+          FRONTEND_BUILD_ID: ${{ needs.build_frontend.outputs.frontend_build_id }}
         run: |
           set -euo pipefail
-          checkpoint_dir="$RUNNER_TEMP/release-checkpoint"
-          install -d -m 700 "$checkpoint_dir"
-          python3 03_Scripts/deploy/release_checkpoint.py write \
-            --checkpoint "$checkpoint_dir/candidate.json" \
-            --journal "$checkpoint_dir/journal.jsonl" \
-            --repository "$GITHUB_REPOSITORY" \
-            --commit "$GITHUB_SHA" \
-            --archive-sha256 "$ARCHIVE_SHA256" \
-            --archive-bytes "$ARCHIVE_BYTES" \
-            --run-id "$GITHUB_RUN_ID" \
-            --run-attempt "$BUILD_RUN_ATTEMPT" \
-            --frontend-identity "$FRONTEND_IDENTITY" \
-            --frontend-checksum "$FRONTEND_CHECKSUM" \
-            --phase transport_verified \
-            --status completed \
-            --retry-class inspect_then_resume \
-            --message "Immutable SSH archive size and SHA-256 verified on Tencent"
+          PYTHONPATH=03_Scripts/deploy python3 -B - <<'PY'
+          import base64
+          import hashlib
+          import os
+          from pathlib import Path
+
+          from release_v2_store import (
+              ReleaseIdentity,
+              ReleaseManifest,
+              canonical_manifest_bytes,
+              manifest_sha256,
+          )
+
+          metadata = Path("hermes/deploy_release.json").read_bytes()
+          manifest = ReleaseManifest(
+              repository=os.environ["GITHUB_REPOSITORY"],
+              identity=ReleaseIdentity(
+                  os.environ["GITHUB_SHA"],
+                  os.environ["ARCHIVE_SHA256"],
+              ),
+              archive_bytes=int(os.environ["ARCHIVE_BYTES"]),
+              frontend_artifact_identity=os.environ["FRONTEND_IDENTITY"],
+              frontend_artifact_checksum=os.environ["FRONTEND_CHECKSUM"],
+              frontend_build_id=os.environ["FRONTEND_BUILD_ID"],
+              build_metadata_sha256=hashlib.sha256(metadata).hexdigest(),
+          )
+          payload = canonical_manifest_bytes(manifest)
+          digest = manifest_sha256(payload)
+          output = Path(os.environ["RUNNER_TEMP"]) / "release-v2-manifest.json"
+          output.write_bytes(payload)
+          with Path(os.environ["GITHUB_OUTPUT"]).open("a", encoding="utf-8") as handle:
+              handle.write(f"manifest-sha256={digest}\n")
+              handle.write(
+                  "manifest-b64="
+                  + base64.b64encode(payload).decode("ascii")
+                  + "\n"
+              )
+          with Path(os.environ["GITHUB_STEP_SUMMARY"]).open(
+              "a",
+              encoding="utf-8",
+          ) as handle:
+              handle.write("### Candidate release identity\n")
+              handle.write(
+                  "Copy this exact triple only after Candidate review succeeds.\n\n"
+              )
+              handle.write(f"- Commit SHA: `{os.environ['GITHUB_SHA']}`\n")
+              handle.write(f"- Archive SHA-256: `{os.environ['ARCHIVE_SHA256']}`\n")
+              handle.write(f"- Manifest SHA-256: `{digest}`\n")
+          PY
 
       - name: Reconfirm current main before first production mutation
         env:
           GITHUB_TOKEN: ${{ github.token }}
+          TARGET_COMMIT_SHA: ${{ inputs.target_commit_sha }}
+          TARGET_ARCHIVE_SHA256: ${{ inputs.target_archive_sha256 }}
+          TARGET_MANIFEST_SHA256: ${{ inputs.target_manifest_sha256 }}
         run: >-
           python3 .github/scripts/release_coordination_guard.py
           verify-plan
           --main-sha "$GITHUB_SHA"
+          --operation "$RELEASE_MODE"
+          --target-sha "$TARGET_COMMIT_SHA"
+          --target-archive-sha256 "$TARGET_ARCHIVE_SHA256"
+          --target-manifest-sha256 "$TARGET_MANIFEST_SHA256"
           --plan "$RUNNER_TEMP/release-coordination-plan/release-coordination-plan.json"
 
-      - name: Deploy verified release on Tencent
+      - name: Deploy verified release to fixed Candidate on Tencent
+        id: deploy_v2
         env:
           AUTH_MODE: ${{ steps.auth.outputs.mode }}
           DEPLOY_ARCHIVE_PATH: ${{ steps.upload_release.outputs.remote-archive }}
@@ -1117,18 +1090,6 @@ jobs:
           SSH_PORT: ${{ secrets.SSH_PORT }}
           SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
           SSH_PASSWORD: ${{ secrets.SSH_PASSWORD }}
-          DEPLOY_SERVER_NAME: ${{ vars.DEPLOY_SERVER_NAME }}
-          DEPLOY_ENABLE_HTTPS: ${{ vars.DEPLOY_ENABLE_HTTPS }}
-          DEPLOY_CERTBOT_EMAIL: ${{ secrets.DEPLOY_CERTBOT_EMAIL }}
-          DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
-          HERMES_SYNC_TOKEN: ${{ secrets.HERMES_SYNC_TOKEN }}
-          GOOGLE_CLIENT_ID: ${{ secrets.GOOGLE_CLIENT_ID }}
-          GOOGLE_CLIENT_SECRET: ${{ secrets.GOOGLE_CLIENT_SECRET }}
-          GOOGLE_OAUTH_PROXY_URL: ${{ secrets.GOOGLE_OAUTH_PROXY_URL }}
-          GOOGLE_OAUTH_RELAY_URL: ${{ secrets.GOOGLE_OAUTH_RELAY_URL }}
-          GOOGLE_OAUTH_RELAY_TOKEN: ${{ secrets.GOOGLE_OAUTH_RELAY_TOKEN }}
-          MIHOMO_SUB_URL: ${{ secrets.MIHOMO_SUB_URL }}
-          MIHOMO_DB_PATH: ${{ vars.MIHOMO_DB_PATH }}
           ARTIFACT_NAME: ${{ needs.build_frontend.outputs.artifact_name }}
           ARTIFACT_IDENTITY: ${{ needs.build_frontend.outputs.artifact_identity }}
           ARTIFACT_CHECKSUM: ${{ needs.build_frontend.outputs.artifact_checksum }}
@@ -1138,11 +1099,11 @@ jobs:
           NODE_VERSION: ${{ needs.build_frontend.outputs.node_version }}
           RELEASE_ID: ${{ needs.build_frontend.outputs.release_id }}
           BUILD_RUN_ATTEMPT: ${{ needs.build_frontend.outputs.workflow_run_attempt }}
+          RELEASE_V2_MANIFEST_B64: ${{ steps.v2_manifest.outputs.manifest-b64 }}
+          RELEASE_V2_MANIFEST_SHA256: ${{ steps.v2_manifest.outputs.manifest-sha256 }}
         run: |
           set -euo pipefail
           SSH_PORT="${SSH_PORT:-22}"
-          DEPLOY_SERVER_NAME="${DEPLOY_SERVER_NAME:-ojeur.cloud www.ojeur.cloud}"
-          DEPLOY_ENABLE_HTTPS="${DEPLOY_ENABLE_HTTPS:-true}"
           deploy_short_sha="${GITHUB_SHA:0:8}"
 
           ssh_options=(
@@ -1178,11 +1139,9 @@ jobs:
             local value="$2"
             printf 'export %s=%q\n' "$name" "$value" >> "$control_payload"
           }
-          write_remote_export DEPLOY_SERVER_NAME "$DEPLOY_SERVER_NAME"
-          write_remote_export DEPLOY_ENABLE_HTTPS "$DEPLOY_ENABLE_HTTPS"
-          write_remote_export DEPLOY_CERTBOT_EMAIL "${DEPLOY_CERTBOT_EMAIL:-}"
           # export DEPLOY_BRANCH=main is carried inside the private stdin payload.
           write_remote_export DEPLOY_BRANCH main
+          write_remote_export DEPLOY_RELEASE_SYSTEM fixed-v2
           write_remote_export DEPLOY_BLUEGREEN_MODE "$RELEASE_MODE"
           write_remote_export DEPLOY_COMMIT_SHA "$GITHUB_SHA"
           write_remote_export DEPLOY_SHORT_SHA "$deploy_short_sha"
@@ -1204,35 +1163,153 @@ jobs:
           write_remote_export FRONTEND_GITHUB_ARTIFACT_DIGEST "$GITHUB_ARTIFACT_DIGEST"
           write_remote_export FRONTEND_BUILD_ID "$FRONTEND_BUILD_ID"
           write_remote_export FRONTEND_NODE_VERSION "$NODE_VERSION"
-          for secret_name in DEEPSEEK_API_KEY HERMES_SYNC_TOKEN GOOGLE_CLIENT_ID GOOGLE_CLIENT_SECRET GOOGLE_OAUTH_PROXY_URL GOOGLE_OAUTH_RELAY_URL GOOGLE_OAUTH_RELAY_TOKEN MIHOMO_SUB_URL MIHOMO_DB_PATH; do
-            write_remote_export "$secret_name" "${!secret_name:-}"
-          done
+          write_remote_export RELEASE_V2_MANIFEST_B64 "$RELEASE_V2_MANIFEST_B64"
+          write_remote_export RELEASE_V2_MANIFEST_SHA256 \
+            "$RELEASE_V2_MANIFEST_SHA256"
           cat 03_Scripts/deploy/fullstack_remote_release.sh >> "$control_payload"
 
-          timeout 5400s "${ssh_command[@]}" "${ssh_options[@]}" "$SSH_USER@$SSH_HOST" \
-            "umask 077; exec bash -s" < "$control_payload"
+          operation_log="$RUNNER_TEMP/v2-operation-output.log"
+          set +e
+          timeout 5400s "${ssh_command[@]}" "${ssh_options[@]}" \
+            "$SSH_USER@$SSH_HOST" "umask 077; exec bash -s" \
+            < "$control_payload" 2>&1 | tee "$operation_log"
+          deploy_rc="${PIPESTATUS[0]}"
+          set -e
+          report_path="$(
+            sed -n 's/^V2_OPERATION_REPORT_PATH=//p' "$operation_log" | tail -n 1
+          )"
+          if [ -n "$report_path" ]; then
+            echo "operation-report-path=$report_path" >> "$GITHUB_OUTPUT"
+          fi
+          exit "$deploy_rc"
 
-      - name: Fetch and attest server release checkpoint
-        if: ${{ always() && steps.upload_release.outcome == 'success' }}
+      - name: Retain V2 operation diagnostics
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: fixed-v2-prepare-${{ github.sha }}-${{ github.run_attempt }}
+          path: |
+            ${{ runner.temp }}/v2-operation-output.log
+            ${{ runner.temp }}/release-v2-manifest.json
+          if-no-files-found: warn
+          compression-level: 0
+          overwrite: false
+          retention-days: 30
+
+  control_fixed_release_v2:
+    if: >-
+      ${{ github.ref == 'refs/heads/main' &&
+      inputs.release_mode != 'prepare-candidate' }}
+    needs: release_coordination_guard
+    environment: production
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+
+    steps:
+      - name: Checkout V2 control source
+        uses: actions/checkout@v5
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+
+      - name: Download frozen release coordination plan
+        uses: actions/download-artifact@v5
+        with:
+          name: release-coordination-plan-${{ github.sha }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/release-coordination-plan
+
+      - name: Revalidate frozen coordination plan after approval
         env:
-          AUTH_MODE: ${{ steps.auth.outputs.mode }}
-          REMOTE_ARCHIVE_PATH: ${{ steps.upload_release.outputs.remote-archive }}
-          ARCHIVE_BYTES: ${{ steps.upload_release.outputs.archive-bytes }}
-          ARCHIVE_SHA256: ${{ steps.upload_release.outputs.archive-sha256 }}
+          GITHUB_TOKEN: ${{ github.token }}
+          TARGET_COMMIT_SHA: ${{ inputs.target_commit_sha }}
+          TARGET_ARCHIVE_SHA256: ${{ inputs.target_archive_sha256 }}
+          TARGET_MANIFEST_SHA256: ${{ inputs.target_manifest_sha256 }}
+        run: >-
+          python3 .github/scripts/release_coordination_guard.py
+          verify-plan
+          --main-sha "$GITHUB_SHA"
+          --operation "$RELEASE_MODE"
+          --target-sha "$TARGET_COMMIT_SHA"
+          --target-archive-sha256 "$TARGET_ARCHIVE_SHA256"
+          --target-manifest-sha256 "$TARGET_MANIFEST_SHA256"
+          --plan "$RUNNER_TEMP/release-coordination-plan/release-coordination-plan.json"
+
+      - name: Validate fixed V2 operation intent
+        env:
+          CONFIRM_CONTROL_OPERATION: ${{ inputs.confirm_control_operation }}
+          TARGET_COMMIT_SHA: ${{ inputs.target_commit_sha }}
+          TARGET_ARCHIVE_SHA256: ${{ inputs.target_archive_sha256 }}
+          TARGET_MANIFEST_SHA256: ${{ inputs.target_manifest_sha256 }}
+        run: |
+          set -euo pipefail
+          [ "$CONFIRM_CONTROL_OPERATION" = "true" ] || {
+            echo "::error::The selected control operation requires explicit confirmation"
+            exit 1
+          }
+          case "$RELEASE_MODE" in
+            update-active|rollback-active)
+              [[ "$TARGET_COMMIT_SHA" =~ ^[0-9a-f]{40}$ ]]
+              [[ "$TARGET_ARCHIVE_SHA256" =~ ^[0-9a-f]{64}$ ]]
+              [[ "$TARGET_MANIFEST_SHA256" =~ ^[0-9a-f]{64}$ ]]
+              ;;
+            discard-candidate)
+              [ -z "$TARGET_COMMIT_SHA" ]
+              [ -z "$TARGET_ARCHIVE_SHA256" ]
+              [ -z "$TARGET_MANIFEST_SHA256" ]
+              ;;
+            *)
+              echo "::error::Unsupported fixed V2 control operation"
+              exit 1
+              ;;
+          esac
+
+      - name: Validate Tencent control credentials
+        id: control_auth
+        env:
           SSH_HOST: ${{ secrets.SSH_HOST }}
           SSH_USER: ${{ secrets.SSH_USER }}
           SSH_PORT: ${{ secrets.SSH_PORT }}
           SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
           SSH_PASSWORD: ${{ secrets.SSH_PASSWORD }}
-          BUILD_RUN_ATTEMPT: ${{ needs.build_frontend.outputs.workflow_run_attempt }}
-          RELEASE_ID: ${{ needs.build_frontend.outputs.release_id }}
-          ARTIFACT_NAME: ${{ needs.build_frontend.outputs.artifact_name }}
-          FRONTEND_IDENTITY: ${{ needs.build_frontend.outputs.artifact_identity }}
-          FRONTEND_CHECKSUM: ${{ needs.build_frontend.outputs.artifact_checksum }}
-          GITHUB_ARTIFACT_ID: ${{ needs.build_frontend.outputs.github_artifact_id }}
-          GITHUB_ARTIFACT_DIGEST: ${{ needs.build_frontend.outputs.github_artifact_digest }}
-          FRONTEND_BUILD_ID: ${{ needs.build_frontend.outputs.frontend_build_id }}
-          NODE_VERSION: ${{ needs.build_frontend.outputs.node_version }}
+          SSH_KNOWN_HOSTS: ${{ secrets.SSH_KNOWN_HOSTS }}
+        run: |
+          set -euo pipefail
+          : "${SSH_HOST:?Missing SSH_HOST}"
+          : "${SSH_USER:?Missing SSH_USER}"
+          : "${SSH_KNOWN_HOSTS:?Missing production secret SSH_KNOWN_HOSTS}"
+          SSH_PORT="${SSH_PORT:-22}"
+          install -d -m 700 ~/.ssh
+          printf '%s\n' "$SSH_KNOWN_HOSTS" > ~/.ssh/known_hosts
+          chmod 600 ~/.ssh/known_hosts
+          known_host="$SSH_HOST"
+          if [ "$SSH_PORT" != "22" ]; then
+            known_host="[$SSH_HOST]:$SSH_PORT"
+          fi
+          ssh-keygen -F "$known_host" -f ~/.ssh/known_hosts >/dev/null || {
+            echo "::error::SSH_KNOWN_HOSTS does not pin the Tencent host and port"
+            exit 1
+          }
+          if [ -n "${SSH_PRIVATE_KEY:-}" ]; then
+            echo "mode=key" >> "$GITHUB_OUTPUT"
+          elif [ -n "${SSH_PASSWORD:-}" ]; then
+            echo "mode=password" >> "$GITHUB_OUTPUT"
+          else
+            echo "::error::Provide either SSH_PRIVATE_KEY or SSH_PASSWORD"
+            exit 1
+          fi
+
+      - name: Run fixed V2 control operation on Tencent
+        id: control_v2
+        env:
+          AUTH_MODE: ${{ steps.control_auth.outputs.mode }}
+          SSH_HOST: ${{ secrets.SSH_HOST }}
+          SSH_USER: ${{ secrets.SSH_USER }}
+          SSH_PORT: ${{ secrets.SSH_PORT }}
+          SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
+          SSH_PASSWORD: ${{ secrets.SSH_PASSWORD }}
+          TARGET_COMMIT_SHA: ${{ inputs.target_commit_sha }}
+          TARGET_ARCHIVE_SHA256: ${{ inputs.target_archive_sha256 }}
+          TARGET_MANIFEST_SHA256: ${{ inputs.target_manifest_sha256 }}
         run: |
           set -euo pipefail
           SSH_PORT="${SSH_PORT:-22}"
@@ -1251,925 +1328,10 @@ jobs:
             chmod 600 ~/.ssh/github_actions_tencent_key
             ssh_command=(ssh -o BatchMode=yes -i ~/.ssh/github_actions_tencent_key)
           else
-            command -v sshpass >/dev/null
-            export SSHPASS="$SSH_PASSWORD"
-            ssh_command=(sshpass -e ssh -o PreferredAuthentications=password -o PubkeyAuthentication=no)
-          fi
-          command -v rsync >/dev/null
-          test -s "$HOME/.ssh/known_hosts"
-          ssh_target="$SSH_USER@$SSH_HOST"
-          server_dir="$RUNNER_TEMP/release-checkpoint/server"
-          install -d -m 700 "$server_dir"
-          attestation_complete=false
-          record_checkpoint_fetch_exit() {
-            local rc="$?"
-            trap - EXIT
-            python3 - "$server_dir/fetch-status.json" "$rc" \
-              "$attestation_complete" <<'PY' || true
-          import json
-          from pathlib import Path
-          import sys
-
-          output, exit_code, attested = sys.argv[1:]
-          Path(output).write_text(
-              json.dumps(
-                  {
-                      "schemaVersion": 1,
-                      "exitCode": int(exit_code),
-                      "backendHealthyAttested": attested == "true",
-                  },
-                  indent=2,
-                  sort_keys=True,
-              )
-              + "\n",
-              encoding="utf-8",
-          )
-          PY
-            exit "$rc"
-          }
-          trap record_checkpoint_fetch_exit EXIT
-
-          remote_home="$(
-            timeout 60s "${ssh_command[@]}" "${ssh_options[@]}" "$ssh_target" \
-              'set -eu; printf "%s" "$HOME"'
-          )"
-          case "$remote_home" in
-            /*) remote_home="${remote_home%/}" ;;
-            *) echo "::error::Tencent SSH returned an invalid home directory"; exit 1 ;;
-          esac
-          remote_state_dir=".local/state/jato-production-release/checkpoints/${GITHUB_SHA}"
-          remote_checkpoint="${remote_state_dir}/${ARCHIVE_SHA256}.json"
-          remote_evidence="${remote_state_dir}/${ARCHIVE_SHA256}.evidence.json"
-          preview_metadata="$server_dir/candidate-preview.json"
-          printf -v rsync_rsh '%q ' "${ssh_command[@]}" "${ssh_options[@]}"
-          rsync_rsh="${rsync_rsh% }"
-          timeout 120s rsync --links --times --protect-args --chmod=F600 \
-            --no-owner --no-group -e "$rsync_rsh" \
-            "$ssh_target:$remote_checkpoint" "$server_dir/backend-healthy.json"
-          timeout 120s rsync --links --times --protect-args --chmod=F600 \
-            --no-owner --no-group -e "$rsync_rsh" \
-            "$ssh_target:$remote_evidence" "$server_dir/backend-healthy.evidence.json"
-          if [ "$RELEASE_MODE" = "prepare-candidate" ]; then
-            timeout 60s "${ssh_command[@]}" "${ssh_options[@]}" "$ssh_target" \
-              "curl --noproxy '*' --fail --silent --show-error --max-time 20 \
-                http://127.0.0.1:18002/candidate-preview.json" \
-              > "$preview_metadata"
-          else
-            printf '{}\n' > "$preview_metadata"
-          fi
-
-          python3 03_Scripts/deploy/release_checkpoint.py show \
-            --checkpoint "$server_dir/backend-healthy.json" >/dev/null
-          python3 - \
-            "$server_dir/backend-healthy.json" \
-            "$server_dir/backend-healthy.evidence.json" \
-            "$server_dir/attestation.json" \
-            "$remote_home/$remote_evidence" \
-            "$GITHUB_REPOSITORY" "$GITHUB_SHA" "$ARCHIVE_SHA256" "$ARCHIVE_BYTES" \
-            "$GITHUB_RUN_ID" "$BUILD_RUN_ATTEMPT" "$FRONTEND_IDENTITY" \
-            "$FRONTEND_CHECKSUM" "$RELEASE_ID" "$RELEASE_MODE" \
-            "$preview_metadata" "$REMOTE_ARCHIVE_PATH" "$ARTIFACT_NAME" \
-            "$GITHUB_ARTIFACT_ID" "$GITHUB_ARTIFACT_DIGEST" \
-            "$FRONTEND_BUILD_ID" "$NODE_VERSION" "$GITHUB_WORKFLOW" <<'PY'
-          import hashlib
-          import json
-          from pathlib import Path
-          import re
-          import stat
-          import sys
-
-          (
-              checkpoint_name,
-              evidence_name,
-              attestation_name,
-              remote_evidence_path,
-              repository,
-              commit,
-              archive_sha256,
-              archive_bytes,
-              run_id,
-              run_attempt,
-              frontend_identity,
-              frontend_checksum,
-              release_id,
-              release_mode,
-              preview_metadata_name,
-              remote_archive_path,
-              artifact_name,
-              github_artifact_id,
-              github_artifact_digest,
-              frontend_build_id,
-              node_version,
-              workflow_name,
-          ) = sys.argv[1:]
-
-          def read_private_json(name: str, label: str) -> tuple[dict[str, object], bytes]:
-              path = Path(name)
-              mode = path.lstat().st_mode
-              if not stat.S_ISREG(mode) or path.is_symlink():
-                  raise SystemExit(f"{label} must be a regular non-symlink file")
-              raw = path.read_bytes()
-              if not raw or len(raw) > 1_048_576:
-                  raise SystemExit(f"{label} has an invalid size")
-              payload = json.loads(raw.decode("utf-8"))
-              if not isinstance(payload, dict):
-                  raise SystemExit(f"{label} root must be an object")
-              return payload, raw
-
-          checkpoint, checkpoint_raw = read_private_json(
-              checkpoint_name,
-              "server checkpoint",
-          )
-          evidence, evidence_raw = read_private_json(
-              evidence_name,
-              "server evidence",
-          )
-          expected_identity = {
-              "repository": repository,
-              "commit": commit,
-              "archiveSha256": archive_sha256,
-              "archiveBytes": int(archive_bytes),
-              "runId": int(run_id),
-              "runAttempt": int(run_attempt),
-              "frontendIdentity": frontend_identity,
-              "frontendChecksum": frontend_checksum,
-          }
-          if checkpoint.get("identity") != expected_identity:
-              raise SystemExit("server checkpoint identity mismatch")
-          expected_remote_archive = (
-              f".cache/jato-releases/archives/{commit}/{archive_sha256}.tar.gz"
-          )
-          if remote_archive_path != expected_remote_archive:
-              raise SystemExit("server archive path identity mismatch")
-          if artifact_name != f"frontend-dist-{commit}":
-              raise SystemExit("frontend artifact name identity mismatch")
-          if re.fullmatch(r"[1-9][0-9]*", github_artifact_id) is None:
-              raise SystemExit("frontend GitHub artifact id is invalid")
-          if re.fullmatch(
-              r"(?:sha256:)?[0-9a-f]{64}",
-              github_artifact_digest,
-          ) is None:
-              raise SystemExit("frontend GitHub artifact digest is invalid")
-          if re.fullmatch(r"[0-9a-f]{64}", frontend_build_id) is None:
-              raise SystemExit("frontend build id is invalid")
-          if re.fullmatch(r"v[0-9]+\.[0-9]+\.[0-9]+", node_version) is None:
-              raise SystemExit("frontend Node version is invalid")
-          if workflow_name != "production-release":
-              raise SystemExit("Candidate source workflow identity mismatch")
-          expected_phase = (
-              "candidate_ready"
-              if release_mode == "prepare-candidate"
-              else "backend_healthy"
-          )
-          expected_retry_class = (
-              "inspect_then_resume"
-              if release_mode == "prepare-candidate"
-              else "automatic"
-          )
-          if (
-              checkpoint.get("phase") != expected_phase
-              or checkpoint.get("status") != "completed"
-          ):
-              raise SystemExit(
-                  f"server checkpoint is not {expected_phase}/completed"
-              )
-          if checkpoint.get("retryClass") != expected_retry_class:
-              raise SystemExit("server checkpoint has an unexpected retry class")
-
-          evidence_sha256 = hashlib.sha256(evidence_raw).hexdigest()
-          message = checkpoint.get("message")
-          if not isinstance(message, str):
-              raise SystemExit("server checkpoint does not bind release evidence")
-          binding = re.search(
-              r"(?:^|[; ])evidence_path=(\S+) evidence_sha256=([0-9a-f]{64})(?:$|[; ])",
-              message,
-          )
-          if (
-              binding is None
-              or binding.group(1) != remote_evidence_path
-              or binding.group(2) != evidence_sha256
-          ):
-              raise SystemExit("server checkpoint evidence binding mismatch")
-          if evidence.get("identity") != expected_identity:
-              raise SystemExit("server evidence identity mismatch")
-
-          backup = evidence.get("backup")
-          if not isinstance(backup, dict):
-              raise SystemExit("server evidence is missing backup metadata")
-          manifest_path = backup.get("manifestPath")
-          manifest_bytes = backup.get("manifestBytes")
-          manifest_sha256 = backup.get("manifestSha256")
-          if (
-              not isinstance(manifest_path, str)
-              or not manifest_path.startswith("/")
-              or not isinstance(manifest_bytes, int)
-              or manifest_bytes <= 0
-              or not isinstance(manifest_sha256, str)
-              or re.fullmatch(r"[0-9a-f]{64}", manifest_sha256) is None
-          ):
-              raise SystemExit("server evidence backup manifest identity is incomplete")
-          migration = evidence.get("migration")
-          if not isinstance(migration, dict) or migration.get("status") not in {
-              "completed",
-              "not_required",
-          }:
-              raise SystemExit("server evidence migration outcome is not final")
-
-          preview = None
-          if release_mode == "prepare-candidate":
-              preview, _ = read_private_json(
-                  preview_metadata_name,
-                  "Candidate preview metadata",
-              )
-              if (
-                  preview.get("role") != "candidate"
-                  or preview.get("commitSha") != commit
-                  or preview.get("archiveSha256") != archive_sha256
-                  or preview.get("candidateSlot") not in {8000, 8001}
-                  or preview.get("previewPort") != 18002
-              ):
-                  raise SystemExit("Candidate preview metadata identity mismatch")
-
-          attestation = {
-              "schemaVersion": 1,
-              "releaseId": release_id,
-              "releaseMode": release_mode,
-              "identity": expected_identity,
-              "approvalHandoff": {
-                  "workflow": workflow_name,
-                  "remoteArchivePath": remote_archive_path,
-                  "frontendArtifactName": artifact_name,
-                  "frontendGithubArtifactId": int(github_artifact_id),
-                  "frontendGithubArtifactDigest": github_artifact_digest,
-                  "frontendBuildId": frontend_build_id,
-                  "frontendNodeVersion": node_version,
-              },
-              "serverCheckpoint": {
-                  "remotePath": remote_evidence_path.removesuffix(".evidence.json") + ".json",
-                  "sha256": hashlib.sha256(checkpoint_raw).hexdigest(),
-                  "phase": expected_phase,
-                  "status": "completed",
-              },
-              "serverEvidence": {
-                  "remotePath": remote_evidence_path,
-                  "sha256": evidence_sha256,
-                  "backupManifestBytes": manifest_bytes,
-                  "backupManifestSha256": manifest_sha256,
-                  "migrationStatus": migration["status"],
-              },
-          }
-          if preview is not None:
-              attestation["candidatePreview"] = preview
-          output = Path(attestation_name)
-          output.write_text(
-              json.dumps(attestation, indent=2, sort_keys=True) + "\n",
-              encoding="utf-8",
-          )
-          output.chmod(0o600)
-          PY
-          attestation_sha256="$(sha256sum "$server_dir/attestation.json" | awk '{print $1}')"
-          # Keep the digest in the immutable artifact. GitHub can suppress a
-          # cross-job output when its secret scanner finds a coincidental match.
-          echo "Server checkpoint/evidence attestation SHA-256: $attestation_sha256"
-          # Continue the runner-side lifecycle from the attested server state.
-          # This prevents a synthetic transport_verified -> www_verified jump.
-          install -m 600 \
-            "$server_dir/backend-healthy.json" \
-            "$RUNNER_TEMP/release-checkpoint/candidate.json"
-          if [ "$RELEASE_MODE" = "prepare-candidate" ]; then
-            {
-              echo "## Candidate ready for manual review"
-              echo
-              echo "- Commit: \`$GITHUB_SHA\`"
-              echo "- Prepare run id: \`$GITHUB_RUN_ID\`"
-              echo "- Prepare run attempt: \`$BUILD_RUN_ATTEMPT\`"
-              echo "- Archive SHA-256: \`$ARCHIVE_SHA256\`"
-              echo "- Attestation SHA-256: \`$attestation_sha256\`"
-              echo "- Server origin: \`127.0.0.1:18002\` (loopback only)"
-              echo "- Local link after SSH forwarding: http://127.0.0.1:18002"
-              echo "- Active www and its background workers were not switched."
-            } >> "$GITHUB_STEP_SUMMARY"
-          fi
-          attestation_complete=true
-
-      - name: Verify Tencent public release provenance
-        if: ${{ env.RELEASE_MODE == 'prepare-and-switch' }}
-        env:
-          ARTIFACT_NAME: ${{ needs.build_frontend.outputs.artifact_name }}
-          ARTIFACT_IDENTITY: ${{ needs.build_frontend.outputs.artifact_identity }}
-          ARTIFACT_CHECKSUM: ${{ needs.build_frontend.outputs.artifact_checksum }}
-          GITHUB_ARTIFACT_ID: ${{ needs.build_frontend.outputs.github_artifact_id }}
-          GITHUB_ARTIFACT_DIGEST: ${{ needs.build_frontend.outputs.github_artifact_digest }}
-          FRONTEND_BUILD_ID: ${{ needs.build_frontend.outputs.frontend_build_id }}
-          NODE_VERSION: ${{ needs.build_frontend.outputs.node_version }}
-          BUILD_RUN_ATTEMPT: ${{ needs.build_frontend.outputs.workflow_run_attempt }}
-          PUBLIC_ORIGINS: ${{ vars.DEPLOY_PUBLIC_BUILD_META_URLS || 'https://www.ojeur.cloud https://ojeur.cloud' }}
-        run: |
-          set -euo pipefail
-          origin_args=()
-          for origin in $PUBLIC_ORIGINS; do
-            origin_args+=(--origin "$origin")
-          done
-          python3 03_Scripts/deploy/frontend_release_artifact.py audit-public \
-            --release-dir "$RUNNER_TEMP/frontend-release" \
-            --expected-github-sha "$GITHUB_SHA" \
-            --expected-artifact-name "$ARTIFACT_NAME" \
-            --expected-artifact-identity "$ARTIFACT_IDENTITY" \
-            --expected-artifact-checksum "$ARTIFACT_CHECKSUM" \
-            --expected-build-id "$FRONTEND_BUILD_ID" \
-            --expected-node-version "$NODE_VERSION" \
-            --expected-run-id "$GITHUB_RUN_ID" \
-            --expected-run-attempt "$BUILD_RUN_ATTEMPT" \
-            --github-artifact-id "$GITHUB_ARTIFACT_ID" \
-            --github-artifact-digest "$GITHUB_ARTIFACT_DIGEST" \
-            --attempts 24 \
-            --delay-seconds 10 \
-            "${origin_args[@]}"
-
-      - name: Verify www runtime API contract
-        if: ${{ env.RELEASE_MODE == 'prepare-and-switch' }}
-        env:
-          PUBLIC_ORIGINS: ${{ vars.DEPLOY_PUBLIC_BUILD_META_URLS || 'https://www.ojeur.cloud https://ojeur.cloud' }}
-        run: |
-          set -euo pipefail
-          for origin in $PUBLIC_ORIGINS; do
-            python3 03_Scripts/deploy/verify_intl_runtime_contract.py \
-              --profile www \
-              --origin "$origin" \
-              --attempts 24 \
-              --delay-seconds 10 \
-              --timeout-seconds 20
-          done
-
-      - name: Record www-verified candidate checkpoint
-        if: ${{ env.RELEASE_MODE == 'prepare-and-switch' }}
-        env:
-          ARCHIVE_BYTES: ${{ steps.upload_release.outputs.archive-bytes }}
-          ARCHIVE_SHA256: ${{ steps.upload_release.outputs.archive-sha256 }}
-          BUILD_RUN_ATTEMPT: ${{ needs.build_frontend.outputs.workflow_run_attempt }}
-          FRONTEND_IDENTITY: ${{ needs.build_frontend.outputs.artifact_identity }}
-          FRONTEND_CHECKSUM: ${{ needs.build_frontend.outputs.artifact_checksum }}
-        run: |
-          set -euo pipefail
-          python3 03_Scripts/deploy/release_checkpoint.py write \
-            --checkpoint "$RUNNER_TEMP/release-checkpoint/candidate.json" \
-            --journal "$RUNNER_TEMP/release-checkpoint/journal.jsonl" \
-            --repository "$GITHUB_REPOSITORY" \
-            --commit "$GITHUB_SHA" \
-            --archive-sha256 "$ARCHIVE_SHA256" \
-            --archive-bytes "$ARCHIVE_BYTES" \
-            --run-id "$GITHUB_RUN_ID" \
-            --run-attempt "$BUILD_RUN_ATTEMPT" \
-            --frontend-identity "$FRONTEND_IDENTITY" \
-            --frontend-checksum "$FRONTEND_CHECKSUM" \
-            --phase www_verified \
-            --status completed \
-            --retry-class automatic
-
-      - name: Check whether intl already serves the immutable release
-        if: ${{ env.RELEASE_MODE == 'prepare-and-switch' }}
-        id: intl_current
-        env:
-          ARTIFACT_NAME: ${{ needs.build_frontend.outputs.artifact_name }}
-          ARTIFACT_IDENTITY: ${{ needs.build_frontend.outputs.artifact_identity }}
-          ARTIFACT_CHECKSUM: ${{ needs.build_frontend.outputs.artifact_checksum }}
-          GITHUB_ARTIFACT_ID: ${{ needs.build_frontend.outputs.github_artifact_id }}
-          GITHUB_ARTIFACT_DIGEST: ${{ needs.build_frontend.outputs.github_artifact_digest }}
-          FRONTEND_BUILD_ID: ${{ needs.build_frontend.outputs.frontend_build_id }}
-          NODE_VERSION: ${{ needs.build_frontend.outputs.node_version }}
-          BUILD_RUN_ATTEMPT: ${{ needs.build_frontend.outputs.workflow_run_attempt }}
-          EXPECTED_SHA: ${{ github.sha }}
-          JATO_INTL_ORIGIN: ${{ vars.JATO_INTL_ORIGIN || 'https://intl.ojeur.cloud' }}
-        run: |
-          set -euo pipefail
-          if python3 03_Scripts/deploy/frontend_release_artifact.py audit-public \
-            --release-dir "$RUNNER_TEMP/frontend-release" \
-            --expected-github-sha "$GITHUB_SHA" \
-            --expected-artifact-name "$ARTIFACT_NAME" \
-            --expected-artifact-identity "$ARTIFACT_IDENTITY" \
-            --expected-artifact-checksum "$ARTIFACT_CHECKSUM" \
-            --expected-build-id "$FRONTEND_BUILD_ID" \
-            --expected-node-version "$NODE_VERSION" \
-            --expected-run-id "$GITHUB_RUN_ID" \
-            --expected-run-attempt "$BUILD_RUN_ATTEMPT" \
-            --github-artifact-id "$GITHUB_ARTIFACT_ID" \
-            --github-artifact-digest "$GITHUB_ARTIFACT_DIGEST" \
-            --origin "$JATO_INTL_ORIGIN" \
-            --attempts 1 \
-            --delay-seconds 0; then
-            echo "current=true" >> "$GITHUB_OUTPUT"
-            echo "Intl already serves the exact immutable release; deployment will be skipped"
-            exit 0
-          fi
-
-          provenance="$RUNNER_TEMP/intl-current-provenance.json"
-          status="$(curl --silent --show-error --location \
-            --connect-timeout 10 --max-time 30 \
-            --output "$provenance" --write-out '%{http_code}' \
-            "$JATO_INTL_ORIGIN/release-provenance.json?release_probe=$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT")"
-          if [ "$status" != "200" ]; then
-            echo "::error::Intl provenance probe was ambiguous (HTTP $status); refusing to redeploy"
-            exit 1
-          fi
-          current_sha="$(python3 - "$provenance" <<'PY'
-          import json
-          import sys
-          from pathlib import Path
-
-          payload = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
-          source = payload.get("source")
-          if not isinstance(source, dict):
-              raise SystemExit("intl provenance is missing source metadata")
-          sha = source.get("githubSha")
-          if not isinstance(sha, str) or len(sha) != 40:
-              raise SystemExit("intl provenance has an invalid githubSha")
-          print(sha)
-          PY
-          )"
-          if [ "$current_sha" = "$EXPECTED_SHA" ]; then
-            echo "::error::Intl serves the target SHA with conflicting artifact provenance; refusing to redeploy"
-            exit 1
-          fi
-          echo "current=false" >> "$GITHUB_OUTPUT"
-          echo "Intl currently serves $current_sha; target deployment is required"
-
-      - name: Record intl deployment ambiguity boundary
-        if: ${{ env.RELEASE_MODE == 'prepare-and-switch' }}
-        env:
-          ARCHIVE_BYTES: ${{ steps.upload_release.outputs.archive-bytes }}
-          ARCHIVE_SHA256: ${{ steps.upload_release.outputs.archive-sha256 }}
-          BUILD_RUN_ATTEMPT: ${{ needs.build_frontend.outputs.workflow_run_attempt }}
-          FRONTEND_IDENTITY: ${{ needs.build_frontend.outputs.artifact_identity }}
-          FRONTEND_CHECKSUM: ${{ needs.build_frontend.outputs.artifact_checksum }}
-        run: |
-          set -euo pipefail
-          python3 03_Scripts/deploy/release_checkpoint.py write \
-            --checkpoint "$RUNNER_TEMP/release-checkpoint/candidate.json" \
-            --journal "$RUNNER_TEMP/release-checkpoint/journal.jsonl" \
-            --repository "$GITHUB_REPOSITORY" \
-            --commit "$GITHUB_SHA" \
-            --archive-sha256 "$ARCHIVE_SHA256" \
-            --archive-bytes "$ARCHIVE_BYTES" \
-            --run-id "$GITHUB_RUN_ID" \
-            --run-attempt "$BUILD_RUN_ATTEMPT" \
-            --frontend-identity "$FRONTEND_IDENTITY" \
-            --frontend-checksum "$FRONTEND_CHECKSUM" \
-            --phase intl_deploy_started \
-            --status in_progress \
-            --retry-class inspect_then_resume \
-            --message "Inspect public intl provenance before retrying an interrupted deploy"
-
-      - name: Deploy downloaded dist to Cloudflare Pages
-        if: >-
-          ${{ env.RELEASE_MODE == 'prepare-and-switch' &&
-          steps.intl_current.outputs.current != 'true' }}
-        working-directory: ${{ runner.temp }}/cloudflare-pages-project
-        env:
-          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-          CLOUDFLARE_PAGES_PROJECT_NAME: ${{ vars.CLOUDFLARE_PAGES_PROJECT_NAME || secrets.CLOUDFLARE_PAGES_PROJECT_NAME }}
-        run: |
-          set -euo pipefail
-          for deploy_attempt in 1 2 3; do
-            if npx --yes "wrangler@$WRANGLER_VERSION" pages deploy "$RUNNER_TEMP/frontend-dist" \
-              --project-name "$CLOUDFLARE_PAGES_PROJECT_NAME" \
-              --branch "$GITHUB_REF_NAME" \
-              --commit-hash "$GITHUB_SHA" \
-              --commit-message "$GITHUB_SHA" \
-              --commit-dirty=true; then
-              exit 0
-            fi
-            if [ "$deploy_attempt" -eq 3 ]; then
-              echo "::error::Cloudflare deployment failed after three bounded attempts"
-              exit 1
-            fi
-            sleep $((deploy_attempt * 10))
-          done
-
-      - name: Verify intl public release provenance
-        if: ${{ env.RELEASE_MODE == 'prepare-and-switch' }}
-        env:
-          ARTIFACT_NAME: ${{ needs.build_frontend.outputs.artifact_name }}
-          ARTIFACT_IDENTITY: ${{ needs.build_frontend.outputs.artifact_identity }}
-          ARTIFACT_CHECKSUM: ${{ needs.build_frontend.outputs.artifact_checksum }}
-          GITHUB_ARTIFACT_ID: ${{ needs.build_frontend.outputs.github_artifact_id }}
-          GITHUB_ARTIFACT_DIGEST: ${{ needs.build_frontend.outputs.github_artifact_digest }}
-          FRONTEND_BUILD_ID: ${{ needs.build_frontend.outputs.frontend_build_id }}
-          NODE_VERSION: ${{ needs.build_frontend.outputs.node_version }}
-          BUILD_RUN_ATTEMPT: ${{ needs.build_frontend.outputs.workflow_run_attempt }}
-          JATO_INTL_ORIGIN: ${{ vars.JATO_INTL_ORIGIN || 'https://intl.ojeur.cloud' }}
-        run: |
-          set -euo pipefail
-          python3 03_Scripts/deploy/frontend_release_artifact.py audit-public \
-            --release-dir "$RUNNER_TEMP/frontend-release" \
-            --expected-github-sha "$GITHUB_SHA" \
-            --expected-artifact-name "$ARTIFACT_NAME" \
-            --expected-artifact-identity "$ARTIFACT_IDENTITY" \
-            --expected-artifact-checksum "$ARTIFACT_CHECKSUM" \
-            --expected-build-id "$FRONTEND_BUILD_ID" \
-            --expected-node-version "$NODE_VERSION" \
-            --expected-run-id "$GITHUB_RUN_ID" \
-            --expected-run-attempt "$BUILD_RUN_ATTEMPT" \
-            --github-artifact-id "$GITHUB_ARTIFACT_ID" \
-            --github-artifact-digest "$GITHUB_ARTIFACT_DIGEST" \
-            --origin "$JATO_INTL_ORIGIN" \
-            --attempts 24 \
-            --delay-seconds 10
-
-      - name: Verify intl API routing contract
-        if: ${{ env.RELEASE_MODE == 'prepare-and-switch' }}
-        env:
-          JATO_INTL_ORIGIN: ${{ vars.JATO_INTL_ORIGIN || 'https://intl.ojeur.cloud' }}
-        run: |
-          set -euo pipefail
-          python3 03_Scripts/deploy/verify_intl_runtime_contract.py \
-            --origin "$JATO_INTL_ORIGIN" \
-            --attempts 24 \
-            --delay-seconds 10 \
-            --timeout-seconds 20
-
-      - name: Record intl-verified candidate checkpoint
-        if: ${{ env.RELEASE_MODE == 'prepare-and-switch' }}
-        env:
-          ARCHIVE_BYTES: ${{ steps.upload_release.outputs.archive-bytes }}
-          ARCHIVE_SHA256: ${{ steps.upload_release.outputs.archive-sha256 }}
-          BUILD_RUN_ATTEMPT: ${{ needs.build_frontend.outputs.workflow_run_attempt }}
-          FRONTEND_IDENTITY: ${{ needs.build_frontend.outputs.artifact_identity }}
-          FRONTEND_CHECKSUM: ${{ needs.build_frontend.outputs.artifact_checksum }}
-        run: |
-          set -euo pipefail
-          python3 03_Scripts/deploy/release_checkpoint.py write \
-            --checkpoint "$RUNNER_TEMP/release-checkpoint/candidate.json" \
-            --journal "$RUNNER_TEMP/release-checkpoint/journal.jsonl" \
-            --repository "$GITHUB_REPOSITORY" \
-            --commit "$GITHUB_SHA" \
-            --archive-sha256 "$ARCHIVE_SHA256" \
-            --archive-bytes "$ARCHIVE_BYTES" \
-            --run-id "$GITHUB_RUN_ID" \
-            --run-attempt "$BUILD_RUN_ATTEMPT" \
-            --frontend-identity "$FRONTEND_IDENTITY" \
-            --frontend-checksum "$FRONTEND_CHECKSUM" \
-            --phase intl_verified \
-            --status completed \
-            --retry-class automatic
-
-      - name: Retain candidate release checkpoint
-        if: ${{ always() && steps.upload_release.outcome == 'success' }}
-        uses: actions/upload-artifact@v4
-        with:
-          name: release-candidate-${{ github.sha }}-${{ github.run_attempt }}
-          path: ${{ runner.temp }}/release-checkpoint
-          if-no-files-found: error
-          compression-level: 0
-          overwrite: false
-          retention-days: 30
-
-  approve_candidate_to_active:
-    if: >-
-      ${{ github.ref == 'refs/heads/main' &&
-      github.event_name == 'workflow_dispatch' &&
-      inputs.release_mode == 'approve-candidate-to-active' &&
-      needs.release_coordination_guard.outputs.release-action == 'deploy' }}
-    needs: release_coordination_guard
-    environment: production
-    runs-on: ubuntu-latest
-    timeout-minutes: 120
-
-    steps:
-      - name: Checkout approval source
-        uses: actions/checkout@v5
-        with:
-          ref: ${{ github.sha }}
-          persist-credentials: false
-
-      - name: Download frozen release coordination plan
-        uses: actions/download-artifact@v5
-        with:
-          name: release-coordination-plan-${{ github.sha }}-${{ github.run_attempt }}
-          path: ${{ runner.temp }}/release-coordination-plan
-
-      - name: Revalidate frozen coordination plan after approval
-        env:
-          GITHUB_TOKEN: ${{ github.token }}
-        run: >-
-          python3 .github/scripts/release_coordination_guard.py
-          verify-plan
-          --main-sha "$GITHUB_SHA"
-          --plan "$RUNNER_TEMP/release-coordination-plan/release-coordination-plan.json"
-
-      - name: Validate exact Candidate approval request
-        env:
-          GITHUB_TOKEN: ${{ github.token }}
-          CANDIDATE_RUN_ID: ${{ inputs.candidate_prepare_run_id }}
-          CANDIDATE_RUN_ATTEMPT: ${{ inputs.candidate_prepare_run_attempt }}
-          CANDIDATE_COMMIT_SHA: ${{ inputs.candidate_commit_sha }}
-          CANDIDATE_ARCHIVE_SHA256: ${{ inputs.candidate_archive_sha256 }}
-          CANDIDATE_ATTESTATION_SHA256: ${{ inputs.candidate_attestation_sha256 }}
-          CONFIRM_WWW_ACTIVATION: ${{ inputs.confirm_www_activation }}
-        run: |
-          set -euo pipefail
-          test "$CONFIRM_WWW_ACTIVATION" = "true" || {
-            echo "::error::confirm_www_activation must be explicitly checked"
-            exit 1
-          }
-          [[ "$CANDIDATE_RUN_ID" =~ ^[1-9][0-9]*$ ]]
-          [[ "$CANDIDATE_RUN_ATTEMPT" =~ ^[1-9][0-9]*$ ]]
-          [[ "$CANDIDATE_COMMIT_SHA" =~ ^[0-9a-f]{40}$ ]]
-          [[ "$CANDIDATE_ARCHIVE_SHA256" =~ ^[0-9a-f]{64}$ ]]
-          [[ "$CANDIDATE_ATTESTATION_SHA256" =~ ^[0-9a-f]{64}$ ]]
-          test "$CANDIDATE_COMMIT_SHA" = "$GITHUB_SHA" || {
-            echo "::error::Reviewed Candidate SHA is not current main; prepare a new Candidate"
-            exit 1
-          }
-
-          request_dir="$RUNNER_TEMP/candidate-approval"
-          install -d -m 700 "$request_dir"
-          gh api \
-            "repos/$GITHUB_REPOSITORY/actions/runs/$CANDIDATE_RUN_ID" \
-            > "$request_dir/prepare-run.json"
-          gh api --paginate --slurp \
-            "repos/$GITHUB_REPOSITORY/actions/runs/$CANDIDATE_RUN_ID/artifacts?per_page=100" \
-            > "$request_dir/prepare-artifacts.json"
-          python3 - \
-            "$request_dir/prepare-run.json" \
-            "$CANDIDATE_RUN_ATTEMPT" "$CANDIDATE_COMMIT_SHA" <<'PY'
-          import json
-          from pathlib import Path
-          import sys
-
-          run = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
-          attempt = int(sys.argv[2])
-          commit = sys.argv[3]
-          workflow_path = str(run.get("path") or "").split("@", maxsplit=1)[0]
-          expected = {
-              "head_branch": "main",
-              "head_sha": commit,
-              "status": "completed",
-              "conclusion": "success",
-              "run_attempt": attempt,
-          }
-          mismatches = {
-              key: {"expected": value, "actual": run.get(key)}
-              for key, value in expected.items()
-              if run.get(key) != value
-          }
-          if workflow_path != ".github/workflows/production-release.yml":
-              mismatches["path"] = {
-                  "expected": ".github/workflows/production-release.yml",
-                  "actual": workflow_path,
-              }
-          if run.get("event") not in {"push", "workflow_dispatch"}:
-              mismatches["event"] = {
-                  "expected": "push or workflow_dispatch",
-                  "actual": run.get("event"),
-              }
-          if mismatches:
-              raise SystemExit(
-                  "prepare-candidate run identity/status mismatch: "
-                  + json.dumps(mismatches, sort_keys=True)
-              )
-          PY
-
-      - name: Download exact Candidate handoff artifact
-        uses: actions/download-artifact@v5
-        with:
-          name: release-candidate-${{ inputs.candidate_commit_sha }}-${{ inputs.candidate_prepare_run_attempt }}
-          path: ${{ runner.temp }}/candidate-approval/release-candidate
-          repository: ${{ github.repository }}
-          github-token: ${{ github.token }}
-          run-id: ${{ inputs.candidate_prepare_run_id }}
-
-      - name: Download exact reviewed frontend artifact
-        uses: actions/download-artifact@v5
-        with:
-          name: frontend-dist-${{ inputs.candidate_commit_sha }}
-          path: ${{ runner.temp }}/candidate-approval/frontend-release
-          repository: ${{ github.repository }}
-          github-token: ${{ github.token }}
-          run-id: ${{ inputs.candidate_prepare_run_id }}
-
-      - name: Verify immutable Candidate handoff
-        env:
-          CANDIDATE_RUN_ID: ${{ inputs.candidate_prepare_run_id }}
-          CANDIDATE_RUN_ATTEMPT: ${{ inputs.candidate_prepare_run_attempt }}
-          CANDIDATE_COMMIT_SHA: ${{ inputs.candidate_commit_sha }}
-          CANDIDATE_ARCHIVE_SHA256: ${{ inputs.candidate_archive_sha256 }}
-          CANDIDATE_ATTESTATION_SHA256: ${{ inputs.candidate_attestation_sha256 }}
-        run: |
-          set -euo pipefail
-          request_dir="$RUNNER_TEMP/candidate-approval"
-          python3 03_Scripts/deploy/verify_candidate_handoff.py \
-            --checkpoint "$request_dir/release-candidate/candidate.json" \
-            --attestation "$request_dir/release-candidate/server/attestation.json" \
-            --artifacts "$request_dir/prepare-artifacts.json" \
-            --env-output "$request_dir/verified.env" \
-            --repository "$GITHUB_REPOSITORY" \
-            --commit "$CANDIDATE_COMMIT_SHA" \
-            --archive-sha256 "$CANDIDATE_ARCHIVE_SHA256" \
-            --run-id "$CANDIDATE_RUN_ID" \
-            --run-attempt "$CANDIDATE_RUN_ATTEMPT" \
-            --attestation-sha256 "$CANDIDATE_ATTESTATION_SHA256"
-          source "$request_dir/verified.env"
-          python3 03_Scripts/deploy/frontend_release_artifact.py verify \
-            --release-dir "$request_dir/frontend-release" \
-            --expected-github-sha "$CANDIDATE_COMMIT_SHA" \
-            --expected-artifact-name "$CANDIDATE_FRONTEND_ARTIFACT_NAME" \
-            --expected-artifact-identity "$CANDIDATE_FRONTEND_ARTIFACT_IDENTITY" \
-            --expected-artifact-checksum "$CANDIDATE_FRONTEND_ARTIFACT_CHECKSUM" \
-            --expected-build-id "$CANDIDATE_FRONTEND_BUILD_ID" \
-            --expected-node-version "$CANDIDATE_FRONTEND_NODE_VERSION" \
-            --expected-run-id "$CANDIDATE_RUN_ID" \
-            --expected-run-attempt "$CANDIDATE_RUN_ATTEMPT" \
-            --github-artifact-id "$CANDIDATE_GITHUB_ARTIFACT_ID" \
-            --github-artifact-digest "$CANDIDATE_GITHUB_ARTIFACT_DIGEST"
-
-      - name: Validate Tencent approval credentials
-        id: approval_auth
-        env:
-          SSH_HOST: ${{ secrets.SSH_HOST }}
-          SSH_USER: ${{ secrets.SSH_USER }}
-          SSH_PORT: ${{ secrets.SSH_PORT }}
-          SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
-          SSH_PASSWORD: ${{ secrets.SSH_PASSWORD }}
-          SSH_KNOWN_HOSTS: ${{ secrets.SSH_KNOWN_HOSTS }}
-        run: |
-          set -euo pipefail
-          : "${SSH_HOST:?Missing SSH_HOST}"
-          : "${SSH_USER:?Missing SSH_USER}"
-          : "${SSH_KNOWN_HOSTS:?Missing production secret SSH_KNOWN_HOSTS}"
-          SSH_PORT="${SSH_PORT:-22}"
-          install -d -m 700 ~/.ssh
-          printf '%s\n' "$SSH_KNOWN_HOSTS" > ~/.ssh/known_hosts
-          chmod 600 ~/.ssh/known_hosts
-          known_host="$SSH_HOST"
-          if [ "$SSH_PORT" != "22" ]; then
-            known_host="[$SSH_HOST]:$SSH_PORT"
-          fi
-          ssh-keygen -F "$known_host" -f ~/.ssh/known_hosts >/dev/null || {
-            echo "::error::SSH_KNOWN_HOSTS does not pin the Tencent host and port"
-            exit 1
-          }
-          if [ -n "${SSH_PRIVATE_KEY:-}" ]; then
-            echo "mode=key" >> "$GITHUB_OUTPUT"
-          elif [ -n "${SSH_PASSWORD:-}" ]; then
-            echo "mode=password" >> "$GITHUB_OUTPUT"
-          else
-            echo "::error::Provide either SSH_PRIVATE_KEY or SSH_PASSWORD"
-            exit 1
-          fi
-
-      - name: Revalidate frozen coordination plan immediately before Active mutation
-        env:
-          GITHUB_TOKEN: ${{ github.token }}
-        run: >-
-          python3 .github/scripts/release_coordination_guard.py
-          verify-plan
-          --main-sha "$GITHUB_SHA"
-          --plan "$RUNNER_TEMP/release-coordination-plan/release-coordination-plan.json"
-
-      - name: Approve exact Candidate on Tencent
-        id: approve_active
-        env:
-          AUTH_MODE: ${{ steps.approval_auth.outputs.mode }}
-          CANDIDATE_VERIFIED_ENV: ${{ runner.temp }}/candidate-approval/verified.env
-          SSH_HOST: ${{ secrets.SSH_HOST }}
-          SSH_USER: ${{ secrets.SSH_USER }}
-          SSH_PORT: ${{ secrets.SSH_PORT }}
-          SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
-          SSH_PASSWORD: ${{ secrets.SSH_PASSWORD }}
-          DEPLOY_SERVER_NAME: ${{ vars.DEPLOY_SERVER_NAME }}
-          DEPLOY_ENABLE_HTTPS: ${{ vars.DEPLOY_ENABLE_HTTPS }}
-          DEPLOY_CERTBOT_EMAIL: ${{ secrets.DEPLOY_CERTBOT_EMAIL }}
-          DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
-          HERMES_SYNC_TOKEN: ${{ secrets.HERMES_SYNC_TOKEN }}
-          GOOGLE_CLIENT_ID: ${{ secrets.GOOGLE_CLIENT_ID }}
-          GOOGLE_CLIENT_SECRET: ${{ secrets.GOOGLE_CLIENT_SECRET }}
-          GOOGLE_OAUTH_PROXY_URL: ${{ secrets.GOOGLE_OAUTH_PROXY_URL }}
-          GOOGLE_OAUTH_RELAY_URL: ${{ secrets.GOOGLE_OAUTH_RELAY_URL }}
-          GOOGLE_OAUTH_RELAY_TOKEN: ${{ secrets.GOOGLE_OAUTH_RELAY_TOKEN }}
-          MIHOMO_SUB_URL: ${{ secrets.MIHOMO_SUB_URL }}
-          MIHOMO_DB_PATH: ${{ vars.MIHOMO_DB_PATH }}
-        run: |
-          set -euo pipefail
-          bash 03_Scripts/deploy/github_candidate_control.sh approve-candidate-to-active
-
-      - name: Record failed approval restore boundary
-        if: ${{ failure() && steps.approve_active.outcome == 'failure' }}
-        run: |
-          {
-            echo "## Candidate approval failed"
-            echo
-            echo "- The workflow remains failed; no success receipt is emitted."
-            echo "- The controller enforces automatic restore previous successful Active."
-            echo "- The previous Active is the server's current Active release identity,"
-            echo "  not the most recent green GitHub Actions run."
-            echo "- www verification was not completed; intl was not touched."
-          } >> "$GITHUB_STEP_SUMMARY"
-          exit 0
-
-      - name: Verify www serves the exact approved Candidate
-        id: verify_www
-        continue-on-error: true
-        env:
-          PUBLIC_ORIGINS: ${{ vars.DEPLOY_PUBLIC_BUILD_META_URLS || 'https://www.ojeur.cloud https://ojeur.cloud' }}
-        run: |
-          set -euo pipefail
-          source "$RUNNER_TEMP/candidate-approval/verified.env"
-          origin_args=()
-          for origin in $PUBLIC_ORIGINS; do
-            origin_args+=(--origin "$origin")
-          done
-          python3 03_Scripts/deploy/frontend_release_artifact.py audit-public \
-            --release-dir "$RUNNER_TEMP/candidate-approval/frontend-release" \
-            --expected-github-sha "$CANDIDATE_COMMIT_SHA" \
-            --expected-artifact-name "$CANDIDATE_FRONTEND_ARTIFACT_NAME" \
-            --expected-artifact-identity "$CANDIDATE_FRONTEND_ARTIFACT_IDENTITY" \
-            --expected-artifact-checksum "$CANDIDATE_FRONTEND_ARTIFACT_CHECKSUM" \
-            --expected-build-id "$CANDIDATE_FRONTEND_BUILD_ID" \
-            --expected-node-version "$CANDIDATE_FRONTEND_NODE_VERSION" \
-            --expected-run-id "$CANDIDATE_RUN_ID" \
-            --expected-run-attempt "$CANDIDATE_RUN_ATTEMPT" \
-            --github-artifact-id "$CANDIDATE_GITHUB_ARTIFACT_ID" \
-            --github-artifact-digest "$CANDIDATE_GITHUB_ARTIFACT_DIGEST" \
-            --attempts 24 \
-            --delay-seconds 10 \
-            "${origin_args[@]}"
-          for origin in $PUBLIC_ORIGINS; do
-            python3 03_Scripts/deploy/verify_intl_runtime_contract.py \
-              --profile www \
-              --origin "$origin" \
-              --attempts 24 \
-              --delay-seconds 10 \
-              --timeout-seconds 20
-          done
-
-      - name: Restore previous Active after failed www audit
-        id: restore_previous_active
-        if: ${{ steps.verify_www.outcome == 'failure' }}
-        env:
-          AUTH_MODE: ${{ steps.approval_auth.outputs.mode }}
-          CANDIDATE_VERIFIED_ENV: ${{ runner.temp }}/candidate-approval/verified.env
-          SSH_HOST: ${{ secrets.SSH_HOST }}
-          SSH_USER: ${{ secrets.SSH_USER }}
-          SSH_PORT: ${{ secrets.SSH_PORT }}
-          SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
-          SSH_PASSWORD: ${{ secrets.SSH_PASSWORD }}
-          DEPLOY_SERVER_NAME: ${{ vars.DEPLOY_SERVER_NAME }}
-          DEPLOY_ENABLE_HTTPS: ${{ vars.DEPLOY_ENABLE_HTTPS }}
-          DEPLOY_CERTBOT_EMAIL: ${{ secrets.DEPLOY_CERTBOT_EMAIL }}
-          DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
-          HERMES_SYNC_TOKEN: ${{ secrets.HERMES_SYNC_TOKEN }}
-          GOOGLE_CLIENT_ID: ${{ secrets.GOOGLE_CLIENT_ID }}
-          GOOGLE_CLIENT_SECRET: ${{ secrets.GOOGLE_CLIENT_SECRET }}
-          GOOGLE_OAUTH_PROXY_URL: ${{ secrets.GOOGLE_OAUTH_PROXY_URL }}
-          GOOGLE_OAUTH_RELAY_URL: ${{ secrets.GOOGLE_OAUTH_RELAY_URL }}
-          GOOGLE_OAUTH_RELAY_TOKEN: ${{ secrets.GOOGLE_OAUTH_RELAY_TOKEN }}
-          MIHOMO_SUB_URL: ${{ secrets.MIHOMO_SUB_URL }}
-          MIHOMO_DB_PATH: ${{ vars.MIHOMO_DB_PATH }}
-        run: |
-          set -euo pipefail
-          bash 03_Scripts/deploy/github_candidate_control.sh restore-previous-active
-          {
-            echo "## www audit rejected the approved Candidate"
-            echo
-            echo "- Automatic restore previous successful Active completed."
-            echo "- No approval success receipt was emitted."
-            echo "- intl was not touched."
-          } >> "$GITHUB_STEP_SUMMARY"
-
-      - name: Keep failed www audit red after automatic restore
-        if: >-
-          ${{ steps.verify_www.outcome == 'failure' &&
-          steps.restore_previous_active.outcome == 'success' }}
-        run: |
-          echo "::error::www audit failed; previous successful Active was restored"
-          exit 1
-
-      - name: Fetch and attest Active update checkpoint
-        if: ${{ steps.verify_www.outcome == 'success' }}
-        env:
-          AUTH_MODE: ${{ steps.approval_auth.outputs.mode }}
-          SSH_HOST: ${{ secrets.SSH_HOST }}
-          SSH_USER: ${{ secrets.SSH_USER }}
-          SSH_PORT: ${{ secrets.SSH_PORT }}
-          SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
-          SSH_PASSWORD: ${{ secrets.SSH_PASSWORD }}
-        run: |
-          set -euo pipefail
-          source "$RUNNER_TEMP/candidate-approval/verified.env"
-          SSH_PORT="${SSH_PORT:-22}"
-          ssh_options=(
-            -T -p "$SSH_PORT"
-            -o StrictHostKeyChecking=yes
-            -o UserKnownHostsFile="$HOME/.ssh/known_hosts"
-            -o ConnectTimeout=20
-            -o ConnectionAttempts=2
-            -o ServerAliveInterval=10
-            -o ServerAliveCountMax=2
-          )
-          if [ "$AUTH_MODE" = "key" ]; then
-            ssh_command=(ssh -o BatchMode=yes -i ~/.ssh/github_actions_tencent_key)
-          else
+            command -v sshpass >/dev/null || {
+              sudo apt-get update -y
+              sudo apt-get install -y sshpass
+            }
             export SSHPASS="$SSH_PASSWORD"
             ssh_command=(
               sshpass -e ssh
@@ -2177,923 +1339,165 @@ jobs:
               -o PubkeyAuthentication=no
             )
           fi
-          receipt_dir="$RUNNER_TEMP/candidate-approval/active-receipt"
-          server_dir="$receipt_dir/server"
-          install -d -m 700 "$server_dir"
-          remote_journal_dir=".local/state/jato-production-release/journals/$CANDIDATE_COMMIT_SHA"
-          remote_checkpoint="$CANDIDATE_SERVER_CHECKPOINT_PATH"
-          remote_evidence="$CANDIDATE_SERVER_EVIDENCE_PATH"
-          remote_journal="$remote_journal_dir/$CANDIDATE_ARCHIVE_SHA256.jsonl"
-          printf -v rsync_rsh '%q ' "${ssh_command[@]}" "${ssh_options[@]}"
-          rsync_rsh="${rsync_rsh% }"
-          ssh_target="$SSH_USER@$SSH_HOST"
-          timeout 120s rsync --links --times --protect-args --chmod=F600 \
-            --no-owner --no-group -e "$rsync_rsh" \
-            "$ssh_target:$remote_checkpoint" "$server_dir/active-updated.json"
-          timeout 120s rsync --links --times --protect-args --chmod=F600 \
-            --no-owner --no-group -e "$rsync_rsh" \
-            "$ssh_target:$remote_evidence" "$server_dir/active-updated.evidence.json"
-          timeout 120s rsync --links --times --protect-args --chmod=F600 \
-            --no-owner --no-group -e "$rsync_rsh" \
-            "$ssh_target:$remote_journal" "$server_dir/active-updated.journal.jsonl"
-          python3 - \
-            "$RUNNER_TEMP/candidate-approval/release-candidate/candidate.json" \
-            "$server_dir/active-updated.json" \
-            "$server_dir/active-updated.evidence.json" \
-            "$server_dir/active-updated.journal.jsonl" \
-            "$CANDIDATE_SERVER_EVIDENCE_PATH" <<'PY'
-          import hashlib
-          import json
-          from pathlib import Path
-          import re
-          import stat
-          import sys
 
-          (
-              reviewed_name,
-              checkpoint_name,
-              evidence_name,
-              journal_name,
-              expected_evidence_path,
-          ) = sys.argv[1:]
-          reviewed = json.loads(Path(reviewed_name).read_text(encoding="utf-8"))
-          checkpoint_raw = Path(checkpoint_name).read_bytes()
-          evidence_raw = Path(evidence_name).read_bytes()
-          journal_path = Path(journal_name)
-          journal_metadata = journal_path.lstat()
-          if journal_path.is_symlink() or not stat.S_ISREG(journal_metadata.st_mode):
-              raise SystemExit(
-                  "canonical Active update journal must be a regular non-symlink file"
-              )
-          journal_raw = journal_path.read_bytes()
-          checkpoint = json.loads(checkpoint_raw.decode("utf-8"))
-          evidence = json.loads(evidence_raw.decode("utf-8"))
-          identity = reviewed.get("identity")
-          if checkpoint.get("identity") != identity or evidence.get("identity") != identity:
-              raise SystemExit("Active update changed the reviewed Candidate identity")
-          if (
-              checkpoint.get("phase") != "active_updated"
-              or checkpoint.get("status") != "completed"
-              or checkpoint.get("retryClass") != "inspect_then_resume"
-          ):
-              raise SystemExit("server checkpoint is not active_updated/completed")
-          message = checkpoint.get("message")
-          binding = re.search(
-              r"(?:^|[; ])evidence_path=(\S+) evidence_sha256=([0-9a-f]{64})(?:$|[; ])",
-              message if isinstance(message, str) else "",
+          control_payload="$RUNNER_TEMP/fixed-v2-control.sh"
+          control_bundle_tar="$RUNNER_TEMP/fixed-v2-control-bundle.tar"
+          control_bundle="$control_bundle_tar.gz"
+          operation_log="$RUNNER_TEMP/v2-operation-output.log"
+          control_bundle_files=(
+            03_Scripts/deploy/fixed_release_v2.py
+            03_Scripts/deploy/fixed_release_v2_remote.sh
+            03_Scripts/deploy/jato_quiescence_gate.py
+            03_Scripts/deploy/nginx/jato_active_release_v2.conf
+            03_Scripts/deploy/nginx/jato_candidate_preview_v2.conf
+            03_Scripts/deploy/release_v2_admission.py
+            03_Scripts/deploy/release_v2_store.py
+            03_Scripts/deploy/systemd/jato-candidate-preview.service
+            03_Scripts/deploy/systemd/jato-fullstack-backend@.service
+            03_Scripts/deploy/systemd/jato-fullstack-backend@8001.service.d/20-candidate-readonly.conf
+            03_Scripts/deploy/validate_release_archive.py
           )
-          if (
-              binding is None
-              or binding.group(1) != expected_evidence_path
-              or binding.group(2) != hashlib.sha256(evidence_raw).hexdigest()
-          ):
-              raise SystemExit("Active update evidence binding mismatch")
-          if not journal_raw or len(journal_raw) > 16 * 1024 * 1024:
-              raise SystemExit("canonical Active update journal has an invalid size")
-          try:
-              events = [
-                  json.loads(line)
-                  for line in journal_raw.decode("utf-8").splitlines()
-                  if line
-              ]
-          except (UnicodeError, json.JSONDecodeError) as exc:
-              raise SystemExit("canonical Active update journal is invalid JSONL") from exc
-          if len(events) < 3:
-              raise SystemExit("canonical Active update journal is incomplete")
-          for sequence, event in enumerate(events, start=1):
-              if (
-                  not isinstance(event, dict)
-                  or event.get("event") != "checkpoint_transition"
-                  or event.get("sequence") != sequence
-                  or event.get("identity") != identity
-              ):
-                  raise SystemExit(
-                      "canonical Active update journal sequence/identity mismatch"
-                  )
-          started, verified, updated = events[-3:]
-          if (
-              started.get("phase") != "active_update_started"
-              or started.get("status") != "in_progress"
-              or started.get("retryClass") != "rollback_required"
-              or verified.get("phase") != "active_update_verified"
-              or verified.get("status") != "completed"
-              or verified.get("retryClass") != "inspect_then_resume"
-              or updated.get("phase") != "active_updated"
-              or updated.get("status") != "completed"
-              or updated.get("retryClass") != "inspect_then_resume"
-          ):
-              raise SystemExit(
-                  "canonical journal does not end in Active update "
-                  "started/verified/completed"
-              )
-          journal_tail = dict(updated)
-          journal_tail.pop("event", None)
-          if journal_tail != checkpoint:
-              raise SystemExit("canonical Active update journal tail/checkpoint mismatch")
-          PY
-          install -m 600 "$server_dir/active-updated.json" "$receipt_dir/candidate.json"
-          install -m 600 "$server_dir/active-updated.journal.jsonl" \
-            "$receipt_dir/journal.jsonl"
-
-      - name: Seal www approval receipt
-        if: ${{ steps.verify_www.outcome == 'success' }}
-        run: |
-          set -euo pipefail
-          source "$RUNNER_TEMP/candidate-approval/verified.env"
-          receipt_dir="$RUNNER_TEMP/candidate-approval/active-receipt"
-          python3 03_Scripts/deploy/release_checkpoint.py write \
-            --checkpoint "$receipt_dir/candidate.json" \
-            --journal "$receipt_dir/journal.jsonl" \
-            --repository "$CANDIDATE_REPOSITORY" \
-            --commit "$CANDIDATE_COMMIT_SHA" \
-            --archive-sha256 "$CANDIDATE_ARCHIVE_SHA256" \
-            --archive-bytes "$CANDIDATE_ARCHIVE_BYTES" \
-            --run-id "$CANDIDATE_RUN_ID" \
-            --run-attempt "$CANDIDATE_RUN_ATTEMPT" \
-            --frontend-identity "$CANDIDATE_FRONTEND_ARTIFACT_IDENTITY" \
-            --frontend-checksum "$CANDIDATE_FRONTEND_ARTIFACT_CHECKSUM" \
-            --phase www_verified \
-            --status completed \
-            --retry-class automatic \
-            --message \
-              "www verified by approval run $GITHUB_RUN_ID/$GITHUB_RUN_ATTEMPT; intl unchanged"
-          {
-            echo "## Candidate approved for www"
-            echo
-            echo "- Candidate commit: \`$CANDIDATE_COMMIT_SHA\`"
-            echo "- Prepare run: \`$CANDIDATE_RUN_ID/$CANDIDATE_RUN_ATTEMPT\`"
-            echo "- Approval run: \`$GITHUB_RUN_ID/$GITHUB_RUN_ATTEMPT\`"
-            echo "- Server checkpoint: \`active_updated/completed\`"
-            echo "- www: exact provenance and runtime contract verified"
-            echo "- intl: unchanged; separate confirmation is still required"
-          } >> "$GITHUB_STEP_SUMMARY"
-
-      - name: Retain immutable www approval receipt
-        if: ${{ steps.verify_www.outcome == 'success' }}
-        uses: actions/upload-artifact@v4
-        with:
-          name: release-www-approved-${{ inputs.candidate_commit_sha }}-${{ github.run_id }}-${{ github.run_attempt }}
-          path: ${{ runner.temp }}/candidate-approval/active-receipt
-          if-no-files-found: error
-          compression-level: 0
-          overwrite: false
-          retention-days: 30
-
-  cleanup_candidate:
-    if: >-
-      ${{ github.ref == 'refs/heads/main' &&
-      github.event_name == 'workflow_dispatch' &&
-      (inputs.release_mode == 'discard-candidate' ||
-      inputs.release_mode == 'discard-failed-candidate' ||
-      inputs.release_mode == 'release-candidate') &&
-      needs.release_coordination_guard.outputs.release-action == 'deploy' }}
-    needs: release_coordination_guard
-    environment: production
-    runs-on: ubuntu-latest
-    timeout-minutes: 120
-
-    steps:
-      - name: Checkout cleanup source
-        uses: actions/checkout@v5
-        with:
-          ref: ${{ github.sha }}
-          persist-credentials: false
-
-      - name: Download frozen release coordination plan
-        uses: actions/download-artifact@v5
-        with:
-          name: release-coordination-plan-${{ github.sha }}-${{ github.run_attempt }}
-          path: ${{ runner.temp }}/release-coordination-plan
-
-      - name: Revalidate frozen coordination plan after cleanup approval
-        env:
-          GITHUB_TOKEN: ${{ github.token }}
-        run: >-
-          python3 .github/scripts/release_coordination_guard.py
-          verify-plan
-          --main-sha "$GITHUB_SHA"
-          --plan "$RUNNER_TEMP/release-coordination-plan/release-coordination-plan.json"
-
-      - name: Validate exact Candidate cleanup request
-        env:
-          GITHUB_TOKEN: ${{ github.token }}
-          CANDIDATE_RUN_ID: ${{ inputs.candidate_prepare_run_id }}
-          CANDIDATE_RUN_ATTEMPT: ${{ inputs.candidate_prepare_run_attempt }}
-          CANDIDATE_COMMIT_SHA: ${{ inputs.candidate_commit_sha }}
-          CANDIDATE_ARCHIVE_SHA256: ${{ inputs.candidate_archive_sha256 }}
-          CANDIDATE_ATTESTATION_SHA256: ${{ inputs.candidate_attestation_sha256 }}
-          CONFIRM_CANDIDATE_CLEANUP: ${{ inputs.confirm_candidate_cleanup }}
-        run: |
-          set -euo pipefail
-          test "$CONFIRM_CANDIDATE_CLEANUP" = "true" || {
-            echo "::error::confirm_candidate_cleanup must be explicitly checked"
-            exit 1
-          }
-          [[ "$CANDIDATE_RUN_ID" =~ ^[1-9][0-9]*$ ]]
-          [[ "$CANDIDATE_RUN_ATTEMPT" =~ ^[1-9][0-9]*$ ]]
-          [[ "$CANDIDATE_COMMIT_SHA" =~ ^[0-9a-f]{40}$ ]]
-          [[ "$CANDIDATE_ARCHIVE_SHA256" =~ ^[0-9a-f]{64}$ ]]
-          if [ "$RELEASE_MODE" = "discard-failed-candidate" ]; then
-            test -z "$CANDIDATE_ATTESTATION_SHA256" || {
-              echo "::error::failed Candidate discard must not claim a successful attestation"
+          umask 077
+          : > "$control_payload"
+          for control_file in "${control_bundle_files[@]}"; do
+            [ -f "$control_file" ] && [ ! -L "$control_file" ] || {
+              echo "::error::Unsafe V2 control source: $control_file"
               exit 1
             }
-          else
-            [[ "$CANDIDATE_ATTESTATION_SHA256" =~ ^[0-9a-f]{64}$ ]]
-          fi
-          if [ "$CANDIDATE_COMMIT_SHA" != "$GITHUB_SHA" ]; then
-            echo "::notice::Cleaning an exact reviewed prior-main Candidate; current main remains control-plane source"
-          fi
-          request_dir="$RUNNER_TEMP/candidate-cleanup"
-          install -d -m 700 "$request_dir"
-          gh api \
-            "repos/$GITHUB_REPOSITORY/actions/runs/$CANDIDATE_RUN_ID" \
-            > "$request_dir/prepare-run.json"
-          gh api --paginate --slurp \
-            "repos/$GITHUB_REPOSITORY/actions/runs/$CANDIDATE_RUN_ID/artifacts?per_page=100" \
-            > "$request_dir/prepare-artifacts.json"
-          python3 - \
-            "$request_dir/prepare-run.json" \
-            "$CANDIDATE_RUN_ATTEMPT" "$CANDIDATE_COMMIT_SHA" \
-            "$RELEASE_MODE" <<'PY'
-          import json
-          from pathlib import Path
-          import sys
-
-          run = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
-          expected = {
-              "head_branch": "main",
-              "head_sha": sys.argv[3],
-              "status": "completed",
-              "run_attempt": int(sys.argv[2]),
-          }
-          mismatches = {
-              key: {"expected": value, "actual": run.get(key)}
-              for key, value in expected.items()
-              if run.get(key) != value
-          }
-          mode = sys.argv[4]
-          allowed_conclusions = {
-              "discard-candidate": {"success", "failure"},
-              "discard-failed-candidate": {"failure"},
-              "release-candidate": {"success"},
-          }.get(mode, set())
-          if run.get("conclusion") not in allowed_conclusions:
-              mismatches["conclusion"] = {
-                  "expected": sorted(allowed_conclusions),
-                  "actual": run.get("conclusion"),
-              }
-          workflow_path = str(run.get("path") or "").split("@", maxsplit=1)[0]
-          if workflow_path != ".github/workflows/production-release.yml":
-              mismatches["path"] = {
-                  "expected": ".github/workflows/production-release.yml",
-                  "actual": workflow_path,
-              }
-          if run.get("event") not in {"push", "workflow_dispatch"}:
-              mismatches["event"] = {
-                  "expected": "push or workflow_dispatch",
-                  "actual": run.get("event"),
-              }
-          if mismatches:
-              raise SystemExit(
-                  "prepare-candidate run identity/status mismatch: "
-                  + json.dumps(mismatches, sort_keys=True)
-              )
-          PY
-
-      - name: Resolve Candidate cleanup handoff source
-        id: cleanup_handoff
-        env:
-          CANDIDATE_RUN_ATTEMPT: ${{ inputs.candidate_prepare_run_attempt }}
-          CANDIDATE_COMMIT_SHA: ${{ inputs.candidate_commit_sha }}
-        run: |
-          set -euo pipefail
-          python3 - \
-            "$RUNNER_TEMP/candidate-cleanup/prepare-artifacts.json" \
-            "$GITHUB_OUTPUT" "$CANDIDATE_COMMIT_SHA" \
-            "$CANDIDATE_RUN_ATTEMPT" "$RELEASE_MODE" <<'PY'
-          import json
-          from pathlib import Path
-          import sys
-
-          artifacts_name, output_name, commit, run_attempt, mode = sys.argv[1:]
-          pages = json.loads(Path(artifacts_name).read_text(encoding="utf-8"))
-          if isinstance(pages, dict):
-              pages = [pages]
-          if not isinstance(pages, list):
-              raise SystemExit("prepare-run artifact response is invalid")
-          artifacts = []
-          for page in pages:
-              if not isinstance(page, dict) or not isinstance(
-                  page.get("artifacts"), list
-              ):
-                  raise SystemExit("prepare-run artifact page is invalid")
-              artifacts.extend(page["artifacts"])
-          names = (
-              f"release-candidate-{commit}-{run_attempt}",
-              f"frontend-dist-{commit}",
-          )
-          selected = {
-              name: [artifact for artifact in artifacts if artifact.get("name") == name]
-              for name in names
-          }
-          duplicates = [name for name, matches in selected.items() if len(matches) > 1]
-          if duplicates:
-              raise SystemExit(
-                  "Candidate cleanup artifact identity is ambiguous: "
-                  + ", ".join(sorted(duplicates))
-              )
-          source = "github-artifact"
-          unavailable = any(
-              len(matches) != 1 or matches[0].get("expired") is not False
-              for matches in selected.values()
-          )
-          if unavailable and mode == "discard-failed-candidate":
-              raise SystemExit(
-                  "failed Candidate discard requires exact non-expired GitHub artifacts"
-              )
-          if unavailable:
-              source = "canonical-server"
-          with Path(output_name).open("a", encoding="utf-8") as output:
-              output.write(f"source={source}\n")
-          print(f"Candidate cleanup handoff source: {source}")
-          PY
-
-      - name: Validate Tencent cleanup credentials
-        id: cleanup_auth
-        env:
-          SSH_HOST: ${{ secrets.SSH_HOST }}
-          SSH_USER: ${{ secrets.SSH_USER }}
-          SSH_PORT: ${{ secrets.SSH_PORT }}
-          SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
-          SSH_PASSWORD: ${{ secrets.SSH_PASSWORD }}
-          SSH_KNOWN_HOSTS: ${{ secrets.SSH_KNOWN_HOSTS }}
-        run: |
-          set -euo pipefail
-          : "${SSH_HOST:?Missing SSH_HOST}"
-          : "${SSH_USER:?Missing SSH_USER}"
-          : "${SSH_KNOWN_HOSTS:?Missing production secret SSH_KNOWN_HOSTS}"
-          SSH_PORT="${SSH_PORT:-22}"
-          install -d -m 700 ~/.ssh
-          printf '%s\n' "$SSH_KNOWN_HOSTS" > ~/.ssh/known_hosts
-          chmod 600 ~/.ssh/known_hosts
-          known_host="$SSH_HOST"
-          if [ "$SSH_PORT" != "22" ]; then
-            known_host="[$SSH_HOST]:$SSH_PORT"
-          fi
-          ssh-keygen -F "$known_host" -f ~/.ssh/known_hosts >/dev/null || {
-            echo "::error::SSH_KNOWN_HOSTS does not pin the Tencent host and port"
-            exit 1
-          }
-          if [ -n "${SSH_PRIVATE_KEY:-}" ]; then
-            echo "mode=key" >> "$GITHUB_OUTPUT"
-          elif [ -n "${SSH_PASSWORD:-}" ]; then
-            echo "mode=password" >> "$GITHUB_OUTPUT"
-          else
-            echo "::error::Provide either SSH_PRIVATE_KEY or SSH_PASSWORD"
-            exit 1
-          fi
-
-      - name: Download exact Candidate cleanup handoff
-        if: ${{ steps.cleanup_handoff.outputs.source == 'github-artifact' }}
-        uses: actions/download-artifact@v5
-        with:
-          name: release-candidate-${{ inputs.candidate_commit_sha }}-${{ inputs.candidate_prepare_run_attempt }}
-          path: ${{ runner.temp }}/candidate-cleanup/release-candidate
-          repository: ${{ github.repository }}
-          github-token: ${{ github.token }}
-          run-id: ${{ inputs.candidate_prepare_run_id }}
-
-      - name: Download exact Candidate cleanup frontend
-        if: ${{ steps.cleanup_handoff.outputs.source == 'github-artifact' }}
-        uses: actions/download-artifact@v5
-        with:
-          name: frontend-dist-${{ inputs.candidate_commit_sha }}
-          path: ${{ runner.temp }}/candidate-cleanup/frontend-release
-          repository: ${{ github.repository }}
-          github-token: ${{ github.token }}
-          run-id: ${{ inputs.candidate_prepare_run_id }}
-
-      - name: Verify immutable Candidate cleanup handoff
-        if: ${{ steps.cleanup_handoff.outputs.source == 'github-artifact' }}
-        env:
-          CANDIDATE_RUN_ID: ${{ inputs.candidate_prepare_run_id }}
-          CANDIDATE_RUN_ATTEMPT: ${{ inputs.candidate_prepare_run_attempt }}
-          CANDIDATE_COMMIT_SHA: ${{ inputs.candidate_commit_sha }}
-          CANDIDATE_ARCHIVE_SHA256: ${{ inputs.candidate_archive_sha256 }}
-          CANDIDATE_ATTESTATION_SHA256: ${{ inputs.candidate_attestation_sha256 }}
-        run: |
-          set -euo pipefail
-          request_dir="$RUNNER_TEMP/candidate-cleanup"
-          if [ "$RELEASE_MODE" = "discard-failed-candidate" ]; then
-            python3 03_Scripts/deploy/verify_candidate_handoff.py \
-              --failed-transport-checkpoint \
-                "$request_dir/release-candidate/candidate.json" \
-              --failed-transport-journal \
-                "$request_dir/release-candidate/journal.jsonl" \
-              --failed-server-checkpoint \
-                "$request_dir/release-candidate/server/backend-healthy.json" \
-              --failed-server-evidence \
-                "$request_dir/release-candidate/server/backend-healthy.evidence.json" \
-              --failed-fetch-status \
-                "$request_dir/release-candidate/server/fetch-status.json" \
-              --failed-preview \
-                "$request_dir/release-candidate/server/candidate-preview.json" \
-              --failed-frontend-release-dir "$request_dir/frontend-release" \
-              --artifacts "$request_dir/prepare-artifacts.json" \
-              --env-output "$request_dir/verified.env" \
-              --reviewed-checkpoint-output "$request_dir/reviewed-candidate.json" \
-              --repository "$GITHUB_REPOSITORY" \
-              --commit "$CANDIDATE_COMMIT_SHA" \
-              --archive-sha256 "$CANDIDATE_ARCHIVE_SHA256" \
-              --run-id "$CANDIDATE_RUN_ID" \
-              --run-attempt "$CANDIDATE_RUN_ATTEMPT"
-          else
-            python3 03_Scripts/deploy/verify_candidate_handoff.py \
-              --checkpoint "$request_dir/release-candidate/candidate.json" \
-              --attestation "$request_dir/release-candidate/server/attestation.json" \
-              --artifacts "$request_dir/prepare-artifacts.json" \
-              --env-output "$request_dir/verified.env" \
-              --reviewed-checkpoint-output "$request_dir/reviewed-candidate.json" \
-              --repository "$GITHUB_REPOSITORY" \
-              --commit "$CANDIDATE_COMMIT_SHA" \
-              --archive-sha256 "$CANDIDATE_ARCHIVE_SHA256" \
-              --run-id "$CANDIDATE_RUN_ID" \
-              --run-attempt "$CANDIDATE_RUN_ATTEMPT" \
-              --attestation-sha256 "$CANDIDATE_ATTESTATION_SHA256"
-          fi
-          source "$request_dir/verified.env"
-          python3 03_Scripts/deploy/frontend_release_artifact.py verify \
-            --release-dir "$request_dir/frontend-release" \
-            --expected-github-sha "$CANDIDATE_COMMIT_SHA" \
-            --expected-artifact-name "$CANDIDATE_FRONTEND_ARTIFACT_NAME" \
-            --expected-artifact-identity "$CANDIDATE_FRONTEND_ARTIFACT_IDENTITY" \
-            --expected-artifact-checksum "$CANDIDATE_FRONTEND_ARTIFACT_CHECKSUM" \
-            --expected-build-id "$CANDIDATE_FRONTEND_BUILD_ID" \
-            --expected-node-version "$CANDIDATE_FRONTEND_NODE_VERSION" \
-            --expected-run-id "$CANDIDATE_RUN_ID" \
-            --expected-run-attempt "$CANDIDATE_RUN_ATTEMPT" \
-            --github-artifact-id "$CANDIDATE_GITHUB_ARTIFACT_ID" \
-            --github-artifact-digest "$CANDIDATE_GITHUB_ARTIFACT_DIGEST"
-
-      - name: Capture canonical Candidate cleanup handoff
-        if: >-
-          ${{ steps.cleanup_handoff.outputs.source == 'canonical-server' &&
-          inputs.release_mode != 'discard-failed-candidate' }}
-        env:
-          AUTH_MODE: ${{ steps.cleanup_auth.outputs.mode }}
-          CANDIDATE_CANONICAL_BUNDLE_OUTPUT: ${{ runner.temp }}/candidate-cleanup/canonical-server.json
-          CANDIDATE_CLEANUP_MODE: ${{ inputs.release_mode }}
-          CANDIDATE_COMMIT_SHA: ${{ inputs.candidate_commit_sha }}
-          CANDIDATE_ARCHIVE_SHA256: ${{ inputs.candidate_archive_sha256 }}
-          CANDIDATE_RUN_ID: ${{ inputs.candidate_prepare_run_id }}
-          CANDIDATE_RUN_ATTEMPT: ${{ inputs.candidate_prepare_run_attempt }}
-          CANDIDATE_REQUESTED_ATTESTATION_SHA256: ${{ inputs.candidate_attestation_sha256 }}
-          SSH_HOST: ${{ secrets.SSH_HOST }}
-          SSH_USER: ${{ secrets.SSH_USER }}
-          SSH_PORT: ${{ secrets.SSH_PORT }}
-          SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
-          SSH_PASSWORD: ${{ secrets.SSH_PASSWORD }}
-        run: |
-          set -euo pipefail
-          bash 03_Scripts/deploy/github_candidate_control.sh \
-            capture-canonical-cleanup
-
-      - name: Verify canonical Candidate cleanup handoff
-        if: >-
-          ${{ steps.cleanup_handoff.outputs.source == 'canonical-server' &&
-          inputs.release_mode != 'discard-failed-candidate' }}
-        env:
-          CANDIDATE_RUN_ID: ${{ inputs.candidate_prepare_run_id }}
-          CANDIDATE_RUN_ATTEMPT: ${{ inputs.candidate_prepare_run_attempt }}
-          CANDIDATE_COMMIT_SHA: ${{ inputs.candidate_commit_sha }}
-          CANDIDATE_ARCHIVE_SHA256: ${{ inputs.candidate_archive_sha256 }}
-          CANDIDATE_ATTESTATION_SHA256: ${{ inputs.candidate_attestation_sha256 }}
-        run: |
-          set -euo pipefail
-          request_dir="$RUNNER_TEMP/candidate-cleanup"
-          python3 03_Scripts/deploy/verify_candidate_handoff.py \
-            --canonical-server-bundle "$request_dir/canonical-server.json" \
-            --cleanup-mode "$RELEASE_MODE" \
-            --env-output "$request_dir/verified.env" \
-            --reviewed-checkpoint-output "$request_dir/reviewed-candidate.json" \
-            --repository "$GITHUB_REPOSITORY" \
-            --commit "$CANDIDATE_COMMIT_SHA" \
-            --archive-sha256 "$CANDIDATE_ARCHIVE_SHA256" \
-            --run-id "$CANDIDATE_RUN_ID" \
-            --run-attempt "$CANDIDATE_RUN_ATTEMPT" \
-            --attestation-sha256 "$CANDIDATE_ATTESTATION_SHA256"
-
-      - name: Capture unchanged Active identity before cleanup
-        env:
-          JATO_WWW_ORIGIN: ${{ vars.JATO_WWW_ORIGIN || 'https://www.ojeur.cloud' }}
-        run: |
-          set -euo pipefail
-          evidence_dir="$RUNNER_TEMP/candidate-cleanup/active-evidence"
-          install -d -m 700 "$evidence_dir"
-          status="$(curl --silent --show-error --location \
-            --connect-timeout 10 --max-time 30 \
-            --output "$evidence_dir/before-healthz.json" --write-out '%{http_code}' \
-            "$JATO_WWW_ORIGIN/healthz")"
-          test "$status" = "200"
-          curl --fail --silent --show-error --location \
-            --connect-timeout 10 --max-time 30 \
-            "$JATO_WWW_ORIGIN/release-provenance.json" \
-            > "$evidence_dir/before-provenance.json"
-          python3 - "$evidence_dir/before-provenance.json" <<'PY'
-          import json
-          from pathlib import Path
-          import sys
-
-          payload = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
-          source = payload.get("source")
-          if not isinstance(source, dict) or not isinstance(source.get("githubSha"), str):
-              raise SystemExit("Active provenance identity is incomplete")
-          PY
-
-      - name: Clean exact Candidate on Tencent
-        id: cleanup_control
-        env:
-          AUTH_MODE: ${{ steps.cleanup_auth.outputs.mode }}
-          CANDIDATE_VERIFIED_ENV: ${{ runner.temp }}/candidate-cleanup/verified.env
-          SSH_HOST: ${{ secrets.SSH_HOST }}
-          SSH_USER: ${{ secrets.SSH_USER }}
-          SSH_PORT: ${{ secrets.SSH_PORT }}
-          SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
-          SSH_PASSWORD: ${{ secrets.SSH_PASSWORD }}
-          DEPLOY_SERVER_NAME: ${{ vars.DEPLOY_SERVER_NAME }}
-          DEPLOY_ENABLE_HTTPS: ${{ vars.DEPLOY_ENABLE_HTTPS }}
-          DEPLOY_CERTBOT_EMAIL: ${{ secrets.DEPLOY_CERTBOT_EMAIL }}
-          DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
-          HERMES_SYNC_TOKEN: ${{ secrets.HERMES_SYNC_TOKEN }}
-          GOOGLE_CLIENT_ID: ${{ secrets.GOOGLE_CLIENT_ID }}
-          GOOGLE_CLIENT_SECRET: ${{ secrets.GOOGLE_CLIENT_SECRET }}
-          GOOGLE_OAUTH_PROXY_URL: ${{ secrets.GOOGLE_OAUTH_PROXY_URL }}
-          GOOGLE_OAUTH_RELAY_URL: ${{ secrets.GOOGLE_OAUTH_RELAY_URL }}
-          GOOGLE_OAUTH_RELAY_TOKEN: ${{ secrets.GOOGLE_OAUTH_RELAY_TOKEN }}
-          MIHOMO_SUB_URL: ${{ secrets.MIHOMO_SUB_URL }}
-          MIHOMO_DB_PATH: ${{ vars.MIHOMO_DB_PATH }}
-        run: |
-          set -euo pipefail
-          bash 03_Scripts/deploy/github_candidate_control.sh "$RELEASE_MODE"
-
-      - name: Fetch canonical Candidate cleanup receipt
-        env:
-          AUTH_MODE: ${{ steps.cleanup_auth.outputs.mode }}
-          SSH_HOST: ${{ secrets.SSH_HOST }}
-          SSH_USER: ${{ secrets.SSH_USER }}
-          SSH_PORT: ${{ secrets.SSH_PORT }}
-          SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
-          SSH_PASSWORD: ${{ secrets.SSH_PASSWORD }}
-        run: |
-          set -euo pipefail
-          source "$RUNNER_TEMP/candidate-cleanup/verified.env"
-          SSH_PORT="${SSH_PORT:-22}"
-          ssh_options=(
-            -T -p "$SSH_PORT"
-            -o StrictHostKeyChecking=yes
-            -o UserKnownHostsFile="$HOME/.ssh/known_hosts"
-            -o ConnectTimeout=20
-            -o ConnectionAttempts=2
-            -o ServerAliveInterval=10
-            -o ServerAliveCountMax=2
-          )
-          if [ "$AUTH_MODE" = "key" ]; then
-            ssh_command=(ssh -o BatchMode=yes -i ~/.ssh/github_actions_tencent_key)
-          else
-            export SSHPASS="$SSH_PASSWORD"
-            ssh_command=(
-              sshpass -e ssh
-              -o PreferredAuthentications=password
-              -o PubkeyAuthentication=no
-            )
-          fi
-          receipt_dir="$RUNNER_TEMP/candidate-cleanup/receipt"
-          server_dir="$receipt_dir/server"
-          install -d -m 700 "$server_dir"
-          remote_checkpoint_dir=".local/state/jato-production-release/checkpoints/$CANDIDATE_COMMIT_SHA"
-          remote_journal_dir=".local/state/jato-production-release/journals/$CANDIDATE_COMMIT_SHA"
-          remote_checkpoint="$remote_checkpoint_dir/$CANDIDATE_ARCHIVE_SHA256.json"
-          remote_evidence="$remote_checkpoint_dir/$CANDIDATE_ARCHIVE_SHA256.evidence.json"
-          remote_journal="$remote_journal_dir/$CANDIDATE_ARCHIVE_SHA256.jsonl"
-          printf -v rsync_rsh '%q ' "${ssh_command[@]}" "${ssh_options[@]}"
-          rsync_rsh="${rsync_rsh% }"
-          ssh_target="$SSH_USER@$SSH_HOST"
-          for remote_local in \
-            "$remote_checkpoint:$server_dir/terminal.json" \
-            "$remote_evidence:$server_dir/terminal.evidence.json" \
-            "$remote_journal:$server_dir/terminal.journal.jsonl"
-          do
-            timeout 120s rsync --links --times --protect-args --chmod=F600 \
-              --no-owner --no-group -e "$rsync_rsh" \
-              "$ssh_target:${remote_local%%:*}" "${remote_local#*:}"
           done
-          python3 - \
-            "$RUNNER_TEMP/candidate-cleanup/reviewed-candidate.json" \
-            "$server_dir/terminal.json" \
-            "$server_dir/terminal.evidence.json" \
-            "$server_dir/terminal.journal.jsonl" "$RELEASE_MODE" <<'PY'
-          import hashlib
-          import json
-          from pathlib import Path
-          import re
-          import stat
-          import sys
-
-          reviewed_name, checkpoint_name, evidence_name, journal_name, mode = sys.argv[1:]
-          def read_regular_json(name, label):
-              path = Path(name)
-              metadata = path.lstat()
-              if path.is_symlink() or not stat.S_ISREG(metadata.st_mode):
-                  raise SystemExit(f"{label} is unsafe")
-              raw = path.read_bytes()
-              if not raw or len(raw) > 16 * 1024 * 1024:
-                  raise SystemExit(f"{label} has an invalid size")
-              try:
-                  payload = json.loads(raw.decode("utf-8"))
-              except (UnicodeError, json.JSONDecodeError) as exc:
-                  raise SystemExit(f"{label} is invalid JSON") from exc
-              if not isinstance(payload, dict):
-                  raise SystemExit(f"{label} root must be an object")
-              return payload, raw
-
-          reviewed, _ = read_regular_json(
-              reviewed_name,
-              "reviewed Candidate checkpoint",
-          )
-          checkpoint, _ = read_regular_json(checkpoint_name, "terminal checkpoint")
-          evidence, evidence_raw = read_regular_json(evidence_name, "terminal evidence")
-          identity = reviewed.get("identity")
-          if checkpoint.get("identity") != identity or evidence.get("identity") != identity:
-              raise SystemExit("Candidate cleanup changed the reviewed identity")
-          expected = {
-              "discard-candidate": (
-                  {"candidate_ready", "rollback_completed"},
-                  "candidate_discarded",
-              ),
-              "discard-failed-candidate": (
-                  {"migrated"},
-                  "candidate_prepare_aborted",
-              ),
-              "release-candidate": ({"active_updated"}, "candidate_released"),
+          LC_ALL=C tar \
+            --sort=name \
+            --no-recursion \
+            --format=posix \
+            --mtime='@0' \
+            --owner=0 \
+            --group=0 \
+            --numeric-owner \
+            --mode='u=rw,go=r' \
+            --no-acls \
+            --no-selinux \
+            --no-xattrs \
+            -cf "$control_bundle_tar" \
+            "${control_bundle_files[@]}"
+          gzip -n -f "$control_bundle_tar"
+          control_bundle_sha256="$(sha256sum "$control_bundle" | awk '{print $1}')"
+          control_bundle_b64="$(base64 -w 0 "$control_bundle")"
+          control_bundle_members="$RUNNER_TEMP/fixed-v2-control-members.txt"
+          printf '%s\n' "${control_bundle_files[@]}" > "$control_bundle_members"
+          control_bundle_members_b64="$(base64 -w 0 "$control_bundle_members")"
+          write_remote_export() {
+            local name="$1"
+            local value="$2"
+            printf 'export %s=%q\n' "$name" "$value" >> "$control_payload"
           }
-          predecessors, terminal = expected.get(mode, (set(), None))
-          if (
-              terminal is None
-              or checkpoint.get("phase") != terminal
-              or checkpoint.get("status") != "completed"
-              or checkpoint.get("retryClass") != "automatic"
-          ):
-              raise SystemExit("Candidate cleanup terminal checkpoint mismatch")
-          journal_path = Path(journal_name)
-          metadata = journal_path.lstat()
-          if journal_path.is_symlink() or not stat.S_ISREG(metadata.st_mode):
-              raise SystemExit("Candidate cleanup journal is unsafe")
-          try:
-              events = [
-                  json.loads(line)
-                  for line in journal_path.read_text(encoding="utf-8").splitlines()
-                  if line
-              ]
-          except (UnicodeError, json.JSONDecodeError) as exc:
-              raise SystemExit("Candidate cleanup journal is invalid JSONL") from exc
-          if len(events) < 2:
-              raise SystemExit("Candidate cleanup journal is incomplete")
-          for sequence, event in enumerate(events, start=1):
-              if (
-                  not isinstance(event, dict)
-                  or event.get("event") != "checkpoint_transition"
-                  or event.get("sequence") != sequence
-                  or event.get("identity") != identity
-              ):
-                  raise SystemExit("Candidate cleanup journal identity/sequence mismatch")
-          previous, final = events[-2:]
-          if (
-              previous.get("phase") not in predecessors
-              or final.get("phase") != terminal
-          ):
-              raise SystemExit("Candidate cleanup journal terminal transition mismatch")
-          if mode == "discard-failed-candidate":
-              reviewed_predecessor = dict(previous)
-              reviewed_predecessor.pop("event", None)
-              if (
-                  reviewed_predecessor != reviewed
-                  or final.get("sequence") != reviewed.get("sequence", 0) + 1
-              ):
-                  raise SystemExit(
-                      "failed Candidate cleanup predecessor differs from reviewed checkpoint"
-                  )
-              binding = re.search(
-                  r"(?:^|[; ])evidence_path=(\S+) "
-                  r"evidence_sha256=([0-9a-f]{64})(?:$|[; ])",
-                  str(reviewed.get("message", "")),
-              )
-              if (
-                  binding is None
-                  or hashlib.sha256(evidence_raw).hexdigest() != binding.group(2)
-              ):
-                  raise SystemExit(
-                      "failed Candidate cleanup evidence differs from reviewed checkpoint"
-                  )
-          journal_tail = dict(final)
-          journal_tail.pop("event", None)
-          if journal_tail != checkpoint:
-              raise SystemExit("Candidate cleanup journal tail/checkpoint mismatch")
-          PY
-          install -m 600 "$server_dir/terminal.json" "$receipt_dir/checkpoint.json"
-          install -m 600 "$server_dir/terminal.evidence.json" "$receipt_dir/evidence.json"
-          install -m 600 "$server_dir/terminal.journal.jsonl" "$receipt_dir/journal.jsonl"
-          install -m 600 \
-            "$RUNNER_TEMP/candidate-cleanup/reviewed-candidate.json" \
-            "$receipt_dir/reviewed-candidate.json"
-          if [ -f "$RUNNER_TEMP/candidate-cleanup/canonical-server.json" ]; then
-            install -m 600 \
-              "$RUNNER_TEMP/candidate-cleanup/canonical-server.json" \
-              "$receipt_dir/canonical-server.json"
+          write_remote_export V2_CONTROL_BUNDLE_SHA256 \
+            "$control_bundle_sha256"
+          write_remote_export V2_CONTROL_BUNDLE_B64 "$control_bundle_b64"
+          write_remote_export V2_CONTROL_BUNDLE_MEMBERS_B64 \
+            "$control_bundle_members_b64"
+          if [ "$RELEASE_MODE" = "update-active" ] \
+            || [ "$RELEASE_MODE" = "rollback-active" ]; then
+            write_remote_export DEPLOY_COMMIT_SHA "$TARGET_COMMIT_SHA"
+            write_remote_export DEPLOY_ARCHIVE_SHA256 "$TARGET_ARCHIVE_SHA256"
+            write_remote_export RELEASE_V2_MANIFEST_SHA256 \
+              "$TARGET_MANIFEST_SHA256"
           fi
+          cat >> "$control_payload" <<'V2_CONTROL_BOOTSTRAP'
+          : "${V2_CONTROL_BUNDLE_SHA256:?Missing V2 control bundle SHA-256}"
+          : "${V2_CONTROL_BUNDLE_B64:?Missing V2 control bundle payload}"
+          : "${V2_CONTROL_BUNDLE_MEMBERS_B64:?Missing V2 control member list}"
+          [[ "$V2_CONTROL_BUNDLE_SHA256" =~ ^[0-9a-f]{64}$ ]] || {
+            echo "[ERROR] V2 control bundle SHA-256 is malformed" >&2
+            exit 1
+          }
+          v2_control_root="$(mktemp -d /run/jato-v2-control.XXXXXX)"
+          v2_control_cleanup() {
+            case "${v2_control_root:-}" in
+              /run/jato-v2-control.*)
+                rm -rf --one-file-system -- "$v2_control_root"
+                ;;
+            esac
+          }
+          trap v2_control_cleanup EXIT
+          chmod 0700 "$v2_control_root"
+          v2_control_archive="$v2_control_root/control-bundle.tar.gz"
+          v2_expected_members="$v2_control_root/expected-members.txt"
+          v2_actual_members="$v2_control_root/actual-members.txt"
+          printf '%s' "$V2_CONTROL_BUNDLE_B64" \
+            | base64 --decode > "$v2_control_archive"
+          actual_control_sha256="$(
+            sha256sum "$v2_control_archive" | awk '{print $1}'
+          )"
+          [[ "$actual_control_sha256" == "$V2_CONTROL_BUNDLE_SHA256" ]] || {
+            echo "[ERROR] V2 control bundle SHA-256 mismatch" >&2
+            exit 1
+          }
+          printf '%s' "$V2_CONTROL_BUNDLE_MEMBERS_B64" \
+            | base64 --decode > "$v2_expected_members"
+          tar -tzf "$v2_control_archive" > "$v2_actual_members"
+          cmp -s "$v2_expected_members" "$v2_actual_members" || {
+            echo "[ERROR] V2 control bundle member list mismatch" >&2
+            exit 1
+          }
+          tar --same-permissions --no-overwrite-dir \
+            -xzf "$v2_control_archive" -C "$v2_control_root"
+          while IFS= read -r v2_control_member; do
+            [[ -n "$v2_control_member" ]] || continue
+            [[ -f "$v2_control_root/$v2_control_member" \
+              && ! -L "$v2_control_root/$v2_control_member" ]] || {
+              echo "[ERROR] Unsafe extracted V2 control member" >&2
+              exit 1
+            }
+          done < "$v2_expected_members"
+          rm -f -- \
+            "$v2_control_archive" \
+            "$v2_expected_members" \
+            "$v2_actual_members"
+          unset \
+            V2_CONTROL_BUNDLE_B64 \
+            V2_CONTROL_BUNDLE_MEMBERS_B64
+          export V2_CONTROL_ROOT="$v2_control_root"
+          export V2_CONTROLLER_PATH="${v2_control_root}/03_Scripts/deploy/fixed_release_v2.py"
+          v2_remote_entry="${v2_control_root}/03_Scripts/deploy/fixed_release_v2_remote.sh"
+          [[ -f "$v2_remote_entry" && ! -L "$v2_remote_entry" ]] || {
+            echo "[ERROR] Trusted fixed V2 remote entry is unavailable" >&2
+            exit 1
+          }
+          bash "$v2_remote_entry" "$@"
+          V2_CONTROL_BOOTSTRAP
 
-      - name: Verify Active identity and health remained unchanged
-        env:
-          JATO_WWW_ORIGIN: ${{ vars.JATO_WWW_ORIGIN || 'https://www.ojeur.cloud' }}
-        run: |
-          set -euo pipefail
-          evidence_dir="$RUNNER_TEMP/candidate-cleanup/active-evidence"
-          status="$(curl --silent --show-error --location \
-            --connect-timeout 10 --max-time 30 \
-            --output "$evidence_dir/after-healthz.json" --write-out '%{http_code}' \
-            "$JATO_WWW_ORIGIN/healthz")"
-          test "$status" = "200"
-          curl --fail --silent --show-error --location \
-            --connect-timeout 10 --max-time 30 \
-            "$JATO_WWW_ORIGIN/release-provenance.json" \
-            > "$evidence_dir/after-provenance.json"
-          python3 - \
-            "$evidence_dir/before-provenance.json" \
-            "$evidence_dir/after-provenance.json" <<'PY'
-          import json
-          from pathlib import Path
-          import sys
-
-          before = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
-          after = json.loads(Path(sys.argv[2]).read_text(encoding="utf-8"))
-          before_source = before.get("source")
-          after_source = after.get("source")
-          if (
-              not isinstance(before_source, dict)
-              or before_source != after_source
-          ):
-              raise SystemExit("Active release identity changed during Candidate cleanup")
-          PY
-          receipt_dir="$RUNNER_TEMP/candidate-cleanup/receipt"
-          install -d -m 700 "$receipt_dir/active-evidence"
-          install -m 600 "$evidence_dir"/*.json "$receipt_dir/active-evidence/"
           {
-            echo "## Candidate cleanup completed"
-            echo
-            echo "- Mode: \`$RELEASE_MODE\`"
-            echo "- Candidate commit: \`${{ inputs.candidate_commit_sha }}\`"
-            echo "- Handoff source: \`${{ steps.cleanup_handoff.outputs.source }}\`"
-            echo "- Active identity and health remained unchanged."
-            echo "- No release archive was rebuilt or uploaded; intl was not modified."
+            echo "### Fixed V2 control identity"
+            echo "- Current main SHA: \`$GITHUB_SHA\`"
+            echo "- Control bundle SHA-256: \`$control_bundle_sha256\`"
           } >> "$GITHUB_STEP_SUMMARY"
 
-      - name: Retain immutable Candidate cleanup receipt
+          printf -v remote_control_command \
+            'set -eu; ssh_home="$HOME"; archive_cache_root="$ssh_home/.cache/jato-releases/archives"; production_lock="$ssh_home/.local/state/jato-production-release/production-deploy.lock"; sudo -n env PRODUCTION_LOCK_PATH="$production_lock" V2_ARCHIVE_CACHE_ROOT="$archive_cache_root" bash -s %q' \
+            "$RELEASE_MODE"
+
+          set +e
+          timeout 2700s "${ssh_command[@]}" "${ssh_options[@]}" \
+            "$SSH_USER@$SSH_HOST" \
+            "$remote_control_command" \
+            < "$control_payload" 2>&1 | tee "$operation_log"
+          control_rc="${PIPESTATUS[0]}"
+          set -e
+          report_path="$(
+            sed -n 's/^V2_OPERATION_REPORT_PATH=//p' "$operation_log" | tail -n 1
+          )"
+          if [ -n "$report_path" ]; then
+            echo "operation-report-path=$report_path" >> "$GITHUB_OUTPUT"
+          fi
+          exit "$control_rc"
+
+      - name: Retain fixed V2 control diagnostics
+        if: ${{ always() }}
         uses: actions/upload-artifact@v4
         with:
-          name: candidate-cleanup-${{ inputs.release_mode }}-${{ inputs.candidate_commit_sha }}-${{ github.run_id }}-${{ github.run_attempt }}
-          path: ${{ runner.temp }}/candidate-cleanup/receipt
-          if-no-files-found: error
-          compression-level: 0
-          overwrite: false
-          retention-days: 30
-
-  audit_frontend_parity:
-    if: >-
-      ${{ github.ref == 'refs/heads/main' &&
-      needs.release_coordination_guard.outputs.release-action == 'deploy' &&
-      github.event_name == 'workflow_dispatch' &&
-      inputs.release_mode == 'prepare-and-switch' }}
-    needs: [release_coordination_guard, build_frontend, deploy_tencent]
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
-
-    steps:
-      - name: Checkout release source
-        uses: actions/checkout@v5
-
-      - name: Download audited frontend artifact by id
-        uses: actions/download-artifact@v5
-        with:
-          artifact-ids: ${{ needs.build_frontend.outputs.github_artifact_id }}
-          path: ${{ runner.temp }}/frontend-release
-
-      - name: Download candidate release checkpoint
-        uses: actions/download-artifact@v5
-        with:
-          name: release-candidate-${{ github.sha }}-${{ github.run_attempt }}
-          path: ${{ runner.temp }}/release-checkpoint
-
-      - name: Require www and intl immutable release parity
-        env:
-          ARTIFACT_NAME: ${{ needs.build_frontend.outputs.artifact_name }}
-          ARTIFACT_IDENTITY: ${{ needs.build_frontend.outputs.artifact_identity }}
-          ARTIFACT_CHECKSUM: ${{ needs.build_frontend.outputs.artifact_checksum }}
-          GITHUB_ARTIFACT_ID: ${{ needs.build_frontend.outputs.github_artifact_id }}
-          GITHUB_ARTIFACT_DIGEST: ${{ needs.build_frontend.outputs.github_artifact_digest }}
-          FRONTEND_BUILD_ID: ${{ needs.build_frontend.outputs.frontend_build_id }}
-          NODE_VERSION: ${{ needs.build_frontend.outputs.node_version }}
-          BUILD_RUN_ATTEMPT: ${{ needs.build_frontend.outputs.workflow_run_attempt }}
-          WWW_ORIGIN: ${{ vars.JATO_WWW_ORIGIN || 'https://www.ojeur.cloud' }}
-          INTL_ORIGIN: ${{ vars.JATO_INTL_ORIGIN || 'https://intl.ojeur.cloud' }}
-        run: |
-          set -euo pipefail
-          python3 03_Scripts/deploy/frontend_release_artifact.py audit-public \
-            --release-dir "$RUNNER_TEMP/frontend-release" \
-            --expected-github-sha "$GITHUB_SHA" \
-            --expected-artifact-name "$ARTIFACT_NAME" \
-            --expected-artifact-identity "$ARTIFACT_IDENTITY" \
-            --expected-artifact-checksum "$ARTIFACT_CHECKSUM" \
-            --expected-build-id "$FRONTEND_BUILD_ID" \
-            --expected-node-version "$NODE_VERSION" \
-            --expected-run-id "$GITHUB_RUN_ID" \
-            --expected-run-attempt "$BUILD_RUN_ATTEMPT" \
-            --github-artifact-id "$GITHUB_ARTIFACT_ID" \
-            --github-artifact-digest "$GITHUB_ARTIFACT_DIGEST" \
-            --origin "$WWW_ORIGIN" \
-            --origin "$INTL_ORIGIN" \
-            --attempts 6 \
-            --delay-seconds 10
-
-      - name: Seal verified production release checkpoint
-        env:
-          BUILD_RUN_ATTEMPT: ${{ needs.build_frontend.outputs.workflow_run_attempt }}
-          FRONTEND_IDENTITY: ${{ needs.build_frontend.outputs.artifact_identity }}
-          FRONTEND_CHECKSUM: ${{ needs.build_frontend.outputs.artifact_checksum }}
-        run: |
-          set -euo pipefail
-          checkpoint="$RUNNER_TEMP/release-checkpoint/candidate.json"
-          journal="$RUNNER_TEMP/release-checkpoint/journal.jsonl"
-          attestation="$RUNNER_TEMP/release-checkpoint/server/attestation.json"
-          # This file arrived inside the per-run, overwrite-disabled candidate
-          # artifact, so hash it after download instead of trusting a job output.
-          actual_attestation_sha256="$(sha256sum "$attestation" | awk '{print $1}')"
-          python3 03_Scripts/deploy/release_checkpoint.py show \
-            --checkpoint "$checkpoint" >/dev/null
-          read -r archive_bytes archive_sha256 < <(
-            python3 - "$checkpoint" "$attestation" <<'PY'
-          import json
-          from pathlib import Path
-          import re
-          import sys
-
-          checkpoint = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
-          attestation = json.loads(Path(sys.argv[2]).read_text(encoding="utf-8"))
-          candidate_identity = checkpoint.get("identity")
-          if not isinstance(candidate_identity, dict):
-              raise SystemExit("candidate checkpoint identity is missing")
-          if candidate_identity != attestation.get("identity"):
-              raise SystemExit("candidate checkpoint and server attestation identity mismatch")
-          archive_bytes = candidate_identity.get("archiveBytes")
-          archive_sha256 = candidate_identity.get("archiveSha256")
-          if isinstance(archive_bytes, bool) or not isinstance(archive_bytes, int) or archive_bytes <= 0:
-              raise SystemExit("attested archive bytes must be a positive integer")
-          if not isinstance(archive_sha256, str) or not re.fullmatch(r"[0-9a-f]{64}", archive_sha256):
-              raise SystemExit("attested archive SHA-256 is invalid")
-          print(archive_bytes, archive_sha256)
-          PY
-          )
-          [[ "$archive_bytes" =~ ^[1-9][0-9]*$ ]]
-          [[ "$archive_sha256" =~ ^[0-9a-f]{64}$ ]]
-          checkpoint_args=(
-            --checkpoint "$checkpoint"
-            --journal "$journal"
-            --repository "$GITHUB_REPOSITORY"
-            --commit "$GITHUB_SHA"
-            --archive-sha256 "$archive_sha256"
-            --archive-bytes "$archive_bytes"
-            --run-id "$GITHUB_RUN_ID"
-            --run-attempt "$BUILD_RUN_ATTEMPT"
-            --frontend-identity "$FRONTEND_IDENTITY"
-            --frontend-checksum "$FRONTEND_CHECKSUM"
-          )
-          python3 03_Scripts/deploy/release_checkpoint.py write \
-            "${checkpoint_args[@]}" \
-            --phase parity_verified \
-            --status completed \
-            --retry-class automatic
-          python3 03_Scripts/deploy/release_checkpoint.py write \
-            "${checkpoint_args[@]}" \
-            --phase complete \
-            --status completed \
-            --retry-class complete \
-            --message "server_attestation_sha256=$actual_attestation_sha256"
-
-      - name: Retain verified production release receipt
-        uses: actions/upload-artifact@v4
-        with:
-          name: release-verified-${{ github.sha }}-${{ github.run_attempt }}
-          path: ${{ runner.temp }}/release-checkpoint
-          if-no-files-found: error
+          name: fixed-v2-${{ inputs.release_mode }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/v2-operation-output.log
+          if-no-files-found: warn
           compression-level: 0
           overwrite: false
           retention-days: 30

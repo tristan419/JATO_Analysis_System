@@ -31,6 +31,7 @@ def _configure_slot(
     active_slot_file.write_text(f"{active_slot}\n", encoding="utf-8")
     deployment_marker = tmp_path / "deployment-in-progress"
     monkeypatch.setenv("APP_RELEASE_SLOT", release_slot)
+    monkeypatch.delenv("APP_RELEASE_ROLE", raising=False)
     monkeypatch.setenv(
         "APP_JATO_MONTHLY_ACTIVE_SLOT_FILE",
         str(active_slot_file),
@@ -61,6 +62,7 @@ def test_jato_monthly_gate_defaults_enabled_for_legacy_deployment(
 ) -> None:
     monkeypatch.delenv("APP_JATO_MONTHLY_ENABLED", raising=False)
     monkeypatch.delenv("APP_RELEASE_SLOT", raising=False)
+    monkeypatch.delenv("APP_RELEASE_ROLE", raising=False)
     monkeypatch.delenv("APP_JATO_MONTHLY_ACTIVE_SLOT_FILE", raising=False)
     monkeypatch.delenv("APP_JATO_MONTHLY_DEPLOYMENT_MARKER", raising=False)
 
@@ -125,6 +127,7 @@ def test_jato_monthly_gate_returns_structured_locked_error(
     for name in (
         "APP_JATO_MONTHLY_ENABLED",
         "APP_RELEASE_SLOT",
+        "APP_RELEASE_ROLE",
         "APP_JATO_MONTHLY_ACTIVE_SLOT_FILE",
         "APP_JATO_MONTHLY_DEPLOYMENT_MARKER",
     ):
@@ -139,6 +142,56 @@ def test_jato_monthly_gate_returns_structured_locked_error(
     assert exc_info.value.detail["code"] == "JATO_MONTHLY_DISABLED"
     assert exc_info.value.detail["reason"] == reason
     assert exc_info.value.detail["retryable"] is True
+
+
+def test_fixed_candidate_role_is_always_disabled(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("APP_JATO_MONTHLY_ENABLED", "true")
+    monkeypatch.setenv("APP_RELEASE_ROLE", "candidate")
+    monkeypatch.setenv("APP_RELEASE_SLOT", "8001")
+
+    availability = jato_monthly_update_service.jato_monthly_availability()
+
+    assert availability["enabled"] is False
+    assert availability["reason"] == "fixed_candidate_role"
+
+
+def test_fixed_active_role_uses_8000_without_legacy_slot_file(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("APP_JATO_MONTHLY_ENABLED", "true")
+    monkeypatch.setenv("APP_RELEASE_ROLE", "active")
+    monkeypatch.setenv("APP_RELEASE_SLOT", "8000")
+    monkeypatch.setenv(
+        "APP_JATO_MONTHLY_DEPLOYMENT_MARKER",
+        str(tmp_path / "deployment-in-progress"),
+    )
+    monkeypatch.delenv("APP_JATO_MONTHLY_ACTIVE_SLOT_FILE", raising=False)
+
+    availability = jato_monthly_update_service.jato_monthly_availability()
+
+    assert availability["enabled"] is True
+    assert availability["reason"] == "fixed_active_role"
+    assert availability["activeSlot"] == "8000"
+
+
+def test_fixed_active_role_still_honors_quiescence_marker(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    marker = tmp_path / "deployment-in-progress"
+    marker.touch()
+    monkeypatch.setenv("APP_JATO_MONTHLY_ENABLED", "true")
+    monkeypatch.setenv("APP_RELEASE_ROLE", "active")
+    monkeypatch.setenv("APP_RELEASE_SLOT", "8000")
+    monkeypatch.setenv("APP_JATO_MONTHLY_DEPLOYMENT_MARKER", str(marker))
+
+    availability = jato_monthly_update_service.jato_monthly_availability()
+
+    assert availability["enabled"] is False
+    assert availability["reason"] == "deployment_in_progress"
 
 
 def test_monthly_router_blocks_get_before_wake_capable_service_call(
@@ -222,6 +275,7 @@ def test_final_worker_spawn_points_fail_closed_when_disabled(
     [
         ("APP_JATO_MONTHLY_ENABLED", "sometimes", "enabled_flag_invalid"),
         ("APP_RELEASE_SLOT", "green", "release_slot_invalid"),
+        ("APP_RELEASE_ROLE", "blue", "release_role_invalid"),
     ],
 )
 def test_jato_monthly_gate_rejects_invalid_runtime_ownership_values(

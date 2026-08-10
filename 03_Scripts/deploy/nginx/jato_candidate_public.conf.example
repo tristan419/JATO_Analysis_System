@@ -1,0 +1,47 @@
+# Fixed public gateway for the loopback-only Candidate preview.
+# Render placeholders once during infrastructure setup.  This gateway never
+# points at Active and stays stable while prepare-candidate replaces 8001/current.
+server {
+    listen 80;
+    listen [::]:80;
+    server_name __CANDIDATE_SERVER_NAME__;
+
+    location / {
+        return 301 https://$host$request_uri;
+    }
+}
+
+server {
+    listen 443 ssl;
+    listen [::]:443 ssl;
+    server_name __CANDIDATE_SERVER_NAME__;
+
+    ssl_certificate __CANDIDATE_CERT_FULLCHAIN__;
+    ssl_certificate_key __CANDIDATE_CERT_PRIVKEY__;
+
+    auth_basic "JATO Candidate";
+    auth_basic_user_file __CANDIDATE_AUTH_FILE__;
+
+    add_header Cache-Control "no-store" always;
+    add_header X-Content-Type-Options nosniff always;
+    add_header X-Frame-Options SAMEORIGIN always;
+    add_header Referrer-Policy strict-origin-when-cross-origin always;
+
+    location / {
+        proxy_pass http://127.0.0.1:__CANDIDATE_PREVIEW_PORT__;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto https;
+
+        # Basic Auth protects the public gateway.  The application uses
+        # X-Auth-Token, so the gateway credential must not reach 8001.
+        proxy_set_header Authorization "";
+
+        proxy_connect_timeout 10s;
+        proxy_send_timeout 600s;
+        proxy_read_timeout 600s;
+        proxy_buffering off;
+    }
+}

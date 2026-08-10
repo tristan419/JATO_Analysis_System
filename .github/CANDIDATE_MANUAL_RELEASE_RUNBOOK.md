@@ -1,297 +1,323 @@
-# Candidate 人工验收与发布操作手册
+# 固定 Active / Candidate V2 人工操作手册
 
-这份手册记录 JATO/Ojeur 在腾讯云上的固定 Candidate / 固定 Active 发布方式，
-以及可直接发给 Codex 的操作口令。以后不记得流程时，先让 Codex
-读取本文件，再决定是否执行任何生产动作。
+这份手册是 JATO/Ojeur 腾讯云代码发布的用户操作入口。忘记流程时，先让
+Codex 读取本文件并报告当前状态，再决定是否执行下一步。
 
-> 本文件描述发布代码，不描述 JATO 月更数据发布。部署 Candidate、切换代码
-> 和发布 JATO 数据是三套不同授权，不能互相代替。
+> 本手册只描述应用代码发布。JATO 月更数据的上传、Review、批准和 Publish
+> 是另一套授权，不能由任何代码发布操作代替。
 
-## 一句话原则
-
-```text
-main 不可变版本 -> 无公网 Candidate -> 人工页面验收
-                    |                  |
-                    | 不满意           | 满意
-                    v                  v
-                 废弃并继续改       同 artifact 更新固定 Active
-                                      -> 清理 Candidate
-                                      -> intl 可在之后独立同步
-```
-
-- `Active` 是当前正式公网服务。
-- `Candidate` 是最新代码的服务器人工验收环境，不承接正式公网流量。
-- `Active` 和 `Candidate` 的角色不互换。批准后仍由原 Active 端口承接公网，
-  Candidate 仍是测试实例，直到用户明确清理。
-- Candidate 验收失败只废弃 Candidate，Active 从未改变，因此不发生 Active
-  回滚，也不需要 recovery/dry-run/apply。
-- 服务器把更新前正在成功服务的 Active Git SHA、该 SHA 对应的 immutable
-  artifact、slot env 和 Nginx preimage 记录为恢复源。只有更新 Active 这一步
-  自身失败时才自动恢复它；不能拿“最近一次绿色 GitHub run”或按同一 SHA
-  临时重建的包代替。
-- 只有 Active 可以运行 JATO 月更 worker、scheduler 等单实例后台任务，
-  Candidate 必须禁用这些任务，防止重复执行。
-- Candidate 与 Active 使用同一套服务器数据连接做页面验收。任何写入型页面
-  测试都有可能改变真实数据，必须由用户有意执行；它不是无副作用沙箱。
-
-日常批准与失败回退只涉及下面三个核心指针状态：
+## 1. 不变原则
 
 ```text
-初始：Active -> A，Candidate -> B
-批准：Active -> B，Candidate -> B（保留到用户明确清理）
-失败：Active -> A，Candidate -> B（A 按原 env/Nginx preimage 重启并核验）
+main 上的不可变 release
+          |
+          | 用户手动启动 prepare-candidate
+          v
+Candidate：8001 + 127.0.0.1:18002 人工预览
+          + candidate.ojeur.cloud 固定国内测试地址
+          |
+          +-- 不满意：discard-candidate，www Active 不变
+          |
+          +-- 满意：用户明确授权 update-active
+                         |
+                         v
+                   Active：8000，仍承接 www 公网
+                         |
+                         +-- 如需主动回退：rollback-active
+
+www Active -- 用户另行启动 sync-www-active-to-intl --> intl
 ```
 
-批准和失败回退都不重新构建、上传、组装或复制 release。它们只切换固定 Active
-的内容寻址指针，并恢复或生成与该指针绑定的运行配置。旧物理槽位互换入口
-`prepare-and-switch` / `switch-locked` 已停用，不能绕过固定角色流程。
+- Active 固定为端口 `8000`，始终承接 www 正式公网流量。
+- Candidate 固定为端口 `8001`，只用于腾讯云真实环境的人工页面测试。
+- Candidate 预览固定监听 `127.0.0.1:18002`；独立的受认证 HTTPS 网关可以把
+  `candidate.ojeur.cloud` 转发到该 loopback 入口，但不得开放 18002 本身。
+- Active 与 Candidate 的角色和端口不互换；Nginx 正式公网上游始终是 `8000`。
+- 合并代码到 `main` 不会自动部署。只有用户从 `main` 手动 dispatch
+  `prepare-candidate`，才会构建并部署 Candidate。
+- Candidate 可以反复被新的 `main` release 替换。Candidate 不合格时，Active
+  可以长期停留在旧稳定版本。
+- Candidate 通过测试也不会自动更新 Active；必须由用户对精确 release 明确授权
+  `update-active`。
+- Active 使用的必须是 Candidate 已测试的同一个不可变 release，不重新构建、
+  重新上传或重新组装。
+- intl 完全独立。V2 不 dispatch、等待或回退 intl 的同步/部署；既有只读 observer
+  即使被独立触发，也不参与 www 发布的成败判定。
 
-## 用户可以直接发送给 Codex 的口令
+## 2. V2 只有四个操作
 
-每条口令都只授权其字面动作，不自动授权下一步。
+| 操作 | 作用 | 不允许发生的事 |
+| --- | --- | --- |
+| `prepare-candidate` | 从手动 dispatch 的当前 `main` 构建、校验并启动固定 Candidate，等待人工测试。 | 不更新 Active，不改变 www 路由，不同步 intl。 |
+| `discard-candidate` | 停止 Candidate、撤销预览并清理未被保护指针引用的 Candidate 文件。 | 不更新或重启 Active，不改变 www，不同步 intl。 |
+| `update-active` | 将固定 Active 指向人工验收过的同一 release，重启 8000 并验证公网。 | 不取“最新 main”代替已验收 release，不重新构建，不同步 intl。 |
+| `rollback-active` | 将固定 Active 回到用户明确指定、且仍受 current/previous 指针保护的 release，重启 8000 并验证公网。 | 不隐式猜测 previous，不临时重建旧包，不改变 Candidate 或 intl。 |
 
-| 口令 | 预期结果 |
-| --- | --- |
-| `部署最新 main 到 Candidate，仅停在人工验收，不切公网` | 构建并启动精确 main SHA 的 Candidate，保持 Active 和公网路由不变，返回 SSH 隧道命令、本机验收地址、SHA 和 artifact 摘要。 |
-| `废弃 Candidate <SHA>，Active 不动` | 停止并清理指定 Candidate；不得更新 Active 或删除旧 Active artifact/preimage。 |
-| `批准 Candidate 更新 Active <SHA>` | 最后核对 SHA、健康和 artifact 后，在 maintenance fence 下更新固定 Active 并重启；公网上游端口不变。仅当安装、重启或公网核验失败时，自动恢复更新前正在成功服务的 SHA 与其原始 artifact。 |
-| `确认同步当前 www Active 到 intl` | 只读识别当前 www Active，并把其 release root 内嵌的原始 immutable frontend artifact 同步到 intl；不接受手填历史 SHA。 |
-| `确认发布完成并清理 Candidate <SHA>` | www 验收完成后停止 Candidate、撤销 preview 并释放测试槽；不等待 intl，且不删除 immutable artifact 或 Active 恢复证据。 |
+不得为日常发布增加第五个操作。每次用户授权只覆盖所选的一项，成功后是否继续
+下一项必须重新确认。
 
-Codex 收到口令后仍应先报告它观察到的 Active SHA、Candidate SHA、当前
-Nginx 路由和后台任务归属。发现现场与口令不一致时应停止，而不是猜测端口
-或重放旧 workflow。
+## 3. 固定运行拓扑
 
-## 目标状态机
+| 角色 | 服务 | 资源限制 | 网络入口 | 后台任务 |
+| --- | --- | --- | --- | --- |
+| Active | `jato-fullstack-backend@8000.service` | `MemoryHigh=6G`、`MemoryMax=8G` | www 公网固定代理到 8000 | 仅 Active 可以运行月更 worker、scheduler 等单实例任务 |
+| Candidate | `jato-fullstack-backend@8001.service` | `MemoryHigh=3G`、`MemoryMax=4G` | 经固定 Candidate HTTPS 网关或本机 SSH 隧道访问 18002 | 必须全部禁用 |
+| Candidate Preview | `jato-candidate-preview.service` | 独立受限 | 只监听 `127.0.0.1:18002`；公网网关只反代此端口 | 不执行后台任务 |
 
-### 1. 部署 Candidate
+运行槽始终只有固定的 8000/8001。`prepare-candidate` 可以使用一个无监听、无指针、
+完成后即销毁的 3G/4G transient dependency-build scope；它只是资源受限的依赖构建
+进程，不是第三个运行槽，也不形成新的 Candidate 身份。
 
-1. 只接受从最新 `main` 产生的 immutable artifact。
-2. 自动识别当前 Active 槽，并把另一槽作为 Candidate。
-3. Active 继续以 `MemoryHigh=6G`、`MemoryMax=8G` 承接公网。
-4. Candidate 在测试阶段以 `MemoryHigh=3G`、`MemoryMax=4G` 运行。
-5. Candidate 禁用月更 worker、scheduler 和其他单实例任务。
-6. Candidate 停在 `candidate_ready`，不能自动切公网 Nginx。
-7. 返回精确 SHA、服务端健康证据和仅供验收的访问方式。
+Candidate 可以读取真实生产环境的数据，以发现本地数据无法复现的问题，但必须使用
+独立的 PostgreSQL 只读账号：
 
-### 2. 人工页面验收
+- Candidate 与 Active 不得共用数据库账号。
+- Candidate 账号只允许连接、schema usage 和查询，不得拥有表写权限、sequence
+  更新权限或数据库/schema create 权限。
+- Candidate 连接强制只读 transaction，并设置有界 statement/lock timeout。
+- Candidate 必须显式禁用 JATO 月更、scheduler、Hermes 和预热等后台任务。
+- JATO 月更及依赖本地生产数据目录或 PostgreSQL 写权限的操作必须拒绝执行。Candidate
+  目前不是针对所有外部系统副作用的通用沙箱；人工测试不得点击 Airflow 等外部管理写
+  操作。若未来要求覆盖这类接口，应单独设计网络/权限隔离，不能把它伪装成本 V2 已有保证。
 
-用户在 Candidate 完整页面测试真实服务器环境中的业务功能。此阶段：
+页面人工验收应以登录、查询、筛选、Dashboard、Market Scan、接口兼容、真实性能和
+错误报告为主。若确实需要验证生产写入，不应临时给 Candidate 写权限，而应另用隔离的
+数据库副本。
 
-- `https://www.ojeur.cloud` 仍然是 Active，不能用它判断 Candidate；
-- Candidate 页面必须显示其精确 SHA 和 `CANDIDATE` 标识；
-- 测试不满意就废弃 Candidate，继续修改代码并部署新的 main SHA；
-- 测试满意也不会自动上线，必须另发 `批准 Candidate 更新 Active <SHA>`。
+## 4. 从 GitHub 手动运行
 
-### 3. 批准更新固定 Active
+统一入口：GitHub Actions 中的 `production-release` workflow。运行时必须选择
+`main`，再选择以下四种 `release_mode` 之一。
 
-1. 再次核对 Candidate 的完整 SHA、archive SHA-256、健康、资源以及单实例
-   任务未在 Candidate 运行。
-2. 持久保存当前 Active 的 release root/current symlink、slot env、Active release
-   link 和 Nginx frontend preimage，并绑定更新前正在服务的成功 SHA。
-3. 复用现有 quiescence gate 检查真实任务状态：空闲时立即通过；只有实际 JATO
-   写入、上传 digest 或 baseline promotion 正在执行时才有界等待。它不会取消
-   正在运行的任务，也不要求用户再做一次确认。通过后暂停 scheduler 和月更
-   入口；`active-slot` 和公网 upstream 端口保持不变。
-4. 原子替换固定 Active 的 `current` symlink，并按固定 Active slot 和目标 SHA
-   生成、替换 env；不能把 Candidate env 直接复制给 Active。随后重启固定
-   Active。
-5. Nginx 只更新 frontend root；后端仍代理原 Active 端口。执行 `nginx -t`
-   和 reload 后核对公网精确 SHA、healthz、readyz、2 workers 与 6G/8G。
-6. 成功后恢复仅属于 Active 的 scheduler/月更任务；Candidate 和 preview 暂时
-   保留，等待用户单独确认清理。
-7. 任一步失败都自动恢复更新前成功 Active 的 root、env、Active release link
-   和 frontend preimage，重启并验证旧 SHA、6G/8G 与公网健康。恢复证明通过
-   前 maintenance fence 不得解除，也不得把失败写成成功。
+### 4.0 服务器一次性前提
 
-这里的自动恢复只是 Active 更新命令的失败保护，不是 Candidate 验收流程中的
-额外步骤。Candidate 未获批准时 Active 根本不会改变；Active 更新及公网核验成功
-后也不会再自动执行恢复。
+首次 V2 Candidate 前，需要一次性只读盘点并由用户另行授权安装基础合同：
 
-事故级 recovery 只用于处理已经存在的异常 checkpoint、未知中断或现场漂移，
-不是日常发布步骤，也不能替代上述 A 指针回退。正常 Candidate 失败或 Active
-更新失败不得创建 recovery plan、反复 dry-run，或要求用户额外执行 recovery。
+- Nginx 必须有效加载固定 `8000/current` 的 Active 配置；安装前后 www 的 legacy
+  commit/frontend identity 必须完全不变。
+- 旧 `jato-bluegreen-boot-reconcile` 不得再在开机时改写正式路由。
+- Candidate 必须已有 root-owned 0600 的独立 PostgreSQL SELECT-only env。
+- `candidate.ojeur.cloud` 使用 DNSPod A 记录直达上海腾讯云；必须使用独立 TLS 证书和
+  独立 Nginx vhost，并在所有页面/API 前启用 Basic Auth。密码文件不得进入仓库，建议
+  使用 `root:www-data`、`0640` 的 `/etc/nginx/jato-candidate.htpasswd`。
+- Candidate 公网 vhost 只能反代 `127.0.0.1:18002`，不得包含 8000、Active include、
+  www/intl 域名或任何 Active fallback。Candidate 不存在时应返回 5xx。
+- 一次性安装必须分两阶段，不能直接启用引用尚不存在证书的 HTTPS 模板：先建立 DNS，
+  为 Candidate 准备临时 HTTP-only server block，让现有 Certbot Nginx authenticator 签发
+  独立证书；再生成 Basic Auth、渲染最终模板、执行 `nginx -t`，通过后才原子替换临时
+  配置并 reload。任一步失败都保留现有 www vhost，不重启 8000/8001。
+- 四个 slot/release/shared 目录、固定 active-slot=8000 和单一生产锁路径必须可信。
+- Candidate/Preview systemd 与 Nginx 合同视为基础设施合同；普通代码发布不自动覆盖
+  线上漂移。合同需要升级时先单独审查和安装，不在 Candidate 启动中猜测覆盖。
+- 生产调用面只允许 `fixed-v2`；`legacy-v1` 直接入口必须拒绝。旧源码在阶段 B 删除前
+  只能作为不可达历史代码保留。
 
-实现时必须保证“人工验收的 artifact”就是 Active 使用的 artifact，不得在
-批准后重新构建、重新上传或复制另一份同 SHA 包。固定 Active 重启可能带来
-几秒连接中断，这是用更简单的固定角色模型换取的明确取舍。
+legacy Active 第一次进入 V2 采用用户明确选择的最简 `B/B`：先按普通流程准备并人工测试
+Candidate B；只有用户再次明确批准 `update-active` 后，现有控制器才把固定 8000 切到同一
+构件，并登记 `active.current == active.previous == B`。不建立 A/A helper、第五种操作、
+checkpoint 或 recovery 系统，也不把没有 Candidate 只读合同的旧代码假装成 Candidate。
 
-### 4. 独立处理 intl 与 Candidate 清理
+首次切换会先证明 legacy current 精确指向旧根目录、previous 为空、8000 unit/env 可读取、
+固定 Nginx 仍只指向 8000，并记录旧 unit/env、systemd 身份和公网 build identity。普通可捕获
+失败会恢复这些运行 preimage 并重新验证 legacy 公网；成功后旧 legacy 不再是自动回退点。
+因此第一次成功后的 B/B 没有 distinct rollback，直到下一次 C 更新形成 C/B 后，才可使用
+普通 `rollback-active` 回到 B。主机断电、内核崩溃或 SIGKILL 造成的多文件中间态不由日常
+控制器自动恢复，必须先人工盘点；这项取舍用于避免重新建设事故恢复平台。
 
-www 的固定 Active 更新成功后，下面两个动作互相独立，执行顺序不构成门禁：
+### 4.1 准备 Candidate
 
-1. `确认同步当前 www Active 到 intl`：可在之后任何合适时间，手动运行独立
-   `sync-www-active-to-intl` workflow。它只有一个确认框，自动读取当前 www
-   Active 的 content-addressed root、runtime seal 与内嵌 frontend artifact，
-   先核对公网 www，再幂等同步并精确审计 intl；不依赖 Candidate handoff。
-2. `确认发布完成并清理 Candidate <SHA>`：www 验收完成后即可停止 Candidate、
-   撤销 preview 并恢复测试槽为空闲，不要求 intl 已经同步。
+选择 `prepare-candidate`。正常流程会：
 
-若 prepare workflow 最终标红，但服务端已经生成精确 `candidate_ready` handoff，
-`discard-candidate` 仍可在验证该 handoff 后清理残留；它只接受 `success` 或
-`failure` 的已完成 run。`release-candidate` 和 Active 批准仍只接受 `success`，
-`cancelled` 等不确定终态一律拒绝。
+1. 对当前 dispatch 的完整 `main` SHA 构建一次 frontend artifact。
+2. 生成完整不可变 release，并校验 archive 大小、SHA-256 和 manifest。
+3. 使用增量传输上传变化块；只有服务器没有任何可验证传输基准时，才可由用户明确
+   勾选一次 `bootstrap_full_upload`。
+4. 更新 Candidate 指针并重启固定 8001。
+5. 验证 Candidate SHA、`/healthz`、3G/4G、只读数据库权限、后台任务禁用和
+   18002 预览。
+6. 输出本次精确的 commit SHA、archive SHA-256、manifest SHA-256 和操作报告。
 
-`discard-failed-candidate` 只用于精确的失败 `prepare-candidate` run 已到达
-`migrated` 但自动清理失败的残留。运行时必须提供该 run 的 ID、attempt、
-commit、archive SHA-256 和明确的 cleanup 确认，Candidate attestation 留空；
-它强制使用未过期的原始 GitHub artifacts，不允许 canonical fallback。该动作
-只停止并清理绑定的 Candidate/preview 槽位，并写入
-`candidate_prepare_aborted`；不修改 Active、数据库、JATO 数据或 intl。当前
-`c354a2d3...` 残留必须先通过该路径清理，才能重新部署
-`572e82b27b2455c965ece780aebfb542dd194e96` Candidate；这是一次精确清理，
-不是 recovery 系统。
+成功仅表示 Candidate 可供人工测试，不表示已发布到 www。
+若上一次进程被强制终止，导致 Candidate 指针、环境文件、8001 或 18002 身份不一致，
+下一次 prepare 会在改指针或重启前拒绝并报告 `candidate_runtime_inconsistent`（或精确的
+runtime identity mismatch）。先运行现有 `discard-candidate` 清空该测试槽，再重新
+prepare；不为这种情况建立 recovery/checkpoint 状态机。
 
-GitHub handoff 或 frontend artifact 已缺失/过期时，**只允许 Candidate 清理走
-canonical server fallback，不允许据此批准 Active**。cleanup workflow 会自动
-切换证明来源：当前 `main` 控制脚本在腾讯云 production lock 下只读采集请求
-run/SHA/archive 对应的 canonical checkpoint、evidence、content-addressed archive、
-内嵌 frontend identity，以及 Candidate 的物理 slot 和固定 preview port `18002`。
-runner 验证这些证据后，仍交给原有清理执行器；执行器会再次在同一生产锁内核对
-路径、摘要和实时 Candidate 状态，再执行精确清理。因此不存在仅凭手填 SHA 清理
-任意 slot 的路径。checkpoint、evidence、archive、slot 或 preview 任一不一致都会
-拒绝，Active 保持不动。fallback 还会从 canonical journal 中重建最初
-`candidate_ready` attestation，并与用户提供的原始 SHA-256 比对；输入任意格式
-正确的摘要不能通过。
+### 4.2 废弃 Candidate
 
-清理 Candidate 不等于删除 immutable artifact、旧 Active artifact、发布日志或
-恢复证据。但当前四种 workflow 模式不提供“发布成功后再显式业务回退”的按钮；
-本 PR 只保证 Active 更新过程自身失败时精确恢复更新前版本。以后若要主动回到
-旧版，必须单独授权并复用已验证 artifact，不能仅按 Git SHA 临时重建。intl 的
-同步与回退始终需要独立确认。
+选择 `discard-candidate`，勾选 `confirm_control_operation`，目标 SHA 输入必须留空。
+该操作应停止 8001 和 18002，清除 Candidate 指针，并只删除不再被任何保护指针引用
+的 release。Active、www、数据库内容和 JATO 数据保持不变。
 
-独立 intl workflow 只允许从当前 `main`、`production` environment 运行，并与
-生产发布共用同一 concurrency lock。若当前 www Active 仍是 legacy、不是
-`/opt/jato/releases/<commit>/<archive-sha256>` 形式，它会明确拒绝；应先完成一次
-新的 fixed Active 发布，不能按手填 Git SHA 重新构建。若 intl 已经是同一精确
-artifact，本次运行只审计并写回执，不重复部署。该动作不修改 Candidate、后端、
-数据库或 JATO 月更数据。
+### 4.3 更新 Active
 
-`frontend-dist` 与 `release-candidate` handoff 均保留 30 天，和批准/清理回执
-窗口一致。30 天内优先使用原始 GitHub artifact handoff；artifact 在 30 天后
-缺失或显示 expired，不再阻断 `candidate_ready`/`rollback_completed` 中保留
-Candidate 的精确废弃，也不阻断 `active_updated` 后的 Candidate 释放；workflow
-会改用上述 canonical server cleanup。批准 Candidate
-更新 Active 始终要求原始、未过期的 GitHub handoff，不使用 fallback。canonical
-证据不完整或现场已漂移时只能拒绝并人工审查，不能重建 handoff 或猜测 slot。
+只有人工页面测试完成后才选择 `update-active`。必须：
 
-## Candidate 页面怎么访问
+1. 从成功的 Candidate 操作报告复制完整 commit SHA、archive SHA-256 和 manifest
+   SHA-256，不凭记忆输入。
+2. 将三项值分别填入 `target_commit_sha`、`target_archive_sha256` 和
+   `target_manifest_sha256`。
+3. 勾选 `confirm_control_operation`，由用户明确批准这一精确 release。
 
-### 本功能 PR 提供的入口
+服务器会再次证明三项身份与当前 Candidate 完全一致，检查数据库 revision 和正在执行
+的 JATO 写任务，然后记录旧 Active 指针、原子更新 `active.current`，使用 Active
+专属环境重启固定 8000，并验证：
 
-`prepare-candidate` 会复用双槽基础设施，但角色由 `active-slot` 固定，不执行
-槽位互换。自动校验完成后停在 `candidate_ready`，并启动一个独立 transient
-Nginx：
+- 内部健康与预期运行 SHA；
+- 2 个后端 worker；
+- Active 为 6G/8G；
+- 仅 Active 的后台任务状态；
+- www 公网健康与 frontend identity。
 
-- 只监听 `127.0.0.1:18002`，腾讯云安全组没有新增公网端口；
-- React 静态文件精确绑定本次 immutable release；
-- `/v1`、`/healthz`、`/readyz` 和 `/docs` 只代理本次 Candidate 槽；
-- `/candidate-preview.json` 绑定完整 SHA、artifact 摘要、物理槽位和端口，并
-  禁止缓存；
-- 页面顶部固定显示黄色 `CANDIDATE` 横幅、SHA 和 artifact 摘要；物理槽位只作
-  诊断信息。Candidate origin 无法验证身份时显示红色阻断提示，不能伪装成
-  Active；
-- 独立预览 Nginx 受 `128M/256M` cgroup 限制，不改变公网 Nginx 配置，
-  不执行公网 Nginx reload。
+安装、重启或验证过程中若失败，同一操作会恢复更新前的 Active 指针和运行配置，重启
+旧版本并验证公网。Candidate 未获授权时，Active 根本不会发生变化。
 
-只可从 `main` 运行 `production-release`：合并到 `main` 的 push 会自动
-执行 `prepare-candidate`，也可手动选择该模式。该模式完成腾讯云
-Candidate attestation 后
-会跳过 www provenance、Cloudflare intl 发布和最终 parity audit。生产 workflow
-不再提供旧 `prepare-and-switch` 槽位互换选项；固定角色 workflow 提供四个明确
-模式：`prepare-candidate`、`approve-candidate-to-active`、`discard-candidate`
-和 `release-candidate`。后两者只清理 Candidate，不读取或修改 intl。
+第一次 legacy→B/B 会在同一 `update-active` 中安装固定 8000 unit 与 compatibility link；
+这不是独立 bootstrap，也不会自动发生。该次成功后页面或命令若请求 rollback，控制器会
+明确返回 `rollback_unavailable`，不会把 B/B 的无操作伪装成已回退。
 
-部署完成后，在本机建立隧道：
+`update-active` 成功后 Candidate 仍可保留供短期核对；需要释放测试环境时，再单独运行
+`discard-candidate`。
+
+### 4.4 主动回退 Active
+
+只有目标仍等于受保护的 `active.current` 或 `active.previous`，才运行
+`rollback-active`。必须从只读回退预检复制完整 commit SHA、archive SHA-256 和 manifest
+SHA-256，分别填入三个 target 输入，勾选 `confirm_control_operation`；不得留空或只凭
+“最近版本”猜测。
+
+首次 B/B 没有 distinct previous，因此不能主动回退。下一次 C 更新形成 `C/B` 后，
+以 `C/B` 回退到 B 为例，系统使用内核原子交换一次进入 `B/C`，不会出现任一版本失去
+指针保护的中间态。控制器捕获到的重启/验证失败会再次原子交换
+回 `C/B` 并验证 C；若进程被强制终止，磁盘状态也只会是 `C/B` 或 `B/C`，下一次对同一
+B 的显式重试只会验证或继续启动 B，不会自动切回 C。只有用户再次明确提交 C 的完整
+三元组时，才允许从 `B/C` 反向交换为 `C/B`。若目标不再受 current/previous 保护，
+操作必须拒绝，不能根据 Git 历史临时生成替代版本。
+
+## 5. Candidate 页面访问方式
+
+`https://www.ojeur.cloud` 永远是 Active，不能用它判断 Candidate。固定测试地址是：
+
+```text
+https://candidate.ojeur.cloud
+```
+
+浏览器先通过独立的 Basic Auth，再在 Candidate 页面使用 JATO 账号密码登录。www 的
+localStorage 登录态不会跨域带入 Candidate；第一版不改变 Active OAuth 配置，因此不要
+用 Candidate 测试 Google/飞书 OAuth 回调。
+
+该 URL 本身不绑定某个 commit。每次从更新后的 `main` 成功运行 `prepare-candidate`，
+控制器会更新 8001 的 Candidate 指针和 18002 的预览身份；刷新同一个 URL 就会看到最新
+Candidate。这个动作不会更新 8000、www 或 intl。Candidate 被废弃或启动失败时，固定 URL
+必须返回 5xx，绝不能回退显示 Active。
+
+固定网关不可用时，SSH 隧道仍作为运维备用入口。在本机终端运行：
 
 ```bash
-ssh -N -p "$SSH_PORT" \
+ssh -N -p "${SSH_PORT:-22}" \
   -L 18002:127.0.0.1:18002 \
   "$SSH_USER@$SSH_HOST"
 ```
 
-然后在本机直接打开：
+保持该终端运行，然后打开：
 
 ```text
 http://127.0.0.1:18002
 ```
 
-这个链接不需要知道 Candidate 当次落在 `8000` 还是 `8001`。如果没有一个
-精确、健康的 `candidate_ready`，18002 必须拒绝连接，不能回退显示 Active。
-它与 www 是不同 origin，现有 www localStorage 登录态不会自动带过来；应在
-Candidate 页面重新使用账号密码登录。OAuth 回调在 18002 上尚未作为验收入口。
+验收时至少检查：
 
-### `candidate.ojeur.cloud` 的边界
+- 页面显示 `CANDIDATE` 标识及预期完整 SHA；
+- `/candidate-preview.json`、`/healthz` 和 `/readyz` 指向 8001 的同一 release；
+- 登录、主要页面、API、筛选与性能符合预期；
+- 月更和其他写入口明确拒绝，而不是悄悄执行；
+- www Active 在整个测试期间仍为原 SHA 且健康。
 
-固定域名可以后续接到同一个 18002 origin，但必须使用 Cloudflare Access
-保护的 named Tunnel：
+本机 18002、Candidate 域名与 www 都是不同 origin，应分别登录。没有一个健康且身份
+一致的 Candidate 时，18002 和固定公网地址都必须拒绝，不能回退显示 Active。
 
-```text
-candidate.ojeur.cloud -> Cloudflare Access -> named Tunnel
-                      -> 127.0.0.1:18002
-```
+## 6. intl 是后续独立动作
 
-不能给 `candidate.ojeur.cloud` 创建直连 CVM 的 A/AAAA 记录，也不能让预览
-Nginx 监听 `0.0.0.0`。当前仓库和 GitHub production environment 尚没有
-专用 Tunnel ID、Access Application/AUD、精确 reviewer policy 和 CVM
-cloudflared 凭据，因此本 PR 先交付可用且不暴露源站的 SSH 隧道本地入口；固定域名
-必须作为单独基础设施动作配置，不能复用并扩权现有 Pages token。
+`update-active` 成功即表示 www 更新成功。需要更新 intl 时，用户在之后合适的时间另行
+手动运行既有 `sync-www-active-to-intl` workflow：
 
-### 数据与后台任务边界
+- 它只读取当时的 current www Active；
+- 它同步 Active 内嵌的同一个 immutable frontend artifact；
+- 它不接受手填 Candidate 或历史 SHA；
+- 它不修改 Candidate、Active 后端、数据库或 JATO 数据；
+- intl 同步失败只作为 intl 问题处理，不回滚已经成功的 www Active。
 
-Candidate 与 Active 使用相同的服务器数据库、Redis 和业务数据连接，因此可
-用于排查“本地数据与服务器数据不同”的问题，也意味着页面写操作会作用于真实
-生产数据。只有用户明确希望验证的页面操作才可执行。Candidate 必须禁用 JATO
-月更 worker、scheduler 和其他单实例后台任务，避免两个实例重复消费或自动执行；
-这些后台 gate 与页面的数据访问能力是两件不同的事。
+因此 www 与 intl 可以短时间处于不同版本。是否再次同步 intl 由用户单独决定，V2
+四操作不等待该结果。
 
-### 一次性历史事故边界
+## 7. 四指针与 release 保留
 
-旧 `29df5e6e...` 已完成 `pre_switch_aborted` 隔离并解除 hold，不再是当前
-Candidate 流程的阻塞，也不得再次运行 recovery。当前一次性历史边界是线上
-Active 仍为 `cd4557cb...`：它早于 `/readyz`、immutable Active link 和稳定
-Nginx include 契约。
-
-在首次 Active bootstrap 完成前，控制器只允许用 2026-08-05 采集的精确现场
-指纹证明该 legacy Active 未变化。证明同时绑定 commit、8000、slot anchor、
-systemd unit、6G/8G、slot env、旧 Nginx site、release metadata、前端 metadata、
-direct health、public build/provenance 和月更 gate；不是通用的“`/readyz=404`
-也算成功”。任一字节或运行状态漂移都会一次列出并在 Candidate mutation 前拒绝。
-
-这个受限 bridge 只用于：
-
-- 清理当前 `c354a2d3...` 失败 Candidate；
-- 准备、复验或废弃新的 Candidate；
-- 保证整个过程 public Active 不变。
-
-它不授权把 Candidate 更新到 legacy Active。此时点击批准必须在 maintenance
-marker、scheduler、systemd 或 Nginx 发生变化前返回
-`legacy_active_bootstrap_required`。因此第一阶段的 Candidate 明确是“服务器页面
-测试可用、暂不可批准上线”；首次 systemd/Nginx bootstrap 与 legacy rollback
-preimage 必须作为后续独立、完整的迁移审查，不能伪装成另一个 `/readyz` 小修。
-
-当前事故收口只执行一次：
+服务器只用四个权威指针保护当前和上一版本：
 
 ```text
-精确清理 c354
-→ 从最新 main 部署 Candidate
-→ 通过 SSH 隧道访问 18002 人工测试
-→ 不满意则废弃 Candidate；满意则保留 Candidate，等待 Active bootstrap
+/opt/jato/slots/8000/current   # active.current
+/opt/jato/slots/8000/previous  # active.previous
+/opt/jato/slots/8001/current   # candidate.current
+/opt/jato/slots/8001/previous  # candidate.previous
 ```
 
-## Release Control 的后续边界
+不可变 release 存放于：
 
-短期由用户在任务中发送上述口令，Codex 通过 GitHub Actions 和腾讯云受控脚本
-执行。普通 Ojeur Active/Candidate 页面不能直接拥有服务器 shell 权限。
+```text
+/opt/jato/releases/<commit>/<archive-sha256>/
+```
 
-未来若增加 Release Control，它应是独立于业务实例的控制面，只调用
-经过鉴权、审计和幂等约束的发布动作，并展示：
+同一 release 可以同时被多个指针引用，因此通常只有 2 至 3 个唯一版本。清理必须保护
+四个指针及当前操作正在使用的 release；只删除未被引用的 release、失败 staging 和
+传输缓存。`discard-candidate` 后，如果该 release 同时是 `active.current`，它仍受
+Active 指针保护，不能被删除。
 
-- Active、Candidate 和旧 Active artifact/preimage 的 SHA 与健康状态；
-- `部署 Candidate`、`废弃 Candidate`、`批准 Candidate 更新 Active`；
-- `确认同步 intl`、`回滚`、`清理 Candidate`；
-- 每一步的操作者、时间、输入 SHA、结果和不可变证据。
+archive cache 只识别 `<cache>/<40-hex>/<64-hex>.tar.gz` 以及对应 `.partial`、`.sha256`
+文件。保护集合只来自上述四指针；删除某个未保护身份前必须非阻塞取得其既有永久
+`.lock`。lock 正忙、缺失或路径不安全时只保留并诊断，绝不 unlink `.lock`。四个操作
+成功后均 best-effort 清理未保护的 archive/partial/sha 文件，清理失败不反向改变已成功
+的指针或服务操作。
 
-浏览器按钮不能拼接或执行任意 shell，也不能根据自己所在端口猜测 Active。
-控制面必须从 `active-slot`、Nginx、systemd、`/readyz` 和 artifact identity
-共同解析真实角色，并在证据不一致时拒绝操作。
+`update-active` 对同一目标重试时不得轮换 previous；`rollback-active` 成功后保留
+`current=回退目标`、`previous=回退前版本`。同一目标重试只收敛当前状态，不会 toggle；
+反向切换必须再次提供 previous 的完整三元组并获得用户授权。
+
+## 8. 操作前后应看到的证据
+
+每次让 Codex 执行前，先要求它只读报告：
+
+- 当前 www Active 完整 SHA、8000 健康、2 workers 和 6G/8G；
+- 当前 Candidate 完整 SHA或为空、8001/18002 状态和 3G/4G；
+- Candidate 数据库只读证明与后台任务禁用状态；
+- www Nginx 仍固定指向 8000；
+- 是否有另一项发布操作持有单一部署锁；
+- 本次将使用的 commit/archive/manifest 三元组。
+
+操作完成后，结构化报告应区分：
+
+- 已通过检查；
+- 失败的阶段及 expected/actual；
+- 尚未执行的检查；
+- Active、Candidate、www 流量、数据库和 JATO 数据是否发生变化。
+
+若证据与预期不一致，停止当前操作并报告一次完整原因，不猜测指针、不重放旧任务，
+也不把“HTTP 200”单独当成版本正确的证明。
+
+## 9. 可直接发给 Codex 的口令
+
+每条口令只授权一项 V2 操作：
+
+| 用户口令 | 对应操作 |
+| --- | --- |
+| `部署当前 main 到 Candidate，只供人工测试，不更新 Active` | `prepare-candidate` |
+| `废弃当前 Candidate，Active 不动` | `discard-candidate` |
+| `批准已测试的 Candidate 三元组更新 www Active` | `update-active` |
+| `将 www Active 回退到只读预检给出的受保护三元组` | `rollback-active` |
+
+若要处理 intl，应单独说：
+
+```text
+同步当前 www Active 到 intl；intl 失败不要回滚 www。
+```
+
+这不是第五个 V2 操作，而是既有的独立 intl workflow。

@@ -34,6 +34,10 @@ CANDIDATE_PREVIEW_TEMPLATE = (
     REPO_ROOT
     / "03_Scripts/deploy/nginx/jato_candidate_preview.conf.example"
 )
+CANDIDATE_PUBLIC_TEMPLATE = (
+    REPO_ROOT
+    / "03_Scripts/deploy/nginx/jato_candidate_public.conf.example"
+)
 NGINX_INSTALLER = (
     REPO_ROOT
     / "03_Scripts/deploy/nginx/install_jato_fullstack_nginx.sh"
@@ -297,6 +301,29 @@ def test_candidate_preview_template_is_loopback_only_and_has_no_active_fallback(
     assert "jato_fullstack_api" not in preview
     assert "candidate-preview.json" not in active
     assert '"role":"candidate"' not in active
+
+
+def test_candidate_public_gateway_is_authenticated_and_candidate_only() -> None:
+    gateway = CANDIDATE_PUBLIC_TEMPLATE.read_text(encoding="utf-8")
+
+    assert "server_name __CANDIDATE_SERVER_NAME__;" in gateway
+    assert "listen 443 ssl;" in gateway
+    assert "auth_basic \"JATO Candidate\";" in gateway
+    assert "auth_basic_user_file __CANDIDATE_AUTH_FILE__;" in gateway
+    assert (
+        "proxy_pass http://127.0.0.1:__CANDIDATE_PREVIEW_PORT__;"
+        in gateway
+    )
+    assert gateway.count("proxy_pass ") == 1
+    assert "include " not in gateway
+    assert 'proxy_set_header Authorization "";' in gateway
+    assert "proxy_set_header X-Forwarded-Proto https;" in gateway
+    assert "127.0.0.1:8000" not in gateway
+    assert "127.0.0.1:8001" not in gateway
+    assert "jato_fullstack_api" not in gateway
+    assert "active-release.conf" not in gateway
+    assert "www.ojeur.cloud" not in gateway
+    assert "intl.ojeur.cloud" not in gateway
 
 
 def test_installer_creates_atomic_release_include_and_reloads_nginx(

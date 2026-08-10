@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import os
 from pathlib import Path
 import subprocess
@@ -11,18 +12,20 @@ import pytest
 REPO_ROOT = Path(__file__).resolve().parents[2]
 HELPER = REPO_ROOT / "03_Scripts/deploy/verify_release_source_seal.py"
 CRITICAL_FILES = (
-    "03_Scripts/deploy/cleanup_toolkit_egg_info.py",
-    "03_Scripts/deploy/fixed_active_preimage.py",
-    "03_Scripts/deploy/jato_bluegreen_boot_reconcile.py",
-    "03_Scripts/deploy/nginx/jato_candidate_preview.conf.example",
-    "03_Scripts/deploy/tencent_bluegreen_release.sh",
-    "03_Scripts/deploy/validate_release_archive.py",
+    "03_Scripts/deploy/fixed_release_v2.py",
+    "03_Scripts/deploy/fixed_release_v2_remote.sh",
+    "03_Scripts/deploy/frontend_release_artifact.py",
     "03_Scripts/deploy/jato_quiescence_gate.py",
-    "03_Scripts/deploy/release_checkpoint.py",
-    "03_Scripts/deploy/systemd/jato-bluegreen-boot-reconcile.service",
-    "03_Scripts/deploy/systemd/nginx-jato-bluegreen-boot-reconcile.conf",
+    "03_Scripts/deploy/release_v2_admission.py",
+    "03_Scripts/deploy/release_v2_store.py",
+    "03_Scripts/deploy/validate_release_archive.py",
     "03_Scripts/deploy/verify_release_source_seal.py",
-    "03_Scripts/ops/deploy_fullstack_server.sh",
+    "03_Scripts/deploy/nginx/jato_active_release_v2.conf",
+    "03_Scripts/deploy/nginx/jato_candidate_preview_v2.conf",
+    "03_Scripts/deploy/systemd/jato-candidate-preview.service",
+    "03_Scripts/deploy/systemd/jato-fullstack-backend@.service",
+    "03_Scripts/deploy/systemd/jato-fullstack-backend@8001.service.d/"
+    "20-candidate-readonly.conf",
 )
 RUNTIME_COMMIT = "a" * 40
 RUNTIME_ARCHIVE = "b" * 64
@@ -412,3 +415,82 @@ def test_runtime_seal_records_resolved_symlink_interpreter(
 
     external.write_bytes(b"external-python-v2\n")
     assert _verify_runtime(root, manifest).returncode != 0
+
+
+def test_relocatable_runtime_seal_rejects_external_interpreter(
+    sealed_runtime: tuple[Path, Path],
+    tmp_path: Path,
+) -> None:
+    root, _old_manifest = sealed_runtime
+    interpreter = root / ".venv/bin/python"
+    external = tmp_path / "system-python"
+    external.write_bytes(b"external-python\n")
+    external.chmod(0o755)
+    interpreter.unlink()
+    interpreter.symlink_to(external)
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            str(HELPER),
+            "build",
+            "--root",
+            str(root),
+            "--output",
+            str(tmp_path / "relocatable-runtime-seal.json"),
+            *_runtime_arguments(),
+            "--recorded-runtime-root",
+            str(tmp_path / "final-release"),
+        ],
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert result.returncode != 0
+    assert "requires an interpreter inside the release root" in result.stderr
+
+
+def test_relocatable_runtime_seal_verifies_after_atomic_promotion(
+    sealed_runtime: tuple[Path, Path],
+    tmp_path: Path,
+) -> None:
+    staging_root, _staging_manifest = sealed_runtime
+    final_root = tmp_path / "releases" / RUNTIME_COMMIT / RUNTIME_ARCHIVE
+    final_root.parent.mkdir(parents=True)
+    staging_manifest = staging_root / ".jato-runtime-seal.json"
+
+    build = subprocess.run(
+        [
+            sys.executable,
+            str(HELPER),
+            "build",
+            "--root",
+            str(staging_root),
+            "--output",
+            str(staging_manifest),
+            *_runtime_arguments(),
+            "--recorded-runtime-root",
+            str(final_root),
+        ],
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert build.returncode == 0, build.stderr
+    staging_verify = _verify_runtime(
+        staging_root,
+        staging_manifest,
+        *_runtime_arguments(),
+        "--recorded-runtime-root",
+        str(final_root),
+    )
+    assert staging_verify.returncode == 0, staging_verify.stderr
+    os.replace(staging_root, final_root)
+    final_manifest = final_root / ".jato-runtime-seal.json"
+    assert _verify_runtime(final_root, final_manifest).returncode == 0
+    payload = json.loads(final_manifest.read_text(encoding="utf-8"))
+    assert payload["runtimeInterpreter"]["resolvedPath"].startswith(
+        str(final_root)
+    )

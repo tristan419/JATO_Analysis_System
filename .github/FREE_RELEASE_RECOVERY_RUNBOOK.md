@@ -1,5 +1,11 @@
 # Free production release recovery runbook
 
+> **Superseded for normal releases.** The fixed Active/Candidate V2 path in
+> [`CANDIDATE_MANUAL_RELEASE_RUNBOOK.md`](CANDIDATE_MANUAL_RELEASE_RUNBOOK.md)
+> is the current operator contract. Recovery/settlement workflow commands below
+> are historical incident notes; their workflow entry points have been removed
+> and must not be used for Candidate or Active operations.
+
 This runbook covers the zero-new-service release path used by
 `.github/workflows/production-release.yml`. It keeps the existing GitHub
 Actions, SSH connection, and Tencent CVM disk. It does not require COS, a CDN,
@@ -9,11 +15,8 @@ The transport is free of new service charges, but it still consumes the
 bandwidth, disk, and GitHub Actions quota already attached to the existing
 systems.
 
-The operator-facing fixed Candidate / fixed Active lifecycle, command vocabulary,
-and current preview limitations are documented separately in
-[`CANDIDATE_MANUAL_RELEASE_RUNBOOK.md`](CANDIDATE_MANUAL_RELEASE_RUNBOOK.md).
-The legacy 29df hold remains an incident-only recovery concern; it is not part
-of the normal Candidate approval path described there.
+The legacy 29df hold remains historical incident evidence; it is not an input
+or gate in the V2 Candidate approval path.
 
 ## Safety boundary
 

@@ -9,7 +9,7 @@ export interface CandidatePreviewMetadata {
   role: "candidate";
   commitSha: string;
   archiveSha256: string;
-  candidateSlot: 8000 | 8001;
+  candidateSlot: 8001;
   previewPort: number;
 }
 
@@ -39,7 +39,7 @@ export function parseCandidatePreviewMetadata(value: unknown): CandidatePreviewM
     || !FULL_SHA_PATTERN.test(record.commitSha)
     || typeof record.archiveSha256 !== "string"
     || !ARCHIVE_SHA256_PATTERN.test(record.archiveSha256)
-    || (record.candidateSlot !== 8000 && record.candidateSlot !== 8001)
+    || record.candidateSlot !== 8001
     || record.previewPort !== 18002
   ) {
     return null;
