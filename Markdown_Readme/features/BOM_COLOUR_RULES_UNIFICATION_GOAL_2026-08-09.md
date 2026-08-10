@@ -2,7 +2,7 @@
 
 > Goal ID: `bom-colour-rules-unified`
 >
-> 状态：`DRAFT_PR_CI_RUNNING`
+> 状态：`DRAFT_PR_CI_GREEN`
 >
 > 实现基线：`main@d40981e87435d58c63c7c4e6c54b07038a83901f`
 >
@@ -319,6 +319,7 @@ Candidate 验收必须在独立可写沙箱上完成：填充、创建、编辑�
 - [x] 后端完整 unit 为 1438 passed / 1 skipped / 14 failed；14 项均可在实现基线复现，与本颜色 diff 无关。
 - [x] `test_ordering_bom_admin.py` 为 36 passed / 5 baseline failed；5 项是 main 已有 country columns / template FOB sync 契约缺口，不在本 PR 顺手重建。
 - [x] 创建颜色实现独立 Draft PR `#220`；不从 feature branch 生产部署。
+- [x] #220 最终实现 head 的 GitHub CI 13/13 通过；PR 继续保持 Draft。
 - [ ] Candidate 可写沙箱人工验收。
 - [ ] 用户明确批准后才进入 Active 发布流程。
 
