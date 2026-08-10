@@ -8,14 +8,14 @@ goal_control:
     身份直接进入页面；完成代码、CI、腾讯云无流量验收后，再由用户授权把同一已测试构件
     更新到正式 www Active。Candidate 测试数据永不进入 Active；intl 继续使用既有的
     Active 到 intl 独立同步流程，不在 V2 中新增编排。
-  current_phase: candidate_prepare_retry_in_progress
-  current_step: monitoring_prepare_retry_31362670385
-  waiting_on: prepare_retry_31362670385_terminal_outcome
+  current_phase: candidate_writable_sandbox_ready
+  current_step: candidate_ready_for_manual_page_testing
+  waiting_on: user_candidate_page_testing
   pause_reason: none
   next_action: >-
-    main@54b32de9 required CI 已成功，已经授权的 prepare-candidate retry run 31362670385
-    正在执行。等待终态及完整 Candidate 验证；只有重跑成功才能判断 Candidate ready。禁止
-    自动更新 Active、同步 intl 或修改生产业务数据。
+    main@54b32de9 的 prepare-candidate retry 已成功，Candidate 可在固定入口进行人工页面测试。
+    测试不满意则继续改 main 并重建 Candidate；测试满意后仍需用户明确授权 update-active。
+    禁止自动更新 Active、同步 intl 或把 Candidate 沙箱数据复制到生产。
   release_authorization_contract:
     source_path: main_to_candidate_to_explicit_user_approval_to_active
     main_may_advance_without_active: true
@@ -71,7 +71,7 @@ goal_control:
     sourceable_runtime_builder_complete: false_removed_helper_only_change
     local_ready_blockers_open: 0_driver_fix_pr223_green
     independent_review_passed: true_hotfix_no_p0_p1_p2
-    server_acceptance_blockers_open: 1_prepare_retry_31362670385_in_progress
+    server_acceptance_blockers_open: 0_candidate_prepare_verified
     update_active_retry_idempotent: true_local
     rollback_active_retry_idempotent: true_local
     rollback_sigkill_reference_safe: true_local_and_linux_ci_target_ext4_unprobed
@@ -187,7 +187,7 @@ goal_control:
     candidate_sandbox_p2_banner_database_identity: fixed_required_and_displayed
     candidate_sandbox_p2_discovery_sql_argv: fixed_stdin_file_dash
     candidate_sandbox_real_postgres_integration: passed_snapshot_restore_migrate_finalize_admission_head
-    candidate_sandbox_real_server_integration: failed_safe_at_alembic_driver_then_sandbox_removed
+    candidate_sandbox_real_server_integration: success_run_31362670385
     candidate_server_role_acl_reconciliation: true_success_2026_08_10t05_41_15z
     candidate_server_dropin_reconciliation: true_exact_221_dynamicuser_dropin_installed
     candidate_sandbox_initialization_authorized: true_user_current_request_2026_08_10
@@ -214,8 +214,8 @@ goal_control:
     candidate_server_role_acl_initialized: true
     candidate_server_env_initialized: true_root_root_0600
     candidate_server_dropin_initialized: true_exact_221_dynamicuser_contract
-    prepare_candidate_executed_on_current_main: true_failed_safe_run_31359449296
-    candidate_prepare_run: 31359449296_failure_main_c238cefb
+    prepare_candidate_executed_on_current_main: true_success_run_31362670385
+    candidate_prepare_first_run: 31359449296_failure_main_c238cefb
     candidate_prepare_failure_stage: alembic_migration
     candidate_prepare_failure_root_cause: asyncpg_forced_to_psycopg2_but_release_venv_has_psycopg_v3_only
     candidate_prepare_release_venv_psycopg2_present: false
@@ -229,17 +229,37 @@ goal_control:
     candidate_prepare_driver_fix_merged: true
     candidate_prepare_driver_fix_merge_sha: 54b32de9681c34c358cb07dbdd3b6690e8098736
     candidate_prepare_driver_fix_main_ci: success_31362410375
-    candidate_prepare_retry_executed: true_in_progress
-    candidate_prepare_retry_run: 31362670385_in_progress_main_54b32de9
-    candidate_prepare_retry_stage: release_coordination_guard
-    candidate_ready: false
-    candidate_and_preview_stopped_after_bootstrap: true
-    candidate_ports_8001_and_18002_listening: false
+    candidate_prepare_retry_executed: true_success
+    candidate_prepare_retry_run: 31362670385_success_main_54b32de9
+    candidate_prepare_retry_stage: completed
+    candidate_prepare_operation_report: /opt/jato/operation-reports/2026-08-10T064838298Z-prepare-candidate-926e57aa.json
+    candidate_prepare_artifact_id: 9053209930
+    candidate_prepare_decision: completed
+    candidate_prepare_sandbox_provisioned: true
+    candidate_prepare_database_isolation_verified: true
+    candidate_prepare_backend_verified: true
+    candidate_prepare_monthly_disabled_verified: true
+    candidate_prepare_preview_verified: true
+    candidate_ready: true
+    candidate_sandbox_ready: true
+    candidate_fixed_entry_ready_for_manual_testing: true
+    candidate_and_preview_stopped_after_bootstrap_before_prepare: true
+    candidate_ports_8001_and_18002_listening: true
+    candidate_backend_resources: active_3g_memory_high_4g_memory_max
+    candidate_preview_resources: active_256m_memory_high_512m_memory_max
+    active_resources_after_candidate_prepare: active_6g_memory_high_8g_memory_max
+    candidate_target_sha: 54b32de9681c34c358cb07dbdd3b6690e8098736
+    candidate_target_archive_sha256_prefix: e92a6b6e
     candidate_public_gateway_status: 401_basic_auth_gate
+    candidate_public_gateway_unauthenticated_status: 401
+    www_health_after_candidate_prepare: 200
     active_main_pid_after_bootstrap: 3481565
     active_current_after_bootstrap: /opt/JATO_Analysis_System-main
     active_local_and_public_health_after_bootstrap: 200
     active_env_nginx_pointer_changed: false
+    active_unchanged_verified: true
+    traffic_attempted: false
+    traffic_changed: false
     candidate_database_role: jato_candidate
     candidate_database_role_security: scram_zero_memberships
     candidate_active_connect_denied_actual_proof: true_permission_denied
@@ -259,7 +279,9 @@ goal_control:
     existing_v2_server_prepare_verified: true_previous_readonly_candidate
     existing_v2_server_update_active_verified: false
     existing_v2_server_distinct_rollback_verified: false
-    existing_v2_writable_business_test_ready: false_prepare_retry_31362670385_in_progress
+    candidate_release_gc: deferred_nonblocking_legacy_active_pointer_target_outside_store
+    candidate_archive_cache_gc: deferred_nonblocking_legacy_active_pointer_target_outside_store
+    existing_v2_writable_business_test_ready: true_candidate_ready_for_manual_testing
     production_changed: candidate_infrastructure_only_no_active_intl_or_business_data
   may_continue_without_new_authorization:
     - local_read_only_audit
@@ -278,7 +300,7 @@ goal_control:
     - observed_server_state_contradicts_documented_baseline
     - change_would_touch_active_or_intl_database_content
     - change_would_cross_this_pr_scope
-  updated_at: "2026-08-10T14:38:29+08:00"
+  updated_at: "2026-08-10T14:54:05+08:00"
 ---
 
 # Fixed Active / Candidate Release V2
@@ -923,6 +945,28 @@ mark-and-sweep 计划；只要 release store 出现未知条目就拒绝清理�
   `ready=false`。当前未执行 `update-active` 或 intl 同步，Active、intl 与 JATO 数据边界保持
   不变。
 - #222 继续保持 docs-only Draft，不转 Ready、不合并；run 最终结果将在终态后另行回写。
+
+### 2026-08-10 / Step 3W：首次可写 Candidate 已准备完成
+
+- production-release run
+  [31362670385](https://github.com/tristan419/JATO_Analysis_System/actions/runs/31362670385)
+  已完成且结论为 `success`，目标为
+  `main@54b32de9681c34c358cb07dbdd3b6690e8098736`。`control_fixed_release_v2` 按本次
+  prepare 路径为 `skipped`，腾讯云部署 job 为 `success`。
+- 不可变证据为 artifact `9053209930`，服务器 operation report 为
+  `/opt/jato/operation-reports/2026-08-10T064838298Z-prepare-candidate-926e57aa.json`；报告
+  `decision/stage=completed`。
+- 沙箱已 provision，数据库隔离、backend、月更禁用、Preview 和 Active 未变化均验证通过。
+  Candidate backend 以 3G/4G 运行，Preview 以 256M/512M 运行，Active 前后均保持 6G/8G
+  active。
+- 本次没有尝试或改变公网流量，没有执行 `update-active` 或 intl 同步，Active、intl 与 JATO
+  数据均未改变。Candidate 现可在固定入口进行人工页面测试，但还没有发布为 Active。
+- Candidate 固定入口未认证请求返回 `401`，www health 为 `200`；目标 archive SHA-256 前缀为
+  `e92a6b6e`。
+- 两项 GC 延后均为非阻塞：release GC 因 legacy Active 的
+  `pointer_target_outside_store` 延后，archive cache GC 因 legacy Active 延后；它们不影响本次
+  Candidate ready 结论。
+- #222 继续保持 docs-only Draft，不转 Ready、不合并。
 
 ### 2026-08-06 / Step 0：目标与开发边界
 
