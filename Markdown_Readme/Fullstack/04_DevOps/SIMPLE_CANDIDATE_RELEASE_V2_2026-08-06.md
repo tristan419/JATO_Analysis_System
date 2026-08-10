@@ -8,15 +8,14 @@ goal_control:
     身份直接进入页面；完成代码、CI、腾讯云无流量验收后，再由用户授权把同一已测试构件
     更新到正式 www Active。Candidate 测试数据永不进入 Active；intl 继续使用既有的
     Active 到 intl 独立同步流程，不在 V2 中新增编排。
-  current_phase: candidate_runtime_secret_isolation_hotfix
-  current_step: await_hotfix_merge_authorization
-  waiting_on: explicit_user_merge_authorization_for_pull_request_221
+  current_phase: tencent_candidate_writable_sandbox_initialization
+  current_step: tencent_readonly_preflight_waiting_mfa
+  waiting_on: tencent_console_mfa_for_readonly_preflight
   pause_reason: none
   next_action: >-
-    修复首次服务器初始化前发现的 Candidate root/backend.env 凭据暴露：8001 使用动态
-    jato-candidate 身份且不继承 Active backend.env，并由现有 verifier fail closed。通过独立
-    PR 合并后，继续用户已经授权的服务器 role/ACL/env 合同初始化与当前 main Candidate
-    prepare。禁止自动更新 Active 或同步 intl。
+    #221 已合并且 main CI 成功。腾讯云只读预检当前等待 MFA；预检通过后，继续用户已经授权
+    的 Candidate role/ACL/env/drop-in 初始化与当前 main prepare。禁止自动更新 Active、同步
+    intl 或修改业务数据。
   release_authorization_contract:
     source_path: main_to_candidate_to_explicit_user_approval_to_active
     main_may_advance_without_active: true
@@ -31,9 +30,9 @@ goal_control:
     intl_failure_preserves_www_active: true
   progress:
     worktree_ready: true
-    worktree: /Users/litristan/.codex/worktrees/candidate-runtime-secret-isolation/JATO_Analysis_System
-    branch: codex/candidate-runtime-secret-isolation
-    base_main_sha: b128f5e5d1066e883f26649cad0441d362aa1e04
+    worktree: /Users/litristan/.codex/worktrees/candidate-first-writable-prepare-evidence/JATO_Analysis_System
+    branch: codex/candidate-first-writable-prepare-evidence
+    base_main_sha: c238cefbf9adb6a4861e42491c3d22145ee93bfe
     remote_main_matches_base: true
     design_recorded: true
     historical_inventory_evidence_recorded_below: true
@@ -131,11 +130,11 @@ goal_control:
     candidate_sandbox_draft_ready_for_human_review: true
     previous_pull_request_214_merged: true_main_30f3e2e4
     current_fix_commit: 979c080bce5b10f6695f6f6ee1c3d9fb4273d689
-    current_fix_github_checks: all_required_green_on_pull_request_221_head_4b88d543
-    pull_request_opened: true
-    pull_request_number: 221
+    current_fix_github_checks: main_ci_run_31356389854_success
+    pull_request_opened: false_merged
+    pull_request_number: 221_merged
     pull_request_url: https://github.com/tristan419/JATO_Analysis_System/pull/221
-    pull_request_is_draft: true
+    pull_request_is_draft: false_merged
     previous_pull_request_217_merged: true_main_619466e8
     candidate_public_gateway_commit: 991a44f8499a1210317aafb5da1f3183b7ee0769
     candidate_fixed_public_link_required: true
@@ -203,8 +202,18 @@ goal_control:
     candidate_runtime_secret_isolation_tests: 135_focused_and_1285_all_scripts
     candidate_runtime_secret_isolation_workflow_validators: 2_passed
     candidate_runtime_secret_isolation_independent_review: passed_no_p0_p1_p2
-    candidate_runtime_secret_isolation_pull_request: 221_draft_checks_green
+    candidate_runtime_secret_isolation_pull_request: 221_merged_main_c238cefb
     candidate_runtime_secret_isolation_ci_runs: 31353394363_and_31353396310_success
+    candidate_runtime_secret_isolation_main_ci: 31356389854_success
+    tencent_readonly_preflight_status: waiting_for_mfa
+    candidate_server_role_acl_initialized: false
+    candidate_server_env_initialized: false
+    candidate_server_dropin_initialized: false
+    prepare_candidate_executed_on_current_main: false
+    active_changed_by_current_operation: false
+    intl_changed_by_current_operation: false
+    business_data_changed_by_current_operation: false
+    hermes_run_31356389867: waiting_unrelated_to_candidate_chain
     candidate_sandbox_merge_sha: 2dea140f328c1d7077ca0792979b47bcca4dca8e
     bom_colour_implementation_merge_sha: b128f5e5d1066e883f26649cad0441d362aa1e04
     bom_colour_goal_pull_request: 218_merged_main_d40981e8
@@ -233,19 +242,18 @@ goal_control:
     - observed_server_state_contradicts_documented_baseline
     - change_would_touch_active_or_intl_database_content
     - change_would_cross_this_pr_scope
-  updated_at: "2026-08-10T11:50:00+08:00"
+  updated_at: "2026-08-10T13:00:04+08:00"
 ---
 
 # Fixed Active / Candidate Release V2
 
 > 状态：实施中
 > 开始日期：2026-08-06
-> worktree：`/Users/litristan/.codex/worktrees/candidate-runtime-secret-isolation/JATO_Analysis_System`
-> branch：`codex/candidate-runtime-secret-isolation`
-> 基线：`main@b128f5e5d1066e883f26649cad0441d362aa1e04`（已包含 #219、#220）
-> 当前 PR scope：仅让固定 Candidate 以动态非 root 身份运行、清除 Active env 继承、禁用
-> Candidate Redis，并同步现有 verifier、测试和操作文档；不改四操作、Active、intl、
-> 生产数据库内容、BOM 颜色业务或 JATO 数据
+> worktree：`/Users/litristan/.codex/worktrees/candidate-first-writable-prepare-evidence/JATO_Analysis_System`
+> branch：`codex/candidate-first-writable-prepare-evidence`
+> 基线：`main@c238cefbf9adb6a4861e42491c3d22145ee93bfe`（已包含 #221）
+> 当前 PR scope：只回写 #221 合并、main CI 与腾讯云预检/初始化/prepare 的事实证据；
+> 不改代码、Active、intl、生产数据库业务数据、BOM 颜色业务或 JATO 数据
 
 ## 0. Goal Control 使用规则
 
@@ -797,6 +805,23 @@ mark-and-sweep 计划；只要 release store 出现未知条目就拒绝清理�
 - 用户已明确授权按 `#215 -> #219` 顺序继续。下一步只推送 #219 同步 head 并等待 required
   checks；全绿后才转 Ready 和合并。服务器角色/ACL、8001 drop-in、首次可写 Candidate
   prepare、Active 更新及 intl 同步仍未获本步骤授权，继续保持不变。
+
+### 2026-08-10 / Step 3R：#221 合并并进入腾讯云首次可写 Candidate 预检
+
+- Candidate runtime secret isolation PR
+  [#221](https://github.com/tristan419/JATO_Analysis_System/pull/221) 已合并为
+  `main@c238cefbf9adb6a4861e42491c3d22145ee93bfe`；对应 main CI
+  [31356389854](https://github.com/tristan419/JATO_Analysis_System/actions/runs/31356389854)
+  已完成且结论为 `success`。
+- 当前阶段是腾讯云只读预检，正在等待控制台 MFA 会话；尚未创建或修改 Candidate 专用
+  PostgreSQL role/ACL，尚未写入 Candidate env，尚未替换 8001 drop-in，也尚未执行当前 main 的
+  `prepare-candidate`。
+- 用户已授权预检通过后执行上述 Candidate 初始化和 `prepare-candidate`。该授权不包含
+  `update-active`、Active 流量切换或 intl 同步；截至本记录，Active、intl 和生产业务数据均未
+  被本步骤修改。
+- 同一 main SHA 的 Hermes devsync run
+  [31356389867](https://github.com/tristan419/JATO_Analysis_System/actions/runs/31356389867)
+  当前为 `waiting`；它不属于 Candidate 初始化/prepare 链路，也不阻塞腾讯云只读预检。
 
 ### 2026-08-06 / Step 0：目标与开发边界
 
