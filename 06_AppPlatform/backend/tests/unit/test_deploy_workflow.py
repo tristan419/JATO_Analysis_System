@@ -19,7 +19,6 @@ CHECKPOINT_RECOVERY_WORKFLOW = (
 )
 PRODUCTION_RELEASE_WORKFLOW = REPO_ROOT / ".github/workflows/production-release.yml"
 INTL_SYNC_WORKFLOW = REPO_ROOT / ".github/workflows/sync-www-active-to-intl.yml"
-INTL_EDGE_PREWARM_WORKFLOW = REPO_ROOT / ".github/workflows/intl-edge-prewarm.yml"
 WORKFLOW_GUARD_VALIDATOR = (
     REPO_ROOT / ".github/scripts/validate_production_workflow_guards.py"
 )
@@ -41,7 +40,12 @@ def test_fixed_v2_release_has_only_four_explicit_jobs() -> None:
         Loader=yaml.BaseLoader,
     )
     assert isinstance(workflow, dict)
-    assert set(workflow["on"]) == {"workflow_dispatch"}
+    assert set(workflow["on"]) == {"workflow_dispatch", "workflow_run"}
+    assert workflow["on"]["workflow_run"] == {
+        "workflows": ["ci"],
+        "types": ["completed"],
+        "branches": ["main"],
+    }
     inputs = workflow["on"]["workflow_dispatch"]["inputs"]
     assert set(inputs) == {
         "release_mode",
@@ -75,7 +79,10 @@ def test_fixed_v2_release_has_only_four_explicit_jobs() -> None:
         assert inputs[name]["required"] == "true"
         assert inputs[name]["type"] == "boolean"
         assert inputs[name]["default"] == "false"
-    assert workflow["env"]["RELEASE_MODE"] == "${{ inputs.release_mode }}"
+    assert workflow["env"]["RELEASE_MODE"] == (
+        "${{ github.event_name == 'workflow_run' && 'prepare-candidate' || "
+        "inputs.release_mode }}"
+    )
     assert workflow["concurrency"] == {
         "group": "production-release-main",
         "cancel-in-progress": "false",
@@ -92,10 +99,30 @@ def test_fixed_v2_release_has_only_four_explicit_jobs() -> None:
     assert "environment" not in guard
     assert [step["name"] for step in guard["steps"]] == [
         "Checkout release coordination guard",
+        "Revalidate automatic CI source",
         "Validate unpublished release coordination",
         "Freeze release coordination plan",
     ]
-    guard_validate = guard["steps"][1]
+    auto_source = guard["steps"][1]
+    assert auto_source["if"] == "${{ github.event_name == 'workflow_run' }}"
+    assert auto_source["env"] == {
+        "GH_TOKEN": "${{ github.token }}",
+        "SOURCE_CI_RUN_ID": "${{ github.event.workflow_run.id }}",
+        "SOURCE_CI_RUN_ATTEMPT": "${{ github.event.workflow_run.run_attempt }}",
+        "SOURCE_CI_HEAD_SHA": "${{ github.event.workflow_run.head_sha }}",
+    }
+    for token in (
+        'test "$SOURCE_CI_HEAD_SHA" = "$GITHUB_SHA"',
+        'repos/$GITHUB_REPOSITORY/branches/main',
+        'repos/$GITHUB_REPOSITORY/actions/runs/$SOURCE_CI_RUN_ID',
+        '.run_attempt == $run_attempt',
+        '.path == ".github/workflows/ci.yml"',
+        '.event == "push"',
+        '.conclusion == "success"',
+        '.head_repository.full_name == $repository',
+    ):
+        assert token in auto_source["run"]
+    guard_validate = guard["steps"][2]
     expected_target_env = {
         "TARGET_COMMIT_SHA": "${{ inputs.target_commit_sha }}",
         "TARGET_ARCHIVE_SHA256": "${{ inputs.target_archive_sha256 }}",
@@ -110,20 +137,37 @@ def test_fixed_v2_release_has_only_four_explicit_jobs() -> None:
         '--target-manifest-sha256 "$TARGET_MANIFEST_SHA256"',
     ):
         assert token in guard_validate["run"]
-    prepare_condition = (
-        "${{ github.ref == 'refs/heads/main' && "
-        "inputs.release_mode == 'prepare-candidate' }}"
+    auto_source_condition = (
+        "github.event_name == 'workflow_run' && "
+        "github.ref == 'refs/heads/main' && "
+        "github.event.workflow_run.conclusion == 'success' && "
+        "github.event.workflow_run.event == 'push' && "
+        "github.event.workflow_run.name == 'ci' && "
+        "github.event.workflow_run.path == '.github/workflows/ci.yml' && "
+        "github.event.workflow_run.head_branch == 'main' && "
+        "github.event.workflow_run.head_repository.full_name == github.repository && "
+        "github.event.workflow_run.head_sha == github.sha"
     )
-    assert jobs["build_frontend"]["if"] == prepare_condition
+    prepare_condition = " ".join(
+        (
+            "${{ (github.event_name == 'workflow_dispatch' && "
+            "github.ref == 'refs/heads/main' && "
+            "inputs.release_mode == 'prepare-candidate') || ("
+            + auto_source_condition
+            + ") }}"
+        ).split()
+    )
+    assert " ".join(jobs["build_frontend"]["if"].split()) == prepare_condition
     assert jobs["build_frontend"]["needs"] == "release_coordination_guard"
-    assert jobs["deploy_tencent"]["if"] == prepare_condition
+    assert " ".join(jobs["deploy_tencent"]["if"].split()) == prepare_condition
     assert jobs["deploy_tencent"]["needs"] == [
         "release_coordination_guard",
         "build_frontend",
     ]
-    assert jobs["deploy_tencent"]["environment"] == "production"
+    assert jobs["deploy_tencent"]["environment"] == "candidate-preview"
     control_condition = (
-        "${{ github.ref == 'refs/heads/main' && "
+        "${{ github.event_name == 'workflow_dispatch' && "
+        "github.ref == 'refs/heads/main' && "
         "inputs.release_mode != 'prepare-candidate' }}"
     )
     control = jobs["control_fixed_release_v2"]
@@ -146,17 +190,39 @@ def test_fixed_v2_release_has_only_four_explicit_jobs() -> None:
             '--target-manifest-sha256 "$TARGET_MANIFEST_SHA256"',
         ):
             assert token in revalidate["run"]
+    current_main = next(
+        step
+        for step in jobs["deploy_tencent"]["steps"]
+        if step["name"] == "Reconfirm current main before first server mutation"
+    )
+    assert current_main["env"] == {"GH_TOKEN": "${{ github.token }}"}
+    assert 'gh api "repos/$GITHUB_REPOSITORY/branches/main"' in current_main["run"]
+    assert 'if [ "$current_main" != "$GITHUB_SHA" ]' in current_main["run"]
     reconfirm = next(
         step
         for step in jobs["deploy_tencent"]["steps"]
-        if step["name"] == "Reconfirm current main before first production mutation"
+        if step["name"] == "Revalidate frozen plan before Candidate mutation"
     )
     for name, expected in expected_target_env.items():
         assert reconfirm["env"][name] == expected
+    assert reconfirm["env"]["GH_TOKEN"] == "${{ github.token }}"
+    assert reconfirm["env"]["GITHUB_TOKEN"] == "${{ github.token }}"
+    assert 'gh api "repos/$GITHUB_REPOSITORY/branches/main"' in reconfirm["run"]
+    assert 'if [ "$current_main" != "$GITHUB_SHA" ]' in reconfirm["run"]
     assert '--operation "$RELEASE_MODE"' in reconfirm["run"]
     assert '--target-sha "$TARGET_COMMIT_SHA"' in reconfirm["run"]
     assert '--target-archive-sha256 "$TARGET_ARCHIVE_SHA256"' in reconfirm["run"]
     assert '--target-manifest-sha256 "$TARGET_MANIFEST_SHA256"' in reconfirm["run"]
+    deploy_release = next(
+        step
+        for step in jobs["deploy_tencent"]["steps"]
+        if step["name"] == "Deploy verified release to fixed Candidate on Tencent"
+    )
+    assert deploy_release["env"]["CANDIDATE_REPLACE_POLICY"] == (
+        "${{ github.event_name == 'workflow_run' && "
+        "'reuse-verified-same-release' || 'replace' }}"
+    )
+    assert "write_remote_export CANDIDATE_REPLACE_POLICY" in deploy_release["run"]
 
 
 @pytest.mark.skipif(
@@ -510,19 +576,17 @@ def test_bluegreen_storage_guard_is_packaged_and_runs_before_candidate_runtime()
         assert forbidden not in storage_guard
 
 
-def test_intl_edge_prewarm_verifies_completed_release_provenance_first() -> None:
-    workflow = INTL_EDGE_PREWARM_WORKFLOW.read_text(encoding="utf-8")
+def test_candidate_prepare_has_no_automatic_intl_follower() -> None:
+    prewarm = REPO_ROOT / ".github/workflows/intl-edge-prewarm.yml"
+    assert not prewarm.exists()
 
-    assert "Verify completed immutable release and intl provenance" in workflow
-    assert "Prewarm intl edge cache" in workflow
-    assert workflow.index(
-        "Verify completed immutable release and intl provenance"
-    ) < workflow.index("Prewarm intl edge cache")
-    assert "npm run perf:prewarm-edge" in workflow
-    assert "JATO_PREWARM_ROLES" in workflow
-    assert "viewer,order_filler" in workflow
-    assert "JATO_PREWARM_GROUP_BY" in workflow
-    assert "JATO_PREWARM_FAIL_ON_ERROR" in workflow
+    sync = yaml.load(
+        INTL_SYNC_WORKFLOW.read_text(encoding="utf-8"),
+        Loader=yaml.BaseLoader,
+    )
+    assert isinstance(sync, dict)
+    assert set(sync["on"]) == {"workflow_dispatch"}
+    assert sync["jobs"]["sync_intl"]["environment"] == "production"
 
 
 def test_tencent_release_upload_requires_verified_basis_or_explicit_bootstrap() -> None:
@@ -678,9 +742,10 @@ def test_fixed_v2_prepare_has_diagnostics_without_cross_service_checkpoints() ->
     ]
     names = [step["name"] for step in active_steps]
     required_order = [
+        "Reconfirm current main before first server mutation",
         "Upload complete release archive with incremental rsync",
         "Generate canonical V2 release manifest",
-        "Reconfirm current main before first production mutation",
+        "Revalidate frozen plan before Candidate mutation",
         "Deploy verified release to fixed Candidate on Tencent",
         "Retain V2 operation diagnostics",
     ]
@@ -897,10 +962,13 @@ def test_tencent_uploads_verified_archive_before_deploy_step() -> None:
     )
 
     verify_index = workflow.index("Verify frontend artifact before Tencent deployment")
+    current_main_index = workflow.index(
+        "Reconfirm current main before first server mutation"
+    )
     upload_index = workflow.index("Upload complete release archive with incremental rsync")
     manifest_index = workflow.index("Generate canonical V2 release manifest")
     deploy_index = workflow.index("Deploy verified release to fixed Candidate on Tencent")
-    assert verify_index < upload_index < manifest_index < deploy_index
+    assert verify_index < current_main_index < upload_index < manifest_index < deploy_index
     assert "frontend-release.json" in workflow
     assert "frontend-dist.tar.gz" in workflow
 

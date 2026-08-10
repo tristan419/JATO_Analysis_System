@@ -75,10 +75,31 @@ rollback baseline. An older schema-v1 release may only be restored together
 with its matching historical release helper; do not mix a v1 payload with the
 v2 verifier.
 
-`intl-edge-prewarm` has only a `workflow_run` trigger for a completed,
-successful `production-release` run on `main`. It resolves and downloads that
-run's artifact, validates the intl public provenance, and only then starts the
-cache prewarm script. It is not a deployment entry point.
+The former `intl-edge-prewarm` follower is retired. Fixed V2
+`production-release` includes Candidate-only prepare operations, so a follower
+could not safely treat every successful run as an intl release. Cache prewarm
+may return later as a separately reviewed optimization bound to an exact,
+successful intl sync; it must not subscribe to mixed-mode `production-release`.
+
+Successful `ci` for the exact current `main` SHA automatically enters the same
+`prepare-candidate` path. Before the first rsync write and again immediately
+before Candidate mutation, the job queries the GitHub branch API and rejects a
+SHA that is no longer current `main`.
+When the exact commit, archive, and manifest already back a fully verified
+Candidate runtime, preview, and isolated sandbox, the automatic path is an
+idempotent no-op so in-progress test data is retained. A manual
+`prepare-candidate` dispatch deliberately keeps replacement semantics and
+refreshes the sandbox.
+
+The automatic prepare job declares the `candidate-preview` environment, but
+the Tencent SSH host, user, key/password, and port are currently repository
+secrets also used by production operations. `candidate-preview` is therefore a
+logical code/PR/main and GitHub-environment boundary, not a restricted SSH
+principal that is technically incapable of Active changes. The reviewed
+workflow, exact-SHA guards, fixed controller action, and server-side release
+lock enforce Candidate-only behavior. Do not describe this environment as
+holding Candidate-only credentials; a separately restricted server principal
+would be a future hardening change.
 
 The manual `sync-www-active-to-intl` workflow is the independent intl release
 entry point. It accepts only an explicit confirmation on current `main`; it
@@ -88,6 +109,8 @@ root's embedded `hermes/frontend_release` manifest and payload, verifies public
 www against them, and idempotently deploys the same bytes to Cloudflare. A
 legacy/non-content-addressed Active is rejected rather than rebuilt. This flow
 does not depend on Candidate state and does not modify backend or JATO data.
+It remains the only intl release entry point and is never invoked by Candidate
+prepare.
 
 ## Validation and governance
 
@@ -101,9 +124,11 @@ or target-tree edits cannot erase a partial group. The gate fails closed on
 partial groups, unresolved dependencies, disagreeing immutable snapshots,
 malformed metadata, stale main, cycles, PR-file visibility limits, or GitHub
 API ambiguity. Its decision is frozen as a same-run immutable artifact. After
-production approval and before deployment credentials, the workflow consumes
-that frozen plan and rechecks that the target is still current `main`; it does
-not re-read mutable PR bodies.
+the applicable GitHub environment gate and before deployment credentials, the
+workflow consumes that frozen plan and rechecks that the target is still
+current `main`; immediately before the first server write and Candidate
+mutation it also queries the GitHub branch API directly. It does not re-read
+mutable PR bodies.
 See [`RELEASE_COORDINATION.md`](RELEASE_COORDINATION.md).
 
 Run the deterministic local checks without production secrets:

@@ -12,6 +12,7 @@ JATO_JOB_ROOT="${JATO_JOB_ROOT:-/opt/jato/shared/04_Processed_data/ops/jato_mont
 PRODUCTION_LOCK_PATH="${PRODUCTION_LOCK_PATH:-}"
 V2_CONTROLLER_PATH="${V2_CONTROLLER_PATH:-}"
 V2_ARCHIVE_CACHE_ROOT="${V2_ARCHIVE_CACHE_ROOT:-}"
+CANDIDATE_REPLACE_POLICY="${CANDIDATE_REPLACE_POLICY:-replace}"
 
 die() {
   printf '[ERROR] %s\n' "$1" >&2
@@ -132,6 +133,10 @@ PY
 
 prepare_candidate() {
   require_identity
+  case "$CANDIDATE_REPLACE_POLICY" in
+    replace|reuse-verified-same-release) ;;
+    *) die "CANDIDATE_REPLACE_POLICY is invalid" ;;
+  esac
   [[ -n "${FRONTEND_ARTIFACT_IDENTITY:-}" ]] \
     || die "FRONTEND_ARTIFACT_IDENTITY is required"
   [[ "${FRONTEND_ARTIFACT_CHECKSUM:-}" =~ ^[0-9a-f]{64}$ ]] \
@@ -210,6 +215,7 @@ prepare_candidate() {
     --commit "$DEPLOY_COMMIT_SHA" \
     --archive-sha256 "$DEPLOY_ARCHIVE_SHA256" \
     --manifest-sha256 "$RELEASE_V2_MANIFEST_SHA256" \
+    --replace-policy "$CANDIDATE_REPLACE_POLICY" \
     --staging-root "$root"
 }
 

@@ -30,17 +30,76 @@ class FixedReleaseV2WorkflowTests(unittest.TestCase):
         validator.assert_fixed_v2_production_workflow(self.workflow)
         validator.assert_single_build_and_strict_outputs(self.workflow)
         validator.assert_fixed_v2_prepare_and_control_contract(self.workflow)
-        validator.assert_prewarm_contract("production-release")
 
-    def test_push_trigger_is_rejected(self) -> None:
+    def test_direct_push_trigger_is_rejected(self) -> None:
         workflow = copy.deepcopy(self.workflow)
         workflow["on"]["push"] = {"branches": ["main"]}
 
         with self.assertRaisesRegex(
             AssertionError,
-            "workflow_dispatch only",
+            "trigger surface changed",
         ):
             validator.assert_fixed_v2_production_workflow(workflow)
+
+    def test_automatic_prepare_requires_successful_ci_from_exact_main(self) -> None:
+        for removed in (
+            "github.event.workflow_run.conclusion == 'success'",
+            "github.event.workflow_run.event == 'push'",
+            "github.event.workflow_run.head_repository.full_name == github.repository",
+            "github.event.workflow_run.head_sha == github.sha",
+        ):
+            with self.subTest(removed=removed):
+                workflow = copy.deepcopy(self.workflow)
+                workflow["jobs"]["deploy_tencent"]["if"] = workflow["jobs"][
+                    "deploy_tencent"
+                ]["if"].replace(removed, "true")
+
+                with self.assertRaisesRegex(AssertionError, "main guard"):
+                    validator.assert_fixed_v2_production_workflow(workflow)
+
+    def test_automatic_ci_revalidation_binds_exact_run_and_attempt(self) -> None:
+        workflow = copy.deepcopy(self.workflow)
+        step = self._step(
+            workflow,
+            "release_coordination_guard",
+            "Revalidate automatic CI source",
+        )
+        step["env"]["SOURCE_CI_RUN_ATTEMPT"] = "1"
+
+        with self.assertRaisesRegex(AssertionError, "source identity binding"):
+            validator.assert_fixed_v2_production_workflow(workflow)
+
+    def test_candidate_prepare_cannot_use_production_environment(self) -> None:
+        workflow = copy.deepcopy(self.workflow)
+        workflow["jobs"]["deploy_tencent"]["environment"] = "production"
+
+        with self.assertRaisesRegex(AssertionError, "candidate-preview"):
+            validator.assert_fixed_v2_production_workflow(workflow)
+
+    def test_control_cannot_run_from_automatic_ci_event(self) -> None:
+        workflow = copy.deepcopy(self.workflow)
+        workflow["jobs"]["control_fixed_release_v2"]["if"] = (
+            validator.PREPARE_RELEASE_CONDITION
+        )
+
+        with self.assertRaisesRegex(AssertionError, "main guard"):
+            validator.assert_fixed_v2_production_workflow(workflow)
+
+    def test_followup_cannot_subscribe_to_mixed_production_release(self) -> None:
+        follower = {
+            "on": {
+                "workflow_run": {
+                    "workflows": ["production-release"],
+                    "types": ["completed"],
+                }
+            }
+        }
+
+        with self.assertRaisesRegex(AssertionError, "Candidate prepare"):
+            validator.assert_does_not_follow_mixed_production_release(
+                follower,
+                "test follower",
+            )
 
     def test_fifth_release_action_is_rejected(self) -> None:
         workflow = copy.deepcopy(self.workflow)
@@ -103,11 +162,53 @@ class FixedReleaseV2WorkflowTests(unittest.TestCase):
         step = self._step(
             workflow,
             "deploy_tencent",
-            "Reconfirm current main before first production mutation",
+            "Revalidate frozen plan before Candidate mutation",
         )
         step["env"]["TARGET_COMMIT_SHA"] = "hard-coded"
 
         with self.assertRaisesRegex(AssertionError, "target input binding"):
+            validator.assert_fixed_v2_prepare_and_control_contract(workflow)
+
+    def test_first_server_mutation_requires_direct_current_main_api_check(self) -> None:
+        workflow = copy.deepcopy(self.workflow)
+        step = self._step(
+            workflow,
+            "deploy_tencent",
+            "Reconfirm current main before first server mutation",
+        )
+        step["run"] = step["run"].replace(
+            'gh api "repos/$GITHUB_REPOSITORY/branches/main"',
+            "printf stale",
+        )
+
+        with self.assertRaisesRegex(AssertionError, "current main recheck"):
+            validator.assert_fixed_v2_prepare_and_control_contract(workflow)
+
+    def test_candidate_mutation_rechecks_live_current_main_after_upload(self) -> None:
+        workflow = copy.deepcopy(self.workflow)
+        step = self._step(
+            workflow,
+            "deploy_tencent",
+            "Revalidate frozen plan before Candidate mutation",
+        )
+        step["run"] = step["run"].replace(
+            'if [ "$current_main" != "$GITHUB_SHA" ]',
+            "if false",
+        )
+
+        with self.assertRaisesRegex(AssertionError, "reconfirm"):
+            validator.assert_fixed_v2_prepare_and_control_contract(workflow)
+
+    def test_automatic_candidate_replace_policy_cannot_be_weakened(self) -> None:
+        workflow = copy.deepcopy(self.workflow)
+        step = self._step(
+            workflow,
+            "deploy_tencent",
+            "Deploy verified release to fixed Candidate on Tencent",
+        )
+        step["env"]["CANDIDATE_REPLACE_POLICY"] = "replace"
+
+        with self.assertRaisesRegex(AssertionError, "replace policy"):
             validator.assert_fixed_v2_prepare_and_control_contract(workflow)
 
     def test_frontend_release_binds_run_attempt_once(self) -> None:

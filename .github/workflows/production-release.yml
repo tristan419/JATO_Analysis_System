@@ -35,6 +35,10 @@ on:
         required: true
         type: boolean
         default: false
+  workflow_run:
+    workflows: ["ci"]
+    types: [completed]
+    branches: ["main"]
 
 permissions:
   actions: read
@@ -48,11 +52,24 @@ concurrency:
 
 env:
   FRONTEND_NODE_VERSION: "20.19.0"
-  RELEASE_MODE: ${{ inputs.release_mode }}
+  RELEASE_MODE: ${{ github.event_name == 'workflow_run' && 'prepare-candidate' || inputs.release_mode }}
 
 jobs:
   release_coordination_guard:
-    if: ${{ github.ref == 'refs/heads/main' }}
+    if: >-
+      ${{
+      (github.event_name == 'workflow_dispatch' &&
+      github.ref == 'refs/heads/main') ||
+      (github.event_name == 'workflow_run' &&
+      github.ref == 'refs/heads/main' &&
+      github.event.workflow_run.conclusion == 'success' &&
+      github.event.workflow_run.event == 'push' &&
+      github.event.workflow_run.name == 'ci' &&
+      github.event.workflow_run.path == '.github/workflows/ci.yml' &&
+      github.event.workflow_run.head_branch == 'main' &&
+      github.event.workflow_run.head_repository.full_name == github.repository &&
+      github.event.workflow_run.head_sha == github.sha)
+      }}
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
@@ -61,6 +78,39 @@ jobs:
         with:
           ref: ${{ github.sha }}
           persist-credentials: false
+
+      - name: Revalidate automatic CI source
+        if: ${{ github.event_name == 'workflow_run' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SOURCE_CI_RUN_ID: ${{ github.event.workflow_run.id }}
+          SOURCE_CI_RUN_ATTEMPT: ${{ github.event.workflow_run.run_attempt }}
+          SOURCE_CI_HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
+        run: |
+          set -euo pipefail
+          [[ "$SOURCE_CI_RUN_ID" =~ ^[1-9][0-9]*$ ]]
+          [[ "$SOURCE_CI_RUN_ATTEMPT" =~ ^[1-9][0-9]*$ ]]
+          [[ "$SOURCE_CI_HEAD_SHA" =~ ^[0-9a-f]{40}$ ]]
+          test "$SOURCE_CI_HEAD_SHA" = "$GITHUB_SHA"
+          current_main="$(gh api "repos/$GITHUB_REPOSITORY/branches/main" --jq .commit.sha)"
+          test "$current_main" = "$SOURCE_CI_HEAD_SHA"
+          run_payload="$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$SOURCE_CI_RUN_ID")"
+          jq -e \
+            --arg repository "$GITHUB_REPOSITORY" \
+            --arg sha "$SOURCE_CI_HEAD_SHA" \
+            --argjson run_id "$SOURCE_CI_RUN_ID" \
+            --argjson run_attempt "$SOURCE_CI_RUN_ATTEMPT" \
+            '.id == $run_id and
+             .run_attempt == $run_attempt and
+             .name == "ci" and
+             .path == ".github/workflows/ci.yml" and
+             .event == "push" and
+             .head_branch == "main" and
+             .head_sha == $sha and
+             .status == "completed" and
+             .conclusion == "success" and
+             .head_repository.full_name == $repository' \
+            <<<"$run_payload" >/dev/null
 
       - name: Validate unpublished release coordination
         env:
@@ -90,8 +140,20 @@ jobs:
 
   build_frontend:
     if: >-
-      ${{ github.ref == 'refs/heads/main' &&
-      inputs.release_mode == 'prepare-candidate' }}
+      ${{
+      (github.event_name == 'workflow_dispatch' &&
+      github.ref == 'refs/heads/main' &&
+      inputs.release_mode == 'prepare-candidate') ||
+      (github.event_name == 'workflow_run' &&
+      github.ref == 'refs/heads/main' &&
+      github.event.workflow_run.conclusion == 'success' &&
+      github.event.workflow_run.event == 'push' &&
+      github.event.workflow_run.name == 'ci' &&
+      github.event.workflow_run.path == '.github/workflows/ci.yml' &&
+      github.event.workflow_run.head_branch == 'main' &&
+      github.event.workflow_run.head_repository.full_name == github.repository &&
+      github.event.workflow_run.head_sha == github.sha)
+      }}
     needs: release_coordination_guard
     runs-on: ubuntu-latest
     timeout-minutes: 30
@@ -224,10 +286,22 @@ jobs:
 
   deploy_tencent:
     if: >-
-      ${{ github.ref == 'refs/heads/main' &&
-      inputs.release_mode == 'prepare-candidate' }}
+      ${{
+      (github.event_name == 'workflow_dispatch' &&
+      github.ref == 'refs/heads/main' &&
+      inputs.release_mode == 'prepare-candidate') ||
+      (github.event_name == 'workflow_run' &&
+      github.ref == 'refs/heads/main' &&
+      github.event.workflow_run.conclusion == 'success' &&
+      github.event.workflow_run.event == 'push' &&
+      github.event.workflow_run.name == 'ci' &&
+      github.event.workflow_run.path == '.github/workflows/ci.yml' &&
+      github.event.workflow_run.head_branch == 'main' &&
+      github.event.workflow_run.head_repository.full_name == github.repository &&
+      github.event.workflow_run.head_sha == github.sha)
+      }}
     needs: [release_coordination_guard, build_frontend]
-    environment: production
+    environment: candidate-preview
     runs-on: ubuntu-latest
     timeout-minutes: 240
 
@@ -615,6 +689,19 @@ jobs:
           for evidence_path in "${msrp_local_paths[@]}"; do
             tar tzf "$RUNNER_TEMP/JATO_deploy.tar.gz" "$evidence_path"
           done
+
+      - name: Reconfirm current main before first server mutation
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          current_main="$(
+            gh api "repos/$GITHUB_REPOSITORY/branches/main" --jq '.commit.sha'
+          )"
+          if [ "$current_main" != "$GITHUB_SHA" ]; then
+            echo "::error::Release SHA is no longer current main"
+            exit 1
+          fi
 
       - name: Upload complete release archive with incremental rsync
         id: upload_release
@@ -1062,21 +1149,30 @@ jobs:
               handle.write(f"- Manifest SHA-256: `{digest}`\n")
           PY
 
-      - name: Reconfirm current main before first production mutation
+      - name: Revalidate frozen plan before Candidate mutation
         env:
+          GH_TOKEN: ${{ github.token }}
           GITHUB_TOKEN: ${{ github.token }}
           TARGET_COMMIT_SHA: ${{ inputs.target_commit_sha }}
           TARGET_ARCHIVE_SHA256: ${{ inputs.target_archive_sha256 }}
           TARGET_MANIFEST_SHA256: ${{ inputs.target_manifest_sha256 }}
-        run: >-
-          python3 .github/scripts/release_coordination_guard.py
-          verify-plan
-          --main-sha "$GITHUB_SHA"
-          --operation "$RELEASE_MODE"
-          --target-sha "$TARGET_COMMIT_SHA"
-          --target-archive-sha256 "$TARGET_ARCHIVE_SHA256"
-          --target-manifest-sha256 "$TARGET_MANIFEST_SHA256"
-          --plan "$RUNNER_TEMP/release-coordination-plan/release-coordination-plan.json"
+        run: |
+          set -euo pipefail
+          current_main="$(
+            gh api "repos/$GITHUB_REPOSITORY/branches/main" --jq '.commit.sha'
+          )"
+          if [ "$current_main" != "$GITHUB_SHA" ]; then
+            echo "::error::Release SHA is no longer current main"
+            exit 1
+          fi
+          python3 .github/scripts/release_coordination_guard.py \
+            verify-plan \
+            --main-sha "$GITHUB_SHA" \
+            --operation "$RELEASE_MODE" \
+            --target-sha "$TARGET_COMMIT_SHA" \
+            --target-archive-sha256 "$TARGET_ARCHIVE_SHA256" \
+            --target-manifest-sha256 "$TARGET_MANIFEST_SHA256" \
+            --plan "$RUNNER_TEMP/release-coordination-plan/release-coordination-plan.json"
 
       - name: Deploy verified release to fixed Candidate on Tencent
         id: deploy_v2
@@ -1101,6 +1197,7 @@ jobs:
           BUILD_RUN_ATTEMPT: ${{ needs.build_frontend.outputs.workflow_run_attempt }}
           RELEASE_V2_MANIFEST_B64: ${{ steps.v2_manifest.outputs.manifest-b64 }}
           RELEASE_V2_MANIFEST_SHA256: ${{ steps.v2_manifest.outputs.manifest-sha256 }}
+          CANDIDATE_REPLACE_POLICY: ${{ github.event_name == 'workflow_run' && 'reuse-verified-same-release' || 'replace' }}
         run: |
           set -euo pipefail
           SSH_PORT="${SSH_PORT:-22}"
@@ -1166,6 +1263,8 @@ jobs:
           write_remote_export RELEASE_V2_MANIFEST_B64 "$RELEASE_V2_MANIFEST_B64"
           write_remote_export RELEASE_V2_MANIFEST_SHA256 \
             "$RELEASE_V2_MANIFEST_SHA256"
+          write_remote_export CANDIDATE_REPLACE_POLICY \
+            "$CANDIDATE_REPLACE_POLICY"
           cat 03_Scripts/deploy/fullstack_remote_release.sh >> "$control_payload"
 
           operation_log="$RUNNER_TEMP/v2-operation-output.log"
@@ -1198,7 +1297,8 @@ jobs:
 
   control_fixed_release_v2:
     if: >-
-      ${{ github.ref == 'refs/heads/main' &&
+      ${{ github.event_name == 'workflow_dispatch' &&
+      github.ref == 'refs/heads/main' &&
       inputs.release_mode != 'prepare-candidate' }}
     needs: release_coordination_guard
     environment: production
