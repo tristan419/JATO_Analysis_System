@@ -8,14 +8,15 @@ goal_control:
     身份直接进入页面；完成代码、CI、腾讯云无流量验收后，再由用户授权把同一已测试构件
     更新到正式 www Active。Candidate 测试数据永不进入 Active；intl 继续使用既有的
     Active 到 intl 独立同步流程，不在 V2 中新增编排。
-  current_phase: candidate_writable_database_sandbox_post_215_ci
-  current_step: push_synced_head_and_wait_required_checks
-  waiting_on: github_required_checks
+  current_phase: candidate_runtime_secret_isolation_hotfix
+  current_step: await_hotfix_merge_authorization
+  waiting_on: explicit_user_merge_authorization_for_pull_request_221
   pause_reason: none
   next_action: >-
-    将已合入 #215 的最新 main 同步进 Candidate PR #219，确认组合 CI 全绿后按用户本轮授权
-    转 Ready 并合并。服务器角色与 ACL 对齐、8001 drop-in 替换和首次可写 Candidate prepare
-    仍分别需要单独授权。禁止自动更新 Active 或同步 intl。
+    修复首次服务器初始化前发现的 Candidate root/backend.env 凭据暴露：8001 使用动态
+    jato-candidate 身份且不继承 Active backend.env，并由现有 verifier fail closed。通过独立
+    PR 合并后，继续用户已经授权的服务器 role/ACL/env 合同初始化与当前 main Candidate
+    prepare。禁止自动更新 Active 或同步 intl。
   release_authorization_contract:
     source_path: main_to_candidate_to_explicit_user_approval_to_active
     main_may_advance_without_active: true
@@ -30,9 +31,9 @@ goal_control:
     intl_failure_preserves_www_active: true
   progress:
     worktree_ready: true
-    worktree: /Users/litristan/.codex/worktrees/candidate-writable-sandbox-fifo/JATO_Analysis_System
-    branch: codex/candidate-writable-sandbox-fifo
-    base_main_sha: 40ae32112927b3e138a88e42cd43ccc611f4ba0f
+    worktree: /Users/litristan/.codex/worktrees/candidate-runtime-secret-isolation/JATO_Analysis_System
+    branch: codex/candidate-runtime-secret-isolation
+    base_main_sha: b128f5e5d1066e883f26649cad0441d362aa1e04
     remote_main_matches_base: true
     design_recorded: true
     historical_inventory_evidence_recorded_below: true
@@ -43,15 +44,15 @@ goal_control:
     store_manifest_primitives_complete: true
     store_manifest_unit_tests_passed: 8
     manifest_cli_unit_tests_passed: 2
-    local_v2_tests_passed: 129_candidate_controller_and_admission
-    current_fixed_release_ci_equivalent_tests: 811_passed_15_skipped
+    local_v2_tests_passed: 135_candidate_controller_and_admission
+    current_fixed_release_ci_equivalent_tests: 1285_passed_15_skipped
     controller_store_admission_tests_passed: 102
     release_seal_tests_passed: 21
     monthly_role_tests_passed: 18
     admission_primitives_complete: true_local
     database_revision_primitives_complete: true
     candidate_database_privilege_probe_complete: true_local
-    candidate_database_role_configured_on_server: true_readonly_role_and_env_verified
+    candidate_database_role_configured_on_server: false_legacy_readonly_role_requires_reconciliation
     four_operation_methods_present: true
     steady_state_four_operations_complete: true_local
     legacy_first_update_active_complete: true_local_b_b
@@ -69,8 +70,8 @@ goal_control:
     v2_source_critical_closure_complete: true_local_13_files
     sourceable_runtime_builder_complete: false_removed_helper_only_change
     local_ready_blockers_open: 0
-    independent_review_passed: true_final_no_p0_p1_or_actionable_p2
-    server_acceptance_blockers_open: 3_role_acl_dropin_then_candidate_prepare
+    independent_review_passed: true_hotfix_no_p0_p1_p2
+    server_acceptance_blockers_open: 4_runtime_secret_isolation_role_acl_dropin_prepare
     update_active_retry_idempotent: true_local
     rollback_active_retry_idempotent: true_local
     rollback_sigkill_reference_safe: true_local_and_linux_ci_target_ext4_unprobed
@@ -108,7 +109,7 @@ goal_control:
     candidate_external_side_effect_sandbox: false_documented_operator_limit
     runtime_python_lines: 4882_after_final_p2_closure
     workflow_unit_tests_passed: 115
-    deployment_tests_passed: 1279
+    deployment_tests_passed: 1285
     deployment_tests_skipped: 15
     backend_tests_passed: 103
     frontend_tests_passed: 375
@@ -129,12 +130,13 @@ goal_control:
     bom_admin_pull_request_215_merged: true_main_40ae3211
     candidate_sandbox_draft_ready_for_human_review: true
     previous_pull_request_214_merged: true_main_30f3e2e4
-    current_fix_commit: 36c2d9f96eecf1524a69e7fd81ae18d0234025a7
-    current_fix_github_checks: 13_of_13_green
+    current_fix_commit: 979c080bce5b10f6695f6f6ee1c3d9fb4273d689
+    current_fix_github_checks: all_required_green_on_pull_request_221_head_4b88d543
     pull_request_opened: true
-    pull_request_number: 217
-    pull_request_url: https://github.com/tristan419/JATO_Analysis_System/pull/217
+    pull_request_number: 221
+    pull_request_url: https://github.com/tristan419/JATO_Analysis_System/pull/221
     pull_request_is_draft: true
+    previous_pull_request_217_merged: true_main_619466e8
     candidate_public_gateway_commit: 991a44f8499a1210317aafb5da1f3183b7ee0769
     candidate_fixed_public_link_required: true
     candidate_public_gateway_design: dnspod_to_shanghai_nginx_basic_auth_to_127_0_0_1_18002
@@ -144,9 +146,9 @@ goal_control:
     candidate_public_gateway_goal_yaml_check: passed
     candidate_public_gateway_independent_review: passed_no_p0_p1
     candidate_public_gateway_github_checks: 13_of_13_green
-    candidate_dns_configured: false
-    candidate_tls_configured: false
-    candidate_basic_auth_configured: false
+    candidate_dns_configured: true
+    candidate_tls_configured: true
+    candidate_basic_auth_configured: true
     candidate_current_sha_verified: b21695163df510e4dd8e91b4701446d917f7d8b8
     candidate_public_link_may_fallback_to_active: false
     active_changed_by_this_step: false
@@ -164,8 +166,8 @@ goal_control:
     candidate_sandbox_may_write_active_database: false
     candidate_sandbox_may_update_active_or_intl: false
     bom_colour_library_followup_in_this_pr: false_out_of_scope
-    candidate_sandbox_pull_request_opened: true_draft
-    candidate_sandbox_pull_request_number: 219
+    candidate_sandbox_pull_request_opened: false_merged
+    candidate_sandbox_pull_request_number: 219_merged
     candidate_sandbox_pull_request_url: https://github.com/tristan419/JATO_Analysis_System/pull/219
     candidate_sandbox_initial_commit: 0949dcdb39a2d12f88e678f0daa0b0563d33048a
     candidate_sandbox_runtime_modules_added: 0
@@ -185,17 +187,34 @@ goal_control:
     candidate_sandbox_p2_banner_database_identity: fixed_required_and_displayed
     candidate_sandbox_p2_discovery_sql_argv: fixed_stdin_file_dash
     candidate_sandbox_real_postgres_integration: passed_snapshot_restore_migrate_finalize_admission_head
-    candidate_sandbox_real_server_integration: false_requires_separate_authorization
-    candidate_server_role_acl_reconciliation: false_requires_separate_authorization
-    candidate_server_dropin_reconciliation: false_requires_separate_authorization
-    bom_colour_goal_pull_request: 218_draft_goal_only_waiting_for_215_owner
+    candidate_sandbox_real_server_integration: false_authorized_current_request_not_executed
+    candidate_server_role_acl_reconciliation: false_authorized_current_request_not_executed
+    candidate_server_dropin_reconciliation: false_authorized_current_request_not_executed
+    candidate_sandbox_initialization_authorized: true_user_current_request_2026_08_10
+    prepare_candidate_authorized: true_user_current_request_after_safe_initialization
+    candidate_runtime_secret_isolation_blocker: confirmed_root_and_active_backend_env_on_main_b128f5e5
+    candidate_runtime_secret_isolation_hotfix_worktree: /Users/litristan/.codex/worktrees/candidate-runtime-secret-isolation/JATO_Analysis_System
+    candidate_runtime_secret_isolation_hotfix_branch: codex/candidate-runtime-secret-isolation
+    candidate_runtime_secret_isolation_server_mutation: false
+    candidate_runtime_secret_isolation_environment_files_reset: true_local
+    candidate_runtime_secret_isolation_dynamic_user: true_local
+    candidate_runtime_secret_isolation_effective_uid_gate: true_local
+    candidate_runtime_secret_isolation_redis_disabled: true_local
+    candidate_runtime_secret_isolation_tests: 135_focused_and_1285_all_scripts
+    candidate_runtime_secret_isolation_workflow_validators: 2_passed
+    candidate_runtime_secret_isolation_independent_review: passed_no_p0_p1_p2
+    candidate_runtime_secret_isolation_pull_request: 221_draft_checks_green
+    candidate_runtime_secret_isolation_ci_runs: 31353394363_and_31353396310_success
+    candidate_sandbox_merge_sha: 2dea140f328c1d7077ca0792979b47bcca4dca8e
+    bom_colour_implementation_merge_sha: b128f5e5d1066e883f26649cad0441d362aa1e04
+    bom_colour_goal_pull_request: 218_merged_main_d40981e8
     existing_v2_goal_assessment: partially_achieved
     existing_v2_core_code_complete: true
     existing_v2_fixed_candidate_link_complete: true
     existing_v2_server_prepare_verified: true_previous_readonly_candidate
     existing_v2_server_update_active_verified: false
     existing_v2_server_distinct_rollback_verified: false
-    existing_v2_writable_business_test_ready: false_local_rereview_and_server_config_pending
+    existing_v2_writable_business_test_ready: false_runtime_hotfix_and_server_init_pending
     production_changed: false
   may_continue_without_new_authorization:
     - local_read_only_audit
@@ -214,18 +233,19 @@ goal_control:
     - observed_server_state_contradicts_documented_baseline
     - change_would_touch_active_or_intl_database_content
     - change_would_cross_this_pr_scope
-  updated_at: "2026-08-10T09:09:00+08:00"
+  updated_at: "2026-08-10T11:50:00+08:00"
 ---
 
 # Fixed Active / Candidate Release V2
 
 > 状态：实施中
 > 开始日期：2026-08-06
-> worktree：`/Users/litristan/.codex/worktrees/candidate-writable-sandbox-fifo/JATO_Analysis_System`
-> branch：`codex/candidate-writable-sandbox-fifo`
-> 基线：`main@40ae32112927b3e138a88e42cd43ccc611f4ba0f`（已包含 #215）
-> 当前 PR scope：Candidate 可写数据库沙箱、FIFO 换新、Candidate-only 应用免登录 admin、
-> 既有发布准入与测试；不改 BOM 颜色业务、Active、intl、生产数据库内容或 JATO 数据
+> worktree：`/Users/litristan/.codex/worktrees/candidate-runtime-secret-isolation/JATO_Analysis_System`
+> branch：`codex/candidate-runtime-secret-isolation`
+> 基线：`main@b128f5e5d1066e883f26649cad0441d362aa1e04`（已包含 #219、#220）
+> 当前 PR scope：仅让固定 Candidate 以动态非 root 身份运行、清除 Active env 继承、禁用
+> Candidate Redis，并同步现有 verifier、测试和操作文档；不改四操作、Active、intl、
+> 生产数据库内容、BOM 颜色业务或 JATO 数据
 
 ## 0. Goal Control 使用规则
 
@@ -257,16 +277,21 @@ goal_control:
 
 尚未达成：
 
-- Candidate 仍通过 SELECT-only 角色读取 Active 数据库，不能测试 BOM 拖拽、规则填充、
-  FOB 重算等真实写入交互。
+- 独立可写沙箱代码已随 #219 合入 main，但首次服务器初始化尚未执行，当前没有承载最新
+  main 的可写 Candidate。
+- 上线前审计发现 8001 仍会以 root 运行并继承 Active `backend.env`；必须先合并本独立
+  hotfix，使 Candidate 使用动态非 root 身份、清空继承的 Active env，并禁用共享 Redis。
+- PostgreSQL 专用角色、Active CONNECT ACL、bootstrap env 和新版 8001 drop-in 仍需在
+  Candidate 停止状态下一次性初始化并验证。
 - `update-active` 尚未在当前 V2 服务器链路完成一次用户批准后的正式切换验收。
 - 尚未形成 distinct `active.previous`，因此真实服务器 `rollback-active` 也未完成端到端验收。
 - 当前 Candidate 运行的代码不等于最新 main；这是“main 可持续前进、Active/Candidate 需人工
   部署”的预期状态，但意味着旧 Goal 的最终验收矩阵尚未闭环。
 
-本 PR 不推倒已经完成的 V2；只把 Candidate 数据边界从“生产库只读”改为“生产快照的
-独立可写沙箱”，并补齐 Candidate 应用免登录。完成后仍需另行授权一次腾讯云
-`prepare-candidate`，再由用户人工页面验收；未授权时不会运行 `update-active`。
+#219 已原位把 Candidate 数据边界从“生产库只读”改为“生产快照的独立可写沙箱”，并补齐
+Candidate 应用免登录。本 hotfix 只关闭首次上线审计发现的运行身份和 Active secrets 泄漏，
+不新增 workflow、操作或状态机。合并后继续执行用户已经授权的腾讯云初始化与
+`prepare-candidate`；仍不会运行 `update-active` 或同步 intl。
 
 ## 1. 目标
 
@@ -568,7 +593,8 @@ mark-and-sweep 计划；只要 release store 出现未知条目就拒绝清理�
 
 1. 完成本地实现、范围审计、独立 PR 与 CI。服务器只读预检确认 legacy Active anchor 精确为
    `/opt/jato/slots/8000/current -> /opt/JATO_Analysis_System-main`、公网固定指向 8000，并盘点
-   8001 的 unit/drop-in/env 与独立数据库只读账号；未知配置直接报告，不建立 recovery。
+   8001 的 unit/drop-in/env、Candidate bootstrap role、Active CONNECT 拒绝和共享路径对动态
+   UID 的可读/可遍历权限；未知配置直接报告，不建立 recovery。
 2. 经用户单独授权配置 Candidate 沙箱管理员/应用角色后，从最终 main 运行普通
    `prepare-candidate` 得到 B。prepare 从 Active 一致性快照恢复独立可写沙箱，只安装/使用
    固定 8001/18002，前后证明 legacy Active、生产数据库与 www 身份不变。

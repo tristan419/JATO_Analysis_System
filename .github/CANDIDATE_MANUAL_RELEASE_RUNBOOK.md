@@ -68,21 +68,21 @@ www Active -- 用户另行启动 sync-www-active-to-intl --> intl
 完成后即销毁的 3G/4G transient dependency-build scope；它只是资源受限的依赖构建
 进程，不是第三个运行槽，也不形成新的 Candidate 身份。
 
-Candidate 可以读取真实生产环境的数据，以发现本地数据无法复现的问题，但必须使用
-独立的 PostgreSQL 只读账号：
+Candidate 使用每次 `prepare-candidate` 从 Active 取得的一致性快照，但运行在独立的
+PostgreSQL 可写沙箱中：
 
-- Candidate 与 Active 不得共用数据库账号。
-- Candidate 账号只允许连接、schema usage 和查询，不得拥有表写权限、sequence
-  更新权限或数据库/schema create 权限。
-- Candidate 连接强制只读 transaction，并设置有界 statement/lock timeout。
-- Candidate 必须显式禁用 JATO 月更、scheduler、Hermes 和预热等后台任务。
-- JATO 月更及依赖本地生产数据目录或 PostgreSQL 写权限的操作必须拒绝执行。Candidate
-  目前不是针对所有外部系统副作用的通用沙箱；人工测试不得点击 Airflow 等外部管理写
-  操作。若未来要求覆盖这类接口，应单独设计网络/权限隔离，不能把它伪装成本 V2 已有保证。
+- Candidate 与 Active 不得共用数据库、数据库账号或 JWT secret。
+- Candidate 账号只在当次 `jato_candidate_*` 沙箱拥有普通业务 DML/sequence 权限；不得
+  database/schema create，也必须被 Active database 明确拒绝 CONNECT。
+- Candidate 以动态、非 root 的 `jato-candidate` 身份运行；8001 不加载 Active 的
+  `backend.env`，只加载自己的 slot env 和 Candidate database env。
+- Candidate 应用内认证关闭，进入页面即为 admin；公网固定入口仍由外层 Basic Auth 保护。
+- Candidate 必须显式禁用 JATO 月更、scheduler、Hermes 和预热等后台任务。Candidate
+  不是针对邮件、webhook、对象存储等外部副作用的通用沙箱，人工测试不得触发这些操作。
 
-页面人工验收应以登录、查询、筛选、Dashboard、Market Scan、接口兼容、真实性能和
-错误报告为主。若确实需要验证生产写入，不应临时给 Candidate 写权限，而应另用隔离的
-数据库副本。
+页面人工验收可以覆盖数据库读写交互；这些写入只留在一次性 Candidate 沙箱，永不复制
+回 Active。查询、筛选、Dashboard、Market Scan、接口兼容、真实性能和结构化错误报告
+仍是基础验收项。
 
 ## 4. 从 GitHub 手动运行
 
@@ -96,7 +96,8 @@ Candidate 可以读取真实生产环境的数据，以发现本地数据无法�
 - Nginx 必须有效加载固定 `8000/current` 的 Active 配置；安装前后 www 的 legacy
   commit/frontend identity 必须完全不变。
 - 旧 `jato-bluegreen-boot-reconcile` 不得再在开机时改写正式路由。
-- Candidate 必须已有 root-owned 0600 的独立 PostgreSQL SELECT-only env。
+- Candidate 必须已有 root-owned 0600 的 PostgreSQL bootstrap env；其中的专用角色对
+  Active database 无 CONNECT，并由 prepare 将 URL 改写到新建的可写沙箱。
 - `candidate.ojeur.cloud` 使用 DNSPod A 记录直达上海腾讯云；必须使用独立 TLS 证书和
   独立 Nginx vhost，并在所有页面/API 前启用 Basic Auth。密码文件不得进入仓库，建议
   使用 `root:www-data`、`0640` 的 `/etc/nginx/jato-candidate.htpasswd`。
@@ -115,7 +116,7 @@ Candidate 可以读取真实生产环境的数据，以发现本地数据无法�
 legacy Active 第一次进入 V2 采用用户明确选择的最简 `B/B`：先按普通流程准备并人工测试
 Candidate B；只有用户再次明确批准 `update-active` 后，现有控制器才把固定 8000 切到同一
 构件，并登记 `active.current == active.previous == B`。不建立 A/A helper、第五种操作、
-checkpoint 或 recovery 系统，也不把没有 Candidate 只读合同的旧代码假装成 Candidate。
+checkpoint 或 recovery 系统，也不把没有 Candidate 沙箱隔离合同的旧代码假装成 Candidate。
 
 首次切换会先证明 legacy current 精确指向旧根目录、previous 为空、8000 unit/env 可读取、
 固定 Nginx 仍只指向 8000，并记录旧 unit/env、systemd 身份和公网 build identity。普通可捕获
@@ -133,7 +134,7 @@ checkpoint 或 recovery 系统，也不把没有 Candidate 只读合同的旧代
 3. 使用增量传输上传变化块；只有服务器没有任何可验证传输基准时，才可由用户明确
    勾选一次 `bootstrap_full_upload`。
 4. 更新 Candidate 指针并重启固定 8001。
-5. 验证 Candidate SHA、`/healthz`、3G/4G、只读数据库权限、后台任务禁用和
+5. 验证 Candidate SHA、`/healthz`、3G/4G、可写沙箱隔离、后台任务禁用和
    18002 预览。
 6. 输出本次精确的 commit SHA、archive SHA-256、manifest SHA-256 和操作报告。
 
@@ -202,9 +203,9 @@ B 的显式重试只会验证或继续启动 B，不会自动切回 C。只有�
 https://candidate.ojeur.cloud
 ```
 
-浏览器先通过独立的 Basic Auth，再在 Candidate 页面使用 JATO 账号密码登录。www 的
-localStorage 登录态不会跨域带入 Candidate；第一版不改变 Active OAuth 配置，因此不要
-用 Candidate 测试 Google/飞书 OAuth 回调。
+浏览器通过独立的 Basic Auth 后，Candidate 应用会直接以 admin 身份进入，不再要求第二次
+JATO 登录。www 的 localStorage 登录态不会跨域带入 Candidate；Candidate 不使用 Active
+OAuth 配置，因此不要用它测试 Google/飞书 OAuth 回调。
 
 该 URL 本身不绑定某个 commit。每次从更新后的 `main` 成功运行 `prepare-candidate`，
 控制器会更新 8001 的 Candidate 指针和 18002 的预览身份；刷新同一个 URL 就会看到最新
@@ -229,12 +230,13 @@ http://127.0.0.1:18002
 
 - 页面显示 `CANDIDATE` 标识及预期完整 SHA；
 - `/candidate-preview.json`、`/healthz` 和 `/readyz` 指向 8001 的同一 release；
-- 登录、主要页面、API、筛选与性能符合预期；
-- 月更和其他写入口明确拒绝，而不是悄悄执行；
+- 外层 Basic Auth、主要页面、API、筛选与性能符合预期；
+- 月更及其他单实例后台任务明确拒绝；普通业务数据库写入只落入 Candidate 沙箱；
 - www Active 在整个测试期间仍为原 SHA 且健康。
 
-本机 18002、Candidate 域名与 www 都是不同 origin，应分别登录。没有一个健康且身份
-一致的 Candidate 时，18002 和固定公网地址都必须拒绝，不能回退显示 Active。
+三个入口是不同 origin：Candidate 域名只需外层 Basic Auth，应用内直接以 admin 进入；
+本机 18002 没有公网 Basic Auth，也不要求应用登录；www 继续使用正式应用登录。没有一个
+健康且身份一致的 Candidate 时，18002 和固定公网地址都必须拒绝，不能回退显示 Active。
 
 ## 6. intl 是后续独立动作
 
@@ -288,7 +290,8 @@ archive cache 只识别 `<cache>/<40-hex>/<64-hex>.tar.gz` 以及对应 `.partia
 
 - 当前 www Active 完整 SHA、8000 健康、2 workers 和 6G/8G；
 - 当前 Candidate 完整 SHA或为空、8001/18002 状态和 3G/4G；
-- Candidate 数据库只读证明与后台任务禁用状态；
+- Candidate 独立可写沙箱、Active CONNECT 拒绝、非 root/无 Active secrets、Redis 隔离与
+  后台任务禁用状态；
 - www Nginx 仍固定指向 8000；
 - 是否有另一项发布操作持有单一部署锁；
 - 本次将使用的 commit/archive/manifest 三元组。
