@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import importlib.util
+import io
 import json
 import os
 from contextlib import contextmanager
@@ -61,11 +62,7 @@ class FakeSystem:
                 "SubState": "dead",
                 "MemoryHigh": str(MODULE.CANDIDATE_MEMORY_HIGH),
                 "MemoryMax": str(MODULE.CANDIDATE_MEMORY_MAX),
-                "Environment": (
-                    "APP_RUNTIME_READ_ONLY=true "
-                    '"PGOPTIONS=-c default_transaction_read_only=on '
-                    '-c statement_timeout=120000 -c lock_timeout=5000"'
-                ),
+                "Environment": "APP_RUNTIME_READ_ONLY=false",
                 "EnvironmentFiles": "",
                 "DropInPaths": "",
                 "ProtectSystem": "strict",
@@ -395,6 +392,74 @@ def candidate_database_ok(config) -> dict[str, object]:
     return MODULE.inspect_candidate_database_isolation(config, runner=runner)
 
 
+class FakeSandboxManager:
+    def __init__(self) -> None:
+        self.counter = 0
+        self.provisioned: list[str] = []
+        self.dropped: list[str] = []
+        self.drop_calls: list[tuple[str | None, frozenset[str]]] = []
+        self.fail_drops: set[str] = set()
+
+    def provision(
+        self,
+        cfg: MODULE.ControllerConfig,
+        candidate_root: Path,
+    ) -> MODULE.CandidateSandbox:
+        del candidate_root
+        self.counter += 1
+        database = (
+            "jato_candidate_20260809t1200"
+            f"{self.counter:02d}z_{self.counter:016x}"
+        )
+        snapshot = f"2026-08-09T12:00:{self.counter:02d}Z"
+        bootstrap = ADMISSION._read_backend_environment(
+            cfg.candidate_database_env,
+            expected_uid=cfg.expected_owner_uid,
+            expected_mode=0o600,
+        )
+        self.provisioned.append(database)
+        return MODULE.CandidateSandbox(
+            database,
+            snapshot,
+            MODULE._render_candidate_database_environment(
+                bootstrap,
+                database,
+                snapshot,
+            ),
+        )
+
+    def drop(
+        self,
+        cfg: MODULE.ControllerConfig,
+        database: str | None,
+        protected: frozenset[str],
+    ) -> tuple[str, ...]:
+        del cfg
+        self.drop_calls.append((database, protected))
+        targets = (
+            [database]
+            if database is not None
+            else [
+                item
+                for item in self.provisioned
+                if item not in self.dropped and item not in protected
+            ]
+        )
+        removed: list[str] = []
+        for target in targets:
+            assert target not in protected
+            if target in self.fail_drops:
+                raise MODULE.V2Error(
+                    "injected_drop_failure",
+                    "drop failed",
+                    details={"removed": removed},
+                )
+            if target in self.provisioned and target not in self.dropped:
+                self.dropped.append(target)
+                removed.append(target)
+        return tuple(removed)
+
+
 def jato_idle(path: Path) -> dict[str, object]:
     return {"busy": False}
 
@@ -434,6 +499,12 @@ def make_http_reader(
                 }
             }
         if url.endswith("candidate-preview.json"):
+            identity_path = (
+                layout.release_root.parent
+                / "preview-runtime/candidate-preview.json"
+            )
+            if identity_path.exists():
+                return 200, json.loads(identity_path.read_text(encoding="utf-8"))
             identity = STORE.read_pointer(layout, MODULE.CANDIDATE_SLOT, "current")
             assert identity is not None
             return 200, {
@@ -500,7 +571,9 @@ def controller(
     jato_lock_holder: MODULE.JatoLockHolder = jato_release_locks,
     http_reader: MODULE.HttpReader | None = None,
     sleeper: Callable[[float], None] = lambda _seconds: None,
+    sandbox_manager: FakeSandboxManager | None = None,
 ) -> MODULE.FixedReleaseController:
+    sandbox_manager = sandbox_manager or FakeSandboxManager()
     system.nginx_active_config = str(cfg.active_release_config)
     system.active_instance_unit = cfg.active_backend_unit
     system.active_template_unit = cfg.active_backend_unit.with_name(
@@ -537,6 +610,8 @@ def controller(
         ),
         database_inspector=database_inspector,
         candidate_database_inspector=candidate_database_ok,
+        sandbox_provisioner=sandbox_manager.provision,
+        sandbox_dropper=sandbox_manager.drop,
         jato_inspector=jato_idle,
         jato_lock_holder=jato_lock_holder,
         sleeper=sleeper,
@@ -574,6 +649,21 @@ def install_candidate(
     identity: STORE.ReleaseIdentity,
     system: FakeSystem,
 ) -> None:
+    bootstrap = ADMISSION._read_backend_environment(
+        ctrl.config.candidate_database_env,
+        expected_uid=ctrl.config.expected_owner_uid,
+        expected_mode=0o600,
+    )
+    database = "jato_candidate_20260809t115959z_0000000000000001"
+    ctrl.config.candidate_database_env.write_text(
+        MODULE._render_candidate_database_environment(
+            bootstrap,
+            database,
+            "2026-08-09T11:59:59Z",
+        ),
+        encoding="utf-8",
+    )
+    ctrl.config.candidate_database_env.chmod(0o600)
     STORE.atomic_symlink(ctrl.config.layout, MODULE.CANDIDATE_SLOT, "current", identity)
     ctrl._write_slot_env(MODULE.CANDIDATE_SLOT, identity, active=False)
     system.units[MODULE.CANDIDATE_UNIT].update(
@@ -584,7 +674,11 @@ def install_candidate(
             "MemoryMax": str(MODULE.CANDIDATE_MEMORY_MAX),
         }
     )
-    ctrl._write_preview_identity(identity)
+    ctrl._write_preview_identity(
+        identity,
+        "2026-08-09T11:59:59Z",
+        database,
+    )
     system.units[MODULE.PREVIEW_UNIT].update(
         {
             "ActiveState": "active",
@@ -622,7 +716,7 @@ def test_prepare_candidate_starts_only_candidate_and_preview(tmp_path: Path) -> 
     assert "APP_JATO_MONTHLY_EXECUTION_MODE=external" in candidate_env
     assert "APP_RELEASE_ROLE=candidate" in candidate_env
     assert f"APP_RELEASE_ARCHIVE_SHA256={CANDIDATE.archive_sha256}" in candidate_env
-    assert "APP_RUNTIME_READ_ONLY=true" in candidate_env
+    assert "APP_RUNTIME_READ_ONLY=false" in candidate_env
     assert (
         "JATO_PARQUET_PATH=/opt/jato/shared/04_Processed_data/jato_full_archive.parquet"
         in candidate_env
@@ -635,6 +729,462 @@ def test_prepare_candidate_starts_only_candidate_and_preview(tmp_path: Path) -> 
         for command in system.commands
     )
     assert "\n" in system.units[MODULE.CANDIDATE_UNIT]["EnvironmentFiles"]
+
+
+def test_default_provision_hides_credentials_and_cleans_only_after_create(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    cfg = config(tmp_path)
+    digest = create_release(cfg.layout, CANDIDATE)
+    assert digest
+    cfg.backend_env.write_text(
+        "APP_DATABASE_ENABLED=true\n"
+        "APP_DATABASE_URL=postgresql+asyncpg://active:active-secret@127.0.0.1/jato\n",
+        encoding="utf-8",
+    )
+    cfg.candidate_database_env.write_text(
+        "APP_DATABASE_ENABLED=true\n"
+        "APP_DATABASE_URL=postgresql+asyncpg://candidate:candidate-secret@127.0.0.1/jato\n",
+        encoding="utf-8",
+    )
+    calls: list[tuple[tuple[str, ...], dict[str, object]]] = []
+    pipelines: list[tuple[tuple[str, ...], dict[str, object]]] = []
+
+    def completed(arguments, **kwargs):
+        calls.append((arguments, kwargs))
+        return MODULE.subprocess.CompletedProcess(arguments, 0, "", "")
+
+    class Process:
+        next_pid = 100
+
+        def __init__(self, arguments, **kwargs):
+            self.arguments = arguments
+            self.kwargs = kwargs
+            self.pid = Process.next_pid
+            Process.next_pid += 1
+            self.returncode = 0
+            self.stdout = io.BytesIO() if arguments[0] == "pg_dump" else None
+            pipelines.append((arguments, kwargs))
+
+        def wait(self, timeout=None):
+            del timeout
+            return self.returncode
+
+        def poll(self):
+            return self.returncode
+
+    monkeypatch.setattr(MODULE.subprocess, "run", completed)
+    monkeypatch.setattr(MODULE.subprocess, "Popen", Process)
+    result = MODULE.provision_candidate_sandbox(
+        cfg,
+        cfg.layout.release_path(CANDIDATE),
+    )
+
+    assert len(calls) == 4
+    assert all(
+        "active-secret" not in " ".join(arguments)
+        and "candidate-secret" not in " ".join(arguments)
+        for arguments, _ in calls
+    )
+    for arguments, _ in (calls[0], calls[1], calls[3]):
+        assert arguments[:4] == ("runuser", "-u", "postgres", "--")
+        assert "--host" in arguments and "/var/run/postgresql" in arguments
+        assert "--port" in arguments and "5432" in arguments
+    assert calls[0][0][-2:] == ("--file", "-")
+    assert calls[0][1]["input"] == MODULE._CANDIDATE_ROLE_PREFLIGHT
+    assert "--template" in calls[1][0] and "template0" in calls[1][0]
+    assert calls[1][0][-1] == result.database_name
+    migration_arguments, migration_options = calls[2]
+    assert migration_arguments[-4:] == ("-m", "alembic", "upgrade", "head")
+    assert migration_options["user"] == "nobody"
+    assert migration_options["group"] == "nogroup"
+    migration_env = migration_options["env"]
+    assert "active-secret" not in str(migration_env)
+    assert "candidate-secret" in str(migration_env)
+    assert len(pipelines) == 2
+    dump_arguments, dump_options = pipelines[0]
+    restore_arguments, restore_options = pipelines[1]
+    assert dump_arguments == (
+        "pg_dump", "--dbname", "jato", "--format=custom", "--no-owner", "--no-privileges",
+    )
+    assert dump_options["env"]["PGDATABASE"] == "jato"
+    assert dump_options["env"]["PGPASSWORD"] == "active-secret"
+    assert dump_options["env"]["PGUSER"] == "active"
+    assert dump_options["env"]["PGHOST"] == "127.0.0.1"
+    assert dump_options["env"]["PGPORT"] == "5432"
+    assert "APP_DATABASE_URL" not in dump_options["env"]
+    assert "--single-transaction" in restore_arguments
+    assert restore_arguments[:3] == ("pg_restore", "--dbname", result.database_name)
+    assert restore_options["user"] == "nobody"
+    assert restore_options["group"] == "nogroup"
+    assert restore_options["env"]["PGDATABASE"] == result.database_name
+    assert restore_options["env"]["PGPASSWORD"] == "candidate-secret"
+    assert restore_options["env"]["PGUSER"] == "candidate"
+    assert "APP_DATABASE_URL" not in restore_options["env"]
+    assert calls[3][0][-2:] == ("--file", "-")
+    assert calls[3][1]["input"] == MODULE._CANDIDATE_FINALIZE
+    assert "REASSIGN OWNED" not in calls[3][1]["input"]
+    assert len(result.database_name.rsplit("_", 1)[1]) == 16
+    assert "candidate-secret" not in repr(result)
+
+
+def test_createdb_collision_never_drops_the_preexisting_database(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    cfg = config(tmp_path)
+    create_release(cfg.layout, CANDIDATE)
+    cfg.backend_env.write_text(
+        "APP_DATABASE_ENABLED=true\n"
+        "APP_DATABASE_URL=postgresql+asyncpg://active:active-secret@127.0.0.1/jato\n",
+        encoding="utf-8",
+    )
+    cfg.candidate_database_env.write_text(
+        "APP_DATABASE_ENABLED=true\n"
+        "APP_DATABASE_URL=postgresql+asyncpg://candidate:candidate-secret@127.0.0.1/jato\n",
+        encoding="utf-8",
+    )
+    commands: list[tuple[str, ...]] = []
+    drops: list[str] = []
+
+    def completed(arguments, **kwargs):
+        del kwargs
+        commands.append(arguments)
+        return MODULE.subprocess.CompletedProcess(
+            arguments,
+            1 if arguments[4] == "createdb" else 0,
+            "",
+            "collision",
+        )
+
+    def drop(*args, **kwargs):
+        del args, kwargs
+        drops.append("called")
+        return ()
+
+    monkeypatch.setattr(MODULE.subprocess, "run", completed)
+    monkeypatch.setattr(MODULE, "drop_candidate_sandbox", drop)
+    monkeypatch.setattr(
+        MODULE,
+        "_run_database_pipeline",
+        lambda *_args, **_kwargs: pytest.fail("restore must not start"),
+    )
+
+    with pytest.raises(MODULE.V2Error) as caught:
+        MODULE.provision_candidate_sandbox(
+            cfg,
+            cfg.layout.release_path(CANDIDATE),
+        )
+
+    assert caught.value.code == "candidate_sandbox_command_failed"
+    createdb = next(command for command in commands if command[4] == "createdb")
+    assert MODULE.CANDIDATE_SANDBOX_NAME.fullmatch(createdb[-1])
+    assert drops == []
+    assert not any(command[4] == "dropdb" for command in commands)
+
+
+def test_default_sandbox_discovery_uses_stdin_and_explicit_cluster(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    cfg = config(tmp_path)
+    cfg.backend_env.write_text(
+        "APP_DATABASE_ENABLED=true\n"
+        "APP_DATABASE_URL=postgresql+asyncpg://active:secret@127.0.0.1:5544/jato_active\n",
+        encoding="utf-8",
+    )
+    target = "jato_candidate_20260809t110004z_eeeeeeeeeeeeeeee"
+    calls: list[tuple[tuple[str, ...], dict[str, object]]] = []
+
+    def completed(arguments, **kwargs):
+        calls.append((arguments, kwargs))
+        stdout = f"{target}\n" if arguments[4] == "psql" else ""
+        return MODULE.subprocess.CompletedProcess(arguments, 0, stdout, "")
+
+    monkeypatch.setattr(MODULE.subprocess, "run", completed)
+
+    removed = MODULE.drop_candidate_sandbox(cfg, None, frozenset({"jato_active"}))
+
+    assert removed == (target,)
+    discovery_arguments, discovery_options = calls[0]
+    assert discovery_arguments[4] == "psql"
+    assert discovery_arguments[-2:] == ("--file", "-")
+    assert discovery_options["input"] == "SELECT datname FROM pg_database;\n"
+    assert "/var/run/postgresql" in discovery_arguments
+    assert "5544" in discovery_arguments
+    assert calls[1][0][4] == "dropdb"
+    assert calls[1][0][-1] == target
+
+
+def test_database_pipeline_timeout_hides_process_lookup_cleanup_race(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[tuple[tuple[str, ...], dict[str, object]]] = []
+    killed: list[int] = []
+
+    class Process:
+        next_pid = 200
+
+        def __init__(self, arguments, **kwargs):
+            self.arguments = arguments
+            self.pid = Process.next_pid
+            Process.next_pid += 1
+            self.stdout = io.BytesIO() if arguments[0] == "pg_dump" else None
+            self.returncode = None
+            self.initial_wait = arguments[0] == "pg_restore"
+            calls.append((arguments, kwargs))
+
+        def wait(self, timeout=None):
+            if self.initial_wait and timeout is not None:
+                self.initial_wait = False
+                raise MODULE.subprocess.TimeoutExpired(self.arguments, timeout)
+            self.returncode = -9
+            return self.returncode
+
+        def poll(self):
+            return self.returncode
+
+    def killpg(pid: int, signal_number: int) -> None:
+        assert signal_number == MODULE.signal.SIGKILL
+        killed.append(pid)
+        if len(killed) == 1:
+            raise ProcessLookupError
+
+    dump_env = {
+        "PGHOST": "127.0.0.1",
+        "PGPORT": "5432",
+        "PGUSER": "active",
+        "PGDATABASE": "active_db",
+        "PGPASSWORD": "active-secret",
+    }
+    restore_env = {
+        "PGHOST": "127.0.0.1",
+        "PGPORT": "5432",
+        "PGUSER": "candidate",
+        "PGDATABASE": "candidate_db",
+        "PGPASSWORD": "candidate-secret",
+    }
+    monkeypatch.setattr(MODULE.subprocess, "Popen", Process)
+    monkeypatch.setattr(MODULE.os, "killpg", killpg)
+
+    with pytest.raises(MODULE.V2Error) as caught:
+        MODULE._run_database_pipeline(dump_env, restore_env)
+
+    assert caught.value.code == "candidate_sandbox_command_failed"
+    assert len(calls) == 2
+    assert calls[0][0][:3] == ("pg_dump", "--dbname", "active_db")
+    assert calls[1][0][:3] == ("pg_restore", "--dbname", "candidate_db")
+    assert calls[0][1]["env"] == dump_env
+    assert calls[1][1]["env"] == restore_env
+    assert "active-secret" not in " ".join(calls[0][0])
+    assert "candidate-secret" not in " ".join(calls[1][0])
+    assert killed == [201, 200]
+
+
+def test_successive_prepares_replace_fifo_sandbox_and_publish_snapshot_time(
+    tmp_path: Path,
+) -> None:
+    cfg = config(tmp_path)
+    install_active(cfg, ACTIVE)
+    older_digest = create_release(cfg.layout, OLDER)
+    system = FakeSystem()
+    sandboxes = FakeSandboxManager()
+    ctrl = controller(cfg, system, sandbox_manager=sandboxes)
+
+    ctrl.prepare_candidate(OLDER, manifest_sha256=older_digest)
+    first_database = sandboxes.provisioned[0]
+    candidate_digest = create_release(cfg.layout, CANDIDATE)
+    ctrl.prepare_candidate(CANDIDATE, manifest_sha256=candidate_digest)
+
+    candidate_values = ADMISSION._read_backend_environment(
+        cfg.candidate_database_env,
+        expected_uid=cfg.expected_owner_uid,
+        expected_mode=0o600,
+    )
+    preview = json.loads(
+        (cfg.preview_runtime_root / "candidate-preview.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    assert candidate_values["APP_CANDIDATE_SANDBOX_DATABASE"] == sandboxes.provisioned[1]
+    assert candidate_values["APP_AUTH_ENABLED"] == "false"
+    assert candidate_values["APP_RUNTIME_READ_ONLY"] == "false"
+    assert len(candidate_values["APP_JWT_SECRET"]) == 64
+    assert preview["databaseSnapshotAt"] == candidate_values["APP_CANDIDATE_SNAPSHOT_AT"]
+    assert preview["databaseName"] == candidate_values["APP_CANDIDATE_SANDBOX_DATABASE"]
+    assert sandboxes.dropped == [first_database]
+    assert STORE.read_pointer(cfg.layout, MODULE.ACTIVE_SLOT, "current") == ACTIVE
+
+
+def test_prepare_reclaims_only_unreferenced_strict_marker_orphans(
+    tmp_path: Path,
+) -> None:
+    cfg = config(tmp_path)
+    active_database = "jato_candidate_20260809t110000z_aaaaaaaaaaaaaaaa"
+    cfg.backend_env.write_text(
+        "APP_DATABASE_ENABLED=true\n"
+        "APP_DATABASE_URL=postgresql+asyncpg://"
+        f"jato_active:secret@db.example/{active_database}\n",
+        encoding="utf-8",
+    )
+    install_active(cfg, ACTIVE)
+    older_digest = create_release(cfg.layout, OLDER)
+    system = FakeSystem()
+    sandboxes = FakeSandboxManager()
+    ctrl = controller(cfg, system, sandbox_manager=sandboxes)
+    ctrl.prepare_candidate(OLDER, manifest_sha256=older_digest)
+    referenced_database = sandboxes.provisioned[0]
+    candidate_values = ADMISSION._read_backend_environment(
+        cfg.candidate_database_env,
+        expected_uid=cfg.expected_owner_uid,
+        expected_mode=0o600,
+    )
+    preview_values = json.loads(
+        (cfg.preview_runtime_root / "candidate-preview.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    assert candidate_values["APP_CANDIDATE_SANDBOX_DATABASE"] == referenced_database
+    assert preview_values["databaseName"] == referenced_database
+    orphan = "jato_candidate_20260809t110001z_bbbbbbbbbbbbbbbb"
+    sandboxes.provisioned.extend((active_database, orphan))
+    candidate_digest = create_release(cfg.layout, CANDIDATE)
+
+    report = ctrl.prepare_candidate(CANDIDATE, manifest_sha256=candidate_digest)
+
+    scan_calls = [call for call in sandboxes.drop_calls if call[0] is None]
+    assert scan_calls[-1][1] == frozenset({active_database, referenced_database})
+    assert f"orphaned_candidate_sandboxes_removed:1" in report["passed"]
+    assert sandboxes.dropped == [orphan, referenced_database]
+    assert active_database not in sandboxes.dropped
+
+
+def test_prepare_rejects_inactive_preview_database_drift_before_fifo_mutation(
+    tmp_path: Path,
+) -> None:
+    cfg = config(tmp_path)
+    install_active(cfg, ACTIVE)
+    older_digest = create_release(cfg.layout, OLDER)
+    system = FakeSystem()
+    sandboxes = FakeSandboxManager()
+    ctrl = controller(cfg, system, sandbox_manager=sandboxes)
+    ctrl.prepare_candidate(OLDER, manifest_sha256=older_digest)
+    system.units[MODULE.PREVIEW_UNIT]["ActiveState"] = "inactive"
+    system.units[MODULE.PREVIEW_UNIT]["SubState"] = "dead"
+    preview_path = cfg.preview_runtime_root / "candidate-preview.json"
+    preview = json.loads(preview_path.read_text(encoding="utf-8"))
+    preview["databaseName"] = "jato_candidate_20260809t110005z_ffffffffffffffff"
+    preview_path.write_text(json.dumps(preview) + "\n", encoding="utf-8")
+    candidate_digest = create_release(cfg.layout, CANDIDATE)
+
+    with pytest.raises(MODULE.V2Error) as caught:
+        ctrl.prepare_candidate(CANDIDATE, manifest_sha256=candidate_digest)
+
+    assert caught.value.code == "candidate_runtime_inconsistent"
+    assert len(sandboxes.provisioned) == 1
+    assert sandboxes.dropped == []
+    assert STORE.read_pointer(cfg.layout, MODULE.CANDIDATE_SLOT, "current") == OLDER
+
+
+def test_partial_orphan_cleanup_failure_records_database_mutation(
+    tmp_path: Path,
+) -> None:
+    cfg = config(tmp_path)
+    install_active(cfg, ACTIVE)
+    candidate_digest = create_release(cfg.layout, CANDIDATE)
+    first = "jato_candidate_20260809t110002z_cccccccccccccccc"
+    second = "jato_candidate_20260809t110003z_dddddddddddddddd"
+    sandboxes = FakeSandboxManager()
+    sandboxes.provisioned.extend((first, second))
+    sandboxes.fail_drops.add(second)
+    ctrl = controller(cfg, FakeSystem(), sandbox_manager=sandboxes)
+
+    with pytest.raises(MODULE.V2Error) as caught:
+        ctrl.prepare_candidate(CANDIDATE, manifest_sha256=candidate_digest)
+
+    report = latest_report(cfg)
+    assert caught.value.code == "injected_drop_failure"
+    assert caught.value.details["removed"] == [first]
+    assert report["failed"]["details"]["removed"] == [first]
+    assert report["mutation"]["databaseChanged"] is True
+    assert sandboxes.dropped == [first]
+    assert STORE.read_pointer(cfg.layout, MODULE.CANDIDATE_SLOT, "current") is None
+
+
+def test_failed_replacement_restores_old_sandbox_and_drops_only_new(
+    tmp_path: Path,
+) -> None:
+    cfg = config(tmp_path)
+    install_active(cfg, ACTIVE)
+    older_digest = create_release(cfg.layout, OLDER)
+    system = FakeSystem()
+    sandboxes = FakeSandboxManager()
+    ctrl = controller(
+        cfg,
+        system,
+        fail_candidate=True,
+        fail_candidate_for=CANDIDATE,
+        sandbox_manager=sandboxes,
+    )
+    ctrl.prepare_candidate(OLDER, manifest_sha256=older_digest)
+    old_database_env = cfg.candidate_database_env.read_bytes()
+    candidate_digest = create_release(cfg.layout, CANDIDATE)
+
+    with pytest.raises(MODULE.V2Error) as caught:
+        ctrl.prepare_candidate(CANDIDATE, manifest_sha256=candidate_digest)
+
+    assert caught.value.code == "runtime_sha_mismatch"
+    assert cfg.candidate_database_env.read_bytes() == old_database_env
+    assert STORE.read_pointer(cfg.layout, MODULE.CANDIDATE_SLOT, "current") == OLDER
+    assert sandboxes.dropped == [sandboxes.provisioned[1]]
+
+
+def test_old_sandbox_drop_failure_restores_old_and_removes_new(tmp_path: Path) -> None:
+    cfg = config(tmp_path)
+    install_active(cfg, ACTIVE)
+    older_digest = create_release(cfg.layout, OLDER)
+    system = FakeSystem()
+    sandboxes = FakeSandboxManager()
+    ctrl = controller(cfg, system, sandbox_manager=sandboxes)
+    ctrl.prepare_candidate(OLDER, manifest_sha256=older_digest)
+    old_database = sandboxes.provisioned[0]
+    old_database_env = cfg.candidate_database_env.read_bytes()
+    sandboxes.fail_drops.add(old_database)
+    candidate_digest = create_release(cfg.layout, CANDIDATE)
+
+    with pytest.raises(MODULE.V2Error) as caught:
+        ctrl.prepare_candidate(CANDIDATE, manifest_sha256=candidate_digest)
+
+    assert caught.value.code == "injected_drop_failure"
+    assert cfg.candidate_database_env.read_bytes() == old_database_env
+    assert STORE.read_pointer(cfg.layout, MODULE.CANDIDATE_SLOT, "current") == OLDER
+    assert sandboxes.dropped == [sandboxes.provisioned[1]]
+
+
+def test_restore_failure_retains_new_sandbox_for_diagnosis(tmp_path: Path) -> None:
+    cfg = config(tmp_path)
+    install_active(cfg, ACTIVE)
+    older_digest = create_release(cfg.layout, OLDER)
+    system = FakeSystem()
+    sandboxes = FakeSandboxManager()
+    ctrl = controller(
+        cfg,
+        system,
+        fail_candidate=True,
+        fail_candidate_for=CANDIDATE,
+        sandbox_manager=sandboxes,
+    )
+    ctrl.prepare_candidate(OLDER, manifest_sha256=older_digest)
+    system.fail_restart_attempts[MODULE.CANDIDATE_UNIT] = {3}
+    candidate_digest = create_release(cfg.layout, CANDIDATE)
+
+    with pytest.raises(MODULE.V2Error) as caught:
+        ctrl.prepare_candidate(CANDIDATE, manifest_sha256=candidate_digest)
+
+    assert caught.value.code == "candidate_restore_failed"
+    assert sandboxes.dropped == []
+    assert sandboxes.provisioned[1] not in sandboxes.dropped
 
 
 def test_prepare_waits_for_transient_candidate_and_preview_startup(
@@ -1281,7 +1831,6 @@ def test_prepare_failure_restores_running_previous_candidate(tmp_path: Path) -> 
         fail_candidate_for=CANDIDATE,
     )
     install_candidate(ctrl, OLDER, system)
-    ctrl._write_preview_identity(OLDER)
     system.units[MODULE.PREVIEW_UNIT]["ActiveState"] = "active"
     system.units[MODULE.PREVIEW_UNIT]["SubState"] = "running"
     old_env = (cfg.slot_env_root / "8001.env").read_bytes()
@@ -1437,6 +1986,61 @@ def test_discard_candidate_clears_candidate_only(tmp_path: Path) -> None:
     assert "archive_cache_files_removed:0" in report["passed"]
 
 
+def test_discard_drop_failure_retains_pointer_env_and_can_retry(tmp_path: Path) -> None:
+    cfg = config(tmp_path)
+    install_active(cfg, ACTIVE)
+    digest = create_release(cfg.layout, CANDIDATE)
+    system = FakeSystem()
+    sandboxes = FakeSandboxManager()
+    ctrl = controller(cfg, system, sandbox_manager=sandboxes)
+    ctrl.prepare_candidate(CANDIDATE, manifest_sha256=digest)
+    database = sandboxes.provisioned[0]
+    database_env = cfg.candidate_database_env.read_bytes()
+    sandboxes.fail_drops.add(database)
+
+    with pytest.raises(MODULE.V2Error) as caught:
+        ctrl.discard_candidate()
+
+    assert caught.value.code == "injected_drop_failure"
+    assert STORE.read_pointer(cfg.layout, MODULE.CANDIDATE_SLOT, "current") == CANDIDATE
+    assert cfg.candidate_database_env.read_bytes() == database_env
+    assert (cfg.preview_runtime_root / "candidate-preview.json").is_file()
+    sandboxes.fail_drops.clear()
+
+    report = ctrl.discard_candidate()
+
+    assert report["decision"] == "completed"
+    assert sandboxes.dropped == [database]
+    assert STORE.read_pointer(cfg.layout, MODULE.CANDIDATE_SLOT, "current") is None
+
+
+def test_discard_rejects_malicious_marker_before_stopping_candidate(
+    tmp_path: Path,
+) -> None:
+    cfg = config(tmp_path)
+    install_active(cfg, ACTIVE)
+    create_release(cfg.layout, CANDIDATE)
+    system = FakeSystem()
+    sandboxes = FakeSandboxManager()
+    ctrl = controller(cfg, system, sandbox_manager=sandboxes)
+    install_candidate(ctrl, CANDIDATE, system)
+    cfg.candidate_database_env.write_text(
+        "APP_DATABASE_ENABLED=true\n"
+        "APP_DATABASE_URL=postgresql+asyncpg://candidate:secret@db.example/jato\n"
+        "APP_CANDIDATE_SANDBOX_DATABASE=../../jato\n",
+        encoding="utf-8",
+    )
+    cfg.candidate_database_env.chmod(0o600)
+
+    with pytest.raises(MODULE.V2Error) as caught:
+        ctrl.discard_candidate()
+
+    assert caught.value.code == "candidate_database_marker_invalid"
+    assert STORE.read_pointer(cfg.layout, MODULE.CANDIDATE_SLOT, "current") == CANDIDATE
+    assert system.units[MODULE.CANDIDATE_UNIT]["ActiveState"] == "active"
+    assert sandboxes.dropped == []
+
+
 def test_update_active_uses_reviewed_candidate_and_keeps_candidate(tmp_path: Path) -> None:
     cfg = config(tmp_path)
     install_active(cfg, ACTIVE)
@@ -1444,6 +2048,7 @@ def test_update_active_uses_reviewed_candidate_and_keeps_candidate(tmp_path: Pat
     system = FakeSystem()
     ctrl = controller(cfg, system)
     install_candidate(ctrl, CANDIDATE, system)
+    candidate_database_env = cfg.candidate_database_env.read_bytes()
 
     report = ctrl.update_active(CANDIDATE, manifest_sha256=candidate_digest)
 
@@ -1456,6 +2061,7 @@ def test_update_active_uses_reviewed_candidate_and_keeps_candidate(tmp_path: Pat
     assert "APP_RELEASE_ROLE=active" in active_env
     assert f"APP_JATO_MONTHLY_ACTIVE_SLOT_FILE={cfg.active_slot_file}" in active_env
     assert f"APP_JATO_MONTHLY_DEPLOYMENT_MARKER={cfg.deployment_marker}" in active_env
+    assert cfg.candidate_database_env.read_bytes() == candidate_database_env
     assert "archive_cache_files_removed:0" in report["passed"]
     assert "\n" in system.units[MODULE.ACTIVE_UNIT]["EnvironmentFiles"]
 
@@ -2152,8 +2758,7 @@ def test_prepare_accepts_exact_legacy_active_without_modifying_it(tmp_path: Path
     assert os.readlink(active_link) == target_before
     assert active_link.resolve(strict=True) == cfg.legacy_active_root
     assert STORE.read_pointer(cfg.layout, MODULE.CANDIDATE_SLOT, "current") == CANDIDATE
-    assert inspected[0].active_root == cfg.layout.release_path(CANDIDATE)
-    assert inspected[0].candidate_root == cfg.layout.release_path(CANDIDATE)
+    assert inspected == []
     active_mutations = {
         ("systemctl", "restart", MODULE.ACTIVE_UNIT),
         ("systemctl", "stop", MODULE.ACTIVE_UNIT),
@@ -2413,7 +3018,7 @@ def test_discard_candidate_defers_gc_while_active_is_legacy(tmp_path: Path) -> N
     assert active_link.resolve(strict=True) == cfg.legacy_active_root
 
 
-def test_legacy_prepare_rejects_database_mismatch_without_mutating_active(
+def test_legacy_prepare_migrates_only_sandbox_without_mutating_active(
     tmp_path: Path,
 ) -> None:
     cfg = config(tmp_path)
@@ -2436,17 +3041,19 @@ def test_legacy_prepare_rejects_database_mismatch_without_mutating_active(
     before = active_link.lstat()
     target_before = os.readlink(active_link)
 
-    with pytest.raises(MODULE.V2Error) as caught:
-        ctrl.prepare_candidate(CANDIDATE, manifest_sha256=digest)
+    report = ctrl.prepare_candidate(CANDIDATE, manifest_sha256=digest)
 
     after = active_link.lstat()
-    assert caught.value.code == "migration_required"
+    assert report["decision"] == "completed"
     assert after.st_ino == before.st_ino
     assert after.st_mtime_ns == before.st_mtime_ns
     assert os.readlink(active_link) == target_before
-    assert STORE.read_pointer(cfg.layout, MODULE.CANDIDATE_SLOT, "current") is None
+    assert STORE.read_pointer(cfg.layout, MODULE.CANDIDATE_SLOT, "current") == CANDIDATE
     assert not any(
-        command[1] in {"set-property", "restart", "stop"}
+        command[:3] in {
+            ("systemctl", "restart", MODULE.ACTIVE_UNIT),
+            ("systemctl", "stop", MODULE.ACTIVE_UNIT),
+        }
         for command in system.commands
     )
 
@@ -2513,7 +3120,7 @@ def test_fixed_active_contract_matches_existing_nginx_installer() -> None:
     ).read_text(encoding="utf-8") == rendered
 
 
-def test_candidate_systemd_contract_enforces_production_data_read_only() -> None:
+def test_candidate_systemd_contract_allows_only_database_sandbox_writes() -> None:
     payload = (
         DEPLOY
         / "systemd/jato-fullstack-backend@8001.service.d/"
@@ -2521,8 +3128,8 @@ def test_candidate_systemd_contract_enforces_production_data_read_only() -> None
     ).read_text(encoding="utf-8")
 
     assert "EnvironmentFile=/etc/jato-fullstack/candidate-database.env" in payload
-    assert "Environment=APP_RUNTIME_READ_ONLY=true" in payload
-    assert "default_transaction_read_only=on" in payload
+    assert "Environment=APP_RUNTIME_READ_ONLY=false" in payload
+    assert "default_transaction_read_only=on" not in payload
     assert "ProtectSystem=strict" in payload
     assert "NoNewPrivileges=true" in payload
     assert "ReadOnlyPaths=/opt/jato/shared" in payload

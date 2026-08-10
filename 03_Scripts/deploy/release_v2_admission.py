@@ -5,6 +5,7 @@ from __future__ import annotations
 from collections.abc import Callable, Iterator, Mapping
 from contextlib import ExitStack, contextmanager
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 import fcntl
 import json
 import os
@@ -22,6 +23,12 @@ MAX_ENV_BYTES = 2 * 1024 * 1024
 MAX_COMMAND_OUTPUT = 2 * 1024 * 1024
 REVISION_PATTERN = re.compile(r"(?m)^\s*([0-9]{8}_[0-9]{4})\b")
 ENV_KEY_PATTERN = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+CANDIDATE_SANDBOX_DATABASE_PATTERN = re.compile(
+    r"^jato_candidate_[a-z0-9](?:[a-z0-9_]{0,47})$"
+)
+CANDIDATE_SNAPSHOT_AT_PATTERN = re.compile(
+    r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,6})?Z$"
+)
 POSTGRES_SCHEMES = frozenset(
     {"postgres", "postgresql", "postgresql+aiopg", "postgresql+asyncpg",
      "postgresql+psycopg", "postgresql+psycopg2"}
@@ -33,9 +40,11 @@ SAFE_COMMAND_ENV = {
     "PYTHONDONTWRITEBYTECODE": "1",
 }
 CANDIDATE_DATABASE_PRIVILEGE_KEYS = (
-    "transactionReadOnly", "defaultTransactionReadOnly", "roleAttributesReadOnly",
-    "connectAllowed", "databaseCreateDenied", "noUnsafeRoleMemberships",
-    "noSchemaCreate", "noTableWrites", "noSequenceWrites",
+    "connectedToSandbox", "connectedAsCandidateRole", "transactionWritable",
+    "defaultTransactionWritable", "roleAttributesSafe", "sandboxConnectAllowed",
+    "sandboxCreateDenied", "noUnsafeRoleMemberships", "allSchemasUsable",
+    "noSchemaCreate", "allRelationsReadable", "allTablesWritable",
+    "allSequencesWritable", "activeConnectDenied",
 )
 CANDIDATE_DATABASE_PRIVILEGE_PROBE = r'''
 import json
@@ -44,15 +53,20 @@ import os
 import psycopg
 
 keys = (
-    "transactionReadOnly",
-    "defaultTransactionReadOnly",
-    "roleAttributesReadOnly",
-    "connectAllowed",
-    "databaseCreateDenied",
+    "connectedToSandbox",
+    "connectedAsCandidateRole",
+    "transactionWritable",
+    "defaultTransactionWritable",
+    "roleAttributesSafe",
+    "sandboxConnectAllowed",
+    "sandboxCreateDenied",
     "noUnsafeRoleMemberships",
+    "allSchemasUsable",
     "noSchemaCreate",
-    "noTableWrites",
-    "noSequenceWrites",
+    "allRelationsReadable",
+    "allTablesWritable",
+    "allSequencesWritable",
+    "activeConnectDenied",
 )
 query = r"""
 WITH RECURSIVE role_memberships(roleid) AS (
@@ -65,8 +79,10 @@ WITH RECURSIVE role_memberships(roleid) AS (
     JOIN role_memberships AS parent ON membership.member = parent.roleid
 )
 SELECT
-    current_setting('transaction_read_only') = 'on',
-    current_setting('default_transaction_read_only') = 'on',
+    current_database()::text = %(candidate_database)s,
+    current_user::text = %(candidate_role)s,
+    current_setting('transaction_read_only') = 'off',
+    current_setting('default_transaction_read_only') = 'off',
     NOT (
         role.rolsuper OR role.rolcreaterole OR role.rolcreatedb
         OR role.rolreplication OR role.rolbypassrls
@@ -75,14 +91,19 @@ SELECT
     NOT has_database_privilege(current_user, current_database(), 'CREATE'),
     NOT EXISTS (
         SELECT 1
-        FROM role_memberships AS membership
-        JOIN pg_roles AS inherited ON inherited.oid = membership.roleid
-        WHERE inherited.rolname <> 'pg_read_all_data'
+        FROM role_memberships
     ),
     NOT EXISTS (
         SELECT 1
         FROM pg_namespace AS namespace
-        WHERE namespace.nspname NOT LIKE 'pg_%'
+        WHERE left(namespace.nspname, 3) <> 'pg_'
+          AND namespace.nspname <> 'information_schema'
+          AND NOT has_schema_privilege(current_user, namespace.oid, 'USAGE')
+    ),
+    NOT EXISTS (
+        SELECT 1
+        FROM pg_namespace AS namespace
+        WHERE left(namespace.nspname, 3) <> 'pg_'
           AND namespace.nspname <> 'information_schema'
           AND has_schema_privilege(current_user, namespace.oid, 'CREATE')
     ),
@@ -90,36 +111,55 @@ SELECT
         SELECT 1
         FROM pg_class AS relation
         JOIN pg_namespace AS namespace ON namespace.oid = relation.relnamespace
-        WHERE namespace.nspname NOT LIKE 'pg_%'
+        WHERE left(namespace.nspname, 3) <> 'pg_'
           AND namespace.nspname <> 'information_schema'
           AND relation.relkind IN ('r', 'p', 'v', 'm', 'f')
+          AND NOT has_table_privilege(current_user, relation.oid, 'SELECT')
+    ),
+    NOT EXISTS (
+        SELECT 1
+        FROM pg_class AS relation
+        JOIN pg_namespace AS namespace ON namespace.oid = relation.relnamespace
+        WHERE left(namespace.nspname, 3) <> 'pg_'
+          AND namespace.nspname <> 'information_schema'
+          AND relation.relkind IN ('r', 'p', 'f')
           AND (
-              has_table_privilege(current_user, relation.oid, 'INSERT')
-              OR has_table_privilege(current_user, relation.oid, 'UPDATE')
-              OR has_table_privilege(current_user, relation.oid, 'DELETE')
-              OR has_table_privilege(current_user, relation.oid, 'TRUNCATE')
-              OR has_table_privilege(current_user, relation.oid, 'REFERENCES')
-              OR has_table_privilege(current_user, relation.oid, 'TRIGGER')
+              NOT has_table_privilege(current_user, relation.oid, 'INSERT')
+              OR NOT has_table_privilege(current_user, relation.oid, 'UPDATE')
+              OR NOT has_table_privilege(current_user, relation.oid, 'DELETE')
           )
     ),
     NOT EXISTS (
         SELECT 1
         FROM pg_class AS sequence
         JOIN pg_namespace AS namespace ON namespace.oid = sequence.relnamespace
-        WHERE namespace.nspname NOT LIKE 'pg_%'
+        WHERE left(namespace.nspname, 3) <> 'pg_'
           AND namespace.nspname <> 'information_schema'
           AND sequence.relkind = 'S'
           AND (
-              has_sequence_privilege(current_user, sequence.oid, 'USAGE')
-              OR has_sequence_privilege(current_user, sequence.oid, 'UPDATE')
+              NOT has_sequence_privilege(current_user, sequence.oid, 'USAGE')
+              OR NOT has_sequence_privilege(current_user, sequence.oid, 'SELECT')
+              OR NOT has_sequence_privilege(current_user, sequence.oid, 'UPDATE')
           )
+    ),
+    NOT has_database_privilege(
+        current_user,
+        %(active_database)s,
+        'CONNECT'
     )
 FROM pg_roles AS role
 WHERE role.rolname = current_user
 """
 with psycopg.connect(os.environ["APP_DATABASE_URL"], connect_timeout=10) as connection:
     with connection.cursor() as cursor:
-        cursor.execute(query)
+        cursor.execute(
+            query,
+            {
+                "active_database": os.environ["ACTIVE_DATABASE_NAME"],
+                "candidate_database": os.environ["CANDIDATE_DATABASE_NAME"],
+                "candidate_role": os.environ["CANDIDATE_DATABASE_ROLE"],
+            },
+        )
         row = cursor.fetchone()
 if row is None or len(row) != len(keys):
     raise RuntimeError("candidate database role proof returned no role")
@@ -335,6 +375,57 @@ def _database_enabled(values: Mapping[str, str]) -> bool:
     raise AdmissionError("database_env_invalid", "APP_DATABASE_ENABLED is invalid")
 
 
+def _required_boolean(values: Mapping[str, str], key: str) -> bool:
+    if key not in values:
+        raise AdmissionError("candidate_env_invalid", f"{key} must be explicit")
+    raw = values[key].strip().lower()
+    if raw in {"1", "true", "yes", "on"}:
+        return True
+    if raw in {"0", "false", "no", "off"}:
+        return False
+    raise AdmissionError("candidate_env_invalid", f"{key} is invalid")
+
+
+def _candidate_snapshot_at(values: Mapping[str, str]) -> str:
+    raw = values.get("APP_CANDIDATE_SNAPSHOT_AT", "")
+    if not CANDIDATE_SNAPSHOT_AT_PATTERN.fullmatch(raw):
+        raise AdmissionError(
+            "candidate_snapshot_at_invalid",
+            "Candidate database snapshot time must be an explicit UTC ISO timestamp",
+        )
+    try:
+        parsed = datetime.fromisoformat(raw.removesuffix("Z") + "+00:00")
+    except ValueError as exc:
+        raise AdmissionError(
+            "candidate_snapshot_at_invalid",
+            "Candidate database snapshot time must be an explicit UTC ISO timestamp",
+        ) from exc
+    if parsed.tzinfo != timezone.utc:
+        raise AdmissionError(
+            "candidate_snapshot_at_invalid",
+            "Candidate database snapshot time must be UTC",
+        )
+    return raw
+
+
+def _require_candidate_jwt_secret(
+    active: Mapping[str, str],
+    candidate: Mapping[str, str],
+) -> None:
+    secret = candidate.get("APP_JWT_SECRET", "")
+    if secret != secret.strip() or not 32 <= len(secret) <= 4096:
+        raise AdmissionError(
+            "candidate_jwt_secret_invalid",
+            "Candidate JWT secret is missing or too short",
+        )
+    active_secret = active.get("APP_JWT_SECRET", "")
+    if active_secret and secret == active_secret:
+        raise AdmissionError(
+            "candidate_jwt_secret_not_isolated",
+            "Candidate JWT secret must be independent from Active",
+        )
+
+
 def _sync_postgresql_url(url: str) -> str:
     if "://" not in url:
         raise AdmissionError("database_url_invalid", "database URL has no scheme")
@@ -372,7 +463,7 @@ def inspect_candidate_database_isolation(
     *,
     runner: CommandRunner = run_command,
 ) -> dict[str, Any]:
-    """Prove Candidate uses the same database through a SELECT-only role."""
+    """Prove Candidate uses a writable sandbox without access to Active."""
 
     active = _read_backend_environment(
         config.active_env,
@@ -388,21 +479,51 @@ def inspect_candidate_database_isolation(
             "candidate_database_disabled",
             "Active and Candidate database access must both be enabled",
         )
-    active_role, *active_endpoint = _database_identity(
+    active_role, active_host, active_port, active_database = _database_identity(
         active.get("APP_DATABASE_URL", "")
     )
     candidate_url = candidate.get("APP_DATABASE_URL", "")
-    candidate_role, *candidate_endpoint = _database_identity(candidate_url)
+    candidate_role, candidate_host, candidate_port, candidate_database = (
+        _database_identity(candidate_url)
+    )
     if candidate_role == active_role:
         raise AdmissionError(
             "candidate_database_role_not_isolated",
             "Candidate must not use the Active database role",
         )
-    if candidate_endpoint != active_endpoint:
+    if (candidate_host, candidate_port) != (active_host, active_port):
         raise AdmissionError(
-            "candidate_database_target_mismatch",
-            "Candidate database target differs from Active",
+            "candidate_database_cluster_mismatch",
+            "Candidate sandbox must use the Active database cluster",
         )
+    if candidate_database == active_database:
+        raise AdmissionError(
+            "candidate_database_not_isolated",
+            "Candidate must use a database distinct from Active",
+        )
+    sandbox_database = candidate.get("APP_CANDIDATE_SANDBOX_DATABASE", "")
+    if not CANDIDATE_SANDBOX_DATABASE_PATTERN.fullmatch(sandbox_database):
+        raise AdmissionError(
+            "candidate_database_marker_invalid",
+            "Candidate sandbox database marker is unsafe",
+        )
+    if sandbox_database != candidate_database:
+        raise AdmissionError(
+            "candidate_database_marker_mismatch",
+            "Candidate sandbox database marker does not match its URL",
+        )
+    if _required_boolean(candidate, "APP_AUTH_ENABLED") is not False:
+        raise AdmissionError(
+            "candidate_auth_enabled",
+            "Candidate application authentication must be disabled behind its outer gate",
+        )
+    if _required_boolean(candidate, "APP_RUNTIME_READ_ONLY") is not False:
+        raise AdmissionError(
+            "candidate_runtime_read_only",
+            "Candidate runtime must be writable only inside its sandbox",
+        )
+    snapshot_at = _candidate_snapshot_at(candidate)
+    _require_candidate_jwt_secret(active, candidate)
     _require_runtime(
         config.candidate_root,
         config.candidate_python,
@@ -412,11 +533,11 @@ def inspect_candidate_database_isolation(
     environment.update(
         {
             "APP_DATABASE_URL": _native_postgresql_url(candidate_url),
+            "ACTIVE_DATABASE_NAME": active_database,
+            "CANDIDATE_DATABASE_NAME": candidate_database,
+            "CANDIDATE_DATABASE_ROLE": candidate_role,
             "PGCONNECT_TIMEOUT": "10",
-            "PGOPTIONS": (
-                "-c default_transaction_read_only=on "
-                "-c statement_timeout=120000 -c lock_timeout=5000"
-            ),
+            "PGOPTIONS": "-c statement_timeout=120000 -c lock_timeout=5000",
         }
     )
     result = runner(
@@ -454,15 +575,19 @@ def inspect_candidate_database_isolation(
     )
     if failed:
         raise AdmissionError(
-            "candidate_database_privileges_not_read_only",
-            "Candidate database role is not SELECT-only: " + ", ".join(failed),
+            "candidate_database_privileges_unsafe",
+            "Candidate sandbox database admission failed: " + ", ".join(failed),
         )
     return {
         "status": "isolated",
-        "sameDatabase": True,
+        "sameCluster": True,
+        "distinctDatabase": True,
         "distinctRole": True,
+        "writable": True,
+        "activeConnectDenied": True,
         "privilegeProof": True,
         "candidateEnvMode": "0600",
+        "snapshotAt": snapshot_at,
     }
 
 

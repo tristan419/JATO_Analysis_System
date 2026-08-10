@@ -10,6 +10,10 @@ import {
 
 import { apiUrl } from "../api/core";
 import { fetchAuthEndpoint } from "../utils/authFallback";
+import {
+  CANDIDATE_RUNTIME_IDENTITY,
+  isCandidatePreviewOrigin,
+} from "../utils/candidateRuntime";
 
 const AUTH_PROFILE_REFRESH_DELAY_MS = 30_000;
 const AUTH_PROFILE_REFRESH_IDLE_TIMEOUT_MS = 8_000;
@@ -80,6 +84,9 @@ const STORAGE_SECONDARY_COUNTRIES = "jato_secondary_countries";
 const STORAGE_PREFERRED_LANDING = "jato_preferred_landing_page";
 
 function loginUrlAfterLogout(): string {
+  if (isCandidatePreviewOrigin(window.location)) {
+    return `${window.location.origin}/`;
+  }
   if (window.location.hostname === "ojeur.cloud" || window.location.hostname === "www.ojeur.cloud") {
     return "https://www.ojeur.cloud/login";
   }
@@ -129,6 +136,23 @@ function storeUser(user: User): void {
 }
 
 function loadUser(): User | null {
+  if (isCandidatePreviewOrigin(window.location)) {
+    const candidateUser: User = {
+      username: CANDIDATE_RUNTIME_IDENTITY.username,
+      role: CANDIDATE_RUNTIME_IDENTITY.role,
+      email: null,
+      oauthProvider: null,
+      avatarUrl: null,
+      displayName: null,
+      primaryCountry: null,
+      secondaryCountries: [],
+      preferredLandingPage: null,
+      profileComplete: false,
+    };
+    localStorage.removeItem(STORAGE_TOKEN);
+    storeUser(candidateUser);
+    return candidateUser;
+  }
   const username = localStorage.getItem(STORAGE_USER) || import.meta.env.VITE_USER_NAME || "anonymous";
   const role = localStorage.getItem(STORAGE_ROLE) || "viewer";
   // When running with the dev token (auth disabled), default to admin so
@@ -173,19 +197,25 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const refreshUser = useCallback(async () => {
-    const currentToken = (
-      localStorage.getItem(STORAGE_TOKEN)
-      || import.meta.env.VITE_AUTH_TOKEN
-      || ""
-    ).trim();
-    if (!currentToken) {
+    const candidateOrigin = isCandidatePreviewOrigin(window.location);
+    const currentToken = candidateOrigin
+      ? ""
+      : (
+        localStorage.getItem(STORAGE_TOKEN)
+        || import.meta.env.VITE_AUTH_TOKEN
+        || ""
+      ).trim();
+    if (!candidateOrigin && !currentToken) {
       setProfileLoaded(true);
       return;
     }
+    const username = candidateOrigin
+      ? CANDIDATE_RUNTIME_IDENTITY.username
+      : localStorage.getItem(STORAGE_USER) || import.meta.env.VITE_USER_NAME || "anonymous";
     const res = await fetchAuthEndpoint("/auth/me", {
       headers: {
-        "X-Auth-Token": currentToken,
-        "X-User-Name": localStorage.getItem(STORAGE_USER) || import.meta.env.VITE_USER_NAME || "anonymous",
+        ...(currentToken ? { "X-Auth-Token": currentToken } : {}),
+        "X-User-Name": username,
       },
     });
     if (!res.ok) {
@@ -200,6 +230,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   // Handle OAuth callback (token in URL params from Google / Feishu)
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
+    if (isCandidatePreviewOrigin(window.location)) {
+      if (params.has("token") || params.has("username") || params.has("role")) {
+        window.history.replaceState({}, "", window.location.pathname);
+      }
+      return;
+    }
     const urlToken = params.get("token");
     const urlUser = params.get("username");
     const urlRole = params.get("role");
@@ -230,6 +266,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, [applyUser]);
 
   useEffect(() => {
+    if (isCandidatePreviewOrigin(window.location)) {
+      void refreshUser();
+      return undefined;
+    }
     const currentToken = (
       localStorage.getItem(STORAGE_TOKEN)
       || import.meta.env.VITE_AUTH_TOKEN

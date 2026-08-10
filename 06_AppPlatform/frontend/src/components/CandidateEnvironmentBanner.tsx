@@ -1,21 +1,21 @@
 import { useEffect, useLayoutEffect, useState } from "react";
 import type { ReactElement } from "react";
+import { isCandidatePreviewOrigin } from "../utils/candidateRuntime";
 
 const CANDIDATE_METADATA_URL = "/candidate-preview.json";
 const FULL_SHA_PATTERN = /^[0-9a-f]{40}$/;
 const ARCHIVE_SHA256_PATTERN = /^[0-9a-f]{64}$/;
+const UTC_TIMESTAMP_PATTERN = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,6})?Z$/;
+const SANDBOX_DATABASE_PATTERN = /^jato_candidate_[a-z0-9](?:[a-z0-9_]{0,47})$/;
 
 export interface CandidatePreviewMetadata {
   role: "candidate";
   commitSha: string;
   archiveSha256: string;
+  databaseName: string;
+  databaseSnapshotAt: string;
   candidateSlot: 8001;
   previewPort: number;
-}
-
-interface CandidateLocation {
-  hostname: string;
-  port: string;
 }
 
 type CandidateBannerState =
@@ -23,12 +23,6 @@ type CandidateBannerState =
   | { status: "verified"; metadata: CandidatePreviewMetadata }
   | { status: "unverified" }
   | { status: "inactive" };
-
-export function isCandidatePreviewOrigin(location: CandidateLocation): boolean {
-  const hostname = location.hostname.toLowerCase().replace(/\.$/, "");
-  if (hostname === "candidate.ojeur.cloud") return location.port === "";
-  return (hostname === "127.0.0.1" || hostname === "localhost") && location.port === "18002";
-}
 
 export function parseCandidatePreviewMetadata(value: unknown): CandidatePreviewMetadata | null {
   if (!value || typeof value !== "object" || Array.isArray(value)) return null;
@@ -39,6 +33,11 @@ export function parseCandidatePreviewMetadata(value: unknown): CandidatePreviewM
     || !FULL_SHA_PATTERN.test(record.commitSha)
     || typeof record.archiveSha256 !== "string"
     || !ARCHIVE_SHA256_PATTERN.test(record.archiveSha256)
+    || typeof record.databaseName !== "string"
+    || !SANDBOX_DATABASE_PATTERN.test(record.databaseName)
+    || typeof record.databaseSnapshotAt !== "string"
+    || !UTC_TIMESTAMP_PATTERN.test(record.databaseSnapshotAt)
+    || Number.isNaN(Date.parse(record.databaseSnapshotAt))
     || record.candidateSlot !== 8001
     || record.previewPort !== 18002
   ) {
@@ -48,6 +47,8 @@ export function parseCandidatePreviewMetadata(value: unknown): CandidatePreviewM
     role: "candidate",
     commitSha: record.commitSha,
     archiveSha256: record.archiveSha256,
+    databaseName: record.databaseName,
+    databaseSnapshotAt: record.databaseSnapshotAt,
     candidateSlot: record.candidateSlot,
     previewPort: record.previewPort,
   };
@@ -124,6 +125,10 @@ export function CandidateEnvironmentBanner(): ReactElement | null {
       </span>
       <span>
         artifact <code title={metadata.archiveSha256}>{metadata.archiveSha256.slice(0, 12)}</code>
+      </span>
+      <span>数据库快照 {new Date(metadata.databaseSnapshotAt).toLocaleString()}</span>
+      <span>
+        数据库沙箱 <code title={metadata.databaseName}>{metadata.databaseName.slice(-8)}</code>
       </span>
       <span>物理诊断 slot {metadata.candidateSlot}（角色固定，不互换）</span>
     </aside>
