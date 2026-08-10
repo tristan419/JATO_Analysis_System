@@ -10,17 +10,17 @@ goal_control:
     把同一已测试构件更新到正式 www Active。Candidate 测试数据永不进入 Active；
     intl 继续使用既有的 Active 到 intl 独立同步流程，不在 V2 中新增编排。
   current_phase: auto_prepare_candidate_freshness
-  current_step: draft_pull_request_open_ci_in_progress
-  waiting_on: pull_request_224_required_ci_then_explicit_merge_authorization
+  current_step: draft_pull_request_ci_green
+  waiting_on: explicit_ready_and_merge_authorization_for_pull_request_224
   pause_reason: none
   next_action: >-
     只复用现有 production-release prepare-candidate 实现“main CI 成功后准备最新
     Candidate”，并在现有 Candidate banner 增加当前 main 新鲜度判定；删除会在
     Candidate prepare 后误审 intl 的过时 intl-edge-prewarm 自动 workflow，不改独立
     sync-www-active-to-intl。candidate-preview GitHub environment 与固定 SSH host key 已配置，
-    本地代码、独立审查和测试已经完成，Draft PR #224 已创建。下一步只监听 required CI；
-    Ready/合并仍需用户单独授权，合并后首次真实自动 prepare 才能验收。禁止自动更新
-    Active 或同步 intl。
+    本地代码、独立审查和测试已经完成，Draft PR #224 的 required CI 已全部通过。
+    下一步必须等待用户单独授权 Ready/合并；合并后监听 main CI 与首次真实自动 prepare。
+    禁止自动更新 Active 或同步 intl。
   release_authorization_contract:
     source_path: main_to_candidate_to_explicit_user_approval_to_active
     main_may_advance_without_active: true
@@ -121,7 +121,7 @@ goal_control:
     frontend_build_and_router_checks_passed: true
     full_local_ci_after_final_runtime_code: true_scripts_and_frontend
     post_ci_changes_documentation_only: false_current_branch_includes_runtime_workflow_and_banner
-    ci_validation_complete: false_current_auto_prepare_not_pushed
+    ci_validation_complete: true_pull_request_224_head_6994eade
     candidate_sandbox_initial_ci_failure: fullstack_frontend_vite_auth_token_test_environment_leak
     candidate_sandbox_ci_fix_scope: one_test_file_plus_goal_no_production_code
     candidate_sandbox_ci_fix_local_validation: 373_tests_types_build_router_passed_with_github_env
@@ -136,7 +136,7 @@ goal_control:
     candidate_sandbox_draft_ready_for_human_review: true
     previous_pull_request_214_merged: true_main_30f3e2e4
     current_fix_commit: 20f082f4dbb64a4e56b4b67f1a93590b445603ec
-    current_fix_github_checks: pending_pull_request_224
+    current_fix_github_checks: all_required_green_on_pull_request_224_head_6994eade
     pull_request_opened: true
     pull_request_number: 224
     pull_request_url: https://github.com/tristan419/JATO_Analysis_System/pull/224
@@ -234,6 +234,7 @@ goal_control:
     automatic_prepare_local_validation: 232_focused_and_1296_all_scripts_15_skipped_two_validators_bash_n_pycompile
     automatic_prepare_pull_request: 224_draft
     automatic_prepare_implementation_commit: 20f082f4dbb64a4e56b4b67f1a93590b445603ec
+    automatic_prepare_pull_request_checks: all_required_green_on_6994eade_before_final_goal_evidence_commit
     candidate_preview_permission_boundary: logical_code_pr_environment_not_restricted_ssh_principal
     candidate_preview_banner_refresh: mount_focus_and_visible_no_polling
     candidate_preview_environment_configured: true_main_only_no_reviewer_no_wait
@@ -270,7 +271,7 @@ goal_control:
     - observed_server_state_contradicts_documented_baseline
     - change_would_touch_active_or_intl_database_content
     - change_would_cross_this_pr_scope
-  updated_at: "2026-08-10T16:33:24+08:00"
+  updated_at: "2026-08-10T16:38:30+08:00"
 ---
 
 # Fixed Active / Candidate Release V2
