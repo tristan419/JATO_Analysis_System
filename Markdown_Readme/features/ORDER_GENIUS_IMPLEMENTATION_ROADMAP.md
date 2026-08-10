@@ -1,7 +1,21 @@
 # Order Genius — 当前状态与待办
 
 > 当前版本: V1.5 | 目标版本: V2 | V2 spec: [ORDER_GENIUS_V2_SPEC.md](./ORDER_GENIUS_V2_SPEC.md)
-> 更新: 2026-06-17
+> 更新: 2026-08-07
+
+## 当前开发基线
+
+- BOM Admin / Order Genius 的新开发必须从当时最新的远端 `main` 创建独立
+  worktree、branch 和 PR，不再沿用固定的长期 BOM 分支。
+- 2026-08-07 的过渡分支是
+  `codex/bom-admin-edit-scope-current-main`，基于
+  `main@37a9905cebd0ccaf5147314f6cedb639f95a25ca`，只重放旧 PR #173 中已确认
+  仍缺失的行级编辑修复及其测试。
+- `codex/bom-colour-rule-library`、`codex/bom-admin-followup` 和旧
+  `JATO_Analysis_System_bom_admin` worktree 仅用于历史审计；禁止把整支历史
+  branch 合回新开发线。
+- 当前过渡 PR 合并后，下一个 BOM 功能仍应从届时最新 `main` 新建分支，不能
+  把本节记录的过渡分支继续当作永久开发入口。
 
 ## V1.5 已实现
 
