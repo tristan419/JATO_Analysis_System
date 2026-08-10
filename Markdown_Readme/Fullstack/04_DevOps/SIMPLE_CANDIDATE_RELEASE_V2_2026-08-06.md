@@ -9,23 +9,22 @@ goal_control:
     页面显示候选代码、当前 main 和数据快照时间。完成腾讯云人工验收后，再由用户授权
     把同一已测试构件更新到正式 www Active。Candidate 测试数据永不进入 Active；
     intl 继续使用既有的 Active 到 intl 独立同步流程，不在 V2 中新增编排。
-  current_phase: auto_prepare_candidate_freshness
-  current_step: draft_pull_request_ci_green
-  waiting_on: explicit_ready_and_merge_authorization_for_pull_request_224
+  current_phase: candidate_manual_business_acceptance
+  current_step: automatic_candidate_ready_for_user_test
+  waiting_on: user_manual_test_at_candidate_ojeur_cloud
   pause_reason: none
   next_action: >-
-    只复用现有 production-release prepare-candidate 实现“main CI 成功后准备最新
-    Candidate”，并在现有 Candidate banner 增加当前 main 新鲜度判定；删除会在
-    Candidate prepare 后误审 intl 的过时 intl-edge-prewarm 自动 workflow，不改独立
-    sync-www-active-to-intl。candidate-preview GitHub environment 与固定 SSH host key 已配置，
-    本地代码、独立审查和测试已经完成，Draft PR #224 的 required CI 已全部通过。
-    下一步必须等待用户单独授权 Ready/合并；合并后监听 main CI 与首次真实自动 prepare。
-    禁止自动更新 Active 或同步 intl。
+    PR #224 已合并为 main@f29cf5096b528e2c0350047f2bc462cc8bfc8696；main CI
+    31372326579 成功后，workflow_run 31372523132 已自动、仅执行
+    prepare-candidate，candidate-preview deployment 5829166016 成功。Candidate 已指向
+    该精确构件与新生产快照沙箱，Active、正式流量、intl 与 JATO 数据未变。
+    下一步由用户打开 candidate.ojeur.cloud 人工测试页面与业务行为；
+    update-active、rollback-active 和 intl 同步仍须各自单独授权，不自动执行。
   release_authorization_contract:
     source_path: main_to_candidate_to_explicit_user_approval_to_active
     main_may_advance_without_active: true
     candidate_may_be_replaced_repeatedly: true
-    successful_main_ci_may_prepare_candidate_automatically: implemented_local_not_merged
+    successful_main_ci_may_prepare_candidate_automatically: true_verified_run_31372523132
     candidate_may_update_active_automatically: false
     candidate_may_update_intl: false
     active_requires_explicit_user_approval: true
@@ -36,9 +35,9 @@ goal_control:
     intl_failure_preserves_www_active: true
   progress:
     worktree_ready: true
-    worktree: /Users/litristan/.codex/worktrees/auto-prepare-candidate-freshness/JATO_Analysis_System
-    branch: codex/auto-prepare-candidate-freshness
-    base_main_sha: 54b32de9681c34c358cb07dbdd3b6690e8098736
+    worktree: /Users/litristan/.codex/worktrees/candidate-auto-chain-evidence/JATO_Analysis_System
+    branch: codex/candidate-auto-chain-evidence
+    base_main_sha: f29cf5096b528e2c0350047f2bc462cc8bfc8696
     remote_main_matches_base: true
     design_recorded: true
     historical_inventory_evidence_recorded_below: true
@@ -109,7 +108,7 @@ goal_control:
     v1_incident_workflow_entries_removed: true_local
     v1_deep_source_cleanup_deferred_to_phase_b: true
     v2_active_baseline_resolver_complete: false
-    candidate_indirect_intl_prewarm_decoupled: true_local_obsolete_follower_removed
+    candidate_indirect_intl_prewarm_decoupled: true_merged_obsolete_follower_deleted
     intl_workflow_files_modified: true_only_obsolete_follower_removed_sync_unchanged
     candidate_external_side_effect_sandbox: false_documented_operator_limit
     runtime_python_lines: 4882_after_final_p2_closure
@@ -120,8 +119,9 @@ goal_control:
     frontend_tests_passed: 391_current_auto_prepare_branch
     frontend_build_and_router_checks_passed: true
     full_local_ci_after_final_runtime_code: true_scripts_and_frontend
-    post_ci_changes_documentation_only: false_current_branch_includes_runtime_workflow_and_banner
-    ci_validation_complete: true_pull_request_224_head_6994eade
+    automatic_prepare_implementation_post_ci_changes: false_pr_224_included_runtime_workflow_and_banner
+    post_ci_changes_documentation_only: true_goal_evidence_followup_only
+    ci_validation_complete: true_main_ci_run_31372326579
     candidate_sandbox_initial_ci_failure: fullstack_frontend_vite_auth_token_test_environment_leak
     candidate_sandbox_ci_fix_scope: one_test_file_plus_goal_no_production_code
     candidate_sandbox_ci_fix_local_validation: 373_tests_types_build_router_passed_with_github_env
@@ -137,10 +137,10 @@ goal_control:
     previous_pull_request_214_merged: true_main_30f3e2e4
     current_fix_commit: 20f082f4dbb64a4e56b4b67f1a93590b445603ec
     current_fix_github_checks: all_required_green_on_pull_request_224_head_6994eade
-    pull_request_opened: true
+    pull_request_opened: false_merged
     pull_request_number: 224
     pull_request_url: https://github.com/tristan419/JATO_Analysis_System/pull/224
-    pull_request_is_draft: true
+    pull_request_is_draft: false_merged
     previous_pull_request_217_merged: true_main_619466e8
     candidate_public_gateway_commit: 991a44f8499a1210317aafb5da1f3183b7ee0769
     candidate_fixed_public_link_required: true
@@ -225,23 +225,23 @@ goal_control:
     candidate_database_orphans_removed_in_first_success: 0_none_present
     candidate_database_active_connect_denied: true
     candidate_monthly_worker_disabled_on_server: true
-    candidate_preview_current_main_comparison: true_local_verified_391_frontend_tests
-    automatic_prepare_after_main_ci: true_local_exact_ci_source_validated
+    candidate_preview_current_main_comparison: true_deployed_manual_ui_acceptance_pending
+    automatic_prepare_after_main_ci: true_verified_run_31372523132
     automatic_prepare_live_main_rechecks: 2_before_server_upload_and_candidate_mutation
     automatic_prepare_same_release_idempotent: true_exact_identity_and_runtime_verified
     automatic_prepare_manual_refresh_preserved: true
     automatic_prepare_independent_review: passed_after_p1_closure_no_open_p0_p1
     automatic_prepare_local_validation: 232_focused_and_1296_all_scripts_15_skipped_two_validators_bash_n_pycompile
-    automatic_prepare_pull_request: 224_draft
+    automatic_prepare_pull_request: 224_merged_main_f29cf5096b528e2c0350047f2bc462cc8bfc8696
     automatic_prepare_implementation_commit: 20f082f4dbb64a4e56b4b67f1a93590b445603ec
-    automatic_prepare_pull_request_checks: all_required_green_on_6994eade_before_final_goal_evidence_commit
+    automatic_prepare_pull_request_checks: all_required_green_then_merged
     candidate_preview_permission_boundary: logical_code_pr_environment_not_restricted_ssh_principal
     candidate_preview_banner_refresh: mount_focus_and_visible_no_polling
     candidate_preview_environment_configured: true_main_only_no_reviewer_no_wait
     candidate_preview_ssh_known_hosts_configured: true_verified_metadata_for_150_158_141_14
-    candidate_preview_environment_deployment_triggered: false
+    candidate_preview_environment_deployment_triggered: true_success_deployment_5829166016
     obsolete_intl_edge_prewarm_failure_run: 31363402536
-    obsolete_intl_edge_prewarm_removal: true_local_file_removed_sync_unchanged
+    obsolete_intl_edge_prewarm_removal: true_merged_workflow_deleted_sync_unchanged
     existing_sync_www_active_to_intl_changed: false
     active_unchanged_by_first_writable_prepare: true
     intl_unchanged_by_first_writable_prepare: true
@@ -249,11 +249,34 @@ goal_control:
     existing_v2_goal_assessment: partially_achieved_candidate_ready_active_cutover_unverified
     existing_v2_core_code_complete: true
     existing_v2_fixed_candidate_link_complete: true
-    existing_v2_server_prepare_verified: true_writable_candidate_run_31362670385
+    existing_v2_server_prepare_verified: true_automatic_run_31372523132
     existing_v2_server_update_active_verified: false
     existing_v2_server_distinct_rollback_verified: false
-    existing_v2_writable_business_test_ready: true_candidate_main_54b32de9
+    existing_v2_writable_business_test_ready: true_candidate_main_f29cf509
     production_changed: candidate_only_active_and_intl_unchanged
+    automatic_prepare_merge_sha: f29cf5096b528e2c0350047f2bc462cc8bfc8696
+    automatic_prepare_main_ci_run: 31372326579_success
+    automatic_prepare_workflow_run: 31372523132_workflow_run_success
+    automatic_prepare_candidate_deployment: 5829166016_success
+    automatic_prepare_diagnostics_artifact: 9056998956
+    automatic_prepare_operation_report: /opt/jato/operation-reports/2026-08-10T091207790Z-prepare-candidate-48c51183.json
+    automatic_prepare_archive_sha256: 758b610516d74f976ee08a199c4d9e36d4fff9086eab2a7fa387226efcd8bc29
+    automatic_prepare_manifest_sha256: cb9c355866058a75c6046ebe76493320f4ee47a7576b04cd8c34f4438d59653b
+    automatic_prepare_previous_sandbox_removed: 1
+    automatic_prepare_orphan_sandboxes_removed: 0
+    automatic_prepare_candidate_cgroup: 3g_high_4g_max
+    automatic_prepare_preview_cgroup: 256m_high_512m_max
+    automatic_prepare_candidate_monthly_worker: disabled_verified
+    automatic_prepare_candidate_database: isolated_writable_snapshot_verified
+    automatic_prepare_active_cgroup: unchanged_6g_high_8g_max
+    automatic_prepare_traffic_changed: false
+    automatic_prepare_jato_data_changed: false
+    automatic_prepare_intl_sync_runs: 0
+    obsolete_intl_edge_prewarm_state: deleted
+    automatic_prepare_hermes_devsync_run: 31372326667_waiting_untouched
+    automatic_prepare_release_gc: deferred_pointer_target_outside_store_legacy_warning
+    automatic_prepare_archive_cache_gc: deferred_for_legacy_active_warning
+    automatic_prepare_next_action: user_manual_test_at_candidate_ojeur_cloud
   may_continue_without_new_authorization:
     - local_read_only_audit
     - documentation_updates
@@ -262,7 +285,7 @@ goal_control:
   explicit_authorization_required:
     - server_bootstrap_or_cleanup
     - manual_candidate_sandbox_provision_or_rotation_outside_prepare
-    - prepare_candidate_on_tencent_until_auto_prepare_is_enabled
+    - manual_prepare_candidate_refresh_or_replace
     - update_or_rollback_active
     - merge_pull_request
     - active_production_release_or_intl_sync
@@ -271,20 +294,19 @@ goal_control:
     - observed_server_state_contradicts_documented_baseline
     - change_would_touch_active_or_intl_database_content
     - change_would_cross_this_pr_scope
-  updated_at: "2026-08-10T16:38:30+08:00"
+  updated_at: "2026-08-10T17:20:40+08:00"
 ---
 
 # Fixed Active / Candidate Release V2
 
 > 状态：实施中
 > 开始日期：2026-08-06
-> worktree：`/Users/litristan/.codex/worktrees/auto-prepare-candidate-freshness/JATO_Analysis_System`
-> branch：`codex/auto-prepare-candidate-freshness`
-> 基线：`main@54b32de9681c34c358cb07dbdd3b6690e8098736`
-> 当前 PR scope：只把已有 `prepare-candidate` 接到成功的 main CI 后，并让已有
-> Candidate banner 判断当前 Candidate 是否等于最新 main；仅在既有 controller 的
-> `prepare-candidate` 增加自动同构件幂等复用策略，不增加第五操作，也不改 Active、intl、
-> 数据库业务数据、BOM 业务或 JATO 数据
+> worktree：`/Users/litristan/.codex/worktrees/candidate-auto-chain-evidence/JATO_Analysis_System`
+> branch：`codex/candidate-auto-chain-evidence`
+> 基线：`main@f29cf5096b528e2c0350047f2bc462cc8bfc8696`
+> 当前 PR scope：仅回写 #224 合并后首次真实自动 Candidate 链路证据与 Goal
+> 下一步；不改 workflow、controller、前后端、Active、intl、数据库业务数据
+> 或 JATO 数据。
 
 ## 0. Goal Control 使用规则
 
@@ -318,24 +340,33 @@ goal_control:
   禁用月更 worker、独立可写沙箱和 Active CONNECT 拒绝均已经腾讯云验收。
 - 该 prepare 仅更新 Candidate；Active、intl 和 JATO 数据均未变。Candidate 可在固定
   `candidate.ojeur.cloud` 中进行可写业务测试，写入不进入 Active。
+- [PR #224](https://github.com/tristan419/JATO_Analysis_System/pull/224) 已合并为
+  `main@f29cf5096b528e2c0350047f2bc462cc8bfc8696`。同 SHA 的
+  [main CI 31372326579](https://github.com/tristan419/JATO_Analysis_System/actions/runs/31372326579)
+  成功后，仅由成功 `workflow_run` 自动触发
+  [production-release 31372523132](https://github.com/tristan419/JATO_Analysis_System/actions/runs/31372523132)；
+  `candidate-preview` deployment `5829166016` 终态为 success。
+- 这次自动 prepare 绑定 commit `f29cf509…`、archive
+  `758b6105…bc29` 与 manifest `cb9c3558…59653b`；追加式报告为
+  `/opt/jato/operation-reports/2026-08-10T091207790Z-prepare-candidate-48c51183.json`，
+  GitHub diagnostics artifact 为 `9056998956`。
+- FIFO 已在第二次成功 prepare 真实验证：新沙箱通过后删除前一沙箱 `1`，
+  orphan 清理为 `0`。Candidate 保持 3G/4G，preview 保持 256M/512M，月更禁用且
+  数据库隔离验证通过；Active 始终为 6G/8G。报告明确
+  `trafficChanged=false`、`jatoDataChanged=false`。
+- 该 SHA 没有 `sync-www-active-to-intl` 运行；该 workflow 自仓库建立以来仍为 `0` 次运行。
+  过时 `intl-edge-prewarm` 已删除。同 SHA 的 Hermes devsync `31372326667` 仍在
+  `waiting`，本次没有批准或触碰。
 
 尚未达成：
 
-- `main` 目前只自动触发 CI，尚不会自动生成 Candidate；此次成功 prepare 仍是在用户
-  授权后人工 dispatch。
-- Candidate banner 已验证自身 commit/artifact/沙箱/快照身份，但尚未与 GitHub
-  当前 `main` 比较；因此 main 后续前进时，旧 Candidate 不会主动显示“已过期”。
-- 专用 `candidate-preview` GitHub environment 已创建，仅允许 main，无 reviewer/wait；
-  `SSH_KNOWN_HOSTS` 已从本机信任的 `150.158.141.14` known_hosts 写入并验证元数据。
-  但这次配置没有触发部署，main CI 后真实自动 prepare 仍待代码合并后验收。
-- 现有过时 `intl-edge-prewarm` 在成功 Candidate prepare 后误对 intl 执行自动预热/审计，
-  [run 31363402536](https://github.com/tristan419/JATO_Analysis_System/actions/runs/31363402536) 因此失败。
-  本 PR 将删除该过时自动 workflow；既有独立 `sync-www-active-to-intl` 保持不变。
+- 用户尚未在 `candidate.ojeur.cloud` 完成这一精确 Candidate 的人工页面与业务验收。
 - `update-active` 尚未在当前 V2 服务器链路完成一次用户批准后的正式切换验收。
 - 尚未形成 distinct `active.previous`，因此真实服务器 `rollback-active` 也未完成端到端验收。
 
-当前 Goal 的 Candidate 可写沙箱目标已达成，但自动 prepare、main 新鲜度 banner、
-`update-active` 和 distinct rollback 仍未全部闭环，所以整体仍为 `partially_achieved`。
+当前 Goal 的 Candidate 可写沙箱、自动 prepare 和 main 新鲜度 banner 目标已达成；
+人工业务验收、`update-active` 与 distinct rollback 仍未全部闭环，所以整体仍为
+`partially_achieved`。
 
 ## 1. 目标
 
@@ -577,10 +608,14 @@ PR 合并 main -> main CI success -> 确认该 SHA 仍是当前 main
   Active 不变，不将失败转换成 Active 操作。
 - 过时 `intl-edge-prewarm` 将删除；独立 `sync-www-active-to-intl` 不变。
 
-截至本次回写，`candidate-preview` environment 已创建为 main-only、无 reviewer/wait，
-且 `SSH_KNOWN_HOSTS` 已写入并验证元数据；本次配置没有触发部署。自动入口、banner
-和过时 prewarm 删除已完成本地实现与测试，但尚未合并；真实 main CI 后自动 prepare
-仍须在合并后验收。
+截至本次回写，#224 已合并为
+`main@f29cf5096b528e2c0350047f2bc462cc8bfc8696`。main CI `31372326579` 成功后，
+`production-release` `31372523132` 已以 `workflow_run` 事件自动触发，两次 live main
+recheck 都通过后才执行 `prepare-candidate`；`candidate-preview` deployment `5829166016`
+终态为 success。自动链路没有进入 `update-active`、`rollback-active` 或 intl 同步。
+过时 `intl-edge-prewarm` 已删除，既有 `sync-www-active-to-intl` 保持不变且运行数仍为
+`0`。Candidate banner 与自动 prepare 技术链路已完成真实服务器验收；下一步是
+用户在 `candidate.ojeur.cloud` 人工验收页面和业务行为。
 
 ### 4.4 Candidate 正常仍不等于 Active 必然成功
 
@@ -694,8 +729,26 @@ mark-and-sweep 计划；只要 release store 出现未知条目就拒绝清理�
   `orphaned_candidate_sandboxes_removed=0`。
 - Active 继续承担 www 公网，保持 6G/8G 合同；本次未改 Active、intl、生产业务数据
   或 JATO 数据。Candidate 只在新沙箱中写入，测试结果不会被 `update-active` 复制。
-- GitHub `candidate-preview` environment 已设置为 main-only，无 reviewer/wait；固定主机指纹
-  已写入。但自动 launcher 尚未合并，所以该 environment 目前没有发起任何部署。
+- #224 已合并为 `main@f29cf5096b528e2c0350047f2bc462cc8bfc8696`。
+  [main CI 31372326579](https://github.com/tristan419/JATO_Analysis_System/actions/runs/31372326579)
+  终态 success；3 秒后，同 SHA 的
+  [production-release 31372523132](https://github.com/tristan419/JATO_Analysis_System/actions/runs/31372523132)
+  以 `workflow_run` 事件启动并成功完成自动 `prepare-candidate`。
+- `candidate-preview` deployment `5829166016` 终态 success；诊断 artifact `9056998956`
+  包含 operation output 与 sidecar manifest。服务器追加式报告为
+  `/opt/jato/operation-reports/2026-08-10T091207790Z-prepare-candidate-48c51183.json`。
+- 不可变身份为 commit `f29cf5096b528e2c0350047f2bc462cc8bfc8696`、archive
+  `758b610516d74f976ee08a199c4d9e36d4fff9086eab2a7fa387226efcd8bc29` 和 manifest
+  `cb9c355866058a75c6046ebe76493320f4ee47a7576b04cd8c34f4438d59653b`。
+- FIFO 真实运行证据为 `previous_candidate_sandbox_removed:1` 与
+  `orphaned_candidate_sandboxes_removed:0`。Candidate 为 3G/4G，preview 为 256M/512M，
+  月更 worker 禁用且数据库隔离验证通过；Active 前后均为 6G/8G。
+- operation report 明确 `trafficChanged=false`、`jatoDataChanged=false`。
+  `sync-www-active-to-intl` 运行数为 `0`，过时 `intl-edge-prewarm` 已删除；Hermes
+  devsync `31372326667` 仍为 `waiting`，本次未批准、未变更。
+- 唯一非阻断警告来自 legacy 过渡布局：release GC 因
+  `pointer_target_outside_store` 延后，archive cache GC 因 legacy Active 延后。这两项
+  没有逆转 Candidate 成功，也没有改变 Active。
 
 ## 8. 迁移策略
 
@@ -763,6 +816,36 @@ mark-and-sweep 计划；只要 release store 出现未知条目就拒绝清理�
 本 V2 的固定角色目标冲突。本计划接受短重启窗口，不再伪装成零停机蓝绿。
 
 ## 10. 实施日志
+
+### 2026-08-10 / Step 3S：首次 main CI 后自动 Candidate 链路验收成功
+
+- [PR #224](https://github.com/tristan419/JATO_Analysis_System/pull/224) 于 08:56:41Z 合并为
+  `main@f29cf5096b528e2c0350047f2bc462cc8bfc8696`。同 SHA 的
+  [main CI 31372326579](https://github.com/tristan419/JATO_Analysis_System/actions/runs/31372326579)
+  在 08:59:25Z success；3 秒后，
+  [production-release 31372523132](https://github.com/tristan419/JATO_Analysis_System/actions/runs/31372523132)
+  以 `workflow_run` 事件启动，同 SHA 的 `candidate-preview` deployment `5829166016`
+  最终 success。这证明触发图为“main push CI 成功 → 自动 prepare”，不是 main push
+  直接越过 CI 修改服务器。
+- 自动 workflow 在上传前和 Candidate mutation 前分别复核 live main，然后复用既有
+  `prepare-candidate`。最终构件精确绑定 commit `f29cf509…`、archive
+  `758b6105…bc29` 和 manifest `cb9c3558…59653b`；diagnostics artifact 为
+  `9056998956`，追加式 operation report 为
+  `/opt/jato/operation-reports/2026-08-10T091207790Z-prepare-candidate-48c51183.json`。
+- 新沙箱恢复、migration、权限、Candidate backend 与 preview 均验证通过后，FIFO
+  才删除上一沙箱 `1`；未发现 orphan（`0`）。Candidate cgroup 为 3G/4G，preview
+  为 256M/512M，月更 worker 明确禁用，Candidate 数据库与 Active 隔离。
+- Active 在 before/after 均为 running 且保持 6G/8G。报告为
+  `trafficChanged=false`、`jatoDataChanged=false`；没有 `update-active`、
+  `rollback-active` 或 intl 操作。`sync-www-active-to-intl` 保持原文件且历史运行数
+  仍为 `0`，过时 `intl-edge-prewarm` workflow 已删除。Hermes devsync `31372326667`
+  仍在 `waiting`，本次未批准、未变更。
+- GC 只返回两项 legacy 过渡警告：`release_gc_deferred:pointer_target_outside_store`
+  与 `archive_cache_gc_deferred_for_legacy_active`。它们不是 Candidate 失败，也没有触发
+  恢复、流量或 JATO 写入。
+- 自动 prepare 与新鲜度技术链路至此完成真实验收。下一步只是用户在
+  `candidate.ojeur.cloud` 人工测试页面与业务行为。只有用户之后对精确构件单独授权，
+  才可执行 `update-active`；`rollback-active` 和 intl 同步也仍须各自单独授权。
 
 ### 2026-08-10 / Step 3R：首个可写 Candidate 成功，进入自动 prepare/新鲜度阶段
 
