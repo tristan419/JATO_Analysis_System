@@ -14,8 +14,8 @@ goal_control:
   waiting_on: pull_request_226_required_ci_then_explicit_discard_candidate_authorization
   pause_reason: none
   next_action: >-
-    Candidate 严格应用登录已提交到 Draft PR #226，独立复审与本地验证均通过。先等待
-    #226 最新 HEAD 的 required CI；仍不得直接 Ready 或合并。CI 全绿后，需用户单独授权用
+    Candidate 严格应用登录已提交到 Draft PR #226，CI 测试环境隔离修复已完成并通过完整前端验证。
+    仍不得直接 Ready 或合并。CI 全绿后，需用户单独授权用
     当前 main 执行 discard-candidate，验证旧免登录 Candidate、沙箱和指针已清除且 8000/www
     不变。之后才可另行授权合并 #226，让 main CI 自动 prepare 新 Candidate；loopback 严格
     登录验收通过后，才原子移除线上 Basic Auth。禁止自动更新 Active 或同步 intl。
@@ -809,9 +809,14 @@ mark-and-sweep 计划；只要 release store 出现未知条目就拒绝清理�
 - 独立前后端复审终态为 P0=0、P1=0、无阻断型 P2。真实 `OAuthGate` 会在任何 provider
   执行前拒绝 Candidate URL 中的 Active OAuth token，并清除 token/user/role 参数且不写
   localStorage；`/login` 直达路径由 `AuthContext` 使用同一清理规则兜底。
-- 本地证据：Candidate deploy/admission 聚焦测试 `163 passed, 2 skipped`；完整 scripts
+- 本地证据（首次提交时）：Candidate deploy/admission 聚焦测试 `163 passed, 2 skipped`；完整 scripts
   `1299 passed, 15 skipped`；required backend 合同 `73 passed`；完整 frontend
-  `73 files / 397 tests`、TypeScript、production build 与 router regression 全部通过。
+  `73 files / 397 tests`、TypeScript、production build 与 router regression 全部通过。随后 GitHub
+  CI 注入 `VITE_USER_NAME=github-actions`，两个无身份 Candidate 用例未隔离该变量而失败；这不是
+  生产认证合同失败。当前修复让每个用例先清空三项 `VITE_*` 身份变量，并在结束后恢复环境；待完整
+  前端套件和最新 required CI 重新通过后再更新终态证据。2026-08-11 修复后完整前端再次通过
+  `73 files / 397 tests`、TypeScript、production build 与 router regression；下一道门禁仅为
+  #226 最新 HEAD 的 required CI。
 - 实现已提交为 `9b56ad74abdd703d2fb22de757b7b650a623ac8a` 并创建
   [Draft PR #226](https://github.com/tristan419/JATO_Analysis_System/pull/226)。#226 明确禁止直接
   合并；当前只等待 required CI，随后仍须用户单独授权 pre-merge `discard-candidate`。

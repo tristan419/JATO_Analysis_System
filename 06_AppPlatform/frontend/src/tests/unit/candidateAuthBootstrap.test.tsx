@@ -2,7 +2,7 @@
 
 import { cleanup, render, screen, waitFor } from "@testing-library/react";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { OAuthGate } from "../../App";
 import { RequireRole } from "../../components/RequireRole";
@@ -52,9 +52,14 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
+beforeEach(() => {
+  vi.stubEnv("VITE_AUTH_TOKEN", "");
+  vi.stubEnv("VITE_USER_NAME", "");
+  vi.stubEnv("VITE_USER_ROLE", "");
+});
+
 describe("Candidate auth bootstrap", () => {
   it("does not create an admin identity without an application login", () => {
-    vi.stubEnv("VITE_AUTH_TOKEN", "");
     useOrigin("candidate.ojeur.cloud", "");
 
     render(<AuthProvider><AuthState /></AuthProvider>);
@@ -66,7 +71,6 @@ describe("Candidate auth bootstrap", () => {
   });
 
   it("sends an unauthenticated Candidate route to the existing login page", async () => {
-    vi.stubEnv("VITE_AUTH_TOKEN", "");
     useOrigin("candidate.ojeur.cloud", "");
 
     render(
@@ -88,7 +92,6 @@ describe("Candidate auth bootstrap", () => {
   });
 
   it("uses the username/password login page without unavailable Candidate OAuth", () => {
-    vi.stubEnv("VITE_AUTH_TOKEN", "");
     useOrigin("candidate.ojeur.cloud", "");
 
     render(
@@ -103,7 +106,6 @@ describe("Candidate auth bootstrap", () => {
   });
 
   it("keeps Google login visible on the Active origin", () => {
-    vi.stubEnv("VITE_AUTH_TOKEN", "");
     useOrigin("www.ojeur.cloud", "");
 
     render(
@@ -116,7 +118,6 @@ describe("Candidate auth bootstrap", () => {
   });
 
   it("ignores unsupported OAuth callback credentials on Candidate", () => {
-    vi.stubEnv("VITE_AUTH_TOKEN", "");
     useOrigin(
       "candidate.ojeur.cloud",
       "",
@@ -181,7 +182,6 @@ describe("Candidate auth bootstrap", () => {
   });
 
   it("preserves Active stored identity and does not refresh without a token", () => {
-    vi.stubEnv("VITE_AUTH_TOKEN", "");
     useOrigin("www.ojeur.cloud", "");
     localStorage.setItem("jato_user_name", "active-user");
     localStorage.setItem("jato_user_role", "editor");
