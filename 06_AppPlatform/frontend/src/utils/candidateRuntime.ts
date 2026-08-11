@@ -3,11 +3,6 @@ export interface CandidateRuntimeLocation {
   port: string;
 }
 
-export const CANDIDATE_RUNTIME_IDENTITY = {
-  role: "admin",
-  username: "candidate",
-} as const;
-
 export function isCandidatePreviewOrigin(location: CandidateRuntimeLocation): boolean {
   const hostname = location.hostname.toLowerCase().replace(/\.$/, "");
   if (hostname === "candidate.ojeur.cloud") return location.port === "";

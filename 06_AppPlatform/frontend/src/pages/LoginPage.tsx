@@ -2,6 +2,7 @@ import { useState, type FormEvent } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import { useAuth } from "../contexts/AuthContext";
 import { fetchAuthEndpoint } from "../utils/authFallback";
+import { isCandidatePreviewOrigin } from "../utils/candidateRuntime";
 
 export function LoginPage() {
   const { login } = useAuth();
@@ -11,6 +12,7 @@ export function LoginPage() {
   const [password, setPassword] = useState("");
   const [error, setError] = useState(() => searchParams.get("oauthError") || "");
   const [submitting, setSubmitting] = useState(false);
+  const candidateOrigin = isCandidatePreviewOrigin(window.location);
 
   const redirect = searchParams.get("redirect") || "/";
 
@@ -208,44 +210,46 @@ export function LoginPage() {
           {submitting ? "Signing in..." : "Sign in"}
         </button>
 
-        {/* Divider */}
-        <div
-          style={{
-            display: "flex",
-            alignItems: "center",
-            gap: 12,
-            marginBottom: 16,
-          }}
-        >
-          <div style={{ flex: 1, height: 1, background: "#e5e7eb" }} />
-          <span style={{ fontSize: 12, color: "#757575" }}>or</span>
-          <div style={{ flex: 1, height: 1, background: "#e5e7eb" }} />
-        </div>
+        {!candidateOrigin && (
+          <>
+            <div
+              style={{
+                display: "flex",
+                alignItems: "center",
+                gap: 12,
+                marginBottom: 16,
+              }}
+            >
+              <div style={{ flex: 1, height: 1, background: "#e5e7eb" }} />
+              <span style={{ fontSize: 12, color: "#757575" }}>or</span>
+              <div style={{ flex: 1, height: 1, background: "#e5e7eb" }} />
+            </div>
 
-        {/* Google */}
-        <button
-          type="button"
-          onClick={() => handleOAuth("google")}
-          style={{
-            width: "100%",
-            padding: "10px 0",
-            borderRadius: 0,
-            border: "1px solid #d1d5db",
-            background: "#ffffff",
-            color: "#262626",
-            fontSize: 16,
-            fontWeight: 400,
-            cursor: "pointer",
-            lineHeight: 1.15,
-            display: "flex",
-            alignItems: "center",
-            justifyContent: "center",
-            gap: 8,
-          }}
-        >
-          <span style={{ color: "#4285f4", fontWeight: 700 }}>G</span>
-          Continue with Google
-        </button>
+            <button
+              type="button"
+              onClick={() => handleOAuth("google")}
+              style={{
+                width: "100%",
+                padding: "10px 0",
+                borderRadius: 0,
+                border: "1px solid #d1d5db",
+                background: "#ffffff",
+                color: "#262626",
+                fontSize: 16,
+                fontWeight: 400,
+                cursor: "pointer",
+                lineHeight: 1.15,
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "center",
+                gap: 8,
+              }}
+            >
+              <span style={{ color: "#4285f4", fontWeight: 700 }}>G</span>
+              Continue with Google
+            </button>
+          </>
+        )}
       </form>
     </div>
   );

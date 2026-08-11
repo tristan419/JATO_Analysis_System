@@ -1,5 +1,6 @@
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 
 from app.api.cache_headers import response_has_cache_control
 from app.api.routes.assistant import router as assistant_router
@@ -27,11 +28,47 @@ from app.api.routes.advanced_analysis import router as advanced_analysis_router
 from app.api.routes.order_genius import router as order_genius_router
 from app.api.routes.lease_comparison import router as lease_comparison_router
 from app.api.routes.order_genius_vehicle_allocation import router as order_genius_vehicle_allocation_router
-from app.core.config import API_PREFIX, APP_NAME, APP_VERSION, CORS_ORIGINS
+from app.core.config import (
+    API_PREFIX,
+    APP_NAME,
+    APP_VERSION,
+    AUTH_REQUIRED,
+    CORS_ORIGINS,
+)
+from app.core.security import get_authenticated_user
 from app.core.startup_validation import run_startup_validation
 
 run_startup_validation()
 app = FastAPI(title=APP_NAME, version=APP_VERSION)
+
+_AUTH_PUBLIC_PATHS = frozenset(
+    {
+        "/healthz",
+        "/readyz",
+        f"{API_PREFIX}/auth/login",
+    }
+)
+
+
+@app.middleware("http")
+async def enforce_required_auth(request: Request, call_next):
+    if (
+        AUTH_REQUIRED
+        and request.method != "OPTIONS"
+        and request.url.path not in _AUTH_PUBLIC_PATHS
+    ):
+        try:
+            get_authenticated_user(
+                request.headers.get("X-Auth-Token"),
+                request.headers.get("X-User-Name", "anonymous"),
+            )
+        except HTTPException as exc:
+            return JSONResponse(
+                status_code=exc.status_code,
+                content={"detail": exc.detail},
+                headers=exc.headers,
+            )
+    return await call_next(request)
 
 
 @app.middleware("http")
