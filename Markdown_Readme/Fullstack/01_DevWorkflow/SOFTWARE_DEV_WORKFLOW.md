@@ -74,12 +74,17 @@
 
 ### 2.7 部署阶段
 
-按 `MANUAL_CICD.md` / `TENCENT_CLOUD_DEPLOY.md` 执行：
+按 `BRANCH_PR_DEPLOYMENT_GOVERNANCE_2026-07-14.md`、`MANUAL_CICD.md` 和
+`TENCENT_CLOUD_DEPLOY.md` 执行：
 
-1. `git pull` on server
-2. 后端重启（systemd）
-3. 前端重新 build + nginx reload
-4. 远端 smoke check
+1. feature branch 通过 CI 和 preview，不直接进入生产环境
+2. PR 审核后 merge 到受保护的 `main`
+3. CI 从 `main` commit 构建一次 immutable artifact
+4. `www` 和 `intl` 部署同一 artifact
+5. 数据库迁移按审核后的顺序执行，随后重启 backend、切换 frontend
+6. 核对 build metadata，并完成双域名和关键 API smoke check
+
+服务器端不得通过切换或拉取旧 feature branch 作为部署/回滚手段。
 
 ### 2.8 验证阶段
 
@@ -97,6 +102,7 @@ Markdown_Readme/
 │   ├── ROADMAP.md                          # 唯一主索引
 │   ├── FULLSTACK_DEVELOPMENT_SPEC_*.md     # 开发规范
 │   ├── PR_CHECKLIST.md                     # PR 清单
+│   ├── BRANCH_PR_DEPLOYMENT_GOVERNANCE_*.md # 分支、PR、部署、回滚治理
 │   ├── TECH_PATH_*.md                      # 技术路径预研
 │   ├── STREAMLIT_VS_REACT_COMPARISON.md    # 功能对齐
 │   ├── FULLSTACK_LOCAL_DEBUG.md            # 调试指南
@@ -120,12 +126,18 @@ Markdown_Readme/
 
 ## 4. 分支策略
 
-当前采用 trunk-based + feature branch：
+当前采用受保护 main + 短生命周期 feature branch：
 
-1. `main` 分支始终可部署
-2. 功能分支命名：`feat/<scope>-<brief>` / `fix/<scope>-<brief>`
-3. PR 合入前必须本地测试通过
-4. 不使用 `--force push` 除非与团队确认
+1. 一个 session = 一个 worktree = 一个 `codex/*` branch = 一个 PR
+2. 原始混合目录只读，不作为功能开发、提交或部署目录
+3. `main` 始终可部署，并且是唯一生产部署来源
+4. feature / hotfix / integration 分支只允许 CI 和 preview
+5. 禁止直接 push 到 `main`；PR 合入前必须本地测试和 CI 通过
+6. integration 分支只用于临时冲突验证，验证结束后删除
+7. 不使用 force push，不以旧 branch 覆盖生产环境
+
+完整规则及异常处理见
+`BRANCH_PR_DEPLOYMENT_GOVERNANCE_2026-07-14.md`。
 
 ---
 
@@ -150,7 +162,9 @@ PO 提需求后，开发者按以下规则确定文档动作：
 | 本地 | `check:frontend` 全过 | 不允许提交 |
 | 本地 | `pytest tests/unit` 全过 | 不允许提交 |
 | PR | checklist 完整勾选 | 退回修改 |
-| 部署后 | smoke check 通过 | 回滚到上一版本 |
+| PR | feature branch 不包含生产 deploy 权限 | 阻断合并 |
+| 部署 | 来源为受保护 `main` + immutable artifact | 阻断上线 |
+| 部署后 | `www`、`intl`、关键 API smoke check 通过 | 回滚到上一生产 artifact |
 
 ---
 
