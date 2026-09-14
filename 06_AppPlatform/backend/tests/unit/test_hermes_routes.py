@@ -1749,3 +1749,135 @@ class TestMermaidRegex:
         blocks = MERMAID_BLOCK_RE.findall(src)
         assert len(blocks) == 1
         assert blocks[0].strip() == ""
+
+
+def test_msrp_country_progress_returns_structured_source_failure_groups(
+    client,
+    tmp_path,
+):
+    reports_dir = tmp_path / "hermes" / "reports"
+    report = {
+        "schemaVersion": "msrp_dryrun_report_v3",
+        "runId": "msrp-dryrun-20260614-024553",
+        "expectedCountries": ["no"],
+        "observedCountries": ["no"],
+        "missingCountries": [],
+        "duplicateCountries": [],
+        "summary": {
+            "total": 4,
+            "pass": 0,
+            "empty": 4,
+            "fail": 0,
+            "errors": 0,
+            "passPct": 0.0,
+            "gateThreshold": 70,
+            "gateStatus": "blocked",
+        },
+        "countriesDetail": [
+            {
+                "countryCode": "no",
+                "total": 4,
+                "pass": 0,
+                "empty": 4,
+                "fail": 0,
+                "errors": 0,
+                "passPct": 0.0,
+                "status": "failure",
+                "failureBreakdown": {
+                    "http_error": 1,
+                    "json_ld_empty": 2,
+                    "no_observation_extracted": 1,
+                },
+                "strategyRecommendations": {
+                    "diagnose_with_msrp_page_analyzer": 1,
+                    "retry": 1,
+                    "try_css_or_attr_json": 2,
+                },
+                "sources": [],
+            }
+        ],
+        "results": [
+            {
+                "country": "no",
+                "code": "mercedes_eqb_no",
+                "status": "empty",
+                "failureReason": "json_ld_empty",
+                "recommendedStrategy": "try_css_or_attr_json",
+                "sourceUrl": "https://www.mercedes-benz.no/cars/eqb",
+                "finalUrl": (
+                    "https://www.mercedes-benz.no/cars/"
+                    "eqb-ikke-tilgjengelig"
+                ),
+            },
+            {
+                "country": "no",
+                "code": "toyota_yaris_cross_no",
+                "status": "empty",
+                "failureReason": "json_ld_empty",
+                "recommendedStrategy": "try_css_or_attr_json",
+                "sourceUrl": "https://www.toyota.no/nybil/yaris-cross",
+                "finalUrl": "https://www.toyota.no/",
+            },
+            {
+                "country": "no",
+                "code": "tesla_model_y_no",
+                "status": "error",
+                "failureReason": "http_error",
+                "recommendedStrategy": "retry",
+                "sourceUrl": "https://www.tesla.com/no_NO/modely",
+                "httpStatus": 403,
+            },
+            {
+                "country": "no",
+                "code": "volvo_xc60_no",
+                "status": "empty",
+                "failureReason": "no_observation_extracted",
+                "recommendedStrategy": "diagnose_with_msrp_page_analyzer",
+                "sourceUrl": "https://www.volvocars.com/no/cars/xc60/",
+            },
+        ],
+        "generatedAt": "2026-06-14T02:45:53Z",
+    }
+
+    with (
+        patch("app.api.routes.hermes.PROJECT_ROOT", tmp_path),
+        patch("app.api.routes.hermes.REPORTS_DIR", reports_dir),
+        patch(
+            "app.api.routes.hermes._load_latest_indexed_msrp_dryrun_report",
+            return_value=report,
+        ),
+        patch(
+            "app.api.routes.hermes._msrp_dashboard_context",
+            return_value={},
+        ),
+    ):
+        response = client.get("/hermes/msrp-country-progress")
+
+    assert response.status_code == 200
+    data = response.json()
+    assert {item["reason"] for item in data["topFailureReasons"]} == {
+        "forbidden_403",
+        "homepage_redirect",
+        "no_observation_extracted",
+        "official_model_unavailable",
+    }
+    groups = {
+        group["failureReason"]: group
+        for group in data["sourceRepairBacklog"]["groups"]
+    }
+    assert groups["official_model_unavailable"]["issueClass"] == (
+        "source_lifecycle"
+    )
+    assert groups["homepage_redirect"]["sourceLifecycleStatus"] == (
+        "homepage_redirect"
+    )
+    assert groups["forbidden_403"]["issueClass"] == "access_control"
+    assert groups["forbidden_403"]["blockingDisposition"] == (
+        "manual_or_proxy_required"
+    )
+    assert groups["no_observation_extracted"]["issueClass"] == (
+        "extractor_strategy"
+    )
+    assert groups["no_observation_extracted"]["recommendedAction"].startswith(
+        "Repair the selector"
+    )
