@@ -3,7 +3,7 @@ from typing import Callable
 
 from fastapi import Depends, Header, HTTPException
 
-from app.core.config import AUTH_ENABLED, TOKEN_ROLE_MAP
+from app.core.config import AUTH_ENABLED, AUTH_REQUIRED, TOKEN_ROLE_MAP
 from app.services.auth_service import session_store
 
 
@@ -52,10 +52,26 @@ def _token_user(
     return None
 
 
+def get_authenticated_user(
+    x_auth_token: str | None = Header(default=None),
+    x_user_name: str = Header(default="anonymous"),
+) -> UserContext:
+    user = _token_user(x_auth_token, x_user_name)
+    if user is None:
+        raise HTTPException(
+            status_code=401,
+            detail="Authentication required",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+    return user
+
+
 def get_current_user(
     x_auth_token: str | None = Header(default=None),
     x_user_name: str = Header(default="anonymous"),
 ) -> UserContext:
+    if AUTH_REQUIRED:
+        return get_authenticated_user(x_auth_token, x_user_name)
     if not AUTH_ENABLED:
         # Even in dev mode, try token resolution first so role-specific
         # testing (order_filler, editor, etc.) works with real login tokens.
@@ -119,6 +135,8 @@ def get_optional_user(
 ) -> UserContext:
     name = str(x_user_name).strip() or "anonymous"
 
+    if AUTH_REQUIRED:
+        return get_authenticated_user(x_auth_token, name)
     if not AUTH_ENABLED:
         token_user = _token_user(x_auth_token, name)
         if token_user:

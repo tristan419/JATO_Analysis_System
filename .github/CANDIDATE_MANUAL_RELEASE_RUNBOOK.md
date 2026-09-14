@@ -11,7 +11,7 @@ Codex 读取本文件并报告当前状态，再决定是否执行下一步。
 ```text
 main 上的不可变 release
           |
-          | 用户手动启动 prepare-candidate
+          | main CI 成功后自动 prepare-candidate
           v
 Candidate：8001 + 127.0.0.1:18002 人工预览
           + candidate.ojeur.cloud 固定国内测试地址
@@ -30,11 +30,11 @@ www Active -- 用户另行启动 sync-www-active-to-intl --> intl
 
 - Active 固定为端口 `8000`，始终承接 www 正式公网流量。
 - Candidate 固定为端口 `8001`，只用于腾讯云真实环境的人工页面测试。
-- Candidate 预览固定监听 `127.0.0.1:18002`；独立的受认证 HTTPS 网关可以把
+- Candidate 预览固定监听 `127.0.0.1:18002`；独立的 HTTPS 网关可以把
   `candidate.ojeur.cloud` 转发到该 loopback 入口，但不得开放 18002 本身。
 - Active 与 Candidate 的角色和端口不互换；Nginx 正式公网上游始终是 `8000`。
-- 合并代码到 `main` 不会自动部署。只有用户从 `main` 手动 dispatch
-  `prepare-candidate`，才会构建并部署 Candidate。
+- 合并代码到 `main` 后先运行 CI；只有当前 main 的 CI 成功，才会自动构建并部署 Candidate。
+  用户仍可手动 dispatch `prepare-candidate` 强制刷新同一 release 的数据库快照。
 - Candidate 可以反复被新的 `main` release 替换。Candidate 不合格时，Active
   可以长期停留在旧稳定版本。
 - Candidate 通过测试也不会自动更新 Active；必须由用户对精确 release 明确授权
@@ -48,7 +48,7 @@ www Active -- 用户另行启动 sync-www-active-to-intl --> intl
 
 | 操作 | 作用 | 不允许发生的事 |
 | --- | --- | --- |
-| `prepare-candidate` | 从手动 dispatch 的当前 `main` 构建、校验并启动固定 Candidate，等待人工测试。 | 不更新 Active，不改变 www 路由，不同步 intl。 |
+| `prepare-candidate` | 从 CI 已通过的当前 `main` 构建、校验并启动固定 Candidate，等待人工测试；也可手动强制刷新。 | 不更新 Active，不改变 www 路由，不同步 intl。 |
 | `discard-candidate` | 停止 Candidate、撤销预览并清理未被保护指针引用的 Candidate 文件。 | 不更新或重启 Active，不改变 www，不同步 intl。 |
 | `update-active` | 将固定 Active 指向人工验收过的同一 release，重启 8000 并验证公网。 | 不取“最新 main”代替已验收 release，不重新构建，不同步 intl。 |
 | `rollback-active` | 将固定 Active 回到用户明确指定、且仍受 current/previous 指针保护的 release，重启 8000 并验证公网。 | 不隐式猜测 previous，不临时重建旧包，不改变 Candidate 或 intl。 |
@@ -76,7 +76,10 @@ PostgreSQL 可写沙箱中：
   database/schema create，也必须被 Active database 明确拒绝 CONNECT。
 - Candidate 以动态、非 root 的 `jato-candidate` 身份运行；8001 不加载 Active 的
   `backend.env`，只加载自己的 slot env 和 Candidate database env。
-- Candidate 应用内认证关闭，进入页面即为 admin；公网固定入口仍由外层 Basic Auth 保护。
+- Candidate 使用与 www 相同的应用登录页；账号和密码哈希来自本次 Active 数据库快照，
+  登录会话使用 Candidate 独立 JWT secret。Candidate 不再伪造 `candidate/admin` 身份。
+- Candidate 同时设置 `APP_AUTH_REQUIRED=true`，除 `/auth/login`、`/healthz` 和 `/readyz`
+  外，后端请求没有有效 Candidate JWT 时必须返回 401；静态开发 token 必须为空。
 - Candidate 必须显式禁用 JATO 月更、scheduler、Hermes 和预热等后台任务。Candidate
   不是针对邮件、webhook、对象存储等外部副作用的通用沙箱，人工测试不得触发这些操作。
 
@@ -84,10 +87,11 @@ PostgreSQL 可写沙箱中：
 回 Active。查询、筛选、Dashboard、Market Scan、接口兼容、真实性能和结构化错误报告
 仍是基础验收项。
 
-## 4. 从 GitHub 手动运行
+## 4. GitHub 自动准备与手动控制
 
-统一入口：GitHub Actions 中的 `production-release` workflow。运行时必须选择
-`main`，再选择以下四种 `release_mode` 之一。
+统一入口：GitHub Actions 中的 `production-release` workflow。当前 main 的 CI 成功后会
+自动运行 `prepare-candidate`；手动运行时必须选择 `main`，再选择以下四种 `release_mode`
+之一。自动入口永远不能选择 `update-active`、`rollback-active` 或 intl 同步。
 
 ### 4.0 服务器一次性前提
 
@@ -99,19 +103,30 @@ PostgreSQL 可写沙箱中：
 - Candidate 必须已有 root-owned 0600 的 PostgreSQL bootstrap env；其中的专用角色对
   Active database 无 CONNECT，并由 prepare 将 URL 改写到新建的可写沙箱。
 - `candidate.ojeur.cloud` 使用 DNSPod A 记录直达上海腾讯云；必须使用独立 TLS 证书和
-  独立 Nginx vhost，并在所有页面/API 前启用 Basic Auth。密码文件不得进入仓库，建议
-  使用 `root:www-data`、`0640` 的 `/etc/nginx/jato-candidate.htpasswd`。
+  独立 Nginx vhost。公网入口直接展示现有 JATO 登录页，不再叠加浏览器 Basic Auth。
 - Candidate 公网 vhost 只能反代 `127.0.0.1:18002`，不得包含 8000、Active include、
   www/intl 域名或任何 Active fallback。Candidate 不存在时应返回 5xx。
 - 一次性安装必须分两阶段，不能直接启用引用尚不存在证书的 HTTPS 模板：先建立 DNS，
   为 Candidate 准备临时 HTTP-only server block，让现有 Certbot Nginx authenticator 签发
-  独立证书；再生成 Basic Auth、渲染最终模板、执行 `nginx -t`，通过后才原子替换临时
+  独立证书；再渲染最终模板、执行 `nginx -t`，通过后才原子替换临时
   配置并 reload。任一步失败都保留现有 www vhost，不重启 8000/8001。
 - 四个 slot/release/shared 目录、固定 active-slot=8000 和单一生产锁路径必须可信。
 - Candidate/Preview systemd 与 Nginx 合同视为基础设施合同；普通代码发布不自动覆盖
   线上漂移。合同需要升级时先单独审查和安装，不在 Candidate 启动中猜测覆盖。
 - 生产调用面只允许 `fixed-v2`；`legacy-v1` 直接入口必须拒绝。旧源码在阶段 B 删除前
   只能作为不可达历史代码保留。
+
+从旧的“应用免登录 + Basic Auth”合同升级时，必须先用仍接受旧合同的当前 `main`
+显式执行一次 `discard-candidate`。新版本会在创建新沙箱前验证旧 Candidate；若直接合并，
+旧 `APP_AUTH_ENABLED=false` 会被新 admission 正确拒绝，自动 prepare 不会继续。安全顺序是：
+
+1. PR 全绿后，另行授权 `discard-candidate`，证明 8001/18002 已停止且 www Active 未变；
+2. 合并严格应用登录 PR，由 main CI 自动 prepare 新 Candidate；
+3. 保留现有 Basic Auth，从服务器 loopback 验证无/坏 token 为 401、沙箱 admin 登录成功；
+4. 备份 Candidate vhost，删除其中的 `auth_basic`，执行 `nginx -t` 后原子替换并 reload；
+5. 公网验证显示 JATO 登录页，且有效登录后的写入只落 Candidate 沙箱。
+
+任何一步失败都不得改 8000、www Active 或 intl；公网 vhost 切换失败时恢复原 vhost。
 
 legacy Active 第一次进入 V2 采用用户明确选择的最简 `B/B`：先按普通流程准备并人工测试
 Candidate B；只有用户再次明确批准 `update-active` 后，现有控制器才把固定 8000 切到同一
@@ -203,9 +218,13 @@ B 的显式重试只会验证或继续启动 B，不会自动切回 C。只有�
 https://candidate.ojeur.cloud
 ```
 
-浏览器通过独立的 Basic Auth 后，Candidate 应用会直接以 admin 身份进入，不再要求第二次
-JATO 登录。www 的 localStorage 登录态不会跨域带入 Candidate；Candidate 不使用 Active
-OAuth 配置，因此不要用它测试 Google/飞书 OAuth 回调。
+浏览器会直接显示现有 JATO 登录页。使用 Active 快照中已有的账号登录；例如 Active 的
+admin 账号在快照时有效，Candidate 中也会保留相同密码哈希和角色。www 的 localStorage
+登录态不会跨域带入 Candidate，Candidate 会签发自己的 JWT；Candidate 不使用 Active OAuth
+配置，因此 Candidate 登录页只显示用户名和密码，不显示 Google/飞书 OAuth。
+
+`/candidate-preview.json`、`/healthz` 和 `/readyz` 为发布身份与健康检查保留公开只读访问；
+业务 API、OpenAPI 文档和其他后端路径必须先通过 Candidate 应用登录。
 
 该 URL 本身不绑定某个 commit。每次从更新后的 `main` 成功运行 `prepare-candidate`，
 控制器会更新 8001 的 Candidate 指针和 18002 的预览身份；刷新同一个 URL 就会看到最新
@@ -230,12 +249,12 @@ http://127.0.0.1:18002
 
 - 页面显示 `CANDIDATE` 标识及预期完整 SHA；
 - `/candidate-preview.json`、`/healthz` 和 `/readyz` 指向 8001 的同一 release；
-- 外层 Basic Auth、主要页面、API、筛选与性能符合预期；
+- JATO 应用登录、主要页面、API、筛选与性能符合预期；
 - 月更及其他单实例后台任务明确拒绝；普通业务数据库写入只落入 Candidate 沙箱；
 - www Active 在整个测试期间仍为原 SHA 且健康。
 
-三个入口是不同 origin：Candidate 域名只需外层 Basic Auth，应用内直接以 admin 进入；
-本机 18002 没有公网 Basic Auth，也不要求应用登录；www 继续使用正式应用登录。没有一个
+三个入口是不同 origin：Candidate 域名和本机 18002 都使用 Candidate 自己的应用登录会话；
+www 继续使用正式应用登录。Candidate 与 www 的 JWT 和 localStorage 互不复用。没有一个
 健康且身份一致的 Candidate 时，18002 和固定公网地址都必须拒绝，不能回退显示 Active。
 
 ## 6. intl 是后续独立动作
