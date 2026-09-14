@@ -1,8 +1,17 @@
 # MSRP 文档索引
 
-日期：2026-04-18
+日期：2026-09-14（恢复入口更新；下方旧执行统计保留原日期）
 
 这个目录把 Fullstack 下所有 MSRP 功能开发文档按功能阶段归档，避免再散落在根目录。
+
+## 2026-09-14 恢复入口
+
+- Governance/Evidence/Materialization 主干已进入 main；当前待收口 [#183](https://github.com/tristan419/JATO_Analysis_System/pull/183) 是来源失败分类统一，不是 21 国抓取全部完成。
+- #183 为 7 文件、2 提交、`+1070/-26`；相关路径在分叉点到 `main@f29cf5096` 间均未被 main 修改。分支落后不等于功能回退，可更新原 PR 基线后重验，不强制重开。
+- 有效 worktree：`/Users/litristan/.codex/worktrees/msrp-failure-feedback-migration/JATO_Analysis_System`。本地 `56c19cd9` 与远端 `aa06581c` 文件树一致；不要因为 SHA 不同重复搬运。旧 `JATO_Analysis_System_msrp` 是含未提交成果的审计源，不清理或整体合并。
+- 真实覆盖率另做 no-ingest 复核：21 国 roster、alias、未配置来源、draft/promoted 去重、scheduled/local dry-run 和 backlog。这些是待核对事项，不是本轮确认仍存在的全部缺陷。
+- 下方 4 月统计是历史 POC，不是 9 月覆盖率；dry-run、ingest/materialize、上线必须分开记录。本文更新没有触发抓取、入库或部署。
+- Candidate #226 影响网站在线验收，不阻塞 MSRP 本地分类修复或只读来源核查。完整状态与个人优先级见[平台交接](../JATO_PLATFORM_HANDOVER_2026-09-14.md)。
 
 ## 目录结构
 
@@ -14,7 +23,7 @@
 | 执行验证 | `04_Execution/` | 真实站点抓取 POC 测试、keyword filling 批次记录 |
 | Backlog | `05_Backlog/` | SUV country model top30 批次计划与后续开发入口 |
 
-## 当前进度快照
+## 历史进度快照（2026-04-18，未在 9 月重跑）
 
 | 市场 | 通过 | 总数 | 通过率 |
 | ------ | -----: | -----: | -------: |
@@ -49,7 +58,7 @@
 15. `04_Execution/MSRP_BATCH1_SOURCE_RESEARCH_2026-04-11.md` — Batch-1 品牌调研
 16. ~~`05_Backlog/MSRP_COUNTRY_BRAND_SOURCE_PRIORITY_PLAN_2026-04-11.md`~~ — 已归档，被 #10 替代
 
-## 当前推荐入口（2026-04-18）
+## 历史推荐入口（2026-04-18）
 
 如果你当前关注的是：
 

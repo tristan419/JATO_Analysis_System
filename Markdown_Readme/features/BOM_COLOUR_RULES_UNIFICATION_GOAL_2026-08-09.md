@@ -2,7 +2,7 @@
 
 > Goal ID: `bom-colour-rules-unified`
 >
-> 状态：`DRAFT_PR_CI_GREEN`
+> 状态：`MERGED_MAIN_PENDING_BUSINESS_ACCEPTANCE`（2026-09-14 复核）
 >
 > 实现基线：`main@d40981e87435d58c63c7c4e6c54b07038a83901f`
 >
@@ -10,7 +10,7 @@
 >
 > 实现分支：`codex/bom-colour-rules-implementation`
 >
-> 实现 PR：`#220`（Draft；未部署 Candidate）
+> 实现 PR：`#220`（已合并；Candidate 业务验收未确认，正式站前端尚未包含）
 >
 > 独立范围：只处理颜色名称、swatch、颜色规则报告、Add/Edit Colour 和选品页取色一致性。
 
@@ -19,12 +19,15 @@
 - BOM Admin 行编辑 PR `#215` 已合并到 `main@40ae32112927b3e138a88e42cd43ccc611f4ba0f`。
 - Candidate 可写 FIFO 沙箱代码 PR `#219` 已合并到 `main@2dea140f328c1d7077ca0792979b47bcca4dca8e`。
 - 本 Goal 设计契约 PR `#218` 已合并到 `main@d40981e87435d58c63c7c4e6c54b07038a83901f`。
-- `#219` 只完成代码合并；Candidate PostgreSQL role/ACL、8001 drop-in 和首次 `prepare-candidate` 仍需分别授权，尚未在服务器执行。
-- 颜色业务实现已从包含 `#215+#219+#218` 的最新远端 `main@d40981e8` 新建独立 worktree/branch；尚未部署 Candidate。
+- #220 已于 2026-08-10 合并；可写 Candidate prepare 和后续 main 自动 prepare 均有成功记录，见 [run 31372523132](https://github.com/tristan419/JATO_Analysis_System/actions/runs/31372523132)。不应重新执行已完成的首次环境建设。
+- 尚未确认本 Goal 的真实页面写入验收。2026-09-14 Candidate 外层仍为 Basic Auth；登录替换在 Draft #226，需按现有手册收口。
+- www/intl 前端均为 `cd4557cb932374a0fefb6c80a5fac9fb75a67d62`，尚不包含 #215/#220；main 为 `f29cf5096b528e2c0350047f2bc462cc8bfc8696`。
+- 下一步是验收现有实现，不是重新搬旧 BOM branch 或重写颜色功能。新功能从届时最新 main 新建 worktree/branch/PR；Candidate 不阻塞本地开发。
+- 恢复入口与个人待办见[平台交接](../Fullstack/JATO_PLATFORM_HANDOVER_2026-09-14.md)。以下旧现状、统计和根因保留为实施前记录，不代表修复后仍然失败。
 
-## 1. 现有 Goal 达成审计
+## 1. 实施前 Goal 达成审计（历史基线）
 
-结论：**Order Genius 的基础能力已经上线，但本文件定义的颜色统一目标尚未达成。**
+实施前结论：Order Genius 基础能力已上线，颜色统一目标当时未达成。当前代码已通过 #220 合入 main，整体 Goal 仍待真实 Candidate 业务验收，不把历史问题列表当成待重做清单。
 
 现有文档之间也存在状态偏差：
 
@@ -47,7 +50,7 @@
 
 因此本 Goal 不是重复建设，而是收口现有半成品。
 
-## 2. 已确认的当前事实
+## 2. 实施前已确认的事实（历史数据，不是 9 月实时盘点）
 
 以下为本次只读核验记录，作为实施前基线，而不是写死在代码中的常量：
 
@@ -92,7 +95,7 @@
 - 名称/swatch 自动补齐不得修改 `single/dual/special`。
 - tier 拖拽仍是独立的价格操作，必须显示实际重算报告。
 
-## 4. 根因与现有责任边界
+## 4. 已修复问题的根因与责任边界（实施契约）
 
 ### 4.1 规则键过窄
 
@@ -269,7 +272,7 @@ Candidate 验收必须在独立可写沙箱上完成：填充、创建、编辑�
 | `.github/RELEASE_COORDINATION.md` | 否 | 不在颜色功能范围 |
 | `ORDER_GENIUS_IMPLEMENTATION_ROADMAP.md` | 否 | 本 Goal 使用独立文档，不争用该文件 |
 
-当前硬门禁：
+当时实施约束（#215/#218/#219/#220 均已合并，不重新排队执行）：
 
 1. #215 的共享 owner 阻塞已经解除，不再是颜色实现的 `Depends-On`。
 2. #218 保持 Goal-only；不得在已审阅的一文件规划 PR 中追加业务实现。
@@ -309,7 +312,7 @@ Candidate 验收必须在独立可写沙箱上完成：填充、创建、编辑�
 - [x] 只读比较 #215 与当前 main，确认共享 owner 冲突。
 - [x] 写入本目标、范围、交互和验收契约。
 - [x] #215 同步最新 main、通过并合并（`main@40ae3211`）。
-- [x] #219 在 post-#215 main 上通过组合测试并合并（`main@2dea140f`）；服务器配置仍未执行。
+- [x] #219 在 post-#215 main 上通过组合测试并合并（`main@2dea140f`）；后续服务器 prepare 已成功，见顶部恢复记录。
 - [x] #218 保持 Goal-only，并按 `main@2dea140f` 回写依赖与实施边界。
 - [x] 合并 #218 设计契约；未触发部署（`main@d40981e8`）。
 - [x] 从包含 #215+#219+#218 的最新 main 建立颜色实现 worktree/branch。
@@ -319,7 +322,8 @@ Candidate 验收必须在独立可写沙箱上完成：填充、创建、编辑�
 - [x] 后端完整 unit 为 1438 passed / 1 skipped / 14 failed；14 项均可在实现基线复现，与本颜色 diff 无关。
 - [x] `test_ordering_bom_admin.py` 为 36 passed / 5 baseline failed；5 项是 main 已有 country columns / template FOB sync 契约缺口，不在本 PR 顺手重建。
 - [x] 创建颜色实现独立 Draft PR `#220`；不从 feature branch 生产部署。
-- [x] #220 最终实现 head 的 GitHub CI 13/13 通过；PR 继续保持 Draft。
+- [x] #220 最终实现 head 的 GitHub CI 13/13 通过，已于 2026-08-10 合并。
+- [x] 2026-09-14 复核代码合并与正式站前端版本，未把两者混同。
 - [ ] Candidate 可写沙箱人工验收。
 - [ ] 用户明确批准后才进入 Active 发布流程。
 
