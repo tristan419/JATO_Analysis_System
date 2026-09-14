@@ -14,6 +14,7 @@ export const PAGE_NAV_ITEMS: PageNavigationItem[] = [
   { to: "/customer-insights", code: "10", label: "Customer", sublabel: "看客户" },
   { to: "/customer-hev", code: "11", label: "Hybrid", sublabel: "看HEV" },
   { to: "/copilot", code: "12", label: "Copilot", sublabel: "国家助手" },
+  { to: "/astrbot", code: "13", label: "AstrBot", sublabel: "汽车 Agent" },
 ];
 
 function matchesNavPath(pathname: string, path: string): boolean {
@@ -186,6 +187,7 @@ export function getMenuPathsForRole(userRole: string): string[] {
 
 const ROUTE_ROLE_OVERRIDES: Record<string, MenuRole> = {
   "/copilot": "viewer",
+  "/astrbot": "viewer",
   "/market/segments": "viewer",
   "/market/ranking/brand": "viewer",
   "/market/ranking/model": "viewer",
@@ -265,6 +267,7 @@ export const MEGA_MENU_ITEMS: MegaMenuItem[] = [
         items: [
           { label: "Overview", sublabel: "市场总览", to: "/market/overview", minRole: "viewer" },
           { label: "Share Transfer", sublabel: "份额转移分析", to: "/market/advanced-analysis", minRole: "viewer" },
+          { label: "AstrBot", sublabel: "汽车市场 Agent", to: "/astrbot", minRole: "viewer" },
           { label: "Hero Product", sublabel: "BEV 动总分析", to: "/market/advanced-analysis?mode=hero-product", minRole: "viewer" },
         ],
       },
@@ -333,6 +336,7 @@ export const MEGA_MENU_ITEMS: MegaMenuItem[] = [
 
 const MEGA_MENU_ROUTE_MAP: Record<string, string> = {
   "/dashboard": "dashboard",
+  "/astrbot": "market-scan",
   "/market": "market-scan",
   "/product": "product-deck",
   "/data": "data-ops",
