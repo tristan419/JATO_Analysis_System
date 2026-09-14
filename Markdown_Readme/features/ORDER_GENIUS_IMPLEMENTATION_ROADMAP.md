@@ -1,21 +1,25 @@
 # Order Genius — 当前状态与待办
 
 > 当前版本: V1.5 | 目标版本: V2 | V2 spec: [ORDER_GENIUS_V2_SPEC.md](./ORDER_GENIUS_V2_SPEC.md)
-> 更新: 2026-08-07
+> 更新: 2026-09-14（恢复状态复核；历史扩展清单未逐项重验）
 
 ## 当前开发基线
 
 - BOM Admin / Order Genius 的新开发必须从当时最新的远端 `main` 创建独立
   worktree、branch 和 PR，不再沿用固定的长期 BOM 分支。
-- 2026-08-07 的过渡分支是
-  `codex/bom-admin-edit-scope-current-main`，基于
-  `main@37a9905cebd0ccaf5147314f6cedb639f95a25ca`，只重放旧 PR #173 中已确认
-  仍缺失的行级编辑修复及其测试。
+- 过渡分支 `codex/bom-admin-edit-scope-current-main` 的 #215 已合并，替代已关闭的 #173；
+  本地 `bom_admin_current` clean，且与 #215 已合并 head 文件树一致，不是新的未迁功能源。
+- #218 颜色目标与 #220 颜色实现均已合并；当前远端 main 为 `f29cf5096`。
+- www/intl 前端构件仍是 `cd4557cb`（7 月 23 日），不包含 #215/#220。先在可用 Candidate
+  验收现有行编辑与颜色规则，再决定独立授权发布；不要因正式站没出现而重复实现。
 - `codex/bom-colour-rule-library`、`codex/bom-admin-followup` 和旧
   `JATO_Analysis_System_bom_admin` worktree 仅用于历史审计；禁止把整支历史
   branch 合回新开发线。
-- 当前过渡 PR 合并后，下一个 BOM 功能仍应从届时最新 `main` 新建分支，不能
+- 过渡 PR 已合并，下一个 BOM 功能应从届时最新 `main` 新建分支，不能
   把本节记录的过渡分支继续当作永久开发入口。
+- 推荐先收口 Candidate #226 恢复在线验收，再选一个具体 BOM 新需求；本地开发无须硬等
+  Candidate。见[平台交接与待办](../Fullstack/JATO_PLATFORM_HANDOVER_2026-09-14.md)及
+  [颜色目标当前进度](BOM_COLOUR_RULES_UNIFICATION_GOAL_2026-08-09.md)。
 
 ## V1.5 已实现
 
@@ -49,10 +53,14 @@
 
 ---
 
-## V1.5 未实现
+## 历史扩展需求清单（未逐项重验，不代表当前均未实现）
+
+本节保留原产品想法，不作为自动实施指令。BOM Admin、Copy SKU/Country、Batch Material、
+颜色 surcharge、Father Note、CBU Finance 的基础能力已有实现；是否缺少下列更细的扩展，
+应在选中具体需求时核对最新 main 和真实行为，不能从旧复选框直接开始重写。
 
 ### BOM 层
-- [ ] BOM Admin 网页维护（product / variant / material_option）
+- [x] BOM Admin 基础网页维护已存在；后续独立业务需求另行定义。
 - [ ] BOM 行级 `row_version` 并发保护
 - [ ] BOM 增删改 + 变更历史
 
@@ -80,7 +88,7 @@
 - [ ] 订单快照（fob_snapshot / amount_snapshot / payment_term_snapshot / lifecycle_id）
 
 ### 定制色
-- [ ] 颜色价格规则表（brand + colour + surcharge + valid_from/to）
+- [ ] 定制色额外需求待确认：已有 surcharge 与 #220 颜色统一实现，不默认新建第二套规则表。
 - [ ] Pricing mode 选择（`fob_includes_surcharge` vs `fob_excludes_surcharge`）
 
 ### CBU / Finance

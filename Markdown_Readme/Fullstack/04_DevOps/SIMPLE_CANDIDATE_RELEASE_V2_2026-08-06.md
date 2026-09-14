@@ -4,28 +4,27 @@ goal_control:
   status: active
   objective: >-
     将复杂蓝绿/事故恢复体系收敛为固定 Active/Candidate 的四操作发布 V2，
-    Candidate 每次 prepare 使用生产一致性快照生成独立可写数据库沙箱并以应用内 admin
-    身份直接进入页面；新 main 的 CI 成功后自动复用现有 prepare 路径生成新 Candidate，
+    Candidate 每次 prepare 使用生产一致性快照生成独立可写数据库沙箱，复用现有登录页
+    和独立 JWT 严格认证，不再使用免登录 admin；新 main 的 CI 成功后生成新 Candidate，
     页面显示候选代码、当前 main 和数据快照时间。完成腾讯云人工验收后，再由用户授权
     把同一已测试构件更新到正式 www Active。Candidate 测试数据永不进入 Active；
     intl 继续使用既有的 Active 到 intl 独立同步流程，不在 V2 中新增编排。
-  current_phase: auto_prepare_candidate_freshness
-  current_step: draft_pull_request_ci_green
-  waiting_on: explicit_ready_and_merge_authorization_for_pull_request_224
-  pause_reason: none
+  current_phase: candidate_application_login
+  current_step: required_ci_green_live_cutover_pending
+  waiting_on: live_state_review_and_explicit_candidate_cutover_authorization
+  pause_reason: historical_task_quota_interruption_2026_08_11
   next_action: >-
-    只复用现有 production-release prepare-candidate 实现“main CI 成功后准备最新
-    Candidate”，并在现有 Candidate banner 增加当前 main 新鲜度判定；删除会在
-    Candidate prepare 后误审 intl 的过时 intl-edge-prewarm 自动 workflow，不改独立
-    sync-www-active-to-intl。candidate-preview GitHub environment 与固定 SSH host key 已配置，
-    本地代码、独立审查和测试已经完成，Draft PR #224 的 required CI 已全部通过。
-    下一步必须等待用户单独授权 Ready/合并；合并后监听 main CI 与首次真实自动 prepare。
-    禁止自动更新 Active 或同步 intl。
+    #224 已合并，自动 prepare run 31372523132 已成功，不再重做自动链路。
+    恢复现有 #226：先核对最新 main、PR、live Candidate 和 Cloudflare 分支预览失败。
+    获准后保持 Basic Auth，废弃旧 Candidate，再获准合并 #226，由 main CI 自动 prepare；
+    保留外层认证验证真实沙箱登录、401 和隔离后，才移除 Candidate Basic Auth。
+    #226 代码已实现但公网登录替换未完成；不新建登录/门禁系统。Active 更新和 intl 同步
+    仍需分别授权，本次文档修订不执行或授权这些操作。
   release_authorization_contract:
     source_path: main_to_candidate_to_explicit_user_approval_to_active
     main_may_advance_without_active: true
     candidate_may_be_replaced_repeatedly: true
-    successful_main_ci_may_prepare_candidate_automatically: implemented_local_not_merged
+    successful_main_ci_may_prepare_candidate_automatically: merged_and_verified_run_31372523132
     candidate_may_update_active_automatically: false
     candidate_may_update_intl: false
     active_requires_explicit_user_approval: true
@@ -36,9 +35,9 @@ goal_control:
     intl_failure_preserves_www_active: true
   progress:
     worktree_ready: true
-    worktree: /Users/litristan/.codex/worktrees/auto-prepare-candidate-freshness/JATO_Analysis_System
-    branch: codex/auto-prepare-candidate-freshness
-    base_main_sha: 54b32de9681c34c358cb07dbdd3b6690e8098736
+    worktree: /Users/litristan/.codex/worktrees/candidate-app-login/JATO_Analysis_System
+    branch: codex/candidate-app-login
+    base_main_sha: f29cf5096b528e2c0350047f2bc462cc8bfc8696
     remote_main_matches_base: true
     design_recorded: true
     historical_inventory_evidence_recorded_below: true
@@ -121,7 +120,7 @@ goal_control:
     frontend_build_and_router_checks_passed: true
     full_local_ci_after_final_runtime_code: true_scripts_and_frontend
     post_ci_changes_documentation_only: false_current_branch_includes_runtime_workflow_and_banner
-    ci_validation_complete: true_pull_request_224_head_6994eade
+    ci_validation_complete: required_checks_passed_pull_request_226_head_5f73caff
     candidate_sandbox_initial_ci_failure: fullstack_frontend_vite_auth_token_test_environment_leak
     candidate_sandbox_ci_fix_scope: one_test_file_plus_goal_no_production_code
     candidate_sandbox_ci_fix_local_validation: 373_tests_types_build_router_passed_with_github_env
@@ -135,11 +134,11 @@ goal_control:
     bom_admin_pull_request_215_merged: true_main_40ae3211
     candidate_sandbox_draft_ready_for_human_review: true
     previous_pull_request_214_merged: true_main_30f3e2e4
-    current_fix_commit: 20f082f4dbb64a4e56b4b67f1a93590b445603ec
-    current_fix_github_checks: all_required_green_on_pull_request_224_head_6994eade
+    current_fix_commit: 5f73caff4d4bc131ce058ecd6a3aed26f23a62ce
+    current_fix_github_checks: required_green_cloudflare_preview_failed_cause_unresolved
     pull_request_opened: true
-    pull_request_number: 224
-    pull_request_url: https://github.com/tristan419/JATO_Analysis_System/pull/224
+    pull_request_number: 226
+    pull_request_url: https://github.com/tristan419/JATO_Analysis_System/pull/226
     pull_request_is_draft: true
     previous_pull_request_217_merged: true_main_619466e8
     candidate_public_gateway_commit: 991a44f8499a1210317aafb5da1f3183b7ee0769
@@ -154,7 +153,7 @@ goal_control:
     candidate_dns_configured: true
     candidate_tls_configured: true
     candidate_basic_auth_configured: true
-    candidate_current_sha_verified: b21695163df510e4dd8e91b4701446d917f7d8b8
+    candidate_current_sha_verified: not_reverified_2026_09_14_basic_auth_only
     candidate_public_link_may_fallback_to_active: false
     active_changed_by_this_step: false
     intl_changed_by_this_step: false
@@ -167,7 +166,7 @@ goal_control:
     candidate_writable_sandbox_implementation: true_local_verified
     candidate_writable_sandbox_fifo_capacity: 1
     candidate_writable_sandbox_transition_max_databases: 2
-    candidate_application_no_login_admin: true_local_committed
+    candidate_application_no_login_admin: historical_219_contract_to_be_replaced_by_226
     candidate_sandbox_may_write_active_database: false
     candidate_sandbox_may_update_active_or_intl: false
     bom_colour_library_followup_in_this_pr: false_out_of_scope
@@ -226,20 +225,20 @@ goal_control:
     candidate_database_active_connect_denied: true
     candidate_monthly_worker_disabled_on_server: true
     candidate_preview_current_main_comparison: true_local_verified_391_frontend_tests
-    automatic_prepare_after_main_ci: true_local_exact_ci_source_validated
+    automatic_prepare_after_main_ci: true_live_verified_run_31372523132
     automatic_prepare_live_main_rechecks: 2_before_server_upload_and_candidate_mutation
     automatic_prepare_same_release_idempotent: true_exact_identity_and_runtime_verified
     automatic_prepare_manual_refresh_preserved: true
     automatic_prepare_independent_review: passed_after_p1_closure_no_open_p0_p1
     automatic_prepare_local_validation: 232_focused_and_1296_all_scripts_15_skipped_two_validators_bash_n_pycompile
-    automatic_prepare_pull_request: 224_draft
+    automatic_prepare_pull_request: 224_merged
     automatic_prepare_implementation_commit: 20f082f4dbb64a4e56b4b67f1a93590b445603ec
     automatic_prepare_pull_request_checks: all_required_green_on_6994eade_before_final_goal_evidence_commit
     candidate_preview_permission_boundary: logical_code_pr_environment_not_restricted_ssh_principal
     candidate_preview_banner_refresh: mount_focus_and_visible_no_polling
     candidate_preview_environment_configured: true_main_only_no_reviewer_no_wait
     candidate_preview_ssh_known_hosts_configured: true_verified_metadata_for_150_158_141_14
-    candidate_preview_environment_deployment_triggered: false
+    candidate_preview_environment_deployment_triggered: true_run_31372523132
     obsolete_intl_edge_prewarm_failure_run: 31363402536
     obsolete_intl_edge_prewarm_removal: true_local_file_removed_sync_unchanged
     existing_sync_www_active_to_intl_changed: false
@@ -252,7 +251,12 @@ goal_control:
     existing_v2_server_prepare_verified: true_writable_candidate_run_31362670385
     existing_v2_server_update_active_verified: false
     existing_v2_server_distinct_rollback_verified: false
-    existing_v2_writable_business_test_ready: true_candidate_main_54b32de9
+    existing_v2_writable_business_test_ready: pending_current_login_and_live_state_verification
+    candidate_login_implementation: implemented_in_draft_226_not_merged
+    candidate_login_live_acceptance: pending
+    local_and_remote_login_tree_equal: true_d5376f21d341eec02071fb00c066474daa776868
+    public_basic_auth_observed: true_2026_09_14
+    www_and_intl_frontend_app_commit_observed: cd4557cb932374a0fefb6c80a5fac9fb75a67d62
     production_changed: candidate_only_active_and_intl_unchanged
   may_continue_without_new_authorization:
     - local_read_only_audit
@@ -271,20 +275,29 @@ goal_control:
     - observed_server_state_contradicts_documented_baseline
     - change_would_touch_active_or_intl_database_content
     - change_would_cross_this_pr_scope
-  updated_at: "2026-08-10T16:38:30+08:00"
+  updated_at: "2026-09-14"
 ---
 
 # Fixed Active / Candidate Release V2
 
 > 状态：实施中
 > 开始日期：2026-08-06
-> worktree：`/Users/litristan/.codex/worktrees/auto-prepare-candidate-freshness/JATO_Analysis_System`
-> branch：`codex/auto-prepare-candidate-freshness`
-> 基线：`main@54b32de9681c34c358cb07dbdd3b6690e8098736`
-> 当前 PR scope：只把已有 `prepare-candidate` 接到成功的 main CI 后，并让已有
-> Candidate banner 判断当前 Candidate 是否等于最新 main；仅在既有 controller 的
-> `prepare-candidate` 增加自动同构件幂等复用策略，不增加第五操作，也不改 Active、intl、
-> 数据库业务数据、BOM 业务或 JATO 数据
+> worktree：`/Users/litristan/.codex/worktrees/candidate-app-login/JATO_Analysis_System`
+> branch：`codex/candidate-app-login` / Draft PR #226
+> 基线：`main@f29cf5096b528e2c0350047f2bc462cc8bfc8696`
+> 当前 scope：复用现有 `/login` 完成 Candidate 严格认证与公网入口切换；不重建自动 prepare，不改 BOM 或生产业务数据，不自动更新 Active/intl。
+
+## 2026-09-14 恢复状态与待办（优先于下方历史阶段记录）
+
+- #224 已合并，2026-08-10 [自动 prepare](https://github.com/tristan419/JATO_Analysis_System/actions/runs/31372523132) 成功；“等待合并 #224”已过时。
+- [#226](https://github.com/tristan419/JATO_Analysis_System/pull/226) 的 required checks 已通过，唯一红项为非 required Cloudflare 分支预览；失败细节待查。`jato月更` 任务于 2026-08-11 查该问题时额度耗尽中断。
+- 本次公网只读确认 Candidate 仍返回 Basic Auth 401，未取得内部运行版本或配置。旧 `APP_AUTH_ENABLED=false` 是 #226 当时记录，不是本次重新登录服务器验证。
+- www/intl 前端仍为 `cd4557cb`（7 月 23 日）；成功 prepare 只证明当时 Candidate 操作完成，不代表 Active 已更新。
+- 顶部控制块已指向 #226；下方未逐条复跑的测试数量、授权和服务器证据均属注明阶段的历史记录，不能作为本轮新授权。#226 分支另有较新 Goal 内容，后续整合本文时按其代码事实保留，不整体用任一旧文件覆盖另一份。
+
+待办顺序：核对 live 与 #226 → 获准废弃旧 Candidate（保留 Basic Auth）→ 获准合并 #226 → main CI 自动 prepare → 在外层认证内验证登录/401/沙箱隔离 → 获准移除 Candidate Basic Auth → 验证公网现有登录页。Active 更新和 intl 同步另行决定。
+
+完成入口后优先验收 main 已有 BOM #215/#220，再开发一个具体 BOM 功能。Candidate 是在线验收前置，不是其他功能本地开发前置。完整个人待办见[恢复交接第 15 节](../JATO_PLATFORM_HANDOVER_2026-09-14.md#15-恢复待办先完成一个可用验收入口再继续-bom)。本次只修文档，不执行上述操作。
 
 ## 0. Goal Control 使用规则
 
@@ -301,7 +314,9 @@ goal_control:
 7. 失败不会自动变成新 hotfix；先把完整事实、影响范围和唯一下一步写入本文件，再
    决定是否修改代码。
 
-## 0.1 Goal 达成审计（2026-08-10）
+## 0.1 历史 Goal 达成审计（2026-08-10，#224 合并前）
+
+本小节保留当时判断；自动 prepare 与新鲜度 banner 后已通过 #224 合并并验证，不再是待实现项。当前登录尾项与待办以上方 2026-09-14 恢复状态为准。
 
 结论：`partially_achieved`，不能标记 `complete`。
 
@@ -363,8 +378,8 @@ prepare-candidate -> 固定 Candidate（8001 / 国内人工预览）
 - Candidate 测试通过后，Active 直接引用 Candidate 已验证的同一个不可变 release；不重新构建、不重新上传、不重新组装。
 - Candidate 每次 prepare 从 Active 数据库取得一致性快照，恢复为独立可写沙箱；运行期间
   不连接、也没有权限连接 Active 数据库。Candidate 测试写入只保留在该沙箱中。
-- Candidate 必须禁用月更 worker、scheduler 等单实例后台任务；应用认证只在 Candidate
-  runtime 禁用，使固定测试入口直接进入 admin UI，Active 认证合同不变。
+- Candidate 必须禁用月更 worker、scheduler 等单实例后台任务；#226 的目标合同为复用
+  现有登录页、独立 JWT 和严格 API 认证，禁止免登录 admin；Active 认证合同不变。
 
 ## 2. 用户可见的四个操作
 
@@ -493,9 +508,10 @@ Candidate 的价值是让新代码面对服务器上的真实数据量、真实 
 - Candidate 应用角色只在新沙箱拥有普通业务写权限，并保持 NOSUPERUSER/NOCREATEDB/
   NOCREATEROLE/NOREPLICATION/NOBYPASSRLS。角色必须对 Active 数据库无 CONNECT；不能仅依赖
   `PUBLIC CONNECT` 的默认状态，prepare 必须显式验证拒绝连接。
-- Candidate env 使用独立强随机 JWT secret，应用级 `APP_AUTH_ENABLED=false`，使固定测试
-  入口无需第二次应用登录并直接获得 admin UI。该设置只能存在于 8001 runtime，不能固化
-  进 Active artifact 或 Active env；固定 HTTPS 网关仍保留独立访问控制。
+- #226 的目标合同：Candidate env 使用独立强随机 JWT secret，启用 `APP_AUTH_ENABLED=true`
+  和 `APP_AUTH_REQUIRED=true`，复用现有账号登录，不接受匿名 admin 或 Active OAuth 回调。
+  旧 #219 的免登录合同不可作为新开发目标；在严格认证 Candidate 验证通过前保留 live Basic Auth，
+  之后才按既有切换顺序移除外层认证。#226 未合并不代表 live 已满足目标合同。
 - systemd 继续使用 `ProtectSystem=strict`、无 Linux capabilities、PrivateTmp；
   `/opt/jato/shared` 及 legacy raw/processed 目录保持只读，仅 Candidate cache 和 Candidate
   数据库可写。
