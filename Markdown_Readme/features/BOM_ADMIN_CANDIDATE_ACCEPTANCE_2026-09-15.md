@@ -15,6 +15,8 @@
 - B 已按最新远端 `main@f29cf509` 在独立 worktree 实施并完成本地验证；尚未合并或部署 Candidate。A 未部署不阻塞 B 本地开发。
 - C（含 E）已按同一基线在独立 worktree 完成本地实现并验证；提交 `2218c0df`，尚未合并或部署 Candidate。它没有写入 35 行正式数据，只让可明确识别的旧空品牌参与规则/加价链路，并对未知身份给出摘要告警。
 - D 已从 `main@f29cf509` 在独立 worktree 完成本地实现并验证；提交 `1a64194a`，尚未合并或部署 Candidate。它只增加认证失败的可见反馈和草稿保留，不改变后端权限，也不自动重试或提交。
+- 只读合并审阅（2026-09-15）：当前远端 `main@9011da6a` 已比三批基线前进 7 个提交；B/C/D 均为相对该 `main` behind 7、ahead 1。单批及 B→C→D 累积模拟合并均无文本冲突，但 `OrderGeniusPage.tsx` 被三批共同修改，`orderGeniusColourRulesPage.test.ts` 被 C/D 共同修改，合并后仍需人工检查组合行为。
+- D 不能直接套到当前 `main`：#228 已重构 Candidate `AuthContext` 的真实 token 流程；模拟合并会得到 `refreshUser(): Promise<boolean>`，但无 token 分支仍是裸 `return`，类型检查会失败并可能破坏 Candidate 登录。应在 `main@9011da6a`（以及 B/C 合并后的最新树）上重新移植 D 的返回值/测试改动，保留 #228 的 token、OAuth 和清理逻辑。三批原有测试结果不等于这个合并树已通过。
 - 发布顺序：本地行为验证 → 可审阅 PR → 获授权合并 main → 现有 CI 自动 prepare Candidate → 在新构件做业务验收 → 单独决定 Active 发布。不要要求“Candidate 验收通过才允许代码进入 main”，这会与现有 main-only Candidate 流程形成循环。
 
 ### 2026-09-15 · A 第一版（待补齐交互验证和异步边界）
@@ -33,11 +35,11 @@
 | A 输入/自动填充/搜索 | 本地实现已收口；尚未部署验收 | 第 13 节 A 收口记录 + 第 12 节 A | Candidate 新构件复验：输入焦点、1.2 秒查库、保存后搜索保持 |
 | B Model/列宽 | 本地实现完成；尚未合并/Candidate 验收 | `codex/bom-model-layout` / `53976fc0`；Grid 默认 280px、优先固定 Model、用户列宽初始化与持久化 | 本地类型、单测、构建、路由回归通过；待 Candidate 在 2200/1400/1100px 与 80/100/125% 实测 |
 | C J5 品牌、颜色共享、加价 | 本地实现完成；尚未合并/Candidate 验收 | `codex/bom-colour-followup` / `2218c0df`；有效品牌归一化、无效身份摘要、共享标准入口、逐国重算筛选 | 本地目标测试通过；待 Candidate 核对 J5 规则、双色 +300、manual/no-base 保护 |
-| D 登录失效 | 本地实现完成；尚未合并/Candidate 验收 | `codex/bom-auth-feedback` / `1a64194a`；protected request 事件、AuthContext 身份核验、数量草稿保留 | 本地全量前端通过；待 Candidate 用真实失效 token/低权限身份验收 |
+| D 登录失效 | 本地实现完成；需基于当前 main 重新移植后再合并/Candidate 验收 | `codex/bom-auth-feedback` / `1a64194a`；protected request 事件、AuthContext 身份核验、数量草稿保留；不可直接覆盖 #228 的 Candidate token 流程 | 原分支本地全量前端通过；移植后的合并树需重新类型/单测；再用 Candidate 真实失效 token/低权限身份验收 |
 | #215 同模板跨车型/版本 | 专项验收未完成 | 第 12.2 节：构造两个真实渲染行并点击 Edit | 只有被点的目标行打开；不是仅比较 key 字符串 |
 | #220 Matrix/保护逻辑 | 部分读取和 Apply 已验，其他待验 | 第 3 节未验项 + C 的用例 | 两个编辑入口保存后 BOM/Matrix 一致；tier/manual/no-base 样本验证 |
 
-当前顺序：A、B、C（含 E）、D 均保留在各自 worktree，先逐批审阅并按授权合并，再由 main-only 流程准备 Candidate，最后做浏览器验收。完成本地批次只代表该批代码可审阅，不能写成“所有 bug 已修好”；后续新任务从届时最新 main 建对应分支。
+当前顺序：先审阅 B/C 并更新到当前 `main@9011da6a`，再在该最新树（必要时含 B/C 合并结果）重新移植 D 的最小改动；随后按授权合并并由 main-only 流程准备 Candidate，最后做浏览器验收。完成本地批次只代表该批代码可审阅，不能写成“所有 bug 已修好”；后续新任务从届时最新 main 建对应分支。
 
 ### 2026-09-15 · B Model 紧凑布局与列宽（本地实现完成，待 Candidate）
 
