@@ -2836,6 +2836,7 @@ export function OrderGeniusPage() {
           onGridReady={(api) => { gridApiRef.current = api; }}
           onToggleGroup={toggleProductGroup}
           onTogglePiRow={togglePiBatchRow}
+          columnWidthStorageScope={user?.username}
         />
       ) : (
         <div style={{ padding: 32, textAlign: "center", color: "#64748b" }}>
