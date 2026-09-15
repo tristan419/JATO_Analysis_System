@@ -512,10 +512,23 @@ def inspect_candidate_database_isolation(
             "candidate_database_marker_mismatch",
             "Candidate sandbox database marker does not match its URL",
         )
-    if _required_boolean(candidate, "APP_AUTH_ENABLED") is not False:
+    if _required_boolean(candidate, "APP_AUTH_ENABLED") is not True:
         raise AdmissionError(
-            "candidate_auth_enabled",
-            "Candidate application authentication must be disabled behind its outer gate",
+            "candidate_auth_disabled",
+            "Candidate must use the application login backed by its sandbox database",
+        )
+    if _required_boolean(candidate, "APP_AUTH_REQUIRED") is not True:
+        raise AdmissionError(
+            "candidate_auth_not_required",
+            "Candidate must reject requests without a valid sandbox login token",
+        )
+    if any(
+        key not in candidate or candidate[key]
+        for key in ("APP_AUTH_TOKEN", "APP_TOKEN_ROLE_MAP")
+    ):
+        raise AdmissionError(
+            "candidate_static_auth_enabled",
+            "Candidate must accept only sandbox login sessions",
         )
     if _required_boolean(candidate, "APP_RUNTIME_READ_ONLY") is not False:
         raise AdmissionError(

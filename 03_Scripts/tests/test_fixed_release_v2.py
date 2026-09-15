@@ -500,15 +500,6 @@ def make_http_reader(
             return None
 
     def reader(url: str, timeout: int) -> tuple[int, dict[str, object]]:
-        if url.endswith("/v1/msrp/monthly-update-jobs"):
-            if candidate_monthly_enabled:
-                return 200, {"items": []}
-            return 423, {
-                "detail": {
-                    "enabled": False,
-                    "reason": "explicitly_disabled",
-                }
-            }
         if url.endswith("candidate-preview.json"):
             identity_path = (
                 layout.release_root.parent
@@ -557,7 +548,14 @@ def make_http_reader(
                 fail_candidate_for is None or identity == fail_candidate_for
             )
             sha = "0" * 40 if should_fail else identity.commit_sha
-            return 200, {"status": "ready", "release": {"commitSha": sha}}
+            return 200, {
+                "status": "ready",
+                "release": {"commitSha": sha},
+                "monthlyUpdate": {
+                    "enabled": candidate_monthly_enabled,
+                    "reason": "enabled" if candidate_monthly_enabled else "explicitly_disabled",
+                },
+            }
         identity = active_identity()
         if identity is None:
             return 200, {
@@ -1019,7 +1017,10 @@ def test_successive_prepares_replace_fifo_sandbox_and_publish_snapshot_time(
         )
     )
     assert candidate_values["APP_CANDIDATE_SANDBOX_DATABASE"] == sandboxes.provisioned[1]
-    assert candidate_values["APP_AUTH_ENABLED"] == "false"
+    assert candidate_values["APP_AUTH_ENABLED"] == "true"
+    assert candidate_values["APP_AUTH_REQUIRED"] == "true"
+    assert candidate_values["APP_AUTH_TOKEN"] == ""
+    assert candidate_values["APP_TOKEN_ROLE_MAP"] == ""
     assert candidate_values["APP_RUNTIME_READ_ONLY"] == "false"
     assert len(candidate_values["APP_JWT_SECRET"]) == 64
     assert preview["databaseSnapshotAt"] == candidate_values["APP_CANDIDATE_SNAPSHOT_AT"]
@@ -1312,7 +1313,7 @@ def test_prepare_waits_for_transient_candidate_and_preview_startup(
     report = ctrl.prepare_candidate(CANDIDATE, manifest_sha256=digest)
 
     assert report["decision"] == "completed"
-    assert attempts == {"backend": 3, "preview": 2}
+    assert attempts == {"backend": 4, "preview": 2}
     assert sleeps == [MODULE.STARTUP_HTTP_INTERVAL_SECONDS] * 3
     assert system.restart_attempts[MODULE.CANDIDATE_UNIT] == 1
     assert system.restart_attempts[MODULE.PREVIEW_UNIT] == 1
@@ -1853,6 +1854,28 @@ def test_prepare_restores_candidate_when_monthly_runtime_is_not_disabled(
     report = latest_report(cfg)
     assert report["stage"] == "candidate_monthly_disabled_verified"
     assert report["mutation"]["stateRestored"] is True
+
+
+@pytest.mark.parametrize(
+    "status,payload",
+    [
+        (401, {"detail": "Authentication required"}),
+        (200, {"status": "ready"}),
+        (200, {"status": "ready", "monthlyUpdate": {"enabled": True, "reason": "enabled"}}),
+        (200, {"status": "ready", "monthlyUpdate": {"enabled": False, "reason": "enabled_flag_invalid"}}),
+        (503, {"status": "not_ready", "monthlyUpdate": {"enabled": False, "reason": "explicitly_disabled"}}),
+    ],
+)
+def test_monthly_probe_rejects_unverified_readiness(tmp_path: Path, status, payload) -> None:
+    ctrl = controller(config(tmp_path), FakeSystem())
+
+    def reader(url, timeout):
+        assert url == "http://127.0.0.1:8001/readyz"
+        return status, payload
+
+    ctrl.http_reader = reader
+    with pytest.raises(MODULE.V2Error, match="Candidate monthly-update runtime"):
+        ctrl._verify_candidate_monthly_disabled()
 
 
 def test_candidate_readonly_contract_owns_resource_limits() -> None:
