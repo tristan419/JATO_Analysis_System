@@ -129,7 +129,10 @@ def candidate_database_config(
         "APP_DATABASE_URL": candidate_url,
         "APP_CANDIDATE_SANDBOX_DATABASE": sandbox_database,
         "APP_CANDIDATE_SNAPSHOT_AT": "2026-08-09T08:09:10.123456Z",
-        "APP_AUTH_ENABLED": "false",
+        "APP_AUTH_ENABLED": "true",
+        "APP_AUTH_REQUIRED": "true",
+        "APP_AUTH_TOKEN": "",
+        "APP_TOKEN_ROLE_MAP": "",
         "APP_RUNTIME_READ_ONLY": "false",
         "APP_JWT_SECRET": "c" * 64,
     }
@@ -325,12 +328,15 @@ def test_candidate_database_requires_exact_private_mode(tmp_path: Path) -> None:
 @pytest.mark.parametrize(
     ("overrides", "expected_code"),
     [
-        ({"APP_AUTH_ENABLED": "true"}, "candidate_auth_enabled"),
+        ({"APP_AUTH_ENABLED": "false"}, "candidate_auth_disabled"),
+        ({"APP_AUTH_REQUIRED": "false"}, "candidate_auth_not_required"),
+        ({"APP_AUTH_TOKEN": "static-token"}, "candidate_static_auth_enabled"),
+        ({"APP_TOKEN_ROLE_MAP": "token:admin"}, "candidate_static_auth_enabled"),
         ({"APP_RUNTIME_READ_ONLY": "true"}, "candidate_runtime_read_only"),
         ({"APP_AUTH_ENABLED": "sometimes"}, "candidate_env_invalid"),
     ],
 )
-def test_candidate_database_requires_writable_no_login_runtime(
+def test_candidate_database_requires_writable_authenticated_runtime(
     tmp_path: Path,
     overrides: dict[str, str],
     expected_code: str,

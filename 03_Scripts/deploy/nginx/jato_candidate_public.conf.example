@@ -19,9 +19,6 @@ server {
     ssl_certificate __CANDIDATE_CERT_FULLCHAIN__;
     ssl_certificate_key __CANDIDATE_CERT_PRIVKEY__;
 
-    auth_basic "JATO Candidate";
-    auth_basic_user_file __CANDIDATE_AUTH_FILE__;
-
     add_header Cache-Control "no-store" always;
     add_header X-Content-Type-Options nosniff always;
     add_header X-Frame-Options SAMEORIGIN always;
@@ -35,8 +32,8 @@ server {
         proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
         proxy_set_header X-Forwarded-Proto https;
 
-        # Basic Auth protects the public gateway.  The application uses
-        # X-Auth-Token, so the gateway credential must not reach 8001.
+        # Candidate uses the same application login as www.  Browser
+        # Authorization credentials must never be forwarded to 8001.
         proxy_set_header Authorization "";
 
         proxy_connect_timeout 10s;

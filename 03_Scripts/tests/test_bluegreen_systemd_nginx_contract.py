@@ -303,13 +303,13 @@ def test_candidate_preview_template_is_loopback_only_and_has_no_active_fallback(
     assert '"role":"candidate"' not in active
 
 
-def test_candidate_public_gateway_is_authenticated_and_candidate_only() -> None:
+def test_candidate_public_gateway_uses_application_login_and_candidate_only() -> None:
     gateway = CANDIDATE_PUBLIC_TEMPLATE.read_text(encoding="utf-8")
 
     assert "server_name __CANDIDATE_SERVER_NAME__;" in gateway
     assert "listen 443 ssl;" in gateway
-    assert "auth_basic \"JATO Candidate\";" in gateway
-    assert "auth_basic_user_file __CANDIDATE_AUTH_FILE__;" in gateway
+    assert "auth_basic" not in gateway
+    assert "__CANDIDATE_AUTH_FILE__" not in gateway
     assert (
         "proxy_pass http://127.0.0.1:__CANDIDATE_PREVIEW_PORT__;"
         in gateway
