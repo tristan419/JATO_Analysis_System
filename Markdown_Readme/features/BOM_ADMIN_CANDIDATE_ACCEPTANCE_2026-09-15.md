@@ -13,6 +13,7 @@
 - Candidate 最近核对仍为 `9011da6a`，没有上述修复。400 个测试是历史实跑结果，不代表本清单所有业务场景通过。
 - 后续五项对应：Model/列宽 → B；J5 空品牌/漏统计/加价 → C1/C2/C4；颜色双入口同步 → C3；登录提示 → D；蓝边框 → E。五项实施说明均在第 12 节。
 - B 已按最新远端 `main@f29cf509` 在独立 worktree 实施并完成本地验证；尚未合并或部署 Candidate。A 未部署不阻塞 B 本地开发；C/D 按各自范围继续，E 可随 C3 的色卡交互一并实施。
+- C（含 E）已按同一基线在独立 worktree 完成本地实现并验证；提交 `2218c0df`，尚未合并或部署 Candidate。它没有写入 35 行正式数据，只让可明确识别的旧空品牌参与规则/加价链路，并对未知身份给出摘要告警。
 - 发布顺序：本地行为验证 → 可审阅 PR → 获授权合并 main → 现有 CI 自动 prepare Candidate → 在新构件做业务验收 → 单独决定 Active 发布。不要要求“Candidate 验收通过才允许代码进入 main”，这会与现有 main-only Candidate 流程形成循环。
 
 ### 2026-09-15 · A 第一版（待补齐交互验证和异步边界）
@@ -30,7 +31,7 @@
 |---|---|---|---|
 | A 输入/自动填充/搜索 | 本地实现已收口；尚未部署验收 | 第 13 节 A 收口记录 + 第 12 节 A | Candidate 新构件复验：输入焦点、1.2 秒查库、保存后搜索保持 |
 | B Model/列宽 | 本地实现完成；尚未合并/Candidate 验收 | `codex/bom-model-layout` / `53976fc0`；Grid 默认 280px、优先固定 Model、用户列宽初始化与持久化 | 本地类型、单测、构建、路由回归通过；待 Candidate 在 2200/1400/1100px 与 80/100/125% 实测 |
-| C J5 品牌、颜色共享、加价 | 未修正；根因与样本已记录 | 第 12 节 C1–C4：精确核对品牌、补规则遗漏统计、统一标准编辑入口、复用逐国重算 | 跨材料同步；正确规则加价；无重复叠加；人工价/无基准不覆盖 |
+| C J5 品牌、颜色共享、加价 | 本地实现完成；尚未合并/Candidate 验收 | `codex/bom-colour-followup` / `2218c0df`；有效品牌归一化、无效身份摘要、共享标准入口、逐国重算筛选 | 本地目标测试通过；待 Candidate 核对 J5 规则、双色 +300、manual/no-base 保护 |
 | D 登录失效 | 原因仍需响应证据 | 第 12 节 D：复用 AuthContext 与请求状态，区分 401/403/409，保留草稿 | 失效用户可重登恢复，有效低权限用户得到权限提示 |
 | #215 同模板跨车型/版本 | 专项验收未完成 | 第 12.2 节：构造两个真实渲染行并点击 Edit | 只有被点的目标行打开；不是仅比较 key 字符串 |
 | #220 Matrix/保护逻辑 | 部分读取和 Apply 已验，其他待验 | 第 3 节未验项 + C 的用例 | 两个编辑入口保存后 BOM/Matrix 一致；tier/manual/no-base 样本验证 |
@@ -46,6 +47,16 @@
 - 变更文件：`06_AppPlatform/frontend/src/components/OrderGeniusGrid.tsx`、`06_AppPlatform/frontend/src/pages/OrderGeniusPage.tsx`、`06_AppPlatform/frontend/src/tests/unit/orderGeniusGridLayout.test.ts`。提交：`53976fc0 fix(bom): keep model column stable across grid refreshes`。
 - 本地验证：`npm run check:types` 通过；`npm run test:unit -- --run src/tests/unit/orderGeniusGridLayout.test.ts` 实际执行全目录 74 files / 393 tests 通过；`npm run build` 通过；`npm run check:router-regression` 通过。构建仅有既有大 chunk warning。
 - 尚未完成：未创建/合并 PR，未部署新 Candidate，未做真实浏览器窄屏/缩放、拖拽列宽、Refresh/数量保存/页面重载及显隐列恢复验收。临时依赖 symlink 已删除；worktree 仅保留自动生成的 `hermes/dev_events/dev_events.jsonl` 修改，未纳入提交。
+
+### 2026-09-15 · C（含 E）共享颜色、J5 品牌归一化与色卡边框（本地实现完成，待 Candidate）
+
+- 基线：`JATO_Analysis_System/main@f29cf509`；独立 worktree：`/Users/litristan/Downloads/JATO_Analysis_System_bom_colour`；分支：`codex/bom-colour-followup`。
+- 根因：部分 J5 ICE/HEV SKU 的存储 `brand` 为空；规则 key、色卡入口、surcharge 查询和 Matrix 筛选都因此漏行或返回 0。两个编辑入口的标准色卡写入范围也不一致。普通色卡硬编码蓝边并不代表冲突或未保存。
+- 实现：新增 `resolve_material_brand`，仅用已知的 JAECOO/OMODA 身份从 `brand`、`model_name`、`bom_template` 归一化，不猜未知品牌；BOM、Matrix、规则汇总、surcharge 查询和逐国重算复用该结果。规则摘要新增无效身份计数与最多 5 个样例，前端 Colour Swatch Rules 卡显式告警；无效 SKU 不进入 Preview/Apply。
+- 实现：Edit Colour Code 在同一 Brand + Code 下修改名称或有效色卡时复用 `setOrderGeniusColourHexRuleStandard`，与小色卡入口使用同一 active-SKU 作用域；改 code 仍走现有单 SKU 迁移逻辑。色卡普通值改为中性细边框，missing 保留虚线，可点击色卡保留 `:focus-visible`。
+- 变更文件：`06_AppPlatform/backend/app/api/routes/order_genius.py`、`06_AppPlatform/backend/app/infra/order_genius_repository.py`、`06_AppPlatform/backend/app/services/order_genius_service.py`、`06_AppPlatform/backend/app/services/ordering_normalization.py`、对应后端测试；`06_AppPlatform/frontend/src/index.css`、`OrderGeniusPage.tsx`、类型与规则契约测试。提交：`2218c0df fix(bom): unify legacy colour identities and shared swatches`。
+- 本地验证：前端 `npm run check:types`、`npm run test:unit`（73 files / 393 tests）、`npm run build`、`npm run check:router-regression` 全部通过；后端 Python compileall 通过，相关规则/品牌测试 9 passed，Matrix/Options 4 passed。完整 `test_ordering_bom_admin.py` 为 39 passed / 5 failed，5 个失败均为该基线已有的 `list_bom_admin_country_columns` / `sync_missing_template_fobs` 缺失或旧测试契约，不是本批改动引入；需在后续基线对齐时单独处理。
+- 尚未完成：未合并、未部署 Candidate，未做真实 J5 ICE/HEV 浏览器验收；未写 Candidate/Active 数据，未验证实际 +300 重算、重复重算幂等、manual FOB 与缺 Single 基准跳过、BOM/Matrix 双入口真实写入后 UI 一致。worktree 仅保留自动生成的 `hermes/dev_events/dev_events.jsonl` 修改，未纳入提交；临时依赖 symlink 已删除。
 
 ### A 收尾：本地代码已收口，Candidate 仍待验收
 
