@@ -403,7 +403,8 @@ Markdown_Readme/Fullstack/JATO_PLATFORM_HANDOVER_2026-09-14.md
 - [ ] **P1 BOM 基线验收**：在 Candidate 验证 #215 同模板只编辑当前行，以及 #220 名称/swatch、Preview/Apply、Matrix 一致性、manual FOB/no-base 保护。记录真实失败，不重新搬 #173。
 - [ ] **P1-A BOM 输入/搜索收尾**：本地实现已在原 `codex/bom-input-search-continuity` worktree 收口（`260f839a` 第一版 + `6eeddf3c` 收口提交）。已补搜索 A→B→A 最新意图、旧响应/错误隔离、lookup 目标生命周期和真实 `BomAdminPanel` 延迟 Promise 交互测试；类型检查、74 个测试文件/400 个测试、构建和路由回归通过。尚未部署 Candidate，仍需按 [BOM 文档第 13 节](../features/BOM_ADMIN_CANDIDATE_ACCEPTANCE_2026-09-15.md#13-实施记录)做浏览器验收；B 已完成本地实现但同样待 Candidate。
 - [ ] **P1-B BOM Model 布局**：已在最新远端 `main@f29cf509` 的独立 worktree/branch 完成本地实现（`codex/bom-model-layout`，`53976fc0`），包含 Model 紧凑固定、其余列横向滚动、用户列宽持久化和显式重置；类型、单测、构建和路由回归通过。尚未合并或部署 Candidate，仍需按问题清单第 13 节做窄屏/缩放和刷新重载验收。
-- [ ] **P1 BOM 后续开发**：B 本地完成后继续按问题清单执行 C（含 E）→ D；每批从届时最新远端 main 新建 worktree/branch/PR，不复用旧分支，不优先建设多人编辑 row_version。
+- [x] **P1 BOM 本地批次**：B（`53976fc0`）、C（含 E，`2218c0df`）和 D（`1a64194a`）已在各自独立 worktree 完成本地实现与验证；不要重新执行这些批次，也不优先建设多人编辑 row_version。
+- [ ] **P1 BOM 合并与 Candidate 验收**：先逐批审阅并按授权合并 B/C/D，再由现有 main-only 流程准备新 Candidate；在新构件实测窄屏/缩放、J5 规则与双色 surcharge、BOM/Matrix 双入口、manual/no-base 保护、登录失效提示和草稿保留。未合并、未部署前不能写成线上已修复。
 - [ ] **发布，单独决定**：若要让正式站看到已验收功能，另行批准把同一个已测构件 update-active；再按现有独立流程同步 intl，分别核验版本。Candidate 可用不等于必须立即发布。
 - [ ] **P2 其他研发**：按产品优先级选择 Config 本地 10 文件收口、AstrBot JATO MCP 整理，或 MSRP #183；不要求全项目依次排队。保留 #157 对 #179 的现有合并约束。
 - [ ] **P3 历史整理**：最后再审计旧 Draft PR/旧 worktree；未提交成果未确认前不关闭、删除或清理。
