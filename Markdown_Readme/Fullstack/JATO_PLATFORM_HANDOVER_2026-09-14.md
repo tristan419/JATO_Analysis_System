@@ -1,5 +1,18 @@
 # JATO Platform 开发交接与恢复入口
 
+## 2026-09-15 更新：先读这里
+
+此节取代下文 9 月 14 日的 Candidate 待切换结论；其他业务线仍是原日期快照，未在本轮重新盘点。
+
+- #226 / #228 已合并；新 Candidate 页面实测 commit `9011da6ac1f5`、artifact `f55a70fea05f`，沙箱尾号 `5b654a45`，快照开始于 2026-09-15 09:13:10。
+- 公网已直接使用现有应用登录，Basic Auth 已移除；本轮 `candidateAdmin` 实际登录成功，匿名/坏 token `/v1/auth/me` 为 401、有效身份为 200。不要再次按旧步骤 discard 或合并 #226/#228。
+- BOM #220 已完成一次真实 Preview/Apply：仅 Candidate 的 8 行颜色名称被填充，前后 BOM API 比较 FOB/tier 等其他返回字段未变。完整验收尚未完成，不能标记可发布。
+- 新发现：J5 ICE 21 行、HEV 14 行品牌为空，联动影响色卡、规则统计和加价；Model 窄屏移位、输入抢焦点已复现；搜索保存后的无条件 reload 已定位。
+- 下一项应选 BOM 输入/保存连续性、J5 共享颜色/加价或列布局修复，不优先扩展多人编辑 row_version，不新增门禁。
+- 完整证据、沙箱写入清单和 TODO：[BOM Candidate 验收与问题梳理](../features/BOM_ADMIN_CANDIDATE_ACCEPTANCE_2026-09-15.md)。本轮没有更新 Active/www/intl，也没有合并文档 PR。
+
+## 以下为 2026-09-14 历史盘点（Candidate 当前状态以上节为准）
+
 > 状态快照：2026-09-14（Asia/Shanghai），已按二次实证审计修订，替代本文初稿判断。
 >
 > 目的：长时间暂停开发后，从一个可信入口重新判断“已经完成什么、什么仍在搁置、下一步从哪里开始”。
@@ -15,9 +28,9 @@
 1. BOM Admin、COC、MarketScan、Hermes 主体已经进入 `main`；
 2. Config、AstrBot 有大量真实成果，但远端 PR 与本地未提交进展已经分叉；
 3. MSRP 的安全与治理主干已经合并，剩余失败分类和真实来源覆盖工作；
-4. Candidate 登录方案接近完成，但仍未完成线上切换，是恢复稳定验收环境前最直接的尾项。
+4. Candidate 登录切换在本次历史盘点时未完成，现已于 9 月 15 日进入业务验收，见页首更新。
 
-推荐个人执行顺序：先收口 Candidate 登录，恢复可用的在线验收入口；再验收已合并的 BOM 改动，从最新 `main` 继续一个具体 BOM 新功能。Config、AstrBot、MSRP 的选择随后按产品优先级决定，不构成全项目串行依赖。
+推荐个人执行顺序：利用现已可用的 Candidate 验收并修复具体 BOM 问题，从最新 `main` 继续开发。Config、AstrBot、MSRP 的选择随后按产品优先级决定，不构成全项目串行依赖。
 
 Candidate 影响在线验收，不是其他功能本地开发的硬前置。先做它是为了便于用户看见和验证成果，不是要求重建部署系统或增加门禁。
 
@@ -69,9 +82,9 @@ git -C TARGET_WORKTREE rev-list --left-right --count JATO_Analysis_System/main..
 
 交接入口尚未进入 main：本文件及本轮关联文档修订位于 `codex/jato-platform-handover-20260914` / [Draft #227](https://github.com/tristan419/JATO_Analysis_System/pull/227)。合并前从 main 新建 worktree 不会带入本交接文件，应显式读取本地 handover worktree。原混合区 `AGENTS.md` 也是未跟踪文件，不能假设它会随新 worktree 自动复制。本次未合并 PR 或触发部署。
 
-## 4. Candidate / 部署：建议最先收口
+## 4. Candidate / 部署：历史过程，勿重放旧切换顺序
 
-### 当前有效进展
+### 9 月 14 日历史进展（#226/#228 后续已合并）
 
 PR：[#226 fix(candidate): require application login](https://github.com/tristan419/JATO_Analysis_System/pull/226)
 
@@ -104,9 +117,9 @@ Candidate 并非从未搭好：2026-08-10 的 [自动 prepare run 31372523132](h
 4. 在 Basic Auth 仍存在时验证真实 OJEUR 登录、401 和沙箱隔离；
 5. 最后原子移除 Candidate vhost 的 Basic Auth。
 
-### 恢复建议
+### 当前恢复建议
 
-先核对 #226 当前内容、Cloudflare 失败是否相关，以及最新 main/运行状态。优先复用已完成实现，只在发现真实缺陷时做最小修复；剩余重点是严格登录、401、沙箱隔离和公网入口验证，不重写认证系统。移除 Basic Auth 和更新 Active/同步 intl 是不同操作，后两者仍须独立授权。
+不要重放本节历史切换步骤。新 Candidate 已可登录，#228 已解决认证开启后旧匿名 monthly 探针期待 423 的不匹配；继续页首链接中的 BOM 验收。Cloudflare 旧分支预览日志的调查不等于 Candidate 仍不可用。更新 Active/同步 intl 仍须分别授权。
 
 [#225](https://github.com/tristan419/JATO_Analysis_System/pull/225) 的自动 Candidate 证据已经被 #226 吸收，原则上不应单独继续合并。
 
@@ -382,11 +395,12 @@ Markdown_Readme/Fullstack/JATO_PLATFORM_HANDOVER_2026-09-14.md
 
 - [x] 本次审计已确认 main、PR、正式站前端版本和混合区统计口径。
 - [ ] **交接入口**：审阅本次 #227 文档修订，决定何时合并；合并前显式读取本 worktree，不把旧 main 中的 Goal 状态当最新指令。文档合并本身可能触发现有 main CI → Candidate 自动准备，不能当成完全无运行影响。
-- [ ] **P0 Candidate**：恢复 `jato月更` / #226，确认本地与远端 tree 一致及当前 CI；只读查清 Cloudflare 预览失败是否相关，不因一个非 required 红项重写认证。
-- [ ] **P0 Candidate 切换**：先核验 live 状态；获准后按第 4 节执行旧 Candidate 废弃、#226 合并、自动 prepare、Basic Auth 内验证，再移除外层 Basic Auth。不同阶段按现有授权边界执行。
-- [ ] **P0 完成标准**：公网 Candidate 打开现有 `/login`；真实沙箱账号可登录；未登录/坏 token API 返回 401；测试写入只落沙箱；页面版本与 main/快照信息清楚；Active/www/intl 不被本轮替换。
+- [x] **Candidate 登录入口**：#226/#228 已合并，新 Candidate 已部署，Basic Auth 已移除，9 月 15 日真实登录与 401/200 已复验；不要重做切换。
+- [x] **Candidate BOM 写入样本**：现有 Preview/Apply 成功填充沙箱 8 行颜色名称；未向 Active/www/intl 发送业务写入。完整环境隔离以前序部署证据为准，不把单次 UI 测试等同于重新证明全部基础设施隔离。
 - [ ] **P1 BOM 基线验收**：在 Candidate 验证 #215 同模板只编辑当前行，以及 #220 名称/swatch、Preview/Apply、Matrix 一致性、manual FOB/no-base 保护。记录真实失败，不重新搬 #173。
-- [ ] **P1 BOM 新功能**：选一个具体需求，从届时最新远端 main 新建独立 worktree/branch/PR，复用现有 BOM 逻辑；不复用旧 BOM 分支。此项本地开发不受 P0 技术阻塞。
+- [ ] **P1-A BOM 输入/搜索收尾**：本地实现已在原 `codex/bom-input-search-continuity` worktree 收口（`260f839a` 第一版 + `6eeddf3c` 收口提交）。已补搜索 A→B→A 最新意图、旧响应/错误隔离、lookup 目标生命周期和真实 `BomAdminPanel` 延迟 Promise 交互测试；类型检查、74 个测试文件/400 个测试、构建和路由回归通过。尚未部署 Candidate，仍需按 [BOM 文档第 13 节](../features/BOM_ADMIN_CANDIDATE_ACCEPTANCE_2026-09-15.md#13-实施记录)做浏览器验收；B 已完成本地实现但同样待 Candidate。
+- [ ] **P1-B BOM Model 布局**：已在最新远端 `main@f29cf509` 的独立 worktree/branch 完成本地实现（`codex/bom-model-layout`，`53976fc0`），包含 Model 紧凑固定、其余列横向滚动、用户列宽持久化和显式重置；类型、单测、构建和路由回归通过。尚未合并或部署 Candidate，仍需按问题清单第 13 节做窄屏/缩放和刷新重载验收。
+- [ ] **P1 BOM 后续开发**：B 本地完成后继续按问题清单执行 C（含 E）→ D；每批从届时最新远端 main 新建 worktree/branch/PR，不复用旧分支，不优先建设多人编辑 row_version。
 - [ ] **发布，单独决定**：若要让正式站看到已验收功能，另行批准把同一个已测构件 update-active；再按现有独立流程同步 intl，分别核验版本。Candidate 可用不等于必须立即发布。
 - [ ] **P2 其他研发**：按产品优先级选择 Config 本地 10 文件收口、AstrBot JATO MCP 整理，或 MSRP #183；不要求全项目依次排队。保留 #157 对 #179 的现有合并约束。
 - [ ] **P3 历史整理**：最后再审计旧 Draft PR/旧 worktree；未提交成果未确认前不关闭、删除或清理。

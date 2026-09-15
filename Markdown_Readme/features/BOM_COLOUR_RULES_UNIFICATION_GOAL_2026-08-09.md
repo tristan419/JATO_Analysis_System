@@ -2,7 +2,7 @@
 
 > Goal ID: `bom-colour-rules-unified`
 >
-> 状态：`MERGED_MAIN_PENDING_BUSINESS_ACCEPTANCE`（2026-09-14 复核）
+> 状态：`MERGED_MAIN_PARTIAL_BUSINESS_ACCEPTANCE_WITH_FINDINGS`（2026-09-15 Candidate 实测）
 >
 > 实现基线：`main@d40981e87435d58c63c7c4e6c54b07038a83901f`
 >
@@ -10,7 +10,7 @@
 >
 > 实现分支：`codex/bom-colour-rules-implementation`
 >
-> 实现 PR：`#220`（已合并；Candidate 业务验收未确认，正式站前端尚未包含）
+> 实现 PR：`#220`（已合并；Candidate 部分验收通过，完整验收未完成；本轮未发布正式站）
 >
 > 独立范围：只处理颜色名称、swatch、颜色规则报告、Add/Edit Colour 和选品页取色一致性。
 
@@ -20,8 +20,9 @@
 - Candidate 可写 FIFO 沙箱代码 PR `#219` 已合并到 `main@2dea140f328c1d7077ca0792979b47bcca4dca8e`。
 - 本 Goal 设计契约 PR `#218` 已合并到 `main@d40981e87435d58c63c7c4e6c54b07038a83901f`。
 - #220 已于 2026-08-10 合并；可写 Candidate prepare 和后续 main 自动 prepare 均有成功记录，见 [run 31372523132](https://github.com/tristan419/JATO_Analysis_System/actions/runs/31372523132)。不应重新执行已完成的首次环境建设。
-- 尚未确认本 Goal 的真实页面写入验收。2026-09-14 Candidate 外层仍为 Basic Auth；登录替换在 Draft #226，需按现有手册收口。
-- www/intl 前端均为 `cd4557cb932374a0fefb6c80a5fac9fb75a67d62`，尚不包含 #215/#220；main 为 `f29cf5096b528e2c0350047f2bc462cc8bfc8696`。
+- 2026-09-15：#226/#228 已合并，Candidate commit `9011da6ac1f5` 已可实际登录，Basic Auth 已移除。Refresh/Preview/Apply 已真实执行：8 个 SKU 仅名称变化，FOB/tier 等其他 BOM API 返回字段未变。
+- 验收发现 35 个 J5 空品牌 SKU 被规则统计排除；输入抢焦点、搜索保存丢筛选等仍需修复。详细证据、样本和未验项见 [Candidate 验收](BOM_ADMIN_CANDIDATE_ACCEPTANCE_2026-09-15.md)。不能标记整个 Goal 完成。
+- www/intl 的 `cd4557cb932374a0fefb6c80a5fac9fb75a67d62` 为 9 月 14 日历史核验值；本轮未重新确认其构件版本，未执行正式站发布。
 - 下一步是验收现有实现，不是重新搬旧 BOM branch 或重写颜色功能。新功能从届时最新 main 新建 worktree/branch/PR；Candidate 不阻塞本地开发。
 - 恢复入口与个人待办见[平台交接](../Fullstack/JATO_PLATFORM_HANDOVER_2026-09-14.md)。以下旧现状、统计和根因保留为实施前记录，不代表修复后仍然失败。
 

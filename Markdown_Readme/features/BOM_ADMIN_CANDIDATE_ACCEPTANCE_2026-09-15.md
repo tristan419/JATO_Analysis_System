@@ -1,0 +1,359 @@
+# BOM Admin / Order Genius：Candidate 验收与问题梳理
+
+> 日期：2026-09-15，Asia/Shanghai。状态：部分验收通过，已发现需修复的问题；不是发布批准。
+> 用户目标：稳定填写订单、稳定列布局、跨物料共享颜色名称/色卡、正确计算颜色加价。暂不优先建设多人编辑、row_version 扩展或新门禁。
+> 初次调研只做验收和文档；之后 A 已有本地代码提交 `260f839a`，尚未部署验收。整个 BOM 修复未完成。
+> **下一位执行者先读第 13 节状态与补做项，再按第 12 节实施。** 先续接 A 的现有 worktree，不重新建一个 A 分支。
+
+## 13. 实施记录
+
+### 最新执行口径（优先于下方历史“已收口”表述）
+
+- A 已有本地提交 `260f839a`、`6eeddf3c`；实际新增组件测试仅覆盖两项搜索场景。输入焦点、1200ms、关闭/切换目标、FOB 保存刷新等完整行为验证尚未补齐，因此不能称 A 已全部验收。
+- Candidate 最近核对仍为 `9011da6a`，没有上述修复。400 个测试是历史实跑结果，不代表本清单所有业务场景通过。
+- 后续五项对应：Model/列宽 → B；J5 空品牌/漏统计/加价 → C1/C2/C4；颜色双入口同步 → C3；登录提示 → D；蓝边框 → E。五项实施说明均在第 12 节。
+- B 已按最新远端 `main@f29cf509` 在独立 worktree 实施并完成本地验证；尚未合并或部署 Candidate。A 未部署不阻塞 B 本地开发；C/D 按各自范围继续，E 可随 C3 的色卡交互一并实施。
+- 发布顺序：本地行为验证 → 可审阅 PR → 获授权合并 main → 现有 CI 自动 prepare Candidate → 在新构件做业务验收 → 单独决定 Active 发布。不要要求“Candidate 验收通过才允许代码进入 main”，这会与现有 main-only Candidate 流程形成循环。
+
+### 2026-09-15 · A 第一版（待补齐交互验证和异步边界）
+
+- 分支：`codex/bom-input-search-continuity`；基线：远端 `main@9011da6ac1f5592e37b7cba80c455e30e0b0b48e`。代码 worktree：`/Users/litristan/Downloads/JATO_Analysis_System_bom_input_search_continuity`。
+- 已修改：`06_AppPlatform/frontend/src/pages/OrderGeniusPage.tsx`、`06_AppPlatform/frontend/src/tests/unit/orderGeniusColourRulesPage.test.ts`。没有修改后端、价格规则、认证或部署。
+- 已实现：颜色编辑 focus 只依赖稳定编辑目标；Add/Edit lookup 延迟统一为 `1200ms`；保存/刷新复用当前已生效搜索，显式 Clear 保持为空查询，加载中的空查询不会被转换成全量刷新。
+- 已验证：`npm run check:types` 通过；`npm run test:unit` 通过（73 files / 398 tests）；`npm run build` 通过；`npm run check:router-regression` 通过。
+- 尚未完成：新构件尚未部署 Candidate；需在 Candidate 浏览器实测名称连续输入、代码查库回填不抢焦点，以及 `MH0032 → FOB 保存 → 仍保留搜索`。因此本记录不是 A 的线上验收或发布批准。
+- 下一步：在现有分支补齐下述 A 收尾，形成可审阅代码和行为证据，再走现有 PR→main→自动 prepare；B/C/D 保持各自明确范围。
+
+### 给 Luna Max：当前交接状态与顺序
+
+| 工作 | 当前状态 | 具体改法入口 | 完成证据 |
+|---|---|---|---|
+| A 输入/自动填充/搜索 | 本地实现已收口；尚未部署验收 | 第 13 节 A 收口记录 + 第 12 节 A | Candidate 新构件复验：输入焦点、1.2 秒查库、保存后搜索保持 |
+| B Model/列宽 | 本地实现完成；尚未合并/Candidate 验收 | `codex/bom-model-layout` / `53976fc0`；Grid 默认 280px、优先固定 Model、用户列宽初始化与持久化 | 本地类型、单测、构建、路由回归通过；待 Candidate 在 2200/1400/1100px 与 80/100/125% 实测 |
+| C J5 品牌、颜色共享、加价 | 未修正；根因与样本已记录 | 第 12 节 C1–C4：精确核对品牌、补规则遗漏统计、统一标准编辑入口、复用逐国重算 | 跨材料同步；正确规则加价；无重复叠加；人工价/无基准不覆盖 |
+| D 登录失效 | 原因仍需响应证据 | 第 12 节 D：复用 AuthContext 与请求状态，区分 401/403/409，保留草稿 | 失效用户可重登恢复，有效低权限用户得到权限提示 |
+| #215 同模板跨车型/版本 | 专项验收未完成 | 第 12.2 节：构造两个真实渲染行并点击 Edit | 只有被点的目标行打开；不是仅比较 key 字符串 |
+| #220 Matrix/保护逻辑 | 部分读取和 Apply 已验，其他待验 | 第 3 节未验项 + C 的用例 | 两个编辑入口保存后 BOM/Matrix 一致；tier/manual/no-base 样本验证 |
+
+建议顺序：A 收尾 → B 列布局 → C 品牌/共享/加价 → D 登录反馈 → 汇总专项验收。业务优先级可调整；完成一个批次只报告该批状态，不能写成“所有 bug 已修好”。后续新任务从届时最新 main 建对应分支；同一未合并任务继续原 worktree。
+
+### 2026-09-15 · B Model 紧凑布局与列宽（本地实现完成，待 Candidate）
+
+- 基线：`JATO_Analysis_System/main@f29cf509`（远端跟踪 ref）；独立 worktree：`/Users/litristan/Downloads/JATO_Analysis_System_bom_model_layout`；分支：`codex/bom-model-layout`。
+- 根因：`getModelColumnWidth(rows)` 将分组标题和完整元信息估宽，并把结果放进随数据依赖重建的 `columnDefs`；固定区同时包含多列，AG Grid 在窄视口会自动解除固定，Model 因此可能跑到右侧。此前没有用户列宽持久化。
+- 实现：Model 改为稳定 `initialWidth=280`、`minWidth=220`、`maxWidth=760`，设置稳定 `colId`、`lockPinned` 和 `lockPosition`；Version/Colour/Interior/Material/Note/FOB/Country 不再强制 pinned，保留 Model（以及 PI 选择列）为固定优先级，其余列横向滚动。分组标题和元信息在固定宽度内截断并提供 tooltip。
+- 实现：使用 AG Grid Column State API 只恢复/保存 `{colId,width}`；按 `user.username` 生成 `localStorage` scope，校验宽度范围，保留显隐列的历史宽度，不保存自动 unpin 的顺序/位置。新增显式 `Reset column widths`，只清除列宽偏好并恢复初始宽度，Refresh 不触发重置。
+- 变更文件：`06_AppPlatform/frontend/src/components/OrderGeniusGrid.tsx`、`06_AppPlatform/frontend/src/pages/OrderGeniusPage.tsx`、`06_AppPlatform/frontend/src/tests/unit/orderGeniusGridLayout.test.ts`。提交：`53976fc0 fix(bom): keep model column stable across grid refreshes`。
+- 本地验证：`npm run check:types` 通过；`npm run test:unit -- --run src/tests/unit/orderGeniusGridLayout.test.ts` 实际执行全目录 74 files / 393 tests 通过；`npm run build` 通过；`npm run check:router-regression` 通过。构建仅有既有大 chunk warning。
+- 尚未完成：未创建/合并 PR，未部署新 Candidate，未做真实浏览器窄屏/缩放、拖拽列宽、Refresh/数量保存/页面重载及显隐列恢复验收。临时依赖 symlink 已删除；worktree 仅保留自动生成的 `hermes/dev_events/dev_events.jsonl` 修改，未纳入提交。
+
+### A 收尾：本地代码已收口，Candidate 仍待验收
+
+复核 `260f839a` 后，以下并发和编辑目标边界已在同一 worktree 收口。Candidate 浏览器尚未部署这次新构件，因此不能写成线上已修好。
+
+1. **搜索队列已收口。** `latestLoadKeyRef` 和 `pendingLoadKeyRef` 现在始终代表最后一次请求意图；A→B→A 不会在 A 完成后错误执行旧 B。显式空字符串仍表示 Clear，`null` 仍表示无待办；保存触发的同查询刷新仍会执行。
+2. **旧结果/错误已隔离。** `getBomAdmin` 返回或失败时，只有仍对应最新查询的请求才能更新行、国家、notice 和错误；过时请求只结束自己的 loading 流程。
+3. **定时衔接已改为直接执行最新 pending。** finally 不再用捕获旧值的零延迟 timer，释放当前请求后直接提交最新 pending key，避免旧查询重新排队。
+4. **lookup 生命周期已绑定目标。** Edit/Add 的 lookup effect 纳入稳定编辑目标 key；切换同品牌同代码的另一材料会清理上一结果/错误，回填前同时核对目标身份、当前代码和 requestId；已有 touched 字段保护保留。
+5. **实际组件交互测试已补。** 新增 `bomAdminAConcurrency.test.tsx`，用真实 `BomAdminPanel`、延迟 Promise 和模拟 API 覆盖 A→B→A 最终刷新、旧响应不得覆盖新查询；现有源码契约测试同步改为检查目标 key 和最新查询守卫。类型检查、全量单测、构建和路由回归均已通过（74 files / 400 tests）。
+
+本地收口提交：`6eeddf3c fix(bom): close search and lookup continuity gaps`（前一版本：`260f839a`）。2026-09-15 只读复核 Candidate 仍运行 `9011da6ac1f5`，因此尚未包含上述提交；在旧构件中输入 Colour name 后仍观察到 Code `BW` 被重新聚焦并全选（activeElement=Code，selection=0–2），未点击保存、未写入沙箱。当前仍需：把这两个提交作为同一 BOM 分支构件部署到 Candidate，实测逐字 code、名称焦点、约 1.2 秒回填、回填后手改、切换/关闭目标、加载中 Clear、FOB 保存刷新和国家筛选；先完成本地验证和 PR 审查，获授权合并 main 后由现有流程准备 Candidate；Candidate 验收通过后再决定 Active 发布。
+
+首要续接路径：`/Users/litristan/Downloads/JATO_Analysis_System_bom_input_search_continuity`。先读 status/diff；提交钩子留下的 `hermes/dev_events/dev_events.jsonl` 修改需保留并识别，不混入无关业务修改。完成本地交互验证不必等待 Candidate 部署；Candidate 复验另记录实际构件 SHA，不能在旧 Candidate 页面验证新代码。
+
+## 1. 基线与证据边界
+
+- 实测入口：https://candidate.ojeur.cloud/product/order-genius ，使用 `candidateAdmin` 登录；不在文档记录密码。
+- 页面显示 commit `9011da6ac1f5592e37b7cba80c455e30e0b0b48e`，artifact `f55a70fea05f3ba983db1f9e7f83e4fd67a6d1285b2a43373265a1109c3981b2`。
+- 沙箱 `jato_candidate_20260915t011310z_3972d27f5b654a45`，页面显示 Active 快照开始时间 2026-09-15 09:13:10。所有本轮业务写入均经 Candidate 同源 API。
+- #226、#228 已合并，Candidate 已使用应用登录，不再需要 Basic Auth。本轮重验真实登录，以及 `/v1/auth/me` 匿名 401、坏 token 401、有效身份 200。
+- 用户截图里可见的地址是 `ojeur.cloud`，不能把截图当成当前 Candidate #220 的表现。当前 Candidate 报告已经不同于截图中的“50 rules / clean”。
+- 源码审查以 `JATO_Analysis_System_candidate_readiness` 的 `fa55a8f91ef0ab299d3794393a18052cc4709c2f` 为本地读取基线；不是旧 handover worktree 中的认证代码。线上构件以页面 SHA 为准。
+- 本轮未重跑历史单元测试，未完成所有写入/并发/价格重算验收。以下明确区分实测、源码证据、待验证假设。
+
+## 2. 结论：不是一个 bug，但有三条清晰的关联链
+
+| 关联链 | 已取得的证据 | 影响 |
+|---|---|---|
+| J5 SKU 品牌为空 → 规则 key 无效、加价查不到 | Candidate 310 个 SKU 中 35 个空品牌：ICE 21、HEV 14 | 色卡入口拒绝、共享规则漏统计、品牌 surcharge 返回 0 |
+| 保存/输入触发错误的状态更新 | 输入 effect 依赖整个编辑对象；保存后 `load()` 未携带搜索 | 焦点全选、搜索结果恢复全量；不是数据真的被删除 |
+| Model 自动扩宽 + 多列固定 + 未保存列状态 | 宽屏 Model 740px 固定左侧；缩窄后变为非固定列 | Model 跑到其他固定列后；用户列宽不能可靠保留 |
+
+登录失效是另一条链，不能直接与颜色库或布局合并为同一根因。红字也不能一律理解为认证失败。
+
+## 3. #215 / #220 验收结果
+
+| 项目 | 结果 | 证据或剩余工作 |
+|---|---|---|
+| #215 普通行 Edit | 部分通过 | J5 ICE 展开后点一行，只有 1 个 Done；其他行仍为 Edit |
+| #215 同模板跨车型/版本不串行 | 待专项样本验收 | 当前 310 SKU 中没有同模板跨 modelName/version 的样本；源码 `buildBomEditScopeKey(modelGroupKey, versionKey, bomTemplate)` 与对应测试已存在，不能用普通行测试代替 |
+| #220 Refresh 五类状态 | 通过，但有统计盲区 | 初始 36 rules：fillable 5、missing 22、nameConflict 7、swatchConflict 2、complete 0；空品牌 SKU 被排除 |
+| #220 Lookup | API 通过 | OMODA/W3 → water blue、`#B6D3FB`，source=brand_code_rule，无冲突 |
+| #220 Preview → Apply | 真实页面写入通过 | Preview 8 项，点击 Fill 8 deterministic items，HTTP 200 / updated=8；再次 Preview 为 0 项 |
+| Apply 不改价格和 tier | 本次样本通过 | 比较前后 310 SKU 的 BOM API 全字段，仅 8 行 `colour` 改变；FOB、tier、swatch、rowVersion 等返回字段均未变；数据库内部 updated_at 不在该 API 内 |
+| Add/Edit 自动填充与二次修改 | 已有实现，完整 UI 验收未完成 | 现有 180ms debounce、requestId 防旧响应、touched 标记；焦点 bug 阻碍正常输入 |
+| J5 色卡入口 | 失败，实测复现 | 展开 ICE 后有 21 个 missing-brand/code/name 按钮；点击显示 required 提示，不打开色卡 |
+| BOM / Matrix 同步 | 数据读取样本通过，双入口写入未验完 | Candidate SE/2026 Matrix 93 行全部匹配 BOM materialCode，colourHex 零差异；仍需验证两种编辑入口更新后的 UI 与历史行边界 |
+| tier 重算 / manual FOB / no Single base | 待真实价格写入验收 | 源码有 skippedManual / skippedNoBase 与逐国明细；本轮未执行 tier 修改，不能标记通过 |
+
+### 本轮沙箱写入记录（保留在 Candidate，未恢复）
+
+仅通过现有 Preview/Apply 改了以下颜色名称，未改价格。它们是验收数据，不是对正式站名称的业务批准；例如 “Model green” 仍应由业务确认标准名称。
+
+| materialCode | 原名称 | 应用规则后的名称 |
+|---|---|---|
+| T7000NHW3MY0001 | W3 | water blue |
+| T7000NHX4MY0002 | X4 | Carbon crystal black&Aviation silver |
+| T7000NHZEMY0002 | ZE | Carbon crystal black&Khaki white |
+| T7000NHZUMY0002 | ZU | Carbon crystal black&Aquatic green |
+| T71604NSPMH0031 | SP | Model green |
+| T71604NSPMH0032 | SP | Model green |
+| T71604NSPMH0035 | SP | Model green |
+| T7160RGSPMH0001 | SP | Model green |
+
+输入焦点测试的 `audit unsaved` 已取消，没有保存。下一次 prepare 会替换一次性沙箱，不要把本轮测试结果误认作 Active 已修复。
+
+## 4. J5 ICE / HEV：空品牌是共同根因，但修品牌不等于自动补完历史价格
+
+### 已证实
+
+1. BOM API 返回 JAECOO5 ICE 21 行、JAECOO5 HEV 14 行 `brand=""`，不是页面仅仅漏显示标题。
+2. ICE 样本 `T71611CBWMM0013` 有色码 BW、名称 Khaki white，但品牌为空、colourHex=null。其来源元数据是 `OMODA&JAECOO - Order Material Codes.xlsx` / `JAECOO5 ICE` / row 23。
+3. `renderColourChip` 要求 brand、code、name 都非空才打开色卡，故 21 个 ICE 入口均被挡住。
+4. `_colour_rule_key` 要求规范化品牌+色码。`build_colour_hex_rules_from_skus` 对无效 key 直接 continue，所以这些 SKU 不计入 missing，也不参加 Preview。
+5. 前后端加价查找依赖品牌。后端 `get_colour_surcharge_amount_for_sku` 没有命中规则就返回 0；品牌默认查找目前是字段精确匹配，还应检查非空品牌的规范化一致性。
+6. Candidate 当前规则：OMODA dual/special = 200 EUR，JAECOO dual/special = 300 EUR。J5 应按 JAECOO 规则讨论 +300，而不是默认写死 +200；若业务要求 J5 +200，那是另一个价格规则决定。
+7. HEV 样本 `T71516FZ6MH0012` 的 BG final=15500、uploaded=15800、source=copied_from_country；`T71516FZ6MH0011` 为 13700/14000。差值与 300 一致，但不能仅凭差值断言当年哪次操作覆盖价格。
+
+### 最小处理方向
+
+- 先做一次精确范围的数据修正：核实这 35 行品牌应为 JAECOO，复用已有 metadata 更新逻辑；不重导整个 Excel，不搬旧分支。
+- 追溯历史写入来源尚未完成。当前 `material_master_parser.py` 已从 model_name + sheet_name 检测品牌，`ordering_normalization.py` 也已能识别 JAECOO；不能未经验证再写一个全新的品牌推断器。
+- 规则报告应把无效品牌/色码计为“未纳入规则的 SKU”，不能静默消失；无需另建治理平台。
+- 修品牌后重新 Refresh/Preview；颜色库仍可能缺失/冲突，不保证一键都可填。
+- 再逐国列出 Single 基准、现有 FOB 来源、tier、适用 surcharge。调用现有重算逻辑只处理明确可重算行，保留 manual FOB 和 missing-base 跳过原因。不对所有颜色一律 +300。
+- 色卡是显示属性，tier 是计价属性：双色 swatch 不等价于必须改成 dual tier；本次 J5 确有 dual 行但品牌失效。
+
+## 5. “所有物料共用颜色库”目前实现到了哪里
+
+当前不是按 Material 建库，而是从所有 active SKU 汇总 **规范化 brand + colourCode**，不同物料/车型共用；它也不是一个完全独立、权威的颜色主表。名称/swatch 仍保存在 SKU 上，汇总可能发生冲突。不能把“共享”理解为不分品牌同色码必然一致。
+
+- #220 已把名字从规则 key 中移除；Refresh 分五类，Preview 只填确定项，冲突不会随意覆盖。
+- 小色卡弹窗走 `setOrderGeniusColourHexRuleStandard` → `set_standard_colour_hex_for_rule`，更新同品牌同代码的 active SKU。
+- Edit Colour Code / Add Colour 复用 `resolve_colour_attributes`，但手工覆盖仍能作为 SKU 值保存并造成规则差异；它不是自动批准整个品牌的标准变更。
+- 因而用户要求“两个入口修改色卡同步”，与目前两个入口的写入作用域仍有差距。最小方案是明确普通代码迁移与共享标准编辑的差别；同样的“改标准色卡”入口复用现有 standard 更新函数，不另建第二个颜色库。改代码时不要顺手把不相关旧 code 的全局标准覆盖掉。
+- Matrix 缺色时不应凭本地名称表画出一张看似正确的色卡、BOM 却另存一套；继续复用 #220 的 colourHex 数据和公共 renderer。对历史 SKU 是否追随新标准必须明确，现有 standard 更新限定 active。
+
+## 6. 输入焦点、蓝框与 1.2 秒自动填充
+
+### 输入 bug：已实测
+
+在 Candidate J5 ICE 的 Edit Colour Code 窗口修改 Colour name，150ms 后 activeElement 已变回 Code，值 BW，selectionStart=0 / selectionEnd=2。取消退出，未提交。
+
+原因：`OrderGeniusPage.tsx` 两个 focus effect 分别依赖整个 `colourCodeEditor` / `addColourEditor` 对象；任一 onChange 或查库回填都会生成新对象，再次 focus/select。不是已证明的浏览器 Insert 覆盖模式。
+
+修复方向：仅弹窗打开或切换明确编辑目标时聚焦一次；输入、改名称、改 swatch 和异步回填均不得抢焦点。复用现有弹窗，不加另一套输入状态机。
+
+### 蓝框不止一种
+
+- 输入框蓝边是焦点提示；反复抢焦点使它看起来不断跳动。保留可访问的键盘焦点提示，不简单删掉所有 outline。
+- 小色卡蓝边在当前 `renderColourChip` 中是有 swatch 时硬编码 `2px solid #3b82f6`；不是“未保存”或“冲突”的可靠信号。建议普通色卡用中性边框，focus-visible 再突出，冲突使用有文字解释的状态。
+
+### 自动填充不用重做
+
+现有 #220 Add/Edit 查库是 180ms debounce，不是用户希望的约 1200ms；已经有 requestId 和 `colourNameTouched/colourHexTouched` 保护。优先修焦点，再把现有等待时间调到约 1.2 秒：
+
+- 有有效品牌/代码且无冲突，才回填未手工修改的名称/色卡。
+- 同一代码回填后允许二次编辑，等待/刷新查询响应不反跳；换代码才重置该代码的 touched 状态。
+- 冲突、无规则、缺品牌显示原因，不能把灰色默认值当成已命中的标准色卡。
+
+## 7. 搜索后保存 FOB，为什么变成全量结果
+
+源码闭环已明确：`saveFobEdit` 保存并 patch 当前行，然后 `scheduleLoad(1200)`；`scheduleLoad` 延迟执行的是不带参数的 `load()`；`load(s)` 只有在 s 非空才提交 search/country。输入框文字还在，返回列表已无筛选。
+
+同类路径还包括 metadata 保存、颜色标准保存、Preview Apply、Copy Country、Adjust Country、模板改名等直接 `load()`，所以只修 FOB 一个按钮不够。
+
+最小方向：让现有重载流程默认使用当前已生效搜索条件，显式 Clear 才加载全量；统一调用者语义，保留现有本地 patch，避免手动输入字段与列表条件分离。后续验收记录 search 请求参数，不只观察输入框。此次未改 FOB 来复现该写入路径。
+
+## 8. Model 列和用户列宽
+
+实测步骤：2200px 宽刷新页面 → Model 固定左侧、740px；缩到 1400px → Model pinned=false，前面留下 Version/Colour/Interior/Material/Note/FOB。再放大不自动恢复，刷新宽屏才重新固定。实测是 viewport 宽度变化，尚未逐档测试浏览器原生缩放。
+
+源码 `getModelColumnWidth(rows)` 把分组标题与完整 groupMeta 拼接估宽；没有紧凑最大值。其他信息列也都 pinned:left，固定区太宽，窄屏解除固定时未保护 Model 的优先级。
+
+建议交互：
+
+1. 默认 Model 约 260–300 CSS px，以用户截图 #3 为视觉目标；主体显示车型/版本，重复说明截断或放 tooltip，不按整段元信息无限扩宽。
+2. Model 始终第一信息列并优先固定；窄屏其余信息列进入横向滚动区域，不把 Model 释放到右侧。PI 选择框的固定位置另按现有功能保留。
+3. 用现有 Grid column state 保存用户宽度，稳定 colId；宽度默认值只用于首次初始化，不在数据/数量刷新时强制应用。只保存所需宽度等偏好，不恢复过去自动 unpin 产生的错误列顺序。
+4. 区分“刷新数据”和“重置列布局”。前者保留宽度、筛选、展开与滚动；后者才恢复默认。页面重载后也恢复用户偏好。
+
+当前 columnDefs 会随 rows 派生宽度/其他依赖变化重建，显式 width/pinned 会再次参与更新，未发现列宽持久化接入。刷新页面丢宽度的原因明确；每次数字保存是否都触发 width 重置仍需回归实测，不能一概而论。
+
+## 9. 红字保存失败 / BOM 403：可能同类，但还不能定案
+
+- Candidate 已验证匿名/坏 token=401，有效用户=200。
+- `api/client.ts` 的 request 目前抛带 status 的 Error，没有在该入口把失效会话统一反馈给 AuthContext。
+- 后端在 AUTH_REQUIRED=false 且 AUTH_ENABLED=true 时，无效 token 可退为 anonymous viewer，再由写权限校验返回 403。该代码路径可以解释“界面仍显示登录但写入 403、重登恢复”；尚未取得用户出错当时的网络响应和正式站配置来证明就是这次原因。
+- 数量红字也可能是 409 版本冲突、校验或网络失败；数量保存已有单独 conflict 处理，不能都引导重新登录。
+
+建议复用现有 AuthContext + 请求错误 status：401 提示“登录已失效，草稿未保存，请重新登录”；403 可先验证当前身份，身份失效才同样提示，有效身份则显示权限不足。保留草稿，不无限重试、不自动提交；登录后让用户确认重试。不要为了避免 403 放宽后端权限。
+
+## 10. 接下来从哪里开发
+
+不用先开发 row_version，也不用再做发布门禁。下一项是把现有 BOM 用顺，而不是重新搬 #173。
+
+1. **输入/保存连续性**：修焦点、保留搜索、识别登录失效与保留草稿；复用现有编辑对象/重载函数/认证上下文。
+2. **J5 和共享规则收口**：核实并修正 35 行品牌，报告无效 key；验证标准编辑两个入口作用域；逐国审核后再重算非人工价格。
+3. **表格布局**：紧凑 Model、优先固定、列宽持久化；不在数据刷新时重置布局。
+4. **完成验收清单**：#215 同模板专项样本；Add/Edit 二次输入；BOM/Matrix 双入口同步；tier、manual FOB/no-base；1400/1100px 与浏览器缩放；搜索后保存、重载保持列宽；过期登录草稿恢复。
+
+每个实际开发任务从届时最新远端 main 新建 `codex/` branch + worktree + PR；不要在混合观察区写代码，不复用 #173/#215/#220 分支。不要为了凑一个大 PR 把认证、价格、布局连成整页重写。允许按用户最痛的问题先选一个小范围收口。
+
+预计责任文件（是方向估计，不是已实施 diff）：
+
+| 范围 | 复用位置 | 预估生产改动 |
+|---|---|---|
+| 焦点/查库等待/搜索保持 | frontend/src/pages/OrderGeniusPage.tsx | 约 20–70 行修改，另加针对性测试 |
+| Model 布局/列宽 | frontend/src/components/OrderGeniusGrid.tsx、现有样式/测试 | 约 50–120 行，避免新表格框架 |
+| 失效登录提示 | frontend/src/api/client.ts、contexts/AuthContext.tsx、现有提示组件 | 约 40–100 行，待确认错误传播入口 |
+| 空品牌/规则统计/价格核对 | material_master_parser.py、ordering_normalization.py、order_genius_repository.py、现有 metadata/重算路由 | 已有能力优先；先列精确数据修正范围，生产代码行数待追溯入口后确定 |
+
+上述路径均相对 `06_AppPlatform/`。实施前重新报告根因、负责函数、具体文件与行数；目前没有理由建设永久恢复系统或第二套颜色库。
+
+## 11. 主要源码定位
+
+以本次读取基线为准，未来修改后行号可能变化：
+
+- `frontend/src/components/OrderGeniusGrid.tsx:456` getModelColumnWidth；`:544` columnDefs 依赖。
+- `frontend/src/pages/OrderGeniusPage.tsx:3552` load；`:3640` scheduleLoad；`:4063` FOB 保存后重载。
+- 同文件 `:3751` / `:3794` Add/Edit 查库，`:5194` / `:5203` focus effects，`:5330` 色卡入口，`:5397` 色卡蓝边；`:4817` 标准色卡保存。
+- `frontend/src/utils/orderGeniusBomAdmin.ts:1` 行编辑 scope key；对应 `tests/unit/orderGeniusBomAdmin.test.ts`。
+- `backend/app/infra/order_genius_repository.py:129` 规则 key；`:1279` 规则汇总；`:1569` Apply；`:1629` 标准更新；`:2430` surcharge lookup；`:2499` 重算。
+- `backend/app/services/material_master_parser.py:527` 已有品牌后处理；`backend/app/core/security.py:69` 认证分支。
+
+关联：[平台交接](../Fullstack/JATO_PLATFORM_HANDOVER_2026-09-14.md)、[颜色 Goal](BOM_COLOUR_RULES_UNIFICATION_GOAL_2026-08-09.md)、[Candidate Goal](../Fullstack/04_DevOps/SIMPLE_CANDIDATE_RELEASE_V2_2026-08-06.md)。本文件是本轮验收证据入口，不能把历史 Goal 的未勾选项直接解释成代码未实现。
+
+## 12. 执行任务书：按这里改，不重新设计系统
+
+### 12.1 开工约定与第一批范围
+
+本节为下一轮实施准备，不表示已经实施或已授权正式站数据修正/发布。
+
+1. 读取本文件、当前项目 AGENTS.md 和 TypeScript skill；按最新远端 main 核对下列函数是否仍存在。行号只作定位提示，以函数语义和实际 diff 为准。
+2. 原混合区只读；本 handover worktree 只承载文档。本文件尚未提交，不能假定新 worktree 自带它。开工时显式读取这个绝对路径：`/Users/litristan/Downloads/JATO_Analysis_System_handover_20260914/Markdown_Readme/features/BOM_ADMIN_CANDIDATE_ACCEPTANCE_2026-09-15.md`。
+3. A 已有 `codex/bom-input-search-continuity` / `260f839a`，先在其现有 worktree 续接并核对最新 main 差异；不要重新创建同名分支。B/C/D 新任务才从届时最新 main 建独立 worktree/branch。不要改用旧 #173/#215/#220 分支。
+4. 第一批 A 已有两个本地提交，按第 13 节记录补未验场景。后续按 B → C（包含 E）→ D 分批推进；A 尚未部署不阻塞后续本地开发。每批保持明确业务范围。
+5. 写代码前报告根因、现有负责函数、具体文件、预计 diff；优先修改现有逻辑，明确没有另建系统的必要。前端描述用户看到的交互，后端描述现有 FastAPI/SQLAlchemy/PostgreSQL 链路与复用函数。
+6. 构建前查磁盘与依赖；不默认 npm install/npm ci 或建 venv。沿用项目允许的已验证依赖。只 stage 当前 PR 文件；不提交临时依赖链接、浏览器产物、认证信息或别的任务改动。
+
+### A. 输入与搜索连续性（已证实根因，可以直接实施）
+
+主要文件：`OrderGeniusPage.tsx`，现有 `orderGeniusColourRulesPage.test.ts` / `orderGeniusColourRules.test.ts`，必要时同目录新增一个针对性的交互测试文件。
+
+**A1 — 只在打开/切换目标时聚焦：**
+
+- 修改依赖整个 `colourCodeEditor` / `addColourEditor` 的两个 effect。Edit 依赖稳定的原始 materialCode 或明确的目标身份；Add 依赖打开状态与稳定的模板/车型/版本/tier 身份。实际字段先读类型，不能拿“正在输入的 colourCode”当弹窗身份。
+- null → 对象、切换目标才允许 focus/select；对象内 name/code/hex/touched/saving 变化都不允许重新 focus/select。
+- 可直接在现有打开入口安排一次聚焦，或用稳定身份 effect 二选一；不要两种并存。保留已有 requestAnimationFrame 清理，关闭后不聚焦已卸载节点。
+- 不为绕过此 bug 把输入改成不可控 defaultValue，不通过强制重挂载弹窗解决；不删正常键盘焦点样式。
+
+**A2 — 复用查库，改等待时间，不重写查库：**
+
+- Add/Edit 两个现有 180ms timer 改成共享的本地常量 1200ms；不影响其他保存/搜索 timer。
+- 保留品牌+代码查找、requestId、当前代码检查、名称与 swatch 各自 touched 标记；关闭、换目标、改代码时确保旧响应失效。特别补查“两个不同目标恰好同品牌同代码”的旧响应，不要只比较代码。
+- 名称被手工改过而 swatch 没改过时，仅允许回填 swatch；反过来也一样。异步返回不得抹掉用户已输入内容。
+- 无品牌/代码不发查库；冲突不自动选标准；无规则显示提示且保持可编辑。手工 name/hex onChange 不能重新触发同代码查库或重新抢焦点。
+
+**A3 — 重载默认保持已生效搜索：**
+
+- 先梳理 `load` / `scheduleLoad` / debouncedSearch / Enter / Clear / cache 的现有职责，统一一个“已提交查询”来源，不新增另一套筛选状态。
+- 明确函数语义：不传新查询 = 刷新当前查询；显式空字符串 = 清空查询；非空字符串 = 提交该查询。禁止用 truthy `||` 把显式空字符串变回旧查询。
+- 输入还在 1.2 秒 debounce 中时，保存重载使用已生效查询；Enter 或 debounce 提交时再更新它。未保存的搜索输入不能被程序清掉。
+- 修改 `scheduleLoad` 读取最新已生效查询，避免闭包捕获旧值；所有直接 `load()` 调用都遵守相同语义。Clear 必须显式 `load("")`，并同步清除输入/已生效条件。
+- 保留已有 loading/pendingLoadKey 调度；保证 loading 中发生 Clear 时空字符串也是合法待执行请求，不与“没有 pending”混同。过期查询响应不得成为最后展示结果。
+- 保留原有国家两字码分流与“目标国家无 FOB”提示，不把国家筛选改成普通文字搜索。保存成功继续用现有 patch 更新当前行，随后只刷新当前查询。
+
+**A 必测（需要真实组件行为或浏览器测试，不只搜索源代码字符串）：**
+
+- Edit/Add 打开时可聚焦；逐字输入 2–4 位 code 不出现第二字替换第一字；名称连续输入后焦点仍在名称，选择范围不变。
+- 1199ms 尚未查库，1200ms 后仅最后有效代码发起；回填后再改名称/hex，延迟返回不覆盖；快速换代码/关窗/换目标不串值。使用 fake timer 时也处理 RAF。
+- 搜索 `MH0032` → 保存 FOB → 等待重载：输入不变、API 仍含 search、结果仍匹配。同测颜色保存、metadata 保存、Apply、Copy/Adjust 重载。
+- Clear 后确实全量；加载中 Clear、快速 A→B、国家码搜索也正确；失败保存保留输入。
+- 不为制造测试证据给正式站写 FOB。浏览器写入仅 Candidate，记录材料号、国家、前后值及清理情况。
+
+### B. Model 紧凑布局与列宽（独立任务）
+
+主要文件：`OrderGeniusGrid.tsx`、现有 Order Genius 样式、针对 Grid 的测试。
+
+1. 将 Model 首次默认宽度设为约 280px，合理最小宽度约 180–220px；不再用整段 groupMeta 决定宽度。分组主标题保留，附加说明用截断/tooltip，不能把展开按钮挤掉。
+2. 先检查锁定的 AG Grid 版本及现有 ColumnState API。优先只固定 Model（以及当前功能必要的 PI 选择列），其余信息列保持稳定顺序并横向滚动；这样比宽屏固定一批、窄屏反复搬列更直接。若保留其他固定列，必须明确解除固定的优先级，Model 最后也不能跑到右侧。
+3. 用 initialWidth 或该版本支持的初始化语义替代反复施加 width；稳定 colId。不要在 rows/数量变化或 onGridSizeChanged 中 sizeColumnsToFit、autoSizeAllColumns、resetColumnState。
+4. 复用 Grid 的用户 resize 事件，只在拖动完成时保存有限的 `{colId: width}` 映射；按用户隔离本地偏好，校验有限数值、合理范围及当前有效 colId。读写 localStorage 失败不影响业务。
+5. 不保存/恢复自动解除固定后的 order/pinned；同一月份字段使用稳定 colId，显隐列恢复宽度。不要把订单行、价格或 token 放入列宽偏好。
+6. 显式“重置列宽”清除该偏好并恢复默认；现有 Refresh 只刷新数据。若已有同等入口，复用而不重复新增。
+
+验收：2200/1400/1100px，浏览器 80/100/125% 缩放，横向滚动、组展开、数量保存、Refresh、页面 reload、切月份/显隐列均不搬 Model、不覆盖手调宽度；PI 和汇总行仍对齐。极窄设备至少保持 Model 可见及其余区域可滚动，不为了固定宽度把操作区压成 0。
+
+### C. J5 品牌与共享颜色/加价（代码修复和数据操作分开）
+
+**C1 — 数据核实，不全表修复：**
+
+- 重新获取 Candidate 的当前样本；35 是本轮快照计数，不写成程序常量。导出精确 materialCode、brand、model、来源信息、tier、各国 FOB/source/base/surcharge。
+- 对 ICE/HEV 的空品牌提出 JAECOO 修正清单；不要把所有空品牌都猜成 JAECOO。现有 parser 已会识别 JAECOO，先找到导入/复制/metadata 的实际写入口；没有复现入口 bug 就不改 parser。
+- Candidate 可用现有 metadata API 做精确验证；正式站数据修正另行取得用户批准。禁止重新上传全表、重建数据库或以新 Candidate 数据覆盖 Active。
+
+**C2 — 规则不能静默漏行：**
+
+- 在已有规则汇总响应中增加无效身份 SKU 的计数/有限样本或复用已有问题摘要；不要为无品牌 SKU 伪造可共享的 key。
+- 前端同一 Colour Swatch Rules 卡显示“有 N 个 SKU 缺品牌/代码，未纳入规则”；complete/clean 的文案必须考虑该项。
+- 保留现有五类规则状态和 Preview fingerprint；缺身份不进入 Apply 自动填充。同步已有 API 类型与测试。
+
+**C3 — 两个色卡入口统一作用域：**
+
+- 复用 `set_standard_colour_hex_for_rule` 作为“修改共享标准名称/色卡”的唯一写入逻辑；弹窗明确提示同品牌同代码影响多少 active SKU。
+- Add/Edit 继续调用 `resolve_colour_attributes`；输入时的二次修改先作为表单草稿，不能边打字边更新全局。
+- 保存时区分“当前 SKU 代码迁移”与“确认共享标准改变”。单纯新增/改 code 不覆盖旧 code 的规则；手工标准与库冲突时展示当前值/新值与作用范围，不能静默变成另一份 SKU 私有色卡。
+- 若需要从 Add/Edit 同时保存标准，优先在现有后端事务中复用标准函数；不要前端连续两个写请求导致一半成功。是否需要扩展现有请求字段由实际接口决定，别先造通用控制面。
+- 修改前确认当前 Edit 名称/色卡的业务语义与本段一致；若仍有跨品牌共用或历史 SKU 自动跟随等新要求，单独问清，不扩大默认范围。
+
+**C4 — 加价复用现有重算，不批量盲加：**
+
+- 修正品牌后重新查询适用规则；当前 JAECOO +300，若要 +200 需明确业务决定，不能据截图口述偷偷改配置。
+- 复用 `reprice_sku_colour_surcharge_fobs`，确认调用覆盖相关实际入口。缺品牌/规则必须报告“无法定价”，不能把未命中与明确 0 加价混同；明确 0 规则合法。
+- 逐国检查同模板/内饰等现有匹配条件下的 Single 基准；不得取任意车型最低价格补基准。manual source 保持不变，missing-base 保留并给原因；已有 surcharge 的行不能重复叠加。
+- 色卡标准变更不应自动改变 tier 或触发改价。价格重算、品牌修正、标准修改分别给出结果，不把三件事塞进 Refresh。
+
+验收：J5 ICE/HEV 品牌修正样本色卡可打开且被统计；跨两个材料同代码的标准同步；冲突不静默吞掉；dual 基准 15000 + 规则 300 = 15300，重复执行不变；manual/无基准跳过；规则明确 0 与规则缺失有不同结果。价格测试用可恢复的 Candidate 测试样本，记录操作影响。
+
+### D. 登录失效提示（先补证据，再最小实现）
+
+1. 读取当前 `request`、`requestBlob`、AuthContext、登录路由和现有错误提示，确定是否已有通知机制；复用现有机制，不另建认证服务。
+2. 用真实过期/无效凭据模拟 BOM 与 quantity 写请求；单独测试有效身份但无权限的 403、409、网络错误。不要把“重新登录能恢复”当成已经确定根因。
+3. 受保护请求 401 才通知“会话失效”；登录失败本身的 401 不触发过期 banner。多个同时失败请求去重，避免十几个 banner 或循环 `/auth/me`。
+4. 403 只在身份核查确认失效后提示重新登录；`/auth/me` 200 但权限不够显示权限不足，核查网络失败显示无法验证。不能全局把 403 转 401，更不能放宽 require_roles。
+5. 明确保留哪些草稿：现有 quantityDrafts、正在编辑的 BOM 表单、搜索/列宽。若登录导航会卸载页面，先验证现有登录是否可在新标签完成并让当前页重验身份；若不能，给出最小恢复方案后再实现，不默默宣称内存草稿能跨导航保存。
+6. 重新登录后只恢复可编辑状态，让用户确认重试；不自动提交旧草稿，不覆盖另一人已更新数据。保留现有 409 处理。
+
+验收：token 无效时有明确 banner 和重新登录动作，未保存值可见；有效低权限用户不被要求反复登录；网络失败不清空身份；重新认证后用户可重试保存；不会产生后台重试风暴。
+
+### E. 色卡蓝边框（可随 C3 实施）
+
+- 位置：`OrderGeniusPage.tsx` 的 `renderColourChip`、`renderDraftColourChip`，以及现有 Order Genius 样式。先检索这些入口中硬编码的 `2px solid #3b82f6`，只修改色卡边框，不全局替换蓝色。
+- 普通已存色卡用中性细边框，保留原背景颜色/双色划分；缺色卡保持虚线和 missing 提示。草稿如果确需区分，用明确文字标记，不把蓝框暗示为未保存或冲突。
+- 可点击色卡保留键盘 `:focus-visible` 轮廓；必要时把内联边框移入现有 CSS 类，让焦点样式能生效。不要删除输入框的正常焦点提示；输入框反复蓝框的根因由 A 修复。
+- 冲突仍由现有规则状态和文字提示表达，不以蓝边框代替。BOM 与 Matrix 保留各自必要交互，不为外观统一强行改写公共渲染器。
+- 验收：普通/双色/缺色/历史行/草稿逐类查看；普通色卡无固定蓝框，Tab 聚焦仍清楚可见，点击仍打开正确编辑器，颜色值、tier 和 FOB 均不因样式修改而改变。
+
+### 12.2 测试与交付方式
+
+- 本前端是 Vite 项目，实际脚本见 `06_AppPlatform/frontend/package.json`：`npm run check:types`、`npm run test:unit`、`npm run build`、`npm run check:router-regression`。先运行本次影响的 Vitest 测试，再按风险运行完整脚本；不要照搬别的项目 `apps/web` / Next 构建路径。
+- 后端改动使用现有可用 Python/pytest 环境，先通过文件检索定位相关 colour rules、surcharge、parser/auth 测试，再运行实际存在的测试文件；不要编造测试通过数量。
+- #215 缺跨车型同模板样本：优先在组件集成测试中构造两个不同车型/版本、相同模板的行，实际点击 Edit 验证只有目标行打开；若 Candidate 建样本，再明确记录创建与清理，不能改真实模板来凑样本。
+- 每批交付写：基线 SHA、变更文件、实跑命令和结果、仍未验证项、Candidate SHA、写入记录。更新本文件新增“实施记录”，不抹掉第 3 节原始验收证据。
+- 未经独立授权不 merge/update-active/sync-intl/discard-candidate。需要新 Candidate 时遵循现有 PR→main→自动 prepare 流程，不自建旁路；文档也不授予正式站写入权限。
+- 如果方案超出本批范围或需要整页重构，停止扩大并报告：“当前方案正在从修复 bug 演变为专项系统，已停止扩大修改。建议退回最小根因修复。”
+
+### 12.3 可直接交给下一轮的起始指令
+
+> 阅读本文第 13 节最新执行口径和第 12 节实施任务书。先执行 B：从最新远端 main 新建独立 worktree/branch，修 Model 紧凑固定位置与用户列宽持久化；完成验证并记录后继续 C（含 E 色卡边框）和 D。保留 A 的 `260f839a`、`6eeddf3c`，不重做已实现部分；A 剩余交互验证按清单补齐。每批写前报告根因、负责函数、文件和预计 diff，复用现有实现。文档分别记录代码实现、测试和部署状态。Candidate 走现有 PR→main→自动 prepare，合并、Active 发布和正式站数据修正按已有授权范围执行。

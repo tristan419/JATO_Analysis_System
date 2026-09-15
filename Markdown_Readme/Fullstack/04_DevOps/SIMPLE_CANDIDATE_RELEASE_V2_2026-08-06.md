@@ -9,17 +9,17 @@ goal_control:
     页面显示候选代码、当前 main 和数据快照时间。完成腾讯云人工验收后，再由用户授权
     把同一已测试构件更新到正式 www Active。Candidate 测试数据永不进入 Active；
     intl 继续使用既有的 Active 到 intl 独立同步流程，不在 V2 中新增编排。
-  current_phase: candidate_application_login
-  current_step: required_ci_green_live_cutover_pending
-  waiting_on: live_state_review_and_explicit_candidate_cutover_authorization
-  pause_reason: historical_task_quota_interruption_2026_08_11
+  current_phase: candidate_business_acceptance
+  current_step: bom_partial_acceptance_with_findings_2026_09_15
+  waiting_on: scoped_bom_fixes_and_remaining_business_acceptance
+  pause_reason: null
   next_action: >-
-    #224 已合并，自动 prepare run 31372523132 已成功，不再重做自动链路。
-    恢复现有 #226：先核对最新 main、PR、live Candidate 和 Cloudflare 分支预览失败。
-    获准后保持 Basic Auth，废弃旧 Candidate，再获准合并 #226，由 main CI 自动 prepare；
-    保留外层认证验证真实沙箱登录、401 和隔离后，才移除 Candidate Basic Auth。
-    #226 代码已实现但公网登录替换未完成；不新建登录/门禁系统。Active 更新和 intl 同步
-    仍需分别授权，本次文档修订不执行或授权这些操作。
+    #226/#228 已合并；Candidate 运行 9011da6ac1f5，Basic Auth 已移除。
+    2026-09-15 已实测真实应用登录、匿名/坏 token 401、有效身份 200，
+    并在 Candidate 沙箱完成 BOM Preview/Apply 8 项名称填充。继续关联 BOM 验收文档，
+    处理空品牌、输入焦点、搜索和列布局问题，完成尚未验收的业务场景。
+    不重放旧 discard/合并/移除认证步骤，不新增登录系统或门禁。
+    Active 更新和 intl 同步仍需分别授权；本次未执行这些操作。
   release_authorization_contract:
     source_path: main_to_candidate_to_explicit_user_approval_to_active
     main_may_advance_without_active: true
@@ -34,6 +34,14 @@ goal_control:
     intl_failure_rolls_back_www_to_previous: false
     intl_failure_preserves_www_active: true
   progress:
+    evidence_note: historical_tests_and_stage_evidence_below_unless_dated_2026_09_15
+    candidate_live_verified_2026_09_15:
+      commit: 9011da6ac1f5592e37b7cba80c455e30e0b0b48e
+      sandbox: jato_candidate_20260915t011310z_3972d27f5b654a45
+      real_application_login: passed
+      auth_me_anonymous_invalid_valid_statuses: [401, 401, 200]
+      bom_preview_apply: passed_8_names_only_no_fob_or_tier_change
+      full_bom_acceptance: incomplete_findings_recorded
     worktree_ready: true
     worktree: /Users/litristan/.codex/worktrees/candidate-app-login/JATO_Analysis_System
     branch: codex/candidate-app-login
@@ -136,14 +144,16 @@ goal_control:
     previous_pull_request_214_merged: true_main_30f3e2e4
     current_fix_commit: 5f73caff4d4bc131ce058ecd6a3aed26f23a62ce
     current_fix_github_checks: required_green_cloudflare_preview_failed_cause_unresolved
-    pull_request_opened: true
+    pull_request_opened: false
     pull_request_number: 226
     pull_request_url: https://github.com/tristan419/JATO_Analysis_System/pull/226
-    pull_request_is_draft: true
+    pull_request_is_draft: false
+    pull_request_226_status: merged_main_c6ab5faaa
+    pull_request_228_status: merged_main_9011da6ac
     previous_pull_request_217_merged: true_main_619466e8
     candidate_public_gateway_commit: 991a44f8499a1210317aafb5da1f3183b7ee0769
     candidate_fixed_public_link_required: true
-    candidate_public_gateway_design: dnspod_to_shanghai_nginx_basic_auth_to_127_0_0_1_18002
+    candidate_public_gateway_design: dnspod_to_shanghai_nginx_to_127_0_0_1_18002_application_login
     candidate_public_gateway_implemented: true_local
     candidate_public_gateway_contract_tests: 22_passed_2_skipped
     candidate_public_gateway_style_check: passed
@@ -152,8 +162,8 @@ goal_control:
     candidate_public_gateway_github_checks: 13_of_13_green
     candidate_dns_configured: true
     candidate_tls_configured: true
-    candidate_basic_auth_configured: true
-    candidate_current_sha_verified: not_reverified_2026_09_14_basic_auth_only
+    candidate_basic_auth_configured: false_removed_2026_09_15
+    candidate_current_sha_verified: 9011da6ac1f5592e37b7cba80c455e30e0b0b48e
     candidate_public_link_may_fallback_to_active: false
     active_changed_by_this_step: false
     intl_changed_by_this_step: false
@@ -255,7 +265,7 @@ goal_control:
     candidate_login_implementation: implemented_in_draft_226_not_merged
     candidate_login_live_acceptance: pending
     local_and_remote_login_tree_equal: true_d5376f21d341eec02071fb00c066474daa776868
-    public_basic_auth_observed: true_2026_09_14
+    public_basic_auth_observed: false_2026_09_15_application_login_verified
     www_and_intl_frontend_app_commit_observed: cd4557cb932374a0fefb6c80a5fac9fb75a67d62
     production_changed: candidate_only_active_and_intl_unchanged
   may_continue_without_new_authorization:
@@ -275,19 +285,27 @@ goal_control:
     - observed_server_state_contradicts_documented_baseline
     - change_would_touch_active_or_intl_database_content
     - change_would_cross_this_pr_scope
-  updated_at: "2026-09-14"
+  updated_at: "2026-09-15"
 ---
 
 # Fixed Active / Candidate Release V2
 
-> 状态：实施中
+> 状态：Candidate 登录部署已完成，业务验收与后续发布决定未完成
 > 开始日期：2026-08-06
 > worktree：`/Users/litristan/.codex/worktrees/candidate-app-login/JATO_Analysis_System`
-> branch：`codex/candidate-app-login` / Draft PR #226
+> 历史实现 branch：`codex/candidate-app-login` / #226 已合并；探针修复 #228 已合并
 > 基线：`main@f29cf5096b528e2c0350047f2bc462cc8bfc8696`
 > 当前 scope：复用现有 `/login` 完成 Candidate 严格认证与公网入口切换；不重建自动 prepare，不改 BOM 或生产业务数据，不自动更新 Active/intl。
 
-## 2026-09-14 恢复状态与待办（优先于下方历史阶段记录）
+## 2026-09-15 当前状态（优先于全部历史阶段记录）
+
+#226 已合并后，旧匿名 monthly 部署探针遇到 401 而非期待的 423；#228 复用 readiness 状态修复衔接，新 main 自动 prepare 成功，见 [run 34915865279](https://github.com/tristan419/JATO_Analysis_System/actions/runs/34915865279)。Candidate 已移除 Basic Auth，现有应用登录可用，页面版本与沙箱身份已实测。
+
+本轮在 Candidate 真实执行 BOM Preview/Apply，8 行只变颜色名称，FOB/tier 等返回字段不变。Candidate 当前仍是 `9011da6ac1f5`，尚未包含 BOM A 收口提交 `6eeddf3c`；对旧构件的只读复核再次观察到输入 Colour name 后 Code `BW` 被抢回焦点并全选，未保存任何数据。输入焦点与 J5 空品牌问题已复现；完整 BOM 验收不能标记通过。证据和后续步骤见 [BOM Candidate 验收](../../features/BOM_ADMIN_CANDIDATE_ACCEPTANCE_2026-09-15.md)。
+
+下次从当前业务验收继续，不重放旧 discard/合并/移除 Basic Auth 顺序。Active 更新与 intl 同步仍需分别授权。以下测试计数、服务器状态、分支路径按其原始日期理解；文档 PR #227 合并前仍须与最新 main Goal 中 #228 的新增实现记录合并，不能用旧文件整份覆盖。
+
+## 2026-09-14 历史恢复记录（已被上节取代，不是当前待办）
 
 - #224 已合并，2026-08-10 [自动 prepare](https://github.com/tristan419/JATO_Analysis_System/actions/runs/31372523132) 成功；“等待合并 #224”已过时。
 - [#226](https://github.com/tristan419/JATO_Analysis_System/pull/226) 的 required checks 已通过，唯一红项为非 required Cloudflare 分支预览；失败细节待查。`jato月更` 任务于 2026-08-11 查该问题时额度耗尽中断。
