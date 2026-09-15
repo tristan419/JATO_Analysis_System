@@ -16,7 +16,7 @@
 - C（含 E）已按同一基线在独立 worktree 完成本地实现并验证；提交 `2218c0df`，尚未合并或部署 Candidate。它没有写入 35 行正式数据，只让可明确识别的旧空品牌参与规则/加价链路，并对未知身份给出摘要告警。
 - D 已从 `main@f29cf509` 在独立 worktree 完成本地实现并验证；提交 `1a64194a`，尚未合并或部署 Candidate。它只增加认证失败的可见反馈和草稿保留，不改变后端权限，也不自动重试或提交。
 - 只读合并审阅（2026-09-15）：当前远端 `main@9011da6a` 已比三批基线前进 7 个提交；B/C/D 均为相对该 `main` behind 7、ahead 1。单批及 B→C→D 累积模拟合并均无文本冲突，但 `OrderGeniusPage.tsx` 被三批共同修改，`orderGeniusColourRulesPage.test.ts` 被 C/D 共同修改，合并后仍需人工检查组合行为。
-- D 不能直接套到当前 `main`：#228 已重构 Candidate `AuthContext` 的真实 token 流程；模拟合并会得到 `refreshUser(): Promise<boolean>`，但无 token 分支仍是裸 `return`，类型检查会失败并可能破坏 Candidate 登录。应在 `main@9011da6a`（以及 B/C 合并后的最新树）上重新移植 D 的返回值/测试改动，保留 #228 的 token、OAuth 和清理逻辑。三批原有测试结果不等于这个合并树已通过。
+- D 合并衔接复核：不能仅补返回值。模拟合并树中 `refreshUser(): Promise<boolean>` 的无 token 分支仍有裸 `return`；网络异常被捕获后返回 false，D 将误报登录失效；Candidate 清 token 会触发 RequireRole 跳转，D 的直接登录导航也会卸载内存草稿。继续现有 D 分支，对齐最新 main 后按下方“给 Luna Max：D 衔接修正”完成最小修改，无需重做整套 D。保留 #228 的真实 token、OAuth 隔离和访问控制，但须修正核验错误与跳转的交互。以上是源码复核，合并树尚未实际运行类型检查或测试；历史通过记录不代表当前组合通过。
 - 发布顺序：本地行为验证 → 可审阅 PR → 获授权合并 main → 现有 CI 自动 prepare Candidate → 在新构件做业务验收 → 单独决定 Active 发布。不要要求“Candidate 验收通过才允许代码进入 main”，这会与现有 main-only Candidate 流程形成循环。
 
 ### 2026-09-15 · A 第一版（待补齐交互验证和异步边界）
@@ -35,11 +35,30 @@
 | A 输入/自动填充/搜索 | 本地实现已收口；尚未部署验收 | 第 13 节 A 收口记录 + 第 12 节 A | Candidate 新构件复验：输入焦点、1.2 秒查库、保存后搜索保持 |
 | B Model/列宽 | 本地实现完成；尚未合并/Candidate 验收 | `codex/bom-model-layout` / `53976fc0`；Grid 默认 280px、优先固定 Model、用户列宽初始化与持久化 | 本地类型、单测、构建、路由回归通过；待 Candidate 在 2200/1400/1100px 与 80/100/125% 实测 |
 | C J5 品牌、颜色共享、加价 | 本地实现完成；尚未合并/Candidate 验收 | `codex/bom-colour-followup` / `2218c0df`；有效品牌归一化、无效身份摘要、共享标准入口、逐国重算筛选 | 本地目标测试通过；待 Candidate 核对 J5 规则、双色 +300、manual/no-base 保护 |
-| D 登录失效 | 本地实现完成；需基于当前 main 重新移植后再合并/Candidate 验收 | `codex/bom-auth-feedback` / `1a64194a`；protected request 事件、AuthContext 身份核验、数量草稿保留；不可直接覆盖 #228 的 Candidate token 流程 | 原分支本地全量前端通过；移植后的合并树需重新类型/单测；再用 Candidate 真实失效 token/低权限身份验收 |
+| D 登录失效 | 原分支已有实现；当前 main 衔接修正待做 | 继续 `codex/bom-auth-feedback` / `1a64194a`；修正返回值、网络核验分类、登录导航草稿保留 | 原分支历史测试通过；对齐后的代码与组合树尚待实跑，再做 Candidate 验收 |
 | #215 同模板跨车型/版本 | 专项验收未完成 | 第 12.2 节：构造两个真实渲染行并点击 Edit | 只有被点的目标行打开；不是仅比较 key 字符串 |
 | #220 Matrix/保护逻辑 | 部分读取和 Apply 已验，其他待验 | 第 3 节未验项 + C 的用例 | 两个编辑入口保存后 BOM/Matrix 一致；tier/manual/no-base 样本验证 |
 
-当前顺序：先审阅 B/C 并更新到当前 `main@9011da6a`，再在该最新树（必要时含 B/C 合并结果）重新移植 D 的最小改动；随后按授权合并并由 main-only 流程准备 Candidate，最后做浏览器验收。完成本地批次只代表该批代码可审阅，不能写成“所有 bug 已修好”；后续新任务从届时最新 main 建对应分支。
+当前顺序：在各自现有 worktree 对齐 B/C 与最新 main，再对齐现有 D 分支并修正三处认证交互；验证各分支及组合结果，形成可审阅提交后再按授权合并。随后由 main-only 流程准备 Candidate 做浏览器验收。`9011da6a` 是本轮核对值，执行前重新 fetch；无需因 behind 7 重开分支或重做功能。
+
+### 给 Luna Max：D 衔接修正（最新任务，优先于原“本地完成”记录）
+
+目标：BOM/数量保存遇到认证失败时，用户能分清登录失效、权限不足和网络故障，并能在重新认证后保留输入、主动重试。继续现有 B/C/D worktree，不重做已有业务功能。
+
+1. 先检查三个 worktree 的 status、HEAD、当前远端 main；保留未提交的 Hermes 事件文件，不 stage 到业务提交。B/C 在各自原分支正常对齐 main；D 同样续接原分支。不要整文件覆盖 main，不需要重开 D，也不在混合观察区开发。
+2. `contexts/AuthContext.tsx` 的 `refreshUser`：所有正常返回路径满足声明类型；无 token/确证认证失效和无法核验必须可区分。若保留 boolean，可用 true 表示有效、false 表示确证无效，网络/服务错误通过异常传播给调用者；检查启动时和后台调用者如何处理异常，避免未处理 Promise。200、认证拒绝、网络异常、5xx 分别处理，不把所有非 200 都解释为过期。
+3. 保留 #228 的 Candidate 真实 token 来源、OAuth 回调隔离、未登录访问限制。复用现有认证函数，明确页面内 403 核验与启动认证的副作用：瞬时网络失败不能清登录身份或导航，确证失效仍须阻止业务请求。不要仅为保留页面而放宽后端权限或恢复匿名 Candidate 身份。
+4. `pages/OrderGeniusPage.tsx`：403 核验 200 显示权限不足；确证失效才显示重新登录；网络/5xx 显示无法核验。并发核验复用现有去重，旧核验结果不能覆盖较新的认证状态；不自动重试写请求。
+5. 重新登录与草稿：当前直接跳 `/login` 会卸载页面，不能只改提示文字就宣称保留成功。优先验证现有登录页能否由用户在新标签完成登录，原页复用身份刷新后继续编辑；要同时检查 RequireRole 清 token 时的跳转。若现有流程无法保留页面，再说明最小草稿恢复方案及所需文件后实施，限制为当前用户/当前编辑上下文，不保存密码/token、不跨账号回填，不建设通用恢复系统。必须实际证明数量与未保存 BOM 表单仍在，登录成功后由用户主动重试，继续保留 409 冲突处理。
+6. 预计主改 `AuthContext.tsx`、`OrderGeniusPage.tsx` 与现有认证/交互测试；只有证据表明确有需要才涉及 `RequireRole.tsx`、`LoginPage.tsx`。`api/client.ts` 事件入口优先复用。写代码前报告具体根因、负责函数、文件和预计行数；不要扩大成全站认证重构。
+
+验证与交付：
+
+- 先用真实 AuthProvider/路由及页面行为测试覆盖：无 token 返回契约；有效身份 403；坏/过期 token；`/auth/me` 网络异常与 5xx；重新登录前后 quantity/BOM 草稿；并发失败与旧核验响应。不以源码字符串断言代替交互测试。
+- 在对齐后的 Vite 前端运行 `npm run check:types`、相关测试、`npm run test:unit`、`npm run build`、`npm run check:router-regression`。单独检查 #228 Candidate 登录回归，以及 B/C/D 累积合并结果；Git 无文本冲突不等于行为通过。
+- 复用已验证依赖，构建前检查磁盘；不自动安装依赖。历史 C 后端 5 个失败如被引用，标为历史记录，需以基线对照确认其归属，不写成此次已重跑通过。
+- 每批更新本节实际基线、提交、实跑结果和未验项，保留原历史记录。A 的 `260f839a`、`6eeddf3c` 仍独立保留，不能被 B/C/D 的整文件覆盖。
+- 本轮交接任务是本地对齐、最小修正和验证。远端合并、Candidate 部署及 Active/www/intl 操作仍按用户明确授权执行；目前未取得这些新授权。
 
 ### 2026-09-15 · B Model 紧凑布局与列宽（本地实现完成，待 Candidate）
 
@@ -380,4 +399,4 @@
 
 ### 12.3 可直接交给下一轮的起始指令
 
-> 阅读本文第 13 节最新执行口径和第 12 节实施任务书。B（`53976fc0`）、C（含 E，`2218c0df`）和 D（`1a64194a`）已从 `main@f29cf509` 在独立 worktree 完成本地实现与验证；不要重复重做这三批。下一步先审阅各 worktree 的 diff 并按授权合并，随后由现有 PR→main→自动 prepare 流程准备 Candidate，再做窄屏/缩放、J5 规则与 +300、BOM/Matrix 双入口、manual/no-base 保护、登录失效和草稿保留的浏览器验收。A 保留 `260f839a`、`6eeddf3c`，仍需在新构件上补交互验收。每批写前报告根因、负责函数、文件和预计 diff，复用现有实现；文档分别记录代码实现、测试和部署状态。Active 发布和正式站数据修正仍需单独授权。
+> 先读第 13 节“给 Luna Max：D 衔接修正”和第 12 节。续接原 B（`53976fc0`）、C 含 E（`2218c0df`）、D（`1a64194a`）worktree，fetch 后将 B/C 对齐最新 main，再对齐 D 并修正三件事：refreshUser 返回契约、网络故障不得误报失效或清身份、登录导航前后实际保留草稿。保留 #228 的真实 token、OAuth 隔离及访问控制；不重做 B/C/D 或新建认证系统。按第 13 节验证各分支及组合行为，每批更新文档并形成可审阅提交。A 的两个提交独立保留。合并与 Candidate 部署等待明确授权；之后走现有 main→Candidate 流程，Active 发布另行决定。

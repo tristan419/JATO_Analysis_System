@@ -10,7 +10,7 @@
 - 新发现：J5 ICE 21 行、HEV 14 行品牌为空，联动影响色卡、规则统计和加价；Model 窄屏移位、输入抢焦点已复现；搜索保存后的无条件 reload 已定位。
 - B Model 布局已在 `/Users/litristan/Downloads/JATO_Analysis_System_bom_model_layout` 本地完成，提交 `53976fc0`；C（含 E）J5 品牌归一化、共享颜色/加价链路和色卡边框已在 `/Users/litristan/Downloads/JATO_Analysis_System_bom_colour` 本地完成，提交 `2218c0df`。两批均未合并、未部署 Candidate，不能写成线上已修复。
 - D 登录失效提示已在 `/Users/litristan/Downloads/JATO_Analysis_System_bom_auth_feedback` 本地完成，提交 `1a64194a`；三批均未合并、未部署 Candidate，不能写成线上已修复。
-- 只读审阅发现：当前远端 `main@9011da6a` 比三批基线前进 7 个提交；B/C 可无文本冲突合并，D 与 #228 的 `AuthContext` 重构存在语义冲突。D 必须在当前 main（或 B/C 合并后的最新树）重新移植，保留真实 Candidate token 流程；不得直接合并原 `1a64194a`。
+- 最新复核：`main@9011da6a` 比三批基线前进 7 个提交；模拟合并无文本冲突，但 D 还需修正返回值、网络失败误报失效/清身份、登录导航卸载草稿三处衔接。继续各自现有分支对齐最新 main 后最小修改，保留 #228 真实 token、OAuth 隔离和访问控制；无需重开分支或重新移植整套 D。具体执行与测试见 BOM 文档第 13 节“给 Luna Max：D 衔接修正”。本次仅源码复核，合并树尚未实跑测试。
 - 下一步是先审阅并按授权合并 B/C/D，随后由现有流程准备 Candidate，再做真实浏览器验收。不优先扩展多人编辑 row_version，不新增门禁。
 - 完整证据、沙箱写入清单和 TODO：[BOM Candidate 验收与问题梳理](../features/BOM_ADMIN_CANDIDATE_ACCEPTANCE_2026-09-15.md)。本轮没有更新 Active/www/intl，也没有合并文档 PR。
 
@@ -405,7 +405,7 @@ Markdown_Readme/Fullstack/JATO_PLATFORM_HANDOVER_2026-09-14.md
 - [ ] **P1-A BOM 输入/搜索收尾**：本地实现已在原 `codex/bom-input-search-continuity` worktree 收口（`260f839a` 第一版 + `6eeddf3c` 收口提交）。已补搜索 A→B→A 最新意图、旧响应/错误隔离、lookup 目标生命周期和真实 `BomAdminPanel` 延迟 Promise 交互测试；类型检查、74 个测试文件/400 个测试、构建和路由回归通过。尚未部署 Candidate，仍需按 [BOM 文档第 13 节](../features/BOM_ADMIN_CANDIDATE_ACCEPTANCE_2026-09-15.md#13-实施记录)做浏览器验收；B 已完成本地实现但同样待 Candidate。
 - [ ] **P1-B BOM Model 布局**：已在最新远端 `main@f29cf509` 的独立 worktree/branch 完成本地实现（`codex/bom-model-layout`，`53976fc0`），包含 Model 紧凑固定、其余列横向滚动、用户列宽持久化和显式重置；类型、单测、构建和路由回归通过。尚未合并或部署 Candidate，仍需按问题清单第 13 节做窄屏/缩放和刷新重载验收。
 - [x] **P1 BOM 本地批次**：B（`53976fc0`）、C（含 E，`2218c0df`）和 D（`1a64194a`）已在各自独立 worktree 完成本地实现与验证；不要重新执行这些批次，也不优先建设多人编辑 row_version。
-- [ ] **P1 BOM 合并与 Candidate 验收**：先审阅 B/C 并更新到 `main@9011da6a`，再在最新树上重新移植 D（保留 #228 的 Candidate token 流程）并按授权合并；随后由现有 main-only 流程准备新 Candidate，在新构件实测窄屏/缩放、J5 规则与双色 surcharge、BOM/Matrix 双入口、manual/no-base 保护、登录失效提示和草稿保留。未合并、未部署前不能写成线上已修复。
+- [ ] **P1 BOM 对齐、D 修正与验收**：在原分支对齐 B/C 与最新 main，再对齐 D，按 BOM 文档第 13 节修正返回契约、网络核验、导航草稿保留并实跑组合测试。完成可审阅提交后按授权合并，由现有 main-only 流程准备 Candidate；再验收布局、J5 加价、颜色双入口、manual/no-base 与认证草稿。当前没有新增合并、部署或正式数据写入授权。
 - [ ] **发布，单独决定**：若要让正式站看到已验收功能，另行批准把同一个已测构件 update-active；再按现有独立流程同步 intl，分别核验版本。Candidate 可用不等于必须立即发布。
 - [ ] **P2 其他研发**：按产品优先级选择 Config 本地 10 文件收口、AstrBot JATO MCP 整理，或 MSRP #183；不要求全项目依次排队。保留 #157 对 #179 的现有合并约束。
 - [ ] **P3 历史整理**：最后再审计旧 Draft PR/旧 worktree；未提交成果未确认前不关闭、删除或清理。
