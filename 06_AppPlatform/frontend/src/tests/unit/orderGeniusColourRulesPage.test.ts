@@ -24,6 +24,21 @@ describe("Order Genius colour rule page contract", () => {
     expect(pageSource).toContain("No reusable Brand + Code rule");
     expect(pageSource).toContain("Wait for the Brand + Code rule check to finish.");
     expect(pageSource).toContain("This code cannot be auto-filled: enter a colour name before saving it.");
+    expect(pageSource).toContain("const BOM_ADMIN_COLOUR_LOOKUP_DELAY_MS = 1200;");
+    expect(pageSource).toContain("}, BOM_ADMIN_COLOUR_LOOKUP_DELAY_MS);");
+    expect(pageSource).toContain("colourCodeEditorFocusKey");
+    expect(pageSource).toContain("addColourEditorFocusKey");
+    expect(pageSource).not.toContain("}, [colourCodeEditor]);");
+    expect(pageSource).not.toContain("}, [addColourEditor]);");
+  });
+
+  it("refreshes BOM data with the applied search and preserves an explicit clear", () => {
+    expect(pageSource).toContain("const appliedBomSearchRef = useRef(cachedSearchText.trim());");
+    expect(pageSource).toContain("requestedSearch === undefined");
+    expect(pageSource).toContain("void load(pendingLoadKey);");
+    expect(pageSource).toContain("void load(nextSearch);");
+    expect(pageSource).toContain("await load(\"\");");
+    expect(pageSource).toContain("load(debouncedSearch);");
   });
 
   it("passes Matrix colour fields through and renders the database swatch", () => {

@@ -2982,6 +2982,7 @@ type BomAdminPageCache = {
 
 const BOM_ADMIN_PAGE_CACHE_KEY = "order-genius:bom-admin";
 const BOM_ADMIN_PAGE_CACHE_TTL_MS = 30 * 60 * 1000;
+const BOM_ADMIN_COLOUR_LOOKUP_DELAY_MS = 1200;
 const EMPTY_BOM_ADMIN_COPY_COUNTRY_FORM: BomAdminCopyCountryForm = {
   sourceCountryCode: "",
   targetCountryCode: "",
@@ -3256,6 +3257,7 @@ function BomAdminPanel({
   const cachedBomAdmin = cachedBomAdminRef.current;
   const cachedSearchText = cachedBomAdmin?.searchText ?? "";
   const initialBomLoadSearchRef = useRef(cachedSearchText.trim());
+  const appliedBomSearchRef = useRef(cachedSearchText.trim());
   const skipNextDebouncedLoadRef = useRef(true);
   const [skus, setSkus] = useState<any[]>([]);
   const [countries, setCountries] = useState<string[]>([]);
@@ -3549,8 +3551,15 @@ function BomAdminPanel({
     }
   }, []);
 
-  const load = useCallback(async (s?: string) => {
-    const loadKey = s ?? "";
+  const load = useCallback(async (requestedSearch?: string) => {
+    // An omitted search means refresh the currently applied query. An explicit
+    // empty string is the Clear action and must remain distinguishable.
+    const loadKey = requestedSearch === undefined
+      ? appliedBomSearchRef.current
+      : requestedSearch.trim();
+    if (requestedSearch !== undefined) {
+      appliedBomSearchRef.current = loadKey;
+    }
     if (loadRef.current) {
       if (currentLoadKeyRef.current !== loadKey) {
         pendingLoadKeyRef.current = loadKey;
@@ -3562,10 +3571,10 @@ function BomAdminPanel({
     setLoading(true);
     setBomAdminError("");
     try {
-      const normalizedSearch = String(s || "").trim().toUpperCase();
+      const normalizedSearch = loadKey.toUpperCase();
       const isCountry = /^[A-Z]{2}$/.test(normalizedSearch);
       const params: { country?: string; search?: string } = {};
-      if (s) {
+      if (loadKey) {
         if (isCountry) {
           const fobCountries = activeFobCountriesRef.current;
           if (fobCountries.includes(normalizedSearch)) {
@@ -3589,11 +3598,11 @@ function BomAdminPanel({
               countryCode: current.countryCode || normalizedSearch,
             }));
           } else {
-            params.search = s;
+            params.search = loadKey;
             setBomAdminNotice("");
           }
         } else {
-          params.search = s;
+          params.search = loadKey;
           setBomAdminNotice("");
         }
       } else {
@@ -3631,7 +3640,7 @@ function BomAdminPanel({
       pendingLoadKeyRef.current = null;
       if (pendingLoadKey !== null) {
         window.setTimeout(() => {
-          void load(pendingLoadKey || undefined);
+          void load(pendingLoadKey);
         }, 0);
       }
     }
@@ -3744,7 +3753,7 @@ function BomAdminPanel({
     }));
   }, [patchBomSkus]);
 
-  useEffect(() => { load(initialBomLoadSearchRef.current || undefined); }, [load]);
+  useEffect(() => { load(initialBomLoadSearchRef.current); }, [load]);
   useEffect(() => { void loadColourSurcharges(); }, [loadColourSurcharges]);
   useEffect(() => { void loadColourHexRules(); }, [loadColourHexRules]);
 
@@ -3787,7 +3796,7 @@ function BomAdminPanel({
           setLoadingColourCodeRuleLookup(false);
         }
       });
-    }, 180);
+    }, BOM_ADMIN_COLOUR_LOOKUP_DELAY_MS);
     return () => window.clearTimeout(timer);
   }, [colourCodeEditor?.brand, colourCodeEditor?.nextColourCode]);
 
@@ -3830,7 +3839,7 @@ function BomAdminPanel({
           setLoadingAddColourRuleLookup(false);
         }
       });
-    }, 180);
+    }, BOM_ADMIN_COLOUR_LOOKUP_DELAY_MS);
     return () => window.clearTimeout(timer);
   }, [addColourEditor?.brand, addColourEditor?.colourCode]);
 
@@ -3977,7 +3986,7 @@ function BomAdminPanel({
       skipNextDebouncedLoadRef.current = false;
       return;
     }
-    load(debouncedSearch || undefined);
+    load(debouncedSearch);
   }, [debouncedSearch, load]);
 
   useEffect(() => {
@@ -5191,23 +5200,43 @@ function BomAdminPanel({
     return () => window.cancelAnimationFrame(frame);
   }, [financeQuickCard]);
 
+  // Focus only when a different editor target opens. Field edits and lookup
+  // responses must never steal the caret from the input the user is typing in.
+  const colourCodeEditorFocusKey = colourCodeEditor
+    ? [
+      colourCodeEditor.materialCode,
+      colourCodeEditor.currentColourCode,
+      colourCodeEditor.modelName,
+      colourCodeEditor.version,
+    ].join("|")
+    : null;
+  const addColourEditorFocusKey = addColourEditor
+    ? [
+      addColourEditor.bomTemplate,
+      addColourEditor.sourceMaterialCode,
+      addColourEditor.tierName,
+      addColourEditor.modelName,
+      addColourEditor.version,
+    ].join("|")
+    : null;
+
   useEffect(() => {
-    if (!colourCodeEditor) return;
+    if (!colourCodeEditorFocusKey) return;
     const frame = window.requestAnimationFrame(() => {
       colourCodeEditorInputRef.current?.focus();
       colourCodeEditorInputRef.current?.select();
     });
     return () => window.cancelAnimationFrame(frame);
-  }, [colourCodeEditor]);
+  }, [colourCodeEditorFocusKey]);
 
   useEffect(() => {
-    if (!addColourEditor) return;
+    if (!addColourEditorFocusKey) return;
     const frame = window.requestAnimationFrame(() => {
       addColourEditorCodeRef.current?.focus();
       addColourEditorCodeRef.current?.select();
     });
     return () => window.cancelAnimationFrame(frame);
-  }, [addColourEditor]);
+  }, [addColourEditorFocusKey]);
 
   const toggleAddMaterialForm = () => {
     const nextVisible = !showAddMaterial;
@@ -5578,7 +5607,7 @@ function BomAdminPanel({
   }, [groupByTemplate, sortedVersionEntriesByModelKey]);
 
   const retryBomAdminLoad = () => {
-    void load(debouncedSearch || searchText || undefined);
+    void load();
   };
 
   const reLoginForBomAdmin = () => {
@@ -5714,7 +5743,7 @@ function BomAdminPanel({
               if (event.key === "Enter") {
                 const nextSearch = searchText.trim();
                 setDebouncedSearch(nextSearch);
-                void load(nextSearch || undefined);
+                void load(nextSearch);
               }
             }}
             className="bom-admin-search-input" />
@@ -5724,7 +5753,7 @@ function BomAdminPanel({
             onClick={async () => {
               setSearchText("");
               setDebouncedSearch("");
-              await load();
+              await load("");
               window.setTimeout(() => searchInputRef.current?.focus(), 0);
             }}
           >
