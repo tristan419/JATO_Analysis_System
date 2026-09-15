@@ -19,6 +19,7 @@ from app.services.ordering_normalization import (
     infer_colour_tier,
     normalize_brand,
     normalize_brand_text,
+    resolve_material_brand,
 )
 
 
@@ -112,6 +113,13 @@ def test_normalize_jaecoo_brand_variants() -> None:
     assert normalize_brand("JEACOO") == "JAECOO"
     assert normalize_brand("jecoo") == "JAECOO"
     assert normalize_brand_text("JEACOO JAECOO7") == "JAECOO JAECOO7"
+
+
+def test_resolve_material_brand_infers_only_known_brand_from_identity() -> None:
+    assert resolve_material_brand("", "JAECOO5 ICE", "T71611C") == "JAECOO"
+    assert resolve_material_brand("", "OMODA5 EV", "T7000") == "OMODA"
+    assert resolve_material_brand("", "J5 ICE", "T71611C") == ""
+    assert resolve_material_brand("JAECOO", "J5 ICE", "T71611C") == "JAECOO"
 
 
 def test_create_material_sku_canonicalizes_jaecoo_and_creates_manual_baseline(
@@ -766,6 +774,24 @@ def test_colour_rules_group_by_normalized_brand_code_and_fill_placeholder() -> N
     ]
 
 
+def test_colour_rules_include_known_brand_when_legacy_brand_is_empty() -> None:
+    rule = repo.build_colour_hex_rules_from_skus([
+        SimpleNamespace(
+            material_code="J5-ICE-W3",
+            brand="",
+            model_name="JAECOO5 ICE",
+            bom_template="T71611C",
+            exterior_color_code="W3",
+            exterior_color_name="Water blue",
+            colour_hex="#B6D3FB",
+        )
+    ])[0]
+
+    assert rule["brand"] == "JAECOO"
+    assert rule["colourCode"] == "W3"
+    assert rule["status"] == "complete"
+
+
 def test_colour_rules_report_name_and_swatch_conflicts_independently() -> None:
     skus = [
         SimpleNamespace(
@@ -811,6 +837,32 @@ def test_colour_rules_report_unknown_placeholder_as_missing() -> None:
     assert rule["standardColourHex"] is None
     assert rule["placeholderNameSkuCount"] == 1
     assert rule["missingSwatchSkuCount"] == 1
+
+
+def test_summarize_invalid_colour_rule_identities_exposes_sample_without_mutation() -> None:
+    session = _FakeSession([
+        SimpleNamespace(
+            material_code="J5-ICE-W3",
+            brand="",
+            model_name="JAECOO5 ICE",
+            bom_template="T71611C",
+            exterior_color_code="W3",
+            is_active=True,
+        ),
+        SimpleNamespace(
+            material_code="UNKNOWN-1",
+            brand="",
+            model_name="J5 ICE",
+            bom_template="T71611C",
+            exterior_color_code="W3",
+            is_active=True,
+        ),
+    ])
+
+    assert repo.summarize_invalid_colour_rule_identities(session) == {
+        "invalidIdentitySkuCount": 1,
+        "invalidIdentitySampleMaterialCodes": ["UNKNOWN-1"],
+    }
 
 
 def test_resolve_colour_attributes_reuses_only_unambiguous_rule() -> None:

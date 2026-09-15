@@ -3073,6 +3073,8 @@ const EMPTY_COLOUR_HEX_RULE_SUMMARY: ColourHexRuleSummary = {
   swatchConflict: 0,
   complete: 0,
   fillableSkus: 0,
+  invalidIdentitySkuCount: 0,
+  invalidIdentitySampleMaterialCodes: [],
 };
 
 const COLOUR_RULE_STATUS_META: ReadonlyArray<{
@@ -4890,11 +4892,13 @@ function BomAdminPanel({
       setColourCodeEditorError("This code cannot be auto-filled: enter a colour name before saving it.");
       return;
     }
-    const nextColourHexPayload = buildSwatchPayload(
-      colourCodeEditor.nextColourHex,
-      colourCodeEditor.nextColourHex2,
-      colourCodeEditor.isDualSwatch,
-    );
+    const nextColourHexPayload = colourCodeEditor.colourHexTouched
+      ? buildSwatchPayload(
+        colourCodeEditor.nextColourHex,
+        colourCodeEditor.nextColourHex2,
+        colourCodeEditor.isDualSwatch,
+      )
+      : String(colourCodeEditor.currentColourHex || "").trim().toUpperCase();
     const nextColourHexParts = nextColourHexPayload ? nextColourHexPayload.split("|") : [];
     if (nextColourHexParts.some((part) => !isColourPickerValue(part))) {
       setColourCodeEditorError("Swatch must use #RRGGBB.");
@@ -4907,9 +4911,28 @@ function BomAdminPanel({
       setColourCodeEditor(null);
       return;
     }
+    const canSaveSharedStandard = !codeChanged
+      && (nameChanged || hexChanged)
+      && Boolean(nextName)
+      && Boolean(nextColourHex)
+      && nextColourHexParts.every((part) => isColourPickerValue(part));
     setSavingColourCodeEditor(true);
     setColourCodeEditorError("");
     try {
+      if (canSaveSharedStandard) {
+        const result = await api.setOrderGeniusColourHexRuleStandard({
+          brand: colourCodeEditor.brand,
+          colourCode: nextCode,
+          colourName: nextName,
+          colourHex: nextColourHex || "",
+        });
+        setBomAdminError("");
+        setBomAdminNotice(`Updated shared ${nextCode} rule across ${result.updated} SKUs.`);
+        setColourCodeEditor(null);
+        await Promise.all([loadColourHexRules(), load()]);
+        onFobChanged?.();
+        return;
+      }
       const result = await api.updateColourCode(colourCodeEditor.materialCode, {
         colourCode: nextCode,
         colourName: colourCodeEditor.colourNameTouched ? nextName : undefined,
@@ -5360,6 +5383,7 @@ function BomAdminPanel({
       >
         <button
           type="button"
+          className="bom-colour-swatch-button"
           title={canEditSwatchRule
             ? `Edit swatch rule for ${brand} ${colourCode} ${colourName}`
             : "Missing brand, colour code or colour name"}
@@ -5394,7 +5418,7 @@ function BomAdminPanel({
             padding: 0,
             borderRadius: 3,
             flexShrink: 0,
-            border: swatch.isMissing ? '1px dashed #94a3b8' : '2px solid #3b82f6',
+            border: swatch.isMissing ? '1px dashed #94a3b8' : '1px solid #d1d5db',
             background: swatch.background,
             opacity: isHist ? 0.5 : 1,
             cursor: "pointer",
@@ -5455,7 +5479,7 @@ function BomAdminPanel({
             height: 16,
             borderRadius: 3,
             flexShrink: 0,
-            border: swatch.isMissing ? "1px dashed #94a3b8" : "2px solid #3b82f6",
+            border: swatch.isMissing ? "1px dashed #94a3b8" : "1px solid #d1d5db",
             background: swatch.background,
           }}
         />
@@ -5926,6 +5950,12 @@ function BomAdminPanel({
                   <div style={{ fontSize: 10, color: "#64748b", marginBottom: 7 }}>
                     {colourHexRuleSummary.totalRules} rules · {colourHexRuleSummary.fillableSkus} SKU fields can be filled
                   </div>
+                  {colourHexRuleSummary.invalidIdentitySkuCount > 0 ? (
+                    <div style={{ marginBottom: 7, padding: "6px 8px", border: "1px solid #fbbf24", background: "#fffbeb", color: "#92400e", fontSize: 10, lineHeight: 1.35 }}>
+                      {colourHexRuleSummary.invalidIdentitySkuCount} SKU(s) are excluded from shared rules because Brand + colour code is incomplete.
+                      {colourHexRuleSummary.invalidIdentitySampleMaterialCodes.length > 0 ? ` Sample: ${colourHexRuleSummary.invalidIdentitySampleMaterialCodes.join(", ")}` : ""}
+                    </div>
+                  ) : null}
                   <div style={{ display: "grid", gridTemplateColumns: "repeat(5, minmax(0, 1fr))", gap: 4 }}>
                     {COLOUR_RULE_STATUS_META.map((meta) => (
                       <button key={meta.status} type="button" className="btn btn-sm btn-ghost" onClick={() => setColourRuleDetailsStatus(meta.status)} style={{ padding: 4, display: "grid", gap: 2, color: meta.colour }}>
@@ -6274,6 +6304,9 @@ function BomAdminPanel({
               </div>
               <div className="bom-colour-code-edit-note">
                 Material code, colour name, FOB, quantities, lifecycle, PI references and CBU rows will move together.
+              </div>
+              <div className="bom-colour-code-edit-note">
+                Saving a name or swatch without changing the code updates the shared Brand + Code colour rule.
               </div>
               {colourCodeEditorError ? <div className="bom-colour-code-edit-error">{colourCodeEditorError}</div> : null}
               <div className="bom-finance-action-bar">

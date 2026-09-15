@@ -35,7 +35,12 @@ from app.db.models import (
     QuantityCellHistory,
     SpecialColourSurchargeRule,
 )
-from app.services.ordering_normalization import clean_text, normalize_brand, normalize_brand_text
+from app.services.ordering_normalization import (
+    clean_text,
+    normalize_brand,
+    normalize_brand_text,
+    resolve_material_brand,
+)
 from app.services.powertrain_normalizer import normalize_powertrain
 
 
@@ -818,7 +823,7 @@ def list_bom_with_fob(
     return [
         {
             "materialCode": s.material_code,
-            "brand": normalize_brand(s.brand),
+            "brand": resolve_material_brand(s.brand, s.model_name, s.bom_template),
             "modelName": normalize_brand_text(s.model_name),
             "version": s.version,
             "colour": s.exterior_color_name or "",
@@ -874,7 +879,7 @@ def _country_material_finance_payload(
         "financeId": str(finance.country_material_finance_id) if finance else None,
         "countryCode": country_code,
         "materialCode": sku.material_code,
-        "brand": normalize_brand(sku.brand),
+        "brand": resolve_material_brand(sku.brand, sku.model_name, sku.bom_template),
         "modelName": normalize_brand_text(sku.model_name),
         "version": sku.version,
         "powertrain": _extract_canonical_powertrain(sku),
@@ -1282,7 +1287,11 @@ def build_colour_hex_rules_from_skus(skus: list[object]) -> list[dict]:
     for sku in skus:
         colour_name = str(getattr(sku, "exterior_color_name", "") or "").strip()
         key = _colour_rule_key(
-            getattr(sku, "brand", None),
+            resolve_material_brand(
+                getattr(sku, "brand", None),
+                getattr(sku, "model_name", None),
+                getattr(sku, "bom_template", None),
+            ),
             getattr(sku, "exterior_color_code", None),
         )
         if key is None:
@@ -1444,7 +1453,11 @@ def _list_colour_rule_candidate_skus(
     return [
         row
         for row in rows
-        if normalize_brand(row.brand or "") == normalized_brand
+        if resolve_material_brand(
+            getattr(row, "brand", None),
+            getattr(row, "model_name", None),
+            getattr(row, "bom_template", None),
+        ) == normalized_brand
     ]
 
 
@@ -1453,6 +1466,31 @@ def list_colour_hex_rules(session: Session) -> list[dict]:
     stmt = select(MaterialSkuMaster).where(MaterialSkuMaster.is_active == True)
     skus = list(session.execute(stmt).scalars().all())
     return build_colour_hex_rules_from_skus(skus)
+
+
+def summarize_invalid_colour_rule_identities(
+    session: Session,
+    *,
+    sample_limit: int = 5,
+) -> dict[str, int | list[str]]:
+    """Report active SKUs excluded from shared rules because identity is incomplete."""
+    stmt = select(MaterialSkuMaster).where(MaterialSkuMaster.is_active == True)
+    invalid_codes = []
+    for sku in session.execute(stmt).scalars().all():
+        brand = resolve_material_brand(
+            getattr(sku, "brand", None),
+            getattr(sku, "model_name", None),
+            getattr(sku, "bom_template", None),
+        )
+        if _colour_rule_key(brand, getattr(sku, "exterior_color_code", None)) is None:
+            material_code = clean_text(sku.material_code)
+            if material_code:
+                invalid_codes.append(material_code)
+    invalid_codes.sort()
+    return {
+        "invalidIdentitySkuCount": len(invalid_codes),
+        "invalidIdentitySampleMaterialCodes": invalid_codes[:max(0, sample_limit)],
+    }
 
 
 def summarize_colour_hex_rules(rules: list[dict]) -> dict[str, int]:
@@ -2353,8 +2391,12 @@ def get_special_colour_surcharge_for_sku(
     sku: MaterialSkuMaster,
 ) -> SpecialColourSurchargeRule | None:
     """Return the most specific special-colour override for one SKU."""
-    normalized_brand = normalize_brand(sku.brand)
-    normalized_model = normalize_brand_text(sku.model_name)
+    normalized_brand = resolve_material_brand(
+        getattr(sku, "brand", None),
+        getattr(sku, "model_name", None),
+        getattr(sku, "bom_template", None),
+    )
+    normalized_model = normalize_brand_text(getattr(sku, "model_name", None))
     normalized_code = _normalize_special_colour_code(sku.exterior_color_code)
     if not normalized_brand or not normalized_code:
         return None
@@ -2437,7 +2479,15 @@ def get_colour_surcharge_amount_for_sku(
         special_rule = get_special_colour_surcharge_for_sku(session, sku)
         if special_rule is not None:
             return float(special_rule.surcharge_eur)
-    rule = get_brand_colour_surcharge(session, sku.brand, colour_tier)
+    rule = get_brand_colour_surcharge(
+        session,
+        resolve_material_brand(
+            getattr(sku, "brand", None),
+            getattr(sku, "model_name", None),
+            getattr(sku, "bom_template", None),
+        ),
+        colour_tier,
+    )
     return float(rule.surcharge_eur) if rule else 0.0
 
 
@@ -2630,7 +2680,11 @@ def reprice_sku_colour_surcharge_fobs(
 
     return {
         "materialCode": sku.material_code,
-        "brand": normalize_brand(sku.brand),
+        "brand": resolve_material_brand(
+            getattr(sku, "brand", None),
+            getattr(sku, "model_name", None),
+            getattr(sku, "bom_template", None),
+        ),
         "colourCode": clean_text(sku.exterior_color_code).upper(),
         "colourTier": colour_tier,
         "surchargeEur": surcharge,
@@ -2653,17 +2707,25 @@ def reprice_brand_colour_surcharge_fobs(
     """Recalculate all active SKUs affected by one brand/tier surcharge rule."""
     normalized_brand = normalize_brand(brand)
     normalized_tier = clean_text(colour_tier).lower()
-    material_codes = list(
+    candidates = list(
         session.execute(
-            select(MaterialSkuMaster.material_code)
+            select(MaterialSkuMaster)
             .where(
                 MaterialSkuMaster.is_active == True,
-                MaterialSkuMaster.brand == normalized_brand,
                 MaterialSkuMaster.colour_tier == normalized_tier,
             )
             .order_by(MaterialSkuMaster.material_code)
         ).scalars().all()
     )
+    material_codes = [
+        sku.material_code
+        for sku in candidates
+        if resolve_material_brand(
+            getattr(sku, "brand", None),
+            getattr(sku, "model_name", None),
+            getattr(sku, "bom_template", None),
+        ) == normalized_brand
+    ]
     totals = {
         "brand": normalized_brand,
         "colourTier": normalized_tier,
@@ -2697,17 +2759,26 @@ def reprice_special_colour_surcharge_fobs(
     normalized_brand = normalize_brand(brand)
     normalized_model = normalize_brand_text(model_name) if model_name else None
     normalized_code = _normalize_special_colour_code(colour_code)
-    stmt = select(MaterialSkuMaster.material_code).where(
+    stmt = select(MaterialSkuMaster).where(
         MaterialSkuMaster.is_active == True,
-        MaterialSkuMaster.brand == normalized_brand,
         MaterialSkuMaster.colour_tier == "special",
         func.upper(MaterialSkuMaster.exterior_color_code) == normalized_code,
     )
     if normalized_model:
         stmt = stmt.where(MaterialSkuMaster.model_name == normalized_model)
-    material_codes = list(
+    candidates = list(
         session.execute(stmt.order_by(MaterialSkuMaster.material_code)).scalars().all()
     )
+    material_codes = [
+        sku.material_code
+        for sku in candidates
+        if resolve_material_brand(
+            getattr(sku, "brand", None),
+            getattr(sku, "model_name", None),
+            getattr(sku, "bom_template", None),
+        ) == normalized_brand
+        and (not normalized_model or normalize_brand_text(getattr(sku, "model_name", None)) == normalized_model)
+    ]
     totals = {
         "brand": normalized_brand,
         "modelName": normalized_model or "",

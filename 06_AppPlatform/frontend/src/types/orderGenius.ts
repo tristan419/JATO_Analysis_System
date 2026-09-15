@@ -159,6 +159,8 @@ export interface ColourHexRuleSummary {
   swatchConflict: number;
   complete: number;
   fillableSkus: number;
+  invalidIdentitySkuCount: number;
+  invalidIdentitySampleMaterialCodes: string[];
 }
 
 export interface ColourHexRulePreviewItem {

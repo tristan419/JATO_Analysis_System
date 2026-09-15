@@ -33,6 +33,7 @@ from app.services.ordering_normalization import (
     merge_colour_tiers,
     normalize_brand,
     normalize_brand_text,
+    resolve_material_brand,
 )
 from app.services.powertrain_normalizer import normalize_powertrain
 
@@ -572,7 +573,7 @@ def _list_matrix_candidate_skus(
     if normalized_brand:
         active_skus = [
             sku for sku in active_skus
-            if normalize_brand(sku.brand) == normalized_brand
+            if resolve_material_brand(sku.brand, sku.model_name, sku.bom_template) == normalized_brand
         ]
     if normalized_model:
         active_skus = [
@@ -594,7 +595,7 @@ def _historical_sku_matches_matrix_filters(
     colour: str | None = None,
     material_code_search: str | None = None,
 ) -> bool:
-    if brand and normalize_brand(sku.brand) != normalize_brand(brand):
+    if brand and resolve_material_brand(sku.brand, sku.model_name, sku.bom_template) != normalize_brand(brand):
         return False
     if model_name and normalize_brand_text(sku.model_name) != normalize_brand_text(model_name):
         return False
@@ -686,7 +687,7 @@ def _build_matrix_for_country(
         rows.append({
             "materialCode": sku.material_code,
             "bomTemplate": sku.bom_template,
-            "brand": normalize_brand(sku.brand),
+            "brand": resolve_material_brand(sku.brand, sku.model_name, sku.bom_template),
             "modelName": normalize_brand_text(sku.model_name),
             "version": sku.version,
             "colour": sku.exterior_color_name,
@@ -750,7 +751,7 @@ def _build_matrix_for_country(
             rows.append({
                 "materialCode": mc,
                 "bomTemplate": hist_sku.bom_template,
-                "brand": normalize_brand(hist_sku.brand),
+                "brand": resolve_material_brand(hist_sku.brand, hist_sku.model_name, hist_sku.bom_template),
                 "modelName": normalize_brand_text(hist_sku.model_name),
                 "version": hist_sku.version,
                 "colour": hist_sku.exterior_color_name,
@@ -887,7 +888,7 @@ def build_options(
     all_active = repo.list_active_skus(session, version=version)
     skus = [s for s in all_active if s.material_code in fob_codes]
     if normalized_brand:
-        skus = [s for s in skus if normalize_brand(s.brand) == normalized_brand]
+        skus = [s for s in skus if resolve_material_brand(s.brand, s.model_name, s.bom_template) == normalized_brand]
     if normalized_model:
         skus = [s for s in skus if normalize_brand_text(s.model_name) == normalized_model]
 
@@ -896,12 +897,16 @@ def build_options(
         skus = [s for s in skus if _extract_canonical_pt(s) == normalize_powertrain(powertrain)]
 
     # Collect distinct values from the filtered skus
-    brands = sorted(set(normalize_brand(s.brand) for s in skus if normalize_brand(s.brand)))
+    brands = sorted(set(
+        resolve_material_brand(s.brand, s.model_name, s.bom_template)
+        for s in skus
+        if resolve_material_brand(s.brand, s.model_name, s.bom_template)
+    ))
     if normalized_brand:
         models = sorted(set(
             normalize_brand_text(s.model_name)
             for s in skus
-            if normalize_brand(s.brand) == normalized_brand and normalize_brand_text(s.model_name)
+            if resolve_material_brand(s.brand, s.model_name, s.bom_template) == normalized_brand and normalize_brand_text(s.model_name)
         ))
     else:
         models = sorted(set(
@@ -918,7 +923,7 @@ def build_options(
     elif normalized_brand:
         pts = sorted(set(
             _extract_canonical_pt(s) for s in skus
-            if normalize_brand(s.brand) == normalized_brand
+            if resolve_material_brand(s.brand, s.model_name, s.bom_template) == normalized_brand
         ))
     else:
         pts = sorted(set(
@@ -931,7 +936,7 @@ def build_options(
         # Cascade: versions filtered by upstream selections
         filtered = skus
         if normalized_brand:
-            filtered = [s for s in filtered if normalize_brand(s.brand) == normalized_brand]
+            filtered = [s for s in filtered if resolve_material_brand(s.brand, s.model_name, s.bom_template) == normalized_brand]
         if normalized_model:
             filtered = [s for s in filtered if normalize_brand_text(s.model_name) == normalized_model]
         vers = sorted(set(s.version for s in filtered))
@@ -941,7 +946,7 @@ def build_options(
     # Cascade colours: filtered by all upstream selections
     colour_source = skus
     if normalized_brand:
-        colour_source = [s for s in colour_source if normalize_brand(s.brand) == normalized_brand]
+        colour_source = [s for s in colour_source if resolve_material_brand(s.brand, s.model_name, s.bom_template) == normalized_brand]
     if normalized_model:
         colour_source = [s for s in colour_source if normalize_brand_text(s.model_name) == normalized_model]
     if powertrain:

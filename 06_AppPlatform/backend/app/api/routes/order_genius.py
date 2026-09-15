@@ -391,7 +391,9 @@ def list_colour_hex_rules(
 ) -> dict:
     """Return derived colour swatch rules and conflicts from material SKUs."""
     items = repo.list_colour_hex_rules(session)
-    return {"items": items, "summary": repo.summarize_colour_hex_rules(items)}
+    summary = repo.summarize_colour_hex_rules(items)
+    summary.update(repo.summarize_invalid_colour_rule_identities(session))
+    return {"items": items, "summary": summary}
 
 
 @router.get("/colour-hex-rules/preview")
@@ -729,7 +731,11 @@ def patch_colour_code(
     try:
         resolved_colour = repo.resolve_colour_attributes(
             session,
-            sku.brand,
+            repo.resolve_material_brand(
+                sku.brand,
+                getattr(sku, "model_name", None),
+                getattr(sku, "bom_template", None),
+            ),
             new_code,
             colour_name=requested_name,
             colour_hex=requested_hex,
