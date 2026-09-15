@@ -10,14 +10,14 @@ goal_control:
     把同一已测试构件更新到正式 www Active。Candidate 测试数据永不进入 Active；
     intl 继续使用既有的 Active 到 intl 独立同步流程，不在 V2 中新增编排。
   current_phase: candidate_application_login
-  current_step: candidate_readiness_monthly_probe_fix
+  current_step: readiness_monthly_fix_pr_228_review
   waiting_on: readiness_probe_fix_review_and_candidate_acceptance
   pause_reason: none
   next_action: >-
     2026-09-14 已授权完成 discard-candidate（34847074640）和 #226 合并（main@c6ab5faa）。
     main CI 34848030750 通过；自动 prepare 34848317542 因匿名业务探针收到 401 而非旧预期
     423 失败，已恢复 Candidate 停止、无指针、无沙箱的状态，Active 未变。
-    当前修复复用 /readyz 的 monthlyUpdate.enabled/reason 及 jato_monthly_availability，
+    修复 PR #228 复用 /readyz 的 monthlyUpdate.enabled/reason 及 jato_monthly_availability，
     保持业务接口匿名 401、认证后禁用 423。完成修复 PR 验证、评审后再合并并验收 Candidate，
     真实登录和沙箱隔离通过后才移除 Basic Auth。禁止自动更新 Active 或同步 intl。
   release_authorization_contract:
@@ -137,11 +137,11 @@ goal_control:
     candidate_sandbox_draft_ready_for_human_review: true
     previous_pull_request_214_merged: true_main_30f3e2e4
     previous_pull_request_226_merged: true_main_c6ab5faaa
-    current_fix_github_checks: pending_readiness_monthly_fix
+    current_fix_github_checks: pending_pull_request_228
     readiness_monthly_local_tests: 177_passed_103_controller_and_74_backend_contract
-    pull_request_opened: false
-    pull_request_number: null
-    pull_request_url: null
+    pull_request_opened: true
+    pull_request_number: 228
+    pull_request_url: https://github.com/tristan419/JATO_Analysis_System/pull/228
     pull_request_is_draft: true
     previous_pull_request_224_merged: true_main_f29cf509
     previous_pull_request_217_merged: true_main_619466e8
