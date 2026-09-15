@@ -382,7 +382,8 @@ def _render_candidate_database_environment(
     values = (
         ("APP_DATABASE_ENABLED", "true"), ("APP_DATABASE_URL", url),
         ("DATABASE_URL", url), ("APP_CANDIDATE_SANDBOX_DATABASE", database_name),
-        ("APP_CANDIDATE_SNAPSHOT_AT", snapshot_at), ("APP_AUTH_ENABLED", "false"),
+        ("APP_CANDIDATE_SNAPSHOT_AT", snapshot_at), ("APP_AUTH_ENABLED", "true"),
+        ("APP_AUTH_REQUIRED", "true"),
         ("APP_AUTH_TOKEN", ""), ("APP_TOKEN_ROLE_MAP", ""),
         ("APP_JWT_SECRET", secrets.token_hex(32)), ("APP_RUNTIME_READ_ONLY", "false"),
     )
@@ -1488,12 +1489,13 @@ class FixedReleaseController:
 
     def _verify_candidate_monthly_disabled(self) -> None:
         status, payload = self.http_reader(
-            "http://127.0.0.1:8001/v1/msrp/monthly-update-jobs",
+            "http://127.0.0.1:8001/readyz",
             20,
         )
-        detail = payload.get("detail")
+        detail = payload.get("monthlyUpdate")
         if (
-            status != 423
+            status != 200
+            or payload.get("status") != "ready"
             or not isinstance(detail, dict)
             or detail.get("enabled") is not False
             or detail.get("reason") != "explicitly_disabled"
@@ -1502,7 +1504,7 @@ class FixedReleaseController:
                 "candidate_monthly_runtime_enabled",
                 "Candidate monthly-update runtime did not fail closed",
                 details={
-                    "expectedStatus": 423,
+                    "expectedStatus": 200,
                     "actualStatus": status,
                     "actualReason": (
                         detail.get("reason") if isinstance(detail, dict) else None
