@@ -60,9 +60,13 @@ interface AuthContextValue {
   token: string | null;
   profileLoaded: boolean;
   login: (username: string, password: string) => Promise<void>;
-  refreshUser: () => Promise<boolean>;
+  refreshUser: (options?: AuthRefreshOptions) => Promise<boolean>;
   updateProfile: (payload: UserProfileUpdate) => Promise<User>;
   logout: () => void;
+}
+
+export interface AuthRefreshOptions {
+  preserveSession?: boolean;
 }
 
 export interface UserProfileUpdate {
@@ -191,8 +195,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     setUser(nextUser);
   }, []);
 
-  const refreshUser = useCallback(async (): Promise<boolean> => {
+  const refreshUser = useCallback(async (options: AuthRefreshOptions = {}): Promise<boolean> => {
     const candidateOrigin = isCandidatePreviewOrigin(window.location);
+    const preserveSession = options.preserveSession === true;
     const currentToken = candidateOrigin
       ? (localStorage.getItem(STORAGE_TOKEN) || "").trim()
       : (
@@ -202,7 +207,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       ).trim();
     if (!currentToken) {
       setProfileLoaded(true);
-      return;
+      return false;
     }
     const username = localStorage.getItem(STORAGE_USER) || import.meta.env.VITE_USER_NAME || "anonymous";
     let res: Response;
@@ -213,23 +218,20 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           "X-User-Name": username,
         },
       });
-    } catch {
-      if (candidateOrigin) {
-        clearStoredAuth();
-        setToken(null);
-        setUser(null);
-      }
+    } catch (error) {
       setProfileLoaded(true);
-      return false;
+      throw error;
     }
     if (!res.ok) {
-      if (candidateOrigin) {
+      const authenticationRejected = res.status === 401 || res.status === 403;
+      if (candidateOrigin && authenticationRejected && !preserveSession) {
         clearStoredAuth();
         setToken(null);
         setUser(null);
       }
       setProfileLoaded(true);
-      return false;
+      if (authenticationRejected) return false;
+      throw new Error(`Auth profile request failed (${res.status})`);
     }
     const data = await res.json();
     applyUser(normalizeUserPayload(data as Record<string, unknown>));
@@ -293,11 +295,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       return;
     }
     if (candidateOrigin) {
-      void refreshUser();
+      void refreshUser().catch(() => undefined);
       return undefined;
     }
     return scheduleAuthProfileRefresh(() => {
-      void refreshUser();
+      void refreshUser().catch(() => undefined);
     });
   }, [refreshUser, token]);
 

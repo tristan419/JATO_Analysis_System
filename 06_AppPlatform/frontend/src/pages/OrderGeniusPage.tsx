@@ -684,7 +684,7 @@ export function OrderGeniusPage() {
         message: "正在核验当前登录身份……",
         requiresLogin: false,
       });
-      const probe = authFailureProbeRef.current || refreshUser();
+      const probe = authFailureProbeRef.current || refreshUser({ preserveSession: true });
       authFailureProbeRef.current = probe;
       void probe
         .then((isValid) => {
@@ -712,11 +712,48 @@ export function OrderGeniusPage() {
     return () => window.removeEventListener(AUTH_FAILURE_EVENT, handleAuthFailure);
   }, [refreshUser]);
 
+  useEffect(() => {
+    if (!authFailureNotice?.requiresLogin) return undefined;
+    const handleWindowFocus = () => {
+      const probe = authFailureProbeRef.current || refreshUser({ preserveSession: true });
+      authFailureProbeRef.current = probe;
+      void probe
+        .then((isValid) => {
+          if (!isValid) return;
+          setAuthFailureNotice({
+            message: "登录已恢复，请主动重试刚才的保存。",
+            requiresLogin: false,
+          });
+        })
+        .catch(() => {
+          setAuthFailureNotice({
+            message: "无法核验登录状态；输入未清除，请检查网络后重试。",
+            requiresLogin: false,
+          });
+        })
+        .finally(() => {
+          if (authFailureProbeRef.current === probe) authFailureProbeRef.current = null;
+        });
+    };
+    window.addEventListener("focus", handleWindowFocus);
+    return () => window.removeEventListener("focus", handleWindowFocus);
+  }, [authFailureNotice?.requiresLogin, refreshUser]);
+
   const reLoginAfterAuthFailure = useCallback(() => {
-    localStorage.removeItem("jato_auth_token");
-    localStorage.removeItem("jato_user_name");
-    localStorage.removeItem("jato_user_role");
-    window.location.href = "/login";
+    const redirect = `${window.location.pathname}${window.location.search}${window.location.hash}`;
+    const loginUrl = `/login?redirect=${encodeURIComponent(redirect)}`;
+    let loginWindow: Window | null = null;
+    try {
+      loginWindow = window.open(loginUrl, "_blank", "noopener,noreferrer");
+    } catch {
+      loginWindow = null;
+    }
+    if (!loginWindow) {
+      setAuthFailureNotice({
+        message: "浏览器阻止了登录新标签，请允许弹窗后再重试；当前输入仍保留。",
+        requiresLogin: true,
+      });
+    }
   }, []);
 
   // ── Upload state ──────────────────────────────────────────────────
