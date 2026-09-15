@@ -10,15 +10,16 @@ goal_control:
     把同一已测试构件更新到正式 www Active。Candidate 测试数据永不进入 Active；
     intl 继续使用既有的 Active 到 intl 独立同步流程，不在 V2 中新增编排。
   current_phase: candidate_application_login
-  current_step: draft_pull_request_ci_and_pre_merge_discard_gate
-  waiting_on: pull_request_226_required_ci_then_explicit_discard_candidate_authorization
+  current_step: candidate_readiness_monthly_probe_fix
+  waiting_on: readiness_probe_fix_review_and_candidate_acceptance
   pause_reason: none
   next_action: >-
-    Candidate 严格应用登录已提交到 Draft PR #226，CI 测试环境隔离修复已完成并通过完整前端验证。
-    仍不得直接 Ready 或合并。CI 全绿后，需用户单独授权用
-    当前 main 执行 discard-candidate，验证旧免登录 Candidate、沙箱和指针已清除且 8000/www
-    不变。之后才可另行授权合并 #226，让 main CI 自动 prepare 新 Candidate；loopback 严格
-    登录验收通过后，才原子移除线上 Basic Auth。禁止自动更新 Active 或同步 intl。
+    2026-09-14 已授权完成 discard-candidate（34847074640）和 #226 合并（main@c6ab5faa）。
+    main CI 34848030750 通过；自动 prepare 34848317542 因匿名业务探针收到 401 而非旧预期
+    423 失败，已恢复 Candidate 停止、无指针、无沙箱的状态，Active 未变。
+    当前修复复用 /readyz 的 monthlyUpdate.enabled/reason 及 jato_monthly_availability，
+    保持业务接口匿名 401、认证后禁用 423。完成修复 PR 验证、评审后再合并并验收 Candidate，
+    真实登录和沙箱隔离通过后才移除 Basic Auth。禁止自动更新 Active 或同步 intl。
   release_authorization_contract:
     source_path: main_to_candidate_to_explicit_user_approval_to_active
     main_may_advance_without_active: true
@@ -35,9 +36,9 @@ goal_control:
     intl_failure_preserves_www_active: true
   progress:
     worktree_ready: true
-    worktree: /Users/litristan/.codex/worktrees/candidate-app-login/JATO_Analysis_System
-    branch: codex/candidate-app-login
-    base_main_sha: f29cf5096b528e2c0350047f2bc462cc8bfc8696
+    worktree: /Users/litristan/Downloads/JATO_Analysis_System_candidate_readiness
+    branch: codex/candidate-readiness-monthly
+    base_main_sha: c6ab5faaa1f99519fc5f78239d6b1aff5530e706
     remote_main_matches_base: true
     design_recorded: true
     historical_inventory_evidence_recorded_below: true
@@ -135,11 +136,12 @@ goal_control:
     bom_admin_pull_request_215_merged: true_main_40ae3211
     candidate_sandbox_draft_ready_for_human_review: true
     previous_pull_request_214_merged: true_main_30f3e2e4
-    current_fix_commit: 9b56ad74abdd703d2fb22de757b7b650a623ac8a
-    current_fix_github_checks: pending_on_pull_request_226
-    pull_request_opened: true
-    pull_request_number: 226
-    pull_request_url: https://github.com/tristan419/JATO_Analysis_System/pull/226
+    previous_pull_request_226_merged: true_main_c6ab5faaa
+    current_fix_github_checks: pending_readiness_monthly_fix
+    readiness_monthly_local_tests: 177_passed_103_controller_and_74_backend_contract
+    pull_request_opened: false
+    pull_request_number: null
+    pull_request_url: null
     pull_request_is_draft: true
     previous_pull_request_224_merged: true_main_f29cf509
     previous_pull_request_217_merged: true_main_619466e8
@@ -289,7 +291,7 @@ goal_control:
     - observed_server_state_contradicts_documented_baseline
     - change_would_touch_active_or_intl_database_content
     - change_would_cross_this_pr_scope
-  updated_at: "2026-08-10T22:53:00+08:00"
+  updated_at: "2026-09-15"
 ---
 
 # Fixed Active / Candidate Release V2

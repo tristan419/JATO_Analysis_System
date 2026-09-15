@@ -137,6 +137,38 @@ def test_editor_endpoint_rejects_anonymous_viewer() -> None:
     assert exc_info.value.status_code == 403
 
 
+def test_candidate_readiness_reports_disabled_monthly_with_auth_required(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from app.api.routes import health
+
+    monkeypatch.setattr(app_main, "AUTH_REQUIRED", True)
+    monkeypatch.setattr(security, "AUTH_REQUIRED", True)
+    monkeypatch.setattr(security, "TOKEN_ROLE_MAP", {})
+    monkeypatch.setenv("APP_JATO_MONTHLY_ENABLED", "false")
+    monkeypatch.setattr(health, "build_readiness_report", lambda: {"status": "ready"})
+    monkeypatch.setattr(
+        security.session_store,
+        "lookup",
+        lambda token: SessionToken(username="sandbox-admin", role="admin")
+        if token == "candidate-jwt" else None,
+    )
+    client = TestClient(app_main.app)
+    readiness = client.get("/readyz")
+    assert readiness.status_code == 200
+    assert readiness.json()["monthlyUpdate"] == {
+        "enabled": False,
+        "reason": "explicitly_disabled",
+    }
+    for headers in ({}, {"X-Auth-Token": "invalid"}):
+        assert client.get("/v1/msrp/monthly-update-jobs", headers=headers).status_code == 401
+    authenticated = client.get(
+        "/v1/msrp/monthly-update-jobs", headers={"X-Auth-Token": "candidate-jwt"},
+    )
+    assert authenticated.status_code == 423
+    assert authenticated.json()["detail"]["reason"] == "explicitly_disabled"
+
+
 def test_admin_includes_viewer_permissions() -> None:
     dependency = security.require_min_role("viewer")
 
