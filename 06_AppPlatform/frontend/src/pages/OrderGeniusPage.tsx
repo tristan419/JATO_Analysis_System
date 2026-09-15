@@ -3060,6 +3060,29 @@ type BomAddColourEditor = {
   colourHexTouched: boolean;
 };
 
+function getBomColourCodeEditorTargetKey(editor: BomColourCodeEditor | null): string | null {
+  if (!editor) return null;
+  return [
+    editor.materialCode,
+    editor.brand,
+    editor.modelName,
+    editor.version,
+    editor.currentColourCode,
+  ].join("|");
+}
+
+function getBomAddColourEditorTargetKey(editor: BomAddColourEditor | null): string | null {
+  if (!editor) return null;
+  return [
+    editor.bomTemplate,
+    editor.sourceMaterialCode,
+    editor.brand,
+    editor.modelName,
+    editor.version,
+    editor.tierName,
+  ].join("|");
+}
+
 type BomColourTierReview = {
   previousTier: BomAdminColourTier;
   nextTier: BomAdminColourTier;
@@ -3245,7 +3268,7 @@ function formatBomSourceLabel(
 
 // ── BOM Admin Panel ──────────────────────────────────────────────────
 
-function BomAdminPanel({
+export function BomAdminPanel({
   initialCopyTargetCountry = null,
   onFobCountriesChanged,
   onFobChanged,
@@ -3367,8 +3390,12 @@ function BomAdminPanel({
   const loadRef = useRef(false);  // prevent concurrent loads
   const currentLoadKeyRef = useRef<string | null>(null);
   const pendingLoadKeyRef = useRef<string | null>(null);
+  const latestLoadKeyRef = useRef(cachedSearchText.trim());
   const loadTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);  // debounce loads
   const activeFobCountriesRef = useRef<string[]>([]);
+
+  const colourCodeEditorTargetKey = getBomColourCodeEditorTargetKey(colourCodeEditor);
+  const addColourEditorTargetKey = getBomAddColourEditorTargetKey(addColourEditor);
 
   // NL always first, then alphabetical
   const sortedCountries = useMemo(() => {
@@ -3560,10 +3587,11 @@ function BomAdminPanel({
     if (requestedSearch !== undefined) {
       appliedBomSearchRef.current = loadKey;
     }
+    latestLoadKeyRef.current = loadKey;
     if (loadRef.current) {
-      if (currentLoadKeyRef.current !== loadKey) {
-        pendingLoadKeyRef.current = loadKey;
-      }
+      // Keep only the latest user intent. Empty string is meaningful here: it
+      // represents an explicit Clear and must not be collapsed into "none".
+      pendingLoadKeyRef.current = loadKey;
       return;
     }
     loadRef.current = true;
@@ -3609,6 +3637,7 @@ function BomAdminPanel({
         setBomAdminNotice("");
       }
       const res = await api.getBomAdmin(Object.keys(params).length > 0 ? params : undefined);
+      if (latestLoadKeyRef.current !== loadKey) return;
       const nextItems = res.items || [];
       setSkus(nextItems);
       setOptimisticColourTiers((current) => {
@@ -3630,7 +3659,9 @@ function BomAdminPanel({
       setBomAdminError("");
     } catch (e) {
       console.error('[BOM Admin]', e);
-      setBomAdminError(getErrorMessage(e));
+      if (latestLoadKeyRef.current === loadKey) {
+        setBomAdminError(getErrorMessage(e));
+      }
     }
     finally {
       loadRef.current = false;
@@ -3639,9 +3670,7 @@ function BomAdminPanel({
       const pendingLoadKey = pendingLoadKeyRef.current;
       pendingLoadKeyRef.current = null;
       if (pendingLoadKey !== null) {
-        window.setTimeout(() => {
-          void load(pendingLoadKey);
-        }, 0);
+        void load(pendingLoadKey);
       }
     }
   }, []);
@@ -3760,7 +3789,10 @@ function BomAdminPanel({
   useEffect(() => {
     const brand = String(colourCodeEditor?.brand || "").trim();
     const colourCode = String(colourCodeEditor?.nextColourCode || "").trim().toUpperCase();
+    const targetKey = colourCodeEditorTargetKey;
     const requestId = ++colourCodeLookupRequestRef.current;
+    setColourCodeRuleLookup(null);
+    setColourCodeEditorError("");
     if (!brand || !/^[A-Z0-9]{1,4}$/.test(colourCode)) {
       setColourCodeRuleLookup(null);
       setLoadingColourCodeRuleLookup(false);
@@ -3772,7 +3804,11 @@ function BomAdminPanel({
         if (colourCodeLookupRequestRef.current !== requestId) return;
         setColourCodeRuleLookup(lookup);
         setColourCodeEditor((current) => {
-          if (!current || current.nextColourCode.trim().toUpperCase() !== colourCode) return current;
+          if (
+            !current
+            || getBomColourCodeEditorTargetKey(current) !== targetKey
+            || current.nextColourCode.trim().toUpperCase() !== colourCode
+          ) return current;
           if (lookup.source !== "brand_code_rule" || lookup.hasNameConflict || lookup.hasSwatchConflict) {
             return current;
           }
@@ -3798,12 +3834,15 @@ function BomAdminPanel({
       });
     }, BOM_ADMIN_COLOUR_LOOKUP_DELAY_MS);
     return () => window.clearTimeout(timer);
-  }, [colourCodeEditor?.brand, colourCodeEditor?.nextColourCode]);
+  }, [colourCodeEditorTargetKey, colourCodeEditor?.nextColourCode]);
 
   useEffect(() => {
     const brand = String(addColourEditor?.brand || "").trim();
     const colourCode = String(addColourEditor?.colourCode || "").trim().toUpperCase();
+    const targetKey = addColourEditorTargetKey;
     const requestId = ++addColourLookupRequestRef.current;
+    setAddColourRuleLookup(null);
+    setAddColourEditorError("");
     if (!brand || !/^[A-Z0-9]{1,4}$/.test(colourCode)) {
       setAddColourRuleLookup(null);
       setLoadingAddColourRuleLookup(false);
@@ -3815,7 +3854,11 @@ function BomAdminPanel({
         if (addColourLookupRequestRef.current !== requestId) return;
         setAddColourRuleLookup(lookup);
         setAddColourEditor((current) => {
-          if (!current || current.colourCode.trim().toUpperCase() !== colourCode) return current;
+          if (
+            !current
+            || getBomAddColourEditorTargetKey(current) !== targetKey
+            || current.colourCode.trim().toUpperCase() !== colourCode
+          ) return current;
           if (lookup.source !== "brand_code_rule" || lookup.hasNameConflict || lookup.hasSwatchConflict) {
             return current;
           }
@@ -3841,7 +3884,7 @@ function BomAdminPanel({
       });
     }, BOM_ADMIN_COLOUR_LOOKUP_DELAY_MS);
     return () => window.clearTimeout(timer);
-  }, [addColourEditor?.brand, addColourEditor?.colourCode]);
+  }, [addColourEditorTargetKey, addColourEditor?.colourCode]);
 
   const replaceFinanceRow = (
     rows: CountryMaterialFinanceRow[],
@@ -5202,41 +5245,23 @@ function BomAdminPanel({
 
   // Focus only when a different editor target opens. Field edits and lookup
   // responses must never steal the caret from the input the user is typing in.
-  const colourCodeEditorFocusKey = colourCodeEditor
-    ? [
-      colourCodeEditor.materialCode,
-      colourCodeEditor.currentColourCode,
-      colourCodeEditor.modelName,
-      colourCodeEditor.version,
-    ].join("|")
-    : null;
-  const addColourEditorFocusKey = addColourEditor
-    ? [
-      addColourEditor.bomTemplate,
-      addColourEditor.sourceMaterialCode,
-      addColourEditor.tierName,
-      addColourEditor.modelName,
-      addColourEditor.version,
-    ].join("|")
-    : null;
-
   useEffect(() => {
-    if (!colourCodeEditorFocusKey) return;
+    if (!colourCodeEditorTargetKey) return;
     const frame = window.requestAnimationFrame(() => {
       colourCodeEditorInputRef.current?.focus();
       colourCodeEditorInputRef.current?.select();
     });
     return () => window.cancelAnimationFrame(frame);
-  }, [colourCodeEditorFocusKey]);
+  }, [colourCodeEditorTargetKey]);
 
   useEffect(() => {
-    if (!addColourEditorFocusKey) return;
+    if (!addColourEditorTargetKey) return;
     const frame = window.requestAnimationFrame(() => {
       addColourEditorCodeRef.current?.focus();
       addColourEditorCodeRef.current?.select();
     });
     return () => window.cancelAnimationFrame(frame);
-  }, [addColourEditorFocusKey]);
+  }, [addColourEditorTargetKey]);
 
   const toggleAddMaterialForm = () => {
     const nextVisible = !showAddMaterial;
