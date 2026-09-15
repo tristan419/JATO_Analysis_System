@@ -14,6 +14,7 @@
 - 后续五项对应：Model/列宽 → B；J5 空品牌/漏统计/加价 → C1/C2/C4；颜色双入口同步 → C3；登录提示 → D；蓝边框 → E。五项实施说明均在第 12 节。
 - B 已按最新远端 `main@f29cf509` 在独立 worktree 实施并完成本地验证；尚未合并或部署 Candidate。A 未部署不阻塞 B 本地开发；C/D 按各自范围继续，E 可随 C3 的色卡交互一并实施。
 - C（含 E）已按同一基线在独立 worktree 完成本地实现并验证；提交 `2218c0df`，尚未合并或部署 Candidate。它没有写入 35 行正式数据，只让可明确识别的旧空品牌参与规则/加价链路，并对未知身份给出摘要告警。
+- D 已从 `main@f29cf509` 在独立 worktree 完成本地实现并验证；提交 `1a64194a`，尚未合并或部署 Candidate。它只增加认证失败的可见反馈和草稿保留，不改变后端权限，也不自动重试或提交。
 - 发布顺序：本地行为验证 → 可审阅 PR → 获授权合并 main → 现有 CI 自动 prepare Candidate → 在新构件做业务验收 → 单独决定 Active 发布。不要要求“Candidate 验收通过才允许代码进入 main”，这会与现有 main-only Candidate 流程形成循环。
 
 ### 2026-09-15 · A 第一版（待补齐交互验证和异步边界）
@@ -32,7 +33,7 @@
 | A 输入/自动填充/搜索 | 本地实现已收口；尚未部署验收 | 第 13 节 A 收口记录 + 第 12 节 A | Candidate 新构件复验：输入焦点、1.2 秒查库、保存后搜索保持 |
 | B Model/列宽 | 本地实现完成；尚未合并/Candidate 验收 | `codex/bom-model-layout` / `53976fc0`；Grid 默认 280px、优先固定 Model、用户列宽初始化与持久化 | 本地类型、单测、构建、路由回归通过；待 Candidate 在 2200/1400/1100px 与 80/100/125% 实测 |
 | C J5 品牌、颜色共享、加价 | 本地实现完成；尚未合并/Candidate 验收 | `codex/bom-colour-followup` / `2218c0df`；有效品牌归一化、无效身份摘要、共享标准入口、逐国重算筛选 | 本地目标测试通过；待 Candidate 核对 J5 规则、双色 +300、manual/no-base 保护 |
-| D 登录失效 | 原因仍需响应证据 | 第 12 节 D：复用 AuthContext 与请求状态，区分 401/403/409，保留草稿 | 失效用户可重登恢复，有效低权限用户得到权限提示 |
+| D 登录失效 | 本地实现完成；尚未合并/Candidate 验收 | `codex/bom-auth-feedback` / `1a64194a`；protected request 事件、AuthContext 身份核验、数量草稿保留 | 本地全量前端通过；待 Candidate 用真实失效 token/低权限身份验收 |
 | #215 同模板跨车型/版本 | 专项验收未完成 | 第 12.2 节：构造两个真实渲染行并点击 Edit | 只有被点的目标行打开；不是仅比较 key 字符串 |
 | #220 Matrix/保护逻辑 | 部分读取和 Apply 已验，其他待验 | 第 3 节未验项 + C 的用例 | 两个编辑入口保存后 BOM/Matrix 一致；tier/manual/no-base 样本验证 |
 
@@ -57,6 +58,16 @@
 - 变更文件：`06_AppPlatform/backend/app/api/routes/order_genius.py`、`06_AppPlatform/backend/app/infra/order_genius_repository.py`、`06_AppPlatform/backend/app/services/order_genius_service.py`、`06_AppPlatform/backend/app/services/ordering_normalization.py`、对应后端测试；`06_AppPlatform/frontend/src/index.css`、`OrderGeniusPage.tsx`、类型与规则契约测试。提交：`2218c0df fix(bom): unify legacy colour identities and shared swatches`。
 - 本地验证：前端 `npm run check:types`、`npm run test:unit`（73 files / 393 tests）、`npm run build`、`npm run check:router-regression` 全部通过；后端 Python compileall 通过，相关规则/品牌测试 9 passed，Matrix/Options 4 passed。完整 `test_ordering_bom_admin.py` 为 39 passed / 5 failed，5 个失败均为该基线已有的 `list_bom_admin_country_columns` / `sync_missing_template_fobs` 缺失或旧测试契约，不是本批改动引入；需在后续基线对齐时单独处理。
 - 尚未完成：未合并、未部署 Candidate，未做真实 J5 ICE/HEV 浏览器验收；未写 Candidate/Active 数据，未验证实际 +300 重算、重复重算幂等、manual FOB 与缺 Single 基准跳过、BOM/Matrix 双入口真实写入后 UI 一致。worktree 仅保留自动生成的 `hermes/dev_events/dev_events.jsonl` 修改，未纳入提交；临时依赖 symlink 已删除。
+
+### 2026-09-15 · D 登录失效提示与数量草稿保留（本地实现完成，待 Candidate）
+
+- 基线：`JATO_Analysis_System/main@f29cf509`；独立 worktree：`/Users/litristan/Downloads/JATO_Analysis_System_bom_auth_feedback`；分支：`codex/bom-auth-feedback`。
+- 根因：`api/client.ts` 的 `request` 已把 HTTP status 放进 Error，但页面只显示原始错误；401/403 没有统一可见提示。数量单元格失败路径会清掉 draft 或回滚显示值，用户无法判断是登录失效、权限不足还是普通冲突。
+- 实现：`request`/`requestBlob` 对受保护路径的 401/403 发出轻量 `AUTH_FAILURE_EVENT`（登录接口不触发）；Order Genius 复用 `AuthContext.refreshUser()` 核验 403，区分“当前账号无权限”“登录已失效”“无法核验网络”。不修改后端 `require_min_role`，不自动重试或自动提交。
+- 实现：数量保存收到 401/403 时保留当前草稿和值，并显示原始错误；其他 409 冲突和网络失败继续走原有处理。页面 banner 提供重新登录动作，只有用户主动点击才清理 token 并跳转；普通 BOM 表单也继续保留其本地输入。
+- 变更文件：`06_AppPlatform/frontend/src/api/client.ts`、`contexts/AuthContext.tsx`、`pages/OrderGeniusPage.tsx` 及两份规则/认证契约测试。提交：`1a64194a fix(bom): explain auth failures and preserve quantity drafts`。
+- 本地验证：`npm run check:types`、`npm run test:unit`（73 files / 393 tests）、`npm run build`、`npm run check:router-regression` 全部通过；新增受保护 401 事件测试通过。构建仅有既有大 chunk warning。
+- 尚未完成：未合并、未部署 Candidate，未用真实过期 token、有效低权限账号和网络断开做浏览器验收；未证明正式站历史红字一定由会话失效引起。重新登录后的跨导航草稿恢复仍依赖现有页面缓存/浏览器行为，不能在未实测前宣称跨页恢复。
 
 ### A 收尾：本地代码已收口，Candidate 仍待验收
 

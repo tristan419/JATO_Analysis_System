@@ -9,7 +9,8 @@
 - BOM #220 已完成一次真实 Preview/Apply：仅 Candidate 的 8 行颜色名称被填充，前后 BOM API 比较 FOB/tier 等其他返回字段未变。完整验收尚未完成，不能标记可发布。
 - 新发现：J5 ICE 21 行、HEV 14 行品牌为空，联动影响色卡、规则统计和加价；Model 窄屏移位、输入抢焦点已复现；搜索保存后的无条件 reload 已定位。
 - B Model 布局已在 `/Users/litristan/Downloads/JATO_Analysis_System_bom_model_layout` 本地完成，提交 `53976fc0`；C（含 E）J5 品牌归一化、共享颜色/加价链路和色卡边框已在 `/Users/litristan/Downloads/JATO_Analysis_System_bom_colour` 本地完成，提交 `2218c0df`。两批均未合并、未部署 Candidate，不能写成线上已修复。
-- 下一步是先审阅并按授权合并 B/C，随后由现有流程准备 Candidate，再做真实浏览器验收；D 登录失效提示仍待独立实现。不优先扩展多人编辑 row_version，不新增门禁。
+- D 登录失效提示已在 `/Users/litristan/Downloads/JATO_Analysis_System_bom_auth_feedback` 本地完成，提交 `1a64194a`；三批均未合并、未部署 Candidate，不能写成线上已修复。
+- 下一步是先审阅并按授权合并 B/C/D，随后由现有流程准备 Candidate，再做真实浏览器验收。不优先扩展多人编辑 row_version，不新增门禁。
 - 完整证据、沙箱写入清单和 TODO：[BOM Candidate 验收与问题梳理](../features/BOM_ADMIN_CANDIDATE_ACCEPTANCE_2026-09-15.md)。本轮没有更新 Active/www/intl，也没有合并文档 PR。
 
 ## 以下为 2026-09-14 历史盘点（Candidate 当前状态以上节为准）
