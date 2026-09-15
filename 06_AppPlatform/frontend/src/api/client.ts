@@ -423,6 +423,21 @@ function parseJatoMonthlyUpdateReviewIssue(
   }
 }
 
+export const AUTH_FAILURE_EVENT = "jato:auth-failure";
+
+function emitAuthFailure(path: string, status: number): void {
+  if (
+    typeof window === "undefined"
+    || (status !== 401 && status !== 403)
+    || path.startsWith("/auth/")
+  ) {
+    return;
+  }
+  window.dispatchEvent(new CustomEvent(AUTH_FAILURE_EVENT, {
+    detail: { path, status },
+  }));
+}
+
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const shouldDedupe = !(init?.body instanceof FormData) && !init?.signal;
   const key = shouldDedupe ? dedupeKey(path, init) : null;
@@ -447,6 +462,7 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
     }
     if (!response.ok) {
       const message = await readErrorMessage(response);
+      emitAuthFailure(path, response.status);
       const error = new Error(`${response.status} ${message}`) as Error & {
         status: number;
         reviewIssue?: JatoMonthlyUpdateReviewIssue;
@@ -508,7 +524,10 @@ async function requestBlob(path: string, init?: RequestInit): Promise<Blob> {
   }
   if (!response.ok) {
     const message = await readErrorMessage(response);
-    throw new Error(`${response.status} ${message}`);
+    emitAuthFailure(path, response.status);
+    const error = new Error(`${response.status} ${message}`) as Error & { status: number };
+    error.status = response.status;
+    throw error;
   }
   return response.blob();
 }

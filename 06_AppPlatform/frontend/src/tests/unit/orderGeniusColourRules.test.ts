@@ -1,6 +1,8 @@
+// @vitest-environment jsdom
+
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { api } from "../../api/client";
+import { api, AUTH_FAILURE_EVENT } from "../../api/client";
 import {
   buildOrderGeniusColourSwatch,
   MISSING_COLOUR_SWATCH_HEX,
@@ -71,5 +73,24 @@ describe("Order Genius colour rule API", () => {
     const error = await api.applyOrderGeniusColourHexRuleFills("old", ["T1"]).catch((cause: unknown) => cause);
     expect((error as { status: number }).status).toBe(409);
     expect((error as Error).message).toContain("preview is stale");
+  });
+
+  it("emits one auth-failure event for protected API responses", async () => {
+    const events: Event[] = [];
+    const listener = (event: Event) => events.push(event);
+    window.addEventListener(AUTH_FAILURE_EVENT, listener);
+    vi.stubGlobal("fetch", vi.fn(async () => Response.json(
+      { detail: "Not authenticated" },
+      { status: 401 },
+    )));
+
+    await expect(api.getOrderGeniusColourHexRules()).rejects.toMatchObject({ status: 401 });
+
+    window.removeEventListener(AUTH_FAILURE_EVENT, listener);
+    expect(events).toHaveLength(1);
+    expect((events[0] as CustomEvent).detail).toMatchObject({
+      path: "/order-genius/colour-hex-rules",
+      status: 401,
+    });
   });
 });

@@ -62,7 +62,7 @@ interface AuthContextValue {
   token: string | null;
   profileLoaded: boolean;
   login: (username: string, password: string) => Promise<void>;
-  refreshUser: () => Promise<void>;
+  refreshUser: () => Promise<boolean>;
   updateProfile: (payload: UserProfileUpdate) => Promise<User>;
   logout: () => void;
 }
@@ -196,7 +196,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     setUser(nextUser);
   }, []);
 
-  const refreshUser = useCallback(async () => {
+  const refreshUser = useCallback(async (): Promise<boolean> => {
     const candidateOrigin = isCandidatePreviewOrigin(window.location);
     const currentToken = candidateOrigin
       ? ""
@@ -207,7 +207,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       ).trim();
     if (!candidateOrigin && !currentToken) {
       setProfileLoaded(true);
-      return;
+      return false;
     }
     const username = candidateOrigin
       ? CANDIDATE_RUNTIME_IDENTITY.username
@@ -220,11 +220,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     });
     if (!res.ok) {
       setProfileLoaded(true);
-      return;
+      return false;
     }
     const data = await res.json();
     applyUser(normalizeUserPayload(data as Record<string, unknown>));
     setProfileLoaded(true);
+    return true;
   }, [applyUser]);
 
   // Handle OAuth callback (token in URL params from Google / Feishu)
