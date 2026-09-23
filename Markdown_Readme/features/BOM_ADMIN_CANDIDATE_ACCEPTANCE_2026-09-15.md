@@ -15,7 +15,7 @@
 - B 已在独立 worktree 对齐最新远端 `main@9011da6a`，对齐合并提交为 `ac59a832`；原业务提交 `53976fc0` 保留。尚未合并远端 PR 或部署 Candidate。A 未部署不阻塞 B 本地开发。
 - C（含 E）已在独立 worktree 对齐同一 `main@9011da6a`，对齐合并提交为 `579ea01e`；原业务提交 `2218c0df` 保留。尚未合并远端 PR 或部署 Candidate；没有写入正式数据。
 - D 已在独立 worktree 对齐同一 `main@9011da6a`（对齐提交 `f6887fb3`），并完成衔接修正提交 `34656898`；原业务提交 `1a64194a` 保留。修正仅涉及认证核验结果分类、启动异常处理、页面内 403 核验和新标签登录，不改变后端权限或 #228 的 Candidate token/OAuth 隔离。
-- 本地衔接批次复核（2026-09-15）：B/C/D 对齐后相对 `main@9011da6a` 均为 0 behind；B/C 无文本冲突，D 修正只在其自身改动范围内继续。共同修改的 `OrderGeniusPage.tsx` 与规则测试仍须在合并后的组合构件做人工验收，Git 无冲突不等于业务通过。
+- 本地衔接批次复核（2026-09-23）：B/C/D 对齐后相对 `main@9011da6a` 均为 0 behind；B/C 无文本冲突，D 修正只在其自身改动范围内继续。共同修改的 `OrderGeniusPage.tsx` 与规则测试仍须在合并后的组合构件做人工验收，Git 无冲突不等于业务通过。
 - D 衔接修正已实跑：无 token 返回 `false`；200 返回 `true`；保留模式下 401 返回 `false` 但不清理 Candidate token/身份；网络异常和 5xx 抛出可区分错误且不清理身份。启动/后台刷新调用者已显式吞掉异常，避免未处理 Promise；登录按钮打开带原路径的同源新标签，原页通过 focus 事件复核身份并提示用户主动重试，数量/BOM 草稿不自动提交。
 - 发布顺序：本地行为验证 → 可审阅 PR → 获授权合并 main → 现有 CI 自动 prepare Candidate → 在新构件做业务验收 → 单独决定 Active 发布。不要要求“Candidate 验收通过才允许代码进入 main”，这会与现有 main-only Candidate 流程形成循环。
 
@@ -90,7 +90,7 @@
 - 本地验证：`npm run check:types`、`npm run test:unit`（73 files / 393 tests）、`npm run build`、`npm run check:router-regression` 全部通过；新增受保护 401 事件测试通过。构建仅有既有大 chunk warning。
 - 尚未完成（原始版本）：未合并、未部署 Candidate，未用真实过期 token、有效低权限账号和网络断开做浏览器验收；未证明正式站历史红字一定由会话失效引起。衔接后的跨标签草稿保留仍需真实浏览器验收，不能在未实测前宣称已跨页恢复。
 
-### 2026-09-15 · B/C/D 对齐与 D 衔接修正（本地完成，待 PR/Candidate）
+### 2026-09-23 · B/C/D 对齐与 D 衔接修正（本地完成，待 PR/Candidate）
 
 - 统一比较基线：当前远端 `main@9011da6ac1f5592e37b7cba80c455e30e0b0b48e`。
 - B `codex/bom-model-layout` 已通过合并提交 `ac59a832` 对齐 `main`；C（含 E）`codex/bom-colour-followup` 已通过 `579ea01e` 对齐；D `codex/bom-auth-feedback` 已通过 `f6887fb3` 对齐。三批原业务提交 `53976fc0`、`2218c0df`、`1a64194a` 均保留，没有整文件覆盖 #228。

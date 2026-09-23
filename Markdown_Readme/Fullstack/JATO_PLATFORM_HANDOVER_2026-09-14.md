@@ -9,7 +9,7 @@
 - BOM #220 已完成一次真实 Preview/Apply：仅 Candidate 的 8 行颜色名称被填充，前后 BOM API 比较 FOB/tier 等其他返回字段未变。完整验收尚未完成，不能标记可发布。
 - 新发现：J5 ICE 21 行、HEV 14 行品牌为空，联动影响色卡、规则统计和加价；Model 窄屏移位、输入抢焦点已复现；搜索保存后的无条件 reload 已定位。
 - B Model 布局已在 `/Users/litristan/Downloads/JATO_Analysis_System_bom_model_layout` 对齐 `main@9011da6a`，对齐提交 `ac59a832`，业务提交 `53976fc0` 保留；C（含 E）已对齐，提交 `579ea01e`，业务提交 `2218c0df` 保留。两批尚未合并远端 PR、未部署 Candidate，不能写成线上已修复。
-- D 登录失效提示已在 `/Users/litristan/Downloads/JATO_Analysis_System_bom_auth_feedback` 对齐提交 `f6887fb3`，并完成最小衔接修正 `34656898`；原业务提交 `1a64194a` 保留。修正保留 #228 的真实 token、OAuth 隔离和访问控制，区分认证拒绝与网络/5xx，不因页面核验失败清身份；重新登录改为同源新标签，原页保留草稿并等待用户主动重试。D 尚未合并远端 PR、未部署 Candidate，不能写成线上已修复。
+- D 登录失效提示已在 `/Users/litristan/Downloads/JATO_Analysis_System_bom_auth_feedback` 对齐提交 `f6887fb3`，并于 2026-09-23 完成最小衔接修正 `34656898`；原业务提交 `1a64194a` 保留。修正保留 #228 的真实 token、OAuth 隔离和访问控制，区分认证拒绝与网络/5xx，不因页面核验失败清身份；重新登录改为同源新标签，原页保留草稿并等待用户主动重试。D 尚未合并远端 PR、未部署 Candidate，不能写成线上已修复。
 - 本地衔接批次已实跑：D `npm run check:types`、全量 Vitest（73 files / 403 tests）、`npm run build`、`npm run check:router-regression` 均通过；构建仅有既有大 chunk warning。尚未做真实浏览器的有效低权限 403、过期 token、网络断开及新标签登录前后草稿验收。
 - 下一步只做 B/C/D PR diff 与组合行为审阅，确认后按授权合并 main；随后由现有流程准备 Candidate，再做真实浏览器验收。不优先扩展多人编辑 row_version，不新增门禁。
 - 完整证据、沙箱写入清单和 TODO：[BOM Candidate 验收与问题梳理](../features/BOM_ADMIN_CANDIDATE_ACCEPTANCE_2026-09-15.md)。本轮没有更新 Active/www/intl，也没有合并文档 PR。
