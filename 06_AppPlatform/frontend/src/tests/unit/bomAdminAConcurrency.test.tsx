@@ -51,6 +51,8 @@ const colourRuleSummary = {
   swatchConflict: 0,
   complete: 0,
   fillableSkus: 0,
+  invalidIdentitySkuCount: 0,
+  invalidIdentitySampleMaterialCodes: [],
 };
 
 describe("BOM Admin A load continuity", () => {
