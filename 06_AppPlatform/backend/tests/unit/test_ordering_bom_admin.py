@@ -362,6 +362,17 @@ def test_uploaded_base_plus_colour_uses_unified_special_rule(monkeypatch) -> Non
     assert resolved.colour_surcharge_eur == 200
     assert resolved.final_fob_eur == 15200
 
+    final = order_genius_service._resolve_fob_for_sku(
+        _FakeSession(),
+        "SE",
+        sku,
+        uuid4(),
+        "uploaded_final_fob",
+    )
+    assert final.base_fob_eur is None
+    assert final.colour_surcharge_eur is None
+    assert final.final_fob_eur == 15000
+
 
 @pytest.mark.parametrize("scenario", ["known", "unknown", "conflict"])
 def test_create_material_sku_resolves_known_unknown_and_conflict_rules(
