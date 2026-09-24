@@ -1,22 +1,40 @@
 # BOM Admin / Order Genius：Candidate 验收与问题梳理
 
-> 创建：2026-09-15；最新需求与状态修订：2026-09-24，Asia/Shanghai。状态：已有本地实现；C 通用新增颜色定价及特殊价页面待补，D 仍有交互缺口，尚未完成 Candidate 验收。
+> 创建：2026-09-15；最新需求与状态修订：2026-09-24，Asia/Shanghai。状态：C7 第一批已在独立 worktree 本地实现；C5/C6/C8 仍部分待补，D 仍有交互缺口，尚未完成 Candidate 验收。
 > 用户目标：稳定填写订单、稳定列布局、跨物料共享颜色名称/色卡、正确计算颜色加价。暂不优先建设多人编辑、row_version 扩展或新门禁。
 > 初次调研只做验收和文档；之后 A 已有本地代码提交 `260f839a`，尚未部署验收。B/C（含 E）/D 的代码批次随后已各自在独立 worktree 完成，整个 BOM 修复仍未完成 Candidate 验收。
-> **下一位执行者先读第 13 节 9 月 24 日修订，再按第 12 节实施。** 保留已有成果；C 按 C5–C8 补齐，D 补交互缺口，不把历史测试通过当作完整收口。
+> **下一位执行者先读第 13 节 9 月 24 日最新批次，再按第 12 节实施。** 保留已有成果；C 按 C5–C8 继续补齐，D 补交互缺口，不把历史测试通过当作完整收口。
 
 ## 13. 实施记录
 
-### 2026-09-24 · 通用颜色加价与特殊价管理（已确认方案，尚未实现）
+### 2026-09-24 · C7 第一批：新增颜色自动 FOB 初始化与特殊价页面初接（本地已实现，未合并）
 
-本节优先于下文“C/D 已完成”“下一步只需合并”的历史表述。本轮为源码排查和需求入档，未修改业务代码、未重跑业务测试、未部署或写数据。
+本批在 `/Users/litristan/Downloads/JATO_Analysis_System_bom_colour` 的 `codex/bom-colour-followup` 上实施，基线为已对齐的 `579ea01e`，业务提交 `eb10c0ead4a49e4d7f4152dabb63d04143b0676e`。没有合并远端、部署 Candidate、更新 Active/www/intl 或写正式数据。
+
+- `create_material_sku` 接受 `sourceMaterialCode` + `automaticFobs`；在同一事务中创建新 SKU，并由 repository 按来源可用国家/付款条件寻找目标 BOM 模板下的 Single 基准，再调用统一 `get_colour_surcharge_amount_for_sku` 计算 Dual/Special 加价。保存 `base_fob_eur`、`colour_surcharge_eur`、`final_fob_eur` 和自动来源；缺 Single 基准逐国跳过并返回原因，不把自动行标成 `manual_edit`。
+- 前端 Add Colour 不再“先重算空价格、再逐国调用手动 FOB 接口复制来源最终价”，改为把来源物料交给后端初始化；页面显示自动创建数量和缺基准国家。`automaticFobs` 与显式 `fobs` 互斥，避免同一请求重复写价。
+- 现有 Special Colour Surcharge 页面初接：Colour Surcharges 工具中可加载、编辑、保存品牌＋可选车型＋色码/名称＋金额规则；列表点击可回填编辑。色卡 tooltip 对 Special 显示命中的车型色码/品牌色码来源，0 EUR 作为明确免加价保留。后端原有优先级继续生效：车型＋色码 → 品牌＋色码 → 品牌 Special 默认；Matte 只走 Special，不叠加 Dual。
+- 本批没有宣称 C5/C6 完成：Special 色卡快捷入口、真正的预览→确认→应用、停用/删除后的回退预览、完整 reprice 明细和其他自动路径（包括 service 中的 `uploaded_base_plus_colour`）仍待后续批次核对。
+
+验证（2026-09-24）：
+
+- 后端新用例：自动创建路由、同模板 Single 基准＋加价、Special 特例覆盖品牌默认，共 `3 passed`；`compileall` 通过。
+- 后端 `tests/unit/test_ordering_bom_admin.py`：`41 passed, 5 failed`。5 个失败是本分支原有基线缺口：缺少 `list_bom_admin_country_columns`（2 项）、空 FOB 列预期仍保留 NL（1 项）、缺少 `sync_missing_template_fobs`（2 项），不由本批变更引入；不能写成全量通过。
+- 前端：`npm run check:types` 通过；全量 Vitest `73 files / 399 tests passed`；`npm run build` 通过（仅既有大 chunk warning）；`npm run check:router-regression` 通过。
+- worktree 仅保留自动生成的 `hermes/dev_events/dev_events.jsonl` 未提交修改；没有把它 stage 到业务提交。
+
+未验项与下一批：在 Candidate 真实浏览器验证普通 Dual、OMODA7/9 Matte 特例、J5 及非 J5、多国家不同 Single 基准、manual/no-base 保护、BOM/Matrix 一致；补 C5/C6 预览/应用/停用和 C7 其他自动入口。D 继续按原计划，不与本批混合。
+
+### 2026-09-24 · 通用颜色加价与特殊价管理（已确认方案，C7 前为未实现口径）
+
+本节优先于下文“C/D 已完成”“下一步只需合并”的历史表述；其中 C7 第一批已由上一个小节记录。本节其余 C5/C6/C8 仍是待实施方案，未部署或写正式数据。
 
 - 用户确认：OMODA 普通 Dual 默认 +200 EUR，JAECOO 普通 Dual 默认 +300 EUR；Matte 属于 Special，不是双色，不叠加 Dual。OMODA7 Matte 特例 +200，OMODA9 Matte 特例 +300。金额由页面规则管理，不硬编码车型金额或根据名称包含 matte 自动分类；实际色码须从现有颜色库选择。
-- C 的通用根因已由源码确认：`handleAddColourEditorSubmit` 先创建 SKU、调用 `updateColourTier`，此时没有 FOB 可重算；随后 `copyPositiveFobsToMaterial` 原样复制来源最终 FOB，并经手动改价接口落成 `manual_edit`。后续规则重算因手动保护而跳过。品牌完整的非 J5 也受影响，C@579ea01e 尚未修正。复制已有正确双色可能碰巧金额正确，但来源仍错误；Copy Material 有同类顺序/统一价格写入风险，需核实自动继承与手填最终价语义。
-- 现有特殊价表、GET/PATCH 接口、前端 API/types 及优先级查询已存在；页面未接入，色卡 tooltip 只读品牌默认价。详细实施见第 12 节 C5–C8。
+- C 的通用根因已由源码确认并在 C7 第一批修正：`handleAddColourEditorSubmit` 原先先创建 SKU、调用 `updateColourTier`，此时没有 FOB 可重算；随后 `copyPositiveFobsToMaterial` 原样复制来源最终 FOB，并经手动改价接口落成 `manual_edit`。后续规则重算因手动保护而跳过。现在新增颜色走后端事务内的 Single 基准＋统一规则初始化；Copy Material 和 service 其他自动入口仍需继续核对。复制已有正确双色可能碰巧金额正确，但来源仍错误。
+- 现有特殊价表、GET/PATCH 接口、前端 API/types 及优先级查询已存在；C7 第一批已接入规则列表/编辑和 Special tooltip 来源显示，但快捷入口、预览/应用和停用仍未完成。详细实施见第 12 节 C5–C8。
 - D@34656898 尚未收口：`window.open(..., 'noopener,noreferrer')` 返回 null 不能证明被拦截；旧核验响应缺少失效保护，可能覆盖较新认证状态。重登前后 quantity/BOM 草稿仅有不完整证据，需真实组件/浏览器测试，不以源码字符串断言代替。
 - 状态日期纠正：D 提交 34656898 的 Git 时间是 2026-09-15；9 月 23 日是后续文档更新日期，不能当作代码实现或重跑测试日期。
-- 用户希望已修功能先进入 Candidate 亲测：优先补齐 A/B 必要交互验证并检查组合结果；C/E 既有成果可分批准备，但必须标注新增颜色定价尚未修复。D 先补上述缺口。之后按现有 PR→main→Candidate 流程交付，不要求所有后续功能一起等齐；Candidate 验收不等于 Active 发布。本次“写进 md”不执行合并或部署。
+- 用户希望已修功能先进入 Candidate 亲测：优先补齐 A/B 必要交互验证并检查组合结果；C7 第一批可在审阅后与既有 C/E 分批准备，但必须标注 C5/C6 其他入口和浏览器验收仍未完成。D 先补上述缺口。之后按现有 PR→main→Candidate 流程交付，不要求所有后续功能一起等齐；Candidate 验收不等于 Active 发布。本节原始方案记录不执行合并或部署。
 
 ### 9 月 15–23 日执行记录（当前状态以 9 月 24 日修订为准）
 
@@ -45,7 +63,7 @@
 |---|---|---|---|
 | A 输入/自动填充/搜索 | 本地实现已收口；尚未部署验收 | 第 13 节 A 收口记录 + 第 12 节 A | Candidate 新构件复验：输入焦点、1.2 秒查库、保存后搜索保持 |
 | B Model/列宽 | 本地实现完成；尚未合并/Candidate 验收 | `codex/bom-model-layout` / `53976fc0`；Grid 默认 280px、优先固定 Model、用户列宽初始化与持久化 | 本地类型、单测、构建、路由回归通过；待 Candidate 在 2200/1400/1100px 与 80/100/125% 实测 |
-| C J5 品牌、颜色共享、加价 | 本地实现完成；尚未合并/Candidate 验收 | `codex/bom-colour-followup` / `2218c0df`；有效品牌归一化、无效身份摘要、共享标准入口、逐国重算筛选 | 本地目标测试通过；待 Candidate 核对 J5 规则、双色 +300、manual/no-base 保护 |
+| C J5 品牌、颜色共享、加价 | 原 C/E 本地实现加上 C7 第一批已完成；C5/C6 其他入口与 Candidate 验收未完成 | `codex/bom-colour-followup` / `2218c0df` + `eb10c0e`；新增颜色按 Single 基准初始化，Special 规则列表/编辑和来源 tooltip 初接 | 后端新用例 3 passed；全量后端 41 passed/5 个已知基线失败；前端 73 files / 399 tests、类型、构建、路由通过；待 Candidate 核对实际价格和手动保护 |
 | D 登录失效 | 对齐 main 后的衔接修正已在本地完成；尚未合并/Candidate 验收 | `codex/bom-auth-feedback`：`f6887fb3` + `34656898`；保留 #228 认证逻辑，区分 401/403、网络/5xx，登录新标签保留原页草稿 | 类型检查、全量单测、构建、路由回归已通过；待 PR 审阅及 Candidate 浏览器验收 |
 | #215 同模板跨车型/版本 | 专项验收未完成 | 第 12.2 节：构造两个真实渲染行并点击 Edit | 只有被点的目标行打开；不是仅比较 key 字符串 |
 | #220 Matrix/保护逻辑 | 部分读取和 Apply 已验，其他待验 | 第 3 节未验项 + C 的用例 | 两个编辑入口保存后 BOM/Matrix 一致；tier/manual/no-base 样本验证 |
