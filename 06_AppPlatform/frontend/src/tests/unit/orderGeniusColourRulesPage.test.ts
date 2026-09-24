@@ -75,4 +75,15 @@ describe("Order Genius colour rule page contract", () => {
     expect(pageSource).toContain("manual FOB skipped");
     expect(pageSource).toContain("missing Single base");
   });
+
+  it("surfaces protected-request auth failures without discarding quantity drafts", () => {
+    expect(pageSource).toContain("AUTH_FAILURE_EVENT");
+    expect(pageSource).toContain("登录已失效，未保存的 BOM/订单输入仍保留在当前页面");
+    expect(pageSource).toContain("当前账号没有执行此 BOM 操作的权限");
+    expect(pageSource).toContain("refreshUser({ preserveSession: true })");
+    expect(pageSource).toContain("登录已恢复，请主动重试刚才的保存。");
+    expect(pageSource).toContain('window.open(loginUrl, "_blank", "noopener,noreferrer")');
+    expect(pageSource).toContain("const authStatus = getErrorStatus(err)");
+    expect(pageSource).toContain("if (authStatus === 401 || authStatus === 403)");
+  });
 });

@@ -13,7 +13,7 @@ import {
 } from "react";
 import { animate } from "animejs";
 
-import { api, apiUrl } from "../api/client";
+import { api, apiUrl, AUTH_FAILURE_EVENT } from "../api/client";
 import { useAuth } from "../contexts/AuthContext";
 import { useAccountCountryOptions } from "../hooks/useAccountCountryOptions";
 import { useResolvedCountry } from "../hooks/useResolvedCountry";
@@ -606,7 +606,7 @@ function buildMaterialDrafts(form: AddMaterialFormState): {
 }
 
 export function OrderGeniusPage() {
-  const { user } = useAuth();
+  const { user, refreshUser } = useAuth();
   const { allCountriesISO } = useResolvedCountry("iso");
   const userCountries = (() => {
     const codes = [...(user?.secondaryCountries ?? [])];
@@ -678,6 +678,99 @@ export function OrderGeniusPage() {
   const [bomAdminCopyTargetCountry, setBomAdminCopyTargetCountry] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
+  const [authFailureNotice, setAuthFailureNotice] = useState<{
+    message: string;
+    requiresLogin: boolean;
+  } | null>(null);
+  const authFailureProbeRef = useRef<Promise<boolean> | null>(null);
+
+  useEffect(() => {
+    const handleAuthFailure = (event: Event) => {
+      const detail = (event as CustomEvent<{ path?: string; status?: number }>).detail;
+      const status = Number(detail?.status);
+      if (status === 401) {
+        setAuthFailureNotice({
+          message: "登录已失效，未保存的 BOM/订单输入仍保留在当前页面；请重新登录后再重试。",
+          requiresLogin: true,
+        });
+        return;
+      }
+      if (status !== 403) return;
+      setAuthFailureNotice({
+        message: "正在核验当前登录身份……",
+        requiresLogin: false,
+      });
+      const probe = authFailureProbeRef.current || refreshUser({ preserveSession: true });
+      authFailureProbeRef.current = probe;
+      void probe
+        .then((isValid) => {
+          setAuthFailureNotice(isValid
+            ? {
+                message: "当前账号没有执行此 BOM 操作的权限；输入未清除。",
+                requiresLogin: false,
+              }
+            : {
+                message: "登录已失效，未保存的 BOM/订单输入仍保留在当前页面；请重新登录后再重试。",
+                requiresLogin: true,
+              });
+        })
+        .catch(() => {
+          setAuthFailureNotice({
+            message: "无法核验登录状态；输入未清除，请检查网络后重试。",
+            requiresLogin: false,
+          });
+        })
+        .finally(() => {
+          if (authFailureProbeRef.current === probe) authFailureProbeRef.current = null;
+        });
+    };
+    window.addEventListener(AUTH_FAILURE_EVENT, handleAuthFailure);
+    return () => window.removeEventListener(AUTH_FAILURE_EVENT, handleAuthFailure);
+  }, [refreshUser]);
+
+  useEffect(() => {
+    if (!authFailureNotice?.requiresLogin) return undefined;
+    const handleWindowFocus = () => {
+      const probe = authFailureProbeRef.current || refreshUser({ preserveSession: true });
+      authFailureProbeRef.current = probe;
+      void probe
+        .then((isValid) => {
+          if (!isValid) return;
+          setAuthFailureNotice({
+            message: "登录已恢复，请主动重试刚才的保存。",
+            requiresLogin: false,
+          });
+        })
+        .catch(() => {
+          setAuthFailureNotice({
+            message: "无法核验登录状态；输入未清除，请检查网络后重试。",
+            requiresLogin: false,
+          });
+        })
+        .finally(() => {
+          if (authFailureProbeRef.current === probe) authFailureProbeRef.current = null;
+        });
+    };
+    window.addEventListener("focus", handleWindowFocus);
+    return () => window.removeEventListener("focus", handleWindowFocus);
+  }, [authFailureNotice?.requiresLogin, refreshUser]);
+
+  const reLoginAfterAuthFailure = useCallback(() => {
+    const redirect = `${window.location.pathname}${window.location.search}${window.location.hash}`;
+    const loginUrl = `/login?redirect=${encodeURIComponent(redirect)}`;
+    let loginWindow: Window | null = null;
+    try {
+      loginWindow = window.open(loginUrl, "_blank", "noopener,noreferrer");
+    } catch {
+      loginWindow = null;
+    }
+    if (!loginWindow) {
+      setAuthFailureNotice({
+        message: "浏览器阻止了登录新标签，请允许弹窗后再重试；当前输入仍保留。",
+        requiresLogin: true,
+      });
+    }
+  }, []);
 
   // ── Upload state ──────────────────────────────────────────────────
   const [showUpload, setShowUpload] = useState(false);
@@ -1268,6 +1361,11 @@ export function OrderGeniusPage() {
         clearDraft();
       } catch (err: unknown) {
         const msg = getErrorMessage(err);
+        const authStatus = getErrorStatus(err);
+        if (authStatus === 401 || authStatus === 403) {
+          setCellErrors((prev) => ({ ...prev, [key]: msg }));
+          return;
+        }
         if (msg.toLowerCase().includes("conflict") || msg.includes("409")) {
           try {
             const latestMatrix = await api.getOrderGeniusMatrix({
@@ -2119,6 +2217,33 @@ export function OrderGeniusPage() {
         <span>{modelFilter || "All models"}</span>
         <span>{powertrainFilter || "All powertrains"}</span>
       </div>
+      {authFailureNotice ? (
+        <div
+          role="alert"
+          style={{
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "space-between",
+            gap: 12,
+            flexWrap: "wrap",
+            margin: "10px 0 14px",
+            padding: "10px 12px",
+            border: `1px solid ${authFailureNotice.requiresLogin ? "#fbbf24" : "#bfdbfe"}`,
+            background: authFailureNotice.requiresLogin ? "#fffbeb" : "#eff6ff",
+            color: authFailureNotice.requiresLogin ? "#92400e" : "#1e3a8a",
+            fontSize: 12,
+            fontWeight: 700,
+          }}
+        >
+          <span>{authFailureNotice.message}</span>
+          <span style={{ display: "inline-flex", gap: 8 }}>
+            {authFailureNotice.requiresLogin ? (
+              <button type="button" className="btn btn-sm btn-primary" onClick={reLoginAfterAuthFailure}>重新登录</button>
+            ) : null}
+            <button type="button" className="btn btn-sm btn-ghost" onClick={() => setAuthFailureNotice(null)}>知道了</button>
+          </span>
+        </div>
+      ) : null}
 
       <DeckFloatingDrawer
         open={showDeck}

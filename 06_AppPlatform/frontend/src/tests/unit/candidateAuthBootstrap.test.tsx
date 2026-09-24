@@ -1,7 +1,8 @@
 // @vitest-environment jsdom
 
-import { cleanup, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
+import { useState } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { OAuthGate } from "../../App";
@@ -40,6 +41,27 @@ function AuthState(): React.ReactElement {
       <span data-testid="username">{user?.username ?? "none"}</span>
       <span data-testid="role">{user?.role ?? "none"}</span>
       <span data-testid="token">{token ?? "none"}</span>
+    </div>
+  );
+}
+
+function RefreshProbe(): React.ReactElement {
+  const { refreshUser } = useAuth();
+  const [result, setResult] = useState("idle");
+  return (
+    <div>
+      <span data-testid="refresh-result">{result}</span>
+      <button
+        type="button"
+        onClick={() => {
+          setResult("pending");
+          void refreshUser({ preserveSession: true })
+            .then((isValid) => setResult(isValid ? "valid" : "invalid"))
+            .catch(() => setResult("error"));
+        }}
+      >
+        Probe auth
+      </button>
     </div>
   );
 }
@@ -193,6 +215,20 @@ describe("Candidate auth bootstrap", () => {
     expect(fetchAuthEndpoint).not.toHaveBeenCalled();
   });
 
+  it("returns an invalid result without probing when Candidate has no token", async () => {
+    useOrigin("candidate.ojeur.cloud", "");
+
+    render(
+      <AuthProvider>
+        <RefreshProbe />
+      </AuthProvider>,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Probe auth" }));
+    await waitFor(() => expect(screen.getByTestId("refresh-result").textContent).toBe("invalid"));
+    expect(fetchAuthEndpoint).not.toHaveBeenCalled();
+  });
+
   it("clears an invalid Candidate session instead of granting access", async () => {
     useOrigin("candidate.ojeur.cloud", "");
     localStorage.setItem("jato_auth_token", "invalid-token");
@@ -211,5 +247,75 @@ describe("Candidate auth bootstrap", () => {
     expect(localStorage.getItem("jato_auth_token")).toBeNull();
     expect(screen.getByTestId("role").textContent).toBe("none");
     expect(screen.getByTestId("token").textContent).toBe("none");
+  });
+
+  it("preserves the Candidate session when a probe cannot reach auth/me", async () => {
+    useOrigin("candidate.ojeur.cloud", "");
+    localStorage.setItem("jato_auth_token", "candidate-token");
+    localStorage.setItem("jato_user_name", "admin");
+    localStorage.setItem("jato_user_role", "admin");
+    vi.mocked(fetchAuthEndpoint).mockRejectedValue(new Error("network down"));
+
+    render(
+      <AuthProvider>
+        <AuthState />
+        <RefreshProbe />
+      </AuthProvider>,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Probe auth" }));
+    await waitFor(() => expect(screen.getByTestId("refresh-result").textContent).toBe("error"));
+    expect(localStorage.getItem("jato_auth_token")).toBe("candidate-token");
+    expect(screen.getByTestId("username").textContent).toBe("admin");
+  });
+
+  it("keeps a Candidate session for a preserved 401 probe while reporting invalid", async () => {
+    useOrigin("candidate.ojeur.cloud", "");
+    localStorage.setItem("jato_auth_token", "expired-token");
+    localStorage.setItem("jato_user_name", "admin");
+    localStorage.setItem("jato_user_role", "admin");
+    vi.mocked(fetchAuthEndpoint)
+      .mockResolvedValueOnce(Response.json({
+        username: "admin",
+        role: "admin",
+        primaryCountry: null,
+        secondaryCountries: [],
+        preferredLandingPage: null,
+        profileComplete: false,
+      }))
+      .mockResolvedValueOnce(new Response("Unauthorized", { status: 401 }));
+
+    render(
+      <AuthProvider>
+        <AuthState />
+        <RefreshProbe />
+      </AuthProvider>,
+    );
+
+    await waitFor(() => expect(fetchAuthEndpoint).toHaveBeenCalledTimes(1));
+    fireEvent.click(screen.getByRole("button", { name: "Probe auth" }));
+    await waitFor(() => expect(screen.getByTestId("refresh-result").textContent).toBe("invalid"));
+    expect(localStorage.getItem("jato_auth_token")).toBe("expired-token");
+    expect(screen.getByTestId("username").textContent).toBe("admin");
+  });
+
+  it("does not clear a Candidate session for an auth service failure", async () => {
+    useOrigin("candidate.ojeur.cloud", "");
+    localStorage.setItem("jato_auth_token", "candidate-token");
+    localStorage.setItem("jato_user_name", "admin");
+    localStorage.setItem("jato_user_role", "admin");
+    vi.mocked(fetchAuthEndpoint).mockResolvedValue(new Response("Service unavailable", { status: 503 }));
+
+    render(
+      <AuthProvider>
+        <AuthState />
+        <RefreshProbe />
+      </AuthProvider>,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Probe auth" }));
+    await waitFor(() => expect(screen.getByTestId("refresh-result").textContent).toBe("error"));
+    expect(localStorage.getItem("jato_auth_token")).toBe("candidate-token");
+    expect(screen.getByTestId("username").textContent).toBe("admin");
   });
 });
