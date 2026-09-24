@@ -333,6 +333,36 @@ def test_special_colour_rule_precedes_brand_special_default(monkeypatch) -> None
     assert repo.get_colour_surcharge_amount_for_sku(_FakeSession(), sku, "special") == 300
 
 
+def test_uploaded_base_plus_colour_uses_unified_special_rule(monkeypatch) -> None:
+    sku = SimpleNamespace(
+        material_code="T7000UEMY0001",
+        brand="OMODA",
+        model_name="OMODA7",
+        exterior_color_type="special",
+        colour_tier="special",
+        raw_payload_json={"country_fobs": {"SE": 15000}},
+    )
+    monkeypatch.setattr(
+        order_genius_service.repo,
+        "get_country_payment_term",
+        lambda *_args, **_kwargs: SimpleNamespace(payment_term_code="TT", country_name="SE"),
+    )
+    monkeypatch.setattr(order_genius_service.repo, "get_colour_surcharge_amount_for_sku", lambda *_args: 200.0)
+    monkeypatch.setattr(order_genius_service.repo, "upsert_fob_resolved", lambda _session, fob: fob)
+
+    resolved = order_genius_service._resolve_fob_for_sku(
+        _FakeSession(),
+        "SE",
+        sku,
+        uuid4(),
+        "uploaded_base_plus_colour",
+    )
+
+    assert resolved.base_fob_eur == 15000
+    assert resolved.colour_surcharge_eur == 200
+    assert resolved.final_fob_eur == 15200
+
+
 @pytest.mark.parametrize("scenario", ["known", "unknown", "conflict"])
 def test_create_material_sku_resolves_known_unknown_and_conflict_rules(
     monkeypatch,

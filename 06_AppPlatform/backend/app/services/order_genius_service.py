@@ -458,12 +458,14 @@ def _resolve_fob_for_sku(
     uploaded_fob_eur = float(uploaded_fob)
 
     if fob_source_mode == "uploaded_base_plus_colour":
-        # Excel FOB is base/single-colour — apply dual-colour surcharge only.
+        # Excel FOB is base/single-colour — apply the resolved Dual/Special surcharge.
         # LC is NOT added here — it is already part of the uploaded FOB value.
-        surcharge = repo.get_brand_colour_surcharge(
-            session, sku.brand, sku.exterior_color_type,
+        colour_tier = _effective_colour_tier(sku)
+        colour_surcharge = (
+            repo.get_colour_surcharge_amount_for_sku(session, sku, colour_tier)
+            if colour_tier in {"dual", "special"}
+            else 0.0
         )
-        colour_surcharge = float(surcharge.surcharge_eur) if surcharge else 0.0
         final_fob = uploaded_fob_eur + colour_surcharge
         fob_source_country = country_code
     else:
@@ -479,7 +481,9 @@ def _resolve_fob_for_sku(
         country_code=country_code,
         material_code=sku.material_code,
         payment_term_code=payment_term_code,
+        base_fob_eur=uploaded_fob_eur,
         uploaded_fob_eur=uploaded_fob_eur,
+        colour_surcharge_eur=colour_surcharge or None,
         final_fob_eur=final_fob,
         fob_source_country_code=fob_source_country,
         fob_source_mode=fob_source_mode,
