@@ -1425,22 +1425,23 @@ def test_colour_tier_reprice_reports_each_country_without_overwriting_manual(
         )
 
     manual = fob("NL", 1300, "manual_edit")
+    manual_with_base = fob("SE", 1300, "manual_edit", 1000, 200)
     no_base = fob("FI", 1100, "uploaded_base_plus_colour")
     updated = fob("AT", 1000, "uploaded_base_plus_colour", 1000, None)
     unchanged = fob("CZ", 1200, "uploaded_base_plus_colour", 1000, 200)
-    session = _FakeSession([manual, no_base, updated, unchanged])
+    session = _FakeSession([manual, manual_with_base, no_base, updated, unchanged])
     monkeypatch.setattr(repo, "get_sku_by_material_code", lambda *_: sku)
     monkeypatch.setattr(repo, "get_colour_surcharge_amount_for_sku", lambda *_: 200.0)
     monkeypatch.setattr(
         repo,
         "_find_colour_surcharge_base_fob",
-        lambda _session, _sku, country: None if country == "FI" else 1000.0,
+        lambda _session, _sku, country: None if country in {"NL", "FI"} else 1000.0,
     )
 
     result = repo.reprice_sku_colour_surcharge_fobs(session, sku.material_code)
     details = {item["countryCode"]: item for item in result["details"]}
 
-    assert result["updated"] == 1
+    assert result["updated"] == 2
     assert result["unchanged"] == 1
     assert result["skippedManual"] == 1
     assert result["skippedNoBase"] == 1
@@ -1448,6 +1449,9 @@ def test_colour_tier_reprice_reports_each_country_without_overwriting_manual(
     assert details["FI"]["reason"] == "missing_single_base"
     assert details["AT"]["newFinalFobEur"] == 1200
     assert details["AT"]["colourSurchargeEur"] == 200
+    assert manual_with_base.final_fob_eur == 1200
+    assert manual_with_base.uploaded_fob_eur == 1000
+    assert manual_with_base.fob_source_mode == "template_base"
     assert details["CZ"]["status"] == "unchanged"
     assert manual.final_fob_eur == 1300
 
@@ -1487,6 +1491,46 @@ def test_colour_tier_reprice_recalculates_template_base_without_freezing_it(
     assert row.base_fob_eur == 15500
     assert row.colour_surcharge_eur == 300
     assert row.final_fob_eur == 15800
+    assert row.fob_source_mode == "template_base"
+
+
+def test_colour_tier_reprice_recalculates_manual_base_with_special_override(
+    monkeypatch,
+) -> None:
+    baseline_id = uuid4()
+    sku = SimpleNamespace(
+        material_code="T6480J1UELX0017",
+        bom_template="T6480J1**LX0017",
+        brand="OMODA",
+        model_name="OMODA9 SHS",
+        exterior_color_code="UE",
+        colour_tier="special",
+    )
+    row = CountrySkuFobResolved(
+        country_sku_fob_id=uuid4(),
+        baseline_version_id=baseline_id,
+        country_code="CH",
+        material_code=sku.material_code,
+        payment_term_code="TT",
+        uploaded_fob_eur=25200,
+        base_fob_eur=25200,
+        colour_surcharge_eur=200,
+        final_fob_eur=25400,
+        fob_source_mode="manual_edit",
+        is_active=True,
+    )
+    session = _FakeSession([row])
+    monkeypatch.setattr(repo, "get_sku_by_material_code", lambda *_: sku)
+    monkeypatch.setattr(repo, "get_colour_surcharge_amount_for_sku", lambda *_: 300.0)
+    monkeypatch.setattr(repo, "_find_colour_surcharge_base_fob", lambda *_: None)
+
+    result = repo.reprice_sku_colour_surcharge_fobs(session, sku.material_code)
+
+    assert result["updated"] == 1
+    assert result["skippedManual"] == 0
+    assert row.base_fob_eur == 25200
+    assert row.colour_surcharge_eur == 300
+    assert row.final_fob_eur == 25500
     assert row.fob_source_mode == "template_base"
 
 

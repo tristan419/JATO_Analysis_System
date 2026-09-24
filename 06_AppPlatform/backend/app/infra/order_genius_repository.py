@@ -2820,7 +2820,15 @@ def reprice_sku_colour_surcharge_fobs(
     *,
     changed_by: str | None = None,
 ) -> dict[str, object]:
-    """Recalculate non-manual FOB rows after a SKU colour tier changes."""
+    """Recalculate derived FOB rows after a SKU colour tier changes.
+
+    BOM Admin manual edits are country-base edits, not final-colour locks.  A
+    manual row with a trusted base (stored on the row or found on the matching
+    Single SKU) therefore follows the same surcharge calculation as an
+    automatic row.  A manual row without any trusted base remains protected;
+    explicit final-price imports use their separate source modes and are not
+    changed by this path.
+    """
     sku = get_sku_by_material_code(session, material_code)
     if sku is None:
         return {
@@ -2858,21 +2866,7 @@ def reprice_sku_colour_surcharge_fobs(
 
     for row in rows:
         old_final = float(row.final_fob_eur)
-        if row.fob_source_mode in COLOUR_SURCHARGE_MANUAL_SOURCE_MODES:
-            skipped_manual += 1
-            details.append({
-                "countryCode": row.country_code,
-                "oldFinalFobEur": old_final,
-                "newFinalFobEur": old_final,
-                "colourSurchargeEur": (
-                    float(row.colour_surcharge_eur)
-                    if row.colour_surcharge_eur is not None
-                    else None
-                ),
-                "status": "skipped",
-                "reason": "manual_fob",
-            })
-            continue
+        is_manual_base_edit = row.fob_source_mode in COLOUR_SURCHARGE_MANUAL_SOURCE_MODES
 
         if colour_tier == "single":
             base_fob = _infer_existing_colour_surcharge_base_fob(row) or float(row.final_fob_eur)
@@ -2883,7 +2877,12 @@ def reprice_sku_colour_surcharge_fobs(
                 or _infer_existing_colour_surcharge_base_fob(row)
             )
             if base_fob is None:
-                skipped_no_base += 1
+                if is_manual_base_edit:
+                    skipped_manual += 1
+                    reason = "manual_fob"
+                else:
+                    skipped_no_base += 1
+                    reason = "missing_single_base"
                 details.append({
                     "countryCode": row.country_code,
                     "oldFinalFobEur": old_final,
@@ -2894,16 +2893,26 @@ def reprice_sku_colour_surcharge_fobs(
                         else None
                     ),
                     "status": "skipped",
-                    "reason": "missing_single_base",
+                    "reason": reason,
                 })
                 continue
             new_surcharge = surcharge if surcharge > 0 else None
 
         new_final = round(base_fob + (new_surcharge or 0.0), 2)
         final_changed = round(old_final, 2) != new_final
+        derived_source_mode = row.fob_source_mode
+        if is_manual_base_edit:
+            derived_source_mode = (
+                "template_base_country_adjust"
+                if row.fob_source_mode == "manual_country_adjust"
+                else "template_base"
+            )
         meta_changed = (
             row.base_fob_eur != base_fob
             or row.colour_surcharge_eur != new_surcharge
+            or (is_manual_base_edit and row.uploaded_fob_eur != base_fob)
+            or (is_manual_base_edit and row.fob_source_mode != derived_source_mode)
+            or (is_manual_base_edit and row.fob_source_country_code is not None)
         )
         if not final_changed and not meta_changed:
             unchanged += 1
@@ -2926,7 +2935,7 @@ def reprice_sku_colour_surcharge_fobs(
                     material_code=row.material_code,
                     payment_term_code=row.payment_term_code,
                     old_uploaded_fob_eur=row.uploaded_fob_eur,
-                    new_uploaded_fob_eur=row.uploaded_fob_eur,
+                    new_uploaded_fob_eur=(base_fob if is_manual_base_edit else row.uploaded_fob_eur),
                     old_final_fob_eur=row.final_fob_eur,
                     new_final_fob_eur=new_final,
                     changed_by=changed_by or "colour_surcharge_reprice",
@@ -2934,6 +2943,10 @@ def reprice_sku_colour_surcharge_fobs(
             )
         row.base_fob_eur = base_fob
         row.colour_surcharge_eur = new_surcharge
+        if is_manual_base_edit:
+            row.uploaded_fob_eur = base_fob
+            row.fob_source_country_code = None
+            row.fob_source_mode = derived_source_mode
         row.final_fob_eur = new_final
         row.updated_at_utc = now
         updated += 1
