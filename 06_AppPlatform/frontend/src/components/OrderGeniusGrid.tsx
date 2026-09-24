@@ -15,6 +15,7 @@ import {
   type CellClassParams,
   type CellValueChangedEvent,
   type ColDef,
+  type ColumnResizedEvent,
   type ICellEditorParams,
   type ICellRendererParams,
   type ValueGetterParams,
@@ -30,8 +31,12 @@ const MONTH_NAMES = [
   "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
 ];
 const MONTH_NUMBERS = MONTH_NAMES.map((_, i) => i + 1);
-const MODEL_COLUMN_MIN_WIDTH = 320;
-const MODEL_COLUMN_CONTENT_PADDING = 88;
+export const ORDER_GENIUS_MODEL_COLUMN_DEFAULT_WIDTH = 280;
+export const ORDER_GENIUS_MODEL_COLUMN_MIN_WIDTH = 220;
+export const ORDER_GENIUS_MODEL_COLUMN_MAX_WIDTH = 760;
+const ORDER_GENIUS_COLUMN_WIDTH_MIN = 52;
+const ORDER_GENIUS_COLUMN_WIDTH_MAX = 1200;
+const ORDER_GENIUS_COLUMN_WIDTH_STORAGE_PREFIX = "jato:order-genius:column-widths:v1:";
 
 export interface OrderGeniusGridRow {
   materialCode: string;
@@ -91,6 +96,8 @@ export interface OrderGeniusGridProps {
   onGridReady?: (api: any) => void;
   onToggleGroup?: (groupKey: string) => void;
   onTogglePiRow?: (row: OrderGeniusGridRow, selected: boolean) => void;
+  /** Stable user/account scope used for local column-width preferences. */
+  columnWidthStorageScope?: string;
 }
 
 interface OrderGeniusGridContext {
@@ -149,12 +156,82 @@ export function getOrderGeniusRowId(row: OrderGeniusGridRow): string {
   ].join("|");
 }
 
+export function getOrderGeniusColumnWidthStorageKey(scope?: string): string {
+  const normalizedScope = (scope || "anonymous").trim().replace(/[^a-zA-Z0-9._-]/g, "_") || "anonymous";
+  return `${ORDER_GENIUS_COLUMN_WIDTH_STORAGE_PREFIX}${normalizedScope}`;
+}
+
+function clampOrderGeniusColumnWidth(colId: string, width: number): number {
+  const min = colId === "modelName" ? ORDER_GENIUS_MODEL_COLUMN_MIN_WIDTH : ORDER_GENIUS_COLUMN_WIDTH_MIN;
+  const max = colId === "modelName" ? ORDER_GENIUS_MODEL_COLUMN_MAX_WIDTH : ORDER_GENIUS_COLUMN_WIDTH_MAX;
+  return Math.round(Math.min(max, Math.max(min, width)));
+}
+
+export function parseOrderGeniusColumnWidths(raw: unknown): Record<string, number> {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return {};
+  const parsed: Record<string, number> = {};
+  for (const [colId, value] of Object.entries(raw as Record<string, unknown>)) {
+    if (!colId || colId === "__proto__" || colId === "constructor" || colId === "prototype") continue;
+    const width = typeof value === "number" ? value : Number(value);
+    if (!Number.isFinite(width) || width <= 0) continue;
+    parsed[colId] = clampOrderGeniusColumnWidth(colId, width);
+  }
+  return parsed;
+}
+
+function readOrderGeniusColumnWidths(storageKey: string): Record<string, number> {
+  if (typeof window === "undefined" || typeof window.localStorage === "undefined") return {};
+  try {
+    const raw = window.localStorage.getItem(storageKey);
+    return raw ? parseOrderGeniusColumnWidths(JSON.parse(raw)) : {};
+  } catch {
+    return {};
+  }
+}
+
+function writeOrderGeniusColumnWidths(storageKey: string, widths: Record<string, number>): void {
+  if (typeof window === "undefined" || typeof window.localStorage === "undefined") return;
+  try {
+    window.localStorage.setItem(storageKey, JSON.stringify(parseOrderGeniusColumnWidths(widths)));
+  } catch {
+    // Column preferences are optional; storage failures must not affect the grid.
+  }
+}
+
+function getOrderGeniusColumnDefId(col: ColDef<OrderGeniusGridRow>): string | null {
+  if (typeof col.colId === "string" && col.colId) return col.colId;
+  if (typeof col.field === "string" && col.field) return col.field;
+  return null;
+}
+
+function getOrderGeniusColumnWidthState(
+  columnDefs: ReadonlyArray<ColDef<OrderGeniusGridRow>>,
+  widths: Record<string, number>,
+): Array<{ colId: string; width: number }> {
+  return columnDefs.flatMap((col) => {
+    const colId = getOrderGeniusColumnDefId(col);
+    const width = colId ? widths[colId] : undefined;
+    return colId && width != null ? [{ colId, width: clampOrderGeniusColumnWidth(colId, width) }] : [];
+  });
+}
+
+function getOrderGeniusDefaultColumnWidthState(
+  columnDefs: ReadonlyArray<ColDef<OrderGeniusGridRow>>,
+): Array<{ colId: string; width: number }> {
+  return columnDefs.flatMap((col) => {
+    const colId = getOrderGeniusColumnDefId(col);
+    const width = typeof col.initialWidth === "number"
+      ? col.initialWidth
+      : typeof col.width === "number" ? col.width : undefined;
+    return colId && width != null ? [{ colId, width: clampOrderGeniusColumnWidth(colId, width) }] : [];
+  });
+}
+
 export function buildOrderGeniusColumnDefs(
   showCountry: boolean,
   selectedMonth: number | null,
   vis: OrderGeniusGridProps["visibleColumns"],
   canEditQuantities: boolean,
-  modelColumnWidth: number,
   piSelectionSummary?: PiSelectionSummary,
   isPiRowSelected?: (row: OrderGeniusGridRow) => boolean,
   onTogglePiRow?: (row: OrderGeniusGridRow, selected: boolean) => void,
@@ -169,7 +246,7 @@ export function buildOrderGeniusColumnDefs(
       headerTooltip: "Tick rows to include their selected-month quantity in PI batch creation.",
       headerComponent: () => <PiSelectHeader summary={piSelectionSummary} />,
       pinned: "left",
-      width: 52,
+      initialWidth: 52,
       editable: false,
       sortable: false,
       cellClass: "og-pi-select-cell",
@@ -196,10 +273,10 @@ export function buildOrderGeniusColumnDefs(
 
   if (showCountry) {
     cols.push({
+      colId: "country",
       headerName: "Country",
       field: "_countryCode",
-      pinned: "left",
-      width: 70,
+      initialWidth: 70,
       editable: false,
       cellClass: "og-country-cell",
     });
@@ -207,11 +284,16 @@ export function buildOrderGeniusColumnDefs(
 
   cols.push(
     {
+      colId: "modelName",
       headerName: "Model",
       field: "modelName",
       pinned: "left",
-      width: modelColumnWidth,
-      minWidth: MODEL_COLUMN_MIN_WIDTH,
+      initialWidth: ORDER_GENIUS_MODEL_COLUMN_DEFAULT_WIDTH,
+      minWidth: ORDER_GENIUS_MODEL_COLUMN_MIN_WIDTH,
+      maxWidth: ORDER_GENIUS_MODEL_COLUMN_MAX_WIDTH,
+      lockPinned: true,
+      lockPosition: "left",
+      suppressMovable: true,
       editable: false,
       cellRendererSelector: (p: any) => {
         if (p.data?.__type === "groupHeader") {
@@ -220,9 +302,9 @@ export function buildOrderGeniusColumnDefs(
         return undefined;
       },
     },
-    { headerName: "Version", field: "version", pinned: "left", width: 130, editable: false },
+    { colId: "version", headerName: "Version", field: "version", initialWidth: 130, editable: false },
     {
-      headerName: "Colour", field: "colour", pinned: "left", width: 130, editable: false,
+      colId: "colour", headerName: "Colour", field: "colour", initialWidth: 130, editable: false,
       cellRenderer: (p: ICellRendererParams<OrderGeniusGridRow, string>) => {
         const name = String(p.value ?? "");
         if (!name) return null;
@@ -251,10 +333,10 @@ export function buildOrderGeniusColumnDefs(
       },
     },
     {
+      colId: "interiorColorName",
       headerName: "Interior",
       field: "interiorColorName",
-      pinned: "left",
-      width: 130,
+      initialWidth: 130,
       editable: false,
       cellRenderer: (p: any) => {
         const name = p.value || "";
@@ -271,10 +353,10 @@ export function buildOrderGeniusColumnDefs(
 
   if (vis.materialCode) {
     cols.push({
+      colId: "materialCode",
       headerName: "Material Code",
       field: "materialCode",
-      pinned: "left",
-      width: 150,
+      initialWidth: 150,
       editable: false,
       cellClass: "og-material-cell",
         valueFormatter: (p) => (p.data?.__type === "groupHeader" || p.data?.__type === "summary" ? "" : String(p.value ?? "")),
@@ -283,10 +365,10 @@ export function buildOrderGeniusColumnDefs(
 
   if (vis.remark) {
     cols.push({
+      colId: "remark",
       headerName: "Note",
       field: "remark",
-      pinned: "left",
-      width: 190,
+      initialWidth: 190,
       editable: false,
       cellClass: "og-remark-cell",
       tooltipValueGetter: (p) => (p.value ? String(p.value) : ""),
@@ -300,10 +382,10 @@ export function buildOrderGeniusColumnDefs(
 
   if (vis.fob) {
     cols.push({
+      colId: "fobEur",
       headerName: "FOB (EUR)",
       field: "fobEur",
-      pinned: "left",
-      width: 100,
+      initialWidth: 100,
       editable: false,
       type: "numericColumn",
       valueFormatter: (p) => {
@@ -331,9 +413,10 @@ export function buildOrderGeniusColumnDefs(
     const amountField = `_amount_${m}` as `_amount_${number}`;
     if (vis.months) {
       cols.push({
+        colId: field,
         headerName: MONTH_NAMES[m - 1],
         field,
-        width: 72,
+        initialWidth: 72,
         type: "numericColumn",
         editable: (params: any) =>
           canEditQuantities
@@ -370,9 +453,10 @@ export function buildOrderGeniusColumnDefs(
     }
     if (vis.amount) {
       cols.push({
+        colId: amountField,
         headerName: `${MONTH_NAMES[m - 1]} €`,
         field: amountField,
-        width: 90,
+        initialWidth: 90,
         type: "numericColumn",
         editable: false,
         valueGetter: (p: ValueGetterParams<OrderGeniusGridRow>) => {
@@ -391,9 +475,10 @@ export function buildOrderGeniusColumnDefs(
 
   if (vis.ttlQty) {
     cols.push({
+      colId: "_ttl",
       headerName: "TTL",
       field: "_ttl" as any,
-      width: 80,
+      initialWidth: 80,
       type: "numericColumn",
       editable: false,
       valueGetter: (p: ValueGetterParams<OrderGeniusGridRow>) => {
@@ -410,9 +495,10 @@ export function buildOrderGeniusColumnDefs(
 
   if (vis.ttlAmount) {
     cols.push({
+      colId: "_ttlAmount",
       headerName: "TTL €",
       field: "_ttlAmount" as any,
-      width: 100,
+      initialWidth: 100,
       type: "numericColumn",
       editable: false,
       valueGetter: (p: ValueGetterParams<OrderGeniusGridRow>) => {
@@ -426,39 +512,6 @@ export function buildOrderGeniusColumnDefs(
   }
 
   return cols;
-}
-
-function estimateGridTextWidth(value: string): number {
-  let width = 0;
-  for (const char of value) {
-    if (/[\u4e00-\u9fff]/.test(char)) {
-      width += 14;
-    } else if (/[A-Z0-9]/.test(char)) {
-      width += 8.4;
-    } else if (/[a-z]/.test(char)) {
-      width += 7.2;
-    } else if (char === " ") {
-      width += 4.5;
-    } else {
-      width += 5.8;
-    }
-  }
-  return width;
-}
-
-function getModelColumnDisplayText(row: OrderGeniusGridRow): string {
-  if (row.__type === "groupHeader") {
-    return [row.__groupLabel, row.__groupMeta].filter(Boolean).join(" ");
-  }
-  return row.modelName || "";
-}
-
-function getModelColumnWidth(rows: OrderGeniusGridRow[]): number {
-  const widestText = rows.reduce((width, row) => {
-    const text = getModelColumnDisplayText(row);
-    return Math.max(width, estimateGridTextWidth(text));
-  }, 0);
-  return Math.ceil(Math.max(MODEL_COLUMN_MIN_WIDTH, widestText + MODEL_COLUMN_CONTENT_PADDING));
 }
 
 /** Inline quantity editor — reads DOM value directly to avoid React batching issues. */
@@ -532,8 +585,10 @@ export function OrderGeniusGrid({
   onGridReady,
   onToggleGroup,
   onTogglePiRow,
+  columnWidthStorageScope,
 }: OrderGeniusGridProps) {
   const localGridApiRef = useRef<any>(null);
+  const columnWidthStorageKey = getOrderGeniusColumnWidthStorageKey(columnWidthStorageScope);
   const gridWrapperRef = useRef<HTMLDivElement | null>(null);
   const selectedRowIdsRef = useRef(selectedRowIds);
   selectedRowIdsRef.current = selectedRowIds;
@@ -541,23 +596,60 @@ export function OrderGeniusGrid({
     (row: OrderGeniusGridRow): boolean => selectedRowIdsRef.current?.has(getOrderGeniusRowId(row)) ?? false,
     [],
   );
-  const modelColumnWidth = useMemo(
-    () => getModelColumnWidth(rows),
-    [rows],
-  );
   const columnDefs = useMemo(
     () => buildOrderGeniusColumnDefs(
       showCountry,
       selectedMonth,
       visibleColumns,
       canEditQuantities,
-      modelColumnWidth,
       piSelectionSummary,
       isPiRowSelected,
       onTogglePiRow,
     ),
-    [canEditQuantities, showCountry, selectedMonth, visibleColumns, modelColumnWidth, piSelectionSummary, isPiRowSelected, onTogglePiRow],
+    [canEditQuantities, showCountry, selectedMonth, visibleColumns, piSelectionSummary, isPiRowSelected, onTogglePiRow],
   );
+  const columnIdsSignature = useMemo(
+    () => columnDefs.map(getOrderGeniusColumnDefId).filter(Boolean).join("|"),
+    [columnDefs],
+  );
+  const applyStoredColumnWidths = useCallback((api: any): void => {
+    const storedWidths = readOrderGeniusColumnWidths(columnWidthStorageKey);
+    const state = getOrderGeniusColumnWidthState(columnDefs, storedWidths);
+    if (state.length > 0) {
+      api.applyColumnState({ state, applyOrder: false });
+    }
+  }, [columnDefs, columnWidthStorageKey]);
+
+  useEffect(() => {
+    if (!localGridApiRef.current) return;
+    applyStoredColumnWidths(localGridApiRef.current);
+  }, [applyStoredColumnWidths, columnIdsSignature]);
+
+  const handleColumnResized = useCallback((event: ColumnResizedEvent<OrderGeniusGridRow>) => {
+    if (!event.finished) return;
+    const currentWidths = readOrderGeniusColumnWidths(columnWidthStorageKey);
+    for (const state of event.api.getColumnState()) {
+      if (state.width == null) continue;
+      currentWidths[state.colId] = clampOrderGeniusColumnWidth(state.colId, state.width);
+    }
+    writeOrderGeniusColumnWidths(columnWidthStorageKey, currentWidths);
+  }, [columnWidthStorageKey]);
+
+  const resetColumnWidths = useCallback(() => {
+    if (typeof window !== "undefined" && typeof window.localStorage !== "undefined") {
+      try {
+        window.localStorage.removeItem(columnWidthStorageKey);
+      } catch {
+        // Ignore storage failures; the in-memory grid can still reset.
+      }
+    }
+    if (localGridApiRef.current) {
+      localGridApiRef.current.applyColumnState({
+        state: getOrderGeniusDefaultColumnWidthState(columnDefs),
+        applyOrder: false,
+      });
+    }
+  }, [columnDefs, columnWidthStorageKey]);
 
   const defaultColDef = useMemo<ColDef<OrderGeniusGridRow>>(
     () => ({
@@ -725,42 +817,57 @@ export function OrderGeniusGrid({
             {expanded ? "-" : "+"}
           </button>
           <div style={{ width: isSubgroup ? 3 : 4, height: isSubgroup ? 16 : 20, borderRadius: 2, flexShrink: 0, backgroundColor: color }} />
-          <span title={label} style={{ color, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{label}</span>
-          {meta ? <span className="og-group-header-meta">{meta}</span> : null}
+          <span title={label} style={{ color, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{label}</span>
+          {meta ? <span className="og-group-header-meta" title={meta} style={{ minWidth: 0 }}>{meta}</span> : null}
         </div>
       );
     },
   }), [onToggleGroup]);
 
   return (
-    <div ref={gridWrapperRef} className="og-grid-wrapper" style={{ height: "70vh", width: "100%" }}>
-      <AgGridReact<OrderGeniusGridRow>
-        theme={themeAlpine}
-        rowData={rows}
-        pinnedBottomRowData={pinnedBottomRowData}
-        columnDefs={columnDefs}
-        components={components}
-        context={gridContext}
-        defaultColDef={defaultColDef}
-        getRowId={getRowId}
-        isRowSelectable={isRowSelectable}
-        rowClassRules={rowClassRules}
-        onCellValueChanged={onCellValueChanged}
-        onGridReady={(p) => {
-          localGridApiRef.current = p.api;
-          onGridReady?.(p.api);
-        }}
-        stopEditingWhenCellsLoseFocus={true}
-        undoRedoCellEditing={true}
-        undoRedoCellEditingLimit={20}
-        animateRows={false}
-        enableCellTextSelection={true}
-        suppressDragLeaveHidesColumns={true}
-        rowModelType="clientSide"
-        rowBuffer={10}
-        headerHeight={32}
-        rowHeight={32}
-      />
+    <div ref={gridWrapperRef} style={{ width: "100%" }}>
+      <div style={{ display: "flex", justifyContent: "flex-end", marginBottom: 6 }}>
+        <button
+          type="button"
+          className="btn btn-sm btn-ghost"
+          onClick={resetColumnWidths}
+          aria-label="Reset order grid column widths"
+          title="Clear saved column widths and restore the defaults"
+        >
+          Reset column widths
+        </button>
+      </div>
+      <div className="og-grid-wrapper" style={{ height: "70vh", width: "100%" }}>
+        <AgGridReact<OrderGeniusGridRow>
+          theme={themeAlpine}
+          rowData={rows}
+          pinnedBottomRowData={pinnedBottomRowData}
+          columnDefs={columnDefs}
+          components={components}
+          context={gridContext}
+          defaultColDef={defaultColDef}
+          getRowId={getRowId}
+          isRowSelectable={isRowSelectable}
+          rowClassRules={rowClassRules}
+          onCellValueChanged={onCellValueChanged}
+          onColumnResized={handleColumnResized}
+          onGridReady={(p) => {
+            localGridApiRef.current = p.api;
+            applyStoredColumnWidths(p.api);
+            onGridReady?.(p.api);
+          }}
+          stopEditingWhenCellsLoseFocus={true}
+          undoRedoCellEditing={true}
+          undoRedoCellEditingLimit={20}
+          animateRows={false}
+          enableCellTextSelection={true}
+          suppressDragLeaveHidesColumns={true}
+          rowModelType="clientSide"
+          rowBuffer={10}
+          headerHeight={32}
+          rowHeight={32}
+        />
+      </div>
     </div>
   );
 }
