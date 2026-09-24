@@ -19,6 +19,7 @@ from app.services.ordering_normalization import (
     infer_colour_tier,
     normalize_brand,
     normalize_brand_text,
+    resolve_material_brand,
 )
 
 
@@ -112,6 +113,13 @@ def test_normalize_jaecoo_brand_variants() -> None:
     assert normalize_brand("JEACOO") == "JAECOO"
     assert normalize_brand("jecoo") == "JAECOO"
     assert normalize_brand_text("JEACOO JAECOO7") == "JAECOO JAECOO7"
+
+
+def test_resolve_material_brand_infers_only_known_brand_from_identity() -> None:
+    assert resolve_material_brand("", "JAECOO5 ICE", "T71611C") == "JAECOO"
+    assert resolve_material_brand("", "OMODA5 EV", "T7000") == "OMODA"
+    assert resolve_material_brand("", "J5 ICE", "T71611C") == ""
+    assert resolve_material_brand("JAECOO", "J5 ICE", "T71611C") == "JAECOO"
 
 
 def test_create_material_sku_canonicalizes_jaecoo_and_creates_manual_baseline(
@@ -225,6 +233,207 @@ def test_create_material_sku_rejects_duplicate_material_code(monkeypatch) -> Non
     assert exc_info.value.detail == "Material code already exists: T7000Z5BWMY0026"
     assert session.added == []
     assert session.committed is False
+
+
+def test_create_material_sku_initializes_automatic_fobs_from_source(monkeypatch) -> None:
+    session = _CreateMaterialSession()
+    baseline_id = uuid4()
+    calls: dict[str, object] = {}
+    monkeypatch.setattr(order_genius_routes.repo, "get_sku_by_material_code_any_status", lambda *_: None)
+    monkeypatch.setattr(order_genius_routes.repo, "get_latest_baseline", lambda *_: SimpleNamespace(baseline_version_id=baseline_id))
+    monkeypatch.setattr(
+        order_genius_routes.repo,
+        "resolve_colour_attributes",
+        lambda *_args, **_kwargs: {"colourName": "Matte silver", "colourHex": "#AAAAAA"},
+    )
+    monkeypatch.setattr(order_genius_routes.repo, "copy_country_material_finance_template", lambda *_args, **_kwargs: 0)
+
+    def initialize(_session: object, target: str, source: str, **kwargs: object) -> dict[str, object]:
+        calls.update(target=target, source=source, kwargs=kwargs)
+        return {"sourceMaterialCode": source, "materialCode": target, "rows": 1, "created": 1, "skippedNoBase": 0, "details": []}
+
+    monkeypatch.setattr(order_genius_routes.repo, "initialize_sku_fobs_from_source", initialize)
+    result = order_genius_routes.create_material_sku(
+        {
+            "materialCode": "T7000UEMY0001",
+            "brand": "OMODA",
+            "modelName": "OMODA7",
+            "version": "Premium-FWD",
+            "colour": "Matte silver",
+            "colourCode": "UE",
+            "colourTier": "special",
+            "sourceMaterialCode": "T7000BWMY0001",
+            "automaticFobs": True,
+        },
+        session=session,
+        user=SimpleNamespace(name="admin@example.com"),
+    )
+
+    assert calls["target"] == "T7000UEMY0001"
+    assert calls["source"] == "T7000BWMY0001"
+    assert result["automaticFobs"]["created"] == 1
+    assert session.committed is True
+
+
+def test_initialize_new_dual_uses_single_base_and_resolved_surcharge(monkeypatch) -> None:
+    target = SimpleNamespace(
+        material_code="TARGET-ZE",
+        colour_tier="dual",
+        bom_template="T7000**MY0001",
+        brand="OMODA",
+        model_name="OMODA7 SHS",
+        powertrain="PHEV",
+        exterior_color_code="ZE",
+    )
+    source = SimpleNamespace(material_code="SOURCE-BW")
+    source_fob = SimpleNamespace(
+        baseline_version_id=uuid4(),
+        country_code="SE",
+        payment_term_code="TT",
+        final_fob_eur=15000,
+        remark="copied note",
+    )
+    session = _FakeSession([source_fob])
+    rows = iter([target, source])
+    monkeypatch.setattr(repo, "get_sku_by_material_code_any_status", lambda *_: next(rows))
+    monkeypatch.setattr(repo, "_find_colour_surcharge_base_fob", lambda *_args: 15000.0)
+    monkeypatch.setattr(repo, "get_colour_surcharge_amount_for_sku", lambda *_args: 200.0)
+
+    result = repo.initialize_sku_fobs_from_source(
+        session,
+        target.material_code,
+        source.material_code,
+    )
+
+    created = session.added[0]
+    assert result["created"] == 1
+    assert result["skippedNoBase"] == 0
+    assert created.base_fob_eur == 15000.0
+    assert created.colour_surcharge_eur == 200.0
+    assert created.final_fob_eur == 15200.0
+    assert created.fob_source_mode == "uploaded_base_plus_colour"
+    assert created.material_code == target.material_code
+
+
+def test_special_colour_rule_precedes_brand_special_default(monkeypatch) -> None:
+    sku = SimpleNamespace(
+        brand="OMODA",
+        model_name="OMODA7",
+        bom_template="T7000",
+        exterior_color_code="UE",
+    )
+    special_rule = SimpleNamespace(surcharge_eur=200)
+    brand_rule = SimpleNamespace(surcharge_eur=300)
+    monkeypatch.setattr(repo, "get_special_colour_surcharge_for_sku", lambda *_: special_rule)
+    monkeypatch.setattr(repo, "get_brand_colour_surcharge", lambda *_: brand_rule)
+
+    assert repo.get_colour_surcharge_amount_for_sku(_FakeSession(), sku, "special") == 200
+
+    monkeypatch.setattr(repo, "get_special_colour_surcharge_for_sku", lambda *_: None)
+    assert repo.get_colour_surcharge_amount_for_sku(_FakeSession(), sku, "special") == 300
+
+
+def test_uploaded_base_plus_colour_uses_unified_special_rule(monkeypatch) -> None:
+    sku = SimpleNamespace(
+        material_code="T7000UEMY0001",
+        brand="OMODA",
+        model_name="OMODA7",
+        exterior_color_type="special",
+        colour_tier="special",
+        raw_payload_json={"country_fobs": {"SE": 15000}},
+    )
+    monkeypatch.setattr(
+        order_genius_service.repo,
+        "get_country_payment_term",
+        lambda *_args, **_kwargs: SimpleNamespace(payment_term_code="TT", country_name="SE"),
+    )
+    monkeypatch.setattr(order_genius_service.repo, "get_colour_surcharge_amount_for_sku", lambda *_args: 200.0)
+    monkeypatch.setattr(order_genius_service.repo, "upsert_fob_resolved", lambda _session, fob: fob)
+
+    resolved = order_genius_service._resolve_fob_for_sku(
+        _FakeSession(),
+        "SE",
+        sku,
+        uuid4(),
+        "uploaded_base_plus_colour",
+    )
+
+    assert resolved.base_fob_eur == 15000
+    assert resolved.colour_surcharge_eur == 200
+    assert resolved.final_fob_eur == 15200
+
+    final = order_genius_service._resolve_fob_for_sku(
+        _FakeSession(),
+        "SE",
+        sku,
+        uuid4(),
+        "uploaded_final_fob",
+    )
+    assert final.base_fob_eur is None
+    assert final.colour_surcharge_eur is None
+    assert final.final_fob_eur == 15000
+
+
+def test_template_base_save_derives_colours_and_keeps_base_after_single_moves(monkeypatch) -> None:
+    baseline_id = uuid4()
+    single = SimpleNamespace(
+        material_code="T7000BWMY0001",
+        bom_template="T7000**MY0001",
+        colour_tier="single",
+        exterior_color_type="single",
+        is_active=True,
+    )
+    dual = SimpleNamespace(
+        material_code="T7000ZEMY0001",
+        bom_template="T7000**MY0001",
+        colour_tier="dual",
+        exterior_color_type="dual",
+        is_active=True,
+    )
+    single_fob = CountrySkuFobResolved(
+        country_sku_fob_id=uuid4(), baseline_version_id=baseline_id,
+        country_code="SE", material_code=single.material_code, payment_term_code="TT",
+        final_fob_eur=15000, is_active=True,
+    )
+    dual_fob = CountrySkuFobResolved(
+        country_sku_fob_id=uuid4(), baseline_version_id=baseline_id,
+        country_code="SE", material_code=dual.material_code, payment_term_code="TT",
+        final_fob_eur=15200, is_active=True,
+    )
+    session = _QueuedExecuteSession([[single, dual], [single_fob, dual_fob]])
+    monkeypatch.setattr(repo, "get_country_payment_term", lambda *_: SimpleNamespace(payment_term_code="TT"))
+    monkeypatch.setattr(repo, "get_latest_baseline", lambda *_: SimpleNamespace(baseline_version_id=baseline_id))
+    monkeypatch.setattr(repo, "get_colour_surcharge_amount_for_sku", lambda _session, sku, tier: 200.0 if tier == "dual" else 0.0)
+
+    result = repo.update_bom_template_base_fob(
+        session,
+        "T7000**MY0001",
+        [single.material_code, dual.material_code],
+        "SE",
+        15500,
+        changed_by="admin",
+    )
+
+    assert result["updated"] == 2
+    assert single_fob.base_fob_eur == 15500
+    assert single_fob.final_fob_eur == 15500
+    assert dual_fob.base_fob_eur == 15500
+    assert dual_fob.colour_surcharge_eur == 200
+    assert dual_fob.final_fob_eur == 15700
+    assert single_fob.fob_source_mode == "template_base"
+
+    session = _QueuedExecuteSession([[dual], [dual_fob]])
+    result = repo.update_bom_template_base_fob(
+        session,
+        "T7000**MY0001",
+        [dual.material_code],
+        "SE",
+        16000,
+        changed_by="admin",
+    )
+    assert result["updated"] == 1
+    assert dual_fob.base_fob_eur == 16000
+    assert dual_fob.final_fob_eur == 16200
 
 
 @pytest.mark.parametrize("scenario", ["known", "unknown", "conflict"])
@@ -766,6 +975,24 @@ def test_colour_rules_group_by_normalized_brand_code_and_fill_placeholder() -> N
     ]
 
 
+def test_colour_rules_include_known_brand_when_legacy_brand_is_empty() -> None:
+    rule = repo.build_colour_hex_rules_from_skus([
+        SimpleNamespace(
+            material_code="J5-ICE-W3",
+            brand="",
+            model_name="JAECOO5 ICE",
+            bom_template="T71611C",
+            exterior_color_code="W3",
+            exterior_color_name="Water blue",
+            colour_hex="#B6D3FB",
+        )
+    ])[0]
+
+    assert rule["brand"] == "JAECOO"
+    assert rule["colourCode"] == "W3"
+    assert rule["status"] == "complete"
+
+
 def test_colour_rules_report_name_and_swatch_conflicts_independently() -> None:
     skus = [
         SimpleNamespace(
@@ -811,6 +1038,32 @@ def test_colour_rules_report_unknown_placeholder_as_missing() -> None:
     assert rule["standardColourHex"] is None
     assert rule["placeholderNameSkuCount"] == 1
     assert rule["missingSwatchSkuCount"] == 1
+
+
+def test_summarize_invalid_colour_rule_identities_exposes_sample_without_mutation() -> None:
+    session = _FakeSession([
+        SimpleNamespace(
+            material_code="J5-ICE-W3",
+            brand="",
+            model_name="JAECOO5 ICE",
+            bom_template="T71611C",
+            exterior_color_code="W3",
+            is_active=True,
+        ),
+        SimpleNamespace(
+            material_code="UNKNOWN-1",
+            brand="",
+            model_name="J5 ICE",
+            bom_template="T71611C",
+            exterior_color_code="W3",
+            is_active=True,
+        ),
+    ])
+
+    assert repo.summarize_invalid_colour_rule_identities(session) == {
+        "invalidIdentitySkuCount": 1,
+        "invalidIdentitySampleMaterialCodes": ["UNKNOWN-1"],
+    }
 
 
 def test_resolve_colour_attributes_reuses_only_unambiguous_rule() -> None:
@@ -1199,6 +1452,44 @@ def test_colour_tier_reprice_reports_each_country_without_overwriting_manual(
     assert manual.final_fob_eur == 1300
 
 
+def test_colour_tier_reprice_recalculates_template_base_without_freezing_it(
+    monkeypatch,
+) -> None:
+    baseline_id = uuid4()
+    sku = SimpleNamespace(
+        material_code="T7000ZEMY0001",
+        bom_template="T7000**MY0001",
+        brand="OMODA",
+        exterior_color_code="ZE",
+        colour_tier="dual",
+    )
+    row = CountrySkuFobResolved(
+        country_sku_fob_id=uuid4(),
+        baseline_version_id=baseline_id,
+        country_code="SE",
+        material_code=sku.material_code,
+        payment_term_code="TT",
+        uploaded_fob_eur=15500,
+        base_fob_eur=15500,
+        colour_surcharge_eur=200,
+        final_fob_eur=15700,
+        fob_source_mode="template_base",
+        is_active=True,
+    )
+    session = _FakeSession([row])
+    monkeypatch.setattr(repo, "get_sku_by_material_code", lambda *_: sku)
+    monkeypatch.setattr(repo, "get_colour_surcharge_amount_for_sku", lambda *_: 300.0)
+    monkeypatch.setattr(repo, "_find_colour_surcharge_base_fob", lambda *_: None)
+
+    result = repo.reprice_sku_colour_surcharge_fobs(session, sku.material_code, changed_by="admin")
+
+    assert result["updated"] == 1
+    assert row.base_fob_eur == 15500
+    assert row.colour_surcharge_eur == 300
+    assert row.final_fob_eur == 15800
+    assert row.fob_source_mode == "template_base"
+
+
 def test_copy_country_fobs_creates_target_country_rows(monkeypatch) -> None:
     baseline_id = uuid4()
     source_row = CountrySkuFobResolved(
@@ -1207,9 +1498,11 @@ def test_copy_country_fobs_creates_target_country_rows(monkeypatch) -> None:
         country_code="CZ",
         material_code="T7000SE**MY0001",
         payment_term_code="LC90",
-        uploaded_fob_eur=14900,
-        final_fob_eur=14900,
-        fob_source_mode="explicit_price_by_payment_term",
+        uploaded_fob_eur=15000,
+        base_fob_eur=15000,
+        colour_surcharge_eur=200,
+        final_fob_eur=15200,
+        fob_source_mode="template_base",
         is_active=True,
     )
     target_term = CountryPaymentTermMaster(
@@ -1250,7 +1543,9 @@ def test_copy_country_fobs_creates_target_country_rows(monkeypatch) -> None:
     assert isinstance(created, CountrySkuFobResolved)
     assert created.country_code == "SK"
     assert created.payment_term_code == "LC90"
-    assert created.final_fob_eur == 14900
+    assert created.base_fob_eur == 15000
+    assert created.colour_surcharge_eur == 200
+    assert created.final_fob_eur == 15200
     assert created.fob_source_country_code == "CZ"
 
 
@@ -1297,6 +1592,44 @@ def test_adjust_country_fobs_updates_rows_and_writes_history(monkeypatch) -> Non
     assert history.old_final_fob_eur == 14900
     assert history.new_final_fob_eur == 15100
     assert history.changed_by == "admin"
+
+
+def test_adjust_country_fobs_moves_template_base_and_preserves_surcharge(monkeypatch) -> None:
+    baseline_id = uuid4()
+    row = CountrySkuFobResolved(
+        country_sku_fob_id=uuid4(),
+        baseline_version_id=baseline_id,
+        country_code="SE",
+        material_code="T7000ZE**MY0001",
+        payment_term_code="TT",
+        uploaded_fob_eur=15500,
+        base_fob_eur=15500,
+        colour_surcharge_eur=200,
+        final_fob_eur=15700,
+        fob_source_mode="template_base",
+        is_active=True,
+    )
+    fake_session = _FakeSession()
+    monkeypatch.setattr(
+        repo,
+        "list_fob_by_country",
+        lambda _session, country_code, payment_term_code=None: [row]
+        if country_code == "SE"
+        else [],
+    )
+
+    result = repo.adjust_country_fobs(fake_session, "SE", 500, changed_by="admin")
+
+    assert result["adjusted"] == 1
+    assert row.base_fob_eur == 16000
+    assert row.uploaded_fob_eur == 16000
+    assert row.colour_surcharge_eur == 200
+    assert row.final_fob_eur == 16200
+    assert row.fob_source_mode == "template_base_country_adjust"
+    history = fake_session.added[0]
+    assert isinstance(history, FobResolvedHistory)
+    assert history.new_uploaded_fob_eur == 16000
+    assert history.new_final_fob_eur == 16200
 
 
 def test_sync_missing_template_fobs_backfills_new_colour_rows_only() -> None:
