@@ -1,5 +1,7 @@
 # JATO Platform 开发交接与恢复入口
 
+本轮统一进度入口：[Order Genius 六项大任务进度](../features/ORDER_GENIUS_PROGRESS_2026-09-24.md)。选品表批次栏已确认，见日期选品/PI需求第3.1节；每批交付按该进度口径报告，已合并/部署不等于业务验收或Active发布。
+
 ## 2026-09-24 新增：PI 批次不可见、余量下单与日期选品
 
 需求与只读源码证据已整理到 [日期选品、月内多批 PI 与 WVTA](../features/ORDER_GENIUS_DATED_SELECTION_PI_BATCH_WVTA_2026-09-24.md)。优先检查 PI 列表国家/月混合状态和请求失败被吞成空列表；现有 allocation plan 可复用为“总量/已进 PI/余量”，继续下单不清零原始订单。模板基准收口后另批增加国家日级价格期间，再接生产日期与 WVTA 匹配。尚未查正式数据库、实施业务代码或部署，不能将截图 409 视为本次 PI 创建成功。
@@ -17,7 +19,7 @@
 - C worktree `/Users/litristan/Downloads/JATO_Analysis_System_bom_colour`、分支 `codex/bom-colour-followup` 已修正 `handleFobSave(allCodes)` 的根因：`**` 模板行按国家保存 `base_fob_eur`，后端同事务按 Single/Dual/Special 规则派生最终价，不再把同一输入逐颜色写成 `manual_edit`。
 - 同批覆盖模板读取、拖动 tier 后重算、最后一个 Single 移走保留基准、Copy Material、模板批量调价、国家复制/调整和前端本地派生结果；普通非 `**` SKU 仍走原逐 SKU 最终价路径，明确最终价导入保持不二次加价。
 - 本地验证：模板/规则聚焦 6 项通过；`test_ordering_bom_admin.py` 为 `46 passed, 5 failed`，5 项均为该分支此前已知的 country-column / `sync_missing_template_fobs` 基线缺口；Python compileall 通过；前端类型检查、73 files / 399 tests、构建、路由回归通过。构建只有既有大 chunk warning。
-- 未完成：尚未在 Candidate 实测 15000→15500→15800、多国家基准、Special 特例、无基准/manual 保护、BOM/Matrix 双入口、Copy/拖动交互。Candidate 已准备但 `candidateAdmin / 123456` 返回 `Invalid credentials`，需先取得正确测试凭据。Hermes 自动事件文件继续保持 dirty，不纳入业务提交。
+- 未完成：尚未在 Candidate 实测 15000→15500→15800、多国家基准、Special 特例、无基准/manual 保护、BOM/Matrix 双入口、Copy/拖动交互。Candidate 已准备但 `candidateAdmin` 测试账号返回 `Invalid credentials`，需先取得正确测试凭据。Hermes 自动事件文件继续保持 dirty，不纳入业务提交。
 
 ## 2026-09-24 更新：颜色定价需求与收口状态（代码已合入，业务验收待登录）
 
@@ -49,7 +51,7 @@
 
 - #226 / #228 已合并；新 Candidate 页面实测 commit `9011da6ac1f5`、artifact `f55a70fea05f`，沙箱尾号 `5b654a45`，快照开始于 2026-09-15 09:13:10。
 - 四批 BOM PR 已按 C → B → A → D 合入；最终 main 为 `efe5ac0f5b11f547ca94942bd2a0ad0708822bb0`。自动 Candidate prepare run [35960030314](https://github.com/tristan419/JATO_Analysis_System/actions/runs/35960030314) 成功，Candidate 当前构件 archive `2810a3510337`、manifest `c7a49e45c7b4`，Active/www/intl 未更新。
-- Candidate 部署报告已确认沙箱/数据库隔离、Candidate backend、月更禁用、preview 和 `active_unchanged`；但本次浏览器使用此前约定的 `candidateAdmin / 123456` 返回 `Invalid credentials`，因此不要把本轮写成“登录成功”或“BOM 验收通过”。取得正确测试凭据后再继续统一验收，不要再次按旧步骤 discard 或合并 #226/#228。
+- Candidate 部署报告已确认沙箱/数据库隔离、Candidate backend、月更禁用、preview 和 `active_unchanged`；但本次浏览器使用此前约定的 `candidateAdmin` 测试账号返回 `Invalid credentials`，因此不要把本轮写成“登录成功”或“BOM 验收通过”。取得正确测试凭据后再继续统一验收，不要再次按旧步骤 discard 或合并 #226/#228。
 - BOM #220 已完成一次真实 Preview/Apply：仅 Candidate 的 8 行颜色名称被填充，前后 BOM API 比较 FOB/tier 等其他返回字段未变。完整验收尚未完成，不能标记可发布。
 - 新发现：J5 ICE 21 行、HEV 14 行品牌为空，联动影响色卡、规则统计和加价；Model 窄屏移位、输入抢焦点已复现；搜索保存后的无条件 reload 已定位。
 - B Model、C 颜色规则和 D 登录失效提示均已在后续 PR #229–#232 合入并部署到当前 Candidate；本节列出的 `main@9011da6a`、未合并和旧 Candidate 版本仅是 9 月 15 日历史快照，不能当作当前状态。
@@ -442,7 +444,7 @@ Markdown_Readme/Fullstack/JATO_PLATFORM_HANDOVER_2026-09-14.md
 
 - [x] 本次审计已确认 main、PR、正式站前端版本和混合区统计口径。
 - [ ] **交接入口**：审阅本次 #227 文档修订，决定何时合并；合并前显式读取本 worktree，不把旧 main 中的 Goal 状态当最新指令。文档合并本身可能触发现有 main CI → Candidate 自动准备，不能当成完全无运行影响。
-- [ ] **Candidate 登录入口（本构件待凭据）**：#226/#228 逻辑已在最终 main，Candidate 部署成功且 Basic Auth 未启用；但本次构件对 `candidateAdmin / 123456` 返回 `Invalid credentials`，需取得正确账号密码后重新完成真实登录与 401/200 复验。不要把部署成功等同于登录验收通过。
+- [ ] **Candidate 登录入口（本构件待凭据）**：#226/#228 逻辑已在最终 main，Candidate 部署成功且 Basic Auth 未启用；但本次构件对 `candidateAdmin` 测试账号返回 `Invalid credentials`，需取得正确账号密码后重新完成真实登录与 401/200 复验。不要把部署成功等同于登录验收通过。
 - [x] **Candidate BOM 写入样本**：现有 Preview/Apply 成功填充沙箱 8 行颜色名称；未向 Active/www/intl 发送业务写入。完整环境隔离以前序部署证据为准，不把单次 UI 测试等同于重新证明全部基础设施隔离。
 - [ ] **P1 BOM 基线验收**：在 Candidate 验证 #215 同模板只编辑当前行，以及 #220 名称/swatch、Preview/Apply、Matrix 一致性、manual FOB/no-base 保护。记录真实失败，不重新搬 #173。
 - [ ] **P1-A BOM 输入/搜索收尾**：A 已随 PR #231 合入最终 main 并部署到当前 Candidate；本地已补搜索 A→B→A 最新意图、旧响应/错误隔离、lookup 目标生命周期和真实 `BomAdminPanel` 延迟 Promise 交互测试。尚未做 Candidate 浏览器验收，需在取得凭据后按 BOM 文档第 13 节实测。

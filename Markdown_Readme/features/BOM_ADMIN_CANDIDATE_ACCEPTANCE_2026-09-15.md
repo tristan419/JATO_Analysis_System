@@ -13,7 +13,7 @@
 - 自动 `production-release` run：[#35960030314](https://github.com/tristan419/JATO_Analysis_System/actions/runs/35960030314)，`prepare-candidate` 成功。
 - 实际构件身份：archive SHA-256 `2810a3510337ab7980ff1d19e9ac64f9276b23c9d4aaf619d363d747673c962b`；manifest SHA-256 `c7a49e45c7b4b6ce80f03b1948474af2f64b2b2c3c23bf10a0a9433257e14af9`；操作 ID `2026-09-24T053732954Z-prepare-candidate-91b3be18`。
 - Candidate 地址：`https://candidate.ojeur.cloud/product/order-genius`。部署报告通过 `candidate_sandbox_provisioned`、`candidate_database_isolation_verified`、`candidate_backend_verified`、`candidate_monthly_disabled_verified`、`candidate_preview_verified`、`active_unchanged`；本次没有 update-active、sync-intl 或正式数据写入。
-- 浏览器实际打开后页面显示 Candidate commit `efe5ac0f5b11`、artifact `2810a3510337`。使用此前口头约定的 `candidateAdmin / 123456` 登录返回 `Invalid credentials`，没有继续尝试未知密码，也没有写入 BOM 数据。必须先取得/恢复正确的 Candidate 测试凭据，再执行第 15 节统一验收；不能把部署成功写成业务验收通过。
+- 浏览器实际打开后页面显示 Candidate commit `efe5ac0f5b11`、artifact `2810a3510337`。使用此前约定的 `candidateAdmin` 测试账号登录返回 `Invalid credentials`，没有继续尝试未知密码，也没有写入 BOM 数据。必须先取得/恢复正确的 Candidate 测试凭据，再执行第 15 节统一验收；不能把部署成功写成业务验收通过。
 
 ## 13. 实施记录
 
@@ -186,7 +186,7 @@
 
 ## 1. 基线与证据边界
 
-> 本节大部分数字是 2026-09-15 旧 Candidate 的只读基线；当前待验构件是 main `efe5ac0f5b11`，部署 run `35960030314`，archive `2810a3510337`。旧基线中的登录成功、规则数量和沙箱标识不能替代当前构件验收；当前构件首次登录尝试 `candidateAdmin / 123456` 已返回 `Invalid credentials`。
+> 本节大部分数字是 2026-09-15 旧 Candidate 的只读基线；当前待验构件是 main `efe5ac0f5b11`，部署 run `35960030314`，archive `2810a3510337`。旧基线中的登录成功、规则数量和沙箱标识不能替代当前构件验收；当前构件首次登录尝试 `candidateAdmin` 已返回 `Invalid credentials`。
 
 - 实测入口：https://candidate.ojeur.cloud/product/order-genius；正确测试凭据待恢复，不在文档记录密码。
 - 页面显示 commit `9011da6ac1f5592e37b7cba80c455e30e0b0b48e`，artifact `f55a70fea05f3ba983db1f9e7f83e4fd67a6d1285b2a43373265a1109c3981b2`。
