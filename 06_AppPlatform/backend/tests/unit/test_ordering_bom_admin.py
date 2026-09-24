@@ -235,6 +235,104 @@ def test_create_material_sku_rejects_duplicate_material_code(monkeypatch) -> Non
     assert session.committed is False
 
 
+def test_create_material_sku_initializes_automatic_fobs_from_source(monkeypatch) -> None:
+    session = _CreateMaterialSession()
+    baseline_id = uuid4()
+    calls: dict[str, object] = {}
+    monkeypatch.setattr(order_genius_routes.repo, "get_sku_by_material_code_any_status", lambda *_: None)
+    monkeypatch.setattr(order_genius_routes.repo, "get_latest_baseline", lambda *_: SimpleNamespace(baseline_version_id=baseline_id))
+    monkeypatch.setattr(
+        order_genius_routes.repo,
+        "resolve_colour_attributes",
+        lambda *_args, **_kwargs: {"colourName": "Matte silver", "colourHex": "#AAAAAA"},
+    )
+    monkeypatch.setattr(order_genius_routes.repo, "copy_country_material_finance_template", lambda *_args, **_kwargs: 0)
+
+    def initialize(_session: object, target: str, source: str, **kwargs: object) -> dict[str, object]:
+        calls.update(target=target, source=source, kwargs=kwargs)
+        return {"sourceMaterialCode": source, "materialCode": target, "rows": 1, "created": 1, "skippedNoBase": 0, "details": []}
+
+    monkeypatch.setattr(order_genius_routes.repo, "initialize_sku_fobs_from_source", initialize)
+    result = order_genius_routes.create_material_sku(
+        {
+            "materialCode": "T7000UEMY0001",
+            "brand": "OMODA",
+            "modelName": "OMODA7",
+            "version": "Premium-FWD",
+            "colour": "Matte silver",
+            "colourCode": "UE",
+            "colourTier": "special",
+            "sourceMaterialCode": "T7000BWMY0001",
+            "automaticFobs": True,
+        },
+        session=session,
+        user=SimpleNamespace(name="admin@example.com"),
+    )
+
+    assert calls["target"] == "T7000UEMY0001"
+    assert calls["source"] == "T7000BWMY0001"
+    assert result["automaticFobs"]["created"] == 1
+    assert session.committed is True
+
+
+def test_initialize_new_dual_uses_single_base_and_resolved_surcharge(monkeypatch) -> None:
+    target = SimpleNamespace(
+        material_code="TARGET-ZE",
+        colour_tier="dual",
+        bom_template="T7000**MY0001",
+        brand="OMODA",
+        model_name="OMODA7 SHS",
+        powertrain="PHEV",
+        exterior_color_code="ZE",
+    )
+    source = SimpleNamespace(material_code="SOURCE-BW")
+    source_fob = SimpleNamespace(
+        baseline_version_id=uuid4(),
+        country_code="SE",
+        payment_term_code="TT",
+        final_fob_eur=15000,
+        remark="copied note",
+    )
+    session = _FakeSession([source_fob])
+    rows = iter([target, source])
+    monkeypatch.setattr(repo, "get_sku_by_material_code_any_status", lambda *_: next(rows))
+    monkeypatch.setattr(repo, "_find_colour_surcharge_base_fob", lambda *_args: 15000.0)
+    monkeypatch.setattr(repo, "get_colour_surcharge_amount_for_sku", lambda *_args: 200.0)
+
+    result = repo.initialize_sku_fobs_from_source(
+        session,
+        target.material_code,
+        source.material_code,
+    )
+
+    created = session.added[0]
+    assert result["created"] == 1
+    assert result["skippedNoBase"] == 0
+    assert created.base_fob_eur == 15000.0
+    assert created.colour_surcharge_eur == 200.0
+    assert created.final_fob_eur == 15200.0
+    assert created.fob_source_mode == "uploaded_base_plus_colour"
+    assert created.material_code == target.material_code
+
+
+def test_special_colour_rule_precedes_brand_special_default(monkeypatch) -> None:
+    sku = SimpleNamespace(
+        brand="OMODA",
+        model_name="OMODA7",
+        bom_template="T7000",
+        exterior_color_code="UE",
+    )
+    special_rule = SimpleNamespace(surcharge_eur=200)
+    brand_rule = SimpleNamespace(surcharge_eur=300)
+    monkeypatch.setattr(repo, "get_special_colour_surcharge_for_sku", lambda *_: special_rule)
+    monkeypatch.setattr(repo, "get_brand_colour_surcharge", lambda *_: brand_rule)
+
+    assert repo.get_colour_surcharge_amount_for_sku(_FakeSession(), sku, "special") == 200
+
+    monkeypatch.setattr(repo, "get_special_colour_surcharge_for_sku", lambda *_: None)
+    assert repo.get_colour_surcharge_amount_for_sku(_FakeSession(), sku, "special") == 300
+
+
 @pytest.mark.parametrize("scenario", ["known", "unknown", "conflict"])
 def test_create_material_sku_resolves_known_unknown_and_conflict_rules(
     monkeypatch,

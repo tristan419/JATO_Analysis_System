@@ -464,6 +464,107 @@ def update_sku_fob_for_country(
     return fob
 
 
+def initialize_sku_fobs_from_source(
+    session: Session,
+    target_material_code: str,
+    source_material_code: str,
+    *,
+    changed_by: str | None = None,
+) -> dict[str, object]:
+    """Create automatic FOB rows for a new colour from a trusted source SKU.
+
+    Dual and Special rows always resolve their base from a Single SKU in the
+    target BOM template and apply the shared surcharge resolver.  The source
+    SKU only supplies the available country/payment-term rows; its final price
+    is never copied as the target price.
+    """
+    target = get_sku_by_material_code_any_status(session, target_material_code)
+    source = get_sku_by_material_code_any_status(session, source_material_code)
+    result: dict[str, object] = {
+        "sourceMaterialCode": source_material_code,
+        "materialCode": target_material_code,
+        "rows": 0,
+        "created": 0,
+        "skippedNoBase": 0,
+        "details": [],
+    }
+    if target is None or source is None:
+        return result
+
+    source_rows = list(
+        session.execute(
+            select(CountrySkuFobResolved).where(
+                CountrySkuFobResolved.material_code == source.material_code,
+                CountrySkuFobResolved.is_active == True,
+                CountrySkuFobResolved.final_fob_eur > 0,
+            )
+        ).scalars().all()
+    )
+    target_tier = clean_text(target.colour_tier or "single").lower()
+    if target_tier not in {"single", "dual", "special"}:
+        target_tier = "single"
+    surcharge = (
+        get_colour_surcharge_amount_for_sku(session, target, target_tier)
+        if target_tier in {"dual", "special"}
+        else 0.0
+    )
+
+    for source_row in source_rows:
+        result["rows"] = int(result["rows"]) + 1
+        if target_tier == "single":
+            base_fob = _positive_float(source_row.final_fob_eur)
+            colour_surcharge = None
+        else:
+            base_fob = _find_colour_surcharge_base_fob(
+                session,
+                target,
+                source_row.country_code,
+                source_row.payment_term_code,
+            )
+            colour_surcharge = surcharge if surcharge > 0 else None
+        if base_fob is None:
+            result["skippedNoBase"] = int(result["skippedNoBase"]) + 1
+            cast_details = result["details"]
+            assert isinstance(cast_details, list)
+            cast_details.append({
+                "countryCode": source_row.country_code,
+                "status": "skipped",
+                "reason": "missing_single_base",
+            })
+            continue
+
+        baseline_id = source_row.baseline_version_id
+        final_fob = round(base_fob + (colour_surcharge or 0.0), 2)
+        session.add(
+            CountrySkuFobResolved(
+                country_sku_fob_id=uuid4(),
+                baseline_version_id=baseline_id,
+                country_code=source_row.country_code,
+                material_code=target.material_code,
+                payment_term_code=source_row.payment_term_code,
+                base_fob_eur=base_fob,
+                colour_surcharge_eur=colour_surcharge,
+                uploaded_fob_eur=base_fob,
+                final_fob_eur=final_fob,
+                fob_source_country_code=source_row.country_code,
+                fob_source_mode="uploaded_base_plus_colour" if target_tier != "single" else "copied_from_template_colour",
+                remark=source_row.remark,
+                is_active=True,
+            )
+        )
+        result["created"] = int(result["created"]) + 1
+        cast_details = result["details"]
+        assert isinstance(cast_details, list)
+        cast_details.append({
+            "countryCode": source_row.country_code,
+            "baseFobEur": base_fob,
+            "colourSurchargeEur": colour_surcharge,
+            "finalFobEur": final_fob,
+            "status": "created",
+        })
+    return result
+
+
 def clear_country_fobs(session: Session, country_code: str) -> int:
     """Deactivate all active BOM FOB rows for one country column."""
     result = session.execute(
@@ -2502,6 +2603,7 @@ def _find_colour_surcharge_base_fob(
     session: Session,
     sku: MaterialSkuMaster,
     country_code: str,
+    payment_term_code: str | None = None,
 ) -> float | None:
     """Find the base single-colour FOB for this SKU's BOM template and country."""
     template = clean_text(sku.bom_template).upper()
@@ -2530,6 +2632,8 @@ def _find_colour_surcharge_base_fob(
             MaterialSkuMaster.version == sku.version,
             MaterialSkuMaster.powertrain == sku.powertrain,
         )
+    if payment_term_code:
+        stmt = stmt.where(CountrySkuFobResolved.payment_term_code == payment_term_code)
     return _positive_float(session.execute(stmt).scalar_one_or_none())
 
 

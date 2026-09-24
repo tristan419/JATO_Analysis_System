@@ -1404,6 +1404,8 @@ def create_material_sku(
     powertrain = clean_text(body.get("powertrain")) or "Other"
     bom_template = clean_text(body.get("bomTemplate")).upper() or material_code
     source_bom_template = clean_text(body.get("sourceBomTemplate")).upper()
+    source_material_code = clean_text(body.get("sourceMaterialCode")).upper()
+    automatic_fobs = bool(body.get("automaticFobs"))
     colour_tier = clean_text(body.get("colourTier") or "single").lower()
     if colour_tier not in {"single", "dual", "special"}:
         raise HTTPException(status_code=400, detail="colourTier must be single, dual, or special")
@@ -1447,6 +1449,13 @@ def create_material_sku(
             status_code=400,
             detail=f"Missing required fields: {', '.join(missing)}",
         )
+    if automatic_fobs and not source_material_code:
+        raise HTTPException(status_code=400, detail="sourceMaterialCode is required for automaticFobs")
+    if automatic_fobs and fob_updates:
+        raise HTTPException(
+            status_code=400,
+            detail="automaticFobs cannot be combined with explicit fobs",
+        )
 
     if repo.get_sku_by_material_code_any_status(session, material_code):
         raise HTTPException(status_code=409, detail=f"Material code already exists: {material_code}")
@@ -1485,6 +1494,22 @@ def create_material_sku(
         baseline_version_id=baseline.baseline_version_id,
     )
     session.add(sku)
+    automatic_fob_result: dict[str, object] = {
+        "sourceMaterialCode": source_material_code,
+        "materialCode": material_code,
+        "rows": 0,
+        "created": 0,
+        "skippedNoBase": 0,
+        "details": [],
+    }
+    if automatic_fobs:
+        session.flush()
+        automatic_fob_result = repo.initialize_sku_fobs_from_source(
+            session,
+            material_code,
+            source_material_code,
+            changed_by=user.name,
+        )
     copied_finance_rows = repo.copy_country_material_finance_template(
         session,
         source_bom_template,
@@ -1531,6 +1556,7 @@ def create_material_sku(
         "colourHex": sku.colour_hex,
         "copiedFinanceRows": copied_finance_rows,
         "fobsCreated": fobs_created,
+        "automaticFobs": automatic_fob_result,
     }
 
 
