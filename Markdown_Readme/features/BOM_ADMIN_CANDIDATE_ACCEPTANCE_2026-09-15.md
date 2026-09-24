@@ -2,10 +2,24 @@
 
 > 2026-09-24 新需求另见 [国家日期选品、月内多批 PI 与 WVTA](ORDER_GENIUS_DATED_SELECTION_PI_BATCH_WVTA_2026-09-24.md)。时间价格建立在模板基准修复之上；PI 可见性故障优先独立处理，不能把本清单现有修复完成等同新需求完成。
 
-> 创建：2026-09-15；最新需求与状态修订：2026-09-24，Asia/Shanghai。状态：C/B/A/D 已按 C → B → A → D 合并到 main，Candidate 已由最终 main 自动准备；浏览器验收已用正确账号开始，但 B/C/#215 仅部分通过，Special 加价、共享色卡与 D 的真实失效场景仍未收口。
+> 创建：2026-09-15；最新需求与状态修订：2026-09-24，Asia/Shanghai。状态：C/B/A/D 已按 C → B → A → D 合并到 main；手动基准重算修复已通过 PR #233 合入，Candidate 已重新准备。当前 Candidate 只代表部署可验收，不代表 Special/manual、共享色卡、BOM/Matrix 双入口与 D 的真实失效场景已全部收口。
 > 用户目标：稳定填写订单、稳定列布局、跨物料共享颜色名称/色卡、正确计算颜色加价。暂不优先建设多人编辑、row_version 扩展或新门禁。
 > 初次调研只做验收和文档；之后 A 已有本地代码提交 `260f839a`，尚未部署验收。B/C（含 E）/D 的代码批次随后已各自在独立 worktree 完成，整个 BOM 修复仍未完成 Candidate 验收。
 > **下一位执行者先读第 13 节 9 月 24 日最新批次，再按第 12 节实施。** 保留已有成果；C 按 C5–C8 继续补齐，D 补交互缺口，不把历史测试通过当作完整收口。
+
+### 2026-09-24 · PR #233 合入后重新准备 Candidate（当前待验构件）
+
+- PR [#233](https://github.com/tristan419/JATO_Analysis_System/pull/233) `fix(bom): reprice manual base rows with colour surcharge` 已合入；合并提交：`cf10438fdeed1573a13fc1f2a533c18623d87476`。该提交只修复有可信 Single 基准的 `manual_edit/manual_country_adjust` 行参与当前 tier surcharge 重算；没有基准的明确最终价继续保护。
+- `production-release` run [#35971888377](https://github.com/tristan419/JATO_Analysis_System/actions/runs/35971888377) 的 `prepare-candidate` 已成功。Candidate 地址仍为 `https://candidate.ojeur.cloud/product/order-genius`；操作 ID：`2026-09-24T080357833Z-prepare-candidate-8f651be3`。
+- 当前构件身份：commit `cf10438fdeed1573a13fc1f2a533c18623d87476`；archive SHA-256 `ea4d7e9ab0a5d9e0fdfa74a4627e2e2dc711d379f7452cdac012e4bc26fff9b3`；manifest SHA-256 `566d1cfe6039a1ffcdc7e147dad06a0374e4a312b665d04aba3e5d1e2df5f57b`。部署报告通过 Candidate sandbox provision/database isolation/backend/monthly-disabled/preview checks，并记录 `active_unchanged`；本次没有 update-active、sync-intl 或正式数据写入。
+- 验收重点：重复 OMODA9/UE `dual → special` 样本时，若 CH 的 Single 基准仍为 `25,200`，应从旧 `25,400` 改为 `25,500`（Special `+300`），而不是再显示 `manual_fob` 跳过。没有可信基准的手动最终价仍应说明并保护。
+
+#### Candidate 色块没有颜色：当前证据与边界
+
+- PR #233 没有修改色卡数据或渲染器，因此它不会修复也不会造成色块颜色缺失。BOM 行渲染器读取 SKU 的 `colourHex`；值缺失时使用中性占位 `#94A3B8`，Matrix 渲染器同样对颜色名称查不到映射时回退到 `#94A3B8`。对应源码为 `06_AppPlatform/frontend/src/pages/OrderGeniusPage.tsx` 的 `renderColourChip` 和 `06_AppPlatform/frontend/src/components/OrderGeniusGrid.tsx` 的颜色映射。
+- 后端列表返回的是每个 SKU 的 `colourHex`（来自 `colour_hex`）。因此“色块灰、看起来没有颜色”首先表示该 SKU 没有可用的规范 hex，或共享规则汇总处于 `missing/conflict`，不是 CSS 失效。此前 Candidate 规则卡已经记录 `24 missing rules`，并观察到 JAECOO5 的部分列表/Matrix 显示 `missing swatch`；J5 空品牌规范化只能修正查找 key，不能凭空生成颜色值。
+- 蓝边也不是“有颜色”的证明：当前 BOM chip 对有 `colourHex` 的自定义值使用 `2px solid #3b82f6`，它是编辑/自定义视觉标记，不是规则命中或保存状态。应把“缺 hex”“规则冲突”“自定义 hex”分开验收，不用随意填默认颜色掩盖数据缺口。
+- 本次 Candidate 先用于验证 #233 的基准重算和回归；共享颜色库应继续以 Refresh/Preview 的 `missing/conflict/fill` 明细定位，后续只补真实缺失或冲突的共享规则，不批量把 `#94A3B8` 写回正式数据。
 
 ### 2026-09-24 · 四批合并后的 Candidate 准备结果（业务验收待登录）
 

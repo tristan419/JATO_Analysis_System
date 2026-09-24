@@ -463,7 +463,9 @@ Markdown_Readme/Fullstack/JATO_PLATFORM_HANDOVER_2026-09-14.md
 - [ ] **P1-A BOM 输入/搜索收尾**：A 已随 PR #231 合入最终 main；Candidate 已观察搜索清除/恢复和 1.2s 搜索入口，尚未完成逐字输入、自动回填后二次修改、FOB 保存后搜索保持的完整浏览器验收。
 - [ ] **P1-B BOM Model 布局**：B 已随 PR #230 合入最终 main；50/100/150% 缩放下 Model 保持最左，但拖拽列宽、刷新/数量保存后的持久化和真实窄窗口尺寸仍未验收。
 - [x] **P1 BOM 本地批次**：B（业务 `53976fc0`，对齐 `ac59a832`）、C（含 E，业务 `2218c0df`，对齐 `579ea01e`）和 D（原始 `1a64194a`，对齐 `f6887fb3`，衔接修正 `34656898`）已在各自独立 worktree 完成本地实现与验证；不要重新执行这些批次，也不优先建设多人编辑 row_version。
-- [ ] **P1 BOM PR 审阅与 Candidate 验收**：B/C/A/D 已按 C → B → A → D 合并，最终 main `efe5ac0f5b11` 的 Candidate 已准备成功；管理员登录、颜色 Preview/Apply、缩放下 Model 和部分 #215 已实测，Special +300、J5 共享色卡/双入口、manual/no-base、FOB 数值和认证草稿仍未收口。当前没有 Active/www/intl 更新授权。
+- [ ] **P1 BOM PR 审阅与 Candidate 验收**：B/C/A/D 已按 C → B → A → D 合并；手动基准重算修复已由 PR #233 合入，当前 main `cf10438fdeed` 的 Candidate 已重新准备成功。#233 只修复“有可信 Single 基准的 manual 行仍应叠加当前颜色 surcharge”，不等于 Special +300、J5 共享色卡/双入口、manual/no-base、FOB 数值和认证草稿全部验收通过。当前没有 Active/www/intl 更新授权。
+- [ ] **当前 Candidate 构件**：部署 run [#35971888377](https://github.com/tristan419/JATO_Analysis_System/actions/runs/35971888377)，操作 ID `2026-09-24T080357833Z-prepare-candidate-8f651be3`，commit `cf10438fdeed1573a13fc1f2a533c18623d87476`，archive `ea4d7e9ab0a5d9e0fdfa74a4627e2e2dc711d379f7452cdac012e4bc26fff9b3`，manifest `566d1cfe6039a1ffcdc7e147dad06a0374e4a312b665d04aba3e5d1e2df5f57b`。Candidate 部署报告通过 sandbox/database isolation/backend/monthly-disabled/preview，并记录 `active_unchanged`；不要把它写成 Active 发布。
+- [ ] **色块缺颜色解释**：PR #233 未改色卡。BOM/Matrix 当前从 SKU `colourHex` 或名称映射渲染，缺失时回退 `#94A3B8`；此前 Candidate 已有 `missing swatch`/缺规则记录。蓝边是自定义 hex 的视觉标记，不代表规则命中。下一步应在 Candidate 读取实际 `colourHex` 与 Refresh/Preview 的 missing/conflict 明细，修真实共享规则数据，不用默认色覆盖缺口。
 - [ ] **发布，单独决定**：若要让正式站看到已验收功能，另行批准把同一个已测构件 update-active；再按现有独立流程同步 intl，分别核验版本。Candidate 可用不等于必须立即发布。
 - [ ] **P2 其他研发**：按产品优先级选择 Config 本地 10 文件收口、AstrBot JATO MCP 整理，或 MSRP #183；不要求全项目依次排队。保留 #157 对 #179 的现有合并约束。
 - [ ] **P3 历史整理**：最后再审计旧 Draft PR/旧 worktree；未提交成果未确认前不关闭、删除或清理。
