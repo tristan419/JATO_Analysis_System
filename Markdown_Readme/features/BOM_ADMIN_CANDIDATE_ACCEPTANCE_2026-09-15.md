@@ -2,7 +2,7 @@
 
 > 2026-09-24 新需求另见 [国家日期选品、月内多批 PI 与 WVTA](ORDER_GENIUS_DATED_SELECTION_PI_BATCH_WVTA_2026-09-24.md)。时间价格建立在模板基准修复之上；PI 可见性故障优先独立处理，不能把本清单现有修复完成等同新需求完成。
 
-> 创建：2026-09-15；最新需求与状态修订：2026-09-24，Asia/Shanghai。状态：C/B/A/D 已按 C → B → A → D 合并到 main，Candidate 已由最终 main 自动准备；业务浏览器验收尚未开始，当前阻塞在 Candidate 登录凭据无效。
+> 创建：2026-09-15；最新需求与状态修订：2026-09-24，Asia/Shanghai。状态：C/B/A/D 已按 C → B → A → D 合并到 main，Candidate 已由最终 main 自动准备；浏览器验收已用正确账号开始，但 B/C/#215 仅部分通过，Special 加价、共享色卡与 D 的真实失效场景仍未收口。
 > 用户目标：稳定填写订单、稳定列布局、跨物料共享颜色名称/色卡、正确计算颜色加价。暂不优先建设多人编辑、row_version 扩展或新门禁。
 > 初次调研只做验收和文档；之后 A 已有本地代码提交 `260f839a`，尚未部署验收。B/C（含 E）/D 的代码批次随后已各自在独立 worktree 完成，整个 BOM 修复仍未完成 Candidate 验收。
 > **下一位执行者先读第 13 节 9 月 24 日最新批次，再按第 12 节实施。** 保留已有成果；C 按 C5–C8 继续补齐，D 补交互缺口，不把历史测试通过当作完整收口。
@@ -15,6 +15,16 @@
 - Candidate 地址：`https://candidate.ojeur.cloud/product/order-genius`。部署报告通过 `candidate_sandbox_provisioned`、`candidate_database_isolation_verified`、`candidate_backend_verified`、`candidate_monthly_disabled_verified`、`candidate_preview_verified`、`active_unchanged`；本次没有 update-active、sync-intl 或正式数据写入。
 - 报告另记 `release_gc_deferred:pointer_target_outside_store`：旧 Active 指针仍在 legacy store，发布回收被延后；这是清理诊断，不是 Candidate 部署失败，也没有改变 Active 流量。
 - 浏览器实际打开后页面显示 Candidate commit `efe5ac0f5b11`、artifact `2810a3510337`。使用此前约定的 `candidateAdmin` 测试账号登录返回 `Invalid credentials`，没有继续尝试未知密码，也没有写入 BOM 数据。必须先取得/恢复正确的 Candidate 测试凭据，再执行第 15 节统一验收；不能把部署成功写成业务验收通过。
+
+### 2026-09-24 · Candidate 浏览器验收批次 1（管理员登录后）
+
+- 用户提供的 Candidate 账号登录成功；凭据不写入文档。页面确认 commit `efe5ac0f5b11`、artifact `2810a3510337`、Candidate 沙箱尾号 `889b4d88`。本轮没有 update-active、sync-intl 或正式数据写入。
+- 颜色规则 Preview/Apply 真实通过：初始 `38 rules / 8 SKU fields can be filled`，Preview 8 项；Apply 后页面显示 `Filled 8 SKUs; 0 unchanged, 9 conflicts, 24 missing rules`，再次 Preview 为 0 项。8 行颜色名称写入 Candidate 沙箱，价格/tier 未因 Apply 改变；冲突和缺规则仍未解决。
+- Model 列在 50%、100%、150% 缩放截图中均在最左，`Reset order grid column widths` 可见；拖拽列宽、刷新/数量保存后的持久化、真实窄窗口尺寸尚未完成，不能标记 B 全通过。
+- #215 交互证据：JAECOO5 HEV Exclusive-FWD 首行进入 `DONE`，Select-FWD 另一版本行仍是 `EDIT`。这证明不会整组同时编辑，但尚未取得“同 BOM Template 跨不同车型/版本”的专门样本。
+- JAECOO5 HEV 的 BOM 色卡按钮现在显示规范化 `JAECOO`，BW 规则可打开并读到 `#94A3B8`；列表和 Matrix 仍有大量 `missing swatch`（规则卡显示 24 个），共享颜色库双入口同步仍未通过。
+- OMODA9 SHS 的规则卡有 `OMODA · OMODA9 SHS · UE · MATTE GRAY +300 EUR`，但 BOM/Matrix 同一 UE 行仍显示 `Tier: dual · OMODA dual default`，Matrix FOB 与普通单色相同；只能证明特例配置被读出，不能证明它已作用于已有 SKU。OMODA9 Matte “Special +300、优先于 Dual”保持未通过，需继续做基准价保存或新颜色样本验收。
+- 管理员登录成功不等于 D 已验收：有效低权限 403、过期 token、断网重登及数量/BOM 草稿跨标签保留本批未执行。
 
 ## 13. 实施记录
 
@@ -103,12 +113,12 @@
 
 | 工作 | 当前状态 | 具体改法入口 | 完成证据 |
 |---|---|---|---|
-| A 输入/自动填充/搜索 | 本地实现已收口；尚未部署验收 | 第 13 节 A 收口记录 + 第 12 节 A | Candidate 新构件复验：输入焦点、1.2 秒查库、保存后搜索保持 |
-| B Model/列宽 | 已随 PR #230 合入并部署；Candidate 验收待登录 | `codex/bom-model-layout` / `53976fc0`；Grid 默认 280px、优先固定 Model、用户列宽初始化与持久化 | 本地类型、单测、构建、路由回归通过；待 Candidate 在 2200/1400/1100px 与 80/100/125% 实测 |
-| C J5 品牌、颜色共享、加价 | 原 C/E 本地实现加上 C7 两批已完成；C5/C6 其他入口与 Candidate 验收未完成 | `codex/bom-colour-followup` / `2218c0df` + `eb10c0e` + `be2b85e`；新增颜色与导入都按 Single 基准初始化，Special 规则列表/编辑和来源 tooltip 初接 | 后端新用例 4 passed；全量后端 43 passed/5 个已知基线失败；前端 73 files / 399 tests、类型、构建、路由通过；待 Candidate 核对实际价格和手动保护 |
-| D 登录失效 | 已随 PR #232 合入并部署；Candidate 验收待登录 | `codex/bom-auth-feedback`：`f6887fb3` + `34656898`；保留 #228 认证逻辑，区分 401/403、网络/5xx，登录新标签保留原页草稿 | 类型检查、全量单测、构建、路由回归已通过；待 Candidate 浏览器验收 |
+| A 输入/自动填充/搜索 | 已在 Candidate 开始验收，仍未全通过 | 第 13 节 A 收口记录 + 第 12 节 A | 已观察 1.2 秒搜索入口；逐字输入、自动回填后二次修改、FOB 保存后搜索保持仍待验 |
+| B Model/列宽 | Candidate 部分通过 | `codex/bom-model-layout` / `53976fc0`；Grid 默认 280px、优先固定 Model、用户列宽初始化与持久化 | 50/100/150% 缩放下 Model 保持最左；拖拽列宽、刷新/数量保存持久化、真实窄窗口仍待验 |
+| C J5 品牌、颜色共享、加价 | Preview/Apply 通过，价格和共享色卡未收口 | `codex/bom-colour-followup` / `2218c0df` + `eb10c0e` + `be2b85e`；新增颜色与导入按 Single 基准初始化，Special 规则列表/编辑和来源 tooltip 初接 | 8 个确定性填充已写入 Candidate；仍有 24 missing、9 conflicts；OMODA9 Matte 行显示 Dual default，未证明 +300 已生效 |
+| D 登录失效 | 管理员登录通过，真实失效场景未验 | `codex/bom-auth-feedback`：`f6887fb3` + `34656898`；保留 #228 认证逻辑，区分 401/403、网络/5xx，登录新标签保留原页草稿 | 类型检查、全量单测、构建、路由回归已通过；低权限 403、过期 token、断网和草稿保留仍待 Candidate 验收 |
 | #215 同模板跨车型/版本 | 专项验收未完成 | 第 12.2 节：构造两个真实渲染行并点击 Edit | 只有被点的目标行打开；不是仅比较 key 字符串 |
-| #220 Matrix/保护逻辑 | 部分读取和 Apply 已验，其他待验 | 第 3 节未验项 + C 的用例 | 两个编辑入口保存后 BOM/Matrix 一致；tier/manual/no-base 样本验证 |
+| #220 Matrix/保护逻辑 | Preview/Apply 及读取部分通过，其他待验 | 第 3 节未验项 + C 的用例 | 8 行颜色名称 Apply 成功；BOM/Matrix 双入口、tier/manual/no-base 和 Special 数值仍需真实样本 |
 
 当前顺序（9 月 24 日修订）：保留现有 A/B/C/E 成果并核对组合行为，准备分批 Candidate 验收；C 按 C5–C8 补通用新增定价和特殊价管理，D 补弹窗误判、旧响应保护和真实草稿测试。上表的本地完成仅指原批次，不代表这些新增缺口已修复。进入 main/Candidate 前核对实际 PR 与构件，不能直接按原始 D 或旧文档宣称可合并。
 
