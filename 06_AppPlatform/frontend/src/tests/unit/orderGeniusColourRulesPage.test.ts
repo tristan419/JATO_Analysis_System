@@ -24,6 +24,28 @@ describe("Order Genius colour rule page contract", () => {
     expect(pageSource).toContain("No reusable Brand + Code rule");
     expect(pageSource).toContain("Wait for the Brand + Code rule check to finish.");
     expect(pageSource).toContain("This code cannot be auto-filled: enter a colour name before saving it.");
+    expect(pageSource).toContain("const BOM_ADMIN_COLOUR_LOOKUP_DELAY_MS = 1200;");
+    expect(pageSource).toContain("}, BOM_ADMIN_COLOUR_LOOKUP_DELAY_MS);");
+    expect(pageSource).toContain("colourCodeEditorTargetKey");
+    expect(pageSource).toContain("addColourEditorTargetKey");
+    expect(pageSource).toContain("getBomColourCodeEditorTargetKey(current) !== targetKey");
+    expect(pageSource).toContain("getBomAddColourEditorTargetKey(current) !== targetKey");
+    expect(pageSource).toContain("setColourCodeRuleLookup(null);");
+    expect(pageSource).toContain("setAddColourRuleLookup(null);");
+    expect(pageSource).not.toContain("}, [colourCodeEditor]);");
+    expect(pageSource).not.toContain("}, [addColourEditor]);");
+  });
+
+  it("refreshes BOM data with the applied search and preserves an explicit clear", () => {
+    expect(pageSource).toContain("const appliedBomSearchRef = useRef(cachedSearchText.trim());");
+    expect(pageSource).toContain("requestedSearch === undefined");
+    expect(pageSource).toContain("latestLoadKeyRef.current = loadKey;");
+    expect(pageSource).toContain("pendingLoadKeyRef.current = loadKey;");
+    expect(pageSource).toContain("if (latestLoadKeyRef.current !== loadKey) return;");
+    expect(pageSource).toContain("void load(pendingLoadKey);");
+    expect(pageSource).toContain("void load(nextSearch);");
+    expect(pageSource).toContain("await load(\"\");");
+    expect(pageSource).toContain("load(debouncedSearch);");
   });
 
   it("passes Matrix colour fields through and renders the database swatch", () => {
@@ -32,6 +54,19 @@ describe("Order Genius colour rule page contract", () => {
     }
     expect(gridSource).toContain("parseOrderGeniusColourSwatch(p.data?.colourHex)");
     expect(gridSource).not.toContain("'carbon crystal black'");
+  });
+
+  it("surfaces incomplete identities and keeps BOM/Matrix colour edits shared", () => {
+    expect(pageSource).toContain("invalidIdentitySkuCount");
+    expect(pageSource).toContain("invalidIdentitySampleMaterialCodes");
+    expect(pageSource).toContain("setOrderGeniusColourHexRuleStandard");
+    expect(pageSource).toContain("Updated shared");
+  });
+
+  it("uses a neutral swatch border while retaining keyboard focus", () => {
+    expect(pageSource).toContain("className=\"bom-colour-swatch-button\"");
+    expect(pageSource).not.toContain("2px solid #3b82f6");
+    expect(pageSource).toContain("1px solid #d1d5db");
   });
 
   it("keeps tier repricing as a separate backend-derived report", () => {

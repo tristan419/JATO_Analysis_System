@@ -13447,6 +13447,11 @@ table.data-table tr.data-table-group-row.contains-selection td {
   width: 112px;
 }
 
+.bom-colour-swatch-button:focus-visible {
+  outline: 2px solid #1d4ed8;
+  outline-offset: 2px;
+}
+
 .bom-colour-code-edit-grid input[readonly] {
   color: #64748b;
   background: #f8fafc;

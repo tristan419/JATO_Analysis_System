@@ -49,6 +49,7 @@ import type {
   ColourHexRule,
   ColourHexRuleSummary,
   ColourSurchargeRule,
+  SpecialColourSurchargeRule,
   ColourTierRepriceReport,
   CountryMaterialFinanceRow,
   CountryMaterialFinanceUpdate,
@@ -86,6 +87,21 @@ const DEFAULT_COLOUR_SURCHARGES: Record<string, number> = {
   "OMODA|special": 200,
   "JAECOO|dual": 300,
   "JAECOO|special": 300,
+};
+type SpecialColourSurchargeDraft = {
+  brand: string;
+  modelName: string;
+  colourCode: string;
+  colourName: string;
+  surchargeEur: string;
+};
+
+const EMPTY_SPECIAL_COLOUR_SURCHARGE_DRAFT: SpecialColourSurchargeDraft = {
+  brand: "OMODA",
+  modelName: "",
+  colourCode: "",
+  colourName: "",
+  surchargeEur: "0",
 };
 const BOM_ADMIN_FIXED_COLUMN_COUNT = 9;
 const BOM_ADMIN_COUNTRY_COLUMN_WIDTH = 75;
@@ -2961,6 +2977,7 @@ export function OrderGeniusPage() {
           onGridReady={(api) => { gridApiRef.current = api; }}
           onToggleGroup={toggleProductGroup}
           onTogglePiRow={togglePiBatchRow}
+          columnWidthStorageScope={user?.username}
         />
       ) : (
         <div style={{ padding: 32, textAlign: "center", color: "#64748b" }}>
@@ -3038,6 +3055,7 @@ type BomCopyDraftSku = {
 };
 
 type BomDraftFobEntry = {
+  baseFobEur?: number | null;
   uploadedFobEur?: number | null;
   finalFobEur?: number | null;
   paymentTermCode?: string | null;
@@ -3050,6 +3068,8 @@ type BomDraftFobEntry = {
 type BomFobPatch = {
   materialCode: string;
   countryCode: string;
+  baseFobEur?: number | null;
+  colourSurchargeEur?: number | null;
   finalFobEur: number | null;
   paymentTermCode?: string | null;
   fobSourceMode?: string | null;
@@ -3107,6 +3127,7 @@ type BomAdminPageCache = {
 
 const BOM_ADMIN_PAGE_CACHE_KEY = "order-genius:bom-admin";
 const BOM_ADMIN_PAGE_CACHE_TTL_MS = 30 * 60 * 1000;
+const BOM_ADMIN_COLOUR_LOOKUP_DELAY_MS = 1200;
 const EMPTY_BOM_ADMIN_COPY_COUNTRY_FORM: BomAdminCopyCountryForm = {
   sourceCountryCode: "",
   targetCountryCode: "",
@@ -3184,6 +3205,29 @@ type BomAddColourEditor = {
   colourHexTouched: boolean;
 };
 
+function getBomColourCodeEditorTargetKey(editor: BomColourCodeEditor | null): string | null {
+  if (!editor) return null;
+  return [
+    editor.materialCode,
+    editor.brand,
+    editor.modelName,
+    editor.version,
+    editor.currentColourCode,
+  ].join("|");
+}
+
+function getBomAddColourEditorTargetKey(editor: BomAddColourEditor | null): string | null {
+  if (!editor) return null;
+  return [
+    editor.bomTemplate,
+    editor.sourceMaterialCode,
+    editor.brand,
+    editor.modelName,
+    editor.version,
+    editor.tierName,
+  ].join("|");
+}
+
 type BomColourTierReview = {
   previousTier: BomAdminColourTier;
   nextTier: BomAdminColourTier;
@@ -3198,6 +3242,8 @@ const EMPTY_COLOUR_HEX_RULE_SUMMARY: ColourHexRuleSummary = {
   swatchConflict: 0,
   complete: 0,
   fillableSkus: 0,
+  invalidIdentitySkuCount: 0,
+  invalidIdentitySampleMaterialCodes: [],
 };
 
 const COLOUR_RULE_STATUS_META: ReadonlyArray<{
@@ -3278,6 +3324,7 @@ interface BomFinanceQuickCard {
 }
 
 type BomFobEditor = {
+  bomTemplate?: string | null;
   materialCodes: string[];
   countryCode: string;
   fob: number | null;
@@ -3340,7 +3387,7 @@ function getDraftBaseFob(
   fob: BomDraftFobEntry | null | undefined,
 ): number | null {
   if (!fob) return null;
-  const raw = fob.finalFobEur ?? fob.uploadedFobEur;
+  const raw = fob.baseFobEur ?? fob.finalFobEur ?? fob.uploadedFobEur;
   if (raw == null) return null;
   const numeric = Number(raw);
   return Number.isFinite(numeric) && numeric > 0 ? numeric : null;
@@ -3369,7 +3416,7 @@ function formatBomSourceLabel(
 
 // ── BOM Admin Panel ──────────────────────────────────────────────────
 
-function BomAdminPanel({
+export function BomAdminPanel({
   initialCopyTargetCountry = null,
   onFobCountriesChanged,
   onFobChanged,
@@ -3381,6 +3428,7 @@ function BomAdminPanel({
   const cachedBomAdmin = cachedBomAdminRef.current;
   const cachedSearchText = cachedBomAdmin?.searchText ?? "";
   const initialBomLoadSearchRef = useRef(cachedSearchText.trim());
+  const appliedBomSearchRef = useRef(cachedSearchText.trim());
   const skipNextDebouncedLoadRef = useRef(true);
   const [skus, setSkus] = useState<any[]>([]);
   const [countries, setCountries] = useState<string[]>([]);
@@ -3440,6 +3488,10 @@ function BomAdminPanel({
   const [colourSurchargeDrafts, setColourSurchargeDrafts] = useState<Record<string, string>>({});
   const [colourSurchargeStatus, setColourSurchargeStatus] = useState("");
   const [savingColourSurcharges, setSavingColourSurcharges] = useState(false);
+  const [specialColourSurchargeRules, setSpecialColourSurchargeRules] = useState<SpecialColourSurchargeRule[]>([]);
+  const [specialColourSurchargeDraft, setSpecialColourSurchargeDraft] = useState<SpecialColourSurchargeDraft>(EMPTY_SPECIAL_COLOUR_SURCHARGE_DRAFT);
+  const [specialColourSurchargeStatus, setSpecialColourSurchargeStatus] = useState("");
+  const [savingSpecialColourSurcharge, setSavingSpecialColourSurcharge] = useState(false);
   const [colourHexRules, setColourHexRules] = useState<ColourHexRule[]>([]);
   const [colourHexRuleSummary, setColourHexRuleSummary] = useState<ColourHexRuleSummary>(EMPTY_COLOUR_HEX_RULE_SUMMARY);
   const [colourHexRuleStatus, setColourHexRuleStatus] = useState("");
@@ -3490,8 +3542,12 @@ function BomAdminPanel({
   const loadRef = useRef(false);  // prevent concurrent loads
   const currentLoadKeyRef = useRef<string | null>(null);
   const pendingLoadKeyRef = useRef<string | null>(null);
+  const latestLoadKeyRef = useRef(cachedSearchText.trim());
   const loadTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);  // debounce loads
   const activeFobCountriesRef = useRef<string[]>([]);
+
+  const colourCodeEditorTargetKey = getBomColourCodeEditorTargetKey(colourCodeEditor);
+  const addColourEditorTargetKey = getBomAddColourEditorTargetKey(addColourEditor);
 
   // NL always first, then alphabetical
   const sortedCountries = useMemo(() => {
@@ -3586,6 +3642,22 @@ function BomAdminPanel({
     return rule ? Number(rule.surchargeEur) : DEFAULT_COLOUR_SURCHARGES[key] ?? 0;
   };
 
+  const resolveSpecialColourSurcharge = (sku: any): { amount: number; source: string } | null => {
+    const brand = String(sku?.brand || "").trim().toUpperCase();
+    const model = String(sku?.modelName || "").trim().toUpperCase();
+    const code = String(sku?.colourCode || "").trim().toUpperCase();
+    if (!brand || !code) return null;
+    const matches = specialColourSurchargeRules.filter((rule) => (
+      String(rule.brand || "").trim().toUpperCase() === brand
+      && String(rule.colourCode || "").trim().toUpperCase() === code
+    ));
+    const modelRule = matches.find((rule) => String(rule.modelName || "").trim().toUpperCase() === model);
+    if (modelRule) return { amount: Number(modelRule.surchargeEur), source: `${brand} ${model} + ${code}` };
+    const brandRule = matches.find((rule) => !String(rule.modelName || "").trim());
+    if (brandRule) return { amount: Number(brandRule.surchargeEur), source: `${brand} + ${code}` };
+    return null;
+  };
+
   const formatBomFobTooltip = (
     countryCode: string,
     baseFob: number | null | undefined,
@@ -3613,6 +3685,7 @@ function BomAdminPanel({
       return `copied from ${fobSourceCountryCode || "source country"}`;
     }
     if (fobSourceMode === "manual_country_adjust") return "manual country adjustment";
+    if (fobSourceMode === "template_base" || fobSourceMode === "template_base_country_adjust") return "template base + colour rule";
     if (fobSourceMode === "manual_edit") return "manual edit";
     if (fobSourceMode === "explicit_price_by_payment_term") return "uploaded/resolved FOB";
     return "";
@@ -3621,6 +3694,7 @@ function BomAdminPanel({
   const getBomFobSourceMarker = (fobSourceMode?: string | null): string => {
     if (fobSourceMode === "copied_from_country") return "C";
     if (fobSourceMode === "manual_country_adjust") return "B";
+    if (fobSourceMode === "template_base" || fobSourceMode === "template_base_country_adjust") return "T";
     if (fobSourceMode === "manual_edit") return "M";
     return "";
   };
@@ -3660,6 +3734,15 @@ function BomAdminPanel({
     }
   }, []);
 
+  const loadSpecialColourSurcharges = useCallback(async () => {
+    try {
+      const res = await api.getOrderGeniusSpecialColourSurcharges();
+      setSpecialColourSurchargeRules(res.items || []);
+    } catch (e) {
+      setSpecialColourSurchargeStatus(getErrorMessage(e));
+    }
+  }, []);
+
   const loadColourHexRules = useCallback(async () => {
     try {
       setLoadingColourHexRules(true);
@@ -3674,12 +3757,20 @@ function BomAdminPanel({
     }
   }, []);
 
-  const load = useCallback(async (s?: string) => {
-    const loadKey = s ?? "";
+  const load = useCallback(async (requestedSearch?: string) => {
+    // An omitted search means refresh the currently applied query. An explicit
+    // empty string is the Clear action and must remain distinguishable.
+    const loadKey = requestedSearch === undefined
+      ? appliedBomSearchRef.current
+      : requestedSearch.trim();
+    if (requestedSearch !== undefined) {
+      appliedBomSearchRef.current = loadKey;
+    }
+    latestLoadKeyRef.current = loadKey;
     if (loadRef.current) {
-      if (currentLoadKeyRef.current !== loadKey) {
-        pendingLoadKeyRef.current = loadKey;
-      }
+      // Keep only the latest user intent. Empty string is meaningful here: it
+      // represents an explicit Clear and must not be collapsed into "none".
+      pendingLoadKeyRef.current = loadKey;
       return;
     }
     loadRef.current = true;
@@ -3687,10 +3778,10 @@ function BomAdminPanel({
     setLoading(true);
     setBomAdminError("");
     try {
-      const normalizedSearch = String(s || "").trim().toUpperCase();
+      const normalizedSearch = loadKey.toUpperCase();
       const isCountry = /^[A-Z]{2}$/.test(normalizedSearch);
       const params: { country?: string; search?: string } = {};
-      if (s) {
+      if (loadKey) {
         if (isCountry) {
           const fobCountries = activeFobCountriesRef.current;
           if (fobCountries.includes(normalizedSearch)) {
@@ -3714,17 +3805,18 @@ function BomAdminPanel({
               countryCode: current.countryCode || normalizedSearch,
             }));
           } else {
-            params.search = s;
+            params.search = loadKey;
             setBomAdminNotice("");
           }
         } else {
-          params.search = s;
+          params.search = loadKey;
           setBomAdminNotice("");
         }
       } else {
         setBomAdminNotice("");
       }
       const res = await api.getBomAdmin(Object.keys(params).length > 0 ? params : undefined);
+      if (latestLoadKeyRef.current !== loadKey) return;
       const nextItems = res.items || [];
       setSkus(nextItems);
       setOptimisticColourTiers((current) => {
@@ -3746,7 +3838,9 @@ function BomAdminPanel({
       setBomAdminError("");
     } catch (e) {
       console.error('[BOM Admin]', e);
-      setBomAdminError(getErrorMessage(e));
+      if (latestLoadKeyRef.current === loadKey) {
+        setBomAdminError(getErrorMessage(e));
+      }
     }
     finally {
       loadRef.current = false;
@@ -3755,9 +3849,7 @@ function BomAdminPanel({
       const pendingLoadKey = pendingLoadKeyRef.current;
       pendingLoadKeyRef.current = null;
       if (pendingLoadKey !== null) {
-        window.setTimeout(() => {
-          void load(pendingLoadKey || undefined);
-        }, 0);
+        void load(pendingLoadKey);
       }
     }
   }, []);
@@ -3798,8 +3890,14 @@ function BomAdminPanel({
         const hasRemarkUpdate = Object.prototype.hasOwnProperty.call(update, "remark");
         fobByCountry[update.countryCode] = {
           ...existing,
-          uploadedFobEur: update.finalFobEur,
+          baseFobEur: Object.prototype.hasOwnProperty.call(update, "baseFobEur")
+            ? update.baseFobEur
+            : existing.baseFobEur,
+          uploadedFobEur: update.baseFobEur ?? update.finalFobEur,
           finalFobEur: update.finalFobEur,
+          colourSurchargeEur: Object.prototype.hasOwnProperty.call(update, "colourSurchargeEur")
+            ? update.colourSurchargeEur
+            : existing.colourSurchargeEur,
           paymentTermCode: update.paymentTermCode ?? existing.paymentTermCode ?? null,
           fobSourceMode: update.fobSourceMode ?? existing.fobSourceMode ?? "manual_edit",
           fobSourceCountryCode: update.fobSourceCountryCode ?? existing.fobSourceCountryCode ?? null,
@@ -3869,14 +3967,18 @@ function BomAdminPanel({
     }));
   }, [patchBomSkus]);
 
-  useEffect(() => { load(initialBomLoadSearchRef.current || undefined); }, [load]);
+  useEffect(() => { load(initialBomLoadSearchRef.current); }, [load]);
   useEffect(() => { void loadColourSurcharges(); }, [loadColourSurcharges]);
+  useEffect(() => { void loadSpecialColourSurcharges(); }, [loadSpecialColourSurcharges]);
   useEffect(() => { void loadColourHexRules(); }, [loadColourHexRules]);
 
   useEffect(() => {
     const brand = String(colourCodeEditor?.brand || "").trim();
     const colourCode = String(colourCodeEditor?.nextColourCode || "").trim().toUpperCase();
+    const targetKey = colourCodeEditorTargetKey;
     const requestId = ++colourCodeLookupRequestRef.current;
+    setColourCodeRuleLookup(null);
+    setColourCodeEditorError("");
     if (!brand || !/^[A-Z0-9]{1,4}$/.test(colourCode)) {
       setColourCodeRuleLookup(null);
       setLoadingColourCodeRuleLookup(false);
@@ -3888,7 +3990,11 @@ function BomAdminPanel({
         if (colourCodeLookupRequestRef.current !== requestId) return;
         setColourCodeRuleLookup(lookup);
         setColourCodeEditor((current) => {
-          if (!current || current.nextColourCode.trim().toUpperCase() !== colourCode) return current;
+          if (
+            !current
+            || getBomColourCodeEditorTargetKey(current) !== targetKey
+            || current.nextColourCode.trim().toUpperCase() !== colourCode
+          ) return current;
           if (lookup.source !== "brand_code_rule" || lookup.hasNameConflict || lookup.hasSwatchConflict) {
             return current;
           }
@@ -3912,14 +4018,17 @@ function BomAdminPanel({
           setLoadingColourCodeRuleLookup(false);
         }
       });
-    }, 180);
+    }, BOM_ADMIN_COLOUR_LOOKUP_DELAY_MS);
     return () => window.clearTimeout(timer);
-  }, [colourCodeEditor?.brand, colourCodeEditor?.nextColourCode]);
+  }, [colourCodeEditorTargetKey, colourCodeEditor?.nextColourCode]);
 
   useEffect(() => {
     const brand = String(addColourEditor?.brand || "").trim();
     const colourCode = String(addColourEditor?.colourCode || "").trim().toUpperCase();
+    const targetKey = addColourEditorTargetKey;
     const requestId = ++addColourLookupRequestRef.current;
+    setAddColourRuleLookup(null);
+    setAddColourEditorError("");
     if (!brand || !/^[A-Z0-9]{1,4}$/.test(colourCode)) {
       setAddColourRuleLookup(null);
       setLoadingAddColourRuleLookup(false);
@@ -3931,7 +4040,11 @@ function BomAdminPanel({
         if (addColourLookupRequestRef.current !== requestId) return;
         setAddColourRuleLookup(lookup);
         setAddColourEditor((current) => {
-          if (!current || current.colourCode.trim().toUpperCase() !== colourCode) return current;
+          if (
+            !current
+            || getBomAddColourEditorTargetKey(current) !== targetKey
+            || current.colourCode.trim().toUpperCase() !== colourCode
+          ) return current;
           if (lookup.source !== "brand_code_rule" || lookup.hasNameConflict || lookup.hasSwatchConflict) {
             return current;
           }
@@ -3955,9 +4068,9 @@ function BomAdminPanel({
           setLoadingAddColourRuleLookup(false);
         }
       });
-    }, 180);
+    }, BOM_ADMIN_COLOUR_LOOKUP_DELAY_MS);
     return () => window.clearTimeout(timer);
-  }, [addColourEditor?.brand, addColourEditor?.colourCode]);
+  }, [addColourEditorTargetKey, addColourEditor?.colourCode]);
 
   const replaceFinanceRow = (
     rows: CountryMaterialFinanceRow[],
@@ -4102,7 +4215,7 @@ function BomAdminPanel({
       skipNextDebouncedLoadRef.current = false;
       return;
     }
-    load(debouncedSearch || undefined);
+    load(debouncedSearch);
   }, [debouncedSearch, load]);
 
   useEffect(() => {
@@ -4165,6 +4278,34 @@ function BomAdminPanel({
     const originalFob = editFob.originalFob != null && editFob.originalFob > 0 ? editFob.originalFob : null;
     const didChangeFob = nextFob !== originalFob;
     try {
+      if (editFob.bomTemplate?.includes("**")) {
+        const result = await api.updateBomTemplateFob({
+          bomTemplate: editFob.bomTemplate,
+          materialCodes: editFob.materialCodes,
+          countryCode: editFob.countryCode,
+          baseFobEur: nextFob,
+          remark,
+        });
+        const detailUpdates: BomFobPatch[] = result.details.flatMap((detail) => {
+          const materialCode = String(detail.materialCode || "");
+          if (!materialCode) return [];
+          return [{
+            materialCode,
+            countryCode: editFob.countryCode,
+            baseFobEur: result.baseFobEur,
+            colourSurchargeEur: detail.colourSurchargeEur == null ? null : Number(detail.colourSurchargeEur),
+            finalFobEur: detail.finalFobEur == null ? null : Number(detail.finalFobEur),
+            fobSourceMode: result.baseFobEur == null ? null : "template_base",
+            fobSourceCountryCode: null,
+            remark,
+          }];
+        });
+        patchBomFobs(detailUpdates);
+        setEditFob(null);
+        scheduleLoad(1200);
+        onFobChanged?.();
+        return;
+      }
       const responses: BomFobSaveResponse[] = [];
       for (const mc of editFob.materialCodes) {
         responses.push(await api.updateSkuFob(mc, { countryCode: editFob.countryCode, finalFobEur: editFob.fob, remark }) as BomFobSaveResponse);
@@ -4530,6 +4671,54 @@ function BomAdminPanel({
       return;
     }
 
+    if (bomKey.includes("**")) {
+      setBulkFobSavingKey(bomKey);
+      try {
+        const templateUpdates: BomFobPatch[] = [];
+        for (const countryCode of editor.selectedCountries) {
+          const sourceSku = allSkus.find((sku: any) => getDraftBaseFob(sku?.fobByCountry?.[countryCode]) != null);
+          const currentBase = getDraftBaseFob(sourceSku?.fobByCountry?.[countryCode]);
+          if (currentBase == null) continue;
+          const result = await api.updateBomTemplateFob({
+            bomTemplate: bomKey,
+            materialCodes: allSkus.map((sku: any) => String(sku.materialCode || "")),
+            countryCode,
+            baseFobEur: Math.max(0, Number((currentBase + numericDelta).toFixed(2))),
+            remark: getBomCountryFobRemark(allSkus, countryCode) || null,
+          });
+          for (const detail of result.details) {
+            const materialCode = String(detail.materialCode || "");
+            if (!materialCode) continue;
+            templateUpdates.push({
+              materialCode,
+              countryCode,
+              baseFobEur: result.baseFobEur,
+              colourSurchargeEur: detail.colourSurchargeEur == null ? null : Number(detail.colourSurchargeEur),
+              finalFobEur: detail.finalFobEur == null ? null : Number(detail.finalFobEur),
+              fobSourceMode: "template_base_country_adjust",
+              remark: getBomCountryFobRemark(allSkus, countryCode),
+            });
+          }
+        }
+        if (templateUpdates.length === 0) throw new Error("Selected countries do not have a template base yet.");
+        patchBomFobs(templateUpdates);
+        updateBulkFobEditor(bomKey, allSkus, (current) => ({ ...current, deltaEur: String(numericDelta) }));
+        setBulkFobErrors((prev) => {
+          if (!prev[bomKey]) return prev;
+          const next = { ...prev };
+          delete next[bomKey];
+          return next;
+        });
+        scheduleLoad(1200);
+        onFobChanged?.();
+      } catch (err) {
+        setBulkFobErrors((prev) => ({ ...prev, [bomKey]: getErrorMessage(err) }));
+      } finally {
+        setBulkFobSavingKey((current) => (current === bomKey ? null : current));
+      }
+      return;
+    }
+
     const updates: Array<{
       materialCode: string;
       countryCode: string;
@@ -4603,32 +4792,6 @@ function BomAdminPanel({
   const pickFobSourceSkuForNewColour = (tierSkus: any[], allSkus: any[]): any | null =>
     tierSkus.find(hasPositiveFob) || allSkus.find(hasPositiveFob) || null;
 
-  const copyPositiveFobsToMaterial = async (
-    targetMaterialCode: string,
-    sourceSku: any | null,
-  ): Promise<BomFobPatch[]> => {
-    if (!targetMaterialCode || !sourceSku) return [];
-    const updates: BomFobPatch[] = [];
-    const sourceFobs = (sourceSku.fobByCountry as Record<string, BomDraftFobEntry>) || {};
-    for (const [countryCode, fob] of Object.entries(sourceFobs)) {
-      const baseFob = getDraftBaseFob(fob);
-      if (baseFob == null) continue;
-      await api.updateSkuFob(targetMaterialCode, {
-        countryCode,
-        finalFobEur: baseFob,
-        paymentTermCode: fob.paymentTermCode ?? undefined,
-      });
-      updates.push({
-        materialCode: targetMaterialCode,
-        countryCode,
-        finalFobEur: baseFob,
-        paymentTermCode: fob.paymentTermCode,
-        fobSourceMode: "copied_from_template_colour",
-      });
-    }
-    return updates;
-  };
-
   const handleCopyMaterialFromBom = (
     draftKey: string,
     bomTemplate: string,
@@ -4642,6 +4805,12 @@ function BomAdminPanel({
     ).trim().toUpperCase();
     const sourceInfo = ref.sourcePayload || {};
     const modelName = String(ref.modelName || "");
+    const templateBaseSource = allSkus.find((sku: any) => {
+      if (getEffectiveColourTier(sku) === "single" && hasPositiveFob(sku)) return true;
+      return Object.values((sku?.fobByCountry as Record<string, BomDraftFobEntry>) || {}).some(
+        (fob) => fob?.baseFobEur != null,
+      );
+    });
     const baseDraft: BomCopyDraft = {
       draftKey,
       sourceBomTemplate: initialTemplate,
@@ -4662,7 +4831,7 @@ function BomAdminPanel({
       effectiveTo: ref.effectiveTo ? String(ref.effectiveTo) : null,
       remark: getBomTemplateRemark(allSkus),
       fobByCountry: Object.fromEntries(
-        Object.entries(ref.fobByCountry || {}).map(([countryCode, fob]) => [
+        Object.entries(templateBaseSource?.fobByCountry || {}).map(([countryCode, fob]) => [
           countryCode,
           { ...((fob as BomDraftFobEntry) || {}) },
         ]),
@@ -4714,6 +4883,7 @@ function BomAdminPanel({
       setCopyDraftErrors((prev) => ({ ...prev, [draftKey]: "Multiple colours need a BOM template with **." }));
       return;
     }
+    const isTemplateBaseCopy = normalizedTemplate.includes("**");
 
     const targetCodes = draft.skus.map((sku) =>
       resolveMaterialCodeFromTemplate(normalizedTemplate, sku.colourCode, sku.sourceMaterialCode),
@@ -4783,16 +4953,18 @@ function BomAdminPanel({
             rowVersion: 1,
           });
         }
-        for (const countryCode of draft.bulkSelectedCountries) {
-          const fob = draft.fobByCountry[countryCode];
-          const baseFob = getDraftBaseFob(fob);
-          if (baseFob == null) continue;
-          await api.updateSkuFob(materialCode, {
-            countryCode,
-            finalFobEur: Number(baseFob),
-            paymentTermCode: fob?.paymentTermCode ?? undefined,
-            remark: fob?.remark ?? null,
-          });
+        if (!isTemplateBaseCopy) {
+          for (const countryCode of draft.bulkSelectedCountries) {
+            const fob = draft.fobByCountry[countryCode];
+            const baseFob = getDraftBaseFob(fob);
+            if (baseFob == null) continue;
+            await api.updateSkuFob(materialCode, {
+              countryCode,
+              finalFobEur: Number(baseFob),
+              paymentTermCode: fob?.paymentTermCode ?? undefined,
+              remark: fob?.remark ?? null,
+            });
+          }
         }
         createdSkus.push({
           materialCode,
@@ -4813,21 +4985,54 @@ function BomAdminPanel({
           effectiveTo: draft.effectiveTo,
           remark: draft.remark,
           rowVersion: 1,
-          fobByCountry: Object.fromEntries(
-            draft.bulkSelectedCountries.flatMap((countryCode) => {
-              const fob = draft.fobByCountry[countryCode];
-              const baseFob = getDraftBaseFob(fob);
-              return baseFob == null
-                ? []
-                : [[countryCode, {
-                  ...fob,
-                  uploadedFobEur: Number(baseFob),
-                  finalFobEur: Number(baseFob),
-                  fobSourceMode: "manual_edit",
-                }]];
-            }),
-          ),
+          fobByCountry: isTemplateBaseCopy
+            ? {}
+            : Object.fromEntries(
+                draft.bulkSelectedCountries.flatMap((countryCode) => {
+                  const fob = draft.fobByCountry[countryCode];
+                  const baseFob = getDraftBaseFob(fob);
+                  return baseFob == null
+                    ? []
+                    : [[countryCode, {
+                      ...fob,
+                      uploadedFobEur: Number(baseFob),
+                      finalFobEur: Number(baseFob),
+                      fobSourceMode: "manual_edit",
+                    }]];
+                }),
+              ),
         });
+      }
+      if (isTemplateBaseCopy) {
+        for (const countryCode of draft.bulkSelectedCountries) {
+          const baseFob = getDraftBaseFob(draft.fobByCountry[countryCode]);
+          if (baseFob == null) continue;
+          const result = await api.updateBomTemplateFob({
+            bomTemplate: normalizedTemplate,
+            materialCodes: createdSkus.map((sku) => String(sku.materialCode || "")),
+            countryCode,
+            baseFobEur: Number(baseFob),
+            remark: draft.remark || null,
+          });
+          const detailsByMaterial = new Map(
+            result.details.map((detail) => [String(detail.materialCode || ""), detail]),
+          );
+          for (const createdSku of createdSkus) {
+            const detail = detailsByMaterial.get(String(createdSku.materialCode || ""));
+            if (!detail) continue;
+            createdSku.fobByCountry = {
+              ...(createdSku.fobByCountry || {}),
+              [countryCode]: {
+                ...(draft.fobByCountry[countryCode] || {}),
+                baseFobEur: result.baseFobEur,
+                uploadedFobEur: result.baseFobEur,
+                colourSurchargeEur: detail.colourSurchargeEur == null ? null : Number(detail.colourSurchargeEur),
+                finalFobEur: detail.finalFobEur == null ? null : Number(detail.finalFobEur),
+                fobSourceMode: "template_base",
+              },
+            };
+          }
+        }
       }
       setSkus((current) => {
         const existingCodes = new Set(current.map((sku) => bomMaterialKey(sku?.materialCode)));
@@ -4873,6 +5078,37 @@ function BomAdminPanel({
       setColourSurchargeStatus(getErrorMessage(e));
     } finally {
       setSavingColourSurcharges(false);
+    }
+  };
+
+  const handleSaveSpecialColourSurcharge = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    const brand = specialColourSurchargeDraft.brand.trim().toUpperCase();
+    const colourCode = specialColourSurchargeDraft.colourCode.trim().toUpperCase();
+    const modelName = specialColourSurchargeDraft.modelName.trim();
+    const surchargeEur = Number(specialColourSurchargeDraft.surchargeEur.trim());
+    if (!brand || !colourCode || !Number.isFinite(surchargeEur) || surchargeEur < 0) {
+      setSpecialColourSurchargeStatus("Brand, colour code and a non-negative surcharge are required.");
+      return;
+    }
+    try {
+      setSavingSpecialColourSurcharge(true);
+      setSpecialColourSurchargeStatus("");
+      const result = await api.updateOrderGeniusSpecialColourSurcharge({
+        brand,
+        modelName: modelName || null,
+        colourCode,
+        colourName: specialColourSurchargeDraft.colourName.trim() || null,
+        surchargeEur,
+      });
+      await Promise.all([loadSpecialColourSurcharges(), load()]);
+      const repriced = Number(result.reprice?.changed || 0);
+      setSpecialColourSurchargeStatus(`Saved ${brand}${modelName ? ` ${modelName}` : ""} ${colourCode}: +${surchargeEur} EUR${repriced ? `; repriced ${repriced} automatic FOB rows` : ""}.`);
+      setSpecialColourSurchargeDraft(EMPTY_SPECIAL_COLOUR_SURCHARGE_DRAFT);
+    } catch (e) {
+      setSpecialColourSurchargeStatus(getErrorMessage(e));
+    } finally {
+      setSavingSpecialColourSurcharge(false);
     }
   };
 
@@ -5015,11 +5251,13 @@ function BomAdminPanel({
       setColourCodeEditorError("This code cannot be auto-filled: enter a colour name before saving it.");
       return;
     }
-    const nextColourHexPayload = buildSwatchPayload(
-      colourCodeEditor.nextColourHex,
-      colourCodeEditor.nextColourHex2,
-      colourCodeEditor.isDualSwatch,
-    );
+    const nextColourHexPayload = colourCodeEditor.colourHexTouched
+      ? buildSwatchPayload(
+        colourCodeEditor.nextColourHex,
+        colourCodeEditor.nextColourHex2,
+        colourCodeEditor.isDualSwatch,
+      )
+      : String(colourCodeEditor.currentColourHex || "").trim().toUpperCase();
     const nextColourHexParts = nextColourHexPayload ? nextColourHexPayload.split("|") : [];
     if (nextColourHexParts.some((part) => !isColourPickerValue(part))) {
       setColourCodeEditorError("Swatch must use #RRGGBB.");
@@ -5032,9 +5270,28 @@ function BomAdminPanel({
       setColourCodeEditor(null);
       return;
     }
+    const canSaveSharedStandard = !codeChanged
+      && (nameChanged || hexChanged)
+      && Boolean(nextName)
+      && Boolean(nextColourHex)
+      && nextColourHexParts.every((part) => isColourPickerValue(part));
     setSavingColourCodeEditor(true);
     setColourCodeEditorError("");
     try {
+      if (canSaveSharedStandard) {
+        const result = await api.setOrderGeniusColourHexRuleStandard({
+          brand: colourCodeEditor.brand,
+          colourCode: nextCode,
+          colourName: nextName,
+          colourHex: nextColourHex || "",
+        });
+        setBomAdminError("");
+        setBomAdminNotice(`Updated shared ${nextCode} rule across ${result.updated} SKUs.`);
+        setColourCodeEditor(null);
+        await Promise.all([loadColourHexRules(), load()]);
+        onFobChanged?.();
+        return;
+      }
       const result = await api.updateColourCode(colourCodeEditor.materialCode, {
         colourCode: nextCode,
         colourName: colourCodeEditor.colourNameTouched ? nextName : undefined,
@@ -5143,7 +5400,7 @@ function BomAdminPanel({
     setSavingAddColourEditor(true);
     setAddColourEditorError("");
     try {
-      await api.createMaterialSku({
+      const created = await api.createMaterialSku({
         materialCode,
         bomTemplate: addColourEditor.bomTemplate,
         brand: addColourEditor.brand,
@@ -5155,24 +5412,27 @@ function BomAdminPanel({
         colourType: addColourEditor.tierName === "single" ? "single" : addColourEditor.tierName,
         colourTier: addColourEditor.tierName,
         powertrain: addColourEditor.powertrain,
+        sourceMaterialCode: addColourEditor.fobSourceSku?.materialCode,
+        automaticFobs: Boolean(addColourEditor.fobSourceSku),
         remark: String(addColourEditor.fobSourceSku?.remark || "").trim() || undefined,
       });
-      await api.updateColourTier(materialCode, addColourEditor.tierName);
       if (addColourEditor.interiorColorName) {
         await api.updateSkuInterior(materialCode, {
           interiorColorName: addColourEditor.interiorColorName,
           editionTag: addColourEditor.editionTag,
         });
       }
-      const copiedFobs = await copyPositiveFobsToMaterial(materialCode, addColourEditor.fobSourceSku);
+      const automaticFobs = created?.automaticFobs as { created?: number; skippedNoBase?: number } | undefined;
+      const copiedFobs = Number(automaticFobs?.created || 0);
+      const skippedFobs = Number(automaticFobs?.skippedNoBase || 0);
       setBomAdminError("");
       setBomAdminNotice(
-        copiedFobs.length > 0
-          ? `Created ${materialCode}; copied ${copiedFobs.length} FOB values.`
-          : `Created ${materialCode}; no source FOB was available to copy.`,
+        copiedFobs > 0
+          ? `Created ${materialCode}; initialized ${copiedFobs} automatic FOB values${skippedFobs > 0 ? `; ${skippedFobs} countries lack a Single base.` : ""}.`
+          : `Created ${materialCode}; no automatic FOB was created${skippedFobs > 0 ? ` because ${skippedFobs} countries lack a Single base.` : "."}`,
       );
       setAddColourEditor(null);
-      if (copiedFobs.length > 0) {
+      if (copiedFobs > 0) {
         onFobChanged?.();
       }
       await load();
@@ -5316,23 +5576,25 @@ function BomAdminPanel({
     return () => window.cancelAnimationFrame(frame);
   }, [financeQuickCard]);
 
+  // Focus only when a different editor target opens. Field edits and lookup
+  // responses must never steal the caret from the input the user is typing in.
   useEffect(() => {
-    if (!colourCodeEditor) return;
+    if (!colourCodeEditorTargetKey) return;
     const frame = window.requestAnimationFrame(() => {
       colourCodeEditorInputRef.current?.focus();
       colourCodeEditorInputRef.current?.select();
     });
     return () => window.cancelAnimationFrame(frame);
-  }, [colourCodeEditor]);
+  }, [colourCodeEditorTargetKey]);
 
   useEffect(() => {
-    if (!addColourEditor) return;
+    if (!addColourEditorTargetKey) return;
     const frame = window.requestAnimationFrame(() => {
       addColourEditorCodeRef.current?.focus();
       addColourEditorCodeRef.current?.select();
     });
     return () => window.cancelAnimationFrame(frame);
-  }, [addColourEditor]);
+  }, [addColourEditorTargetKey]);
 
   const toggleAddMaterialForm = () => {
     const nextVisible = !showAddMaterial;
@@ -5456,10 +5718,13 @@ function BomAdminPanel({
     const colourCode = String(s.colourCode || "").trim().toUpperCase();
     const colourName = String(s.colour || "").trim();
     const canEditSwatchRule = Boolean(brand && colourCode && colourName);
+    const specialSurcharge = effectiveTier === "special" ? resolveSpecialColourSurcharge(s) : null;
+    const surchargeAmount = specialSurcharge?.amount ?? getColourSurchargeAmount(brand, effectiveTier);
+    const surchargeSource = specialSurcharge?.source ?? `${brand} ${effectiveTier} default`;
     const surchargeLabel = effectiveTier === "dual"
       ? `Dual +${formatSurchargeDraft(getColourSurchargeAmount(brand, "dual"))}€`
       : effectiveTier === "special"
-        ? `Special +${formatSurchargeDraft(getColourSurchargeAmount(brand, "special"))}€`
+        ? `Special +${formatSurchargeDraft(surchargeAmount)}€`
         : "Single";
 
     return (
@@ -5471,7 +5736,7 @@ function BomAdminPanel({
           setDragSku(s.materialCode);
         } : undefined}
         onDragEnd={editing ? () => { setDragSku(null); setDragOverTier(null); dragMaterialCode.current = null; } : undefined}
-        title={`${s.colour}${s.colourCode ? ` (${s.colourCode})` : ''}${swatch.isDual ? ' · dual swatch' : ''}${swatch.isMissing ? ' · missing swatch' : ''} · Tier: ${effectiveTier} — Drag to reclassify, click swatch to edit colour rule`}
+        title={`${s.colour}${s.colourCode ? ` (${s.colourCode})` : ''}${swatch.isDual ? ' · dual swatch' : ''}${swatch.isMissing ? ' · missing swatch' : ''} · Tier: ${effectiveTier} · ${surchargeSource} — Drag to reclassify, click swatch to edit colour rule`}
         style={{
           display: "inline-flex",
           alignItems: "center",
@@ -5485,6 +5750,7 @@ function BomAdminPanel({
       >
         <button
           type="button"
+          className="bom-colour-swatch-button"
           title={canEditSwatchRule
             ? `Edit swatch rule for ${brand} ${colourCode} ${colourName}`
             : "Missing brand, colour code or colour name"}
@@ -5519,7 +5785,7 @@ function BomAdminPanel({
             padding: 0,
             borderRadius: 3,
             flexShrink: 0,
-            border: swatch.isMissing ? '1px dashed #94a3b8' : '2px solid #3b82f6',
+            border: swatch.isMissing ? '1px dashed #94a3b8' : '1px solid #d1d5db',
             background: swatch.background,
             opacity: isHist ? 0.5 : 1,
             cursor: "pointer",
@@ -5580,7 +5846,7 @@ function BomAdminPanel({
             height: 16,
             borderRadius: 3,
             flexShrink: 0,
-            border: swatch.isMissing ? "1px dashed #94a3b8" : "2px solid #3b82f6",
+            border: swatch.isMissing ? "1px dashed #94a3b8" : "1px solid #d1d5db",
             background: swatch.background,
           }}
         />
@@ -5703,7 +5969,7 @@ function BomAdminPanel({
   }, [groupByTemplate, sortedVersionEntriesByModelKey]);
 
   const retryBomAdminLoad = () => {
-    void load(debouncedSearch || searchText || undefined);
+    void load();
   };
 
   const reLoginForBomAdmin = () => {
@@ -5839,7 +6105,7 @@ function BomAdminPanel({
               if (event.key === "Enter") {
                 const nextSearch = searchText.trim();
                 setDebouncedSearch(nextSearch);
-                void load(nextSearch || undefined);
+                void load(nextSearch);
               }
             }}
             className="bom-admin-search-input" />
@@ -5849,7 +6115,7 @@ function BomAdminPanel({
             onClick={async () => {
               setSearchText("");
               setDebouncedSearch("");
-              await load();
+              await load("");
               window.setTimeout(() => searchInputRef.current?.focus(), 0);
             }}
           >
@@ -6041,6 +6307,39 @@ function BomAdminPanel({
                     </div>
                   ) : null}
                 </form>
+                <form className="bom-admin-tool-tile" onSubmit={handleSaveSpecialColourSurcharge}>
+                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 7 }}>
+                    <span style={{ fontSize: 11, fontWeight: 800, color: "#334155" }}>Special Colour Overrides</span>
+                    <button className="btn btn-sm btn-primary" type="submit" disabled={savingSpecialColourSurcharge}>
+                      {savingSpecialColourSurcharge ? "Saving..." : "Save"}
+                    </button>
+                  </div>
+                  <div style={{ display: "grid", gridTemplateColumns: "72px 1fr 70px 1fr 64px", gap: 5, alignItems: "center" }}>
+                    <select value={specialColourSurchargeDraft.brand} onChange={(e) => setSpecialColourSurchargeDraft((prev) => ({ ...prev, brand: e.target.value }))} style={{ fontSize: 10 }}>
+                      {BOM_ADMIN_SURCHARGE_BRANDS.map((brand) => <option key={brand}>{brand}</option>)}
+                    </select>
+                    <input type="text" placeholder="Model (blank = brand)" value={specialColourSurchargeDraft.modelName} onChange={(e) => setSpecialColourSurchargeDraft((prev) => ({ ...prev, modelName: e.target.value }))} style={{ fontSize: 10 }} />
+                    <input type="text" placeholder="Code" value={specialColourSurchargeDraft.colourCode} onChange={(e) => setSpecialColourSurchargeDraft((prev) => ({ ...prev, colourCode: e.target.value.toUpperCase() }))} style={{ fontSize: 10, textTransform: "uppercase" }} />
+                    <input type="text" placeholder="Colour name (optional)" value={specialColourSurchargeDraft.colourName} onChange={(e) => setSpecialColourSurchargeDraft((prev) => ({ ...prev, colourName: e.target.value }))} style={{ fontSize: 10 }} />
+                    <input type="number" min={0} step={1} placeholder="EUR" value={specialColourSurchargeDraft.surchargeEur} onChange={(e) => setSpecialColourSurchargeDraft((prev) => ({ ...prev, surchargeEur: e.target.value }))} style={{ fontSize: 10 }} />
+                  </div>
+                  <div style={{ marginTop: 6, fontSize: 9, color: "#64748b" }}>Priority: model + code → brand + code → brand Special. 0 EUR explicitly waives the fallback.</div>
+                  {specialColourSurchargeRules.length > 0 ? (
+                    <div style={{ display: "grid", gap: 3, marginTop: 7, maxHeight: 94, overflowY: "auto" }}>
+                      {specialColourSurchargeRules.map((rule) => (
+                        <button key={rule.specialColourSurchargeRuleId} type="button" className="btn btn-sm btn-ghost" onClick={() => setSpecialColourSurchargeDraft({ brand: rule.brand, modelName: rule.modelName || "", colourCode: rule.colourCode, colourName: rule.colourName || "", surchargeEur: String(rule.surchargeEur) })} style={{ display: "flex", justifyContent: "space-between", gap: 8, padding: "3px 5px", fontSize: 9, textAlign: "left" }}>
+                          <span>{rule.brand}{rule.modelName ? ` · ${rule.modelName}` : ""} · {rule.colourCode}{rule.colourName ? ` · ${rule.colourName}` : ""}</span>
+                          <strong>+{rule.surchargeEur} EUR</strong>
+                        </button>
+                      ))}
+                    </div>
+                  ) : null}
+                  {specialColourSurchargeStatus ? (
+                    <div style={{ marginTop: 7, fontSize: 11, color: specialColourSurchargeStatus.startsWith("Saved") ? "#0f766e" : "#b45309" }}>
+                      {specialColourSurchargeStatus}
+                    </div>
+                  ) : null}
+                </form>
                 <div className="bom-admin-tool-tile" style={{ minHeight: 124 }}>
                   <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 7 }}>
                     <span style={{ fontSize: 11, fontWeight: 800, color: "#334155" }}>Colour Swatch Rules</span>
@@ -6051,6 +6350,12 @@ function BomAdminPanel({
                   <div style={{ fontSize: 10, color: "#64748b", marginBottom: 7 }}>
                     {colourHexRuleSummary.totalRules} rules · {colourHexRuleSummary.fillableSkus} SKU fields can be filled
                   </div>
+                  {colourHexRuleSummary.invalidIdentitySkuCount > 0 ? (
+                    <div style={{ marginBottom: 7, padding: "6px 8px", border: "1px solid #fbbf24", background: "#fffbeb", color: "#92400e", fontSize: 10, lineHeight: 1.35 }}>
+                      {colourHexRuleSummary.invalidIdentitySkuCount} SKU(s) are excluded from shared rules because Brand + colour code is incomplete.
+                      {colourHexRuleSummary.invalidIdentitySampleMaterialCodes.length > 0 ? ` Sample: ${colourHexRuleSummary.invalidIdentitySampleMaterialCodes.join(", ")}` : ""}
+                    </div>
+                  ) : null}
                   <div style={{ display: "grid", gridTemplateColumns: "repeat(5, minmax(0, 1fr))", gap: 4 }}>
                     {COLOUR_RULE_STATUS_META.map((meta) => (
                       <button key={meta.status} type="button" className="btn btn-sm btn-ghost" onClick={() => setColourRuleDetailsStatus(meta.status)} style={{ padding: 4, display: "grid", gap: 2, color: meta.colour }}>
@@ -6399,6 +6704,9 @@ function BomAdminPanel({
               </div>
               <div className="bom-colour-code-edit-note">
                 Material code, colour name, FOB, quantities, lifecycle, PI references and CBU rows will move together.
+              </div>
+              <div className="bom-colour-code-edit-note">
+                Saving a name or swatch without changing the code updates the shared Brand + Code colour rule.
               </div>
               {colourCodeEditorError ? <div className="bom-colour-code-edit-error">{colourCodeEditorError}</div> : null}
               <div className="bom-finance-action-bar">
@@ -6981,6 +7289,7 @@ function BomAdminPanel({
                                         return;
                                       }
                                       setEditFob({
+                                        bomTemplate: String(bomTemplate || ""),
                                         materialCodes: allCodes,
                                         countryCode: c,
                                         fob: baseFob ?? null,
@@ -7528,6 +7837,7 @@ function BomAdminPanel({
                         label: "Edit FOB",
                         onClick: () => {
                           setEditFob({
+                            bomTemplate: financeQuickCard.materialCode,
                             materialCodes: financeQuickCard.materialCodes,
                             countryCode: financeQuickCard.countryCode,
                             fob: financeQuickCard.fob,
@@ -7578,7 +7888,7 @@ function BomAdminPanel({
             <div className="bom-fob-edit-card">
               <div>
                 <span className="bom-finance-eyebrow">BOM ADMIN · FOB</span>
-                <h4>Edit FOB</h4>
+                <h4>{editFob.bomTemplate?.includes("**") ? "Edit template base FOB" : "Edit FOB"}</h4>
                 <p>{editFob.materialCodes.length} material codes</p>
               </div>
               <div className="bom-fob-edit-source-line">
@@ -7602,7 +7912,7 @@ function BomAdminPanel({
                   />
                 </label>
                 <label>
-                  <span>FOB EUR</span>
+                  <span>{editFob.bomTemplate?.includes("**") ? "Base FOB EUR" : "FOB EUR"}</span>
                   <input
                     type="number"
                     value={editFob.fob ?? ""}
