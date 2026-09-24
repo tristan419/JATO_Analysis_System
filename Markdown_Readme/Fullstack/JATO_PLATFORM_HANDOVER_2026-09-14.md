@@ -4,7 +4,7 @@
 
 本节覆盖下方“C/D 已完成、只需合并”的旧结论。C7 第一批已在 BOM 独立 worktree 本地实现，但仍未合并或部署；本轮没有写正式数据。
 
-- 新增双色不加价不限于 J5：现有流程先在无 FOB 时重算，再复制来源最终价并落为 manual_edit，后续加价又被手动保护跳过。C7 第一批已在 `codex/bom-colour-followup` 修正新增颜色路径，业务提交 `eb10c0e`：后端按同模板/国家/付款条件 Single 基准＋统一规则在事务内初始化，前端不再逐国调用手动 FOB 复制；Copy Material 和其他自动入口仍待核对。
+- 新增双色不加价不限于 J5：现有流程先在无 FOB 时重算，再复制来源最终价并落为 manual_edit，后续加价又被手动保护跳过。C7 两个本地批次已在 `codex/bom-colour-followup` 修正新增颜色和导入路径，业务提交 `eb10c0e`、`be2b85e`：后端按同模板/国家/付款条件 Single 基准＋统一规则在事务内初始化，前端不再逐国调用手动 FOB 复制，导入也保存 base/surcharge 元数据；Copy Material 和其他入口仍待核对。
 - 用户确认品牌默认 Dual：OMODA +200 EUR、JAECOO +300 EUR；Matte 是 Special，不叠加 Dual。特例 OMODA7 Matte +200、OMODA9 Matte +300，由用户在页面指定品牌、色码和可选车型维护，不硬编码。
 - 特殊价表、API 和后端匹配已存在；本批已在现有 Colour Surcharges 接入列表/编辑并在 Special 色卡 tooltip 展示实际命中来源。优先级为车型色码特例→品牌色码特例→品牌 Special 默认；0 表示免加价，停用才回退。真正的预览→应用、停用和完整回退明细仍待后续批次。详见 [BOM 实施文档 C5–C8](../features/BOM_ADMIN_CANDIDATE_ACCEPTANCE_2026-09-15.md)。
 - D@34656898 仍需修新标签 null 返回误报、旧核验响应覆盖，并补重登前后真实数量/BOM 草稿测试。历史 403 个测试通过不能替代这些验收。该代码提交日期为 9 月 15 日，9 月 23 日是文档更新日期。
@@ -13,9 +13,9 @@
 
 ### C7 第一批实绩（2026-09-24）
 
-- C worktree：`/Users/litristan/Downloads/JATO_Analysis_System_bom_colour`，分支 `codex/bom-colour-followup`，业务提交 `eb10c0ead4a49e4d7f4152dabb63d04143b0676e`；基线 `579ea01e`。未合并、未部署 Candidate、未更新 Active/www/intl。
-- 已改：`create_material_sku` 的自动 FOB 初始化、同模板 Single 基准和统一 surcharge 解析；Add Colour 移除旧的逐国 manual 复制；现有 Special surcharge 列表/编辑 UI 与来源 tooltip 初接；对应后端/前端测试。
-- 已验：后端新用例 `3 passed`；后端该文件总计 `41 passed, 5 failed`，5 项均为此前已知的 `list_bom_admin_country_columns` / `sync_missing_template_fobs` 基线缺口；前端类型检查、73 files / 399 tests、构建、路由回归均通过。
+- C worktree：`/Users/litristan/Downloads/JATO_Analysis_System_bom_colour`，分支 `codex/bom-colour-followup`，业务提交 `eb10c0ead4a49e4d7f4152dabb63d04143b0676e`、`be2b85eb8be8b01979b3ee4672c3e03f4a052575`；基线 `579ea01e`。未合并、未部署 Candidate、未更新 Active/www/intl。
+- 已改：`create_material_sku` 的自动 FOB 初始化、同模板 Single 基准和统一 surcharge 解析；Add Colour 移除旧的逐国 manual 复制；导入 `uploaded_base_plus_colour` 复用同一解析并保存 base/surcharge；现有 Special surcharge 列表/编辑 UI 与来源 tooltip 初接；对应后端/前端测试。
+- 已验：后端新增用例 `4 passed`；后端该文件总计 `43 passed, 5 failed`，5 项均为此前已知的 `list_bom_admin_country_columns` / `sync_missing_template_fobs` 基线缺口；前端类型检查、73 files / 399 tests、构建、路由回归均通过。
 - 未验：Candidate 浏览器、普通 Dual 与 OMODA7/9 Matte 特例、BOM/Matrix 双入口一致、manual/no-base、多国家基准、C5/C6 预览/应用/停用、Copy Material 和其他自动入口。保留 Hermes 自动事件文件 dirty，不纳入业务提交。
 
 ## 2026-09-15 更新：先读这里

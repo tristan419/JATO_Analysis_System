@@ -25,6 +25,13 @@
 
 未验项与下一批：在 Candidate 真实浏览器验证普通 Dual、OMODA7/9 Matte 特例、J5 及非 J5、多国家不同 Single 基准、manual/no-base 保护、BOM/Matrix 一致；补 C5/C6 预览/应用/停用和 C7 其他自动入口。D 继续按原计划，不与本批混合。
 
+### 2026-09-24 · C7 第二批：导入解析复用统一颜色规则（本地已实现，未合并）
+
+- 在同一 C worktree 继续提交 `be2b85eb8be8b01979b3ee4672c3e03f4a052575`。`app/services/order_genius_service.py::_resolve_fob_for_sku` 的 `uploaded_base_plus_colour` 现在使用 `_effective_colour_tier` 和 `repo.get_colour_surcharge_amount_for_sku`，因此导入路径也遵守车型＋色码 → 品牌＋色码 → 品牌 Special/ Dual 默认的解析；明确最终价模式仍不叠加。
+- 自动解析行现在写入 `base_fob_eur`、`colour_surcharge_eur` 和 `final_fob_eur`，后续重算能识别基准与加价；没有改手动编辑保护。
+- 新增回归测试：Special 导入基准 15000、特例 +200 时得到 15200，并保留 base/surcharge 元数据。聚焦 4 项新用例通过；完整后端文件当前 `43 passed, 5 failed`，5 个失败仍为上一批记录的既有基线缺口。
+- 本批仍未合并/部署，未做 Candidate 浏览器验收；Copy Material、基准价导入的明确最终价分支和 C5/C6 预览/应用/停用仍待验。
+
 ### 2026-09-24 · 通用颜色加价与特殊价管理（已确认方案，C7 前为未实现口径）
 
 本节优先于下文“C/D 已完成”“下一步只需合并”的历史表述；其中 C7 第一批已由上一个小节记录。本节其余 C5/C6/C8 仍是待实施方案，未部署或写正式数据。
@@ -63,7 +70,7 @@
 |---|---|---|---|
 | A 输入/自动填充/搜索 | 本地实现已收口；尚未部署验收 | 第 13 节 A 收口记录 + 第 12 节 A | Candidate 新构件复验：输入焦点、1.2 秒查库、保存后搜索保持 |
 | B Model/列宽 | 本地实现完成；尚未合并/Candidate 验收 | `codex/bom-model-layout` / `53976fc0`；Grid 默认 280px、优先固定 Model、用户列宽初始化与持久化 | 本地类型、单测、构建、路由回归通过；待 Candidate 在 2200/1400/1100px 与 80/100/125% 实测 |
-| C J5 品牌、颜色共享、加价 | 原 C/E 本地实现加上 C7 第一批已完成；C5/C6 其他入口与 Candidate 验收未完成 | `codex/bom-colour-followup` / `2218c0df` + `eb10c0e`；新增颜色按 Single 基准初始化，Special 规则列表/编辑和来源 tooltip 初接 | 后端新用例 3 passed；全量后端 41 passed/5 个已知基线失败；前端 73 files / 399 tests、类型、构建、路由通过；待 Candidate 核对实际价格和手动保护 |
+| C J5 品牌、颜色共享、加价 | 原 C/E 本地实现加上 C7 两批已完成；C5/C6 其他入口与 Candidate 验收未完成 | `codex/bom-colour-followup` / `2218c0df` + `eb10c0e` + `be2b85e`；新增颜色与导入都按 Single 基准初始化，Special 规则列表/编辑和来源 tooltip 初接 | 后端新用例 4 passed；全量后端 43 passed/5 个已知基线失败；前端 73 files / 399 tests、类型、构建、路由通过；待 Candidate 核对实际价格和手动保护 |
 | D 登录失效 | 对齐 main 后的衔接修正已在本地完成；尚未合并/Candidate 验收 | `codex/bom-auth-feedback`：`f6887fb3` + `34656898`；保留 #228 认证逻辑，区分 401/403、网络/5xx，登录新标签保留原页草稿 | 类型检查、全量单测、构建、路由回归已通过；待 PR 审阅及 Candidate 浏览器验收 |
 | #215 同模板跨车型/版本 | 专项验收未完成 | 第 12.2 节：构造两个真实渲染行并点击 Edit | 只有被点的目标行打开；不是仅比较 key 字符串 |
 | #220 Matrix/保护逻辑 | 部分读取和 Apply 已验，其他待验 | 第 3 节未验项 + C 的用例 | 两个编辑入口保存后 BOM/Matrix 一致；tier/manual/no-base 样本验证 |
