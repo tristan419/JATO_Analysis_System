@@ -1,56 +1,60 @@
 # JATO Platform 开发交接与恢复入口
 
-## 2026-09-24 用户澄清：先修模板基准价语义
+## 2026-09-24 新增：PI 批次不可见、余量下单与日期选品
+
+需求与只读源码证据已整理到 [日期选品、月内多批 PI 与 WVTA](../features/ORDER_GENIUS_DATED_SELECTION_PI_BATCH_WVTA_2026-09-24.md)。优先检查 PI 列表国家/月混合状态和请求失败被吞成空列表；现有 allocation plan 可复用为“总量/已进 PI/余量”，继续下单不清零原始订单。模板基准收口后另批增加国家日级价格期间，再接生产日期与 WVTA 匹配。尚未查正式数据库、实施业务代码或部署，不能将截图 409 视为本次 PI 创建成功。
+
+## 2026-09-24 当前状态：四批 BOM 已合入，Candidate 待业务登录验收
 
 最高优先级：BOM 含 `**` 的模板行输入是按国家维护的基准价；Single=基准+0，Dual/Special=基准+适用规则。人工基准应保留，派生颜色仍随基准、分类及规则变化重算。旧文档“保护手动最终 FOB”不能用于冻结模板编辑生成的颜色价格。
 
-现有 `handleFobSave` 将模板下所有颜色写入同一最终价并标成 `manual_edit` 的根因，已在 C worktree 的 `83a45c63` 修复；新增颜色/导入三个提交与本批模板语义现在连续，但仍未合并或部署。不能假定数据库存在独立 `**` 价格记录，也不能简单禁止非 `**` 请求。明确最终价导入与历史数据单独识别，不自动回填正式数据。
+现有 `handleFobSave` 将模板下所有颜色写入同一最终价并标成 `manual_edit` 的根因，已由 C 批次修复并随 PR #229 合入；新增颜色/导入与模板基准语义现在都在最终 main。不能假定数据库存在独立 `**` 价格记录，也不能简单禁止非 `**` 请求。明确最终价导入与历史数据单独识别，不自动回填正式数据。
 
-完整实施及数值验收见 [BOM 实施文档第 13 节“用户澄清：模板基准价与派生颜色价格”](../features/BOM_ADMIN_CANDIDATE_ACCEPTANCE_2026-09-15.md)。模板基准批次已在 C worktree 本地实现，提交为 `83a45c63`，仍未合并、部署或写正式数据；后续历史描述与此节实际记录冲突时以本节为准。
+完整实施及数值验收见 [BOM 实施文档第 13 节“用户澄清：模板基准价与派生颜色价格”](../features/BOM_ADMIN_CANDIDATE_ACCEPTANCE_2026-09-15.md)。模板基准批次已随 C PR #229 合入；最终 main 为 `efe5ac0f5b11`，Candidate 已由 run [35960030314](https://github.com/tristan419/JATO_Analysis_System/actions/runs/35960030314) 准备成功。当前只剩浏览器业务验收，登录凭据暂时无效；Active/www/intl 未更新。
 
-### 2026-09-24 模板基准批次实绩（待合并/Candidate）
+### 2026-09-24 模板基准批次实绩（已合入，Candidate 待数值验收）
 
 - C worktree `/Users/litristan/Downloads/JATO_Analysis_System_bom_colour`、分支 `codex/bom-colour-followup` 已修正 `handleFobSave(allCodes)` 的根因：`**` 模板行按国家保存 `base_fob_eur`，后端同事务按 Single/Dual/Special 规则派生最终价，不再把同一输入逐颜色写成 `manual_edit`。
 - 同批覆盖模板读取、拖动 tier 后重算、最后一个 Single 移走保留基准、Copy Material、模板批量调价、国家复制/调整和前端本地派生结果；普通非 `**` SKU 仍走原逐 SKU 最终价路径，明确最终价导入保持不二次加价。
 - 本地验证：模板/规则聚焦 6 项通过；`test_ordering_bom_admin.py` 为 `46 passed, 5 failed`，5 项均为该分支此前已知的 country-column / `sync_missing_template_fobs` 基线缺口；Python compileall 通过；前端类型检查、73 files / 399 tests、构建、路由回归通过。构建只有既有大 chunk warning。
-- 未完成：没有创建/更新远端 PR，没有合并 main，没有准备 Candidate；仍需在 Candidate 实测 15000→15500→15800、多国家基准、Special 特例、无基准/manual 保护、BOM/Matrix 双入口、Copy/拖动交互。Hermes 自动事件文件继续保持 dirty，不纳入业务提交。
+- 未完成：尚未在 Candidate 实测 15000→15500→15800、多国家基准、Special 特例、无基准/manual 保护、BOM/Matrix 双入口、Copy/拖动交互。Candidate 已准备但 `candidateAdmin / 123456` 返回 `Invalid credentials`，需先取得正确测试凭据。Hermes 自动事件文件继续保持 dirty，不纳入业务提交。
 
-## 2026-09-24 更新：颜色定价需求与收口状态
+## 2026-09-24 更新：颜色定价需求与收口状态（代码已合入，业务验收待登录）
 
-本节覆盖下方“C/D 已完成、只需合并”的旧结论。C7 第一批已在 BOM 独立 worktree 本地实现，但仍未合并或部署；本轮没有写正式数据。
+本节覆盖下方“C/D 已完成、只需合并”的旧结论。C/B/A/D 已按 C → B → A → D 合入最终 main 并准备一次 Candidate；以下颜色规则与模板代码已部署到 Candidate，但尚未完成浏览器业务验收。本轮没有写 Active/www/intl 或正式业务数据。
 
 - 新增双色不加价不限于 J5：旧流程先在无 FOB 时重算，再复制来源最终价并落为 manual_edit，后续加价又被手动保护跳过。C7 现有四个业务提交已在 `codex/bom-colour-followup` 修正新增颜色、导入和模板入口：后端按同模板/国家/付款条件 Single 基准＋统一规则初始化，模板编辑/Copy Material/批量调价/国家复制调整也保存 base/surcharge 元数据；明确最终价不伪装成 Single 基准。C5/C6 的预览、应用和停用回退仍待后续。
 - 用户确认品牌默认 Dual：OMODA +200 EUR、JAECOO +300 EUR；Matte 是 Special，不叠加 Dual。特例 OMODA7 Matte +200、OMODA9 Matte +300，由用户在页面指定品牌、色码和可选车型维护，不硬编码。
 - 特殊价表、API 和后端匹配已存在；本批已在现有 Colour Surcharges 接入列表/编辑并在 Special 色卡 tooltip 展示实际命中来源。优先级为车型色码特例→品牌色码特例→品牌 Special 默认；0 表示免加价，停用才回退。真正的预览→应用、停用和完整回退明细仍待后续批次。详见 [BOM 实施文档 C5–C8](../features/BOM_ADMIN_CANDIDATE_ACCEPTANCE_2026-09-15.md)。
 - D@34656898 已修复新标签登录误报、旧核验响应覆盖和 401/403/网络错误分类；真实浏览器的低权限 403、过期 token、网络断开及重登前后数量/BOM 草稿仍待验收。历史 403 个测试通过不能替代这些验收。该代码提交日期为 9 月 15 日，9 月 23 日是文档更新日期。
-- 用户希望已稳定修复先进入 Candidate：先核对 A/B 必要交互验证及组合结果，C/E 既有部分可分批准备并明确未修定价；D 补齐后再纳入。通过现有 PR→main→Candidate 流程，记录实际部署 SHA；不把 Candidate 验收等同于 Active 发布。
+- Candidate 实际身份、部署报告和登录阻塞见 BOM 验收文档第 13 节；取得正确凭据后统一验收 A/B/C/D 组合，不把 Candidate 验收等同于 Active 发布。
 - 最新文档位于 handover worktree；上次远端核对 #227 尚未包含本地修订，后续应重新核对远端，不能直接合并旧版。
 
-### C7 第三批实绩（2026-09-24）
+### C7 第三批实绩（2026-09-24；记录时未合入，后续已随 PR #229 合入）
 
-- C worktree：`/Users/litristan/Downloads/JATO_Analysis_System_bom_colour`，分支 `codex/bom-colour-followup`，业务提交 `83a45c63`；未合并、未部署 Candidate、未更新 Active/www/intl。
+- C worktree：`/Users/litristan/Downloads/JATO_Analysis_System_bom_colour`，分支 `codex/bom-colour-followup`，业务提交 `83a45c63`；后续随 PR #229 合入并部署到当前 Candidate，未更新 Active/www/intl。
 - 已改：模板 `PATCH /order-genius/bom-templates/fob`、`base_fob_eur` 派生保存与历史记录；模板编辑、批量调价、Copy Material、国家复制/调整遵守基准＋颜色规则；tier 重算不冻结模板派生价。
 - 已验：后端聚焦 6 passed，完整文件 46 passed / 5 known baseline failures；前端 73 files / 399 tests、类型、构建、路由回归通过。Candidate 数值与双入口浏览器验收仍待进行。
 
-### C7 第一批实绩（2026-09-24）
+### C7 第一批实绩（2026-09-24；记录时未合入，后续已随 PR #229 合入）
 
-- C worktree：`/Users/litristan/Downloads/JATO_Analysis_System_bom_colour`，分支 `codex/bom-colour-followup`，业务提交 `eb10c0ead4a49e4d7f4152dabb63d04143b0676e`、`be2b85eb8be8b01979b3ee4672c3e03f4a052575`、`282cd1218dd4235ca40392f3c91387e66aa0cad8`；基线 `579ea01e`。未合并、未部署 Candidate、未更新 Active/www/intl。
+- C worktree：`/Users/litristan/Downloads/JATO_Analysis_System_bom_colour`，分支 `codex/bom-colour-followup`，业务提交 `eb10c0ead4a49e4d7f4152dabb63d04143b0676e`、`be2b85eb8be8b01979b3ee4672c3e03f4a052575`、`282cd1218dd4235ca40392f3c91387e66aa0cad8`；基线 `579ea01e`。后续随 PR #229 合入并部署到当前 Candidate，未更新 Active/www/intl。
 - 已改：`create_material_sku` 的自动 FOB 初始化、同模板 Single 基准和统一 surcharge 解析；Add Colour 移除旧的逐国 manual 复制；导入 `uploaded_base_plus_colour` 复用同一解析并保存 base/surcharge；现有 Special surcharge 列表/编辑 UI 与来源 tooltip 初接；对应后端/前端测试。
 - 已验：后端新增用例 `4 passed`；后端该文件总计 `43 passed, 5 failed`，5 项均为此前已知的 `list_bom_admin_country_columns` / `sync_missing_template_fobs` 基线缺口；前端类型检查、73 files / 399 tests、构建、路由回归均通过。
 - 未验：Candidate 浏览器、普通 Dual 与 OMODA7/9 Matte 特例、BOM/Matrix 双入口一致、manual/no-base、多国家基准、C5/C6 预览/应用/停用、Copy Material 和其他自动入口。保留 Hermes 自动事件文件 dirty，不纳入业务提交。
 
-## 2026-09-15 更新：先读这里
+## 2026-09-15 更新：历史快照（已被上方 2026-09-24 状态覆盖）
 
 此节取代下文 9 月 14 日的 Candidate 待切换结论；其他业务线仍是原日期快照，未在本轮重新盘点。
 
 - #226 / #228 已合并；新 Candidate 页面实测 commit `9011da6ac1f5`、artifact `f55a70fea05f`，沙箱尾号 `5b654a45`，快照开始于 2026-09-15 09:13:10。
-- 公网已直接使用现有应用登录，Basic Auth 已移除；本轮 `candidateAdmin` 实际登录成功，匿名/坏 token `/v1/auth/me` 为 401、有效身份为 200。不要再次按旧步骤 discard 或合并 #226/#228。
+- 四批 BOM PR 已按 C → B → A → D 合入；最终 main 为 `efe5ac0f5b11f547ca94942bd2a0ad0708822bb0`。自动 Candidate prepare run [35960030314](https://github.com/tristan419/JATO_Analysis_System/actions/runs/35960030314) 成功，Candidate 当前构件 archive `2810a3510337`、manifest `c7a49e45c7b4`，Active/www/intl 未更新。
+- Candidate 部署报告已确认沙箱/数据库隔离、Candidate backend、月更禁用、preview 和 `active_unchanged`；但本次浏览器使用此前约定的 `candidateAdmin / 123456` 返回 `Invalid credentials`，因此不要把本轮写成“登录成功”或“BOM 验收通过”。取得正确测试凭据后再继续统一验收，不要再次按旧步骤 discard 或合并 #226/#228。
 - BOM #220 已完成一次真实 Preview/Apply：仅 Candidate 的 8 行颜色名称被填充，前后 BOM API 比较 FOB/tier 等其他返回字段未变。完整验收尚未完成，不能标记可发布。
 - 新发现：J5 ICE 21 行、HEV 14 行品牌为空，联动影响色卡、规则统计和加价；Model 窄屏移位、输入抢焦点已复现；搜索保存后的无条件 reload 已定位。
-- B Model 布局已在 `/Users/litristan/Downloads/JATO_Analysis_System_bom_model_layout` 对齐 `main@9011da6a`，对齐提交 `ac59a832`，业务提交 `53976fc0` 保留；C（含 E）已对齐，提交 `579ea01e`，业务提交 `2218c0df` 保留。两批尚未合并远端 PR、未部署 Candidate，不能写成线上已修复。
-- D 登录失效提示已在 `/Users/litristan/Downloads/JATO_Analysis_System_bom_auth_feedback` 对齐提交 `f6887fb3`，并于 2026-09-23 完成最小衔接修正 `34656898`；原业务提交 `1a64194a` 保留。修正保留 #228 的真实 token、OAuth 隔离和访问控制，区分认证拒绝与网络/5xx，不因页面核验失败清身份；重新登录改为同源新标签，原页保留草稿并等待用户主动重试。D 尚未合并远端 PR、未部署 Candidate，不能写成线上已修复。
+- B Model、C 颜色规则和 D 登录失效提示均已在后续 PR #229–#232 合入并部署到当前 Candidate；本节列出的 `main@9011da6a`、未合并和旧 Candidate 版本仅是 9 月 15 日历史快照，不能当作当前状态。
 - 本地衔接批次已实跑：D `npm run check:types`、全量 Vitest（73 files / 403 tests）、`npm run build`、`npm run check:router-regression` 均通过；构建仅有既有大 chunk warning。尚未做真实浏览器的有效低权限 403、过期 token、网络断开及新标签登录前后草稿验收。
-- 下一步只做 B/C/D PR diff 与组合行为审阅，确认后按授权合并 main；随后由现有流程准备 Candidate，再做真实浏览器验收。不优先扩展多人编辑 row_version，不新增门禁。
+- 后续不再重复审阅/合并 B/C/D；取得正确 Candidate 凭据后直接做一次统一浏览器验收。不优先扩展多人编辑 row_version，不新增门禁。
 - 完整证据、沙箱写入清单和 TODO：[BOM Candidate 验收与问题梳理](../features/BOM_ADMIN_CANDIDATE_ACCEPTANCE_2026-09-15.md)。本轮没有更新 Active/www/intl，也没有合并文档 PR。
 
 ## 以下为 2026-09-14 历史盘点（Candidate 当前状态以上节为准）
@@ -438,13 +442,13 @@ Markdown_Readme/Fullstack/JATO_PLATFORM_HANDOVER_2026-09-14.md
 
 - [x] 本次审计已确认 main、PR、正式站前端版本和混合区统计口径。
 - [ ] **交接入口**：审阅本次 #227 文档修订，决定何时合并；合并前显式读取本 worktree，不把旧 main 中的 Goal 状态当最新指令。文档合并本身可能触发现有 main CI → Candidate 自动准备，不能当成完全无运行影响。
-- [x] **Candidate 登录入口**：#226/#228 已合并，新 Candidate 已部署，Basic Auth 已移除，9 月 15 日真实登录与 401/200 已复验；不要重做切换。
+- [ ] **Candidate 登录入口（本构件待凭据）**：#226/#228 逻辑已在最终 main，Candidate 部署成功且 Basic Auth 未启用；但本次构件对 `candidateAdmin / 123456` 返回 `Invalid credentials`，需取得正确账号密码后重新完成真实登录与 401/200 复验。不要把部署成功等同于登录验收通过。
 - [x] **Candidate BOM 写入样本**：现有 Preview/Apply 成功填充沙箱 8 行颜色名称；未向 Active/www/intl 发送业务写入。完整环境隔离以前序部署证据为准，不把单次 UI 测试等同于重新证明全部基础设施隔离。
 - [ ] **P1 BOM 基线验收**：在 Candidate 验证 #215 同模板只编辑当前行，以及 #220 名称/swatch、Preview/Apply、Matrix 一致性、manual FOB/no-base 保护。记录真实失败，不重新搬 #173。
-- [ ] **P1-A BOM 输入/搜索收尾**：本地实现已在原 `codex/bom-input-search-continuity` worktree 收口（`260f839a` 第一版 + `6eeddf3c` 收口提交）。已补搜索 A→B→A 最新意图、旧响应/错误隔离、lookup 目标生命周期和真实 `BomAdminPanel` 延迟 Promise 交互测试；类型检查、74 个测试文件/400 个测试、构建和路由回归通过。尚未部署 Candidate，仍需按 [BOM 文档第 13 节](../features/BOM_ADMIN_CANDIDATE_ACCEPTANCE_2026-09-15.md#13-实施记录)做浏览器验收；B 已完成本地实现但同样待 Candidate。
-- [ ] **P1-B BOM Model 布局**：已在 `main@9011da6a` 的独立 worktree/branch 完成本地实现（`codex/bom-model-layout`，业务提交 `53976fc0`，对齐提交 `ac59a832`），包含 Model 紧凑固定、其余列横向滚动、用户列宽持久化和显式重置；类型、单测、构建和路由回归通过。尚未合并或部署 Candidate，仍需按问题清单第 13 节做窄屏/缩放和刷新重载验收。
+- [ ] **P1-A BOM 输入/搜索收尾**：A 已随 PR #231 合入最终 main 并部署到当前 Candidate；本地已补搜索 A→B→A 最新意图、旧响应/错误隔离、lookup 目标生命周期和真实 `BomAdminPanel` 延迟 Promise 交互测试。尚未做 Candidate 浏览器验收，需在取得凭据后按 BOM 文档第 13 节实测。
+- [ ] **P1-B BOM Model 布局**：B 已随 PR #230 合入最终 main 并部署到当前 Candidate，包含 Model 紧凑固定、其余列横向滚动、用户列宽持久化和显式重置；尚未做 Candidate 窄屏/缩放/刷新重载验收。
 - [x] **P1 BOM 本地批次**：B（业务 `53976fc0`，对齐 `ac59a832`）、C（含 E，业务 `2218c0df`，对齐 `579ea01e`）和 D（原始 `1a64194a`，对齐 `f6887fb3`，衔接修正 `34656898`）已在各自独立 worktree 完成本地实现与验证；不要重新执行这些批次，也不优先建设多人编辑 row_version。
-- [ ] **P1 BOM PR 审阅与 Candidate 验收**：B/C/D 已完成对齐与 D 衔接修正，D 的类型、全量 403 测试、构建和路由回归已通过；下一步审阅三批相对 `main@9011da6a` 的 diff 与组合行为，获授权后合并，由现有 main-only 流程准备 Candidate；再验收布局、J5 加价、颜色双入口、manual/no-base 与认证草稿。当前没有新增合并、部署或正式数据写入授权。
+- [ ] **P1 BOM PR 审阅与 Candidate 验收**：B/C/A/D 已按 C → B → A → D 合并，最终 main `efe5ac0f5b11` 的 Candidate 已准备成功；业务验收尚未开始，当前先解决 Candidate 登录凭据无效，再统一验收布局、J5/通用与特殊颜色加价、颜色双入口、manual/no-base、FOB 和认证草稿。当前没有 Active/www/intl 更新授权。
 - [ ] **发布，单独决定**：若要让正式站看到已验收功能，另行批准把同一个已测构件 update-active；再按现有独立流程同步 intl，分别核验版本。Candidate 可用不等于必须立即发布。
 - [ ] **P2 其他研发**：按产品优先级选择 Config 本地 10 文件收口、AstrBot JATO MCP 整理，或 MSRP #183；不要求全项目依次排队。保留 #157 对 #179 的现有合并约束。
 - [ ] **P3 历史整理**：最后再审计旧 Draft PR/旧 worktree；未提交成果未确认前不关闭、删除或清理。

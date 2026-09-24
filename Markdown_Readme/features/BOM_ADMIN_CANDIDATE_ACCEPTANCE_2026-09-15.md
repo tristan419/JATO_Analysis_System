@@ -1,9 +1,19 @@
 # BOM Admin / Order Genius：Candidate 验收与问题梳理
 
-> 创建：2026-09-15；最新需求与状态修订：2026-09-24，Asia/Shanghai。状态：C7 新增颜色/导入与模板基准批次已在独立 worktree 本地实现；C5/C6/C8 仍部分待补，D 仍有交互缺口，整体尚未完成 Candidate 验收。
+> 2026-09-24 新需求另见 [国家日期选品、月内多批 PI 与 WVTA](ORDER_GENIUS_DATED_SELECTION_PI_BATCH_WVTA_2026-09-24.md)。时间价格建立在模板基准修复之上；PI 可见性故障优先独立处理，不能把本清单现有修复完成等同新需求完成。
+
+> 创建：2026-09-15；最新需求与状态修订：2026-09-24，Asia/Shanghai。状态：C/B/A/D 已按 C → B → A → D 合并到 main，Candidate 已由最终 main 自动准备；业务浏览器验收尚未开始，当前阻塞在 Candidate 登录凭据无效。
 > 用户目标：稳定填写订单、稳定列布局、跨物料共享颜色名称/色卡、正确计算颜色加价。暂不优先建设多人编辑、row_version 扩展或新门禁。
 > 初次调研只做验收和文档；之后 A 已有本地代码提交 `260f839a`，尚未部署验收。B/C（含 E）/D 的代码批次随后已各自在独立 worktree 完成，整个 BOM 修复仍未完成 Candidate 验收。
 > **下一位执行者先读第 13 节 9 月 24 日最新批次，再按第 12 节实施。** 保留已有成果；C 按 C5–C8 继续补齐，D 补交互缺口，不把历史测试通过当作完整收口。
+
+### 2026-09-24 · 四批合并后的 Candidate 准备结果（业务验收待登录）
+
+- 合并顺序已执行：C → B → A → D；四个 PR 均已通过 required checks 并合入远端 `main`。最终 main：`efe5ac0f5b11f547ca94942bd2a0ad0708822bb0`。
+- 自动 `production-release` run：[#35960030314](https://github.com/tristan419/JATO_Analysis_System/actions/runs/35960030314)，`prepare-candidate` 成功。
+- 实际构件身份：archive SHA-256 `2810a3510337ab7980ff1d19e9ac64f9276b23c9d4aaf619d363d747673c962b`；manifest SHA-256 `c7a49e45c7b4b6ce80f03b1948474af2f64b2b2c3c23bf10a0a9433257e14af9`；操作 ID `2026-09-24T053732954Z-prepare-candidate-91b3be18`。
+- Candidate 地址：`https://candidate.ojeur.cloud/product/order-genius`。部署报告通过 `candidate_sandbox_provisioned`、`candidate_database_isolation_verified`、`candidate_backend_verified`、`candidate_monthly_disabled_verified`、`candidate_preview_verified`、`active_unchanged`；本次没有 update-active、sync-intl 或正式数据写入。
+- 浏览器实际打开后页面显示 Candidate commit `efe5ac0f5b11`、artifact `2810a3510337`。使用此前口头约定的 `candidateAdmin / 123456` 登录返回 `Invalid credentials`，没有继续尝试未知密码，也没有写入 BOM 数据。必须先取得/恢复正确的 Candidate 测试凭据，再执行第 15 节统一验收；不能把部署成功写成业务验收通过。
 
 ## 13. 实施记录
 
@@ -19,7 +29,7 @@
 - 验收必须覆盖：OMODA 基准 15000→15500，Single=15500、Dual(+200)=15700；Dual 规则改 +300 后为15800且基准仍15500。再覆盖拖动分类、移走最后一个 Single、Special 特例、复制与批量调整、多国家不同基准、无基准、重复计算、备注单独保存不改变定价语义，以及 BOM/Matrix 一致。
 - 模板基准批次已在同一 C worktree 实现，提交见下一节；`eb10c0e`、`be2b85e`、`282cd121` 的新增颜色/导入成果继续保留。代码只改独立 worktree，没有合并远端、部署 Candidate、更新 Active/www/intl 或写正式数据。合并、Candidate 部署和 Active 发布仍按已有授权边界执行。
 
-### 2026-09-24 · C7 第三批：模板基准 FOB 与派生颜色重算（本地已实现，未合并）
+### 2026-09-24 · C7 第三批：模板基准 FOB 与派生颜色重算（记录时本地实现；后续已随 PR #229 合入）
 
 - worktree：`/Users/litristan/Downloads/JATO_Analysis_System_bom_colour`；分支：`codex/bom-colour-followup`；提交：`83a45c63 fix(bom): preserve template base FOB semantics`。本批以已有 `282cd121` 为工作树基础，保留用户澄清的模板语义：含 `**` 的模板按国家保存 Single 基准，Single=基准，Dual/Special=基准＋统一颜色规则；没有新增独立 `**` 数据模型，也没有禁止非 `**` SKU 请求。
 - 后端新增 `PATCH /order-genius/bom-templates/fob` 和 repository 同事务更新：读取/写入 `base_fob_eur`，按模板所有 active SKU 计算 `colour_surcharge_eur`/`final_fob_eur`，记录变化历史；清空基准会清理该模板国家行。模板编辑不再逐个 `updateSkuFob` 把同一输入标成 `manual_edit`。
@@ -30,9 +40,9 @@
 
 - 后端模板/规则聚焦用例 `6 passed`；完整 `tests/unit/test_ordering_bom_admin.py` 为 `46 passed, 5 failed`。5 个失败仍是本分支既有基线缺口：`list_bom_admin_country_columns` 缺失/旧 NL 预期 3 项，`sync_missing_template_fobs` 缺失 2 项；没有把它们写成此次通过。
 - `compileall` 通过；前端 `npm run check:types` 通过；全量 Vitest `73 files / 399 tests passed`；构建和路由回归通过（构建仅既有大 chunk warning）。
-- 当前未验：Candidate 浏览器中的 15000→15500→15800 数值链路、不同国家基准、OMODA/JAECOO/Special 规则、无基准与手动保护、BOM/Matrix 双入口、真实 Copy/拖动交互。模板批次仍未创建/更新 PR、未合并 main、未部署 Candidate。
+- 当前未验：Candidate 浏览器中的 15000→15500→15800 数值链路、不同国家基准、OMODA/JAECOO/Special 规则、无基准与手动保护、BOM/Matrix 双入口、真实 Copy/拖动交互。模板批次已随 PR #229 合入并部署到当前 Candidate，浏览器验收待正确登录凭据。
 
-### 2026-09-24 · C7 第一批：新增颜色自动 FOB 初始化与特殊价页面初接（本地已实现，未合并）
+### 2026-09-24 · C7 第一批：新增颜色自动 FOB 初始化与特殊价页面初接（记录时本地实现；后续已随 PR #229 合入）
 
 本批在 `/Users/litristan/Downloads/JATO_Analysis_System_bom_colour` 的 `codex/bom-colour-followup` 上实施，基线为已对齐的 `579ea01e`，业务提交 `eb10c0ead4a49e4d7f4152dabb63d04143b0676e`。没有合并远端、部署 Candidate、更新 Active/www/intl 或写正式数据。
 
@@ -50,12 +60,12 @@
 
 未验项与下一批：在 Candidate 真实浏览器验证普通 Dual、OMODA7/9 Matte 特例、J5 及非 J5、多国家不同 Single 基准、manual/no-base 保护、BOM/Matrix 一致；补 C5/C6 预览/应用/停用和 C7 其他自动入口。D 继续按原计划，不与本批混合。
 
-### 2026-09-24 · C7 第二批：导入解析复用统一颜色规则（本地已实现，未合并）
+### 2026-09-24 · C7 第二批：导入解析复用统一颜色规则（记录时本地实现；后续已随 PR #229 合入）
 
 - 在同一 C worktree 继续提交 `be2b85eb8be8b01979b3ee4672c3e03f4a052575`，随后提交 `282cd1218dd4235ca40392f3c91387e66aa0cad8` 收紧明确最终价语义。`app/services/order_genius_service.py::_resolve_fob_for_sku` 的 `uploaded_base_plus_colour` 现在使用 `_effective_colour_tier` 和 `repo.get_colour_surcharge_amount_for_sku`，因此导入路径也遵守车型＋色码 → 品牌＋色码 → 品牌 Special/ Dual 默认的解析；明确最终价模式仍不叠加且不写入 Single base 元数据。
 - 自动解析行现在写入 `base_fob_eur`、`colour_surcharge_eur` 和 `final_fob_eur`，后续重算能识别基准与加价；没有改手动编辑保护。
 - 新增回归测试：Special 导入基准 15000、特例 +200 时得到 15200，并保留 base/surcharge 元数据。聚焦 4 项新用例通过；完整后端文件当前 `43 passed, 5 failed`，5 个失败仍为上一批记录的既有基线缺口。
-- 本批仍未合并/部署，未做 Candidate 浏览器验收；Copy Material、基准价导入的明确最终价分支和 C5/C6 预览/应用/停用仍待验。
+- 本批已随 PR #229 合入并部署到当前 Candidate，尚未做 Candidate 浏览器验收；Copy Material、基准价导入的明确最终价分支和 C5/C6 预览/应用/停用仍待验。
 
 ### 2026-09-24 · 通用颜色加价与特殊价管理（已确认方案，C7 前为未实现口径）
 
@@ -71,10 +81,9 @@
 ### 9 月 15–23 日执行记录（当前状态以 9 月 24 日修订为准）
 
 - A 已有本地提交 `260f839a`、`6eeddf3c`；实际新增组件测试仅覆盖两项搜索场景。输入焦点、1200ms、关闭/切换目标、FOB 保存刷新等完整行为验证尚未补齐，因此不能称 A 已全部验收。
-- Candidate 最近核对仍为 `9011da6a`，没有上述修复。400 个测试是历史实跑结果，不代表本清单所有业务场景通过。
+- `9011da6a` 是 9 月 15 日历史 Candidate；当前 Candidate 为 `efe5ac0f5b11`，已包含下述修复。400 个测试是历史实跑结果，不代表本清单所有业务场景通过。
 - 后续五项对应：Model/列宽 → B；J5 空品牌/漏统计/加价 → C1/C2/C4；颜色双入口同步 → C3；登录提示 → D；蓝边框 → E。五项实施说明均在第 12 节，B/C（含 E）/D 的本地批次已完成。
-- B 已在独立 worktree 对齐最新远端 `main@9011da6a`，对齐合并提交为 `ac59a832`；原业务提交 `53976fc0` 保留。尚未合并远端 PR 或部署 Candidate。A 未部署不阻塞 B 本地开发。
-- C（含 E）已在独立 worktree 对齐同一 `main@9011da6a`，对齐合并提交为 `579ea01e`；原业务提交 `2218c0df` 保留。尚未合并远端 PR 或部署 Candidate；没有写入正式数据。
+- B 已随 PR #230、C（含 E）已随 PR #229 合入最终 main，并部署到当前 Candidate；上述 worktree 提交是历史审阅证据，不是当前发布状态。没有更新 Active/www/intl 或写入正式数据。
 - D 已在独立 worktree 对齐同一 `main@9011da6a`（对齐提交 `f6887fb3`），并完成衔接修正提交 `34656898`；原业务提交 `1a64194a` 保留。修正仅涉及认证核验结果分类、启动异常处理、页面内 403 核验和新标签登录，不改变后端权限或 #228 的 Candidate token/OAuth 隔离。
 - 本地衔接批次复核（2026-09-23）：B/C/D 对齐后相对 `main@9011da6a` 均为 0 behind；B/C 无文本冲突，D 修正只在其自身改动范围内继续。共同修改的 `OrderGeniusPage.tsx` 与规则测试仍须在合并后的组合构件做人工验收，Git 无冲突不等于业务通过。
 - D 衔接修正已实跑：无 token 返回 `false`；200 返回 `true`；保留模式下 401 返回 `false` 但不清理 Candidate token/身份；网络异常和 5xx 抛出可区分错误且不清理身份。启动/后台刷新调用者已显式吞掉异常，避免未处理 Promise；登录按钮打开带原路径的同源新标签，原页通过 focus 事件复核身份并提示用户主动重试，数量/BOM 草稿不自动提交。
@@ -94,9 +103,9 @@
 | 工作 | 当前状态 | 具体改法入口 | 完成证据 |
 |---|---|---|---|
 | A 输入/自动填充/搜索 | 本地实现已收口；尚未部署验收 | 第 13 节 A 收口记录 + 第 12 节 A | Candidate 新构件复验：输入焦点、1.2 秒查库、保存后搜索保持 |
-| B Model/列宽 | 本地实现完成；尚未合并/Candidate 验收 | `codex/bom-model-layout` / `53976fc0`；Grid 默认 280px、优先固定 Model、用户列宽初始化与持久化 | 本地类型、单测、构建、路由回归通过；待 Candidate 在 2200/1400/1100px 与 80/100/125% 实测 |
+| B Model/列宽 | 已随 PR #230 合入并部署；Candidate 验收待登录 | `codex/bom-model-layout` / `53976fc0`；Grid 默认 280px、优先固定 Model、用户列宽初始化与持久化 | 本地类型、单测、构建、路由回归通过；待 Candidate 在 2200/1400/1100px 与 80/100/125% 实测 |
 | C J5 品牌、颜色共享、加价 | 原 C/E 本地实现加上 C7 两批已完成；C5/C6 其他入口与 Candidate 验收未完成 | `codex/bom-colour-followup` / `2218c0df` + `eb10c0e` + `be2b85e`；新增颜色与导入都按 Single 基准初始化，Special 规则列表/编辑和来源 tooltip 初接 | 后端新用例 4 passed；全量后端 43 passed/5 个已知基线失败；前端 73 files / 399 tests、类型、构建、路由通过；待 Candidate 核对实际价格和手动保护 |
-| D 登录失效 | 对齐 main 后的衔接修正已在本地完成；尚未合并/Candidate 验收 | `codex/bom-auth-feedback`：`f6887fb3` + `34656898`；保留 #228 认证逻辑，区分 401/403、网络/5xx，登录新标签保留原页草稿 | 类型检查、全量单测、构建、路由回归已通过；待 PR 审阅及 Candidate 浏览器验收 |
+| D 登录失效 | 已随 PR #232 合入并部署；Candidate 验收待登录 | `codex/bom-auth-feedback`：`f6887fb3` + `34656898`；保留 #228 认证逻辑，区分 401/403、网络/5xx，登录新标签保留原页草稿 | 类型检查、全量单测、构建、路由回归已通过；待 Candidate 浏览器验收 |
 | #215 同模板跨车型/版本 | 专项验收未完成 | 第 12.2 节：构造两个真实渲染行并点击 Edit | 只有被点的目标行打开；不是仅比较 key 字符串 |
 | #220 Matrix/保护逻辑 | 部分读取和 Apply 已验，其他待验 | 第 3 节未验项 + C 的用例 | 两个编辑入口保存后 BOM/Matrix 一致；tier/manual/no-base 样本验证 |
 
@@ -121,7 +130,7 @@
 - 每批更新本节实际基线、提交、实跑结果和未验项，保留原历史记录。A 的 `260f839a`、`6eeddf3c` 仍独立保留，不能被 B/C/D 的整文件覆盖。
 - 本轮交接任务是本地对齐、最小修正和验证。远端合并、Candidate 部署及 Active/www/intl 操作仍按用户明确授权执行；目前未取得这些新授权。
 
-### 2026-09-15 · B Model 紧凑布局与列宽（本地实现完成，待 Candidate）
+### 2026-09-15 · B Model 紧凑布局与列宽（历史实现记录；已随 PR #230 合入）
 
 - 基线：`JATO_Analysis_System/main@f29cf509`（远端跟踪 ref）；独立 worktree：`/Users/litristan/Downloads/JATO_Analysis_System_bom_model_layout`；分支：`codex/bom-model-layout`。
 - 根因：`getModelColumnWidth(rows)` 将分组标题和完整元信息估宽，并把结果放进随数据依赖重建的 `columnDefs`；固定区同时包含多列，AG Grid 在窄视口会自动解除固定，Model 因此可能跑到右侧。此前没有用户列宽持久化。
@@ -129,9 +138,9 @@
 - 实现：使用 AG Grid Column State API 只恢复/保存 `{colId,width}`；按 `user.username` 生成 `localStorage` scope，校验宽度范围，保留显隐列的历史宽度，不保存自动 unpin 的顺序/位置。新增显式 `Reset column widths`，只清除列宽偏好并恢复初始宽度，Refresh 不触发重置。
 - 变更文件：`06_AppPlatform/frontend/src/components/OrderGeniusGrid.tsx`、`06_AppPlatform/frontend/src/pages/OrderGeniusPage.tsx`、`06_AppPlatform/frontend/src/tests/unit/orderGeniusGridLayout.test.ts`。提交：`53976fc0 fix(bom): keep model column stable across grid refreshes`。
 - 本地验证：`npm run check:types` 通过；`npm run test:unit -- --run src/tests/unit/orderGeniusGridLayout.test.ts` 实际执行全目录 74 files / 393 tests 通过；`npm run build` 通过；`npm run check:router-regression` 通过。构建仅有既有大 chunk warning。
-- 尚未完成：未创建/合并 PR，未部署新 Candidate，未做真实浏览器窄屏/缩放、拖拽列宽、Refresh/数量保存/页面重载及显隐列恢复验收。临时依赖 symlink 已删除；worktree 仅保留自动生成的 `hermes/dev_events/dev_events.jsonl` 修改，未纳入提交。
+- 尚未完成：当时未创建/合并 PR；后续已随 PR #230 合入并部署到当前 Candidate，仍未做真实浏览器窄屏/缩放、拖拽列宽、Refresh/数量保存/页面重载及显隐列恢复验收。临时依赖 symlink 已删除；worktree 仅保留自动生成的 `hermes/dev_events/dev_events.jsonl` 修改，未纳入提交。
 
-### 2026-09-15 · C（含 E）共享颜色、J5 品牌归一化与色卡边框（本地实现完成，待 Candidate）
+### 2026-09-15 · C（含 E）共享颜色、J5 品牌归一化与色卡边框（历史实现记录；已随 PR #229 合入）
 
 - 基线：`JATO_Analysis_System/main@f29cf509`；独立 worktree：`/Users/litristan/Downloads/JATO_Analysis_System_bom_colour`；分支：`codex/bom-colour-followup`。
 - 根因：部分 J5 ICE/HEV SKU 的存储 `brand` 为空；规则 key、色卡入口、surcharge 查询和 Matrix 筛选都因此漏行或返回 0。两个编辑入口的标准色卡写入范围也不一致。普通色卡硬编码蓝边并不代表冲突或未保存。
@@ -139,7 +148,7 @@
 - 实现：Edit Colour Code 在同一 Brand + Code 下修改名称或有效色卡时复用 `setOrderGeniusColourHexRuleStandard`，与小色卡入口使用同一 active-SKU 作用域；改 code 仍走现有单 SKU 迁移逻辑。色卡普通值改为中性细边框，missing 保留虚线，可点击色卡保留 `:focus-visible`。
 - 变更文件：`06_AppPlatform/backend/app/api/routes/order_genius.py`、`06_AppPlatform/backend/app/infra/order_genius_repository.py`、`06_AppPlatform/backend/app/services/order_genius_service.py`、`06_AppPlatform/backend/app/services/ordering_normalization.py`、对应后端测试；`06_AppPlatform/frontend/src/index.css`、`OrderGeniusPage.tsx`、类型与规则契约测试。提交：`2218c0df fix(bom): unify legacy colour identities and shared swatches`。
 - 本地验证：前端 `npm run check:types`、`npm run test:unit`（73 files / 393 tests）、`npm run build`、`npm run check:router-regression` 全部通过；后端 Python compileall 通过，相关规则/品牌测试 9 passed，Matrix/Options 4 passed。完整 `test_ordering_bom_admin.py` 为 39 passed / 5 failed，5 个失败均为该基线已有的 `list_bom_admin_country_columns` / `sync_missing_template_fobs` 缺失或旧测试契约，不是本批改动引入；需在后续基线对齐时单独处理。
-- 尚未完成：未合并、未部署 Candidate，未做真实 J5 ICE/HEV 浏览器验收；未写 Candidate/Active 数据，未验证实际 +300 重算、重复重算幂等、manual FOB 与缺 Single 基准跳过、BOM/Matrix 双入口真实写入后 UI 一致。worktree 仅保留自动生成的 `hermes/dev_events/dev_events.jsonl` 修改，未纳入提交；临时依赖 symlink 已删除。
+- 尚未完成：当时未合并/部署；后续已随 PR #229 合入并部署到当前 Candidate，仍未做真实 J5 ICE/HEV 浏览器验收；未写 Active 数据，未验证实际 +300 重算、重复重算幂等、manual FOB 与缺 Single 基准跳过、BOM/Matrix 双入口真实写入后 UI 一致。worktree 仅保留自动生成的 `hermes/dev_events/dev_events.jsonl` 修改，未纳入提交；临时依赖 symlink 已删除。
 
 ### 2026-09-15 · D 登录失效提示与数量草稿保留（原始实现；已由下方衔接批次修正）
 
@@ -149,9 +158,9 @@
 - 实现：数量保存收到 401/403 时保留当前草稿和值，并显示原始错误；其他 409 冲突和网络失败继续走原有处理。原始版本的重新登录动作会清理 token 并跳转；该导航会卸载内存草稿，已在下方衔接批次改为同源新标签 + 原页复核。
 - 变更文件：`06_AppPlatform/frontend/src/api/client.ts`、`contexts/AuthContext.tsx`、`pages/OrderGeniusPage.tsx` 及两份规则/认证契约测试。提交：`1a64194a fix(bom): explain auth failures and preserve quantity drafts`。
 - 本地验证：`npm run check:types`、`npm run test:unit`（73 files / 393 tests）、`npm run build`、`npm run check:router-regression` 全部通过；新增受保护 401 事件测试通过。构建仅有既有大 chunk warning。
-- 尚未完成（原始版本）：未合并、未部署 Candidate，未用真实过期 token、有效低权限账号和网络断开做浏览器验收；未证明正式站历史红字一定由会话失效引起。衔接后的跨标签草稿保留仍需真实浏览器验收，不能在未实测前宣称已跨页恢复。
+- 尚未完成（原始版本）：当时未合并/部署；后续已随 PR #232 合入并部署到当前 Candidate，仍未用真实过期 token、有效低权限账号和网络断开做浏览器验收；未证明正式站历史红字一定由会话失效引起。衔接后的跨标签草稿保留仍需真实浏览器验收，不能在未实测前宣称已跨页恢复。
 
-### 2026-09-23 · B/C/D 对齐与 D 衔接修正（本地完成，待 PR/Candidate）
+### 2026-09-23 · B/C/D 对齐与 D 衔接修正（历史实现记录；已随 PR #229–#232 合入）
 
 - 统一比较基线：当前远端 `main@9011da6ac1f5592e37b7cba80c455e30e0b0b48e`。
 - B `codex/bom-model-layout` 已通过合并提交 `ac59a832` 对齐 `main`；C（含 E）`codex/bom-colour-followup` 已通过 `579ea01e` 对齐；D `codex/bom-auth-feedback` 已通过 `f6887fb3` 对齐。三批原业务提交 `53976fc0`、`2218c0df`、`1a64194a` 均保留，没有整文件覆盖 #228。
@@ -159,11 +168,11 @@
 - `refreshUser` 现在统一返回契约：无 token/确证 401 或 403 返回 `false`；200 返回 `true`；网络异常和 5xx 抛出异常。默认启动校验仍会在确证 Candidate 认证失效时清理身份；页面 403 核验使用 `preserveSession`，不会因瞬时失败清理身份或导航。
 - 401/403 业务请求仍通过现有 `AUTH_FAILURE_EVENT` 提示；页面只在 403 核验确认失效时给“重新登录”。重新登录打开同源新标签并带回原路径，原页面保留数量与 BOM 内存草稿，用户完成登录后回到原页由 focus 事件复核并提示主动重试；不自动重放写请求，不保存密码或 token 副本。
 - 实跑结果（最终提交 `34656898`）：`npm run check:types` 通过；`npm run test:unit -- --run ...` 实际运行全目录 73 files / 403 tests，全部通过；`npm run build` 通过（仅既有大 chunk warning，build meta commit=`3465689`）；`npm run check:router-regression` 通过。D 新增无 token、网络异常、保留模式 401、5xx 测试；依赖只读复用主 worktree，临时 symlink 已删除。
-- 尚未完成：未创建/更新远端 PR，未合并 main，未部署 Candidate；尚未在真实浏览器验证新标签登录前后数量/BOM 表单保持、有效低权限 403、真实过期 token、网络断开，以及 B/C/D 组合后的 Model/J5/Matrix/manual/no-base 业务场景。下一批先做 PR 审阅和组合检查，随后才按授权走 main→Candidate。
+- 尚未完成：当时尚未创建/更新远端 PR；后续已按 C → B → A → D 合入并部署 Candidate。仍尚未在真实浏览器验证新标签登录前后数量/BOM 表单保持、有效低权限 403、真实过期 token、网络断开，以及 B/C/D 组合后的 Model/J5/Matrix/manual/no-base 业务场景；当前先解决 Candidate 登录凭据。
 
 ### A 收尾：本地代码已收口，Candidate 仍待验收
 
-复核 `260f839a` 后，以下并发和编辑目标边界已在同一 worktree 收口。Candidate 浏览器尚未部署这次新构件，因此不能写成线上已修好。
+复核 `260f839a` 后，以下并发和编辑目标边界已在同一 worktree 收口；A 已随 PR #231 合入最终 main 并部署到当前 Candidate，但浏览器验收仍因登录凭据无效而未开始。
 
 1. **搜索队列已收口。** `latestLoadKeyRef` 和 `pendingLoadKeyRef` 现在始终代表最后一次请求意图；A→B→A 不会在 A 完成后错误执行旧 B。显式空字符串仍表示 Clear，`null` 仍表示无待办；保存触发的同查询刷新仍会执行。
 2. **旧结果/错误已隔离。** `getBomAdmin` 返回或失败时，只有仍对应最新查询的请求才能更新行、国家、notice 和错误；过时请求只结束自己的 loading 流程。
@@ -171,13 +180,15 @@
 4. **lookup 生命周期已绑定目标。** Edit/Add 的 lookup effect 纳入稳定编辑目标 key；切换同品牌同代码的另一材料会清理上一结果/错误，回填前同时核对目标身份、当前代码和 requestId；已有 touched 字段保护保留。
 5. **实际组件交互测试已补。** 新增 `bomAdminAConcurrency.test.tsx`，用真实 `BomAdminPanel`、延迟 Promise 和模拟 API 覆盖 A→B→A 最终刷新、旧响应不得覆盖新查询；现有源码契约测试同步改为检查目标 key 和最新查询守卫。类型检查、全量单测、构建和路由回归均已通过（74 files / 400 tests）。
 
-本地收口提交：`6eeddf3c fix(bom): close search and lookup continuity gaps`（前一版本：`260f839a`）。2026-09-15 只读复核 Candidate 仍运行 `9011da6ac1f5`，因此尚未包含上述提交；在旧构件中输入 Colour name 后仍观察到 Code `BW` 被重新聚焦并全选（activeElement=Code，selection=0–2），未点击保存、未写入沙箱。当前仍需：把这两个提交作为同一 BOM 分支构件部署到 Candidate，实测逐字 code、名称焦点、约 1.2 秒回填、回填后手改、切换/关闭目标、加载中 Clear、FOB 保存刷新和国家筛选；先完成本地验证和 PR 审查，获授权合并 main 后由现有流程准备 Candidate；Candidate 验收通过后再决定 Active 发布。
+本地收口提交：`6eeddf3c fix(bom): close search and lookup continuity gaps`（前一版本：`260f839a`）。2026-09-15 旧 Candidate 中观察到 Code `BW` 被重新聚焦并全选（activeElement=Code，selection=0–2），未点击保存、未写入沙箱；该旧构件证据不能代表当前 main。当前仍需在新 Candidate 实测逐字 code、名称焦点、约 1.2 秒回填、回填后手改、切换/关闭目标、加载中 Clear、FOB 保存刷新和国家筛选；取得正确凭据后再做这些验收，Candidate 验收通过后再决定 Active 发布。
 
-首要续接路径：`/Users/litristan/Downloads/JATO_Analysis_System_bom_input_search_continuity`。先读 status/diff；提交钩子留下的 `hermes/dev_events/dev_events.jsonl` 修改需保留并识别，不混入无关业务修改。完成本地交互验证不必等待 Candidate 部署；Candidate 复验另记录实际构件 SHA，不能在旧 Candidate 页面验证新代码。
+首要续接路径：已完成合并；后续只需在当前 Candidate 做浏览器复验。提交钩子留下的 `hermes/dev_events/dev_events.jsonl` 修改需保留并识别，不混入无关业务修改；不能回到旧 Candidate 页面验证新代码。
 
 ## 1. 基线与证据边界
 
-- 实测入口：https://candidate.ojeur.cloud/product/order-genius ，使用 `candidateAdmin` 登录；不在文档记录密码。
+> 本节大部分数字是 2026-09-15 旧 Candidate 的只读基线；当前待验构件是 main `efe5ac0f5b11`，部署 run `35960030314`，archive `2810a3510337`。旧基线中的登录成功、规则数量和沙箱标识不能替代当前构件验收；当前构件首次登录尝试 `candidateAdmin / 123456` 已返回 `Invalid credentials`。
+
+- 实测入口：https://candidate.ojeur.cloud/product/order-genius；正确测试凭据待恢复，不在文档记录密码。
 - 页面显示 commit `9011da6ac1f5592e37b7cba80c455e30e0b0b48e`，artifact `f55a70fea05f3ba983db1f9e7f83e4fd67a6d1285b2a43373265a1109c3981b2`。
 - 沙箱 `jato_candidate_20260915t011310z_3972d27f5b654a45`，页面显示 Active 快照开始时间 2026-09-15 09:13:10。所有本轮业务写入均经 Candidate 同源 API。
 - #226、#228 已合并，Candidate 已使用应用登录，不再需要 Basic Auth。本轮重验真实登录，以及 `/v1/auth/me` 匿名 401、坏 token 401、有效身份 200。
