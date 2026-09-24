@@ -850,6 +850,53 @@ def patch_bom_template_material_code(
     }
 
 
+@router.patch("/bom-templates/fob")
+def patch_bom_template_fob(
+    body: dict,
+    session: Session = Depends(get_db_session),
+    user=Depends(require_min_role("editor")),
+) -> dict:
+    material_codes = body.get("materialCodes")
+    if not isinstance(material_codes, list) or not material_codes:
+        raise HTTPException(status_code=400, detail="materialCodes is required")
+    country_code = clean_text(body.get("countryCode") or body.get("country_code")).upper()
+    if not country_code:
+        raise HTTPException(status_code=400, detail="countryCode is required")
+    if "baseFobEur" not in body:
+        raise HTTPException(status_code=400, detail="baseFobEur is required")
+    base_raw = body.get("baseFobEur")
+    base_fob = _parse_fob_value(base_raw)
+    if base_raw not in (None, "", 0, 0.0) and base_fob is None:
+        raise HTTPException(status_code=400, detail="baseFobEur must be a non-negative number")
+    if base_fob is not None and base_fob < 0:
+        raise HTTPException(status_code=400, detail="baseFobEur must be a non-negative number")
+    if base_fob == 0:
+        base_fob = None
+    bom_template = clean_text(body.get("bomTemplate") or body.get("materialCode")).upper()
+    try:
+        result = repo.update_bom_template_base_fob(
+            session,
+            bom_template,
+            [clean_text(code).upper() for code in material_codes],
+            country_code,
+            base_fob,
+            remark=clean_text(body.get("remark")) if "remark" in body else None,
+            update_remark="remark" in body,
+            changed_by=user.name,
+        )
+        session.commit()
+        return result
+    except LookupError as exc:
+        session.rollback()
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        session.rollback()
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except IntegrityError as exc:
+        session.rollback()
+        raise HTTPException(status_code=409, detail="Could not save BOM template base FOB") from exc
+
+
 @router.patch("/material-skus/{material_code}/colour-tier")
 def patch_sku_colour_tier(
     material_code: str,

@@ -5413,6 +5413,12 @@ export const api = {
   updateSkuFob: (materialCode: string, body: { countryCode: string; finalFobEur?: number | null; paymentTermCode?: string; remark?: string | null }) =>
     request<any>(`/order-genius/material-skus/${encodeURIComponent(materialCode)}/fob`, { method: "PATCH", body: JSON.stringify(body) }),
 
+  updateBomTemplateFob: (body: { bomTemplate: string; materialCodes: string[]; countryCode: string; baseFobEur: number | null; remark?: string | null }) =>
+    request<{ bomTemplate: string; countryCode: string; baseFobEur: number | null; updated: number; created: number; cleared: number; details: Array<Record<string, unknown>> }>(
+      "/order-genius/bom-templates/fob",
+      { method: "PATCH", body: JSON.stringify(body) },
+    ),
+
   updateSkuFobsBulk: (body: { updates: { materialCode: string; countryCode: string; finalFobEur: number | null; paymentTermCode?: string | null }[] }) =>
     request<{ updated: number; cleared: number; unchanged: number; total: number }>(
       "/order-genius/material-skus/fobs/bulk",

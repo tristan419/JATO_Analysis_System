@@ -464,6 +464,160 @@ def update_sku_fob_for_country(
     return fob
 
 
+def update_bom_template_base_fob(
+    session: Session,
+    bom_template: str,
+    material_codes: list[str],
+    country_code: str,
+    base_fob_eur: float | None,
+    *,
+    remark: str | None = None,
+    update_remark: bool = False,
+    changed_by: str | None = None,
+) -> dict[str, object]:
+    """Persist one country base and derive every colour in a BOM template.
+
+    A template edit is intentionally different from a per-SKU final-price edit:
+    it updates the shared base on every active colour row and recalculates the
+    tier surcharge.  The base remains present even when the last Single colour
+    is moved away because derived rows retain ``base_fob_eur``.
+    """
+    normalized_template = clean_text(bom_template).upper()
+    normalized_country = clean_text(country_code).upper()
+    normalized_codes = [clean_text(code).upper() for code in material_codes if clean_text(code)]
+    if not normalized_template:
+        raise ValueError("bomTemplate is required")
+    if not normalized_country:
+        raise ValueError("countryCode is required")
+    if not normalized_codes:
+        raise ValueError("materialCodes is required")
+    if base_fob_eur is not None and base_fob_eur < 0:
+        raise ValueError("baseFobEur must be greater than or equal to 0")
+
+    skus = list(
+        session.execute(
+            select(MaterialSkuMaster).where(
+                MaterialSkuMaster.material_code.in_(normalized_codes),
+                MaterialSkuMaster.bom_template == normalized_template,
+                MaterialSkuMaster.is_active == True,
+            )
+        ).scalars().all()
+    )
+    if not skus:
+        raise LookupError("No active SKUs found for BOM template")
+
+    rows = list(
+        session.execute(
+            select(CountrySkuFobResolved).where(
+                CountrySkuFobResolved.material_code.in_([sku.material_code for sku in skus]),
+                CountrySkuFobResolved.country_code == normalized_country,
+                CountrySkuFobResolved.is_active == True,
+            )
+        ).scalars().all()
+    )
+    rows_by_material: dict[str, list[CountrySkuFobResolved]] = {}
+    for row in rows:
+        rows_by_material.setdefault(row.material_code, []).append(row)
+
+    payment_term = get_country_payment_term(session, normalized_country)
+    payment_term_code = payment_term.payment_term_code if payment_term else "TT"
+    baseline = get_latest_baseline(session)
+    if baseline is None and base_fob_eur is not None:
+        baseline = create_baseline_version(
+            session=session,
+            source_file_name="manual_admin",
+            source_file_hash=None,
+            baseline_name="manual_admin",
+            published_by=changed_by or "system",
+        )
+        session.flush()
+
+    details: list[dict[str, object]] = []
+    updated = 0
+    created = 0
+    cleared = 0
+    now = datetime.now(timezone.utc)
+    for sku in skus:
+        sku_rows = rows_by_material.get(sku.material_code, [])
+        if base_fob_eur is None:
+            for row in sku_rows:
+                row.is_active = False
+                row.updated_at_utc = now
+                cleared += 1
+            details.append({"materialCode": sku.material_code, "status": "cleared", "rows": len(sku_rows)})
+            continue
+
+        tier = clean_text(sku.colour_tier or sku.exterior_color_type or "single").lower()
+        if tier not in {"single", "dual", "special"}:
+            tier = "single"
+        surcharge = (
+            get_colour_surcharge_amount_for_sku(session, sku, tier)
+            if tier in {"dual", "special"}
+            else 0.0
+        )
+        final_fob = round(float(base_fob_eur) + surcharge, 2)
+        target_rows = sku_rows
+        if not target_rows:
+            if baseline is None:
+                raise ValueError("No baseline available for BOM template FOB")
+            target_rows = [
+                CountrySkuFobResolved(
+                    country_sku_fob_id=uuid4(),
+                    baseline_version_id=baseline.baseline_version_id,
+                    country_code=normalized_country,
+                    material_code=sku.material_code,
+                    payment_term_code=payment_term_code,
+                    is_active=True,
+                )
+            ]
+            session.add(target_rows[0])
+            created += 1
+        for row in target_rows:
+            old_final = float(row.final_fob_eur or 0)
+            if round(old_final, 2) != final_fob:
+                session.add(
+                    FobResolvedHistory(
+                        country_sku_fob_id=row.country_sku_fob_id,
+                        baseline_version_id=row.baseline_version_id,
+                        country_code=row.country_code,
+                        material_code=row.material_code,
+                        payment_term_code=row.payment_term_code,
+                        old_uploaded_fob_eur=row.uploaded_fob_eur,
+                        new_uploaded_fob_eur=base_fob_eur,
+                        old_final_fob_eur=row.final_fob_eur,
+                        new_final_fob_eur=final_fob,
+                        changed_by=changed_by or "bom_template_base_edit",
+                    )
+                )
+                updated += 1
+            row.base_fob_eur = base_fob_eur
+            row.uploaded_fob_eur = base_fob_eur
+            row.colour_surcharge_eur = surcharge or None
+            row.final_fob_eur = final_fob
+            row.fob_source_country_code = None
+            row.fob_source_mode = "template_base"
+            if update_remark:
+                row.remark = remark or None
+            row.updated_at_utc = now
+        details.append({
+            "materialCode": sku.material_code,
+            "tier": tier,
+            "baseFobEur": float(base_fob_eur),
+            "colourSurchargeEur": surcharge or None,
+            "finalFobEur": final_fob,
+            "rows": len(target_rows),
+        })
+    return {
+        "bomTemplate": normalized_template,
+        "countryCode": normalized_country,
+        "baseFobEur": base_fob_eur,
+        "updated": updated,
+        "created": created,
+        "cleared": cleared,
+        "details": details,
+    }
+
+
 def initialize_sku_fobs_from_source(
     session: Session,
     target_material_code: str,
@@ -803,7 +957,10 @@ def adjust_country_fobs(
 
     for row in rows:
         old_value = float(row.final_fob_eur)
-        new_value = round(old_value + delta, 2)
+        has_template_base = row.base_fob_eur is not None
+        old_base = float(row.base_fob_eur) if has_template_base else old_value
+        new_base = round(old_base + delta, 2)
+        new_value = round(new_base + (float(row.colour_surcharge_eur or 0) if has_template_base else 0), 2)
         if new_value < 0:
             skipped_negative += 1
             continue
@@ -819,14 +976,19 @@ def adjust_country_fobs(
                 material_code=row.material_code,
                 payment_term_code=row.payment_term_code,
                 old_uploaded_fob_eur=row.uploaded_fob_eur,
-                new_uploaded_fob_eur=row.uploaded_fob_eur,
+                new_uploaded_fob_eur=(new_base if has_template_base else row.uploaded_fob_eur),
                 old_final_fob_eur=row.final_fob_eur,
                 new_final_fob_eur=new_value,
                 changed_by=changed_by or "adjust_country_fobs",
             )
         )
         row.final_fob_eur = new_value
-        row.fob_source_mode = "manual_country_adjust"
+        if has_template_base:
+            row.base_fob_eur = new_base
+            row.uploaded_fob_eur = new_base
+            row.fob_source_mode = "template_base_country_adjust"
+        else:
+            row.fob_source_mode = "manual_country_adjust"
         row.updated_at_utc = datetime.now(timezone.utc)
         adjusted += 1
 
@@ -871,6 +1033,8 @@ def list_bom_with_fob(
             "paymentTermCode": f.payment_term_code,
             "fobSourceMode": f.fob_source_mode,
         }
+        if f.base_fob_eur is not None:
+            fob_entry["baseFobEur"] = float(f.base_fob_eur)
         if f.uploaded_fob_eur:
             fob_entry["uploadedFobEur"] = float(f.uploaded_fob_eur)
         if f.colour_surcharge_eur:

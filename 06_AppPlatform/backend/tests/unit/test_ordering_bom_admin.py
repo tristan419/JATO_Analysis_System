@@ -374,6 +374,68 @@ def test_uploaded_base_plus_colour_uses_unified_special_rule(monkeypatch) -> Non
     assert final.final_fob_eur == 15000
 
 
+def test_template_base_save_derives_colours_and_keeps_base_after_single_moves(monkeypatch) -> None:
+    baseline_id = uuid4()
+    single = SimpleNamespace(
+        material_code="T7000BWMY0001",
+        bom_template="T7000**MY0001",
+        colour_tier="single",
+        exterior_color_type="single",
+        is_active=True,
+    )
+    dual = SimpleNamespace(
+        material_code="T7000ZEMY0001",
+        bom_template="T7000**MY0001",
+        colour_tier="dual",
+        exterior_color_type="dual",
+        is_active=True,
+    )
+    single_fob = CountrySkuFobResolved(
+        country_sku_fob_id=uuid4(), baseline_version_id=baseline_id,
+        country_code="SE", material_code=single.material_code, payment_term_code="TT",
+        final_fob_eur=15000, is_active=True,
+    )
+    dual_fob = CountrySkuFobResolved(
+        country_sku_fob_id=uuid4(), baseline_version_id=baseline_id,
+        country_code="SE", material_code=dual.material_code, payment_term_code="TT",
+        final_fob_eur=15200, is_active=True,
+    )
+    session = _QueuedExecuteSession([[single, dual], [single_fob, dual_fob]])
+    monkeypatch.setattr(repo, "get_country_payment_term", lambda *_: SimpleNamespace(payment_term_code="TT"))
+    monkeypatch.setattr(repo, "get_latest_baseline", lambda *_: SimpleNamespace(baseline_version_id=baseline_id))
+    monkeypatch.setattr(repo, "get_colour_surcharge_amount_for_sku", lambda _session, sku, tier: 200.0 if tier == "dual" else 0.0)
+
+    result = repo.update_bom_template_base_fob(
+        session,
+        "T7000**MY0001",
+        [single.material_code, dual.material_code],
+        "SE",
+        15500,
+        changed_by="admin",
+    )
+
+    assert result["updated"] == 2
+    assert single_fob.base_fob_eur == 15500
+    assert single_fob.final_fob_eur == 15500
+    assert dual_fob.base_fob_eur == 15500
+    assert dual_fob.colour_surcharge_eur == 200
+    assert dual_fob.final_fob_eur == 15700
+    assert single_fob.fob_source_mode == "template_base"
+
+    session = _QueuedExecuteSession([[dual], [dual_fob]])
+    result = repo.update_bom_template_base_fob(
+        session,
+        "T7000**MY0001",
+        [dual.material_code],
+        "SE",
+        16000,
+        changed_by="admin",
+    )
+    assert result["updated"] == 1
+    assert dual_fob.base_fob_eur == 16000
+    assert dual_fob.final_fob_eur == 16200
+
+
 @pytest.mark.parametrize("scenario", ["known", "unknown", "conflict"])
 def test_create_material_sku_resolves_known_unknown_and_conflict_rules(
     monkeypatch,
@@ -1390,6 +1452,44 @@ def test_colour_tier_reprice_reports_each_country_without_overwriting_manual(
     assert manual.final_fob_eur == 1300
 
 
+def test_colour_tier_reprice_recalculates_template_base_without_freezing_it(
+    monkeypatch,
+) -> None:
+    baseline_id = uuid4()
+    sku = SimpleNamespace(
+        material_code="T7000ZEMY0001",
+        bom_template="T7000**MY0001",
+        brand="OMODA",
+        exterior_color_code="ZE",
+        colour_tier="dual",
+    )
+    row = CountrySkuFobResolved(
+        country_sku_fob_id=uuid4(),
+        baseline_version_id=baseline_id,
+        country_code="SE",
+        material_code=sku.material_code,
+        payment_term_code="TT",
+        uploaded_fob_eur=15500,
+        base_fob_eur=15500,
+        colour_surcharge_eur=200,
+        final_fob_eur=15700,
+        fob_source_mode="template_base",
+        is_active=True,
+    )
+    session = _FakeSession([row])
+    monkeypatch.setattr(repo, "get_sku_by_material_code", lambda *_: sku)
+    monkeypatch.setattr(repo, "get_colour_surcharge_amount_for_sku", lambda *_: 300.0)
+    monkeypatch.setattr(repo, "_find_colour_surcharge_base_fob", lambda *_: None)
+
+    result = repo.reprice_sku_colour_surcharge_fobs(session, sku.material_code, changed_by="admin")
+
+    assert result["updated"] == 1
+    assert row.base_fob_eur == 15500
+    assert row.colour_surcharge_eur == 300
+    assert row.final_fob_eur == 15800
+    assert row.fob_source_mode == "template_base"
+
+
 def test_copy_country_fobs_creates_target_country_rows(monkeypatch) -> None:
     baseline_id = uuid4()
     source_row = CountrySkuFobResolved(
@@ -1398,9 +1498,11 @@ def test_copy_country_fobs_creates_target_country_rows(monkeypatch) -> None:
         country_code="CZ",
         material_code="T7000SE**MY0001",
         payment_term_code="LC90",
-        uploaded_fob_eur=14900,
-        final_fob_eur=14900,
-        fob_source_mode="explicit_price_by_payment_term",
+        uploaded_fob_eur=15000,
+        base_fob_eur=15000,
+        colour_surcharge_eur=200,
+        final_fob_eur=15200,
+        fob_source_mode="template_base",
         is_active=True,
     )
     target_term = CountryPaymentTermMaster(
@@ -1441,7 +1543,9 @@ def test_copy_country_fobs_creates_target_country_rows(monkeypatch) -> None:
     assert isinstance(created, CountrySkuFobResolved)
     assert created.country_code == "SK"
     assert created.payment_term_code == "LC90"
-    assert created.final_fob_eur == 14900
+    assert created.base_fob_eur == 15000
+    assert created.colour_surcharge_eur == 200
+    assert created.final_fob_eur == 15200
     assert created.fob_source_country_code == "CZ"
 
 
@@ -1488,6 +1592,44 @@ def test_adjust_country_fobs_updates_rows_and_writes_history(monkeypatch) -> Non
     assert history.old_final_fob_eur == 14900
     assert history.new_final_fob_eur == 15100
     assert history.changed_by == "admin"
+
+
+def test_adjust_country_fobs_moves_template_base_and_preserves_surcharge(monkeypatch) -> None:
+    baseline_id = uuid4()
+    row = CountrySkuFobResolved(
+        country_sku_fob_id=uuid4(),
+        baseline_version_id=baseline_id,
+        country_code="SE",
+        material_code="T7000ZE**MY0001",
+        payment_term_code="TT",
+        uploaded_fob_eur=15500,
+        base_fob_eur=15500,
+        colour_surcharge_eur=200,
+        final_fob_eur=15700,
+        fob_source_mode="template_base",
+        is_active=True,
+    )
+    fake_session = _FakeSession()
+    monkeypatch.setattr(
+        repo,
+        "list_fob_by_country",
+        lambda _session, country_code, payment_term_code=None: [row]
+        if country_code == "SE"
+        else [],
+    )
+
+    result = repo.adjust_country_fobs(fake_session, "SE", 500, changed_by="admin")
+
+    assert result["adjusted"] == 1
+    assert row.base_fob_eur == 16000
+    assert row.uploaded_fob_eur == 16000
+    assert row.colour_surcharge_eur == 200
+    assert row.final_fob_eur == 16200
+    assert row.fob_source_mode == "template_base_country_adjust"
+    history = fake_session.added[0]
+    assert isinstance(history, FobResolvedHistory)
+    assert history.new_uploaded_fob_eur == 16000
+    assert history.new_final_fob_eur == 16200
 
 
 def test_sync_missing_template_fobs_backfills_new_colour_rows_only() -> None:

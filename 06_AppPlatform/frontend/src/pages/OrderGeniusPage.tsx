@@ -2929,6 +2929,7 @@ type BomCopyDraftSku = {
 };
 
 type BomDraftFobEntry = {
+  baseFobEur?: number | null;
   uploadedFobEur?: number | null;
   finalFobEur?: number | null;
   paymentTermCode?: string | null;
@@ -2941,6 +2942,8 @@ type BomDraftFobEntry = {
 type BomFobPatch = {
   materialCode: string;
   countryCode: string;
+  baseFobEur?: number | null;
+  colourSurchargeEur?: number | null;
   finalFobEur: number | null;
   paymentTermCode?: string | null;
   fobSourceMode?: string | null;
@@ -3171,6 +3174,7 @@ interface BomFinanceQuickCard {
 }
 
 type BomFobEditor = {
+  bomTemplate?: string | null;
   materialCodes: string[];
   countryCode: string;
   fob: number | null;
@@ -3233,7 +3237,7 @@ function getDraftBaseFob(
   fob: BomDraftFobEntry | null | undefined,
 ): number | null {
   if (!fob) return null;
-  const raw = fob.finalFobEur ?? fob.uploadedFobEur;
+  const raw = fob.baseFobEur ?? fob.finalFobEur ?? fob.uploadedFobEur;
   if (raw == null) return null;
   const numeric = Number(raw);
   return Number.isFinite(numeric) && numeric > 0 ? numeric : null;
@@ -3526,6 +3530,7 @@ function BomAdminPanel({
       return `copied from ${fobSourceCountryCode || "source country"}`;
     }
     if (fobSourceMode === "manual_country_adjust") return "manual country adjustment";
+    if (fobSourceMode === "template_base" || fobSourceMode === "template_base_country_adjust") return "template base + colour rule";
     if (fobSourceMode === "manual_edit") return "manual edit";
     if (fobSourceMode === "explicit_price_by_payment_term") return "uploaded/resolved FOB";
     return "";
@@ -3534,6 +3539,7 @@ function BomAdminPanel({
   const getBomFobSourceMarker = (fobSourceMode?: string | null): string => {
     if (fobSourceMode === "copied_from_country") return "C";
     if (fobSourceMode === "manual_country_adjust") return "B";
+    if (fobSourceMode === "template_base" || fobSourceMode === "template_base_country_adjust") return "T";
     if (fobSourceMode === "manual_edit") return "M";
     return "";
   };
@@ -3720,8 +3726,14 @@ function BomAdminPanel({
         const hasRemarkUpdate = Object.prototype.hasOwnProperty.call(update, "remark");
         fobByCountry[update.countryCode] = {
           ...existing,
-          uploadedFobEur: update.finalFobEur,
+          baseFobEur: Object.prototype.hasOwnProperty.call(update, "baseFobEur")
+            ? update.baseFobEur
+            : existing.baseFobEur,
+          uploadedFobEur: update.baseFobEur ?? update.finalFobEur,
           finalFobEur: update.finalFobEur,
+          colourSurchargeEur: Object.prototype.hasOwnProperty.call(update, "colourSurchargeEur")
+            ? update.colourSurchargeEur
+            : existing.colourSurchargeEur,
           paymentTermCode: update.paymentTermCode ?? existing.paymentTermCode ?? null,
           fobSourceMode: update.fobSourceMode ?? existing.fobSourceMode ?? "manual_edit",
           fobSourceCountryCode: update.fobSourceCountryCode ?? existing.fobSourceCountryCode ?? null,
@@ -4088,6 +4100,34 @@ function BomAdminPanel({
     const originalFob = editFob.originalFob != null && editFob.originalFob > 0 ? editFob.originalFob : null;
     const didChangeFob = nextFob !== originalFob;
     try {
+      if (editFob.bomTemplate?.includes("**")) {
+        const result = await api.updateBomTemplateFob({
+          bomTemplate: editFob.bomTemplate,
+          materialCodes: editFob.materialCodes,
+          countryCode: editFob.countryCode,
+          baseFobEur: nextFob,
+          remark,
+        });
+        const detailUpdates: BomFobPatch[] = result.details.flatMap((detail) => {
+          const materialCode = String(detail.materialCode || "");
+          if (!materialCode) return [];
+          return [{
+            materialCode,
+            countryCode: editFob.countryCode,
+            baseFobEur: result.baseFobEur,
+            colourSurchargeEur: detail.colourSurchargeEur == null ? null : Number(detail.colourSurchargeEur),
+            finalFobEur: detail.finalFobEur == null ? null : Number(detail.finalFobEur),
+            fobSourceMode: result.baseFobEur == null ? null : "template_base",
+            fobSourceCountryCode: null,
+            remark,
+          }];
+        });
+        patchBomFobs(detailUpdates);
+        setEditFob(null);
+        scheduleLoad(1200);
+        onFobChanged?.();
+        return;
+      }
       const responses: BomFobSaveResponse[] = [];
       for (const mc of editFob.materialCodes) {
         responses.push(await api.updateSkuFob(mc, { countryCode: editFob.countryCode, finalFobEur: editFob.fob, remark }) as BomFobSaveResponse);
@@ -4453,6 +4493,54 @@ function BomAdminPanel({
       return;
     }
 
+    if (bomKey.includes("**")) {
+      setBulkFobSavingKey(bomKey);
+      try {
+        const templateUpdates: BomFobPatch[] = [];
+        for (const countryCode of editor.selectedCountries) {
+          const sourceSku = allSkus.find((sku: any) => getDraftBaseFob(sku?.fobByCountry?.[countryCode]) != null);
+          const currentBase = getDraftBaseFob(sourceSku?.fobByCountry?.[countryCode]);
+          if (currentBase == null) continue;
+          const result = await api.updateBomTemplateFob({
+            bomTemplate: bomKey,
+            materialCodes: allSkus.map((sku: any) => String(sku.materialCode || "")),
+            countryCode,
+            baseFobEur: Math.max(0, Number((currentBase + numericDelta).toFixed(2))),
+            remark: getBomCountryFobRemark(allSkus, countryCode) || null,
+          });
+          for (const detail of result.details) {
+            const materialCode = String(detail.materialCode || "");
+            if (!materialCode) continue;
+            templateUpdates.push({
+              materialCode,
+              countryCode,
+              baseFobEur: result.baseFobEur,
+              colourSurchargeEur: detail.colourSurchargeEur == null ? null : Number(detail.colourSurchargeEur),
+              finalFobEur: detail.finalFobEur == null ? null : Number(detail.finalFobEur),
+              fobSourceMode: "template_base_country_adjust",
+              remark: getBomCountryFobRemark(allSkus, countryCode),
+            });
+          }
+        }
+        if (templateUpdates.length === 0) throw new Error("Selected countries do not have a template base yet.");
+        patchBomFobs(templateUpdates);
+        updateBulkFobEditor(bomKey, allSkus, (current) => ({ ...current, deltaEur: String(numericDelta) }));
+        setBulkFobErrors((prev) => {
+          if (!prev[bomKey]) return prev;
+          const next = { ...prev };
+          delete next[bomKey];
+          return next;
+        });
+        scheduleLoad(1200);
+        onFobChanged?.();
+      } catch (err) {
+        setBulkFobErrors((prev) => ({ ...prev, [bomKey]: getErrorMessage(err) }));
+      } finally {
+        setBulkFobSavingKey((current) => (current === bomKey ? null : current));
+      }
+      return;
+    }
+
     const updates: Array<{
       materialCode: string;
       countryCode: string;
@@ -4539,6 +4627,12 @@ function BomAdminPanel({
     ).trim().toUpperCase();
     const sourceInfo = ref.sourcePayload || {};
     const modelName = String(ref.modelName || "");
+    const templateBaseSource = allSkus.find((sku: any) => {
+      if (getEffectiveColourTier(sku) === "single" && hasPositiveFob(sku)) return true;
+      return Object.values((sku?.fobByCountry as Record<string, BomDraftFobEntry>) || {}).some(
+        (fob) => fob?.baseFobEur != null,
+      );
+    });
     const baseDraft: BomCopyDraft = {
       draftKey,
       sourceBomTemplate: initialTemplate,
@@ -4559,7 +4653,7 @@ function BomAdminPanel({
       effectiveTo: ref.effectiveTo ? String(ref.effectiveTo) : null,
       remark: getBomTemplateRemark(allSkus),
       fobByCountry: Object.fromEntries(
-        Object.entries(ref.fobByCountry || {}).map(([countryCode, fob]) => [
+        Object.entries(templateBaseSource?.fobByCountry || {}).map(([countryCode, fob]) => [
           countryCode,
           { ...((fob as BomDraftFobEntry) || {}) },
         ]),
@@ -4611,6 +4705,7 @@ function BomAdminPanel({
       setCopyDraftErrors((prev) => ({ ...prev, [draftKey]: "Multiple colours need a BOM template with **." }));
       return;
     }
+    const isTemplateBaseCopy = normalizedTemplate.includes("**");
 
     const targetCodes = draft.skus.map((sku) =>
       resolveMaterialCodeFromTemplate(normalizedTemplate, sku.colourCode, sku.sourceMaterialCode),
@@ -4680,16 +4775,18 @@ function BomAdminPanel({
             rowVersion: 1,
           });
         }
-        for (const countryCode of draft.bulkSelectedCountries) {
-          const fob = draft.fobByCountry[countryCode];
-          const baseFob = getDraftBaseFob(fob);
-          if (baseFob == null) continue;
-          await api.updateSkuFob(materialCode, {
-            countryCode,
-            finalFobEur: Number(baseFob),
-            paymentTermCode: fob?.paymentTermCode ?? undefined,
-            remark: fob?.remark ?? null,
-          });
+        if (!isTemplateBaseCopy) {
+          for (const countryCode of draft.bulkSelectedCountries) {
+            const fob = draft.fobByCountry[countryCode];
+            const baseFob = getDraftBaseFob(fob);
+            if (baseFob == null) continue;
+            await api.updateSkuFob(materialCode, {
+              countryCode,
+              finalFobEur: Number(baseFob),
+              paymentTermCode: fob?.paymentTermCode ?? undefined,
+              remark: fob?.remark ?? null,
+            });
+          }
         }
         createdSkus.push({
           materialCode,
@@ -4710,21 +4807,54 @@ function BomAdminPanel({
           effectiveTo: draft.effectiveTo,
           remark: draft.remark,
           rowVersion: 1,
-          fobByCountry: Object.fromEntries(
-            draft.bulkSelectedCountries.flatMap((countryCode) => {
-              const fob = draft.fobByCountry[countryCode];
-              const baseFob = getDraftBaseFob(fob);
-              return baseFob == null
-                ? []
-                : [[countryCode, {
-                  ...fob,
-                  uploadedFobEur: Number(baseFob),
-                  finalFobEur: Number(baseFob),
-                  fobSourceMode: "manual_edit",
-                }]];
-            }),
-          ),
+          fobByCountry: isTemplateBaseCopy
+            ? {}
+            : Object.fromEntries(
+                draft.bulkSelectedCountries.flatMap((countryCode) => {
+                  const fob = draft.fobByCountry[countryCode];
+                  const baseFob = getDraftBaseFob(fob);
+                  return baseFob == null
+                    ? []
+                    : [[countryCode, {
+                      ...fob,
+                      uploadedFobEur: Number(baseFob),
+                      finalFobEur: Number(baseFob),
+                      fobSourceMode: "manual_edit",
+                    }]];
+                }),
+              ),
         });
+      }
+      if (isTemplateBaseCopy) {
+        for (const countryCode of draft.bulkSelectedCountries) {
+          const baseFob = getDraftBaseFob(draft.fobByCountry[countryCode]);
+          if (baseFob == null) continue;
+          const result = await api.updateBomTemplateFob({
+            bomTemplate: normalizedTemplate,
+            materialCodes: createdSkus.map((sku) => String(sku.materialCode || "")),
+            countryCode,
+            baseFobEur: Number(baseFob),
+            remark: draft.remark || null,
+          });
+          const detailsByMaterial = new Map(
+            result.details.map((detail) => [String(detail.materialCode || ""), detail]),
+          );
+          for (const createdSku of createdSkus) {
+            const detail = detailsByMaterial.get(String(createdSku.materialCode || ""));
+            if (!detail) continue;
+            createdSku.fobByCountry = {
+              ...(createdSku.fobByCountry || {}),
+              [countryCode]: {
+                ...(draft.fobByCountry[countryCode] || {}),
+                baseFobEur: result.baseFobEur,
+                uploadedFobEur: result.baseFobEur,
+                colourSurchargeEur: detail.colourSurchargeEur == null ? null : Number(detail.colourSurchargeEur),
+                finalFobEur: detail.finalFobEur == null ? null : Number(detail.finalFobEur),
+                fobSourceMode: "template_base",
+              },
+            };
+          }
+        }
       }
       setSkus((current) => {
         const existingCodes = new Set(current.map((sku) => bomMaterialKey(sku?.materialCode)));
@@ -6979,6 +7109,7 @@ function BomAdminPanel({
                                         return;
                                       }
                                       setEditFob({
+                                        bomTemplate: String(bomTemplate || ""),
                                         materialCodes: allCodes,
                                         countryCode: c,
                                         fob: baseFob ?? null,
@@ -7526,6 +7657,7 @@ function BomAdminPanel({
                         label: "Edit FOB",
                         onClick: () => {
                           setEditFob({
+                            bomTemplate: financeQuickCard.materialCode,
                             materialCodes: financeQuickCard.materialCodes,
                             countryCode: financeQuickCard.countryCode,
                             fob: financeQuickCard.fob,
@@ -7576,7 +7708,7 @@ function BomAdminPanel({
             <div className="bom-fob-edit-card">
               <div>
                 <span className="bom-finance-eyebrow">BOM ADMIN · FOB</span>
-                <h4>Edit FOB</h4>
+                <h4>{editFob.bomTemplate?.includes("**") ? "Edit template base FOB" : "Edit FOB"}</h4>
                 <p>{editFob.materialCodes.length} material codes</p>
               </div>
               <div className="bom-fob-edit-source-line">
@@ -7600,7 +7732,7 @@ function BomAdminPanel({
                   />
                 </label>
                 <label>
-                  <span>FOB EUR</span>
+                  <span>{editFob.bomTemplate?.includes("**") ? "Base FOB EUR" : "FOB EUR"}</span>
                   <input
                     type="number"
                     value={editFob.fob ?? ""}
