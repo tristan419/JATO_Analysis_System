@@ -391,7 +391,9 @@ def list_colour_hex_rules(
 ) -> dict:
     """Return derived colour swatch rules and conflicts from material SKUs."""
     items = repo.list_colour_hex_rules(session)
-    return {"items": items, "summary": repo.summarize_colour_hex_rules(items)}
+    summary = repo.summarize_colour_hex_rules(items)
+    summary.update(repo.summarize_invalid_colour_rule_identities(session))
+    return {"items": items, "summary": summary}
 
 
 @router.get("/colour-hex-rules/preview")
@@ -729,7 +731,11 @@ def patch_colour_code(
     try:
         resolved_colour = repo.resolve_colour_attributes(
             session,
-            sku.brand,
+            repo.resolve_material_brand(
+                sku.brand,
+                getattr(sku, "model_name", None),
+                getattr(sku, "bom_template", None),
+            ),
             new_code,
             colour_name=requested_name,
             colour_hex=requested_hex,
@@ -842,6 +848,53 @@ def patch_bom_template_material_code(
         "materialCodes": list(mapping.values()),
         "updated": len(mapping),
     }
+
+
+@router.patch("/bom-templates/fob")
+def patch_bom_template_fob(
+    body: dict,
+    session: Session = Depends(get_db_session),
+    user=Depends(require_min_role("editor")),
+) -> dict:
+    material_codes = body.get("materialCodes")
+    if not isinstance(material_codes, list) or not material_codes:
+        raise HTTPException(status_code=400, detail="materialCodes is required")
+    country_code = clean_text(body.get("countryCode") or body.get("country_code")).upper()
+    if not country_code:
+        raise HTTPException(status_code=400, detail="countryCode is required")
+    if "baseFobEur" not in body:
+        raise HTTPException(status_code=400, detail="baseFobEur is required")
+    base_raw = body.get("baseFobEur")
+    base_fob = _parse_fob_value(base_raw)
+    if base_raw not in (None, "", 0, 0.0) and base_fob is None:
+        raise HTTPException(status_code=400, detail="baseFobEur must be a non-negative number")
+    if base_fob is not None and base_fob < 0:
+        raise HTTPException(status_code=400, detail="baseFobEur must be a non-negative number")
+    if base_fob == 0:
+        base_fob = None
+    bom_template = clean_text(body.get("bomTemplate") or body.get("materialCode")).upper()
+    try:
+        result = repo.update_bom_template_base_fob(
+            session,
+            bom_template,
+            [clean_text(code).upper() for code in material_codes],
+            country_code,
+            base_fob,
+            remark=clean_text(body.get("remark")) if "remark" in body else None,
+            update_remark="remark" in body,
+            changed_by=user.name,
+        )
+        session.commit()
+        return result
+    except LookupError as exc:
+        session.rollback()
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        session.rollback()
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except IntegrityError as exc:
+        session.rollback()
+        raise HTTPException(status_code=409, detail="Could not save BOM template base FOB") from exc
 
 
 @router.patch("/material-skus/{material_code}/colour-tier")
@@ -1398,6 +1451,8 @@ def create_material_sku(
     powertrain = clean_text(body.get("powertrain")) or "Other"
     bom_template = clean_text(body.get("bomTemplate")).upper() or material_code
     source_bom_template = clean_text(body.get("sourceBomTemplate")).upper()
+    source_material_code = clean_text(body.get("sourceMaterialCode")).upper()
+    automatic_fobs = bool(body.get("automaticFobs"))
     colour_tier = clean_text(body.get("colourTier") or "single").lower()
     if colour_tier not in {"single", "dual", "special"}:
         raise HTTPException(status_code=400, detail="colourTier must be single, dual, or special")
@@ -1441,6 +1496,13 @@ def create_material_sku(
             status_code=400,
             detail=f"Missing required fields: {', '.join(missing)}",
         )
+    if automatic_fobs and not source_material_code:
+        raise HTTPException(status_code=400, detail="sourceMaterialCode is required for automaticFobs")
+    if automatic_fobs and fob_updates:
+        raise HTTPException(
+            status_code=400,
+            detail="automaticFobs cannot be combined with explicit fobs",
+        )
 
     if repo.get_sku_by_material_code_any_status(session, material_code):
         raise HTTPException(status_code=409, detail=f"Material code already exists: {material_code}")
@@ -1479,6 +1541,22 @@ def create_material_sku(
         baseline_version_id=baseline.baseline_version_id,
     )
     session.add(sku)
+    automatic_fob_result: dict[str, object] = {
+        "sourceMaterialCode": source_material_code,
+        "materialCode": material_code,
+        "rows": 0,
+        "created": 0,
+        "skippedNoBase": 0,
+        "details": [],
+    }
+    if automatic_fobs:
+        session.flush()
+        automatic_fob_result = repo.initialize_sku_fobs_from_source(
+            session,
+            material_code,
+            source_material_code,
+            changed_by=user.name,
+        )
     copied_finance_rows = repo.copy_country_material_finance_template(
         session,
         source_bom_template,
@@ -1525,6 +1603,7 @@ def create_material_sku(
         "colourHex": sku.colour_hex,
         "copiedFinanceRows": copied_finance_rows,
         "fobsCreated": fobs_created,
+        "automaticFobs": automatic_fob_result,
     }
 
 

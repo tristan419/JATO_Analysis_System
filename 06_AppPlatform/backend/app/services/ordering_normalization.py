@@ -30,6 +30,21 @@ def normalize_brand(value: object | None) -> str:
     return text.upper()
 
 
+def resolve_material_brand(
+    brand: object | None,
+    model_name: object | None = None,
+    bom_template: object | None = None,
+) -> str:
+    """Return a stored brand, or infer one only from an explicit known identity."""
+    stored = normalize_brand(brand)
+    if stored:
+        return stored
+    identity = normalize_brand(" ".join(
+        part for part in (clean_text(model_name), clean_text(bom_template)) if part
+    ))
+    return identity if identity in {"JAECOO", "OMODA"} else ""
+
+
 _COLOUR_TIER_RANK = {
     "single": 0,
     "dual": 1,
