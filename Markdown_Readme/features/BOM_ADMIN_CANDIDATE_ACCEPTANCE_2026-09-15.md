@@ -27,7 +27,7 @@
 
 ### 2026-09-24 · C7 第二批：导入解析复用统一颜色规则（本地已实现，未合并）
 
-- 在同一 C worktree 继续提交 `be2b85eb8be8b01979b3ee4672c3e03f4a052575`。`app/services/order_genius_service.py::_resolve_fob_for_sku` 的 `uploaded_base_plus_colour` 现在使用 `_effective_colour_tier` 和 `repo.get_colour_surcharge_amount_for_sku`，因此导入路径也遵守车型＋色码 → 品牌＋色码 → 品牌 Special/ Dual 默认的解析；明确最终价模式仍不叠加。
+- 在同一 C worktree 继续提交 `be2b85eb8be8b01979b3ee4672c3e03f4a052575`，随后提交 `282cd1218dd4235ca40392f3c91387e66aa0cad8` 收紧明确最终价语义。`app/services/order_genius_service.py::_resolve_fob_for_sku` 的 `uploaded_base_plus_colour` 现在使用 `_effective_colour_tier` 和 `repo.get_colour_surcharge_amount_for_sku`，因此导入路径也遵守车型＋色码 → 品牌＋色码 → 品牌 Special/ Dual 默认的解析；明确最终价模式仍不叠加且不写入 Single base 元数据。
 - 自动解析行现在写入 `base_fob_eur`、`colour_surcharge_eur` 和 `final_fob_eur`，后续重算能识别基准与加价；没有改手动编辑保护。
 - 新增回归测试：Special 导入基准 15000、特例 +200 时得到 15200，并保留 base/surcharge 元数据。聚焦 4 项新用例通过；完整后端文件当前 `43 passed, 5 failed`，5 个失败仍为上一批记录的既有基线缺口。
 - 本批仍未合并/部署，未做 Candidate 浏览器验收；Copy Material、基准价导入的明确最终价分支和 C5/C6 预览/应用/停用仍待验。
