@@ -466,6 +466,7 @@ Markdown_Readme/Fullstack/JATO_PLATFORM_HANDOVER_2026-09-14.md
 - [ ] **P1 BOM PR 审阅与 Candidate 验收**：B/C/A/D 已按 C → B → A → D 合并；手动基准重算修复已由 PR #233 合入，当前 main `cf10438fdeed` 的 Candidate 已重新准备成功。#233 只修复“有可信 Single 基准的 manual 行仍应叠加当前颜色 surcharge”，不等于 Special +300、J5 共享色卡/双入口、manual/no-base、FOB 数值和认证草稿全部验收通过。当前没有 Active/www/intl 更新授权。
 - [ ] **当前 Candidate 构件**：部署 run [#35971888377](https://github.com/tristan419/JATO_Analysis_System/actions/runs/35971888377)，操作 ID `2026-09-24T080357833Z-prepare-candidate-8f651be3`，commit `cf10438fdeed1573a13fc1f2a533c18623d87476`，archive `ea4d7e9ab0a5d9e0fdfa74a4627e2e2dc711d379f7452cdac012e4bc26fff9b3`，manifest `566d1cfe6039a1ffcdc7e147dad06a0374e4a312b665d04aba3e5d1e2df5f57b`。Candidate 部署报告通过 sandbox/database isolation/backend/monthly-disabled/preview，并记录 `active_unchanged`；不要把它写成 Active 发布。
 - [ ] **色块缺颜色解释**：PR #233 未改色卡。BOM/Matrix 当前从 SKU `colourHex` 或名称映射渲染，缺失时回退 `#94A3B8`；此前 Candidate 已有 `missing swatch`/缺规则记录。蓝边是自定义 hex 的视觉标记，不代表规则命中。下一步应在 Candidate 读取实际 `colourHex` 与 Refresh/Preview 的 missing/conflict 明细，修真实共享规则数据，不用默认色覆盖缺口。
+- [ ] **颜色映射实现口径**：先按规范化“品牌＋Colour Code”查已有共享 HEX；未命中才按名称/别名找唯一候选；仍未命中才让用户选色或输入 HEX 并确认保存。不能把颜色名称自动猜成真实车漆色，也不能用默认灰色覆盖缺失数据。双色保存两份 HEX、Matte 保存一份；色块数量与 Dual/Special 价格 tier 分开维护。BOM 与 Matrix 必须引用同一映射。
 - [ ] **发布，单独决定**：若要让正式站看到已验收功能，另行批准把同一个已测构件 update-active；再按现有独立流程同步 intl，分别核验版本。Candidate 可用不等于必须立即发布。
 - [ ] **P2 其他研发**：按产品优先级选择 Config 本地 10 文件收口、AstrBot JATO MCP 整理，或 MSRP #183；不要求全项目依次排队。保留 #157 对 #179 的现有合并约束。
 - [ ] **P3 历史整理**：最后再审计旧 Draft PR/旧 worktree；未提交成果未确认前不关闭、删除或清理。
