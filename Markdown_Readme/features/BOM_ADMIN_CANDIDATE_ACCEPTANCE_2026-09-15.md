@@ -1,11 +1,36 @@
 # BOM Admin / Order Genius：Candidate 验收与问题梳理
 
-> 创建：2026-09-15；最新需求与状态修订：2026-09-24，Asia/Shanghai。状态：C7 第一批已在独立 worktree 本地实现；C5/C6/C8 仍部分待补，D 仍有交互缺口，尚未完成 Candidate 验收。
+> 创建：2026-09-15；最新需求与状态修订：2026-09-24，Asia/Shanghai。状态：C7 新增颜色/导入与模板基准批次已在独立 worktree 本地实现；C5/C6/C8 仍部分待补，D 仍有交互缺口，整体尚未完成 Candidate 验收。
 > 用户目标：稳定填写订单、稳定列布局、跨物料共享颜色名称/色卡、正确计算颜色加价。暂不优先建设多人编辑、row_version 扩展或新门禁。
 > 初次调研只做验收和文档；之后 A 已有本地代码提交 `260f839a`，尚未部署验收。B/C（含 E）/D 的代码批次随后已各自在独立 worktree 完成，整个 BOM 修复仍未完成 Candidate 验收。
 > **下一位执行者先读第 13 节 9 月 24 日最新批次，再按第 12 节实施。** 保留已有成果；C 按 C5–C8 继续补齐，D 补交互缺口，不把历史测试通过当作完整收口。
 
 ## 13. 实施记录
+
+### 2026-09-24 · 用户澄清：模板基准价与派生颜色价格（最高优先级，已本地实现，待 Candidate）
+
+本节覆盖下文将 BOM 页面输入理解为“各颜色手动最终 FOB”的旧口径。用户明确：在含 `**` 的 BOM 模板行按国家维护基准价；Single = 基准 + 0，Dual = 基准 + 品牌 Dual 规则，Special = 基准 + 命中特殊价规则。颜色区域继续支持拖动分类、增删改查；颜色加价由现有统一工具维护，Matte 为 Special。
+
+- 已核查的错位：`BomAdminPanel` 模板行编辑传入 `allCodes`，`handleFobSave` 逐个调用 `updateSkuFob`，把同一输入写成各颜色最终价；repository 标为 `manual_edit` 后，规则重算跳过这些派生行。这不代表用户主动逐颜色锁定了最终价。
+- 修改模板基准价应在后端同一事务内保存基准并计算该模板各颜色最终价；前端提交模板作用域、国家和基准金额，复用现有规则解析。禁止继续把同一最终价逐颜色覆盖。保护的是人工维护的基准，不能因基准由人工输入而冻结派生颜色。
+- 拖动 Single/Dual/Special 或修改 surcharge 仅改变适用加价，基准保持不变；最后一个 Single 移走时也不能丢失已维护基准。新增颜色、Copy Material、模板批量调整、国家复制/调整均须核对并遵守同一基准语义。Copy Material 页面手填金额按模板基准处理，不再当各颜色最终价。
+- 先核查现有基准存储与读取，优先复用 `base_fob_eur` 和已有模板作用域。`**` 当前可以只是分组标识，不能假设数据库已有独立同名基准记录；不得简单禁止非 `**` SKU 请求，否则会堵住现有模板保存流程。若确需数据模型调整，先说明现有存储为何不足及最小改动范围，不新增定价框架。
+- `manual_edit` 历史标签本身不能证明颜色最终价是人工特例。旧数据仍需只读核对，不批量解锁或回填正式数据；明确最终价导入保留原值、不二次加价，其导入语义不能套用到 BOM 模板编辑。
+- 验收必须覆盖：OMODA 基准 15000→15500，Single=15500、Dual(+200)=15700；Dual 规则改 +300 后为15800且基准仍15500。再覆盖拖动分类、移走最后一个 Single、Special 特例、复制与批量调整、多国家不同基准、无基准、重复计算、备注单独保存不改变定价语义，以及 BOM/Matrix 一致。
+- 模板基准批次已在同一 C worktree 实现，提交见下一节；`eb10c0e`、`be2b85e`、`282cd121` 的新增颜色/导入成果继续保留。代码只改独立 worktree，没有合并远端、部署 Candidate、更新 Active/www/intl 或写正式数据。合并、Candidate 部署和 Active 发布仍按已有授权边界执行。
+
+### 2026-09-24 · C7 第三批：模板基准 FOB 与派生颜色重算（本地已实现，未合并）
+
+- worktree：`/Users/litristan/Downloads/JATO_Analysis_System_bom_colour`；分支：`codex/bom-colour-followup`；提交：`83a45c63 fix(bom): preserve template base FOB semantics`。本批以已有 `282cd121` 为工作树基础，保留用户澄清的模板语义：含 `**` 的模板按国家保存 Single 基准，Single=基准，Dual/Special=基准＋统一颜色规则；没有新增独立 `**` 数据模型，也没有禁止非 `**` SKU 请求。
+- 后端新增 `PATCH /order-genius/bom-templates/fob` 和 repository 同事务更新：读取/写入 `base_fob_eur`，按模板所有 active SKU 计算 `colour_surcharge_eur`/`final_fob_eur`，记录变化历史；清空基准会清理该模板国家行。模板编辑不再逐个 `updateSkuFob` 把同一输入标成 `manual_edit`。
+- 拖动 Single/Dual/Special 会沿用已有 reprice 流程：`template_base` 与 `template_base_country_adjust` 可重算，人工最终价 `manual_edit` 仍保持保护；最后一个 Single 移走不丢失其他颜色行上的 `base_fob_eur`。模板批量调整、Copy Material、国家复制/调整均传递基准和 surcharge 元数据；明确最终价导入仍不写 Single 基准、不二次加价。
+- 前端模板 FOB 编辑、批量调价、Copy Material 改为模板接口；显示基准价和 surcharge，复制后使用接口返回的派生结果更新本地状态。普通无 `**` SKU 保留原逐 SKU 最终价路径。
+
+验证（2026-09-24）：
+
+- 后端模板/规则聚焦用例 `6 passed`；完整 `tests/unit/test_ordering_bom_admin.py` 为 `46 passed, 5 failed`。5 个失败仍是本分支既有基线缺口：`list_bom_admin_country_columns` 缺失/旧 NL 预期 3 项，`sync_missing_template_fobs` 缺失 2 项；没有把它们写成此次通过。
+- `compileall` 通过；前端 `npm run check:types` 通过；全量 Vitest `73 files / 399 tests passed`；构建和路由回归通过（构建仅既有大 chunk warning）。
+- 当前未验：Candidate 浏览器中的 15000→15500→15800 数值链路、不同国家基准、OMODA/JAECOO/Special 规则、无基准与手动保护、BOM/Matrix 双入口、真实 Copy/拖动交互。模板批次仍未创建/更新 PR、未合并 main、未部署 Candidate。
 
 ### 2026-09-24 · C7 第一批：新增颜色自动 FOB 初始化与特殊价页面初接（本地已实现，未合并）
 
@@ -410,7 +435,7 @@
 
 - 修正品牌后重新查询适用规则；当前 JAECOO +300，若要 +200 需明确业务决定，不能据截图口述偷偷改配置。
 - 复用 `reprice_sku_colour_surcharge_fobs`，确认调用覆盖相关实际入口。缺品牌/规则必须报告“无法定价”，不能把未命中与明确 0 加价混同；明确 0 规则合法。
-- 逐国检查同模板/内饰等现有匹配条件下的 Single 基准；不得取任意车型最低价格补基准。manual source 保持不变，missing-base 保留并给原因；已有 surcharge 的行不能重复叠加。
+- 逐国检查同模板/内饰等现有匹配条件下的可信基准；不得取任意车型最低价格补基准。按第 13 节最新澄清保护人工基准、重算派生颜色；不能仅凭 manual source 冻结模板编辑生成的颜色行。missing-base 保留并给原因；已有 surcharge 不能重复叠加。
 - 色卡标准变更不应自动改变 tier 或触发改价。价格重算、品牌修正、标准修改分别给出结果，不把三件事塞进 Refresh。
 
 验收：J5 ICE/HEV 品牌修正样本色卡可打开且被统计；跨两个材料同代码的标准同步；冲突不静默吞掉；dual 基准 15000 + 规则 300 = 15300，重复执行不变；manual/无基准跳过；规则明确 0 与规则缺失有不同结果。价格测试用可恢复的 Candidate 测试样本，记录操作影响。
@@ -419,7 +444,7 @@
 
 - 在现有 Colour Surcharges 品牌 Dual/Special 默认表下增加“特殊色加价”列表，支持新增、编辑、移除特例。字段为品牌、车型（可选“该品牌全部车型”）、色码/名称、加价 EUR；从现有物料/颜色库选择，名称仅辅助识别，匹配使用品牌、车型和色码。
 - Special 色卡入口增加“设置加价”，自动带入当前品牌、车型、色码，打开同一规则编辑交互，不建立另一份私有规则。名称/swatch 仍共享，价格可限定车型；单纯编辑色卡不改变 tier 或价格。
-- 自动 Special 定价优先级：品牌＋车型＋色码 → 品牌＋色码（不限车型）→ 品牌 Special 默认。Dual 继续使用品牌 Dual 默认，Single 不附加颜色费用；Matte 必须为 Special，特例替代默认，不叠加 Dual。明确手动最终 FOB 在自动重算之外保护。
+- 自动 Special 定价优先级：品牌＋车型＋色码 → 品牌＋色码（不限车型）→ 品牌 Special 默认。Dual 继续使用品牌 Dual 默认，Single 不附加颜色费用；Matte 必须为 Special，特例替代默认，不叠加 Dual。人工模板基准不受规则修改影响，派生颜色仍须重算；历史或明确最终价导入按第 13 节区分，不能与模板输入混同。
 - 规则 0 合法，代表免加价；删除/停用特例才回退下一级。规则完全缺失必须返回可识别的未配置结果，不能当作明确 0。
 - 复用 `SpecialColourSurchargeRule`（`app/db/models.py`）和 repository 中 `get_special_colour_surcharge_for_sku`、`get_colour_surcharge_amount_for_sku`、`upsert_special_colour_surcharge`。现有字段和索引已支持上述范围，预计不需新表；保留车型精确优先和零金额命中逻辑。
 - 复用 `GET/PATCH /special-colour-surcharges`、前端 `getOrderGeniusSpecialColourSurcharges` / `updateOrderGeniusSpecialColourSurcharge` 与现有 types。新增最小停用操作，按规则 ID 精确处理，复用 `is_active`；停用后按剩余规则重算适用的自动价格，不删除历史价格记录。
@@ -435,8 +460,8 @@
 
 - 在现有 `create_material_sku` 后端事务中创建 SKU 并初始化各国自动价格；前端传目标 tier 与来源物料/所需上下文，后端验证来源范围。取消新增颜色中“先重算空价格，再逐国手动写 FOB”的调用链。异常整体回滚；合法缺基准国家按明确策略跳过并返回原因，其余国家正常生成。
 - 自动价格从同 BOM 模板、同国家且符合现有内饰/付款条件的可信 Single 基准计算；核查现有匹配是否足够，不取无关车型最低价。使用统一规则解析函数，不在前端重写优先级，不直接复制来源双色最终价后再加一次。
-- 正确保存 base、surcharge、final 与自动来源；不能把自动生成价格标成 manual_edit，也不能把真正手动价格改成自动来源。复用现有可用来源语义，只有确实缺失时才增加最小值。
-- Copy Material 核对自动继承与用户明确输入最终 FOB 两种语义；自动继承使用同一初始化，手填最终价原值保留。原始来源是 Dual/Special 时不得将其最终价当作 Single 基准。
+- 正确保存 base、surcharge、final 与来源；区分人工模板基准和派生颜色最终价，不能把模板改价派生行标成不可重算的 manual_edit。复用现有来源语义，只有确实缺失时才增加最小值；不能批量重标记历史行。
+- Copy Material 自动继承可信模板基准；页面手填金额作为目标模板基准，按各颜色规则派生最终价。原始来源是 Dual/Special 时不得将其最终价当作基准。明确最终价导入是独立语义，不因该分支而允许模板输入覆盖所有颜色最终价。
 - `order_genius_service` 中 `uploaded_base_plus_colour` 当前只读品牌规则，需改为复用统一 tier/特殊规则计算；`uploaded_final_fob` 和明确最终价模式不再加价。检查是否存在其他绕过统一解析的自动路径。
 - 历史 manual_edit 已混有自动复制记录，不能一键取消全部手动保护；仅列疑似受影响样本供核对，历史价格修正独立记录和授权，不默认纳入新功能回填。
 
@@ -444,7 +469,7 @@
 
 - 主要文件：`06_AppPlatform/frontend/src/pages/OrderGeniusPage.tsx`（现有 BomAdminPanel）、`src/api/client.ts`、`src/types/orderGenius.ts`；后端 `app/api/routes/order_genius.py`、对应请求 schema、`app/infra/order_genius_repository.py`、`app/services/order_genius_service.py` 及相关测试。按实际实现需要拆出局部 UI 组件，不重写整页或新增定价框架。实施前报告每批预计文件和行数；本轮未给出已实施行数。
 - 规则测试：车型特例覆盖不限车型特例；不限车型特例覆盖品牌 Special 默认；OMODA7/9 相同色码不同金额互不影响；0 命中、缺规则、停用回退；Matte 不叠加 Dual。
-- 定价测试：品牌完整的非 J5 首次新增 Dual（15000+200 或 +300）；从已有 Dual 新增不重复叠加；新增 Special 命中特例；多国家不同 Single 基准；缺基准有原因；manual 最终价不被覆盖；重复计算幂等；创建失败回滚；Copy Material 和基准价导入遵守同一规则，最终价导入不二次加价。
+- 定价测试：品牌完整的非 J5 首次新增 Dual（15000+200 或 +300）；从已有 Dual 新增不重复叠加；新增 Special 命中特例；多国家不同基准；缺基准有原因；人工模板基准在规则重算时不变、派生价格正确更新；重复计算幂等；创建失败回滚；Copy Material 和基准价导入遵守同一规则，最终价导入不二次加价。必须执行第 13 节最新澄清中的模板改价/拖动/复制/调整验收。
 - 真实组件测试：选择品牌/车型/色码→预览→确认→BOM/Matrix 显示一致并保留搜索；取消预览无写入；保存失败保留输入；移除特例后正确回退。不能只断言代码字符串。
 - 可分为“修复新增价格初始化”“接入特殊价页面/预览/移除”“自动定价其他入口对齐”小批次，但共享同一个后端规则解析。每批先在原业务 worktree 核对基线和未提交内容，避免覆盖 A/B/D；记录提交、实际测试和未验项。已稳定的 A/B/C/E 可独立准备 Candidate 供用户验收，不因此宣称 C5–C8 完成。
 
@@ -478,4 +503,4 @@
 
 ### 12.3 可直接交给下一轮的起始指令
 
-> 先读第 13 节 2026-09-24 修订及第 12 节 C5–C8。延续现有成果，先核对当前远端 main、worktree 与 PR；C 补新增双色/Special 定价和现有特殊价页面入口，不能仅修 J5 品牌；D@34656898 补新标签误报、旧响应保护与真实草稿测试。按本文件优先级复用现有规则表和定价函数，Matte 为 Special，不叠加 Dual；保护手动最终 FOB，不批量回填历史。已稳定的 A/B/C/E 可分批准备用户 Candidate 验收，不重做 B；A 的两个提交独立保留。每批更新实际测试和未验项，通过现有 PR→main→Candidate 流程交付，Active/www/intl 发布单独决定。
+> 先读第 13 节“用户澄清：模板基准价与派生颜色价格”，再读 C5–C8。保留已有成果；C 下一批优先修模板基准保存和派生重算，并覆盖拖动分类、复制及批量调整。人工模板基准保持，派生颜色按规则更新；不得继续将模板金额逐颜色写成相同最终价并冻结。不要简单禁止非 ** 请求或假设已有独立模板价格记录。历史数据不批量回填，明确最终价导入不二次加价。随后补 C5/C6；D@34656898 补新标签误报、旧响应保护与真实草稿测试。每批更新实际测试和未验项，沿用 PR→main→Candidate 流程及授权边界；Active/www/intl 发布单独决定。

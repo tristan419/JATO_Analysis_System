@@ -1,15 +1,36 @@
 # JATO Platform 开发交接与恢复入口
 
+## 2026-09-24 用户澄清：先修模板基准价语义
+
+最高优先级：BOM 含 `**` 的模板行输入是按国家维护的基准价；Single=基准+0，Dual/Special=基准+适用规则。人工基准应保留，派生颜色仍随基准、分类及规则变化重算。旧文档“保护手动最终 FOB”不能用于冻结模板编辑生成的颜色价格。
+
+现有 `handleFobSave` 将模板下所有颜色写入同一最终价并标成 `manual_edit` 的根因，已在 C worktree 的 `83a45c63` 修复；新增颜色/导入三个提交与本批模板语义现在连续，但仍未合并或部署。不能假定数据库存在独立 `**` 价格记录，也不能简单禁止非 `**` 请求。明确最终价导入与历史数据单独识别，不自动回填正式数据。
+
+完整实施及数值验收见 [BOM 实施文档第 13 节“用户澄清：模板基准价与派生颜色价格”](../features/BOM_ADMIN_CANDIDATE_ACCEPTANCE_2026-09-15.md)。模板基准批次已在 C worktree 本地实现，提交为 `83a45c63`，仍未合并、部署或写正式数据；后续历史描述与此节实际记录冲突时以本节为准。
+
+### 2026-09-24 模板基准批次实绩（待合并/Candidate）
+
+- C worktree `/Users/litristan/Downloads/JATO_Analysis_System_bom_colour`、分支 `codex/bom-colour-followup` 已修正 `handleFobSave(allCodes)` 的根因：`**` 模板行按国家保存 `base_fob_eur`，后端同事务按 Single/Dual/Special 规则派生最终价，不再把同一输入逐颜色写成 `manual_edit`。
+- 同批覆盖模板读取、拖动 tier 后重算、最后一个 Single 移走保留基准、Copy Material、模板批量调价、国家复制/调整和前端本地派生结果；普通非 `**` SKU 仍走原逐 SKU 最终价路径，明确最终价导入保持不二次加价。
+- 本地验证：模板/规则聚焦 6 项通过；`test_ordering_bom_admin.py` 为 `46 passed, 5 failed`，5 项均为该分支此前已知的 country-column / `sync_missing_template_fobs` 基线缺口；Python compileall 通过；前端类型检查、73 files / 399 tests、构建、路由回归通过。构建只有既有大 chunk warning。
+- 未完成：没有创建/更新远端 PR，没有合并 main，没有准备 Candidate；仍需在 Candidate 实测 15000→15500→15800、多国家基准、Special 特例、无基准/manual 保护、BOM/Matrix 双入口、Copy/拖动交互。Hermes 自动事件文件继续保持 dirty，不纳入业务提交。
+
 ## 2026-09-24 更新：颜色定价需求与收口状态
 
 本节覆盖下方“C/D 已完成、只需合并”的旧结论。C7 第一批已在 BOM 独立 worktree 本地实现，但仍未合并或部署；本轮没有写正式数据。
 
-- 新增双色不加价不限于 J5：现有流程先在无 FOB 时重算，再复制来源最终价并落为 manual_edit，后续加价又被手动保护跳过。C7 三个本地批次已在 `codex/bom-colour-followup` 修正新增颜色和导入路径，业务提交 `eb10c0e`、`be2b85e`、`282cd121`：后端按同模板/国家/付款条件 Single 基准＋统一规则在事务内初始化，前端不再逐国调用手动 FOB 复制，导入也保存 base/surcharge 元数据；明确最终价不伪装成 Single 基准；Copy Material 和其他入口仍待核对。
+- 新增双色不加价不限于 J5：旧流程先在无 FOB 时重算，再复制来源最终价并落为 manual_edit，后续加价又被手动保护跳过。C7 现有四个业务提交已在 `codex/bom-colour-followup` 修正新增颜色、导入和模板入口：后端按同模板/国家/付款条件 Single 基准＋统一规则初始化，模板编辑/Copy Material/批量调价/国家复制调整也保存 base/surcharge 元数据；明确最终价不伪装成 Single 基准。C5/C6 的预览、应用和停用回退仍待后续。
 - 用户确认品牌默认 Dual：OMODA +200 EUR、JAECOO +300 EUR；Matte 是 Special，不叠加 Dual。特例 OMODA7 Matte +200、OMODA9 Matte +300，由用户在页面指定品牌、色码和可选车型维护，不硬编码。
 - 特殊价表、API 和后端匹配已存在；本批已在现有 Colour Surcharges 接入列表/编辑并在 Special 色卡 tooltip 展示实际命中来源。优先级为车型色码特例→品牌色码特例→品牌 Special 默认；0 表示免加价，停用才回退。真正的预览→应用、停用和完整回退明细仍待后续批次。详见 [BOM 实施文档 C5–C8](../features/BOM_ADMIN_CANDIDATE_ACCEPTANCE_2026-09-15.md)。
-- D@34656898 仍需修新标签 null 返回误报、旧核验响应覆盖，并补重登前后真实数量/BOM 草稿测试。历史 403 个测试通过不能替代这些验收。该代码提交日期为 9 月 15 日，9 月 23 日是文档更新日期。
+- D@34656898 已修复新标签登录误报、旧核验响应覆盖和 401/403/网络错误分类；真实浏览器的低权限 403、过期 token、网络断开及重登前后数量/BOM 草稿仍待验收。历史 403 个测试通过不能替代这些验收。该代码提交日期为 9 月 15 日，9 月 23 日是文档更新日期。
 - 用户希望已稳定修复先进入 Candidate：先核对 A/B 必要交互验证及组合结果，C/E 既有部分可分批准备并明确未修定价；D 补齐后再纳入。通过现有 PR→main→Candidate 流程，记录实际部署 SHA；不把 Candidate 验收等同于 Active 发布。
 - 最新文档位于 handover worktree；上次远端核对 #227 尚未包含本地修订，后续应重新核对远端，不能直接合并旧版。
+
+### C7 第三批实绩（2026-09-24）
+
+- C worktree：`/Users/litristan/Downloads/JATO_Analysis_System_bom_colour`，分支 `codex/bom-colour-followup`，业务提交 `83a45c63`；未合并、未部署 Candidate、未更新 Active/www/intl。
+- 已改：模板 `PATCH /order-genius/bom-templates/fob`、`base_fob_eur` 派生保存与历史记录；模板编辑、批量调价、Copy Material、国家复制/调整遵守基准＋颜色规则；tier 重算不冻结模板派生价。
+- 已验：后端聚焦 6 passed，完整文件 46 passed / 5 known baseline failures；前端 73 files / 399 tests、类型、构建、路由回归通过。Candidate 数值与双入口浏览器验收仍待进行。
 
 ### C7 第一批实绩（2026-09-24）
 
