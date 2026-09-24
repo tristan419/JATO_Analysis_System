@@ -3002,6 +3002,7 @@ type BomAdminPageCache = {
 
 const BOM_ADMIN_PAGE_CACHE_KEY = "order-genius:bom-admin";
 const BOM_ADMIN_PAGE_CACHE_TTL_MS = 30 * 60 * 1000;
+const BOM_ADMIN_COLOUR_LOOKUP_DELAY_MS = 1200;
 const EMPTY_BOM_ADMIN_COPY_COUNTRY_FORM: BomAdminCopyCountryForm = {
   sourceCountryCode: "",
   targetCountryCode: "",
@@ -3078,6 +3079,29 @@ type BomAddColourEditor = {
   colourNameTouched: boolean;
   colourHexTouched: boolean;
 };
+
+function getBomColourCodeEditorTargetKey(editor: BomColourCodeEditor | null): string | null {
+  if (!editor) return null;
+  return [
+    editor.materialCode,
+    editor.brand,
+    editor.modelName,
+    editor.version,
+    editor.currentColourCode,
+  ].join("|");
+}
+
+function getBomAddColourEditorTargetKey(editor: BomAddColourEditor | null): string | null {
+  if (!editor) return null;
+  return [
+    editor.bomTemplate,
+    editor.sourceMaterialCode,
+    editor.brand,
+    editor.modelName,
+    editor.version,
+    editor.tierName,
+  ].join("|");
+}
 
 type BomColourTierReview = {
   previousTier: BomAdminColourTier;
@@ -3267,7 +3291,7 @@ function formatBomSourceLabel(
 
 // ── BOM Admin Panel ──────────────────────────────────────────────────
 
-function BomAdminPanel({
+export function BomAdminPanel({
   initialCopyTargetCountry = null,
   onFobCountriesChanged,
   onFobChanged,
@@ -3279,6 +3303,7 @@ function BomAdminPanel({
   const cachedBomAdmin = cachedBomAdminRef.current;
   const cachedSearchText = cachedBomAdmin?.searchText ?? "";
   const initialBomLoadSearchRef = useRef(cachedSearchText.trim());
+  const appliedBomSearchRef = useRef(cachedSearchText.trim());
   const skipNextDebouncedLoadRef = useRef(true);
   const [skus, setSkus] = useState<any[]>([]);
   const [countries, setCountries] = useState<string[]>([]);
@@ -3392,8 +3417,12 @@ function BomAdminPanel({
   const loadRef = useRef(false);  // prevent concurrent loads
   const currentLoadKeyRef = useRef<string | null>(null);
   const pendingLoadKeyRef = useRef<string | null>(null);
+  const latestLoadKeyRef = useRef(cachedSearchText.trim());
   const loadTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);  // debounce loads
   const activeFobCountriesRef = useRef<string[]>([]);
+
+  const colourCodeEditorTargetKey = getBomColourCodeEditorTargetKey(colourCodeEditor);
+  const addColourEditorTargetKey = getBomAddColourEditorTargetKey(addColourEditor);
 
   // NL always first, then alphabetical
   const sortedCountries = useMemo(() => {
@@ -3603,12 +3632,20 @@ function BomAdminPanel({
     }
   }, []);
 
-  const load = useCallback(async (s?: string) => {
-    const loadKey = s ?? "";
+  const load = useCallback(async (requestedSearch?: string) => {
+    // An omitted search means refresh the currently applied query. An explicit
+    // empty string is the Clear action and must remain distinguishable.
+    const loadKey = requestedSearch === undefined
+      ? appliedBomSearchRef.current
+      : requestedSearch.trim();
+    if (requestedSearch !== undefined) {
+      appliedBomSearchRef.current = loadKey;
+    }
+    latestLoadKeyRef.current = loadKey;
     if (loadRef.current) {
-      if (currentLoadKeyRef.current !== loadKey) {
-        pendingLoadKeyRef.current = loadKey;
-      }
+      // Keep only the latest user intent. Empty string is meaningful here: it
+      // represents an explicit Clear and must not be collapsed into "none".
+      pendingLoadKeyRef.current = loadKey;
       return;
     }
     loadRef.current = true;
@@ -3616,10 +3653,10 @@ function BomAdminPanel({
     setLoading(true);
     setBomAdminError("");
     try {
-      const normalizedSearch = String(s || "").trim().toUpperCase();
+      const normalizedSearch = loadKey.toUpperCase();
       const isCountry = /^[A-Z]{2}$/.test(normalizedSearch);
       const params: { country?: string; search?: string } = {};
-      if (s) {
+      if (loadKey) {
         if (isCountry) {
           const fobCountries = activeFobCountriesRef.current;
           if (fobCountries.includes(normalizedSearch)) {
@@ -3643,17 +3680,18 @@ function BomAdminPanel({
               countryCode: current.countryCode || normalizedSearch,
             }));
           } else {
-            params.search = s;
+            params.search = loadKey;
             setBomAdminNotice("");
           }
         } else {
-          params.search = s;
+          params.search = loadKey;
           setBomAdminNotice("");
         }
       } else {
         setBomAdminNotice("");
       }
       const res = await api.getBomAdmin(Object.keys(params).length > 0 ? params : undefined);
+      if (latestLoadKeyRef.current !== loadKey) return;
       const nextItems = res.items || [];
       setSkus(nextItems);
       setOptimisticColourTiers((current) => {
@@ -3675,7 +3713,9 @@ function BomAdminPanel({
       setBomAdminError("");
     } catch (e) {
       console.error('[BOM Admin]', e);
-      setBomAdminError(getErrorMessage(e));
+      if (latestLoadKeyRef.current === loadKey) {
+        setBomAdminError(getErrorMessage(e));
+      }
     }
     finally {
       loadRef.current = false;
@@ -3684,9 +3724,7 @@ function BomAdminPanel({
       const pendingLoadKey = pendingLoadKeyRef.current;
       pendingLoadKeyRef.current = null;
       if (pendingLoadKey !== null) {
-        window.setTimeout(() => {
-          void load(pendingLoadKey || undefined);
-        }, 0);
+        void load(pendingLoadKey);
       }
     }
   }, []);
@@ -3804,7 +3842,7 @@ function BomAdminPanel({
     }));
   }, [patchBomSkus]);
 
-  useEffect(() => { load(initialBomLoadSearchRef.current || undefined); }, [load]);
+  useEffect(() => { load(initialBomLoadSearchRef.current); }, [load]);
   useEffect(() => { void loadColourSurcharges(); }, [loadColourSurcharges]);
   useEffect(() => { void loadSpecialColourSurcharges(); }, [loadSpecialColourSurcharges]);
   useEffect(() => { void loadColourHexRules(); }, [loadColourHexRules]);
@@ -3812,7 +3850,10 @@ function BomAdminPanel({
   useEffect(() => {
     const brand = String(colourCodeEditor?.brand || "").trim();
     const colourCode = String(colourCodeEditor?.nextColourCode || "").trim().toUpperCase();
+    const targetKey = colourCodeEditorTargetKey;
     const requestId = ++colourCodeLookupRequestRef.current;
+    setColourCodeRuleLookup(null);
+    setColourCodeEditorError("");
     if (!brand || !/^[A-Z0-9]{1,4}$/.test(colourCode)) {
       setColourCodeRuleLookup(null);
       setLoadingColourCodeRuleLookup(false);
@@ -3824,7 +3865,11 @@ function BomAdminPanel({
         if (colourCodeLookupRequestRef.current !== requestId) return;
         setColourCodeRuleLookup(lookup);
         setColourCodeEditor((current) => {
-          if (!current || current.nextColourCode.trim().toUpperCase() !== colourCode) return current;
+          if (
+            !current
+            || getBomColourCodeEditorTargetKey(current) !== targetKey
+            || current.nextColourCode.trim().toUpperCase() !== colourCode
+          ) return current;
           if (lookup.source !== "brand_code_rule" || lookup.hasNameConflict || lookup.hasSwatchConflict) {
             return current;
           }
@@ -3848,14 +3893,17 @@ function BomAdminPanel({
           setLoadingColourCodeRuleLookup(false);
         }
       });
-    }, 180);
+    }, BOM_ADMIN_COLOUR_LOOKUP_DELAY_MS);
     return () => window.clearTimeout(timer);
-  }, [colourCodeEditor?.brand, colourCodeEditor?.nextColourCode]);
+  }, [colourCodeEditorTargetKey, colourCodeEditor?.nextColourCode]);
 
   useEffect(() => {
     const brand = String(addColourEditor?.brand || "").trim();
     const colourCode = String(addColourEditor?.colourCode || "").trim().toUpperCase();
+    const targetKey = addColourEditorTargetKey;
     const requestId = ++addColourLookupRequestRef.current;
+    setAddColourRuleLookup(null);
+    setAddColourEditorError("");
     if (!brand || !/^[A-Z0-9]{1,4}$/.test(colourCode)) {
       setAddColourRuleLookup(null);
       setLoadingAddColourRuleLookup(false);
@@ -3867,7 +3915,11 @@ function BomAdminPanel({
         if (addColourLookupRequestRef.current !== requestId) return;
         setAddColourRuleLookup(lookup);
         setAddColourEditor((current) => {
-          if (!current || current.colourCode.trim().toUpperCase() !== colourCode) return current;
+          if (
+            !current
+            || getBomAddColourEditorTargetKey(current) !== targetKey
+            || current.colourCode.trim().toUpperCase() !== colourCode
+          ) return current;
           if (lookup.source !== "brand_code_rule" || lookup.hasNameConflict || lookup.hasSwatchConflict) {
             return current;
           }
@@ -3891,9 +3943,9 @@ function BomAdminPanel({
           setLoadingAddColourRuleLookup(false);
         }
       });
-    }, 180);
+    }, BOM_ADMIN_COLOUR_LOOKUP_DELAY_MS);
     return () => window.clearTimeout(timer);
-  }, [addColourEditor?.brand, addColourEditor?.colourCode]);
+  }, [addColourEditorTargetKey, addColourEditor?.colourCode]);
 
   const replaceFinanceRow = (
     rows: CountryMaterialFinanceRow[],
@@ -4038,7 +4090,7 @@ function BomAdminPanel({
       skipNextDebouncedLoadRef.current = false;
       return;
     }
-    load(debouncedSearch || undefined);
+    load(debouncedSearch);
   }, [debouncedSearch, load]);
 
   useEffect(() => {
@@ -5399,23 +5451,25 @@ function BomAdminPanel({
     return () => window.cancelAnimationFrame(frame);
   }, [financeQuickCard]);
 
+  // Focus only when a different editor target opens. Field edits and lookup
+  // responses must never steal the caret from the input the user is typing in.
   useEffect(() => {
-    if (!colourCodeEditor) return;
+    if (!colourCodeEditorTargetKey) return;
     const frame = window.requestAnimationFrame(() => {
       colourCodeEditorInputRef.current?.focus();
       colourCodeEditorInputRef.current?.select();
     });
     return () => window.cancelAnimationFrame(frame);
-  }, [colourCodeEditor]);
+  }, [colourCodeEditorTargetKey]);
 
   useEffect(() => {
-    if (!addColourEditor) return;
+    if (!addColourEditorTargetKey) return;
     const frame = window.requestAnimationFrame(() => {
       addColourEditorCodeRef.current?.focus();
       addColourEditorCodeRef.current?.select();
     });
     return () => window.cancelAnimationFrame(frame);
-  }, [addColourEditor]);
+  }, [addColourEditorTargetKey]);
 
   const toggleAddMaterialForm = () => {
     const nextVisible = !showAddMaterial;
@@ -5790,7 +5844,7 @@ function BomAdminPanel({
   }, [groupByTemplate, sortedVersionEntriesByModelKey]);
 
   const retryBomAdminLoad = () => {
-    void load(debouncedSearch || searchText || undefined);
+    void load();
   };
 
   const reLoginForBomAdmin = () => {
@@ -5926,7 +5980,7 @@ function BomAdminPanel({
               if (event.key === "Enter") {
                 const nextSearch = searchText.trim();
                 setDebouncedSearch(nextSearch);
-                void load(nextSearch || undefined);
+                void load(nextSearch);
               }
             }}
             className="bom-admin-search-input" />
@@ -5936,7 +5990,7 @@ function BomAdminPanel({
             onClick={async () => {
               setSearchText("");
               setDebouncedSearch("");
-              await load();
+              await load("");
               window.setTimeout(() => searchInputRef.current?.focus(), 0);
             }}
           >
