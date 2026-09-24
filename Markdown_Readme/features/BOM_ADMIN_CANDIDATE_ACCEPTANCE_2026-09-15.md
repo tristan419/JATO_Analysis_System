@@ -23,7 +23,9 @@
 - Model 列在 50%、100%、150% 缩放截图中均在最左，`Reset order grid column widths` 可见；拖拽列宽、刷新/数量保存后的持久化、真实窄窗口尺寸尚未完成，不能标记 B 全通过。
 - #215 交互证据：JAECOO5 HEV Exclusive-FWD 首行进入 `DONE`，Select-FWD 另一版本行仍是 `EDIT`。这证明不会整组同时编辑，但尚未取得“同 BOM Template 跨不同车型/版本”的专门样本。
 - JAECOO5 HEV 的 BOM 色卡按钮现在显示规范化 `JAECOO`，BW 规则可打开并读到 `#94A3B8`；列表和 Matrix 仍有大量 `missing swatch`（规则卡显示 24 个），共享颜色库双入口同步仍未通过。
-- OMODA9 SHS 的规则卡有 `OMODA · OMODA9 SHS · UE · MATTE GRAY +300 EUR`，但 BOM/Matrix 同一 UE 行仍显示 `Tier: dual · OMODA dual default`，Matrix FOB 与普通单色相同；只能证明特例配置被读出，不能证明它已作用于已有 SKU。OMODA9 Matte “Special +300、优先于 Dual”保持未通过，需继续做基准价保存或新颜色样本验收。
+- OMODA9 SHS 在 Candidate 中将 `UE` 从 `dual` 移到 `special` 后，价格复核弹窗显示 `9 countries scanned · 8 updated · 1 manual FOB skipped · 0 missing Single base`；AT、RO、BG、CZ、HR、GR、HU、SK 均按 Special `+300 EUR` 重算，只有 CH 保持 `25,400 → 25,400 · surcharge 200 · manual_fob`。这证明车型＋色码的 Special `+300` 规则和优先级已经生效，未更新的是被 `manual_edit` 标记的瑞士行。
+- 本次确认的业务语义是：BOM Admin 中手动 Copy 和 Manual Edit 都是在修改国家基准 FOB，不是锁定某个颜色的最终 FOB；最终价始终是 `base_fob_eur + 当前 tier surcharge`。真正的车型＋品牌＋色码特殊价优先于品牌色码特殊价和品牌 Special 默认，Matte 只走 Special、不叠加 Dual。
+- 当前剩余根因是 `manual_edit` 同时表示“人工改过基准”和“不可重算的最终价”。重算函数在读取 `base_fob_eur` 前直接跳过该行，所以复制后再手动调整的 CH 不能跟随 Special 规则。下一批只需收窄保护：有可信基准的手动行允许重算；没有基准的明确最终价继续报告并保护，不批量回填历史正式数据。
 - 管理员登录成功不等于 D 已验收：有效低权限 403、过期 token、断网重登及数量/BOM 草稿跨标签保留本批未执行。
 
 ## 13. 实施记录
@@ -37,6 +39,7 @@
 - 拖动 Single/Dual/Special 或修改 surcharge 仅改变适用加价，基准保持不变；最后一个 Single 移走时也不能丢失已维护基准。新增颜色、Copy Material、模板批量调整、国家复制/调整均须核对并遵守同一基准语义。Copy Material 页面手填金额按模板基准处理，不再当各颜色最终价。
 - 先核查现有基准存储与读取，优先复用 `base_fob_eur` 和已有模板作用域。`**` 当前可以只是分组标识，不能假设数据库已有独立同名基准记录；不得简单禁止非 `**` SKU 请求，否则会堵住现有模板保存流程。若确需数据模型调整，先说明现有存储为何不足及最小改动范围，不新增定价框架。
 - `manual_edit` 历史标签本身不能证明颜色最终价是人工特例。旧数据仍需只读核对，不批量解锁或回填正式数据；明确最终价导入保留原值、不二次加价，其导入语义不能套用到 BOM 模板编辑。
+- 用户进一步明确：BOM Admin 的手动 Copy 和 Manual Edit 都应改国家 Single 基准；Dual/Special 颜色加价必须覆盖在该基准上。`manual_edit` 不能继续作为模板派生颜色的永久锁价语义；只有没有可信基准的明确最终价才继续保护。
 - 验收必须覆盖：OMODA 基准 15000→15500，Single=15500、Dual(+200)=15700；Dual 规则改 +300 后为15800且基准仍15500。再覆盖拖动分类、移走最后一个 Single、Special 特例、复制与批量调整、多国家不同基准、无基准、重复计算、备注单独保存不改变定价语义，以及 BOM/Matrix 一致。
 - 模板基准批次已在同一 C worktree 实现，提交见下一节；`eb10c0e`、`be2b85e`、`282cd121` 的新增颜色/导入成果继续保留。代码只改独立 worktree，没有合并远端、部署 Candidate、更新 Active/www/intl 或写正式数据。合并、Candidate 部署和 Active 发布仍按已有授权边界执行。
 
@@ -44,7 +47,7 @@
 
 - worktree：`/Users/litristan/Downloads/JATO_Analysis_System_bom_colour`；分支：`codex/bom-colour-followup`；提交：`83a45c63 fix(bom): preserve template base FOB semantics`。本批以已有 `282cd121` 为工作树基础，保留用户澄清的模板语义：含 `**` 的模板按国家保存 Single 基准，Single=基准，Dual/Special=基准＋统一颜色规则；没有新增独立 `**` 数据模型，也没有禁止非 `**` SKU 请求。
 - 后端新增 `PATCH /order-genius/bom-templates/fob` 和 repository 同事务更新：读取/写入 `base_fob_eur`，按模板所有 active SKU 计算 `colour_surcharge_eur`/`final_fob_eur`，记录变化历史；清空基准会清理该模板国家行。模板编辑不再逐个 `updateSkuFob` 把同一输入标成 `manual_edit`。
-- 拖动 Single/Dual/Special 会沿用已有 reprice 流程：`template_base` 与 `template_base_country_adjust` 可重算，人工最终价 `manual_edit` 仍保持保护；最后一个 Single 移走不丢失其他颜色行上的 `base_fob_eur`。模板批量调整、Copy Material、国家复制/调整均传递基准和 surcharge 元数据；明确最终价导入仍不写 Single 基准、不二次加价。
+- 拖动 Single/Dual/Special 会沿用已有 reprice 流程：`template_base` 与 `template_base_country_adjust` 可重算；本次新证据要求带可信基准的历史 `manual_edit`/复制行也可重算，只有无基准的明确最终价继续保护。最后一个 Single 移走不丢失其他颜色行上的 `base_fob_eur`。模板批量调整、Copy Material、国家复制/调整均传递基准和 surcharge 元数据；明确最终价导入仍不写 Single 基准、不二次加价。
 - 前端模板 FOB 编辑、批量调价、Copy Material 改为模板接口；显示基准价和 surcharge，复制后使用接口返回的派生结果更新本地状态。普通无 `**` SKU 保留原逐 SKU 最终价路径。
 
 验证（2026-09-24）：
@@ -52,6 +55,13 @@
 - 后端模板/规则聚焦用例 `6 passed`；完整 `tests/unit/test_ordering_bom_admin.py` 为 `46 passed, 5 failed`。5 个失败仍是本分支既有基线缺口：`list_bom_admin_country_columns` 缺失/旧 NL 预期 3 项，`sync_missing_template_fobs` 缺失 2 项；没有把它们写成此次通过。
 - `compileall` 通过；前端 `npm run check:types` 通过；全量 Vitest `73 files / 399 tests passed`；构建和路由回归通过（构建仅既有大 chunk warning）。
 - 当前未验：Candidate 浏览器中的 15000→15500→15800 数值链路、不同国家基准、OMODA/JAECOO/Special 规则、无基准与手动保护、BOM/Matrix 双入口、真实 Copy/拖动交互。模板批次已随 PR #229 合入并部署到当前 Candidate，浏览器验收待正确登录凭据。
+
+### 2026-09-24 · Candidate 浏览器验收批次 2：Special 规则正确，manual 基准语义仍需修正
+
+- Candidate 实测样本为 OMODA9 SHS 的 `UE`，执行 `dual → special`。规则解析为 `OMODA / special / +300 EUR`；9 个国家中 8 个按 `+300` 更新，0 个缺 Single 基准。
+- CH 显示 `25,400 → 25,400 · surcharge 200 · manual_fob`，不是 Special 规则没有命中，而是当前重算函数先按 `fob_source_mode in {manual_edit, manual_country_adjust}` 跳过，尚未读取该行的基准元数据。
+- 业务修复口径已确定：Copy/Manual Edit 写的是国家基准，颜色 surcharge 重新覆盖计算；车型＋品牌＋色码特殊价为最高优先级。若 CH 保留 `25,200` Single 基准，预期 Special +300 后为 `25,500`。本次只做了 Candidate 沙箱验收，没有修改 Active 或正式数据。
+- 下一批代码只需拆开“手动基准”和“手动最终价”语义：有可信 `base_fob_eur` 的行应重算并记录历史；没有基准的明确最终价继续跳过并说明原因。应补有基准 manual 行、无基准 manual 行、特殊价优先级和重复执行幂等测试。
 
 ### 2026-09-24 · C7 第一批：新增颜色自动 FOB 初始化与特殊价页面初接（记录时本地实现；后续已随 PR #229 合入）
 

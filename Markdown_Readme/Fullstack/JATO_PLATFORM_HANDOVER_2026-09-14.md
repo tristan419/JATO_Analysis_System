@@ -21,7 +21,9 @@
 - Model 列在 50%、100%、150% 浏览器缩放截图中均保持最左；页面提供 `Reset order grid column widths`。本轮尚未完成拖拽列宽、刷新/数量保存后的持久化和真实窄窗口尺寸测试，因此只标记“缩放下位置通过”，不标记列宽持久化通过。
 - #215 行编辑实测：JAECOO5 HEV 的 Exclusive-FWD 首个 BOM 行进入 `DONE` 编辑态，同时 Select-FWD 另一版本行仍为 `EDIT`，没有整组一起进入编辑。尚未找到可证明“同 BOM Template 跨不同车型/版本”的专门样本，不能扩大结论。
 - JAECOO5 HEV 的颜色入口不再因空品牌而完全打不开：BOM 行显示规范化品牌 `JAECOO`，点击 BW 色卡可打开规则编辑并读到 `#94A3B8`。但列表仍有 24 个 `missing swatch` 规则，Matrix 也仍显示 Missing swatch；共享库/历史 SKU 同步尚未验收通过。
-- OMODA9 SHS 的规则卡显示 `OMODA · OMODA9 SHS · UE · MATTE GRAY +300 EUR`，但同一 Candidate 数据的 BOM/Matrix 行仍显示 `UE · Tier: dual · OMODA dual default`，Matrix 颜色行 FOB 与普通单色相同，未观察到 +300 的 Special 结果。当前只能确认“特例配置存在”，不能确认“特例优先级已作用于已有 SKU”；该项保持未通过，需用基准价保存或新建颜色样本继续核对。
+- OMODA9 SHS 在 Candidate 中将 `UE` 从 `dual` 移到 `special` 后，价格复核弹窗显示 `9 countries scanned · 8 updated · 1 manual FOB skipped · 0 missing Single base`；AT、RO、BG、CZ、HR、GR、HU、SK 均按 Special `+300 EUR` 重算，只有 CH 保持 `25,400 → 25,400 · surcharge 200 · manual_fob`。这证明车型＋色码的 Special `+300` 规则和优先级已经生效，未更新的是被 `manual_edit` 标记的瑞士行。
+- 本次确认的业务语义是：BOM Admin 中手动 Copy 和 Manual Edit 都是在修改国家基准 FOB，不是锁定某个颜色的最终 FOB；最终价始终是 `base_fob_eur + 当前 tier surcharge`。真正的车型＋品牌＋色码特殊价优先于品牌色码特殊价和品牌 Special 默认，Matte 只走 Special、不叠加 Dual。
+- 当前剩余根因是 `manual_edit` 同时表示“人工改过基准”和“不可重算的最终价”。重算函数在读取 `base_fob_eur` 前直接跳过该行，所以复制后再手动调整的 CH 不能跟随 Special 规则。下一批只需收窄保护：有可信基准的手动行允许重算；没有基准的明确最终价继续报告并保护，不批量回填历史正式数据。
 - 真实低权限 403、过期 token、断网重登和数量/BOM 草稿跨标签保留仍未执行；本轮只有管理员登录成功，不把 D 标成浏览器全验收通过。
 
 ### 2026-09-24 模板基准批次实绩（已合入，Candidate 待数值验收）
