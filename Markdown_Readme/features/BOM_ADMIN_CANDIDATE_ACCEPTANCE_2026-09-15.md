@@ -13,6 +13,7 @@
 - 自动 `production-release` run：[#35960030314](https://github.com/tristan419/JATO_Analysis_System/actions/runs/35960030314)，`prepare-candidate` 成功。
 - 实际构件身份：archive SHA-256 `2810a3510337ab7980ff1d19e9ac64f9276b23c9d4aaf619d363d747673c962b`；manifest SHA-256 `c7a49e45c7b4b6ce80f03b1948474af2f64b2b2c3c23bf10a0a9433257e14af9`；操作 ID `2026-09-24T053732954Z-prepare-candidate-91b3be18`。
 - Candidate 地址：`https://candidate.ojeur.cloud/product/order-genius`。部署报告通过 `candidate_sandbox_provisioned`、`candidate_database_isolation_verified`、`candidate_backend_verified`、`candidate_monthly_disabled_verified`、`candidate_preview_verified`、`active_unchanged`；本次没有 update-active、sync-intl 或正式数据写入。
+- 报告另记 `release_gc_deferred:pointer_target_outside_store`：旧 Active 指针仍在 legacy store，发布回收被延后；这是清理诊断，不是 Candidate 部署失败，也没有改变 Active 流量。
 - 浏览器实际打开后页面显示 Candidate commit `efe5ac0f5b11`、artifact `2810a3510337`。使用此前约定的 `candidateAdmin` 测试账号登录返回 `Invalid credentials`，没有继续尝试未知密码，也没有写入 BOM 数据。必须先取得/恢复正确的 Candidate 测试凭据，再执行第 15 节统一验收；不能把部署成功写成业务验收通过。
 
 ## 13. 实施记录
