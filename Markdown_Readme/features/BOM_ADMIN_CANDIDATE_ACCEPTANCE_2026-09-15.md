@@ -63,6 +63,13 @@
 - 业务修复口径已确定：Copy/Manual Edit 写的是国家基准，颜色 surcharge 重新覆盖计算；车型＋品牌＋色码特殊价为最高优先级。若 CH 保留 `25,200` Single 基准，预期 Special +300 后为 `25,500`。本次只做了 Candidate 沙箱验收，没有修改 Active 或正式数据。
 - 下一批代码只需拆开“手动基准”和“手动最终价”语义：有可信 `base_fob_eur` 的行应重算并记录历史；没有基准的明确最终价继续跳过并说明原因。应补有基准 manual 行、无基准 manual 行、特殊价优先级和重复执行幂等测试。
 
+### 2026-09-24 · manual 基准重算修复（本地已实现，尚未合入 Candidate）
+
+- 新 worktree：`/Users/litristan/Downloads/JATO_Analysis_System_bom_manual_base_reprice`；分支：`codex/bom-manual-base-reprice`；提交：`8ae4a0c7 fix(bom): reprice manual base rows with colour surcharge`。基于最终 main `efe5ac0f5b11`，没有修改旧 C 分支。
+- 后端 `reprice_sku_colour_surcharge_fobs` 现在先寻找行内 `base_fob_eur` 或同模板可信 Single 基准，再应用当前 tier surcharge。带基准的 `manual_edit/manual_country_adjust` 行会转成可重算的模板基准来源；无基准手动行仍显示 `manual_fob` 并保护；显式最终价导入的其他 source mode 不受影响。
+- 回归证据：颜色重算聚焦测试 `3 passed`；`tests/unit/test_ordering_bom_admin.py` 为 `47 passed, 5 failed`，5 项仍是该最终 main 已知的 country-column / `sync_missing_template_fobs` 基线缺口；compileall 和 diff 检查通过。
+- 新增 OMODA9/UE 样本断言：手动行保留 Single 基准 `25,200`，Special 车型色码规则 `+300` 后得到 `25,500`，不再被旧 `+200` manual 标记冻结。该分支尚未创建 PR、合入 main 或重新准备 Candidate；Active/www/intl 和正式数据均未修改。
+
 ### 2026-09-24 · C7 第一批：新增颜色自动 FOB 初始化与特殊价页面初接（记录时本地实现；后续已随 PR #229 合入）
 
 本批在 `/Users/litristan/Downloads/JATO_Analysis_System_bom_colour` 的 `codex/bom-colour-followup` 上实施，基线为已对齐的 `579ea01e`，业务提交 `eb10c0ead4a49e4d7f4152dabb63d04143b0676e`。没有合并远端、部署 Candidate、更新 Active/www/intl 或写正式数据。

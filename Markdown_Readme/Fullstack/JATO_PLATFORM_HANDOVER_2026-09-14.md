@@ -24,6 +24,7 @@
 - OMODA9 SHS 在 Candidate 中将 `UE` 从 `dual` 移到 `special` 后，价格复核弹窗显示 `9 countries scanned · 8 updated · 1 manual FOB skipped · 0 missing Single base`；AT、RO、BG、CZ、HR、GR、HU、SK 均按 Special `+300 EUR` 重算，只有 CH 保持 `25,400 → 25,400 · surcharge 200 · manual_fob`。这证明车型＋色码的 Special `+300` 规则和优先级已经生效，未更新的是被 `manual_edit` 标记的瑞士行。
 - 本次确认的业务语义是：BOM Admin 中手动 Copy 和 Manual Edit 都是在修改国家基准 FOB，不是锁定某个颜色的最终 FOB；最终价始终是 `base_fob_eur + 当前 tier surcharge`。真正的车型＋品牌＋色码特殊价优先于品牌色码特殊价和品牌 Special 默认，Matte 只走 Special、不叠加 Dual。
 - 当前剩余根因是 `manual_edit` 同时表示“人工改过基准”和“不可重算的最终价”。重算函数在读取 `base_fob_eur` 前直接跳过该行，所以复制后再手动调整的 CH 不能跟随 Special 规则。下一批只需收窄保护：有可信基准的手动行允许重算；没有基准的明确最终价继续报告并保护，不批量回填历史正式数据。
+- 最小修复已在独立分支 `codex/bom-manual-base-reprice` 实现，提交 `8ae4a0c7`；当前只通过本地测试，尚未创建 PR、合入 main 或重新准备 Candidate。该分支不改变 Active/www/intl，也不回填历史正式数据。
 - 真实低权限 403、过期 token、断网重登和数量/BOM 草稿跨标签保留仍未执行；本轮只有管理员登录成功，不把 D 标成浏览器全验收通过。
 
 ### 2026-09-24 模板基准批次实绩（已合入，Candidate 待数值验收）
