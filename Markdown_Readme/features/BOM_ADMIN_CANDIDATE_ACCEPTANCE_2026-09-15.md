@@ -678,7 +678,7 @@ Candidate：`https://candidate.ojeur.cloud`；发布提交：`abd38688d35eec9d77
 
 代码 worktree：`/Users/litristan/Downloads/JATO_Analysis_System_bom_reprice_audit`；分支：`codex/bom-colour-reprice-audit`；提交：`3b2bc15b`（随后仅记录 Hermes dev event 的 `3066ed34`）；PR：[ #236 ](https://github.com/tristan419/JATO_Analysis_System/pull/236)。本批变更仅限后端路由、repository 和 BOM 单元测试；没有 merge、prepare Candidate、update-active、sync-intl 或写入任何环境数据。
 
-验证结果：颜色重算/审计/优先级定向测试 `7 passed`；`tests/unit/test_ordering_bom_admin.py` 为 `56 passed, 5 failed`。5 个失败仍是当前 main 已有的 country-column / `sync_missing_template_fobs` 基线缺口（缺少 `list_bom_admin_country_columns`、`sync_missing_template_fobs` 等），不是本 PR 新增；Python `compileall` 与 `git diff --check` 通过。
+验证结果：颜色重算/审计/优先级定向测试 `8 passed`（含 `colour_tier` 为空但 `exterior_color_type` 为 Dual/Special 的旧行回归）；`tests/unit/test_ordering_bom_admin.py` 为 `56 passed, 5 failed`。5 个失败仍是当前 main 已有的 country-column / `sync_missing_template_fobs` 基线缺口（缺少 `list_bom_admin_country_columns`、`sync_missing_template_fobs` 等），不是本 PR 新增；Python `compileall` 与 `git diff --check` 通过。
 
 Candidate 验收前置清单：
 
