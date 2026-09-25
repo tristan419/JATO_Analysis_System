@@ -628,7 +628,7 @@
 
 > 先读第 13 节“用户澄清：模板基准价与派生颜色价格”，再读 C5–C8。保留已有成果；C 下一批优先修模板基准保存和派生重算，并覆盖拖动分类、复制及批量调整。人工模板基准保持，派生颜色按规则更新；不得继续将模板金额逐颜色写成相同最终价并冻结。不要简单禁止非 ** 请求或假设已有独立模板价格记录。历史数据不批量回填，明确最终价导入不二次加价。随后补 C5/C6；D@34656898 补新标签误报、旧响应保护与真实草稿测试。每批更新实际测试和未验项，沿用 PR→main→Candidate 流程及授权边界；Active/www/intl 发布单独决定。
 
-### 2026-09-25 · 两个根因修复批次（本地已实现，尚未合 PR/Candidate）
+### 2026-09-25 · 两个根因修复批次（PR 已创建，尚未合并/Candidate）
 
 用户授权先修两个根因，禁止在 Candidate 前手工逐行补色或逐行加价：
 
@@ -643,4 +643,4 @@
 - 后端定向颜色/价格/迁移测试：`23 passed`；BOM 单元文件整体为 `54 passed, 5 failed`，5 项仍是最终 main 已存在的 country-column / `sync_missing_template_fobs` 基线缺口，不由本批引入。
 - 新增回归明确要求：同模板 Single `19,350`、JAECOO Dual `+300` 的旧复制行重算为 `19,650`；持久 `OMODA+TE` 标准即使 SKU 自身无 HEX 也能被 lookup、BOM 和 Matrix 共用。
 
-下一步边界：先审阅本批 diff 和迁移，再创建 PR；PR 合入最新 main 后只准备一次 Candidate。Candidate 验收必须实际证明：选品表同模板 Dual/Special FOB 高于 Single、复制国家后仍按目标国 Single 基准重算、创建 TE 后刷新并在另一个模板自动回填名称与单/双色色值、BOM/Matrix 一致。Candidate 可用不等于 Active 发布。
+下一步边界：PR #235 已通过 CI，仍需人工审阅并取得合并授权；合入最新 main 后只准备一次 Candidate。Candidate 验收必须以选品表实际 FOB 为准，而不是色卡 tooltip 的规则金额：同模板 Dual/Special 的实际 FOB 应高于 Single；还要证明复制国家后按目标国 Single 基准重算、创建 TE 后刷新并在另一个模板自动回填名称与单/双色色值、BOM/Matrix 一致。Candidate 可用不等于 Active 发布。
