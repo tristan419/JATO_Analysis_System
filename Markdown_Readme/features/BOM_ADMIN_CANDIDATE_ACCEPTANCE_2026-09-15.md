@@ -777,3 +777,14 @@ Candidate：`https://candidate.ojeur.cloud`；发布提交：`abd38688d35eec9d77
 - 本批仍未改前端面板；下一批接入 Colour Surcharges 下方折叠管理入口和实际命中反馈，继续复用现有 API/storage，不新建规则系统。
 
 实跑结果：`13 passed`（tier-qualified surcharge、重算/audit 回归与 Alembic 单头检查），compileall 和 diff check 通过；完整 BOM 测试的 5 个既有基线缺口仍需单独记录。
+
+### 2026-09-25 · #236 第三批：前端按档位管理定制加价（本地已提交，待审阅）
+
+- 业务提交 `75758ea6` 已推送到现有 PR #236 分支；未合并、未准备 Candidate、未写入环境数据。
+- 前端 API/type 现在显式传递 `colourTier`（`dual` 或 `special`）；色卡命中定制规则时要求与当前 BOM Admin 档位相同，Dual 不再误读 Special 特例，Single 永远不查定制加价。
+- 原“Special Colour Overrides”入口改为颜色加价区域下方默认折叠的“Custom colour surcharge (N)”；展开后可编辑品牌、车型、色码、适用档位、名称和金额，已有规则列表也显示档位。优先级说明改为同档位内“车型＋色码 → 品牌＋色码 → 品牌当前档位默认”，不累加。
+- 改动复用现有 API、规则存储和色卡渲染器，没有新增规则系统；UI 未做整页重构。
+
+实跑结果：前端 TypeScript `tsc --noEmit` 通过；Vitest `75 files / 411 tests passed`；Vite production build 通过；`git diff --check` 通过。
+
+本批仍未处理：重复付款条件价格的只读盘点、BOM/Matrix 浏览器验收、Candidate 只读 audit/apply、旧历史行迁移；这些必须在审阅并合入后另行按流程验证，不把本地构建当作 Candidate 通过。

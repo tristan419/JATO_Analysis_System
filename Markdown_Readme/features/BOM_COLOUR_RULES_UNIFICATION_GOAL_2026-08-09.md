@@ -348,3 +348,13 @@ Candidate 验收必须在独立可写沙箱上完成：填充、创建、编辑�
 8. 所有 focused tests、类型检查和构建通过。
 9. 在 Candidate 可写沙箱完成真实页面验收，Active 数据无变化。
 10. 独立 PR 合入 main；生产发布仍需用户另行明确授权。
+
+### 2026-09-25 · #236 最终重算修订状态
+
+#236 的三批本地代码已完成并推送到同一 PR 分支，但仍待审阅、合并和 Candidate 验收：
+
+- `944bcc03` 统一 audit/Apply 的 Single 基准决策；
+- `95ba8941` 让定制颜色规则显式绑定 Dual/Special tier，并加入迁移；
+- `75758ea6` 让前端 API、色卡命中和折叠管理入口使用同一 tier。
+
+本地前端类型检查、411 个单测和生产构建通过；本状态不代表 PR 已合入或 Candidate 已部署。Candidate 验收仍必须证明同一模板的实际 Dual/Special FOB 高于 Single、同档位定制规则命中、Single 不加价，以及 BOM/Matrix 结果一致。
