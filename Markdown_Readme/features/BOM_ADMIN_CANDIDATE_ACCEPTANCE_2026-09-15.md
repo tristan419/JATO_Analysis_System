@@ -86,6 +86,34 @@
 - 部署报告通过 `candidate_sandbox_provisioned`、`candidate_database_isolation_verified`、`candidate_backend_verified`、`candidate_monthly_disabled_verified`、`candidate_preview_verified`、`active_unchanged`；没有 update-active、sync-intl 或正式数据写入。`release_gc_deferred:pointer_target_outside_store` 仍是既有 legacy Active 指针清理诊断，不是 Candidate 失败。
 - 现在只待真实浏览器验收，不把 Candidate 构件身份等同业务通过。验收按本节清单记录前后值、截图/响应和未通过项；测试写入仅限 Candidate 沙箱。
 
+### 2026-09-25 · Candidate 共享颜色与 Dual 价格复核：三项暂不通过
+
+本批根据 Candidate commit `fd50e5a1b322` 的实际 API 只读核对，否决“Dual +300、色块共享、TE 创建后复用”三项的通过标记；没有手填颜色、修改 FOB 或写入 Candidate。
+
+#### 1. JAECOO Dual +300 目前只在规则层成立
+
+- `/v1/order-genius/colour-surcharges` 当前确认 JAECOO `dual=300`、`special=300`，规则金额本身正确。
+- CH 的模板 `T7160RG**MH0001` 当前返回：Single `BW/CL/KU/UD` 都是 `19,350`；Dual `ZK`、`ZN` 也都是 `19,350`。Dual 行还带 `baseFobEur=20,150`、`colourSurchargeEur=300`、`finalFobEur=19,350`；CZ 对应行是 `manual_edit`，CH 是 `copied_from_country`。
+- 因此实际结果不是 `19,350 + 300 = 19,650`。这证明当前行的 surcharge 元数据与最终 FOB 不一致，不能只看规则 tooltip 或 `M` 标记归因于手动保护。需要继续区分：现有 tier 已经是 Dual 时是否没有触发重算、Copy Country 是否复制了旧最终价、以及可信 Single 基准读取为何落成 `20,150`。
+
+#### 2. 共享颜色没有覆盖显示路径
+
+- 当前 `/v1/order-genius/colour-hex-rules` 汇总为 `39 rules / 5 fillable / 25 missing / 7 name conflicts / 2 swatch conflicts`。
+- 代表性规则：JAECOO+`ZE` 为 `name_conflict` 且 12 个 SKU 中 9 个缺 swatch；JAECOO+`UE` 为 `missing` 且 3 个 SKU 全缺；OMODA+`TE` 为 `missing` 且当前唯一 SKU 缺 swatch。
+- `/v1/order-genius/bom-admin?search=T7160RG&country=CH` 与 `/v1/order-genius/matrix?...&material_code_search=T7160RG` 都返回大部分 `colourHex=null`；只有现有 `ZM` 的占位双色 `#1A1A1A|#94A3B8` 和 `SP` 的 `#3A7D44` 有值。代码核对也确认 `renderColourChip`/Matrix 读取 SKU 自身 `colourHex`，PR #234 的 lookup 只服务 Add/Edit 输入，不是显示时的共享回退。
+- 因而“一个入口有色、另一个入口灰”仍然可能发生。当前灰色只能解释为缺配置占位，不能当成真实车漆；后续要么在唯一无冲突共享映射时由服务层统一解析，要么显示明确 `missing swatch`，不能静默套灰色。
+
+#### 3. TE 当前 Candidate 没有可复用标准，旧沙箱无法证明已保存
+
+- 当前 `/v1/order-genius/bom-admin?search=TE` 只有 `OMODA / T7000NHTEMY0001 / TE / blacked`，`colourHex=null`；`/colour-hex-rules/lookup?brand=OMODA&colourCode=TE&colourName=blacked` 返回 `source=none`、空 `nameCandidates`。
+- 本次 prepare-candidate 报告含 `previous_candidate_sandbox_removed:1`，且 Candidate 页面显示新的数据库快照开始时间。因此如果 TE 是在上一个 Candidate 沙箱保存，旧记录已随沙箱替换消失；如果从未成功提交，当前证据也会相同。不能凭当前结果断言上次保存失败，也不能要求用户反复手填来掩盖这个区别。
+- 完整验收必须在**当前**沙箱重新做一次：创建 `OMODA+TE`（名称和单/双色 HEX）→ 刷新页面 → 在同品牌另一个模板只输入 `TE` → 唯一映射自动回填 → 保存 → BOM 与 Matrix 读取同一名称/色值 → 检查该颜色的实际 FOB/tier。过程中记录 material code、当前数据库快照时间、前后 API 响应。
+
+#### 当前结论与下一步边界
+
+- 三项均为“Candidate 已部署、业务未通过”，不更新 Active/www/intl，也不建议继续手工逐色补值或手工给每行加 `300`。
+- Dual 价格需要先修正现有可信 Single 基准与重算触发/复制语义；颜色共享需要解决“只从 active SKU 汇总、没有独立可持久化标准”的根因。后者不是继续扩展一次性 lookup 就能完成，是否增加最小持久化颜色标准记录及迁移，应在实施前单独确认。
+
 ### 2026-09-24 · 用户澄清：模板基准价与派生颜色价格（最高优先级，已本地实现，待 Candidate）
 
 本节覆盖下文将 BOM 页面输入理解为“各颜色手动最终 FOB”的旧口径。用户明确：在含 `**` 的 BOM 模板行按国家维护基准价；Single = 基准 + 0，Dual = 基准 + 品牌 Dual 规则，Special = 基准 + 命中特殊价规则。颜色区域继续支持拖动分类、增删改查；颜色加价由现有统一工具维护，Matte 为 Special。
