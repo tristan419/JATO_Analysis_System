@@ -56,6 +56,28 @@
 
 ## 13. 实施记录
 
+### 2026-09-25 · 共享颜色库查找与未知色保护（本地已实现，待 PR/Candidate）
+
+- 新 worktree：`/Users/litristan/Downloads/JATO_Analysis_System_bom_shared_colour_mapping`；分支：`codex/bom-shared-colour-mapping`；基线：最终 main `cf10438fdeed1573a13fc1f2a533c18623d87476`。本批只处理共享颜色映射和色块缺失的真实根因，不改价格规则、认证、Active/www/intl 或正式数据。
+- 后端复用现有 `lookup_colour_rule`、`resolve_colour_attributes`、`build_colour_hex_rules_from_skus` 和 SKU 的 `colourHex`：先按规范化品牌＋Colour Code 查唯一规则；色码无可复用规则时，才按 Unicode/标点/空格归一化后的颜色名查现有候选。唯一无冲突候选可回填标准名称与 HEX；多个候选返回选择列表；未知值不猜色、不写默认灰色。
+- 前端 Add/Edit Colour 两个入口均传入 `colourName`，保留约 1.2 秒延迟、requestId 和已手改字段保护。多候选时显示现有规则选择按钮；用户选择后才把名称/HEX填入当前编辑目标。BOM/Matrix 仍读取同一 SKU/共享映射；双色保存两份 HEX，Matte 只保存一份，色块数量不推导价格 tier。
+- 冲突规则不会被名称候选静默覆盖。按品牌＋代码已存在但处于 conflict 的规则仍要求用户明确处理；只有 `brand_code_rule` 或唯一 `name_candidate` 才允许自动回填。没有候选时用户可选色或输入 HEX 后确认保存。
+
+本批已实跑：
+
+- 后端 `tests/unit/test_ordering_bom_admin.py -k 'colour_rule or colour_attributes or colour_surcharge and not sync_template'`：`19 passed, 36 deselected`；`compileall` 与 `git diff --check` 通过。完整文件中仍有 5 个既有 country-column / `sync_missing_template_fobs` 基线失败，本批不处理。
+- 前端已完成 `npm run test:unit`（`75 files / 411 tests passed`）、`npm run check:types`、`npm run build`、`npm run check:router-regression`；构建仅保留既有 chunk-size warning。临时依赖 symlink 已删除。
+
+进入 PR 后 Candidate 验收必须逐项记录：
+
+1. 已有品牌＋色码映射（如 JAECOO＋ZE）在 Add/Edit、BOM 和 Matrix 复用同一名称与 HEX。
+2. 色码未命中但名称唯一时只回填唯一候选；名称多候选时出现选择项且不自动写入；完全未知时不产生灰色持久化值。
+3. 用户手动选色/输入 HEX 并保存后，两个入口显示相同色值；双色两个 HEX、Matte 一个 HEX，均不改变 tier 或 FOB。
+4. 改颜色名称、改色码、异步回填后二次输入不会抢焦点或覆盖手改值；1.2 秒等待后旧响应不能覆盖新编辑目标。
+5. 与既有 C7/PR #233 验收合并检查：普通 Dual、OMODA7/9 Matte Special、JAECOO/J5、manual 基准和 no-base 保护不回退；本批不能被解释为价格规则或登录失效已全部完成。
+
+本批尚未创建/合并 PR，也尚未准备新 Candidate；取得 PR 与构件身份后再补写本节，不把本地测试当作 Candidate 验收或 Active 发布。
+
 ### 2026-09-24 · 用户澄清：模板基准价与派生颜色价格（最高优先级，已本地实现，待 Candidate）
 
 本节覆盖下文将 BOM 页面输入理解为“各颜色手动最终 FOB”的旧口径。用户明确：在含 `**` 的 BOM 模板行按国家维护基准价；Single = 基准 + 0，Dual = 基准 + 品牌 Dual 规则，Special = 基准 + 命中特殊价规则。颜色区域继续支持拖动分类、增删改查；颜色加价由现有统一工具维护，Matte 为 Special。
