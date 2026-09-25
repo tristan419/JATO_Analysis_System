@@ -78,6 +78,14 @@
 
 本批尚未创建/合并 PR，也尚未准备新 Candidate；取得 PR 与构件身份后再补写本节，不把本地测试当作 Candidate 验收或 Active 发布。
 
+### 2026-09-25 · PR #234 合入并准备共享颜色映射 Candidate（待浏览器验收）
+
+- PR [#234](https://github.com/tristan419/JATO_Analysis_System/pull/234) 已通过 required CI（backend、frontend、smoke、release contract、Cloudflare Pages）并合入 main；合并提交：`fd50e5a1b3222aec96d1b5dcb34d8d884018ffae`。
+- `production-release` run [#36099775361](https://github.com/tristan419/JATO_Analysis_System/actions/runs/36099775361) 的 `prepare-candidate` 已成功；操作 ID：`2026-09-25T055411284Z-prepare-candidate-f3855f8b`。Candidate：`https://candidate.ojeur.cloud/product/order-genius`。
+- 构件身份：archive SHA-256 `0067a7c84c7f9ddbbf41ad567bb35784fde27861d28cbe8d3d4f2d5585fbc171`；manifest SHA-256 `9eaf85a81401a4912bec5bd9c6c94670bf3e703af5765dc0c9cc7111de39fef8`；公网 `build-meta.json` 显示 commit/appCommit/deployCommit 均为 `fd50e5a1b3222aec96d1b5dcb34d8d884018ffae`，healthz 返回 200。
+- 部署报告通过 `candidate_sandbox_provisioned`、`candidate_database_isolation_verified`、`candidate_backend_verified`、`candidate_monthly_disabled_verified`、`candidate_preview_verified`、`active_unchanged`；没有 update-active、sync-intl 或正式数据写入。`release_gc_deferred:pointer_target_outside_store` 仍是既有 legacy Active 指针清理诊断，不是 Candidate 失败。
+- 现在只待真实浏览器验收，不把 Candidate 构件身份等同业务通过。验收按本节清单记录前后值、截图/响应和未通过项；测试写入仅限 Candidate 沙箱。
+
 ### 2026-09-24 · 用户澄清：模板基准价与派生颜色价格（最高优先级，已本地实现，待 Candidate）
 
 本节覆盖下文将 BOM 页面输入理解为“各颜色手动最终 FOB”的旧口径。用户明确：在含 `**` 的 BOM 模板行按国家维护基准价；Single = 基准 + 0，Dual = 基准 + 品牌 Dual 规则，Special = 基准 + 命中特殊价规则。颜色区域继续支持拖动分类、增删改查；颜色加价由现有统一工具维护，Matte 为 Special。
