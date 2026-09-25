@@ -788,3 +788,15 @@ Candidate：`https://candidate.ojeur.cloud`；发布提交：`abd38688d35eec9d77
 实跑结果：前端 TypeScript `tsc --noEmit` 通过；Vitest `75 files / 411 tests passed`；Vite production build 通过；`git diff --check` 通过。
 
 本批仍未处理：重复付款条件价格的只读盘点、BOM/Matrix 浏览器验收、Candidate 只读 audit/apply、旧历史行迁移；这些必须在审阅并合入后另行按流程验证，不把本地构建当作 Candidate 通过。
+
+### 2026-09-25 · #236 三批组合审阅结论（暂不批准合并）
+
+只读审阅基线：远端 `main@abd38688d35eec9d771d8a9fc5fa599545b172eb`，PR 分支 `75758ea6`，分支相对 main 为 `0 behind / 6 ahead`；GitHub PR 状态 `OPEN`、`MERGEABLE`，现有 CI 检查均成功。没有执行 merge、Candidate 或环境写入。
+
+发现以下必须在 PR 内补齐的业务阻塞：
+
+1. **旧档位兼容尚未覆盖所有入口。** 重算和 audit 已回退 `colour_tier` 为空时的 `exterior_color_type`，但 `initialize_sku_fobs_from_source()` 仍以 `target.colour_tier or "single"` 计算新颜色，BOM Admin 列表响应也仍以 `s.colour_tier or "single"` 返回。旧行在这些路径会被当成 Single，导致新建/显示不加价；应复用同一个 effective-tier 判定，不新增第二套规则。
+2. **缺少品牌/档位规则会静默变成零加价。** `get_colour_surcharge_amount_for_sku()` 返回 `0` 时，audit/Apply 仍可能把 Dual/Special 视为可重算并写入基准价。最终方案要求“没有规则不是 0”，应在共享决策中区分显式 `0` 与缺规则，缺规则归类并跳过写入。
+3. **拖动档位回报没有展示歧义计数。** 后端已返回 `skippedAmbiguous`，但前端 `ColourTierRepriceReport`/Review 仍未展示该字段，用户会看不到基准歧义；需要补类型、显示和回归测试。
+
+因此当前结论是：代码测试和合并状态通过，但 PR 不能按现状合入；先做以上最小修订，再重新审阅。仍不准备 Candidate。
