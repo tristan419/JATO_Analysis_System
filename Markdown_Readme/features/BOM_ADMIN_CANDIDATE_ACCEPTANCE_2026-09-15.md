@@ -754,7 +754,7 @@ Candidate：`https://candidate.ojeur.cloud`；发布提交：`abd38688d35eec9d77
 
 ### 2026-09-25 · #236 第一批修订：统一 audit/Apply 基准决策（本地已提交，待审阅）
 
-- 代码 worktree：`/Users/litristan/Downloads/JATO_Analysis_System_bom_reprice_audit`；分支 `codex/bom-colour-reprice-audit`；业务提交 `944bcc03`。未合并、未准备 Candidate、未写入任何环境数据。
+- 代码 worktree：`/Users/litristan/Downloads/JATO_Analysis_System_bom_reprice_audit`；分支 `codex/bom-colour-reprice-audit`；业务提交 `944bcc03` 已推送到现有 PR #236 分支，等待审阅。未合并、未准备 Candidate、未写入任何环境数据。
 - 在现有 `order_genius_repository.py` 中新增共享 `_resolve_colour_surcharge_reprice_base()`；audit 的 `_colour_surcharge_reprice_item()` 与 writer 的 `reprice_sku_colour_surcharge_fobs()` 共用同一基准决策，消除两套来源保护逻辑。
 - Single 基准只按同一 BOM template＋国家寻找；付款条件只保留参考信息，不参与选择。多个不同 Single 值保持 `ambiguous_base`，旧 manual base 不能消除歧义；没有 Single 时只有明确记录为 template/base edit 的行可使用已保存基准。
 - imported final source 不再因标签永久跳过：存在可信 Single 时按当前 tier surcharge 重算；无基准时单独归类 `explicit_final`，不自动写入。`skippedAmbiguous` 已接入真实 writer 路径。
