@@ -666,3 +666,22 @@ Candidate：`https://candidate.ojeur.cloud`；发布提交：`abd38688d35eec9d77
 - 已通过：实际 Dual/Special FOB 高于同模板 Single；Dual 与 Special 金额区分正确；BOM/Matrix 色值和 FOB 一致；共享标准保存后可复用。
 - 认证抽查：Candidate 有效 `admin/admin123` 可读取上述接口；匿名请求和无效 token 均返回 `401 Authentication required`，没有把匿名请求误判成业务功能状态。
 - 仍未通过/未覆盖：真实浏览器拖动分类的稳定性、TE 专项跨模板回填、Copy Country 的目标国基准专项、J5 ICE/HEV 数据样本、BOM/Matrix 完整交互回归、D 的真实失效会话与草稿保留。Candidate 可供继续验收，不等于 Active 已发布。
+
+### 2026-09-25 · 派生颜色 FOB 全量审计与显式重算（PR #236，未合并/未部署）
+
+本批按“Single 是唯一可信来源，Dual/Special 是派生结果”的统一模型实现，目标不是修 JAECOO7 或 OMODA9 的单个样本：
+
+- 新增只读 `GET /order-genius/colour-surcharge-reprice/audit`。每一行只在同一 BOM 模板、国家、付款条件下寻找唯一 active Single FOB；模板缺失时才使用同车型/版本/动力的精确兼容路径。多个不同 Single 候选归类为 `ambiguousBase`，没有候选归类为 `missingBase`，不会取任意车型最低价。
+- 审计按 `auto_reprice`、`already_correct`、`missing_base`、`ambiguous_base`、`explicit_final` 分类，并返回当前基准、当前 surcharge、预期最终 FOB、来源模式和稳定 fingerprint。明确导入的最终价（`uploaded_final_fob`、`explicit_price_by_payment_term`）不自动覆盖；有可信 `base_fob_eur` 的 manual/template/copy 行可以进入派生重算。
+- 新增需编辑权限的 `POST /order-genius/colour-surcharge-reprice/apply`。必须提交上一次审计 fingerprint；服务端重新审计，数据有变化即返回 409，不接受旧预览盲写。应用仍复用现有 `reprice_sku_colour_surcharge_fobs`、规则优先级和历史记录，不新增定价框架。
+- 特殊价优先级保持为：车型＋品牌＋色码 → 品牌＋色码 → 品牌 Special 默认；Dual 使用品牌 Dual 默认；Matte 只属于 Special，不叠加 Dual。Copy Country 已有目标国重算调用，目标国没有可信 Single 时由审计标为待确认。
+
+代码 worktree：`/Users/litristan/Downloads/JATO_Analysis_System_bom_reprice_audit`；分支：`codex/bom-colour-reprice-audit`；提交：`3b2bc15b`（随后仅记录 Hermes dev event 的 `3066ed34`）；PR：[ #236 ](https://github.com/tristan419/JATO_Analysis_System/pull/236)。本批变更仅限后端路由、repository 和 BOM 单元测试；没有 merge、prepare Candidate、update-active、sync-intl 或写入任何环境数据。
+
+验证结果：颜色重算/审计/优先级定向测试 `7 passed`；`tests/unit/test_ordering_bom_admin.py` 为 `56 passed, 5 failed`。5 个失败仍是当前 main 已有的 country-column / `sync_missing_template_fobs` 基线缺口（缺少 `list_bom_admin_country_columns`、`sync_missing_template_fobs` 等），不是本 PR 新增；Python `compileall` 与 `git diff --check` 通过。
+
+Candidate 验收前置清单：
+
+1. 只读运行全量 audit，保存 Candidate SHA、fingerprint、四类数量和 JAECOO7/OMODA9 样本明细；先确认 `auto_reprice` 不包含明确最终价、`missing/ambiguous` 不被自动改写。
+2. 用户审阅 audit 后，才在 Candidate 使用同一 fingerprint 调用 apply；核对同模板 Single、Dual、Special 的实际选品表 FOB，以及 BOM/Matrix 一致，重复调用应为 0 更新。
+3. 单独验收 Copy Country 的目标国 Single 基准、手动基准、无基准保护和特殊价优先级。Candidate 验收通过不等于 Active 发布；在此之前不执行正式数据迁移。
