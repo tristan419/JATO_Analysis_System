@@ -768,3 +768,12 @@ Candidate：`https://candidate.ojeur.cloud`；发布提交：`abd38688d35eec9d77
 - `python3 -m compileall -q app/infra/order_genius_repository.py`、`git diff --check` 通过。
 
 本批未处理：按档位扩展 SpecialColourSurchargeRule/迁移及折叠 UI、国家价格重复记录只读盘点、BOM/Matrix 浏览器验收、Candidate audit/apply。下一批先审阅 `944bcc03`，再继续最小的 tier-qualified 定制规则改动；不直接合并或部署。
+
+### 2026-09-25 · #236 第二批：定制颜色规则绑定 Dual/Special（本地已提交，待审阅）
+
+- 业务提交 `95ba8941` 已推送到现有 PR #236 分支；未合并、未准备 Candidate、未写入环境数据。
+- `SpecialColourSurchargeRule` 增加 `colour_tier`，旧记录 migration 默认迁移为 `special`；唯一约束和查询键同时包含 tier，避免同品牌/车型/色码的 Special 特例误用于 Dual。新增 migration `20260925_0048_tiered_special_colour_surcharge`，降级遇到 Dual 规则会停止并报错，不删除规则。
+- `get_colour_surcharge_amount_for_sku`、upsert、按特例重算和路由/schema 均传递同一 tier。Single 不查询定制规则；Dual/Special 只命中相同档位的车型色码→品牌色码→品牌该档位默认。旧客户端不传 `colourTier` 时兼容为 Special。
+- 本批仍未改前端面板；下一批接入 Colour Surcharges 下方折叠管理入口和实际命中反馈，继续复用现有 API/storage，不新建规则系统。
+
+实跑结果：`13 passed`（tier-qualified surcharge、重算/audit 回归与 Alembic 单头检查），compileall 和 diff check 通过；完整 BOM 测试的 5 个既有基线缺口仍需单独记录。

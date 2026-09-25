@@ -486,6 +486,7 @@ Markdown_Readme/Fullstack/JATO_PLATFORM_HANDOVER_2026-09-14.md
 - [x] **2026-09-25 #235 合并及 Candidate 准备**：已合入 abd38688d35eec9d771d8a9fc5fa599545b172eb；持久色库与部分重算已实现，Candidate OMODA9/UE 实测有通过证据。勾选仅表示合并/部署完成，不表示全量历史派生价格或所有交互验收通过。
 - [ ] **2026-09-25 #236 修订（下一步）**：按 [第 13 节最终确认方案](../features/BOM_ADMIN_CANDIDATE_ACCEPTANCE_2026-09-15.md#bom-pricing-final-20260925) 修复统一计算、歧义放行、计数、付款条件去耦及档位定制。来源为 import/manual/copy 不能永久冻结价格；缺基准/冲突仍不写。修订、测试与审阅后再获授权合并，Candidate 先只读审计再授权 Apply；不自动改正式数据。
 - [ ] **2026-09-25 #236 第一批已完成待审阅**：业务提交 `944bcc03` 已让 audit/writer 共用基准决策，去除付款条件基准过滤，保留歧义并补真实 `skippedAmbiguous`，Apply 按物料＋国家去重；定向测试 `10 passed`，完整 BOM 文件 `60 passed, 5 failed`（5 项为既有 country-column / `sync_missing_template_fobs` 基线缺口）。未合并、未部署 Candidate；详见 BOM 文档第 13 节批次记录。
+- [ ] **2026-09-25 #236 第二批已完成待审阅**：业务提交 `95ba8941` 已将颜色特例绑定 `Dual/Special` tier，旧规则默认 Special，新增 migration `20260925_0048`，避免 Special 特例误用于 Dual；tier/audit/迁移定向 `13 passed`。未合并、未部署 Candidate；下一批才接折叠管理 UI。
 - [ ] **P2 其他研发**：按产品优先级选择 Config 本地 10 文件收口、AstrBot JATO MCP 整理，或 MSRP #183；不要求全项目依次排队。保留 #157 对 #179 的现有合并约束。
 - [ ] **P3 历史整理**：最后再审计旧 Draft PR/旧 worktree；未提交成果未确认前不关闭、删除或清理。
 
