@@ -383,6 +383,15 @@ def test_missing_tier_and_missing_rule_never_become_zero(monkeypatch) -> None:
     assert repo.resolve_colour_surcharge_for_sku(_FakeSession(), sku, "dual")["status"] == "missing_rule"
 
 
+def test_legacy_colour_name_does_not_infer_special_tier() -> None:
+    sku = SimpleNamespace(
+        colour_tier=None,
+        exterior_color_type="matte",
+    )
+
+    assert repo.resolve_effective_colour_tier(sku) is None
+
+
 def test_colour_override_is_bound_to_the_requested_tier(monkeypatch) -> None:
     sku = SimpleNamespace(
         brand="OMODA",

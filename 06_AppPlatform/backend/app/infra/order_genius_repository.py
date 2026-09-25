@@ -82,11 +82,6 @@ COLOUR_TIER_ALIASES = {
     "bi-color": "dual",
     "bi-colour": "dual",
     "special": "special",
-    "matte": "special",
-    "pearl": "special",
-    "metallic": "special",
-    "black edition": "special",
-    "special finish": "special",
 }
 COLOUR_SURCHARGE_MANUAL_SOURCE_MODES = frozenset(
     {"manual_edit", "manual_country_adjust"}
