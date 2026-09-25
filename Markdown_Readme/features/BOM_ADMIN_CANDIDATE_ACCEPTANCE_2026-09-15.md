@@ -764,7 +764,7 @@ Candidate：`https://candidate.ojeur.cloud`；发布提交：`abd38688d35eec9d77
 本批实跑结果：
 
 - 定向 BOM 重算/audit 测试：`10 passed`。
-- `tests/unit/test_ordering_bom_admin.py`：`60 passed, 5 failed`；5 个失败仍是最终 main 已有的 `list_bom_admin_country_columns` / `sync_missing_template_fobs` 基线缺口，不由本批引入。
+- `tests/unit/test_ordering_bom_admin.py`：`61 passed, 5 failed`；5 个失败仍是最终 main 已有的 `list_bom_admin_country_columns` / `sync_missing_template_fobs` 基线缺口，不由本批引入。
 - `python3 -m compileall -q app/infra/order_genius_repository.py`、`git diff --check` 通过。
 
 本批未处理：按档位扩展 SpecialColourSurchargeRule/迁移及折叠 UI、国家价格重复记录只读盘点、BOM/Matrix 浏览器验收、Candidate audit/apply。下一批先审阅 `944bcc03`，再继续最小的 tier-qualified 定制规则改动；不直接合并或部署。
