@@ -5188,7 +5188,7 @@ export const api = {
       "/order-genius/special-colour-surcharges",
     ),
 
-  updateOrderGeniusSpecialColourSurcharge: (body: { brand: string; modelName?: string | null; colourCode: string; colourName?: string | null; surchargeEur: number }) =>
+  updateOrderGeniusSpecialColourSurcharge: (body: { brand: string; modelName?: string | null; colourCode: string; colourTier: "dual" | "special"; colourName?: string | null; surchargeEur: number }) =>
     request<SpecialColourSurchargeRule & { reprice?: Record<string, number | string> }>(
       "/order-genius/special-colour-surcharges",
       { method: "PATCH", body: JSON.stringify(body) },

@@ -92,6 +92,7 @@ type SpecialColourSurchargeDraft = {
   brand: string;
   modelName: string;
   colourCode: string;
+  colourTier: "dual" | "special";
   colourName: string;
   surchargeEur: string;
 };
@@ -100,6 +101,7 @@ const EMPTY_SPECIAL_COLOUR_SURCHARGE_DRAFT: SpecialColourSurchargeDraft = {
   brand: "OMODA",
   modelName: "",
   colourCode: "",
+  colourTier: "special",
   colourName: "",
   surchargeEur: "0",
 };
@@ -3496,6 +3498,7 @@ export function BomAdminPanel({
   const [savingColourSurcharges, setSavingColourSurcharges] = useState(false);
   const [specialColourSurchargeRules, setSpecialColourSurchargeRules] = useState<SpecialColourSurchargeRule[]>([]);
   const [specialColourSurchargeDraft, setSpecialColourSurchargeDraft] = useState<SpecialColourSurchargeDraft>(EMPTY_SPECIAL_COLOUR_SURCHARGE_DRAFT);
+  const [specialColourSurchargeExpanded, setSpecialColourSurchargeExpanded] = useState(false);
   const [specialColourSurchargeStatus, setSpecialColourSurchargeStatus] = useState("");
   const [savingSpecialColourSurcharge, setSavingSpecialColourSurcharge] = useState(false);
   const [colourHexRules, setColourHexRules] = useState<ColourHexRule[]>([]);
@@ -3648,7 +3651,10 @@ export function BomAdminPanel({
     return rule ? Number(rule.surchargeEur) : DEFAULT_COLOUR_SURCHARGES[key] ?? 0;
   };
 
-  const resolveSpecialColourSurcharge = (sku: any): { amount: number; source: string } | null => {
+  const resolveSpecialColourSurcharge = (
+    sku: { brand?: unknown; modelName?: unknown; colourCode?: unknown },
+    tier: "dual" | "special",
+  ): { amount: number; source: string } | null => {
     const brand = String(sku?.brand || "").trim().toUpperCase();
     const model = String(sku?.modelName || "").trim().toUpperCase();
     const code = String(sku?.colourCode || "").trim().toUpperCase();
@@ -3656,11 +3662,12 @@ export function BomAdminPanel({
     const matches = specialColourSurchargeRules.filter((rule) => (
       String(rule.brand || "").trim().toUpperCase() === brand
       && String(rule.colourCode || "").trim().toUpperCase() === code
+      && rule.colourTier === tier
     ));
     const modelRule = matches.find((rule) => String(rule.modelName || "").trim().toUpperCase() === model);
-    if (modelRule) return { amount: Number(modelRule.surchargeEur), source: `${brand} ${model} + ${code}` };
+    if (modelRule) return { amount: Number(modelRule.surchargeEur), source: `${tier} · ${brand} ${model} + ${code}` };
     const brandRule = matches.find((rule) => !String(rule.modelName || "").trim());
-    if (brandRule) return { amount: Number(brandRule.surchargeEur), source: `${brand} + ${code}` };
+    if (brandRule) return { amount: Number(brandRule.surchargeEur), source: `${tier} · ${brand} + ${code}` };
     return null;
   };
 
@@ -5094,6 +5101,7 @@ export function BomAdminPanel({
     const brand = specialColourSurchargeDraft.brand.trim().toUpperCase();
     const colourCode = specialColourSurchargeDraft.colourCode.trim().toUpperCase();
     const modelName = specialColourSurchargeDraft.modelName.trim();
+    const colourTier = specialColourSurchargeDraft.colourTier;
     const surchargeEur = Number(specialColourSurchargeDraft.surchargeEur.trim());
     if (!brand || !colourCode || !Number.isFinite(surchargeEur) || surchargeEur < 0) {
       setSpecialColourSurchargeStatus("Brand, colour code and a non-negative surcharge are required.");
@@ -5106,6 +5114,7 @@ export function BomAdminPanel({
         brand,
         modelName: modelName || null,
         colourCode,
+        colourTier,
         colourName: specialColourSurchargeDraft.colourName.trim() || null,
         surchargeEur,
       });
@@ -5727,11 +5736,11 @@ export function BomAdminPanel({
     const colourCode = String(s.colourCode || "").trim().toUpperCase();
     const colourName = String(s.colour || "").trim();
     const canEditSwatchRule = Boolean(brand && colourCode && colourName);
-    const specialSurcharge = effectiveTier === "special" ? resolveSpecialColourSurcharge(s) : null;
+    const specialSurcharge = effectiveTier === "single" ? null : resolveSpecialColourSurcharge(s, effectiveTier);
     const surchargeAmount = specialSurcharge?.amount ?? getColourSurchargeAmount(brand, effectiveTier);
     const surchargeSource = specialSurcharge?.source ?? `${brand} ${effectiveTier} default`;
     const surchargeLabel = effectiveTier === "dual"
-      ? `Dual +${formatSurchargeDraft(getColourSurchargeAmount(brand, "dual"))}€`
+      ? `Dual +${formatSurchargeDraft(surchargeAmount)}€`
       : effectiveTier === "special"
         ? `Special +${formatSurchargeDraft(surchargeAmount)}€`
         : "Single";
@@ -6317,36 +6326,53 @@ export function BomAdminPanel({
                   ) : null}
                 </form>
                 <form className="bom-admin-tool-tile" onSubmit={handleSaveSpecialColourSurcharge}>
-                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 7 }}>
-                    <span style={{ fontSize: 11, fontWeight: 800, color: "#334155" }}>Special Colour Overrides</span>
-                    <button className="btn btn-sm btn-primary" type="submit" disabled={savingSpecialColourSurcharge}>
-                      {savingSpecialColourSurcharge ? "Saving..." : "Save"}
+                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: specialColourSurchargeExpanded ? 7 : 0 }}>
+                    <button
+                      type="button"
+                      className="btn btn-sm btn-ghost"
+                      aria-expanded={specialColourSurchargeExpanded}
+                      onClick={() => setSpecialColourSurchargeExpanded((expanded) => !expanded)}
+                      style={{ padding: 0, fontSize: 11, fontWeight: 800, color: "#334155" }}
+                    >
+                      {specialColourSurchargeExpanded ? "▾" : "▸"} Custom colour surcharge ({specialColourSurchargeRules.length})
                     </button>
+                    {specialColourSurchargeExpanded ? (
+                      <button className="btn btn-sm btn-primary" type="submit" disabled={savingSpecialColourSurcharge}>
+                        {savingSpecialColourSurcharge ? "Saving..." : "Save"}
+                      </button>
+                    ) : null}
                   </div>
-                  <div style={{ display: "grid", gridTemplateColumns: "72px 1fr 70px 1fr 64px", gap: 5, alignItems: "center" }}>
-                    <select value={specialColourSurchargeDraft.brand} onChange={(e) => setSpecialColourSurchargeDraft((prev) => ({ ...prev, brand: e.target.value }))} style={{ fontSize: 10 }}>
-                      {BOM_ADMIN_SURCHARGE_BRANDS.map((brand) => <option key={brand}>{brand}</option>)}
-                    </select>
-                    <input type="text" placeholder="Model (blank = brand)" value={specialColourSurchargeDraft.modelName} onChange={(e) => setSpecialColourSurchargeDraft((prev) => ({ ...prev, modelName: e.target.value }))} style={{ fontSize: 10 }} />
-                    <input type="text" placeholder="Code" value={specialColourSurchargeDraft.colourCode} onChange={(e) => setSpecialColourSurchargeDraft((prev) => ({ ...prev, colourCode: e.target.value.toUpperCase() }))} style={{ fontSize: 10, textTransform: "uppercase" }} />
-                    <input type="text" placeholder="Colour name (optional)" value={specialColourSurchargeDraft.colourName} onChange={(e) => setSpecialColourSurchargeDraft((prev) => ({ ...prev, colourName: e.target.value }))} style={{ fontSize: 10 }} />
-                    <input type="number" min={0} step={1} placeholder="EUR" value={specialColourSurchargeDraft.surchargeEur} onChange={(e) => setSpecialColourSurchargeDraft((prev) => ({ ...prev, surchargeEur: e.target.value }))} style={{ fontSize: 10 }} />
-                  </div>
-                  <div style={{ marginTop: 6, fontSize: 9, color: "#64748b" }}>Priority: model + code → brand + code → brand Special. 0 EUR explicitly waives the fallback.</div>
-                  {specialColourSurchargeRules.length > 0 ? (
-                    <div style={{ display: "grid", gap: 3, marginTop: 7, maxHeight: 94, overflowY: "auto" }}>
-                      {specialColourSurchargeRules.map((rule) => (
-                        <button key={rule.specialColourSurchargeRuleId} type="button" className="btn btn-sm btn-ghost" onClick={() => setSpecialColourSurchargeDraft({ brand: rule.brand, modelName: rule.modelName || "", colourCode: rule.colourCode, colourName: rule.colourName || "", surchargeEur: String(rule.surchargeEur) })} style={{ display: "flex", justifyContent: "space-between", gap: 8, padding: "3px 5px", fontSize: 9, textAlign: "left" }}>
-                          <span>{rule.brand}{rule.modelName ? ` · ${rule.modelName}` : ""} · {rule.colourCode}{rule.colourName ? ` · ${rule.colourName}` : ""}</span>
-                          <strong>+{rule.surchargeEur} EUR</strong>
-                        </button>
-                      ))}
-                    </div>
-                  ) : null}
-                  {specialColourSurchargeStatus ? (
-                    <div style={{ marginTop: 7, fontSize: 11, color: specialColourSurchargeStatus.startsWith("Saved") ? "#0f766e" : "#b45309" }}>
-                      {specialColourSurchargeStatus}
-                    </div>
+                  {specialColourSurchargeExpanded ? (
+                    <>
+                      <div style={{ display: "grid", gridTemplateColumns: "72px 1fr 70px 82px 1fr 64px", gap: 5, alignItems: "center" }}>
+                        <select value={specialColourSurchargeDraft.brand} onChange={(e) => setSpecialColourSurchargeDraft((prev) => ({ ...prev, brand: e.target.value }))} style={{ fontSize: 10 }}>
+                          {BOM_ADMIN_SURCHARGE_BRANDS.map((brand) => <option key={brand}>{brand}</option>)}
+                        </select>
+                        <input type="text" placeholder="Model (blank = brand)" value={specialColourSurchargeDraft.modelName} onChange={(e) => setSpecialColourSurchargeDraft((prev) => ({ ...prev, modelName: e.target.value }))} style={{ fontSize: 10 }} />
+                        <input type="text" placeholder="Code" value={specialColourSurchargeDraft.colourCode} onChange={(e) => setSpecialColourSurchargeDraft((prev) => ({ ...prev, colourCode: e.target.value.toUpperCase() }))} style={{ fontSize: 10, textTransform: "uppercase" }} />
+                        <select value={specialColourSurchargeDraft.colourTier} onChange={(e) => setSpecialColourSurchargeDraft((prev) => ({ ...prev, colourTier: e.target.value as "dual" | "special" }))} style={{ fontSize: 10 }}>
+                          {BOM_ADMIN_SURCHARGE_TYPES.map((type) => <option key={type.value} value={type.value}>{type.label}</option>)}
+                        </select>
+                        <input type="text" placeholder="Colour name (optional)" value={specialColourSurchargeDraft.colourName} onChange={(e) => setSpecialColourSurchargeDraft((prev) => ({ ...prev, colourName: e.target.value }))} style={{ fontSize: 10 }} />
+                        <input type="number" min={0} step={1} placeholder="EUR" value={specialColourSurchargeDraft.surchargeEur} onChange={(e) => setSpecialColourSurchargeDraft((prev) => ({ ...prev, surchargeEur: e.target.value }))} style={{ fontSize: 10 }} />
+                      </div>
+                      <div style={{ marginTop: 6, fontSize: 9, color: "#64748b" }}>Same tier only: model + code → brand + code → brand tier default. Single is always +0; 0 EUR explicitly waives the fallback.</div>
+                      {specialColourSurchargeRules.length > 0 ? (
+                        <div style={{ display: "grid", gap: 3, marginTop: 7, maxHeight: 94, overflowY: "auto" }}>
+                          {specialColourSurchargeRules.map((rule) => (
+                            <button key={rule.specialColourSurchargeRuleId} type="button" className="btn btn-sm btn-ghost" onClick={() => setSpecialColourSurchargeDraft({ brand: rule.brand, modelName: rule.modelName || "", colourCode: rule.colourCode, colourTier: rule.colourTier, colourName: rule.colourName || "", surchargeEur: String(rule.surchargeEur) })} style={{ display: "flex", justifyContent: "space-between", gap: 8, padding: "3px 5px", fontSize: 9, textAlign: "left" }}>
+                              <span>{rule.brand}{rule.modelName ? ` · ${rule.modelName}` : ""} · {rule.colourCode} · {rule.colourTier}{rule.colourName ? ` · ${rule.colourName}` : ""}</span>
+                              <strong>+{rule.surchargeEur} EUR</strong>
+                            </button>
+                          ))}
+                        </div>
+                      ) : null}
+                      {specialColourSurchargeStatus ? (
+                        <div style={{ marginTop: 7, fontSize: 11, color: specialColourSurchargeStatus.startsWith("Saved") ? "#0f766e" : "#b45309" }}>
+                          {specialColourSurchargeStatus}
+                        </div>
+                      ) : null}
+                    </>
                   ) : null}
                 </form>
                 <div className="bom-admin-tool-tile" style={{ minHeight: 124 }}>

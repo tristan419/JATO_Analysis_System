@@ -109,6 +109,7 @@ export interface SpecialColourSurchargeRule {
   brand: string;
   modelName: string | null;
   colourCode: string;
+  colourTier: "dual" | "special";
   colourName: string | null;
   surchargeEur: number;
   isActive: boolean;
