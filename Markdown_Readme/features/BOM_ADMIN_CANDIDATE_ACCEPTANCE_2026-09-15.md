@@ -664,4 +664,5 @@ Candidate：`https://candidate.ojeur.cloud`；发布提交：`abd38688d35eec9d77
 **本批结论：**
 
 - 已通过：实际 Dual/Special FOB 高于同模板 Single；Dual 与 Special 金额区分正确；BOM/Matrix 色值和 FOB 一致；共享标准保存后可复用。
+- 认证抽查：Candidate 有效 `admin/admin123` 可读取上述接口；匿名请求和无效 token 均返回 `401 Authentication required`，没有把匿名请求误判成业务功能状态。
 - 仍未通过/未覆盖：真实浏览器拖动分类的稳定性、TE 专项跨模板回填、Copy Country 的目标国基准专项、J5 ICE/HEV 数据样本、BOM/Matrix 完整交互回归、D 的真实失效会话与草稿保留。Candidate 可供继续验收，不等于 Active 已发布。
