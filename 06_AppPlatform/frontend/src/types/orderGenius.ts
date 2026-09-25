@@ -196,9 +196,18 @@ export interface ColourHexRuleLookup {
   status: ColourHexRuleStatus | "none";
   colourName: string | null;
   colourHex: string | null;
-  source: "brand_code_rule" | "none";
+  source: "brand_code_rule" | "name_candidate" | "name_candidates" | "none";
   hasNameConflict: boolean;
   hasSwatchConflict: boolean;
+  nameCandidates: Array<{
+    brand: string;
+    colourCode: string;
+    colourName: string | null;
+    colourHex: string | null;
+    status: ColourHexRuleStatus;
+    hasNameConflict: boolean;
+    hasSwatchConflict: boolean;
+  }>;
 }
 
 export type ColourTierRepriceDetailStatus = "updated" | "unchanged" | "skipped";

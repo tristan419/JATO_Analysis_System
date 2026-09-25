@@ -21,6 +21,9 @@ describe("Order Genius colour rule page contract", () => {
     expect(pageSource).toContain("colourHexTouched: true");
     expect(pageSource).toContain("Manual values will create a rule difference");
     expect(pageSource).toContain("conflict: not auto-filled. Enter values manually");
+    expect(pageSource).toContain("Several existing colours match this name. Choose one below");
+    expect(pageSource).toContain("Name match selected one existing colour");
+    expect(pageSource).toContain("nameCandidates.map");
     expect(pageSource).toContain("No reusable Brand + Code rule");
     expect(pageSource).toContain("Wait for the Brand + Code rule check to finish.");
     expect(pageSource).toContain("This code cannot be auto-filled: enter a colour name before saving it.");
@@ -28,6 +31,7 @@ describe("Order Genius colour rule page contract", () => {
     expect(pageSource).toContain("}, BOM_ADMIN_COLOUR_LOOKUP_DELAY_MS);");
     expect(pageSource).toContain("colourCodeEditorTargetKey");
     expect(pageSource).toContain("addColourEditorTargetKey");
+    expect(pageSource).toContain("lookupOrderGeniusColourHexRule(brand, colourCode, colourName)");
     expect(pageSource).toContain("getBomColourCodeEditorTargetKey(current) !== targetKey");
     expect(pageSource).toContain("getBomAddColourEditorTargetKey(current) !== targetKey");
     expect(pageSource).toContain("setColourCodeRuleLookup(null);");

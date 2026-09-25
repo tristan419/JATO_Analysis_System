@@ -433,12 +433,18 @@ def apply_colour_rule_fills(
 @router.get("/colour-hex-rules/lookup")
 def lookup_colour_rule(
     brand: str = Query(...),
-    colour_code: str = Query(..., alias="colourCode"),
+    colour_code: str | None = Query(None, alias="colourCode"),
+    colour_name: str | None = Query(None, alias="colourName"),
     session: Session = Depends(get_db_session),
     _=Depends(require_min_role("editor")),
 ) -> dict:
     try:
-        return repo.lookup_colour_rule(session, brand, colour_code)
+        return repo.lookup_colour_rule(
+            session,
+            brand,
+            colour_code or "",
+            colour_name=colour_name,
+        )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 

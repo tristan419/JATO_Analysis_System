@@ -1086,6 +1086,99 @@ def test_resolve_colour_attributes_reuses_only_unambiguous_rule() -> None:
     assert result["source"] == "brand_code_rule"
 
 
+def test_lookup_colour_rule_uses_unique_name_alias_after_code_miss(monkeypatch) -> None:
+    session = _FakeSession([
+        SimpleNamespace(
+            material_code="A",
+            brand="JAECOO",
+            model_name="JAECOO5 ICE",
+            bom_template="T71611C",
+            is_active=True,
+            exterior_color_code="BW",
+            exterior_color_name="Khaki White (BW)",
+            colour_hex="#F0ECE0",
+        ),
+    ])
+    monkeypatch.setattr(repo, "_list_colour_rule_candidate_skus", lambda *_args: [])
+
+    result = repo.lookup_colour_rule(
+        session,
+        "JEACOO",
+        "ZZ",
+        colour_name="khaki white",
+    )
+
+    assert result["source"] == "name_candidate"
+    assert result["colourCode"] == "ZZ"
+    assert result["colourName"] == "Khaki White (BW)"
+    assert result["colourHex"] == "#F0ECE0"
+    assert len(result["nameCandidates"]) == 1
+
+
+def test_lookup_colour_rule_keeps_multiple_name_candidates_for_user_choice(monkeypatch) -> None:
+    session = _FakeSession([
+        SimpleNamespace(
+            material_code="A",
+            brand="OMODA",
+            model_name="OMODA5 EV",
+            bom_template="T7000",
+            is_active=True,
+            exterior_color_code="BW",
+            exterior_color_name="Khaki White",
+            colour_hex="#F0ECE0",
+        ),
+        SimpleNamespace(
+            material_code="B",
+            brand="OMODA",
+            model_name="OMODA9 SHS",
+            bom_template="T7001",
+            is_active=True,
+            exterior_color_code="KW",
+            exterior_color_name="Khaki White",
+            colour_hex="#F5F0E8",
+        ),
+    ])
+    monkeypatch.setattr(repo, "_list_colour_rule_candidate_skus", lambda *_args: [])
+
+    result = repo.lookup_colour_rule(
+        session,
+        "OMODA",
+        "ZZ",
+        colour_name="Khaki White",
+    )
+
+    assert result["source"] == "name_candidates"
+    assert result["colourHex"] is None
+    assert [item["colourCode"] for item in result["nameCandidates"]] == ["BW", "KW"]
+
+
+def test_resolve_colour_attributes_canonicalizes_unique_name_alias(monkeypatch) -> None:
+    session = _FakeSession([
+        SimpleNamespace(
+            material_code="A",
+            brand="JAECOO",
+            model_name="JAECOO5 ICE",
+            bom_template="T71611C",
+            is_active=True,
+            exterior_color_code="BW",
+            exterior_color_name="Khaki White",
+            colour_hex="#F0ECE0",
+        ),
+    ])
+    monkeypatch.setattr(repo, "_list_colour_rule_candidate_skus", lambda *_args: [])
+
+    result = repo.resolve_colour_attributes(
+        session,
+        "JAECOO",
+        "ZZ",
+        colour_name="khaki white",
+    )
+
+    assert result["colourName"] == "Khaki White"
+    assert result["colourHex"] == "#F0ECE0"
+    assert result["source"] == "name_candidate"
+
+
 def test_resolve_colour_attributes_preserves_explicit_hex_clear() -> None:
     session = _FakeSession([
         SimpleNamespace(

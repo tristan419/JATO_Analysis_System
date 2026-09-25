@@ -3309,6 +3309,12 @@ function formatColourRuleLookupNote(lookup: ColourHexRuleLookup, manuallyChanged
   if (lookup.source === "brand_code_rule") {
     return `Brand + Code rule: ${lookup.colourName ?? "no name"} · ${lookup.colourHex ?? "no swatch"}${manuallyChanged ? " · Manual values will create a rule difference." : " · Auto-filled."}`;
   }
+  if (lookup.source === "name_candidate") {
+    return `Name match selected one existing colour: ${lookup.colourName ?? "no name"} · ${lookup.colourHex ?? "no swatch"}${manuallyChanged ? " · Manual values will create a rule difference." : " · Candidate auto-filled."}`;
+  }
+  if (lookup.source === "name_candidates") {
+    return "Several existing colours match this name. Choose one below; nothing is changed automatically.";
+  }
   return "No reusable Brand + Code rule. Enter a colour name; swatch is optional.";
 }
 
@@ -3975,6 +3981,7 @@ export function BomAdminPanel({
   useEffect(() => {
     const brand = String(colourCodeEditor?.brand || "").trim();
     const colourCode = String(colourCodeEditor?.nextColourCode || "").trim().toUpperCase();
+    const colourName = String(colourCodeEditor?.nextColourName || "").trim();
     const targetKey = colourCodeEditorTargetKey;
     const requestId = ++colourCodeLookupRequestRef.current;
     setColourCodeRuleLookup(null);
@@ -3986,7 +3993,7 @@ export function BomAdminPanel({
     }
     setLoadingColourCodeRuleLookup(true);
     const timer = window.setTimeout(() => {
-      void api.lookupOrderGeniusColourHexRule(brand, colourCode).then((lookup) => {
+      void api.lookupOrderGeniusColourHexRule(brand, colourCode, colourName).then((lookup) => {
         if (colourCodeLookupRequestRef.current !== requestId) return;
         setColourCodeRuleLookup(lookup);
         setColourCodeEditor((current) => {
@@ -3995,7 +4002,7 @@ export function BomAdminPanel({
             || getBomColourCodeEditorTargetKey(current) !== targetKey
             || current.nextColourCode.trim().toUpperCase() !== colourCode
           ) return current;
-          if (lookup.source !== "brand_code_rule" || lookup.hasNameConflict || lookup.hasSwatchConflict) {
+          if (!['brand_code_rule', 'name_candidate'].includes(lookup.source) || lookup.hasNameConflict || lookup.hasSwatchConflict) {
             return current;
           }
           const swatch = splitColourHexValue(lookup.colourHex);
@@ -4020,11 +4027,12 @@ export function BomAdminPanel({
       });
     }, BOM_ADMIN_COLOUR_LOOKUP_DELAY_MS);
     return () => window.clearTimeout(timer);
-  }, [colourCodeEditorTargetKey, colourCodeEditor?.nextColourCode]);
+  }, [colourCodeEditorTargetKey, colourCodeEditor?.nextColourCode, colourCodeEditor?.nextColourName]);
 
   useEffect(() => {
     const brand = String(addColourEditor?.brand || "").trim();
     const colourCode = String(addColourEditor?.colourCode || "").trim().toUpperCase();
+    const colourName = String(addColourEditor?.colourName || "").trim();
     const targetKey = addColourEditorTargetKey;
     const requestId = ++addColourLookupRequestRef.current;
     setAddColourRuleLookup(null);
@@ -4036,7 +4044,7 @@ export function BomAdminPanel({
     }
     setLoadingAddColourRuleLookup(true);
     const timer = window.setTimeout(() => {
-      void api.lookupOrderGeniusColourHexRule(brand, colourCode).then((lookup) => {
+      void api.lookupOrderGeniusColourHexRule(brand, colourCode, colourName).then((lookup) => {
         if (addColourLookupRequestRef.current !== requestId) return;
         setAddColourRuleLookup(lookup);
         setAddColourEditor((current) => {
@@ -4045,7 +4053,7 @@ export function BomAdminPanel({
             || getBomAddColourEditorTargetKey(current) !== targetKey
             || current.colourCode.trim().toUpperCase() !== colourCode
           ) return current;
-          if (lookup.source !== "brand_code_rule" || lookup.hasNameConflict || lookup.hasSwatchConflict) {
+          if (!['brand_code_rule', 'name_candidate'].includes(lookup.source) || lookup.hasNameConflict || lookup.hasSwatchConflict) {
             return current;
           }
           const swatch = splitColourHexValue(lookup.colourHex);
@@ -4070,7 +4078,7 @@ export function BomAdminPanel({
       });
     }, BOM_ADMIN_COLOUR_LOOKUP_DELAY_MS);
     return () => window.clearTimeout(timer);
-  }, [addColourEditorTargetKey, addColourEditor?.colourCode]);
+  }, [addColourEditorTargetKey, addColourEditor?.colourCode, addColourEditor?.colourName]);
 
   const replaceFinanceRow = (
     rows: CountryMaterialFinanceRow[],
@@ -5244,7 +5252,8 @@ export function BomAdminPanel({
       setColourCodeEditorError("Wait for the Brand + Code rule check to finish.");
       return;
     }
-    const canAutoFillChangedCode = colourCodeRuleLookup?.source === "brand_code_rule"
+    const canAutoFillChangedCode = (colourCodeRuleLookup?.source === "brand_code_rule"
+      || colourCodeRuleLookup?.source === "name_candidate")
       && !colourCodeRuleLookup.hasNameConflict
       && !colourCodeRuleLookup.hasSwatchConflict;
     if (codeChanged && !canAutoFillChangedCode && !nextName) {
@@ -6651,6 +6660,35 @@ export function BomAdminPanel({
                 </label>
               </div>
               {loadingColourCodeRuleLookup ? <div className="bom-add-colour-edit-note">Checking Brand + Code rule...</div> : colourCodeRuleLookup ? <div className="bom-add-colour-edit-note">{formatColourRuleLookupNote(colourCodeRuleLookup, colourCodeEditor.colourNameTouched || colourCodeEditor.colourHexTouched)}</div> : null}
+              {colourCodeRuleLookup?.source === "name_candidates" && colourCodeRuleLookup.nameCandidates.length > 0 ? (
+                <div className="bom-add-colour-edit-note">
+                  <span>Choose an existing name match:</span>
+                  <div style={{ display: "flex", flexWrap: "wrap", gap: 4, marginTop: 4 }}>
+                    {colourCodeRuleLookup.nameCandidates.map((candidate) => (
+                      <button
+                        key={`${candidate.colourCode}-${candidate.colourName || ""}-${candidate.colourHex || ""}`}
+                        type="button"
+                        className="btn btn-sm btn-ghost"
+                        disabled={!candidate.colourName || !candidate.colourHex || candidate.hasNameConflict || candidate.hasSwatchConflict}
+                        onClick={() => {
+                          const swatch = splitColourHexValue(candidate.colourHex);
+                          setColourCodeEditor((prev) => prev ? {
+                            ...prev,
+                            nextColourName: candidate.colourName || prev.nextColourName,
+                            nextColourHex: swatch.hex1,
+                            nextColourHex2: swatch.hex2,
+                            isDualSwatch: swatch.isDual,
+                            colourNameTouched: true,
+                            colourHexTouched: true,
+                          } : prev);
+                        }}
+                      >
+                        {candidate.colourCode} · {candidate.colourName || "no name"} · {candidate.colourHex || "no swatch"}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              ) : null}
               <div className="bom-colour-swatch-option">
                 <span>Swatch</span>
                 <div className={`bom-colour-swatch-controls${colourCodeEditor.isDualSwatch ? " is-dual" : ""}`}>
@@ -6794,6 +6832,35 @@ export function BomAdminPanel({
                 </label>
               </div>
               {loadingAddColourRuleLookup ? <div className="bom-add-colour-edit-note">Checking Brand + Code rule...</div> : addColourRuleLookup ? <div className="bom-add-colour-edit-note">{formatColourRuleLookupNote(addColourRuleLookup, addColourEditor.colourNameTouched || addColourEditor.colourHexTouched)}</div> : null}
+              {addColourRuleLookup?.source === "name_candidates" && addColourRuleLookup.nameCandidates.length > 0 ? (
+                <div className="bom-add-colour-edit-note">
+                  <span>Choose an existing name match:</span>
+                  <div style={{ display: "flex", flexWrap: "wrap", gap: 4, marginTop: 4 }}>
+                    {addColourRuleLookup.nameCandidates.map((candidate) => (
+                      <button
+                        key={`${candidate.colourCode}-${candidate.colourName || ""}-${candidate.colourHex || ""}`}
+                        type="button"
+                        className="btn btn-sm btn-ghost"
+                        disabled={!candidate.colourName || !candidate.colourHex || candidate.hasNameConflict || candidate.hasSwatchConflict}
+                        onClick={() => {
+                          const swatch = splitColourHexValue(candidate.colourHex);
+                          setAddColourEditor((prev) => prev ? {
+                            ...prev,
+                            colourName: candidate.colourName || prev.colourName,
+                            colourHex: swatch.hex1,
+                            colourHex2: swatch.hex2,
+                            isDualSwatch: swatch.isDual,
+                            colourNameTouched: true,
+                            colourHexTouched: true,
+                          } : prev);
+                        }}
+                      >
+                        {candidate.colourCode} · {candidate.colourName || "no name"} · {candidate.colourHex || "no swatch"}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              ) : null}
               <div className="bom-colour-swatch-option">
                 <span>Swatch optional</span>
                 <div className={`bom-colour-swatch-controls${addColourEditor.isDualSwatch ? " is-dual" : ""}`}>
