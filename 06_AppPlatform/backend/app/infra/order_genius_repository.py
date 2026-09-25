@@ -3125,12 +3125,13 @@ def _find_colour_surcharge_base_resolution(
 ) -> dict[str, object]:
     """Resolve one exact Single base without treating a derived colour as source.
 
-    A colour price is only auto-repairable when the same BOM template, country,
-    and payment-term dimension has one unambiguous active Single FOB.  Legacy
+    A colour price is only auto-repairable when the same BOM template and
+    country have one unambiguous active Single FOB.  Payment term is reference
+    metadata only.  Legacy
     rows with no template can still use the exact vehicle identity; a populated
     template never falls back to another vehicle's price.
     """
-    template = clean_text(sku.bom_template).upper()
+    template = clean_text(getattr(sku, "bom_template", None)).upper()
     single_tier = or_(
         MaterialSkuMaster.colour_tier == "single",
         and_(
@@ -3158,14 +3159,11 @@ def _find_colour_surcharge_base_resolution(
         stmt = stmt.where(MaterialSkuMaster.bom_template == template)
     else:
         stmt = stmt.where(
-            MaterialSkuMaster.brand == sku.brand,
-            MaterialSkuMaster.model_name == sku.model_name,
-            MaterialSkuMaster.version == sku.version,
-            MaterialSkuMaster.powertrain == sku.powertrain,
+            MaterialSkuMaster.brand == getattr(sku, "brand", None),
+            MaterialSkuMaster.model_name == getattr(sku, "model_name", None),
+            MaterialSkuMaster.version == getattr(sku, "version", None),
+            MaterialSkuMaster.powertrain == getattr(sku, "powertrain", None),
         )
-    if payment_term_code:
-        stmt = stmt.where(CountrySkuFobResolved.payment_term_code == payment_term_code)
-
     values = sorted(
         {
             round(float(value), 2)
@@ -3209,6 +3207,39 @@ def _infer_existing_colour_surcharge_base_fob(
     return None
 
 
+def _resolve_colour_surcharge_reprice_base(
+    session: Session,
+    sku: MaterialSkuMaster,
+    row: CountrySkuFobResolved,
+) -> dict[str, object]:
+    """Resolve the base shared by audit and write paths.
+
+    Payment terms are reference metadata only.  A conflicting Single candidate
+    remains ambiguous; an older row-local value cannot choose one.  If no
+    Single exists, a row-local base is usable only when its source explicitly
+    records a template/base edit.
+    """
+    resolution = _find_colour_surcharge_base_resolution(
+        session, sku, row.country_code, None
+    )
+    if resolution["status"] in {"resolved", "ambiguous"}:
+        return resolution
+    if row.fob_source_mode in {
+        "manual_edit",
+        "manual_country_adjust",
+        "template_base",
+        "template_base_country_adjust",
+    }:
+        stored_base = _infer_existing_colour_surcharge_base_fob(row)
+        if stored_base is not None:
+            return {
+                "status": "stored",
+                "baseFobEur": stored_base,
+                "candidates": [],
+            }
+    return resolution
+
+
 def reprice_sku_colour_surcharge_fobs(
     session: Session,
     material_code: str,
@@ -3221,9 +3252,9 @@ def reprice_sku_colour_surcharge_fobs(
     BOM Admin manual edits are country-base edits, not final-colour locks.  A
     manual row with a trusted base (stored on the row or found on the matching
     Single SKU) therefore follows the same surcharge calculation as an
-    automatic row.  A manual row without any trusted base remains protected;
-    explicit final-price imports use their separate source modes and are not
-    changed by this path.
+    automatic row.  A row without any trusted base remains protected.  Source
+    mode is provenance, not a permanent colour-price lock: an imported final
+    row is recalculated when the matching Single base is unambiguous.
     """
     sku = get_sku_by_material_code(session, material_code)
     if sku is None:
@@ -3277,20 +3308,13 @@ def reprice_sku_colour_surcharge_fobs(
             base_fob = _infer_existing_colour_surcharge_base_fob(row) or float(row.final_fob_eur)
             new_surcharge = None
         else:
-            base_fob = _find_colour_surcharge_base_fob(
-                session,
-                sku,
-                row.country_code,
-                row.payment_term_code,
-            )
-            if base_fob is None and row.fob_source_mode in {
-                *COLOUR_SURCHARGE_MANUAL_SOURCE_MODES,
-                "template_base",
-                "template_base_country_adjust",
-            }:
-                base_fob = _infer_existing_colour_surcharge_base_fob(row)
+            resolution = _resolve_colour_surcharge_reprice_base(session, sku, row)
+            base_fob = resolution["baseFobEur"]
             if base_fob is None:
-                if is_manual_base_edit:
+                if resolution["status"] == "ambiguous":
+                    skipped_ambiguous += 1
+                    reason = "ambiguous_single_base"
+                elif is_manual_base_edit:
                     skipped_manual += 1
                     reason = "manual_fob"
                 else:
@@ -3569,33 +3593,19 @@ def _colour_surcharge_reprice_item(
         item["category"] = "not_applicable"
         item["reason"] = "single_colour"
         return item
-    if row.fob_source_mode in COLOUR_SURCHARGE_EXPLICIT_FINAL_SOURCE_MODES:
-        item["category"] = "explicit_final"
-        item["reason"] = "explicit_final_price_source"
-        return item
-
-    resolution = _find_colour_surcharge_base_resolution(
-        session,
-        sku,
-        row.country_code,
-        row.payment_term_code,
-    )
+    resolution = _resolve_colour_surcharge_reprice_base(session, sku, row)
     item["singleBaseCandidates"] = resolution["candidates"]
-    if resolution["status"] != "resolved" and row.fob_source_mode in {
-        *COLOUR_SURCHARGE_MANUAL_SOURCE_MODES,
-        "template_base",
-        "template_base_country_adjust",
-    }:
-        stored_base = _infer_existing_colour_surcharge_base_fob(row)
-        if stored_base is not None:
-            resolution = {"status": "stored", "baseFobEur": stored_base, "candidates": []}
     if resolution["status"] == "ambiguous":
         item["category"] = "ambiguous_base"
-        item["reason"] = "multiple_single_bases_for_template_country_payment_term"
+        item["reason"] = "multiple_single_bases_for_template_country"
         return item
     if resolution["status"] not in {"resolved", "stored"}:
-        item["category"] = "missing_base"
-        item["reason"] = "no_single_base_for_template_country_payment_term"
+        if row.fob_source_mode in COLOUR_SURCHARGE_EXPLICIT_FINAL_SOURCE_MODES:
+            item["category"] = "explicit_final"
+            item["reason"] = "explicit_final_without_single_base"
+        else:
+            item["category"] = "missing_base"
+            item["reason"] = "no_single_base_for_template_country"
         return item
 
     base_fob = float(resolution["baseFobEur"])
@@ -3736,6 +3746,17 @@ def apply_colour_surcharge_reprice_audit(
     if preview_fingerprint != audit["fingerprint"]:
         raise ValueError("Colour surcharge audit is stale; refresh the audit before applying")
     items = [item for item in audit["items"] if item["category"] == "auto_reprice"]
+    # One call reprices all active payment-term rows for a material/country.
+    # Payment terms remain reference metadata and must not cause duplicate work.
+    unique_items: list[dict[str, object]] = []
+    seen_targets: set[tuple[str, str]] = set()
+    for item in items:
+        target = (str(item["materialCode"]), str(item["countryCode"]))
+        if target in seen_targets:
+            continue
+        seen_targets.add(target)
+        unique_items.append(item)
+    items = unique_items
     totals = {"requested": len(items), "updated": 0, "unchanged": 0, "skipped": 0}
     details: list[dict[str, object]] = []
     for item in items:
