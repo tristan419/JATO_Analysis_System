@@ -1291,7 +1291,7 @@ def patch_sku_fob(
     if not country:
         raise HTTPException(status_code=400, detail="countryCode is required")
     if "finalFobEur" not in body and "baseFobEur" not in body:
-        raise HTTPException(status_code=400, detail="finalFobEur is required")
+        raise HTTPException(status_code=400, detail="baseFobEur is required")
     if not repo.get_sku_by_material_code_any_status(session, material_code):
         raise HTTPException(status_code=404, detail="Material code not found")
 
@@ -1300,15 +1300,19 @@ def patch_sku_fob(
     pt_code = body.get("paymentTermCode")
     remark_provided = "remark" in body
     remark = clean_text(body.get("remark")) if remark_provided else None
-    result = repo.update_sku_fob_for_country(
-        session,
-        material_code,
-        country,
-        fob_val,
-        pt_code,
-        remark=remark,
-        update_remark=remark_provided,
-    )
+    try:
+        result = repo.update_sku_fob_for_country(
+            session,
+            material_code,
+            country,
+            fob_val,
+            pt_code,
+            remark=remark,
+            update_remark=remark_provided,
+        )
+    except ValueError as exc:
+        session.rollback()
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     if fob_val is None:
         session.commit()
         return {
@@ -1325,6 +1329,8 @@ def patch_sku_fob(
     return {
         "materialCode": result.material_code,
         "countryCode": result.country_code,
+        "baseFobEur": float(result.base_fob_eur) if result.base_fob_eur is not None else None,
+        "colourSurchargeEur": float(result.colour_surcharge_eur) if result.colour_surcharge_eur is not None else None,
         "finalFobEur": float(result.final_fob_eur) if result.final_fob_eur is not None else None,
         "paymentTermCode": result.payment_term_code,
         "fobSourceMode": result.fob_source_mode,
@@ -1358,7 +1364,7 @@ def patch_sku_fobs_bulk(
         if len(country) != 2:
             raise HTTPException(status_code=400, detail=f"updates[{index}] countryCode must be 2 letters")
         if "finalFobEur" not in update_body and "baseFobEur" not in update_body:
-            raise HTTPException(status_code=400, detail=f"updates[{index}] finalFobEur is required")
+            raise HTTPException(status_code=400, detail=f"updates[{index}] baseFobEur is required")
         if not repo.get_sku_by_material_code_any_status(session, material_code):
             missing_materials.append(material_code)
             continue
@@ -1380,13 +1386,17 @@ def patch_sku_fobs_bulk(
     cleared = 0
     unchanged = 0
     for update_body in normalized_updates:
-        result = repo.update_sku_fob_for_country(
-            session,
-            update_body["materialCode"],
-            update_body["countryCode"],
-            update_body["finalFobEur"],
-            update_body["paymentTermCode"],
-        )
+        try:
+            result = repo.update_sku_fob_for_country(
+                session,
+                update_body["materialCode"],
+                update_body["countryCode"],
+                update_body["finalFobEur"],
+                update_body["paymentTermCode"],
+            )
+        except ValueError as exc:
+            session.rollback()
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
         if result is None:
             unchanged += 1
         elif update_body["finalFobEur"] is None:
@@ -1656,6 +1666,8 @@ def create_material_sku(
         "rows": 0,
         "created": 0,
         "skippedNoBase": 0,
+        "skippedMissingTier": 0,
+        "skippedMissingRule": 0,
         "details": [],
     }
     if automatic_fobs:
@@ -1682,20 +1694,24 @@ def create_material_sku(
         if len(country) != 2:
             raise HTTPException(status_code=400, detail=f"fobs[{index}] countryCode must be 2 letters")
         if "finalFobEur" not in fob_body and "baseFobEur" not in fob_body:
-            raise HTTPException(status_code=400, detail=f"fobs[{index}] finalFobEur is required")
+            raise HTTPException(status_code=400, detail=f"fobs[{index}] baseFobEur is required")
         fob_raw = fob_body.get("finalFobEur") if "finalFobEur" in fob_body else fob_body.get("baseFobEur")
         fob_value = _parse_fob_value(fob_raw)
         if fob_value is None:
             continue
-        repo.update_sku_fob_for_country(
-            session,
-            material_code,
-            country,
-            fob_value,
-            fob_body.get("paymentTermCode"),
-            remark=clean_text(fob_body.get("remark")) if "remark" in fob_body else None,
-            update_remark="remark" in fob_body,
-        )
+        try:
+            repo.update_sku_fob_for_country(
+                session,
+                material_code,
+                country,
+                fob_value,
+                fob_body.get("paymentTermCode"),
+                remark=clean_text(fob_body.get("remark")) if "remark" in fob_body else None,
+                update_remark="remark" in fob_body,
+            )
+        except ValueError as exc:
+            session.rollback()
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
         fobs_created += 1
     try:
         session.commit()

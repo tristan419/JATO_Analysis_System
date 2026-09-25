@@ -212,7 +212,13 @@ export interface ColourHexRuleLookup {
 }
 
 export type ColourTierRepriceDetailStatus = "updated" | "unchanged" | "skipped";
-export type ColourTierRepriceSkipReason = "manual_fob" | "missing_single_base" | null;
+export type ColourTierRepriceSkipReason =
+  | "manual_fob"
+  | "missing_single_base"
+  | "ambiguous_single_base"
+  | "missing_colour_tier"
+  | "missing_colour_surcharge_rule"
+  | null;
 
 export interface ColourTierRepriceDetail {
   countryCode: string;
@@ -227,13 +233,16 @@ export interface ColourTierRepriceReport {
   materialCode: string;
   brand: string;
   colourCode: string;
-  colourTier: string;
-  surchargeEur: number;
+  colourTier: string | null;
+  surchargeEur: number | null;
   rows: number;
   updated: number;
   unchanged: number;
   skippedManual: number;
   skippedNoBase: number;
+  skippedAmbiguous: number;
+  skippedMissingTier: number;
+  skippedMissingRule: number;
   details: ColourTierRepriceDetail[];
 }
 

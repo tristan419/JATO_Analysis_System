@@ -3345,6 +3345,8 @@ type BomFobEditor = {
 type BomFobSaveResponse = {
   materialCode: string;
   countryCode: string;
+  baseFobEur: number | null;
+  colourSurchargeEur: number | null;
   finalFobEur: number | null;
   paymentTermCode?: string | null;
   fobSourceMode?: string | null;
@@ -4323,7 +4325,7 @@ export function BomAdminPanel({
       }
       const responses: BomFobSaveResponse[] = [];
       for (const mc of editFob.materialCodes) {
-        responses.push(await api.updateSkuFob(mc, { countryCode: editFob.countryCode, finalFobEur: editFob.fob, remark }) as BomFobSaveResponse);
+        responses.push(await api.updateSkuFob(mc, { countryCode: editFob.countryCode, baseFobEur: editFob.fob, remark }) as BomFobSaveResponse);
       }
       const responseByMaterial = new Map(
         responses.map((response) => [bomMaterialKey(response.materialCode), response]),
@@ -4333,6 +4335,8 @@ export function BomAdminPanel({
         return {
           materialCode,
           countryCode: editFob.countryCode,
+          baseFobEur: response?.baseFobEur ?? nextFob,
+          colourSurchargeEur: response?.colourSurchargeEur ?? null,
           finalFobEur: response?.finalFobEur ?? nextFob,
           paymentTermCode: response?.paymentTermCode ?? null,
           fobSourceMode: response?.fobSourceMode ?? (didChangeFob ? "manual_edit" : editFob.fobSourceMode ?? null),
@@ -4767,14 +4771,25 @@ export function BomAdminPanel({
       for (const update of updates) {
         await api.updateSkuFob(update.materialCode, {
           countryCode: update.countryCode,
-          finalFobEur: update.finalFobEur,
+          baseFobEur: update.finalFobEur,
           paymentTermCode: update.paymentTermCode ?? undefined,
         });
       }
-      patchBomFobs(updates.map((update) => ({
-        ...update,
-        fobSourceMode: "manual_country_adjust",
-      })));
+      patchBomFobs(updates.map((update) => {
+        const sku = allSkus.find((candidate: any) => String(candidate.materialCode || "") === update.materialCode);
+        const tier = sku ? getEffectiveColourTier(sku) : "single";
+        const special = tier === "single" || !sku ? null : resolveSpecialColourSurcharge(sku, tier);
+        const surcharge = tier === "single"
+          ? 0
+          : special?.amount ?? getColourSurchargeAmount(String(sku?.brand || ""), tier);
+        return {
+          ...update,
+          baseFobEur: update.finalFobEur,
+          finalFobEur: Number((update.finalFobEur + surcharge).toFixed(2)),
+          colourSurchargeEur: surcharge > 0 ? surcharge : null,
+          fobSourceMode: "manual_country_adjust",
+        };
+      }));
       if (quickDelta != null) {
         updateBulkFobEditor(bomKey, allSkus, (current) => ({
           ...current,
@@ -4975,7 +4990,7 @@ export function BomAdminPanel({
             if (baseFob == null) continue;
             await api.updateSkuFob(materialCode, {
               countryCode,
-              finalFobEur: Number(baseFob),
+              baseFobEur: Number(baseFob),
               paymentTermCode: fob?.paymentTermCode ?? undefined,
               remark: fob?.remark ?? null,
             });
@@ -5440,14 +5455,21 @@ export function BomAdminPanel({
           editionTag: addColourEditor.editionTag,
         });
       }
-      const automaticFobs = created?.automaticFobs as { created?: number; skippedNoBase?: number } | undefined;
+      const automaticFobs = created?.automaticFobs as { created?: number; skippedNoBase?: number; skippedMissingTier?: number; skippedMissingRule?: number } | undefined;
       const copiedFobs = Number(automaticFobs?.created || 0);
       const skippedFobs = Number(automaticFobs?.skippedNoBase || 0);
+      const missingTierFobs = Number(automaticFobs?.skippedMissingTier || 0);
+      const missingRuleFobs = Number(automaticFobs?.skippedMissingRule || 0);
+      const skippedReason = [
+        skippedFobs > 0 ? `${skippedFobs} countries lack a Single base` : "",
+        missingTierFobs > 0 ? `${missingTierFobs} countries lack a colour tier` : "",
+        missingRuleFobs > 0 ? `${missingRuleFobs} countries lack a surcharge rule` : "",
+      ].filter(Boolean).join("; ");
       setBomAdminError("");
       setBomAdminNotice(
         copiedFobs > 0
-          ? `Created ${materialCode}; initialized ${copiedFobs} automatic FOB values${skippedFobs > 0 ? `; ${skippedFobs} countries lack a Single base.` : ""}.`
-          : `Created ${materialCode}; no automatic FOB was created${skippedFobs > 0 ? ` because ${skippedFobs} countries lack a Single base.` : "."}`,
+          ? `Created ${materialCode}; initialized ${copiedFobs} automatic FOB values${skippedReason ? `; ${skippedReason}.` : ""}`
+          : `Created ${materialCode}; no automatic FOB was created${skippedReason ? ` because ${skippedReason}.` : "."}`,
       );
       setAddColourEditor(null);
       if (copiedFobs > 0) {
@@ -6475,8 +6497,8 @@ export function BomAdminPanel({
         <div className="bom-finance-modal-backdrop" onClick={() => setColourTierReview(null)}>
           <div className="bom-colour-code-edit-modal-shell" onClick={(event) => event.stopPropagation()}>
             <section className="bom-colour-code-edit-card" role="dialog" aria-modal="true" aria-label="Colour tier price review">
-              <div className="bom-colour-code-edit-head"><div><span className="bom-finance-eyebrow">COLOUR TIER · PRICE REVIEW</span><h4>{colourTierReview.report.colourCode || colourTierReview.report.materialCode}: {colourTierReview.previousTier} → {colourTierReview.nextTier}</h4><p>{colourTierReview.report.brand} / {colourTierReview.nextTier} / +{colourTierReview.report.surchargeEur.toLocaleString()} EUR</p></div></div>
-              <div style={{ fontSize: 11, fontWeight: 700 }}>{colourTierReview.report.rows} countries scanned · {colourTierReview.report.updated} updated · {colourTierReview.report.skippedManual} manual FOB skipped · {colourTierReview.report.skippedNoBase} missing Single base</div>
+              <div className="bom-colour-code-edit-head"><div><span className="bom-finance-eyebrow">COLOUR TIER · PRICE REVIEW</span><h4>{colourTierReview.report.colourCode || colourTierReview.report.materialCode}: {colourTierReview.previousTier} → {colourTierReview.nextTier}</h4><p>{colourTierReview.report.brand} / {colourTierReview.nextTier} / {colourTierReview.report.surchargeEur == null ? "rule unavailable" : `+${colourTierReview.report.surchargeEur.toLocaleString()} EUR`}</p></div></div>
+              <div style={{ fontSize: 11, fontWeight: 700 }}>{colourTierReview.report.rows} countries scanned · {colourTierReview.report.updated} updated · {colourTierReview.report.skippedManual} manual FOB skipped · {colourTierReview.report.skippedNoBase} missing Single base · {colourTierReview.report.skippedAmbiguous} ambiguous base · {colourTierReview.report.skippedMissingTier} missing tier · {colourTierReview.report.skippedMissingRule} missing rule</div>
               <div style={{ maxHeight: "48vh", overflowY: "auto", border: "1px solid #e2e8f0" }}>
                 {colourTierReview.report.details.map((detail) => <div key={detail.countryCode} style={{ padding: 7, borderBottom: "1px solid #e2e8f0", fontSize: 11 }}><strong>{detail.countryCode}</strong> · {detail.oldFinalFobEur?.toLocaleString() ?? "-"} → {detail.newFinalFobEur?.toLocaleString() ?? "-"} · surcharge {detail.colourSurchargeEur?.toLocaleString() ?? "-"}{detail.reason ? ` · ${detail.reason}` : ""}</div>)}
               </div>

@@ -334,6 +334,55 @@ def test_special_colour_rule_precedes_brand_special_default(monkeypatch) -> None
     assert repo.get_colour_surcharge_amount_for_sku(_FakeSession(), sku, "special") == 300
 
 
+def test_new_dual_base_write_derives_final_from_shared_rule(monkeypatch) -> None:
+    sku = SimpleNamespace(
+        material_code="T7000ZEMY0001",
+        brand="OMODA",
+        model_name="OMODA7 SHS",
+        bom_template="T7000**MY0001",
+        exterior_color_code="ZE",
+        colour_tier="dual",
+        exterior_color_type="dual",
+    )
+    row = CountrySkuFobResolved(
+        country_sku_fob_id=uuid4(),
+        baseline_version_id=uuid4(),
+        country_code="SE",
+        material_code=sku.material_code,
+        payment_term_code="TT",
+        uploaded_fob_eur=15000,
+        final_fob_eur=15200,
+        fob_source_mode="uploaded_base_plus_colour",
+        is_active=True,
+    )
+    monkeypatch.setattr(repo, "get_sku_by_material_code_any_status", lambda *_: sku)
+    monkeypatch.setattr(repo, "get_colour_surcharge_amount_for_sku", lambda *_: 200.0)
+
+    result = repo.update_sku_fob_for_country(
+        _FakeSession([row]), sku.material_code, "SE", 15500, "TT"
+    )
+
+    assert result is row
+    assert row.base_fob_eur == 15500
+    assert row.colour_surcharge_eur == 200
+    assert row.final_fob_eur == 15700
+
+
+def test_missing_tier_and_missing_rule_never_become_zero(monkeypatch) -> None:
+    sku = SimpleNamespace(
+        brand="OMODA",
+        model_name="OMODA7 SHS",
+        bom_template="T7000**MY0001",
+        exterior_color_code="ZE",
+        colour_tier=None,
+        exterior_color_type=None,
+    )
+    assert repo.resolve_colour_surcharge_for_sku(_FakeSession(), sku, None)["status"] == "missing_tier"
+    monkeypatch.setattr(repo, "get_special_colour_surcharge_for_sku", lambda *_: None)
+    monkeypatch.setattr(repo, "get_brand_colour_surcharge", lambda *_: None)
+    assert repo.resolve_colour_surcharge_for_sku(_FakeSession(), sku, "dual")["status"] == "missing_rule"
+
+
 def test_colour_override_is_bound_to_the_requested_tier(monkeypatch) -> None:
     sku = SimpleNamespace(
         brand="OMODA",
@@ -1880,6 +1929,9 @@ def test_colour_surcharge_reprice_audit_classifies_generic_rows_without_writing(
         "missingBase": 0,
         "ambiguousBase": 1,
         "explicitFinal": 0,
+        "missingTier": 0,
+        "missingRule": 0,
+        "notApplicable": 0,
     }
     assert by_code[dual.material_code]["expectedFinalFobEur"] == 19650
     assert by_code[dual.material_code]["category"] == "auto_reprice"
@@ -1956,6 +2008,9 @@ def test_colour_surcharge_reprice_audit_keeps_manual_row_ambiguous(
         "missingBase": 0,
         "ambiguousBase": 1,
         "explicitFinal": 0,
+        "missingTier": 0,
+        "missingRule": 0,
+        "notApplicable": 0,
     }
     assert result["items"][0]["trustedSingleBaseFobEur"] is None
     assert result["items"][0]["reason"] == "multiple_single_bases_for_template_country"
@@ -2230,6 +2285,17 @@ def test_adjust_country_fobs_updates_rows_and_writes_history(monkeypatch) -> Non
         if country_code == "SK"
         else [],
     )
+    monkeypatch.setattr(
+        repo,
+        "get_sku_by_material_code_any_status",
+        lambda *_: SimpleNamespace(
+            brand="OMODA",
+            model_name="OMODA7 SHS",
+            bom_template="T7000SE**MY0001",
+            exterior_color_code="BW",
+            colour_tier="single",
+        ),
+    )
 
     result = repo.adjust_country_fobs(fake_session, "SK", 200, changed_by="admin")
 
@@ -2240,9 +2306,13 @@ def test_adjust_country_fobs_updates_rows_and_writes_history(monkeypatch) -> Non
         "adjusted": 1,
         "skippedNegative": 0,
         "unchanged": 0,
+        "skippedNoBase": 0,
+        "skippedAmbiguous": 0,
+        "skippedMissingTier": 0,
+        "skippedMissingRule": 0,
     }
     assert row.final_fob_eur == 15100
-    assert row.fob_source_mode == "manual_country_adjust"
+    assert row.fob_source_mode == "template_base_country_adjust"
     assert row.updated_at_utc is not None
     history = fake_session.added[0]
     assert isinstance(history, FobResolvedHistory)
@@ -2276,6 +2346,18 @@ def test_adjust_country_fobs_moves_template_base_and_preserves_surcharge(monkeyp
         if country_code == "SE"
         else [],
     )
+    monkeypatch.setattr(
+        repo,
+        "get_sku_by_material_code_any_status",
+        lambda *_: SimpleNamespace(
+            brand="OMODA",
+            model_name="OMODA7 SHS",
+            bom_template="T7000**MY0001",
+            exterior_color_code="ZE",
+            colour_tier="dual",
+        ),
+    )
+    monkeypatch.setattr(repo, "get_colour_surcharge_amount_for_sku", lambda *_: 200.0)
 
     result = repo.adjust_country_fobs(fake_session, "SE", 500, changed_by="admin")
 

@@ -69,11 +69,9 @@ def _derive_colour_tier(exterior_color_type: str) -> str:
     return infer_colour_tier(None, exterior_color_type)
 
 
-def _effective_colour_tier(sku: object) -> str:
-    explicit = str(getattr(sku, "colour_tier", "") or "").strip().lower()
-    if explicit in {"single", "dual", "special"}:
-        return explicit
-    return _derive_colour_tier(getattr(sku, "exterior_color_type", None) or "single")
+def _effective_colour_tier(sku: object) -> str | None:
+    """Use the repository's saved-tier resolver for every pricing path."""
+    return repo.resolve_effective_colour_tier(sku)
 
 
 def _interior_by_template(skus: list[MaterialSkuMaster]) -> dict[str, str]:
@@ -461,11 +459,12 @@ def _resolve_fob_for_sku(
         # Excel FOB is base/single-colour — apply the resolved Dual/Special surcharge.
         # LC is NOT added here — it is already part of the uploaded FOB value.
         colour_tier = _effective_colour_tier(sku)
-        colour_surcharge = (
-            repo.get_colour_surcharge_amount_for_sku(session, sku, colour_tier)
-            if colour_tier in {"dual", "special"}
-            else 0.0
-        )
+        decision = repo.resolve_colour_surcharge_for_sku(session, sku, colour_tier)
+        if decision["status"] in {"missing_tier", "missing_rule"}:
+            raise ValueError(
+                f"Cannot resolve colour surcharge for {sku.material_code}: {decision['status']}"
+            )
+        colour_surcharge = float(decision["amount"] or 0.0)
         final_fob = uploaded_fob_eur + colour_surcharge
         fob_source_country = country_code
     else:
