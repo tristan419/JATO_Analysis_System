@@ -5206,8 +5206,10 @@ export const api = {
       body: JSON.stringify({ previewFingerprint, materialCodes }),
     }),
 
-  lookupOrderGeniusColourHexRule: (brand: string, colourCode: string) => {
-    const qs = new URLSearchParams({ brand, colourCode });
+  lookupOrderGeniusColourHexRule: (brand: string, colourCode: string, colourName?: string) => {
+    const qs = new URLSearchParams({ brand });
+    if (colourCode.trim()) qs.set("colourCode", colourCode);
+    if (colourName?.trim()) qs.set("colourName", colourName);
     return request<ColourHexRuleLookup>(`/order-genius/colour-hex-rules/lookup?${qs.toString()}`);
   },
 

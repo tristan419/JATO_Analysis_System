@@ -47,6 +47,21 @@ describe("Order Genius colour swatches", () => {
 });
 
 describe("Order Genius colour rule API", () => {
+  it("sends an optional colour name for alias lookup without inventing a swatch", async () => {
+    const fetchMock = vi.fn(async (_input: RequestInfo | URL) => Response.json({
+      brand: "JAECOO", colourCode: "ZZ", status: "missing",
+      colourName: null, colourHex: null, source: "name_candidates",
+      hasNameConflict: false, hasSwatchConflict: false, nameCandidates: [],
+    }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await api.lookupOrderGeniusColourHexRule("JAECOO", "ZZ", "Khaki white");
+
+    expect(String(fetchMock.mock.calls[0]?.[0])).toContain("brand=JAECOO");
+    expect(String(fetchMock.mock.calls[0]?.[0])).toContain("colourCode=ZZ");
+    expect(String(fetchMock.mock.calls[0]?.[0])).toContain("colourName=Khaki+white");
+  });
+
   it("passes the immutable preview fingerprint into Apply", async () => {
     const fetchMock = vi.fn(async (_input: RequestInfo | URL, _init?: RequestInit) => Response.json({
       updated: 1, unchanged: 0, conflicts: 0, missingRules: 0,

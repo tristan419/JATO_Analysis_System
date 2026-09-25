@@ -9,6 +9,7 @@ from __future__ import annotations
 import hashlib
 import json
 import re
+import unicodedata
 from collections import Counter
 from copy import deepcopy
 from datetime import datetime, timezone
@@ -119,6 +120,19 @@ def _extract_canonical_powertrain(sku: MaterialSkuMaster) -> str:
 def normalize_colour_rule_name(colour_name: str | None) -> str:
     """Normalize colour names for reusable swatch rules."""
     return re.sub(r"\s+", " ", str(colour_name or "").strip()).casefold()
+
+
+def normalize_colour_rule_alias(colour_name: str | None) -> str:
+    """Normalize a display name for safe, non-mutating alias lookup.
+
+    This only collapses presentation differences (Unicode width, punctuation,
+    whitespace and a trailing colour-code annotation). It never invents a
+    colour value or treats a fuzzy match as an automatic write.
+    """
+    text = unicodedata.normalize("NFKC", str(colour_name or "")).strip()
+    text = re.sub(r"\s*[()]\s*[A-Za-z0-9]{1,4}\s*[)]\s*$", "", text)
+    text = re.sub(r"[^0-9A-Za-z\u0080-\uffff]+", " ", text)
+    return re.sub(r"\s+", " ", text).strip().casefold()
 
 
 def normalize_colour_hex_value(colour_hex: str | None) -> str | None:
@@ -1726,6 +1740,46 @@ def _list_colour_rule_candidate_skus(
     ]
 
 
+def _list_colour_rule_name_candidates(
+    session: Session,
+    brand: str,
+    colour_name: str,
+) -> list[dict]:
+    """Return existing brand+code rules matching one normalized display alias."""
+    normalized_brand = normalize_brand(brand)
+    alias = normalize_colour_rule_alias(colour_name)
+    if not normalized_brand or not alias:
+        return []
+    stmt = select(MaterialSkuMaster).where(MaterialSkuMaster.is_active == True)
+    rows = [
+        row
+        for row in session.execute(stmt).scalars().all()
+        if resolve_material_brand(
+            getattr(row, "brand", None),
+            getattr(row, "model_name", None),
+            getattr(row, "bom_template", None),
+        ) == normalized_brand
+        and normalize_colour_rule_alias(
+            getattr(row, "exterior_color_name", None)
+        ) == alias
+    ]
+    if not rows:
+        return []
+    rules = build_colour_hex_rules_from_skus(rows)
+    candidates: list[dict] = []
+    for rule in rules:
+        candidates.append({
+            "brand": rule["brand"],
+            "colourCode": rule["colourCode"],
+            "colourName": rule["standardColourName"],
+            "colourHex": rule["standardColourHex"],
+            "status": rule["status"],
+            "hasNameConflict": rule["hasNameConflict"],
+            "hasSwatchConflict": rule["hasSwatchConflict"],
+        })
+    return sorted(candidates, key=lambda item: item["colourCode"])
+
+
 def list_colour_hex_rules(session: Session) -> list[dict]:
     """Return derived swatch rules collected from existing material SKUs."""
     stmt = select(MaterialSkuMaster).where(MaterialSkuMaster.is_active == True)
@@ -1802,41 +1856,78 @@ def lookup_colour_rule(
     session: Session,
     brand: str,
     colour_code: str,
+    *,
+    colour_name: str | None = None,
 ) -> dict:
-    """Resolve one derived brand+code rule without mutating any SKU."""
-    key = _colour_rule_key(brand, colour_code)
-    if key is None:
-        raise ValueError("brand and colourCode are required")
-    normalized_brand, normalized_code = key
-    rules = build_colour_hex_rules_from_skus(
-        _list_colour_rule_candidate_skus(
-            session,
-            normalized_brand,
-            normalized_code,
+    """Resolve a shared colour rule without mutating any SKU.
+
+    Brand+code is authoritative. A name alias is only considered when that
+    lookup has no reusable rule, and is auto-reusable only when exactly one
+    unambiguous existing rule matches. Conflicting rules remain explicit so
+    the caller must resolve them rather than silently replacing a saved swatch.
+    """
+    normalized_brand = normalize_brand(brand)
+    normalized_code = str(colour_code or "").strip().upper()
+    if not normalized_brand and not str(colour_name or "").strip():
+        raise ValueError("brand and colourCode or colourName are required")
+    if normalized_code:
+        rules = build_colour_hex_rules_from_skus(
+            _list_colour_rule_candidate_skus(
+                session,
+                normalized_brand,
+                normalized_code,
+            )
         )
+        if rules:
+            rule = rules[0]
+            reusable = rule["status"] in {"fillable", "complete"}
+            return {
+                "brand": normalized_brand,
+                "colourCode": normalized_code,
+                "status": rule["status"],
+                "colourName": rule["standardColourName"] if reusable else None,
+                "colourHex": rule["standardColourHex"] if reusable else None,
+                "source": "brand_code_rule" if reusable else "none",
+                "hasNameConflict": rule["hasNameConflict"],
+                "hasSwatchConflict": rule["hasSwatchConflict"],
+                "nameCandidates": [],
+            }
+
+    name_candidates = _list_colour_rule_name_candidates(
+        session,
+        normalized_brand,
+        str(colour_name or ""),
     )
-    if not rules:
+    reusable_candidates = [
+        candidate
+        for candidate in name_candidates
+        if candidate["status"] in {"fillable", "complete"}
+        and not candidate["hasNameConflict"]
+        and not candidate["hasSwatchConflict"]
+    ]
+    if len(reusable_candidates) == 1:
+        candidate = reusable_candidates[0]
         return {
             "brand": normalized_brand,
-            "colourCode": normalized_code,
-            "status": "missing",
-            "colourName": None,
-            "colourHex": None,
-            "source": "none",
+            "colourCode": normalized_code or candidate["colourCode"],
+            "status": candidate["status"],
+            "colourName": candidate["colourName"],
+            "colourHex": candidate["colourHex"],
+            "source": "name_candidate",
             "hasNameConflict": False,
             "hasSwatchConflict": False,
+            "nameCandidates": name_candidates,
         }
-    rule = rules[0]
-    reusable = rule["status"] in {"fillable", "complete"}
     return {
         "brand": normalized_brand,
         "colourCode": normalized_code,
-        "status": rule["status"],
-        "colourName": rule["standardColourName"] if reusable else None,
-        "colourHex": rule["standardColourHex"] if reusable else None,
-        "source": "brand_code_rule" if reusable else "none",
-        "hasNameConflict": rule["hasNameConflict"],
-        "hasSwatchConflict": rule["hasSwatchConflict"],
+        "status": "missing",
+        "colourName": None,
+        "colourHex": None,
+        "source": "name_candidates" if name_candidates else "none",
+        "hasNameConflict": any(candidate["hasNameConflict"] for candidate in name_candidates),
+        "hasSwatchConflict": any(candidate["hasSwatchConflict"] for candidate in name_candidates),
+        "nameCandidates": name_candidates,
     }
 
 
@@ -1852,10 +1943,17 @@ def resolve_colour_attributes(
     """Fill missing/placeholder attributes from one unambiguous brand+code rule."""
     explicit_name = str(colour_name or "").strip()
     explicit_hex = normalize_colour_hex_value(colour_hex)
-    rule = lookup_colour_rule(session, brand, colour_code)
-    reusable = rule["source"] == "brand_code_rule"
+    rule = lookup_colour_rule(
+        session,
+        brand,
+        colour_code,
+        colour_name=explicit_name,
+    )
+    reusable = rule["source"] in {"brand_code_rule", "name_candidate"}
     resolved_name = explicit_name
-    if is_placeholder_colour_name(explicit_name, colour_code) and reusable:
+    if rule["source"] == "name_candidate" and reusable:
+        resolved_name = rule["colourName"] or explicit_name
+    elif is_placeholder_colour_name(explicit_name, colour_code) and reusable:
         resolved_name = rule["colourName"]
     resolved_hex = (
         explicit_hex
