@@ -489,6 +489,7 @@ Markdown_Readme/Fullstack/JATO_PLATFORM_HANDOVER_2026-09-14.md
 - [ ] **2026-09-25 #236 第二批已完成待审阅**：业务提交 `95ba8941` 已将颜色特例绑定 `Dual/Special` tier，旧规则默认 Special，新增 migration `20260925_0048`，避免 Special 特例误用于 Dual；tier/audit/迁移定向 `13 passed`。未合并、未部署 Candidate；下一批才接折叠管理 UI。
 - [ ] **2026-09-25 #236 第三批已完成待审阅**：业务提交 `75758ea6` 已将前端 API/type、色卡命中和定制规则入口绑定 `Dual/Special` tier；Special 定制入口默认折叠并显示规则数量，展开后可编辑适用档位，Single 不查询定制加价。前端 `tsc --noEmit`、Vitest `75 files / 411 tests`、Vite build 均通过。未合并、未部署 Candidate；下一步是审阅三批组合后再决定是否授权合并。
 - [ ] **2026-09-25 #236 三批组合审阅暂不通过**：远端 `main@abd38688d35e`，PR head `75758ea6`，`0 behind / 6 ahead`，GitHub 显示 `MERGEABLE` 且 CI 成功；但旧 `colour_tier` 回退尚未覆盖新增颜色/列表入口，缺品牌档位规则会静默变成零加价，前端未展示 `skippedAmbiguous`。先修这三处并复审，不合并、不准备 Candidate。
+- [ ] **新增 Dual 颜色零加价诊断**：确认新增颜色自动初始化、显式 FOB、单行/批量 FOB 编辑仍有直接写 `final_fob_eur` 或 `target.colour_tier or "single"` 的旁路；这些必须统一解释为 Single 基准并按 Dual/Special surcharge 派生，缺规则不能静默按 0。现有最终方案覆盖该根因，但 #236 当前实现尚未完成这些入口收口。
 - [ ] **P2 其他研发**：按产品优先级选择 Config 本地 10 文件收口、AstrBot JATO MCP 整理，或 MSRP #183；不要求全项目依次排队。保留 #157 对 #179 的现有合并约束。
 - [ ] **P3 历史整理**：最后再审计旧 Draft PR/旧 worktree；未提交成果未确认前不关闭、删除或清理。
 

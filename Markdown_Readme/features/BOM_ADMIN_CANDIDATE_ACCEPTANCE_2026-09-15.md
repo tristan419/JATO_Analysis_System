@@ -800,3 +800,20 @@ Candidate：`https://candidate.ojeur.cloud`；发布提交：`abd38688d35eec9d77
 3. **拖动档位回报没有展示歧义计数。** 后端已返回 `skippedAmbiguous`，但前端 `ColourTierRepriceReport`/Review 仍未展示该字段，用户会看不到基准歧义；需要补类型、显示和回归测试。
 
 因此当前结论是：代码测试和合并状态通过，但 PR 不能按现状合入；先做以上最小修订，再重新审阅。仍不准备 Candidate。
+
+### 2026-09-25 · 新增 Dual 颜色仍显示零加价：调用链诊断
+
+这类现象与上述审阅阻塞是同一个根因，不应为某个物料号增加特例：
+
+- **自动新增颜色路径**：`create_material_sku()` → `initialize_sku_fobs_from_source()`。新增 SKU 从已有颜色复制国家 FOB 时，当前初始化函数仍以 `target.colour_tier or "single"` 判断档位；旧数据若 tier 为空会漏读 `exterior_color_type`。即使档位是 Dual，`get_colour_surcharge_amount_for_sku()` 找不到品牌 Dual 规则时也返回 `0`，随后把新行写成无颜色加价。
+- **手动 FOB 路径**：`create_material_sku()` 的显式 `fobs`、`PATCH /material-skus/{code}/fob` 和 bulk endpoint 都直接调用 `update_sku_fob_for_country()`，把输入值当最终 FOB 写入，没有按 SKU 的 Dual/Special 档位重新计算。BOM 页面虽然把该数字当“基准”编辑，接口仍保存成最终值，所以新增 Dual 颜色或手动改价后可能出现 `colour_surcharge_eur = NULL`、实际 FOB 等于 Single。
+- **规则缺失路径**：当前 resolver 将“没有适用品牌/档位规则”和“明确配置 0 EUR”都折成 `0`；这会掩盖规则未初始化或品牌规范化失败，不能证明加价为 0。
+
+现有最终方案可以解决，但必须把它明确扩展为“新增/手动/复制/导入全部走同一决策”而不是只修 audit：
+
+1. 复用一个 effective-tier 判定（显式 `colour_tier` → 合法 `exterior_color_type` → 缺失待确认），供列表、创建、初始化、重算和导出使用；缺档位不得默认为 Single。
+2. 复用一个带状态的 surcharge 决策，至少区分 `matched_amount`、`explicit_zero`、`missing_rule`。缺规则归类并阻止写入，不能静默按 0；Single 固定为 0。
+3. 新增颜色自动初始化和显式 FOB 输入都把输入解释为同模板国家 Single 基准；Dual/Special 保存 `base_fob_eur + surcharge`，同时记录 surcharge 和来源。Country Copy、批量调价、单行编辑也复用该入口，不能再直接写 `final_fob_eur`。
+4. 增加回归：已有模板新增 OMODA Dual 为 `Single + 200`、JAECOO Dual 为 `Single + 300`；手动改单后仍保持差额；缺规则不创建/不覆盖；显式 0 只在有明确规则时生效；重复保存不叠加。
+
+因此答案是：**MD 方案的业务模型是对的，但当前 #236 只完成了重算/audit 和规则 tier 化，尚未完成“新增颜色与手动 FOB 入口收口”。在补齐上述调用链前，不能说已解决新增 Dual 为 0 的问题，也不能合并或准备 Candidate。**
