@@ -1945,6 +1945,31 @@ class BrandColourSurchargeRule(TimestampMixin, Base):
     is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
 
 
+class BrandColourSwatchRule(TimestampMixin, Base):
+    """Persistent brand + colour-code standard shared by BOM and Matrix."""
+
+    __tablename__ = "brand_colour_swatch_rule"
+    __table_args__ = (
+        Index(
+            "uq_ordering_brand_colour_swatch_active",
+            "brand",
+            "colour_code",
+            unique=True,
+            postgresql_where=text("is_active = true"),
+        ),
+        {"schema": "ordering"},
+    )
+
+    brand_colour_swatch_rule_id: Mapped[UUID] = mapped_column(
+        PGUUID(as_uuid=True), primary_key=True, default=uuid4
+    )
+    brand: Mapped[str] = mapped_column(Text, nullable=False)
+    colour_code: Mapped[str] = mapped_column(Text, nullable=False)
+    colour_name: Mapped[str] = mapped_column(Text, nullable=False)
+    colour_hex: Mapped[str] = mapped_column(Text, nullable=False)
+    is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+
+
 class SpecialColourSurchargeRule(TimestampMixin, Base):
     __tablename__ = "special_colour_surcharge_rule"
     __table_args__ = (
