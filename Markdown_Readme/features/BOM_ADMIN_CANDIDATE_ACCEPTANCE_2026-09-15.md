@@ -817,3 +817,20 @@ Candidate：`https://candidate.ojeur.cloud`；发布提交：`abd38688d35eec9d77
 4. 增加回归：已有模板新增 OMODA Dual 为 `Single + 200`、JAECOO Dual 为 `Single + 300`；手动改单后仍保持差额；缺规则不创建/不覆盖；显式 0 只在有明确规则时生效；重复保存不叠加。
 
 因此答案是：**MD 方案的业务模型是对的，但当前 #236 只完成了重算/audit 和规则 tier 化，尚未完成“新增颜色与手动 FOB 入口收口”。在补齐上述调用链前，不能说已解决新增 Dual 为 0 的问题，也不能合并或准备 Candidate。**
+
+### 2026-09-26 · #236 第四批：新增颜色与手动 FOB 入口收口（本地已提交，待审阅）
+
+- 代码 worktree：`/Users/litristan/Downloads/JATO_Analysis_System_bom_reprice_audit`；分支 `codex/bom-colour-reprice-audit`；提交 `95706e19` 已推送到 PR [#236](https://github.com/tristan419/JATO_Analysis_System/pull/236)。没有合并、没有准备 Candidate、没有写入 Candidate/Active/www/intl。
+- 统一复用 repository 的 effective tier 和带状态 surcharge 决策：显式 `colour_tier` 优先，旧数据才回退合法 `exterior_color_type`；缺档位保持缺失，不再默认为 Single。显式 `0` 与缺规则分开，缺规则不会静默生成零加价。
+- `create_material_sku()` 的自动 FOB 初始化、显式 `fobs`、单行 `PATCH /material-skus/{code}/fob`、bulk FOB、模板基准保存、国家批量调整都把输入解释为同模板国家 Single 基准；Dual/Special 保存 `base_fob_eur + colour_surcharge_eur = final_fob_eur`。付款条件只作为参考元数据，单行写入按物料＋国家更新现有付款条件行。
+- BOM Admin 列表返回同一 effective tier；导入的 `uploaded_base_plus_colour` 也走同一状态决策。拖动/重算回报补充 `missing tier`、`missing rule` 和基准歧义计数，审计摘要补充缺档位、缺规则和不适用分类。
+- 新增回归：新增 OMODA Dual 基准 `15,500` 得到 `15,700`（+200）；缺档位/缺规则不会写成 0；重复保存不会把已加价最终值再次当成基准。
+
+本批验证：
+
+- BOM Admin 后端专项：`65 passed, 5 failed`；5 项仍是最终 main 已存在的 `list_bom_admin_country_columns` / `sync_missing_template_fobs` 基线缺口，不由本批引入。
+- 新增 Dual 基准写入、缺档位/缺规则保护用例通过；`compileall`、`git diff --check` 通过。
+- 前端 `tsc --noEmit` 通过；Vitest `75 files / 411 tests passed`；Vite production build 通过。
+- 后端全 unit 结果为 `1478 passed, 1 skipped, 14 failed`；除上述 5 个 BOM 基线缺口外，其余失败属于现有环境/历史测试（认证 fixture、Airflow 权限、旧 parser 断言），未由本批代码触发。
+
+下一步仍是先审阅 #236 四批组合并获授权，再走 PR → 最新 main → 现有 Candidate 流程。Candidate 只先做只读审计与浏览器验收；不得把本地通过或 PR CI 通过等同 Candidate/Active 业务验收，也不执行批量 Apply 或正式环境发布。
