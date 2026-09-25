@@ -1,5 +1,11 @@
 # BOM Colour Rules 统一目标与实施契约
 
+> **2026-09-25 最新恢复入口：** [BOM 第 13 节最终确认方案与 Luna Max 任务](BOM_ADMIN_CANDIDATE_ACCEPTANCE_2026-09-15.md#bom-pricing-final-20260925)。#235 已合入并准备 Candidate，持久品牌＋色码标准及 UE 两模板复用已有部分证据；本 Goal 尚未完整验收。#236 必须修订后再审阅，不能直接合并。
+>
+> 颜色名称/HEX 不决定 tier；以 BOM Admin 保存档位为准。基准为模板＋国家，付款条件仅参考；Single 固定＋0（包括独立模板 Matte black），Dual/Special 使用同档位定制优先级。保留并收拢定制管理入口，旧规则只适用 Special。manual/copy/import 来源不永久锁价，有可信基准才统一派生；缺失/冲突不猜值。审计/Apply 共用逻辑，授权后方可写 Candidate；Active/www/intl 发布单独决定。
+>
+> 下方状态和实现基线为早期记录，不代表最新代码或当前执行要求。不要重做 #215/#220，也不要按旧“人工 FOB 一律跳过”实现。本轮仅更新文档，未改代码或业务数据。
+
 > Goal ID: `bom-colour-rules-unified`
 >
 > 状态：`MERGED_MAIN_PARTIAL_BUSINESS_ACCEPTANCE_WITH_FINDINGS`（2026-09-15 Candidate 实测）

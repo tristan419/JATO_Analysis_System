@@ -1,5 +1,19 @@
 # JATO Platform 开发交接与恢复入口
 
+## 2026-09-25 最新 BOM 执行入口（文档确认，待代码修订）
+
+**Luna Max 先读 [BOM 第 13 节最终确认方案](../features/BOM_ADMIN_CANDIDATE_ACCEPTANCE_2026-09-15.md#bom-pricing-final-20260925)。#236 不可直接合并；本轮只改文档。**
+
+- 基准是 BOM 模板＋国家；付款条件只参考。已保存 tier 决定加价；Single 永远＋0，名称不决定分类。
+- OMODA7 Matte gray Special＋200；OMODA9 UE Special＋300；CP / Matte black 独立模板 Single 使用自身较高基准，不另加颜色费。
+- 保留定制能力，规则绑定 Dual/Special 档位，同档位内车型色码→品牌色码→品牌默认。旧规则保留为 Special；管理入口折叠到 Colour Surcharges 下方。
+- manual/copy/import 不永久锁价；可信基准＋明确档位统一派生。缺基准、歧义、缺档位/规则不写；不能以旧 manual base 消除冲突。
+- audit/Apply 共用决策，修复歧义放行、空计数和付款条件审计/国家写入不一致。重复付款条件价格先只读盘点，不猜价、不直接删数据。
+- 最新已记录 Candidate：#235 的 abd38688d35eec9d771d8a9fc5fa599545b172eb，仅 OMODA9/UE 部分数值与色库样本通过；JAECOO7 等历史价差仍未收口。实施前重新核对远端 main/PR。
+- 下一步修订 #236 并补真实 Apply/读写联动测试，每批更新实施文档；审阅后才请求合并及 Candidate 授权，Candidate 批量重算须先审阅只读清单。Active/www/intl 不动。
+
+**以下日期段落保留历史实现/验收事实，不作最新实施指令。**旧“付款条件参与定价”“导入最终价永久保护”“所有 Matte 是 Special”等要求已被上述口径替代；旧 SHA 不是当前版本。
+
 本轮统一进度入口：[Order Genius 六项大任务进度](../features/ORDER_GENIUS_PROGRESS_2026-09-24.md)。选品表批次栏已确认，见日期选品/PI需求第3.1节；每批交付按该进度口径报告，已合并/部署不等于业务验收或Active发布。
 
 ## 2026-09-24 新增：PI 批次不可见、余量下单与日期选品
@@ -463,14 +477,15 @@ Markdown_Readme/Fullstack/JATO_PLATFORM_HANDOVER_2026-09-14.md
 - [ ] **P1-A BOM 输入/搜索收尾**：A 已随 PR #231 合入最终 main；Candidate 已观察搜索清除/恢复和 1.2s 搜索入口，尚未完成逐字输入、自动回填后二次修改、FOB 保存后搜索保持的完整浏览器验收。
 - [ ] **P1-B BOM Model 布局**：B 已随 PR #230 合入最终 main；50/100/150% 缩放下 Model 保持最左，但拖拽列宽、刷新/数量保存后的持久化和真实窄窗口尺寸仍未验收。
 - [x] **P1 BOM 本地批次**：B（业务 `53976fc0`，对齐 `ac59a832`）、C（含 E，业务 `2218c0df`，对齐 `579ea01e`）和 D（原始 `1a64194a`，对齐 `f6887fb3`，衔接修正 `34656898`）已在各自独立 worktree 完成本地实现与验证；不要重新执行这些批次，也不优先建设多人编辑 row_version。
-- [ ] **P1 BOM PR 审阅与 Candidate 验收**：B/C/A/D 已按 C → B → A → D 合并；手动基准重算修复已由 PR #233 合入，当前 main `cf10438fdeed` 的 Candidate 已重新准备成功。#233 只修复“有可信 Single 基准的 manual 行仍应叠加当前颜色 surcharge”，不等于 Special +300、J5 共享色卡/双入口、manual/no-base、FOB 数值和认证草稿全部验收通过。当前没有 Active/www/intl 更新授权。
-- [ ] **当前 Candidate 构件**：部署 run [#35971888377](https://github.com/tristan419/JATO_Analysis_System/actions/runs/35971888377)，操作 ID `2026-09-24T080357833Z-prepare-candidate-8f651be3`，commit `cf10438fdeed1573a13fc1f2a533c18623d87476`，archive `ea4d7e9ab0a5d9e0fdfa74a4627e2e2dc711d379f7452cdac012e4bc26fff9b3`，manifest `566d1cfe6039a1ffcdc7e147dad06a0374e4a312b665d04aba3e5d1e2df5f57b`。Candidate 部署报告通过 sandbox/database isolation/backend/monthly-disabled/preview，并记录 `active_unchanged`；不要把它写成 Active 发布。
-- [ ] **色块缺颜色解释**：PR #233 未改色卡。BOM/Matrix 当前从 SKU `colourHex` 或名称映射渲染，缺失时回退 `#94A3B8`；此前 Candidate 已有 `missing swatch`/缺规则记录。蓝边是自定义 hex 的视觉标记，不代表规则命中。下一步应在 Candidate 读取实际 `colourHex` 与 Refresh/Preview 的 missing/conflict 明细，修真实共享规则数据，不用默认色覆盖缺口。
+- [ ] **P1 BOM PR 审阅与 Candidate 验收**：A/B/C/D、#233/#234/#235 已合入；最新已记录 Candidate 为 abd38688d35e。#236 必须按顶部最终方案修订并重新审阅；全量价格与完整交互仍未验收，不能直接合并或发布正式站。
+- [ ] **当前 Candidate 构件（最新已记录）**：abd38688d35eec9d771d8a9fc5fa599545b172eb；详细实际样本见 BOM 实施文档 #235 Candidate 实测。旧 #233 cf10438fdeed 构件仅作历史。后续重新部署必须记录新的实际 SHA 与沙箱身份。
+- [ ] **共享色卡剩余验收**：#235 已引入持久品牌＋色码标准并共用 BOM/Matrix 解析；UE 两模板样本通过，不等于 TE 创建后跨模板复用或全部历史缺色已通过。缺值应明确提示，不写默认灰色掩盖缺失。
 - [ ] **颜色映射实现口径**：先按规范化“品牌＋Colour Code”查已有共享 HEX；未命中才按名称/别名找唯一候选；仍未命中才让用户选色或输入 HEX 并确认保存。不能把颜色名称自动猜成真实车漆色，也不能用默认灰色覆盖缺失数据。双色保存两份 HEX、Matte 保存一份；色块数量与 Dual/Special 价格 tier 分开维护。BOM 与 Matrix 必须引用同一映射。
 - [ ] **2026-09-25 共享颜色映射 Candidate：部署通过，业务验收否决**：PR [#234](https://github.com/tristan419/JATO_Analysis_System/pull/234) 已合入 main，merge/main/Candidate commit `fd50e5a1b3222aec96d1b5dcb34d8d884018ffae`。Candidate run [#36099775361](https://github.com/tristan419/JATO_Analysis_System/actions/runs/36099775361)，操作 ID `2026-09-25T055411284Z-prepare-candidate-f3855f8b`，archive `0067a7c84c7f9ddbbf41ad567bb35784fde27861d28cbe8d3d4f2d5585fbc171`，manifest `9eaf85a81401a4912bec5bd9c6c94670bf3e703af5765dc0c9cc7111de39fef8`。部署报告通过 sandbox/database isolation/backend/monthly-disabled/preview 并记录 `active_unchanged`，但业务复核发现：JAECOO `dual=300` 的规则正确而 `T7160RG**MH0001` 的 CH Dual 实际仍为 `19,350`（行元数据同时出现 `baseFobEur=20,150`、`colourSurchargeEur=300`、`finalFobEur=19,350`）；BOM/Matrix 大量 `colourHex=null`，共享规则没有覆盖显示路径；当前沙箱 OMODA+TE lookup 为 `source=none`，且本次替换删除了 1 个旧 Candidate 沙箱，无法证明旧 TE 是否曾成功持久化。三项均不能验收通过；不手工逐色补值、不手工给每行加 300，先修根因并在当前沙箱重做 TE 全流程。不更新 Active/www/intl。
 - [ ] **发布，单独决定**：若要让正式站看到已验收功能，另行批准把同一个已测构件 update-active；再按现有独立流程同步 intl，分别核验版本。Candidate 可用不等于必须立即发布。
-- [ ] **2026-09-25 根因修复待合并/Candidate**：新 worktree `/Users/litristan/Downloads/JATO_Analysis_System_bom_persistent_base_reprice`、分支 `codex/bom-persistent-base-reprice`，基线 `main@fd50e5a1b322`；提交 `7d2880a86fff7d6f079f5a50f294b37019b294d5`，PR [#235](https://github.com/tristan419/JATO_Analysis_System/pull/235) 已创建，当前未合并。此批只修两件事：已有 Dual/Special 行按同模板可信 Single 基准 + surcharge 重算（Copy Country 目标国复制后也触发按国重算）；新增持久 `ordering.brand_colour_swatch_rule`，并让 BOM/Matrix 共用同一标准颜色解析。没有手工补 Candidate 色值、没有给正式数据加价、没有 update-active/sync-intl。前端 TS、75 个 Vitest 文件/411 测试、build/router regression 均通过；后端颜色/价格/迁移定向 23 项通过，BOM 单元文件 `54 passed, 5 failed`，5 项是最终 main 已知 country-column / `sync_missing_template_fobs` 基线失败。PR 合入后 Candidate 核对：同模板 Single 与 Dual/Special 的实际 FOB 差额、Copy Country 后目标国基准、TE 创建→刷新→另一模板自动回填、BOM/Matrix 色值一致；不得把规则 tooltip 当作实际 FOB 证据。
-- [ ] **2026-09-25 派生颜色 FOB 全量审计（最新，PR #236）**：PR [#235](https://github.com/tristan419/JATO_Analysis_System/pull/235) 已合入并在 Candidate 实测，但历史 Dual/Special 仍可能与 Single 漂移；不能把一次 tier 变更等同于全量迁移。PR [#236](https://github.com/tristan419/JATO_Analysis_System/pull/236) 的分支 `codex/bom-colour-reprice-audit`（提交 `3b2bc15b`，记录提交 `3066ed34`）新增只读 audit 与 fingerprint 保护的显式 apply：只认同模板/国家/付款条件的唯一 Single，输出 `auto_reprice / already_correct / missing_base / ambiguous_base / explicit_final`，不自动覆盖明确最终价。该 PR 尚未合并、尚未 prepare Candidate；不能在当前 Candidate 手工执行批量写入。合并后先只读审计并保存结果，再经用户确认在 Candidate apply，验证 JAECOO7 等历史行实际 Dual/Special FOB 高于同模板 Single、重复应用幂等、Copy Country 目标国基准和 BOM/Matrix 一致；Active/www/intl 仍不动。
+- [x] **2026-09-25 #235 合并及 Candidate 准备**：已合入 abd38688d35eec9d771d8a9fc5fa599545b172eb；持久色库与部分重算已实现，Candidate OMODA9/UE 实测有通过证据。勾选仅表示合并/部署完成，不表示全量历史派生价格或所有交互验收通过。
+- [ ] **2026-09-25 #236 修订（下一步）**：按 [第 13 节最终确认方案](../features/BOM_ADMIN_CANDIDATE_ACCEPTANCE_2026-09-15.md#bom-pricing-final-20260925) 修复统一计算、歧义放行、计数、付款条件去耦及档位定制。来源为 import/manual/copy 不能永久冻结价格；缺基准/冲突仍不写。修订、测试与审阅后再获授权合并，Candidate 先只读审计再授权 Apply；不自动改正式数据。
+- [ ] **2026-09-25 #236 第一批已完成待审阅**：业务提交 `944bcc03` 已让 audit/writer 共用基准决策，去除付款条件基准过滤，保留歧义并补真实 `skippedAmbiguous`，Apply 按物料＋国家去重；定向测试 `10 passed`，完整 BOM 文件 `60 passed, 5 failed`（5 项为既有 country-column / `sync_missing_template_fobs` 基线缺口）。未合并、未部署 Candidate；详见 BOM 文档第 13 节批次记录。
 - [ ] **P2 其他研发**：按产品优先级选择 Config 本地 10 文件收口、AstrBot JATO MCP 整理，或 MSRP #183；不要求全项目依次排队。保留 #157 对 #179 的现有合并约束。
 - [ ] **P3 历史整理**：最后再审计旧 Draft PR/旧 worktree；未提交成果未确认前不关闭、删除或清理。
 
