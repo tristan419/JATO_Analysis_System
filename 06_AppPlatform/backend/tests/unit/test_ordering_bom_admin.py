@@ -1590,7 +1590,7 @@ def test_colour_tier_reprice_reports_each_country_without_overwriting_manual(
     monkeypatch.setattr(
         repo,
         "_find_colour_surcharge_base_fob",
-        lambda _session, _sku, country: None if country in {"NL", "FI"} else 1000.0,
+        lambda _session, _sku, country, *_args: None if country in {"NL", "FI"} else 1000.0,
     )
 
     result = repo.reprice_sku_colour_surcharge_fobs(session, sku.material_code)
@@ -1727,6 +1727,99 @@ def test_colour_tier_reprice_recalculates_manual_base_with_special_override(
     assert row.colour_surcharge_eur == 300
     assert row.final_fob_eur == 25500
     assert row.fob_source_mode == "template_base"
+
+
+def test_colour_surcharge_reprice_audit_classifies_generic_rows_without_writing(monkeypatch) -> None:
+    dual = SimpleNamespace(
+        material_code="T7160RGZKMH0001",
+        brand="JAECOO",
+        model_name="JAECOO7 SHS",
+        version="Exclusive-FWD",
+        powertrain="PHEV",
+        bom_template="T7160RG**MH0001",
+        exterior_color_code="ZK",
+        exterior_color_name="Carbon crystal black&Olive gray",
+        exterior_color_type="dual",
+        colour_tier="dual",
+    )
+    explicit = SimpleNamespace(**{**dual.__dict__, "material_code": "T7160RGZNMH0001"})
+    ambiguous = SimpleNamespace(**{**dual.__dict__, "material_code": "T7160RGZMMH0001"})
+
+    def row(material_code: str, source: str, final: float, base=None, surcharge=None):
+        return SimpleNamespace(
+            material_code=material_code,
+            country_code="CH",
+            payment_term_code="TT",
+            final_fob_eur=final,
+            base_fob_eur=base,
+            colour_surcharge_eur=surcharge,
+            fob_source_mode=source,
+        )
+
+    rows = [
+        row(dual.material_code, "copied_from_country", 19350),
+        row(explicit.material_code, "explicit_price_by_payment_term", 19350),
+        row(ambiguous.material_code, "copied_from_country", 19350),
+    ]
+    session = _QueuedExecuteSession([
+        [dual, explicit, ambiguous],
+        rows,
+        [19350],
+        [19350, 19400],
+    ])
+    monkeypatch.setattr(repo, "get_colour_surcharge_amount_for_sku", lambda *_: 300.0)
+
+    result = repo.audit_colour_surcharge_reprice(session)
+    by_code = {item["materialCode"]: item for item in result["items"]}
+
+    assert result["summary"] == {
+        "rows": 3,
+        "autoReprice": 1,
+        "alreadyCorrect": 0,
+        "missingBase": 0,
+        "ambiguousBase": 1,
+        "explicitFinal": 1,
+    }
+    assert by_code[dual.material_code]["expectedFinalFobEur"] == 19650
+    assert by_code[dual.material_code]["category"] == "auto_reprice"
+    assert by_code[explicit.material_code]["category"] == "explicit_final"
+    assert by_code[ambiguous.material_code]["category"] == "ambiguous_base"
+    assert result["fingerprint"]
+    assert session.added == []
+
+
+def test_colour_surcharge_reprice_audit_uses_stored_manual_base_only_when_single_is_absent(
+    monkeypatch,
+) -> None:
+    sku = SimpleNamespace(
+        material_code="T6480J1UELX0017",
+        brand="OMODA",
+        model_name="OMODA9 SHS",
+        version="Comfort-FWD",
+        powertrain="PHEV",
+        bom_template="T6480J1**LX0017",
+        exterior_color_code="UE",
+        exterior_color_name="Matte gray",
+        exterior_color_type="special",
+        colour_tier="special",
+    )
+    row = SimpleNamespace(
+        material_code=sku.material_code,
+        country_code="CH",
+        payment_term_code="TT",
+        final_fob_eur=25400,
+        base_fob_eur=25200,
+        colour_surcharge_eur=200,
+        fob_source_mode="manual_edit",
+    )
+    session = _QueuedExecuteSession([[sku], [row], []])
+    monkeypatch.setattr(repo, "get_colour_surcharge_amount_for_sku", lambda *_: 300.0)
+
+    result = repo.audit_colour_surcharge_reprice(session)
+
+    assert result["summary"]["autoReprice"] == 1
+    assert result["items"][0]["trustedSingleBaseFobEur"] == 25200
+    assert result["items"][0]["expectedFinalFobEur"] == 25500
 
 
 def test_copy_country_fobs_creates_target_country_rows(monkeypatch) -> None:

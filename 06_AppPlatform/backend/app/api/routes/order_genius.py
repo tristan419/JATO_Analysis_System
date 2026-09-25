@@ -384,6 +384,57 @@ def update_special_colour_surcharge(
     }
 
 
+@router.get("/colour-surcharge-reprice/audit")
+def audit_colour_surcharge_reprice(
+    material_codes: str | None = Query(default=None, alias="materialCodes"),
+    country_code: str | None = Query(default=None, alias="countryCode"),
+    _=Depends(require_min_role("viewer")),
+    session: Session = Depends(get_db_session),
+) -> dict:
+    codes = (
+        [clean_text(code) for code in material_codes.split(",") if clean_text(code)]
+        if material_codes
+        else None
+    )
+    return repo.audit_colour_surcharge_reprice(
+        session,
+        material_codes=codes,
+        country_code=country_code,
+    )
+
+
+@router.post("/colour-surcharge-reprice/apply")
+def apply_colour_surcharge_reprice(
+    body: dict,
+    session: Session = Depends(get_db_session),
+    user=Depends(require_min_role("editor")),
+) -> dict:
+    preview_fingerprint = clean_text(body.get("previewFingerprint"))
+    if not preview_fingerprint:
+        raise HTTPException(status_code=400, detail="previewFingerprint is required")
+    material_codes = body.get("materialCodes")
+    if material_codes is not None and not isinstance(material_codes, list):
+        raise HTTPException(status_code=400, detail="materialCodes must be a list")
+    codes = (
+        [clean_text(code) for code in material_codes if clean_text(code)]
+        if material_codes is not None
+        else None
+    )
+    try:
+        result = repo.apply_colour_surcharge_reprice_audit(
+            session,
+            preview_fingerprint,
+            material_codes=codes,
+            country_code=body.get("countryCode"),
+            changed_by=user.name,
+        )
+        session.commit()
+        return result
+    except ValueError as exc:
+        session.rollback()
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
 @router.get("/colour-hex-rules")
 def list_colour_hex_rules(
     session: Session = Depends(get_db_session),
