@@ -696,7 +696,7 @@ Single 无条件加价 0，不触发颜色特例。Dual/Special 在**同一适�
 
 ### 12.3 可直接交给下一轮的起始指令
 
-> 按第 13 节「2026-09-25 最终确认方案与 Luna Max 任务」修订 #236。先核对最新 origin/main、现有分支和 dirty，再分批统一基准解析与 audit/Apply、扩展按档位定制规则并折叠入口、去除付款条件定价与来源永久锁、对齐所有读写入口及测试。不要重做 A/B/C/D，不按单车型硬编码。每批更新文档和实际测试；修订后先审阅，合并、Candidate 准备及批量 Apply 等待相应明确授权，Active/www/intl 不动。
+> 按第 13 节「2026-09-25 最终确认方案与 Luna Max 任务」审阅 #236 四批组合。先核对最新远端 main、PR head、worktree dirty 和实际测试，不重做 A/B/C/D，不按单车型硬编码。确认审阅通过并获明确授权后，才走 PR → 最新 main → Candidate；Candidate 先只读 audit，批量 Apply、Active/www/intl 仍分别等待授权。
 
 ### 2026-09-25 · 两个根因修复批次（PR #235 已合并，Candidate 已准备）
 
