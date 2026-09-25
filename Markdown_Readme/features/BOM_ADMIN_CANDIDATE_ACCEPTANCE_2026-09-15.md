@@ -820,12 +820,13 @@ Candidate：`https://candidate.ojeur.cloud`；发布提交：`abd38688d35eec9d77
 
 ### 2026-09-26 · #236 第四批：新增颜色与手动 FOB 入口收口（本地已提交，待审阅）
 
-- 代码 worktree：`/Users/litristan/Downloads/JATO_Analysis_System_bom_reprice_audit`；分支 `codex/bom-colour-reprice-audit`；实现提交 `95706e19`，最新测试契约提交 `f72ce28b`，均已推送到 PR [#236](https://github.com/tristan419/JATO_Analysis_System/pull/236)。没有合并、没有准备 Candidate、没有写入 Candidate/Active/www/intl。
+- 代码 worktree：`/Users/litristan/Downloads/JATO_Analysis_System_bom_reprice_audit`；分支 `codex/bom-colour-reprice-audit`；实现提交 `95706e19`，测试契约提交 `f72ce28b`，最新 legacy-tier 修订提交 `61b5dd24`，均已推送到 PR [#236](https://github.com/tristan419/JATO_Analysis_System/pull/236)。没有合并、没有准备 Candidate、没有写入 Candidate/Active/www/intl。
 - 统一复用 repository 的 effective tier 和带状态 surcharge 决策：显式 `colour_tier` 优先，旧数据才回退合法 `exterior_color_type`；缺档位保持缺失，不再默认为 Single。显式 `0` 与缺规则分开，缺规则不会静默生成零加价。
 - `create_material_sku()` 的自动 FOB 初始化、显式 `fobs`、单行 `PATCH /material-skus/{code}/fob`、bulk FOB、模板基准保存、国家批量调整都把输入解释为同模板国家 Single 基准；Dual/Special 保存 `base_fob_eur + colour_surcharge_eur = final_fob_eur`。付款条件只作为参考元数据，单行写入按物料＋国家更新现有付款条件行。
 - BOM Admin 列表返回同一 effective tier；导入的 `uploaded_base_plus_colour` 也走同一状态决策。拖动/重算回报补充 `missing tier`、`missing rule` 和基准歧义计数，审计摘要补充缺档位、缺规则和不适用分类。
 - 新增回归：新增 OMODA Dual 基准 `15,500` 得到 `15,700`（+200）；缺档位/缺规则不会写成 0；重复保存不会把已加价最终值再次当成基准。
 - 重算若最终价格不变但仍需把 `uploaded_fob_eur` 归一为可信 Single 基准，会明确计为一次元数据更新；后续重复重算才报告 unchanged，避免把派生最终价再次当基准。
+- legacy `exterior_color_type` 只接受明确的 `single/dual/special`（及 Dual 的明确同义词）；`matte/pearl/black edition` 等名称不会在缺失档位时自动推断为 Special。
 
 本批验证：
 

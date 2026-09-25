@@ -361,8 +361,8 @@ Candidate 验收必须在独立可写沙箱上完成：填充、创建、编辑�
 
 ### 2026-09-26 · #236 第四批：新增颜色沿用档位加价（待合并）
 
-已在独立分支 `codex/bom-colour-reprice-audit` 提交实现 `95706e19`，并以 `f72ce28b` 补齐测试契约，修复新增颜色及其他写入口把 Dual/Special 当成无加价 Single 的旁路。统一 repository 决策现在负责：effective tier（显式 `colour_tier`，再回退合法 legacy type）、同模板同国家 Single 基准、同档位定制/品牌默认 surcharge，以及缺档位/缺规则的可识别跳过原因。
+已在独立分支 `codex/bom-colour-reprice-audit` 提交实现 `95706e19`，以 `f72ce28b` 补齐测试契约，并以 `61b5dd24` 收紧 legacy tier 兼容，修复新增颜色及其他写入口把 Dual/Special 当成无加价 Single 的旁路。统一 repository 决策现在负责：effective tier（显式 `colour_tier`，再回退合法 legacy type）、同模板同国家 Single 基准、同档位定制/品牌默认 surcharge，以及缺档位/缺规则的可识别跳过原因。
 
-覆盖入口：新增颜色自动 FOB、显式 `fobs`、单行 PATCH、批量 FOB、模板基准保存、国家调整和 `uploaded_base_plus_colour` 导入。输入均按 Single 基准解释，Dual/Special 保存为 `base + surcharge = final`；Single 固定零加价；付款条件不参与基准选择。缺规则不再等价于显式 0，重复保存不叠加。
+覆盖入口：新增颜色自动 FOB、显式 `fobs`、单行 PATCH、批量 FOB、模板基准保存、国家调整和 `uploaded_base_plus_colour` 导入。输入均按 Single 基准解释，Dual/Special 保存为 `base + surcharge = final`；Single 固定零加价；付款条件不参与基准选择。缺规则不再等价于显式 0，重复保存不叠加。legacy 回退只接受明确的 `single/dual/special` 类型，不从 matte 等名称猜档位。
 
 本批专项后端为 `65 passed, 5 failed`，失败是最新 main 已有的 country-column / `sync_missing_template_fobs` 基线缺口；前端 `tsc`、Vitest `75 files / 411 tests` 和 Vite build 通过。价格不变但基准元数据被归一化的行会计为一次更新，后续重算才保持 unchanged。尚未合并、未准备 Candidate，必须先审阅 #236 四批组合；Candidate 阶段先只读 audit，再由用户另行授权 Apply。

@@ -497,10 +497,11 @@ Markdown_Readme/Fullstack/JATO_PLATFORM_HANDOVER_2026-09-14.md
 
 ### 2026-09-26 · #236 第四批已实现，等待组合审阅与授权
 
-针对“已有物料新增 Dual/Special 颜色后实际 FOB 仍等于 Single、颜色加价为 0”的根因，PR [#236](https://github.com/tristan419/JATO_Analysis_System/pull/236) 已在独立 worktree `/Users/litristan/Downloads/JATO_Analysis_System_bom_reprice_audit` 的 `codex/bom-colour-reprice-audit` 分支完成第四批实现提交 `95706e19`，并以 `f72ce28b` 补齐测试契约。本批不是 JAECOO7 或某个颜色的特例：
+针对“已有物料新增 Dual/Special 颜色后实际 FOB 仍等于 Single、颜色加价为 0”的根因，PR [#236](https://github.com/tristan419/JATO_Analysis_System/pull/236) 已在独立 worktree `/Users/litristan/Downloads/JATO_Analysis_System_bom_reprice_audit` 的 `codex/bom-colour-reprice-audit` 分支完成第四批实现提交 `95706e19`，以 `f72ce28b` 补齐测试契约，并以 `61b5dd24` 收紧 legacy tier 兼容。本批不是 JAECOO7 或某个颜色的特例：
 
 - 新增颜色自动初始化、显式 FOB、单行/批量编辑、模板基准保存、国家调整和导入均把输入解释为同模板同国家的 Single 基准，再按已保存 `Single/Dual/Special` 档位解析颜色加价；付款条件只作为参考元数据。
 - 统一决策区分合法显式 `0`、缺档位和缺规则；缺档位/缺规则不会静默写成零加价。旧数据只在合法时从 `exterior_color_type` 回退，不能把未知档位默认成 Single。
+- legacy 回退只接受明确的 `single/dual/special` 类型；不会因 `matte`、`pearl` 或 `black edition` 等名称自动推断 Special。
 - 计算结果同时保存 `base_fob_eur`、`colour_surcharge_eur` 和 `final_fob_eur`，重复保存不会把已加价最终值再次当成基准。
 
 本地验证已记录在 BOM 实施文档第 13 节：专项 `65 passed, 5 failed`（5 项为最新 main 已存在的 country-column / `sync_missing_template_fobs` 基线缺口）；前端类型检查、411 个单测和生产构建通过。该提交尚未合并、未准备 Candidate、未写入 Candidate/Active/www/intl。下一步只能是审阅四批组合并获得明确授权，再按 PR → 最新 main → Candidate 流程做只读 audit 和浏览器验收；不得把本地测试结果当作线上价格已修复。
