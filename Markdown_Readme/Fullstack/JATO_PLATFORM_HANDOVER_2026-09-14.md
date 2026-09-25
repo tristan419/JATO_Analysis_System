@@ -504,4 +504,4 @@ Markdown_Readme/Fullstack/JATO_PLATFORM_HANDOVER_2026-09-14.md
 - legacy 回退只接受明确的 `single/dual/special` 类型；不会因 `matte`、`pearl` 或 `black edition` 等名称自动推断 Special。
 - 计算结果同时保存 `base_fob_eur`、`colour_surcharge_eur` 和 `final_fob_eur`，重复保存不会把已加价最终值再次当成基准。
 
-本地验证已记录在 BOM 实施文档第 13 节：专项 `65 passed, 5 failed`（5 项为最新 main 已存在的 country-column / `sync_missing_template_fobs` 基线缺口）；前端类型检查、411 个单测和生产构建通过。该提交尚未合并、未准备 Candidate、未写入 Candidate/Active/www/intl。下一步只能是审阅四批组合并获得明确授权，再按 PR → 最新 main → Candidate 流程做只读 audit 和浏览器验收；不得把本地测试结果当作线上价格已修复。
+本地验证已记录在 BOM 实施文档第 13 节：专项 `66 passed, 5 failed`（5 项为最新 main 已存在的 country-column / `sync_missing_template_fobs` 基线缺口）；前端类型检查、411 个单测和生产构建通过。该提交尚未合并、未准备 Candidate、未写入 Candidate/Active/www/intl。下一步只能是审阅四批组合并获得明确授权，再按 PR → 最新 main → Candidate 流程做只读 audit 和浏览器验收；不得把本地测试结果当作线上价格已修复。

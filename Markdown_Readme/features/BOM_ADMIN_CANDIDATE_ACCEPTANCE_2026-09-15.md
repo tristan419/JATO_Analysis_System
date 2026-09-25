@@ -830,7 +830,7 @@ Candidate：`https://candidate.ojeur.cloud`；发布提交：`abd38688d35eec9d77
 
 本批验证：
 
-- BOM Admin 后端专项：`65 passed, 5 failed`；5 项仍是最终 main 已存在的 `list_bom_admin_country_columns` / `sync_missing_template_fobs` 基线缺口，不由本批引入。
+- BOM Admin 后端专项：`66 passed, 5 failed`；5 项仍是最终 main 已存在的 `list_bom_admin_country_columns` / `sync_missing_template_fobs` 基线缺口，不由本批引入。
 - 新增 Dual 基准写入、缺档位/缺规则保护用例通过；`compileall`、`git diff --check` 通过。
 - 前端 `tsc --noEmit` 通过；Vitest `75 files / 411 tests passed`；Vite production build 通过。
 - 后端全 unit 结果为 `1478 passed, 1 skipped, 14 failed`；除上述 5 个 BOM 基线缺口外，其余失败属于现有环境/历史测试（认证 fixture、Airflow 权限、旧 parser 断言），未由本批代码触发。
