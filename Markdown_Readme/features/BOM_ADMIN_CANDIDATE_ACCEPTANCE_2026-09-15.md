@@ -628,14 +628,14 @@
 
 > 先读第 13 节“用户澄清：模板基准价与派生颜色价格”，再读 C5–C8。保留已有成果；C 下一批优先修模板基准保存和派生重算，并覆盖拖动分类、复制及批量调整。人工模板基准保持，派生颜色按规则更新；不得继续将模板金额逐颜色写成相同最终价并冻结。不要简单禁止非 ** 请求或假设已有独立模板价格记录。历史数据不批量回填，明确最终价导入不二次加价。随后补 C5/C6；D@34656898 补新标签误报、旧响应保护与真实草稿测试。每批更新实际测试和未验项，沿用 PR→main→Candidate 流程及授权边界；Active/www/intl 发布单独决定。
 
-### 2026-09-25 · 两个根因修复批次（PR 已创建，尚未合并/Candidate）
+### 2026-09-25 · 两个根因修复批次（PR #235 已合并，Candidate 已准备）
 
 用户授权先修两个根因，禁止在 Candidate 前手工逐行补色或逐行加价：
 
 1. **已有 Dual/Special 行的最终 FOB**：`_find_colour_surcharge_base_fob` 现在优先读取同 BOM template、同国家的可信 Single `final_fob_eur`；兼容旧导入中 `colour_tier` 为空但 `exterior_color_type=single` 的行，模板没有可用 Single 时才按同车型/版本/动力回退。`reprice_sku_colour_surcharge_fobs` 增加按国家重算范围；Copy Country 完成复制后，对目标国已有 Dual/Special 行按 Single 基准 + 当前 surcharge 重算，避免复制来源国的旧最终价。带可信基准的 `manual_edit`/复制行不再被冻结；没有可信基准的明确最终价仍跳过并报告原因。
 2. **共享颜色标准与双入口显示**：新增 `ordering.brand_colour_swatch_rule` 持久记录（规范化 brand + colour code 唯一、标准名称、单色/双色 HEX、active 状态），迁移 `20260925_0047`。现有标准保存、创建 SKU、显式编辑颜色 HEX 都复用同一 upsert；解析优先读持久标准，旧 SKU 汇总仅作为兼容回退。BOM Admin 与 Order Genius Matrix 都使用同一个标准 map 解析名称/色值，缺失仍明确为缺失，不生成默认灰色。
 
-本批变更文件：`app/db/models.py`、`alembic/versions/20260925_0047_brand_colour_swatch_rule.py`、`app/infra/order_genius_repository.py`、`app/services/order_genius_service.py`、`app/api/routes/order_genius.py`、`frontend/src/api/client.ts`、`frontend/src/pages/OrderGeniusPage.tsx` 及 BOM 单元测试。提交：`7d2880a86fff7d6f079f5a50f294b37019b294d5`；PR [#235](https://github.com/tristan419/JATO_Analysis_System/pull/235) 已创建，当前只等待 CI/审阅。没有改 Active/www/intl、没有写 Candidate 数据。
+本批变更文件：`app/db/models.py`、`alembic/versions/20260925_0047_brand_colour_swatch_rule.py`、`app/infra/order_genius_repository.py`、`app/services/order_genius_service.py`、`app/api/routes/order_genius.py`、`frontend/src/api/client.ts`、`frontend/src/pages/OrderGeniusPage.tsx` 及 BOM 单元测试。原始提交：`7d2880a86fff7d6f079f5a50f294b37019b294d5`；PR [#235](https://github.com/tristan419/JATO_Analysis_System/pull/235) 已合并到 `main`，当前 Candidate 发布提交为 `abd38688d35eec9d771d8a9fc5fa599545b172eb`。没有改 Active/www/intl；Candidate 写入仅限本节记录的沙箱验收数据。
 
 验证结果：
 
@@ -643,7 +643,7 @@
 - 后端定向颜色/价格/迁移测试：`23 passed`；BOM 单元文件整体为 `54 passed, 5 failed`，5 项仍是最终 main 已存在的 country-column / `sync_missing_template_fobs` 基线缺口，不由本批引入。
 - 新增回归明确要求：同模板 Single `19,350`、JAECOO Dual `+300` 的旧复制行重算为 `19,650`；持久 `OMODA+TE` 标准即使 SKU 自身无 HEX 也能被 lookup、BOM 和 Matrix 共用。
 
-下一步边界：PR #235 已通过 CI，仍需人工审阅并取得合并授权；合入最新 main 后只准备一次 Candidate。Candidate 验收必须以选品表实际 FOB 为准，而不是色卡 tooltip 的规则金额：同模板 Dual/Special 的实际 FOB 应高于 Single；还要证明复制国家后按目标国 Single 基准重算、创建 TE 后刷新并在另一个模板自动回填名称与单/双色色值、BOM/Matrix 一致。Candidate 可用不等于 Active 发布。
+验收边界：Candidate 验收必须以选品表实际 FOB 为准，而不是色卡 tooltip 的规则金额：同模板 Dual/Special 的实际 FOB 应高于 Single；还要证明复制国家后按目标国 Single 基准重算、创建 TE 后刷新并在另一个模板自动回填名称与单/双色色值、BOM/Matrix 一致。Candidate 可用不等于 Active 发布。
 
 ### 2026-09-25 · PR #235 合入后的 Candidate 实测（仅 Candidate 沙箱）
 
