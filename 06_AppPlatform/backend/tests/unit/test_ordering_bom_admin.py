@@ -334,6 +334,51 @@ def test_special_colour_rule_precedes_brand_special_default(monkeypatch) -> None
     assert repo.get_colour_surcharge_amount_for_sku(_FakeSession(), sku, "special") == 300
 
 
+def test_colour_override_is_bound_to_the_requested_tier(monkeypatch) -> None:
+    sku = SimpleNamespace(
+        brand="OMODA",
+        model_name="OMODA9 SHS",
+        bom_template="T6480J1**LX0017",
+        exterior_color_code="UE",
+    )
+    special_rule = SimpleNamespace(surcharge_eur=300)
+    dual_rule = SimpleNamespace(surcharge_eur=250)
+    defaults = {
+        "dual": SimpleNamespace(surcharge_eur=200),
+        "special": SimpleNamespace(surcharge_eur=200),
+    }
+    monkeypatch.setattr(
+        repo,
+        "get_special_colour_surcharge_for_sku",
+        lambda _session, _sku, tier="special": (
+            dual_rule if tier == "dual" else special_rule
+        ),
+    )
+    monkeypatch.setattr(
+        repo,
+        "get_brand_colour_surcharge",
+        lambda _session, _brand, tier: defaults[tier],
+    )
+
+    assert repo.get_colour_surcharge_amount_for_sku(_FakeSession(), sku, "special") == 300
+    assert repo.get_colour_surcharge_amount_for_sku(_FakeSession(), sku, "dual") == 250
+
+
+def test_upsert_special_colour_surcharge_normalizes_tier() -> None:
+    rule = repo.upsert_special_colour_surcharge(
+        _FakeSession(),
+        "omoda",
+        "UE",
+        300,
+        model_name="OMODA9 SHS",
+        colour_tier="DUAL",
+    )
+
+    assert rule.brand == "OMODA"
+    assert rule.colour_tier == "dual"
+    assert rule.surcharge_eur == 300
+
+
 def test_uploaded_base_plus_colour_uses_unified_special_rule(monkeypatch) -> None:
     sku = SimpleNamespace(
         material_code="T7000UEMY0001",

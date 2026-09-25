@@ -329,6 +329,7 @@ def list_special_colour_surcharges(
                 "brand": r.brand,
                 "modelName": r.model_name,
                 "colourCode": r.colour_code,
+                "colourTier": r.colour_tier,
                 "colourName": r.colour_name,
                 "surchargeEur": float(r.surcharge_eur),
                 "isActive": r.is_active,
@@ -352,6 +353,7 @@ def update_special_colour_surcharge(
             body.surchargeEur,
             model_name=body.modelName,
             colour_name=body.colourName,
+            colour_tier=body.colourTier,
         )
         session.flush()
         reprice = repo.reprice_special_colour_surcharge_fobs(
@@ -359,6 +361,7 @@ def update_special_colour_surcharge(
             rule.brand,
             rule.colour_code,
             model_name=rule.model_name,
+            colour_tier=rule.colour_tier,
             changed_by=user.name,
         )
         session.commit()
@@ -377,6 +380,7 @@ def update_special_colour_surcharge(
         "brand": rule.brand,
         "modelName": rule.model_name,
         "colourCode": rule.colour_code,
+        "colourTier": rule.colour_tier,
         "colourName": rule.colour_name,
         "surchargeEur": float(rule.surcharge_eur),
         "isActive": rule.is_active,

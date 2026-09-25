@@ -3008,8 +3008,9 @@ def list_special_colour_surcharges(
 def get_special_colour_surcharge_for_sku(
     session: Session,
     sku: MaterialSkuMaster,
+    colour_tier: str = "special",
 ) -> SpecialColourSurchargeRule | None:
-    """Return the most specific special-colour override for one SKU."""
+    """Return the most specific override for one SKU and saved BOM tier."""
     normalized_brand = resolve_material_brand(
         getattr(sku, "brand", None),
         getattr(sku, "model_name", None),
@@ -3017,6 +3018,9 @@ def get_special_colour_surcharge_for_sku(
     )
     normalized_model = normalize_brand_text(getattr(sku, "model_name", None))
     normalized_code = _normalize_special_colour_code(sku.exterior_color_code)
+    normalized_tier = clean_text(colour_tier).lower()
+    if normalized_tier not in {"dual", "special"}:
+        return None
     if not normalized_brand or not normalized_code:
         return None
 
@@ -3025,6 +3029,7 @@ def get_special_colour_surcharge_for_sku(
             SpecialColourSurchargeRule.brand == normalized_brand,
             SpecialColourSurchargeRule.model_name == normalized_model,
             SpecialColourSurchargeRule.colour_code == normalized_code,
+            SpecialColourSurchargeRule.colour_tier == normalized_tier,
             SpecialColourSurchargeRule.is_active == True,
         )
     ).scalars().first()
@@ -3036,6 +3041,7 @@ def get_special_colour_surcharge_for_sku(
             SpecialColourSurchargeRule.brand == normalized_brand,
             SpecialColourSurchargeRule.model_name.is_(None),
             SpecialColourSurchargeRule.colour_code == normalized_code,
+            SpecialColourSurchargeRule.colour_tier == normalized_tier,
             SpecialColourSurchargeRule.is_active == True,
         )
     ).scalars().first()
@@ -3049,15 +3055,19 @@ def upsert_special_colour_surcharge(
     *,
     model_name: str | None = None,
     colour_name: str | None = None,
+    colour_tier: str = "special",
 ) -> SpecialColourSurchargeRule:
     normalized_brand = normalize_brand(brand)
     normalized_model = normalize_brand_text(model_name) if model_name else None
     normalized_code = _normalize_special_colour_code(colour_code)
     normalized_name = clean_text(colour_name) or None
+    normalized_tier = clean_text(colour_tier).lower()
     if not normalized_brand:
         raise ValueError("brand is required")
     if not normalized_code:
         raise ValueError("colourCode is required")
+    if normalized_tier not in {"dual", "special"}:
+        raise ValueError("colourTier must be dual or special")
     if surcharge_eur < 0:
         raise ValueError("surchargeEur must be greater than or equal to 0")
 
@@ -3066,6 +3076,7 @@ def upsert_special_colour_surcharge(
             SpecialColourSurchargeRule.brand == normalized_brand,
             SpecialColourSurchargeRule.model_name == normalized_model,
             SpecialColourSurchargeRule.colour_code == normalized_code,
+            SpecialColourSurchargeRule.colour_tier == normalized_tier,
             SpecialColourSurchargeRule.is_active == True,
         )
     ).scalars().first()
@@ -3080,6 +3091,7 @@ def upsert_special_colour_surcharge(
         brand=normalized_brand,
         model_name=normalized_model,
         colour_code=normalized_code,
+        colour_tier=normalized_tier,
         colour_name=normalized_name,
         surcharge_eur=surcharge_eur,
         is_active=True,
@@ -3093,9 +3105,12 @@ def get_colour_surcharge_amount_for_sku(
     sku: MaterialSkuMaster,
     colour_tier: str,
 ) -> float:
-    """Resolve tier surcharge: special colour override wins over brand default."""
-    if colour_tier == "special":
-        special_rule = get_special_colour_surcharge_for_sku(session, sku)
+    """Resolve one tier surcharge; same-tier colour override wins."""
+    normalized_tier = clean_text(colour_tier).lower()
+    if normalized_tier in {"dual", "special"}:
+        special_rule = get_special_colour_surcharge_for_sku(
+            session, sku, normalized_tier
+        )
         if special_rule is not None:
             return float(special_rule.surcharge_eur)
     rule = get_brand_colour_surcharge(
@@ -3105,7 +3120,7 @@ def get_colour_surcharge_amount_for_sku(
             getattr(sku, "model_name", None),
             getattr(sku, "bom_template", None),
         ),
-        colour_tier,
+        normalized_tier,
     )
     return float(rule.surcharge_eur) if rule else 0.0
 
@@ -3486,19 +3501,23 @@ def reprice_special_colour_surcharge_fobs(
     colour_code: str,
     *,
     model_name: str | None = None,
+    colour_tier: str = "special",
     changed_by: str | None = None,
 ) -> dict[str, int | str]:
-    """Recalculate active special-colour SKUs affected by one override rule."""
+    """Recalculate active SKUs affected by one tier-qualified override."""
     normalized_brand = normalize_brand(brand)
     normalized_model = normalize_brand_text(model_name) if model_name else None
     normalized_code = _normalize_special_colour_code(colour_code)
+    normalized_tier = clean_text(colour_tier).lower()
+    if normalized_tier not in {"dual", "special"}:
+        raise ValueError("colourTier must be dual or special")
     stmt = select(MaterialSkuMaster).where(
         MaterialSkuMaster.is_active == True,
         or_(
-            MaterialSkuMaster.colour_tier == "special",
+            MaterialSkuMaster.colour_tier == normalized_tier,
             and_(
                 MaterialSkuMaster.colour_tier.is_(None),
-                func.lower(MaterialSkuMaster.exterior_color_type) == "special",
+                func.lower(MaterialSkuMaster.exterior_color_type) == normalized_tier,
             ),
         ),
         func.upper(MaterialSkuMaster.exterior_color_code) == normalized_code,
@@ -3522,6 +3541,7 @@ def reprice_special_colour_surcharge_fobs(
         "brand": normalized_brand,
         "modelName": normalized_model or "",
         "colourCode": normalized_code,
+        "colourTier": normalized_tier,
         "skus": len(material_codes),
         "rows": 0,
         "updated": 0,
