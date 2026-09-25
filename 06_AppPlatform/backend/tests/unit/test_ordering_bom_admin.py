@@ -1694,8 +1694,11 @@ def test_colour_tier_reprice_reports_each_country_without_overwriting_manual(
     result = repo.reprice_sku_colour_surcharge_fobs(session, sku.material_code)
     details = {item["countryCode"]: item for item in result["details"]}
 
-    assert result["updated"] == 2
-    assert result["unchanged"] == 1
+    # The unchanged final price still needs one metadata normalization pass:
+    # uploaded_fob_eur is rewritten to the trusted Single base so future
+    # recalculations cannot treat the derived final value as a new base.
+    assert result["updated"] == 3
+    assert result["unchanged"] == 0
     assert result["skippedManual"] == 1
     assert result["skippedNoBase"] == 1
     assert details["NL"]["reason"] == "manual_fob"
@@ -1705,7 +1708,8 @@ def test_colour_tier_reprice_reports_each_country_without_overwriting_manual(
     assert manual_with_base.final_fob_eur == 1200
     assert manual_with_base.uploaded_fob_eur == 1000
     assert manual_with_base.fob_source_mode == "template_base"
-    assert details["CZ"]["status"] == "unchanged"
+    assert details["CZ"]["status"] == "updated"
+    assert unchanged.uploaded_fob_eur == 1000
     assert manual.final_fob_eur == 1300
 
 
