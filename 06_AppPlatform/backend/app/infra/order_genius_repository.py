@@ -15,11 +15,12 @@ from copy import deepcopy
 from datetime import datetime, timezone
 from uuid import UUID, uuid4
 
-from sqlalchemy import and_, delete, func, inspect, select, update
+from sqlalchemy import and_, delete, func, inspect, or_, select, update
 from sqlalchemy.orm import Session
 
 from app.db.models import (
     BrandColourSurchargeRule,
+    BrandColourSwatchRule,
     CountryMaterialFinance,
     CountryPaymentTermMaster,
     CountrySkuFobResolved,
@@ -872,6 +873,7 @@ def copy_country_fobs(
     updated = 0
     skipped = 0
     unchanged = 0
+    copied_material_codes: set[str] = set()
     for source_row in source_rows:
         existing = get_fob_for_country_sku(
             session,
@@ -919,6 +921,7 @@ def copy_country_fobs(
             existing.remark = source_row.remark
             existing.is_active = True
             existing.updated_at_utc = datetime.now(timezone.utc)
+            copied_material_codes.add(source_row.material_code)
             continue
 
         session.add(
@@ -940,6 +943,26 @@ def copy_country_fobs(
             )
         )
         created += 1
+        copied_material_codes.add(source_row.material_code)
+
+    # A copied Dual/Special row is a derived price.  Re-resolve it from the
+    # target country's trusted Single row instead of retaining the source
+    # country's already-derived final price.
+    repriced = 0
+    for material_code in sorted(copied_material_codes):
+        sku = get_sku_by_material_code(session, material_code)
+        if sku is None:
+            continue
+        tier = clean_text(sku.colour_tier or sku.exterior_color_type or "single").lower()
+        if tier not in {"dual", "special"}:
+            continue
+        result = reprice_sku_colour_surcharge_fobs(
+            session,
+            material_code,
+            country_code=target,
+            changed_by=changed_by or "copy_country_fobs",
+        )
+        repriced += int(result["updated"])
 
     return {
         "sourceCountryCode": source,
@@ -950,6 +973,7 @@ def copy_country_fobs(
         "updated": updated,
         "skipped": skipped,
         "unchanged": unchanged,
+        "repriced": repriced,
         "targetPaymentTermCode": target_payment_term_code,
     }
 
@@ -1029,6 +1053,8 @@ def list_bom_with_fob(
     if not skus:
         return [], all_countries
 
+    colour_standards = list_persistent_colour_standard_map(session)
+
     material_codes = [s.material_code for s in skus]
     fobs = session.execute(
         select(CountrySkuFobResolved).where(
@@ -1099,16 +1125,21 @@ def list_bom_with_fob(
                 slim[key] = value
         return slim
 
-    return [
-        {
+    payloads: list[dict] = []
+    for s in skus:
+        display_colour_name, display_colour_hex = resolve_colour_display_values(
+            s,
+            colour_standards,
+        )
+        payloads.append({
             "materialCode": s.material_code,
             "brand": resolve_material_brand(s.brand, s.model_name, s.bom_template),
             "modelName": normalize_brand_text(s.model_name),
             "version": s.version,
-            "colour": s.exterior_color_name or "",
+            "colour": display_colour_name or "",
             "colourCode": s.exterior_color_code or "",
             "colourType": s.exterior_color_type or "single",
-            "colourHex": s.colour_hex,
+            "colourHex": display_colour_hex,
             "colourCodeConfirmed": s.colour_code_confirmed,
             "colourTier": s.colour_tier or "single",
             "bomTemplate": s.bom_template,
@@ -1131,9 +1162,8 @@ def list_bom_with_fob(
             "sourceRowNumber": s.source_row_number,
             "sourceFileName": baseline_names.get(s.baseline_version_id) if s.baseline_version_id else None,
             "sourcePayload": slim_source_payload(s.raw_payload_json),
-        }
-        for s in skus
-    ], all_countries
+        })
+    return payloads, all_countries
 
 
 def _optional_float(value: object) -> float | None:
@@ -1715,6 +1745,139 @@ def build_colour_hex_rules_from_skus(skus: list[object]) -> list[dict]:
     )
 
 
+def list_persistent_colour_standard_map(
+    session: Session,
+) -> dict[tuple[str, str], BrandColourSwatchRule]:
+    """Load the durable brand+code standard records used by every display path."""
+    rows = session.execute(
+        select(BrandColourSwatchRule).where(BrandColourSwatchRule.is_active == True)
+    ).scalars().all()
+    result: dict[tuple[str, str], BrandColourSwatchRule] = {}
+    for row in rows:
+        if not isinstance(row, BrandColourSwatchRule):
+            continue
+        key = _colour_rule_key(row.brand, row.colour_code)
+        if key is not None:
+            result[key] = row
+    return result
+
+
+def resolve_colour_display_values(
+    sku: object,
+    standards: dict[tuple[str, str], BrandColourSwatchRule] | None = None,
+) -> tuple[str | None, str | None]:
+    """Return one shared colour name/hex pair for BOM and Matrix rendering."""
+    key = _colour_rule_key(
+        resolve_material_brand(
+            getattr(sku, "brand", None),
+            getattr(sku, "model_name", None),
+            getattr(sku, "bom_template", None),
+        ),
+        getattr(sku, "exterior_color_code", None),
+    )
+    standard = standards.get(key) if standards and key else None
+    if standard is not None:
+        return standard.colour_name, standard.colour_hex
+    return (
+        str(getattr(sku, "exterior_color_name", "") or "") or None,
+        getattr(sku, "colour_hex", None),
+    )
+
+
+def _persistent_colour_standard_candidates(
+    session: Session,
+    brand: str,
+    colour_name: str,
+) -> list[dict]:
+    alias = normalize_colour_rule_alias(colour_name)
+    if not alias:
+        return []
+    candidates: list[dict] = []
+    for row in list_persistent_colour_standard_map(session).values():
+        if normalize_brand(row.brand) != normalize_brand(brand):
+            continue
+        if normalize_colour_rule_alias(row.colour_name) != alias:
+            continue
+        candidates.append({
+            "brand": normalize_brand(row.brand),
+            "colourCode": row.colour_code,
+            "colourName": row.colour_name,
+            "colourHex": row.colour_hex,
+            "status": "complete",
+            "hasNameConflict": False,
+            "hasSwatchConflict": False,
+        })
+    return sorted(candidates, key=lambda item: item["colourCode"])
+
+
+def _upsert_persistent_colour_standard(
+    session: Session,
+    brand: str,
+    colour_code: str,
+    colour_name: str,
+    colour_hex: str,
+) -> BrandColourSwatchRule:
+    standard_hex = normalize_colour_hex_value(colour_hex)
+    if standard_hex is None:
+        raise ValueError("colourHex is required")
+    key = _colour_rule_key(brand, colour_code)
+    if key is None:
+        raise ValueError("brand and colourCode are required")
+    standard_name = str(colour_name or "").strip()
+    if is_placeholder_colour_name(standard_name, key[1]):
+        raise ValueError("A non-placeholder colourName is required")
+    existing = session.execute(
+        select(BrandColourSwatchRule).where(
+            BrandColourSwatchRule.brand == key[0],
+            BrandColourSwatchRule.colour_code == key[1],
+            BrandColourSwatchRule.is_active == True,
+        )
+    ).scalars().first()
+    if isinstance(existing, BrandColourSwatchRule):
+        existing.colour_name = standard_name
+        existing.colour_hex = standard_hex
+        existing.updated_at_utc = datetime.now(timezone.utc)
+        return existing
+    standard = BrandColourSwatchRule(
+        brand_colour_swatch_rule_id=uuid4(),
+        brand=key[0],
+        colour_code=key[1],
+        colour_name=standard_name,
+        colour_hex=standard_hex,
+        is_active=True,
+    )
+    session.add(standard)
+    return standard
+
+
+def upsert_colour_standard_from_sku(
+    session: Session,
+    brand: str,
+    colour_code: str,
+    colour_name: str,
+    colour_hex: str,
+) -> BrandColourSwatchRule:
+    """Persist an explicit SKU swatch and synchronise matching active SKUs."""
+    standard = _upsert_persistent_colour_standard(
+        session,
+        brand,
+        colour_code,
+        colour_name,
+        colour_hex,
+    )
+    candidates = _list_colour_rule_candidate_skus(
+        session,
+        standard.brand,
+        standard.colour_code,
+    )
+    now = datetime.now(timezone.utc)
+    for sku in candidates:
+        sku.exterior_color_name = standard.colour_name
+        sku.colour_hex = standard.colour_hex
+        sku.updated_at_utc = now
+    return standard
+
+
 def _list_colour_rule_candidate_skus(
     session: Session,
     brand: str,
@@ -1781,10 +1944,68 @@ def _list_colour_rule_name_candidates(
 
 
 def list_colour_hex_rules(session: Session) -> list[dict]:
-    """Return derived swatch rules collected from existing material SKUs."""
+    """Return SKU-derived rules with durable standards taking precedence."""
     stmt = select(MaterialSkuMaster).where(MaterialSkuMaster.is_active == True)
     skus = list(session.execute(stmt).scalars().all())
-    return build_colour_hex_rules_from_skus(skus)
+    rules = build_colour_hex_rules_from_skus(skus)
+    standards = list_persistent_colour_standard_map(session)
+    by_key = {(rule["brand"], rule["colourCode"]): rule for rule in rules}
+    for key, standard in standards.items():
+        rule = by_key.get(key)
+        if rule is None:
+            rule = {
+                "brand": key[0],
+                "colourCode": key[1],
+                "skuCount": 0,
+                "sampleMaterialCodes": [],
+                "placeholderNameSkuCount": 0,
+                "missingSwatchSkuCount": 0,
+                "colourName": standard.colour_name,
+                "normalizedColourName": normalize_colour_rule_name(standard.colour_name),
+                "status": "complete",
+                "standardColourName": standard.colour_name,
+                "standardColourHex": standard.colour_hex,
+                "nameOptions": [{
+                    "colourName": standard.colour_name,
+                    "normalizedColourName": normalize_colour_rule_name(standard.colour_name),
+                    "skuCount": 0,
+                }],
+                "hexOptions": [{"colourHex": standard.colour_hex, "skuCount": 0}],
+                "hasNameConflict": False,
+                "hasSwatchConflict": False,
+                "fillableSkuCount": 0,
+                "previewChanges": [],
+            }
+            rules.append(rule)
+            by_key[key] = rule
+        else:
+            rule["colourName"] = standard.colour_name
+            rule["normalizedColourName"] = normalize_colour_rule_name(standard.colour_name)
+            rule["standardColourName"] = standard.colour_name
+            rule["standardColourHex"] = standard.colour_hex
+            rule["status"] = "complete"
+            rule["nameOptions"] = [{
+                "colourName": standard.colour_name,
+                "normalizedColourName": normalize_colour_rule_name(standard.colour_name),
+                "skuCount": int(rule.get("skuCount") or 0),
+            }]
+            rule["hexOptions"] = [{
+                "colourHex": standard.colour_hex,
+                "skuCount": int(rule.get("skuCount") or 0),
+            }]
+            rule["hasNameConflict"] = False
+            rule["hasSwatchConflict"] = False
+            rule["fillableSkuCount"] = 0
+            rule["previewChanges"] = []
+    status_rank = dict(name_conflict=0, swatch_conflict=1, missing=2, fillable=3, complete=4)
+    return sorted(
+        rules,
+        key=lambda item: (
+            status_rank.get(item["status"], 9),
+            item["brand"],
+            item["colourCode"],
+        ),
+    )
 
 
 def summarize_invalid_colour_rule_identities(
@@ -1871,6 +2092,21 @@ def lookup_colour_rule(
     if not normalized_brand and not str(colour_name or "").strip():
         raise ValueError("brand and colourCode or colourName are required")
     if normalized_code:
+        persistent = list_persistent_colour_standard_map(session).get(
+            (normalized_brand, normalized_code)
+        )
+        if persistent is not None:
+            return {
+                "brand": normalized_brand,
+                "colourCode": normalized_code,
+                "status": "complete",
+                "colourName": persistent.colour_name,
+                "colourHex": persistent.colour_hex,
+                "source": "persistent_rule",
+                "hasNameConflict": False,
+                "hasSwatchConflict": False,
+                "nameCandidates": [],
+            }
         rules = build_colour_hex_rules_from_skus(
             _list_colour_rule_candidate_skus(
                 session,
@@ -1897,6 +2133,16 @@ def lookup_colour_rule(
         session,
         normalized_brand,
         str(colour_name or ""),
+    )
+    existing_codes = {candidate["colourCode"] for candidate in name_candidates}
+    name_candidates.extend(
+        candidate
+        for candidate in _persistent_colour_standard_candidates(
+            session,
+            normalized_brand,
+            str(colour_name or ""),
+        )
+        if candidate["colourCode"] not in existing_codes
     )
     reusable_candidates = [
         candidate
@@ -1949,7 +2195,11 @@ def resolve_colour_attributes(
         colour_code,
         colour_name=explicit_name,
     )
-    reusable = rule["source"] in {"brand_code_rule", "name_candidate"}
+    reusable = rule["source"] in {
+        "brand_code_rule",
+        "name_candidate",
+        "persistent_rule",
+    }
     resolved_name = explicit_name
     if rule["source"] == "name_candidate" and reusable:
         resolved_name = rule["colourName"] or explicit_name
@@ -2035,9 +2285,6 @@ def set_standard_colour_hex_for_rule(
     colour_hex: str,
 ) -> dict:
     """Resolve a brand+code conflict by applying one chosen name and swatch."""
-    standard_colour_hex = normalize_colour_hex_value(colour_hex)
-    if standard_colour_hex is None:
-        raise ValueError("colourHex is required")
     key = _colour_rule_key(brand, colour_code)
     if key is None:
         raise ValueError("brand and colourCode are required")
@@ -2050,13 +2297,18 @@ def set_standard_colour_hex_for_rule(
         normalized_brand,
         normalized_code,
     )
-    if not candidates:
-        raise ValueError("No matching material SKUs for colour rule")
+    standard = _upsert_persistent_colour_standard(
+        session,
+        normalized_brand,
+        normalized_code,
+        standard_colour_name,
+        colour_hex,
+    )
     updated_codes: list[str] = []
     now = datetime.now(timezone.utc)
     for sku in candidates:
         sku.exterior_color_name = standard_colour_name
-        sku.colour_hex = standard_colour_hex
+        sku.colour_hex = standard.colour_hex
         sku.updated_at_utc = now
         updated_codes.append(sku.material_code)
     return {
@@ -2064,9 +2316,10 @@ def set_standard_colour_hex_for_rule(
         "colourCode": normalized_code,
         "colourName": standard_colour_name,
         "normalizedColourName": normalize_colour_rule_name(standard_colour_name),
-        "colourHex": standard_colour_hex,
+        "colourHex": standard.colour_hex,
         "updated": len(updated_codes),
         "materialCodes": updated_codes,
+        "source": "persistent_rule",
     }
 
 
@@ -2867,8 +3120,21 @@ def _find_colour_surcharge_base_fob(
     country_code: str,
     payment_term_code: str | None = None,
 ) -> float | None:
-    """Find the base single-colour FOB for this SKU's BOM template and country."""
+    """Find the trusted Single FOB for this SKU's template and country.
+
+    Imported rows did not always populate ``colour_tier``.  Treat an explicit
+    single ``exterior_color_type`` as Single too, and only fall back to the
+    vehicle identity when a template has no usable Single row.  A Dual/Special
+    row's stored base or copied final is never preferred over this result.
+    """
     template = clean_text(sku.bom_template).upper()
+    single_tier = or_(
+        MaterialSkuMaster.colour_tier == "single",
+        and_(
+            MaterialSkuMaster.colour_tier.is_(None),
+            func.lower(MaterialSkuMaster.exterior_color_type) == "single",
+        ),
+    )
     stmt = (
         select(func.min(CountrySkuFobResolved.final_fob_eur))
         .select_from(CountrySkuFobResolved)
@@ -2882,7 +3148,7 @@ def _find_colour_surcharge_base_fob(
             CountrySkuFobResolved.final_fob_eur > 0,
             MaterialSkuMaster.is_active == True,
             MaterialSkuMaster.material_code != sku.material_code,
-            MaterialSkuMaster.colour_tier == "single",
+            single_tier,
         )
     )
     if template:
@@ -2896,7 +3162,38 @@ def _find_colour_surcharge_base_fob(
         )
     if payment_term_code:
         stmt = stmt.where(CountrySkuFobResolved.payment_term_code == payment_term_code)
-    return _positive_float(session.execute(stmt).scalar_one_or_none())
+    value = _positive_float(session.execute(stmt).scalar_one_or_none())
+    if value is not None or not template:
+        return value
+
+    # Some legacy imports have a stale/missing template on one colour row.  A
+    # same model/version/powertrain Single is a safer fallback than reusing a
+    # stale derived Dual/Special value.
+    fallback = (
+        select(func.min(CountrySkuFobResolved.final_fob_eur))
+        .select_from(CountrySkuFobResolved)
+        .join(
+            MaterialSkuMaster,
+            MaterialSkuMaster.material_code == CountrySkuFobResolved.material_code,
+        )
+        .where(
+            CountrySkuFobResolved.country_code == country_code,
+            CountrySkuFobResolved.is_active == True,
+            CountrySkuFobResolved.final_fob_eur > 0,
+            MaterialSkuMaster.is_active == True,
+            MaterialSkuMaster.material_code != sku.material_code,
+            single_tier,
+            MaterialSkuMaster.brand == sku.brand,
+            MaterialSkuMaster.model_name == sku.model_name,
+            MaterialSkuMaster.version == sku.version,
+            MaterialSkuMaster.powertrain == sku.powertrain,
+        )
+    )
+    if payment_term_code:
+        fallback = fallback.where(
+            CountrySkuFobResolved.payment_term_code == payment_term_code
+        )
+    return _positive_float(session.execute(fallback).scalar_one_or_none())
 
 
 def _infer_existing_colour_surcharge_base_fob(
@@ -2916,6 +3213,7 @@ def reprice_sku_colour_surcharge_fobs(
     session: Session,
     material_code: str,
     *,
+    country_code: str | None = None,
     changed_by: str | None = None,
 ) -> dict[str, object]:
     """Recalculate derived FOB rows after a SKU colour tier changes.
@@ -2952,6 +3250,11 @@ def reprice_sku_colour_surcharge_fobs(
                 CountrySkuFobResolved.material_code == sku.material_code,
                 CountrySkuFobResolved.is_active == True,
                 CountrySkuFobResolved.final_fob_eur > 0,
+                *(
+                    [CountrySkuFobResolved.country_code == country_code]
+                    if country_code
+                    else []
+                ),
             )
         ).scalars().all()
     )

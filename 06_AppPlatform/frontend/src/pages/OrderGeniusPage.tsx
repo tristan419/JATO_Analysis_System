@@ -5644,7 +5644,7 @@ export function BomAdminPanel({
         overwriteExisting: copyCountryForm.overwriteExisting,
       });
       setCopyCountryMessage(
-        `${res.sourceCountryCode} -> ${res.targetCountryCode}: ${res.created} created, ${res.updated} updated, ${res.skipped} skipped, ${res.unchanged} unchanged.`,
+        `${res.sourceCountryCode} -> ${res.targetCountryCode}: ${res.created} created, ${res.updated} updated, ${res.repriced} Dual/Special repriced, ${res.skipped} skipped, ${res.unchanged} unchanged.`,
       );
       setAdjustCountryForm(prev => ({ ...prev, countryCode: res.targetCountryCode }));
       await load();

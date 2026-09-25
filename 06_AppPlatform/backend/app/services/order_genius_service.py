@@ -665,6 +665,7 @@ def _build_matrix_for_country(
     matrix_interior_by_template = _interior_by_template(
         active_skus + list(historical_skus.values())
     )
+    colour_standards = repo.list_persistent_colour_standard_map(session)
     historical_fob_map = repo.list_fobs_for_country_material_codes(
         session,
         country_code,
@@ -676,6 +677,10 @@ def _build_matrix_for_country(
     rows = []
     for sku in skus_with_fob:
         fob = fob_map[sku.material_code]
+        display_colour_name, display_colour_hex = repo.resolve_colour_display_values(
+            sku,
+            colour_standards,
+        )
         row_months: dict[str, dict] = {}
         row_ttl = 0
         for month in range(1, 13):
@@ -694,11 +699,11 @@ def _build_matrix_for_country(
             "brand": resolve_material_brand(sku.brand, sku.model_name, sku.bom_template),
             "modelName": normalize_brand_text(sku.model_name),
             "version": sku.version,
-            "colour": sku.exterior_color_name,
+            "colour": display_colour_name,
             "colourCode": sku.exterior_color_code,
             "colourType": sku.exterior_color_type,
             "colourTier": _effective_colour_tier(sku),
-            "colourHex": sku.colour_hex,
+            "colourHex": display_colour_hex,
             "interiorColorName": _effective_interior_name(sku, matrix_interior_by_template),
             "interiorColourCode": sku.interior_colour_code,
             "interiorPackage": sku.interior_package,
@@ -735,6 +740,10 @@ def _build_matrix_for_country(
         ):
             continue
         fob = historical_fob_map.get(mc)
+        display_colour_name, display_colour_hex = repo.resolve_colour_display_values(
+            hist_sku,
+            colour_standards,
+        )
 
         row_months: dict[str, dict] = {}
         row_ttl = 0
@@ -758,11 +767,11 @@ def _build_matrix_for_country(
                 "brand": resolve_material_brand(hist_sku.brand, hist_sku.model_name, hist_sku.bom_template),
                 "modelName": normalize_brand_text(hist_sku.model_name),
                 "version": hist_sku.version,
-                "colour": hist_sku.exterior_color_name,
+                "colour": display_colour_name,
                 "colourCode": hist_sku.exterior_color_code,
                 "colourType": hist_sku.exterior_color_type,
                 "colourTier": _effective_colour_tier(hist_sku),
-                "colourHex": hist_sku.colour_hex,
+                "colourHex": display_colour_hex,
                 "interiorColorName": _effective_interior_name(hist_sku, matrix_interior_by_template),
                 "interiorColourCode": hist_sku.interior_colour_code,
                 "interiorPackage": hist_sku.interior_package,

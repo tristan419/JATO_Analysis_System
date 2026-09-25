@@ -678,6 +678,22 @@ def patch_sku_colour_hex(
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     sku.colour_hex = colour_hex
+    if colour_hex and not repo.is_placeholder_colour_name(
+        sku.exterior_color_name,
+        sku.exterior_color_code,
+    ):
+        brand = repo.resolve_material_brand(
+            sku.brand,
+            getattr(sku, "model_name", None),
+            getattr(sku, "bom_template", None),
+        )
+        repo.upsert_colour_standard_from_sku(
+            session,
+            brand,
+            sku.exterior_color_code,
+            sku.exterior_color_name,
+            colour_hex,
+        )
     session.commit()
     return {"materialCode": sku.material_code, "colourHex": sku.colour_hex}
 
@@ -778,6 +794,25 @@ def patch_colour_code(
         detail = str(exc)
         status_code = 409 if "already exists" in detail.lower() else 400
         raise HTTPException(status_code=status_code, detail=detail) from exc
+    if (
+        colour_hex_supplied
+        and sku.colour_hex
+        and not repo.is_placeholder_colour_name(
+            sku.exterior_color_name,
+            sku.exterior_color_code,
+        )
+    ):
+        repo.upsert_colour_standard_from_sku(
+            session,
+            repo.resolve_material_brand(
+                sku.brand,
+                getattr(sku, "model_name", None),
+                getattr(sku, "bom_template", None),
+            ),
+            sku.exterior_color_code,
+            sku.exterior_color_name,
+            sku.colour_hex,
+        )
     session.commit()
     return {
         "materialCode": target_material_code,
@@ -1547,6 +1582,19 @@ def create_material_sku(
         baseline_version_id=baseline.baseline_version_id,
     )
     session.add(sku)
+    if (
+        "colourHex" in body
+        and colour_hex
+        and not repo.is_placeholder_colour_name(colour, colour_code)
+    ):
+        session.flush()
+        repo.upsert_colour_standard_from_sku(
+            session,
+            brand,
+            colour_code,
+            colour,
+            colour_hex,
+        )
     automatic_fob_result: dict[str, object] = {
         "sourceMaterialCode": source_material_code,
         "materialCode": material_code,

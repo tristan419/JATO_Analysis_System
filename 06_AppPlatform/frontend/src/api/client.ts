@@ -5473,7 +5473,7 @@ export const api = {
     ),
 
   copyCountryFobs: (body: { sourceCountryCode: string; targetCountryCode: string; overwriteExisting?: boolean }) =>
-    request<{ sourceCountryCode: string; targetCountryCode: string; sourceRows: number; created: number; updated: number; skipped: number; unchanged: number; targetPaymentTermCode: string | null }>(
+    request<{ sourceCountryCode: string; targetCountryCode: string; sourceRows: number; created: number; updated: number; skipped: number; unchanged: number; repriced: number; targetPaymentTermCode: string | null }>(
       "/order-genius/countries/copy-fobs",
       { method: "POST", body: JSON.stringify(body) },
     ),

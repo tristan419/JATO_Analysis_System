@@ -9,6 +9,7 @@ from fastapi import HTTPException
 from app.api.routes import order_genius as order_genius_routes
 from app.db.models import (
     BrandColourSurchargeRule,
+    BrandColourSwatchRule,
     CountryPaymentTermMaster,
     CountrySkuFobResolved,
     FobResolvedHistory,
@@ -1245,7 +1246,64 @@ def test_set_standard_colour_hex_for_rule_resolves_whole_brand_code() -> None:
         same_code_other_name.is_published,
         same_code_other_name.final_fob_eur,
     ) == ("dual", False, 14300)
-    assert fake_session.added == []
+    assert len(fake_session.added) == 1
+    standard = fake_session.added[0]
+    assert isinstance(standard, BrandColourSwatchRule)
+    assert (standard.brand, standard.colour_code, standard.colour_hex) == (
+        "JAECOO",
+        "BW",
+        "#FFFFFF",
+    )
+
+
+def test_persistent_colour_standard_is_authoritative_without_active_skus() -> None:
+    standard = BrandColourSwatchRule(
+        brand_colour_swatch_rule_id=uuid4(),
+        brand="OMODA",
+        colour_code="TE",
+        colour_name="Matte gray",
+        colour_hex="#8A8A8A",
+        is_active=True,
+    )
+    session = _FakeSession([standard])
+
+    result = repo.lookup_colour_rule(session, "OMODA", "TE")
+
+    assert result == {
+        "brand": "OMODA",
+        "colourCode": "TE",
+        "status": "complete",
+        "colourName": "Matte gray",
+        "colourHex": "#8A8A8A",
+        "source": "persistent_rule",
+        "hasNameConflict": False,
+        "hasSwatchConflict": False,
+        "nameCandidates": [],
+    }
+
+
+def test_shared_colour_display_resolves_same_standard_for_bom_and_matrix() -> None:
+    standard = BrandColourSwatchRule(
+        brand_colour_swatch_rule_id=uuid4(),
+        brand="OMODA",
+        colour_code="TE",
+        colour_name="Matte gray",
+        colour_hex="#8A8A8A",
+        is_active=True,
+    )
+    sku = SimpleNamespace(
+        brand="OMODA",
+        model_name="OMODA9 SHS",
+        bom_template="T7160**MH0001",
+        exterior_color_code="TE",
+        exterior_color_name="Matte gray",
+        colour_hex=None,
+    )
+
+    assert repo.resolve_colour_display_values(
+        sku,
+        {("OMODA", "TE"): standard},
+    ) == ("Matte gray", "#8A8A8A")
 
 
 def test_preview_and_apply_colour_rule_fills_use_same_material_codes() -> None:
@@ -1310,7 +1368,11 @@ def test_preview_and_apply_exclude_inactive_skus() -> None:
 
     class ActiveOnlySession(_FakeSession):
         def execute(self, stmt: object) -> _ExecuteResult:
-            assert "material_sku_master.is_active = true" in str(stmt).lower()
+            statement_sql = str(stmt).lower()
+            assert (
+                "material_sku_master.is_active = true" in statement_sql
+                or "brand_colour_swatch_rule.is_active = true" in statement_sql
+            )
             return _ExecuteResult([row for row in self.execute_values if row.is_active])
 
     session = ActiveOnlySession([donor, target, inactive])
@@ -1549,6 +1611,46 @@ def test_colour_tier_reprice_reports_each_country_without_overwriting_manual(
     assert manual.final_fob_eur == 1300
 
 
+def test_colour_tier_reprice_uses_single_base_for_existing_dual_row(
+    monkeypatch,
+) -> None:
+    baseline_id = uuid4()
+    sku = SimpleNamespace(
+        material_code="T7160RGZKMH0001",
+        bom_template="T7160RG**MH0001",
+        brand="OMODA",
+        model_name="OMODA9 SHS",
+        exterior_color_code="ZK",
+        colour_tier="dual",
+    )
+    row = CountrySkuFobResolved(
+        country_sku_fob_id=uuid4(),
+        baseline_version_id=baseline_id,
+        country_code="CH",
+        material_code=sku.material_code,
+        payment_term_code="TT",
+        uploaded_fob_eur=19350,
+        base_fob_eur=20150,
+        colour_surcharge_eur=300,
+        final_fob_eur=19350,
+        fob_source_mode="copied_from_country",
+        fob_source_country_code="CZ",
+        is_active=True,
+    )
+    session = _FakeSession([row])
+    monkeypatch.setattr(repo, "get_sku_by_material_code", lambda *_: sku)
+    monkeypatch.setattr(repo, "get_colour_surcharge_amount_for_sku", lambda *_: 300.0)
+    monkeypatch.setattr(repo, "_find_colour_surcharge_base_fob", lambda *_: 19350.0)
+
+    result = repo.reprice_sku_colour_surcharge_fobs(session, sku.material_code)
+
+    assert result["updated"] == 1
+    assert row.base_fob_eur == 19350
+    assert row.colour_surcharge_eur == 300
+    assert row.final_fob_eur == 19650
+    assert row.fob_source_mode == "copied_from_country"
+
+
 def test_colour_tier_reprice_recalculates_template_base_without_freezing_it(
     monkeypatch,
 ) -> None:
@@ -1684,6 +1786,68 @@ def test_copy_country_fobs_creates_target_country_rows(monkeypatch) -> None:
     assert created.colour_surcharge_eur == 200
     assert created.final_fob_eur == 15200
     assert created.fob_source_country_code == "CZ"
+
+
+def test_copy_country_fobs_reprices_copied_dual_against_target_country(monkeypatch) -> None:
+    baseline_id = uuid4()
+    source_row = CountrySkuFobResolved(
+        country_sku_fob_id=uuid4(),
+        baseline_version_id=baseline_id,
+        country_code="CZ",
+        material_code="T7160RGZKMH0001",
+        payment_term_code="TT",
+        uploaded_fob_eur=20450,
+        base_fob_eur=20150,
+        colour_surcharge_eur=300,
+        final_fob_eur=20450,
+        fob_source_mode="template_base",
+        is_active=True,
+    )
+    dual = SimpleNamespace(
+        material_code=source_row.material_code,
+        colour_tier="dual",
+        exterior_color_type="dual",
+    )
+    target_term = CountryPaymentTermMaster(
+        country_payment_term_id=uuid4(),
+        country_code="CH",
+        country_name="Switzerland",
+        payment_term_code="TT",
+        payment_method="TT",
+        lc_days=0,
+        is_active=True,
+    )
+    fake_session = _FakeSession()
+    repriced: list[dict[str, object]] = []
+    monkeypatch.setattr(
+        repo,
+        "list_fob_by_country",
+        lambda _session, country_code, payment_term_code=None: [source_row]
+        if country_code == "CZ"
+        else [],
+    )
+    monkeypatch.setattr(
+        repo,
+        "get_country_payment_term",
+        lambda _session, country_code: target_term if country_code == "CH" else None,
+    )
+    monkeypatch.setattr(repo, "get_fob_for_country_sku", lambda *_args: None)
+    monkeypatch.setattr(repo, "get_sku_by_material_code", lambda *_args: dual)
+
+    def reprice(_session, material_code, **kwargs):
+        repriced.append({"materialCode": material_code, **kwargs})
+        return {"updated": 1}
+
+    monkeypatch.setattr(repo, "reprice_sku_colour_surcharge_fobs", reprice)
+
+    result = repo.copy_country_fobs(fake_session, "CZ", "CH")
+
+    assert result["repriced"] == 1
+    assert repriced == [{
+        "materialCode": source_row.material_code,
+        "country_code": "CH",
+        "changed_by": "copy_country_fobs",
+    }]
 
 
 def test_adjust_country_fobs_updates_rows_and_writes_history(monkeypatch) -> None:
