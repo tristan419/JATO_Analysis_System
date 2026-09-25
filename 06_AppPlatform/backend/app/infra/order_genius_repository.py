@@ -3238,7 +3238,9 @@ def reprice_sku_colour_surcharge_fobs(
             "details": [],
         }
 
-    colour_tier = clean_text(sku.colour_tier or "single").lower()
+    colour_tier = clean_text(
+        sku.colour_tier or sku.exterior_color_type or "single"
+    ).lower()
     if colour_tier not in {"single", "dual", "special"}:
         colour_tier = "single"
     surcharge = 0.0
@@ -3405,7 +3407,13 @@ def reprice_brand_colour_surcharge_fobs(
             select(MaterialSkuMaster)
             .where(
                 MaterialSkuMaster.is_active == True,
-                MaterialSkuMaster.colour_tier == normalized_tier,
+                or_(
+                    MaterialSkuMaster.colour_tier == normalized_tier,
+                    and_(
+                        MaterialSkuMaster.colour_tier.is_(None),
+                        func.lower(MaterialSkuMaster.exterior_color_type) == normalized_tier,
+                    ),
+                ),
             )
             .order_by(MaterialSkuMaster.material_code)
         ).scalars().all()
@@ -3462,7 +3470,13 @@ def reprice_special_colour_surcharge_fobs(
     normalized_code = _normalize_special_colour_code(colour_code)
     stmt = select(MaterialSkuMaster).where(
         MaterialSkuMaster.is_active == True,
-        MaterialSkuMaster.colour_tier == "special",
+        or_(
+            MaterialSkuMaster.colour_tier == "special",
+            and_(
+                MaterialSkuMaster.colour_tier.is_(None),
+                func.lower(MaterialSkuMaster.exterior_color_type) == "special",
+            ),
+        ),
         func.upper(MaterialSkuMaster.exterior_color_code) == normalized_code,
     )
     if normalized_model:
@@ -3645,7 +3659,15 @@ def audit_colour_surcharge_reprice(
     normalized_country = clean_text(country_code).upper() if country_code else None
     stmt = select(MaterialSkuMaster).where(
         MaterialSkuMaster.is_active == True,
-        MaterialSkuMaster.colour_tier.in_(["dual", "special"]),
+        or_(
+            MaterialSkuMaster.colour_tier.in_(["dual", "special"]),
+            and_(
+                MaterialSkuMaster.colour_tier.is_(None),
+                func.lower(MaterialSkuMaster.exterior_color_type).in_(
+                    ["dual", "special"]
+                ),
+            ),
+        ),
     )
     if normalized_codes:
         stmt = stmt.where(MaterialSkuMaster.material_code.in_(normalized_codes))

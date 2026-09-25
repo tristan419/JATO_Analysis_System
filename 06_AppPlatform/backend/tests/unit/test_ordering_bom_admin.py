@@ -1689,6 +1689,41 @@ def test_colour_tier_reprice_recalculates_template_base_without_freezing_it(
     assert row.fob_source_mode == "template_base"
 
 
+def test_colour_tier_reprice_uses_legacy_exterior_type_when_tier_is_blank(
+    monkeypatch,
+) -> None:
+    sku = SimpleNamespace(
+        material_code="T7160LEGACYDUAL",
+        bom_template="T7160**MH0001",
+        brand="JAECOO",
+        exterior_color_code="ZK",
+        colour_tier=None,
+        exterior_color_type="dual",
+    )
+    row = CountrySkuFobResolved(
+        country_sku_fob_id=uuid4(),
+        baseline_version_id=uuid4(),
+        country_code="CH",
+        material_code=sku.material_code,
+        payment_term_code="TT",
+        uploaded_fob_eur=19350,
+        base_fob_eur=19350,
+        final_fob_eur=19350,
+        fob_source_mode="copied_from_country",
+        is_active=True,
+    )
+    session = _FakeSession([row])
+    monkeypatch.setattr(repo, "get_sku_by_material_code", lambda *_: sku)
+    monkeypatch.setattr(repo, "get_colour_surcharge_amount_for_sku", lambda *_: 300.0)
+    monkeypatch.setattr(repo, "_find_colour_surcharge_base_fob", lambda *_: 19350.0)
+
+    result = repo.reprice_sku_colour_surcharge_fobs(session, sku.material_code)
+
+    assert result["updated"] == 1
+    assert row.final_fob_eur == 19650
+    assert row.colour_surcharge_eur == 300
+
+
 def test_colour_tier_reprice_recalculates_manual_base_with_special_override(
     monkeypatch,
 ) -> None:
