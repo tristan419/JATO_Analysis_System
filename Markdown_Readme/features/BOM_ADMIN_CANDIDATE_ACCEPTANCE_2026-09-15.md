@@ -644,3 +644,24 @@
 - 新增回归明确要求：同模板 Single `19,350`、JAECOO Dual `+300` 的旧复制行重算为 `19,650`；持久 `OMODA+TE` 标准即使 SKU 自身无 HEX 也能被 lookup、BOM 和 Matrix 共用。
 
 下一步边界：PR #235 已通过 CI，仍需人工审阅并取得合并授权；合入最新 main 后只准备一次 Candidate。Candidate 验收必须以选品表实际 FOB 为准，而不是色卡 tooltip 的规则金额：同模板 Dual/Special 的实际 FOB 应高于 Single；还要证明复制国家后按目标国 Single 基准重算、创建 TE 后刷新并在另一个模板自动回填名称与单/双色色值、BOM/Matrix 一致。Candidate 可用不等于 Active 发布。
+
+### 2026-09-25 · PR #235 合入后的 Candidate 实测（仅 Candidate 沙箱）
+
+Candidate：`https://candidate.ojeur.cloud`；发布提交：`abd38688d35eec9d771d8a9fc5fa599545b172eb`。本轮没有 update-active、sync-intl 或正式站写入。
+
+**实际选品表 FOB（不是 tooltip 规则金额）：**
+
+- OMODA9 SHS、模板 `T6480J1**LX0017`、CH：同模板 Single（BX/CM/GX）均为 `25,400`；UE 从 `dual` 改为 `special` 后由接口返回 `25,400 → 25,700`，`colourSurchargeEur=300`，`skippedManual=0`。BOM Admin 读取 `25,700`，Matrix 同样读取 `25,700`。
+- OMODA9 SHS、模板 `T6480J1**LX0018`、CH：UE 从 `dual` 改为 `special` 时为 `25,900 → 26,200`（Special +300），再改回 `dual` 为 `26,200 → 26,100`（Dual +200）。恢复 Dual 后选品表实际 FOB `26,100`，仍高于同模板 Single `25,900`。
+- 这证明“手动复制/手动编辑形成的旧最终价”在执行受支持的 tier 变更时，会以可信 Single 模板基准重算，而不是继续沿用旧的 `manual_edit` 最终价。部署本身不会批量回填历史行；验收操作触发后才会重算，不能把部署完成误认为历史数据已全部修正。
+
+**共享颜色标准与 BOM/Matrix：**
+
+- 在 Candidate 沙箱为 `OMODA + UE` 保存共享标准：名称 `Matte gray`、色值 `#8A8A8A`。接口返回 `source=persistent_rule`、`updated=2`，同步到 `T6480J1UELX0017` 和 `T6480J1UELX0018`。
+- 保存后重新 lookup 返回 `status=complete`，刷新规则摘要后该规则为 `complete`；BOM Admin 和 Matrix 对两个模板均读取同一 `#8A8A8A`，没有再显示默认灰色占位。
+- 当前 Candidate 快照没有 `OMODA + TE` SKU，因此不能在本轮声称完成“TE 创建后跨模板复用”；本轮用同一品牌、同一色码 UE 的两个真实模板证明了持久规则和双入口共用路径。TE 专项仍需在包含 TE 的 Candidate 数据中按“创建→刷新→另一模板输入→保存”重复一次。
+
+**本批结论：**
+
+- 已通过：实际 Dual/Special FOB 高于同模板 Single；Dual 与 Special 金额区分正确；BOM/Matrix 色值和 FOB 一致；共享标准保存后可复用。
+- 仍未通过/未覆盖：真实浏览器拖动分类的稳定性、TE 专项跨模板回填、Copy Country 的目标国基准专项、J5 ICE/HEV 数据样本、BOM/Matrix 完整交互回归、D 的真实失效会话与草稿保留。Candidate 可供继续验收，不等于 Active 已发布。
