@@ -12,6 +12,8 @@
     "preview": "vite preview",
     "check:types": "tsc --noEmit",
     "test:unit": "vitest run src/tests/unit",
+    "review:astrbot": "node scripts/astrbot_codex_review.mjs",
+    "smoke:astrbot-stream": "node scripts/astrbot_stream_smoke.mjs",
     "check:router-regression": "node scripts/run_dashboard_spec_regression.cjs",
     "check:frontend": "npm run check:types && npm run test:unit && npm run build && npm run check:router-regression",
     "perf:routes": "node scripts/measure_route_performance.cjs",

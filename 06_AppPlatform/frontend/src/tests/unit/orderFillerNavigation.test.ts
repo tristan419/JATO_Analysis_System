@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   MEGA_MENU_ITEMS,
   filterMenuByRole,
+  getActiveMegaMenuId,
   isKnownAppRoute,
   isRouteAllowedForRole,
   type MegaMenuItem,
@@ -33,6 +34,7 @@ describe("order filler navigation", () => {
     expect(paths).toContain("/dashboard");
     expect(paths).toContain("/market/overview");
     expect(paths).toContain("/market/advanced-analysis");
+    expect(paths).toContain("/astrbot");
     expect(paths).toContain("/market/advanced-analysis?mode=hero-product");
     expect(paths).toContain("/product/order-genius");
     expect(paths).toContain("/product/order-genius/vehicle-allocation");
@@ -56,10 +58,31 @@ describe("order filler navigation", () => {
     }
   });
 
+  it("keeps AstrBot under Market Analysis and highlights Market Scan", () => {
+    const marketMenu = MEGA_MENU_ITEMS.find((item) => item.id === "market-scan");
+    expect(marketMenu?.type).toBe("mega");
+    if (!marketMenu || marketMenu.type !== "mega") {
+      throw new Error("Market Scan menu is missing");
+    }
+
+    const marketAnalysis = marketMenu.groups.find(
+      (group) => group.title === "Market Analysis / 市场分析",
+    );
+    const paths = marketAnalysis?.items.map((item) => item.to) ?? [];
+    expect(paths).toContain("/astrbot");
+    expect(paths.indexOf("/astrbot")).toBeGreaterThan(
+      paths.indexOf("/market/advanced-analysis"),
+    );
+    expect(getActiveMegaMenuId("/astrbot")).toBe("market-scan");
+    expect(getActiveMegaMenuId("/astrbot/eval")).toBe("market-scan");
+  });
+
   it("uses the same role policy in the route guard", () => {
     expect(isRouteAllowedForRole("/product/pricing", "order_filler")).toBe(true);
     expect(isRouteAllowedForRole("/data/spec-detail", "order_filler")).toBe(true);
     expect(isRouteAllowedForRole("/market/transfer", "order_filler")).toBe(true);
+    expect(isRouteAllowedForRole("/astrbot", "viewer")).toBe(true);
+    expect(isRouteAllowedForRole("/astrbot/eval", "viewer")).toBe(true);
     expect(isRouteAllowedForRole("/data/order-genius", "order_filler")).toBe(true);
     expect(isRouteAllowedForRole("/product/order-genius/vehicle-allocation", "order_filler")).toBe(true);
     expect(isRouteAllowedForRole("/product/order-genius/cbu", "editor")).toBe(true);

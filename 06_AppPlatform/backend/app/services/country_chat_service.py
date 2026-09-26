@@ -2506,6 +2506,7 @@ def _inject_deck_panels(
 
     snapshot["periodLabel"] = metadata.get("labels", {}).get("pageTitle", "")
     snapshot["resolvedPeriod"] = metadata.get("resolvedPeriod", "")
+    snapshot["metricScopes"] = _build_market_metric_scopes(snapshot, metadata)
 
     overview = results.get("overview", {})
     snapshot["overviewSummary"] = overview.get("summary", {})
@@ -2564,6 +2565,75 @@ def _inject_deck_panels(
 
     cross_tabs = results.get("crossTabs")
     snapshot["crossTabs"] = cross_tabs if isinstance(cross_tabs, dict) else {}
+
+
+def _build_market_metric_scopes(
+    snapshot: dict[str, Any],
+    metadata: dict[str, Any],
+) -> dict[str, dict[str, str]]:
+    """Describe the time basis of ranking and cross-tab metrics in one snapshot."""
+    analysis_meta = snapshot.get("analysisMeta") if isinstance(snapshot.get("analysisMeta"), dict) else {}
+    selected_year = _coerce_optional_int(analysis_meta.get("selectedYear"))
+    selected_month = _coerce_optional_int(analysis_meta.get("selectedMonth"))
+    resolved_period = str(metadata.get("resolvedPeriod") or "").strip()
+    resolved_match = re.fullmatch(r"(\d{4})-(\d{2})", resolved_period)
+    resolved_year = int(resolved_match.group(1)) if resolved_match else None
+    resolved_month = int(resolved_match.group(2)) if resolved_match else None
+
+    if selected_year is not None and selected_month is not None:
+        ranking_period = f"{selected_year:04d}-{selected_month:02d}"
+        ranking_scope = {
+            "periodType": "month",
+            "periodLabel": f"{ranking_period} 当月",
+            "periodStart": ranking_period,
+            "periodEnd": ranking_period,
+        }
+    elif selected_year is not None:
+        current_year_partial = (
+            resolved_year == selected_year
+            and resolved_month is not None
+            and resolved_month < 12
+        )
+        period_end = resolved_period if current_year_partial else f"{selected_year:04d}-12"
+        ranking_scope = {
+            "periodType": "ytd" if current_year_partial else "full_year",
+            "periodLabel": (
+                f"{selected_year} YTD（截至 {resolved_period}）"
+                if current_year_partial
+                else f"{selected_year} 全年"
+            ),
+            "periodStart": f"{selected_year:04d}-01",
+            "periodEnd": period_end,
+        }
+    else:
+        ranking_scope = {
+            "periodType": "unknown",
+            "periodLabel": "时间范围未标注",
+            "periodStart": "",
+            "periodEnd": "",
+        }
+
+    if resolved_period:
+        cross_tab_scope = {
+            "periodType": "month",
+            "periodLabel": f"{resolved_period} 当月",
+            "periodStart": resolved_period,
+            "periodEnd": resolved_period,
+        }
+    else:
+        cross_tab_scope = {
+            "periodType": "unknown",
+            "periodLabel": "时间范围未标注",
+            "periodStart": "",
+            "periodEnd": "",
+        }
+
+    return {
+        "topBrands": dict(ranking_scope),
+        "topModels": dict(ranking_scope),
+        "powertrainMix": dict(ranking_scope),
+        "crossTabs": cross_tab_scope,
+    }
 
 
 def _normalize_segment_token(value: Any) -> str:
