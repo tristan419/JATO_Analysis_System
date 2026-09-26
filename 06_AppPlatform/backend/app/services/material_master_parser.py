@@ -15,11 +15,7 @@ from pathlib import Path
 
 import openpyxl
 
-from app.services.ordering_normalization import (
-    infer_colour_tier,
-    normalize_brand,
-    normalize_brand_text,
-)
+from app.services.ordering_normalization import normalize_brand, normalize_brand_text
 
 
 DUAL_COLOUR_PATTERNS = [
@@ -50,7 +46,13 @@ def _detect_edition_tag(raw_colour_name: str) -> str | None:
 def _detect_colour_tier(
     colour_name: str, colour_type: str, edition_tag: str | None = None
 ) -> str:
-    return infer_colour_tier(colour_name, colour_type, edition_tag)
+    """Keep the imported tier explicit; names and swatches are not pricing rules."""
+    normalized = str(colour_type or "").strip().lower().replace("_", "-")
+    if normalized in {"dual", "two-tone", "dual-tone", "dual tone", "bi-color", "bi-colour"}:
+        return "dual"
+    if normalized == "special":
+        return "special"
+    return "single"
 
 
 # ── BOM-pattern → interior inference rules ───────────────────
@@ -404,6 +406,8 @@ def parse_material_master_xlsx(file_path: Path) -> dict:
             if config_str:
                 current_model["configuration"] = config_str
             if bom_str:
+                if _extract_bom_template(bom_str) != _extract_bom_template(current_model.get("bom", "")):
+                    current_model.pop("interior_color", None)
                 current_model["bom"] = bom_str
 
             # BOM template is the stable binding key for colour variants.

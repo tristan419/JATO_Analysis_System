@@ -159,4 +159,18 @@ describe("BOM Admin A load continuity", () => {
     expect(document.body.textContent).toContain("Fresh Beta");
     expect(document.body.textContent).not.toContain("Stale Alpha");
   });
+
+  it("shows the backend colour decision without substituting a frontend default", async () => {
+    const response = bomResponse("Pricing sample");
+    response.items[0].colourTier = "dual";
+    const items = response.items.map((item) => ({
+      ...item, colourPricing: { status: "matched_amount", amount: 475, source: "model_colour" },
+    }));
+    vi.spyOn(api, "getBomAdmin").mockResolvedValue({ ...response, items });
+    vi.spyOn(api, "getOrderGeniusSpecialColourSurcharges").mockResolvedValue({ items: [] });
+    await act(async () => { render(<BomAdminPanel />); });
+    await act(async () => { fireEvent.click(screen.getByRole("button", { name: /OMODA Pricing sample/ })); });
+    expect(screen.getByTitle(/dual · rule \+475€/)).toBeTruthy();
+    expect(screen.queryByTitle(/dual · rule \+200€/)).toBeNull();
+  });
 });

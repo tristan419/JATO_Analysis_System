@@ -29,8 +29,6 @@ from app.services.order_quantity_parser import (
     parse_order_quantity_xlsx,
 )
 from app.services.ordering_normalization import (
-    infer_colour_tier,
-    merge_colour_tiers,
     normalize_brand,
     normalize_brand_text,
     resolve_material_brand,
@@ -64,9 +62,13 @@ def _extract_canonical_pt(sku: object) -> str:
 
 
 def _derive_colour_tier(exterior_color_type: str) -> str:
-    """Auto-classify colour_tier from exterior_color_type.
-    single → single, dual → dual, matte/black edition/etc → special"""
-    return infer_colour_tier(None, exterior_color_type)
+    """Normalize the explicit imported colour type without name inference."""
+    normalized = str(exterior_color_type or "").strip().lower().replace("_", "-")
+    if normalized in {"dual", "two-tone", "dual-tone", "dual tone", "bi-color", "bi-colour"}:
+        return "dual"
+    if normalized == "special":
+        return "special"
+    return "single"
 
 
 def _effective_colour_tier(sku: object) -> str | None:
@@ -96,124 +98,6 @@ def _effective_interior_name(
 
 
 # ── Upload orchestration ───────────────────────────────────────────────
-
-
-def _assign_fob_based_tiers(
-    session: Session,
-    skus: list[MaterialSkuMaster],
-) -> int:
-    """After FOB resolution, group SKUs by (bom_template, country) and assign colour_tier
-    based on FOB levels within each group.
-
-    Within each group, unique FOB values are sorted:
-      1 FOB level  → all 'single'
-      2 FOB levels → lower FOB = 'single', higher = 'dual'
-      3+ FOB levels → lowest = 'single', middle(s) = 'dual', highest = 'special'
-    """
-    from collections import defaultdict
-
-    from app.db.models import CountrySkuFobResolved
-
-    updated = 0
-    if not skus:
-        return updated
-
-    # Collect all FOB data for these SKUs (keyed by material_code, not material_sku_id)
-    material_codes = [s.material_code for s in skus]
-    code_to_sku: dict[str, MaterialSkuMaster] = {s.material_code: s for s in skus}
-    all_fobs = session.query(CountrySkuFobResolved).filter(
-        CountrySkuFobResolved.material_code.in_(material_codes),
-        CountrySkuFobResolved.is_active == True,
-        CountrySkuFobResolved.final_fob_eur > 0,
-    ).all()
-
-    # Step 1: For each (bom_template, country), find the base FOB
-    bom_base_fob: dict[tuple[str, str], float] = {}
-    bom_fobs: dict[tuple[str, str], dict[str, float]] = defaultdict(dict)
-    for fob in all_fobs:
-        sku = code_to_sku.get(fob.material_code)
-        if not sku or fob.final_fob_eur is None or float(fob.final_fob_eur) <= 0:
-            continue
-        bt = sku.bom_template or sku.material_code
-        key = (bt, fob.country_code)
-        bom_fobs[key][sku.material_code] = float(fob.final_fob_eur)
-    for key, mc_fobs in bom_fobs.items():
-        bom_base_fob[key] = min(mc_fobs.values())
-
-    # Step 2: Cross-BOM base FOB per (model+version, country)
-    mv_base_fob: dict[tuple[str, str], float] = {}
-    mv_fobs: dict[tuple[str, str], list[float]] = defaultdict(list)
-    for fob in all_fobs:
-        sku = code_to_sku.get(fob.material_code)
-        if not sku or fob.final_fob_eur is None or float(fob.final_fob_eur) <= 0:
-            continue
-        mv = f"{sku.model_name or ''}|{sku.version or ''}"
-        key = (mv, fob.country_code)
-        mv_fobs[key].append(float(fob.final_fob_eur))
-    for key, fobs in mv_fobs.items():
-        mv_base_fob[key] = min(fobs)
-
-    # Step 3: Compute paint surcharge per SKU
-    surcharge_map: dict[tuple[str, str], dict[str, float]] = defaultdict(dict)
-    for fob in all_fobs:
-        sku = code_to_sku.get(fob.material_code)
-        if not sku or fob.final_fob_eur is None or float(fob.final_fob_eur) <= 0:
-            continue
-        bt = sku.bom_template or sku.material_code
-        mv = f"{sku.model_name or ''}|{sku.version or ''}"
-        key = (mv, fob.country_code)
-        own_base = bom_base_fob.get((bt, fob.country_code))
-        bom_mcs = list(bom_fobs.get((bt, fob.country_code), {}).keys())
-        if own_base is not None and len(bom_mcs) >= 2:
-            base = own_base
-        else:
-            base = mv_base_fob.get(key)
-        if base is None or base == 0:
-            continue
-        surcharge = float(fob.final_fob_eur) - base
-        surcharge_map[key][sku.material_code] = surcharge
-
-    # Step 4: Assign tiers based on surcharge levels
-    for (mv, country), mc_surcharges in surcharge_map.items():
-        unique_sc = sorted(set(mc_surcharges.values()))
-
-        # Map surcharge → tier
-        sc_to_tier: dict[float, str] = {}
-        if len(unique_sc) == 1:
-            # Single FOB level: all single
-            sc_to_tier[unique_sc[0]] = "single"
-        elif len(unique_sc) == 2:
-            sc_to_tier[unique_sc[0]] = "single"
-            sc_to_tier[unique_sc[1]] = "dual"
-        else:
-            sc_to_tier[unique_sc[0]] = "single"
-            for sc in unique_sc[1:-1]:
-                sc_to_tier[sc] = "dual"
-            sc_to_tier[unique_sc[-1]] = "special"
-
-        for mc, sc in mc_surcharges.items():
-            fob_tier = sc_to_tier.get(sc)
-            if fob_tier is None:
-                continue
-            sku = code_to_sku.get(mc)
-            tier = merge_colour_tiers(
-                sku.colour_tier if sku else None,
-                infer_colour_tier(
-                    sku.exterior_color_name if sku else None,
-                    sku.exterior_color_type if sku else None,
-                    sku.edition_tag if sku else None,
-                    sku.exterior_color_code if sku else None,
-                    sku.colour_hex if sku else None,
-                ),
-                fob_tier,
-            )
-            if sku and sku.colour_tier != tier:
-                sku.colour_tier = tier
-                updated += 1
-
-    if updated:
-        session.flush()
-    return updated
 
 
 def preview_parsed_upload(
@@ -296,6 +180,13 @@ def publish_baseline(
         if existing:
             new_material_codes.append(mc)
             continue
+        raw_colour_type = repo.clean_text(row.get("exterior_color_type"))
+        saved_colour_tier = repo.clean_text(row.get("colour_tier")).lower()
+        colour_tier = saved_colour_tier or (
+            _derive_colour_tier(raw_colour_type) if raw_colour_type else ""
+        )
+        if colour_tier not in {"single", "dual", "special"}:
+            raise ValueError(f"Colour tier is required for {mc}")
         sku = MaterialSkuMaster(
             material_sku_id=uuid_module.uuid4(),
             baseline_version_id=baseline.baseline_version_id,
@@ -306,9 +197,9 @@ def publish_baseline(
             version=row.get("version", ""),
             exterior_color_name=row.get("exterior_color_name", ""),
             exterior_color_code=row.get("exterior_color_code", ""),
-            exterior_color_type=row.get("exterior_color_type", "single"),
+            exterior_color_type=raw_colour_type or colour_tier,
             colour_code_confirmed=row.get("colour_code_confirmed", True),
-            colour_tier=row.get("colour_tier") or _derive_colour_tier(row.get("exterior_color_type", "single")),
+            colour_tier=colour_tier,
             edition_tag=row.get("edition_tag"),
             interior_color_name=row.get("interior_color_name") or _infer_interior_from_bom(row.get("bom_template")),
             interior_colour_code=row.get("interior_colour_code"),
@@ -363,9 +254,6 @@ def publish_baseline(
         else:
             fob_skipped.add(country_pt.country_code)
 
-    # 5. Assign colour_tier based on FOB levels (FOB-based tier detection)
-    tier_updates = _assign_fob_based_tiers(session, new_skus)
-
     return {
         "baseline_version_id": str(baseline.baseline_version_id),
         "baseline_name": baseline_name,
@@ -374,7 +262,7 @@ def publish_baseline(
         "fob_source_mode": fob_source_mode,
         "fob_resolved_countries": sorted(fob_resolved),
         "fob_skipped_countries": sorted(fob_skipped),
-        "tier_updates": tier_updates,
+        "tier_updates": 0,  # Import never reclassifies saved tiers from prices.
         "status": "published",
     }
 
@@ -391,11 +279,11 @@ def _resolve_fob_for_sku(
 ) -> CountrySkuFobResolved:
     """Resolve FOB for a country+SKU pair.
 
-    Pricing model (corrected):
-    - LC is NOT a global adjustment formula. It is a price dimension/key.
-    - FOB = resolved by: country_code + material_code + payment_term_code
-    - payment_term_price_rule is NOT used for calculation.
-    - Colour surcharge only applies in uploaded_base_plus_colour mode.
+    Pricing model:
+    - FOB is owned by the BOM template/material + country Single base.
+    - Payment term is retained as settlement metadata only; it never selects or
+      adjusts a price and payment_term_price_rule is not used here.
+    - Colour surcharge applies only in uploaded_base_plus_colour mode.
     """
     from app.db.models import CountrySkuFobResolved
     from app.services.material_master_parser import _normalise_country_name
@@ -426,9 +314,7 @@ def _resolve_fob_for_sku(
 
     if uploaded_fob is None:
         # Check explicit fallback mapping (e.g. RO → HR)
-        fallback_src = repo.get_country_fob_source_mapping(
-            session, country_code, payment_term_code,
-        )
+        fallback_src = repo.get_country_fob_source_mapping(session, country_code)
         if fallback_src:
             # Try direct match first, then normalised name match
             uploaded_fob = country_fobs.get(fallback_src)
@@ -633,16 +519,18 @@ def _build_matrix_for_country(
 
     # Get FOB for these SKUs in one round trip. Payment term is metadata-only
     # in the current repository rule, matching get_fob_for_country_sku.
-    fob_map: dict[str, CountrySkuFobResolved] = repo.list_fobs_for_country_material_codes(
+    fob_map, fob_conflicts = repo.list_fobs_for_country_material_codes(
         session,
         country_code,
         [sku.material_code for sku in active_skus],
         payment_term_code,
+        include_conflicts=True,
     )
+    conflict_codes = {str(item["materialCode"]) for item in fob_conflicts}
 
-    # Only include SKUs that have FOB for this country
+    # Keep unresolved groups visible with no price so normal rows remain usable.
     skus_with_fob = [
-        s for s in active_skus if s.material_code in fob_map
+        s for s in active_skus if s.material_code in fob_map or s.material_code in conflict_codes
     ]
 
     # Get quantities for this country+year
@@ -665,17 +553,23 @@ def _build_matrix_for_country(
         active_skus + list(historical_skus.values())
     )
     colour_standards = repo.list_persistent_colour_standard_map(session)
-    historical_fob_map = repo.list_fobs_for_country_material_codes(
+    historical_fob_map, historical_fob_conflicts = repo.list_fobs_for_country_material_codes(
         session,
         country_code,
         historical_codes,
         payment_term_code,
+        include_conflicts=True,
     )
+    fob_conflicts.extend(historical_fob_conflicts)
 
     # Build rows
     rows = []
     for sku in skus_with_fob:
-        fob = fob_map[sku.material_code]
+        fob = fob_map.get(sku.material_code)
+        conflict = next(
+            (item for item in fob_conflicts if item["materialCode"] == sku.material_code),
+            None,
+        )
         display_colour_name, display_colour_hex = repo.resolve_colour_display_values(
             sku,
             colour_standards,
@@ -710,7 +604,8 @@ def _build_matrix_for_country(
             "powertrain": _extract_canonical_pt(sku),
             "fobEur": float(fob.final_fob_eur) if fob else None,
             "lifecycleStatus": "active",
-            "editable": True,
+            "fobConflict": conflict,
+            "editable": conflict is None,
             "displayStyle": None,
             "remark": sku.remark,
             "effectiveFrom": sku.effective_from_month,
@@ -721,7 +616,7 @@ def _build_matrix_for_country(
 
     # Add historical rows with quantity data (respect brand/model/version/colour filters)
     for mc in historical_codes:
-        if mc in fob_map:
+        if mc in fob_map or mc in {str(item["materialCode"]) for item in historical_fob_conflicts}:
             continue  # already included as active
         hist_sku = historical_skus.get(mc)
         if not hist_sku:
@@ -739,6 +634,10 @@ def _build_matrix_for_country(
         ):
             continue
         fob = historical_fob_map.get(mc)
+        conflict = next(
+            (item for item in historical_fob_conflicts if item["materialCode"] == mc),
+            None,
+        )
         display_colour_name, display_colour_hex = repo.resolve_colour_display_values(
             hist_sku,
             colour_standards,
@@ -778,6 +677,7 @@ def _build_matrix_for_country(
                 "powertrain": _extract_canonical_pt(hist_sku),
                 "fobEur": float(fob.final_fob_eur) if fob else None,
                 "lifecycleStatus": "historical",
+                "fobConflict": conflict,
                 "editable": False,
                 "displayStyle": "strikethrough",
                 "remark": hist_sku.remark,
@@ -794,6 +694,7 @@ def _build_matrix_for_country(
         "year": year,
         "rows": rows,
         "totalRows": len(rows),
+        "fobConflicts": fob_conflicts,
     }
 
 
@@ -1085,6 +986,14 @@ def export_matrix(
                           brand=brand, model_name=model_name,
                           powertrain=powertrain, version=version, colour=colour,
                           material_code_search=material_code_search)
+    if matrix.get("fobConflicts"):
+        conflicts = ", ".join(
+            f"{item['materialCode']}/{item['countryCode']}"
+            for item in matrix["fobConflicts"][:5]
+        )
+        raise ValueError(
+            f"Export blocked: confirm BOM Admin Single FOB for {conflicts}"
+        )
     rows = matrix["rows"]
     export_months = [selected_month] if selected_month else list(range(1, 13))
     if quantities_only or hide_empty_rows:
@@ -1122,6 +1031,14 @@ def export_pi_matrix(
                           brand=brand, model_name=model_name,
                           powertrain=powertrain, version=version, colour=colour,
                           material_code_search=material_code_search)
+    if matrix.get("fobConflicts"):
+        conflicts = ", ".join(
+            f"{item['materialCode']}/{item['countryCode']}"
+            for item in matrix["fobConflicts"][:5]
+        )
+        raise ValueError(
+            f"PI export blocked: confirm BOM Admin Single FOB for {conflicts}"
+        )
     rows = matrix["rows"]
     export_months = [selected_month] if selected_month else list(range(1, 13))
     if hide_empty_rows:

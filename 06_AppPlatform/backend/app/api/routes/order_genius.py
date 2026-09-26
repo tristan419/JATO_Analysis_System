@@ -221,6 +221,9 @@ def publish_material_master(
     except FileNotFoundError as e:
         session.rollback()
         raise HTTPException(status_code=404, detail=str(e))
+    except repo.CountryFobConflict as e:
+        session.rollback()
+        raise HTTPException(status_code=409, detail=str(e)) from e
     except ValueError as e:
         session.rollback()
         raise HTTPException(status_code=409, detail=str(e))
@@ -707,6 +710,9 @@ def patch_quantity_cell(
         )
         session.commit()
         return result
+    except repo.CountryFobConflict as e:
+        session.rollback()
+        raise HTTPException(status_code=409, detail=str(e)) from e
     except ValueError as e:
         session.rollback()
         msg = str(e)
@@ -1000,9 +1006,11 @@ def patch_sku_colour_tier(
     session: Session = Depends(get_db_session),
     user=Depends(require_min_role("editor")),
 ) -> dict:
-    colour_tier = body.get("colourTier", body.get("colour_tier", "single"))
+    colour_tier = clean_text(body.get("colourTier", body.get("colour_tier"))).lower()
+    if not colour_tier:
+        raise HTTPException(status_code=400, detail="colourTier is required")
     if colour_tier not in ("single", "dual", "special"):
-        raise HTTPException(status_code=400, detail="colour_tier must be single, dual, or special")
+        raise HTTPException(status_code=400, detail="colourTier must be single, dual, or special")
     ok = repo.update_sku_colour_tier(session, material_code, colour_tier)
     if not ok:
         raise HTTPException(status_code=404, detail="SKU not found")
@@ -1084,7 +1092,10 @@ def get_sku_fob(
     session: Session = Depends(get_db_session),
     _=Depends(require_min_role("viewer")),
 ) -> dict:
-    fob = get_fob_for_sku(session, country, material_code)
+    try:
+        fob = get_fob_for_sku(session, country, material_code)
+    except repo.CountryFobConflict as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
     if not fob:
         raise HTTPException(status_code=404, detail="FOB not resolved for this SKU")
     return fob
@@ -1559,7 +1570,9 @@ def create_material_sku(
     source_bom_template = clean_text(body.get("sourceBomTemplate")).upper()
     source_material_code = clean_text(body.get("sourceMaterialCode")).upper()
     automatic_fobs = bool(body.get("automaticFobs"))
-    colour_tier = clean_text(body.get("colourTier") or "single").lower()
+    colour_tier = clean_text(body.get("colourTier")).lower()
+    if not colour_tier:
+        raise HTTPException(status_code=400, detail="colourTier is required")
     if colour_tier not in {"single", "dual", "special"}:
         raise HTTPException(status_code=400, detail="colourTier must be single, dual, or special")
     lifecycle_status = clean_text(body.get("lifecycleStatus") or "active") or "active"
@@ -1666,6 +1679,7 @@ def create_material_sku(
         "rows": 0,
         "created": 0,
         "skippedNoBase": 0,
+        "skippedAmbiguous": 0,
         "skippedMissingTier": 0,
         "skippedMissingRule": 0,
         "details": [],
@@ -1797,8 +1811,18 @@ def get_bom_admin(
     _=Depends(require_min_role("editor")),
 ) -> dict:
     """Return BOM data with FOB per country, for the BOM admin panel."""
-    items, countries = repo.list_bom_with_fob(session, brand=brand, search=search, country_code=country)
-    return {"items": items, "countries": countries}
+    items, countries, fob_conflicts = repo.list_bom_with_fob(
+        session,
+        brand=brand,
+        search=search,
+        country_code=country,
+        include_conflicts=True,
+    )
+    return {
+        "items": items,
+        "countries": countries,
+        "fobConflicts": fob_conflicts,
+    }
 
 
 @router.get("/material-skus-admin")
@@ -2071,9 +2095,12 @@ def export_order_genius(
     include_hist = body.get("includeHistoricalWithQuantity", True)
     filters = _export_filter_params(body)
     quantities_only = _body_bool(body.get("quantitiesOnly", False))
-    buf = export_matrix(session, country, year, include_hist,
-                        **filters,
-                        quantities_only=quantities_only)
+    try:
+        buf = export_matrix(session, country, year, include_hist,
+                            **filters,
+                            quantities_only=quantities_only)
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
     from datetime import date as _date
     today = _date.today().strftime("%Y%m%d")
     suffix = _export_filename_suffix(filters)
@@ -2098,7 +2125,10 @@ def export_order_genius_pi(
     validate_country_access(session, user.name, user.role, country)
     year = body.get("year", 2026)
     filters = _export_filter_params(body)
-    buf = export_pi_matrix(session, country, year, **filters)
+    try:
+        buf = export_pi_matrix(session, country, year, **filters)
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
     from datetime import date as _date
     today = _date.today().strftime("%Y%m%d")
     suffix = _export_filename_suffix(filters)

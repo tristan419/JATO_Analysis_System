@@ -15,6 +15,19 @@ export interface MonthCell {
   rowVersion: number;
 }
 
+export interface FobConflict {
+  materialCode: string;
+  countryCode: string;
+  status: "conflict";
+  reason: string;
+  records: Array<{
+    paymentTermCode: string | null;
+    baseFobEur: number | null;
+    colourSurchargeEur: number | null;
+    finalFobEur: number;
+  }>;
+}
+
 export interface MaterialSkuMatrixRow {
   materialCode: string;
   bomTemplate?: string | null;
@@ -31,6 +44,7 @@ export interface MaterialSkuMatrixRow {
   editionTag?: string | null;
   powertrain: string | null;
   fobEur: number | null;
+  fobConflict?: FobConflict | null;
   lifecycleStatus: string;
   editable: boolean;
   displayStyle: string | null;
@@ -48,6 +62,7 @@ export interface MatrixResponse {
   year: number;
   rows: MaterialSkuMatrixRow[];
   totalRows: number;
+  fobConflicts?: FobConflict[];
 }
 
 export interface MatrixBatchResponse {

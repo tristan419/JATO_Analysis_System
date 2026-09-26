@@ -57,6 +57,7 @@ import type {
   MaterialSkuMatrixRow,
   MaterialUploadPreview,
   MatrixResponse,
+  FobConflict,
   MonthCell,
   OrderGeniusOptions,
   PublishBaselineResponse,
@@ -676,6 +677,7 @@ export function OrderGeniusPage() {
 
   const [options, setOptions] = useState<OrderGeniusOptions | null>(null);
   const [matrices, setMatrices] = useState<Record<string, MatrixResponse>>({});
+  const [matrixConflictNotice, setMatrixConflictNotice] = useState<FobConflict[]>([]);
   const [fobCountryCodes, setFobCountryCodes] = useState<string[] | null>(null);
   const [bomAdminCopyTargetCountry, setBomAdminCopyTargetCountry] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
@@ -877,6 +879,7 @@ export function OrderGeniusPage() {
     if (!primaryCountry) return;
     setLoading(true);
     setError("");
+    setMatrixConflictNotice([]);
     api
       .getOrderGeniusOptions({
         country: primaryCountry,
@@ -921,6 +924,9 @@ export function OrderGeniusPage() {
           if (matrix) next[country] = matrix;
         }
         setMatrices(next);
+        setMatrixConflictNotice(
+          Object.values(response.matrices).flatMap((matrix) => matrix.fobConflicts || []),
+        );
         if (Object.keys(next).length === 0) {
           const firstError = Object.values(response.errors)[0];
           if (firstError) setError(firstError);
@@ -2265,6 +2271,15 @@ export function OrderGeniusPage() {
           {error}
         </div>
       ) : null}
+      {matrixConflictNotice.length > 0 ? (
+        <div
+          className="alert"
+          role="status"
+          style={{ marginBottom: 16, color: "#92400e", background: "#fffbeb", borderColor: "#fbbf24" }}
+        >
+          {matrixConflictNotice.length} 个物料／国家存在待确认 FOB 基准；正常行仍可查看。请在 BOM Admin 确认模板＋国家 Single 基准后再重算。
+        </div>
+      ) : null}
 
       <div className="deck-control-tabs order-genius-control-tabs" role="tablist" aria-label="Order Genius control sections">
         {orderGeniusControlTabs.map((tab) => (
@@ -3057,6 +3072,9 @@ type BomCopyDraftSku = {
 };
 
 type BomDraftFobEntry = {
+  status?: "conflict" | null;
+  reason?: string | null;
+  records?: Array<Record<string, unknown>>;
   baseFobEur?: number | null;
   uploadedFobEur?: number | null;
   finalFobEur?: number | null;
@@ -3645,34 +3663,6 @@ export function BomAdminPanel({
     return colourHexRules.filter((rule) => rule.status === colourRuleDetailsStatus);
   }, [colourHexRules, colourRuleDetailsStatus]);
 
-  const getColourSurchargeAmount = (brand: string, colourType: string): number => {
-    const key = colourSurchargeKey(brand, colourType);
-    const rule = colourSurchargeRules.find(
-      (item) => colourSurchargeKey(item.brand, item.colourType) === key,
-    );
-    return rule ? Number(rule.surchargeEur) : DEFAULT_COLOUR_SURCHARGES[key] ?? 0;
-  };
-
-  const resolveSpecialColourSurcharge = (
-    sku: { brand?: unknown; modelName?: unknown; colourCode?: unknown },
-    tier: "dual" | "special",
-  ): { amount: number; source: string } | null => {
-    const brand = String(sku?.brand || "").trim().toUpperCase();
-    const model = String(sku?.modelName || "").trim().toUpperCase();
-    const code = String(sku?.colourCode || "").trim().toUpperCase();
-    if (!brand || !code) return null;
-    const matches = specialColourSurchargeRules.filter((rule) => (
-      String(rule.brand || "").trim().toUpperCase() === brand
-      && String(rule.colourCode || "").trim().toUpperCase() === code
-      && rule.colourTier === tier
-    ));
-    const modelRule = matches.find((rule) => String(rule.modelName || "").trim().toUpperCase() === model);
-    if (modelRule) return { amount: Number(modelRule.surchargeEur), source: `${tier} · ${brand} ${model} + ${code}` };
-    const brandRule = matches.find((rule) => !String(rule.modelName || "").trim());
-    if (brandRule) return { amount: Number(brandRule.surchargeEur), source: `${tier} · ${brand} + ${code}` };
-    return null;
-  };
-
   const formatBomFobTooltip = (
     countryCode: string,
     baseFob: number | null | undefined,
@@ -3696,7 +3686,7 @@ export function BomAdminPanel({
     fobSourceMode?: string | null,
     fobSourceCountryCode?: string | null,
   ): string => {
-    if (fobSourceMode === "copied_from_country") {
+    if (fobSourceMode === "copied_from_country" || (fobSourceMode === "template_base" && fobSourceCountryCode)) {
       return `copied from ${fobSourceCountryCode || "source country"}`;
     }
     if (fobSourceMode === "manual_country_adjust") return "manual country adjustment";
@@ -3846,6 +3836,12 @@ export function BomAdminPanel({
         return Object.keys(next).length === Object.keys(current).length ? current : next;
       });
       const nextCountries = res.countries || [];
+      const conflictCount = Array.isArray(res.fobConflicts) ? res.fobConflicts.length : 0;
+      if (conflictCount > 0) {
+        setBomAdminNotice(
+          `${conflictCount} 个物料／国家的 FOB 基准待确认；正常行仍可编辑，请先在 BOM Admin 保存唯一模板＋国家 Single 基准。`,
+        );
+      }
       const nextActiveFobCountries = res.activeFobCountries || nextCountries;
       activeFobCountriesRef.current = nextActiveFobCountries;
       setCountries(nextCountries);
@@ -4768,28 +4764,16 @@ export function BomAdminPanel({
 
     setBulkFobSavingKey(bomKey);
     try {
+      const savedUpdates: BomFobPatch[] = [];
       for (const update of updates) {
-        await api.updateSkuFob(update.materialCode, {
+        const saved: BomFobSaveResponse = await api.updateSkuFob(update.materialCode, {
           countryCode: update.countryCode,
           baseFobEur: update.finalFobEur,
           paymentTermCode: update.paymentTermCode ?? undefined,
         });
+        savedUpdates.push(saved);
       }
-      patchBomFobs(updates.map((update) => {
-        const sku = allSkus.find((candidate: any) => String(candidate.materialCode || "") === update.materialCode);
-        const tier = sku ? getEffectiveColourTier(sku) : "single";
-        const special = tier === "single" || !sku ? null : resolveSpecialColourSurcharge(sku, tier);
-        const surcharge = tier === "single"
-          ? 0
-          : special?.amount ?? getColourSurchargeAmount(String(sku?.brand || ""), tier);
-        return {
-          ...update,
-          baseFobEur: update.finalFobEur,
-          finalFobEur: Number((update.finalFobEur + surcharge).toFixed(2)),
-          colourSurchargeEur: surcharge > 0 ? surcharge : null,
-          fobSourceMode: "manual_country_adjust",
-        };
-      }));
+      patchBomFobs(savedUpdates);
       if (quickDelta != null) {
         updateBulkFobEditor(bomKey, allSkus, (current) => ({
           ...current,
@@ -5455,12 +5439,13 @@ export function BomAdminPanel({
           editionTag: addColourEditor.editionTag,
         });
       }
-      const automaticFobs = created?.automaticFobs as { created?: number; skippedNoBase?: number; skippedMissingTier?: number; skippedMissingRule?: number } | undefined;
+      const automaticFobs = created?.automaticFobs as { created?: number; skippedNoBase?: number; skippedAmbiguous?: number; skippedMissingTier?: number; skippedMissingRule?: number } | undefined;
       const copiedFobs = Number(automaticFobs?.created || 0);
       const skippedFobs = Number(automaticFobs?.skippedNoBase || 0);
       const missingTierFobs = Number(automaticFobs?.skippedMissingTier || 0);
       const missingRuleFobs = Number(automaticFobs?.skippedMissingRule || 0);
       const skippedReason = [
+        automaticFobs?.skippedAmbiguous ? `${automaticFobs.skippedAmbiguous} countries have conflicting bases` : "",
         skippedFobs > 0 ? `${skippedFobs} countries lack a Single base` : "",
         missingTierFobs > 0 ? `${missingTierFobs} countries lack a colour tier` : "",
         missingRuleFobs > 0 ? `${missingRuleFobs} countries lack a surcharge rule` : "",
@@ -5758,14 +5743,11 @@ export function BomAdminPanel({
     const colourCode = String(s.colourCode || "").trim().toUpperCase();
     const colourName = String(s.colour || "").trim();
     const canEditSwatchRule = Boolean(brand && colourCode && colourName);
-    const specialSurcharge = effectiveTier === "single" ? null : resolveSpecialColourSurcharge(s, effectiveTier);
-    const surchargeAmount = specialSurcharge?.amount ?? getColourSurchargeAmount(brand, effectiveTier);
-    const surchargeSource = specialSurcharge?.source ?? `${brand} ${effectiveTier} default`;
-    const surchargeLabel = effectiveTier === "dual"
-      ? `Dual +${formatSurchargeDraft(surchargeAmount)}€`
-      : effectiveTier === "special"
-        ? `Special +${formatSurchargeDraft(surchargeAmount)}€`
-        : "Single";
+    const pricing: { amount?: number | null; source?: string | null; status?: string } | undefined = s.colourPricing;
+    const surchargeSource = pricing?.source ?? "Pricing configuration missing";
+    const surchargeLabel = pricing?.amount == null
+      ? "Pricing configuration missing"
+      : `${effectiveTier} · rule +${formatSurchargeDraft(pricing.amount)}€ (see country FOB for saved price)`;
 
     return (
       <span key={s.materialCode}
@@ -7377,8 +7359,9 @@ export function BomAdminPanel({
                               </td>
                               {sortedCountries.map(c => {
                                 const fob = ref.fobByCountry?.[c];
+                                const hasConflict = fob?.status === "conflict";
                                 const baseFob = getDraftBaseFob(fob);
-                                const hasFob = fob != null && baseFob != null && baseFob > 0;
+                                const hasFob = !hasConflict && fob != null && baseFob != null && baseFob > 0;
                                 const hasSurcharge = fob?.colourSurchargeEur && fob.colourSurchargeEur > 0;
                                 const sourceMarker = getBomFobSourceMarker(fob?.fobSourceMode);
                                 const countryRemark = getBomCountryFobRemark(allSkus, c);
@@ -7388,8 +7371,12 @@ export function BomAdminPanel({
                                   : [];
                                 const hasFinance = financeCountries.includes(c);
                                 return (
-                                  <td key={c} className="bom-fob-price-cell" title={formatBomFobTooltip(c, baseFob, fob?.colourSurchargeEur, fob?.fobSourceMode, fob?.fobSourceCountryCode, countryRemark)} style={{ width: BOM_ADMIN_COUNTRY_COLUMN_WIDTH, minWidth: BOM_ADMIN_COUNTRY_COLUMN_WIDTH, textAlign: "right", cursor: "pointer", padding: "2px 4px" }}
+                                  <td key={c} className="bom-fob-price-cell" title={hasConflict ? "FOB 基准待确认：付款条件记录存在不同价格，先在 BOM Admin 保存模板＋国家 Single 基准" : formatBomFobTooltip(c, baseFob, fob?.colourSurchargeEur, fob?.fobSourceMode, fob?.fobSourceCountryCode, countryRemark)} style={{ width: BOM_ADMIN_COUNTRY_COLUMN_WIDTH, minWidth: BOM_ADMIN_COUNTRY_COLUMN_WIDTH, textAlign: "right", cursor: hasConflict ? "not-allowed" : "pointer", padding: "2px 4px" }}
                                     onClick={() => {
+                                      if (hasConflict) {
+                                        setBomAdminError(`${bomTemplate} / ${c} 的 FOB 基准待确认；请先保存唯一 Single 基准。`);
+                                        return;
+                                      }
                                       if (c === "NL") {
                                         void openFinanceQuickCard({
                                           countryCode: c,
@@ -7414,8 +7401,8 @@ export function BomAdminPanel({
                                         fobSourceCountryCode: fob?.fobSourceCountryCode ?? null,
                                       });
                                     }}>
-                                    <span className="bom-fob-price-value" style={{ color: hasFob ? "#0f766e" : "#cbd5e1", fontWeight: hasFob ? 600 : 400 }}>
-                                      {hasFob ? baseFob!.toLocaleString() : "-"}
+                                    <span className="bom-fob-price-value" style={{ color: hasConflict ? "#b45309" : hasFob ? "#0f766e" : "#cbd5e1", fontWeight: hasFob || hasConflict ? 600 : 400 }}>
+                                      {hasConflict ? "?" : hasFob ? baseFob!.toLocaleString() : "-"}
                                       {hasSurcharge ? <sup style={{ color: '#d97706', fontSize: 9 }}> +{fob.colourSurchargeEur}</sup> : null}
                                       {hasFinance ? (
                                         <sup className="bom-finance-source-mark" title={`${c} finance / CBU maintained`}>
