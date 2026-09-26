@@ -154,6 +154,8 @@ import type {
   ColourHexRule,
   ColourHexRuleSummary,
   ColourSurchargeRule,
+  ColourSurchargeRepriceApplyResult,
+  ColourSurchargeRepriceAudit,
   ColourTierUpdateResult,
   SpecialColourSurchargeRule,
   CountryMaterialFinanceHistoryItem,
@@ -5192,6 +5194,20 @@ export const api = {
     request<SpecialColourSurchargeRule & { reprice?: Record<string, number | string> }>(
       "/order-genius/special-colour-surcharges",
       { method: "PATCH", body: JSON.stringify(body) },
+    ),
+
+  auditOrderGeniusColourSurchargeReprice: () =>
+    request<ColourSurchargeRepriceAudit>(
+      "/order-genius/colour-surcharge-reprice/audit",
+    ),
+
+  applyOrderGeniusColourSurchargeReprice: (previewFingerprint: string) =>
+    request<ColourSurchargeRepriceApplyResult>(
+      "/order-genius/colour-surcharge-reprice/apply",
+      {
+        method: "POST",
+        body: JSON.stringify({ previewFingerprint }),
+      },
     ),
 
   getOrderGeniusColourHexRules: () =>

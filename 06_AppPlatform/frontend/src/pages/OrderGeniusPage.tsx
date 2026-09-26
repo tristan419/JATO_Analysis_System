@@ -40,7 +40,11 @@ import {
 import { CommandSelect } from "../components/CommandSelect";
 import { DeckFloatingDrawer, FlipToolCard } from "../components/deckControls";
 import { MaterialFinanceMatrix, MaterialFinanceWorkbench } from "../components/finance";
-import { BomEditPanel, type BomEditCountryOption } from "../components/orderGenius";
+import {
+  BomEditPanel,
+  BomFobRepriceAuditCard,
+  type BomEditCountryOption,
+} from "../components/orderGenius";
 import type {
   ColourHexRuleApplyResult,
   ColourHexRuleLookup,
@@ -6411,6 +6415,12 @@ export function BomAdminPanel({
                     </div>
 	                  ) : null}
 	                </div>
+	                <BomFobRepriceAuditCard
+	                  onApplied={async () => {
+	                    await load();
+	                    onFobChanged?.();
+	                  }}
+	                />
 	              </div>
               {bomAdminNotice ? (
                 <div style={{ marginTop: 8, padding: "8px 10px", border: "1px solid #bfdbfe", background: "#eff6ff", color: "#1d4ed8", fontSize: 11, fontWeight: 700 }}>

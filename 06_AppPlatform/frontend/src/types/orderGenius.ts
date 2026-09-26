@@ -267,6 +267,84 @@ export interface ColourTierUpdateResult {
   reprice: ColourTierRepriceReport;
 }
 
+export type ColourSurchargeRepriceCategory =
+  | "auto_reprice"
+  | "already_correct"
+  | "missing_base"
+  | "ambiguous_base"
+  | "explicit_final"
+  | "missing_tier"
+  | "missing_rule"
+  | "not_applicable";
+
+export interface ColourSurchargeRepriceItem {
+  materialCode: string;
+  brand: string;
+  modelName: string | null;
+  version: string | null;
+  bomTemplate: string | null;
+  colourCode: string;
+  colourName: string | null;
+  colourTier: string | null;
+  countryCode: string;
+  paymentTermCode: string | null;
+  currentBaseFobEur: number | null;
+  currentColourSurchargeEur: number | null;
+  currentFinalFobEur: number | null;
+  currentSourceMode: string | null;
+  currentUploadedFobEur: number | null;
+  category: ColourSurchargeRepriceCategory;
+  reason: string | null;
+  trustedSingleBaseFobEur?: number | null;
+  surchargeEur?: number | null;
+  expectedFinalFobEur?: number | null;
+  surchargeRuleStatus?: string;
+  surchargeRuleSource?: string;
+  singleBaseCandidates?: number[];
+}
+
+export interface ColourSurchargeRepriceSummary {
+  rows: number;
+  autoReprice: number;
+  alreadyCorrect: number;
+  missingBase: number;
+  ambiguousBase: number;
+  explicitFinal: number;
+  missingTier: number;
+  missingRule: number;
+  notApplicable: number;
+}
+
+export interface ColourSurchargeRepriceAudit {
+  filters: {
+    materialCodes: string[];
+    countryCode: string | null;
+  };
+  fingerprint: string;
+  summary: ColourSurchargeRepriceSummary;
+  items: ColourSurchargeRepriceItem[];
+}
+
+export interface ColourSurchargeRepriceApplyResult {
+  previewFingerprint: string;
+  totals: {
+    requested: number;
+    updated: number;
+    unchanged: number;
+    skipped: number;
+  };
+  details: Array<{
+    materialCode: string;
+    countryCode: string;
+    updated: number;
+    skippedManual: number;
+    skippedNoBase: number;
+    skippedAmbiguous: number;
+    skippedMissingTier: number;
+    skippedMissingRule: number;
+  }>;
+}
+
 export interface CountryMaterialFinanceRow {
   financeId: string | null;
   countryCode: string;
