@@ -221,6 +221,9 @@ def publish_material_master(
     except FileNotFoundError as e:
         session.rollback()
         raise HTTPException(status_code=404, detail=str(e))
+    except repo.CountryFobConflict as e:
+        session.rollback()
+        raise HTTPException(status_code=409, detail=str(e)) from e
     except ValueError as e:
         session.rollback()
         raise HTTPException(status_code=409, detail=str(e))
@@ -329,6 +332,7 @@ def list_special_colour_surcharges(
                 "brand": r.brand,
                 "modelName": r.model_name,
                 "colourCode": r.colour_code,
+                "colourTier": r.colour_tier,
                 "colourName": r.colour_name,
                 "surchargeEur": float(r.surcharge_eur),
                 "isActive": r.is_active,
@@ -352,6 +356,7 @@ def update_special_colour_surcharge(
             body.surchargeEur,
             model_name=body.modelName,
             colour_name=body.colourName,
+            colour_tier=body.colourTier,
         )
         session.flush()
         reprice = repo.reprice_special_colour_surcharge_fobs(
@@ -359,6 +364,7 @@ def update_special_colour_surcharge(
             rule.brand,
             rule.colour_code,
             model_name=rule.model_name,
+            colour_tier=rule.colour_tier,
             changed_by=user.name,
         )
         session.commit()
@@ -377,11 +383,63 @@ def update_special_colour_surcharge(
         "brand": rule.brand,
         "modelName": rule.model_name,
         "colourCode": rule.colour_code,
+        "colourTier": rule.colour_tier,
         "colourName": rule.colour_name,
         "surchargeEur": float(rule.surcharge_eur),
         "isActive": rule.is_active,
         "reprice": reprice,
     }
+
+
+@router.get("/colour-surcharge-reprice/audit")
+def audit_colour_surcharge_reprice(
+    material_codes: str | None = Query(default=None, alias="materialCodes"),
+    country_code: str | None = Query(default=None, alias="countryCode"),
+    _=Depends(require_min_role("viewer")),
+    session: Session = Depends(get_db_session),
+) -> dict:
+    codes = (
+        [clean_text(code) for code in material_codes.split(",") if clean_text(code)]
+        if material_codes
+        else None
+    )
+    return repo.audit_colour_surcharge_reprice(
+        session,
+        material_codes=codes,
+        country_code=country_code,
+    )
+
+
+@router.post("/colour-surcharge-reprice/apply")
+def apply_colour_surcharge_reprice(
+    body: dict,
+    session: Session = Depends(get_db_session),
+    user=Depends(require_min_role("editor")),
+) -> dict:
+    preview_fingerprint = clean_text(body.get("previewFingerprint"))
+    if not preview_fingerprint:
+        raise HTTPException(status_code=400, detail="previewFingerprint is required")
+    material_codes = body.get("materialCodes")
+    if material_codes is not None and not isinstance(material_codes, list):
+        raise HTTPException(status_code=400, detail="materialCodes must be a list")
+    codes = (
+        [clean_text(code) for code in material_codes if clean_text(code)]
+        if material_codes is not None
+        else None
+    )
+    try:
+        result = repo.apply_colour_surcharge_reprice_audit(
+            session,
+            preview_fingerprint,
+            material_codes=codes,
+            country_code=body.get("countryCode"),
+            changed_by=user.name,
+        )
+        session.commit()
+        return result
+    except ValueError as exc:
+        session.rollback()
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
 
 
 @router.get("/colour-hex-rules")
@@ -652,6 +710,9 @@ def patch_quantity_cell(
         )
         session.commit()
         return result
+    except repo.CountryFobConflict as e:
+        session.rollback()
+        raise HTTPException(status_code=409, detail=str(e)) from e
     except ValueError as e:
         session.rollback()
         msg = str(e)
@@ -945,9 +1006,11 @@ def patch_sku_colour_tier(
     session: Session = Depends(get_db_session),
     user=Depends(require_min_role("editor")),
 ) -> dict:
-    colour_tier = body.get("colourTier", body.get("colour_tier", "single"))
+    colour_tier = clean_text(body.get("colourTier", body.get("colour_tier"))).lower()
+    if not colour_tier:
+        raise HTTPException(status_code=400, detail="colourTier is required")
     if colour_tier not in ("single", "dual", "special"):
-        raise HTTPException(status_code=400, detail="colour_tier must be single, dual, or special")
+        raise HTTPException(status_code=400, detail="colourTier must be single, dual, or special")
     ok = repo.update_sku_colour_tier(session, material_code, colour_tier)
     if not ok:
         raise HTTPException(status_code=404, detail="SKU not found")
@@ -1029,7 +1092,10 @@ def get_sku_fob(
     session: Session = Depends(get_db_session),
     _=Depends(require_min_role("viewer")),
 ) -> dict:
-    fob = get_fob_for_sku(session, country, material_code)
+    try:
+        fob = get_fob_for_sku(session, country, material_code)
+    except repo.CountryFobConflict as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
     if not fob:
         raise HTTPException(status_code=404, detail="FOB not resolved for this SKU")
     return fob
@@ -1236,7 +1302,7 @@ def patch_sku_fob(
     if not country:
         raise HTTPException(status_code=400, detail="countryCode is required")
     if "finalFobEur" not in body and "baseFobEur" not in body:
-        raise HTTPException(status_code=400, detail="finalFobEur is required")
+        raise HTTPException(status_code=400, detail="baseFobEur is required")
     if not repo.get_sku_by_material_code_any_status(session, material_code):
         raise HTTPException(status_code=404, detail="Material code not found")
 
@@ -1245,15 +1311,19 @@ def patch_sku_fob(
     pt_code = body.get("paymentTermCode")
     remark_provided = "remark" in body
     remark = clean_text(body.get("remark")) if remark_provided else None
-    result = repo.update_sku_fob_for_country(
-        session,
-        material_code,
-        country,
-        fob_val,
-        pt_code,
-        remark=remark,
-        update_remark=remark_provided,
-    )
+    try:
+        result = repo.update_sku_fob_for_country(
+            session,
+            material_code,
+            country,
+            fob_val,
+            pt_code,
+            remark=remark,
+            update_remark=remark_provided,
+        )
+    except ValueError as exc:
+        session.rollback()
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     if fob_val is None:
         session.commit()
         return {
@@ -1270,6 +1340,8 @@ def patch_sku_fob(
     return {
         "materialCode": result.material_code,
         "countryCode": result.country_code,
+        "baseFobEur": float(result.base_fob_eur) if result.base_fob_eur is not None else None,
+        "colourSurchargeEur": float(result.colour_surcharge_eur) if result.colour_surcharge_eur is not None else None,
         "finalFobEur": float(result.final_fob_eur) if result.final_fob_eur is not None else None,
         "paymentTermCode": result.payment_term_code,
         "fobSourceMode": result.fob_source_mode,
@@ -1303,7 +1375,7 @@ def patch_sku_fobs_bulk(
         if len(country) != 2:
             raise HTTPException(status_code=400, detail=f"updates[{index}] countryCode must be 2 letters")
         if "finalFobEur" not in update_body and "baseFobEur" not in update_body:
-            raise HTTPException(status_code=400, detail=f"updates[{index}] finalFobEur is required")
+            raise HTTPException(status_code=400, detail=f"updates[{index}] baseFobEur is required")
         if not repo.get_sku_by_material_code_any_status(session, material_code):
             missing_materials.append(material_code)
             continue
@@ -1325,13 +1397,17 @@ def patch_sku_fobs_bulk(
     cleared = 0
     unchanged = 0
     for update_body in normalized_updates:
-        result = repo.update_sku_fob_for_country(
-            session,
-            update_body["materialCode"],
-            update_body["countryCode"],
-            update_body["finalFobEur"],
-            update_body["paymentTermCode"],
-        )
+        try:
+            result = repo.update_sku_fob_for_country(
+                session,
+                update_body["materialCode"],
+                update_body["countryCode"],
+                update_body["finalFobEur"],
+                update_body["paymentTermCode"],
+            )
+        except ValueError as exc:
+            session.rollback()
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
         if result is None:
             unchanged += 1
         elif update_body["finalFobEur"] is None:
@@ -1494,7 +1570,9 @@ def create_material_sku(
     source_bom_template = clean_text(body.get("sourceBomTemplate")).upper()
     source_material_code = clean_text(body.get("sourceMaterialCode")).upper()
     automatic_fobs = bool(body.get("automaticFobs"))
-    colour_tier = clean_text(body.get("colourTier") or "single").lower()
+    colour_tier = clean_text(body.get("colourTier")).lower()
+    if not colour_tier:
+        raise HTTPException(status_code=400, detail="colourTier is required")
     if colour_tier not in {"single", "dual", "special"}:
         raise HTTPException(status_code=400, detail="colourTier must be single, dual, or special")
     lifecycle_status = clean_text(body.get("lifecycleStatus") or "active") or "active"
@@ -1601,6 +1679,9 @@ def create_material_sku(
         "rows": 0,
         "created": 0,
         "skippedNoBase": 0,
+        "skippedAmbiguous": 0,
+        "skippedMissingTier": 0,
+        "skippedMissingRule": 0,
         "details": [],
     }
     if automatic_fobs:
@@ -1627,20 +1708,24 @@ def create_material_sku(
         if len(country) != 2:
             raise HTTPException(status_code=400, detail=f"fobs[{index}] countryCode must be 2 letters")
         if "finalFobEur" not in fob_body and "baseFobEur" not in fob_body:
-            raise HTTPException(status_code=400, detail=f"fobs[{index}] finalFobEur is required")
+            raise HTTPException(status_code=400, detail=f"fobs[{index}] baseFobEur is required")
         fob_raw = fob_body.get("finalFobEur") if "finalFobEur" in fob_body else fob_body.get("baseFobEur")
         fob_value = _parse_fob_value(fob_raw)
         if fob_value is None:
             continue
-        repo.update_sku_fob_for_country(
-            session,
-            material_code,
-            country,
-            fob_value,
-            fob_body.get("paymentTermCode"),
-            remark=clean_text(fob_body.get("remark")) if "remark" in fob_body else None,
-            update_remark="remark" in fob_body,
-        )
+        try:
+            repo.update_sku_fob_for_country(
+                session,
+                material_code,
+                country,
+                fob_value,
+                fob_body.get("paymentTermCode"),
+                remark=clean_text(fob_body.get("remark")) if "remark" in fob_body else None,
+                update_remark="remark" in fob_body,
+            )
+        except ValueError as exc:
+            session.rollback()
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
         fobs_created += 1
     try:
         session.commit()
@@ -1726,8 +1811,18 @@ def get_bom_admin(
     _=Depends(require_min_role("editor")),
 ) -> dict:
     """Return BOM data with FOB per country, for the BOM admin panel."""
-    items, countries = repo.list_bom_with_fob(session, brand=brand, search=search, country_code=country)
-    return {"items": items, "countries": countries}
+    items, countries, fob_conflicts = repo.list_bom_with_fob(
+        session,
+        brand=brand,
+        search=search,
+        country_code=country,
+        include_conflicts=True,
+    )
+    return {
+        "items": items,
+        "countries": countries,
+        "fobConflicts": fob_conflicts,
+    }
 
 
 @router.get("/material-skus-admin")
@@ -2000,9 +2095,12 @@ def export_order_genius(
     include_hist = body.get("includeHistoricalWithQuantity", True)
     filters = _export_filter_params(body)
     quantities_only = _body_bool(body.get("quantitiesOnly", False))
-    buf = export_matrix(session, country, year, include_hist,
-                        **filters,
-                        quantities_only=quantities_only)
+    try:
+        buf = export_matrix(session, country, year, include_hist,
+                            **filters,
+                            quantities_only=quantities_only)
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
     from datetime import date as _date
     today = _date.today().strftime("%Y%m%d")
     suffix = _export_filename_suffix(filters)
@@ -2027,7 +2125,10 @@ def export_order_genius_pi(
     validate_country_access(session, user.name, user.role, country)
     year = body.get("year", 2026)
     filters = _export_filter_params(body)
-    buf = export_pi_matrix(session, country, year, **filters)
+    try:
+        buf = export_pi_matrix(session, country, year, **filters)
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
     from datetime import date as _date
     today = _date.today().strftime("%Y%m%d")
     suffix = _export_filename_suffix(filters)

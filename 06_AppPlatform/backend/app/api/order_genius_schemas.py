@@ -97,6 +97,7 @@ class SpecialColourSurchargeUpdate(BaseModel):
     brand: str = Field(min_length=1)
     modelName: str | None = None
     colourCode: str = Field(min_length=1)
+    colourTier: str = Field(default="special", min_length=1)
     colourName: str | None = None
     surchargeEur: float = Field(ge=0)
 

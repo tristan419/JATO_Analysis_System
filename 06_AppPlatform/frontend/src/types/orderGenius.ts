@@ -15,6 +15,19 @@ export interface MonthCell {
   rowVersion: number;
 }
 
+export interface FobConflict {
+  materialCode: string;
+  countryCode: string;
+  status: "conflict";
+  reason: string;
+  records: Array<{
+    paymentTermCode: string | null;
+    baseFobEur: number | null;
+    colourSurchargeEur: number | null;
+    finalFobEur: number;
+  }>;
+}
+
 export interface MaterialSkuMatrixRow {
   materialCode: string;
   bomTemplate?: string | null;
@@ -31,6 +44,7 @@ export interface MaterialSkuMatrixRow {
   editionTag?: string | null;
   powertrain: string | null;
   fobEur: number | null;
+  fobConflict?: FobConflict | null;
   lifecycleStatus: string;
   editable: boolean;
   displayStyle: string | null;
@@ -48,6 +62,7 @@ export interface MatrixResponse {
   year: number;
   rows: MaterialSkuMatrixRow[];
   totalRows: number;
+  fobConflicts?: FobConflict[];
 }
 
 export interface MatrixBatchResponse {
@@ -109,6 +124,7 @@ export interface SpecialColourSurchargeRule {
   brand: string;
   modelName: string | null;
   colourCode: string;
+  colourTier: "dual" | "special";
   colourName: string | null;
   surchargeEur: number;
   isActive: boolean;
@@ -211,7 +227,13 @@ export interface ColourHexRuleLookup {
 }
 
 export type ColourTierRepriceDetailStatus = "updated" | "unchanged" | "skipped";
-export type ColourTierRepriceSkipReason = "manual_fob" | "missing_single_base" | null;
+export type ColourTierRepriceSkipReason =
+  | "manual_fob"
+  | "missing_single_base"
+  | "ambiguous_single_base"
+  | "missing_colour_tier"
+  | "missing_colour_surcharge_rule"
+  | null;
 
 export interface ColourTierRepriceDetail {
   countryCode: string;
@@ -226,13 +248,16 @@ export interface ColourTierRepriceReport {
   materialCode: string;
   brand: string;
   colourCode: string;
-  colourTier: string;
-  surchargeEur: number;
+  colourTier: string | null;
+  surchargeEur: number | null;
   rows: number;
   updated: number;
   unchanged: number;
   skippedManual: number;
   skippedNoBase: number;
+  skippedAmbiguous: number;
+  skippedMissingTier: number;
+  skippedMissingRule: number;
   details: ColourTierRepriceDetail[];
 }
 

@@ -1975,17 +1975,20 @@ class SpecialColourSurchargeRule(TimestampMixin, Base):
     __table_args__ = (
         Index(
             "uq_ordering_special_colour_surcharge_active",
-            "brand", "model_name", "colour_code",
+            "brand", "model_name", "colour_code", "colour_tier",
             unique=True,
             postgresql_where=text("is_active = true AND model_name IS NOT NULL"),
         ),
         Index(
             "uq_ordering_special_colour_surcharge_global_active",
-            "brand", "colour_code",
+            "brand", "colour_code", "colour_tier",
             unique=True,
             postgresql_where=text("is_active = true AND model_name IS NULL"),
         ),
-        Index("ix_ordering_special_colour_surcharge_lookup", "brand", "colour_code"),
+        Index(
+            "ix_ordering_special_colour_surcharge_lookup",
+            "brand", "colour_code", "colour_tier",
+        ),
         {"schema": "ordering"},
     )
 
@@ -1995,6 +1998,9 @@ class SpecialColourSurchargeRule(TimestampMixin, Base):
     brand: Mapped[str] = mapped_column(Text, nullable=False)
     model_name: Mapped[str | None] = mapped_column(Text, nullable=True)
     colour_code: Mapped[str] = mapped_column(Text, nullable=False)
+    colour_tier: Mapped[str] = mapped_column(
+        Text, nullable=False, default="special", comment="dual | special"
+    )
     colour_name: Mapped[str | None] = mapped_column(Text, nullable=True)
     surcharge_eur: Mapped[float] = mapped_column(
         Numeric(12, 2), nullable=False, default=0

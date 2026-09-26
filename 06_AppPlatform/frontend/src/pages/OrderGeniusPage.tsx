@@ -57,6 +57,7 @@ import type {
   MaterialSkuMatrixRow,
   MaterialUploadPreview,
   MatrixResponse,
+  FobConflict,
   MonthCell,
   OrderGeniusOptions,
   PublishBaselineResponse,
@@ -92,6 +93,7 @@ type SpecialColourSurchargeDraft = {
   brand: string;
   modelName: string;
   colourCode: string;
+  colourTier: "dual" | "special";
   colourName: string;
   surchargeEur: string;
 };
@@ -100,6 +102,7 @@ const EMPTY_SPECIAL_COLOUR_SURCHARGE_DRAFT: SpecialColourSurchargeDraft = {
   brand: "OMODA",
   modelName: "",
   colourCode: "",
+  colourTier: "special",
   colourName: "",
   surchargeEur: "0",
 };
@@ -674,6 +677,7 @@ export function OrderGeniusPage() {
 
   const [options, setOptions] = useState<OrderGeniusOptions | null>(null);
   const [matrices, setMatrices] = useState<Record<string, MatrixResponse>>({});
+  const [matrixConflictNotice, setMatrixConflictNotice] = useState<FobConflict[]>([]);
   const [fobCountryCodes, setFobCountryCodes] = useState<string[] | null>(null);
   const [bomAdminCopyTargetCountry, setBomAdminCopyTargetCountry] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
@@ -875,6 +879,7 @@ export function OrderGeniusPage() {
     if (!primaryCountry) return;
     setLoading(true);
     setError("");
+    setMatrixConflictNotice([]);
     api
       .getOrderGeniusOptions({
         country: primaryCountry,
@@ -919,6 +924,9 @@ export function OrderGeniusPage() {
           if (matrix) next[country] = matrix;
         }
         setMatrices(next);
+        setMatrixConflictNotice(
+          Object.values(response.matrices).flatMap((matrix) => matrix.fobConflicts || []),
+        );
         if (Object.keys(next).length === 0) {
           const firstError = Object.values(response.errors)[0];
           if (firstError) setError(firstError);
@@ -2263,6 +2271,15 @@ export function OrderGeniusPage() {
           {error}
         </div>
       ) : null}
+      {matrixConflictNotice.length > 0 ? (
+        <div
+          className="alert"
+          role="status"
+          style={{ marginBottom: 16, color: "#92400e", background: "#fffbeb", borderColor: "#fbbf24" }}
+        >
+          {matrixConflictNotice.length} 个物料／国家存在待确认 FOB 基准；正常行仍可查看。请在 BOM Admin 确认模板＋国家 Single 基准后再重算。
+        </div>
+      ) : null}
 
       <div className="deck-control-tabs order-genius-control-tabs" role="tablist" aria-label="Order Genius control sections">
         {orderGeniusControlTabs.map((tab) => (
@@ -3055,6 +3072,9 @@ type BomCopyDraftSku = {
 };
 
 type BomDraftFobEntry = {
+  status?: "conflict" | null;
+  reason?: string | null;
+  records?: Array<Record<string, unknown>>;
   baseFobEur?: number | null;
   uploadedFobEur?: number | null;
   finalFobEur?: number | null;
@@ -3343,6 +3363,8 @@ type BomFobEditor = {
 type BomFobSaveResponse = {
   materialCode: string;
   countryCode: string;
+  baseFobEur: number | null;
+  colourSurchargeEur: number | null;
   finalFobEur: number | null;
   paymentTermCode?: string | null;
   fobSourceMode?: string | null;
@@ -3496,6 +3518,7 @@ export function BomAdminPanel({
   const [savingColourSurcharges, setSavingColourSurcharges] = useState(false);
   const [specialColourSurchargeRules, setSpecialColourSurchargeRules] = useState<SpecialColourSurchargeRule[]>([]);
   const [specialColourSurchargeDraft, setSpecialColourSurchargeDraft] = useState<SpecialColourSurchargeDraft>(EMPTY_SPECIAL_COLOUR_SURCHARGE_DRAFT);
+  const [specialColourSurchargeExpanded, setSpecialColourSurchargeExpanded] = useState(false);
   const [specialColourSurchargeStatus, setSpecialColourSurchargeStatus] = useState("");
   const [savingSpecialColourSurcharge, setSavingSpecialColourSurcharge] = useState(false);
   const [colourHexRules, setColourHexRules] = useState<ColourHexRule[]>([]);
@@ -3640,30 +3663,6 @@ export function BomAdminPanel({
     return colourHexRules.filter((rule) => rule.status === colourRuleDetailsStatus);
   }, [colourHexRules, colourRuleDetailsStatus]);
 
-  const getColourSurchargeAmount = (brand: string, colourType: string): number => {
-    const key = colourSurchargeKey(brand, colourType);
-    const rule = colourSurchargeRules.find(
-      (item) => colourSurchargeKey(item.brand, item.colourType) === key,
-    );
-    return rule ? Number(rule.surchargeEur) : DEFAULT_COLOUR_SURCHARGES[key] ?? 0;
-  };
-
-  const resolveSpecialColourSurcharge = (sku: any): { amount: number; source: string } | null => {
-    const brand = String(sku?.brand || "").trim().toUpperCase();
-    const model = String(sku?.modelName || "").trim().toUpperCase();
-    const code = String(sku?.colourCode || "").trim().toUpperCase();
-    if (!brand || !code) return null;
-    const matches = specialColourSurchargeRules.filter((rule) => (
-      String(rule.brand || "").trim().toUpperCase() === brand
-      && String(rule.colourCode || "").trim().toUpperCase() === code
-    ));
-    const modelRule = matches.find((rule) => String(rule.modelName || "").trim().toUpperCase() === model);
-    if (modelRule) return { amount: Number(modelRule.surchargeEur), source: `${brand} ${model} + ${code}` };
-    const brandRule = matches.find((rule) => !String(rule.modelName || "").trim());
-    if (brandRule) return { amount: Number(brandRule.surchargeEur), source: `${brand} + ${code}` };
-    return null;
-  };
-
   const formatBomFobTooltip = (
     countryCode: string,
     baseFob: number | null | undefined,
@@ -3687,7 +3686,7 @@ export function BomAdminPanel({
     fobSourceMode?: string | null,
     fobSourceCountryCode?: string | null,
   ): string => {
-    if (fobSourceMode === "copied_from_country") {
+    if (fobSourceMode === "copied_from_country" || (fobSourceMode === "template_base" && fobSourceCountryCode)) {
       return `copied from ${fobSourceCountryCode || "source country"}`;
     }
     if (fobSourceMode === "manual_country_adjust") return "manual country adjustment";
@@ -3837,6 +3836,12 @@ export function BomAdminPanel({
         return Object.keys(next).length === Object.keys(current).length ? current : next;
       });
       const nextCountries = res.countries || [];
+      const conflictCount = Array.isArray(res.fobConflicts) ? res.fobConflicts.length : 0;
+      if (conflictCount > 0) {
+        setBomAdminNotice(
+          `${conflictCount} 个物料／国家的 FOB 基准待确认；正常行仍可编辑，请先在 BOM Admin 保存唯一模板＋国家 Single 基准。`,
+        );
+      }
       const nextActiveFobCountries = res.activeFobCountries || nextCountries;
       activeFobCountriesRef.current = nextActiveFobCountries;
       setCountries(nextCountries);
@@ -4316,7 +4321,7 @@ export function BomAdminPanel({
       }
       const responses: BomFobSaveResponse[] = [];
       for (const mc of editFob.materialCodes) {
-        responses.push(await api.updateSkuFob(mc, { countryCode: editFob.countryCode, finalFobEur: editFob.fob, remark }) as BomFobSaveResponse);
+        responses.push(await api.updateSkuFob(mc, { countryCode: editFob.countryCode, baseFobEur: editFob.fob, remark }) as BomFobSaveResponse);
       }
       const responseByMaterial = new Map(
         responses.map((response) => [bomMaterialKey(response.materialCode), response]),
@@ -4326,6 +4331,8 @@ export function BomAdminPanel({
         return {
           materialCode,
           countryCode: editFob.countryCode,
+          baseFobEur: response?.baseFobEur ?? nextFob,
+          colourSurchargeEur: response?.colourSurchargeEur ?? null,
           finalFobEur: response?.finalFobEur ?? nextFob,
           paymentTermCode: response?.paymentTermCode ?? null,
           fobSourceMode: response?.fobSourceMode ?? (didChangeFob ? "manual_edit" : editFob.fobSourceMode ?? null),
@@ -4757,17 +4764,16 @@ export function BomAdminPanel({
 
     setBulkFobSavingKey(bomKey);
     try {
+      const savedUpdates: BomFobPatch[] = [];
       for (const update of updates) {
-        await api.updateSkuFob(update.materialCode, {
+        const saved: BomFobSaveResponse = await api.updateSkuFob(update.materialCode, {
           countryCode: update.countryCode,
-          finalFobEur: update.finalFobEur,
+          baseFobEur: update.finalFobEur,
           paymentTermCode: update.paymentTermCode ?? undefined,
         });
+        savedUpdates.push(saved);
       }
-      patchBomFobs(updates.map((update) => ({
-        ...update,
-        fobSourceMode: "manual_country_adjust",
-      })));
+      patchBomFobs(savedUpdates);
       if (quickDelta != null) {
         updateBulkFobEditor(bomKey, allSkus, (current) => ({
           ...current,
@@ -4968,7 +4974,7 @@ export function BomAdminPanel({
             if (baseFob == null) continue;
             await api.updateSkuFob(materialCode, {
               countryCode,
-              finalFobEur: Number(baseFob),
+              baseFobEur: Number(baseFob),
               paymentTermCode: fob?.paymentTermCode ?? undefined,
               remark: fob?.remark ?? null,
             });
@@ -5094,6 +5100,7 @@ export function BomAdminPanel({
     const brand = specialColourSurchargeDraft.brand.trim().toUpperCase();
     const colourCode = specialColourSurchargeDraft.colourCode.trim().toUpperCase();
     const modelName = specialColourSurchargeDraft.modelName.trim();
+    const colourTier = specialColourSurchargeDraft.colourTier;
     const surchargeEur = Number(specialColourSurchargeDraft.surchargeEur.trim());
     if (!brand || !colourCode || !Number.isFinite(surchargeEur) || surchargeEur < 0) {
       setSpecialColourSurchargeStatus("Brand, colour code and a non-negative surcharge are required.");
@@ -5106,6 +5113,7 @@ export function BomAdminPanel({
         brand,
         modelName: modelName || null,
         colourCode,
+        colourTier,
         colourName: specialColourSurchargeDraft.colourName.trim() || null,
         surchargeEur,
       });
@@ -5431,14 +5439,22 @@ export function BomAdminPanel({
           editionTag: addColourEditor.editionTag,
         });
       }
-      const automaticFobs = created?.automaticFobs as { created?: number; skippedNoBase?: number } | undefined;
+      const automaticFobs = created?.automaticFobs as { created?: number; skippedNoBase?: number; skippedAmbiguous?: number; skippedMissingTier?: number; skippedMissingRule?: number } | undefined;
       const copiedFobs = Number(automaticFobs?.created || 0);
       const skippedFobs = Number(automaticFobs?.skippedNoBase || 0);
+      const missingTierFobs = Number(automaticFobs?.skippedMissingTier || 0);
+      const missingRuleFobs = Number(automaticFobs?.skippedMissingRule || 0);
+      const skippedReason = [
+        automaticFobs?.skippedAmbiguous ? `${automaticFobs.skippedAmbiguous} countries have conflicting bases` : "",
+        skippedFobs > 0 ? `${skippedFobs} countries lack a Single base` : "",
+        missingTierFobs > 0 ? `${missingTierFobs} countries lack a colour tier` : "",
+        missingRuleFobs > 0 ? `${missingRuleFobs} countries lack a surcharge rule` : "",
+      ].filter(Boolean).join("; ");
       setBomAdminError("");
       setBomAdminNotice(
         copiedFobs > 0
-          ? `Created ${materialCode}; initialized ${copiedFobs} automatic FOB values${skippedFobs > 0 ? `; ${skippedFobs} countries lack a Single base.` : ""}.`
-          : `Created ${materialCode}; no automatic FOB was created${skippedFobs > 0 ? ` because ${skippedFobs} countries lack a Single base.` : "."}`,
+          ? `Created ${materialCode}; initialized ${copiedFobs} automatic FOB values${skippedReason ? `; ${skippedReason}.` : ""}`
+          : `Created ${materialCode}; no automatic FOB was created${skippedReason ? ` because ${skippedReason}.` : "."}`,
       );
       setAddColourEditor(null);
       if (copiedFobs > 0) {
@@ -5727,14 +5743,11 @@ export function BomAdminPanel({
     const colourCode = String(s.colourCode || "").trim().toUpperCase();
     const colourName = String(s.colour || "").trim();
     const canEditSwatchRule = Boolean(brand && colourCode && colourName);
-    const specialSurcharge = effectiveTier === "special" ? resolveSpecialColourSurcharge(s) : null;
-    const surchargeAmount = specialSurcharge?.amount ?? getColourSurchargeAmount(brand, effectiveTier);
-    const surchargeSource = specialSurcharge?.source ?? `${brand} ${effectiveTier} default`;
-    const surchargeLabel = effectiveTier === "dual"
-      ? `Dual +${formatSurchargeDraft(getColourSurchargeAmount(brand, "dual"))}€`
-      : effectiveTier === "special"
-        ? `Special +${formatSurchargeDraft(surchargeAmount)}€`
-        : "Single";
+    const pricing: { amount?: number | null; source?: string | null; status?: string } | undefined = s.colourPricing;
+    const surchargeSource = pricing?.source ?? "Pricing configuration missing";
+    const surchargeLabel = pricing?.amount == null
+      ? "Pricing configuration missing"
+      : `${effectiveTier} · rule +${formatSurchargeDraft(pricing.amount)}€ (see country FOB for saved price)`;
 
     return (
       <span key={s.materialCode}
@@ -6317,36 +6330,53 @@ export function BomAdminPanel({
                   ) : null}
                 </form>
                 <form className="bom-admin-tool-tile" onSubmit={handleSaveSpecialColourSurcharge}>
-                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 7 }}>
-                    <span style={{ fontSize: 11, fontWeight: 800, color: "#334155" }}>Special Colour Overrides</span>
-                    <button className="btn btn-sm btn-primary" type="submit" disabled={savingSpecialColourSurcharge}>
-                      {savingSpecialColourSurcharge ? "Saving..." : "Save"}
+                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: specialColourSurchargeExpanded ? 7 : 0 }}>
+                    <button
+                      type="button"
+                      className="btn btn-sm btn-ghost"
+                      aria-expanded={specialColourSurchargeExpanded}
+                      onClick={() => setSpecialColourSurchargeExpanded((expanded) => !expanded)}
+                      style={{ padding: 0, fontSize: 11, fontWeight: 800, color: "#334155" }}
+                    >
+                      {specialColourSurchargeExpanded ? "▾" : "▸"} Custom colour surcharge ({specialColourSurchargeRules.length})
                     </button>
+                    {specialColourSurchargeExpanded ? (
+                      <button className="btn btn-sm btn-primary" type="submit" disabled={savingSpecialColourSurcharge}>
+                        {savingSpecialColourSurcharge ? "Saving..." : "Save"}
+                      </button>
+                    ) : null}
                   </div>
-                  <div style={{ display: "grid", gridTemplateColumns: "72px 1fr 70px 1fr 64px", gap: 5, alignItems: "center" }}>
-                    <select value={specialColourSurchargeDraft.brand} onChange={(e) => setSpecialColourSurchargeDraft((prev) => ({ ...prev, brand: e.target.value }))} style={{ fontSize: 10 }}>
-                      {BOM_ADMIN_SURCHARGE_BRANDS.map((brand) => <option key={brand}>{brand}</option>)}
-                    </select>
-                    <input type="text" placeholder="Model (blank = brand)" value={specialColourSurchargeDraft.modelName} onChange={(e) => setSpecialColourSurchargeDraft((prev) => ({ ...prev, modelName: e.target.value }))} style={{ fontSize: 10 }} />
-                    <input type="text" placeholder="Code" value={specialColourSurchargeDraft.colourCode} onChange={(e) => setSpecialColourSurchargeDraft((prev) => ({ ...prev, colourCode: e.target.value.toUpperCase() }))} style={{ fontSize: 10, textTransform: "uppercase" }} />
-                    <input type="text" placeholder="Colour name (optional)" value={specialColourSurchargeDraft.colourName} onChange={(e) => setSpecialColourSurchargeDraft((prev) => ({ ...prev, colourName: e.target.value }))} style={{ fontSize: 10 }} />
-                    <input type="number" min={0} step={1} placeholder="EUR" value={specialColourSurchargeDraft.surchargeEur} onChange={(e) => setSpecialColourSurchargeDraft((prev) => ({ ...prev, surchargeEur: e.target.value }))} style={{ fontSize: 10 }} />
-                  </div>
-                  <div style={{ marginTop: 6, fontSize: 9, color: "#64748b" }}>Priority: model + code → brand + code → brand Special. 0 EUR explicitly waives the fallback.</div>
-                  {specialColourSurchargeRules.length > 0 ? (
-                    <div style={{ display: "grid", gap: 3, marginTop: 7, maxHeight: 94, overflowY: "auto" }}>
-                      {specialColourSurchargeRules.map((rule) => (
-                        <button key={rule.specialColourSurchargeRuleId} type="button" className="btn btn-sm btn-ghost" onClick={() => setSpecialColourSurchargeDraft({ brand: rule.brand, modelName: rule.modelName || "", colourCode: rule.colourCode, colourName: rule.colourName || "", surchargeEur: String(rule.surchargeEur) })} style={{ display: "flex", justifyContent: "space-between", gap: 8, padding: "3px 5px", fontSize: 9, textAlign: "left" }}>
-                          <span>{rule.brand}{rule.modelName ? ` · ${rule.modelName}` : ""} · {rule.colourCode}{rule.colourName ? ` · ${rule.colourName}` : ""}</span>
-                          <strong>+{rule.surchargeEur} EUR</strong>
-                        </button>
-                      ))}
-                    </div>
-                  ) : null}
-                  {specialColourSurchargeStatus ? (
-                    <div style={{ marginTop: 7, fontSize: 11, color: specialColourSurchargeStatus.startsWith("Saved") ? "#0f766e" : "#b45309" }}>
-                      {specialColourSurchargeStatus}
-                    </div>
+                  {specialColourSurchargeExpanded ? (
+                    <>
+                      <div style={{ display: "grid", gridTemplateColumns: "72px 1fr 70px 82px 1fr 64px", gap: 5, alignItems: "center" }}>
+                        <select value={specialColourSurchargeDraft.brand} onChange={(e) => setSpecialColourSurchargeDraft((prev) => ({ ...prev, brand: e.target.value }))} style={{ fontSize: 10 }}>
+                          {BOM_ADMIN_SURCHARGE_BRANDS.map((brand) => <option key={brand}>{brand}</option>)}
+                        </select>
+                        <input type="text" placeholder="Model (blank = brand)" value={specialColourSurchargeDraft.modelName} onChange={(e) => setSpecialColourSurchargeDraft((prev) => ({ ...prev, modelName: e.target.value }))} style={{ fontSize: 10 }} />
+                        <input type="text" placeholder="Code" value={specialColourSurchargeDraft.colourCode} onChange={(e) => setSpecialColourSurchargeDraft((prev) => ({ ...prev, colourCode: e.target.value.toUpperCase() }))} style={{ fontSize: 10, textTransform: "uppercase" }} />
+                        <select value={specialColourSurchargeDraft.colourTier} onChange={(e) => setSpecialColourSurchargeDraft((prev) => ({ ...prev, colourTier: e.target.value as "dual" | "special" }))} style={{ fontSize: 10 }}>
+                          {BOM_ADMIN_SURCHARGE_TYPES.map((type) => <option key={type.value} value={type.value}>{type.label}</option>)}
+                        </select>
+                        <input type="text" placeholder="Colour name (optional)" value={specialColourSurchargeDraft.colourName} onChange={(e) => setSpecialColourSurchargeDraft((prev) => ({ ...prev, colourName: e.target.value }))} style={{ fontSize: 10 }} />
+                        <input type="number" min={0} step={1} placeholder="EUR" value={specialColourSurchargeDraft.surchargeEur} onChange={(e) => setSpecialColourSurchargeDraft((prev) => ({ ...prev, surchargeEur: e.target.value }))} style={{ fontSize: 10 }} />
+                      </div>
+                      <div style={{ marginTop: 6, fontSize: 9, color: "#64748b" }}>Same tier only: model + code → brand + code → brand tier default. Single is always +0; 0 EUR explicitly waives the fallback.</div>
+                      {specialColourSurchargeRules.length > 0 ? (
+                        <div style={{ display: "grid", gap: 3, marginTop: 7, maxHeight: 94, overflowY: "auto" }}>
+                          {specialColourSurchargeRules.map((rule) => (
+                            <button key={rule.specialColourSurchargeRuleId} type="button" className="btn btn-sm btn-ghost" onClick={() => setSpecialColourSurchargeDraft({ brand: rule.brand, modelName: rule.modelName || "", colourCode: rule.colourCode, colourTier: rule.colourTier, colourName: rule.colourName || "", surchargeEur: String(rule.surchargeEur) })} style={{ display: "flex", justifyContent: "space-between", gap: 8, padding: "3px 5px", fontSize: 9, textAlign: "left" }}>
+                              <span>{rule.brand}{rule.modelName ? ` · ${rule.modelName}` : ""} · {rule.colourCode} · {rule.colourTier}{rule.colourName ? ` · ${rule.colourName}` : ""}</span>
+                              <strong>+{rule.surchargeEur} EUR</strong>
+                            </button>
+                          ))}
+                        </div>
+                      ) : null}
+                      {specialColourSurchargeStatus ? (
+                        <div style={{ marginTop: 7, fontSize: 11, color: specialColourSurchargeStatus.startsWith("Saved") ? "#0f766e" : "#b45309" }}>
+                          {specialColourSurchargeStatus}
+                        </div>
+                      ) : null}
+                    </>
                   ) : null}
                 </form>
                 <div className="bom-admin-tool-tile" style={{ minHeight: 124 }}>
@@ -6449,8 +6479,8 @@ export function BomAdminPanel({
         <div className="bom-finance-modal-backdrop" onClick={() => setColourTierReview(null)}>
           <div className="bom-colour-code-edit-modal-shell" onClick={(event) => event.stopPropagation()}>
             <section className="bom-colour-code-edit-card" role="dialog" aria-modal="true" aria-label="Colour tier price review">
-              <div className="bom-colour-code-edit-head"><div><span className="bom-finance-eyebrow">COLOUR TIER · PRICE REVIEW</span><h4>{colourTierReview.report.colourCode || colourTierReview.report.materialCode}: {colourTierReview.previousTier} → {colourTierReview.nextTier}</h4><p>{colourTierReview.report.brand} / {colourTierReview.nextTier} / +{colourTierReview.report.surchargeEur.toLocaleString()} EUR</p></div></div>
-              <div style={{ fontSize: 11, fontWeight: 700 }}>{colourTierReview.report.rows} countries scanned · {colourTierReview.report.updated} updated · {colourTierReview.report.skippedManual} manual FOB skipped · {colourTierReview.report.skippedNoBase} missing Single base</div>
+              <div className="bom-colour-code-edit-head"><div><span className="bom-finance-eyebrow">COLOUR TIER · PRICE REVIEW</span><h4>{colourTierReview.report.colourCode || colourTierReview.report.materialCode}: {colourTierReview.previousTier} → {colourTierReview.nextTier}</h4><p>{colourTierReview.report.brand} / {colourTierReview.nextTier} / {colourTierReview.report.surchargeEur == null ? "rule unavailable" : `+${colourTierReview.report.surchargeEur.toLocaleString()} EUR`}</p></div></div>
+              <div style={{ fontSize: 11, fontWeight: 700 }}>{colourTierReview.report.rows} countries scanned · {colourTierReview.report.updated} updated · {colourTierReview.report.skippedManual} manual FOB skipped · {colourTierReview.report.skippedNoBase} missing Single base · {colourTierReview.report.skippedAmbiguous} ambiguous base · {colourTierReview.report.skippedMissingTier} missing tier · {colourTierReview.report.skippedMissingRule} missing rule</div>
               <div style={{ maxHeight: "48vh", overflowY: "auto", border: "1px solid #e2e8f0" }}>
                 {colourTierReview.report.details.map((detail) => <div key={detail.countryCode} style={{ padding: 7, borderBottom: "1px solid #e2e8f0", fontSize: 11 }}><strong>{detail.countryCode}</strong> · {detail.oldFinalFobEur?.toLocaleString() ?? "-"} → {detail.newFinalFobEur?.toLocaleString() ?? "-"} · surcharge {detail.colourSurchargeEur?.toLocaleString() ?? "-"}{detail.reason ? ` · ${detail.reason}` : ""}</div>)}
               </div>
@@ -7329,8 +7359,9 @@ export function BomAdminPanel({
                               </td>
                               {sortedCountries.map(c => {
                                 const fob = ref.fobByCountry?.[c];
+                                const hasConflict = fob?.status === "conflict";
                                 const baseFob = getDraftBaseFob(fob);
-                                const hasFob = fob != null && baseFob != null && baseFob > 0;
+                                const hasFob = !hasConflict && fob != null && baseFob != null && baseFob > 0;
                                 const hasSurcharge = fob?.colourSurchargeEur && fob.colourSurchargeEur > 0;
                                 const sourceMarker = getBomFobSourceMarker(fob?.fobSourceMode);
                                 const countryRemark = getBomCountryFobRemark(allSkus, c);
@@ -7340,8 +7371,12 @@ export function BomAdminPanel({
                                   : [];
                                 const hasFinance = financeCountries.includes(c);
                                 return (
-                                  <td key={c} className="bom-fob-price-cell" title={formatBomFobTooltip(c, baseFob, fob?.colourSurchargeEur, fob?.fobSourceMode, fob?.fobSourceCountryCode, countryRemark)} style={{ width: BOM_ADMIN_COUNTRY_COLUMN_WIDTH, minWidth: BOM_ADMIN_COUNTRY_COLUMN_WIDTH, textAlign: "right", cursor: "pointer", padding: "2px 4px" }}
+                                  <td key={c} className="bom-fob-price-cell" title={hasConflict ? "FOB 基准待确认：付款条件记录存在不同价格，先在 BOM Admin 保存模板＋国家 Single 基准" : formatBomFobTooltip(c, baseFob, fob?.colourSurchargeEur, fob?.fobSourceMode, fob?.fobSourceCountryCode, countryRemark)} style={{ width: BOM_ADMIN_COUNTRY_COLUMN_WIDTH, minWidth: BOM_ADMIN_COUNTRY_COLUMN_WIDTH, textAlign: "right", cursor: hasConflict ? "not-allowed" : "pointer", padding: "2px 4px" }}
                                     onClick={() => {
+                                      if (hasConflict) {
+                                        setBomAdminError(`${bomTemplate} / ${c} 的 FOB 基准待确认；请先保存唯一 Single 基准。`);
+                                        return;
+                                      }
                                       if (c === "NL") {
                                         void openFinanceQuickCard({
                                           countryCode: c,
@@ -7366,8 +7401,8 @@ export function BomAdminPanel({
                                         fobSourceCountryCode: fob?.fobSourceCountryCode ?? null,
                                       });
                                     }}>
-                                    <span className="bom-fob-price-value" style={{ color: hasFob ? "#0f766e" : "#cbd5e1", fontWeight: hasFob ? 600 : 400 }}>
-                                      {hasFob ? baseFob!.toLocaleString() : "-"}
+                                    <span className="bom-fob-price-value" style={{ color: hasConflict ? "#b45309" : hasFob ? "#0f766e" : "#cbd5e1", fontWeight: hasFob || hasConflict ? 600 : 400 }}>
+                                      {hasConflict ? "?" : hasFob ? baseFob!.toLocaleString() : "-"}
                                       {hasSurcharge ? <sup style={{ color: '#d97706', fontSize: 9 }}> +{fob.colourSurchargeEur}</sup> : null}
                                       {hasFinance ? (
                                         <sup className="bom-finance-source-mark" title={`${c} finance / CBU maintained`}>

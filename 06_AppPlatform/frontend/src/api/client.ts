@@ -5188,7 +5188,7 @@ export const api = {
       "/order-genius/special-colour-surcharges",
     ),
 
-  updateOrderGeniusSpecialColourSurcharge: (body: { brand: string; modelName?: string | null; colourCode: string; colourName?: string | null; surchargeEur: number }) =>
+  updateOrderGeniusSpecialColourSurcharge: (body: { brand: string; modelName?: string | null; colourCode: string; colourTier: "dual" | "special"; colourName?: string | null; surchargeEur: number }) =>
     request<SpecialColourSurchargeRule & { reprice?: Record<string, number | string> }>(
       "/order-genius/special-colour-surcharges",
       { method: "PATCH", body: JSON.stringify(body) },
@@ -5425,13 +5425,18 @@ export const api = {
   // BOM Admin
   getBomAdmin: (params?: { brand?: string; search?: string; country?: string }) => {
     const qs = params ? new URLSearchParams(Object.entries(params).filter(([_,v]) => v != null) as any).toString() : "";
-    return request<{ items: any[]; countries: string[]; activeFobCountries?: string[] }>("/order-genius/bom-admin" + (qs ? "?" + qs : ""));
+    return request<{
+      items: any[];
+      countries: string[];
+      activeFobCountries?: string[];
+      fobConflicts?: Array<Record<string, unknown>>;
+    }>("/order-genius/bom-admin" + (qs ? "?" + qs : ""));
   },
 
   updateSkuLifecycle: (materialCode: string, body: { lifecycleStatus: string; effectiveFrom?: string; effectiveTo?: string; rowVersion: number }) =>
     request<any>(`/order-genius/material-skus/${encodeURIComponent(materialCode)}/lifecycle`, { method: "PATCH", body: JSON.stringify(body) }),
 
-  updateSkuFob: (materialCode: string, body: { countryCode: string; finalFobEur?: number | null; paymentTermCode?: string; remark?: string | null }) =>
+  updateSkuFob: (materialCode: string, body: { countryCode: string; baseFobEur?: number | null; finalFobEur?: number | null; paymentTermCode?: string; remark?: string | null }) =>
     request<any>(`/order-genius/material-skus/${encodeURIComponent(materialCode)}/fob`, { method: "PATCH", body: JSON.stringify(body) }),
 
   updateBomTemplateFob: (body: { bomTemplate: string; materialCodes: string[]; countryCode: string; baseFobEur: number | null; remark?: string | null }) =>
@@ -5479,7 +5484,7 @@ export const api = {
     ),
 
   adjustCountryFobs: (body: { countryCode: string; deltaEur: number }) =>
-    request<{ countryCode: string; deltaEur: number; rows: number; adjusted: number; skippedNegative: number; unchanged: number }>(
+    request<{ countryCode: string; deltaEur: number; rows: number; adjusted: number; skippedNegative: number; unchanged: number; skippedNoBase: number; skippedAmbiguous: number; skippedMissingTier: number; skippedMissingRule: number }>(
       "/order-genius/countries/adjust-fobs",
       { method: "POST", body: JSON.stringify(body) },
     ),
@@ -5487,7 +5492,7 @@ export const api = {
   createPaymentTerm: (body: { countryCode: string; countryName: string; paymentTermCode: string; paymentMethod: string; lcDays: number }) =>
     request<any>("/order-genius/payment-terms/countries", { method: "POST", body: JSON.stringify(body) }),
 
-  createMaterialSku: (body: { materialCode: string; brand?: string; modelName?: string; version?: string; colour?: string; colourCode?: string; colourHex?: string | null; colourType?: string; colourTier?: string; powertrain?: string; bomTemplate?: string; sourceBomTemplate?: string; sourceMaterialCode?: string; automaticFobs?: boolean; interiorColorName?: string | null; editionTag?: string | null; lifecycleStatus?: string; effectiveFrom?: string | null; effectiveTo?: string | null; remark?: string; fobs?: { countryCode: string; finalFobEur: number; paymentTermCode?: string | null; remark?: string | null }[] }) =>
+  createMaterialSku: (body: { materialCode: string; brand?: string; modelName?: string; version?: string; colour?: string; colourCode?: string; colourHex?: string | null; colourType?: string; colourTier?: string; powertrain?: string; bomTemplate?: string; sourceBomTemplate?: string; sourceMaterialCode?: string; automaticFobs?: boolean; interiorColorName?: string | null; editionTag?: string | null; lifecycleStatus?: string; effectiveFrom?: string | null; effectiveTo?: string | null; remark?: string; fobs?: { countryCode: string; baseFobEur?: number; finalFobEur?: number; paymentTermCode?: string | null; remark?: string | null }[] }) =>
     request<any>("/order-genius/material-skus", { method: "POST", body: JSON.stringify(body) }),
 
   syncBomTemplateFobs: (body: { bomTemplate: string; materialCodes?: string[]; repriceExistingColourSurcharges?: boolean }) =>
