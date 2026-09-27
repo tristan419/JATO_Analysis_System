@@ -1846,7 +1846,11 @@ class MaterialSkuMaster(TimestampMixin, Base):
     exterior_color_type: Mapped[str] = mapped_column(Text, nullable=False)
     colour_hex: Mapped[str | None] = mapped_column(Text, nullable=True)
     colour_code_confirmed: Mapped[bool] = mapped_column(Boolean, default=True)
-    colour_tier: Mapped[str] = mapped_column(Text, default="single", comment="single | dual | special")
+    colour_tier: Mapped[str] = mapped_column(
+        Text,
+        nullable=False,
+        comment="Explicitly selected single | dual | special",
+    )
     interior_color_name: Mapped[str | None] = mapped_column(Text, nullable=True)
     interior_colour_code: Mapped[str | None] = mapped_column(Text, nullable=True)
     interior_package: Mapped[str | None] = mapped_column(Text, nullable=True)
