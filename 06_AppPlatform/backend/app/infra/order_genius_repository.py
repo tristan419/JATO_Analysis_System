@@ -1359,7 +1359,7 @@ def list_bom_with_fob(
         payloads.append({
             "materialCode": s.material_code,
             "brand": resolve_material_brand(s.brand, s.model_name, s.bom_template),
-            "modelCode": s.model_code or "",
+            "modelCode": getattr(s, "model_code", None) or "",
             "modelName": normalize_brand_text(s.model_name),
             "powertrain": _extract_canonical_powertrain(s),
             "version": s.version,
