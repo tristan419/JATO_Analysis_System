@@ -189,16 +189,34 @@ export interface ColourHexRulePreviewItem {
   newColourHex: string;
 }
 
+export interface ColourHexRulePreviewRule {
+  brand: string;
+  colourCode: string;
+  colourName: string;
+  colourHex: string;
+  source: "existing_sku" | "generated_from_name";
+  skuCount: number;
+  hasNameConflict: boolean;
+  hasSwatchConflict: boolean;
+  nameOptions: ColourNameOption[];
+}
+
 export interface ColourHexRulePreview {
+  rules: ColourHexRulePreviewRule[];
   items: ColourHexRulePreviewItem[];
   total: number;
   ruleCount: number;
+  generatedRuleCount: number;
+  unresolvedRuleCount: number;
+  unresolvedConflictCount: number;
   fingerprint: string;
 }
 
 export interface ColourHexRuleApplyResult {
   updated: number;
   unchanged: number;
+  rulesCreated: number;
+  generatedRules: number;
   conflicts: number;
   missingRules: number;
   materialCodes: string[];
@@ -212,7 +230,7 @@ export interface ColourHexRuleLookup {
   status: ColourHexRuleStatus | "none";
   colourName: string | null;
   colourHex: string | null;
-  source: "brand_code_rule" | "name_candidate" | "name_candidates" | "none";
+  source: "persistent_rule" | "brand_code_rule" | "generated_from_name" | "name_candidate" | "name_candidates" | "none";
   hasNameConflict: boolean;
   hasSwatchConflict: boolean;
   nameCandidates: Array<{
@@ -265,6 +283,84 @@ export interface ColourTierUpdateResult {
   materialCode: string;
   colourTier: string;
   reprice: ColourTierRepriceReport;
+}
+
+export type ColourSurchargeRepriceCategory =
+  | "auto_reprice"
+  | "already_correct"
+  | "missing_base"
+  | "ambiguous_base"
+  | "explicit_final"
+  | "missing_tier"
+  | "missing_rule"
+  | "not_applicable";
+
+export interface ColourSurchargeRepriceItem {
+  materialCode: string;
+  brand: string;
+  modelName: string | null;
+  version: string | null;
+  bomTemplate: string | null;
+  colourCode: string;
+  colourName: string | null;
+  colourTier: string | null;
+  countryCode: string;
+  paymentTermCode: string | null;
+  currentBaseFobEur: number | null;
+  currentColourSurchargeEur: number | null;
+  currentFinalFobEur: number | null;
+  currentSourceMode: string | null;
+  currentUploadedFobEur: number | null;
+  category: ColourSurchargeRepriceCategory;
+  reason: string | null;
+  trustedSingleBaseFobEur?: number | null;
+  surchargeEur?: number | null;
+  expectedFinalFobEur?: number | null;
+  surchargeRuleStatus?: string;
+  surchargeRuleSource?: string;
+  singleBaseCandidates?: number[];
+}
+
+export interface ColourSurchargeRepriceSummary {
+  rows: number;
+  autoReprice: number;
+  alreadyCorrect: number;
+  missingBase: number;
+  ambiguousBase: number;
+  explicitFinal: number;
+  missingTier: number;
+  missingRule: number;
+  notApplicable: number;
+}
+
+export interface ColourSurchargeRepriceAudit {
+  filters: {
+    materialCodes: string[];
+    countryCode: string | null;
+  };
+  fingerprint: string;
+  summary: ColourSurchargeRepriceSummary;
+  items: ColourSurchargeRepriceItem[];
+}
+
+export interface ColourSurchargeRepriceApplyResult {
+  previewFingerprint: string;
+  totals: {
+    requested: number;
+    updated: number;
+    unchanged: number;
+    skipped: number;
+  };
+  details: Array<{
+    materialCode: string;
+    countryCode: string;
+    updated: number;
+    skippedManual: number;
+    skippedNoBase: number;
+    skippedAmbiguous: number;
+    skippedMissingTier: number;
+    skippedMissingRule: number;
+  }>;
 }
 
 export interface CountryMaterialFinanceRow {

@@ -1088,6 +1088,28 @@ def test_colour_rules_report_unknown_placeholder_as_missing() -> None:
     assert rule["missingSwatchSkuCount"] == 1
 
 
+@pytest.mark.parametrize(
+    ("colour_name", "expected"),
+    [
+        ("Khaki white", "#F0ECE0"),
+        ("Carbon crystal black&Alpine green", "#1A1A1A|#3A7D44"),
+        ("Matte gray (UE)", "#444444"),
+    ],
+)
+def test_generate_colour_hex_from_name_uses_stable_automotive_palette(
+    colour_name: str,
+    expected: str,
+) -> None:
+    assert repo.generate_colour_hex_from_name(colour_name) == expected
+
+
+def test_generate_colour_hex_from_unknown_name_is_stable_and_valid() -> None:
+    first = repo.generate_colour_hex_from_name("Starlight Aurora")
+
+    assert first == repo.generate_colour_hex_from_name("Starlight Aurora")
+    assert repo.normalize_colour_hex_value(first) == first
+
+
 def test_summarize_invalid_colour_rule_identities_exposes_sample_without_mutation() -> None:
     session = _FakeSession([
         SimpleNamespace(
@@ -1163,7 +1185,7 @@ def test_lookup_colour_rule_uses_unique_name_alias_after_code_miss(monkeypatch) 
     assert len(result["nameCandidates"]) == 1
 
 
-def test_lookup_colour_rule_keeps_multiple_name_candidates_for_user_choice(monkeypatch) -> None:
+def test_lookup_colour_rule_generates_when_name_alias_has_multiple_old_swatches(monkeypatch) -> None:
     session = _FakeSession([
         SimpleNamespace(
             material_code="A",
@@ -1195,9 +1217,25 @@ def test_lookup_colour_rule_keeps_multiple_name_candidates_for_user_choice(monke
         colour_name="Khaki White",
     )
 
-    assert result["source"] == "name_candidates"
-    assert result["colourHex"] is None
+    assert result["source"] == "generated_from_name"
+    assert result["colourHex"] == "#F0ECE0"
     assert [item["colourCode"] for item in result["nameCandidates"]] == ["BW", "KW"]
+
+
+def test_lookup_colour_rule_generates_preview_for_new_brand_code(monkeypatch) -> None:
+    session = _FakeSession([])
+    monkeypatch.setattr(repo, "_list_colour_rule_candidate_skus", lambda *_args: [])
+
+    result = repo.lookup_colour_rule(
+        session,
+        "JAECOO",
+        "NEW",
+        colour_name="Carbon crystal black&Alpine green",
+    )
+
+    assert result["source"] == "generated_from_name"
+    assert result["colourName"] == "Carbon crystal black&Alpine green"
+    assert result["colourHex"] == "#1A1A1A|#3A7D44"
 
 
 def test_resolve_colour_attributes_canonicalizes_unique_name_alias(monkeypatch) -> None:
@@ -1394,6 +1432,129 @@ def test_preview_and_apply_colour_rule_fills_use_same_material_codes() -> None:
     assert (donor.colour_tier, donor.is_published, donor.final_fob_eur) == (
         "single", True, 14000,
     )
+    assert len(session.added) == 1
+    standard = session.added[0]
+    assert isinstance(standard, BrandColourSwatchRule)
+    assert (standard.brand, standard.colour_code, standard.colour_name, standard.colour_hex) == (
+        "OMODA", "W3", "water blue", "#B6D3FB",
+    )
+
+
+def test_colour_rule_apply_generates_and_persists_one_shared_standard() -> None:
+    first = SimpleNamespace(
+        material_code="A",
+        brand="JAECOO",
+        exterior_color_code="BW",
+        exterior_color_name="Khaki white",
+        colour_hex=None,
+        updated_at_utc=None,
+    )
+    second = SimpleNamespace(
+        material_code="B",
+        brand="JAECOO",
+        exterior_color_code="BW",
+        exterior_color_name="Khaki white",
+        colour_hex=None,
+        updated_at_utc=None,
+    )
+    session = _FakeSession([first, second])
+
+    preview = repo.preview_colour_rule_fills(session)
+
+    assert preview["ruleCount"] == 1
+    assert preview["generatedRuleCount"] == 1
+    assert preview["rules"][0] == {
+        "brand": "JAECOO",
+        "colourCode": "BW",
+        "colourName": "Khaki white",
+        "colourHex": "#F0ECE0",
+        "source": "generated_from_name",
+        "skuCount": 2,
+        "hasNameConflict": False,
+        "hasSwatchConflict": False,
+        "nameOptions": [{
+            "colourName": "Khaki white",
+            "normalizedColourName": "khaki white",
+            "skuCount": 2,
+        }],
+    }
+
+    result = repo.apply_colour_rule_fills(
+        session,
+        [item["materialCode"] for item in preview["items"]],
+        preview["fingerprint"],
+    )
+
+    assert result["rulesCreated"] == 1
+    assert result["generatedRules"] == 1
+    assert result["updated"] == 2
+    assert first.colour_hex == second.colour_hex == "#F0ECE0"
+    assert isinstance(session.added[0], BrandColourSwatchRule)
+
+    session.execute_values.append(session.added[0])
+    repeated = repo.preview_colour_rule_fills(session)
+    assert repeated["rules"] == []
+    assert repeated["items"] == []
+
+
+def test_colour_rule_preview_selects_most_used_name_for_confirmation() -> None:
+    session = _FakeSession([
+        SimpleNamespace(
+            material_code="A",
+            brand="OMODA",
+            exterior_color_code="SY",
+            exterior_color_name="Mist Green",
+            colour_hex=None,
+            updated_at_utc=None,
+        ),
+        SimpleNamespace(
+            material_code="B",
+            brand="OMODA",
+            exterior_color_code="SY",
+            exterior_color_name="Mist Green",
+            colour_hex=None,
+            updated_at_utc=None,
+        ),
+        SimpleNamespace(
+            material_code="C",
+            brand="OMODA",
+            exterior_color_code="SY",
+            exterior_color_name="Misty Green",
+            colour_hex=None,
+            updated_at_utc=None,
+        ),
+    ])
+
+    preview = repo.preview_colour_rule_fills(session)
+
+    assert preview["rules"][0]["colourName"] == "Mist Green"
+    assert preview["rules"][0]["colourHex"] == "#8BA99A"
+    assert preview["rules"][0]["hasNameConflict"] is True
+
+
+def test_colour_rule_preview_never_regenerates_a_persistent_standard() -> None:
+    sku = SimpleNamespace(
+        material_code="A",
+        brand="OMODA",
+        exterior_color_code="UE",
+        exterior_color_name="Matte gray",
+        colour_hex=None,
+        updated_at_utc=None,
+    )
+    standard = BrandColourSwatchRule(
+        brand_colour_swatch_rule_id=uuid4(),
+        brand="OMODA",
+        colour_code="UE",
+        colour_name="Approved matte gray",
+        colour_hex="#8A8A8A",
+        is_active=True,
+    )
+    session = _FakeSession([sku, standard])
+
+    preview = repo.preview_colour_rule_fills(session)
+
+    assert preview["rules"] == []
+    assert preview["items"] == []
     assert session.added == []
 
 

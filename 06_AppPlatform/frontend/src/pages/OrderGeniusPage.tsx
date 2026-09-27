@@ -40,7 +40,11 @@ import {
 import { CommandSelect } from "../components/CommandSelect";
 import { DeckFloatingDrawer, FlipToolCard } from "../components/deckControls";
 import { MaterialFinanceMatrix, MaterialFinanceWorkbench } from "../components/finance";
-import { BomEditPanel, type BomEditCountryOption } from "../components/orderGenius";
+import {
+  BomEditPanel,
+  BomFobRepriceAuditCard,
+  type BomEditCountryOption,
+} from "../components/orderGenius";
 import type {
   ColourHexRuleApplyResult,
   ColourHexRuleLookup,
@@ -3326,8 +3330,11 @@ function formatColourRuleLookupNote(lookup: ColourHexRuleLookup, manuallyChanged
       .join(" + ");
     return `Brand + Code ${fields} conflict: not auto-filled. Enter values manually.`;
   }
-  if (lookup.source === "brand_code_rule") {
+  if (lookup.source === "persistent_rule" || lookup.source === "brand_code_rule") {
     return `Brand + Code rule: ${lookup.colourName ?? "no name"} · ${lookup.colourHex ?? "no swatch"}${manuallyChanged ? " · Manual values will create a rule difference." : " · Auto-filled."}`;
+  }
+  if (lookup.source === "generated_from_name") {
+    return `Approximate swatch generated from the colour name: ${lookup.colourHex ?? "no swatch"}. Confirm it once in Colour Swatch Rules to reuse it for this Brand + Code.`;
   }
   if (lookup.source === "name_candidate") {
     return `Name match selected one existing colour: ${lookup.colourName ?? "no name"} · ${lookup.colourHex ?? "no swatch"}${manuallyChanged ? " · Manual values will create a rule difference." : " · Candidate auto-filled."}`;
@@ -4007,7 +4014,7 @@ export function BomAdminPanel({
             || getBomColourCodeEditorTargetKey(current) !== targetKey
             || current.nextColourCode.trim().toUpperCase() !== colourCode
           ) return current;
-          if (!['brand_code_rule', 'name_candidate'].includes(lookup.source) || lookup.hasNameConflict || lookup.hasSwatchConflict) {
+          if (!['persistent_rule', 'brand_code_rule', 'generated_from_name', 'name_candidate'].includes(lookup.source) || lookup.hasNameConflict || lookup.hasSwatchConflict) {
             return current;
           }
           const swatch = splitColourHexValue(lookup.colourHex);
@@ -4058,7 +4065,7 @@ export function BomAdminPanel({
             || getBomAddColourEditorTargetKey(current) !== targetKey
             || current.colourCode.trim().toUpperCase() !== colourCode
           ) return current;
-          if (!['brand_code_rule', 'name_candidate'].includes(lookup.source) || lookup.hasNameConflict || lookup.hasSwatchConflict) {
+          if (!['persistent_rule', 'brand_code_rule', 'generated_from_name', 'name_candidate'].includes(lookup.source) || lookup.hasNameConflict || lookup.hasSwatchConflict) {
             return current;
           }
           const swatch = splitColourHexValue(lookup.colourHex);
@@ -5180,7 +5187,7 @@ export function BomAdminPanel({
       setColourRuleApplyResult(result);
       await Promise.all([loadColourHexRules(), load()]);
       setColourHexRuleStatus(
-        `Filled ${result.updated} SKUs; ${result.unchanged} unchanged, ${result.conflicts} conflicts, ${result.missingRules} missing rules.`,
+        `Confirmed ${result.rulesCreated} shared Brand + Code rules (${result.generatedRules} generated); synchronized ${result.updated} SKUs.`,
       );
     } catch (error) {
       setColourRuleActionError(
@@ -5260,10 +5267,14 @@ export function BomAdminPanel({
       setColourCodeEditorError("Wait for the Brand + Code rule check to finish.");
       return;
     }
-    const canAutoFillChangedCode = (colourCodeRuleLookup?.source === "brand_code_rule"
-      || colourCodeRuleLookup?.source === "name_candidate")
-      && !colourCodeRuleLookup.hasNameConflict
-      && !colourCodeRuleLookup.hasSwatchConflict;
+    const canAutoFillChangedCode = Boolean(colourCodeRuleLookup && [
+      "persistent_rule",
+      "brand_code_rule",
+      "generated_from_name",
+      "name_candidate",
+    ].includes(colourCodeRuleLookup.source))
+      && !colourCodeRuleLookup?.hasNameConflict
+      && !colourCodeRuleLookup?.hasSwatchConflict;
     if (codeChanged && !canAutoFillChangedCode && !nextName) {
       setColourCodeEditorError("This code cannot be auto-filled: enter a colour name before saving it.");
       return;
@@ -5378,7 +5389,8 @@ export function BomAdminPanel({
     }
     if (
       (
-        addColourRuleLookup?.source !== "brand_code_rule"
+        !addColourRuleLookup
+        || !["persistent_rule", "brand_code_rule", "generated_from_name", "name_candidate"].includes(addColourRuleLookup.source)
         || addColourRuleLookup.hasNameConflict
         || addColourRuleLookup.hasSwatchConflict
       )
@@ -6387,7 +6399,7 @@ export function BomAdminPanel({
                     </button>
                   </div>
                   <div style={{ fontSize: 10, color: "#64748b", marginBottom: 7 }}>
-                    {colourHexRuleSummary.totalRules} rules · {colourHexRuleSummary.fillableSkus} SKU fields can be filled
+                    {colourHexRuleSummary.totalRules} rules · existing standards are reused; missing swatches can be generated from names
                   </div>
                   {colourHexRuleSummary.invalidIdentitySkuCount > 0 ? (
                     <div style={{ marginBottom: 7, padding: "6px 8px", border: "1px solid #fbbf24", background: "#fffbeb", color: "#92400e", fontSize: 10, lineHeight: 1.35 }}>
@@ -6402,8 +6414,8 @@ export function BomAdminPanel({
                       </button>
                     ))}
                   </div>
-                  <button className="btn btn-sm btn-primary" type="button" disabled={loadingColourRulePreview || colourHexRuleSummary.fillableSkus === 0} onClick={() => void handlePreviewColourRuleFills()} style={{ marginTop: 7, width: "100%" }}>
-                    {loadingColourRulePreview ? "Building preview..." : `Preview ${colourHexRuleSummary.fillableSkus} deterministic fills`}
+                  <button className="btn btn-sm btn-primary" type="button" disabled={loadingColourRulePreview || colourHexRuleSummary.totalRules === 0} onClick={() => void handlePreviewColourRuleFills()} style={{ marginTop: 7, width: "100%" }}>
+                    {loadingColourRulePreview ? "Building preview..." : "Preview shared swatch standards"}
                   </button>
                   {colourHexRuleStatus ? (
                     <div style={{ marginTop: 7, fontSize: 11, color: colourHexRuleStatus.startsWith("Set") ? "#0f766e" : "#b45309" }}>
@@ -6411,6 +6423,12 @@ export function BomAdminPanel({
                     </div>
 	                  ) : null}
 	                </div>
+	                <BomFobRepriceAuditCard
+	                  onApplied={async () => {
+	                    await load();
+	                    onFobChanged?.();
+	                  }}
+	                />
 	              </div>
               {bomAdminNotice ? (
                 <div style={{ marginTop: 8, padding: "8px 10px", border: "1px solid #bfdbfe", background: "#eff6ff", color: "#1d4ed8", fontSize: 11, fontWeight: 700 }}>
@@ -6458,17 +6476,41 @@ export function BomAdminPanel({
         <div className="bom-finance-modal-backdrop" onClick={() => { if (!applyingColourRulePreview) setShowColourRulePreview(false); }}>
           <div className="bom-colour-code-edit-modal-shell" onClick={(event) => event.stopPropagation()}>
             <section className="bom-colour-code-edit-card" role="dialog" aria-modal="true" aria-label="Colour rule fill preview">
-              <div className="bom-colour-code-edit-head"><div><span className="bom-finance-eyebrow">COLOUR RULES · PREVIEW</span><h4>{colourRuleApplyResult ? "Fill result" : "Confirm deterministic fills"}</h4><p>{colourRulePreview ? `${colourRulePreview.total} SKUs from ${colourRulePreview.ruleCount} rules` : "Checking current rules..."}</p></div></div>
+              <div className="bom-colour-code-edit-head"><div><span className="bom-finance-eyebrow">COLOUR SWATCH RULES · PREVIEW</span><h4>{colourRuleApplyResult ? "Shared standards saved" : "Confirm Brand + Code standards"}</h4><p>{colourRulePreview ? `${colourRulePreview.ruleCount} standards · ${colourRulePreview.generatedRuleCount} approximate swatches · ${colourRulePreview.total} SKU updates` : "Checking current rules..."}</p></div></div>
               {loadingColourRulePreview ? <p>Building preview...</p> : null}
               {colourRuleActionError ? <div className="bom-colour-code-edit-error">{colourRuleActionError}</div> : null}
-              {colourRuleApplyResult ? <div style={{ color: "#0f766e", fontWeight: 700 }}>{colourRuleApplyResult.updated} updated · {colourRuleApplyResult.unchanged} unchanged · {colourRuleApplyResult.conflicts} conflicts · {colourRuleApplyResult.missingRules} missing rules</div> : null}
+              {colourRuleApplyResult ? <div style={{ color: "#0f766e", fontWeight: 700 }}>{colourRuleApplyResult.rulesCreated} standards saved · {colourRuleApplyResult.generatedRules} generated · {colourRuleApplyResult.updated} SKUs synchronized · {colourRuleApplyResult.missingRules} unresolved</div> : null}
               {colourRulePreview ? (
                 <div style={{ maxHeight: "48vh", overflowY: "auto", border: "1px solid #e2e8f0" }}>
-                  {colourRulePreview.items.map((item) => <div key={item.materialCode} style={{ padding: 7, borderBottom: "1px solid #e2e8f0", fontSize: 11 }}><strong>{item.materialCode}</strong> · {item.oldColourName || "(blank)"} → {item.newColourName}<br />{item.oldColourHex || "(blank)"} → {item.newColourHex}</div>)}
+                  {colourRulePreview.rules.map((rule) => (
+                    <div key={`${rule.brand}|${rule.colourCode}`} style={{ padding: 8, borderBottom: "1px solid #e2e8f0", fontSize: 11 }}>
+                      <span
+                        aria-label={`${rule.colourName} ${rule.colourHex}`}
+                        style={{
+                          display: "inline-block",
+                          width: 18,
+                          height: 18,
+                          marginRight: 6,
+                          verticalAlign: "middle",
+                          border: "1px solid #cbd5e1",
+                          background: rule.colourHex.includes("|")
+                            ? `linear-gradient(135deg, ${rule.colourHex.split("|")[0]} 0 49%, ${rule.colourHex.split("|")[1]} 51% 100%)`
+                            : rule.colourHex,
+                        }}
+                      />
+                      <strong>{rule.brand} · {rule.colourCode}</strong> · {rule.colourName} · {rule.colourHex}
+                      <br />
+                      <span style={{ color: rule.source === "generated_from_name" ? "#b45309" : "#64748b" }}>
+                        {rule.source === "generated_from_name" ? "Approximate HEX generated from name" : "Existing unique SKU swatch"} · {rule.skuCount} SKUs
+                        {rule.hasNameConflict ? ` · selected most-used name from ${rule.nameOptions.length} names` : ""}
+                      </span>
+                    </div>
+                  ))}
+                  {colourRulePreview.rules.length === 0 ? <div style={{ padding: 10, color: "#64748b", fontSize: 11 }}>All reusable Brand + Code standards are already confirmed.</div> : null}
                 </div>
               ) : null}
               <div className="bom-finance-action-bar">
-                {!colourRuleApplyResult && colourRulePreview?.items.length ? <button type="button" className="btn btn-sm btn-primary" disabled={applyingColourRulePreview} onClick={() => void handleApplyColourRuleFills()}>{applyingColourRulePreview ? "Filling..." : `Fill ${colourRulePreview.items.length} deterministic items`}</button> : null}
+                {!colourRuleApplyResult && colourRulePreview?.rules.length ? <button type="button" className="btn btn-sm btn-primary" disabled={applyingColourRulePreview} onClick={() => void handleApplyColourRuleFills()}>{applyingColourRulePreview ? "Saving..." : `Confirm ${colourRulePreview.rules.length} shared standards`}</button> : null}
                 <button type="button" className="btn btn-sm btn-ghost" disabled={applyingColourRulePreview} onClick={() => setShowColourRulePreview(false)}>Close</button>
               </div>
             </section>
