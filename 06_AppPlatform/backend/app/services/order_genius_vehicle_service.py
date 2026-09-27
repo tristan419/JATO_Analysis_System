@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+from calendar import monthrange
 from datetime import date, datetime
 from decimal import Decimal
 from typing import Any
@@ -118,7 +119,9 @@ def create_pi_line(session: Session, pi_code: str, payload: dict[str, Any], user
         raise HTTPException(status_code=404, detail="PI not found")
     line_seq = int(payload.get("lineSequenceNo") or repo.next_line_sequence(session, header.pi_id))
     material_code = _clean(payload.get("materialCode"))
-    line_payload = _line_payload_from_material(session, header.country_code, material_code, payload)
+    line_payload = _line_payload_from_material(
+        session, header.country_code, material_code, payload, pricing_date=header.order_date,
+    )
     line = _build_line(session, header, line_seq, line_payload, username)
     repo.add_line(session, line)
     _add_line_allocations(
@@ -142,7 +145,9 @@ def update_pi_line(session: Session, pi_line_code: str, payload: dict[str, Any],
     if not header:
         raise HTTPException(status_code=404, detail="PI not found")
     material_code = _clean(payload.get("materialCode")) if "materialCode" in payload else line.material_code
-    payload = _line_payload_from_material(session, header.country_code, material_code, payload)
+    payload = _line_payload_from_material(
+        session, header.country_code, material_code, payload, pricing_date=header.order_date,
+    )
     for attr, key in {
         "material_code": "materialCode",
         "bom": "bom",
@@ -198,6 +203,7 @@ def generate_from_order_matrix(session: Session, payload: dict[str, Any], userna
         country,
         line_items,
     )
+    requested_order_date = _parse_date(payload.get("orderDate"))
 
     header = create_pi_header(session, {
         "countryCode": country,
@@ -232,13 +238,54 @@ def generate_from_order_matrix(session: Session, payload: dict[str, Any], userna
         if quantity <= 0:
             continue
         material_code = _clean(item.get("materialCode"))
-        line_payload = _line_payload_from_material(session, country, material_code, item)
+        if not material_code:
+            raise HTTPException(status_code=400, detail="materialCode is required for PI line items")
+        resolved_allocations: list[dict[str, Any]] = []
+        for allocation in allocations:
+            allocation_country = str(allocation["countryCode"]).upper()
+            pricing_date = _resolve_pi_pricing_date(
+                session,
+                allocation_country,
+                material_code,
+                year,
+                month,
+                requested_order_date,
+            )
+            resolved_payload = _line_payload_from_material(
+                session,
+                allocation_country,
+                material_code,
+                item,
+                pricing_date=pricing_date,
+            )
+            resolved_allocations.append({
+                **allocation,
+                "fobEur": resolved_payload.get("fobEur"),
+            })
+        line_country = country if any(
+            str(allocation["countryCode"]).upper() == country for allocation in resolved_allocations
+        ) else str(resolved_allocations[0]["countryCode"]).upper()
+        line_pricing_date = _resolve_pi_pricing_date(
+            session,
+            line_country,
+            material_code,
+            year,
+            month,
+            requested_order_date,
+        )
+        line_payload = _line_payload_from_material(
+            session,
+            line_country,
+            material_code,
+            item,
+            pricing_date=line_pricing_date,
+        )
         line_payload["quantity"] = quantity
         line = _build_line(session, header_model, idx, line_payload, username)
         repo.add_line(session, line)
-        _add_line_allocations(session, header_model, line, allocations, username)
+        _add_line_allocations(session, header_model, line, resolved_allocations, username)
         line_count += 1
-        _ensure_vehicle_units_for_line_allocations(session, header_model, line, allocations, username)
+        _ensure_vehicle_units_for_line_allocations(session, header_model, line, resolved_allocations, username)
         vehicle_count += quantity
 
     return {"piCode": header_model.pi_code, "lineCount": line_count, "vehicleCount": vehicle_count}
@@ -887,7 +934,51 @@ def _line_items_from_order_quantities(session: Session, country: str, year: int,
     ]
 
 
-def _line_payload_from_material(session: Session, country: str, material_code: str | None, item: dict[str, Any]) -> dict:
+def _resolve_pi_pricing_date(
+    session: Session,
+    country: str,
+    material_code: str,
+    year: int,
+    month: int,
+    requested_order_date: date | None,
+) -> date | None:
+    if requested_order_date is not None:
+        if requested_order_date.year != year or requested_order_date.month != month:
+            raise HTTPException(status_code=400, detail="orderDate must be inside the selected order month")
+        return requested_order_date
+    sku = og_repo.get_sku_by_material_code_any_status(session, material_code)
+    if sku is None or not sku.bom_template:
+        return None
+    month_start = date(year, month, 1)
+    month_end = date(year, month, monthrange(year, month)[1])
+    relevant_periods = [
+        period
+        for period in og_repo.list_country_template_fob_periods(session, country, sku.bom_template)
+        if period.valid_from <= month_end and (period.valid_to is None or period.valid_to >= month_start)
+    ]
+    if not relevant_periods:
+        return None
+    if len(relevant_periods) == 1:
+        period = relevant_periods[0]
+        if period.valid_from <= month_start and (period.valid_to is None or period.valid_to >= month_end):
+            return month_start
+    raise HTTPException(
+        status_code=409,
+        detail=(
+            f"{sku.bom_template} / {country} has more than one FOB price inside "
+            f"{year}-{month:02d}; choose an orderDate before creating the PI"
+        ),
+    )
+
+
+def _line_payload_from_material(
+    session: Session,
+    country: str,
+    material_code: str | None,
+    item: dict[str, Any],
+    *,
+    pricing_date: date | None = None,
+) -> dict:
     payload = dict(item)
     if not material_code:
         return payload
@@ -906,6 +997,31 @@ def _line_payload_from_material(session: Session, country: str, material_code: s
             "interiorColorName": sku.interior_color_name,
             "interiorColourCode": sku.interior_colour_code,
         })
+    if sku and pricing_date and sku.bom_template:
+        try:
+            period = og_repo.resolve_country_template_fob_period(
+                session, country, sku.bom_template, pricing_date,
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        if period is not None:
+            base_fob = float(period.base_fob_eur)
+            if base_fob == 0:
+                raise HTTPException(
+                    status_code=409,
+                    detail=f"{sku.bom_template} / {country} is stopped on {pricing_date.isoformat()}",
+                )
+            tier = og_repo.resolve_effective_colour_tier(sku)
+            surcharge = og_repo.resolve_colour_surcharge_for_sku(session, sku, tier)
+            amount = surcharge.get("amount")
+            if amount is None:
+                reason = "missing saved colour tier" if surcharge.get("status") == "missing_tier" else "missing colour surcharge rule"
+                raise HTTPException(
+                    status_code=409,
+                    detail=f"{sku.material_code} cannot be priced: {reason}",
+                )
+            payload["fobEur"] = round(base_fob + float(amount), 2)
+            return payload
     if fob:
         payload["fobEur"] = float(fob.final_fob_eur)
     return payload

@@ -274,9 +274,32 @@ def resolve_fill_decision(
 
     selected_candidates = list(candidates)
     if conflict_strategy == "date_country":
-        country_filtered = [record for record in selected_candidates if _record_matches_country(row, record)]
-        if country_filtered:
-            selected_candidates = country_filtered
+        matching_special = [
+            record
+            for record in selected_candidates
+            if _comment_special_country(record.comments) is not None
+            and _record_matches_country(row, record)
+        ]
+        generic_candidates = [
+            record for record in selected_candidates
+            if _comment_special_country(record.comments) is None
+        ]
+        country_filtered = matching_special or generic_candidates
+        if not country_filtered:
+            return FillDecision(
+                material_group=row.material_group,
+                sheet_name=row.sheet_name,
+                row_number=row.row_number,
+                status="not_found",
+                candidate_count=len(candidates),
+                reason="物料号有候选，但没有适用于该国家的 WVTA/COC；保留候选供人工检查。",
+                confidence=0,
+                selected_record=None,
+                candidate_records=unique_candidates,
+                written_wvta=None,
+                written_coc=None,
+            )
+        selected_candidates = country_filtered
         date_filtered = [
             record
             for record in selected_candidates
@@ -287,6 +310,21 @@ def resolve_fill_decision(
                 record.valid_to,
             )
         ]
+        has_production_date = row.production_date_start is not None or row.production_date_end is not None
+        if has_production_date and not date_filtered:
+            return FillDecision(
+                material_group=row.material_group,
+                sheet_name=row.sheet_name,
+                row_number=row.row_number,
+                status="not_found",
+                candidate_count=len(candidates),
+                reason="物料号有候选，但生产日期不在任何 WVTA/COC 有效期内；未回退旧候选。",
+                confidence=0,
+                selected_record=None,
+                candidate_records=tuple(_unique_records(selected_candidates)),
+                written_wvta=None,
+                written_coc=None,
+            )
         if date_filtered:
             selected_candidates = date_filtered
 

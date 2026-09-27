@@ -174,3 +174,106 @@ def test_resolve_fill_decision_requires_exact_material_group() -> None:
     )
 
     assert decision.status == "not_found"
+
+
+def test_date_country_does_not_fall_back_when_production_date_is_outside_all_periods() -> None:
+    material = "T7000Z5**MY0013"
+    record = _record(
+        material,
+        "e4*2018/858*00273*02",
+        "00273-02&402&104V&COC002-宁德",
+        valid_from=date(2026, 3, 11),
+        valid_to=date(2026, 4, 14),
+    )
+
+    decision = resolve_fill_decision(
+        _row(material, production_start=date(2026, 4, 15), production_end=date(2026, 4, 15)),
+        {material: [record]},
+        overwrite_existing=False,
+        conflict_strategy="date_country",
+    )
+
+    assert decision.status == "not_found"
+    assert decision.written_wvta is None
+    assert "未回退旧候选" in decision.reason
+
+
+def test_date_country_uses_inclusive_validity_boundaries() -> None:
+    material = "T7000Z5**MY0013"
+    old = _record(
+        material,
+        "e4*2018/858*00273*02",
+        "00273-02&402&104V&COC002-宁德",
+        valid_from=date(2026, 3, 1),
+        valid_to=date(2026, 4, 28),
+    )
+    new = _record(
+        material,
+        "e4*2018/858*00273*03",
+        "00273-03&402&104V&COC002-宁德",
+        valid_from=date(2026, 4, 29),
+        valid_to=None,
+    )
+
+    old_decision = resolve_fill_decision(
+        _row(material, production_start=date(2026, 4, 28), production_end=date(2026, 4, 28)),
+        {material: [old, new]},
+        overwrite_existing=False,
+        conflict_strategy="date_country",
+    )
+    new_decision = resolve_fill_decision(
+        _row(material, production_start=date(2026, 4, 29), production_end=date(2026, 4, 29)),
+        {material: [old, new]},
+        overwrite_existing=False,
+        conflict_strategy="date_country",
+    )
+
+    assert old_decision.written_wvta.endswith("*02")
+    assert new_decision.written_wvta.endswith("*03")
+
+
+def test_date_country_prefers_matching_country_special_over_generic_record() -> None:
+    material = "T7000Z5**MY0013"
+    generic = _record(
+        material,
+        "e4*2018/858*00273*03",
+        "00273-03&402&104V&COC002-宁德",
+        valid_from=date(2026, 4, 15),
+        valid_to=None,
+    )
+    poland = _record(
+        material,
+        "e4*2018/858*00273*03",
+        "00273-03&428&104V&COC003-波兰专用",
+        valid_from=date(2026, 4, 15),
+        valid_to=None,
+        comments="波兰专用COC",
+    )
+
+    decision = resolve_fill_decision(
+        _row(material, country="PL"),
+        {material: [generic, poland]},
+        overwrite_existing=False,
+        conflict_strategy="date_country",
+    )
+
+    assert decision.status == "filled"
+    assert decision.written_coc == poland.coc_no
+
+
+def test_date_country_without_production_date_keeps_multiple_periods_ambiguous() -> None:
+    material = "T7000Z5**MY0013"
+    records = [
+        _record(material, "e4*2018/858*00273*02", "old", valid_from=date(2026, 3, 1), valid_to=date(2026, 4, 28)),
+        _record(material, "e4*2018/858*00273*03", "new", valid_from=date(2026, 4, 29), valid_to=None),
+    ]
+
+    decision = resolve_fill_decision(
+        _row(material, production_start=None, production_end=None),
+        {material: records},
+        overwrite_existing=False,
+        conflict_strategy="date_country",
+    )
+
+    assert decision.status == "ambiguous"
+    assert decision.written_wvta is None

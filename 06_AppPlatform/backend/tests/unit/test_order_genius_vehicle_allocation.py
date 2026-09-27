@@ -1,4 +1,5 @@
 import json
+from datetime import date
 from pathlib import Path
 from types import SimpleNamespace
 from uuid import uuid4
@@ -21,6 +22,7 @@ from app.services.order_genius_vehicle_service import (
     _ensure_vehicle_units_for_line_allocations,
     _line_items_from_order_quantities,
     _line_payload_from_material,
+    _resolve_pi_pricing_date,
     _market_country_codes_for_line_items,
     build_car_code,
     build_pi_code,
@@ -338,6 +340,67 @@ def test_line_payload_uses_bom_admin_and_country_fob(monkeypatch) -> None:
     assert payload["exteriorColorName"] == "Black Warrior"
     assert payload["interiorColorName"] == "Black Red"
     assert payload["fobEur"] == 21200
+
+
+def test_line_payload_uses_order_date_period_and_saved_colour_tier(monkeypatch) -> None:
+    sku = SimpleNamespace(
+        material_code="T7151RYKUMH0001",
+        bom_template="T7151R**MH0001",
+        brand="JAECOO",
+        model_name="JAECOO7",
+        version="Luxury",
+        powertrain="PHEV",
+        exterior_color_name="Black & White",
+        exterior_color_code="ZE",
+        interior_color_name="Black",
+        interior_colour_code="BK",
+        colour_tier="dual",
+    )
+    period = SimpleNamespace(base_fob_eur=19000)
+    monkeypatch.setattr(order_repo, "get_sku_by_material_code_any_status", lambda *_args: sku)
+    monkeypatch.setattr(order_repo, "get_fob_for_country_sku", lambda *_args: SimpleNamespace(final_fob_eur=19000))
+    monkeypatch.setattr(order_repo, "resolve_country_template_fob_period", lambda *_args: period)
+    monkeypatch.setattr(order_repo, "resolve_effective_colour_tier", lambda _sku: "dual")
+    monkeypatch.setattr(
+        order_repo,
+        "resolve_colour_surcharge_for_sku",
+        lambda *_args: {"status": "matched_amount", "amount": 300, "source": "brand_tier"},
+    )
+
+    payload = _line_payload_from_material(
+        object(),
+        "CH",
+        sku.material_code,
+        {"materialCode": sku.material_code},
+        pricing_date=date(2026, 7, 20),
+    )
+
+    assert payload["fobEur"] == 19300
+
+
+def test_pi_requires_order_date_when_one_month_crosses_fob_periods(monkeypatch) -> None:
+    sku = SimpleNamespace(bom_template="T7151R**MH0001")
+    periods = [
+        SimpleNamespace(valid_from=date(2026, 7, 1), valid_to=date(2026, 7, 14)),
+        SimpleNamespace(valid_from=date(2026, 7, 15), valid_to=None),
+    ]
+    monkeypatch.setattr(order_repo, "get_sku_by_material_code_any_status", lambda *_args: sku)
+    monkeypatch.setattr(order_repo, "list_country_template_fob_periods", lambda *_args: periods)
+
+    with pytest.raises(HTTPException) as exc:
+        _resolve_pi_pricing_date(object(), "CH", "SKU", 2026, 7, None)
+
+    assert exc.value.status_code == 409
+    assert "choose an orderDate" in str(exc.value.detail)
+
+
+def test_pi_can_use_single_period_covering_whole_month_without_order_date(monkeypatch) -> None:
+    sku = SimpleNamespace(bom_template="T7151R**MH0001")
+    periods = [SimpleNamespace(valid_from=date(2026, 7, 1), valid_to=date(2026, 7, 31))]
+    monkeypatch.setattr(order_repo, "get_sku_by_material_code_any_status", lambda *_args: sku)
+    monkeypatch.setattr(order_repo, "list_country_template_fob_periods", lambda *_args: periods)
+
+    assert _resolve_pi_pricing_date(object(), "CH", "SKU", 2026, 7, None) == date(2026, 7, 1)
 
 
 def test_line_items_can_be_built_from_selection_quantities(monkeypatch) -> None:
