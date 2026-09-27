@@ -127,16 +127,7 @@ def _country_fob_conflict_payload(
     }
 
 
-COLOUR_TIER_ALIASES = {
-    "single": "single",
-    "dual": "dual",
-    "two-tone": "dual",
-    "dual-tone": "dual",
-    "dual tone": "dual",
-    "bi-color": "dual",
-    "bi-colour": "dual",
-    "special": "special",
-}
+COLOUR_TIERS = frozenset({"single", "dual", "special"})
 COLOUR_SURCHARGE_MANUAL_SOURCE_MODES = frozenset(
     {"manual_edit", "manual_country_adjust"}
 )
@@ -186,20 +177,9 @@ def _extract_canonical_powertrain(sku: MaterialSkuMaster) -> str:
 
 
 def resolve_effective_colour_tier(sku: object) -> str | None:
-    """Resolve the saved tier, falling back only to legacy type metadata.
-
-    A missing/unknown value stays missing so pricing paths cannot silently turn
-    an unclassified colour into Single.
-    """
-    for value in (
-        getattr(sku, "colour_tier", None),
-        getattr(sku, "exterior_color_type", None),
-    ):
-        normalized = clean_text(value).lower().replace("_", "-")
-        tier = COLOUR_TIER_ALIASES.get(normalized)
-        if tier is not None:
-            return tier
-    return None
+    """Return only an explicitly saved canonical pricing tier."""
+    normalized = clean_text(getattr(sku, "colour_tier", None)).lower()
+    return normalized if normalized in COLOUR_TIERS else None
 
 
 def normalize_colour_rule_name(colour_name: str | None) -> str:
@@ -3517,10 +3497,7 @@ def _find_colour_surcharge_base_resolution(
     metadata only. Rows without a template stay scoped to their material code.
     """
     template = clean_text(getattr(sku, "bom_template", None)).upper()
-    single_tier = func.lower(func.trim(func.coalesce(
-        func.nullif(func.trim(MaterialSkuMaster.colour_tier), ""),
-        MaterialSkuMaster.exterior_color_type,
-    ))) == "single"
+    single_tier = func.lower(func.trim(MaterialSkuMaster.colour_tier)) == "single"
     stmt = (
         select(CountrySkuFobResolved.final_fob_eur)
         .select_from(CountrySkuFobResolved)
@@ -3842,13 +3819,7 @@ def reprice_brand_colour_surcharge_fobs(
             select(MaterialSkuMaster)
             .where(
                 MaterialSkuMaster.is_active == True,
-                or_(
-                    MaterialSkuMaster.colour_tier == normalized_tier,
-                    and_(
-                        MaterialSkuMaster.colour_tier.is_(None),
-                        func.lower(MaterialSkuMaster.exterior_color_type) == normalized_tier,
-                    ),
-                ),
+                func.lower(func.trim(MaterialSkuMaster.colour_tier)) == normalized_tier,
             )
             .order_by(MaterialSkuMaster.material_code)
         ).scalars().all()
@@ -3913,13 +3884,7 @@ def reprice_special_colour_surcharge_fobs(
         raise ValueError("colourTier must be dual or special")
     stmt = select(MaterialSkuMaster).where(
         MaterialSkuMaster.is_active == True,
-        or_(
-            MaterialSkuMaster.colour_tier == normalized_tier,
-            and_(
-                MaterialSkuMaster.colour_tier.is_(None),
-                func.lower(MaterialSkuMaster.exterior_color_type) == normalized_tier,
-            ),
-        ),
+        func.lower(func.trim(MaterialSkuMaster.colour_tier)) == normalized_tier,
         func.upper(MaterialSkuMaster.exterior_color_code) == normalized_code,
     )
     if normalized_model:

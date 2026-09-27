@@ -17,7 +17,6 @@ from app.db.models import (
 from app.infra import order_genius_repository as repo
 from app.services import order_genius_service
 from app.services.ordering_normalization import (
-    infer_colour_tier,
     normalize_brand,
     normalize_brand_text,
     resolve_material_brand,
@@ -582,21 +581,18 @@ def test_create_material_sku_resolves_known_unknown_and_conflict_rules(
     assert (result["colourName"], result["colourHex"]) == expected
 
 
-def test_infer_colour_tier_handles_dual_swatch_and_special_finish() -> None:
-    assert infer_colour_tier("Carbon black / khaki white") == "dual"
-    assert infer_colour_tier("Carbon black + grey roof") == "dual"
-    assert infer_colour_tier("Aviation silver", colour_hex="#C8C0B8|#111111") == "dual"
-    assert infer_colour_tier("Matte black (Black Edition)") == "special"
-
-
-def test_effective_colour_tier_legacy_fallback_ignores_fillable_name_and_swatch() -> None:
+def test_effective_colour_tier_requires_explicit_saved_value() -> None:
     sku = SimpleNamespace(
         colour_tier=None,
-        exterior_color_type="single",
-        exterior_color_name="Matte black",
+        exterior_color_type="dual",
+        exterior_color_name="Black & White",
         colour_hex="#111111|#FFFFFF",
     )
 
+    assert order_genius_service._effective_colour_tier(sku) is None
+
+    sku.colour_tier = "single"
+    sku.exterior_color_name = "Matte black"
     assert order_genius_service._effective_colour_tier(sku) == "single"
 
 
@@ -1913,7 +1909,7 @@ def test_colour_tier_reprice_recalculates_template_base_without_freezing_it(
     assert row.fob_source_mode == "template_base"
 
 
-def test_colour_tier_reprice_uses_legacy_exterior_type_when_tier_is_blank(
+def test_colour_tier_reprice_blocks_legacy_exterior_type_when_tier_is_blank(
     monkeypatch,
 ) -> None:
     sku = SimpleNamespace(
@@ -1938,7 +1934,15 @@ def test_colour_tier_reprice_uses_legacy_exterior_type_when_tier_is_blank(
     )
     session = _FakeSession([row])
     monkeypatch.setattr(repo, "get_sku_by_material_code", lambda *_: sku)
-    monkeypatch.setattr(repo, "resolve_colour_surcharge_for_sku", lambda *_args: {"status": "matched_amount", "amount": 300.0, "source": "brand_tier"})
+    monkeypatch.setattr(
+        repo,
+        "resolve_colour_surcharge_for_sku",
+        lambda _session, _sku, tier: (
+            {"status": "missing_tier", "amount": None, "source": None}
+            if tier is None
+            else {"status": "matched_amount", "amount": 300.0, "source": "brand_tier"}
+        ),
+    )
     monkeypatch.setattr(
         repo,
         "_find_colour_surcharge_base_resolution",
@@ -1947,9 +1951,10 @@ def test_colour_tier_reprice_uses_legacy_exterior_type_when_tier_is_blank(
 
     result = repo.reprice_sku_colour_surcharge_fobs(session, sku.material_code)
 
-    assert result["updated"] == 1
-    assert row.final_fob_eur == 19650
-    assert row.colour_surcharge_eur == 300
+    assert result["updated"] == 0
+    assert result["skippedMissingTier"] == 1
+    assert row.final_fob_eur == 19350
+    assert row.colour_surcharge_eur is None
 
 
 def test_colour_tier_reprice_recalculates_manual_base_with_special_override(

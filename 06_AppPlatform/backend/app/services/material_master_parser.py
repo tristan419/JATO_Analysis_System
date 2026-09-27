@@ -43,18 +43,6 @@ def _detect_edition_tag(raw_colour_name: str) -> str | None:
     return m.group(1).strip().title() if m else None
 
 
-def _detect_colour_tier(
-    colour_name: str, colour_type: str, edition_tag: str | None = None
-) -> str:
-    """Keep the imported tier explicit; names and swatches are not pricing rules."""
-    normalized = str(colour_type or "").strip().lower().replace("_", "-")
-    if normalized in {"dual", "two-tone", "dual-tone", "dual tone", "bi-color", "bi-colour"}:
-        return "dual"
-    if normalized == "special":
-        return "special"
-    return "single"
-
-
 # ── BOM-pattern → interior inference rules ───────────────────
 # Key: regex matching the FULL BOM template (with ** as literal chars).
 # The pattern includes the model-specific prefix before '**' so the same
@@ -446,7 +434,6 @@ def parse_material_master_xlsx(file_path: Path) -> dict:
             colour_name = _clean_colour_name(raw_colour)
             colour_type = _detect_colour_type(raw_colour)
             edition_tag = _detect_edition_tag(raw_colour)
-            colour_tier = _detect_colour_tier(colour_name, colour_type, edition_tag)
 
             # Interior colour resolution (multi-layer fallback):
             # 1. Direct value from Excel row (already read above)
@@ -512,7 +499,10 @@ def parse_material_master_xlsx(file_path: Path) -> dict:
                 "exterior_color_code": colour_code,
                 "exterior_color_type": colour_type,
                 "colour_code_confirmed": colour_code_confirmed,
-                "colour_tier": colour_tier,
+                # Legacy workbooks have no authoritative Colour Tier column.
+                # Appearance metadata may be shown as a Preview hint, but it
+                # must never become a pricing tier without user confirmation.
+                "colour_tier": None,
                 "edition_tag": edition_tag,
                 "interior_color_name": raw_interior or None,
                 "interior_colour_code": interior_colour_code,

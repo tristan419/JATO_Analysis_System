@@ -11,7 +11,6 @@ from sqlalchemy.orm import Session
 from app.db import models
 from app.infra import order_genius_repository as repo
 from app.services import order_genius_service as service
-from app.services.material_master_parser import _detect_colour_tier
 from app.api.routes import order_genius as routes
 
 
@@ -71,6 +70,14 @@ def fob(db, code, value, base=None, surcharge=None, term="TT", country="CH", sou
     db.add(row)
     db.flush()
     return row
+
+
+def test_material_colour_tier_has_no_implicit_default() -> None:
+    column = models.MaterialSkuMaster.__table__.c.colour_tier
+
+    assert column.nullable is False
+    assert column.default is None
+    assert column.server_default is None
 
 
 @pytest.mark.parametrize("source_tier", ["single", "dual", "special"])
@@ -164,9 +171,9 @@ def test_no_single_requires_consistent_template_base_evidence(db):
     assert repo.audit_colour_surcharge_reprice(db)["summary"]["ambiguousBase"] == 2
 
 
-def test_explicit_single_matte_never_gets_special_override(db):
-    matte = sku(db, "CP", "single", "OMODA", "BLACK**001", "OMODA9 SHS", "Matte black")
-    assert _detect_colour_tier("Matte black", "single", "Black Edition") == "single"
+@pytest.mark.parametrize("name", ["Matte black", "Black & White"])
+def test_explicit_single_name_never_changes_pricing_tier(db, name):
+    matte = sku(db, "CP", "single", "OMODA", "BLACK**001", "OMODA9 SHS", name)
     fob(db, "CP", 26500, base=26500)
     repo.upsert_special_colour_surcharge(db, "OMODA", "CP", 300, model_name="OMODA9 SHS")
     repo.reprice_sku_colour_surcharge_fobs(db, matte.material_code)

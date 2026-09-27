@@ -61,16 +61,6 @@ def _extract_canonical_pt(sku: object) -> str:
     return normalize_powertrain(raw_pt) if raw_pt else "Other"
 
 
-def _derive_colour_tier(exterior_color_type: str) -> str:
-    """Normalize the explicit imported colour type without name inference."""
-    normalized = str(exterior_color_type or "").strip().lower().replace("_", "-")
-    if normalized in {"dual", "two-tone", "dual-tone", "dual tone", "bi-color", "bi-colour"}:
-        return "dual"
-    if normalized == "special":
-        return "special"
-    return "single"
-
-
 def _effective_colour_tier(sku: object) -> str | None:
     """Use the repository's saved-tier resolver for every pricing path."""
     return repo.resolve_effective_colour_tier(sku)
@@ -182,9 +172,7 @@ def publish_baseline(
             continue
         raw_colour_type = repo.clean_text(row.get("exterior_color_type"))
         saved_colour_tier = repo.clean_text(row.get("colour_tier")).lower()
-        colour_tier = saved_colour_tier or (
-            _derive_colour_tier(raw_colour_type) if raw_colour_type else ""
-        )
+        colour_tier = saved_colour_tier
         if colour_tier not in {"single", "dual", "special"}:
             raise ValueError(f"Colour tier is required for {mc}")
         sku = MaterialSkuMaster(
@@ -197,7 +185,7 @@ def publish_baseline(
             version=row.get("version", ""),
             exterior_color_name=row.get("exterior_color_name", ""),
             exterior_color_code=row.get("exterior_color_code", ""),
-            exterior_color_type=raw_colour_type or colour_tier,
+            exterior_color_type=raw_colour_type or "unknown",
             colour_code_confirmed=row.get("colour_code_confirmed", True),
             colour_tier=colour_tier,
             edition_tag=row.get("edition_tag"),
