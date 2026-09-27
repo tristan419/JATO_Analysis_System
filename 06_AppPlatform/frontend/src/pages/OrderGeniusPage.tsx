@@ -43,6 +43,7 @@ import { MaterialFinanceMatrix, MaterialFinanceWorkbench } from "../components/f
 import {
   BomEditPanel,
   BomFobRepriceAuditCard,
+  type BomFobAuditTemplateTarget,
   type BomEditCountryOption,
 } from "../components/orderGenius";
 import type {
@@ -3169,6 +3170,26 @@ type BomAdminModelGroup = {
   versions: Map<string, any[]>;
 };
 
+function getBomAdminPowertrainGroup(modelName: unknown): string {
+  const normalized = String(modelName || "").toUpperCase();
+  if (normalized.includes("HEV")) return "HEV";
+  if (normalized.includes("SHS")) return "PHEV";
+  if (normalized.includes("BEV") || normalized.includes(" EV")) return "BEV";
+  if (normalized.includes("ICE")) return "ICE";
+  return "Other";
+}
+
+function getBomAdminModelGroupKey(brand: unknown, modelName: unknown): string {
+  return `${String(brand || "")}|${String(modelName || "")}|${getBomAdminPowertrainGroup(modelName)}`;
+}
+
+function getBomTemplateSearchText(bomTemplate: string): string {
+  const normalized = bomTemplate.trim().toUpperCase();
+  const wildcardIndex = normalized.indexOf("**");
+  if (wildcardIndex >= 4) return normalized.slice(0, wildcardIndex);
+  return normalized.replaceAll("*", "");
+}
+
 type BomAdminTierGroups = {
   single: any[];
   dual: any[];
@@ -3562,6 +3583,8 @@ export function BomAdminPanel({
   const addColourLookupRequestRef = useRef(0);
   const copyDraftInputRefs = useRef<Record<string, HTMLInputElement | null>>({});
   const bomGroupRefs = useRef<Record<string, HTMLDivElement | null>>({});
+  const bomTemplateRowRefs = useRef<Record<string, HTMLTableRowElement | null>>({});
+  const auditNavigationTargetRef = useRef<{ modelGroupKey: string; bomTemplate: string } | null>(null);
   const expandedBomGroupKeyRef = useRef<string | null>(null);
   const [dragSku, setDragSku] = useState<string | null>(null);
   const [dragOverTier, setDragOverTier] = useState<string | null>(null);
@@ -3871,6 +3894,27 @@ export function BomAdminPanel({
       }
     }
   }, []);
+
+  const openAuditBomTemplate = useCallback(async (target: BomFobAuditTemplateTarget) => {
+    const bomTemplate = target.bomTemplate.trim().toUpperCase();
+    const search = getBomTemplateSearchText(bomTemplate);
+    const modelGroupKey = getBomAdminModelGroupKey(target.brand, target.modelName);
+    auditNavigationTargetRef.current = { modelGroupKey, bomTemplate };
+    expandedBomGroupKeyRef.current = modelGroupKey;
+    setExpandedGroups((current) => {
+      const next = new Set(current);
+      next.add(modelGroupKey);
+      return next;
+    });
+    setToolsFlipped(false);
+    setSearchText(search);
+    if (debouncedSearch !== search) {
+      skipNextDebouncedLoadRef.current = true;
+      setDebouncedSearch(search);
+    }
+    await load(search);
+    setBomAdminNotice(`Showing BOM template ${bomTemplate}. Review its saved Single / Dual / Special placement, then refresh the FOB audit.`);
+  }, [debouncedSearch, load]);
 
   const scheduleLoad = useCallback((delay = 0) => {
     if (loadTimerRef.current) clearTimeout(loadTimerRef.current);
@@ -5745,6 +5789,18 @@ export function BomAdminPanel({
     }
   }, [expandedGroups]);
 
+  useEffect(() => {
+    const target = auditNavigationTargetRef.current;
+    if (!target || !expandedGroups.has(target.modelGroupKey)) return;
+    const row = bomTemplateRowRefs.current[bomMaterialKey(target.bomTemplate)];
+    if (!row) return;
+    auditNavigationTargetRef.current = null;
+    const frame = window.requestAnimationFrame(() => {
+      row.scrollIntoView?.({ behavior: "smooth", block: "center", inline: "nearest" });
+    });
+    return () => window.cancelAnimationFrame(frame);
+  }, [expandedGroups, skus]);
+
   // Shared colour chip renderer used by BOM rows
   const renderColourChip = (s: any, isHist: boolean, editing: boolean) => {
     const effectiveTier = getEffectiveColourTier(s);
@@ -5902,11 +5958,8 @@ export function BomAdminPanel({
   const modelGroups = useMemo(() => {
     const map = new Map<string, BomAdminModelGroup>();
     for (const s of skus) {
-      const pt = (s.modelName || '').toUpperCase().includes('HEV') ? 'HEV' :
-                 (s.modelName || '').toUpperCase().includes('SHS') ? 'PHEV' :
-                 (s.modelName || '').toUpperCase().includes('BEV') || (s.modelName || '').toUpperCase().includes(' EV') ? 'BEV' :
-                 (s.modelName || '').toUpperCase().includes('ICE') ? 'ICE' : 'Other';
-      const mk = `${s.brand}|${s.modelName}|${pt}`;
+      const pt = getBomAdminPowertrainGroup(s.modelName);
+      const mk = getBomAdminModelGroupKey(s.brand, s.modelName);
       if (!map.has(mk)) map.set(mk, { brand: s.brand, modelName: s.modelName, pt, versions: new Map() });
       const vk = s.version || 'Default';
       if (!map.get(mk)!.versions.has(vk)) map.get(mk)!.versions.set(vk, []);
@@ -6093,7 +6146,7 @@ export function BomAdminPanel({
     return style;
   };
   const toolsCardHeight = toolsFlipped
-    ? (isPhoneToolsLayout ? 540 : isCompactToolsLayout ? 430 : 252)
+    ? (isPhoneToolsLayout ? 620 : isCompactToolsLayout ? 520 : 390)
     : (isPhoneToolsLayout ? 118 : 84);
   const toolsRowMarginBottom = 12;
   const bomSearchPlaceholder = isCompactToolsLayout
@@ -6424,6 +6477,7 @@ export function BomAdminPanel({
 	                  ) : null}
 	                </div>
 	                <BomFobRepriceAuditCard
+	                  onOpenBomTemplate={openAuditBomTemplate}
 	                  onApplied={async () => {
 	                    await load();
 	                    onFobChanged?.();
@@ -7284,6 +7338,9 @@ export function BomAdminPanel({
                           return (
                             <Fragment key={bomTemplate}>
                             <tr
+                              ref={(node) => {
+                                bomTemplateRowRefs.current[bomMaterialKey(bomTemplate)] = node;
+                              }}
                               style={isHist ? { opacity: 0.55, textDecoration: "line-through" }
                                    : isPhaseOut ? { opacity: 0.75 } : undefined}>
                               <td className="bom-admin-material-cell" style={{
