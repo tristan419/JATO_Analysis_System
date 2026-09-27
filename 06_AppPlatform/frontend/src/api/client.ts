@@ -5449,6 +5449,13 @@ export const api = {
     }>("/order-genius/bom-admin" + (qs ? "?" + qs : ""));
   },
 
+  exportBomAdmin: (countryCode?: string) =>
+    requestBlob("/order-genius/bom-admin/export", {
+      method: "POST",
+      body: JSON.stringify({ countryCode: countryCode || null }),
+      headers: { "Content-Type": "application/json" },
+    }),
+
   updateSkuLifecycle: (materialCode: string, body: { lifecycleStatus: string; effectiveFrom?: string; effectiveTo?: string; rowVersion: number }) =>
     request<any>(`/order-genius/material-skus/${encodeURIComponent(materialCode)}/lifecycle`, { method: "PATCH", body: JSON.stringify(body) }),
 
