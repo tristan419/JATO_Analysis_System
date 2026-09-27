@@ -3,4 +3,7 @@ export {
   type BomEditCountryOption,
   type BomEditSaveMessage,
 } from "./BomEditPanel";
-export { BomFobRepriceAuditCard } from "./BomFobRepriceAuditCard";
+export {
+  BomFobRepriceAuditCard,
+  type BomFobAuditTemplateTarget,
+} from "./BomFobRepriceAuditCard";
