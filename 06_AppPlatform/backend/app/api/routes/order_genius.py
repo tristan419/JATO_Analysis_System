@@ -28,6 +28,7 @@ from app.db.session import get_db_session
 from app.infra import order_genius_repository as repo
 from app.services import material_master_upload_service as upload_svc
 from app.services.backup_utils import backup_ordering_schema
+from app.services.bom_admin_export_service import build_bom_admin_workbook
 from app.services.order_genius_service import (
     apply_order_quantity_import,
     build_matrix,
@@ -1823,6 +1824,36 @@ def get_bom_admin(
         "countries": countries,
         "fobConflicts": fob_conflicts,
     }
+
+
+@router.post("/bom-admin/export")
+def export_bom_admin(
+    body: dict,
+    session: Session = Depends(get_db_session),
+    _=Depends(require_min_role("editor")),
+) -> StreamingResponse:
+    """Export the managed BOM/material master as a human-readable XLSX."""
+    country_code = clean_text(body.get("countryCode")).upper() or None
+    if country_code is not None and len(country_code) != 2:
+        raise HTTPException(status_code=400, detail="countryCode must be a two-letter code")
+
+    items, countries = repo.list_bom_with_fob(session, limit=5000)
+    try:
+        workbook = build_bom_admin_workbook(
+            items,
+            countries,
+            country_code=country_code,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    scope = country_code or "ALL"
+    file_name = f"BOM_Admin_Material_Master_{scope}.xlsx"
+    return StreamingResponse(
+        workbook,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": f'attachment; filename="{file_name}"'},
+    )
 
 
 @router.get("/material-skus-admin")

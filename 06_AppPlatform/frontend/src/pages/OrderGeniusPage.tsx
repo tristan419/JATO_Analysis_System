@@ -3532,6 +3532,9 @@ export function BomAdminPanel({
   });
   const [adjustCountryMessage, setAdjustCountryMessage] = useState("");
   const [adjustingCountry, setAdjustingCountry] = useState(false);
+  const [bomExportCountry, setBomExportCountry] = useState("");
+  const [exportingBomAdmin, setExportingBomAdmin] = useState(false);
+  const [bomExportStatus, setBomExportStatus] = useState("");
   const [copyDrafts, setCopyDrafts] = useState<Record<string, BomCopyDraft>>({});
   const [copyDraftErrors, setCopyDraftErrors] = useState<Record<string, string>>({});
   const [copyDraftSavingKey, setCopyDraftSavingKey] = useState<string | null>(null);
@@ -3653,6 +3656,25 @@ export function BomAdminPanel({
     }
     return map;
   }, [sortedCountries]);
+
+  const handleBomAdminExport = async () => {
+    setExportingBomAdmin(true);
+    setBomExportStatus("");
+    try {
+      const blob = await api.exportBomAdmin(bomExportCountry || undefined);
+      const url = URL.createObjectURL(blob);
+      const anchor = document.createElement("a");
+      anchor.href = url;
+      anchor.download = `BOM_Admin_Material_Master_${bomExportCountry || "ALL"}.xlsx`;
+      anchor.click();
+      URL.revokeObjectURL(url);
+      setBomExportStatus(`Exported ${bomExportCountry || "all countries"}.`);
+    } catch (error) {
+      setBomExportStatus(`Export failed: ${getErrorMessage(error)}`);
+    } finally {
+      setExportingBomAdmin(false);
+    }
+  };
   const bomAdminTableMinWidth = BOM_ADMIN_FIXED_COLUMN_WIDTH + sortedCountries.length * BOM_ADMIN_COUNTRY_COLUMN_WIDTH;
   const renderBomAdminColumnGroup = () => (
     <colgroup>
@@ -6351,6 +6373,35 @@ export function BomAdminPanel({
                     </div>
                   ) : null}
                 </form>
+                <div className="bom-admin-tool-tile">
+                  <div style={{ fontSize: 11, fontWeight: 800, color: "#334155", marginBottom: 8 }}>BOM Admin Excel</div>
+                  <div style={{ display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap" }}>
+                    <select
+                      aria-label="BOM Admin export country"
+                      value={bomExportCountry}
+                      onChange={(event) => setBomExportCountry(event.target.value)}
+                      style={{ minWidth: 150, fontSize: 11 }}
+                    >
+                      <option value="">All countries</option>
+                      {sortedActiveFobCountries.map((countryCode) => (
+                        <option key={countryCode} value={countryCode}>
+                          {countryLabels.get(countryCode) || countryCode} ({countryCode})
+                        </option>
+                      ))}
+                    </select>
+                    <button className="btn btn-sm btn-primary" type="button" disabled={exportingBomAdmin} onClick={() => void handleBomAdminExport()}>
+                      {exportingBomAdmin ? "Exporting..." : "Export material workbook"}
+                    </button>
+                  </div>
+                  <div style={{ marginTop: 7, fontSize: 9, lineHeight: 1.35, color: "#64748b" }}>
+                    One model per sheet. Blue rows mean a saved Dual/Special surcharge tier; tier is never inferred from the colour name or fill.
+                  </div>
+                  {bomExportStatus ? (
+                    <div style={{ marginTop: 7, fontSize: 11, color: bomExportStatus.startsWith("Exported") ? "#0f766e" : "#dc2626", fontWeight: 600 }}>
+                      {bomExportStatus}
+                    </div>
+                  ) : null}
+                </div>
                 <form
                   className="bom-admin-tool-tile"
                   onSubmit={handleSaveColourSurcharges}
