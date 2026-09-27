@@ -459,7 +459,7 @@ def preview_colour_rule_fills(
     session: Session = Depends(get_db_session),
     _=Depends(require_min_role("editor")),
 ) -> dict:
-    """Preview deterministic brand+code name/swatch fills without writing."""
+    """Preview new shared brand+code standards and SKU synchronization."""
     return repo.preview_colour_rule_fills(session)
 
 

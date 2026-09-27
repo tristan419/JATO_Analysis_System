@@ -23,6 +23,8 @@ describe("Order Genius colour rule page contract", () => {
     expect(pageSource).toContain("conflict: not auto-filled. Enter values manually");
     expect(pageSource).toContain("Several existing colours match this name. Choose one below");
     expect(pageSource).toContain("Name match selected one existing colour");
+    expect(pageSource).toContain("Approximate swatch generated from the colour name");
+    expect(pageSource).toContain('"generated_from_name"');
     expect(pageSource).toContain("nameCandidates.map");
     expect(pageSource).toContain("No reusable Brand + Code rule");
     expect(pageSource).toContain("Wait for the Brand + Code rule check to finish.");
@@ -65,6 +67,9 @@ describe("Order Genius colour rule page contract", () => {
     expect(pageSource).toContain("invalidIdentitySampleMaterialCodes");
     expect(pageSource).toContain("setOrderGeniusColourHexRuleStandard");
     expect(pageSource).toContain("Updated shared");
+    expect(pageSource).toContain("Confirm Brand + Code standards");
+    expect(pageSource).toContain("Confirm ${colourRulePreview.rules.length} shared standards");
+    expect(pageSource).toContain("All reusable Brand + Code standards are already confirmed.");
   });
 
   it("uses a neutral swatch border while retaining keyboard focus", () => {

@@ -189,16 +189,34 @@ export interface ColourHexRulePreviewItem {
   newColourHex: string;
 }
 
+export interface ColourHexRulePreviewRule {
+  brand: string;
+  colourCode: string;
+  colourName: string;
+  colourHex: string;
+  source: "existing_sku" | "generated_from_name";
+  skuCount: number;
+  hasNameConflict: boolean;
+  hasSwatchConflict: boolean;
+  nameOptions: ColourNameOption[];
+}
+
 export interface ColourHexRulePreview {
+  rules: ColourHexRulePreviewRule[];
   items: ColourHexRulePreviewItem[];
   total: number;
   ruleCount: number;
+  generatedRuleCount: number;
+  unresolvedRuleCount: number;
+  unresolvedConflictCount: number;
   fingerprint: string;
 }
 
 export interface ColourHexRuleApplyResult {
   updated: number;
   unchanged: number;
+  rulesCreated: number;
+  generatedRules: number;
   conflicts: number;
   missingRules: number;
   materialCodes: string[];
@@ -212,7 +230,7 @@ export interface ColourHexRuleLookup {
   status: ColourHexRuleStatus | "none";
   colourName: string | null;
   colourHex: string | null;
-  source: "brand_code_rule" | "name_candidate" | "name_candidates" | "none";
+  source: "persistent_rule" | "brand_code_rule" | "generated_from_name" | "name_candidate" | "name_candidates" | "none";
   hasNameConflict: boolean;
   hasSwatchConflict: boolean;
   nameCandidates: Array<{
