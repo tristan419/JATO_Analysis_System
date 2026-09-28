@@ -128,6 +128,7 @@ ACTIVE_MEMORY_HIGH = 6 * 1024**3
 ACTIVE_MEMORY_MAX = 8 * 1024**3
 CANDIDATE_MEMORY_HIGH = 3 * 1024**3
 CANDIDATE_MEMORY_MAX = 4 * 1024**3
+CANDIDATE_RUNTIME_ROOT = Path("/var/cache/jato-candidate")
 PREVIEW_MEMORY_HIGH = 256 * 1024**2
 PREVIEW_MEMORY_MAX = 512 * 1024**2
 EXIT_ACTIVE_RESTORE_UNPROVEN = 81
@@ -1243,6 +1244,9 @@ class FixedReleaseController:
         else:
             # Candidate must not share Active's Redis DB/cache namespace.
             lines["APP_REDIS_ENABLED"] = "false"
+            lines["APP_COC_MATCH_JOB_ROOT"] = str(
+                CANDIDATE_RUNTIME_ROOT / "coc_match"
+            )
         return "".join(f"{key}={value}\n" for key, value in lines.items())
 
     def _write_slot_env(self, slot: str, identity: ReleaseIdentity, *, active: bool) -> None:
@@ -1370,7 +1374,7 @@ class FixedReleaseController:
                 "/opt/JATO_Analysis_System-main/01_RAW_DATA",
                 "/opt/JATO_Analysis_System-main/04_Processed_data",
             ),
-            "ReadWritePaths": ("/var/cache/jato-candidate",),
+            "ReadWritePaths": (str(CANDIDATE_RUNTIME_ROOT),),
             "FragmentPath": (str(self.config.candidate_backend_unit),),
             "WorkingDirectory": (
                 "/opt/jato/slots/8001/current/06_AppPlatform/backend",
@@ -1459,6 +1463,13 @@ class FixedReleaseController:
                 "candidate_runtime_isolation_mismatch",
                 "Candidate Redis sharing is not disabled",
             )
+        if not active:
+            expected_coc_root = CANDIDATE_RUNTIME_ROOT / "coc_match"
+            if f"APP_COC_MATCH_JOB_ROOT={expected_coc_root}\n" not in env:
+                raise V2Error(
+                    "candidate_runtime_isolation_mismatch",
+                    "Candidate COC job storage is not isolated",
+                )
         if active:
             expected_lines = (
                 f"APP_JATO_MONTHLY_ACTIVE_SLOT_FILE={self.config.active_slot_file}\n",

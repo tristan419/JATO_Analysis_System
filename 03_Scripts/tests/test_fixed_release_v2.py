@@ -727,6 +727,10 @@ def test_prepare_candidate_starts_only_candidate_and_preview(tmp_path: Path) -> 
     assert "APP_RUNTIME_READ_ONLY=false" in candidate_env
     assert "APP_REDIS_ENABLED=false" in candidate_env
     assert (
+        "APP_COC_MATCH_JOB_ROOT=/var/cache/jato-candidate/coc_match"
+        in candidate_env
+    )
+    assert (
         "JATO_PARQUET_PATH=/opt/jato/shared/04_Processed_data/jato_full_archive.parquet"
         in candidate_env
     )
@@ -2169,6 +2173,7 @@ def test_update_active_uses_reviewed_candidate_and_keeps_candidate(tmp_path: Pat
     active_env = (cfg.slot_env_root / "8000.env").read_text(encoding="utf-8")
     assert "APP_JATO_MONTHLY_ENABLED=true" in active_env
     assert "APP_RELEASE_ROLE=active" in active_env
+    assert "APP_COC_MATCH_JOB_ROOT=/var/cache/jato-candidate" not in active_env
     assert f"APP_JATO_MONTHLY_ACTIVE_SLOT_FILE={cfg.active_slot_file}" in active_env
     assert f"APP_JATO_MONTHLY_DEPLOYMENT_MARKER={cfg.deployment_marker}" in active_env
     assert cfg.candidate_database_env.read_bytes() == candidate_database_env
@@ -3309,6 +3314,27 @@ def test_candidate_runtime_rejects_shared_redis_default(tmp_path: Path) -> None:
     candidate_env.write_text(
         candidate_env.read_text(encoding="utf-8").replace(
             "APP_REDIS_ENABLED=false\n",
+            "",
+        ),
+        encoding="utf-8",
+    )
+    system.units[MODULE.CANDIDATE_UNIT]["ActiveState"] = "active"
+
+    with pytest.raises(MODULE.V2Error) as caught:
+        ctrl._verify_backend(MODULE.CANDIDATE_SLOT, CANDIDATE, active=False)
+
+    assert caught.value.code == "candidate_runtime_isolation_mismatch"
+
+
+def test_candidate_runtime_rejects_shared_coc_job_storage(tmp_path: Path) -> None:
+    cfg = config(tmp_path)
+    system = FakeSystem()
+    ctrl = controller(cfg, system)
+    ctrl._write_slot_env(MODULE.CANDIDATE_SLOT, CANDIDATE, active=False)
+    candidate_env = cfg.slot_env_root / "8001.env"
+    candidate_env.write_text(
+        candidate_env.read_text(encoding="utf-8").replace(
+            "APP_COC_MATCH_JOB_ROOT=/var/cache/jato-candidate/coc_match\n",
             "",
         ),
         encoding="utf-8",
