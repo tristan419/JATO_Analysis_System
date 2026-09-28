@@ -13,7 +13,7 @@ import unicodedata
 from colorsys import hsv_to_rgb
 from collections import Counter
 from copy import deepcopy
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from uuid import UUID, uuid4
 
 from sqlalchemy import and_, delete, func, inspect, or_, select, text, update
@@ -26,6 +26,7 @@ from app.db.models import (
     CountryFobSourceMapping,
     CountryPaymentTermMaster,
     CountrySkuFobResolved,
+    CountryTemplateFobPeriod,
     FobResolvedHistory,
     MaterialBaselineVersion,
     MaterialLifecycle,
@@ -812,6 +813,138 @@ def update_bom_template_base_fob(
         "cleared": cleared,
         "details": details,
     }
+
+
+def list_country_template_fob_periods(
+    session: Session,
+    country_code: str,
+    bom_template: str,
+) -> list[CountryTemplateFobPeriod]:
+    return list(
+        session.execute(
+            select(CountryTemplateFobPeriod)
+            .where(
+                CountryTemplateFobPeriod.country_code == clean_text(country_code).upper(),
+                CountryTemplateFobPeriod.bom_template == clean_text(bom_template).upper(),
+            )
+            .order_by(CountryTemplateFobPeriod.valid_from)
+        ).scalars().all()
+    )
+
+
+def resolve_country_template_fob_period(
+    session: Session,
+    country_code: str,
+    bom_template: str,
+    target_date: date,
+) -> CountryTemplateFobPeriod | None:
+    rows = list(
+        session.execute(
+            select(CountryTemplateFobPeriod).where(
+                CountryTemplateFobPeriod.country_code == clean_text(country_code).upper(),
+                CountryTemplateFobPeriod.bom_template == clean_text(bom_template).upper(),
+                CountryTemplateFobPeriod.valid_from <= target_date,
+                or_(
+                    CountryTemplateFobPeriod.valid_to.is_(None),
+                    CountryTemplateFobPeriod.valid_to >= target_date,
+                ),
+            )
+        ).scalars().all()
+    )
+    if len(rows) > 1:
+        raise ValueError(
+            f"Overlapping FOB periods for {clean_text(bom_template).upper()} / "
+            f"{clean_text(country_code).upper()} on {target_date.isoformat()}"
+        )
+    return rows[0] if rows else None
+
+
+def save_country_template_fob_period(
+    session: Session,
+    *,
+    country_code: str,
+    bom_template: str,
+    valid_from: date,
+    valid_to: date | None,
+    base_fob_eur: float,
+    remark: str | None,
+    changed_by: str,
+    period_id: UUID | None = None,
+    row_version: int | None = None,
+) -> CountryTemplateFobPeriod:
+    country = clean_text(country_code).upper()
+    template = clean_text(bom_template).upper()
+    if not country or not template:
+        raise ValueError("countryCode and bomTemplate are required")
+    if valid_to is not None and valid_to < valid_from:
+        raise ValueError("validTo must be on or after validFrom")
+    if base_fob_eur < 0:
+        raise ValueError("baseFobEur must be greater than or equal to 0")
+
+    row = (
+        session.get(CountryTemplateFobPeriod, period_id)
+        if period_id is not None
+        else None
+    )
+    if period_id is not None and row is None:
+        raise LookupError("FOB period not found")
+    if row is not None and row_version is not None and row.row_version != row_version:
+        raise RuntimeError("FOB period changed; refresh and retry")
+    if row is not None and (
+        row.country_code != country or row.bom_template != template
+    ):
+        raise ValueError("FOB period country and BOM template cannot be changed")
+
+    overlap = select(CountryTemplateFobPeriod.country_template_fob_period_id).where(
+        CountryTemplateFobPeriod.country_code == country,
+        CountryTemplateFobPeriod.bom_template == template,
+        or_(
+            CountryTemplateFobPeriod.valid_to.is_(None),
+            CountryTemplateFobPeriod.valid_to >= valid_from,
+        ),
+    )
+    if valid_to is not None:
+        overlap = overlap.where(CountryTemplateFobPeriod.valid_from <= valid_to)
+    if period_id is not None:
+        overlap = overlap.where(
+            CountryTemplateFobPeriod.country_template_fob_period_id != period_id
+        )
+    if session.execute(overlap.limit(1)).scalar_one_or_none() is not None:
+        raise ValueError("FOB periods cannot overlap for the same template and country")
+
+    if row is None:
+        row = CountryTemplateFobPeriod(
+            country_template_fob_period_id=uuid4(),
+            country_code=country,
+            bom_template=template,
+            valid_from=valid_from,
+            base_fob_eur=round(base_fob_eur, 2),
+            created_by=changed_by,
+        )
+        session.add(row)
+    else:
+        row.row_version += 1
+    row.country_code = country
+    row.bom_template = template
+    row.valid_from = valid_from
+    row.valid_to = valid_to
+    row.base_fob_eur = round(base_fob_eur, 2)
+    row.remark = clean_text(remark) or None
+    row.updated_by = changed_by
+    return row
+
+
+def delete_country_template_fob_period(
+    session: Session,
+    period_id: UUID,
+    row_version: int,
+) -> None:
+    row = session.get(CountryTemplateFobPeriod, period_id)
+    if row is None:
+        raise LookupError("FOB period not found")
+    if row.row_version != row_version:
+        raise RuntimeError("FOB period changed; refresh and retry")
+    session.delete(row)
 
 
 def initialize_sku_fobs_from_source(

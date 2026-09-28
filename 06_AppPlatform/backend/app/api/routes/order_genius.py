@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import io
+from datetime import date
 from uuid import UUID
 import uuid as uuid_module
 from pathlib import Path
@@ -23,7 +24,7 @@ from app.api.order_genius_schemas import (
 )
 from app.core.config import PROJECT_ROOT
 from app.core.security import require_min_role, require_roles, validate_country_access
-from app.db.models import CountryPaymentTermMaster, PaymentTermAuditLog
+from app.db.models import CountryPaymentTermMaster, CountryTemplateFobPeriod, PaymentTermAuditLog
 from app.db.session import get_db_session
 from app.infra import order_genius_repository as repo
 from app.services import material_master_upload_service as upload_svc
@@ -87,6 +88,31 @@ def _parse_fob_value(raw_value: object) -> float | None:
         raise HTTPException(status_code=400, detail="finalFobEur must be numeric") from exc
 
 
+def _parse_iso_date(raw_value: object, field_name: str, *, required: bool = False) -> date | None:
+    value = clean_text(raw_value)
+    if not value:
+        if required:
+            raise HTTPException(status_code=400, detail=f"{field_name} is required")
+        return None
+    try:
+        return date.fromisoformat(value)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=f"{field_name} must be YYYY-MM-DD") from exc
+
+
+def _country_template_fob_period_payload(row: CountryTemplateFobPeriod) -> dict:
+    return {
+        "periodId": str(row.country_template_fob_period_id),
+        "countryCode": row.country_code,
+        "bomTemplate": row.bom_template,
+        "validFrom": row.valid_from.isoformat(),
+        "validTo": row.valid_to.isoformat() if row.valid_to else None,
+        "baseFobEur": float(row.base_fob_eur),
+        "remark": row.remark,
+        "rowVersion": row.row_version,
+    }
+
+
 def _export_filter_params(body: dict) -> dict:
     return {
         "brand": body.get("brand"),
@@ -96,6 +122,10 @@ def _export_filter_params(body: dict) -> dict:
         "colour": body.get("colour"),
         "material_code_search": body.get("materialCodeSearch") or body.get("material_code_search"),
         "selected_month": _selected_month_from_body(body),
+        "selection_date": _parse_iso_date(
+            body.get("selectionDate") or body.get("selection_date"),
+            "selectionDate",
+        ),
         "hide_empty_rows": _body_bool(body.get("hideEmptyRows", body.get("hide_empty_rows", False))),
     }
 
@@ -109,11 +139,14 @@ def _export_filename_suffix(filters: dict) -> str:
         filters.get("colour"),
         filters.get("material_code_search"),
         filters.get("selected_month"),
+        filters.get("selection_date"),
         filters.get("hide_empty_rows"),
     ])
     suffix = "_filtered" if is_filtered else ""
     if filters.get("selected_month"):
         suffix += f"_M{filters['selected_month']:02d}"
+    if filters.get("selection_date"):
+        suffix += f"_{filters['selection_date'].isoformat()}"
     return suffix
 
 
@@ -615,6 +648,7 @@ def get_order_genius_matrix(
     version: str | None = Query(default=None),
     colour: str | None = Query(default=None),
     material_code_search: str | None = Query(default=None),
+    selection_date: str | None = Query(default=None),
     session: Session = Depends(get_db_session),
     user=Depends(require_min_role("viewer")),
 ) -> dict:
@@ -629,6 +663,7 @@ def get_order_genius_matrix(
         version=version,
         colour=colour,
         material_code_search=material_code_search,
+        selection_date=_parse_iso_date(selection_date, "selectionDate"),
     )
 
 
@@ -669,6 +704,10 @@ def get_order_genius_matrix_batch(
             body.get("materialCodeSearch")
             or body.get("material_code_search")
             or None
+        ),
+        "selection_date": _parse_iso_date(
+            body.get("selectionDate") or body.get("selection_date"),
+            "selectionDate",
         ),
     }
 
@@ -998,6 +1037,106 @@ def patch_bom_template_fob(
     except IntegrityError as exc:
         session.rollback()
         raise HTTPException(status_code=409, detail="Could not save BOM template base FOB") from exc
+
+
+@router.get("/bom-templates/fob-periods")
+def get_bom_template_fob_periods(
+    bom_template: str = Query(alias="bomTemplate"),
+    country_code: str = Query(alias="countryCode"),
+    session: Session = Depends(get_db_session),
+    user=Depends(require_min_role("viewer")),
+) -> dict:
+    country = clean_text(country_code).upper()
+    template = clean_text(bom_template).upper()
+    if not country or not template:
+        raise HTTPException(status_code=400, detail="countryCode and bomTemplate are required")
+    validate_country_access(session, user.name, user.role, country)
+    rows = repo.list_country_template_fob_periods(session, country, template)
+    return {"periods": [_country_template_fob_period_payload(row) for row in rows]}
+
+
+@router.put("/bom-templates/fob-periods")
+def put_bom_template_fob_period(
+    body: dict,
+    session: Session = Depends(get_db_session),
+    user=Depends(require_min_role("editor")),
+) -> dict:
+    country = clean_text(body.get("countryCode")).upper()
+    template = clean_text(body.get("bomTemplate")).upper()
+    if not country or not template:
+        raise HTTPException(status_code=400, detail="countryCode and bomTemplate are required")
+    validate_country_access(session, user.name, user.role, country)
+    valid_from = _parse_iso_date(body.get("validFrom"), "validFrom", required=True)
+    valid_to = _parse_iso_date(body.get("validTo"), "validTo")
+    try:
+        base_fob = float(body.get("baseFobEur"))
+    except (TypeError, ValueError) as exc:
+        raise HTTPException(status_code=400, detail="baseFobEur must be a non-negative number") from exc
+    period_id_raw = clean_text(body.get("periodId"))
+    try:
+        period_id = UUID(period_id_raw) if period_id_raw else None
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail="periodId is invalid") from exc
+    if period_id is not None:
+        existing = session.get(CountryTemplateFobPeriod, period_id)
+        if existing is None:
+            raise HTTPException(status_code=404, detail="FOB period not found")
+        validate_country_access(session, user.name, user.role, existing.country_code)
+        if existing.country_code != country or existing.bom_template != template:
+            raise HTTPException(
+                status_code=400,
+                detail="FOB period country and BOM template cannot be changed",
+            )
+    try:
+        row = repo.save_country_template_fob_period(
+            session,
+            country_code=country,
+            bom_template=template,
+            valid_from=valid_from,
+            valid_to=valid_to,
+            base_fob_eur=base_fob,
+            remark=clean_text(body.get("remark")) or None,
+            changed_by=user.name,
+            period_id=period_id,
+            row_version=int(body.get("rowVersion")) if body.get("rowVersion") is not None else None,
+        )
+        session.commit()
+        session.refresh(row)
+        return _country_template_fob_period_payload(row)
+    except LookupError as exc:
+        session.rollback()
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except RuntimeError as exc:
+        session.rollback()
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except ValueError as exc:
+        session.rollback()
+        detail = str(exc)
+        status_code = 409 if "overlap" in detail.lower() else 400
+        raise HTTPException(status_code=status_code, detail=detail) from exc
+
+
+@router.delete("/bom-templates/fob-periods/{period_id}")
+def delete_bom_template_fob_period(
+    period_id: UUID,
+    row_version: int = Query(alias="rowVersion"),
+    session: Session = Depends(get_db_session),
+    user=Depends(require_min_role("editor")),
+) -> dict:
+    row = session.get(CountryTemplateFobPeriod, period_id)
+    if row is None:
+        raise HTTPException(status_code=404, detail="FOB period not found")
+    validate_country_access(session, user.name, user.role, row.country_code)
+    try:
+        repo.delete_country_template_fob_period(session, period_id, row_version)
+        session.commit()
+        return {"deleted": True, "periodId": str(period_id)}
+    except LookupError as exc:
+        session.rollback()
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except RuntimeError as exc:
+        session.rollback()
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
 
 
 @router.patch("/material-skus/{material_code}/colour-tier")

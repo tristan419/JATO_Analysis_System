@@ -44,6 +44,17 @@ export interface MaterialSkuMatrixRow {
   editionTag?: string | null;
   powertrain: string | null;
   fobEur: number | null;
+  fobPeriod?: {
+    periodId?: string;
+    selectionDate: string;
+    validFrom?: string;
+    validTo?: string | null;
+    baseFobEur?: number;
+    colourTier?: string | null;
+    surchargeEur?: number;
+    surchargeSource?: string | null;
+    status: string;
+  } | null;
   fobConflict?: FobConflict | null;
   lifecycleStatus: string;
   editable: boolean;
@@ -60,6 +71,7 @@ export interface MatrixResponse {
   countryName: string | null;
   paymentTermCode: string | null;
   year: number;
+  selectionDate?: string | null;
   rows: MaterialSkuMatrixRow[];
   totalRows: number;
   fobConflicts?: FobConflict[];
@@ -68,6 +80,17 @@ export interface MatrixResponse {
 export interface MatrixBatchResponse {
   matrices: Record<string, MatrixResponse>;
   errors: Record<string, string>;
+}
+
+export interface CountryTemplateFobPeriod {
+  periodId: string;
+  countryCode: string;
+  bomTemplate: string;
+  validFrom: string;
+  validTo: string | null;
+  baseFobEur: number;
+  remark: string | null;
+  rowVersion: number;
 }
 
 export interface QuantityCellUpdate {

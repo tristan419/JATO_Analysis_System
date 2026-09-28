@@ -164,6 +164,7 @@ import type {
   CountryMaterialFinanceRow,
   CountryMaterialFinanceUpdate,
   CountryPaymentTerm,
+  CountryTemplateFobPeriod,
   MaterialUploadPreview,
   MaterialUploadPreviewRow,
   MaterialUploadSession,
@@ -5015,6 +5016,7 @@ export const api = {
     version?: string;
     colour?: string;
     materialCodeSearch?: string;
+    selectionDate?: string;
   }) => {
     const qs = new URLSearchParams();
     qs.set("country", params.country);
@@ -5026,6 +5028,7 @@ export const api = {
     if (params.colour) qs.set("colour", params.colour);
     if (params.materialCodeSearch)
       qs.set("material_code_search", params.materialCodeSearch);
+    if (params.selectionDate) qs.set("selection_date", params.selectionDate);
     return request<MatrixResponse>(
       `/order-genius/matrix?${qs.toString()}`,
     );
@@ -5040,6 +5043,7 @@ export const api = {
     version?: string;
     colour?: string;
     materialCodeSearch?: string;
+    selectionDate?: string;
   }) =>
     request<MatrixBatchResponse>("/order-genius/matrix/batch", {
       method: "POST",
@@ -5052,6 +5056,7 @@ export const api = {
         version: params.version,
         colour: params.colour,
         materialCodeSearch: params.materialCodeSearch,
+        selectionDate: params.selectionDate,
       }),
     }),
 
@@ -5157,14 +5162,14 @@ export const api = {
       },
     ).then(mapCountryMaterialFinanceRow),
 
-  exportOrderGenius: (country: string, year: number, opts?: { brand?: string; model?: string; powertrain?: string; version?: string; colour?: string; materialCodeSearch?: string; selectedMonth?: number; hideEmptyRows?: boolean; quantitiesOnly?: boolean }) =>
+  exportOrderGenius: (country: string, year: number, opts?: { brand?: string; model?: string; powertrain?: string; version?: string; colour?: string; materialCodeSearch?: string; selectedMonth?: number; selectionDate?: string; hideEmptyRows?: boolean; quantitiesOnly?: boolean }) =>
     requestBlob("/order-genius/export", {
       method: "POST",
       body: JSON.stringify({ country, year, ...opts }),
       headers: { "Content-Type": "application/json" },
     }),
 
-  exportOrderGeniusPi: (country: string, year: number, opts?: { brand?: string; model?: string; powertrain?: string; version?: string; colour?: string; materialCodeSearch?: string; selectedMonth?: number; hideEmptyRows?: boolean; freightEur?: number; insuranceEur?: number; domesticFreightEur?: number; domesticInsuranceEur?: number }) =>
+  exportOrderGeniusPi: (country: string, year: number, opts?: { brand?: string; model?: string; powertrain?: string; version?: string; colour?: string; materialCodeSearch?: string; selectedMonth?: number; selectionDate?: string; hideEmptyRows?: boolean; freightEur?: number; insuranceEur?: number; domesticFreightEur?: number; domesticInsuranceEur?: number }) =>
     requestBlob("/order-genius/export-pi", {
       method: "POST",
       body: JSON.stringify({ country, year, ...opts }),
@@ -5466,6 +5471,36 @@ export const api = {
     request<{ bomTemplate: string; countryCode: string; baseFobEur: number | null; updated: number; created: number; cleared: number; details: Array<Record<string, unknown>> }>(
       "/order-genius/bom-templates/fob",
       { method: "PATCH", body: JSON.stringify(body) },
+    ),
+
+  listBomTemplateFobPeriods: (params: { bomTemplate: string; countryCode: string }) => {
+    const qs = new URLSearchParams({
+      bomTemplate: params.bomTemplate,
+      countryCode: params.countryCode,
+    });
+    return request<{ periods: CountryTemplateFobPeriod[] }>(
+      `/order-genius/bom-templates/fob-periods?${qs.toString()}`,
+    );
+  },
+
+  saveBomTemplateFobPeriod: (body: {
+    periodId?: string;
+    bomTemplate: string;
+    countryCode: string;
+    validFrom: string;
+    validTo?: string | null;
+    baseFobEur: number;
+    remark?: string | null;
+    rowVersion?: number;
+  }) => request<CountryTemplateFobPeriod>(
+    "/order-genius/bom-templates/fob-periods",
+    { method: "PUT", body: JSON.stringify(body) },
+  ),
+
+  deleteBomTemplateFobPeriod: (periodId: string, rowVersion: number) =>
+    request<{ deleted: boolean; periodId: string }>(
+      `/order-genius/bom-templates/fob-periods/${encodeURIComponent(periodId)}?rowVersion=${rowVersion}`,
+      { method: "DELETE" },
     ),
 
   updateSkuFobsBulk: (body: { updates: { materialCode: string; countryCode: string; finalFobEur: number | null; paymentTermCode?: string | null }[] }) =>

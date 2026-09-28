@@ -12489,6 +12489,80 @@ table.data-table tr.data-table-group-row.contains-selection td {
   color: #667085;
 }
 
+.og-pi-batch-summary {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 6px;
+}
+
+.og-pi-batch-summary > span {
+  display: grid;
+  gap: 2px;
+  border: 1px solid #e5eaf0;
+  border-radius: 6px;
+  background: rgba(255, 255, 255, 0.72);
+  padding: 7px 9px;
+}
+
+.og-pi-batch-summary small,
+.og-pi-existing-batches small {
+  color: #667085;
+  font-size: 10px;
+}
+
+.og-pi-batch-summary strong {
+  color: #111827;
+  font-size: 15px;
+}
+
+.og-pi-batch-summary .is-warning {
+  border-color: #f0b267;
+  background: #fff8ed;
+}
+
+.og-pi-existing-batches {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+
+.og-pi-line-batches {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 7px;
+}
+
+.og-pi-line-batches a {
+  color: #1d4ed8;
+  font-weight: 800;
+  text-decoration: none;
+}
+
+.og-pi-line-batches a:hover {
+  text-decoration: underline;
+}
+
+.og-pi-existing-batches > strong {
+  margin-right: 4px;
+  color: #344054;
+  font-size: 11px;
+}
+
+.og-pi-existing-batches a {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  border: 1px solid rgba(28, 105, 212, 0.28);
+  border-radius: 999px;
+  background: rgba(28, 105, 212, 0.08);
+  color: #1c69d4;
+  font-size: 11px;
+  font-weight: 800;
+  padding: 4px 8px;
+  text-decoration: none;
+}
+
 .og-pi-batch-mode {
   display: inline-grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -12605,6 +12679,9 @@ table.data-table tr.data-table-group-row.contains-selection td {
 }
 
 @media (max-width: 780px) {
+  .og-pi-batch-summary {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
   .order-genius-control-drawer {
     top: 84px;
     right: 12px;
@@ -13068,7 +13145,9 @@ table.data-table tr.data-table-group-row.contains-selection td {
 }
 
 .bom-fob-edit-modal-shell {
-  width: min(520px, calc(100vw - 56px));
+  width: min(920px, calc(100vw - 56px));
+  max-height: calc(100vh - 56px);
+  overflow: auto;
 }
 
 .bom-colour-code-edit-modal-shell {
@@ -15660,6 +15739,138 @@ table.material-finance-table td:nth-child(n+5) {
   font-size: 13px;
   line-height: 1.35;
   resize: vertical;
+}
+
+.bom-fob-period-editor {
+  display: grid;
+  gap: 10px;
+  padding: 12px;
+  border: 1px solid #dbe4f0;
+  border-radius: 7px;
+  background: rgba(248, 250, 252, 0.88);
+}
+
+.bom-fob-period-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.bom-fob-period-head > div {
+  display: grid;
+  gap: 3px;
+}
+
+.bom-fob-period-head strong {
+  color: #0f172a;
+  font-size: 13px;
+}
+
+.bom-fob-period-head span,
+.bom-fob-period-editor > p {
+  margin: 0;
+  color: #64748b;
+  font-size: 11px;
+}
+
+.bom-fob-period-list {
+  display: grid;
+  max-height: 180px;
+  overflow: auto;
+  border: 1px solid #e2e8f0;
+  background: #fff;
+}
+
+.bom-fob-period-row {
+  display: grid;
+  grid-template-columns: 180px 110px minmax(120px, 1fr) auto;
+  align-items: center;
+  gap: 10px;
+  min-height: 38px;
+  padding: 6px 8px;
+  border-bottom: 1px solid #eef2f7;
+  color: #475569;
+  font-size: 11px;
+}
+
+.bom-fob-period-row:last-child {
+  border-bottom: 0;
+}
+
+.bom-fob-period-row strong {
+  color: #0f766e;
+  text-align: right;
+}
+
+.bom-fob-period-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 6px;
+}
+
+.bom-fob-period-draft {
+  display: grid;
+  grid-template-columns: 140px 140px 130px minmax(160px, 1fr) auto;
+  align-items: end;
+  gap: 8px;
+}
+
+.bom-fob-period-draft label {
+  display: grid;
+  gap: 4px;
+  color: #475569;
+  font-size: 9px;
+  font-weight: 900;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.bom-fob-period-draft input {
+  width: 100%;
+  min-width: 0;
+  height: 34px;
+  padding: 0 8px;
+  border: 1px solid #cbd5e1;
+  border-radius: 4px;
+  background: #fff;
+}
+
+.order-genius-date-filter {
+  display: grid;
+  gap: 3px;
+  min-width: 146px;
+  color: #64748b;
+  font-size: 9px;
+  font-weight: 900;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.order-genius-date-filter input {
+  width: 100%;
+  min-height: 34px;
+  padding: 0 8px;
+  border: 1px solid #cbd5e1;
+  border-radius: 4px;
+  background: #fff;
+  color: #0f172a;
+}
+
+@media (max-width: 760px) {
+  .bom-fob-period-row,
+  .bom-fob-period-draft {
+    grid-template-columns: 1fr;
+  }
+
+  .bom-fob-period-row strong {
+    text-align: left;
+  }
+
+  .bom-fob-period-actions {
+    justify-content: flex-start;
+  }
 }
 
 .bom-colour-code-edit-grid input {

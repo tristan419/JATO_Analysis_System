@@ -271,7 +271,7 @@ export function CocMatchPage() {
   const [fillPdfFile, setFillPdfFile] = useState<File | null>(null);
   const [overwriteExisting, setOverwriteExisting] = useState(false);
   const [includeResultSheet, setIncludeResultSheet] = useState(false);
-  const [conflictStrategy, setConflictStrategy] = useState<"date_country" | "strict">("strict");
+  const [conflictStrategy, setConflictStrategy] = useState<"date_country" | "strict">("date_country");
   const [fillUploading, setFillUploading] = useState(false);
   const [fillError, setFillError] = useState<string | null>(null);
   const [fillUploadDetail, setFillUploadDetail] = useState<string | null>(null);
@@ -875,8 +875,8 @@ export function CocMatchPage() {
         <label style={fieldStyle}>
           <span>冲突策略</span>
           <select value={conflictStrategy} onChange={(event) => setConflictStrategy(event.target.value as "date_country" | "strict")}>
-            <option value="strict">严格唯一，否则标记冲突</option>
             <option value="date_country">按生产日期 / 国家收敛</option>
+            <option value="strict">严格唯一，否则标记冲突</option>
           </select>
         </label>
         <label style={checkboxStyle}>

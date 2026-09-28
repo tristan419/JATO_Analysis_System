@@ -1,4 +1,5 @@
 """Real SQLAlchemy transactions: exercise public pricing paths, not mock prices."""
+from datetime import date
 from uuid import uuid4
 from types import SimpleNamespace
 
@@ -27,7 +28,7 @@ def db():
               models.BrandColourSurchargeRule, models.SpecialColourSurchargeRule,
               models.BrandColourSwatchRule, models.CountryPaymentTermMaster,
               models.CountryMaterialFinance, models.CountryFobSourceMapping,
-              models.OrderQuantityCell]
+              models.CountryTemplateFobPeriod, models.OrderQuantityCell]
     metadata = MetaData()
     for model in tables:
         table = model.__table__.to_metadata(metadata)
@@ -138,6 +139,119 @@ def test_audit_apply_reload_is_idempotent_and_matches_matrix(db):
     assert next(row for row in bom if row["materialCode"] == "D")["fobByCountry"]["CH"]["finalFobEur"] == 19650
     matrix = service.build_matrix(db, "CH", 2026)
     assert next(row for row in matrix["rows"] if row["materialCode"] == "D")["fobEur"] == 19650
+
+
+def test_matrix_selection_date_uses_country_template_base_and_saved_tier(db):
+    sku(db, "S", "single")
+    sku(db, "D", "dual")
+    fob(db, "S", 1000)
+    fob(db, "D", 1300, base=1000, surcharge=300)
+    repo.save_country_template_fob_period(
+        db,
+        country_code="CH",
+        bom_template="T**001",
+        valid_from=date(2026, 7, 15),
+        valid_to=date(2026, 7, 31),
+        base_fob_eur=1200,
+        remark="July update",
+        changed_by="test",
+    )
+    db.commit()
+
+    matrix = service.build_matrix(db, "CH", 2026, selection_date=date(2026, 7, 20))
+    rows = {row["materialCode"]: row for row in matrix["rows"]}
+
+    assert rows["S"]["fobEur"] == 1200
+    assert rows["D"]["fobEur"] == 1500
+    assert rows["D"]["fobPeriod"]["colourTier"] == "dual"
+    assert rows["D"]["fobPeriod"]["surchargeEur"] == 300
+
+
+def test_zero_period_marks_sku_stopped_without_default_fallback(db):
+    sku(db, "S", "single")
+    fob(db, "S", 1000)
+    repo.save_country_template_fob_period(
+        db,
+        country_code="CH",
+        bom_template="T**001",
+        valid_from=date(2026, 8, 1),
+        valid_to=date(2026, 8, 31),
+        base_fob_eur=0,
+        remark="Stopped",
+        changed_by="test",
+    )
+    db.commit()
+
+    matrix = service.build_matrix(db, "CH", 2026, selection_date=date(2026, 8, 10))
+    row = next(item for item in matrix["rows"] if item["materialCode"] == "S")
+
+    assert row["fobEur"] is None
+    assert row["fobPeriod"]["status"] == "stopped"
+
+
+def test_template_country_fob_periods_reject_overlap(db):
+    repo.save_country_template_fob_period(
+        db,
+        country_code="CH",
+        bom_template="T**001",
+        valid_from=date(2026, 9, 1),
+        valid_to=date(2026, 9, 15),
+        base_fob_eur=1000,
+        remark=None,
+        changed_by="test",
+    )
+    with pytest.raises(ValueError, match="cannot overlap"):
+        repo.save_country_template_fob_period(
+            db,
+            country_code="CH",
+            bom_template="T**001",
+            valid_from=date(2026, 9, 15),
+            valid_to=date(2026, 9, 30),
+            base_fob_eur=1200,
+            remark=None,
+            changed_by="test",
+        )
+
+
+def test_template_country_fob_period_update_keeps_original_scope(db, monkeypatch):
+    period = repo.save_country_template_fob_period(
+        db,
+        country_code="CH",
+        bom_template="T**001",
+        valid_from=date(2026, 10, 1),
+        valid_to=date(2026, 10, 31),
+        base_fob_eur=1000,
+        remark=None,
+        changed_by="test",
+    )
+    db.commit()
+    calls = []
+    monkeypatch.setattr(
+        routes,
+        "validate_country_access",
+        lambda _session, _name, _role, country: calls.append(country),
+    )
+
+    with pytest.raises(routes.HTTPException) as exc:
+        routes.put_bom_template_fob_period(
+            body={
+                "periodId": str(period.country_template_fob_period_id),
+                "rowVersion": period.row_version,
+                "countryCode": "RO",
+                "bomTemplate": "T**001",
+                "validFrom": "2026-10-01",
+                "validTo": "2026-10-31",
+                "baseFobEur": 1100,
+            },
+            session=db,
+            user=SimpleNamespace(name="tester", role="editor"),
+        )
+
+    assert exc.value.status_code == 400
+    assert calls == ["RO", "CH"]
+    db.refresh(period)
+    assert period.country_code == "CH"
+    assert float(period.base_fob_eur) == 1000
 
 
 def test_conflicting_single_payment_terms_remain_ambiguous(db):

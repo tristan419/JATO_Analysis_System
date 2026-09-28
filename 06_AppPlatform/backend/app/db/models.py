@@ -2056,6 +2056,44 @@ class CountrySkuFobResolved(TimestampMixin, Base):
     is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
 
 
+class CountryTemplateFobPeriod(TimestampMixin, Base):
+    """Date-effective Single base FOB for one BOM template and country."""
+
+    __tablename__ = "country_template_fob_period"
+    __table_args__ = (
+        UniqueConstraint(
+            "country_code", "bom_template", "valid_from",
+            name="uq_country_template_fob_period_start",
+        ),
+        CheckConstraint(
+            "valid_to IS NULL OR valid_to >= valid_from",
+            name="ck_country_template_fob_period_window",
+        ),
+        CheckConstraint(
+            "base_fob_eur >= 0",
+            name="ck_country_template_fob_period_non_negative",
+        ),
+        Index(
+            "ix_country_template_fob_period_lookup",
+            "country_code", "bom_template", "valid_from", "valid_to",
+        ),
+        {"schema": "ordering"},
+    )
+
+    country_template_fob_period_id: Mapped[UUID] = mapped_column(
+        PGUUID(as_uuid=True), primary_key=True, default=uuid4
+    )
+    country_code: Mapped[str] = mapped_column(Text, nullable=False)
+    bom_template: Mapped[str] = mapped_column(Text, nullable=False)
+    valid_from: Mapped[date] = mapped_column(Date, nullable=False)
+    valid_to: Mapped[date | None] = mapped_column(Date, nullable=True)
+    base_fob_eur: Mapped[float] = mapped_column(Numeric(12, 2), nullable=False)
+    remark: Mapped[str | None] = mapped_column(Text, nullable=True)
+    row_version: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    created_by: Mapped[str | None] = mapped_column(Text, nullable=True)
+    updated_by: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+
 class CountryMaterialFinance(TimestampMixin, Base):
     __tablename__ = "country_material_finance"
     __table_args__ = (

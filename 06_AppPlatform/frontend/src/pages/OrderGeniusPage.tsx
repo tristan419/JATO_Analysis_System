@@ -59,6 +59,7 @@ import type {
   CountryMaterialFinanceRow,
   CountryMaterialFinanceUpdate,
   CountryPaymentTerm,
+  CountryTemplateFobPeriod,
   MaterialSkuMatrixRow,
   MaterialUploadPreview,
   MatrixResponse,
@@ -70,6 +71,11 @@ import type {
   QuantityImportPreview,
   QuantityImportResult,
 } from "../types/orderGenius";
+import type {
+  PiOrderHeader,
+  VehicleAllocationPlan,
+  VehicleAllocationPlanLine,
+} from "../types/orderGeniusVehicle";
 
 const CHUNK_SIZE = 5 * 1024 * 1024; // 5 MB
 const MONTHS = [
@@ -661,6 +667,7 @@ export function OrderGeniusPage() {
   }, []);
   const [selectedYear, setSelectedYear] = useState(new Date().getFullYear());
   const [selectedMonth, setSelectedMonth] = useState<number | null>(null); // null = all months
+  const [selectionDate, setSelectionDate] = useState("");
   const [visibleColumns, setVisibleColumns] = useState({
     months: true, amount: true, ttlQty: true, ttlAmount: true, fob: true, materialCode: true, remark: true,
   });
@@ -827,6 +834,11 @@ export function OrderGeniusPage() {
   const [creatingPiBatch, setCreatingPiBatch] = useState(false);
   const [piBatchNotice, setPiBatchNotice] = useState("");
   const [piBatchCreatedCodes, setPiBatchCreatedCodes] = useState<string[]>([]);
+  const [piAllocationPlans, setPiAllocationPlans] = useState<Record<string, VehicleAllocationPlan>>({});
+  const [piExistingBatches, setPiExistingBatches] = useState<PiOrderHeader[]>([]);
+  const [piPlanLoading, setPiPlanLoading] = useState(false);
+  const [piPlanError, setPiPlanError] = useState("");
+  const [piBatchRefreshKey, setPiBatchRefreshKey] = useState(0);
   const matrixRequestIdRef = useRef(0);
 
   useEffect(() => {
@@ -918,6 +930,7 @@ export function OrderGeniusPage() {
       version: versionFilter || undefined,
       colour: colourFilter || undefined,
       materialCodeSearch: debouncedMaterialSearch || undefined,
+      selectionDate: selectionDate || undefined,
     };
     void api
       .getOrderGeniusMatrixBatch({ countries: selectedCountries, ...params })
@@ -945,7 +958,7 @@ export function OrderGeniusPage() {
       });
   }, [
     selectedCountries, selectedYear, brandFilter, modelFilter,
-    powertrainFilter, versionFilter, colourFilter, debouncedMaterialSearch,
+    powertrainFilter, versionFilter, colourFilter, debouncedMaterialSearch, selectionDate,
   ]);
 
   useEffect(() => {
@@ -1301,6 +1314,7 @@ export function OrderGeniusPage() {
   // Stable refs so callback identity doesn't change on re-render (prevents grid flash)
   const selCountriesRef = useRef(selectedCountries); selCountriesRef.current = selectedCountries;
   const selYearRef = useRef(selectedYear); selYearRef.current = selectedYear;
+  const selectionDateRef = useRef(selectionDate); selectionDateRef.current = selectionDate;
   const loadMatricesRef = useRef(loadMatrices); loadMatricesRef.current = loadMatrices;
 
   const toggleProductGroup = useCallback((groupKey: string) => {
@@ -1385,6 +1399,7 @@ export function OrderGeniusPage() {
               country: countryCode,
               year: selYearRef.current,
               materialCodeSearch: data.materialCode,
+              selectionDate: selectionDateRef.current || undefined,
             });
             const normalizedMaterial = data.materialCode.trim().toUpperCase();
             const latestRow = latestMatrix.rows.find(
@@ -1557,6 +1572,110 @@ export function OrderGeniusPage() {
     return result;
   }, [combinedMatrix.rows, quantityDrafts, selectedMonth]);
 
+  useEffect(() => {
+    if (selectedMonth == null || selectedCountries.length === 0) {
+      setPiAllocationPlans({});
+      setPiExistingBatches([]);
+      setPiPlanError("");
+      return;
+    }
+    let cancelled = false;
+    setPiPlanLoading(true);
+    setPiPlanError("");
+
+    const loadBatchesForCountry = async (countryCode: string): Promise<PiOrderHeader[]> => {
+      const month = `${selectedYear}-${String(selectedMonth).padStart(2, "0")}`;
+      const first = await api.getVehicleAllocationPis({ country: countryCode, month, page: 1, pageSize: 200 });
+      const batches = [...first.items];
+      const totalPages = Math.ceil(first.total / 200);
+      for (let pageNumber = 2; pageNumber <= totalPages; pageNumber += 1) {
+        const page = await api.getVehicleAllocationPis({
+          country: countryCode,
+          month,
+          page: pageNumber,
+          pageSize: 200,
+        });
+        batches.push(...page.items);
+      }
+      return batches;
+    };
+
+    void Promise.all(selectedCountries.map(async (countryCode) => ({
+      countryCode,
+      plan: await api.getVehicleAllocationOrderMatrixPlan(countryCode, selectedYear, selectedMonth),
+      batches: await loadBatchesForCountry(countryCode),
+    })))
+      .then((results) => {
+        if (cancelled) return;
+        const plans: Record<string, VehicleAllocationPlan> = {};
+        const batches = new Map<string, PiOrderHeader>();
+        results.forEach((result) => {
+          plans[result.countryCode] = result.plan;
+          result.batches.forEach((batch) => batches.set(batch.piCode, batch));
+        });
+        setPiAllocationPlans(plans);
+        setPiExistingBatches(Array.from(batches.values()).sort((a, b) => (
+          b.piCode.localeCompare(a.piCode)
+        )));
+      })
+      .catch((err: unknown) => {
+        if (!cancelled) {
+          setPiAllocationPlans({});
+          setPiExistingBatches([]);
+          setPiPlanError(getErrorMessage(err));
+        }
+      })
+      .finally(() => {
+        if (!cancelled) setPiPlanLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [piBatchRefreshKey, selectedCountries, selectedMonth, selectedYear]);
+
+  const piPlanLinesByCountryMaterial = useMemo(() => {
+    const result = new Map<string, VehicleAllocationPlanLine>();
+    Object.entries(piAllocationPlans).forEach(([countryCode, plan]) => {
+      plan.lineItems.forEach((line) => {
+        if (line.materialCode) result.set(`${countryCode}|${line.materialCode}`, line);
+      });
+    });
+    return result;
+  }, [piAllocationPlans]);
+
+  const piCodesByCountryMaterial = useMemo(() => {
+    const result = new Map<string, string[]>();
+    Object.entries(piAllocationPlans).forEach(([countryCode, plan]) => {
+      plan.existingLines.forEach((line) => {
+        const materialCode = line.materialCode?.trim();
+        const piCode = line.piCode?.trim();
+        if (!materialCode || !piCode) return;
+        const key = `${countryCode}|${materialCode}`;
+        const current = result.get(key) ?? [];
+        if (!current.includes(piCode)) current.push(piCode);
+        result.set(key, current);
+      });
+    });
+    return result;
+  }, [piAllocationPlans]);
+
+  const piPlanTotals = useMemo(() => Object.values(piAllocationPlans).reduce((totals, plan) => ({
+    selectedQuantity: totals.selectedQuantity + plan.totals.selectedQuantity,
+    generatedQuantity: totals.generatedQuantity + plan.totals.generatedQuantity,
+    remainingQuantity: totals.remainingQuantity + plan.totals.remainingQuantity,
+    overGeneratedQuantity: totals.overGeneratedQuantity + plan.totals.overGeneratedQuantity,
+  }), {
+    selectedQuantity: 0,
+    generatedQuantity: 0,
+    remainingQuantity: 0,
+    overGeneratedQuantity: 0,
+  }), [piAllocationPlans]);
+
+  const remainingPiQuantity = useCallback((row: OrderGeniusGridRow): number => {
+    const countryCode = row._countryCode || primaryCountry;
+    return piPlanLinesByCountryMaterial.get(`${countryCode}|${row.materialCode}`)?.remainingQuantity ?? 0;
+  }, [piPlanLinesByCountryMaterial, primaryCountry]);
+
   const selectablePiRows = useMemo(() => {
     if (selectedMonth == null) return [];
     const monthField = `month_${selectedMonth}` as `month_${number}`;
@@ -1564,9 +1683,10 @@ export function OrderGeniusPage() {
       row.__type !== "groupHeader"
       && row.__type !== "consolidated_parent"
       && row.lifecycleStatus !== "historical"
-      && (row[monthField] || 0) > 0,
+      && (row[monthField] || 0) > 0
+      && remainingPiQuantity(row) > 0,
     );
-  }, [piCandidateRows, selectedMonth]);
+  }, [piCandidateRows, remainingPiQuantity, selectedMonth]);
 
   const selectablePiRowsById = useMemo(() => {
     const result = new Map<string, OrderGeniusGridRow>();
@@ -1588,10 +1708,10 @@ export function OrderGeniusPage() {
   const selectedPiQuantityTotal = useMemo(() => {
     return selectedPiRows.reduce((sum, row) => {
       const rowId = getOrderGeniusRowId(row);
-      const monthQuantity = selectedMonth == null ? 0 : row[`month_${selectedMonth}`] || 0;
-      return sum + Math.min(piBatchQuantities[rowId] ?? monthQuantity, monthQuantity);
+      const remainingQuantity = remainingPiQuantity(row);
+      return sum + Math.min(piBatchQuantities[rowId] ?? remainingQuantity, remainingQuantity);
     }, 0);
-  }, [piBatchQuantities, selectedMonth, selectedPiRows]);
+  }, [piBatchQuantities, remainingPiQuantity, selectedPiRows]);
 
   const allSelectablePiRowsSelected = useMemo(() => {
     return selectedMonth != null
@@ -1817,7 +1937,7 @@ export function OrderGeniusPage() {
 
   const togglePiBatchRow = useCallback((row: OrderGeniusGridRow, selected: boolean): void => {
     const rowId = getOrderGeniusRowId(row);
-    const monthQuantity = selectedMonth == null ? 0 : row[`month_${selectedMonth}`] || 0;
+    const remainingQuantity = remainingPiQuantity(row);
     setPiSelectedRowIds((current) => {
       const next = new Set(current);
       if (selected) next.add(rowId);
@@ -1826,18 +1946,18 @@ export function OrderGeniusPage() {
     });
     setPiBatchQuantities((current) => {
       const next = { ...current };
-      if (selected) next[rowId] = Math.max(1, monthQuantity);
+      if (selected) next[rowId] = remainingQuantity;
       else delete next[rowId];
       return next;
     });
     setPiBatchNotice("");
     setPiBatchCreatedCodes([]);
-  }, [selectedMonth]);
+  }, [remainingPiQuantity]);
 
   const updatePiBatchQuantity = (row: OrderGeniusGridRow, quantity: number): void => {
     const rowId = getOrderGeniusRowId(row);
-    const monthQuantity = selectedMonth == null ? 0 : row[`month_${selectedMonth}`] || 0;
-    const nextQuantity = Math.max(0, Math.min(Math.floor(quantity || 0), monthQuantity));
+    const remainingQuantity = remainingPiQuantity(row);
+    const nextQuantity = Math.max(0, Math.min(Math.floor(quantity || 0), remainingQuantity));
     setPiBatchQuantities((current) => ({ ...current, [rowId]: nextQuantity }));
     setPiBatchNotice("");
     setPiBatchCreatedCodes([]);
@@ -1855,15 +1975,14 @@ export function OrderGeniusPage() {
     const nextQuantities: Record<string, number> = {};
     for (const row of selectablePiRows) {
       const rowId = getOrderGeniusRowId(row);
-      const monthQuantity = row[`month_${selectedMonth}`] || 0;
       nextIds.add(rowId);
-      nextQuantities[rowId] = Math.max(1, monthQuantity);
+      nextQuantities[rowId] = remainingPiQuantity(row);
     }
     setPiSelectedRowIds(nextIds);
     setPiBatchQuantities(nextQuantities);
     setPiBatchNotice("");
     setPiBatchCreatedCodes([]);
-  }, [selectablePiRows, selectedMonth]);
+  }, [remainingPiQuantity, selectablePiRows, selectedMonth]);
 
   const piSelectionSummary = useMemo(() => ({
     selectedCount: selectedPiRows.length,
@@ -1906,11 +2025,11 @@ export function OrderGeniusPage() {
     const byMaterial = new Map<string, PiBatchLineItem>();
     for (const row of selectedPiRows) {
       const rowId = getOrderGeniusRowId(row);
-      const monthQuantity = row[`month_${selectedMonth}`] || 0;
-      const requestedQuantity = Math.floor(piBatchQuantities[rowId] ?? monthQuantity);
+      const remainingQuantity = remainingPiQuantity(row);
+      const requestedQuantity = Math.floor(piBatchQuantities[rowId] ?? remainingQuantity);
       if (requestedQuantity <= 0) continue;
-      if (requestedQuantity > monthQuantity) {
-        setError(`PI quantity exceeds order quantity: ${row.materialCode}`);
+      if (requestedQuantity > remainingQuantity) {
+        setError(`PI quantity exceeds remaining quantity: ${row.materialCode} (remaining ${remainingQuantity})`);
         return;
       }
       const countryCode = row._countryCode || primaryCountry;
@@ -2027,8 +2146,10 @@ export function OrderGeniusPage() {
       }));
       setPiBatchNotice(`Created ${createdCodes.join(", ")}`);
       setPiBatchCreatedCodes(createdCodes);
+      setPiBatchRefreshKey((key) => key + 1);
     } catch (err: unknown) {
       setError(`PI batch failed: ${getErrorMessage(err)}`);
+      setPiBatchRefreshKey((key) => key + 1);
     } finally {
       setCreatingPiBatch(false);
     }
@@ -2051,6 +2172,7 @@ export function OrderGeniusPage() {
     colour: colourFilter || undefined,
     materialCodeSearch: materialSearch || undefined,
     selectedMonth: selectedMonth ?? undefined,
+    selectionDate: selectionDate || undefined,
     hideEmptyRows,
   });
 
@@ -2369,6 +2491,15 @@ export function OrderGeniusPage() {
           ))}
         </select>
 
+        <label className="order-genius-date-filter">
+          <span>Selection date</span>
+          <input
+            type="date"
+            value={selectionDate}
+            onChange={(event) => setSelectionDate(event.target.value)}
+          />
+        </label>
+
         <select
           value={selectedMonth ?? ""}
           onChange={(e) => setSelectedMonth(e.target.value ? Number(e.target.value) : null)}
@@ -2590,6 +2721,35 @@ export function OrderGeniusPage() {
                 : "Select all"}
             </label>
           </div>
+          {selectedMonth ? (
+            <div className="og-pi-batch-summary" aria-label="PI month allocation summary">
+              <span><small>Month total</small><strong>{piPlanLoading ? "…" : piPlanTotals.selectedQuantity}</strong></span>
+              <span><small>Already in PI</small><strong>{piPlanLoading ? "…" : piPlanTotals.generatedQuantity}</strong></span>
+              <span><small>Waiting for next batch</small><strong>{piPlanLoading ? "…" : piPlanTotals.remainingQuantity}</strong></span>
+              <span className={piPlanTotals.overGeneratedQuantity > 0 ? "is-warning" : ""}>
+                <small>Over allocated</small><strong>{piPlanLoading ? "…" : piPlanTotals.overGeneratedQuantity}</strong>
+              </span>
+            </div>
+          ) : null}
+          {piPlanError ? (
+            <div className="alert alert-error">
+              PI batch history failed to load: {piPlanError}
+              <button type="button" className="btn btn-sm btn-ghost" onClick={() => setPiBatchRefreshKey((key) => key + 1)}>
+                Retry
+              </button>
+            </div>
+          ) : null}
+          {selectedMonth && piExistingBatches.length > 0 ? (
+            <div className="og-pi-existing-batches" aria-label="Existing PI batches">
+              <strong>Existing batches</strong>
+              {piExistingBatches.map((batch) => (
+                <a key={batch.piCode} href={vehicleAllocationUrl(batch.piCode)}>
+                  {batch.piCode}
+                  <small>{batch.marketCountryCodes.join("/") || batch.countryCode}</small>
+                </a>
+              ))}
+            </div>
+          ) : null}
           <div className="og-pi-batch-mode" role="group" aria-label="PI batch scope">
             <button
               type="button"
@@ -2675,6 +2835,10 @@ export function OrderGeniusPage() {
               {selectedPiRows.map((row) => {
                 const rowId = getOrderGeniusRowId(row);
                 const monthQuantity = selectedMonth == null ? 0 : row[`month_${selectedMonth}`] || 0;
+                const planLine = piPlanLinesByCountryMaterial.get(`${row._countryCode || primaryCountry}|${row.materialCode}`);
+                const existingPiCodes = piCodesByCountryMaterial.get(`${row._countryCode || primaryCountry}|${row.materialCode}`) ?? [];
+                const generatedQuantity = planLine?.generatedQuantity ?? 0;
+                const remainingQuantity = planLine?.remainingQuantity ?? 0;
                 return (
                   <label
                     key={rowId}
@@ -2683,14 +2847,22 @@ export function OrderGeniusPage() {
                     <span>
                       {row._countryCode ? `${row._countryCode} · ` : ""}{row.materialCode}
                       <small>{row.modelName} / {row.version} / {row.colour}</small>
+                      <small>Total {monthQuantity} · in PI {generatedQuantity} · remaining {remainingQuantity}</small>
+                      {existingPiCodes.length > 0 ? (
+                        <small className="og-pi-line-batches">
+                          Batches {existingPiCodes.map((piCode) => (
+                            <a key={piCode} href={vehicleAllocationUrl(piCode)} onClick={(event) => event.stopPropagation()}>{piCode}</a>
+                          ))}
+                        </small>
+                      ) : null}
                     </span>
                     <input
                       type="number"
                       min={0}
-                      max={monthQuantity}
-                      value={piBatchQuantities[rowId] ?? monthQuantity}
+                      max={remainingQuantity}
+                      value={piBatchQuantities[rowId] ?? remainingQuantity}
                       onChange={(event) => updatePiBatchQuantity(row, Number(event.target.value))}
-                      title={`PI quantity for this row. Max ${monthQuantity}.`}
+                      title={`Quantity for the next PI batch. Remaining ${remainingQuantity} of ${monthQuantity}.`}
                     />
                   </label>
                 );
@@ -3388,6 +3560,24 @@ type BomFobEditor = {
   fobSourceCountryCode?: string | null;
 };
 
+type BomFobPeriodDraft = {
+  periodId: string | null;
+  rowVersion: number | null;
+  validFrom: string;
+  validTo: string;
+  baseFobEur: string;
+  remark: string;
+};
+
+const EMPTY_BOM_FOB_PERIOD_DRAFT: BomFobPeriodDraft = {
+  periodId: null,
+  rowVersion: null,
+  validFrom: "",
+  validTo: "",
+  baseFobEur: "",
+  remark: "",
+};
+
 type BomFobSaveResponse = {
   materialCode: string;
   countryCode: string;
@@ -3494,6 +3684,11 @@ export function BomAdminPanel({
   const [searchText, setSearchText] = useState(cachedSearchText);
   const [debouncedSearch, setDebouncedSearch] = useState(cachedSearchText.trim());
   const [editFob, setEditFob] = useState<BomFobEditor | null>(null);
+  const [fobPeriods, setFobPeriods] = useState<CountryTemplateFobPeriod[]>([]);
+  const [fobPeriodsLoading, setFobPeriodsLoading] = useState(false);
+  const [fobPeriodSaving, setFobPeriodSaving] = useState(false);
+  const [fobPeriodError, setFobPeriodError] = useState("");
+  const [fobPeriodDraft, setFobPeriodDraft] = useState<BomFobPeriodDraft>(EMPTY_BOM_FOB_PERIOD_DRAFT);
   const [financeQuickCard, setFinanceQuickCard] = useState<BomFinanceQuickCard | null>(null);
   const [financeQuickFlipped, setFinanceQuickFlipped] = useState(false);
   const [financeQuickRows, setFinanceQuickRows] = useState<CountryMaterialFinanceRow[]>([]);
@@ -4356,6 +4551,96 @@ export function BomAdminPanel({
     }, 50);
     return () => window.clearTimeout(timer);
   }, [showAddMaterial]);
+
+  useEffect(() => {
+    const bomTemplate = editFob?.bomTemplate?.trim();
+    const countryCode = editFob?.countryCode.trim().toUpperCase();
+    if (!bomTemplate || !countryCode || !bomTemplate.includes("**")) {
+      setFobPeriods([]);
+      setFobPeriodError("");
+      setFobPeriodDraft(EMPTY_BOM_FOB_PERIOD_DRAFT);
+      return;
+    }
+    let cancelled = false;
+    setFobPeriodsLoading(true);
+    setFobPeriodError("");
+    void api.listBomTemplateFobPeriods({ bomTemplate, countryCode })
+      .then((response) => {
+        if (!cancelled) setFobPeriods(response.periods);
+      })
+      .catch((error: unknown) => {
+        if (!cancelled) setFobPeriodError(getErrorMessage(error));
+      })
+      .finally(() => {
+        if (!cancelled) setFobPeriodsLoading(false);
+      });
+    return () => { cancelled = true; };
+  }, [editFob?.bomTemplate, editFob?.countryCode]);
+
+  const reloadFobPeriods = async () => {
+    const bomTemplate = editFob?.bomTemplate?.trim();
+    const countryCode = editFob?.countryCode.trim().toUpperCase();
+    if (!bomTemplate || !countryCode) return;
+    const response = await api.listBomTemplateFobPeriods({ bomTemplate, countryCode });
+    setFobPeriods(response.periods);
+  };
+
+  const handleFobPeriodSave = async () => {
+    if (!editFob?.bomTemplate || !fobPeriodDraft.validFrom || fobPeriodDraft.baseFobEur === "") return;
+    const baseFobEur = Number(fobPeriodDraft.baseFobEur);
+    if (!Number.isFinite(baseFobEur) || baseFobEur < 0) {
+      setFobPeriodError("Period base FOB must be zero or greater.");
+      return;
+    }
+    setFobPeriodSaving(true);
+    setFobPeriodError("");
+    try {
+      await api.saveBomTemplateFobPeriod({
+        periodId: fobPeriodDraft.periodId ?? undefined,
+        rowVersion: fobPeriodDraft.rowVersion ?? undefined,
+        bomTemplate: editFob.bomTemplate,
+        countryCode: editFob.countryCode,
+        validFrom: fobPeriodDraft.validFrom,
+        validTo: fobPeriodDraft.validTo || null,
+        baseFobEur,
+        remark: fobPeriodDraft.remark.trim() || null,
+      });
+      setFobPeriodDraft(EMPTY_BOM_FOB_PERIOD_DRAFT);
+      await reloadFobPeriods();
+    } catch (error: unknown) {
+      setFobPeriodError(getErrorMessage(error));
+    } finally {
+      setFobPeriodSaving(false);
+    }
+  };
+
+  const handleFobPeriodDelete = async (period: CountryTemplateFobPeriod) => {
+    setFobPeriodSaving(true);
+    setFobPeriodError("");
+    try {
+      await api.deleteBomTemplateFobPeriod(period.periodId, period.rowVersion);
+      if (fobPeriodDraft.periodId === period.periodId) {
+        setFobPeriodDraft(EMPTY_BOM_FOB_PERIOD_DRAFT);
+      }
+      await reloadFobPeriods();
+    } catch (error: unknown) {
+      setFobPeriodError(getErrorMessage(error));
+    } finally {
+      setFobPeriodSaving(false);
+    }
+  };
+
+  const handleFobPeriodEdit = (period: CountryTemplateFobPeriod) => {
+    setFobPeriodError("");
+    setFobPeriodDraft({
+      periodId: period.periodId,
+      rowVersion: period.rowVersion,
+      validFrom: period.validFrom,
+      validTo: period.validTo ?? "",
+      baseFobEur: String(period.baseFobEur),
+      remark: period.remark ?? "",
+    });
+  };
 
   const handleFobSave = async () => {
     if (!editFob) return;
@@ -8181,6 +8466,57 @@ export function BomAdminPanel({
                   />
                 </label>
               </div>
+              {editFob.bomTemplate?.includes("**") ? (
+                <section className="bom-fob-period-editor" aria-label="Date-specific base FOB periods">
+                  <div className="bom-fob-period-head">
+                    <div>
+                      <strong>Date-specific Single base</strong>
+                      <span>Overrides the default only inside the saved dates. Zero means ordering stopped.</span>
+                    </div>
+                    {fobPeriodsLoading ? <span>Loading…</span> : null}
+                  </div>
+                  {fobPeriods.length > 0 ? (
+                    <div className="bom-fob-period-list">
+                      {fobPeriods.map((period) => (
+                        <div key={period.periodId} className="bom-fob-period-row">
+                          <span>{period.validFrom} → {period.validTo || "Open"}</span>
+                          <strong>{period.baseFobEur.toLocaleString()} EUR</strong>
+                          <span>{period.remark || "—"}</span>
+                          <div className="bom-fob-period-actions">
+                            <button
+                              type="button"
+                              className="btn btn-sm btn-ghost"
+                              disabled={fobPeriodSaving}
+                              onClick={() => handleFobPeriodEdit(period)}
+                            >Edit</button>
+                            <button
+                              type="button"
+                              className="btn btn-sm btn-ghost"
+                              disabled={fobPeriodSaving}
+                              onClick={() => void handleFobPeriodDelete(period)}
+                            >Delete</button>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  ) : !fobPeriodsLoading ? <p>No dated override; the default base remains active.</p> : null}
+                  <div className="bom-fob-period-draft">
+                    <label><span>From</span><input type="date" value={fobPeriodDraft.validFrom} onChange={(event) => setFobPeriodDraft((current) => ({ ...current, validFrom: event.target.value }))} /></label>
+                    <label><span>To</span><input type="date" value={fobPeriodDraft.validTo} onChange={(event) => setFobPeriodDraft((current) => ({ ...current, validTo: event.target.value }))} /></label>
+                    <label><span>Single base EUR</span><input type="number" min="0" value={fobPeriodDraft.baseFobEur} onChange={(event) => setFobPeriodDraft((current) => ({ ...current, baseFobEur: event.target.value }))} /></label>
+                    <label><span>Remark</span><input type="text" value={fobPeriodDraft.remark} onChange={(event) => setFobPeriodDraft((current) => ({ ...current, remark: event.target.value }))} /></label>
+                    <div className="bom-fob-period-actions">
+                      <button type="button" className="btn btn-sm btn-primary" disabled={fobPeriodSaving || !fobPeriodDraft.validFrom || fobPeriodDraft.baseFobEur === ""} onClick={() => void handleFobPeriodSave()}>
+                        {fobPeriodDraft.periodId ? "Save changes" : "Add period"}
+                      </button>
+                      {fobPeriodDraft.periodId ? (
+                        <button type="button" className="btn btn-sm btn-ghost" disabled={fobPeriodSaving} onClick={() => setFobPeriodDraft(EMPTY_BOM_FOB_PERIOD_DRAFT)}>Cancel edit</button>
+                      ) : null}
+                    </div>
+                  </div>
+                  {fobPeriodError ? <div className="form-error">{fobPeriodError}</div> : null}
+                </section>
+              ) : null}
               <BomFinanceActionBar
                 actions={[
                   { label: `Save ${editFob.materialCodes.length}`, kind: "primary", onClick: () => void handleFobSave() },

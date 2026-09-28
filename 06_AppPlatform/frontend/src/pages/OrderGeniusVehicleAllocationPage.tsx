@@ -300,6 +300,11 @@ export function OrderGeniusVehicleAllocationPage() {
   const [vehicles, setVehicles] = useState<PiVehicleUnit[]>([]);
   const [total, setTotal] = useState(0);
   const [piHeaders, setPiHeaders] = useState<PiOrderHeader[]>([]);
+  const [piHeaderTotal, setPiHeaderTotal] = useState(0);
+  const [piBrowseCountry, setPiBrowseCountry] = useState(defaultCountry);
+  const [piBrowseMonth, setPiBrowseMonth] = useState("");
+  const [piBrowsePage, setPiBrowsePage] = useState(1);
+  const [piListError, setPiListError] = useState<string | null>(null);
   const [selectedPi, setSelectedPi] = useState<PiOrderDetail | null>(null);
   const [deleteConfirmPi, setDeleteConfirmPi] = useState<string | null>(null);
   // Multi-select state
@@ -413,10 +418,11 @@ export function OrderGeniusVehicleAllocationPage() {
     addFallbackCode(defaultCountry);
     addFallbackCode(filters.country);
     addFallbackCode(piForm.countryCode);
+    addFallbackCode(piBrowseCountry);
     addFallbackCode(selectedPi?.header.countryCode);
     selectedPi?.header.marketCountryCodes.forEach(addFallbackCode);
     return Array.from(byCode.values()).sort((a, b) => a.value.localeCompare(b.value));
-  }, [accountCountryOptions, defaultCountry, filters.country, piForm.countryCode, selectedPi]);
+  }, [accountCountryOptions, defaultCountry, filters.country, piBrowseCountry, piForm.countryCode, selectedPi]);
   const vinPasteScopeVehicles = useMemo(() => {
     if (!selectedPi) {
       return [];
@@ -439,6 +445,7 @@ export function OrderGeniusVehicleAllocationPage() {
     }
     setFilters((current) => current.country ? current : { ...current, country: defaultCountry });
     setPiForm((current) => current.countryCode ? current : { ...current, countryCode: defaultCountry });
+    setPiBrowseCountry((current) => current || defaultCountry);
   }, [defaultCountry]);
 
   useEffect(() => {
@@ -502,20 +509,24 @@ export function OrderGeniusVehicleAllocationPage() {
   useEffect(() => {
     let cancelled = false;
     setSideLoading(true);
+    setPiListError(null);
     api.getVehicleAllocationPis({
-      country: filters.country,
-      month: piForm.orderMonth,
-      page: 1,
+      country: piBrowseCountry,
+      month: piBrowseMonth,
+      page: piBrowsePage,
       pageSize: 50,
     })
       .then((res) => {
         if (!cancelled) {
           setPiHeaders(res.items);
+          setPiHeaderTotal(res.total);
         }
       })
-      .catch(() => {
+      .catch((err: unknown) => {
         if (!cancelled) {
           setPiHeaders([]);
+          setPiHeaderTotal(0);
+          setPiListError(err instanceof Error ? err.message : "加载 PI 列表失败");
         }
       })
       .finally(() => {
@@ -526,7 +537,14 @@ export function OrderGeniusVehicleAllocationPage() {
     return () => {
       cancelled = true;
     };
-  }, [filters.country, piForm.orderMonth, refreshKey]);
+  }, [piBrowseCountry, piBrowseMonth, piBrowsePage, refreshKey]);
+
+  useEffect(() => {
+    const piCode = new URLSearchParams(window.location.search).get("pi")?.trim().toUpperCase();
+    if (piCode) {
+      void selectPi(piCode);
+    }
+  }, []);
 
   function updateFilter<K extends keyof VehicleAllocationFilters>(
     key: K,
@@ -548,6 +566,8 @@ export function OrderGeniusVehicleAllocationPage() {
     }));
     setSelectedVehicle(null);
     setEditForm(null);
+    setPiBrowseCountry(detail.header.countryCode);
+    setPiBrowseMonth(detail.header.orderMonth);
   }
 
   function openPiTool(tab: PiToolTab): void {
@@ -1081,7 +1101,41 @@ export function OrderGeniusVehicleAllocationPage() {
           <section className="va-panel">
             <div className="va-panel-head">
               <h2>PI</h2>
-              <span>{sideLoading ? "Loading" : `${piHeaders.length}`}</span>
+              <span>{sideLoading ? "Loading" : `${piHeaderTotal}`}</span>
+            </div>
+            <div className="va-form" aria-label="Browse existing PI batches">
+              <div className="va-form-row">
+                <label>Browse Country</label>
+                <CommandSelect
+                  value={normalizeCountryCode(piBrowseCountry)}
+                  options={countryCommandOptions}
+                  placeholder="All accessible"
+                  searchPlaceholder="Search country..."
+                  onChange={(value) => {
+                    setPiBrowseCountry(value);
+                    setPiBrowsePage(1);
+                  }}
+                />
+              </div>
+              <div className="va-form-row">
+                <label>Browse Month</label>
+                <input
+                  type="month"
+                  value={piBrowseMonth}
+                  onChange={(event) => {
+                    setPiBrowseMonth(event.target.value);
+                    setPiBrowsePage(1);
+                  }}
+                />
+              </div>
+              {piListError ? (
+                <div className="alert alert-error">
+                  {piListError}
+                  <button type="button" className="btn btn-sm btn-ghost" onClick={() => setRefreshKey((key) => key + 1)}>
+                    Retry
+                  </button>
+                </div>
+              ) : null}
             </div>
             <form className="va-form" onSubmit={createPi}>
               <div className="va-form-row">
@@ -1170,6 +1224,27 @@ export function OrderGeniusVehicleAllocationPage() {
                 </button>
               ))}
             </div>
+            {piHeaderTotal > 50 ? (
+              <div className="va-button-row" aria-label="PI list pagination">
+                <button
+                  type="button"
+                  className="btn btn-sm btn-ghost"
+                  disabled={piBrowsePage <= 1 || sideLoading}
+                  onClick={() => setPiBrowsePage((pageNumber) => Math.max(1, pageNumber - 1))}
+                >
+                  Previous
+                </button>
+                <span>{piBrowsePage} / {Math.max(1, Math.ceil(piHeaderTotal / 50))}</span>
+                <button
+                  type="button"
+                  className="btn btn-sm btn-ghost"
+                  disabled={piBrowsePage * 50 >= piHeaderTotal || sideLoading}
+                  onClick={() => setPiBrowsePage((pageNumber) => pageNumber + 1)}
+                >
+                  Next
+                </button>
+              </div>
+            ) : null}
           </section>
 
           <section className="va-panel">

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import io
 import uuid as uuid_module
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from pathlib import Path
 from uuid import UUID
 
@@ -487,6 +487,64 @@ def _historical_sku_matches_matrix_filters(
     return True
 
 
+def _date_effective_fob(
+    session: Session,
+    country_code: str,
+    sku: MaterialSkuMaster,
+    selection_date: date | None,
+) -> tuple[float | None, dict | None, dict | None]:
+    """Resolve an optional dated base without changing the SKU's saved tier."""
+    if selection_date is None or not sku.bom_template:
+        return None, None, None
+    try:
+        period = repo.resolve_country_template_fob_period(
+            session,
+            country_code,
+            sku.bom_template,
+            selection_date,
+        )
+    except ValueError as exc:
+        conflict = {
+            "materialCode": sku.material_code,
+            "countryCode": country_code,
+            "status": "conflict",
+            "reason": str(exc),
+            "records": [],
+        }
+        return None, conflict, {"status": "conflict", "selectionDate": selection_date.isoformat()}
+    if period is None:
+        return None, None, None
+
+    period_payload = {
+        "periodId": str(period.country_template_fob_period_id),
+        "selectionDate": selection_date.isoformat(),
+        "validFrom": period.valid_from.isoformat(),
+        "validTo": period.valid_to.isoformat() if period.valid_to else None,
+        "baseFobEur": float(period.base_fob_eur),
+        "status": "stopped" if float(period.base_fob_eur) == 0 else "matched",
+    }
+    if float(period.base_fob_eur) == 0:
+        return None, None, period_payload
+
+    tier = repo.resolve_effective_colour_tier(sku)
+    surcharge = repo.resolve_colour_surcharge_for_sku(session, sku, tier)
+    amount = surcharge.get("amount")
+    if amount is None:
+        reason = "Missing saved colour tier" if surcharge.get("status") == "missing_tier" else "Missing colour surcharge rule"
+        conflict = {
+            "materialCode": sku.material_code,
+            "countryCode": country_code,
+            "status": "conflict",
+            "reason": reason,
+            "records": [],
+        }
+        return None, conflict, {**period_payload, "status": str(surcharge.get("status") or "conflict")}
+    period_payload["colourTier"] = tier
+    period_payload["surchargeEur"] = float(amount)
+    period_payload["surchargeSource"] = surcharge.get("source")
+    return round(float(period.base_fob_eur) + float(amount), 2), None, period_payload
+
+
 def _build_matrix_for_country(
     session: Session,
     country_code: str,
@@ -498,6 +556,7 @@ def _build_matrix_for_country(
     version: str | None = None,
     colour: str | None = None,
     material_code_search: str | None = None,
+    selection_date: date | None = None,
 ) -> dict:
     # Get country payment term valid for this order year
     order_month_hint = f"{year}-01"  # use January of the order year
@@ -517,8 +576,15 @@ def _build_matrix_for_country(
     conflict_codes = {str(item["materialCode"]) for item in fob_conflicts}
 
     # Keep unresolved groups visible with no price so normal rows remain usable.
+    dated_fob_by_material = {
+        sku.material_code: _date_effective_fob(session, country_code, sku, selection_date)
+        for sku in active_skus
+    }
     skus_with_fob = [
-        s for s in active_skus if s.material_code in fob_map or s.material_code in conflict_codes
+        sku for sku in active_skus
+        if sku.material_code in fob_map
+        or sku.material_code in conflict_codes
+        or dated_fob_by_material[sku.material_code][2] is not None
     ]
 
     # Get quantities for this country+year
@@ -558,6 +624,11 @@ def _build_matrix_for_country(
             (item for item in fob_conflicts if item["materialCode"] == sku.material_code),
             None,
         )
+        dated_fob, dated_conflict, fob_period = dated_fob_by_material[sku.material_code]
+        if fob_period is not None:
+            conflict = dated_conflict
+            if dated_conflict is not None:
+                fob_conflicts.append(dated_conflict)
         display_colour_name, display_colour_hex = repo.resolve_colour_display_values(
             sku,
             colour_standards,
@@ -590,7 +661,8 @@ def _build_matrix_for_country(
             "interiorPackage": sku.interior_package,
             "editionTag": sku.edition_tag,
             "powertrain": _extract_canonical_pt(sku),
-            "fobEur": float(fob.final_fob_eur) if fob else None,
+            "fobEur": dated_fob if fob_period is not None else (float(fob.final_fob_eur) if fob else None),
+            "fobPeriod": fob_period,
             "lifecycleStatus": "active",
             "fobConflict": conflict,
             "editable": conflict is None,
@@ -626,6 +698,13 @@ def _build_matrix_for_country(
             (item for item in historical_fob_conflicts if item["materialCode"] == mc),
             None,
         )
+        dated_fob, dated_conflict, fob_period = _date_effective_fob(
+            session, country_code, hist_sku, selection_date,
+        )
+        if fob_period is not None:
+            conflict = dated_conflict
+            if dated_conflict is not None:
+                fob_conflicts.append(dated_conflict)
         display_colour_name, display_colour_hex = repo.resolve_colour_display_values(
             hist_sku,
             colour_standards,
@@ -663,7 +742,8 @@ def _build_matrix_for_country(
                 "interiorPackage": hist_sku.interior_package,
                 "editionTag": hist_sku.edition_tag,
                 "powertrain": _extract_canonical_pt(hist_sku),
-                "fobEur": float(fob.final_fob_eur) if fob else None,
+                "fobEur": dated_fob if fob_period is not None else (float(fob.final_fob_eur) if fob else None),
+                "fobPeriod": fob_period,
                 "lifecycleStatus": "historical",
                 "fobConflict": conflict,
                 "editable": False,
@@ -680,6 +760,7 @@ def _build_matrix_for_country(
         "countryName": country_name,
         "paymentTermCode": payment_term_code,
         "year": year,
+        "selectionDate": selection_date.isoformat() if selection_date else None,
         "rows": rows,
         "totalRows": len(rows),
         "fobConflicts": fob_conflicts,
@@ -696,6 +777,7 @@ def build_matrix(
     version: str | None = None,
     colour: str | None = None,
     material_code_search: str | None = None,
+    selection_date: date | None = None,
 ) -> dict:
     """Build the Order Genius matrix for a country+year.
 
@@ -721,6 +803,7 @@ def build_matrix(
         version=version,
         colour=colour,
         material_code_search=material_code_search,
+        selection_date=selection_date,
     )
 
 
@@ -734,6 +817,7 @@ def build_matrix_batch(
     version: str | None = None,
     colour: str | None = None,
     material_code_search: str | None = None,
+    selection_date: date | None = None,
 ) -> dict[str, dict]:
     """Build matrices for many countries while reusing the filtered SKU set."""
     active_skus = _list_matrix_candidate_skus(
@@ -757,6 +841,7 @@ def build_matrix_batch(
             version=version,
             colour=colour,
             material_code_search=material_code_search,
+            selection_date=selection_date,
         )
         for country_code in country_codes
     }
@@ -968,12 +1053,14 @@ def export_matrix(
     selected_month: int | None = None,
     hide_empty_rows: bool = False,
     quantities_only: bool = False,
+    selection_date: date | None = None,
 ) -> io.BytesIO:
     """Generate the Order Genius Excel workbook."""
     matrix = build_matrix(session, country_code, year,
                           brand=brand, model_name=model_name,
                           powertrain=powertrain, version=version, colour=colour,
-                          material_code_search=material_code_search)
+                          material_code_search=material_code_search,
+                          selection_date=selection_date)
     if matrix.get("fobConflicts"):
         conflicts = ", ".join(
             f"{item['materialCode']}/{item['countryCode']}"
@@ -1013,12 +1100,14 @@ def export_pi_matrix(
     insurance_eur: float | None = None,
     domestic_freight_eur: float | None = None,
     domestic_insurance_eur: float | None = None,
+    selection_date: date | None = None,
 ) -> io.BytesIO:
     """Generate a PI workbook using the current Order Genius selection."""
     matrix = build_matrix(session, country_code, year,
                           brand=brand, model_name=model_name,
                           powertrain=powertrain, version=version, colour=colour,
-                          material_code_search=material_code_search)
+                          material_code_search=material_code_search,
+                          selection_date=selection_date)
     if matrix.get("fobConflicts"):
         conflicts = ", ".join(
             f"{item['materialCode']}/{item['countryCode']}"
