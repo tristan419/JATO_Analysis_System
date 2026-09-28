@@ -213,6 +213,47 @@ def test_template_country_fob_periods_reject_overlap(db):
         )
 
 
+def test_template_country_fob_period_update_keeps_original_scope(db, monkeypatch):
+    period = repo.save_country_template_fob_period(
+        db,
+        country_code="CH",
+        bom_template="T**001",
+        valid_from=date(2026, 10, 1),
+        valid_to=date(2026, 10, 31),
+        base_fob_eur=1000,
+        remark=None,
+        changed_by="test",
+    )
+    db.commit()
+    calls = []
+    monkeypatch.setattr(
+        routes,
+        "validate_country_access",
+        lambda _session, _name, _role, country: calls.append(country),
+    )
+
+    with pytest.raises(routes.HTTPException) as exc:
+        routes.put_bom_template_fob_period(
+            body={
+                "periodId": str(period.country_template_fob_period_id),
+                "rowVersion": period.row_version,
+                "countryCode": "RO",
+                "bomTemplate": "T**001",
+                "validFrom": "2026-10-01",
+                "validTo": "2026-10-31",
+                "baseFobEur": 1100,
+            },
+            session=db,
+            user=SimpleNamespace(name="tester", role="editor"),
+        )
+
+    assert exc.value.status_code == 400
+    assert calls == ["RO", "CH"]
+    db.refresh(period)
+    assert period.country_code == "CH"
+    assert float(period.base_fob_eur) == 1000
+
+
 def test_conflicting_single_payment_terms_remain_ambiguous(db):
     sku(db, "S", "single")
     sku(db, "D", "dual")

@@ -15803,6 +15803,13 @@ table.material-finance-table td:nth-child(n+5) {
   text-align: right;
 }
 
+.bom-fob-period-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 6px;
+}
+
 .bom-fob-period-draft {
   display: grid;
   grid-template-columns: 140px 140px 130px minmax(160px, 1fr) auto;
@@ -15859,6 +15866,10 @@ table.material-finance-table td:nth-child(n+5) {
 
   .bom-fob-period-row strong {
     text-align: left;
+  }
+
+  .bom-fob-period-actions {
+    justify-content: flex-start;
   }
 }
 

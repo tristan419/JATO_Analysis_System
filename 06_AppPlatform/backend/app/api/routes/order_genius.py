@@ -1077,6 +1077,16 @@ def put_bom_template_fob_period(
         period_id = UUID(period_id_raw) if period_id_raw else None
     except ValueError as exc:
         raise HTTPException(status_code=400, detail="periodId is invalid") from exc
+    if period_id is not None:
+        existing = session.get(CountryTemplateFobPeriod, period_id)
+        if existing is None:
+            raise HTTPException(status_code=404, detail="FOB period not found")
+        validate_country_access(session, user.name, user.role, existing.country_code)
+        if existing.country_code != country or existing.bom_template != template:
+            raise HTTPException(
+                status_code=400,
+                detail="FOB period country and BOM template cannot be changed",
+            )
     try:
         row = repo.save_country_template_fob_period(
             session,

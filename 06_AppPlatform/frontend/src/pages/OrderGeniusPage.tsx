@@ -3561,6 +3561,8 @@ type BomFobEditor = {
 };
 
 type BomFobPeriodDraft = {
+  periodId: string | null;
+  rowVersion: number | null;
   validFrom: string;
   validTo: string;
   baseFobEur: string;
@@ -3568,6 +3570,8 @@ type BomFobPeriodDraft = {
 };
 
 const EMPTY_BOM_FOB_PERIOD_DRAFT: BomFobPeriodDraft = {
+  periodId: null,
+  rowVersion: null,
   validFrom: "",
   validTo: "",
   baseFobEur: "",
@@ -4592,6 +4596,8 @@ export function BomAdminPanel({
     setFobPeriodError("");
     try {
       await api.saveBomTemplateFobPeriod({
+        periodId: fobPeriodDraft.periodId ?? undefined,
+        rowVersion: fobPeriodDraft.rowVersion ?? undefined,
         bomTemplate: editFob.bomTemplate,
         countryCode: editFob.countryCode,
         validFrom: fobPeriodDraft.validFrom,
@@ -4613,12 +4619,27 @@ export function BomAdminPanel({
     setFobPeriodError("");
     try {
       await api.deleteBomTemplateFobPeriod(period.periodId, period.rowVersion);
+      if (fobPeriodDraft.periodId === period.periodId) {
+        setFobPeriodDraft(EMPTY_BOM_FOB_PERIOD_DRAFT);
+      }
       await reloadFobPeriods();
     } catch (error: unknown) {
       setFobPeriodError(getErrorMessage(error));
     } finally {
       setFobPeriodSaving(false);
     }
+  };
+
+  const handleFobPeriodEdit = (period: CountryTemplateFobPeriod) => {
+    setFobPeriodError("");
+    setFobPeriodDraft({
+      periodId: period.periodId,
+      rowVersion: period.rowVersion,
+      validFrom: period.validFrom,
+      validTo: period.validTo ?? "",
+      baseFobEur: String(period.baseFobEur),
+      remark: period.remark ?? "",
+    });
   };
 
   const handleFobSave = async () => {
@@ -8461,12 +8482,20 @@ export function BomAdminPanel({
                           <span>{period.validFrom} → {period.validTo || "Open"}</span>
                           <strong>{period.baseFobEur.toLocaleString()} EUR</strong>
                           <span>{period.remark || "—"}</span>
-                          <button
-                            type="button"
-                            className="btn btn-sm btn-ghost"
-                            disabled={fobPeriodSaving}
-                            onClick={() => void handleFobPeriodDelete(period)}
-                          >Delete</button>
+                          <div className="bom-fob-period-actions">
+                            <button
+                              type="button"
+                              className="btn btn-sm btn-ghost"
+                              disabled={fobPeriodSaving}
+                              onClick={() => handleFobPeriodEdit(period)}
+                            >Edit</button>
+                            <button
+                              type="button"
+                              className="btn btn-sm btn-ghost"
+                              disabled={fobPeriodSaving}
+                              onClick={() => void handleFobPeriodDelete(period)}
+                            >Delete</button>
+                          </div>
                         </div>
                       ))}
                     </div>
@@ -8476,7 +8505,14 @@ export function BomAdminPanel({
                     <label><span>To</span><input type="date" value={fobPeriodDraft.validTo} onChange={(event) => setFobPeriodDraft((current) => ({ ...current, validTo: event.target.value }))} /></label>
                     <label><span>Single base EUR</span><input type="number" min="0" value={fobPeriodDraft.baseFobEur} onChange={(event) => setFobPeriodDraft((current) => ({ ...current, baseFobEur: event.target.value }))} /></label>
                     <label><span>Remark</span><input type="text" value={fobPeriodDraft.remark} onChange={(event) => setFobPeriodDraft((current) => ({ ...current, remark: event.target.value }))} /></label>
-                    <button type="button" className="btn btn-sm btn-primary" disabled={fobPeriodSaving || !fobPeriodDraft.validFrom || fobPeriodDraft.baseFobEur === ""} onClick={() => void handleFobPeriodSave()}>Add period</button>
+                    <div className="bom-fob-period-actions">
+                      <button type="button" className="btn btn-sm btn-primary" disabled={fobPeriodSaving || !fobPeriodDraft.validFrom || fobPeriodDraft.baseFobEur === ""} onClick={() => void handleFobPeriodSave()}>
+                        {fobPeriodDraft.periodId ? "Save changes" : "Add period"}
+                      </button>
+                      {fobPeriodDraft.periodId ? (
+                        <button type="button" className="btn btn-sm btn-ghost" disabled={fobPeriodSaving} onClick={() => setFobPeriodDraft(EMPTY_BOM_FOB_PERIOD_DRAFT)}>Cancel edit</button>
+                      ) : null}
+                    </div>
                   </div>
                   {fobPeriodError ? <div className="form-error">{fobPeriodError}</div> : null}
                 </section>

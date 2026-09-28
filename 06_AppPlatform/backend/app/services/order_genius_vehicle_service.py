@@ -119,8 +119,9 @@ def create_pi_line(session: Session, pi_code: str, payload: dict[str, Any], user
         raise HTTPException(status_code=404, detail="PI not found")
     line_seq = int(payload.get("lineSequenceNo") or repo.next_line_sequence(session, header.pi_id))
     material_code = _clean(payload.get("materialCode"))
+    pricing_date = _resolve_header_pricing_date(session, header, material_code)
     line_payload = _line_payload_from_material(
-        session, header.country_code, material_code, payload, pricing_date=header.order_date,
+        session, header.country_code, material_code, payload, pricing_date=pricing_date,
     )
     line = _build_line(session, header, line_seq, line_payload, username)
     repo.add_line(session, line)
@@ -145,9 +146,14 @@ def update_pi_line(session: Session, pi_line_code: str, payload: dict[str, Any],
     if not header:
         raise HTTPException(status_code=404, detail="PI not found")
     material_code = _clean(payload.get("materialCode")) if "materialCode" in payload else line.material_code
-    payload = _line_payload_from_material(
-        session, header.country_code, material_code, payload, pricing_date=header.order_date,
-    )
+    material_changed = "materialCode" in payload and material_code != line.material_code
+    if material_changed:
+        pricing_date = _resolve_header_pricing_date(session, header, material_code)
+        payload = _line_payload_from_material(
+            session, header.country_code, material_code, payload, pricing_date=pricing_date,
+        )
+    else:
+        payload = dict(payload)
     for attr, key in {
         "material_code": "materialCode",
         "bom": "bom",
@@ -971,6 +977,24 @@ def _resolve_pi_pricing_date(
     )
 
 
+def _resolve_header_pricing_date(
+    session: Session,
+    header: PiOrderHeader,
+    material_code: str | None,
+) -> date | None:
+    if not material_code:
+        return header.order_date
+    year, month, _ = _resolve_order_month({"orderMonth": header.order_month})
+    return _resolve_pi_pricing_date(
+        session,
+        header.country_code,
+        material_code,
+        year,
+        month,
+        header.order_date,
+    )
+
+
 def _line_payload_from_material(
     session: Session,
     country: str,
@@ -1366,7 +1390,9 @@ def _create_vehicle_from_import_row(session: Session, row: dict[str, Any], usern
         car_code = _clean(row.get("car_code"))
         car_parts = parse_car_code(car_code.upper()) if car_code else None
         line_seq = int(car_parts["lineSequence"]) if car_parts else repo.next_line_sequence(session, header.pi_id)
-        line_payload = _line_payload_from_material(session, header.country_code, _clean(row.get("material_code")), {
+        material_code = _clean(row.get("material_code"))
+        pricing_date = _resolve_header_pricing_date(session, header, material_code)
+        line_payload = _line_payload_from_material(session, header.country_code, material_code, {
             "materialCode": _clean(row.get("material_code")),
             "bom": _clean(row.get("bom")),
             "brand": _clean(row.get("brand")),
@@ -1376,7 +1402,7 @@ def _create_vehicle_from_import_row(session: Session, row: dict[str, Any], usern
             "exteriorColorName": _clean(row.get("exterior_color_name")),
             "interiorColorName": _clean(row.get("interior_color_name")),
             "quantity": 0,
-        })
+        }, pricing_date=pricing_date)
         line = _build_line(session, header, line_seq, line_payload, username)
         repo.add_line(session, line)
 

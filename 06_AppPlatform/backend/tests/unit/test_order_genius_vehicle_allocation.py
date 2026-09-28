@@ -403,6 +403,58 @@ def test_pi_can_use_single_period_covering_whole_month_without_order_date(monkey
     assert _resolve_pi_pricing_date(object(), "CH", "SKU", 2026, 7, None) == date(2026, 7, 1)
 
 
+def test_header_pricing_date_reuses_pi_month_and_order_date(monkeypatch) -> None:
+    calls = []
+    header = SimpleNamespace(
+        country_code="CH",
+        order_month="2026-07",
+        order_date=date(2026, 7, 20),
+    )
+
+    def fake_resolve(session, country, material_code, year, month, requested_date):
+        calls.append((country, material_code, year, month, requested_date))
+        return requested_date
+
+    monkeypatch.setattr(vehicle_service, "_resolve_pi_pricing_date", fake_resolve)
+
+    resolved = vehicle_service._resolve_header_pricing_date(object(), header, "SKU")
+
+    assert resolved == date(2026, 7, 20)
+    assert calls == [("CH", "SKU", 2026, 7, date(2026, 7, 20))]
+
+
+def test_updating_pi_line_metadata_does_not_reprice_saved_fob(monkeypatch) -> None:
+    line = SimpleNamespace(
+        pi_code="PI-CH-202607-001",
+        pi_line_id=uuid4(),
+        material_code="SKU",
+        fob_eur=1300,
+        quantity=2,
+        amount_eur=2600,
+        remark=None,
+        row_version=0,
+        updated_by=None,
+    )
+    header = SimpleNamespace(country_code="CH")
+    session = SimpleNamespace(flush=lambda: None)
+    monkeypatch.setattr(vehicle_repo, "get_line_by_code", lambda *_args: line)
+    monkeypatch.setattr(vehicle_repo, "get_header_by_code", lambda *_args: header)
+    monkeypatch.setattr(vehicle_repo, "list_allocations_by_line", lambda *_args: [])
+    monkeypatch.setattr(vehicle_service, "_sync_vehicles_from_line", lambda *_args: None)
+    monkeypatch.setattr(vehicle_service, "line_to_dict", lambda row: {"fobEur": float(row.fob_eur)})
+    monkeypatch.setattr(
+        vehicle_service,
+        "_line_payload_from_material",
+        lambda *_args, **_kwargs: pytest.fail("metadata-only update must not reprice the line"),
+    )
+
+    result = vehicle_service.update_pi_line(session, "PI-CH-202607-001-L01", {"remark": "checked"}, "tester")
+
+    assert result["fobEur"] == 1300
+    assert line.amount_eur == 2600
+    assert line.remark == "checked"
+
+
 def test_line_items_can_be_built_from_selection_quantities(monkeypatch) -> None:
     cells = [
         SimpleNamespace(material_code="A", quantity=2, fob_eur=100),

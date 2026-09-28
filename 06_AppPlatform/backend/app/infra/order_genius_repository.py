@@ -890,6 +890,10 @@ def save_country_template_fob_period(
         raise LookupError("FOB period not found")
     if row is not None and row_version is not None and row.row_version != row_version:
         raise RuntimeError("FOB period changed; refresh and retry")
+    if row is not None and (
+        row.country_code != country or row.bom_template != template
+    ):
+        raise ValueError("FOB period country and BOM template cannot be changed")
 
     overlap = select(CountryTemplateFobPeriod.country_template_fob_period_id).where(
         CountryTemplateFobPeriod.country_code == country,
