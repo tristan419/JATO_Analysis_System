@@ -1432,7 +1432,14 @@ class FixedReleaseController:
                 details={"actual": runtime_uid},
             )
 
-    def _verify_backend(self, slot: str, identity: ReleaseIdentity, *, active: bool) -> None:
+    def _verify_backend(
+        self,
+        slot: str,
+        identity: ReleaseIdentity,
+        *,
+        active: bool,
+        require_candidate_coc_storage: bool = True,
+    ) -> None:
         unit = ACTIVE_UNIT if active else CANDIDATE_UNIT
         high = ACTIVE_MEMORY_HIGH if active else CANDIDATE_MEMORY_HIGH
         maximum = ACTIVE_MEMORY_MAX if active else CANDIDATE_MEMORY_MAX
@@ -1463,7 +1470,7 @@ class FixedReleaseController:
                 "candidate_runtime_isolation_mismatch",
                 "Candidate Redis sharing is not disabled",
             )
-        if not active:
+        if not active and require_candidate_coc_storage:
             expected_coc_root = CANDIDATE_RUNTIME_ROOT / "coc_match"
             if f"APP_COC_MATCH_JOB_ROOT={expected_coc_root}\n" not in env:
                 raise V2Error(
@@ -1960,6 +1967,7 @@ class FixedReleaseController:
                             CANDIDATE_SLOT,
                             old.current,
                             active=False,
+                            require_candidate_coc_storage=False,
                         ),
                     )
             if (
@@ -2092,7 +2100,12 @@ class FixedReleaseController:
                             "candidate_runtime_inconsistent",
                             "Candidate pointer is not backed by a running verified backend; discard it first",
                         )
-                    self._verify_backend(CANDIDATE_SLOT, old.current, active=False)
+                    self._verify_backend(
+                        CANDIDATE_SLOT,
+                        old.current,
+                        active=False,
+                        require_candidate_coc_storage=False,
+                    )
                     if old_sandbox is not None:
                         self._candidate_database_isolation_gate(old.current)
                 if preview_was_active:

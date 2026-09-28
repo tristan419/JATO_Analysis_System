@@ -1007,6 +1007,14 @@ def test_successive_prepares_replace_fifo_sandbox_and_publish_snapshot_time(
 
     ctrl.prepare_candidate(OLDER, manifest_sha256=older_digest)
     first_database = sandboxes.provisioned[0]
+    candidate_env_path = cfg.slot_env_root / "8001.env"
+    candidate_env_path.write_text(
+        candidate_env_path.read_text(encoding="utf-8").replace(
+            "APP_COC_MATCH_JOB_ROOT=/var/cache/jato-candidate/coc_match\n",
+            "",
+        ),
+        encoding="utf-8",
+    )
     candidate_digest = create_release(cfg.layout, CANDIDATE)
     ctrl.prepare_candidate(CANDIDATE, manifest_sha256=candidate_digest)
 
@@ -1026,6 +1034,10 @@ def test_successive_prepares_replace_fifo_sandbox_and_publish_snapshot_time(
     assert candidate_values["APP_AUTH_TOKEN"] == ""
     assert candidate_values["APP_TOKEN_ROLE_MAP"] == ""
     assert candidate_values["APP_RUNTIME_READ_ONLY"] == "false"
+    assert (
+        "APP_COC_MATCH_JOB_ROOT=/var/cache/jato-candidate/coc_match"
+        in candidate_env_path.read_text(encoding="utf-8")
+    )
     assert len(candidate_values["APP_JWT_SECRET"]) == 64
     assert preview["databaseSnapshotAt"] == candidate_values["APP_CANDIDATE_SNAPSHOT_AT"]
     assert preview["databaseName"] == candidate_values["APP_CANDIDATE_SANDBOX_DATABASE"]
