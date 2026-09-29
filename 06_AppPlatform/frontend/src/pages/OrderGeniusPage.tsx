@@ -163,17 +163,17 @@ const BOM_LIFECYCLE_OPTIONS = [
   {
     value: "active",
     label: "Active",
-    description: "Active：正常在选品表出现；有正价 FOB 就可以填数量、导出 PI。",
+    description: "Active：没有结束日期且已经生效；有正价 FOB 就可以填数量、导出 PI。",
   },
   {
     value: "phase_out",
     label: "Phase out",
-    description: "Phase out：退市中，但仍会在选品表出现；有正价 FOB 仍可填数量。From / To 用来标记退市窗口，目前不会自动按日期锁死。",
+    description: "Phase out：已设置结束日期但尚未超过最后有效日；当天仍可下单。",
   },
   {
     value: "historical",
     label: "History",
-    description: "History：历史物料，不作为新选品出现；主要保留历史记录，避免老订单/老数据丢失。",
+    description: "History：已经超过最后有效日；普通选品不显示，历史补录需显式包含。",
   },
 ] as const;
 type BomLifecycleStatus = (typeof BOM_LIFECYCLE_OPTIONS)[number]["value"];
@@ -5303,6 +5303,9 @@ export function BomAdminPanel({
           colourTier: effectiveColourTier,
           powertrain: draft.powertrain || "ICE",
           sourceBomTemplate: draft.sourceBomTemplate,
+          lifecycleStatus: draft.lifecycleStatus || "active",
+          effectiveFrom: draft.effectiveFrom,
+          effectiveTo: draft.effectiveTo,
           remark: draft.remark || undefined,
         });
         if (effectiveColourTier !== "single") {
@@ -5315,14 +5318,6 @@ export function BomAdminPanel({
           await api.updateSkuInterior(materialCode, {
             interiorColorName: draft.interiorColorName || null,
             editionTag: draft.editionTag || null,
-          });
-        }
-        if (draft.lifecycleStatus !== "active" || draft.effectiveFrom || draft.effectiveTo) {
-          await api.updateSkuLifecycle(materialCode, {
-            lifecycleStatus: draft.lifecycleStatus || "active",
-            effectiveFrom: draft.effectiveFrom || undefined,
-            effectiveTo: draft.effectiveTo || undefined,
-            rowVersion: 1,
           });
         }
         if (!isTemplateBaseCopy) {
@@ -8239,14 +8234,12 @@ export function BomAdminPanel({
                                                 onClick={async () => {
                                                   const value = option.value;
                                                   patchBomLifecycle(allCodes, { lifecycleStatus: value });
-                                                  for (const s of allSkus) {
-                                                    try {
-                                                      await api.updateSkuLifecycle(s.materialCode, {
-                                                        lifecycleStatus: value,
-                                                        rowVersion: s.rowVersion,
-                                                      });
-                                                    } catch {}
-                                                  }
+                                                  try {
+                                                    await api.updateSkuLifecycle(ref.materialCode, {
+                                                      lifecycleStatus: value,
+                                                      rowVersion: ref.rowVersion,
+                                                    });
+                                                  } catch {}
                                                   scheduleLoad(1200);
                                                 }}
                                               >
@@ -8264,15 +8257,13 @@ export function BomAdminPanel({
                                                 onBlur={async (e) => {
                                                   const value = e.target.value.trim() || null;
                                                   patchBomLifecycle(allCodes, { effectiveFrom: value });
-                                                  for (const s of allSkus) {
-                                                    try {
-                                                      await api.updateSkuLifecycle(s.materialCode, {
-                                                        lifecycleStatus: s.lifecycleStatus || lifecycleStatus,
-                                                        effectiveFrom: value ?? undefined,
-                                                        rowVersion: s.rowVersion,
-                                                      });
-                                                    } catch {}
-                                                  }
+                                                  try {
+                                                    await api.updateSkuLifecycle(ref.materialCode, {
+                                                      lifecycleStatus: ref.lifecycleStatus || lifecycleStatus,
+                                                      effectiveFrom: value,
+                                                      rowVersion: ref.rowVersion,
+                                                    });
+                                                  } catch {}
                                                   scheduleLoad(1200);
                                                 }}
                                               />
@@ -8286,15 +8277,13 @@ export function BomAdminPanel({
                                                 onBlur={async (e) => {
                                                   const value = e.target.value.trim() || null;
                                                   patchBomLifecycle(allCodes, { effectiveTo: value });
-                                                  for (const s of allSkus) {
-                                                    try {
-                                                      await api.updateSkuLifecycle(s.materialCode, {
-                                                        lifecycleStatus: s.lifecycleStatus || lifecycleStatus,
-                                                        effectiveTo: value ?? undefined,
-                                                        rowVersion: s.rowVersion,
-                                                      });
-                                                    } catch {}
-                                                  }
+                                                  try {
+                                                    await api.updateSkuLifecycle(ref.materialCode, {
+                                                      lifecycleStatus: ref.lifecycleStatus || lifecycleStatus,
+                                                      effectiveTo: value,
+                                                      rowVersion: ref.rowVersion,
+                                                    });
+                                                  } catch {}
                                                   scheduleLoad(1200);
                                                 }}
                                               />

@@ -432,11 +432,29 @@ def list_active_skus(
     version: str | None = None,
     exterior_color_code: str | None = None,
     material_code_search: str | None = None,
+    target_date: date | None = None,
     limit: int = 2000,
 ) -> list[MaterialSkuMaster]:
+    today = date.today()
     stmt = select(MaterialSkuMaster).where(
-        MaterialSkuMaster.is_active == True,
-        MaterialSkuMaster.lifecycle_status == "active",
+        or_(
+            and_(
+                MaterialSkuMaster.effective_from_date.is_(None),
+                MaterialSkuMaster.effective_to_date.is_(None),
+                MaterialSkuMaster.is_active == True,
+                MaterialSkuMaster.lifecycle_status.in_(("active", "phase_out")),
+            ),
+            and_(
+                or_(
+                    MaterialSkuMaster.effective_from_date.is_not(None),
+                    MaterialSkuMaster.effective_to_date.is_not(None),
+                ),
+                or_(
+                    MaterialSkuMaster.effective_to_date.is_(None),
+                    MaterialSkuMaster.effective_to_date >= today,
+                ),
+            ),
+        )
     )
     if brand:
         stmt = stmt.where(MaterialSkuMaster.brand == brand)
@@ -455,8 +473,12 @@ def list_active_skus(
             MaterialSkuMaster.material_code.ilike(f"%{material_code_search}%")
         )
     stmt = stmt.order_by(MaterialSkuMaster.brand, MaterialSkuMaster.model_name)
-    stmt = stmt.limit(limit)
-    return list(session.execute(stmt).scalars().all())
+    rows = list(session.execute(stmt).scalars().all())
+    current = target_date or today
+    return [
+        row for row in rows
+        if resolve_effective_lifecycle_status(row, current) in {"active", "phase_out"}
+    ][:limit]
 
 
 def list_historical_skus_with_quantity(
@@ -488,12 +510,154 @@ def list_historical_skus_with_quantity(
 def get_active_sku_by_code(
     session: Session, material_code: str
 ) -> MaterialSkuMaster | None:
-    stmt = select(MaterialSkuMaster).where(
-        MaterialSkuMaster.material_code == material_code,
-        MaterialSkuMaster.is_active == True,
-        MaterialSkuMaster.lifecycle_status == "active",
+    today = date.today()
+    stmt = (
+        select(MaterialSkuMaster).where(
+            MaterialSkuMaster.material_code == material_code,
+            or_(
+                and_(
+                    MaterialSkuMaster.effective_from_date.is_(None),
+                    MaterialSkuMaster.effective_to_date.is_(None),
+                    MaterialSkuMaster.is_active == True,
+                    MaterialSkuMaster.lifecycle_status.in_(("active", "phase_out")),
+                ),
+                and_(
+                    or_(
+                        MaterialSkuMaster.effective_from_date.is_not(None),
+                        MaterialSkuMaster.effective_to_date.is_not(None),
+                    ),
+                    or_(
+                        MaterialSkuMaster.effective_to_date.is_(None),
+                        MaterialSkuMaster.effective_to_date >= today,
+                    ),
+                ),
+            ),
+        )
+        .order_by(MaterialSkuMaster.row_version.desc())
     )
-    return session.execute(stmt).scalars().first()
+    for sku in session.execute(stmt).scalars().all():
+        if resolve_effective_lifecycle_status(sku, today) in {"active", "phase_out"}:
+            return sku
+    return None
+
+
+def resolve_effective_lifecycle_status(
+    sku: MaterialSkuMaster,
+    target_date: date,
+) -> str:
+    """Resolve lifecycle from exact dates, falling back to the legacy label."""
+    effective_from, effective_to = get_lifecycle_dates(sku)
+    if effective_from is not None and target_date < effective_from:
+        return "not_yet_active"
+    if effective_to is not None:
+        if target_date > effective_to:
+            return "historical"
+        return "phase_out"
+    status = clean_text(getattr(sku, "lifecycle_status", "active")).lower()
+    return status if status in {"active", "phase_out", "historical"} else "active"
+
+
+def get_lifecycle_dates(sku: object) -> tuple[date | None, date | None]:
+    return (
+        getattr(sku, "effective_from_date", None),
+        getattr(sku, "effective_to_date", None),
+    )
+
+
+def list_bom_template_skus(
+    session: Session,
+    bom_template: str,
+    baseline_version_id: UUID,
+) -> list[MaterialSkuMaster]:
+    template = clean_text(bom_template).upper()
+    rows = list(
+        session.execute(
+            select(MaterialSkuMaster)
+            .where(
+                MaterialSkuMaster.baseline_version_id == baseline_version_id,
+                func.upper(MaterialSkuMaster.bom_template) == template,
+            )
+            .order_by(MaterialSkuMaster.material_code)
+        ).scalars().all()
+    )
+    return [
+        row for row in rows
+        if clean_text(getattr(row, "bom_template", "")).upper() == template
+    ]
+
+
+def get_bom_template_lifecycle(
+    session: Session,
+    bom_template: str,
+    baseline_version_id: UUID,
+) -> dict:
+    rows = list_bom_template_skus(session, bom_template, baseline_version_id)
+    if not rows:
+        raise LookupError("BOM template not found")
+    boundaries = {get_lifecycle_dates(row) for row in rows}
+    inconsistent = len(boundaries) > 1
+    effective_from, effective_to = next(iter(boundaries)) if not inconsistent else (None, None)
+    return {
+        "bomTemplate": clean_text(bom_template).upper(),
+        "effectiveFrom": effective_from,
+        "effectiveTo": effective_to,
+        "inconsistent": inconsistent,
+        "materials": [row.material_code for row in rows],
+        "rows": rows,
+    }
+
+
+def preview_bom_template_lifecycle_update(
+    session: Session,
+    material_code: str,
+    effective_from: date | None,
+    effective_to: date | None,
+) -> dict:
+    anchor = get_sku_by_material_code_any_status(session, material_code)
+    if anchor is None:
+        raise LookupError("Material code not found")
+    template = clean_text(anchor.bom_template or anchor.material_code).upper()
+    rows = list_bom_template_skus(session, template, anchor.baseline_version_id)
+    if not rows:
+        rows = [anchor]
+    periods = list(
+        session.execute(
+            select(CountryTemplateFobPeriod)
+            .where(CountryTemplateFobPeriod.bom_template == template)
+            .order_by(
+                CountryTemplateFobPeriod.country_code,
+                CountryTemplateFobPeriod.valid_from,
+            )
+        ).scalars().all()
+    )
+    impacts: list[dict] = []
+    for period in periods:
+        before_start = effective_from is not None and period.valid_from < effective_from
+        after_end = effective_to is not None and (
+            period.valid_to is None or period.valid_to > effective_to
+        )
+        if before_start or after_end:
+            impacts.append({
+                "periodId": str(period.country_template_fob_period_id),
+                "countryCode": period.country_code,
+                "validFrom": period.valid_from.isoformat(),
+                "validTo": period.valid_to.isoformat() if period.valid_to else None,
+                "beforeTemplateStart": before_start,
+                "afterTemplateEnd": after_end,
+                "suggestedActions": [
+                    "Edit price period",
+                    "Extend template lifecycle",
+                    "Cancel",
+                ],
+            })
+    return {
+        "bomTemplate": template,
+        "materialCodes": [row.material_code for row in rows],
+        "effectiveFrom": effective_from.isoformat() if effective_from else None,
+        "effectiveTo": effective_to.isoformat() if effective_to else None,
+        "affectedPeriods": impacts,
+        "canApply": not impacts,
+    }
 
 
 def transition_old_skus_to_historical(
@@ -514,35 +678,49 @@ def transition_old_skus_to_historical(
     return result.rowcount
 
 
-def update_sku_lifecycle(
+def update_bom_template_lifecycle(
     session: Session,
     material_code: str,
     lifecycle_status: str,
-    effective_from: str | None = None,
-    effective_to: str | None = None,
+    effective_from: date | None = None,
+    effective_to: date | None = None,
     expected_version: int = 1,
-) -> MaterialSkuMaster | None:
-    """Update a single SKU's lifecycle status with optimistic locking.
-
-    Uses any_status lookup so that historical SKUs can be re-activated.
-    """
-    sku = get_sku_by_material_code_any_status(session, material_code)
-    if not sku:
+) -> dict | None:
+    """Update exact lifecycle dates for every colour in one BOM template."""
+    anchor = get_sku_by_material_code_any_status(session, material_code)
+    if anchor is None or anchor.row_version != expected_version:
         return None
-    if sku.row_version != expected_version:
-        return None
-    sku.lifecycle_status = lifecycle_status
-    if lifecycle_status == "historical":
-        sku.is_active = False
-    elif lifecycle_status == "active":
-        sku.is_active = True
-    if effective_from is not None:
-        sku.effective_from_month = effective_from
-    if effective_to is not None:
-        sku.effective_to_month = effective_to
-    sku.row_version = expected_version + 1
-    sku.updated_at_utc = datetime.now(timezone.utc)
-    return sku
+    if effective_from is not None and effective_to is not None and effective_to < effective_from:
+        raise ValueError("effectiveTo must be on or after effectiveFrom")
+    status = clean_text(lifecycle_status).lower()
+    if status not in {"active", "phase_out", "historical"}:
+        raise ValueError("lifecycleStatus must be active, phase_out or historical")
+    preview = preview_bom_template_lifecycle_update(
+        session,
+        material_code,
+        effective_from,
+        effective_to,
+    )
+    if preview["affectedPeriods"]:
+        raise ValueError("Country FOB periods exceed the proposed template lifecycle")
+    template = preview["bomTemplate"]
+    rows = list_bom_template_skus(session, template, anchor.baseline_version_id) or [anchor]
+    now = datetime.now(timezone.utc)
+    current_date = date.today()
+    for sku in rows:
+        sku.effective_from_date = effective_from
+        sku.effective_to_date = effective_to
+        sku.lifecycle_status = status
+        effective_status = resolve_effective_lifecycle_status(sku, current_date)
+        sku.lifecycle_status = effective_status if effective_status != "not_yet_active" else "active"
+        sku.is_active = effective_status in {"active", "phase_out"}
+        sku.row_version += 1
+        sku.updated_at_utc = now
+    return {
+        **preview,
+        "lifecycleStatus": resolve_effective_lifecycle_status(anchor, current_date),
+        "rowVersions": {sku.material_code: sku.row_version for sku in rows},
+    }
 
 
 def delete_sku(session: Session, material_code: str) -> bool:
@@ -832,6 +1010,21 @@ def list_country_template_fob_periods(
     )
 
 
+def has_country_template_fob_periods(
+    session: Session,
+    country_code: str,
+    bom_template: str,
+) -> bool:
+    return session.execute(
+        select(CountryTemplateFobPeriod.country_template_fob_period_id)
+        .where(
+            CountryTemplateFobPeriod.country_code == clean_text(country_code).upper(),
+            CountryTemplateFobPeriod.bom_template == clean_text(bom_template).upper(),
+        )
+        .limit(1)
+    ).scalar_one_or_none() is not None
+
+
 def resolve_country_template_fob_period(
     session: Session,
     country_code: str,
@@ -880,6 +1073,32 @@ def save_country_template_fob_period(
         raise ValueError("validTo must be on or after validFrom")
     if base_fob_eur < 0:
         raise ValueError("baseFobEur must be greater than or equal to 0")
+
+    baseline = get_latest_baseline(session)
+    if baseline is not None:
+        try:
+            lifecycle = get_bom_template_lifecycle(
+                session,
+                template,
+                baseline.baseline_version_id,
+            )
+        except LookupError:
+            lifecycle = None
+        if lifecycle is not None:
+            if lifecycle["inconsistent"]:
+                raise ValueError(
+                    "BOM template lifecycle is inconsistent across colour SKUs; align it before saving FOB periods"
+                )
+            template_from = lifecycle["effectiveFrom"]
+            template_to = lifecycle["effectiveTo"]
+            if template_from is not None and valid_from < template_from:
+                raise ValueError(
+                    f"FOB period starts before the template lifecycle ({template_from.isoformat()})"
+                )
+            if template_to is not None and (valid_to is None or valid_to > template_to):
+                raise ValueError(
+                    f"FOB period exceeds the template final order date ({template_to.isoformat()})"
+                )
 
     row = (
         session.get(CountryTemplateFobPeriod, period_id)
@@ -1509,10 +1728,10 @@ def list_bom_with_fob(
             "interiorPackage": s.interior_package or interior_by_template.get(s.bom_template, (None, None, None))[2],
             "editionTag": s.edition_tag,
             "remark": s.remark,
-            "lifecycleStatus": s.lifecycle_status,
+            "lifecycleStatus": resolve_effective_lifecycle_status(s, date.today()),
             "isActive": s.is_active,
-            "effectiveFrom": s.effective_from_month,
-            "effectiveTo": s.effective_to_month,
+            "effectiveFrom": get_lifecycle_dates(s)[0].isoformat() if get_lifecycle_dates(s)[0] else None,
+            "effectiveTo": get_lifecycle_dates(s)[1].isoformat() if get_lifecycle_dates(s)[1] else None,
             "rowVersion": s.row_version,
             "fobByCountry": fob_map.get(s.material_code, {}),
             "financeCountries": sorted(

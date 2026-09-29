@@ -148,6 +148,8 @@ import type {
 } from "../types/hermes";
 import type {
   BaselineVersion,
+  BomTemplateLifecycleUpdateRequest,
+  BomTemplateLifecycleUpdateResponse,
   ColourHexRuleApplyResult,
   ColourHexRuleLookup,
   ColourHexRulePreview,
@@ -5461,8 +5463,11 @@ export const api = {
       headers: { "Content-Type": "application/json" },
     }),
 
-  updateSkuLifecycle: (materialCode: string, body: { lifecycleStatus: string; effectiveFrom?: string; effectiveTo?: string; rowVersion: number }) =>
-    request<any>(`/order-genius/material-skus/${encodeURIComponent(materialCode)}/lifecycle`, { method: "PATCH", body: JSON.stringify(body) }),
+  updateSkuLifecycle: (materialCode: string, body: BomTemplateLifecycleUpdateRequest) =>
+    request<BomTemplateLifecycleUpdateResponse>(
+      `/order-genius/material-skus/${encodeURIComponent(materialCode)}/lifecycle`,
+      { method: "PATCH", body: JSON.stringify(body) },
+    ),
 
   updateSkuFob: (materialCode: string, body: { countryCode: string; baseFobEur?: number | null; finalFobEur?: number | null; paymentTermCode?: string; remark?: string | null }) =>
     request<any>(`/order-genius/material-skus/${encodeURIComponent(materialCode)}/fob`, { method: "PATCH", body: JSON.stringify(body) }),

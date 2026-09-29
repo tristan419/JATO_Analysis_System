@@ -1860,6 +1860,10 @@ class MaterialSkuMaster(TimestampMixin, Base):
     lifecycle_status: Mapped[str] = mapped_column(Text, nullable=False, default="active")
     is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
     is_published: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    effective_from_date: Mapped[date | None] = mapped_column(Date, nullable=True)
+    effective_to_date: Mapped[date | None] = mapped_column(Date, nullable=True)
+    # Retained as migration evidence for legacy YYYY-MM imports. New lifecycle
+    # reads and writes use the exact-date columns above.
     effective_from_month: Mapped[str | None] = mapped_column(Text, nullable=True)
     effective_to_month: Mapped[str | None] = mapped_column(Text, nullable=True)
     remark: Mapped[str | None] = mapped_column(Text, nullable=True)

@@ -93,6 +93,33 @@ export interface CountryTemplateFobPeriod {
   rowVersion: number;
 }
 
+export interface BomTemplateLifecycleUpdateRequest {
+  lifecycleStatus: "active" | "phase_out" | "historical";
+  effectiveFrom?: string | null;
+  effectiveTo?: string | null;
+  rowVersion: number;
+  previewOnly?: boolean;
+}
+
+export interface BomTemplateLifecycleUpdateResponse {
+  bomTemplate: string;
+  materialCodes: string[];
+  effectiveFrom: string | null;
+  effectiveTo: string | null;
+  affectedPeriods: Array<{
+    periodId: string;
+    countryCode: string;
+    validFrom: string;
+    validTo: string | null;
+    beforeTemplateStart: boolean;
+    afterTemplateEnd: boolean;
+    suggestedActions: string[];
+  }>;
+  canApply: boolean;
+  lifecycleStatus?: string;
+  rowVersions?: Record<string, number>;
+}
+
 export interface QuantityCellUpdate {
   countryCode: string;
   orderYear: number;
