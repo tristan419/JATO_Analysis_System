@@ -434,6 +434,7 @@ def _list_matrix_candidate_skus(
     version: str | None = None,
     colour: str | None = None,
     material_code_search: str | None = None,
+    selection_date: date | None = None,
 ) -> list[MaterialSkuMaster]:
     normalized_brand = normalize_brand(brand) if brand else None
     normalized_model = normalize_brand_text(model_name) if model_name else None
@@ -446,6 +447,7 @@ def _list_matrix_candidate_skus(
         version=version,
         exterior_color_code=colour,
         material_code_search=material_code_search,
+        target_date=selection_date,
     )
     if normalized_brand:
         active_skus = [
@@ -487,15 +489,38 @@ def _historical_sku_matches_matrix_filters(
     return True
 
 
-def _date_effective_fob(
+def resolve_date_effective_fob(
     session: Session,
     country_code: str,
     sku: MaterialSkuMaster,
     selection_date: date | None,
 ) -> tuple[float | None, dict | None, dict | None]:
-    """Resolve an optional dated base without changing the SKU's saved tier."""
+    """Resolve one date using template lifecycle, country base and saved tier."""
     if selection_date is None or not sku.bom_template:
         return None, None, None
+    lifecycle_status = repo.resolve_effective_lifecycle_status(sku, selection_date)
+    if lifecycle_status not in {"active", "phase_out"}:
+        effective_from, effective_to = repo.get_lifecycle_dates(sku)
+        reason = (
+            f"Material is not active until {effective_from.isoformat()}"
+            if lifecycle_status == "not_yet_active" and effective_from
+            else f"Material expired on {effective_to.isoformat()}"
+            if lifecycle_status == "historical" and effective_to
+            else f"Material lifecycle is {lifecycle_status}"
+        )
+        evidence = {
+            "selectionDate": selection_date.isoformat(),
+            "status": lifecycle_status,
+            "effectiveFrom": effective_from.isoformat() if effective_from else None,
+            "effectiveTo": effective_to.isoformat() if effective_to else None,
+        }
+        return None, {
+            "materialCode": sku.material_code,
+            "countryCode": country_code,
+            "status": "conflict",
+            "reason": reason,
+            "records": [],
+        }, evidence
     try:
         period = repo.resolve_country_template_fob_period(
             session,
@@ -513,7 +538,23 @@ def _date_effective_fob(
         }
         return None, conflict, {"status": "conflict", "selectionDate": selection_date.isoformat()}
     if period is None:
-        return None, None, None
+        if not repo.has_country_template_fob_periods(
+            session,
+            country_code,
+            sku.bom_template,
+        ):
+            return None, None, None
+        evidence = {
+            "selectionDate": selection_date.isoformat(),
+            "status": "no_price",
+        }
+        return None, {
+            "materialCode": sku.material_code,
+            "countryCode": country_code,
+            "status": "conflict",
+            "reason": f"No FOB is available on {selection_date.isoformat()}",
+            "records": [],
+        }, evidence
 
     period_payload = {
         "periodId": str(period.country_template_fob_period_id),
@@ -577,7 +618,7 @@ def _build_matrix_for_country(
 
     # Keep unresolved groups visible with no price so normal rows remain usable.
     dated_fob_by_material = {
-        sku.material_code: _date_effective_fob(session, country_code, sku, selection_date)
+        sku.material_code: resolve_date_effective_fob(session, country_code, sku, selection_date)
         for sku in active_skus
     }
     skus_with_fob = [
@@ -663,13 +704,16 @@ def _build_matrix_for_country(
             "powertrain": _extract_canonical_pt(sku),
             "fobEur": dated_fob if fob_period is not None else (float(fob.final_fob_eur) if fob else None),
             "fobPeriod": fob_period,
-            "lifecycleStatus": "active",
+            "lifecycleStatus": repo.resolve_effective_lifecycle_status(
+                sku,
+                selection_date or date.today(),
+            ),
             "fobConflict": conflict,
             "editable": conflict is None,
             "displayStyle": None,
             "remark": sku.remark,
-            "effectiveFrom": sku.effective_from_month,
-            "effectiveTo": sku.effective_to_month,
+            "effectiveFrom": repo.get_lifecycle_dates(sku)[0].isoformat() if repo.get_lifecycle_dates(sku)[0] else None,
+            "effectiveTo": repo.get_lifecycle_dates(sku)[1].isoformat() if repo.get_lifecycle_dates(sku)[1] else None,
             "months": row_months,
             "ttl": row_ttl,
         })
@@ -698,7 +742,7 @@ def _build_matrix_for_country(
             (item for item in historical_fob_conflicts if item["materialCode"] == mc),
             None,
         )
-        dated_fob, dated_conflict, fob_period = _date_effective_fob(
+        dated_fob, dated_conflict, fob_period = resolve_date_effective_fob(
             session, country_code, hist_sku, selection_date,
         )
         if fob_period is not None:
@@ -744,13 +788,20 @@ def _build_matrix_for_country(
                 "powertrain": _extract_canonical_pt(hist_sku),
                 "fobEur": dated_fob if fob_period is not None else (float(fob.final_fob_eur) if fob else None),
                 "fobPeriod": fob_period,
-                "lifecycleStatus": "historical",
+                "lifecycleStatus": (
+                    repo.resolve_effective_lifecycle_status(
+                        hist_sku,
+                        selection_date or date.today(),
+                    )
+                    if any(repo.get_lifecycle_dates(hist_sku))
+                    else "historical"
+                ),
                 "fobConflict": conflict,
                 "editable": False,
                 "displayStyle": "strikethrough",
                 "remark": hist_sku.remark,
-                "effectiveFrom": hist_sku.effective_from_month,
-                "effectiveTo": hist_sku.effective_to_month,
+                "effectiveFrom": repo.get_lifecycle_dates(hist_sku)[0].isoformat() if repo.get_lifecycle_dates(hist_sku)[0] else None,
+                "effectiveTo": repo.get_lifecycle_dates(hist_sku)[1].isoformat() if repo.get_lifecycle_dates(hist_sku)[1] else None,
                 "months": row_months,
                 "ttl": row_ttl,
             })
@@ -791,6 +842,7 @@ def build_matrix(
         version=version,
         colour=colour,
         material_code_search=material_code_search,
+        selection_date=selection_date,
     )
     return _build_matrix_for_country(
         session,
@@ -828,6 +880,7 @@ def build_matrix_batch(
         version=version,
         colour=colour,
         material_code_search=material_code_search,
+        selection_date=selection_date,
     )
     return {
         country_code: _build_matrix_for_country(

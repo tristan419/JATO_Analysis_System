@@ -14,6 +14,7 @@ from sqlalchemy.orm import Session
 from app.db.models import PiOrderHeader, PiOrderLine, PiOrderLineAllocation, PiVehicleUnit
 from app.infra import order_genius_repository as og_repo
 from app.infra import order_genius_vehicle_repository as repo
+from app.services.order_genius_service import resolve_date_effective_fob
 from app.services.order_genius_vehicle_exporter import generate_vehicle_allocation_excel
 from app.services.vehicle_status_flow_config import get_vehicle_status_flow_config
 
@@ -957,13 +958,19 @@ def _resolve_pi_pricing_date(
         return None
     month_start = date(year, month, 1)
     month_end = date(year, month, monthrange(year, month)[1])
+    periods = og_repo.list_country_template_fob_periods(session, country, sku.bom_template)
+    if not periods:
+        return None
     relevant_periods = [
         period
-        for period in og_repo.list_country_template_fob_periods(session, country, sku.bom_template)
+        for period in periods
         if period.valid_from <= month_end and (period.valid_to is None or period.valid_to >= month_start)
     ]
     if not relevant_periods:
-        return None
+        raise HTTPException(
+            status_code=409,
+            detail=f"No FOB is available for {sku.bom_template} / {country} in {year}-{month:02d}",
+        )
     if len(relevant_periods) == 1:
         period = relevant_periods[0]
         if period.valid_from <= month_start and (period.valid_to is None or period.valid_to >= month_end):
@@ -1022,29 +1029,17 @@ def _line_payload_from_material(
             "interiorColourCode": sku.interior_colour_code,
         })
     if sku and pricing_date and sku.bom_template:
-        try:
-            period = og_repo.resolve_country_template_fob_period(
-                session, country, sku.bom_template, pricing_date,
-            )
-        except ValueError as exc:
-            raise HTTPException(status_code=409, detail=str(exc)) from exc
-        if period is not None:
-            base_fob = float(period.base_fob_eur)
-            if base_fob == 0:
-                raise HTTPException(
-                    status_code=409,
-                    detail=f"{sku.bom_template} / {country} is stopped on {pricing_date.isoformat()}",
-                )
-            tier = og_repo.resolve_effective_colour_tier(sku)
-            surcharge = og_repo.resolve_colour_surcharge_for_sku(session, sku, tier)
-            amount = surcharge.get("amount")
-            if amount is None:
-                reason = "missing saved colour tier" if surcharge.get("status") == "missing_tier" else "missing colour surcharge rule"
-                raise HTTPException(
-                    status_code=409,
-                    detail=f"{sku.material_code} cannot be priced: {reason}",
-                )
-            payload["fobEur"] = round(base_fob + float(amount), 2)
+        dated_fob, conflict, evidence = resolve_date_effective_fob(
+            session,
+            country,
+            sku,
+            pricing_date,
+        )
+        if evidence is not None:
+            if dated_fob is None:
+                reason = conflict.get("reason") if conflict else evidence.get("status")
+                raise HTTPException(status_code=409, detail=reason)
+            payload["fobEur"] = dated_fob
             return payload
     if fob:
         payload["fobEur"] = float(fob.final_fob_eur)

@@ -1,5 +1,5 @@
 """Real SQLAlchemy transactions: exercise public pricing paths, not mock prices."""
-from datetime import date
+from datetime import date, timedelta
 from uuid import uuid4
 from types import SimpleNamespace
 
@@ -167,6 +167,30 @@ def test_matrix_selection_date_uses_country_template_base_and_saved_tier(db):
     assert rows["D"]["fobPeriod"]["surchargeEur"] == 300
 
 
+def test_country_template_periods_remain_country_specific(db):
+    sku(db, "S", "single")
+    fob(db, "S", 1000, country="CH")
+    fob(db, "S", 900, country="SK")
+    for country, base in (("CH", 1200), ("SK", 950)):
+        repo.save_country_template_fob_period(
+            db,
+            country_code=country,
+            bom_template="T**001",
+            valid_from=date(2026, 7, 1),
+            valid_to=date(2026, 7, 31),
+            base_fob_eur=base,
+            remark=None,
+            changed_by="test",
+        )
+    db.commit()
+
+    ch = service.build_matrix(db, "CH", 2026, selection_date=date(2026, 7, 20))
+    sk = service.build_matrix(db, "SK", 2026, selection_date=date(2026, 7, 20))
+
+    assert next(row for row in ch["rows"] if row["materialCode"] == "S")["fobEur"] == 1200
+    assert next(row for row in sk["rows"] if row["materialCode"] == "S")["fobEur"] == 950
+
+
 def test_zero_period_marks_sku_stopped_without_default_fallback(db):
     sku(db, "S", "single")
     fob(db, "S", 1000)
@@ -187,6 +211,254 @@ def test_zero_period_marks_sku_stopped_without_default_fallback(db):
 
     assert row["fobEur"] is None
     assert row["fobPeriod"]["status"] == "stopped"
+
+
+def test_configured_period_gap_never_falls_back_to_legacy_fob(db):
+    sku(db, "S", "single")
+    fob(db, "S", 1000)
+    repo.save_country_template_fob_period(
+        db,
+        country_code="CH",
+        bom_template="T**001",
+        valid_from=date(2026, 1, 1),
+        valid_to=date(2026, 1, 31),
+        base_fob_eur=1100,
+        remark=None,
+        changed_by="test",
+    )
+    db.commit()
+
+    matrix = service.build_matrix(db, "CH", 2026, selection_date=date(2026, 2, 10))
+    row = next(item for item in matrix["rows"] if item["materialCode"] == "S")
+
+    assert row["fobEur"] is None
+    assert row["fobPeriod"]["status"] == "no_price"
+    assert row["fobConflict"]["reason"] == "No FOB is available on 2026-02-10"
+
+
+def test_no_period_schedule_keeps_undated_legacy_fob(db):
+    sku(db, "S", "single")
+    fob(db, "S", 1000)
+    db.commit()
+
+    matrix = service.build_matrix(db, "CH", 2026, selection_date=date(2026, 2, 10))
+    row = next(item for item in matrix["rows"] if item["materialCode"] == "S")
+
+    assert row["fobEur"] == 1000
+    assert row["fobPeriod"] is None
+
+
+def test_template_lifecycle_updates_every_colour_and_is_date_derived(db):
+    single = sku(db, "S", "single")
+    dual = sku(db, "D", "dual")
+    result = repo.update_bom_template_lifecycle(
+        db,
+        material_code="S",
+        lifecycle_status="active",
+        effective_from=date(2026, 3, 14),
+        effective_to=date(2026, 9, 30),
+        expected_version=single.row_version,
+    )
+    db.commit()
+
+    assert result["materialCodes"] == ["D", "S"]
+    assert single.effective_from_date == dual.effective_from_date == date(2026, 3, 14)
+    assert single.effective_to_date == dual.effective_to_date == date(2026, 9, 30)
+    assert repo.resolve_effective_lifecycle_status(single, date(2026, 3, 13)) == "not_yet_active"
+    assert repo.resolve_effective_lifecycle_status(single, date(2026, 3, 14)) == "phase_out"
+    assert repo.resolve_effective_lifecycle_status(single, date(2026, 9, 30)) == "phase_out"
+    assert repo.resolve_effective_lifecycle_status(single, date(2026, 10, 1)) == "historical"
+
+
+def test_default_matrix_scope_excludes_expired_templates_until_historical_opt_in(db):
+    expired = sku(db, "OLD", "single", template="OLD**001")
+    planned = sku(db, "NEW", "single", template="NEW**001")
+    today = date.today()
+    expired.effective_from_date = today - timedelta(days=60)
+    expired.effective_to_date = today - timedelta(days=1)
+    expired.is_active = False
+    expired.lifecycle_status = "historical"
+    planned.effective_from_date = today + timedelta(days=10)
+    planned.is_active = False
+    db.commit()
+
+    rows = repo.list_active_skus(
+        db,
+        target_date=today + timedelta(days=10),
+    )
+
+    assert {row.material_code for row in rows} == {"NEW"}
+
+
+def test_country_period_must_stay_inside_template_lifecycle(db):
+    single = sku(db, "S", "single")
+    sku(db, "D", "dual")
+    repo.update_bom_template_lifecycle(
+        db,
+        material_code="S",
+        lifecycle_status="active",
+        effective_from=date(2026, 3, 14),
+        effective_to=date(2026, 9, 30),
+        expected_version=single.row_version,
+    )
+
+    with pytest.raises(ValueError, match="starts before"):
+        repo.save_country_template_fob_period(
+            db,
+            country_code="CH",
+            bom_template="T**001",
+            valid_from=date(2026, 3, 1),
+            valid_to=date(2026, 6, 30),
+            base_fob_eur=1000,
+            remark=None,
+            changed_by="test",
+        )
+    with pytest.raises(ValueError, match="exceeds"):
+        repo.save_country_template_fob_period(
+            db,
+            country_code="CH",
+            bom_template="T**001",
+            valid_from=date(2026, 3, 14),
+            valid_to=None,
+            base_fob_eur=1000,
+            remark=None,
+            changed_by="test",
+        )
+
+
+def test_lifecycle_preview_lists_price_periods_that_would_be_outside(db):
+    sku(db, "S", "single")
+    repo.save_country_template_fob_period(
+        db,
+        country_code="CH",
+        bom_template="T**001",
+        valid_from=date(2026, 1, 1),
+        valid_to=date(2026, 12, 31),
+        base_fob_eur=1000,
+        remark=None,
+        changed_by="test",
+    )
+    db.commit()
+
+    preview = repo.preview_bom_template_lifecycle_update(
+        db,
+        "S",
+        date(2026, 1, 1),
+        date(2026, 9, 30),
+    )
+
+    assert preview["canApply"] is False
+    assert preview["affectedPeriods"][0]["afterTemplateEnd"] is True
+    with pytest.raises(ValueError, match="exceed"):
+        repo.update_bom_template_lifecycle(
+            db,
+            material_code="S",
+            lifecycle_status="phase_out",
+            effective_from=date(2026, 1, 1),
+            effective_to=date(2026, 9, 30),
+            expected_version=1,
+        )
+
+
+def test_lifecycle_route_maps_legacy_months_and_updates_template_group(db):
+    single = sku(db, "S", "single")
+    dual = sku(db, "D", "dual")
+    result = routes.patch_sku_lifecycle(
+        "S",
+        {
+            "lifecycleStatus": "phase_out",
+            "effectiveFrom": "2026-03",
+            "effectiveTo": "2026-09",
+            "rowVersion": single.row_version,
+        },
+        session=db,
+        user=SimpleNamespace(name="test"),
+    )
+
+    assert result["effectiveFrom"] == "2026-03-01"
+    assert result["effectiveTo"] == "2026-09-30"
+    assert result["materialCodes"] == ["D", "S"]
+    assert single.effective_from_date == dual.effective_from_date == date(2026, 3, 1)
+    assert single.effective_to_date == dual.effective_to_date == date(2026, 9, 30)
+
+
+def test_lifecycle_route_preserves_omitted_boundary_and_clears_explicit_null(db):
+    single = sku(db, "S", "single")
+    single.effective_from_date = date(2026, 3, 14)
+    single.effective_to_date = date(2026, 9, 30)
+    db.commit()
+
+    preserved = routes.patch_sku_lifecycle(
+        "S",
+        {
+            "lifecycleStatus": "phase_out",
+            "effectiveFrom": "2026-04-01",
+            "rowVersion": single.row_version,
+        },
+        session=db,
+        user=SimpleNamespace(name="test"),
+    )
+    assert preserved["effectiveFrom"] == "2026-04-01"
+    assert preserved["effectiveTo"] == "2026-09-30"
+
+    cleared = routes.patch_sku_lifecycle(
+        "S",
+        {
+            "lifecycleStatus": "active",
+            "effectiveTo": None,
+            "rowVersion": preserved["rowVersions"]["S"],
+        },
+        session=db,
+        user=SimpleNamespace(name="test"),
+    )
+    assert cleared["effectiveFrom"] == "2026-04-01"
+    assert cleared["effectiveTo"] is None
+
+
+def test_lifecycle_route_returns_actionable_period_conflict(db):
+    single = sku(db, "S", "single")
+    repo.save_country_template_fob_period(
+        db,
+        country_code="CH",
+        bom_template="T**001",
+        valid_from=date(2026, 1, 1),
+        valid_to=date(2026, 12, 31),
+        base_fob_eur=1000,
+        remark=None,
+        changed_by="test",
+    )
+    db.commit()
+
+    preview = routes.patch_sku_lifecycle(
+        "S",
+        {
+            "lifecycleStatus": "phase_out",
+            "effectiveFrom": "2026-01-01",
+            "effectiveTo": "2026-09-30",
+            "rowVersion": single.row_version,
+            "previewOnly": True,
+        },
+        session=db,
+        user=SimpleNamespace(name="test"),
+    )
+    assert preview["canApply"] is False
+
+    with pytest.raises(routes.HTTPException) as exc:
+        routes.patch_sku_lifecycle(
+            "S",
+            {
+                "lifecycleStatus": "phase_out",
+                "effectiveFrom": "2026-01-01",
+                "effectiveTo": "2026-09-30",
+                "rowVersion": single.row_version,
+            },
+            session=db,
+            user=SimpleNamespace(name="test"),
+        )
+
+    assert exc.value.status_code == 409
+    assert exc.value.detail["code"] == "template_lifecycle_fob_period_conflict"
+    assert exc.value.detail["preview"]["affectedPeriods"][0]["countryCode"] == "CH"
 
 
 def test_template_country_fob_periods_reject_overlap(db):

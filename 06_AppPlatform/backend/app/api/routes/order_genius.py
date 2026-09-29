@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import io
+from calendar import monthrange
 from datetime import date
 from uuid import UUID
 import uuid as uuid_module
@@ -98,6 +99,29 @@ def _parse_iso_date(raw_value: object, field_name: str, *, required: bool = Fals
         return date.fromisoformat(value)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=f"{field_name} must be YYYY-MM-DD") from exc
+
+
+def _parse_lifecycle_date(
+    raw_value: object,
+    field_name: str,
+    *,
+    end_of_month: bool = False,
+) -> date | None:
+    """Accept exact dates and migrate legacy YYYY-MM boundaries explicitly."""
+    value = clean_text(raw_value)
+    if not value:
+        return None
+    if len(value) == 7:
+        try:
+            year, month = (int(part) for part in value.split("-", 1))
+            day = monthrange(year, month)[1] if end_of_month else 1
+            return date(year, month, day)
+        except (TypeError, ValueError) as exc:
+            raise HTTPException(
+                status_code=400,
+                detail=f"{field_name} must be YYYY-MM-DD",
+            ) from exc
+    return _parse_iso_date(value, field_name)
 
 
 def _country_template_fob_period_payload(row: CountryTemplateFobPeriod) -> dict:
@@ -1344,28 +1368,65 @@ def patch_sku_lifecycle(
     session: Session = Depends(get_db_session),
     user=Depends(require_min_role("editor")),
 ) -> dict:
-    """Update a material SKU's lifecycle status (active/historical/phase_out)."""
-    result = repo.update_sku_lifecycle(
-        session,
-        material_code=material_code,
-        lifecycle_status=body.get("lifecycleStatus", "active"),
-        effective_from=body.get("effectiveFrom"),
-        effective_to=body.get("effectiveTo"),
-        expected_version=body.get("rowVersion", 1),
+    """Preview or update lifecycle dates for every colour in a BOM template."""
+    anchor = repo.get_sku_by_material_code_any_status(session, material_code)
+    if anchor is None:
+        raise HTTPException(status_code=404, detail="Material code not found")
+    current_from, current_to = repo.get_lifecycle_dates(anchor)
+    effective_from = (
+        _parse_lifecycle_date(body.get("effectiveFrom"), "effectiveFrom")
+        if "effectiveFrom" in body
+        else current_from
     )
+    effective_to = (
+        _parse_lifecycle_date(
+            body.get("effectiveTo"),
+            "effectiveTo",
+            end_of_month=True,
+        )
+        if "effectiveTo" in body
+        else current_to
+    )
+    try:
+        preview = repo.preview_bom_template_lifecycle_update(
+            session,
+            material_code,
+            effective_from,
+            effective_to,
+        )
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    if body.get("previewOnly") is True:
+        return preview
+    if preview["affectedPeriods"]:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "template_lifecycle_fob_period_conflict",
+                "message": "Country FOB periods exceed the proposed template lifecycle.",
+                "messageZh": "国家 FOB 区间超出拟议的模板生命周期。",
+                "preview": preview,
+            },
+        )
+    try:
+        result = repo.update_bom_template_lifecycle(
+            session,
+            material_code=material_code,
+            lifecycle_status=body.get("lifecycleStatus", "active"),
+            effective_from=effective_from,
+            effective_to=effective_to,
+            expected_version=body.get("rowVersion", 1),
+        )
+    except ValueError as exc:
+        session.rollback()
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     if result is None:
         sku = repo.get_sku_by_material_code_any_status(session, material_code)
         if not sku:
             raise HTTPException(status_code=404, detail="Material code not found")
         raise HTTPException(status_code=409, detail="Concurrent update conflict")
     session.commit()
-    return {
-        "materialCode": result.material_code,
-        "lifecycleStatus": result.lifecycle_status,
-        "rowVersion": result.row_version,
-        "effectiveFrom": result.effective_from,
-        "effectiveTo": result.effective_to,
-    }
+    return result
 
 
 @router.delete("/material-skus/{material_code}")
@@ -1715,9 +1776,18 @@ def create_material_sku(
         raise HTTPException(status_code=400, detail="colourTier is required")
     if colour_tier not in {"single", "dual", "special"}:
         raise HTTPException(status_code=400, detail="colourTier must be single, dual, or special")
-    lifecycle_status = clean_text(body.get("lifecycleStatus") or "active") or "active"
-    effective_from = clean_text(body.get("effectiveFrom")) or None
-    effective_to = clean_text(body.get("effectiveTo")) or None
+    lifecycle_status = clean_text(body.get("lifecycleStatus") or "active").lower() or "active"
+    if lifecycle_status not in {"active", "phase_out", "historical"}:
+        raise HTTPException(
+            status_code=400,
+            detail="lifecycleStatus must be active, phase_out or historical",
+        )
+    effective_from = _parse_lifecycle_date(body.get("effectiveFrom"), "effectiveFrom")
+    effective_to = _parse_lifecycle_date(
+        body.get("effectiveTo"),
+        "effectiveTo",
+        end_of_month=True,
+    )
     interior_color_name = clean_text(body.get("interiorColorName")) or None
     edition_tag = clean_text(body.get("editionTag")) or None
     fob_updates = body.get("fobs") or []
@@ -1777,6 +1847,38 @@ def create_material_sku(
         )
         session.flush()
 
+    template_rows = repo.list_bom_template_skus(
+        session,
+        bom_template,
+        baseline.baseline_version_id,
+    )
+    if template_rows:
+        template_boundaries = {
+            repo.get_lifecycle_dates(row)
+            for row in template_rows
+        }
+        if len(template_boundaries) != 1:
+            raise HTTPException(
+                status_code=409,
+                detail="BOM template lifecycle is inconsistent across colour SKUs",
+            )
+        effective_from, effective_to = next(iter(template_boundaries))
+        lifecycle_status = repo.resolve_effective_lifecycle_status(
+            template_rows[0],
+            date.today(),
+        )
+        if lifecycle_status == "not_yet_active":
+            lifecycle_status = "active"
+    if (
+        effective_from is not None
+        and effective_to is not None
+        and effective_to < effective_from
+    ):
+        raise HTTPException(
+            status_code=400,
+            detail="effectiveTo must be on or after effectiveFrom",
+        )
+
     sku = MaterialSkuMaster(
         material_sku_id=uuid4(),
         material_code=material_code,
@@ -1793,12 +1895,17 @@ def create_material_sku(
         interior_color_name=interior_color_name,
         edition_tag=edition_tag,
         lifecycle_status=lifecycle_status,
-        effective_from_month=effective_from,
-        effective_to_month=effective_to,
+        effective_from_date=effective_from,
+        effective_to_date=effective_to,
         is_active=True,
         is_published=False,
         baseline_version_id=baseline.baseline_version_id,
     )
+    effective_status = repo.resolve_effective_lifecycle_status(sku, date.today())
+    sku.lifecycle_status = (
+        effective_status if effective_status != "not_yet_active" else "active"
+    )
+    sku.is_active = effective_status in {"active", "phase_out"}
     session.add(sku)
     if (
         "colourHex" in body
@@ -2015,10 +2122,10 @@ def list_material_skus_admin(
                 "modelName": r.model_name,
                 "version": r.version,
                 "colour": r.exterior_color_name or "",
-                "lifecycleStatus": r.lifecycle_status,
+                "lifecycleStatus": repo.resolve_effective_lifecycle_status(r, date.today()),
                 "isActive": r.is_active,
-                "effectiveFrom": r.effective_from_month,
-                "effectiveTo": r.effective_to_month,
+                "effectiveFrom": repo.get_lifecycle_dates(r)[0].isoformat() if repo.get_lifecycle_dates(r)[0] else None,
+                "effectiveTo": repo.get_lifecycle_dates(r)[1].isoformat() if repo.get_lifecycle_dates(r)[1] else None,
                 "rowVersion": r.row_version,
             }
             for r in rows

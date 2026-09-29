@@ -67,7 +67,7 @@ def test_alembic_revision_chain_has_single_head() -> None:
             _revision_values(_literal_assignment(module, "down_revision"))
         )
 
-    assert sorted(revisions - parent_revisions) == ["20260928_0050"]
+    assert sorted(revisions - parent_revisions) == ["20260929_0051"]
 
 
 def test_governance_revision_generates_isolated_postgresql_sql() -> None:
@@ -135,6 +135,33 @@ def test_evidence_contract_revision_generates_postgresql_sql() -> None:
     assert "CREATE TABLE msrp.observation_evidence_links" in sql
     assert "evidence_refs_json JSONB DEFAULT '[]'::jsonb NOT NULL" in sql
     assert "ON DELETE CASCADE" not in sql
+
+
+def test_template_lifecycle_revision_preserves_legacy_month_boundaries() -> None:
+    revision_path = (
+        VERSIONS_DIR / "20260929_0051_template_lifecycle_dates.py"
+    )
+    spec = importlib.util.spec_from_file_location(
+        "template_lifecycle_revision_0051",
+        revision_path,
+    )
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    output = StringIO()
+    context = MigrationContext.configure(
+        dialect_name="postgresql",
+        opts={"as_sql": True, "output_buffer": output},
+    )
+    module.op = Operations(context)
+
+    module.upgrade()
+
+    sql = output.getvalue()
+    assert "ADD COLUMN effective_from_date DATE" in sql
+    assert "ADD COLUMN effective_to_date DATE" in sql
+    assert "effective_from_month || '-01'" in sql
+    assert "interval '1 month - 1 day'" in sql
 
 
 def test_materialization_revision_adds_fk_backed_approval_provenance() -> None:

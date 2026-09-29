@@ -356,7 +356,12 @@ def test_line_payload_uses_order_date_period_and_saved_colour_tier(monkeypatch) 
         interior_colour_code="BK",
         colour_tier="dual",
     )
-    period = SimpleNamespace(base_fob_eur=19000)
+    period = SimpleNamespace(
+        country_template_fob_period_id="period-1",
+        valid_from=date(2026, 7, 1),
+        valid_to=date(2026, 7, 31),
+        base_fob_eur=19000,
+    )
     monkeypatch.setattr(order_repo, "get_sku_by_material_code_any_status", lambda *_args: sku)
     monkeypatch.setattr(order_repo, "get_fob_for_country_sku", lambda *_args: SimpleNamespace(final_fob_eur=19000))
     monkeypatch.setattr(order_repo, "resolve_country_template_fob_period", lambda *_args: period)
@@ -401,6 +406,19 @@ def test_pi_can_use_single_period_covering_whole_month_without_order_date(monkey
     monkeypatch.setattr(order_repo, "list_country_template_fob_periods", lambda *_args: periods)
 
     assert _resolve_pi_pricing_date(object(), "CH", "SKU", 2026, 7, None) == date(2026, 7, 1)
+
+
+def test_pi_does_not_fall_back_when_configured_periods_leave_month_gap(monkeypatch) -> None:
+    sku = SimpleNamespace(bom_template="T**001")
+    periods = [SimpleNamespace(valid_from=date(2026, 1, 1), valid_to=date(2026, 1, 31))]
+    monkeypatch.setattr(order_repo, "get_sku_by_material_code_any_status", lambda *_args: sku)
+    monkeypatch.setattr(order_repo, "list_country_template_fob_periods", lambda *_args: periods)
+
+    with pytest.raises(HTTPException) as exc:
+        _resolve_pi_pricing_date(object(), "CH", "SKU", 2026, 2, None)
+
+    assert exc.value.status_code == 409
+    assert "No FOB is available" in str(exc.value.detail)
 
 
 def test_header_pricing_date_reuses_pi_month_and_order_date(monkeypatch) -> None:
