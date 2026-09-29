@@ -188,6 +188,48 @@ def update_pi_line(session: Session, pi_line_code: str, payload: dict[str, Any],
     return result
 
 
+def _validate_historical_backfill_request(
+    session: Session,
+    line_items: list[dict[str, Any]],
+    year: int,
+    month: int,
+    requested_order_date: date | None,
+    include_historical: bool,
+    confirm_historical: bool,
+) -> set[str]:
+    historical_codes: set[str] = set()
+    for item in line_items:
+        if not isinstance(item, dict):
+            continue
+        material_code = _clean(item.get("materialCode"))
+        if not material_code:
+            continue
+        sku = og_repo.get_current_baseline_sku_by_code(session, material_code)
+        if sku and og_repo.resolve_effective_lifecycle_status(sku, date.today()) == "historical":
+            historical_codes.add(material_code)
+    if not historical_codes:
+        return historical_codes
+    if (year, month) > (date.today().year, date.today().month):
+        raise HTTPException(
+            status_code=400,
+            detail="Historical materials cannot be used for a future month; extend the BOM template end date first.",
+        )
+    if not include_historical or not confirm_historical:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "Historical material requires explicit confirmation. "
+                "This will not reactivate the material."
+            ),
+        )
+    if requested_order_date is None:
+        raise HTTPException(
+            status_code=400,
+            detail="Historical PI backfill requires an orderDate inside the selected order month.",
+        )
+    return historical_codes
+
+
 def generate_from_order_matrix(session: Session, payload: dict[str, Any], username: str) -> dict:
     country = str(payload.get("countryCode") or "").upper()
     year = int(payload.get("orderYear") or 0)
@@ -211,6 +253,18 @@ def generate_from_order_matrix(session: Session, payload: dict[str, Any], userna
         line_items,
     )
     requested_order_date = _parse_date(payload.get("orderDate"))
+    include_historical = _truthy(payload.get("includeHistorical"))
+    confirm_historical = _truthy(payload.get("confirmHistorical"))
+    confirm_undated_default = _truthy(payload.get("confirmUndatedDefaultFob"))
+    historical_codes = _validate_historical_backfill_request(
+        session,
+        line_items,
+        year,
+        month,
+        requested_order_date,
+        include_historical,
+        confirm_historical,
+    )
 
     header = create_pi_header(session, {
         "countryCode": country,
@@ -247,6 +301,7 @@ def generate_from_order_matrix(session: Session, payload: dict[str, Any], userna
         material_code = _clean(item.get("materialCode"))
         if not material_code:
             raise HTTPException(status_code=400, detail="materialCode is required for PI line items")
+        historical_backfill = material_code in historical_codes
         resolved_allocations: list[dict[str, Any]] = []
         for allocation in allocations:
             allocation_country = str(allocation["countryCode"]).upper()
@@ -257,6 +312,7 @@ def generate_from_order_matrix(session: Session, payload: dict[str, Any], userna
                 year,
                 month,
                 requested_order_date,
+                historical_backfill=historical_backfill,
             )
             resolved_payload = _line_payload_from_material(
                 session,
@@ -264,6 +320,8 @@ def generate_from_order_matrix(session: Session, payload: dict[str, Any], userna
                 material_code,
                 item,
                 pricing_date=pricing_date,
+                historical_backfill=historical_backfill,
+                confirm_undated_default=confirm_undated_default,
             )
             resolved_allocations.append({
                 **allocation,
@@ -279,6 +337,7 @@ def generate_from_order_matrix(session: Session, payload: dict[str, Any], userna
             year,
             month,
             requested_order_date,
+            historical_backfill=historical_backfill,
         )
         line_payload = _line_payload_from_material(
             session,
@@ -286,6 +345,8 @@ def generate_from_order_matrix(session: Session, payload: dict[str, Any], userna
             material_code,
             item,
             pricing_date=line_pricing_date,
+            historical_backfill=historical_backfill,
+            confirm_undated_default=confirm_undated_default,
         )
         line_payload["quantity"] = quantity
         line = _build_line(session, header_model, idx, line_payload, username)
@@ -948,12 +1009,17 @@ def _resolve_pi_pricing_date(
     year: int,
     month: int,
     requested_order_date: date | None,
+    historical_backfill: bool = False,
 ) -> date | None:
     if requested_order_date is not None:
         if requested_order_date.year != year or requested_order_date.month != month:
             raise HTTPException(status_code=400, detail="orderDate must be inside the selected order month")
         return requested_order_date
-    sku = og_repo.get_sku_by_material_code_any_status(session, material_code)
+    sku = (
+        og_repo.get_current_baseline_sku_by_code(session, material_code)
+        if historical_backfill
+        else og_repo.get_sku_by_material_code_any_status(session, material_code)
+    )
     if sku is None or not sku.bom_template:
         return None
     month_start = date(year, month, 1)
@@ -1009,11 +1075,17 @@ def _line_payload_from_material(
     item: dict[str, Any],
     *,
     pricing_date: date | None = None,
+    historical_backfill: bool = False,
+    confirm_undated_default: bool = False,
 ) -> dict:
     payload = dict(item)
     if not material_code:
         return payload
-    sku = og_repo.get_sku_by_material_code_any_status(session, material_code)
+    sku = (
+        og_repo.get_current_baseline_sku_by_code(session, material_code)
+        if historical_backfill
+        else og_repo.get_sku_by_material_code_any_status(session, material_code)
+    )
     fob = og_repo.get_fob_for_country_sku(session, country, material_code)
     if sku:
         payload.update({
@@ -1034,6 +1106,7 @@ def _line_payload_from_material(
             country,
             sku,
             pricing_date,
+            allow_historical_backfill=historical_backfill,
         )
         if evidence is not None:
             if dated_fob is None:
@@ -1042,7 +1115,20 @@ def _line_payload_from_material(
             payload["fobEur"] = dated_fob
             return payload
     if fob:
+        if historical_backfill and not confirm_undated_default:
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    f"{material_code} only has an undated legacy FOB for {country}; "
+                    "confirm use of this price or create a dated price period."
+                ),
+            )
         payload["fobEur"] = float(fob.final_fob_eur)
+    elif historical_backfill:
+        raise HTTPException(
+            status_code=409,
+            detail=f"No FOB is available for historical material {material_code} / {country}.",
+        )
     return payload
 
 

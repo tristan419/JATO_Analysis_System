@@ -402,6 +402,21 @@ def get_sku_by_material_code_any_status(
     return session.execute(stmt).scalars().first()
 
 
+def get_current_baseline_sku_by_code(
+    session: Session,
+    material_code: str,
+) -> MaterialSkuMaster | None:
+    """Return one SKU exactly as saved in the latest published material baseline."""
+    baseline = get_latest_baseline(session)
+    if baseline is None:
+        return None
+    stmt = select(MaterialSkuMaster).where(
+        MaterialSkuMaster.baseline_version_id == baseline.baseline_version_id,
+        MaterialSkuMaster.material_code == material_code,
+    )
+    return session.execute(stmt).scalars().first()
+
+
 def get_skus_by_material_codes_any_status(
     session: Session, material_codes: list[str],
 ) -> dict[str, MaterialSkuMaster]:
@@ -479,6 +494,30 @@ def list_active_skus(
         row for row in rows
         if resolve_effective_lifecycle_status(row, current) in {"active", "phase_out"}
     ][:limit]
+
+
+def list_skus_including_historical(
+    session: Session,
+    version: str | None = None,
+    exterior_color_code: str | None = None,
+    material_code_search: str | None = None,
+    limit: int = 4000,
+) -> list[MaterialSkuMaster]:
+    """Return the current material master rows without hiding Historical SKUs."""
+    baseline = get_latest_baseline(session)
+    if baseline is None:
+        return []
+    stmt = select(MaterialSkuMaster).where(
+        MaterialSkuMaster.baseline_version_id == baseline.baseline_version_id,
+    )
+    if version:
+        stmt = stmt.where(MaterialSkuMaster.version == version)
+    if exterior_color_code:
+        stmt = stmt.where(MaterialSkuMaster.exterior_color_code == exterior_color_code)
+    if material_code_search:
+        stmt = stmt.where(MaterialSkuMaster.material_code.ilike(f"%{material_code_search}%"))
+    stmt = stmt.order_by(MaterialSkuMaster.brand, MaterialSkuMaster.model_name).limit(limit)
+    return list(session.execute(stmt).scalars().all())
 
 
 def list_historical_skus_with_quantity(

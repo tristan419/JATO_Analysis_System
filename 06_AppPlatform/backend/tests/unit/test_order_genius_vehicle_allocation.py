@@ -383,6 +383,69 @@ def test_line_payload_uses_order_date_period_and_saved_colour_tier(monkeypatch) 
     assert payload["fobEur"] == 19300
 
 
+def test_historical_undated_fob_requires_explicit_confirmation(monkeypatch) -> None:
+    sku = SimpleNamespace(
+        material_code="OLD",
+        bom_template="OLD**001",
+        brand="JAECOO",
+        model_name="JAECOO7",
+        version="Luxury",
+        powertrain="PHEV",
+        exterior_color_name="Khaki white",
+        exterior_color_code="BW",
+        interior_color_name="Black",
+        interior_colour_code="BK",
+    )
+    monkeypatch.setattr(order_repo, "get_current_baseline_sku_by_code", lambda *_args: sku)
+    monkeypatch.setattr(order_repo, "get_fob_for_country_sku", lambda *_args: SimpleNamespace(final_fob_eur=19000))
+    monkeypatch.setattr(
+        vehicle_service,
+        "resolve_date_effective_fob",
+        lambda *_args, **_kwargs: (None, None, None),
+    )
+
+    with pytest.raises(HTTPException, match="undated legacy FOB"):
+        _line_payload_from_material(
+            object(), "CH", "OLD", {"materialCode": "OLD"},
+            pricing_date=date(2026, 8, 20), historical_backfill=True,
+        )
+
+    payload = _line_payload_from_material(
+        object(), "CH", "OLD", {"materialCode": "OLD"},
+        pricing_date=date(2026, 8, 20), historical_backfill=True,
+        confirm_undated_default=True,
+    )
+    assert payload["fobEur"] == 19000
+
+
+def test_historical_pi_scope_requires_confirmation_date_and_nonfuture_month(monkeypatch) -> None:
+    sku = SimpleNamespace(material_code="OLD")
+    monkeypatch.setattr(order_repo, "get_current_baseline_sku_by_code", lambda *_args: sku)
+    monkeypatch.setattr(order_repo, "resolve_effective_lifecycle_status", lambda *_args: "historical")
+    today = date.today()
+    items = [{"materialCode": "OLD", "quantity": 1}]
+
+    with pytest.raises(HTTPException, match="explicit confirmation"):
+        vehicle_service._validate_historical_backfill_request(
+            object(), items, today.year, today.month, today, True, False,
+        )
+    with pytest.raises(HTTPException, match="requires an orderDate"):
+        vehicle_service._validate_historical_backfill_request(
+            object(), items, today.year, today.month, None, True, True,
+        )
+
+    future_year = today.year + (1 if today.month == 12 else 0)
+    future_month = 1 if today.month == 12 else today.month + 1
+    with pytest.raises(HTTPException, match="future month"):
+        vehicle_service._validate_historical_backfill_request(
+            object(), items, future_year, future_month, today, True, True,
+        )
+
+    assert vehicle_service._validate_historical_backfill_request(
+        object(), items, today.year, today.month, today, True, True,
+    ) == {"OLD"}
+
+
 def test_pi_requires_order_date_when_one_month_crosses_fob_periods(monkeypatch) -> None:
     sku = SimpleNamespace(bom_template="T7151R**MH0001")
     periods = [

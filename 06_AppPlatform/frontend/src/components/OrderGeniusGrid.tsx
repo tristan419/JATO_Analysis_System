@@ -51,6 +51,8 @@ export interface OrderGeniusGridRow {
   fobEur: number | null;
   lifecycleStatus: string;
   editable: boolean;
+  historicalBackfill?: boolean;
+  priceSource?: "dated_period" | "undated_default" | "missing";
   remark?: string;
   _countryCode?: string;
   _indent?: boolean;

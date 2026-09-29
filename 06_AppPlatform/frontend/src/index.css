@@ -12435,6 +12435,49 @@ table.data-table tr.data-table-group-row.contains-selection td {
   backdrop-filter: blur(12px) saturate(160%);
 }
 
+.order-genius-historical-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: #344054;
+  font-size: 12px;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.og-historical-backfill-warning,
+.og-historical-backfill-confirmations {
+  display: grid;
+  gap: 6px;
+  border: 1px solid #e0a23a;
+  border-radius: 8px;
+  background: #fff8e8;
+  color: #7a4b00;
+  padding: 9px 10px;
+  font-size: 12px;
+}
+
+.og-historical-backfill-warning {
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+}
+
+.og-historical-backfill-warning strong,
+.og-historical-backfill-warning span {
+  grid-column: 1;
+}
+
+.og-historical-backfill-warning button {
+  grid-column: 2;
+  grid-row: 1 / span 2;
+}
+
+.og-historical-backfill-confirmations label {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+}
+
 .og-pi-batch-head,
 .og-pi-batch-actions {
   display: flex;

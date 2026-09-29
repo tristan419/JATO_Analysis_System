@@ -673,6 +673,7 @@ def get_order_genius_matrix(
     colour: str | None = Query(default=None),
     material_code_search: str | None = Query(default=None),
     selection_date: str | None = Query(default=None),
+    include_historical: bool = Query(default=False),
     session: Session = Depends(get_db_session),
     user=Depends(require_min_role("viewer")),
 ) -> dict:
@@ -688,6 +689,7 @@ def get_order_genius_matrix(
         colour=colour,
         material_code_search=material_code_search,
         selection_date=_parse_iso_date(selection_date, "selectionDate"),
+        include_historical=include_historical,
     )
 
 
@@ -733,6 +735,7 @@ def get_order_genius_matrix_batch(
             body.get("selectionDate") or body.get("selection_date"),
             "selectionDate",
         ),
+        "include_historical": bool(body.get("includeHistorical", False)),
     }
 
     errors: dict[str, str] = {}
@@ -771,6 +774,7 @@ def patch_quantity_cell(
             quantity=body.get("quantity", 0),
             updated_by=user.name,
             expected_version=body.get("rowVersion", body.get("row_version", 1)),
+            include_historical=bool(body.get("includeHistorical", False)),
         )
         session.commit()
         return result
