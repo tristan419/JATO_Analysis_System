@@ -435,6 +435,7 @@ def _list_matrix_candidate_skus(
     colour: str | None = None,
     material_code_search: str | None = None,
     selection_date: date | None = None,
+    include_historical: bool = False,
 ) -> list[MaterialSkuMaster]:
     normalized_brand = normalize_brand(brand) if brand else None
     normalized_model = normalize_brand_text(model_name) if model_name else None
@@ -442,12 +443,21 @@ def _list_matrix_candidate_skus(
 
     # Brand/model/powertrain are normalized in Python because legacy BOM rows can
     # still contain JEACOO and stale powertrain values.
-    active_skus = repo.list_active_skus(
-        session,
-        version=version,
-        exterior_color_code=colour,
-        material_code_search=material_code_search,
-        target_date=selection_date,
+    active_skus = (
+        repo.list_skus_including_historical(
+            session,
+            version=version,
+            exterior_color_code=colour,
+            material_code_search=material_code_search,
+        )
+        if include_historical
+        else repo.list_active_skus(
+            session,
+            version=version,
+            exterior_color_code=colour,
+            material_code_search=material_code_search,
+            target_date=selection_date,
+        )
     )
     if normalized_brand:
         active_skus = [
@@ -494,12 +504,14 @@ def resolve_date_effective_fob(
     country_code: str,
     sku: MaterialSkuMaster,
     selection_date: date | None,
+    allow_historical_backfill: bool = False,
 ) -> tuple[float | None, dict | None, dict | None]:
     """Resolve one date using template lifecycle, country base and saved tier."""
     if selection_date is None or not sku.bom_template:
         return None, None, None
     lifecycle_status = repo.resolve_effective_lifecycle_status(sku, selection_date)
-    if lifecycle_status not in {"active", "phase_out"}:
+    lifecycle_override = lifecycle_status not in {"active", "phase_out"} and allow_historical_backfill
+    if lifecycle_status not in {"active", "phase_out"} and not lifecycle_override:
         effective_from, effective_to = repo.get_lifecycle_dates(sku)
         reason = (
             f"Material is not active until {effective_from.isoformat()}"
@@ -563,6 +575,7 @@ def resolve_date_effective_fob(
         "validTo": period.valid_to.isoformat() if period.valid_to else None,
         "baseFobEur": float(period.base_fob_eur),
         "status": "stopped" if float(period.base_fob_eur) == 0 else "matched",
+        "lifecycleOverride": lifecycle_status if lifecycle_override else None,
     }
     if float(period.base_fob_eur) == 0:
         return None, None, period_payload
@@ -586,6 +599,37 @@ def resolve_date_effective_fob(
     return round(float(period.base_fob_eur) + float(amount), 2), None, period_payload
 
 
+def _historical_surcharge_review(
+    session: Session,
+    sku: MaterialSkuMaster,
+    fob: CountrySkuFobResolved | None,
+    fob_period: dict | None,
+) -> dict:
+    tier = repo.resolve_effective_colour_tier(sku)
+    resolved = repo.resolve_colour_surcharge_for_sku(session, sku, tier)
+    current_amount = resolved.get("amount")
+    saved_amount = float(fob.colour_surcharge_eur) if fob and fob.colour_surcharge_eur is not None else None
+    if tier == "single" and saved_amount is None:
+        saved_amount = 0.0
+    if fob_period and fob_period.get("surchargeEur") is not None:
+        current_amount = float(fob_period["surchargeEur"])
+    if current_amount is None:
+        status = "missing_rule"
+    elif saved_amount is None:
+        status = "missing_evidence"
+    elif round(saved_amount, 2) != round(float(current_amount), 2):
+        status = "changed"
+    else:
+        status = "matched"
+    return {
+        "status": status,
+        "savedSurchargeEur": saved_amount,
+        "currentSurchargeEur": float(current_amount) if current_amount is not None else None,
+        "currentSource": resolved.get("source"),
+        "requiresConfirmation": status != "matched",
+    }
+
+
 def _build_matrix_for_country(
     session: Session,
     country_code: str,
@@ -598,6 +642,7 @@ def _build_matrix_for_country(
     colour: str | None = None,
     material_code_search: str | None = None,
     selection_date: date | None = None,
+    include_historical: bool = False,
 ) -> dict:
     # Get country payment term valid for this order year
     order_month_hint = f"{year}-01"  # use January of the order year
@@ -618,7 +663,16 @@ def _build_matrix_for_country(
 
     # Keep unresolved groups visible with no price so normal rows remain usable.
     dated_fob_by_material = {
-        sku.material_code: resolve_date_effective_fob(session, country_code, sku, selection_date)
+        sku.material_code: resolve_date_effective_fob(
+            session,
+            country_code,
+            sku,
+            selection_date,
+            allow_historical_backfill=(
+                include_historical
+                and repo.resolve_effective_lifecycle_status(sku, date.today()) == "historical"
+            ),
+        )
         for sku in active_skus
     }
     skus_with_fob = [
@@ -626,6 +680,10 @@ def _build_matrix_for_country(
         if sku.material_code in fob_map
         or sku.material_code in conflict_codes
         or dated_fob_by_material[sku.material_code][2] is not None
+        or (
+            include_historical
+            and repo.resolve_effective_lifecycle_status(sku, date.today()) == "historical"
+        )
     ]
 
     # Get quantities for this country+year
@@ -636,8 +694,9 @@ def _build_matrix_for_country(
     for q in all_quantities:
         qty_map[(q.material_code, q.order_month)] = q
 
-    # Get historical SKUs that have quantity data
-    historical_codes = repo.list_historical_skus_with_quantity(
+    # Default mode retains old historical rows that already contain quantities.
+    # Explicit backfill mode already receives all current-baseline SKUs above.
+    historical_codes = [] if include_historical else repo.list_historical_skus_with_quantity(
         session, country_code, year
     )
     historical_skus = repo.get_skus_by_material_codes_any_status(
@@ -686,6 +745,18 @@ def _build_matrix_for_country(
                 "rowVersion": cell.row_version if cell else 1,
             }
 
+        lifecycle_status = repo.resolve_effective_lifecycle_status(
+            sku,
+            selection_date or date.today(),
+        )
+        historical_backfill = (
+            repo.resolve_effective_lifecycle_status(sku, date.today()) == "historical"
+        )
+        historical_surcharge_review = (
+            _historical_surcharge_review(session, sku, fob, fob_period)
+            if historical_backfill
+            else None
+        )
         rows.append({
             "materialCode": sku.material_code,
             "bomTemplate": sku.bom_template,
@@ -704,13 +775,17 @@ def _build_matrix_for_country(
             "powertrain": _extract_canonical_pt(sku),
             "fobEur": dated_fob if fob_period is not None else (float(fob.final_fob_eur) if fob else None),
             "fobPeriod": fob_period,
-            "lifecycleStatus": repo.resolve_effective_lifecycle_status(
-                sku,
-                selection_date or date.today(),
-            ),
+            "lifecycleStatus": "historical" if historical_backfill else lifecycle_status,
             "fobConflict": conflict,
-            "editable": conflict is None,
-            "displayStyle": None,
+            "editable": conflict is None and (not historical_backfill or include_historical),
+            "displayStyle": "strikethrough" if historical_backfill else None,
+            "historicalBackfill": historical_backfill,
+            "priceSource": (
+                "dated_period" if fob_period is not None
+                else "undated_default" if fob is not None
+                else "missing"
+            ),
+            "historicalSurchargeReview": historical_surcharge_review,
             "remark": sku.remark,
             "effectiveFrom": repo.get_lifecycle_dates(sku)[0].isoformat() if repo.get_lifecycle_dates(sku)[0] else None,
             "effectiveTo": repo.get_lifecycle_dates(sku)[1].isoformat() if repo.get_lifecycle_dates(sku)[1] else None,
@@ -829,6 +904,7 @@ def build_matrix(
     colour: str | None = None,
     material_code_search: str | None = None,
     selection_date: date | None = None,
+    include_historical: bool = False,
 ) -> dict:
     """Build the Order Genius matrix for a country+year.
 
@@ -843,6 +919,7 @@ def build_matrix(
         colour=colour,
         material_code_search=material_code_search,
         selection_date=selection_date,
+        include_historical=include_historical,
     )
     return _build_matrix_for_country(
         session,
@@ -856,6 +933,7 @@ def build_matrix(
         colour=colour,
         material_code_search=material_code_search,
         selection_date=selection_date,
+        include_historical=include_historical,
     )
 
 
@@ -870,6 +948,7 @@ def build_matrix_batch(
     colour: str | None = None,
     material_code_search: str | None = None,
     selection_date: date | None = None,
+    include_historical: bool = False,
 ) -> dict[str, dict]:
     """Build matrices for many countries while reusing the filtered SKU set."""
     active_skus = _list_matrix_candidate_skus(
@@ -881,6 +960,7 @@ def build_matrix_batch(
         colour=colour,
         material_code_search=material_code_search,
         selection_date=selection_date,
+        include_historical=include_historical,
     )
     return {
         country_code: _build_matrix_for_country(
@@ -895,6 +975,7 @@ def build_matrix_batch(
             colour=colour,
             material_code_search=material_code_search,
             selection_date=selection_date,
+            include_historical=include_historical,
         )
         for country_code in country_codes
     }
@@ -1022,11 +1103,23 @@ def update_quantity_cell(
     quantity: int,
     updated_by: str,
     expected_version: int,
+    include_historical: bool = False,
 ) -> dict:
-    """Save a monthly quantity cell. Rejects historical SKUs."""
-    sku = repo.get_active_sku_by_code(session, material_code)
+    """Save a monthly quantity cell, with explicit current/past Historical opt-in."""
+    sku = repo.get_current_baseline_sku_by_code(session, material_code)
     if not sku:
-        raise ValueError("Historical material code cannot be edited.")
+        raise ValueError("Material code not found.")
+    lifecycle_status = repo.resolve_effective_lifecycle_status(sku, date.today())
+    if lifecycle_status == "historical":
+        if not include_historical:
+            raise ValueError("Historical material requires explicit includeHistorical confirmation.")
+        current_month = (date.today().year, date.today().month)
+        if (order_year, order_month) > current_month:
+            raise ValueError(
+                "Historical material cannot be used for a future month; extend the BOM template end date first."
+            )
+    elif lifecycle_status not in {"active", "phase_out"}:
+        raise ValueError("Material code is not active for order entry.")
 
     # Get current FOB for the cell
     fob = repo.get_fob_for_country_sku(session, country_code, material_code)

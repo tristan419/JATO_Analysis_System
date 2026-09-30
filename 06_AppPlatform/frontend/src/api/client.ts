@@ -5019,6 +5019,7 @@ export const api = {
     colour?: string;
     materialCodeSearch?: string;
     selectionDate?: string;
+    includeHistorical?: boolean;
   }) => {
     const qs = new URLSearchParams();
     qs.set("country", params.country);
@@ -5031,6 +5032,7 @@ export const api = {
     if (params.materialCodeSearch)
       qs.set("material_code_search", params.materialCodeSearch);
     if (params.selectionDate) qs.set("selection_date", params.selectionDate);
+    if (params.includeHistorical) qs.set("include_historical", "true");
     return request<MatrixResponse>(
       `/order-genius/matrix?${qs.toString()}`,
     );
@@ -5046,6 +5048,7 @@ export const api = {
     colour?: string;
     materialCodeSearch?: string;
     selectionDate?: string;
+    includeHistorical?: boolean;
   }) =>
     request<MatrixBatchResponse>("/order-genius/matrix/batch", {
       method: "POST",
@@ -5059,6 +5062,7 @@ export const api = {
         colour: params.colour,
         materialCodeSearch: params.materialCodeSearch,
         selectionDate: params.selectionDate,
+        includeHistorical: params.includeHistorical,
       }),
     }),
 

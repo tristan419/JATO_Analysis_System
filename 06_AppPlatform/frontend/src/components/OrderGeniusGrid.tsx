@@ -51,6 +51,15 @@ export interface OrderGeniusGridRow {
   fobEur: number | null;
   lifecycleStatus: string;
   editable: boolean;
+  historicalBackfill?: boolean;
+  priceSource?: "dated_period" | "undated_default" | "missing";
+  historicalSurchargeReview?: {
+    status: "matched" | "missing_rule" | "missing_evidence" | "changed";
+    savedSurchargeEur: number | null;
+    currentSurchargeEur: number | null;
+    currentSource: string | null;
+    requiresConfirmation: boolean;
+  } | null;
   remark?: string;
   _countryCode?: string;
   _indent?: boolean;

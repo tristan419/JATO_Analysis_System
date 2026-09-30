@@ -407,6 +407,8 @@ interface PiBatchAllocation {
   countryCode: string;
   quantity: number;
   fobEur: number | null;
+  historicalFobOverrideEur?: number;
+  historicalPriceReason?: string | null;
 }
 
 interface PiBatchLineItem {
@@ -418,6 +420,8 @@ interface PiBatchLineItem {
   exteriorColorName: string;
   interiorColorName: string | null;
   allocations?: PiBatchAllocation[];
+  historicalFobOverrideEur?: number;
+  historicalPriceReason?: string | null;
 }
 
 function brandDisplayRank(brand: string): number {
@@ -668,6 +672,7 @@ export function OrderGeniusPage() {
   const [selectedYear, setSelectedYear] = useState(new Date().getFullYear());
   const [selectedMonth, setSelectedMonth] = useState<number | null>(null); // null = all months
   const [selectionDate, setSelectionDate] = useState("");
+  const [includeHistorical, setIncludeHistorical] = useState(false);
   const [visibleColumns, setVisibleColumns] = useState({
     months: true, amount: true, ttlQty: true, ttlAmount: true, fob: true, materialCode: true, remark: true,
   });
@@ -833,6 +838,11 @@ export function OrderGeniusPage() {
   const [orderingAccountCodeEdited, setOrderingAccountCodeEdited] = useState(false);
   const [creatingPiBatch, setCreatingPiBatch] = useState(false);
   const [piBatchNotice, setPiBatchNotice] = useState("");
+  const [confirmHistoricalPi, setConfirmHistoricalPi] = useState(false);
+  const [confirmUndatedHistoricalFob, setConfirmUndatedHistoricalFob] = useState(false);
+  const [confirmHistoricalSurcharge, setConfirmHistoricalSurcharge] = useState(false);
+  const [historicalFobOverrides, setHistoricalFobOverrides] = useState<Record<string, string>>({});
+  const [historicalPriceReasons, setHistoricalPriceReasons] = useState<Record<string, string>>({});
   const [piBatchCreatedCodes, setPiBatchCreatedCodes] = useState<string[]>([]);
   const [piAllocationPlans, setPiAllocationPlans] = useState<Record<string, VehicleAllocationPlan>>({});
   const [piExistingBatches, setPiExistingBatches] = useState<PiOrderHeader[]>([]);
@@ -840,6 +850,17 @@ export function OrderGeniusPage() {
   const [piPlanError, setPiPlanError] = useState("");
   const [piBatchRefreshKey, setPiBatchRefreshKey] = useState(0);
   const matrixRequestIdRef = useRef(0);
+  const selectedOrderMonthIsFuture = selectedMonth != null
+    && (selectedYear * 12 + selectedMonth) > (new Date().getFullYear() * 12 + new Date().getMonth() + 1);
+
+  useEffect(() => {
+    if (selectedOrderMonthIsFuture && includeHistorical) setIncludeHistorical(false);
+    setConfirmHistoricalPi(false);
+    setConfirmUndatedHistoricalFob(false);
+    setConfirmHistoricalSurcharge(false);
+    setHistoricalFobOverrides({});
+    setHistoricalPriceReasons({});
+  }, [includeHistorical, selectedMonth, selectedOrderMonthIsFuture, selectedYear]);
 
   useEffect(() => {
     const timer = window.setTimeout(() => {
@@ -931,6 +952,7 @@ export function OrderGeniusPage() {
       colour: colourFilter || undefined,
       materialCodeSearch: debouncedMaterialSearch || undefined,
       selectionDate: selectionDate || undefined,
+      includeHistorical,
     };
     void api
       .getOrderGeniusMatrixBatch({ countries: selectedCountries, ...params })
@@ -958,7 +980,7 @@ export function OrderGeniusPage() {
       });
   }, [
     selectedCountries, selectedYear, brandFilter, modelFilter,
-    powertrainFilter, versionFilter, colourFilter, debouncedMaterialSearch, selectionDate,
+    powertrainFilter, versionFilter, colourFilter, debouncedMaterialSearch, selectionDate, includeHistorical,
   ]);
 
   useEffect(() => {
@@ -1038,6 +1060,9 @@ export function OrderGeniusPage() {
         fobEur: r.fobEur ?? null,
         lifecycleStatus: r.lifecycleStatus,
         editable: r.editable,
+        historicalBackfill: r.historicalBackfill,
+        priceSource: r.priceSource,
+        historicalSurchargeReview: r.historicalSurchargeReview,
         remark: includeParentRemark ? parentMaterialRemarkForRow(r) : undefined,
         _countryCode: r._countryCode,
         _indent: indent || undefined,
@@ -1373,6 +1398,7 @@ export function OrderGeniusPage() {
         materialCode: data.materialCode,
         quantity: qty,
         rowVersion: oldRowVersion,
+        includeHistorical: data.historicalBackfill === true,
       };
 
       try {
@@ -1682,11 +1708,11 @@ export function OrderGeniusPage() {
     return piCandidateRows.filter((row) =>
       row.__type !== "groupHeader"
       && row.__type !== "consolidated_parent"
-      && row.lifecycleStatus !== "historical"
+      && (row.lifecycleStatus !== "historical" || (includeHistorical && row.historicalBackfill === true))
       && (row[monthField] || 0) > 0
       && remainingPiQuantity(row) > 0,
     );
-  }, [piCandidateRows, remainingPiQuantity, selectedMonth]);
+  }, [includeHistorical, piCandidateRows, remainingPiQuantity, selectedMonth]);
 
   const selectablePiRowsById = useMemo(() => {
     const result = new Map<string, OrderGeniusGridRow>();
@@ -1704,6 +1730,20 @@ export function OrderGeniusPage() {
     }
     return result;
   }, [piSelectedRowIds, selectablePiRowsById]);
+  const selectedHistoricalPiRows = useMemo(
+    () => selectedPiRows.filter((row) => row.historicalBackfill === true),
+    [selectedPiRows],
+  );
+  const selectedHistoricalNeedsUndatedConfirmation = useMemo(
+    () => selectedHistoricalPiRows.some((row) => row.priceSource === "undated_default"),
+    [selectedHistoricalPiRows],
+  );
+  const selectedHistoricalNeedsSurchargeConfirmation = useMemo(
+    () => selectedHistoricalPiRows.some(
+      (row) => row.historicalSurchargeReview?.requiresConfirmation === true,
+    ),
+    [selectedHistoricalPiRows],
+  );
 
   const selectedPiQuantityTotal = useMemo(() => {
     return selectedPiRows.reduce((sum, row) => {
@@ -2020,6 +2060,24 @@ export function OrderGeniusPage() {
       setError("Select at least one order row");
       return;
     }
+    if (selectedHistoricalPiRows.length > 0) {
+      if (!includeHistorical || !confirmHistoricalPi) {
+        setError("Confirm that this Historical PI backfill will not reactivate the material / 请确认历史补录不会重新启用物料");
+        return;
+      }
+      if (!piBatchForm.orderDate) {
+        setError("Historical PI backfill requires an order date inside the selected month / 历史补录必须选择订单月份内的具体日期");
+        return;
+      }
+      if (selectedHistoricalNeedsUndatedConfirmation && !confirmUndatedHistoricalFob) {
+        setError("Confirm the undated default FOB or create a dated price period / 请确认无日期基准价或先建立日期价格区间");
+        return;
+      }
+      if (selectedHistoricalNeedsSurchargeConfirmation && !confirmHistoricalSurcharge) {
+        setError("Review and confirm the Historical colour surcharge / 请核对并确认历史颜色加价");
+        return;
+      }
+    }
 
     const byCountry = new Map<string, Map<string, PiBatchLineItem>>();
     const byMaterial = new Map<string, PiBatchLineItem>();
@@ -2033,6 +2091,17 @@ export function OrderGeniusPage() {
         return;
       }
       const countryCode = row._countryCode || primaryCountry;
+      const historicalOverrideText = historicalFobOverrides[rowId]?.trim() ?? "";
+      const historicalOverride = historicalOverrideText === "" ? undefined : Number(historicalOverrideText);
+      const historicalReason = cleanText(historicalPriceReasons[rowId]);
+      if (historicalOverride !== undefined && (!Number.isFinite(historicalOverride) || historicalOverride < 0)) {
+        setError(`Historical FOB override must be zero or greater: ${row.materialCode}`);
+        return;
+      }
+      if (historicalOverride !== undefined && !historicalReason) {
+        setError(`Historical FOB override requires a reason: ${row.materialCode}`);
+        return;
+      }
       const items = byCountry.get(countryCode) ?? new Map<string, PiBatchLineItem>();
       const existing = items.get(row.materialCode);
       if (existing) {
@@ -2046,6 +2115,8 @@ export function OrderGeniusPage() {
           version: row.version,
           exteriorColorName: row.colour,
           interiorColorName: row.interiorColorName ?? null,
+          historicalFobOverrideEur: historicalOverride,
+          historicalPriceReason: historicalReason,
         });
       }
       byCountry.set(countryCode, items);
@@ -2055,6 +2126,8 @@ export function OrderGeniusPage() {
         countryCode,
         quantity: requestedQuantity,
         fobEur: row.fobEur,
+        historicalFobOverrideEur: historicalOverride,
+        historicalPriceReason: historicalReason,
       };
       if (materialExisting) {
         materialExisting.quantity += requestedQuantity;
@@ -2117,6 +2190,10 @@ export function OrderGeniusPage() {
           shipName: cleanText(piBatchForm.shipName),
           eta: cleanText(piBatchForm.eta),
           lineItems: Array.from(byMaterial.values()),
+          includeHistorical: selectedHistoricalPiRows.length > 0,
+          confirmHistorical: confirmHistoricalPi,
+          confirmUndatedDefaultFob: confirmUndatedHistoricalFob,
+          confirmHistoricalSurcharge,
         });
         createdCodes.push(result.piCode);
       } else {
@@ -2132,6 +2209,10 @@ export function OrderGeniusPage() {
             shipName: cleanText(piBatchForm.shipName),
             eta: cleanText(piBatchForm.eta),
             lineItems: Array.from(lineItems.values()),
+            includeHistorical: selectedHistoricalPiRows.length > 0,
+            confirmHistorical: confirmHistoricalPi,
+            confirmUndatedDefaultFob: confirmUndatedHistoricalFob,
+            confirmHistoricalSurcharge,
           });
           createdCodes.push(result.piCode);
         }
@@ -2491,6 +2572,21 @@ export function OrderGeniusPage() {
           ))}
         </select>
 
+        <label
+          className="order-genius-historical-toggle"
+          title={selectedOrderMonthIsFuture
+            ? "Historical materials cannot be used for a future month; extend the BOM template end date first."
+            : "Explicitly show Historical materials for current or past order backfill."}
+        >
+          <input
+            type="checkbox"
+            checked={includeHistorical}
+            disabled={selectedMonth == null || selectedOrderMonthIsFuture}
+            onChange={(event) => setIncludeHistorical(event.currentTarget.checked)}
+          />
+          Include historical materials
+        </label>
+
         <label className="order-genius-date-filter">
           <span>Selection date</span>
           <input
@@ -2739,6 +2835,30 @@ export function OrderGeniusPage() {
               </button>
             </div>
           ) : null}
+          {includeHistorical ? (
+            <div className="og-historical-backfill-warning" role="note">
+              <strong>历史物料补录 / Historical material backfill</strong>
+              <span>
+                你正在为历史物料创建 PI；这不会重新启用该物料。<br />
+                You are creating a PI for a historical material. This will not reactivate the material.
+              </span>
+              <button type="button" className="btn btn-sm btn-ghost" onClick={openBomAdminPanel}>
+                Open BOM Admin
+              </button>
+            </div>
+          ) : null}
+          {selectedOrderMonthIsFuture ? (
+            <div className="og-historical-backfill-warning" role="alert">
+              <strong>Future Historical use is blocked / 未来月份不能使用 Historical</strong>
+              <span>
+                请先在 BOM Admin 延长模板最终截止日期。<br />
+                Extend the BOM template final order date before creating this future PI.
+              </span>
+              <button type="button" className="btn btn-sm btn-ghost" onClick={openBomAdminPanel}>
+                Open BOM Admin
+              </button>
+            </div>
+          ) : null}
           {selectedMonth && piExistingBatches.length > 0 ? (
             <div className="og-pi-existing-batches" aria-label="Existing PI batches">
               <strong>Existing batches</strong>
@@ -2848,6 +2968,12 @@ export function OrderGeniusPage() {
                       {row._countryCode ? `${row._countryCode} · ` : ""}{row.materialCode}
                       <small>{row.modelName} / {row.version} / {row.colour}</small>
                       <small>Total {monthQuantity} · in PI {generatedQuantity} · remaining {remainingQuantity}</small>
+                      {row.historicalSurchargeReview ? (
+                        <small className={row.historicalSurchargeReview.requiresConfirmation ? "is-warning" : ""}>
+                          Historical surcharge: saved {row.historicalSurchargeReview.savedSurchargeEur ?? "unknown"}
+                          {" · "}current {row.historicalSurchargeReview.currentSurchargeEur ?? "missing"}
+                        </small>
+                      ) : null}
                       {existingPiCodes.length > 0 ? (
                         <small className="og-pi-line-batches">
                           Batches {existingPiCodes.map((piCode) => (
@@ -2864,9 +2990,66 @@ export function OrderGeniusPage() {
                       onChange={(event) => updatePiBatchQuantity(row, Number(event.target.value))}
                       title={`Quantity for the next PI batch. Remaining ${remainingQuantity} of ${monthQuantity}.`}
                     />
+                    {row.historicalBackfill ? (
+                      <span className="og-historical-price-override">
+                        <input
+                          type="number"
+                          min={0}
+                          step="1"
+                          value={historicalFobOverrides[rowId] ?? ""}
+                          onChange={(event) => setHistoricalFobOverrides((current) => ({
+                            ...current,
+                            [rowId]: event.currentTarget.value,
+                          }))}
+                          placeholder={`FOB override (${row.fobEur ?? "none"})`}
+                          title="Optional final FOB override for this Historical PI only"
+                        />
+                        <input
+                          value={historicalPriceReasons[rowId] ?? ""}
+                          onChange={(event) => setHistoricalPriceReasons((current) => ({
+                            ...current,
+                            [rowId]: event.currentTarget.value,
+                          }))}
+                          placeholder="Override reason"
+                          title="Required only when a Historical FOB override is entered"
+                        />
+                      </span>
+                    ) : null}
                   </label>
                 );
               })}
+            </div>
+          ) : null}
+          {selectedHistoricalPiRows.length > 0 ? (
+            <div className="og-historical-backfill-confirmations">
+              <label>
+                <input
+                  type="checkbox"
+                  checked={confirmHistoricalPi}
+                  onChange={(event) => setConfirmHistoricalPi(event.currentTarget.checked)}
+                />
+                Confirm Historical PI backfill; material stays Historical / 确认历史补录，物料保持 Historical
+              </label>
+              {selectedHistoricalNeedsUndatedConfirmation ? (
+                <label>
+                  <input
+                    type="checkbox"
+                    checked={confirmUndatedHistoricalFob}
+                    onChange={(event) => setConfirmUndatedHistoricalFob(event.currentTarget.checked)}
+                  />
+                  Use the displayed undated default FOB / 使用当前展示的无日期基准价
+                </label>
+              ) : null}
+              {selectedHistoricalNeedsSurchargeConfirmation ? (
+                <label>
+                  <input
+                    type="checkbox"
+                    checked={confirmHistoricalSurcharge}
+                    onChange={(event) => setConfirmHistoricalSurcharge(event.currentTarget.checked)}
+                  />
+                  Confirm saved versus current colour surcharge / 确认历史与当前颜色加价差异
+                </label>
+              ) : null}
             </div>
           ) : null}
           <div className="og-pi-batch-actions">

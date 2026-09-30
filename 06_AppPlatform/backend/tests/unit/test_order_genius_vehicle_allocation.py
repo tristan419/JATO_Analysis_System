@@ -1,5 +1,5 @@
 import json
-from datetime import date
+from datetime import date, timedelta
 from pathlib import Path
 from types import SimpleNamespace
 from uuid import uuid4
@@ -7,11 +7,17 @@ from uuid import uuid4
 import openpyxl
 import pytest
 from fastapi import HTTPException
+from sqlalchemy import MetaData, create_engine
+from sqlalchemy.dialects.postgresql import JSONB
+from sqlalchemy.ext.compiler import compiles
+from sqlalchemy.orm import Session
 
+from app.db import models
 from app.api.routes import order_genius_vehicle_allocation as vehicle_route
 from app.api.routes.order_genius_vehicle_allocation import _normalise_import_rows_payload
 from app.infra import order_genius_repository as order_repo
 from app.infra import order_genius_vehicle_repository as vehicle_repo
+from app.services import order_genius_service as order_service
 from app.services import order_genius_vehicle_service as vehicle_service
 from app.services.order_genius_vehicle_exporter import generate_vehicle_allocation_excel
 from app.services.order_genius_vehicle_import_parser import (
@@ -34,6 +40,55 @@ from app.services.order_genius_vehicle_service import (
     parse_pi_code,
 )
 from app.services.vehicle_status_flow_config import get_vehicle_status_flow_config
+
+
+@compiles(JSONB, "sqlite")
+def compile_vehicle_jsonb_sqlite(_type, _compiler, **_kw):
+    return "JSON"
+
+
+@pytest.fixture
+def vehicle_db():
+    engine = create_engine(
+        "sqlite://",
+        execution_options={"schema_translate_map": {"ordering": None}},
+    )
+    metadata = MetaData()
+    for model in (
+        models.MaterialBaselineVersion,
+        models.MaterialSkuMaster,
+        models.CountrySkuFobResolved,
+        models.BrandColourSurchargeRule,
+        models.SpecialColourSurchargeRule,
+        models.CountryTemplateFobPeriod,
+        models.OrderQuantityCell,
+        models.QuantityCellHistory,
+        models.PiOrderHeader,
+        models.PiOrderLine,
+        models.PiOrderLineAllocation,
+        models.PiVehicleUnit,
+    ):
+        table = model.__table__.to_metadata(metadata)
+        for column in table.columns:
+            if isinstance(column.type, JSONB) and column.server_default is not None:
+                column.server_default = None
+        for index in table.indexes:
+            predicate = index.dialect_options["postgresql"].get("where")
+            if predicate is not None:
+                index.dialect_options["sqlite"]["where"] = predicate
+    metadata.create_all(engine)
+    with Session(engine) as session:
+        baseline = order_repo.create_baseline_version(
+            session,
+            "historical-test.xlsx",
+            None,
+            "historical-test",
+            "tester",
+        )
+        session.flush()
+        session.info["baseline"] = baseline.baseline_version_id
+        yield session
+    engine.dispose()
 
 
 def test_vehicle_allocation_code_generation_rules() -> None:
@@ -383,6 +438,143 @@ def test_line_payload_uses_order_date_period_and_saved_colour_tier(monkeypatch) 
     assert payload["fobEur"] == 19300
 
 
+def test_historical_undated_fob_requires_explicit_confirmation(monkeypatch) -> None:
+    sku = SimpleNamespace(
+        material_code="OLD",
+        bom_template="OLD**001",
+        brand="JAECOO",
+        model_name="JAECOO7",
+        version="Luxury",
+        powertrain="PHEV",
+        exterior_color_name="Khaki white",
+        exterior_color_code="BW",
+        interior_color_name="Black",
+        interior_colour_code="BK",
+    )
+    monkeypatch.setattr(order_repo, "get_current_baseline_sku_by_code", lambda *_args: sku)
+    monkeypatch.setattr(order_repo, "get_fob_for_country_sku", lambda *_args: SimpleNamespace(final_fob_eur=19000))
+    monkeypatch.setattr(
+        vehicle_service,
+        "resolve_date_effective_fob",
+        lambda *_args, **_kwargs: (None, None, None),
+    )
+
+    with pytest.raises(HTTPException, match="undated legacy FOB"):
+        _line_payload_from_material(
+            object(), "CH", "OLD", {"materialCode": "OLD"},
+            pricing_date=date(2026, 8, 20), historical_backfill=True,
+        )
+
+    payload = _line_payload_from_material(
+        object(), "CH", "OLD", {"materialCode": "OLD"},
+        pricing_date=date(2026, 8, 20), historical_backfill=True,
+        confirm_undated_default=True,
+    )
+    assert payload["fobEur"] == 19000
+
+
+def test_historical_pi_scope_requires_confirmation_date_and_nonfuture_month(monkeypatch) -> None:
+    sku = SimpleNamespace(material_code="OLD")
+    monkeypatch.setattr(order_repo, "get_current_baseline_sku_by_code", lambda *_args: sku)
+    monkeypatch.setattr(order_repo, "resolve_effective_lifecycle_status", lambda *_args: "historical")
+    monkeypatch.setattr(order_repo, "resolve_effective_colour_tier", lambda *_args: "single")
+    monkeypatch.setattr(
+        order_repo,
+        "resolve_colour_surcharge_for_sku",
+        lambda *_args: {"amount": 0, "source": "single"},
+    )
+    monkeypatch.setattr(
+        order_repo,
+        "get_fob_for_country_sku",
+        lambda *_args: SimpleNamespace(colour_surcharge_eur=None),
+    )
+    today = date.today()
+    items = [{"materialCode": "OLD", "quantity": 1}]
+
+    with pytest.raises(HTTPException, match="explicit confirmation"):
+        vehicle_service._validate_historical_backfill_request(
+            object(), "CH", items, today.year, today.month, today, True, False, True,
+        )
+    with pytest.raises(HTTPException, match="requires an orderDate"):
+        vehicle_service._validate_historical_backfill_request(
+            object(), "CH", items, today.year, today.month, None, True, True, True,
+        )
+
+    future_year = today.year + (1 if today.month == 12 else 0)
+    future_month = 1 if today.month == 12 else today.month + 1
+    with pytest.raises(HTTPException, match="future month"):
+        vehicle_service._validate_historical_backfill_request(
+            object(), "CH", items, future_year, future_month, today, True, True, True,
+        )
+
+    assert vehicle_service._validate_historical_backfill_request(
+        object(), "CH", items, today.year, today.month, today, True, True, True,
+    ) == {"OLD"}
+
+
+def test_historical_pi_requires_surcharge_confirmation_when_evidence_differs(monkeypatch) -> None:
+    sku = SimpleNamespace(material_code="OLD")
+    monkeypatch.setattr(order_repo, "get_current_baseline_sku_by_code", lambda *_args: sku)
+    monkeypatch.setattr(order_repo, "resolve_effective_lifecycle_status", lambda *_args: "historical")
+    monkeypatch.setattr(order_repo, "resolve_effective_colour_tier", lambda *_args: "dual")
+    monkeypatch.setattr(
+        order_repo,
+        "resolve_colour_surcharge_for_sku",
+        lambda *_args: {"amount": 300, "source": "brand_tier"},
+    )
+    monkeypatch.setattr(
+        order_repo,
+        "get_fob_for_country_sku",
+        lambda *_args: SimpleNamespace(colour_surcharge_eur=200),
+    )
+    today = date.today()
+    items = [{"materialCode": "OLD", "quantity": 1}]
+
+    with pytest.raises(HTTPException, match="surcharge evidence differs"):
+        vehicle_service._validate_historical_backfill_request(
+            object(), "CH", items, today.year, today.month, today, True, True, False,
+        )
+
+    assert vehicle_service._validate_historical_backfill_request(
+        object(), "CH", items, today.year, today.month, today, True, True, True,
+    ) == {"OLD"}
+
+
+def test_historical_fob_override_requires_reason_and_is_saved_in_line_remark() -> None:
+    with pytest.raises(HTTPException, match="requires a reason"):
+        vehicle_service._apply_historical_price_override(
+            {"fobEur": 19000}, {"historicalFobOverrideEur": 19100}, True,
+        )
+
+    payload = vehicle_service._apply_historical_price_override(
+        {"fobEur": 19000, "remark": "Imported history"},
+        {"historicalFobOverrideEur": 19100, "historicalPriceReason": "signed PI evidence"},
+        True,
+    )
+    assert payload["fobEur"] == 19100
+    assert payload["remark"] == "Imported history | Historical price override: signed PI evidence"
+
+
+def test_historical_override_survives_country_allocation_normalisation() -> None:
+    allocations = vehicle_service._line_item_allocations(
+        {
+            "quantity": 2,
+            "historicalFobOverrideEur": 19100,
+            "historicalPriceReason": "signed PI evidence",
+            "allocations": [{"countryCode": "CH", "quantity": 2}],
+        },
+        "CH",
+    )
+
+    assert allocations == [{
+        "countryCode": "CH",
+        "quantity": 2,
+        "fobEur": None,
+        "historicalFobOverrideEur": 19100,
+        "historicalPriceReason": "signed PI evidence",
+    }]
+
+
 def test_pi_requires_order_date_when_one_month_crosses_fob_periods(monkeypatch) -> None:
     sku = SimpleNamespace(bom_template="T7151R**MH0001")
     periods = [
@@ -567,6 +759,136 @@ def test_order_matrix_plan_uses_remaining_quantities(monkeypatch) -> None:
         item["materialCode"]: item["quantity"]
         for item in plan["remainingLineItems"]
     } == {"A": 1, "B": 1}
+
+
+def test_historical_backfill_persists_qpr_across_multiple_pi_batches(vehicle_db) -> None:
+    today = date.today()
+    if today.month == 1:
+        year, month = today.year - 1, 12
+    else:
+        year, month = today.year, today.month - 1
+    order_date = date(year, month, 15)
+    material_code = "HIST-001"
+    vehicle_db.add(models.MaterialSkuMaster(
+        baseline_version_id=vehicle_db.info["baseline"],
+        material_code=material_code,
+        brand="JAECOO",
+        model_name="JAECOO7 SHS",
+        version="Premium",
+        powertrain="PHEV",
+        bom_template="HIST**001",
+        exterior_color_code="BW",
+        exterior_color_name="Khaki white",
+        exterior_color_type="single",
+        colour_tier="single",
+        lifecycle_status="historical",
+        is_active=True,
+        effective_from_date=order_date - timedelta(days=365),
+        effective_to_date=order_date - timedelta(days=1),
+    ))
+    vehicle_db.add(models.CountrySkuFobResolved(
+        baseline_version_id=vehicle_db.info["baseline"],
+        country_code="CH",
+        material_code=material_code,
+        payment_term_code="TT",
+        base_fob_eur=18_000,
+        uploaded_fob_eur=18_000,
+        final_fob_eur=18_000,
+        fob_source_mode="template_base",
+    ))
+    vehicle_db.flush()
+
+    first_quantity = order_service.update_quantity_cell(
+        vehicle_db,
+        "CH",
+        year,
+        month,
+        material_code,
+        5,
+        "tester",
+        0,
+        include_historical=True,
+    )
+    first_pi = generate_from_order_matrix(
+        vehicle_db,
+        {
+            "countryCode": "CH",
+            "orderYear": year,
+            "orderMonth": month,
+            "orderDate": order_date.isoformat(),
+            "lineItems": [{"materialCode": material_code, "quantity": 2}],
+            "includeHistorical": True,
+            "confirmHistorical": True,
+            "confirmUndatedDefaultFob": True,
+        },
+        "tester",
+    )
+    after_first_pi = get_order_matrix_allocation_plan(vehicle_db, "CH", year, month)
+
+    expanded_quantity = order_service.update_quantity_cell(
+        vehicle_db,
+        "CH",
+        year,
+        month,
+        material_code,
+        7,
+        "tester",
+        first_quantity["row_version"],
+        include_historical=True,
+    )
+    second_pi = generate_from_order_matrix(
+        vehicle_db,
+        {
+            "countryCode": "CH",
+            "orderYear": year,
+            "orderMonth": month,
+            "orderDate": order_date.isoformat(),
+            "lineItems": [{"materialCode": material_code, "quantity": 3}],
+            "includeHistorical": True,
+            "confirmHistorical": True,
+            "confirmUndatedDefaultFob": True,
+        },
+        "tester",
+    )
+    after_second_pi = get_order_matrix_allocation_plan(vehicle_db, "CH", year, month)
+
+    assert first_pi["piCode"].endswith("-001")
+    assert second_pi["piCode"].endswith("-002")
+    assert after_first_pi["totals"] == {
+        "selectedQuantity": 5,
+        "generatedQuantity": 2,
+        "generatedVehicleCount": 2,
+        "remainingQuantity": 3,
+        "overGeneratedQuantity": 0,
+    }
+    assert expanded_quantity["quantity"] == 7
+    assert after_second_pi["totals"] == {
+        "selectedQuantity": 7,
+        "generatedQuantity": 5,
+        "generatedVehicleCount": 5,
+        "remainingQuantity": 2,
+        "overGeneratedQuantity": 0,
+    }
+    assert order_repo.get_current_baseline_sku_by_code(
+        vehicle_db,
+        material_code,
+    ).lifecycle_status == "historical"
+
+    with pytest.raises(HTTPException, match="requested 3, remaining 2"):
+        generate_from_order_matrix(
+            vehicle_db,
+            {
+                "countryCode": "CH",
+                "orderYear": year,
+                "orderMonth": month,
+                "orderDate": order_date.isoformat(),
+                "lineItems": [{"materialCode": material_code, "quantity": 3}],
+                "includeHistorical": True,
+                "confirmHistorical": True,
+                "confirmUndatedDefaultFob": True,
+            },
+            "tester",
+        )
 
 
 def test_explicit_pi_line_items_cannot_exceed_remaining_quantities(monkeypatch) -> None:

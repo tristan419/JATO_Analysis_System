@@ -28,7 +28,8 @@ def db():
               models.BrandColourSurchargeRule, models.SpecialColourSurchargeRule,
               models.BrandColourSwatchRule, models.CountryPaymentTermMaster,
               models.CountryMaterialFinance, models.CountryFobSourceMapping,
-              models.CountryTemplateFobPeriod, models.OrderQuantityCell]
+              models.CountryTemplateFobPeriod, models.OrderQuantityCell,
+              models.QuantityCellHistory]
     metadata = MetaData()
     for model in tables:
         table = model.__table__.to_metadata(metadata)
@@ -288,6 +289,116 @@ def test_default_matrix_scope_excludes_expired_templates_until_historical_opt_in
     )
 
     assert {row.material_code for row in rows} == {"NEW"}
+
+
+def test_matrix_historical_opt_in_exposes_editable_backfill_row_without_reactivation(db):
+    expired = sku(db, "OLD", "single", template="OLD**001")
+    expired.effective_from_date = date.today() - timedelta(days=60)
+    expired.effective_to_date = date.today() - timedelta(days=1)
+    expired.is_active = False
+    expired.lifecycle_status = "historical"
+    fob(db, "OLD", 18000)
+    db.commit()
+
+    default_matrix = service.build_matrix(db, "CH", date.today().year)
+    backfill_matrix = service.build_matrix(
+        db,
+        "CH",
+        date.today().year,
+        include_historical=True,
+    )
+
+    assert all(row["materialCode"] != "OLD" for row in default_matrix["rows"])
+    row = next(row for row in backfill_matrix["rows"] if row["materialCode"] == "OLD")
+    assert row["lifecycleStatus"] == "historical"
+    assert row["historicalBackfill"] is True
+    assert row["editable"] is True
+    assert row["priceSource"] == "undated_default"
+    assert expired.lifecycle_status == "historical"
+    assert expired.is_active is False
+
+
+def test_historical_quantity_requires_opt_in_and_rejects_future_month(db):
+    expired = sku(db, "OLD", "single", template="OLD**001")
+    expired.effective_to_date = date.today() - timedelta(days=1)
+    expired.is_active = False
+    expired.lifecycle_status = "historical"
+    fob(db, "OLD", 18000)
+    db.commit()
+
+    with pytest.raises(ValueError, match="explicit includeHistorical"):
+        service.update_quantity_cell(
+            db, "CH", date.today().year, date.today().month, "OLD", 2, "tester", 1,
+        )
+
+    saved = service.update_quantity_cell(
+        db,
+        "CH",
+        date.today().year,
+        date.today().month,
+        "OLD",
+        2,
+        "tester",
+        1,
+        include_historical=True,
+    )
+    assert saved["quantity"] == 2
+    assert expired.lifecycle_status == "historical"
+    assert expired.is_active is False
+
+    future_year = date.today().year + (1 if date.today().month == 12 else 0)
+    future_month = 1 if date.today().month == 12 else date.today().month + 1
+    with pytest.raises(ValueError, match="future month"):
+        service.update_quantity_cell(
+            db,
+            "CH",
+            future_year,
+            future_month,
+            "OLD",
+            1,
+            "tester",
+            1,
+            include_historical=True,
+        )
+
+
+def test_historical_backfill_turns_lifecycle_rejection_into_price_preview(db):
+    expired = sku(db, "OLD", "single", template="OLD**001")
+    expired.effective_from_date = date(2026, 1, 1)
+    expired.effective_to_date = date(2026, 6, 30)
+    expired.is_active = False
+    expired.lifecycle_status = "historical"
+    fob(db, "OLD", 18000)
+    db.commit()
+
+    blocked_fob, blocked_conflict, _ = service.resolve_date_effective_fob(
+        db, "CH", expired, date(2026, 8, 15),
+    )
+    preview_fob, preview_conflict, preview_evidence = service.resolve_date_effective_fob(
+        db,
+        "CH",
+        expired,
+        date(2026, 8, 15),
+        allow_historical_backfill=True,
+    )
+
+    assert blocked_fob is None
+    assert "expired" in blocked_conflict["reason"]
+    assert preview_fob is None
+    assert preview_conflict is None
+    assert preview_evidence is None
+
+
+def test_historical_surcharge_review_compares_saved_evidence_with_current_rule(db):
+    dual = sku(db, "OLD", "dual", template="OLD**001")
+    saved_fob = fob(db, "OLD", 18200, base=18000, surcharge=200)
+
+    review = service._historical_surcharge_review(db, dual, saved_fob, None)
+
+    assert review["status"] == "changed"
+    assert review["savedSurchargeEur"] == 200
+    assert review["currentSurchargeEur"] == 300
+    assert review["requiresConfirmation"] is True
 
 
 def test_country_period_must_stay_inside_template_lifecycle(db):

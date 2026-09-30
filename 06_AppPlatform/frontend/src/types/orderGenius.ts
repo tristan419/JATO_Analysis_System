@@ -59,6 +59,15 @@ export interface MaterialSkuMatrixRow {
   lifecycleStatus: string;
   editable: boolean;
   displayStyle: string | null;
+  historicalBackfill?: boolean;
+  priceSource?: "dated_period" | "undated_default" | "missing";
+  historicalSurchargeReview?: {
+    status: "matched" | "missing_rule" | "missing_evidence" | "changed";
+    savedSurchargeEur: number | null;
+    currentSurchargeEur: number | null;
+    currentSource: string | null;
+    requiresConfirmation: boolean;
+  } | null;
   remark: string | null;
   effectiveFrom?: string | null;
   effectiveTo?: string | null;
@@ -127,6 +136,7 @@ export interface QuantityCellUpdate {
   materialCode: string;
   quantity: number;
   rowVersion: number;
+  includeHistorical?: boolean;
 }
 
 export interface QuantityCellResponse {
