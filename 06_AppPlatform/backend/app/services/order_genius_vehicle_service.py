@@ -190,14 +190,17 @@ def update_pi_line(session: Session, pi_line_code: str, payload: dict[str, Any],
 
 def _validate_historical_backfill_request(
     session: Session,
+    default_country: str,
     line_items: list[dict[str, Any]],
     year: int,
     month: int,
     requested_order_date: date | None,
     include_historical: bool,
     confirm_historical: bool,
+    confirm_historical_surcharge: bool,
 ) -> set[str]:
     historical_codes: set[str] = set()
+    surcharge_review_required = False
     for item in line_items:
         if not isinstance(item, dict):
             continue
@@ -207,6 +210,27 @@ def _validate_historical_backfill_request(
         sku = og_repo.get_current_baseline_sku_by_code(session, material_code)
         if sku and og_repo.resolve_effective_lifecycle_status(sku, date.today()) == "historical":
             historical_codes.add(material_code)
+            tier = og_repo.resolve_effective_colour_tier(sku)
+            resolved = og_repo.resolve_colour_surcharge_for_sku(session, sku, tier)
+            current_amount = resolved.get("amount")
+            for allocation in _line_item_allocations(item, default_country):
+                fob = og_repo.get_fob_for_country_sku(
+                    session,
+                    str(allocation["countryCode"]),
+                    material_code,
+                )
+                saved_amount = (
+                    float(fob.colour_surcharge_eur)
+                    if fob and fob.colour_surcharge_eur is not None
+                    else 0.0 if tier == "single"
+                    else None
+                )
+                if (
+                    current_amount is None
+                    or saved_amount is None
+                    or round(saved_amount, 2) != round(float(current_amount), 2)
+                ):
+                    surcharge_review_required = True
     if not historical_codes:
         return historical_codes
     if (year, month) > (date.today().year, date.today().month):
@@ -226,6 +250,11 @@ def _validate_historical_backfill_request(
         raise HTTPException(
             status_code=400,
             detail="Historical PI backfill requires an orderDate inside the selected order month.",
+        )
+    if surcharge_review_required and not confirm_historical_surcharge:
+        raise HTTPException(
+            status_code=409,
+            detail="Historical colour surcharge evidence differs or is missing; review and confirm the candidate price.",
         )
     return historical_codes
 
@@ -255,15 +284,18 @@ def generate_from_order_matrix(session: Session, payload: dict[str, Any], userna
     requested_order_date = _parse_date(payload.get("orderDate"))
     include_historical = _truthy(payload.get("includeHistorical"))
     confirm_historical = _truthy(payload.get("confirmHistorical"))
+    confirm_historical_surcharge = _truthy(payload.get("confirmHistoricalSurcharge"))
     confirm_undated_default = _truthy(payload.get("confirmUndatedDefaultFob"))
     historical_codes = _validate_historical_backfill_request(
         session,
+        country,
         line_items,
         year,
         month,
         requested_order_date,
         include_historical,
         confirm_historical,
+        confirm_historical_surcharge,
     )
 
     header = create_pi_header(session, {
@@ -314,11 +346,16 @@ def generate_from_order_matrix(session: Session, payload: dict[str, Any], userna
                 requested_order_date,
                 historical_backfill=historical_backfill,
             )
+            pricing_item = {
+                **item,
+                "historicalFobOverrideEur": allocation.get("historicalFobOverrideEur"),
+                "historicalPriceReason": allocation.get("historicalPriceReason"),
+            }
             resolved_payload = _line_payload_from_material(
                 session,
                 allocation_country,
                 material_code,
-                item,
+                pricing_item,
                 pricing_date=pricing_date,
                 historical_backfill=historical_backfill,
                 confirm_undated_default=confirm_undated_default,
@@ -339,11 +376,21 @@ def generate_from_order_matrix(session: Session, payload: dict[str, Any], userna
             requested_order_date,
             historical_backfill=historical_backfill,
         )
+        line_allocation = next(
+            allocation
+            for allocation in resolved_allocations
+            if str(allocation["countryCode"]).upper() == line_country
+        )
+        line_item = {
+            **item,
+            "historicalFobOverrideEur": line_allocation.get("historicalFobOverrideEur"),
+            "historicalPriceReason": line_allocation.get("historicalPriceReason"),
+        }
         line_payload = _line_payload_from_material(
             session,
             line_country,
             material_code,
-            item,
+            line_item,
             pricing_date=line_pricing_date,
             historical_backfill=historical_backfill,
             confirm_undated_default=confirm_undated_default,
@@ -1113,7 +1160,7 @@ def _line_payload_from_material(
                 reason = conflict.get("reason") if conflict else evidence.get("status")
                 raise HTTPException(status_code=409, detail=reason)
             payload["fobEur"] = dated_fob
-            return payload
+            return _apply_historical_price_override(payload, item, historical_backfill)
     if fob:
         if historical_backfill and not confirm_undated_default:
             raise HTTPException(
@@ -1129,6 +1176,29 @@ def _line_payload_from_material(
             status_code=409,
             detail=f"No FOB is available for historical material {material_code} / {country}.",
         )
+    return _apply_historical_price_override(payload, item, historical_backfill)
+
+
+def _apply_historical_price_override(
+    payload: dict[str, Any],
+    item: dict[str, Any],
+    historical_backfill: bool,
+) -> dict[str, Any]:
+    raw_override = item.get("historicalFobOverrideEur")
+    if not historical_backfill or raw_override in (None, ""):
+        return payload
+    override = _decimal_or_none(raw_override)
+    if override is None or override < 0:
+        raise HTTPException(status_code=400, detail="Historical FOB override must be zero or greater")
+    current = _decimal_or_none(payload.get("fobEur"))
+    if current is not None and override == current:
+        return payload
+    reason = _clean(item.get("historicalPriceReason"))
+    if not reason:
+        raise HTTPException(status_code=400, detail="Historical FOB override requires a reason")
+    payload["fobEur"] = float(override)
+    note = f"Historical price override: {reason}"
+    payload["remark"] = f"{payload.get('remark')} | {note}" if payload.get("remark") else note
     return payload
 
 
@@ -1198,11 +1268,22 @@ def _line_item_allocations(item: dict[str, Any], default_country: str) -> list[d
         current = by_country.get(country_code)
         if current:
             current["quantity"] = int(current["quantity"]) + quantity
+            for key in ("historicalFobOverrideEur", "historicalPriceReason"):
+                if current.get(key) in (None, "") and raw.get(key) not in (None, ""):
+                    current[key] = raw.get(key)
         else:
             by_country[country_code] = {
                 "countryCode": country_code,
                 "quantity": quantity,
                 "fobEur": raw.get("fobEur", item.get("fobEur")),
+                "historicalFobOverrideEur": raw.get(
+                    "historicalFobOverrideEur",
+                    item.get("historicalFobOverrideEur"),
+                ),
+                "historicalPriceReason": raw.get(
+                    "historicalPriceReason",
+                    item.get("historicalPriceReason"),
+                ),
             }
     return list(by_country.values())
 

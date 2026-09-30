@@ -422,28 +422,102 @@ def test_historical_pi_scope_requires_confirmation_date_and_nonfuture_month(monk
     sku = SimpleNamespace(material_code="OLD")
     monkeypatch.setattr(order_repo, "get_current_baseline_sku_by_code", lambda *_args: sku)
     monkeypatch.setattr(order_repo, "resolve_effective_lifecycle_status", lambda *_args: "historical")
+    monkeypatch.setattr(order_repo, "resolve_effective_colour_tier", lambda *_args: "single")
+    monkeypatch.setattr(
+        order_repo,
+        "resolve_colour_surcharge_for_sku",
+        lambda *_args: {"amount": 0, "source": "single"},
+    )
+    monkeypatch.setattr(
+        order_repo,
+        "get_fob_for_country_sku",
+        lambda *_args: SimpleNamespace(colour_surcharge_eur=None),
+    )
     today = date.today()
     items = [{"materialCode": "OLD", "quantity": 1}]
 
     with pytest.raises(HTTPException, match="explicit confirmation"):
         vehicle_service._validate_historical_backfill_request(
-            object(), items, today.year, today.month, today, True, False,
+            object(), "CH", items, today.year, today.month, today, True, False, True,
         )
     with pytest.raises(HTTPException, match="requires an orderDate"):
         vehicle_service._validate_historical_backfill_request(
-            object(), items, today.year, today.month, None, True, True,
+            object(), "CH", items, today.year, today.month, None, True, True, True,
         )
 
     future_year = today.year + (1 if today.month == 12 else 0)
     future_month = 1 if today.month == 12 else today.month + 1
     with pytest.raises(HTTPException, match="future month"):
         vehicle_service._validate_historical_backfill_request(
-            object(), items, future_year, future_month, today, True, True,
+            object(), "CH", items, future_year, future_month, today, True, True, True,
         )
 
     assert vehicle_service._validate_historical_backfill_request(
-        object(), items, today.year, today.month, today, True, True,
+        object(), "CH", items, today.year, today.month, today, True, True, True,
     ) == {"OLD"}
+
+
+def test_historical_pi_requires_surcharge_confirmation_when_evidence_differs(monkeypatch) -> None:
+    sku = SimpleNamespace(material_code="OLD")
+    monkeypatch.setattr(order_repo, "get_current_baseline_sku_by_code", lambda *_args: sku)
+    monkeypatch.setattr(order_repo, "resolve_effective_lifecycle_status", lambda *_args: "historical")
+    monkeypatch.setattr(order_repo, "resolve_effective_colour_tier", lambda *_args: "dual")
+    monkeypatch.setattr(
+        order_repo,
+        "resolve_colour_surcharge_for_sku",
+        lambda *_args: {"amount": 300, "source": "brand_tier"},
+    )
+    monkeypatch.setattr(
+        order_repo,
+        "get_fob_for_country_sku",
+        lambda *_args: SimpleNamespace(colour_surcharge_eur=200),
+    )
+    today = date.today()
+    items = [{"materialCode": "OLD", "quantity": 1}]
+
+    with pytest.raises(HTTPException, match="surcharge evidence differs"):
+        vehicle_service._validate_historical_backfill_request(
+            object(), "CH", items, today.year, today.month, today, True, True, False,
+        )
+
+    assert vehicle_service._validate_historical_backfill_request(
+        object(), "CH", items, today.year, today.month, today, True, True, True,
+    ) == {"OLD"}
+
+
+def test_historical_fob_override_requires_reason_and_is_saved_in_line_remark() -> None:
+    with pytest.raises(HTTPException, match="requires a reason"):
+        vehicle_service._apply_historical_price_override(
+            {"fobEur": 19000}, {"historicalFobOverrideEur": 19100}, True,
+        )
+
+    payload = vehicle_service._apply_historical_price_override(
+        {"fobEur": 19000, "remark": "Imported history"},
+        {"historicalFobOverrideEur": 19100, "historicalPriceReason": "signed PI evidence"},
+        True,
+    )
+    assert payload["fobEur"] == 19100
+    assert payload["remark"] == "Imported history | Historical price override: signed PI evidence"
+
+
+def test_historical_override_survives_country_allocation_normalisation() -> None:
+    allocations = vehicle_service._line_item_allocations(
+        {
+            "quantity": 2,
+            "historicalFobOverrideEur": 19100,
+            "historicalPriceReason": "signed PI evidence",
+            "allocations": [{"countryCode": "CH", "quantity": 2}],
+        },
+        "CH",
+    )
+
+    assert allocations == [{
+        "countryCode": "CH",
+        "quantity": 2,
+        "fobEur": None,
+        "historicalFobOverrideEur": 19100,
+        "historicalPriceReason": "signed PI evidence",
+    }]
 
 
 def test_pi_requires_order_date_when_one_month_crosses_fob_periods(monkeypatch) -> None:

@@ -599,6 +599,37 @@ def resolve_date_effective_fob(
     return round(float(period.base_fob_eur) + float(amount), 2), None, period_payload
 
 
+def _historical_surcharge_review(
+    session: Session,
+    sku: MaterialSkuMaster,
+    fob: CountrySkuFobResolved | None,
+    fob_period: dict | None,
+) -> dict:
+    tier = repo.resolve_effective_colour_tier(sku)
+    resolved = repo.resolve_colour_surcharge_for_sku(session, sku, tier)
+    current_amount = resolved.get("amount")
+    saved_amount = float(fob.colour_surcharge_eur) if fob and fob.colour_surcharge_eur is not None else None
+    if tier == "single" and saved_amount is None:
+        saved_amount = 0.0
+    if fob_period and fob_period.get("surchargeEur") is not None:
+        current_amount = float(fob_period["surchargeEur"])
+    if current_amount is None:
+        status = "missing_rule"
+    elif saved_amount is None:
+        status = "missing_evidence"
+    elif round(saved_amount, 2) != round(float(current_amount), 2):
+        status = "changed"
+    else:
+        status = "matched"
+    return {
+        "status": status,
+        "savedSurchargeEur": saved_amount,
+        "currentSurchargeEur": float(current_amount) if current_amount is not None else None,
+        "currentSource": resolved.get("source"),
+        "requiresConfirmation": status != "matched",
+    }
+
+
 def _build_matrix_for_country(
     session: Session,
     country_code: str,
@@ -721,6 +752,11 @@ def _build_matrix_for_country(
         historical_backfill = (
             repo.resolve_effective_lifecycle_status(sku, date.today()) == "historical"
         )
+        historical_surcharge_review = (
+            _historical_surcharge_review(session, sku, fob, fob_period)
+            if historical_backfill
+            else None
+        )
         rows.append({
             "materialCode": sku.material_code,
             "bomTemplate": sku.bom_template,
@@ -749,6 +785,7 @@ def _build_matrix_for_country(
                 else "undated_default" if fob is not None
                 else "missing"
             ),
+            "historicalSurchargeReview": historical_surcharge_review,
             "remark": sku.remark,
             "effectiveFrom": repo.get_lifecycle_dates(sku)[0].isoformat() if repo.get_lifecycle_dates(sku)[0] else None,
             "effectiveTo": repo.get_lifecycle_dates(sku)[1].isoformat() if repo.get_lifecycle_dates(sku)[1] else None,

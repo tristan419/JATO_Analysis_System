@@ -104,6 +104,10 @@ describe("Order Genius colour rule page contract", () => {
     expect(pageSource).toContain("This will not reactivate the material");
     expect(pageSource).toContain("confirmHistorical: confirmHistoricalPi");
     expect(pageSource).toContain("confirmUndatedDefaultFob: confirmUndatedHistoricalFob");
+    expect(pageSource).toContain("confirmHistoricalSurcharge");
+    expect(pageSource).toContain("historicalFobOverrideEur");
+    expect(pageSource).toContain("Historical surcharge: saved");
+    expect(pageSource).toContain("Override reason");
     expect(pageSource).toContain("Open BOM Admin");
   });
 });

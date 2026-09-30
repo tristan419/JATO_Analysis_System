@@ -389,6 +389,18 @@ def test_historical_backfill_turns_lifecycle_rejection_into_price_preview(db):
     assert preview_evidence is None
 
 
+def test_historical_surcharge_review_compares_saved_evidence_with_current_rule(db):
+    dual = sku(db, "OLD", "dual", template="OLD**001")
+    saved_fob = fob(db, "OLD", 18200, base=18000, surcharge=200)
+
+    review = service._historical_surcharge_review(db, dual, saved_fob, None)
+
+    assert review["status"] == "changed"
+    assert review["savedSurchargeEur"] == 200
+    assert review["currentSurchargeEur"] == 300
+    assert review["requiresConfirmation"] is True
+
+
 def test_country_period_must_stay_inside_template_lifecycle(db):
     single = sku(db, "S", "single")
     sku(db, "D", "dual")
