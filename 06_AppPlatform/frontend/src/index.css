@@ -12081,6 +12081,38 @@ table.data-table tr.data-table-group-row.contains-selection td {
   margin: 0 0 14px;
 }
 
+.og-pi-readiness {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  min-height: 28px;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.og-pi-readiness.is-pending { color: #1d4ed8; }
+.og-pi-readiness.is-ready { color: #047857; }
+.og-pi-readiness.is-error { color: #b91c1c; }
+.og-pi-readiness button { color: inherit; text-decoration: underline; }
+.og-pi-panel-readiness { font-size: 12px; margin: 8px 0; }
+.og-month-controls {
+  grid-column: 1 / -1;
+  display: grid;
+  grid-template-columns: minmax(0, 2fr) minmax(90px, 1fr);
+  gap: 12px;
+  padding: 12px;
+  border: 1px solid #93c5fd;
+  border-radius: 10px;
+  background: #eff6ff;
+}
+.og-month-controls label { display: grid; gap: 6px; color: #1d4ed8; font-weight: 700; }
+.og-month-controls select { min-height: 42px; font-size: 16px; }
+.og-more-filters { grid-column: 1 / -1; min-width: 0; }
+.og-more-filters summary { cursor: pointer; color: #475569; font-weight: 600; padding: 8px 0; }
+.og-pi-order-date { display: grid; gap: 4px; font-size: 12px; }
+
 .order-genius-summary-strip span {
   display: inline-flex;
   align-items: center;

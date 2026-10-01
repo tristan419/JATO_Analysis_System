@@ -31,7 +31,7 @@ def db():
               models.BrandColourSwatchRule, models.CountryPaymentTermMaster,
               models.CountryMaterialFinance, models.CountryFobSourceMapping,
               models.CountryTemplateFobPeriod, models.OrderQuantityCell,
-              models.QuantityCellHistory]
+              models.QuantityCellHistory, models.MaterialSkuRemarkHistory]
     metadata = MetaData()
     for model in tables:
         table = model.__table__.to_metadata(metadata)
@@ -82,6 +82,37 @@ def test_material_colour_tier_has_no_implicit_default() -> None:
     assert column.nullable is False
     assert column.default is None
     assert column.server_default is None
+
+
+def test_product_save_is_atomic_and_returns_saved_powertrain(db):
+    first = sku(db, "A", "single")
+    second = sku(db, "B", "dual")
+    first.model_name = second.model_name = "JAECOO8 SHS"
+    fob(db, "A", 1000, base=1000)
+    fob(db, "B", 1300, base=1000, surcharge=300)
+    db.commit()
+    body = {"materialCodes": ["A", "B"], "version": "7 seats", "powertrain": "HEV",
+            "remark": "new note", "rowVersions": {"A": 1, "B": 99}}
+    with pytest.raises(HTTPException) as error:
+        routes.patch_sku_metadata("A", body, db, SimpleNamespace(name="test"))
+    assert error.value.status_code == 409
+    db.expire_all()
+    assert first.remark is None and first.row_version == 1
+    assert first.version == "Premium" and first.powertrain == "PHEV"
+    body["rowVersions"]["B"] = 1
+    result = routes.patch_sku_metadata("A", body, db, SimpleNamespace(name="test"))
+    db.expire_all()
+    assert result["productFields"]["powertrain"] == "HEV"
+    assert {row["powertrain"] for row in service.build_matrix(db, "CH", 2026)["rows"]} == {"HEV"}
+    assert first.powertrain == second.powertrain == "HEV"
+    assert first.remark == second.remark == "new note"
+    assert first.row_version == second.row_version == 2
+    assert len(db.scalars(select(models.MaterialSkuRemarkHistory)).all()) == 2
+    # Re-saving unchanged remarks neither fabricates a version nor adds history.
+    routes.patch_sku_metadata("A", body, db, SimpleNamespace(name="test"))
+    db.expire_all()
+    assert first.row_version == second.row_version == 2
+    assert len(db.scalars(select(models.MaterialSkuRemarkHistory)).all()) == 2
 
 
 @pytest.mark.parametrize("source_tier", ["single", "dual", "special"])
@@ -251,28 +282,29 @@ def test_no_period_schedule_keeps_undated_legacy_fob(db):
     assert row["fobPeriod"] is None
 
 
-def test_clearing_last_period_requires_explicit_restore_and_retains_history(db):
+def test_deleting_last_period_previews_default_and_retains_history(db):
     single = sku(db, "S", "single")
     fob(db, "S", 1000, base=1000)
     row = repo.save_country_template_fob_period(db, country_code="CH", bom_template="T**001",
         valid_from=date(2026, 8, 1), valid_to=date(2026, 8, 31), base_fob_eur=1200, remark=None, changed_by="test")
     db.commit()
-    repo.delete_country_template_fob_period(db, row.country_template_fob_period_id, row.row_version)
+    preview = routes.delete_bom_template_fob_period(row.country_template_fob_period_id, row.row_version,
+        preview_only=True, fingerprint=None, session=db, user=SimpleNamespace(name="test", role="admin"))
+    assert preview["defaultBaseFobEur"] == 1000 and preview["lastPeriod"] is True
+    with pytest.raises(HTTPException) as exc:
+        routes.delete_bom_template_fob_period(row.country_template_fob_period_id, row.row_version,
+            preview_only=False, fingerprint="stale", session=db, user=SimpleNamespace(name="test", role="admin"))
+    assert exc.value.status_code == 409
+    confirmed = routes.delete_bom_template_fob_period(row.country_template_fob_period_id, row.row_version,
+        preview_only=False, fingerprint=preview["fingerprint"], session=db, user=SimpleNamespace(name="test", role="admin"))
+    assert confirmed["deleted"] is True
     db.commit(); db.expire_all()
     assert repo.list_country_template_fob_periods(db, "CH", "T**001") == []
-    assert repo.has_country_template_fob_periods(db, "CH", "T**001") is True
-    amount, conflict, evidence = service.resolve_date_effective_fob(db, "CH", single, date(2026, 8, 2))
-    assert amount is None and evidence["status"] == "no_price"
-    with pytest.raises(ValueError, match="No country FOB"):
-        service.update_quantity_cell(db, "CH", 2026, 8, "S", 2, "test", 1)
-    assert repo.restore_country_template_default_fob(db, "CH", "T**001", "test", preview_only=True) == 1000
-    with pytest.raises(ValueError, match="preview and confirm"):
-        repo.restore_country_template_default_fob(db, "CH", "T**001", "test", expected_base=900)
-    assert repo.has_country_template_fob_periods(db, "CH", "T**001") is True
-    repo.restore_country_template_default_fob(db, "CH", "T**001", "test", expected_base=1000)
-    db.commit(); db.expire_all()
     assert repo.has_country_template_fob_periods(db, "CH", "T**001") is False
-    assert db.get(models.CountryTemplateFobPeriod, row.country_template_fob_period_id).status == "default"
+    amount, conflict, evidence = service.resolve_date_effective_fob(db, "CH", single, date(2026, 8, 2))
+    assert amount is None and conflict is None and evidence is None  # caller now uses its undated default
+    assert service.build_matrix(db, "CH", 2026, selection_date=date(2026, 8, 2))["rows"][0]["fobEur"] == 1000
+    assert db.get(models.CountryTemplateFobPeriod, row.country_template_fob_period_id).status == "deleted"
     saved = service.update_quantity_cell(db, "CH", 2026, 8, "S", 2, "test", 1)
     assert saved["fob_eur"] == 1000
     # The same start date can be used again without deleting audit history.
@@ -280,6 +312,71 @@ def test_clearing_last_period_requires_explicit_restore_and_retains_history(db):
         valid_from=date(2026, 8, 1), valid_to=date(2026, 8, 31), base_fob_eur=1300, remark=None, changed_by="test")
     db.commit()
     assert repo.has_country_template_fob_periods(db, "CH", "T**001") is True
+
+
+def test_period_only_bom_country_search_includes_materials_and_keeps_raw_default(db):
+    sku(db, "S", "single"); sku(db, "D", "dual")
+    sku(db, "OTHER", "single", template="OTHER**001")
+    fob(db, "OTHER", 900, country="NL")
+    first = repo.save_country_template_fob_period(db, country_code="CH", bom_template="T**001",
+        valid_from=date(2026, 8, 1), valid_to=date(2026, 8, 31), base_fob_eur=1200, remark=None, changed_by="test")
+    repo.save_country_template_fob_period(db, country_code="CH", bom_template="T**001",
+        valid_from=date(2027, 1, 1), valid_to=None, base_fob_eur=1300, remark=None, changed_by="test")
+    db.commit()
+    items, countries = repo.list_bom_with_fob(db, country_code="CH")
+    assert countries == ["CH", "NL"]
+    assert {item["materialCode"] for item in items} == {"S", "D"}
+    assert items[0]["fobByCountry"] == {}
+    assert [p["baseFobEur"] for p in items[0]["fobPeriodsByCountry"]["CH"]] == [1200, 1300]
+    assert repo.list_active_fob_material_codes(db, "CH") == {"S", "D"}
+    preview = repo.preview_country_template_fob_period_deletion(db, first.country_template_fob_period_id, first.row_version)
+    assert preview["lastPeriod"] is False
+    repo.delete_country_template_fob_period(db, first.country_template_fob_period_id, first.row_version)
+    db.commit()
+    assert service.resolve_date_effective_fob(db, "CH", repo.get_sku_by_material_code(db, "S"), date(2026, 8, 2))[0] is None
+
+
+@pytest.mark.parametrize("default", [None, 0, 1000])
+def test_last_period_deletion_returns_to_default_or_no_price_without_restore(db, default):
+    sku(db, "S", "single")
+    if default is not None:
+        fob(db, "S", default, base=default)
+    row = repo.save_country_template_fob_period(db, country_code="CH", bom_template="T**001",
+        valid_from=date(2026, 8, 1), valid_to=date(2026, 8, 31), base_fob_eur=1200, remark=None, changed_by="test")
+    db.commit()
+    preview = repo.preview_country_template_fob_period_deletion(db, row.country_template_fob_period_id, row.row_version)
+    assert preview["defaultBaseFobEur"] == default
+    routes.delete_bom_template_fob_period(row.country_template_fob_period_id, row.row_version,
+        preview_only=False, fingerprint=preview["fingerprint"], session=db, user=SimpleNamespace(name="test", role="admin"))
+    assert repo.has_country_template_fob_periods(db, "CH", "T**001") is False
+    if not default:
+        with pytest.raises(HTTPException) as error:
+            vehicle_service._resolve_pi_pricing_date(db, "CH", "S", 2026, 8, date(2026, 8, 1))
+        assert error.value.status_code == 409
+    else:
+        assert vehicle_service._resolve_pi_pricing_date(db, "CH", "S", 2026, 8, date(2026, 8, 1)) == date(2026, 8, 1)
+
+
+def test_last_period_delete_does_not_pick_ambiguous_default_and_rechecks_changes(db):
+    sku(db, "S", "single")
+    first = fob(db, "S", 1000, base=1000)
+    row = repo.save_country_template_fob_period(db, country_code="CH", bom_template="T**001",
+        valid_from=date(2026, 8, 1), valid_to=date(2026, 8, 31), base_fob_eur=1200, remark=None, changed_by="test")
+    db.commit()
+    preview = repo.preview_country_template_fob_period_deletion(db, row.country_template_fob_period_id, row.row_version)
+    first.final_fob_eur = first.base_fob_eur = 1100
+    db.commit()
+    with pytest.raises(HTTPException) as error:
+        routes.delete_bom_template_fob_period(row.country_template_fob_period_id, row.row_version,
+            preview_only=False, fingerprint=preview["fingerprint"], session=db, user=SimpleNamespace(name="test", role="admin"))
+    assert error.value.status_code == 409
+    assert row.status == "active"
+    sku(db, "OTHER", "single")
+    fob(db, "OTHER", 1300, base=1300)
+    db.commit()
+    with pytest.raises(ValueError, match="(?i)conflict|ambiguous"):
+        repo.preview_country_template_fob_period_deletion(db, row.country_template_fob_period_id, row.row_version)
+    assert row.status == "active"
 
 
 def test_country_month_availability_prices_all_colours_and_keeps_other_country(db):

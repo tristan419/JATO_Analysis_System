@@ -155,8 +155,10 @@ COUNTRY_MATERIAL_FINANCE_VALUE_FIELDS = (
 
 
 def _extract_canonical_powertrain(sku: MaterialSkuMaster) -> str:
-    """Model name wins over stale imported powertrain values for BOM grouping/filtering."""
+    """An explicitly saved powertrain wins; names only describe legacy missing values."""
     raw_pt = clean_text(sku.powertrain).upper()
+    if raw_pt in {"ICE", "BEV", "EV", "HEV", "PHEV", "MHEV", "REEV", "FCEV"}:
+        return "BEV" if raw_pt == "EV" else raw_pt
     model = clean_text(sku.model_name).upper()
     combined = f"{model} {raw_pt}"
     if "PHEV" in combined or "SHS" in combined or "PLUG" in combined:
@@ -1199,7 +1201,7 @@ def has_country_template_fob_periods(
         .where(
             CountryTemplateFobPeriod.country_code == clean_text(country_code).upper(),
             CountryTemplateFobPeriod.bom_template == clean_text(bom_template).upper(),
-            CountryTemplateFobPeriod.status != "default",
+            CountryTemplateFobPeriod.status == "active",
         )
         .limit(1)
     ).scalar_one_or_none() is not None
@@ -1359,36 +1361,57 @@ def delete_country_template_fob_period(
     row.row_version += 1
 
 
-def restore_country_template_default_fob(
-    session: Session, country_code: str, bom_template: str, changed_by: str,
-    *, preview_only: bool = False, expected_base: float | None = None,
-) -> float:
-    """Explicitly release a cleared schedule; keep its historical records."""
-    if list_country_template_fob_periods(session, country_code, bom_template):
-        raise ValueError("Remove all dated periods before restoring the undated default FOB")
+def preview_country_template_fob_period_deletion(
+    session: Session, period_id: UUID, row_version: int,
+) -> dict:
+    """Resolve the last-period impact using the same trusted Single base as repricing."""
+    period = session.get(CountryTemplateFobPeriod, period_id)
+    if period is None or period.status != "active":
+        raise LookupError("FOB period not found")
+    if period.row_version != row_version:
+        raise RuntimeError("FOB period changed; refresh and retry")
+    country_code, bom_template = period.country_code, period.bom_template
+    periods = list_country_template_fob_periods(session, country_code, bom_template)
     baseline = get_latest_baseline(session)
     skus = list_bom_template_skus(session, bom_template, baseline.baseline_version_id) if baseline else []
     if not skus:
         raise LookupError("BOM template not found")
-    resolution = {"baseFobEur": None}
+    base = None
+    evidence = []
+    candidates: set[float] = set()
     for sku in skus:
         fob = get_fob_for_country_sku(session, country_code, sku.material_code)
         if fob is not None:
+            evidence.append([sku.material_code, sku.row_version, sku.colour_tier, float(fob.final_fob_eur),
+                             float(fob.base_fob_eur) if fob.base_fob_eur is not None else None])
+            if float(fob.final_fob_eur) == 0 and fob.base_fob_eur in (None, 0):
+                base = 0.0
+                candidates.add(base)
+                continue
             resolution = _resolve_colour_surcharge_reprice_base(session, sku, fob)
-            break
-    if resolution.get("baseFobEur") is None or float(resolution["baseFobEur"]) <= 0:
-        raise ValueError("Confirm a unique positive Single base in BOM Admin before restoring default FOB")
-    base = float(resolution["baseFobEur"])
-    if preview_only:
-        return base
-    if expected_base is None or expected_base != base:
-        raise ValueError("Default Single base changed; preview and confirm again / 长期基准已变化，请重新预览确认")
-    session.execute(update(CountryTemplateFobPeriod).where(
-        CountryTemplateFobPeriod.country_code == clean_text(country_code).upper(),
-        CountryTemplateFobPeriod.bom_template == clean_text(bom_template).upper(),
-        CountryTemplateFobPeriod.status == "deleted",
-    ).values(status="default", updated_by=changed_by, row_version=CountryTemplateFobPeriod.row_version + 1))
-    return base
+            if len(periods) == 1 and resolution.get("baseFobEur") is None:
+                if resolution["status"] == "ambiguous":
+                    raise ValueError(f"Conflicting default Single bases: {resolution.get('candidates')}; confirm the template/country base in BOM Admin")
+                raise ValueError("Missing trusted default Single base; confirm the template/country base in BOM Admin")
+            if resolution.get("baseFobEur") is not None:
+                base = float(resolution["baseFobEur"])
+                candidates.add(base)
+    if len(periods) == 1 and len(candidates) > 1:
+        raise ValueError("Conflicting default Single bases; confirm the template/country base in BOM Admin / 长期基准冲突，请确认模板国家基准")
+    fingerprint = hashlib.sha256(json.dumps(
+        [str(period_id), [(str(p.country_template_fob_period_id), p.row_version) for p in periods], evidence, base],
+        sort_keys=True,
+    ).encode()).hexdigest()
+    return {"fingerprint": fingerprint, "lastPeriod": len(periods) == 1, "defaultBaseFobEur": base}
+
+
+def country_template_fob_period_payload(row: CountryTemplateFobPeriod) -> dict:
+    return {
+        "periodId": str(row.country_template_fob_period_id), "countryCode": row.country_code,
+        "bomTemplate": row.bom_template, "validFrom": row.valid_from.isoformat(),
+        "validTo": row.valid_to.isoformat() if row.valid_to else None,
+        "baseFobEur": float(row.base_fob_eur), "remark": row.remark, "rowVersion": row.row_version,
+    }
 
 
 def initialize_sku_fobs_from_source(
@@ -1841,6 +1864,16 @@ def list_bom_with_fob(
         )
     ).scalars().all()
 
+    periods_by_template: dict[str, dict[str, list[dict]]] = {}
+    periods = session.execute(select(CountryTemplateFobPeriod).where(
+        CountryTemplateFobPeriod.bom_template.in_({s.bom_template for s in skus if s.bom_template}),
+        CountryTemplateFobPeriod.status == "active",
+    ).order_by(CountryTemplateFobPeriod.valid_from)).scalars().all()
+    for period in periods:
+        periods_by_template.setdefault(period.bom_template, {}).setdefault(period.country_code, []).append(
+            country_template_fob_period_payload(period)
+        )
+
     # Build FOB map: material_code -> { country_code: { fob, paymentTerm } }
     fob_map: dict[str, dict] = {}
     fob_conflict_map: dict[str, dict[str, dict[str, object]]] = {}
@@ -1959,6 +1992,7 @@ def list_bom_with_fob(
             "effectiveTo": get_lifecycle_dates(s)[1].isoformat() if get_lifecycle_dates(s)[1] else None,
             "rowVersion": s.row_version,
             "fobByCountry": fob_map.get(s.material_code, {}),
+            "fobPeriodsByCountry": periods_by_template.get(s.bom_template, {}),
             "financeCountries": sorted(
                 finance_country_map.get(s.material_code, set())
                 | finance_country_map.get(s.bom_template or "", set())
@@ -2360,11 +2394,7 @@ def list_all_material_skus_for_admin(
     """
     stmt = select(MaterialSkuMaster)
     if country_code:
-        subq = select(CountrySkuFobResolved.material_code).where(
-            CountrySkuFobResolved.country_code == country_code,
-            CountrySkuFobResolved.is_active == True,
-        ).distinct()
-        stmt = stmt.where(MaterialSkuMaster.material_code.in_(subq))
+        stmt = stmt.where(MaterialSkuMaster.material_code.in_(list_active_fob_material_codes(session, country_code)))
     if brand:
         stmt = stmt.where(MaterialSkuMaster.brand == brand)
     if search:
@@ -3776,6 +3806,9 @@ def list_active_fob_country_codes(session: Session) -> list[str]:
         .where(CountrySkuFobResolved.is_active == True)
         .distinct()
     ).scalars().all()
+    country_codes += session.execute(select(CountryTemplateFobPeriod.country_code).where(
+        CountryTemplateFobPeriod.status == "active",
+    ).distinct()).scalars().all()
     return sorted({str(code or "").upper() for code in country_codes if str(code or "").strip()})
 
 
@@ -4912,12 +4945,19 @@ def list_active_fob_material_codes(
     country_code: str,
     payment_term_code: str | None = None,  # kept for API compat, no longer filters
 ) -> set[str]:
-    return {row[0] for row in session.execute(
+    defaults = {row[0] for row in session.execute(
         select(CountrySkuFobResolved.material_code).where(
             CountrySkuFobResolved.country_code == country_code,
             CountrySkuFobResolved.is_active == True,
         )
     ).all()}
+    period_materials = session.execute(select(MaterialSkuMaster.material_code).where(
+        MaterialSkuMaster.bom_template.in_(select(CountryTemplateFobPeriod.bom_template).where(
+            CountryTemplateFobPeriod.country_code == country_code,
+            CountryTemplateFobPeriod.status == "active",
+        )),
+    )).scalars().all()
+    return defaults | set(period_materials)
 
 
 def get_country_fob_source_mapping(

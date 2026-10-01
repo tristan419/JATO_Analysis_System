@@ -168,6 +168,7 @@ import type {
   CountryMaterialFinanceUpdate,
   CountryPaymentTerm,
   CountryTemplateFobPeriod,
+  FobPeriodDeletionPreview,
   MaterialUploadPreview,
   MaterialUploadPreviewRow,
   MaterialUploadSession,
@@ -5512,16 +5513,11 @@ export const api = {
     { method: "PUT", body: JSON.stringify(body) },
   ),
 
-  deleteBomTemplateFobPeriod: (periodId: string, rowVersion: number) =>
-    request<{ deleted: boolean; periodId: string }>(
-      `/order-genius/bom-templates/fob-periods/${encodeURIComponent(periodId)}?rowVersion=${rowVersion}`,
+  deleteBomTemplateFobPeriod: (periodId: string, rowVersion: number, fingerprint?: string) =>
+    request<FobPeriodDeletionPreview>(
+      `/order-genius/bom-templates/fob-periods/${encodeURIComponent(periodId)}?rowVersion=${rowVersion}&${fingerprint ? `fingerprint=${encodeURIComponent(fingerprint)}` : "previewOnly=true"}`,
       { method: "DELETE" },
     ),
-
-  restoreBomTemplateDefaultFob: (bomTemplate: string, countryCode: string, expectedBaseFobEur: number | null) =>
-    request<{ restored: boolean; baseFobEur: number }>("/order-genius/bom-templates/fob-periods/restore-default", {
-      method: "POST", body: JSON.stringify({ bomTemplate, countryCode, previewOnly: expectedBaseFobEur === null, confirmed: expectedBaseFobEur !== null, expectedBaseFobEur }),
-    }),
 
   updateSkuFobsBulk: (body: { updates: { materialCode: string; countryCode: string; finalFobEur: number | null; paymentTermCode?: string | null }[] }) =>
     request<{ updated: number; cleared: number; unchanged: number; total: number }>(
@@ -5579,8 +5575,8 @@ export const api = {
       { method: "POST", body: JSON.stringify(body) },
     ),
 
-  updateSkuMetadata: (materialCode: string, body: { materialCodes?: string[]; brand?: string; modelName?: string; version?: string; powertrain?: string }) =>
-    request<{ materialCodes: string[]; updated: number }>(
+  updateSkuMetadata: (materialCode: string, body: { materialCodes?: string[]; brand?: string; modelName?: string; version?: string; powertrain?: string; remark?: string; rowVersions?: Record<string, number> }) =>
+    request<{ materialCodes: string[]; updated: number; productFields: { brand: string | null; modelName: string | null; version: string | null; powertrain: string } }>(
       `/order-genius/material-skus/${encodeURIComponent(materialCode)}/metadata`,
       { method: "PATCH", body: JSON.stringify(body) },
     ),

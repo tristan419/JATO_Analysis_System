@@ -61,6 +61,7 @@ describe("BOM Admin A load continuity", () => {
     localStorage.clear();
     vi.spyOn(api, "getAccountCountryOptions").mockResolvedValue({ items: [] });
     vi.spyOn(api, "getOrderGeniusColourSurcharges").mockResolvedValue({ items: [] });
+    vi.spyOn(api, "getOrderGeniusSpecialColourSurcharges").mockResolvedValue({ items: [] });
     vi.spyOn(api, "getOrderGeniusColourHexRules").mockResolvedValue({
       items: [],
       summary: colourRuleSummary,
@@ -174,6 +175,39 @@ describe("BOM Admin A load continuity", () => {
     expect(screen.queryByTitle(/dual · rule \+200€/)).toBeNull();
   });
 
+  it("saves product fields once and waits for BOM and matrix readback without inventing a version", async () => {
+    const response = bomResponse("Product sample");
+    const refreshed = { ...response, items: response.items.map((item) => ({ ...item, version: "7 seats", powertrain: "HEV" })) };
+    const readback = deferred<typeof response>();
+    const matrixReadback = deferred<void>();
+    vi.spyOn(api, "getBomAdmin").mockResolvedValueOnce(response).mockReturnValueOnce(readback.promise).mockResolvedValue(refreshed);
+    const save = vi.spyOn(api, "updateSkuMetadata").mockResolvedValue({
+      materialCodes: ["T-Product sample"], updated: 1,
+      productFields: { brand: "OMODA", modelName: "Product sample", version: "7 seats", powertrain: "HEV" },
+    });
+    const remarkSave = vi.spyOn(api, "updateSkuRemark");
+    const changed = vi.fn(() => matrixReadback.promise);
+    await act(async () => { render(<BomAdminPanel onFobChanged={changed} />); });
+    await act(async () => { fireEvent.click(screen.getByRole("button", { name: /OMODA Product sample/ })); });
+    fireEvent.click(screen.getByRole("button", { name: "Edit" }));
+    fireEvent.change(screen.getByPlaceholderText("Version"), { target: { value: "7 seats" } });
+    await act(async () => { fireEvent.click(screen.getByText("Save Changes")); });
+    expect(save).toHaveBeenCalledTimes(1);
+    expect(save).toHaveBeenCalledWith("T-Product sample", expect.objectContaining({ rowVersions: { "T-Product sample": 1 }, remark: "" }));
+    expect(remarkSave).not.toHaveBeenCalled();
+    expect(screen.getByText("Saving...").hasAttribute("disabled")).toBe(true);
+    expect(screen.queryByText("Saved product fields.")).toBeNull();
+    await act(async () => { readback.resolve(refreshed); await readback.promise; });
+    expect(changed).toHaveBeenCalledOnce();
+    expect(screen.getByText("Saving...").hasAttribute("disabled")).toBe(true);
+    await act(async () => { matrixReadback.resolve(); await matrixReadback.promise; });
+    expect(screen.getAllByText("Saved product fields.").length).toBeGreaterThan(0);
+    expect((screen.getByPlaceholderText("Version") as HTMLInputElement).value).toBe("7 seats");
+    expect(document.body.textContent).toContain("HEV");
+    await act(async () => { fireEvent.click(screen.getByText("Save Changes")); });
+    expect(save).toHaveBeenLastCalledWith("T-Product sample", expect.objectContaining({ rowVersions: { "T-Product sample": 1 } }));
+  });
+
   it("opens country periods outside the BOM card and keeps the draft after a save failure", async () => {
     vi.spyOn(api, "getBomAdmin").mockResolvedValue(bomResponse("Period sample"));
     vi.spyOn(api, "listBomTemplateFobPeriods").mockResolvedValue({ periods: [], usesPeriods: false });
@@ -196,25 +230,67 @@ describe("BOM Admin A load continuity", () => {
     expect(screen.queryByRole("dialog")).toBeNull();
   });
 
-  it("requires a server-priced preview before restoring a cleared schedule", async () => {
+  it("shows latest-start Single base with Pn without changing the default input", async () => {
+    const response = bomResponse("Period summary");
+    const periods = [
+      { periodId: "past", countryCode: "SE", bomTemplate: "T-Period summary-**", validFrom: "2026-07-01", validTo: "2026-08-31", baseFobEur: 14000, remark: null, rowVersion: 1 },
+      { periodId: "future", countryCode: "SE", bomTemplate: "T-Period summary-**", validFrom: "2027-01-01", validTo: null, baseFobEur: 15000, remark: null, rowVersion: 1 },
+    ];
+    vi.spyOn(api, "getBomAdmin").mockResolvedValue({ ...response, items: response.items.map((item) => ({ ...item, fobPeriodsByCountry: { SE: periods } })) });
+    vi.spyOn(api, "listBomTemplateFobPeriods").mockResolvedValue({ periods, usesPeriods: true });
+    await act(async () => { render(<BomAdminPanel />); });
+    await act(async () => { fireEvent.click(screen.getByRole("button", { name: /OMODA Period summary/ })); });
+    expect(screen.getByText("P2")).toBeTruthy();
+    const price = screen.getByText("15,000");
+    expect(price.closest("td")?.title).toContain("Undated default: 13,600");
+    expect(price.closest("td")?.title).toContain("Management summary, not a quote for today");
+    await act(async () => { fireEvent.click(price); });
+    expect((screen.getByLabelText("Base FOB EUR") as HTMLInputElement).value).toBe("13600");
+    expect(document.body.textContent).toContain("T-Period summary-**");
+  });
+
+  it("confirms the server-priced default once before deleting the last period", async () => {
     vi.spyOn(api, "getBomAdmin").mockResolvedValue(bomResponse("Restore sample"));
     vi.spyOn(api, "listBomTemplateFobPeriods")
-      .mockResolvedValueOnce({ periods: [], usesPeriods: true })
+      .mockResolvedValueOnce({ periods: [{ periodId: "p1", countryCode: "SE", bomTemplate: "T-Restore sample-**", validFrom: "2026-08-01", validTo: "2026-08-31", baseFobEur: 14000, remark: null, rowVersion: 1 }], usesPeriods: true })
       .mockResolvedValue({ periods: [], usesPeriods: false });
-    const restore = vi.spyOn(api, "restoreBomTemplateDefaultFob")
-      .mockResolvedValueOnce({ restored: false, baseFobEur: 13000 })
-      .mockResolvedValue({ restored: true, baseFobEur: 13000 });
+    const impact = { periodId: "p1", fingerprint: "fp", lastPeriod: true, defaultBaseFobEur: 13000 };
+    const remove = vi.spyOn(api, "deleteBomTemplateFobPeriod")
+      .mockResolvedValueOnce({ ...impact, deleted: false })
+      .mockResolvedValue({ ...impact, deleted: true });
     const changed = vi.fn();
     await act(async () => { render(<BomAdminPanel onFobChanged={changed} />); });
     await act(async () => { fireEvent.click(screen.getByRole("button", { name: /OMODA Restore sample/ })); });
     await act(async () => { fireEvent.click(screen.getByText("13,600")); });
-    await act(async () => { fireEvent.click(screen.getByText("Restore undated default FOB")); });
-    expect(restore).toHaveBeenLastCalledWith("T-Restore sample-**", "SE", null);
-    expect(screen.getByText(/Restore undated Single base 13,000 EUR/)).toBeTruthy();
+    await act(async () => { fireEvent.click(within(screen.getByRole("dialog")).getByText("Delete")); });
+    expect(remove).toHaveBeenLastCalledWith("p1", 1, undefined);
+    expect(screen.getByText(/undated Single base 13,000 EUR/)).toBeTruthy();
     expect(changed).not.toHaveBeenCalled();
-    await act(async () => { fireEvent.click(screen.getByText("Confirm restore default FOB")); });
-    expect(restore).toHaveBeenLastCalledWith("T-Restore sample-**", "SE", 13000);
+    await act(async () => { fireEvent.click(screen.getByText("Confirm remove period")); });
+    expect(remove).toHaveBeenLastCalledWith("p1", 1, "fp");
     expect(changed).toHaveBeenCalledOnce();
     expect(screen.getByText(/No periods configured/)).toBeTruthy();
+  });
+
+  it("searches the target country's rows and renders only NL plus that country; Clear restores all columns", async () => {
+    const response = bomResponse("Country columns");
+    const item = { ...response.items[0], fobByCountry: { NL: { finalFobEur: 12000 }, CH: { finalFobEur: 13600 }, SE: { finalFobEur: 14000 } } };
+    const getBom = vi.spyOn(api, "getBomAdmin").mockImplementation(async (params) => ({
+      ...response, items: [item], countries: params?.country ? ["NL", params.country] : ["NL", "CH", "SE"],
+      activeFobCountries: ["NL", "CH", "SE"],
+    }));
+    await act(async () => { render(<BomAdminPanel />); });
+    await act(async () => { fireEvent.click(screen.getByRole("button", { name: /OMODA Country columns/ })); });
+    const input = screen.getByPlaceholderText(/Search model/);
+    await act(async () => {
+      fireEvent.change(input, { target: { value: "CH" } });
+      fireEvent.keyDown(input, { key: "Enter" });
+    });
+    expect(getBom).toHaveBeenLastCalledWith({ country: "CH" });
+    expect(screen.getAllByRole("columnheader").map((cell) => cell.textContent).filter((text) => /^(NL|CH|SE)/.test(text || ""))).toEqual(["NL", "CH"]);
+    expect(screen.getByText("12,000")).toBeTruthy();
+    expect(screen.queryByText("14,000")).toBeNull();
+    await act(async () => { fireEvent.click(screen.getByRole("button", { name: /^Clear$/ })); });
+    expect(screen.getAllByRole("columnheader").map((cell) => cell.textContent).filter((text) => /^(NL|CH|SE)/.test(text || ""))).toEqual(["NL", "CH", "SE"]);
   });
 });

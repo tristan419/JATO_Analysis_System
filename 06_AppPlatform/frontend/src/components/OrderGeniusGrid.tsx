@@ -96,6 +96,7 @@ export interface OrderGeniusGridProps {
   rows: OrderGeniusGridRow[];
   selectedMonth: number | null;
   selectedRowIds?: ReadonlySet<string>;
+  selectableRowIds?: ReadonlySet<string>;
   piSelectionSummary?: PiSelectionSummary;
   canEditQuantities: boolean;
   visibleColumns: {
@@ -251,11 +252,11 @@ export function buildOrderGeniusColumnDefs(
   piSelectionSummary?: PiSelectionSummary,
   isPiRowSelected?: (row: OrderGeniusGridRow) => boolean,
   onTogglePiRow?: (row: OrderGeniusGridRow, selected: boolean) => void,
+  isPiRowSelectable?: (row: OrderGeniusGridRow) => boolean,
 ): ColDef<OrderGeniusGridRow>[] {
   const cols: ColDef<OrderGeniusGridRow>[] = [];
 
   if (selectedMonth != null && onTogglePiRow) {
-    const monthField = `month_${selectedMonth}` as `month_${number}`;
     cols.push({
       colId: "piSelect",
       headerName: "PI",
@@ -271,8 +272,7 @@ export function buildOrderGeniusColumnDefs(
         if (!row || row.__type === "groupHeader" || row.__type === "consolidated_parent" || row.__type === "summary") {
           return null;
         }
-        const quantity = row[monthField] || 0;
-        const disabled = quantity <= 0 || row.lifecycleStatus === "historical";
+        const disabled = isPiRowSelectable?.(row) !== true;
         return (
           <input
             type="checkbox"
@@ -439,6 +439,7 @@ export function buildOrderGeniusColumnDefs(
           && params.data != null
           && params.data.__type !== "groupHeader"
           && params.data.editable !== false
+          && !params.data._saving.has(field)
           && params.data._months?.[String(m)]?.isEditable !== false,
         tooltipValueGetter: (params) => params.data?._errors?.[field]
           || params.data?._months?.[String(m)]?.reason || "",
@@ -595,6 +596,7 @@ export function OrderGeniusGrid({
   rows,
   selectedMonth,
   selectedRowIds,
+  selectableRowIds,
   piSelectionSummary,
   canEditQuantities,
   visibleColumns,
@@ -623,8 +625,9 @@ export function OrderGeniusGrid({
       piSelectionSummary,
       isPiRowSelected,
       onTogglePiRow,
+      (row) => selectableRowIds?.has(getOrderGeniusRowId(row)) === true,
     ),
-    [canEditQuantities, showCountry, selectedMonth, visibleColumns, piSelectionSummary, isPiRowSelected, onTogglePiRow],
+    [canEditQuantities, showCountry, selectedMonth, visibleColumns, piSelectionSummary, isPiRowSelected, onTogglePiRow, selectableRowIds],
   );
   const columnIdsSignature = useMemo(
     () => columnDefs.map(getOrderGeniusColumnDefId).filter(Boolean).join("|"),
@@ -753,7 +756,7 @@ export function OrderGeniusGrid({
   useEffect(() => {
     if (!localGridApiRef.current) return;
     localGridApiRef.current.refreshCells({ force: true, columns: ["piSelect"] });
-  }, [selectedRowIds]);
+  }, [selectedRowIds, selectableRowIds]);
 
   const gridContext = useMemo<OrderGeniusGridContext>(
     () => ({ onToggleGroup }),

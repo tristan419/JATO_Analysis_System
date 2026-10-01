@@ -17,7 +17,7 @@
 
 .bom-edit-main-row {
   display: grid;
-  grid-template-columns: minmax(610px, 1fr) minmax(520px, 0.86fr);
+  grid-template-columns: minmax(610px, 1fr) minmax(340px, 0.6fr);
   gap: 16px;
   align-items: stretch;
   padding: 12px 14px;
@@ -32,7 +32,7 @@
 .bom-edit-product-card,
 .bom-edit-lifecycle-card {
   display: grid;
-  grid-template-rows: 14px 36px;
+  grid-template-rows: 14px auto;
   gap: 7px;
   align-content: start;
 }
@@ -97,8 +97,8 @@
 }
 
 .bom-edit-lifecycle-card .bom-lifecycle-editor {
-  display: grid;
-  grid-template-columns: minmax(244px, 1fr) minmax(128px, 148px) minmax(128px, 148px);
+  display: flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: 8px;
 }
@@ -108,38 +108,27 @@
   font-size: 10px;
 }
 
-.bom-edit-lifecycle-card .bom-lifecycle-window {
-  display: contents;
+.bom-lifecycle-dates-trigger { display: inline-flex; align-items: center; gap: 5px; }
+.bom-lifecycle-date-dialog {
+  width: min(620px, 100%);
+  max-height: calc(100dvh - 56px);
+  display: flex;
+  flex-direction: column;
+  padding: 20px;
+  border: 1px solid #cbd5e1;
+  border-radius: 12px;
+  background: #fff;
 }
-
-.bom-edit-lifecycle-card .bom-lifecycle-window label {
-  position: relative;
-  display: block;
-  min-width: 0;
-  height: 36px;
-}
-
-.bom-edit-lifecycle-card .bom-lifecycle-window label span {
-  position: absolute;
-  top: -14px;
-  left: 0;
-  color: #94a3b8;
-  font-size: 8px;
-  font-weight: 800;
-  letter-spacing: 0.08em;
-  line-height: 1;
-  text-transform: uppercase;
-}
-
-.bom-edit-lifecycle-card .bom-lifecycle-window input {
-  height: 36px;
-  min-height: 36px;
-  padding: 0 9px;
-}
-
-.bom-admin-table td .bom-edit-lifecycle-card .bom-lifecycle-window input {
-  height: 36px;
-  min-height: 36px;
+.bom-lifecycle-date-dialog header { display: flex; align-items: start; justify-content: space-between; gap: 12px; }
+.bom-lifecycle-date-dialog h4 { margin: 5px 0; }
+.bom-lifecycle-date-dialog p { margin: 6px 0; }
+.bom-lifecycle-date-body { display: grid; gap: 12px; overflow-y: auto; min-height: 0; }
+.bom-lifecycle-date-dialog .bom-lifecycle-window label { color: #475569; font-size: 11px; letter-spacing: 0; }
+.bom-lifecycle-date-dialog .bom-lifecycle-window input { min-height: 36px; font-size: 13px; }
+.bom-lifecycle-date-dialog small { color: #64748b; }
+@media (max-width: 520px) {
+  .bom-lifecycle-date-dialog { padding: 14px; }
+  .bom-lifecycle-date-dialog .bom-lifecycle-window { grid-template-columns: 1fr; }
 }
 
 .bom-edit-ops-panel {

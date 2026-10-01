@@ -1078,8 +1078,9 @@ def _resolve_pi_pricing_date(
         raise HTTPException(status_code=409, detail="Template is available for only part of this month; choose an available orderDate / 模板仅部分日期可用，请选择有效下单日")
     periods = og_repo.list_country_template_fob_periods(session, country, sku.bom_template)
     if not periods:
-        if og_repo.has_country_template_fob_periods(session, country, sku.bom_template):
-            raise HTTPException(status_code=409, detail="Dated periods were cleared; restore default FOB explicitly in BOM Admin / 区间已清空，请明确恢复长期价格")
+        default_fob = og_repo.get_fob_for_country_sku(session, country, material_code)
+        if default_fob is None or float(default_fob.final_fob_eur) <= 0:
+            raise HTTPException(status_code=409, detail="No country FOB; save a positive country base in BOM Admin / 国家无有效价格，请先保存基准价")
         return requested_order_date or (month_start if effective_from is not None or effective_to is not None else None)
     availability = resolve_month_effective_fob(
         session, country, sku, year, month, default_fob=None, periods=periods,
